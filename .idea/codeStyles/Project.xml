@@ -1,0 +1,25 @@
+<component name="ProjectCodeStyleConfiguration">
+  <code_scheme name="Project" version="173">
+    <ScalaCodeStyleSettings>
+      <option name="INDENT_FIRST_PARAMETER_CLAUSE" value="true" />
+      <option name="KEEP_ONE_LINE_LAMBDAS_IN_ARG_LIST" value="true" />
+      <option name="SPACES_IN_ONE_LINE_BLOCKS" value="true" />
+      <option name="ALIGN_PARAMETER_TYPES_IN_MULTILINE_DECLARATIONS" value="1" />
+      <option name="CALL_PARAMETERS_NEW_LINE_AFTER_LPAREN" value="2" />
+      <option name="MULTILINE_STRING_CLOSING_QUOTES_ON_NEW_LINE" value="true" />
+      <option name="TYPE_ANNOTATION_PROTECTED_MEMBER" value="false" />
+    </ScalaCodeStyleSettings>
+    <codeStyleSettings language="Scala">
+      <option name="ALIGN_MULTILINE_PARAMETERS" value="false" />
+      <option name="CALL_PARAMETERS_RPAREN_ON_NEXT_LINE" value="true" />
+      <option name="METHOD_PARAMETERS_LPAREN_ON_NEXT_LINE" value="true" />
+      <option name="METHOD_PARAMETERS_RPAREN_ON_NEXT_LINE" value="true" />
+      <option name="KEEP_SIMPLE_BLOCKS_IN_ONE_LINE" value="true" />
+      <option name="KEEP_SIMPLE_METHODS_IN_ONE_LINE" value="true" />
+      <option name="WRAP_LONG_LINES" value="true" />
+      <option name="METHOD_ANNOTATION_WRAP" value="1" />
+      <option name="CLASS_ANNOTATION_WRAP" value="1" />
+      <option name="FIELD_ANNOTATION_WRAP" value="1" />
+    </codeStyleSettings>
+  </code_scheme>
+</component>
