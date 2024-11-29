@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
   <component name="ScalaSbtSettings">
+    <option name="customLauncherPath" />
+    <option name="customVMEnabled" value="true" />
+    <option name="customVMPath" value="$USER_HOME$/.sdkman/candidates/java/current" />
     <option name="linkedExternalProjectsSettings">
       <SbtProjectSettings>
         <option name="converterVersion" value="2" />
@@ -11,7 +14,7 @@
             <option value="$PROJECT_DIR$/project" />
           </set>
         </option>
-        <option name="resolveClassifiers" value="false" />
+        <option name="resolveSbtClassifiers" value="true" />
         <option name="sbtVersion" value="1.10.5" />
       </SbtProjectSettings>
     </option>

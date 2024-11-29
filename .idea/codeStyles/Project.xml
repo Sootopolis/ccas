@@ -7,7 +7,16 @@
       <option name="ALIGN_PARAMETER_TYPES_IN_MULTILINE_DECLARATIONS" value="1" />
       <option name="CALL_PARAMETERS_NEW_LINE_AFTER_LPAREN" value="2" />
       <option name="MULTILINE_STRING_CLOSING_QUOTES_ON_NEW_LINE" value="true" />
+      <option name="USE_SCALA3_INDENTATION_BASED_SYNTAX" value="false" />
       <option name="TYPE_ANNOTATION_PROTECTED_MEMBER" value="false" />
+      <option name="TYPE_ANNOTATION_EXCLUDE_MEMBER_OF">
+        <set>
+          <option value="junit.framework.TestCase" />
+          <option value="scala.App" />
+          <option value="zio.ZIOAppDefault" />
+          <option value="zio.ZIOSpecDefault" />
+        </set>
+      </option>
     </ScalaCodeStyleSettings>
     <codeStyleSettings language="Scala">
       <option name="ALIGN_MULTILINE_PARAMETERS" value="false" />

@@ -1,6 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
   <component name="ScalaCompilerConfiguration">
-    <profile name="sbt 1" modules="ccas" />
+    <profile name="sbt 1" modules="ccas">
+      <parameters>
+        <parameter value="--deprecation" />
+        <parameter value="--feature" />
+        <parameter value="-Wunused:all" />
+        <parameter value="-Wshadow:all" />
+        <parameter value="-Wvalue-discard" />
+        <parameter value="-Xmax-inlines:16384" />
+      </parameters>
+    </profile>
   </component>
 </project>
