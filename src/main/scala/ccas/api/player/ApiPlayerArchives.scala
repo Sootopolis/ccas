@@ -8,5 +8,5 @@ import zio.http.URL
 case class ApiPlayerArchives(archives: Chunk[URL]) extends PrettyPrinting[ApiPlayerArchives]
 
 object ApiPlayerArchives {
-  def getUrl(username: Username): URL = ApiPlayerCurrentDailyGames.getUrl(username).addPath("archives")
+  def getUrl(username: Username): URL = ApiPlayerGamesCurrent.getUrl(username).addPath("archives")
 }

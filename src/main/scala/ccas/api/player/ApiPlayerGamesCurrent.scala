@@ -8,10 +8,10 @@ import zio.http.URL
 
 import java.time.Instant
 
-case class ApiPlayerCurrentDailyGames(games: Chunk[ApiPlayerCurrentDailyGames])
-  extends PrettyPrinting[ApiPlayerCurrentDailyGames]
+case class ApiPlayerGamesCurrent(games: Chunk[ApiPlayerGamesCurrent])
+  extends PrettyPrinting[ApiPlayerGamesCurrent]
 
-object ApiPlayerCurrentDailyGames {
+object ApiPlayerGamesCurrent {
   case class ApiPlayerCurrentDailyGame(
     white       : URL,
     black       : URL,
@@ -32,11 +32,11 @@ object ApiPlayerCurrentDailyGames {
   ) extends ApiPlayerGame {
     val whiteUsername: Username = Username.wrap(white.path.segments.last)
     val blackUsername: Username = Username.wrap(black.path.segments.last)
-    
-    def isWhite(username: Username) = {
-      if (whiteUsername == username) { whiteUsername }
-      else if (blackUsername == username) { blackUsername }
-      else { throw new IllegalArgumentException("")}
+
+    def isWhite(username: Username): Boolean = {
+      if (whiteUsername == username) { true }
+      else if (blackUsername == username) { false }
+      else { throw new IllegalArgumentException("") }
     }
   }
 

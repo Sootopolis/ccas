@@ -32,4 +32,10 @@ object Subtypes {
   object ClubName extends Subtype[String] {
     override def assertion: Assertion[String] = !Assertion.isEmptyString
   }
+
+  type ClubMatchId = ClubMatchId.Type
+
+  object ClubMatchId extends Subtype[Int] {
+    override def assertion: Assertion[Int] = Assertion.greaterThanOrEqualTo(0)
+  }
 }
