@@ -1,7 +1,8 @@
 package ccas.api.player
 
 import ccas.api.player.ApiPlayerMatches.{ApiPlayerMatchFinished, ApiPlayerMatchInProgress, ApiPlayerMatchRegistered}
-import ccas.api.utils.GameResultDetail
+import ccas.api.utils.Enums.GameResultDetail
+import ccas.utils.PrettyPrinting
 import zio.Chunk
 import zio.http.URL
 
@@ -9,26 +10,36 @@ case class ApiPlayerMatches(
   finished  : Chunk[ApiPlayerMatchFinished],
   inProgress: Chunk[ApiPlayerMatchInProgress],
   registered: Chunk[ApiPlayerMatchRegistered]
-)
+) extends PrettyPrinting[ApiPlayerMatches]
 
 object ApiPlayerMatches {
-  trait ApiPlayerMatch {
+  sealed trait ApiPlayerMatch {
     val name: String
     val url: URL
     val `@id`: URL
     val club: URL
   }
 
-  trait ApiPlayerMatchStarted extends ApiPlayerMatch {
+  sealed trait ApiPlayerMatchStarted extends ApiPlayerMatch {
     val board: URL
   }
 
   case class ApiPlayerMatchResults(playedAsWhite: GameResultDetail, playedAsBlack: GameResultDetail)
 
-  case class ApiPlayerMatchRegistered(name: String, url: URL, `@id`: URL, club: URL) extends ApiPlayerMatch
+  case class ApiPlayerMatchRegistered(
+    name : String,
+    url  : URL,
+    `@id`: URL,
+    club : URL
+  ) extends ApiPlayerMatch
 
-  case class ApiPlayerMatchInProgress(name: String, url: URL, `@id`: URL, club: URL, board: URL)
-    extends ApiPlayerMatchStarted
+  case class ApiPlayerMatchInProgress(
+    name : String,
+    url  : URL,
+    `@id`: URL,
+    club : URL,
+    board: URL
+  ) extends ApiPlayerMatchStarted
 
   case class ApiPlayerMatchFinished(
     name   : String,

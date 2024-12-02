@@ -1,7 +1,8 @@
 package ccas.api.player
 
+import ccas.api.utils.Enums.{Colour, GameRule, TimeClass}
 import ccas.api.utils.Subtypes.Username
-import ccas.api.utils.{Colour, GameRule, Subtypes, TimeClass}
+import ccas.api.utils.Subtypes
 import ccas.utils.PrettyPrinting
 import zio.Chunk
 import zio.http.URL
@@ -29,7 +30,7 @@ object ApiPlayerGamesCurrent {
     rated       : Boolean,
     tournament  : Option[URL],
     `match`     : Option[URL]
-  ) extends ApiPlayerGame {
+  ) extends PrettyPrinting[ApiPlayerCurrentDailyGame] {
     val whiteUsername: Username = Username.wrap(white.path.segments.last)
     val blackUsername: Username = Username.wrap(black.path.segments.last)
 

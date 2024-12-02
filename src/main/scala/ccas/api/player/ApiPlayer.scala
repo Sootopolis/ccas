@@ -1,8 +1,8 @@
 package ccas.api.player
 
 import ccas.api.Hosts
+import ccas.api.utils.Enums.{League, PlayerStatus, Title}
 import ccas.api.utils.Subtypes.{Elo, PlayerId, Username}
-import ccas.api.utils.{League, PlayerStatus, Title}
 import ccas.utils.PrettyPrinting
 import zio.http.URL
 

@@ -1,0 +1,156 @@
+package ccas.api.clubmatch
+
+import ccas.api.clubmatch.ApiDailyMatch.{ApiDailyMatchSettings, ApiDailyMatchTeams}
+import ccas.api.utils.Enums.*
+import ccas.api.utils.Subtypes.{Elo, Username}
+import ccas.utils.PrettyPrinting
+import zio.Chunk
+import zio.http.URL
+
+import java.time.Instant
+
+// match
+
+sealed trait ApiDailyMatch extends PrettyPrinting[ApiDailyMatch] {
+  val `@id`: URL
+  val name: String
+  val url: URL
+  val status: ClubMatchStatus
+  val boards: Int
+  val settings: ApiDailyMatchSettings
+  val teams: ApiDailyMatchTeams
+}
+
+object ApiDailyMatch {
+  case class ApiDailyMatchRegistered(
+    `@id`    : URL,
+    name     : String,
+    url      : URL,
+    startTime: Option[Instant],
+    status   : ClubMatchStatus,
+    boards   : Int,
+    settings : ApiDailyMatchSettings,
+    teams    : ApiDailyMatchTeamsRegistered
+  ) extends ApiDailyMatch {
+    require(status == ClubMatchStatus.registration)
+  }
+
+  case class ApiDailyMatchInProgress(
+    `@id`    : URL,
+    name     : String,
+    url      : URL,
+    startTime: Instant,
+    status   : ClubMatchStatus,
+    boards   : Int,
+    settings : ApiDailyMatchSettings,
+    teams    : ApiDailyMatchTeamsInProgress
+  ) extends ApiDailyMatch {
+    require(status == ClubMatchStatus.in_progress)
+  }
+
+  case class ApiDailyMatchFinished(
+    `@id`    : URL,
+    name     : String,
+    url      : URL,
+    startTime: Instant,
+    endTime  : Instant,
+    status   : ClubMatchStatus,
+    boards   : Int,
+    settings : ApiDailyMatchSettings,
+    teams    : ApiDailyMatchTeamsFinished
+  ) extends ApiDailyMatch {
+    require(status == ClubMatchStatus.finished)
+  }
+
+  case class ApiDailyMatchSettings(
+    rules           : GameRule,
+    timeClass       : TimeClass,
+    timeControl     : String,
+    initialSetup    : Option[String],
+    minTeamPlayers  : Option[Int],
+    maxTeamPlayers  : Option[Int],
+    minRequiredGames: Int,
+    minRating       : Option[Elo],
+    maxRating       : Option[Elo],
+    autoStart       : Boolean
+  )
+
+  // teams
+
+  sealed trait ApiDailyMatchTeams {
+    val team1: ApiDailyMatchTeam
+    val team2: ApiDailyMatchTeam
+  }
+
+  case class ApiDailyMatchTeamsRegistered(team1: ApiDailyMatchTeamRegistered, team2: ApiDailyMatchTeamRegistered)
+    extends ApiDailyMatchTeams
+
+  case class ApiDailyMatchTeamsInProgress(team1: ApiDailyMatchTeamInProgress, team2: ApiDailyMatchTeamInProgress)
+    extends ApiDailyMatchTeams
+
+  case class ApiDailyMatchTeamsFinished(team1: ApiDailyMatchTeamFinished, team2: ApiDailyMatchTeamFinished)
+    extends ApiDailyMatchTeams
+
+  // team
+
+  sealed trait ApiDailyMatchTeam {
+    val `@id`: URL
+    val name: String
+    val url: URL
+    val score: Double
+    val players: Chunk[ApiDailyMatchPlayer]
+    val fairPlayRemovals: Set[Username]
+  }
+
+  case class ApiDailyMatchTeamRegistered(
+    `@id`           : URL,
+    name            : String,
+    url             : URL,
+    score           : Double,
+    players         : Chunk[ApiDailyMatchPlayerRegistered],
+    fairPlayRemovals: Set[Username],
+    locked          : Boolean
+  ) extends ApiDailyMatchTeam
+
+  case class ApiDailyMatchTeamInProgress(
+    `@id`           : URL,
+    name            : String,
+    url             : URL,
+    score           : Double,
+    players         : Chunk[ApiDailyMatchPlayerStarted],
+    fairPlayRemovals: Set[Username]
+  ) extends ApiDailyMatchTeam
+
+  case class ApiDailyMatchTeamFinished(
+    `@id`           : URL,
+    name            : String,
+    url             : URL,
+    score           : Double,
+    result          : ClubMatchResult,
+    players         : Chunk[ApiDailyMatchPlayerStarted],
+    fairPlayRemovals: Set[Username]
+  ) extends ApiDailyMatchTeam
+
+  // player
+
+  sealed trait ApiDailyMatchPlayer {
+    val username: Username
+  }
+
+  case class ApiDailyMatchPlayerRegistered(
+    username      : Username,
+    rating        : Elo,
+    timeoutPercent: Double,
+    rd            : Double,
+    status        : PlayerStatus
+  ) extends ApiDailyMatchPlayer
+
+  case class ApiDailyMatchPlayerStarted(
+    username     : Username,
+    stats        : URL,
+    status       : PlayerStatus,
+    playedAsWhite: Option[GameResultDetail],
+    playedAsBlack: Option[GameResultDetail],
+    board        : URL
+  ) extends ApiDailyMatchPlayer
+}

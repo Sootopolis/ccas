@@ -1,8 +1,8 @@
 package ccas.api.player
 
 import ccas.api.player.ApiPlayerArchive.ApiPlayerArchiveGame
+import ccas.api.utils.Enums.{GameResultDetail, GameRule}
 import ccas.api.utils.Subtypes.{Elo, Username}
-import ccas.api.utils.{GameResultDetail, GameRule}
 import ccas.utils.PrettyPrinting
 import zio.Chunk
 import zio.http.URL
@@ -41,7 +41,7 @@ object ApiPlayerArchive {
     result  : GameResultDetail
   )
 
-  case class ApiPlayerArchiveGameAccuracy(white: Float, black: Float)
+  case class ApiPlayerArchiveGameAccuracy(white: Double, black: Double)
 
   def getUrl(username: Username, year: Int, month: Int): URL = {
     require(year > 1970, "year must be greater than 1970")
