@@ -1,6 +1,7 @@
 package ccas.api.player
 
 import ccas.api.player.ApiPlayerArchive.ApiPlayerArchiveGame
+import ccas.api.utils.Accuracies
 import ccas.api.utils.Enums.{GameResultDetail, GameRule}
 import ccas.api.utils.Subtypes.{Elo, Username}
 import ccas.utils.PrettyPrinting
@@ -17,7 +18,7 @@ object ApiPlayerArchive {
     white       : ApiPlayerArchiveGamePlayer,
     black       : ApiPlayerArchiveGamePlayer,
     rated       : Boolean,
-    accuracies  : ApiPlayerArchiveGameAccuracy,
+    accuracies  : Accuracies,
     URL         : URL,
     fen         : String,
     pgn         : String,
@@ -40,8 +41,6 @@ object ApiPlayerArchive {
     uuid    : UUID,
     result  : GameResultDetail
   )
-
-  case class ApiPlayerArchiveGameAccuracy(white: Double, black: Double)
 
   def getUrl(username: Username, year: Int, month: Int): URL = {
     require(year > 1970, "year must be greater than 1970")

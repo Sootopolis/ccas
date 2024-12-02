@@ -1,8 +1,9 @@
 package ccas.api.clubmatch
 
+import ccas.api.Hosts
 import ccas.api.clubmatch.ApiDailyMatch.{ApiDailyMatchSettings, ApiDailyMatchTeams}
 import ccas.api.utils.Enums.*
-import ccas.api.utils.Subtypes.{Elo, Username}
+import ccas.api.utils.Subtypes.{ClubMatchId, Elo, Username}
 import ccas.utils.PrettyPrinting
 import zio.Chunk
 import zio.http.URL
@@ -22,6 +23,10 @@ sealed trait ApiDailyMatch extends PrettyPrinting[ApiDailyMatch] {
 }
 
 object ApiDailyMatch {
+  val host: URL = Hosts.api.addPath("match")
+
+  def getUrl(clubMatchId: ClubMatchId): URL = host.addPath(clubMatchId.toString)
+
   case class ApiDailyMatchRegistered(
     `@id`    : URL,
     name     : String,
