@@ -1,17 +1,17 @@
 package ccas.api.club
 
-import ccas.api.utils.Subtypes.{ClubName, Username}
-import ccas.utils.PrettyPrinting
+import ccas.api.utils.Subtypes.{ClubUrlName, Username}
 import zio.Chunk
 import zio.http.URL
+import zio.json.{SnakeCase, jsonMemberNames}
 
 import java.time.Instant
 
+@jsonMemberNames(SnakeCase)
 case class ApiClubMembers(weekly: Chunk[ApiClubMembers], monthly: Chunk[ApiClubMembers], allTime: Chunk[ApiClubMembers])
-  extends PrettyPrinting[ApiClubMembers]
 
 object ApiClubMembers {
   case class ApiClubMember(username: Username, joined: Instant)
 
-  def getUrl(clubName: ClubName): URL = ApiClub.getUrl(clubName).addPath("members")
+  def getUrl(clubUrlName: ClubUrlName): URL = ApiClub.getUrl(clubUrlName).addPath("members")
 }

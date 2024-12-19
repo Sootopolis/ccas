@@ -1,18 +1,18 @@
 package ccas.api.clubmatch
 
-import ccas.api.Hosts
 import ccas.api.clubmatch.ApiDailyMatch.{ApiDailyMatchSettings, ApiDailyMatchTeams}
 import ccas.api.utils.Enums.*
+import ccas.api.utils.Hosts
 import ccas.api.utils.Subtypes.{ClubMatchId, Elo, Username}
-import ccas.utils.PrettyPrinting
 import zio.Chunk
 import zio.http.URL
+import zio.json.{SnakeCase, jsonMemberNames}
 
 import java.time.Instant
 
 // match
 
-sealed trait ApiDailyMatch extends PrettyPrinting[ApiDailyMatch] {
+sealed trait ApiDailyMatch {
   val `@id`: URL
   val name: String
   val url: URL
@@ -27,6 +27,7 @@ object ApiDailyMatch {
 
   def getUrl(clubMatchId: ClubMatchId): URL = host.addPath(clubMatchId.toString)
 
+  @jsonMemberNames(SnakeCase)
   case class ApiDailyMatchRegistered(
     `@id`    : URL,
     name     : String,
@@ -37,9 +38,10 @@ object ApiDailyMatch {
     settings : ApiDailyMatchSettings,
     teams    : ApiDailyMatchTeamsRegistered
   ) extends ApiDailyMatch {
-    require(status == ClubMatchStatus.registration)
+    require(status == ClubMatchStatus.Registration)
   }
 
+  @jsonMemberNames(SnakeCase)
   case class ApiDailyMatchInProgress(
     `@id`    : URL,
     name     : String,
@@ -50,9 +52,10 @@ object ApiDailyMatch {
     settings : ApiDailyMatchSettings,
     teams    : ApiDailyMatchTeamsInProgress
   ) extends ApiDailyMatch {
-    require(status == ClubMatchStatus.in_progress)
+    require(status == ClubMatchStatus.InProgress)
   }
 
+  @jsonMemberNames(SnakeCase)
   case class ApiDailyMatchFinished(
     `@id`    : URL,
     name     : String,
@@ -64,7 +67,7 @@ object ApiDailyMatch {
     settings : ApiDailyMatchSettings,
     teams    : ApiDailyMatchTeamsFinished
   ) extends ApiDailyMatch {
-    require(status == ClubMatchStatus.finished)
+    require(status == ClubMatchStatus.Finished)
   }
 
   case class ApiDailyMatchSettings(

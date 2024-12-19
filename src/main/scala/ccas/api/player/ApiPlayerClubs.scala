@@ -2,14 +2,15 @@ package ccas.api.player
 
 import ccas.api.club.ApiClub
 import ccas.api.player.ApiPlayerClubs.ApiPlayerClub
-import ccas.api.utils.Subtypes.ClubName
-import ccas.utils.PrettyPrinting
+import ccas.api.utils.Subtypes.ClubUrlName
 import zio.Chunk
 import zio.http.URL
+import zio.json.{SnakeCase, jsonMemberNames}
 
 import java.time.Instant
 
-case class ApiPlayerClubs(clubs: Chunk[ApiPlayerClub]) extends PrettyPrinting[ApiPlayerClubs]
+@jsonMemberNames(SnakeCase)
+case class ApiPlayerClubs(clubs: Chunk[ApiPlayerClub])
 
 object ApiPlayerClubs {
   case class ApiPlayerClub(
@@ -19,7 +20,7 @@ object ApiPlayerClubs {
     url         : URL,
     joined      : Instant
   ) {
-    def clubName: ClubName = ClubName.wrap(url.path.segments.last)
+    def clubName: ClubUrlName = ClubUrlName.wrap(url.path.segments.last)
     
     def clubApiUrl: URL = ApiClub.getUrl(clubName)
   }

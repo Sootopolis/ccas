@@ -1,11 +1,13 @@
 package ccas.api.club
 
-import ccas.api.Hosts
 import ccas.api.club.ApiClub.ClubVisibility
-import ccas.api.utils.Subtypes.{ClubId, ClubName, Elo}
+import ccas.api.utils.Hosts
+import ccas.api.utils.Subtypes.{ClubId, ClubUrlName, Elo}
 import zio.Chunk
 import zio.http.URL
+import zio.json.{SnakeCase, jsonMemberNames}
 
+@jsonMemberNames(SnakeCase)
 case class ApiClub(
   `@id`             : URL, // the location of this profile (always self-referencing)
   name              : String, // the human-readable name of this club
@@ -26,7 +28,7 @@ case class ApiClub(
 object ApiClub {
   val host: URL = Hosts.api.addPath("club")
 
-  def getUrl(clubName: ClubName): URL = host.addPath(clubName)
+  def getUrl(clubUrlName: ClubUrlName): URL = host.addPath(clubUrlName)
 
   enum ClubVisibility {
     case public

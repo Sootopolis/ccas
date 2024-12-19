@@ -2,13 +2,14 @@ package ccas.api.player
 
 import ccas.api.player.ApiPlayerGamesToMove.GameToMove
 import ccas.api.utils.Subtypes.Username
-import ccas.utils.PrettyPrinting
 import zio.Chunk
 import zio.http.URL
+import zio.json.{SnakeCase, jsonMemberNames}
 
 import java.time.Instant
 
-case class ApiPlayerGamesToMove(games: Chunk[GameToMove]) extends PrettyPrinting[ApiPlayerGamesToMove]
+@jsonMemberNames(SnakeCase)
+case class ApiPlayerGamesToMove(games: Chunk[GameToMove])
 
 object ApiPlayerGamesToMove {
   case class GameToMove(url: URL, moveBy: Instant, drawOffer: Option[Boolean], lastActivity: Instant)

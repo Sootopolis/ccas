@@ -7,12 +7,13 @@ import ccas.api.utils.Subtypes.{ClubMatchId, Elo, Username}
 import ccas.utils.PrettyPrinting
 import zio.Chunk
 import zio.http.URL
+import zio.json.{SnakeCase, jsonMemberNames}
 
 import java.time.Instant
 
-case class ApiDailyMatchBoard(boardScores: BoardScores, games: Chunk[ApiDailyBoardGame])
-  extends PrettyPrinting[ApiDailyMatchBoard] {
-  require(games.nonEmpty && games.length <= 2)
+@jsonMemberNames(SnakeCase)
+case class ApiDailyMatchBoard(boardScores: BoardScores, games: Chunk[ApiDailyBoardGame]) {
+  require(games.nonEmpty && games.length <= 2, s"A board can only have 1 or 2 games:\n$this")
 }
 
 object ApiDailyMatchBoard {

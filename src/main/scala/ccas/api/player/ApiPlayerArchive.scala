@@ -4,14 +4,15 @@ import ccas.api.player.ApiPlayerArchive.ApiPlayerArchiveGame
 import ccas.api.utils.Accuracies
 import ccas.api.utils.Enums.{GameResultDetail, GameRule}
 import ccas.api.utils.Subtypes.{Elo, Username}
-import ccas.utils.PrettyPrinting
 import zio.Chunk
 import zio.http.URL
+import zio.json.{SnakeCase, jsonMemberNames}
 
 import java.time.{Instant, Month, Year}
 import java.util.UUID
 
-case class ApiPlayerArchive(games: Chunk[ApiPlayerArchiveGame]) extends PrettyPrinting[ApiPlayerArchive]
+@jsonMemberNames(SnakeCase)
+case class ApiPlayerArchive(games: Chunk[ApiPlayerArchiveGame])
 
 object ApiPlayerArchive {
   case class ApiPlayerArchiveGame(

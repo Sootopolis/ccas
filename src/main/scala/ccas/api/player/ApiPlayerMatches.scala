@@ -2,15 +2,16 @@ package ccas.api.player
 
 import ccas.api.player.ApiPlayerMatches.{ApiPlayerMatchFinished, ApiPlayerMatchInProgress, ApiPlayerMatchRegistered}
 import ccas.api.utils.Enums.GameResultDetail
-import ccas.utils.PrettyPrinting
 import zio.Chunk
 import zio.http.URL
+import zio.json.{SnakeCase, jsonMemberNames}
 
+@jsonMemberNames(SnakeCase)
 case class ApiPlayerMatches(
   finished  : Chunk[ApiPlayerMatchFinished],
   inProgress: Chunk[ApiPlayerMatchInProgress],
   registered: Chunk[ApiPlayerMatchRegistered]
-) extends PrettyPrinting[ApiPlayerMatches]
+)
 
 object ApiPlayerMatches {
   sealed trait ApiPlayerMatch {

@@ -3,18 +3,19 @@ package ccas.api.player
 import ccas.api.player.ApiPlayerStats.Stats
 import ccas.api.utils.Enums.GameResult
 import ccas.api.utils.Subtypes.{Elo, Username}
-import ccas.utils.PrettyPrinting
 import zio.http.URL
+import zio.json.{SnakeCase, jsonMemberNames}
 
 import java.time.Instant
 
+@jsonMemberNames(SnakeCase)
 case class ApiPlayerStats(
   chessDaily   : Stats,
   chess960Daily: Stats,
   chessRapid   : Stats,
   chessBlitz   : Stats,
   chessBullet  : Stats,
-) extends PrettyPrinting[ApiPlayerStats]
+)
 
 object ApiPlayerStats {
   def getUrl(username: Username): URL = ApiPlayer.getUrl(username).addPath("stats")
@@ -26,7 +27,7 @@ object ApiPlayerStats {
   case class BestElo(rating: Elo, date: Instant, game: URL)
 
   case class Record(win: Int, loss: Int, draw: Int, timePerMove: Int, timeoutPercent: Double) {
-    val nGames: Int = win + loss + draw
+    lazy val nGames: Int = win + loss + draw
     lazy val winRate: Double = win / nGames.toDouble
     lazy val scoreRate: Double = // not hardcoding in case chess scoring rules change
       (win * GameResult.Win.score + draw * GameResult.Draw.score + loss * GameResult.Loss.score) / nGames

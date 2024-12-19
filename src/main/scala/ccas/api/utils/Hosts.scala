@@ -1,4 +1,4 @@
-package ccas.api
+package ccas.api.utils
 
 import zio.http.Scheme.HTTPS
 import zio.http.URL

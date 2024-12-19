@@ -1,16 +1,17 @@
 package ccas.api.player
 
+import ccas.api.player.ApiPlayerGamesCurrent.ApiPlayerCurrentDailyGame
 import ccas.api.utils.Enums.{Colour, GameRule, TimeClass}
-import ccas.api.utils.Subtypes.Username
 import ccas.api.utils.Subtypes
-import ccas.utils.PrettyPrinting
+import ccas.api.utils.Subtypes.Username
 import zio.Chunk
 import zio.http.URL
+import zio.json.{SnakeCase, jsonMemberNames}
 
 import java.time.Instant
 
-case class ApiPlayerGamesCurrent(games: Chunk[ApiPlayerGamesCurrent])
-  extends PrettyPrinting[ApiPlayerGamesCurrent]
+@jsonMemberNames(SnakeCase)
+case class ApiPlayerGamesCurrent(games: Chunk[ApiPlayerCurrentDailyGame])
 
 object ApiPlayerGamesCurrent {
   case class ApiPlayerCurrentDailyGame(
@@ -30,14 +31,14 @@ object ApiPlayerGamesCurrent {
     rated       : Boolean,
     tournament  : Option[URL],
     `match`     : Option[URL]
-  ) extends PrettyPrinting[ApiPlayerCurrentDailyGame] {
+  ) {
     val whiteUsername: Username = Username.wrap(white.path.segments.last)
     val blackUsername: Username = Username.wrap(black.path.segments.last)
 
     def isWhite(username: Username): Boolean = {
       if (whiteUsername == username) { true }
       else if (blackUsername == username) { false }
-      else { throw new IllegalArgumentException("") }
+      else { throw new IllegalArgumentException(s"Player $username is not present in game $url.") }
     }
   }
 

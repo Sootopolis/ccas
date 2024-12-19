@@ -1,13 +1,15 @@
 package ccas.api.player
 
-import ccas.api.Hosts
 import ccas.api.utils.Enums.{League, PlayerStatus, Title}
+import ccas.api.utils.Hosts
 import ccas.api.utils.Subtypes.{Elo, PlayerId, Username}
-import ccas.utils.PrettyPrinting
+import ccas.utils.json.JsonCodecs.urlJsonCodec
 import zio.http.URL
+import zio.json.{DeriveJsonDecoder, JsonDecoder, SnakeCase, jsonMemberNames}
 
 import java.time.Instant
 
+@jsonMemberNames(SnakeCase)
 case class ApiPlayer(
   playerId  : PlayerId, // the non-changing Chess.com ID of this player
   username  : Username, // the username of this player
@@ -24,14 +26,16 @@ case class ApiPlayer(
   verified  : Boolean,
   league    : League,
   fide      : Option[Elo], // FIDE rating
-) extends PrettyPrinting[ApiPlayer] {
+) {
   val profileUrl: URL = Hosts.website.addPath(s"member/$username")
   val apiUrl: URL = ApiPlayer.getUrl(username)
   val apiStatsUrl: URL = ApiPlayerStats.getUrl(username)
 }
 
-object ApiPlayer extends App {
+object ApiPlayer {
   val host: URL = Hosts.api.addPath("player")
+  
+  given JsonDecoder[ApiPlayer] = DeriveJsonDecoder.gen[ApiPlayer]
 
   def getUrl(username: Username): URL = host.addPath(username)
 }
