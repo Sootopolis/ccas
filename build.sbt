@@ -1,20 +1,40 @@
-ThisBuild / version := "0.1.0-SNAPSHOT"
+val versionCCAS  = "0.1.0-SNAPSHOT"
+val versionScala = "3.6.2"
 
-ThisBuild / scalaVersion := "3.6.2"
+ThisBuild / version      := versionCCAS
+ThisBuild / scalaVersion := versionScala
 
-val zioVersion = "2.1.13"
-val zioHttpVersion = "3.0.1"
-val zioJsonVersion = "0.7.3"
-val magnoliaVersion = "1.3.8"
+// versions
+
+val versionZio           = "2.1.14"
+val versionZioHttp       = "3.0.1"
+val versionZioJson       = "0.7.3"
+val versionZioProtoQuill = "4.8.6"
+val versionMagnolia      = "1.3.8"
+val versionPostgres      = "42.7.4"
+
+// modules
+
+val zio             = "dev.zio"                      %% "zio"               % versionZio
+val zioTest         = "dev.zio"                      %% "zio-test"          % versionZio % Test
+val zioTestSbt      = "dev.zio"                      %% "zio-test-sbt"      % versionZio % Test
+val zioTestMagnolia = "dev.zio"                      %% "zio-test-magnolia" % versionZio % Test
+val zioHttp         = "dev.zio"                      %% "zio-http"          % versionZioHttp
+val zioJson         = "dev.zio"                      %% "zio-json"          % versionZioJson
+val zioProtoQuill   = "io.getquill"                  %% "quill-jdbc-zio"    % versionZioProtoQuill
+val magnolia        = "com.softwaremill.magnolia1_3" %% "magnolia"          % versionMagnolia
+val postgresql      = "org.postgresql"               %  "postgresql"        % versionPostgres
 
 libraryDependencies ++= Seq(
-  "dev.zio"                      %% "zio"               % zioVersion,
-  "dev.zio"                      %% "zio-test"          % zioVersion % Test,
-  "dev.zio"                      %% "zio-test-sbt"      % zioVersion % Test,
-  "dev.zio"                      %% "zio-test-magnolia" % zioVersion % Test,
-  "dev.zio"                      %% "zio-http"          % zioHttpVersion,
-  "dev.zio"                      %% "zio-json"          % zioJsonVersion,
-  "com.softwaremill.magnolia1_3" %% "magnolia"          % magnoliaVersion
+  zio,
+  zioTest,
+  zioTestSbt,
+  zioTestMagnolia,
+  zioHttp,
+  zioJson,
+  zioProtoQuill,
+  magnolia,
+  postgresql,
 )
 
 scalacOptions ++= Seq(
@@ -26,7 +46,6 @@ scalacOptions ++= Seq(
   "-Xmax-inlines:256",
 )
 
-lazy val root = (project in file("."))
-  .settings(
-    name := "ccas",
-  )
+lazy val root = (project in file(".")).settings(
+  name := "ccas",
+)
