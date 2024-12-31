@@ -1,0 +1,509 @@
+{
+  "@id": "https://api.chess.com/pub/match/1718523",
+  "name": "TCMAC GLADIATOR 2024/25 Group A R3 The Great British Empire. vs Europe National Team",
+  "url": "https://www.chess.com/club/matches/1718523",
+  "start_time": 1736074800,
+  "status": "registration",
+  "boards": 30,
+  "settings": {
+    "rules": "chess",
+    "time_class": "daily",
+    "time_control": "1/259200",
+    "initial_setup": "",
+    "min_team_players": 10,
+    "max_rating": 1600,
+    "min_required_games": 10,
+    "autostart": false
+  },
+  "teams": {
+    "team1": {
+      "@id": "https://api.chess.com/pub/club/the-great-british-empire",
+      "name": "The Great British Empire.",
+      "url": "https://www.chess.com/club/the-great-british-empire",
+      "score": 0,
+      "players": [
+        {
+          "username": "180dave",
+          "rating": 994,
+          "timeout_percent": 0,
+          "rd": 44.8971,
+          "status": "premium"
+        },
+        {
+          "username": "andyd19",
+          "rating": 1041,
+          "timeout_percent": 0,
+          "rd": 56.5435,
+          "status": "basic"
+        },
+        {
+          "username": "bahauoppo",
+          "rating": 1301,
+          "timeout_percent": 0,
+          "rd": 52.727,
+          "status": "basic"
+        },
+        {
+          "username": "bightigh",
+          "rating": 938,
+          "timeout_percent": 0,
+          "rd": 53.7928,
+          "status": "basic"
+        },
+        {
+          "username": "camilla_lee_honeytrap",
+          "rating": 1469,
+          "timeout_percent": 0.64,
+          "rd": 47.2208,
+          "status": "premium"
+        },
+        {
+          "username": "cardiff",
+          "rating": 1024,
+          "timeout_percent": 0,
+          "rd": 57.094,
+          "status": "premium"
+        },
+        {
+          "username": "chestermike",
+          "rating": 1164,
+          "timeout_percent": 0,
+          "rd": 50.1419,
+          "status": "basic"
+        },
+        {
+          "username": "cypherblack",
+          "rating": 1321,
+          "timeout_percent": 0,
+          "rd": 49.066,
+          "status": "premium"
+        },
+        {
+          "username": "darrinm",
+          "rating": 1150,
+          "timeout_percent": 0,
+          "rd": 60.0255,
+          "status": "basic"
+        },
+        {
+          "username": "davidpeardon",
+          "rating": 1334,
+          "timeout_percent": 0,
+          "rd": 41.6271,
+          "status": "premium"
+        },
+        {
+          "username": "dsm_uk",
+          "rating": 1545,
+          "timeout_percent": 0,
+          "rd": 54.2681,
+          "status": "basic"
+        },
+        {
+          "username": "edwinkm",
+          "rating": 1005,
+          "timeout_percent": 0,
+          "rd": 60.0253,
+          "status": "premium"
+        },
+        {
+          "username": "elm49",
+          "rating": 1119,
+          "timeout_percent": 0,
+          "rd": 50.0385,
+          "status": "basic"
+        },
+        {
+          "username": "emsworth-sussex",
+          "rating": 1518,
+          "timeout_percent": 0,
+          "rd": 56.0477,
+          "status": "basic"
+        },
+        {
+          "username": "fgalmeid",
+          "rating": 1167,
+          "timeout_percent": 6.82,
+          "rd": 46.0012,
+          "status": "premium"
+        },
+        {
+          "username": "gerardconnolly",
+          "rating": 1536,
+          "timeout_percent": 0,
+          "rd": 75.4273,
+          "status": "basic"
+        },
+        {
+          "username": "giraffebha",
+          "rating": 1318,
+          "timeout_percent": 0,
+          "rd": 48.2032,
+          "status": "premium"
+        },
+        {
+          "username": "gray_cat",
+          "rating": 1410,
+          "timeout_percent": 0,
+          "rd": 35.852,
+          "status": "premium"
+        },
+        {
+          "username": "horsechessnut",
+          "rating": 1310,
+          "timeout_percent": 0,
+          "rd": 37.2096,
+          "status": "premium"
+        },
+        {
+          "username": "jefrodownunder",
+          "rating": 903,
+          "timeout_percent": 0,
+          "rd": 51.0765,
+          "status": "basic"
+        },
+        {
+          "username": "joss_bartleet",
+          "rating": 1144,
+          "timeout_percent": 22.22,
+          "rd": 75.3663,
+          "status": "basic"
+        },
+        {
+          "username": "lincoln_imp",
+          "rating": 1108,
+          "timeout_percent": 0,
+          "rd": 77.5534,
+          "status": "premium"
+        },
+        {
+          "username": "lostapiece",
+          "rating": 1146,
+          "timeout_percent": 0,
+          "rd": 42.3509,
+          "status": "premium"
+        },
+        {
+          "username": "palidan5",
+          "rating": 1254,
+          "timeout_percent": 0,
+          "rd": 34.6114,
+          "status": "premium"
+        },
+        {
+          "username": "phizzer",
+          "rating": 1081,
+          "timeout_percent": 0,
+          "rd": 58.2139,
+          "status": "premium"
+        },
+        {
+          "username": "seventeenscents",
+          "rating": 1086,
+          "timeout_percent": 1.08,
+          "rd": 45.9861,
+          "status": "premium"
+        },
+        {
+          "username": "thedogbobson",
+          "rating": 979,
+          "timeout_percent": 0,
+          "rd": 56.1651,
+          "status": "premium"
+        },
+        {
+          "username": "thedrunkenmaster",
+          "rating": 1141,
+          "timeout_percent": 0,
+          "rd": 54.0908,
+          "status": "basic"
+        },
+        {
+          "username": "therealcheese27",
+          "rating": 992,
+          "timeout_percent": 0,
+          "rd": 43.2249,
+          "status": "basic"
+        },
+        {
+          "username": "wonderfolly",
+          "rating": 1098,
+          "timeout_percent": 0,
+          "rd": 34.2384,
+          "status": "basic"
+        }
+      ],
+      "fair_play_removals": [],
+      "locked": false
+    },
+    "team2": {
+      "@id": "https://api.chess.com/pub/club/europe-national-team",
+      "name": "Europe National Team",
+      "url": "https://www.chess.com/club/europe-national-team",
+      "score": 0,
+      "players": [
+        {
+          "username": "arievanlent",
+          "rating": 1466,
+          "timeout_percent": 0,
+          "rd": 42.3637,
+          "status": "premium"
+        },
+        {
+          "username": "barmaglot8",
+          "rating": 1171,
+          "timeout_percent": 0.32,
+          "rd": 34.3003,
+          "status": "basic"
+        },
+        {
+          "username": "bon480",
+          "rating": 768,
+          "timeout_percent": 7.14,
+          "rd": 68.9619,
+          "status": "basic"
+        },
+        {
+          "username": "crno_srce",
+          "rating": 1215,
+          "timeout_percent": 8.96,
+          "rd": 52.5968,
+          "status": "basic"
+        },
+        {
+          "username": "dariopinese",
+          "rating": 1292,
+          "timeout_percent": 0,
+          "rd": 47.1291,
+          "status": "premium"
+        },
+        {
+          "username": "davecat74",
+          "rating": 1293,
+          "timeout_percent": 0,
+          "rd": 30.452,
+          "status": "premium"
+        },
+        {
+          "username": "dmitriyfarfar",
+          "rating": 1137,
+          "timeout_percent": 5.56,
+          "rd": 77.4368,
+          "status": "basic"
+        },
+        {
+          "username": "dovmat09",
+          "rating": 1345,
+          "timeout_percent": 0,
+          "rd": 42.541,
+          "status": "basic"
+        },
+        {
+          "username": "eleonore99",
+          "rating": 1579,
+          "timeout_percent": 0,
+          "rd": 48.1888,
+          "status": "basic"
+        },
+        {
+          "username": "fugalbishop",
+          "rating": 643,
+          "timeout_percent": 69.44,
+          "rd": 54.657,
+          "status": "basic"
+        },
+        {
+          "username": "fxgv",
+          "rating": 1574,
+          "timeout_percent": 0,
+          "rd": 59.6017,
+          "status": "premium"
+        },
+        {
+          "username": "genealogy",
+          "rating": 1547,
+          "timeout_percent": 0,
+          "rd": 54.1559,
+          "status": "premium"
+        },
+        {
+          "username": "gordonogilvie",
+          "rating": 1248,
+          "timeout_percent": 0,
+          "rd": 33.3635,
+          "status": "basic"
+        },
+        {
+          "username": "jasperseelemeijer",
+          "rating": 1512,
+          "timeout_percent": 3.44,
+          "rd": 28.9256,
+          "status": "basic"
+        },
+        {
+          "username": "jaysaintmary",
+          "rating": 1477,
+          "timeout_percent": 0,
+          "rd": 52.5199,
+          "status": "premium"
+        },
+        {
+          "username": "jurij_vojska",
+          "rating": 1134,
+          "timeout_percent": 42.34,
+          "rd": 48.4507,
+          "status": "basic"
+        },
+        {
+          "username": "makkanakki",
+          "rating": 997,
+          "timeout_percent": 0,
+          "rd": 40.848,
+          "status": "basic"
+        },
+        {
+          "username": "masterking_64",
+          "rating": 1304,
+          "timeout_percent": 0,
+          "rd": 190.815,
+          "status": "premium"
+        },
+        {
+          "username": "matoshazrli",
+          "rating": 921,
+          "timeout_percent": 0,
+          "rd": 53.5794,
+          "status": "basic"
+        },
+        {
+          "username": "mclaren1917",
+          "rating": 1271,
+          "timeout_percent": 0,
+          "rd": 55.228,
+          "status": "premium"
+        },
+        {
+          "username": "mevensso",
+          "rating": 1443,
+          "timeout_percent": 11.9,
+          "rd": 61.9923,
+          "status": "basic"
+        },
+        {
+          "username": "milotos",
+          "rating": 1554,
+          "timeout_percent": 0,
+          "rd": 61.7786,
+          "status": "premium"
+        },
+        {
+          "username": "mmendezh8",
+          "rating": 1537,
+          "timeout_percent": 0,
+          "rd": 58.455,
+          "status": "basic"
+        },
+        {
+          "username": "omamuckel",
+          "rating": 871,
+          "timeout_percent": 0,
+          "rd": 100.581,
+          "status": "basic"
+        },
+        {
+          "username": "pal78",
+          "rating": 1412,
+          "timeout_percent": 2.1,
+          "rd": 48.2053,
+          "status": "basic"
+        },
+        {
+          "username": "posven",
+          "rating": 1231,
+          "timeout_percent": 1.77,
+          "rd": 43.4165,
+          "status": "basic"
+        },
+        {
+          "username": "pulkkins",
+          "rating": 1367,
+          "timeout_percent": 0,
+          "rd": 74.2603,
+          "status": "basic"
+        },
+        {
+          "username": "pyecom",
+          "rating": 1138,
+          "timeout_percent": 0,
+          "rd": 50.9557,
+          "status": "basic"
+        },
+        {
+          "username": "rasputin1973",
+          "rating": 1400,
+          "timeout_percent": 4.76,
+          "rd": 54.128,
+          "status": "premium"
+        },
+        {
+          "username": "restinpeace29",
+          "rating": 1350,
+          "timeout_percent": 0,
+          "rd": 50.6766,
+          "status": "premium"
+        },
+        {
+          "username": "robenbro",
+          "rating": 1540,
+          "timeout_percent": 0,
+          "rd": 57.0387,
+          "status": "premium"
+        },
+        {
+          "username": "scalcio13",
+          "rating": 1461,
+          "timeout_percent": 0,
+          "rd": 50.4899,
+          "status": "basic"
+        },
+        {
+          "username": "snikerst",
+          "rating": 1145,
+          "timeout_percent": 0,
+          "rd": 53.4153,
+          "status": "basic"
+        },
+        {
+          "username": "standing_bear",
+          "rating": 1185,
+          "timeout_percent": 14.86,
+          "rd": 51.8552,
+          "status": "basic"
+        },
+        {
+          "username": "syzovvladyslav",
+          "rating": 1463,
+          "timeout_percent": 0,
+          "rd": 39.2316,
+          "status": "premium"
+        },
+        {
+          "username": "szente",
+          "rating": 1167,
+          "timeout_percent": 2.63,
+          "rd": 47.9864,
+          "status": "basic"
+        },
+        {
+          "username": "trasgu00",
+          "rating": 1136,
+          "timeout_percent": 0,
+          "rd": 32.4856,
+          "status": "basic"
+        }
+      ],
+      "fair_play_removals": [],
+      "locked": false
+    }
+  }
+}

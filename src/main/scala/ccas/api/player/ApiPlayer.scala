@@ -1,9 +1,9 @@
 package ccas.api.player
 
-import ccas.api.utils.Enums.{League, PlayerStatus, Title}
 import ccas.api.utils.Hosts
-import ccas.api.utils.Subtypes.{Elo, PlayerId, Username}
-import ccas.utils.json.JsonCodecs.urlJsonCodec
+import ccas.api.utils.enums.{League, PlayerStatus, Title}
+import ccas.api.utils.subtypes.{Elo, PlayerId, Username}
+import ccas.utils.json.JsonDecoding
 import zio.http.URL
 import zio.json.{DeriveJsonDecoder, JsonDecoder, SnakeCase, jsonMemberNames}
 
@@ -32,10 +32,10 @@ case class ApiPlayer(
   val apiStatsUrl: URL = ApiPlayerStats.getUrl(username)
 }
 
-object ApiPlayer {
+object ApiPlayer extends JsonDecoding[ApiPlayer] {
+  override protected val jsonDecoderDerived: JsonDecoder[ApiPlayer] = DeriveJsonDecoder.gen
+
   val host: URL = Hosts.api.addPath("player")
-  
-  given JsonDecoder[ApiPlayer] = DeriveJsonDecoder.gen[ApiPlayer]
 
   def getUrl(username: Username): URL = host.addPath(username)
 }

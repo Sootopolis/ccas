@@ -1,0 +1,76 @@
+{
+  "clubs": [
+    {
+      "@id": "https://www.chess.com/club/tottenham-hotspur-fc-2",
+      "name": "Tottenham Hotspur FC.",
+      "last_activity": 1734181584,
+      "icon": "https://images.chesscomfiles.com/uploads/v1/group/4283.2013fb01.50x50o.3d0d1239324a.jpeg",
+      "url": "https://www.chess.com/club/tottenham-hotspur-fc-2",
+      "joined": 1645463087
+    },
+    {
+      "@id": "https://www.chess.com/club/devon-chess",
+      "name": "Devon Chess",
+      "last_activity": 1735496565,
+      "icon": "https://images.chesscomfiles.com/uploads/v1/group/4696.3070b7ea.50x50o.0cbf50cd75e7.jpg",
+      "url": "https://www.chess.com/club/devon-chess",
+      "joined": 1561106819
+    },
+    {
+      "@id": "https://www.chess.com/club/world-football-addicts",
+      "name": "WORLD FOOTBALL ADDICTS",
+      "last_activity": 1723121443,
+      "icon": "https://images.chesscomfiles.com/uploads/v1/group/10866.07917e0a.50x50o.801dcebbafc3.jpeg",
+      "url": "https://www.chess.com/club/world-football-addicts",
+      "joined": 1561286251
+    },
+    {
+      "@id": "https://www.chess.com/club/the-great-british-empire",
+      "name": "The Great British Empire.",
+      "last_activity": 1735503785,
+      "icon": "https://images.chesscomfiles.com/uploads/v1/group/19328.56a89664.50x50o.f30a48fd13d3.jpg",
+      "url": "https://www.chess.com/club/the-great-british-empire",
+      "joined": 1598357890
+    },
+    {
+      "@id": "https://www.chess.com/club/diagonally-challenged-gentlemens-club",
+      "name": "Diagonally Challenged Gentlemen's Club",
+      "last_activity": 1735503794,
+      "icon": "https://images.chesscomfiles.com/uploads/v1/group/20798.a4906525.50x50o.1329489a5e18.jpeg",
+      "url": "https://www.chess.com/club/diagonally-challenged-gentlemens-club",
+      "joined": 1710165743
+    },
+    {
+      "@id": "https://www.chess.com/club/tgbe-office-for-planning-and-preparation",
+      "name": "TGBE Office for Planning and Preparation",
+      "last_activity": 1733419183,
+      "icon": "https://images.chesscomfiles.com/uploads/v1/group/26396.d0757bf8.50x50o.c551564f00f3.jpeg",
+      "url": "https://www.chess.com/club/tgbe-office-for-planning-and-preparation",
+      "joined": 1600944935
+    },
+    {
+      "@id": "https://www.chess.com/club/tgbe-vote-chess-group",
+      "name": "TGBE Vote Chess Group",
+      "last_activity": 1690929103,
+      "icon": "https://images.chesscomfiles.com/uploads/v1/group/29814.e8340f4c.50x50o.0260576f5583.jpeg",
+      "url": "https://www.chess.com/club/tgbe-vote-chess-group",
+      "joined": 1601577167
+    },
+    {
+      "@id": "https://www.chess.com/club/chess-com-developer-community",
+      "name": "Chess.com Developer Community",
+      "last_activity": 1735516783,
+      "icon": "https://images.chesscomfiles.com/uploads/v1/group/57796.67ee0038.50x50o.585842f67281.png",
+      "url": "https://www.chess.com/club/chess-com-developer-community",
+      "joined": 1648139246
+    },
+    {
+      "@id": "https://www.chess.com/club/laleague-chess-masters-llcm",
+      "name": "LaLEAGUE Chess Masters LLCM",
+      "last_activity": 1702777138,
+      "icon": "https://images.chesscomfiles.com/uploads/v1/group/525381.d2046959.50x50o.faa1a11df3c9.png",
+      "url": "https://www.chess.com/club/laleague-chess-masters-llcm",
+      "joined": 1687984555
+    }
+  ]
+}

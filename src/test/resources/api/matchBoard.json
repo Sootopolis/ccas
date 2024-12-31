@@ -1,0 +1,62 @@
+{
+  "board_scores": {
+    "wonderfolly": 2,
+    "melayev_77": 0
+  },
+  "games": [
+    {
+      "url": "https://www.chess.com/game/daily/678929789",
+      "pgn": "[Event \"TURK CHESS PLAYERS vs The Great British Empire. U1300 14.07.2024 - Board 13\"]\n[Site \"Chess.com\"]\n[Date \"2024.07.13\"]\n[Round \"-\"]\n[White \"wonderfolly\"]\n[Black \"Melayev_77\"]\n[Result \"1-0\"]\n[Match \"https://www.chess.com/club/matches/1650919\"]\n[CurrentPosition \"r1bqkb1r/pp2pppp/2n2n2/2pP4/8/2PP1Q2/PP3PPP/RNB1KBNR b KQkq - 0 5\"]\n[Timezone \"UTC\"]\n[ECO \"B20\"]\n[ECOUrl \"https://www.chess.com/openings/Sicilian-Defense\"]\n[UTCDate \"2024.07.13\"]\n[UTCTime \"22:04:04\"]\n[WhiteElo \"1102\"]\n[BlackElo \"538\"]\n[TimeControl \"1/259200\"]\n[Termination \"wonderfolly won on time\"]\n[StartTime \"22:04:04\"]\n[EndDate \"2024.07.19\"]\n[EndTime \"10:07:31\"]\n[Link \"https://www.chess.com/game/daily/678929789\"]\n\n1. e4 {[%clk 71:19:00]} 1... c5 {[%clk 65:30:14]} 2. Qf3 {[%clk 56:45:58]} 2... Nc6 {[%clk 63:17:32]} 3. c3 {[%clk 66:31:55]} 3... Nf6 {[%clk 70:42:38]} 4. d3 {[%clk 66:38:24]} 4... d5 {[%clk 61:03:56]} 5. exd5 {[%clk 66:07:51]} 1-0\n",
+      "time_control": "1/259200",
+      "end_time": 1721383651,
+      "rated": true,
+      "fen": "r1bqkb1r/pp2pppp/2n2n2/2pP4/8/2PP1Q2/PP3PPP/RNB1KBNR b KQkq - 0 5",
+      "start_time": 1720908244,
+      "time_class": "daily",
+      "rules": "chess",
+      "white": {
+        "rating": 1102,
+        "result": "win",
+        "@id": "https://api.chess.com/pub/player/wonderfolly",
+        "username": "wonderfolly",
+        "uuid": "d70a4442-08af-11e3-8002-000000000000"
+      },
+      "black": {
+        "rating": 538,
+        "result": "timeout",
+        "@id": "https://api.chess.com/pub/player/melayev_77",
+        "username": "Melayev_77",
+        "uuid": "27ce0670-33a6-11ef-80b0-1baca5e6361e"
+      },
+      "eco": "https://www.chess.com/openings/Sicilian-Defense",
+      "match": "https://api.chess.com/pub/match/1650919"
+    },
+    {
+      "url": "https://www.chess.com/game/daily/678929787",
+      "pgn": "[Event \"TURK CHESS PLAYERS vs The Great British Empire. U1300 14.07.2024 - Board 13\"]\n[Site \"Chess.com\"]\n[Date \"2024.07.13\"]\n[Round \"-\"]\n[White \"Melayev_77\"]\n[Black \"wonderfolly\"]\n[Result \"0-1\"]\n[Match \"https://www.chess.com/club/matches/1650919\"]\n[CurrentPosition \"rnb1kbnr/pp3ppp/2pp1q2/8/3NP3/2N5/PPP2PPP/R1BQKB1R w KQkq - 2 6\"]\n[Timezone \"UTC\"]\n[ECO \"C41\"]\n[ECOUrl \"https://www.chess.com/openings/Philidor-Defense-Exchange-Variation-4.Nxd4\"]\n[UTCDate \"2024.07.13\"]\n[UTCTime \"22:04:04\"]\n[WhiteElo \"545\"]\n[BlackElo \"1101\"]\n[TimeControl \"1/259200\"]\n[Termination \"wonderfolly won on time\"]\n[StartTime \"22:04:04\"]\n[EndDate \"2024.07.19\"]\n[EndTime \"10:07:13\"]\n[Link \"https://www.chess.com/game/daily/678929787\"]\n\n1. e4 {[%clk 64:50:58]} 1... e5 {[%clk 56:44:28]} 2. Nf3 {[%clk 63:18:55]} 2... d6 {[%clk 66:30:23]} 3. d4 {[%clk 70:44:14]} 3... exd4 {[%clk 66:36:48]} 4. Nxd4 {[%clk 72:00:00]} 4... c6 {[%clk 71:55:45]} 5. Nc3 {[%clk 61:07:03]} 5... Qf6 {[%clk 66:08:47]} 0-1\n",
+      "time_control": "1/259200",
+      "end_time": 1721383633,
+      "rated": true,
+      "fen": "rnb1kbnr/pp3ppp/2pp1q2/8/3NP3/2N5/PPP2PPP/R1BQKB1R w KQkq - 2 6",
+      "start_time": 1720908244,
+      "time_class": "daily",
+      "rules": "chess",
+      "white": {
+        "rating": 545,
+        "result": "timeout",
+        "@id": "https://api.chess.com/pub/player/melayev_77",
+        "username": "Melayev_77",
+        "uuid": "27ce0670-33a6-11ef-80b0-1baca5e6361e"
+      },
+      "black": {
+        "rating": 1101,
+        "result": "win",
+        "@id": "https://api.chess.com/pub/player/wonderfolly",
+        "username": "wonderfolly",
+        "uuid": "d70a4442-08af-11e3-8002-000000000000"
+      },
+      "eco": "https://www.chess.com/openings/Philidor-Defense-Exchange-Variation-4.Nxd4",
+      "match": "https://api.chess.com/pub/match/1650919"
+    }
+  ]
+}

@@ -1,19 +1,22 @@
 package ccas.api.player
 
 import ccas.api.player.ApiPlayerGamesCurrent.ApiPlayerCurrentDailyGame
-import ccas.api.utils.Enums.{Colour, GameRule, TimeClass}
-import ccas.api.utils.Subtypes
-import ccas.api.utils.Subtypes.Username
+import ccas.api.utils.enums.{Colour, GameRule, TimeClass}
+import ccas.api.utils.subtypes.Username
+import ccas.utils.json.JsonDecoding
 import zio.Chunk
 import zio.http.URL
-import zio.json.{SnakeCase, jsonMemberNames}
+import zio.json.{DeriveJsonDecoder, JsonDecoder, SnakeCase, jsonMemberNames}
 
 import java.time.Instant
 
 @jsonMemberNames(SnakeCase)
 case class ApiPlayerGamesCurrent(games: Chunk[ApiPlayerCurrentDailyGame])
 
-object ApiPlayerGamesCurrent {
+object ApiPlayerGamesCurrent extends JsonDecoding[ApiPlayerGamesCurrent] {
+  override protected val jsonDecoderDerived: JsonDecoder[ApiPlayerGamesCurrent] = DeriveJsonDecoder.gen
+
+  @jsonMemberNames(SnakeCase)
   case class ApiPlayerCurrentDailyGame(
     white       : URL,
     black       : URL,
@@ -31,7 +34,7 @@ object ApiPlayerGamesCurrent {
     rated       : Boolean,
     tournament  : Option[URL],
     `match`     : Option[URL]
-  ) {
+  ) derives JsonDecoder {
     val whiteUsername: Username = Username.wrap(white.path.segments.last)
     val blackUsername: Username = Username.wrap(black.path.segments.last)
 

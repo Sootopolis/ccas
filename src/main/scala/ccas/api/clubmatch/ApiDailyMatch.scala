@@ -1,12 +1,15 @@
 package ccas.api.clubmatch
 
 import ccas.api.clubmatch.ApiDailyMatch.{ApiDailyMatchSettings, ApiDailyMatchTeams}
-import ccas.api.utils.Enums.*
-import ccas.api.utils.Hosts
-import ccas.api.utils.Subtypes.{ClubMatchId, Elo, Username}
+import ccas.api.utils.*
+import ccas.api.utils.enums.*
+import ccas.api.utils.subtypes.{ClubMatchId, Elo, Username}
+import ccas.utils.json.{JsonDecoding, JsonDecodingException}
 import zio.Chunk
 import zio.http.URL
-import zio.json.{SnakeCase, jsonMemberNames}
+import zio.json.ast.{Json, JsonCursor}
+import zio.json.internal.RetractReader
+import zio.json.{JsonDecoder, JsonError, SnakeCase, jsonMemberNames}
 
 import java.time.Instant
 
@@ -22,7 +25,24 @@ sealed trait ApiDailyMatch {
   val teams: ApiDailyMatchTeams
 }
 
-object ApiDailyMatch {
+object ApiDailyMatch extends JsonDecoding[ApiDailyMatch] {
+  override protected val jsonDecoderDerived: JsonDecoder[ApiDailyMatch] = new JsonDecoder[ApiDailyMatch] {
+    override def unsafeDecode(trace: List[JsonError], in: RetractReader): ApiDailyMatch =
+      unsafeFromJsonAST(trace, Json.decoder.unsafeDecode(trace, in))
+
+    override def unsafeFromJsonAST(trace: List[JsonError], json: Json): ApiDailyMatch = {
+      val statusJson = json.get(JsonCursor.field("status")).getOrElse {
+        throw JsonDecodingException("Cannot decode json ApiDailyMatch: field `status` not found")
+      }
+      val decoder = ClubMatchStatus.jsonCodec.decoder.unsafeFromJsonAST(trace, statusJson) match {
+        case ClubMatchStatus.Finished => ApiDailyMatchFinished.derived$JsonDecoder.widen[ApiDailyMatch]
+        case ClubMatchStatus.InProgress => ApiDailyMatchInProgress.derived$JsonDecoder.widen[ApiDailyMatch]
+        case ClubMatchStatus.Registration => ApiDailyMatchRegistered.derived$JsonDecoder.widen[ApiDailyMatch]
+      }
+      decoder.fromJsonAST(json).left.map(JsonDecodingException(_)).fold(throw _, identity)
+    }
+  }
+
   val host: URL = Hosts.api.addPath("match")
 
   def getUrl(clubMatchId: ClubMatchId): URL = host.addPath(clubMatchId.toString)
@@ -37,7 +57,7 @@ object ApiDailyMatch {
     boards   : Int,
     settings : ApiDailyMatchSettings,
     teams    : ApiDailyMatchTeamsRegistered
-  ) extends ApiDailyMatch {
+  ) extends ApiDailyMatch derives JsonDecoder {
     require(status == ClubMatchStatus.Registration)
   }
 
@@ -51,7 +71,7 @@ object ApiDailyMatch {
     boards   : Int,
     settings : ApiDailyMatchSettings,
     teams    : ApiDailyMatchTeamsInProgress
-  ) extends ApiDailyMatch {
+  ) extends ApiDailyMatch derives JsonDecoder {
     require(status == ClubMatchStatus.InProgress)
   }
 
@@ -66,10 +86,11 @@ object ApiDailyMatch {
     boards   : Int,
     settings : ApiDailyMatchSettings,
     teams    : ApiDailyMatchTeamsFinished
-  ) extends ApiDailyMatch {
+  ) extends ApiDailyMatch derives JsonDecoder {
     require(status == ClubMatchStatus.Finished)
   }
 
+  @jsonMemberNames(SnakeCase)
   case class ApiDailyMatchSettings(
     rules           : GameRule,
     timeClass       : TimeClass,
@@ -80,8 +101,8 @@ object ApiDailyMatch {
     minRequiredGames: Int,
     minRating       : Option[Elo],
     maxRating       : Option[Elo],
-    autoStart       : Boolean
-  )
+    autoStart       : Option[Boolean]
+  ) derives JsonDecoder
 
   // teams
 
@@ -90,14 +111,17 @@ object ApiDailyMatch {
     val team2: ApiDailyMatchTeam
   }
 
+  @jsonMemberNames(SnakeCase)
   case class ApiDailyMatchTeamsRegistered(team1: ApiDailyMatchTeamRegistered, team2: ApiDailyMatchTeamRegistered)
-    extends ApiDailyMatchTeams
+    extends ApiDailyMatchTeams derives JsonDecoder
 
+  @jsonMemberNames(SnakeCase)
   case class ApiDailyMatchTeamsInProgress(team1: ApiDailyMatchTeamInProgress, team2: ApiDailyMatchTeamInProgress)
-    extends ApiDailyMatchTeams
+    extends ApiDailyMatchTeams derives JsonDecoder
 
+  @jsonMemberNames(SnakeCase)
   case class ApiDailyMatchTeamsFinished(team1: ApiDailyMatchTeamFinished, team2: ApiDailyMatchTeamFinished)
-    extends ApiDailyMatchTeams
+    extends ApiDailyMatchTeams derives JsonDecoder
 
   // team
 
@@ -110,6 +134,7 @@ object ApiDailyMatch {
     val fairPlayRemovals: Set[Username]
   }
 
+  @jsonMemberNames(SnakeCase)
   case class ApiDailyMatchTeamRegistered(
     `@id`           : URL,
     name            : String,
@@ -118,8 +143,9 @@ object ApiDailyMatch {
     players         : Chunk[ApiDailyMatchPlayerRegistered],
     fairPlayRemovals: Set[Username],
     locked          : Boolean
-  ) extends ApiDailyMatchTeam
+  ) extends ApiDailyMatchTeam derives JsonDecoder
 
+  @jsonMemberNames(SnakeCase)
   case class ApiDailyMatchTeamInProgress(
     `@id`           : URL,
     name            : String,
@@ -127,8 +153,9 @@ object ApiDailyMatch {
     score           : Double,
     players         : Chunk[ApiDailyMatchPlayerStarted],
     fairPlayRemovals: Set[Username]
-  ) extends ApiDailyMatchTeam
+  ) extends ApiDailyMatchTeam derives JsonDecoder
 
+  @jsonMemberNames(SnakeCase)
   case class ApiDailyMatchTeamFinished(
     `@id`           : URL,
     name            : String,
@@ -137,7 +164,7 @@ object ApiDailyMatch {
     result          : ClubMatchResult,
     players         : Chunk[ApiDailyMatchPlayerStarted],
     fairPlayRemovals: Set[Username]
-  ) extends ApiDailyMatchTeam
+  ) extends ApiDailyMatchTeam derives JsonDecoder
 
   // player
 
@@ -145,14 +172,16 @@ object ApiDailyMatch {
     val username: Username
   }
 
+  @jsonMemberNames(SnakeCase)
   case class ApiDailyMatchPlayerRegistered(
     username      : Username,
     rating        : Elo,
     timeoutPercent: Double,
     rd            : Double,
     status        : PlayerStatus
-  ) extends ApiDailyMatchPlayer
+  ) extends ApiDailyMatchPlayer derives JsonDecoder
 
+  @jsonMemberNames(SnakeCase)
   case class ApiDailyMatchPlayerStarted(
     username     : Username,
     stats        : URL,
@@ -160,5 +189,5 @@ object ApiDailyMatch {
     playedAsWhite: Option[GameResultDetail],
     playedAsBlack: Option[GameResultDetail],
     board        : URL
-  ) extends ApiDailyMatchPlayer
+  ) extends ApiDailyMatchPlayer derives JsonDecoder
 }

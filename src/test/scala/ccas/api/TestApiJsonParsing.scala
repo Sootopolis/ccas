@@ -1,0 +1,62 @@
+package ccas.api
+
+import ccas.api.club.{ApiClub, ApiClubMatches, ApiClubMembers}
+import ccas.api.clubmatch.{ApiDailyMatch, ApiDailyMatchBoard}
+import ccas.api.player.*
+import ccas.api.utils.enums.{League, PlayerStatus}
+import ccas.api.utils.subtypes.{PlayerId, Username}
+import zio.http.URL
+import zio.json.{JsonDecoder, readJsonLinesAs}
+import zio.test.{Spec, ZIOSpecDefault, assertCompletes, assertTrue}
+
+import java.net.URI
+import java.time.Instant
+
+object TestApiJsonParsing extends ZIOSpecDefault {
+  override def spec: Spec[Any, Throwable] = suite("API JSON parsing tests")(
+    generateTest[ApiPlayer]("player")(player),
+    generateTest[ApiPlayerStats]("playerStats"),
+    generateTest[ApiPlayerGamesCurrent]("playerGames"),
+    generateTest[ApiPlayerGamesToMove]("playerGamesToMove"),
+    generateTest[ApiPlayerClubs]("playerClubs"),
+    generateTest[ApiPlayerMatches]("playerMatches"),
+    generateTest[ApiClub]("club"),
+    generateTest[ApiClubMatches]("clubMatches"),
+    generateTest[ApiClubMembers]("clubMembers"),
+    generateTest[ApiDailyMatch]("matchFinished"),
+    generateTest[ApiDailyMatch]("matchInProgress"),
+    generateTest[ApiDailyMatch]("matchRegistered"),
+    generateTest[ApiDailyMatchBoard]("matchBoard"),
+  )
+
+  private def getFileName(label: String) = s"src/test/resources/api/$label.json"
+
+  private def generateTest[T](label: String)(expected: => T)(using decoder: JsonDecoder[T]) = test(label) {
+    readJsonLinesAs(getFileName(label)).runHead.someOrFailException.map(x => assertTrue(x == expected))
+  }
+
+  private def generateTest[T](label: String)(using decoder: JsonDecoder[T]) = test(label) {
+    readJsonLinesAs(getFileName(label))(using decoder).runHead.someOrFailException.as(assertCompletes)
+  }
+
+  private val player = ApiPlayer(
+    playerId = PlayerId.wrap(41),
+    username = Username.wrap("erik"),
+    name = Some("Erik"),
+    country = URL.fromURI(URI("https://api.chess.com/pub/country/US")).get,
+    location = Some("Bay Area, CA"),
+    status = PlayerStatus.Staff,
+    joined = Instant.ofEpochSecond(1178556600),
+    lastOnline = Instant.ofEpochSecond(1735164010),
+    title = None,
+    avatar = {
+      val uri = URI("https://images.chesscomfiles.com/uploads/v1/user/41.5434c4ff.200x200o.5b102889d835.jpeg")
+      Some(URL.fromURI(uri).get)
+    },
+    followers = 7930,
+    isStreamer = false,
+    verified = false,
+    league = League.Silver,
+    fide = None
+  )
+}

@@ -1,0 +1,22 @@
+{
+  "@id": "https://api.chess.com/pub/club/chess-com-developer-community",
+  "name": "Chess.com Developer Community",
+  "club_id": 57796,
+  "country": "https://api.chess.com/pub/country/XX",
+  "average_daily_rating": 925,
+  "members_count": 15376,
+  "created": 1500301978,
+  "last_activity": 1734388428,
+  "admin": [
+    "https://api.chess.com/pub/player/bcurtis",
+    "https://api.chess.com/pub/player/erik",
+    "https://api.chess.com/pub/player/andreamorandini",
+    "https://api.chess.com/pub/player/martin_stahl",
+    "https://api.chess.com/pub/player/jdcannon"
+  ],
+  "visibility": "public",
+  "join_request": "https://www.chess.com/club/join/57796",
+  "icon": "https://images.chesscomfiles.com/uploads/v1/group/57796.67ee0038.50x50o.585842f67281.png",
+  "description": "<p>Chess.com's official club for APIs, data, and code for developers. Get involved!</p>",
+  "url": "https://www.chess.com/club/chess-com-developer-community"
+}

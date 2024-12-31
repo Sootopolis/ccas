@@ -1,0 +1,251 @@
+{
+  "@id": "https://api.chess.com/pub/match/1650919",
+  "name": "TURK CHESS PLAYERS vs The Great British Empire. U1300 14.07.2024",
+  "url": "https://www.chess.com/club/matches/1650919",
+  "start_time": 1720908242,
+  "end_time": 1735309563,
+  "status": "finished",
+  "boards": 13,
+  "settings": {
+    "rules": "chess",
+    "time_class": "daily",
+    "time_control": "1/259200",
+    "initial_setup": "",
+    "min_team_players": 1,
+    "max_rating": 1300,
+    "min_required_games": 0,
+    "autostart": false
+  },
+  "teams": {
+    "team1": {
+      "@id": "https://api.chess.com/pub/club/turk-chess-players",
+      "name": "TURK CHESS PLAYERS",
+      "url": "https://www.chess.com/club/turk-chess-players",
+      "score": 10,
+      "result": "lose",
+      "players": [
+        {
+          "username": "aslanli77",
+          "stats": "https://api.chess.com/pub/player/aslanli77/stats",
+          "status": "basic",
+          "played_as_black": "win",
+          "played_as_white": "win",
+          "board": "https://api.chess.com/pub/match/1650919/6"
+        },
+        {
+          "username": "ege_izmir",
+          "stats": "https://api.chess.com/pub/player/ege_izmir/stats",
+          "status": "basic",
+          "played_as_black": "win",
+          "played_as_white": "checkmated",
+          "board": "https://api.chess.com/pub/match/1650919/3"
+        },
+        {
+          "username": "fkb_85",
+          "stats": "https://api.chess.com/pub/player/fkb_85/stats",
+          "status": "premium",
+          "played_as_black": "win",
+          "played_as_white": "win",
+          "board": "https://api.chess.com/pub/match/1650919/5"
+        },
+        {
+          "username": "grs2801",
+          "stats": "https://api.chess.com/pub/player/grs2801/stats",
+          "status": "basic",
+          "played_as_black": "timeout",
+          "played_as_white": "timeout",
+          "board": "https://api.chess.com/pub/match/1650919/12"
+        },
+        {
+          "username": "hakush44",
+          "stats": "https://api.chess.com/pub/player/hakush44/stats",
+          "status": "basic",
+          "played_as_black": "timeout",
+          "played_as_white": "timeout",
+          "board": "https://api.chess.com/pub/match/1650919/7"
+        },
+        {
+          "username": "hamed4416",
+          "stats": "https://api.chess.com/pub/player/hamed4416/stats",
+          "status": "basic",
+          "played_as_black": "resigned",
+          "played_as_white": "win",
+          "board": "https://api.chess.com/pub/match/1650919/11"
+        },
+        {
+          "username": "jordani_jovanovic",
+          "stats": "https://api.chess.com/pub/player/jordani_jovanovic/stats",
+          "status": "basic",
+          "played_as_white": "win",
+          "played_as_black": "win",
+          "board": "https://api.chess.com/pub/match/1650919/8"
+        },
+        {
+          "username": "melayev_77",
+          "stats": "https://api.chess.com/pub/player/melayev_77/stats",
+          "status": "closed:fair_play_violations",
+          "played_as_black": "timeout",
+          "played_as_white": "timeout",
+          "board": "https://api.chess.com/pub/match/1650919/13"
+        },
+        {
+          "username": "mertbenim",
+          "stats": "https://api.chess.com/pub/player/mertbenim/stats",
+          "status": "basic",
+          "played_as_white": "resigned",
+          "played_as_black": "resigned",
+          "board": "https://api.chess.com/pub/match/1650919/10"
+        },
+        {
+          "username": "navidm6m",
+          "stats": "https://api.chess.com/pub/player/navidm6m/stats",
+          "status": "basic",
+          "played_as_white": "resigned",
+          "played_as_black": "checkmated",
+          "board": "https://api.chess.com/pub/match/1650919/1"
+        },
+        {
+          "username": "seyranhacibeyli",
+          "stats": "https://api.chess.com/pub/player/seyranhacibeyli/stats",
+          "status": "premium",
+          "played_as_black": "win",
+          "played_as_white": "resigned",
+          "board": "https://api.chess.com/pub/match/1650919/2"
+        },
+        {
+          "username": "sleepy-demetrius",
+          "stats": "https://api.chess.com/pub/player/sleepy-demetrius/stats",
+          "status": "basic",
+          "played_as_black": "timeout",
+          "played_as_white": "win",
+          "board": "https://api.chess.com/pub/match/1650919/4"
+        },
+        {
+          "username": "zibapak",
+          "stats": "https://api.chess.com/pub/player/zibapak/stats",
+          "status": "premium",
+          "played_as_black": "resigned",
+          "played_as_white": "checkmated",
+          "board": "https://api.chess.com/pub/match/1650919/9"
+        }
+      ],
+      "fair_play_removals": [
+        "Melayev_77"
+      ]
+    },
+    "team2": {
+      "@id": "https://api.chess.com/pub/club/the-great-british-empire",
+      "name": "The Great British Empire.",
+      "url": "https://www.chess.com/club/the-great-british-empire",
+      "score": 16,
+      "result": "win",
+      "players": [
+        {
+          "username": "br1bri",
+          "stats": "https://api.chess.com/pub/player/br1bri/stats",
+          "status": "premium",
+          "played_as_white": "resigned",
+          "played_as_black": "resigned",
+          "board": "https://api.chess.com/pub/match/1650919/6"
+        },
+        {
+          "username": "chestermike",
+          "stats": "https://api.chess.com/pub/player/chestermike/stats",
+          "status": "basic",
+          "played_as_white": "win",
+          "played_as_black": "checkmated",
+          "board": "https://api.chess.com/pub/match/1650919/11"
+        },
+        {
+          "username": "coolcheck108",
+          "stats": "https://api.chess.com/pub/player/coolcheck108/stats",
+          "status": "premium",
+          "played_as_white": "resigned",
+          "played_as_black": "win",
+          "board": "https://api.chess.com/pub/match/1650919/2"
+        },
+        {
+          "username": "dtresham",
+          "stats": "https://api.chess.com/pub/player/dtresham/stats",
+          "status": "premium",
+          "played_as_black": "checkmated",
+          "played_as_white": "resigned",
+          "board": "https://api.chess.com/pub/match/1650919/8"
+        },
+        {
+          "username": "giraffebha",
+          "stats": "https://api.chess.com/pub/player/giraffebha/stats",
+          "status": "premium",
+          "played_as_white": "checkmated",
+          "played_as_black": "win",
+          "board": "https://api.chess.com/pub/match/1650919/3"
+        },
+        {
+          "username": "marianneolsen",
+          "stats": "https://api.chess.com/pub/player/marianneolsen/stats",
+          "status": "premium",
+          "played_as_white": "resigned",
+          "played_as_black": "resigned",
+          "board": "https://api.chess.com/pub/match/1650919/5"
+        },
+        {
+          "username": "mrbevill",
+          "stats": "https://api.chess.com/pub/player/mrbevill/stats",
+          "status": "premium",
+          "played_as_black": "win",
+          "played_as_white": "win",
+          "board": "https://api.chess.com/pub/match/1650919/10"
+        },
+        {
+          "username": "palidan5",
+          "stats": "https://api.chess.com/pub/player/palidan5/stats",
+          "status": "premium",
+          "played_as_white": "win",
+          "played_as_black": "resigned",
+          "board": "https://api.chess.com/pub/match/1650919/4"
+        },
+        {
+          "username": "seventeenscents",
+          "stats": "https://api.chess.com/pub/player/seventeenscents/stats",
+          "status": "premium",
+          "played_as_white": "win",
+          "played_as_black": "win",
+          "board": "https://api.chess.com/pub/match/1650919/12"
+        },
+        {
+          "username": "steve2906",
+          "stats": "https://api.chess.com/pub/player/steve2906/stats",
+          "status": "basic",
+          "played_as_black": "win",
+          "played_as_white": "win",
+          "board": "https://api.chess.com/pub/match/1650919/1"
+        },
+        {
+          "username": "tommiesantala",
+          "stats": "https://api.chess.com/pub/player/tommiesantala/stats",
+          "status": "basic",
+          "played_as_white": "win",
+          "played_as_black": "win",
+          "board": "https://api.chess.com/pub/match/1650919/9"
+        },
+        {
+          "username": "viki37",
+          "stats": "https://api.chess.com/pub/player/viki37/stats",
+          "status": "premium",
+          "played_as_white": "win",
+          "played_as_black": "win",
+          "board": "https://api.chess.com/pub/match/1650919/7"
+        },
+        {
+          "username": "wonderfolly",
+          "stats": "https://api.chess.com/pub/player/wonderfolly/stats",
+          "status": "basic",
+          "played_as_white": "win",
+          "played_as_black": "win",
+          "board": "https://api.chess.com/pub/match/1650919/13"
+        }
+      ],
+      "fair_play_removals": []
+    }
+  }
+}

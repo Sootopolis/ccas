@@ -1,0 +1,34 @@
+{
+  "games": [
+    {
+      "url": "https://www.chess.com/game/daily/749283479",
+      "move_by": 1735843180,
+      "last_activity": 1735583980
+    },
+    {
+      "url": "https://www.chess.com/game/daily/749283481",
+      "move_by": 1735843213,
+      "last_activity": 1735584013
+    },
+    {
+      "url": "https://www.chess.com/game/daily/749214017",
+      "move_by": 1735844342,
+      "last_activity": 1735585142
+    },
+    {
+      "url": "https://www.chess.com/game/daily/738566627",
+      "move_by": 1735844474,
+      "last_activity": 1735585274
+    },
+    {
+      "url": "https://www.chess.com/game/daily/749305125",
+      "move_by": 1735854349,
+      "last_activity": 1735595149
+    },
+    {
+      "url": "https://www.chess.com/game/daily/749213803",
+      "move_by": 1736801987,
+      "last_activity": 1735592387
+    }
+  ]
+}

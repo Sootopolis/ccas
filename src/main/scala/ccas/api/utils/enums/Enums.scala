@@ -1,0 +1,154 @@
+package ccas.api.utils.enums
+
+import ccas.utils.json.EnumJson
+import zio.json.SnakeCase
+
+import scala.util.Try
+
+enum Colour {
+  case White
+  case Black
+}
+
+object Colour extends EnumJson[Colour]
+
+// Not associated with the Chess.com public api.
+enum GameResult(val score: Double) {
+  case Win  extends GameResult(1.0)
+  case Draw extends GameResult(0.5)
+  case Loss extends GameResult(0.0)
+}
+
+object GameResult extends EnumJson[GameResult]
+
+enum GameResultDetail(val category: GameResult) {
+  val score: Double = category.score
+
+  case Win                 extends GameResultDetail(GameResult.Win)
+  case Stalemate           extends GameResultDetail(GameResult.Draw)
+  case Agreed              extends GameResultDetail(GameResult.Draw)
+  case Repetition          extends GameResultDetail(GameResult.Draw)
+  case FiftyMove           extends GameResultDetail(GameResult.Draw)
+  case Insufficient        extends GameResultDetail(GameResult.Draw)
+  case TimeVsInsufficient  extends GameResultDetail(GameResult.Draw)
+  case Checkmated          extends GameResultDetail(GameResult.Loss)
+  case Resigned            extends GameResultDetail(GameResult.Loss)
+  case Timeout             extends GameResultDetail(GameResult.Loss)
+  case Lose                extends GameResultDetail(GameResult.Loss)
+  case Abandoned           extends GameResultDetail(GameResult.Loss)
+  case KingOfTheHill       extends GameResultDetail(GameResult.Loss)
+  case ThreeCheck          extends GameResultDetail(GameResult.Loss)
+  case BughousePartnerLose extends GameResultDetail(GameResult.Loss)
+}
+
+object GameResultDetail extends EnumJson[GameResultDetail] {
+  private val lookup = GameResultDetail.values.map(member => member.toString.toLowerCase -> member).toMap
+    .removed(FiftyMove.toString.toLowerCase).updated("50move", FiftyMove)
+
+  override protected def jsonToEnum(string: String) = Try(lookup(string)).toEither.left.map(_.getMessage)
+}
+
+enum GameRule {
+  case Chess
+  case Chess960
+  case Bughouse
+  case KingOfTheHill
+  case ThreeCheck
+  case CrazyHouse
+}
+
+object GameRule extends EnumJson[GameRule] {
+  private val lookup = values.map(member => member.toString.toLowerCase -> member).toMap
+
+  override protected def jsonToEnum(string: String) = Try(lookup(string)).toEither.left.map(_.getMessage)
+}
+
+enum League {
+  case Wood
+  case Stone
+  case Bronze
+  case Silver
+  case Crystal
+  case Elite
+  case Champion
+  case Legend
+}
+
+object League extends EnumJson[League]
+
+enum ClubMatchResult(val scorePerPlayer: Double) {
+  def totalScore(nPlayers: Int): Double = scorePerPlayer * nPlayers
+
+  case Win  extends ClubMatchResult(5.0)
+  case Draw extends ClubMatchResult(2.0)
+  case Lose extends ClubMatchResult(0.0)
+}
+
+object ClubMatchResult extends EnumJson[ClubMatchResult]
+
+enum ClubMatchStatus {
+  case Finished
+  case InProgress
+  case Registration
+}
+
+object ClubMatchStatus extends EnumJson[ClubMatchStatus]
+
+enum PlayerStatus {
+  case Basic
+  case Premium
+  case Mod
+  case Staff
+  case Closed
+  case FairPlay
+  case Abuse
+}
+
+object PlayerStatus extends EnumJson[PlayerStatus] {
+  private val lookup = Map(
+    "basic"                       -> Basic,
+    "premium"                     -> Premium,
+    "mod"                         -> Mod,
+    "staff"                       -> Staff,
+    "closed"                      -> Closed,
+    "closed:fair_play_violations" -> FairPlay,
+    "closed:abuse"                -> Abuse,
+  )
+
+  override protected def enumToJson(member: PlayerStatus) = SnakeCase(member.toString)
+
+  override protected def jsonToEnum(string: String) = Try(lookup(string)).toEither.left.map(_.getMessage)
+}
+
+enum TimeClass {
+  case Daily
+  case Rapid
+  case Standard
+  case Blitz
+  case Lightning
+  case Bullet
+}
+
+object TimeClass extends EnumJson[TimeClass]
+
+enum Title {
+  case GM
+  case IM
+  case FM
+  case CM
+  case NM
+  case WGM
+  case WIM
+  case WFM
+  case WCM
+  case WNM
+}
+
+object Title extends EnumJson[Title]
+
+enum ClubVisibility {
+  case Public
+  case Private
+}
+
+object ClubVisibility extends EnumJson[ClubVisibility]

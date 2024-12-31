@@ -2,11 +2,12 @@ package ccas.api.player
 
 import ccas.api.player.ApiPlayerArchive.ApiPlayerArchiveGame
 import ccas.api.utils.Accuracies
-import ccas.api.utils.Enums.{GameResultDetail, GameRule}
-import ccas.api.utils.Subtypes.{Elo, Username}
+import ccas.api.utils.enums.{GameResultDetail, GameRule}
+import ccas.api.utils.subtypes.{Elo, Username}
+import ccas.utils.json.JsonDecoding
 import zio.Chunk
 import zio.http.URL
-import zio.json.{SnakeCase, jsonMemberNames}
+import zio.json.{DeriveJsonDecoder, JsonDecoder, SnakeCase, jsonMemberNames}
 
 import java.time.{Instant, Month, Year}
 import java.util.UUID
@@ -14,7 +15,10 @@ import java.util.UUID
 @jsonMemberNames(SnakeCase)
 case class ApiPlayerArchive(games: Chunk[ApiPlayerArchiveGame])
 
-object ApiPlayerArchive {
+object ApiPlayerArchive extends JsonDecoding[ApiPlayerArchive] {
+  override protected val jsonDecoderDerived: JsonDecoder[ApiPlayerArchive] = DeriveJsonDecoder.gen
+
+  @jsonMemberNames(SnakeCase)
   case class ApiPlayerArchiveGame(
     white       : ApiPlayerArchiveGamePlayer,
     black       : ApiPlayerArchiveGamePlayer,
@@ -33,15 +37,16 @@ object ApiPlayerArchive {
     eco         : Option[URL],
     tournament  : Option[URL],
     `match`     : Option[URL]
-  )
+  ) derives JsonDecoder
 
+  @jsonMemberNames(SnakeCase)
   case class ApiPlayerArchiveGamePlayer(
     username: Username,
     `@id`   : URL,
     rating  : Elo,
     uuid    : UUID,
     result  : GameResultDetail
-  )
+  ) derives JsonDecoder
 
   def getUrl(username: Username, year: Int, month: Int): URL = {
     require(year > 1970, "year must be greater than 1970")

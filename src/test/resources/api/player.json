@@ -1,0 +1,18 @@
+{
+  "avatar": "https://images.chesscomfiles.com/uploads/v1/user/41.5434c4ff.200x200o.5b102889d835.jpeg",
+  "player_id": 41,
+  "@id": "https://api.chess.com/pub/player/erik",
+  "url": "https://www.chess.com/member/erik",
+  "name": "Erik",
+  "username": "erik",
+  "followers": 7930,
+  "country": "https://api.chess.com/pub/country/US",
+  "location": "Bay Area, CA",
+  "last_online": 1735164010,
+  "joined": 1178556600,
+  "status": "staff",
+  "is_streamer": false,
+  "verified": false,
+  "league": "Silver",
+  "streaming_platforms": []
+}

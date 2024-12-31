@@ -1,26 +1,27 @@
 package ccas.api.clubmatch
 
-import ccas.api.clubmatch.ApiDailyMatchBoard.{ApiDailyBoardGame, BoardScores}
+import ccas.api.clubmatch.ApiDailyMatchBoard.ApiDailyBoardGame
 import ccas.api.utils.Accuracies
-import ccas.api.utils.Enums.{GameResultDetail, GameRule, TimeClass}
-import ccas.api.utils.Subtypes.{ClubMatchId, Elo, Username}
-import ccas.utils.PrettyPrinting
+import ccas.api.utils.enums.{GameResultDetail, GameRule, TimeClass}
+import ccas.api.utils.subtypes.{ClubMatchId, Elo, Username}
+import ccas.utils.json.JsonDecoding
 import zio.Chunk
 import zio.http.URL
-import zio.json.{SnakeCase, jsonMemberNames}
+import zio.json.{DeriveJsonDecoder, JsonDecoder, SnakeCase, jsonMemberNames}
 
 import java.time.Instant
 
 @jsonMemberNames(SnakeCase)
-case class ApiDailyMatchBoard(boardScores: BoardScores, games: Chunk[ApiDailyBoardGame]) {
+case class ApiDailyMatchBoard(boardScores: Map[Username, Double], games: Chunk[ApiDailyBoardGame]) {
   require(games.nonEmpty && games.length <= 2, s"A board can only have 1 or 2 games:\n$this")
 }
 
-object ApiDailyMatchBoard {
+object ApiDailyMatchBoard extends JsonDecoding[ApiDailyMatchBoard] {
+  override protected val jsonDecoderDerived: JsonDecoder[ApiDailyMatchBoard] = DeriveJsonDecoder.gen
+
   def getUrl(clubMatchId: ClubMatchId, boardId: Int): URL = ApiDailyMatch.getUrl(clubMatchId).addPath(boardId.toString)
 
-  case class BoardScores(player1: Double, player2: Double)
-
+  @jsonMemberNames(SnakeCase)
   case class ApiDailyBoardGame(
     white      : ApiDailyBoardPlayer,
     black      : ApiDailyBoardPlayer,
@@ -36,13 +37,14 @@ object ApiDailyMatchBoard {
     rated      : Boolean,
     eco        : Option[URL],
     `match`    : URL
-  )
+  ) derives JsonDecoder
 
+  @jsonMemberNames(SnakeCase)
   case class ApiDailyBoardPlayer(
     username: Username,
     rating  : Elo,
     result  : Option[GameResultDetail],
     `@id`   : URL,
-    team    : URL
-  )
+    team    : Option[URL] // TODO if this is never present, remove it
+  ) derives JsonDecoder
 }
