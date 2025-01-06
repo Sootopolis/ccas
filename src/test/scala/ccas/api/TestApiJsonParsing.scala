@@ -29,7 +29,7 @@ object TestApiJsonParsing extends ZIOSpecDefault {
     generateTest[ApiDailyMatchBoard]("matchBoard"),
   )
 
-  private def getFileName(label: String) = s"src/test/resources/api/$label.json"
+  private def getFileName(label: String) = s"data/test/api/$label.json"
 
   private def generateTest[T](label: String)(expected: => T)(using decoder: JsonDecoder[T]) = test(label) {
     readJsonLinesAs(getFileName(label)).runHead.someOrFailException.map(x => assertTrue(x == expected))
