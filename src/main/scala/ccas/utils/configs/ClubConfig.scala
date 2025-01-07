@@ -9,7 +9,7 @@ import zio.{Config, IO, TaskLayer}
 
 import javax.sql.DataSource
 
-case class ClubConfig(clubUrlName: ClubUrlName, recruitment: Option[RecruitmentConfig]) derives PrettyPrinter {
+case class ClubConfig(clubUrlName: ClubUrlName, recruitment: RecruitmentConfig = RecruitmentConfig.default) {
   def dataSourceLayer: TaskLayer[DataSource] = {
     val config = new HikariConfig()
     config.setDriverClassName("org.sqlite.JDBC")
@@ -20,6 +20,9 @@ case class ClubConfig(clubUrlName: ClubUrlName, recruitment: Option[RecruitmentC
 
 object ClubConfig extends CcasConfig[ClubConfig] {
   override protected val derivedConfig = DeriveConfig.derived[ClubConfig].desc
+
+  given prettyPrinter: PrettyPrinter[ClubConfig] =
+    PrettyPrinter.derived(PrettyPrinter.Setting(ignoreDefault = true))
 
   private def get(clubAlias: String) = derivedConfig.nested(AllConfigs.root, clubAlias)
 

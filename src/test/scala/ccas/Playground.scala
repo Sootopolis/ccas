@@ -1,7 +1,8 @@
 package ccas
 
-import ccas.utils.configs.AllConfigs
-import zio.{Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
+import ccas.utils.configs.{AllConfigs, ClubConfig, RecruitmentConfig}
+import ccas.utils.prettyprinting.PrettyPrinter
+import zio.{Chunk, Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
 
 object Playground extends ZIOAppDefault {
 //  case class Person(firstName: String, lastName: String, age: Int, url: URL, instant: Instant)
@@ -20,8 +21,10 @@ object Playground extends ZIOAppDefault {
 //    query[Person].filter(_.instant > context.lift(Instant.EPOCH))
 //  }
 
-  override def run = AllConfigs.load.map { allConfig =>
-    allConfig.prettyPrint()
-    println(allConfig.clubs("tgbe"))
-  }
+  case class Thing(chunk: Chunk[(String, Int)]) derives PrettyPrinter
+  override def run = for {
+    _ <- AllConfigs.load.map(_.prettyPrint())
+    _ <- ClubConfig.load("devon").map(_.prettyPrint())
+    _ <- ZIO.succeed(Thing(Chunk("a" -> 1, "b" -> 2)).prettyPrint())
+  } yield ()
 }

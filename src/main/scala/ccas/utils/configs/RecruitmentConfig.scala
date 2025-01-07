@@ -23,7 +23,7 @@ case class RecruitmentConfig(
   maxHoursPerMove    : Option[Double] = None,
   maxHoursOffline    : Option[Double] = None,
   countries          : Chunk[String] = Chunk.empty,
-) derives PrettyPrinter {
+) /*derives PrettyPrinter*/ {
   require(
     minScoreRate.forall(x => maxScoreRate.forall(x <= _)),
     s"minScoreRate ${ minScoreRate.get } is greater than maxScoreRate ${ maxScoreRate.get }."
@@ -39,6 +39,11 @@ case class RecruitmentConfig(
 }
 
 object RecruitmentConfig extends CcasConfig[RecruitmentConfig] {
+  val default = new RecruitmentConfig()
+
+  given prettyPrinter: PrettyPrinter[RecruitmentConfig] =
+    PrettyPrinter.derived(PrettyPrinter.Setting(ignoreDefault = true))
+
   override protected val derivedConfig: Config[RecruitmentConfig] = DeriveConfig.derived[RecruitmentConfig].desc
 
   private def get(clubAlias: String) = derivedConfig.nested(AllConfigs.root, clubAlias, "recruitment")
