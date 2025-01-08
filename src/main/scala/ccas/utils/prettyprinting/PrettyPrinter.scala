@@ -15,19 +15,12 @@ trait PrettyPrinter[T] { self =>
 
   protected val overrideSetting: Option[Setting] = None
 
-  private def getSettingOrElse(default: Setting) = overrideSetting.getOrElse(default)
+  private def getSetting(default: Setting = Setting.default) = overrideSetting.getOrElse(default)
 
   extension (value: T)(using tClassTag: ClassTag[T]) {
-    def toPrettyString(overrideSettingOption: Option[Setting] = None): String = getPrettyString(
-      value = value,
-      setting = overrideSettingOption.orElse(overrideSetting).getOrElse(Setting.default),
-      className = tClassTag.runtimeClass.getName
-    )
+    def toPrettyString: String = getPrettyString(value, getSetting(), tClassTag.runtimeClass.getName)
 
-    def toPrettyString: String = toPrettyString(None)
-
-    def prettyPrint(settingOption: Option[Setting] = None): Unit =
-      println(toPrettyString(settingOption))
+    def prettyPrint(): Unit = println(toPrettyString)
   }
 }
 
@@ -70,7 +63,6 @@ object PrettyPrinter extends AutoDerivation[PrettyPrinter] {
   override def join[T](caseClass: CaseClass[PrettyPrinter, T]): PrettyPrinter[T] = new PrettyPrinter[T] {
     override protected def getPrettyString(value: T, setting: Setting, className: String): String = {
       if (caseClass.isObject) { caseClass.typeInfo.short } else {
-        println(caseClass.typeInfo)
         val name = caseClass.typeInfo.short
         val fields = Class.forName(className).getDeclaredFields.map(field => field.getName -> field).toMap
         val items = Chunk.fromIterator(caseClass.params.iterator).flatMap { param =>
@@ -78,7 +70,7 @@ object PrettyPrinter extends AutoDerivation[PrettyPrinter] {
           Option.unless(setting.ignoreDefault && param.default.contains(dereferenced)) {
             val paramClassName = fields(param.label).getType.getName
             val paramPrettyPrinter = param.typeclass
-            val paramSetting = paramPrettyPrinter.getSettingOrElse(setting)
+            val paramSetting = paramPrettyPrinter.getSetting(setting)
             val prettyValue = paramPrettyPrinter.getPrettyString(param.deref(value), paramSetting, paramClassName)
             if (setting.namedArguments) { s"${ param.label } = $prettyValue" } else { prettyValue }
           }
@@ -92,7 +84,7 @@ object PrettyPrinter extends AutoDerivation[PrettyPrinter] {
     override protected def getPrettyString(value: T, setting: Setting, className: String): String = {
       if (sealedTrait.isEnum) { value.toString } else {
         sealedTrait.choose(value) { subtype =>
-          val subtypeSetting = subtype.typeclass.getSettingOrElse(setting)
+          val subtypeSetting = subtype.typeclass.getSetting(setting)
           subtype.typeclass.getPrettyString(subtype.cast(value), subtypeSetting, subtype.typeInfo.short)
         }
       }
@@ -103,7 +95,7 @@ object PrettyPrinter extends AutoDerivation[PrettyPrinter] {
     override protected def getPrettyString(value: C[T], setting: Setting, className: String): String = {
       val name = className.split(Array('$', '.')).last
       val tClassName = classTag[T].runtimeClass.getName
-      val items = Chunk.from(value).map(pp.getPrettyString(_, pp.getSettingOrElse(setting), tClassName))
+      val items = Chunk.from(value).map(pp.getPrettyString(_, pp.getSetting(setting), tClassName))
       makePrettyString(name, items, setting)
     }
   }
@@ -111,13 +103,12 @@ object PrettyPrinter extends AutoDerivation[PrettyPrinter] {
   given mapPrinter[K: ClassTag, V: ClassTag, M[A, B] <: collection.Map[A, B]]
     (using kpp: PrettyPrinter[K], vpp: PrettyPrinter[V], mct: ClassTag[M[K, V]]): PrettyPrinter[M[K, V]] with {
     override protected def getPrettyString(value: M[K, V], setting: Setting, className: String): String = {
-      println(mct.runtimeClass.getName)
       val name = className.split(Array('$', '.')).last
       val kClassName = classTag[K].runtimeClass.getName
       val vClassName = classTag[V].runtimeClass.getName
       val items = Chunk.from(value).map { (k, v) =>
-        kpp.getPrettyString(k, kpp.getSettingOrElse(setting), kClassName)
-          + " -> " + vpp.getPrettyString(v, vpp.getSettingOrElse(setting), vClassName)
+        kpp.getPrettyString(k, kpp.getSetting(setting), kClassName)
+          + " -> " + vpp.getPrettyString(v, vpp.getSetting(setting), vClassName)
       }
       makePrettyString(name, items, setting)
     }
@@ -127,7 +118,7 @@ object PrettyPrinter extends AutoDerivation[PrettyPrinter] {
     override protected def getPrettyString(value: Option[T], setting: Setting, className: String): String = {
       val tClassName = classTag[T].runtimeClass.getName
       value.fold("None") { t =>
-        val item = prettyPrinter.getPrettyString(t, prettyPrinter.getSettingOrElse(setting), tClassName)
+        val item = prettyPrinter.getPrettyString(t, prettyPrinter.getSetting(setting), tClassName)
         makePrettyString("Some", Chunk(item), setting)
       }
     }
