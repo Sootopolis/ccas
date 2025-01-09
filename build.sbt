@@ -11,9 +11,10 @@ ThisBuild / sbtVersion   := vSbt
 val vZio           = "2.1.14"
 val vZioConfig     = "4.0.3"
 val vZioHttp       = "3.0.1"
-val vZioJson       = "0.7.3"
+val vZioJson       = "0.7.4"
 val vZioProtoQuill = "4.8.6"
 val vMagnolia      = "1.3.8"
+val vPostgresql    = "42.7.4"
 val vSqliteJdbc    = "3.47.2.0"
 
 // modules
@@ -29,6 +30,7 @@ libraryDependencies ++= Seq(
   "dev.zio"                      %% "zio-json"            % vZioJson,
   "io.getquill"                  %% "quill-jdbc-zio"      % vZioProtoQuill,
   "com.softwaremill.magnolia1_3" %% "magnolia"            % vMagnolia,
+  "org.postgresql"               %  "postgresql"          % vPostgresql,
   "org.xerial"                   %  "sqlite-jdbc"         % vSqliteJdbc,
 )
 

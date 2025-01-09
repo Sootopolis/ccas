@@ -2,6 +2,7 @@ package ccas
 
 import ccas.utils.configs.{AllConfigs, ClubConfig, RecruitmentConfig}
 import ccas.utils.prettyprinting.PrettyPrinter
+import io.getquill.jdbczio.Quill.DataSource
 import zio.{Chunk, Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
 
 object Playground extends ZIOAppDefault {
@@ -23,8 +24,9 @@ object Playground extends ZIOAppDefault {
 
   case class Thing(chunk: Chunk[(String, Int)]) derives PrettyPrinter
   override def run = for {
-    _ <- AllConfigs.load.map(_.prettyPrint())
-    _ <- ClubConfig.load("devon").map(_.prettyPrint())
-    _ <- ZIO.succeed(Thing(Chunk("a" -> 1, "b" -> 2)).prettyPrint())
+//    _ <- AllConfigs.load.map(_.prettyPrint())
+//    _ <- ClubConfig.load("devon").map(_.prettyPrint())
+//    _ <- ZIO.succeed(Thing(Chunk("a" -> 1, "b" -> 2)).prettyPrint())
+    _ <- ZIO.serviceWith[javax.sql.DataSource](println).provide(DataSource.fromPrefix("database"))
   } yield ()
 }

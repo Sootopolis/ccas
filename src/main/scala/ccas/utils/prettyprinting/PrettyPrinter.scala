@@ -10,7 +10,7 @@ import scala.deriving.Mirror
 import scala.reflect.{ClassTag, classTag}
 
 /** Enable pretty printing of a case class by adding `derives PrettyPrinter` after the round brackets. */
-trait PrettyPrinter[T] { self =>
+trait PrettyPrinter[T] {
   protected def getPrettyString(value: T, setting: Setting, className: String): String
 
   protected val overrideSetting: Option[Setting] = None
