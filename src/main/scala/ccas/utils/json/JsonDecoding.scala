@@ -16,10 +16,15 @@ trait JsonDecoding[T] {
 
   final given instantJsonDecoder: JsonDecoder[Instant] = JsonDecoding.instantJsonDecoder
 
-  final def decode(string: String): Either[String, T] = string.fromJson[T](using jsonDecoderDerived)
+  final def decode(string: String): Either[String, T] = string.fromJson[T]
 
   final def decodeZIO(string: String): IO[JsonDecodingException, T] =
     ZIO.fromEither(decode(string)).mapError(JsonDecodingException(_))
+
+  extension (string: String) {
+    def decodeJson: Either[String, T] = string.fromJson[T]
+    def decodeJsonZIO: IO[JsonDecodingException, T] = ZIO.fromEither(decodeJson).mapError(JsonDecodingException(_))
+  }
 }
 
 object JsonDecoding {

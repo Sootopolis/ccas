@@ -4,17 +4,15 @@ import ccas.api.clubmatch.ApiDailyMatch.{ApiDailyMatchSettings, ApiDailyMatchTea
 import ccas.api.utils.*
 import ccas.api.utils.enums.*
 import ccas.api.utils.subtypes.{ClubMatchId, Elo, Username}
-import ccas.utils.json.{JsonDecoding, JsonDecodingException}
+import ccas.utils.json.JsonDecoding
 import zio.Chunk
 import zio.http.URL
-import zio.json.ast.{Json, JsonCursor}
-import zio.json.internal.RetractReader
-import zio.json.{JsonDecoder, JsonError, SnakeCase, jsonMemberNames}
+import zio.json.{DeriveJsonDecoder, JsonDecoder, SnakeCase, jsonDiscriminator, jsonHint, jsonMemberNames}
 
 import java.time.Instant
 
 // match
-
+@jsonDiscriminator("status") @jsonMemberNames(SnakeCase)
 sealed trait ApiDailyMatch {
   val `@id`: URL
   val name: String
@@ -26,28 +24,13 @@ sealed trait ApiDailyMatch {
 }
 
 object ApiDailyMatch extends JsonDecoding[ApiDailyMatch] {
-  override protected val jsonDecoderDerived: JsonDecoder[ApiDailyMatch] = new JsonDecoder[ApiDailyMatch] {
-    override def unsafeDecode(trace: List[JsonError], in: RetractReader): ApiDailyMatch =
-      unsafeFromJsonAST(trace, Json.decoder.unsafeDecode(trace, in))
-
-    override def unsafeFromJsonAST(trace: List[JsonError], json: Json): ApiDailyMatch = {
-      val statusJson = json.get(JsonCursor.field("status")).getOrElse {
-        throw JsonDecodingException("Cannot decode json ApiDailyMatch: field `status` not found")
-      }
-      val decoder = ClubMatchStatus.jsonCodec.decoder.unsafeFromJsonAST(trace, statusJson) match {
-        case ClubMatchStatus.Finished => ApiDailyMatchFinished.derived$JsonDecoder.widen[ApiDailyMatch]
-        case ClubMatchStatus.InProgress => ApiDailyMatchInProgress.derived$JsonDecoder.widen[ApiDailyMatch]
-        case ClubMatchStatus.Registration => ApiDailyMatchRegistered.derived$JsonDecoder.widen[ApiDailyMatch]
-      }
-      decoder.fromJsonAST(json).left.map(JsonDecodingException(_)).fold(throw _, identity)
-    }
-  }
+  override protected val jsonDecoderDerived: JsonDecoder[ApiDailyMatch] = DeriveJsonDecoder.gen
 
   val host: URL = Hosts.api.addPath("match")
 
   def getUrl(clubMatchId: ClubMatchId): URL = host.addPath(clubMatchId.toString)
 
-  @jsonMemberNames(SnakeCase)
+  @jsonMemberNames(SnakeCase) @jsonHint(ClubMatchStatus.Registration.encodeJson.replace("\"", ""))
   case class ApiDailyMatchRegistered(
     `@id`    : URL,
     name     : String,
@@ -61,7 +44,7 @@ object ApiDailyMatch extends JsonDecoding[ApiDailyMatch] {
     require(status == ClubMatchStatus.Registration)
   }
 
-  @jsonMemberNames(SnakeCase)
+  @jsonMemberNames(SnakeCase) @jsonHint(ClubMatchStatus.InProgress.encodeJson.replace("\"", ""))
   case class ApiDailyMatchInProgress(
     `@id`    : URL,
     name     : String,
@@ -75,7 +58,7 @@ object ApiDailyMatch extends JsonDecoding[ApiDailyMatch] {
     require(status == ClubMatchStatus.InProgress)
   }
 
-  @jsonMemberNames(SnakeCase)
+  @jsonMemberNames(SnakeCase) @jsonHint(ClubMatchStatus.Finished.encodeJson.replace("\"", ""))
   case class ApiDailyMatchFinished(
     `@id`    : URL,
     name     : String,

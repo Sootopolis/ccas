@@ -62,7 +62,7 @@ object PrettyPrinter extends AutoDerivation[PrettyPrinter] {
 
   override def join[T](caseClass: CaseClass[PrettyPrinter, T]): PrettyPrinter[T] = new PrettyPrinter[T] {
     override protected def getPrettyString(value: T, setting: Setting, className: String): String = {
-      if (caseClass.isObject) { caseClass.typeInfo.short } else {
+      if (caseClass.isObject || caseClass.params.isEmpty) { caseClass.typeInfo.short } else {
         val name = caseClass.typeInfo.short
         val fields = Class.forName(className).getDeclaredFields.map(field => field.getName -> field).toMap
         val items = Chunk.fromIterator(caseClass.params.iterator).flatMap { param =>
@@ -71,7 +71,7 @@ object PrettyPrinter extends AutoDerivation[PrettyPrinter] {
             val paramClassName = fields(param.label).getType.getName
             val paramPrettyPrinter = param.typeclass
             val paramSetting = paramPrettyPrinter.getSetting(setting)
-            val prettyValue = paramPrettyPrinter.getPrettyString(param.deref(value), paramSetting, paramClassName)
+            val prettyValue = paramPrettyPrinter.getPrettyString(dereferenced, paramSetting, paramClassName)
             if (setting.namedArguments) { s"${ param.label } = $prettyValue" } else { prettyValue }
           }
         }
@@ -81,14 +81,11 @@ object PrettyPrinter extends AutoDerivation[PrettyPrinter] {
   }
 
   override def split[T](sealedTrait: SealedTrait[PrettyPrinter, T]): PrettyPrinter[T] = new PrettyPrinter[T] {
-    override protected def getPrettyString(value: T, setting: Setting, className: String): String = {
-      if (sealedTrait.isEnum) { value.toString } else {
-        sealedTrait.choose(value) { subtype =>
-          val subtypeSetting = subtype.typeclass.getSetting(setting)
-          subtype.typeclass.getPrettyString(subtype.cast(value), subtypeSetting, subtype.typeInfo.short)
-        }
+    override protected def getPrettyString(value: T, setting: Setting, className: String): String =
+      sealedTrait.choose(value) { subtype =>
+        val subtypeSetting = subtype.typeclass.getSetting(setting)
+        subtype.typeclass.getPrettyString(subtype.cast(value), subtypeSetting, subtype.typeInfo.full)
       }
-    }
   }
 
   given collectionPrinter[T: ClassTag, C[A] <: IterableOnce[A]](using pp: PrettyPrinter[T]): PrettyPrinter[C[T]] with {

@@ -15,12 +15,22 @@ trait EnumJson[T <: scala.reflect.Enum] {
 
   final given jsonCodec: JsonCodec[T] = JsonCodec.string.transformOrFail(jsonToEnum, enumToJson)
 
-  final def encode(t: T): String = t.toJsonPretty(using jsonCodec.encoder)
+  final def encode(t: T): String = t.toJsonPretty
 
   final def encodeZIO(t: T): UIO[String] = ZIO.succeed(encode(t))
 
-  final def decode(string: String): Either[String, T] = string.fromJson[T](using jsonCodec.decoder)
+  final def decode(string: String): Either[String, T] = string.fromJson[T]
 
   final def decodeZIO(string: String): IO[JsonDecodingException, T] =
     ZIO.fromEither(decode(string)).mapError(JsonDecodingException(_))
+
+  extension (member: T) {
+    def encodeJson: String = member.toJsonPretty
+    def encodeJsonPretty: String = member.toJsonPretty
+  }
+
+  extension (string: String) {
+    def decodeJson: Either[String, T] = string.fromJson[T]
+    def decodeJsonZIO: IO[JsonDecodingException, T] = ZIO.fromEither(decodeJson).mapError(JsonDecodingException(_))
+  }
 }

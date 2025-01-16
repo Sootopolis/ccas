@@ -15,8 +15,8 @@ trait JsonEncoding[T] {
 
   final given instantJsonEncoder: JsonEncoder[Instant] = JsonEncoding.instantJsonEncoder
 
-  extension (t: T) {
-    def encode: String = t.toJsonPretty(using jsonEncoderDerived)
+  extension (value: T) {
+    def encode: String = value.toJsonPretty(using jsonEncoderDerived)
 
     def encodeZIO: UIO[String] = ZIO.succeed(encode)
   }

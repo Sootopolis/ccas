@@ -94,14 +94,14 @@ enum ClubMatchStatus {
 
 object ClubMatchStatus extends EnumJson[ClubMatchStatus]
 
-enum PlayerStatus {
-  case Basic
-  case Premium
-  case Mod
-  case Staff
-  case Closed
-  case FairPlay
-  case Abuse
+enum PlayerStatus(val isBanned: Boolean) {
+  case Basic    extends PlayerStatus(false)
+  case Premium  extends PlayerStatus(false)
+  case Mod      extends PlayerStatus(false)
+  case Staff    extends PlayerStatus(false)
+  case Closed   extends PlayerStatus(true)
+  case FairPlay extends PlayerStatus(true)
+  case Abuse    extends PlayerStatus(true)
 }
 
 object PlayerStatus extends EnumJson[PlayerStatus] {
@@ -120,13 +120,13 @@ object PlayerStatus extends EnumJson[PlayerStatus] {
   override protected def jsonToEnum(string: String) = Try(lookup(string)).toEither.left.map(_.getMessage)
 }
 
-enum TimeClass {
-  case Daily
-  case Rapid
-  case Standard
-  case Blitz
-  case Lightning
-  case Bullet
+enum TimeClass(val isDaily: Boolean) {
+  case Daily     extends TimeClass(true)
+  case Rapid     extends TimeClass(false)
+  case Standard  extends TimeClass(false)
+  case Blitz     extends TimeClass(false)
+  case Lightning extends TimeClass(false)
+  case Bullet    extends TimeClass(false)
 }
 
 object TimeClass extends EnumJson[TimeClass]

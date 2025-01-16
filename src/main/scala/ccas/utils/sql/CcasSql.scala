@@ -1,26 +1,58 @@
 package ccas.utils.sql
 
-import io.getquill.SnakeCase
-import zio.{Chunk, ZIO}
+import io.getquill.parser.ParserLibrary
+import io.getquill.{BatchAction, Insert, Quoted, SnakeCase, Update, defaultParser, query, quote}
+import zio.{Chunk, Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
 
+import java.sql.SQLException
 import javax.sql.DataSource
 
-trait CcasSql[T] { self =>
+trait CcasSql[T] {
+  self =>
   val tableName: String = SnakeCase.table(self.getClass.getSimpleName)
+  protected val ctx = CcasSqlContext
 
-  def insert(value: T): ZIO[DataSource, Throwable, Unit]
+  import ctx.{insertValue, updateValue, given}
 
-  def insert(values: IterableOnce[T]): ZIO[DataSource, Throwable, Unit]
+  inline def insert(values: IterableOnce[T]): ZIO[CcasDataSource, SQLException, Unit] =
+    ctx.run[T, Insert[T]] { quote(ctx.liftQuery(Chunk.from(values)).foreach(query[T].insertValue)) }.unit
 
-  def update(value: T): ZIO[DataSource, Throwable, Unit]
+  //
+  protected inline def dynamicFilter(a: T, b: T) = primaryKeys.map(key => key(a) == key(b)).reduce(_ && _)
 
-  def update(values: IterableOnce[T]): ZIO[DataSource, Throwable, Unit]
+  protected def primaryKeys: Seq[T => Any]
 
-  def selectAll: ZIO[DataSource, Throwable, Chunk[T]]
+  inline def update(values: IterableOnce[T]): ZIO[CcasDataSource, SQLException, Unit] =
+    ctx.run[T, Update[T]] {
+      quote {
+        ctx.liftQuery(Chunk.from(values)).foreach { value =>
+          query[T].filter(row => dynamicFilter(row, value))
+            .updateValue(value)
+        }
+      }
+    }.unit
 
-  def createTable: ZIO[DataSource, Throwable, Unit]
+  //
+  //  inline def selectAll: ZIO[CcasDataSource, Throwable, Chunk[T]]
+  //
+  //  inline def createTable: ZIO[CcasDataSource, Throwable, Unit]
+  //
+  //  inline def dropTable: ZIO[CcasDataSource, Throwable, Unit]
+  //
+  //  inline def clearTable: ZIO[CcasDataSource, Throwable, Unit]
+}
 
-  def dropTable: ZIO[DataSource, Throwable, Unit]
+case class Person(name: String, age: Int)
 
-  def clearTable: ZIO[DataSource, Throwable, Unit]
+object Person extends CcasSql[Person] with ZIOAppDefault {
+  override protected def primaryKeys: Seq[Person => Any] = Seq(_.name, _.age)
+
+  override def run = {
+    import ctx.given
+    val persons = Seq(Person("a", 28))
+    for {
+      _ <- Person.insert(persons)
+//      _ <- Person.update(persons)
+    } yield ()
+  }.provide(CcasDataSource.layer)
 }
