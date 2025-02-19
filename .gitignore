@@ -2,8 +2,8 @@ target/
 !.mvn/wrapper/maven-wrapper.jar
 !**/src/main/**/target/
 !**/src/test/**/target/
-src/main/resources/application.conf
-src/test/scala/ccas/Playground.scala
+!**/src/main/resources/application.conf
+!**/src/test/scala/ccas/Playground.scala
 
 ### IntelliJ IDEA ###
 .idea/modules.xml
