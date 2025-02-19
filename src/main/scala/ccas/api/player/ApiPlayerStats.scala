@@ -1,13 +1,11 @@
 package ccas.api.player
 
 import ccas.api.player.ApiPlayerStats.{ApiPlayerDailyStats, ApiPlayerLiveStats}
-import ccas.api.utils.enums.GameResult
-import ccas.api.utils.subtypes.{Elo, Username}
+import ccas.api.misc.enums.GameResult
+import ccas.api.misc.subtypes.{Elo, Username}
 import ccas.utils.json.JsonDecoding
 import zio.http.URL
 import zio.json.{DeriveJsonDecoder, JsonDecoder, SnakeCase, jsonMemberNames}
-
-import java.time.Instant
 
 @jsonMemberNames(SnakeCase)
 case class ApiPlayerStats(
@@ -47,10 +45,10 @@ object ApiPlayerStats extends JsonDecoding[ApiPlayerStats] {
   ) extends ApiPlayerGameTypeStats[ApiPlayerLiveRecord] derives JsonDecoder
 
   @jsonMemberNames(SnakeCase)
-  case class LatestElo(rating: Elo, date: Instant, rd: Double) derives JsonDecoder
+  case class LatestElo(rating: Elo, date: Long, rd: Double) derives JsonDecoder
 
   @jsonMemberNames(SnakeCase)
-  case class BestElo(rating: Elo, date: Instant, game: URL) derives JsonDecoder
+  case class BestElo(rating: Elo, date: Long, game: URL) derives JsonDecoder
 
   sealed trait ApiPlayerGameTypeRecord {
     val win: Int

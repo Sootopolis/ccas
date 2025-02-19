@@ -1,7 +1,7 @@
 package ccas.api.player
 
 import ccas.api.player.ApiPlayerMatches.ApiPlayerMatch
-import ccas.api.utils.enums.GameResultDetail
+import ccas.api.misc.enums.GameResultDetail
 import ccas.utils.json.JsonDecoding
 import zio.Chunk
 import zio.http.URL

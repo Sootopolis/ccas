@@ -1,6 +1,6 @@
 package ccas.api.player
 
-import ccas.api.utils.subtypes.Username
+import ccas.api.misc.subtypes.Username
 import ccas.utils.json.JsonDecoding
 import zio.Chunk
 import zio.http.URL

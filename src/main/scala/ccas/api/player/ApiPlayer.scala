@@ -1,14 +1,12 @@
 package ccas.api.player
 
-import ccas.api.utils.Hosts
-import ccas.api.utils.enums.{League, PlayerStatus, Title}
-import ccas.api.utils.subtypes.{Elo, PlayerId, Username}
+import ccas.api.misc.Hosts
+import ccas.api.misc.enums.{League, PlayerStatus, Title}
+import ccas.api.misc.subtypes.{Elo, PlayerId, Username}
 import ccas.utils.json.JsonDecoding
 import ccas.utils.prettyprinting.PrettyPrinter
 import zio.http.URL
 import zio.json.{DeriveJsonDecoder, JsonDecoder, SnakeCase, jsonMemberNames}
-
-import java.time.Instant
 
 @jsonMemberNames(SnakeCase)
 case class ApiPlayer(
@@ -18,8 +16,8 @@ case class ApiPlayer(
   country   : URL, // API location of this player's country's profile
   location  : Option[String], // (optional) the city or location
   status    : PlayerStatus, // account status: closed, closed:fair_play_violations, basic, premium, mod, staff
-  joined    : Instant, // timestamp of registration on Chess.com
-  lastOnline: Instant, // timestamp of the most recent login
+  joined    : Long, // timestamp of registration on Chess.com
+  lastOnline: Long, // timestamp of the most recent login
   title     : Option[Title], // (optional) abbreviation of chess title, if any
   avatar    : Option[URL], // (optional) URL of a 200x200 image
   followers : Int, // the number of players tracking this player's activity
@@ -28,7 +26,7 @@ case class ApiPlayer(
   league    : League,
   fide      : Option[Elo], // FIDE rating
 ) derives PrettyPrinter {
-  val profileUrl: URL = Hosts.website.addPath(s"member/$username")
+  val profileUrl: URL = ApiPlayer.getProfileUrl(username)
   val apiUrl: URL = ApiPlayer.getUrl(username)
   val apiStatsUrl: URL = ApiPlayerStats.getUrl(username)
 }
@@ -39,4 +37,6 @@ object ApiPlayer extends JsonDecoding[ApiPlayer] {
   val host: URL = Hosts.api.addPath("player")
 
   def getUrl(username: Username): URL = host.addPath(username)
+
+  def getProfileUrl(username: Username): URL = Hosts.website.addPath("member").addPath(username)
 }

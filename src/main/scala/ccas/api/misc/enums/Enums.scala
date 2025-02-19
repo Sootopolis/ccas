@@ -1,4 +1,4 @@
-package ccas.api.utils.enums
+package ccas.api.misc.enums
 
 import ccas.utils.json.EnumJson
 import zio.json.SnakeCase
@@ -94,14 +94,22 @@ enum ClubMatchStatus {
 
 object ClubMatchStatus extends EnumJson[ClubMatchStatus]
 
-enum PlayerStatus(val isBanned: Boolean) {
-  case Basic    extends PlayerStatus(false)
-  case Premium  extends PlayerStatus(false)
-  case Mod      extends PlayerStatus(false)
-  case Staff    extends PlayerStatus(false)
-  case Closed   extends PlayerStatus(true)
-  case FairPlay extends PlayerStatus(true)
-  case Abuse    extends PlayerStatus(true)
+enum PlayerStatusCategory {
+  case Active
+  case Closed
+  case FairPlay
+  case Abuse
+  case Unknown
+}
+
+enum PlayerStatus(val category: PlayerStatusCategory) {
+  case Basic    extends PlayerStatus(PlayerStatusCategory.Active)
+  case Premium  extends PlayerStatus(PlayerStatusCategory.Active)
+  case Mod      extends PlayerStatus(PlayerStatusCategory.Active)
+  case Staff    extends PlayerStatus(PlayerStatusCategory.Active)
+  case Closed   extends PlayerStatus(PlayerStatusCategory.Closed)
+  case FairPlay extends PlayerStatus(PlayerStatusCategory.FairPlay)
+  case Abuse    extends PlayerStatus(PlayerStatusCategory.Abuse)
 }
 
 object PlayerStatus extends EnumJson[PlayerStatus] {

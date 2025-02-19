@@ -1,8 +1,8 @@
 package ccas.api.player
 
 import ccas.api.player.ApiPlayerGamesCurrent.ApiPlayerCurrentDailyGame
-import ccas.api.utils.enums.{Colour, GameRule, TimeClass}
-import ccas.api.utils.subtypes.Username
+import ccas.api.misc.enums.{Colour, GameRule, TimeClass}
+import ccas.api.misc.subtypes.Username
 import ccas.utils.json.JsonDecoding
 import zio.Chunk
 import zio.http.URL
@@ -24,10 +24,10 @@ object ApiPlayerGamesCurrent extends JsonDecoding[ApiPlayerGamesCurrent] {
     fen         : String,
     pgn         : String,
     turn        : Colour,
-    moveBy      : Instant, // timestamp of when the next move must be made. 0 if the player-to-move is on vacation.
+    moveBy      : Long, // timestamp of when the next move must be made. 0 if the player-to-move is on vacation.
     drawOffer   : Option[Colour],
-    lastActivity: Instant,
-    startTime   : Instant,
+    lastActivity: Long,
+    startTime   : Long,
     timeControl : String,
     timeClass   : TimeClass,
     rules       : GameRule,

@@ -1,14 +1,12 @@
 package ccas.api.club
 
 import ccas.api.club.ApiClubMatches.{ApiClubMatchFinished, ApiClubMatchInProgress, ApiClubMatchRegistered}
-import ccas.api.utils.enums.{ClubMatchResult, TimeClass}
-import ccas.api.utils.subtypes.ClubUrlName
+import ccas.api.misc.enums.{ClubMatchResult, TimeClass}
+import ccas.api.misc.subtypes.ClubUrlName
 import ccas.utils.json.JsonDecoding
 import zio.Chunk
 import zio.http.URL
 import zio.json.{DeriveJsonDecoder, JsonDecoder, SnakeCase, jsonMemberNames}
-
-import java.time.Instant
 
 @jsonMemberNames(SnakeCase)
 case class ApiClubMatches(
@@ -34,7 +32,7 @@ object ApiClubMatches extends JsonDecoding[ApiClubMatches] {
   }
 
   sealed trait ApiClubMatchStarted extends ApiClubMatch {
-    val startTime: Instant
+    val startTime: Long
   }
 
   @jsonMemberNames(SnakeCase)
@@ -51,7 +49,7 @@ object ApiClubMatches extends JsonDecoding[ApiClubMatches] {
     `@id`    : URL,
     opponent : URL,
     timeClass: TimeClass,
-    startTime: Instant
+    startTime: Long
   ) extends ApiClubMatchStarted derives JsonDecoder
 
   @jsonMemberNames(SnakeCase)
@@ -60,7 +58,7 @@ object ApiClubMatches extends JsonDecoding[ApiClubMatches] {
     `@id`    : URL,
     opponent : URL,
     timeClass: TimeClass,
-    startTime: Instant,
+    startTime: Long,
     result   : ClubMatchResult
   ) extends ApiClubMatchStarted derives JsonDecoder
 

@@ -1,4 +1,4 @@
-package ccas.api.utils.subtypes
+package ccas.api.misc.subtypes
 
 import zio.{Config, NonEmptyChunk}
 import zio.config.magnolia.DeriveConfig
@@ -36,6 +36,8 @@ object Username extends Subtype[String] {
   given fieldDecoder: JsonFieldDecoder[Username] = derive
 
   given fieldEncoder: JsonFieldEncoder[Username] = derive
+
+  given derivedConfig: DeriveConfig[Username] = derive
 }
 
 type ClubId = ClubId.Type
@@ -44,6 +46,8 @@ object ClubId extends Subtype[Int] {
   override def assertion: Assertion[Int] = Assertion.greaterThanOrEqualTo(0)
 
   given jsonCodec: JsonCodec[ClubId] = derive
+
+  given derivedConfig: DeriveConfig[ClubId] = derive
 }
 
 type ClubUrlName = ClubUrlName.Type

@@ -1,15 +1,15 @@
 package ccas.api.player
 
 import ccas.api.player.ApiPlayerArchive.ApiPlayerArchiveGame
-import ccas.api.utils.Accuracies
-import ccas.api.utils.enums.{GameResultDetail, GameRule}
-import ccas.api.utils.subtypes.{Elo, Username}
+import ccas.api.misc.Accuracies
+import ccas.api.misc.enums.{GameResultDetail, GameRule}
+import ccas.api.misc.subtypes.{Elo, Username}
 import ccas.utils.json.JsonDecoding
 import zio.Chunk
 import zio.http.URL
 import zio.json.{DeriveJsonDecoder, JsonDecoder, SnakeCase, jsonMemberNames}
 
-import java.time.{Instant, Month, Year}
+import java.time.{Month, Year}
 import java.util.UUID
 
 @jsonMemberNames(SnakeCase)
@@ -30,8 +30,8 @@ object ApiPlayerArchive extends JsonDecoding[ApiPlayerArchive] {
     tcn         : String,
     UUID        : UUID,
     initialSetup: String,
-    startTime   : Instant,
-    endTime     : Instant,
+    startTime   : Long,
+    endTime     : Long,
     timeControl : String,
     rules       : GameRule,
     eco         : Option[URL],

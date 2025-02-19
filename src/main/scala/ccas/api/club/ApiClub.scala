@@ -1,14 +1,14 @@
 package ccas.api.club
 
-import ccas.api.utils.Hosts
-import ccas.api.utils.enums.ClubVisibility
-import ccas.api.utils.subtypes.{ClubId, ClubUrlName, Elo}
+import ccas.api.misc.Hosts
+import ccas.api.misc.enums.ClubVisibility
+import ccas.api.misc.subtypes.{ClubId, ClubUrlName, Elo}
+import ccas.utils.client.CcasClient
+import ccas.utils.configs.ClubConfig
 import ccas.utils.json.JsonDecoding
-import zio.Chunk
+import zio.{Chunk, Task}
 import zio.http.URL
 import zio.json.{DeriveJsonDecoder, JsonDecoder, SnakeCase, jsonMemberNames}
-
-import java.time.Instant
 
 @jsonMemberNames(SnakeCase)
 case class ApiClub(
@@ -20,8 +20,8 @@ case class ApiClub(
   location          : Option[String],
   averageDailyRating: Elo, //average daily rating
   membersCount      : Int, //total members count
-  created           : Instant, // timestamp of creation on Chess.com
-  lastActivity      : Instant, // timestamp of the most recent post, match, etc
+  created           : Long, // timestamp of creation on Chess.com
+  lastActivity      : Long, // timestamp of the most recent post, match, etc
   visibility        : ClubVisibility, // whether the club is public or private
   joinRequest       : URL, // location to submit a request to join this club
   admin             : Chunk[URL], // array of URLs to the player profiles for the admins of this club
@@ -34,4 +34,6 @@ object ApiClub extends JsonDecoding[ApiClub] {
   val host: URL = Hosts.api.addPath("club")
 
   def getUrl(clubUrlName: ClubUrlName): URL = host.addPath(clubUrlName)
+
+  def get(client: CcasClient, clubUrlName: ClubUrlName): Task[ApiClub] = client.get[ApiClub](getUrl(clubUrlName))
 }

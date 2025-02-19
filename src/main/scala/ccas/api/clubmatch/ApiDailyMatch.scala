@@ -1,15 +1,13 @@
 package ccas.api.clubmatch
 
 import ccas.api.clubmatch.ApiDailyMatch.{ApiDailyMatchSettings, ApiDailyMatchTeams}
-import ccas.api.utils.*
-import ccas.api.utils.enums.*
-import ccas.api.utils.subtypes.{ClubMatchId, Elo, Username}
+import ccas.api.misc.*
+import ccas.api.misc.enums.*
+import ccas.api.misc.subtypes.{ClubMatchId, Elo, Username}
 import ccas.utils.json.JsonDecoding
 import zio.Chunk
 import zio.http.URL
 import zio.json.{DeriveJsonDecoder, JsonDecoder, SnakeCase, jsonDiscriminator, jsonHint, jsonMemberNames}
-
-import java.time.Instant
 
 // match
 @jsonDiscriminator("status") @jsonMemberNames(SnakeCase)
@@ -35,7 +33,7 @@ object ApiDailyMatch extends JsonDecoding[ApiDailyMatch] {
     `@id`    : URL,
     name     : String,
     url      : URL,
-    startTime: Option[Instant],
+    startTime: Option[Long],
     status   : ClubMatchStatus,
     boards   : Int,
     settings : ApiDailyMatchSettings,
@@ -49,7 +47,7 @@ object ApiDailyMatch extends JsonDecoding[ApiDailyMatch] {
     `@id`    : URL,
     name     : String,
     url      : URL,
-    startTime: Instant,
+    startTime: Long,
     status   : ClubMatchStatus,
     boards   : Int,
     settings : ApiDailyMatchSettings,
@@ -63,8 +61,8 @@ object ApiDailyMatch extends JsonDecoding[ApiDailyMatch] {
     `@id`    : URL,
     name     : String,
     url      : URL,
-    startTime: Instant,
-    endTime  : Instant,
+    startTime: Long,
+    endTime  : Long,
     status   : ClubMatchStatus,
     boards   : Int,
     settings : ApiDailyMatchSettings,

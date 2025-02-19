@@ -1,4 +1,4 @@
-package ccas.api.utils
+package ccas.api.misc
 
 import zio.json.{JsonDecoder, SnakeCase, jsonMemberNames}
 

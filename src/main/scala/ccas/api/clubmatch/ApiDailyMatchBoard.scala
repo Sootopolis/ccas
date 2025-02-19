@@ -1,15 +1,13 @@
 package ccas.api.clubmatch
 
 import ccas.api.clubmatch.ApiDailyMatchBoard.ApiDailyBoardGame
-import ccas.api.utils.Accuracies
-import ccas.api.utils.enums.{GameResultDetail, GameRule, TimeClass}
-import ccas.api.utils.subtypes.{ClubMatchId, Elo, Username}
+import ccas.api.misc.Accuracies
+import ccas.api.misc.enums.{GameResultDetail, GameRule, TimeClass}
+import ccas.api.misc.subtypes.{ClubMatchId, Elo, Username}
 import ccas.utils.json.JsonDecoding
 import zio.Chunk
 import zio.http.URL
 import zio.json.{DeriveJsonDecoder, JsonDecoder, SnakeCase, jsonMemberNames}
-
-import java.time.Instant
 
 @jsonMemberNames(SnakeCase)
 case class ApiDailyMatchBoard(boardScores: Map[Username, Double], games: Chunk[ApiDailyBoardGame]) {
@@ -29,8 +27,8 @@ object ApiDailyMatchBoard extends JsonDecoding[ApiDailyMatchBoard] {
     url        : URL,
     fen        : String,
     pgn        : String,
-    startTime  : Instant,
-    endTime    : Option[Instant],
+    startTime  : Long,
+    endTime    : Option[Long],
     timeControl: String,
     timeClass  : TimeClass,
     rules      : GameRule,

@@ -3,8 +3,8 @@ package ccas.api
 import ccas.api.club.{ApiClub, ApiClubMatches, ApiClubMembers}
 import ccas.api.clubmatch.{ApiDailyMatch, ApiDailyMatchBoard}
 import ccas.api.player.*
-import ccas.api.utils.enums.{League, PlayerStatus}
-import ccas.api.utils.subtypes.{PlayerId, Username}
+import ccas.api.misc.enums.{League, PlayerStatus}
+import ccas.api.misc.subtypes.{PlayerId, Username}
 import zio.http.URL
 import zio.json.{JsonDecoder, readJsonLinesAs}
 import zio.test.{Spec, ZIOSpecDefault, assertCompletes, assertTrue}
@@ -46,8 +46,8 @@ object TestApiJsonParsing extends ZIOSpecDefault {
     country = URL.fromURI(URI("https://api.chess.com/pub/country/US")).get,
     location = Some("Bay Area, CA"),
     status = PlayerStatus.Staff,
-    joined = Instant.ofEpochSecond(1178556600),
-    lastOnline = Instant.ofEpochSecond(1735164010),
+    joined = 1178556600,
+    lastOnline = 1735164010,
     title = None,
     avatar = {
       val uri = URI("https://images.chesscomfiles.com/uploads/v1/user/41.5434c4ff.200x200o.5b102889d835.jpeg")

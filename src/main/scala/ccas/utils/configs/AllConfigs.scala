@@ -1,11 +1,15 @@
 package ccas.utils.configs
 
+import ccas.utils.client.CcasClient
 import ccas.utils.configs
 import ccas.utils.prettyprinting.PrettyPrinter
 import zio.config.magnolia.DeriveConfig
-import zio.{Config, IO}
+import zio.http.Client
+import zio.{Config, IO, RIO}
 
-case class AllConfigs(clubs: Map[String, ClubConfig]) derives PrettyPrinter
+case class AllConfigs(user: UserConfig, clubs: Map[String, ClubConfig]) derives PrettyPrinter {
+  def client: RIO[Client, CcasClient] = CcasClient.create(user.headers)
+}
 
 object AllConfigs extends CcasConfig[AllConfigs] {
   val root: String = "clubs"

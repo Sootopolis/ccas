@@ -1,6 +1,6 @@
 package ccas.utils.configs
 
-import ccas.api.utils.subtypes.Elo
+import ccas.api.misc.subtypes.Elo
 import ccas.utils.prettyprinting.PrettyPrinter
 import zio.config.magnolia.DeriveConfig
 import zio.{Chunk, Config, IO}
