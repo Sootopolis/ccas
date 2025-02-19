@@ -12,9 +12,7 @@ object MembershipApp extends ZIOAppDefault {
   def updateLatest(client: CcasClient, clubConfig: ClubConfig) = {
     val x = for {
       _ <- clubConfig.checkClubId(client)
-      clubMembers <- ApiClubMembers.get(client, clubConfig.clubUrlName).map(_.toMap)
-      currentById <- ClubMember.loadCurrent.map(_.map(member => member.playerId -> member).toMap)
-      latestFormerById <- ClubMember.loadLatestFormer.map(_.map(member => member.playerId -> member).toMap)
+      apiClubMembersByUsername <- ApiClubMembers.get(client, clubConfig.clubUrlName).map(_.toMap)
     } yield ()
     ???
   }
