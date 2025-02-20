@@ -97,7 +97,7 @@ object ClubMatchStatus extends EnumJson[ClubMatchStatus]
 enum PlayerStatusCategory {
   case Active
   case Closed
-  case FairPlay
+  case Fairplay
   case Abuse
   case Unknown
 }
@@ -108,7 +108,7 @@ enum PlayerStatus(val category: PlayerStatusCategory) {
   case Mod      extends PlayerStatus(PlayerStatusCategory.Active)
   case Staff    extends PlayerStatus(PlayerStatusCategory.Active)
   case Closed   extends PlayerStatus(PlayerStatusCategory.Closed)
-  case FairPlay extends PlayerStatus(PlayerStatusCategory.FairPlay)
+  case Fairplay extends PlayerStatus(PlayerStatusCategory.Fairplay)
   case Abuse    extends PlayerStatus(PlayerStatusCategory.Abuse)
 }
 
@@ -119,7 +119,7 @@ object PlayerStatus extends EnumJson[PlayerStatus] {
     "mod"                         -> Mod,
     "staff"                       -> Staff,
     "closed"                      -> Closed,
-    "closed:fair_play_violations" -> FairPlay,
+    "closed:fair_play_violations" -> Fairplay,
     "closed:abuse"                -> Abuse,
   )
 

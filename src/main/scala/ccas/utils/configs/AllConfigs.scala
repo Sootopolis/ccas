@@ -7,7 +7,7 @@ import zio.config.magnolia.DeriveConfig
 import zio.http.Client
 import zio.{Config, IO, RIO}
 
-case class AllConfigs(user: UserConfig, clubs: Map[String, ClubConfig]) derives PrettyPrinter {
+case class AllConfigs(user: UserConfig, clubs: Map[String, BaseClubConfig]) derives PrettyPrinter {
   def client: RIO[Client, CcasClient] = CcasClient.create(user.headers)
 }
 

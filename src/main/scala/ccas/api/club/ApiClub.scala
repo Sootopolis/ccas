@@ -4,7 +4,6 @@ import ccas.api.misc.Hosts
 import ccas.api.misc.enums.ClubVisibility
 import ccas.api.misc.subtypes.{ClubId, ClubUrlName, Elo}
 import ccas.utils.client.CcasClient
-import ccas.utils.configs.ClubConfig
 import ccas.utils.json.JsonDecoding
 import zio.{Chunk, Task}
 import zio.http.URL

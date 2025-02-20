@@ -47,18 +47,4 @@ object MembershipChange {
   case class RenamedReopened(oldUsername: Username, newUsername: Username) extends WithRenaming
 
   case class RenamedReturned(oldUsername: Username, newUsername: Username) extends WithRenaming
-
-  /*
-    isMember: Boolean,
-    wasMember: Boolean,
-    isOpen: Boolean,
-    wasOpen: Boolean,
-    hasRenamed: Boolean,
-
-    true, true, true, true, true => renamed
-    true, true, true, true, false => unchanged
-    true, true, true, false, true => reopened renamed
-    true, true, true, false, false => reopened
-    true, true, false, true, true => 
-   */
 }
