@@ -1,7 +1,7 @@
 package ccas.api.misc.enums
 
 import ccas.utils.json.EnumJson
-import zio.json.SnakeCase
+import ccas.utils.sql.EnumSql
 
 import scala.util.Try
 
@@ -42,8 +42,13 @@ enum GameResultDetail(val category: GameResult) {
 }
 
 object GameResultDetail extends EnumJson[GameResultDetail] {
-  private val lookup = GameResultDetail.values.map(member => member.toString.toLowerCase -> member).toMap
-    .removed(FiftyMove.toString.toLowerCase).updated("50move", FiftyMove)
+  private val lookup = GameResultDetail.values.map { member =>
+    val apiString = member match {
+      case FiftyMove => "50move"
+      case other => other.toString.toLowerCase
+    }
+    apiString -> member
+  }.toMap
 
   override protected def jsonToEnum(string: String) = Try(lookup(string)).toEither.left.map(_.getMessage)
 }
@@ -102,6 +107,8 @@ enum PlayerStatusCategory {
   case Unknown
 }
 
+object PlayerStatusCategory extends EnumSql[PlayerStatusCategory]
+
 enum PlayerStatus(val category: PlayerStatusCategory) {
   case Basic    extends PlayerStatus(PlayerStatusCategory.Active)
   case Premium  extends PlayerStatus(PlayerStatusCategory.Active)
@@ -113,19 +120,17 @@ enum PlayerStatus(val category: PlayerStatusCategory) {
 }
 
 object PlayerStatus extends EnumJson[PlayerStatus] {
-  private val lookup = Map(
-    "basic"                       -> Basic,
-    "premium"                     -> Premium,
-    "mod"                         -> Mod,
-    "staff"                       -> Staff,
-    "closed"                      -> Closed,
-    "closed:fair_play_violations" -> Fairplay,
-    "closed:abuse"                -> Abuse,
-  )
+  private val lookup = values.map { member =>
+    val apiString = member match {
+      case Fairplay => "closed:fair_play_violations"
+      case Abuse => "closed:abuse"
+      case other => other.toString.toLowerCase
+    }
+    apiString -> member
+  }.toMap
 
-  override protected def enumToJson(member: PlayerStatus) = SnakeCase(member.toString)
-
-  override protected def jsonToEnum(string: String) = Try(lookup(string)).toEither.left.map(_.getMessage)
+  override protected def jsonToEnum(string: String) =
+    super.jsonToEnum(string).orElse(Try(lookup(string)).toEither.left.map(_.getMessage))
 }
 
 enum TimeClass(val isDaily: Boolean) {
@@ -152,7 +157,7 @@ enum Title {
   case WNM
 }
 
-object Title extends EnumJson[Title]
+object Title extends EnumJson[Title] with EnumSql[Title]
 
 enum ClubVisibility {
   case Public

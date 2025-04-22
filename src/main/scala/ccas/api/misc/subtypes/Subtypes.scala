@@ -1,87 +1,73 @@
 package ccas.api.misc.subtypes
 
-import zio.{Config, NonEmptyChunk}
+import io.getquill.MappedEncoding
+import zio.Config.Error.InvalidData
 import zio.config.magnolia.DeriveConfig
 import zio.json.{JsonCodec, JsonFieldDecoder, JsonFieldEncoder}
 import zio.prelude.{Assertion, Subtype}
+import zio.{Chunk, Config, NonEmptyChunk, json}
 
-private def stringError(errors: NonEmptyChunk[String]) = errors.mkString("\n")
-private def configError(errors: NonEmptyChunk[String]) = Config.Error.InvalidData(message = stringError(errors))
+sealed trait CcasSubtype[T: {JsonCodec, DeriveConfig}] extends Subtype[T] { self =>
+  private val name = self.getClass.getSimpleName.stripSuffix("$")
+
+  protected def validated(value: Type): Either[String, Type] =
+    make(value).toEitherWith(errors => errors.mkString(s"Error validating $name:\n  ", "\n  ", ""))
+
+  given MappedEncoding[Type, T] = MappedEncoding(unwrap)
+  given MappedEncoding[T, Type] = MappedEncoding(wrap)
+  given JsonCodec[Type] = derive[JsonCodec].transformOrFail(validated, identity)
+  given DeriveConfig[Type] = derive[DeriveConfig].mapOrFail(validated(_).left.map(InvalidData(Chunk.empty, _)))
+}
+
+sealed trait CcasKeySubtype[T: {JsonCodec, DeriveConfig, JsonFieldEncoder, JsonFieldDecoder}] extends CcasSubtype[T] {
+  given JsonFieldEncoder[Type] = derive[JsonFieldEncoder]
+  given JsonFieldDecoder[Type] = derive[JsonFieldDecoder].mapOrFail(validated)
+}
 
 type Elo = Elo.Type
 
-object Elo extends Subtype[Int] {
+object Elo extends CcasSubtype[Int] {
   override def assertion: Assertion[Int] = Assertion.greaterThanOrEqualTo(0)
-
-  given jsonCodec: JsonCodec[Elo] = derive
-
-  given derivedConfig: DeriveConfig[Elo] = DeriveConfig.from(Config.int).mapOrFail(make(_).toEitherWith(configError))
 }
 
 type PlayerId = PlayerId.Type
 
-object PlayerId extends Subtype[Int] {
+object PlayerId extends CcasSubtype[Int] {
   override def assertion: Assertion[Int] = Assertion.greaterThanOrEqualTo(0)
-
-  given jsonCodec: JsonCodec[PlayerId] = derive
 }
 
 type Username = Username.Type
 
-object Username extends Subtype[String] {
+object Username extends CcasKeySubtype[String] {
   override def assertion: Assertion[String] = !Assertion.isEmptyString
-
-  given jsonCodec: JsonCodec[Username] = derive
-
-  given fieldDecoder: JsonFieldDecoder[Username] = derive
-
-  given fieldEncoder: JsonFieldEncoder[Username] = derive
-
-  given derivedConfig: DeriveConfig[Username] = derive
 }
 
 type ClubId = ClubId.Type
 
-object ClubId extends Subtype[Int] {
+object ClubId extends CcasSubtype[Int] {
   override def assertion: Assertion[Int] = Assertion.greaterThanOrEqualTo(0)
-
-  given jsonCodec: JsonCodec[ClubId] = derive
-
-  given derivedConfig: DeriveConfig[ClubId] = derive
 }
 
 type ClubUrlName = ClubUrlName.Type
 
-object ClubUrlName extends Subtype[String] {
+object ClubUrlName extends CcasKeySubtype[String] {
   override def assertion: Assertion[String] = !Assertion.isEmptyString
-
-  given jsonCodec: JsonCodec[ClubUrlName] = derive
-
-  given fieldDecoder: JsonFieldDecoder[ClubUrlName] = derive
-
-  given fieldEncoder: JsonFieldEncoder[ClubUrlName] = derive
-
-  given derivedConfig: DeriveConfig[ClubUrlName] = derive
 }
 
 type ClubMatchId = ClubMatchId.Type
 
-object ClubMatchId extends Subtype[Int] {
+object ClubMatchId extends CcasSubtype[Int] {
   override def assertion: Assertion[Int] = Assertion.greaterThanOrEqualTo(0)
-
-  given jsonCodec: JsonCodec[ClubMatchId] = derive
-
-  given fieldDecoder: JsonFieldDecoder[ClubMatchId] = derive
-
-  given fieldEncoder: JsonFieldEncoder[ClubMatchId] = derive
 }
 
 type Rate = Rate.Type
 
-object Rate extends Subtype[Double] {
+object Rate extends CcasSubtype[Double] {
   override def assertion: Assertion[Double] = Assertion.between(0.0, 1.0)
+}
 
-  given jsonCodec: JsonCodec[Rate] = derive
+type ClubAlias = ClubAlias.Type
 
-  given derivedConfig: Config[Rate] = Config.double.mapOrFail(make(_).toEitherWith(configError))
+object ClubAlias extends CcasSubtype[String] {
+  override def assertion: Assertion[String] = !Assertion.isEmptyString
 }

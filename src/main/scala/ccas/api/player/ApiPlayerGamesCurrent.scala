@@ -8,8 +8,6 @@ import zio.Chunk
 import zio.http.URL
 import zio.json.{DeriveJsonDecoder, JsonDecoder, SnakeCase, jsonMemberNames}
 
-import java.time.Instant
-
 @jsonMemberNames(SnakeCase)
 case class ApiPlayerGamesCurrent(games: Chunk[ApiPlayerCurrentDailyGame])
 

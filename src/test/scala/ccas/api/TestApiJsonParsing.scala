@@ -2,15 +2,14 @@ package ccas.api
 
 import ccas.api.club.{ApiClub, ApiClubMatches, ApiClubMembers}
 import ccas.api.clubmatch.{ApiDailyMatch, ApiDailyMatchBoard}
-import ccas.api.player.*
 import ccas.api.misc.enums.{League, PlayerStatus}
 import ccas.api.misc.subtypes.{PlayerId, Username}
+import ccas.api.player.*
 import zio.http.URL
 import zio.json.{JsonDecoder, readJsonLinesAs}
 import zio.test.{Spec, ZIOSpecDefault, assertCompletes, assertTrue}
 
 import java.net.URI
-import java.time.Instant
 
 object TestApiJsonParsing extends ZIOSpecDefault {
   override def spec: Spec[Any, Throwable] = suite("API JSON parsing tests")(
@@ -50,8 +49,8 @@ object TestApiJsonParsing extends ZIOSpecDefault {
     lastOnline = 1735164010,
     title = None,
     avatar = {
-      val uri = URI("https://images.chesscomfiles.com/uploads/v1/user/41.5434c4ff.200x200o.5b102889d835.jpeg")
-      Some(URL.fromURI(uri).get)
+      val uri = "https://images.chesscomfiles.com/uploads/v1/user/41.5434c4ff.200x200o.5b102889d835.jpeg"
+      Some(URL.decode(uri).toOption.get)
     },
     followers = 7930,
     isStreamer = false,

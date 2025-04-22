@@ -1,7 +1,7 @@
 package ccas.utils.configs
 
 import ccas.api.misc.subtypes.Username
-import ccas.ccasVersion
+import ccas.info.BuildInfo
 import ccas.utils.configs
 import zio.Config
 import zio.config.magnolia.DeriveConfig
@@ -18,7 +18,7 @@ case class UserConfig(username: Username, email: String) {
       Comment(s"User chess.com username: $username"),
       Comment(s"User email: $email"),
     )
-    Headers(UserAgent(Product("CCAS", Some(ccasVersion)), comments))
+    Headers(UserAgent(Product("CCAS", Some(BuildInfo.version)), comments))
   }
 }
 

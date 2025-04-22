@@ -31,7 +31,7 @@ libraryDependencies ++= Seq(
   "dev.zio"                      %% "zio-schema-json"       % vZioSchema,
   "dev.zio"                      %% "zio-schema-zio-test"   % vZioSchema,
   "dev.zio"                      %% "zio-schema-derivation" % vZioSchema,
-//  "org.scala-lang"               %  "scala-reflect"         % scalaVersion.value % "provided",
+  //  "org.scala-lang"               %  "scala-reflect"         % scalaVersion.value % "provided",
 
   // magnolia
   "com.softwaremill.magnolia1_3" %% "magnolia"              % vMagnolia,
@@ -46,7 +46,13 @@ scalacOptions ++= Seq(
   "-Wunused:all",
   "-Wshadow:all",
   "-Wvalue-discard",
-  "-Xmax-inlines:256",
+  "-Xmax-inlines:1024",
 )
 
-lazy val root = (project in file(".")).settings(name := "ccas")
+lazy val root = (project in file("."))
+  .enablePlugins(BuildInfoPlugin)
+  .settings(
+    name := "ccas",
+    buildInfoKeys := Seq[BuildInfoKey](name, version, scalaVersion, sbtVersion),
+    buildInfoPackage := "ccas.info"
+  )

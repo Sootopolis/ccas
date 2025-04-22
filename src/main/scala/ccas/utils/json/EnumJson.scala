@@ -25,7 +25,7 @@ trait EnumJson[T <: scala.reflect.Enum] {
     ZIO.fromEither(decode(string)).mapError(JsonDecodingException(_))
 
   extension (member: T) {
-    def encodeJson: String = member.toJsonPretty
+    def encodeJson: String = member.toJson
     def encodeJsonPretty: String = member.toJsonPretty
   }
 

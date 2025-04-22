@@ -1,50 +1,36 @@
 package ccas.analysis.apps.membership
 
-import ccas.analysis.tables.general.Player
-import ccas.api.misc.subtypes.Username
-import ccas.api.player.ApiPlayer
+import ccas.analysis.tables.clubadmin.ClubMember
+import ccas.analysis.tables.general.PlayerSnapshot
+import ccas.api.misc.enums.PlayerStatusCategory
+import ccas.api.misc.subtypes.{PlayerId, Username}
+import zio.Chunk
 
-sealed trait MembershipChange {
-  def report: String
-}
+import java.time.Instant
 
 object MembershipChange {
-  sealed trait WithoutRenaming extends MembershipChange {
-    val username: Username
+  case class MemberChangeSummary(playerId: PlayerId, changes: Chunk[MemberChange])
 
-    override def report: String = s"$username ${ ApiPlayer.getProfileUrl(username) }"
+  object MemberChangeSummary {
+    def apply(playerId: PlayerId, changes: Chunk[MemberChange]) =
+      new MemberChangeSummary(playerId, changes.sortBy(_.timestamp))
   }
 
-  sealed trait WithRenaming extends MembershipChange {
-    val oldUsername: Username
-    val newUsername: Username
+  case class MemberState(player: PlayerSnapshot, member: ClubMember)
 
-    override def report: String = s"$oldUsername -> $newUsername ${ ApiPlayer.getProfileUrl(newUsername) }"
+  sealed trait MemberChange {
+    val timestamp: Instant
   }
 
-  case class Unchanged(username: Username) extends WithoutRenaming
+  case class UsernameChange(
+    timestamp  : Instant,
+    oldUsername: Username,
+  ) extends MemberChange
 
-  case class Joined(username: Username) extends WithoutRenaming
+  case class StatusChange(
+    timestamp : Instant,
+    oldStatus : PlayerStatusCategory,
+  ) extends MemberChange
 
-  case class Returned(username: Username) extends WithoutRenaming
-
-  case class Reopened(username: Username) extends WithoutRenaming
-
-  case class Removed(username: Username) extends WithoutRenaming
-
-  case class Closed(username: Username) extends WithoutRenaming
-
-  case class Banned(username: Username) extends WithoutRenaming
-
-  /** The member has changed their username and is no longer a member of the club, therefore we cannot access
-   *  their API endpoint. There is also no way to know the exact circumstance of the member's removal, whether
-   *  the member has left the club, got banned, closed their account, or any combination of those.
-   *  It's `WithoutRenaming` because we do not know the new username. */
-  case class RenamedRemoved(username: Username) extends WithoutRenaming
-
-  case class Renamed(oldUsername: Username, newUsername: Username) extends WithRenaming
-
-  case class RenamedReopened(oldUsername: Username, newUsername: Username) extends WithRenaming
-
-  case class RenamedReturned(oldUsername: Username, newUsername: Username) extends WithRenaming
+  case class JoinedClub(timestamp: Instant) extends MemberChange
 }

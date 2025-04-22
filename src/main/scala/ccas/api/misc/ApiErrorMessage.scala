@@ -1,3 +1,3 @@
 package ccas.api.misc
 
-case class ApiErrorMessage()
+class ApiErrorMessage(message: String) extends Exception(message)

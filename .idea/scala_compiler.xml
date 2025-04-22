@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
   <component name="ScalaCompilerConfiguration">
-    <profile name="sbt 1" modules="ccas">
+    <option name="separateProdTestSources" value="true" />
+    <profile name="sbt 1" modules="root">
       <parameters>
         <parameter value="--deprecation" />
         <parameter value="--feature" />
@@ -9,6 +10,17 @@
         <parameter value="-Wshadow:all" />
         <parameter value="-Wvalue-discard" />
         <parameter value="-Xmax-inlines:256" />
+      </parameters>
+    </profile>
+    <profile name="sbt 2" modules="ccas" />
+    <profile name="sbt 3" modules="ccas.main,ccas.test">
+      <parameters>
+        <parameter value="--deprecation" />
+        <parameter value="--feature" />
+        <parameter value="-Wunused:all" />
+        <parameter value="-Wshadow:all" />
+        <parameter value="-Wvalue-discard" />
+        <parameter value="-Xmax-inlines:1024" />
       </parameters>
     </profile>
   </component>

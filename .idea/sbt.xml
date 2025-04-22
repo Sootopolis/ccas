@@ -1,8 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
   <component name="ScalaSbtSettings">
-    <option name="customLauncherPath" />
-    <option name="customVMEnabled" value="true" />
     <option name="customVMPath" value="$USER_HOME$/.sdkman/candidates/java/current" />
     <option name="linkedExternalProjectsSettings">
       <SbtProjectSettings>
@@ -15,8 +13,9 @@
           </set>
         </option>
         <option name="resolveSbtClassifiers" value="true" />
-        <option name="sbtVersion" value="1.10.7" />
+        <option name="sbtVersion" value="1.10.11" />
       </SbtProjectSettings>
     </option>
+    <option name="sbtOptions" value="-Dquill.macro.log.pretty=true" />
   </component>
 </project>

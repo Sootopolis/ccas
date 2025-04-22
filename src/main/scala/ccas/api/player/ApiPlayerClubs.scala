@@ -1,14 +1,12 @@
 package ccas.api.player
 
 import ccas.api.club.ApiClub
-import ccas.api.player.ApiPlayerClubs.ApiPlayerClub
 import ccas.api.misc.subtypes.ClubUrlName
+import ccas.api.player.ApiPlayerClubs.ApiPlayerClub
 import ccas.utils.json.JsonDecoding
 import zio.Chunk
 import zio.http.URL
 import zio.json.{DeriveJsonDecoder, JsonDecoder, SnakeCase, jsonMemberNames}
-
-import java.time.Instant
 
 @jsonMemberNames(SnakeCase)
 case class ApiPlayerClubs(clubs: Chunk[ApiPlayerClub])
