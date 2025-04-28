@@ -41,6 +41,8 @@ build/
 
 ### VS Code ###
 .vscode/
+.bloop
+.metals
 
 ### Mac OS ###
 .DS_Store
