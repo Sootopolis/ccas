@@ -13,4 +13,5 @@ object Versions {
   val vZioSchema     = "1.6.6"
   val vMagnolia      = "1.3.16"
   val vPostgresql    = "42.7.5"
+  val vSqlite        = "3.49.1.0"
 }

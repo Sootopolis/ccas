@@ -37,7 +37,10 @@ libraryDependencies ++= Seq(
   "com.softwaremill.magnolia1_3" %% "magnolia"              % vMagnolia,
 
   // postgresql
-  "org.postgresql"               %  "postgresql"            % vPostgresql
+  "org.postgresql"               %  "postgresql"            % vPostgresql,
+
+  // sqlite
+  "org.xerial"                   % "sqlite-jdbc"            % vSqlite,
 )
 
 scalacOptions ++= Seq(
