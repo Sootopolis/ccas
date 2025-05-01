@@ -28,7 +28,7 @@
         <parameter value="-Wunused:all" />
         <parameter value="-Wshadow:all" />
         <parameter value="-Wvalue-discard" />
-        <parameter value="-Xmax-inlines:1024" />
+        <parameter value="-Xmax-inlines:64" />
       </parameters>
     </profile>
   </component>

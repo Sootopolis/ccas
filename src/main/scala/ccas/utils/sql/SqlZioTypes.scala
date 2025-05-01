@@ -6,5 +6,5 @@ import java.sql.SQLException
 
 object SqlZioTypes {
   type SqlRIO[-R, +A] = ZIO[R, SQLException, A]
-  type SqlIO[+A] = IO[SQLException, A]
+  type SqlTask[+A] = IO[SQLException, A]
 }

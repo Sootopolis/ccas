@@ -40,7 +40,7 @@ libraryDependencies ++= Seq(
   "org.postgresql"               %  "postgresql"            % vPostgresql,
 
   // sqlite
-  "org.xerial"                   % "sqlite-jdbc"            % vSqlite,
+  "org.xerial"                   %  "sqlite-jdbc"           % vSqlite,
 )
 
 scalacOptions ++= Seq(
@@ -49,13 +49,13 @@ scalacOptions ++= Seq(
   "-Wunused:all",
   "-Wshadow:all",
   "-Wvalue-discard",
-  "-Xmax-inlines:1024",
+  "-Xmax-inlines:64",
 )
 
 lazy val root = (project in file("."))
   .enablePlugins(BuildInfoPlugin)
   .settings(
     name := "ccas",
-    buildInfoKeys := Seq[BuildInfoKey](name, version, scalaVersion, sbtVersion),
+    buildInfoKeys := Seq(name, version, scalaVersion, sbtVersion),
     buildInfoPackage := "ccas.info"
   )
