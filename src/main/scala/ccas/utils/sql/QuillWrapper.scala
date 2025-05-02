@@ -3,7 +3,7 @@ package ccas.utils.sql
 import io.getquill.SnakeCase
 import io.getquill.context.sql.idiom.SqlIdiom
 import io.getquill.jdbczio.Quill
-import zio.{Scope, TaskLayer, ZIO, ZLayer}
+import zio.{RIO, Tag, TaskLayer, URLayer, ZIO, ZLayer}
 
 import javax.sql.DataSource
 
@@ -19,32 +19,31 @@ object QuillWrapper {
     case SQLite
   }
 
-  case class PostgresQuillWrapper(quill: Quill.Postgres[SnakeCase]) extends QuillWrapper
-
-  case class SqliteQuillWrapper(quill: Quill.Sqlite[SnakeCase]) extends QuillWrapper
+  case class Postgres(quill: Quill.Postgres[SnakeCase]) extends QuillWrapper
+  case class Sqlite(quill: Quill.Sqlite[SnakeCase]) extends QuillWrapper
 
   // TODO more wrappers here
 
-  private def live: ZLayer[DataSource, Throwable, QuillWrapper] = ZLayer.scoped {
-    {
-      for {
-        dataSource <- ZIO.service[DataSource]
-        connection <- ZIO.fromAutoCloseable(ZIO.attemptBlocking(dataSource.getConnection))
-        rawDatabaseProductName <- ZIO.attempt(connection.getMetaData.getDatabaseProductName)
-          .orElseFail(new Exception(s"No database product name found."))
-        databaseProductName <- ZIO.attempt(DatabaseProduceName.valueOf(rawDatabaseProductName))
-          .orElseFail(new Exception(s"Unsupported database product name: $rawDatabaseProductName"))
-        wrapped <- databaseProductName match {
-          case DatabaseProduceName.PostgreSQL => ZIO.serviceWith[Quill.Postgres[SnakeCase]](PostgresQuillWrapper(_))
-          case DatabaseProduceName.SQLite => ZIO.serviceWith[Quill.Sqlite[SnakeCase]](SqliteQuillWrapper(_))
-        }
-      } yield { wrapped }
-    }.provideSome[Scope & DataSource](
-      Quill.Postgres.fromNamingStrategy(SnakeCase),
-      Quill.Sqlite.fromNamingStrategy(SnakeCase)
-    )
+  def liveFromPrefix(prefix: String = defaultDataSourcePrefix): TaskLayer[QuillWrapper] =
+    Quill.DataSource.fromPrefix(prefix) >>> live
+
+  private val live: ZLayer[DataSource, Throwable, QuillWrapper] = ZLayer.scoped {
+    for {
+      dataSource <- ZIO.service[DataSource]
+      connection <- ZIO.fromAutoCloseable(ZIO.attemptBlocking(dataSource.getConnection))
+      rawDatabaseProductName <- ZIO.attempt(connection.getMetaData.getDatabaseProductName)
+        .orElseFail(new Exception(s"No database product name found."))
+      databaseProductName <- ZIO.attempt(DatabaseProduceName.valueOf(rawDatabaseProductName))
+        .orElseFail(new Exception(s"Unsupported database product name: `$rawDatabaseProductName`"))
+      wrapped <- databaseProductName match {
+        case DatabaseProduceName.PostgreSQL => buildSnakeCase(Quill.Postgres.fromNamingStrategy, Postgres(_))
+        case DatabaseProduceName.SQLite => buildSnakeCase(Quill.Sqlite.fromNamingStrategy, Sqlite(_))
+      }
+    } yield { wrapped }
   }
 
-  def liveFromPrefix(prefix: String = defaultDataSourcePrefix): TaskLayer[QuillWrapper] =
-    ZLayer.make[QuillWrapper](Quill.DataSource.fromPrefix(prefix), live)
+  private def buildSnakeCase[Q <: Quill[?, SnakeCase]: Tag](
+    service: SnakeCase => URLayer[DataSource, Q],
+    wrap   : Q => QuillWrapper
+  ): RIO[DataSource, QuillWrapper] = ZIO.serviceWith[Q](wrap).provideSomeLayer(service(SnakeCase))
 }

@@ -1,4 +1,4 @@
-package ccas.analysis.tables.general
+package ccas.analysis.tables
 
 import ccas.api.misc.subtypes.{ClubId, ClubUrlName}
 

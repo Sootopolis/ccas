@@ -60,9 +60,9 @@ object ClubMatchId extends CcasSubtype[Int] {
   override def assertion: Assertion[Int] = Assertion.greaterThanOrEqualTo(0)
 }
 
-type Rate = Rate.Type
+type Percentage = Percentage.Type
 
-object Rate extends CcasSubtype[Double] {
+object Percentage extends CcasSubtype[Double] {
   override def assertion: Assertion[Double] = Assertion.between(0.0, 1.0)
 }
 

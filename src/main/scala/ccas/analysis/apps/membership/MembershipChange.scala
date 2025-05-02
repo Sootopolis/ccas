@@ -1,7 +1,6 @@
 package ccas.analysis.apps.membership
 
-import ccas.analysis.tables.clubadmin.ClubMember
-import ccas.analysis.tables.general.PlayerSnapshot
+import ccas.analysis.tables.{ClubMember, PlayerSnapshot}
 import ccas.api.misc.enums.PlayerStatusCategory
 import ccas.api.misc.subtypes.{PlayerId, Username}
 import zio.Chunk
