@@ -5,13 +5,13 @@ import io.getquill.jdbczio.Quill
 import zio.{RLayer, Tag, ZIO, ZLayer}
 
 case class RepoResolver[Repo: Tag](
-  postgresSnake: Quill.Postgres[SnakeCase] => Repo = RepoResolver.defaultRepositoryResolver,
-  sqliteSnake  : Quill.Sqlite[SnakeCase] => Repo = RepoResolver.defaultRepositoryResolver,
+  postgres: Quill.Postgres[SnakeCase] => Repo = RepoResolver.defaultRepositoryResolver,
+  sqlite  : Quill.Sqlite[SnakeCase] => Repo = RepoResolver.defaultRepositoryResolver,
 ) {
-  val live: RLayer[QuillWrapper, Repo] = ZLayer.fromZIO {
+  def live: RLayer[QuillWrapper, Repo] = ZLayer.fromZIO {
     ZIO.serviceWithZIO[QuillWrapper] {
-      case QuillWrapper.Postgres(quill) => ZIO.attempt(postgresSnake(quill))
-      case QuillWrapper.Sqlite(quill) => ZIO.attempt(sqliteSnake(quill))
+      case QuillWrapper.Postgres(quill) => ZIO.attempt(postgres(quill))
+      case QuillWrapper.Sqlite(quill) => ZIO.attempt(sqlite(quill))
     }
   }
 }

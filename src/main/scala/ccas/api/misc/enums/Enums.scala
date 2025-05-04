@@ -107,7 +107,7 @@ enum PlayerStatusCategory {
   case Unknown
 }
 
-object PlayerStatusCategory extends EnumSql[PlayerStatusCategory]
+object PlayerStatusCategory extends EnumSql[PlayerStatusCategory]()
 
 enum PlayerStatus(val category: PlayerStatusCategory) {
   case Basic    extends PlayerStatus(PlayerStatusCategory.Active)
@@ -157,7 +157,7 @@ enum Title {
   case WNM
 }
 
-object Title extends EnumJson[Title] with EnumSql[Title]
+object Title extends EnumJson[Title] with EnumSql[Title](identity, identity)
 
 enum ClubVisibility {
   case Public

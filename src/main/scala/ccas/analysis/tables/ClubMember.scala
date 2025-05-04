@@ -26,8 +26,8 @@ object ClubMember extends SqlRepoUtils {
   override protected type Repo = ClubMemberRepo
 
   override protected val repoResolver: RepoResolver[Repo] = RepoResolver(
-    postgresSnake = PostgresRepo.apply,
-    sqliteSnake = SqliteRepo.apply,
+    postgres = PostgresRepo.apply,
+    sqlite = SqliteRepo.apply,
   )
 
   sealed trait ClubMemberRepo {

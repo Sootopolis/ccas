@@ -27,47 +27,47 @@ sealed trait CcasKeySubtype[T: {JsonCodec, DeriveConfig, JsonFieldEncoder, JsonF
 type Elo = Elo.Type
 
 object Elo extends CcasSubtype[Int] {
-  override def assertion: Assertion[Int] = Assertion.greaterThanOrEqualTo(0)
+  override inline def assertion: Assertion[Int] = Assertion.greaterThanOrEqualTo(0)
 }
 
 type PlayerId = PlayerId.Type
 
-object PlayerId extends CcasSubtype[Int] {
-  override def assertion: Assertion[Int] = Assertion.greaterThanOrEqualTo(0)
+object PlayerId extends CcasSubtype[Long] {
+  override inline def assertion: Assertion[Long] = Assertion.greaterThanOrEqualTo(0L)
 }
 
 type Username = Username.Type
 
 object Username extends CcasKeySubtype[String] {
-  override def assertion: Assertion[String] = !Assertion.isEmptyString
+  override inline def assertion: Assertion[String] = !Assertion.isEmptyString
 }
 
 type ClubId = ClubId.Type
 
-object ClubId extends CcasSubtype[Int] {
-  override def assertion: Assertion[Int] = Assertion.greaterThanOrEqualTo(0)
+object ClubId extends CcasSubtype[Long] {
+  override inline def assertion: Assertion[Long] = Assertion.greaterThanOrEqualTo(0L)
 }
 
 type ClubUrlName = ClubUrlName.Type
 
 object ClubUrlName extends CcasKeySubtype[String] {
-  override def assertion: Assertion[String] = !Assertion.isEmptyString
+  override inline def assertion: Assertion[String] = !Assertion.isEmptyString
 }
 
 type ClubMatchId = ClubMatchId.Type
 
-object ClubMatchId extends CcasSubtype[Int] {
-  override def assertion: Assertion[Int] = Assertion.greaterThanOrEqualTo(0)
+object ClubMatchId extends CcasSubtype[Long] {
+  override inline def assertion: Assertion[Long] = Assertion.greaterThanOrEqualTo(0L)
 }
 
 type Percentage = Percentage.Type
 
 object Percentage extends CcasSubtype[Double] {
-  override def assertion: Assertion[Double] = Assertion.between(0.0, 1.0)
+  override inline def assertion: Assertion[Double] = Assertion.between(0.0, 1.0)
 }
 
 type ClubAlias = ClubAlias.Type
 
 object ClubAlias extends CcasSubtype[String] {
-  override def assertion: Assertion[String] = !Assertion.isEmptyString
+  override inline def assertion: Assertion[String] = !Assertion.isEmptyString
 }

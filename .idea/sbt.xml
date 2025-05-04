@@ -14,8 +14,10 @@
         </option>
         <option name="resolveSbtClassifiers" value="true" />
         <option name="sbtVersion" value="1.10.11" />
+        <option name="useSeparateCompilerOutputPaths" value="true" />
       </SbtProjectSettings>
     </option>
-    <option name="sbtOptions" value="-Dquill.macro.log.pretty=true" />
+    <option name="sbtOptions" value="-warn --verbose" />
+    <option name="vmParameters" value="-Xmx16G -Xss16M" />
   </component>
 </project>
