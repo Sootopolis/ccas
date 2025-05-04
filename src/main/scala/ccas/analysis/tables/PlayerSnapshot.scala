@@ -1,5 +1,6 @@
 package ccas.analysis.tables
 
+import ccas.api.misc.enums.PlayerStatusCategory.Active
 import ccas.api.misc.enums.{PlayerStatusCategory, Title}
 import ccas.api.misc.subtypes.{PlayerId, Username}
 import ccas.utils.sql.SqlZioTypes.SqlTask
@@ -34,14 +35,16 @@ object PlayerSnapshot extends SqlRepoUtils {
   def selectAll: RepoTask[List[PlayerSnapshot]] = repoService(_.selectAll)
   /** Select the latest player snapshot records. */
   def selectLatest: RepoTask[List[PlayerSnapshot]] = repoService(_.selectLatest)
+  /** Select records of currently active players. */
+  def selectActive: RepoTask[List[PlayerSnapshot]] = repoService(_.selectActive)
   /** Select all player snapshot records for a given player by id. */
   def selectId(playerId: PlayerId): RepoTask[List[PlayerSnapshot]] = repoService(_.selectId(playerId))
   /** Select all player snapshot records for a given player by username. */
-  def selectUsername(username: Username): RepoTask[List[PlayerSnapshot]] = repoService(_.selectUsername(username))
+  def selectName(username: Username): RepoTask[List[PlayerSnapshot]] = repoService(_.selectName(username))
   /** Select the latest player snapshot record, if exists, of a given player by id. */
   def selectIdLatest(playerId: PlayerId): RepoTask[Option[PlayerSnapshot]] = repoService(_.selectIdLatest(playerId))
   /** Select the latest player snapshot record, if exists, of a given player by username. */
-  def selectUsernameLatest(username: Username): RepoTask[Option[PlayerSnapshot]] = repoService(_.selectUsernameLatest(username))
+  def selectNameLatest(username: Username): RepoTask[Option[PlayerSnapshot]] = repoService(_.selectNameLatest(username))
   /** Select all player snapshot records since and immediately before a given timestamp. */
   def selectSince(since: Instant): RepoTask[List[PlayerSnapshot]] = repoService(_.selectSince(since))
   /** Insert a player snapshot record. */
@@ -59,25 +62,18 @@ object PlayerSnapshot extends SqlRepoUtils {
     val quill: Quill[? <: SqlIdiom, SnakeCase]
     import quill.*
 
-    protected inline def selectAllQuery: EntityQuery[PlayerSnapshot] = query[PlayerSnapshot]
-
-    protected inline def selectLatestQuery: Query[PlayerSnapshot] = selectAllQuery
-      .join { query[PlayerSnapshot].groupByMap(_.playerId)(row => row.playerId -> max(row.since)) }
-      .on { case (row, (playerId, since)) => row.playerId == playerId && row.since == since }.map(_._1)
-
-    protected inline def selectIdQuery(playerId: PlayerId): EntityQuery[PlayerSnapshot] =
-      selectAllQuery.filter(_.playerId == lift(playerId))
-
-    protected inline def selectUsernameQuery(username: Username): EntityQuery[PlayerSnapshot] =
-      selectAllQuery.filter(_.username == lift(username))
-
-    protected inline def selectIdLatestQuery(playerId: PlayerId): Option[PlayerSnapshot] =
-      selectIdQuery(playerId).sortBy(_.since)(Ord.desc).take(1).value
-
-    protected inline def selectUsernameLatestQuery(username: Username): Option[PlayerSnapshot] =
-      selectUsernameQuery(username).sortBy(_.since)(Ord.desc).take(1).value
-
-    protected inline def selectSinceQuery(since: Instant): Query[PlayerSnapshot] = {
+    protected inline def selectAllQuery = query[PlayerSnapshot]
+    protected inline def selectLatestQuery = {
+      selectAllQuery
+        .join { query[PlayerSnapshot].groupByMap(_.playerId)(row => row.playerId -> max(row.since)) }
+        .on { case (row, (playerId, since)) => row.playerId == playerId && row.since == since }.map(_._1)
+    }
+    protected inline def selectActiveQuery = selectLatestQuery.filter(_.status == lift(Active))
+    protected inline def selectIdQuery(playerId: PlayerId) = selectAllQuery.filter(_.playerId == lift(playerId))
+    protected inline def selectNameQuery(username: Username) = selectAllQuery.filter(_.username == lift(username))
+    protected inline def selectIdLatestQuery(playerId: PlayerId) = selectIdQuery(playerId).sortBy(_.since)(Ord.desc)
+    protected inline def selectNameLatestQuery(username: Username) = selectNameQuery(username).sortBy(_.since)(Ord.desc)
+    protected inline def selectSinceQuery(since: Instant) = {
       val justBeforeById = selectAllQuery.filter(_.since <= lift(since))
         .groupByMap(_.playerId)(x => x.playerId -> max(x.since))
       val justBefore = selectAllQuery.join(justBeforeById)
@@ -85,30 +81,22 @@ object PlayerSnapshot extends SqlRepoUtils {
       val after = selectAllQuery.filter(_.since > lift(since))
       justBefore.union(after)
     }
-
-    protected inline def insertQuery(item: PlayerSnapshot): Insert[PlayerSnapshot] =
-      selectAllQuery.insertValue(lift(item))
-
-    protected inline def insertBatchQuery(items: Iterable[PlayerSnapshot]): BatchAction[Insert[PlayerSnapshot]] =
-      liftQuery(items).foreach(selectAllQuery.insertValue(_))
-
-    protected inline def updateQuery(item: PlayerSnapshot): Update[PlayerSnapshot] =
-      selectIdQuery(item.playerId).filter(_.since == lift(item.since)).updateValue(lift(item))
-
-    protected inline def updateBatchQuery(items: Iterable[PlayerSnapshot]): BatchAction[Update[PlayerSnapshot]] = {
-      liftQuery(items).foreach { item =>
-        selectAllQuery.filter(_.playerId == item.playerId).filter(_.since == item.since).updateValue(item)
-      }
-    }
-
-    protected inline def deleteAllQuery: Delete[PlayerSnapshot] = selectAllQuery.delete
+    private inline def insertLifted(item: PlayerSnapshot): Insert[PlayerSnapshot] = selectAllQuery.insertValue(item)
+    protected inline def insertQuery(item: PlayerSnapshot) = insertLifted(lift(item))
+    protected inline def insertBatchQuery(items: Iterable[PlayerSnapshot]) = liftQuery(items).foreach(insertLifted)
+    private inline def updateLifted(item: PlayerSnapshot): Update[PlayerSnapshot] =
+      selectAllQuery.filter(_.playerId == item.playerId).filter(_.since == item.since).updateValue(item)
+    protected inline def updateQuery(item: PlayerSnapshot) = updateLifted(lift(item))
+    protected inline def updateBatchQuery(items: Iterable[PlayerSnapshot]) = liftQuery(items).foreach(updateLifted)
+    protected inline def deleteAllQuery = selectAllQuery.delete
 
     def selectAll: SqlTask[List[PlayerSnapshot]]
     def selectLatest: SqlTask[List[PlayerSnapshot]]
+    def selectActive: SqlTask[List[PlayerSnapshot]]
     def selectId(id: PlayerId): SqlTask[List[PlayerSnapshot]]
-    def selectUsername(username: Username): SqlTask[List[PlayerSnapshot]]
+    def selectName(username: Username): SqlTask[List[PlayerSnapshot]]
     def selectIdLatest(id: PlayerId): SqlTask[Option[PlayerSnapshot]]
-    def selectUsernameLatest(username: Username): SqlTask[Option[PlayerSnapshot]]
+    def selectNameLatest(username: Username): SqlTask[Option[PlayerSnapshot]]
     def selectSince(since: Instant): SqlTask[List[PlayerSnapshot]]
     def insert(item: PlayerSnapshot): SqlTask[Unit]
     def insertBatch(items: Iterable[PlayerSnapshot]): SqlTask[Unit]
@@ -122,10 +110,13 @@ object PlayerSnapshot extends SqlRepoUtils {
 
     override def selectAll: SqlTask[List[PlayerSnapshot]] = run(selectAllQuery)
     override def selectLatest: SqlTask[List[PlayerSnapshot]] = run(selectLatestQuery)
+    override def selectActive: SqlTask[List[PlayerSnapshot]] = run(selectActiveQuery)
     override def selectId(id: PlayerId): SqlTask[List[PlayerSnapshot]] = run(selectIdQuery(id))
-    override def selectUsername(username: Username): SqlTask[List[PlayerSnapshot]] = run(selectUsernameQuery(username))
-    override def selectIdLatest(id: PlayerId): SqlTask[Option[PlayerSnapshot]] = run(selectIdLatestQuery(id))
-    override def selectUsernameLatest(username: Username): SqlTask[Option[PlayerSnapshot]] = run(selectUsernameLatestQuery(username))
+    override def selectName(username: Username): SqlTask[List[PlayerSnapshot]] = run(selectNameQuery(username))
+    override def selectIdLatest(id: PlayerId): SqlTask[Option[PlayerSnapshot]] =
+      run(selectIdLatestQuery(id)).map(_.headOption)
+    override def selectNameLatest(username: Username): SqlTask[Option[PlayerSnapshot]] =
+      run(selectNameLatestQuery(username)).map(_.headOption)
     override def selectSince(since: Instant): SqlTask[List[PlayerSnapshot]] = run(selectSinceQuery(since))
     override def insert(item: PlayerSnapshot): SqlTask[Unit] = run(insertQuery(item)).unit
     override def insertBatch(items: Iterable[PlayerSnapshot]): SqlTask[Unit] = run(insertBatchQuery(items)).unit
@@ -139,10 +130,13 @@ object PlayerSnapshot extends SqlRepoUtils {
 
     override def selectAll: SqlTask[List[PlayerSnapshot]] = run(selectAllQuery)
     override def selectLatest: SqlTask[List[PlayerSnapshot]] = run(selectLatestQuery)
+    override def selectActive: SqlTask[List[PlayerSnapshot]] = run(selectActiveQuery)
     override def selectId(id: PlayerId): SqlTask[List[PlayerSnapshot]] = run(selectIdQuery(id))
-    override def selectUsername(username: Username): SqlTask[List[PlayerSnapshot]] = run(selectUsernameQuery(username))
-    override def selectIdLatest(id: PlayerId): SqlTask[Option[PlayerSnapshot]] = run(selectIdLatestQuery(id))
-    override def selectUsernameLatest(username: Username): SqlTask[Option[PlayerSnapshot]] = run(selectUsernameLatestQuery(username))
+    override def selectName(username: Username): SqlTask[List[PlayerSnapshot]] = run(selectNameQuery(username))
+    override def selectIdLatest(id: PlayerId): SqlTask[Option[PlayerSnapshot]] =
+      run(selectIdLatestQuery(id)).map(_.headOption)
+    override def selectNameLatest(username: Username): SqlTask[Option[PlayerSnapshot]] =
+      run(selectNameLatestQuery(username)).map(_.headOption)
     override def selectSince(since: Instant): SqlTask[List[PlayerSnapshot]] = run(selectSinceQuery(since))
     override def insert(item: PlayerSnapshot): SqlTask[Unit] = run(insertQuery(item)).unit
     override def insertBatch(items: Iterable[PlayerSnapshot]): SqlTask[Unit] = run(insertBatchQuery(items)).unit

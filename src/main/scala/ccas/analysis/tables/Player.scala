@@ -38,14 +38,13 @@ object Player extends SqlRepoUtils {
     val quill: Quill[? <: SqlIdiom, SnakeCase]
     import quill.*
 
-    protected inline def selectAllQuery: EntityQuery[Player] = query[Player]
-    protected inline def selectIdQuery(playerId: PlayerId): EntityQuery[Player] =
-      selectAllQuery.filter(_.playerId == lift(playerId))
-    protected inline def insertQuery(player: Player): Insert[Player] = selectAllQuery.insertValue(lift(player))
-    protected inline def insertBatchQuery(players: Iterable[Player]): BatchAction[Insert[Player]] =
-      liftQuery(players).foreach(selectAllQuery.insertValue)
+    protected inline def selectAllQuery = query[Player]
+    protected inline def selectIdQuery(playerId: PlayerId) = selectAllQuery.filter(_.playerId == lift(playerId))
+    private inline def insertLifted(player: Player): Insert[Player] = selectAllQuery.insertValue(player)
+    protected inline def insertQuery(player: Player) = insertLifted(lift(player))
+    protected inline def insertBatchQuery(players: Iterable[Player]) = liftQuery(players).foreach(insertLifted)
     protected inline def deleteAllQuery = selectAllQuery.delete
-    protected inline def deleteQuery(playerId: PlayerId): Delete[Player] = selectIdQuery(playerId).delete
+    protected inline def deleteQuery(playerId: PlayerId) = selectIdQuery(playerId).delete
 
     def selectAll: SqlTask[List[Player]]
     def selectId(playerId: PlayerId): SqlTask[Option[Player]]
@@ -55,7 +54,7 @@ object Player extends SqlRepoUtils {
     def deleteId(playerId: PlayerId): SqlTask[Unit]
   }
 
-  private case class PostgresRepo(quill: Quill.Postgres[SnakeCase]) extends PlayerRepository {
+  private case class PostgresRepo(quill: Quill.Postgres[SnakeCase]) extends Repo {
     import quill.*
 
     override def selectAll: SqlTask[List[Player]] = run(selectAllQuery)
@@ -66,7 +65,7 @@ object Player extends SqlRepoUtils {
     override def deleteId(playerId: PlayerId): SqlTask[Unit] = run(deleteQuery(playerId)).unit
   }
 
-  private case class SqliteRepo(quill: Quill.Sqlite[SnakeCase]) extends PlayerRepository {
+  private case class SqliteRepo(quill: Quill.Sqlite[SnakeCase]) extends Repo {
     import quill.*
 
     override def selectAll: SqlTask[List[Player]] = run(selectAllQuery)

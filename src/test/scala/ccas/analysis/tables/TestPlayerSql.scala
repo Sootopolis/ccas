@@ -1,7 +1,7 @@
 package ccas.analysis.tables
 
 import ccas.api.misc.enums.PlayerStatusCategory.{Active, Fairplay}
-import ccas.api.misc.enums.Title.CM
+import ccas.api.misc.enums.Title.{CM, GM, IM}
 import ccas.api.misc.enums.{PlayerStatusCategory, Title}
 import ccas.api.misc.subtypes.{PlayerId, Username}
 import ccas.utils.sql.QuillWrapper
@@ -15,7 +15,8 @@ object TestPlayerSql extends ZIOSpecDefault {
     testDeleteAll,
     testInsert,
     testInsertBatch,
-    testSelect
+    testSelect,
+    testUpdate,
   ).provideShared(
     QuillWrapper.liveFromPrefix(),
     Player.live,
@@ -75,5 +76,13 @@ object TestPlayerSql extends ZIOSpecDefault {
         sinceT1.toSet == Set(player0Snapshot1, player1Snapshot1, player0Snapshot2, player1Snapshot2)
       )
     }
+  }
+
+  private def testUpdate = test("testUpdate") {
+    for {
+      _ <- PlayerSnapshot.update(player0Snapshot0.copy(title = Some(IM)))
+      _ <- PlayerSnapshot.updateBatch(Chunk(player0Snapshot1, player0Snapshot2).map(_.copy(title = Some(GM))))
+      results <- PlayerSnapshot.selectId(player0.playerId).map(_.sortBy(_.since).flatMap(_.title))
+    } yield { assertTrue(results == List(IM, GM, GM)) }
   }
 }
