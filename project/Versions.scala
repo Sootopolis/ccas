@@ -5,13 +5,13 @@ object Versions {
   val vSbt           = "1.10.11"
 
   // libraries
-  val vZio           = "2.1.17"
+  val vZio           = "2.1.24"
   val vZioConfig     = "4.0.4"
-  val vZioHttp       = "3.2.0"
-  val vZioJson       = "0.7.42"
+  val vZioHttp       = "3.7.4"
+  val vZioJson       = "0.7.45"
   val vZioProtoQuill = "4.8.6"
   val vZioSchema     = "1.6.6"
-  val vMagnolia      = "1.3.16"
-  val vPostgresql    = "42.7.5"
+  val vMagnolia      = "1.3.18"
+  val vPostgresql    = "42.7.8"
   val vSqlite        = "3.49.1.0"
 }

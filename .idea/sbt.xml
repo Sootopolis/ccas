@@ -13,11 +13,12 @@
           </set>
         </option>
         <option name="resolveSbtClassifiers" value="true" />
-        <option name="sbtVersion" value="1.10.11" />
-        <option name="useSeparateCompilerOutputPaths" value="true" />
+        <option name="sbtVersion" value="1.12.0" />
+        <option name="useSbtShellForBuild" value="true" />
+        <option name="useSbtShellForImport" value="true" />
       </SbtProjectSettings>
     </option>
-    <option name="sbtOptions" value="-warn --verbose" />
+    <option name="sbtOptions" value="-warn" />
     <option name="vmParameters" value="-Xmx16G -Xss16M" />
   </component>
 </project>

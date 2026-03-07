@@ -12,6 +12,9 @@ libraryDependencies ++= Seq(
   "dev.zio"                      %% "zio-test-sbt"          % vZio % Test,
   "dev.zio"                      %% "zio-test-magnolia"     % vZio % Test,
 
+  // zio-json
+  "dev.zio"                      %% "zio-json"              % vZioJson,
+
   // zio-config
   "dev.zio"                      %% "zio-config"            % vZioConfig,
   "dev.zio"                      %% "zio-config-magnolia"   % vZioConfig,
@@ -20,17 +23,14 @@ libraryDependencies ++= Seq(
   // zio-http
   "dev.zio"                      %% "zio-http"              % vZioHttp,
 
-  // zio-json
-  "dev.zio"                      %% "zio-json"              % vZioJson,
-
   // zio-protoquill
   "io.getquill"                  %% "quill-jdbc-zio"        % vZioProtoQuill,
 
   // zio-schema
-  "dev.zio"                      %% "zio-schema"            % vZioSchema,
-  "dev.zio"                      %% "zio-schema-json"       % vZioSchema,
-  "dev.zio"                      %% "zio-schema-zio-test"   % vZioSchema,
-  "dev.zio"                      %% "zio-schema-derivation" % vZioSchema,
+//  "dev.zio"                      %% "zio-schema"            % vZioSchema,
+//  "dev.zio"                      %% "zio-schema-json"       % vZioSchema,
+//  "dev.zio"                      %% "zio-schema-zio-test"   % vZioSchema,
+//  "dev.zio"                      %% "zio-schema-derivation" % vZioSchema,
   //  "org.scala-lang"               %  "scala-reflect"         % scalaVersion.value % "provided",
 
   // magnolia
