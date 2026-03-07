@@ -2,77 +2,42 @@ package ccas.analysis.tables
 
 import ccas.api.misc.subtypes.PlayerId
 import ccas.utils.sql.SqlZioTypes.SqlTask
-import ccas.utils.sql.{RepoResolver, SqlRepoUtils}
+import ccas.utils.sql.SqlRepoUtils
 import io.getquill.*
-import io.getquill.context.sql.idiom.SqlIdiom
 import io.getquill.jdbczio.Quill
-import zio.ZIO
 
 import java.time.Instant
 
 case class Player(playerId: PlayerId, joined: Instant)
 
 object Player extends SqlRepoUtils {
-  /** Type of the repository of the table, typically a `sealed trait`. */
   override protected type Repo = PlayerRepository
 
-  override protected val repoResolver: RepoResolver[Repo] = RepoResolver(
-    postgres = PostgresRepo.apply,
-    sqlite = SqliteRepo.apply,
-  )
+  override protected def makeRepo(quill: Quill.Postgres[SnakeCase]): Repo = PlayerRepository(quill)
 
-  /** Select all player records. */
   def selectAll: RepoTask[List[Player]] = repoService(_.selectAll)
-  /** Select the entry of a player id if exists. */
   def selectId(playerId: PlayerId): RepoTask[Option[Player]] = repoService(_.selectId(playerId))
-  /** Insert a player record. */
   def insert(player: Player): RepoTask[Unit] = repoService(_.insert(player))
-  /** Insert a collection of player records. */
   def insertBatch(players: Iterable[Player]): RepoTask[Unit] = repoService(_.insertBatch(players))
-  /** Delete all player records. Use with caution. */
   def deleteAll: RepoTask[Unit] = repoService(_.deleteAll)
-  /** Delete the entry of a player id if exists. */
   def deleteId(playerId: PlayerId): RepoTask[Unit] = repoService(_.deleteId(playerId))
 
-  sealed trait PlayerRepository {
-    val quill: Quill[? <: SqlIdiom, SnakeCase]
+  case class PlayerRepository(quill: Quill.Postgres[SnakeCase]) {
     import quill.*
 
-    protected inline def selectAllQuery = query[Player]
-    protected inline def selectIdQuery(playerId: PlayerId) = selectAllQuery.filter(_.playerId == lift(playerId))
+    inline def selectAllQuery = query[Player]
+    inline def selectIdQuery(playerId: PlayerId) = selectAllQuery.filter(_.playerId == lift(playerId))
     private inline def insertLifted(player: Player): Insert[Player] = selectAllQuery.insertValue(player)
-    protected inline def insertQuery(player: Player) = insertLifted(lift(player))
-    protected inline def insertBatchQuery(players: Iterable[Player]) = liftQuery(players).foreach(insertLifted)
-    protected inline def deleteAllQuery = selectAllQuery.delete
-    protected inline def deleteQuery(playerId: PlayerId) = selectIdQuery(playerId).delete
+    inline def insertQuery(player: Player) = insertLifted(lift(player))
+    inline def insertBatchQuery(players: Iterable[Player]) = liftQuery(players).foreach(insertLifted)
+    inline def deleteAllQuery = selectAllQuery.delete
+    inline def deleteQuery(playerId: PlayerId) = selectIdQuery(playerId).delete
 
-    def selectAll: SqlTask[List[Player]]
-    def selectId(playerId: PlayerId): SqlTask[Option[Player]]
-    def insert(player: Player): SqlTask[Unit]
-    def insertBatch(players: Iterable[Player]): SqlTask[Unit]
-    def deleteAll: SqlTask[Unit]
-    def deleteId(playerId: PlayerId): SqlTask[Unit]
-  }
-
-  private case class PostgresRepo(quill: Quill.Postgres[SnakeCase]) extends Repo {
-    import quill.*
-
-    override def selectAll: SqlTask[List[Player]] = run(selectAllQuery)
-    override def selectId(playerId: PlayerId): SqlTask[Option[Player]] = run(selectIdQuery(playerId)).map(_.headOption)
-    override def insert(player: Player): SqlTask[Unit] = run(insertQuery(player)).unit
-    override def insertBatch(players: Iterable[Player]): SqlTask[Unit] = run(insertBatchQuery(players)).unit
-    override def deleteAll: SqlTask[Unit] = run(deleteAllQuery).unit
-    override def deleteId(playerId: PlayerId): SqlTask[Unit] = run(deleteQuery(playerId)).unit
-  }
-
-  private case class SqliteRepo(quill: Quill.Sqlite[SnakeCase]) extends Repo {
-    import quill.*
-
-    override def selectAll: SqlTask[List[Player]] = run(selectAllQuery)
-    override def selectId(playerId: PlayerId): SqlTask[Option[Player]] = run(selectIdQuery(playerId)).map(_.headOption)
-    override def insert(player: Player): SqlTask[Unit] = run(insertQuery(player)).unit
-    override def insertBatch(players: Iterable[Player]): SqlTask[Unit] = run(insertBatchQuery(players)).unit
-    override def deleteAll: SqlTask[Unit] = run(deleteAllQuery).unit
-    override def deleteId(playerId: PlayerId): SqlTask[Unit] = run(deleteQuery(playerId)).unit
+    def selectAll: SqlTask[List[Player]] = run(selectAllQuery)
+    def selectId(playerId: PlayerId): SqlTask[Option[Player]] = run(selectIdQuery(playerId)).map(_.headOption)
+    def insert(player: Player): SqlTask[Unit] = run(insertQuery(player)).unit
+    def insertBatch(players: Iterable[Player]): SqlTask[Unit] = run(insertBatchQuery(players)).unit
+    def deleteAll: SqlTask[Unit] = run(deleteAllQuery).unit
+    def deleteId(playerId: PlayerId): SqlTask[Unit] = run(deleteQuery(playerId)).unit
   }
 }

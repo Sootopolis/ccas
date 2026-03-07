@@ -2,11 +2,11 @@ package ccas.utils.client
 
 import ccas.utils.json.JsonDecodingException
 import zio.http.Method.GET
-import zio.http.{Client, Headers, Request, URL, ZClient}
+import zio.http.{Client, Headers, Request, URL}
 import zio.json.JsonDecoder
-import zio.{Chunk, RIO, Scope, Task, ZIO}
+import zio.{Chunk, Semaphore, Task, ZIO, ZLayer}
 
-final class CcasClient(client: Client, headers: Headers) {
+final class CcasClient(client: Client, headers: Headers, semaphore: Semaphore) {
   private val batchedClient = client.batched
 
   def get[T](url: URL)(using jsonDecoder: JsonDecoder[T]): Task[T] = for {
@@ -16,9 +16,20 @@ final class CcasClient(client: Client, headers: Headers) {
   } yield { value }
 
   def getAll[T](urls: Iterable[URL])(using jsonDecoder: JsonDecoder[T]): Task[Chunk[T]] = Chunk.from(urls).mapZIO(get)
+
+  def getWithPermit[T](url: URL)(using jsonDecoder: JsonDecoder[T]): Task[T] =
+    semaphore.withPermit(get(url))
+
+  def getAllWithPermit[T](urls: Iterable[URL])(using jsonDecoder: JsonDecoder[T]): Task[Chunk[T]] =
+    Chunk.from(urls).mapZIO(getWithPermit)
 }
 
 object CcasClient {
-  def create(headers: Headers = Headers.empty): RIO[Client, CcasClient] =
-    ZIO.serviceWith[Client](CcasClient(_, headers))
+  def live(permits: Long = 1, headers: Headers = Headers.empty): ZLayer[Client, Nothing, CcasClient] =
+    ZLayer.fromZIO {
+      for {
+        client    <- ZIO.service[Client]
+        semaphore <- Semaphore.make(permits)
+      } yield CcasClient(client, headers, semaphore)
+    }
 }

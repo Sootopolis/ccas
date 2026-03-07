@@ -39,8 +39,6 @@ libraryDependencies ++= Seq(
   // postgresql
   "org.postgresql"               %  "postgresql"            % vPostgresql,
 
-  // sqlite
-  "org.xerial"                   %  "sqlite-jdbc"           % vSqlite,
 )
 
 scalacOptions ++= Seq(
