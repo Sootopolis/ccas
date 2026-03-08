@@ -21,6 +21,22 @@ object Club extends SqlRepoUtils {
 
   override protected def makeRepo(xa: Transactor): Repo = ClubRepository(xa)
 
+  // Raw SQL — composable in transact() blocks (writes only)
+  def upsertSql(club: Club)(using DbCon): Unit = {
+    sql"""INSERT INTO club (club_id, created, url_name) VALUES (${club.clubId}, ${club.created}, ${club.urlName})
+          ON CONFLICT (club_id) DO UPDATE SET url_name = EXCLUDED.url_name""".update.run()
+    ()
+  }
+
+  def upsertBatchSql(clubs: Iterable[Club])(using DbCon): Unit = {
+    batchUpdate(clubs) { club =>
+      sql"""INSERT INTO club (club_id, created, url_name) VALUES (${club.clubId}, ${club.created}, ${club.urlName})
+            ON CONFLICT (club_id) DO UPDATE SET url_name = EXCLUDED.url_name""".update
+    }
+    ()
+  }
+
+  // ZIO API
   def selectAll: RepoTask[List[Club]] = repoService(_.selectAll)
   def selectId(clubId: ClubId): RepoTask[Option[Club]] = repoService(_.selectId(clubId))
   def upsert(club: Club): RepoTask[Unit] = repoService(_.upsert(club))
@@ -36,21 +52,11 @@ object Club extends SqlRepoUtils {
         .refineToOrDie[SQLException]
 
     def upsert(club: Club): SqlTask[Unit] =
-      ZIO.attempt {
-        connect(xa) {
-          sql"""INSERT INTO club (club_id, created, url_name) VALUES (${club.clubId}, ${club.created}, ${club.urlName})
-                ON CONFLICT (club_id) DO UPDATE SET url_name = EXCLUDED.url_name""".update.run()
-        }
-      }.refineToOrDie[SQLException].unit
+      ZIO.attempt { connect(xa)(upsertSql(club)) }
+        .refineToOrDie[SQLException]
 
     def upsertBatch(clubs: Iterable[Club]): SqlTask[Unit] =
-      ZIO.attempt {
-        transact(xa) {
-          batchUpdate(clubs) { club =>
-            sql"""INSERT INTO club (club_id, created, url_name) VALUES (${club.clubId}, ${club.created}, ${club.urlName})
-                  ON CONFLICT (club_id) DO UPDATE SET url_name = EXCLUDED.url_name""".update
-          }
-        }
-      }.refineToOrDie[SQLException].unit
+      ZIO.attempt { transact(xa)(upsertBatchSql(clubs)) }
+        .refineToOrDie[SQLException]
   }
 }

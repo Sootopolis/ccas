@@ -25,6 +25,43 @@ object ClubMember extends SqlRepoUtils {
 
   override protected def makeRepo(xa: Transactor): Repo = ClubMemberRepository(xa)
 
+  private val selectCols = "club_id, player_id, since, until"
+
+  // Raw SQL — composable in transact() blocks (writes only)
+  def insertSql(item: ClubMember)(using DbCon): Unit = {
+    sql"""INSERT INTO club_member (club_id, player_id, since, until)
+          VALUES (${item.clubId}, ${item.playerId}, ${item.since}, ${item.until})""".update.run()
+    ()
+  }
+
+  def insertBatchSql(items: Iterable[ClubMember])(using DbCon): Unit = {
+    batchUpdate(items) { item =>
+      sql"""INSERT INTO club_member (club_id, player_id, since, until)
+            VALUES (${item.clubId}, ${item.playerId}, ${item.since}, ${item.until})""".update
+    }
+    ()
+  }
+
+  def updateSql(item: ClubMember)(using DbCon): Unit = {
+    sql"""UPDATE club_member SET until = ${item.until}
+          WHERE club_id = ${item.clubId} AND player_id = ${item.playerId} AND since = ${item.since}""".update.run()
+    ()
+  }
+
+  def updateBatchSql(items: Iterable[ClubMember])(using DbCon): Unit = {
+    batchUpdate(items) { item =>
+      sql"""UPDATE club_member SET until = ${item.until}
+            WHERE club_id = ${item.clubId} AND player_id = ${item.playerId} AND since = ${item.since}""".update
+    }
+    ()
+  }
+
+  def deleteAllSql(using DbCon): Unit = {
+    sql"DELETE FROM club_member".update.run()
+    ()
+  }
+
+  // ZIO API
   def selectAll: RepoTask[List[ClubMember]] = repoService(_.selectAll)
   def selectClub(clubId: ClubId): RepoTask[List[ClubMember]] = repoService(_.selectClub(clubId))
   def selectClubCurrent(clubId: ClubId): RepoTask[List[ClubMember]] = repoService(_.selectClubCurrent(clubId))
@@ -35,8 +72,6 @@ object ClubMember extends SqlRepoUtils {
   def update(item: ClubMember): RepoTask[Unit] = repoService(_.update(item))
   def updateBatch(items: Iterable[ClubMember]): RepoTask[Unit] = repoService(_.updateBatch(items))
   def deleteAll: RepoTask[Unit] = repoService(_.deleteAll)
-
-  private val selectCols = "club_id, player_id, since, until"
 
   case class ClubMemberRepository(xa: Transactor) {
     def selectAll: SqlTask[List[ClubMember]] =
@@ -52,54 +87,36 @@ object ClubMember extends SqlRepoUtils {
         .refineToOrDie[SQLException]
 
     def selectClubActive(clubId: ClubId): SqlTask[List[ClubMember]] =
-      ZIO.attempt {
-        connect(xa) {
-          sql"""SELECT cm.club_id, cm.player_id, cm.since, cm.until FROM club_member cm
-                JOIN player_snapshot ps ON cm.player_id = ps.player_id
-                JOIN (SELECT player_id, MAX(since) AS since FROM player_snapshot GROUP BY player_id) latest
-                ON ps.player_id = latest.player_id AND ps.since = latest.since
-                WHERE cm.club_id = $clubId AND cm.until IS NULL AND ps.status = ${Active.toString}""".query[ClubMember].run().toList
-        }
-      }.refineToOrDie[SQLException]
+      ZIO.attempt { connect(xa)(
+        sql"""SELECT cm.club_id, cm.player_id, cm.since, cm.until FROM club_member cm
+              JOIN player_snapshot ps ON cm.player_id = ps.player_id
+              JOIN (SELECT player_id, MAX(since) AS since FROM player_snapshot GROUP BY player_id) latest
+              ON ps.player_id = latest.player_id AND ps.since = latest.since
+              WHERE cm.club_id = $clubId AND cm.until IS NULL AND ps.status = ${Active.toString}""".query[ClubMember].run().toList
+      ) }.refineToOrDie[SQLException]
 
     def selectClubFormer(clubId: ClubId): SqlTask[List[ClubMember]] =
       ZIO.attempt { connect(xa)(sql"SELECT #$selectCols FROM club_member WHERE club_id = $clubId AND until IS NOT NULL".query[ClubMember].run().toList) }
         .refineToOrDie[SQLException]
 
     def insert(item: ClubMember): SqlTask[Unit] =
-      ZIO.attempt {
-        connect(xa)(sql"""INSERT INTO club_member (club_id, player_id, since, until)
-              VALUES (${item.clubId}, ${item.playerId}, ${item.since}, ${item.until})""".update.run())
-      }.refineToOrDie[SQLException].unit
+      ZIO.attempt { connect(xa)(insertSql(item)) }
+        .refineToOrDie[SQLException]
 
     def insertBatch(items: Iterable[ClubMember]): SqlTask[Unit] =
-      ZIO.attempt {
-        transact(xa) {
-          batchUpdate(items) { item =>
-            sql"""INSERT INTO club_member (club_id, player_id, since, until)
-                  VALUES (${item.clubId}, ${item.playerId}, ${item.since}, ${item.until})""".update
-          }
-        }
-      }.refineToOrDie[SQLException].unit
+      ZIO.attempt { transact(xa)(insertBatchSql(items)) }
+        .refineToOrDie[SQLException]
 
     def update(item: ClubMember): SqlTask[Unit] =
-      ZIO.attempt {
-        connect(xa)(sql"""UPDATE club_member SET until = ${item.until}
-              WHERE club_id = ${item.clubId} AND player_id = ${item.playerId} AND since = ${item.since}""".update.run())
-      }.refineToOrDie[SQLException].unit
+      ZIO.attempt { connect(xa)(updateSql(item)) }
+        .refineToOrDie[SQLException]
 
     def updateBatch(items: Iterable[ClubMember]): SqlTask[Unit] =
-      ZIO.attempt {
-        transact(xa) {
-          batchUpdate(items) { item =>
-            sql"""UPDATE club_member SET until = ${item.until}
-                  WHERE club_id = ${item.clubId} AND player_id = ${item.playerId} AND since = ${item.since}""".update
-          }
-        }
-      }.refineToOrDie[SQLException].unit
+      ZIO.attempt { transact(xa)(updateBatchSql(items)) }
+        .refineToOrDie[SQLException]
 
     def deleteAll: SqlTask[Unit] =
-      ZIO.attempt { connect(xa)(sql"DELETE FROM club_member".update.run()) }
-        .refineToOrDie[SQLException].unit
+      ZIO.attempt { connect(xa)(deleteAllSql) }
+        .refineToOrDie[SQLException]
   }
 }

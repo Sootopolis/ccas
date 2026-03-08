@@ -17,6 +17,30 @@ object Player extends SqlRepoUtils {
 
   override protected def makeRepo(xa: Transactor): Repo = PlayerRepository(xa)
 
+  // Raw SQL — composable in transact() blocks (writes only)
+  def insertSql(player: Player)(using DbCon): Unit = {
+    sql"INSERT INTO player (player_id, joined) VALUES (${player.playerId}, ${player.joined})".update.run()
+    ()
+  }
+
+  def insertBatchSql(players: Iterable[Player])(using DbCon): Unit = {
+    batchUpdate(players) { player =>
+      sql"INSERT INTO player (player_id, joined) VALUES (${player.playerId}, ${player.joined})".update
+    }
+    ()
+  }
+
+  def deleteAllSql(using DbCon): Unit = {
+    sql"DELETE FROM player".update.run()
+    ()
+  }
+
+  def deleteIdSql(playerId: PlayerId)(using DbCon): Unit = {
+    sql"DELETE FROM player WHERE player_id = $playerId".update.run()
+    ()
+  }
+
+  // ZIO API
   def selectAll: RepoTask[List[Player]] = repoService(_.selectAll)
   def selectId(playerId: PlayerId): RepoTask[Option[Player]] = repoService(_.selectId(playerId))
   def insert(player: Player): RepoTask[Unit] = repoService(_.insert(player))
@@ -34,24 +58,19 @@ object Player extends SqlRepoUtils {
         .refineToOrDie[SQLException]
 
     def insert(player: Player): SqlTask[Unit] =
-      ZIO.attempt { connect(xa)(sql"INSERT INTO player (player_id, joined) VALUES (${player.playerId}, ${player.joined})".update.run()) }
-        .refineToOrDie[SQLException].unit
+      ZIO.attempt { connect(xa)(insertSql(player)) }
+        .refineToOrDie[SQLException]
 
     def insertBatch(players: Iterable[Player]): SqlTask[Unit] =
-      ZIO.attempt {
-        transact(xa) {
-          batchUpdate(players) { player =>
-            sql"INSERT INTO player (player_id, joined) VALUES (${player.playerId}, ${player.joined})".update
-          }
-        }
-      }.refineToOrDie[SQLException].unit
+      ZIO.attempt { transact(xa)(insertBatchSql(players)) }
+        .refineToOrDie[SQLException]
 
     def deleteAll: SqlTask[Unit] =
-      ZIO.attempt { connect(xa)(sql"DELETE FROM player".update.run()) }
-        .refineToOrDie[SQLException].unit
+      ZIO.attempt { connect(xa)(deleteAllSql) }
+        .refineToOrDie[SQLException]
 
     def deleteId(playerId: PlayerId): SqlTask[Unit] =
-      ZIO.attempt { connect(xa)(sql"DELETE FROM player WHERE player_id = $playerId".update.run()) }
-        .refineToOrDie[SQLException].unit
+      ZIO.attempt { connect(xa)(deleteIdSql(playerId)) }
+        .refineToOrDie[SQLException]
   }
 }
