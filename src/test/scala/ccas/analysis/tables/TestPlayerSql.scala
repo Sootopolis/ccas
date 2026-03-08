@@ -4,7 +4,7 @@ import ccas.api.misc.enums.PlayerStatusCategory.{Active, Fairplay}
 import ccas.api.misc.enums.Title.{CM, GM, IM}
 import ccas.api.misc.enums.{PlayerStatusCategory, Title}
 import ccas.api.misc.subtypes.{PlayerId, Username}
-import ccas.utils.sql.QuillWrapper
+import ccas.utils.sql.DataSourceLayer
 import zio.Chunk
 import zio.test.{Spec, TestAspect, ZIOSpecDefault, assertCompletes, assertTrue}
 
@@ -18,7 +18,7 @@ object TestPlayerSql extends ZIOSpecDefault {
     testSelect,
     testUpdate,
   ).provideShared(
-    QuillWrapper.liveFromPrefix(),
+    DataSourceLayer.liveFromPrefix(),
     Player.live,
     PlayerSnapshot.live
   ) @@ TestAspect.sequential

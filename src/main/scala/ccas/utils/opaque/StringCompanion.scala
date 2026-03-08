@@ -1,6 +1,6 @@
 package ccas.utils.opaque
 
-import io.getquill.MappedEncoding
+import com.augustnagro.magnum.DbCodec
 import zio.json.{JsonDecoder, JsonEncoder}
 
 trait StringCompanion[S] {
@@ -11,8 +11,7 @@ trait StringCompanion[S] {
 
   given jsonDecoder: JsonDecoder[S] = JsonDecoder.string.map(fromStringUnsafe)
   given jsonEncoder: JsonEncoder[S] = JsonEncoder.string.contramap(toStringUnsafe)
-  given sqlDecoder: MappedEncoding[String, S] = MappedEncoding(fromStringUnsafe)
-  given sqlEncoder: MappedEncoding[S, String] = MappedEncoding(toStringUnsafe)
+  given dbCodec: DbCodec[S] = DbCodec[String].biMap(fromStringUnsafe, toStringUnsafe)
 
   extension (opaque: S) {
     inline def length: Int = toStringUnsafe(opaque).length

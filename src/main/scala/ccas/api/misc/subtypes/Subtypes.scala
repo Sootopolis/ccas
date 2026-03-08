@@ -1,20 +1,19 @@
 package ccas.api.misc.subtypes
 
-import io.getquill.MappedEncoding
+import com.augustnagro.magnum.DbCodec
 import zio.Config.Error.InvalidData
 import zio.config.magnolia.DeriveConfig
 import zio.json.{JsonCodec, JsonFieldDecoder, JsonFieldEncoder}
 import zio.prelude.{Assertion, Subtype}
 import zio.{Chunk, Config, NonEmptyChunk, json}
 
-sealed trait CcasSubtype[T: {JsonCodec, DeriveConfig}] extends Subtype[T] { self =>
+sealed trait CcasSubtype[T: {JsonCodec, DeriveConfig, DbCodec}] extends Subtype[T] { self =>
   private val name = self.getClass.getSimpleName.stripSuffix("$")
 
   protected def validated(value: Type): Either[String, Type] =
     make(value).toEitherWith(errors => errors.mkString(s"Error validating $name:\n  ", "\n  ", ""))
 
-  given MappedEncoding[Type, T] = MappedEncoding(unwrap)
-  given MappedEncoding[T, Type] = MappedEncoding(wrap)
+  given DbCodec[Type] = summon[DbCodec[T]].biMap(wrap, unwrap)
   given JsonCodec[Type] = derive[JsonCodec].transformOrFail(validated, identity)
   given DeriveConfig[Type] = derive[DeriveConfig].mapOrFail(validated(_).left.map(InvalidData(Chunk.empty, _)))
 }

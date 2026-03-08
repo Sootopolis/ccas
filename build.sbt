@@ -23,8 +23,8 @@ libraryDependencies ++= Seq(
   // zio-http
   "dev.zio"                      %% "zio-http"              % vZioHttp,
 
-  // zio-protoquill
-  "io.getquill"                  %% "quill-jdbc-zio"        % vZioProtoQuill,
+  // magnum
+  "com.augustnagro"              %% "magnum"                % vMagnum,
 
   // zio-schema
 //  "dev.zio"                      %% "zio-schema"            % vZioSchema,

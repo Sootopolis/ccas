@@ -3,42 +3,54 @@ package ccas.analysis.tables
 import ccas.api.misc.subtypes.{ClubId, ClubUrlName}
 import ccas.utils.sql.SqlZioTypes.SqlTask
 import ccas.utils.sql.SqlRepoUtils
-import io.getquill.*
-import io.getquill.jdbczio.Quill
+import ccas.utils.sql.DbCodecs.given
+import com.augustnagro.magnum.*
+import zio.ZIO
 
+import java.sql.SQLException
 import java.time.Instant
 
 case class Club(
   clubId : ClubId,
   created: Instant,
   urlName: ClubUrlName,
-)
+) derives DbCodec
 
 object Club extends SqlRepoUtils {
-  inline given UpdateMeta[Club] = updateMeta(_.clubId)
-
   override protected type Repo = ClubRepository
 
-  override protected def makeRepo(quill: Quill.Postgres[SnakeCase]): Repo = ClubRepository(quill)
+  override protected def makeRepo(xa: Transactor): Repo = ClubRepository(xa)
 
   def selectAll: RepoTask[List[Club]] = repoService(_.selectAll)
   def selectId(clubId: ClubId): RepoTask[Option[Club]] = repoService(_.selectId(clubId))
   def upsert(club: Club): RepoTask[Unit] = repoService(_.upsert(club))
   def upsertBatch(clubs: Iterable[Club]): RepoTask[Unit] = repoService(_.upsertBatch(clubs))
 
-  case class ClubRepository(quill: Quill.Postgres[SnakeCase]) {
-    import quill.*
+  case class ClubRepository(xa: Transactor) {
+    def selectAll: SqlTask[List[Club]] =
+      ZIO.attempt { connect(xa)(sql"SELECT club_id, created, url_name FROM club".query[Club].run().toList) }
+        .refineToOrDie[SQLException]
 
-    inline def selectAllQuery = query[Club]
-    inline def selectIdQuery(clubId: ClubId) = selectAllQuery.filter(_.clubId == lift(clubId))
-    private inline def upsertLifted(club: Club): Insert[Club] =
-      selectAllQuery.insertValue(club).onConflictUpdate(_.clubId)((t, e) => t.urlName -> e.urlName)
-    inline def upsertQuery(club: Club) = upsertLifted(lift(club))
-    inline def upsertBatchQuery(clubs: Iterable[Club]) = liftQuery(clubs).foreach(upsertLifted)
+    def selectId(clubId: ClubId): SqlTask[Option[Club]] =
+      ZIO.attempt { connect(xa)(sql"SELECT club_id, created, url_name FROM club WHERE club_id = $clubId".query[Club].run().headOption) }
+        .refineToOrDie[SQLException]
 
-    def selectAll: SqlTask[List[Club]] = run(selectAllQuery)
-    def selectId(clubId: ClubId): SqlTask[Option[Club]] = run(selectIdQuery(clubId)).map(_.headOption)
-    def upsert(club: Club): SqlTask[Unit] = run(upsertQuery(club)).unit
-    def upsertBatch(clubs: Iterable[Club]): SqlTask[Unit] = run(upsertBatchQuery(clubs)).unit
+    def upsert(club: Club): SqlTask[Unit] =
+      ZIO.attempt {
+        connect(xa) {
+          sql"""INSERT INTO club (club_id, created, url_name) VALUES (${club.clubId}, ${club.created}, ${club.urlName})
+                ON CONFLICT (club_id) DO UPDATE SET url_name = EXCLUDED.url_name""".update.run()
+        }
+      }.refineToOrDie[SQLException].unit
+
+    def upsertBatch(clubs: Iterable[Club]): SqlTask[Unit] =
+      ZIO.attempt {
+        transact(xa) {
+          batchUpdate(clubs) { club =>
+            sql"""INSERT INTO club (club_id, created, url_name) VALUES (${club.clubId}, ${club.created}, ${club.urlName})
+                  ON CONFLICT (club_id) DO UPDATE SET url_name = EXCLUDED.url_name""".update
+          }
+        }
+      }.refineToOrDie[SQLException].unit
   }
 }

@@ -1,6 +1,6 @@
 package ccas.utils.sql
 
-import io.getquill.MappedEncoding
+import com.augustnagro.magnum.DbCodec
 
 trait EnumSql[T <: reflect.Enum] {
   protected def valueOf(string: String): T
@@ -8,6 +8,8 @@ trait EnumSql[T <: reflect.Enum] {
   protected def encodingNaming(scalaString: String): String = scalaString
   protected def decodingNaming(sqlString: String): String = sqlString
 
-  given MappedEncoding[T, String] = MappedEncoding(member => encodingNaming(member.toString))
-  given MappedEncoding[String, T] = MappedEncoding(string => valueOf(decodingNaming(string)))
+  given DbCodec[T] = DbCodec[String].biMap(
+    string => valueOf(decodingNaming(string)),
+    member => encodingNaming(member.toString)
+  )
 }

@@ -1,16 +1,15 @@
 package ccas.utils.sql
 
 import ccas.utils.sql.SqlZioTypes.SqlTask
-import io.getquill.SnakeCase
-import io.getquill.jdbczio.Quill
+import com.augustnagro.magnum.Transactor
 import zio.{RIO, RLayer, Tag, ZIO, ZLayer}
 
 trait SqlRepoUtils {
   protected type Repo: Tag
 
-  protected def makeRepo(quill: Quill.Postgres[SnakeCase]): Repo
+  protected def makeRepo(xa: Transactor): Repo
 
-  final def live: RLayer[Quill.Postgres[SnakeCase], Repo] =
+  final def live: RLayer[Transactor, Repo] =
     ZLayer.fromFunction(makeRepo)
 
   final protected type RepoTask[+A] = RIO[Repo, A]

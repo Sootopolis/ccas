@@ -1,14 +1,16 @@
 package ccas.analysis.tables
 
+import ccas.api.misc.enums.PlayerStatusCategory
 import ccas.api.misc.enums.PlayerStatusCategory.Active
-import ccas.api.misc.enums.{PlayerStatusCategory, Title}
+import ccas.api.misc.enums.Title
 import ccas.api.misc.subtypes.{PlayerId, Username}
 import ccas.utils.sql.SqlZioTypes.SqlTask
 import ccas.utils.sql.SqlRepoUtils
-import io.getquill.*
-import io.getquill.extras.InstantOps
-import io.getquill.jdbczio.Quill
+import ccas.utils.sql.DbCodecs.given
+import com.augustnagro.magnum.*
+import zio.ZIO
 
+import java.sql.SQLException
 import java.time.Instant
 
 case class PlayerSnapshot(
@@ -17,14 +19,12 @@ case class PlayerSnapshot(
   username: Username,
   status  : PlayerStatusCategory,
   title   : Option[Title]
-)
+) derives DbCodec
 
 object PlayerSnapshot extends SqlRepoUtils {
-  inline given UpdateMeta[PlayerSnapshot] = updateMeta(_.playerId, _.since)
-
   override protected type Repo = PlayerSnapshotRepository
 
-  override protected def makeRepo(quill: Quill.Postgres[SnakeCase]): Repo = PlayerSnapshotRepository(quill)
+  override protected def makeRepo(xa: Transactor): Repo = PlayerSnapshotRepository(xa)
 
   def selectAll: RepoTask[List[PlayerSnapshot]] = repoService(_.selectAll)
   def selectLatest: RepoTask[List[PlayerSnapshot]] = repoService(_.selectLatest)
@@ -40,51 +40,93 @@ object PlayerSnapshot extends SqlRepoUtils {
   def updateBatch(items: Iterable[PlayerSnapshot]): RepoTask[Unit] = repoService(_.updateBatch(items))
   def deleteAll: RepoTask[Unit] = repoService(_.deleteAll)
 
-  case class PlayerSnapshotRepository(quill: Quill.Postgres[SnakeCase]) {
-    import quill.*
+  private val selectCols = "player_id, since, username, status, title"
 
-    inline def selectAllQuery = query[PlayerSnapshot]
-    inline def selectLatestQuery = {
-      selectAllQuery
-        .join { query[PlayerSnapshot].groupByMap(_.playerId)(row => row.playerId -> max(row.since)) }
-        .on { case (row, (playerId, since)) => row.playerId == playerId && row.since == since }.map(_._1)
-    }
-    inline def selectActiveQuery = selectLatestQuery.filter(_.status == lift(Active))
-    inline def selectIdQuery(playerId: PlayerId) = selectAllQuery.filter(_.playerId == lift(playerId))
-    inline def selectNameQuery(username: Username) = selectAllQuery.filter(_.username == lift(username))
-    inline def selectIdLatestQuery(playerId: PlayerId) = selectIdQuery(playerId).sortBy(_.since)(Ord.desc)
-    inline def selectNameLatestQuery(username: Username) = selectNameQuery(username).sortBy(_.since)(Ord.desc)
-    inline def selectSinceQuery(since: Instant) = {
-      val justBeforeById = selectAllQuery.filter(_.since <= lift(since))
-        .groupByMap(_.playerId)(x => x.playerId -> max(x.since))
-      val justBefore = selectAllQuery.join(justBeforeById)
-        .on { case (row, (playerId, since)) => row.playerId == playerId && row.since == since }.map(_._1)
-      val after = selectAllQuery.filter(_.since > lift(since))
-      justBefore.union(after)
-    }
-    private inline def insertLifted(item: PlayerSnapshot): Insert[PlayerSnapshot] = selectAllQuery.insertValue(item)
-    inline def insertQuery(item: PlayerSnapshot) = insertLifted(lift(item))
-    inline def insertBatchQuery(items: Iterable[PlayerSnapshot]) = liftQuery(items).foreach(insertLifted)
-    private inline def updateLifted(item: PlayerSnapshot): Update[PlayerSnapshot] =
-      selectAllQuery.filter(_.playerId == item.playerId).filter(_.since == item.since).updateValue(item)
-    inline def updateQuery(item: PlayerSnapshot) = updateLifted(lift(item))
-    inline def updateBatchQuery(items: Iterable[PlayerSnapshot]) = liftQuery(items).foreach(updateLifted)
-    inline def deleteAllQuery = selectAllQuery.delete
+  case class PlayerSnapshotRepository(xa: Transactor) {
+    def selectAll: SqlTask[List[PlayerSnapshot]] =
+      ZIO.attempt { connect(xa)(sql"SELECT #$selectCols FROM player_snapshot".query[PlayerSnapshot].run().toList) }
+        .refineToOrDie[SQLException]
 
-    def selectAll: SqlTask[List[PlayerSnapshot]] = run(selectAllQuery)
-    def selectLatest: SqlTask[List[PlayerSnapshot]] = run(selectLatestQuery)
-    def selectActive: SqlTask[List[PlayerSnapshot]] = run(selectActiveQuery)
-    def selectId(id: PlayerId): SqlTask[List[PlayerSnapshot]] = run(selectIdQuery(id))
-    def selectName(username: Username): SqlTask[List[PlayerSnapshot]] = run(selectNameQuery(username))
-    def selectIdLatest(id: PlayerId): SqlTask[Option[PlayerSnapshot]] =
-      run(selectIdLatestQuery(id)).map(_.headOption)
+    def selectLatest: SqlTask[List[PlayerSnapshot]] =
+      ZIO.attempt {
+        connect(xa) {
+          sql"""SELECT #$selectCols FROM player_snapshot ps
+                INNER JOIN (SELECT player_id, MAX(since) AS since FROM player_snapshot GROUP BY player_id) latest
+                ON ps.player_id = latest.player_id AND ps.since = latest.since""".query[PlayerSnapshot].run().toList
+        }
+      }.refineToOrDie[SQLException]
+
+    def selectActive: SqlTask[List[PlayerSnapshot]] =
+      ZIO.attempt {
+        connect(xa) {
+          sql"""SELECT #$selectCols FROM player_snapshot ps
+                INNER JOIN (SELECT player_id, MAX(since) AS since FROM player_snapshot GROUP BY player_id) latest
+                ON ps.player_id = latest.player_id AND ps.since = latest.since
+                WHERE ps.status = ${Active.toString}""".query[PlayerSnapshot].run().toList
+        }
+      }.refineToOrDie[SQLException]
+
+    def selectId(playerId: PlayerId): SqlTask[List[PlayerSnapshot]] =
+      ZIO.attempt { connect(xa)(sql"SELECT #$selectCols FROM player_snapshot WHERE player_id = $playerId".query[PlayerSnapshot].run().toList) }
+        .refineToOrDie[SQLException]
+
+    def selectName(username: Username): SqlTask[List[PlayerSnapshot]] =
+      ZIO.attempt { connect(xa)(sql"SELECT #$selectCols FROM player_snapshot WHERE username = $username".query[PlayerSnapshot].run().toList) }
+        .refineToOrDie[SQLException]
+
+    def selectIdLatest(playerId: PlayerId): SqlTask[Option[PlayerSnapshot]] =
+      ZIO.attempt { connect(xa)(sql"SELECT #$selectCols FROM player_snapshot WHERE player_id = $playerId ORDER BY since DESC".query[PlayerSnapshot].run().headOption) }
+        .refineToOrDie[SQLException]
+
     def selectNameLatest(username: Username): SqlTask[Option[PlayerSnapshot]] =
-      run(selectNameLatestQuery(username)).map(_.headOption)
-    def selectSince(since: Instant): SqlTask[List[PlayerSnapshot]] = run(selectSinceQuery(since))
-    def insert(item: PlayerSnapshot): SqlTask[Unit] = run(insertQuery(item)).unit
-    def insertBatch(items: Iterable[PlayerSnapshot]): SqlTask[Unit] = run(insertBatchQuery(items)).unit
-    def update(item: PlayerSnapshot): SqlTask[Unit] = run(updateQuery(item)).unit
-    def updateBatch(items: Iterable[PlayerSnapshot]): SqlTask[Unit] = run(updateBatchQuery(items)).unit
-    def deleteAll: SqlTask[Unit] = run(deleteAllQuery).unit
+      ZIO.attempt { connect(xa)(sql"SELECT #$selectCols FROM player_snapshot WHERE username = $username ORDER BY since DESC".query[PlayerSnapshot].run().headOption) }
+        .refineToOrDie[SQLException]
+
+    def selectSince(since: Instant): SqlTask[List[PlayerSnapshot]] =
+      ZIO.attempt {
+        connect(xa) {
+          sql"""SELECT #$selectCols FROM player_snapshot ps
+                INNER JOIN (SELECT player_id, MAX(since) AS since FROM player_snapshot WHERE since <= $since GROUP BY player_id) jb
+                ON ps.player_id = jb.player_id AND ps.since = jb.since
+                UNION
+                SELECT #$selectCols FROM player_snapshot WHERE since > $since""".query[PlayerSnapshot].run().toList
+        }
+      }.refineToOrDie[SQLException]
+
+    def insert(item: PlayerSnapshot): SqlTask[Unit] =
+      ZIO.attempt {
+        connect(xa)(sql"""INSERT INTO player_snapshot (player_id, since, username, status, title)
+              VALUES (${item.playerId}, ${item.since}, ${item.username}, ${item.status.toString}, ${item.title.map(_.toString)})""".update.run())
+      }.refineToOrDie[SQLException].unit
+
+    def insertBatch(items: Iterable[PlayerSnapshot]): SqlTask[Unit] =
+      ZIO.attempt {
+        transact(xa) {
+          batchUpdate(items) { item =>
+            sql"""INSERT INTO player_snapshot (player_id, since, username, status, title)
+                  VALUES (${item.playerId}, ${item.since}, ${item.username}, ${item.status.toString}, ${item.title.map(_.toString)})""".update
+          }
+        }
+      }.refineToOrDie[SQLException].unit
+
+    def update(item: PlayerSnapshot): SqlTask[Unit] =
+      ZIO.attempt {
+        connect(xa)(sql"""UPDATE player_snapshot SET username = ${item.username}, status = ${item.status.toString}, title = ${item.title.map(_.toString)}
+              WHERE player_id = ${item.playerId} AND since = ${item.since}""".update.run())
+      }.refineToOrDie[SQLException].unit
+
+    def updateBatch(items: Iterable[PlayerSnapshot]): SqlTask[Unit] =
+      ZIO.attempt {
+        transact(xa) {
+          batchUpdate(items) { item =>
+            sql"""UPDATE player_snapshot SET username = ${item.username}, status = ${item.status.toString}, title = ${item.title.map(_.toString)}
+                  WHERE player_id = ${item.playerId} AND since = ${item.since}""".update
+          }
+        }
+      }.refineToOrDie[SQLException].unit
+
+    def deleteAll: SqlTask[Unit] =
+      ZIO.attempt { connect(xa)(sql"DELETE FROM player_snapshot".update.run()) }
+        .refineToOrDie[SQLException].unit
   }
 }

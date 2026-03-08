@@ -3,17 +3,19 @@ package ccas.analysis.tables
 import ccas.api.misc.subtypes.PlayerId
 import ccas.utils.sql.SqlZioTypes.SqlTask
 import ccas.utils.sql.SqlRepoUtils
-import io.getquill.*
-import io.getquill.jdbczio.Quill
+import ccas.utils.sql.DbCodecs.given
+import com.augustnagro.magnum.*
+import zio.ZIO
 
+import java.sql.SQLException
 import java.time.Instant
 
-case class Player(playerId: PlayerId, joined: Instant)
+case class Player(playerId: PlayerId, joined: Instant) derives DbCodec
 
 object Player extends SqlRepoUtils {
   override protected type Repo = PlayerRepository
 
-  override protected def makeRepo(quill: Quill.Postgres[SnakeCase]): Repo = PlayerRepository(quill)
+  override protected def makeRepo(xa: Transactor): Repo = PlayerRepository(xa)
 
   def selectAll: RepoTask[List[Player]] = repoService(_.selectAll)
   def selectId(playerId: PlayerId): RepoTask[Option[Player]] = repoService(_.selectId(playerId))
@@ -22,22 +24,34 @@ object Player extends SqlRepoUtils {
   def deleteAll: RepoTask[Unit] = repoService(_.deleteAll)
   def deleteId(playerId: PlayerId): RepoTask[Unit] = repoService(_.deleteId(playerId))
 
-  case class PlayerRepository(quill: Quill.Postgres[SnakeCase]) {
-    import quill.*
+  case class PlayerRepository(xa: Transactor) {
+    def selectAll: SqlTask[List[Player]] =
+      ZIO.attempt { connect(xa)(sql"SELECT player_id, joined FROM player".query[Player].run().toList) }
+        .refineToOrDie[SQLException]
 
-    inline def selectAllQuery = query[Player]
-    inline def selectIdQuery(playerId: PlayerId) = selectAllQuery.filter(_.playerId == lift(playerId))
-    private inline def insertLifted(player: Player): Insert[Player] = selectAllQuery.insertValue(player)
-    inline def insertQuery(player: Player) = insertLifted(lift(player))
-    inline def insertBatchQuery(players: Iterable[Player]) = liftQuery(players).foreach(insertLifted)
-    inline def deleteAllQuery = selectAllQuery.delete
-    inline def deleteQuery(playerId: PlayerId) = selectIdQuery(playerId).delete
+    def selectId(playerId: PlayerId): SqlTask[Option[Player]] =
+      ZIO.attempt { connect(xa)(sql"SELECT player_id, joined FROM player WHERE player_id = $playerId".query[Player].run().headOption) }
+        .refineToOrDie[SQLException]
 
-    def selectAll: SqlTask[List[Player]] = run(selectAllQuery)
-    def selectId(playerId: PlayerId): SqlTask[Option[Player]] = run(selectIdQuery(playerId)).map(_.headOption)
-    def insert(player: Player): SqlTask[Unit] = run(insertQuery(player)).unit
-    def insertBatch(players: Iterable[Player]): SqlTask[Unit] = run(insertBatchQuery(players)).unit
-    def deleteAll: SqlTask[Unit] = run(deleteAllQuery).unit
-    def deleteId(playerId: PlayerId): SqlTask[Unit] = run(deleteQuery(playerId)).unit
+    def insert(player: Player): SqlTask[Unit] =
+      ZIO.attempt { connect(xa)(sql"INSERT INTO player (player_id, joined) VALUES (${player.playerId}, ${player.joined})".update.run()) }
+        .refineToOrDie[SQLException].unit
+
+    def insertBatch(players: Iterable[Player]): SqlTask[Unit] =
+      ZIO.attempt {
+        transact(xa) {
+          batchUpdate(players) { player =>
+            sql"INSERT INTO player (player_id, joined) VALUES (${player.playerId}, ${player.joined})".update
+          }
+        }
+      }.refineToOrDie[SQLException].unit
+
+    def deleteAll: SqlTask[Unit] =
+      ZIO.attempt { connect(xa)(sql"DELETE FROM player".update.run()) }
+        .refineToOrDie[SQLException].unit
+
+    def deleteId(playerId: PlayerId): SqlTask[Unit] =
+      ZIO.attempt { connect(xa)(sql"DELETE FROM player WHERE player_id = $playerId".update.run()) }
+        .refineToOrDie[SQLException].unit
   }
 }
