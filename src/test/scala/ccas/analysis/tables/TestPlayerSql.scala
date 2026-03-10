@@ -12,15 +12,14 @@ import java.time.{Duration, Instant, LocalDateTime, ZoneOffset}
 
 object TestPlayerSql extends ZIOSpecDefault {
   override def spec: Spec[Any, Throwable] = suite("TestPlayerSql")(
+    testCreateTables,
     testDeleteAll,
     testInsert,
     testInsertBatch,
     testSelect,
     testUpdate,
   ).provideShared(
-    DataSourceLayer.liveFromPrefix(),
-    Player.live,
-    PlayerSnapshot.live
+    DataSourceLayer.liveFromPrefix()
   ) @@ TestAspect.sequential
 
   private object Timestamps {
@@ -36,6 +35,13 @@ object TestPlayerSql extends ZIOSpecDefault {
   private val player0Snapshot2 = player0Snapshot1.copy(since = Timestamps.t2, status = Fairplay)
   private val player1Snapshot1 = player0Snapshot1.copy(playerId = player1.playerId, username = Username("player1"))
   private val player1Snapshot2 = player1Snapshot1.copy(since = Timestamps.t2, title = Some(CM))
+
+  private def testCreateTables = test("testCreateTables") {
+    for {
+      _ <- Player.createTable
+      _ <- PlayerSnapshot.createTable
+    } yield { assertCompletes }
+  }
 
   private def testDeleteAll = test("testDeleteAll") {
     for {

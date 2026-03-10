@@ -9,7 +9,7 @@ trait EnumSql[T <: reflect.Enum] {
   protected def decodingNaming(sqlString: String): String = sqlString
 
   given DbCodec[T] = DbCodec[String].biMap(
-    string => valueOf(decodingNaming(string)),
+    string => if string == null then null.asInstanceOf[T] else valueOf(decodingNaming(string)),
     member => encodingNaming(member.toString)
   )
 }
