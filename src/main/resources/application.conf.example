@@ -1,0 +1,12 @@
+database = {
+  dataSourceClassName = org.postgresql.ds.PGSimpleDataSource
+  dataSource = {
+    user = ccas
+    password = changeme
+    databaseName = ccas
+    portNumber = 5432
+    serverName = localhost
+    currentSchema = public
+  }
+  connectionTimeout = 30000
+}

@@ -26,13 +26,6 @@ libraryDependencies ++= Seq(
   // magnum
   "com.augustnagro"              %% "magnum"                % vMagnum,
 
-  // zio-schema
-//  "dev.zio"                      %% "zio-schema"            % vZioSchema,
-//  "dev.zio"                      %% "zio-schema-json"       % vZioSchema,
-//  "dev.zio"                      %% "zio-schema-zio-test"   % vZioSchema,
-//  "dev.zio"                      %% "zio-schema-derivation" % vZioSchema,
-  //  "org.scala-lang"               %  "scala-reflect"         % scalaVersion.value % "provided",
-
   // magnolia
   "com.softwaremill.magnolia1_3" %% "magnolia"              % vMagnolia,
 
