@@ -21,4 +21,16 @@ object DbCodecs {
     string => if string == null then null else URL.decode(string).fold(e => throw e, identity),
     url => if url == null then null else url.encode,
   )
+
+  given DbCodec[List[String]] = new DbCodec[List[String]] {
+    override def cols: IArray[Int] = IArray(Types.ARRAY)
+    override def readSingle(rs: ResultSet, pos: Int): List[String] =
+      val arr = rs.getArray(pos)
+      if arr == null then Nil
+      else arr.getArray.asInstanceOf[Array[AnyRef]].map(_.toString).toList
+    override def writeSingle(value: List[String], ps: PreparedStatement, pos: Int): Unit =
+      val arr = ps.getConnection.createArrayOf("TEXT", value.toArray[AnyRef])
+      ps.setArray(pos, arr)
+    override def queryRepr: String = "?"
+  }
 }
