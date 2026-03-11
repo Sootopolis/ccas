@@ -13,6 +13,7 @@ final class ChessComClient(
   mutex: Semaphore,
   throttled: Ref[Boolean],
   cooldown: Duration,
+  retryBase: Duration = 1.second,
 ) {
   private val batchedClient = client.batched
 
@@ -49,7 +50,7 @@ final class ChessComClient(
     }
 
   private val retrySchedule: Schedule[Any, Throwable, Any] =
-    Schedule.exponential(1.second) && Schedule.recurs(4) && Schedule.recurWhile[Throwable] {
+    Schedule.exponential(retryBase) && Schedule.recurs(4) && Schedule.recurWhile[Throwable] {
       case _: RateLimitedException => true
       case _ => false
     }

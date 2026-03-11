@@ -13,7 +13,8 @@ object TestChessComClient extends ZIOSpecDefault {
   private def makeClient(
     handler: Request => ZIO[Any, Nothing, Response],
     permits: Long = 5,
-    cooldown: Duration = 30.seconds,
+    cooldown: Duration = 50.millis,
+    retryBase: Duration = 10.millis,
   ): ZIO[Any, Nothing, (ChessComClient, Ref[Boolean])] =
     for {
       semaphore <- Semaphore.make(permits)
@@ -32,16 +33,12 @@ object TestChessComClient extends ZIOSpecDefault {
         )(implicit trace: Trace, ev: Scope =:= Scope): ZIO[Env1 & Scope, Throwable, Response] =
           ZIO.die(new UnsupportedOperationException)
       }
-      val client = ChessComClient(ZClient.fromDriver(driver), Headers.empty, semaphore, mutex, throttled, cooldown)
+      val client = ChessComClient(ZClient.fromDriver(driver), Headers.empty, semaphore, mutex, throttled, cooldown, retryBase)
       (client, throttled)
     }
 
   private val testUrl = URL.decode("http://test.example.com/api").toOption.get
   private val jsonBody = """{"value":"ok"}"""
-
-  /** Fork a fiber that keeps advancing TestClock so ZIO.sleep calls resolve quickly. */
-  private val advanceClock: ZIO[Live, Nothing, Fiber[Nothing, Nothing]] =
-    (TestClock.adjust(1.second) *> Live.live(ZIO.sleep(1.millis))).forever.fork
 
   override def spec: Spec[TestEnvironment, Any] = suite("TestChessComClient")(
     test("normal 200 succeeds without throttle activation") {
@@ -60,9 +57,7 @@ object TestChessComClient extends ZIOSpecDefault {
             else Response.json(jsonBody)
           }
         }
-        clock  <- advanceClock
         result <- client.get[Payload](testUrl)
-        _      <- clock.interrupt
         count  <- counter.get
       } yield assertTrue(result.value == "ok", count == 2)
     },
@@ -70,9 +65,7 @@ object TestChessComClient extends ZIOSpecDefault {
     test("429 sets throttled ref to true") {
       for {
         (client, throttled) <- makeClient(_ => ZIO.succeed(Response(status = Status.TooManyRequests)))
-        clock               <- advanceClock
         _                   <- client.get[Payload](testUrl).exit
-        _                   <- clock.interrupt
         isThrottled         <- throttled.get
       } yield assertTrue(isThrottled)
     },
@@ -87,16 +80,12 @@ object TestChessComClient extends ZIOSpecDefault {
               else Response.json(jsonBody)
             }
           },
-          cooldown = 30.seconds,
+          cooldown = 50.millis,
         )
-        // Advance clock enough for the retry backoff (1s) so the get completes
-        clock  <- advanceClock
-        _      <- client.get[Payload](testUrl)
-        _      <- clock.interrupt
-        // After successful retry, throttle should be active
+        _              <- client.get[Payload](testUrl)
         throttledBefore <- throttled.get
-        // Advance past cooldown
-        _ <- TestClock.adjust(31.seconds)
+        // Wait past cooldown
+        _ <- ZIO.sleep(60.millis)
         throttledAfter <- throttled.get
       } yield assertTrue(throttledBefore, !throttledAfter)
     },
@@ -104,9 +93,7 @@ object TestChessComClient extends ZIOSpecDefault {
     test("exhausted retries surface RateLimitedException") {
       for {
         (client, _) <- makeClient(_ => ZIO.succeed(Response(status = Status.TooManyRequests)))
-        clock       <- advanceClock
         exit        <- client.get[Payload](testUrl).exit
-        _           <- clock.interrupt
       } yield assertTrue(exit.isFailure)
     },
 
@@ -138,5 +125,5 @@ object TestChessComClient extends ZIOSpecDefault {
         recorded <- order.get
       } yield assertTrue(recorded == Chunk(0, 1, 2))
     },
-  )
+  ) @@ TestAspect.withLiveClock @@ TestAspect.timeout(5.seconds)
 }
