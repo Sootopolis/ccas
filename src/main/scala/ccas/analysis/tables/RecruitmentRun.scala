@@ -31,6 +31,7 @@ object RecruitmentRun {
               completed_at      TIMESTAMPTZ,
               candidates_found  INT NOT NULL DEFAULT 0
             )""".update.run()
+      sql"""CREATE INDEX IF NOT EXISTS idx_recruitment_run_club_id ON recruitment_run(club_id)""".update.run()
     }
 
   def insert(clubId: ClubId, configName: String, startedAt: Instant): ZIO[Transactor, SQLException, Long] =

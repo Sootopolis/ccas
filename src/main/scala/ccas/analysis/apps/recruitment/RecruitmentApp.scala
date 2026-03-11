@@ -16,26 +16,21 @@ object RecruitmentApp extends ZIOAppDefault {
 
   override def run: ZIO[Any & ZIOAppArgs & Scope, Any, Any] =
     for {
-      args     <- ZIOAppArgs.getArgs
-      clubName <- ZIO.fromOption(args.headOption).map(ClubUrlName.wrap)
-                    .orElseFail(IllegalArgumentException(
-                      "Usage: RecruitmentApp <club-url-name> [config-name]\n       RecruitmentApp report <club-url-name> [run-id]"
-                    ))
-      _        <- (args.lift(1) match
-                    case Some("report") =>
-                      args.lift(2) match
-                        case Some(clubStr) =>
-                          val reportClubName = ClubUrlName.wrap(clubStr)
-                          showReport(reportClubName, args.lift(3))
-                        case None =>
-                          showReport(clubName, None)
-                    case configNameOpt =>
-                      recruit(clubName, configNameOpt.getOrElse("default"))
-                  ).provide(
-                    ChessComClient.live(),
-                    Client.default,
-                    DataSourceLayer.liveFromPrefix(),
-                  )
+      args <- ZIOAppArgs.getArgs
+      _    <- (args.toList match
+                case "report" :: clubStr :: rest =>
+                  showReport(ClubUrlName.wrap(clubStr), rest.headOption)
+                case clubStr :: rest =>
+                  recruit(ClubUrlName.wrap(clubStr), rest.headOption.getOrElse("default"))
+                case _ =>
+                  ZIO.fail(IllegalArgumentException(
+                    "Usage: RecruitmentApp <club-url-name> [config-name]\n       RecruitmentApp report <club-url-name> [run-id]"
+                  ))
+              ).provide(
+                ChessComClient.live(),
+                Client.default,
+                DataSourceLayer.liveFromPrefix(),
+              )
     } yield ()
 
   // --- Phase 1: Initialize ---
@@ -143,7 +138,7 @@ object RecruitmentApp extends ZIOAppDefault {
         _ <- RecruitmentCandidate.insert(candidate)
       } yield invited :+ username).catchAll { error =>
         // On error fetching player data, record as Error outcome
-        val candidate = RecruitmentCandidate(runId, username, now, CandidateOutcome.Error, Some(error.getMessage))
+        val candidate = RecruitmentCandidate(runId, username, now, CandidateOutcome.Error, Some(Option(error.getMessage).getOrElse(error.getClass.getSimpleName)))
         RecruitmentCandidate.insert(candidate).as(invited)
       }
     }
@@ -158,7 +153,9 @@ object RecruitmentApp extends ZIOAppDefault {
                   .orElseFail(IllegalArgumentException(s"Club '$clubUrlName' not found in database"))
       clubId  = club.clubId
       run    <- runIdOpt match
-                  case Some(id) => RecruitmentRun.selectId(id.toLong).flatMap(
+                  case Some(id) => ZIO.attempt(id.toLong).mapError(_ => IllegalArgumentException(s"Invalid run ID: '$id' (expected a number)")).flatMap(
+                    RecruitmentRun.selectId(_)
+                  ).flatMap(
                     ZIO.fromOption(_).orElseFail(IllegalArgumentException(s"Run $id not found"))
                   )
                   case None => RecruitmentRun.selectLatest(clubId).flatMap(

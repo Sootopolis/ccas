@@ -1,6 +1,7 @@
 package ccas.analysis.tables
 
 import ccas.analysis.apps.recruitment.ExhaustionBehavior
+import ccas.analysis.apps.recruitment.ExhaustionBehavior.given
 import ccas.api.misc.subtypes.{ClubId, ClubUrlName}
 import ccas.utils.sql.SqlZioTypes.connectZIO
 import ccas.utils.sql.DbCodecs.given
@@ -15,7 +16,7 @@ final case class RecruitmentConfig(
   maxCandidates             : Int,
   sourceClubs               : List[String],
   excludeClubs              : List[String],
-  onExhaustion              : String,
+  onExhaustion              : ExhaustionBehavior,
   nationalityMode           : Option[String],
   nationalityCountries      : List[String],
   maxClubs                  : Option[Int],
@@ -33,7 +34,6 @@ final case class RecruitmentConfig(
 ) derives DbCodec {
   def sourceClubNames: List[ClubUrlName] = sourceClubs.map(ClubUrlName.wrap)
   def excludeClubNames: List[ClubUrlName] = excludeClubs.map(ClubUrlName.wrap)
-  def exhaustionBehavior: ExhaustionBehavior = ExhaustionBehavior.valueOf(onExhaustion)
 }
 
 object RecruitmentConfig {
@@ -96,7 +96,7 @@ object RecruitmentConfig {
               min_days_since_registration, days_since_last_invited
             ) VALUES (
               ${item.clubId}, ${item.configName}, ${item.maxCandidates},
-              ${item.sourceClubs}, ${item.excludeClubs}, ${item.onExhaustion},
+              ${item.sourceClubs}, ${item.excludeClubs}, ${item.onExhaustion.toString},
               ${item.nationalityMode}, ${item.nationalityCountries}, ${item.maxClubs},
               ${item.dailyMaxTimeoutPercent}, ${item.dailyMaxTmTimeoutPercent},
               ${item.dailyMinOngoingGames}, ${item.dailyMaxOngoingGames}, ${item.dailyMinOngoingTeamMatches},

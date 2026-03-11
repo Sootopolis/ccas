@@ -141,7 +141,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
     maxCandidates: Int = 10,
     sourceClubs: List[String] = List("source-club"),
     excludeClubs: List[String] = Nil,
-    onExhaustion: String = "Stop",
+    onExhaustion: ExhaustionBehavior = ExhaustionBehavior.Stop,
   ): RecruitmentConfig =
     RecruitmentConfig(
       clubId = clubId,
@@ -198,14 +198,14 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       )
     },
 
-    test("exhaustionBehavior parses Stop") {
-      val config = makeConfig(onExhaustion = "Stop")
-      assertTrue(config.exhaustionBehavior == ExhaustionBehavior.Stop)
+    test("onExhaustion stores Stop enum value") {
+      val config = makeConfig(onExhaustion = ExhaustionBehavior.Stop)
+      assertTrue(config.onExhaustion == ExhaustionBehavior.Stop)
     },
 
-    test("exhaustionBehavior parses Explore") {
-      val config = makeConfig(onExhaustion = "Explore")
-      assertTrue(config.exhaustionBehavior == ExhaustionBehavior.Explore)
+    test("onExhaustion stores Explore enum value") {
+      val config = makeConfig(onExhaustion = ExhaustionBehavior.Explore)
+      assertTrue(config.onExhaustion == ExhaustionBehavior.Explore)
     },
   )
 
@@ -225,7 +225,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         loaded.get.maxCandidates == 10,
         loaded.get.sourceClubs == List("club-a", "club-b"),
         loaded.get.excludeClubs == List("club-x"),
-        loaded.get.onExhaustion == "Stop",
+        loaded.get.onExhaustion == ExhaustionBehavior.Stop,
       )
     },
 
@@ -334,6 +334,24 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       } yield assertTrue(
         invited.size == 1,
         invited.head.username == Username("alice"),
+      )
+    },
+
+    test("CandidateOutcome enum round-trip for all variants") {
+      for {
+        _     <- seedDb
+        runId <- RecruitmentRun.insert(clubId, "default", T.t0)
+        outcomes = CandidateOutcome.values.toList
+        _ <- ZIO.foreachDiscard(outcomes.zipWithIndex) { (outcome, i) =>
+          RecruitmentCandidate.insert(
+            RecruitmentCandidate(runId, Username.wrap(s"user-$i"), T.t0, outcome, Some(s"reason-$i"))
+          )
+        }
+        candidates <- RecruitmentCandidate.selectByRun(runId)
+        loadedOutcomes = candidates.map(_.outcome).toSet
+      } yield assertTrue(
+        candidates.size == outcomes.size,
+        loadedOutcomes == outcomes.toSet,
       )
     },
 
