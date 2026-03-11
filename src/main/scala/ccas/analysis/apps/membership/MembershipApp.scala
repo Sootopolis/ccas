@@ -54,7 +54,7 @@ object MembershipApp extends ZIOAppDefault {
       _        <- persist(result)
     } yield result
 
-  private def buildDbState(clubId: ClubId): ZIO[Transactor, Throwable, DbState] =
+  private[membership] def buildDbState(clubId: ClubId): ZIO[Transactor, Throwable, DbState] =
     for {
       snapshots <- PlayerSnapshot.selectLatest
       members   <- ClubMember.selectClubCurrent(clubId)
@@ -71,7 +71,7 @@ object MembershipApp extends ZIOAppDefault {
 
   // --- Phase B: Classify API members ---
 
-  private final case class PhaseBResult(
+  private[membership] final case class PhaseBResult(
     resolvedIds      : Set[PlayerId],
     changes          : Chunk[MemberChangeSummary],
     newPlayers       : Chunk[Player],
@@ -80,7 +80,7 @@ object MembershipApp extends ZIOAppDefault {
     closedMemberships: Chunk[ClubMember],
   )
 
-  private def classifyApiMembers(
+  private[membership] def classifyApiMembers(
     client : CcasClient,
     clubId : ClubId,
     apiMap : Map[Username, Long],
@@ -186,13 +186,13 @@ object MembershipApp extends ZIOAppDefault {
 
   // --- Phase C: Classify disappeared members ---
 
-  private final case class PhaseCResult(
+  private[membership] final case class PhaseCResult(
     changes          : Chunk[MemberChangeSummary],
     newSnapshots     : Chunk[PlayerSnapshot],
     closedMemberships: Chunk[ClubMember],
   )
 
-  private def classifyDisappeared(
+  private[membership] def classifyDisappeared(
     client     : CcasClient,
     dbState    : DbState,
     resolvedIds: Set[PlayerId],
@@ -249,7 +249,7 @@ object MembershipApp extends ZIOAppDefault {
 
   // --- Merge & Persist ---
 
-  private def mergeResults(b: PhaseBResult, c: PhaseCResult): ReconciliationResult =
+  private[membership] def mergeResults(b: PhaseBResult, c: PhaseCResult): ReconciliationResult =
     ReconciliationResult(
       changes           = b.changes ++ c.changes,
       newPlayers        = b.newPlayers,
@@ -311,13 +311,13 @@ object MembershipApp extends ZIOAppDefault {
       _       <- reportFromDb(clubId, members, snaps, since, until)
     } yield ()
 
-  private def reportFromDb(
+  private[membership] def classifyFromDb(
     clubId : ClubId,
     members: List[ClubMember],
     snaps  : List[PlayerSnapshot],
     since  : Instant,
     until  : Instant,
-  ): ZIO[Any, Nothing, Unit] = {
+  ): List[MemberChangeSummary] = {
     val snapsByPlayer = snaps.groupBy(_.playerId)
 
     // Find membership changes in the time range
@@ -329,7 +329,7 @@ object MembershipApp extends ZIOAppDefault {
     // Group by player
     val membersByPlayer = changedMembers.groupBy(_.playerId)
 
-    val summaries = membersByPlayer.toList.map { case (playerId, cms) =>
+    membersByPlayer.toList.map { case (playerId, cms) =>
       val playerSnaps = snapsByPlayer.getOrElse(playerId, Nil).sortBy(_.since)
       val changes = Chunk.newBuilder[MemberChange]
 
@@ -380,7 +380,14 @@ object MembershipApp extends ZIOAppDefault {
 
       MemberChangeSummary(playerId, changes.result())
     }.filter(_.changes.nonEmpty)
-
-    ZIO.foreachDiscard(summaries)(printChangeSummary)
   }
+
+  private def reportFromDb(
+    clubId : ClubId,
+    members: List[ClubMember],
+    snaps  : List[PlayerSnapshot],
+    since  : Instant,
+    until  : Instant,
+  ): ZIO[Any, Nothing, Unit] =
+    ZIO.foreachDiscard(classifyFromDb(clubId, members, snaps, since, until))(printChangeSummary)
 }
