@@ -1,12 +1,12 @@
 package ccas.utils.client
 
 import ccas.utils.json.JsonDecodingException
+import zio.http.{Client, Header, Headers, Request, URL}
 import zio.http.Method.GET
-import zio.http.{Client, Headers, Request, URL}
 import zio.json.JsonDecoder
 import zio.{Chunk, Semaphore, Task, ZIO, ZLayer}
 
-final class CcasClient(client: Client, headers: Headers, semaphore: Semaphore) {
+final class ChessComClient(client: Client, headers: Headers, semaphore: Semaphore) {
   private val batchedClient = client.batched
 
   def get[T](url: URL)(using jsonDecoder: JsonDecoder[T]): Task[T] = for {
@@ -24,12 +24,17 @@ final class CcasClient(client: Client, headers: Headers, semaphore: Semaphore) {
     Chunk.from(urls).mapZIO(getWithPermit)
 }
 
-object CcasClient {
-  def live(permits: Long = 1, headers: Headers = Headers.empty): ZLayer[Client, Nothing, CcasClient] =
+object ChessComClient {
+  private def userAgentHeaders(contactEmail: String): Headers =
+    Headers(Header.Custom("User-Agent", s"CCAS/1.0 (contact: $contactEmail)"))
+
+  def live(permits: Long = 1, headers: Headers = Headers.empty): ZLayer[Client, Throwable, ChessComClient] =
     ZLayer.fromZIO {
       for {
-        client    <- ZIO.service[Client]
-        semaphore <- Semaphore.make(permits)
-      } yield CcasClient(client, headers, semaphore)
+        contactEmail <- ZIO.fromOption(Option(System.getenv("CCAS_CONTACT_EMAIL")))
+                          .orElseFail(IllegalStateException("CCAS_CONTACT_EMAIL environment variable is required"))
+        client       <- ZIO.service[Client]
+        semaphore    <- Semaphore.make(permits)
+      } yield ChessComClient(client, userAgentHeaders(contactEmail) ++ headers, semaphore)
     }
 }

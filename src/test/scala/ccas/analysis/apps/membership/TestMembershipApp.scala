@@ -6,7 +6,7 @@ import ccas.analysis.tables.{Club, ClubMember, Player, PlayerSnapshot}
 import ccas.api.misc.enums.PlayerStatusCategory
 import ccas.api.misc.enums.PlayerStatusCategory.{Active, Closed}
 import ccas.api.misc.subtypes.{ClubId, ClubUrlName, PlayerId, Username}
-import ccas.utils.client.CcasClient
+import ccas.utils.client.ChessComClient
 import ccas.utils.sql.{DataSourceLayer, SqlZioTypes}
 import com.augustnagro.magnum.{Transactor, sql}
 import zio.{Chunk, Scope, Semaphore, Trace, ZIO}
@@ -61,10 +61,10 @@ object TestMembershipApp extends ZIOSpecDefault {
     fields.mkString("{\n", ",\n", "\n}")
   }
 
-  private def fakeCcasClient(
+  private def fakeChessComClient(
     responses: Map[String, String],
     failures: Set[String] = Set.empty,
-  ): ZIO[Any, Nothing, CcasClient] =
+  ): ZIO[Any, Nothing, ChessComClient] =
     Semaphore.make(1).map { semaphore =>
       val routes: Routes[Any, Response] = Routes(
         Method.GET / "pub" / "player" / string("username") -> handler { (username: String, _: Request) =>
@@ -84,7 +84,7 @@ object TestMembershipApp extends ZIOSpecDefault {
         )(implicit trace: Trace, ev: Scope =:= Scope): ZIO[Env1 & Scope, Throwable, Response] =
           ZIO.die(new UnsupportedOperationException)
       }
-      CcasClient(ZClient.fromDriver(driver), Headers.empty, semaphore)
+      ChessComClient(ZClient.fromDriver(driver), Headers.empty, semaphore)
     }
 
   private val testPlayerIds = List(pid0, pid1, pid2, pid3, pid4, pid5)
@@ -311,7 +311,7 @@ object TestMembershipApp extends ZIOSpecDefault {
       val apiMap = Map(Username("alice") -> T.t1.getEpochSecond)
 
       for {
-        client <- fakeCcasClient(Map.empty)
+        client <- fakeChessComClient(Map.empty)
         result <- MembershipApp.classifyApiMembers(client, clubId, apiMap, dbState, T.t2)
       } yield assertTrue(
         result.resolvedIds.contains(pid0),
@@ -329,7 +329,7 @@ object TestMembershipApp extends ZIOSpecDefault {
       val apiMap = Map(Username("bob") -> T.t1.getEpochSecond)
 
       for {
-        client <- fakeCcasClient(Map.empty)
+        client <- fakeChessComClient(Map.empty)
         result <- MembershipApp.classifyApiMembers(client, clubId, apiMap, dbState, T.t2)
       } yield assertTrue(
         result.resolvedIds.contains(pid1),
@@ -351,7 +351,7 @@ object TestMembershipApp extends ZIOSpecDefault {
       val responses = Map("charlie-new" -> apiPlayerJson(102, "charlie-new"))
 
       for {
-        client <- fakeCcasClient(responses)
+        client <- fakeChessComClient(responses)
         result <- MembershipApp.classifyApiMembers(client, clubId, apiMap, dbState, T.t2)
       } yield assertTrue(
         result.resolvedIds.contains(pid2),
@@ -368,7 +368,7 @@ object TestMembershipApp extends ZIOSpecDefault {
 
       for {
         _ <- seedDb()
-        client <- fakeCcasClient(responses)
+        client <- fakeChessComClient(responses)
         result <- MembershipApp.classifyApiMembers(client, clubId, apiMap, dbState, T.t2)
       } yield assertTrue(
         result.resolvedIds.contains(pid3),
@@ -389,7 +389,7 @@ object TestMembershipApp extends ZIOSpecDefault {
 
       for {
         _ <- seedDb(players = List(player4), snapshots = List(snap4))
-        client <- fakeCcasClient(responses)
+        client <- fakeChessComClient(responses)
         result <- MembershipApp.classifyApiMembers(client, clubId, apiMap, dbState, T.t2)
       } yield assertTrue(
         result.resolvedIds.contains(pid4),
@@ -410,7 +410,7 @@ object TestMembershipApp extends ZIOSpecDefault {
       val responses = Map("frank-new" -> apiPlayerJson(105, "frank-new", status = "closed"))
 
       for {
-        client <- fakeCcasClient(responses)
+        client <- fakeChessComClient(responses)
         result <- MembershipApp.classifyApiMembers(client, clubId, apiMap, dbState, T.t2)
       } yield assertTrue(
         result.resolvedIds.contains(pid5),
@@ -436,7 +436,7 @@ object TestMembershipApp extends ZIOSpecDefault {
       val responses = Map("alice" -> apiPlayerJson(100, "alice"))
 
       for {
-        client <- fakeCcasClient(responses)
+        client <- fakeChessComClient(responses)
         result <- MembershipApp.classifyDisappeared(client, dbState, Set.empty, T.t2)
       } yield assertTrue(
         result.changes.size == 1,
@@ -455,7 +455,7 @@ object TestMembershipApp extends ZIOSpecDefault {
       val responses = Map("bob" -> apiPlayerJson(101, "bob", status = "closed"))
 
       for {
-        client <- fakeCcasClient(responses)
+        client <- fakeChessComClient(responses)
         result <- MembershipApp.classifyDisappeared(client, dbState, Set.empty, T.t2)
       } yield assertTrue(
         result.changes.size == 1,
@@ -474,7 +474,7 @@ object TestMembershipApp extends ZIOSpecDefault {
       )
 
       for {
-        client <- fakeCcasClient(Map.empty, failures = Set("charlie"))
+        client <- fakeChessComClient(Map.empty, failures = Set("charlie"))
         result <- MembershipApp.classifyDisappeared(client, dbState, Set.empty, T.t2)
       } yield assertTrue(
         result.changes.size == 1,
@@ -493,7 +493,7 @@ object TestMembershipApp extends ZIOSpecDefault {
       val responses = Map("diana" -> apiPlayerJson(999, "diana"))
 
       for {
-        client <- fakeCcasClient(responses)
+        client <- fakeChessComClient(responses)
         result <- MembershipApp.classifyDisappeared(client, dbState, Set.empty, T.t2)
       } yield assertTrue(
         result.changes.size == 1,
@@ -511,7 +511,7 @@ object TestMembershipApp extends ZIOSpecDefault {
       )
 
       for {
-        client <- fakeCcasClient(Map.empty)
+        client <- fakeChessComClient(Map.empty)
         result <- MembershipApp.classifyDisappeared(client, dbState, Set(pid0), T.t2)
       } yield assertTrue(
         result.changes.isEmpty,

@@ -6,7 +6,7 @@ import ccas.api.club.{ApiClub, ApiClubMembers}
 import ccas.api.misc.enums.PlayerStatusCategory
 import ccas.api.misc.subtypes.{ClubId, ClubUrlName, PlayerId, Username}
 import ccas.api.player.ApiPlayer
-import ccas.utils.client.CcasClient
+import ccas.utils.client.ChessComClient
 import ccas.utils.sql.DataSourceLayer
 import com.augustnagro.magnum.Transactor
 import zio.http.Client
@@ -29,7 +29,7 @@ object MembershipApp extends ZIOAppDefault {
                     case None =>
                       reconcile(clubName).flatMap(result => reportReconciliation(result))
                   ).provide(
-                    CcasClient.live(),
+                    ChessComClient.live(),
                     Client.default,
                     DataSourceLayer.liveFromPrefix(),
                   )
@@ -37,9 +37,9 @@ object MembershipApp extends ZIOAppDefault {
 
   // --- Phase A: Gather data ---
 
-  private def reconcile(clubUrlName: ClubUrlName): ZIO[CcasClient & Transactor, Throwable, ReconciliationResult] =
+  private def reconcile(clubUrlName: ClubUrlName): ZIO[ChessComClient & Transactor, Throwable, ReconciliationResult] =
     for {
-      client   <- ZIO.service[CcasClient]
+      client   <- ZIO.service[ChessComClient]
       apiClub  <- ApiClub.get(client, clubUrlName)
       clubId    = apiClub.clubId
       club      = Club(clubId, Instant.ofEpochSecond(apiClub.created), clubUrlName)
@@ -81,7 +81,7 @@ object MembershipApp extends ZIOAppDefault {
   )
 
   private[membership] def classifyApiMembers(
-    client : CcasClient,
+    client : ChessComClient,
     clubId : ClubId,
     apiMap : Map[Username, Long],
     dbState: DbState,
@@ -193,7 +193,7 @@ object MembershipApp extends ZIOAppDefault {
   )
 
   private[membership] def classifyDisappeared(
-    client     : CcasClient,
+    client     : ChessComClient,
     dbState    : DbState,
     resolvedIds: Set[PlayerId],
     now        : Instant,

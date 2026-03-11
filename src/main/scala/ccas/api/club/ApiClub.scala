@@ -3,7 +3,7 @@ package ccas.api.club
 import ccas.api.misc.Hosts
 import ccas.api.misc.enums.ClubVisibility
 import ccas.api.misc.subtypes.{ClubId, ClubUrlName, Elo}
-import ccas.utils.client.CcasClient
+import ccas.utils.client.ChessComClient
 import ccas.utils.json.JsonDecoding
 import zio.{Chunk, Task}
 import zio.http.URL
@@ -34,5 +34,5 @@ object ApiClub extends JsonDecoding[ApiClub] {
 
   def getUrl(clubUrlName: ClubUrlName): URL = host.addPath(clubUrlName)
 
-  def get(client: CcasClient, clubUrlName: ClubUrlName): Task[ApiClub] = client.get[ApiClub](getUrl(clubUrlName))
+  def get(client: ChessComClient, clubUrlName: ClubUrlName): Task[ApiClub] = client.get[ApiClub](getUrl(clubUrlName))
 }

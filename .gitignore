@@ -44,6 +44,9 @@ build/
 .bloop
 .metals
 
+### Environment ###
+.env
+
 ### Mac OS ###
 .DS_Store
 

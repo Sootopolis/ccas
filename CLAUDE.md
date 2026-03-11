@@ -48,7 +48,7 @@ The codebase has two main layers:
 
 ### HTTP Client
 
-`CcasClient` wraps `zio-http` `Client` for making batched GET requests with automatic JSON decoding. `CcasApiClient` adds a semaphore (permits=1) for rate-limited Chess.com API access.
+`ChessComClient` wraps `zio-http` `Client` for making batched GET requests with automatic JSON decoding. It includes a default `User-Agent` header and a semaphore (default permits=1) for rate-limited Chess.com API access.
 
 ### Database
 
