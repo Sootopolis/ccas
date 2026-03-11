@@ -13,13 +13,13 @@ import java.time.{Month, Year}
 import java.util.UUID
 
 @jsonMemberNames(SnakeCase)
-case class ApiPlayerArchive(games: Chunk[ApiPlayerArchiveGame])
+final case class ApiPlayerArchive(games: Chunk[ApiPlayerArchiveGame])
 
 object ApiPlayerArchive extends JsonDecoding[ApiPlayerArchive] {
   override protected val jsonDecoderDerived: JsonDecoder[ApiPlayerArchive] = DeriveJsonDecoder.gen
 
   @jsonMemberNames(SnakeCase)
-  case class ApiPlayerArchiveGame(
+  final case class ApiPlayerArchiveGame(
     white       : ApiPlayerArchiveGamePlayer,
     black       : ApiPlayerArchiveGamePlayer,
     rated       : Boolean,
@@ -40,7 +40,7 @@ object ApiPlayerArchive extends JsonDecoding[ApiPlayerArchive] {
   ) derives JsonDecoder
 
   @jsonMemberNames(SnakeCase)
-  case class ApiPlayerArchiveGamePlayer(
+  final case class ApiPlayerArchiveGamePlayer(
     username: Username,
     `@id`   : URL,
     rating  : Elo,

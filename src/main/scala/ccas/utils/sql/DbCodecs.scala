@@ -1,6 +1,7 @@
 package ccas.utils.sql
 
 import com.augustnagro.magnum.DbCodec
+import zio.http.URL
 
 import java.sql.{PreparedStatement, ResultSet, Types}
 import java.time.Instant
@@ -15,4 +16,9 @@ object DbCodecs {
       ps.setObject(pos, value.atOffset(java.time.ZoneOffset.UTC))
     override def queryRepr: String = "?"
   }
+
+  given DbCodec[URL] = DbCodec[String].biMap(
+    string => if string == null then null else URL.decode(string).fold(e => throw e, identity),
+    url => if url == null then null else url.encode,
+  )
 }

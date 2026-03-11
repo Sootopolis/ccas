@@ -12,7 +12,7 @@ import zio.ZIO
 import java.sql.SQLException
 import java.time.Instant
 
-case class PlayerSnapshot(
+final case class PlayerSnapshot(
   playerId: PlayerId,
   since   : Instant,
   username: Username,

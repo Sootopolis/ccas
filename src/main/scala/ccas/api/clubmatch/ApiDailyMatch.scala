@@ -29,7 +29,7 @@ object ApiDailyMatch extends JsonDecoding[ApiDailyMatch] {
   def getUrl(clubMatchId: ClubMatchId): URL = host.addPath(clubMatchId.toString)
 
   @jsonMemberNames(SnakeCase) @jsonHint(ClubMatchStatus.Registration.encodeJson.replace("\"", ""))
-  case class ApiDailyMatchRegistered(
+  final case class ApiDailyMatchRegistered(
     `@id`    : URL,
     name     : String,
     url      : URL,
@@ -43,7 +43,7 @@ object ApiDailyMatch extends JsonDecoding[ApiDailyMatch] {
   }
 
   @jsonMemberNames(SnakeCase) @jsonHint(ClubMatchStatus.InProgress.encodeJson.replace("\"", ""))
-  case class ApiDailyMatchInProgress(
+  final case class ApiDailyMatchInProgress(
     `@id`    : URL,
     name     : String,
     url      : URL,
@@ -57,7 +57,7 @@ object ApiDailyMatch extends JsonDecoding[ApiDailyMatch] {
   }
 
   @jsonMemberNames(SnakeCase) @jsonHint(ClubMatchStatus.Finished.encodeJson.replace("\"", ""))
-  case class ApiDailyMatchFinished(
+  final case class ApiDailyMatchFinished(
     `@id`    : URL,
     name     : String,
     url      : URL,
@@ -72,7 +72,7 @@ object ApiDailyMatch extends JsonDecoding[ApiDailyMatch] {
   }
 
   @jsonMemberNames(SnakeCase)
-  case class ApiDailyMatchSettings(
+  final case class ApiDailyMatchSettings(
     rules           : GameRule,
     timeClass       : TimeClass,
     timeControl     : String,
@@ -93,15 +93,15 @@ object ApiDailyMatch extends JsonDecoding[ApiDailyMatch] {
   }
 
   @jsonMemberNames(SnakeCase)
-  case class ApiDailyMatchTeamsRegistered(team1: ApiDailyMatchTeamRegistered, team2: ApiDailyMatchTeamRegistered)
+  final case class ApiDailyMatchTeamsRegistered(team1: ApiDailyMatchTeamRegistered, team2: ApiDailyMatchTeamRegistered)
     extends ApiDailyMatchTeams derives JsonDecoder
 
   @jsonMemberNames(SnakeCase)
-  case class ApiDailyMatchTeamsInProgress(team1: ApiDailyMatchTeamInProgress, team2: ApiDailyMatchTeamInProgress)
+  final case class ApiDailyMatchTeamsInProgress(team1: ApiDailyMatchTeamInProgress, team2: ApiDailyMatchTeamInProgress)
     extends ApiDailyMatchTeams derives JsonDecoder
 
   @jsonMemberNames(SnakeCase)
-  case class ApiDailyMatchTeamsFinished(team1: ApiDailyMatchTeamFinished, team2: ApiDailyMatchTeamFinished)
+  final case class ApiDailyMatchTeamsFinished(team1: ApiDailyMatchTeamFinished, team2: ApiDailyMatchTeamFinished)
     extends ApiDailyMatchTeams derives JsonDecoder
 
   // team
@@ -116,7 +116,7 @@ object ApiDailyMatch extends JsonDecoding[ApiDailyMatch] {
   }
 
   @jsonMemberNames(SnakeCase)
-  case class ApiDailyMatchTeamRegistered(
+  final case class ApiDailyMatchTeamRegistered(
     `@id`           : URL,
     name            : String,
     url             : URL,
@@ -127,7 +127,7 @@ object ApiDailyMatch extends JsonDecoding[ApiDailyMatch] {
   ) extends ApiDailyMatchTeam derives JsonDecoder
 
   @jsonMemberNames(SnakeCase)
-  case class ApiDailyMatchTeamInProgress(
+  final case class ApiDailyMatchTeamInProgress(
     `@id`           : URL,
     name            : String,
     url             : URL,
@@ -137,7 +137,7 @@ object ApiDailyMatch extends JsonDecoding[ApiDailyMatch] {
   ) extends ApiDailyMatchTeam derives JsonDecoder
 
   @jsonMemberNames(SnakeCase)
-  case class ApiDailyMatchTeamFinished(
+  final case class ApiDailyMatchTeamFinished(
     `@id`           : URL,
     name            : String,
     url             : URL,
@@ -154,7 +154,7 @@ object ApiDailyMatch extends JsonDecoding[ApiDailyMatch] {
   }
 
   @jsonMemberNames(SnakeCase)
-  case class ApiDailyMatchPlayerRegistered(
+  final case class ApiDailyMatchPlayerRegistered(
     username      : Username,
     rating        : Elo,
     timeoutPercent: Double,
@@ -163,7 +163,7 @@ object ApiDailyMatch extends JsonDecoding[ApiDailyMatch] {
   ) extends ApiDailyMatchPlayer derives JsonDecoder
 
   @jsonMemberNames(SnakeCase)
-  case class ApiDailyMatchPlayerStarted(
+  final case class ApiDailyMatchPlayerStarted(
     username     : Username,
     stats        : URL,
     status       : PlayerStatus,

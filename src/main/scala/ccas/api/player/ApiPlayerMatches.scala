@@ -8,7 +8,7 @@ import zio.http.URL
 import zio.json.{DeriveJsonDecoder, JsonDecoder, SnakeCase, jsonMemberNames}
 
 @jsonMemberNames(SnakeCase)
-case class ApiPlayerMatches(
+final case class ApiPlayerMatches(
   finished  : Chunk[ApiPlayerMatch],
   inProgress: Chunk[ApiPlayerMatch],
   registered: Chunk[ApiPlayerMatch]
@@ -18,7 +18,7 @@ object ApiPlayerMatches extends JsonDecoding[ApiPlayerMatches] {
   override protected val jsonDecoderDerived: JsonDecoder[ApiPlayerMatches] = DeriveJsonDecoder.gen
 
   @jsonMemberNames(SnakeCase)
-  case class ApiPlayerMatch(
+  final case class ApiPlayerMatch(
     name   : String,
     url    : URL,
     `@id`  : URL,
@@ -28,7 +28,7 @@ object ApiPlayerMatches extends JsonDecoding[ApiPlayerMatches] {
   ) derives JsonDecoder
 
   @jsonMemberNames(SnakeCase)
-  case class ApiPlayerMatchResults(
+  final case class ApiPlayerMatchResults(
     playedAsWhite: Option[GameResultDetail],
     playedAsBlack: Option[GameResultDetail]
   ) derives JsonDecoder

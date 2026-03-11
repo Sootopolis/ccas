@@ -10,7 +10,7 @@ import zio.http.URL
 import zio.json.{DeriveJsonDecoder, JsonDecoder, SnakeCase, jsonMemberNames}
 
 @jsonMemberNames(SnakeCase)
-case class ApiClub(
+final case class ApiClub(
   `@id`             : URL, // the location of this profile (always self-referencing)
   name              : String, // the human-readable name of this club
   clubId            : ClubId, // the non-changing Chess.com ID of this club

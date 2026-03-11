@@ -10,7 +10,7 @@ import java.sql.SQLException
 import java.time.Instant
 
 @Table(PostgresDbType, SqlNameMapper.CamelToSnakeCase)
-case class Club(
+final case class Club(
   @Id clubId: ClubId,
   created   : Instant,
   urlName   : ClubUrlName,

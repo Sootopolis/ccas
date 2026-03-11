@@ -9,13 +9,13 @@ import zio.http.URL
 import zio.json.{DeriveJsonDecoder, JsonDecoder, SnakeCase, jsonMemberNames}
 
 @jsonMemberNames(SnakeCase)
-case class ApiPlayerGamesCurrent(games: Chunk[ApiPlayerCurrentDailyGame])
+final case class ApiPlayerGamesCurrent(games: Chunk[ApiPlayerCurrentDailyGame])
 
 object ApiPlayerGamesCurrent extends JsonDecoding[ApiPlayerGamesCurrent] {
   override protected val jsonDecoderDerived: JsonDecoder[ApiPlayerGamesCurrent] = DeriveJsonDecoder.gen
 
   @jsonMemberNames(SnakeCase)
-  case class ApiPlayerCurrentDailyGame(
+  final case class ApiPlayerCurrentDailyGame(
     white       : URL,
     black       : URL,
     url         : URL,

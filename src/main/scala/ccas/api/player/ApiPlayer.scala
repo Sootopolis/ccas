@@ -9,7 +9,7 @@ import zio.http.URL
 import zio.json.{DeriveJsonDecoder, JsonDecoder, SnakeCase, jsonMemberNames}
 
 @jsonMemberNames(SnakeCase)
-case class ApiPlayer(
+final case class ApiPlayer(
   playerId  : PlayerId, // the non-changing Chess.com ID of this player
   username  : Username, // the username of this player
   name      : Option[String], // (optional) the personal first and last name

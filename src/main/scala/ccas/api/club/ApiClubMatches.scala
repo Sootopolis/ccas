@@ -9,7 +9,7 @@ import zio.http.URL
 import zio.json.{DeriveJsonDecoder, JsonDecoder, SnakeCase, jsonMemberNames}
 
 @jsonMemberNames(SnakeCase)
-case class ApiClubMatches(
+final case class ApiClubMatches(
   finished  : Chunk[ApiClubMatchFinished],
   inProgress: Chunk[ApiClubMatchInProgress],
   registered: Chunk[ApiClubMatchRegistered]
@@ -36,7 +36,7 @@ object ApiClubMatches extends JsonDecoding[ApiClubMatches] {
   }
 
   @jsonMemberNames(SnakeCase)
-  case class ApiClubMatchRegistered(
+  final case class ApiClubMatchRegistered(
     name     : String,
     `@id`    : URL,
     opponent : URL,
@@ -44,7 +44,7 @@ object ApiClubMatches extends JsonDecoding[ApiClubMatches] {
   ) extends ApiClubMatch derives JsonDecoder
 
   @jsonMemberNames(SnakeCase)
-  case class ApiClubMatchInProgress(
+  final case class ApiClubMatchInProgress(
     name     : String,
     `@id`    : URL,
     opponent : URL,
@@ -53,7 +53,7 @@ object ApiClubMatches extends JsonDecoding[ApiClubMatches] {
   ) extends ApiClubMatchStarted derives JsonDecoder
 
   @jsonMemberNames(SnakeCase)
-  case class ApiClubMatchFinished(
+  final case class ApiClubMatchFinished(
     name     : String,
     `@id`    : URL,
     opponent : URL,

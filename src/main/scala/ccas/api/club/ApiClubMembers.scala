@@ -9,7 +9,7 @@ import zio.http.URL
 import zio.json.{DeriveJsonDecoder, JsonDecoder, SnakeCase, jsonMemberNames}
 
 @jsonMemberNames(SnakeCase)
-case class ApiClubMembers(
+final case class ApiClubMembers(
   weekly : Chunk[ApiClubMember],
   monthly: Chunk[ApiClubMember],
   allTime: Chunk[ApiClubMember]
@@ -25,7 +25,7 @@ object ApiClubMembers extends JsonDecoding[ApiClubMembers] {
   override protected val jsonDecoderDerived: JsonDecoder[ApiClubMembers] = DeriveJsonDecoder.gen
 
   @jsonMemberNames(SnakeCase)
-  case class ApiClubMember(username: Username, joined: Long) derives JsonDecoder
+  final case class ApiClubMember(username: Username, joined: Long) derives JsonDecoder
 
   def getUrl(clubUrlName: ClubUrlName): URL = ApiClub.getUrl(clubUrlName).addPath("members")
 

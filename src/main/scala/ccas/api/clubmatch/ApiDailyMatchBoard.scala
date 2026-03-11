@@ -10,7 +10,7 @@ import zio.http.URL
 import zio.json.{DeriveJsonDecoder, JsonDecoder, SnakeCase, jsonMemberNames}
 
 @jsonMemberNames(SnakeCase)
-case class ApiDailyMatchBoard(boardScores: Map[Username, Double], games: Chunk[ApiDailyBoardGame]) {
+final case class ApiDailyMatchBoard(boardScores: Map[Username, Double], games: Chunk[ApiDailyBoardGame]) {
   require(games.nonEmpty && games.length <= 2, s"A board can only have 1 or 2 games:\n$this")
 }
 
@@ -20,7 +20,7 @@ object ApiDailyMatchBoard extends JsonDecoding[ApiDailyMatchBoard] {
   def getUrl(clubMatchId: ClubMatchId, boardId: Int): URL = ApiDailyMatch.getUrl(clubMatchId).addPath(boardId.toString)
 
   @jsonMemberNames(SnakeCase)
-  case class ApiDailyBoardGame(
+  final case class ApiDailyBoardGame(
     white      : ApiDailyBoardPlayer,
     black      : ApiDailyBoardPlayer,
     accuracies : Option[Accuracies],
@@ -38,7 +38,7 @@ object ApiDailyMatchBoard extends JsonDecoding[ApiDailyMatchBoard] {
   ) derives JsonDecoder
 
   @jsonMemberNames(SnakeCase)
-  case class ApiDailyBoardPlayer(
+  final case class ApiDailyBoardPlayer(
     username: Username,
     rating  : Elo,
     result  : Option[GameResultDetail],

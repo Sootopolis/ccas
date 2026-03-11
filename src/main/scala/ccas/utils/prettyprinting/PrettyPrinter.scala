@@ -9,7 +9,7 @@ import java.time.temporal.Temporal
 import scala.deriving.Mirror
 import scala.reflect.{ClassTag, classTag}
 
-/** Enable pretty printing of a case class by adding `derives PrettyPrinter` after the round brackets. */
+/** Enable pretty printing of a final case class by adding `derives PrettyPrinter` after the round brackets. */
 trait PrettyPrinter[T] {
   protected def getPrettyString(value: T, setting: Setting, className: String): String
 
@@ -33,7 +33,7 @@ object PrettyPrinter extends AutoDerivation[PrettyPrinter] {
    * @param trailingComma Whether to have a comma after the last element in a multi-line element (default: false).
    * @param ignoreDefault Whether to omit elements equal to their default values (default: false).
    */
-  case class Setting(
+  final case class Setting(
     nIndent       : Int = 2,
     maxWidth      : Int = 80,
     namedArguments: Boolean = true,

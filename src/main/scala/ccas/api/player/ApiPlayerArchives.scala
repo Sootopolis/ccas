@@ -7,7 +7,7 @@ import zio.http.URL
 import zio.json.{DeriveJsonDecoder, JsonDecoder, SnakeCase, jsonMemberNames}
 
 @jsonMemberNames(SnakeCase)
-case class ApiPlayerArchives(archives: Chunk[URL])
+final case class ApiPlayerArchives(archives: Chunk[URL])
 
 object ApiPlayerArchives extends JsonDecoding[ApiPlayerArchives] {
   override protected val jsonDecoderDerived: JsonDecoder[ApiPlayerArchives] = DeriveJsonDecoder.gen

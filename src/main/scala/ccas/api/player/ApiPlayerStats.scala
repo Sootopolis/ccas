@@ -8,7 +8,7 @@ import zio.http.URL
 import zio.json.{DeriveJsonDecoder, JsonDecoder, SnakeCase, jsonMemberNames}
 
 @jsonMemberNames(SnakeCase)
-case class ApiPlayerStats(
+final case class ApiPlayerStats(
   chessDaily   : ApiPlayerDailyStats,
   chess960Daily: ApiPlayerDailyStats,
   chessRapid   : ApiPlayerLiveStats,
@@ -29,7 +29,7 @@ object ApiPlayerStats extends JsonDecoding[ApiPlayerStats] {
   }
 
   @jsonMemberNames(SnakeCase)
-  case class ApiPlayerDailyStats(
+  final case class ApiPlayerDailyStats(
     last      : LatestElo,
     best      : BestElo,
     record    : ApiDailyRecord,
@@ -37,7 +37,7 @@ object ApiPlayerStats extends JsonDecoding[ApiPlayerStats] {
   ) extends ApiPlayerGameTypeStats[ApiDailyRecord] derives JsonDecoder
 
   @jsonMemberNames(SnakeCase)
-  case class ApiPlayerLiveStats(
+  final case class ApiPlayerLiveStats(
     last      : LatestElo,
     best      : BestElo,
     record    : ApiPlayerLiveRecord,
@@ -45,10 +45,10 @@ object ApiPlayerStats extends JsonDecoding[ApiPlayerStats] {
   ) extends ApiPlayerGameTypeStats[ApiPlayerLiveRecord] derives JsonDecoder
 
   @jsonMemberNames(SnakeCase)
-  case class LatestElo(rating: Elo, date: Long, rd: Double) derives JsonDecoder
+  final case class LatestElo(rating: Elo, date: Long, rd: Double) derives JsonDecoder
 
   @jsonMemberNames(SnakeCase)
-  case class BestElo(rating: Elo, date: Long, game: URL) derives JsonDecoder
+  final case class BestElo(rating: Elo, date: Long, game: URL) derives JsonDecoder
 
   sealed trait ApiPlayerGameTypeRecord {
     val win: Int
@@ -61,12 +61,12 @@ object ApiPlayerStats extends JsonDecoding[ApiPlayerStats] {
   }
 
   @jsonMemberNames(SnakeCase)
-  case class ApiPlayerLiveRecord(win: Int, loss: Int, draw: Int) extends ApiPlayerGameTypeRecord derives JsonDecoder
+  final case class ApiPlayerLiveRecord(win: Int, loss: Int, draw: Int) extends ApiPlayerGameTypeRecord derives JsonDecoder
 
   @jsonMemberNames(SnakeCase)
-  case class ApiDailyRecord(win: Int, loss: Int, draw: Int, timePerMove: Int, timeoutPercent: Double)
+  final case class ApiDailyRecord(win: Int, loss: Int, draw: Int, timePerMove: Int, timeoutPercent: Double)
     extends ApiPlayerGameTypeRecord derives JsonDecoder
 
   @jsonMemberNames(SnakeCase)
-  case class TournamentRecord(points: Int, withdraw: Int, count: Int, highestFinish: Int) derives JsonDecoder
+  final case class TournamentRecord(points: Int, withdraw: Int, count: Int, highestFinish: Int) derives JsonDecoder
 }
