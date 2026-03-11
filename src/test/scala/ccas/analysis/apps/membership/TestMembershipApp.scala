@@ -9,7 +9,7 @@ import ccas.api.misc.subtypes.{ClubId, ClubUrlName, PlayerId, Username}
 import ccas.utils.client.ChessComClient
 import ccas.utils.sql.{DataSourceLayer, SqlZioTypes}
 import com.augustnagro.magnum.{Transactor, sql}
-import zio.{Chunk, Scope, Semaphore, Trace, ZIO}
+import zio.{Chunk, Ref, Scope, Semaphore, Trace, ZIO}
 import zio.http.*
 import zio.test.{Spec, TestAspect, TestResult, ZIOSpecDefault, assertTrue}
 
@@ -65,7 +65,11 @@ object TestMembershipApp extends ZIOSpecDefault {
     responses: Map[String, String],
     failures: Set[String] = Set.empty,
   ): ZIO[Any, Nothing, ChessComClient] =
-    Semaphore.make(1).map { semaphore =>
+    (for {
+      semaphore <- Semaphore.make(1)
+      mutex     <- Semaphore.make(1)
+      throttled <- Ref.make(false)
+    } yield (semaphore, mutex, throttled)).map { (semaphore, mutex, throttled) =>
       val routes: Routes[Any, Response] = Routes(
         Method.GET / "pub" / "player" / string("username") -> handler { (username: String, _: Request) =>
           if failures.contains(username) then Response(status = Status.NotFound)
@@ -84,7 +88,7 @@ object TestMembershipApp extends ZIOSpecDefault {
         )(implicit trace: Trace, ev: Scope =:= Scope): ZIO[Env1 & Scope, Throwable, Response] =
           ZIO.die(new UnsupportedOperationException)
       }
-      ChessComClient(ZClient.fromDriver(driver), Headers.empty, semaphore)
+      ChessComClient(ZClient.fromDriver(driver), Headers.empty, semaphore, mutex, throttled, zio.Duration.fromSeconds(30))
     }
 
   private val testPlayerIds = List(pid0, pid1, pid2, pid3, pid4, pid5)

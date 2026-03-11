@@ -1,40 +1,77 @@
 package ccas.utils.client
 
 import ccas.utils.json.JsonDecodingException
-import zio.http.{Client, Header, Headers, Request, URL}
+import zio.http.{Client, Header, Headers, Request, Status, URL}
 import zio.http.Method.GET
 import zio.json.JsonDecoder
-import zio.{Chunk, Semaphore, Task, ZIO, ZLayer}
+import zio.{Chunk, Duration, Ref, Schedule, Semaphore, Task, ZIO, ZLayer, durationInt}
 
-final class ChessComClient(client: Client, headers: Headers, semaphore: Semaphore) {
+final class ChessComClient(
+  client: Client,
+  headers: Headers,
+  semaphore: Semaphore,
+  mutex: Semaphore,
+  throttled: Ref[Boolean],
+  cooldown: Duration,
+) {
   private val batchedClient = client.batched
 
-  def get[T](url: URL)(using jsonDecoder: JsonDecoder[T]): Task[T] = for {
+  private def rawGet[T](url: URL)(using jsonDecoder: JsonDecoder[T]): Task[T] = for {
     response <- batchedClient.request(Request(method = GET, url = url).addHeaders(headers))
+    _ <- ZIO.when(response.status == Status.TooManyRequests)(
+      activateThrottle *> ZIO.fail(RateLimitedException(url))
+    )
     string <- response.body.asString
     value <- ZIO.fromEither(jsonDecoder.decodeJson(string)).mapError(JsonDecodingException(_))
-  } yield { value }
+  } yield value
 
-  def getAll[T](urls: Iterable[URL])(using jsonDecoder: JsonDecoder[T]): Task[Chunk[T]] = Chunk.from(urls).mapZIO(get)
+  def get[T](url: URL)(using jsonDecoder: JsonDecoder[T]): Task[T] = {
+    val acquireAndCall = for {
+      isThrottled <- throttled.get
+      permit = if isThrottled then mutex else semaphore
+      result <- permit.withPermit(rawGet(url))
+    } yield result
+    acquireAndCall.retry(retrySchedule)
+  }
 
-  def getWithPermit[T](url: URL)(using jsonDecoder: JsonDecoder[T]): Task[T] =
-    semaphore.withPermit(get(url))
+  def getAll[T](urls: Iterable[URL])(using jsonDecoder: JsonDecoder[T]): Task[Chunk[T]] =
+    ZIO.foreachPar(Chunk.from(urls))(get)
 
-  def getAllWithPermit[T](urls: Iterable[URL])(using jsonDecoder: JsonDecoder[T]): Task[Chunk[T]] =
-    Chunk.from(urls).mapZIO(getWithPermit)
+  def getWithPermit[T](url: URL)(using jsonDecoder: JsonDecoder[T]): Task[T] = get(url)
+
+  def getAllWithPermit[T](urls: Iterable[URL])(using jsonDecoder: JsonDecoder[T]): Task[Chunk[T]] = getAll(urls)
+
+  private def activateThrottle: Task[Unit] =
+    throttled.getAndSet(true).flatMap { wasThrottled =>
+      ZIO.unless(wasThrottled) {
+        (ZIO.sleep(cooldown) *> throttled.set(false)).fork.unit
+      }.unit
+    }
+
+  private val retrySchedule: Schedule[Any, Throwable, Any] =
+    Schedule.exponential(1.second) && Schedule.recurs(4) && Schedule.recurWhile[Throwable] {
+      case _: RateLimitedException => true
+      case _ => false
+    }
 }
 
 object ChessComClient {
   private def userAgentHeaders(contactEmail: String): Headers =
     Headers(Header.Custom("User-Agent", s"CCAS/1.0 (contact: $contactEmail)"))
 
-  def live(permits: Long = 1, headers: Headers = Headers.empty): ZLayer[Client, Throwable, ChessComClient] =
+  def live(
+    permits: Long = 5,
+    cooldown: Duration = 30.seconds,
+    headers: Headers = Headers.empty,
+  ): ZLayer[Client, Throwable, ChessComClient] =
     ZLayer.fromZIO {
       for {
         contactEmail <- ZIO.fromOption(Option(System.getenv("CCAS_CONTACT_EMAIL")))
                           .orElseFail(IllegalStateException("CCAS_CONTACT_EMAIL environment variable is required"))
         client       <- ZIO.service[Client]
         semaphore    <- Semaphore.make(permits)
-      } yield ChessComClient(client, userAgentHeaders(contactEmail) ++ headers, semaphore)
+        mutex        <- Semaphore.make(1)
+        throttled    <- Ref.make(false)
+      } yield ChessComClient(client, userAgentHeaders(contactEmail) ++ headers, semaphore, mutex, throttled, cooldown)
     }
 }
