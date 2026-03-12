@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: ccas
+      POSTGRES_USER: ccas
+      POSTGRES_PASSWORD: ccas
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./docker/init-test-schema.sql:/docker-entrypoint-initdb.d/init-test-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ccas -d ccas"]
+      interval: 5s
+      timeout: 5s
+      retries: 5

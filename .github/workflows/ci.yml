@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: ccas
+          POSTGRES_USER: ccas
+          POSTGRES_PASSWORD: ccas
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ccas -d ccas"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create test schema
+        run: psql -h localhost -U ccas -d ccas -c "CREATE SCHEMA IF NOT EXISTS test;"
+        env:
+          PGPASSWORD: ccas
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 25
+          cache: sbt
+
+      - name: Run tests
+        run: sbt test
+        env:
+          CCAS_CONTACT_EMAIL: ci@ccas.dev
