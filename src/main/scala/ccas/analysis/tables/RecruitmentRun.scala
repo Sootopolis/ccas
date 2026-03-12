@@ -51,17 +51,12 @@ object RecruitmentRun {
   def selectLatest(clubId: ClubId): ZIO[Transactor, SQLException, Option[RecruitmentRun]] =
     connectZIO {
       sql"SELECT $selectCols FROM recruitment_run WHERE club_id = $clubId ORDER BY started_at DESC"
-        .query[RecruitmentRun]
-        .run()
-        .headOption
+        .query[RecruitmentRun].run().headOption
     }
 
   def selectId(runId: Long): ZIO[Transactor, SQLException, Option[RecruitmentRun]] =
     connectZIO {
-      sql"SELECT $selectCols FROM recruitment_run WHERE run_id = $runId"
-        .query[RecruitmentRun]
-        .run()
-        .headOption
+      sql"SELECT $selectCols FROM recruitment_run WHERE run_id = $runId".query[RecruitmentRun].run().headOption
     }
 
   def deleteAll: ZIO[Transactor, SQLException, Int] =

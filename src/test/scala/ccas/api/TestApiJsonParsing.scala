@@ -1,15 +1,16 @@
 package ccas.api
 
+import java.net.URI
+
+import zio.http.URL
+import zio.json.{readJsonLinesAs, JsonDecoder}
+import zio.test.{assertCompletes, assertTrue, Spec, ZIOSpecDefault}
+
 import ccas.api.club.{ApiClub, ApiClubMatches, ApiClubMembers}
 import ccas.api.clubmatch.{ApiDailyMatch, ApiDailyMatchBoard}
 import ccas.api.misc.enums.{League, PlayerStatus}
 import ccas.api.misc.subtypes.{PlayerId, Username}
 import ccas.api.player.*
-import zio.http.URL
-import zio.json.{JsonDecoder, readJsonLinesAs}
-import zio.test.{Spec, ZIOSpecDefault, assertCompletes, assertTrue}
-
-import java.net.URI
 
 object TestApiJsonParsing extends ZIOSpecDefault {
   override def spec: Spec[Any, Throwable] = suite("API JSON parsing tests")(
@@ -25,7 +26,7 @@ object TestApiJsonParsing extends ZIOSpecDefault {
     generateTest[ApiDailyMatch]("matchFinished"),
     generateTest[ApiDailyMatch]("matchInProgress"),
     generateTest[ApiDailyMatch]("matchRegistered"),
-    generateTest[ApiDailyMatchBoard]("matchBoard"),
+    generateTest[ApiDailyMatchBoard]("matchBoard")
   )
 
   private def getFileName(label: String) = s"data/test/api/$label.json"

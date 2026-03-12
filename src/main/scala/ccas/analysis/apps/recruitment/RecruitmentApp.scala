@@ -47,11 +47,9 @@ object RecruitmentApp extends ZIOAppDefault {
       clubId = apiClub.clubId
       club   = Club(clubId, Instant.ofEpochSecond(apiClub.created), clubUrlName)
       _ <- Club.upsert(club)
-      config <- RecruitmentConfig
-        .select(clubId, configName)
+      config <- RecruitmentConfig.select(clubId, configName)
         .flatMap(
-          ZIO
-            .fromOption(_)
+          ZIO.fromOption(_)
             .orElseFail(
               IllegalArgumentException(s"No recruitment config '$configName' found for club '$clubUrlName'")
             )
@@ -126,36 +124,35 @@ object RecruitmentApp extends ZIOAppDefault {
     // 6. ApiPlayerMatches: team matches, team match timeout rate
 
     val toEvaluate = candidates.take(maxCandidates)
-    ZIO.foldLeft(toEvaluate)(List.empty[Username]) {
-      case (invited, username) =>
-        val now = Instant.now()
-        (for {
-          apiPlayer <- client.getWithPermit[ApiPlayer](ApiPlayer.getUrl(username))
-          playerId  = apiPlayer.playerId
-          statusCat = apiPlayer.status.category
+    ZIO.foldLeft(toEvaluate)(List.empty[Username]) { case (invited, username) =>
+      val now = Instant.now()
+      (for {
+        apiPlayer <- client.getWithPermit[ApiPlayer](ApiPlayer.getUrl(username))
+        playerId  = apiPlayer.playerId
+        statusCat = apiPlayer.status.category
 
-          // Persist player data (same as MembershipApp does for caching)
-          existingPlayer <- Player.selectId(playerId)
-          _ <- ZIO.when(existingPlayer.isEmpty) {
-            Player.insert(Player(playerId, Instant.ofEpochSecond(apiPlayer.joined), None))
-          }
-          _ <- PlayerSnapshot.insert(PlayerSnapshot(playerId, now, username, statusCat, apiPlayer.title))
-
-          // Placeholder: accept all candidates
-          outcome   = CandidateOutcome.Invited
-          candidate = RecruitmentCandidate(runId, username, now, outcome, None)
-          _ <- RecruitmentCandidate.insert(candidate)
-        } yield invited :+ username).catchAll { error =>
-          // On error fetching player data, record as Error outcome
-          val candidate = RecruitmentCandidate(
-            runId,
-            username,
-            now,
-            CandidateOutcome.Error,
-            Some(Option(error.getMessage).getOrElse(error.getClass.getSimpleName))
-          )
-          RecruitmentCandidate.insert(candidate).as(invited)
+        // Persist player data (same as MembershipApp does for caching)
+        existingPlayer <- Player.selectId(playerId)
+        _ <- ZIO.when(existingPlayer.isEmpty) {
+          Player.insert(Player(playerId, Instant.ofEpochSecond(apiPlayer.joined), None))
         }
+        _ <- PlayerSnapshot.insert(PlayerSnapshot(playerId, now, username, statusCat, apiPlayer.title))
+
+        // Placeholder: accept all candidates
+        outcome   = CandidateOutcome.Invited
+        candidate = RecruitmentCandidate(runId, username, now, outcome, None)
+        _ <- RecruitmentCandidate.insert(candidate)
+      } yield invited :+ username).catchAll { error =>
+        // On error fetching player data, record as Error outcome
+        val candidate = RecruitmentCandidate(
+          runId,
+          username,
+          now,
+          CandidateOutcome.Error,
+          Some(Option(error.getMessage).getOrElse(error.getClass.getSimpleName))
+        )
+        RecruitmentCandidate.insert(candidate).as(invited)
+      }
     }
   }
 
@@ -165,27 +162,19 @@ object RecruitmentApp extends ZIOAppDefault {
       : ZIO[Transactor, Throwable, Unit] =
     for {
       clubs <- Club.selectAll
-      club <- ZIO
-        .fromOption(clubs.find(_.urlName == clubUrlName))
+      club <- ZIO.fromOption(clubs.find(_.urlName == clubUrlName))
         .orElseFail(IllegalArgumentException(s"Club '$clubUrlName' not found in database"))
       clubId = club.clubId
-      run <- runIdOpt match
+      run <- runIdOpt match {
         case Some(id) =>
-          ZIO
-            .attempt(id.toLong)
-            .mapError(_ => IllegalArgumentException(s"Invalid run ID: '$id' (expected a number)"))
-            .flatMap(
-              RecruitmentRun.selectId(_)
-            )
-            .flatMap(
-              ZIO.fromOption(_).orElseFail(IllegalArgumentException(s"Run $id not found"))
-            )
+          ZIO.attempt(id.toLong)
+            .orElseFail(IllegalArgumentException(s"Invalid run ID: '$id' (expected a number)"))
+            .flatMap(RecruitmentRun.selectId)
+            .someOrFail(IllegalArgumentException(s"Run $id not found"))
         case None =>
-          RecruitmentRun
-            .selectLatest(clubId)
-            .flatMap(
-              ZIO.fromOption(_).orElseFail(IllegalArgumentException(s"No runs found for club '$clubUrlName'"))
-            )
+          RecruitmentRun.selectLatest(clubId)
+            .flatMap(ZIO.fromOption(_).orElseFail(IllegalArgumentException(s"No runs found for club '$clubUrlName'")))
+      }
       invited <- RecruitmentCandidate.selectInvitedByRun(run.runId)
       _       <- Console.printLine(s"=== Recruitment Report for $clubUrlName (run ${run.runId}) ===").orDie
       _       <- Console.printLine(s"Started: ${run.startedAt}").orDie

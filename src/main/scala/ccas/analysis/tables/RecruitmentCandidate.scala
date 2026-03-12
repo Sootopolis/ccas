@@ -39,33 +39,29 @@ object RecruitmentCandidate {
   def insert(item: RecruitmentCandidate): ZIO[Transactor, SQLException, Int] =
     connectZIO {
       sql"""INSERT INTO recruitment_candidate (run_id, username, evaluated_at, outcome, rejection_reason)
-            VALUES (${item.runId}, ${item.username}, ${item.evaluatedAt}, ${item.outcome.toString}, ${item.rejectionReason})""".update
-        .run()
+            VALUES (${item.runId}, ${item.username}, ${item.evaluatedAt}, ${item.outcome.toString}, ${item
+          .rejectionReason})""".update.run()
     }
 
   def insertBatch(items: Iterable[RecruitmentCandidate]): ZIO[Transactor, SQLException, BatchUpdateResult] =
     transactZIO {
       batchUpdate(items) { item =>
         sql"""INSERT INTO recruitment_candidate (run_id, username, evaluated_at, outcome, rejection_reason)
-              VALUES (${item.runId}, ${item.username}, ${item.evaluatedAt}, ${item.outcome.toString}, ${item.rejectionReason})""".update
+              VALUES (${item.runId}, ${item.username}, ${item.evaluatedAt}, ${item.outcome.toString}, ${item
+            .rejectionReason})""".update
       }
     }
 
   def selectByRun(runId: Long): ZIO[Transactor, SQLException, List[RecruitmentCandidate]] =
     connectZIO {
-      sql"SELECT $selectCols FROM recruitment_candidate WHERE run_id = $runId"
-        .query[RecruitmentCandidate]
-        .run()
-        .toList
+      sql"SELECT $selectCols FROM recruitment_candidate WHERE run_id = $runId".query[RecruitmentCandidate].run().toList
     }
 
   def selectInvitedByRun(runId: Long): ZIO[Transactor, SQLException, List[RecruitmentCandidate]] =
     connectZIO {
       val invited = CandidateOutcome.Invited.toString
       sql"SELECT $selectCols FROM recruitment_candidate WHERE run_id = $runId AND outcome = $invited"
-        .query[RecruitmentCandidate]
-        .run()
-        .toList
+        .query[RecruitmentCandidate].run().toList
     }
 
   def selectLatestInvited(username: Username): ZIO[Transactor, SQLException, Option[RecruitmentCandidate]] =
@@ -73,10 +69,7 @@ object RecruitmentCandidate {
       val invited = CandidateOutcome.Invited.toString
       sql"""SELECT $selectCols FROM recruitment_candidate
             WHERE username = $username AND outcome = $invited
-            ORDER BY evaluated_at DESC"""
-        .query[RecruitmentCandidate]
-        .run()
-        .headOption
+            ORDER BY evaluated_at DESC""".query[RecruitmentCandidate].run().headOption
     }
 
   def deleteAll: ZIO[Transactor, SQLException, Int] =

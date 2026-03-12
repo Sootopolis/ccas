@@ -1,12 +1,13 @@
 package ccas.analysis.tables
 
+import java.time.{Duration, Instant, LocalDateTime, ZoneOffset}
+
+import zio.test.{assertCompletes, assertTrue, Spec, TestAspect, ZIOSpecDefault}
+import zio.Chunk
+
 import ccas.api.misc.enums.PlayerStatusCategory.{Active, Closed}
 import ccas.api.misc.subtypes.{ClubId, ClubUrlName, PlayerId, Username}
 import ccas.utils.sql.DataSourceLayer
-import zio.Chunk
-import zio.test.{Spec, TestAspect, ZIOSpecDefault, assertCompletes, assertTrue}
-
-import java.time.{Duration, Instant, LocalDateTime, ZoneOffset}
 
 object TestClubSql extends ZIOSpecDefault {
   override def spec: Spec[Any, Throwable] = suite("TestClubSql")(
@@ -19,7 +20,7 @@ object TestClubSql extends ZIOSpecDefault {
     testMemberInsert,
     testMemberInsertBatch,
     testMemberSelect,
-    testMemberUpdate,
+    testMemberUpdate
   ).provideShared(
     DataSourceLayer.liveFromPrefix()
   ) @@ TestAspect.sequential
@@ -71,7 +72,7 @@ object TestClubSql extends ZIOSpecDefault {
 
   private def testClubUpsert = test("testClubUpsert") {
     for {
-      _ <- Club.upsert(clubA)
+      _      <- Club.upsert(clubA)
       result <- Club.selectId(clubA.clubId)
     } yield assertTrue(result.contains(clubA))
   }
@@ -79,7 +80,7 @@ object TestClubSql extends ZIOSpecDefault {
   private def testClubUpsertUpdate = test("testClubUpsertUpdate") {
     val updated = clubA.copy(urlName = ClubUrlName("club-a-renamed"))
     for {
-      _ <- Club.upsert(updated)
+      _      <- Club.upsert(updated)
       result <- Club.selectId(clubA.clubId)
     } yield assertTrue(
       result.contains(updated),
@@ -89,9 +90,9 @@ object TestClubSql extends ZIOSpecDefault {
 
   private def testClubUpsertBatch = test("testClubUpsertBatch") {
     for {
-      _ <- Club.upsertBatch(List(clubA, clubB))
-      a <- Club.selectId(clubA.clubId)
-      b <- Club.selectId(clubB.clubId)
+      _        <- Club.upsertBatch(List(clubA, clubB))
+      a        <- Club.selectId(clubA.clubId)
+      b        <- Club.selectId(clubB.clubId)
       notFound <- Club.selectId(ClubId(999))
     } yield assertTrue(
       a.contains(clubA),
@@ -110,16 +111,16 @@ object TestClubSql extends ZIOSpecDefault {
 
   private def testMemberInsert = test("testMemberInsert") {
     for {
-      _ <- Player.insertBatch(Chunk(player0, player1, player2))
-      _ <- PlayerSnapshot.insertBatch(Chunk(snap0, snap1, snap2))
-      _ <- ClubMember.insert(memA0)
+      _   <- Player.insertBatch(Chunk(player0, player1, player2))
+      _   <- PlayerSnapshot.insertBatch(Chunk(snap0, snap1, snap2))
+      _   <- ClubMember.insert(memA0)
       all <- ClubMember.selectAll
     } yield assertTrue(all == List(memA0))
   }
 
   private def testMemberInsertBatch = test("testMemberInsertBatch") {
     for {
-      _ <- ClubMember.insertBatch(List(memA1, memA2, memB0))
+      _   <- ClubMember.insertBatch(List(memA1, memA2, memB0))
       all <- ClubMember.selectAll
     } yield assertTrue(all.toSet == Set(memA0, memA1, memA2, memB0))
   }
@@ -138,7 +139,7 @@ object TestClubSql extends ZIOSpecDefault {
       clubA_cur.toSet == Set(memA0, memA1),
       clubA_act.toSet == Set(memA0, memA1),
       clubA_fmr == List(memA2),
-      clubB_all == List(memB0),
+      clubB_all == List(memB0)
     )
   }
 
@@ -146,13 +147,13 @@ object TestClubSql extends ZIOSpecDefault {
     val memA0Former = memA0.copy(until = Some(Timestamps.t3))
     val memB0Former = memB0.copy(until = Some(Timestamps.t3))
     for {
-      _ <- ClubMember.update(memA0Former)
-      _ <- ClubMember.updateBatch(List(memB0Former))
+      _         <- ClubMember.update(memA0Former)
+      _         <- ClubMember.updateBatch(List(memB0Former))
       clubA_cur <- ClubMember.selectClubCurrent(clubA.clubId)
       clubB_cur <- ClubMember.selectClubCurrent(clubB.clubId)
     } yield assertTrue(
       clubA_cur == List(memA1),
-      clubB_cur.isEmpty,
+      clubB_cur.isEmpty
     )
   }
 }

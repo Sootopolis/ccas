@@ -77,17 +77,12 @@ object RecruitmentConfig {
   def select(clubId: ClubId, configName: String): ZIO[Transactor, SQLException, Option[RecruitmentConfig]] =
     connectZIO {
       sql"SELECT $selectCols FROM recruitment_config WHERE club_id = $clubId AND config_name = $configName"
-        .query[RecruitmentConfig]
-        .run()
-        .headOption
+        .query[RecruitmentConfig].run().headOption
     }
 
   def selectClub(clubId: ClubId): ZIO[Transactor, SQLException, List[RecruitmentConfig]] =
     connectZIO {
-      sql"SELECT $selectCols FROM recruitment_config WHERE club_id = $clubId"
-        .query[RecruitmentConfig]
-        .run()
-        .toList
+      sql"SELECT $selectCols FROM recruitment_config WHERE club_id = $clubId".query[RecruitmentConfig].run().toList
     }
 
   def upsert(item: RecruitmentConfig): ZIO[Transactor, SQLException, Int] =

@@ -11,11 +11,11 @@ object TestChessComClient extends ZIOSpecDefault {
   private given JsonDecoder[Payload] = DeriveJsonDecoder.gen[Payload]
 
   private def makeClient(
-    handler: Request => ZIO[Any, Nothing, Response],
-    permits: Long = 5,
-    cooldown: Duration = 50.millis,
-    retryBase: Duration = 10.millis,
-  ): ZIO[Any, Nothing, (ChessComClient, Ref[Boolean])] =
+      handler: Request => ZIO[Any, Nothing, Response],
+      permits: Long = 5,
+      cooldown: Duration = 50.millis,
+      retryBase: Duration = 10.millis
+    ): ZIO[Any, Nothing, (ChessComClient, Ref[Boolean])] =
     for {
       semaphore <- Semaphore.make(permits)
       mutex     <- Semaphore.make(1)
@@ -23,21 +23,34 @@ object TestChessComClient extends ZIOSpecDefault {
     } yield {
       val driver = new ZClient.Driver[Any, Scope, Throwable] {
         override def request(
-          version: Version, method: Method, url: URL, headers: Headers, body: Body,
-          sslConfig: Option[ClientSSLConfig], proxy: Option[Proxy],
-        )(implicit trace: Trace): ZIO[Scope, Throwable, Response] =
+            version: Version,
+            method: Method,
+            url: URL,
+            headers: Headers,
+            body: Body,
+            sslConfig: Option[ClientSSLConfig],
+            proxy: Option[Proxy]
+          )(implicit trace: Trace
+          ): ZIO[Scope, Throwable, Response] =
           handler(Request(method = method, url = url, headers = headers, body = body))
 
         override def socket[Env1 <: Any](
-          version: Version, url: URL, headers: Headers, app: WebSocketApp[Env1],
-        )(implicit trace: Trace, ev: Scope =:= Scope): ZIO[Env1 & Scope, Throwable, Response] =
+            version: Version,
+            url: URL,
+            headers: Headers,
+            app: WebSocketApp[Env1]
+          )(implicit
+            trace: Trace,
+            ev: Scope =:= Scope
+          ): ZIO[Env1 & Scope, Throwable, Response] =
           ZIO.die(new UnsupportedOperationException)
       }
-      val client = ChessComClient(ZClient.fromDriver(driver), Headers.empty, semaphore, mutex, throttled, cooldown, retryBase)
+      val client =
+        ChessComClient(ZClient.fromDriver(driver), Headers.empty, semaphore, mutex, throttled, cooldown, retryBase)
       (client, throttled)
     }
 
-  private val testUrl = URL.decode("http://test.example.com/api").toOption.get
+  private val testUrl  = URL.decode("http://test.example.com/api").toOption.get
   private val jsonBody = """{"value":"ok"}"""
 
   override def spec: Spec[TestEnvironment, Any] = suite("TestChessComClient")(
@@ -47,10 +60,9 @@ object TestChessComClient extends ZIOSpecDefault {
         result      <- client.get[Payload](testUrl)
       } yield assertTrue(result.value == "ok")
     },
-
     test("429 triggers retry and succeeds on subsequent attempt") {
       for {
-        counter     <- Ref.make(0)
+        counter <- Ref.make(0)
         (client, _) <- makeClient { _ =>
           counter.getAndUpdate(_ + 1).map { n =>
             if n == 0 then Response(status = Status.TooManyRequests)
@@ -61,7 +73,6 @@ object TestChessComClient extends ZIOSpecDefault {
         count  <- counter.get
       } yield assertTrue(result.value == "ok", count == 2)
     },
-
     test("429 sets throttled ref to true") {
       for {
         (client, throttled) <- makeClient(_ => ZIO.succeed(Response(status = Status.TooManyRequests)))
@@ -69,10 +80,9 @@ object TestChessComClient extends ZIOSpecDefault {
         isThrottled         <- throttled.get
       } yield assertTrue(isThrottled)
     },
-
     test("cooldown resets throttle") {
       for {
-        counter             <- Ref.make(0)
+        counter <- Ref.make(0)
         (client, throttled) <- makeClient(
           handler = { _ =>
             counter.getAndUpdate(_ + 1).map { n =>
@@ -80,23 +90,21 @@ object TestChessComClient extends ZIOSpecDefault {
               else Response.json(jsonBody)
             }
           },
-          cooldown = 50.millis,
+          cooldown = 50.millis
         )
-        _              <- client.get[Payload](testUrl)
+        _               <- client.get[Payload](testUrl)
         throttledBefore <- throttled.get
         // Wait past cooldown
-        _ <- ZIO.sleep(60.millis)
+        _              <- ZIO.sleep(60.millis)
         throttledAfter <- throttled.get
       } yield assertTrue(throttledBefore, !throttledAfter)
     },
-
     test("exhausted retries surface RateLimitedException") {
       for {
         (client, _) <- makeClient(_ => ZIO.succeed(Response(status = Status.TooManyRequests)))
         exit        <- client.get[Payload](testUrl).exit
       } yield assertTrue(exit.isFailure)
     },
-
     test("sequential ordering when throttled") {
       for {
         order     <- Ref.make(Chunk.empty[Int])
@@ -106,24 +114,36 @@ object TestChessComClient extends ZIOSpecDefault {
         counter   <- Ref.make(0)
         driver = new ZClient.Driver[Any, Scope, Throwable] {
           override def request(
-            version: Version, method: Method, url: URL, headers: Headers, body: Body,
-            sslConfig: Option[ClientSSLConfig], proxy: Option[Proxy],
-          )(implicit trace: Trace): ZIO[Scope, Throwable, Response] =
+              version: Version,
+              method: Method,
+              url: URL,
+              headers: Headers,
+              body: Body,
+              sslConfig: Option[ClientSSLConfig],
+              proxy: Option[Proxy]
+            )(implicit trace: Trace
+            ): ZIO[Scope, Throwable, Response] =
             for {
               n <- counter.getAndUpdate(_ + 1)
               _ <- order.update(_ :+ n)
             } yield Response.json(jsonBody)
 
           override def socket[Env1 <: Any](
-            version: Version, url: URL, headers: Headers, app: WebSocketApp[Env1],
-          )(implicit trace: Trace, ev: Scope =:= Scope): ZIO[Env1 & Scope, Throwable, Response] =
+              version: Version,
+              url: URL,
+              headers: Headers,
+              app: WebSocketApp[Env1]
+            )(implicit
+              trace: Trace,
+              ev: Scope =:= Scope
+            ): ZIO[Env1 & Scope, Throwable, Response] =
             ZIO.die(new UnsupportedOperationException)
         }
         client = ChessComClient(ZClient.fromDriver(driver), Headers.empty, semaphore, mutex, throttled, 60.seconds)
-        urls = (1 to 3).map(i => URL.decode(s"http://test.example.com/api/$i").toOption.get)
-        _ <- client.getAll[Payload](urls)
+        urls   = (1 to 3).map(i => URL.decode(s"http://test.example.com/api/$i").toOption.get)
+        _        <- client.getAll[Payload](urls)
         recorded <- order.get
       } yield assertTrue(recorded == Chunk(0, 1, 2))
-    },
+    }
   ) @@ TestAspect.withLiveClock @@ TestAspect.timeout(5.seconds)
 }

@@ -7,31 +7,30 @@ ThisBuild / sbtVersion   := vSbt
 // modules
 libraryDependencies ++= Seq(
   // zio
-  "dev.zio"                      %% "zio"                   % vZio,
-  "dev.zio"                      %% "zio-test"              % vZio % Test,
-  "dev.zio"                      %% "zio-test-sbt"          % vZio % Test,
-  "dev.zio"                      %% "zio-test-magnolia"     % vZio % Test,
+  "dev.zio" %% "zio"               % vZio,
+  "dev.zio" %% "zio-test"          % vZio % Test,
+  "dev.zio" %% "zio-test-sbt"      % vZio % Test,
+  "dev.zio" %% "zio-test-magnolia" % vZio % Test,
 
   // zio-json
-  "dev.zio"                      %% "zio-json"              % vZioJson,
+  "dev.zio" %% "zio-json" % vZioJson,
 
   // zio-config
-  "dev.zio"                      %% "zio-config"            % vZioConfig,
-  "dev.zio"                      %% "zio-config-magnolia"   % vZioConfig,
-  "dev.zio"                      %% "zio-config-typesafe"   % vZioConfig,
+  "dev.zio" %% "zio-config"          % vZioConfig,
+  "dev.zio" %% "zio-config-magnolia" % vZioConfig,
+  "dev.zio" %% "zio-config-typesafe" % vZioConfig,
 
   // zio-http
-  "dev.zio"                      %% "zio-http"              % vZioHttp,
+  "dev.zio" %% "zio-http" % vZioHttp,
 
   // magnum
-  "com.augustnagro"              %% "magnum"                % vMagnum,
+  "com.augustnagro" %% "magnum" % vMagnum,
 
   // magnolia
-  "com.softwaremill.magnolia1_3" %% "magnolia"              % vMagnolia,
+  "com.softwaremill.magnolia1_3" %% "magnolia" % vMagnolia,
 
   // postgresql
-  "org.postgresql"               %  "postgresql"            % vPostgresql,
-
+  "org.postgresql" % "postgresql" % vPostgresql
 )
 
 scalacOptions ++= Seq(
@@ -40,7 +39,7 @@ scalacOptions ++= Seq(
   "-Wunused:all",
   "-Wshadow:all",
   "-Wvalue-discard",
-  "-Xmax-inlines:64",
+  "-Xmax-inlines:64"
 )
 
 Test / parallelExecution := false
@@ -48,7 +47,7 @@ Test / parallelExecution := false
 lazy val root = (project in file("."))
   .enablePlugins(BuildInfoPlugin)
   .settings(
-    name := "ccas",
-    buildInfoKeys := Seq(name, version, scalaVersion, sbtVersion),
+    name             := "ccas",
+    buildInfoKeys    := Seq(name, version, scalaVersion, sbtVersion),
     buildInfoPackage := "ccas.info"
   )
