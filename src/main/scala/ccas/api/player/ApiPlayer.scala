@@ -24,7 +24,7 @@ final case class ApiPlayer(
     followers: Int,           // the number of players tracking this player's activity
     isStreamer: Boolean,      // if the member is a Chess.com streamer
     verified: Boolean,
-    league: League,
+    league: Option[League],
     fide: Option[Elo] // FIDE rating
   ) derives PrettyPrinter {
   val profileUrl: URL  = ApiPlayer.getProfileUrl(username)

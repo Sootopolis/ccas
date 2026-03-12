@@ -31,8 +31,8 @@ object PlayerSnapshot {
               player_id BIGINT NOT NULL,
               since     TIMESTAMPTZ NOT NULL,
               username  VARCHAR NOT NULL,
-              status    VARCHAR NOT NULL CHECK (status IN ('Active', 'Closed', 'Fairplay', 'Abuse', 'Unknown')),
-              title     VARCHAR CHECK (title IN ('GM', 'IM', 'FM', 'CM', 'NM', 'WGM', 'WIM', 'WFM', 'WCM', 'WNM')),
+              status    VARCHAR NOT NULL,
+              title     VARCHAR,
               PRIMARY KEY (player_id, since),
               FOREIGN KEY (player_id) REFERENCES player (player_id) ON DELETE RESTRICT
             )""".update.run()

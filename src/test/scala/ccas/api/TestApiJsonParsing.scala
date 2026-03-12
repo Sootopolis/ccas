@@ -56,7 +56,7 @@ object TestApiJsonParsing extends ZIOSpecDefault {
     followers = 7930,
     isStreamer = false,
     verified = false,
-    league = League.Silver,
+    league = Some(League.Silver),
     fide = None
   )
 }
