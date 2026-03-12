@@ -31,9 +31,10 @@ object PlayerSnapshot {
               player_id BIGINT NOT NULL,
               since     TIMESTAMPTZ NOT NULL,
               username  VARCHAR NOT NULL,
-              status    VARCHAR NOT NULL,
-              title     VARCHAR,
-              PRIMARY KEY (player_id, since)
+              status    VARCHAR NOT NULL CHECK (status IN ('Active', 'Closed', 'Fairplay', 'Abuse', 'Unknown')),
+              title     VARCHAR CHECK (title IN ('GM', 'IM', 'FM', 'CM', 'NM', 'WGM', 'WIM', 'WFM', 'WCM', 'WNM')),
+              PRIMARY KEY (player_id, since),
+              FOREIGN KEY (player_id) REFERENCES player (player_id) ON DELETE RESTRICT
             )""".update.run()
       sql"""CREATE INDEX IF NOT EXISTS idx_player_snapshot_username
             ON player_snapshot (username)""".update.run()
@@ -69,18 +70,14 @@ object PlayerSnapshot {
 
   def selectIdLatest(playerId: PlayerId): ZIO[Transactor, SQLException, Option[PlayerSnapshot]] =
     connectZIO(
-      sql"SELECT $selectCols FROM player_snapshot WHERE player_id = $playerId ORDER BY since DESC"
-        .query[PlayerSnapshot]
-        .run()
-        .headOption
+      sql"SELECT $selectCols FROM player_snapshot WHERE player_id = $playerId ORDER BY since DESC".query[PlayerSnapshot]
+        .run().headOption
     )
 
   def selectNameLatest(username: Username): ZIO[Transactor, SQLException, Option[PlayerSnapshot]] =
     connectZIO(
-      sql"SELECT $selectCols FROM player_snapshot WHERE username = $username ORDER BY since DESC"
-        .query[PlayerSnapshot]
-        .run()
-        .headOption
+      sql"SELECT $selectCols FROM player_snapshot WHERE username = $username ORDER BY since DESC".query[PlayerSnapshot]
+        .run().headOption
     )
 
   def selectSince(since: Instant): ZIO[Transactor, SQLException, List[PlayerSnapshot]] =
@@ -112,16 +109,16 @@ object PlayerSnapshot {
 
   def update(item: PlayerSnapshot): ZIO[Transactor, SQLException, Int] =
     connectZIO {
-      sql"""UPDATE player_snapshot SET username = ${item.username}, status = ${item.status.toString}, title = ${item.title
-          .map(_.toString)}
+      sql"""UPDATE player_snapshot SET username = ${item.username}, status = ${item.status.toString}, title = ${item
+          .title.map(_.toString)}
             WHERE player_id = ${item.playerId} AND since = ${item.since}""".update.run()
     }
 
   def updateBatch(items: Iterable[PlayerSnapshot]): ZIO[Transactor, SQLException, BatchUpdateResult] =
     transactZIO {
       batchUpdate(items) { item =>
-        sql"""UPDATE player_snapshot SET username = ${item.username}, status = ${item.status.toString}, title = ${item.title
-            .map(_.toString)}
+        sql"""UPDATE player_snapshot SET username = ${item.username}, status = ${item.status.toString}, title = ${item
+            .title.map(_.toString)}
               WHERE player_id = ${item.playerId} AND since = ${item.since}""".update
       }
     }

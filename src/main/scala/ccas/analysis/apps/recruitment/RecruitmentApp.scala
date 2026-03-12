@@ -20,10 +20,8 @@ object RecruitmentApp extends ZIOAppDefault {
     for {
       args <- ZIOAppArgs.getArgs
       _ <- (args.toList match
-        case "report" :: clubStr :: rest =>
-          showReport(ClubUrlName.wrap(clubStr), rest.headOption)
-        case clubStr :: rest =>
-          recruit(ClubUrlName.wrap(clubStr), rest.headOption.getOrElse("default"))
+        case "report" :: clubStr :: rest => showReport(ClubUrlName.wrap(clubStr), rest.headOption)
+        case clubStr :: rest => recruit(ClubUrlName.wrap(clubStr), rest.headOption.getOrElse("default"))
         case _ =>
           ZIO.fail(
             ExternalException(
@@ -49,12 +47,7 @@ object RecruitmentApp extends ZIOAppDefault {
       club   = Club(clubId, Instant.ofEpochSecond(apiClub.created), clubUrlName)
       _ <- Club.upsert(club)
       config <- RecruitmentConfig.select(clubId, configName)
-        .flatMap(
-          ZIO.fromOption(_)
-            .orElseFail(
-              ExternalException(s"No recruitment config '$configName' found for club '$clubUrlName'")
-            )
-        )
+        .someOrFail(ExternalException(s"No recruitment config '$configName' found for club '$clubUrlName'"))
       now = Instant.now()
       runId <- RecruitmentRun.insert(clubId, configName, now)
 

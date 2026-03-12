@@ -29,9 +29,10 @@ object RecruitmentCandidate {
               run_id            BIGINT NOT NULL,
               username          VARCHAR NOT NULL,
               evaluated_at      TIMESTAMPTZ NOT NULL,
-              outcome           VARCHAR NOT NULL,
+              outcome           VARCHAR NOT NULL CHECK (outcome IN ('Invited', 'Rejected', 'AlreadyMember', 'Error')),
               rejection_reason  VARCHAR,
-              PRIMARY KEY (run_id, username)
+              PRIMARY KEY (run_id, username),
+              FOREIGN KEY (run_id) REFERENCES recruitment_run (run_id) ON DELETE RESTRICT
             )""".update.run()
       sql"""CREATE INDEX IF NOT EXISTS idx_rc_username ON recruitment_candidate (username)""".update.run()
     }

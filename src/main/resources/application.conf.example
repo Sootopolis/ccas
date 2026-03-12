@@ -1,4 +1,8 @@
 database = {
+  # JDBC URL — if set, takes priority over individual dataSource fields below.
+  # Format: jdbc:postgresql://host/db?user=x&password=x&sslmode=require
+  url = ${?DATABASE_URL}
+
   dataSourceClassName = org.postgresql.ds.PGSimpleDataSource
   dataSource = {
     user = ccas

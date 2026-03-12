@@ -19,9 +19,10 @@ final class ChessComClient(
 
   private def rawGet[T](url: URL)(using jsonDecoder: JsonDecoder[T]): Task[T] = for {
     response <- batchedClient.request(Request(method = GET, url = url).addHeaders(headers))
-    _ <- ZIO.when(response.status == Status.TooManyRequests)(
-      activateThrottle *> ZIO.fail(RateLimitedException(url))
-    )
+    _ <- ZIO
+      .when(response.status == Status.TooManyRequests)(
+        activateThrottle *> ZIO.fail(RateLimitedException(url))
+      )
     string <- response.body.asString
     value  <- ZIO.fromEither(jsonDecoder.decodeJson(string)).mapError(JsonDecodingException(_))
   } yield value
@@ -47,8 +48,7 @@ final class ChessComClient(
       ZIO
         .unless(wasThrottled) {
           (ZIO.sleep(cooldown) *> throttled.set(false)).fork.unit
-        }
-        .unit
+        }.unit
     }
 
   private val retrySchedule: Schedule[Any, Throwable, Any] =
@@ -67,15 +67,15 @@ object ChessComClient {
       cooldown: Duration = 30.seconds,
       headers: Headers = Headers.empty
     ): ZLayer[Client, Throwable, ChessComClient] =
-    ZLayer.fromZIO {
-      for {
-        contactEmail <- ZIO
-          .fromOption(Option(System.getenv("CCAS_CONTACT_EMAIL")))
-          .orElseFail(IllegalStateException("CCAS_CONTACT_EMAIL environment variable is required"))
-        client    <- ZIO.service[Client]
-        semaphore <- Semaphore.make(permits)
-        mutex     <- Semaphore.make(1)
-        throttled <- Ref.make(false)
-      } yield ChessComClient(client, userAgentHeaders(contactEmail) ++ headers, semaphore, mutex, throttled, cooldown)
-    }
+    ZLayer
+      .fromZIO {
+        for {
+          contactEmail <- ZIO.fromOption(Option(System.getenv("CCAS_CONTACT_EMAIL")))
+            .orElseFail(IllegalStateException("CCAS_CONTACT_EMAIL environment variable is required"))
+          client    <- ZIO.service[Client]
+          semaphore <- Semaphore.make(permits)
+          mutex     <- Semaphore.make(1)
+          throttled <- Ref.make(false)
+        } yield ChessComClient(client, userAgentHeaders(contactEmail) ++ headers, semaphore, mutex, throttled, cooldown)
+      }
 }

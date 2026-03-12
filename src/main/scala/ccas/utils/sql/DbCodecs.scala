@@ -18,7 +18,7 @@ object DbCodecs {
   }
 
   given DbCodec[URL] = DbCodec[String].biMap(
-    string => if string == null then null else URL.decode(string).fold(e => throw e, identity),
+    string => if string == null then null else URL.decode(string).fold(_ => { System.err.println(s"[WARN] Malformed URL in database: $string"); null }, identity),
     url => if url == null then null else url.encode
   )
 

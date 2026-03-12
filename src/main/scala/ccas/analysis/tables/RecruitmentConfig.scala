@@ -55,7 +55,7 @@ object RecruitmentConfig {
               max_candidates                 INT NOT NULL,
               source_clubs                   TEXT[] NOT NULL DEFAULT '{}',
               exclude_clubs                  TEXT[] NOT NULL DEFAULT '{}',
-              on_exhaustion                  VARCHAR NOT NULL DEFAULT 'Stop',
+              on_exhaustion                  VARCHAR NOT NULL DEFAULT 'Stop' CHECK (on_exhaustion IN ('Stop', 'Explore')),
               nationality_mode               VARCHAR,
               nationality_countries          TEXT[] NOT NULL DEFAULT '{}',
               max_clubs                      INT,
@@ -70,7 +70,8 @@ object RecruitmentConfig {
               daily_min_tm_games_finished    INT,
               min_days_since_registration    INT,
               days_since_last_invited        INT,
-              PRIMARY KEY (club_id, config_name)
+              PRIMARY KEY (club_id, config_name),
+              FOREIGN KEY (club_id) REFERENCES club (club_id) ON DELETE RESTRICT
             )""".update.run()
     }
 

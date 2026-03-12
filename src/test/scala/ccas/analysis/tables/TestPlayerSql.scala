@@ -5,7 +5,6 @@ import java.time.{Duration, Instant, LocalDateTime, ZoneOffset}
 import zio.test.{assertCompletes, assertTrue, Spec, TestAspect, ZIOSpecDefault}
 import zio.Chunk
 
-import ccas.api.misc.enums.{PlayerStatusCategory, Title}
 import ccas.api.misc.enums.PlayerStatusCategory.{Active, Fairplay}
 import ccas.api.misc.enums.Title.{CM, GM, IM}
 import ccas.api.misc.subtypes.{PlayerId, Username}
@@ -46,8 +45,8 @@ object TestPlayerSql extends ZIOSpecDefault {
 
   private def testDeleteAll = test("testDeleteAll") {
     for {
-      _ <- Player.deleteAll
       _ <- PlayerSnapshot.deleteAll
+      _ <- Player.deleteAll
     } yield assertCompletes
   }
 

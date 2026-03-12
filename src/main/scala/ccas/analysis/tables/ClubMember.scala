@@ -30,7 +30,9 @@ object ClubMember {
               player_id BIGINT NOT NULL,
               since     TIMESTAMPTZ NOT NULL,
               until     TIMESTAMPTZ,
-              PRIMARY KEY (club_id, player_id, since)
+              PRIMARY KEY (club_id, player_id, since),
+              FOREIGN KEY (club_id) REFERENCES club (club_id) ON DELETE RESTRICT,
+              FOREIGN KEY (player_id) REFERENCES player (player_id) ON DELETE RESTRICT
             )""".update.run()
       sql"""CREATE INDEX IF NOT EXISTS idx_club_member_player_id
             ON club_member (player_id)""".update.run()
@@ -53,17 +55,13 @@ object ClubMember {
             JOIN player_snapshot ps ON cm.player_id = ps.player_id
             JOIN (SELECT player_id, MAX(since) AS since FROM player_snapshot GROUP BY player_id) latest
             ON ps.player_id = latest.player_id AND ps.since = latest.since
-            WHERE cm.club_id = $clubId AND cm.until IS NULL AND ps.status = ${Active.toString}"""
-        .query[ClubMember]
-        .run()
-        .toList
+            WHERE cm.club_id = $clubId AND cm.until IS NULL AND ps.status = ${Active.toString}""".query[ClubMember]
+        .run().toList
     )
 
   def selectClubFormer(clubId: ClubId): ZIO[Transactor, SQLException, List[ClubMember]] =
     connectZIO(
-      sql"SELECT $selectCols FROM club_member WHERE club_id = $clubId AND until IS NOT NULL"
-        .query[ClubMember]
-        .run()
+      sql"SELECT $selectCols FROM club_member WHERE club_id = $clubId AND until IS NOT NULL".query[ClubMember].run()
         .toList
     )
 

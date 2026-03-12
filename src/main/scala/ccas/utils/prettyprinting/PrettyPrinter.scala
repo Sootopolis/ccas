@@ -72,14 +72,15 @@ object PrettyPrinter extends AutoDerivation[PrettyPrinter] {
         val fields = Class.forName(className).getDeclaredFields.map(field => field.getName -> field).toMap
         val items = Chunk.fromIterator(caseClass.params.iterator).flatMap { param =>
           val dereferenced = param.deref(value)
-          Option.unless(setting.ignoreDefault && param.default.contains(dereferenced)) {
-            val paramClassName     = fields(param.label).getType.getName
-            val paramPrettyPrinter = param.typeclass
-            val paramSetting       = paramPrettyPrinter.getSetting(setting)
-            val prettyValue        = paramPrettyPrinter.getPrettyString(dereferenced, paramSetting, paramClassName)
-            if (setting.namedArguments) { s"${param.label} = $prettyValue" }
-            else { prettyValue }
-          }
+          Option
+            .unless(setting.ignoreDefault && param.default.contains(dereferenced)) {
+              val paramClassName     = fields(param.label).getType.getName
+              val paramPrettyPrinter = param.typeclass
+              val paramSetting       = paramPrettyPrinter.getSetting(setting)
+              val prettyValue        = paramPrettyPrinter.getPrettyString(dereferenced, paramSetting, paramClassName)
+              if (setting.namedArguments) { s"${param.label} = $prettyValue" }
+              else { prettyValue }
+            }
         }
         makePrettyString(name, items, setting)
       }
