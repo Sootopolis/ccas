@@ -11,6 +11,7 @@ import ccas.api.club.{ApiClub, ApiClubMembers}
 import ccas.api.misc.subtypes.{ClubId, ClubUrlName, Username}
 import ccas.api.player.ApiPlayer
 import ccas.utils.client.ChessComClient
+import ccas.utils.errors.ExternalException
 import ccas.utils.sql.DataSourceLayer
 
 object RecruitmentApp extends ZIOAppDefault {
@@ -25,7 +26,7 @@ object RecruitmentApp extends ZIOAppDefault {
           recruit(ClubUrlName.wrap(clubStr), rest.headOption.getOrElse("default"))
         case _ =>
           ZIO.fail(
-            IllegalArgumentException(
+            ExternalException(
               "Usage: RecruitmentApp <club-url-name> [config-name]\n       RecruitmentApp report <club-url-name> [run-id]"
             )
           )
@@ -51,7 +52,7 @@ object RecruitmentApp extends ZIOAppDefault {
         .flatMap(
           ZIO.fromOption(_)
             .orElseFail(
-              IllegalArgumentException(s"No recruitment config '$configName' found for club '$clubUrlName'")
+              ExternalException(s"No recruitment config '$configName' found for club '$clubUrlName'")
             )
         )
       now = Instant.now()
@@ -163,17 +164,17 @@ object RecruitmentApp extends ZIOAppDefault {
     for {
       clubs <- Club.selectAll
       club <- ZIO.fromOption(clubs.find(_.urlName == clubUrlName))
-        .orElseFail(IllegalArgumentException(s"Club '$clubUrlName' not found in database"))
+        .orElseFail(ExternalException(s"Club '$clubUrlName' not found in database"))
       clubId = club.clubId
       run <- runIdOpt match {
         case Some(id) =>
           ZIO.attempt(id.toLong)
-            .orElseFail(IllegalArgumentException(s"Invalid run ID: '$id' (expected a number)"))
+            .orElseFail(ExternalException(s"Invalid run ID: '$id' (expected a number)"))
             .flatMap(RecruitmentRun.selectId)
-            .someOrFail(IllegalArgumentException(s"Run $id not found"))
+            .someOrFail(ExternalException(s"Run $id not found"))
         case None =>
           RecruitmentRun.selectLatest(clubId)
-            .flatMap(ZIO.fromOption(_).orElseFail(IllegalArgumentException(s"No runs found for club '$clubUrlName'")))
+            .flatMap(ZIO.fromOption(_).orElseFail(ExternalException(s"No runs found for club '$clubUrlName'")))
       }
       invited <- RecruitmentCandidate.selectInvitedByRun(run.runId)
       _       <- Console.printLine(s"=== Recruitment Report for $clubUrlName (run ${run.runId}) ===").orDie
