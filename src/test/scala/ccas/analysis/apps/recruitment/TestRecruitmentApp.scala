@@ -141,8 +141,6 @@ object TestRecruitmentApp extends ZIOSpecDefault {
 
   private def seedDb: ZIO[Transactor, Throwable, Unit] =
     for {
-      _ <- Player.createTable *> PlayerSnapshot.createTable *> Club.createTable *> ClubMember.createTable
-      _ <- RecruitmentConfig.createTable *> RecruitmentRun.createTable *> RecruitmentCandidate.createTable
       _ <- SqlZioTypes.connectZIO(sql"ALTER TABLE player ADD COLUMN IF NOT EXISTS board_url VARCHAR".update.run())
       // Clean up test data
       _ <- RecruitmentCandidate.deleteAll
@@ -196,7 +194,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
     suiteFullWorkflow,
     suiteReport
   ).provideShared(
-    DataSourceLayer.liveFromPrefix()
+    DataSourceLayer.liveFromPrefix(onInit = Tables.ensureTables)
   ) @@ TestAspect.sequential
 
   // ==========================================================================

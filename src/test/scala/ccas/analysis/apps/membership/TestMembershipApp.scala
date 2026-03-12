@@ -9,7 +9,7 @@ import zio.test.{assertTrue, Spec, TestAspect, TestResult, ZIOSpecDefault}
 
 import ccas.analysis.apps.membership.MembershipApp.{PhaseBResult, PhaseCResult}
 import ccas.analysis.apps.membership.MembershipChange.*
-import ccas.analysis.tables.{Club, ClubMember, Player, PlayerSnapshot}
+import ccas.analysis.tables.{Club, ClubMember, Player, PlayerSnapshot, Tables}
 import ccas.api.misc.enums.PlayerStatusCategory
 import ccas.api.misc.enums.PlayerStatusCategory.{Active, Closed}
 import ccas.api.misc.subtypes.{ClubId, ClubUrlName, PlayerId, Username}
@@ -119,7 +119,6 @@ object TestMembershipApp extends ZIOSpecDefault {
       members: List[ClubMember] = Nil
     ): ZIO[Transactor, Throwable, Unit] =
     for {
-      _ <- Player.createTable *> PlayerSnapshot.createTable *> Club.createTable *> ClubMember.createTable
       _ <- SqlZioTypes.connectZIO(sql"ALTER TABLE player ADD COLUMN IF NOT EXISTS board_url VARCHAR".update.run())
       _ <- SqlZioTypes.connectZIO(sql"DELETE FROM club_member WHERE club_id = $clubId".update.run())
       _ <- ZIO.foreachDiscard(testPlayerIds) { pid =>
@@ -141,7 +140,7 @@ object TestMembershipApp extends ZIOSpecDefault {
     suiteClassifyApiMembers,
     suiteClassifyDisappeared
   ).provideShared(
-    DataSourceLayer.liveFromPrefix()
+    DataSourceLayer.liveFromPrefix(onInit = Tables.ensureTables)
   ) @@ TestAspect.sequential
 
   // ==========================================================================

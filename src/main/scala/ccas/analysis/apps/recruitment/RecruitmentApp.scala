@@ -31,7 +31,7 @@ object RecruitmentApp extends ZIOAppDefault {
       ).provide(
         ChessComClient.live(),
         Client.default,
-        DataSourceLayer.liveFromPrefix()
+        DataSourceLayer.liveFromPrefix(onInit = Tables.ensureTables)
       )
     } yield ()
 
@@ -40,7 +40,6 @@ object RecruitmentApp extends ZIOAppDefault {
   private[recruitment] def recruit(clubUrlName: ClubUrlName, configName: String)
       : ZIO[ChessComClient & Transactor, Throwable, RecruitmentRun] =
     for {
-      _       <- ensureTables
       client  <- ZIO.service[ChessComClient]
       apiClub <- ApiClub.get(client, clubUrlName)
       clubId = apiClub.clubId
@@ -66,17 +65,6 @@ object RecruitmentApp extends ZIOAppDefault {
       _ <- Console.printLine(s"Invited: ${invited.size}").orDie
       _ <- ZIO.foreachDiscard(invited)(u => Console.printLine(s"  $u").orDie)
     } yield finalRun
-
-  private def ensureTables: ZIO[Transactor, Throwable, Unit] =
-    for {
-      _ <- Player.createTable
-      _ <- PlayerSnapshot.createTable
-      _ <- Club.createTable
-      _ <- ClubMember.createTable
-      _ <- RecruitmentConfig.createTable
-      _ <- RecruitmentRun.createTable
-      _ <- RecruitmentCandidate.createTable
-    } yield ()
 
   // --- Phase 2: Gather candidate usernames ---
 

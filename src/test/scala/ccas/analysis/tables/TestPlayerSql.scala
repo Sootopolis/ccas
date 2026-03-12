@@ -19,7 +19,7 @@ object TestPlayerSql extends ZIOSpecDefault {
     testSelect,
     testUpdate
   ).provideShared(
-    DataSourceLayer.liveFromPrefix()
+    DataSourceLayer.liveFromPrefix(onInit = Tables.ensureTables)
   ) @@ TestAspect.sequential
 
   private object Timestamps {
@@ -37,10 +37,7 @@ object TestPlayerSql extends ZIOSpecDefault {
   private val player1Snapshot2 = player1Snapshot1.copy(since = Timestamps.t2, title = Some(CM))
 
   private def testCreateTables = test("testCreateTables") {
-    for {
-      _ <- Player.createTable
-      _ <- PlayerSnapshot.createTable
-    } yield assertCompletes
+    assertCompletes
   }
 
   private def testDeleteAll = test("testDeleteAll") {

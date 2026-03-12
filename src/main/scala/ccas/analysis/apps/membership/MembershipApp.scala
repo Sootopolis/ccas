@@ -7,7 +7,7 @@ import zio.{Chunk, Console, Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
 import zio.http.Client
 
 import ccas.analysis.apps.membership.MembershipChange.*
-import ccas.analysis.tables.{Club, ClubMember, Player, PlayerSnapshot}
+import ccas.analysis.tables.{Club, ClubMember, Player, PlayerSnapshot, Tables}
 import ccas.api.club.{ApiClub, ApiClubMembers}
 import ccas.api.misc.enums.PlayerStatusCategory
 import ccas.api.misc.subtypes.{ClubId, ClubUrlName, PlayerId, Username}
@@ -23,20 +23,21 @@ object MembershipApp extends ZIOAppDefault {
       args <- ZIOAppArgs.getArgs
       clubName <- ZIO.fromOption(args.headOption).map(ClubUrlName.wrap)
         .orElseFail(ExternalException("Usage: MembershipApp <club-url-name> [since until]"))
-      _ <- (args.lift(1) match
-        case Some(sinceStr) =>
-          ZIO.attempt(Instant.parse(sinceStr)).mapError(_ => ExternalException(s"Invalid date format: $sinceStr"))
-            .flatMap { since =>
-              ZIO.attempt(args.lift(2).map(Instant.parse).getOrElse(Instant.now()))
-                .mapError(_ => ExternalException(s"Invalid date format: ${args.lift(2).get}"))
-                .flatMap(until => report(clubName, since, until))
-            }
-        case None =>
-          reconcile(clubName).flatMap(result => reportReconciliation(result))
-      ).provide(
+      _ <- (for {
+        _ <- args.lift(1) match
+          case Some(sinceStr) =>
+            ZIO.attempt(Instant.parse(sinceStr)).mapError(_ => ExternalException(s"Invalid date format: $sinceStr"))
+              .flatMap { since =>
+                ZIO.attempt(args.lift(2).map(Instant.parse).getOrElse(Instant.now()))
+                  .mapError(_ => ExternalException(s"Invalid date format: ${args.lift(2).get}"))
+                  .flatMap(until => report(clubName, since, until))
+              }
+          case None =>
+            reconcile(clubName).flatMap(result => reportReconciliation(result))
+      } yield ()).provide(
         ChessComClient.live(),
         Client.default,
-        DataSourceLayer.liveFromPrefix()
+        DataSourceLayer.liveFromPrefix(onInit = Tables.ensureTables)
       )
     } yield ()
 

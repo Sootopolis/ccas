@@ -22,7 +22,7 @@ object TestClubSql extends ZIOSpecDefault {
     testMemberSelect,
     testMemberUpdate
   ).provideShared(
-    DataSourceLayer.liveFromPrefix()
+    DataSourceLayer.liveFromPrefix(onInit = Tables.ensureTables)
   ) @@ TestAspect.sequential
 
   private object Timestamps {
@@ -54,12 +54,7 @@ object TestClubSql extends ZIOSpecDefault {
   // --- Club tests ---
 
   private def testCreateTables = test("testCreateTables") {
-    for {
-      _ <- Player.createTable
-      _ <- PlayerSnapshot.createTable
-      _ <- Club.createTable
-      _ <- ClubMember.createTable
-    } yield assertCompletes
+    assertCompletes
   }
 
   private def testDeleteAll = test("testDeleteAll") {
