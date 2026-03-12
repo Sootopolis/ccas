@@ -10,6 +10,7 @@ object Tables {
       _ <- PlayerSnapshot.createTable
       _ <- Club.createTable
       _ <- ClubMember.createTable
+      _ <- MembershipRun.createTable
       _ <- RecruitmentConfig.createTable
       _ <- RecruitmentRun.createTable
       _ <- RecruitmentCandidate.createTable

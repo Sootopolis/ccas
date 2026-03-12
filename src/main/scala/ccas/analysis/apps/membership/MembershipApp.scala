@@ -7,7 +7,7 @@ import zio.{Chunk, Console, Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
 import zio.http.Client
 
 import ccas.analysis.apps.membership.MembershipChange.*
-import ccas.analysis.tables.{Club, ClubMember, Player, PlayerSnapshot, Tables}
+import ccas.analysis.tables.{Club, ClubMember, MembershipRun, Player, PlayerSnapshot, Tables}
 import ccas.api.club.{ApiClub, ApiClubMembers}
 import ccas.api.misc.enums.PlayerStatusCategory
 import ccas.api.misc.subtypes.{ClubId, ClubUrlName, PlayerId, Username}
@@ -22,15 +22,19 @@ object MembershipApp extends ZIOAppDefault {
     for {
       args <- ZIOAppArgs.getArgs
       clubName <- ZIO.fromOption(args.headOption).map(ClubUrlName.wrap)
-        .orElseFail(ExternalException("Usage: MembershipApp <club-url-name> [since until]"))
+        .orElseFail(ExternalException("Usage: MembershipApp <club-url-name> [since [until]]"))
       _ <- (for {
         _ <- args.lift(1) match
           case Some(sinceStr) =>
             ZIO.attempt(Instant.parse(sinceStr)).mapError(_ => ExternalException(s"Invalid date format: $sinceStr"))
               .flatMap { since =>
-                ZIO.attempt(args.lift(2).map(Instant.parse).getOrElse(Instant.now()))
-                  .mapError(_ => ExternalException(s"Invalid date format: ${args.lift(2).get}"))
-                  .flatMap(until => report(clubName, since, until))
+                args.lift(2) match
+                  case Some(untilStr) =>
+                    ZIO.attempt(Instant.parse(untilStr))
+                      .mapError(_ => ExternalException(s"Invalid date format: $untilStr"))
+                      .flatMap(until => reconcileIfStale(clubName, until) *> report(clubName, since, until))
+                  case None =>
+                    reconcile(clubName) *> report(clubName, since, Instant.now())
               }
           case None =>
             reconcile(clubName).flatMap(result => reportReconciliation(result))
@@ -39,6 +43,17 @@ object MembershipApp extends ZIOAppDefault {
         Client.default,
         DataSourceLayer.liveFromPrefix(onInit = Tables.ensureTables)
       )
+    } yield ()
+
+  private def reconcileIfStale(clubUrlName: ClubUrlName, until: Instant): ZIO[ChessComClient & Transactor, Throwable, Unit] =
+    for {
+      clubs <- Club.selectAll
+      _ <- ZIO.fromOption(clubs.find(_.urlName == clubUrlName)).flatMap { club =>
+        MembershipRun.selectLatest(club.clubId).flatMap {
+          case Some(run) if !until.isAfter(run.ranAt) => ZIO.unit
+          case _ => reconcile(clubUrlName).unit
+        }
+      }.orElse(reconcile(clubUrlName).unit)
     } yield ()
 
   // --- Phase A: Gather data ---
@@ -58,6 +73,7 @@ object MembershipApp extends ZIOAppDefault {
       phaseC <- classifyDisappeared(client, dbState, phaseB.resolvedIds, now)
       result = mergeResults(phaseB, phaseC)
       _ <- persist(result)
+      _ <- MembershipRun.insert(clubId, now)
     } yield result
 
   private[membership] def buildDbState(clubId: ClubId): ZIO[Transactor, Throwable, DbState] =
