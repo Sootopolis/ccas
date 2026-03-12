@@ -1,9 +1,9 @@
 package ccas.api.misc.enums
 
+import scala.util.Try
+
 import ccas.utils.json.EnumJson
 import ccas.utils.sql.EnumSql
-
-import scala.util.Try
 
 enum Colour {
   case White
@@ -45,7 +45,7 @@ object GameResultDetail extends EnumJson[GameResultDetail] {
   private val lookup = GameResultDetail.values.map { member =>
     val apiString = member match {
       case FiftyMove => "50move"
-      case other => other.toString.toLowerCase
+      case other     => other.toString.toLowerCase
     }
     apiString -> member
   }.toMap
@@ -123,8 +123,8 @@ object PlayerStatus extends EnumJson[PlayerStatus] {
   private val lookup = values.map { member =>
     val apiString = member match {
       case Fairplay => "closed:fair_play_violations"
-      case Abuse => "closed:abuse"
-      case other => other.toString.toLowerCase
+      case Abuse    => "closed:abuse"
+      case other    => other.toString.toLowerCase
     }
     apiString -> member
   }.toMap

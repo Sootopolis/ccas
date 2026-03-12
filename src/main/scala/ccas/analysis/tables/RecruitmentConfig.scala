@@ -1,38 +1,39 @@
 package ccas.analysis.tables
 
-import ccas.analysis.apps.recruitment.ExhaustionBehavior
-import ccas.analysis.apps.recruitment.ExhaustionBehavior.given
-import ccas.api.misc.subtypes.{ClubId, ClubUrlName}
-import ccas.utils.sql.SqlZioTypes.connectZIO
-import ccas.utils.sql.DbCodecs.given
+import java.sql.SQLException
+
 import com.augustnagro.magnum.*
 import zio.ZIO
 
-import java.sql.SQLException
+import ccas.analysis.apps.recruitment.ExhaustionBehavior
+import ccas.analysis.apps.recruitment.ExhaustionBehavior.given
+import ccas.api.misc.subtypes.{ClubId, ClubUrlName}
+import ccas.utils.sql.DbCodecs.given
+import ccas.utils.sql.SqlZioTypes.connectZIO
 
 final case class RecruitmentConfig(
-  clubId                    : ClubId,
-  configName                : String,
-  maxCandidates             : Int,
-  sourceClubs               : List[String],
-  excludeClubs              : List[String],
-  onExhaustion              : ExhaustionBehavior,
-  nationalityMode           : Option[String],
-  nationalityCountries      : List[String],
-  maxClubs                  : Option[Int],
-  dailyMaxTimeoutPercent    : Option[Double],
-  dailyMaxTmTimeoutPercent  : Option[Double],
-  dailyMinOngoingGames      : Option[Int],
-  dailyMaxOngoingGames      : Option[Int],
-  dailyMinOngoingTeamMatches: Option[Int],
-  dailyMinElo               : Option[Int],
-  dailyMaxElo               : Option[Int],
-  dailyMinGamesFinished     : Option[Int],
-  dailyMinTmGamesFinished   : Option[Int],
-  minDaysSinceRegistration  : Option[Int],
-  daysSinceLastInvited      : Option[Int],
-) derives DbCodec {
-  def sourceClubNames: List[ClubUrlName] = sourceClubs.map(ClubUrlName.wrap)
+    clubId: ClubId,
+    configName: String,
+    maxCandidates: Int,
+    sourceClubs: List[String],
+    excludeClubs: List[String],
+    onExhaustion: ExhaustionBehavior,
+    nationalityMode: Option[String],
+    nationalityCountries: List[String],
+    maxClubs: Option[Int],
+    dailyMaxTimeoutPercent: Option[Double],
+    dailyMaxTmTimeoutPercent: Option[Double],
+    dailyMinOngoingGames: Option[Int],
+    dailyMaxOngoingGames: Option[Int],
+    dailyMinOngoingTeamMatches: Option[Int],
+    dailyMinElo: Option[Int],
+    dailyMaxElo: Option[Int],
+    dailyMinGamesFinished: Option[Int],
+    dailyMinTmGamesFinished: Option[Int],
+    minDaysSinceRegistration: Option[Int],
+    daysSinceLastInvited: Option[Int])
+    derives DbCodec {
+  def sourceClubNames: List[ClubUrlName]  = sourceClubs.map(ClubUrlName.wrap)
   def excludeClubNames: List[ClubUrlName] = excludeClubs.map(ClubUrlName.wrap)
 }
 
@@ -76,13 +77,17 @@ object RecruitmentConfig {
   def select(clubId: ClubId, configName: String): ZIO[Transactor, SQLException, Option[RecruitmentConfig]] =
     connectZIO {
       sql"SELECT $selectCols FROM recruitment_config WHERE club_id = $clubId AND config_name = $configName"
-        .query[RecruitmentConfig].run().headOption
+        .query[RecruitmentConfig]
+        .run()
+        .headOption
     }
 
   def selectClub(clubId: ClubId): ZIO[Transactor, SQLException, List[RecruitmentConfig]] =
     connectZIO {
       sql"SELECT $selectCols FROM recruitment_config WHERE club_id = $clubId"
-        .query[RecruitmentConfig].run().toList
+        .query[RecruitmentConfig]
+        .run()
+        .toList
     }
 
   def upsert(item: RecruitmentConfig): ZIO[Transactor, SQLException, Int] =

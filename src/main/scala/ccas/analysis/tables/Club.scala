@@ -1,20 +1,21 @@
 package ccas.analysis.tables
 
-import ccas.api.misc.subtypes.{ClubId, ClubUrlName}
-import ccas.utils.sql.SqlZioTypes.{connectZIO, transactZIO}
-import ccas.utils.sql.DbCodecs.given
-import com.augustnagro.magnum.*
-import zio.ZIO
-
 import java.sql.SQLException
 import java.time.Instant
 
+import com.augustnagro.magnum.*
+import zio.ZIO
+
+import ccas.api.misc.subtypes.{ClubId, ClubUrlName}
+import ccas.utils.sql.DbCodecs.given
+import ccas.utils.sql.SqlZioTypes.{connectZIO, transactZIO}
+
 @Table(PostgresDbType, SqlNameMapper.CamelToSnakeCase)
 final case class Club(
-  @Id clubId: ClubId,
-  created   : Instant,
-  urlName   : ClubUrlName,
-) derives DbCodec
+    @Id clubId: ClubId,
+    created: Instant,
+    urlName: ClubUrlName)
+    derives DbCodec
 
 object Club {
   private val repo = ImmutableRepo[Club, ClubId]

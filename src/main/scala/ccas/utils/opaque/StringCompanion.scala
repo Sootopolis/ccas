@@ -11,10 +11,10 @@ trait StringCompanion[S] {
 
   given jsonDecoder: JsonDecoder[S] = JsonDecoder.string.map(fromStringUnsafe)
   given jsonEncoder: JsonEncoder[S] = JsonEncoder.string.contramap(toStringUnsafe)
-  given dbCodec: DbCodec[S] = DbCodec[String].biMap(fromStringUnsafe, toStringUnsafe)
+  given dbCodec: DbCodec[S]         = DbCodec[String].biMap(fromStringUnsafe, toStringUnsafe)
 
   extension (opaque: S) {
-    inline def length: Int = toStringUnsafe(opaque).length
+    inline def length: Int    = toStringUnsafe(opaque).length
     inline def toLowerCase: S = fromStringUnsafe(toStringUnsafe(opaque).toLowerCase)
     inline def toUpperCase: S = fromStringUnsafe(toStringUnsafe(opaque).toUpperCase)
   }

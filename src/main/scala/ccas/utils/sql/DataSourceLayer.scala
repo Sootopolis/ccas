@@ -11,9 +11,9 @@ object DataSourceLayer {
   def liveFromPrefix(prefix: String = defaultPrefix): TaskLayer[Transactor] =
     ZLayer.fromZIO {
       ZIO.attempt {
-        val config = ConfigFactory.load().getConfig(prefix)
+        val config   = ConfigFactory.load().getConfig(prefix)
         val dsConfig = config.getConfig("dataSource")
-        val ds = new PGSimpleDataSource()
+        val ds       = new PGSimpleDataSource()
         ds.setUser(dsConfig.getString("user"))
         ds.setPassword(dsConfig.getString("password"))
         ds.setDatabaseName(dsConfig.getString("databaseName"))

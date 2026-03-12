@@ -1,19 +1,19 @@
 package ccas.api.club
 
+import zio.{Chunk, Task}
+import zio.http.URL
+import zio.json.{jsonMemberNames, DeriveJsonDecoder, JsonDecoder, SnakeCase}
+
 import ccas.api.club.ApiClubMembers.ApiClubMember
 import ccas.api.misc.subtypes.{ClubUrlName, Username}
 import ccas.utils.client.ChessComClient
 import ccas.utils.json.JsonDecoding
-import zio.{Chunk, Task}
-import zio.http.URL
-import zio.json.{DeriveJsonDecoder, JsonDecoder, SnakeCase, jsonMemberNames}
 
 @jsonMemberNames(SnakeCase)
 final case class ApiClubMembers(
-  weekly : Chunk[ApiClubMember],
-  monthly: Chunk[ApiClubMember],
-  allTime: Chunk[ApiClubMember]
-) {
+    weekly: Chunk[ApiClubMember],
+    monthly: Chunk[ApiClubMember],
+    allTime: Chunk[ApiClubMember]) {
   def toIterator: Iterator[ApiClubMember] = weekly.iterator ++ monthly.iterator ++ allTime.iterator
 
   def all: Chunk[ApiClubMember] = Chunk.fromIterator(toIterator)

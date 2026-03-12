@@ -1,24 +1,25 @@
 package ccas.analysis.tables
 
+import java.sql.SQLException
+import java.time.Instant
+
+import com.augustnagro.magnum.*
+import zio.ZIO
+
 import ccas.api.misc.enums.PlayerStatusCategory
 import ccas.api.misc.enums.PlayerStatusCategory.Active
 import ccas.api.misc.enums.Title
 import ccas.api.misc.subtypes.{PlayerId, Username}
-import ccas.utils.sql.SqlZioTypes.{connectZIO, transactZIO}
 import ccas.utils.sql.DbCodecs.given
-import com.augustnagro.magnum.*
-import zio.ZIO
-
-import java.sql.SQLException
-import java.time.Instant
+import ccas.utils.sql.SqlZioTypes.{connectZIO, transactZIO}
 
 final case class PlayerSnapshot(
-  playerId: PlayerId,
-  since   : Instant,
-  username: Username,
-  status  : PlayerStatusCategory,
-  title   : Option[Title]
-) derives DbCodec
+    playerId: PlayerId,
+    since: Instant,
+    username: Username,
+    status: PlayerStatusCategory,
+    title: Option[Title])
+    derives DbCodec
 
 object PlayerSnapshot {
   private val selectCols   = SqlLiteral("player_id, since, username, status, title")
@@ -57,16 +58,30 @@ object PlayerSnapshot {
     )
 
   def selectId(playerId: PlayerId): ZIO[Transactor, SQLException, List[PlayerSnapshot]] =
-    connectZIO(sql"SELECT $selectCols FROM player_snapshot WHERE player_id = $playerId".query[PlayerSnapshot].run().toList)
+    connectZIO(
+      sql"SELECT $selectCols FROM player_snapshot WHERE player_id = $playerId".query[PlayerSnapshot].run().toList
+    )
 
   def selectName(username: Username): ZIO[Transactor, SQLException, List[PlayerSnapshot]] =
-    connectZIO(sql"SELECT $selectCols FROM player_snapshot WHERE username = $username".query[PlayerSnapshot].run().toList)
+    connectZIO(
+      sql"SELECT $selectCols FROM player_snapshot WHERE username = $username".query[PlayerSnapshot].run().toList
+    )
 
   def selectIdLatest(playerId: PlayerId): ZIO[Transactor, SQLException, Option[PlayerSnapshot]] =
-    connectZIO(sql"SELECT $selectCols FROM player_snapshot WHERE player_id = $playerId ORDER BY since DESC".query[PlayerSnapshot].run().headOption)
+    connectZIO(
+      sql"SELECT $selectCols FROM player_snapshot WHERE player_id = $playerId ORDER BY since DESC"
+        .query[PlayerSnapshot]
+        .run()
+        .headOption
+    )
 
   def selectNameLatest(username: Username): ZIO[Transactor, SQLException, Option[PlayerSnapshot]] =
-    connectZIO(sql"SELECT $selectCols FROM player_snapshot WHERE username = $username ORDER BY since DESC".query[PlayerSnapshot].run().headOption)
+    connectZIO(
+      sql"SELECT $selectCols FROM player_snapshot WHERE username = $username ORDER BY since DESC"
+        .query[PlayerSnapshot]
+        .run()
+        .headOption
+    )
 
   def selectSince(since: Instant): ZIO[Transactor, SQLException, List[PlayerSnapshot]] =
     connectZIO(
@@ -80,27 +95,33 @@ object PlayerSnapshot {
   def insert(item: PlayerSnapshot): ZIO[Transactor, SQLException, Int] =
     connectZIO {
       sql"""INSERT INTO player_snapshot (player_id, since, username, status, title)
-            VALUES (${item.playerId}, ${item.since}, ${item.username}, ${item.status.toString}, ${item.title.map(_.toString)})""".update.run()
+            VALUES (${item.playerId}, ${item.since}, ${item.username}, ${item.status.toString}, ${item.title.map(
+          _.toString
+        )})""".update.run()
     }
 
   def insertBatch(items: Iterable[PlayerSnapshot]): ZIO[Transactor, SQLException, BatchUpdateResult] =
     transactZIO {
       batchUpdate(items) { item =>
         sql"""INSERT INTO player_snapshot (player_id, since, username, status, title)
-              VALUES (${item.playerId}, ${item.since}, ${item.username}, ${item.status.toString}, ${item.title.map(_.toString)})""".update
+              VALUES (${item.playerId}, ${item.since}, ${item.username}, ${item.status.toString}, ${item.title.map(
+            _.toString
+          )})""".update
       }
     }
 
   def update(item: PlayerSnapshot): ZIO[Transactor, SQLException, Int] =
     connectZIO {
-      sql"""UPDATE player_snapshot SET username = ${item.username}, status = ${item.status.toString}, title = ${item.title.map(_.toString)}
+      sql"""UPDATE player_snapshot SET username = ${item.username}, status = ${item.status.toString}, title = ${item.title
+          .map(_.toString)}
             WHERE player_id = ${item.playerId} AND since = ${item.since}""".update.run()
     }
 
   def updateBatch(items: Iterable[PlayerSnapshot]): ZIO[Transactor, SQLException, BatchUpdateResult] =
     transactZIO {
       batchUpdate(items) { item =>
-        sql"""UPDATE player_snapshot SET username = ${item.username}, status = ${item.status.toString}, title = ${item.title.map(_.toString)}
+        sql"""UPDATE player_snapshot SET username = ${item.username}, status = ${item.status.toString}, title = ${item.title
+            .map(_.toString)}
               WHERE player_id = ${item.playerId} AND since = ${item.since}""".update
       }
     }

@@ -1,21 +1,22 @@
 package ccas.analysis.tables
 
-import ccas.api.misc.enums.PlayerStatusCategory.Active
-import ccas.api.misc.subtypes.{ClubId, PlayerId}
-import ccas.utils.sql.SqlZioTypes.{connectZIO, transactZIO}
-import ccas.utils.sql.DbCodecs.given
-import com.augustnagro.magnum.*
-import zio.ZIO
-
 import java.sql.SQLException
 import java.time.Instant
 
+import com.augustnagro.magnum.*
+import zio.ZIO
+
+import ccas.api.misc.enums.PlayerStatusCategory.Active
+import ccas.api.misc.subtypes.{ClubId, PlayerId}
+import ccas.utils.sql.DbCodecs.given
+import ccas.utils.sql.SqlZioTypes.{connectZIO, transactZIO}
+
 final case class ClubMember(
-  clubId  : ClubId,
-  playerId: PlayerId,
-  since   : Instant,
-  until   : Option[Instant],
-) derives DbCodec {
+    clubId: ClubId,
+    playerId: PlayerId,
+    since: Instant,
+    until: Option[Instant])
+    derives DbCodec {
   def isCurrent: Boolean = until.isEmpty
 }
 
@@ -42,7 +43,9 @@ object ClubMember {
     connectZIO(sql"SELECT $selectCols FROM club_member WHERE club_id = $clubId".query[ClubMember].run().toList)
 
   def selectClubCurrent(clubId: ClubId): ZIO[Transactor, SQLException, List[ClubMember]] =
-    connectZIO(sql"SELECT $selectCols FROM club_member WHERE club_id = $clubId AND until IS NULL".query[ClubMember].run().toList)
+    connectZIO(
+      sql"SELECT $selectCols FROM club_member WHERE club_id = $clubId AND until IS NULL".query[ClubMember].run().toList
+    )
 
   def selectClubActive(clubId: ClubId): ZIO[Transactor, SQLException, List[ClubMember]] =
     connectZIO(
@@ -50,11 +53,19 @@ object ClubMember {
             JOIN player_snapshot ps ON cm.player_id = ps.player_id
             JOIN (SELECT player_id, MAX(since) AS since FROM player_snapshot GROUP BY player_id) latest
             ON ps.player_id = latest.player_id AND ps.since = latest.since
-            WHERE cm.club_id = $clubId AND cm.until IS NULL AND ps.status = ${Active.toString}""".query[ClubMember].run().toList
+            WHERE cm.club_id = $clubId AND cm.until IS NULL AND ps.status = ${Active.toString}"""
+        .query[ClubMember]
+        .run()
+        .toList
     )
 
   def selectClubFormer(clubId: ClubId): ZIO[Transactor, SQLException, List[ClubMember]] =
-    connectZIO(sql"SELECT $selectCols FROM club_member WHERE club_id = $clubId AND until IS NOT NULL".query[ClubMember].run().toList)
+    connectZIO(
+      sql"SELECT $selectCols FROM club_member WHERE club_id = $clubId AND until IS NOT NULL"
+        .query[ClubMember]
+        .run()
+        .toList
+    )
 
   def insert(item: ClubMember): ZIO[Transactor, SQLException, Int] =
     connectZIO {

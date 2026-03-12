@@ -1,22 +1,23 @@
 package ccas.analysis.tables
 
-import ccas.api.misc.subtypes.ClubId
-import ccas.utils.sql.SqlZioTypes.connectZIO
-import ccas.utils.sql.DbCodecs.given
-import com.augustnagro.magnum.*
-import zio.ZIO
-
 import java.sql.SQLException
 import java.time.Instant
 
+import com.augustnagro.magnum.*
+import zio.ZIO
+
+import ccas.api.misc.subtypes.ClubId
+import ccas.utils.sql.DbCodecs.given
+import ccas.utils.sql.SqlZioTypes.connectZIO
+
 final case class RecruitmentRun(
-  runId          : Long,
-  clubId         : ClubId,
-  configName     : String,
-  startedAt      : Instant,
-  completedAt    : Option[Instant],
-  candidatesFound: Int,
-) derives DbCodec
+    runId: Long,
+    clubId: ClubId,
+    configName: String,
+    startedAt: Instant,
+    completedAt: Option[Instant],
+    candidatesFound: Int)
+    derives DbCodec
 
 object RecruitmentRun {
   private val selectCols = SqlLiteral("run_id, club_id, config_name, started_at, completed_at, candidates_found")
@@ -50,13 +51,17 @@ object RecruitmentRun {
   def selectLatest(clubId: ClubId): ZIO[Transactor, SQLException, Option[RecruitmentRun]] =
     connectZIO {
       sql"SELECT $selectCols FROM recruitment_run WHERE club_id = $clubId ORDER BY started_at DESC"
-        .query[RecruitmentRun].run().headOption
+        .query[RecruitmentRun]
+        .run()
+        .headOption
     }
 
   def selectId(runId: Long): ZIO[Transactor, SQLException, Option[RecruitmentRun]] =
     connectZIO {
       sql"SELECT $selectCols FROM recruitment_run WHERE run_id = $runId"
-        .query[RecruitmentRun].run().headOption
+        .query[RecruitmentRun]
+        .run()
+        .headOption
     }
 
   def deleteAll: ZIO[Transactor, SQLException, Int] =

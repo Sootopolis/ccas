@@ -1,9 +1,9 @@
 package ccas.utils.json
 
+import scala.util.Try
+
 import zio.{IO, UIO, ZIO}
 import zio.json.{DecoderOps, EncoderOps, JsonCodec, PascalCase, SnakeCase}
-
-import scala.util.Try
 
 trait EnumJson[T <: scala.reflect.Enum] {
   protected def valueOf(string: String): T
@@ -25,12 +25,12 @@ trait EnumJson[T <: scala.reflect.Enum] {
     ZIO.fromEither(decode(string)).mapError(JsonDecodingException(_))
 
   extension (member: T) {
-    def encodeJson: String = member.toJson
+    def encodeJson: String       = member.toJson
     def encodeJsonPretty: String = member.toJsonPretty
   }
 
   extension (string: String) {
-    def decodeJson: Either[String, T] = string.fromJson[T]
+    def decodeJson: Either[String, T]               = string.fromJson[T]
     def decodeJsonZIO: IO[JsonDecodingException, T] = ZIO.fromEither(decodeJson).mapError(JsonDecodingException(_))
   }
 }

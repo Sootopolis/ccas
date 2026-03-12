@@ -1,10 +1,11 @@
 package ccas.api.player
 
+import zio.http.URL
+import zio.json.{jsonMemberNames, DeriveJsonDecoder, JsonDecoder, SnakeCase}
+import zio.Chunk
+
 import ccas.api.misc.subtypes.Username
 import ccas.utils.json.JsonDecoding
-import zio.Chunk
-import zio.http.URL
-import zio.json.{DeriveJsonDecoder, JsonDecoder, SnakeCase, jsonMemberNames}
 
 @jsonMemberNames(SnakeCase)
 final case class ApiPlayerArchives(archives: Chunk[URL])

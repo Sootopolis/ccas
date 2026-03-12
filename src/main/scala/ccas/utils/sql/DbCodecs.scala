@@ -1,10 +1,10 @@
 package ccas.utils.sql
 
-import com.augustnagro.magnum.DbCodec
-import zio.http.URL
-
 import java.sql.{PreparedStatement, ResultSet, Types}
 import java.time.Instant
+
+import com.augustnagro.magnum.DbCodec
+import zio.http.URL
 
 object DbCodecs {
   given DbCodec[Instant] = new DbCodec[Instant] {
@@ -19,7 +19,7 @@ object DbCodecs {
 
   given DbCodec[URL] = DbCodec[String].biMap(
     string => if string == null then null else URL.decode(string).fold(e => throw e, identity),
-    url => if url == null then null else url.encode,
+    url => if url == null then null else url.encode
   )
 
   given DbCodec[List[String]] = new DbCodec[List[String]] {

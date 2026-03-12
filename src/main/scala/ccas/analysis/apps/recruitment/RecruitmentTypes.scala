@@ -12,6 +12,6 @@ object ExhaustionBehavior extends EnumSql[ExhaustionBehavior]
 // For this scaffold, only Stop is implemented; Explore is deferred
 
 sealed trait RejectionReason { def message: String }
-object RejectionReason {
+object RejectionReason       {
   // Will be populated in follow-up: ExcludedNationality, TooManyClubs, EloOutOfRange, etc.
 }

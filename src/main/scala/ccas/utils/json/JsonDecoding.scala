@@ -1,11 +1,11 @@
 package ccas.utils.json
 
-import zio.http.URL
-import zio.json.{DecoderOps, JsonDecoder}
-import zio.{IO, ZIO}
-
 import java.time.Instant
 import scala.util.Try
+
+import zio.{IO, ZIO}
+import zio.http.URL
+import zio.json.{DecoderOps, JsonDecoder}
 
 trait JsonDecoding[T] {
   export JsonDecoding.given
@@ -20,7 +20,7 @@ trait JsonDecoding[T] {
     ZIO.fromEither(decode(string)).mapError(JsonDecodingException(_))
 
   extension (string: String) {
-    def decodeJson: Either[String, T] = string.fromJson[T]
+    def decodeJson: Either[String, T]               = string.fromJson[T]
     def decodeJsonZIO: IO[JsonDecodingException, T] = ZIO.fromEither(decodeJson).mapError(JsonDecodingException(_))
   }
 }

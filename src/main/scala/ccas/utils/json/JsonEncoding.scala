@@ -1,10 +1,10 @@
 package ccas.utils.json
 
+import java.time.Instant
+
+import zio.{UIO, ZIO}
 import zio.http.URL
 import zio.json.{EncoderOps, JsonEncoder}
-import zio.{UIO, ZIO}
-
-import java.time.Instant
 
 trait JsonEncoding[T] {
   protected val jsonEncoderDerived: JsonEncoder[T]
@@ -23,6 +23,6 @@ trait JsonEncoding[T] {
 }
 
 object JsonEncoding {
-  private val urlJsonEncoder: JsonEncoder[URL] = JsonEncoder.string.contramap(_.encode)
+  private val urlJsonEncoder: JsonEncoder[URL]         = JsonEncoder.string.contramap(_.encode)
   private val instantJsonEncoder: JsonEncoder[Instant] = JsonEncoder.long.contramap(_.getEpochSecond)
 }

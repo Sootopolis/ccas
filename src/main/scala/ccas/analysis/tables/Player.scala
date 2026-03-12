@@ -1,14 +1,15 @@
 package ccas.analysis.tables
 
-import ccas.api.misc.subtypes.PlayerId
-import ccas.utils.sql.SqlZioTypes.{connectZIO, transactZIO}
-import ccas.utils.sql.DbCodecs.given
-import com.augustnagro.magnum.*
-import zio.ZIO
-import zio.http.URL
-
 import java.sql.SQLException
 import java.time.Instant
+
+import com.augustnagro.magnum.*
+import zio.http.URL
+import zio.ZIO
+
+import ccas.api.misc.subtypes.PlayerId
+import ccas.utils.sql.DbCodecs.given
+import ccas.utils.sql.SqlZioTypes.{connectZIO, transactZIO}
 
 @Table(PostgresDbType, SqlNameMapper.CamelToSnakeCase)
 final case class Player(@Id playerId: PlayerId, joined: Instant, boardUrl: Option[URL]) derives DbCodec
