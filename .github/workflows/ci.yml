@@ -25,14 +25,14 @@ jobs:
           --health-retries 5
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Create test schema
         run: psql -h localhost -U ccas -d ccas -c "CREATE SCHEMA IF NOT EXISTS test;"
         env:
           PGPASSWORD: ccas
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 25
