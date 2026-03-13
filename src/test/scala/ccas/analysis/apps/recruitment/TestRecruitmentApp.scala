@@ -850,7 +850,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         cached <- PlayerRecruitmentCache.selectId(pid0)
       } yield assertTrue(
         cached.isDefined,
-        cached.get.clubCount == 0,
+        cached.get.clubCount.contains(0),
         cached.get.ongoingGames == 0,
         cached.get.dailyElo.contains(1200)
       )

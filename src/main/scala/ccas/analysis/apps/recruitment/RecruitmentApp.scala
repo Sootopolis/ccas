@@ -84,7 +84,7 @@ object RecruitmentApp extends ZIOAppDefault {
       existingUsernames = targetMembers.toMap.keySet
 
       // Fetch members from all source clubs
-      sourceMembers <- ZIO.foreach(config.sourceClubNames) { sourceClubName =>
+      sourceMembers <- ZIO.foreachPar(config.sourceClubNames) { sourceClubName =>
         ApiClubMembers.get(client, sourceClubName).map(_.toMap.keySet)
       }
 
@@ -121,14 +121,14 @@ object RecruitmentApp extends ZIOAppDefault {
       toEvaluate = candidates.take(config.maxCandidates)
       runCtx = RunContext(client, config, targetMatchIds, Instant.now())
       filters = buildFilterChain(config)
-      invited <- ZIO.foldLeft(toEvaluate)(List.empty[Username]) { case (invited, username) =>
+      revInvited <- ZIO.foldLeft(toEvaluate)(List.empty[Username]) { case (invited, username) =>
         val now = Instant.now()
-        val candidateCtx = CandidateContext(username)
+        val candidateCtx = CandidateContext.initial(username)
         val env = FilterEnv(runCtx.copy(now = now), candidateCtx)
         (for {
           (outcome, finalCandidate) <- runFilters(env, filters)
           _ <- persistCandidateResults(runId, now, finalCandidate, outcome)
-        } yield if (outcome == CandidateOutcome.Invited) invited :+ username else invited).catchAll { error =>
+        } yield if (outcome == CandidateOutcome.Invited) username :: invited else invited).catchAll { error =>
           persistCandidateResults(
             runId,
             now,
@@ -138,7 +138,7 @@ object RecruitmentApp extends ZIOAppDefault {
           ).as(invited)
         }
       }
-    } yield invited
+    } yield revInvited.reverse
 
   // --- Filter pipeline types ---
 
@@ -153,10 +153,15 @@ object RecruitmentApp extends ZIOAppDefault {
   /** Accumulated per-candidate state — populated as filters run. */
   private case class CandidateContext(
       username: Username,
-      apiPlayer: Option[ApiPlayer] = None,
-      isNewPlayer: Boolean = false,
-      cache: Option[PlayerRecruitmentCache] = None
+      apiPlayer: Option[ApiPlayer],
+      isNewPlayer: Boolean,
+      clubCount: Option[Int],
+      cache: Option[PlayerRecruitmentCache]
   )
+  private object CandidateContext {
+    def initial(username: Username): CandidateContext =
+      CandidateContext(username, apiPlayer = None, isNewPlayer = false, clubCount = None, cache = None)
+  }
 
   /** Groups contexts passed to each filter. */
   private case class FilterEnv(run: RunContext, candidate: CandidateContext)
@@ -271,11 +276,12 @@ object RecruitmentApp extends ZIOAppDefault {
         clubNames = playerClubs.clubs.map(_.clubName).toSet
         config = env.run.config
 
+        updatedCtx = env.candidate.copy(clubCount = Some(clubCount))
         outcome =
           if (config.maxClubs.exists(clubCount > _)) Some(CandidateOutcome.Rejected)
           else if (config.excludeClubNames.exists(clubNames.contains)) Some(CandidateOutcome.Rejected)
           else None
-      } yield FilterResult(outcome, env.candidate)
+      } yield FilterResult(outcome, updatedCtx)
   }
 
   private object FetchDailyStatsAndCheck extends RecruitmentFilter {
@@ -302,7 +308,7 @@ object RecruitmentApp extends ZIOAppDefault {
           dailyElo = Some(dailyElo),
           dailyTimeoutPct = Some(dailyTimeoutPct),
           dailyGamesFinished = Some(dailyGamesFinished),
-          clubCount = 0, // will be filled by clubs filter data, but thresholds use the one from the filter
+          clubCount = env.candidate.clubCount,
           ongoingGames = ongoingGames,
           ongoingTeamMatches = ongoingTeamMatches,
           tmGamesFinished90d = 0,
@@ -341,7 +347,7 @@ object RecruitmentApp extends ZIOAppDefault {
       cache: PlayerRecruitmentCache,
       config: RecruitmentConfig
     ): CandidateOutcome =
-    if (config.maxClubs.exists(cache.clubCount > _)) CandidateOutcome.Rejected
+    if (config.maxClubs.exists(max => cache.clubCount.exists(_ > max))) CandidateOutcome.Rejected
     else if (config.dailyMinElo.exists(min => cache.dailyElo.exists(_ < min))) CandidateOutcome.Rejected
     else if (config.dailyMaxElo.exists(max => cache.dailyElo.exists(_ > max))) CandidateOutcome.Rejected
     else if (config.dailyMaxTimeoutPercent.exists(max => cache.dailyTimeoutPct.exists(_ > max))) CandidateOutcome.Rejected
@@ -374,25 +380,7 @@ object RecruitmentApp extends ZIOAppDefault {
             VALUES (${ap.playerId}, $now, ${candidate.username}, ${statusCat.toString}, ${ap.title.map(_.toString)})""".update.run()
     }
     // 3. Upsert PlayerRecruitmentCache (if fresh data was gathered)
-    candidate.cache.foreach { c =>
-      sql"""INSERT INTO player_recruitment_cache (
-              player_id, fetched_at, daily_elo, daily_timeout_pct, daily_games_finished,
-              club_count, ongoing_games, ongoing_team_matches, tm_games_finished_90d, tm_timeout_pct_90d
-            ) VALUES (
-              ${c.playerId}, ${c.fetchedAt}, ${c.dailyElo}, ${c.dailyTimeoutPct}, ${c.dailyGamesFinished},
-              ${c.clubCount}, ${c.ongoingGames}, ${c.ongoingTeamMatches},
-              ${c.tmGamesFinished90d}, ${c.tmTimeoutPct90d}
-            ) ON CONFLICT (player_id) DO UPDATE SET
-              fetched_at = EXCLUDED.fetched_at,
-              daily_elo = EXCLUDED.daily_elo,
-              daily_timeout_pct = EXCLUDED.daily_timeout_pct,
-              daily_games_finished = EXCLUDED.daily_games_finished,
-              club_count = EXCLUDED.club_count,
-              ongoing_games = EXCLUDED.ongoing_games,
-              ongoing_team_matches = EXCLUDED.ongoing_team_matches,
-              tm_games_finished_90d = EXCLUDED.tm_games_finished_90d,
-              tm_timeout_pct_90d = EXCLUDED.tm_timeout_pct_90d""".update.run()
-    }
+    candidate.cache.foreach(PlayerRecruitmentCache.upsertRaw)
     // 4. Insert RecruitmentCandidate
     val outcomeStr = outcome.toString
     val reason = errorMessage

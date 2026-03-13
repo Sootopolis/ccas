@@ -16,7 +16,7 @@ final case class PlayerRecruitmentCache(
     dailyElo: Option[Int],
     dailyTimeoutPct: Option[Double],
     dailyGamesFinished: Option[Int],
-    clubCount: Int,
+    clubCount: Option[Int],
     ongoingGames: Int,
     ongoingTeamMatches: Int,
     tmGamesFinished90d: Int,
@@ -37,7 +37,7 @@ object PlayerRecruitmentCache {
               daily_elo              INT,
               daily_timeout_pct      DOUBLE PRECISION,
               daily_games_finished   INT,
-              club_count             INT NOT NULL,
+              club_count             INT,
               ongoing_games          INT NOT NULL,
               ongoing_team_matches   INT NOT NULL,
               tm_games_finished_90d  INT NOT NULL,
@@ -51,25 +51,31 @@ object PlayerRecruitmentCache {
         .query[PlayerRecruitmentCache].run().headOption
     }
 
+  def upsertRaw(item: PlayerRecruitmentCache)(using DbCon): Unit = {
+    sql"""INSERT INTO player_recruitment_cache (
+            player_id, fetched_at, daily_elo, daily_timeout_pct, daily_games_finished,
+            club_count, ongoing_games, ongoing_team_matches, tm_games_finished_90d, tm_timeout_pct_90d
+          ) VALUES (
+            ${item.playerId}, ${item.fetchedAt}, ${item.dailyElo}, ${item.dailyTimeoutPct}, ${item.dailyGamesFinished},
+            ${item.clubCount}, ${item.ongoingGames}, ${item.ongoingTeamMatches},
+            ${item.tmGamesFinished90d}, ${item.tmTimeoutPct90d}
+          ) ON CONFLICT (player_id) DO UPDATE SET
+            fetched_at = EXCLUDED.fetched_at,
+            daily_elo = EXCLUDED.daily_elo,
+            daily_timeout_pct = EXCLUDED.daily_timeout_pct,
+            daily_games_finished = EXCLUDED.daily_games_finished,
+            club_count = EXCLUDED.club_count,
+            ongoing_games = EXCLUDED.ongoing_games,
+            ongoing_team_matches = EXCLUDED.ongoing_team_matches,
+            tm_games_finished_90d = EXCLUDED.tm_games_finished_90d,
+            tm_timeout_pct_90d = EXCLUDED.tm_timeout_pct_90d""".update.run()
+    ()
+  }
+
   def upsert(item: PlayerRecruitmentCache): ZIO[Transactor, SQLException, Int] =
     connectZIO {
-      sql"""INSERT INTO player_recruitment_cache (
-              player_id, fetched_at, daily_elo, daily_timeout_pct, daily_games_finished,
-              club_count, ongoing_games, ongoing_team_matches, tm_games_finished_90d, tm_timeout_pct_90d
-            ) VALUES (
-              ${item.playerId}, ${item.fetchedAt}, ${item.dailyElo}, ${item.dailyTimeoutPct}, ${item.dailyGamesFinished},
-              ${item.clubCount}, ${item.ongoingGames}, ${item.ongoingTeamMatches},
-              ${item.tmGamesFinished90d}, ${item.tmTimeoutPct90d}
-            ) ON CONFLICT (player_id) DO UPDATE SET
-              fetched_at = EXCLUDED.fetched_at,
-              daily_elo = EXCLUDED.daily_elo,
-              daily_timeout_pct = EXCLUDED.daily_timeout_pct,
-              daily_games_finished = EXCLUDED.daily_games_finished,
-              club_count = EXCLUDED.club_count,
-              ongoing_games = EXCLUDED.ongoing_games,
-              ongoing_team_matches = EXCLUDED.ongoing_team_matches,
-              tm_games_finished_90d = EXCLUDED.tm_games_finished_90d,
-              tm_timeout_pct_90d = EXCLUDED.tm_timeout_pct_90d""".update.run()
+      upsertRaw(item)
+      1
     }
 
   def deleteAll: ZIO[Transactor, SQLException, Int] =
