@@ -72,12 +72,6 @@ object PlayerRecruitmentCache {
     ()
   }
 
-  def upsert(item: PlayerRecruitmentCache): ZIO[Transactor, SQLException, Int] =
-    connectZIO {
-      upsertRaw(item)
-      1
-    }
-
   def deleteAll: ZIO[Transactor, SQLException, Int] =
     connectZIO {
       sql"DELETE FROM player_recruitment_cache".update.run()
