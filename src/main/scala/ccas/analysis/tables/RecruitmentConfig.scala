@@ -14,7 +14,6 @@ import ccas.utils.sql.SqlZioTypes.connectZIO
 final case class RecruitmentConfig(
     clubId: ClubId,
     configName: String,
-    maxCandidates: Int,
     sourceClubs: List[String],
     excludeClubs: List[String],
     onExhaustion: ExhaustionBehavior,
@@ -40,7 +39,7 @@ final case class RecruitmentConfig(
 
 object RecruitmentConfig {
   private val selectCols = SqlLiteral(
-    """club_id, config_name, max_candidates, source_clubs, exclude_clubs, on_exhaustion,
+    """club_id, config_name, source_clubs, exclude_clubs, on_exhaustion,
        nationality_mode, nationality_countries, max_clubs,
        daily_max_timeout_percent, daily_max_tm_timeout_percent,
        daily_min_ongoing_games, daily_max_ongoing_games, daily_min_ongoing_team_matches,
@@ -53,7 +52,6 @@ object RecruitmentConfig {
       sql"""CREATE TABLE IF NOT EXISTS recruitment_config (
               club_id                        BIGINT NOT NULL,
               config_name                    VARCHAR NOT NULL,
-              max_candidates                 INT NOT NULL,
               source_clubs                   TEXT[] NOT NULL,
               exclude_clubs                  TEXT[] NOT NULL,
               on_exhaustion                  VARCHAR NOT NULL CHECK (on_exhaustion IN ('Stop', 'Explore')),
@@ -91,14 +89,14 @@ object RecruitmentConfig {
   def upsert(item: RecruitmentConfig): ZIO[Transactor, SQLException, Int] =
     connectZIO {
       sql"""INSERT INTO recruitment_config (
-              club_id, config_name, max_candidates, source_clubs, exclude_clubs, on_exhaustion,
+              club_id, config_name, source_clubs, exclude_clubs, on_exhaustion,
               nationality_mode, nationality_countries, max_clubs,
               daily_max_timeout_percent, daily_max_tm_timeout_percent,
               daily_min_ongoing_games, daily_max_ongoing_games, daily_min_ongoing_team_matches,
               daily_min_elo, daily_max_elo, daily_min_games_finished, daily_min_tm_games_finished,
               min_days_since_registration, days_since_last_invited, exclude_source_admins
             ) VALUES (
-              ${item.clubId}, ${item.configName}, ${item.maxCandidates},
+              ${item.clubId}, ${item.configName},
               ${item.sourceClubs}, ${item.excludeClubs}, ${item.onExhaustion.toString},
               ${item.nationalityMode}, ${item.nationalityCountries}, ${item.maxClubs},
               ${item.dailyMaxTimeoutPercent}, ${item.dailyMaxTmTimeoutPercent},
@@ -106,7 +104,6 @@ object RecruitmentConfig {
               ${item.dailyMinElo}, ${item.dailyMaxElo}, ${item.dailyMinGamesFinished}, ${item.dailyMinTmGamesFinished},
               ${item.minDaysSinceRegistration}, ${item.daysSinceLastInvited}, ${item.excludeSourceAdmins}
             ) ON CONFLICT (club_id, config_name) DO UPDATE SET
-              max_candidates = EXCLUDED.max_candidates,
               source_clubs = EXCLUDED.source_clubs,
               exclude_clubs = EXCLUDED.exclude_clubs,
               on_exhaustion = EXCLUDED.on_exhaustion,

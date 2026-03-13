@@ -41,7 +41,7 @@ object RecruitmentApp extends ZIOAppDefault {
 
   // --- Phase 1: Initialize ---
 
-  private[recruitment] def recruit(clubUrlName: ClubUrlName, configName: String)
+  private[recruitment] def recruit(clubUrlName: ClubUrlName, configName: String, maxCandidates: Int = 30)
       : ZIO[ChessComClient & Transactor, Throwable, RecruitmentRun] =
     for {
       client  <- ZIO.service[ChessComClient]
@@ -58,7 +58,7 @@ object RecruitmentApp extends ZIOAppDefault {
       candidates <- gatherCandidates(client, clubId, clubUrlName, config)
 
       // --- Phase 3: Evaluate candidates ---
-      invited <- evaluateCandidates(client, runId, clubUrlName, candidates, config)
+      invited <- evaluateCandidates(client, runId, clubUrlName, candidates, config, maxCandidates)
 
       // --- Phase 4: Finalize ---
       completedAt = Instant.now()
@@ -111,31 +111,34 @@ object RecruitmentApp extends ZIOAppDefault {
       runId: Long,
       clubUrlName: ClubUrlName,
       candidates: List[Username],
-      config: RecruitmentConfig
+      config: RecruitmentConfig,
+      maxCandidates: Int = 30
     ): ZIO[Transactor, Throwable, List[Username]] =
     for {
       // Pre-fetch target club's registered match IDs (for opponent check)
       clubMatches <- client.get[ApiClubMatches](ApiClubMatches.getUrl(clubUrlName))
       targetMatchIds = (clubMatches.registered.map(_.`@id`) ++ clubMatches.inProgress.map(_.`@id`)).toSet
 
-      toEvaluate = candidates.take(config.maxCandidates)
       runCtx = RunContext(client, config, targetMatchIds, Instant.now())
       filters = buildFilterChain(config)
-      revInvited <- ZIO.foldLeft(toEvaluate)(List.empty[Username]) { case (invited, username) =>
-        val now = Instant.now()
-        val candidateCtx = CandidateContext.initial(username)
-        val env = FilterEnv(runCtx.copy(now = now), candidateCtx)
-        (for {
-          (outcome, finalCandidate) <- runFilters(env, filters)
-          _ <- persistCandidateResults(runId, now, finalCandidate, outcome)
-        } yield if (outcome == CandidateOutcome.Invited) username :: invited else invited).catchAll { error =>
-          persistCandidateResults(
-            runId,
-            now,
-            candidateCtx,
-            CandidateOutcome.Error,
-            Some(Option(error.getMessage).getOrElse(error.getClass.getSimpleName))
-          ).as(invited)
+      revInvited <- ZIO.foldLeft(candidates)(List.empty[Username]) { case (invited, username) =>
+        if (invited.size >= maxCandidates) ZIO.succeed(invited)
+        else {
+          val now = Instant.now()
+          val candidateCtx = CandidateContext.initial(username)
+          val env = FilterEnv(runCtx.copy(now = now), candidateCtx)
+          (for {
+            (outcome, finalCandidate) <- runFilters(env, filters)
+            _ <- persistCandidateResults(runId, now, finalCandidate, outcome)
+          } yield if (outcome == CandidateOutcome.Invited) username :: invited else invited).catchAll { error =>
+            persistCandidateResults(
+              runId,
+              now,
+              candidateCtx,
+              CandidateOutcome.Error,
+              Some(Option(error.getMessage).getOrElse(error.getClass.getSimpleName))
+            ).as(invited)
+          }
         }
       }
     } yield revInvited.reverse

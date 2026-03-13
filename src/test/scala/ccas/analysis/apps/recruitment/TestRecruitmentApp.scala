@@ -253,7 +253,6 @@ object TestRecruitmentApp extends ZIOSpecDefault {
     } yield ()
 
   private def makeConfig(
-      maxCandidates: Int = 10,
       sourceClubs: List[String] = List("source-club"),
       excludeClubs: List[String] = Nil,
       onExhaustion: ExhaustionBehavior = ExhaustionBehavior.Stop
@@ -261,7 +260,6 @@ object TestRecruitmentApp extends ZIOSpecDefault {
     RecruitmentConfig(
       clubId = clubId,
       configName = "default",
-      maxCandidates = maxCandidates,
       sourceClubs = sourceClubs,
       excludeClubs = excludeClubs,
       onExhaustion = onExhaustion,
@@ -337,7 +335,6 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         loaded <- RecruitmentConfig.select(clubId, "default")
       } yield assertTrue(
         loaded.isDefined,
-        loaded.get.maxCandidates == 10,
         loaded.get.sourceClubs == List("club-a", "club-b"),
         loaded.get.excludeClubs == List("club-x"),
         loaded.get.onExhaustion == ExhaustionBehavior.Stop
@@ -354,14 +351,14 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       } yield assertTrue(all.size == 2)
     },
     test("RecruitmentConfig upsert updates existing") {
-      val config  = makeConfig(maxCandidates = 5)
-      val updated = config.copy(maxCandidates = 20)
+      val config  = makeConfig()
+      val updated = config.copy(dailyMinElo = Some(1500))
       for {
         _      <- seedDb
         _      <- RecruitmentConfig.upsert(config)
         _      <- RecruitmentConfig.upsert(updated)
         loaded <- RecruitmentConfig.select(clubId, "default")
-      } yield assertTrue(loaded.get.maxCandidates == 20)
+      } yield assertTrue(loaded.get.dailyMinElo.contains(1500))
     },
     test("RecruitmentConfig TEXT[] array round-trip") {
       val config = makeConfig(
@@ -595,7 +592,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         "player/bob"     -> apiPlayerJson(201, "bob"),
         "player/charlie" -> apiPlayerJson(202, "charlie")
       )
-      val config = makeConfig(maxCandidates = 2)
+      val config = makeConfig()
 
       for {
         _      <- seedDb
@@ -607,7 +604,8 @@ object TestRecruitmentApp extends ZIOSpecDefault {
           runId,
           clubUrlName,
           List(Username("alice"), Username("bob"), Username("charlie")),
-          config
+          config,
+          maxCandidates = 2
         )
         candidates <- RecruitmentCandidate.selectByRun(runId)
       } yield assertTrue(
