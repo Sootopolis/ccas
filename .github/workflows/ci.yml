@@ -44,3 +44,10 @@ jobs:
         run: sbt test
         env:
           CCAS_CONTACT_EMAIL: ci@ccas.dev
+
+      - name: Test report
+        uses: mikepenz/action-junit-report@v5
+        if: always()
+        with:
+          report_paths: '**/target/test-reports/TEST-*.xml'
+          include_passed: true
