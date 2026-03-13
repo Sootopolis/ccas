@@ -11,6 +11,7 @@ import ccas.analysis.tables.*
 import ccas.api.misc.subtypes.{ClubId, ClubUrlName, PlayerId, Username}
 import ccas.utils.client.ChessComClient
 import ccas.utils.sql.{DataSourceLayer, SqlZioTypes}
+import ccas.utils.sql.DbCodecs.given
 
 object TestRecruitmentApp extends ZIOSpecDefault {
 
@@ -141,6 +142,8 @@ object TestRecruitmentApp extends ZIOSpecDefault {
 
   private val emptyCurrentGamesJson: String = """{"games": []}"""
 
+  private val emptyArchiveJson: String = """{"games": []}"""
+
   private def apiClubMembersJson(members: List[(String, Long)]): String = {
     val memberJsons = members.map { (username, joined) =>
       s"""{"username": "$username", "joined": $joined}"""
@@ -173,6 +176,12 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         // Player current games endpoint
         Method.GET / "pub" / "player" / string("username") / "games" -> handler { (username: String, _: Request) =>
           responses.get(s"player/$username/games").fold(Response.json(emptyCurrentGamesJson))(Response.json(_))
+        },
+        // Player archive endpoint (year/month)
+        Method.GET / "pub" / "player" / string("username") / "games" / string("year") / string("month") -> handler {
+          (username: String, year: String, month: String, _: Request) =>
+            responses.get(s"player/$username/games/$year/$month")
+              .fold(Response.json(emptyArchiveJson))(Response.json(_))
         },
         // Player endpoint
         Method.GET / "pub" / "player" / string("username") -> handler { (username: String, _: Request) =>
@@ -281,6 +290,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
     suiteGatherCandidates,
     suiteEvaluateCandidates,
     suiteFilterChain,
+    suiteCacheFilters,
     suiteFullWorkflow,
     suiteReport
   ).provideShared(
@@ -852,8 +862,117 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         cached.isDefined,
         cached.get.clubCount.contains(0),
         cached.get.ongoingGames == 0,
-        cached.get.dailyElo.contains(1200)
+        cached.get.dailyElo.contains(1200),
+        cached.get.lastDailyTimeoutAt.isEmpty,
+        cached.get.lastTmTimeoutAt.isEmpty
       )
+    }
+  )
+
+  // ==========================================================================
+  // Suite: Cache-aware filters
+  // ==========================================================================
+
+  /** Helper: run evalSingle but seed a cache row (and its player FK) before evaluation. */
+  private def evalSingleWithCache(
+      responses: Map[String, String],
+      config: RecruitmentConfig,
+      cache: PlayerRecruitmentCache,
+      username: String = "alice"
+    ): ZIO[Transactor, Throwable, CandidateOutcome] =
+    for {
+      _      <- seedDb
+      // Seed player row for FK constraint, then seed cache
+      _      <- SqlZioTypes.connectZIO {
+        sql"""INSERT INTO player (player_id, joined, board_url)
+              VALUES (${cache.playerId}, ${T.t0}, ${None: Option[String]})
+              ON CONFLICT (player_id) DO NOTHING""".update.run()
+      }
+      _      <- SqlZioTypes.transactZIO(PlayerRecruitmentCache.upsertRaw(cache))
+      _      <- RecruitmentConfig.upsert(config)
+      runId  <- RecruitmentRun.insert(clubId, "default", Instant.now())
+      client <- fakeChessComClient(responses)
+      _      <- RecruitmentApp.evaluateCandidates(client, runId, clubUrlName, List(Username.wrap(username)), config)
+      cands  <- RecruitmentCandidate.selectByRun(runId)
+    } yield cands.head.outcome
+
+  private def suiteCacheFilters = suite("cache-aware filters")(
+    test("zero-tolerance daily timeout rejects from cache") {
+      val now = Instant.now()
+      val staleCache = PlayerRecruitmentCache(
+        playerId = pid0,
+        fetchedAt = now.minus(java.time.Duration.ofDays(30)), // very old cache
+        dailyElo = Some(1500),
+        dailyTimeoutPct = Some(0.0),
+        dailyGamesFinished = Some(200),
+        clubCount = Some(5),
+        ongoingGames = 3,
+        ongoingTeamMatches = 2,
+        tmGamesFinished90d = 10,
+        tmTimeoutPct90d = Some(0.0),
+        lastDailyTimeoutAt = Some(now.minus(java.time.Duration.ofDays(100))), // had a timeout once
+        lastTmTimeoutAt = None
+      )
+      val config = makeConfig().copy(dailyMaxTimeoutPercent = Some(0.0))
+      val responses = Map("player/alice" -> apiPlayerJson(200, "alice"))
+
+      for {
+        outcome <- evalSingleWithCache(responses, config, staleCache)
+      } yield assertTrue(outcome == CandidateOutcome.Rejected)
+    },
+    test("maxClubs cache rejection at 48h old cache") {
+      val now = Instant.now()
+      val cache48h = PlayerRecruitmentCache(
+        playerId = pid0,
+        fetchedAt = now.minus(java.time.Duration.ofHours(48)),
+        dailyElo = Some(1500),
+        dailyTimeoutPct = Some(0.0),
+        dailyGamesFinished = Some(200),
+        clubCount = Some(120), // way over limit
+        ongoingGames = 3,
+        ongoingTeamMatches = 2,
+        tmGamesFinished90d = 10,
+        tmTimeoutPct90d = Some(0.0),
+        lastDailyTimeoutAt = None,
+        lastTmTimeoutAt = None
+      )
+      val config = makeConfig().copy(maxClubs = Some(50))
+      val responses = Map("player/alice" -> apiPlayerJson(200, "alice"))
+
+      for {
+        outcome <- evalSingleWithCache(responses, config, cache48h)
+      } yield assertTrue(outcome == CandidateOutcome.Rejected)
+    },
+    test("stale cache falls through to API checks") {
+      val now = Instant.now()
+      val staleCache = PlayerRecruitmentCache(
+        playerId = pid0,
+        fetchedAt = now.minus(java.time.Duration.ofHours(100)),
+        dailyElo = Some(500),
+        dailyTimeoutPct = Some(50.0),
+        dailyGamesFinished = Some(5),
+        clubCount = Some(120),
+        ongoingGames = 0,
+        ongoingTeamMatches = 0,
+        tmGamesFinished90d = 0,
+        tmTimeoutPct90d = None,
+        lastDailyTimeoutAt = None,
+        lastTmTimeoutAt = None
+      )
+      val config = makeConfig().copy(
+        maxClubs = Some(50),
+        dailyMinElo = Some(1000),
+        dailyMaxTimeoutPercent = Some(10.0)
+      )
+      val responses = Map(
+        "player/alice"       -> apiPlayerJson(200, "alice"),
+        "player/alice/stats" -> apiPlayerStatsJson(dailyElo = 1500, timeoutPct = 2.0),
+        "player/alice/clubs" -> apiPlayerClubsJson(List("club-a", "club-b"))
+      )
+
+      for {
+        outcome <- evalSingleWithCache(responses, config, staleCache)
+      } yield assertTrue(outcome == CandidateOutcome.Invited)
     }
   )
 
