@@ -90,12 +90,12 @@ object TestChessComClient extends ZIOSpecDefault {
               else Response.json(jsonBody)
             }
           },
-          cooldown = 50.millis
+          cooldown = 500.millis
         )
         _               <- client.get[Payload](testUrl)
         throttledBefore <- throttled.get
         // Wait past cooldown
-        _              <- ZIO.sleep(60.millis)
+        _              <- ZIO.sleep(600.millis)
         throttledAfter <- throttled.get
       } yield assertTrue(throttledBefore, !throttledAfter)
     },
