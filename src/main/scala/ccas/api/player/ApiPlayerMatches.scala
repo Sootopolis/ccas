@@ -5,6 +5,7 @@ import zio.json.{jsonMemberNames, DeriveJsonDecoder, JsonDecoder, SnakeCase}
 import zio.Chunk
 
 import ccas.api.misc.enums.GameResultDetail
+import ccas.api.misc.subtypes.Username
 import ccas.api.player.ApiPlayerMatches.ApiPlayerMatch
 import ccas.utils.json.JsonDecoding
 
@@ -16,6 +17,8 @@ final case class ApiPlayerMatches(
 
 object ApiPlayerMatches extends JsonDecoding[ApiPlayerMatches] {
   override protected val jsonDecoderDerived: JsonDecoder[ApiPlayerMatches] = DeriveJsonDecoder.gen
+
+  def getUrl(username: Username): URL = ApiPlayer.getUrl(username).addPath("matches")
 
   @jsonMemberNames(SnakeCase)
   final case class ApiPlayerMatch(

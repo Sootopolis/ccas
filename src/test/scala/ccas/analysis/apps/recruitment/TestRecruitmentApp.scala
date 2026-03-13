@@ -41,12 +41,13 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       playerId: Long,
       username: String,
       status: String = "basic",
-      joined: Long = T.t0.getEpochSecond
+      joined: Long = T.t0.getEpochSecond,
+      country: String = "US"
     ): String = {
     val fields = List(
       s""""player_id": $playerId""",
       s""""username": "$username"""",
-      s""""country": "https://api.chess.com/pub/country/US"""",
+      s""""country": "https://api.chess.com/pub/country/$country"""",
       s""""status": "$status"""",
       s""""joined": $joined""",
       s""""last_online": $joined""",
@@ -58,7 +59,8 @@ object TestRecruitmentApp extends ZIOSpecDefault {
     fields.mkString("{\n", ",\n", "\n}")
   }
 
-  private def apiClubJson(clubId: Long, urlName: String): String =
+  private def apiClubJson(clubId: Long, urlName: String, admins: List[String] = Nil): String = {
+    val adminJson = admins.map(u => s""""https://api.chess.com/pub/player/$u"""").mkString("[", ",", "]")
     s"""{
        |  "@id": "https://api.chess.com/pub/club/$urlName",
        |  "name": "Test Club",
@@ -70,9 +72,74 @@ object TestRecruitmentApp extends ZIOSpecDefault {
        |  "last_activity": ${T.t1.getEpochSecond},
        |  "visibility": "public",
        |  "join_request": "https://api.chess.com/pub/club/$urlName/join",
-       |  "admin": [],
+       |  "admin": $adminJson,
        |  "description": "A test club"
        |}""".stripMargin
+  }
+
+  private def apiClubMatchesJson(registeredIds: List[String] = Nil): String = {
+    val regs = registeredIds.map { id =>
+      s"""{"name": "match", "@id": "$id", "opponent": "https://api.chess.com/pub/club/other", "time_class": "daily"}"""
+    }
+    s"""{"finished": [], "in_progress": [], "registered": [${regs.mkString(",")}]}"""
+  }
+
+  private def apiPlayerMatchesJson(registeredIds: List[String] = Nil): String = {
+    val regs = registeredIds.map { id =>
+      s"""{"name": "match", "url": "https://chess.com/match/1", "@id": "$id", "club": "https://api.chess.com/pub/club/test", "board": "https://chess.com/board/1"}"""
+    }
+    s"""{"finished": [], "in_progress": [], "registered": [${regs.mkString(",")}]}"""
+  }
+
+  private val emptyClubMatchesJson: String =
+    """{"finished": [], "in_progress": [], "registered": []}"""
+
+  private val emptyPlayerMatchesJson: String =
+    """{"finished": [], "in_progress": [], "registered": []}"""
+
+  private def apiPlayerClubsJson(clubs: List[String] = Nil): String = {
+    val clubJsons = clubs.map { name =>
+      s"""{"name": "$name", "last_activity": 0, "url": "https://api.chess.com/pub/club/$name", "joined": 0}"""
+    }
+    s"""{"clubs": [${clubJsons.mkString(",")}]}"""
+  }
+
+  private def apiPlayerStatsJson(
+      dailyElo: Int = 1200,
+      timeoutPct: Double = 0.0,
+      wins: Int = 100,
+      losses: Int = 50,
+      draws: Int = 10
+    ): String =
+    s"""{
+       |  "chess_daily": {
+       |    "last": {"rating": $dailyElo, "date": 0, "rd": 0},
+       |    "best": {"rating": $dailyElo, "date": 0, "game": "https://chess.com/game/1"},
+       |    "record": {"win": $wins, "loss": $losses, "draw": $draws, "time_per_move": 86400, "timeout_percent": $timeoutPct}
+       |  },
+       |  "chess960_daily": {
+       |    "last": {"rating": 0, "date": 0, "rd": 0},
+       |    "best": {"rating": 0, "date": 0, "game": "https://chess.com/game/1"},
+       |    "record": {"win": 0, "loss": 0, "draw": 0, "time_per_move": 0, "timeout_percent": 0}
+       |  },
+       |  "chess_rapid": {
+       |    "last": {"rating": 0, "date": 0, "rd": 0},
+       |    "best": {"rating": 0, "date": 0, "game": "https://chess.com/game/1"},
+       |    "record": {"win": 0, "loss": 0, "draw": 0}
+       |  },
+       |  "chess_blitz": {
+       |    "last": {"rating": 0, "date": 0, "rd": 0},
+       |    "best": {"rating": 0, "date": 0, "game": "https://chess.com/game/1"},
+       |    "record": {"win": 0, "loss": 0, "draw": 0}
+       |  },
+       |  "chess_bullet": {
+       |    "last": {"rating": 0, "date": 0, "rd": 0},
+       |    "best": {"rating": 0, "date": 0, "game": "https://chess.com/game/1"},
+       |    "record": {"win": 0, "loss": 0, "draw": 0}
+       |  }
+       |}""".stripMargin
+
+  private val emptyCurrentGamesJson: String = """{"games": []}"""
 
   private def apiClubMembersJson(members: List[(String, Long)]): String = {
     val memberJsons = members.map { (username, joined) =>
@@ -91,18 +158,38 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       throttled <- Ref.make(false)
     } yield (semaphore, mutex, throttled)).map { (semaphore, mutex, throttled) =>
       val routes: Routes[Any, Response] = Routes(
+        // Player stats endpoint
+        Method.GET / "pub" / "player" / string("username") / "stats" -> handler { (username: String, _: Request) =>
+          responses.get(s"player/$username/stats").fold(Response.json(apiPlayerStatsJson()))(Response.json(_))
+        },
+        // Player clubs endpoint
+        Method.GET / "pub" / "player" / string("username") / "clubs" -> handler { (username: String, _: Request) =>
+          responses.get(s"player/$username/clubs").fold(Response.json(apiPlayerClubsJson()))(Response.json(_))
+        },
+        // Player matches endpoint
+        Method.GET / "pub" / "player" / string("username") / "matches" -> handler { (username: String, _: Request) =>
+          responses.get(s"player/$username/matches").fold(Response.json(emptyPlayerMatchesJson))(Response.json(_))
+        },
+        // Player current games endpoint
+        Method.GET / "pub" / "player" / string("username") / "games" -> handler { (username: String, _: Request) =>
+          responses.get(s"player/$username/games").fold(Response.json(emptyCurrentGamesJson))(Response.json(_))
+        },
         // Player endpoint
         Method.GET / "pub" / "player" / string("username") -> handler { (username: String, _: Request) =>
           if failures.contains(username) then Response(status = Status.NotFound)
           else responses.get(s"player/$username").fold(Response(status = Status.NotFound))(Response.json(_))
         },
-        // Club endpoint
-        Method.GET / "pub" / "club" / string("club") -> handler { (clubName: String, _: Request) =>
-          responses.get(s"club/$clubName").fold(Response(status = Status.NotFound))(Response.json(_))
+        // Club matches endpoint
+        Method.GET / "pub" / "club" / string("club") / "matches" -> handler { (clubName: String, _: Request) =>
+          responses.get(s"club/$clubName/matches").fold(Response.json(emptyClubMatchesJson))(Response.json(_))
         },
         // Club members endpoint
         Method.GET / "pub" / "club" / string("club") / "members" -> handler { (clubName: String, _: Request) =>
           responses.get(s"club/$clubName/members").fold(Response(status = Status.NotFound))(Response.json(_))
+        },
+        // Club endpoint
+        Method.GET / "pub" / "club" / string("club") -> handler { (clubName: String, _: Request) =>
+          responses.get(s"club/$clubName").fold(Response(status = Status.NotFound))(Response.json(_))
         }
       )
       val driver = new ZClient.Driver[Any, Scope, Throwable] {
@@ -146,6 +233,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       _ <- RecruitmentCandidate.deleteAll
       _ <- RecruitmentRun.deleteAll
       _ <- RecruitmentConfig.deleteAll
+      _ <- PlayerRecruitmentCache.deleteAll
       _ <- SqlZioTypes.connectZIO(sql"DELETE FROM club_member WHERE club_id = $clubId".update.run())
       _ <- SqlZioTypes.connectZIO(sql"DELETE FROM club_member WHERE club_id = $sourceClubId".update.run())
       _ <- ZIO.foreachDiscard(List(pid0, pid1, pid2)) { pid =>
@@ -181,7 +269,8 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       dailyMinGamesFinished = None,
       dailyMinTmGamesFinished = None,
       minDaysSinceRegistration = None,
-      daysSinceLastInvited = None
+      daysSinceLastInvited = None,
+      excludeSourceAdmins = true
     )
 
   // --- Spec ---
@@ -191,6 +280,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
     suiteDbCrud,
     suiteGatherCandidates,
     suiteEvaluateCandidates,
+    suiteFilterChain,
     suiteFullWorkflow,
     suiteReport
   ).provideShared(
@@ -398,6 +488,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
             ("existing-member", T.t0.getEpochSecond)
           )
         ),
+        "club/source-club" -> apiClubJson(sourceClubId, "source-club"),
         "club/source-club/members" -> apiClubMembersJson(
           List(
             ("existing-member", T.t0.getEpochSecond),
@@ -421,12 +512,14 @@ object TestRecruitmentApp extends ZIOSpecDefault {
     test("deduplicates across multiple source clubs") {
       val responses = Map(
         s"club/$clubUrlName/members" -> apiClubMembersJson(Nil),
+        "club/source-a" -> apiClubJson(601, "source-a"),
         "club/source-a/members" -> apiClubMembersJson(
           List(
             ("shared-player", T.t0.getEpochSecond),
             ("unique-a", T.t0.getEpochSecond)
           )
         ),
+        "club/source-b" -> apiClubJson(602, "source-b"),
         "club/source-b/members" -> apiClubMembersJson(
           List(
             ("shared-player", T.t0.getEpochSecond),
@@ -457,12 +550,14 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         "player/alice" -> apiPlayerJson(200, "alice"),
         "player/bob"   -> apiPlayerJson(201, "bob")
       )
+      val config = makeConfig()
 
       for {
         _       <- seedDb
+        _       <- RecruitmentConfig.upsert(config)
         runId   <- RecruitmentRun.insert(clubId, "default", T.t0)
         client  <- fakeChessComClient(responses)
-        invited <- RecruitmentApp.evaluateCandidates(client, runId, List(Username("alice"), Username("bob")), 10)
+        invited <- RecruitmentApp.evaluateCandidates(client, runId, clubUrlName, List(Username("alice"), Username("bob")), config)
         // Check invited list
         _ = assertTrue(invited.size == 2)
         // Check Player table
@@ -490,16 +585,19 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         "player/bob"     -> apiPlayerJson(201, "bob"),
         "player/charlie" -> apiPlayerJson(202, "charlie")
       )
+      val config = makeConfig(maxCandidates = 2)
 
       for {
         _      <- seedDb
+        _      <- RecruitmentConfig.upsert(config)
         runId  <- RecruitmentRun.insert(clubId, "default", T.t0)
         client <- fakeChessComClient(responses)
         invited <- RecruitmentApp.evaluateCandidates(
           client,
           runId,
+          clubUrlName,
           List(Username("alice"), Username("bob"), Username("charlie")),
-          2
+          config
         )
         candidates <- RecruitmentCandidate.selectByRun(runId)
       } yield assertTrue(
@@ -511,12 +609,14 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       val responses = Map(
         "player/alice" -> apiPlayerJson(200, "alice")
       )
+      val config = makeConfig()
 
       for {
         _          <- seedDb
+        _          <- RecruitmentConfig.upsert(config)
         runId      <- RecruitmentRun.insert(clubId, "default", T.t0)
         client     <- fakeChessComClient(responses, failures = Set("bob"))
-        invited    <- RecruitmentApp.evaluateCandidates(client, runId, List(Username("alice"), Username("bob")), 10)
+        invited    <- RecruitmentApp.evaluateCandidates(client, runId, clubUrlName, List(Username("alice"), Username("bob")), config)
         candidates <- RecruitmentCandidate.selectByRun(runId)
         errors = candidates.filter(_.outcome == CandidateOutcome.Error)
       } yield assertTrue(
@@ -526,6 +626,233 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         errors.size == 1,
         errors.head.username == Username("bob"),
         errors.head.rejectionReason.isDefined
+      )
+    }
+  )
+
+  // ==========================================================================
+  // Suite: Filter chain
+  // ==========================================================================
+
+  /** Helper: run evaluateCandidates with a single candidate and return the outcome. */
+  private def evalSingle(
+      responses: Map[String, String],
+      config: RecruitmentConfig,
+      username: String = "alice"
+    ): ZIO[Transactor, Throwable, CandidateOutcome] =
+    for {
+      _      <- seedDb
+      _      <- RecruitmentConfig.upsert(config)
+      runId  <- RecruitmentRun.insert(clubId, "default", Instant.now())
+      client <- fakeChessComClient(responses)
+      _      <- RecruitmentApp.evaluateCandidates(client, runId, clubUrlName, List(Username.wrap(username)), config)
+      cands  <- RecruitmentCandidate.selectByRun(runId)
+    } yield cands.head.outcome
+
+  private def suiteFilterChain = suite("filter chain")(
+    test("rejects closed account") {
+      val responses = Map("player/alice" -> apiPlayerJson(200, "alice", status = "closed"))
+      for { outcome <- evalSingle(responses, makeConfig()) }
+      yield assertTrue(outcome == CandidateOutcome.Rejected)
+    },
+    test("rejects by minDaysSinceRegistration") {
+      // Player joined 5 days ago, config requires 30 days
+      val recentJoin = Instant.now().minus(java.time.Duration.ofDays(5)).getEpochSecond
+      val responses  = Map("player/alice" -> apiPlayerJson(200, "alice", joined = recentJoin))
+      val config     = makeConfig().copy(minDaysSinceRegistration = Some(30))
+      for { outcome <- evalSingle(responses, config) }
+      yield assertTrue(outcome == CandidateOutcome.Rejected)
+    },
+    test("accepts player meeting minDaysSinceRegistration") {
+      // Player joined 60 days ago, config requires 30 days
+      val oldJoin   = Instant.now().minus(java.time.Duration.ofDays(60)).getEpochSecond
+      val responses = Map("player/alice" -> apiPlayerJson(200, "alice", joined = oldJoin))
+      val config    = makeConfig().copy(minDaysSinceRegistration = Some(30))
+      for { outcome <- evalSingle(responses, config) }
+      yield assertTrue(outcome == CandidateOutcome.Invited)
+    },
+    test("rejects by nationality exclude mode") {
+      val responses = Map("player/alice" -> apiPlayerJson(200, "alice", country = "XX"))
+      val config    = makeConfig().copy(nationalityMode = Some("exclude"), nationalityCountries = List("XX", "YY"))
+      for { outcome <- evalSingle(responses, config) }
+      yield assertTrue(outcome == CandidateOutcome.Rejected)
+    },
+    test("accepts player not in nationality exclude list") {
+      val responses = Map("player/alice" -> apiPlayerJson(200, "alice", country = "ZZ"))
+      val config    = makeConfig().copy(nationalityMode = Some("exclude"), nationalityCountries = List("XX", "YY"))
+      for { outcome <- evalSingle(responses, config) }
+      yield assertTrue(outcome == CandidateOutcome.Invited)
+    },
+    test("rejects by nationality include mode when not in list") {
+      val responses = Map("player/alice" -> apiPlayerJson(200, "alice", country = "ZZ"))
+      val config    = makeConfig().copy(nationalityMode = Some("include"), nationalityCountries = List("XX", "YY"))
+      for { outcome <- evalSingle(responses, config) }
+      yield assertTrue(outcome == CandidateOutcome.Rejected)
+    },
+    test("accepts player in nationality include list") {
+      val responses = Map("player/alice" -> apiPlayerJson(200, "alice", country = "YY"))
+      val config    = makeConfig().copy(nationalityMode = Some("include"), nationalityCountries = List("XX", "YY"))
+      for { outcome <- evalSingle(responses, config) }
+      yield assertTrue(outcome == CandidateOutcome.Invited)
+    },
+    test("rejects by dailyMinElo") {
+      val responses = Map(
+        "player/alice"       -> apiPlayerJson(200, "alice"),
+        "player/alice/stats" -> apiPlayerStatsJson(dailyElo = 800)
+      )
+      val config = makeConfig().copy(dailyMinElo = Some(1000))
+      for { outcome <- evalSingle(responses, config) }
+      yield assertTrue(outcome == CandidateOutcome.Rejected)
+    },
+    test("rejects by dailyMaxElo") {
+      val responses = Map(
+        "player/alice"       -> apiPlayerJson(200, "alice"),
+        "player/alice/stats" -> apiPlayerStatsJson(dailyElo = 2200)
+      )
+      val config = makeConfig().copy(dailyMaxElo = Some(2000))
+      for { outcome <- evalSingle(responses, config) }
+      yield assertTrue(outcome == CandidateOutcome.Rejected)
+    },
+    test("accepts player within Elo range") {
+      val responses = Map(
+        "player/alice"       -> apiPlayerJson(200, "alice"),
+        "player/alice/stats" -> apiPlayerStatsJson(dailyElo = 1500)
+      )
+      val config = makeConfig().copy(dailyMinElo = Some(1000), dailyMaxElo = Some(2000))
+      for { outcome <- evalSingle(responses, config) }
+      yield assertTrue(outcome == CandidateOutcome.Invited)
+    },
+    test("rejects by dailyMaxTimeoutPercent") {
+      val responses = Map(
+        "player/alice"       -> apiPlayerJson(200, "alice"),
+        "player/alice/stats" -> apiPlayerStatsJson(timeoutPct = 15.0)
+      )
+      val config = makeConfig().copy(dailyMaxTimeoutPercent = Some(10.0))
+      for { outcome <- evalSingle(responses, config) }
+      yield assertTrue(outcome == CandidateOutcome.Rejected)
+    },
+    test("rejects by dailyMinGamesFinished") {
+      val responses = Map(
+        "player/alice"       -> apiPlayerJson(200, "alice"),
+        "player/alice/stats" -> apiPlayerStatsJson(wins = 5, losses = 3, draws = 2) // 10 games
+      )
+      val config = makeConfig().copy(dailyMinGamesFinished = Some(50))
+      for { outcome <- evalSingle(responses, config) }
+      yield assertTrue(outcome == CandidateOutcome.Rejected)
+    },
+    test("rejects by maxClubs") {
+      val responses = Map(
+        "player/alice"       -> apiPlayerJson(200, "alice"),
+        "player/alice/clubs" -> apiPlayerClubsJson(List("club-1", "club-2", "club-3", "club-4", "club-5", "club-6"))
+      )
+      val config = makeConfig().copy(maxClubs = Some(5))
+      for { outcome <- evalSingle(responses, config) }
+      yield assertTrue(outcome == CandidateOutcome.Rejected)
+    },
+    test("rejects by excludeClubs") {
+      val responses = Map(
+        "player/alice"       -> apiPlayerJson(200, "alice"),
+        "player/alice/clubs" -> apiPlayerClubsJson(List("good-club", "banned-club"))
+      )
+      val config = makeConfig(excludeClubs = List("banned-club"))
+      for { outcome <- evalSingle(responses, config) }
+      yield assertTrue(outcome == CandidateOutcome.Rejected)
+    },
+    test("rejects when player has match against target club") {
+      val matchId = "https://api.chess.com/pub/match/12345"
+      val responses = Map(
+        "player/alice"           -> apiPlayerJson(200, "alice"),
+        "player/alice/matches"   -> apiPlayerMatchesJson(registeredIds = List(matchId)),
+        s"club/$clubUrlName/matches" -> apiClubMatchesJson(registeredIds = List(matchId))
+      )
+      for { outcome <- evalSingle(responses, makeConfig()) }
+      yield assertTrue(outcome == CandidateOutcome.Rejected)
+    },
+    test("accepts when player matches don't overlap target club") {
+      val responses = Map(
+        "player/alice"               -> apiPlayerJson(200, "alice"),
+        "player/alice/matches"       -> apiPlayerMatchesJson(registeredIds = List("https://api.chess.com/pub/match/999")),
+        s"club/$clubUrlName/matches" -> apiClubMatchesJson(registeredIds = List("https://api.chess.com/pub/match/888"))
+      )
+      for { outcome <- evalSingle(responses, makeConfig()) }
+      yield assertTrue(outcome == CandidateOutcome.Invited)
+    },
+    test("rejects by daysSinceLastInvited") {
+      val config = makeConfig().copy(daysSinceLastInvited = Some(30))
+      for {
+        _     <- seedDb
+        _     <- RecruitmentConfig.upsert(config)
+        // Create a prior run with alice invited recently
+        priorRunId <- RecruitmentRun.insert(clubId, "default", Instant.now())
+        _ <- RecruitmentCandidate.insert(
+          RecruitmentCandidate(priorRunId, Username("alice"), Instant.now(), CandidateOutcome.Invited, None)
+        )
+        // Now evaluate alice again
+        runId  <- RecruitmentRun.insert(clubId, "default", Instant.now())
+        client <- fakeChessComClient(Map("player/alice" -> apiPlayerJson(200, "alice")))
+        _      <- RecruitmentApp.evaluateCandidates(client, runId, clubUrlName, List(Username("alice")), config)
+        cands  <- RecruitmentCandidate.selectByRun(runId)
+      } yield assertTrue(cands.head.outcome == CandidateOutcome.Rejected)
+    },
+    test("excludeSourceAdmins removes admin from candidate pool") {
+      val responses = Map(
+        s"club/$clubUrlName/members" -> apiClubMembersJson(Nil),
+        "club/source-club" -> apiClubJson(sourceClubId, "source-club", admins = List("admin-user")),
+        "club/source-club/members" -> apiClubMembersJson(
+          List(
+            ("admin-user", T.t0.getEpochSecond),
+            ("regular-user", T.t0.getEpochSecond)
+          )
+        )
+      )
+      val config = makeConfig().copy(excludeSourceAdmins = true)
+
+      for {
+        _          <- seedDb
+        client     <- fakeChessComClient(responses)
+        candidates <- RecruitmentApp.gatherCandidates(client, clubId, clubUrlName, config)
+      } yield assertTrue(
+        candidates.size == 1,
+        candidates.head == Username("regular-user")
+      )
+    },
+    test("excludeSourceAdmins=false keeps admins in candidate pool") {
+      val responses = Map(
+        s"club/$clubUrlName/members" -> apiClubMembersJson(Nil),
+        "club/source-club" -> apiClubJson(sourceClubId, "source-club", admins = List("admin-user")),
+        "club/source-club/members" -> apiClubMembersJson(
+          List(
+            ("admin-user", T.t0.getEpochSecond),
+            ("regular-user", T.t0.getEpochSecond)
+          )
+        )
+      )
+      val config = makeConfig().copy(excludeSourceAdmins = false)
+
+      for {
+        _          <- seedDb
+        client     <- fakeChessComClient(responses)
+        candidates <- RecruitmentApp.gatherCandidates(client, clubId, clubUrlName, config)
+      } yield assertTrue(
+        candidates.size == 2,
+        candidates.toSet == Set(Username("admin-user"), Username("regular-user"))
+      )
+    },
+    test("cache is populated after evaluation") {
+      val responses = Map("player/alice" -> apiPlayerJson(200, "alice"))
+      val config    = makeConfig()
+      for {
+        _      <- seedDb
+        _      <- RecruitmentConfig.upsert(config)
+        runId  <- RecruitmentRun.insert(clubId, "default", Instant.now())
+        client <- fakeChessComClient(responses)
+        _      <- RecruitmentApp.evaluateCandidates(client, runId, clubUrlName, List(Username("alice")), config)
+        cached <- PlayerRecruitmentCache.selectId(pid0)
+      } yield assertTrue(
+        cached.isDefined,
+        cached.get.clubCount == 0,
+        cached.get.ongoingGames == 0,
+        cached.get.dailyElo.contains(1200)
       )
     }
   )
@@ -543,6 +870,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
             ("existing", T.t0.getEpochSecond)
           )
         ),
+        "club/source-club" -> apiClubJson(sourceClubId, "source-club"),
         "club/source-club/members" -> apiClubMembersJson(
           List(
             ("existing", T.t0.getEpochSecond),

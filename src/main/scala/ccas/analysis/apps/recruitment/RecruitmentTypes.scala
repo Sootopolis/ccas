@@ -11,7 +11,3 @@ object ExhaustionBehavior extends EnumSql[ExhaustionBehavior]
 // Explore: discover new sources (e.g. clubs that source club members are in, match opponents)
 // For this scaffold, only Stop is implemented; Explore is deferred
 
-sealed trait RejectionReason { def message: String }
-object RejectionReason       {
-  // Will be populated in follow-up: ExcludedNationality, TooManyClubs, EloOutOfRange, etc.
-}

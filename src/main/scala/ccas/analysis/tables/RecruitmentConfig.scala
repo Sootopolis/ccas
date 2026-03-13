@@ -31,7 +31,8 @@ final case class RecruitmentConfig(
     dailyMinGamesFinished: Option[Int],
     dailyMinTmGamesFinished: Option[Int],
     minDaysSinceRegistration: Option[Int],
-    daysSinceLastInvited: Option[Int])
+    daysSinceLastInvited: Option[Int],
+    excludeSourceAdmins: Boolean)
     derives DbCodec {
   def sourceClubNames: List[ClubUrlName]  = sourceClubs.map(ClubUrlName.wrap)
   def excludeClubNames: List[ClubUrlName] = excludeClubs.map(ClubUrlName.wrap)
@@ -44,7 +45,7 @@ object RecruitmentConfig {
        daily_max_timeout_percent, daily_max_tm_timeout_percent,
        daily_min_ongoing_games, daily_max_ongoing_games, daily_min_ongoing_team_matches,
        daily_min_elo, daily_max_elo, daily_min_games_finished, daily_min_tm_games_finished,
-       min_days_since_registration, days_since_last_invited"""
+       min_days_since_registration, days_since_last_invited, exclude_source_admins"""
   )
 
   def createTable: ZIO[Transactor, SQLException, Int] =
@@ -53,11 +54,11 @@ object RecruitmentConfig {
               club_id                        BIGINT NOT NULL,
               config_name                    VARCHAR NOT NULL,
               max_candidates                 INT NOT NULL,
-              source_clubs                   TEXT[] NOT NULL DEFAULT '{}',
-              exclude_clubs                  TEXT[] NOT NULL DEFAULT '{}',
-              on_exhaustion                  VARCHAR NOT NULL DEFAULT 'Stop' CHECK (on_exhaustion IN ('Stop', 'Explore')),
+              source_clubs                   TEXT[] NOT NULL,
+              exclude_clubs                  TEXT[] NOT NULL,
+              on_exhaustion                  VARCHAR NOT NULL CHECK (on_exhaustion IN ('Stop', 'Explore')),
               nationality_mode               VARCHAR,
-              nationality_countries          TEXT[] NOT NULL DEFAULT '{}',
+              nationality_countries          TEXT[] NOT NULL,
               max_clubs                      INT,
               daily_max_timeout_percent      DOUBLE PRECISION,
               daily_max_tm_timeout_percent   DOUBLE PRECISION,
@@ -70,6 +71,7 @@ object RecruitmentConfig {
               daily_min_tm_games_finished    INT,
               min_days_since_registration    INT,
               days_since_last_invited        INT,
+              exclude_source_admins          BOOLEAN NOT NULL,
               PRIMARY KEY (club_id, config_name),
               FOREIGN KEY (club_id) REFERENCES club (club_id) ON DELETE RESTRICT
             )""".update.run()
@@ -94,7 +96,7 @@ object RecruitmentConfig {
               daily_max_timeout_percent, daily_max_tm_timeout_percent,
               daily_min_ongoing_games, daily_max_ongoing_games, daily_min_ongoing_team_matches,
               daily_min_elo, daily_max_elo, daily_min_games_finished, daily_min_tm_games_finished,
-              min_days_since_registration, days_since_last_invited
+              min_days_since_registration, days_since_last_invited, exclude_source_admins
             ) VALUES (
               ${item.clubId}, ${item.configName}, ${item.maxCandidates},
               ${item.sourceClubs}, ${item.excludeClubs}, ${item.onExhaustion.toString},
@@ -102,7 +104,7 @@ object RecruitmentConfig {
               ${item.dailyMaxTimeoutPercent}, ${item.dailyMaxTmTimeoutPercent},
               ${item.dailyMinOngoingGames}, ${item.dailyMaxOngoingGames}, ${item.dailyMinOngoingTeamMatches},
               ${item.dailyMinElo}, ${item.dailyMaxElo}, ${item.dailyMinGamesFinished}, ${item.dailyMinTmGamesFinished},
-              ${item.minDaysSinceRegistration}, ${item.daysSinceLastInvited}
+              ${item.minDaysSinceRegistration}, ${item.daysSinceLastInvited}, ${item.excludeSourceAdmins}
             ) ON CONFLICT (club_id, config_name) DO UPDATE SET
               max_candidates = EXCLUDED.max_candidates,
               source_clubs = EXCLUDED.source_clubs,
@@ -121,7 +123,8 @@ object RecruitmentConfig {
               daily_min_games_finished = EXCLUDED.daily_min_games_finished,
               daily_min_tm_games_finished = EXCLUDED.daily_min_tm_games_finished,
               min_days_since_registration = EXCLUDED.min_days_since_registration,
-              days_since_last_invited = EXCLUDED.days_since_last_invited""".update.run()
+              days_since_last_invited = EXCLUDED.days_since_last_invited,
+              exclude_source_admins = EXCLUDED.exclude_source_admins""".update.run()
     }
 
   def deleteAll: ZIO[Transactor, SQLException, Int] =

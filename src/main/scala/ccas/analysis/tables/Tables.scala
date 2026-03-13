@@ -14,5 +14,6 @@ object Tables {
       _ <- RecruitmentConfig.createTable
       _ <- RecruitmentRun.createTable
       _ <- RecruitmentCandidate.createTable
+      _ <- PlayerRecruitmentCache.createTable
     } yield ()
 }
