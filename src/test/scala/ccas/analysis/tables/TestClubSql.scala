@@ -22,7 +22,7 @@ object TestClubSql extends ZIOSpecDefault {
     testMemberSelect,
     testMemberUpdate
   ).provideShared(
-    DataSourceLayer.liveFromPrefix(onInit = Tables.ensureTables)
+    DataSourceLayer.liveFromPrefix(schema = Some("test_club_sql"), onInit = Tables.ensureTables)
   ) @@ TestAspect.sequential
 
   private object Timestamps {

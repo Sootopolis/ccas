@@ -42,7 +42,7 @@ scalacOptions ++= Seq(
   "-Xmax-inlines:64"
 )
 
-Test / parallelExecution := false
+Test / parallelExecution := true
 
 lazy val root = (project in file("."))
   .enablePlugins(BuildInfoPlugin)

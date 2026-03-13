@@ -140,7 +140,7 @@ object TestMembershipApp extends ZIOSpecDefault {
     suiteClassifyApiMembers,
     suiteClassifyDisappeared
   ).provideShared(
-    DataSourceLayer.liveFromPrefix(onInit = Tables.ensureTables)
+    DataSourceLayer.liveFromPrefix(schema = Some("test_membership_app"), onInit = Tables.ensureTables)
   ) @@ TestAspect.sequential
 
   // ==========================================================================

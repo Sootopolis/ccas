@@ -8,8 +8,11 @@ import zio.{TaskLayer, ZIO, ZLayer}
 object DataSourceLayer {
   private val defaultPrefix = "database"
 
+  private val schemaNamePattern = "^[a-z_][a-z0-9_]*$".r
+
   def liveFromPrefix(
     prefix: String = defaultPrefix,
+    schema: Option[String] = None,
     onInit: ZIO[Transactor, Throwable, Unit] = ZIO.unit
   ): TaskLayer[Transactor] =
     ZLayer
@@ -27,9 +30,21 @@ object DataSourceLayer {
               ds.setDatabaseName(dsConfig.getString("databaseName"))
               ds.setPortNumbers(Array(dsConfig.getInt("portNumber")))
               ds.setServerNames(Array(dsConfig.getString("serverName")))
-              ds.setCurrentSchema(dsConfig.getString("currentSchema"))
+              ds.setCurrentSchema(schema.getOrElse(dsConfig.getString("currentSchema")))
             }
             Transactor(ds)
+          }
+          _ <- ZIO.foreachDiscard(schema) { s =>
+            ZIO.attempt {
+              require(schemaNamePattern.matches(s), s"Invalid schema name: $s")
+              val conn = xa.dataSource.getConnection
+              try {
+                val stmt = conn.createStatement()
+                stmt.execute(s"DROP SCHEMA IF EXISTS $s CASCADE")
+                stmt.execute(s"CREATE SCHEMA $s")
+                stmt.close()
+              } finally conn.close()
+            }
           }
           _ <- onInit.provideEnvironment(zio.ZEnvironment(xa))
         } yield xa
