@@ -253,8 +253,9 @@ object RecruitmentApp extends ZIOAppDefault {
         hasOpponentMatch = playerRegisteredIds.exists(env.run.clubMatchIds.contains)
 
         // Also check cache freshness — if fresh, short-circuit with cached thresholds
-        playerId = env.candidate.apiPlayer.get.playerId
-        cached <- PlayerRecruitmentCache.selectId(playerId)
+        apiPlayer <- ZIO.fromOption(env.candidate.apiPlayer)
+          .orElseFail(new NoSuchElementException("apiPlayer not set — FetchAndCheckPlayer must run before CheckOpponentMatch"))
+        cached <- PlayerRecruitmentCache.selectId(apiPlayer.playerId)
         cacheIsFresh = cached.exists(c =>
           ChronoUnit.HOURS.between(c.fetchedAt, env.run.now) < cacheFreshnessHours
         )
@@ -301,9 +302,10 @@ object RecruitmentApp extends ZIOAppDefault {
         ongoingGames = currentGames.games.size
         ongoingTeamMatches = currentGames.games.count(_.`match`.isDefined)
 
-        playerId = env.candidate.apiPlayer.get.playerId
+        apiPlayer <- ZIO.fromOption(env.candidate.apiPlayer)
+          .orElseFail(new NoSuchElementException("apiPlayer not set — FetchAndCheckPlayer must run before FetchDailyStatsAndCheck"))
         cache = PlayerRecruitmentCache(
-          playerId = playerId,
+          playerId = apiPlayer.playerId,
           fetchedAt = env.run.now,
           dailyElo = Some(dailyElo),
           dailyTimeoutPct = Some(dailyTimeoutPct),
@@ -321,7 +323,8 @@ object RecruitmentApp extends ZIOAppDefault {
 
   private object FetchTmStatsAndCheck extends RecruitmentFilter {
     def apply(env: FilterEnv): ZIO[Transactor, Throwable, FilterResult] = {
-      val cache = env.candidate.cache.get
+      val cache = env.candidate.cache
+        .getOrElse(throw new NoSuchElementException("cache not set — FetchDailyStatsAndCheck must run before FetchTmStatsAndCheck"))
       for {
         tmResult <- fetchTmStats(
           env.run.client,

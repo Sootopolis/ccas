@@ -55,9 +55,10 @@ object ApiPlayerStats extends JsonDecoding[ApiPlayerStats] {
     val loss: Int
     val draw: Int
     lazy val nGames: Int     = win + loss + draw
-    lazy val winRate: Double = win / nGames.toDouble
+    lazy val winRate: Double = if (nGames == 0) 0.0 else win / nGames.toDouble
     lazy val scoreRate: Double = // not hardcoding in case chess scoring rules change
-      (win * GameResult.Win.score + draw * GameResult.Draw.score + loss * GameResult.Loss.score) / nGames
+      if (nGames == 0) 0.0
+      else (win * GameResult.Win.score + draw * GameResult.Draw.score + loss * GameResult.Loss.score) / nGames
   }
 
   @jsonMemberNames(SnakeCase)

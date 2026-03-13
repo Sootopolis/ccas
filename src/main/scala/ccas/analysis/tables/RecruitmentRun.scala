@@ -40,7 +40,8 @@ object RecruitmentRun {
     connectZIO {
       sql"""INSERT INTO recruitment_run (club_id, config_name, started_at, candidates_found)
             VALUES ($clubId, $configName, $startedAt, 0)
-            RETURNING run_id""".query[Long].run().head
+            RETURNING run_id""".query[Long].run()
+              .headOption.getOrElse(throw new SQLException("INSERT RETURNING produced no rows"))
     }
 
   def update(item: RecruitmentRun): ZIO[Transactor, SQLException, Int] =
