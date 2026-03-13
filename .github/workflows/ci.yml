@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+  actions: read
+  checks: write
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -46,8 +51,9 @@ jobs:
           CCAS_CONTACT_EMAIL: ci@ccas.dev
 
       - name: Test report
-        uses: mikepenz/action-junit-report@v5
+        uses: dorny/test-reporter@v2
         if: always()
         with:
-          report_paths: '**/target/test-reports/TEST-*.xml'
-          include_passed: true
+          name: Test results
+          path: '**/target/test-reports/TEST-*.xml'
+          reporter: java-junit
