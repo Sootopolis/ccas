@@ -504,7 +504,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       for {
         _          <- seedDb
         client     <- fakeChessComClient(responses)
-        candidates <- RecruitmentApp.gatherCandidates(client, clubId, clubUrlName, config, List(ClubUrlName("source-club")))
+        candidates <- RecruitmentApp.gatherCandidates(client, clubUrlName, config, List(ClubUrlName("source-club")))
       } yield assertTrue(
         candidates.size == 2,
         !candidates.contains(Username("existing-member")),
@@ -534,7 +534,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       for {
         _          <- seedDb
         client     <- fakeChessComClient(responses)
-        candidates <- RecruitmentApp.gatherCandidates(client, clubId, clubUrlName, config, List(ClubUrlName("source-a"), ClubUrlName("source-b")))
+        candidates <- RecruitmentApp.gatherCandidates(client, clubUrlName, config, List(ClubUrlName("source-a"), ClubUrlName("source-b")))
       } yield assertTrue(
         candidates.size == 3,
         candidates.toSet == Set(Username("shared-player"), Username("unique-a"), Username("unique-b"))
@@ -813,7 +813,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       for {
         _          <- seedDb
         client     <- fakeChessComClient(responses)
-        candidates <- RecruitmentApp.gatherCandidates(client, clubId, clubUrlName, config, List(ClubUrlName("source-club")))
+        candidates <- RecruitmentApp.gatherCandidates(client, clubUrlName, config, List(ClubUrlName("source-club")))
       } yield assertTrue(
         candidates.size == 1,
         candidates.head == Username("regular-user")
@@ -835,7 +835,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       for {
         _          <- seedDb
         client     <- fakeChessComClient(responses)
-        candidates <- RecruitmentApp.gatherCandidates(client, clubId, clubUrlName, config, List(ClubUrlName("source-club")))
+        candidates <- RecruitmentApp.gatherCandidates(client, clubUrlName, config, List(ClubUrlName("source-club")))
       } yield assertTrue(
         candidates.size == 2,
         candidates.toSet == Set(Username("admin-user"), Username("regular-user"))

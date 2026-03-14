@@ -61,14 +61,13 @@ object JobRunner {
         now = Instant.now()
         jobRun = JobRun(id, kind, JobRunStatus.Running, clubUrlName, params, now, None, None)
         _ <- JobRun.insert(jobRun)
-        fiber <- runJob(id, kind, clubUrlName, effect).fork
+        fiber <- runJob(id, kind, effect).fork
         _     <- fibers.update(_ + fiber)
       } yield id
 
     private def runJob(
         id: JobRunId,
         kind: JobKind,
-        clubUrlName: Option[ClubUrlName],
         effect: ZIO[ChessComClient & Transactor, Throwable, Any]
     ): ZIO[Any, Nothing, Unit] =
       effect
@@ -76,13 +75,13 @@ object JobRunner {
         .foldZIO(
           failure = { error =>
             val msg = Option(error.getMessage).getOrElse(error.getClass.getSimpleName)
-            JobRun.update(JobRun(id, kind, JobRunStatus.Failed, clubUrlName, None, Instant.now(), Some(Instant.now()), Some(msg)))
+            JobRun.updateStatus(id, JobRunStatus.Failed, Some(Instant.now()), Some(msg))
               .provideEnvironment(zio.ZEnvironment(xa))
               .unit.orDie
           },
           success = { _ =>
             val complete =
-              JobRun.update(JobRun(id, kind, JobRunStatus.Completed, clubUrlName, None, Instant.now(), Some(Instant.now()), None))
+              JobRun.updateStatus(id, JobRunStatus.Completed, Some(Instant.now()), None)
                 .provideEnvironment(zio.ZEnvironment(xa))
                 .unit.orDie
             val followUp =

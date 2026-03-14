@@ -82,6 +82,8 @@ object JobRoutes {
 
   // --- Helpers ---
 
+  // ISO-8601 string codecs for the REST API, overriding the global
+  // epoch-seconds codecs in ccas.utils.json (which match Chess.com's format).
   private given JsonEncoder[Instant] = JsonEncoder.string.contramap(_.toString)
   private given JsonDecoder[Instant] = JsonDecoder.string.mapOrFail { s =>
     try Right(Instant.parse(s))

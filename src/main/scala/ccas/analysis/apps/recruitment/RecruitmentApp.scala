@@ -10,7 +10,7 @@ import zio.http.{Client, URL}
 import ccas.analysis.tables.*
 import ccas.api.club.{ApiClub, ApiClubMatches, ApiClubMembers}
 import ccas.api.misc.enums.{GameResultDetail, PlayerStatusCategory}
-import ccas.api.misc.subtypes.{ClubId, ClubUrlName, PlayerId, Username}
+import ccas.api.misc.subtypes.{ClubUrlName, Username}
 import ccas.api.player.*
 import ccas.utils.client.ChessComClient
 import ccas.utils.errors.ExternalException
@@ -63,7 +63,7 @@ object RecruitmentApp extends ZIOAppDefault {
       runId <- RecruitmentRun.insert(clubId, configName, now)
 
       // --- Phase 2: Gather candidate usernames ---
-      candidates <- gatherCandidates(client, clubId, clubUrlName, config, sourceClubs)
+      candidates <- gatherCandidates(client, clubUrlName, config, sourceClubs)
 
       // --- Phase 3: Evaluate candidates ---
       invited <- evaluateCandidates(client, runId, clubUrlName, candidates, config, inviteCap)
@@ -82,7 +82,6 @@ object RecruitmentApp extends ZIOAppDefault {
 
   private[recruitment] def gatherCandidates(
       client: ChessComClient,
-      clubId: ClubId,
       clubUrlName: ClubUrlName,
       config: RecruitmentConfig,
       sourceClubs: List[ClubUrlName]
@@ -128,8 +127,7 @@ object RecruitmentApp extends ZIOAppDefault {
       clubMatches <- client.get[ApiClubMatches](ApiClubMatches.getUrl(clubUrlName))
       targetMatchIds = (clubMatches.registered.map(_.`@id`) ++ clubMatches.inProgress.map(_.`@id`)).toSet
 
-      clubId  = config.clubId
-      runCtx  = RunContext(client, config, clubId, targetMatchIds, Instant.now())
+      runCtx  = RunContext(client, config, targetMatchIds, Instant.now())
       filters = buildFilterChain(config)
       revInvited <- ZIO.foldLeft(candidates)(List.empty[Username]) { case (invited, username) =>
         if (invited.size >= inviteCap) ZIO.succeed(invited)
@@ -159,7 +157,6 @@ object RecruitmentApp extends ZIOAppDefault {
   private case class RunContext(
       client: ChessComClient,
       config: RecruitmentConfig,
-      clubId: ClubId,
       clubMatchIds: Set[URL],
       now: Instant
   )
@@ -266,7 +263,7 @@ object RecruitmentApp extends ZIOAppDefault {
       for {
         playerId <- ZIO.fromOption(env.candidate.apiPlayer.map(_.playerId))
           .orElseFail(new NoSuchElementException("apiPlayer not set — FetchAndCheckPlayer must run before CheckBlacklist"))
-        blacklisted <- RecruitmentBlacklist.isBlacklisted(env.run.clubId, playerId, env.run.now)
+        blacklisted <- RecruitmentBlacklist.isBlacklisted(env.run.config.clubId, playerId, env.run.now)
       } yield FilterResult(Option.when(blacklisted)(CandidateOutcome.Rejected), env.candidate)
   }
 

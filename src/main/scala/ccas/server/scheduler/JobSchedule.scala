@@ -70,23 +70,17 @@ object JobSchedule {
     }
 
   def update(id: Long, intervalHours: Option[Int], enabled: Option[Boolean], params: Option[Option[String]]): ZIO[Transactor, SQLException, Int] =
-    connectZIO {
-      (intervalHours, enabled, params) match
-        case (Some(ih), Some(en), Some(p)) =>
-          sql"UPDATE job_schedule SET interval_hours = $ih, enabled = $en, params = $p WHERE id = $id".update.run()
-        case (Some(ih), Some(en), None) =>
-          sql"UPDATE job_schedule SET interval_hours = $ih, enabled = $en WHERE id = $id".update.run()
-        case (Some(ih), None, Some(p)) =>
-          sql"UPDATE job_schedule SET interval_hours = $ih, params = $p WHERE id = $id".update.run()
-        case (Some(ih), None, None) =>
-          sql"UPDATE job_schedule SET interval_hours = $ih WHERE id = $id".update.run()
-        case (None, Some(en), Some(p)) =>
-          sql"UPDATE job_schedule SET enabled = $en, params = $p WHERE id = $id".update.run()
-        case (None, Some(en), None) =>
-          sql"UPDATE job_schedule SET enabled = $en WHERE id = $id".update.run()
-        case (None, None, Some(p)) =>
-          sql"UPDATE job_schedule SET params = $p WHERE id = $id".update.run()
-        case (None, None, None) => 0
+    if (intervalHours.isEmpty && enabled.isEmpty && params.isEmpty) ZIO.succeed(0)
+    else {
+      val hasParams   = params.isDefined
+      val paramsValue = params.flatten
+      connectZIO {
+        sql"""UPDATE job_schedule SET
+                interval_hours = COALESCE($intervalHours, interval_hours),
+                enabled = COALESCE($enabled, enabled),
+                params = CASE WHEN $hasParams THEN $paramsValue ELSE params END
+              WHERE id = $id""".update.run()
+      }
     }
 
   def delete(id: Long): ZIO[Transactor, SQLException, Int] =

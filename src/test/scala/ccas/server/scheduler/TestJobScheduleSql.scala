@@ -21,6 +21,7 @@ object TestJobScheduleSql extends ZIOSpecDefault {
     testUpdateAllFields,
     testUpdatePartialFields,
     testUpdateNoFields,
+    testUpdateSetParamsToNull,
     testDelete,
     testUniqueConstraint
   ).provideShared(
@@ -126,6 +127,20 @@ object TestJobScheduleSql extends ZIOSpecDefault {
       _       <- JobSchedule.update(id, None, None, None)
       result  <- JobSchedule.selectId(id)
     } yield assertTrue(
+      result.get.intervalHours == 12,
+      result.get.enabled
+    )
+  }
+
+  private def testUpdateSetParamsToNull = test("update can set params to null via Some(None)") {
+    val schedule = JobSchedule(0L, JobKind.Recruitment, Some(ClubUrlName("club-a")), Some("original"), 12, enabled = true, None)
+    for {
+      _       <- deleteAll
+      id      <- JobSchedule.insert(schedule)
+      _       <- JobSchedule.update(id, None, None, Some(None))
+      result  <- JobSchedule.selectId(id)
+    } yield assertTrue(
+      result.get.params.isEmpty,
       result.get.intervalHours == 12,
       result.get.enabled
     )

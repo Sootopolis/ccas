@@ -56,6 +56,12 @@ object JobRun {
           """.update.run()
     }
 
+  def updateStatus(id: JobRunId, status: JobRunStatus, completedAt: Option[Instant], error: Option[String]): ZIO[Transactor, SQLException, Int] =
+    connectZIO {
+      sql"""UPDATE job_run SET status = $status, completed_at = $completedAt, error = $error
+             WHERE id = $id""".update.run()
+    }
+
   def selectId(id: JobRunId): ZIO[Transactor, SQLException, Option[JobRun]] =
     connectZIO {
       sql"SELECT id, kind, status, club_url_name, params, started_at, completed_at, error FROM job_run WHERE id = $id"

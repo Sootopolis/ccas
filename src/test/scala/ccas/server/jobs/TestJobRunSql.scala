@@ -16,6 +16,7 @@ object TestJobRunSql extends ZIOSpecDefault {
     testInsertAndSelectId,
     testSelectIdMissing,
     testUpdateChangesFields,
+    testUpdateStatusChangesFields,
     testSelectRunningByKindAndClub,
     testSelectRunningNullClub,
     testSelectRunningIgnoresNonRunning,
@@ -75,6 +76,21 @@ object TestJobRunSql extends ZIOSpecDefault {
     } yield assertTrue(
       result.get.status == JobRunStatus.Completed,
       result.get.completedAt.contains(T.t1)
+    )
+  }
+
+  private def testUpdateStatusChangesFields = test("updateStatus changes status, completedAt, error without touching other fields") {
+    for {
+      _      <- deleteAll
+      _      <- JobRun.insert(run2) // has params = Some("params"), startedAt = T.t2
+      _      <- JobRun.updateStatus(id2, JobRunStatus.Completed, Some(T.t1), None)
+      result <- JobRun.selectId(id2)
+    } yield assertTrue(
+      result.get.status == JobRunStatus.Completed,
+      result.get.completedAt.contains(T.t1),
+      result.get.startedAt == T.t2,
+      result.get.params.contains("params"),
+      result.get.error.isEmpty
     )
   }
 
