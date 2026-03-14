@@ -40,20 +40,20 @@ object JobRun {
             )""".update.run()
     }
 
-  def insert(jobRun: JobRun): ZIO[Transactor, SQLException, Unit] =
+  def insert(jobRun: JobRun): ZIO[Transactor, SQLException, Int] =
     connectZIO {
-      (sql"""INSERT INTO job_run (id, kind, status, club_url_name, params, started_at, completed_at, error)
+      sql"""INSERT INTO job_run (id, kind, status, club_url_name, params, started_at, completed_at, error)
              VALUES (${jobRun.id}, ${jobRun.kind}, ${jobRun.status}, ${jobRun.clubUrlName},
                      ${jobRun.params}, ${jobRun.startedAt}, ${jobRun.completedAt}, ${jobRun.error})
-          """.update.run()): Unit
+          """.update.run()
     }
 
-  def update(jobRun: JobRun): ZIO[Transactor, SQLException, Unit] =
+  def update(jobRun: JobRun): ZIO[Transactor, SQLException, Int] =
     connectZIO {
-      (sql"""UPDATE job_run
+      sql"""UPDATE job_run
              SET status = ${jobRun.status}, completed_at = ${jobRun.completedAt}, error = ${jobRun.error}
              WHERE id = ${jobRun.id}
-          """.update.run()): Unit
+          """.update.run()
     }
 
   def selectId(id: JobRunId): ZIO[Transactor, SQLException, Option[JobRun]] =

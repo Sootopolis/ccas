@@ -3,7 +3,7 @@ package ccas.analysis.apps.recruitment
 import java.time.{Instant, LocalDate, YearMonth, ZoneOffset}
 import java.time.temporal.ChronoUnit
 
-import com.augustnagro.magnum.{sql, Transactor}
+import com.augustnagro.magnum.Transactor
 import zio.{Chunk, Console, Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
 import zio.http.{Client, URL}
 
@@ -15,8 +15,7 @@ import ccas.api.player.*
 import ccas.utils.client.ChessComClient
 import ccas.utils.errors.ExternalException
 import ccas.utils.sql.DataSourceLayer
-import ccas.utils.sql.DbCodecs.given
-import ccas.utils.sql.SqlZioTypes.transactZIO
+import ccas.utils.sql.SqlZioTypes.withTransaction
 
 object RecruitmentApp extends ZIOAppDefault {
 
@@ -570,26 +569,19 @@ object RecruitmentApp extends ZIOAppDefault {
       candidate: CandidateContext,
       outcome: CandidateOutcome,
       errorMessage: Option[String] = None
-    ): ZIO[Transactor, Throwable, Unit] = transactZIO {
-    // 1. Insert Player if new
-    candidate.apiPlayer.filter(_ => candidate.isNewPlayer).foreach { ap =>
-      sql"""INSERT INTO player (player_id, joined)
-            VALUES (${ap.playerId}, ${Instant.ofEpochSecond(ap.joined)})""".update.run()
+    ): ZIO[Transactor, Throwable, Unit] =
+    withTransaction {
+      for {
+        _ <- ZIO.foreachDiscard(candidate.apiPlayer.filter(_ => candidate.isNewPlayer)) { ap =>
+               Player.insert(Player(ap.playerId, Instant.ofEpochSecond(ap.joined)))
+             }
+        _ <- ZIO.foreachDiscard(candidate.apiPlayer) { ap =>
+               PlayerSnapshot.insert(PlayerSnapshot(ap.playerId, now, candidate.username, ap.status.category, ap.title))
+             }
+        _ <- ZIO.foreachDiscard(candidate.cache)(PlayerRecruitmentCache.upsert)
+        _ <- RecruitmentCandidate.insert(RecruitmentCandidate(runId, candidate.username, now, outcome, errorMessage))
+      } yield ()
     }
-    // 2. Insert PlayerSnapshot (always, if apiPlayer was fetched)
-    candidate.apiPlayer.foreach { ap =>
-      val statusCat = ap.status.category
-      sql"""INSERT INTO player_snapshot (player_id, since, username, status, title)
-            VALUES (${ap.playerId}, $now, ${candidate.username}, ${statusCat.toString}, ${ap.title.map(_.toString)})""".update.run()
-    }
-    // 3. Upsert PlayerRecruitmentCache (if fresh data was gathered)
-    candidate.cache.foreach(PlayerRecruitmentCache.upsertRaw)
-    // 4. Insert RecruitmentCandidate
-    val outcomeStr = outcome.toString
-    val reason = errorMessage
-    sql"""INSERT INTO recruitment_candidate (run_id, username, evaluated_at, outcome, rejection_reason)
-          VALUES ($runId, ${candidate.username}, $now, $outcomeStr, $reason)""".update.run()
-  }.unit
 
   // --- TM stats helpers ---
 

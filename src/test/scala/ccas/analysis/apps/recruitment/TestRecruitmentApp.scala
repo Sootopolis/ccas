@@ -996,7 +996,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
               VALUES (${cache.playerId}, ${T.t0})
               ON CONFLICT (player_id) DO NOTHING""".update.run()
       }
-      _      <- SqlZioTypes.transactZIO(PlayerRecruitmentCache.upsertRaw(cache))
+      _      <- PlayerRecruitmentCache.upsert(cache)
       _      <- RecruitmentConfig.upsert(config)
       runId  <- RecruitmentRun.insert(clubId, "default", Instant.now())
       client <- fakeChessComClient(responses)

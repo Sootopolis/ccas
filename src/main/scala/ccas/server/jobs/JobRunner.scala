@@ -78,13 +78,13 @@ object JobRunner {
             val msg = Option(error.getMessage).getOrElse(error.getClass.getSimpleName)
             JobRun.update(JobRun(id, kind, JobRunStatus.Failed, clubUrlName, None, Instant.now(), Some(Instant.now()), Some(msg)))
               .provideEnvironment(zio.ZEnvironment(xa))
-              .orDie
+              .unit.orDie
           },
           success = { _ =>
             val complete =
               JobRun.update(JobRun(id, kind, JobRunStatus.Completed, clubUrlName, None, Instant.now(), Some(Instant.now()), None))
                 .provideEnvironment(zio.ZEnvironment(xa))
-                .orDie
+                .unit.orDie
             val followUp =
               if kind == JobKind.Recruitment || kind == JobKind.Membership then
                 submitMatchRef.provideEnvironment(zio.ZEnvironment(xa)).ignore

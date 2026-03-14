@@ -64,14 +64,14 @@ object JobSchedule {
             RETURNING id""".query[Long].run().head
     }
 
-  def updateLastRunAt(id: Long, at: Instant): ZIO[Transactor, SQLException, Unit] =
+  def updateLastRunAt(id: Long, at: Instant): ZIO[Transactor, SQLException, Int] =
     connectZIO {
-      (sql"UPDATE job_schedule SET last_run_at = $at WHERE id = $id".update.run()): Unit
+      sql"UPDATE job_schedule SET last_run_at = $at WHERE id = $id".update.run()
     }
 
-  def update(id: Long, intervalHours: Option[Int], enabled: Option[Boolean], params: Option[Option[String]]): ZIO[Transactor, SQLException, Unit] =
+  def update(id: Long, intervalHours: Option[Int], enabled: Option[Boolean], params: Option[Option[String]]): ZIO[Transactor, SQLException, Int] =
     connectZIO {
-      val _ = (intervalHours, enabled, params) match
+      (intervalHours, enabled, params) match
         case (Some(ih), Some(en), Some(p)) =>
           sql"UPDATE job_schedule SET interval_hours = $ih, enabled = $en, params = $p WHERE id = $id".update.run()
         case (Some(ih), Some(en), None) =>
@@ -89,8 +89,8 @@ object JobSchedule {
         case (None, None, None) => 0
     }
 
-  def delete(id: Long): ZIO[Transactor, SQLException, Unit] =
+  def delete(id: Long): ZIO[Transactor, SQLException, Int] =
     connectZIO {
-      val _ = sql"DELETE FROM job_schedule WHERE id = $id".update.run()
+      sql"DELETE FROM job_schedule WHERE id = $id".update.run()
     }
 }
