@@ -35,6 +35,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
   private val pid0 = PlayerId(200)
   private val pid1 = PlayerId(201)
   private val pid2 = PlayerId(202)
+  private val pid3 = PlayerId(203)
 
   // --- Helpers ---
 
@@ -241,11 +242,15 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       // Clean up test data
       _ <- RecruitmentCandidate.deleteAll
       _ <- RecruitmentRun.deleteAll
+      _ <- RecruitmentBlacklist.deleteAll
       _ <- RecruitmentConfig.deleteAll
       _ <- PlayerRecruitmentCache.deleteAll
       _ <- SqlZioTypes.connectZIO(sql"DELETE FROM club_member WHERE club_id = $clubId".update.run())
       _ <- SqlZioTypes.connectZIO(sql"DELETE FROM club_member WHERE club_id = $sourceClubId".update.run())
-      _ <- ZIO.foreachDiscard(List(pid0, pid1, pid2)) { pid =>
+      _ <- ZIO.foreachDiscard(List(blacklistClubId, ClubId(701))) { cid =>
+        SqlZioTypes.connectZIO(sql"DELETE FROM club WHERE club_id = $cid".update.run())
+      }
+      _ <- ZIO.foreachDiscard(List(pid0, pid1, pid2, pid3)) { pid =>
         SqlZioTypes.connectZIO(sql"DELETE FROM player_snapshot WHERE player_id = $pid".update.run()) *>
           SqlZioTypes.connectZIO(sql"DELETE FROM player WHERE player_id = $pid".update.run())
       }
@@ -288,6 +293,8 @@ object TestRecruitmentApp extends ZIOSpecDefault {
     suiteGatherCandidates,
     suiteEvaluateCandidates,
     suiteFilterChain,
+    suiteBlacklist,
+    suiteBlacklistApp,
     suiteCacheFilters,
     suiteFullWorkflow,
     suiteReport
@@ -863,6 +870,121 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         cached.get.dailyElo.contains(1200),
         cached.get.lastDailyTimeoutAt.isEmpty,
         cached.get.lastTmTimeoutAt.isEmpty
+      )
+    }
+  )
+
+  // ==========================================================================
+  // Suite: Blacklist
+  // ==========================================================================
+
+  private def suiteBlacklist = suite("blacklist")(
+    test("blacklisted player is rejected during evaluation") {
+      val responses = Map("player/alice" -> apiPlayerJson(200, "alice"))
+      val config    = makeConfig()
+      for {
+        _      <- seedDb
+        _      <- RecruitmentConfig.upsert(config)
+        // Blacklist alice (indefinite)
+        _      <- RecruitmentBlacklist.insert(
+          RecruitmentBlacklist(clubId, pid0, T.t0, expiresAt = None, reason = Some("banned"))
+        )
+        runId  <- RecruitmentRun.insert(clubId, "default", Instant.now())
+        client <- fakeChessComClient(responses)
+        _      <- RecruitmentApp.evaluateCandidates(client, runId, clubUrlName, List(Username("alice")), config)
+        cands  <- RecruitmentCandidate.selectByRun(runId)
+      } yield assertTrue(
+        cands.size == 1,
+        cands.head.outcome == CandidateOutcome.Rejected
+      )
+    },
+    test("expired blacklist entry does not reject the player") {
+      val now       = Instant.now()
+      val responses = Map("player/alice" -> apiPlayerJson(200, "alice"))
+      val config    = makeConfig()
+      for {
+        _      <- seedDb
+        _      <- RecruitmentConfig.upsert(config)
+        // Blacklist alice with an already-expired entry
+        _      <- RecruitmentBlacklist.insert(
+          RecruitmentBlacklist(clubId, pid0, T.t0, expiresAt = Some(now.minus(java.time.Duration.ofDays(1))), reason = Some("temp ban"))
+        )
+        runId  <- RecruitmentRun.insert(clubId, "default", now)
+        client <- fakeChessComClient(responses)
+        _      <- RecruitmentApp.evaluateCandidates(client, runId, clubUrlName, List(Username("alice")), config)
+        cands  <- RecruitmentCandidate.selectByRun(runId)
+      } yield assertTrue(
+        cands.size == 1,
+        cands.head.outcome == CandidateOutcome.Invited
+      )
+    }
+  )
+
+  // ==========================================================================
+  // Suite: BlacklistApp
+  // ==========================================================================
+
+  private val blacklistClubId      = ClubId(700)
+  private val blacklistClubUrlName = ClubUrlName("blacklist-club")
+
+  private def suiteBlacklistApp = suite("BlacklistApp")(
+    test("inserts blacklist entry with reason and expiresAt") {
+      val futureInstant = T.t3
+      val responses = Map(
+        s"club/$blacklistClubUrlName" -> apiClubJson(700, blacklistClubUrlName, Nil),
+        "player/target-player"       -> apiPlayerJson(203, "target-player")
+      )
+      for {
+        _       <- seedDb
+        client  <- fakeChessComClient(responses)
+        xa      <- ZIO.service[Transactor]
+        _       <- BlacklistApp.addToBlacklist(blacklistClubUrlName, Username("target-player"), Some("toxic"), Some(futureInstant))
+                     .provideEnvironment(zio.ZEnvironment(client, xa))
+        entries <- RecruitmentBlacklist.selectByClub(blacklistClubId)
+      } yield assertTrue(
+        entries.size == 1,
+        entries.head.playerId == pid3,
+        entries.head.reason.contains("toxic"),
+        entries.head.expiresAt.contains(futureInstant)
+      )
+    },
+    test("inserts blacklist entry without optional fields") {
+      val responses = Map(
+        s"club/$blacklistClubUrlName" -> apiClubJson(700, blacklistClubUrlName, Nil),
+        "player/target-player"       -> apiPlayerJson(203, "target-player")
+      )
+      for {
+        _       <- seedDb
+        client  <- fakeChessComClient(responses)
+        xa      <- ZIO.service[Transactor]
+        _       <- BlacklistApp.addToBlacklist(blacklistClubUrlName, Username("target-player"), None, None)
+                     .provideEnvironment(zio.ZEnvironment(client, xa))
+        entries <- RecruitmentBlacklist.selectByClub(blacklistClubId)
+      } yield assertTrue(
+        entries.size == 1,
+        entries.head.reason.isEmpty,
+        entries.head.expiresAt.isEmpty
+      )
+    },
+    test("upserts club before inserting blacklist entry") {
+      val freshClubId      = ClubId(701)
+      val freshClubUrlName = ClubUrlName("fresh-club")
+      val responses = Map(
+        s"club/$freshClubUrlName" -> apiClubJson(701, freshClubUrlName, Nil),
+        "player/target-player"   -> apiPlayerJson(203, "target-player")
+      )
+      for {
+        _       <- seedDb
+        client  <- fakeChessComClient(responses)
+        xa      <- ZIO.service[Transactor]
+        before  <- Club.selectId(freshClubId)
+        _       <- BlacklistApp.addToBlacklist(freshClubUrlName, Username("target-player"), None, None)
+                     .provideEnvironment(zio.ZEnvironment(client, xa))
+        after   <- Club.selectId(freshClubId)
+      } yield assertTrue(
+        before.isEmpty,
+        after.isDefined,
+        after.get.urlName == freshClubUrlName
       )
     }
   )

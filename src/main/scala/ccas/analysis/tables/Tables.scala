@@ -12,6 +12,7 @@ object Tables {
       _ <- ClubMember.createTable
       _ <- MembershipRun.createTable
       _ <- RecruitmentConfig.createTable
+      _ <- RecruitmentBlacklist.createTable
       _ <- RecruitmentRun.createTable
       _ <- RecruitmentCandidate.createTable
       _ <- PlayerRecruitmentCache.createTable

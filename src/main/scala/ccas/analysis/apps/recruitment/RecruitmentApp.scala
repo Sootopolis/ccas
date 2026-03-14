@@ -121,7 +121,8 @@ object RecruitmentApp extends ZIOAppDefault {
       clubMatches <- client.get[ApiClubMatches](ApiClubMatches.getUrl(clubUrlName))
       targetMatchIds = (clubMatches.registered.map(_.`@id`) ++ clubMatches.inProgress.map(_.`@id`)).toSet
 
-      runCtx = RunContext(client, config, targetMatchIds, Instant.now())
+      clubId  = config.clubId
+      runCtx  = RunContext(client, config, clubId, targetMatchIds, Instant.now())
       filters = buildFilterChain(config)
       revInvited <- ZIO.foldLeft(candidates)(List.empty[Username]) { case (invited, username) =>
         if (invited.size >= inviteCap) ZIO.succeed(invited)
@@ -151,6 +152,7 @@ object RecruitmentApp extends ZIOAppDefault {
   private case class RunContext(
       client: ChessComClient,
       config: RecruitmentConfig,
+      clubId: ClubId,
       clubMatchIds: Set[URL],
       now: Instant
   )
@@ -192,6 +194,7 @@ object RecruitmentApp extends ZIOAppDefault {
     val base = List(
       CheckInvitedTooRecently,
       FetchAndCheckPlayer,
+      CheckBlacklist,
       CheckCacheCriteria,
       CheckOpponentMatch,
       CheckClubs,
@@ -249,6 +252,15 @@ object RecruitmentApp extends ZIOAppDefault {
           }) Some(CandidateOutcome.Rejected)
           else None
       } yield FilterResult(outcome, updatedCtx)
+  }
+
+  private object CheckBlacklist extends RecruitmentFilter {
+    def apply(env: FilterEnv): ZIO[Transactor, Throwable, FilterResult] =
+      for {
+        playerId <- ZIO.fromOption(env.candidate.apiPlayer.map(_.playerId))
+          .orElseFail(new NoSuchElementException("apiPlayer not set — FetchAndCheckPlayer must run before CheckBlacklist"))
+        blacklisted <- RecruitmentBlacklist.isBlacklisted(env.run.clubId, playerId, env.run.now)
+      } yield FilterResult(Option.when(blacklisted)(CandidateOutcome.Rejected), env.candidate)
   }
 
   // --- Per-criterion cache checks ---
