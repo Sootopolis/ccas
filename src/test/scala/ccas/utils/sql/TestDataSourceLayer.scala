@@ -1,10 +1,9 @@
 package ccas.utils.sql
 
+import com.augustnagro.magnum.Transactor
 import com.zaxxer.hikari.HikariDataSource
 import zio.ZIO
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
-
-import ccas.utils.sql.DataSourceLayer
 
 object TestDataSourceLayer extends ZIOSpecDefault {
   override def spec: Spec[Any, Throwable] = suite("TestDataSourceLayer")(
@@ -20,13 +19,13 @@ object TestDataSourceLayer extends ZIOSpecDefault {
 
   private def testIsHikariDataSource = test("underlying DataSource is HikariDataSource") {
     for {
-      xa <- ZIO.service[com.augustnagro.magnum.Transactor]
+      xa <- ZIO.service[Transactor]
     } yield assertTrue(xa.dataSource.isInstanceOf[HikariDataSource])
   }
 
   private def testPoolConfigApplied = test("pool config is applied from application.conf") {
     for {
-      xa <- ZIO.service[com.augustnagro.magnum.Transactor]
+      xa <- ZIO.service[Transactor]
       hikariDs = xa.dataSource.asInstanceOf[HikariDataSource]
     } yield assertTrue(
       hikariDs.getMaximumPoolSize == 3,
@@ -37,7 +36,7 @@ object TestDataSourceLayer extends ZIOSpecDefault {
 
   private def testConnectionFunctional = test("connections are functional") {
     for {
-      xa <- ZIO.service[com.augustnagro.magnum.Transactor]
+      xa <- ZIO.service[Transactor]
       result <- ZIO.attempt {
         val conn = xa.dataSource.getConnection
         try {
@@ -55,7 +54,7 @@ object TestDataSourceLayer extends ZIOSpecDefault {
 
   private def testSchemaOverride = test("schema override works") {
     for {
-      xa <- ZIO.service[com.augustnagro.magnum.Transactor]
+      xa <- ZIO.service[Transactor]
       exists <- ZIO.attempt {
         val conn = xa.dataSource.getConnection
         try {
@@ -77,8 +76,7 @@ object TestDataSourceLayer extends ZIOSpecDefault {
       hikariDs <- ZIO.scoped {
         for {
           xa <- DataSourceLayer.liveFromPrefix(schema = Some("test_dsl_close")).build
-          ds = xa.get[com.augustnagro.magnum.Transactor].dataSource.asInstanceOf[HikariDataSource]
-          _  <- ZIO.succeed(assertTrue(!ds.isClosed))
+          ds = xa.get[Transactor].dataSource.asInstanceOf[HikariDataSource]
         } yield ds
       }
     } yield assertTrue(hikariDs.isClosed)
