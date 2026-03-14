@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-CCAS (Chess Club Admin System) is a Scala 3 application that pulls data from the Chess.com public API and stores it in a PostgreSQL database for chess club management tasks: tracking membership, analysing member performance, and scouting players from other clubs.
+CCAS (Chess Club Admin System) is a Scala 3 application that pulls data from the Chess.com public API and stores it in a PostgreSQL database for chess club management tasks: tracking membership, analysing member performance, and scouting/recruiting players from other clubs. It includes a backend HTTP server with job scheduling for running these tasks.
 
 ## Build & Test Commands
 
@@ -22,13 +22,15 @@ Tests use ZIO Test (`ZIOSpecDefault`). SQL tests require a running PostgreSQL in
 
 ### Layers
 
-The codebase has three main packages:
+The codebase has four main packages:
 
 1. **`ccas.api`** — Chess.com API models and client. Case classes model API JSON responses (e.g., `ApiPlayer`, `ApiClub`, `ApiDailyMatch`). Each API model companion object extends `JsonDecoding[T]` to provide a ZIO JSON decoder. API models are read-only data transfer objects; they are never written to the database directly.
 
-2. **`ccas.analysis`** — Domain tables and business logic. `analysis.tables` contains database-persisted entities (`Player`, `PlayerSnapshot`, `Club`, `ClubMember`). `analysis.apps` contains runnable applications (e.g., `MembershipApp extends ZIOAppDefault`).
+2. **`ccas.analysis`** — Domain tables and business logic. `analysis.tables` contains database-persisted entities (`Player`, `PlayerSnapshot`, `Club`, `ClubMember`, plus recruitment-related tables like `RecruitmentConfig`, `RecruitmentCandidate`, `RecruitmentBlacklist`). `analysis.apps` contains runnable applications (`MembershipApp`, `RecruitmentApp`, `MatchRefApp`, `BlacklistApp`).
 
-3. **`ccas.utils`** — Shared infrastructure: HTTP client (`client/`), JSON traits (`json/`), SQL helpers (`sql/`), opaque type utilities (`opaque/`), and pretty-printing (`prettyprinting/`).
+3. **`ccas.server`** — Backend HTTP server with job execution and scheduling. `server.jobs` has `JobRunner` (async job execution via forked fibers), `JobRun`/`JobSchedule` (database entities). `server.routes` has zio-http route handlers for jobs, schedules, and health checks. `server.scheduler` has `JobScheduler` (polling-based scheduled job execution). Entry point is `CcasServer extends ZIOAppDefault`.
+
+4. **`ccas.utils`** — Shared infrastructure: HTTP client (`client/`), JSON traits (`json/`), SQL helpers (`sql/`), opaque type utilities (`opaque/`), and pretty-printing (`prettyprinting/`).
 
 ### Key Patterns
 
@@ -45,7 +47,7 @@ The codebase has three main packages:
 
 **JSON decoding trait:** API model companions extend `JsonDecoding[T]`, which wraps `JsonDecoder` with convenience methods (`decodeZIO`, string extensions). The derived decoder is provided via `jsonDecoderDerived`. API models use `@jsonMemberNames(SnakeCase)` for field mapping. Global decoders for `Instant` and `URL` are exported automatically.
 
-**ZIO effect types:** SQL operations use `SqlTask[A]` (alias for `IO[SQLException, A]`). Helper functions `connectZIO` and `transactZIO` (in `ccas.utils.sql.SqlZioTypes`) provide the bridge between Magnum's context-function-based API and ZIO effects, returning `ZIO[Transactor, SQLException, A]`.
+**ZIO effect types:** SQL operations use `SqlTask[A]` (alias for `IO[SQLException, A]`). Helper functions `connectZIO` and `transactZIO` (in `ccas.utils.sql.SqlZioTypes`) provide the bridge between Magnum's context-function-based API and ZIO effects, returning `ZIO[Transactor, SQLException, A]`. For multi-statement atomic operations, `withTransaction` wraps multiple `connectZIO` calls in a single JDBC transaction (commits on success, rolls back on any failure or interruption) by sharing a proxied connection via a scoped `Transactor`.
 
 ### HTTP Client
 
@@ -55,6 +57,14 @@ The codebase has three main packages:
 - Exponential backoff retry (up to 4 retries) with configurable cooldown (default 30s)
 - Requires `CCAS_CONTACT_EMAIL` environment variable for the `User-Agent` header
 - Batch fetching via `getAll[T](urls)` using `ZIO.foreachPar`
+
+### Backend Server
+
+`CcasServer` (`ccas.server`) is a zio-http server that exposes REST endpoints and runs background jobs:
+- **Routes:** `HealthRoutes` (health/readiness), `JobRoutes` (submit and query jobs), `ScheduleRoutes` (CRUD for scheduled jobs). Route handlers use inline JSON codecs for request/response types and map domain exceptions to HTTP status codes (e.g., `JobConflictException` → 409).
+- **JobRunner:** Trait-based (`JobRunnerLive`) async executor that forks fibers per job, tracks state in `JobRun` table (ULID IDs via `ulid-creator`), and auto-submits follow-up jobs (e.g., MatchRef after Recruitment completes). Marks orphaned running jobs as failed on startup.
+- **JobScheduler:** Polling daemon (configurable interval) that checks enabled `JobSchedule` entries and submits due jobs to the `JobRunner`.
+- **ServerTables:** Ensures both analysis and server database tables exist on startup.
 
 ### Database
 
