@@ -20,6 +20,8 @@ import ccas.utils.sql.SqlZioTypes.transactZIO
 
 object RecruitmentApp extends ZIOAppDefault {
 
+  private val DefaultInviteCap = 30
+
   override def run: ZIO[Any & ZIOAppArgs & Scope, Any, Any] =
     for {
       args <- ZIOAppArgs.getArgs
@@ -41,7 +43,7 @@ object RecruitmentApp extends ZIOAppDefault {
 
   // --- Phase 1: Initialize ---
 
-  private[recruitment] def recruit(clubUrlName: ClubUrlName, configName: String, maxCandidates: Int = 30)
+  private[recruitment] def recruit(clubUrlName: ClubUrlName, configName: String, inviteCap: Int = DefaultInviteCap)
       : ZIO[ChessComClient & Transactor, Throwable, RecruitmentRun] =
     for {
       client  <- ZIO.service[ChessComClient]
@@ -58,7 +60,7 @@ object RecruitmentApp extends ZIOAppDefault {
       candidates <- gatherCandidates(client, clubId, clubUrlName, config)
 
       // --- Phase 3: Evaluate candidates ---
-      invited <- evaluateCandidates(client, runId, clubUrlName, candidates, config, maxCandidates)
+      invited <- evaluateCandidates(client, runId, clubUrlName, candidates, config, inviteCap)
 
       // --- Phase 4: Finalize ---
       completedAt = Instant.now()
@@ -112,7 +114,7 @@ object RecruitmentApp extends ZIOAppDefault {
       clubUrlName: ClubUrlName,
       candidates: List[Username],
       config: RecruitmentConfig,
-      maxCandidates: Int = 30
+      inviteCap: Int = DefaultInviteCap
     ): ZIO[Transactor, Throwable, List[Username]] =
     for {
       // Pre-fetch target club's registered match IDs (for opponent check)
@@ -122,7 +124,7 @@ object RecruitmentApp extends ZIOAppDefault {
       runCtx = RunContext(client, config, targetMatchIds, Instant.now())
       filters = buildFilterChain(config)
       revInvited <- ZIO.foldLeft(candidates)(List.empty[Username]) { case (invited, username) =>
-        if (invited.size >= maxCandidates) ZIO.succeed(invited)
+        if (invited.size >= inviteCap) ZIO.succeed(invited)
         else {
           val now = Instant.now()
           val candidateCtx = CandidateContext.initial(username)

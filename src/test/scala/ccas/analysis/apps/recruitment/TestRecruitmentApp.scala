@@ -586,7 +586,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         candidates.forall(_.outcome == CandidateOutcome.Invited)
       )
     },
-    test("respects maxCandidates limit") {
+    test("respects inviteCap limit") {
       val responses = Map(
         "player/alice"   -> apiPlayerJson(200, "alice"),
         "player/bob"     -> apiPlayerJson(201, "bob"),
@@ -605,7 +605,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
           clubUrlName,
           List(Username("alice"), Username("bob"), Username("charlie")),
           config,
-          maxCandidates = 2
+          inviteCap = 2
         )
         candidates <- RecruitmentCandidate.selectByRun(runId)
       } yield assertTrue(
