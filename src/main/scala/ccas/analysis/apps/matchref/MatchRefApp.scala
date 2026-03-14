@@ -25,7 +25,7 @@ object MatchRefApp extends ZIOAppDefault {
       DataSourceLayer.liveFromPrefix(onInit = Tables.ensureTables)
     )
 
-  private def populate: ZIO[ChessComClient & Transactor, Throwable, Unit] =
+  def populate: ZIO[ChessComClient & Transactor, Throwable, Unit] =
     for {
       client <- ZIO.service[ChessComClient]
       cache  <- Ref.make(Map.empty[ClubMatchId, ApiDailyMatch])

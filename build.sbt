@@ -30,7 +30,13 @@ libraryDependencies ++= Seq(
   "com.softwaremill.magnolia1_3" %% "magnolia" % vMagnolia,
 
   // postgresql
-  "org.postgresql" % "postgresql" % vPostgresql
+  "org.postgresql" % "postgresql" % vPostgresql,
+
+  // connection pool
+  "com.zaxxer" % "HikariCP" % vHikari,
+
+  // ulid
+  "com.github.f4b6a3" % "ulid-creator" % vUlidCreator
 )
 
 scalacOptions ++= Seq(

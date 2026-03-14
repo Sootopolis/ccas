@@ -46,7 +46,7 @@ object MembershipApp extends ZIOAppDefault {
       )
     } yield ()
 
-  private def reconcileIfStale(clubUrlName: ClubUrlName, until: Instant): ZIO[ChessComClient & Transactor, Throwable, Unit] =
+  def reconcileIfStale(clubUrlName: ClubUrlName, until: Instant): ZIO[ChessComClient & Transactor, Throwable, Unit] =
     for {
       clubOpt <- Club.selectByUrlName(clubUrlName)
       _ <- ZIO.fromOption(clubOpt).flatMap { club =>
@@ -59,7 +59,7 @@ object MembershipApp extends ZIOAppDefault {
 
   // --- Phase A: Gather data ---
 
-  private def reconcile(clubUrlName: ClubUrlName): ZIO[ChessComClient & Transactor, Throwable, ReconciliationResult] =
+  def reconcile(clubUrlName: ClubUrlName): ZIO[ChessComClient & Transactor, Throwable, ReconciliationResult] =
     for {
       client  <- ZIO.service[ChessComClient]
       apiClub <- ApiClub.get(client, clubUrlName)
@@ -457,7 +457,7 @@ object MembershipApp extends ZIOAppDefault {
 
   // --- Report mode: DB-only ---
 
-  private def report(clubUrlName: ClubUrlName, since: Instant, until: Instant): ZIO[Transactor, Throwable, Unit] =
+  def report(clubUrlName: ClubUrlName, since: Instant, until: Instant): ZIO[Transactor, Throwable, Unit] =
     for {
       club <- Club.selectByUrlName(clubUrlName)
         .someOrFail(ExternalException(s"Club '$clubUrlName' not found in database"))

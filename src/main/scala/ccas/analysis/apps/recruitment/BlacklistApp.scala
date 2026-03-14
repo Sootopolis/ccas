@@ -40,7 +40,7 @@ object BlacklistApp extends ZIOAppDefault {
       )
     } yield ()
 
-  private[recruitment] def addToBlacklist(
+  def addToBlacklist(
       clubUrlName: ClubUrlName,
       username: Username,
       reason: Option[String],

@@ -46,7 +46,7 @@ object RecruitmentApp extends ZIOAppDefault {
 
   // --- Phase 1: Initialize ---
 
-  private[recruitment] def recruit(
+  def recruit(
       clubUrlName: ClubUrlName,
       configName: String,
       inviteCap: Int = DefaultInviteCap,
@@ -683,7 +683,7 @@ object RecruitmentApp extends ZIOAppDefault {
 
   // --- Report mode ---
 
-  private[recruitment] def showReport(clubUrlName: ClubUrlName, runIdOpt: Option[String])
+  def showReport(clubUrlName: ClubUrlName, runIdOpt: Option[String])
       : ZIO[Transactor, Throwable, Unit] =
     for {
       club <- Club.selectByUrlName(clubUrlName)

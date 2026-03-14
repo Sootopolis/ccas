@@ -2,7 +2,7 @@ package ccas.utils.sql
 
 import com.augustnagro.magnum.Transactor
 import com.typesafe.config.ConfigFactory
-import org.postgresql.ds.PGSimpleDataSource
+import com.zaxxer.hikari.{HikariConfig, HikariDataSource}
 import zio.{TaskLayer, ZIO, ZLayer}
 
 object DataSourceLayer {
@@ -15,38 +15,52 @@ object DataSourceLayer {
     schema: Option[String] = None,
     onInit: ZIO[Transactor, Throwable, Unit] = ZIO.unit
   ): TaskLayer[Transactor] =
-    ZLayer
-      .fromZIO {
-        for {
-          xa <- ZIO.attempt {
-            val config = ConfigFactory.load().getConfig(prefix)
-            val ds     = new PGSimpleDataSource()
+    ZLayer.scoped {
+      for {
+        xa <- ZIO.acquireRelease(
+          ZIO.attempt {
+            val config      = ConfigFactory.load().getConfig(prefix)
+            val hikariConfig = new HikariConfig()
+
             if (config.hasPath("url")) {
-              ds.setUrl(config.getString("url"))
+              hikariConfig.setJdbcUrl(config.getString("url"))
             } else {
               val dsConfig = config.getConfig("dataSource")
-              ds.setUser(dsConfig.getString("user"))
-              ds.setPassword(dsConfig.getString("password"))
-              ds.setDatabaseName(dsConfig.getString("databaseName"))
-              ds.setPortNumbers(Array(dsConfig.getInt("portNumber")))
-              ds.setServerNames(Array(dsConfig.getString("serverName")))
-              ds.setCurrentSchema(schema.getOrElse(dsConfig.getString("currentSchema")))
+              hikariConfig.setJdbcUrl(
+                s"jdbc:postgresql://${dsConfig.getString("serverName")}:${dsConfig.getInt("portNumber")}/${dsConfig.getString("databaseName")}"
+              )
+              hikariConfig.setUsername(dsConfig.getString("user"))
+              hikariConfig.setPassword(dsConfig.getString("password"))
+              hikariConfig.setSchema(schema.getOrElse(dsConfig.getString("currentSchema")))
             }
-            Transactor(ds)
-          }
-          _ <- ZIO.foreachDiscard(schema) { s =>
-            ZIO.attempt {
-              require(schemaNamePattern.matches(s), s"Invalid schema name: $s")
-              val conn = xa.dataSource.getConnection
-              try {
-                val stmt = conn.createStatement()
-                stmt.execute(s"DROP SCHEMA IF EXISTS $s CASCADE")
-                stmt.execute(s"CREATE SCHEMA $s")
-                stmt.close()
-              } finally conn.close()
+
+            if (config.hasPath("pool")) {
+              val poolConfig = config.getConfig("pool")
+              if (poolConfig.hasPath("maximumPoolSize"))  hikariConfig.setMaximumPoolSize(poolConfig.getInt("maximumPoolSize"))
+              if (poolConfig.hasPath("minimumIdle"))       hikariConfig.setMinimumIdle(poolConfig.getInt("minimumIdle"))
+              if (poolConfig.hasPath("connectionTimeout")) hikariConfig.setConnectionTimeout(poolConfig.getLong("connectionTimeout"))
+              if (poolConfig.hasPath("idleTimeout"))       hikariConfig.setIdleTimeout(poolConfig.getLong("idleTimeout"))
+              if (poolConfig.hasPath("maxLifetime"))       hikariConfig.setMaxLifetime(poolConfig.getLong("maxLifetime"))
             }
+
+            val hikariDs = new HikariDataSource(hikariConfig)
+            (hikariDs, Transactor(hikariDs))
           }
-          _ <- onInit.provideEnvironment(zio.ZEnvironment(xa))
-        } yield xa
-      }
+        )(pair => ZIO.succeed(pair._1.close()))
+        (_, transactor) = xa
+        _ <- ZIO.foreachDiscard(schema) { s =>
+          ZIO.attempt {
+            require(schemaNamePattern.matches(s), s"Invalid schema name: $s")
+            val conn = transactor.dataSource.getConnection
+            try {
+              val stmt = conn.createStatement()
+              stmt.execute(s"DROP SCHEMA IF EXISTS $s CASCADE")
+              stmt.execute(s"CREATE SCHEMA $s")
+              stmt.close()
+            } finally conn.close()
+          }
+        }
+        _ <- onInit.provideEnvironment(zio.ZEnvironment(transactor))
+      } yield transactor
+    }
 }

@@ -1,0 +1,110 @@
+package ccas.server.jobs
+
+import java.time.Instant
+
+import com.augustnagro.magnum.Transactor
+import zio.{Fiber, Ref, ZIO, ZLayer}
+
+import ccas.api.misc.subtypes.ClubUrlName
+import ccas.utils.client.ChessComClient
+
+trait JobRunner {
+  def submit(
+      kind: JobKind,
+      clubUrlName: Option[ClubUrlName],
+      params: Option[String],
+      effect: ZIO[ChessComClient & Transactor, Throwable, Any]
+  ): ZIO[Transactor, Throwable, JobRunId]
+
+  def status(id: JobRunId): ZIO[Transactor, Throwable, Option[JobRun]]
+
+  def recentJobs(limit: Int): ZIO[Transactor, Throwable, List[JobRun]]
+}
+
+object JobRunner {
+
+  val live: ZLayer[ChessComClient & Transactor, Throwable, JobRunner] =
+    ZLayer.scoped {
+      for {
+        client  <- ZIO.service[ChessComClient]
+        xa      <- ZIO.service[Transactor]
+        fibers  <- Ref.make(Set.empty[Fiber.Runtime[Nothing, Unit]])
+        _       <- JobRun.markOrphansAsFailed.provideEnvironment(zio.ZEnvironment(xa))
+        runner   = new JobRunnerLive(client, xa, fibers)
+        _       <- ZIO.addFinalizer(runner.awaitAll)
+      } yield runner
+    }
+
+  private class JobRunnerLive(
+      client: ChessComClient,
+      xa: Transactor,
+      fibers: Ref[Set[Fiber.Runtime[Nothing, Unit]]]
+  ) extends JobRunner {
+
+    private val env = zio.ZEnvironment(client, xa)
+
+    override def submit(
+        kind: JobKind,
+        clubUrlName: Option[ClubUrlName],
+        params: Option[String],
+        effect: ZIO[ChessComClient & Transactor, Throwable, Any]
+    ): ZIO[Transactor, Throwable, JobRunId] =
+      for {
+        existing <- JobRun.selectRunning(kind, clubUrlName)
+        _        <- ZIO.when(existing.isDefined)(
+                      ZIO.fail(new JobConflictException(
+                        s"A ${kind} job is already running" +
+                          clubUrlName.fold("")(c => s" for club $c")
+                      ))
+                    )
+        id  = JobRunId.generate()
+        now = Instant.now()
+        jobRun = JobRun(id, kind, JobRunStatus.Running, clubUrlName, params, now, None, None)
+        _ <- JobRun.insert(jobRun)
+        fiber <- runJob(id, kind, clubUrlName, effect).fork
+        _     <- fibers.update(_ + fiber)
+      } yield id
+
+    private def runJob(
+        id: JobRunId,
+        kind: JobKind,
+        clubUrlName: Option[ClubUrlName],
+        effect: ZIO[ChessComClient & Transactor, Throwable, Any]
+    ): ZIO[Any, Nothing, Unit] =
+      effect
+        .provideEnvironment(env)
+        .foldZIO(
+          failure = { error =>
+            val msg = Option(error.getMessage).getOrElse(error.getClass.getSimpleName)
+            JobRun.update(JobRun(id, kind, JobRunStatus.Failed, clubUrlName, None, Instant.now(), Some(Instant.now()), Some(msg)))
+              .provideEnvironment(zio.ZEnvironment(xa))
+              .orDie
+          },
+          success = { _ =>
+            val complete =
+              JobRun.update(JobRun(id, kind, JobRunStatus.Completed, clubUrlName, None, Instant.now(), Some(Instant.now()), None))
+                .provideEnvironment(zio.ZEnvironment(xa))
+                .orDie
+            val followUp =
+              if kind == JobKind.Recruitment || kind == JobKind.Membership then
+                submitMatchRef.provideEnvironment(zio.ZEnvironment(xa)).ignore
+              else ZIO.unit
+            complete *> followUp
+          }
+        )
+
+    private def submitMatchRef: ZIO[Transactor, Throwable, Unit] = {
+      import ccas.analysis.apps.matchref.MatchRefApp
+      submit(JobKind.MatchRef, None, None, MatchRefApp.populate).unit.catchAll(_ => ZIO.unit)
+    }
+
+    def awaitAll: ZIO[Any, Nothing, Unit] =
+      fibers.get.flatMap(fs => ZIO.foreachDiscard(fs)(_.await))
+
+    override def status(id: JobRunId): ZIO[Transactor, Throwable, Option[JobRun]] =
+      JobRun.selectId(id)
+
+    override def recentJobs(limit: Int): ZIO[Transactor, Throwable, List[JobRun]] =
+      JobRun.selectRecent(limit)
+  }
+}
