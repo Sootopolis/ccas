@@ -258,14 +258,12 @@ object TestRecruitmentApp extends ZIOSpecDefault {
     } yield ()
 
   private def makeConfig(
-      sourceClubs: List[String] = List("source-club"),
       excludeClubs: List[String] = Nil,
       onExhaustion: ExhaustionBehavior = ExhaustionBehavior.Stop
     ): RecruitmentConfig =
     RecruitmentConfig(
       clubId = clubId,
       configName = "default",
-      sourceClubs = sourceClubs,
       excludeClubs = excludeClubs,
       onExhaustion = onExhaustion,
       nationalityMode = None,
@@ -307,12 +305,6 @@ object TestRecruitmentApp extends ZIOSpecDefault {
   // ==========================================================================
 
   private def suiteConfigHelpers = suite("config helpers")(
-    test("sourceClubNames wraps strings to ClubUrlName") {
-      val config = makeConfig(sourceClubs = List("club-a", "club-b"))
-      assertTrue(
-        config.sourceClubNames == List(ClubUrlName("club-a"), ClubUrlName("club-b"))
-      )
-    },
     test("excludeClubNames wraps strings to ClubUrlName") {
       val config = makeConfig(excludeClubs = List("club-x"))
       assertTrue(
@@ -335,14 +327,13 @@ object TestRecruitmentApp extends ZIOSpecDefault {
 
   private def suiteDbCrud = suite("DB CRUD")(
     test("RecruitmentConfig upsert and select") {
-      val config = makeConfig(sourceClubs = List("club-a", "club-b"), excludeClubs = List("club-x"))
+      val config = makeConfig(excludeClubs = List("club-x"))
       for {
         _      <- seedDb
         _      <- RecruitmentConfig.upsert(config)
         loaded <- RecruitmentConfig.select(clubId, "default")
       } yield assertTrue(
         loaded.isDefined,
-        loaded.get.sourceClubs == List("club-a", "club-b"),
         loaded.get.excludeClubs == List("club-x"),
         loaded.get.onExhaustion == ExhaustionBehavior.Stop
       )
@@ -369,7 +360,6 @@ object TestRecruitmentApp extends ZIOSpecDefault {
     },
     test("RecruitmentConfig TEXT[] array round-trip") {
       val config = makeConfig(
-        sourceClubs = List("alpha", "beta", "gamma"),
         excludeClubs = List("delta")
       ).copy(nationalityCountries = List("US", "GB", "DE"))
       for {
@@ -377,7 +367,6 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         _      <- RecruitmentConfig.upsert(config)
         loaded <- RecruitmentConfig.select(clubId, "default")
       } yield assertTrue(
-        loaded.get.sourceClubs == List("alpha", "beta", "gamma"),
         loaded.get.excludeClubs == List("delta"),
         loaded.get.nationalityCountries == List("US", "GB", "DE")
       )
@@ -516,7 +505,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       for {
         _          <- seedDb
         client     <- fakeChessComClient(responses)
-        candidates <- RecruitmentApp.gatherCandidates(client, clubId, clubUrlName, config)
+        candidates <- RecruitmentApp.gatherCandidates(client, clubId, clubUrlName, config, List(ClubUrlName("source-club")))
       } yield assertTrue(
         candidates.size == 2,
         !candidates.contains(Username("existing-member")),
@@ -541,12 +530,12 @@ object TestRecruitmentApp extends ZIOSpecDefault {
           )
         )
       )
-      val config = makeConfig(sourceClubs = List("source-a", "source-b"))
+      val config = makeConfig()
 
       for {
         _          <- seedDb
         client     <- fakeChessComClient(responses)
-        candidates <- RecruitmentApp.gatherCandidates(client, clubId, clubUrlName, config)
+        candidates <- RecruitmentApp.gatherCandidates(client, clubId, clubUrlName, config, List(ClubUrlName("source-a"), ClubUrlName("source-b")))
       } yield assertTrue(
         candidates.size == 3,
         candidates.toSet == Set(Username("shared-player"), Username("unique-a"), Username("unique-b"))
@@ -825,7 +814,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       for {
         _          <- seedDb
         client     <- fakeChessComClient(responses)
-        candidates <- RecruitmentApp.gatherCandidates(client, clubId, clubUrlName, config)
+        candidates <- RecruitmentApp.gatherCandidates(client, clubId, clubUrlName, config, List(ClubUrlName("source-club")))
       } yield assertTrue(
         candidates.size == 1,
         candidates.head == Username("regular-user")
@@ -847,7 +836,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       for {
         _          <- seedDb
         client     <- fakeChessComClient(responses)
-        candidates <- RecruitmentApp.gatherCandidates(client, clubId, clubUrlName, config)
+        candidates <- RecruitmentApp.gatherCandidates(client, clubId, clubUrlName, config, List(ClubUrlName("source-club")))
       } yield assertTrue(
         candidates.size == 2,
         candidates.toSet == Set(Username("admin-user"), Username("regular-user"))
@@ -1127,7 +1116,8 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         _      <- RecruitmentConfig.upsert(config)
         client <- fakeChessComClient(responses)
         xa     <- ZIO.service[Transactor]
-        result <- RecruitmentApp.recruit(clubUrlName, "default").provideEnvironment(zio.ZEnvironment(client, xa))
+        result <- RecruitmentApp.recruit(clubUrlName, "default", sourceClubs = List(ClubUrlName("source-club")))
+          .provideEnvironment(zio.ZEnvironment(client, xa))
         // Verify run record
         run <- RecruitmentRun.selectId(result.runId)
         // Verify candidates

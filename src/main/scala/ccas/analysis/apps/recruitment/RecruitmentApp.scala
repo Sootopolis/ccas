@@ -27,11 +27,14 @@ object RecruitmentApp extends ZIOAppDefault {
       args <- ZIOAppArgs.getArgs
       _ <- (args.toList match
         case "report" :: clubStr :: rest => showReport(ClubUrlName.wrap(clubStr), rest.headOption)
-        case clubStr :: rest => recruit(ClubUrlName.wrap(clubStr), rest.headOption.getOrElse("default"))
+        case clubStr :: rest =>
+          val configName  = rest.headOption.getOrElse("default")
+          val sourceClubs = rest.drop(1).map(ClubUrlName.wrap)
+          recruit(ClubUrlName.wrap(clubStr), configName, sourceClubs = sourceClubs)
         case _ =>
           ZIO.fail(
             ExternalException(
-              "Usage: RecruitmentApp <club-url-name> [config-name]\n       RecruitmentApp report <club-url-name> [run-id]"
+              "Usage: RecruitmentApp <club-url-name> [config-name] [source-clubs...]\n       RecruitmentApp report <club-url-name> [run-id]"
             )
           )
       ).provide(
@@ -43,8 +46,12 @@ object RecruitmentApp extends ZIOAppDefault {
 
   // --- Phase 1: Initialize ---
 
-  private[recruitment] def recruit(clubUrlName: ClubUrlName, configName: String, inviteCap: Int = DefaultInviteCap)
-      : ZIO[ChessComClient & Transactor, Throwable, RecruitmentRun] =
+  private[recruitment] def recruit(
+      clubUrlName: ClubUrlName,
+      configName: String,
+      inviteCap: Int = DefaultInviteCap,
+      sourceClubs: List[ClubUrlName] = Nil
+    ): ZIO[ChessComClient & Transactor, Throwable, RecruitmentRun] =
     for {
       client  <- ZIO.service[ChessComClient]
       apiClub <- ApiClub.get(client, clubUrlName)
@@ -57,7 +64,7 @@ object RecruitmentApp extends ZIOAppDefault {
       runId <- RecruitmentRun.insert(clubId, configName, now)
 
       // --- Phase 2: Gather candidate usernames ---
-      candidates <- gatherCandidates(client, clubId, clubUrlName, config)
+      candidates <- gatherCandidates(client, clubId, clubUrlName, config, sourceClubs)
 
       // --- Phase 3: Evaluate candidates ---
       invited <- evaluateCandidates(client, runId, clubUrlName, candidates, config, inviteCap)
@@ -78,7 +85,8 @@ object RecruitmentApp extends ZIOAppDefault {
       client: ChessComClient,
       clubId: ClubId,
       clubUrlName: ClubUrlName,
-      config: RecruitmentConfig
+      config: RecruitmentConfig,
+      sourceClubs: List[ClubUrlName]
     ): ZIO[Transactor, Throwable, List[Username]] =
     for {
       // Fetch target club members
@@ -86,7 +94,7 @@ object RecruitmentApp extends ZIOAppDefault {
       existingUsernames = targetMembers.toMap.keySet
 
       // Fetch members from all source clubs
-      sourceMembers <- ZIO.foreachPar(config.sourceClubNames) { sourceClubName =>
+      sourceMembers <- ZIO.foreachPar(sourceClubs) { sourceClubName =>
         ApiClubMembers.get(client, sourceClubName).map(_.toMap.keySet)
       }
 
@@ -96,7 +104,7 @@ object RecruitmentApp extends ZIOAppDefault {
 
       // Optionally exclude source club admins
       adminUsernames <- if (config.excludeSourceAdmins) {
-        ZIO.foreachPar(config.sourceClubNames) { sourceClubName =>
+        ZIO.foreachPar(sourceClubs) { sourceClubName =>
           ApiClub.get(client, sourceClubName).map { apiClub =>
             apiClub.admin.map(url => Username.wrap(url.path.segments.last)).toSet
           }

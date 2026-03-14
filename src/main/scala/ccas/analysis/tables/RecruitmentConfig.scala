@@ -14,7 +14,6 @@ import ccas.utils.sql.SqlZioTypes.connectZIO
 final case class RecruitmentConfig(
     clubId: ClubId,
     configName: String,
-    sourceClubs: List[String],
     excludeClubs: List[String],
     onExhaustion: ExhaustionBehavior,
     nationalityMode: Option[String],
@@ -33,13 +32,12 @@ final case class RecruitmentConfig(
     daysSinceLastInvited: Option[Int],
     excludeSourceAdmins: Boolean)
     derives DbCodec {
-  def sourceClubNames: List[ClubUrlName]  = sourceClubs.map(ClubUrlName.wrap)
   def excludeClubNames: List[ClubUrlName] = excludeClubs.map(ClubUrlName.wrap)
 }
 
 object RecruitmentConfig {
   private val selectCols = SqlLiteral(
-    """club_id, config_name, source_clubs, exclude_clubs, on_exhaustion,
+    """club_id, config_name, exclude_clubs, on_exhaustion,
        nationality_mode, nationality_countries, max_clubs,
        daily_max_timeout_percent, daily_max_tm_timeout_percent,
        daily_min_ongoing_games, daily_max_ongoing_games, daily_min_ongoing_team_matches,
@@ -52,7 +50,6 @@ object RecruitmentConfig {
       sql"""CREATE TABLE IF NOT EXISTS recruitment_config (
               club_id                        BIGINT NOT NULL,
               config_name                    VARCHAR NOT NULL,
-              source_clubs                   TEXT[] NOT NULL,
               exclude_clubs                  TEXT[] NOT NULL,
               on_exhaustion                  VARCHAR NOT NULL CHECK (on_exhaustion IN ('Stop', 'Explore')),
               nationality_mode               VARCHAR,
@@ -73,6 +70,8 @@ object RecruitmentConfig {
               PRIMARY KEY (club_id, config_name),
               FOREIGN KEY (club_id) REFERENCES club (club_id) ON DELETE RESTRICT
             )""".update.run()
+    } *> connectZIO {
+      sql"ALTER TABLE recruitment_config DROP COLUMN IF EXISTS source_clubs".update.run()
     }
 
   def select(clubId: ClubId, configName: String): ZIO[Transactor, SQLException, Option[RecruitmentConfig]] =
@@ -89,7 +88,7 @@ object RecruitmentConfig {
   def upsert(item: RecruitmentConfig): ZIO[Transactor, SQLException, Int] =
     connectZIO {
       sql"""INSERT INTO recruitment_config (
-              club_id, config_name, source_clubs, exclude_clubs, on_exhaustion,
+              club_id, config_name, exclude_clubs, on_exhaustion,
               nationality_mode, nationality_countries, max_clubs,
               daily_max_timeout_percent, daily_max_tm_timeout_percent,
               daily_min_ongoing_games, daily_max_ongoing_games, daily_min_ongoing_team_matches,
@@ -97,14 +96,13 @@ object RecruitmentConfig {
               min_days_since_registration, days_since_last_invited, exclude_source_admins
             ) VALUES (
               ${item.clubId}, ${item.configName},
-              ${item.sourceClubs}, ${item.excludeClubs}, ${item.onExhaustion.toString},
+              ${item.excludeClubs}, ${item.onExhaustion.toString},
               ${item.nationalityMode}, ${item.nationalityCountries}, ${item.maxClubs},
               ${item.dailyMaxTimeoutPercent}, ${item.dailyMaxTmTimeoutPercent},
               ${item.dailyMinOngoingGames}, ${item.dailyMaxOngoingGames}, ${item.dailyMinOngoingTeamMatches},
               ${item.dailyMinElo}, ${item.dailyMaxElo}, ${item.dailyMinGamesFinished}, ${item.dailyMinTmGamesFinished},
               ${item.minDaysSinceRegistration}, ${item.daysSinceLastInvited}, ${item.excludeSourceAdmins}
             ) ON CONFLICT (club_id, config_name) DO UPDATE SET
-              source_clubs = EXCLUDED.source_clubs,
               exclude_clubs = EXCLUDED.exclude_clubs,
               on_exhaustion = EXCLUDED.on_exhaustion,
               nationality_mode = EXCLUDED.nationality_mode,
