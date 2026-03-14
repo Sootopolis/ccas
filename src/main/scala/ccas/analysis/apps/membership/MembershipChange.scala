@@ -33,7 +33,8 @@ object MembershipChange {
 
   final case class DbState(
       membersByPlayerId: Map[PlayerId, MemberState],
-      membersByUsername: Map[Username, MemberState])
+      membersByUsername: Map[Username, MemberState],
+      knownPlayersByUsername: Map[Username, PlayerSnapshot] = Map.empty)
 
   final case class ReconciliationResult(
       changes: Chunk[MemberChangeSummary],

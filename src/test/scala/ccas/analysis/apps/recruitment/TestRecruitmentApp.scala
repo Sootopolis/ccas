@@ -249,7 +249,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       _ <- ZIO.foreachDiscard(List(blacklistClubId, ClubId(701))) { cid =>
         SqlZioTypes.connectZIO(sql"DELETE FROM club WHERE club_id = $cid".update.run())
       }
-      _ <- ZIO.foreachDiscard(List(pid0, pid1, pid2, pid3)) { pid =>
+      _ <- ZIO.foreachDiscard(List(PlayerId(199), pid0, pid1, pid2, pid3)) { pid =>
         SqlZioTypes.connectZIO(sql"DELETE FROM player_snapshot WHERE player_id = $pid".update.run()) *>
           SqlZioTypes.connectZIO(sql"DELETE FROM player WHERE player_id = $pid".update.run())
       }
@@ -1105,6 +1105,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
             ("candidate-b", T.t0.getEpochSecond)
           )
         ),
+        "player/existing" -> apiPlayerJson(199, "existing"),
         "player/candidate-a" -> apiPlayerJson(200, "candidate-a"),
         "player/candidate-b" -> apiPlayerJson(201, "candidate-b")
       )

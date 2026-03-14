@@ -59,7 +59,7 @@ object MembershipApp extends ZIOAppDefault {
 
   // --- Phase A: Gather data ---
 
-  def reconcile(clubUrlName: ClubUrlName): ZIO[ChessComClient & Transactor, Throwable, ReconciliationResult] =
+  def reconcile(clubUrlName: ClubUrlName, trustUsernames: Boolean = true): ZIO[ChessComClient & Transactor, Throwable, ReconciliationResult] =
     for {
       client  <- ZIO.service[ChessComClient]
       apiClub <- ApiClub.get(client, clubUrlName)
@@ -70,7 +70,7 @@ object MembershipApp extends ZIOAppDefault {
       (apiMembers, dbState) = pair
       apiMap                = apiMembers.toMap
       now                   = Instant.now()
-      phaseB <- classifyApiMembers(client, clubId, apiMap, dbState, now)
+      phaseB <- classifyApiMembers(client, clubId, apiMap, dbState, now, trustUsernames)
       phaseC <- classifyDisappeared(client, dbState, phaseB.resolvedIds, apiMap, clubUrlName, now)
       result = mergeResults(phaseB, phaseC)
       _ <- persist(result)
@@ -88,7 +88,8 @@ object MembershipApp extends ZIOAppDefault {
       }
       DbState(
         membersByPlayerId = states.map(s => s.player.playerId -> s).toMap,
-        membersByUsername = states.map(s => s.player.username -> s).toMap
+        membersByUsername = states.map(s => s.player.username -> s).toMap,
+        knownPlayersByUsername = snapshots.map(s => s.username -> s).toMap
       )
     }
 
@@ -107,7 +108,8 @@ object MembershipApp extends ZIOAppDefault {
       clubId: ClubId,
       apiMap: Map[Username, Long],
       dbState: DbState,
-      now: Instant
+      now: Instant,
+      trustUsernames: Boolean = true
     ): ZIO[Transactor, Throwable, PhaseBResult] = {
     val initial = PhaseBResult(Set.empty, Chunk.empty, Chunk.empty, Chunk.empty, Chunk.empty, Chunk.empty)
     ZIO
@@ -134,88 +136,127 @@ object MembershipApp extends ZIOAppDefault {
               )
 
           case None =>
-            // Unknown by username — fetch from API
-            client.getWithPermit[ApiPlayer](ApiPlayer.getUrl(username)).flatMap { apiPlayer =>
-              val playerId       = apiPlayer.playerId
-              val statusCategory = apiPlayer.status.category
-
-              dbState.membersByPlayerId.get(playerId) match {
-                case Some(state) =>
-                  // Username change: same player ID, different username
-                  val changeChunks   = Chunk.newBuilder[MemberChange]
-                  val snapshotChunks = Chunk.newBuilder[PlayerSnapshot]
-
-                  changeChunks += UsernameChange(now, state.player.username)
-                  val newSnapshot = PlayerSnapshot(playerId, now, username, statusCategory, apiPlayer.title)
-                  snapshotChunks += newSnapshot
-
-                  // Also detect status/title changes
-                  if state.player.status != statusCategory then changeChunks += StatusChange(now, state.player.status)
-
-                  val summary = MemberChangeSummary(playerId, changeChunks.result())
-                  ZIO
-                    .succeed(
-                      acc.copy(
+            // Unknown by username — check trusted snapshots first, then fall back to API
+            if trustUsernames then
+              dbState.knownPlayersByUsername.get(username) match {
+                case Some(snapshot) =>
+                  val playerId = snapshot.playerId
+                  dbState.membersByPlayerId.get(playerId) match {
+                    case Some(state) =>
+                      // Username change detected via trusted snapshot
+                      val change      = MemberChangeSummary(playerId, Chunk(UsernameChange(now, state.player.username)))
+                      val newSnapshot = PlayerSnapshot(playerId, now, username, snapshot.status, snapshot.title)
+                      ZIO.succeed(acc.copy(
                         resolvedIds = acc.resolvedIds + playerId,
-                        changes = acc.changes :+ summary,
-                        newSnapshots = acc.newSnapshots ++ snapshotChunks.result()
-                      )
-                    )
-
-                case None =>
-                  // Check if player exists in DB at all
-                  Player.selectId(playerId).flatMap {
-                    case Some(_) =>
-                      // Player exists but not current club member — joined club
-                      val newMember      = ClubMember(clubId, playerId, since, None)
-                      val snapshotChunks = Chunk.newBuilder[PlayerSnapshot]
-                      val changeChunks   = Chunk.newBuilder[MemberChange]
-
-                      changeChunks += JoinedClub(now)
-
-                      // Check if snapshot needs updating
-                      PlayerSnapshot.selectIdLatest(playerId).map { latestOpt =>
-                        val needsSnapshot = latestOpt.forall(l =>
-                          l.username != username || l.status != statusCategory || l.title != apiPlayer.title
-                        )
-                        if needsSnapshot then
-                          snapshotChunks += PlayerSnapshot(playerId, now, username, statusCategory, apiPlayer.title)
-                          latestOpt.foreach { latest =>
-                            if latest.username != username then changeChunks += UsernameChange(now, latest.username)
-                            if latest.status != statusCategory then changeChunks += StatusChange(now, latest.status)
-                          }
-
-                        val summary = MemberChangeSummary(playerId, changeChunks.result())
-                        acc.copy(
-                          resolvedIds = acc.resolvedIds + playerId,
-                          changes = acc.changes :+ summary,
-                          newSnapshots = acc.newSnapshots ++ snapshotChunks.result(),
-                          newMemberships = acc.newMemberships :+ newMember
-                        )
-                      }
-
+                        changes = acc.changes :+ change,
+                        newSnapshots = acc.newSnapshots :+ newSnapshot
+                      ))
                     case None =>
-                      // Brand new player
-                      val player   = Player(playerId, Instant.ofEpochSecond(apiPlayer.joined))
-                      val snapshot = PlayerSnapshot(playerId, now, username, statusCategory, apiPlayer.title)
-                      val member   = ClubMember(clubId, playerId, since, None)
-                      val summary  = MemberChangeSummary(playerId, Chunk(NewMember(now)))
-                      ZIO
-                        .succeed(
-                          acc.copy(
-                            resolvedIds = acc.resolvedIds + playerId,
-                            changes = acc.changes :+ summary,
-                            newPlayers = acc.newPlayers :+ player,
-                            newSnapshots = acc.newSnapshots :+ snapshot,
-                            newMemberships = acc.newMemberships :+ member
-                          )
-                        )
+                      // Known player joined this club
+                      val newMember = ClubMember(clubId, playerId, since, None)
+                      val change    = MemberChangeSummary(playerId, Chunk(JoinedClub(now)))
+                      ZIO.succeed(acc.copy(
+                        resolvedIds = acc.resolvedIds + playerId,
+                        changes = acc.changes :+ change,
+                        newMemberships = acc.newMemberships :+ newMember
+                      ))
                   }
+                case None =>
+                  fetchAndClassifyNewMember(client, clubId, username, since, dbState, acc, now)
               }
-            }
+            else
+              fetchAndClassifyNewMember(client, clubId, username, since, dbState, acc, now)
         }
       }
   }
+
+  private def fetchAndClassifyNewMember(
+      client: ChessComClient,
+      clubId: ClubId,
+      username: Username,
+      since: Instant,
+      dbState: DbState,
+      acc: PhaseBResult,
+      now: Instant
+    ): ZIO[Transactor, Throwable, PhaseBResult] =
+    client.getWithPermit[ApiPlayer](ApiPlayer.getUrl(username)).flatMap { apiPlayer =>
+      val playerId       = apiPlayer.playerId
+      val statusCategory = apiPlayer.status.category
+
+      dbState.membersByPlayerId.get(playerId) match {
+        case Some(state) =>
+          // Username change: same player ID, different username
+          val changeChunks   = Chunk.newBuilder[MemberChange]
+          val snapshotChunks = Chunk.newBuilder[PlayerSnapshot]
+
+          changeChunks += UsernameChange(now, state.player.username)
+          val newSnapshot = PlayerSnapshot(playerId, now, username, statusCategory, apiPlayer.title)
+          snapshotChunks += newSnapshot
+
+          // Also detect status/title changes
+          if state.player.status != statusCategory then changeChunks += StatusChange(now, state.player.status)
+
+          val summary = MemberChangeSummary(playerId, changeChunks.result())
+          ZIO
+            .succeed(
+              acc.copy(
+                resolvedIds = acc.resolvedIds + playerId,
+                changes = acc.changes :+ summary,
+                newSnapshots = acc.newSnapshots ++ snapshotChunks.result()
+              )
+            )
+
+        case None =>
+          // Check if player exists in DB at all
+          Player.selectId(playerId).flatMap {
+            case Some(_) =>
+              // Player exists but not current club member — joined club
+              val newMember      = ClubMember(clubId, playerId, since, None)
+              val snapshotChunks = Chunk.newBuilder[PlayerSnapshot]
+              val changeChunks   = Chunk.newBuilder[MemberChange]
+
+              changeChunks += JoinedClub(now)
+
+              // Check if snapshot needs updating
+              PlayerSnapshot.selectIdLatest(playerId).map { latestOpt =>
+                val needsSnapshot = latestOpt.forall(l =>
+                  l.username != username || l.status != statusCategory || l.title != apiPlayer.title
+                )
+                if needsSnapshot then
+                  snapshotChunks += PlayerSnapshot(playerId, now, username, statusCategory, apiPlayer.title)
+                  latestOpt.foreach { latest =>
+                    if latest.username != username then changeChunks += UsernameChange(now, latest.username)
+                    if latest.status != statusCategory then changeChunks += StatusChange(now, latest.status)
+                  }
+
+                val summary = MemberChangeSummary(playerId, changeChunks.result())
+                acc.copy(
+                  resolvedIds = acc.resolvedIds + playerId,
+                  changes = acc.changes :+ summary,
+                  newSnapshots = acc.newSnapshots ++ snapshotChunks.result(),
+                  newMemberships = acc.newMemberships :+ newMember
+                )
+              }
+
+            case None =>
+              // Brand new player
+              val player   = Player(playerId, Instant.ofEpochSecond(apiPlayer.joined))
+              val snapshot = PlayerSnapshot(playerId, now, username, statusCategory, apiPlayer.title)
+              val member   = ClubMember(clubId, playerId, since, None)
+              val summary  = MemberChangeSummary(playerId, Chunk(NewMember(now)))
+              ZIO
+                .succeed(
+                  acc.copy(
+                    resolvedIds = acc.resolvedIds + playerId,
+                    changes = acc.changes :+ summary,
+                    newPlayers = acc.newPlayers :+ player,
+                    newSnapshots = acc.newSnapshots :+ snapshot,
+                    newMemberships = acc.newMemberships :+ member
+                  )
+                )
+          }
+      }
+    }
 
   // --- Phase C: Classify disappeared members ---
 

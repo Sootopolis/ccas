@@ -7,6 +7,7 @@ import com.augustnagro.magnum.Transactor
 import zio.{Chunk, Console, Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
 import zio.http.{Client, URL}
 
+import ccas.analysis.apps.membership.MembershipApp
 import ccas.analysis.tables.*
 import ccas.api.club.{ApiClub, ApiClubMatches, ApiClubMembers}
 import ccas.api.misc.enums.{GameResultDetail, PlayerStatusCategory}
@@ -52,6 +53,7 @@ object RecruitmentApp extends ZIOAppDefault {
       sourceClubs: List[ClubUrlName] = Nil
     ): ZIO[ChessComClient & Transactor, Throwable, RecruitmentRun] =
     for {
+      _       <- MembershipApp.reconcile(clubUrlName)
       client  <- ZIO.service[ChessComClient]
       apiClub <- ApiClub.get(client, clubUrlName)
       clubId = apiClub.clubId

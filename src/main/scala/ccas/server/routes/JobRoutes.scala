@@ -29,7 +29,7 @@ object JobRoutes {
     given JsonCodec[RecruitmentRequest] = DeriveJsonCodec.gen
   }
 
-  case class MembershipRequest(clubUrlName: ClubUrlName)
+  case class MembershipRequest(clubUrlName: ClubUrlName, trustUsernames: Option[Boolean])
   object MembershipRequest {
     given JsonCodec[MembershipRequest] = DeriveJsonCodec.gen
   }
@@ -121,7 +121,7 @@ object JobRoutes {
       (for {
         body   <- req.body.asString.flatMap(s => ZIO.fromEither(summon[JsonDecoder[MembershipRequest]].decodeJson(s)).mapError(e => new ExternalException(e)))
         runner <- ZIO.service[JobRunner]
-        effect  = MembershipApp.reconcile(body.clubUrlName)
+        effect  = MembershipApp.reconcile(body.clubUrlName, body.trustUsernames.getOrElse(true))
         jobId  <- runner.submit(JobKind.Membership, Some(body.clubUrlName), None, effect)
       } yield jsonResponse(Status.Accepted, JobResponse(JobRunId.unwrap(jobId), "running")))
         .catchAll(e => ZIO.succeed(handleJobError(e)))

@@ -289,7 +289,11 @@ object TestMembershipApp extends ZIOSpecDefault {
         dbState.membersByPlayerId(pid0).member == mem0,
         dbState.membersByUsername.size == 2,
         dbState.membersByUsername.contains(Username("alice")),
-        dbState.membersByUsername.contains(Username("bob"))
+        dbState.membersByUsername.contains(Username("bob")),
+        dbState.knownPlayersByUsername.contains(Username("alice")),
+        dbState.knownPlayersByUsername.contains(Username("bob")),
+        dbState.knownPlayersByUsername(Username("alice")) == snap0,
+        dbState.knownPlayersByUsername(Username("bob")) == snap1
       )
     },
     test("excludes former members from DbState") {
@@ -304,7 +308,10 @@ object TestMembershipApp extends ZIOSpecDefault {
           members = List(formerMem)
         )
         dbState <- MembershipApp.buildDbState(clubId)
-      } yield assertTrue(dbState.membersByPlayerId.isEmpty)
+      } yield assertTrue(
+        dbState.membersByPlayerId.isEmpty,
+        dbState.knownPlayersByUsername.contains(Username("alice"))
+      )
     }
   )
 
@@ -425,6 +432,61 @@ object TestMembershipApp extends ZIOSpecDefault {
         result.changes.head.changes.exists(_.isInstanceOf[UsernameChange]),
         result.changes.head.changes.exists(_.isInstanceOf[StatusChange])
       )
+    },
+    test("trust-mode: known player joins club without API call") {
+      val snap = PlayerSnapshot(pid3, T.t0, Username("diana"), Active, None)
+      val dbState = DbState(
+        membersByPlayerId = Map.empty,
+        membersByUsername = Map.empty,
+        knownPlayersByUsername = Map(Username("diana") -> snap)
+      )
+      val apiMap = Map(Username("diana") -> T.t1.getEpochSecond)
+
+      for {
+        client <- fakeChessComClient(Map.empty)
+        result <- MembershipApp.classifyApiMembers(client, clubId, apiMap, dbState, T.t2)
+      } yield assertTrue(
+        result.resolvedIds.contains(pid3),
+        result.changes.size == 1,
+        result.changes.head.changes.exists(_.isInstanceOf[JoinedClub]),
+        result.newMemberships.nonEmpty,
+        result.newSnapshots.isEmpty
+      )
+    },
+    test("trust-mode: username change detected without API call") {
+      val oldSnap = PlayerSnapshot(pid2, T.t0, Username("charlie-old"), Active, None)
+      val mem     = ClubMember(clubId, pid2, T.t0, None)
+      val newSnap = PlayerSnapshot(pid2, T.t1, Username("charlie-new"), Active, None)
+      val dbState = DbState(
+        membersByPlayerId = Map(pid2 -> MemberState(oldSnap, mem)),
+        membersByUsername = Map(Username("charlie-old") -> MemberState(oldSnap, mem)),
+        knownPlayersByUsername = Map(Username("charlie-new") -> newSnap)
+      )
+      val apiMap = Map(Username("charlie-new") -> T.t0.getEpochSecond)
+
+      for {
+        client <- fakeChessComClient(Map.empty)
+        result <- MembershipApp.classifyApiMembers(client, clubId, apiMap, dbState, T.t2)
+      } yield assertTrue(
+        result.resolvedIds.contains(pid2),
+        result.changes.size == 1,
+        result.changes.head.changes.exists(_.isInstanceOf[UsernameChange]),
+        result.newSnapshots.nonEmpty
+      )
+    },
+    test("trustUsernames=false bypasses known player lookup") {
+      val snap = PlayerSnapshot(pid3, T.t0, Username("diana"), Active, None)
+      val dbState = DbState(
+        membersByPlayerId = Map.empty,
+        membersByUsername = Map.empty,
+        knownPlayersByUsername = Map(Username("diana") -> snap)
+      )
+      val apiMap = Map(Username("diana") -> T.t0.getEpochSecond)
+
+      for {
+        client <- fakeChessComClient(Map.empty)
+        result <- MembershipApp.classifyApiMembers(client, clubId, apiMap, dbState, T.t2, trustUsernames = false).exit
+      } yield assertTrue(result.isFailure)
     }
   )
 
