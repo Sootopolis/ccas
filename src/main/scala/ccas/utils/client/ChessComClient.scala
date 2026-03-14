@@ -18,7 +18,7 @@ final class ChessComClient(
   private val batchedClient = client.batched
 
   private def rawGet[T](url: URL)(using jsonDecoder: JsonDecoder[T]): Task[T] = for {
-    response <- batchedClient.request(Request(method = GET, url = url).addHeaders(headers))
+    response <- batchedClient(Request(method = GET, url = url).addHeaders(headers))
     _ <- ZIO
       .when(response.status == Status.TooManyRequests)(
         activateThrottle *> ZIO.fail(RateLimitedException(url))

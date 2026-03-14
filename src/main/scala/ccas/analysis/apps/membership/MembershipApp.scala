@@ -3,11 +3,13 @@ package ccas.analysis.apps.membership
 import java.time.Instant
 
 import com.augustnagro.magnum.Transactor
-import zio.{Chunk, Console, Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
+import zio.{Chunk, Console, Scope, Task, ZIO, ZIOAppArgs, ZIOAppDefault}
 import zio.http.Client
 
 import ccas.analysis.apps.membership.MembershipChange.*
-import ccas.analysis.tables.{Club, ClubMember, MembershipRun, Player, PlayerMatchRef, PlayerSnapshot, Tables}
+import scala.annotation.nowarn
+
+import ccas.analysis.tables.{Club, ClubMatchRef, ClubMember, MembershipRun, Player, PlayerMatchRef, PlayerSnapshot, Tables}
 import ccas.api.club.{ApiClub, ApiClubMembers}
 import ccas.api.clubmatch.ApiDailyMatch
 import ccas.api.misc.enums.PlayerStatusCategory
@@ -62,16 +64,20 @@ object MembershipApp extends ZIOAppDefault {
   def reconcile(clubUrlName: ClubUrlName, trustUsernames: Boolean = true): ZIO[ChessComClient & Transactor, Throwable, ReconciliationResult] =
     for {
       client  <- ZIO.service[ChessComClient]
-      apiClub <- ApiClub.get(client, clubUrlName)
+      (apiClub, resolvedUrlName) <- withNameFallback(
+        clubUrlName,
+        name => ApiClub.get(client, name),
+        resolveClubUrlName(client, _)
+      )
       clubId = apiClub.clubId
-      club   = Club(clubId, Instant.ofEpochSecond(apiClub.created), clubUrlName)
+      club   = Club(clubId, Instant.ofEpochSecond(apiClub.created), resolvedUrlName)
       _    <- Club.upsert(club)
-      pair <- ApiClubMembers.get(client, clubUrlName).zipPar(buildDbState(clubId))
+      pair <- ApiClubMembers.get(client, resolvedUrlName).zipPar(buildDbState(clubId))
       (apiMembers, dbState) = pair
       apiMap                = apiMembers.toMap
       now                   = Instant.now()
       phaseB <- classifyApiMembers(client, clubId, apiMap, dbState, now, trustUsernames)
-      phaseC <- classifyDisappeared(client, dbState, phaseB.resolvedIds, apiMap, clubUrlName, now)
+      phaseC <- classifyDisappeared(client, dbState, phaseB.resolvedIds, apiMap, resolvedUrlName, now)
       result = mergeResults(phaseB, phaseC)
       _ <- persist(result)
       _ <- MembershipRun.insert(clubId, now)
@@ -445,6 +451,52 @@ object MembershipApp extends ZIOAppDefault {
       }
         .filter(_ != oldUsername)
     }.catchAll(_ => ZIO.succeed(None))
+
+  private def withNameFallback[Name, T](
+      name: Name,
+      effect: Name => Task[T],
+      resolve: Name => ZIO[Transactor, Throwable, Option[Name]]
+    ): ZIO[Transactor, Throwable, (T, Name)] =
+    effect(name)
+      .map(_ -> name)
+      .catchAll { originalError =>
+        resolve(name).flatMap {
+          case Some(newName) => effect(newName).map(_ -> newName)
+          case None          => ZIO.fail(originalError)
+        }
+      }
+
+  private def resolveClubUrlName(
+      client: ChessComClient,
+      oldUrlName: ClubUrlName
+    ): ZIO[Transactor, Throwable, Option[ClubUrlName]] =
+    Club.selectByUrlName(oldUrlName).flatMap {
+      case None => ZIO.succeed(None)
+      case Some(club) =>
+        ClubMatchRef.selectId(club.clubId).flatMap {
+          case None => ZIO.succeed(None)
+          case Some(ref) =>
+            (for {
+              dailyMatch <- client.getWithPermit[ApiDailyMatch](ApiDailyMatch.getUrl(ref.matchId))
+              team = if ref.teamIdx == 1 then dailyMatch.teams.team1 else dailyMatch.teams.team2
+              newUrlName = team.`@id`.path.segments.lastOption.map(ClubUrlName.wrap)
+            } yield newUrlName.filter(_ != oldUrlName)).catchAll(_ => ZIO.succeed(None))
+        }
+    }
+
+  @nowarn("msg=unused")
+  private def resolvePlayerUsername(
+      client: ChessComClient,
+      oldUsername: Username
+    ): ZIO[Transactor, Throwable, Option[Username]] =
+    PlayerSnapshot.selectNameLatest(oldUsername).flatMap {
+      case None => ZIO.succeed(None)
+      case Some(snapshot) =>
+        PlayerMatchRef.selectId(snapshot.playerId).flatMap {
+          case None => ZIO.succeed(None)
+          case Some(ref) => resolveUsernameFromMatchRef(client, ref, oldUsername)
+        }
+    }
 
   // --- Merge & Persist ---
 

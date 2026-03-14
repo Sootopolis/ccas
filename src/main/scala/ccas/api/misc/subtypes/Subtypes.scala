@@ -1,7 +1,7 @@
 package ccas.api.misc.subtypes
 
 import com.augustnagro.magnum.DbCodec
-import zio.{json, Chunk, Config, NonEmptyChunk}
+import zio.{json, Chunk, NonEmptyChunk}
 import zio.config.magnolia.DeriveConfig
 import zio.json.{JsonCodec, JsonFieldDecoder, JsonFieldEncoder}
 import zio.prelude.{Assertion, Subtype}
@@ -18,7 +18,7 @@ sealed trait CcasSubtype[T: {JsonCodec, DeriveConfig, DbCodec}] extends Subtype[
   given DeriveConfig[Type] = derive[DeriveConfig].mapOrFail(validated(_).left.map(InvalidData(Chunk.empty, _)))
 }
 
-sealed trait CcasKeySubtype[T: {JsonCodec, DeriveConfig, JsonFieldEncoder, JsonFieldDecoder}] extends CcasSubtype[T] {
+sealed trait CcasKeySubtype[T: {JsonFieldEncoder, JsonFieldDecoder}] extends CcasSubtype[T] {
   given JsonFieldEncoder[Type] = derive[JsonFieldEncoder]
   given JsonFieldDecoder[Type] = derive[JsonFieldDecoder].mapOrFail(validated)
 }

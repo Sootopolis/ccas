@@ -157,14 +157,4 @@ object MatchRefApp extends ZIOAppDefault {
     else None
   }
 
-  private def resolveUrlNameFromClubMatchRef(
-      client: ChessComClient,
-      ref: ClubMatchRef,
-      oldUrlName: ClubUrlName
-    ): ZIO[Any, Throwable, Option[ClubUrlName]] =
-    for {
-      dailyMatch <- client.getWithPermit[ApiDailyMatch](ApiDailyMatch.getUrl(ref.matchId))
-      team = if ref.teamIdx == 1 then dailyMatch.teams.team1 else dailyMatch.teams.team2
-      newUrlName = team.`@id`.path.segments.lastOption.map(ClubUrlName.wrap)
-    } yield newUrlName.filter(_ != oldUrlName)
 }

@@ -105,8 +105,7 @@ object PrettyPrinter extends AutoDerivation[PrettyPrinter] {
 
   given mapPrinter[K: ClassTag, V: ClassTag, M[A, B] <: collection.Map[A, B]](
       using kpp: PrettyPrinter[K],
-      vpp: PrettyPrinter[V],
-      mct: ClassTag[M[K, V]]
+      vpp: PrettyPrinter[V]
     ): PrettyPrinter[M[K, V]] with {
     override protected def getPrettyString(value: M[K, V], setting: Setting, className: String): String = {
       val name       = className.split(Array('$', '.')).last
