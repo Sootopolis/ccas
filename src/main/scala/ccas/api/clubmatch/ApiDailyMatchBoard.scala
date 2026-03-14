@@ -43,7 +43,6 @@ object ApiDailyMatchBoard extends JsonDecoding[ApiDailyMatchBoard] {
       username: Username,
       rating: Elo,
       result: Option[GameResultDetail],
-      `@id`: URL,
-      team: Option[URL] // TODO if this is never present, remove it
-    ) derives JsonDecoder
+      `@id`: URL)
+      derives JsonDecoder
 }

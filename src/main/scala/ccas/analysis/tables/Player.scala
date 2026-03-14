@@ -4,7 +4,6 @@ import java.sql.SQLException
 import java.time.Instant
 
 import com.augustnagro.magnum.*
-import zio.http.URL
 import zio.ZIO
 
 import ccas.api.misc.subtypes.PlayerId
@@ -12,7 +11,7 @@ import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.SqlZioTypes.{connectZIO, transactZIO}
 
 @Table(PostgresDbType, SqlNameMapper.CamelToSnakeCase)
-final case class Player(@Id playerId: PlayerId, joined: Instant, boardUrl: Option[URL]) derives DbCodec
+final case class Player(@Id playerId: PlayerId, joined: Instant) derives DbCodec
 
 object Player {
   private val repo = Repo[Player, Player, PlayerId]
@@ -21,8 +20,7 @@ object Player {
     connectZIO {
       sql"""CREATE TABLE IF NOT EXISTS player (
               player_id BIGINT PRIMARY KEY,
-              joined    TIMESTAMPTZ NOT NULL,
-              board_url VARCHAR
+              joined    TIMESTAMPTZ NOT NULL
             )""".update.run()
     }
 

@@ -574,8 +574,8 @@ object RecruitmentApp extends ZIOAppDefault {
     ): ZIO[Transactor, Throwable, Unit] = transactZIO {
     // 1. Insert Player if new
     candidate.apiPlayer.filter(_ => candidate.isNewPlayer).foreach { ap =>
-      sql"""INSERT INTO player (player_id, joined, board_url)
-            VALUES (${ap.playerId}, ${Instant.ofEpochSecond(ap.joined)}, ${None: Option[String]})""".update.run()
+      sql"""INSERT INTO player (player_id, joined)
+            VALUES (${ap.playerId}, ${Instant.ofEpochSecond(ap.joined)})""".update.run()
     }
     // 2. Insert PlayerSnapshot (always, if apiPlayer was fetched)
     candidate.apiPlayer.foreach { ap =>

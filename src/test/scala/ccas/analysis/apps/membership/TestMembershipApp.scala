@@ -119,7 +119,6 @@ object TestMembershipApp extends ZIOSpecDefault {
       members: List[ClubMember] = Nil
     ): ZIO[Transactor, Throwable, Unit] =
     for {
-      _ <- SqlZioTypes.connectZIO(sql"ALTER TABLE player ADD COLUMN IF NOT EXISTS board_url VARCHAR".update.run())
       _ <- SqlZioTypes.connectZIO(sql"DELETE FROM club_member WHERE club_id = $clubId".update.run())
       _ <- ZIO.foreachDiscard(testPlayerIds) { pid =>
         SqlZioTypes.connectZIO(sql"DELETE FROM player_snapshot WHERE player_id = $pid".update.run()) *>
@@ -241,7 +240,7 @@ object TestMembershipApp extends ZIOSpecDefault {
     test("concatenates PhaseBResult and PhaseCResult fields") {
       val bChange = MemberChangeSummary(pid0, Chunk(NewMember(T.t1)))
       val cChange = MemberChangeSummary(pid1, Chunk(LeftClub(T.t1)))
-      val bPlayer = Player(pid0, T.t0, None)
+      val bPlayer = Player(pid0, T.t0)
       val bSnap   = PlayerSnapshot(pid0, T.t1, Username("alice"), Active, None)
       val cSnap   = PlayerSnapshot(pid1, T.t1, Username("bob"), Active, None)
       val bMember = ClubMember(clubId, pid0, T.t1, None)
@@ -268,8 +267,8 @@ object TestMembershipApp extends ZIOSpecDefault {
 
   private def suiteBuildDbState = suite("buildDbState")(
     test("builds correct DbState maps") {
-      val player0 = Player(pid0, T.t0, None)
-      val player1 = Player(pid1, T.t0, None)
+      val player0 = Player(pid0, T.t0)
+      val player1 = Player(pid1, T.t0)
       val snap0   = PlayerSnapshot(pid0, T.t1, Username("alice"), Active, None)
       val snap1   = PlayerSnapshot(pid1, T.t1, Username("bob"), Active, None)
       val mem0    = ClubMember(clubId, pid0, T.t1, None)
@@ -294,7 +293,7 @@ object TestMembershipApp extends ZIOSpecDefault {
       )
     },
     test("excludes former members from DbState") {
-      val player0   = Player(pid0, T.t0, None)
+      val player0   = Player(pid0, T.t0)
       val snap0     = PlayerSnapshot(pid0, T.t1, Username("alice"), Active, None)
       val formerMem = ClubMember(clubId, pid0, T.t0, Some(T.t1))
 
@@ -390,7 +389,7 @@ object TestMembershipApp extends ZIOSpecDefault {
       )
     },
     test("existing player joins club") {
-      val player4   = Player(pid4, T.t0, None)
+      val player4   = Player(pid4, T.t0)
       val snap4     = PlayerSnapshot(pid4, T.t0, Username("eve"), Active, None)
       val dbState   = DbState(Map.empty, Map.empty)
       val apiMap    = Map(Username("eve") -> T.t1.getEpochSecond)
@@ -445,7 +444,7 @@ object TestMembershipApp extends ZIOSpecDefault {
 
       for {
         client <- fakeChessComClient(responses)
-        result <- MembershipApp.classifyDisappeared(client, dbState, Set.empty, T.t2)
+        result <- MembershipApp.classifyDisappeared(client, dbState, Set.empty, Map.empty, ClubUrlName("test-club"), T.t2)
       } yield assertTrue(
         result.changes.size == 1,
         result.changes.head.changes.exists(_.isInstanceOf[LeftClub]),
@@ -463,7 +462,7 @@ object TestMembershipApp extends ZIOSpecDefault {
 
       for {
         client <- fakeChessComClient(responses)
-        result <- MembershipApp.classifyDisappeared(client, dbState, Set.empty, T.t2)
+        result <- MembershipApp.classifyDisappeared(client, dbState, Set.empty, Map.empty, ClubUrlName("test-club"), T.t2)
       } yield assertTrue(
         result.changes.size == 1,
         result.changes.head.changes.exists(_.isInstanceOf[AccountClosed]),
@@ -481,7 +480,7 @@ object TestMembershipApp extends ZIOSpecDefault {
 
       for {
         client <- fakeChessComClient(Map.empty, failures = Set("charlie"))
-        result <- MembershipApp.classifyDisappeared(client, dbState, Set.empty, T.t2)
+        result <- MembershipApp.classifyDisappeared(client, dbState, Set.empty, Map.empty, ClubUrlName("test-club"), T.t2)
       } yield assertTrue(
         result.changes.size == 1,
         result.changes.head.changes.exists(_.isInstanceOf[Unresolvable]),
@@ -499,7 +498,7 @@ object TestMembershipApp extends ZIOSpecDefault {
 
       for {
         client <- fakeChessComClient(responses)
-        result <- MembershipApp.classifyDisappeared(client, dbState, Set.empty, T.t2)
+        result <- MembershipApp.classifyDisappeared(client, dbState, Set.empty, Map.empty, ClubUrlName("test-club"), T.t2)
       } yield assertTrue(
         result.changes.size == 1,
         result.changes.head.changes.exists(_.isInstanceOf[Unresolvable]),
@@ -516,7 +515,7 @@ object TestMembershipApp extends ZIOSpecDefault {
 
       for {
         client <- fakeChessComClient(Map.empty)
-        result <- MembershipApp.classifyDisappeared(client, dbState, Set(pid0), T.t2)
+        result <- MembershipApp.classifyDisappeared(client, dbState, Set(pid0), Map.empty, ClubUrlName("test-club"), T.t2)
       } yield assertTrue(
         result.changes.isEmpty,
         result.newSnapshots.isEmpty,

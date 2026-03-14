@@ -28,8 +28,8 @@ object TestPlayerSql extends ZIOSpecDefault {
     val t2: Instant = t0.plus(Duration.ofDays(2))
   }
 
-  private val player0          = Player(PlayerId(0), Timestamps.t0, None)
-  private val player1          = Player(PlayerId(1), Timestamps.t1, None)
+  private val player0          = Player(PlayerId(0), Timestamps.t0)
+  private val player1          = Player(PlayerId(1), Timestamps.t1)
   private val player0Snapshot0 = PlayerSnapshot(player0.playerId, Timestamps.t0, Username("player0_0"), Active, None)
   private val player0Snapshot1 = player0Snapshot0.copy(since = Timestamps.t1, username = Username("player0_1"))
   private val player0Snapshot2 = player0Snapshot1.copy(since = Timestamps.t2, status = Fairplay)

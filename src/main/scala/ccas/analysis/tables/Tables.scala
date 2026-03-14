@@ -7,6 +7,7 @@ object Tables {
   def ensureTables: ZIO[Transactor, Throwable, Unit] =
     for {
       _ <- Player.createTable
+      _ <- PlayerMatchRef.createTable
       _ <- PlayerSnapshot.createTable
       _ <- Club.createTable
       _ <- ClubMember.createTable

@@ -238,7 +238,6 @@ object TestRecruitmentApp extends ZIOSpecDefault {
 
   private def seedDb: ZIO[Transactor, Throwable, Unit] =
     for {
-      _ <- SqlZioTypes.connectZIO(sql"ALTER TABLE player ADD COLUMN IF NOT EXISTS board_url VARCHAR".update.run())
       // Clean up test data
       _ <- RecruitmentCandidate.deleteAll
       _ <- RecruitmentRun.deleteAll
@@ -993,8 +992,8 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       _      <- seedDb
       // Seed player row for FK constraint, then seed cache
       _      <- SqlZioTypes.connectZIO {
-        sql"""INSERT INTO player (player_id, joined, board_url)
-              VALUES (${cache.playerId}, ${T.t0}, ${None: Option[String]})
+        sql"""INSERT INTO player (player_id, joined)
+              VALUES (${cache.playerId}, ${T.t0})
               ON CONFLICT (player_id) DO NOTHING""".update.run()
       }
       _      <- SqlZioTypes.transactZIO(PlayerRecruitmentCache.upsertRaw(cache))

@@ -35,9 +35,9 @@ object TestClubSql extends ZIOSpecDefault {
   private val clubA = Club(ClubId(200), Timestamps.t0, ClubUrlName("club-a"))
   private val clubB = Club(ClubId(201), Timestamps.t0, ClubUrlName("club-b"))
 
-  private val player0 = Player(PlayerId(10), Timestamps.t0, None)
-  private val player1 = Player(PlayerId(11), Timestamps.t0, None)
-  private val player2 = Player(PlayerId(12), Timestamps.t0, None)
+  private val player0 = Player(PlayerId(10), Timestamps.t0)
+  private val player1 = Player(PlayerId(11), Timestamps.t0)
+  private val player2 = Player(PlayerId(12), Timestamps.t0)
 
   // Latest snapshots: player0 Active, player1 Active, player2 Closed
   private val snap0 = PlayerSnapshot(player0.playerId, Timestamps.t1, Username("p0"), Active, None)
