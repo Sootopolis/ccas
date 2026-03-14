@@ -93,7 +93,7 @@ object MatchRefApp extends ZIOAppDefault {
 
   private def findTeamIdx(dailyMatch: ApiDailyMatch, username: Username): Option[Int] = {
     val teams = dailyMatch.teams
-    val u     = Username.unwrap(username).toLowerCase
+    val u     = Username.unwrap(username)
     if teams.team1.players.exists(p => Username.unwrap(p.username).equalsIgnoreCase(u)) then Some(1)
     else if teams.team2.players.exists(p => Username.unwrap(p.username).equalsIgnoreCase(u)) then Some(2)
     else None

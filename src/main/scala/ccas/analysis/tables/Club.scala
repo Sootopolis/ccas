@@ -35,6 +35,12 @@ object Club {
   def selectId(clubId: ClubId): ZIO[Transactor, SQLException, Option[Club]] =
     connectZIO(repo.findById(clubId))
 
+  def selectByUrlName(urlName: ClubUrlName): ZIO[Transactor, SQLException, Option[Club]] =
+    connectZIO {
+      sql"SELECT club_id, created, url_name FROM club WHERE url_name = $urlName"
+        .query[Club].run().headOption
+    }
+
   def upsert(club: Club): ZIO[Transactor, SQLException, Int] =
     connectZIO {
       sql"""INSERT INTO club (club_id, created, url_name) VALUES (${club.clubId}, ${club.created}, ${club.urlName})

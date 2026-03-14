@@ -532,10 +532,10 @@ object RecruitmentApp extends ZIOAppDefault {
   }
 
   private object CheckTmStats extends RecruitmentFilter {
-    def apply(env: FilterEnv): ZIO[Transactor, Throwable, FilterResult] = {
-      val cache = env.candidate.cache
-        .getOrElse(throw new NoSuchElementException("cache not set — CheckDailyStats must run before CheckTmStats"))
+    def apply(env: FilterEnv): ZIO[Transactor, Throwable, FilterResult] =
       for {
+        cache <- ZIO.fromOption(env.candidate.cache)
+          .orElseFail(new NoSuchElementException("cache not set — CheckDailyStats must run before CheckTmStats"))
         tmResult <- fetchTmStats(
           env.run.client,
           env.candidate.username,
@@ -560,7 +560,6 @@ object RecruitmentApp extends ZIOAppDefault {
           else if (config.dailyMaxTmTimeoutPercent.exists(max => tmTimeoutPct.exists(_ > max))) Some(CandidateOutcome.Rejected)
           else None
       } yield FilterResult(outcome, updatedCtx)
-    }
   }
 
   // --- Deferred DB writes ---
@@ -687,9 +686,8 @@ object RecruitmentApp extends ZIOAppDefault {
   private[recruitment] def showReport(clubUrlName: ClubUrlName, runIdOpt: Option[String])
       : ZIO[Transactor, Throwable, Unit] =
     for {
-      clubs <- Club.selectAll
-      club <- ZIO.fromOption(clubs.find(_.urlName == clubUrlName))
-        .orElseFail(ExternalException(s"Club '$clubUrlName' not found in database"))
+      club <- Club.selectByUrlName(clubUrlName)
+        .someOrFail(ExternalException(s"Club '$clubUrlName' not found in database"))
       clubId = club.clubId
       run <- runIdOpt match {
         case Some(id) =>

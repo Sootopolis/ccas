@@ -48,8 +48,8 @@ object MembershipApp extends ZIOAppDefault {
 
   private def reconcileIfStale(clubUrlName: ClubUrlName, until: Instant): ZIO[ChessComClient & Transactor, Throwable, Unit] =
     for {
-      clubs <- Club.selectAll
-      _ <- ZIO.fromOption(clubs.find(_.urlName == clubUrlName)).flatMap { club =>
+      clubOpt <- Club.selectByUrlName(clubUrlName)
+      _ <- ZIO.fromOption(clubOpt).flatMap { club =>
         MembershipRun.selectLatest(club.clubId).flatMap {
           case Some(run) if !until.isAfter(run.ranAt) => ZIO.unit
           case _ => reconcile(clubUrlName).unit
@@ -316,25 +316,19 @@ object MembershipApp extends ZIOAppDefault {
     val playerId    = state.player.playerId
     val oldUsername = state.player.username
 
+    def unresolvable: PhaseCResult =
+      acc.copy(
+        changes = acc.changes :+ MemberChangeSummary(playerId, Chunk(Unresolvable(now, oldUsername))),
+        closedMemberships = acc.closedMemberships :+ closedMember
+      )
+
     PlayerMatchRef.selectId(playerId).flatMap {
       case None =>
-        // No match ref → unresolvable
-        ZIO.succeed(
-          acc.copy(
-            changes = acc.changes :+ MemberChangeSummary(playerId, Chunk(Unresolvable(now, oldUsername))),
-            closedMemberships = acc.closedMemberships :+ closedMember
-          )
-        )
+        ZIO.succeed(unresolvable)
       case Some(ref) =>
         resolveUsernameFromMatchRef(client, ref, oldUsername).flatMap {
           case None =>
-            // Could not resolve → unresolvable
-            ZIO.succeed(
-              acc.copy(
-                changes = acc.changes :+ MemberChangeSummary(playerId, Chunk(Unresolvable(now, oldUsername))),
-                closedMemberships = acc.closedMemberships :+ closedMember
-              )
-            )
+            ZIO.succeed(unresolvable)
           case Some(resolvedUsername) =>
             // Successfully resolved — fetch profile for resolved username
             client.getWithPermit[ApiPlayer](ApiPlayer.getUrl(resolvedUsername)).foldZIO(
@@ -404,10 +398,10 @@ object MembershipApp extends ZIOAppDefault {
     client.getWithPermit[ApiDailyMatch](ApiDailyMatch.getUrl(ref.matchId)).map { dailyMatch =>
       val team = if ref.teamIdx == 1 then dailyMatch.teams.team1 else dailyMatch.teams.team2
       val boardSuffix = s"/${ref.boardIdx}"
-      team.players
-        .find(p => p.isInstanceOf[ccas.api.clubmatch.ApiDailyMatch.ApiDailyMatchPlayerStarted] &&
-          p.asInstanceOf[ccas.api.clubmatch.ApiDailyMatch.ApiDailyMatchPlayerStarted].board.path.toString.endsWith(boardSuffix))
-        .map(_.username)
+      team.players.collectFirst {
+        case p: ApiDailyMatch.ApiDailyMatchPlayerStarted
+          if p.board.path.toString.endsWith(boardSuffix) => p.username
+      }
         .filter(_ != oldUsername)
     }.catchAll(_ => ZIO.succeed(None))
 
@@ -465,9 +459,8 @@ object MembershipApp extends ZIOAppDefault {
 
   private def report(clubUrlName: ClubUrlName, since: Instant, until: Instant): ZIO[Transactor, Throwable, Unit] =
     for {
-      clubs <- Club.selectAll
-      club <- ZIO.fromOption(clubs.find(_.urlName == clubUrlName))
-        .orElseFail(ExternalException(s"Club '$clubUrlName' not found in database"))
+      club <- Club.selectByUrlName(clubUrlName)
+        .someOrFail(ExternalException(s"Club '$clubUrlName' not found in database"))
       clubId = club.clubId
       members <- ClubMember.selectClub(clubId)
       snaps   <- PlayerSnapshot.selectSince(since)
