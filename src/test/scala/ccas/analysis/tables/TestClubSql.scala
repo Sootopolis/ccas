@@ -6,7 +6,7 @@ import zio.test.{assertCompletes, assertTrue, Spec, TestAspect, ZIOSpecDefault}
 import zio.Chunk
 
 import ccas.api.misc.enums.PlayerStatusCategory.{Active, Closed}
-import ccas.api.misc.subtypes.{ClubId, ClubUrlName, PlayerId, Username}
+import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubUrlName, PlayerId, Username}
 import ccas.utils.sql.DataSourceLayer
 
 object TestClubSql extends ZIOSpecDefault {
@@ -20,7 +20,11 @@ object TestClubSql extends ZIOSpecDefault {
     testMemberInsert,
     testMemberInsertBatch,
     testMemberSelect,
-    testMemberUpdate
+    testMemberUpdate,
+    testClubMatchRefUpsert,
+    testClubMatchRefUpsertUpdate,
+    testClubMatchRefDelete,
+    testClubMatchRefDeleteAll
   ).provideShared(
     DataSourceLayer.liveFromPrefix(schema = Some("test_club_sql"), onInit = Tables.ensureTables)
   ) @@ TestAspect.sequential
@@ -59,6 +63,7 @@ object TestClubSql extends ZIOSpecDefault {
 
   private def testDeleteAll = test("testDeleteAll") {
     for {
+      _ <- ClubMatchRef.deleteAll
       _ <- ClubMember.deleteAll
       _ <- PlayerSnapshot.deleteAll
       _ <- Player.deleteAll
@@ -150,5 +155,42 @@ object TestClubSql extends ZIOSpecDefault {
       clubA_cur == List(memA1),
       clubB_cur.isEmpty
     )
+  }
+
+  // --- ClubMatchRef tests ---
+
+  private val refA = ClubMatchRef(clubA.clubId, ClubMatchId(9001), teamIdx = 1)
+  private val refB = ClubMatchRef(clubB.clubId, ClubMatchId(9002), teamIdx = 2)
+
+  private def testClubMatchRefUpsert = test("testClubMatchRefUpsert") {
+    for {
+      _      <- ClubMatchRef.upsert(refA)
+      result <- ClubMatchRef.selectId(refA.clubId)
+    } yield assertTrue(result.contains(refA))
+  }
+
+  private def testClubMatchRefUpsertUpdate = test("testClubMatchRefUpsertUpdate") {
+    val updated = refA.copy(matchId = ClubMatchId(9099), teamIdx = 2)
+    for {
+      _      <- ClubMatchRef.upsert(updated)
+      result <- ClubMatchRef.selectId(refA.clubId)
+    } yield assertTrue(result.contains(updated))
+  }
+
+  private def testClubMatchRefDelete = test("testClubMatchRefDelete") {
+    for {
+      _      <- ClubMatchRef.upsert(refB)
+      _      <- ClubMatchRef.deleteId(refB.clubId)
+      result <- ClubMatchRef.selectId(refB.clubId)
+    } yield assertTrue(result.isEmpty)
+  }
+
+  private def testClubMatchRefDeleteAll = test("testClubMatchRefDeleteAll") {
+    for {
+      _      <- ClubMatchRef.upsert(refB)
+      _      <- ClubMatchRef.deleteAll
+      resultA <- ClubMatchRef.selectId(refA.clubId)
+      resultB <- ClubMatchRef.selectId(refB.clubId)
+    } yield assertTrue(resultA.isEmpty, resultB.isEmpty)
   }
 }

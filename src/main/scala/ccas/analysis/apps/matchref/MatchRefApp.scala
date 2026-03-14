@@ -4,9 +4,10 @@ import com.augustnagro.magnum.{sql, Transactor}
 import zio.{Console, Ref, Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
 import zio.http.Client
 
-import ccas.analysis.tables.{PlayerMatchRef, Tables}
+import ccas.analysis.tables.{ClubMatchRef, PlayerMatchRef, Tables}
+import ccas.api.club.ApiClubMatches
 import ccas.api.clubmatch.ApiDailyMatch
-import ccas.api.misc.subtypes.{ClubMatchId, PlayerId, Username}
+import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubUrlName, PlayerId, Username}
 import ccas.api.player.ApiPlayerMatches
 import ccas.utils.client.ChessComClient
 import ccas.utils.sql.DataSourceLayer
@@ -15,6 +16,7 @@ import ccas.utils.sql.SqlZioTypes.connectZIO
 object MatchRefApp extends ZIOAppDefault {
 
   private final case class UnresolvedPlayer(playerId: PlayerId, username: Username)
+  private final case class UnresolvedClub(clubId: ClubId, urlName: ClubUrlName)
 
   override def run: ZIO[Any & ZIOAppArgs & Scope, Any, Any] =
     populate.provide(
@@ -25,20 +27,31 @@ object MatchRefApp extends ZIOAppDefault {
 
   private def populate: ZIO[ChessComClient & Transactor, Throwable, Unit] =
     for {
-      client   <- ZIO.service[ChessComClient]
-      players  <- selectUnresolved
-      _        <- Console.printLine(s"Players without match ref: ${players.size}").orDie
-      cache    <- Ref.make(Map.empty[ClubMatchId, ApiDailyMatch])
-      resolved <- ZIO.foldLeft(players)(0) { case (count, player) =>
+      client <- ZIO.service[ChessComClient]
+      cache  <- Ref.make(Map.empty[ClubMatchId, ApiDailyMatch])
+      // Players
+      players        <- selectUnresolvedPlayers
+      _              <- Console.printLine(s"Players without match ref: ${players.size}").orDie
+      resolvedPlayers <- ZIO.foldLeft(players)(0) { case (count, player) =>
         resolvePlayer(client, cache, player).map {
           case Some(_) => count + 1
           case None    => count
         }
       }
-      _ <- Console.printLine(s"Resolved: $resolved / ${players.size}").orDie
+      _ <- Console.printLine(s"Resolved: $resolvedPlayers / ${players.size}").orDie
+      // Clubs
+      clubs        <- selectUnresolvedClubs
+      _            <- Console.printLine(s"Clubs without match ref: ${clubs.size}").orDie
+      resolvedClubs <- ZIO.foldLeft(clubs)(0) { case (count, club) =>
+        resolveClub(client, cache, club).map {
+          case Some(_) => count + 1
+          case None    => count
+        }
+      }
+      _ <- Console.printLine(s"Resolved: $resolvedClubs / ${clubs.size}").orDie
     } yield ()
 
-  private def selectUnresolved: ZIO[Transactor, Throwable, List[UnresolvedPlayer]] =
+  private def selectUnresolvedPlayers: ZIO[Transactor, Throwable, List[UnresolvedPlayer]] =
     connectZIO {
       sql"""SELECT p.player_id, ps.username
             FROM player p
@@ -98,4 +111,60 @@ object MatchRefApp extends ZIOAppDefault {
     else if teams.team2.players.exists(p => Username.unwrap(p.username).equalsIgnoreCase(u)) then Some(2)
     else None
   }
+
+  // --- Club resolution ---
+
+  private def selectUnresolvedClubs: ZIO[Transactor, Throwable, List[UnresolvedClub]] =
+    connectZIO {
+      sql"""SELECT c.club_id, c.url_name
+            FROM club c
+            LEFT JOIN club_match_ref cmr ON c.club_id = cmr.club_id
+            WHERE cmr.club_id IS NULL""".query[UnresolvedClub].run().toList
+    }
+
+  private def resolveClub(
+      client: ChessComClient,
+      cache: Ref[Map[ClubMatchId, ApiDailyMatch]],
+      club: UnresolvedClub
+    ): ZIO[Transactor, Throwable, Option[ClubMatchRef]] =
+    (for {
+      clubMatches <- client.getWithPermit[ApiClubMatches](ApiClubMatches.getUrl(club.urlName))
+      matchOpt = clubMatches.finished.headOption
+      ref <- matchOpt match
+        case None =>
+          Console.printLine(s"  ${club.urlName}: no finished match").orDie.as(None)
+        case Some(m) =>
+          val matchId = ClubMatchId.wrap(m.`@id`.path.segments.last.toLong)
+          for {
+            dailyMatch <- fetchMatch(client, cache, matchId)
+            teamIdx = findClubTeamIdx(dailyMatch, club.urlName)
+            result <- teamIdx match
+              case None =>
+                Console.printLine(s"  ${club.urlName}: not found in match $matchId teams").orDie.as(None)
+              case Some(idx) =>
+                val ref = ClubMatchRef(club.clubId, matchId, idx)
+                ClubMatchRef.upsert(ref).as(Some(ref))
+          } yield result
+    } yield ref).catchAll { error =>
+      Console.printLine(s"  ${club.urlName}: error — ${error.getMessage}").orDie.as(None)
+    }
+
+  private def findClubTeamIdx(dailyMatch: ApiDailyMatch, urlName: ClubUrlName): Option[Int] = {
+    val teams = dailyMatch.teams
+    val name  = ClubUrlName.unwrap(urlName)
+    if teams.team1.`@id`.path.segments.lastOption.exists(_.equalsIgnoreCase(name)) then Some(1)
+    else if teams.team2.`@id`.path.segments.lastOption.exists(_.equalsIgnoreCase(name)) then Some(2)
+    else None
+  }
+
+  private def resolveUrlNameFromClubMatchRef(
+      client: ChessComClient,
+      ref: ClubMatchRef,
+      oldUrlName: ClubUrlName
+    ): ZIO[Any, Throwable, Option[ClubUrlName]] =
+    for {
+      dailyMatch <- client.getWithPermit[ApiDailyMatch](ApiDailyMatch.getUrl(ref.matchId))
+      team = if ref.teamIdx == 1 then dailyMatch.teams.team1 else dailyMatch.teams.team2
+      newUrlName = team.`@id`.path.segments.lastOption.map(ClubUrlName.wrap)
+    } yield newUrlName.filter(_ != oldUrlName)
 }
