@@ -271,7 +271,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       configName = "default",
       excludeClubs = excludeClubs,
       onExhaustion = onExhaustion,
-      nationalityMode = None,
+      nationalityExclude = false,
       nationalityCountries = Nil,
       maxClubs = None,
       dailyMaxTimeoutPercent = None,
@@ -335,7 +335,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         config.configName == "daily",
         config.excludeClubs.isEmpty,
         config.onExhaustion == ExhaustionBehavior.Explore,
-        config.nationalityMode.isEmpty,
+        !config.nationalityExclude,
         config.nationalityCountries.isEmpty,
         config.maxClubs.contains(40),
         config.dailyMaxTimeoutPercent.contains(5.0),
@@ -721,25 +721,25 @@ object TestRecruitmentApp extends ZIOSpecDefault {
     },
     test("rejects by nationality exclude mode") {
       val responses = Map("player/alice" -> apiPlayerJson(200, "alice", country = "XX"))
-      val config    = makeConfig().copy(nationalityMode = Some("exclude"), nationalityCountries = List("XX", "YY"))
+      val config    = makeConfig().copy(nationalityExclude = true, nationalityCountries = List("XX", "YY"))
       for { outcome <- evalSingle(responses, config) }
       yield assertTrue(outcome == CandidateOutcome.Rejected)
     },
     test("accepts player not in nationality exclude list") {
       val responses = Map("player/alice" -> apiPlayerJson(200, "alice", country = "ZZ"))
-      val config    = makeConfig().copy(nationalityMode = Some("exclude"), nationalityCountries = List("XX", "YY"))
+      val config    = makeConfig().copy(nationalityExclude = true, nationalityCountries = List("XX", "YY"))
       for { outcome <- evalSingle(responses, config) }
       yield assertTrue(outcome == CandidateOutcome.Invited)
     },
     test("rejects by nationality include mode when not in list") {
       val responses = Map("player/alice" -> apiPlayerJson(200, "alice", country = "ZZ"))
-      val config    = makeConfig().copy(nationalityMode = Some("include"), nationalityCountries = List("XX", "YY"))
+      val config    = makeConfig().copy(nationalityExclude = false, nationalityCountries = List("XX", "YY"))
       for { outcome <- evalSingle(responses, config) }
       yield assertTrue(outcome == CandidateOutcome.Rejected)
     },
     test("accepts player in nationality include list") {
       val responses = Map("player/alice" -> apiPlayerJson(200, "alice", country = "YY"))
-      val config    = makeConfig().copy(nationalityMode = Some("include"), nationalityCountries = List("XX", "YY"))
+      val config    = makeConfig().copy(nationalityExclude = false, nationalityCountries = List("XX", "YY"))
       for { outcome <- evalSingle(responses, config) }
       yield assertTrue(outcome == CandidateOutcome.Invited)
     },

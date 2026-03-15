@@ -26,6 +26,13 @@ final case class PlayerRecruitmentCache(
     derives DbCodec
 
 object PlayerRecruitmentCache {
+  def empty(playerId: PlayerId, fetchedAt: Instant, clubCount: Option[Int]): PlayerRecruitmentCache =
+    PlayerRecruitmentCache(playerId, fetchedAt,
+      dailyElo = None, dailyTimeoutPct = None, dailyGamesFinished = None,
+      clubCount = clubCount, ongoingGames = 0, ongoingTeamMatches = 0,
+      tmGamesFinished90d = 0, tmTimeoutPct90d = None,
+      lastDailyTimeoutAt = None, lastTmTimeoutAt = None)
+
   private val selectCols = SqlLiteral(
     """player_id, fetched_at, daily_elo, daily_timeout_pct, daily_games_finished,
        club_count, ongoing_games, ongoing_team_matches, tm_games_finished_90d, tm_timeout_pct_90d,

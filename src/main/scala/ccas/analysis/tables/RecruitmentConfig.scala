@@ -16,7 +16,7 @@ final case class RecruitmentConfig(
     configName: String,
     excludeClubs: List[String],
     onExhaustion: ExhaustionBehavior,
-    nationalityMode: Option[String],
+    nationalityExclude: Boolean,
     nationalityCountries: List[String],
     maxClubs: Option[Int],
     dailyMaxTimeoutPercent: Option[Double],
@@ -41,7 +41,7 @@ final case class RecruitmentConfig(
 object RecruitmentConfig {
   private val selectCols = SqlLiteral(
     """club_id, config_name, exclude_clubs, on_exhaustion,
-       nationality_mode, nationality_countries, max_clubs,
+       nationality_exclude, nationality_countries, max_clubs,
        daily_max_timeout_percent, daily_max_tm_timeout_percent,
        daily_min_ongoing_games, daily_max_ongoing_games, daily_min_ongoing_team_matches,
        daily_min_elo, daily_max_elo, daily_min_games_finished, daily_min_tm_games_finished,
@@ -56,7 +56,7 @@ object RecruitmentConfig {
               config_name                    VARCHAR NOT NULL,
               exclude_clubs                  TEXT[] NOT NULL,
               on_exhaustion                  VARCHAR NOT NULL CHECK (on_exhaustion IN ('Stop', 'Explore')),
-              nationality_mode               VARCHAR,
+              nationality_exclude            BOOLEAN NOT NULL,
               nationality_countries          TEXT[] NOT NULL,
               max_clubs                      INT,
               daily_max_timeout_percent      DOUBLE PRECISION,
@@ -94,7 +94,7 @@ object RecruitmentConfig {
     connectZIO {
       sql"""INSERT INTO recruitment_config (
               club_id, config_name, exclude_clubs, on_exhaustion,
-              nationality_mode, nationality_countries, max_clubs,
+              nationality_exclude, nationality_countries, max_clubs,
               daily_max_timeout_percent, daily_max_tm_timeout_percent,
               daily_min_ongoing_games, daily_max_ongoing_games, daily_min_ongoing_team_matches,
               daily_min_elo, daily_max_elo, daily_min_games_finished, daily_min_tm_games_finished,
@@ -103,7 +103,7 @@ object RecruitmentConfig {
             ) VALUES (
               ${item.clubId}, ${item.configName},
               ${item.excludeClubs}, ${item.onExhaustion.toString},
-              ${item.nationalityMode}, ${item.nationalityCountries}, ${item.maxClubs},
+              ${item.nationalityExclude}, ${item.nationalityCountries}, ${item.maxClubs},
               ${item.dailyMaxTimeoutPercent}, ${item.dailyMaxTmTimeoutPercent},
               ${item.dailyMinOngoingGames}, ${item.dailyMaxOngoingGames}, ${item.dailyMinOngoingTeamMatches},
               ${item.dailyMinElo}, ${item.dailyMaxElo}, ${item.dailyMinGamesFinished}, ${item.dailyMinTmGamesFinished},
@@ -112,7 +112,7 @@ object RecruitmentConfig {
             ) ON CONFLICT (club_id, config_name) DO UPDATE SET
               exclude_clubs = EXCLUDED.exclude_clubs,
               on_exhaustion = EXCLUDED.on_exhaustion,
-              nationality_mode = EXCLUDED.nationality_mode,
+              nationality_exclude = EXCLUDED.nationality_exclude,
               nationality_countries = EXCLUDED.nationality_countries,
               max_clubs = EXCLUDED.max_clubs,
               daily_max_timeout_percent = EXCLUDED.daily_max_timeout_percent,
@@ -138,7 +138,7 @@ object RecruitmentConfig {
       configName                = "daily",
       excludeClubs              = Nil,
       onExhaustion              = ExhaustionBehavior.Explore,
-      nationalityMode           = None,
+      nationalityExclude        = false,
       nationalityCountries      = Nil,
       maxClubs                  = Some(40),
       dailyMaxTimeoutPercent    = Some(5.0),

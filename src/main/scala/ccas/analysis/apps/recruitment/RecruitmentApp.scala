@@ -50,10 +50,8 @@ object RecruitmentApp extends ZIOAppDefault {
   // --- ExploreContext: bundles constant parameters across explore loop recursion ---
 
   private case class ExploreContext(
-      client: ChessComClient,
       runId: Long,
       clubUrlName: ClubUrlName,
-      config: RecruitmentConfig,
       filters: List[RecruitmentFilter],
       runCtx: RunContext,
       invitedRef: Ref[List[Username]],
@@ -108,8 +106,9 @@ object RecruitmentApp extends ZIOAppDefault {
 
       // --- Shared setup ---
       targetMembers <- ApiClubMembers.get(client, clubUrlName)
-      existingUsernames = targetMembers.toMap.keySet
-      targetMemberNames = targetMembers.toMap.keys.toList
+      membersMap = targetMembers.toMap
+      existingUsernames = membersMap.keySet
+      targetMemberNames = membersMap.keys.toList
 
       clubMatches <- client.get[ApiClubMatches](ApiClubMatches.getUrl(clubUrlName))
       targetMatchIds = (clubMatches.registered.map(_.`@id`) ++ clubMatches.inProgress.map(_.`@id`)).toSet
@@ -128,10 +127,8 @@ object RecruitmentApp extends ZIOAppDefault {
       effectiveConcurrency = config.exploreConcurrency.map(_ min MaxExploreConcurrency).getOrElse(1)
 
       ctx = ExploreContext(
-        client = client,
         runId = runId,
         clubUrlName = clubUrlName,
-        config = config,
         filters = filters,
         runCtx = runCtx,
         invitedRef = invitedRef,
@@ -323,11 +320,11 @@ object RecruitmentApp extends ZIOAppDefault {
       case ClubSource(clubUrlName) =>
         for {
           (members, adminUsernames) <-
-            if (ctx.config.excludeSourceAdmins)
-              ApiClubMembers.get(ctx.client, clubUrlName).map(_.toMap.keySet)
-                .zipPar(ApiClub.get(ctx.client, clubUrlName).map(extractAdminUsernames))
+            if (ctx.runCtx.config.excludeSourceAdmins)
+              ApiClubMembers.get(ctx.runCtx.client, clubUrlName).map(_.toMap.keySet)
+                .zipPar(ApiClub.get(ctx.runCtx.client, clubUrlName).map(extractAdminUsernames))
             else
-              ApiClubMembers.get(ctx.client, clubUrlName).map(m => (m.toMap.keySet, Set.empty[Username]))
+              ApiClubMembers.get(ctx.runCtx.client, clubUrlName).map(m => (m.toMap.keySet, Set.empty[Username]))
           filtered = (members -- ctx.existingUsernames -- evaluatedUsernames -- adminUsernames).toList
           _ <- Console.printLine(s"[Explore] Activated club source: ${ClubUrlName.unwrap(clubUrlName)} (${filtered.size} candidates)").orDie
         } yield filtered
@@ -345,7 +342,7 @@ object RecruitmentApp extends ZIOAppDefault {
       visitedClubs: Set[ClubUrlName],
       staticStrategies: List[() => ZIO[Transactor, Throwable, List[SourceDescriptor]]]
     ): ZIO[Transactor, Throwable, (List[SourceDescriptor], List[() => ZIO[Transactor, Throwable, List[SourceDescriptor]]])] = {
-    if (ctx.config.onExhaustion != ExhaustionBehavior.Explore)
+    if (ctx.runCtx.config.onExhaustion != ExhaustionBehavior.Explore)
       ZIO.succeed((Nil, staticStrategies))
     else for {
       // Dynamic strategy 1: candidate opponents
@@ -359,7 +356,7 @@ object RecruitmentApp extends ZIOAppDefault {
         for {
           clubs <- ctx.runCtx.discoveredClubs.get
           newClubs = clubs.filterNot(visitedClubs.contains).filterNot(_ == ctx.clubUrlName)
-            .filterNot(ctx.config.excludeClubNames.contains)
+            .filterNot(ctx.runCtx.config.excludeClubNames.contains)
           result <- if (newClubs.nonEmpty) {
             Console.printLine(s"[Explore] Discovered ${newClubs.size} candidate clubs").orDie
               .as((newClubs.toList.map(ClubSource(_)), staticStrategies))
@@ -372,7 +369,7 @@ object RecruitmentApp extends ZIOAppDefault {
                   sources <- head()
                   filtered = sources.filter {
                     case ClubSource(name) => !visitedClubs.contains(name) && name != ctx.clubUrlName &&
-                      !ctx.config.excludeClubNames.contains(name)
+                      !ctx.runCtx.config.excludeClubNames.contains(name)
                     case _ => true
                   }
                   _ <- Console.printLine(s"[Explore] Static strategy yielded ${filtered.size} sources").orDie
@@ -549,14 +546,11 @@ object RecruitmentApp extends ZIOAppDefault {
           else if (config.minDaysSinceRegistration.exists { days =>
             ChronoUnit.DAYS.between(Instant.ofEpochSecond(apiPlayer.joined), now) < days
           }) Some(CandidateOutcome.Rejected)
-          else if (config.nationalityMode.exists { mode =>
+          else if (config.nationalityCountries.nonEmpty) {
             val countryCode = apiPlayer.country.path.segments.last
-            mode match {
-              case "include" => !config.nationalityCountries.contains(countryCode)
-              case "exclude" => config.nationalityCountries.contains(countryCode)
-              case _         => false
-            }
-          }) Some(CandidateOutcome.Rejected)
+            val listed = config.nationalityCountries.contains(countryCode)
+            if (config.nationalityExclude == listed) Some(CandidateOutcome.Rejected) else None
+          }
           else None
       } yield FilterResult(outcome, updatedCtx)
   }
@@ -781,19 +775,11 @@ object RecruitmentApp extends ZIOAppDefault {
             clubCount = env.candidate.clubCount.orElse(c.clubCount),
             lastDailyTimeoutAt = mergedDailyTimeout
           )
-          case None => PlayerRecruitmentCache(
-            playerId = apiPlayer.playerId,
-            fetchedAt = env.run.now,
+          case None => PlayerRecruitmentCache.empty(apiPlayer.playerId, env.run.now, env.candidate.clubCount).copy(
             dailyElo = Some(dailyElo),
             dailyTimeoutPct = Some(dailyTimeoutPct),
             dailyGamesFinished = Some(dailyGamesFinished),
-            clubCount = env.candidate.clubCount,
-            ongoingGames = 0,
-            ongoingTeamMatches = 0,
-            tmGamesFinished90d = 0,
-            tmTimeoutPct90d = None,
-            lastDailyTimeoutAt = mergedDailyTimeout,
-            lastTmTimeoutAt = None
+            lastDailyTimeoutAt = mergedDailyTimeout
           )
         }
         updatedCtx = env.candidate.copy(cache = Some(updatedCache))
@@ -825,19 +811,9 @@ object RecruitmentApp extends ZIOAppDefault {
             ongoingGames = ongoingGames,
             ongoingTeamMatches = ongoingTeamMatches
           )
-          case None => PlayerRecruitmentCache(
-            playerId = apiPlayer.playerId,
-            fetchedAt = env.run.now,
-            dailyElo = None,
-            dailyTimeoutPct = None,
-            dailyGamesFinished = None,
-            clubCount = env.candidate.clubCount,
+          case None => PlayerRecruitmentCache.empty(apiPlayer.playerId, env.run.now, env.candidate.clubCount).copy(
             ongoingGames = ongoingGames,
-            ongoingTeamMatches = ongoingTeamMatches,
-            tmGamesFinished90d = 0,
-            tmTimeoutPct90d = None,
-            lastDailyTimeoutAt = None,
-            lastTmTimeoutAt = None
+            ongoingTeamMatches = ongoingTeamMatches
           )
         }
         updatedCtx = env.candidate.copy(cache = Some(updatedCache))
@@ -930,21 +906,13 @@ object RecruitmentApp extends ZIOAppDefault {
           if (tmGamesFinished == 0) None
           else if (config.dailyMaxTmTimeoutPercent.isDefined && overallTimeoutPct == 0.0) Some(0.0)
           else {
-            val timeouts = tmGames.count { g =>
-              val isWhite = g.white.username.equalsIgnoreCase(username)
-              val playerResult = if (isWhite) g.white.result else g.black.result
-              playerResult == GameResultDetail.Timeout
-            }
+            val timeouts = tmGames.count(g => playerResult(g, username) == GameResultDetail.Timeout)
             Some(timeouts.toDouble / tmGamesFinished * 100.0)
           }
 
         // Find most recent TM game with Timeout result
         lastTmTimeoutAt = tmGames
-          .filter { g =>
-            val isWhite = g.white.username.equalsIgnoreCase(username)
-            val playerResult = if (isWhite) g.white.result else g.black.result
-            playerResult == GameResultDetail.Timeout
-          }
+          .filter(g => playerResult(g, username) == GameResultDetail.Timeout)
           .sortBy(_.endTime)(using Ordering[Long].reverse)
           .headOption
           .map(g => Instant.ofEpochSecond(g.endTime))
@@ -971,16 +939,15 @@ object RecruitmentApp extends ZIOAppDefault {
     ).map { archive =>
       archive.games
         .filter(g => g.`match`.isEmpty) // non-match daily games
-        .filter { g =>
-          val isWhite = g.white.username.equalsIgnoreCase(username)
-          val playerResult = if (isWhite) g.white.result else g.black.result
-          playerResult == GameResultDetail.Timeout
-        }
+        .filter(g => playerResult(g, username) == GameResultDetail.Timeout)
         .sortBy(_.endTime)(using Ordering[Long].reverse)
         .headOption
         .map(g => Instant.ofEpochSecond(g.endTime))
     }.catchAll(_ => ZIO.succeed(None))
   }
+
+  private def playerResult(g: ApiPlayerArchive.ApiPlayerArchiveGame, username: Username): GameResultDetail =
+    if (g.white.username.equalsIgnoreCase(username)) g.white.result else g.black.result
 
   private def mergeOptionalInstants(a: Option[Instant], b: Option[Instant]): Option[Instant] =
     (a, b) match {
