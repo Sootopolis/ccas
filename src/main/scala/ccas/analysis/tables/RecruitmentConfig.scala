@@ -32,7 +32,8 @@ final case class RecruitmentConfig(
     daysSinceLastInvited: Option[Int],
     dailyMaxHoursPerMove: Option[Int],
     excludeSourceAdmins: Boolean,
-    excludeFormerMembers: Boolean)
+    excludeFormerMembers: Boolean,
+    exploreConcurrency: Option[Int])
     derives DbCodec {
   def excludeClubNames: List[ClubUrlName] = excludeClubs.map(ClubUrlName.wrap)
 }
@@ -45,7 +46,7 @@ object RecruitmentConfig {
        daily_min_ongoing_games, daily_max_ongoing_games, daily_min_ongoing_team_matches,
        daily_min_elo, daily_max_elo, daily_min_games_finished, daily_min_tm_games_finished,
        min_days_since_registration, days_since_last_invited, daily_max_hours_per_move,
-       exclude_source_admins, exclude_former_members"""
+       exclude_source_admins, exclude_former_members, explore_concurrency"""
   )
 
   def createTable: ZIO[Transactor, SQLException, Int] =
@@ -72,6 +73,7 @@ object RecruitmentConfig {
               daily_max_hours_per_move       INT,
               exclude_source_admins          BOOLEAN NOT NULL,
               exclude_former_members         BOOLEAN NOT NULL,
+              explore_concurrency            INT,
               PRIMARY KEY (club_id, config_name),
               FOREIGN KEY (club_id) REFERENCES club (club_id) ON DELETE RESTRICT
             )""".update.run()
@@ -97,7 +99,7 @@ object RecruitmentConfig {
               daily_min_ongoing_games, daily_max_ongoing_games, daily_min_ongoing_team_matches,
               daily_min_elo, daily_max_elo, daily_min_games_finished, daily_min_tm_games_finished,
               min_days_since_registration, days_since_last_invited, daily_max_hours_per_move,
-              exclude_source_admins, exclude_former_members
+              exclude_source_admins, exclude_former_members, explore_concurrency
             ) VALUES (
               ${item.clubId}, ${item.configName},
               ${item.excludeClubs}, ${item.onExhaustion.toString},
@@ -106,7 +108,7 @@ object RecruitmentConfig {
               ${item.dailyMinOngoingGames}, ${item.dailyMaxOngoingGames}, ${item.dailyMinOngoingTeamMatches},
               ${item.dailyMinElo}, ${item.dailyMaxElo}, ${item.dailyMinGamesFinished}, ${item.dailyMinTmGamesFinished},
               ${item.minDaysSinceRegistration}, ${item.daysSinceLastInvited}, ${item.dailyMaxHoursPerMove},
-              ${item.excludeSourceAdmins}, ${item.excludeFormerMembers}
+              ${item.excludeSourceAdmins}, ${item.excludeFormerMembers}, ${item.exploreConcurrency}
             ) ON CONFLICT (club_id, config_name) DO UPDATE SET
               exclude_clubs = EXCLUDED.exclude_clubs,
               on_exhaustion = EXCLUDED.on_exhaustion,
@@ -126,7 +128,8 @@ object RecruitmentConfig {
               days_since_last_invited = EXCLUDED.days_since_last_invited,
               daily_max_hours_per_move = EXCLUDED.daily_max_hours_per_move,
               exclude_source_admins = EXCLUDED.exclude_source_admins,
-              exclude_former_members = EXCLUDED.exclude_former_members""".update.run()
+              exclude_former_members = EXCLUDED.exclude_former_members,
+              explore_concurrency = EXCLUDED.explore_concurrency""".update.run()
     }
 
   def defaultDaily(clubId: ClubId): RecruitmentConfig =
@@ -151,7 +154,8 @@ object RecruitmentConfig {
       daysSinceLastInvited      = Some(180),
       dailyMaxHoursPerMove      = Some(12),
       excludeSourceAdmins       = true,
-      excludeFormerMembers      = true
+      excludeFormerMembers      = true,
+      exploreConcurrency        = None
     )
 
   def deleteAll: ZIO[Transactor, SQLException, Int] =

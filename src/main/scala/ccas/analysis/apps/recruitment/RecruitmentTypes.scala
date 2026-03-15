@@ -7,7 +7,4 @@ object CandidateOutcome extends EnumSql[CandidateOutcome]
 
 enum ExhaustionBehavior { case Stop, Explore }
 object ExhaustionBehavior extends EnumSql[ExhaustionBehavior]
-// Stop: finish the run with however many candidates were found
-// Explore: discover new sources (e.g. clubs that source club members are in, match opponents)
-// For this scaffold, only Stop is implemented; Explore is deferred
 

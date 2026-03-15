@@ -61,7 +61,7 @@ object JobScheduler {
           val clubUrlName = schedule.clubUrlName.getOrElse(
             throw new IllegalStateException("Recruitment schedule missing clubUrlName")
           )
-          RecruitmentApp.recruit(clubUrlName, "default").unit
+          RecruitmentApp.recruit(clubUrlName, "default", timeLimitMinutes = Some(30)).unit
         case JobKind.Membership =>
           val clubUrlName = schedule.clubUrlName.getOrElse(
             throw new IllegalStateException("Membership schedule missing clubUrlName")

@@ -247,10 +247,14 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       _ <- PlayerRecruitmentCache.deleteAll
       _ <- SqlZioTypes.connectZIO(sql"DELETE FROM club_member WHERE club_id = $clubId".update.run())
       _ <- SqlZioTypes.connectZIO(sql"DELETE FROM club_member WHERE club_id = $sourceClubId".update.run())
-      _ <- ZIO.foreachDiscard(List(blacklistClubId, ClubId(701))) { cid =>
+      _ <- ZIO.foreachDiscard(List(blacklistClubId, ClubId(701), ClubId(702), ClubId(801), ClubId(802))) { cid =>
         SqlZioTypes.connectZIO(sql"DELETE FROM club WHERE club_id = $cid".update.run())
       }
-      _ <- ZIO.foreachDiscard(List(PlayerId(199), pid0, pid1, pid2, pid3)) { pid =>
+      _ <- ZIO.foreachDiscard(
+        List(PlayerId(199), pid0, pid1, pid2, pid3,
+          PlayerId(210), PlayerId(211), PlayerId(220), PlayerId(221),
+          PlayerId(222), PlayerId(223))
+      ) { pid =>
         SqlZioTypes.connectZIO(sql"DELETE FROM player_snapshot WHERE player_id = $pid".update.run()) *>
           SqlZioTypes.connectZIO(sql"DELETE FROM player WHERE player_id = $pid".update.run())
       }
@@ -283,7 +287,8 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       daysSinceLastInvited = None,
       dailyMaxHoursPerMove = None,
       excludeSourceAdmins = true,
-      excludeFormerMembers = excludeFormerMembers
+      excludeFormerMembers = excludeFormerMembers,
+      exploreConcurrency = None
     )
 
   // --- Spec ---
@@ -298,6 +303,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
     suiteBlacklistApp,
     suiteCacheFilters,
     suiteFullWorkflow,
+    suiteExploreMode,
     suiteReport
   ).provideShared(
     DataSourceLayer.liveFromPrefix(schema = Some("test_recruitment_app"), onInit = Tables.ensureTables)
@@ -345,7 +351,8 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         config.daysSinceLastInvited.contains(180),
         config.dailyMaxHoursPerMove.contains(12),
         config.excludeSourceAdmins,
-        config.excludeFormerMembers
+        config.excludeFormerMembers,
+        config.exploreConcurrency.isEmpty
       )
     }
   )
@@ -1224,6 +1231,147 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         invited.size == 2,
         playerA.isDefined,
         playerB.isDefined
+      )
+    }
+  )
+
+  // ==========================================================================
+  // Suite: Explore mode
+  // ==========================================================================
+
+  private val discoverableClubId = ClubId(701)
+  private val discoverableClubUrlName = ClubUrlName("discoverable-club")
+
+  private def suiteExploreMode = suite("explore mode")(
+    test("isGrim pure logic") {
+      import RecruitmentApp.{SourceState, isGrim}
+      assertTrue(
+        !isGrim(SourceState(Nil, 39, 39, 39)),    // below both thresholds
+        isGrim(SourceState(Nil, 10, 10, 40)),      // consecutive threshold hit
+        isGrim(SourceState(Nil, 40, 39, 5)),       // ratio threshold: 39/40 >= 0.975
+        !isGrim(SourceState(Nil, 40, 38, 5)),      // ratio 38/40 = 0.95 < 0.975
+        !isGrim(SourceState(Nil, 0, 0, 0))         // fresh source
+      )
+    },
+
+    test("Stop mode does not explore beyond source clubs") {
+      val responses = Map(
+        s"club/$clubUrlName" -> apiClubJson(clubId, clubUrlName),
+        s"club/$clubUrlName/members" -> apiClubMembersJson(Nil),
+        s"club/$discoverableClubUrlName" -> apiClubJson(discoverableClubId, discoverableClubUrlName),
+        s"club/$discoverableClubUrlName/members" -> apiClubMembersJson(
+          List(("explorer", T.t0.getEpochSecond))
+        ),
+        "player/explorer" -> apiPlayerJson(210, "explorer")
+      )
+      val config = makeConfig(onExhaustion = ExhaustionBehavior.Stop)
+
+      for {
+        _      <- seedDb
+        _      <- Club.upsert(Club(discoverableClubId, T.t0, discoverableClubUrlName))
+        _      <- RecruitmentConfig.upsert(config)
+        client <- fakeChessComClient(responses)
+        xa     <- ZIO.service[Transactor]
+        result <- RecruitmentApp.recruit(clubUrlName, "default", sourceClubs = Nil)
+          .provideEnvironment(zio.ZEnvironment(client, xa))
+        candidates <- RecruitmentCandidate.selectByRun(result.runId)
+      } yield assertTrue(
+        candidates.isEmpty
+      )
+    },
+
+    test("Explore mode discovers candidates from DB clubs") {
+      val responses = Map(
+        s"club/$clubUrlName" -> apiClubJson(clubId, clubUrlName),
+        s"club/$clubUrlName/members" -> apiClubMembersJson(Nil),
+        s"club/$discoverableClubUrlName" -> apiClubJson(discoverableClubId, discoverableClubUrlName),
+        s"club/$discoverableClubUrlName/members" -> apiClubMembersJson(
+          List(("explorer", T.t0.getEpochSecond))
+        ),
+        "player/explorer" -> apiPlayerJson(210, "explorer")
+      )
+      val config = makeConfig(onExhaustion = ExhaustionBehavior.Explore)
+
+      for {
+        _      <- seedDb
+        _      <- Club.upsert(Club(discoverableClubId, T.t0, discoverableClubUrlName))
+        _      <- RecruitmentConfig.upsert(config)
+        client <- fakeChessComClient(responses)
+        xa     <- ZIO.service[Transactor]
+        result <- RecruitmentApp.recruit(clubUrlName, "default", sourceClubs = Nil)
+          .provideEnvironment(zio.ZEnvironment(client, xa))
+        candidates <- RecruitmentCandidate.selectByRun(result.runId)
+      } yield assertTrue(
+        candidates.size == 1,
+        candidates.head.outcome == CandidateOutcome.Invited,
+        candidates.head.username == Username("explorer")
+      )
+    },
+
+    test("Explore mode discovers candidates from match opponents") {
+      val clubMatchesWithOpponent =
+        s"""{"finished": [{"name": "match", "@id": "https://api.chess.com/pub/match/99", "opponent": "https://api.chess.com/pub/club/opponent-club", "time_class": "daily", "start_time": ${T.t0.getEpochSecond}, "result": "win"}], "in_progress": [], "registered": []}"""
+      val opponentClubId = ClubId(702)
+      val responses = Map(
+        s"club/$clubUrlName" -> apiClubJson(clubId, clubUrlName),
+        s"club/$clubUrlName/members" -> apiClubMembersJson(Nil),
+        s"club/$clubUrlName/matches" -> clubMatchesWithOpponent,
+        "club/opponent-club" -> apiClubJson(opponentClubId, "opponent-club"),
+        "club/opponent-club/members" -> apiClubMembersJson(
+          List(("opp-player", T.t0.getEpochSecond))
+        ),
+        "player/opp-player" -> apiPlayerJson(211, "opp-player")
+      )
+      val config = makeConfig(onExhaustion = ExhaustionBehavior.Explore)
+
+      for {
+        _      <- seedDb
+        _      <- RecruitmentConfig.upsert(config)
+        client <- fakeChessComClient(responses)
+        xa     <- ZIO.service[Transactor]
+        result <- RecruitmentApp.recruit(clubUrlName, "default", sourceClubs = Nil)
+          .provideEnvironment(zio.ZEnvironment(client, xa))
+        candidates <- RecruitmentCandidate.selectByRun(result.runId)
+      } yield assertTrue(
+        candidates.size == 1,
+        candidates.head.outcome == CandidateOutcome.Invited,
+        candidates.head.username == Username("opp-player")
+      )
+    },
+
+    test("Explore mode respects invite cap across sources") {
+      val source1 = ClubUrlName("source-1")
+      val source2 = ClubUrlName("source-2")
+      val responses = Map(
+        s"club/$clubUrlName" -> apiClubJson(clubId, clubUrlName),
+        s"club/$clubUrlName/members" -> apiClubMembersJson(Nil),
+        s"club/$source1" -> apiClubJson(ClubId(801), source1),
+        s"club/$source1/members" -> apiClubMembersJson(
+          List(("cap-a", T.t0.getEpochSecond), ("cap-b", T.t0.getEpochSecond))
+        ),
+        s"club/$source2" -> apiClubJson(ClubId(802), source2),
+        s"club/$source2/members" -> apiClubMembersJson(
+          List(("cap-c", T.t0.getEpochSecond), ("cap-d", T.t0.getEpochSecond))
+        ),
+        "player/cap-a" -> apiPlayerJson(220, "cap-a"),
+        "player/cap-b" -> apiPlayerJson(221, "cap-b"),
+        "player/cap-c" -> apiPlayerJson(222, "cap-c"),
+        "player/cap-d" -> apiPlayerJson(223, "cap-d")
+      )
+      val config = makeConfig()
+
+      for {
+        _      <- seedDb
+        _      <- RecruitmentConfig.upsert(config)
+        client <- fakeChessComClient(responses)
+        xa     <- ZIO.service[Transactor]
+        result <- RecruitmentApp.recruit(clubUrlName, "default", inviteCap = 3, sourceClubs = List(source1, source2))
+          .provideEnvironment(zio.ZEnvironment(client, xa))
+        candidates <- RecruitmentCandidate.selectByRun(result.runId)
+        invited = candidates.filter(_.outcome == CandidateOutcome.Invited)
+      } yield assertTrue(
+        invited.size == 3,
+        result.candidatesFound == 3
       )
     }
   )

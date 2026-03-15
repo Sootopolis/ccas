@@ -19,11 +19,15 @@ object JobRoutes {
 
   // --- Request types ---
 
+  private val MaxInviteCap = 40
+  private val MaxTimeLimitMinutes = 30
+
   case class RecruitmentRequest(
       clubUrlName: ClubUrlName,
       configName: Option[String],
       inviteCap: Option[Int],
-      sourceClubs: Option[List[ClubUrlName]]
+      sourceClubs: Option[List[ClubUrlName]],
+      timeLimitMinutes: Option[Int]
   )
   object RecruitmentRequest {
     given JsonCodec[RecruitmentRequest] = DeriveJsonCodec.gen
@@ -106,11 +110,14 @@ object JobRoutes {
       (for {
         body   <- req.body.asString.flatMap(s => ZIO.fromEither(summon[JsonDecoder[RecruitmentRequest]].decodeJson(s)).mapError(e => new ExternalException(e)))
         runner <- ZIO.service[JobRunner]
+        effectiveInviteCap    = body.inviteCap.map(_ min MaxInviteCap).getOrElse(30)
+        effectiveTimeLimit    = body.timeLimitMinutes.map(_ min MaxTimeLimitMinutes)
         effect  = RecruitmentApp.recruit(
                     body.clubUrlName,
                     body.configName.getOrElse("default"),
-                    body.inviteCap.getOrElse(30),
-                    body.sourceClubs.getOrElse(Nil)
+                    effectiveInviteCap,
+                    body.sourceClubs.getOrElse(Nil),
+                    effectiveTimeLimit
                   )
         jobId  <- runner.submit(JobKind.Recruitment, Some(body.clubUrlName), Some(req.body.toString), effect)
       } yield jsonResponse(Status.Accepted, JobResponse(JobRunId.unwrap(jobId), "running")))
