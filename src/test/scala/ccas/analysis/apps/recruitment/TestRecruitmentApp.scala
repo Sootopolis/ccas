@@ -111,13 +111,14 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       timeoutPct: Double = 0.0,
       wins: Int = 100,
       losses: Int = 50,
-      draws: Int = 10
+      draws: Int = 10,
+      timePerMove: Int = 86400
     ): String =
     s"""{
        |  "chess_daily": {
        |    "last": {"rating": $dailyElo, "date": 0, "rd": 0},
        |    "best": {"rating": $dailyElo, "date": 0, "game": "https://chess.com/game/1"},
-       |    "record": {"win": $wins, "loss": $losses, "draw": $draws, "time_per_move": 86400, "timeout_percent": $timeoutPct}
+       |    "record": {"win": $wins, "loss": $losses, "draw": $draws, "time_per_move": $timePerMove, "timeout_percent": $timeoutPct}
        |  },
        |  "chess960_daily": {
        |    "last": {"rating": 0, "date": 0, "rd": 0},
@@ -258,7 +259,8 @@ object TestRecruitmentApp extends ZIOSpecDefault {
 
   private def makeConfig(
       excludeClubs: List[String] = Nil,
-      onExhaustion: ExhaustionBehavior = ExhaustionBehavior.Stop
+      onExhaustion: ExhaustionBehavior = ExhaustionBehavior.Stop,
+      excludeFormerMembers: Boolean = false
     ): RecruitmentConfig =
     RecruitmentConfig(
       clubId = clubId,
@@ -279,7 +281,9 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       dailyMinTmGamesFinished = None,
       minDaysSinceRegistration = None,
       daysSinceLastInvited = None,
-      excludeSourceAdmins = true
+      dailyMaxHoursPerMove = None,
+      excludeSourceAdmins = true,
+      excludeFormerMembers = excludeFormerMembers
     )
 
   // --- Spec ---
@@ -317,6 +321,32 @@ object TestRecruitmentApp extends ZIOSpecDefault {
     test("onExhaustion stores Explore enum value") {
       val config = makeConfig(onExhaustion = ExhaustionBehavior.Explore)
       assertTrue(config.onExhaustion == ExhaustionBehavior.Explore)
+    },
+    test("defaultDaily returns expected field values") {
+      val config = RecruitmentConfig.defaultDaily(clubId)
+      assertTrue(
+        config.clubId == clubId,
+        config.configName == "daily",
+        config.excludeClubs.isEmpty,
+        config.onExhaustion == ExhaustionBehavior.Explore,
+        config.nationalityMode.isEmpty,
+        config.nationalityCountries.isEmpty,
+        config.maxClubs.contains(40),
+        config.dailyMaxTimeoutPercent.contains(5.0),
+        config.dailyMaxTmTimeoutPercent.contains(0.0),
+        config.dailyMinOngoingGames.isEmpty,
+        config.dailyMaxOngoingGames.contains(60),
+        config.dailyMinOngoingTeamMatches.isEmpty,
+        config.dailyMinElo.contains(1000),
+        config.dailyMaxElo.isEmpty,
+        config.dailyMinGamesFinished.contains(20),
+        config.dailyMinTmGamesFinished.contains(10),
+        config.minDaysSinceRegistration.contains(90),
+        config.daysSinceLastInvited.contains(180),
+        config.dailyMaxHoursPerMove.contains(12),
+        config.excludeSourceAdmins,
+        config.excludeFormerMembers
+      )
     }
   )
 
@@ -475,6 +505,14 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         latest.isDefined,
         latest.get.runId == runId2
       )
+    },
+    test("defaultDaily round-trips through DB via upsert/select") {
+      val config = RecruitmentConfig.defaultDaily(clubId)
+      for {
+        _      <- seedDb
+        _      <- RecruitmentConfig.upsert(config)
+        loaded <- RecruitmentConfig.select(clubId, "daily")
+      } yield assertTrue(loaded.contains(config))
     }
   )
 
@@ -743,6 +781,24 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       for { outcome <- evalSingle(responses, config) }
       yield assertTrue(outcome == CandidateOutcome.Rejected)
     },
+    test("rejects by dailyMaxHoursPerMove") {
+      val responses = Map(
+        "player/alice"       -> apiPlayerJson(200, "alice"),
+        "player/alice/stats" -> apiPlayerStatsJson(timePerMove = 86400) // 24 hours
+      )
+      val config = makeConfig().copy(dailyMaxHoursPerMove = Some(12))
+      for { outcome <- evalSingle(responses, config) }
+      yield assertTrue(outcome == CandidateOutcome.Rejected)
+    },
+    test("accepts player within dailyMaxHoursPerMove") {
+      val responses = Map(
+        "player/alice"       -> apiPlayerJson(200, "alice"),
+        "player/alice/stats" -> apiPlayerStatsJson(timePerMove = 36000) // 10 hours
+      )
+      val config = makeConfig().copy(dailyMaxHoursPerMove = Some(12))
+      for { outcome <- evalSingle(responses, config) }
+      yield assertTrue(outcome == CandidateOutcome.Invited)
+    },
     test("rejects by maxClubs") {
       val responses = Map(
         "player/alice"       -> apiPlayerJson(200, "alice"),
@@ -859,6 +915,42 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         cached.get.lastDailyTimeoutAt.isEmpty,
         cached.get.lastTmTimeoutAt.isEmpty
       )
+    },
+    test("former member rejected when excludeFormerMembers = true") {
+      val responses = Map("player/alice" -> apiPlayerJson(200, "alice"))
+      val config    = makeConfig(excludeFormerMembers = true)
+      for {
+        _      <- seedDb
+        _      <- RecruitmentConfig.upsert(config)
+        // Seed alice as a former member of the club (player row needed for FK)
+        _      <- SqlZioTypes.connectZIO {
+          sql"""INSERT INTO player (player_id, joined) VALUES ($pid0, ${T.t0})
+                ON CONFLICT (player_id) DO NOTHING""".update.run()
+        }
+        _      <- ClubMember.insert(ClubMember(clubId, pid0, T.t0, Some(T.t1)))
+        runId  <- RecruitmentRun.insert(clubId, "default", Instant.now())
+        client <- fakeChessComClient(responses)
+        _      <- RecruitmentApp.evaluateCandidates(client, runId, clubUrlName, List(Username("alice")), config)
+        cands  <- RecruitmentCandidate.selectByRun(runId)
+      } yield assertTrue(cands.head.outcome == CandidateOutcome.Rejected)
+    },
+    test("former member accepted when excludeFormerMembers = false") {
+      val responses = Map("player/alice" -> apiPlayerJson(200, "alice"))
+      val config    = makeConfig(excludeFormerMembers = false)
+      for {
+        _      <- seedDb
+        _      <- RecruitmentConfig.upsert(config)
+        // Seed alice as a former member of the club
+        _      <- SqlZioTypes.connectZIO {
+          sql"""INSERT INTO player (player_id, joined) VALUES ($pid0, ${T.t0})
+                ON CONFLICT (player_id) DO NOTHING""".update.run()
+        }
+        _      <- ClubMember.insert(ClubMember(clubId, pid0, T.t0, Some(T.t1)))
+        runId  <- RecruitmentRun.insert(clubId, "default", Instant.now())
+        client <- fakeChessComClient(responses)
+        _      <- RecruitmentApp.evaluateCandidates(client, runId, clubUrlName, List(Username("alice")), config)
+        cands  <- RecruitmentCandidate.selectByRun(runId)
+      } yield assertTrue(cands.head.outcome == CandidateOutcome.Invited)
     }
   )
 

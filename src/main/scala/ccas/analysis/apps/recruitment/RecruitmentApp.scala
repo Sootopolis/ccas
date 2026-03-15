@@ -11,7 +11,7 @@ import ccas.analysis.apps.membership.MembershipApp
 import ccas.analysis.tables.*
 import ccas.api.club.{ApiClub, ApiClubMatches, ApiClubMembers}
 import ccas.api.misc.enums.{GameResultDetail, PlayerStatusCategory}
-import ccas.api.misc.subtypes.{ClubUrlName, Username}
+import ccas.api.misc.subtypes.{ClubUrlName, PlayerId, Username}
 import ccas.api.player.*
 import ccas.utils.client.ChessComClient
 import ccas.utils.errors.ExternalException
@@ -129,7 +129,11 @@ object RecruitmentApp extends ZIOAppDefault {
       clubMatches <- client.get[ApiClubMatches](ApiClubMatches.getUrl(clubUrlName))
       targetMatchIds = (clubMatches.registered.map(_.`@id`) ++ clubMatches.inProgress.map(_.`@id`)).toSet
 
-      runCtx  = RunContext(client, config, targetMatchIds, Instant.now())
+      formerMemberIds <- if (config.excludeFormerMembers)
+        ClubMember.selectClubFormer(config.clubId).map(_.map(_.playerId).toSet)
+      else ZIO.succeed(Set.empty[PlayerId])
+
+      runCtx  = RunContext(client, config, targetMatchIds, formerMemberIds, Instant.now())
       filters = buildFilterChain(config)
       revInvited <- ZIO.foldLeft(candidates)(List.empty[Username]) { case (invited, username) =>
         if (invited.size >= inviteCap) ZIO.succeed(invited)
@@ -160,6 +164,7 @@ object RecruitmentApp extends ZIOAppDefault {
       client: ChessComClient,
       config: RecruitmentConfig,
       clubMatchIds: Set[URL],
+      formerMemberIds: Set[PlayerId],
       now: Instant
   )
 
@@ -200,7 +205,10 @@ object RecruitmentApp extends ZIOAppDefault {
     val base = List(
       CheckInvitedTooRecently,
       FetchAndCheckPlayer,
-      CheckBlacklist,
+      CheckBlacklist
+    )
+    val formerMember = Option.when(config.excludeFormerMembers)(CheckFormerMember)
+    val rest = List(
       CheckCacheCriteria,
       CheckOpponentMatch,
       CheckClubs,
@@ -210,7 +218,7 @@ object RecruitmentApp extends ZIOAppDefault {
     val tm = Option.when(
       config.dailyMinTmGamesFinished.isDefined || config.dailyMaxTmTimeoutPercent.isDefined
     )(CheckTmStats)
-    base ++ tm
+    base ++ formerMember ++ rest ++ tm
   }
 
   // --- Filter implementations ---
@@ -267,6 +275,15 @@ object RecruitmentApp extends ZIOAppDefault {
           .orElseFail(new NoSuchElementException("apiPlayer not set — FetchAndCheckPlayer must run before CheckBlacklist"))
         blacklisted <- RecruitmentBlacklist.isBlacklisted(env.run.config.clubId, playerId, env.run.now)
       } yield FilterResult(Option.when(blacklisted)(CandidateOutcome.Rejected), env.candidate)
+  }
+
+  private object CheckFormerMember extends RecruitmentFilter {
+    def apply(env: FilterEnv): ZIO[Transactor, Throwable, FilterResult] =
+      for {
+        playerId <- ZIO.fromOption(env.candidate.apiPlayer.map(_.playerId))
+          .orElseFail(new NoSuchElementException("apiPlayer not set — FetchAndCheckPlayer must run before CheckFormerMember"))
+        isFormer = env.run.formerMemberIds.contains(playerId)
+      } yield FilterResult(Option.when(isFormer)(CandidateOutcome.Rejected), env.candidate)
   }
 
   // --- Per-criterion cache checks ---
@@ -445,12 +462,14 @@ object RecruitmentApp extends ZIOAppDefault {
           env.candidate.cache.flatMap(_.lastDailyTimeoutAt)
         )
 
+        dailyTimePerMove = dailyStats.record.timePerMove
         config = env.run.config
         outcome =
           if (config.dailyMinElo.exists(dailyElo < _)) Some(CandidateOutcome.Rejected)
           else if (config.dailyMaxElo.exists(dailyElo > _)) Some(CandidateOutcome.Rejected)
           else if (config.dailyMaxTimeoutPercent.exists(dailyTimeoutPct > _)) Some(CandidateOutcome.Rejected)
           else if (config.dailyMinGamesFinished.exists(dailyGamesFinished < _)) Some(CandidateOutcome.Rejected)
+          else if (config.dailyMaxHoursPerMove.exists(maxHours => dailyTimePerMove > maxHours * 3600)) Some(CandidateOutcome.Rejected)
           else None
 
         // Build/update cache with daily stats
