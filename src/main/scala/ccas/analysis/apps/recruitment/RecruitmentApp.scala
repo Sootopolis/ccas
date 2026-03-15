@@ -47,6 +47,22 @@ object RecruitmentApp extends ZIOAppDefault {
     s.consecutiveRejects >= GrimConsecutiveRejects ||
     (s.evaluated >= GrimMinSample && s.rejected.toDouble / s.evaluated >= GrimRejectRatio)
 
+  // --- ExploreContext: bundles constant parameters across explore loop recursion ---
+
+  private case class ExploreContext(
+      client: ChessComClient,
+      runId: Long,
+      clubUrlName: ClubUrlName,
+      config: RecruitmentConfig,
+      filters: List[RecruitmentFilter],
+      runCtx: RunContext,
+      invitedRef: Ref[List[Username]],
+      evaluatedRef: Ref[Set[Username]],
+      inviteCap: Int,
+      existingUsernames: Set[Username],
+      exploreConcurrency: Int
+  )
+
   override def run: ZIO[Any & ZIOAppArgs & Scope, Any, Any] =
     for {
       args <- ZIOAppArgs.getArgs
@@ -93,6 +109,7 @@ object RecruitmentApp extends ZIOAppDefault {
       // --- Shared setup ---
       targetMembers <- ApiClubMembers.get(client, clubUrlName)
       existingUsernames = targetMembers.toMap.keySet
+      targetMemberNames = targetMembers.toMap.keys.toList
 
       clubMatches <- client.get[ApiClubMatches](ApiClubMatches.getUrl(clubUrlName))
       targetMatchIds = (clubMatches.registered.map(_.`@id`) ++ clubMatches.inProgress.map(_.`@id`)).toSet
@@ -110,20 +127,7 @@ object RecruitmentApp extends ZIOAppDefault {
       filters = buildFilterChain(config)
       effectiveConcurrency = config.exploreConcurrency.map(_ min MaxExploreConcurrency).getOrElse(1)
 
-      // --- Build initial sources from provided source clubs ---
-      initialSources = sourceClubs.map(ClubSource(_))
-
-      // --- Build static strategy list (only used when onExhaustion == Explore) ---
-      staticStrategies: List[() => ZIO[Transactor, Throwable, List[SourceDescriptor]]] =
-        if (config.onExhaustion != ExhaustionBehavior.Explore) Nil
-        else List(
-          () => discoverOwnMemberClubs(client, clubUrlName),
-          () => discoverDbClubs(clubUrlName),
-          () => discoverMatchOpponents(clubMatches)
-        )
-
-      // --- Run the explore loop (with optional timeout) ---
-      loopEffect = exploreLoop(
+      ctx = ExploreContext(
         client = client,
         runId = runId,
         clubUrlName = clubUrlName,
@@ -134,12 +138,29 @@ object RecruitmentApp extends ZIOAppDefault {
         evaluatedRef = evaluatedRef,
         inviteCap = inviteCap,
         existingUsernames = existingUsernames,
+        exploreConcurrency = effectiveConcurrency
+      )
+
+      // --- Build initial sources from provided source clubs ---
+      initialSources = sourceClubs.map(ClubSource(_))
+
+      // --- Build static strategy list (only used when onExhaustion == Explore) ---
+      staticStrategies: List[() => ZIO[Transactor, Throwable, List[SourceDescriptor]]] =
+        if (config.onExhaustion != ExhaustionBehavior.Explore) Nil
+        else List(
+          () => discoverOwnMemberClubs(client, clubUrlName, targetMemberNames),
+          () => discoverDbClubs(clubUrlName),
+          () => discoverMatchOpponents(clubMatches)
+        )
+
+      // --- Run the explore loop (with optional timeout) ---
+      loopEffect = exploreLoop(
+        ctx = ctx,
         activePool = Map.empty,
         pendingSources = initialSources,
         staticStrategies = staticStrategies,
         visitedClubs = sourceClubs.toSet,
-        roundRobinKeys = Nil,
-        exploreConcurrency = effectiveConcurrency
+        roundRobinKeys = Nil
       )
       _ <- timeLimitMinutes match {
         case Some(minutes) => loopEffect.timeout(zio.durationLong(minutes.toLong).minutes).unit
@@ -161,63 +182,46 @@ object RecruitmentApp extends ZIOAppDefault {
   // --- Explore loop ---
 
   private def exploreLoop(
-      client: ChessComClient,
-      runId: Long,
-      clubUrlName: ClubUrlName,
-      config: RecruitmentConfig,
-      filters: List[RecruitmentFilter],
-      runCtx: RunContext,
-      invitedRef: Ref[List[Username]],
-      evaluatedRef: Ref[Set[Username]],
-      inviteCap: Int,
-      existingUsernames: Set[Username],
+      ctx: ExploreContext,
       activePool: Map[String, SourceState],
       pendingSources: List[SourceDescriptor],
       staticStrategies: List[() => ZIO[Transactor, Throwable, List[SourceDescriptor]]],
       visitedClubs: Set[ClubUrlName],
-      roundRobinKeys: List[String],
-      exploreConcurrency: Int
+      roundRobinKeys: List[String]
     ): ZIO[Transactor, Throwable, Unit] =
     for {
-      invited <- invitedRef.get
-      _ <- if (invited.size >= inviteCap) ZIO.unit
+      invited <- ctx.invitedRef.get
+      _ <- if (invited.size >= ctx.inviteCap) ZIO.unit
       else if (activePool.isEmpty && pendingSources.isEmpty) {
         // Try replenishment
         for {
-          evaluated <- evaluatedRef.get
-          replenished <- replenish(
-            config, runCtx, evaluated, visitedClubs, clubUrlName, staticStrategies
-          )
+          evaluated <- ctx.evaluatedRef.get
+          replenished <- replenish(ctx, evaluated, visitedClubs, staticStrategies)
           (newSources, remainingStrategies) = replenished
           _ <- if (newSources.isEmpty && remainingStrategies.isEmpty) ZIO.unit
           else exploreLoop(
-            client, runId, clubUrlName, config, filters, runCtx, invitedRef, evaluatedRef,
-            inviteCap, existingUsernames, activePool, newSources, remainingStrategies,
-            visitedClubs, roundRobinKeys, exploreConcurrency
+            ctx, activePool, newSources, remainingStrategies,
+            visitedClubs, roundRobinKeys
           )
         } yield ()
       }
       else {
         // Activate pending sources if pool has capacity
         for {
-          evaluated <- evaluatedRef.get
+          evaluated <- ctx.evaluatedRef.get
           activationResult <- activateSources(
-            client, config, activePool, pendingSources, existingUsernames, evaluated,
-            visitedClubs, exploreConcurrency
+            ctx, activePool, pendingSources, evaluated, visitedClubs
           )
           (pool2, pending2, visited2) = activationResult
           _ <- if (pool2.isEmpty) {
             // Activation yielded empty sources, try replenishment
             for {
-              replenished <- replenish(
-                config, runCtx, evaluated, visited2, clubUrlName, staticStrategies
-              )
+              replenished <- replenish(ctx, evaluated, visited2, staticStrategies)
               (newSources, remainingStrategies) = replenished
               _ <- if (newSources.isEmpty && remainingStrategies.isEmpty) ZIO.unit
               else exploreLoop(
-                client, runId, clubUrlName, config, filters, runCtx, invitedRef, evaluatedRef,
-                inviteCap, existingUsernames, pool2, newSources, remainingStrategies,
-                visited2, roundRobinKeys, exploreConcurrency
+                ctx, pool2, newSources, remainingStrategies,
+                visited2, roundRobinKeys
               )
             } yield ()
           }
@@ -225,67 +229,56 @@ object RecruitmentApp extends ZIOAppDefault {
             // Pick next candidate via round-robin
             val keys = if (roundRobinKeys.exists(pool2.contains)) roundRobinKeys.filter(pool2.contains)
                         else pool2.keys.toList
-            val (sourceId, nextKeys) = keys match {
-              case head :: tail => (head, tail :+ head)
-              case Nil => throw new IllegalStateException("pool2 non-empty but no keys") // unreachable
-            }
-            val sourceState = pool2(sourceId)
-            sourceState.remaining match {
-              case Nil =>
-                // Source exhausted, remove and recurse
-                val pool3 = pool2 - sourceId
-                exploreLoop(
-                  client, runId, clubUrlName, config, filters, runCtx, invitedRef, evaluatedRef,
-                  inviteCap, existingUsernames, pool3, pending2, staticStrategies,
-                  visited2, nextKeys.filter(_ != sourceId), exploreConcurrency
-                )
-              case username :: rest =>
-                for {
-                  alreadyEvaluated <- evaluatedRef.get.map(_.contains(username))
-                  pool3 = pool2.updated(sourceId, sourceState.copy(remaining = rest))
-                  _ <- if (alreadyEvaluated) {
-                    // Skip, recurse with updated remaining
-                    exploreLoop(
-                      client, runId, clubUrlName, config, filters, runCtx, invitedRef, evaluatedRef,
-                      inviteCap, existingUsernames, pool3, pending2, staticStrategies,
-                      visited2, nextKeys, exploreConcurrency
-                    )
-                  } else {
-                    val now = Instant.now()
-                    val candidateCtx = CandidateContext.initial(username)
-                    val env = FilterEnv(runCtx.copy(now = now), candidateCtx)
-                    for {
-                      result <- (for {
-                        (outcome, finalCandidate) <- runFilters(env, filters)
-                        _ <- persistCandidateResults(runId, now, finalCandidate, outcome)
-                      } yield outcome).catchAll { error =>
-                        persistCandidateResults(
-                          runId, now, candidateCtx, CandidateOutcome.Error,
-                          Some(Option(error.getMessage).getOrElse(error.getClass.getSimpleName))
-                        ).as(CandidateOutcome.Error)
-                      }
-                      _ <- evaluatedRef.update(_ + username)
-                      isInvited = result == CandidateOutcome.Invited
-                      isRejected = result == CandidateOutcome.Rejected || result == CandidateOutcome.Error
-                      _ <- ZIO.when(isInvited)(invitedRef.update(username :: _))
+            for {
+              picked <- keys match {
+                case head :: tail => ZIO.succeed((head, tail :+ head))
+                case Nil => ZIO.die(new IllegalStateException("pool2 non-empty but no keys"))
+              }
+              (sourceId, nextKeys) = picked
+              sourceState = pool2(sourceId)
+              _ <- sourceState.remaining match {
+                case Nil =>
+                  // Source exhausted, remove and recurse
+                  val pool3 = pool2 - sourceId
+                  exploreLoop(
+                    ctx, pool3, pending2, staticStrategies,
+                    visited2, nextKeys.filter(_ != sourceId)
+                  )
+                case username :: rest =>
+                  for {
+                    alreadyEvaluated <- ctx.evaluatedRef.get.map(_.contains(username))
+                    pool3 = pool2.updated(sourceId, sourceState.copy(remaining = rest))
+                    _ <- if (alreadyEvaluated) {
+                      // Skip, recurse with updated remaining
+                      exploreLoop(
+                        ctx, pool3, pending2, staticStrategies,
+                        visited2, nextKeys
+                      )
+                    } else {
+                      for {
+                        result <- evaluateCandidate(ctx.runId, username, ctx.runCtx, ctx.filters)
+                        _ <- ctx.evaluatedRef.update(_ + username)
+                        isInvited = result == CandidateOutcome.Invited
+                        isRejected = result == CandidateOutcome.Rejected || result == CandidateOutcome.Error
+                        _ <- ZIO.when(isInvited)(ctx.invitedRef.update(username :: _))
 
-                      updatedSource = pool3(sourceId).copy(
-                        evaluated = sourceState.evaluated + 1,
-                        rejected = sourceState.rejected + (if (isRejected) 1 else 0),
-                        consecutiveRejects = if (isInvited) 0 else sourceState.consecutiveRejects + 1
-                      )
-                      pool4 <- if (isGrim(updatedSource)) {
-                        Console.printLine(s"[Explore] Abandoning grim source: $sourceId (eval=${updatedSource.evaluated}, rej=${updatedSource.rejected})").orDie.as(pool3 - sourceId)
-                      } else ZIO.succeed(pool3.updated(sourceId, updatedSource))
-                      _ <- exploreLoop(
-                        client, runId, clubUrlName, config, filters, runCtx, invitedRef, evaluatedRef,
-                        inviteCap, existingUsernames, pool4, pending2, staticStrategies,
-                        visited2, nextKeys, exploreConcurrency
-                      )
-                    } yield ()
-                  }
-                } yield ()
-            }
+                        updatedSource = pool3(sourceId).copy(
+                          evaluated = sourceState.evaluated + 1,
+                          rejected = sourceState.rejected + (if (isRejected) 1 else 0),
+                          consecutiveRejects = if (isInvited) 0 else sourceState.consecutiveRejects + 1
+                        )
+                        pool4 <- if (isGrim(updatedSource)) {
+                          Console.printLine(s"[Explore] Abandoning grim source: $sourceId (eval=${updatedSource.evaluated}, rej=${updatedSource.rejected})").orDie.as(pool3 - sourceId)
+                        } else ZIO.succeed(pool3.updated(sourceId, updatedSource))
+                        _ <- exploreLoop(
+                          ctx, pool4, pending2, staticStrategies,
+                          visited2, nextKeys
+                        )
+                      } yield ()
+                    }
+                  } yield ()
+              }
+            } yield ()
           }
         } yield ()
       }
@@ -294,53 +287,52 @@ object RecruitmentApp extends ZIOAppDefault {
   // --- Source activation ---
 
   private def activateSources(
-      client: ChessComClient,
-      config: RecruitmentConfig,
+      ctx: ExploreContext,
       activePool: Map[String, SourceState],
       pendingSources: List[SourceDescriptor],
-      existingUsernames: Set[Username],
       evaluatedUsernames: Set[Username],
-      visitedClubs: Set[ClubUrlName],
-      exploreConcurrency: Int
+      visitedClubs: Set[ClubUrlName]
     ): ZIO[Transactor, Throwable, (Map[String, SourceState], List[SourceDescriptor], Set[ClubUrlName])] = {
-    val slotsAvailable = exploreConcurrency - activePool.size
+    val slotsAvailable = ctx.exploreConcurrency - activePool.size
     if (slotsAvailable <= 0 || pendingSources.isEmpty)
       ZIO.succeed((activePool, pendingSources, visitedClubs))
     else {
       val (toActivate, remaining) = pendingSources.splitAt(slotsAvailable)
-      ZIO.foldLeft(toActivate)((activePool, visitedClubs)) { case ((pool, visited), source) =>
-        activateSource(client, config, source, existingUsernames, evaluatedUsernames)
-          .map { members =>
-            val newVisited = source match {
-              case ClubSource(name) => visited + name
-              case _                => visited
-            }
-            if (members.isEmpty) (pool, newVisited)
-            else (pool + (source.id -> SourceState(members, 0, 0, 0)), newVisited)
+      for {
+        results <- ZIO.foreachPar(toActivate) { source =>
+          activateSource(ctx, source, evaluatedUsernames).map(members => (source, members))
+        }
+        (pool2, visited2) = results.foldLeft((activePool, visitedClubs)) { case ((pool, visited), (source, members)) =>
+          val newVisited = source match {
+            case ClubSource(name) => visited + name
+            case _                => visited
           }
-      }.map { case (pool, visited) => (pool, remaining, visited) }
+          if (members.isEmpty) (pool, newVisited)
+          else (pool + (source.id -> SourceState(members, 0, 0, 0)), newVisited)
+        }
+      } yield (pool2, remaining, visited2)
     }
   }
 
   private def activateSource(
-      client: ChessComClient,
-      config: RecruitmentConfig,
+      ctx: ExploreContext,
       source: SourceDescriptor,
-      existingUsernames: Set[Username],
       evaluatedUsernames: Set[Username]
     ): ZIO[Transactor, Throwable, List[Username]] =
     source match {
       case ClubSource(clubUrlName) =>
         for {
-          members <- ApiClubMembers.get(client, clubUrlName).map(_.toMap.keySet)
-          adminUsernames <- if (config.excludeSourceAdmins)
-            ApiClub.get(client, clubUrlName).map(_.admin.map(url => Username.wrap(url.path.segments.last)).toSet)
-          else ZIO.succeed(Set.empty[Username])
-          filtered = (members -- existingUsernames -- evaluatedUsernames -- adminUsernames).toList
+          (members, adminUsernames) <-
+            if (ctx.config.excludeSourceAdmins)
+              ApiClubMembers.get(ctx.client, clubUrlName).map(_.toMap.keySet)
+                .zipPar(ApiClub.get(ctx.client, clubUrlName).map(extractAdminUsernames))
+            else
+              ApiClubMembers.get(ctx.client, clubUrlName).map(m => (m.toMap.keySet, Set.empty[Username]))
+          filtered = (members -- ctx.existingUsernames -- evaluatedUsernames -- adminUsernames).toList
           _ <- Console.printLine(s"[Explore] Activated club source: ${ClubUrlName.unwrap(clubUrlName)} (${filtered.size} candidates)").orDie
         } yield filtered
       case UsernameSource(id, usernames) =>
-        val filtered = (usernames -- existingUsernames -- evaluatedUsernames).toList
+        val filtered = (usernames -- ctx.existingUsernames -- evaluatedUsernames).toList
         Console.printLine(s"[Explore] Activated username source: $id (${filtered.size} candidates)").orDie
           .as(filtered)
     }
@@ -348,18 +340,16 @@ object RecruitmentApp extends ZIOAppDefault {
   // --- Replenishment ---
 
   private def replenish(
-      config: RecruitmentConfig,
-      runCtx: RunContext,
+      ctx: ExploreContext,
       evaluatedUsernames: Set[Username],
       visitedClubs: Set[ClubUrlName],
-      clubUrlName: ClubUrlName,
       staticStrategies: List[() => ZIO[Transactor, Throwable, List[SourceDescriptor]]]
     ): ZIO[Transactor, Throwable, (List[SourceDescriptor], List[() => ZIO[Transactor, Throwable, List[SourceDescriptor]]])] = {
-    if (config.onExhaustion != ExhaustionBehavior.Explore)
+    if (ctx.config.onExhaustion != ExhaustionBehavior.Explore)
       ZIO.succeed((Nil, staticStrategies))
     else for {
       // Dynamic strategy 1: candidate opponents
-      opponents <- runCtx.discoveredOpponents.get
+      opponents <- ctx.runCtx.discoveredOpponents.get
       newOpponents = opponents -- evaluatedUsernames
       result <- if (newOpponents.nonEmpty) {
         Console.printLine(s"[Explore] Discovered ${newOpponents.size} candidate opponents").orDie
@@ -367,9 +357,9 @@ object RecruitmentApp extends ZIOAppDefault {
       } else {
         // Dynamic strategy 2: candidate clubs
         for {
-          clubs <- runCtx.discoveredClubs.get
-          newClubs = clubs.filterNot(visitedClubs.contains).filterNot(_ == clubUrlName)
-            .filterNot(config.excludeClubNames.contains)
+          clubs <- ctx.runCtx.discoveredClubs.get
+          newClubs = clubs.filterNot(visitedClubs.contains).filterNot(_ == ctx.clubUrlName)
+            .filterNot(ctx.config.excludeClubNames.contains)
           result <- if (newClubs.nonEmpty) {
             Console.printLine(s"[Explore] Discovered ${newClubs.size} candidate clubs").orDie
               .as((newClubs.toList.map(ClubSource(_)), staticStrategies))
@@ -381,8 +371,8 @@ object RecruitmentApp extends ZIOAppDefault {
                 for {
                   sources <- head()
                   filtered = sources.filter {
-                    case ClubSource(name) => !visitedClubs.contains(name) && name != clubUrlName &&
-                      !config.excludeClubNames.contains(name)
+                    case ClubSource(name) => !visitedClubs.contains(name) && name != ctx.clubUrlName &&
+                      !ctx.config.excludeClubNames.contains(name)
                     case _ => true
                   }
                   _ <- Console.printLine(s"[Explore] Static strategy yielded ${filtered.size} sources").orDie
@@ -398,12 +388,11 @@ object RecruitmentApp extends ZIOAppDefault {
 
   private def discoverOwnMemberClubs(
       client: ChessComClient,
-      clubUrlName: ClubUrlName
-    ): ZIO[Transactor, Throwable, List[SourceDescriptor]] =
+      clubUrlName: ClubUrlName,
+      targetMemberNames: List[Username]
+    ): ZIO[Transactor, Throwable, List[SourceDescriptor]] = {
+    val sample = targetMemberNames.take(20)
     for {
-      members <- ApiClubMembers.get(client, clubUrlName)
-      memberNames = members.toMap.keys.toList
-      sample = memberNames.take(20)
       clubSets <- ZIO.foreachPar(sample) { username =>
         client.getWithPermit[ApiPlayerClubs](ApiPlayerClubs.getUrl(username))
           .map(_.clubs.map(_.clubName).toSet)
@@ -412,6 +401,7 @@ object RecruitmentApp extends ZIOAppDefault {
       allClubs = clubSets.foldLeft(Set.empty[ClubUrlName])(_ ++ _) - clubUrlName
       _ <- Console.printLine(s"[Explore] Own member clubs strategy found ${allClubs.size} clubs").orDie
     } yield allClubs.toList.map(ClubSource(_))
+  }
 
   private def discoverDbClubs(
       clubUrlName: ClubUrlName
@@ -431,6 +421,31 @@ object RecruitmentApp extends ZIOAppDefault {
     val opponentClubNames = opponentUrls.map(url => ClubUrlName.wrap(url.path.segments.last)).toSet
     Console.printLine(s"[Explore] Match opponents strategy found ${opponentClubNames.size} clubs").orDie
       .as(opponentClubNames.toList.map(ClubSource(_)))
+  }
+
+  // --- Helpers ---
+
+  private def extractAdminUsernames(apiClub: ApiClub): Set[Username] =
+    apiClub.admin.map(url => Username.wrap(url.path.segments.last)).toSet
+
+  private def evaluateCandidate(
+      runId: Long,
+      username: Username,
+      runCtx: RunContext,
+      filters: List[RecruitmentFilter]
+    ): ZIO[Transactor, Throwable, CandidateOutcome] = {
+    val now = Instant.now()
+    val candidateCtx = CandidateContext.initial(username)
+    val env = FilterEnv(runCtx.copy(now = now), candidateCtx)
+    (for {
+      (outcome, finalCandidate) <- runFilters(env, filters)
+      _ <- persistCandidateResults(runId, now, finalCandidate, outcome)
+    } yield outcome).catchAll { error =>
+      persistCandidateResults(
+        runId, now, candidateCtx, CandidateOutcome.Error,
+        Some(Option(error.getMessage).getOrElse(error.getClass.getSimpleName))
+      ).as(CandidateOutcome.Error)
+    }
   }
 
   // --- Filter pipeline types ---
@@ -1001,9 +1016,7 @@ object RecruitmentApp extends ZIOAppDefault {
       candidatesBeforeAdminFilter = allSourceUsernames -- existingUsernames
       adminUsernames <- if (config.excludeSourceAdmins) {
         ZIO.foreachPar(sourceClubs) { sourceClubName =>
-          ApiClub.get(client, sourceClubName).map { apiClub =>
-            apiClub.admin.map(url => Username.wrap(url.path.segments.last)).toSet
-          }
+          ApiClub.get(client, sourceClubName).map(extractAdminUsernames)
         }.map(_.foldLeft(Set.empty[Username])(_ ++ _))
       } else ZIO.succeed(Set.empty[Username])
     } yield (candidatesBeforeAdminFilter -- adminUsernames).toList
@@ -1028,19 +1041,8 @@ object RecruitmentApp extends ZIOAppDefault {
       filters = buildFilterChain(config)
       revInvited <- ZIO.foldLeft(candidates)(List.empty[Username]) { case (invited, username) =>
         if (invited.size >= inviteCap) ZIO.succeed(invited)
-        else {
-          val now = Instant.now()
-          val candidateCtx = CandidateContext.initial(username)
-          val env = FilterEnv(runCtx.copy(now = now), candidateCtx)
-          (for {
-            (outcome, finalCandidate) <- runFilters(env, filters)
-            _ <- persistCandidateResults(runId, now, finalCandidate, outcome)
-          } yield if (outcome == CandidateOutcome.Invited) username :: invited else invited).catchAll { error =>
-            persistCandidateResults(
-              runId, now, candidateCtx, CandidateOutcome.Error,
-              Some(Option(error.getMessage).getOrElse(error.getClass.getSimpleName))
-            ).as(invited)
-          }
+        else evaluateCandidate(runId, username, runCtx, filters).map { outcome =>
+          if (outcome == CandidateOutcome.Invited) username :: invited else invited
         }
       }
     } yield revInvited.reverse
