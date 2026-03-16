@@ -287,16 +287,15 @@ object RecruitmentApp extends ZIOAppDefault {
       _ <- if (alreadyEvaluated)
         exploreLoop(ctx, pool3, pendingSources, staticStrategies, visitedClubs, nextKeys)
       else {
-        val checkRejected = ctx.runCtx.config.daysSinceRejected match {
-          case None => ZIO.succeed(false)
-          case Some(days) =>
-            PlayerSnapshot.selectNameLatest(username).flatMap {
-              case None => ZIO.succeed(false)
-              case Some(snap) =>
-                RecruitmentCandidate.selectLatestRejectedByConfig(
-                  snap.playerId, ctx.runCtx.config.clubId, ctx.runCtx.config.configName
-                ).map(_.exists(c => ChronoUnit.DAYS.between(c.evaluatedAt, ctx.runCtx.now) < days))
-            }
+        val checkRejected = ctx.runCtx.config.daysSinceRejected.fold(ZIO.succeed(false)) { days =>
+          for {
+            snapOpt   <- PlayerSnapshot.selectNameLatest(username)
+            rejectOpt <- ZIO.foreach(snapOpt)(snap =>
+                           RecruitmentCandidate.selectLatestRejectedByConfig(
+                             snap.playerId, ctx.runCtx.config.clubId, ctx.runCtx.config.configName
+                           )
+                         ).map(_.flatten)
+          } yield rejectOpt.exists(c => ChronoUnit.DAYS.between(c.evaluatedAt, ctx.runCtx.now) < days)
         }
         checkRejected.flatMap { recentlyRejected =>
           if (recentlyRejected) {
@@ -930,19 +929,18 @@ object RecruitmentApp extends ZIOAppDefault {
       outcome: CandidateOutcome,
       errorMessage: Option[String] = None
     ): RIO[Transactor, Unit] =
-    candidate.apiPlayer match {
-      case None => ZIO.unit // No player data (transient API error) — skip persistence, retry next run
-      case Some(ap) =>
-        withTransaction {
-          for {
-            _ <- ZIO.when(candidate.isNewPlayer)(
-                   Player.insert(Player(ap.playerId, Instant.ofEpochSecond(ap.joined)))
-                 )
-            _ <- PlayerSnapshot.insert(PlayerSnapshot(ap.playerId, now, candidate.username, ap.status.category, ap.title))
-            _ <- ZIO.foreachDiscard(candidate.cache)(PlayerRecruitmentCache.upsert)
-            _ <- RecruitmentCandidate.insert(RecruitmentCandidate(runId, ap.playerId, now, outcome, errorMessage))
-          } yield ()
-        }
+    // No player data (transient API error) — skip persistence, retry next run
+    ZIO.foreachDiscard(candidate.apiPlayer) { ap =>
+      withTransaction {
+        for {
+          _ <- ZIO.when(candidate.isNewPlayer)(
+                 Player.insert(Player(ap.playerId, Instant.ofEpochSecond(ap.joined)))
+               )
+          _ <- PlayerSnapshot.insert(PlayerSnapshot(ap.playerId, now, candidate.username, ap.status.category, ap.title))
+          _ <- ZIO.foreachDiscard(candidate.cache)(PlayerRecruitmentCache.upsert)
+          _ <- RecruitmentCandidate.insert(RecruitmentCandidate(runId, ap.playerId, now, outcome, errorMessage))
+        } yield ()
+      }
     }
 
   // --- TM stats helpers ---

@@ -460,43 +460,35 @@ object MembershipApp extends ZIOAppDefault {
     effect(name)
       .map(_ -> name)
       .catchAll { originalError =>
-        resolve(name).flatMap {
-          case Some(newName) => effect(newName).map(_ -> newName)
-          case None          => ZIO.fail(originalError)
-        }
+        resolve(name).flatMap(_.fold(ZIO.fail(originalError))(newName => effect(newName).map(_ -> newName)))
       }
 
   private def resolveClubUrlName(
       client: ChessComClient,
       oldUrlName: ClubUrlName
     ): RIO[Transactor, Option[ClubUrlName]] =
-    Club.selectByUrlName(oldUrlName).flatMap {
-      case None => ZIO.succeed(None)
-      case Some(club) =>
-        ClubMatchRef.selectId(club.clubId).flatMap {
-          case None => ZIO.succeed(None)
-          case Some(ref) =>
-            (for {
-              dailyMatch <- client.getWithPermit[ApiDailyMatch](ApiDailyMatch.getUrl(ref.matchId))
-              team = if ref.teamIdx == 1 then dailyMatch.teams.team1 else dailyMatch.teams.team2
-              newUrlName = team.`@id`.path.segments.lastOption.map(ClubUrlName.wrap)
-            } yield newUrlName.filter(_ != oldUrlName)).catchAll(_ => ZIO.succeed(None))
-        }
-    }
+    (for {
+      clubOpt <- Club.selectByUrlName(oldUrlName)
+      refOpt  <- ZIO.foreach(clubOpt)(club => ClubMatchRef.selectId(club.clubId)).map(_.flatten)
+      result  <- ZIO.foreach(refOpt) { ref =>
+                   for {
+                     dailyMatch <- client.getWithPermit[ApiDailyMatch](ApiDailyMatch.getUrl(ref.matchId))
+                     team = if ref.teamIdx == 1 then dailyMatch.teams.team1 else dailyMatch.teams.team2
+                     newUrlName = team.`@id`.path.segments.lastOption.map(ClubUrlName.wrap)
+                   } yield newUrlName.filter(_ != oldUrlName)
+                 }.map(_.flatten)
+    } yield result).catchAll(_ => ZIO.succeed(None))
 
   @nowarn("msg=unused")
   private def resolvePlayerUsername(
       client: ChessComClient,
       oldUsername: Username
     ): RIO[Transactor, Option[Username]] =
-    PlayerSnapshot.selectNameLatest(oldUsername).flatMap {
-      case None => ZIO.succeed(None)
-      case Some(snapshot) =>
-        PlayerMatchRef.selectId(snapshot.playerId).flatMap {
-          case None => ZIO.succeed(None)
-          case Some(ref) => resolveUsernameFromMatchRef(client, ref, oldUsername)
-        }
-    }
+    for {
+      snapOpt <- PlayerSnapshot.selectNameLatest(oldUsername)
+      refOpt  <- ZIO.foreach(snapOpt)(snap => PlayerMatchRef.selectId(snap.playerId)).map(_.flatten)
+      result  <- ZIO.foreach(refOpt)(ref => resolveUsernameFromMatchRef(client, ref, oldUsername)).map(_.flatten)
+    } yield result
 
   // --- Merge & Persist ---
 

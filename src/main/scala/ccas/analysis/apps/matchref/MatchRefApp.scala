@@ -94,13 +94,11 @@ object MatchRefApp extends ZIOAppDefault {
       cache: Ref[Map[ClubMatchId, ApiDailyMatch]],
       matchId: ClubMatchId
     ): Task[ ApiDailyMatch] =
-    cache.get.flatMap(_.get(matchId) match
-      case Some(m) => ZIO.succeed(m)
-      case None =>
-        client.getWithPermit[ApiDailyMatch](ApiDailyMatch.getUrl(matchId)).flatMap { m =>
-          cache.update(_ + (matchId -> m)).as(m)
-        }
-    )
+    cache.get.flatMap(_.get(matchId).fold(
+      client.getWithPermit[ApiDailyMatch](ApiDailyMatch.getUrl(matchId)).flatMap { m =>
+        cache.update(_ + (matchId -> m)).as(m)
+      }
+    )(ZIO.succeed))
 
   private def findTeamIdx(dailyMatch: ApiDailyMatch, username: Username): Option[Int] = {
     val teams = dailyMatch.teams
