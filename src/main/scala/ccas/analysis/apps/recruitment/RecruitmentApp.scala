@@ -365,6 +365,22 @@ object RecruitmentApp extends ZIOAppDefault {
     }
   }
 
+  private[recruitment] def gatherClubCandidates(
+      client: ChessComClient,
+      clubUrlName: ClubUrlName,
+      excludeSourceAdmins: Boolean,
+      existingUsernames: Set[Username],
+      evaluatedUsernames: Set[Username]
+    ): Task[List[Username]] =
+    for {
+      (members, adminUsernames) <-
+        if (excludeSourceAdmins)
+          ApiClubMembers.get(client, clubUrlName).map(_.toMap.keySet)
+            .zipPar(ApiClub.get(client, clubUrlName).map(extractAdminUsernames))
+        else
+          ApiClubMembers.get(client, clubUrlName).map(m => (m.toMap.keySet, Set.empty[Username]))
+    } yield (members -- existingUsernames -- evaluatedUsernames -- adminUsernames).toList
+
   private def activateSource(
       ctx: ExploreContext,
       source: SourceDescriptor,
@@ -373,13 +389,10 @@ object RecruitmentApp extends ZIOAppDefault {
     source match {
       case ClubSource(clubUrlName) =>
         for {
-          (members, adminUsernames) <-
-            if (ctx.runCtx.config.excludeSourceAdmins)
-              ApiClubMembers.get(ctx.runCtx.client, clubUrlName).map(_.toMap.keySet)
-                .zipPar(ApiClub.get(ctx.runCtx.client, clubUrlName).map(extractAdminUsernames))
-            else
-              ApiClubMembers.get(ctx.runCtx.client, clubUrlName).map(m => (m.toMap.keySet, Set.empty[Username]))
-          filtered = (members -- ctx.existingUsernames -- evaluatedUsernames -- adminUsernames).toList
+          filtered <- gatherClubCandidates(
+            ctx.runCtx.client, clubUrlName, ctx.runCtx.config.excludeSourceAdmins,
+            ctx.existingUsernames, evaluatedUsernames
+          )
           _ <- Console.printLine(s"[Explore] Activated club source: ${ClubUrlName.unwrap(clubUrlName)} (${filtered.size} candidates)").orDie
         } yield filtered
       case UsernameSource(id, usernames) =>
@@ -479,7 +492,7 @@ object RecruitmentApp extends ZIOAppDefault {
   private def extractAdminUsernames(apiClub: ApiClub): Set[Username] =
     apiClub.admin.map(url => Username.wrap(url.path.segments.last)).toSet
 
-  private def evaluateCandidate(
+  private[recruitment] def evaluateCandidate(
       runId: Long,
       username: Username,
       runCtx: RunContext,
@@ -502,7 +515,7 @@ object RecruitmentApp extends ZIOAppDefault {
   // --- Filter pipeline types ---
 
   /** Shared across all candidates in a run. */
-  private case class RunContext(
+  private[recruitment] case class RunContext(
       client: ChessComClient,
       config: RecruitmentConfig,
       clubMatchIds: Set[URL],
@@ -513,24 +526,24 @@ object RecruitmentApp extends ZIOAppDefault {
   )
 
   /** Accumulated per-candidate state — populated as filters run. */
-  private case class CandidateContext(
+  private[recruitment] case class CandidateContext(
       username: Username,
       apiPlayer: Option[ApiPlayer],
       isNewPlayer: Boolean,
       cache: Option[PlayerRecruitmentCache],
       recentArchives: Option[List[ApiPlayerArchive]] = None
   )
-  private object CandidateContext {
+  private[recruitment] object CandidateContext {
     def initial(username: Username): CandidateContext =
       CandidateContext(username, apiPlayer = None, isNewPlayer = false, cache = None)
   }
 
   /** Groups contexts passed to each filter. */
-  private case class FilterEnv(run: RunContext, candidate: CandidateContext)
+  private[recruitment] case class FilterEnv(run: RunContext, candidate: CandidateContext)
 
-  private case class FilterResult(outcome: Option[CandidateOutcome], candidate: CandidateContext)
+  private[recruitment] case class FilterResult(outcome: Option[CandidateOutcome], candidate: CandidateContext)
 
-  private trait RecruitmentFilter {
+  private[recruitment] trait RecruitmentFilter {
     def apply(env: FilterEnv): RIO[Transactor, FilterResult]
   }
 
@@ -559,7 +572,7 @@ object RecruitmentApp extends ZIOAppDefault {
 
   // --- Filter chain builder ---
 
-  private def buildFilterChain(config: RecruitmentConfig): List[RecruitmentFilter] = {
+  private[recruitment] def buildFilterChain(config: RecruitmentConfig): List[RecruitmentFilter] = {
     val base = List(
       FetchAndCheckPlayer,
       CheckInvitedTooRecently,
@@ -1033,55 +1046,6 @@ object RecruitmentApp extends ZIOAppDefault {
     val endMonth = YearMonth.from(today)
     Iterator.iterate(startMonth)(_.plusMonths(1)).takeWhile(!_.isAfter(endMonth)).toList
   }
-
-  // --- Test-facing helpers (preserve original API for existing tests) ---
-
-  private[recruitment] def gatherCandidates(
-      client: ChessComClient,
-      clubUrlName: ClubUrlName,
-      config: RecruitmentConfig,
-      sourceClubs: List[ClubUrlName]
-    ): RIO[Transactor, List[Username]] =
-    for {
-      targetMembers <- ApiClubMembers.get(client, clubUrlName)
-      existingUsernames = targetMembers.toMap.keySet
-      sourceMembers <- ZIO.foreachPar(sourceClubs) { sourceClubName =>
-        ApiClubMembers.get(client, sourceClubName).map(_.toMap.keySet)
-      }
-      allSourceUsernames = sourceMembers.foldLeft(Set.empty[Username])(_ ++ _)
-      candidatesBeforeAdminFilter = allSourceUsernames -- existingUsernames
-      adminUsernames <- if (config.excludeSourceAdmins) {
-        ZIO.foreachPar(sourceClubs) { sourceClubName =>
-          ApiClub.get(client, sourceClubName).map(extractAdminUsernames)
-        }.map(_.foldLeft(Set.empty[Username])(_ ++ _))
-      } else ZIO.succeed(Set.empty[Username])
-    } yield (candidatesBeforeAdminFilter -- adminUsernames).toList
-
-  private[recruitment] def evaluateCandidates(
-      client: ChessComClient,
-      runId: Long,
-      clubUrlName: ClubUrlName,
-      candidates: List[Username],
-      config: RecruitmentConfig,
-      inviteCap: Int = DefaultInviteCap
-    ): RIO[Transactor, List[Username]] =
-    for {
-      clubMatches <- client.get[ApiClubMatches](ApiClubMatches.getUrl(clubUrlName))
-      targetMatchIds = (clubMatches.registered.map(_.`@id`) ++ clubMatches.inProgress.map(_.`@id`)).toSet
-      formerMemberIds <- if (config.excludeFormerMembers)
-        ClubMember.selectClubFormer(config.clubId).map(_.map(_.playerId).toSet)
-      else ZIO.succeed(Set.empty[PlayerId])
-      discoveredClubs     <- Ref.make(Set.empty[ClubUrlName])
-      discoveredOpponents <- Ref.make(Set.empty[Username])
-      runCtx  = RunContext(client, config, targetMatchIds, formerMemberIds, Instant.now(), discoveredClubs, discoveredOpponents)
-      filters = buildFilterChain(config)
-      revInvited <- ZIO.foldLeft(candidates)(List.empty[Username]) { case (invited, username) =>
-        if (invited.size >= inviteCap) ZIO.succeed(invited)
-        else evaluateCandidate(runId, username, runCtx, filters).map { outcome =>
-          if (outcome == CandidateOutcome.Invited) username :: invited else invited
-        }
-      }
-    } yield revInvited.reverse
 
   // --- Report mode ---
 

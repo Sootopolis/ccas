@@ -8,6 +8,7 @@ import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.analysis.tables.*
+import ccas.api.club.ApiClubMatches
 import ccas.api.misc.subtypes.{ClubId, ClubUrlName, PlayerId, Username}
 import ccas.utils.client.ChessComClient
 import ccas.utils.sql.{DataSourceLayer, SqlZioTypes}
@@ -361,6 +362,34 @@ object TestRecruitmentApp extends ZIOSpecDefault {
             ON CONFLICT (player_id) DO NOTHING""".update.run()
     }.unit
 
+  /** Test-side helper that calls real production code: builds a RunContext, filter chain,
+    * and loops evaluateCandidate — matching what the explore loop does.
+    */
+  private def evalCandidates(
+      client: ChessComClient,
+      runId: Long,
+      candidates: List[Username],
+      config: RecruitmentConfig,
+      inviteCap: Int = 30
+    ): RIO[Transactor, List[Username]] =
+    for {
+      clubMatches <- client.get[ApiClubMatches](ApiClubMatches.getUrl(clubUrlName))
+      targetMatchIds = (clubMatches.registered.map(_.`@id`) ++ clubMatches.inProgress.map(_.`@id`)).toSet
+      formerMemberIds <- if (config.excludeFormerMembers)
+        ClubMember.selectClubFormer(config.clubId).map(_.map(_.playerId).toSet)
+      else ZIO.succeed(Set.empty[PlayerId])
+      discoveredClubs     <- Ref.make(Set.empty[ClubUrlName])
+      discoveredOpponents <- Ref.make(Set.empty[Username])
+      runCtx  = RecruitmentApp.RunContext(client, config, targetMatchIds, formerMemberIds, Instant.now(), discoveredClubs, discoveredOpponents)
+      filters = RecruitmentApp.buildFilterChain(config)
+      revInvited <- ZIO.foldLeft(candidates)(List.empty[Username]) { case (invited, username) =>
+        if (invited.size >= inviteCap) ZIO.succeed(invited)
+        else RecruitmentApp.evaluateCandidate(runId, username, runCtx, filters).map { outcome =>
+          if (outcome == CandidateOutcome.Invited) username :: invited else invited
+        }
+      }
+    } yield revInvited.reverse
+
   private def makeConfig(
       excludeClubs: List[String] = Nil,
       excludeFormerMembers: Boolean = false,
@@ -395,7 +424,6 @@ object TestRecruitmentApp extends ZIOSpecDefault {
   override def spec: Spec[Any, Throwable] = suite("TestRecruitmentApp")(
     suiteConfigHelpers,
     suiteDbCrud,
-    suiteGatherCandidates,
     suiteEvaluateCandidates,
     suiteFilterChain,
     suiteBlacklist,
@@ -620,70 +648,6 @@ object TestRecruitmentApp extends ZIOSpecDefault {
   )
 
   // ==========================================================================
-  // Suite: Gather candidates
-  // ==========================================================================
-
-  private def suiteGatherCandidates = suite("gatherCandidates")(
-    test("deduplicates and filters out existing members") {
-      val responses = Map(
-        s"club/$clubUrlName/members" -> apiClubMembersJson(
-          List(
-            ("existing-member", T.t0.getEpochSecond)
-          )
-        ),
-        "club/source-club" -> apiClubJson(sourceClubId, "source-club"),
-        "club/source-club/members" -> apiClubMembersJson(
-          List(
-            ("existing-member", T.t0.getEpochSecond),
-            ("candidate-a", T.t0.getEpochSecond),
-            ("candidate-b", T.t0.getEpochSecond)
-          )
-        )
-      )
-      val config = makeConfig()
-
-      for {
-        _          <- seedDb
-        client     <- fakeChessComClient(responses)
-        candidates <- RecruitmentApp.gatherCandidates(client, clubUrlName, config, List(ClubUrlName("source-club")))
-      } yield assertTrue(
-        candidates.size == 2,
-        !candidates.contains(Username("existing-member")),
-        candidates.toSet == Set(Username("candidate-a"), Username("candidate-b"))
-      )
-    },
-    test("deduplicates across multiple source clubs") {
-      val responses = Map(
-        s"club/$clubUrlName/members" -> apiClubMembersJson(Nil),
-        "club/source-a" -> apiClubJson(601, "source-a"),
-        "club/source-a/members" -> apiClubMembersJson(
-          List(
-            ("shared-player", T.t0.getEpochSecond),
-            ("unique-a", T.t0.getEpochSecond)
-          )
-        ),
-        "club/source-b" -> apiClubJson(602, "source-b"),
-        "club/source-b/members" -> apiClubMembersJson(
-          List(
-            ("shared-player", T.t0.getEpochSecond),
-            ("unique-b", T.t0.getEpochSecond)
-          )
-        )
-      )
-      val config = makeConfig()
-
-      for {
-        _          <- seedDb
-        client     <- fakeChessComClient(responses)
-        candidates <- RecruitmentApp.gatherCandidates(client, clubUrlName, config, List(ClubUrlName("source-a"), ClubUrlName("source-b")))
-      } yield assertTrue(
-        candidates.size == 3,
-        candidates.toSet == Set(Username("shared-player"), Username("unique-a"), Username("unique-b"))
-      )
-    }
-  )
-
-  // ==========================================================================
   // Suite: Evaluate candidates
   // ==========================================================================
 
@@ -700,7 +664,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         _       <- RecruitmentConfig.upsert(config)
         runId   <- RecruitmentRun.insert(clubId, "default", T.t0)
         client  <- fakeChessComClient(responses)
-        invited <- RecruitmentApp.evaluateCandidates(client, runId, clubUrlName, List(Username("alice"), Username("bob")), config)
+        invited <- evalCandidates(client, runId, List(Username("alice"), Username("bob")), config)
         // Check invited list
         _ = assertTrue(invited.size == 2)
         // Check Player table
@@ -735,10 +699,9 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         _      <- RecruitmentConfig.upsert(config)
         runId  <- RecruitmentRun.insert(clubId, "default", T.t0)
         client <- fakeChessComClient(responses)
-        invited <- RecruitmentApp.evaluateCandidates(
+        invited <- evalCandidates(
           client,
           runId,
-          clubUrlName,
           List(Username("alice"), Username("bob"), Username("charlie")),
           config,
           inviteCap = 2
@@ -760,7 +723,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         _          <- RecruitmentConfig.upsert(config)
         runId      <- RecruitmentRun.insert(clubId, "default", T.t0)
         client     <- fakeChessComClient(responses, failures = Set("bob"))
-        invited    <- RecruitmentApp.evaluateCandidates(client, runId, clubUrlName, List(Username("alice"), Username("bob")), config)
+        invited    <- evalCandidates(client, runId, List(Username("alice"), Username("bob")), config)
         candidates <- RecruitmentCandidate.selectByRun(runId)
       } yield assertTrue(
         invited.size == 1,
@@ -786,7 +749,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       _      <- RecruitmentConfig.upsert(config)
       runId  <- RecruitmentRun.insert(clubId, "default", Instant.now())
       client <- fakeChessComClient(responses)
-      _      <- RecruitmentApp.evaluateCandidates(client, runId, clubUrlName, List(Username.wrap(username)), config)
+      _      <- evalCandidates(client, runId, List(Username.wrap(username)), config)
       cands  <- RecruitmentCandidate.selectByRun(runId)
     } yield cands.head.outcome
 
@@ -951,13 +914,35 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         // Now evaluate alice again
         runId  <- RecruitmentRun.insert(clubId, "default", Instant.now())
         client <- fakeChessComClient(Map("player/alice" -> apiPlayerJson(200, "alice")))
-        _      <- RecruitmentApp.evaluateCandidates(client, runId, clubUrlName, List(Username("alice")), config)
+        _      <- evalCandidates(client, runId, List(Username("alice")), config)
         cands  <- RecruitmentCandidate.selectByRun(runId)
       } yield assertTrue(cands.head.outcome == CandidateOutcome.Rejected)
     },
-    test("excludeSourceAdmins removes admin from candidate pool") {
+    test("gatherClubCandidates excludes existing and evaluated usernames") {
       val responses = Map(
-        s"club/$clubUrlName/members" -> apiClubMembersJson(Nil),
+        "club/source-club" -> apiClubJson(sourceClubId, "source-club"),
+        "club/source-club/members" -> apiClubMembersJson(
+          List(
+            ("existing-member", T.t0.getEpochSecond),
+            ("already-evaluated", T.t0.getEpochSecond),
+            ("fresh-candidate", T.t0.getEpochSecond)
+          )
+        )
+      )
+
+      for {
+        client     <- fakeChessComClient(responses)
+        candidates <- RecruitmentApp.gatherClubCandidates(
+          client, ClubUrlName("source-club"), excludeSourceAdmins = false,
+          existingUsernames = Set(Username("existing-member")),
+          evaluatedUsernames = Set(Username("already-evaluated"))
+        )
+      } yield assertTrue(
+        candidates == List(Username("fresh-candidate"))
+      )
+    },
+    test("gatherClubCandidates excludes admins when enabled") {
+      val responses = Map(
         "club/source-club" -> apiClubJson(sourceClubId, "source-club", admins = List("admin-user")),
         "club/source-club/members" -> apiClubMembersJson(
           List(
@@ -966,20 +951,20 @@ object TestRecruitmentApp extends ZIOSpecDefault {
           )
         )
       )
-      val config = makeConfig().copy(excludeSourceAdmins = true)
 
       for {
-        _          <- seedDb
         client     <- fakeChessComClient(responses)
-        candidates <- RecruitmentApp.gatherCandidates(client, clubUrlName, config, List(ClubUrlName("source-club")))
+        candidates <- RecruitmentApp.gatherClubCandidates(
+          client, ClubUrlName("source-club"), excludeSourceAdmins = true,
+          existingUsernames = Set.empty, evaluatedUsernames = Set.empty
+        )
       } yield assertTrue(
         candidates.size == 1,
         candidates.head == Username("regular-user")
       )
     },
-    test("excludeSourceAdmins=false keeps admins in candidate pool") {
+    test("gatherClubCandidates keeps admins when disabled") {
       val responses = Map(
-        s"club/$clubUrlName/members" -> apiClubMembersJson(Nil),
         "club/source-club" -> apiClubJson(sourceClubId, "source-club", admins = List("admin-user")),
         "club/source-club/members" -> apiClubMembersJson(
           List(
@@ -988,12 +973,13 @@ object TestRecruitmentApp extends ZIOSpecDefault {
           )
         )
       )
-      val config = makeConfig().copy(excludeSourceAdmins = false)
 
       for {
-        _          <- seedDb
         client     <- fakeChessComClient(responses)
-        candidates <- RecruitmentApp.gatherCandidates(client, clubUrlName, config, List(ClubUrlName("source-club")))
+        candidates <- RecruitmentApp.gatherClubCandidates(
+          client, ClubUrlName("source-club"), excludeSourceAdmins = false,
+          existingUsernames = Set.empty, evaluatedUsernames = Set.empty
+        )
       } yield assertTrue(
         candidates.size == 2,
         candidates.toSet == Set(Username("admin-user"), Username("regular-user"))
@@ -1007,7 +993,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         _      <- RecruitmentConfig.upsert(config)
         runId  <- RecruitmentRun.insert(clubId, "default", Instant.now())
         client <- fakeChessComClient(responses)
-        _      <- RecruitmentApp.evaluateCandidates(client, runId, clubUrlName, List(Username("alice")), config)
+        _      <- evalCandidates(client, runId, List(Username("alice")), config)
         cached <- PlayerRecruitmentCache.selectId(pid0)
       } yield assertTrue(
         cached.isDefined,
@@ -1032,7 +1018,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         _      <- ClubMember.insert(ClubMember(clubId, pid0, T.t0, Some(T.t1)))
         runId  <- RecruitmentRun.insert(clubId, "default", Instant.now())
         client <- fakeChessComClient(responses)
-        _      <- RecruitmentApp.evaluateCandidates(client, runId, clubUrlName, List(Username("alice")), config)
+        _      <- evalCandidates(client, runId, List(Username("alice")), config)
         cands  <- RecruitmentCandidate.selectByRun(runId)
       } yield assertTrue(cands.head.outcome == CandidateOutcome.Rejected)
     },
@@ -1050,7 +1036,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         _      <- ClubMember.insert(ClubMember(clubId, pid0, T.t0, Some(T.t1)))
         runId  <- RecruitmentRun.insert(clubId, "default", Instant.now())
         client <- fakeChessComClient(responses)
-        _      <- RecruitmentApp.evaluateCandidates(client, runId, clubUrlName, List(Username("alice")), config)
+        _      <- evalCandidates(client, runId, List(Username("alice")), config)
         cands  <- RecruitmentCandidate.selectByRun(runId)
       } yield assertTrue(cands.head.outcome == CandidateOutcome.Invited)
     }
@@ -1073,7 +1059,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         )
         runId  <- RecruitmentRun.insert(clubId, "default", Instant.now())
         client <- fakeChessComClient(responses)
-        _      <- RecruitmentApp.evaluateCandidates(client, runId, clubUrlName, List(Username("alice")), config)
+        _      <- evalCandidates(client, runId, List(Username("alice")), config)
         cands  <- RecruitmentCandidate.selectByRun(runId)
       } yield assertTrue(
         cands.size == 1,
@@ -1093,7 +1079,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         )
         runId  <- RecruitmentRun.insert(clubId, "default", now)
         client <- fakeChessComClient(responses)
-        _      <- RecruitmentApp.evaluateCandidates(client, runId, clubUrlName, List(Username("alice")), config)
+        _      <- evalCandidates(client, runId, List(Username("alice")), config)
         cands  <- RecruitmentCandidate.selectByRun(runId)
       } yield assertTrue(
         cands.size == 1,
@@ -1194,7 +1180,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       _      <- RecruitmentConfig.upsert(config)
       runId  <- RecruitmentRun.insert(clubId, "default", Instant.now())
       client <- fakeChessComClient(responses)
-      _      <- RecruitmentApp.evaluateCandidates(client, runId, clubUrlName, List(Username.wrap(username)), config)
+      _      <- evalCandidates(client, runId, List(Username.wrap(username)), config)
       cands  <- RecruitmentCandidate.selectByRun(runId)
     } yield cands.head.outcome
 
