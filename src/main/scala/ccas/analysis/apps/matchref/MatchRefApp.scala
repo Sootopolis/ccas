@@ -29,26 +29,24 @@ object MatchRefApp extends ZIOAppDefault {
     for {
       client <- ZIO.service[ChessComClient]
       cache  <- Ref.make(Map.empty[ClubMatchId, ApiDailyMatch])
-      // Players
-      players        <- selectUnresolvedPlayers
-      _              <- Console.printLine(s"Players without match ref: ${players.size}").orDie
-      resolvedPlayers <- ZIO.foldLeft(players)(0) { case (count, player) =>
-        resolvePlayer(client, cache, player).map {
-          case Some(_) => count + 1
-          case None    => count
-        }
-      }
-      _ <- Console.printLine(s"Resolved: $resolvedPlayers / ${players.size}").orDie
       // Clubs
       clubs        <- selectUnresolvedClubs
       _            <- Console.printLine(s"Clubs without match ref: ${clubs.size}").orDie
-      resolvedClubs <- ZIO.foldLeft(clubs)(0) { case (count, club) =>
-        resolveClub(client, cache, club).map {
-          case Some(_) => count + 1
-          case None    => count
-        }
-      }
+      clubCounter  <- Ref.make(0)
+      _            <- ZIO.foreachPar(clubs)(club =>
+        resolveClub(client, cache, club).tap(r => clubCounter.update(_ + 1).when(r.isDefined))
+      )
+      resolvedClubs <- clubCounter.get
       _ <- Console.printLine(s"Resolved: $resolvedClubs / ${clubs.size}").orDie
+      // Players
+      players        <- selectUnresolvedPlayers
+      _              <- Console.printLine(s"Players without match ref: ${players.size}").orDie
+      playerCounter  <- Ref.make(0)
+      _              <- ZIO.foreachPar(players)(player =>
+        resolvePlayer(client, cache, player).tap(r => playerCounter.update(_ + 1).when(r.isDefined))
+      )
+      resolvedPlayers <- playerCounter.get
+      _ <- Console.printLine(s"Resolved: $resolvedPlayers / ${players.size}").orDie
     } yield ()
 
   private def selectUnresolvedPlayers: ZIO[Transactor, Throwable, List[UnresolvedPlayer]] =
