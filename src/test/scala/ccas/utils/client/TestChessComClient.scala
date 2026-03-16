@@ -11,11 +11,11 @@ object TestChessComClient extends ZIOSpecDefault {
   private given JsonDecoder[Payload] = DeriveJsonDecoder.gen[Payload]
 
   private def makeClient(
-      handler: Request => UIO[ Response],
+      handler: Request => UIO[Response],
       permits: Long = 5,
       cooldown: Duration = 50.millis,
       retryBase: Duration = 10.millis
-    ): UIO[ (ChessComClient, Ref[Boolean])] =
+    ): UIO[(ChessComClient, Ref[Boolean])] =
     for {
       semaphore <- Semaphore.make(permits)
       mutex     <- Semaphore.make(1)

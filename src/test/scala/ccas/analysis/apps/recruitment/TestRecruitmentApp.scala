@@ -157,7 +157,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
   private def fakeChessComClient(
       responses: Map[String, String],
       failures: Set[String] = Set.empty
-    ): UIO[ ChessComClient] =
+    ): UIO[ChessComClient] =
     (for {
       semaphore <- Semaphore.make(1)
       mutex     <- Semaphore.make(1)
@@ -249,7 +249,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       blockAfterN: Int,
       reached: Promise[Nothing, Unit],
       gate: Promise[Nothing, Unit]
-    ): UIO[ ChessComClient] =
+    ): UIO[ChessComClient] =
     (for {
       semaphore    <- Semaphore.make(1)
       mutex        <- Semaphore.make(1)

@@ -323,7 +323,7 @@ object RecruitmentApp extends ZIOAppDefault {
       }
     } yield ()
 
-  private def printProgress(ctx: ExploreContext): UIO[ Unit] =
+  private def printProgress(ctx: ExploreContext): UIO[Unit] =
     ZIO.whenDiscard(ctx.showProgress)(for {
       invited   <- ctx.invitedRef.get
       evaluated <- ctx.evaluatedRef.get
@@ -952,7 +952,7 @@ object RecruitmentApp extends ZIOAppDefault {
       overallTimeoutPct: Double,
       now: Instant,
       currentMonthArchive: Option[ApiPlayerArchive] = None
-    ): Task[ (Int, Option[Double], Option[Instant], Set[Username])] = {
+    ): Task[(Int, Option[Double], Option[Instant], Set[Username])] = {
     val needsTmStats = config.dailyMinTmGamesFinished.isDefined || config.dailyMaxTmTimeoutPercent.isDefined
     if (!needsTmStats) ZIO.succeed((0, None, None, Set.empty))
     else {

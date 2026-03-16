@@ -93,7 +93,7 @@ object MatchRefApp extends ZIOAppDefault {
       client: ChessComClient,
       cache: Ref[Map[ClubMatchId, ApiDailyMatch]],
       matchId: ClubMatchId
-    ): Task[ ApiDailyMatch] =
+    ): Task[ApiDailyMatch] =
     cache.get.flatMap(_.get(matchId).fold(
       client.get[ApiDailyMatch](ApiDailyMatch.getUrl(matchId)).flatMap { m =>
         cache.update(_ + (matchId -> m)).as(m)

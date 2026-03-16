@@ -346,7 +346,7 @@ object MembershipApp extends ZIOAppDefault {
       client: ChessComClient,
       clubUrlName: ClubUrlName,
       username: Username
-    ): Task[ Boolean] =
+    ): Task[Boolean] =
     client.get[ApiPlayerClubs](ApiPlayerClubs.getUrl(username)).map { playerClubs =>
       playerClubs.clubs.exists(_.clubName == clubUrlName)
     }.catchAll(_ => ZIO.succeed(false))
@@ -441,7 +441,7 @@ object MembershipApp extends ZIOAppDefault {
       client: ChessComClient,
       ref: PlayerMatchRef,
       oldUsername: Username
-    ): Task[ Option[Username]] =
+    ): Task[Option[Username]] =
     client.get[ApiDailyMatch](ApiDailyMatch.getUrl(ref.matchId)).map { dailyMatch =>
       val team = if ref.teamIdx == 1 then dailyMatch.teams.team1 else dailyMatch.teams.team2
       val boardSuffix = s"/${ref.boardIdx}"
@@ -511,7 +511,7 @@ object MembershipApp extends ZIOAppDefault {
 
   // --- Reporting ---
 
-  private def reportReconciliation(result: ReconciliationResult): UIO[ Unit] =
+  private def reportReconciliation(result: ReconciliationResult): UIO[Unit] =
     for {
       _ <- Console.printLine(s"=== Reconciliation Complete ===").orDie
       _ <- Console.printLine(s"New players:        ${result.newPlayers.size}").orDie
@@ -522,7 +522,7 @@ object MembershipApp extends ZIOAppDefault {
       _ <- ZIO.foreachDiscard(result.changes)(printChangeSummary)
     } yield ()
 
-  private def printChangeSummary(summary: MemberChangeSummary): UIO[ Unit] =
+  private def printChangeSummary(summary: MemberChangeSummary): UIO[Unit] =
     for {
       _ <- Console.printLine(s"Player ${summary.playerId}:").orDie
       _ <- ZIO.foreachDiscard(summary.changes) { change =>
@@ -627,6 +627,6 @@ object MembershipApp extends ZIOAppDefault {
       snaps: List[PlayerSnapshot],
       since: Instant,
       until: Instant
-    ): UIO[ Unit] =
+    ): UIO[Unit] =
     ZIO.foreachDiscard(classifyFromDb(clubId, members, snaps, since, until))(printChangeSummary)
 }

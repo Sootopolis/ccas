@@ -14,9 +14,7 @@ final case class ApiClubMembers(
     weekly: Chunk[ApiClubMember],
     monthly: Chunk[ApiClubMember],
     allTime: Chunk[ApiClubMember]) {
-  def toIterator: Iterator[ApiClubMember] = weekly.iterator ++ monthly.iterator ++ allTime.iterator
-
-  def all: Chunk[ApiClubMember] = Chunk.fromIterator(toIterator)
+  def all: Chunk[ApiClubMember] = weekly ++ monthly ++ allTime
 
   def toMap: Map[Username, Long] = all.map(member => member.username -> member.joined).toMap
 }

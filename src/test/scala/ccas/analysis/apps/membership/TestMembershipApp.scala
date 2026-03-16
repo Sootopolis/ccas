@@ -5,12 +5,11 @@ import java.time.{Duration, Instant, LocalDateTime, ZoneOffset}
 import com.augustnagro.magnum.{sql, Transactor}
 import zio.{Chunk, RIO, Ref, Scope, Semaphore, Trace, UIO, ZIO}
 import zio.http.*
-import zio.test.{assertTrue, Spec, TestAspect, TestResult, ZIOSpecDefault}
+import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.analysis.apps.membership.MembershipApp.{PhaseBResult, PhaseCResult}
 import ccas.analysis.apps.membership.MembershipChange.*
 import ccas.analysis.tables.{Club, ClubMember, Player, PlayerSnapshot, Tables}
-import ccas.api.misc.enums.PlayerStatusCategory
 import ccas.api.misc.enums.PlayerStatusCategory.{Active, Closed}
 import ccas.api.misc.subtypes.{ClubId, ClubUrlName, PlayerId, Username}
 import ccas.utils.client.ChessComClient
@@ -65,7 +64,7 @@ object TestMembershipApp extends ZIOSpecDefault {
   private def fakeChessComClient(
       responses: Map[String, String],
       failures: Set[String] = Set.empty
-    ): UIO[ ChessComClient] =
+    ): UIO[ChessComClient] =
     (for {
       semaphore <- Semaphore.make(1)
       mutex     <- Semaphore.make(1)

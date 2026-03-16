@@ -26,6 +26,8 @@ case class JobRun(
 
 object JobRun {
 
+  private val selectCols = SqlLiteral("id, kind, status, club_url_name, params, started_at, completed_at, error")
+
   def createTable: ZIO[Transactor, SQLException, Int] =
     connectZIO {
       sql"""CREATE TABLE IF NOT EXISTS job_run (
@@ -64,33 +66,33 @@ object JobRun {
 
   def selectId(id: JobRunId): ZIO[Transactor, SQLException, Option[JobRun]] =
     connectZIO {
-      sql"SELECT id, kind, status, club_url_name, params, started_at, completed_at, error FROM job_run WHERE id = $id"
+      sql"SELECT $selectCols FROM job_run WHERE id = $id"
         .query[JobRun].run().headOption
     }
 
   def selectRunning(kind: JobKind, clubUrlName: Option[ClubUrlName]): ZIO[Transactor, SQLException, Option[JobRun]] =
     connectZIO {
+      val running = JobRunStatus.Running
       clubUrlName match
         case Some(name) =>
-          sql"""SELECT id, kind, status, club_url_name, params, started_at, completed_at, error
-                FROM job_run WHERE kind = $kind AND club_url_name = $name AND status = 'Running'"""
+          sql"SELECT $selectCols FROM job_run WHERE kind = $kind AND club_url_name = $name AND status = $running"
             .query[JobRun].run().headOption
         case None =>
-          sql"""SELECT id, kind, status, club_url_name, params, started_at, completed_at, error
-                FROM job_run WHERE kind = $kind AND club_url_name IS NULL AND status = 'Running'"""
+          sql"SELECT $selectCols FROM job_run WHERE kind = $kind AND club_url_name IS NULL AND status = $running"
             .query[JobRun].run().headOption
     }
 
   def selectRecent(limit: Int): ZIO[Transactor, SQLException, List[JobRun]] =
     connectZIO {
-      sql"""SELECT id, kind, status, club_url_name, params, started_at, completed_at, error
-            FROM job_run ORDER BY started_at DESC LIMIT $limit"""
+      sql"SELECT $selectCols FROM job_run ORDER BY started_at DESC LIMIT $limit"
         .query[JobRun].run().toList
     }
 
   def markOrphansAsFailed: ZIO[Transactor, SQLException, Int] =
     connectZIO {
-      sql"""UPDATE job_run SET status = 'Failed', completed_at = NOW(), error = 'Service restarted'
-            WHERE status = 'Running'""".update.run()
+      val failed = JobRunStatus.Failed
+      val running = JobRunStatus.Running
+      sql"""UPDATE job_run SET status = $failed, completed_at = NOW(), error = 'Service restarted'
+            WHERE status = $running""".update.run()
     }
 }

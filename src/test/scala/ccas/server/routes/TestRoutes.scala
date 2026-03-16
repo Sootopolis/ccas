@@ -64,9 +64,9 @@ object TestRoutes extends ZIOSpecDefault {
     override def recentJobs(limit: Int): RIO[Transactor, List[JobRun]] =
       jobs.get.map(_.values.toList.sortBy(_.startedAt)(using Ordering[Instant].reverse).take(limit))
 
-    def setNextAction(action: Action): UIO[ Unit] = nextAction.set(action)
+    def setNextAction(action: Action): UIO[Unit] = nextAction.set(action)
 
-    def prePopulate(jobRun: JobRun): UIO[ Unit] = jobs.update(_ + (jobRun.id -> jobRun))
+    def prePopulate(jobRun: JobRun): UIO[Unit] = jobs.update(_ + (jobRun.id -> jobRun))
   }
 
   private val fakeJobRunnerLayer: ZLayer[Any, Nothing, JobRunner] =

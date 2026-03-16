@@ -7,7 +7,6 @@ import ccas.api.misc.enums.{League, PlayerStatus, Title}
 import ccas.api.misc.subtypes.{Elo, PlayerId, Username}
 import ccas.api.misc.Hosts
 import ccas.utils.json.JsonDecoding
-// import ccas.utils.prettyprinting.PrettyPrinter
 
 @jsonMemberNames(SnakeCase)
 final case class ApiPlayer(
@@ -26,7 +25,7 @@ final case class ApiPlayer(
     verified: Boolean,
     league: Option[League],
     fide: Option[Elo] // FIDE rating
-  ) /* derives PrettyPrinter */ {
+  ) {
   val profileUrl: URL  = ApiPlayer.getProfileUrl(username)
   val apiUrl: URL      = ApiPlayer.getUrl(username)
   val apiStatsUrl: URL = ApiPlayerStats.getUrl(username)
