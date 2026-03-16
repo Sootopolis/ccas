@@ -13,8 +13,8 @@ final class ChessComClient(
     semaphore: Semaphore,
     mutex: Semaphore,
     throttled: Ref[Boolean],
-    cooldown: Duration,
-    retryBase: Duration = 1.second) {
+    cooldown: Duration) {
+  private val retryBase: Duration = 1.second
   private val batchedClient = client.batched
 
   private def rawGet[T](url: URL)(using jsonDecoder: JsonDecoder[T]): Task[T] = for {
@@ -59,8 +59,7 @@ object ChessComClient {
 
   def live(
       permits: Long = 5,
-      cooldown: Duration = 30.seconds,
-      headers: Headers = Headers.empty
+      cooldown: Duration = 30.seconds
     ): ZLayer[Client, Throwable, ChessComClient] =
     ZLayer
       .fromZIO {
@@ -71,6 +70,6 @@ object ChessComClient {
           semaphore <- Semaphore.make(permits)
           mutex     <- Semaphore.make(1)
           throttled <- Ref.make(false)
-        } yield ChessComClient(client, userAgentHeaders(contactEmail) ++ headers, semaphore, mutex, throttled, cooldown)
+        } yield ChessComClient(client, userAgentHeaders(contactEmail), semaphore, mutex, throttled, cooldown)
       }
 }
