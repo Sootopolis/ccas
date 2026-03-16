@@ -3,7 +3,7 @@ package ccas.analysis.apps.recruitment
 import java.time.{Duration, Instant, LocalDateTime, ZoneOffset}
 
 import com.augustnagro.magnum.{sql, Transactor}
-import zio.{Ref, Scope, Semaphore, ZIO}
+import zio.{Promise, Ref, Scope, Semaphore, ZIO}
 import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
@@ -30,7 +30,8 @@ object TestRecruitmentApp extends ZIOSpecDefault {
   private val clubUrlName = ClubUrlName("test-club")
   private val club        = Club(clubId, T.t0, clubUrlName)
 
-  private val sourceClubId = ClubId(600)
+  private val sourceClubId    = ClubId(600)
+  private val intSourceClubId = ClubId(901)
 
   private val pid0 = PlayerId(200)
   private val pid1 = PlayerId(201)
@@ -237,6 +238,95 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       )
     }
 
+  /** A variant of fakeChessComClient where the Nth player profile request blocks.
+    * After `blockAfterN` successful player profile fetches, the next fetch completes `reached`
+    * and then awaits `gate` before responding. This ensures exactly `blockAfterN` candidates
+    * have had their profiles fetched (and thus fully evaluated, since concurrency = 1)
+    * before the block occurs, regardless of Set iteration order.
+    */
+  private def fakeChessComClientWithBlock(
+      responses: Map[String, String],
+      blockAfterN: Int,
+      reached: Promise[Nothing, Unit],
+      gate: Promise[Nothing, Unit]
+    ): ZIO[Any, Nothing, ChessComClient] =
+    (for {
+      semaphore    <- Semaphore.make(1)
+      mutex        <- Semaphore.make(1)
+      throttled    <- Ref.make(false)
+      playerCount  <- Ref.make(0)
+    } yield (semaphore, mutex, throttled, playerCount)).map { (semaphore, mutex, throttled, playerCount) =>
+      val routes: Routes[Any, Response] = Routes(
+        Method.GET / "pub" / "player" / string("username") / "stats" -> handler { (username: String, _: Request) =>
+          responses.get(s"player/$username/stats").fold(Response.json(apiPlayerStatsJson()))(Response.json(_))
+        },
+        Method.GET / "pub" / "player" / string("username") / "clubs" -> handler { (username: String, _: Request) =>
+          responses.get(s"player/$username/clubs").fold(Response.json(apiPlayerClubsJson()))(Response.json(_))
+        },
+        Method.GET / "pub" / "player" / string("username") / "matches" -> handler { (username: String, _: Request) =>
+          responses.get(s"player/$username/matches").fold(Response.json(emptyPlayerMatchesJson))(Response.json(_))
+        },
+        Method.GET / "pub" / "player" / string("username") / "games" -> handler { (username: String, _: Request) =>
+          responses.get(s"player/$username/games").fold(Response.json(emptyCurrentGamesJson))(Response.json(_))
+        },
+        Method.GET / "pub" / "player" / string("username") / "games" / string("year") / string("month") -> handler {
+          (username: String, year: String, month: String, _: Request) =>
+            responses.get(s"player/$username/games/$year/$month")
+              .fold(Response.json(emptyArchiveJson))(Response.json(_))
+        },
+        Method.GET / "pub" / "player" / string("username") -> handler { (username: String, _: Request) =>
+          val resp = responses.get(s"player/$username").fold(Response(status = Status.NotFound))(Response.json(_))
+          playerCount.getAndUpdate(_ + 1).flatMap { count =>
+            if (count >= blockAfterN)
+              reached.succeed(()) *> gate.await.as(resp)
+            else
+              ZIO.succeed(resp)
+          }
+        }.sandbox,
+        Method.GET / "pub" / "club" / string("club") / "matches" -> handler { (clubName: String, _: Request) =>
+          responses.get(s"club/$clubName/matches").fold(Response.json(emptyClubMatchesJson))(Response.json(_))
+        },
+        Method.GET / "pub" / "club" / string("club") / "members" -> handler { (clubName: String, _: Request) =>
+          responses.get(s"club/$clubName/members").fold(Response(status = Status.NotFound))(Response.json(_))
+        },
+        Method.GET / "pub" / "club" / string("club") -> handler { (clubName: String, _: Request) =>
+          responses.get(s"club/$clubName").fold(Response(status = Status.NotFound))(Response.json(_))
+        }
+      )
+      val driver = new ZClient.Driver[Any, Scope, Throwable] {
+        override def request(
+            version: Version,
+            method: Method,
+            url: URL,
+            headers: Headers,
+            body: Body,
+            sslConfig: Option[ClientSSLConfig],
+            proxy: Option[Proxy]
+          )(implicit trace: zio.Trace
+          ): ZIO[Scope, Throwable, Response] =
+          routes.runZIO(Request(method = method, url = url, headers = headers, body = body))
+
+        override def socket[Env1 <: Any](
+            version: Version,
+            url: URL,
+            headers: Headers,
+            app: WebSocketApp[Env1]
+          )(implicit
+            trace: zio.Trace,
+            ev: Scope =:= Scope
+          ): ZIO[Env1 & Scope, Throwable, Response] =
+          ZIO.die(new UnsupportedOperationException)
+      }
+      ChessComClient(
+        ZClient.fromDriver(driver),
+        Headers.empty,
+        semaphore,
+        mutex,
+        throttled,
+        zio.Duration.fromSeconds(30)
+      )
+    }
+
   private def seedDb: ZIO[Transactor, Throwable, Unit] =
     for {
       // Clean up test data
@@ -247,13 +337,15 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       _ <- PlayerRecruitmentCache.deleteAll
       _ <- SqlZioTypes.connectZIO(sql"DELETE FROM club_member WHERE club_id = $clubId".update.run())
       _ <- SqlZioTypes.connectZIO(sql"DELETE FROM club_member WHERE club_id = $sourceClubId".update.run())
-      _ <- ZIO.foreachDiscard(List(blacklistClubId, ClubId(701), ClubId(702), ClubId(801), ClubId(802))) { cid =>
+      _ <- SqlZioTypes.connectZIO(sql"DELETE FROM club_member WHERE club_id = $intSourceClubId".update.run())
+      _ <- ZIO.foreachDiscard(List(blacklistClubId, ClubId(701), ClubId(702), ClubId(801), ClubId(802), intSourceClubId)) { cid =>
         SqlZioTypes.connectZIO(sql"DELETE FROM club WHERE club_id = $cid".update.run())
       }
       _ <- ZIO.foreachDiscard(
         List(PlayerId(199), pid0, pid1, pid2, pid3,
           PlayerId(210), PlayerId(211), PlayerId(220), PlayerId(221),
-          PlayerId(222), PlayerId(223))
+          PlayerId(222), PlayerId(223),
+          PlayerId(300), PlayerId(301), PlayerId(302), PlayerId(303), PlayerId(304))
       ) { pid =>
         SqlZioTypes.connectZIO(sql"DELETE FROM player_snapshot WHERE player_id = $pid".update.run()) *>
           SqlZioTypes.connectZIO(sql"DELETE FROM player WHERE player_id = $pid".update.run())
@@ -1373,7 +1465,45 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         invited.size == 3,
         result.candidatesFound == 3
       )
-    }
+    },
+
+    test("interrupted recruit persists partial results") {
+      val intSource = ClubUrlName("int-source")
+      val candidateNames = (0 to 4).map(i => s"int-cand-$i").toList
+      val responses = Map(
+        s"club/$clubUrlName" -> apiClubJson(clubId, clubUrlName),
+        s"club/$clubUrlName/members" -> apiClubMembersJson(Nil),
+        s"club/$intSource" -> apiClubJson(intSourceClubId, intSource),
+        s"club/$intSource/members" -> apiClubMembersJson(
+          candidateNames.map(n => (n, T.t0.getEpochSecond))
+        )
+      ) ++ candidateNames.zipWithIndex.map { (name, i) =>
+        s"player/$name" -> apiPlayerJson(300 + i, name)
+      }.toMap
+      val config = makeConfig()
+
+      for {
+        _       <- seedDb
+        _       <- RecruitmentConfig.upsert(config)
+        reached <- Promise.make[Nothing, Unit]
+        gate    <- Promise.make[Nothing, Unit]
+        client  <- fakeChessComClientWithBlock(responses, blockAfterN = 2, reached, gate)
+        xa      <- ZIO.service[Transactor]
+        fiber   <- RecruitmentApp.recruit(clubUrlName, "default", sourceClubs = List(intSource))
+          .provideEnvironment(zio.ZEnvironment(client, xa))
+          .fork
+        _       <- reached.await
+        _       <- fiber.interrupt
+        latest  <- RecruitmentRun.selectLatest(clubId)
+        runId    = latest.get.runId
+        cands   <- RecruitmentCandidate.selectByRun(runId)
+        invited  = cands.filter(_.outcome == CandidateOutcome.Invited)
+      } yield assertTrue(
+        latest.isDefined,
+        latest.get.completedAt.isDefined,
+        invited.size >= 2
+      )
+    } @@ TestAspect.withLiveClock
   )
 
   // ==========================================================================

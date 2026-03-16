@@ -4,7 +4,7 @@ import java.time.{Instant, LocalDate, YearMonth, ZoneOffset}
 import java.time.temporal.ChronoUnit
 
 import com.augustnagro.magnum.Transactor
-import zio.{Chunk, Console, Ref, Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
+import zio.{Chunk, Console, Ref, Scope, ZEnvironment, ZIO, ZIOAppArgs, ZIOAppDefault}
 import zio.http.{Client, URL}
 
 import ccas.analysis.apps.membership.MembershipApp
@@ -141,6 +141,25 @@ object RecruitmentApp extends ZIOAppDefault {
         showProgress = showProgress
       )
 
+      transactor <- ZIO.service[Transactor]
+
+      finalizeRun = (label: String) => for {
+        _ <- ZIO.when(showProgress)(Console.printLine("").orDie)
+        invited     <- invitedRef.get.map(_.reverse)
+        evaluated   <- evaluatedRef.get
+        completedAt  = Instant.now()
+        finalRun     = RecruitmentRun(runId, clubId, configName, now, Some(completedAt), invited.size)
+        _ <- RecruitmentRun.update(finalRun)
+        _ <- Console.printLine(s"=== $label ===").orDie
+        _ <- Console.printLine(s"Candidates evaluated: ${evaluated.size}").orDie
+        _ <- Console.printLine(s"Invited: ${invited.size}").orDie
+        _ <- ZIO.foreachDiscard(invited)(u => Console.printLine(s"  $u").orDie)
+      } yield finalRun
+
+      _ <- ZIO.when(showProgress)(
+        Console.printLine("[Hint] Press Ctrl+C to stop gracefully (candidates found so far will be listed)").orDie
+      )
+
       // --- Build initial sources from provided source clubs ---
       initialSources = sourceClubs.map(ClubSource(_))
 
@@ -162,22 +181,17 @@ object RecruitmentApp extends ZIOAppDefault {
         visitedClubs = sourceClubs.toSet,
         roundRobinKeys = Nil
       )
-      _ <- timeLimitMinutes match {
+      _ <- (timeLimitMinutes match {
         case Some(minutes) => loopEffect.timeout(zio.durationLong(minutes.toLong).minutes).unit
         case None          => loopEffect.unit
-      }
+      }).onInterrupt(
+        finalizeRun("Recruitment Interrupted")
+          .provideEnvironment(ZEnvironment(transactor))
+          .orDie
+      )
 
       // --- Finalize ---
-      _ <- ZIO.when(showProgress)(Console.printLine("").orDie)
-      invited     <- invitedRef.get.map(_.reverse)
-      evaluated   <- evaluatedRef.get
-      completedAt  = Instant.now()
-      finalRun     = RecruitmentRun(runId, clubId, configName, now, Some(completedAt), invited.size)
-      _ <- RecruitmentRun.update(finalRun)
-      _ <- Console.printLine(s"=== Recruitment Complete ===").orDie
-      _ <- Console.printLine(s"Candidates evaluated: ${evaluated.size}").orDie
-      _ <- Console.printLine(s"Invited: ${invited.size}").orDie
-      _ <- ZIO.foreachDiscard(invited)(u => Console.printLine(s"  $u").orDie)
+      finalRun <- finalizeRun("Recruitment Complete")
     } yield finalRun
 
   // --- Explore loop ---
