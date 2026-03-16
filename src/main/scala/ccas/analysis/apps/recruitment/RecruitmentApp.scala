@@ -58,7 +58,8 @@ object RecruitmentApp extends ZIOAppDefault {
       evaluatedRef: Ref[Set[Username]],
       inviteCap: Int,
       existingUsernames: Set[Username],
-      exploreConcurrency: Int
+      exploreConcurrency: Int,
+      showProgress: Boolean
   )
 
   override def run: ZIO[Any & ZIOAppArgs & Scope, Any, Any] =
@@ -69,7 +70,7 @@ object RecruitmentApp extends ZIOAppDefault {
         case clubStr :: rest =>
           val configName  = rest.headOption.getOrElse("default")
           val sourceClubs = rest.drop(1).map(ClubUrlName.wrap)
-          recruit(ClubUrlName.wrap(clubStr), configName, sourceClubs = sourceClubs)
+          recruit(ClubUrlName.wrap(clubStr), configName, sourceClubs = sourceClubs, showProgress = true)
         case _ =>
           ZIO.fail(
             ExternalException(
@@ -90,7 +91,8 @@ object RecruitmentApp extends ZIOAppDefault {
       configName: String,
       inviteCap: Int = DefaultInviteCap,
       sourceClubs: List[ClubUrlName] = Nil,
-      timeLimitMinutes: Option[Int] = None
+      timeLimitMinutes: Option[Int] = None,
+      showProgress: Boolean = false
     ): ZIO[ChessComClient & Transactor, Throwable, RecruitmentRun] =
     for {
       _       <- MembershipApp.reconcile(clubUrlName)
@@ -135,7 +137,8 @@ object RecruitmentApp extends ZIOAppDefault {
         evaluatedRef = evaluatedRef,
         inviteCap = inviteCap,
         existingUsernames = existingUsernames,
-        exploreConcurrency = effectiveConcurrency
+        exploreConcurrency = effectiveConcurrency,
+        showProgress = showProgress
       )
 
       // --- Build initial sources from provided source clubs ---
@@ -165,6 +168,7 @@ object RecruitmentApp extends ZIOAppDefault {
       }
 
       // --- Finalize ---
+      _ <- ZIO.when(showProgress)(Console.printLine("").orDie)
       invited     <- invitedRef.get.map(_.reverse)
       evaluated   <- evaluatedRef.get
       completedAt  = Instant.now()
@@ -258,6 +262,7 @@ object RecruitmentApp extends ZIOAppDefault {
                         isInvited = result == CandidateOutcome.Invited
                         isRejected = result == CandidateOutcome.Rejected || result == CandidateOutcome.Error
                         _ <- ZIO.when(isInvited)(ctx.invitedRef.update(username :: _))
+                        _ <- printProgress(ctx)
 
                         updatedSource = pool3(sourceId).copy(
                           evaluated = sourceState.evaluated + 1,
@@ -279,6 +284,19 @@ object RecruitmentApp extends ZIOAppDefault {
           }
         } yield ()
       }
+    } yield ()
+
+  private def printProgress(ctx: ExploreContext): ZIO[Any, Nothing, Unit] =
+    if (!ctx.showProgress) ZIO.unit
+    else for {
+      invited   <- ctx.invitedRef.get
+      evaluated <- ctx.evaluatedRef.get
+      cap        = ctx.inviteCap
+      pct        = if (cap == 0) 100 else (invited.size * 100) / cap
+      filled     = pct / 5
+      bar        = "\u2588" * filled + "\u2591" * (20 - filled)
+      line       = s"\r[Progress] Evaluated: ${evaluated.size} | Invited: ${invited.size}/$cap | $bar $pct%"
+      _         <- Console.print(line).orDie
     } yield ()
 
   // --- Source activation ---
