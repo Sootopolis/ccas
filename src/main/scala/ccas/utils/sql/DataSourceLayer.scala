@@ -3,7 +3,7 @@ package ccas.utils.sql
 import com.augustnagro.magnum.Transactor
 import com.typesafe.config.ConfigFactory
 import com.zaxxer.hikari.{HikariConfig, HikariDataSource}
-import zio.{TaskLayer, ZIO, ZLayer}
+import zio.{RIO, TaskLayer, ZIO, ZLayer}
 
 object DataSourceLayer {
   private val defaultPrefix = "database"
@@ -13,7 +13,7 @@ object DataSourceLayer {
   def liveFromPrefix(
     prefix: String = defaultPrefix,
     schema: Option[String] = None,
-    onInit: ZIO[Transactor, Throwable, Unit] = ZIO.unit
+    onInit: RIO[Transactor, Unit] = ZIO.unit
   ): TaskLayer[Transactor] =
     ZLayer.scoped {
       for {

@@ -3,7 +3,7 @@ package ccas.analysis.apps.recruitment
 import java.time.Instant
 
 import com.augustnagro.magnum.Transactor
-import zio.{Console, Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
+import zio.{Console, RIO, Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
 import zio.http.Client
 
 import ccas.analysis.tables.*
@@ -45,7 +45,7 @@ object BlacklistApp extends ZIOAppDefault {
       username: Username,
       reason: Option[String],
       expiresAt: Option[Instant]
-    ): ZIO[ChessComClient & Transactor, Throwable, Unit] =
+    ): RIO[ChessComClient & Transactor, Unit] =
     for {
       client    <- ZIO.service[ChessComClient]
       apiClub   <- ApiClub.get(client, clubUrlName)

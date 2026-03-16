@@ -3,7 +3,7 @@ package ccas.analysis.apps.membership
 import java.time.Instant
 
 import com.augustnagro.magnum.Transactor
-import zio.{Chunk, Console, Scope, Task, ZIO, ZIOAppArgs, ZIOAppDefault}
+import zio.{Chunk, Console, RIO, Scope, Task, UIO, ZIO, ZIOAppArgs, ZIOAppDefault}
 import zio.http.Client
 
 import ccas.analysis.apps.membership.MembershipChange.*
@@ -48,7 +48,7 @@ object MembershipApp extends ZIOAppDefault {
       )
     } yield ()
 
-  def reconcileIfStale(clubUrlName: ClubUrlName, until: Instant): ZIO[ChessComClient & Transactor, Throwable, Unit] =
+  def reconcileIfStale(clubUrlName: ClubUrlName, until: Instant): RIO[ChessComClient & Transactor, Unit] =
     for {
       clubOpt <- Club.selectByUrlName(clubUrlName)
       _ <- ZIO.fromOption(clubOpt).flatMap { club =>
@@ -61,7 +61,7 @@ object MembershipApp extends ZIOAppDefault {
 
   // --- Phase A: Gather data ---
 
-  def reconcile(clubUrlName: ClubUrlName, trustUsernames: Boolean = true): ZIO[ChessComClient & Transactor, Throwable, ReconciliationResult] =
+  def reconcile(clubUrlName: ClubUrlName, trustUsernames: Boolean = true): RIO[ChessComClient & Transactor, ReconciliationResult] =
     for {
       client  <- ZIO.service[ChessComClient]
       (apiClub, resolvedUrlName) <- withNameFallback(
@@ -83,7 +83,7 @@ object MembershipApp extends ZIOAppDefault {
       _ <- MembershipRun.insert(clubId, now)
     } yield result
 
-  private[membership] def buildDbState(clubId: ClubId): ZIO[Transactor, Throwable, DbState] =
+  private[membership] def buildDbState(clubId: ClubId): RIO[Transactor, DbState] =
     for {
       snapshots <- PlayerSnapshot.selectLatest
       members   <- ClubMember.selectClubCurrent(clubId)
@@ -116,7 +116,7 @@ object MembershipApp extends ZIOAppDefault {
       dbState: DbState,
       now: Instant,
       trustUsernames: Boolean = true
-    ): ZIO[Transactor, Throwable, PhaseBResult] = {
+    ): RIO[Transactor, PhaseBResult] = {
     val initial = PhaseBResult(Set.empty, Chunk.empty, Chunk.empty, Chunk.empty, Chunk.empty, Chunk.empty)
     ZIO
       .foldLeft(apiMap.toList)(initial) { case (acc, (username, joinedEpoch)) =>
@@ -184,7 +184,7 @@ object MembershipApp extends ZIOAppDefault {
       dbState: DbState,
       acc: PhaseBResult,
       now: Instant
-    ): ZIO[Transactor, Throwable, PhaseBResult] =
+    ): RIO[Transactor, PhaseBResult] =
     client.getWithPermit[ApiPlayer](ApiPlayer.getUrl(username)).flatMap { apiPlayer =>
       val playerId       = apiPlayer.playerId
       val statusCategory = apiPlayer.status.category
@@ -278,7 +278,7 @@ object MembershipApp extends ZIOAppDefault {
       apiMap: Map[Username, Long],
       clubUrlName: ClubUrlName,
       now: Instant
-    ): ZIO[Transactor, Throwable, PhaseCResult] = {
+    ): RIO[Transactor, PhaseCResult] = {
     val disappeared = dbState.membersByPlayerId.values.filterNot(s => resolvedIds.contains(s.player.playerId))
     val initial     = PhaseCResult(Chunk.empty, Chunk.empty, Chunk.empty)
 
@@ -346,7 +346,7 @@ object MembershipApp extends ZIOAppDefault {
       client: ChessComClient,
       clubUrlName: ClubUrlName,
       username: Username
-    ): ZIO[Any, Throwable, Boolean] =
+    ): Task[ Boolean] =
     client.getWithPermit[ApiPlayerClubs](ApiPlayerClubs.getUrl(username)).map { playerClubs =>
       playerClubs.clubs.exists(_.clubName == clubUrlName)
     }.catchAll(_ => ZIO.succeed(false))
@@ -359,7 +359,7 @@ object MembershipApp extends ZIOAppDefault {
       apiMap: Map[Username, Long],
       clubUrlName: ClubUrlName,
       now: Instant
-    ): ZIO[Transactor, Throwable, PhaseCResult] = {
+    ): RIO[Transactor, PhaseCResult] = {
     val playerId    = state.player.playerId
     val oldUsername = state.player.username
 
@@ -441,7 +441,7 @@ object MembershipApp extends ZIOAppDefault {
       client: ChessComClient,
       ref: PlayerMatchRef,
       oldUsername: Username
-    ): ZIO[Any, Throwable, Option[Username]] =
+    ): Task[ Option[Username]] =
     client.getWithPermit[ApiDailyMatch](ApiDailyMatch.getUrl(ref.matchId)).map { dailyMatch =>
       val team = if ref.teamIdx == 1 then dailyMatch.teams.team1 else dailyMatch.teams.team2
       val boardSuffix = s"/${ref.boardIdx}"
@@ -455,8 +455,8 @@ object MembershipApp extends ZIOAppDefault {
   private def withNameFallback[Name, T](
       name: Name,
       effect: Name => Task[T],
-      resolve: Name => ZIO[Transactor, Throwable, Option[Name]]
-    ): ZIO[Transactor, Throwable, (T, Name)] =
+      resolve: Name => RIO[Transactor, Option[Name]]
+    ): RIO[Transactor, (T, Name)] =
     effect(name)
       .map(_ -> name)
       .catchAll { originalError =>
@@ -469,7 +469,7 @@ object MembershipApp extends ZIOAppDefault {
   private def resolveClubUrlName(
       client: ChessComClient,
       oldUrlName: ClubUrlName
-    ): ZIO[Transactor, Throwable, Option[ClubUrlName]] =
+    ): RIO[Transactor, Option[ClubUrlName]] =
     Club.selectByUrlName(oldUrlName).flatMap {
       case None => ZIO.succeed(None)
       case Some(club) =>
@@ -488,7 +488,7 @@ object MembershipApp extends ZIOAppDefault {
   private def resolvePlayerUsername(
       client: ChessComClient,
       oldUsername: Username
-    ): ZIO[Transactor, Throwable, Option[Username]] =
+    ): RIO[Transactor, Option[Username]] =
     PlayerSnapshot.selectNameLatest(oldUsername).flatMap {
       case None => ZIO.succeed(None)
       case Some(snapshot) =>
@@ -509,7 +509,7 @@ object MembershipApp extends ZIOAppDefault {
       closedMemberships = b.closedMemberships ++ c.closedMemberships
     )
 
-  private def persist(result: ReconciliationResult): ZIO[Transactor, Throwable, Unit] =
+  private def persist(result: ReconciliationResult): RIO[Transactor, Unit] =
     for {
       _ <- ZIO.when(result.newPlayers.nonEmpty)(Player.insertBatch(result.newPlayers))
       _ <- ZIO.when(result.newSnapshots.nonEmpty)(PlayerSnapshot.insertBatch(result.newSnapshots))
@@ -519,7 +519,7 @@ object MembershipApp extends ZIOAppDefault {
 
   // --- Reporting ---
 
-  private def reportReconciliation(result: ReconciliationResult): ZIO[Any, Nothing, Unit] =
+  private def reportReconciliation(result: ReconciliationResult): UIO[ Unit] =
     for {
       _ <- Console.printLine(s"=== Reconciliation Complete ===").orDie
       _ <- Console.printLine(s"New players:        ${result.newPlayers.size}").orDie
@@ -530,7 +530,7 @@ object MembershipApp extends ZIOAppDefault {
       _ <- ZIO.foreachDiscard(result.changes)(printChangeSummary)
     } yield ()
 
-  private def printChangeSummary(summary: MemberChangeSummary): ZIO[Any, Nothing, Unit] =
+  private def printChangeSummary(summary: MemberChangeSummary): UIO[ Unit] =
     for {
       _ <- Console.printLine(s"Player ${summary.playerId}:").orDie
       _ <- ZIO.foreachDiscard(summary.changes) { change =>
@@ -550,7 +550,7 @@ object MembershipApp extends ZIOAppDefault {
 
   // --- Report mode: DB-only ---
 
-  def report(clubUrlName: ClubUrlName, since: Instant, until: Instant): ZIO[Transactor, Throwable, Unit] =
+  def report(clubUrlName: ClubUrlName, since: Instant, until: Instant): RIO[Transactor, Unit] =
     for {
       club <- Club.selectByUrlName(clubUrlName)
         .someOrFail(ExternalException(s"Club '$clubUrlName' not found in database"))
@@ -635,6 +635,6 @@ object MembershipApp extends ZIOAppDefault {
       snaps: List[PlayerSnapshot],
       since: Instant,
       until: Instant
-    ): ZIO[Any, Nothing, Unit] =
+    ): UIO[ Unit] =
     ZIO.foreachDiscard(classifyFromDb(clubId, members, snaps, since, until))(printChangeSummary)
 }

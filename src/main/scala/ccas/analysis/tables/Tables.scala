@@ -1,10 +1,10 @@
 package ccas.analysis.tables
 
 import com.augustnagro.magnum.Transactor
-import zio.ZIO
+import zio.RIO
 
 object Tables {
-  def ensureTables: ZIO[Transactor, Throwable, Unit] =
+  def ensureTables: RIO[Transactor, Unit] =
     for {
       _ <- Player.createTable
       _ <- PlayerMatchRef.createTable

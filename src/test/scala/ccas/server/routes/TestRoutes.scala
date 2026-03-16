@@ -3,7 +3,7 @@ package ccas.server.routes
 import java.time.{Instant, LocalDateTime, ZoneOffset}
 
 import com.augustnagro.magnum.{sql, Transactor}
-import zio.{Ref, Scope, Semaphore, Trace, ZIO, ZLayer}
+import zio.{RIO, Ref, Scope, Semaphore, Trace, UIO, URIO, ZIO, ZLayer}
 import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
@@ -44,8 +44,8 @@ object TestRoutes extends ZIOSpecDefault {
         kind: JobKind,
         clubUrlName: Option[ClubUrlName],
         params: Option[String],
-        effect: ZIO[ChessComClient & Transactor, Throwable, Any]
-    ): ZIO[Transactor, Throwable, JobRunId] =
+        effect: RIO[ChessComClient & Transactor, Any]
+    ): RIO[Transactor, JobRunId] =
       nextAction.get.flatMap {
         case Action.Succeed =>
           val id  = JobRunId.generate()
@@ -58,15 +58,15 @@ object TestRoutes extends ZIOSpecDefault {
           ZIO.fail(new Exception(msg))
       }
 
-    override def status(id: JobRunId): ZIO[Transactor, Throwable, Option[JobRun]] =
+    override def status(id: JobRunId): RIO[Transactor, Option[JobRun]] =
       jobs.get.map(_.get(id))
 
-    override def recentJobs(limit: Int): ZIO[Transactor, Throwable, List[JobRun]] =
+    override def recentJobs(limit: Int): RIO[Transactor, List[JobRun]] =
       jobs.get.map(_.values.toList.sortBy(_.startedAt)(using Ordering[Instant].reverse).take(limit))
 
-    def setNextAction(action: Action): ZIO[Any, Nothing, Unit] = nextAction.set(action)
+    def setNextAction(action: Action): UIO[ Unit] = nextAction.set(action)
 
-    def prePopulate(jobRun: JobRun): ZIO[Any, Nothing, Unit] = jobs.update(_ + (jobRun.id -> jobRun))
+    def prePopulate(jobRun: JobRun): UIO[ Unit] = jobs.update(_ + (jobRun.id -> jobRun))
   }
 
   private val fakeJobRunnerLayer: ZLayer[Any, Nothing, JobRunner] =
@@ -130,7 +130,7 @@ object TestRoutes extends ZIOSpecDefault {
       .addHeader(Header.ContentType(MediaType.application.json))
   }
 
-  private def getFakeRunner: ZIO[JobRunner, Nothing, FakeJobRunner] =
+  private def getFakeRunner: URIO[JobRunner, FakeJobRunner] =
     ZIO.service[JobRunner].map(_.asInstanceOf[FakeJobRunner])
 
   // ==========================================================================

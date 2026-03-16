@@ -4,7 +4,7 @@ import java.time.{Instant, LocalDate, YearMonth, ZoneOffset}
 import java.time.temporal.ChronoUnit
 
 import com.augustnagro.magnum.Transactor
-import zio.{Chunk, Console, Ref, Scope, ZEnvironment, ZIO, ZIOAppArgs, ZIOAppDefault}
+import zio.{Chunk, Console, RIO, Ref, Scope, Task, UIO, ZEnvironment, ZIO, ZIOAppArgs, ZIOAppDefault}
 import zio.http.{Client, URL}
 
 import ccas.analysis.apps.membership.MembershipApp
@@ -96,7 +96,7 @@ object RecruitmentApp extends ZIOAppDefault {
       timeLimitMinutes: Option[Int] = None,
       explore: Boolean = true,
       showProgress: Boolean = false
-    ): ZIO[ChessComClient & Transactor, Throwable, RecruitmentRun] =
+    ): RIO[ChessComClient & Transactor, RecruitmentRun] =
     for {
       _       <- MembershipApp.reconcile(clubUrlName)
       client  <- ZIO.service[ChessComClient]
@@ -168,7 +168,7 @@ object RecruitmentApp extends ZIOAppDefault {
       initialSources = sourceClubs.map(ClubSource(_))
 
       // --- Build static strategy list (only used when explore == true) ---
-      staticStrategies: List[() => ZIO[Transactor, Throwable, List[SourceDescriptor]]] =
+      staticStrategies: List[() => RIO[Transactor, List[SourceDescriptor]]] =
         if (!explore) Nil
         else List(
           () => discoverOwnMemberClubs(client, clubUrlName, targetMemberNames),
@@ -204,10 +204,10 @@ object RecruitmentApp extends ZIOAppDefault {
       ctx: ExploreContext,
       activePool: Map[String, SourceState],
       pendingSources: List[SourceDescriptor],
-      staticStrategies: List[() => ZIO[Transactor, Throwable, List[SourceDescriptor]]],
+      staticStrategies: List[() => RIO[Transactor, List[SourceDescriptor]]],
       visitedClubs: Set[ClubUrlName],
       roundRobinKeys: List[String]
-    ): ZIO[Transactor, Throwable, Unit] =
+    ): RIO[Transactor, Unit] =
     for {
       invited <- ctx.invitedRef.get
       _ <- if (invited.size >= ctx.inviteCap) ZIO.unit
@@ -319,7 +319,7 @@ object RecruitmentApp extends ZIOAppDefault {
       }
     } yield ()
 
-  private def printProgress(ctx: ExploreContext): ZIO[Any, Nothing, Unit] =
+  private def printProgress(ctx: ExploreContext): UIO[ Unit] =
     ZIO.whenDiscard(ctx.showProgress)(for {
       invited   <- ctx.invitedRef.get
       evaluated <- ctx.evaluatedRef.get
@@ -339,7 +339,7 @@ object RecruitmentApp extends ZIOAppDefault {
       pendingSources: List[SourceDescriptor],
       evaluatedUsernames: Set[Username],
       visitedClubs: Set[ClubUrlName]
-    ): ZIO[Transactor, Throwable, (Map[String, SourceState], List[SourceDescriptor], Set[ClubUrlName])] = {
+    ): RIO[Transactor, (Map[String, SourceState], List[SourceDescriptor], Set[ClubUrlName])] = {
     val slotsAvailable = ctx.exploreConcurrency - activePool.size
     if (slotsAvailable <= 0 || pendingSources.isEmpty)
       ZIO.succeed((activePool, pendingSources, visitedClubs))
@@ -365,7 +365,7 @@ object RecruitmentApp extends ZIOAppDefault {
       ctx: ExploreContext,
       source: SourceDescriptor,
       evaluatedUsernames: Set[Username]
-    ): ZIO[Transactor, Throwable, List[Username]] =
+    ): RIO[Transactor, List[Username]] =
     source match {
       case ClubSource(clubUrlName) =>
         for {
@@ -390,8 +390,8 @@ object RecruitmentApp extends ZIOAppDefault {
       ctx: ExploreContext,
       evaluatedUsernames: Set[Username],
       visitedClubs: Set[ClubUrlName],
-      staticStrategies: List[() => ZIO[Transactor, Throwable, List[SourceDescriptor]]]
-    ): ZIO[Transactor, Throwable, (List[SourceDescriptor], List[() => ZIO[Transactor, Throwable, List[SourceDescriptor]]])] = {
+      staticStrategies: List[() => RIO[Transactor, List[SourceDescriptor]]]
+    ): RIO[Transactor, (List[SourceDescriptor], List[() => RIO[Transactor, List[SourceDescriptor]]])] = {
     if (!ctx.explore)
       ZIO.succeed((Nil, staticStrategies))
     else for {
@@ -437,7 +437,7 @@ object RecruitmentApp extends ZIOAppDefault {
       client: ChessComClient,
       clubUrlName: ClubUrlName,
       targetMemberNames: List[Username]
-    ): ZIO[Transactor, Throwable, List[SourceDescriptor]] = {
+    ): RIO[Transactor, List[SourceDescriptor]] = {
     val sample = targetMemberNames.take(20)
     for {
       clubSets <- ZIO.foreachPar(sample) { username =>
@@ -452,7 +452,7 @@ object RecruitmentApp extends ZIOAppDefault {
 
   private def discoverDbClubs(
       clubUrlName: ClubUrlName
-    ): ZIO[Transactor, Throwable, List[SourceDescriptor]] =
+    ): RIO[Transactor, List[SourceDescriptor]] =
     for {
       clubs <- Club.selectAll
       filtered = clubs.map(_.urlName).filter(_ != clubUrlName)
@@ -461,7 +461,7 @@ object RecruitmentApp extends ZIOAppDefault {
 
   private def discoverMatchOpponents(
       clubMatches: ApiClubMatches
-    ): ZIO[Transactor, Throwable, List[SourceDescriptor]] = {
+    ): RIO[Transactor, List[SourceDescriptor]] = {
     val opponentUrls = clubMatches.finished.map(_.opponent) ++
       clubMatches.inProgress.map(_.opponent) ++
       clubMatches.registered.map(_.opponent)
@@ -480,7 +480,7 @@ object RecruitmentApp extends ZIOAppDefault {
       username: Username,
       runCtx: RunContext,
       filters: List[RecruitmentFilter]
-    ): ZIO[Transactor, Throwable, CandidateOutcome] = {
+    ): RIO[Transactor, CandidateOutcome] = {
     val now = Instant.now()
     val candidateCtx = CandidateContext.initial(username)
     val env = FilterEnv(runCtx.copy(now = now), candidateCtx)
@@ -527,13 +527,13 @@ object RecruitmentApp extends ZIOAppDefault {
   private case class FilterResult(outcome: Option[CandidateOutcome], candidate: CandidateContext)
 
   private trait RecruitmentFilter {
-    def apply(env: FilterEnv): ZIO[Transactor, Throwable, FilterResult]
+    def apply(env: FilterEnv): RIO[Transactor, FilterResult]
   }
 
   // --- Pipeline runner ---
 
   private def runFilters(env: FilterEnv, filters: List[RecruitmentFilter])
-      : ZIO[Transactor, Throwable, (CandidateOutcome, CandidateContext)] =
+      : RIO[Transactor, (CandidateOutcome, CandidateContext)] =
     ZIO.foldLeft(filters)(FilterResult(None, env.candidate)) {
       case (r @ FilterResult(Some(_), _), _) => ZIO.succeed(r)
       case (FilterResult(None, ctx), filter) => filter(env.copy(candidate = ctx))
@@ -564,7 +564,7 @@ object RecruitmentApp extends ZIOAppDefault {
   // --- Filter implementations ---
 
   private object CheckInvitedTooRecently extends RecruitmentFilter {
-    def apply(env: FilterEnv): ZIO[Transactor, Throwable, FilterResult] =
+    def apply(env: FilterEnv): RIO[Transactor, FilterResult] =
       for {
         playerId <- ZIO.fromOption(env.candidate.apiPlayer.map(_.playerId))
           .orElseFail(new NoSuchElementException("apiPlayer not set — FetchAndCheckPlayer must run before CheckInvitedTooRecently"))
@@ -576,7 +576,7 @@ object RecruitmentApp extends ZIOAppDefault {
   }
 
   private object FetchAndCheckPlayer extends RecruitmentFilter {
-    def apply(env: FilterEnv): ZIO[Transactor, Throwable, FilterResult] =
+    def apply(env: FilterEnv): RIO[Transactor, FilterResult] =
       for {
         apiPlayer <- env.run.client.getWithPermit[ApiPlayer](ApiPlayer.getUrl(env.candidate.username))
         existingPlayer <- Player.selectId(apiPlayer.playerId)
@@ -608,7 +608,7 @@ object RecruitmentApp extends ZIOAppDefault {
   }
 
   private object CheckBlacklist extends RecruitmentFilter {
-    def apply(env: FilterEnv): ZIO[Transactor, Throwable, FilterResult] =
+    def apply(env: FilterEnv): RIO[Transactor, FilterResult] =
       for {
         playerId <- ZIO.fromOption(env.candidate.apiPlayer.map(_.playerId))
           .orElseFail(new NoSuchElementException("apiPlayer not set — FetchAndCheckPlayer must run before CheckBlacklist"))
@@ -617,7 +617,7 @@ object RecruitmentApp extends ZIOAppDefault {
   }
 
   private object CheckFormerMember extends RecruitmentFilter {
-    def apply(env: FilterEnv): ZIO[Transactor, Throwable, FilterResult] =
+    def apply(env: FilterEnv): RIO[Transactor, FilterResult] =
       for {
         playerId <- ZIO.fromOption(env.candidate.apiPlayer.map(_.playerId))
           .orElseFail(new NoSuchElementException("apiPlayer not set — FetchAndCheckPlayer must run before CheckFormerMember"))
@@ -744,7 +744,7 @@ object RecruitmentApp extends ZIOAppDefault {
   }
 
   private object CheckCacheCriteria extends RecruitmentFilter {
-    def apply(env: FilterEnv): ZIO[Transactor, Throwable, FilterResult] =
+    def apply(env: FilterEnv): RIO[Transactor, FilterResult] =
       ZIO.succeed {
         val outcome = env.candidate.cache.flatMap(runCacheCriteria(_, env.run.config, env.run.now))
         FilterResult(outcome, env.candidate)
@@ -752,7 +752,7 @@ object RecruitmentApp extends ZIOAppDefault {
   }
 
   private object CheckOpponentMatch extends RecruitmentFilter {
-    def apply(env: FilterEnv): ZIO[Transactor, Throwable, FilterResult] =
+    def apply(env: FilterEnv): RIO[Transactor, FilterResult] =
       for {
         playerMatches <- env.run.client.getWithPermit[ApiPlayerMatches](
           ApiPlayerMatches.getUrl(env.candidate.username)
@@ -764,7 +764,7 @@ object RecruitmentApp extends ZIOAppDefault {
   }
 
   private object CheckClubs extends RecruitmentFilter {
-    def apply(env: FilterEnv): ZIO[Transactor, Throwable, FilterResult] =
+    def apply(env: FilterEnv): RIO[Transactor, FilterResult] =
       for {
         playerClubs <- env.run.client.getWithPermit[ApiPlayerClubs](
           ApiPlayerClubs.getUrl(env.candidate.username)
@@ -793,7 +793,7 @@ object RecruitmentApp extends ZIOAppDefault {
   }
 
   private object CheckDailyStats extends RecruitmentFilter {
-    def apply(env: FilterEnv): ZIO[Transactor, Throwable, FilterResult] =
+    def apply(env: FilterEnv): RIO[Transactor, FilterResult] =
       for {
         playerStats <- env.run.client.getWithPermit[ApiPlayerStats](
           ApiPlayerStats.getUrl(env.candidate.username)
@@ -805,7 +805,7 @@ object RecruitmentApp extends ZIOAppDefault {
       } yield result
 
     private def applyDailyStats(env: FilterEnv, dailyStats: ApiPlayerStats.ApiPlayerDailyStats)
-        : ZIO[Transactor, Throwable, FilterResult] = {
+        : RIO[Transactor, FilterResult] = {
       val dailyElo = dailyStats.last.rating
       val dailyTimeoutPct = dailyStats.record.timeoutPercent
       val dailyGamesFinished = dailyStats.record.nGames
@@ -855,7 +855,7 @@ object RecruitmentApp extends ZIOAppDefault {
   }
 
   private object CheckOngoingGames extends RecruitmentFilter {
-    def apply(env: FilterEnv): ZIO[Transactor, Throwable, FilterResult] =
+    def apply(env: FilterEnv): RIO[Transactor, FilterResult] =
       for {
         currentGames <- env.run.client.getWithPermit[ApiPlayerGamesCurrent](
           ApiPlayerGamesCurrent.getUrl(env.candidate.username)
@@ -889,7 +889,7 @@ object RecruitmentApp extends ZIOAppDefault {
   }
 
   private object CheckTmStats extends RecruitmentFilter {
-    def apply(env: FilterEnv): ZIO[Transactor, Throwable, FilterResult] =
+    def apply(env: FilterEnv): RIO[Transactor, FilterResult] =
       for {
         cache <- ZIO.fromOption(env.candidate.cache)
           .orElseFail(new NoSuchElementException("cache not set — CheckDailyStats must run before CheckTmStats"))
@@ -930,7 +930,7 @@ object RecruitmentApp extends ZIOAppDefault {
       candidate: CandidateContext,
       outcome: CandidateOutcome,
       errorMessage: Option[String] = None
-    ): ZIO[Transactor, Throwable, Unit] =
+    ): RIO[Transactor, Unit] =
     candidate.apiPlayer match {
       case None => ZIO.unit // No player data (transient API error) — skip persistence, retry next run
       case Some(ap) =>
@@ -954,7 +954,7 @@ object RecruitmentApp extends ZIOAppDefault {
       config: RecruitmentConfig,
       overallTimeoutPct: Double,
       now: Instant
-    ): ZIO[Any, Throwable, (Int, Option[Double], Option[Instant], Set[Username])] = {
+    ): Task[ (Int, Option[Double], Option[Instant], Set[Username])] = {
     val needsTmStats = config.dailyMinTmGamesFinished.isDefined || config.dailyMaxTmTimeoutPercent.isDefined
     if (!needsTmStats) ZIO.succeed((0, None, None, Set.empty))
     else {
@@ -1002,7 +1002,7 @@ object RecruitmentApp extends ZIOAppDefault {
       client: ChessComClient,
       username: Username,
       now: Instant
-    ): ZIO[Any, Throwable, Option[Instant]] = {
+    ): Task[ Option[Instant]] = {
     val currentMonth = YearMonth.from(LocalDate.ofInstant(now, ZoneOffset.UTC))
     client.getWithPermit[ApiPlayerArchive](
       ApiPlayerArchive.getUrl(username, currentMonth.getYear, currentMonth.getMonthValue)
@@ -1042,7 +1042,7 @@ object RecruitmentApp extends ZIOAppDefault {
       clubUrlName: ClubUrlName,
       config: RecruitmentConfig,
       sourceClubs: List[ClubUrlName]
-    ): ZIO[Transactor, Throwable, List[Username]] =
+    ): RIO[Transactor, List[Username]] =
     for {
       targetMembers <- ApiClubMembers.get(client, clubUrlName)
       existingUsernames = targetMembers.toMap.keySet
@@ -1065,7 +1065,7 @@ object RecruitmentApp extends ZIOAppDefault {
       candidates: List[Username],
       config: RecruitmentConfig,
       inviteCap: Int = DefaultInviteCap
-    ): ZIO[Transactor, Throwable, List[Username]] =
+    ): RIO[Transactor, List[Username]] =
     for {
       clubMatches <- client.get[ApiClubMatches](ApiClubMatches.getUrl(clubUrlName))
       targetMatchIds = (clubMatches.registered.map(_.`@id`) ++ clubMatches.inProgress.map(_.`@id`)).toSet
@@ -1087,7 +1087,7 @@ object RecruitmentApp extends ZIOAppDefault {
   // --- Report mode ---
 
   def showReport(clubUrlName: ClubUrlName, runIdOpt: Option[String])
-      : ZIO[Transactor, Throwable, Unit] =
+      : RIO[Transactor, Unit] =
     for {
       club <- Club.selectByUrlName(clubUrlName)
         .someOrFail(ExternalException(s"Club '$clubUrlName' not found in database"))

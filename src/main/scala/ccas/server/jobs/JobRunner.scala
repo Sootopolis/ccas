@@ -3,7 +3,7 @@ package ccas.server.jobs
 import java.time.Instant
 
 import com.augustnagro.magnum.Transactor
-import zio.{Fiber, Ref, ZIO, ZLayer}
+import zio.{Fiber, RIO, Ref, UIO, ZIO, ZLayer}
 
 import ccas.api.misc.subtypes.ClubUrlName
 import ccas.utils.client.ChessComClient
@@ -13,12 +13,12 @@ trait JobRunner {
       kind: JobKind,
       clubUrlName: Option[ClubUrlName],
       params: Option[String],
-      effect: ZIO[ChessComClient & Transactor, Throwable, Any]
-  ): ZIO[Transactor, Throwable, JobRunId]
+      effect: RIO[ChessComClient & Transactor, Any]
+  ): RIO[Transactor, JobRunId]
 
-  def status(id: JobRunId): ZIO[Transactor, Throwable, Option[JobRun]]
+  def status(id: JobRunId): RIO[Transactor, Option[JobRun]]
 
-  def recentJobs(limit: Int): ZIO[Transactor, Throwable, List[JobRun]]
+  def recentJobs(limit: Int): RIO[Transactor, List[JobRun]]
 }
 
 object JobRunner {
@@ -47,8 +47,8 @@ object JobRunner {
         kind: JobKind,
         clubUrlName: Option[ClubUrlName],
         params: Option[String],
-        effect: ZIO[ChessComClient & Transactor, Throwable, Any]
-    ): ZIO[Transactor, Throwable, JobRunId] =
+        effect: RIO[ChessComClient & Transactor, Any]
+    ): RIO[Transactor, JobRunId] =
       for {
         existing <- JobRun.selectRunning(kind, clubUrlName)
         _        <- ZIO.when(existing.isDefined)(
@@ -68,8 +68,8 @@ object JobRunner {
     private def runJob(
         id: JobRunId,
         kind: JobKind,
-        effect: ZIO[ChessComClient & Transactor, Throwable, Any]
-    ): ZIO[Any, Nothing, Unit] =
+        effect: RIO[ChessComClient & Transactor, Any]
+    ): UIO[ Unit] =
       effect
         .provideEnvironment(env)
         .foldZIO(
@@ -91,18 +91,18 @@ object JobRunner {
           }
         )
 
-    private def submitMatchRef: ZIO[Transactor, Throwable, Unit] = {
+    private def submitMatchRef: RIO[Transactor, Unit] = {
       import ccas.analysis.apps.matchref.MatchRefApp
       submit(JobKind.MatchRef, None, None, MatchRefApp.populate).ignore
     }
 
-    def awaitAll: ZIO[Any, Nothing, Unit] =
+    def awaitAll: UIO[ Unit] =
       fibers.get.flatMap(fs => ZIO.foreachDiscard(fs)(_.await))
 
-    override def status(id: JobRunId): ZIO[Transactor, Throwable, Option[JobRun]] =
+    override def status(id: JobRunId): RIO[Transactor, Option[JobRun]] =
       JobRun.selectId(id)
 
-    override def recentJobs(limit: Int): ZIO[Transactor, Throwable, List[JobRun]] =
+    override def recentJobs(limit: Int): RIO[Transactor, List[JobRun]] =
       JobRun.selectRecent(limit)
   }
 }

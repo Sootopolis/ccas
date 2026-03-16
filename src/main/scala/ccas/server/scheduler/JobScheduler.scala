@@ -5,7 +5,7 @@ import java.time.temporal.ChronoUnit
 
 import com.augustnagro.magnum.Transactor
 import com.typesafe.config.ConfigFactory
-import zio.{durationLong, Console, Duration, ZIO, ZLayer}
+import zio.{durationLong, Console, Duration, Task, UIO, ZIO, ZLayer}
 
 import ccas.analysis.apps.matchref.MatchRefApp
 import ccas.analysis.apps.membership.MembershipApp
@@ -13,7 +13,7 @@ import ccas.analysis.apps.recruitment.RecruitmentApp
 import ccas.server.jobs.{JobKind, JobRunner}
 
 trait JobScheduler {
-  def start: ZIO[Any, Nothing, Unit]
+  def start: UIO[ Unit]
 }
 
 object JobScheduler {
@@ -36,13 +36,13 @@ object JobScheduler {
 
     private val env = zio.ZEnvironment(xa)
 
-    override def start: ZIO[Any, Nothing, Unit] =
+    override def start: UIO[ Unit] =
       pollLoop
         .repeat(zio.Schedule.fixed(pollInterval))
         .forkDaemon
         .unit
 
-    private def pollLoop: ZIO[Any, Nothing, Unit] =
+    private def pollLoop: UIO[ Unit] =
       (for {
         schedules <- JobSchedule.selectEnabled.provideEnvironment(env)
         now        = Instant.now()
@@ -55,7 +55,7 @@ object JobScheduler {
       } yield ())
         .catchAll(e => Console.printLine(s"[Scheduler] Error: ${e.getMessage}").orDie)
 
-    private def runSchedule(schedule: JobSchedule, now: Instant): ZIO[Any, Throwable, Unit] = {
+    private def runSchedule(schedule: JobSchedule, now: Instant): Task[ Unit] = {
       val effect = schedule.kind match
         case JobKind.Recruitment =>
           val clubUrlName = schedule.clubUrlName.getOrElse(

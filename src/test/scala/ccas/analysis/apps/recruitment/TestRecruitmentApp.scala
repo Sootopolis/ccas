@@ -3,7 +3,7 @@ package ccas.analysis.apps.recruitment
 import java.time.{Duration, Instant, LocalDateTime, ZoneOffset}
 
 import com.augustnagro.magnum.{sql, Transactor}
-import zio.{Promise, Ref, Scope, Semaphore, ZIO}
+import zio.{Promise, RIO, Ref, Scope, Semaphore, UIO, ZIO}
 import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
@@ -157,7 +157,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
   private def fakeChessComClient(
       responses: Map[String, String],
       failures: Set[String] = Set.empty
-    ): ZIO[Any, Nothing, ChessComClient] =
+    ): UIO[ ChessComClient] =
     (for {
       semaphore <- Semaphore.make(1)
       mutex     <- Semaphore.make(1)
@@ -249,7 +249,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       blockAfterN: Int,
       reached: Promise[Nothing, Unit],
       gate: Promise[Nothing, Unit]
-    ): ZIO[Any, Nothing, ChessComClient] =
+    ): UIO[ ChessComClient] =
     (for {
       semaphore    <- Semaphore.make(1)
       mutex        <- Semaphore.make(1)
@@ -327,7 +327,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       )
     }
 
-  private def seedDb: ZIO[Transactor, Throwable, Unit] =
+  private def seedDb: RIO[Transactor, Unit] =
     for {
       // Clean up test data
       _ <- RecruitmentCandidate.deleteAll
@@ -354,7 +354,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       _ <- Club.upsert(club)
     } yield ()
 
-  private def seedPlayer(playerId: PlayerId): ZIO[Transactor, Throwable, Unit] =
+  private def seedPlayer(playerId: PlayerId): RIO[Transactor, Unit] =
     SqlZioTypes.connectZIO {
       sql"""INSERT INTO player (player_id, joined)
             VALUES ($playerId, ${T.t0})
@@ -780,7 +780,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       responses: Map[String, String],
       config: RecruitmentConfig,
       username: String = "alice"
-    ): ZIO[Transactor, Throwable, CandidateOutcome] =
+    ): RIO[Transactor, CandidateOutcome] =
     for {
       _      <- seedDb
       _      <- RecruitmentConfig.upsert(config)
@@ -1181,7 +1181,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       config: RecruitmentConfig,
       cache: PlayerRecruitmentCache,
       username: String = "alice"
-    ): ZIO[Transactor, Throwable, CandidateOutcome] =
+    ): RIO[Transactor, CandidateOutcome] =
     for {
       _      <- seedDb
       // Seed player row for FK constraint, then seed cache

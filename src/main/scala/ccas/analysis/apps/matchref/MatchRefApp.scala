@@ -1,7 +1,7 @@
 package ccas.analysis.apps.matchref
 
 import com.augustnagro.magnum.{sql, Transactor}
-import zio.{Console, Ref, Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
+import zio.{Console, RIO, Ref, Scope, Task, ZIO, ZIOAppArgs, ZIOAppDefault}
 import zio.http.Client
 
 import ccas.analysis.tables.{ClubMatchRef, PlayerMatchRef, Tables}
@@ -25,7 +25,7 @@ object MatchRefApp extends ZIOAppDefault {
       DataSourceLayer.liveFromPrefix(onInit = Tables.ensureTables)
     )
 
-  def populate: ZIO[ChessComClient & Transactor, Throwable, Unit] =
+  def populate: RIO[ChessComClient & Transactor, Unit] =
     for {
       client <- ZIO.service[ChessComClient]
       cache  <- Ref.make(Map.empty[ClubMatchId, ApiDailyMatch])
@@ -49,7 +49,7 @@ object MatchRefApp extends ZIOAppDefault {
       _ <- Console.printLine(s"Resolved: $resolvedPlayers / ${players.size}").orDie
     } yield ()
 
-  private def selectUnresolvedPlayers: ZIO[Transactor, Throwable, List[UnresolvedPlayer]] =
+  private def selectUnresolvedPlayers: RIO[Transactor, List[UnresolvedPlayer]] =
     connectZIO {
       sql"""SELECT p.player_id, ps.username
             FROM player p
@@ -65,7 +65,7 @@ object MatchRefApp extends ZIOAppDefault {
       client: ChessComClient,
       cache: Ref[Map[ClubMatchId, ApiDailyMatch]],
       player: UnresolvedPlayer
-    ): ZIO[Transactor, Throwable, Option[PlayerMatchRef]] =
+    ): RIO[Transactor, Option[PlayerMatchRef]] =
     (for {
       playerMatches <- client.getWithPermit[ApiPlayerMatches](ApiPlayerMatches.getUrl(player.username))
       matchOpt = playerMatches.finished.find(_.board.isDefined).headOption
@@ -93,7 +93,7 @@ object MatchRefApp extends ZIOAppDefault {
       client: ChessComClient,
       cache: Ref[Map[ClubMatchId, ApiDailyMatch]],
       matchId: ClubMatchId
-    ): ZIO[Any, Throwable, ApiDailyMatch] =
+    ): Task[ ApiDailyMatch] =
     cache.get.flatMap(_.get(matchId) match
       case Some(m) => ZIO.succeed(m)
       case None =>
@@ -112,7 +112,7 @@ object MatchRefApp extends ZIOAppDefault {
 
   // --- Club resolution ---
 
-  private def selectUnresolvedClubs: ZIO[Transactor, Throwable, List[UnresolvedClub]] =
+  private def selectUnresolvedClubs: RIO[Transactor, List[UnresolvedClub]] =
     connectZIO {
       sql"""SELECT c.club_id, c.url_name
             FROM club c
@@ -124,7 +124,7 @@ object MatchRefApp extends ZIOAppDefault {
       client: ChessComClient,
       cache: Ref[Map[ClubMatchId, ApiDailyMatch]],
       club: UnresolvedClub
-    ): ZIO[Transactor, Throwable, Option[ClubMatchRef]] =
+    ): RIO[Transactor, Option[ClubMatchRef]] =
     (for {
       clubMatches <- client.getWithPermit[ApiClubMatches](ApiClubMatches.getUrl(club.urlName))
       matchOpt = clubMatches.finished.headOption
