@@ -518,7 +518,7 @@ object RecruitmentApp extends ZIOAppDefault {
       apiPlayer: Option[ApiPlayer],
       isNewPlayer: Boolean,
       cache: Option[PlayerRecruitmentCache],
-      currentMonthArchive: Option[ApiPlayerArchive] = None
+      recentArchives: Option[List[ApiPlayerArchive]] = None
   )
   private object CandidateContext {
     def initial(username: Username): CandidateContext =
@@ -820,14 +820,18 @@ object RecruitmentApp extends ZIOAppDefault {
       val dailyElo = dailyStats.last.rating
       val dailyTimeoutPct = dailyStats.record.timeoutPercent
       val dailyGamesFinished = dailyStats.record.nGames
-      val currentMonth = YearMonth.from(LocalDate.ofInstant(env.run.now, ZoneOffset.UTC))
       for {
-        // Fetch current month archive (reused by CheckTmStats if it runs later)
-        archive <- env.run.client.get[ApiPlayerArchive](
-          ApiPlayerArchive.getUrl(env.candidate.username, currentMonth.getYear, currentMonth.getMonthValue)
-        ).catchAll(_ => ZIO.succeed(ApiPlayerArchive(Chunk.empty)))
+        // Fetch 90-day archives only when player has timed out before (timeoutPct > 0)
+        archives <- if (dailyTimeoutPct > 0) {
+          val months = recentArchiveMonths(env.run.now, 90)
+          ZIO.foreachPar(months) { ym =>
+            env.run.client.get[ApiPlayerArchive](
+              ApiPlayerArchive.getUrl(env.candidate.username, ym.getYear, ym.getMonthValue)
+            ).catchAll(_ => ZIO.succeed(ApiPlayerArchive(Chunk.empty)))
+          }.map(Some(_))
+        } else ZIO.succeed(None)
 
-        lastDailyTimeoutAt = extractLastDailyTimeout(archive, env.candidate.username)
+        lastDailyTimeoutAt = archives.flatMap(extractLastDailyTimeout(_, env.candidate.username))
 
         // Merge with existing cache's lastDailyTimeoutAt (keep more recent)
         mergedDailyTimeout = mergeOptionalInstants(
@@ -854,7 +858,7 @@ object RecruitmentApp extends ZIOAppDefault {
           dailyGamesFinished = Some(dailyGamesFinished),
           lastDailyTimeoutAt = mergedDailyTimeout
         ))
-        updatedCtx = env.candidate.copy(cache = Some(updatedCache), currentMonthArchive = Some(archive))
+        updatedCtx = env.candidate.copy(cache = Some(updatedCache), recentArchives = archives)
       } yield FilterResult(outcome, updatedCtx)
     }
   }
@@ -896,7 +900,7 @@ object RecruitmentApp extends ZIOAppDefault {
           env.run.config,
           cache.dailyTimeoutPct.getOrElse(0.0),
           env.run.now,
-          env.candidate.currentMonthArchive
+          env.candidate.recentArchives
         )
         (tmGamesFinished, tmTimeoutPct, lastTmTimeoutAt, opponentUsernames) = tmResult
 
@@ -933,9 +937,7 @@ object RecruitmentApp extends ZIOAppDefault {
     ZIO.foreachDiscard(candidate.apiPlayer) { ap =>
       withTransaction {
         for {
-          _ <- ZIO.when(candidate.isNewPlayer)(
-                 Player.insert(Player(ap.playerId, Instant.ofEpochSecond(ap.joined)))
-               )
+          _ <- ZIO.when(candidate.isNewPlayer)(Player.insert(Player(ap.playerId, Instant.ofEpochSecond(ap.joined))))
           _ <- PlayerSnapshot.insert(PlayerSnapshot(ap.playerId, now, candidate.username, ap.status.category, ap.title))
           _ <- ZIO.foreachDiscard(candidate.cache)(PlayerRecruitmentCache.upsert)
           _ <- RecruitmentCandidate.insert(RecruitmentCandidate(runId, ap.playerId, now, outcome, errorMessage))
@@ -951,7 +953,7 @@ object RecruitmentApp extends ZIOAppDefault {
       config: RecruitmentConfig,
       overallTimeoutPct: Double,
       now: Instant,
-      currentMonthArchive: Option[ApiPlayerArchive] = None
+      recentArchives: Option[List[ApiPlayerArchive]]
     ): Task[(Int, Option[Double], Option[Instant], Set[Username])] = {
     val needsTmStats = config.dailyMinTmGamesFinished.isDefined || config.dailyMaxTmTimeoutPercent.isDefined
     if (!needsTmStats) ZIO.succeed((0, None, None, Set.empty))
@@ -959,14 +961,15 @@ object RecruitmentApp extends ZIOAppDefault {
       // Fetch last ~90 days of archives
       val cutoff = now.minus(90, ChronoUnit.DAYS)
       val months = recentArchiveMonths(now, 90)
-      val currentMonth = YearMonth.from(LocalDate.ofInstant(now, ZoneOffset.UTC))
 
       for {
-        archives <- ZIO.foreachPar(months) { ym =>
-          if (currentMonthArchive.isDefined && ym == currentMonth) ZIO.succeed(currentMonthArchive.get)
-          else client.get[ApiPlayerArchive](
-            ApiPlayerArchive.getUrl(username, ym.getYear, ym.getMonthValue)
-          ).catchAll(_ => ZIO.succeed(ApiPlayerArchive(Chunk.empty)))
+        archives <- recentArchives match {
+          case Some(cached) => ZIO.succeed(cached)
+          case None => ZIO.foreachPar(months) { ym =>
+            client.get[ApiPlayerArchive](
+              ApiPlayerArchive.getUrl(username, ym.getYear, ym.getMonthValue)
+            ).catchAll(_ => ZIO.succeed(ApiPlayerArchive(Chunk.empty)))
+          }
         }
         tmGames = archives.flatMap(_.games.filter(g => g.`match`.isDefined && g.endTime >= cutoff.getEpochSecond))
         tmGamesFinished = tmGames.size
@@ -998,8 +1001,8 @@ object RecruitmentApp extends ZIOAppDefault {
     }
   }
 
-  private def extractLastDailyTimeout(archive: ApiPlayerArchive, username: Username): Option[Instant] =
-    archive.games
+  private def extractLastDailyTimeout(archives: List[ApiPlayerArchive], username: Username): Option[Instant] =
+    archives.flatMap(_.games)
       .filter(g => g.`match`.isEmpty) // non-match daily games
       .filter(g => playerResult(g, username) == GameResultDetail.Timeout)
       .sortBy(_.endTime)(using Ordering[Long].reverse)

@@ -13,8 +13,7 @@ object TestChessComClient extends ZIOSpecDefault {
   private def makeClient(
       handler: Request => UIO[Response],
       permits: Long = 5,
-      cooldown: Duration = 50.millis,
-      retryBase: Duration = 10.millis
+      cooldown: Duration = 50.millis
     ): UIO[(ChessComClient, Ref[Boolean])] =
     for {
       semaphore <- Semaphore.make(permits)
@@ -46,7 +45,7 @@ object TestChessComClient extends ZIOSpecDefault {
           ZIO.die(new UnsupportedOperationException)
       }
       val client =
-        ChessComClient(ZClient.fromDriver(driver), Headers.empty, semaphore, mutex, throttled, cooldown, retryBase)
+        ChessComClient(ZClient.fromDriver(driver), Headers.empty, semaphore, mutex, throttled, cooldown)
       (client, throttled)
     }
 
