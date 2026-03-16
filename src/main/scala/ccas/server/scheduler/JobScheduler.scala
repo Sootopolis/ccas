@@ -13,7 +13,7 @@ import ccas.analysis.apps.recruitment.RecruitmentApp
 import ccas.server.jobs.{JobKind, JobRunner}
 
 trait JobScheduler {
-  def start: UIO[ Unit]
+  def start: UIO[Unit]
 }
 
 object JobScheduler {
@@ -36,13 +36,13 @@ object JobScheduler {
 
     private val env = zio.ZEnvironment(xa)
 
-    override def start: UIO[ Unit] =
+    override def start: UIO[Unit] =
       pollLoop
         .repeat(zio.Schedule.fixed(pollInterval))
         .forkDaemon
         .unit
 
-    private def pollLoop: UIO[ Unit] =
+    private def pollLoop: UIO[Unit] =
       (for {
         schedules <- JobSchedule.selectEnabled.provideEnvironment(env)
         now        = Instant.now()
@@ -55,7 +55,7 @@ object JobScheduler {
       } yield ())
         .catchAll(e => Console.printLine(s"[Scheduler] Error: ${e.getMessage}").orDie)
 
-    private def runSchedule(schedule: JobSchedule, now: Instant): Task[ Unit] = {
+    private def runSchedule(schedule: JobSchedule, now: Instant): Task[Unit] = {
       val effect = schedule.kind match
         case JobKind.Recruitment =>
           val clubUrlName = schedule.clubUrlName.getOrElse(

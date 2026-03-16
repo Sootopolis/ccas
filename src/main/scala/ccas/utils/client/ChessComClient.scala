@@ -39,10 +39,6 @@ final class ChessComClient(
   def getAll[T](urls: Iterable[URL])(using jsonDecoder: JsonDecoder[T]): Task[Chunk[T]] =
     ZIO.foreachPar(Chunk.from(urls))(get)
 
-  def getWithPermit[T](url: URL)(using jsonDecoder: JsonDecoder[T]): Task[T] = get(url)
-
-  def getAllWithPermit[T](urls: Iterable[URL])(using jsonDecoder: JsonDecoder[T]): Task[Chunk[T]] = getAll(urls)
-
   private def activateThrottle: Task[Unit] =
     throttled.getAndSet(true).flatMap { wasThrottled =>
       ZIO.unlessDiscard(wasThrottled) {

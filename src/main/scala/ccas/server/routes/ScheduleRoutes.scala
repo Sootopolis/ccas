@@ -3,10 +3,11 @@ package ccas.server.routes
 import com.augustnagro.magnum.Transactor
 import zio.ZIO
 import zio.http.*
-import zio.json.{DeriveJsonCodec, JsonCodec, JsonDecoder, JsonEncoder}
+import zio.json.{DeriveJsonCodec, JsonCodec}
 
 import ccas.api.misc.subtypes.ClubUrlName
 import ccas.server.jobs.JobKind
+import ccas.server.routes.RouteHelpers.*
 import ccas.server.scheduler.JobSchedule
 
 object ScheduleRoutes {
@@ -56,15 +57,7 @@ object ScheduleRoutes {
       )
   }
 
-  case class ErrorResponse(error: String)
-  object ErrorResponse {
-    given JsonCodec[ErrorResponse] = DeriveJsonCodec.gen
-  }
-
   // --- Helpers ---
-
-  private def jsonResponse[A: JsonEncoder](status: Status, body: A): Response =
-    Response.json(summon[JsonEncoder[A]].encodeJson(body, None).toString).status(status)
 
   private def parseJobKind(s: String): Either[String, JobKind] =
     scala.util.Try(JobKind.valueOf(s)).toEither.left.map(_ => s"Invalid job kind: $s. Valid: ${JobKind.values.mkString(", ")}")
@@ -81,9 +74,7 @@ object ScheduleRoutes {
 
     Method.POST / "api" / "schedules" -> handler { (req: Request) =>
       (for {
-        body <- req.body.asString.flatMap(s =>
-          ZIO.fromEither(summon[JsonDecoder[CreateScheduleRequest]].decodeJson(s)).mapError(e => new Exception(e))
-        )
+        body <- parseJsonBody[CreateScheduleRequest](req)
         kind <- ZIO.fromEither(parseJobKind(body.kind)).mapError(e => new Exception(e))
         clubUrlName = body.clubUrlName.map(ClubUrlName.wrap)
         schedule    = JobSchedule(0L, kind, clubUrlName, body.params, body.intervalHours, enabled = true, lastRunAt = None)
@@ -95,9 +86,7 @@ object ScheduleRoutes {
 
     Method.PUT / "api" / "schedules" / long("id") -> handler { (id: Long, req: Request) =>
       (for {
-        body <- req.body.asString.flatMap(s =>
-          ZIO.fromEither(summon[JsonDecoder[UpdateScheduleRequest]].decodeJson(s)).mapError(e => new Exception(e))
-        )
+        body <- parseJsonBody[UpdateScheduleRequest](req)
         _ <- JobSchedule.update(id, body.intervalHours, body.enabled, body.params.map(Some(_)))
         updated <- JobSchedule.selectId(id).someOrFail(new Exception(s"Schedule $id not found"))
       } yield jsonResponse(Status.Ok, ScheduleResponse.fromSchedule(updated)))

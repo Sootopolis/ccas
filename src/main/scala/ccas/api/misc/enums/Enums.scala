@@ -1,7 +1,5 @@
 package ccas.api.misc.enums
 
-import scala.util.Try
-
 import ccas.utils.json.EnumJson
 import ccas.utils.sql.EnumSql
 
@@ -42,15 +40,15 @@ enum GameResultDetail(val category: GameResult) {
 }
 
 object GameResultDetail extends EnumJson[GameResultDetail] {
-  private val lookup = GameResultDetail.values.map { member =>
+  private val lookup = lookupJson(GameResultDetail.values.map { member =>
     val apiString = member match {
       case FiftyMove => "50move"
       case other     => other.toString.toLowerCase
     }
     apiString -> member
-  }.toMap
+  }.toMap)
 
-  override protected def jsonToEnum(string: String) = Try(lookup(string)).toEither.left.map(_.getMessage)
+  override protected def jsonToEnum(string: String) = lookup(string)
 }
 
 enum GameRule {
@@ -63,9 +61,9 @@ enum GameRule {
 }
 
 object GameRule extends EnumJson[GameRule] {
-  private val lookup = values.map(member => member.toString.toLowerCase -> member).toMap
+  private val lookup = lookupJson(values.map(member => member.toString.toLowerCase -> member).toMap)
 
-  override protected def jsonToEnum(string: String) = Try(lookup(string)).toEither.left.map(_.getMessage)
+  override protected def jsonToEnum(string: String) = lookup(string)
 }
 
 enum League {
@@ -120,17 +118,17 @@ enum PlayerStatus(val category: PlayerStatusCategory) {
 }
 
 object PlayerStatus extends EnumJson[PlayerStatus] {
-  private val lookup = values.map { member =>
+  private val lookup = lookupJson(values.map { member =>
     val apiString = member match {
       case Fairplay => "closed:fair_play_violations"
       case Abuse    => "closed:abuse"
       case other    => other.toString.toLowerCase
     }
     apiString -> member
-  }.toMap
+  }.toMap)
 
   override protected def jsonToEnum(string: String) =
-    super.jsonToEnum(string).orElse(Try(lookup(string)).toEither.left.map(_.getMessage))
+    super.jsonToEnum(string).orElse(lookup(string))
 }
 
 enum TimeClass(val isDaily: Boolean) {

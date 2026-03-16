@@ -69,23 +69,23 @@ object JobRunner {
         id: JobRunId,
         kind: JobKind,
         effect: RIO[ChessComClient & Transactor, Any]
-    ): UIO[ Unit] =
+    ): UIO[Unit] =
       effect
         .provideEnvironment(env)
         .foldZIO(
           failure = { error =>
             val msg = Option(error.getMessage).getOrElse(error.getClass.getSimpleName)
             JobRun.updateStatus(id, JobRunStatus.Failed, Some(Instant.now()), Some(msg))
-              .provideEnvironment(zio.ZEnvironment(xa))
+              .provideEnvironment(env)
               .unit.orDie
           },
           success = { _ =>
             val complete =
               JobRun.updateStatus(id, JobRunStatus.Completed, Some(Instant.now()), None)
-                .provideEnvironment(zio.ZEnvironment(xa))
+                .provideEnvironment(env)
                 .unit.orDie
             val followUp = ZIO.whenDiscard(kind == JobKind.Recruitment || kind == JobKind.Membership)(
-                submitMatchRef.provideEnvironment(zio.ZEnvironment(xa)).ignore
+                submitMatchRef.provideEnvironment(env).ignore
               )
             complete *> followUp
           }
@@ -96,7 +96,7 @@ object JobRunner {
       submit(JobKind.MatchRef, None, None, MatchRefApp.populate).ignore
     }
 
-    def awaitAll: UIO[ Unit] =
+    def awaitAll: UIO[Unit] =
       fibers.get.flatMap(fs => ZIO.foreachDiscard(fs)(_.await))
 
     override def status(id: JobRunId): RIO[Transactor, Option[JobRun]] =

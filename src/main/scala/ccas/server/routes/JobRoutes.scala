@@ -12,6 +12,7 @@ import ccas.analysis.apps.membership.MembershipApp
 import ccas.analysis.apps.recruitment.{BlacklistApp, RecruitmentApp}
 import ccas.api.misc.subtypes.{ClubUrlName, Username}
 import ccas.server.jobs.*
+import ccas.server.routes.RouteHelpers.*
 import ccas.utils.client.ChessComClient
 import ccas.utils.errors.ExternalException
 
@@ -19,6 +20,7 @@ object JobRoutes {
 
   // --- Request types ---
 
+  private val DefaultInviteCap = 30
   private val MaxInviteCap = 40
   private val MaxTimeLimitMinutes = 30
 
@@ -80,11 +82,6 @@ object JobRoutes {
       )
   }
 
-  case class ErrorResponse(error: String)
-  object ErrorResponse {
-    given JsonCodec[ErrorResponse] = DeriveJsonCodec.gen
-  }
-
   // --- Helpers ---
 
   // ISO-8601 string codecs for the REST API, overriding the global
@@ -94,9 +91,6 @@ object JobRoutes {
     try Right(Instant.parse(s))
     catch { case _: Exception => Left(s"Invalid instant: $s") }
   }
-
-  private def jsonResponse[A: JsonEncoder](status: Status, body: A): Response =
-    Response.json(summon[JsonEncoder[A]].encodeJson(body, None).toString).status(status)
 
   private def handleJobError(error: Throwable): Response = error match
     case e: JobConflictException => jsonResponse(Status.Conflict, ErrorResponse(e.getMessage))
@@ -109,9 +103,9 @@ object JobRoutes {
 
     Method.POST / "api" / "jobs" / "recruitment" -> handler { (req: Request) =>
       (for {
-        body   <- req.body.asString.flatMap(s => ZIO.fromEither(summon[JsonDecoder[RecruitmentRequest]].decodeJson(s)).mapError(e => new ExternalException(e)))
+        body   <- parseJsonBody[RecruitmentRequest](req)
         runner <- ZIO.service[JobRunner]
-        effectiveInviteCap    = body.inviteCap.map(_ min MaxInviteCap).getOrElse(30)
+        effectiveInviteCap    = body.inviteCap.map(_ min MaxInviteCap).getOrElse(DefaultInviteCap)
         effectiveTimeLimit    = body.timeLimitMinutes.map(_ min MaxTimeLimitMinutes)
         effect  = RecruitmentApp.recruit(
                     body.clubUrlName,
@@ -128,7 +122,7 @@ object JobRoutes {
 
     Method.POST / "api" / "jobs" / "membership" -> handler { (req: Request) =>
       (for {
-        body   <- req.body.asString.flatMap(s => ZIO.fromEither(summon[JsonDecoder[MembershipRequest]].decodeJson(s)).mapError(e => new ExternalException(e)))
+        body   <- parseJsonBody[MembershipRequest](req)
         runner <- ZIO.service[JobRunner]
         effect  = MembershipApp.reconcile(body.clubUrlName, body.trustUsernames.getOrElse(true))
         jobId  <- runner.submit(JobKind.Membership, Some(body.clubUrlName), None, effect)
@@ -146,7 +140,7 @@ object JobRoutes {
 
     Method.POST / "api" / "jobs" / "blacklist" -> handler { (req: Request) =>
       (for {
-        body <- req.body.asString.flatMap(s => ZIO.fromEither(summon[JsonDecoder[BlacklistRequest]].decodeJson(s)).mapError(e => new ExternalException(e)))
+        body <- parseJsonBody[BlacklistRequest](req)
         _    <- BlacklistApp.addToBlacklist(body.clubUrlName, body.username, body.reason, body.expiresAt)
       } yield Response.ok)
         .catchAll(e => ZIO.succeed(handleJobError(e)))

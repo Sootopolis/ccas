@@ -3,9 +3,9 @@ package ccas.utils.json
 import scala.util.Try
 
 import zio.{IO, UIO, ZIO}
-import zio.json.{DecoderOps, EncoderOps, JsonCodec, PascalCase, SnakeCase}
+import zio.json.{DecoderOps, EncoderOps, JsonCodec, JsonDecoder, PascalCase, SnakeCase}
 
-trait EnumJson[T <: scala.reflect.Enum] {
+trait EnumJson[T <: scala.reflect.Enum] extends StringDecodeOps[T] {
   protected def valueOf(string: String): T
 
   protected def enumToJson(member: T): String = SnakeCase(member.toString)
@@ -14,6 +14,11 @@ trait EnumJson[T <: scala.reflect.Enum] {
     Try(valueOf(PascalCase(string))).toEither.left.map(_.getMessage)
 
   final given jsonCodec: JsonCodec[T] = JsonCodec.string.transformOrFail(jsonToEnum, enumToJson)
+
+  override protected def jsonDecoderInstance: JsonDecoder[T] = jsonCodec.decoder
+
+  protected def lookupJson(map: Map[String, T]): String => Either[String, T] =
+    string => map.get(string).toRight(s"Invalid enum value: $string")
 
   final def encode(t: T): String = t.toJsonPretty
 
@@ -29,8 +34,4 @@ trait EnumJson[T <: scala.reflect.Enum] {
     def encodeJsonPretty: String = member.toJsonPretty
   }
 
-  extension (string: String) {
-    def decodeJson: Either[String, T]               = string.fromJson[T]
-    def decodeJsonZIO: IO[JsonDecodingException, T] = ZIO.fromEither(decodeJson).mapError(JsonDecodingException(_))
-  }
 }

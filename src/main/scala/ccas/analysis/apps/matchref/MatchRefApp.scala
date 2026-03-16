@@ -67,7 +67,7 @@ object MatchRefApp extends ZIOAppDefault {
       player: UnresolvedPlayer
     ): RIO[Transactor, Option[PlayerMatchRef]] =
     (for {
-      playerMatches <- client.getWithPermit[ApiPlayerMatches](ApiPlayerMatches.getUrl(player.username))
+      playerMatches <- client.get[ApiPlayerMatches](ApiPlayerMatches.getUrl(player.username))
       matchOpt = playerMatches.finished.find(_.board.isDefined).headOption
       ref <- matchOpt match
         case None =>
@@ -95,7 +95,7 @@ object MatchRefApp extends ZIOAppDefault {
       matchId: ClubMatchId
     ): Task[ ApiDailyMatch] =
     cache.get.flatMap(_.get(matchId).fold(
-      client.getWithPermit[ApiDailyMatch](ApiDailyMatch.getUrl(matchId)).flatMap { m =>
+      client.get[ApiDailyMatch](ApiDailyMatch.getUrl(matchId)).flatMap { m =>
         cache.update(_ + (matchId -> m)).as(m)
       }
     )(ZIO.succeed))
@@ -124,7 +124,7 @@ object MatchRefApp extends ZIOAppDefault {
       club: UnresolvedClub
     ): RIO[Transactor, Option[ClubMatchRef]] =
     (for {
-      clubMatches <- client.getWithPermit[ApiClubMatches](ApiClubMatches.getUrl(club.urlName))
+      clubMatches <- client.get[ApiClubMatches](ApiClubMatches.getUrl(club.urlName))
       matchOpt = clubMatches.finished.headOption
       ref <- matchOpt match
         case None =>

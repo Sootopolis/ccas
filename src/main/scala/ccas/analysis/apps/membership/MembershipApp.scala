@@ -185,7 +185,7 @@ object MembershipApp extends ZIOAppDefault {
       acc: PhaseBResult,
       now: Instant
     ): RIO[Transactor, PhaseBResult] =
-    client.getWithPermit[ApiPlayer](ApiPlayer.getUrl(username)).flatMap { apiPlayer =>
+    client.get[ApiPlayer](ApiPlayer.getUrl(username)).flatMap { apiPlayer =>
       val playerId       = apiPlayer.playerId
       val statusCategory = apiPlayer.status.category
 
@@ -288,7 +288,7 @@ object MembershipApp extends ZIOAppDefault {
         val oldUsername  = state.player.username
         val closedMember = state.member.copy(until = Some(now))
 
-        client.getWithPermit[ApiPlayer](ApiPlayer.getUrl(oldUsername)).foldZIO(
+        client.get[ApiPlayer](ApiPlayer.getUrl(oldUsername)).foldZIO(
           // API failure (404) — username gone, try match ref fallback
           _ => matchRefFallback(client, acc, state, closedMember, apiMap, clubUrlName, now),
           apiPlayer =>
@@ -347,7 +347,7 @@ object MembershipApp extends ZIOAppDefault {
       clubUrlName: ClubUrlName,
       username: Username
     ): Task[ Boolean] =
-    client.getWithPermit[ApiPlayerClubs](ApiPlayerClubs.getUrl(username)).map { playerClubs =>
+    client.get[ApiPlayerClubs](ApiPlayerClubs.getUrl(username)).map { playerClubs =>
       playerClubs.clubs.exists(_.clubName == clubUrlName)
     }.catchAll(_ => ZIO.succeed(false))
 
@@ -378,7 +378,7 @@ object MembershipApp extends ZIOAppDefault {
             ZIO.succeed(unresolvable)
           case Some(resolvedUsername) =>
             // Successfully resolved — fetch profile for resolved username
-            client.getWithPermit[ApiPlayer](ApiPlayer.getUrl(resolvedUsername)).foldZIO(
+            client.get[ApiPlayer](ApiPlayer.getUrl(resolvedUsername)).foldZIO(
               // Profile fetch failed — record username change + close membership
               _ => {
                 val changeChunks   = Chunk.newBuilder[MemberChange]
@@ -442,7 +442,7 @@ object MembershipApp extends ZIOAppDefault {
       ref: PlayerMatchRef,
       oldUsername: Username
     ): Task[ Option[Username]] =
-    client.getWithPermit[ApiDailyMatch](ApiDailyMatch.getUrl(ref.matchId)).map { dailyMatch =>
+    client.get[ApiDailyMatch](ApiDailyMatch.getUrl(ref.matchId)).map { dailyMatch =>
       val team = if ref.teamIdx == 1 then dailyMatch.teams.team1 else dailyMatch.teams.team2
       val boardSuffix = s"/${ref.boardIdx}"
       team.players.collectFirst {
@@ -472,7 +472,7 @@ object MembershipApp extends ZIOAppDefault {
       refOpt  <- ZIO.foreach(clubOpt)(club => ClubMatchRef.selectId(club.clubId)).map(_.flatten)
       result  <- ZIO.foreach(refOpt) { ref =>
                    for {
-                     dailyMatch <- client.getWithPermit[ApiDailyMatch](ApiDailyMatch.getUrl(ref.matchId))
+                     dailyMatch <- client.get[ApiDailyMatch](ApiDailyMatch.getUrl(ref.matchId))
                      team = if ref.teamIdx == 1 then dailyMatch.teams.team1 else dailyMatch.teams.team2
                      newUrlName = team.`@id`.path.segments.lastOption.map(ClubUrlName.wrap)
                    } yield newUrlName.filter(_ != oldUrlName)

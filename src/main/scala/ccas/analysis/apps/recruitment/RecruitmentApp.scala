@@ -445,7 +445,7 @@ object RecruitmentApp extends ZIOAppDefault {
     val sample = targetMemberNames.take(20)
     for {
       clubSets <- ZIO.foreachPar(sample) { username =>
-        client.getWithPermit[ApiPlayerClubs](ApiPlayerClubs.getUrl(username))
+        client.get[ApiPlayerClubs](ApiPlayerClubs.getUrl(username))
           .map(_.clubs.map(_.clubName).toSet)
           .catchAll(_ => ZIO.succeed(Set.empty[ClubUrlName]))
       }
@@ -595,7 +595,7 @@ object RecruitmentApp extends ZIOAppDefault {
   private object FetchAndCheckPlayer extends RecruitmentFilter {
     def apply(env: FilterEnv): RIO[Transactor, FilterResult] =
       for {
-        apiPlayer <- env.run.client.getWithPermit[ApiPlayer](ApiPlayer.getUrl(env.candidate.username))
+        apiPlayer <- env.run.client.get[ApiPlayer](ApiPlayer.getUrl(env.candidate.username))
         existingPlayer <- Player.selectId(apiPlayer.playerId)
         statusCat = apiPlayer.status.category
         config = env.run.config
@@ -769,7 +769,7 @@ object RecruitmentApp extends ZIOAppDefault {
   private object CheckOpponentMatch extends RecruitmentFilter {
     def apply(env: FilterEnv): RIO[Transactor, FilterResult] =
       for {
-        playerMatches <- env.run.client.getWithPermit[ApiPlayerMatches](
+        playerMatches <- env.run.client.get[ApiPlayerMatches](
           ApiPlayerMatches.getUrl(env.candidate.username)
         )
         playerRegisteredIds = playerMatches.registered.map(_.`@id`).toSet ++
@@ -781,7 +781,7 @@ object RecruitmentApp extends ZIOAppDefault {
   private object CheckClubs extends RecruitmentFilter {
     def apply(env: FilterEnv): RIO[Transactor, FilterResult] =
       for {
-        playerClubs <- env.run.client.getWithPermit[ApiPlayerClubs](
+        playerClubs <- env.run.client.get[ApiPlayerClubs](
           ApiPlayerClubs.getUrl(env.candidate.username)
         )
         clubCount = playerClubs.clubs.size
@@ -806,7 +806,7 @@ object RecruitmentApp extends ZIOAppDefault {
   private object CheckDailyStats extends RecruitmentFilter {
     def apply(env: FilterEnv): RIO[Transactor, FilterResult] =
       for {
-        playerStats <- env.run.client.getWithPermit[ApiPlayerStats](
+        playerStats <- env.run.client.get[ApiPlayerStats](
           ApiPlayerStats.getUrl(env.candidate.username)
         )
         result <- playerStats.chessDaily match {
@@ -823,7 +823,7 @@ object RecruitmentApp extends ZIOAppDefault {
       val currentMonth = YearMonth.from(LocalDate.ofInstant(env.run.now, ZoneOffset.UTC))
       for {
         // Fetch current month archive (reused by CheckTmStats if it runs later)
-        archive <- env.run.client.getWithPermit[ApiPlayerArchive](
+        archive <- env.run.client.get[ApiPlayerArchive](
           ApiPlayerArchive.getUrl(env.candidate.username, currentMonth.getYear, currentMonth.getMonthValue)
         ).catchAll(_ => ZIO.succeed(ApiPlayerArchive(Chunk.empty)))
 
@@ -862,7 +862,7 @@ object RecruitmentApp extends ZIOAppDefault {
   private object CheckOngoingGames extends RecruitmentFilter {
     def apply(env: FilterEnv): RIO[Transactor, FilterResult] =
       for {
-        currentGames <- env.run.client.getWithPermit[ApiPlayerGamesCurrent](
+        currentGames <- env.run.client.get[ApiPlayerGamesCurrent](
           ApiPlayerGamesCurrent.getUrl(env.candidate.username)
         )
         ongoingGames = currentGames.games.size
@@ -964,7 +964,7 @@ object RecruitmentApp extends ZIOAppDefault {
       for {
         archives <- ZIO.foreachPar(months) { ym =>
           if (currentMonthArchive.isDefined && ym == currentMonth) ZIO.succeed(currentMonthArchive.get)
-          else client.getWithPermit[ApiPlayerArchive](
+          else client.get[ApiPlayerArchive](
             ApiPlayerArchive.getUrl(username, ym.getYear, ym.getMonthValue)
           ).catchAll(_ => ZIO.succeed(ApiPlayerArchive(Chunk.empty)))
         }

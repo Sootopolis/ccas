@@ -52,8 +52,7 @@ object ApiPlayerArchive extends JsonDecoding[ApiPlayerArchive] {
   def getUrl(username: Username, year: Int, month: Int): URL = {
     require(year > 1970, "year must be greater than 1970")
     require((1 to 12).contains(month), "month must be between 1 and 12")
-    val monthString = if (month >= 10) { month.toString }
-    else { s"0$month" }
+    val monthString = f"$month%02d"
     ApiPlayerArchives.getUrl(username).addPath(year.toString).addPath(monthString)
   }
 
