@@ -822,14 +822,20 @@ object RecruitmentApp extends ZIOAppDefault {
       val dailyGamesFinished = dailyStats.record.nGames
       for {
         // Fetch 90-day archives only when player has timed out before (timeoutPct > 0)
-        archives <- if (dailyTimeoutPct > 0) {
+        needsArchives = dailyTimeoutPct > 0 || env.run.config.dailyMinGamesFinished.isDefined
+        archives <- if (needsArchives) {
           val months = recentArchiveMonths(env.run.now, 90)
           ZIO.foreachPar(months) { ym =>
             env.run.client.get[ApiPlayerArchive](
               ApiPlayerArchive.getUrl(env.candidate.username, ym.getYear, ym.getMonthValue)
             ).catchAll(_ => ZIO.succeed(ApiPlayerArchive(Chunk.empty)))
           }.map(Some(_))
-        } else ZIO.succeed(None)
+        } else ZIO.none
+
+        cutoff90d = env.run.now.minus(90, ChronoUnit.DAYS)
+        dailyGamesFinished90d = archives.map(
+          _.flatMap(_.games.filter(_.endTime >= cutoff90d.getEpochSecond)).size
+        )
 
         lastDailyTimeoutAt = archives.flatMap(extractLastDailyTimeout(_, env.candidate.username))
 
@@ -845,7 +851,7 @@ object RecruitmentApp extends ZIOAppDefault {
           if (config.dailyMinElo.exists(dailyElo < _)) Some(CandidateOutcome.Rejected)
           else if (config.dailyMaxElo.exists(dailyElo > _)) Some(CandidateOutcome.Rejected)
           else if (config.dailyMaxTimeoutPercent.exists(dailyTimeoutPct > _)) Some(CandidateOutcome.Rejected)
-          else if (config.dailyMinGamesFinished.exists(dailyGamesFinished < _)) Some(CandidateOutcome.Rejected)
+          else if (config.dailyMinGamesFinished.exists(min => dailyGamesFinished90d.getOrElse(dailyGamesFinished) < min)) Some(CandidateOutcome.Rejected)
           else if (config.dailyMaxHoursPerMove.exists(maxHours => dailyTimePerMove > maxHours * 3600)) Some(CandidateOutcome.Rejected)
           else None
 
@@ -855,7 +861,7 @@ object RecruitmentApp extends ZIOAppDefault {
           fetchedAt = env.run.now,
           dailyElo = Some(dailyElo),
           dailyTimeoutPct = Some(dailyTimeoutPct),
-          dailyGamesFinished = Some(dailyGamesFinished),
+          dailyGamesFinished = Some(dailyGamesFinished90d.getOrElse(dailyGamesFinished)),
           lastDailyTimeoutAt = mergedDailyTimeout
         ))
         updatedCtx = env.candidate.copy(cache = Some(updatedCache), recentArchives = archives)
