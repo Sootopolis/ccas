@@ -71,9 +71,8 @@ object JobScheduler {
           MatchRefApp.populate
 
       runner.submit(schedule.kind, schedule.clubUrlName, schedule.params, effect)
-        .provideEnvironment(env)
-        .flatMap(_ => JobSchedule.updateLastRunAt(schedule.id, now).provideEnvironment(env))
-        .unit
+        .provideEnvironment(env) *>
+        JobSchedule.updateLastRunAt(schedule.id, now).provideEnvironment(env).unit
     }
   }
 }

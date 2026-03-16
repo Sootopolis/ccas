@@ -84,17 +84,16 @@ object JobRunner {
               JobRun.updateStatus(id, JobRunStatus.Completed, Some(Instant.now()), None)
                 .provideEnvironment(zio.ZEnvironment(xa))
                 .unit.orDie
-            val followUp =
-              if kind == JobKind.Recruitment || kind == JobKind.Membership then
+            val followUp = ZIO.whenDiscard(kind == JobKind.Recruitment || kind == JobKind.Membership)(
                 submitMatchRef.provideEnvironment(zio.ZEnvironment(xa)).ignore
-              else ZIO.unit
+              )
             complete *> followUp
           }
         )
 
     private def submitMatchRef: ZIO[Transactor, Throwable, Unit] = {
       import ccas.analysis.apps.matchref.MatchRefApp
-      submit(JobKind.MatchRef, None, None, MatchRefApp.populate).unit.catchAll(_ => ZIO.unit)
+      submit(JobKind.MatchRef, None, None, MatchRefApp.populate).ignore
     }
 
     def awaitAll: ZIO[Any, Nothing, Unit] =

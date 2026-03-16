@@ -45,10 +45,9 @@ final class ChessComClient(
 
   private def activateThrottle: Task[Unit] =
     throttled.getAndSet(true).flatMap { wasThrottled =>
-      ZIO
-        .unless(wasThrottled) {
-          (ZIO.sleep(cooldown) *> throttled.set(false)).fork.unit
-        }.unit
+      ZIO.unlessDiscard(wasThrottled) {
+        (ZIO.sleep(cooldown) *> throttled.set(false)).fork.unit
+      }
     }
 
   private val retrySchedule: Schedule[Any, Throwable, Any] =

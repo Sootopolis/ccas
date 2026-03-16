@@ -217,11 +217,10 @@ object RecruitmentApp extends ZIOAppDefault {
           evaluated <- ctx.evaluatedRef.get
           replenished <- replenish(ctx, evaluated, visitedClubs, staticStrategies)
           (newSources, remainingStrategies) = replenished
-          _ <- if (newSources.isEmpty && remainingStrategies.isEmpty) ZIO.unit
-          else exploreLoop(
+          _ <- ZIO.unlessDiscard(newSources.isEmpty && remainingStrategies.isEmpty)(exploreLoop(
             ctx, activePool, newSources, remainingStrategies,
             visitedClubs, roundRobinKeys
-          )
+          ))
         } yield ()
       }
       else {
@@ -237,11 +236,10 @@ object RecruitmentApp extends ZIOAppDefault {
             for {
               replenished <- replenish(ctx, evaluated, visited2, staticStrategies)
               (newSources, remainingStrategies) = replenished
-              _ <- if (newSources.isEmpty && remainingStrategies.isEmpty) ZIO.unit
-              else exploreLoop(
+              _ <- ZIO.unlessDiscard(newSources.isEmpty && remainingStrategies.isEmpty)(exploreLoop(
                 ctx, pool2, newSources, remainingStrategies,
                 visited2, roundRobinKeys
-              )
+              ))
             } yield ()
           }
           else {
@@ -322,8 +320,7 @@ object RecruitmentApp extends ZIOAppDefault {
     } yield ()
 
   private def printProgress(ctx: ExploreContext): ZIO[Any, Nothing, Unit] =
-    if (!ctx.showProgress) ZIO.unit
-    else for {
+    ZIO.whenDiscard(ctx.showProgress)(for {
       invited   <- ctx.invitedRef.get
       evaluated <- ctx.evaluatedRef.get
       cap        = ctx.inviteCap
@@ -332,7 +329,7 @@ object RecruitmentApp extends ZIOAppDefault {
       bar        = "\u2588" * filled + "\u2591" * (20 - filled)
       line       = s"\r[Progress] Evaluated: ${evaluated.size} | Invited: ${invited.size}/$cap | $bar $pct%"
       _         <- Console.print(line).orDie
-    } yield ()
+    } yield ())
 
   // --- Source activation ---
 
@@ -1103,7 +1100,7 @@ object RecruitmentApp extends ZIOAppDefault {
             .someOrFail(ExternalException(s"Run $id not found"))
         case None =>
           RecruitmentRun.selectLatest(clubId)
-            .flatMap(ZIO.fromOption(_).orElseFail(ExternalException(s"No runs found for club '$clubUrlName'")))
+            .someOrFail(ExternalException(s"No runs found for club '$clubUrlName'"))
       }
       invited <- RecruitmentCandidate.selectInvitedByRun(run.runId)
       _       <- Console.printLine(s"=== Recruitment Report for $clubUrlName (run ${run.runId}) ===").orDie
