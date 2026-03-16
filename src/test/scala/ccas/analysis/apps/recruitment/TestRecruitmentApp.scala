@@ -345,6 +345,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         List(PlayerId(199), pid0, pid1, pid2, pid3,
           PlayerId(210), PlayerId(211), PlayerId(220), PlayerId(221),
           PlayerId(222), PlayerId(223),
+          PlayerId(250), PlayerId(251), PlayerId(252), PlayerId(253),
           PlayerId(300), PlayerId(301), PlayerId(302), PlayerId(303), PlayerId(304))
       ) { pid =>
         SqlZioTypes.connectZIO(sql"DELETE FROM player_snapshot WHERE player_id = $pid".update.run()) *>
@@ -353,34 +354,40 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       _ <- Club.upsert(club)
     } yield ()
 
+  private def seedPlayer(playerId: PlayerId): ZIO[Transactor, Throwable, Unit] =
+    SqlZioTypes.connectZIO {
+      sql"""INSERT INTO player (player_id, joined)
+            VALUES ($playerId, ${T.t0})
+            ON CONFLICT (player_id) DO NOTHING""".update.run()
+    }.unit
+
   private def makeConfig(
       excludeClubs: List[String] = Nil,
-      onExhaustion: ExhaustionBehavior = ExhaustionBehavior.Stop,
-      excludeFormerMembers: Boolean = false
+      excludeFormerMembers: Boolean = false,
+      daysSinceRejected: Option[Int] = None
     ): RecruitmentConfig =
     RecruitmentConfig(
       clubId = clubId,
       configName = "default",
-      excludeClubs = excludeClubs,
-      onExhaustion = onExhaustion,
+      minDaysSinceRegistration = None,
+      daysSinceLastInvited = None,
+      daysSinceRejected = daysSinceRejected,
       nationalityExclude = false,
       nationalityCountries = Nil,
+      excludeClubs = excludeClubs,
       maxClubs = None,
-      dailyMaxTimeoutPercent = None,
-      dailyMaxTmTimeoutPercent = None,
-      dailyMinOngoingGames = None,
-      dailyMaxOngoingGames = None,
-      dailyMinOngoingTeamMatches = None,
+      excludeSourceAdmins = true,
+      excludeFormerMembers = excludeFormerMembers,
       dailyMinElo = None,
       dailyMaxElo = None,
       dailyMinGamesFinished = None,
       dailyMinTmGamesFinished = None,
-      minDaysSinceRegistration = None,
-      daysSinceLastInvited = None,
+      dailyMaxTimeoutPercent = None,
+      dailyMaxTmTimeoutPercent = None,
       dailyMaxHoursPerMove = None,
-      excludeSourceAdmins = true,
-      excludeFormerMembers = excludeFormerMembers,
-      exploreConcurrency = None
+      dailyMinOngoingGames = None,
+      dailyMaxOngoingGames = None,
+      dailyMinOngoingTeamMatches = None
     )
 
   // --- Spec ---
@@ -412,39 +419,30 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         config.excludeClubNames == List(ClubUrlName("club-x"))
       )
     },
-    test("onExhaustion stores Stop enum value") {
-      val config = makeConfig(onExhaustion = ExhaustionBehavior.Stop)
-      assertTrue(config.onExhaustion == ExhaustionBehavior.Stop)
-    },
-    test("onExhaustion stores Explore enum value") {
-      val config = makeConfig(onExhaustion = ExhaustionBehavior.Explore)
-      assertTrue(config.onExhaustion == ExhaustionBehavior.Explore)
-    },
     test("defaultDaily returns expected field values") {
       val config = RecruitmentConfig.defaultDaily(clubId)
       assertTrue(
         config.clubId == clubId,
         config.configName == "daily",
-        config.excludeClubs.isEmpty,
-        config.onExhaustion == ExhaustionBehavior.Explore,
+        config.minDaysSinceRegistration.contains(90),
+        config.daysSinceLastInvited.contains(180),
+        config.daysSinceRejected.contains(30),
         !config.nationalityExclude,
         config.nationalityCountries.isEmpty,
+        config.excludeClubs.isEmpty,
         config.maxClubs.contains(40),
-        config.dailyMaxTimeoutPercent.contains(5.0),
-        config.dailyMaxTmTimeoutPercent.contains(0.0),
-        config.dailyMinOngoingGames.isEmpty,
-        config.dailyMaxOngoingGames.contains(60),
-        config.dailyMinOngoingTeamMatches.isEmpty,
+        config.excludeSourceAdmins,
+        config.excludeFormerMembers,
         config.dailyMinElo.contains(1000),
         config.dailyMaxElo.isEmpty,
         config.dailyMinGamesFinished.contains(20),
         config.dailyMinTmGamesFinished.contains(10),
-        config.minDaysSinceRegistration.contains(90),
-        config.daysSinceLastInvited.contains(180),
+        config.dailyMaxTimeoutPercent.contains(5.0),
+        config.dailyMaxTmTimeoutPercent.contains(0.0),
         config.dailyMaxHoursPerMove.contains(12),
-        config.excludeSourceAdmins,
-        config.excludeFormerMembers,
-        config.exploreConcurrency.isEmpty
+        config.dailyMinOngoingGames.isEmpty,
+        config.dailyMaxOngoingGames.contains(60),
+        config.dailyMinOngoingTeamMatches.isEmpty
       )
     }
   )
@@ -462,8 +460,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         loaded <- RecruitmentConfig.select(clubId, "default")
       } yield assertTrue(
         loaded.isDefined,
-        loaded.get.excludeClubs == List("club-x"),
-        loaded.get.onExhaustion == ExhaustionBehavior.Stop
+        loaded.get.excludeClubs == List("club-x")
       )
     },
     test("RecruitmentConfig selectClub") {
@@ -538,14 +535,16 @@ object TestRecruitmentApp extends ZIOSpecDefault {
     test("RecruitmentCandidate insert and selectByRun") {
       for {
         _     <- seedDb
+        _     <- seedPlayer(pid0)
+        _     <- seedPlayer(pid1)
         runId <- RecruitmentRun.insert(clubId, "default", T.t0)
         _ <- RecruitmentCandidate
           .insert(
-            RecruitmentCandidate(runId, Username("alice"), T.t0, CandidateOutcome.Invited, None)
+            RecruitmentCandidate(runId, pid0, T.t0, CandidateOutcome.Invited, None)
           )
         _ <- RecruitmentCandidate
           .insert(
-            RecruitmentCandidate(runId, Username("bob"), T.t0, CandidateOutcome.Rejected, Some("too few games"))
+            RecruitmentCandidate(runId, pid1, T.t0, CandidateOutcome.Rejected, Some("too few games"))
           )
         all <- RecruitmentCandidate.selectByRun(runId)
       } yield assertTrue(all.size == 2)
@@ -553,30 +552,34 @@ object TestRecruitmentApp extends ZIOSpecDefault {
     test("RecruitmentCandidate selectInvitedByRun filters by outcome") {
       for {
         _     <- seedDb
+        _     <- seedPlayer(pid0)
+        _     <- seedPlayer(pid1)
         runId <- RecruitmentRun.insert(clubId, "default", T.t0)
         _ <- RecruitmentCandidate
           .insert(
-            RecruitmentCandidate(runId, Username("alice"), T.t0, CandidateOutcome.Invited, None)
+            RecruitmentCandidate(runId, pid0, T.t0, CandidateOutcome.Invited, None)
           )
         _ <- RecruitmentCandidate
           .insert(
-            RecruitmentCandidate(runId, Username("bob"), T.t0, CandidateOutcome.Rejected, Some("reason"))
+            RecruitmentCandidate(runId, pid1, T.t0, CandidateOutcome.Rejected, Some("reason"))
           )
         invited <- RecruitmentCandidate.selectInvitedByRun(runId)
       } yield assertTrue(
         invited.size == 1,
-        invited.head.username == Username("alice")
+        invited.head.playerId == pid0
       )
     },
     test("CandidateOutcome enum round-trip for all variants") {
+      val enumPids = CandidateOutcome.values.toList.zipWithIndex.map((_, i) => PlayerId.wrap(250L + i))
       for {
         _     <- seedDb
-        runId <- RecruitmentRun.insert(clubId, "default", T.t0)
+        _     <- ZIO.foreachDiscard(enumPids)(seedPlayer)
         outcomes = CandidateOutcome.values.toList
-        _ <- ZIO.foreachDiscard(outcomes.zipWithIndex) { (outcome, i) =>
+        runId <- RecruitmentRun.insert(clubId, "default", T.t0)
+        _ <- ZIO.foreachDiscard(outcomes.zip(enumPids)) { (outcome, pid) =>
           RecruitmentCandidate
             .insert(
-              RecruitmentCandidate(runId, Username.wrap(s"user-$i"), T.t0, outcome, Some(s"reason-$i"))
+              RecruitmentCandidate(runId, pid, T.t0, outcome, Some(s"reason-${pid}"))
             )
         }
         candidates <- RecruitmentCandidate.selectByRun(runId)
@@ -589,17 +592,18 @@ object TestRecruitmentApp extends ZIOSpecDefault {
     test("RecruitmentCandidate selectLatestInvited") {
       for {
         _      <- seedDb
+        _      <- seedPlayer(pid0)
         runId1 <- RecruitmentRun.insert(clubId, "default", T.t0)
         runId2 <- RecruitmentRun.insert(clubId, "default", T.t1)
         _ <- RecruitmentCandidate
           .insert(
-            RecruitmentCandidate(runId1, Username("alice"), T.t0, CandidateOutcome.Invited, None)
+            RecruitmentCandidate(runId1, pid0, T.t0, CandidateOutcome.Invited, None)
           )
         _ <- RecruitmentCandidate
           .insert(
-            RecruitmentCandidate(runId2, Username("alice"), T.t1, CandidateOutcome.Invited, None)
+            RecruitmentCandidate(runId2, pid0, T.t1, CandidateOutcome.Invited, None)
           )
-        latest <- RecruitmentCandidate.selectLatestInvited(Username("alice"))
+        latest <- RecruitmentCandidate.selectLatestInvited(pid0)
       } yield assertTrue(
         latest.isDefined,
         latest.get.runId == runId2
@@ -745,7 +749,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         candidates.size == 2
       )
     },
-    test("records Error outcome on API failure") {
+    test("skips candidate on API failure (no record written)") {
       val responses = Map(
         "player/alice" -> apiPlayerJson(200, "alice")
       )
@@ -758,14 +762,11 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         client     <- fakeChessComClient(responses, failures = Set("bob"))
         invited    <- RecruitmentApp.evaluateCandidates(client, runId, clubUrlName, List(Username("alice"), Username("bob")), config)
         candidates <- RecruitmentCandidate.selectByRun(runId)
-        errors = candidates.filter(_.outcome == CandidateOutcome.Error)
       } yield assertTrue(
         invited.size == 1,
         invited.head == Username("alice"),
-        candidates.size == 2,
-        errors.size == 1,
-        errors.head.username == Username("bob"),
-        errors.head.rejectionReason.isDefined
+        candidates.size == 1,
+        candidates.head.outcome == CandidateOutcome.Invited
       )
     }
   )
@@ -940,10 +941,12 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       for {
         _     <- seedDb
         _     <- RecruitmentConfig.upsert(config)
+        // Seed player row for FK constraint
+        _     <- seedPlayer(pid0)
         // Create a prior run with alice invited recently
         priorRunId <- RecruitmentRun.insert(clubId, "default", Instant.now())
         _ <- RecruitmentCandidate.insert(
-          RecruitmentCandidate(priorRunId, Username("alice"), Instant.now(), CandidateOutcome.Invited, None)
+          RecruitmentCandidate(priorRunId, pid0, Instant.now(), CandidateOutcome.Invited, None)
         )
         // Now evaluate alice again
         runId  <- RecruitmentRun.insert(clubId, "default", Instant.now())
@@ -1346,7 +1349,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       )
     },
 
-    test("Stop mode does not explore beyond source clubs") {
+    test("explore=false does not explore beyond source clubs") {
       val responses = Map(
         s"club/$clubUrlName" -> apiClubJson(clubId, clubUrlName),
         s"club/$clubUrlName/members" -> apiClubMembersJson(Nil),
@@ -1356,7 +1359,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         ),
         "player/explorer" -> apiPlayerJson(210, "explorer")
       )
-      val config = makeConfig(onExhaustion = ExhaustionBehavior.Stop)
+      val config = makeConfig()
 
       for {
         _      <- seedDb
@@ -1364,7 +1367,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         _      <- RecruitmentConfig.upsert(config)
         client <- fakeChessComClient(responses)
         xa     <- ZIO.service[Transactor]
-        result <- RecruitmentApp.recruit(clubUrlName, "default", sourceClubs = Nil)
+        result <- RecruitmentApp.recruit(clubUrlName, "default", sourceClubs = Nil, explore = false)
           .provideEnvironment(zio.ZEnvironment(client, xa))
         candidates <- RecruitmentCandidate.selectByRun(result.runId)
       } yield assertTrue(
@@ -1372,7 +1375,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       )
     },
 
-    test("Explore mode discovers candidates from DB clubs") {
+    test("explore=true discovers candidates from DB clubs") {
       val responses = Map(
         s"club/$clubUrlName" -> apiClubJson(clubId, clubUrlName),
         s"club/$clubUrlName/members" -> apiClubMembersJson(Nil),
@@ -1382,7 +1385,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         ),
         "player/explorer" -> apiPlayerJson(210, "explorer")
       )
-      val config = makeConfig(onExhaustion = ExhaustionBehavior.Explore)
+      val config = makeConfig()
 
       for {
         _      <- seedDb
@@ -1390,17 +1393,17 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         _      <- RecruitmentConfig.upsert(config)
         client <- fakeChessComClient(responses)
         xa     <- ZIO.service[Transactor]
-        result <- RecruitmentApp.recruit(clubUrlName, "default", sourceClubs = Nil)
+        result <- RecruitmentApp.recruit(clubUrlName, "default", sourceClubs = Nil, explore = true)
           .provideEnvironment(zio.ZEnvironment(client, xa))
         candidates <- RecruitmentCandidate.selectByRun(result.runId)
       } yield assertTrue(
         candidates.size == 1,
         candidates.head.outcome == CandidateOutcome.Invited,
-        candidates.head.username == Username("explorer")
+        candidates.head.playerId == PlayerId(210)
       )
     },
 
-    test("Explore mode discovers candidates from match opponents") {
+    test("explore=true discovers candidates from match opponents") {
       val clubMatchesWithOpponent =
         s"""{"finished": [{"name": "match", "@id": "https://api.chess.com/pub/match/99", "opponent": "https://api.chess.com/pub/club/opponent-club", "time_class": "daily", "start_time": ${T.t0.getEpochSecond}, "result": "win"}], "in_progress": [], "registered": []}"""
       val opponentClubId = ClubId(702)
@@ -1414,24 +1417,24 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         ),
         "player/opp-player" -> apiPlayerJson(211, "opp-player")
       )
-      val config = makeConfig(onExhaustion = ExhaustionBehavior.Explore)
+      val config = makeConfig()
 
       for {
         _      <- seedDb
         _      <- RecruitmentConfig.upsert(config)
         client <- fakeChessComClient(responses)
         xa     <- ZIO.service[Transactor]
-        result <- RecruitmentApp.recruit(clubUrlName, "default", sourceClubs = Nil)
+        result <- RecruitmentApp.recruit(clubUrlName, "default", sourceClubs = Nil, explore = true)
           .provideEnvironment(zio.ZEnvironment(client, xa))
         candidates <- RecruitmentCandidate.selectByRun(result.runId)
       } yield assertTrue(
         candidates.size == 1,
         candidates.head.outcome == CandidateOutcome.Invited,
-        candidates.head.username == Username("opp-player")
+        candidates.head.playerId == PlayerId(211)
       )
     },
 
-    test("Explore mode respects invite cap across sources") {
+    test("explore=true respects invite cap across sources") {
       val source1 = ClubUrlName("source-1")
       val source2 = ClubUrlName("source-2")
       val responses = Map(
@@ -1514,15 +1517,17 @@ object TestRecruitmentApp extends ZIOSpecDefault {
     test("showReport displays invited candidates") {
       for {
         _     <- seedDb
+        _     <- seedPlayer(pid0)
+        _     <- seedPlayer(pid1)
         runId <- RecruitmentRun.insert(clubId, "default", T.t0)
         _     <- RecruitmentRun.update(RecruitmentRun(runId, clubId, "default", T.t0, Some(T.t1), 2))
         _ <- RecruitmentCandidate
           .insert(
-            RecruitmentCandidate(runId, Username("alice"), T.t0, CandidateOutcome.Invited, None)
+            RecruitmentCandidate(runId, pid0, T.t0, CandidateOutcome.Invited, None)
           )
         _ <- RecruitmentCandidate
           .insert(
-            RecruitmentCandidate(runId, Username("bob"), T.t0, CandidateOutcome.Invited, None)
+            RecruitmentCandidate(runId, pid1, T.t0, CandidateOutcome.Invited, None)
           )
         _ <- RecruitmentApp.showReport(clubUrlName, Some(runId.toString))
       } yield assertTrue(true)
@@ -1530,11 +1535,12 @@ object TestRecruitmentApp extends ZIOSpecDefault {
     test("showReport with latest run") {
       for {
         _     <- seedDb
+        _     <- seedPlayer(pid0)
         runId <- RecruitmentRun.insert(clubId, "default", T.t0)
         _     <- RecruitmentRun.update(RecruitmentRun(runId, clubId, "default", T.t0, Some(T.t1), 1))
         _ <- RecruitmentCandidate
           .insert(
-            RecruitmentCandidate(runId, Username("alice"), T.t0, CandidateOutcome.Invited, None)
+            RecruitmentCandidate(runId, pid0, T.t0, CandidateOutcome.Invited, None)
           )
         _ <- RecruitmentApp.showReport(clubUrlName, None)
       } yield assertTrue(true)

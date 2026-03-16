@@ -27,7 +27,8 @@ object JobRoutes {
       configName: Option[String],
       inviteCap: Option[Int],
       sourceClubs: Option[List[ClubUrlName]],
-      timeLimitMinutes: Option[Int]
+      timeLimitMinutes: Option[Int],
+      explore: Option[Boolean]
   )
   object RecruitmentRequest {
     given JsonCodec[RecruitmentRequest] = DeriveJsonCodec.gen
@@ -117,7 +118,8 @@ object JobRoutes {
                     body.configName.getOrElse("default"),
                     effectiveInviteCap,
                     body.sourceClubs.getOrElse(Nil),
-                    effectiveTimeLimit
+                    effectiveTimeLimit,
+                    explore = body.explore.getOrElse(true)
                   )
         jobId  <- runner.submit(JobKind.Recruitment, Some(body.clubUrlName), Some(req.body.toString), effect)
       } yield jsonResponse(Status.Accepted, JobResponse(JobRunId.unwrap(jobId), "running")))

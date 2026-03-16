@@ -10,11 +10,11 @@ import ccas.utils.json.JsonDecoding
 
 @jsonMemberNames(SnakeCase)
 final case class ApiPlayerStats(
-    chessDaily: ApiPlayerDailyStats,
-    chess960Daily: ApiPlayerDailyStats,
-    chessRapid: ApiPlayerLiveStats,
-    chessBlitz: ApiPlayerLiveStats,
-    chessBullet: ApiPlayerLiveStats)
+    chessDaily: Option[ApiPlayerDailyStats],
+    chess960Daily: Option[ApiPlayerDailyStats],
+    chessRapid: Option[ApiPlayerLiveStats],
+    chessBlitz: Option[ApiPlayerLiveStats],
+    chessBullet: Option[ApiPlayerLiveStats])
 
 object ApiPlayerStats extends JsonDecoding[ApiPlayerStats] {
   override protected val jsonDecoderDerived: JsonDecoder[ApiPlayerStats] = DeriveJsonDecoder.gen
@@ -23,7 +23,7 @@ object ApiPlayerStats extends JsonDecoding[ApiPlayerStats] {
 
   sealed trait ApiPlayerGameTypeStats[Record <: ApiPlayerGameTypeRecord] {
     val last: LatestElo
-    val best: BestElo
+    val best: Option[BestElo]
     val record: Record
     val tournament: Option[TournamentRecord]
   }
@@ -31,7 +31,7 @@ object ApiPlayerStats extends JsonDecoding[ApiPlayerStats] {
   @jsonMemberNames(SnakeCase)
   final case class ApiPlayerDailyStats(
       last: LatestElo,
-      best: BestElo,
+      best: Option[BestElo],
       record: ApiDailyRecord,
       tournament: Option[TournamentRecord])
       extends ApiPlayerGameTypeStats[ApiDailyRecord] derives JsonDecoder
@@ -39,13 +39,13 @@ object ApiPlayerStats extends JsonDecoding[ApiPlayerStats] {
   @jsonMemberNames(SnakeCase)
   final case class ApiPlayerLiveStats(
       last: LatestElo,
-      best: BestElo,
+      best: Option[BestElo],
       record: ApiPlayerLiveRecord,
       tournament: Option[TournamentRecord])
       extends ApiPlayerGameTypeStats[ApiPlayerLiveRecord] derives JsonDecoder
 
   @jsonMemberNames(SnakeCase)
-  final case class LatestElo(rating: Elo, date: Long, rd: Double) derives JsonDecoder
+  final case class LatestElo(rating: Elo, date: Long, rd: Option[Double]) derives JsonDecoder
 
   @jsonMemberNames(SnakeCase)
   final case class BestElo(rating: Elo, date: Long, game: URL) derives JsonDecoder
