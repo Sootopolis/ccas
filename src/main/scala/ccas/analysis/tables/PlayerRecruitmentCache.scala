@@ -17,9 +17,9 @@ final case class PlayerRecruitmentCache(
     dailyTimeoutPct: Option[Double],
     dailyGamesFinished: Option[Int],
     clubCount: Option[Int],
-    ongoingGames: Int,
-    ongoingTeamMatches: Int,
-    tmGamesFinished90d: Int,
+    ongoingGames: Option[Int],
+    ongoingTeamMatches: Option[Int],
+    tmGamesFinished90d: Option[Int],
     tmTimeoutPct90d: Option[Double],
     lastDailyTimeoutAt: Option[Instant],
     lastTmTimeoutAt: Option[Instant])
@@ -29,8 +29,8 @@ object PlayerRecruitmentCache {
   def empty(playerId: PlayerId, fetchedAt: Instant, clubCount: Option[Int]): PlayerRecruitmentCache =
     PlayerRecruitmentCache(playerId, fetchedAt,
       dailyElo = None, dailyTimeoutPct = None, dailyGamesFinished = None,
-      clubCount = clubCount, ongoingGames = 0, ongoingTeamMatches = 0,
-      tmGamesFinished90d = 0, tmTimeoutPct90d = None,
+      clubCount = clubCount, ongoingGames = None, ongoingTeamMatches = None,
+      tmGamesFinished90d = None, tmTimeoutPct90d = None,
       lastDailyTimeoutAt = None, lastTmTimeoutAt = None)
 
   private val selectCols = SqlLiteral(
@@ -48,9 +48,9 @@ object PlayerRecruitmentCache {
               daily_timeout_pct      DOUBLE PRECISION,
               daily_games_finished   INT,
               club_count             INT,
-              ongoing_games          INT NOT NULL,
-              ongoing_team_matches   INT NOT NULL,
-              tm_games_finished_90d  INT NOT NULL,
+              ongoing_games          INT,
+              ongoing_team_matches   INT,
+              tm_games_finished_90d  INT,
               tm_timeout_pct_90d     DOUBLE PRECISION,
               last_daily_timeout_at  TIMESTAMPTZ,
               last_tm_timeout_at     TIMESTAMPTZ
@@ -59,6 +59,12 @@ object PlayerRecruitmentCache {
       sql"ALTER TABLE player_recruitment_cache ADD COLUMN IF NOT EXISTS last_daily_timeout_at TIMESTAMPTZ".update.run()
     } *> connectZIO {
       sql"ALTER TABLE player_recruitment_cache ADD COLUMN IF NOT EXISTS last_tm_timeout_at TIMESTAMPTZ".update.run()
+    } *> connectZIO {
+      sql"ALTER TABLE player_recruitment_cache ALTER COLUMN ongoing_games DROP NOT NULL".update.run()
+    } *> connectZIO {
+      sql"ALTER TABLE player_recruitment_cache ALTER COLUMN ongoing_team_matches DROP NOT NULL".update.run()
+    } *> connectZIO {
+      sql"ALTER TABLE player_recruitment_cache ALTER COLUMN tm_games_finished_90d DROP NOT NULL".update.run()
     }
 
   def selectId(playerId: PlayerId): ZIO[Transactor, SQLException, Option[PlayerRecruitmentCache]] =

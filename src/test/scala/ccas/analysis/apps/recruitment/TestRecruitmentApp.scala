@@ -1012,7 +1012,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       } yield assertTrue(
         cached.isDefined,
         cached.get.clubCount.contains(0),
-        cached.get.ongoingGames == 0,
+        cached.get.ongoingGames.contains(0),
         cached.get.dailyElo.contains(1200),
         cached.get.lastDailyTimeoutAt.isEmpty,
         cached.get.lastTmTimeoutAt.isEmpty
@@ -1208,9 +1208,9 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         dailyTimeoutPct = Some(0.0),
         dailyGamesFinished = Some(200),
         clubCount = Some(5),
-        ongoingGames = 3,
-        ongoingTeamMatches = 2,
-        tmGamesFinished90d = 10,
+        ongoingGames = Some(3),
+        ongoingTeamMatches = Some(2),
+        tmGamesFinished90d = Some(10),
         tmTimeoutPct90d = Some(0.0),
         lastDailyTimeoutAt = Some(now.minus(java.time.Duration.ofDays(100))), // had a timeout once
         lastTmTimeoutAt = None
@@ -1231,9 +1231,9 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         dailyTimeoutPct = Some(0.0),
         dailyGamesFinished = Some(200),
         clubCount = Some(120), // way over limit
-        ongoingGames = 3,
-        ongoingTeamMatches = 2,
-        tmGamesFinished90d = 10,
+        ongoingGames = Some(3),
+        ongoingTeamMatches = Some(2),
+        tmGamesFinished90d = Some(10),
         tmTimeoutPct90d = Some(0.0),
         lastDailyTimeoutAt = None,
         lastTmTimeoutAt = None
@@ -1254,9 +1254,9 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         dailyTimeoutPct = Some(50.0),
         dailyGamesFinished = Some(5),
         clubCount = Some(120),
-        ongoingGames = 0,
-        ongoingTeamMatches = 0,
-        tmGamesFinished90d = 0,
+        ongoingGames = Some(0),
+        ongoingTeamMatches = Some(0),
+        tmGamesFinished90d = Some(0),
         tmTimeoutPct90d = None,
         lastDailyTimeoutAt = None,
         lastTmTimeoutAt = None

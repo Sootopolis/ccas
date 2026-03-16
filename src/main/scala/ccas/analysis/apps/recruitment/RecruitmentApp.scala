@@ -697,7 +697,7 @@ object RecruitmentApp extends ZIOAppDefault {
       4L,
       (cache, config) =>
         Option.when(
-          config.dailyMinOngoingGames.exists(cache.ongoingGames < _)
+          config.dailyMinOngoingGames.exists(min => cache.ongoingGames.exists(_ < min))
         )(CandidateOutcome.Rejected)
     ),
     // Max ongoing games (4h)
@@ -705,7 +705,7 @@ object RecruitmentApp extends ZIOAppDefault {
       4L,
       (cache, config) =>
         Option.when(
-          config.dailyMaxOngoingGames.exists(cache.ongoingGames > _)
+          config.dailyMaxOngoingGames.exists(max => cache.ongoingGames.exists(_ > max))
         )(CandidateOutcome.Rejected)
     ),
     // Min ongoing team matches (4h)
@@ -713,7 +713,7 @@ object RecruitmentApp extends ZIOAppDefault {
       4L,
       (cache, config) =>
         Option.when(
-          config.dailyMinOngoingTeamMatches.exists(cache.ongoingTeamMatches < _)
+          config.dailyMinOngoingTeamMatches.exists(min => cache.ongoingTeamMatches.exists(_ < min))
         )(CandidateOutcome.Rejected)
     ),
     // Min TM games finished 90d (24h)
@@ -721,7 +721,7 @@ object RecruitmentApp extends ZIOAppDefault {
       24L,
       (cache, config) =>
         Option.when(
-          config.dailyMinTmGamesFinished.exists(cache.tmGamesFinished90d < _)
+          config.dailyMinTmGamesFinished.exists(min => cache.tmGamesFinished90d.exists(_ < min))
         )(CandidateOutcome.Rejected)
     ),
     // Max TM timeout % 90d (24h)
@@ -776,7 +776,15 @@ object RecruitmentApp extends ZIOAppDefault {
         clubNames = playerClubs.clubs.map(_.clubName).toSet
         config = env.run.config
 
-        updatedCtx = env.candidate.copy(clubCount = Some(clubCount))
+        // Update cache with clubCount
+        apiPlayer <- ZIO.fromOption(env.candidate.apiPlayer)
+          .orElseFail(new NoSuchElementException("apiPlayer not set — FetchAndCheckPlayer must run before CheckClubs"))
+        updatedCache = env.candidate.cache match {
+          case Some(c) => c.copy(clubCount = Some(clubCount))
+          case None    => PlayerRecruitmentCache.empty(apiPlayer.playerId, env.run.now, Some(clubCount))
+        }
+        updatedCtx = env.candidate.copy(clubCount = Some(clubCount), cache = Some(updatedCache))
+
         outcome =
           if (config.maxClubs.exists(clubCount > _)) Some(CandidateOutcome.Rejected)
           else if (config.excludeClubNames.exists(clubNames.contains)) Some(CandidateOutcome.Rejected)
@@ -871,12 +879,12 @@ object RecruitmentApp extends ZIOAppDefault {
           .orElseFail(new NoSuchElementException("apiPlayer not set — FetchAndCheckPlayer must run before CheckOngoingGames"))
         updatedCache = existingCache match {
           case Some(c) => c.copy(
-            ongoingGames = ongoingGames,
-            ongoingTeamMatches = ongoingTeamMatches
+            ongoingGames = Some(ongoingGames),
+            ongoingTeamMatches = Some(ongoingTeamMatches)
           )
           case None => PlayerRecruitmentCache.empty(apiPlayer.playerId, env.run.now, env.candidate.clubCount).copy(
-            ongoingGames = ongoingGames,
-            ongoingTeamMatches = ongoingTeamMatches
+            ongoingGames = Some(ongoingGames),
+            ongoingTeamMatches = Some(ongoingTeamMatches)
           )
         }
         updatedCtx = env.candidate.copy(cache = Some(updatedCache))
@@ -904,7 +912,7 @@ object RecruitmentApp extends ZIOAppDefault {
         mergedTmTimeout = mergeOptionalInstants(lastTmTimeoutAt, cache.lastTmTimeoutAt)
 
         updatedCache = cache.copy(
-          tmGamesFinished90d = tmGamesFinished,
+          tmGamesFinished90d = Some(tmGamesFinished),
           tmTimeoutPct90d = tmTimeoutPct,
           lastTmTimeoutAt = mergedTmTimeout
         )
