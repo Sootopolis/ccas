@@ -22,6 +22,7 @@ object RecruitmentApp extends ZIOAppDefault {
 
   private val DefaultInviteCap = 30
   private val DefaultExploreConcurrency = 1
+  private val DefaultEvalBatchSize = 4
 
   // --- Explore mode types ---
 
@@ -29,7 +30,7 @@ object RecruitmentApp extends ZIOAppDefault {
   private case class ClubSource(clubUrlName: ClubUrlName) extends SourceDescriptor {
     val id: String = ClubUrlName.unwrap(clubUrlName)
   }
-  private case class UsernameSource(id: String, usernames: Set[Username]) extends SourceDescriptor
+  private case class UsernameSource(id: String, usernames: List[Username]) extends SourceDescriptor
 
   private[recruitment] case class SourceState(
       remaining: List[Username],
@@ -39,13 +40,10 @@ object RecruitmentApp extends ZIOAppDefault {
   )
 
   // Grim constants (server-side, not user-configurable)
-  private val GrimConsecutiveRejects = 40
-  private val GrimMinSample = 40
-  private val GrimRejectRatio = 39.0 / 40.0
+  private val GrimConsecutiveRejects = 50
 
   private[recruitment] def isGrim(s: SourceState): Boolean =
-    s.consecutiveRejects >= GrimConsecutiveRejects ||
-    (s.evaluated >= GrimMinSample && s.rejected.toDouble / s.evaluated >= GrimRejectRatio)
+    s.consecutiveRejects >= GrimConsecutiveRejects
 
   // --- ExploreContext: bundles constant parameters across explore loop recursion ---
 
@@ -59,6 +57,7 @@ object RecruitmentApp extends ZIOAppDefault {
       inviteCap: Int,
       existingUsernames: Set[Username],
       exploreConcurrency: Int,
+      evalBatchSize: Int,
       explore: Boolean,
       showProgress: Boolean
   )
@@ -140,6 +139,7 @@ object RecruitmentApp extends ZIOAppDefault {
         inviteCap = inviteCap,
         existingUsernames = existingUsernames,
         exploreConcurrency = effectiveConcurrency,
+        evalBatchSize = DefaultEvalBatchSize,
         explore = explore,
         showProgress = showProgress
       )
@@ -258,70 +258,86 @@ object RecruitmentApp extends ZIOAppDefault {
           }
           (sourceId, nextKeys) = picked
           sourceState = pool2(sourceId)
-          _ <- sourceState.remaining match {
-            case Nil =>
-              val pool3 = pool2 - sourceId
-              exploreLoop(ctx, pool3, pending2, staticStrategies, visited2, nextKeys.filter(_ != sourceId))
-            case username :: rest =>
-              evaluateNextFromSource(ctx, pool2, sourceState, sourceId, username, rest, pending2, staticStrategies, visited2, nextKeys)
+          _ <- if (sourceState.remaining.isEmpty) {
+            val pool3 = pool2 - sourceId
+            exploreLoop(ctx, pool3, pending2, staticStrategies, visited2, nextKeys.filter(_ != sourceId))
+          } else {
+            evaluateBatchFromSource(ctx, pool2, sourceState, sourceId, pending2, staticStrategies, visited2, nextKeys)
           }
         } yield ()
       }
     } yield ()
 
-  private def evaluateNextFromSource(
+  private def checkRecentlyRejected(
+      ctx: ExploreContext,
+      username: Username
+    ): RIO[Transactor, Boolean] =
+    ctx.runCtx.config.daysSinceRejected.fold(ZIO.succeed(false)) { days =>
+      for {
+        snapOpt   <- PlayerSnapshot.selectNameLatest(username)
+        rejectOpt <- ZIO.foreach(snapOpt)(snap =>
+                       RecruitmentCandidate.selectLatestRejectedByConfig(
+                         snap.playerId, ctx.runCtx.config.clubId, ctx.runCtx.config.configName
+                       )
+                     ).map(_.flatten)
+      } yield rejectOpt.exists(c => ChronoUnit.DAYS.between(c.evaluatedAt, ctx.runCtx.now) < days)
+    }
+
+  private def evaluateBatchFromSource(
       ctx: ExploreContext,
       pool: Map[String, SourceState],
       sourceState: SourceState,
       sourceId: String,
-      username: Username,
-      rest: List[Username],
       pendingSources: List[SourceDescriptor],
       staticStrategies: List[() => RIO[Transactor, List[SourceDescriptor]]],
       visitedClubs: Set[ClubUrlName],
       nextKeys: List[String]
-    ): RIO[Transactor, Unit] =
+    ): RIO[Transactor, Unit] = {
+    val (batch, rest) = sourceState.remaining.splitAt(ctx.evalBatchSize)
+    val pool3 = pool.updated(sourceId, sourceState.copy(remaining = rest))
     for {
-      alreadyEvaluated <- ctx.evaluatedRef.get.map(_.contains(username))
-      pool3 = pool.updated(sourceId, sourceState.copy(remaining = rest))
-      _ <- if (alreadyEvaluated)
-        exploreLoop(ctx, pool3, pendingSources, staticStrategies, visitedClubs, nextKeys)
-      else {
-        val checkRejected = ctx.runCtx.config.daysSinceRejected.fold(ZIO.succeed(false)) { days =>
-          for {
-            snapOpt   <- PlayerSnapshot.selectNameLatest(username)
-            rejectOpt <- ZIO.foreach(snapOpt)(snap =>
-                           RecruitmentCandidate.selectLatestRejectedByConfig(
-                             snap.playerId, ctx.runCtx.config.clubId, ctx.runCtx.config.configName
-                           )
-                         ).map(_.flatten)
-          } yield rejectOpt.exists(c => ChronoUnit.DAYS.between(c.evaluatedAt, ctx.runCtx.now) < days)
-        }
-        checkRejected.flatMap { recentlyRejected =>
-          if (recentlyRejected) {
-            ctx.evaluatedRef.update(_ + username) *>
-              exploreLoop(ctx, pool3, pendingSources, staticStrategies, visitedClubs, nextKeys)
-          } else for {
-            result <- evaluateCandidate(ctx.runId, username, ctx.runCtx, ctx.filters)
-            _ <- ctx.evaluatedRef.update(_ + username)
-            isInvited = result == CandidateOutcome.Invited
-            isRejected = result == CandidateOutcome.Rejected || result == CandidateOutcome.Error
-            _ <- ZIO.when(isInvited)(ctx.invitedRef.update(username :: _))
-            _ <- printProgress(ctx)
+      // Filter out already-evaluated and recently-rejected candidates
+      alreadyEvaluated <- ctx.evaluatedRef.get
+      freshBatch = batch.filterNot(alreadyEvaluated)
+      filteredBatch <- ZIO.filter(freshBatch)(u => checkRecentlyRejected(ctx, u).map(!_))
+      skippedCount = freshBatch.size - filteredBatch.size
+      _ <- ctx.evaluatedRef.update(_ ++ freshBatch.take(freshBatch.size - filteredBatch.size + skippedCount).toSet)
+      // Mark recently-rejected as evaluated
+      recentlyRejected = freshBatch.filterNot(filteredBatch.contains)
+      _ <- ctx.evaluatedRef.update(_ ++ recentlyRejected.toSet)
 
-            updatedSource = pool3(sourceId).copy(
-              evaluated = sourceState.evaluated + 1,
-              rejected = sourceState.rejected + (if (isRejected) 1 else 0),
-              consecutiveRejects = if (isInvited) 0 else sourceState.consecutiveRejects + 1
-            )
-            pool4 <- if (isGrim(updatedSource)) {
-              Console.printLine(s"[Explore] Abandoning grim source: $sourceId (eval=${updatedSource.evaluated}, rej=${updatedSource.rejected})").orDie.as(pool3 - sourceId)
-            } else ZIO.succeed(pool3.updated(sourceId, updatedSource))
-            _ <- exploreLoop(ctx, pool4, pendingSources, staticStrategies, visitedClubs, nextKeys)
-          } yield ()
-        }
+      // Evaluate batch in parallel
+      results <- ZIO.foreachPar(filteredBatch)(u => evaluateCandidate(ctx.runId, u, ctx.runCtx, ctx.filters).map(u -> _))
+
+      // Update refs
+      invitedInBatch = results.collect { case (u, CandidateOutcome.Invited) => u }
+      rejectedInBatch = results.count { case (_, o) => o == CandidateOutcome.Rejected || o == CandidateOutcome.Error }
+      _ <- ctx.evaluatedRef.update(_ ++ filteredBatch.toSet)
+      _ <- ZIO.foreachDiscard(invitedInBatch)(u => ctx.invitedRef.update(u :: _))
+      _ <- printProgress(ctx)
+
+      // Compute consecutive rejects: trailing rejects after last invite in batch
+      batchConsecutiveRejects = {
+        val orderedResults = results.map(_._2)
+        val lastInviteIdx = orderedResults.lastIndexWhere(_ == CandidateOutcome.Invited)
+        if (lastInviteIdx >= 0) orderedResults.drop(lastInviteIdx + 1).size
+        else sourceState.consecutiveRejects + orderedResults.size
       }
+
+      updatedSource = pool3(sourceId).copy(
+        evaluated = sourceState.evaluated + filteredBatch.size,
+        rejected = sourceState.rejected + rejectedInBatch,
+        consecutiveRejects = if (invitedInBatch.nonEmpty) batchConsecutiveRejects
+                             else sourceState.consecutiveRejects + filteredBatch.size
+      )
+      pool4 <- if (ctx.explore && isGrim(updatedSource)) {
+        Console.printLine(s"[Explore] Abandoning grim source: $sourceId (eval=${updatedSource.evaluated}, rej=${updatedSource.rejected})").orDie.as(pool3 - sourceId)
+      } else {
+        ZIO.succeed(pool3.updated(sourceId, updatedSource))
+      }
+      _ <- exploreLoop(ctx, pool4, pendingSources, staticStrategies, visitedClubs, nextKeys)
     } yield ()
+  }
 
   private def printProgress(ctx: ExploreContext): UIO[Unit] =
     ZIO.whenDiscard(ctx.showProgress)(for {
@@ -373,13 +389,14 @@ object RecruitmentApp extends ZIOAppDefault {
       evaluatedUsernames: Set[Username]
     ): Task[List[Username]] =
     for {
-      (members, adminUsernames) <-
+      (orderedMembers, adminUsernames) <-
         if (excludeSourceAdmins)
-          ApiClubMembers.get(client, clubUrlName).map(_.toMap.keySet)
+          ApiClubMembers.get(client, clubUrlName).map(_.all.map(_.username).toList)
             .zipPar(ApiClub.get(client, clubUrlName).map(extractAdminUsernames))
         else
-          ApiClubMembers.get(client, clubUrlName).map(m => (m.toMap.keySet, Set.empty[Username]))
-    } yield (members -- existingUsernames -- evaluatedUsernames -- adminUsernames).toList
+          ApiClubMembers.get(client, clubUrlName).map(m => (m.all.map(_.username).toList, Set.empty[Username]))
+      exclude = existingUsernames ++ evaluatedUsernames ++ adminUsernames
+    } yield orderedMembers.filterNot(exclude).distinct
 
   private def activateSource(
       ctx: ExploreContext,
@@ -396,7 +413,8 @@ object RecruitmentApp extends ZIOAppDefault {
           _ <- Console.printLine(s"[Explore] Activated club source: ${ClubUrlName.unwrap(clubUrlName)} (${filtered.size} candidates)").orDie
         } yield filtered
       case UsernameSource(id, usernames) =>
-        val filtered = (usernames -- ctx.existingUsernames -- evaluatedUsernames).toList
+        val exclude = ctx.existingUsernames ++ evaluatedUsernames
+        val filtered = usernames.filterNot(exclude)
         Console.printLine(s"[Explore] Activated username source: $id (${filtered.size} candidates)").orDie
           .as(filtered)
     }
@@ -417,7 +435,7 @@ object RecruitmentApp extends ZIOAppDefault {
       newOpponents = opponents -- evaluatedUsernames
       result <- if (newOpponents.nonEmpty) {
         Console.printLine(s"[Explore] Discovered ${newOpponents.size} candidate opponents").orDie
-          .as((List(UsernameSource("candidate-opponents", newOpponents)), staticStrategies))
+          .as((List(UsernameSource("candidate-opponents", newOpponents.toList)), staticStrategies))
       } else {
         // Dynamic strategy 2: candidate clubs
         for {
@@ -841,13 +859,13 @@ object RecruitmentApp extends ZIOAppDefault {
           ZIO.foreachPar(months) { ym =>
             env.run.client.get[ApiPlayerArchive](
               ApiPlayerArchive.getUrl(env.candidate.username, ym.getYear, ym.getMonthValue)
-            ).catchAll(_ => ZIO.succeed(ApiPlayerArchive(Chunk.empty)))
+            ).catchSome { case _: ExternalException => ZIO.succeed(ApiPlayerArchive(Chunk.empty)) }
           }.map(Some(_))
         } else ZIO.none
 
         cutoff90d = env.run.now.minus(90, ChronoUnit.DAYS)
         dailyGamesFinished90d = archives.map(
-          _.flatMap(_.games.filter(_.endTime >= cutoff90d.getEpochSecond)).size
+          _.flatMap(_.games.filter(g => g.`match`.isEmpty && g.endTime >= cutoff90d.getEpochSecond)).size
         )
 
         lastDailyTimeoutAt = archives.flatMap(extractLastDailyTimeout(_, env.candidate.username))
@@ -987,7 +1005,7 @@ object RecruitmentApp extends ZIOAppDefault {
           case None => ZIO.foreachPar(months) { ym =>
             client.get[ApiPlayerArchive](
               ApiPlayerArchive.getUrl(username, ym.getYear, ym.getMonthValue)
-            ).catchAll(_ => ZIO.succeed(ApiPlayerArchive(Chunk.empty)))
+            ).catchSome { case _: ExternalException => ZIO.succeed(ApiPlayerArchive(Chunk.empty)) }
           }
         }
         tmGames = archives.flatMap(_.games.filter(g => g.`match`.isDefined && g.endTime >= cutoff.getEpochSecond))

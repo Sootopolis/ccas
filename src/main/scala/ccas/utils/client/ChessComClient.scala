@@ -5,6 +5,7 @@ import zio.http.{Client, Header, Headers, Request, Status, URL}
 import zio.http.Method.GET
 import zio.json.JsonDecoder
 
+import ccas.utils.errors.ExternalException
 import ccas.utils.json.JsonDecodingException
 
 final class ChessComClient(
@@ -20,8 +21,12 @@ final class ChessComClient(
   private def rawGet[T](url: URL)(using jsonDecoder: JsonDecoder[T]): Task[T] = for {
     response <- batchedClient(Request(method = GET, url = url).addHeaders(headers))
     _ <- ZIO
-      .when(response.status == Status.TooManyRequests)(
+      .whenDiscard(response.status == Status.TooManyRequests)(
         activateThrottle *> ZIO.fail(RateLimitedException(url))
+      )
+    _ <- ZIO
+      .whenDiscard(!response.status.isSuccess)(
+        ZIO.fail(ExternalException(s"HTTP ${response.status.code} for $url"))
       )
     string <- response.body.asString
     value  <- ZIO.fromEither(jsonDecoder.decodeJson(string)).mapError(JsonDecodingException(_))

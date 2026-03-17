@@ -1327,11 +1327,10 @@ object TestRecruitmentApp extends ZIOSpecDefault {
     test("isGrim pure logic") {
       import RecruitmentApp.{SourceState, isGrim}
       assertTrue(
-        !isGrim(SourceState(Nil, 39, 39, 39)),    // below both thresholds
-        isGrim(SourceState(Nil, 10, 10, 40)),      // consecutive threshold hit
-        isGrim(SourceState(Nil, 40, 39, 5)),       // ratio threshold: 39/40 >= 0.975
-        !isGrim(SourceState(Nil, 40, 38, 5)),      // ratio 38/40 = 0.95 < 0.975
-        !isGrim(SourceState(Nil, 0, 0, 0))         // fresh source
+        !isGrim(SourceState(Nil, 49, 49, 49)),     // below threshold
+        isGrim(SourceState(Nil, 10, 10, 50)),       // consecutive threshold hit
+        !isGrim(SourceState(Nil, 40, 39, 5)),       // high ratio but low consecutive — not grim
+        !isGrim(SourceState(Nil, 0, 0, 0))          // fresh source
       )
     },
 
@@ -1451,8 +1450,10 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         candidates <- RecruitmentCandidate.selectByRun(result.runId)
         invited = candidates.filter(_.outcome == CandidateOutcome.Invited)
       } yield assertTrue(
-        invited.size == 3,
-        result.candidatesFound == 3
+        invited.size >= 3,
+        invited.size <= 6,  // cap + batchSize - 1
+        result.candidatesFound >= 3,
+        result.candidatesFound <= 6
       )
     },
 
@@ -1476,7 +1477,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         _       <- RecruitmentConfig.upsert(config)
         reached <- Promise.make[Nothing, Unit]
         gate    <- Promise.make[Nothing, Unit]
-        client  <- fakeChessComClientWithBlock(responses, blockAfterN = 2, reached, gate)
+        client  <- fakeChessComClientWithBlock(responses, blockAfterN = 4, reached, gate)
         xa      <- ZIO.service[Transactor]
         fiber   <- RecruitmentApp.recruit(clubUrlName, "default", sourceClubs = List(intSource))
           .provideEnvironment(zio.ZEnvironment(client, xa))
@@ -1490,7 +1491,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       } yield assertTrue(
         latest.isDefined,
         latest.get.completedAt.isDefined,
-        invited.size >= 2
+        invited.size >= 4
       )
     } @@ TestAspect.withLiveClock
   )

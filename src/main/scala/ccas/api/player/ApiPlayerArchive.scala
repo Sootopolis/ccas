@@ -24,7 +24,7 @@ object ApiPlayerArchive extends JsonDecoding[ApiPlayerArchive] {
       white: ApiPlayerArchiveGamePlayer,
       black: ApiPlayerArchiveGamePlayer,
       rated: Boolean,
-      accuracies: Accuracies,
+      accuracies: Option[Accuracies],
       URL: URL,
       fen: String,
       pgn: String,
