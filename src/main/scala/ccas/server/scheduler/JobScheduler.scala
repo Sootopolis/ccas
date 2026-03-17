@@ -47,10 +47,8 @@ object JobScheduler {
         schedules <- JobSchedule.selectEnabled.provideEnvironment(env)
         now        = Instant.now()
         _ <- ZIO.foreachDiscard(schedules) { schedule =>
-          val isDue = schedule.lastRunAt match
-            case None     => true
-            case Some(ts) => ChronoUnit.HOURS.between(ts, now) >= schedule.intervalHours
-          ZIO.when(isDue)(runSchedule(schedule, now))
+          val isDue = schedule.lastRunAt.forall(ts => ChronoUnit.HOURS.between(ts, now) >= schedule.intervalHours)
+          ZIO.whenDiscard(isDue)(runSchedule(schedule, now))
         }
       } yield ())
         .catchAll(e => Console.printLine(s"[Scheduler] Error: ${e.getMessage}").orDie)

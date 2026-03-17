@@ -68,7 +68,7 @@ object MatchRefApp extends ZIOAppDefault {
     ): RIO[Transactor, Option[PlayerMatchRef]] =
     (for {
       playerMatches <- client.get[ApiPlayerMatches](ApiPlayerMatches.getUrl(player.username))
-      matchOpt = playerMatches.finished.find(_.board.isDefined).headOption
+      matchOpt = playerMatches.finished.find(_.board.isDefined)
       ref <- matchOpt match
         case None =>
           Console.printLine(s"  ${player.username}: no finished match with board").orDie.as(None)
