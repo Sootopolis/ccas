@@ -33,9 +33,16 @@ final case class RecruitmentConfig(
     dailyMinOngoingTeamMatches: Option[Int])
     derives DbCodec {
   def excludeClubNames: List[ClubUrlName] = excludeClubs.map(ClubUrlName.wrap)
+
+  def capped: RecruitmentConfig = copy(
+    daysSinceLastInvited = daysSinceLastInvited.map(_.min(RecruitmentConfig.MaxDaysSinceLookback)),
+    daysSinceRejected = daysSinceRejected.map(_.min(RecruitmentConfig.MaxDaysSinceLookback))
+  )
 }
 
 object RecruitmentConfig {
+  val MaxDaysSinceLookback: Int = 180
+
   private val selectCols = SqlLiteral(
     """club_id, config_name,
        min_days_since_registration, days_since_last_invited, days_since_rejected,
@@ -86,7 +93,8 @@ object RecruitmentConfig {
       sql"SELECT $selectCols FROM recruitment_config WHERE club_id = $clubId".query[RecruitmentConfig].run().toList
     }
 
-  def upsert(item: RecruitmentConfig): ZIO[Transactor, SQLException, Int] =
+  def upsert(item: RecruitmentConfig): ZIO[Transactor, SQLException, Int] = {
+    val c = item.capped
     connectZIO {
       sql"""INSERT INTO recruitment_config (
               club_id, config_name,
@@ -97,13 +105,13 @@ object RecruitmentConfig {
               daily_max_timeout_percent, daily_max_tm_timeout_percent, daily_max_hours_per_move,
               daily_min_ongoing_games, daily_max_ongoing_games, daily_min_ongoing_team_matches
             ) VALUES (
-              ${item.clubId}, ${item.configName},
-              ${item.minDaysSinceRegistration}, ${item.daysSinceLastInvited}, ${item.daysSinceRejected},
-              ${item.nationalityExclude}, ${item.nationalityCountries},
-              ${item.excludeClubs}, ${item.maxClubs}, ${item.excludeSourceAdmins}, ${item.excludeFormerMembers},
-              ${item.dailyMinElo}, ${item.dailyMaxElo}, ${item.dailyMinGamesFinished}, ${item.dailyMinTmGamesFinished},
-              ${item.dailyMaxTimeoutPercent}, ${item.dailyMaxTmTimeoutPercent}, ${item.dailyMaxHoursPerMove},
-              ${item.dailyMinOngoingGames}, ${item.dailyMaxOngoingGames}, ${item.dailyMinOngoingTeamMatches}
+              ${c.clubId}, ${c.configName},
+              ${c.minDaysSinceRegistration}, ${c.daysSinceLastInvited}, ${c.daysSinceRejected},
+              ${c.nationalityExclude}, ${c.nationalityCountries},
+              ${c.excludeClubs}, ${c.maxClubs}, ${c.excludeSourceAdmins}, ${c.excludeFormerMembers},
+              ${c.dailyMinElo}, ${c.dailyMaxElo}, ${c.dailyMinGamesFinished}, ${c.dailyMinTmGamesFinished},
+              ${c.dailyMaxTimeoutPercent}, ${c.dailyMaxTmTimeoutPercent}, ${c.dailyMaxHoursPerMove},
+              ${c.dailyMinOngoingGames}, ${c.dailyMaxOngoingGames}, ${c.dailyMinOngoingTeamMatches}
             ) ON CONFLICT (club_id, config_name) DO UPDATE SET
               min_days_since_registration = EXCLUDED.min_days_since_registration,
               days_since_last_invited = EXCLUDED.days_since_last_invited,
@@ -125,6 +133,7 @@ object RecruitmentConfig {
               daily_max_ongoing_games = EXCLUDED.daily_max_ongoing_games,
               daily_min_ongoing_team_matches = EXCLUDED.daily_min_ongoing_team_matches""".update.run()
     }
+  }
 
   def defaultDaily(clubId: ClubId): RecruitmentConfig =
     RecruitmentConfig(
