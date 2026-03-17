@@ -45,7 +45,7 @@ object TestChessComClient extends ZIOSpecDefault {
           ZIO.die(new UnsupportedOperationException)
       }
       val client =
-        ChessComClient(ZClient.fromDriver(driver), Headers.empty, semaphore, mutex, throttled, cooldown)
+        ChessComClient(ZClient.fromDriver(driver), Headers.empty, semaphore, mutex, throttled, cooldown, retryBase = 10.millis)
       (client, throttled)
     }
 

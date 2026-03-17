@@ -14,8 +14,8 @@ final class ChessComClient(
     semaphore: Semaphore,
     mutex: Semaphore,
     throttled: Ref[Boolean],
-    cooldown: Duration) {
-  private val retryBase: Duration = 1.second
+    cooldown: Duration,
+    retryBase: Duration = 1.second) {
   private val batchedClient = client.batched
 
   private def rawGet[T](url: URL)(using jsonDecoder: JsonDecoder[T]): Task[T] = for {
