@@ -225,9 +225,9 @@ object TestRecruitmentApp extends ZIOSpecDefault {
           responses.get(s"player/$username/games").fold(Response.json(emptyCurrentGamesJson))(Response.json(_))
         },
         // Player archive endpoint (year/month)
-        Method.GET / "pub" / "player" / string("username") / "games" / "archives" / string("year") / string("month") -> handler {
+        Method.GET / "pub" / "player" / string("username") / "games" / string("year") / string("month") -> handler {
           (username: String, year: String, month: String, _: Request) =>
-            responses.get(s"player/$username/games/archives/$year/$month")
+            responses.get(s"player/$username/games/$year/$month")
               .fold(Response.json(emptyArchiveJson))(Response.json(_))
         },
         // Player endpoint
@@ -313,9 +313,9 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         Method.GET / "pub" / "player" / string("username") / "games" -> handler { (username: String, _: Request) =>
           responses.get(s"player/$username/games").fold(Response.json(emptyCurrentGamesJson))(Response.json(_))
         },
-        Method.GET / "pub" / "player" / string("username") / "games" / "archives" / string("year") / string("month") -> handler {
+        Method.GET / "pub" / "player" / string("username") / "games" / string("year") / string("month") -> handler {
           (username: String, year: String, month: String, _: Request) =>
-            responses.get(s"player/$username/games/archives/$year/$month")
+            responses.get(s"player/$username/games/$year/$month")
               .fold(Response.json(emptyArchiveJson))(Response.json(_))
         },
         Method.GET / "pub" / "player" / string("username") -> handler { (username: String, _: Request) =>
@@ -692,7 +692,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
     test("ApiFetchFailure insert and selectRecent") {
       val now = Instant.now()
       val failure = ApiFetchFailure(
-        url = "https://api.chess.com/pub/player/alice/games/archives/2026/03",
+        url = "https://api.chess.com/pub/player/alice/games/2026/03",
         errorType = "ExternalException",
         errorMessage = Some("HTTP 404"),
         occurredAt = now
@@ -936,7 +936,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       val now = Instant.now()
       val recent = now.minus(java.time.Duration.ofDays(10)).getEpochSecond
       val ym = java.time.YearMonth.from(java.time.LocalDate.ofInstant(now, java.time.ZoneOffset.UTC))
-      val archiveKey = s"player/alice/games/archives/${ym.getYear}/${f"${ym.getMonthValue}%02d"}"
+      val archiveKey = s"player/alice/games/${ym.getYear}/${f"${ym.getMonthValue}%02d"}"
       val games = List(
         archiveGameJson("alice", "bob", endTime = recent,
           matchUrl = Some("https://api.chess.com/pub/match/111")),
@@ -958,7 +958,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       val now = Instant.now()
       val recent = now.minus(java.time.Duration.ofDays(10)).getEpochSecond
       val ym = java.time.YearMonth.from(java.time.LocalDate.ofInstant(now, java.time.ZoneOffset.UTC))
-      val archiveKey = s"player/alice/games/archives/${ym.getYear}/${f"${ym.getMonthValue}%02d"}"
+      val archiveKey = s"player/alice/games/${ym.getYear}/${f"${ym.getMonthValue}%02d"}"
       val games = List(
         archiveGameJson("alice", "bob", endTime = recent, timeClass = "daily"),
         archiveGameJson("alice", "carol", endTime = recent, timeClass = "blitz"),
@@ -977,7 +977,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
     test("archive fetch failure is recorded in ApiFetchFailure") {
       val now = Instant.now()
       val ym = java.time.YearMonth.from(java.time.LocalDate.ofInstant(now, java.time.ZoneOffset.UTC))
-      val archiveKey = s"player/alice/games/archives/${ym.getYear}/${f"${ym.getMonthValue}%02d"}"
+      val archiveKey = s"player/alice/games/${ym.getYear}/${f"${ym.getMonthValue}%02d"}"
       val responses = Map(
         "player/alice"       -> apiPlayerJson(200, "alice"),
         "player/alice/stats" -> apiPlayerStatsJson(wins = 100, losses = 50, draws = 10),
@@ -992,16 +992,18 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         client   <- fakeChessComClient(responses)
         _        <- evalCandidates(client, runId, List(Username.wrap("alice")), config)
         failures <- ApiFetchFailure.selectRecent(now.minus(Duration.ofMinutes(1)))
+        cands    <- RecruitmentCandidate.selectByRun(runId)
       } yield assertTrue(
         failures.nonEmpty,
-        failures.exists(_.errorType == "JsonDecodingException")
+        failures.exists(_.errorType == "JsonDecodingException"),
+        cands.head.outcome == CandidateOutcome.Error
       )
     },
     test("extractLastDailyTimeout ignores non-daily timeClass games") {
       val now = Instant.now()
       val recent = now.minus(java.time.Duration.ofDays(10)).getEpochSecond
       val ym = java.time.YearMonth.from(java.time.LocalDate.ofInstant(now, java.time.ZoneOffset.UTC))
-      val archiveKey = s"player/alice/games/archives/${ym.getYear}/${f"${ym.getMonthValue}%02d"}"
+      val archiveKey = s"player/alice/games/${ym.getYear}/${f"${ym.getMonthValue}%02d"}"
       val games = List(
         // Blitz timeout — should NOT count as lastDailyTimeoutAt
         archiveGameJson("alice", "bob", whiteResult = "timeout", blackResult = "win",

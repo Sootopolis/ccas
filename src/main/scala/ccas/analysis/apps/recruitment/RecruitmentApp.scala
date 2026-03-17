@@ -4,7 +4,7 @@ import java.time.{Instant, LocalDate, YearMonth, ZoneOffset}
 import java.time.temporal.ChronoUnit
 
 import com.augustnagro.magnum.Transactor
-import zio.{Chunk, Console, RIO, Ref, Scope, Task, UIO, ZEnvironment, ZIO, ZIOAppArgs, ZIOAppDefault}
+import zio.{Console, RIO, Ref, Scope, Task, UIO, ZEnvironment, ZIO, ZIOAppArgs, ZIOAppDefault}
 import zio.http.{Client, URL}
 
 import ccas.analysis.apps.membership.MembershipApp
@@ -865,7 +865,7 @@ object RecruitmentApp extends ZIOAppDefault {
             val url = ApiPlayerArchive.getUrl(env.candidate.username, ym.getYear, ym.getMonthValue)
             env.run.client.get[ApiPlayerArchive](url).catchAll { e =>
               ApiFetchFailure.insert(ApiFetchFailure(url.toString, e.getClass.getSimpleName, Option(e.getMessage), env.run.now))
-                .orDie.as(ApiPlayerArchive(Chunk.empty))
+                .orDie *> ZIO.fail(e)
             }
           }.map(Some(_))
         } else ZIO.none
@@ -1013,7 +1013,7 @@ object RecruitmentApp extends ZIOAppDefault {
             val url = ApiPlayerArchive.getUrl(username, ym.getYear, ym.getMonthValue)
             client.get[ApiPlayerArchive](url).catchAll { e =>
               ApiFetchFailure.insert(ApiFetchFailure(url.toString, e.getClass.getSimpleName, Option(e.getMessage), now))
-                .orDie.as(ApiPlayerArchive(Chunk.empty))
+                .orDie *> ZIO.fail(e)
             }
           }
         }
