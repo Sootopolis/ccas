@@ -1070,10 +1070,14 @@ object RecruitmentApp extends ZIOAppDefault {
       _       <- Console.printLine(s"Started: ${run.startedAt}").orDie
       _       <- Console.printLine(s"Completed: ${run.completedAt.getOrElse("in progress")}").orDie
       _       <- Console.printLine(s"Invited: ${invited.size}").orDie
-      _       <- ZIO.foreachDiscard(invited) { c =>
-                   PlayerSnapshot.selectIdLatest(c.playerId)
-                     .map(_.fold(Username.wrap(s"[pid=${c.playerId}]"))(_.username))
-                     .flatMap(name => Console.printLine(s"  $name").orDie)
-                 }
+      usernames <- ZIO.foreach(invited) { c =>
+                     PlayerSnapshot.selectIdLatest(c.playerId)
+                       .map(_.fold(Username.wrap(s"[pid=${c.playerId}]"))(_.username))
+                   }
+      _         <- Console.printLine(usernames.mkString(" ")).orDie
+      _         <- Console.printLine("").orDie
+      _         <- ZIO.foreachDiscard(usernames) { name =>
+                     Console.printLine(ApiPlayer.getProfileUrl(name)).orDie
+                   }
     } yield ()
 }
