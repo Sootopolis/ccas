@@ -124,9 +124,9 @@ object TestMembershipApp extends ZIOSpecDefault {
           SqlZioTypes.connectZIO(sql"DELETE FROM player WHERE player_id = $pid".update.run())
       }
       _ <- Club.upsert(club)
-      _ <- ZIO.when(players.nonEmpty)(Player.insertBatch(players))
-      _ <- ZIO.when(snapshots.nonEmpty)(PlayerSnapshot.insertBatch(snapshots))
-      _ <- ZIO.when(members.nonEmpty)(ClubMember.insertBatch(members))
+      _ <- ZIO.whenDiscard(players.nonEmpty)(Player.insertBatch(players))
+      _ <- ZIO.whenDiscard(snapshots.nonEmpty)(PlayerSnapshot.insertBatch(snapshots))
+      _ <- ZIO.whenDiscard(members.nonEmpty)(ClubMember.insertBatch(members))
     } yield ()
 
   // --- Spec ---

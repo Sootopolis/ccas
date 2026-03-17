@@ -51,7 +51,7 @@ object JobRunner {
     ): RIO[Transactor, JobRunId] =
       for {
         existing <- JobRun.selectRunning(kind, clubUrlName)
-        _        <- ZIO.when(existing.isDefined)(
+        _        <- ZIO.whenDiscard(existing.isDefined)(
                       ZIO.fail(new JobConflictException(
                         s"A ${kind} job is already running" +
                           clubUrlName.fold("")(c => s" for club $c")

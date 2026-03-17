@@ -503,10 +503,10 @@ object MembershipApp extends ZIOAppDefault {
 
   private def persist(result: ReconciliationResult): RIO[Transactor, Unit] =
     for {
-      _ <- ZIO.when(result.newPlayers.nonEmpty)(Player.insertBatch(result.newPlayers))
-      _ <- ZIO.when(result.newSnapshots.nonEmpty)(PlayerSnapshot.insertBatch(result.newSnapshots))
-      _ <- ZIO.when(result.newMemberships.nonEmpty)(ClubMember.insertBatch(result.newMemberships))
-      _ <- ZIO.when(result.closedMemberships.nonEmpty)(ClubMember.updateBatch(result.closedMemberships))
+      _ <- ZIO.whenDiscard(result.newPlayers.nonEmpty)(Player.insertBatch(result.newPlayers))
+      _ <- ZIO.whenDiscard(result.newSnapshots.nonEmpty)(PlayerSnapshot.insertBatch(result.newSnapshots))
+      _ <- ZIO.whenDiscard(result.newMemberships.nonEmpty)(ClubMember.insertBatch(result.newMemberships))
+      _ <- ZIO.whenDiscard(result.closedMemberships.nonEmpty)(ClubMember.updateBatch(result.closedMemberships))
     } yield ()
 
   // --- Reporting ---

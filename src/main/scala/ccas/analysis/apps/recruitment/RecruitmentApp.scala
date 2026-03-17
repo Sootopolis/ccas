@@ -147,7 +147,7 @@ object RecruitmentApp extends ZIOAppDefault {
       transactor <- ZIO.service[Transactor]
 
       finalizeRun = (label: String) => for {
-        _ <- ZIO.when(showProgress)(Console.printLine("").orDie)
+        _ <- ZIO.whenDiscard(showProgress)(Console.printLine("").orDie)
         invited     <- invitedRef.get.map(_.reverse)
         evaluated   <- evaluatedRef.get
         completedAt  = Instant.now()
@@ -159,7 +159,7 @@ object RecruitmentApp extends ZIOAppDefault {
         _ <- ZIO.foreachDiscard(invited)(u => Console.printLine(s"  $u").orDie)
       } yield finalRun
 
-      _ <- ZIO.when(showProgress)(
+      _ <- ZIO.whenDiscard(showProgress)(
         Console.printLine("[Hint] Press Ctrl+C to stop gracefully (candidates found so far will be listed)").orDie
       )
 
@@ -974,7 +974,7 @@ object RecruitmentApp extends ZIOAppDefault {
     ZIO.foreachDiscard(candidate.apiPlayer) { ap =>
       withTransaction {
         for {
-          _ <- ZIO.when(candidate.isNewPlayer)(Player.insert(Player(ap.playerId, Instant.ofEpochSecond(ap.joined))))
+          _ <- ZIO.whenDiscard(candidate.isNewPlayer)(Player.insert(Player(ap.playerId, Instant.ofEpochSecond(ap.joined))))
           _ <- PlayerSnapshot.insert(PlayerSnapshot(ap.playerId, now, candidate.username, ap.status.category, ap.title))
           _ <- ZIO.foreachDiscard(candidate.cache)(PlayerRecruitmentCache.upsert)
           _ <- RecruitmentCandidate.insert(RecruitmentCandidate(runId, ap.playerId, now, outcome, errorMessage))
