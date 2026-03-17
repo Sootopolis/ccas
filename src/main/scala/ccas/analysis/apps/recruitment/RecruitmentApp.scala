@@ -982,7 +982,15 @@ object RecruitmentApp extends ZIOAppDefault {
       withTransaction {
         for {
           _ <- ZIO.whenDiscard(candidate.isNewPlayer)(Player.insert(Player(ap.playerId, Instant.ofEpochSecond(ap.joined))))
-          _ <- PlayerSnapshot.insert(PlayerSnapshot(ap.playerId, now, candidate.username, ap.status.category, ap.title))
+          _ <- {
+            val snap = PlayerSnapshot(ap.playerId, now, candidate.username, ap.status.category, ap.title)
+            PlayerSnapshot.selectIdLatest(ap.playerId).flatMap {
+              case Some(latest) if latest.username == snap.username && latest.status == snap.status && latest.title == snap.title =>
+                ZIO.unit
+              case _ =>
+                PlayerSnapshot.insert(snap)
+            }
+          }
           _ <- ZIO.foreachDiscard(candidate.cache)(PlayerRecruitmentCache.upsert)
           _ <- RecruitmentCandidate.insert(RecruitmentCandidate(runId, ap.playerId, now, outcome, errorMessage))
         } yield ()
