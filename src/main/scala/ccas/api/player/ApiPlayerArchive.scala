@@ -31,7 +31,7 @@ object ApiPlayerArchive extends JsonDecoding[ApiPlayerArchive] {
       tcn: String,
       UUID: UUID,
       initialSetup: String,
-      startTime: Long,
+      startTime: Option[Long],
       endTime: Long,
       timeControl: String,
       rules: GameRule,

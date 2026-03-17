@@ -58,6 +58,7 @@ enum GameRule {
   case KingOfTheHill
   case ThreeCheck
   case CrazyHouse
+  case OddsChess
 }
 
 object GameRule extends EnumJson[GameRule] {
