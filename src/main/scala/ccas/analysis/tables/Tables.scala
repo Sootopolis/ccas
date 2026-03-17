@@ -18,5 +18,6 @@ object Tables {
       _ <- RecruitmentRun.createTable
       _ <- RecruitmentCandidate.createTable
       _ <- PlayerRecruitmentCache.createTable
+      _ <- ApiFetchFailure.createTable
     } yield ()
 }

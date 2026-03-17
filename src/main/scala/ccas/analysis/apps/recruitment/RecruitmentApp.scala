@@ -519,15 +519,20 @@ object RecruitmentApp extends ZIOAppDefault {
     val now = Instant.now()
     val candidateCtx = CandidateContext.initial(username)
     val env = FilterEnv(runCtx.copy(now = now), candidateCtx)
-    (for {
-      (outcome, finalCandidate) <- runFilters(env, filters)
-      _ <- persistCandidateResults(runId, now, finalCandidate, outcome)
-    } yield outcome).catchAll { error =>
-      persistCandidateResults(
-        runId, now, candidateCtx, CandidateOutcome.Error,
-        Some(Option(error.getMessage).getOrElse(error.getClass.getSimpleName))
-      ).as(CandidateOutcome.Error)
-    }
+    for {
+      ctxRef <- Ref.make(candidateCtx)
+      result <- (for {
+        (outcome, finalCandidate) <- runFilters(env, filters, ctxRef)
+        _ <- persistCandidateResults(runId, now, finalCandidate, outcome)
+      } yield outcome).catchAll { error =>
+        ctxRef.get.flatMap { latestCtx =>
+          persistCandidateResults(
+            runId, now, latestCtx, CandidateOutcome.Error,
+            Some(Option(error.getMessage).getOrElse(error.getClass.getSimpleName))
+          )
+        }.as(CandidateOutcome.Error)
+      }
+    } yield result
   }
 
   // --- Filter pipeline types ---
@@ -581,11 +586,11 @@ object RecruitmentApp extends ZIOAppDefault {
 
   // --- Pipeline runner ---
 
-  private def runFilters(env: FilterEnv, filters: List[RecruitmentFilter])
+  private def runFilters(env: FilterEnv, filters: List[RecruitmentFilter], ctxRef: Ref[CandidateContext])
       : RIO[Transactor, (CandidateOutcome, CandidateContext)] =
     ZIO.foldLeft(filters)(FilterResult(None, env.candidate)) {
       case (r @ FilterResult(Some(_), _), _) => ZIO.succeed(r)
-      case (FilterResult(None, ctx), filter) => filter(env.copy(candidate = ctx))
+      case (FilterResult(None, ctx), filter) => ctxRef.set(ctx) *> filter(env.copy(candidate = ctx))
     }.map(r => (r.outcome.getOrElse(CandidateOutcome.Invited), r.candidate))
 
   // --- Filter chain builder ---
@@ -857,15 +862,17 @@ object RecruitmentApp extends ZIOAppDefault {
         archives <- if (needsArchives) {
           val months = recentArchiveMonths(env.run.now, 90)
           ZIO.foreachPar(months) { ym =>
-            env.run.client.get[ApiPlayerArchive](
-              ApiPlayerArchive.getUrl(env.candidate.username, ym.getYear, ym.getMonthValue)
-            ).catchSome { case _: ExternalException => ZIO.succeed(ApiPlayerArchive(Chunk.empty)) }
+            val url = ApiPlayerArchive.getUrl(env.candidate.username, ym.getYear, ym.getMonthValue)
+            env.run.client.get[ApiPlayerArchive](url).catchAll { e =>
+              ApiFetchFailure.insert(ApiFetchFailure(url.toString, e.getClass.getSimpleName, Option(e.getMessage), env.run.now))
+                .orDie.as(ApiPlayerArchive(Chunk.empty))
+            }
           }.map(Some(_))
         } else ZIO.none
 
         cutoff90d = env.run.now.minus(90, ChronoUnit.DAYS)
         dailyGamesFinished90d = archives.map(
-          _.flatMap(_.games.filter(g => g.`match`.isEmpty && g.endTime >= cutoff90d.getEpochSecond)).size
+          _.flatMap(_.games.filter(g => g.timeClass == "daily" && g.endTime >= cutoff90d.getEpochSecond)).size
         )
 
         lastDailyTimeoutAt = archives.flatMap(extractLastDailyTimeout(_, env.candidate.username))
@@ -991,7 +998,7 @@ object RecruitmentApp extends ZIOAppDefault {
       overallTimeoutPct: Double,
       now: Instant,
       recentArchives: Option[List[ApiPlayerArchive]]
-    ): Task[(Int, Option[Double], Option[Instant], Set[Username])] = {
+    ): RIO[Transactor, (Int, Option[Double], Option[Instant], Set[Username])] = {
     val needsTmStats = config.dailyMinTmGamesFinished.isDefined || config.dailyMaxTmTimeoutPercent.isDefined
     if (!needsTmStats) ZIO.succeed((0, None, None, Set.empty))
     else {
@@ -1003,12 +1010,14 @@ object RecruitmentApp extends ZIOAppDefault {
         archives <- recentArchives match {
           case Some(cached) => ZIO.succeed(cached)
           case None => ZIO.foreachPar(months) { ym =>
-            client.get[ApiPlayerArchive](
-              ApiPlayerArchive.getUrl(username, ym.getYear, ym.getMonthValue)
-            ).catchSome { case _: ExternalException => ZIO.succeed(ApiPlayerArchive(Chunk.empty)) }
+            val url = ApiPlayerArchive.getUrl(username, ym.getYear, ym.getMonthValue)
+            client.get[ApiPlayerArchive](url).catchAll { e =>
+              ApiFetchFailure.insert(ApiFetchFailure(url.toString, e.getClass.getSimpleName, Option(e.getMessage), now))
+                .orDie.as(ApiPlayerArchive(Chunk.empty))
+            }
           }
         }
-        tmGames = archives.flatMap(_.games.filter(g => g.`match`.isDefined && g.endTime >= cutoff.getEpochSecond))
+        tmGames = archives.flatMap(_.games.filter(g => g.timeClass == "daily" && g.`match`.isDefined && g.endTime >= cutoff.getEpochSecond))
         tmGamesFinished = tmGames.size
 
         // TM timeout rate
@@ -1040,7 +1049,7 @@ object RecruitmentApp extends ZIOAppDefault {
 
   private def extractLastDailyTimeout(archives: List[ApiPlayerArchive], username: Username): Option[Instant] =
     archives.flatMap(_.games)
-      .filter(g => g.`match`.isEmpty) // non-match daily games
+      .filter(g => g.timeClass == "daily" && g.`match`.isEmpty) // non-match daily games
       .filter(g => playerResult(g, username) == GameResultDetail.Timeout)
       .sortBy(_.endTime)(using Ordering[Long].reverse)
       .headOption

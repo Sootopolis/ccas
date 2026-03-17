@@ -37,7 +37,8 @@ object ApiPlayerArchive extends JsonDecoding[ApiPlayerArchive] {
       rules: GameRule,
       eco: Option[URL],
       tournament: Option[URL],
-      `match`: Option[URL])
+      `match`: Option[URL],
+      timeClass: String)
       derives JsonDecoder
 
   @jsonMemberNames(SnakeCase)

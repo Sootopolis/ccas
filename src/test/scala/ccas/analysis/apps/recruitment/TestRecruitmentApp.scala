@@ -148,6 +148,49 @@ object TestRecruitmentApp extends ZIOSpecDefault {
 
   private val emptyArchiveJson: String = """{"games": []}"""
 
+  private def archiveGameJson(
+      white: String,
+      black: String,
+      whiteResult: String = "win",
+      blackResult: String = "checkmated",
+      endTime: Long = T.t2.getEpochSecond,
+      matchUrl: Option[String] = None,
+      timeClass: String = "daily"
+    ): String = {
+    val matchField = matchUrl.fold("")(u => s""", "match": "$u"""")
+    s"""{
+       |  "url": "https://www.chess.com/game/daily/1",
+       |  "pgn": "",
+       |  "time_control": "1/259200",
+       |  "end_time": $endTime,
+       |  "rated": true,
+       |  "tcn": "",
+       |  "uuid": "${java.util.UUID.randomUUID()}",
+       |  "initial_setup": "",
+       |  "fen": "",
+       |  "start_time": ${endTime - 86400},
+       |  "time_class": "$timeClass",
+       |  "rules": "chess",
+       |  "white": {
+       |    "rating": 1500,
+       |    "result": "$whiteResult",
+       |    "@id": "https://api.chess.com/pub/player/$white",
+       |    "username": "$white",
+       |    "uuid": "${java.util.UUID.randomUUID()}"
+       |  },
+       |  "black": {
+       |    "rating": 1500,
+       |    "result": "$blackResult",
+       |    "@id": "https://api.chess.com/pub/player/$black",
+       |    "username": "$black",
+       |    "uuid": "${java.util.UUID.randomUUID()}"
+       |  }$matchField
+       |}""".stripMargin
+  }
+
+  private def archiveJson(games: List[String]): String =
+    s"""{"games": [${games.mkString(",")}]}"""
+
   private def apiClubMembersJson(members: List[(String, Long)]): String = {
     val memberJsons = members.map { (username, joined) =>
       s"""{"username": "$username", "joined": $joined}"""
@@ -182,9 +225,9 @@ object TestRecruitmentApp extends ZIOSpecDefault {
           responses.get(s"player/$username/games").fold(Response.json(emptyCurrentGamesJson))(Response.json(_))
         },
         // Player archive endpoint (year/month)
-        Method.GET / "pub" / "player" / string("username") / "games" / string("year") / string("month") -> handler {
+        Method.GET / "pub" / "player" / string("username") / "games" / "archives" / string("year") / string("month") -> handler {
           (username: String, year: String, month: String, _: Request) =>
-            responses.get(s"player/$username/games/$year/$month")
+            responses.get(s"player/$username/games/archives/$year/$month")
               .fold(Response.json(emptyArchiveJson))(Response.json(_))
         },
         // Player endpoint
@@ -270,9 +313,9 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         Method.GET / "pub" / "player" / string("username") / "games" -> handler { (username: String, _: Request) =>
           responses.get(s"player/$username/games").fold(Response.json(emptyCurrentGamesJson))(Response.json(_))
         },
-        Method.GET / "pub" / "player" / string("username") / "games" / string("year") / string("month") -> handler {
+        Method.GET / "pub" / "player" / string("username") / "games" / "archives" / string("year") / string("month") -> handler {
           (username: String, year: String, month: String, _: Request) =>
-            responses.get(s"player/$username/games/$year/$month")
+            responses.get(s"player/$username/games/archives/$year/$month")
               .fold(Response.json(emptyArchiveJson))(Response.json(_))
         },
         Method.GET / "pub" / "player" / string("username") -> handler { (username: String, _: Request) =>
@@ -336,6 +379,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       _ <- RecruitmentBlacklist.deleteAll
       _ <- RecruitmentConfig.deleteAll
       _ <- PlayerRecruitmentCache.deleteAll
+      _ <- ApiFetchFailure.deleteAll
       _ <- SqlZioTypes.connectZIO(sql"DELETE FROM club_member WHERE club_id = $clubId".update.run())
       _ <- SqlZioTypes.connectZIO(sql"DELETE FROM club_member WHERE club_id = $sourceClubId".update.run())
       _ <- SqlZioTypes.connectZIO(sql"DELETE FROM club_member WHERE club_id = $intSourceClubId".update.run())
@@ -644,6 +688,27 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         _      <- RecruitmentConfig.upsert(config)
         loaded <- RecruitmentConfig.select(clubId, "daily")
       } yield assertTrue(loaded.contains(config))
+    },
+    test("ApiFetchFailure insert and selectRecent") {
+      val now = Instant.now()
+      val failure = ApiFetchFailure(
+        url = "https://api.chess.com/pub/player/alice/games/archives/2026/03",
+        errorType = "ExternalException",
+        errorMessage = Some("HTTP 404"),
+        occurredAt = now
+      )
+      for {
+        _        <- seedDb
+        _        <- ApiFetchFailure.insert(failure)
+        recent   <- ApiFetchFailure.selectRecent(now.minus(Duration.ofMinutes(1)))
+        tooEarly <- ApiFetchFailure.selectRecent(now.plus(Duration.ofMinutes(1)))
+      } yield assertTrue(
+        recent.size == 1,
+        recent.head.url == failure.url,
+        recent.head.errorType == "ExternalException",
+        recent.head.errorMessage.contains("HTTP 404"),
+        tooEarly.isEmpty
+      )
     }
   )
 
@@ -730,6 +795,28 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         invited.head == Username("alice"),
         candidates.size == 1,
         candidates.head.outcome == CandidateOutcome.Invited
+      )
+    },
+    test("mid-pipeline error persists candidate with Error outcome") {
+      // Player profile fetches OK (apiPlayer set), but stats returns invalid JSON
+      val responses = Map(
+        "player/alice"       -> apiPlayerJson(200, "alice"),
+        "player/alice/stats" -> "NOT VALID JSON"
+      )
+      val config = makeConfig()
+
+      for {
+        _          <- seedDb
+        _          <- RecruitmentConfig.upsert(config)
+        runId      <- RecruitmentRun.insert(clubId, "default", T.t0)
+        client     <- fakeChessComClient(responses)
+        _          <- evalCandidates(client, runId, List(Username("alice")), config)
+        candidates <- RecruitmentCandidate.selectByRun(runId)
+      } yield assertTrue(
+        candidates.size == 1,
+        candidates.head.outcome == CandidateOutcome.Error,
+        candidates.head.playerId == pid0,
+        candidates.head.rejectionReason.isDefined
       )
     }
   )
@@ -843,6 +930,103 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       val config = makeConfig().copy(dailyMinGamesFinished = Some(50))
       for { outcome <- evalSingle(responses, config) }
       yield assertTrue(outcome == CandidateOutcome.Rejected)
+    },
+    test("dailyMinGamesFinished counts team match games from archives") {
+      // Archive has 2 TM games + 1 non-TM game = 3 daily games in 90d window
+      val now = Instant.now()
+      val recent = now.minus(java.time.Duration.ofDays(10)).getEpochSecond
+      val ym = java.time.YearMonth.from(java.time.LocalDate.ofInstant(now, java.time.ZoneOffset.UTC))
+      val archiveKey = s"player/alice/games/archives/${ym.getYear}/${f"${ym.getMonthValue}%02d"}"
+      val games = List(
+        archiveGameJson("alice", "bob", endTime = recent,
+          matchUrl = Some("https://api.chess.com/pub/match/111")),
+        archiveGameJson("carol", "alice", whiteResult = "checkmated", blackResult = "win",
+          endTime = recent, matchUrl = Some("https://api.chess.com/pub/match/222")),
+        archiveGameJson("alice", "dave", endTime = recent)
+      )
+      val responses = Map(
+        "player/alice"       -> apiPlayerJson(200, "alice"),
+        "player/alice/stats" -> apiPlayerStatsJson(wins = 100, losses = 50, draws = 10),
+        archiveKey           -> archiveJson(games)
+      )
+      // Require 3 games — should pass because TM games are included
+      val config = makeConfig().copy(dailyMinGamesFinished = Some(3))
+      for { outcome <- evalSingle(responses, config) }
+      yield assertTrue(outcome == CandidateOutcome.Invited)
+    },
+    test("dailyMinGamesFinished excludes non-daily games from archives") {
+      val now = Instant.now()
+      val recent = now.minus(java.time.Duration.ofDays(10)).getEpochSecond
+      val ym = java.time.YearMonth.from(java.time.LocalDate.ofInstant(now, java.time.ZoneOffset.UTC))
+      val archiveKey = s"player/alice/games/archives/${ym.getYear}/${f"${ym.getMonthValue}%02d"}"
+      val games = List(
+        archiveGameJson("alice", "bob", endTime = recent, timeClass = "daily"),
+        archiveGameJson("alice", "carol", endTime = recent, timeClass = "blitz"),
+        archiveGameJson("alice", "dave", endTime = recent, timeClass = "rapid")
+      )
+      val responses = Map(
+        "player/alice"       -> apiPlayerJson(200, "alice"),
+        "player/alice/stats" -> apiPlayerStatsJson(wins = 100, losses = 50, draws = 10),
+        archiveKey           -> archiveJson(games)
+      )
+      // Only 1 daily game in archives — require 2, should reject
+      val config = makeConfig().copy(dailyMinGamesFinished = Some(2))
+      for { outcome <- evalSingle(responses, config) }
+      yield assertTrue(outcome == CandidateOutcome.Rejected)
+    },
+    test("archive fetch failure is recorded in ApiFetchFailure") {
+      val now = Instant.now()
+      val ym = java.time.YearMonth.from(java.time.LocalDate.ofInstant(now, java.time.ZoneOffset.UTC))
+      val archiveKey = s"player/alice/games/archives/${ym.getYear}/${f"${ym.getMonthValue}%02d"}"
+      val responses = Map(
+        "player/alice"       -> apiPlayerJson(200, "alice"),
+        "player/alice/stats" -> apiPlayerStatsJson(wins = 100, losses = 50, draws = 10),
+        archiveKey           -> "NOT VALID JSON"
+      )
+      // dailyMinGamesFinished triggers archive fetch
+      val config = makeConfig().copy(dailyMinGamesFinished = Some(1))
+      for {
+        _        <- seedDb
+        _        <- RecruitmentConfig.upsert(config)
+        runId    <- RecruitmentRun.insert(clubId, "default", Instant.now())
+        client   <- fakeChessComClient(responses)
+        _        <- evalCandidates(client, runId, List(Username.wrap("alice")), config)
+        failures <- ApiFetchFailure.selectRecent(now.minus(Duration.ofMinutes(1)))
+      } yield assertTrue(
+        failures.nonEmpty,
+        failures.exists(_.errorType == "JsonDecodingException")
+      )
+    },
+    test("extractLastDailyTimeout ignores non-daily timeClass games") {
+      val now = Instant.now()
+      val recent = now.minus(java.time.Duration.ofDays(10)).getEpochSecond
+      val ym = java.time.YearMonth.from(java.time.LocalDate.ofInstant(now, java.time.ZoneOffset.UTC))
+      val archiveKey = s"player/alice/games/archives/${ym.getYear}/${f"${ym.getMonthValue}%02d"}"
+      val games = List(
+        // Blitz timeout — should NOT count as lastDailyTimeoutAt
+        archiveGameJson("alice", "bob", whiteResult = "timeout", blackResult = "win",
+          endTime = recent, timeClass = "blitz"),
+        // Daily win — no timeout
+        archiveGameJson("alice", "carol", endTime = recent, timeClass = "daily")
+      )
+      val responses = Map(
+        "player/alice"       -> apiPlayerJson(200, "alice"),
+        "player/alice/stats" -> apiPlayerStatsJson(timeoutPct = 5.0, wins = 100, losses = 50, draws = 10),
+        archiveKey           -> archiveJson(games)
+      )
+      // timeoutPct > 0 triggers archive fetch; not high enough to reject
+      val config = makeConfig().copy(dailyMaxTimeoutPercent = Some(10.0))
+      for {
+        _     <- seedDb
+        _     <- RecruitmentConfig.upsert(config)
+        runId <- RecruitmentRun.insert(clubId, "default", Instant.now())
+        client <- fakeChessComClient(responses)
+        _     <- evalCandidates(client, runId, List(Username.wrap("alice")), config)
+        cache <- PlayerRecruitmentCache.selectId(pid0)
+      } yield assertTrue(
+        cache.isDefined,
+        cache.get.lastDailyTimeoutAt.isEmpty // blitz timeout should not be stored
+      )
     },
     test("rejects by dailyMaxHoursPerMove") {
       val responses = Map(
