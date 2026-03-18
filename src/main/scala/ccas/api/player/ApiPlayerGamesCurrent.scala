@@ -17,22 +17,22 @@ object ApiPlayerGamesCurrent extends JsonDecoding[ApiPlayerGamesCurrent] {
 
   @jsonMemberNames(SnakeCase)
   final case class ApiPlayerCurrentDailyGame(
-      white: URL,
-      black: URL,
-      url: URL,
-      fen: String,
-      pgn: String,
-      turn: Colour,
-      moveBy: Long, // timestamp of when the next move must be made. 0 if the player-to-move is on vacation.
-      drawOffer: Option[Colour],
-      lastActivity: Long,
-      startTime: Long,
-      timeControl: String,
-      timeClass: TimeClass,
-      rules: GameRule,
-      rated: Boolean,
-      tournament: Option[URL],
-      `match`: Option[URL])
+    white: URL,
+    black: URL,
+    url: URL,
+    fen: String,
+    pgn: String,
+    turn: Colour,
+    moveBy: Long, // timestamp of when the next move must be made. 0 if the player-to-move is on vacation.
+    drawOffer: Option[Colour],
+    lastActivity: Long,
+    startTime: Long,
+    timeControl: String,
+    timeClass: TimeClass,
+    rules: GameRule,
+    rated: Boolean,
+    tournament: Option[URL],
+    `match`: Option[URL])
       derives JsonDecoder {
     val whiteUsername: Username = Username.wrap(white.path.segments.last)
     val blackUsername: Username = Username.wrap(black.path.segments.last)

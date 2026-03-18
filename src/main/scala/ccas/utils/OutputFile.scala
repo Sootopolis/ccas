@@ -1,8 +1,8 @@
 package ccas.utils
 
 import java.nio.file.{Files, Path, Paths}
-import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
+import java.time.LocalDateTime
 
 import zio.{Task, ZIO}
 
@@ -14,7 +14,7 @@ object OutputFile {
 
   def write(appName: String, clubUrlName: ClubUrlName, content: String): Task[Path] = {
     val date = LocalDateTime.now().format(dateTimeFormat)
-    val dir = Paths.get("out", appName)
+    val dir  = Paths.get("out", appName)
     val path = dir.resolve(s"$date-$clubUrlName.txt")
     ZIO.attemptBlocking(Files.createDirectories(dir)) *>
       ZIO.writeFile(path.toString, content).as(path)

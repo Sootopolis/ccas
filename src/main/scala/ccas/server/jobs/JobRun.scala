@@ -14,15 +14,15 @@ import ccas.utils.sql.SqlZioTypes.connectZIO
 
 @Table(PostgresDbType, SqlNameMapper.CamelToSnakeCase)
 case class JobRun(
-    @Id id: JobRunId,
-    kind: JobKind,
-    status: JobRunStatus,
-    clubUrlName: Option[ClubUrlName],
-    params: Option[String],
-    startedAt: Instant,
-    completedAt: Option[Instant],
-    error: Option[String]
-) derives DbCodec
+  @Id id: JobRunId,
+  kind: JobKind,
+  status: JobRunStatus,
+  clubUrlName: Option[ClubUrlName],
+  params: Option[String],
+  startedAt: Instant,
+  completedAt: Option[Instant],
+  error: Option[String])
+    derives DbCodec
 
 object JobRun {
 
@@ -58,7 +58,8 @@ object JobRun {
           """.update.run()
     }
 
-  def updateStatus(id: JobRunId, status: JobRunStatus, completedAt: Option[Instant], error: Option[String]): ZIO[Transactor, SQLException, Int] =
+  def updateStatus(id: JobRunId, status: JobRunStatus, completedAt: Option[Instant], error: Option[String])
+    : ZIO[Transactor, SQLException, Int] =
     connectZIO {
       sql"""UPDATE job_run SET status = $status, completed_at = $completedAt, error = $error
              WHERE id = $id""".update.run()
@@ -90,7 +91,7 @@ object JobRun {
 
   def markOrphansAsFailed: ZIO[Transactor, SQLException, Int] =
     connectZIO {
-      val failed = JobRunStatus.Failed
+      val failed  = JobRunStatus.Failed
       val running = JobRunStatus.Running
       sql"""UPDATE job_run SET status = $failed, completed_at = NOW(), error = 'Service restarted'
             WHERE status = $running""".update.run()

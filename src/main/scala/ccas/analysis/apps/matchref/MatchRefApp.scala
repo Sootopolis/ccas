@@ -30,23 +30,23 @@ object MatchRefApp extends ZIOAppDefault {
       client <- ZIO.service[ChessComClient]
       cache  <- Ref.make(Map.empty[ClubMatchId, Promise[Throwable, ApiDailyMatch]])
       // Clubs
-      clubs        <- selectUnresolvedClubs
-      _            <- ZIO.logInfo(s"Clubs without match ref: ${clubs.size}")
-      clubCounter  <- Ref.make(0)
-      _            <- ZIO.foreachPar(clubs)(club =>
+      clubs       <- selectUnresolvedClubs
+      _           <- ZIO.logInfo(s"Clubs without match ref: ${clubs.size}")
+      clubCounter <- Ref.make(0)
+      _ <- ZIO.foreachPar(clubs)(club =>
         resolveClub(client, cache, club).tap(r => clubCounter.update(_ + 1).when(r.isDefined))
       )
       resolvedClubs <- clubCounter.get
-      _ <- ZIO.logInfo(s"Resolved: $resolvedClubs / ${clubs.size}")
+      _             <- ZIO.logInfo(s"Resolved: $resolvedClubs / ${clubs.size}")
       // Players
-      players        <- selectUnresolvedPlayers
-      _              <- ZIO.logInfo(s"Players without match ref: ${players.size}")
-      playerCounter  <- Ref.make(0)
-      _              <- ZIO.foreachPar(players)(player =>
+      players       <- selectUnresolvedPlayers
+      _             <- ZIO.logInfo(s"Players without match ref: ${players.size}")
+      playerCounter <- Ref.make(0)
+      _ <- ZIO.foreachPar(players)(player =>
         resolvePlayer(client, cache, player).tap(r => playerCounter.update(_ + 1).when(r.isDefined))
       )
       resolvedPlayers <- playerCounter.get
-      _ <- ZIO.logInfo(s"Resolved: $resolvedPlayers / ${players.size}")
+      _               <- ZIO.logInfo(s"Resolved: $resolvedPlayers / ${players.size}")
     } yield ()
 
   private def selectUnresolvedPlayers: RIO[Transactor, List[UnresolvedPlayer]] =
@@ -62,10 +62,10 @@ object MatchRefApp extends ZIOAppDefault {
     }
 
   private def resolvePlayer(
-      client: ChessComClient,
-      cache: Ref[Map[ClubMatchId, Promise[Throwable, ApiDailyMatch]]],
-      player: UnresolvedPlayer
-    ): RIO[Transactor, Option[PlayerMatchRef]] =
+    client: ChessComClient,
+    cache: Ref[Map[ClubMatchId, Promise[Throwable, ApiDailyMatch]]],
+    player: UnresolvedPlayer
+  ): RIO[Transactor, Option[PlayerMatchRef]] =
     (for {
       playerMatches <- client.get[ApiPlayerMatches](ApiPlayerMatches.getUrl(player.username))
       matchOpt = playerMatches.finished.find(_.board.isDefined)
@@ -90,13 +90,13 @@ object MatchRefApp extends ZIOAppDefault {
     }
 
   private def fetchMatch(
-      client: ChessComClient,
-      cache: Ref[Map[ClubMatchId, Promise[Throwable, ApiDailyMatch]]],
-      matchId: ClubMatchId
-    ): Task[ApiDailyMatch] =
+    client: ChessComClient,
+    cache: Ref[Map[ClubMatchId, Promise[Throwable, ApiDailyMatch]]],
+    matchId: ClubMatchId
+  ): Task[ApiDailyMatch] =
     for {
       promise <- Promise.make[Throwable, ApiDailyMatch]
-      action  <- cache.modify { m =>
+      action <- cache.modify { m =>
         m.get(matchId) match {
           case Some(existing) => (existing.await, m)
           case None           => (fetchAndComplete(client, promise, matchId), m + (matchId -> promise))
@@ -106,10 +106,10 @@ object MatchRefApp extends ZIOAppDefault {
     } yield result
 
   private def fetchAndComplete(
-      client: ChessComClient,
-      promise: Promise[Throwable, ApiDailyMatch],
-      matchId: ClubMatchId
-    ): Task[ApiDailyMatch] =
+    client: ChessComClient,
+    promise: Promise[Throwable, ApiDailyMatch],
+    matchId: ClubMatchId
+  ): Task[ApiDailyMatch] =
     client.get[ApiDailyMatch](ApiDailyMatch.getUrl(matchId))
       .tap(promise.succeed)
       .tapError(promise.fail)
@@ -133,10 +133,10 @@ object MatchRefApp extends ZIOAppDefault {
     }
 
   private def resolveClub(
-      client: ChessComClient,
-      cache: Ref[Map[ClubMatchId, Promise[Throwable, ApiDailyMatch]]],
-      club: UnresolvedClub
-    ): RIO[Transactor, Option[ClubMatchRef]] =
+    client: ChessComClient,
+    cache: Ref[Map[ClubMatchId, Promise[Throwable, ApiDailyMatch]]],
+    club: UnresolvedClub
+  ): RIO[Transactor, Option[ClubMatchRef]] =
     (for {
       clubMatches <- client.get[ApiClubMatches](ApiClubMatches.getUrl(club.urlName))
       matchOpt = clubMatches.finished.headOption

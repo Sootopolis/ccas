@@ -1,5 +1,6 @@
 package ccas.server.jobs
 
+import com.augustnagro.magnum.sql
 import zio.{durationInt, Ref, Scope, Semaphore, Trace, ZIO, ZLayer}
 import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
@@ -9,7 +10,6 @@ import ccas.server.ServerTables
 import ccas.utils.client.ChessComClient
 import ccas.utils.sql.DataSourceLayer
 import ccas.utils.sql.SqlZioTypes.connectZIO
-import com.augustnagro.magnum.sql
 
 object TestJobRunner extends ZIOSpecDefault {
 
@@ -41,26 +41,26 @@ object TestJobRunner extends ZIOSpecDefault {
         )
         val driver = new ZClient.Driver[Any, Scope, Throwable] {
           override def request(
-              version: Version,
-              method: Method,
-              url: URL,
-              headers: Headers,
-              body: Body,
-              sslConfig: Option[ClientSSLConfig],
-              proxy: Option[Proxy]
-            )(implicit trace: Trace
-            ): ZIO[Scope, Throwable, Response] =
+            version: Version,
+            method: Method,
+            url: URL,
+            headers: Headers,
+            body: Body,
+            sslConfig: Option[ClientSSLConfig],
+            proxy: Option[Proxy]
+          )(implicit trace: Trace
+          ): ZIO[Scope, Throwable, Response] =
             routes.runZIO(Request(method = method, url = url, headers = headers, body = body))
 
           override def socket[Env1 <: Any](
-              version: Version,
-              url: URL,
-              headers: Headers,
-              app: WebSocketApp[Env1]
-            )(implicit
-              trace: Trace,
-              ev: Scope =:= Scope
-            ): ZIO[Env1 & Scope, Throwable, Response] =
+            version: Version,
+            url: URL,
+            headers: Headers,
+            app: WebSocketApp[Env1]
+          )(implicit
+            trace: Trace,
+            ev: Scope =:= Scope
+          ): ZIO[Env1 & Scope, Throwable, Response] =
             ZIO.die(new UnsupportedOperationException)
         }
         ChessComClient(
@@ -74,10 +74,11 @@ object TestJobRunner extends ZIOSpecDefault {
       }
     }
 
-  private def awaitStatus(runner: JobRunner, id: JobRunId, maxWait: zio.Duration = 10.seconds): ZIO[com.augustnagro.magnum.Transactor, Throwable, JobRun] =
+  private def awaitStatus(runner: JobRunner, id: JobRunId, maxWait: zio.Duration = 10.seconds)
+    : ZIO[com.augustnagro.magnum.Transactor, Throwable, JobRun] =
     runner.status(id).flatMap {
       case Some(job) if job.status != JobRunStatus.Running => ZIO.succeed(job)
-      case _ => ZIO.sleep(100.millis) *> awaitStatus(runner, id, maxWait)
+      case _                                               => ZIO.sleep(100.millis) *> awaitStatus(runner, id, maxWait)
     }.timeoutFail(new Exception(s"Job $id did not complete in time"))(maxWait)
 
   // --- Tests ---

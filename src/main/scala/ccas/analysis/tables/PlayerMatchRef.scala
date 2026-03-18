@@ -10,10 +10,10 @@ import ccas.utils.sql.SqlZioTypes.connectZIO
 
 @Table(PostgresDbType, SqlNameMapper.CamelToSnakeCase)
 final case class PlayerMatchRef(
-    @Id playerId: PlayerId,
-    matchId: ClubMatchId,
-    teamIdx: Int,
-    boardIdx: Int)
+  @Id playerId: PlayerId,
+  matchId: ClubMatchId,
+  teamIdx: Int,
+  boardIdx: Int)
     derives DbCodec
 
 object PlayerMatchRef {
@@ -40,8 +40,8 @@ object PlayerMatchRef {
     }
 
   def deleteId(playerId: PlayerId): ZIO[Transactor, SQLException, Int] =
-    connectZIO { sql"DELETE FROM player_match_ref WHERE player_id = $playerId".update.run() }
+    connectZIO(sql"DELETE FROM player_match_ref WHERE player_id = $playerId".update.run())
 
   def deleteAll: ZIO[Transactor, SQLException, Int] =
-    connectZIO { sql"DELETE FROM player_match_ref".update.run() }
+    connectZIO(sql"DELETE FROM player_match_ref".update.run())
 }

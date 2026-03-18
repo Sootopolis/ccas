@@ -41,11 +41,11 @@ object TestMembershipApp extends ZIOSpecDefault {
   // --- Helpers ---
 
   private def apiPlayerJson(
-      playerId: Long,
-      username: String,
-      status: String = "basic",
-      joined: Long = T.t0.getEpochSecond
-    ): String = {
+    playerId: Long,
+    username: String,
+    status: String = "basic",
+    joined: Long = T.t0.getEpochSecond
+  ): String = {
     val fields = List(
       s""""player_id": $playerId""",
       s""""username": "$username"""",
@@ -62,9 +62,9 @@ object TestMembershipApp extends ZIOSpecDefault {
   }
 
   private def fakeChessComClient(
-      responses: Map[String, String],
-      failures: Set[String] = Set.empty
-    ): UIO[ChessComClient] =
+    responses: Map[String, String],
+    failures: Set[String] = Set.empty
+  ): UIO[ChessComClient] =
     (for {
       semaphore <- Semaphore.make(1)
       mutex     <- Semaphore.make(1)
@@ -78,26 +78,26 @@ object TestMembershipApp extends ZIOSpecDefault {
       )
       val driver = new ZClient.Driver[Any, Scope, Throwable] {
         override def request(
-            version: Version,
-            method: Method,
-            url: URL,
-            headers: Headers,
-            body: Body,
-            sslConfig: Option[ClientSSLConfig],
-            proxy: Option[Proxy]
-          )(implicit trace: Trace
-          ): ZIO[Scope, Throwable, Response] =
+          version: Version,
+          method: Method,
+          url: URL,
+          headers: Headers,
+          body: Body,
+          sslConfig: Option[ClientSSLConfig],
+          proxy: Option[Proxy]
+        )(implicit trace: Trace
+        ): ZIO[Scope, Throwable, Response] =
           routes.runZIO(Request(method = method, url = url, headers = headers, body = body))
 
         override def socket[Env1 <: Any](
-            version: Version,
-            url: URL,
-            headers: Headers,
-            app: WebSocketApp[Env1]
-          )(implicit
-            trace: Trace,
-            ev: Scope =:= Scope
-          ): ZIO[Env1 & Scope, Throwable, Response] =
+          version: Version,
+          url: URL,
+          headers: Headers,
+          app: WebSocketApp[Env1]
+        )(implicit
+          trace: Trace,
+          ev: Scope =:= Scope
+        ): ZIO[Env1 & Scope, Throwable, Response] =
           ZIO.die(new UnsupportedOperationException)
       }
       ChessComClient(
@@ -113,10 +113,10 @@ object TestMembershipApp extends ZIOSpecDefault {
   private val testPlayerIds = List(pid0, pid1, pid2, pid3, pid4, pid5)
 
   private def seedDb(
-      players: List[Player] = Nil,
-      snapshots: List[PlayerSnapshot] = Nil,
-      members: List[ClubMember] = Nil
-    ): RIO[Transactor, Unit] =
+    players: List[Player] = Nil,
+    snapshots: List[PlayerSnapshot] = Nil,
+    members: List[ClubMember] = Nil
+  ): RIO[Transactor, Unit] =
     for {
       _ <- SqlZioTypes.connectZIO(sql"DELETE FROM club_member WHERE club_id = $clubId".update.run())
       _ <- ZIO.foreachDiscard(testPlayerIds) { pid =>
@@ -505,7 +505,14 @@ object TestMembershipApp extends ZIOSpecDefault {
 
       for {
         client <- fakeChessComClient(responses)
-        result <- MembershipApp.classifyDisappeared(client, dbState, Set.empty, Map.empty, ClubUrlName("test-club"), T.t2)
+        result <- MembershipApp.classifyDisappeared(
+          client,
+          dbState,
+          Set.empty,
+          Map.empty,
+          ClubUrlName("test-club"),
+          T.t2
+        )
       } yield assertTrue(
         result.changes.size == 1,
         result.changes.head.changes.exists(_.isInstanceOf[LeftClub]),
@@ -523,7 +530,14 @@ object TestMembershipApp extends ZIOSpecDefault {
 
       for {
         client <- fakeChessComClient(responses)
-        result <- MembershipApp.classifyDisappeared(client, dbState, Set.empty, Map.empty, ClubUrlName("test-club"), T.t2)
+        result <- MembershipApp.classifyDisappeared(
+          client,
+          dbState,
+          Set.empty,
+          Map.empty,
+          ClubUrlName("test-club"),
+          T.t2
+        )
       } yield assertTrue(
         result.changes.size == 1,
         result.changes.head.changes.exists(_.isInstanceOf[AccountClosed]),
@@ -541,7 +555,14 @@ object TestMembershipApp extends ZIOSpecDefault {
 
       for {
         client <- fakeChessComClient(Map.empty, failures = Set("charlie"))
-        result <- MembershipApp.classifyDisappeared(client, dbState, Set.empty, Map.empty, ClubUrlName("test-club"), T.t2)
+        result <- MembershipApp.classifyDisappeared(
+          client,
+          dbState,
+          Set.empty,
+          Map.empty,
+          ClubUrlName("test-club"),
+          T.t2
+        )
       } yield assertTrue(
         result.changes.size == 1,
         result.changes.head.changes.exists(_.isInstanceOf[Unresolvable]),
@@ -559,7 +580,14 @@ object TestMembershipApp extends ZIOSpecDefault {
 
       for {
         client <- fakeChessComClient(responses)
-        result <- MembershipApp.classifyDisappeared(client, dbState, Set.empty, Map.empty, ClubUrlName("test-club"), T.t2)
+        result <- MembershipApp.classifyDisappeared(
+          client,
+          dbState,
+          Set.empty,
+          Map.empty,
+          ClubUrlName("test-club"),
+          T.t2
+        )
       } yield assertTrue(
         result.changes.size == 1,
         result.changes.head.changes.exists(_.isInstanceOf[Unresolvable]),
@@ -576,7 +604,14 @@ object TestMembershipApp extends ZIOSpecDefault {
 
       for {
         client <- fakeChessComClient(Map.empty)
-        result <- MembershipApp.classifyDisappeared(client, dbState, Set(pid0), Map.empty, ClubUrlName("test-club"), T.t2)
+        result <- MembershipApp.classifyDisappeared(
+          client,
+          dbState,
+          Set(pid0),
+          Map.empty,
+          ClubUrlName("test-club"),
+          T.t2
+        )
       } yield assertTrue(
         result.changes.isEmpty,
         result.newSnapshots.isEmpty,

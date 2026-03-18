@@ -11,12 +11,12 @@ import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.SqlZioTypes.connectZIO
 
 final case class RecruitmentRun(
-    runId: Long,
-    clubId: ClubId,
-    criteriaId: Long,
-    startedAt: Instant,
-    completedAt: Option[Instant],
-    candidatesFound: Int)
+  runId: Long,
+  clubId: ClubId,
+  criteriaId: Long,
+  startedAt: Instant,
+  completedAt: Option[Instant],
+  candidatesFound: Int)
     derives DbCodec
 
 object RecruitmentRun {
@@ -61,7 +61,7 @@ object RecruitmentRun {
     }
 
   def sumCandidatesFoundToday(clubId: ClubId, alias: String): ZIO[Transactor, SQLException, Int] =
-    (connectZIO {
+    connectZIO {
       sql"""SELECT COALESCE(SUM(candidates_found), 0) FROM recruitment_run
             WHERE club_id = $clubId AND criteria_id IN (
               SELECT criteria_id FROM recruitment_alias WHERE club_id = $clubId AND alias = $alias
@@ -69,7 +69,7 @@ object RecruitmentRun {
               AND completed_at IS NOT NULL
               AND (started_at AT TIME ZONE 'UTC')::date = (NOW() AT TIME ZONE 'UTC')::date"""
         .query[Int].run().headOption
-    }).someOrFail(new SQLException("COALESCE query produced no rows"))
+    }.someOrFail(new SQLException("COALESCE query produced no rows"))
 
   def deleteAll: ZIO[Transactor, SQLException, Int] =
     connectZIO {

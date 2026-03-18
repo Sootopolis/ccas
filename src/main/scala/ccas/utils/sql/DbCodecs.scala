@@ -20,10 +20,12 @@ object DbCodecs {
   given DbCodec[URL] = DbCodec[String].biMap(
     string =>
       if string == null then null
-      else URL.decode(string).fold(
-        _ => throw new IllegalStateException(s"Malformed URL in database: $string"),
-        identity
-      ),
+      else
+        URL.decode(string).fold(
+          _ => throw new IllegalStateException(s"Malformed URL in database: $string"),
+          identity
+        )
+    ,
     url => if url == null then null else url.encode
   )
 

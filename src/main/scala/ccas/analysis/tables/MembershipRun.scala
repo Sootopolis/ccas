@@ -11,9 +11,9 @@ import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.SqlZioTypes.connectZIO
 
 final case class MembershipRun(
-    runId: Long,
-    clubId: ClubId,
-    ranAt: Instant)
+  runId: Long,
+  clubId: ClubId,
+  ranAt: Instant)
     derives DbCodec
 
 object MembershipRun {

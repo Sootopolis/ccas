@@ -8,8 +8,8 @@ import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.api.misc.subtypes.ClubUrlName
-import ccas.server.ServerTables
 import ccas.server.jobs.*
+import ccas.server.ServerTables
 import ccas.utils.client.ChessComClient
 import ccas.utils.sql.DataSourceLayer
 import ccas.utils.sql.SqlZioTypes.connectZIO
@@ -36,15 +36,15 @@ object TestRoutes extends ZIOSpecDefault {
   }
 
   private class FakeJobRunner(
-      jobs: Ref[Map[JobRunId, JobRun]],
-      nextAction: Ref[Action]
-  ) extends JobRunner {
+    jobs: Ref[Map[JobRunId, JobRun]],
+    nextAction: Ref[Action])
+      extends JobRunner {
 
     override def submit(
-        kind: JobKind,
-        clubUrlName: Option[ClubUrlName],
-        params: Option[String],
-        effect: RIO[ChessComClient & Transactor, Any]
+      kind: JobKind,
+      clubUrlName: Option[ClubUrlName],
+      params: Option[String],
+      effect: RIO[ChessComClient & Transactor, Any]
     ): RIO[Transactor, JobRunId] =
       nextAction.get.flatMap {
         case Action.Succeed =>
@@ -89,26 +89,26 @@ object TestRoutes extends ZIOSpecDefault {
         )
         val driver = new ZClient.Driver[Any, Scope, Throwable] {
           override def request(
-              version: Version,
-              method: Method,
-              url: URL,
-              headers: Headers,
-              body: Body,
-              sslConfig: Option[ClientSSLConfig],
-              proxy: Option[Proxy]
-            )(implicit trace: Trace
-            ): ZIO[Scope, Throwable, Response] =
+            version: Version,
+            method: Method,
+            url: URL,
+            headers: Headers,
+            body: Body,
+            sslConfig: Option[ClientSSLConfig],
+            proxy: Option[Proxy]
+          )(implicit trace: Trace
+          ): ZIO[Scope, Throwable, Response] =
             routes.runZIO(Request(method = method, url = url, headers = headers, body = body))
 
           override def socket[Env1 <: Any](
-              version: Version,
-              url: URL,
-              headers: Headers,
-              app: WebSocketApp[Env1]
-            )(implicit
-              trace: Trace,
-              ev: Scope =:= Scope
-            ): ZIO[Env1 & Scope, Throwable, Response] =
+            version: Version,
+            url: URL,
+            headers: Headers,
+            app: WebSocketApp[Env1]
+          )(implicit
+            trace: Trace,
+            ev: Scope =:= Scope
+          ): ZIO[Env1 & Scope, Throwable, Response] =
             ZIO.die(new UnsupportedOperationException)
         }
         ChessComClient(
@@ -157,16 +157,20 @@ object TestRoutes extends ZIOSpecDefault {
   private def suiteJobRoutes = suite("JobRoutes")(
     test("POST /api/jobs/recruitment returns 202") {
       for {
-        fake     <- getFakeRunner
-        _        <- fake.setNextAction(Action.Succeed)
-        response <- JobRoutes.routes.runZIO(jsonRequest(Method.POST, "/api/jobs/recruitment", """{"clubUrlName":"test-club"}"""))
+        fake <- getFakeRunner
+        _    <- fake.setNextAction(Action.Succeed)
+        response <- JobRoutes.routes.runZIO(
+          jsonRequest(Method.POST, "/api/jobs/recruitment", """{"clubUrlName":"test-club"}""")
+        )
       } yield assertTrue(response.status == Status.Accepted)
     },
     test("POST /api/jobs/recruitment returns 409 on conflict") {
       for {
-        fake     <- getFakeRunner
-        _        <- fake.setNextAction(Action.Conflict)
-        response <- JobRoutes.routes.runZIO(jsonRequest(Method.POST, "/api/jobs/recruitment", """{"clubUrlName":"test-club"}"""))
+        fake <- getFakeRunner
+        _    <- fake.setNextAction(Action.Conflict)
+        response <- JobRoutes.routes.runZIO(
+          jsonRequest(Method.POST, "/api/jobs/recruitment", """{"clubUrlName":"test-club"}""")
+        )
       } yield assertTrue(response.status == Status.Conflict)
     },
     test("POST /api/jobs/recruitment returns 400 on bad JSON") {
@@ -176,9 +180,11 @@ object TestRoutes extends ZIOSpecDefault {
     },
     test("POST /api/jobs/membership returns 202") {
       for {
-        fake     <- getFakeRunner
-        _        <- fake.setNextAction(Action.Succeed)
-        response <- JobRoutes.routes.runZIO(jsonRequest(Method.POST, "/api/jobs/membership", """{"clubUrlName":"test-club"}"""))
+        fake <- getFakeRunner
+        _    <- fake.setNextAction(Action.Succeed)
+        response <- JobRoutes.routes.runZIO(
+          jsonRequest(Method.POST, "/api/jobs/membership", """{"clubUrlName":"test-club"}""")
+        )
       } yield assertTrue(response.status == Status.Accepted)
     },
     test("POST /api/jobs/matchref returns 202") {
@@ -190,7 +196,16 @@ object TestRoutes extends ZIOSpecDefault {
     },
     test("GET /api/jobs returns list") {
       val t0 = LocalDateTime.of(2025, 6, 1, 0, 0).toInstant(ZoneOffset.UTC)
-      val job = JobRun(JobRunId.wrap("list-id"), JobKind.Recruitment, JobRunStatus.Completed, Some(ClubUrlName("c")), None, t0, Some(t0), None)
+      val job = JobRun(
+        JobRunId.wrap("list-id"),
+        JobKind.Recruitment,
+        JobRunStatus.Completed,
+        Some(ClubUrlName("c")),
+        None,
+        t0,
+        Some(t0),
+        None
+      )
       for {
         fake     <- getFakeRunner
         _        <- fake.prePopulate(job)
@@ -241,11 +256,15 @@ object TestRoutes extends ZIOSpecDefault {
     },
     test("POST /api/schedules creates schedule") {
       for {
-        _        <- deleteAllSchedules
+        _ <- deleteAllSchedules
         response <- ScheduleRoutes.routes.runZIO(
-          jsonRequest(Method.POST, "/api/schedules", """{"kind":"Recruitment","clubUrlName":"test-club","intervalHours":24}""")
+          jsonRequest(
+            Method.POST,
+            "/api/schedules",
+            """{"kind":"Recruitment","clubUrlName":"test-club","intervalHours":24}"""
+          )
         )
-        body     <- response.body.asString
+        body <- response.body.asString
       } yield assertTrue(
         response.status == Status.Created,
         body.contains("Recruitment"),
@@ -266,11 +285,11 @@ object TestRoutes extends ZIOSpecDefault {
         // Get existing schedule id
         listResp <- ScheduleRoutes.routes.runZIO(jsonRequest(Method.GET, "/api/schedules"))
         listBody <- listResp.body.asString
-        id        = extractFirstId(listBody)
+        id = extractFirstId(listBody)
         response <- ScheduleRoutes.routes.runZIO(
           jsonRequest(Method.PUT, s"/api/schedules/$id", """{"intervalHours":48,"enabled":false}""")
         )
-        body     <- response.body.asString
+        body <- response.body.asString
       } yield assertTrue(
         response.status == Status.Ok,
         body.contains("48"),
@@ -281,7 +300,7 @@ object TestRoutes extends ZIOSpecDefault {
       for {
         listResp <- ScheduleRoutes.routes.runZIO(jsonRequest(Method.GET, "/api/schedules"))
         listBody <- listResp.body.asString
-        id        = extractFirstId(listBody)
+        id = extractFirstId(listBody)
         response <- ScheduleRoutes.routes.runZIO(jsonRequest(Method.DELETE, s"/api/schedules/$id"))
       } yield assertTrue(response.status == Status.NoContent)
     },

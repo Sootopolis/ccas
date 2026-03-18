@@ -41,23 +41,23 @@ object BlacklistApp extends ZIOAppDefault {
     } yield ()
 
   def addToBlacklist(
-      clubUrlName: ClubUrlName,
-      username: Username,
-      reason: Option[String],
-      expiresAt: Option[Instant]
-    ): RIO[ChessComClient & Transactor, Unit] =
+    clubUrlName: ClubUrlName,
+    username: Username,
+    reason: Option[String],
+    expiresAt: Option[Instant]
+  ): RIO[ChessComClient & Transactor, Unit] =
     for {
-      client    <- ZIO.service[ChessComClient]
-      apiClub   <- ApiClub.get(client, clubUrlName)
-      club       = Club(apiClub.clubId, Instant.ofEpochSecond(apiClub.created), clubUrlName)
+      client  <- ZIO.service[ChessComClient]
+      apiClub <- ApiClub.get(client, clubUrlName)
+      club = Club(apiClub.clubId, Instant.ofEpochSecond(apiClub.created), clubUrlName)
       _         <- Club.upsert(club)
       apiPlayer <- client.get[ApiPlayer](ApiPlayer.getUrl(username))
-      now        = Instant.now()
-      _         <- RecruitmentBlacklist.insert(
-                     RecruitmentBlacklist(apiClub.clubId, apiPlayer.playerId, now, expiresAt, reason)
-                   )
-      _         <- Console.printLine(
-                     s"Blacklisted ${username} (player_id=${apiPlayer.playerId}) for club ${clubUrlName}"
-                   ).orDie
+      now = Instant.now()
+      _ <- RecruitmentBlacklist.insert(
+        RecruitmentBlacklist(apiClub.clubId, apiPlayer.playerId, now, expiresAt, reason)
+      )
+      _ <- Console.printLine(
+        s"Blacklisted ${username} (player_id=${apiPlayer.playerId}) for club ${clubUrlName}"
+      ).orDie
     } yield ()
 }

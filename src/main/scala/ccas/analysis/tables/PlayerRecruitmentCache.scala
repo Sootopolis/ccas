@@ -11,27 +11,36 @@ import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.SqlZioTypes.connectZIO
 
 final case class PlayerRecruitmentCache(
-    playerId: PlayerId,
-    fetchedAt: Instant,
-    dailyElo: Option[Int],
-    dailyTimeoutPct: Option[Double],
-    dailyGamesFinished: Option[Int],
-    clubCount: Option[Int],
-    ongoingGames: Option[Int],
-    ongoingTeamMatches: Option[Int],
-    tmGamesFinished90d: Option[Int],
-    tmTimeoutPct90d: Option[Double],
-    lastDailyTimeoutAt: Option[Instant],
-    lastTmTimeoutAt: Option[Instant])
+  playerId: PlayerId,
+  fetchedAt: Instant,
+  dailyElo: Option[Int],
+  dailyTimeoutPct: Option[Double],
+  dailyGamesFinished: Option[Int],
+  clubCount: Option[Int],
+  ongoingGames: Option[Int],
+  ongoingTeamMatches: Option[Int],
+  tmGamesFinished90d: Option[Int],
+  tmTimeoutPct90d: Option[Double],
+  lastDailyTimeoutAt: Option[Instant],
+  lastTmTimeoutAt: Option[Instant])
     derives DbCodec
 
 object PlayerRecruitmentCache {
   def empty(playerId: PlayerId, fetchedAt: Instant, clubCount: Option[Int]): PlayerRecruitmentCache =
-    PlayerRecruitmentCache(playerId, fetchedAt,
-      dailyElo = None, dailyTimeoutPct = None, dailyGamesFinished = None,
-      clubCount = clubCount, ongoingGames = None, ongoingTeamMatches = None,
-      tmGamesFinished90d = None, tmTimeoutPct90d = None,
-      lastDailyTimeoutAt = None, lastTmTimeoutAt = None)
+    PlayerRecruitmentCache(
+      playerId,
+      fetchedAt,
+      dailyElo = None,
+      dailyTimeoutPct = None,
+      dailyGamesFinished = None,
+      clubCount = clubCount,
+      ongoingGames = None,
+      ongoingTeamMatches = None,
+      tmGamesFinished90d = None,
+      tmTimeoutPct90d = None,
+      lastDailyTimeoutAt = None,
+      lastTmTimeoutAt = None
+    )
 
   private val selectCols = SqlLiteral(
     """player_id, fetched_at, daily_elo, daily_timeout_pct, daily_games_finished,

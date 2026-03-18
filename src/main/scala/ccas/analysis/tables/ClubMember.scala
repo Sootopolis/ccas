@@ -12,10 +12,10 @@ import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.SqlZioTypes.{connectZIO, transactZIO}
 
 final case class ClubMember(
-    clubId: ClubId,
-    playerId: PlayerId,
-    since: Instant,
-    until: Option[Instant])
+  clubId: ClubId,
+  playerId: PlayerId,
+  since: Instant,
+  until: Option[Instant])
     derives DbCodec {
   def isCurrent: Boolean = until.isEmpty
 }

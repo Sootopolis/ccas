@@ -14,14 +14,14 @@ import ccas.utils.sql.SqlZioTypes.connectZIO
 
 @Table(PostgresDbType, SqlNameMapper.CamelToSnakeCase)
 case class JobSchedule(
-    @Id id: Long,
-    kind: JobKind,
-    clubUrlName: Option[ClubUrlName],
-    params: Option[String],
-    intervalHours: Int,
-    enabled: Boolean,
-    lastRunAt: Option[Instant]
-) derives DbCodec
+  @Id id: Long,
+  kind: JobKind,
+  clubUrlName: Option[ClubUrlName],
+  params: Option[String],
+  intervalHours: Int,
+  enabled: Boolean,
+  lastRunAt: Option[Instant])
+    derives DbCodec
 
 object JobSchedule {
 
@@ -69,7 +69,8 @@ object JobSchedule {
       sql"UPDATE job_schedule SET last_run_at = $at WHERE id = $id".update.run()
     }
 
-  def update(id: Long, intervalHours: Option[Int], enabled: Option[Boolean], params: Option[Option[String]]): ZIO[Transactor, SQLException, Int] =
+  def update(id: Long, intervalHours: Option[Int], enabled: Option[Boolean], params: Option[Option[String]])
+    : ZIO[Transactor, SQLException, Int] =
     if (intervalHours.isEmpty && enabled.isEmpty && params.isEmpty) ZIO.succeed(0)
     else {
       val hasParams   = params.isDefined

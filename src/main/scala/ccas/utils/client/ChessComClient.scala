@@ -9,13 +9,13 @@ import ccas.utils.errors.ExternalException
 import ccas.utils.json.JsonDecodingException
 
 final class ChessComClient(
-    client: Client,
-    headers: Headers,
-    semaphore: Semaphore,
-    mutex: Semaphore,
-    throttled: Ref[Boolean],
-    cooldown: Duration,
-    retryBase: Duration = 1.second) {
+  client: Client,
+  headers: Headers,
+  semaphore: Semaphore,
+  mutex: Semaphore,
+  throttled: Ref[Boolean],
+  cooldown: Duration,
+  retryBase: Duration = 1.second) {
   private val batchedClient = client.batched
 
   private def rawGet[T](url: URL)(using jsonDecoder: JsonDecoder[T]): Task[T] = for {
@@ -65,9 +65,9 @@ object ChessComClient {
     Headers(Header.Custom("User-Agent", s"CCAS/1.0 (contact: $contactEmail)"))
 
   def live(
-      permits: Long = 5,
-      cooldown: Duration = 30.seconds
-    ): ZLayer[Client, Throwable, ChessComClient] =
+    permits: Long = 5,
+    cooldown: Duration = 30.seconds
+  ): ZLayer[Client, Throwable, ChessComClient] =
     ZLayer
       .fromZIO {
         for {

@@ -19,11 +19,11 @@ object ApiPlayerClubs extends JsonDecoding[ApiPlayerClubs] {
 
   @jsonMemberNames(SnakeCase)
   final case class ApiPlayerClub(
-      name: String,
-      lastActivity: Long,
-      icon: Option[URL],
-      url: URL,
-      joined: Long)
+    name: String,
+    lastActivity: Long,
+    icon: Option[URL],
+    url: URL,
+    joined: Long)
       derives JsonDecoder {
     def clubName: ClubUrlName = ClubUrlName.wrap(url.path.segments.last)
 

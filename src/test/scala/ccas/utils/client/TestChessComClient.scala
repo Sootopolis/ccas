@@ -11,10 +11,10 @@ object TestChessComClient extends ZIOSpecDefault {
   private given JsonDecoder[Payload] = DeriveJsonDecoder.gen[Payload]
 
   private def makeClient(
-      handler: Request => UIO[Response],
-      permits: Long = 5,
-      cooldown: Duration = 50.millis
-    ): UIO[(ChessComClient, Ref[Boolean])] =
+    handler: Request => UIO[Response],
+    permits: Long = 5,
+    cooldown: Duration = 50.millis
+  ): UIO[(ChessComClient, Ref[Boolean])] =
     for {
       semaphore <- Semaphore.make(permits)
       mutex     <- Semaphore.make(1)
@@ -22,30 +22,38 @@ object TestChessComClient extends ZIOSpecDefault {
     } yield {
       val driver = new ZClient.Driver[Any, Scope, Throwable] {
         override def request(
-            version: Version,
-            method: Method,
-            url: URL,
-            headers: Headers,
-            body: Body,
-            sslConfig: Option[ClientSSLConfig],
-            proxy: Option[Proxy]
-          )(implicit trace: Trace
-          ): ZIO[Scope, Throwable, Response] =
+          version: Version,
+          method: Method,
+          url: URL,
+          headers: Headers,
+          body: Body,
+          sslConfig: Option[ClientSSLConfig],
+          proxy: Option[Proxy]
+        )(implicit trace: Trace
+        ): ZIO[Scope, Throwable, Response] =
           handler(Request(method = method, url = url, headers = headers, body = body))
 
         override def socket[Env1 <: Any](
-            version: Version,
-            url: URL,
-            headers: Headers,
-            app: WebSocketApp[Env1]
-          )(implicit
-            trace: Trace,
-            ev: Scope =:= Scope
-          ): ZIO[Env1 & Scope, Throwable, Response] =
+          version: Version,
+          url: URL,
+          headers: Headers,
+          app: WebSocketApp[Env1]
+        )(implicit
+          trace: Trace,
+          ev: Scope =:= Scope
+        ): ZIO[Env1 & Scope, Throwable, Response] =
           ZIO.die(new UnsupportedOperationException)
       }
       val client =
-        ChessComClient(ZClient.fromDriver(driver), Headers.empty, semaphore, mutex, throttled, cooldown, retryBase = 10.millis)
+        ChessComClient(
+          ZClient.fromDriver(driver),
+          Headers.empty,
+          semaphore,
+          mutex,
+          throttled,
+          cooldown,
+          retryBase = 10.millis
+        )
       (client, throttled)
     }
 
@@ -113,29 +121,29 @@ object TestChessComClient extends ZIOSpecDefault {
         counter   <- Ref.make(0)
         driver = new ZClient.Driver[Any, Scope, Throwable] {
           override def request(
-              version: Version,
-              method: Method,
-              url: URL,
-              headers: Headers,
-              body: Body,
-              sslConfig: Option[ClientSSLConfig],
-              proxy: Option[Proxy]
-            )(implicit trace: Trace
-            ): ZIO[Scope, Throwable, Response] =
+            version: Version,
+            method: Method,
+            url: URL,
+            headers: Headers,
+            body: Body,
+            sslConfig: Option[ClientSSLConfig],
+            proxy: Option[Proxy]
+          )(implicit trace: Trace
+          ): ZIO[Scope, Throwable, Response] =
             for {
               n <- counter.getAndUpdate(_ + 1)
               _ <- order.update(_ :+ n)
             } yield Response.json(jsonBody)
 
           override def socket[Env1 <: Any](
-              version: Version,
-              url: URL,
-              headers: Headers,
-              app: WebSocketApp[Env1]
-            )(implicit
-              trace: Trace,
-              ev: Scope =:= Scope
-            ): ZIO[Env1 & Scope, Throwable, Response] =
+            version: Version,
+            url: URL,
+            headers: Headers,
+            app: WebSocketApp[Env1]
+          )(implicit
+            trace: Trace,
+            ev: Scope =:= Scope
+          ): ZIO[Env1 & Scope, Throwable, Response] =
             ZIO.die(new UnsupportedOperationException)
         }
         client = ChessComClient(ZClient.fromDriver(driver), Headers.empty, semaphore, mutex, throttled, 60.seconds)

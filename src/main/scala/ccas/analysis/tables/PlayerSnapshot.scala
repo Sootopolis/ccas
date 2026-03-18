@@ -14,11 +14,11 @@ import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.SqlZioTypes.{connectZIO, transactZIO}
 
 final case class PlayerSnapshot(
-    playerId: PlayerId,
-    since: Instant,
-    username: Username,
-    status: PlayerStatusCategory,
-    title: Option[Title])
+  playerId: PlayerId,
+  since: Instant,
+  username: Username,
+  status: PlayerStatusCategory,
+  title: Option[Title])
     derives DbCodec
 
 object PlayerSnapshot {

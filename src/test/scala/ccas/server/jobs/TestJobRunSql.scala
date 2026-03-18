@@ -36,8 +36,10 @@ object TestJobRunSql extends ZIOSpecDefault {
   private val id1 = JobRunId.wrap("test-id-1")
   private val id2 = JobRunId.wrap("test-id-2")
 
-  private val run0 = JobRun(id0, JobKind.Recruitment, JobRunStatus.Running, Some(ClubUrlName("club-a")), None, T.t0, None, None)
-  private val run1 = JobRun(id1, JobKind.Membership, JobRunStatus.Running, Some(ClubUrlName("club-a")), None, T.t1, None, None)
+  private val run0 =
+    JobRun(id0, JobKind.Recruitment, JobRunStatus.Running, Some(ClubUrlName("club-a")), None, T.t0, None, None)
+  private val run1 =
+    JobRun(id1, JobKind.Membership, JobRunStatus.Running, Some(ClubUrlName("club-a")), None, T.t1, None, None)
   private val run2 = JobRun(id2, JobKind.MatchRef, JobRunStatus.Running, None, Some("params"), T.t2, None, None)
 
   private val deleteAll = connectZIO { val _ = sql"DELETE FROM job_run".update.run() }
@@ -79,26 +81,27 @@ object TestJobRunSql extends ZIOSpecDefault {
     )
   }
 
-  private def testUpdateStatusChangesFields = test("updateStatus changes status, completedAt, error without touching other fields") {
-    for {
-      _      <- deleteAll
-      _      <- JobRun.insert(run2) // has params = Some("params"), startedAt = T.t2
-      _      <- JobRun.updateStatus(id2, JobRunStatus.Completed, Some(T.t1), None)
-      result <- JobRun.selectId(id2)
-    } yield assertTrue(
-      result.get.status == JobRunStatus.Completed,
-      result.get.completedAt.contains(T.t1),
-      result.get.startedAt == T.t2,
-      result.get.params.contains("params"),
-      result.get.error.isEmpty
-    )
-  }
+  private def testUpdateStatusChangesFields =
+    test("updateStatus changes status, completedAt, error without touching other fields") {
+      for {
+        _      <- deleteAll
+        _      <- JobRun.insert(run2) // has params = Some("params"), startedAt = T.t2
+        _      <- JobRun.updateStatus(id2, JobRunStatus.Completed, Some(T.t1), None)
+        result <- JobRun.selectId(id2)
+      } yield assertTrue(
+        result.get.status == JobRunStatus.Completed,
+        result.get.completedAt.contains(T.t1),
+        result.get.startedAt == T.t2,
+        result.get.params.contains("params"),
+        result.get.error.isEmpty
+      )
+    }
 
   private def testSelectRunningByKindAndClub = test("selectRunning finds by kind + clubUrlName (Some)") {
     for {
-      _ <- deleteAll
-      _ <- JobRun.insert(run0) // Recruitment, club-a
-      _ <- JobRun.insert(run1) // Membership, club-a
+      _           <- deleteAll
+      _           <- JobRun.insert(run0) // Recruitment, club-a
+      _           <- JobRun.insert(run1) // Membership, club-a
       recruitment <- JobRun.selectRunning(JobKind.Recruitment, Some(ClubUrlName("club-a")))
       membership  <- JobRun.selectRunning(JobKind.Membership, Some(ClubUrlName("club-a")))
     } yield assertTrue(
@@ -109,9 +112,9 @@ object TestJobRunSql extends ZIOSpecDefault {
 
   private def testSelectRunningNullClub = test("selectRunning finds by kind when clubUrlName is None") {
     for {
-      _ <- deleteAll
-      _ <- JobRun.insert(run2) // MatchRef, None
-      found   <- JobRun.selectRunning(JobKind.MatchRef, None)
+      _        <- deleteAll
+      _        <- JobRun.insert(run2) // MatchRef, None
+      found    <- JobRun.selectRunning(JobKind.MatchRef, None)
       notFound <- JobRun.selectRunning(JobKind.MatchRef, Some(ClubUrlName("x")))
     } yield assertTrue(
       found.get.id == id2,
@@ -120,8 +123,26 @@ object TestJobRunSql extends ZIOSpecDefault {
   }
 
   private def testSelectRunningIgnoresNonRunning = test("selectRunning ignores non-Running rows") {
-    val completed = JobRun(id0, JobKind.Recruitment, JobRunStatus.Completed, Some(ClubUrlName("club-a")), None, T.t0, Some(T.t1), None)
-    val failed    = JobRun(id1, JobKind.Recruitment, JobRunStatus.Failed, Some(ClubUrlName("club-a")), None, T.t0, Some(T.t1), Some("err"))
+    val completed = JobRun(
+      id0,
+      JobKind.Recruitment,
+      JobRunStatus.Completed,
+      Some(ClubUrlName("club-a")),
+      None,
+      T.t0,
+      Some(T.t1),
+      None
+    )
+    val failed = JobRun(
+      id1,
+      JobKind.Recruitment,
+      JobRunStatus.Failed,
+      Some(ClubUrlName("club-a")),
+      None,
+      T.t0,
+      Some(T.t1),
+      Some("err")
+    )
     for {
       _      <- deleteAll
       _      <- JobRun.insert(completed)
@@ -132,10 +153,10 @@ object TestJobRunSql extends ZIOSpecDefault {
 
   private def testSelectRecentOrdering = test("selectRecent orders by startedAt DESC with limit") {
     for {
-      _ <- deleteAll
-      _ <- JobRun.insert(run0.copy(startedAt = T.t0))
-      _ <- JobRun.insert(run1.copy(startedAt = T.t1))
-      _ <- JobRun.insert(run2.copy(startedAt = T.t2))
+      _      <- deleteAll
+      _      <- JobRun.insert(run0.copy(startedAt = T.t0))
+      _      <- JobRun.insert(run1.copy(startedAt = T.t1))
+      _      <- JobRun.insert(run2.copy(startedAt = T.t2))
       recent <- JobRun.selectRecent(2)
     } yield assertTrue(
       recent.size == 2,
@@ -149,14 +170,14 @@ object TestJobRunSql extends ZIOSpecDefault {
     val running2  = JobRun(id1, JobKind.Membership, JobRunStatus.Running, None, None, T.t1, None, None)
     val completed = JobRun(id2, JobKind.MatchRef, JobRunStatus.Completed, None, None, T.t2, Some(T.t2), None)
     for {
-      _      <- deleteAll
-      _      <- JobRun.insert(running1)
-      _      <- JobRun.insert(running2)
-      _      <- JobRun.insert(completed)
-      count  <- JobRun.markOrphansAsFailed
-      r0     <- JobRun.selectId(id0)
-      r1     <- JobRun.selectId(id1)
-      r2     <- JobRun.selectId(id2)
+      _     <- deleteAll
+      _     <- JobRun.insert(running1)
+      _     <- JobRun.insert(running2)
+      _     <- JobRun.insert(completed)
+      count <- JobRun.markOrphansAsFailed
+      r0    <- JobRun.selectId(id0)
+      r1    <- JobRun.selectId(id1)
+      r2    <- JobRun.selectId(id2)
     } yield assertTrue(
       count == 2,
       r0.get.status == JobRunStatus.Failed,

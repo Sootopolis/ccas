@@ -37,7 +37,7 @@ object Player {
     transactZIO(repo.insertAll(players))
 
   def deleteAll: ZIO[Transactor, SQLException, Int] =
-    connectZIO { sql"DELETE FROM player".update.run() }
+    connectZIO(sql"DELETE FROM player".update.run())
 
   def deleteId(playerId: PlayerId): ZIO[Transactor, SQLException, Unit] =
     connectZIO(repo.deleteById(playerId))

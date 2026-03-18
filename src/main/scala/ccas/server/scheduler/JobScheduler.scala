@@ -1,7 +1,7 @@
 package ccas.server.scheduler
 
-import java.time.Instant
 import java.time.temporal.ChronoUnit
+import java.time.Instant
 
 import com.augustnagro.magnum.Transactor
 import com.typesafe.config.ConfigFactory
@@ -21,19 +21,20 @@ object JobScheduler {
 
   val live: ZLayer[JobRunner & Transactor, Nothing, JobScheduler] =
     ZLayer.fromFunction { (runner: JobRunner, xa: Transactor) =>
-      val config      = ConfigFactory.load()
-      val pollMinutes = if config.hasPath("scheduler.pollIntervalMinutes")
-                        then config.getInt("scheduler.pollIntervalMinutes")
-                        else 5
+      val config = ConfigFactory.load()
+      val pollMinutes =
+        if config.hasPath("scheduler.pollIntervalMinutes")
+        then config.getInt("scheduler.pollIntervalMinutes")
+        else 5
       val pollInterval = pollMinutes.toLong.minutes
       new JobSchedulerLive(runner, xa, pollInterval)
     }
 
   private class JobSchedulerLive(
-      runner: JobRunner,
-      xa: Transactor,
-      pollInterval: Duration
-  ) extends JobScheduler {
+    runner: JobRunner,
+    xa: Transactor,
+    pollInterval: Duration)
+      extends JobScheduler {
 
     private val env = zio.ZEnvironment(xa)
 
@@ -46,7 +47,7 @@ object JobScheduler {
     private def pollLoop: UIO[Unit] =
       (for {
         schedules <- JobSchedule.selectEnabled.provideEnvironment(env)
-        now        = Instant.now()
+        now = Instant.now()
         _ <- ZIO.foreachDiscard(schedules) { schedule =>
           val isDue = schedule.lastRunAt.forall(ts => ChronoUnit.HOURS.between(ts, now) >= schedule.intervalHours)
           ZIO.whenDiscard(isDue)(runSchedule(schedule, now))
@@ -61,13 +62,9 @@ object JobScheduler {
 
       val effect = schedule.kind match
         case JobKind.Recruitment =>
-          requireClubUrlName.flatMap(name =>
-            RecruitmentApp.recruit(name, "default", timeLimitMinutes = Some(30)).unit
-          )
+          requireClubUrlName.flatMap(name => RecruitmentApp.recruit(name, "default", timeLimitMinutes = Some(30)).unit)
         case JobKind.Membership =>
-          requireClubUrlName.flatMap(name =>
-            MembershipApp.reconcile(name).unit
-          )
+          requireClubUrlName.flatMap(name => MembershipApp.reconcile(name).unit)
         case JobKind.MatchRef =>
           MatchRefApp.populate
 

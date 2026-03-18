@@ -187,8 +187,8 @@ object TestClubSql extends ZIOSpecDefault {
 
   private def testClubMatchRefDeleteAll = test("testClubMatchRefDeleteAll") {
     for {
-      _      <- ClubMatchRef.upsert(refB)
-      _      <- ClubMatchRef.deleteAll
+      _       <- ClubMatchRef.upsert(refB)
+      _       <- ClubMatchRef.deleteAll
       resultA <- ClubMatchRef.selectId(refA.clubId)
       resultB <- ClubMatchRef.selectId(refB.clubId)
     } yield assertTrue(resultA.isEmpty, resultB.isEmpty)

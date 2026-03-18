@@ -13,11 +13,11 @@ import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.SqlZioTypes.{connectZIO, transactZIO}
 
 final case class RecruitmentCandidate(
-    runId: Long,
-    playerId: PlayerId,
-    evaluatedAt: Instant,
-    outcome: CandidateOutcome,
-    rejectionReason: Option[String])
+  runId: Long,
+  playerId: PlayerId,
+  evaluatedAt: Instant,
+  outcome: CandidateOutcome,
+  rejectionReason: Option[String])
     derives DbCodec
 
 object RecruitmentCandidate {
@@ -75,10 +75,10 @@ object RecruitmentCandidate {
     }
 
   def selectLatestRejectedByAlias(
-      playerId: PlayerId,
-      clubId: ClubId,
-      alias: String
-    ): ZIO[Transactor, SQLException, Option[RecruitmentCandidate]] =
+    playerId: PlayerId,
+    clubId: ClubId,
+    alias: String
+  ): ZIO[Transactor, SQLException, Option[RecruitmentCandidate]] =
     connectZIO {
       val rejected = CandidateOutcome.Rejected.toString
       val selectColsQualified = SqlLiteral(

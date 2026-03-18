@@ -4,11 +4,11 @@ import java.sql.SQLException
 import java.time.{Instant, LocalDateTime, ZoneOffset}
 
 import com.augustnagro.magnum.sql
-import zio.ZIO
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
+import zio.ZIO
 
-import ccas.server.ServerTables
 import ccas.server.jobs.{JobKind, JobRun, JobRunId, JobRunStatus}
+import ccas.server.ServerTables
 import ccas.utils.sql.SqlZioTypes.{connectZIO, withTransaction}
 
 object TestWithTransaction extends ZIOSpecDefault {
@@ -38,7 +38,7 @@ object TestWithTransaction extends ZIOSpecDefault {
   private def testCommitOnSuccess = test("commit on success: both inserts are visible") {
     for {
       _ <- deleteAll
-      _ <- withTransaction { JobRun.insert(runA) *> JobRun.insert(runB) }
+      _ <- withTransaction(JobRun.insert(runA) *> JobRun.insert(runB))
       a <- JobRun.selectId(idA)
       b <- JobRun.selectId(idB)
     } yield assertTrue(
@@ -50,7 +50,7 @@ object TestWithTransaction extends ZIOSpecDefault {
   private def testRollbackOnSqlException = test("rollback on SQLException: first insert is undone") {
     for {
       _      <- deleteAll
-      result <- withTransaction { JobRun.insert(runA) *> JobRun.insert(runA) }.exit
+      result <- withTransaction(JobRun.insert(runA) *> JobRun.insert(runA)).exit
       a      <- JobRun.selectId(idA)
     } yield assertTrue(
       result.isFailure,
@@ -61,7 +61,7 @@ object TestWithTransaction extends ZIOSpecDefault {
   private def testRollbackOnZioFail = test("rollback on ZIO.fail: first insert is undone") {
     for {
       _      <- deleteAll
-      result <- withTransaction { JobRun.insert(runA) *> ZIO.fail(new SQLException("simulated")) }.exit
+      result <- withTransaction(JobRun.insert(runA) *> ZIO.fail(new SQLException("simulated"))).exit
       a      <- JobRun.selectId(idA)
     } yield assertTrue(
       result.isFailure,
@@ -72,7 +72,7 @@ object TestWithTransaction extends ZIOSpecDefault {
   private def testRollbackOnDefect = test("rollback on defect: first insert is undone") {
     for {
       _      <- deleteAll
-      result <- withTransaction { JobRun.insert(runA) *> ZIO.die(new RuntimeException("boom")) }.exit
+      result <- withTransaction(JobRun.insert(runA) *> ZIO.die(new RuntimeException("boom"))).exit
       a      <- JobRun.selectId(idA)
     } yield assertTrue(
       result.isFailure,
@@ -83,7 +83,7 @@ object TestWithTransaction extends ZIOSpecDefault {
   private def testConnectionSharing = test("connectZIO calls inside withTransaction share one connection") {
     for {
       _ <- deleteAll
-      a <- withTransaction { JobRun.insert(runA) *> JobRun.selectId(idA) }
+      a <- withTransaction(JobRun.insert(runA) *> JobRun.selectId(idA))
     } yield assertTrue(
       a.isDefined,
       a.get.id == idA

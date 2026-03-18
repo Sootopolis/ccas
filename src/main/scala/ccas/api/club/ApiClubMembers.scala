@@ -11,9 +11,9 @@ import ccas.utils.json.JsonDecoding
 
 @jsonMemberNames(SnakeCase)
 final case class ApiClubMembers(
-    weekly: Chunk[ApiClubMember],
-    monthly: Chunk[ApiClubMember],
-    allTime: Chunk[ApiClubMember]) {
+  weekly: Chunk[ApiClubMember],
+  monthly: Chunk[ApiClubMember],
+  allTime: Chunk[ApiClubMember]) {
   def all: Chunk[ApiClubMember] = weekly ++ monthly ++ allTime
 
   def toMap: Map[Username, Long] = all.map(member => member.username -> member.joined).toMap

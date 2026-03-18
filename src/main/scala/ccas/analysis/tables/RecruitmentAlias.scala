@@ -11,10 +11,10 @@ import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.SqlZioTypes.connectZIO
 
 final case class RecruitmentAlias(
-    clubId: ClubId,
-    alias: String,
-    since: Instant,
-    criteriaId: Long)
+  clubId: ClubId,
+  alias: String,
+  since: Instant,
+  criteriaId: Long)
     derives DbCodec
 
 object RecruitmentAlias {

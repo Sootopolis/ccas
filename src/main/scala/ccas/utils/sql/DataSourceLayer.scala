@@ -19,7 +19,7 @@ object DataSourceLayer {
       for {
         xa <- ZIO.acquireRelease(
           ZIO.attempt {
-            val config      = ConfigFactory.load().getConfig(prefix)
+            val config       = ConfigFactory.load().getConfig(prefix)
             val hikariConfig = new HikariConfig()
 
             if (config.hasPath("url")) {
@@ -36,11 +36,13 @@ object DataSourceLayer {
 
             if (config.hasPath("pool")) {
               val poolConfig = config.getConfig("pool")
-              if (poolConfig.hasPath("maximumPoolSize"))  hikariConfig.setMaximumPoolSize(poolConfig.getInt("maximumPoolSize"))
-              if (poolConfig.hasPath("minimumIdle"))       hikariConfig.setMinimumIdle(poolConfig.getInt("minimumIdle"))
-              if (poolConfig.hasPath("connectionTimeout")) hikariConfig.setConnectionTimeout(poolConfig.getLong("connectionTimeout"))
-              if (poolConfig.hasPath("idleTimeout"))       hikariConfig.setIdleTimeout(poolConfig.getLong("idleTimeout"))
-              if (poolConfig.hasPath("maxLifetime"))       hikariConfig.setMaxLifetime(poolConfig.getLong("maxLifetime"))
+              if (poolConfig.hasPath("maximumPoolSize"))
+                hikariConfig.setMaximumPoolSize(poolConfig.getInt("maximumPoolSize"))
+              if (poolConfig.hasPath("minimumIdle")) hikariConfig.setMinimumIdle(poolConfig.getInt("minimumIdle"))
+              if (poolConfig.hasPath("connectionTimeout"))
+                hikariConfig.setConnectionTimeout(poolConfig.getLong("connectionTimeout"))
+              if (poolConfig.hasPath("idleTimeout")) hikariConfig.setIdleTimeout(poolConfig.getLong("idleTimeout"))
+              if (poolConfig.hasPath("maxLifetime")) hikariConfig.setMaxLifetime(poolConfig.getLong("maxLifetime"))
             }
 
             val hikariDs = new HikariDataSource(hikariConfig)
