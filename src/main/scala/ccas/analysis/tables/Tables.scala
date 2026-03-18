@@ -13,7 +13,8 @@ object Tables {
       _ <- ClubMatchRef.createTable
       _ <- ClubMember.createTable
       _ <- MembershipRun.createTable
-      _ <- RecruitmentConfig.createTable
+      _ <- RecruitmentCriteria.createTable
+      _ <- RecruitmentAlias.createTable
       _ <- RecruitmentBlacklist.createTable
       _ <- RecruitmentRun.createTable
       _ <- RecruitmentCandidate.createTable

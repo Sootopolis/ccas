@@ -13,21 +13,21 @@ import ccas.utils.sql.SqlZioTypes.connectZIO
 final case class RecruitmentRun(
     runId: Long,
     clubId: ClubId,
-    configName: String,
+    criteriaId: Long,
     startedAt: Instant,
     completedAt: Option[Instant],
     candidatesFound: Int)
     derives DbCodec
 
 object RecruitmentRun {
-  private val selectCols = SqlLiteral("run_id, club_id, config_name, started_at, completed_at, candidates_found")
+  private val selectCols = SqlLiteral("run_id, club_id, criteria_id, started_at, completed_at, candidates_found")
 
   def createTable: ZIO[Transactor, SQLException, Int] =
     connectZIO {
       sql"""CREATE TABLE IF NOT EXISTS recruitment_run (
               run_id            BIGSERIAL PRIMARY KEY,
               club_id           BIGINT NOT NULL,
-              config_name       VARCHAR NOT NULL,
+              criteria_id       BIGINT NOT NULL,
               started_at        TIMESTAMPTZ NOT NULL,
               completed_at      TIMESTAMPTZ,
               candidates_found  INT NOT NULL,
@@ -36,10 +36,10 @@ object RecruitmentRun {
       sql"""CREATE INDEX IF NOT EXISTS idx_recruitment_run_club_id ON recruitment_run(club_id)""".update.run()
     }
 
-  def insert(clubId: ClubId, configName: String, startedAt: Instant): ZIO[Transactor, SQLException, Long] =
+  def insert(clubId: ClubId, criteriaId: Long, startedAt: Instant): ZIO[Transactor, SQLException, Long] =
     connectZIO {
-      sql"""INSERT INTO recruitment_run (club_id, config_name, started_at, candidates_found)
-            VALUES ($clubId, $configName, $startedAt, 0)
+      sql"""INSERT INTO recruitment_run (club_id, criteria_id, started_at, candidates_found)
+            VALUES ($clubId, $criteriaId, $startedAt, 0)
             RETURNING run_id""".query[Long].run()
               .headOption.getOrElse(throw new SQLException("INSERT RETURNING produced no rows"))
     }
@@ -59,6 +59,17 @@ object RecruitmentRun {
   def selectId(runId: Long): ZIO[Transactor, SQLException, Option[RecruitmentRun]] =
     connectZIO {
       sql"SELECT $selectCols FROM recruitment_run WHERE run_id = $runId".query[RecruitmentRun].run().headOption
+    }
+
+  def sumCandidatesFoundToday(clubId: ClubId, alias: String): ZIO[Transactor, SQLException, Int] =
+    connectZIO {
+      sql"""SELECT COALESCE(SUM(candidates_found), 0) FROM recruitment_run
+            WHERE club_id = $clubId AND criteria_id IN (
+              SELECT criteria_id FROM recruitment_alias WHERE club_id = $clubId AND alias = $alias
+            )
+              AND completed_at IS NOT NULL
+              AND (started_at AT TIME ZONE 'UTC')::date = (NOW() AT TIME ZONE 'UTC')::date"""
+        .query[Int].run().head
     }
 
   def deleteAll: ZIO[Transactor, SQLException, Int] =

@@ -20,14 +20,14 @@ object JobRoutes {
 
   // --- Request types ---
 
-  private val DefaultInviteCap = 30
-  private val MaxInviteCap = 40
+  private val MaxTarget = 40
   private val MaxTimeLimitMinutes = 30
 
   case class RecruitmentRequest(
       clubUrlName: ClubUrlName,
-      configName: Option[String],
-      inviteCap: Option[Int],
+      alias: Option[String],
+      target: Option[Int],
+      cumulative: Option[Boolean],
       sourceClubs: Option[List[ClubUrlName]],
       timeLimitMinutes: Option[Int],
       explore: Option[Boolean]
@@ -105,14 +105,15 @@ object JobRoutes {
       (for {
         body   <- parseJsonBody[RecruitmentRequest](req)
         runner <- ZIO.service[JobRunner]
-        effectiveInviteCap    = body.inviteCap.map(_ min MaxInviteCap).getOrElse(DefaultInviteCap)
+        cappedTarget          = body.target.map(_ min MaxTarget)
         effectiveTimeLimit    = body.timeLimitMinutes.map(_ min MaxTimeLimitMinutes)
         effect  = RecruitmentApp.recruit(
                     body.clubUrlName,
-                    body.configName.getOrElse("default"),
-                    effectiveInviteCap,
-                    body.sourceClubs.getOrElse(Nil),
-                    effectiveTimeLimit,
+                    body.alias.getOrElse("default"),
+                    target = cappedTarget,
+                    cumulative = body.cumulative.getOrElse(false),
+                    sourceClubs = body.sourceClubs.getOrElse(Nil),
+                    timeLimitMinutes = effectiveTimeLimit,
                     explore = body.explore.getOrElse(true)
                   )
         jobId  <- runner.submit(JobKind.Recruitment, Some(body.clubUrlName), Some(req.body.toString), effect)
