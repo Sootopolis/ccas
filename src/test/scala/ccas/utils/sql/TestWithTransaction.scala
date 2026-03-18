@@ -20,7 +20,7 @@ object TestWithTransaction extends ZIOSpecDefault {
     testRollbackOnDefect,
     testConnectionSharing
   ).provideShared(
-    DataSourceLayer.liveFromPrefix(schema = Some("test_with_tx"), onInit = ServerTables.ensureTables)
+    FreshSchemaLayer("test_with_tx", onInit = ServerTables.ensureTables)
   ) @@ TestAspect.sequential
 
   private val t0: Instant = LocalDateTime.of(2025, 6, 1, 0, 0).toInstant(ZoneOffset.UTC)

@@ -8,7 +8,7 @@ import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 import ccas.api.misc.subtypes.ClubUrlName
 import ccas.server.jobs.JobKind
 import ccas.server.ServerTables
-import ccas.utils.sql.DataSourceLayer
+import ccas.utils.sql.FreshSchemaLayer
 import ccas.utils.sql.SqlZioTypes.connectZIO
 
 object TestJobScheduleSql extends ZIOSpecDefault {
@@ -25,7 +25,7 @@ object TestJobScheduleSql extends ZIOSpecDefault {
     testDelete,
     testUniqueConstraint
   ).provideShared(
-    DataSourceLayer.liveFromPrefix(schema = Some("test_job_schedule"), onInit = ServerTables.ensureTables)
+    FreshSchemaLayer("test_job_schedule", onInit = ServerTables.ensureTables)
   ) @@ TestAspect.sequential
 
   private object T {

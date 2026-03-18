@@ -10,7 +10,7 @@ import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 import ccas.analysis.tables.*
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubUrlName, PlayerId, Username}
 import ccas.utils.client.ChessComClient
-import ccas.utils.sql.{DataSourceLayer, SqlZioTypes}
+import ccas.utils.sql.{FreshSchemaLayer, SqlZioTypes}
 
 object TestMatchRefApp extends ZIOSpecDefault {
 
@@ -218,7 +218,7 @@ object TestMatchRefApp extends ZIOSpecDefault {
     suiteClubResolution,
     suiteFullPopulate
   ).provideShared(
-    DataSourceLayer.liveFromPrefix(schema = Some("test_match_ref_app"), onInit = Tables.ensureTables)
+    FreshSchemaLayer("test_match_ref_app", onInit = Tables.ensureTables)
   ) @@ TestAspect.sequential
 
   // ==========================================================================

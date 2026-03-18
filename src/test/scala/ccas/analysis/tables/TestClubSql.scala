@@ -7,7 +7,7 @@ import zio.Chunk
 
 import ccas.api.misc.enums.PlayerStatusCategory.{Active, Closed}
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubUrlName, PlayerId, Username}
-import ccas.utils.sql.DataSourceLayer
+import ccas.utils.sql.FreshSchemaLayer
 
 object TestClubSql extends ZIOSpecDefault {
   override def spec: Spec[Any, Throwable] = suite("TestClubSql")(
@@ -26,7 +26,7 @@ object TestClubSql extends ZIOSpecDefault {
     testClubMatchRefDelete,
     testClubMatchRefDeleteAll
   ).provideShared(
-    DataSourceLayer.liveFromPrefix(schema = Some("test_club_sql"), onInit = Tables.ensureTables)
+    FreshSchemaLayer("test_club_sql", onInit = Tables.ensureTables)
   ) @@ TestAspect.sequential
 
   private object Timestamps {

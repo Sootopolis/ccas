@@ -11,7 +11,7 @@ import ccas.api.misc.subtypes.ClubUrlName
 import ccas.server.jobs.*
 import ccas.server.ServerTables
 import ccas.utils.client.ChessComClient
-import ccas.utils.sql.DataSourceLayer
+import ccas.utils.sql.FreshSchemaLayer
 import ccas.utils.sql.SqlZioTypes.connectZIO
 
 object TestRoutes extends ZIOSpecDefault {
@@ -21,7 +21,7 @@ object TestRoutes extends ZIOSpecDefault {
     suiteJobRoutes,
     suiteScheduleRoutes
   ).provideShared(
-    DataSourceLayer.liveFromPrefix(schema = Some("test_routes"), onInit = ServerTables.ensureTables),
+    FreshSchemaLayer("test_routes", onInit = ServerTables.ensureTables),
     fakeJobRunnerLayer,
     dummyChessComClientLayer,
     Scope.default

@@ -7,7 +7,7 @@ import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.api.misc.subtypes.ClubUrlName
 import ccas.server.ServerTables
-import ccas.utils.sql.DataSourceLayer
+import ccas.utils.sql.FreshSchemaLayer
 import ccas.utils.sql.SqlZioTypes.connectZIO
 
 object TestJobRunSql extends ZIOSpecDefault {
@@ -23,7 +23,7 @@ object TestJobRunSql extends ZIOSpecDefault {
     testSelectRecentOrdering,
     testMarkOrphansAsFailed
   ).provideShared(
-    DataSourceLayer.liveFromPrefix(schema = Some("test_job_run"), onInit = ServerTables.ensureTables)
+    FreshSchemaLayer("test_job_run", onInit = ServerTables.ensureTables)
   ) @@ TestAspect.sequential
 
   private object T {

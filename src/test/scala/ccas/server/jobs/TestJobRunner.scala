@@ -8,7 +8,7 @@ import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 import ccas.api.misc.subtypes.ClubUrlName
 import ccas.server.ServerTables
 import ccas.utils.client.ChessComClient
-import ccas.utils.sql.DataSourceLayer
+import ccas.utils.sql.FreshSchemaLayer
 import ccas.utils.sql.SqlZioTypes.connectZIO
 
 object TestJobRunner extends ZIOSpecDefault {
@@ -22,7 +22,7 @@ object TestJobRunner extends ZIOSpecDefault {
     testStatusUnknown,
     testRecentJobsOrdered
   ).provideShared(
-    DataSourceLayer.liveFromPrefix(schema = Some("test_job_runner"), onInit = ServerTables.ensureTables),
+    FreshSchemaLayer("test_job_runner", onInit = ServerTables.ensureTables),
     dummyChessComClientLayer,
     JobRunner.live
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock @@ TestAspect.timeout(30.seconds)

@@ -13,7 +13,7 @@ import ccas.analysis.tables.{Club, ClubMember, Player, PlayerSnapshot, Tables}
 import ccas.api.misc.enums.PlayerStatusCategory.{Active, Closed}
 import ccas.api.misc.subtypes.{ClubId, ClubUrlName, PlayerId, Username}
 import ccas.utils.client.ChessComClient
-import ccas.utils.sql.{DataSourceLayer, SqlZioTypes}
+import ccas.utils.sql.{FreshSchemaLayer, SqlZioTypes}
 
 object TestMembershipApp extends ZIOSpecDefault {
 
@@ -138,7 +138,7 @@ object TestMembershipApp extends ZIOSpecDefault {
     suiteClassifyApiMembers,
     suiteClassifyDisappeared
   ).provideShared(
-    DataSourceLayer.liveFromPrefix(schema = Some("test_membership_app"), onInit = Tables.ensureTables)
+    FreshSchemaLayer("test_membership_app", onInit = Tables.ensureTables)
   ) @@ TestAspect.sequential
 
   // ==========================================================================
