@@ -14,6 +14,7 @@ import ccas.api.misc.enums.{GameResultDetail, PlayerStatusCategory}
 import ccas.api.misc.subtypes.{ClubId, ClubUrlName, PlayerId, Username}
 import ccas.api.player.*
 import ccas.utils.client.ChessComClient
+import ccas.utils.OutputFile
 import ccas.utils.errors.ExternalException
 import ccas.utils.errors.safeMessage
 import ccas.utils.sql.DataSourceLayer
@@ -71,7 +72,14 @@ object RecruitmentApp extends ZIOAppDefault {
     for {
       args <- ZIOAppArgs.getArgs
       _ <- (args.toList match
-        case "report" :: clubStr :: rest => showReport(ClubUrlName.wrap(clubStr), rest.headOption)
+        case "report" :: clubStr :: rest =>
+          val clubUrlName = ClubUrlName.wrap(clubStr)
+          showReport(clubUrlName, rest.headOption).flatMap { usernames =>
+            ZIO.whenDiscard(usernames.nonEmpty) {
+              OutputFile.write("recruitment", clubUrlName, formatRecruitmentOutput(usernames))
+                .flatMap(path => ZIO.logInfo(s"Output written to $path"))
+            }
+          }
         case clubStr :: rest =>
           val (flags, positional) = rest.partition(_.startsWith("--"))
           val flagMap = flags.sliding(2, 2).collect { case Seq(k, v) => k -> v }.toMap ++
@@ -83,8 +91,23 @@ object RecruitmentApp extends ZIOAppDefault {
           val positionalClean = positional.filterNot(_ == "--cumulative")
           val alias  = positionalClean.headOption.getOrElse("default")
           val sourceClubs = positionalClean.drop(1).map(ClubUrlName.wrap)
-          recruit(ClubUrlName.wrap(clubStr), alias, target = targetOpt, cumulative = cumulative,
+          val clubUrlName = ClubUrlName.wrap(clubStr)
+          recruit(clubUrlName, alias, target = targetOpt, cumulative = cumulative,
             sourceClubs = sourceClubs, explore = sourceClubs.isEmpty, showProgress = true)
+            .flatMap { run =>
+              for {
+                candidates <- if (cumulative) RecruitmentCandidate.selectInvitedToday(run.clubId, alias)
+                              else RecruitmentCandidate.selectInvitedByRun(run.runId)
+                usernames <- ZIO.foreach(candidates)(c =>
+                  PlayerSnapshot.selectIdLatest(c.playerId)
+                    .map(_.fold(Username.wrap(s"[pid=${c.playerId}]"))(_.username))
+                )
+                _ <- ZIO.whenDiscard(usernames.nonEmpty) {
+                  OutputFile.write("recruitment", clubUrlName, formatRecruitmentOutput(usernames))
+                    .flatMap(path => ZIO.logInfo(s"Output written to $path"))
+                }
+              } yield ()
+            }
         case _ => ZIO.fail(ExternalException(help))
       ).provide(
         ChessComClient.live(),
@@ -1126,8 +1149,14 @@ object RecruitmentApp extends ZIOAppDefault {
 
   // --- Report mode ---
 
+  private def formatRecruitmentOutput(usernames: List[Username]): String = {
+    val header = usernames.mkString(" ")
+    val detail = usernames.map(name => s"$name ${ApiPlayer.getProfileUrl(name)}").mkString("\n")
+    s"$header\n\n$detail\n"
+  }
+
   def showReport(clubUrlName: ClubUrlName, runIdOpt: Option[String])
-      : RIO[Transactor, Unit] =
+      : RIO[Transactor, List[Username]] =
     for {
       club <- Club.selectByUrlName(clubUrlName)
         .someOrFail(ExternalException(s"Club '$clubUrlName' not found in database"))
@@ -1156,5 +1185,5 @@ object RecruitmentApp extends ZIOAppDefault {
       _         <- ZIO.foreachDiscard(usernames) { name =>
                      ZIO.logInfo(ApiPlayer.getProfileUrl(name).toString)
                    }
-    } yield ()
+    } yield usernames
 }

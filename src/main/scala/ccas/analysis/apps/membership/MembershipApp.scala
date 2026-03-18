@@ -15,6 +15,7 @@ import ccas.api.clubmatch.ApiDailyMatch
 import ccas.api.misc.enums.PlayerStatusCategory
 import ccas.api.misc.subtypes.{ClubId, ClubUrlName, PlayerId, Username}
 import ccas.api.player.{ApiPlayer, ApiPlayerClubs}
+import ccas.utils.OutputFile
 import ccas.utils.client.ChessComClient
 import ccas.utils.errors.ExternalException
 import ccas.utils.sql.DataSourceLayer
@@ -35,12 +36,32 @@ object MembershipApp extends ZIOAppDefault {
                   case Some(untilStr) =>
                     ZIO.attempt(Instant.parse(untilStr))
                       .mapError(_ => ExternalException(s"Invalid date format: $untilStr"))
-                      .flatMap(until => reconcileIfStale(clubName, until) *> report(clubName, since, until))
+                      .flatMap { until =>
+                        reconcileIfStale(clubName, until) *>
+                          report(clubName, since, until).flatMap { summaries =>
+                            ZIO.whenDiscard(summaries.nonEmpty) {
+                              OutputFile.write("membership", clubName, formatChangeSummaries(summaries))
+                                .flatMap(path => ZIO.logInfo(s"Output written to $path"))
+                            }
+                          }
+                      }
                   case None =>
-                    reconcile(clubName) *> report(clubName, since, Instant.now())
+                    reconcile(clubName) *>
+                      report(clubName, since, Instant.now()).flatMap { summaries =>
+                        ZIO.whenDiscard(summaries.nonEmpty) {
+                          OutputFile.write("membership", clubName, formatChangeSummaries(summaries))
+                            .flatMap(path => ZIO.logInfo(s"Output written to $path"))
+                        }
+                      }
               }
           case None =>
-            reconcile(clubName).flatMap(result => reportReconciliation(result))
+            reconcile(clubName).flatMap { result =>
+              reportReconciliation(result) *>
+                ZIO.whenDiscard(result.changes.nonEmpty) {
+                  OutputFile.write("membership", clubName, formatReconciliation(result))
+                    .flatMap(path => ZIO.logInfo(s"Output written to $path"))
+                }
+            }
       } yield ()).provide(
         ChessComClient.live(),
         Client.default,
@@ -540,18 +561,45 @@ object MembershipApp extends ZIOAppDefault {
     case UsernameChange(ts, oldName)   => s"[USERNAME CHANGE] at $ts — was: $oldName"
     case StatusChange(ts, oldStatus)   => s"[STATUS CHANGE] at $ts — was: $oldStatus"
 
+  // --- File output formatting ---
+
+  private def formatReconciliation(result: ReconciliationResult): String = {
+    val sb = new StringBuilder
+    sb.append("=== Reconciliation Complete ===\n")
+    sb.append(s"New players:        ${result.newPlayers.size}\n")
+    sb.append(s"New snapshots:      ${result.newSnapshots.size}\n")
+    sb.append(s"New memberships:    ${result.newMemberships.size}\n")
+    sb.append(s"Closed memberships: ${result.closedMemberships.size}\n")
+    sb.append("\n")
+    result.changes.foreach { summary =>
+      sb.append(s"${summary.username}:\n")
+      summary.changes.foreach(change => sb.append(s"  ${formatChange(change)}\n"))
+    }
+    sb.toString
+  }
+
+  private def formatChangeSummaries(summaries: List[MemberChangeSummary]): String = {
+    val sb = new StringBuilder
+    summaries.foreach { summary =>
+      sb.append(s"${summary.username}:\n")
+      summary.changes.foreach(change => sb.append(s"  ${formatChange(change)}\n"))
+    }
+    sb.toString
+  }
+
   // --- Report mode: DB-only ---
 
-  def report(clubUrlName: ClubUrlName, since: Instant, until: Instant): RIO[Transactor, Unit] =
+  def report(clubUrlName: ClubUrlName, since: Instant, until: Instant): RIO[Transactor, List[MemberChangeSummary]] =
     for {
       club <- Club.selectByUrlName(clubUrlName)
         .someOrFail(ExternalException(s"Club '$clubUrlName' not found in database"))
       clubId = club.clubId
       members <- ClubMember.selectClub(clubId)
       snaps   <- PlayerSnapshot.selectSince(since)
+      summaries = classifyFromDb(clubId, members, snaps, since, until)
       _       <- ZIO.logInfo(s"=== Report for ${clubUrlName} from $since to $until ===")
-      _       <- reportFromDb(clubId, members, snaps, since, until)
-    } yield ()
+      _       <- ZIO.foreachDiscard(summaries)(printChangeSummary)
+    } yield summaries
 
   private[membership] def classifyFromDb(
       clubId: ClubId,
@@ -622,12 +670,4 @@ object MembershipApp extends ZIOAppDefault {
     }.filter(_.changes.nonEmpty)
   }
 
-  private def reportFromDb(
-      clubId: ClubId,
-      members: List[ClubMember],
-      snaps: List[PlayerSnapshot],
-      since: Instant,
-      until: Instant
-    ): UIO[Unit] =
-    ZIO.foreachDiscard(classifyFromDb(clubId, members, snaps, since, until))(printChangeSummary)
 }
