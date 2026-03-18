@@ -61,7 +61,7 @@ object MembershipApp extends ZIOAppDefault {
 
   // --- Phase A: Gather data ---
 
-  def reconcile(clubUrlName: ClubUrlName, trustUsernames: Boolean = true): RIO[ChessComClient & Transactor, ReconciliationResult] =
+  def reconcile(clubUrlName: ClubUrlName, trustUsernames: Boolean = true, trackRun: Boolean = true): RIO[ChessComClient & Transactor, ReconciliationResult] =
     for {
       client  <- ZIO.service[ChessComClient]
       (apiClub, resolvedUrlName) <- withNameFallback(
@@ -80,7 +80,7 @@ object MembershipApp extends ZIOAppDefault {
       phaseC <- classifyDisappeared(client, dbState, phaseB.resolvedIds, apiMap, resolvedUrlName, now)
       result = mergeResults(phaseB, phaseC)
       _ <- persist(result)
-      _ <- MembershipRun.insert(clubId, now)
+      _ <- ZIO.whenDiscard(trackRun)(MembershipRun.insert(clubId, now))
     } yield result
 
   private[membership] def buildDbState(clubId: ClubId): RIO[Transactor, DbState] =

@@ -106,7 +106,7 @@ object RecruitmentApp extends ZIOAppDefault {
       showProgress: Boolean = false
     ): RIO[ChessComClient & Transactor, RecruitmentRun] =
     for {
-      _       <- MembershipApp.reconcile(clubUrlName)
+      _       <- MembershipApp.reconcile(clubUrlName, trackRun = false)
       client  <- ZIO.service[ChessComClient]
       apiClub <- ApiClub.get(client, clubUrlName)
       clubId = apiClub.clubId
