@@ -19,4 +19,7 @@ object OutputFile {
     ZIO.attemptBlocking(Files.createDirectories(dir)) *>
       ZIO.writeFile(path.toString, content).as(path)
   }
+
+  def writeAndLog(appName: String, clubUrlName: ClubUrlName, content: String): Task[Unit] =
+    write(appName, clubUrlName, content).flatMap(path => ZIO.logInfo(s"Output written to $path"))
 }

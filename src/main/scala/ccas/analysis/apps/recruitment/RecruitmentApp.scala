@@ -74,8 +74,7 @@ object RecruitmentApp extends ZIOAppDefault {
           val clubUrlName = ClubUrlName.wrap(clubStr)
           showReport(clubUrlName, rest.headOption).flatMap { usernames =>
             ZIO.whenDiscard(usernames.nonEmpty) {
-              OutputFile.write("recruitment", clubUrlName, formatRecruitmentOutput(usernames))
-                .flatMap(path => ZIO.logInfo(s"Output written to $path"))
+              OutputFile.writeAndLog("recruitment", clubUrlName, formatRecruitmentOutput(usernames))
             }
           }
         case clubStr :: rest =>
