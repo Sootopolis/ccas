@@ -1,9 +1,14 @@
 package ccas.analysis.tables
 
 import com.augustnagro.magnum.Transactor
-import zio.RIO
+import zio.{RIO, Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
 
-object Tables {
+import ccas.utils.sql.DataSourceLayer
+
+object Tables extends ZIOAppDefault {
+  override def run: RIO[ZIOAppArgs & Scope, Unit] =
+    ensureTables.provide(DataSourceLayer.liveFromPrefix()) <* ZIO.logInfo("All tables ensured")
+
   def ensureTables: RIO[Transactor, Unit] =
     for {
       _ <- Player.createTable

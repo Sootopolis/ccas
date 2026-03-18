@@ -1,5 +1,12 @@
 package ccas.analysis.apps.membership
 
+import java.time.Instant
+import scala.annotation.nowarn
+
+import com.augustnagro.magnum.Transactor
+import zio.{Chunk, RIO, Scope, Task, UIO, ZIO, ZIOAppArgs, ZIOAppDefault}
+import zio.http.Client
+
 import ccas.analysis.apps.membership.MembershipChange.*
 import ccas.analysis.tables.*
 import ccas.api.club.{ApiClub, ApiClubMembers}
@@ -7,22 +14,16 @@ import ccas.api.clubmatch.ApiDailyMatch
 import ccas.api.misc.enums.PlayerStatusCategory
 import ccas.api.misc.subtypes.{ClubId, ClubUrlName, PlayerId, Username}
 import ccas.api.player.{ApiPlayer, ApiPlayerClubs}
-import ccas.utils.OutputFile
 import ccas.utils.client.ChessComClient
 import ccas.utils.errors.ExternalException
 import ccas.utils.sql.DataSourceLayer
-import com.augustnagro.magnum.Transactor
-import zio.http.Client
-import zio.{Chunk, RIO, Scope, Task, UIO, ZIO, ZIOAppArgs, ZIOAppDefault}
-
-import java.time.Instant
-import scala.annotation.nowarn
+import ccas.utils.OutputFile
 
 object MembershipApp extends ZIOAppDefault {
 
   private sealed trait RunMode
-  private case object ReconcileOnly                            extends RunMode
-  private case class SinceNow(since: Instant)                  extends RunMode
+  private case object ReconcileOnly                             extends RunMode
+  private case class SinceNow(since: Instant)                   extends RunMode
   private case class SinceUntil(since: Instant, until: Instant) extends RunMode
 
   private def parseRunMode(args: Chunk[String]): Task[RunMode] =
@@ -36,46 +37,42 @@ object MembershipApp extends ZIOAppDefault {
               case None => ZIO.succeed(SinceNow(since))
               case Some(untilStr) =>
                 ZIO.attempt(Instant.parse(untilStr))
-                  .orElseFail(ExternalException(s"Invalid date format: $untilStr"))
-                  .map(SinceUntil(since, _))
+                  .mapBoth(_ => ExternalException(s"Invalid date format: $untilStr"), SinceUntil(since, _))
             }
           }
     }
 
-  override def run: ZIO[Any & ZIOAppArgs & Scope, Any, Any] =
-    for {
+  override def run: ZIO[ZIOAppArgs & Scope, Any, Any] =
+    (for {
       args <- ZIOAppArgs.getArgs
-      clubName <- ZIO.fromOption(args.headOption).map(ClubUrlName.wrap)
-        .orElseFail(ExternalException("Usage: MembershipApp <club-url-name> [since [until]]"))
+      clubName <- ZIO.fromOption(args.headOption)
+        .mapBoth(_ => ExternalException("Usage: MembershipApp <club-url-name> [since [until]]"), ClubUrlName.wrap)
       mode <- parseRunMode(args)
-      _ <- (mode match {
+      _ <- mode match {
         case ReconcileOnly =>
           reconcile(clubName).flatMap { result =>
-            reportReconciliation(result) *>
-              ZIO.whenDiscard(result.changes.nonEmpty) {
-                OutputFile.writeAndLog("membership", clubName, formatReconciliation(result))
-              }
+            reportReconciliation(result) *> ZIO.whenDiscard(result.changes.nonEmpty) {
+              OutputFile.writeAndLog("membership", clubName, formatReconciliation(result))
+            }
           }
         case SinceNow(since) =>
-          reconcile(clubName) *>
-            report(clubName, since, Instant.now()).flatMap { summaries =>
-              ZIO.whenDiscard(summaries.nonEmpty) {
-                OutputFile.writeAndLog("membership", clubName, formatChangeSummaries(summaries))
-              }
+          reconcile(clubName) *> report(clubName, since, Instant.now()).flatMap { summaries =>
+            ZIO.whenDiscard(summaries.nonEmpty) {
+              OutputFile.writeAndLog("membership", clubName, formatChangeSummaries(summaries))
             }
+          }
         case SinceUntil(since, until) =>
-          reconcileIfStale(clubName, until) *>
-            report(clubName, since, until).flatMap { summaries =>
-              ZIO.whenDiscard(summaries.nonEmpty) {
-                OutputFile.writeAndLog("membership", clubName, formatChangeSummaries(summaries))
-              }
+          reconcileIfStale(clubName, until) *> report(clubName, since, until).flatMap { summaries =>
+            ZIO.whenDiscard(summaries.nonEmpty) {
+              OutputFile.writeAndLog("membership", clubName, formatChangeSummaries(summaries))
             }
-      }).provide(
-        ChessComClient.live(),
-        Client.default,
-        DataSourceLayer.liveFromPrefix(onInit = Tables.ensureTables)
-      )
-    } yield ()
+          }
+      }
+    } yield ()).provideSomeAuto(
+      ChessComClient.live(),
+      Client.default,
+      DataSourceLayer.liveFromPrefix(onInit = Tables.ensureTables)
+    )
 
   def reconcileIfStale(clubUrlName: ClubUrlName, until: Instant): RIO[ChessComClient & Transactor, Unit] =
     for {
@@ -357,7 +354,7 @@ object MembershipApp extends ZIOAppDefault {
   ): (Chunk[PlayerSnapshot], Chunk[MemberChange]) =
     if state.player.status != statusCategory || state.player.username != username || state.player.title != title then
       val snapshot = PlayerSnapshot(playerId, now, username, statusCategory, title)
-      val changes = Chunk.newBuilder[MemberChange]
+      val changes  = Chunk.newBuilder[MemberChange]
       if state.player.status != statusCategory then changes += StatusChange(now, state.player.status)
       if state.player.username != username then changes += UsernameChange(now, state.player.username)
       (Chunk(snapshot), changes.result())
@@ -534,7 +531,7 @@ object MembershipApp extends ZIOAppDefault {
   private def printChangeSummary(summary: MemberChangeSummary): UIO[Unit] =
     for {
       _ <- ZIO.logInfo(s"${summary.username}:")
-      _ <- ZIO.foreachDiscard(summary.changes) { change => ZIO.logInfo(s"  ${formatChange(change)}") }
+      _ <- ZIO.foreachDiscard(summary.changes)(change => ZIO.logInfo(s"  ${formatChange(change)}"))
     } yield ()
 
   private def formatChange(change: MemberChange): String = change match
