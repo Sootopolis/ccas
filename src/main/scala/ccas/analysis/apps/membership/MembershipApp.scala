@@ -30,12 +30,12 @@ object MembershipApp extends ZIOAppDefault {
       _ <- (for {
         _ <- args.lift(1) match
           case Some(sinceStr) =>
-            ZIO.attempt(Instant.parse(sinceStr)).mapError(_ => ExternalException(s"Invalid date format: $sinceStr"))
+            ZIO.attempt(Instant.parse(sinceStr)).orElseFail(ExternalException(s"Invalid date format: $sinceStr"))
               .flatMap { since =>
                 args.lift(2) match
                   case Some(untilStr) =>
                     ZIO.attempt(Instant.parse(untilStr))
-                      .mapError(_ => ExternalException(s"Invalid date format: $untilStr"))
+                      .orElseFail(ExternalException(s"Invalid date format: $untilStr"))
                       .flatMap { until =>
                         reconcileIfStale(clubName, until) *>
                           report(clubName, since, until).flatMap { summaries =>
