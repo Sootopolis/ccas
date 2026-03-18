@@ -26,9 +26,6 @@ libraryDependencies ++= Seq(
   // magnum
   "com.augustnagro" %% "magnum" % vMagnum,
 
-  // magnolia
-  "com.softwaremill.magnolia1_3" %% "magnolia" % vMagnolia,
-
   // postgresql
   "org.postgresql" % "postgresql" % vPostgresql,
 
