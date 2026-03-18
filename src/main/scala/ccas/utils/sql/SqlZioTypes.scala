@@ -51,7 +51,7 @@ object SqlZioTypes {
         if method.getName == "close" then ()
         else if args == null then method.invoke(con)
         else method.invoke(con, args*)
-    ).asInstanceOf[Connection]
+    ).asInstanceOf[Connection] // safe: proxy implements Connection interface
 
   /** Minimal DataSource that always returns the same (proxied) connection. */
   private class SingleConnectionDataSource(con: Connection) extends DataSource {

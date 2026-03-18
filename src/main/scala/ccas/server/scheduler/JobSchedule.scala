@@ -61,8 +61,8 @@ object JobSchedule {
       sql"""INSERT INTO job_schedule (kind, club_url_name, params, interval_hours, enabled, last_run_at)
             VALUES (${schedule.kind}, ${schedule.clubUrlName}, ${schedule.params},
                     ${schedule.intervalHours}, ${schedule.enabled}, ${schedule.lastRunAt})
-            RETURNING id""".query[Long].run().head
-    }
+            RETURNING id""".query[Long].run().headOption
+    }.someOrFail(new SQLException("INSERT RETURNING produced no rows"))
 
   def updateLastRunAt(id: Long, at: Instant): ZIO[Transactor, SQLException, Int] =
     connectZIO {

@@ -40,9 +40,8 @@ object RecruitmentRun {
     connectZIO {
       sql"""INSERT INTO recruitment_run (club_id, criteria_id, started_at, candidates_found)
             VALUES ($clubId, $criteriaId, $startedAt, 0)
-            RETURNING run_id""".query[Long].run()
-              .headOption.getOrElse(throw new SQLException("INSERT RETURNING produced no rows"))
-    }
+            RETURNING run_id""".query[Long].run().headOption
+    }.someOrFail(new SQLException("INSERT RETURNING produced no rows"))
 
   def update(item: RecruitmentRun): ZIO[Transactor, SQLException, Int] =
     connectZIO {
@@ -62,15 +61,15 @@ object RecruitmentRun {
     }
 
   def sumCandidatesFoundToday(clubId: ClubId, alias: String): ZIO[Transactor, SQLException, Int] =
-    connectZIO {
+    (connectZIO {
       sql"""SELECT COALESCE(SUM(candidates_found), 0) FROM recruitment_run
             WHERE club_id = $clubId AND criteria_id IN (
               SELECT criteria_id FROM recruitment_alias WHERE club_id = $clubId AND alias = $alias
             )
               AND completed_at IS NOT NULL
               AND (started_at AT TIME ZONE 'UTC')::date = (NOW() AT TIME ZONE 'UTC')::date"""
-        .query[Int].run().head
-    }
+        .query[Int].run().headOption
+    }).someOrFail(new SQLException("COALESCE query produced no rows"))
 
   def deleteAll: ZIO[Transactor, SQLException, Int] =
     connectZIO {

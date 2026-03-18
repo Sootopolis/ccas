@@ -101,9 +101,8 @@ object RecruitmentCriteria {
               ${c.dailyMinElo}, ${c.dailyMaxElo}, ${c.dailyMinGamesFinished}, ${c.dailyMinTmGamesFinished},
               ${c.dailyMaxTimeoutPercent}, ${c.dailyMaxTmTimeoutPercent}, ${c.dailyMaxHoursPerMove},
               ${c.dailyMinOngoingGames}, ${c.dailyMaxOngoingGames}, ${c.dailyMinOngoingTeamMatches}
-            ) RETURNING criteria_id""".query[Long].run()
-              .headOption.getOrElse(throw new SQLException("INSERT RETURNING produced no rows"))
-    }
+            ) RETURNING criteria_id""".query[Long].run().headOption
+    }.someOrFail(new SQLException("INSERT RETURNING produced no rows"))
   }
 
   def defaultDaily: RecruitmentCriteria =

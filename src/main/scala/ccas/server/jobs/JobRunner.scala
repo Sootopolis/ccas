@@ -7,6 +7,7 @@ import zio.{Fiber, RIO, Ref, UIO, ZIO, ZLayer}
 
 import ccas.api.misc.subtypes.ClubUrlName
 import ccas.utils.client.ChessComClient
+import ccas.utils.errors.safeMessage
 
 trait JobRunner {
   def submit(
@@ -74,7 +75,7 @@ object JobRunner {
         .provideEnvironment(env)
         .foldZIO(
           failure = { error =>
-            val msg = Option(error.getMessage).getOrElse(error.getClass.getSimpleName)
+            val msg = error.safeMessage
             JobRun.updateStatus(id, JobRunStatus.Failed, Some(Instant.now()), Some(msg))
               .provideEnvironment(env)
               .unit.orDie

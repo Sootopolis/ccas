@@ -34,9 +34,8 @@ object MembershipRun {
     connectZIO {
       sql"""INSERT INTO membership_run (club_id, ran_at)
             VALUES ($clubId, $ranAt)
-            RETURNING run_id""".query[Long].run()
-              .headOption.getOrElse(throw new SQLException("INSERT RETURNING produced no rows"))
-    }
+            RETURNING run_id""".query[Long].run().headOption
+    }.someOrFail(new SQLException("INSERT RETURNING produced no rows"))
 
   def selectLatest(clubId: ClubId): ZIO[Transactor, SQLException, Option[MembershipRun]] =
     connectZIO {

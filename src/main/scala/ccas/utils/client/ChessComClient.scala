@@ -44,10 +44,12 @@ final class ChessComClient(
   def getAll[T](urls: Iterable[URL])(using jsonDecoder: JsonDecoder[T]): Task[Chunk[T]] =
     ZIO.foreachPar(Chunk.from(urls))(get)
 
+  // Fiber safety: getAndSet is atomic, so only the first 429 forks a cooldown fiber.
+  // Subsequent 429s during the cooldown see wasThrottled=true and skip the fork.
   private def activateThrottle: Task[Unit] =
     throttled.getAndSet(true).flatMap { wasThrottled =>
       ZIO.unlessDiscard(wasThrottled) {
-        (ZIO.sleep(cooldown) *> throttled.set(false)).fork.unit
+        (ZIO.sleep(cooldown) *> throttled.set(false)).forkDaemon.unit
       }
     }
 

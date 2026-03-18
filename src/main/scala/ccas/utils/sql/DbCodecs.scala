@@ -32,6 +32,7 @@ object DbCodecs {
     override def readSingle(rs: ResultSet, pos: Int): List[String] =
       val arr = rs.getArray(pos)
       if arr == null then Nil
+      // safe: JDBC Array.getArray returns Object[] for TEXT[] columns
       else arr.getArray.asInstanceOf[Array[AnyRef]].map(_.toString).toList
     override def writeSingle(value: List[String], ps: PreparedStatement, pos: Int): Unit =
       val arr = ps.getConnection.createArrayOf("TEXT", value.toArray[AnyRef])

@@ -5,7 +5,7 @@ import java.time.Instant
 import com.augustnagro.magnum.Transactor
 import zio.ZIO
 import zio.http.*
-import zio.json.{DeriveJsonCodec, JsonCodec, JsonDecoder, JsonEncoder}
+import zio.json.{DeriveJsonCodec, EncoderOps, JsonCodec, JsonDecoder, JsonEncoder}
 
 import ccas.analysis.apps.matchref.MatchRefApp
 import ccas.analysis.apps.membership.MembershipApp
@@ -89,7 +89,7 @@ object JobRoutes {
   private given JsonEncoder[Instant] = JsonEncoder.string.contramap(_.toString)
   private given JsonDecoder[Instant] = JsonDecoder.string.mapOrFail { s =>
     try Right(Instant.parse(s))
-    catch { case _: Exception => Left(s"Invalid instant: $s") }
+    catch { case e: Exception => Left(s"Invalid instant: $s (${e.getMessage})") }
   }
 
   private def handleJobError(error: Throwable): Response = error match
@@ -116,7 +116,9 @@ object JobRoutes {
                     timeLimitMinutes = effectiveTimeLimit,
                     explore = body.explore.getOrElse(true)
                   )
-        jobId  <- runner.submit(JobKind.Recruitment, Some(body.clubUrlName), Some(req.body.toString), effect)
+        paramsStr = body.toJson
+        params    = if (paramsStr.length > 1024) paramsStr.take(1024) + "..." else paramsStr
+        jobId  <- runner.submit(JobKind.Recruitment, Some(body.clubUrlName), Some(params), effect)
       } yield jsonResponse(Status.Accepted, JobResponse(JobRunId.unwrap(jobId), "running")))
         .catchAll(e => ZIO.succeed(handleJobError(e)))
     },
