@@ -130,7 +130,7 @@ object MembershipApp extends ZIOAppDefault {
             // Rejoin: different `since` timestamp
             val closedMember = state.member.copy(until = Some(now))
             val newMember    = ClubMember(clubId, state.player.playerId, since, None)
-            val change       = MemberChangeSummary(state.player.playerId, Chunk(Rejoined(now, state.member.since)))
+            val change       = MemberChangeSummary(state.player.playerId, username, Chunk(Rejoined(now, state.member.since)))
             ZIO
               .succeed(
                 acc.copy(
@@ -150,7 +150,7 @@ object MembershipApp extends ZIOAppDefault {
                   dbState.membersByPlayerId.get(playerId) match {
                     case Some(state) =>
                       // Username change detected via trusted snapshot
-                      val change      = MemberChangeSummary(playerId, Chunk(UsernameChange(now, state.player.username)))
+                      val change      = MemberChangeSummary(playerId, username, Chunk(UsernameChange(now, state.player.username)))
                       val newSnapshot = PlayerSnapshot(playerId, now, username, snapshot.status, snapshot.title)
                       ZIO.succeed(acc.copy(
                         resolvedIds = acc.resolvedIds + playerId,
@@ -160,7 +160,7 @@ object MembershipApp extends ZIOAppDefault {
                     case None =>
                       // Known player joined this club
                       val newMember = ClubMember(clubId, playerId, since, None)
-                      val change    = MemberChangeSummary(playerId, Chunk(JoinedClub(now)))
+                      val change    = MemberChangeSummary(playerId, username, Chunk(JoinedClub(now)))
                       ZIO.succeed(acc.copy(
                         resolvedIds = acc.resolvedIds + playerId,
                         changes = acc.changes :+ change,
@@ -202,7 +202,7 @@ object MembershipApp extends ZIOAppDefault {
           // Also detect status/title changes
           if state.player.status != statusCategory then changeChunks += StatusChange(now, state.player.status)
 
-          val summary = MemberChangeSummary(playerId, changeChunks.result())
+          val summary = MemberChangeSummary(playerId, username, changeChunks.result())
           ZIO
             .succeed(
               acc.copy(
@@ -235,7 +235,7 @@ object MembershipApp extends ZIOAppDefault {
                     if latest.status != statusCategory then changeChunks += StatusChange(now, latest.status)
                   }
 
-                val summary = MemberChangeSummary(playerId, changeChunks.result())
+                val summary = MemberChangeSummary(playerId, username, changeChunks.result())
                 acc.copy(
                   resolvedIds = acc.resolvedIds + playerId,
                   changes = acc.changes :+ summary,
@@ -249,7 +249,7 @@ object MembershipApp extends ZIOAppDefault {
               val player   = Player(playerId, Instant.ofEpochSecond(apiPlayer.joined))
               val snapshot = PlayerSnapshot(playerId, now, username, statusCategory, apiPlayer.title)
               val member   = ClubMember(clubId, playerId, since, None)
-              val summary  = MemberChangeSummary(playerId, Chunk(NewMember(now)))
+              val summary  = MemberChangeSummary(playerId, username, Chunk(NewMember(now)))
               ZIO
                 .succeed(
                   acc.copy(
@@ -306,7 +306,7 @@ object MembershipApp extends ZIOAppDefault {
                 appendSnapshotChanges(state, apiPlayer.username, statusCategory, apiPlayer.title, snapshotChunks, changeChunks, playerId, now)
                 ZIO.succeed(
                   acc.copy(
-                    changes = acc.changes :+ MemberChangeSummary(playerId, changeChunks.result()),
+                    changes = acc.changes :+ MemberChangeSummary(playerId, apiPlayer.username, changeChunks.result()),
                     newSnapshots = acc.newSnapshots ++ snapshotChunks.result(),
                     closedMemberships = acc.closedMemberships :+ closedMember
                   )
@@ -317,7 +317,7 @@ object MembershipApp extends ZIOAppDefault {
                 appendSnapshotChanges(state, apiPlayer.username, statusCategory, apiPlayer.title, snapshotChunks, changeChunks, playerId, now)
                 checkClubMembership(client, clubUrlName, apiPlayer.username).map { stillMember =>
                   acc.copy(
-                    changes = acc.changes :+ MemberChangeSummary(playerId, changeChunks.result()),
+                    changes = acc.changes :+ MemberChangeSummary(playerId, apiPlayer.username, changeChunks.result()),
                     newSnapshots = acc.newSnapshots ++ snapshotChunks.result(),
                     closedMemberships = if stillMember then acc.closedMemberships else acc.closedMemberships :+ closedMember
                   )
@@ -365,7 +365,7 @@ object MembershipApp extends ZIOAppDefault {
 
     def unresolvable: PhaseCResult =
       acc.copy(
-        changes = acc.changes :+ MemberChangeSummary(playerId, Chunk(Unresolvable(now, oldUsername))),
+        changes = acc.changes :+ MemberChangeSummary(playerId, oldUsername, Chunk(Unresolvable(now, oldUsername))),
         closedMemberships = acc.closedMemberships :+ closedMember
       )
 
@@ -387,7 +387,7 @@ object MembershipApp extends ZIOAppDefault {
                 snapshotChunks += PlayerSnapshot(playerId, now, resolvedUsername, state.player.status, state.player.title)
                 ZIO.succeed(
                   acc.copy(
-                    changes = acc.changes :+ MemberChangeSummary(playerId, changeChunks.result()),
+                    changes = acc.changes :+ MemberChangeSummary(playerId, resolvedUsername, changeChunks.result()),
                     newSnapshots = acc.newSnapshots ++ snapshotChunks.result(),
                     closedMemberships = acc.closedMemberships :+ closedMember
                   )
@@ -407,7 +407,7 @@ object MembershipApp extends ZIOAppDefault {
                     // Renamed but still in club — don't close membership
                     ZIO.succeed(
                       acc.copy(
-                        changes = acc.changes :+ MemberChangeSummary(playerId, changeChunks.result()),
+                        changes = acc.changes :+ MemberChangeSummary(playerId, resolvedUsername, changeChunks.result()),
                         newSnapshots = acc.newSnapshots ++ snapshotChunks.result()
                       )
                     )
@@ -416,7 +416,7 @@ object MembershipApp extends ZIOAppDefault {
                     changeChunks += LeftClub(now)
                     ZIO.succeed(
                       acc.copy(
-                        changes = acc.changes :+ MemberChangeSummary(playerId, changeChunks.result()),
+                        changes = acc.changes :+ MemberChangeSummary(playerId, resolvedUsername, changeChunks.result()),
                         newSnapshots = acc.newSnapshots ++ snapshotChunks.result(),
                         closedMemberships = acc.closedMemberships :+ closedMember
                       )
@@ -426,7 +426,7 @@ object MembershipApp extends ZIOAppDefault {
                   changeChunks += AccountClosed(now, statusCategory)
                   checkClubMembership(client, clubUrlName, resolvedUsername).map { stillMember =>
                     acc.copy(
-                      changes = acc.changes :+ MemberChangeSummary(playerId, changeChunks.result()),
+                      changes = acc.changes :+ MemberChangeSummary(playerId, resolvedUsername, changeChunks.result()),
                       newSnapshots = acc.newSnapshots ++ snapshotChunks.result(),
                       closedMemberships = if stillMember then acc.closedMemberships else acc.closedMemberships :+ closedMember
                     )
@@ -524,7 +524,7 @@ object MembershipApp extends ZIOAppDefault {
 
   private def printChangeSummary(summary: MemberChangeSummary): UIO[Unit] =
     for {
-      _ <- Console.printLine(s"Player ${summary.playerId}:").orDie
+      _ <- Console.printLine(s"${summary.username}:").orDie
       _ <- ZIO.foreachDiscard(summary.changes) { change =>
         Console.printLine(s"  ${formatChange(change)}").orDie
       }
@@ -617,7 +617,8 @@ object MembershipApp extends ZIOAppDefault {
         }
       }
 
-      MemberChangeSummary(playerId, changes.result())
+      val latestUsername = playerSnaps.lastOption.map(_.username).getOrElse(Username.wrap("unknown"))
+      MemberChangeSummary(playerId, latestUsername, changes.result())
     }.filter(_.changes.nonEmpty)
   }
 

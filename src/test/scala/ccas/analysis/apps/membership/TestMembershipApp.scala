@@ -237,8 +237,8 @@ object TestMembershipApp extends ZIOSpecDefault {
 
   private def suiteMergeResults = suite("mergeResults")(
     test("concatenates PhaseBResult and PhaseCResult fields") {
-      val bChange = MemberChangeSummary(pid0, Chunk(NewMember(T.t1)))
-      val cChange = MemberChangeSummary(pid1, Chunk(LeftClub(T.t1)))
+      val bChange = MemberChangeSummary(pid0, Username("alice"), Chunk(NewMember(T.t1)))
+      val cChange = MemberChangeSummary(pid1, Username("bob"), Chunk(LeftClub(T.t1)))
       val bPlayer = Player(pid0, T.t0)
       val bSnap   = PlayerSnapshot(pid0, T.t1, Username("alice"), Active, None)
       val cSnap   = PlayerSnapshot(pid1, T.t1, Username("bob"), Active, None)

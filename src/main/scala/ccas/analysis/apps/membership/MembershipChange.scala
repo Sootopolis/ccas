@@ -9,11 +9,11 @@ import ccas.api.misc.enums.PlayerStatusCategory
 import ccas.api.misc.subtypes.{PlayerId, Username}
 
 object MembershipChange {
-  final case class MemberChangeSummary(playerId: PlayerId, changes: Chunk[MemberChange])
+  final case class MemberChangeSummary(playerId: PlayerId, username: Username, changes: Chunk[MemberChange])
 
   object MemberChangeSummary {
-    def apply(playerId: PlayerId, changes: Chunk[MemberChange]) =
-      new MemberChangeSummary(playerId, changes.sortBy(_.timestamp))
+    def apply(playerId: PlayerId, username: Username, changes: Chunk[MemberChange]) =
+      new MemberChangeSummary(playerId, username, changes.sortBy(_.timestamp))
   }
 
   final case class MemberState(player: PlayerSnapshot, member: ClubMember)
