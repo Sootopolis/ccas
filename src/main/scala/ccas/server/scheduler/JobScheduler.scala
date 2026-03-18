@@ -5,11 +5,12 @@ import java.time.temporal.ChronoUnit
 
 import com.augustnagro.magnum.Transactor
 import com.typesafe.config.ConfigFactory
-import zio.{durationLong, Console, Duration, Task, UIO, ZIO, ZLayer}
+import zio.{durationLong, Duration, Task, UIO, ZIO, ZLayer}
 
 import ccas.analysis.apps.matchref.MatchRefApp
 import ccas.analysis.apps.membership.MembershipApp
 import ccas.analysis.apps.recruitment.RecruitmentApp
+import ccas.api.misc.subtypes.ClubUrlName
 import ccas.server.jobs.{JobKind, JobRunner}
 
 trait JobScheduler {
@@ -51,20 +52,22 @@ object JobScheduler {
           ZIO.whenDiscard(isDue)(runSchedule(schedule, now))
         }
       } yield ())
-        .catchAll(e => Console.printLine(s"[Scheduler] Error: ${e.getMessage}").orDie)
+        .catchAll(e => ZIO.logError(s"[Scheduler] Error: ${e.getMessage}"))
 
     private def runSchedule(schedule: JobSchedule, now: Instant): Task[Unit] = {
+      def requireClubUrlName: Task[ClubUrlName] =
+        ZIO.fromOption(schedule.clubUrlName)
+          .orElseFail(new IllegalStateException(s"${schedule.kind} schedule missing clubUrlName"))
+
       val effect = schedule.kind match
         case JobKind.Recruitment =>
-          val clubUrlName = schedule.clubUrlName.getOrElse(
-            throw new IllegalStateException("Recruitment schedule missing clubUrlName")
+          requireClubUrlName.flatMap(name =>
+            RecruitmentApp.recruit(name, "default", timeLimitMinutes = Some(30)).unit
           )
-          RecruitmentApp.recruit(clubUrlName, "default", timeLimitMinutes = Some(30)).unit
         case JobKind.Membership =>
-          val clubUrlName = schedule.clubUrlName.getOrElse(
-            throw new IllegalStateException("Membership schedule missing clubUrlName")
+          requireClubUrlName.flatMap(name =>
+            MembershipApp.reconcile(name).unit
           )
-          MembershipApp.reconcile(clubUrlName).unit
         case JobKind.MatchRef =>
           MatchRefApp.populate
 

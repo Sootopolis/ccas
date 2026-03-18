@@ -15,6 +15,7 @@ import ccas.api.misc.subtypes.{ClubId, ClubUrlName, PlayerId, Username}
 import ccas.api.player.*
 import ccas.utils.client.ChessComClient
 import ccas.utils.errors.ExternalException
+import ccas.utils.errors.safeMessage
 import ccas.utils.sql.DataSourceLayer
 import ccas.utils.sql.SqlZioTypes.withTransaction
 
@@ -162,16 +163,16 @@ object RecruitmentApp extends ZIOAppDefault {
       transactor <- ZIO.service[Transactor]
 
       finalizeRun = (label: String) => for {
-        _ <- ZIO.whenDiscard(showProgress)(Console.printLine("").orDie)
+        _ <- ZIO.whenDiscard(showProgress)(ZIO.logInfo(""))
         invited     <- invitedRef.get.map(_.reverse)
         evaluated   <- evaluatedRef.get
         completedAt  = Instant.now()
         finalRun     = RecruitmentRun(runId, clubId, criteria.criteriaId, now, Some(completedAt), invited.size)
         _ <- RecruitmentRun.update(finalRun)
-        _ <- Console.printLine(s"=== $label ===").orDie
-        _ <- Console.printLine(s"Candidates evaluated: ${evaluated.size}").orDie
-        _ <- Console.printLine(s"Invited: ${invited.size}").orDie
-        _ <- ZIO.foreachDiscard(invited)(u => Console.printLine(s"  $u").orDie)
+        _ <- ZIO.logInfo(s"=== $label ===")
+        _ <- ZIO.logInfo(s"Candidates evaluated: ${evaluated.size}")
+        _ <- ZIO.logInfo(s"Invited: ${invited.size}")
+        _ <- ZIO.foreachDiscard(invited)(u => ZIO.logInfo(s"  $u"))
         // Cumulative summary: show today's total across all runs
         _ <- ZIO.whenDiscard(cumulative && alreadyFound > 0) {
           for {
@@ -181,23 +182,23 @@ object RecruitmentApp extends ZIOAppDefault {
                 .map(_.fold(Username.wrap(s"[pid=${c.playerId}]"))(_.username))
             )
             allToday = earlierUsernames ++ invited
-            _ <- Console.printLine(s"=== Today's Total: ${allToday.size} ===").orDie
-            _ <- ZIO.foreachDiscard(allToday)(u => Console.printLine(s"  $u").orDie)
+            _ <- ZIO.logInfo(s"=== Today's Total: ${allToday.size} ===")
+            _ <- ZIO.foreachDiscard(allToday)(u => ZIO.logInfo(s"  $u"))
           } yield ()
         }
       } yield finalRun
 
       _ <- ZIO.whenDiscard(cumulative && alreadyFound > 0)(
-        Console.printLine(s"[Cumulative] Already found $alreadyFound today, effective target: $effectiveTarget").orDie
+        ZIO.logInfo(s"[Cumulative] Already found $alreadyFound today, effective target: $effectiveTarget")
       )
 
       finalRun <- if (effectiveTarget == 0) {
-        Console.printLine("[Cumulative] Target already met, skipping explore").orDie *>
+        ZIO.logInfo("[Cumulative] Target already met, skipping explore") *>
           finalizeRun("Recruitment Complete (target already met)")
       } else {
         for {
           _ <- ZIO.whenDiscard(showProgress)(
-            Console.printLine("[Hint] Press Ctrl+C to stop gracefully (candidates found so far will be listed)").orDie
+            ZIO.logInfo("[Hint] Press Ctrl+C to stop gracefully (candidates found so far will be listed)")
           )
 
           // --- Build initial sources from provided source clubs ---
@@ -370,7 +371,7 @@ object RecruitmentApp extends ZIOAppDefault {
                              else sourceState.consecutiveRejects + filteredBatch.size
       )
       pool4 <- if (ctx.explore && isGrim(updatedSource)) {
-        Console.printLine(s"[Explore] Abandoning grim source: $sourceId (eval=${updatedSource.evaluated}, rej=${updatedSource.rejected})").orDie.as(pool3 - sourceId)
+        ZIO.logInfo(s"[Explore] Abandoning grim source: $sourceId (eval=${updatedSource.evaluated}, rej=${updatedSource.rejected})").as(pool3 - sourceId)
       } else {
         ZIO.succeed(pool3.updated(sourceId, updatedSource))
       }
@@ -387,7 +388,7 @@ object RecruitmentApp extends ZIOAppDefault {
       filled     = pct / 5
       bar        = "\u2588" * filled + "\u2591" * (20 - filled)
       line       = s"\r[Progress] Evaluated: ${evaluated.size} | Invited: ${invited.size}/$tgt | $bar $pct%"
-      _         <- Console.print(line).orDie
+      _         <- Console.print(line).ignore
     } yield ())
 
   // --- Source activation ---
@@ -449,12 +450,12 @@ object RecruitmentApp extends ZIOAppDefault {
             ctx.runCtx.client, clubUrlName, ctx.runCtx.criteria.excludeSourceAdmins,
             ctx.existingUsernames, evaluatedUsernames
           )
-          _ <- Console.printLine(s"[Explore] Activated club source: ${ClubUrlName.unwrap(clubUrlName)} (${filtered.size} candidates)").orDie
+          _ <- ZIO.logInfo(s"[Explore] Activated club source: ${ClubUrlName.unwrap(clubUrlName)} (${filtered.size} candidates)")
         } yield filtered
       case UsernameSource(id, usernames) =>
         val exclude = ctx.existingUsernames ++ evaluatedUsernames
         val filtered = usernames.filterNot(exclude)
-        Console.printLine(s"[Explore] Activated username source: $id (${filtered.size} candidates)").orDie
+        ZIO.logInfo(s"[Explore] Activated username source: $id (${filtered.size} candidates)")
           .as(filtered)
     }
 
@@ -473,7 +474,7 @@ object RecruitmentApp extends ZIOAppDefault {
       opponents <- ctx.runCtx.discoveredOpponents.get
       newOpponents = opponents -- evaluatedUsernames
       result <- if (newOpponents.nonEmpty) {
-        Console.printLine(s"[Explore] Discovered ${newOpponents.size} candidate opponents").orDie
+        ZIO.logInfo(s"[Explore] Discovered ${newOpponents.size} candidate opponents")
           .as((List(UsernameSource("candidate-opponents", newOpponents.toList)), staticStrategies))
       } else {
         // Dynamic strategy 2: candidate clubs
@@ -482,7 +483,7 @@ object RecruitmentApp extends ZIOAppDefault {
           newClubs = clubs.diff(visitedClubs).filterNot(_ == ctx.clubUrlName)
             .filterNot(ctx.runCtx.criteria.excludeClubNames.contains)
           result <- if (newClubs.nonEmpty) {
-            Console.printLine(s"[Explore] Discovered ${newClubs.size} candidate clubs").orDie
+            ZIO.logInfo(s"[Explore] Discovered ${newClubs.size} candidate clubs")
               .as((newClubs.toList.map(ClubSource(_)), staticStrategies))
           } else {
             // Static strategies: try next one
@@ -496,7 +497,7 @@ object RecruitmentApp extends ZIOAppDefault {
                       !ctx.runCtx.criteria.excludeClubNames.contains(name)
                     case _ => true
                   }
-                  _ <- Console.printLine(s"[Explore] Static strategy yielded ${filtered.size} sources").orDie
+                  _ <- ZIO.logInfo(s"[Explore] Static strategy yielded ${filtered.size} sources")
                 } yield (filtered, tail)
             }
           }
@@ -520,7 +521,7 @@ object RecruitmentApp extends ZIOAppDefault {
           .catchAll(_ => ZIO.succeed(Set.empty[ClubUrlName]))
       }
       allClubs = clubSets.foldLeft(Set.empty[ClubUrlName])(_ ++ _) - clubUrlName
-      _ <- Console.printLine(s"[Explore] Own member clubs strategy found ${allClubs.size} clubs").orDie
+      _ <- ZIO.logInfo(s"[Explore] Own member clubs strategy found ${allClubs.size} clubs")
     } yield allClubs.toList.map(ClubSource(_))
   }
 
@@ -530,7 +531,7 @@ object RecruitmentApp extends ZIOAppDefault {
     for {
       clubs <- Club.selectAll
       filtered = clubs.map(_.urlName).filter(_ != clubUrlName)
-      _ <- Console.printLine(s"[Explore] DB clubs strategy found ${filtered.size} clubs").orDie
+      _ <- ZIO.logInfo(s"[Explore] DB clubs strategy found ${filtered.size} clubs")
     } yield filtered.map(ClubSource(_))
 
   private def discoverMatchOpponents(
@@ -540,7 +541,7 @@ object RecruitmentApp extends ZIOAppDefault {
       clubMatches.inProgress.map(_.opponent) ++
       clubMatches.registered.map(_.opponent)
     val opponentClubNames = opponentUrls.map(url => ClubUrlName.wrap(url.path.segments.last)).toSet
-    Console.printLine(s"[Explore] Match opponents strategy found ${opponentClubNames.size} clubs").orDie
+    ZIO.logInfo(s"[Explore] Match opponents strategy found ${opponentClubNames.size} clubs")
       .as(opponentClubNames.toList.map(ClubSource(_)))
   }
 
@@ -567,7 +568,7 @@ object RecruitmentApp extends ZIOAppDefault {
         ctxRef.get.flatMap { latestCtx =>
           persistCandidateResults(
             runId, now, latestCtx, CandidateOutcome.Error,
-            Some(Option(error.getMessage).getOrElse(error.getClass.getSimpleName))
+            Some(error.safeMessage)
           )
         }.as(CandidateOutcome.Error)
       }
@@ -1142,18 +1143,18 @@ object RecruitmentApp extends ZIOAppDefault {
             .someOrFail(ExternalException(s"No runs found for club '$clubUrlName'"))
       }
       invited <- RecruitmentCandidate.selectInvitedByRun(run.runId)
-      _       <- Console.printLine(s"=== Recruitment Report for $clubUrlName (run ${run.runId}) ===").orDie
-      _       <- Console.printLine(s"Started: ${run.startedAt}").orDie
-      _       <- Console.printLine(s"Completed: ${run.completedAt.getOrElse("in progress")}").orDie
-      _       <- Console.printLine(s"Invited: ${invited.size}").orDie
+      _       <- ZIO.logInfo(s"=== Recruitment Report for $clubUrlName (run ${run.runId}) ===")
+      _       <- ZIO.logInfo(s"Started: ${run.startedAt}")
+      _       <- ZIO.logInfo(s"Completed: ${run.completedAt.getOrElse("in progress")}")
+      _       <- ZIO.logInfo(s"Invited: ${invited.size}")
       usernames <- ZIO.foreach(invited) { c =>
                      PlayerSnapshot.selectIdLatest(c.playerId)
                        .map(_.fold(Username.wrap(s"[pid=${c.playerId}]"))(_.username))
                    }
-      _         <- Console.printLine(usernames.mkString(" ")).orDie
-      _         <- Console.printLine("").orDie
+      _         <- ZIO.logInfo(usernames.mkString(" "))
+      _         <- ZIO.logInfo("")
       _         <- ZIO.foreachDiscard(usernames) { name =>
-                     Console.printLine(ApiPlayer.getProfileUrl(name)).orDie
+                     ZIO.logInfo(ApiPlayer.getProfileUrl(name).toString)
                    }
     } yield ()
 }

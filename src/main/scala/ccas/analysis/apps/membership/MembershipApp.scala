@@ -3,7 +3,7 @@ package ccas.analysis.apps.membership
 import java.time.Instant
 
 import com.augustnagro.magnum.Transactor
-import zio.{Chunk, Console, RIO, Scope, Task, UIO, ZIO, ZIOAppArgs, ZIOAppDefault}
+import zio.{Chunk, RIO, Scope, Task, UIO, ZIO, ZIOAppArgs, ZIOAppDefault}
 import zio.http.Client
 
 import ccas.analysis.apps.membership.MembershipChange.*
@@ -513,20 +513,20 @@ object MembershipApp extends ZIOAppDefault {
 
   private def reportReconciliation(result: ReconciliationResult): UIO[Unit] =
     for {
-      _ <- Console.printLine(s"=== Reconciliation Complete ===").orDie
-      _ <- Console.printLine(s"New players:        ${result.newPlayers.size}").orDie
-      _ <- Console.printLine(s"New snapshots:      ${result.newSnapshots.size}").orDie
-      _ <- Console.printLine(s"New memberships:    ${result.newMemberships.size}").orDie
-      _ <- Console.printLine(s"Closed memberships: ${result.closedMemberships.size}").orDie
-      _ <- Console.printLine("").orDie
+      _ <- ZIO.logInfo(s"=== Reconciliation Complete ===")
+      _ <- ZIO.logInfo(s"New players:        ${result.newPlayers.size}")
+      _ <- ZIO.logInfo(s"New snapshots:      ${result.newSnapshots.size}")
+      _ <- ZIO.logInfo(s"New memberships:    ${result.newMemberships.size}")
+      _ <- ZIO.logInfo(s"Closed memberships: ${result.closedMemberships.size}")
+      _ <- ZIO.logInfo("")
       _ <- ZIO.foreachDiscard(result.changes)(printChangeSummary)
     } yield ()
 
   private def printChangeSummary(summary: MemberChangeSummary): UIO[Unit] =
     for {
-      _ <- Console.printLine(s"${summary.username}:").orDie
+      _ <- ZIO.logInfo(s"${summary.username}:")
       _ <- ZIO.foreachDiscard(summary.changes) { change =>
-        Console.printLine(s"  ${formatChange(change)}").orDie
+        ZIO.logInfo(s"  ${formatChange(change)}")
       }
     } yield ()
 
@@ -549,7 +549,7 @@ object MembershipApp extends ZIOAppDefault {
       clubId = club.clubId
       members <- ClubMember.selectClub(clubId)
       snaps   <- PlayerSnapshot.selectSince(since)
-      _       <- Console.printLine(s"=== Report for ${clubUrlName} from $since to $until ===").orDie
+      _       <- ZIO.logInfo(s"=== Report for ${clubUrlName} from $since to $until ===")
       _       <- reportFromDb(clubId, members, snaps, since, until)
     } yield ()
 
