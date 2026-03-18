@@ -1,5 +1,6 @@
 <component name="ProjectCodeStyleConfiguration">
   <code_scheme name="Project" version="173">
+    <option name="AUTODETECT_INDENTS" value="false" />
     <ScalaCodeStyleSettings>
       <option name="SCALAFMT_CONFIG_PATH" value="$PROJECT_DIR$/.scalafmt.conf" />
       <option name="FORMATTER" value="1" />
