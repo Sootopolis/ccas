@@ -109,6 +109,12 @@ object RecruitmentCandidate {
         .query[RecruitmentCandidate].run().toList
     }
 
+  def selectCountByRun(runId: Long): ZIO[Transactor, SQLException, Int] =
+    connectZIO {
+      sql"SELECT COUNT(*) FROM recruitment_candidate WHERE run_id = $runId"
+        .query[Int].run().headOption
+    }.someOrFail(new SQLException("COUNT query produced no rows"))
+
   def deleteAll: ZIO[Transactor, SQLException, Int] =
     connectZIO {
       sql"DELETE FROM recruitment_candidate".update.run()

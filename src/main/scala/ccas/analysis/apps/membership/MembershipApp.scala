@@ -53,17 +53,16 @@ object MembershipApp extends ZIOAppDefault {
       _ <- mode match {
         case ReconcileOnly =>
           reconcile(clubName).flatMap { result =>
-            reportReconciliation(result) *> ZIO.whenDiscard(result.changes.nonEmpty) {
+            reportReconciliation(result) *>
               OutputFile.writeAndLog("membership", clubName, formatReconciliation(result))
-            }
           }
         case SinceNow(since) =>
-          reconcile(clubName) *> report(clubName, since, Instant.now()).flatMap { summaries =>
-            OutputFile.writeAndLog("membership", clubName, formatChangeSummaries(summaries))
+          reconcile(clubName) *> report(clubName, since, Instant.now()).flatMap { rr =>
+            OutputFile.writeAndLog("membership", clubName, formatReport(rr))
           }
         case SinceUntil(since, until) =>
-          reconcileIfStale(clubName, until) *> report(clubName, since, until).flatMap { summaries =>
-            OutputFile.writeAndLog("membership", clubName, formatChangeSummaries(summaries))
+          reconcileIfStale(clubName, until) *> report(clubName, since, until).flatMap { rr =>
+            OutputFile.writeAndLog("membership", clubName, formatReport(rr))
           }
       }
     } yield ()).provideSomeAuto(
@@ -105,7 +104,10 @@ object MembershipApp extends ZIOAppDefault {
       now    = Instant.now()
       phaseB <- classifyApiMembers(client, clubId, apiMap, dbState, now, trustUsernames)
       phaseC <- classifyDisappeared(client, dbState, phaseB.resolvedIds, apiMap, resolvedUrlName, now)
-      result = mergeResults(phaseB, phaseC)
+      result = mergeResults(phaseB, phaseC).copy(
+        currentMemberCount = apiMap.size,
+        previousMemberCount = dbState.membersByPlayerId.size
+      )
       _ <- persist(result)
       _ <- ZIO.whenDiscard(trackRun)(MembershipRun.insert(clubId, now))
     } yield result
@@ -508,9 +510,12 @@ object MembershipApp extends ZIOAppDefault {
 
   // --- Reporting ---
 
-  private def reportReconciliation(result: ReconciliationResult): UIO[Unit] =
+  private def reportReconciliation(result: ReconciliationResult): UIO[Unit] = {
+    val delta = result.currentMemberCount - result.previousMemberCount
+    val sign  = if (delta >= 0) "+" else ""
     for {
       _ <- ZIO.logInfo(s"=== Reconciliation Complete ===")
+      _ <- ZIO.logInfo(s"Total members:      ${result.currentMemberCount} ($sign$delta)")
       _ <- ZIO.logInfo(s"New players:        ${result.newPlayers.size}")
       _ <- ZIO.logInfo(s"New snapshots:      ${result.newSnapshots.size}")
       _ <- ZIO.logInfo(s"New memberships:    ${result.newMemberships.size}")
@@ -518,6 +523,7 @@ object MembershipApp extends ZIOAppDefault {
       _ <- ZIO.logInfo("")
       _ <- ZIO.foreachDiscard(result.changes)(printChangeSummary)
     } yield ()
+  }
 
   private def printChangeSummary(summary: MemberChangeSummary): UIO[Unit] =
     for {
@@ -538,13 +544,24 @@ object MembershipApp extends ZIOAppDefault {
   // --- File output formatting ---
 
   private def formatReconciliation(result: ReconciliationResult): String = {
+    val delta = result.currentMemberCount - result.previousMemberCount
+    val sign  = if (delta >= 0) "+" else ""
     val header = s"""=== Reconciliation Complete ===
+                    |Total members:      ${result.currentMemberCount} ($sign$delta)
                     |New players:        ${result.newPlayers.size}
                     |New snapshots:      ${result.newSnapshots.size}
                     |New memberships:    ${result.newMemberships.size}
                     |Closed memberships: ${result.closedMemberships.size}
                     |""".stripMargin
     header + "\n" + formatChangeSummaries(result.changes.toList)
+  }
+
+  private def formatReport(rr: ReportResult): String = {
+    val delta = rr.memberCountAtEnd - rr.memberCountAtStart
+    val sign  = if (delta >= 0) "+" else ""
+    val header = s"Total members: ${rr.memberCountAtEnd} ($sign$delta)\n\n"
+    if (rr.summaries.isEmpty) { header + "No changes\n" }
+    else { header + formatChangeSummaries(rr.summaries) }
   }
 
   private def formatChangeSummaries(summaries: List[MemberChangeSummary]): String = {
@@ -558,7 +575,13 @@ object MembershipApp extends ZIOAppDefault {
 
   // --- Report mode: DB-only ---
 
-  def report(clubUrlName: ClubUrlName, since: Instant, until: Instant): RIO[Transactor, List[MemberChangeSummary]] =
+  private case class ReportResult(
+    summaries: List[MemberChangeSummary],
+    memberCountAtStart: Int,
+    memberCountAtEnd: Int
+  )
+
+  private def report(clubUrlName: ClubUrlName, since: Instant, until: Instant): RIO[Transactor, ReportResult] =
     for {
       club <- Club.selectByUrlName(clubUrlName)
         .someOrFail(ExternalException(s"Club '$clubUrlName' not found in database"))
@@ -566,9 +589,12 @@ object MembershipApp extends ZIOAppDefault {
       members <- ClubMember.selectClub(clubId)
       snaps   <- PlayerSnapshot.selectSince(since)
       summaries = classifyFromDb(clubId, members, snaps, since, until)
+      countAtStart = members.count(m => !m.since.isAfter(since) && m.until.forall(_.isAfter(since)))
+      countAtEnd   = members.count(m => !m.since.isAfter(until) && m.until.forall(_.isAfter(until)))
       _ <- ZIO.logInfo(s"=== Report for $clubUrlName from $since to $until ===")
+      _ <- ZIO.logInfo(s"Members: $countAtStart -> $countAtEnd")
       _ <- ZIO.foreachDiscard(summaries)(printChangeSummary)
-    } yield summaries
+    } yield ReportResult(summaries, countAtStart, countAtEnd)
 
   private[membership] def classifyFromDb(
     clubId: ClubId,

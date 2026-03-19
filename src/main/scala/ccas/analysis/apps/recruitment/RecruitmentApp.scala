@@ -76,10 +76,8 @@ object RecruitmentApp extends ZIOAppDefault {
       _ <- (args.toList match
         case "report" :: clubStr :: rest =>
           val clubUrlName = ClubUrlName.wrap(clubStr)
-          showReport(clubUrlName, rest.headOption).flatMap { usernames =>
-            ZIO.whenDiscard(usernames.nonEmpty) {
-              OutputFile.writeAndLog("recruitment", clubUrlName, formatRecruitmentOutput(usernames))
-            }
+          showReport(clubUrlName, rest.headOption).flatMap { case (usernames, evaluatedCount) =>
+            OutputFile.writeAndLog("recruitment", clubUrlName, formatRecruitmentOutput(usernames, evaluatedCount))
           }
         case clubStr :: rest =>
           val (flags, positional) = rest.partition(_.startsWith("--"))
@@ -111,10 +109,9 @@ object RecruitmentApp extends ZIOAppDefault {
                 PlayerSnapshot.selectIdLatest(c.playerId)
                   .map(_.fold(Username.wrap(s"[pid=${c.playerId}]"))(_.username))
               )
-              _ <- ZIO.whenDiscard(usernames.nonEmpty) {
-                OutputFile.write("recruitment", clubUrlName, formatRecruitmentOutput(usernames))
-                  .flatMap(path => ZIO.logInfo(s"Output written to $path"))
-              }
+              evaluatedCount <- RecruitmentCandidate.selectCountByRun(run.runId)
+              _ <- OutputFile.write("recruitment", clubUrlName, formatRecruitmentOutput(usernames, evaluatedCount))
+                .flatMap(path => ZIO.logInfo(s"Output written to $path"))
             } yield ()
           }
         case _ => ZIO.fail(ExternalException(help))
@@ -1269,13 +1266,14 @@ object RecruitmentApp extends ZIOAppDefault {
 
   // --- Report mode ---
 
-  private def formatRecruitmentOutput(usernames: List[Username]): String = {
+  private def formatRecruitmentOutput(usernames: List[Username], evaluatedCount: Int): String = {
+    val stats  = s"Evaluated: $evaluatedCount | Invited: ${usernames.size}"
     val header = usernames.mkString(" ")
     val detail = usernames.map(name => s"$name ${ApiPlayer.getProfileUrl(name)}").mkString("\n")
-    s"$header\n\n$detail\n"
+    s"$stats\n\n$header\n\n$detail\n"
   }
 
-  def showReport(clubUrlName: ClubUrlName, runIdOpt: Option[String]): RIO[Transactor, List[Username]] =
+  def showReport(clubUrlName: ClubUrlName, runIdOpt: Option[String]): RIO[Transactor, (List[Username], Int)] =
     for {
       club <- Club.selectByUrlName(clubUrlName)
         .someOrFail(ExternalException(s"Club '$clubUrlName' not found in database"))
@@ -1290,11 +1288,12 @@ object RecruitmentApp extends ZIOAppDefault {
           RecruitmentRun.selectLatest(clubId)
             .someOrFail(ExternalException(s"No runs found for club '$clubUrlName'"))
       }
-      invited <- RecruitmentCandidate.selectInvitedByRun(run.runId)
-      _       <- ZIO.logInfo(s"=== Recruitment Report for $clubUrlName (run ${run.runId}) ===")
-      _       <- ZIO.logInfo(s"Started: ${run.startedAt}")
-      _       <- ZIO.logInfo(s"Completed: ${run.completedAt.getOrElse("in progress")}")
-      _       <- ZIO.logInfo(s"Invited: ${invited.size}")
+      invited        <- RecruitmentCandidate.selectInvitedByRun(run.runId)
+      evaluatedCount <- RecruitmentCandidate.selectCountByRun(run.runId)
+      _              <- ZIO.logInfo(s"=== Recruitment Report for $clubUrlName (run ${run.runId}) ===")
+      _              <- ZIO.logInfo(s"Started: ${run.startedAt}")
+      _              <- ZIO.logInfo(s"Completed: ${run.completedAt.getOrElse("in progress")}")
+      _              <- ZIO.logInfo(s"Evaluated: $evaluatedCount | Invited: ${invited.size}")
       usernames <- ZIO.foreach(invited) { c =>
         PlayerSnapshot.selectIdLatest(c.playerId)
           .map(_.fold(Username.wrap(s"[pid=${c.playerId}]"))(_.username))
@@ -1304,5 +1303,5 @@ object RecruitmentApp extends ZIOAppDefault {
       _ <- ZIO.foreachDiscard(usernames) { name =>
         ZIO.logInfo(ApiPlayer.getProfileUrl(name).toString)
       }
-    } yield usernames
+    } yield (usernames, evaluatedCount)
 }
