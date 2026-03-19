@@ -32,8 +32,8 @@ object ApiPlayerGamesCurrent extends JsonDecoding[ApiPlayerGamesCurrent] {
     rules: GameRule,
     rated: Boolean,
     tournament: Option[URL],
-    `match`: Option[URL])
-      derives JsonDecoder {
+    `match`: Option[URL]
+  ) derives JsonDecoder {
     val whiteUsername: Username = Username.wrap(white.path.segments.last)
     val blackUsername: Username = Username.wrap(black.path.segments.last)
 

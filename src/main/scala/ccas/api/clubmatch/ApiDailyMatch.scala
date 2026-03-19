@@ -38,8 +38,8 @@ object ApiDailyMatch extends JsonDecoding[ApiDailyMatch] {
     status: ClubMatchStatus,
     boards: Int,
     settings: ApiDailyMatchSettings,
-    teams: ApiDailyMatchTeamsRegistered)
-      extends ApiDailyMatch derives JsonDecoder {
+    teams: ApiDailyMatchTeamsRegistered
+  ) extends ApiDailyMatch derives JsonDecoder {
     require(status == ClubMatchStatus.Registration)
   }
 
@@ -52,8 +52,8 @@ object ApiDailyMatch extends JsonDecoding[ApiDailyMatch] {
     status: ClubMatchStatus,
     boards: Int,
     settings: ApiDailyMatchSettings,
-    teams: ApiDailyMatchTeamsInProgress)
-      extends ApiDailyMatch derives JsonDecoder {
+    teams: ApiDailyMatchTeamsInProgress
+  ) extends ApiDailyMatch derives JsonDecoder {
     require(status == ClubMatchStatus.InProgress)
   }
 
@@ -67,8 +67,8 @@ object ApiDailyMatch extends JsonDecoding[ApiDailyMatch] {
     status: ClubMatchStatus,
     boards: Int,
     settings: ApiDailyMatchSettings,
-    teams: ApiDailyMatchTeamsFinished)
-      extends ApiDailyMatch derives JsonDecoder {
+    teams: ApiDailyMatchTeamsFinished
+  ) extends ApiDailyMatch derives JsonDecoder {
     require(status == ClubMatchStatus.Finished)
   }
 
@@ -83,8 +83,8 @@ object ApiDailyMatch extends JsonDecoding[ApiDailyMatch] {
     minRequiredGames: Int,
     minRating: Option[Elo],
     maxRating: Option[Elo],
-    autoStart: Option[Boolean])
-      derives JsonDecoder
+    autoStart: Option[Boolean]
+  ) derives JsonDecoder
 
   // teams
 
@@ -124,8 +124,8 @@ object ApiDailyMatch extends JsonDecoding[ApiDailyMatch] {
     score: Double,
     players: Chunk[ApiDailyMatchPlayerRegistered],
     fairPlayRemovals: Set[Username],
-    locked: Boolean)
-      extends ApiDailyMatchTeam derives JsonDecoder
+    locked: Boolean
+  ) extends ApiDailyMatchTeam derives JsonDecoder
 
   @jsonMemberNames(SnakeCase)
   final case class ApiDailyMatchTeamInProgress(
@@ -134,8 +134,8 @@ object ApiDailyMatch extends JsonDecoding[ApiDailyMatch] {
     url: URL,
     score: Double,
     players: Chunk[ApiDailyMatchPlayerStarted],
-    fairPlayRemovals: Set[Username])
-      extends ApiDailyMatchTeam derives JsonDecoder
+    fairPlayRemovals: Set[Username]
+  ) extends ApiDailyMatchTeam derives JsonDecoder
 
   @jsonMemberNames(SnakeCase)
   final case class ApiDailyMatchTeamFinished(
@@ -145,8 +145,8 @@ object ApiDailyMatch extends JsonDecoding[ApiDailyMatch] {
     score: Double,
     result: ClubMatchResult,
     players: Chunk[ApiDailyMatchPlayerStarted],
-    fairPlayRemovals: Set[Username])
-      extends ApiDailyMatchTeam derives JsonDecoder
+    fairPlayRemovals: Set[Username]
+  ) extends ApiDailyMatchTeam derives JsonDecoder
 
   // player
 
@@ -160,8 +160,8 @@ object ApiDailyMatch extends JsonDecoding[ApiDailyMatch] {
     rating: Elo,
     timeoutPercent: Double,
     rd: Double,
-    status: PlayerStatus)
-      extends ApiDailyMatchPlayer derives JsonDecoder
+    status: PlayerStatus
+  ) extends ApiDailyMatchPlayer derives JsonDecoder
 
   @jsonMemberNames(SnakeCase)
   final case class ApiDailyMatchPlayerStarted(
@@ -170,6 +170,6 @@ object ApiDailyMatch extends JsonDecoding[ApiDailyMatch] {
     status: PlayerStatus,
     playedAsWhite: Option[GameResultDetail],
     playedAsBlack: Option[GameResultDetail],
-    board: URL)
-      extends ApiDailyMatchPlayer derives JsonDecoder
+    board: URL
+  ) extends ApiDailyMatchPlayer derives JsonDecoder
 }

@@ -29,8 +29,7 @@ object TestChessComClient extends ZIOSpecDefault {
           body: Body,
           sslConfig: Option[ClientSSLConfig],
           proxy: Option[Proxy]
-        )(implicit trace: Trace
-        ): ZIO[Scope, Throwable, Response] =
+        )(implicit trace: Trace): ZIO[Scope, Throwable, Response] =
           handler(Request(method = method, url = url, headers = headers, body = body))
 
         override def socket[Env1 <: Any](
@@ -128,8 +127,7 @@ object TestChessComClient extends ZIOSpecDefault {
             body: Body,
             sslConfig: Option[ClientSSLConfig],
             proxy: Option[Proxy]
-          )(implicit trace: Trace
-          ): ZIO[Scope, Throwable, Response] =
+          )(implicit trace: Trace): ZIO[Scope, Throwable, Response] =
             for {
               n <- counter.getAndUpdate(_ + 1)
               _ <- order.update(_ :+ n)

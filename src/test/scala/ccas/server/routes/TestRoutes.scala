@@ -35,10 +35,7 @@ object TestRoutes extends ZIOSpecDefault {
     case Fail(msg: String)
   }
 
-  private class FakeJobRunner(
-    jobs: Ref[Map[JobRunId, JobRun]],
-    nextAction: Ref[Action])
-      extends JobRunner {
+  private class FakeJobRunner(jobs: Ref[Map[JobRunId, JobRun]], nextAction: Ref[Action]) extends JobRunner {
 
     override def submit(
       kind: JobKind,
@@ -96,8 +93,7 @@ object TestRoutes extends ZIOSpecDefault {
             body: Body,
             sslConfig: Option[ClientSSLConfig],
             proxy: Option[Proxy]
-          )(implicit trace: Trace
-          ): ZIO[Scope, Throwable, Response] =
+          )(implicit trace: Trace): ZIO[Scope, Throwable, Response] =
             routes.runZIO(Request(method = method, url = url, headers = headers, body = body))
 
           override def socket[Env1 <: Any](

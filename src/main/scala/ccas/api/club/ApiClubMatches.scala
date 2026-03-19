@@ -13,7 +13,8 @@ import ccas.utils.json.JsonDecoding
 final case class ApiClubMatches(
   finished: Chunk[ApiClubMatchFinished],
   inProgress: Chunk[ApiClubMatchInProgress],
-  registered: Chunk[ApiClubMatchRegistered]) {
+  registered: Chunk[ApiClubMatchRegistered]
+) {
   def dailyFinished: Chunk[ApiClubMatchFinished] = finished.filter(_.timeClass == TimeClass.Daily)
 
   def dailyInProgress: Chunk[ApiClubMatchInProgress] = inProgress.filter(_.timeClass == TimeClass.Daily)
@@ -36,11 +37,7 @@ object ApiClubMatches extends JsonDecoding[ApiClubMatches] {
   }
 
   @jsonMemberNames(SnakeCase)
-  final case class ApiClubMatchRegistered(
-    name: String,
-    `@id`: URL,
-    opponent: URL,
-    timeClass: TimeClass)
+  final case class ApiClubMatchRegistered(name: String, `@id`: URL, opponent: URL, timeClass: TimeClass)
       extends ApiClubMatch derives JsonDecoder
 
   @jsonMemberNames(SnakeCase)
@@ -49,8 +46,8 @@ object ApiClubMatches extends JsonDecoding[ApiClubMatches] {
     `@id`: URL,
     opponent: URL,
     timeClass: TimeClass,
-    startTime: Long)
-      extends ApiClubMatchStarted derives JsonDecoder
+    startTime: Long
+  ) extends ApiClubMatchStarted derives JsonDecoder
 
   @jsonMemberNames(SnakeCase)
   final case class ApiClubMatchFinished(
@@ -59,8 +56,8 @@ object ApiClubMatches extends JsonDecoding[ApiClubMatches] {
     opponent: URL,
     timeClass: TimeClass,
     startTime: Long,
-    result: ClubMatchResult)
-      extends ApiClubMatchStarted derives JsonDecoder
+    result: ClubMatchResult
+  ) extends ApiClubMatchStarted derives JsonDecoder
 
   def getUrl(clubUrlName: ClubUrlName): URL = ApiClub.getUrl(clubUrlName).addPath("matches")
 }

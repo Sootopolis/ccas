@@ -11,11 +11,7 @@ import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.SqlZioTypes.{connectZIO, transactZIO}
 
 @Table(PostgresDbType, SqlNameMapper.CamelToSnakeCase)
-final case class Club(
-  @Id clubId: ClubId,
-  created: Instant,
-  urlName: ClubUrlName)
-    derives DbCodec
+final case class Club(@Id clubId: ClubId, created: Instant, urlName: ClubUrlName) derives DbCodec
 
 object Club {
   private val repo = ImmutableRepo[Club, ClubId]

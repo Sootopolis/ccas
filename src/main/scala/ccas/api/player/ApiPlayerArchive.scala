@@ -38,8 +38,8 @@ object ApiPlayerArchive extends JsonDecoding[ApiPlayerArchive] {
     eco: Option[URL],
     tournament: Option[URL],
     `match`: Option[URL],
-    timeClass: String)
-      derives JsonDecoder
+    timeClass: String
+  ) derives JsonDecoder
 
   @jsonMemberNames(SnakeCase)
   final case class ApiPlayerArchiveGamePlayer(
@@ -47,8 +47,8 @@ object ApiPlayerArchive extends JsonDecoding[ApiPlayerArchive] {
     `@id`: URL,
     rating: Elo,
     uuid: UUID,
-    result: GameResultDetail)
-      derives JsonDecoder
+    result: GameResultDetail
+  ) derives JsonDecoder
 
   def getUrl(username: Username, year: Int, month: Int): URL = {
     require(year > 1970, "year must be greater than 1970")

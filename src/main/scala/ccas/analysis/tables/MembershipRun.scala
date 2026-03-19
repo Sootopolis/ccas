@@ -10,11 +10,7 @@ import ccas.api.misc.subtypes.ClubId
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.SqlZioTypes.connectZIO
 
-final case class MembershipRun(
-  runId: Long,
-  clubId: ClubId,
-  ranAt: Instant)
-    derives DbCodec
+final case class MembershipRun(runId: Long, clubId: ClubId, ranAt: Instant) derives DbCodec
 
 object MembershipRun {
   private val selectCols = SqlLiteral("run_id, club_id, ran_at")

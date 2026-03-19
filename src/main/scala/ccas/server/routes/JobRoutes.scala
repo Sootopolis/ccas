@@ -30,7 +30,8 @@ object JobRoutes {
     cumulative: Option[Boolean],
     sourceClubs: Option[List[ClubUrlName]],
     timeLimitMinutes: Option[Int],
-    explore: Option[Boolean])
+    explore: Option[Boolean]
+  )
   object RecruitmentRequest {
     given JsonCodec[RecruitmentRequest] = DeriveJsonCodec.gen
   }
@@ -44,7 +45,8 @@ object JobRoutes {
     clubUrlName: ClubUrlName,
     username: Username,
     reason: Option[String],
-    expiresAt: Option[Instant])
+    expiresAt: Option[Instant]
+  )
   object BlacklistRequest {
     given JsonCodec[BlacklistRequest] = DeriveJsonCodec.gen
   }
@@ -63,7 +65,8 @@ object JobRoutes {
     clubUrlName: Option[String],
     startedAt: String,
     completedAt: Option[String],
-    error: Option[String])
+    error: Option[String]
+  )
   object JobStatusResponse {
     given JsonCodec[JobStatusResponse] = DeriveJsonCodec.gen
 

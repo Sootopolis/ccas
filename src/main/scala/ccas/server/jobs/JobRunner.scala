@@ -36,10 +36,7 @@ object JobRunner {
       } yield runner
     }
 
-  private class JobRunnerLive(
-    client: ChessComClient,
-    xa: Transactor,
-    fibers: Ref[Set[Fiber.Runtime[Nothing, Unit]]])
+  private class JobRunnerLive(client: ChessComClient, xa: Transactor, fibers: Ref[Set[Fiber.Runtime[Nothing, Unit]]])
       extends JobRunner {
 
     private val env = zio.ZEnvironment(client, xa)

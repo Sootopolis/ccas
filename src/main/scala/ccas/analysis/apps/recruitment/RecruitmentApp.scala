@@ -38,7 +38,8 @@ object RecruitmentApp extends ZIOAppDefault {
     remaining: List[Username],
     evaluated: Int,
     rejected: Int,
-    consecutiveRejects: Int)
+    consecutiveRejects: Int
+  )
 
   // Grim constants (server-side, not user-configurable)
   private val GrimConsecutiveRejects = 50
@@ -60,7 +61,8 @@ object RecruitmentApp extends ZIOAppDefault {
     exploreConcurrency: Int,
     evalBatchSize: Int,
     explore: Boolean,
-    showProgress: Boolean)
+    showProgress: Boolean
+  )
 
   private val help =
     """Usage: RecruitmentApp <club-url-name> [alias] [source-clubs...] [--target N] [--cumulative]
@@ -667,7 +669,8 @@ object RecruitmentApp extends ZIOAppDefault {
     formerMemberIds: Set[PlayerId],
     now: Instant,
     discoveredClubs: Ref[Set[ClubUrlName]],
-    discoveredOpponents: Ref[Set[Username]])
+    discoveredOpponents: Ref[Set[Username]]
+  )
 
   /** Accumulated per-candidate state — populated as filters run. */
   private[recruitment] case class CandidateContext(
@@ -675,7 +678,8 @@ object RecruitmentApp extends ZIOAppDefault {
     apiPlayer: Option[ApiPlayer],
     isNewPlayer: Boolean,
     cache: Option[PlayerRecruitmentCache],
-    recentArchives: Option[List[ApiPlayerArchive]] = None)
+    recentArchives: Option[List[ApiPlayerArchive]] = None
+  )
   private[recruitment] object CandidateContext {
     def initial(username: Username): CandidateContext =
       CandidateContext(username, apiPlayer = None, isNewPlayer = false, cache = None)
@@ -708,8 +712,11 @@ object RecruitmentApp extends ZIOAppDefault {
 
   // --- Pipeline runner ---
 
-  private def runFilters(env: FilterEnv, filters: List[RecruitmentFilter], ctxRef: Ref[CandidateContext])
-    : RIO[Transactor, (CandidateOutcome, CandidateContext)] =
+  private def runFilters(
+    env: FilterEnv,
+    filters: List[RecruitmentFilter],
+    ctxRef: Ref[CandidateContext]
+  ): RIO[Transactor, (CandidateOutcome, CandidateContext)] =
     ZIO.foldLeft(filters)(FilterResult(None, env.candidate)) {
       case (r @ FilterResult(Some(_), _), _) => ZIO.succeed(r)
       case (FilterResult(None, ctx), filter) => ctxRef.set(ctx) *> filter(env.copy(candidate = ctx))
@@ -803,7 +810,8 @@ object RecruitmentApp extends ZIOAppDefault {
 
   private case class CacheCriterion(
     stalenessHours: Long,
-    check: (PlayerRecruitmentCache, RecruitmentCriteria) => Option[CandidateOutcome])
+    check: (PlayerRecruitmentCache, RecruitmentCriteria) => Option[CandidateOutcome]
+  )
 
   private val cacheCriteria: List[CacheCriterion] = List(
     // Zero-tolerance daily timeout (unlimited staleness)
@@ -973,8 +981,10 @@ object RecruitmentApp extends ZIOAppDefault {
         }
       } yield result
 
-    private def applyDailyStats(env: FilterEnv, dailyStats: ApiPlayerStats.ApiPlayerDailyStats)
-      : RIO[Transactor, FilterResult] = {
+    private def applyDailyStats(
+      env: FilterEnv,
+      dailyStats: ApiPlayerStats.ApiPlayerDailyStats
+    ): RIO[Transactor, FilterResult] = {
       val dailyElo           = dailyStats.last.rating
       val dailyTimeoutPct    = dailyStats.record.timeoutPercent
       val dailyGamesFinished = dailyStats.record.nGames

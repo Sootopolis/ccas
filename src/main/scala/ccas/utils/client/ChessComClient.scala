@@ -5,6 +5,7 @@ import zio.http.{Client, Header, Headers, Request, Status, URL}
 import zio.http.Method.GET
 import zio.json.JsonDecoder
 
+import ccas.info.BuildInfo
 import ccas.utils.errors.ExternalException
 import ccas.utils.json.JsonDecodingException
 
@@ -15,7 +16,8 @@ final class ChessComClient(
   mutex: Semaphore,
   throttled: Ref[Boolean],
   cooldown: Duration,
-  retryBase: Duration = 1.second) {
+  retryBase: Duration = 1.second
+) {
   private val batchedClient = client.batched
 
   private def rawGet[T](url: URL)(using jsonDecoder: JsonDecoder[T]): Task[T] = for {
@@ -62,7 +64,7 @@ final class ChessComClient(
 
 object ChessComClient {
   private def userAgentHeaders(contactEmail: String): Headers =
-    Headers(Header.Custom("User-Agent", s"CCAS/1.0 (contact: $contactEmail)"))
+    Headers(Header.Custom("User-Agent", s"${BuildInfo.name.toUpperCase}/${BuildInfo.version} (contact: $contactEmail)"))
 
   def live(
     permits: Long = 5,

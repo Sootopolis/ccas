@@ -18,8 +18,8 @@ final case class PlayerSnapshot(
   since: Instant,
   username: Username,
   status: PlayerStatusCategory,
-  title: Option[Title])
-    derives DbCodec
+  title: Option[Title]
+) derives DbCodec
 
 object PlayerSnapshot {
   private val selectCols   = SqlLiteral("player_id, since, username, status, title")

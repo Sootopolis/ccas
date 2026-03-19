@@ -22,8 +22,8 @@ final case class PlayerRecruitmentCache(
   tmGamesFinished90d: Option[Int],
   tmTimeoutPct90d: Option[Double],
   lastDailyTimeoutAt: Option[Instant],
-  lastTmTimeoutAt: Option[Instant])
-    derives DbCodec
+  lastTmTimeoutAt: Option[Instant]
+) derives DbCodec
 
 object PlayerRecruitmentCache {
   def empty(playerId: PlayerId, fetchedAt: Instant, clubCount: Option[Int]): PlayerRecruitmentCache =

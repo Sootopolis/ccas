@@ -35,14 +35,10 @@ object ApiDailyMatchBoard extends JsonDecoding[ApiDailyMatchBoard] {
     rules: GameRule,
     rated: Boolean,
     eco: Option[URL],
-    `match`: URL)
-      derives JsonDecoder
+    `match`: URL
+  ) derives JsonDecoder
 
   @jsonMemberNames(SnakeCase)
-  final case class ApiDailyBoardPlayer(
-    username: Username,
-    rating: Elo,
-    result: Option[GameResultDetail],
-    `@id`: URL)
+  final case class ApiDailyBoardPlayer(username: Username, rating: Elo, result: Option[GameResultDetail], `@id`: URL)
       derives JsonDecoder
 }

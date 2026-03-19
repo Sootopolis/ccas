@@ -29,8 +29,8 @@ final case class RecruitmentCriteria(
   dailyMaxHoursPerMove: Option[Int],
   dailyMinOngoingGames: Option[Int],
   dailyMaxOngoingGames: Option[Int],
-  dailyMinOngoingTeamMatches: Option[Int])
-    derives DbCodec {
+  dailyMinOngoingTeamMatches: Option[Int]
+) derives DbCodec {
   def excludeClubNames: List[ClubUrlName] = excludeClubs.map(ClubUrlName.wrap)
 
   def capped: RecruitmentCriteria = copy(

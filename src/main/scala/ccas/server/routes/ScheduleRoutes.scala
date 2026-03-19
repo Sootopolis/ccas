@@ -18,15 +18,13 @@ object ScheduleRoutes {
     kind: String,
     clubUrlName: Option[String],
     params: Option[String],
-    intervalHours: Int)
+    intervalHours: Int
+  )
   object CreateScheduleRequest {
     given JsonCodec[CreateScheduleRequest] = DeriveJsonCodec.gen
   }
 
-  case class UpdateScheduleRequest(
-    intervalHours: Option[Int],
-    enabled: Option[Boolean],
-    params: Option[String])
+  case class UpdateScheduleRequest(intervalHours: Option[Int], enabled: Option[Boolean], params: Option[String])
   object UpdateScheduleRequest {
     given JsonCodec[UpdateScheduleRequest] = DeriveJsonCodec.gen
   }
@@ -38,7 +36,8 @@ object ScheduleRoutes {
     params: Option[String],
     intervalHours: Int,
     enabled: Boolean,
-    lastRunAt: Option[String])
+    lastRunAt: Option[String]
+  )
   object ScheduleResponse {
     given JsonCodec[ScheduleResponse] = DeriveJsonCodec.gen
 

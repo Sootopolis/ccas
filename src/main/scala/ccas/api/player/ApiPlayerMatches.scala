@@ -13,7 +13,8 @@ import ccas.utils.json.JsonDecoding
 final case class ApiPlayerMatches(
   finished: Chunk[ApiPlayerMatch],
   inProgress: Chunk[ApiPlayerMatch],
-  registered: Chunk[ApiPlayerMatch])
+  registered: Chunk[ApiPlayerMatch]
+)
 
 object ApiPlayerMatches extends JsonDecoding[ApiPlayerMatches] {
   override protected val jsonDecoderDerived: JsonDecoder[ApiPlayerMatches] = DeriveJsonDecoder.gen
@@ -27,12 +28,12 @@ object ApiPlayerMatches extends JsonDecoding[ApiPlayerMatches] {
     `@id`: URL,
     club: URL,
     results: Option[ApiPlayerMatchResults],
-    board: Option[URL])
-      derives JsonDecoder
+    board: Option[URL]
+  ) derives JsonDecoder
 
   @jsonMemberNames(SnakeCase)
   final case class ApiPlayerMatchResults(
     playedAsWhite: Option[GameResultDetail],
-    playedAsBlack: Option[GameResultDetail])
-      derives JsonDecoder
+    playedAsBlack: Option[GameResultDetail]
+  ) derives JsonDecoder
 }

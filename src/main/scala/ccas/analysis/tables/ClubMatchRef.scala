@@ -9,11 +9,7 @@ import ccas.api.misc.subtypes.{ClubId, ClubMatchId}
 import ccas.utils.sql.SqlZioTypes.connectZIO
 
 @Table(PostgresDbType, SqlNameMapper.CamelToSnakeCase)
-final case class ClubMatchRef(
-  @Id clubId: ClubId,
-  matchId: ClubMatchId,
-  teamIdx: Int)
-    derives DbCodec
+final case class ClubMatchRef(@Id clubId: ClubId, matchId: ClubMatchId, teamIdx: Int) derives DbCodec
 
 object ClubMatchRef {
   private val repo = ImmutableRepo[ClubMatchRef, ClubId]

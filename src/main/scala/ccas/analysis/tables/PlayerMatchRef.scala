@@ -9,11 +9,7 @@ import ccas.api.misc.subtypes.{ClubMatchId, PlayerId}
 import ccas.utils.sql.SqlZioTypes.connectZIO
 
 @Table(PostgresDbType, SqlNameMapper.CamelToSnakeCase)
-final case class PlayerMatchRef(
-  @Id playerId: PlayerId,
-  matchId: ClubMatchId,
-  teamIdx: Int,
-  boardIdx: Int)
+final case class PlayerMatchRef(@Id playerId: PlayerId, matchId: ClubMatchId, teamIdx: Int, boardIdx: Int)
     derives DbCodec
 
 object PlayerMatchRef {

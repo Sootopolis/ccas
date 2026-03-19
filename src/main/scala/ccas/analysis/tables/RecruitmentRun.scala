@@ -16,8 +16,8 @@ final case class RecruitmentRun(
   criteriaId: Long,
   startedAt: Instant,
   completedAt: Option[Instant],
-  candidatesFound: Int)
-    derives DbCodec
+  candidatesFound: Int
+) derives DbCodec
 
 object RecruitmentRun {
   private val selectCols = SqlLiteral("run_id, club_id, criteria_id, started_at, completed_at, candidates_found")

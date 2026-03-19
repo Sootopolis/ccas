@@ -21,8 +21,8 @@ case class JobRun(
   params: Option[String],
   startedAt: Instant,
   completedAt: Option[Instant],
-  error: Option[String])
-    derives DbCodec
+  error: Option[String]
+) derives DbCodec
 
 object JobRun {
 
@@ -58,8 +58,12 @@ object JobRun {
           """.update.run()
     }
 
-  def updateStatus(id: JobRunId, status: JobRunStatus, completedAt: Option[Instant], error: Option[String])
-    : ZIO[Transactor, SQLException, Int] =
+  def updateStatus(
+    id: JobRunId,
+    status: JobRunStatus,
+    completedAt: Option[Instant],
+    error: Option[String]
+  ): ZIO[Transactor, SQLException, Int] =
     connectZIO {
       sql"""UPDATE job_run SET status = $status, completed_at = $completedAt, error = $error
              WHERE id = $id""".update.run()

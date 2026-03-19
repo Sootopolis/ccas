@@ -48,8 +48,7 @@ object TestJobRunner extends ZIOSpecDefault {
             body: Body,
             sslConfig: Option[ClientSSLConfig],
             proxy: Option[Proxy]
-          )(implicit trace: Trace
-          ): ZIO[Scope, Throwable, Response] =
+          )(implicit trace: Trace): ZIO[Scope, Throwable, Response] =
             routes.runZIO(Request(method = method, url = url, headers = headers, body = body))
 
           override def socket[Env1 <: Any](
@@ -74,8 +73,11 @@ object TestJobRunner extends ZIOSpecDefault {
       }
     }
 
-  private def awaitStatus(runner: JobRunner, id: JobRunId, maxWait: zio.Duration = 10.seconds)
-    : ZIO[com.augustnagro.magnum.Transactor, Throwable, JobRun] =
+  private def awaitStatus(
+    runner: JobRunner,
+    id: JobRunId,
+    maxWait: zio.Duration = 10.seconds
+  ): ZIO[com.augustnagro.magnum.Transactor, Throwable, JobRun] =
     runner.status(id).flatMap {
       case Some(job) if job.status != JobRunStatus.Running => ZIO.succeed(job)
       case _                                               => ZIO.sleep(100.millis) *> awaitStatus(runner, id, maxWait)

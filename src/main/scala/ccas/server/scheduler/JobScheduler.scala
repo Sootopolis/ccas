@@ -30,11 +30,7 @@ object JobScheduler {
       new JobSchedulerLive(runner, xa, pollInterval)
     }
 
-  private class JobSchedulerLive(
-    runner: JobRunner,
-    xa: Transactor,
-    pollInterval: Duration)
-      extends JobScheduler {
+  private class JobSchedulerLive(runner: JobRunner, xa: Transactor, pollInterval: Duration) extends JobScheduler {
 
     private val env = zio.ZEnvironment(xa)
 

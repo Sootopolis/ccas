@@ -147,8 +147,7 @@ object TestMatchRefApp extends ZIOSpecDefault {
           body: Body,
           sslConfig: Option[ClientSSLConfig],
           proxy: Option[Proxy]
-        )(implicit trace: zio.Trace
-        ): ZIO[Scope, Throwable, Response] =
+        )(implicit trace: zio.Trace): ZIO[Scope, Throwable, Response] =
           routes.runZIO(Request(method = method, url = url, headers = headers, body = body))
 
         override def socket[Env1 <: Any](

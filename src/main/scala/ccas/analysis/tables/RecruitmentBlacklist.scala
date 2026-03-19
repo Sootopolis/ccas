@@ -15,8 +15,8 @@ final case class RecruitmentBlacklist(
   playerId: PlayerId,
   addedAt: Instant,
   expiresAt: Option[Instant],
-  reason: Option[String])
-    derives DbCodec
+  reason: Option[String]
+) derives DbCodec
 
 object RecruitmentBlacklist {
 

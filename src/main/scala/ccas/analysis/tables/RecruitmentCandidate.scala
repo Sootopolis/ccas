@@ -17,8 +17,8 @@ final case class RecruitmentCandidate(
   playerId: PlayerId,
   evaluatedAt: Instant,
   outcome: CandidateOutcome,
-  rejectionReason: Option[String])
-    derives DbCodec
+  rejectionReason: Option[String]
+) derives DbCodec
 
 object RecruitmentCandidate {
   private val selectCols = SqlLiteral("run_id, player_id, evaluated_at, outcome, rejection_reason")
