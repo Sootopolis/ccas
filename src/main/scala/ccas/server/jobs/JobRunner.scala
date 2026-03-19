@@ -70,26 +70,25 @@ object JobRunner {
       kind: JobKind,
       effect: RIO[ChessComClient & Transactor, Any]
     ): UIO[Unit] =
-      effect
-        .provideEnvironment(env)
-        .foldZIO(
-          failure = { error =>
-            val msg = error.safeMessage
-            JobRun.updateStatus(id, JobRunStatus.Failed, Some(Instant.now()), Some(msg))
-              .provideEnvironment(env)
-              .unit.orDie
-          },
-          success = { _ =>
-            val complete =
-              JobRun.updateStatus(id, JobRunStatus.Completed, Some(Instant.now()), None)
-                .provideEnvironment(env)
-                .unit.orDie
-            val followUp = ZIO.whenDiscard(kind == JobKind.Recruitment || kind == JobKind.Membership)(
-              submitMatchRef.provideEnvironment(env).ignore
-            )
-            complete *> followUp
-          }
+      def onFailure(error: Throwable): UIO[Unit] = {
+        val msg = error.safeMessage
+        JobRun.updateStatus(id, JobRunStatus.Failed, Some(Instant.now()), Some(msg))
+          .provideEnvironment(env)
+          .unit.orDie
+      }
+
+      def onSuccess: UIO[Unit] = {
+        val complete =
+          JobRun.updateStatus(id, JobRunStatus.Completed, Some(Instant.now()), None)
+            .provideEnvironment(env)
+            .unit.orDie
+        val followUp = ZIO.whenDiscard(kind == JobKind.Recruitment || kind == JobKind.Membership)(
+          submitMatchRef.provideEnvironment(env).ignore
         )
+        complete *> followUp
+      }
+
+      effect.provideEnvironment(env).foldZIO(onFailure, _ => onSuccess)
 
     private def submitMatchRef: RIO[Transactor, Unit] = {
       import ccas.analysis.apps.matchref.MatchRefApp

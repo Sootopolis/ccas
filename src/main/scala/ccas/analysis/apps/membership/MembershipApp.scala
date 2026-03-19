@@ -42,7 +42,7 @@ object MembershipApp extends ZIOAppDefault {
           }
     }
 
-  override def run: ZIO[ZIOAppArgs & Scope, Any, Any] =
+  override def run: RIO[ZIOAppArgs & Scope, Unit] =
     (for {
       args <- ZIOAppArgs.getArgs
       clubName <- args.headOption match {
@@ -72,7 +72,7 @@ object MembershipApp extends ZIOAppDefault {
       DataSourceLayer.liveFromPrefix(onInit = Tables.ensureTables)
     )
 
-  def reconcileIfStale(clubUrlName: ClubUrlName, until: Instant): RIO[ChessComClient & Transactor, Unit] =
+  private def reconcileIfStale(clubUrlName: ClubUrlName, until: Instant): RIO[ChessComClient & Transactor, Unit] =
     for {
       clubOpt <- Club.selectByUrlName(clubUrlName)
       _ <- ZIO.fromOption(clubOpt).flatMap { club =>
@@ -305,38 +305,41 @@ object MembershipApp extends ZIOAppDefault {
       val oldUsername  = state.player.username
       val closedMember = state.member.copy(until = Some(now))
 
-      client.get[ApiPlayer](ApiPlayer.getUrl(oldUsername)).flatMap { apiPlayer =>
-        if (apiPlayer.playerId != playerId) {
-          matchRefFallback(client, acc, state, closedMember, apiMap, clubUrlName, now)
-        } else {
-          val statusCategory = apiPlayer.status.category
-          val (snapshots, extraChanges) =
-            snapshotChanges(state, apiPlayer.username, statusCategory, apiPlayer.title, playerId, now)
-          val primaryChange =
-            if (statusCategory == PlayerStatusCategory.Active) { Chunk(LeftClub(now)) }
-            else { Chunk(AccountClosed(now, statusCategory)) }
-          val allChanges = primaryChange ++ extraChanges
-          val summary    = MemberChangeSummary(playerId, apiPlayer.username, allChanges)
-
-          if (statusCategory == PlayerStatusCategory.Active) {
-            ZIO.succeed(
-              acc.copy(
-                changes = acc.changes :+ summary,
-                newSnapshots = acc.newSnapshots ++ snapshots,
-                closedMemberships = acc.closedMemberships :+ closedMember
-              )
-            )
+      client.get[ApiPlayer](ApiPlayer.getUrl(oldUsername)).foldZIO(
+        _ => matchRefFallback(client, acc, state, closedMember, apiMap, clubUrlName, now),
+        apiPlayer => {
+          if (apiPlayer.playerId != playerId) {
+            matchRefFallback(client, acc, state, closedMember, apiMap, clubUrlName, now)
           } else {
-            checkClubMembership(client, clubUrlName, apiPlayer.username).map { stillMember =>
-              acc.copy(
-                changes = acc.changes :+ summary,
-                newSnapshots = acc.newSnapshots ++ snapshots,
-                closedMemberships = if stillMember then acc.closedMemberships else acc.closedMemberships :+ closedMember
+            val statusCategory = apiPlayer.status.category
+            val (snapshots, extraChanges) =
+              snapshotChanges(state, apiPlayer.username, statusCategory, apiPlayer.title, playerId, now)
+            val primaryChange =
+              if (statusCategory == PlayerStatusCategory.Active) { Chunk(LeftClub(now)) }
+              else { Chunk(AccountClosed(now, statusCategory)) }
+            val allChanges = primaryChange ++ extraChanges
+            val summary    = MemberChangeSummary(playerId, apiPlayer.username, allChanges)
+
+            if (statusCategory == PlayerStatusCategory.Active) {
+              ZIO.succeed(
+                acc.copy(
+                  changes = acc.changes :+ summary,
+                  newSnapshots = acc.newSnapshots ++ snapshots,
+                  closedMemberships = acc.closedMemberships :+ closedMember
+                )
               )
+            } else {
+              checkClubMembership(client, clubUrlName, apiPlayer.username).map { stillMember =>
+                acc.copy(
+                  changes = acc.changes :+ summary,
+                  newSnapshots = acc.newSnapshots ++ snapshots,
+                  closedMemberships = if stillMember then acc.closedMemberships else acc.closedMemberships :+ closedMember
+                )
+              }
             }
           }
         }
-      }
+      )
     }
   }
 
@@ -388,52 +391,48 @@ object MembershipApp extends ZIOAppDefault {
         resolveUsernameFromMatchRef(client, ref, oldUsername).flatMap {
           case None => ZIO.succeed(unresolvable)
           case Some(resolvedUsername) =>
-            // Successfully resolved — fetch profile for resolved username
-            client.get[ApiPlayer](ApiPlayer.getUrl(resolvedUsername)).foldZIO(
-              _ => {
-                // Profile fetch failed — record username change + close membership
-                val snapshot = PlayerSnapshot(playerId, now, resolvedUsername, state.player.status, state.player.title)
-                val changes  = Chunk(UsernameChange(now, oldUsername))
+            def onProfileFetchFailed: UIO[PhaseCResult] = {
+              val snapshot = PlayerSnapshot(playerId, now, resolvedUsername, state.player.status, state.player.title)
+              val changes  = Chunk(UsernameChange(now, oldUsername))
+              ZIO.succeed(
+                acc.copy(
+                  changes = acc.changes :+ MemberChangeSummary(playerId, resolvedUsername, changes),
+                  newSnapshots = acc.newSnapshots :+ snapshot,
+                  closedMemberships = acc.closedMemberships :+ closedMember
+                )
+              )
+            }
+
+            def onProfileResolved(resolvedProfile: ApiPlayer): Task[PhaseCResult] = {
+              val statusCategory = resolvedProfile.status.category
+              val snapshot = PlayerSnapshot(playerId, now, resolvedUsername, statusCategory, resolvedProfile.title)
+              val changes = Chunk(UsernameChange(now, oldUsername)) ++
+                Option.when(state.player.status != statusCategory)(StatusChange(now, state.player.status))
+
+              if (statusCategory == PlayerStatusCategory.Active) {
+                val hasLeft = apiMap.contains(resolvedUsername)
+                val leftOpt = Option.unless(hasLeft)(LeftClub(now))
                 ZIO.succeed(
                   acc.copy(
-                    changes = acc.changes :+ MemberChangeSummary(playerId, resolvedUsername, changes),
+                    changes = acc.changes :+ MemberChangeSummary(playerId, resolvedUsername, changes ++ leftOpt),
                     newSnapshots = acc.newSnapshots :+ snapshot,
-                    closedMemberships = acc.closedMemberships :+ closedMember
+                    closedMemberships = acc.closedMemberships ++ Option.when(hasLeft)(closedMember)
                   )
                 )
-              },
-              resolvedProfile => {
-                val statusCategory = resolvedProfile.status.category
-                val snapshot = PlayerSnapshot(playerId, now, resolvedUsername, statusCategory, resolvedProfile.title)
-                val changes = Chunk(UsernameChange(now, oldUsername)) ++
-                  (if state.player.status != statusCategory then Chunk(StatusChange(now, state.player.status))
-                   else Chunk.empty)
-
-                if statusCategory == PlayerStatusCategory.Active then
-                  val closedOpt =
-                    if apiMap.contains(resolvedUsername) then Chunk.empty
-                    else Chunk(LeftClub(now))
-                  ZIO.succeed(
-                    acc.copy(
-                      changes = acc.changes :+ MemberChangeSummary(playerId, resolvedUsername, changes ++ closedOpt),
-                      newSnapshots = acc.newSnapshots :+ snapshot,
-                      closedMemberships =
-                        if closedOpt.isEmpty then acc.closedMemberships
-                        else acc.closedMemberships :+ closedMember
-                    )
+              } else {
+                checkClubMembership(client, clubUrlName, resolvedUsername).map { stillMember =>
+                  val allChanges = changes :+ AccountClosed(now, statusCategory)
+                  acc.copy(
+                    changes = acc.changes :+ MemberChangeSummary(playerId, resolvedUsername, allChanges),
+                    newSnapshots = acc.newSnapshots :+ snapshot,
+                    closedMemberships = acc.closedMemberships ++ Option.unless(stillMember)(closedMember)
                   )
-                else
-                  checkClubMembership(client, clubUrlName, resolvedUsername).map { stillMember =>
-                    val allChanges = changes :+ AccountClosed(now, statusCategory)
-                    acc.copy(
-                      changes = acc.changes :+ MemberChangeSummary(playerId, resolvedUsername, allChanges),
-                      newSnapshots = acc.newSnapshots :+ snapshot,
-                      closedMemberships =
-                        if stillMember then acc.closedMemberships else acc.closedMemberships :+ closedMember
-                    )
-                  }
+                }
               }
-            )
+            }
+
+            client.get[ApiPlayer](ApiPlayer.getUrl(resolvedUsername))
+              .foldZIO(_ => onProfileFetchFailed, onProfileResolved)
         }
     }
   }
@@ -470,11 +469,10 @@ object MembershipApp extends ZIOAppDefault {
       clubOpt <- Club.selectByUrlName(oldUrlName)
       refOpt  <- ZIO.foreach(clubOpt)(club => ClubMatchRef.selectId(club.clubId)).map(_.flatten)
       result <- ZIO.foreach(refOpt) { ref =>
-        for {
-          dailyMatch <- client.get[ApiDailyMatch](ApiDailyMatch.getUrl(ref.matchId))
-          team       = if ref.teamIdx == 1 then dailyMatch.teams.team1 else dailyMatch.teams.team2
-          newUrlName = team.`@id`.path.segments.lastOption.map(ClubUrlName.wrap)
-        } yield newUrlName.filter(_ != oldUrlName)
+        client.get[ApiDailyMatch](ApiDailyMatch.getUrl(ref.matchId)).map { dailyMatch =>
+          val team       = if (ref.teamIdx == 1) { dailyMatch.teams.team1 } else { dailyMatch.teams.team2 }
+          team.`@id`.path.segments.lastOption.map(ClubUrlName.wrap).filter(_ != oldUrlName)
+        }
       }.map(_.flatten)
     } yield result).catchAll(_ => ZIO.none)
 
@@ -596,33 +594,36 @@ object MembershipApp extends ZIOAppDefault {
 
       cms.foreach { cm =>
         // New membership in range
-        if cm.since.compareTo(since) >= 0 && cm.since.compareTo(until) <= 0 then
+        if (cm.since.compareTo(since) >= 0 && cm.since.compareTo(until) <= 0) {
           // Check if there's a prior membership for same club+player
           val priorMemberships = members
             .filter(m => m.clubId == clubId && m.playerId == playerId && m.until.isDefined && m.since != cm.since)
-          if priorMemberships.nonEmpty then
+          if (priorMemberships.nonEmpty) {
             val latestPrior = priorMemberships.maxBy(_.since)
             changes += Rejoined(cm.since, latestPrior.until.getOrElse(latestPrior.since))
-          else
+          }
+          else {
             // Check if player has snapshots before this membership — existing player joining club
             val priorSnaps = playerSnaps.filter(_.since.isBefore(cm.since))
             if priorSnaps.nonEmpty then changes += JoinedClub(cm.since)
             else changes += NewMember(cm.since)
+          }
+        }
 
         // Closed membership in range
         cm.until.foreach { u =>
-          if u.compareTo(since) >= 0 && u.compareTo(until) <= 0 then
+          if (u.compareTo(since) >= 0 && u.compareTo(until) <= 0) {
             // Check latest snapshot to determine reason
             val latestSnap = playerSnaps.filter(s => !s.since.isAfter(u)).lastOption
-            latestSnap match
-              case Some(snap) if snap.status != PlayerStatusCategory.Active =>
-                changes += AccountClosed(u, snap.status)
-              case Some(_) =>
-                changes += LeftClub(u)
+            latestSnap match {
+              case Some(snap) if snap.status != PlayerStatusCategory.Active => changes += AccountClosed(u, snap.status)
+              case Some(_) => changes += LeftClub(u)
               case None =>
                 // No snapshot found near the closure — unresolvable
                 val username = playerSnaps.headOption.fold(Username.wrap("unknown"))(_.username)
                 changes += Unresolvable(u, username)
+            }
+          }
         }
       }
 
@@ -631,8 +632,8 @@ object MembershipApp extends ZIOAppDefault {
       snapsInRange.foreach { snap =>
         val previousSnap = playerSnaps.filter(_.since.isBefore(snap.since)).lastOption
         previousSnap.foreach { prev =>
-          if prev.username != snap.username then changes += UsernameChange(snap.since, prev.username)
-          if prev.status != snap.status then changes += StatusChange(snap.since, prev.status)
+          if (prev.username != snap.username) { changes += UsernameChange(snap.since, prev.username) }
+          if (prev.status != snap.status) { changes += StatusChange(snap.since, prev.status) }
         }
       }
 
@@ -640,5 +641,4 @@ object MembershipApp extends ZIOAppDefault {
       MemberChangeSummary(playerId, latestUsername, changes.result())
     }.filter(_.changes.nonEmpty)
   }
-
 }

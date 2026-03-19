@@ -22,14 +22,12 @@ final class ChessComClient(
 
   private def rawGet[T](url: URL)(using jsonDecoder: JsonDecoder[T]): Task[T] = for {
     response <- batchedClient(Request(method = GET, url = url).addHeaders(headers))
-    _ <- ZIO
-      .whenDiscard(response.status == Status.TooManyRequests)(
-        activateThrottle *> ZIO.fail(RateLimitedException(url))
-      )
-    _ <- ZIO
-      .whenDiscard(!response.status.isSuccess)(
-        ZIO.fail(ExternalException(s"HTTP ${response.status.code} for $url"))
-      )
+    _ <- ZIO.whenDiscard(response.status == Status.TooManyRequests)(
+      activateThrottle *> ZIO.fail(RateLimitedException(url))
+    )
+    _ <- ZIO.whenDiscard(!response.status.isSuccess)(
+      ZIO.fail(ExternalException(s"HTTP ${response.status.code} for $url"))
+    )
     string <- response.body.asString
     value  <- ZIO.fromEither(jsonDecoder.decodeJson(string)).mapError(JsonDecodingException(_))
   } yield value
@@ -50,9 +48,7 @@ final class ChessComClient(
   // Subsequent 429s during the cooldown see wasThrottled=true and skip the fork.
   private def activateThrottle: Task[Unit] =
     throttled.getAndSet(true).flatMap { wasThrottled =>
-      ZIO.unlessDiscard(wasThrottled) {
-        (ZIO.sleep(cooldown) *> throttled.set(false)).forkDaemon.unit
-      }
+      ZIO.unlessDiscard(wasThrottled)(throttled.set(false).delay(cooldown).forkDaemon.unit)
     }
 
   private val retrySchedule: Schedule[Any, Throwable, Any] =
@@ -70,15 +66,14 @@ object ChessComClient {
     permits: Long = 5,
     cooldown: Duration = 30.seconds
   ): ZLayer[Client, Throwable, ChessComClient] =
-    ZLayer
-      .fromZIO {
-        for {
-          contactEmail <- ZIO.fromOption(Option(System.getenv("CCAS_CONTACT_EMAIL")))
-            .orElseFail(IllegalStateException("CCAS_CONTACT_EMAIL environment variable is required"))
-          client    <- ZIO.service[Client]
-          semaphore <- Semaphore.make(permits)
-          mutex     <- Semaphore.make(1)
-          throttled <- Ref.make(false)
-        } yield ChessComClient(client, userAgentHeaders(contactEmail), semaphore, mutex, throttled, cooldown)
-      }
+    ZLayer.fromZIO {
+      for {
+        contactEmail <- ZIO.fromOption(Option(System.getenv("CCAS_CONTACT_EMAIL")))
+          .orElseFail(IllegalStateException("CCAS_CONTACT_EMAIL environment variable is required"))
+        client    <- ZIO.service[Client]
+        semaphore <- Semaphore.make(permits)
+        mutex     <- Semaphore.make(1)
+        throttled <- Ref.make(false)
+      } yield ChessComClient(client, userAgentHeaders(contactEmail), semaphore, mutex, throttled, cooldown)
+    }
 }

@@ -18,7 +18,7 @@ object MatchRefApp extends ZIOAppDefault {
   private final case class UnresolvedPlayer(playerId: PlayerId, username: Username)
   private final case class UnresolvedClub(clubId: ClubId, urlName: ClubUrlName)
 
-  override def run: ZIO[Any & ZIOAppArgs & Scope, Any, Any] =
+  override def run: RIO[ZIOAppArgs & Scope, Unit] =
     populate.provide(
       ChessComClient.live(),
       Client.default,

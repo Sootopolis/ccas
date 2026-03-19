@@ -16,10 +16,10 @@ import ccas.utils.sql.DataSourceLayer
 
 object BlacklistApp extends ZIOAppDefault {
 
-  override def run: ZIO[Any & ZIOAppArgs & Scope, Any, Any] =
-    for {
+  override def run: RIO[ZIOAppArgs & Scope, Unit] =
+    (for {
       args <- ZIOAppArgs.getArgs
-      _ <- (args.toList match
+      _ <- args.toList match {
         case clubStr :: usernameStr :: rest =>
           addToBlacklist(
             ClubUrlName.wrap(clubStr),
@@ -27,18 +27,13 @@ object BlacklistApp extends ZIOAppDefault {
             reason = rest.headOption,
             expiresAt = rest.lift(1).map(Instant.parse)
           )
-        case _ =>
-          ZIO.fail(
-            ExternalException(
-              "Usage: BlacklistApp <club-url-name> <username> [reason] [expires-at]"
-            )
-          )
-      ).provide(
-        ChessComClient.live(),
-        Client.default,
-        DataSourceLayer.liveFromPrefix(onInit = Tables.ensureTables)
-      )
-    } yield ()
+        case _ => ZIO.fail(ExternalException("Usage: BlacklistApp <club-url-name> <username> [reason] [expires-at]"))
+      }
+    } yield ()).provideSomeAuto(
+      ChessComClient.live(),
+      Client.default,
+      DataSourceLayer.liveFromPrefix(onInit = Tables.ensureTables)
+    )
 
   def addToBlacklist(
     clubUrlName: ClubUrlName,
@@ -57,7 +52,7 @@ object BlacklistApp extends ZIOAppDefault {
         RecruitmentBlacklist(apiClub.clubId, apiPlayer.playerId, now, expiresAt, reason)
       )
       _ <- Console.printLine(
-        s"Blacklisted ${username} (player_id=${apiPlayer.playerId}) for club ${clubUrlName}"
+        s"Blacklisted $username (player_id=${apiPlayer.playerId}) for club $clubUrlName"
       ).orDie
     } yield ()
 }

@@ -68,7 +68,7 @@ object RecruitmentApp extends ZIOAppDefault {
     """Usage: RecruitmentApp <club-url-name> [alias] [source-clubs...] [--target N] [--cumulative]
       |       RecruitmentApp report <club-url-name> [run-id]""".stripMargin
 
-  override def run: ZIO[Any & ZIOAppArgs & Scope, Any, Any] =
+  override def run: RIO[ZIOAppArgs & Scope, Unit] =
     for {
       args <- ZIOAppArgs.getArgs
       _ <- (args.toList match
@@ -99,22 +99,21 @@ object RecruitmentApp extends ZIOAppDefault {
             sourceClubs = sourceClubs,
             explore = sourceClubs.isEmpty,
             showProgress = true
-          )
-            .flatMap { run =>
-              for {
-                candidates <-
-                  if (cumulative) RecruitmentCandidate.selectInvitedToday(run.clubId, alias)
-                  else RecruitmentCandidate.selectInvitedByRun(run.runId)
-                usernames <- ZIO.foreach(candidates)(c =>
-                  PlayerSnapshot.selectIdLatest(c.playerId)
-                    .map(_.fold(Username.wrap(s"[pid=${c.playerId}]"))(_.username))
-                )
-                _ <- ZIO.whenDiscard(usernames.nonEmpty) {
-                  OutputFile.write("recruitment", clubUrlName, formatRecruitmentOutput(usernames))
-                    .flatMap(path => ZIO.logInfo(s"Output written to $path"))
-                }
-              } yield ()
-            }
+          ).flatMap { run =>
+            for {
+              candidates <-
+                if (cumulative) RecruitmentCandidate.selectInvitedToday(run.clubId, alias)
+                else RecruitmentCandidate.selectInvitedByRun(run.runId)
+              usernames <- ZIO.foreach(candidates)(c =>
+                PlayerSnapshot.selectIdLatest(c.playerId)
+                  .map(_.fold(Username.wrap(s"[pid=${c.playerId}]"))(_.username))
+              )
+              _ <- ZIO.whenDiscard(usernames.nonEmpty) {
+                OutputFile.write("recruitment", clubUrlName, formatRecruitmentOutput(usernames))
+                  .flatMap(path => ZIO.logInfo(s"Output written to $path"))
+              }
+            } yield ()
+          }
         case _ => ZIO.fail(ExternalException(help))
       ).provide(
         ChessComClient.live(),
@@ -638,22 +637,23 @@ object RecruitmentApp extends ZIOAppDefault {
     val now          = Instant.now()
     val candidateCtx = CandidateContext.initial(username)
     val env          = FilterEnv(runCtx.copy(now = now), candidateCtx)
+    def onEvaluationError(ctxRef: Ref[CandidateContext])(error: Throwable): RIO[Transactor, CandidateOutcome] =
+      ctxRef.get.flatMap { latestCtx =>
+        persistCandidateResults(
+          runId,
+          now,
+          latestCtx,
+          CandidateOutcome.Error,
+          Some(error.safeMessage)
+        )
+      }.as(CandidateOutcome.Error)
+
     for {
       ctxRef <- Ref.make(candidateCtx)
       result <- (for {
         (outcome, finalCandidate) <- runFilters(env, filters, ctxRef)
         _                         <- persistCandidateResults(runId, now, finalCandidate, outcome)
-      } yield outcome).catchAll { error =>
-        ctxRef.get.flatMap { latestCtx =>
-          persistCandidateResults(
-            runId,
-            now,
-            latestCtx,
-            CandidateOutcome.Error,
-            Some(error.safeMessage)
-          )
-        }.as(CandidateOutcome.Error)
-      }
+      } yield outcome).catchAll(onEvaluationError(ctxRef))
     } yield result
   }
 
@@ -985,6 +985,11 @@ object RecruitmentApp extends ZIOAppDefault {
       env: FilterEnv,
       dailyStats: ApiPlayerStats.ApiPlayerDailyStats
     ): RIO[Transactor, FilterResult] = {
+      def logAndReraise(url: URL)(e: Throwable): RIO[Transactor, Nothing] =
+        ApiFetchFailure.insert(
+          ApiFetchFailure(url.toString, e.getClass.getSimpleName, Option(e.getMessage), env.run.now)
+        ).orDie *> ZIO.fail(e)
+
       val dailyElo           = dailyStats.last.rating
       val dailyTimeoutPct    = dailyStats.record.timeoutPercent
       val dailyGamesFinished = dailyStats.record.nGames
@@ -996,12 +1001,7 @@ object RecruitmentApp extends ZIOAppDefault {
             val months = recentArchiveMonths(env.run.now, 90)
             ZIO.foreachPar(months) { ym =>
               val url = ApiPlayerArchive.getUrl(env.candidate.username, ym.getYear, ym.getMonthValue)
-              env.run.client.get[ApiPlayerArchive](url).catchAll { e =>
-                ApiFetchFailure.insert(
-                  ApiFetchFailure(url.toString, e.getClass.getSimpleName, Option(e.getMessage), env.run.now)
-                )
-                  .orDie *> ZIO.fail(e)
-              }
+              env.run.client.get[ApiPlayerArchive](url).catchAll(logAndReraise(url))
             }.map(Some(_))
           } else ZIO.none
 
