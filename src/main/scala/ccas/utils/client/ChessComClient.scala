@@ -35,7 +35,7 @@ final class ChessComClient(
   def get[T](url: URL)(using jsonDecoder: JsonDecoder[T]): Task[T] = {
     val acquireAndCall = for {
       isThrottled <- throttled.get
-      permit = if isThrottled then mutex else semaphore
+      permit = if (isThrottled) { mutex } else { semaphore }
       result <- permit.withPermit(rawGet(url))
     } yield result
     acquireAndCall.retry(retrySchedule)

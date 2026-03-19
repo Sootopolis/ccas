@@ -72,8 +72,8 @@ object TestMembershipApp extends ZIOSpecDefault {
     } yield (semaphore, mutex, throttled)).map { (semaphore, mutex, throttled) =>
       val routes: Routes[Any, Response] = Routes(
         Method.GET / "pub" / "player" / string("username") -> handler { (username: String, _: Request) =>
-          if failures.contains(username) then Response(status = Status.NotFound)
-          else responses.get(username).fold(Response(status = Status.NotFound))(Response.json(_))
+          if (failures.contains(username)) { Response(status = Status.NotFound) }
+          else { responses.get(username).fold(Response(status = Status.NotFound))(Response.json(_)) }
         }
       )
       val driver = new ZClient.Driver[Any, Scope, Throwable] {

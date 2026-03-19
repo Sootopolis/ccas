@@ -122,7 +122,7 @@ object TestRoutes extends ZIOSpecDefault {
 
   private def jsonRequest(method: Method, path: String, body: String = ""): Request = {
     val url = URL.decode(path).toOption.get
-    Request(method = method, url = url, body = if body.isEmpty then Body.empty else Body.fromString(body))
+    Request(method = method, url = url, body = if (body.isEmpty) { Body.empty } else { Body.fromString(body) })
       .addHeader(Header.ContentType(MediaType.application.json))
   }
 

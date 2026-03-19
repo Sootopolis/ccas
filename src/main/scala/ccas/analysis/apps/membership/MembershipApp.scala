@@ -248,12 +248,13 @@ object MembershipApp extends ZIOAppDefault {
                 val needsSnapshot = latestOpt.forall(l =>
                   l.username != username || l.status != statusCategory || l.title != apiPlayer.title
                 )
-                if needsSnapshot then
+                if (needsSnapshot) {
                   snapshotChunks += PlayerSnapshot(playerId, now, username, statusCategory, apiPlayer.title)
                   latestOpt.foreach { latest =>
-                    if latest.username != username then changeChunks += UsernameChange(now, latest.username)
-                    if latest.status != statusCategory then changeChunks += StatusChange(now, latest.status)
+                    if (latest.username != username) { changeChunks += UsernameChange(now, latest.username) }
+                    if (latest.status != statusCategory) { changeChunks += StatusChange(now, latest.status) }
                   }
+                }
 
                 val summary = MemberChangeSummary(playerId, username, changeChunks.result())
                 acc.copy(
@@ -335,7 +336,7 @@ object MembershipApp extends ZIOAppDefault {
                 acc.copy(
                   changes = acc.changes :+ summary,
                   newSnapshots = acc.newSnapshots ++ snapshots,
-                  closedMemberships = if stillMember then acc.closedMemberships else acc.closedMemberships :+ closedMember
+                  closedMemberships = if (stillMember) { acc.closedMemberships } else { acc.closedMemberships :+ closedMember }
                 )
               }
             }
@@ -353,13 +354,13 @@ object MembershipApp extends ZIOAppDefault {
     playerId: PlayerId,
     now: Instant
   ): (Chunk[PlayerSnapshot], Chunk[MemberChange]) =
-    if state.player.status != statusCategory || state.player.username != username || state.player.title != title then
+    if (state.player.status != statusCategory || state.player.username != username || state.player.title != title) {
       val snapshot = PlayerSnapshot(playerId, now, username, statusCategory, title)
       val changes  = Chunk.newBuilder[MemberChange]
-      if state.player.status != statusCategory then changes += StatusChange(now, state.player.status)
-      if state.player.username != username then changes += UsernameChange(now, state.player.username)
+      if (state.player.status != statusCategory) { changes += StatusChange(now, state.player.status) }
+      if (state.player.username != username) { changes += UsernameChange(now, state.player.username) }
       (Chunk(snapshot), changes.result())
-    else (Chunk.empty, Chunk.empty)
+    } else { (Chunk.empty, Chunk.empty) }
 
   private def checkClubMembership(
     client: ChessComClient,
@@ -445,7 +446,7 @@ object MembershipApp extends ZIOAppDefault {
     oldUsername: Username
   ): Task[Option[Username]] =
     client.get[ApiDailyMatch](ApiDailyMatch.getUrl(ref.matchId)).map { dailyMatch =>
-      val team        = if ref.teamIdx == 1 then dailyMatch.teams.team1 else dailyMatch.teams.team2
+      val team        = if (ref.teamIdx == 1) { dailyMatch.teams.team1 } else { dailyMatch.teams.team2 }
       val boardSuffix = s"/${ref.boardIdx}"
       team.players.collectFirst {
         case p: ApiDailyMatch.ApiDailyMatchPlayerStarted if p.board.path.toString.endsWith(boardSuffix) => p.username
@@ -631,8 +632,8 @@ object MembershipApp extends ZIOAppDefault {
           else {
             // Check if player has snapshots before this membership — existing player joining club
             val priorSnaps = playerSnaps.filter(_.since.isBefore(cm.since))
-            if priorSnaps.nonEmpty then changes += JoinedClub(cm.since)
-            else changes += NewMember(cm.since)
+            if (priorSnaps.nonEmpty) { changes += JoinedClub(cm.since) }
+            else { changes += NewMember(cm.since) }
           }
         }
 

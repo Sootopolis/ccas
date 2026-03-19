@@ -47,9 +47,9 @@ object SqlZioTypes {
       con.getClass.getClassLoader,
       Array(classOf[Connection]),
       (_, method: Method, args: Array[AnyRef]) =>
-        if method.getName == "close" then ()
-        else if args == null then method.invoke(con)
-        else method.invoke(con, args*)
+        if (method.getName == "close") { () }
+        else if (args == null) { method.invoke(con) }
+        else { method.invoke(con, args*) }
     ).asInstanceOf[Connection] // safe: proxy implements Connection interface
 
   /** Minimal DataSource that always returns the same (proxied) connection. */
@@ -62,8 +62,8 @@ object SqlZioTypes {
     override def getLoginTimeout: Int                                          = 0
     override def getParentLogger: JLogger = JLogger.getLogger("SingleConnectionDataSource")
     override def unwrap[T](iface: Class[T]): T =
-      if iface.isInstance(this) then iface.cast(this)
-      else throw new SQLException(s"Cannot unwrap to ${iface.getName}")
+      if (iface.isInstance(this)) { iface.cast(this) }
+      else { throw new SQLException(s"Cannot unwrap to ${iface.getName}") }
     override def isWrapperFor(iface: Class[?]): Boolean = iface.isInstance(this)
   }
 }

@@ -71,8 +71,8 @@ object TestChessComClient extends ZIOSpecDefault {
         counter <- Ref.make(0)
         (client, _) <- makeClient { _ =>
           counter.getAndUpdate(_ + 1).map { n =>
-            if n == 0 then Response(status = Status.TooManyRequests)
-            else Response.json(jsonBody)
+            if (n == 0) { Response(status = Status.TooManyRequests) }
+            else { Response.json(jsonBody) }
           }
         }
         result <- client.get[Payload](testUrl)
@@ -92,8 +92,8 @@ object TestChessComClient extends ZIOSpecDefault {
         (client, throttled) <- makeClient(
           handler = { _ =>
             counter.getAndUpdate(_ + 1).map { n =>
-              if n == 0 then Response(status = Status.TooManyRequests)
-              else Response.json(jsonBody)
+              if (n == 0) { Response(status = Status.TooManyRequests) }
+              else { Response.json(jsonBody) }
             }
           },
           cooldown = 500.millis

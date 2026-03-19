@@ -232,8 +232,8 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         },
         // Player endpoint
         Method.GET / "pub" / "player" / string("username") -> handler { (username: String, _: Request) =>
-          if failures.contains(username) then Response(status = Status.NotFound)
-          else responses.get(s"player/$username").fold(Response(status = Status.NotFound))(Response.json(_))
+          if (failures.contains(username)) { Response(status = Status.NotFound) }
+          else { responses.get(s"player/$username").fold(Response(status = Status.NotFound))(Response.json(_)) }
         },
         // Club matches endpoint
         Method.GET / "pub" / "club" / string("club") / "matches" -> handler { (clubName: String, _: Request) =>
