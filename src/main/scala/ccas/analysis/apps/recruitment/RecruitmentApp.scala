@@ -65,8 +65,10 @@ object RecruitmentApp extends ZIOAppDefault {
   )
 
   private val help =
-    """Usage: RecruitmentApp <club-url-name> [alias] [source-clubs...] [--target N] [--cumulative]
-      |       RecruitmentApp report <club-url-name> [run-id]""".stripMargin
+    """Usage: RecruitmentApp <club-url-name> [alias] [source-clubs...] [--target N] [--cumulative] [--focus]
+      |       RecruitmentApp report <club-url-name> [run-id]
+      |
+      |  --focus    Only recruit from the given source clubs (no exploration)""".stripMargin
 
   override def run: RIO[ZIOAppArgs & Scope, Unit] =
     for {
@@ -87,6 +89,7 @@ object RecruitmentApp extends ZIOAppDefault {
             }.toMap
           val targetOpt       = flagMap.get("--target").flatMap(_.toIntOption)
           val cumulative      = flags.contains("--cumulative")
+          val focus           = flags.contains("--focus")
           val positionalClean = positional.filterNot(_ == "--cumulative")
           val alias           = positionalClean.headOption.getOrElse("default")
           val sourceClubs     = positionalClean.drop(1).map(ClubUrlName.wrap)
@@ -97,7 +100,7 @@ object RecruitmentApp extends ZIOAppDefault {
             target = targetOpt,
             cumulative = cumulative,
             sourceClubs = sourceClubs,
-            explore = sourceClubs.isEmpty,
+            explore = sourceClubs.isEmpty || !focus,
             showProgress = true
           ).flatMap { run =>
             for {
@@ -254,7 +257,8 @@ object RecruitmentApp extends ZIOAppDefault {
                 List(
                   () => discoverOwnMemberClubs(client, clubUrlName, targetMemberNames),
                   () => discoverDbClubs(clubUrlName),
-                  () => discoverMatchOpponents(clubMatches)
+                  () => discoverMatchOpponents(clubMatches),
+                  () => discoverCandidateOpponents(client, now)
                 )
 
             // --- Run the explore loop (with optional timeout) ---
@@ -608,7 +612,7 @@ object RecruitmentApp extends ZIOAppDefault {
   ): RIO[Transactor, List[SourceDescriptor]] =
     for {
       clubs <- Club.selectAll
-      filtered = clubs.map(_.urlName).filter(_ != clubUrlName)
+      filtered = scala.util.Random.shuffle(clubs.map(_.urlName).filter(_ != clubUrlName))
       _ <- ZIO.logInfo(s"[Explore] DB clubs strategy found ${filtered.size} clubs")
     } yield filtered.map(ClubSource(_))
 
@@ -621,6 +625,36 @@ object RecruitmentApp extends ZIOAppDefault {
     val opponentClubNames = opponentUrls.map(url => ClubUrlName.wrap(url.path.segments.last)).toSet
     ZIO.logInfo(s"[Explore] Match opponents strategy found ${opponentClubNames.size} clubs")
       .as(opponentClubNames.toList.map(ClubSource(_)))
+  }
+
+  private def discoverCandidateOpponents(
+    client: ChessComClient,
+    now: Instant
+  ): RIO[Transactor, List[SourceDescriptor]] = {
+    val cutoff = now.minus(90, ChronoUnit.DAYS)
+    val months = recentArchiveMonths(now, 90)
+    for {
+      tmPlayers <- PlayerRecruitmentCache.selectTmActive(20)
+      snapshots <- ZIO.foreach(tmPlayers)(c => PlayerSnapshot.selectIdLatest(c.playerId))
+      usernames = snapshots.flatten.map(_.username)
+      opponentSets <- ZIO.foreachPar(usernames) { username =>
+        ZIO.foreachPar(months) { ym =>
+          client.get[ApiPlayerArchive](ApiPlayerArchive.getUrl(username, ym.getYear, ym.getMonthValue))
+        }.map { archives =>
+          archives.flatMap(_.games.filter(g =>
+            g.timeClass == "daily" && g.`match`.isDefined && g.endTime >= cutoff.getEpochSecond
+          )).flatMap { g =>
+            val isWhite        = g.white.username.equalsIgnoreCase(username)
+            val opponentResult = if (isWhite) g.black.result else g.white.result
+            val opponentName   = if (isWhite) g.black.username else g.white.username
+            Option.when(opponentResult != GameResultDetail.Timeout)(Username.wrap(opponentName))
+          }.toSet
+        }.catchAll(_ => ZIO.succeed(Set.empty[Username]))
+      }
+      allOpponents = opponentSets.foldLeft(Set.empty[Username])(_ ++ _)
+      _ <- ZIO.logInfo(s"[Explore] Candidate opponents strategy found ${allOpponents.size} opponents")
+    } yield if (allOpponents.isEmpty) Nil
+            else List(UsernameSource("db-candidate-opponents", allOpponents.toList))
   }
 
   // --- Helpers ---

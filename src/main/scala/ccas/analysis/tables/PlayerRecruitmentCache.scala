@@ -107,6 +107,14 @@ object PlayerRecruitmentCache {
               last_tm_timeout_at = EXCLUDED.last_tm_timeout_at""".update.run()
     }
 
+  def selectTmActive(limit: Int): ZIO[Transactor, SQLException, Vector[PlayerRecruitmentCache]] =
+    connectZIO {
+      sql"""SELECT $selectCols FROM player_recruitment_cache
+            WHERE tm_games_finished_90d > 0 OR ongoing_team_matches > 0
+            ORDER BY RANDOM() LIMIT $limit"""
+        .query[PlayerRecruitmentCache].run()
+    }
+
   def deleteAll: ZIO[Transactor, SQLException, Int] =
     connectZIO {
       sql"DELETE FROM player_recruitment_cache".update.run()
