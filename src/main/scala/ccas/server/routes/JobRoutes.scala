@@ -7,6 +7,7 @@ import zio.http.*
 import zio.json.{DeriveJsonCodec, EncoderOps, JsonCodec, JsonDecoder, JsonEncoder}
 import zio.ZIO
 
+import ccas.analysis.apps.history.HistoryApp
 import ccas.analysis.apps.matchref.MatchRefApp
 import ccas.analysis.apps.membership.MembershipApp
 import ccas.analysis.apps.recruitment.{BlacklistApp, RecruitmentApp}
@@ -39,6 +40,11 @@ object JobRoutes {
   case class MembershipRequest(clubUrlName: ClubUrlName, trustUsernames: Option[Boolean])
   object MembershipRequest {
     given JsonCodec[MembershipRequest] = DeriveJsonCodec.gen
+  }
+
+  case class HistoryRequest(clubUrlName: ClubUrlName, full: Option[Boolean], refresh: Option[Boolean])
+  object HistoryRequest {
+    given JsonCodec[HistoryRequest] = DeriveJsonCodec.gen
   }
 
   case class BlacklistRequest(
@@ -134,6 +140,15 @@ object JobRoutes {
       (for {
         runner <- ZIO.service[JobRunner]
         jobId  <- runner.submit(JobKind.MatchRef, None, None, MatchRefApp.populate)
+      } yield jsonResponse(Status.Accepted, JobResponse(JobRunId.unwrap(jobId), "running")))
+        .catchAll(e => ZIO.succeed(handleJobError(e)))
+    },
+    Method.POST / "api" / "jobs" / "history" -> handler { (req: Request) =>
+      (for {
+        body   <- parseJsonBody[HistoryRequest](req)
+        runner <- ZIO.service[JobRunner]
+        effect = HistoryApp.discover(body.clubUrlName, body.full.getOrElse(false), body.refresh.getOrElse(false))
+        jobId <- runner.submit(JobKind.History, Some(body.clubUrlName), Some(body.toJson), effect)
       } yield jsonResponse(Status.Accepted, JobResponse(JobRunId.unwrap(jobId), "running")))
         .catchAll(e => ZIO.succeed(handleJobError(e)))
     },

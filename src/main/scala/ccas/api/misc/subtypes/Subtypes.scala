@@ -1,5 +1,7 @@
 package ccas.api.misc.subtypes
 
+import zio.http.URL
+
 import ccas.utils.opaque.{DoubleCompanion, IntCompanion, LongCompanion, StringCompanion, StringKeyCompanion}
 
 type Elo = Elo.Type
@@ -42,6 +44,8 @@ type ClubMatchId = ClubMatchId.Type
 object ClubMatchId extends LongCompanion {
   override protected def validateRaw(raw: Long): Either[String, Long] =
     Either.cond(raw >= 0L, raw, s"$name must be >= 0")
+
+  def fromUrl(url: URL): ClubMatchId = wrap(url.path.segments.last.toLong)
 }
 
 type Percentage = Percentage.Type

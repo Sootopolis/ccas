@@ -7,6 +7,7 @@ import com.augustnagro.magnum.Transactor
 import com.typesafe.config.ConfigFactory
 import zio.{durationLong, Duration, Task, UIO, ZIO, ZLayer}
 
+import ccas.analysis.apps.history.HistoryApp
 import ccas.analysis.apps.matchref.MatchRefApp
 import ccas.analysis.apps.membership.MembershipApp
 import ccas.analysis.apps.recruitment.RecruitmentApp
@@ -63,6 +64,8 @@ object JobScheduler {
           requireClubUrlName.flatMap(name => MembershipApp.reconcile(name).unit)
         case JobKind.MatchRef =>
           MatchRefApp.populate
+        case JobKind.History =>
+          requireClubUrlName.flatMap(name => HistoryApp.discover(name).unit)
 
       runner.submit(schedule.kind, schedule.clubUrlName, schedule.params, effect)
         .provideEnvironment(env) *>
