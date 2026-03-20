@@ -36,7 +36,7 @@ object ApiPlayer extends JsonDecoding[ApiPlayer] {
 
   val host: URL = Hosts.api.addPath("player")
 
-  def getUrl(username: Username): URL = host.addPath(username)
+  def getUrl(username: Username): URL = host.addPath(username.value)
 
-  def getProfileUrl(username: Username): URL = Hosts.website.addPath("member").addPath(username)
+  def getProfileUrl(username: Username): URL = Hosts.website.addPath("member").addPath(username.value)
 }

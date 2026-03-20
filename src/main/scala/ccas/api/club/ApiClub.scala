@@ -33,7 +33,7 @@ object ApiClub extends JsonDecoding[ApiClub] {
 
   val host: URL = Hosts.api.addPath("club")
 
-  def getUrl(clubUrlName: ClubUrlName): URL = host.addPath(clubUrlName)
+  def getUrl(clubUrlName: ClubUrlName): URL = host.addPath(clubUrlName.value)
 
   def get(client: ChessComClient, clubUrlName: ClubUrlName): Task[ApiClub] = client.get[ApiClub](getUrl(clubUrlName))
 }

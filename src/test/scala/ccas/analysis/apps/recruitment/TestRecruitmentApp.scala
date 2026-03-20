@@ -1144,7 +1144,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
     },
     test("gatherClubCandidates excludes existing and evaluated usernames") {
       val responses = Map(
-        "club/source-club" -> apiClubJson(sourceClubId, "source-club"),
+        "club/source-club" -> apiClubJson(sourceClubId.value, "source-club"),
         "club/source-club/members" -> apiClubMembersJson(
           List(
             ("existing-member", T.t0.getEpochSecond),
@@ -1169,7 +1169,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
     },
     test("gatherClubCandidates excludes admins when enabled") {
       val responses = Map(
-        "club/source-club" -> apiClubJson(sourceClubId, "source-club", admins = List("admin-user")),
+        "club/source-club" -> apiClubJson(sourceClubId.value, "source-club", admins = List("admin-user")),
         "club/source-club/members" -> apiClubMembersJson(
           List(
             ("admin-user", T.t0.getEpochSecond),
@@ -1194,7 +1194,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
     },
     test("gatherClubCandidates keeps admins when disabled") {
       val responses = Map(
-        "club/source-club" -> apiClubJson(sourceClubId, "source-club", admins = List("admin-user")),
+        "club/source-club" -> apiClubJson(sourceClubId.value, "source-club", admins = List("admin-user")),
         "club/source-club/members" -> apiClubMembersJson(
           List(
             ("admin-user", T.t0.getEpochSecond),
@@ -1337,7 +1337,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
     test("inserts blacklist entry with reason and expiresAt") {
       val futureInstant = T.t3
       val responses = Map(
-        s"club/$blacklistClubUrlName" -> apiClubJson(700, blacklistClubUrlName, Nil),
+        s"club/$blacklistClubUrlName" -> apiClubJson(700, blacklistClubUrlName.value, Nil),
         "player/target-player"        -> apiPlayerJson(203, "target-player")
       )
       for {
@@ -1361,7 +1361,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
     },
     test("inserts blacklist entry without optional fields") {
       val responses = Map(
-        s"club/$blacklistClubUrlName" -> apiClubJson(700, blacklistClubUrlName, Nil),
+        s"club/$blacklistClubUrlName" -> apiClubJson(700, blacklistClubUrlName.value, Nil),
         "player/target-player"        -> apiPlayerJson(203, "target-player")
       )
       for {
@@ -1381,7 +1381,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       val freshClubId      = ClubId(701)
       val freshClubUrlName = ClubUrlName("fresh-club")
       val responses = Map(
-        s"club/$freshClubUrlName" -> apiClubJson(701, freshClubUrlName, Nil),
+        s"club/$freshClubUrlName" -> apiClubJson(701, freshClubUrlName.value, Nil),
         "player/target-player"    -> apiPlayerJson(203, "target-player")
       )
       for {
@@ -1514,13 +1514,13 @@ object TestRecruitmentApp extends ZIOSpecDefault {
   private def suiteFullWorkflow = suite("full workflow")(
     test("recruit end-to-end") {
       val responses = Map(
-        s"club/$clubUrlName" -> apiClubJson(clubId, clubUrlName),
+        s"club/$clubUrlName" -> apiClubJson(clubId.value, clubUrlName.value),
         s"club/$clubUrlName/members" -> apiClubMembersJson(
           List(
             ("existing", T.t0.getEpochSecond)
           )
         ),
-        "club/source-club" -> apiClubJson(sourceClubId, "source-club"),
+        "club/source-club" -> apiClubJson(sourceClubId.value, "source-club"),
         "club/source-club/members" -> apiClubMembersJson(
           List(
             ("existing", T.t0.getEpochSecond),
@@ -1578,9 +1578,9 @@ object TestRecruitmentApp extends ZIOSpecDefault {
     },
     test("explore=false does not explore beyond source clubs") {
       val responses = Map(
-        s"club/$clubUrlName"             -> apiClubJson(clubId, clubUrlName),
+        s"club/$clubUrlName"             -> apiClubJson(clubId.value, clubUrlName.value),
         s"club/$clubUrlName/members"     -> apiClubMembersJson(Nil),
-        s"club/$discoverableClubUrlName" -> apiClubJson(discoverableClubId, discoverableClubUrlName),
+        s"club/$discoverableClubUrlName" -> apiClubJson(discoverableClubId.value, discoverableClubUrlName.value),
         s"club/$discoverableClubUrlName/members" -> apiClubMembersJson(
           List(("explorer", T.t0.getEpochSecond))
         ),
@@ -1603,9 +1603,9 @@ object TestRecruitmentApp extends ZIOSpecDefault {
     },
     test("explore=true discovers candidates from DB clubs") {
       val responses = Map(
-        s"club/$clubUrlName"             -> apiClubJson(clubId, clubUrlName),
+        s"club/$clubUrlName"             -> apiClubJson(clubId.value, clubUrlName.value),
         s"club/$clubUrlName/members"     -> apiClubMembersJson(Nil),
-        s"club/$discoverableClubUrlName" -> apiClubJson(discoverableClubId, discoverableClubUrlName),
+        s"club/$discoverableClubUrlName" -> apiClubJson(discoverableClubId.value, discoverableClubUrlName.value),
         s"club/$discoverableClubUrlName/members" -> apiClubMembersJson(
           List(("explorer", T.t0.getEpochSecond))
         ),
@@ -1633,10 +1633,10 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         s"""{"finished": [{"name": "match", "@id": "https://api.chess.com/pub/match/99", "opponent": "https://api.chess.com/pub/club/opponent-club", "time_class": "daily", "start_time": ${T.t0.getEpochSecond}, "result": "win"}], "in_progress": [], "registered": []}"""
       val opponentClubId = ClubId(702)
       val responses = Map(
-        s"club/$clubUrlName"         -> apiClubJson(clubId, clubUrlName),
+        s"club/$clubUrlName"         -> apiClubJson(clubId.value, clubUrlName.value),
         s"club/$clubUrlName/members" -> apiClubMembersJson(Nil),
         s"club/$clubUrlName/matches" -> clubMatchesWithOpponent,
-        "club/opponent-club"         -> apiClubJson(opponentClubId, "opponent-club"),
+        "club/opponent-club"         -> apiClubJson(opponentClubId.value, "opponent-club"),
         "club/opponent-club/members" -> apiClubMembersJson(
           List(("opp-player", T.t0.getEpochSecond))
         ),
@@ -1662,13 +1662,13 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       val source1 = ClubUrlName("source-1")
       val source2 = ClubUrlName("source-2")
       val responses = Map(
-        s"club/$clubUrlName"         -> apiClubJson(clubId, clubUrlName),
+        s"club/$clubUrlName"         -> apiClubJson(clubId.value, clubUrlName.value),
         s"club/$clubUrlName/members" -> apiClubMembersJson(Nil),
-        s"club/$source1"             -> apiClubJson(ClubId(801), source1),
+        s"club/$source1"             -> apiClubJson(ClubId(801).value, source1.value),
         s"club/$source1/members" -> apiClubMembersJson(
           List(("cap-a", T.t0.getEpochSecond), ("cap-b", T.t0.getEpochSecond))
         ),
-        s"club/$source2" -> apiClubJson(ClubId(802), source2),
+        s"club/$source2" -> apiClubJson(ClubId(802).value, source2.value),
         s"club/$source2/members" -> apiClubMembersJson(
           List(("cap-c", T.t0.getEpochSecond), ("cap-d", T.t0.getEpochSecond))
         ),
@@ -1699,9 +1699,9 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       val intSource      = ClubUrlName("int-source")
       val candidateNames = (0 to 4).map(i => s"int-cand-$i").toList
       val responses = Map(
-        s"club/$clubUrlName"         -> apiClubJson(clubId, clubUrlName),
+        s"club/$clubUrlName"         -> apiClubJson(clubId.value, clubUrlName.value),
         s"club/$clubUrlName/members" -> apiClubMembersJson(Nil),
-        s"club/$intSource"           -> apiClubJson(intSourceClubId, intSource),
+        s"club/$intSource"           -> apiClubJson(intSourceClubId.value, intSource.value),
         s"club/$intSource/members" -> apiClubMembersJson(
           candidateNames.map(n => (n, T.t0.getEpochSecond))
         )

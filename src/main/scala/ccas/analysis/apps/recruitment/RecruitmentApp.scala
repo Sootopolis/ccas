@@ -644,7 +644,7 @@ object RecruitmentApp extends ZIOAppDefault {
             val isWhite        = g.white.username.equalsIgnoreCase(username)
             val opponentResult = if (isWhite) g.black.result else g.white.result
             val opponentName   = if (isWhite) g.black.username else g.white.username
-            Option.when(opponentResult != GameResultDetail.Timeout)(Username.wrap(opponentName))
+            Option.when(opponentResult != GameResultDetail.Timeout)(opponentName)
           }.toSet
         }.catchAll(_ => ZIO.succeed(Set.empty[Username]))
       }
@@ -1052,8 +1052,8 @@ object RecruitmentApp extends ZIOAppDefault {
         dailyTimePerMove = dailyStats.record.timePerMove
         criteria         = env.run.criteria
         outcome =
-          if (criteria.dailyMinElo.exists(dailyElo < _)) Some(CandidateOutcome.Rejected)
-          else if (criteria.dailyMaxElo.exists(dailyElo > _)) Some(CandidateOutcome.Rejected)
+          if (criteria.dailyMinElo.exists(dailyElo.value < _)) Some(CandidateOutcome.Rejected)
+          else if (criteria.dailyMaxElo.exists(dailyElo.value > _)) Some(CandidateOutcome.Rejected)
           else if (criteria.dailyMaxTimeoutPercent.exists(dailyTimeoutPct > _)) Some(CandidateOutcome.Rejected)
           else if (
             criteria.dailyMinGamesFinished.exists(min => dailyGamesFinished90d.getOrElse(dailyGamesFinished) < min)
@@ -1067,7 +1067,7 @@ object RecruitmentApp extends ZIOAppDefault {
         updatedCache = getOrUpdateCache(env)(
           _.copy(
             fetchedAt = env.run.now,
-            dailyElo = Some(dailyElo),
+            dailyElo = Some(dailyElo.value),
             dailyTimeoutPct = Some(dailyTimeoutPct),
             dailyGamesFinished = Some(dailyGamesFinished90d.getOrElse(dailyGamesFinished)),
             lastDailyTimeoutAt = mergedDailyTimeout
@@ -1231,7 +1231,7 @@ object RecruitmentApp extends ZIOAppDefault {
           val isWhite        = g.white.username.equalsIgnoreCase(username)
           val opponentResult = if (isWhite) g.black.result else g.white.result
           val opponentName   = if (isWhite) g.black.username else g.white.username
-          Option.when(opponentResult != GameResultDetail.Timeout)(Username.wrap(opponentName))
+          Option.when(opponentResult != GameResultDetail.Timeout)(opponentName)
         }.toSet
       } yield (tmGamesFinished, tmTimeoutPct, lastTmTimeoutAt, opponentUsernames)
     }
