@@ -27,7 +27,7 @@ object ApiPlayerArchive extends JsonDecoding[ApiPlayerArchive] {
     accuracies: Option[Accuracies],
     URL: URL,
     fen: String,
-    pgn: String,
+    pgn: Option[String],
     tcn: String,
     UUID: UUID,
     initialSetup: String,
