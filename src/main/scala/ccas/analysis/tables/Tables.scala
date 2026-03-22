@@ -26,7 +26,7 @@ object Tables extends ZIOAppDefault {
       _ <- PlayerRecruitmentCache.createTable
       _ <- ApiFetchFailure.createTable
       _ <- ClubMatch.createTable
-      _ <- ClubMatchPlayer.createTable
+      _ <- ClubMatchBoard.createTable
       _ <- HistoryMemberQuery.createTable
       _ <- HistoryPendingMatch.createTable
       _ <- HistoryRun.createTable

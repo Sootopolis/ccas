@@ -24,7 +24,8 @@ object TestClubSql extends ZIOSpecDefault {
     testClubMatchRefUpsert,
     testClubMatchRefUpsertUpdate,
     testClubMatchRefDelete,
-    testClubMatchRefDeleteAll
+    testClubMatchRefDeleteAll,
+    testReplaceSince
   ).provideShared(
     FreshSchemaLayer("test_club_sql", onInit = Tables.ensureTables)
   ) @@ TestAspect.sequential
@@ -192,5 +193,28 @@ object TestClubSql extends ZIOSpecDefault {
       resultA <- ClubMatchRef.selectId(refA.clubId)
       resultB <- ClubMatchRef.selectId(refB.clubId)
     } yield assertTrue(resultA.isEmpty, resultB.isEmpty)
+  }
+
+  // --- ClubMember.replaceSince tests ---
+
+  private def testReplaceSince = test("ClubMember.replaceSince replaces approximate since with authoritative") {
+    val approxMember = ClubMember(clubA.clubId, player0.playerId, Timestamps.t0, None, sinceApproximate = true)
+    val newSince = Timestamps.t1
+    for {
+      _ <- ClubMember.deleteAll
+      _ <- ClubMember.insert(approxMember)
+      updated <- ClubMember.replaceSince(clubA.clubId, player0.playerId, Timestamps.t0, newSince)
+      result <- ClubMember.selectClub(clubA.clubId)
+      // Verify it does not replace a non-approximate member
+      _ <- ClubMember.deleteAll
+      _ <- ClubMember.insert(ClubMember(clubA.clubId, player0.playerId, Timestamps.t0, None, sinceApproximate = false))
+      notUpdated <- ClubMember.replaceSince(clubA.clubId, player0.playerId, Timestamps.t0, newSince)
+    } yield assertTrue(
+      updated == 1,
+      result.size == 1,
+      result.head.since == newSince,
+      !result.head.sinceApproximate,
+      notUpdated == 0
+    )
   }
 }

@@ -7,7 +7,7 @@ import zio.json.readJsonLinesAs
 import zio.test.{assertTrue, Spec, ZIOSpecDefault}
 
 import ccas.api.clubmatch.ApiDailyMatch
-import ccas.api.misc.enums.{ClubMatchResult, ClubMatchStatus, GameResultDetail, TimeClass}
+import ccas.api.misc.enums.{BoardGameWinner, ClubMatchResult, ClubMatchStatus, GameResultDetail, TimeClass}
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubUrlName}
 import ccas.api.player.ApiPlayerMatches.ApiPlayerMatch
 
@@ -25,7 +25,8 @@ object TestHistoryApp extends ZIOSpecDefault {
     testIsClubDailyMatchRejectsOtherClub,
     testIsClubDailyMatchRejectsLiveMatch,
     testIsClubDailyMatchCaseInsensitive,
-    testScoreX2Computation
+    suiteNormalizeGameOutcome,
+    suiteComputeScoreX2
   )
 
   private def url(s: String): URL = URL.decode(s).toOption.get
@@ -183,19 +184,118 @@ object TestHistoryApp extends ZIOSpecDefault {
     assertTrue(HistoryApp.isClubDailyMatch(m, ClubUrlName("devon-chess")))
   }
 
-  // --- Score computation ---
+  // --- normalizeGameOutcome ---
 
-  private def testScoreX2Computation = test("scoreX2 computation: 2*(white+black)") {
-    def compute(w: Option[GameResultDetail], b: Option[GameResultDetail]): Short =
-      ((w.fold(0.0)(_.score) + b.fold(0.0)(_.score)) * 2).toShort
+  private def suiteNormalizeGameOutcome = suite("normalizeGameOutcome")(
+    test("white wins → winner is white's team, detail is loss reason") {
+      val (winner, detail) = HistoryApp.normalizeGameOutcome(
+        Some(GameResultDetail.Win), Some(GameResultDetail.Checkmated), whiteTeamIsTeam1 = true
+      )
+      assertTrue(
+        winner.contains(BoardGameWinner.Team1),
+        detail.contains(GameResultDetail.Checkmated)
+      )
+    },
+    test("black wins → winner is black's team, detail is loss reason") {
+      val (winner, detail) = HistoryApp.normalizeGameOutcome(
+        Some(GameResultDetail.Resigned), Some(GameResultDetail.Win), whiteTeamIsTeam1 = true
+      )
+      assertTrue(
+        winner.contains(BoardGameWinner.Team2),
+        detail.contains(GameResultDetail.Resigned)
+      )
+    },
+    test("draw → winner is Draw, detail is draw reason") {
+      val (winner, detail) = HistoryApp.normalizeGameOutcome(
+        Some(GameResultDetail.Stalemate), Some(GameResultDetail.Stalemate), whiteTeamIsTeam1 = true
+      )
+      assertTrue(
+        winner.contains(BoardGameWinner.Draw),
+        detail.contains(GameResultDetail.Stalemate)
+      )
+    },
+    test("not played → both None") {
+      val (winner, detail) = HistoryApp.normalizeGameOutcome(None, None, whiteTeamIsTeam1 = true)
+      assertTrue(winner.isEmpty, detail.isEmpty)
+    },
+    test("whiteTeamIsTeam1=false flips winner mapping") {
+      val (winner, detail) = HistoryApp.normalizeGameOutcome(
+        Some(GameResultDetail.Win), Some(GameResultDetail.Timeout), whiteTeamIsTeam1 = false
+      )
+      assertTrue(
+        winner.contains(BoardGameWinner.Team2),
+        detail.contains(GameResultDetail.Timeout)
+      )
+    },
+    test("whiteTeamIsTeam1=false black wins → Team1") {
+      val (winner, detail) = HistoryApp.normalizeGameOutcome(
+        Some(GameResultDetail.Resigned), Some(GameResultDetail.Win), whiteTeamIsTeam1 = false
+      )
+      assertTrue(
+        winner.contains(BoardGameWinner.Team1),
+        detail.contains(GameResultDetail.Resigned)
+      )
+    }
+  )
 
-    assertTrue(
-      compute(Some(GameResultDetail.Win), Some(GameResultDetail.Win)) == 4.toShort,       // 2 * (1.0 + 1.0)
-      compute(Some(GameResultDetail.Win), Some(GameResultDetail.Checkmated)) == 2.toShort, // 2 * (1.0 + 0.0)
-      compute(Some(GameResultDetail.Stalemate), Some(GameResultDetail.Agreed)) == 2.toShort, // 2 * (0.5 + 0.5)
-      compute(Some(GameResultDetail.Win), None) == 2.toShort,                              // 2 * (1.0 + 0.0)
-      compute(None, None) == 0.toShort,                                                    // no games played
-      compute(Some(GameResultDetail.Resigned), Some(GameResultDetail.Timeout)) == 0.toShort // both lost
-    )
-  }
+  // --- computeScoreX2 ---
+
+  private def suiteComputeScoreX2 = suite("computeScoreX2")(
+    test("normal scoring: team1 wins both games") {
+      val (t1, t2) = HistoryApp.computeScoreX2(
+        Some(BoardGameWinner.Team1), Some(BoardGameWinner.Team1),
+        team1FairPlay = false, team2FairPlay = false
+      )
+      assertTrue(t1 == 4.toShort, t2 == 0.toShort)
+    },
+    test("normal scoring: split results") {
+      val (t1, t2) = HistoryApp.computeScoreX2(
+        Some(BoardGameWinner.Team1), Some(BoardGameWinner.Team2),
+        team1FairPlay = false, team2FairPlay = false
+      )
+      assertTrue(t1 == 2.toShort, t2 == 2.toShort)
+    },
+    test("normal scoring: both draws") {
+      val (t1, t2) = HistoryApp.computeScoreX2(
+        Some(BoardGameWinner.Draw), Some(BoardGameWinner.Draw),
+        team1FairPlay = false, team2FairPlay = false
+      )
+      assertTrue(t1 == 2.toShort, t2 == 2.toShort)
+    },
+    test("team1 banned: team2 gets 2 per game") {
+      val (t1, t2) = HistoryApp.computeScoreX2(
+        Some(BoardGameWinner.Team2), Some(BoardGameWinner.Team2),
+        team1FairPlay = true, team2FairPlay = false
+      )
+      assertTrue(t1 == 0.toShort, t2 == 4.toShort)
+    },
+    test("team2 banned: team1 gets 2 per game") {
+      val (t1, t2) = HistoryApp.computeScoreX2(
+        Some(BoardGameWinner.Team2), Some(BoardGameWinner.Team2),
+        team1FairPlay = false, team2FairPlay = true
+      )
+      assertTrue(t1 == 4.toShort, t2 == 0.toShort)
+    },
+    test("both players banned: each gets 1 per game") {
+      val (t1, t2) = HistoryApp.computeScoreX2(
+        Some(BoardGameWinner.Team1), Some(BoardGameWinner.Team1),
+        team1FairPlay = true, team2FairPlay = true
+      )
+      assertTrue(t1 == 2.toShort, t2 == 2.toShort)
+    },
+    test("game not played: both get 0") {
+      val (t1, t2) = HistoryApp.computeScoreX2(
+        None, None,
+        team1FairPlay = false, team2FairPlay = false
+      )
+      assertTrue(t1 == 0.toShort, t2 == 0.toShort)
+    },
+    test("one game played, one not") {
+      val (t1, t2) = HistoryApp.computeScoreX2(
+        Some(BoardGameWinner.Team1), None,
+        team1FairPlay = false, team2FairPlay = false
+      )
+      assertTrue(t1 == 2.toShort, t2 == 0.toShort)
+    }
+  )
 }

@@ -149,6 +149,11 @@ object MembershipApp extends ZIOAppDefault {
     ZIO.foldLeft(apiMap.toList)(initial) { case (acc, (username, joinedEpoch)) =>
       val since = Instant.ofEpochSecond(joinedEpoch)
       dbState.membersByUsername.get(username) match {
+        case Some(state) if state.member.sinceApproximate =>
+          // Replace approximate with authoritative timestamp
+          ClubMember.replaceSince(clubId, state.player.playerId, state.member.since, since)
+            .as(acc.copy(resolvedIds = acc.resolvedIds + state.player.playerId))
+
         case Some(state) if state.member.since == since =>
           // Unchanged member
           ZIO.succeed(acc.copy(resolvedIds = acc.resolvedIds + state.player.playerId))
@@ -156,7 +161,7 @@ object MembershipApp extends ZIOAppDefault {
         case Some(state) =>
           // Rejoin: different `since` timestamp
           val closedMember = state.member.copy(until = Some(now))
-          val newMember    = ClubMember(clubId, state.player.playerId, since, None)
+          val newMember    = ClubMember(clubId, state.player.playerId, since, None, sinceApproximate = false)
           val change = MemberChangeSummary(state.player.playerId, username, Chunk(Rejoined(now, state.member.since)))
           ZIO.succeed(
             acc.copy(
@@ -190,7 +195,7 @@ object MembershipApp extends ZIOAppDefault {
                     )
                   case None =>
                     // Known player joined this club
-                    val newMember = ClubMember(clubId, playerId, since, None)
+                    val newMember = ClubMember(clubId, playerId, since, None, sinceApproximate = false)
                     val change    = MemberChangeSummary(playerId, username, Chunk(JoinedClub(now)))
                     ZIO.succeed(
                       acc.copy(
@@ -237,7 +242,7 @@ object MembershipApp extends ZIOAppDefault {
           Player.selectId(playerId).flatMap {
             case Some(_) =>
               // Player exists but not current club member — joined club
-              val newMember      = ClubMember(clubId, playerId, since, None)
+              val newMember      = ClubMember(clubId, playerId, since, None, sinceApproximate = false)
               val snapshotChunks = Chunk.newBuilder[PlayerSnapshot]
               val changeChunks   = Chunk.newBuilder[MemberChange]
 
@@ -269,7 +274,7 @@ object MembershipApp extends ZIOAppDefault {
               // Brand new player
               val player   = Player(playerId, Instant.ofEpochSecond(apiPlayer.joined))
               val snapshot = PlayerSnapshot(playerId, now, username, statusCategory, apiPlayer.title)
-              val member   = ClubMember(clubId, playerId, since, None)
+              val member   = ClubMember(clubId, playerId, since, None, sinceApproximate = false)
               val summary  = MemberChangeSummary(playerId, username, Chunk(NewMember(now)))
               ZIO.succeed(
                 acc.copy(

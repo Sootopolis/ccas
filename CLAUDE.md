@@ -26,7 +26,7 @@ The codebase has four main packages:
 
 1. **`ccas.api`** — Chess.com API models and client. Case classes model API JSON responses (e.g., `ApiPlayer`, `ApiClub`, `ApiDailyMatch`). Each API model companion object extends `JsonDecoding[T]` to provide a ZIO JSON decoder. API models are read-only data transfer objects; they are never written to the database directly.
 
-2. **`ccas.analysis`** — Domain tables and business logic. `analysis.tables` contains database-persisted entities (`Player`, `PlayerSnapshot`, `Club`, `ClubMember`, `ClubMatch`, `ClubMatchPlayer`, plus recruitment-related tables and history crawl tables like `HistoryMemberQuery`, `HistoryPendingMatch`, `HistoryRun`). `analysis.apps` contains runnable applications (`MembershipApp`, `RecruitmentApp`, `MatchRefApp`, `BlacklistApp`, `HistoryApp`).
+2. **`ccas.analysis`** — Domain tables and business logic. `analysis.tables` contains database-persisted entities (`Player`, `PlayerSnapshot`, `Club`, `ClubMember`, `ClubMatch`, `ClubMatchBoard`, plus recruitment-related tables and history crawl tables like `HistoryMemberQuery`, `HistoryPendingMatch`, `HistoryRun`). `analysis.apps` contains runnable applications (`MembershipApp`, `RecruitmentApp`, `MatchRefApp`, `BlacklistApp`, `HistoryApp`).
 
 3. **`ccas.server`** — Backend HTTP server with job execution and scheduling. `server.jobs` has `JobRunner` (async job execution via forked fibers), `JobRun`/`JobSchedule` (database entities). `server.routes` has zio-http route handlers for jobs, schedules, and health checks. `server.scheduler` has `JobScheduler` (polling-based scheduled job execution). Entry point is `CcasServer extends ZIOAppDefault`.
 

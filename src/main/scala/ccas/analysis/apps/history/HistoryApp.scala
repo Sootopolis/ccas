@@ -347,57 +347,140 @@ object HistoryApp extends ZIOAppDefault {
         .orElseFail(ExternalException(s"Club ${ctx.clubUrlName} not found in match $matchId teams"))
 
       teams = dailyMatch.teams
-      ourTeam      = if (ourTeamIdx == 1) { teams.team1 } else { teams.team2 }
       opponentTeam = if (ourTeamIdx == 1) { teams.team2 } else { teams.team1 }
-      oppTeamIdx   = if (ourTeamIdx == 1) { 2 } else { 1 }
 
       opponentClubId <- resolveClubIdFromTeamUrl(opponentTeam.`@id`)
       clubMatch = buildClubMatchRow(matchId, dailyMatch, ctx.clubId, ourTeamIdx, opponentClubId)
 
-      // Resolve players (API calls + discovery happen outside the transaction)
-      ourPlayers <- resolveTeamPlayers(ctx, matchId, ourTeam, ourTeamIdx.toShort, isOurTeam = true, clubMatch.startTime)
-      oppPlayers <- resolveTeamPlayers(ctx, matchId, opponentTeam, oppTeamIdx.toShort, isOurTeam = false, clubMatch.startTime)
+      boardRows <- buildBoardRows(ctx, matchId, dailyMatch, ourTeamIdx, clubMatch.startTime)
 
-      // Store match + players + remove from pending atomically
-      allPlayers = ourPlayers ++ oppPlayers
       _ <- withTransaction {
         for {
           _ <- ClubMatch.upsert(clubMatch)
-          _ <- ClubMatchPlayer.deleteMatch(matchId)
-          _ <- ZIO.foreachDiscard(allPlayers)(ClubMatchPlayer.insert)
+          _ <- ClubMatchBoard.deleteMatch(matchId)
+          _ <- ZIO.foreachDiscard(boardRows)(ClubMatchBoard.insert)
           _ <- HistoryPendingMatch.delete(ctx.clubId, matchId)
         } yield ()
       }
     } yield ()
 
-  // === Player Resolution ===
+  // === Board Row Construction ===
 
-  private def resolveTeamPlayers(
+  private def buildBoardRows(
     ctx: ProcessingContext,
     matchId: ClubMatchId,
-    team: ApiDailyMatchTeam,
-    teamIdx: Short,
-    isOurTeam: Boolean,
+    dailyMatch: ApiDailyMatch,
+    ourTeamIdx: Int,
     matchStartTime: Option[Instant]
-  ): RIO[Transactor, List[ClubMatchPlayer]] = {
-    val fpLower = team.fairPlayRemovals.map(u => Username.unwrap(u).toLowerCase)
+  ): RIO[Transactor, List[ClubMatchBoard]] = {
+    dailyMatch match {
+      case _: ApiDailyMatchRegistered => ZIO.succeed(Nil)
+      case _ =>
+        val teams = dailyMatch.teams
+        val team1FpLower = teams.team1.fairPlayRemovals.map(u => Username.unwrap(u).toLowerCase)
+        val team2FpLower = teams.team2.fairPlayRemovals.map(u => Username.unwrap(u).toLowerCase)
 
-    ZIO.foreach(team.players.toList) { player =>
-      resolvePlayerId(ctx, player.username, isOurTeam, matchStartTime).map { pidOpt =>
-        pidOpt.map { playerId =>
-          val (board, playedAsWhite, playedAsBlack) = player match {
-            case p: ApiDailyMatchPlayerStarted =>
-              (Some(p.board.path.segments.last.toInt), p.playedAsWhite, p.playedAsBlack)
-            case _: ApiDailyMatchPlayerRegistered =>
-              (None, None, None)
+        val team1ByBoard: Map[Int, ApiDailyMatchPlayerStarted] = teams.team1.players.collect {
+          case p: ApiDailyMatchPlayerStarted => p.board.path.segments.last.toInt -> p
+        }.toMap
+        val team2ByBoard: Map[Int, ApiDailyMatchPlayerStarted] = teams.team2.players.collect {
+          case p: ApiDailyMatchPlayerStarted => p.board.path.segments.last.toInt -> p
+        }.toMap
+
+        val allBoards = (team1ByBoard.keySet ++ team2ByBoard.keySet).toList.sorted
+
+        ZIO.foreach(allBoards) { boardNum =>
+          for {
+            t1Player <- ZIO.fromOption(team1ByBoard.get(boardNum))
+              .orElseFail(ExternalException(s"Match $matchId board $boardNum: missing team1 player"))
+            t2Player <- ZIO.fromOption(team2ByBoard.get(boardNum))
+              .orElseFail(ExternalException(s"Match $matchId board $boardNum: missing team2 player"))
+
+            t1Username = t1Player.username
+            t2Username = t2Player.username
+            t1FairPlay = team1FpLower.contains(Username.unwrap(t1Username).toLowerCase)
+            t2FairPlay = team2FpLower.contains(Username.unwrap(t2Username).toLowerCase)
+
+            t1Pid <- if (ourTeamIdx == 1) { resolvePlayerId(ctx, t1Username, isOurTeam = true, matchStartTime) }
+                     else { ZIO.none }
+            t2Pid <- if (ourTeamIdx == 2) { resolvePlayerId(ctx, t2Username, isOurTeam = true, matchStartTime) }
+                     else { ZIO.none }
+          } yield {
+            val (g1Winner, g1Detail) =
+              normalizeGameOutcome(t1Player.playedAsWhite, t2Player.playedAsBlack, whiteTeamIsTeam1 = true)
+            val (g2Winner, g2Detail) =
+              normalizeGameOutcome(t2Player.playedAsWhite, t1Player.playedAsBlack, whiteTeamIsTeam1 = false)
+            val (t1Score, t2Score) = computeScoreX2(g1Winner, g2Winner, t1FairPlay, t2FairPlay)
+
+            ClubMatchBoard(
+              matchId = matchId,
+              board = boardNum,
+              team1PlayerId = t1Pid,
+              team1Username = t1Username,
+              team1FairPlay = t1FairPlay,
+              team2PlayerId = t2Pid,
+              team2Username = t2Username,
+              team2FairPlay = t2FairPlay,
+              game1Winner = g1Winner,
+              game1Detail = g1Detail,
+              game2Winner = g2Winner,
+              game2Detail = g2Detail,
+              team1ScoreX2 = t1Score,
+              team2ScoreX2 = t2Score
+            )
           }
-          val scoreX2 = ((playedAsWhite.fold(0.0)(_.score) + playedAsBlack.fold(0.0)(_.score)) * 2).toShort
-          val isFairPlay = fpLower.contains(Username.unwrap(player.username).toLowerCase)
-          ClubMatchPlayer(matchId, playerId, teamIdx, player.username, board, playedAsWhite, playedAsBlack, scoreX2, isFairPlay)
         }
-      }
-    }.map(_.flatten)
+    }
   }
+
+  // === Game Outcome Normalization ===
+
+  private[history] def normalizeGameOutcome(
+    whiteResult: Option[GameResultDetail],
+    blackResult: Option[GameResultDetail],
+    whiteTeamIsTeam1: Boolean
+  ): (Option[BoardGameWinner], Option[GameResultDetail]) = {
+    (whiteResult, blackResult) match {
+      case (Some(GameResultDetail.Win), Some(loss)) =>
+        val winner = if (whiteTeamIsTeam1) { BoardGameWinner.Team1 } else { BoardGameWinner.Team2 }
+        (Some(winner), Some(loss))
+      case (Some(loss), Some(GameResultDetail.Win)) =>
+        val winner = if (whiteTeamIsTeam1) { BoardGameWinner.Team2 } else { BoardGameWinner.Team1 }
+        (Some(winner), Some(loss))
+      case (Some(draw), Some(_)) if draw.category == GameResult.Draw =>
+        (Some(BoardGameWinner.Draw), Some(draw))
+      case (None, None) =>
+        (None, None)
+      case _ =>
+        // Mismatched state (e.g., one side played, other didn't) — treat as not played
+        (None, None)
+    }
+  }
+
+  private[history] def computeScoreX2(
+    game1Winner: Option[BoardGameWinner],
+    game2Winner: Option[BoardGameWinner],
+    team1FairPlay: Boolean,
+    team2FairPlay: Boolean
+  ): (Short, Short) = {
+    def gameScore(winner: Option[BoardGameWinner]): (Int, Int) = {
+      winner match {
+        case None                              => (0, 0)
+        case Some(_) if team1FairPlay && team2FairPlay => (1, 1)
+        case Some(_) if team1FairPlay          => (0, 2)
+        case Some(_) if team2FairPlay          => (2, 0)
+        case Some(BoardGameWinner.Team1)       => (2, 0)
+        case Some(BoardGameWinner.Team2)       => (0, 2)
+        case Some(BoardGameWinner.Draw)        => (1, 1)
+      }
+    }
+
+    val (g1t1, g1t2) = gameScore(game1Winner)
+    val (g2t1, g2t2) = gameScore(game2Winner)
+    ((g1t1 + g2t1).toShort, (g1t2 + g2t2).toShort)
+  }
+
+  // === Player Resolution ===
 
   private def resolvePlayerId(
     ctx: ProcessingContext,
@@ -519,12 +602,12 @@ object HistoryApp extends ZIOAppDefault {
               val since = Instant.ofEpochSecond(apiClub.joined)
               val until = if (statusCategory == PlayerStatusCategory.Active) { None }
                 else { Some(Instant.ofEpochSecond(apiPlayer.lastOnline)) }
-              ClubMember(clubId, playerId, since, until)
+              ClubMember(clubId, playerId, since, until, sinceApproximate = false)
             case None =>
               val since = matchStartTime.getOrElse(Instant.ofEpochSecond(apiPlayer.joined))
               val until = if (statusCategory == PlayerStatusCategory.Active) { matchStartTime }
                 else { Some(Instant.ofEpochSecond(apiPlayer.lastOnline)) }
-              ClubMember(clubId, playerId, since, until)
+              ClubMember(clubId, playerId, since, until, sinceApproximate = true)
           }
           _ <- ClubMember.insert(member)
         } yield ()
@@ -533,7 +616,7 @@ object HistoryApp extends ZIOAppDefault {
           val since = matchStartTime.getOrElse(Instant.ofEpochSecond(apiPlayer.joined))
           val until = if (statusCategory == PlayerStatusCategory.Active) { None }
             else { Some(Instant.ofEpochSecond(apiPlayer.lastOnline)) }
-          ClubMember.insert(ClubMember(clubId, playerId, since, until)).unit
+          ClubMember.insert(ClubMember(clubId, playerId, since, until, sinceApproximate = true)).unit
         }
     }
   }

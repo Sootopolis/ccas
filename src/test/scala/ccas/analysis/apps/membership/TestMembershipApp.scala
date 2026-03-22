@@ -472,6 +472,34 @@ object TestMembershipApp extends ZIOSpecDefault {
         result.newSnapshots.nonEmpty
       )
     },
+    test("sinceApproximate member → replaceSince, not Rejoined") {
+      val snap = PlayerSnapshot(pid0, T.t0, Username("alice"), Active, None)
+      val mem  = ClubMember(clubId, pid0, T.t0, None, sinceApproximate = true)
+      val dbState = DbState(
+        membersByPlayerId = Map(pid0 -> MemberState(snap, mem)),
+        membersByUsername = Map(Username("alice") -> MemberState(snap, mem))
+      )
+      val apiMap = Map(Username("alice") -> T.t1.getEpochSecond)
+
+      for {
+        _ <- seedDb(
+          players = List(Player(pid0, T.t0)),
+          snapshots = List(snap),
+          members = List(mem)
+        )
+        client <- fakeChessComClient(Map.empty)
+        result <- MembershipApp.classifyApiMembers(client, clubId, apiMap, dbState, T.t2)
+        members <- ClubMember.selectClub(clubId)
+      } yield assertTrue(
+        result.resolvedIds.contains(pid0),
+        result.changes.isEmpty,
+        result.newMemberships.isEmpty,
+        result.closedMemberships.isEmpty,
+        members.size == 1,
+        members.head.since == T.t1,
+        !members.head.sinceApproximate
+      )
+    },
     test("trustUsernames=false bypasses known player lookup") {
       val snap = PlayerSnapshot(pid3, T.t0, Username("diana"), Active, None)
       val dbState = DbState(

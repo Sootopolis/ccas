@@ -4,7 +4,7 @@ import java.time.{Duration, Instant, LocalDateTime, ZoneOffset}
 
 import zio.test.{assertCompletes, assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
-import ccas.api.misc.enums.{ClubMatchResult, ClubMatchStatus, GameResultDetail, TimeClass}
+import ccas.api.misc.enums.{BoardGameWinner, ClubMatchResult, ClubMatchStatus, GameResultDetail, TimeClass}
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubUrlName, PlayerId, Username}
 import ccas.utils.sql.FreshSchemaLayer
 
@@ -15,9 +15,9 @@ object TestClubMatchSql extends ZIOSpecDefault {
     testClubMatchUpsertUpdate,
     testClubMatchSelectMatchIdsForClub,
     testClubMatchSelectStaleForClub,
-    testClubMatchPlayerInsertAndSelect,
-    testClubMatchPlayerNullableEnumRoundTrip,
-    testClubMatchPlayerDeleteMatch,
+    testClubMatchBoardInsertAndSelect,
+    testClubMatchBoardNullableGameFields,
+    testClubMatchBoardDeleteMatch,
     testHistoryPendingMatchInsert,
     testHistoryPendingMatchCount,
     testHistoryPendingMatchBatch,
@@ -141,74 +141,85 @@ object TestClubMatchSql extends ZIOSpecDefault {
     )
   }
 
-  // --- ClubMatchPlayer tests ---
+  // --- ClubMatchBoard tests ---
 
-  private val cmpA = ClubMatchPlayer(
+  private val boardA = ClubMatchBoard(
     matchId = matchFinished.matchId,
-    playerId = player0.playerId,
-    teamIdx = 1,
-    username = Username("p0"),
-    board = Some(1),
-    playedAsWhite = Some(GameResultDetail.Win),
-    playedAsBlack = Some(GameResultDetail.Checkmated),
-    scoreX2 = 2, // 1.0 + 0.0 = 1.0 → 2
-    fairPlayRemoval = false
+    board = 1,
+    team1PlayerId = Some(player0.playerId),
+    team1Username = Username("p0"),
+    team1FairPlay = false,
+    team2PlayerId = Some(player1.playerId),
+    team2Username = Username("p1"),
+    team2FairPlay = false,
+    game1Winner = Some(BoardGameWinner.Team1),
+    game1Detail = Some(GameResultDetail.Checkmated),
+    game2Winner = Some(BoardGameWinner.Team2),
+    game2Detail = Some(GameResultDetail.Resigned),
+    team1ScoreX2 = 2,
+    team2ScoreX2 = 2
   )
 
-  private val cmpB = ClubMatchPlayer(
+  private val boardB = ClubMatchBoard(
     matchId = matchFinished.matchId,
-    playerId = player1.playerId,
-    teamIdx = 2,
-    username = Username("p1"),
-    board = Some(1),
-    playedAsWhite = Some(GameResultDetail.Resigned),
-    playedAsBlack = Some(GameResultDetail.Win),
-    scoreX2 = 2,
-    fairPlayRemoval = false
+    board = 2,
+    team1PlayerId = Some(player1.playerId),
+    team1Username = Username("p1"),
+    team1FairPlay = false,
+    team2PlayerId = None,
+    team2Username = Username("opp2"),
+    team2FairPlay = false,
+    game1Winner = Some(BoardGameWinner.Draw),
+    game1Detail = Some(GameResultDetail.Stalemate),
+    game2Winner = None,
+    game2Detail = None,
+    team1ScoreX2 = 1,
+    team2ScoreX2 = 1
   )
 
-  private def testClubMatchPlayerInsertAndSelect = test("ClubMatchPlayer insertBatch and selectMatch") {
+  private def testClubMatchBoardInsertAndSelect = test("ClubMatchBoard insertBatch and selectMatch") {
     for {
-      _       <- ClubMatchPlayer.insertBatch(List(cmpA, cmpB))
-      results <- ClubMatchPlayer.selectMatch(matchFinished.matchId)
-    } yield assertTrue(results.toSet == Set(cmpA, cmpB))
+      _       <- ClubMatchBoard.insertBatch(List(boardA, boardB))
+      results <- ClubMatchBoard.selectMatch(matchFinished.matchId)
+    } yield assertTrue(results.toSet == Set(boardA, boardB))
   }
 
-  private def testClubMatchPlayerNullableEnumRoundTrip = test("ClubMatchPlayer with null played_as fields round-trips") {
-    // Simulates a registration-state player: no board, no results
-    val regPlayer = ClubMatchPlayer(
+  private def testClubMatchBoardNullableGameFields = test("ClubMatchBoard with null game fields round-trips") {
+    val noGames = ClubMatchBoard(
       matchId = matchFinished.matchId,
-      playerId = player0.playerId,
-      teamIdx = 1,
-      username = Username("p0"),
-      board = None,
-      playedAsWhite = None,
-      playedAsBlack = None,
-      scoreX2 = 0,
-      fairPlayRemoval = true
+      board = 3,
+      team1PlayerId = None,
+      team1Username = Username("t1"),
+      team1FairPlay = true,
+      team2PlayerId = None,
+      team2Username = Username("t2"),
+      team2FairPlay = false,
+      game1Winner = None,
+      game1Detail = None,
+      game2Winner = None,
+      game2Detail = None,
+      team1ScoreX2 = 0,
+      team2ScoreX2 = 0
     )
     for {
-      _       <- ClubMatchPlayer.deleteMatch(matchFinished.matchId)
-      _       <- ClubMatchPlayer.insert(regPlayer)
-      results <- ClubMatchPlayer.selectMatch(matchFinished.matchId)
+      _       <- ClubMatchBoard.insert(noGames)
+      results <- ClubMatchBoard.selectMatch(matchFinished.matchId)
+      board3  = results.find(_.board == 3).get
     } yield assertTrue(
-      results == List(regPlayer),
-      results.head.playedAsWhite.isEmpty,
-      results.head.playedAsBlack.isEmpty,
-      results.head.board.isEmpty,
-      results.head.fairPlayRemoval
+      board3 == noGames,
+      board3.game1Winner.isEmpty,
+      board3.game1Detail.isEmpty,
+      board3.team1PlayerId.isEmpty,
+      board3.team1FairPlay
     )
   }
 
-  private def testClubMatchPlayerDeleteMatch = test("ClubMatchPlayer deleteMatch") {
+  private def testClubMatchBoardDeleteMatch = test("ClubMatchBoard deleteMatch") {
     for {
-      // Re-insert both players for a clean delete test
-      _       <- ClubMatchPlayer.deleteMatch(matchFinished.matchId)
-      _       <- ClubMatchPlayer.insertBatch(List(cmpA, cmpB))
-      deleted <- ClubMatchPlayer.deleteMatch(matchFinished.matchId)
-      results <- ClubMatchPlayer.selectMatch(matchFinished.matchId)
+      deleted <- ClubMatchBoard.deleteMatch(matchFinished.matchId)
+      results <- ClubMatchBoard.selectMatch(matchFinished.matchId)
     } yield assertTrue(
-      deleted == 2,
+      deleted == 3,
       results.isEmpty
     )
   }

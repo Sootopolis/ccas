@@ -164,3 +164,9 @@ enum ClubVisibility {
 }
 
 object ClubVisibility extends EnumJson[ClubVisibility]
+
+enum BoardGameWinner {
+  case Team1, Team2, Draw
+}
+
+object BoardGameWinner extends EnumSql[BoardGameWinner]
