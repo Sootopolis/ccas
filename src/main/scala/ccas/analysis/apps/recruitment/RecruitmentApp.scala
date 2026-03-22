@@ -24,7 +24,8 @@ object RecruitmentApp extends ZIOAppDefault {
 
   private val DefaultTarget             = 30
   private val DefaultExploreConcurrency = 1
-  private val DefaultEvalBatchSize      = 4
+  private val DefaultEvalBatchSize      = 4  // max concurrent evaluations (parallelism)
+  private val DefaultEvalChunkSize     = 32 // candidates per checkpoint (source-switch interval)
 
   // --- Explore mode types ---
 
@@ -56,10 +57,12 @@ object RecruitmentApp extends ZIOAppDefault {
     runCtx: RunContext,
     invitedRef: Ref[List[Username]],
     evaluatedRef: Ref[Set[Username]],
+    evalCountRef: Ref[Int],
     target: Int,
     existingUsernames: Set[Username],
     exploreConcurrency: Int,
     evalBatchSize: Int,
+    evalChunkSize: Int,
     explore: Boolean,
     showProgress: Boolean
   )
@@ -171,6 +174,7 @@ object RecruitmentApp extends ZIOAppDefault {
       discoveredOpponents <- Ref.make(Set.empty[Username])
       invitedRef          <- Ref.make(List.empty[Username])
       evaluatedRef        <- Ref.make(Set.empty[Username])
+      evalCountRef        <- Ref.make(0)
 
       runCtx = RunContext(
         client,
@@ -193,10 +197,12 @@ object RecruitmentApp extends ZIOAppDefault {
         runCtx = runCtx,
         invitedRef = invitedRef,
         evaluatedRef = evaluatedRef,
+        evalCountRef = evalCountRef,
         target = effectiveTarget,
         existingUsernames = existingUsernames,
         exploreConcurrency = effectiveConcurrency,
         evalBatchSize = DefaultEvalBatchSize,
+        evalChunkSize = DefaultEvalChunkSize,
         explore = explore,
         showProgress = showProgress
       )
@@ -206,14 +212,17 @@ object RecruitmentApp extends ZIOAppDefault {
       finalizeRun = (label: String) =>
         for {
           _         <- ZIO.whenDiscard(showProgress)(ZIO.logInfo(""))
+          _         <- reclassifyExcessInvited(ctx)
           invited   <- invitedRef.get.map(_.reverse)
-          evaluated <- evaluatedRef.get
+          evalCount <- evalCountRef.get
+          deferredCount <- RecruitmentCandidate.selectDeferredCountByRun(runId)
           completedAt = Instant.now()
           finalRun    = RecruitmentRun(runId, clubId, criteria.criteriaId, now, Some(completedAt), invited.size)
           _ <- RecruitmentRun.update(finalRun)
           _ <- ZIO.logInfo(s"=== $label ===")
-          _ <- ZIO.logInfo(s"Candidates evaluated: ${evaluated.size}")
+          _ <- ZIO.logInfo(s"Candidates evaluated: $evalCount")
           _ <- ZIO.logInfo(s"Invited: ${invited.size}")
+          _ <- ZIO.whenDiscard(deferredCount > 0)(ZIO.logInfo(s"Deferred: $deferredCount"))
           _ <- ZIO.foreachDiscard(invited)(u => ZIO.logInfo(s"  $u"))
           // Cumulative summary: show today's total across all runs
           _ <- ZIO.whenDiscard(cumulative && alreadyFound > 0) {
@@ -244,8 +253,20 @@ object RecruitmentApp extends ZIOAppDefault {
               ZIO.logInfo("[Hint] Press Ctrl+C to stop gracefully (candidates found so far will be listed)")
             )
 
+            // --- Load deferred candidates from prior runs as a priority source ---
+            deferredCandidates <- RecruitmentCandidate.selectDeferredByClub(clubId)
+            deferredUsernames <- ZIO.foreach(deferredCandidates)(c =>
+              PlayerSnapshot.selectIdLatest(c.playerId).map(_.map(_.username))
+            ).map(_.flatten.filterNot(existingUsernames))
+            _ <- ZIO.whenDiscard(deferredUsernames.nonEmpty)(
+              ZIO.logInfo(s"[Deferred] Found ${deferredUsernames.size} deferred candidates from prior runs")
+            )
+
             // --- Build initial sources from provided source clubs ---
-            initialSources = sourceClubs.map(ClubSource(_))
+            deferredSource = Option.when(deferredUsernames.nonEmpty)(
+              UsernameSource("deferred-priority", deferredUsernames)
+            )
+            initialSources = deferredSource.toList ++ sourceClubs.map(ClubSource(_))
 
             // --- Build static strategy list (only used when explore == true) ---
             staticStrategies: List[() => RIO[Transactor, List[SourceDescriptor]]] =
@@ -398,33 +419,32 @@ object RecruitmentApp extends ZIOAppDefault {
     visitedClubs: Set[ClubUrlName],
     nextKeys: List[String]
   ): RIO[Transactor, Unit] = {
-    val (batch, rest) = sourceState.remaining.splitAt(ctx.evalBatchSize)
+    val (chunk, rest) = sourceState.remaining.splitAt(ctx.evalChunkSize)
     val pool3         = pool.updated(sourceId, sourceState.copy(remaining = rest))
     for {
       // Filter out already-evaluated and recently-rejected candidates
       alreadyEvaluated <- ctx.evaluatedRef.get
-      freshBatch = batch.filterNot(alreadyEvaluated)
-      filteredBatch <- ZIO.filter(freshBatch)(u => checkRecentlyRejected(ctx, u).map(!_))
-      skippedCount = freshBatch.size - filteredBatch.size
-      _ <- ctx.evaluatedRef.update(_ ++ freshBatch.take(freshBatch.size - filteredBatch.size + skippedCount).toSet)
-      // Mark recently-rejected as evaluated
-      recentlyRejected = freshBatch.filterNot(filteredBatch.contains)
+      freshChunk = chunk.filterNot(alreadyEvaluated)
+      filteredChunk <- ZIO.filter(freshChunk)(u => checkRecentlyRejected(ctx, u).map(!_))
+      recentlyRejected = freshChunk.filterNot(filteredChunk.contains)
       _ <- ctx.evaluatedRef.update(_ ++ recentlyRejected.toSet)
 
-      // Evaluate batch in parallel
-      results <- ZIO.foreachPar(filteredBatch)(u =>
+      // Evaluate chunk with bounded parallelism (continuous throughput)
+      results <- ZIO.foreachPar(filteredChunk)(u =>
         evaluateCandidate(ctx.runId, u, ctx.runCtx, ctx.filters).map(u -> _)
-      )
+      ).withParallelism(ctx.evalBatchSize)
 
       // Update refs
       invitedInBatch  = results.collect { case (u, CandidateOutcome.Invited) => u }
       rejectedInBatch = results.count { case (_, o) => o == CandidateOutcome.Rejected || o == CandidateOutcome.Error }
-      _ <- ctx.evaluatedRef.update(_ ++ filteredBatch.toSet)
+      _ <- ctx.evaluatedRef.update(_ ++ filteredChunk.toSet)
+      _ <- ctx.evalCountRef.update(_ + filteredChunk.size)
       _ <- ZIO.foreachDiscard(invitedInBatch)(u => ctx.invitedRef.update(u :: _))
+      _ <- reclassifyExcessInvited(ctx)
       _ <- printProgress(ctx)
 
-      // Compute consecutive rejects: trailing rejects after last invite in batch
-      batchConsecutiveRejects = {
+      // Compute consecutive rejects: trailing rejects after last invite in chunk
+      chunkConsecutiveRejects = {
         val orderedResults = results.map(_._2)
         val lastInviteIdx  = orderedResults.lastIndexWhere(_ == CandidateOutcome.Invited)
         if (lastInviteIdx >= 0) orderedResults.drop(lastInviteIdx + 1).size
@@ -432,11 +452,11 @@ object RecruitmentApp extends ZIOAppDefault {
       }
 
       updatedSource = pool3(sourceId).copy(
-        evaluated = sourceState.evaluated + filteredBatch.size,
+        evaluated = sourceState.evaluated + filteredChunk.size,
         rejected = sourceState.rejected + rejectedInBatch,
         consecutiveRejects =
-          if (invitedInBatch.nonEmpty) batchConsecutiveRejects
-          else sourceState.consecutiveRejects + filteredBatch.size
+          if (invitedInBatch.nonEmpty) chunkConsecutiveRejects
+          else sourceState.consecutiveRejects + filteredChunk.size
       )
       pool4 <-
         if (ctx.explore && isGrim(updatedSource)) {
@@ -453,14 +473,36 @@ object RecruitmentApp extends ZIOAppDefault {
   private def printProgress(ctx: ExploreContext): UIO[Unit] =
     ZIO.whenDiscard(ctx.showProgress)(for {
       invited   <- ctx.invitedRef.get
-      evaluated <- ctx.evaluatedRef.get
+      evalCount <- ctx.evalCountRef.get
       tgt    = ctx.target
       pct    = if (tgt == 0) 100 else (invited.size * 100) / tgt
       filled = pct / 5
       bar    = "\u2588" * filled + "\u2591" * (20 - filled)
-      line   = s"\r[Progress] Evaluated: ${evaluated.size} | Invited: ${invited.size}/$tgt | $bar $pct%"
+      line   = s"\r[Progress] Evaluated: $evalCount | Invited: ${invited.size}/$tgt | $bar $pct%"
       _ <- Console.print(line).ignore
     } yield ())
+
+  /** When invited count exceeds the target, reclassify the newest excess from Invited to Deferred. */
+  private def reclassifyExcessInvited(ctx: ExploreContext): RIO[Transactor, Unit] =
+    for {
+      invited <- ctx.invitedRef.get
+      excess = invited.size - ctx.target
+      _ <- ZIO.whenDiscard(excess > 0) {
+        // invitedRef is prepend-ordered (newest first), so take excess from the head
+        val toDefer = invited.take(excess)
+        for {
+          playerIds <- ZIO.foreach(toDefer)(u =>
+            PlayerSnapshot.selectNameLatest(u)
+              .someOrFail(new java.sql.SQLException(s"No snapshot for deferred candidate $u"))
+              .map(_.playerId)
+          )
+          _ <- ZIO.foreachDiscard(playerIds)(pid =>
+            RecruitmentCandidate.updateOutcome(ctx.runId, pid, CandidateOutcome.Deferred)
+          )
+          _ <- ctx.invitedRef.set(invited.drop(excess))
+        } yield ()
+      }
+    } yield ()
 
   // --- Source activation ---
 

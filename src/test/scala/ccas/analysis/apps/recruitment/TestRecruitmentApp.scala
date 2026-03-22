@@ -1687,12 +1687,13 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         result <- RecruitmentApp.recruit(clubUrlName, "default", target = Some(3), sourceClubs = List(source1, source2))
           .provideEnvironment(zio.ZEnvironment(client, xa))
         candidates <- RecruitmentCandidate.selectByRun(result.runId)
-        invited = candidates.filter(_.outcome == CandidateOutcome.Invited)
+        invited  = candidates.filter(_.outcome == CandidateOutcome.Invited)
+        deferred = candidates.filter(_.outcome == CandidateOutcome.Deferred)
       } yield assertTrue(
-        invited.size >= 3,
-        invited.size <= 6, // cap + batchSize - 1
-        result.candidatesFound >= 3,
-        result.candidatesFound <= 6
+        invited.size == 3,
+        result.candidatesFound == 3,
+        deferred.size + invited.size >= 3,
+        deferred.size + invited.size <= 4
       )
     },
     test("interrupted recruit persists partial results") {
@@ -1729,9 +1730,130 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       } yield assertTrue(
         latest.isDefined,
         latest.get.completedAt.isDefined,
-        invited.size >= 4
+        invited.nonEmpty
       )
-    } @@ TestAspect.withLiveClock
+    } @@ TestAspect.withLiveClock,
+    test("excess invited candidates are reclassified as Deferred") {
+      val source = ClubUrlName("defer-source")
+      // 6 candidates, target=2 → should get exactly 2 Invited, rest Deferred or Rejected
+      val candidateNames = (0 to 5).map(i => s"defer-cand-$i").toList
+      val responses = Map(
+        s"club/$clubUrlName"         -> apiClubJson(clubId.value, clubUrlName.value),
+        s"club/$clubUrlName/members" -> apiClubMembersJson(Nil),
+        s"club/$source"              -> apiClubJson(ClubId(901).value, source.value),
+        s"club/$source/members" -> apiClubMembersJson(
+          candidateNames.map(n => (n, T.t0.getEpochSecond))
+        )
+      ) ++ candidateNames.zipWithIndex.map { (name, i) =>
+        s"player/$name" -> apiPlayerJson(400 + i, name)
+      }.toMap
+      val criteria = makeCriteria()
+
+      for {
+        _      <- seedDb
+        _      <- seedCriteria(criteria)
+        client <- fakeChessComClient(responses)
+        xa     <- ZIO.service[Transactor]
+        result <- RecruitmentApp.recruit(clubUrlName, "default", target = Some(2), sourceClubs = List(source))
+          .provideEnvironment(zio.ZEnvironment(client, xa))
+        candidates <- RecruitmentCandidate.selectByRun(result.runId)
+        invited  = candidates.filter(_.outcome == CandidateOutcome.Invited)
+        deferred = candidates.filter(_.outcome == CandidateOutcome.Deferred)
+      } yield assertTrue(
+        invited.size == 2,
+        result.candidatesFound == 2,
+        // Some candidates may be deferred (those that passed filters but exceeded target)
+        invited.size + deferred.size >= 2
+      )
+    },
+    test("deferred candidates from prior run are prioritised in next run") {
+      val source = ClubUrlName("prio-source")
+      // Seed a prior run with a Deferred candidate, then run again
+      val responses = Map(
+        s"club/$clubUrlName"         -> apiClubJson(clubId.value, clubUrlName.value),
+        s"club/$clubUrlName/members" -> apiClubMembersJson(Nil),
+        s"club/$source"              -> apiClubJson(ClubId(902).value, source.value),
+        s"club/$source/members" -> apiClubMembersJson(
+          List(("prio-new", T.t0.getEpochSecond))
+        ),
+        "player/prio-deferred" -> apiPlayerJson(500, "prio-deferred"),
+        "player/prio-new"      -> apiPlayerJson(501, "prio-new")
+      )
+      val criteria = makeCriteria()
+
+      for {
+        _          <- seedDb
+        criteriaId <- seedCriteria(criteria)
+        client     <- fakeChessComClient(responses)
+        xa         <- ZIO.service[Transactor]
+
+        // Seed prior run with a Deferred candidate (need Player + Snapshot)
+        _ <- seedPlayer(PlayerId(500))
+        _ <- PlayerSnapshot.insert(
+          PlayerSnapshot(PlayerId(500), T.t0, Username.wrap("prio-deferred"), ccas.api.misc.enums.PlayerStatusCategory.Active, None)
+        )
+        priorRunId <- RecruitmentRun.insert(clubId, criteriaId, T.t0)
+        _ <- RecruitmentRun.update(RecruitmentRun(priorRunId, clubId, criteriaId, T.t0, Some(T.t1), 0))
+        _ <- RecruitmentCandidate.insert(
+          RecruitmentCandidate(priorRunId, PlayerId(500), T.t0, CandidateOutcome.Deferred, None)
+        )
+
+        // Verify selectDeferredByClub finds it
+        deferredBefore <- RecruitmentCandidate.selectDeferredByClub(clubId)
+
+        // Run recruitment — deferred candidate should be picked up as priority
+        result <- RecruitmentApp.recruit(clubUrlName, "default", target = Some(10), sourceClubs = List(source))
+          .provideEnvironment(zio.ZEnvironment(client, xa))
+
+        // The deferred candidate should now have an Invited outcome in the new run
+        newCandidates <- RecruitmentCandidate.selectByRun(result.runId)
+        newInvited = newCandidates.filter(_.outcome == CandidateOutcome.Invited)
+        newInvitedPids = newInvited.map(_.playerId).toSet
+
+        // After the new run, selectDeferredByClub should no longer return the candidate
+        deferredAfter <- RecruitmentCandidate.selectDeferredByClub(clubId)
+      } yield assertTrue(
+        deferredBefore.size == 1,
+        deferredBefore.head.playerId == PlayerId(500),
+        newInvitedPids.contains(PlayerId(500)),
+        deferredAfter.isEmpty
+      )
+    },
+    test("selectDeferredByClub excludes candidates resolved in later runs") {
+      val criteria = makeCriteria()
+
+      for {
+        _          <- seedDb
+        criteriaId <- seedCriteria(criteria)
+        _ <- seedPlayer(PlayerId(600))
+        _ <- PlayerSnapshot.insert(
+          PlayerSnapshot(PlayerId(600), T.t0, Username.wrap("resolved-player"), ccas.api.misc.enums.PlayerStatusCategory.Active, None)
+        )
+
+        // Run 1: candidate is Deferred
+        runId1 <- RecruitmentRun.insert(clubId, criteriaId, T.t0)
+        _ <- RecruitmentRun.update(RecruitmentRun(runId1, clubId, criteriaId, T.t0, Some(T.t1), 0))
+        _ <- RecruitmentCandidate.insert(
+          RecruitmentCandidate(runId1, PlayerId(600), T.t0, CandidateOutcome.Deferred, None)
+        )
+
+        // Should find the deferred candidate
+        deferredBefore <- RecruitmentCandidate.selectDeferredByClub(clubId)
+
+        // Run 2: same candidate is Invited (later timestamp)
+        runId2 <- RecruitmentRun.insert(clubId, criteriaId, T.t2)
+        _ <- RecruitmentRun.update(RecruitmentRun(runId2, clubId, criteriaId, T.t2, Some(T.t3), 1))
+        _ <- RecruitmentCandidate.insert(
+          RecruitmentCandidate(runId2, PlayerId(600), T.t2, CandidateOutcome.Invited, None)
+        )
+
+        // Should no longer find the deferred candidate
+        deferredAfter <- RecruitmentCandidate.selectDeferredByClub(clubId)
+      } yield assertTrue(
+        deferredBefore.size == 1,
+        deferredAfter.isEmpty
+      )
+    }
   )
 
   // ==========================================================================

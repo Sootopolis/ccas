@@ -2,6 +2,6 @@ package ccas.analysis.apps.recruitment
 
 import ccas.utils.sql.EnumSql
 
-enum CandidateOutcome { case Invited, Rejected, AlreadyMember, Error }
+enum CandidateOutcome { case Invited, Rejected, AlreadyMember, Error, Deferred }
 
 object CandidateOutcome extends EnumSql[CandidateOutcome]
