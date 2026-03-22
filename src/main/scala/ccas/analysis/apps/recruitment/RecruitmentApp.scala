@@ -811,10 +811,10 @@ object RecruitmentApp extends ZIOAppDefault {
       CheckDailyStats,
       CheckOngoingGames
     )
-    val tm = Option.when(
+    val teamMatch = Option.when(
       criteria.dailyMinTmGamesFinished.isDefined || criteria.dailyMaxTmTimeoutPercent.isDefined
     )(CheckTmStats)
-    base ++ formerMember ++ rest ++ tm
+    base ++ formerMember ++ rest ++ teamMatch
   }
 
   // --- Filter implementations ---

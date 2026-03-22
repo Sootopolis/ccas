@@ -26,7 +26,7 @@ object TestJobRunSql extends ZIOSpecDefault {
     FreshSchemaLayer("test_job_run", onInit = ServerTables.ensureTables)
   ) @@ TestAspect.sequential
 
-  private object T {
+  private object Times {
     val t0: Instant = LocalDateTime.of(2025, 6, 1, 0, 0).toInstant(ZoneOffset.UTC)
     val t1: Instant = t0.plus(Duration.ofDays(1))
     val t2: Instant = t0.plus(Duration.ofDays(2))
@@ -37,10 +37,10 @@ object TestJobRunSql extends ZIOSpecDefault {
   private val id2 = JobRunId.wrap("test-id-2")
 
   private val run0 =
-    JobRun(id0, JobKind.Recruitment, JobRunStatus.Running, Some(ClubUrlName("club-a")), None, T.t0, None, None)
+    JobRun(id0, JobKind.Recruitment, JobRunStatus.Running, Some(ClubUrlName("club-a")), None, Times.t0, None, None)
   private val run1 =
-    JobRun(id1, JobKind.Membership, JobRunStatus.Running, Some(ClubUrlName("club-a")), None, T.t1, None, None)
-  private val run2 = JobRun(id2, JobKind.MatchRef, JobRunStatus.Running, None, Some("params"), T.t2, None, None)
+    JobRun(id1, JobKind.Membership, JobRunStatus.Running, Some(ClubUrlName("club-a")), None, Times.t1, None, None)
+  private val run2 = JobRun(id2, JobKind.MatchRef, JobRunStatus.Running, None, Some("params"), Times.t2, None, None)
 
   private val deleteAll = connectZIO { val _ = sql"DELETE FROM job_run".update.run() }
 
@@ -73,11 +73,11 @@ object TestJobRunSql extends ZIOSpecDefault {
     for {
       _      <- deleteAll
       _      <- JobRun.insert(run0)
-      _      <- JobRun.update(run0.copy(status = JobRunStatus.Completed, completedAt = Some(T.t1), error = None))
+      _      <- JobRun.update(run0.copy(status = JobRunStatus.Completed, completedAt = Some(Times.t1), error = None))
       result <- JobRun.selectId(id0)
     } yield assertTrue(
       result.get.status == JobRunStatus.Completed,
-      result.get.completedAt.contains(T.t1)
+      result.get.completedAt.contains(Times.t1)
     )
   }
 
@@ -85,13 +85,13 @@ object TestJobRunSql extends ZIOSpecDefault {
     test("updateStatus changes status, completedAt, error without touching other fields") {
       for {
         _      <- deleteAll
-        _      <- JobRun.insert(run2) // has params = Some("params"), startedAt = T.t2
-        _      <- JobRun.updateStatus(id2, JobRunStatus.Completed, Some(T.t1), None)
+        _      <- JobRun.insert(run2) // has params = Some("params"), startedAt = Times.t2
+        _      <- JobRun.updateStatus(id2, JobRunStatus.Completed, Some(Times.t1), None)
         result <- JobRun.selectId(id2)
       } yield assertTrue(
         result.get.status == JobRunStatus.Completed,
-        result.get.completedAt.contains(T.t1),
-        result.get.startedAt == T.t2,
+        result.get.completedAt.contains(Times.t1),
+        result.get.startedAt == Times.t2,
         result.get.params.contains("params"),
         result.get.error.isEmpty
       )
@@ -129,8 +129,8 @@ object TestJobRunSql extends ZIOSpecDefault {
       JobRunStatus.Completed,
       Some(ClubUrlName("club-a")),
       None,
-      T.t0,
-      Some(T.t1),
+      Times.t0,
+      Some(Times.t1),
       None
     )
     val failed = JobRun(
@@ -139,8 +139,8 @@ object TestJobRunSql extends ZIOSpecDefault {
       JobRunStatus.Failed,
       Some(ClubUrlName("club-a")),
       None,
-      T.t0,
-      Some(T.t1),
+      Times.t0,
+      Some(Times.t1),
       Some("err")
     )
     for {
@@ -154,9 +154,9 @@ object TestJobRunSql extends ZIOSpecDefault {
   private def testSelectRecentOrdering = test("selectRecent orders by startedAt DESC with limit") {
     for {
       _      <- deleteAll
-      _      <- JobRun.insert(run0.copy(startedAt = T.t0))
-      _      <- JobRun.insert(run1.copy(startedAt = T.t1))
-      _      <- JobRun.insert(run2.copy(startedAt = T.t2))
+      _      <- JobRun.insert(run0.copy(startedAt = Times.t0))
+      _      <- JobRun.insert(run1.copy(startedAt = Times.t1))
+      _      <- JobRun.insert(run2.copy(startedAt = Times.t2))
       recent <- JobRun.selectRecent(2)
     } yield assertTrue(
       recent.size == 2,
@@ -166,9 +166,9 @@ object TestJobRunSql extends ZIOSpecDefault {
   }
 
   private def testMarkOrphansAsFailed = test("markOrphansAsFailed marks Running → Failed") {
-    val running1  = JobRun(id0, JobKind.Recruitment, JobRunStatus.Running, None, None, T.t0, None, None)
-    val running2  = JobRun(id1, JobKind.Membership, JobRunStatus.Running, None, None, T.t1, None, None)
-    val completed = JobRun(id2, JobKind.MatchRef, JobRunStatus.Completed, None, None, T.t2, Some(T.t2), None)
+    val running1  = JobRun(id0, JobKind.Recruitment, JobRunStatus.Running, None, None, Times.t0, None, None)
+    val running2  = JobRun(id1, JobKind.Membership, JobRunStatus.Running, None, None, Times.t1, None, None)
+    val completed = JobRun(id2, JobKind.MatchRef, JobRunStatus.Completed, None, None, Times.t2, Some(Times.t2), None)
     for {
       _     <- deleteAll
       _     <- JobRun.insert(running1)

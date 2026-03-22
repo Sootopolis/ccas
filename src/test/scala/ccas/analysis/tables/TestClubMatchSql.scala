@@ -30,7 +30,7 @@ object TestClubMatchSql extends ZIOSpecDefault {
     FreshSchemaLayer("test_club_match_sql", onInit = Tables.ensureTables)
   ) @@ TestAspect.sequential
 
-  private object T {
+  private object Times {
     val t0: Instant = LocalDateTime.of(2025, 6, 1, 0, 0).toInstant(ZoneOffset.UTC)
     val t1: Instant = t0.plus(Duration.ofDays(1))
     val t2: Instant = t0.plus(Duration.ofDays(2))
@@ -38,14 +38,14 @@ object TestClubMatchSql extends ZIOSpecDefault {
     val t4: Instant = t0.plus(Duration.ofDays(120)) // unused — reserved for future stale-window tests
   }
 
-  private val clubA = Club(ClubId(300), T.t0, ClubUrlName("club-a"))
-  private val clubB = Club(ClubId(301), T.t0, ClubUrlName("club-b"))
+  private val clubA = Club(ClubId(300), Times.t0, ClubUrlName("club-a"))
+  private val clubB = Club(ClubId(301), Times.t0, ClubUrlName("club-b"))
 
-  private val player0 = Player(PlayerId(50), T.t0)
-  private val player1 = Player(PlayerId(51), T.t0)
+  private val player0 = Player(PlayerId(50), Times.t0)
+  private val player1 = Player(PlayerId(51), Times.t0)
 
-  private val snap0 = PlayerSnapshot(player0.playerId, T.t0, Username("p0"), ccas.api.misc.enums.PlayerStatusCategory.Active, None)
-  private val snap1 = PlayerSnapshot(player1.playerId, T.t0, Username("p1"), ccas.api.misc.enums.PlayerStatusCategory.Active, None)
+  private val snap0 = PlayerSnapshot(player0.playerId, Times.t0, Username("p0"), ccas.api.misc.enums.PlayerStatusCategory.Active, None)
+  private val snap1 = PlayerSnapshot(player1.playerId, Times.t0, Username("p1"), ccas.api.misc.enums.PlayerStatusCategory.Active, None)
 
   private val matchFinished = ClubMatch(
     matchId = ClubMatchId(1001),
@@ -53,8 +53,8 @@ object TestClubMatchSql extends ZIOSpecDefault {
     url = "https://www.chess.com/club/matches/1001",
     status = ClubMatchStatus.Finished,
     timeClass = TimeClass.Daily,
-    startTime = Some(T.t0),
-    endTime = Some(T.t1),
+    startTime = Some(Times.t0),
+    endTime = Some(Times.t1),
     boards = 5,
     team1ClubId = Some(clubA.clubId),
     team1Name = "Club A",
@@ -64,7 +64,7 @@ object TestClubMatchSql extends ZIOSpecDefault {
     team2Name = "Club B",
     team2Score = 4.0,
     team2Result = Some(ClubMatchResult.Lose),
-    fetchedAt = T.t2
+    fetchedAt = Times.t2
   )
 
   private val matchInProgress = ClubMatch(
@@ -73,7 +73,7 @@ object TestClubMatchSql extends ZIOSpecDefault {
     url = "https://www.chess.com/club/matches/1002",
     status = ClubMatchStatus.InProgress,
     timeClass = TimeClass.Daily,
-    startTime = Some(T.t1),
+    startTime = Some(Times.t1),
     endTime = None,
     boards = 3,
     team1ClubId = Some(clubA.clubId),
@@ -84,7 +84,7 @@ object TestClubMatchSql extends ZIOSpecDefault {
     team2Name = "Unknown Club",
     team2Score = 1.0,
     team2Result = None,
-    fetchedAt = T.t2
+    fetchedAt = Times.t2
   )
 
   // --- ClubMatch tests ---
@@ -105,20 +105,20 @@ object TestClubMatchSql extends ZIOSpecDefault {
   }
 
   private def testClubMatchUpsertUpdate = test("ClubMatch upsert update") {
-    val updated = matchFinished.copy(team1Score = 7.0, fetchedAt = T.t3)
+    val updated = matchFinished.copy(team1Score = 7.0, fetchedAt = Times.t3)
     for {
       _      <- ClubMatch.upsert(updated)
       result <- ClubMatch.selectId(matchFinished.matchId)
     } yield assertTrue(
       result.contains(updated),
       result.get.team1Score == 7.0,
-      result.get.fetchedAt == T.t3
+      result.get.fetchedAt == Times.t3
     )
   }
 
   private def testClubMatchSelectMatchIdsForClub = test("selectMatchIdsForClub") {
     for {
-      _     <- ClubMatch.upsert(matchFinished.copy(fetchedAt = T.t2)) // restore original
+      _     <- ClubMatch.upsert(matchFinished.copy(fetchedAt = Times.t2)) // restore original
       _     <- ClubMatch.upsert(matchInProgress)
       idsA  <- ClubMatch.selectMatchIdsForClub(clubA.clubId)
       idsB  <- ClubMatch.selectMatchIdsForClub(clubB.clubId)
@@ -131,8 +131,8 @@ object TestClubMatchSql extends ZIOSpecDefault {
   }
 
   private def testClubMatchSelectStaleForClub = test("selectStaleForClub returns non-finished and stale finished") {
-    // matchFinished: end_time=T.t1, fetched_at=T.t2. Stale if fetched_at < end_time + 90 days.
-    // T.t2 < T.t1 + 90 days → stale.
+    // matchFinished: end_time=Times.t1, fetched_at=Times.t2. Stale if fetched_at < end_time + 90 days.
+    // Times.t2 < Times.t1 + 90 days → stale.
     // matchInProgress: not finished → always stale.
     for {
       staleA <- ClubMatch.selectStaleForClub(clubA.clubId)
@@ -279,11 +279,11 @@ object TestClubMatchSql extends ZIOSpecDefault {
 
   private def testHistoryMemberQueryInsert = test("HistoryMemberQuery insert and upsert") {
     for {
-      _ <- HistoryMemberQuery.insert(HistoryMemberQuery(clubA.clubId, player0.playerId, T.t1))
-      _ <- HistoryMemberQuery.insert(HistoryMemberQuery(clubA.clubId, player1.playerId, T.t1))
+      _ <- HistoryMemberQuery.insert(HistoryMemberQuery(clubA.clubId, player0.playerId, Times.t1))
+      _ <- HistoryMemberQuery.insert(HistoryMemberQuery(clubA.clubId, player1.playerId, Times.t1))
       ids <- HistoryMemberQuery.selectClubPlayerIds(clubA.clubId)
       // Upsert same player with new timestamp
-      _ <- HistoryMemberQuery.insert(HistoryMemberQuery(clubA.clubId, player0.playerId, T.t2))
+      _ <- HistoryMemberQuery.insert(HistoryMemberQuery(clubA.clubId, player0.playerId, Times.t2))
       idsAfter <- HistoryMemberQuery.selectClubPlayerIds(clubA.clubId)
     } yield assertTrue(
       ids == Set(player0.playerId, player1.playerId),
@@ -305,8 +305,8 @@ object TestClubMatchSql extends ZIOSpecDefault {
 
   private def testHistoryRunInsertAndComplete = test("HistoryRun insert and complete") {
     for {
-      runId <- HistoryRun.insert(clubA.clubId, T.t0)
-      _     <- HistoryRun.complete(runId, T.t1, matchesProcessed = 42, playersDiscovered = 7)
+      runId <- HistoryRun.insert(clubA.clubId, Times.t0)
+      _     <- HistoryRun.complete(runId, Times.t1, matchesProcessed = 42, playersDiscovered = 7)
     } yield assertTrue(runId > 0L)
   }
 }

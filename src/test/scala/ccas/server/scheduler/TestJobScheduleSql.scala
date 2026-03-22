@@ -28,7 +28,7 @@ object TestJobScheduleSql extends ZIOSpecDefault {
     FreshSchemaLayer("test_job_schedule", onInit = ServerTables.ensureTables)
   ) @@ TestAspect.sequential
 
-  private object T {
+  private object Times {
     val t0: Instant = LocalDateTime.of(2025, 6, 1, 0, 0).toInstant(ZoneOffset.UTC)
     val t1: Instant = t0.plus(Duration.ofDays(1))
   }
@@ -87,9 +87,9 @@ object TestJobScheduleSql extends ZIOSpecDefault {
     for {
       _      <- deleteAll
       id     <- JobSchedule.insert(schedule)
-      _      <- JobSchedule.updateLastRunAt(id, T.t0)
+      _      <- JobSchedule.updateLastRunAt(id, Times.t0)
       result <- JobSchedule.selectId(id)
-    } yield assertTrue(result.get.lastRunAt.contains(T.t0))
+    } yield assertTrue(result.get.lastRunAt.contains(Times.t0))
   }
 
   private def testUpdateAllFields = test("update with all optional fields") {
