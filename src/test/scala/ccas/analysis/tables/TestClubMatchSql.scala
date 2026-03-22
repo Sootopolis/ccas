@@ -44,8 +44,10 @@ object TestClubMatchSql extends ZIOSpecDefault {
   private val player0 = Player(PlayerId(50), Times.t0)
   private val player1 = Player(PlayerId(51), Times.t0)
 
-  private val snap0 = PlayerSnapshot(player0.playerId, Times.t0, Username("p0"), ccas.api.misc.enums.PlayerStatusCategory.Active, None)
-  private val snap1 = PlayerSnapshot(player1.playerId, Times.t0, Username("p1"), ccas.api.misc.enums.PlayerStatusCategory.Active, None)
+  private val snap0 =
+    PlayerSnapshot(player0.playerId, Times.t0, Username("p0"), ccas.api.misc.enums.PlayerStatusCategory.Active, None)
+  private val snap1 =
+    PlayerSnapshot(player1.playerId, Times.t0, Username("p1"), ccas.api.misc.enums.PlayerStatusCategory.Active, None)
 
   private val matchFinished = ClubMatch(
     matchId = ClubMatchId(1001),
@@ -118,10 +120,10 @@ object TestClubMatchSql extends ZIOSpecDefault {
 
   private def testClubMatchSelectMatchIdsForClub = test("selectMatchIdsForClub") {
     for {
-      _     <- ClubMatch.upsert(matchFinished.copy(fetchedAt = Times.t2)) // restore original
-      _     <- ClubMatch.upsert(matchInProgress)
-      idsA  <- ClubMatch.selectMatchIdsForClub(clubA.clubId)
-      idsB  <- ClubMatch.selectMatchIdsForClub(clubB.clubId)
+      _       <- ClubMatch.upsert(matchFinished.copy(fetchedAt = Times.t2)) // restore original
+      _       <- ClubMatch.upsert(matchInProgress)
+      idsA    <- ClubMatch.selectMatchIdsForClub(clubA.clubId)
+      idsB    <- ClubMatch.selectMatchIdsForClub(clubB.clubId)
       idsNone <- ClubMatch.selectMatchIdsForClub(ClubId(999))
     } yield assertTrue(
       idsA == Set(ClubMatchId(1001), ClubMatchId(1002)),
@@ -204,7 +206,7 @@ object TestClubMatchSql extends ZIOSpecDefault {
     for {
       _       <- ClubMatchBoard.insert(noGames)
       results <- ClubMatchBoard.selectMatch(matchFinished.matchId)
-      board3  = results.find(_.board == 3).get
+      board3 = results.find(_.board == 3).get
     } yield assertTrue(
       board3 == noGames,
       board3.game1Winner.isEmpty,
@@ -228,8 +230,8 @@ object TestClubMatchSql extends ZIOSpecDefault {
 
   private def testHistoryPendingMatchInsert = test("HistoryPendingMatch insert with ON CONFLICT DO NOTHING") {
     for {
-      r1 <- HistoryPendingMatch.insert(HistoryPendingMatch(clubA.clubId, ClubMatchId(2001)))
-      r2 <- HistoryPendingMatch.insert(HistoryPendingMatch(clubA.clubId, ClubMatchId(2001))) // duplicate
+      r1  <- HistoryPendingMatch.insert(HistoryPendingMatch(clubA.clubId, ClubMatchId(2001)))
+      r2  <- HistoryPendingMatch.insert(HistoryPendingMatch(clubA.clubId, ClubMatchId(2001))) // duplicate
       ids <- HistoryPendingMatch.selectClub(clubA.clubId)
     } yield assertTrue(
       r1 == 1,
@@ -246,11 +248,13 @@ object TestClubMatchSql extends ZIOSpecDefault {
 
   private def testHistoryPendingMatchBatch = test("HistoryPendingMatch insertBatch") {
     for {
-      _ <- HistoryPendingMatch.insertBatch(List(
-        HistoryPendingMatch(clubA.clubId, ClubMatchId(2002)),
-        HistoryPendingMatch(clubA.clubId, ClubMatchId(2003)),
-        HistoryPendingMatch(clubA.clubId, ClubMatchId(2001)) // duplicate, should be ignored
-      ))
+      _ <- HistoryPendingMatch.insertBatch(
+        List(
+          HistoryPendingMatch(clubA.clubId, ClubMatchId(2002)),
+          HistoryPendingMatch(clubA.clubId, ClubMatchId(2003)),
+          HistoryPendingMatch(clubA.clubId, ClubMatchId(2001)) // duplicate, should be ignored
+        )
+      )
       count <- HistoryPendingMatch.count(clubA.clubId)
       ids   <- HistoryPendingMatch.selectClub(clubA.clubId)
     } yield assertTrue(
@@ -267,7 +271,7 @@ object TestClubMatchSql extends ZIOSpecDefault {
 
   private def testHistoryPendingMatchDelete = test("HistoryPendingMatch delete") {
     for {
-      deleted  <- HistoryPendingMatch.delete(clubA.clubId, ClubMatchId(2001))
+      deleted   <- HistoryPendingMatch.delete(clubA.clubId, ClubMatchId(2001))
       remaining <- HistoryPendingMatch.count(clubA.clubId)
     } yield assertTrue(
       deleted == 1,
@@ -279,11 +283,11 @@ object TestClubMatchSql extends ZIOSpecDefault {
 
   private def testHistoryMemberQueryInsert = test("HistoryMemberQuery insert and upsert") {
     for {
-      _ <- HistoryMemberQuery.insert(HistoryMemberQuery(clubA.clubId, player0.playerId, Times.t1))
-      _ <- HistoryMemberQuery.insert(HistoryMemberQuery(clubA.clubId, player1.playerId, Times.t1))
+      _   <- HistoryMemberQuery.insert(HistoryMemberQuery(clubA.clubId, player0.playerId, Times.t1))
+      _   <- HistoryMemberQuery.insert(HistoryMemberQuery(clubA.clubId, player1.playerId, Times.t1))
       ids <- HistoryMemberQuery.selectClubPlayerIds(clubA.clubId)
       // Upsert same player with new timestamp
-      _ <- HistoryMemberQuery.insert(HistoryMemberQuery(clubA.clubId, player0.playerId, Times.t2))
+      _        <- HistoryMemberQuery.insert(HistoryMemberQuery(clubA.clubId, player0.playerId, Times.t2))
       idsAfter <- HistoryMemberQuery.selectClubPlayerIds(clubA.clubId)
     } yield assertTrue(
       ids == Set(player0.playerId, player1.playerId),

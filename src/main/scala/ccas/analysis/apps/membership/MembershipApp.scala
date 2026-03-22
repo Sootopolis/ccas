@@ -315,7 +315,7 @@ object MembershipApp extends ZIOAppDefault {
 
       client.get[ApiPlayer](ApiPlayer.getUrl(oldUsername)).foldZIO(
         _ => matchRefFallback(client, acc, state, closedMember, apiMap, clubUrlName, now),
-        apiPlayer => {
+        apiPlayer =>
           if (apiPlayer.playerId != playerId) {
             matchRefFallback(client, acc, state, closedMember, apiMap, clubUrlName, now)
           } else {
@@ -341,12 +341,12 @@ object MembershipApp extends ZIOAppDefault {
                 acc.copy(
                   changes = acc.changes :+ summary,
                   newSnapshots = acc.newSnapshots ++ snapshots,
-                  closedMemberships = if (stillMember) { acc.closedMemberships } else { acc.closedMemberships :+ closedMember }
+                  closedMemberships = if (stillMember) { acc.closedMemberships }
+                  else { acc.closedMemberships :+ closedMember }
                 )
               }
             }
           }
-        }
       )
     }
   }
@@ -451,7 +451,8 @@ object MembershipApp extends ZIOAppDefault {
     oldUsername: Username
   ): Task[Option[Username]] =
     client.get[ApiDailyMatch](ApiDailyMatch.getUrl(ref.matchId)).map { dailyMatch =>
-      val team        = if (ref.teamIdx == 1) { dailyMatch.teams.team1 } else { dailyMatch.teams.team2 }
+      val team = if (ref.teamIdx == 1) { dailyMatch.teams.team1 }
+      else { dailyMatch.teams.team2 }
       val boardSuffix = s"/${ref.boardIdx}"
       team.players.collectFirst {
         case p: ApiDailyMatch.ApiDailyMatchPlayerStarted if p.board.path.toString.endsWith(boardSuffix) => p.username
@@ -478,7 +479,8 @@ object MembershipApp extends ZIOAppDefault {
       refOpt  <- ZIO.foreach(clubOpt)(club => ClubMatchRef.selectId(club.clubId)).map(_.flatten)
       result <- ZIO.foreach(refOpt) { ref =>
         client.get[ApiDailyMatch](ApiDailyMatch.getUrl(ref.matchId)).map { dailyMatch =>
-          val team       = if (ref.teamIdx == 1) { dailyMatch.teams.team1 } else { dailyMatch.teams.team2 }
+          val team = if (ref.teamIdx == 1) { dailyMatch.teams.team1 }
+          else { dailyMatch.teams.team2 }
           team.`@id`.path.segments.lastOption.map(ClubUrlName.wrap).filter(_ != oldUrlName)
         }
       }.map(_.flatten)
@@ -537,7 +539,7 @@ object MembershipApp extends ZIOAppDefault {
       _ <- ZIO.foreachDiscard(summary.changes)(change => ZIO.logInfo(s"  ${formatChange(change)}"))
     } yield ()
 
-  private def formatChange(change: MemberChange): String = change match
+  private def formatChange(change: MemberChange): String = change match {
     case NewMember(ts)                 => s"[NEW MEMBER] at $ts"
     case JoinedClub(ts)                => s"[JOINED CLUB] at $ts"
     case LeftClub(ts)                  => s"[LEFT CLUB] at $ts"
@@ -546,6 +548,7 @@ object MembershipApp extends ZIOAppDefault {
     case Unresolvable(ts, oldUsername) => s"[UNRESOLVABLE] at $ts — old username: $oldUsername"
     case UsernameChange(ts, oldName)   => s"[USERNAME CHANGE] at $ts — was: $oldName"
     case StatusChange(ts, oldStatus)   => s"[STATUS CHANGE] at $ts — was: $oldStatus"
+  }
 
   // --- File output formatting ---
 
@@ -563,8 +566,8 @@ object MembershipApp extends ZIOAppDefault {
   }
 
   private def formatReport(rr: ReportResult): String = {
-    val delta = rr.memberCountAtEnd - rr.memberCountAtStart
-    val sign  = if (delta >= 0) "+" else ""
+    val delta  = rr.memberCountAtEnd - rr.memberCountAtStart
+    val sign   = if (delta >= 0) "+" else ""
     val header = s"Total members: ${rr.memberCountAtEnd} ($sign$delta)\n\n"
     if (rr.summaries.isEmpty) { header + "No changes\n" }
     else { header + formatChangeSummaries(rr.summaries) }
@@ -594,7 +597,7 @@ object MembershipApp extends ZIOAppDefault {
       clubId = club.clubId
       members <- ClubMember.selectClub(clubId)
       snaps   <- PlayerSnapshot.selectSince(since)
-      summaries = classifyFromDb(clubId, members, snaps, since, until)
+      summaries    = classifyFromDb(clubId, members, snaps, since, until)
       countAtStart = members.count(m => !m.since.isAfter(since) && m.until.forall(_.isAfter(since)))
       countAtEnd   = members.count(m => !m.since.isAfter(until) && m.until.forall(_.isAfter(until)))
       _ <- ZIO.logInfo(s"=== Report for $clubUrlName from $since to $until ===")
@@ -633,8 +636,7 @@ object MembershipApp extends ZIOAppDefault {
           if (priorMemberships.nonEmpty) {
             val latestPrior = priorMemberships.maxBy(_.since)
             changes += Rejoined(cm.since, latestPrior.until.getOrElse(latestPrior.since))
-          }
-          else {
+          } else {
             // Check if player has snapshots before this membership — existing player joining club
             val priorSnaps = playerSnaps.filter(_.since.isBefore(cm.since))
             if (priorSnaps.nonEmpty) { changes += JoinedClub(cm.since) }
@@ -649,8 +651,8 @@ object MembershipApp extends ZIOAppDefault {
             val latestSnap = playerSnaps.filter(s => !s.since.isAfter(u)).lastOption
             latestSnap match {
               case Some(snap) if snap.status != PlayerStatusCategory.Active => changes += AccountClosed(u, snap.status)
-              case Some(_) => changes += LeftClub(u)
-              case None =>
+              case Some(_)                                                  => changes += LeftClub(u)
+              case None                                                     =>
                 // No snapshot found near the closure — unresolvable
                 val username = playerSnaps.headOption.fold(Username.wrap("unknown"))(_.username)
                 changes += Unresolvable(u, username)

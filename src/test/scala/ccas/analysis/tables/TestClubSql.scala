@@ -199,12 +199,12 @@ object TestClubSql extends ZIOSpecDefault {
 
   private def testReplaceSince = test("ClubMember.replaceSince replaces approximate since with authoritative") {
     val approxMember = ClubMember(clubA.clubId, player0.playerId, Timestamps.t0, None, sinceApproximate = true)
-    val newSince = Timestamps.t1
+    val newSince     = Timestamps.t1
     for {
-      _ <- ClubMember.deleteAll
-      _ <- ClubMember.insert(approxMember)
+      _       <- ClubMember.deleteAll
+      _       <- ClubMember.insert(approxMember)
       updated <- ClubMember.replaceSince(clubA.clubId, player0.playerId, Timestamps.t0, newSince)
-      result <- ClubMember.selectClub(clubA.clubId)
+      result  <- ClubMember.selectClub(clubA.clubId)
       // Verify it does not replace a non-approximate member
       _ <- ClubMember.deleteAll
       _ <- ClubMember.insert(ClubMember(clubA.clubId, player0.playerId, Timestamps.t0, None, sinceApproximate = false))

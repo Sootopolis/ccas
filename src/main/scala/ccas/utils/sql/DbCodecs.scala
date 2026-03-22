@@ -11,7 +11,8 @@ object DbCodecs {
     override def cols: IArray[Int] = IArray(Types.TIMESTAMP_WITH_TIMEZONE)
     override def readSingle(rs: ResultSet, pos: Int): Instant =
       val odt = rs.getObject(pos, classOf[java.time.OffsetDateTime])
-      if (odt == null) { null } else { odt.toInstant }
+      if (odt == null) { null }
+      else { odt.toInstant }
     override def writeSingle(value: Instant, ps: PreparedStatement, pos: Int): Unit =
       ps.setObject(pos, value.atOffset(java.time.ZoneOffset.UTC))
     override def queryRepr: String = "?"
@@ -25,9 +26,10 @@ object DbCodecs {
           _ => throw new IllegalStateException(s"Malformed URL in database: $string"),
           identity
         )
-      }
-    ,
-    url => if (url == null) { null } else { url.encode }
+      },
+    url =>
+      if (url == null) { null }
+      else { url.encode }
   )
 
   given DbCodec[List[String]] = new DbCodec[List[String]] {

@@ -68,7 +68,7 @@ object MatchRefApp extends ZIOAppDefault {
   ): RIO[Transactor, Option[PlayerMatchRef]] =
     (for {
       playerMatches <- client.get[ApiPlayerMatches](ApiPlayerMatches.getUrl(player.username))
-      ref <- playerMatches.finished.find(_.board.isDefined) match
+      ref <- playerMatches.finished.find(_.board.isDefined) match {
         case None => ZIO.logInfo(s"  ${player.username}: no finished match with board").as(None)
         case Some(m) =>
           val matchId  = ClubMatchId.wrap(m.`@id`.path.segments.last.toLong)
@@ -82,6 +82,7 @@ object MatchRefApp extends ZIOAppDefault {
                 PlayerMatchRef.upsert(ref).as(Some(ref))
             }
           } yield result
+      }
     } yield ref).catchAll(error => ZIO.logWarning(s"  ${player.username}: error — ${error.getMessage}").as(None))
 
   private def fetchMatch(

@@ -3,7 +3,6 @@ package ccas.utils
 import java.nio.file.{Files, Path, Paths}
 import java.time.format.DateTimeFormatter
 import java.time.LocalDateTime
-
 import scala.util.Using
 
 import zio.{Task, ZIO}
@@ -26,9 +25,9 @@ object OutputFile {
   def writeAndLog(appName: String, clubUrlName: ClubUrlName, content: String): Task[Unit] =
     write(appName, clubUrlName, content).flatMap(path => ZIO.logInfo(s"Output written to $path"))
 
-  private def archiveExisting(clubDir: Path, appName: String): Unit = {
+  private def archiveExisting(clubDir: Path, appName: String): Unit =
     if (Files.exists(clubDir)) {
-      val suffix    = s"-$appName.txt"
+      val suffix     = s"-$appName.txt"
       val archiveDir = clubDir.resolve("archive")
       Using(Files.list(clubDir)) { stream =>
         stream
@@ -39,5 +38,4 @@ object OutputFile {
           }
       }: Unit
     }
-  }
 }

@@ -35,7 +35,7 @@ object TestHistoryApp extends ZIOSpecDefault {
 
   private def testClubMatchIdFromUrl = test("ClubMatchId.fromUrl extracts match ID from API URL") {
     val apiUrl = url("https://api.chess.com/pub/match/1650919")
-    val id = ClubMatchId.fromUrl(apiUrl)
+    val id     = ClubMatchId.fromUrl(apiUrl)
     assertTrue(ClubMatchId.unwrap(id) == 1650919L)
   }
 
@@ -67,9 +67,9 @@ object TestHistoryApp extends ZIOSpecDefault {
   private def testBuildClubMatchRowFinished = test("buildClubMatchRow correctly maps a finished match") {
     matchFixture.map { m =>
       val matchId = ClubMatchId.fromUrl(m.`@id`)
-      val clubId = ClubId(100)
-      val oppId = Some(ClubId(200))
-      val row = HistoryApp.buildClubMatchRow(matchId, m, clubId, ourTeamIdx = 1, opponentClubId = oppId)
+      val clubId  = ClubId(100)
+      val oppId   = Some(ClubId(200))
+      val row     = HistoryApp.buildClubMatchRow(matchId, m, clubId, ourTeamIdx = 1, opponentClubId = oppId)
 
       assertTrue(
         row.matchId == ClubMatchId(1650919),
@@ -94,9 +94,9 @@ object TestHistoryApp extends ZIOSpecDefault {
   private def testBuildClubMatchRowTeam2IsOurs = test("buildClubMatchRow swaps club IDs when we are team2") {
     matchFixture.map { m =>
       val matchId = ClubMatchId.fromUrl(m.`@id`)
-      val clubId = ClubId(200)
-      val oppId = Some(ClubId(100))
-      val row = HistoryApp.buildClubMatchRow(matchId, m, clubId, ourTeamIdx = 2, opponentClubId = oppId)
+      val clubId  = ClubId(200)
+      val oppId   = Some(ClubId(100))
+      val row     = HistoryApp.buildClubMatchRow(matchId, m, clubId, ourTeamIdx = 2, opponentClubId = oppId)
 
       assertTrue(
         row.team1ClubId == oppId,
@@ -111,25 +111,26 @@ object TestHistoryApp extends ZIOSpecDefault {
   private val registeredFixture =
     readJsonLinesAs[ApiDailyMatch]("data/test/api/matchRegistered.json").runHead.someOrFailException
 
-  private def testBuildClubMatchRowInProgress = test("buildClubMatchRow maps in-progress match with no endTime/results") {
-    inProgressFixture.map { m =>
-      val matchId = ClubMatchId.fromUrl(m.`@id`)
-      val row = HistoryApp.buildClubMatchRow(matchId, m, ClubId(100), ourTeamIdx = 1, opponentClubId = None)
+  private def testBuildClubMatchRowInProgress =
+    test("buildClubMatchRow maps in-progress match with no endTime/results") {
+      inProgressFixture.map { m =>
+        val matchId = ClubMatchId.fromUrl(m.`@id`)
+        val row     = HistoryApp.buildClubMatchRow(matchId, m, ClubId(100), ourTeamIdx = 1, opponentClubId = None)
 
-      assertTrue(
-        row.status == ClubMatchStatus.InProgress,
-        row.startTime.isDefined,
-        row.endTime.isEmpty,
-        row.team1Result.isEmpty,
-        row.team2Result.isEmpty
-      )
+        assertTrue(
+          row.status == ClubMatchStatus.InProgress,
+          row.startTime.isDefined,
+          row.endTime.isEmpty,
+          row.team1Result.isEmpty,
+          row.team2Result.isEmpty
+        )
+      }
     }
-  }
 
   private def testBuildClubMatchRowRegistered = test("buildClubMatchRow maps registered match with optional startTime") {
     registeredFixture.map { m =>
       val matchId = ClubMatchId.fromUrl(m.`@id`)
-      val row = HistoryApp.buildClubMatchRow(matchId, m, ClubId(100), ourTeamIdx = 1, opponentClubId = None)
+      val row     = HistoryApp.buildClubMatchRow(matchId, m, ClubId(100), ourTeamIdx = 1, opponentClubId = None)
 
       assertTrue(
         row.status == ClubMatchStatus.Registration,
@@ -189,7 +190,9 @@ object TestHistoryApp extends ZIOSpecDefault {
   private def suiteNormalizeGameOutcome = suite("normalizeGameOutcome")(
     test("white wins → winner is white's team, detail is loss reason") {
       val (winner, detail) = HistoryApp.normalizeGameOutcome(
-        Some(GameResultDetail.Win), Some(GameResultDetail.Checkmated), whiteTeamIsTeam1 = true
+        Some(GameResultDetail.Win),
+        Some(GameResultDetail.Checkmated),
+        whiteTeamIsTeam1 = true
       )
       assertTrue(
         winner.contains(BoardGameWinner.Team1),
@@ -198,7 +201,9 @@ object TestHistoryApp extends ZIOSpecDefault {
     },
     test("black wins → winner is black's team, detail is loss reason") {
       val (winner, detail) = HistoryApp.normalizeGameOutcome(
-        Some(GameResultDetail.Resigned), Some(GameResultDetail.Win), whiteTeamIsTeam1 = true
+        Some(GameResultDetail.Resigned),
+        Some(GameResultDetail.Win),
+        whiteTeamIsTeam1 = true
       )
       assertTrue(
         winner.contains(BoardGameWinner.Team2),
@@ -207,7 +212,9 @@ object TestHistoryApp extends ZIOSpecDefault {
     },
     test("draw → winner is Draw, detail is draw reason") {
       val (winner, detail) = HistoryApp.normalizeGameOutcome(
-        Some(GameResultDetail.Stalemate), Some(GameResultDetail.Stalemate), whiteTeamIsTeam1 = true
+        Some(GameResultDetail.Stalemate),
+        Some(GameResultDetail.Stalemate),
+        whiteTeamIsTeam1 = true
       )
       assertTrue(
         winner.contains(BoardGameWinner.Draw),
@@ -220,7 +227,9 @@ object TestHistoryApp extends ZIOSpecDefault {
     },
     test("whiteTeamIsTeam1=false flips winner mapping") {
       val (winner, detail) = HistoryApp.normalizeGameOutcome(
-        Some(GameResultDetail.Win), Some(GameResultDetail.Timeout), whiteTeamIsTeam1 = false
+        Some(GameResultDetail.Win),
+        Some(GameResultDetail.Timeout),
+        whiteTeamIsTeam1 = false
       )
       assertTrue(
         winner.contains(BoardGameWinner.Team2),
@@ -229,7 +238,9 @@ object TestHistoryApp extends ZIOSpecDefault {
     },
     test("whiteTeamIsTeam1=false black wins → Team1") {
       val (winner, detail) = HistoryApp.normalizeGameOutcome(
-        Some(GameResultDetail.Resigned), Some(GameResultDetail.Win), whiteTeamIsTeam1 = false
+        Some(GameResultDetail.Resigned),
+        Some(GameResultDetail.Win),
+        whiteTeamIsTeam1 = false
       )
       assertTrue(
         winner.contains(BoardGameWinner.Team1),
@@ -243,57 +254,73 @@ object TestHistoryApp extends ZIOSpecDefault {
   private def suiteComputeScoreX2 = suite("computeScoreX2")(
     test("normal scoring: team1 wins both games") {
       val (t1, t2) = HistoryApp.computeScoreX2(
-        Some(BoardGameWinner.Team1), Some(BoardGameWinner.Team1),
-        team1FairPlay = false, team2FairPlay = false
+        Some(BoardGameWinner.Team1),
+        Some(BoardGameWinner.Team1),
+        team1FairPlay = false,
+        team2FairPlay = false
       )
       assertTrue(t1 == 4.toShort, t2 == 0.toShort)
     },
     test("normal scoring: split results") {
       val (t1, t2) = HistoryApp.computeScoreX2(
-        Some(BoardGameWinner.Team1), Some(BoardGameWinner.Team2),
-        team1FairPlay = false, team2FairPlay = false
+        Some(BoardGameWinner.Team1),
+        Some(BoardGameWinner.Team2),
+        team1FairPlay = false,
+        team2FairPlay = false
       )
       assertTrue(t1 == 2.toShort, t2 == 2.toShort)
     },
     test("normal scoring: both draws") {
       val (t1, t2) = HistoryApp.computeScoreX2(
-        Some(BoardGameWinner.Draw), Some(BoardGameWinner.Draw),
-        team1FairPlay = false, team2FairPlay = false
+        Some(BoardGameWinner.Draw),
+        Some(BoardGameWinner.Draw),
+        team1FairPlay = false,
+        team2FairPlay = false
       )
       assertTrue(t1 == 2.toShort, t2 == 2.toShort)
     },
     test("team1 banned: team2 gets 2 per game") {
       val (t1, t2) = HistoryApp.computeScoreX2(
-        Some(BoardGameWinner.Team2), Some(BoardGameWinner.Team2),
-        team1FairPlay = true, team2FairPlay = false
+        Some(BoardGameWinner.Team2),
+        Some(BoardGameWinner.Team2),
+        team1FairPlay = true,
+        team2FairPlay = false
       )
       assertTrue(t1 == 0.toShort, t2 == 4.toShort)
     },
     test("team2 banned: team1 gets 2 per game") {
       val (t1, t2) = HistoryApp.computeScoreX2(
-        Some(BoardGameWinner.Team2), Some(BoardGameWinner.Team2),
-        team1FairPlay = false, team2FairPlay = true
+        Some(BoardGameWinner.Team2),
+        Some(BoardGameWinner.Team2),
+        team1FairPlay = false,
+        team2FairPlay = true
       )
       assertTrue(t1 == 4.toShort, t2 == 0.toShort)
     },
     test("both players banned: each gets 1 per game") {
       val (t1, t2) = HistoryApp.computeScoreX2(
-        Some(BoardGameWinner.Team1), Some(BoardGameWinner.Team1),
-        team1FairPlay = true, team2FairPlay = true
+        Some(BoardGameWinner.Team1),
+        Some(BoardGameWinner.Team1),
+        team1FairPlay = true,
+        team2FairPlay = true
       )
       assertTrue(t1 == 2.toShort, t2 == 2.toShort)
     },
     test("game not played: both get 0") {
       val (t1, t2) = HistoryApp.computeScoreX2(
-        None, None,
-        team1FairPlay = false, team2FairPlay = false
+        None,
+        None,
+        team1FairPlay = false,
+        team2FairPlay = false
       )
       assertTrue(t1 == 0.toShort, t2 == 0.toShort)
     },
     test("one game played, one not") {
       val (t1, t2) = HistoryApp.computeScoreX2(
-        Some(BoardGameWinner.Team1), None,
-        team1FairPlay = false, team2FairPlay = false
+        Some(BoardGameWinner.Team1),
+        None,
+        team1FairPlay = false,
+        team2FairPlay = false
       )
       assertTrue(t1 == 2.toShort, t2 == 0.toShort)
     }

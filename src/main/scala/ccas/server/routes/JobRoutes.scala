@@ -98,10 +98,11 @@ object JobRoutes {
     catch { case e: Exception => Left(s"Invalid instant: $s (${e.getMessage})") }
   }
 
-  private def handleJobError(error: Throwable): Response = error match
+  private def handleJobError(error: Throwable): Response = error match {
     case e: JobConflictException => jsonResponse(Status.Conflict, ErrorResponse(e.getMessage))
     case e: ExternalException    => jsonResponse(Status.BadRequest, ErrorResponse(e.getMessage))
     case e                       => jsonResponse(Status.InternalServerError, ErrorResponse(e.getMessage))
+  }
 
   // --- Routes ---
 
@@ -171,10 +172,10 @@ object JobRoutes {
         runner <- ZIO.service[JobRunner]
         id = JobRunId.wrap(jobId)
         jobOpt <- runner.status(id)
-      } yield jobOpt match
+      } yield jobOpt match {
         case Some(job) => jsonResponse(Status.Ok, JobStatusResponse.fromJobRun(job))
         case None      => jsonResponse(Status.NotFound, ErrorResponse(s"Job $jobId not found"))
-      ).catchAll(e => ZIO.succeed(handleJobError(e)))
+      }).catchAll(e => ZIO.succeed(handleJobError(e)))
     }
   )
 }

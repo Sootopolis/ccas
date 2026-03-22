@@ -1790,10 +1790,16 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         // Seed prior run with a Deferred candidate (need Player + Snapshot)
         _ <- seedPlayer(PlayerId(500))
         _ <- PlayerSnapshot.insert(
-          PlayerSnapshot(PlayerId(500), Times.t0, Username.wrap("prio-deferred"), ccas.api.misc.enums.PlayerStatusCategory.Active, None)
+          PlayerSnapshot(
+            PlayerId(500),
+            Times.t0,
+            Username.wrap("prio-deferred"),
+            ccas.api.misc.enums.PlayerStatusCategory.Active,
+            None
+          )
         )
         priorRunId <- RecruitmentRun.insert(clubId, criteriaId, Times.t0)
-        _ <- RecruitmentRun.update(RecruitmentRun(priorRunId, clubId, criteriaId, Times.t0, Some(Times.t1), 0))
+        _          <- RecruitmentRun.update(RecruitmentRun(priorRunId, clubId, criteriaId, Times.t0, Some(Times.t1), 0))
         _ <- RecruitmentCandidate.insert(
           RecruitmentCandidate(priorRunId, PlayerId(500), Times.t0, CandidateOutcome.Deferred, None)
         )
@@ -1807,7 +1813,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
 
         // The deferred candidate should now have an Invited outcome in the new run
         newCandidates <- RecruitmentCandidate.selectByRun(result.runId)
-        newInvited = newCandidates.filter(_.outcome == CandidateOutcome.Invited)
+        newInvited     = newCandidates.filter(_.outcome == CandidateOutcome.Invited)
         newInvitedPids = newInvited.map(_.playerId).toSet
 
         // After the new run, selectDeferredByClub should no longer return the candidate
@@ -1825,14 +1831,20 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       for {
         _          <- seedDb
         criteriaId <- seedCriteria(criteria)
-        _ <- seedPlayer(PlayerId(600))
+        _          <- seedPlayer(PlayerId(600))
         _ <- PlayerSnapshot.insert(
-          PlayerSnapshot(PlayerId(600), Times.t0, Username.wrap("resolved-player"), ccas.api.misc.enums.PlayerStatusCategory.Active, None)
+          PlayerSnapshot(
+            PlayerId(600),
+            Times.t0,
+            Username.wrap("resolved-player"),
+            ccas.api.misc.enums.PlayerStatusCategory.Active,
+            None
+          )
         )
 
         // Run 1: candidate is Deferred
         runId1 <- RecruitmentRun.insert(clubId, criteriaId, Times.t0)
-        _ <- RecruitmentRun.update(RecruitmentRun(runId1, clubId, criteriaId, Times.t0, Some(Times.t1), 0))
+        _      <- RecruitmentRun.update(RecruitmentRun(runId1, clubId, criteriaId, Times.t0, Some(Times.t1), 0))
         _ <- RecruitmentCandidate.insert(
           RecruitmentCandidate(runId1, PlayerId(600), Times.t0, CandidateOutcome.Deferred, None)
         )
@@ -1842,7 +1854,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
 
         // Run 2: same candidate is Invited (later timestamp)
         runId2 <- RecruitmentRun.insert(clubId, criteriaId, Times.t2)
-        _ <- RecruitmentRun.update(RecruitmentRun(runId2, clubId, criteriaId, Times.t2, Some(Times.t3), 1))
+        _      <- RecruitmentRun.update(RecruitmentRun(runId2, clubId, criteriaId, Times.t2, Some(Times.t3), 1))
         _ <- RecruitmentCandidate.insert(
           RecruitmentCandidate(runId2, PlayerId(600), Times.t2, CandidateOutcome.Invited, None)
         )

@@ -57,7 +57,7 @@ object JobScheduler {
         ZIO.fromOption(schedule.clubUrlName)
           .orElseFail(new IllegalStateException(s"${schedule.kind} schedule missing clubUrlName"))
 
-      val effect = schedule.kind match
+      val effect = schedule.kind match {
         case JobKind.Recruitment =>
           requireClubUrlName.flatMap(name => RecruitmentApp.recruit(name, "default", timeLimitMinutes = Some(30)).unit)
         case JobKind.Membership =>
@@ -66,6 +66,7 @@ object JobScheduler {
           MatchRefApp.populate
         case JobKind.History =>
           requireClubUrlName.flatMap(name => HistoryApp.discover(name).unit)
+      }
 
       runner.submit(schedule.kind, schedule.clubUrlName, schedule.params, effect)
         .provideEnvironment(env) *>

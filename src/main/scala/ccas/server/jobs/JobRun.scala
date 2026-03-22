@@ -78,13 +78,14 @@ object JobRun {
   def selectRunning(kind: JobKind, clubUrlName: Option[ClubUrlName]): ZIO[Transactor, SQLException, Option[JobRun]] =
     connectZIO {
       val running = JobRunStatus.Running
-      clubUrlName match
+      clubUrlName match {
         case Some(name) =>
           sql"SELECT $selectCols FROM job_run WHERE kind = $kind AND club_url_name = $name AND status = $running"
             .query[JobRun].run().headOption
         case None =>
           sql"SELECT $selectCols FROM job_run WHERE kind = $kind AND club_url_name IS NULL AND status = $running"
             .query[JobRun].run().headOption
+      }
     }
 
   def selectRecent(limit: Int): ZIO[Transactor, SQLException, List[JobRun]] =

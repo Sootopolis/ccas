@@ -82,9 +82,10 @@ object JobRunner {
           JobRun.updateStatus(id, JobRunStatus.Completed, Some(Instant.now()), None)
             .provideEnvironment(env)
             .unit.orDie
-        val followUp = ZIO.whenDiscard(kind == JobKind.Recruitment || kind == JobKind.Membership || kind == JobKind.History)(
-          submitMatchRef.provideEnvironment(env).ignore
-        )
+        val followUp =
+          ZIO.whenDiscard(kind == JobKind.Recruitment || kind == JobKind.Membership || kind == JobKind.History)(
+            submitMatchRef.provideEnvironment(env).ignore
+          )
         complete *> followUp
       }
 

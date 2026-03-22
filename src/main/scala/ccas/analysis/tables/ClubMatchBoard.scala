@@ -29,8 +29,8 @@ final case class ClubMatchBoard(
 object ClubMatchBoard {
   private val selectCols = SqlLiteral(
     "match_id, board, team1_player_id, team1_username, team1_fair_play, " +
-    "team2_player_id, team2_username, team2_fair_play, " +
-    "game1_winner, game1_detail, game2_winner, game2_detail, team1_score_x2, team2_score_x2"
+      "team2_player_id, team2_username, team2_fair_play, " +
+      "game1_winner, game1_detail, game2_winner, game2_detail, team1_score_x2, team2_score_x2"
   )
 
   def createTable: ZIO[Transactor, SQLException, Int] =

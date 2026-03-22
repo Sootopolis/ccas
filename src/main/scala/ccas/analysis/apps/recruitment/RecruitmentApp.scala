@@ -25,7 +25,7 @@ object RecruitmentApp extends ZIOAppDefault {
   private val DefaultTarget             = 30
   private val DefaultExploreConcurrency = 1
   private val DefaultEvalBatchSize      = 4  // max concurrent evaluations (parallelism)
-  private val DefaultEvalChunkSize     = 32 // candidates per checkpoint (source-switch interval)
+  private val DefaultEvalChunkSize      = 32 // candidates per checkpoint (source-switch interval)
 
   // --- Explore mode types ---
 
@@ -76,7 +76,7 @@ object RecruitmentApp extends ZIOAppDefault {
   override def run: RIO[ZIOAppArgs & Scope, Unit] =
     for {
       args <- ZIOAppArgs.getArgs
-      _ <- (args.toList match
+      _ <- (args.toList match {
         case "report" :: clubStr :: rest =>
           val clubUrlName = ClubUrlName.wrap(clubStr)
           showReport(clubUrlName, rest.headOption).flatMap { case (usernames, evaluatedCount) =>
@@ -118,7 +118,7 @@ object RecruitmentApp extends ZIOAppDefault {
             } yield ()
           }
         case _ => ZIO.fail(ExternalException(help))
-      ).provide(
+      }).provide(
         ChessComClient.live(),
         Client.default,
         DataSourceLayer.liveFromPrefix(onInit = Tables.ensureTables)
@@ -211,10 +211,10 @@ object RecruitmentApp extends ZIOAppDefault {
 
       finalizeRun = (label: String) =>
         for {
-          _         <- ZIO.whenDiscard(showProgress)(ZIO.logInfo(""))
-          _         <- reclassifyExcessInvited(ctx)
-          invited   <- invitedRef.get.map(_.reverse)
-          evalCount <- evalCountRef.get
+          _             <- ZIO.whenDiscard(showProgress)(ZIO.logInfo(""))
+          _             <- reclassifyExcessInvited(ctx)
+          invited       <- invitedRef.get.map(_.reverse)
+          evalCount     <- evalCountRef.get
           deferredCount <- RecruitmentCandidate.selectDeferredCountByRun(runId)
           completedAt = Instant.now()
           finalRun    = RecruitmentRun(runId, clubId, criteria.criteriaId, now, Some(completedAt), invited.size)
@@ -680,9 +680,9 @@ object RecruitmentApp extends ZIOAppDefault {
         ZIO.foreachPar(months) { ym =>
           client.get[ApiPlayerArchive](ApiPlayerArchive.getUrl(username, ym.getYear, ym.getMonthValue))
         }.map { archives =>
-          archives.flatMap(_.games.filter(g =>
-            g.timeClass == "daily" && g.`match`.isDefined && g.endTime >= cutoff.getEpochSecond
-          )).flatMap { g =>
+          archives.flatMap(
+            _.games.filter(g => g.timeClass == "daily" && g.`match`.isDefined && g.endTime >= cutoff.getEpochSecond)
+          ).flatMap { g =>
             val isWhite        = g.white.username.equalsIgnoreCase(username)
             val opponentResult = if (isWhite) g.black.result else g.white.result
             val opponentName   = if (isWhite) g.black.username else g.white.username
@@ -692,8 +692,9 @@ object RecruitmentApp extends ZIOAppDefault {
       }
       allOpponents = opponentSets.foldLeft(Set.empty[Username])(_ ++ _)
       _ <- ZIO.logInfo(s"[Explore] Candidate opponents strategy found ${allOpponents.size} opponents")
-    } yield if (allOpponents.isEmpty) Nil
-            else List(UsernameSource("db-candidate-opponents", allOpponents.toList))
+    } yield
+      if (allOpponents.isEmpty) Nil
+      else List(UsernameSource("db-candidate-opponents", allOpponents.toList))
   }
 
   // --- Helpers ---

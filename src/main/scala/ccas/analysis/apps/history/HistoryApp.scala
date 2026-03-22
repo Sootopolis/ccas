@@ -81,8 +81,19 @@ object HistoryApp extends ZIOAppDefault {
         playersFailed     <- Ref.make(0)
         failedMatches     <- Ref.make(List.empty[(ClubMatchId, String)])
       } yield new ProcessingContext(
-        client, clubId, clubUrlName, matchCache, discoveryCache, knownPlayers, newPlayers,
-        matchesProcessed, matchesFailed, playersDiscovered, playersKnown, playersFailed, failedMatches
+        client,
+        clubId,
+        clubUrlName,
+        matchCache,
+        discoveryCache,
+        knownPlayers,
+        newPlayers,
+        matchesProcessed,
+        matchesFailed,
+        playersDiscovered,
+        playersKnown,
+        playersFailed,
+        failedMatches
       )
   }
 
@@ -121,12 +132,12 @@ object HistoryApp extends ZIOAppDefault {
       club <- Club.selectByUrlName(clubUrlName)
         .someOrFail(ExternalException(s"Club '$clubUrlName' not found"))
       clubId = club.clubId
-      allMembers    <- ClubMember.selectClub(clubId)
-      latestSnaps   <- PlayerSnapshot.selectLatest
-      processedIds  <- ClubMatch.selectMatchIdsForClub(clubId)
-      queriedIds    <- HistoryMemberQuery.selectClubPlayerIds(clubId)
-      startedAt      = Instant.now()
-      runId         <- HistoryRun.insert(clubId, startedAt)
+      allMembers   <- ClubMember.selectClub(clubId)
+      latestSnaps  <- PlayerSnapshot.selectLatest
+      processedIds <- ClubMatch.selectMatchIdsForClub(clubId)
+      queriedIds   <- HistoryMemberQuery.selectClubPlayerIds(clubId)
+      startedAt = Instant.now()
+      runId <- HistoryRun.insert(clubId, startedAt)
       snapByPlayerId = latestSnaps.map(s => s.playerId -> s).toMap
       _ <- ZIO.logInfo(
         s"  Members: ${allMembers.size}, Processed matches: ${processedIds.size}, Queried members: ${queriedIds.size}"
@@ -137,7 +148,9 @@ object HistoryApp extends ZIOAppDefault {
       _ <- ZIO.whenDiscard(full) {
         ZIO.logInfo("  --full: clearing member query history") *> HistoryMemberQuery.deleteClub(clubId)
       }
-      effectiveQueriedIds = if (full) { Set.empty[PlayerId] } else { queriedIds }
+      effectiveQueriedIds =
+        if (full) { Set.empty[PlayerId] }
+        else { queriedIds }
 
       seedClub <- seedFromClubMatches(client, clubId, clubUrlName)
       _        <- ZIO.logInfo(s"  Club matches endpoint: $seedClub new match IDs")
@@ -150,12 +163,12 @@ object HistoryApp extends ZIOAppDefault {
       )
 
       seedStale <- seedStaleMatches(clubId, refresh)
-      _ <- ZIO.logInfo(s"  Stale match refresh: $seedStale matches queued")
+      _         <- ZIO.logInfo(s"  Stale match refresh: $seedStale matches queued")
 
       // === Phase 3: Process matches (BFS waves) ===
       _ <- ZIO.logInfo("Phase 3: Processing matches...")
       knownPlayersInit = latestSnaps.map(s => Username.unwrap(s.username).toLowerCase -> s.playerId).toMap
-      ctx <- ProcessingContext.make(client, clubId, clubUrlName, knownPlayersInit)
+      ctx       <- ProcessingContext.make(client, clubId, clubUrlName, knownPlayersInit)
       waveStats <- processWaves(ctx)
 
       // === Phase 4: Finalize ===
@@ -203,7 +216,7 @@ object HistoryApp extends ZIOAppDefault {
       counterRef <- Ref.make(0)
       seedRef    <- Ref.make(0)
       failRef    <- Ref.make(0)
-      total       = toQuery.size
+      total = toQuery.size
       _ <- ZIO.foreachParDiscard(toQuery) { case (playerId, username) =>
         seedMatchesForPlayer(client, clubId, clubUrlName, playerId, username)
           .foldZIO(
@@ -236,8 +249,12 @@ object HistoryApp extends ZIOAppDefault {
   ): RIO[Transactor, Int] =
     for {
       playerMatches <- client.get[ApiPlayerMatches](ApiPlayerMatches.getUrl(username))
-      matchIds = playerMatches.finished.collect { case m if isClubDailyMatch(m, clubUrlName) => ClubMatchId.fromUrl(m.`@id`) } ++
-        playerMatches.inProgress.collect { case m if isClubDailyMatch(m, clubUrlName) => ClubMatchId.fromUrl(m.`@id`) } ++
+      matchIds = playerMatches.finished.collect {
+        case m if isClubDailyMatch(m, clubUrlName) => ClubMatchId.fromUrl(m.`@id`)
+      } ++
+        playerMatches.inProgress.collect {
+          case m if isClubDailyMatch(m, clubUrlName) => ClubMatchId.fromUrl(m.`@id`)
+        } ++
         playerMatches.registered.collect { case m if isClubDailyMatch(m, clubUrlName) => ClubMatchId.fromUrl(m.`@id`) }
       _ <- insertPendingMatchIds(clubId, matchIds)
       _ <- HistoryMemberQuery.insert(HistoryMemberQuery(clubId, playerId, Instant.now()))
@@ -255,12 +272,12 @@ object HistoryApp extends ZIOAppDefault {
     if (refresh) {
       for {
         matchIds <- ClubMatch.selectMatchIdsForClub(clubId)
-        _ <- insertPendingMatchIds(clubId, matchIds)
+        _        <- insertPendingMatchIds(clubId, matchIds)
       } yield matchIds.size
     } else {
       for {
         staleIds <- ClubMatch.selectStaleForClub(clubId)
-        _ <- insertPendingMatchIds(clubId, staleIds)
+        _        <- insertPendingMatchIds(clubId, staleIds)
       } yield staleIds.size
     }
 
@@ -270,39 +287,41 @@ object HistoryApp extends ZIOAppDefault {
     def waveLoop(waveCount: Int, waveDetails: List[(Int, Int)]): RIO[Transactor, RunStats] =
       for {
         pendingCount <- HistoryPendingMatch.count(ctx.clubId)
-        result <- if (pendingCount == 0) {
-          readStats(ctx, waveCount, waveDetails)
-        } else {
-          val wave = waveCount + 1
-          for {
-            _           <- ZIO.logInfo(s"  Wave $wave: $pendingCount matches to process")
-            _           <- ctx.newPlayers.set(Set.empty)
-            beforeCount <- ctx.matchesProcessed.get
+        result <-
+          if (pendingCount == 0) {
+            readStats(ctx, waveCount, waveDetails)
+          } else {
+            val wave = waveCount + 1
+            for {
+              _           <- ZIO.logInfo(s"  Wave $wave: $pendingCount matches to process")
+              _           <- ctx.newPlayers.set(Set.empty)
+              beforeCount <- ctx.matchesProcessed.get
 
-            _ <- processAllPending(ctx)
+              _ <- processAllPending(ctx)
 
-            afterCount <- ctx.matchesProcessed.get
-            failedCount <- ctx.matchesFailed.get
-            waveProcessed = afterCount - beforeCount
-            _ <- ZIO.logInfo(s"  Wave $wave complete: $waveProcessed processed, $failedCount failed total")
+              afterCount  <- ctx.matchesProcessed.get
+              failedCount <- ctx.matchesFailed.get
+              waveProcessed = afterCount - beforeCount
+              _ <- ZIO.logInfo(s"  Wave $wave complete: $waveProcessed processed, $failedCount failed total")
 
-            // Seed matches for newly discovered players
-            newPlayers <- ctx.newPlayers.get
-            _ <- ZIO.whenDiscard(newPlayers.nonEmpty) {
-              ZIO.logInfo(s"  Querying match lists for ${newPlayers.size} discovered players...") *>
-                ZIO.foreachParDiscard(newPlayers) { dp =>
-                  seedMatchesForPlayer(ctx.client, ctx.clubId, ctx.clubUrlName, dp.playerId, dp.username).catchAll {
-                    error => ZIO.logWarning(s"  ${dp.username}: failed to seed — ${error.getMessage}")
+              // Seed matches for newly discovered players
+              newPlayers <- ctx.newPlayers.get
+              _ <- ZIO.whenDiscard(newPlayers.nonEmpty) {
+                ZIO.logInfo(s"  Querying match lists for ${newPlayers.size} discovered players...") *>
+                  ZIO.foreachParDiscard(newPlayers) { dp =>
+                    seedMatchesForPlayer(ctx.client, ctx.clubId, ctx.clubUrlName, dp.playerId, dp.username).catchAll {
+                      error => ZIO.logWarning(s"  ${dp.username}: failed to seed — ${error.getMessage}")
+                    }
                   }
-                }
-            }
+              }
 
-            newPending <- HistoryPendingMatch.count(ctx.clubId)
-            updatedDetails = waveDetails :+ (wave, waveProcessed)
-            r <- if (newPending > 0 && newPlayers.nonEmpty) { waveLoop(wave, updatedDetails) }
-                 else { readStats(ctx, wave, updatedDetails).map(_.copy(pendingRemaining = newPending.toInt)) }
-          } yield r
-        }
+              newPending <- HistoryPendingMatch.count(ctx.clubId)
+              updatedDetails = waveDetails :+ (wave, waveProcessed)
+              r <-
+                if (newPending > 0 && newPlayers.nonEmpty) { waveLoop(wave, updatedDetails) }
+                else { readStats(ctx, wave, updatedDetails).map(_.copy(pendingRemaining = newPending.toInt)) }
+            } yield r
+          }
       } yield result
 
     waveLoop(0, Nil)
@@ -334,8 +353,8 @@ object HistoryApp extends ZIOAppDefault {
               ctx.failedMatches.update(_ :+ (matchId, error.getMessage)) *>
               ZIO.logWarning(s"    Match $matchId: ${error.getMessage}")
           } *> counter.updateAndGet(_ + 1).flatMap { n =>
-            ZIO.whenDiscard(n % 50 == 0 || n == total)(ZIO.logInfo(s"    Progress: $n/$total"))
-          }
+          ZIO.whenDiscard(n % 50 == 0 || n == total)(ZIO.logInfo(s"    Progress: $n/$total"))
+        }
       }
     } yield ()
   }
@@ -347,7 +366,9 @@ object HistoryApp extends ZIOAppDefault {
         .orElseFail(ExternalException(s"Club ${ctx.clubUrlName} not found in match $matchId teams"))
 
       teams = dailyMatch.teams
-      opponentTeam = if (ourTeamIdx == 1) { teams.team2 } else { teams.team1 }
+      opponentTeam =
+        if (ourTeamIdx == 1) { teams.team2 }
+        else { teams.team1 }
 
       opponentClubId <- resolveClubIdFromTeamUrl(opponentTeam.`@id`)
       clubMatch = buildClubMatchRow(matchId, dailyMatch, ctx.clubId, ourTeamIdx, opponentClubId)
@@ -372,11 +393,11 @@ object HistoryApp extends ZIOAppDefault {
     dailyMatch: ApiDailyMatch,
     ourTeamIdx: Int,
     matchStartTime: Option[Instant]
-  ): RIO[Transactor, List[ClubMatchBoard]] = {
+  ): RIO[Transactor, List[ClubMatchBoard]] =
     dailyMatch match {
       case _: ApiDailyMatchRegistered => ZIO.succeed(Nil)
       case _ =>
-        val teams = dailyMatch.teams
+        val teams        = dailyMatch.teams
         val team1FpLower = teams.team1.fairPlayRemovals.map(u => Username.unwrap(u).toLowerCase)
         val team2FpLower = teams.team2.fairPlayRemovals.map(u => Username.unwrap(u).toLowerCase)
 
@@ -401,10 +422,12 @@ object HistoryApp extends ZIOAppDefault {
             t1FairPlay = team1FpLower.contains(Username.unwrap(t1Username).toLowerCase)
             t2FairPlay = team2FpLower.contains(Username.unwrap(t2Username).toLowerCase)
 
-            t1Pid <- if (ourTeamIdx == 1) { resolvePlayerId(ctx, t1Username, isOurTeam = true, matchStartTime) }
-                     else { ZIO.none }
-            t2Pid <- if (ourTeamIdx == 2) { resolvePlayerId(ctx, t2Username, isOurTeam = true, matchStartTime) }
-                     else { ZIO.none }
+            t1Pid <-
+              if (ourTeamIdx == 1) { resolvePlayerId(ctx, t1Username, isOurTeam = true, matchStartTime) }
+              else { ZIO.none }
+            t2Pid <-
+              if (ourTeamIdx == 2) { resolvePlayerId(ctx, t2Username, isOurTeam = true, matchStartTime) }
+              else { ZIO.none }
           } yield {
             val (g1Winner, g1Detail) =
               normalizeGameOutcome(t1Player.playedAsWhite, t2Player.playedAsBlack, whiteTeamIsTeam1 = true)
@@ -431,7 +454,6 @@ object HistoryApp extends ZIOAppDefault {
           }
         }
     }
-  }
 
   // === Game Outcome Normalization ===
 
@@ -439,13 +461,15 @@ object HistoryApp extends ZIOAppDefault {
     whiteResult: Option[GameResultDetail],
     blackResult: Option[GameResultDetail],
     whiteTeamIsTeam1: Boolean
-  ): (Option[BoardGameWinner], Option[GameResultDetail]) = {
+  ): (Option[BoardGameWinner], Option[GameResultDetail]) =
     (whiteResult, blackResult) match {
       case (Some(GameResultDetail.Win), Some(loss)) =>
-        val winner = if (whiteTeamIsTeam1) { BoardGameWinner.Team1 } else { BoardGameWinner.Team2 }
+        val winner = if (whiteTeamIsTeam1) { BoardGameWinner.Team1 }
+        else { BoardGameWinner.Team2 }
         (Some(winner), Some(loss))
       case (Some(loss), Some(GameResultDetail.Win)) =>
-        val winner = if (whiteTeamIsTeam1) { BoardGameWinner.Team2 } else { BoardGameWinner.Team1 }
+        val winner = if (whiteTeamIsTeam1) { BoardGameWinner.Team2 }
+        else { BoardGameWinner.Team1 }
         (Some(winner), Some(loss))
       case (Some(draw), Some(_)) if draw.category == GameResult.Draw =>
         (Some(BoardGameWinner.Draw), Some(draw))
@@ -455,7 +479,6 @@ object HistoryApp extends ZIOAppDefault {
         // Mismatched state (e.g., one side played, other didn't) — treat as not played
         (None, None)
     }
-  }
 
   private[history] def computeScoreX2(
     game1Winner: Option[BoardGameWinner],
@@ -463,17 +486,16 @@ object HistoryApp extends ZIOAppDefault {
     team1FairPlay: Boolean,
     team2FairPlay: Boolean
   ): (Short, Short) = {
-    def gameScore(winner: Option[BoardGameWinner]): (Int, Int) = {
+    def gameScore(winner: Option[BoardGameWinner]): (Int, Int) =
       winner match {
-        case None                              => (0, 0)
+        case None                                      => (0, 0)
         case Some(_) if team1FairPlay && team2FairPlay => (1, 1)
-        case Some(_) if team1FairPlay          => (0, 2)
-        case Some(_) if team2FairPlay          => (2, 0)
-        case Some(BoardGameWinner.Team1)       => (2, 0)
-        case Some(BoardGameWinner.Team2)       => (0, 2)
-        case Some(BoardGameWinner.Draw)        => (1, 1)
+        case Some(_) if team1FairPlay                  => (0, 2)
+        case Some(_) if team2FairPlay                  => (2, 0)
+        case Some(BoardGameWinner.Team1)               => (2, 0)
+        case Some(BoardGameWinner.Team2)               => (0, 2)
+        case Some(BoardGameWinner.Draw)                => (1, 1)
       }
-    }
 
     val (g1t1, g1t2) = gameScore(game1Winner)
     val (g2t1, g2t2) = gameScore(game2Winner)
@@ -499,8 +521,8 @@ object HistoryApp extends ZIOAppDefault {
     }
   }
 
-  /** Gates the full discovery flow (API fetch + DB insert) behind a Promise so that concurrent
-    * fibers resolving the same unknown player share a single API call and a single DB insert.
+  /** Gates the full discovery flow (API fetch + DB insert) behind a Promise so that concurrent fibers resolving the
+    * same unknown player share a single API call and a single DB insert.
     */
   private def discoverPlayer(
     ctx: ProcessingContext,
@@ -551,7 +573,7 @@ object HistoryApp extends ZIOAppDefault {
               ctx.knownPlayers.update(_ + (key -> playerId)).as(Some(playerId))
             } else {
               val snapshotSince = if (statusCategory == PlayerStatusCategory.Active) { now }
-                else { Instant.ofEpochSecond(apiPlayer.lastOnline) }
+              else { Instant.ofEpochSecond(apiPlayer.lastOnline) }
               val snapshot = PlayerSnapshot(playerId, snapshotSince, username, statusCategory, apiPlayer.title)
               for {
                 _ <- PlayerSnapshot.insert(snapshot)
@@ -568,11 +590,10 @@ object HistoryApp extends ZIOAppDefault {
     // The doer handles success/failure and completes the promise.
     // On failure: log once, count once, resolve promise to None so awaiting fibers get None (not an exception).
     work.foldZIO(
-      error => {
+      error =>
         ctx.playersFailed.update(_ + 1) *>
           ZIO.logWarning(s"    Cannot resolve player $username: ${error.getMessage}") *>
-          promise.succeed(None).as(None)
-      },
+          promise.succeed(None).as(None),
       result => promise.succeed(result).as(result)
     )
   }
@@ -601,12 +622,12 @@ object HistoryApp extends ZIOAppDefault {
             case Some(apiClub) =>
               val since = Instant.ofEpochSecond(apiClub.joined)
               val until = if (statusCategory == PlayerStatusCategory.Active) { None }
-                else { Some(Instant.ofEpochSecond(apiPlayer.lastOnline)) }
+              else { Some(Instant.ofEpochSecond(apiPlayer.lastOnline)) }
               ClubMember(clubId, playerId, since, until, sinceApproximate = false)
             case None =>
               val since = matchStartTime.getOrElse(Instant.ofEpochSecond(apiPlayer.joined))
               val until = if (statusCategory == PlayerStatusCategory.Active) { matchStartTime }
-                else { Some(Instant.ofEpochSecond(apiPlayer.lastOnline)) }
+              else { Some(Instant.ofEpochSecond(apiPlayer.lastOnline)) }
               ClubMember(clubId, playerId, since, until, sinceApproximate = true)
           }
           _ <- ClubMember.insert(member)
@@ -615,7 +636,7 @@ object HistoryApp extends ZIOAppDefault {
         fromApi.catchAll { _ =>
           val since = matchStartTime.getOrElse(Instant.ofEpochSecond(apiPlayer.joined))
           val until = if (statusCategory == PlayerStatusCategory.Active) { None }
-            else { Some(Instant.ofEpochSecond(apiPlayer.lastOnline)) }
+          else { Some(Instant.ofEpochSecond(apiPlayer.lastOnline)) }
           ClubMember.insert(ClubMember(clubId, playerId, since, until, sinceApproximate = true)).unit
         }
     }
@@ -630,7 +651,8 @@ object HistoryApp extends ZIOAppDefault {
         m.get(matchId) match {
           case Some(existing) => (existing.await, m)
           case None =>
-            val fetch = ctx.client.get[ApiDailyMatch](ApiDailyMatch.getUrl(matchId)).tapBoth(promise.fail, promise.succeed)
+            val fetch =
+              ctx.client.get[ApiDailyMatch](ApiDailyMatch.getUrl(matchId)).tapBoth(promise.fail, promise.succeed)
             (fetch, m + (matchId -> promise))
         }
       }
@@ -662,16 +684,17 @@ object HistoryApp extends ZIOAppDefault {
   ): ClubMatch = {
     val teams = dailyMatch.teams
     val (startTime, endTime) = dailyMatch match {
-      case m: ApiDailyMatchFinished   => (Some(Instant.ofEpochSecond(m.startTime)), Some(Instant.ofEpochSecond(m.endTime)))
+      case m: ApiDailyMatchFinished =>
+        (Some(Instant.ofEpochSecond(m.startTime)), Some(Instant.ofEpochSecond(m.endTime)))
       case m: ApiDailyMatchInProgress => (Some(Instant.ofEpochSecond(m.startTime)), None)
       case m: ApiDailyMatchRegistered => (m.startTime.map(Instant.ofEpochSecond), None)
     }
     val (team1Result, team2Result) = teams match {
       case t: ApiDailyMatchTeamsFinished => (Some(t.team1.result), Some(t.team2.result))
-      case _                            => (None, None)
+      case _                             => (None, None)
     }
     val (team1ClubId, team2ClubId) = if (ourTeamIdx == 1) { (Some(clubId), opponentClubId) }
-      else { (opponentClubId, Some(clubId)) }
+    else { (opponentClubId, Some(clubId)) }
 
     ClubMatch(
       matchId = matchId,

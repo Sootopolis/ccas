@@ -487,8 +487,8 @@ object TestMembershipApp extends ZIOSpecDefault {
           snapshots = List(snap),
           members = List(mem)
         )
-        client <- fakeChessComClient(Map.empty)
-        result <- MembershipApp.classifyApiMembers(client, clubId, apiMap, dbState, Times.t2)
+        client  <- fakeChessComClient(Map.empty)
+        result  <- MembershipApp.classifyApiMembers(client, clubId, apiMap, dbState, Times.t2)
         members <- ClubMember.selectClub(clubId)
       } yield assertTrue(
         result.resolvedIds.contains(pid0),
@@ -511,7 +511,14 @@ object TestMembershipApp extends ZIOSpecDefault {
 
       for {
         client <- fakeChessComClient(Map.empty)
-        result <- MembershipApp.classifyApiMembers(client, clubId, apiMap, dbState, Times.t2, trustUsernames = false).exit
+        result <- MembershipApp.classifyApiMembers(
+          client,
+          clubId,
+          apiMap,
+          dbState,
+          Times.t2,
+          trustUsernames = false
+        ).exit
       } yield assertTrue(result.isFailure)
     }
   )
