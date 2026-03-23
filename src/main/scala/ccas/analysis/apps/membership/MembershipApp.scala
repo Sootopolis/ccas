@@ -1,12 +1,5 @@
 package ccas.analysis.apps.membership
 
-import java.time.{Duration as JDuration, Instant}
-import scala.annotation.nowarn
-
-import com.augustnagro.magnum.Transactor
-import zio.{Chunk, RIO, Scope, Task, UIO, ZIO, ZIOAppArgs, ZIOAppDefault}
-import zio.http.Client
-
 import ccas.analysis.apps.membership.MembershipChange.*
 import ccas.analysis.tables.*
 import ccas.api.club.{ApiClub, ApiClubMembers}
@@ -14,10 +7,16 @@ import ccas.api.clubmatch.ApiDailyMatch
 import ccas.api.misc.enums.PlayerStatusCategory
 import ccas.api.misc.subtypes.{ClubId, ClubUrlName, PlayerId, Username}
 import ccas.api.player.{ApiPlayer, ApiPlayerClubs}
+import ccas.utils.OutputFile
 import ccas.utils.client.ChessComClient
 import ccas.utils.errors.ExternalException
 import ccas.utils.sql.DataSourceLayer
-import ccas.utils.OutputFile
+import com.augustnagro.magnum.Transactor
+import zio.http.Client
+import zio.{Chunk, RIO, Scope, Task, UIO, ZIO, ZIOAppArgs, ZIOAppDefault}
+
+import java.time.{Instant, Duration as JDuration}
+import scala.annotation.nowarn
 
 object MembershipApp extends ZIOAppDefault {
 
