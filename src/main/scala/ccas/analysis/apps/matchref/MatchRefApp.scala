@@ -1,10 +1,13 @@
 package ccas.analysis.apps.matchref
 
+import java.time.{Duration as JDuration, Instant}
+import scala.annotation.nowarn
+
 import com.augustnagro.magnum.{sql, Transactor}
 import zio.{Promise, RIO, Ref, Scope, Task, ZIO, ZIOAppArgs, ZIOAppDefault}
 import zio.http.Client
 
-import ccas.analysis.tables.{ClubMatchRef, PlayerMatchRef, Tables}
+import ccas.analysis.tables.{ClubMatchRef, PlayerMatchRef, RunTrigger, Tables}
 import ccas.api.club.ApiClubMatches
 import ccas.api.clubmatch.ApiDailyMatch
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubUrlName, PlayerId, Username}
@@ -19,16 +22,19 @@ object MatchRefApp extends ZIOAppDefault {
   private final case class UnresolvedClub(clubId: ClubId, urlName: ClubUrlName)
 
   override def run: RIO[ZIOAppArgs & Scope, Unit] =
-    populate.provide(
+    populate().provide(
       ChessComClient.live(),
       Client.default,
       DataSourceLayer.liveFromPrefix(onInit = Tables.ensureTables)
     )
 
-  def populate: RIO[ChessComClient & Transactor, Unit] =
+  // trigger accepted for consistency with other app entry points but not persisted (no run table)
+  @nowarn("msg=unused")
+  def populate(trigger: RunTrigger = RunTrigger.Cli): RIO[ChessComClient & Transactor, Unit] =
     for {
-      client <- ZIO.service[ChessComClient]
-      cache  <- Ref.make(Map.empty[ClubMatchId, Promise[Throwable, ApiDailyMatch]])
+      startedAt <- ZIO.succeed(Instant.now())
+      client    <- ZIO.service[ChessComClient]
+      cache     <- Ref.make(Map.empty[ClubMatchId, Promise[Throwable, ApiDailyMatch]])
       // Clubs
       clubs       <- selectUnresolvedClubs
       _           <- ZIO.logInfo(s"Clubs without match ref: ${clubs.size}")
@@ -47,6 +53,9 @@ object MatchRefApp extends ZIOAppDefault {
       }
       resolvedPlayers <- playerCounter.get
       _               <- ZIO.logInfo(s"Resolved: $resolvedPlayers / ${players.size}")
+      completedAt = Instant.now()
+      duration    = JDuration.between(startedAt, completedAt)
+      _ <- ZIO.logInfo(s"Duration: ${duration.toMinutes}m ${duration.toSecondsPart}s")
     } yield ()
 
   private def selectUnresolvedPlayers: RIO[Transactor, List[UnresolvedPlayer]] =

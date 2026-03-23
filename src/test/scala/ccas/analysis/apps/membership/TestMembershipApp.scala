@@ -247,7 +247,7 @@ object TestMembershipApp extends ZIOSpecDefault {
 
       val phaseB = PhaseBResult(Set(pid0), Chunk(bChange), Chunk(bPlayer), Chunk(bSnap), Chunk(bMember), Chunk(bClosed))
       val phaseC = PhaseCResult(Chunk(cChange), Chunk(cSnap), Chunk(cClosed))
-      val result = MembershipApp.mergeResults(phaseB, phaseC)
+      val result = MembershipApp.mergeResults(phaseB, phaseC, 10, 8, Times.t0, Times.t1)
 
       assertTrue(
         result.changes == Chunk(bChange, cChange),

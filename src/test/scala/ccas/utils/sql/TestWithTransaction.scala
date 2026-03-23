@@ -7,6 +7,7 @@ import com.augustnagro.magnum.sql
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 import zio.ZIO
 
+import ccas.analysis.tables.RunTrigger
 import ccas.server.jobs.{JobKind, JobRun, JobRunId, JobRunStatus}
 import ccas.server.ServerTables
 import ccas.utils.sql.SqlZioTypes.{connectZIO, withTransaction}
@@ -28,8 +29,8 @@ object TestWithTransaction extends ZIOSpecDefault {
   private val idA = JobRunId.wrap("tx-test-a")
   private val idB = JobRunId.wrap("tx-test-b")
 
-  private val runA = JobRun(idA, JobKind.Recruitment, JobRunStatus.Running, None, None, t0, None, None)
-  private val runB = JobRun(idB, JobKind.Membership, JobRunStatus.Running, None, None, t0, None, None)
+  private val runA = JobRun(idA, JobKind.Recruitment, RunTrigger.Cli, JobRunStatus.Running, None, None, t0, None, None)
+  private val runB = JobRun(idB, JobKind.Membership, RunTrigger.Cli, JobRunStatus.Running, None, None, t0, None, None)
 
   private val deleteAll = connectZIO { val _ = sql"DELETE FROM job_run".update.run() }
 

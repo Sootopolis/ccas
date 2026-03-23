@@ -6,6 +6,8 @@ import java.time.Instant
 import com.augustnagro.magnum.*
 import zio.ZIO
 
+import ccas.analysis.tables.RunTrigger
+import ccas.analysis.tables.RunTrigger.given
 import ccas.api.misc.subtypes.ClubUrlName
 import ccas.server.jobs.JobKind.given
 import ccas.server.jobs.JobRunStatus.given
@@ -16,6 +18,7 @@ import ccas.utils.sql.SqlZioTypes.connectZIO
 case class JobRun(
   @Id id: JobRunId,
   kind: JobKind,
+  trigger: RunTrigger,
   status: JobRunStatus,
   clubUrlName: Option[ClubUrlName],
   params: Option[String],
@@ -26,13 +29,14 @@ case class JobRun(
 
 object JobRun {
 
-  private val selectCols = SqlLiteral("id, kind, status, club_url_name, params, started_at, completed_at, error")
+  private val selectCols = SqlLiteral("id, kind, trigger, status, club_url_name, params, started_at, completed_at, error")
 
   def createTable: ZIO[Transactor, SQLException, Int] =
     connectZIO {
       sql"""CREATE TABLE IF NOT EXISTS job_run (
               id             TEXT PRIMARY KEY,
               kind           TEXT NOT NULL,
+              trigger        TEXT NOT NULL,
               status         TEXT NOT NULL,
               club_url_name  TEXT,
               params         TEXT,
@@ -44,8 +48,8 @@ object JobRun {
 
   def insert(jobRun: JobRun): ZIO[Transactor, SQLException, Int] =
     connectZIO {
-      sql"""INSERT INTO job_run (id, kind, status, club_url_name, params, started_at, completed_at, error)
-             VALUES (${jobRun.id}, ${jobRun.kind}, ${jobRun.status}, ${jobRun.clubUrlName},
+      sql"""INSERT INTO job_run (id, kind, trigger, status, club_url_name, params, started_at, completed_at, error)
+             VALUES (${jobRun.id}, ${jobRun.kind}, ${jobRun.trigger}, ${jobRun.status}, ${jobRun.clubUrlName},
                      ${jobRun.params}, ${jobRun.startedAt}, ${jobRun.completedAt}, ${jobRun.error})
           """.update.run()
     }

@@ -6,6 +6,7 @@ import java.time.Instant
 import com.augustnagro.magnum.*
 import zio.ZIO
 
+import ccas.analysis.tables.RunTrigger.given
 import ccas.api.misc.subtypes.ClubId
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.SqlZioTypes.connectZIO
@@ -14,13 +15,14 @@ final case class RecruitmentRun(
   runId: Long,
   clubId: ClubId,
   criteriaId: Long,
+  trigger: RunTrigger,
   startedAt: Instant,
   completedAt: Option[Instant],
   candidatesFound: Int
 ) derives DbCodec
 
 object RecruitmentRun {
-  private val selectCols = SqlLiteral("run_id, club_id, criteria_id, started_at, completed_at, candidates_found")
+  private val selectCols = SqlLiteral("run_id, club_id, criteria_id, trigger, started_at, completed_at, candidates_found")
 
   def createTable: ZIO[Transactor, SQLException, Int] =
     connectZIO {
@@ -28,6 +30,7 @@ object RecruitmentRun {
               run_id            BIGSERIAL PRIMARY KEY,
               club_id           BIGINT NOT NULL,
               criteria_id       BIGINT NOT NULL,
+              trigger           TEXT NOT NULL,
               started_at        TIMESTAMPTZ NOT NULL,
               completed_at      TIMESTAMPTZ,
               candidates_found  INT NOT NULL,
@@ -36,10 +39,10 @@ object RecruitmentRun {
       sql"""CREATE INDEX IF NOT EXISTS idx_recruitment_run_club_id ON recruitment_run(club_id)""".update.run()
     }
 
-  def insert(clubId: ClubId, criteriaId: Long, startedAt: Instant): ZIO[Transactor, SQLException, Long] =
+  def insert(clubId: ClubId, criteriaId: Long, trigger: RunTrigger, startedAt: Instant): ZIO[Transactor, SQLException, Long] =
     connectZIO {
-      sql"""INSERT INTO recruitment_run (club_id, criteria_id, started_at, candidates_found)
-            VALUES ($clubId, $criteriaId, $startedAt, 0)
+      sql"""INSERT INTO recruitment_run (club_id, criteria_id, trigger, started_at, candidates_found)
+            VALUES ($clubId, $criteriaId, $trigger, $startedAt, 0)
             RETURNING run_id""".query[Long].run().headOption
     }.someOrFail(new SQLException("INSERT RETURNING produced no rows"))
 

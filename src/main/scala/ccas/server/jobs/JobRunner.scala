@@ -5,6 +5,7 @@ import java.time.Instant
 import com.augustnagro.magnum.Transactor
 import zio.{Fiber, RIO, Ref, UIO, ZIO, ZLayer}
 
+import ccas.analysis.tables.RunTrigger
 import ccas.api.misc.subtypes.ClubUrlName
 import ccas.utils.client.ChessComClient
 import ccas.utils.errors.safeMessage
@@ -14,6 +15,7 @@ trait JobRunner {
     kind: JobKind,
     clubUrlName: Option[ClubUrlName],
     params: Option[String],
+    trigger: RunTrigger,
     effect: RIO[ChessComClient & Transactor, Any]
   ): RIO[Transactor, JobRunId]
 
@@ -45,6 +47,7 @@ object JobRunner {
       kind: JobKind,
       clubUrlName: Option[ClubUrlName],
       params: Option[String],
+      trigger: RunTrigger,
       effect: RIO[ChessComClient & Transactor, Any]
     ): RIO[Transactor, JobRunId] =
       for {
@@ -59,7 +62,7 @@ object JobRunner {
         )
         id     = JobRunId.generate()
         now    = Instant.now()
-        jobRun = JobRun(id, kind, JobRunStatus.Running, clubUrlName, params, now, None, None)
+        jobRun = JobRun(id, kind, trigger, JobRunStatus.Running, clubUrlName, params, now, None, None)
         _     <- JobRun.insert(jobRun)
         fiber <- runJob(id, kind, effect).fork
         _     <- fibers.update(_ + fiber)
@@ -93,7 +96,7 @@ object JobRunner {
 
     private def submitMatchRef: RIO[Transactor, Unit] = {
       import ccas.analysis.apps.matchref.MatchRefApp
-      submit(JobKind.MatchRef, None, None, MatchRefApp.populate).ignore
+      submit(JobKind.MatchRef, None, None, RunTrigger.FollowUp, MatchRefApp.populate(RunTrigger.FollowUp)).ignore
     }
 
     def awaitAll: UIO[Unit] =

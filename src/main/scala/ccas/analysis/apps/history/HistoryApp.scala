@@ -125,7 +125,8 @@ object HistoryApp extends ZIOAppDefault {
   def discover(
     clubUrlName: ClubUrlName,
     full: Boolean = false,
-    refresh: Boolean = false
+    refresh: Boolean = false,
+    trigger: RunTrigger = RunTrigger.Cli
   ): RIO[ChessComClient & Transactor, Unit] =
     for {
       client <- ZIO.service[ChessComClient]
@@ -142,7 +143,7 @@ object HistoryApp extends ZIOAppDefault {
       processedIds <- ClubMatch.selectMatchIdsForClub(clubId)
       queriedIds   <- HistoryMemberQuery.selectClubPlayerIds(clubId)
       startedAt = Instant.now()
-      runId <- HistoryRun.insert(clubId, startedAt)
+      runId <- HistoryRun.insert(clubId, trigger, startedAt)
       snapByPlayerId = latestSnaps.map(s => s.playerId -> s).toMap
       _ <- ZIO.logInfo(
         s"  Members: ${allMembers.size}, Processed matches: ${processedIds.size}, Queried members: ${queriedIds.size}"
@@ -261,10 +262,7 @@ object HistoryApp extends ZIOAppDefault {
       _ <- HistoryMemberQuery.insert(HistoryMemberQuery(clubId, playerId, Instant.now()))
     } yield matchIds.size
 
-  private def insertPendingMatchIds(
-    clubId: ClubId,
-    matchIds: Iterable[ClubMatchId]
-  ): RIO[Transactor, Unit] =
+  private def insertPendingMatchIds(clubId: ClubId, matchIds: Iterable[ClubMatchId]): RIO[Transactor, Unit] =
     ZIO.foreachDiscard(matchIds.grouped(1000).toList) { batch =>
       HistoryPendingMatch.insertBatch(batch.map(id => HistoryPendingMatch(clubId, id)))
     }
@@ -336,10 +334,7 @@ object HistoryApp extends ZIOAppDefault {
     loop
   }
 
-  private def processMatchBatch(
-    ctx: ProcessingContext,
-    matchIds: List[ClubMatchId]
-  ): RIO[Transactor, Unit] = {
+  private def processMatchBatch(ctx: ProcessingContext, matchIds: List[ClubMatchId]): RIO[Transactor, Unit] = {
     val total = matchIds.size
     for {
       counter <- Ref.make(0)
@@ -726,11 +721,7 @@ object HistoryApp extends ZIOAppDefault {
 
   // === Reporting ===
 
-  private def readStats(
-    ctx: ProcessingContext,
-    waveCount: Int,
-    waveDetails: List[(Int, Int)]
-  ): UIO[RunStats] =
+  private def readStats(ctx: ProcessingContext, waveCount: Int, waveDetails: List[(Int, Int)]): UIO[RunStats] =
     for {
       matchesProcessed  <- ctx.matchesProcessed.get
       matchesFailed     <- ctx.matchesFailed.get

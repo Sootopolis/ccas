@@ -43,7 +43,9 @@ object MembershipChange {
     newSnapshots: Chunk[PlayerSnapshot],
     newMemberships: Chunk[ClubMember],
     closedMemberships: Chunk[ClubMember],
-    currentMemberCount: Int = 0,
-    previousMemberCount: Int = 0
+    currentMemberCount: Int,
+    previousMemberCount: Int,
+    startedAt: Instant,
+    completedAt: Instant
   )
 }

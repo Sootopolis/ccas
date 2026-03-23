@@ -208,7 +208,7 @@ object TestMatchRefApp extends ZIOSpecDefault {
     } yield ()
 
   private def runPopulate(client: ChessComClient): RIO[Transactor, Unit] =
-    MatchRefApp.populate.provideSomeLayer(ZLayer.succeed(client))
+    MatchRefApp.populate().provideSomeLayer(ZLayer.succeed(client))
 
   // --- Spec ---
 

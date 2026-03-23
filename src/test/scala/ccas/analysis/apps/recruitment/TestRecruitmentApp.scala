@@ -609,7 +609,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       for {
         _          <- seedDb
         criteriaId <- seedCriteria(makeCriteria())
-        runId      <- RecruitmentRun.insert(clubId, criteriaId, Times.t0)
+        runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0)
         loaded     <- RecruitmentRun.selectId(runId)
       } yield assertTrue(
         runId > 0,
@@ -624,8 +624,8 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       for {
         _          <- seedDb
         criteriaId <- seedCriteria(makeCriteria())
-        runId      <- RecruitmentRun.insert(clubId, criteriaId, Times.t0)
-        _          <- RecruitmentRun.update(RecruitmentRun(runId, clubId, criteriaId, Times.t0, Some(Times.t1), 5))
+        runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0)
+        _          <- RecruitmentRun.update(RecruitmentRun(runId, clubId, criteriaId, RunTrigger.Cli, Times.t0, Some(Times.t1), 5))
         loaded     <- RecruitmentRun.selectId(runId)
       } yield assertTrue(
         loaded.get.completedAt.isDefined,
@@ -636,8 +636,8 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       for {
         _          <- seedDb
         criteriaId <- seedCriteria(makeCriteria())
-        _          <- RecruitmentRun.insert(clubId, criteriaId, Times.t0)
-        runId2     <- RecruitmentRun.insert(clubId, criteriaId, Times.t1)
+        _          <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0)
+        runId2     <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t1)
         latest     <- RecruitmentRun.selectLatest(clubId)
       } yield assertTrue(
         latest.isDefined,
@@ -650,7 +650,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         _          <- seedPlayer(pid0)
         _          <- seedPlayer(pid1)
         criteriaId <- seedCriteria(makeCriteria())
-        runId      <- RecruitmentRun.insert(clubId, criteriaId, Times.t0)
+        runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0)
         _ <- RecruitmentCandidate
           .insert(
             RecruitmentCandidate(runId, pid0, Times.t0, CandidateOutcome.Invited, None)
@@ -668,7 +668,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         _          <- seedPlayer(pid0)
         _          <- seedPlayer(pid1)
         criteriaId <- seedCriteria(makeCriteria())
-        runId      <- RecruitmentRun.insert(clubId, criteriaId, Times.t0)
+        runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0)
         _ <- RecruitmentCandidate
           .insert(
             RecruitmentCandidate(runId, pid0, Times.t0, CandidateOutcome.Invited, None)
@@ -690,7 +690,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         _ <- ZIO.foreachDiscard(enumPids)(seedPlayer)
         outcomes = CandidateOutcome.values.toList
         criteriaId <- seedCriteria(makeCriteria())
-        runId      <- RecruitmentRun.insert(clubId, criteriaId, Times.t0)
+        runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0)
         _ <- ZIO.foreachDiscard(outcomes.zip(enumPids)) { (outcome, pid) =>
           RecruitmentCandidate
             .insert(
@@ -709,8 +709,8 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         _          <- seedDb
         _          <- seedPlayer(pid0)
         criteriaId <- seedCriteria(makeCriteria())
-        runId1     <- RecruitmentRun.insert(clubId, criteriaId, Times.t0)
-        runId2     <- RecruitmentRun.insert(clubId, criteriaId, Times.t1)
+        runId1     <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0)
+        runId2     <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t1)
         _ <- RecruitmentCandidate
           .insert(
             RecruitmentCandidate(runId1, pid0, Times.t0, CandidateOutcome.Invited, None)
@@ -774,7 +774,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       for {
         _          <- seedDb
         criteriaId <- seedCriteria(criteria)
-        runId      <- RecruitmentRun.insert(clubId, criteriaId, Times.t0)
+        runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0)
         client     <- fakeChessComClient(responses)
         invited    <- evalCandidates(client, runId, List(Username("alice"), Username("bob")), criteria)
         // Check invited list
@@ -809,7 +809,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       for {
         _          <- seedDb
         criteriaId <- seedCriteria(criteria)
-        runId      <- RecruitmentRun.insert(clubId, criteriaId, Times.t0)
+        runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0)
         client     <- fakeChessComClient(responses)
         invited <- evalCandidates(
           client,
@@ -833,7 +833,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       for {
         _          <- seedDb
         criteriaId <- seedCriteria(criteria)
-        runId      <- RecruitmentRun.insert(clubId, criteriaId, Times.t0)
+        runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0)
         client     <- fakeChessComClient(responses, failures = Set("bob"))
         invited    <- evalCandidates(client, runId, List(Username("alice"), Username("bob")), criteria)
         candidates <- RecruitmentCandidate.selectByRun(runId)
@@ -855,7 +855,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       for {
         _          <- seedDb
         criteriaId <- seedCriteria(criteria)
-        runId      <- RecruitmentRun.insert(clubId, criteriaId, Times.t0)
+        runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0)
         client     <- fakeChessComClient(responses)
         _          <- evalCandidates(client, runId, List(Username("alice")), criteria)
         candidates <- RecruitmentCandidate.selectByRun(runId)
@@ -881,7 +881,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
     for {
       _          <- seedDb
       criteriaId <- seedCriteria(criteria)
-      runId      <- RecruitmentRun.insert(clubId, criteriaId, Instant.now())
+      runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Instant.now())
       client     <- fakeChessComClient(responses)
       _          <- evalCandidates(client, runId, List(Username.wrap(username)), criteria)
       cands      <- RecruitmentCandidate.selectByRun(runId)
@@ -1026,7 +1026,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       for {
         _          <- seedDb
         criteriaId <- seedCriteria(criteria)
-        runId      <- RecruitmentRun.insert(clubId, criteriaId, Instant.now())
+        runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Instant.now())
         client     <- fakeChessComClient(responses)
         _          <- evalCandidates(client, runId, List(Username.wrap("alice")), criteria)
         failures   <- ApiFetchFailure.selectRecent(now.minus(Duration.ofMinutes(1)))
@@ -1065,7 +1065,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       for {
         _          <- seedDb
         criteriaId <- seedCriteria(criteria)
-        runId      <- RecruitmentRun.insert(clubId, criteriaId, Instant.now())
+        runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Instant.now())
         client     <- fakeChessComClient(responses)
         _          <- evalCandidates(client, runId, List(Username.wrap("alice")), criteria)
         cache      <- PlayerRecruitmentCache.selectId(pid0)
@@ -1131,12 +1131,12 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         // Seed player row for FK constraint
         _ <- seedPlayer(pid0)
         // Create a prior run with alice invited recently
-        priorRunId <- RecruitmentRun.insert(clubId, criteriaId, Instant.now())
+        priorRunId <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Instant.now())
         _ <- RecruitmentCandidate.insert(
           RecruitmentCandidate(priorRunId, pid0, Instant.now(), CandidateOutcome.Invited, None)
         )
         // Now evaluate alice again
-        runId  <- RecruitmentRun.insert(clubId, criteriaId, Instant.now())
+        runId  <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Instant.now())
         client <- fakeChessComClient(Map("player/alice" -> apiPlayerJson(200, "alice")))
         _      <- evalCandidates(client, runId, List(Username("alice")), criteria)
         cands  <- RecruitmentCandidate.selectByRun(runId)
@@ -1223,7 +1223,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       for {
         _          <- seedDb
         criteriaId <- seedCriteria(criteria)
-        runId      <- RecruitmentRun.insert(clubId, criteriaId, Instant.now())
+        runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Instant.now())
         client     <- fakeChessComClient(responses)
         _          <- evalCandidates(client, runId, List(Username("alice")), criteria)
         cached     <- PlayerRecruitmentCache.selectId(pid0)
@@ -1248,7 +1248,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
                 ON CONFLICT (player_id) DO NOTHING""".update.run()
         }
         _      <- ClubMember.insert(ClubMember(clubId, pid0, Times.t0, Some(Times.t1)))
-        runId  <- RecruitmentRun.insert(clubId, criteriaId, Instant.now())
+        runId  <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Instant.now())
         client <- fakeChessComClient(responses)
         _      <- evalCandidates(client, runId, List(Username("alice")), criteria)
         cands  <- RecruitmentCandidate.selectByRun(runId)
@@ -1266,7 +1266,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
                 ON CONFLICT (player_id) DO NOTHING""".update.run()
         }
         _      <- ClubMember.insert(ClubMember(clubId, pid0, Times.t0, Some(Times.t1)))
-        runId  <- RecruitmentRun.insert(clubId, criteriaId, Instant.now())
+        runId  <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Instant.now())
         client <- fakeChessComClient(responses)
         _      <- evalCandidates(client, runId, List(Username("alice")), criteria)
         cands  <- RecruitmentCandidate.selectByRun(runId)
@@ -1289,7 +1289,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         _ <- RecruitmentBlacklist.insert(
           RecruitmentBlacklist(clubId, pid0, Times.t0, expiresAt = None, reason = Some("banned"))
         )
-        runId  <- RecruitmentRun.insert(clubId, criteriaId, Instant.now())
+        runId  <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Instant.now())
         client <- fakeChessComClient(responses)
         _      <- evalCandidates(client, runId, List(Username("alice")), criteria)
         cands  <- RecruitmentCandidate.selectByRun(runId)
@@ -1315,7 +1315,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
             reason = Some("temp ban")
           )
         )
-        runId  <- RecruitmentRun.insert(clubId, criteriaId, now)
+        runId  <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, now)
         client <- fakeChessComClient(responses)
         _      <- evalCandidates(client, runId, List(Username("alice")), criteria)
         cands  <- RecruitmentCandidate.selectByRun(runId)
@@ -1421,7 +1421,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       }
       _          <- PlayerRecruitmentCache.upsert(cache)
       criteriaId <- seedCriteria(criteria)
-      runId      <- RecruitmentRun.insert(clubId, criteriaId, Instant.now())
+      runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Instant.now())
       client     <- fakeChessComClient(responses)
       _          <- evalCandidates(client, runId, List(Username.wrap(username)), criteria)
       cands      <- RecruitmentCandidate.selectByRun(runId)
@@ -1798,8 +1798,8 @@ object TestRecruitmentApp extends ZIOSpecDefault {
             None
           )
         )
-        priorRunId <- RecruitmentRun.insert(clubId, criteriaId, Times.t0)
-        _          <- RecruitmentRun.update(RecruitmentRun(priorRunId, clubId, criteriaId, Times.t0, Some(Times.t1), 0))
+        priorRunId <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0)
+        _          <- RecruitmentRun.update(RecruitmentRun(priorRunId, clubId, criteriaId, RunTrigger.Cli, Times.t0, Some(Times.t1), 0))
         _ <- RecruitmentCandidate.insert(
           RecruitmentCandidate(priorRunId, PlayerId(500), Times.t0, CandidateOutcome.Deferred, None)
         )
@@ -1843,8 +1843,8 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         )
 
         // Run 1: candidate is Deferred
-        runId1 <- RecruitmentRun.insert(clubId, criteriaId, Times.t0)
-        _      <- RecruitmentRun.update(RecruitmentRun(runId1, clubId, criteriaId, Times.t0, Some(Times.t1), 0))
+        runId1 <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0)
+        _      <- RecruitmentRun.update(RecruitmentRun(runId1, clubId, criteriaId, RunTrigger.Cli, Times.t0, Some(Times.t1), 0))
         _ <- RecruitmentCandidate.insert(
           RecruitmentCandidate(runId1, PlayerId(600), Times.t0, CandidateOutcome.Deferred, None)
         )
@@ -1853,8 +1853,8 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         deferredBefore <- RecruitmentCandidate.selectDeferredByClub(clubId)
 
         // Run 2: same candidate is Invited (later timestamp)
-        runId2 <- RecruitmentRun.insert(clubId, criteriaId, Times.t2)
-        _      <- RecruitmentRun.update(RecruitmentRun(runId2, clubId, criteriaId, Times.t2, Some(Times.t3), 1))
+        runId2 <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t2)
+        _      <- RecruitmentRun.update(RecruitmentRun(runId2, clubId, criteriaId, RunTrigger.Cli, Times.t2, Some(Times.t3), 1))
         _ <- RecruitmentCandidate.insert(
           RecruitmentCandidate(runId2, PlayerId(600), Times.t2, CandidateOutcome.Invited, None)
         )
@@ -1879,8 +1879,8 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         _          <- seedPlayer(pid0)
         _          <- seedPlayer(pid1)
         criteriaId <- seedCriteria(makeCriteria())
-        runId      <- RecruitmentRun.insert(clubId, criteriaId, Times.t0)
-        _          <- RecruitmentRun.update(RecruitmentRun(runId, clubId, criteriaId, Times.t0, Some(Times.t1), 2))
+        runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0)
+        _          <- RecruitmentRun.update(RecruitmentRun(runId, clubId, criteriaId, RunTrigger.Cli, Times.t0, Some(Times.t1), 2))
         _ <- RecruitmentCandidate
           .insert(
             RecruitmentCandidate(runId, pid0, Times.t0, CandidateOutcome.Invited, None)
@@ -1897,8 +1897,8 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         _          <- seedDb
         _          <- seedPlayer(pid0)
         criteriaId <- seedCriteria(makeCriteria())
-        runId      <- RecruitmentRun.insert(clubId, criteriaId, Times.t0)
-        _          <- RecruitmentRun.update(RecruitmentRun(runId, clubId, criteriaId, Times.t0, Some(Times.t1), 1))
+        runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0)
+        _          <- RecruitmentRun.update(RecruitmentRun(runId, clubId, criteriaId, RunTrigger.Cli, Times.t0, Some(Times.t1), 1))
         _ <- RecruitmentCandidate
           .insert(
             RecruitmentCandidate(runId, pid0, Times.t0, CandidateOutcome.Invited, None)

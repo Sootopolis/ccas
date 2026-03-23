@@ -1,6 +1,6 @@
 package ccas.analysis.apps.membership
 
-import java.time.Instant
+import java.time.{Duration as JDuration, Instant}
 import scala.annotation.nowarn
 
 import com.augustnagro.magnum.Transactor
@@ -76,7 +76,7 @@ object MembershipApp extends ZIOAppDefault {
       clubOpt <- Club.selectByUrlName(clubUrlName)
       _ <- ZIO.fromOption(clubOpt).flatMap { club =>
         MembershipRun.selectLatest(club.clubId).flatMap {
-          case Some(run) if !until.isAfter(run.ranAt) => ZIO.unit
+          case Some(run) if !until.isAfter(run.startedAt) => ZIO.unit
           case _                                      => reconcile(clubUrlName).unit
         }
       }.orElse(reconcile(clubUrlName).unit)
@@ -87,10 +87,12 @@ object MembershipApp extends ZIOAppDefault {
   def reconcile(
     clubUrlName: ClubUrlName,
     trustUsernames: Boolean = true,
-    trackRun: Boolean = true
+    trackRun: Boolean = true,
+    trigger: RunTrigger = RunTrigger.Cli
   ): RIO[ChessComClient & Transactor, ReconciliationResult] =
     for {
-      client <- ZIO.service[ChessComClient]
+      startedAt <- ZIO.succeed(Instant.now())
+      client    <- ZIO.service[ChessComClient]
       (apiClub, resolvedUrlName) <- withNameFallback(
         clubUrlName,
         name => ApiClub.get(client, name),
@@ -99,18 +101,16 @@ object MembershipApp extends ZIOAppDefault {
       clubId = apiClub.clubId
       club   = Club(clubId, Instant.ofEpochSecond(apiClub.created), resolvedUrlName)
       _                     <- Club.upsert(club)
+      runId                 <- ZIO.when(trackRun)(MembershipRun.insert(clubId, trigger, startedAt))
       (apiMembers, dbState) <- ApiClubMembers.get(client, resolvedUrlName).zipPar(buildDbState(clubId))
       apiMap = apiMembers.toMap
       now    = Instant.now()
-      phaseB <- classifyApiMembers(client, clubId, apiMap, dbState, now, trustUsernames)
-      phaseC <- classifyDisappeared(client, dbState, phaseB.resolvedIds, apiMap, resolvedUrlName, now)
-      result = mergeResults(phaseB, phaseC).copy(
-        currentMemberCount = apiMap.size,
-        previousMemberCount = dbState.membersByPlayerId.size
-      )
-      _ <- persist(result)
-      _ <- ZIO.whenDiscard(trackRun)(MembershipRun.insert(clubId, now))
-    } yield result
+      phaseB      <- classifyApiMembers(client, clubId, apiMap, dbState, now, trustUsernames)
+      phaseC      <- classifyDisappeared(client, dbState, phaseB.resolvedIds, apiMap, resolvedUrlName, now)
+      _           <- persist(phaseB, phaseC)
+      completedAt = Instant.now()
+      _           <- ZIO.foreachDiscard(runId)(id => MembershipRun.complete(id, completedAt))
+    } yield mergeResults(phaseB, phaseC, apiMap.size, dbState.membersByPlayerId.size, startedAt, completedAt)
 
   private[membership] def buildDbState(clubId: ClubId): RIO[Transactor, DbState] =
     for {
@@ -499,30 +499,47 @@ object MembershipApp extends ZIOAppDefault {
 
   // --- Merge & Persist ---
 
-  private[membership] def mergeResults(b: PhaseBResult, c: PhaseCResult): ReconciliationResult =
+  private[membership] def mergeResults(
+    b: PhaseBResult,
+    c: PhaseCResult,
+    currentMemberCount: Int,
+    previousMemberCount: Int,
+    startedAt: Instant,
+    completedAt: Instant
+  ): ReconciliationResult =
     ReconciliationResult(
       changes = b.changes ++ c.changes,
       newPlayers = b.newPlayers,
       newSnapshots = b.newSnapshots ++ c.newSnapshots,
       newMemberships = b.newMemberships,
-      closedMemberships = b.closedMemberships ++ c.closedMemberships
+      closedMemberships = b.closedMemberships ++ c.closedMemberships,
+      currentMemberCount = currentMemberCount,
+      previousMemberCount = previousMemberCount,
+      startedAt = startedAt,
+      completedAt = completedAt
     )
 
-  private def persist(result: ReconciliationResult): RIO[Transactor, Unit] =
+  private def persist(b: PhaseBResult, c: PhaseCResult): RIO[Transactor, Unit] =
     for {
-      _ <- ZIO.whenDiscard(result.newPlayers.nonEmpty)(Player.insertBatch(result.newPlayers))
-      _ <- ZIO.whenDiscard(result.newSnapshots.nonEmpty)(PlayerSnapshot.insertBatch(result.newSnapshots))
-      _ <- ZIO.whenDiscard(result.newMemberships.nonEmpty)(ClubMember.insertBatch(result.newMemberships))
-      _ <- ZIO.whenDiscard(result.closedMemberships.nonEmpty)(ClubMember.updateBatch(result.closedMemberships))
+      _ <- ZIO.whenDiscard(b.newPlayers.nonEmpty)(Player.insertBatch(b.newPlayers))
+      _ <- ZIO.whenDiscard((b.newSnapshots ++ c.newSnapshots).nonEmpty)(
+        PlayerSnapshot.insertBatch(b.newSnapshots ++ c.newSnapshots)
+      )
+      _ <- ZIO.whenDiscard(b.newMemberships.nonEmpty)(ClubMember.insertBatch(b.newMemberships))
+      _ <- ZIO.whenDiscard((b.closedMemberships ++ c.closedMemberships).nonEmpty)(
+        ClubMember.updateBatch(b.closedMemberships ++ c.closedMemberships)
+      )
     } yield ()
 
   // --- Reporting ---
 
   private def reportReconciliation(result: ReconciliationResult): UIO[Unit] = {
-    val delta = result.currentMemberCount - result.previousMemberCount
-    val sign  = if (delta >= 0) "+" else ""
+    val delta    = result.currentMemberCount - result.previousMemberCount
+    val sign     = if (delta >= 0) "+" else ""
+    val duration = JDuration.between(result.startedAt, result.completedAt)
     for {
       _ <- ZIO.logInfo(s"=== Reconciliation Complete ===")
+      _ <- ZIO.logInfo(s"Duration:           ${duration.toMinutes}m ${duration.toSecondsPart}s")
       _ <- ZIO.logInfo(s"Total members:      ${result.currentMemberCount} ($sign$delta)")
       _ <- ZIO.logInfo(s"New players:        ${result.newPlayers.size}")
       _ <- ZIO.logInfo(s"New snapshots:      ${result.newSnapshots.size}")
@@ -553,9 +570,14 @@ object MembershipApp extends ZIOAppDefault {
   // --- File output formatting ---
 
   private def formatReconciliation(result: ReconciliationResult): String = {
-    val delta = result.currentMemberCount - result.previousMemberCount
-    val sign  = if (delta >= 0) "+" else ""
-    val header = s"""=== Reconciliation Complete ===
+    val duration = JDuration.between(result.startedAt, result.completedAt)
+    val delta    = result.currentMemberCount - result.previousMemberCount
+    val sign     = if (delta >= 0) "+" else ""
+    val header = s"""Started:   ${result.startedAt}
+                    |Completed: ${result.completedAt}
+                    |Duration:  ${duration.toMinutes}m ${duration.toSecondsPart}s
+                    |
+                    |=== Reconciliation Complete ===
                     |Total members:      ${result.currentMemberCount} ($sign$delta)
                     |New players:        ${result.newPlayers.size}
                     |New snapshots:      ${result.newSnapshots.size}

@@ -7,6 +7,7 @@ import zio.{RIO, Ref, Scope, Semaphore, Trace, UIO, URIO, ZIO, ZLayer}
 import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
+import ccas.analysis.tables.RunTrigger
 import ccas.api.misc.subtypes.ClubUrlName
 import ccas.server.jobs.*
 import ccas.server.ServerTables
@@ -41,13 +42,14 @@ object TestRoutes extends ZIOSpecDefault {
       kind: JobKind,
       clubUrlName: Option[ClubUrlName],
       params: Option[String],
+      trigger: RunTrigger,
       effect: RIO[ChessComClient & Transactor, Any]
     ): RIO[Transactor, JobRunId] =
       nextAction.get.flatMap {
         case Action.Succeed =>
           val id  = JobRunId.generate()
           val now = Instant.now()
-          val job = JobRun(id, kind, JobRunStatus.Running, clubUrlName, params, now, None, None)
+          val job = JobRun(id, kind, trigger, JobRunStatus.Running, clubUrlName, params, now, None, None)
           jobs.update(_ + (id -> job)).as(id)
         case Action.Conflict =>
           ZIO.fail(new JobConflictException(s"A $kind job is already running"))
@@ -200,6 +202,7 @@ object TestRoutes extends ZIOSpecDefault {
       val job = JobRun(
         JobRunId.wrap("list-id"),
         JobKind.Recruitment,
+        RunTrigger.Cli,
         JobRunStatus.Completed,
         Some(ClubUrlName("c")),
         None,
@@ -219,7 +222,7 @@ object TestRoutes extends ZIOSpecDefault {
     },
     test("GET /api/jobs/:id returns 200 for existing") {
       val t0  = LocalDateTime.of(2025, 6, 1, 0, 0).toInstant(ZoneOffset.UTC)
-      val job = JobRun(JobRunId.wrap("detail-id"), JobKind.Membership, JobRunStatus.Running, None, None, t0, None, None)
+      val job = JobRun(JobRunId.wrap("detail-id"), JobKind.Membership, RunTrigger.Cli, JobRunStatus.Running, None, None, t0, None, None)
       for {
         fake     <- getFakeRunner
         _        <- fake.prePopulate(job)

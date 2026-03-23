@@ -1,6 +1,6 @@
 package ccas.analysis.apps.recruitment
 
-import java.time.{Instant, LocalDate, YearMonth, ZoneOffset}
+import java.time.{Duration as JDuration, Instant, LocalDate, YearMonth, ZoneOffset}
 import java.time.temporal.ChronoUnit
 
 import com.augustnagro.magnum.Transactor
@@ -92,8 +92,10 @@ object RecruitmentApp extends ZIOAppDefault {
       _ <- (args.toList match {
         case "report" :: clubStr :: rest =>
           val clubUrlName = ClubUrlName.wrap(clubStr)
-          showReport(clubUrlName, rest.headOption).flatMap { case (usernames, evaluatedCount) =>
-            OutputFile.writeAndLog("recruitment", clubUrlName, formatRecruitmentOutput(usernames, evaluatedCount))
+          showReport(clubUrlName, rest.headOption).flatMap { case (usernames, evaluatedCount, reportRun) =>
+            val startedAt   = reportRun.startedAt
+            val completedAt = reportRun.completedAt.getOrElse(Instant.now())
+            OutputFile.writeAndLog("recruitment", clubUrlName, formatRecruitmentOutput(usernames, evaluatedCount, startedAt, completedAt))
           }
         case clubStr :: rest =>
           val (flags, positional) = rest.partition(_.startsWith("--"))
@@ -126,7 +128,7 @@ object RecruitmentApp extends ZIOAppDefault {
                   .map(_.fold(Username.wrap(s"[pid=${c.playerId}]"))(_.username))
               )
               evaluatedCount <- RecruitmentCandidate.selectCountByRun(run.runId)
-              _ <- OutputFile.write("recruitment", clubUrlName, formatRecruitmentOutput(usernames, evaluatedCount))
+              _ <- OutputFile.write("recruitment", clubUrlName, formatRecruitmentOutput(usernames, evaluatedCount, run.startedAt, run.completedAt.getOrElse(Instant.now())))
                 .flatMap(path => ZIO.logInfo(s"Output written to $path"))
             } yield ()
           }
@@ -148,7 +150,8 @@ object RecruitmentApp extends ZIOAppDefault {
     sourceClubs: List[ClubUrlName] = Nil,
     timeLimitMinutes: Option[Int] = None,
     explore: Boolean = true,
-    showProgress: Boolean = false
+    showProgress: Boolean = false,
+    trigger: RunTrigger = RunTrigger.Cli
   ): RIO[ChessComClient & Transactor, RecruitmentRun] =
     for {
       _       <- MembershipApp.reconcile(clubUrlName, trackRun = false)
@@ -167,7 +170,7 @@ object RecruitmentApp extends ZIOAppDefault {
         else ZIO.succeed(0)
       effectiveTarget = (resolvedTarget - alreadyFound) max 0
       now             = Instant.now()
-      runId <- RecruitmentRun.insert(clubId, criteria.criteriaId, now)
+      runId <- RecruitmentRun.insert(clubId, criteria.criteriaId, trigger, now)
 
       // --- Shared setup ---
       targetMembers <- ApiClubMembers.get(client, clubUrlName)
@@ -230,9 +233,11 @@ object RecruitmentApp extends ZIOAppDefault {
           evalCount     <- evalCountRef.get
           deferredCount <- RecruitmentCandidate.selectDeferredCountByRun(runId)
           completedAt = Instant.now()
-          finalRun    = RecruitmentRun(runId, clubId, criteria.criteriaId, now, Some(completedAt), invited.size)
+          duration    = JDuration.between(now, completedAt)
+          finalRun    = RecruitmentRun(runId, clubId, criteria.criteriaId, trigger, now, Some(completedAt), invited.size)
           _ <- RecruitmentRun.update(finalRun)
           _ <- ZIO.logInfo(s"=== $label ===")
+          _ <- ZIO.logInfo(s"Duration: ${duration.toMinutes}m ${duration.toSecondsPart}s")
           _ <- ZIO.logInfo(s"Candidates evaluated: $evalCount")
           _ <- ZIO.logInfo(s"Invited: ${invited.size}")
           _ <- ZIO.whenDiscard(deferredCount > 0)(ZIO.logInfo(s"Deferred: $deferredCount"))
@@ -1320,14 +1325,21 @@ object RecruitmentApp extends ZIOAppDefault {
 
   // --- Report mode ---
 
-  private def formatRecruitmentOutput(usernames: List[Username], evaluatedCount: Int): String = {
-    val stats  = s"Evaluated: $evaluatedCount | Invited: ${usernames.size}"
-    val header = usernames.mkString(" ")
-    val detail = usernames.map(name => s"$name ${ApiPlayer.getProfileUrl(name)}").mkString("\n")
-    s"$stats\n\n$header\n\n$detail\n"
+  private def formatRecruitmentOutput(
+    usernames: List[Username],
+    evaluatedCount: Int,
+    startedAt: Instant,
+    completedAt: Instant
+  ): String = {
+    val duration = JDuration.between(startedAt, completedAt)
+    val timing   = s"Started:   $startedAt\nCompleted: $completedAt\nDuration:  ${duration.toMinutes}m ${duration.toSecondsPart}s\n\n"
+    val stats    = s"Evaluated: $evaluatedCount | Invited: ${usernames.size}"
+    val header   = usernames.mkString(" ")
+    val detail   = usernames.map(name => s"$name ${ApiPlayer.getProfileUrl(name)}").mkString("\n")
+    s"$timing$stats\n\n$header\n\n$detail\n"
   }
 
-  def showReport(clubUrlName: ClubUrlName, runIdOpt: Option[String]): RIO[Transactor, (List[Username], Int)] =
+  def showReport(clubUrlName: ClubUrlName, runIdOpt: Option[String]): RIO[Transactor, (List[Username], Int, RecruitmentRun)] =
     for {
       club <- Club.selectByUrlName(clubUrlName)
         .someOrFail(ExternalException(s"Club '$clubUrlName' not found in database"))
@@ -1357,5 +1369,5 @@ object RecruitmentApp extends ZIOAppDefault {
       _ <- ZIO.foreachDiscard(usernames) { name =>
         ZIO.logInfo(ApiPlayer.getProfileUrl(name).toString)
       }
-    } yield (usernames, evaluatedCount)
+    } yield (usernames, evaluatedCount, run)
 }

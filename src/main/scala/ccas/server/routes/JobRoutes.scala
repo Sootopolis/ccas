@@ -11,6 +11,7 @@ import ccas.analysis.apps.history.HistoryApp
 import ccas.analysis.apps.matchref.MatchRefApp
 import ccas.analysis.apps.membership.MembershipApp
 import ccas.analysis.apps.recruitment.{BlacklistApp, RecruitmentApp}
+import ccas.analysis.tables.RunTrigger
 import ccas.api.misc.subtypes.{ClubUrlName, Username}
 import ccas.server.jobs.*
 import ccas.server.routes.RouteHelpers.*
@@ -71,7 +72,8 @@ object JobRoutes {
     clubUrlName: Option[String],
     startedAt: String,
     completedAt: Option[String],
-    error: Option[String]
+    error: Option[String],
+    trigger: String
   )
   object JobStatusResponse {
     given JsonCodec[JobStatusResponse] = DeriveJsonCodec.gen
@@ -84,7 +86,8 @@ object JobRoutes {
         clubUrlName = jr.clubUrlName.map(ClubUrlName.unwrap),
         startedAt = jr.startedAt.toString,
         completedAt = jr.completedAt.map(_.toString),
-        error = jr.error
+        error = jr.error,
+        trigger = jr.trigger.toString
       )
   }
 
@@ -120,11 +123,12 @@ object JobRoutes {
           cumulative = body.cumulative.getOrElse(false),
           sourceClubs = body.sourceClubs.getOrElse(Nil),
           timeLimitMinutes = effectiveTimeLimit,
-          explore = body.explore.getOrElse(true)
+          explore = body.explore.getOrElse(true),
+          trigger = RunTrigger.Api
         )
         paramsStr = body.toJson
         params    = if (paramsStr.length > 1024) paramsStr.take(1024) + "..." else paramsStr
-        jobId <- runner.submit(JobKind.Recruitment, Some(body.clubUrlName), Some(params), effect)
+        jobId <- runner.submit(JobKind.Recruitment, Some(body.clubUrlName), Some(params), RunTrigger.Api, effect)
       } yield jsonResponse(Status.Accepted, JobResponse(JobRunId.unwrap(jobId), "running")))
         .catchAll(e => ZIO.succeed(handleJobError(e)))
     },
@@ -132,15 +136,15 @@ object JobRoutes {
       (for {
         body   <- parseJsonBody[MembershipRequest](req)
         runner <- ZIO.service[JobRunner]
-        effect = MembershipApp.reconcile(body.clubUrlName, body.trustUsernames.getOrElse(true))
-        jobId <- runner.submit(JobKind.Membership, Some(body.clubUrlName), None, effect)
+        effect = MembershipApp.reconcile(body.clubUrlName, body.trustUsernames.getOrElse(true), trigger = RunTrigger.Api)
+        jobId <- runner.submit(JobKind.Membership, Some(body.clubUrlName), None, RunTrigger.Api, effect)
       } yield jsonResponse(Status.Accepted, JobResponse(JobRunId.unwrap(jobId), "running")))
         .catchAll(e => ZIO.succeed(handleJobError(e)))
     },
     Method.POST / "api" / "jobs" / "matchref" -> handler {
       (for {
         runner <- ZIO.service[JobRunner]
-        jobId  <- runner.submit(JobKind.MatchRef, None, None, MatchRefApp.populate)
+        jobId  <- runner.submit(JobKind.MatchRef, None, None, RunTrigger.Api, MatchRefApp.populate(RunTrigger.Api))
       } yield jsonResponse(Status.Accepted, JobResponse(JobRunId.unwrap(jobId), "running")))
         .catchAll(e => ZIO.succeed(handleJobError(e)))
     },
@@ -148,8 +152,8 @@ object JobRoutes {
       (for {
         body   <- parseJsonBody[HistoryRequest](req)
         runner <- ZIO.service[JobRunner]
-        effect = HistoryApp.discover(body.clubUrlName, body.full.getOrElse(false), body.refresh.getOrElse(false))
-        jobId <- runner.submit(JobKind.History, Some(body.clubUrlName), Some(body.toJson), effect)
+        effect = HistoryApp.discover(body.clubUrlName, body.full.getOrElse(false), body.refresh.getOrElse(false), RunTrigger.Api)
+        jobId <- runner.submit(JobKind.History, Some(body.clubUrlName), Some(body.toJson), RunTrigger.Api, effect)
       } yield jsonResponse(Status.Accepted, JobResponse(JobRunId.unwrap(jobId), "running")))
         .catchAll(e => ZIO.succeed(handleJobError(e)))
     },

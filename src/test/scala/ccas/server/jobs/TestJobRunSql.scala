@@ -5,6 +5,7 @@ import java.time.{Duration, Instant, LocalDateTime, ZoneOffset}
 import com.augustnagro.magnum.sql
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
+import ccas.analysis.tables.RunTrigger
 import ccas.api.misc.subtypes.ClubUrlName
 import ccas.server.ServerTables
 import ccas.utils.sql.FreshSchemaLayer
@@ -37,10 +38,10 @@ object TestJobRunSql extends ZIOSpecDefault {
   private val id2 = JobRunId.wrap("test-id-2")
 
   private val run0 =
-    JobRun(id0, JobKind.Recruitment, JobRunStatus.Running, Some(ClubUrlName("club-a")), None, Times.t0, None, None)
+    JobRun(id0, JobKind.Recruitment, RunTrigger.Cli, JobRunStatus.Running, Some(ClubUrlName("club-a")), None, Times.t0, None, None)
   private val run1 =
-    JobRun(id1, JobKind.Membership, JobRunStatus.Running, Some(ClubUrlName("club-a")), None, Times.t1, None, None)
-  private val run2 = JobRun(id2, JobKind.MatchRef, JobRunStatus.Running, None, Some("params"), Times.t2, None, None)
+    JobRun(id1, JobKind.Membership, RunTrigger.Cli, JobRunStatus.Running, Some(ClubUrlName("club-a")), None, Times.t1, None, None)
+  private val run2 = JobRun(id2, JobKind.MatchRef, RunTrigger.Cli, JobRunStatus.Running, None, Some("params"), Times.t2, None, None)
 
   private val deleteAll = connectZIO { val _ = sql"DELETE FROM job_run".update.run() }
 
@@ -126,6 +127,7 @@ object TestJobRunSql extends ZIOSpecDefault {
     val completed = JobRun(
       id0,
       JobKind.Recruitment,
+      RunTrigger.Cli,
       JobRunStatus.Completed,
       Some(ClubUrlName("club-a")),
       None,
@@ -136,6 +138,7 @@ object TestJobRunSql extends ZIOSpecDefault {
     val failed = JobRun(
       id1,
       JobKind.Recruitment,
+      RunTrigger.Cli,
       JobRunStatus.Failed,
       Some(ClubUrlName("club-a")),
       None,
@@ -166,9 +169,9 @@ object TestJobRunSql extends ZIOSpecDefault {
   }
 
   private def testMarkOrphansAsFailed = test("markOrphansAsFailed marks Running → Failed") {
-    val running1  = JobRun(id0, JobKind.Recruitment, JobRunStatus.Running, None, None, Times.t0, None, None)
-    val running2  = JobRun(id1, JobKind.Membership, JobRunStatus.Running, None, None, Times.t1, None, None)
-    val completed = JobRun(id2, JobKind.MatchRef, JobRunStatus.Completed, None, None, Times.t2, Some(Times.t2), None)
+    val running1  = JobRun(id0, JobKind.Recruitment, RunTrigger.Cli, JobRunStatus.Running, None, None, Times.t0, None, None)
+    val running2  = JobRun(id1, JobKind.Membership, RunTrigger.Cli, JobRunStatus.Running, None, None, Times.t1, None, None)
+    val completed = JobRun(id2, JobKind.MatchRef, RunTrigger.Cli, JobRunStatus.Completed, None, None, Times.t2, Some(Times.t2), None)
     for {
       _     <- deleteAll
       _     <- JobRun.insert(running1)

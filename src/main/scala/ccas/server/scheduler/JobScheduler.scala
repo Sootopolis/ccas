@@ -11,6 +11,7 @@ import ccas.analysis.apps.history.HistoryApp
 import ccas.analysis.apps.matchref.MatchRefApp
 import ccas.analysis.apps.membership.MembershipApp
 import ccas.analysis.apps.recruitment.RecruitmentApp
+import ccas.analysis.tables.RunTrigger
 import ccas.api.misc.subtypes.ClubUrlName
 import ccas.server.jobs.{JobKind, JobRunner}
 
@@ -59,16 +60,16 @@ object JobScheduler {
 
       val effect = schedule.kind match {
         case JobKind.Recruitment =>
-          requireClubUrlName.flatMap(name => RecruitmentApp.recruit(name, "default", timeLimitMinutes = Some(30)).unit)
+          requireClubUrlName.flatMap(name => RecruitmentApp.recruit(name, "default", timeLimitMinutes = Some(30), trigger = RunTrigger.Scheduled).unit)
         case JobKind.Membership =>
-          requireClubUrlName.flatMap(name => MembershipApp.reconcile(name).unit)
+          requireClubUrlName.flatMap(name => MembershipApp.reconcile(name, trigger = RunTrigger.Scheduled).unit)
         case JobKind.MatchRef =>
-          MatchRefApp.populate
+          MatchRefApp.populate(RunTrigger.Scheduled)
         case JobKind.History =>
-          requireClubUrlName.flatMap(name => HistoryApp.discover(name).unit)
+          requireClubUrlName.flatMap(name => HistoryApp.discover(name, trigger = RunTrigger.Scheduled).unit)
       }
 
-      runner.submit(schedule.kind, schedule.clubUrlName, schedule.params, effect)
+      runner.submit(schedule.kind, schedule.clubUrlName, schedule.params, RunTrigger.Scheduled, effect)
         .provideEnvironment(env) *>
         JobSchedule.updateLastRunAt(schedule.id, now).provideEnvironment(env).unit
     }
