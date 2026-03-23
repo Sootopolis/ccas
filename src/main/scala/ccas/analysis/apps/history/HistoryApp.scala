@@ -17,7 +17,7 @@ import ccas.utils.errors.ExternalException
 import ccas.utils.sql.DataSourceLayer
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.SqlZioTypes.{connectZIO, withTransaction}
-import ccas.utils.OutputFile
+import ccas.utils.{OutputFile, ProgressBar}
 
 object HistoryApp extends ZIOAppDefault {
 
@@ -225,14 +225,20 @@ object HistoryApp extends ZIOAppDefault {
       failRef          <- Ref.make(0)
       failedMembersRef <- Ref.make(List.empty[(Username, String)])
       total = toQuery.size
-      _ <- ZIO.foreachParDiscard(toQuery) { case (playerId, username) =>
-        seedMatchesForPlayer(client, clubId, clubUrlName, playerId, username).foldZIO(
-          error => failRef.update(_ + 1) *> failedMembersRef.update(_ :+ (username, error.getMessage))
-            *> ZIO.logWarning(s"  $username: failed — ${error.getMessage}"),
-          count => seedRef.update(_ + count) *> counterRef.updateAndGet(_ + 1).flatMap { n =>
-            ZIO.whenDiscard(n % 50 == 0 || n == total)(ZIO.logInfo(s"  Querying member matches: $n/$total"))
+      _ <- ZIO.scoped {
+        for {
+          bar <- ProgressBar.scoped
+          _ <- ZIO.foreachParDiscard(toQuery) { case (playerId, username) =>
+            seedMatchesForPlayer(client, clubId, clubUrlName, playerId, username).foldZIO(
+              error => failRef.update(_ + 1)
+                *> failedMembersRef.update(_ :+ (username, error.getMessage))
+                *> ZIO.logWarning(s"  $username: failed — ${error.getMessage}"),
+              count => seedRef.update(_ + count) *> counterRef.updateAndGet(_ + 1).flatMap { n =>
+                bar.print(n, total, s"  Querying member matches: $n/$total")
+              }
+            )
           }
-        )
+        } yield ()
       }
       seeded        <- seedRef.get
       queried       <- counterRef.get
@@ -293,7 +299,10 @@ object HistoryApp extends ZIOAppDefault {
             _ <- ctx.newPlayers.set(Set.empty)
             beforeCount <- ctx.matchesProcessed.get
 
-            _ <- processAllPending(ctx)
+            waveCounter <- Ref.make(0)
+            _ <- ZIO.scoped {
+              ProgressBar.scoped.flatMap(waveBar => processAllPending(ctx, waveBar, waveCounter, pendingCount))
+            }
 
             afterCount <- ctx.matchesProcessed.get
             failedCount <- ctx.matchesFailed.get
@@ -323,34 +332,37 @@ object HistoryApp extends ZIOAppDefault {
     waveLoop(0, Nil)
   }
 
-  private def processAllPending(ctx: ProcessingContext): RIO[Transactor, Unit] = {
-    def loop: RIO[Transactor, Unit] =
-      for {
-        batch <- HistoryPendingMatch.selectClubBatch(ctx.clubId, BatchSize)
-        _ <- ZIO.whenDiscard(batch.nonEmpty) {
-          processMatchBatch(ctx, batch) *> loop
-        }
-      } yield ()
-    loop
-  }
-
-  private def processMatchBatch(ctx: ProcessingContext, matchIds: List[ClubMatchId]): RIO[Transactor, Unit] = {
-    val total = matchIds.size
+  private def processAllPending(
+    ctx: ProcessingContext,
+    bar: ProgressBar,
+    counter: Ref[Int],
+    waveTotal: Long
+  ): RIO[Transactor, Unit] =
     for {
-      counter <- Ref.make(0)
-      _ <- ZIO.foreachParDiscard(matchIds) { matchId =>
-        processMatch(ctx, matchId)
-          .zipLeft(ctx.matchesProcessed.update(_ + 1))
-          .catchAll { error =>
-            ctx.matchesFailed.update(_ + 1) *>
-              ctx.failedMatches.update(_ :+ (matchId, error.getMessage)) *>
-              ZIO.logWarning(s"    Match $matchId: ${error.getMessage}")
-          } *> counter.updateAndGet(_ + 1).flatMap { n =>
-          ZIO.whenDiscard(n % 50 == 0 || n == total)(ZIO.logInfo(s"    Progress: $n/$total"))
-        }
+      batch <- HistoryPendingMatch.selectClubBatch(ctx.clubId, BatchSize)
+      _ <- ZIO.whenDiscard(batch.nonEmpty) {
+        processMatchBatch(ctx, batch, bar, counter, waveTotal) *> processAllPending(ctx, bar, counter, waveTotal)
       }
     } yield ()
-  }
+
+  private def processMatchBatch(
+    ctx: ProcessingContext,
+    matchIds: List[ClubMatchId],
+    bar: ProgressBar,
+    counter: Ref[Int],
+    waveTotal: Long
+  ): RIO[Transactor, Unit] =
+    ZIO.foreachParDiscard(matchIds) { matchId =>
+      processMatch(ctx, matchId)
+        .zipLeft(ctx.matchesProcessed.update(_ + 1))
+        .catchAll { error =>
+          ctx.matchesFailed.update(_ + 1) *>
+            ctx.failedMatches.update(_ :+ (matchId, error.getMessage)) *>
+            ZIO.logWarning(s"    Match $matchId: ${error.getMessage}")
+        } *> counter.updateAndGet(_ + 1).flatMap { n =>
+        bar.print(n, waveTotal.toInt, s"    Processing matches: $n/$waveTotal")
+      }
+    }
 
   private def processMatch(ctx: ProcessingContext, matchId: ClubMatchId): RIO[Transactor, Unit] =
     for {

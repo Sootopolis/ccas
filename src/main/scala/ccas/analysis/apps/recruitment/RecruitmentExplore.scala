@@ -4,7 +4,7 @@ import java.time.Instant
 import java.time.temporal.ChronoUnit
 
 import com.augustnagro.magnum.Transactor
-import zio.{Console, RIO, Task, UIO, ZIO}
+import zio.{RIO, Task, UIO, ZIO}
 
 import ccas.analysis.tables.*
 import ccas.api.club.{ApiClub, ApiClubMatches, ApiClubMembers}
@@ -179,12 +179,8 @@ private[recruitment] object RecruitmentExplore {
     ZIO.whenDiscard(ctx.showProgress)(for {
       invited   <- ctx.invitedRef.get
       evalCount <- ctx.evalCountRef.get
-      tgt    = ctx.target
-      pct    = if (tgt == 0) 100 else (invited.size * 100) / tgt
-      filled = pct / 5
-      bar    = "\u2588" * filled + "\u2591" * (20 - filled)
-      line   = s"\r[Progress] Evaluated: $evalCount | Invited: ${invited.size}/$tgt | $bar $pct%"
-      _ <- Console.print(line).ignore
+      _ <- ctx.progressBar.print(invited.size, ctx.target,
+        s"[Progress] Evaluated: $evalCount | Invited: ${invited.size}/${ctx.target}")
     } yield ())
 
   /** When invited count exceeds the target, reclassify the newest excess from Invited to Deferred. */

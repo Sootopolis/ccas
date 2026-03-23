@@ -12,6 +12,7 @@ import ccas.api.club.ApiClubMatches
 import ccas.api.clubmatch.ApiDailyMatch
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubUrlName, PlayerId, Username}
 import ccas.api.player.ApiPlayerMatches
+import ccas.utils.ProgressBar
 import ccas.utils.client.ChessComClient
 import ccas.utils.sql.DataSourceLayer
 import ccas.utils.sql.SqlZioTypes.connectZIO
@@ -38,18 +39,36 @@ object MatchRefApp extends ZIOAppDefault {
       // Clubs
       clubs       <- selectUnresolvedClubs
       _           <- ZIO.logInfo(s"Clubs without match ref: ${clubs.size}")
-      clubCounter <- Ref.make(0)
-      _ <- ZIO.foreachParDiscard(clubs) { club =>
-        resolveClub(client, cache, club).tap(r => clubCounter.update(_ + 1).when(r.isDefined))
+      clubCounter   <- Ref.make(0)
+      clubProcessed <- Ref.make(0)
+      _ <- ZIO.scoped {
+        for {
+          clubBar <- ProgressBar.scoped
+          _ <- ZIO.foreachParDiscard(clubs) { club =>
+            resolveClub(client, cache, club).tap(r => clubCounter.update(_ + 1).when(r.isDefined))
+              *> clubProcessed.updateAndGet(_ + 1).flatMap(n =>
+                clubBar.print(n, clubs.size, s"  Resolving clubs: $n/${clubs.size}")
+              )
+          }
+        } yield ()
       }
       resolvedClubs <- clubCounter.get
       _             <- ZIO.logInfo(s"Resolved: $resolvedClubs / ${clubs.size}")
       // Players
       players       <- selectUnresolvedPlayers
       _             <- ZIO.logInfo(s"Players without match ref: ${players.size}")
-      playerCounter <- Ref.make(0)
-      _ <- ZIO.foreachParDiscard(players) { player =>
-        resolvePlayer(client, cache, player).tap(r => playerCounter.update(_ + 1).when(r.isDefined))
+      playerCounter   <- Ref.make(0)
+      playerProcessed <- Ref.make(0)
+      _ <- ZIO.scoped {
+        for {
+          playerBar <- ProgressBar.scoped
+          _ <- ZIO.foreachParDiscard(players) { player =>
+            resolvePlayer(client, cache, player).tap(r => playerCounter.update(_ + 1).when(r.isDefined))
+              *> playerProcessed.updateAndGet(_ + 1).flatMap(n =>
+                playerBar.print(n, players.size, s"  Resolving players: $n/${players.size}")
+              )
+          }
+        } yield ()
       }
       resolvedPlayers <- playerCounter.get
       _               <- ZIO.logInfo(s"Resolved: $resolvedPlayers / ${players.size}")

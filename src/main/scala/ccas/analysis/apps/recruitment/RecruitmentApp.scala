@@ -95,7 +95,7 @@ object RecruitmentApp extends ZIOAppDefault {
     explore: Boolean = true,
     showProgress: Boolean = false,
     trigger: RunTrigger = RunTrigger.Cli
-  ): RIO[ChessComClient & Transactor, RecruitmentRun] =
+  ): RIO[ChessComClient & Transactor, RecruitmentRun] = ZIO.scoped {
     for {
       _       <- MembershipApp.reconcile(clubUrlName, trackRun = false)
       client  <- ZIO.service[ChessComClient]
@@ -149,6 +149,7 @@ object RecruitmentApp extends ZIOAppDefault {
       filters              = RecruitmentFilters.buildFilterChain(criteria)
       effectiveConcurrency = DefaultExploreConcurrency
 
+      progressBar <- ccas.utils.ProgressBar.scoped
       ctx = ExploreContext(
         runId = runId,
         clubUrlName = clubUrlName,
@@ -163,14 +164,15 @@ object RecruitmentApp extends ZIOAppDefault {
         evalBatchSize = DefaultEvalBatchSize,
         evalChunkSize = DefaultEvalChunkSize,
         explore = explore,
-        showProgress = showProgress
+        showProgress = showProgress,
+        progressBar = progressBar
       )
 
       transactor <- ZIO.service[Transactor]
 
       finalizeRun = (label: String) =>
         for {
-          _             <- ZIO.whenDiscard(showProgress)(ZIO.logInfo(""))
+          _             <- ZIO.whenDiscard(showProgress)(progressBar.finish)
           _             <- RecruitmentExplore.reclassifyExcessInvited(ctx)
           invited       <- invitedRef.get.map(_.reverse)
           evalCount     <- evalCountRef.get
@@ -263,6 +265,7 @@ object RecruitmentApp extends ZIOAppDefault {
           } yield finalRun
         }
     } yield finalRun
+  }
 
   // --- Report mode ---
 

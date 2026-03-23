@@ -5,6 +5,7 @@ import ccas.api.misc.enums.GameResultDetail
 import ccas.api.misc.subtypes.{ClubId, ClubUrlName, PlayerId, Username}
 import ccas.api.player.ApiPlayer
 import ccas.api.player.ApiPlayerArchive.ApiPlayerArchiveGame
+import ccas.utils.ProgressBar
 import ccas.utils.client.ChessComClient
 import com.augustnagro.magnum.Transactor
 import zio.http.URL
@@ -110,7 +111,8 @@ private[recruitment] case class ExploreContext(
   evalBatchSize: Int,
   evalChunkSize: Int,
   explore: Boolean,
-  showProgress: Boolean
+  showProgress: Boolean,
+  progressBar: ProgressBar
 )
 
 // --- Archive game helpers ---
