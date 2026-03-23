@@ -4,7 +4,7 @@ import java.time.{Duration as JDuration, Instant}
 import scala.annotation.nowarn
 
 import com.augustnagro.magnum.{sql, Transactor}
-import zio.{Promise, RIO, Ref, Scope, Task, ZIO, ZIOAppArgs, ZIOAppDefault}
+import zio.{Promise, RIO, Ref, Scope, Task, ZIO, ZIOAppDefault}
 import zio.http.Client
 
 import ccas.analysis.tables.{ClubMatchRef, PlayerMatchRef, RunTrigger, Tables}
@@ -22,7 +22,7 @@ object MatchRefApp extends ZIOAppDefault {
   private final case class UnresolvedPlayer(playerId: PlayerId, username: Username)
   private final case class UnresolvedClub(clubId: ClubId, urlName: ClubUrlName)
 
-  override def run: RIO[ZIOAppArgs & Scope, Unit] =
+  override def run: RIO[Scope, Unit] =
     populate().provide(
       ChessComClient.live(),
       Client.default,
