@@ -31,13 +31,21 @@ private[recruitment] case class RunContext(
   discoveredOpponents: Ref[Set[Username]]
 )
 
-/** Accumulated per-candidate state — populated as filters run. */
+/** Accumulated per-candidate state — populated as filters run.
+  *
+  * @param cacheRejected
+  *   Set by [[RecruitmentFilters.CheckCacheCriteria]] when the candidate is rejected purely on
+  *   cached stats (no fresh API data fetched beyond the initial player lookup). When true,
+  *   no [[ccas.analysis.tables.RecruitmentCandidate]] row is persisted so the candidate is not
+  *   blocked by the `daysSinceRejected` cooldown and can be re-evaluated once the cache ages out.
+  */
 private[recruitment] case class CandidateContext(
   username: Username,
   apiPlayer: Option[ApiPlayer],
   isNewPlayer: Boolean,
   cache: Option[PlayerRecruitmentCache],
-  recentArchives: Option[List[ccas.api.player.ApiPlayerArchive]] = None
+  recentArchives: Option[List[ccas.api.player.ApiPlayerArchive]] = None,
+  cacheRejected: Boolean = false
 )
 private[recruitment] object CandidateContext {
   def initial(username: Username): CandidateContext =

@@ -1410,7 +1410,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
     criteria: RecruitmentCriteria,
     cache: PlayerRecruitmentCache,
     username: String = "alice"
-  ): RIO[Transactor, CandidateOutcome] =
+  ): RIO[Transactor, Option[CandidateOutcome]] =
     for {
       _ <- seedDb
       // Seed player row for FK constraint, then seed cache
@@ -1425,7 +1425,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       client     <- fakeChessComClient(responses)
       _          <- evalCandidates(client, runId, List(Username.wrap(username)), criteria)
       cands      <- RecruitmentCandidate.selectByRun(runId)
-    } yield cands.head.outcome
+    } yield cands.headOption.map(_.outcome)
 
   private def suiteCacheFilters = suite("cache-aware filters")(
     test("zero-tolerance daily timeout rejects from cache") {
@@ -1449,7 +1449,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
 
       for {
         outcome <- evalSingleWithCache(responses, criteria, staleCache)
-      } yield assertTrue(outcome == CandidateOutcome.Rejected)
+      } yield assertTrue(outcome.isEmpty) // cache-only rejection: no candidate row persisted
     },
     test("maxClubs cache rejection at 48h old cache") {
       val now = Instant.now()
@@ -1472,7 +1472,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
 
       for {
         outcome <- evalSingleWithCache(responses, criteria, cache48h)
-      } yield assertTrue(outcome == CandidateOutcome.Rejected)
+      } yield assertTrue(outcome.isEmpty) // cache-only rejection: no candidate row persisted
     },
     test("stale cache falls through to API checks") {
       val now = Instant.now()
@@ -1503,7 +1503,36 @@ object TestRecruitmentApp extends ZIOSpecDefault {
 
       for {
         outcome <- evalSingleWithCache(responses, criteria, staleCache)
-      } yield assertTrue(outcome == CandidateOutcome.Invited)
+      } yield assertTrue(outcome.contains(CandidateOutcome.Invited))
+    },
+    test("cache-only rejection does not block re-evaluation via daysSinceRejected") {
+      val now = Instant.now()
+      val cache = PlayerRecruitmentCache(
+        playerId = pid0,
+        fetchedAt = now.minus(Duration.ofHours(12)),
+        dailyElo = Some(1500),
+        dailyTimeoutPct = Some(0.0),
+        dailyGamesFinished = Some(200),
+        clubCount = Some(120), // over limit
+        ongoingGames = Some(3),
+        ongoingTeamMatches = Some(2),
+        tmGamesFinished90d = Some(10),
+        tmTimeoutPct90d = Some(0.0),
+        lastDailyTimeoutAt = None,
+        lastTmTimeoutAt = None
+      )
+      val criteria  = makeCriteria(daysSinceRejected = Some(30)).copy(maxClubs = Some(50))
+      val responses = Map("player/alice" -> apiPlayerJson(200, "alice"))
+
+      for {
+        // First run: cache-only rejection (no candidate row written)
+        outcome1 <- evalSingleWithCache(responses, criteria, cache)
+        // Verify no Rejected row exists for daysSinceRejected to find
+        rejected <- RecruitmentCandidate.selectLatestRejectedByAlias(pid0, clubId, "default")
+      } yield assertTrue(
+        outcome1.isEmpty,
+        rejected.isEmpty
+      )
     }
   )
 

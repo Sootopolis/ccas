@@ -222,7 +222,7 @@ private[recruitment] object RecruitmentFilters {
     def apply(env: FilterEnv): RIO[Transactor, FilterResult] =
       ZIO.succeed {
         val rejected = env.candidate.cache.exists(runCacheCriteria(_, env.run.criteria, env.run.now))
-        FilterResult(rejected, env.candidate)
+        FilterResult(rejected, if (rejected) env.candidate.copy(cacheRejected = true) else env.candidate)
       }
   }
 
@@ -389,7 +389,10 @@ private[recruitment] object RecruitmentFilters {
             }
           }
           _ <- ZIO.foreachDiscard(candidate.cache)(PlayerRecruitmentCache.upsert)
-          _ <- RecruitmentCandidate.insert(RecruitmentCandidate(runId, ap.playerId, now, outcome, errorMessage))
+          // Skip candidate row for cache-only rejections so they aren't blocked by daysSinceRejected
+          _ <- ZIO.unlessDiscard(candidate.cacheRejected)(
+            RecruitmentCandidate.insert(RecruitmentCandidate(runId, ap.playerId, now, outcome, errorMessage))
+          )
         } yield ()
       }
     }
