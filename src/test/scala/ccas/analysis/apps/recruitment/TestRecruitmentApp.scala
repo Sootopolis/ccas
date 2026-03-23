@@ -448,7 +448,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         else ZIO.succeed(Set.empty[PlayerId])
       discoveredClubs     <- Ref.make(Set.empty[ClubUrlName])
       discoveredOpponents <- Ref.make(Set.empty[Username])
-      runCtx = RecruitmentApp.RunContext(
+      runCtx = RunContext(
         client,
         criteria,
         clubId,
@@ -459,11 +459,11 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         discoveredClubs,
         discoveredOpponents
       )
-      filters = RecruitmentApp.buildFilterChain(criteria)
+      filters = RecruitmentFilters.buildFilterChain(criteria)
       revInvited <- ZIO.foldLeft(candidates)(List.empty[Username]) { case (invited, username) =>
         if (invited.size >= target) ZIO.succeed(invited)
         else
-          RecruitmentApp.evaluateCandidate(runId, username, runCtx, filters).map { outcome =>
+          RecruitmentFilters.evaluateCandidate(runId, username, runCtx, filters).map { outcome =>
             if (outcome == CandidateOutcome.Invited) username :: invited else invited
           }
       }
@@ -1156,7 +1156,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
 
       for {
         client <- fakeChessComClient(responses)
-        candidates <- RecruitmentApp.gatherClubCandidates(
+        candidates <- RecruitmentExplore.gatherClubCandidates(
           client,
           ClubUrlName("source-club"),
           excludeSourceAdmins = false,
@@ -1180,7 +1180,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
 
       for {
         client <- fakeChessComClient(responses)
-        candidates <- RecruitmentApp.gatherClubCandidates(
+        candidates <- RecruitmentExplore.gatherClubCandidates(
           client,
           ClubUrlName("source-club"),
           excludeSourceAdmins = true,
@@ -1205,7 +1205,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
 
       for {
         client <- fakeChessComClient(responses)
-        candidates <- RecruitmentApp.gatherClubCandidates(
+        candidates <- RecruitmentExplore.gatherClubCandidates(
           client,
           ClubUrlName("source-club"),
           excludeSourceAdmins = false,
@@ -1478,7 +1478,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       val now = Instant.now()
       val staleCache = PlayerRecruitmentCache(
         playerId = pid0,
-        fetchedAt = now.minus(java.time.Duration.ofHours(100)),
+        fetchedAt = now.minus(java.time.Duration.ofDays(31)),
         dailyElo = Some(500),
         dailyTimeoutPct = Some(50.0),
         dailyGamesFinished = Some(5),
@@ -1568,7 +1568,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
 
   private def suiteExploreMode = suite("explore mode")(
     test("isGrim pure logic") {
-      import RecruitmentApp.{SourceState, isGrim}
+      import ccas.analysis.apps.recruitment.{SourceState, isGrim}
       assertTrue(
         !isGrim(SourceState(Nil, 49, 49, 49)), // below threshold
         isGrim(SourceState(Nil, 10, 10, 50)),  // consecutive threshold hit

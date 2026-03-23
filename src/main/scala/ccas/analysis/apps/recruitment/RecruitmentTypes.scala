@@ -1,0 +1,120 @@
+package ccas.analysis.apps.recruitment
+
+import ccas.analysis.tables.{PlayerRecruitmentCache, RecruitmentCriteria}
+import ccas.api.misc.enums.GameResultDetail
+import ccas.api.misc.subtypes.{ClubId, ClubUrlName, PlayerId, Username}
+import ccas.api.player.ApiPlayer
+import ccas.api.player.ApiPlayerArchive.ApiPlayerArchiveGame
+import ccas.utils.client.ChessComClient
+import com.augustnagro.magnum.Transactor
+import zio.http.URL
+import zio.{RIO, Ref}
+
+import java.time.Instant
+
+// --- Filter pipeline types ---
+
+private[recruitment] trait RecruitmentFilter {
+  def apply(env: FilterEnv): RIO[Transactor, FilterResult]
+}
+
+/** Shared across all candidates in a run. */
+private[recruitment] case class RunContext(
+  client: ChessComClient,
+  criteria: RecruitmentCriteria,
+  clubId: ClubId,
+  alias: String,
+  clubMatchIds: Set[URL],
+  formerMemberIds: Set[PlayerId],
+  now: Instant,
+  discoveredClubs: Ref[Set[ClubUrlName]],
+  discoveredOpponents: Ref[Set[Username]]
+)
+
+/** Accumulated per-candidate state — populated as filters run. */
+private[recruitment] case class CandidateContext(
+  username: Username,
+  apiPlayer: Option[ApiPlayer],
+  isNewPlayer: Boolean,
+  cache: Option[PlayerRecruitmentCache],
+  recentArchives: Option[List[ccas.api.player.ApiPlayerArchive]] = None
+)
+private[recruitment] object CandidateContext {
+  def initial(username: Username): CandidateContext =
+    CandidateContext(username, apiPlayer = None, isNewPlayer = false, cache = None)
+}
+
+/** Groups contexts passed to each filter. */
+private[recruitment] case class FilterEnv(run: RunContext, candidate: CandidateContext)
+
+private[recruitment] case class FilterResult(rejected: Boolean, candidate: CandidateContext)
+
+// --- Explore mode types ---
+
+private[recruitment] sealed trait SourceDescriptor {
+  val id: String
+}
+
+private[recruitment] case class ClubSource(clubUrlName: ClubUrlName) extends SourceDescriptor {
+  val id: String = ClubUrlName.unwrap(clubUrlName)
+}
+
+private[recruitment] case class UsernameSource(id: String, usernames: List[Username]) extends SourceDescriptor
+
+private[recruitment] case class TmStatsResult(
+  gamesFinished: Int,
+  timeoutPct: Option[Double],
+  lastTimeoutAt: Option[Instant],
+  opponentUsernames: Set[Username]
+)
+
+private[recruitment] case class ActivationResult(
+  pool: Map[String, SourceState],
+  pending: List[SourceDescriptor],
+  visited: Set[ClubUrlName]
+)
+
+private[recruitment] case class SourceState(
+  remaining: List[Username],
+  evaluated: Int,
+  rejected: Int,
+  consecutiveRejects: Int
+)
+
+// Grim constants (server-side, not user-configurable)
+private[recruitment] val GrimConsecutiveRejects = 50
+
+private[recruitment] def isGrim(s: SourceState): Boolean = s.consecutiveRejects >= GrimConsecutiveRejects
+
+// --- ExploreContext: bundles constant parameters across explore loop recursion ---
+
+private[recruitment] case class ExploreContext(
+  runId: Long,
+  clubUrlName: ClubUrlName,
+  filters: List[RecruitmentFilter],
+  runCtx: RunContext,
+  invitedRef: Ref[List[Username]],
+  evaluatedRef: Ref[Set[Username]],
+  evalCountRef: Ref[Int],
+  target: Int,
+  existingUsernames: Set[Username],
+  exploreConcurrency: Int,
+  evalBatchSize: Int,
+  evalChunkSize: Int,
+  explore: Boolean,
+  showProgress: Boolean
+)
+
+// --- Archive game helpers ---
+
+/** Returns the opponent's username if they did not lose by timeout. */
+private[recruitment] def nonTimeoutOpponent(g: ApiPlayerArchiveGame, username: Username): Option[Username] = {
+  val isWhite        = g.white.username.equalsIgnoreCase(username)
+  val opponentResult = if (isWhite) g.black.result else g.white.result
+  val opponentName   = if (isWhite) g.black.username else g.white.username
+  Option.when(opponentResult != GameResultDetail.Timeout)(opponentName)
+}
+
+/** Returns the player's own result in the game. */
+private[recruitment] def playerResult(g: ApiPlayerArchiveGame, username: Username): GameResultDetail =
+  if (g.white.username.equalsIgnoreCase(username)) g.white.result else g.black.result
