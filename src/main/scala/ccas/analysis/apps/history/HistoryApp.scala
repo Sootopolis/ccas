@@ -1,11 +1,9 @@
 package ccas.analysis.apps.history
 
-import java.time.{Duration as JDuration, Instant}
-
-import com.augustnagro.magnum.{sql, Transactor}
-import zio.{Promise, RIO, Ref, Scope, Task, ZIO, ZIOAppArgs, ZIOAppDefault}
+import java.time.{Instant, Duration as JDuration}
+import com.augustnagro.magnum.{Transactor, sql}
+import zio.{Promise, RIO, Ref, Scope, Task, UIO, ZIO, ZIOAppArgs, ZIOAppDefault}
 import zio.http.{Client, URL}
-
 import ccas.analysis.apps.membership.MembershipApp
 import ccas.analysis.tables.*
 import ccas.api.club.ApiClubMatches
@@ -227,18 +225,13 @@ object HistoryApp extends ZIOAppDefault {
       failedMembersRef <- Ref.make(List.empty[(Username, String)])
       total = toQuery.size
       _ <- ZIO.foreachParDiscard(toQuery) { case (playerId, username) =>
-        seedMatchesForPlayer(client, clubId, clubUrlName, playerId, username)
-          .foldZIO(
-            error =>
-              failRef.update(_ + 1) *>
-                failedMembersRef.update(_ :+ (username, error.getMessage)) *>
-                ZIO.logWarning(s"  $username: failed — ${error.getMessage}"),
-            count =>
-              seedRef.update(_ + count) *>
-                counterRef.updateAndGet(_ + 1).flatMap { n =>
-                  ZIO.whenDiscard(n % 50 == 0 || n == total)(ZIO.logInfo(s"  Querying member matches: $n/$total"))
-                }
-          )
+        seedMatchesForPlayer(client, clubId, clubUrlName, playerId, username).foldZIO(
+          error => failRef.update(_ + 1) *> failedMembersRef.update(_ :+ (username, error.getMessage))
+            *> ZIO.logWarning(s"  $username: failed — ${error.getMessage}"),
+          count => seedRef.update(_ + count) *> counterRef.updateAndGet(_ + 1).flatMap { n =>
+            ZIO.whenDiscard(n % 50 == 0 || n == total)(ZIO.logInfo(s"  Querying member matches: $n/$total"))
+          }
+        )
       }
       seeded        <- seedRef.get
       queried       <- counterRef.get
@@ -295,41 +288,38 @@ object HistoryApp extends ZIOAppDefault {
     def waveLoop(waveCount: Int, waveDetails: List[(Int, Int)]): RIO[Transactor, RunStats] =
       for {
         pendingCount <- HistoryPendingMatch.count(ctx.clubId)
-        result <-
-          if (pendingCount == 0) {
-            readStats(ctx, waveCount, waveDetails)
-          } else {
-            val wave = waveCount + 1
-            for {
-              _           <- ZIO.logInfo(s"  Wave $wave: $pendingCount matches to process")
-              _           <- ctx.newPlayers.set(Set.empty)
-              beforeCount <- ctx.matchesProcessed.get
+        result <- if (pendingCount == 0) { readStats(ctx, waveCount, waveDetails) } else {
+          val wave = waveCount + 1
+          for {
+            _ <- ZIO.logInfo(s"  Wave $wave: $pendingCount matches to process")
+            _ <- ctx.newPlayers.set(Set.empty)
+            beforeCount <- ctx.matchesProcessed.get
 
-              _ <- processAllPending(ctx)
+            _ <- processAllPending(ctx)
 
-              afterCount  <- ctx.matchesProcessed.get
-              failedCount <- ctx.matchesFailed.get
-              waveProcessed = afterCount - beforeCount
-              _ <- ZIO.logInfo(s"  Wave $wave complete: $waveProcessed processed, $failedCount failed total")
+            afterCount <- ctx.matchesProcessed.get
+            failedCount <- ctx.matchesFailed.get
+            waveProcessed = afterCount - beforeCount
+            _ <- ZIO.logInfo(s"  Wave $wave complete: $waveProcessed processed, $failedCount failed total")
 
-              // Seed matches for newly discovered players
-              newPlayers <- ctx.newPlayers.get
-              _ <- ZIO.whenDiscard(newPlayers.nonEmpty) {
-                ZIO.logInfo(s"  Querying match lists for ${newPlayers.size} discovered players...") *>
-                  ZIO.foreachParDiscard(newPlayers) { dp =>
-                    seedMatchesForPlayer(ctx.client, ctx.clubId, ctx.clubUrlName, dp.playerId, dp.username).catchAll {
-                      error => ZIO.logWarning(s"  ${dp.username}: failed to seed — ${error.getMessage}")
-                    }
+            // Seed matches for newly discovered players
+            newPlayers <- ctx.newPlayers.get
+            _ <- ZIO.whenDiscard(newPlayers.nonEmpty) {
+              ZIO.logInfo(s"  Querying match lists for ${newPlayers.size} discovered players...") *>
+                ZIO.foreachParDiscard(newPlayers) { dp =>
+                  seedMatchesForPlayer(ctx.client, ctx.clubId, ctx.clubUrlName, dp.playerId, dp.username).catchAll {
+                    error => ZIO.logWarning(s"  ${dp.username}: failed to seed — ${error.getMessage}")
                   }
-              }
+                }
+            }
 
-              newPending <- HistoryPendingMatch.count(ctx.clubId)
-              updatedDetails = waveDetails :+ (wave, waveProcessed)
-              r <-
-                if (newPending > 0 && newPlayers.nonEmpty) { waveLoop(wave, updatedDetails) }
-                else { readStats(ctx, wave, updatedDetails).map(_.copy(pendingRemaining = newPending.toInt)) }
-            } yield r
-          }
+            newPending <- HistoryPendingMatch.count(ctx.clubId)
+            updatedDetails = waveDetails :+ (wave, waveProcessed)
+            r <-
+              if (newPending > 0 && newPlayers.nonEmpty) { waveLoop(wave, updatedDetails) }
+              else { readStats(ctx, wave, updatedDetails).map(_.copy(pendingRemaining = newPending.toInt)) }
+          } yield r
+        }
       } yield result
 
     waveLoop(0, Nil)
@@ -355,7 +345,7 @@ object HistoryApp extends ZIOAppDefault {
       counter <- Ref.make(0)
       _ <- ZIO.foreachParDiscard(matchIds) { matchId =>
         processMatch(ctx, matchId)
-          .tap(_ => ctx.matchesProcessed.update(_ + 1))
+          .zipLeft(ctx.matchesProcessed.update(_ + 1))
           .catchAll { error =>
             ctx.matchesFailed.update(_ + 1) *>
               ctx.failedMatches.update(_ :+ (matchId, error.getMessage)) *>
@@ -518,12 +508,9 @@ object HistoryApp extends ZIOAppDefault {
   ): RIO[Transactor, Option[PlayerId]] = {
     val key = Username.unwrap(username).toLowerCase
     ctx.knownPlayers.get.map(_.get(key)).flatMap {
-      case Some(playerId) =>
-        ctx.playersKnown.update(_ + 1).as(Some(playerId))
-      case None if !isOurTeam =>
-        ZIO.none
-      case None =>
-        discoverPlayer(ctx, username, key, matchStartTime)
+      case Some(playerId) => ctx.playersKnown.update(_ + 1).as(Some(playerId))
+      case None if !isOurTeam => ZIO.none
+      case None => discoverPlayer(ctx, username, key, matchStartTime)
     }
   }
 
@@ -596,10 +583,9 @@ object HistoryApp extends ZIOAppDefault {
     // The doer handles success/failure and completes the promise.
     // On failure: log once, count once, resolve promise to None so awaiting fibers get None (not an exception).
     work.foldZIO(
-      error =>
-        ctx.playersFailed.update(_ + 1) *>
-          ZIO.logWarning(s"    Cannot resolve player $username: ${error.getMessage}") *>
-          promise.succeed(None).as(None),
+      error => ctx.playersFailed.update(_ + 1)
+        *> ZIO.logWarning(s"    Cannot resolve player $username: ${error.getMessage}")
+        *> promise.succeed(None).as(None),
       result => promise.succeed(result).as(result)
     )
   }
@@ -744,7 +730,7 @@ object HistoryApp extends ZIOAppDefault {
     ctx: ProcessingContext,
     waveCount: Int,
     waveDetails: List[(Int, Int)]
-  ): ZIO[Any, Nothing, RunStats] =
+  ): UIO[RunStats] =
     for {
       matchesProcessed  <- ctx.matchesProcessed.get
       matchesFailed     <- ctx.matchesFailed.get
@@ -763,7 +749,7 @@ object HistoryApp extends ZIOAppDefault {
       failedMatches = failedMatches
     )
 
-  private def logSummary(stats: RunStats, startedAt: Instant, completedAt: Instant): zio.UIO[Unit] = {
+  private def logSummary(stats: RunStats, startedAt: Instant, completedAt: Instant): UIO[Unit] = {
     val duration = JDuration.between(startedAt, completedAt)
     for {
       _ <- ZIO.logInfo("=== History Discovery Complete ===")

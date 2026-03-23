@@ -1083,13 +1083,13 @@ object RecruitmentApp extends ZIOAppDefault {
         // Fetch 90-day archives only when player has timed out before (timeoutPct > 0)
         needsArchives = dailyTimeoutPct > 0 || env.run.criteria.dailyMinGamesFinished.isDefined
         archives <-
-          if (needsArchives) {
+          ZIO.when(needsArchives) {
             val months = recentArchiveMonths(env.run.now, 90)
             ZIO.foreachPar(months) { ym =>
               val url = ApiPlayerArchive.getUrl(env.candidate.username, ym.getYear, ym.getMonthValue)
               env.run.client.get[ApiPlayerArchive](url).catchAll(logAndReraise(url))
-            }.map(Some(_))
-          } else ZIO.none
+            }
+          }
 
         cutoff90d = env.run.now.minus(90, ChronoUnit.DAYS)
         dailyGamesFinished90d = archives.map(
