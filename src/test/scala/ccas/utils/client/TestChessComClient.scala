@@ -1,5 +1,6 @@
 package ccas.utils.client
 
+import com.augustnagro.magnum.Transactor
 import zio.*
 import zio.http.*
 import zio.json.*
@@ -46,6 +47,7 @@ object TestChessComClient extends ZIOSpecDefault {
       val client =
         ChessComClient(
           ZClient.fromDriver(driver),
+          Transactor(null),
           Headers.empty,
           semaphore,
           mutex,
@@ -144,7 +146,7 @@ object TestChessComClient extends ZIOSpecDefault {
           ): ZIO[Env1 & Scope, Throwable, Response] =
             ZIO.die(new UnsupportedOperationException)
         }
-        client = ChessComClient(ZClient.fromDriver(driver), Headers.empty, semaphore, mutex, throttled, 60.seconds)
+        client = ChessComClient(ZClient.fromDriver(driver), Transactor(null), Headers.empty, semaphore, mutex, throttled, 60.seconds)
         urls   = (1 to 3).map(i => URL.decode(s"http://test.example.com/api/$i").toOption.get)
         _        <- client.getAll[Payload](urls)
         recorded <- order.get

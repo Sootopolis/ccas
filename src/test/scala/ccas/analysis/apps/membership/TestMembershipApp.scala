@@ -3,7 +3,7 @@ package ccas.analysis.apps.membership
 import java.time.{Duration, Instant, LocalDateTime, ZoneOffset}
 
 import com.augustnagro.magnum.{sql, Transactor}
-import zio.{Chunk, RIO, Ref, Scope, Semaphore, Trace, UIO, ZIO}
+import zio.{Chunk, RIO, Ref, Scope, Semaphore, Trace, ZIO}
 import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
@@ -64,12 +64,13 @@ object TestMembershipApp extends ZIOSpecDefault {
   private def fakeChessComClient(
     responses: Map[String, String],
     failures: Set[String] = Set.empty
-  ): UIO[ChessComClient] =
-    (for {
-      semaphore <- Semaphore.make(1)
-      mutex     <- Semaphore.make(1)
-      throttled <- Ref.make(false)
-    } yield (semaphore, mutex, throttled)).map { (semaphore, mutex, throttled) =>
+  ): RIO[Transactor, ChessComClient] =
+    for {
+      transactor <- ZIO.service[Transactor]
+      semaphore  <- Semaphore.make(1)
+      mutex      <- Semaphore.make(1)
+      throttled  <- Ref.make(false)
+    } yield {
       val routes: Routes[Any, Response] = Routes(
         Method.GET / "pub" / "player" / string("username") -> handler { (username: String, _: Request) =>
           if (failures.contains(username)) { Response(status = Status.NotFound) }
@@ -101,6 +102,7 @@ object TestMembershipApp extends ZIOSpecDefault {
       }
       ChessComClient(
         ZClient.fromDriver(driver),
+        transactor,
         Headers.empty,
         semaphore,
         mutex,

@@ -2,7 +2,7 @@ package ccas.analysis.apps.history
 
 import java.time.{Instant, Duration as JDuration}
 import com.augustnagro.magnum.{Transactor, sql}
-import zio.{Promise, RIO, Ref, Scope, Task, UIO, ZIO, ZIOAppArgs, ZIOAppDefault}
+import zio.{Promise, RIO, Ref, Scope, Task, UIO, ZEnvironment, ZIO, ZIOAppArgs, ZIOAppDefault}
 import zio.http.{Client, URL}
 import ccas.analysis.apps.membership.MembershipApp
 import ccas.analysis.tables.*
@@ -129,7 +129,8 @@ object HistoryApp extends ZIOAppDefault {
     trigger: RunTrigger = RunTrigger.Cli
   ): RIO[ChessComClient & Transactor, Unit] =
     for {
-      client <- ZIO.service[ChessComClient]
+      client     <- ZIO.service[ChessComClient]
+      transactor <- ZIO.service[Transactor]
 
       // === Phase 1: Initialize ===
       _ <- ZIO.logInfo(s"=== HistoryApp: $clubUrlName ===")
@@ -175,7 +176,11 @@ object HistoryApp extends ZIOAppDefault {
       _ <- ZIO.logInfo("Phase 3: Processing matches...")
       knownPlayersInit = latestSnaps.map(s => Username.unwrap(s.username).toLowerCase -> s.playerId).toMap
       ctx       <- ProcessingContext.make(client, clubId, clubUrlName, knownPlayersInit)
-      waveStats <- processWaves(ctx)
+      waveStats <- processWaves(ctx).onInterrupt(
+        finalizeInterrupted(ctx, runId, startedAt, clubUrlName, memberSeed, membersSkipped, seedClub, seedStale)
+          .provideEnvironment(ZEnvironment(transactor))
+          .orDie
+      )
 
       // === Phase 4: Finalize ===
       completedAt = Instant.now()
@@ -339,9 +344,11 @@ object HistoryApp extends ZIOAppDefault {
     waveTotal: Long
   ): RIO[Transactor, Unit] =
     for {
-      batch <- HistoryPendingMatch.selectClubBatch(ctx.clubId, BatchSize)
-      _ <- ZIO.whenDiscard(batch.nonEmpty) {
-        processMatchBatch(ctx, batch, bar, counter, waveTotal) *> processAllPending(ctx, bar, counter, waveTotal)
+      batch    <- HistoryPendingMatch.selectClubBatch(ctx.clubId, BatchSize)
+      failedIds <- ctx.failedMatches.get.map(_.map(_._1).toSet)
+      filtered = batch.filterNot(failedIds.contains)
+      _ <- ZIO.whenDiscard(filtered.nonEmpty) {
+        processMatchBatch(ctx, filtered, bar, counter, waveTotal) *> processAllPending(ctx, bar, counter, waveTotal)
       }
     } yield ()
 
@@ -377,12 +384,17 @@ object HistoryApp extends ZIOAppDefault {
       clubMatch = buildClubMatchRow(matchId, dailyMatch, ctx.clubId, weAreTeam1, opponentClubId)
 
       boardRows <- buildBoardRows(ctx, matchId, dailyMatch, weAreTeam1, clubMatch.startTime, bar)
+      matchRefs = boardRows.flatMap { row =>
+        val pid = if (weAreTeam1) { row.team1PlayerId } else { row.team2PlayerId }
+        pid.map(id => PlayerMatchRef(id, matchId, isTeam1 = weAreTeam1, row.board))
+      }
 
       _ <- withTransaction {
         for {
           _ <- ClubMatch.upsert(clubMatch)
           _ <- ClubMatchBoard.deleteMatch(matchId)
           _ <- ClubMatchBoard.insertBatch(boardRows)
+          _ <- PlayerMatchRef.upsertBatch(matchRefs)
           _ <- HistoryPendingMatch.delete(ctx.clubId, matchId)
         } yield ()
       }
@@ -739,6 +751,33 @@ object HistoryApp extends ZIOAppDefault {
   }
 
   // === Reporting ===
+
+  private def finalizeInterrupted(
+    ctx: ProcessingContext,
+    runId: Long,
+    startedAt: Instant,
+    clubUrlName: ClubUrlName,
+    memberSeed: MemberSeedResult,
+    membersSkipped: Int,
+    seedClub: Int,
+    seedStale: Int
+  ): RIO[Transactor, Unit] =
+    for {
+      partialStats     <- readStats(ctx, waveCount = 0, waveDetails = Nil)
+      pendingRemaining <- HistoryPendingMatch.count(ctx.clubId)
+      completedAt = Instant.now()
+      totalStats = partialStats.copy(
+        membersQueried = memberSeed.queried,
+        membersSkipped = membersSkipped,
+        membersFailed = memberSeed.failed,
+        matchesSeeded = seedClub + memberSeed.seeded + seedStale,
+        failedMembers = memberSeed.failedMembers,
+        pendingRemaining = pendingRemaining.toInt
+      )
+      _ <- HistoryRun.complete(runId, completedAt, totalStats.matchesProcessed, totalStats.playersDiscovered)
+      _ <- logSummary(totalStats, startedAt, completedAt)
+      _ <- OutputFile.writeAndLog("history", clubUrlName, formatReport(totalStats, clubUrlName, startedAt, completedAt))
+    } yield ()
 
   private def readStats(ctx: ProcessingContext, waveCount: Int, waveDetails: List[(Int, Int)]): UIO[RunStats] =
     for {

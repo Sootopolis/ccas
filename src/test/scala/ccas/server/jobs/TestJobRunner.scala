@@ -1,6 +1,6 @@
 package ccas.server.jobs
 
-import com.augustnagro.magnum.sql
+import com.augustnagro.magnum.{sql, Transactor}
 import zio.{durationInt, Ref, Scope, Semaphore, Trace, ZIO, ZLayer}
 import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
@@ -65,6 +65,7 @@ object TestJobRunner extends ZIOSpecDefault {
         }
         ChessComClient(
           ZClient.fromDriver(driver),
+          Transactor(null),
           Headers.empty,
           semaphore,
           mutex,

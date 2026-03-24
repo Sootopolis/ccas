@@ -3,7 +3,7 @@ package ccas.analysis.apps.recruitment
 import java.time.{Duration, Instant, LocalDateTime, ZoneOffset}
 
 import com.augustnagro.magnum.{sql, Transactor}
-import zio.{Promise, RIO, Ref, Scope, Semaphore, UIO, ZIO}
+import zio.{Promise, RIO, Ref, Scope, Semaphore, ZIO}
 import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
@@ -201,12 +201,13 @@ object TestRecruitmentApp extends ZIOSpecDefault {
   private def fakeChessComClient(
     responses: Map[String, String],
     failures: Set[String] = Set.empty
-  ): UIO[ChessComClient] =
-    (for {
-      semaphore <- Semaphore.make(1)
-      mutex     <- Semaphore.make(1)
-      throttled <- Ref.make(false)
-    } yield (semaphore, mutex, throttled)).map { (semaphore, mutex, throttled) =>
+  ): RIO[Transactor, ChessComClient] =
+    for {
+      transactor <- ZIO.service[Transactor]
+      semaphore  <- Semaphore.make(1)
+      mutex      <- Semaphore.make(1)
+      throttled  <- Ref.make(false)
+    } yield {
       val routes: Routes[Any, Response] = Routes(
         // Player stats endpoint
         Method.GET / "pub" / "player" / string("username") / "stats" -> handler { (username: String, _: Request) =>
@@ -273,6 +274,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       }
       ChessComClient(
         ZClient.fromDriver(driver),
+        transactor,
         Headers.empty,
         semaphore,
         mutex,
@@ -291,13 +293,14 @@ object TestRecruitmentApp extends ZIOSpecDefault {
     blockAfterN: Int,
     reached: Promise[Nothing, Unit],
     gate: Promise[Nothing, Unit]
-  ): UIO[ChessComClient] =
-    (for {
+  ): RIO[Transactor, ChessComClient] =
+    for {
+      transactor  <- ZIO.service[Transactor]
       semaphore   <- Semaphore.make(1)
       mutex       <- Semaphore.make(1)
       throttled   <- Ref.make(false)
       playerCount <- Ref.make(0)
-    } yield (semaphore, mutex, throttled, playerCount)).map { (semaphore, mutex, throttled, playerCount) =>
+    } yield {
       val routes: Routes[Any, Response] = Routes(
         Method.GET / "pub" / "player" / string("username") / "stats" -> handler { (username: String, _: Request) =>
           responses.get(s"player/$username/stats").fold(Response.json(apiPlayerStatsJson()))(Response.json(_))
@@ -360,6 +363,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       }
       ChessComClient(
         ZClient.fromDriver(driver),
+        transactor,
         Headers.empty,
         semaphore,
         mutex,

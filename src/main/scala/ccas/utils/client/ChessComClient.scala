@@ -1,16 +1,21 @@
 package ccas.utils.client
 
-import zio.{durationInt, Chunk, Duration, Ref, Schedule, Semaphore, Task, ZIO, ZLayer}
+import java.time.Instant
+
+import com.augustnagro.magnum.Transactor
+import zio.{durationInt, Chunk, Duration, Ref, Schedule, Semaphore, Task, ZEnvironment, ZIO, ZLayer}
 import zio.http.{Client, Header, Headers, Request, Status, URL}
 import zio.http.Method.GET
 import zio.json.JsonDecoder
 
+import ccas.analysis.tables.ApiFetchFailure
 import ccas.info.BuildInfo
 import ccas.utils.errors.ExternalException
 import ccas.utils.json.JsonDecodingException
 
 final class ChessComClient(
   client: Client,
+  transactor: Transactor,
   headers: Headers,
   semaphore: Semaphore,
   mutex: Semaphore,
@@ -40,7 +45,12 @@ final class ChessComClient(
         else { semaphore }
       result <- permit.withPermit(rawGet(url))
     } yield result
-    acquireAndCall.retry(retrySchedule)
+    acquireAndCall.retry(retrySchedule).tapError { error =>
+      ApiFetchFailure
+        .insert(ApiFetchFailure(url.encode, error.getClass.getSimpleName, Option(error.getMessage), Instant.now()))
+        .provideEnvironment(ZEnvironment(transactor))
+        .ignore
+    }
   }
 
   def getAll[T](urls: Iterable[URL])(using jsonDecoder: JsonDecoder[T]): Task[Chunk[T]] =
@@ -67,15 +77,16 @@ object ChessComClient {
   def live(
     permits: Long = 5,
     cooldown: Duration = 30.seconds
-  ): ZLayer[Client, Throwable, ChessComClient] =
+  ): ZLayer[Client & Transactor, Throwable, ChessComClient] =
     ZLayer.fromZIO {
       for {
         contactEmail <- ZIO.fromOption(Option(System.getenv("CCAS_CONTACT_EMAIL")))
           .orElseFail(IllegalStateException("CCAS_CONTACT_EMAIL environment variable is required"))
-        client    <- ZIO.service[Client]
-        semaphore <- Semaphore.make(permits)
-        mutex     <- Semaphore.make(1)
-        throttled <- Ref.make(false)
-      } yield ChessComClient(client, userAgentHeaders(contactEmail), semaphore, mutex, throttled, cooldown)
+        client      <- ZIO.service[Client]
+        transactor  <- ZIO.service[Transactor]
+        semaphore   <- Semaphore.make(permits)
+        mutex       <- Semaphore.make(1)
+        throttled   <- Ref.make(false)
+      } yield ChessComClient(client, transactor, userAgentHeaders(contactEmail), semaphore, mutex, throttled, cooldown)
     }
 }

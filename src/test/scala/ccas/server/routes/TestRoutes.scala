@@ -111,6 +111,7 @@ object TestRoutes extends ZIOSpecDefault {
         }
         ChessComClient(
           ZClient.fromDriver(driver),
+          Transactor(null),
           Headers.empty,
           semaphore,
           mutex,

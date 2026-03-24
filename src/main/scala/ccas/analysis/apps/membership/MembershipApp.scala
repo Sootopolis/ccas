@@ -472,7 +472,7 @@ object MembershipApp extends ZIOAppDefault {
     oldUsername: Username
   ): Task[Option[Username]] =
     client.get[ApiDailyMatch](ApiDailyMatch.getUrl(ref.matchId)).map { dailyMatch =>
-      val team = if (ref.teamIdx == 1) { dailyMatch.teams.team1 }
+      val team = if (ref.isTeam1) { dailyMatch.teams.team1 }
       else { dailyMatch.teams.team2 }
       val boardSuffix = s"/${ref.boardIdx}"
       team.players.collectFirst {
@@ -500,7 +500,7 @@ object MembershipApp extends ZIOAppDefault {
       refOpt  <- ZIO.foreach(clubOpt)(club => ClubMatchRef.selectId(club.clubId)).map(_.flatten)
       result <- ZIO.foreach(refOpt) { ref =>
         client.get[ApiDailyMatch](ApiDailyMatch.getUrl(ref.matchId)).map { dailyMatch =>
-          val team = if (ref.teamIdx == 1) { dailyMatch.teams.team1 }
+          val team = if (ref.isTeam1) { dailyMatch.teams.team1 }
           else { dailyMatch.teams.team2 }
           team.`@id`.path.segments.lastOption.map(ClubUrlName.wrap).filter(_ != oldUrlName)
         }

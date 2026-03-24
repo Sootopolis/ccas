@@ -3,7 +3,7 @@ package ccas.analysis.apps.matchref
 import java.time.{Instant, LocalDateTime, ZoneOffset}
 
 import com.augustnagro.magnum.{sql, Transactor}
-import zio.{RIO, Ref, Scope, Semaphore, UIO, ZIO, ZLayer}
+import zio.{RIO, Ref, Scope, Semaphore, ZIO, ZLayer}
 import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
@@ -120,12 +120,13 @@ object TestMatchRefApp extends ZIOSpecDefault {
   private def fakeChessComClient(
     responses: Map[String, String],
     failures: Set[String] = Set.empty
-  ): UIO[ChessComClient] =
-    (for {
-      semaphore <- Semaphore.make(5)
-      mutex     <- Semaphore.make(1)
-      throttled <- Ref.make(false)
-    } yield (semaphore, mutex, throttled)).map { (semaphore, mutex, throttled) =>
+  ): RIO[Transactor, ChessComClient] =
+    for {
+      transactor <- ZIO.service[Transactor]
+      semaphore  <- Semaphore.make(5)
+      mutex      <- Semaphore.make(1)
+      throttled  <- Ref.make(false)
+    } yield {
       val routes: Routes[Any, Response] = Routes(
         Method.GET / "pub" / "player" / string("username") / "matches" -> handler { (username: String, _: Request) =>
           if (failures.contains(username)) Response(status = Status.InternalServerError)
@@ -163,6 +164,7 @@ object TestMatchRefApp extends ZIOSpecDefault {
       }
       ChessComClient(
         ZClient.fromDriver(driver),
+        transactor,
         Headers.empty,
         semaphore,
         mutex,
@@ -248,7 +250,7 @@ object TestMatchRefApp extends ZIOSpecDefault {
       } yield assertTrue(
         ref.isDefined,
         ref.get.matchId == ClubMatchId.wrap(matchId1),
-        ref.get.teamIdx == 1,
+        ref.get.isTeam1,
         ref.get.boardIdx == 3
       )
     },
@@ -275,7 +277,7 @@ object TestMatchRefApp extends ZIOSpecDefault {
       } yield assertTrue(
         ref.isDefined,
         ref.get.matchId == ClubMatchId.wrap(matchId2),
-        ref.get.teamIdx == 2,
+        !ref.get.isTeam1,
         ref.get.boardIdx == 5
       )
     },
@@ -374,7 +376,7 @@ object TestMatchRefApp extends ZIOSpecDefault {
       } yield assertTrue(
         ref.isDefined,
         ref.get.matchId == ClubMatchId.wrap(matchId1),
-        ref.get.teamIdx == 1
+        ref.get.isTeam1
       )
     },
     test("resolves club on team2") {
@@ -402,7 +404,7 @@ object TestMatchRefApp extends ZIOSpecDefault {
       } yield assertTrue(
         ref.isDefined,
         ref.get.matchId == ClubMatchId.wrap(matchId1),
-        ref.get.teamIdx == 2
+        !ref.get.isTeam1
       )
     },
     test("skips club with no finished match") {
@@ -485,8 +487,8 @@ object TestMatchRefApp extends ZIOSpecDefault {
       for {
         _ <- seedDb
         // Pre-seed match refs
-        _ <- PlayerMatchRef.upsert(PlayerMatchRef(pid0, ClubMatchId.wrap(matchId1), 1, 3))
-        _ <- ClubMatchRef.upsert(ClubMatchRef(clubId0, ClubMatchId.wrap(matchId1), 1))
+        _ <- PlayerMatchRef.upsert(PlayerMatchRef(pid0, ClubMatchId.wrap(matchId1), true, 3))
+        _ <- ClubMatchRef.upsert(ClubMatchRef(clubId0, ClubMatchId.wrap(matchId1), true))
         // Provide no API responses — if populate tries to fetch, it would get empty/404
         client <- fakeChessComClient(
           Map(
@@ -501,11 +503,11 @@ object TestMatchRefApp extends ZIOSpecDefault {
       } yield assertTrue(
         playerRef.isDefined,
         playerRef.get.matchId == ClubMatchId.wrap(matchId1),
-        playerRef.get.teamIdx == 1,
+        playerRef.get.isTeam1,
         playerRef.get.boardIdx == 3,
         clubRef.isDefined,
         clubRef.get.matchId == ClubMatchId.wrap(matchId1),
-        clubRef.get.teamIdx == 1
+        clubRef.get.isTeam1
       )
     }
   )

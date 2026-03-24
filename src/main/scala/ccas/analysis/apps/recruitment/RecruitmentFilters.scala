@@ -5,7 +5,6 @@ import java.time.temporal.ChronoUnit
 
 import com.augustnagro.magnum.Transactor
 import zio.{RIO, Ref, ZIO}
-import zio.http.URL
 
 import ccas.analysis.tables.*
 import ccas.api.misc.enums.GameResultDetail
@@ -266,11 +265,6 @@ private[recruitment] object RecruitmentFilters {
       env: FilterEnv,
       dailyStats: ApiPlayerStats.ApiPlayerDailyStats
     ): RIO[Transactor, FilterResult] = {
-      def logAndReraise(url: URL)(e: Throwable): RIO[Transactor, Nothing] =
-        ApiFetchFailure.insert(
-          ApiFetchFailure(url.toString, e.getClass.getSimpleName, Option(e.getMessage), env.run.now)
-        ).orDie *> ZIO.fail(e)
-
       val dailyElo           = dailyStats.last.rating
       val dailyTimeoutPct    = dailyStats.record.timeoutPercent
       val dailyGamesFinished = dailyStats.record.nGames
@@ -281,7 +275,7 @@ private[recruitment] object RecruitmentFilters {
             val months = recentArchiveMonths(env.run.now, 90)
             ZIO.foreachPar(months) { ym =>
               val url = ApiPlayerArchive.getUrl(env.candidate.username, ym.getYear, ym.getMonthValue)
-              env.run.client.get[ApiPlayerArchive](url).catchAll(logAndReraise(url))
+              env.run.client.get[ApiPlayerArchive](url)
             }
           }
         _ <- requireApiPlayer(env)
@@ -419,11 +413,7 @@ private[recruitment] object RecruitmentFilters {
         case None =>
           ZIO.foreachPar(months) { ym =>
             val url = ApiPlayerArchive.getUrl(username, ym.getYear, ym.getMonthValue)
-            client.get[ApiPlayerArchive](url).tapError { e =>
-              ApiFetchFailure.insert(
-                ApiFetchFailure(url.toString, e.getClass.getSimpleName, Option(e.getMessage), now)
-              )
-            }
+            client.get[ApiPlayerArchive](url)
           }
       }).map { archives =>
         val tmGames = archives.flatMap(

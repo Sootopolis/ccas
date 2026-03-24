@@ -104,10 +104,10 @@ object MatchRefApp extends ZIOAppDefault {
           val boardIdx = m.board.get.path.segments.last.toInt
           for {
             dailyMatch <- fetchMatch(client, cache, matchId)
-            result <- findTeamIdx(dailyMatch, player.username) match {
+            result <- findIsTeam1(dailyMatch, player.username) match {
               case None => bar.logInfo(s"  ${player.username}: not found in match $matchId teams").as(None)
-              case Some(idx) =>
-                val ref = PlayerMatchRef(player.playerId, matchId, idx, boardIdx)
+              case Some(isTeam1) =>
+                val ref = PlayerMatchRef(player.playerId, matchId, isTeam1, boardIdx)
                 PlayerMatchRef.upsert(ref).as(Some(ref))
             }
           } yield result
@@ -137,11 +137,11 @@ object MatchRefApp extends ZIOAppDefault {
   ): Task[ApiDailyMatch] =
     client.get[ApiDailyMatch](ApiDailyMatch.getUrl(matchId)).tapBoth(promise.fail, promise.succeed)
 
-  private def findTeamIdx(dailyMatch: ApiDailyMatch, username: Username): Option[Int] = {
+  private def findIsTeam1(dailyMatch: ApiDailyMatch, username: Username): Option[Boolean] = {
     val teams = dailyMatch.teams
     val u     = Username.unwrap(username)
-    if (teams.team1.players.exists(p => Username.unwrap(p.username).equalsIgnoreCase(u))) { Some(1) }
-    else if (teams.team2.players.exists(p => Username.unwrap(p.username).equalsIgnoreCase(u))) { Some(2) }
+    if (teams.team1.players.exists(p => Username.unwrap(p.username).equalsIgnoreCase(u))) { Some(true) }
+    else if (teams.team2.players.exists(p => Username.unwrap(p.username).equalsIgnoreCase(u))) { Some(false) }
     else { None }
   }
 
@@ -169,21 +169,21 @@ object MatchRefApp extends ZIOAppDefault {
           val matchId = ClubMatchId.wrap(m.`@id`.path.segments.last.toLong)
           for {
             dailyMatch <- fetchMatch(client, cache, matchId)
-            result <- findClubTeamIdx(dailyMatch, club.urlName) match {
+            result <- findClubIsTeam1(dailyMatch, club.urlName) match {
               case None => bar.logInfo(s"  ${club.urlName}: not found in match $matchId teams").as(None)
-              case Some(idx) =>
-                val ref = ClubMatchRef(club.clubId, matchId, idx)
+              case Some(isTeam1) =>
+                val ref = ClubMatchRef(club.clubId, matchId, isTeam1)
                 ClubMatchRef.upsert(ref).as(Some(ref))
             }
           } yield result
       }
     } yield ref).catchAll(error => bar.logWarning(s"  ${club.urlName}: error — ${error.getMessage}").as(None))
 
-  private def findClubTeamIdx(dailyMatch: ApiDailyMatch, urlName: ClubUrlName): Option[Int] = {
+  private def findClubIsTeam1(dailyMatch: ApiDailyMatch, urlName: ClubUrlName): Option[Boolean] = {
     val teams = dailyMatch.teams
     val name  = ClubUrlName.unwrap(urlName)
-    if (teams.team1.`@id`.path.segments.lastOption.exists(_.equalsIgnoreCase(name))) { Some(1) }
-    else if (teams.team2.`@id`.path.segments.lastOption.exists(_.equalsIgnoreCase(name))) { Some(2) }
+    if (teams.team1.`@id`.path.segments.lastOption.exists(_.equalsIgnoreCase(name))) { Some(true) }
+    else if (teams.team2.`@id`.path.segments.lastOption.exists(_.equalsIgnoreCase(name))) { Some(false) }
     else { None }
   }
 }
