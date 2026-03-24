@@ -7,7 +7,7 @@ import com.augustnagro.magnum.{sql, Transactor}
 import zio.{Promise, RIO, Ref, Scope, Task, ZIO, ZIOAppDefault}
 import zio.http.Client
 
-import ccas.analysis.tables.{ClubMatchRef, PlayerMatchRef, RunTrigger, Tables}
+import ccas.analysis.tables.{ClubMatch, ClubMatchBoard, ClubMatchRef, PlayerMatchRef, RunTrigger, Tables}
 import ccas.api.club.ApiClubMatches
 import ccas.api.clubmatch.ApiDailyMatch
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubUrlName, PlayerId, Username}
@@ -96,19 +96,28 @@ object MatchRefApp extends ZIOAppDefault {
     bar: ProgressBar
   ): RIO[Transactor, Option[PlayerMatchRef]] =
     (for {
-      playerMatches <- client.get[ApiPlayerMatches](ApiPlayerMatches.getUrl(player.username))
-      ref <- playerMatches.finished.find(_.board.isDefined) match {
-        case None => bar.logInfo(s"  ${player.username}: no finished match with board").as(None)
-        case Some(m) =>
-          val matchId  = ClubMatchId.wrap(m.`@id`.path.segments.last.toLong)
-          val boardIdx = m.board.get.path.segments.last.toInt
+      // Try DB first (from HistoryApp's club_match_board data)
+      dbRef <- ClubMatchBoard.selectPlayerMatchRef(player.playerId)
+      ref <- dbRef match {
+        case Some(ref) => PlayerMatchRef.upsert(ref).as(Some(ref))
+        case None =>
+          // Fall back to API
           for {
-            dailyMatch <- fetchMatch(client, cache, matchId)
-            result <- findIsTeam1(dailyMatch, player.username) match {
-              case None => bar.logInfo(s"  ${player.username}: not found in match $matchId teams").as(None)
-              case Some(isTeam1) =>
-                val ref = PlayerMatchRef(player.playerId, matchId, isTeam1, boardIdx)
-                PlayerMatchRef.upsert(ref).as(Some(ref))
+            playerMatches <- client.get[ApiPlayerMatches](ApiPlayerMatches.getUrl(player.username))
+            result <- playerMatches.finished.find(_.board.isDefined) match {
+              case None => bar.logInfo(s"  ${player.username}: no finished match with board").as(None)
+              case Some(m) =>
+                val matchId  = ClubMatchId.wrap(m.`@id`.path.segments.last.toLong)
+                val boardIdx = m.board.get.path.segments.last.toInt
+                for {
+                  dailyMatch <- fetchMatch(client, cache, matchId)
+                  r <- findIsTeam1(dailyMatch, player.username) match {
+                    case None => bar.logInfo(s"  ${player.username}: not found in match $matchId teams").as(None)
+                    case Some(isTeam1) =>
+                      val ref = PlayerMatchRef(player.playerId, matchId, isTeam1, boardIdx)
+                      PlayerMatchRef.upsert(ref).as(Some(ref))
+                  }
+                } yield r
             }
           } yield result
       }
@@ -162,18 +171,27 @@ object MatchRefApp extends ZIOAppDefault {
     bar: ProgressBar
   ): RIO[Transactor, Option[ClubMatchRef]] =
     (for {
-      clubMatches <- client.get[ApiClubMatches](ApiClubMatches.getUrl(club.urlName))
-      ref <- clubMatches.finished.headOption match {
-        case None => bar.logInfo(s"  ${club.urlName}: no finished match").as(None)
-        case Some(m) =>
-          val matchId = ClubMatchId.wrap(m.`@id`.path.segments.last.toLong)
+      // Try DB first (from HistoryApp's club_match data)
+      dbRef <- ClubMatch.selectClubMatchRef(club.clubId)
+      ref <- dbRef match {
+        case Some(ref) => ClubMatchRef.upsert(ref).as(Some(ref))
+        case None =>
+          // Fall back to API
           for {
-            dailyMatch <- fetchMatch(client, cache, matchId)
-            result <- findClubIsTeam1(dailyMatch, club.urlName) match {
-              case None => bar.logInfo(s"  ${club.urlName}: not found in match $matchId teams").as(None)
-              case Some(isTeam1) =>
-                val ref = ClubMatchRef(club.clubId, matchId, isTeam1)
-                ClubMatchRef.upsert(ref).as(Some(ref))
+            clubMatches <- client.get[ApiClubMatches](ApiClubMatches.getUrl(club.urlName))
+            result <- clubMatches.finished.headOption match {
+              case None => bar.logInfo(s"  ${club.urlName}: no finished match").as(None)
+              case Some(m) =>
+                val matchId = ClubMatchId.wrap(m.`@id`.path.segments.last.toLong)
+                for {
+                  dailyMatch <- fetchMatch(client, cache, matchId)
+                  r <- findClubIsTeam1(dailyMatch, club.urlName) match {
+                    case None => bar.logInfo(s"  ${club.urlName}: not found in match $matchId teams").as(None)
+                    case Some(isTeam1) =>
+                      val ref = ClubMatchRef(club.clubId, matchId, isTeam1)
+                      ClubMatchRef.upsert(ref).as(Some(ref))
+                  }
+                } yield r
             }
           } yield result
       }

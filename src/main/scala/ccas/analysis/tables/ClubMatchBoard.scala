@@ -94,4 +94,14 @@ object ClubMatchBoard {
                 ${item.team1ScoreX2}, ${item.team2ScoreX2})""".update
       }
     }
+
+  def selectPlayerMatchRef(playerId: PlayerId): ZIO[Transactor, SQLException, Option[PlayerMatchRef]] =
+    connectZIO {
+      sql"""SELECT match_id, board AS board_idx, (team1_player_id = $playerId) AS is_team1
+            FROM club_match_board
+            WHERE team1_player_id = $playerId OR team2_player_id = $playerId
+            LIMIT 1""".query[(ClubMatchId, Int, Boolean)].run().headOption.map {
+        case (matchId, boardIdx, isTeam1) => PlayerMatchRef(playerId, matchId, isTeam1, boardIdx)
+      }
+    }
 }

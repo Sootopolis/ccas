@@ -105,4 +105,14 @@ object ClubMatch {
             WHERE team1_club_id = $clubId OR team2_club_id = $clubId"""
         .query[Long].run().head
     }
+
+  def selectClubMatchRef(clubId: ClubId): ZIO[Transactor, SQLException, Option[ClubMatchRef]] =
+    connectZIO {
+      sql"""SELECT match_id, (team1_club_id = $clubId) AS is_team1
+            FROM club_match
+            WHERE team1_club_id = $clubId OR team2_club_id = $clubId
+            LIMIT 1""".query[(ClubMatchId, Boolean)].run().headOption.map {
+        case (matchId, isTeam1) => ClubMatchRef(clubId, matchId, isTeam1)
+      }
+    }
 }

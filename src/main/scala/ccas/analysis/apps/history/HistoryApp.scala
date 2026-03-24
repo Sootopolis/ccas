@@ -384,17 +384,12 @@ object HistoryApp extends ZIOAppDefault {
       clubMatch = buildClubMatchRow(matchId, dailyMatch, ctx.clubId, weAreTeam1, opponentClubId)
 
       boardRows <- buildBoardRows(ctx, matchId, dailyMatch, weAreTeam1, clubMatch.startTime, bar)
-      matchRefs = boardRows.flatMap { row =>
-        val pid = if (weAreTeam1) { row.team1PlayerId } else { row.team2PlayerId }
-        pid.map(id => PlayerMatchRef(id, matchId, isTeam1 = weAreTeam1, row.board))
-      }
 
       _ <- withTransaction {
         for {
           _ <- ClubMatch.upsert(clubMatch)
           _ <- ClubMatchBoard.deleteMatch(matchId)
           _ <- ClubMatchBoard.insertBatch(boardRows)
-          _ <- PlayerMatchRef.upsertBatch(matchRefs)
           _ <- HistoryPendingMatch.delete(ctx.clubId, matchId)
         } yield ()
       }
