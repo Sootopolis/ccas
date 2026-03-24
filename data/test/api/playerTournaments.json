@@ -1,0 +1,53 @@
+{
+  "finished": [
+    {
+      "url": "https://www.chess.com/tournament/1500-to-2000",
+      "@id": "https://api.chess.com/pub/tournament/1500-to-2000",
+      "wins": 2,
+      "losses": 3,
+      "draws": 1,
+      "points_awarded": 0,
+      "placement": 12,
+      "status": "eliminated",
+      "total_players": 21
+    },
+    {
+      "url": "https://www.chess.com/tournament/a-bit-of-fun-6",
+      "@id": "https://api.chess.com/pub/tournament/a-bit-of-fun-6",
+      "wins": 14,
+      "losses": 7,
+      "draws": 1,
+      "points_awarded": 280,
+      "placement": 1,
+      "status": "active",
+      "total_players": 18
+    }
+  ],
+  "in_progress": [
+    {
+      "url": "https://www.chess.com/tournament/immerdate-tournament-29",
+      "@id": "https://api.chess.com/pub/tournament/immerdate-tournament-29",
+      "wins": 0,
+      "losses": 2,
+      "draws": 0,
+      "status": "eliminated",
+      "total_players": 240
+    },
+    {
+      "url": "https://www.chess.com/tournament/templar-summer-extravaganza",
+      "@id": "https://api.chess.com/pub/tournament/templar-summer-extravaganza",
+      "wins": 14,
+      "losses": 6,
+      "draws": 2,
+      "status": "eliminated",
+      "total_players": 60
+    }
+  ],
+  "registered": [
+    {
+      "url": "https://www.chess.com/tournament/easter-bash-2026-1",
+      "@id": "https://api.chess.com/pub/tournament/easter-bash-2026-1",
+      "status": "registered"
+    }
+  ]
+}

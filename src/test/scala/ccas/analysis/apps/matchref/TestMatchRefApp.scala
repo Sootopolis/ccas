@@ -132,6 +132,13 @@ object TestMatchRefApp extends ZIOSpecDefault {
           if (failures.contains(username)) Response(status = Status.InternalServerError)
           else responses.get(s"player/$username/matches").fold(Response.json(emptyPlayerMatchesJson))(Response.json(_))
         },
+        Method.GET / "pub" / "player" / string("username") -> handler { (username: String, _: Request) =>
+          if (failures.contains(username)) Response(status = Status.InternalServerError)
+          else {
+            val pid = playerIdByUsername.getOrElse(username.toLowerCase, 0L)
+            Response.json(apiPlayerJson(username, pid))
+          }
+        },
         Method.GET / "pub" / "club" / string("club") / "matches" -> handler { (clubName: String, _: Request) =>
           responses.get(s"club/$clubName/matches").fold(Response.json(emptyClubMatchesJson))(Response.json(_))
         },
@@ -174,6 +181,14 @@ object TestMatchRefApp extends ZIOSpecDefault {
     }
 
   // --- DB helpers ---
+
+  private val playerIdByUsername: Map[String, Long] = Map(
+    "alice" -> PlayerId.unwrap(pid0), "bob" -> PlayerId.unwrap(pid1), "charlie" -> PlayerId.unwrap(pid2)
+  )
+
+  private def apiPlayerJson(username: String, playerId: Long): String =
+    s"""{"player_id":$playerId,"username":"$username","country":"https://api.chess.com/pub/country/XX",
+        |"status":"premium","joined":1000000000,"last_online":1000000000,"followers":0,"is_streamer":false,"verified":false}""".stripMargin
 
   private val testPlayerIds = List(pid0, pid1, pid2)
   private val testClubIds   = List(clubId0, clubId1)
@@ -487,8 +502,8 @@ object TestMatchRefApp extends ZIOSpecDefault {
       for {
         _ <- seedDb
         // Pre-seed match refs
-        _ <- PlayerMatchRef.upsert(PlayerMatchRef(pid0, ClubMatchId.wrap(matchId1), true, 3))
-        _ <- ClubMatchRef.upsert(ClubMatchRef(clubId0, ClubMatchId.wrap(matchId1), true))
+        _ <- PlayerMatchRef.upsert(PlayerMatchRef(pid0, ClubMatchId.wrap(matchId1), isLive = false, true, 3))
+        _ <- ClubMatchRef.upsert(ClubMatchRef(clubId0, ClubMatchId.wrap(matchId1), isLive = false, true))
         // Provide no API responses — if populate tries to fetch, it would get empty/404
         client <- fakeChessComClient(
           Map(

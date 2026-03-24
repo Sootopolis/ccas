@@ -160,8 +160,8 @@ object TestClubSql extends ZIOSpecDefault {
 
   // --- ClubMatchRef tests ---
 
-  private val refA = ClubMatchRef(clubA.clubId, ClubMatchId(9001), isTeam1 = true)
-  private val refB = ClubMatchRef(clubB.clubId, ClubMatchId(9002), isTeam1 = false)
+  private val refA = ClubMatchRef(clubA.clubId, ClubMatchId(9001), isLive = false, isTeam1 = true)
+  private val refB = ClubMatchRef(clubB.clubId, ClubMatchId(9002), isLive = false, isTeam1 = false)
 
   private def testClubMatchRefUpsert = test("testClubMatchRefUpsert") {
     for {

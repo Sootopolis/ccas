@@ -46,19 +46,19 @@ object TestHistoryApp extends ZIOSpecDefault {
 
   private def testFindOurTeamTeam1 = test("findOurTeam returns true when club is team1") {
     matchFixture.map { m =>
-      assertTrue(HistoryApp.findOurTeam(m, ClubUrlName("turk-chess-players")) == Some(true))
+      assertTrue(HistoryApp.findOurTeam(m.teams, ClubUrlName("turk-chess-players")) == Some(true))
     }
   }
 
   private def testFindOurTeamTeam2 = test("findOurTeam returns false when club is team2") {
     matchFixture.map { m =>
-      assertTrue(HistoryApp.findOurTeam(m, ClubUrlName("the-great-british-empire")) == Some(false))
+      assertTrue(HistoryApp.findOurTeam(m.teams, ClubUrlName("the-great-british-empire")) == Some(false))
     }
   }
 
   private def testFindOurTeamNotFound = test("findOurTeam returns None for unknown club") {
     matchFixture.map { m =>
-      assertTrue(HistoryApp.findOurTeam(m, ClubUrlName("not-a-club")) == None)
+      assertTrue(HistoryApp.findOurTeam(m.teams, ClubUrlName("not-a-club")) == None)
     }
   }
 

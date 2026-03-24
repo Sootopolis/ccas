@@ -3,9 +3,9 @@ package ccas.analysis.apps.membership
 import ccas.analysis.apps.membership.MembershipChange.*
 import ccas.analysis.tables.*
 import ccas.api.club.{ApiClub, ApiClubMembers}
-import ccas.api.clubmatch.ApiDailyMatch
+import ccas.api.clubmatch.{ApiDailyMatch, ApiLiveMatch, TeamMatchPlayerStarted, TeamMatchTeams}
 import ccas.api.misc.enums.PlayerStatusCategory
-import ccas.api.misc.subtypes.{ClubId, ClubUrlName, PlayerId, Username}
+import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubUrlName, PlayerId, Username}
 import ccas.api.player.{ApiPlayer, ApiPlayerClubs}
 import ccas.utils.{OutputFile, ProgressBar}
 import ccas.utils.client.ChessComClient
@@ -471,14 +471,22 @@ object MembershipApp extends ZIOAppDefault {
     ref: PlayerMatchRef,
     oldUsername: Username
   ): Task[Option[Username]] =
-    client.get[ApiDailyMatch](ApiDailyMatch.getUrl(ref.matchId)).map { dailyMatch =>
-      val team = if (ref.isTeam1) { dailyMatch.teams.team1 }
-      else { dailyMatch.teams.team2 }
+    fetchTeamMatchTeams(client, ref.matchId, ref.isLive).map { teams =>
+      val team = if (ref.isTeam1) { teams.team1 }
+      else { teams.team2 }
       val boardSuffix = s"/${ref.boardIdx}"
       team.players.collectFirst {
-        case p: ApiDailyMatch.ApiDailyMatchPlayerStarted if p.board.path.toString.endsWith(boardSuffix) => p.username
+        case p: TeamMatchPlayerStarted if p.board.path.toString.endsWith(boardSuffix) => p.username
       }.filter(_ != oldUsername)
     }.catchAll(_ => ZIO.none)
+
+  private def fetchTeamMatchTeams(
+    client: ChessComClient,
+    matchId: ClubMatchId,
+    isLive: Boolean
+  ): Task[TeamMatchTeams] =
+    if (isLive) { client.get[ApiLiveMatch](ApiLiveMatch.getUrl(matchId)).map(_.teams) }
+    else { client.get[ApiDailyMatch](ApiDailyMatch.getUrl(matchId)).map(_.teams) }
 
   private def withNameFallback[Name, T](
     name: Name,
@@ -499,9 +507,9 @@ object MembershipApp extends ZIOAppDefault {
       clubOpt <- Club.selectByUrlName(oldUrlName)
       refOpt  <- ZIO.foreach(clubOpt)(club => ClubMatchRef.selectId(club.clubId)).map(_.flatten)
       result <- ZIO.foreach(refOpt) { ref =>
-        client.get[ApiDailyMatch](ApiDailyMatch.getUrl(ref.matchId)).map { dailyMatch =>
-          val team = if (ref.isTeam1) { dailyMatch.teams.team1 }
-          else { dailyMatch.teams.team2 }
+        fetchTeamMatchTeams(client, ref.matchId, ref.isLive).map { teams =>
+          val team = if (ref.isTeam1) { teams.team1 }
+          else { teams.team2 }
           team.`@id`.path.segments.lastOption.map(ClubUrlName.wrap).filter(_ != oldUrlName)
         }
       }.map(_.flatten)

@@ -110,7 +110,7 @@ object ApiDailyMatch extends JsonDecoding[ApiDailyMatch] {
 
   // teams
 
-  sealed trait ApiDailyMatchTeams {
+  sealed trait ApiDailyMatchTeams extends TeamMatchTeams {
     val team1: ApiDailyMatchTeam
     val team2: ApiDailyMatchTeam
   }
@@ -124,7 +124,7 @@ object ApiDailyMatch extends JsonDecoding[ApiDailyMatch] {
       extends ApiDailyMatchTeams derives JsonDecoder
 
   @jsonMemberNames(SnakeCase)
-  final case class ApiDailyMatchTeamsFinished(team1: ApiDailyMatchTeamFinished, team2: ApiDailyMatchTeamFinished)
+  final case class ApiDailyMatchTeamsFinished(team1: MatchTeamFinished, team2: MatchTeamFinished)
       extends ApiDailyMatchTeams derives JsonDecoder
 
   @jsonMemberNames(SnakeCase)
@@ -133,7 +133,7 @@ object ApiDailyMatch extends JsonDecoding[ApiDailyMatch] {
 
   // team
 
-  sealed trait ApiDailyMatchTeam {
+  sealed trait ApiDailyMatchTeam extends TeamMatchTeam {
     val `@id`: URL
     val name: String
     val url: URL
@@ -159,18 +159,18 @@ object ApiDailyMatch extends JsonDecoding[ApiDailyMatch] {
     name: String,
     url: URL,
     score: Double,
-    players: Chunk[ApiDailyMatchPlayerStarted],
+    players: Chunk[MatchPlayerStarted],
     fairPlayRemovals: Set[Username]
   ) extends ApiDailyMatchTeam derives JsonDecoder
 
   @jsonMemberNames(SnakeCase)
-  final case class ApiDailyMatchTeamFinished(
+  final case class MatchTeamFinished(
     `@id`: URL,
     name: String,
     url: URL,
     score: Double,
     result: ClubMatchResult,
-    players: Chunk[ApiDailyMatchPlayerStarted],
+    players: Chunk[MatchPlayerStarted],
     fairPlayRemovals: Set[Username]
   ) extends ApiDailyMatchTeam derives JsonDecoder
 
@@ -187,7 +187,7 @@ object ApiDailyMatch extends JsonDecoding[ApiDailyMatch] {
 
   // player
 
-  sealed trait ApiDailyMatchPlayer {
+  sealed trait ApiDailyMatchPlayer extends TeamMatchPlayer {
     val username: Username
   }
 
@@ -201,14 +201,14 @@ object ApiDailyMatch extends JsonDecoding[ApiDailyMatch] {
   ) extends ApiDailyMatchPlayer derives JsonDecoder
 
   @jsonMemberNames(SnakeCase)
-  final case class ApiDailyMatchPlayerStarted(
+  final case class MatchPlayerStarted(
     username: Username,
     stats: URL,
     status: PlayerStatus,
     playedAsWhite: Option[GameResultDetail],
     playedAsBlack: Option[GameResultDetail],
     board: URL
-  ) extends ApiDailyMatchPlayer derives JsonDecoder
+  ) extends ApiDailyMatchPlayer with TeamMatchPlayerStarted derives JsonDecoder
 
   @jsonMemberNames(SnakeCase)
   final case class ApiDailyMatchPlayerCancelled(

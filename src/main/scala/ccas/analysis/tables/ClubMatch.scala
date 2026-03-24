@@ -112,7 +112,7 @@ object ClubMatch {
             FROM club_match
             WHERE team1_club_id = $clubId OR team2_club_id = $clubId
             LIMIT 1""".query[(ClubMatchId, Boolean)].run().headOption.map {
-        case (matchId, isTeam1) => ClubMatchRef(clubId, matchId, isTeam1)
+        case (matchId, isTeam1) => ClubMatchRef(clubId, matchId, isLive = false, isTeam1)
       }
     }
 }

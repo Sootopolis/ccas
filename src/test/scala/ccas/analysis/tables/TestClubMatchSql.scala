@@ -230,13 +230,13 @@ object TestClubMatchSql extends ZIOSpecDefault {
 
   private def testHistoryPendingMatchInsert = test("HistoryPendingMatch insert with ON CONFLICT DO NOTHING") {
     for {
-      r1  <- HistoryPendingMatch.insert(HistoryPendingMatch(clubA.clubId, ClubMatchId(2001)))
-      r2  <- HistoryPendingMatch.insert(HistoryPendingMatch(clubA.clubId, ClubMatchId(2001))) // duplicate
+      r1  <- HistoryPendingMatch.insert(HistoryPendingMatch(clubA.clubId, ClubMatchId(2001), isLive = false))
+      r2  <- HistoryPendingMatch.insert(HistoryPendingMatch(clubA.clubId, ClubMatchId(2001), isLive = false)) // duplicate
       ids <- HistoryPendingMatch.selectClub(clubA.clubId)
     } yield assertTrue(
       r1 == 1,
       r2 == 0,
-      ids == List(ClubMatchId(2001))
+      ids == List(HistoryPendingMatch(clubA.clubId, ClubMatchId(2001), isLive = false))
     )
   }
 
@@ -250,16 +250,16 @@ object TestClubMatchSql extends ZIOSpecDefault {
     for {
       _ <- HistoryPendingMatch.insertBatch(
         List(
-          HistoryPendingMatch(clubA.clubId, ClubMatchId(2002)),
-          HistoryPendingMatch(clubA.clubId, ClubMatchId(2003)),
-          HistoryPendingMatch(clubA.clubId, ClubMatchId(2001)) // duplicate, should be ignored
+          HistoryPendingMatch(clubA.clubId, ClubMatchId(2002), isLive = false),
+          HistoryPendingMatch(clubA.clubId, ClubMatchId(2003), isLive = false),
+          HistoryPendingMatch(clubA.clubId, ClubMatchId(2001), isLive = false) // duplicate, should be ignored
         )
       )
       count <- HistoryPendingMatch.count(clubA.clubId)
       ids   <- HistoryPendingMatch.selectClub(clubA.clubId)
     } yield assertTrue(
       count == 3L,
-      ids.toSet == Set(ClubMatchId(2001), ClubMatchId(2002), ClubMatchId(2003))
+      ids.map(_.matchId).toSet == Set(ClubMatchId(2001), ClubMatchId(2002), ClubMatchId(2003))
     )
   }
 
@@ -271,7 +271,7 @@ object TestClubMatchSql extends ZIOSpecDefault {
 
   private def testHistoryPendingMatchDelete = test("HistoryPendingMatch delete") {
     for {
-      deleted   <- HistoryPendingMatch.delete(clubA.clubId, ClubMatchId(2001))
+      deleted   <- HistoryPendingMatch.delete(clubA.clubId, ClubMatchId(2001), isLive = false)
       remaining <- HistoryPendingMatch.count(clubA.clubId)
     } yield assertTrue(
       deleted == 1,

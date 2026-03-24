@@ -9,7 +9,8 @@ import ccas.api.misc.subtypes.{ClubId, ClubMatchId}
 import ccas.utils.sql.SqlZioTypes.connectZIO
 
 @Table(PostgresDbType, SqlNameMapper.CamelToSnakeCase)
-final case class ClubMatchRef(@Id clubId: ClubId, matchId: ClubMatchId, isTeam1: Boolean) derives DbCodec
+final case class ClubMatchRef(@Id clubId: ClubId, matchId: ClubMatchId, isLive: Boolean, isTeam1: Boolean)
+    derives DbCodec
 
 object ClubMatchRef {
   private val repo = ImmutableRepo[ClubMatchRef, ClubId]
@@ -19,8 +20,10 @@ object ClubMatchRef {
       sql"""CREATE TABLE IF NOT EXISTS club_match_ref (
               club_id  BIGINT PRIMARY KEY REFERENCES club (club_id),
               match_id BIGINT NOT NULL,
+              is_live  BOOLEAN NOT NULL DEFAULT false,
               is_team1 BOOLEAN NOT NULL
             )""".update.run()
+      sql"""ALTER TABLE club_match_ref ADD COLUMN IF NOT EXISTS is_live BOOLEAN NOT NULL DEFAULT false""".update.run()
     }
 
   def selectId(clubId: ClubId): ZIO[Transactor, SQLException, Option[ClubMatchRef]] =
@@ -28,9 +31,9 @@ object ClubMatchRef {
 
   def upsert(ref: ClubMatchRef): ZIO[Transactor, SQLException, Int] =
     connectZIO {
-      sql"""INSERT INTO club_match_ref (club_id, match_id, is_team1)
-            VALUES (${ref.clubId}, ${ref.matchId}, ${ref.isTeam1})
-            ON CONFLICT (club_id) DO UPDATE SET match_id = EXCLUDED.match_id, is_team1 = EXCLUDED.is_team1""".update.run()
+      sql"""INSERT INTO club_match_ref (club_id, match_id, is_live, is_team1)
+            VALUES (${ref.clubId}, ${ref.matchId}, ${ref.isLive}, ${ref.isTeam1})
+            ON CONFLICT (club_id) DO UPDATE SET match_id = EXCLUDED.match_id, is_live = EXCLUDED.is_live, is_team1 = EXCLUDED.is_team1""".update.run()
     }
 
   def deleteId(clubId: ClubId): ZIO[Transactor, SQLException, Int] =
