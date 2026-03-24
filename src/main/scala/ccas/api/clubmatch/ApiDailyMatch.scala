@@ -194,7 +194,7 @@ object ApiDailyMatch extends JsonDecoding[ApiDailyMatch] {
   @jsonMemberNames(SnakeCase)
   final case class ApiDailyMatchPlayerRegistered(
     username: Username,
-    rating: Elo,
+    rating: Option[Elo],
     timeoutPercent: Double,
     rd: Double,
     status: PlayerStatus
