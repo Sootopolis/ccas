@@ -139,7 +139,7 @@ private[recruitment] object RecruitmentExplore {
       // Evaluate chunk with bounded parallelism (continuous throughput)
       results <- ZIO.foreachPar(filteredChunk)(u =>
         RecruitmentFilters.evaluateCandidate(ctx.runId, u, ctx.runCtx, ctx.filters).map(u -> _)
-      ).withParallelism(ctx.evalBatchSize)
+      )
 
       // Update refs
       invitedInBatch  = results.collect { case (u, CandidateOutcome.Invited) => u }

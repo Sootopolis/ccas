@@ -20,7 +20,6 @@ object RecruitmentApp extends ZIOAppDefault {
 
   private val DefaultTarget             = 30
   private val DefaultExploreConcurrency = 1
-  private val DefaultEvalBatchSize      = 4  // max concurrent evaluations (parallelism)
   private val DefaultEvalChunkSize      = 32 // candidates per checkpoint (source-switch interval)
 
   private val help =
@@ -161,7 +160,6 @@ object RecruitmentApp extends ZIOAppDefault {
         target = effectiveTarget,
         existingUsernames = existingUsernames,
         exploreConcurrency = effectiveConcurrency,
-        evalBatchSize = DefaultEvalBatchSize,
         evalChunkSize = DefaultEvalChunkSize,
         explore = explore,
         showProgress = showProgress,

@@ -108,7 +108,6 @@ private[recruitment] case class ExploreContext(
   target: Int,
   existingUsernames: Set[Username],
   exploreConcurrency: Int,
-  evalBatchSize: Int,
   evalChunkSize: Int,
   explore: Boolean,
   showProgress: Boolean,

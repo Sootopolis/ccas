@@ -3,7 +3,7 @@ package ccas.analysis.apps.recruitment
 import java.time.{Duration, Instant, LocalDateTime, ZoneOffset}
 
 import com.augustnagro.magnum.{sql, Transactor}
-import zio.{Promise, RIO, Ref, Scope, Semaphore, ZIO}
+import zio.{durationInt, Promise, RIO, Ref, Scope, Semaphore, ZIO}
 import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
@@ -296,7 +296,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
   ): RIO[Transactor, ChessComClient] =
     for {
       transactor  <- ZIO.service[Transactor]
-      semaphore   <- Semaphore.make(1)
+      semaphore   <- Semaphore.make(5)
       mutex       <- Semaphore.make(1)
       throttled   <- Ref.make(false)
       playerCount <- Ref.make(0)
@@ -1755,6 +1755,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
           .provideEnvironment(zio.ZEnvironment(client, xa))
           .fork
         _      <- reached.await
+        _      <- ZIO.sleep(200.millis)
         _      <- fiber.interrupt
         latest <- RecruitmentRun.selectLatest(clubId)
         runId = latest.get.runId

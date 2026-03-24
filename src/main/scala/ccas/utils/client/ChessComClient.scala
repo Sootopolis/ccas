@@ -75,7 +75,7 @@ object ChessComClient {
     Headers(Header.Custom("User-Agent", s"${BuildInfo.name.toUpperCase}/${BuildInfo.version} (contact: $contactEmail)"))
 
   def live(
-    permits: Long = 5,
+    permits: Long = 20,
     cooldown: Duration = 30.seconds
   ): ZLayer[Client & Transactor, Throwable, ChessComClient] =
     ZLayer.fromZIO {

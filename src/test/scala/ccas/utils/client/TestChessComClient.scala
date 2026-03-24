@@ -83,9 +83,12 @@ object TestChessComClient extends ZIOSpecDefault {
     },
     test("429 sets throttled ref to true") {
       for {
-        (client, throttled) <- makeClient(_ => ZIO.succeed(Response(status = Status.TooManyRequests)))
-        _                   <- client.get[Payload](testUrl).exit
-        isThrottled         <- throttled.get
+        (client, throttled) <- makeClient(
+          _ => ZIO.succeed(Response(status = Status.TooManyRequests)),
+          cooldown = 1.second
+        )
+        _           <- client.get[Payload](testUrl).exit
+        isThrottled <- throttled.get
       } yield assertTrue(isThrottled)
     },
     test("cooldown resets throttle") {
