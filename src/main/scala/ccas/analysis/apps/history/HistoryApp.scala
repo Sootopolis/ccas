@@ -704,12 +704,15 @@ object HistoryApp extends ZIOAppDefault {
     val (startTime, endTime) = dailyMatch match {
       case m: ApiDailyMatchFinished =>
         (Some(Instant.ofEpochSecond(m.startTime)), Some(Instant.ofEpochSecond(m.endTime)))
+      case m: ApiDailyMatchCancelled =>
+        (Some(Instant.ofEpochSecond(m.startTime)), Some(Instant.ofEpochSecond(m.endTime)))
       case m: ApiDailyMatchInProgress => (Some(Instant.ofEpochSecond(m.startTime)), None)
       case m: ApiDailyMatchRegistered => (m.startTime.map(Instant.ofEpochSecond), None)
     }
     val (team1Result, team2Result) = teams match {
-      case t: ApiDailyMatchTeamsFinished => (Some(t.team1.result), Some(t.team2.result))
-      case _                             => (None, None)
+      case t: ApiDailyMatchTeamsFinished  => (Some(t.team1.result), Some(t.team2.result))
+      case t: ApiDailyMatchTeamsCancelled => (Some(t.team1.result), Some(t.team2.result))
+      case _                              => (None, None)
     }
     val (team1ClubId, team2ClubId) = if (weAreTeam1) { (Some(clubId), opponentClubId) }
     else { (opponentClubId, Some(clubId)) }

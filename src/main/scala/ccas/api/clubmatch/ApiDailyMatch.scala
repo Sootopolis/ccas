@@ -2,6 +2,7 @@ package ccas.api.clubmatch
 
 import zio.http.URL
 import zio.json.{jsonDiscriminator, jsonHint, jsonMemberNames, DeriveJsonDecoder, JsonDecoder, SnakeCase}
+import zio.json.ast.Json
 import zio.Chunk
 
 import ccas.api.clubmatch.ApiDailyMatch.{ApiDailyMatchSettings, ApiDailyMatchTeams}
@@ -23,7 +24,13 @@ sealed trait ApiDailyMatch {
 }
 
 object ApiDailyMatch extends JsonDecoding[ApiDailyMatch] {
-  override protected val jsonDecoderDerived: JsonDecoder[ApiDailyMatch] = DeriveJsonDecoder.gen
+  override protected val jsonDecoderDerived: JsonDecoder[ApiDailyMatch] = {
+    val gen       = DeriveJsonDecoder.gen[ApiDailyMatch]
+    val cancelled = JsonDecoder[ApiDailyMatchCancelled]
+    JsonDecoder[Json].mapOrFail { json =>
+      gen.fromJsonAST(json).orElse(cancelled.fromJsonAST(json).map(_.asInstanceOf[ApiDailyMatch]))
+    }
+  }
 
   val host: URL = Hosts.api.addPath("match")
 
@@ -73,6 +80,21 @@ object ApiDailyMatch extends JsonDecoding[ApiDailyMatch] {
   }
 
   @jsonMemberNames(SnakeCase)
+  final case class ApiDailyMatchCancelled(
+    `@id`: URL,
+    name: String,
+    url: URL,
+    startTime: Long,
+    endTime: Long,
+    status: ClubMatchStatus,
+    boards: Int,
+    settings: ApiDailyMatchSettings,
+    teams: ApiDailyMatchTeamsCancelled
+  ) extends ApiDailyMatch derives JsonDecoder {
+    require(status == ClubMatchStatus.Finished)
+  }
+
+  @jsonMemberNames(SnakeCase)
   final case class ApiDailyMatchSettings(
     rules: GameRule,
     timeClass: TimeClass,
@@ -103,6 +125,10 @@ object ApiDailyMatch extends JsonDecoding[ApiDailyMatch] {
 
   @jsonMemberNames(SnakeCase)
   final case class ApiDailyMatchTeamsFinished(team1: ApiDailyMatchTeamFinished, team2: ApiDailyMatchTeamFinished)
+      extends ApiDailyMatchTeams derives JsonDecoder
+
+  @jsonMemberNames(SnakeCase)
+  final case class ApiDailyMatchTeamsCancelled(team1: ApiDailyMatchTeamCancelled, team2: ApiDailyMatchTeamCancelled)
       extends ApiDailyMatchTeams derives JsonDecoder
 
   // team
@@ -148,6 +174,17 @@ object ApiDailyMatch extends JsonDecoding[ApiDailyMatch] {
     fairPlayRemovals: Set[Username]
   ) extends ApiDailyMatchTeam derives JsonDecoder
 
+  @jsonMemberNames(SnakeCase)
+  final case class ApiDailyMatchTeamCancelled(
+    `@id`: URL,
+    name: String,
+    url: URL,
+    score: Double,
+    result: ClubMatchResult,
+    players: Chunk[ApiDailyMatchPlayerCancelled],
+    fairPlayRemovals: Set[Username]
+  ) extends ApiDailyMatchTeam derives JsonDecoder
+
   // player
 
   sealed trait ApiDailyMatchPlayer {
@@ -171,5 +208,12 @@ object ApiDailyMatch extends JsonDecoding[ApiDailyMatch] {
     playedAsWhite: Option[GameResultDetail],
     playedAsBlack: Option[GameResultDetail],
     board: URL
+  ) extends ApiDailyMatchPlayer derives JsonDecoder
+
+  @jsonMemberNames(SnakeCase)
+  final case class ApiDailyMatchPlayerCancelled(
+    username: Username,
+    stats: URL,
+    status: PlayerStatus
   ) extends ApiDailyMatchPlayer derives JsonDecoder
 }

@@ -26,6 +26,7 @@ object TestApiJsonParsing extends ZIOSpecDefault {
     generateTest[ApiDailyMatch]("matchFinished"),
     generateTest[ApiDailyMatch]("matchInProgress"),
     generateTest[ApiDailyMatch]("matchRegistered"),
+    generateTest[ApiDailyMatch]("matchCancelled"),
     generateTest[ApiDailyMatchBoard]("matchBoard")
   )
 
