@@ -79,14 +79,17 @@ object ChessComClient {
     cooldown: Duration = 30.seconds
   ): ZLayer[Client & Transactor, Throwable, ChessComClient] =
     ZLayer.fromZIO {
+      val effectivePermits  = sys.env.get("CHESS_COM_API_PERMITS").flatMap(_.toLongOption).getOrElse(permits)
+      val effectiveCooldown = sys.env.get("CHESS_COM_API_COOLDOWN_SECONDS").flatMap(_.toIntOption)
+        .fold(cooldown)(_.seconds)
       for {
         contactEmail <- ZIO.fromOption(Option(System.getenv("CCAS_CONTACT_EMAIL")))
           .orElseFail(IllegalStateException("CCAS_CONTACT_EMAIL environment variable is required"))
         client      <- ZIO.service[Client]
         transactor  <- ZIO.service[Transactor]
-        semaphore   <- Semaphore.make(permits)
+        semaphore   <- Semaphore.make(effectivePermits)
         mutex       <- Semaphore.make(1)
         throttled   <- Ref.make(false)
-      } yield ChessComClient(client, transactor, userAgentHeaders(contactEmail), semaphore, mutex, throttled, cooldown)
+      } yield ChessComClient(client, transactor, userAgentHeaders(contactEmail), semaphore, mutex, throttled, effectiveCooldown)
     }
 }

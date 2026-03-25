@@ -142,15 +142,16 @@ object HistoryApp extends ZIOAppDefault {
       club <- Club.selectBySlug(clubSlug)
         .someOrFail(ExternalException(s"Club '$clubSlug' not found"))
       clubId = club.clubId
-      allMembers   <- ClubMember.selectClub(clubId)
-      latestSnaps  <- PlayerSnapshot.selectLatest
-      processedIds <- ClubMatch.selectMatchIdsForClub(clubId)
-      queriedIds   <- HistoryMemberQuery.selectClubPlayerIds(clubId)
+      (allMembers, latestSnaps, processedCount, queriedIds) <-
+        ClubMember.selectClub(clubId) <&>
+        PlayerSnapshot.selectLatest <&>
+        ClubMatch.countForClub(clubId) <&>
+        HistoryMemberQuery.selectClubPlayerIds(clubId)
       startedAt = Instant.now()
       runId <- HistoryRun.insert(clubId, trigger, startedAt)
       snapByPlayerId = latestSnaps.map(s => s.playerId -> s).toMap
       _ <- ZIO.logInfo(
-        s"  Members: ${allMembers.size}, Processed matches: ${processedIds.size}, Queried members: ${queriedIds.size}"
+        s"  Members: ${allMembers.size}, Processed matches: $processedCount, Queried members: ${queriedIds.size}"
       )
 
       // === Phase 2: Seed match IDs ===

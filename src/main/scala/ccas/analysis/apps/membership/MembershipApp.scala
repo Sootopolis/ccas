@@ -564,13 +564,15 @@ object MembershipApp extends ZIOAppDefault {
   private def persist(b: PhaseBResult, c: PhaseCResult): RIO[Transactor, Unit] =
     for {
       _ <- ZIO.whenDiscard(b.newPlayers.nonEmpty)(Player.insertBatch(b.newPlayers))
-      _ <- ZIO.whenDiscard((b.newSnapshots ++ c.newSnapshots).nonEmpty)(
-        PlayerSnapshot.insertBatch(b.newSnapshots ++ c.newSnapshots)
-      )
-      _ <- ZIO.whenDiscard(b.newMemberships.nonEmpty)(ClubMember.insertBatch(b.newMemberships))
-      _ <- ZIO.whenDiscard((b.closedMemberships ++ c.closedMemberships).nonEmpty)(
-        ClubMember.updateBatch(b.closedMemberships ++ c.closedMemberships)
-      )
+      _ <- ZIO.collectAllParDiscard(List(
+        ZIO.whenDiscard((b.newSnapshots ++ c.newSnapshots).nonEmpty)(
+          PlayerSnapshot.insertBatch(b.newSnapshots ++ c.newSnapshots)
+        ),
+        ZIO.whenDiscard(b.newMemberships.nonEmpty)(ClubMember.insertBatch(b.newMemberships)),
+        ZIO.whenDiscard((b.closedMemberships ++ c.closedMemberships).nonEmpty)(
+          ClubMember.updateBatch(b.closedMemberships ++ c.closedMemberships)
+        )
+      ))
     } yield ()
 
   // --- Reporting ---
