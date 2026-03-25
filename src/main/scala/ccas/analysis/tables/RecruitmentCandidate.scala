@@ -13,12 +13,12 @@ import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.SqlZioTypes.{connectZIO, transactZIO}
 
 final case class RecruitmentCandidate(
-    runId: Long,
-    playerId: PlayerId,
-    evaluatedAt: Instant,
-    outcome: CandidateOutcome,
-    rejectionReason: Option[String])
-    derives DbCodec
+  runId: Long,
+  playerId: PlayerId,
+  evaluatedAt: Instant,
+  outcome: CandidateOutcome,
+  rejectionReason: Option[String]
+) derives DbCodec
 
 object RecruitmentCandidate {
   private val selectCols = SqlLiteral("run_id, player_id, evaluated_at, outcome, rejection_reason")
@@ -29,7 +29,7 @@ object RecruitmentCandidate {
               run_id            BIGINT NOT NULL,
               player_id         BIGINT NOT NULL,
               evaluated_at      TIMESTAMPTZ NOT NULL,
-              outcome           VARCHAR NOT NULL CHECK (outcome IN ('Invited', 'Rejected', 'AlreadyMember', 'Error')),
+              outcome           VARCHAR NOT NULL CHECK (outcome IN ('Invited', 'Rejected', 'AlreadyMember', 'Error', 'Deferred')),
               rejection_reason  VARCHAR,
               PRIMARY KEY (run_id, player_id),
               FOREIGN KEY (run_id) REFERENCES recruitment_run (run_id) ON DELETE RESTRICT,
@@ -75,10 +75,10 @@ object RecruitmentCandidate {
     }
 
   def selectLatestRejectedByAlias(
-      playerId: PlayerId,
-      clubId: ClubId,
-      alias: String
-    ): ZIO[Transactor, SQLException, Option[RecruitmentCandidate]] =
+    playerId: PlayerId,
+    clubId: ClubId,
+    alias: String
+  ): ZIO[Transactor, SQLException, Option[RecruitmentCandidate]] =
     connectZIO {
       val rejected = CandidateOutcome.Rejected.toString
       val selectColsQualified = SqlLiteral(
@@ -106,6 +106,48 @@ object RecruitmentCandidate {
               AND rr.completed_at IS NOT NULL
               AND (rr.started_at AT TIME ZONE 'UTC')::date = (NOW() AT TIME ZONE 'UTC')::date
               AND rc.outcome = $invited"""
+        .query[RecruitmentCandidate].run().toList
+    }
+
+  def selectCountByRun(runId: Long): ZIO[Transactor, SQLException, Int] =
+    connectZIO {
+      sql"SELECT COUNT(*) FROM recruitment_candidate WHERE run_id = $runId"
+        .query[Int].run().headOption
+    }.someOrFail(new SQLException("COUNT query produced no rows"))
+
+  def selectDeferredCountByRun(runId: Long): ZIO[Transactor, SQLException, Int] =
+    connectZIO {
+      val deferred = CandidateOutcome.Deferred.toString
+      sql"SELECT COUNT(*) FROM recruitment_candidate WHERE run_id = $runId AND outcome = $deferred"
+        .query[Int].run().headOption
+    }.someOrFail(new SQLException("COUNT query produced no rows"))
+
+  def updateOutcome(runId: Long, playerId: PlayerId, outcome: CandidateOutcome): ZIO[Transactor, SQLException, Int] =
+    connectZIO {
+      sql"""UPDATE recruitment_candidate SET outcome = ${outcome.toString}
+            WHERE run_id = $runId AND player_id = $playerId""".update.run()
+    }
+
+  /** Returns deferred candidates for a club that have not been resolved (Invited/Rejected) in a later run. */
+  def selectDeferredByClub(clubId: ClubId): ZIO[Transactor, SQLException, List[RecruitmentCandidate]] =
+    connectZIO {
+      val deferred = CandidateOutcome.Deferred.toString
+      val invited  = CandidateOutcome.Invited.toString
+      val rejected = CandidateOutcome.Rejected.toString
+      val selectColsQualified = SqlLiteral(
+        "rc.run_id, rc.player_id, rc.evaluated_at, rc.outcome, rc.rejection_reason"
+      )
+      sql"""SELECT $selectColsQualified FROM recruitment_candidate rc
+            JOIN recruitment_run rr ON rc.run_id = rr.run_id
+            WHERE rr.club_id = $clubId AND rc.outcome = $deferred
+              AND NOT EXISTS (
+                SELECT 1 FROM recruitment_candidate rc2
+                JOIN recruitment_run rr2 ON rc2.run_id = rr2.run_id
+                WHERE rr2.club_id = $clubId AND rc2.player_id = rc.player_id
+                  AND rc2.outcome IN ($invited, $rejected)
+                  AND rc2.evaluated_at > rc.evaluated_at
+              )
+            ORDER BY rc.evaluated_at DESC"""
         .query[RecruitmentCandidate].run().toList
     }
 

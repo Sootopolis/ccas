@@ -8,7 +8,7 @@ import zio.Chunk
 import ccas.api.misc.enums.PlayerStatusCategory.{Active, Fairplay}
 import ccas.api.misc.enums.Title.{CM, GM, IM}
 import ccas.api.misc.subtypes.{PlayerId, Username}
-import ccas.utils.sql.DataSourceLayer
+import ccas.utils.sql.FreshSchemaLayer
 
 object TestPlayerSql extends ZIOSpecDefault {
   override def spec: Spec[Any, Throwable] = suite("TestPlayerSql")(
@@ -19,7 +19,7 @@ object TestPlayerSql extends ZIOSpecDefault {
     testSelect,
     testUpdate
   ).provideShared(
-    DataSourceLayer.liveFromPrefix(schema = Some("test_player_sql"), onInit = Tables.ensureTables)
+    FreshSchemaLayer("test_player_sql", onInit = Tables.ensureTables)
   ) @@ TestAspect.sequential
 
   private object Timestamps {

@@ -1,72 +1,72 @@
 package ccas.api.misc.subtypes
 
-import com.augustnagro.magnum.DbCodec
-import zio.{json, Chunk, NonEmptyChunk}
-import zio.config.magnolia.DeriveConfig
-import zio.json.{JsonCodec, JsonFieldDecoder, JsonFieldEncoder}
-import zio.prelude.{Assertion, Subtype}
-import zio.Config.Error.InvalidData
+import zio.http.URL
 
-sealed trait CcasSubtype[T: {JsonCodec, DeriveConfig, DbCodec}] extends Subtype[T] { self =>
-  private val name = self.getClass.getSimpleName.stripSuffix("$")
-
-  protected def validated(value: Type): Either[String, Type] =
-    make(value).toEitherWith(errors => errors.mkString(s"Error validating $name:\n  ", "\n  ", ""))
-
-  given DbCodec[Type]      = summon[DbCodec[T]].biMap(wrap, unwrap)
-  given JsonCodec[Type]    = derive[JsonCodec].transformOrFail(validated, identity)
-  given DeriveConfig[Type] = derive[DeriveConfig].mapOrFail(validated(_).left.map(InvalidData(Chunk.empty, _)))
-}
-
-sealed trait CcasKeySubtype[T: {JsonFieldEncoder, JsonFieldDecoder}] extends CcasSubtype[T] {
-  given JsonFieldEncoder[Type] = derive[JsonFieldEncoder]
-  given JsonFieldDecoder[Type] = derive[JsonFieldDecoder].mapOrFail(validated)
-}
+import ccas.utils.opaque.{DoubleCompanion, IntCompanion, LongCompanion, StringCompanion, StringKeyCompanion}
 
 type Elo = Elo.Type
 
-object Elo extends CcasSubtype[Int] {
-  override inline def assertion: Assertion[Int] = Assertion.greaterThanOrEqualTo(0)
+object Elo extends IntCompanion {
+  override protected def validateRaw(raw: Int): Either[String, Int] =
+    Either.cond(raw >= 0, raw, s"$name must be >= 0")
 }
 
 type PlayerId = PlayerId.Type
 
-object PlayerId extends CcasSubtype[Long] {
-  override inline def assertion: Assertion[Long] = Assertion.greaterThanOrEqualTo(0L)
+object PlayerId extends LongCompanion {
+  override protected def validateRaw(raw: Long): Either[String, Long] =
+    Either.cond(raw >= 0L, raw, s"$name must be >= 0")
 }
 
 type Username = Username.Type
 
-object Username extends CcasKeySubtype[String] {
-  override inline def assertion: Assertion[String] = !Assertion.isEmptyString
+object Username extends StringKeyCompanion {
+  override protected def validateRaw(raw: String): Either[String, String] =
+    Either.cond(raw.nonEmpty, raw, s"$name must not be empty")
 }
 
 type ClubId = ClubId.Type
 
-object ClubId extends CcasSubtype[Long] {
-  override inline def assertion: Assertion[Long] = Assertion.greaterThanOrEqualTo(0L)
+object ClubId extends LongCompanion {
+  override protected def validateRaw(raw: Long): Either[String, Long] =
+    Either.cond(raw >= 0L, raw, s"$name must be >= 0")
 }
 
-type ClubUrlName = ClubUrlName.Type
+type ClubSlug = ClubSlug.Type
 
-object ClubUrlName extends CcasKeySubtype[String] {
-  override inline def assertion: Assertion[String] = !Assertion.isEmptyString
+object ClubSlug extends StringKeyCompanion {
+  override protected def validateRaw(raw: String): Either[String, String] =
+    Either.cond(raw.nonEmpty, raw, s"$name must not be empty")
 }
 
 type ClubMatchId = ClubMatchId.Type
 
-object ClubMatchId extends CcasSubtype[Long] {
-  override inline def assertion: Assertion[Long] = Assertion.greaterThanOrEqualTo(0L)
+object ClubMatchId extends LongCompanion {
+  override protected def validateRaw(raw: Long): Either[String, Long] =
+    Either.cond(raw >= 0L, raw, s"$name must be >= 0")
+
+  def fromUrl(url: URL): ClubMatchId = wrap(url.path.segments.last.toLong)
 }
 
 type Percentage = Percentage.Type
 
-object Percentage extends CcasSubtype[Double] {
-  override inline def assertion: Assertion[Double] = Assertion.between(0.0, 1.0)
+object Percentage extends DoubleCompanion {
+  override protected def validateRaw(raw: Double): Either[String, Double] =
+    Either.cond(raw >= 0.0 && raw <= 1.0, raw, s"$name must be between 0.0 and 1.0")
 }
 
 type ClubAlias = ClubAlias.Type
 
-object ClubAlias extends CcasSubtype[String] {
-  override inline def assertion: Assertion[String] = !Assertion.isEmptyString
+object ClubAlias extends StringCompanion {
+  override protected def validateRaw(raw: String): Either[String, String] =
+    Either.cond(raw.nonEmpty, raw, s"$name must not be empty")
+}
+
+type TournamentSlug = TournamentSlug.Type
+
+object TournamentSlug extends StringCompanion {
+  override protected def validateRaw(raw: String): Either[String, String] =
+    Either.cond(raw.nonEmpty, raw, s"$name must not be empty")
+
+  def fromUrl(url: URL): TournamentSlug = wrap(url.path.segments.last)
 }

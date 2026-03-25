@@ -1,16 +1,18 @@
 package ccas.server.scheduler
 
-import java.time.Instant
 import java.time.temporal.ChronoUnit
+import java.time.Instant
 
 import com.augustnagro.magnum.Transactor
 import com.typesafe.config.ConfigFactory
 import zio.{durationLong, Duration, Task, UIO, ZIO, ZLayer}
 
-import ccas.analysis.apps.matchref.MatchRefApp
+import ccas.analysis.apps.history.HistoryApp
+import ccas.analysis.apps.ref.RefApp
 import ccas.analysis.apps.membership.MembershipApp
 import ccas.analysis.apps.recruitment.RecruitmentApp
-import ccas.api.misc.subtypes.ClubUrlName
+import ccas.analysis.tables.RunTrigger
+import ccas.api.misc.subtypes.ClubSlug
 import ccas.server.jobs.{JobKind, JobRunner}
 
 trait JobScheduler {
@@ -21,19 +23,16 @@ object JobScheduler {
 
   val live: ZLayer[JobRunner & Transactor, Nothing, JobScheduler] =
     ZLayer.fromFunction { (runner: JobRunner, xa: Transactor) =>
-      val config      = ConfigFactory.load()
-      val pollMinutes = if config.hasPath("scheduler.pollIntervalMinutes")
-                        then config.getInt("scheduler.pollIntervalMinutes")
-                        else 5
+      val config = ConfigFactory.load()
+      val pollMinutes =
+        if config.hasPath("scheduler.pollIntervalMinutes")
+        then config.getInt("scheduler.pollIntervalMinutes")
+        else 5
       val pollInterval = pollMinutes.toLong.minutes
       new JobSchedulerLive(runner, xa, pollInterval)
     }
 
-  private class JobSchedulerLive(
-      runner: JobRunner,
-      xa: Transactor,
-      pollInterval: Duration
-  ) extends JobScheduler {
+  private class JobSchedulerLive(runner: JobRunner, xa: Transactor, pollInterval: Duration) extends JobScheduler {
 
     private val env = zio.ZEnvironment(xa)
 
@@ -46,7 +45,7 @@ object JobScheduler {
     private def pollLoop: UIO[Unit] =
       (for {
         schedules <- JobSchedule.selectEnabled.provideEnvironment(env)
-        now        = Instant.now()
+        now = Instant.now()
         _ <- ZIO.foreachDiscard(schedules) { schedule =>
           val isDue = schedule.lastRunAt.forall(ts => ChronoUnit.HOURS.between(ts, now) >= schedule.intervalHours)
           ZIO.whenDiscard(isDue)(runSchedule(schedule, now))
@@ -55,23 +54,22 @@ object JobScheduler {
         .catchAll(e => ZIO.logError(s"[Scheduler] Error: ${e.getMessage}"))
 
     private def runSchedule(schedule: JobSchedule, now: Instant): Task[Unit] = {
-      def requireClubUrlName: Task[ClubUrlName] =
-        ZIO.fromOption(schedule.clubUrlName)
-          .orElseFail(new IllegalStateException(s"${schedule.kind} schedule missing clubUrlName"))
+      def requireClubSlug: Task[ClubSlug] =
+        ZIO.fromOption(schedule.clubSlug)
+          .orElseFail(new IllegalStateException(s"${schedule.kind} schedule missing clubSlug"))
 
-      val effect = schedule.kind match
+      val effect = schedule.kind match {
         case JobKind.Recruitment =>
-          requireClubUrlName.flatMap(name =>
-            RecruitmentApp.recruit(name, "default", timeLimitMinutes = Some(30)).unit
-          )
+          requireClubSlug.flatMap(name => RecruitmentApp.recruit(name, "default", timeLimitMinutes = Some(30), trigger = RunTrigger.Scheduled).unit)
         case JobKind.Membership =>
-          requireClubUrlName.flatMap(name =>
-            MembershipApp.reconcile(name).unit
-          )
+          requireClubSlug.flatMap(name => MembershipApp.reconcile(name, trigger = RunTrigger.Scheduled).unit)
         case JobKind.MatchRef =>
-          MatchRefApp.populate
+          RefApp.populate(RunTrigger.Scheduled)
+        case JobKind.History =>
+          requireClubSlug.flatMap(name => HistoryApp.discover(name, trigger = RunTrigger.Scheduled).unit)
+      }
 
-      runner.submit(schedule.kind, schedule.clubUrlName, schedule.params, effect)
+      runner.submit(schedule.kind, schedule.clubSlug, schedule.params, RunTrigger.Scheduled, effect)
         .provideEnvironment(env) *>
         JobSchedule.updateLastRunAt(schedule.id, now).provideEnvironment(env).unit
     }

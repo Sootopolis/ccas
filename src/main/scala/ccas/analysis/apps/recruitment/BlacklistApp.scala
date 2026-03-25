@@ -8,7 +8,7 @@ import zio.http.Client
 
 import ccas.analysis.tables.*
 import ccas.api.club.ApiClub
-import ccas.api.misc.subtypes.{ClubUrlName, Username}
+import ccas.api.misc.subtypes.{ClubSlug, Username}
 import ccas.api.player.ApiPlayer
 import ccas.utils.client.ChessComClient
 import ccas.utils.errors.ExternalException
@@ -16,48 +16,43 @@ import ccas.utils.sql.DataSourceLayer
 
 object BlacklistApp extends ZIOAppDefault {
 
-  override def run: ZIO[Any & ZIOAppArgs & Scope, Any, Any] =
-    for {
+  override def run: RIO[ZIOAppArgs & Scope, Unit] =
+    (for {
       args <- ZIOAppArgs.getArgs
-      _ <- (args.toList match
+      _ <- args.toList match {
         case clubStr :: usernameStr :: rest =>
           addToBlacklist(
-            ClubUrlName.wrap(clubStr),
+            ClubSlug.wrap(clubStr),
             Username.wrap(usernameStr),
             reason = rest.headOption,
             expiresAt = rest.lift(1).map(Instant.parse)
           )
-        case _ =>
-          ZIO.fail(
-            ExternalException(
-              "Usage: BlacklistApp <club-url-name> <username> [reason] [expires-at]"
-            )
-          )
-      ).provide(
-        ChessComClient.live(),
-        Client.default,
-        DataSourceLayer.liveFromPrefix(onInit = Tables.ensureTables)
-      )
-    } yield ()
+        case _ => ZIO.fail(ExternalException("Usage: BlacklistApp <club-slug> <username> [reason] [expires-at]"))
+      }
+    } yield ()).provideSomeAuto(
+      ChessComClient.live(),
+      Client.default,
+      DataSourceLayer.liveFromPrefix(onInit = Tables.ensureTables)
+    )
 
   def addToBlacklist(
-      clubUrlName: ClubUrlName,
-      username: Username,
-      reason: Option[String],
-      expiresAt: Option[Instant]
-    ): RIO[ChessComClient & Transactor, Unit] =
+    clubSlug: ClubSlug,
+    username: Username,
+    reason: Option[String],
+    expiresAt: Option[Instant]
+  ): RIO[ChessComClient & Transactor, Unit] =
     for {
-      client    <- ZIO.service[ChessComClient]
-      apiClub   <- ApiClub.get(client, clubUrlName)
-      club       = Club(apiClub.clubId, Instant.ofEpochSecond(apiClub.created), clubUrlName)
+      client  <- ZIO.service[ChessComClient]
+      apiClub <- ApiClub.get(client, clubSlug)
+      club = Club(apiClub.clubId, Instant.ofEpochSecond(apiClub.created), clubSlug)
       _         <- Club.upsert(club)
       apiPlayer <- client.get[ApiPlayer](ApiPlayer.getUrl(username))
-      now        = Instant.now()
-      _         <- RecruitmentBlacklist.insert(
-                     RecruitmentBlacklist(apiClub.clubId, apiPlayer.playerId, now, expiresAt, reason)
-                   )
-      _         <- Console.printLine(
-                     s"Blacklisted ${username} (player_id=${apiPlayer.playerId}) for club ${clubUrlName}"
-                   ).orDie
+      now = Instant.now()
+      _ <- RecruitmentBlacklist.insert(
+        RecruitmentBlacklist(apiClub.clubId, apiPlayer.playerId, now, expiresAt, reason)
+      )
+      _ <- Console.printLine(
+        s"Blacklisted $username (player_id=${apiPlayer.playerId}) for club $clubSlug"
+      ).orDie
     } yield ()
 }

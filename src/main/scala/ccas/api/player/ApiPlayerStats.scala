@@ -10,11 +10,12 @@ import ccas.utils.json.JsonDecoding
 
 @jsonMemberNames(SnakeCase)
 final case class ApiPlayerStats(
-    chessDaily: Option[ApiPlayerDailyStats],
-    chess960Daily: Option[ApiPlayerDailyStats],
-    chessRapid: Option[ApiPlayerLiveStats],
-    chessBlitz: Option[ApiPlayerLiveStats],
-    chessBullet: Option[ApiPlayerLiveStats])
+  chessDaily: Option[ApiPlayerDailyStats],
+  chess960Daily: Option[ApiPlayerDailyStats],
+  chessRapid: Option[ApiPlayerLiveStats],
+  chessBlitz: Option[ApiPlayerLiveStats],
+  chessBullet: Option[ApiPlayerLiveStats]
+)
 
 object ApiPlayerStats extends JsonDecoding[ApiPlayerStats] {
   override protected val jsonDecoderDerived: JsonDecoder[ApiPlayerStats] = DeriveJsonDecoder.gen
@@ -30,19 +31,19 @@ object ApiPlayerStats extends JsonDecoding[ApiPlayerStats] {
 
   @jsonMemberNames(SnakeCase)
   final case class ApiPlayerDailyStats(
-      last: LatestElo,
-      best: Option[BestElo],
-      record: ApiDailyRecord,
-      tournament: Option[TournamentRecord])
-      extends ApiPlayerGameTypeStats[ApiDailyRecord] derives JsonDecoder
+    last: LatestElo,
+    best: Option[BestElo],
+    record: ApiDailyRecord,
+    tournament: Option[TournamentRecord]
+  ) extends ApiPlayerGameTypeStats[ApiDailyRecord] derives JsonDecoder
 
   @jsonMemberNames(SnakeCase)
   final case class ApiPlayerLiveStats(
-      last: LatestElo,
-      best: Option[BestElo],
-      record: ApiPlayerLiveRecord,
-      tournament: Option[TournamentRecord])
-      extends ApiPlayerGameTypeStats[ApiPlayerLiveRecord] derives JsonDecoder
+    last: LatestElo,
+    best: Option[BestElo],
+    record: ApiPlayerLiveRecord,
+    tournament: Option[TournamentRecord]
+  ) extends ApiPlayerGameTypeStats[ApiPlayerLiveRecord] derives JsonDecoder
 
   @jsonMemberNames(SnakeCase)
   final case class LatestElo(rating: Elo, date: Long, rd: Option[Double]) derives JsonDecoder

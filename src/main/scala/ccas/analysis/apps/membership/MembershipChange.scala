@@ -32,14 +32,20 @@ object MembershipChange {
   final case class StatusChange(timestamp: Instant, oldStatus: PlayerStatusCategory)  extends MemberChange
 
   final case class DbState(
-      membersByPlayerId: Map[PlayerId, MemberState],
-      membersByUsername: Map[Username, MemberState],
-      knownPlayersByUsername: Map[Username, PlayerSnapshot] = Map.empty)
+    membersByPlayerId: Map[PlayerId, MemberState],
+    membersByUsername: Map[Username, MemberState],
+    knownPlayersByUsername: Map[Username, PlayerSnapshot] = Map.empty
+  )
 
   final case class ReconciliationResult(
-      changes: Chunk[MemberChangeSummary],
-      newPlayers: Chunk[Player],
-      newSnapshots: Chunk[PlayerSnapshot],
-      newMemberships: Chunk[ClubMember],
-      closedMemberships: Chunk[ClubMember])
+    changes: Chunk[MemberChangeSummary],
+    newPlayers: Chunk[Player],
+    newSnapshots: Chunk[PlayerSnapshot],
+    newMemberships: Chunk[ClubMember],
+    closedMemberships: Chunk[ClubMember],
+    currentMemberCount: Int,
+    previousMemberCount: Int,
+    startedAt: Instant,
+    completedAt: Instant
+  )
 }

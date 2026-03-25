@@ -5,15 +5,16 @@ import zio.http.URL
 import zio.json.{jsonMemberNames, DeriveJsonDecoder, JsonDecoder, SnakeCase}
 
 import ccas.api.club.ApiClubMembers.ApiClubMember
-import ccas.api.misc.subtypes.{ClubUrlName, Username}
+import ccas.api.misc.subtypes.{ClubSlug, Username}
 import ccas.utils.client.ChessComClient
 import ccas.utils.json.JsonDecoding
 
 @jsonMemberNames(SnakeCase)
 final case class ApiClubMembers(
-    weekly: Chunk[ApiClubMember],
-    monthly: Chunk[ApiClubMember],
-    allTime: Chunk[ApiClubMember]) {
+  weekly: Chunk[ApiClubMember],
+  monthly: Chunk[ApiClubMember],
+  allTime: Chunk[ApiClubMember]
+) {
   def all: Chunk[ApiClubMember] = weekly ++ monthly ++ allTime
 
   def toMap: Map[Username, Long] = all.map(member => member.username -> member.joined).toMap
@@ -25,8 +26,8 @@ object ApiClubMembers extends JsonDecoding[ApiClubMembers] {
   @jsonMemberNames(SnakeCase)
   final case class ApiClubMember(username: Username, joined: Long) derives JsonDecoder
 
-  def getUrl(clubUrlName: ClubUrlName): URL = ApiClub.getUrl(clubUrlName).addPath("members")
+  def getUrl(clubSlug: ClubSlug): URL = ApiClub.getUrl(clubSlug).addPath("members")
 
-  def get(client: ChessComClient, clubUrlName: ClubUrlName): Task[ApiClubMembers] =
-    client.get[ApiClubMembers](getUrl(clubUrlName))
+  def get(client: ChessComClient, clubSlug: ClubSlug): Task[ApiClubMembers] =
+    client.get[ApiClubMembers](getUrl(clubSlug))
 }

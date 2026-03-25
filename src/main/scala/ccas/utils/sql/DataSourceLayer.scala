@@ -8,8 +8,6 @@ import zio.{RIO, TaskLayer, ZIO, ZLayer}
 object DataSourceLayer {
   private val defaultPrefix = "database"
 
-  private val schemaNamePattern = "^[a-z_][a-z0-9_]*$".r
-
   def liveFromPrefix(
     prefix: String = defaultPrefix,
     schema: Option[String] = None,
@@ -17,9 +15,9 @@ object DataSourceLayer {
   ): TaskLayer[Transactor] =
     ZLayer.scoped {
       for {
-        xa <- ZIO.acquireRelease(
+        hikariDs <- ZIO.acquireRelease(
           ZIO.attempt {
-            val config      = ConfigFactory.load().getConfig(prefix)
+            val config       = ConfigFactory.load().getConfig(prefix)
             val hikariConfig = new HikariConfig()
 
             if (config.hasPath("url")) {
@@ -36,30 +34,19 @@ object DataSourceLayer {
 
             if (config.hasPath("pool")) {
               val poolConfig = config.getConfig("pool")
-              if (poolConfig.hasPath("maximumPoolSize"))  hikariConfig.setMaximumPoolSize(poolConfig.getInt("maximumPoolSize"))
-              if (poolConfig.hasPath("minimumIdle"))       hikariConfig.setMinimumIdle(poolConfig.getInt("minimumIdle"))
-              if (poolConfig.hasPath("connectionTimeout")) hikariConfig.setConnectionTimeout(poolConfig.getLong("connectionTimeout"))
-              if (poolConfig.hasPath("idleTimeout"))       hikariConfig.setIdleTimeout(poolConfig.getLong("idleTimeout"))
-              if (poolConfig.hasPath("maxLifetime"))       hikariConfig.setMaxLifetime(poolConfig.getLong("maxLifetime"))
+              if (poolConfig.hasPath("maximumPoolSize"))
+                hikariConfig.setMaximumPoolSize(poolConfig.getInt("maximumPoolSize"))
+              if (poolConfig.hasPath("minimumIdle")) hikariConfig.setMinimumIdle(poolConfig.getInt("minimumIdle"))
+              if (poolConfig.hasPath("connectionTimeout"))
+                hikariConfig.setConnectionTimeout(poolConfig.getLong("connectionTimeout"))
+              if (poolConfig.hasPath("idleTimeout")) hikariConfig.setIdleTimeout(poolConfig.getLong("idleTimeout"))
+              if (poolConfig.hasPath("maxLifetime")) hikariConfig.setMaxLifetime(poolConfig.getLong("maxLifetime"))
             }
 
-            val hikariDs = new HikariDataSource(hikariConfig)
-            (hikariDs, Transactor(hikariDs))
+            new HikariDataSource(hikariConfig)
           }
-        )(pair => ZIO.succeed(pair._1.close()))
-        (_, transactor) = xa
-        _ <- ZIO.foreachDiscard(schema) { s =>
-          ZIO.attempt {
-            require(schemaNamePattern.matches(s), s"Invalid schema name: $s")
-            val conn = transactor.dataSource.getConnection
-            try {
-              val stmt = conn.createStatement()
-              stmt.execute(s"DROP SCHEMA IF EXISTS $s CASCADE")
-              stmt.execute(s"CREATE SCHEMA $s")
-              stmt.close()
-            } finally conn.close()
-          }
-        }
+        )(ds => ZIO.succeed(ds.close()))
+        transactor = Transactor(hikariDs)
         _ <- onInit.provideEnvironment(zio.ZEnvironment(transactor))
       } yield transactor
     }

@@ -11,27 +11,36 @@ import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.SqlZioTypes.connectZIO
 
 final case class PlayerRecruitmentCache(
-    playerId: PlayerId,
-    fetchedAt: Instant,
-    dailyElo: Option[Int],
-    dailyTimeoutPct: Option[Double],
-    dailyGamesFinished: Option[Int],
-    clubCount: Option[Int],
-    ongoingGames: Option[Int],
-    ongoingTeamMatches: Option[Int],
-    tmGamesFinished90d: Option[Int],
-    tmTimeoutPct90d: Option[Double],
-    lastDailyTimeoutAt: Option[Instant],
-    lastTmTimeoutAt: Option[Instant])
-    derives DbCodec
+  playerId: PlayerId,
+  fetchedAt: Instant,
+  dailyElo: Option[Int],
+  dailyTimeoutPct: Option[Double],
+  dailyGamesFinished: Option[Int],
+  clubCount: Option[Int],
+  ongoingGames: Option[Int],
+  ongoingTeamMatches: Option[Int],
+  tmGamesFinished90d: Option[Int],
+  tmTimeoutPct90d: Option[Double],
+  lastDailyTimeoutAt: Option[Instant],
+  lastTmTimeoutAt: Option[Instant]
+) derives DbCodec
 
 object PlayerRecruitmentCache {
   def empty(playerId: PlayerId, fetchedAt: Instant, clubCount: Option[Int]): PlayerRecruitmentCache =
-    PlayerRecruitmentCache(playerId, fetchedAt,
-      dailyElo = None, dailyTimeoutPct = None, dailyGamesFinished = None,
-      clubCount = clubCount, ongoingGames = None, ongoingTeamMatches = None,
-      tmGamesFinished90d = None, tmTimeoutPct90d = None,
-      lastDailyTimeoutAt = None, lastTmTimeoutAt = None)
+    PlayerRecruitmentCache(
+      playerId,
+      fetchedAt,
+      dailyElo = None,
+      dailyTimeoutPct = None,
+      dailyGamesFinished = None,
+      clubCount = clubCount,
+      ongoingGames = None,
+      ongoingTeamMatches = None,
+      tmGamesFinished90d = None,
+      tmTimeoutPct90d = None,
+      lastDailyTimeoutAt = None,
+      lastTmTimeoutAt = None
+    )
 
   private val selectCols = SqlLiteral(
     """player_id, fetched_at, daily_elo, daily_timeout_pct, daily_games_finished,
@@ -96,6 +105,14 @@ object PlayerRecruitmentCache {
               tm_timeout_pct_90d = EXCLUDED.tm_timeout_pct_90d,
               last_daily_timeout_at = EXCLUDED.last_daily_timeout_at,
               last_tm_timeout_at = EXCLUDED.last_tm_timeout_at""".update.run()
+    }
+
+  def selectTmActive(limit: Int): ZIO[Transactor, SQLException, Vector[PlayerRecruitmentCache]] =
+    connectZIO {
+      sql"""SELECT $selectCols FROM player_recruitment_cache
+            WHERE tm_games_finished_90d > 0 OR ongoing_team_matches > 0
+            ORDER BY RANDOM() LIMIT $limit"""
+        .query[PlayerRecruitmentCache].run()
     }
 
   def deleteAll: ZIO[Transactor, SQLException, Int] =

@@ -2,8 +2,8 @@ package ccas.utils.sql
 
 import com.augustnagro.magnum.Transactor
 import com.zaxxer.hikari.HikariDataSource
-import zio.ZIO
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
+import zio.ZIO
 
 object TestDataSourceLayer extends ZIOSpecDefault {
   override def spec: Spec[Any, Throwable] = suite("TestDataSourceLayer")(
@@ -14,7 +14,7 @@ object TestDataSourceLayer extends ZIOSpecDefault {
     testPoolClosesOnScopeExit,
     testInvalidSchemaRejected
   ).provideShared(
-    DataSourceLayer.liveFromPrefix(schema = Some("test_dsl"))
+    FreshSchemaLayer("test_dsl")
   ) @@ TestAspect.sequential
 
   private def testIsHikariDataSource = test("underlying DataSource is HikariDataSource") {
@@ -52,14 +52,14 @@ object TestDataSourceLayer extends ZIOSpecDefault {
     } yield assertTrue(result == 1)
   }
 
-  private def testSchemaOverride = test("schema override works") {
+  private def testSchemaOverride = test("FreshSchemaLayer creates schema") {
     for {
       xa <- ZIO.service[Transactor]
       exists <- ZIO.attempt {
         val conn = xa.dataSource.getConnection
         try {
           val stmt = conn.createStatement()
-          val rs   = stmt.executeQuery(
+          val rs = stmt.executeQuery(
             "SELECT 1 FROM information_schema.schemata WHERE schema_name = 'test_dsl'"
           )
           val found = rs.next()
@@ -85,7 +85,7 @@ object TestDataSourceLayer extends ZIOSpecDefault {
   private def testInvalidSchemaRejected = test("invalid schema name is rejected") {
     for {
       result <- ZIO.scoped {
-        DataSourceLayer.liveFromPrefix(schema = Some("DROP TABLE")).build
+        FreshSchemaLayer("DROP TABLE").build
       }.either
     } yield assertTrue(
       result.left.exists(_.isInstanceOf[IllegalArgumentException])

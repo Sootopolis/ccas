@@ -39,7 +39,7 @@ enum GameResultDetail(val category: GameResult) {
   case BughousePartnerLose extends GameResultDetail(GameResult.Loss)
 }
 
-object GameResultDetail extends EnumJson[GameResultDetail] {
+object GameResultDetail extends EnumJson[GameResultDetail] with EnumSql[GameResultDetail] {
   private val lookup = lookupJson(GameResultDetail.values.map { member =>
     val apiString = member match {
       case FiftyMove => "50move"
@@ -88,7 +88,7 @@ enum ClubMatchResult(val scorePerPlayer: Double) {
   case Lose extends ClubMatchResult(0.0)
 }
 
-object ClubMatchResult extends EnumJson[ClubMatchResult]
+object ClubMatchResult extends EnumJson[ClubMatchResult] with EnumSql[ClubMatchResult]
 
 enum ClubMatchStatus {
   case Finished
@@ -96,7 +96,7 @@ enum ClubMatchStatus {
   case Registration
 }
 
-object ClubMatchStatus extends EnumJson[ClubMatchStatus]
+object ClubMatchStatus extends EnumJson[ClubMatchStatus] with EnumSql[ClubMatchStatus]
 
 enum PlayerStatusCategory {
   case Active
@@ -141,7 +141,7 @@ enum TimeClass(val isDaily: Boolean) {
   case Bullet    extends TimeClass(false)
 }
 
-object TimeClass extends EnumJson[TimeClass]
+object TimeClass extends EnumJson[TimeClass] with EnumSql[TimeClass]
 
 enum Title {
   case GM
@@ -164,3 +164,9 @@ enum ClubVisibility {
 }
 
 object ClubVisibility extends EnumJson[ClubVisibility]
+
+enum BoardGameWinner {
+  case Team1, Team2, Draw
+}
+
+object BoardGameWinner extends EnumSql[BoardGameWinner]

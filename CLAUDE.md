@@ -26,7 +26,7 @@ The codebase has four main packages:
 
 1. **`ccas.api`** — Chess.com API models and client. Case classes model API JSON responses (e.g., `ApiPlayer`, `ApiClub`, `ApiDailyMatch`). Each API model companion object extends `JsonDecoding[T]` to provide a ZIO JSON decoder. API models are read-only data transfer objects; they are never written to the database directly.
 
-2. **`ccas.analysis`** — Domain tables and business logic. `analysis.tables` contains database-persisted entities (`Player`, `PlayerSnapshot`, `Club`, `ClubMember`, plus recruitment-related tables like `RecruitmentConfig`, `RecruitmentCandidate`, `RecruitmentBlacklist`). `analysis.apps` contains runnable applications (`MembershipApp`, `RecruitmentApp`, `MatchRefApp`, `BlacklistApp`).
+2. **`ccas.analysis`** — Domain tables and business logic. `analysis.tables` contains database-persisted entities (`Player`, `PlayerSnapshot`, `Club`, `ClubMember`, `ClubMatch`, `ClubMatchBoard`, plus recruitment-related tables and history crawl tables like `HistoryMemberQuery`, `HistoryPendingMatch`, `HistoryRun`). `analysis.apps` contains runnable applications (`MembershipApp`, `RecruitmentApp`, `MatchRefApp`, `BlacklistApp`, `HistoryApp`).
 
 3. **`ccas.server`** — Backend HTTP server with job execution and scheduling. `server.jobs` has `JobRunner` (async job execution via forked fibers), `JobRun`/`JobSchedule` (database entities). `server.routes` has zio-http route handlers for jobs, schedules, and health checks. `server.scheduler` has `JobScheduler` (polling-based scheduled job execution). Entry point is `CcasServer extends ZIOAppDefault`.
 
@@ -62,7 +62,7 @@ The codebase has four main packages:
 
 `CcasServer` (`ccas.server`) is a zio-http server that exposes REST endpoints and runs background jobs:
 - **Routes:** `HealthRoutes` (health/readiness), `JobRoutes` (submit and query jobs), `ScheduleRoutes` (CRUD for scheduled jobs). Route handlers use inline JSON codecs for request/response types and map domain exceptions to HTTP status codes (e.g., `JobConflictException` → 409).
-- **JobRunner:** Trait-based (`JobRunnerLive`) async executor that forks fibers per job, tracks state in `JobRun` table (ULID IDs via `ulid-creator`), and auto-submits follow-up jobs (e.g., MatchRef after Recruitment completes). Marks orphaned running jobs as failed on startup.
+- **JobRunner:** Trait-based (`JobRunnerLive`) async executor that forks fibers per job, tracks state in `JobRun` table (ULID IDs via `ulid-creator`), and auto-submits follow-up jobs (e.g., MatchRef after Recruitment, Membership, or History completes). Marks orphaned running jobs as failed on startup.
 - **JobScheduler:** Polling daemon (configurable interval) that checks enabled `JobSchedule` entries and submits due jobs to the `JobRunner`.
 - **ServerTables:** Ensures both analysis and server database tables exist on startup.
 

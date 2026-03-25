@@ -5,33 +5,33 @@ import java.sql.SQLException
 import com.augustnagro.magnum.*
 import zio.ZIO
 
-import ccas.api.misc.subtypes.ClubUrlName
+import ccas.api.misc.subtypes.ClubSlug
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.SqlZioTypes.connectZIO
 
 final case class RecruitmentCriteria(
-    criteriaId: Long,
-    minDaysSinceRegistration: Option[Int],
-    daysSinceLastInvited: Option[Int],
-    daysSinceRejected: Option[Int],
-    nationalityExclude: Boolean,
-    nationalityCountries: List[String],
-    excludeClubs: List[String],
-    maxClubs: Option[Int],
-    excludeSourceAdmins: Boolean,
-    excludeFormerMembers: Boolean,
-    dailyMinElo: Option[Int],
-    dailyMaxElo: Option[Int],
-    dailyMinGamesFinished: Option[Int],
-    dailyMinTmGamesFinished: Option[Int],
-    dailyMaxTimeoutPercent: Option[Double],
-    dailyMaxTmTimeoutPercent: Option[Double],
-    dailyMaxHoursPerMove: Option[Int],
-    dailyMinOngoingGames: Option[Int],
-    dailyMaxOngoingGames: Option[Int],
-    dailyMinOngoingTeamMatches: Option[Int])
-    derives DbCodec {
-  def excludeClubNames: List[ClubUrlName] = excludeClubs.map(ClubUrlName.wrap)
+  criteriaId: Long,
+  minDaysSinceRegistration: Option[Int],
+  daysSinceLastInvited: Option[Int],
+  daysSinceRejected: Option[Int],
+  nationalityExclude: Boolean,
+  nationalityCountries: List[String],
+  excludeClubs: List[String],
+  maxClubs: Option[Int],
+  excludeSourceAdmins: Boolean,
+  excludeFormerMembers: Boolean,
+  dailyMinElo: Option[Int],
+  dailyMaxElo: Option[Int],
+  dailyMinGamesFinished: Option[Int],
+  dailyMinTmGamesFinished: Option[Int],
+  dailyMaxTimeoutPercent: Option[Double],
+  dailyMaxTmTimeoutPercent: Option[Double],
+  dailyMaxHoursPerMove: Option[Int],
+  dailyMinOngoingGames: Option[Int],
+  dailyMaxOngoingGames: Option[Int],
+  dailyMinOngoingTeamMatches: Option[Int]
+) derives DbCodec {
+  def excludeClubNames: List[ClubSlug] = excludeClubs.map(ClubSlug.wrap)
 
   def capped: RecruitmentCriteria = copy(
     daysSinceLastInvited = daysSinceLastInvited.map(_.min(RecruitmentCriteria.MaxDaysSinceLookback)),
@@ -85,7 +85,7 @@ object RecruitmentCriteria {
     }
 
   def insert(item: RecruitmentCriteria): ZIO[Transactor, SQLException, Long] = {
-    val c = item.capped
+    val criteria = item.capped
     connectZIO {
       sql"""INSERT INTO recruitment_criteria (
               min_days_since_registration, days_since_last_invited, days_since_rejected,
@@ -95,37 +95,37 @@ object RecruitmentCriteria {
               daily_max_timeout_percent, daily_max_tm_timeout_percent, daily_max_hours_per_move,
               daily_min_ongoing_games, daily_max_ongoing_games, daily_min_ongoing_team_matches
             ) VALUES (
-              ${c.minDaysSinceRegistration}, ${c.daysSinceLastInvited}, ${c.daysSinceRejected},
-              ${c.nationalityExclude}, ${c.nationalityCountries},
-              ${c.excludeClubs}, ${c.maxClubs}, ${c.excludeSourceAdmins}, ${c.excludeFormerMembers},
-              ${c.dailyMinElo}, ${c.dailyMaxElo}, ${c.dailyMinGamesFinished}, ${c.dailyMinTmGamesFinished},
-              ${c.dailyMaxTimeoutPercent}, ${c.dailyMaxTmTimeoutPercent}, ${c.dailyMaxHoursPerMove},
-              ${c.dailyMinOngoingGames}, ${c.dailyMaxOngoingGames}, ${c.dailyMinOngoingTeamMatches}
+              ${criteria.minDaysSinceRegistration}, ${criteria.daysSinceLastInvited}, ${criteria.daysSinceRejected},
+              ${criteria.nationalityExclude}, ${criteria.nationalityCountries},
+              ${criteria.excludeClubs}, ${criteria.maxClubs}, ${criteria.excludeSourceAdmins}, ${criteria.excludeFormerMembers},
+              ${criteria.dailyMinElo}, ${criteria.dailyMaxElo}, ${criteria.dailyMinGamesFinished}, ${criteria.dailyMinTmGamesFinished},
+              ${criteria.dailyMaxTimeoutPercent}, ${criteria.dailyMaxTmTimeoutPercent}, ${criteria.dailyMaxHoursPerMove},
+              ${criteria.dailyMinOngoingGames}, ${criteria.dailyMaxOngoingGames}, ${criteria.dailyMinOngoingTeamMatches}
             ) RETURNING criteria_id""".query[Long].run().headOption
     }.someOrFail(new SQLException("INSERT RETURNING produced no rows"))
   }
 
   def defaultDaily: RecruitmentCriteria =
     RecruitmentCriteria(
-      criteriaId                = 0,
-      minDaysSinceRegistration  = Some(90),
-      daysSinceLastInvited      = Some(180),
-      daysSinceRejected         = Some(30),
-      nationalityExclude        = false,
-      nationalityCountries      = Nil,
-      excludeClubs              = Nil,
-      maxClubs                  = Some(40),
-      excludeSourceAdmins       = true,
-      excludeFormerMembers      = true,
-      dailyMinElo               = Some(1000),
-      dailyMaxElo               = None,
-      dailyMinGamesFinished     = Some(20),
-      dailyMinTmGamesFinished   = Some(10),
-      dailyMaxTimeoutPercent    = Some(5.0),
-      dailyMaxTmTimeoutPercent  = Some(0.0),
-      dailyMaxHoursPerMove      = Some(12),
-      dailyMinOngoingGames      = None,
-      dailyMaxOngoingGames      = Some(60),
+      criteriaId = 0,
+      minDaysSinceRegistration = Some(90),
+      daysSinceLastInvited = Some(180),
+      daysSinceRejected = Some(30),
+      nationalityExclude = false,
+      nationalityCountries = Nil,
+      excludeClubs = Nil,
+      maxClubs = Some(40),
+      excludeSourceAdmins = true,
+      excludeFormerMembers = true,
+      dailyMinElo = Some(1000),
+      dailyMaxElo = None,
+      dailyMinGamesFinished = Some(20),
+      dailyMinTmGamesFinished = Some(10),
+      dailyMaxTimeoutPercent = Some(5.0),
+      dailyMaxTmTimeoutPercent = Some(0.0),
+      dailyMaxHoursPerMove = Some(12),
+      dailyMinOngoingGames = None,
+      dailyMaxOngoingGames = Some(60),
       dailyMinOngoingTeamMatches = None
     )
 

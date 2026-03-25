@@ -6,8 +6,8 @@ import zio.test.{assertCompletes, assertTrue, Spec, TestAspect, ZIOSpecDefault}
 import zio.Chunk
 
 import ccas.api.misc.enums.PlayerStatusCategory.{Active, Closed}
-import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubUrlName, PlayerId, Username}
-import ccas.utils.sql.DataSourceLayer
+import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username}
+import ccas.utils.sql.FreshSchemaLayer
 
 object TestClubSql extends ZIOSpecDefault {
   override def spec: Spec[Any, Throwable] = suite("TestClubSql")(
@@ -24,9 +24,10 @@ object TestClubSql extends ZIOSpecDefault {
     testClubMatchRefUpsert,
     testClubMatchRefUpsertUpdate,
     testClubMatchRefDelete,
-    testClubMatchRefDeleteAll
+    testClubMatchRefDeleteAll,
+    testReplaceSince
   ).provideShared(
-    DataSourceLayer.liveFromPrefix(schema = Some("test_club_sql"), onInit = Tables.ensureTables)
+    FreshSchemaLayer("test_club_sql", onInit = Tables.ensureTables)
   ) @@ TestAspect.sequential
 
   private object Timestamps {
@@ -36,8 +37,8 @@ object TestClubSql extends ZIOSpecDefault {
     val t3: Instant = t0.plus(Duration.ofDays(3))
   }
 
-  private val clubA = Club(ClubId(200), Timestamps.t0, ClubUrlName("club-a"))
-  private val clubB = Club(ClubId(201), Timestamps.t0, ClubUrlName("club-b"))
+  private val clubA = Club(ClubId(200), Timestamps.t0, ClubSlug("club-a"))
+  private val clubB = Club(ClubId(201), Timestamps.t0, ClubSlug("club-b"))
 
   private val player0 = Player(PlayerId(10), Timestamps.t0)
   private val player1 = Player(PlayerId(11), Timestamps.t0)
@@ -78,7 +79,7 @@ object TestClubSql extends ZIOSpecDefault {
   }
 
   private def testClubUpsertUpdate = test("testClubUpsertUpdate") {
-    val updated = clubA.copy(urlName = ClubUrlName("club-a-renamed"))
+    val updated = clubA.copy(slug = ClubSlug("club-a-renamed"))
     for {
       _      <- Club.upsert(updated)
       result <- Club.selectId(clubA.clubId)
@@ -159,8 +160,8 @@ object TestClubSql extends ZIOSpecDefault {
 
   // --- ClubMatchRef tests ---
 
-  private val refA = ClubMatchRef(clubA.clubId, ClubMatchId(9001), teamIdx = 1)
-  private val refB = ClubMatchRef(clubB.clubId, ClubMatchId(9002), teamIdx = 2)
+  private val refA = ClubMatchRef(clubA.clubId, ClubMatchId(9001), isLive = false, isTeam1 = true)
+  private val refB = ClubMatchRef(clubB.clubId, ClubMatchId(9002), isLive = false, isTeam1 = false)
 
   private def testClubMatchRefUpsert = test("testClubMatchRefUpsert") {
     for {
@@ -170,7 +171,7 @@ object TestClubSql extends ZIOSpecDefault {
   }
 
   private def testClubMatchRefUpsertUpdate = test("testClubMatchRefUpsertUpdate") {
-    val updated = refA.copy(matchId = ClubMatchId(9099), teamIdx = 2)
+    val updated = refA.copy(matchId = ClubMatchId(9099), isTeam1 = false)
     for {
       _      <- ClubMatchRef.upsert(updated)
       result <- ClubMatchRef.selectId(refA.clubId)
@@ -187,10 +188,33 @@ object TestClubSql extends ZIOSpecDefault {
 
   private def testClubMatchRefDeleteAll = test("testClubMatchRefDeleteAll") {
     for {
-      _      <- ClubMatchRef.upsert(refB)
-      _      <- ClubMatchRef.deleteAll
+      _       <- ClubMatchRef.upsert(refB)
+      _       <- ClubMatchRef.deleteAll
       resultA <- ClubMatchRef.selectId(refA.clubId)
       resultB <- ClubMatchRef.selectId(refB.clubId)
     } yield assertTrue(resultA.isEmpty, resultB.isEmpty)
+  }
+
+  // --- ClubMember.replaceSince tests ---
+
+  private def testReplaceSince = test("ClubMember.replaceSince replaces approximate since with authoritative") {
+    val approxMember = ClubMember(clubA.clubId, player0.playerId, Timestamps.t0, None, sinceApproximate = true)
+    val newSince     = Timestamps.t1
+    for {
+      _       <- ClubMember.deleteAll
+      _       <- ClubMember.insert(approxMember)
+      updated <- ClubMember.replaceSince(clubA.clubId, player0.playerId, Timestamps.t0, newSince)
+      result  <- ClubMember.selectClub(clubA.clubId)
+      // Verify it does not replace a non-approximate member
+      _ <- ClubMember.deleteAll
+      _ <- ClubMember.insert(ClubMember(clubA.clubId, player0.playerId, Timestamps.t0, None, sinceApproximate = false))
+      notUpdated <- ClubMember.replaceSince(clubA.clubId, player0.playerId, Timestamps.t0, newSince)
+    } yield assertTrue(
+      updated == 1,
+      result.size == 1,
+      result.head.since == newSince,
+      !result.head.sinceApproximate,
+      notUpdated == 0
+    )
   }
 }

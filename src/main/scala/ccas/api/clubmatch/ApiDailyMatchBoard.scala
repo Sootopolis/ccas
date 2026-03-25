@@ -22,27 +22,23 @@ object ApiDailyMatchBoard extends JsonDecoding[ApiDailyMatchBoard] {
 
   @jsonMemberNames(SnakeCase)
   final case class ApiDailyBoardGame(
-      white: ApiDailyBoardPlayer,
-      black: ApiDailyBoardPlayer,
-      accuracies: Option[Accuracies],
-      url: URL,
-      fen: String,
-      pgn: String,
-      startTime: Long,
-      endTime: Option[Long],
-      timeControl: String,
-      timeClass: TimeClass,
-      rules: GameRule,
-      rated: Boolean,
-      eco: Option[URL],
-      `match`: URL)
-      derives JsonDecoder
+    white: ApiDailyBoardPlayer,
+    black: ApiDailyBoardPlayer,
+    accuracies: Option[Accuracies],
+    url: URL,
+    fen: String,
+    pgn: String,
+    startTime: Long,
+    endTime: Option[Long],
+    timeControl: String,
+    timeClass: TimeClass,
+    rules: GameRule,
+    rated: Boolean,
+    eco: Option[URL],
+    `match`: URL
+  ) derives JsonDecoder
 
   @jsonMemberNames(SnakeCase)
-  final case class ApiDailyBoardPlayer(
-      username: Username,
-      rating: Elo,
-      result: Option[GameResultDetail],
-      `@id`: URL)
+  final case class ApiDailyBoardPlayer(username: Username, rating: Elo, result: Option[GameResultDetail], `@id`: URL)
       derives JsonDecoder
 }

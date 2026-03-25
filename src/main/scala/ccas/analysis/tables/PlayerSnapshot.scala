@@ -14,12 +14,12 @@ import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.SqlZioTypes.{connectZIO, transactZIO}
 
 final case class PlayerSnapshot(
-    playerId: PlayerId,
-    since: Instant,
-    username: Username,
-    status: PlayerStatusCategory,
-    title: Option[Title])
-    derives DbCodec
+  playerId: PlayerId,
+  since: Instant,
+  username: Username,
+  status: PlayerStatusCategory,
+  title: Option[Title]
+) derives DbCodec
 
 object PlayerSnapshot {
   private val selectCols   = SqlLiteral("player_id, since, username, status, title")

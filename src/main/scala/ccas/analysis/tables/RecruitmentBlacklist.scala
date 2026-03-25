@@ -11,11 +11,11 @@ import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.SqlZioTypes.connectZIO
 
 final case class RecruitmentBlacklist(
-    clubId: ClubId,
-    playerId: PlayerId,
-    addedAt: Instant,
-    expiresAt: Option[Instant],
-    reason: Option[String]
+  clubId: ClubId,
+  playerId: PlayerId,
+  addedAt: Instant,
+  expiresAt: Option[Instant],
+  reason: Option[String]
 ) derives DbCodec
 
 object RecruitmentBlacklist {

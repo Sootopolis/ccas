@@ -6,7 +6,7 @@ import java.time.Instant
 import com.augustnagro.magnum.*
 import zio.ZIO
 
-import ccas.api.misc.subtypes.ClubUrlName
+import ccas.api.misc.subtypes.ClubSlug
 import ccas.server.jobs.JobKind
 import ccas.server.jobs.JobKind.given
 import ccas.utils.sql.DbCodecs.given
@@ -14,13 +14,13 @@ import ccas.utils.sql.SqlZioTypes.connectZIO
 
 @Table(PostgresDbType, SqlNameMapper.CamelToSnakeCase)
 case class JobSchedule(
-    @Id id: Long,
-    kind: JobKind,
-    clubUrlName: Option[ClubUrlName],
-    params: Option[String],
-    intervalHours: Int,
-    enabled: Boolean,
-    lastRunAt: Option[Instant]
+  @Id id: Long,
+  kind: JobKind,
+  clubSlug: Option[ClubSlug],
+  params: Option[String],
+  intervalHours: Int,
+  enabled: Boolean,
+  lastRunAt: Option[Instant]
 ) derives DbCodec
 
 object JobSchedule {
@@ -30,16 +30,16 @@ object JobSchedule {
       sql"""CREATE TABLE IF NOT EXISTS job_schedule (
               id              BIGSERIAL PRIMARY KEY,
               kind            TEXT NOT NULL,
-              club_url_name   TEXT,
+              club_slug   TEXT,
               params          TEXT,
               interval_hours  INT NOT NULL,
               enabled         BOOLEAN NOT NULL DEFAULT TRUE,
               last_run_at     TIMESTAMPTZ,
-              UNIQUE (kind, club_url_name)
+              UNIQUE (kind, club_slug)
             )""".update.run()
     }
 
-  private val columns = SqlLiteral("id, kind, club_url_name, params, interval_hours, enabled, last_run_at")
+  private val columns = SqlLiteral("id, kind, club_slug, params, interval_hours, enabled, last_run_at")
 
   def selectAll: ZIO[Transactor, SQLException, List[JobSchedule]] =
     connectZIO {
@@ -58,8 +58,8 @@ object JobSchedule {
 
   def insert(schedule: JobSchedule): ZIO[Transactor, SQLException, Long] =
     connectZIO {
-      sql"""INSERT INTO job_schedule (kind, club_url_name, params, interval_hours, enabled, last_run_at)
-            VALUES (${schedule.kind}, ${schedule.clubUrlName}, ${schedule.params},
+      sql"""INSERT INTO job_schedule (kind, club_slug, params, interval_hours, enabled, last_run_at)
+            VALUES (${schedule.kind}, ${schedule.clubSlug}, ${schedule.params},
                     ${schedule.intervalHours}, ${schedule.enabled}, ${schedule.lastRunAt})
             RETURNING id""".query[Long].run().headOption
     }.someOrFail(new SQLException("INSERT RETURNING produced no rows"))
@@ -69,7 +69,12 @@ object JobSchedule {
       sql"UPDATE job_schedule SET last_run_at = $at WHERE id = $id".update.run()
     }
 
-  def update(id: Long, intervalHours: Option[Int], enabled: Option[Boolean], params: Option[Option[String]]): ZIO[Transactor, SQLException, Int] =
+  def update(
+    id: Long,
+    intervalHours: Option[Int],
+    enabled: Option[Boolean],
+    params: Option[Option[String]]
+  ): ZIO[Transactor, SQLException, Int] =
     if (intervalHours.isEmpty && enabled.isEmpty && params.isEmpty) ZIO.succeed(0)
     else {
       val hasParams   = params.isDefined

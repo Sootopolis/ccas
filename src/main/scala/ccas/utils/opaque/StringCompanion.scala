@@ -1,21 +1,34 @@
 package ccas.utils.opaque
 
 import com.augustnagro.magnum.DbCodec
-import zio.json.{JsonDecoder, JsonEncoder}
+import zio.config.magnolia.DeriveConfig
+import zio.json.{JsonCodec, JsonDecoder, JsonEncoder}
+import zio.Chunk
+import zio.Config.Error.InvalidData
 
-trait StringCompanion[S] {
-  final inline def apply(string: String): S = fromStringUnsafe(string)
+trait StringCompanion {
+  opaque type Type = String
 
-  protected def fromStringUnsafe(string: String): S
-  protected def toStringUnsafe(opaque: S): String
+  def apply(value: String): Type  = value
+  def wrap(value: String): Type   = value
+  def unwrap(value: Type): String = value
 
-  given jsonDecoder: JsonDecoder[S] = JsonDecoder.string.map(fromStringUnsafe)
-  given jsonEncoder: JsonEncoder[S] = JsonEncoder.string.contramap(toStringUnsafe)
-  given dbCodec: DbCodec[S]         = DbCodec[String].biMap(fromStringUnsafe, toStringUnsafe)
+  protected val name: String = getClass.getSimpleName.stripSuffix("$")
 
-  extension (opaque: S) {
-    inline def length: Int    = toStringUnsafe(opaque).length
-    inline def toLowerCase: S = fromStringUnsafe(toStringUnsafe(opaque).toLowerCase)
-    inline def toUpperCase: S = fromStringUnsafe(toStringUnsafe(opaque).toUpperCase)
+  protected def validateRaw(raw: String): Either[String, String] = Right(raw)
+  protected def validated(raw: String): Either[String, Type]     = validateRaw(raw).map(wrap)
+
+  given JsonCodec[Type]    = JsonCodec.string.transformOrFail(validated, unwrap)
+  given JsonDecoder[Type]  = summon[JsonCodec[Type]].decoder
+  given JsonEncoder[Type]  = summon[JsonCodec[Type]].encoder
+  given DbCodec[Type]      = DbCodec[String].biMap(wrap, unwrap)
+  given DeriveConfig[Type] = DeriveConfig[String].mapOrFail(validated(_).left.map(InvalidData(Chunk.empty, _)))
+
+  extension (s: Type) {
+    def value: String                          = unwrap(s)
+    def length: Int                            = unwrap(s).length
+    def toLowerCase: Type                      = wrap(unwrap(s).toLowerCase)
+    def toUpperCase: Type                      = wrap(unwrap(s).toUpperCase)
+    def equalsIgnoreCase(other: Type): Boolean = unwrap(s).equalsIgnoreCase(unwrap(other))
   }
 }
