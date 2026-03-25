@@ -5,7 +5,7 @@ import java.sql.SQLException
 import com.augustnagro.magnum.*
 import zio.ZIO
 
-import ccas.api.misc.subtypes.ClubUrlName
+import ccas.api.misc.subtypes.ClubSlug
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.SqlZioTypes.connectZIO
 
@@ -31,7 +31,7 @@ final case class RecruitmentCriteria(
   dailyMaxOngoingGames: Option[Int],
   dailyMinOngoingTeamMatches: Option[Int]
 ) derives DbCodec {
-  def excludeClubNames: List[ClubUrlName] = excludeClubs.map(ClubUrlName.wrap)
+  def excludeClubNames: List[ClubSlug] = excludeClubs.map(ClubSlug.wrap)
 
   def capped: RecruitmentCriteria = copy(
     daysSinceLastInvited = daysSinceLastInvited.map(_.min(RecruitmentCriteria.MaxDaysSinceLookback)),

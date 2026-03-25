@@ -1,4 +1,4 @@
-package ccas.analysis.apps.matchref
+package ccas.analysis.apps.ref
 
 import java.time.{Duration as JDuration, Instant}
 import scala.annotation.nowarn
@@ -7,20 +7,21 @@ import com.augustnagro.magnum.{sql, Transactor}
 import zio.{Promise, RIO, Ref, Scope, Task, ZIO, ZIOAppDefault}
 import zio.http.Client
 
-import ccas.analysis.tables.{ClubMatch, ClubMatchBoard, ClubMatchRef, PlayerMatchRef, RunTrigger, Tables}
+import ccas.analysis.tables.{ClubMatch, ClubMatchBoard, ClubMatchRef, PlayerMatchRef, PlayerTournamentRef, RunTrigger, Tables}
 import ccas.api.club.ApiClubMatches
 import ccas.api.clubmatch.{ApiDailyMatch, ApiLiveMatch, TeamMatchTeams}
-import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubUrlName, PlayerId, Username}
-import ccas.api.player.{ApiPlayer, ApiPlayerMatches}
+import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, TournamentSlug, Username}
+import ccas.api.player.{ApiPlayer, ApiPlayerMatches, ApiPlayerTournaments}
+import ccas.api.tournament.ApiTournament
 import ccas.utils.ProgressBar
 import ccas.utils.client.ChessComClient
 import ccas.utils.sql.DataSourceLayer
 import ccas.utils.sql.SqlZioTypes.connectZIO
 
-object MatchRefApp extends ZIOAppDefault {
+object RefApp extends ZIOAppDefault {
 
   private final case class UnresolvedPlayer(playerId: PlayerId, username: Username)
-  private final case class UnresolvedClub(clubId: ClubId, urlName: ClubUrlName)
+  private final case class UnresolvedClub(clubId: ClubId, slug: ClubSlug)
 
   override def run: RIO[Scope, Unit] =
     populate().provide(
@@ -63,7 +64,7 @@ object MatchRefApp extends ZIOAppDefault {
         for {
           playerBar <- ProgressBar.scoped
           _ <- ZIO.foreachParDiscard(players) { player =>
-            resolvePlayer(client, cache, player, playerBar).tap(r => playerCounter.update(_ + 1).when(r.isDefined))
+            resolvePlayer(client, cache, player, playerBar).tap(r => playerCounter.update(_ + 1).when(r))
               *> playerProcessed.updateAndGet(_ + 1).flatMap(n =>
                 playerBar.print(n, players.size, s"  Resolving players: $n/${players.size}")
               )
@@ -86,7 +87,8 @@ object MatchRefApp extends ZIOAppDefault {
               FROM player_snapshot
             ) ps ON p.player_id = ps.player_id AND ps.rn = 1
             LEFT JOIN player_match_ref pmr ON p.player_id = pmr.player_id
-            WHERE pmr.player_id IS NULL""".query[UnresolvedPlayer].run().toList
+            LEFT JOIN player_tournament_ref ptr ON p.player_id = ptr.player_id
+            WHERE pmr.player_id IS NULL AND ptr.player_id IS NULL""".query[UnresolvedPlayer].run().toList
     }
 
   private def resolvePlayer(
@@ -94,40 +96,82 @@ object MatchRefApp extends ZIOAppDefault {
     cache: Ref[Map[(ClubMatchId, Boolean), Promise[Throwable, TeamMatchTeams]]],
     player: UnresolvedPlayer,
     bar: ProgressBar
-  ): RIO[Transactor, Option[PlayerMatchRef]] =
+  ): RIO[Transactor, Boolean] =
     (for {
       // Try DB first (from HistoryApp's club_match_board data)
       dbRef <- ClubMatchBoard.selectPlayerMatchRef(player.playerId)
-      ref <- dbRef match {
-        case Some(ref) => PlayerMatchRef.upsert(ref).as(Some(ref))
+      resolved <- dbRef match {
+        case Some(ref) => PlayerMatchRef.upsert(ref).as(true)
         case None =>
-          // Fall back to API
-          for {
-            playerMatches <- client.get[ApiPlayerMatches](ApiPlayerMatches.getUrl(player.username))
-            result <- playerMatches.finished.find(_.board.isDefined) match {
-              case None => bar.logInfo(s"  ${player.username}: no finished match with board").as(None)
-              case Some(m) =>
-                val matchId  = ClubMatchId.fromUrl(m.`@id`)
-                val isLive   = m.`@id`.path.segments.contains("live")
-                val boardIdx = m.board.get.path.segments.last.toInt
-                for {
-                  teams <- fetchMatch(client, cache, matchId, isLive)
-                  r <- findIsTeam1(teams, player.username) match {
-                    case None => bar.logInfo(s"  ${player.username}: not found in match $matchId teams").as(None)
-                    case Some(isTeam1) =>
-                      verifyPlayerId(client, player.username, player.playerId).flatMap {
-                        case false =>
-                          bar.logWarning(s"  ${player.username}: player_id mismatch, skipping").as(None)
-                        case true =>
-                          val ref = PlayerMatchRef(player.playerId, matchId, isLive, isTeam1, boardIdx)
-                          PlayerMatchRef.upsert(ref).as(Some(ref))
-                      }
-                  }
-                } yield r
-            }
-          } yield result
+          resolvePlayerViaMatch(client, cache, player, bar).flatMap {
+            case true  => ZIO.succeed(true)
+            case false => resolvePlayerViaTournament(client, player, bar)
+          }
       }
-    } yield ref).catchAll(error => bar.logWarning(s"  ${player.username}: error — ${error.getMessage}").as(None))
+    } yield resolved).catchAll(error => bar.logWarning(s"  ${player.username}: error — ${error.getMessage}").as(false))
+
+  private def resolvePlayerViaMatch(
+    client: ChessComClient,
+    cache: Ref[Map[(ClubMatchId, Boolean), Promise[Throwable, TeamMatchTeams]]],
+    player: UnresolvedPlayer,
+    bar: ProgressBar
+  ): RIO[Transactor, Boolean] =
+    for {
+      playerMatches <- client.get[ApiPlayerMatches](ApiPlayerMatches.getUrl(player.username))
+      result <- playerMatches.finished.find(_.board.isDefined) match {
+        case None => bar.logInfo(s"  ${player.username}: no finished match with board").as(false)
+        case Some(m) =>
+          val matchId  = ClubMatchId.fromUrl(m.`@id`)
+          val isLive   = m.`@id`.path.segments.contains("live")
+          val boardIdx = m.board.get.path.segments.last.toInt
+          for {
+            teams <- fetchMatch(client, cache, matchId, isLive)
+            r <- findIsTeam1(teams, player.username) match {
+              case None => bar.logInfo(s"  ${player.username}: not found in match $matchId teams").as(false)
+              case Some(isTeam1) =>
+                verifyPlayerId(client, player.username, player.playerId).flatMap {
+                  case false =>
+                    bar.logWarning(s"  ${player.username}: player_id mismatch, skipping").as(false)
+                  case true =>
+                    val ref = PlayerMatchRef(player.playerId, matchId, isLive, isTeam1, boardIdx)
+                    PlayerMatchRef.upsert(ref).as(true)
+                }
+            }
+          } yield r
+      }
+    } yield result
+
+  private def resolvePlayerViaTournament(
+    client: ChessComClient,
+    player: UnresolvedPlayer,
+    bar: ProgressBar
+  ): RIO[Transactor, Boolean] =
+    for {
+      playerTournaments <- client.get[ApiPlayerTournaments](ApiPlayerTournaments.getUrl(player.username))
+      eligible = playerTournaments.finished ++ playerTournaments.inProgress
+      result <- eligible.headOption match {
+        case None => bar.logInfo(s"  ${player.username}: no eligible tournaments").as(false)
+        case Some(t) =>
+          val slug = TournamentSlug.fromUrl(t.`@id`)
+          for {
+            tournament <- client.get[ApiTournament](ApiTournament.getUrl(slug))
+            playerIdx = tournament.players.indexWhere(tp =>
+              Username.unwrap(tp.username).equalsIgnoreCase(Username.unwrap(player.username))
+            )
+            r <- if (playerIdx < 0) {
+              bar.logInfo(s"  ${player.username}: not found in tournament $slug players").as(false)
+            } else {
+              verifyPlayerId(client, player.username, player.playerId).flatMap {
+                case false =>
+                  bar.logWarning(s"  ${player.username}: player_id mismatch, skipping").as(false)
+                case true =>
+                  val ref = PlayerTournamentRef(player.playerId, slug, playerIdx)
+                  PlayerTournamentRef.upsert(ref).as(true)
+              }
+            }
+          } yield r
+      }
+    } yield result
 
   // --- Match fetching ---
 
@@ -170,8 +214,8 @@ object MatchRefApp extends ZIOAppDefault {
     else { None }
   }
 
-  private def findClubIsTeam1(teams: TeamMatchTeams, urlName: ClubUrlName): Option[Boolean] = {
-    val name = ClubUrlName.unwrap(urlName)
+  private def findClubIsTeam1(teams: TeamMatchTeams, slug: ClubSlug): Option[Boolean] = {
+    val name = ClubSlug.unwrap(slug)
     if (teams.team1.`@id`.path.segments.lastOption.exists(_.equalsIgnoreCase(name))) { Some(true) }
     else if (teams.team2.`@id`.path.segments.lastOption.exists(_.equalsIgnoreCase(name))) { Some(false) }
     else { None }
@@ -186,7 +230,7 @@ object MatchRefApp extends ZIOAppDefault {
 
   private def selectUnresolvedClubs: RIO[Transactor, List[UnresolvedClub]] =
     connectZIO {
-      sql"""SELECT c.club_id, c.url_name
+      sql"""SELECT c.club_id, c.slug
             FROM club c
             LEFT JOIN club_match_ref cmr ON c.club_id = cmr.club_id
             WHERE cmr.club_id IS NULL""".query[UnresolvedClub].run().toList
@@ -206,16 +250,16 @@ object MatchRefApp extends ZIOAppDefault {
         case None =>
           // Fall back to API — any finished team match works (daily or live)
           for {
-            clubMatches <- client.get[ApiClubMatches](ApiClubMatches.getUrl(club.urlName))
+            clubMatches <- client.get[ApiClubMatches](ApiClubMatches.getUrl(club.slug))
             result <- clubMatches.finished.headOption match {
-              case None => bar.logInfo(s"  ${club.urlName}: no finished match").as(None)
+              case None => bar.logInfo(s"  ${club.slug}: no finished match").as(None)
               case Some(m) =>
                 val matchId = ClubMatchId.fromUrl(m.`@id`)
                 val isLive  = m.`@id`.path.segments.contains("live")
                 for {
                   teams <- fetchMatch(client, cache, matchId, isLive)
-                  r <- findClubIsTeam1(teams, club.urlName) match {
-                    case None => bar.logInfo(s"  ${club.urlName}: not found in match $matchId teams").as(None)
+                  r <- findClubIsTeam1(teams, club.slug) match {
+                    case None => bar.logInfo(s"  ${club.slug}: not found in match $matchId teams").as(None)
                     case Some(isTeam1) =>
                       val ref = ClubMatchRef(club.clubId, matchId, isLive, isTeam1)
                       ClubMatchRef.upsert(ref).as(Some(ref))
@@ -224,5 +268,5 @@ object MatchRefApp extends ZIOAppDefault {
             }
           } yield result
       }
-    } yield ref).catchAll(error => bar.logWarning(s"  ${club.urlName}: error — ${error.getMessage}").as(None))
+    } yield ref).catchAll(error => bar.logWarning(s"  ${club.slug}: error — ${error.getMessage}").as(None))
 }

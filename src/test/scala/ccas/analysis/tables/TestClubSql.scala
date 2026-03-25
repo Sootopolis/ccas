@@ -6,7 +6,7 @@ import zio.test.{assertCompletes, assertTrue, Spec, TestAspect, ZIOSpecDefault}
 import zio.Chunk
 
 import ccas.api.misc.enums.PlayerStatusCategory.{Active, Closed}
-import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubUrlName, PlayerId, Username}
+import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username}
 import ccas.utils.sql.FreshSchemaLayer
 
 object TestClubSql extends ZIOSpecDefault {
@@ -37,8 +37,8 @@ object TestClubSql extends ZIOSpecDefault {
     val t3: Instant = t0.plus(Duration.ofDays(3))
   }
 
-  private val clubA = Club(ClubId(200), Timestamps.t0, ClubUrlName("club-a"))
-  private val clubB = Club(ClubId(201), Timestamps.t0, ClubUrlName("club-b"))
+  private val clubA = Club(ClubId(200), Timestamps.t0, ClubSlug("club-a"))
+  private val clubB = Club(ClubId(201), Timestamps.t0, ClubSlug("club-b"))
 
   private val player0 = Player(PlayerId(10), Timestamps.t0)
   private val player1 = Player(PlayerId(11), Timestamps.t0)
@@ -79,7 +79,7 @@ object TestClubSql extends ZIOSpecDefault {
   }
 
   private def testClubUpsertUpdate = test("testClubUpsertUpdate") {
-    val updated = clubA.copy(urlName = ClubUrlName("club-a-renamed"))
+    val updated = clubA.copy(slug = ClubSlug("club-a-renamed"))
     for {
       _      <- Club.upsert(updated)
       result <- Club.selectId(clubA.clubId)

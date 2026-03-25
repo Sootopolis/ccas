@@ -2,7 +2,7 @@ package ccas.analysis.apps.recruitment
 
 import ccas.analysis.tables.{PlayerRecruitmentCache, RecruitmentCriteria}
 import ccas.api.misc.enums.GameResultDetail
-import ccas.api.misc.subtypes.{ClubId, ClubUrlName, PlayerId, Username}
+import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
 import ccas.api.player.ApiPlayer
 import ccas.api.player.ApiPlayerArchive.ApiPlayerArchiveGame
 import ccas.utils.ProgressBar
@@ -28,7 +28,7 @@ private[recruitment] case class RunContext(
   clubMatchIds: Set[URL],
   formerMemberIds: Set[PlayerId],
   now: Instant,
-  discoveredClubs: Ref[Set[ClubUrlName]],
+  discoveredClubs: Ref[Set[ClubSlug]],
   discoveredOpponents: Ref[Set[Username]]
 )
 
@@ -64,8 +64,8 @@ private[recruitment] sealed trait SourceDescriptor {
   val id: String
 }
 
-private[recruitment] case class ClubSource(clubUrlName: ClubUrlName) extends SourceDescriptor {
-  val id: String = ClubUrlName.unwrap(clubUrlName)
+private[recruitment] case class ClubSource(clubSlug: ClubSlug) extends SourceDescriptor {
+  val id: String = ClubSlug.unwrap(clubSlug)
 }
 
 private[recruitment] case class UsernameSource(id: String, usernames: List[Username]) extends SourceDescriptor
@@ -80,7 +80,7 @@ private[recruitment] case class TmStatsResult(
 private[recruitment] case class ActivationResult(
   pool: Map[String, SourceState],
   pending: List[SourceDescriptor],
-  visited: Set[ClubUrlName]
+  visited: Set[ClubSlug]
 )
 
 private[recruitment] case class SourceState(
@@ -99,7 +99,7 @@ private[recruitment] def isGrim(s: SourceState): Boolean = s.consecutiveRejects 
 
 private[recruitment] case class ExploreContext(
   runId: Long,
-  clubUrlName: ClubUrlName,
+  clubSlug: ClubSlug,
   filters: List[RecruitmentFilter],
   runCtx: RunContext,
   invitedRef: Ref[List[Username]],

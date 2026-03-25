@@ -6,14 +6,14 @@ import com.augustnagro.magnum.Transactor
 import zio.{Fiber, RIO, Ref, UIO, ZIO, ZLayer}
 
 import ccas.analysis.tables.RunTrigger
-import ccas.api.misc.subtypes.ClubUrlName
+import ccas.api.misc.subtypes.ClubSlug
 import ccas.utils.client.ChessComClient
 import ccas.utils.errors.safeMessage
 
 trait JobRunner {
   def submit(
     kind: JobKind,
-    clubUrlName: Option[ClubUrlName],
+    clubSlug: Option[ClubSlug],
     params: Option[String],
     trigger: RunTrigger,
     effect: RIO[ChessComClient & Transactor, Any]
@@ -45,24 +45,24 @@ object JobRunner {
 
     override def submit(
       kind: JobKind,
-      clubUrlName: Option[ClubUrlName],
+      clubSlug: Option[ClubSlug],
       params: Option[String],
       trigger: RunTrigger,
       effect: RIO[ChessComClient & Transactor, Any]
     ): RIO[Transactor, JobRunId] =
       for {
-        existing <- JobRun.selectRunning(kind, clubUrlName)
+        existing <- JobRun.selectRunning(kind, clubSlug)
         _ <- ZIO.whenDiscard(existing.isDefined)(
           ZIO.fail(
             new JobConflictException(
               s"A ${kind} job is already running" +
-                clubUrlName.fold("")(c => s" for club $c")
+                clubSlug.fold("")(c => s" for club $c")
             )
           )
         )
         id     = JobRunId.generate()
         now    = Instant.now()
-        jobRun = JobRun(id, kind, trigger, JobRunStatus.Running, clubUrlName, params, now, None, None)
+        jobRun = JobRun(id, kind, trigger, JobRunStatus.Running, clubSlug, params, now, None, None)
         _     <- JobRun.insert(jobRun)
         fiber <- runJob(id, kind, effect).fork
         _     <- fibers.update(_ + fiber)
@@ -87,16 +87,16 @@ object JobRunner {
             .unit.orDie
         val followUp =
           ZIO.whenDiscard(kind == JobKind.Recruitment || kind == JobKind.Membership || kind == JobKind.History)(
-            submitMatchRef.provideEnvironment(env).ignore
+            submitRef.provideEnvironment(env).ignore
           )
         complete *> followUp
       }
 
       effect.provideEnvironment(env).foldZIO(onFailure, _ => onSuccess)
 
-    private def submitMatchRef: RIO[Transactor, Unit] = {
-      import ccas.analysis.apps.matchref.MatchRefApp
-      submit(JobKind.MatchRef, None, None, RunTrigger.FollowUp, MatchRefApp.populate(RunTrigger.FollowUp)).ignore
+    private def submitRef: RIO[Transactor, Unit] = {
+      import ccas.analysis.apps.ref.RefApp
+      submit(JobKind.MatchRef, None, None, RunTrigger.FollowUp, RefApp.populate(RunTrigger.FollowUp)).ignore
     }
 
     def awaitAll: UIO[Unit] =

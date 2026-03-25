@@ -6,7 +6,7 @@ import zio.Chunk
 
 import ccas.api.club.ApiClubMatches.{ApiClubMatchFinished, ApiClubMatchInProgress, ApiClubMatchRegistered}
 import ccas.api.misc.enums.{ClubMatchResult, TimeClass}
-import ccas.api.misc.subtypes.ClubUrlName
+import ccas.api.misc.subtypes.ClubSlug
 import ccas.utils.json.JsonDecoding
 
 @jsonMemberNames(SnakeCase)
@@ -59,5 +59,5 @@ object ApiClubMatches extends JsonDecoding[ApiClubMatches] {
     result: ClubMatchResult
   ) extends ApiClubMatchStarted derives JsonDecoder
 
-  def getUrl(clubUrlName: ClubUrlName): URL = ApiClub.getUrl(clubUrlName).addPath("matches")
+  def getUrl(clubSlug: ClubSlug): URL = ApiClub.getUrl(clubSlug).addPath("matches")
 }

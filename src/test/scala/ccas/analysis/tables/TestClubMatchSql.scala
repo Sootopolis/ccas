@@ -5,7 +5,7 @@ import java.time.{Duration, Instant, LocalDateTime, ZoneOffset}
 import zio.test.{assertCompletes, assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.api.misc.enums.{BoardGameWinner, ClubMatchResult, ClubMatchStatus, GameResultDetail, TimeClass}
-import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubUrlName, PlayerId, Username}
+import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username}
 import ccas.utils.sql.FreshSchemaLayer
 
 object TestClubMatchSql extends ZIOSpecDefault {
@@ -38,8 +38,8 @@ object TestClubMatchSql extends ZIOSpecDefault {
     val t4: Instant = t0.plus(Duration.ofDays(120)) // unused — reserved for future stale-window tests
   }
 
-  private val clubA = Club(ClubId(300), Times.t0, ClubUrlName("club-a"))
-  private val clubB = Club(ClubId(301), Times.t0, ClubUrlName("club-b"))
+  private val clubA = Club(ClubId(300), Times.t0, ClubSlug("club-a"))
+  private val clubB = Club(ClubId(301), Times.t0, ClubSlug("club-b"))
 
   private val player0 = Player(PlayerId(50), Times.t0)
   private val player1 = Player(PlayerId(51), Times.t0)

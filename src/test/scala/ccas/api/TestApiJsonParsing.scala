@@ -11,6 +11,7 @@ import ccas.api.clubmatch.{ApiDailyMatch, ApiDailyMatchBoard, ApiLiveMatch}
 import ccas.api.misc.enums.{League, PlayerStatus}
 import ccas.api.misc.subtypes.{PlayerId, Username}
 import ccas.api.player.*
+import ccas.api.tournament.ApiTournament
 
 object TestApiJsonParsing extends ZIOSpecDefault {
   override def spec: Spec[Any, Throwable] = suite("API JSON parsing tests")(
@@ -29,7 +30,8 @@ object TestApiJsonParsing extends ZIOSpecDefault {
     generateTest[ApiDailyMatch]("matchCancelled"),
     generateTest[ApiDailyMatchBoard]("matchBoard"),
     generateTest[ApiLiveMatch]("liveMatchFinished"),
-    generateTest[ApiPlayerTournaments]("playerTournaments")
+    generateTest[ApiPlayerTournaments]("playerTournaments"),
+    generateTest[ApiTournament]("tournament")
   )
 
   private def getFileName(label: String) = s"data/test/api/$label.json"

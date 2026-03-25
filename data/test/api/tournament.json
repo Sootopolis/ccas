@@ -1,0 +1,40 @@
+{
+  "name": "1500 to 2000",
+  "url": "https://www.chess.com/tournament/1500-to-2000",
+  "description": "<p>Rated Games for Advanced Players!</p>",
+  "creator": "ttvchillclapz",
+  "status": "finished",
+  "finish_time": 1687014361,
+  "settings": {
+    "type": "round_robin",
+    "rules": "chess",
+    "is_rated": true,
+    "is_official": false,
+    "is_invite_only": false,
+    "min_rating": 1500,
+    "max_rating": 2000,
+    "initial_group_size": 5,
+    "user_advance_count": 1,
+    "use_tiebreak": true,
+    "allow_vacation": false,
+    "winner_places": 3,
+    "registered_user_count": 21,
+    "games_per_opponent": 2,
+    "total_rounds": 3,
+    "concurrent_games_per_opponent": 1,
+    "time_class": "daily",
+    "time_control": "1/86400"
+  },
+  "players": [
+    {"username": "davrosftm", "status": "eliminated"},
+    {"username": "aimammt", "status": "eliminated"},
+    {"username": "celeron", "status": "active"},
+    {"username": "blueknight1", "status": "eliminated"},
+    {"username": "snop2000", "status": "eliminated"}
+  ],
+  "rounds": [
+    "https://api.chess.com/pub/tournament/1500-to-2000/1",
+    "https://api.chess.com/pub/tournament/1500-to-2000/2",
+    "https://api.chess.com/pub/tournament/1500-to-2000/3"
+  ]
+}

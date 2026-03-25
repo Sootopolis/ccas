@@ -11,7 +11,7 @@ import ccas.analysis.apps.membership.MembershipApp.{PhaseBResult, PhaseCResult}
 import ccas.analysis.apps.membership.MembershipChange.*
 import ccas.analysis.tables.{Club, ClubMember, Player, PlayerSnapshot, Tables}
 import ccas.api.misc.enums.PlayerStatusCategory.{Active, Closed}
-import ccas.api.misc.subtypes.{ClubId, ClubUrlName, PlayerId, Username}
+import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
 import ccas.utils.client.ChessComClient
 import ccas.utils.sql.{FreshSchemaLayer, SqlZioTypes}
 
@@ -36,7 +36,7 @@ object TestMembershipApp extends ZIOSpecDefault {
   private val pid5 = PlayerId(105)
 
   private val clubId = ClubId(500)
-  private val club   = Club(clubId, Times.t0, ClubUrlName("test-club"))
+  private val club   = Club(clubId, Times.t0, ClubSlug("test-club"))
 
   // --- Helpers ---
 
@@ -546,7 +546,7 @@ object TestMembershipApp extends ZIOSpecDefault {
           dbState,
           Set.empty,
           Map.empty,
-          ClubUrlName("test-club"),
+          ClubSlug("test-club"),
           Times.t2
         )
       } yield assertTrue(
@@ -571,7 +571,7 @@ object TestMembershipApp extends ZIOSpecDefault {
           dbState,
           Set.empty,
           Map.empty,
-          ClubUrlName("test-club"),
+          ClubSlug("test-club"),
           Times.t2
         )
       } yield assertTrue(
@@ -596,7 +596,7 @@ object TestMembershipApp extends ZIOSpecDefault {
           dbState,
           Set.empty,
           Map.empty,
-          ClubUrlName("test-club"),
+          ClubSlug("test-club"),
           Times.t2
         )
       } yield assertTrue(
@@ -621,7 +621,7 @@ object TestMembershipApp extends ZIOSpecDefault {
           dbState,
           Set.empty,
           Map.empty,
-          ClubUrlName("test-club"),
+          ClubSlug("test-club"),
           Times.t2
         )
       } yield assertTrue(
@@ -645,7 +645,7 @@ object TestMembershipApp extends ZIOSpecDefault {
           dbState,
           Set(pid0),
           Map.empty,
-          ClubUrlName("test-club"),
+          ClubSlug("test-club"),
           Times.t2
         )
       } yield assertTrue(

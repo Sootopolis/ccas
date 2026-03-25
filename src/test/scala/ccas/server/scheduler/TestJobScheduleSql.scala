@@ -5,7 +5,7 @@ import java.time.{Duration, Instant, LocalDateTime, ZoneOffset}
 import com.augustnagro.magnum.sql
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
-import ccas.api.misc.subtypes.ClubUrlName
+import ccas.api.misc.subtypes.ClubSlug
 import ccas.server.jobs.JobKind
 import ccas.server.ServerTables
 import ccas.utils.sql.FreshSchemaLayer
@@ -39,7 +39,7 @@ object TestJobScheduleSql extends ZIOSpecDefault {
 
   private def testInsertAndSelectId = test("insert returns generated id and selectId retrieves") {
     val schedule =
-      JobSchedule(0L, JobKind.Recruitment, Some(ClubUrlName("club-a")), Some("p=1"), 24, enabled = true, None)
+      JobSchedule(0L, JobKind.Recruitment, Some(ClubSlug("club-a")), Some("p=1"), 24, enabled = true, None)
     for {
       _      <- deleteAll
       id     <- JobSchedule.insert(schedule)
@@ -49,7 +49,7 @@ object TestJobScheduleSql extends ZIOSpecDefault {
       result.isDefined,
       result.get.id == id,
       result.get.kind == JobKind.Recruitment,
-      result.get.clubUrlName.contains(ClubUrlName("club-a")),
+      result.get.clubSlug.contains(ClubSlug("club-a")),
       result.get.params.contains("p=1"),
       result.get.intervalHours == 24,
       result.get.enabled,
@@ -58,8 +58,8 @@ object TestJobScheduleSql extends ZIOSpecDefault {
   }
 
   private def testSelectAll = test("selectAll returns all schedules") {
-    val s1 = JobSchedule(0L, JobKind.Recruitment, Some(ClubUrlName("club-a")), None, 12, enabled = true, None)
-    val s2 = JobSchedule(0L, JobKind.Membership, Some(ClubUrlName("club-b")), None, 24, enabled = true, None)
+    val s1 = JobSchedule(0L, JobKind.Recruitment, Some(ClubSlug("club-a")), None, 12, enabled = true, None)
+    val s2 = JobSchedule(0L, JobKind.Membership, Some(ClubSlug("club-b")), None, 24, enabled = true, None)
     for {
       _   <- deleteAll
       _   <- JobSchedule.insert(s1)
@@ -69,8 +69,8 @@ object TestJobScheduleSql extends ZIOSpecDefault {
   }
 
   private def testSelectEnabledFiltersDisabled = test("selectEnabled filters disabled") {
-    val enabled  = JobSchedule(0L, JobKind.Recruitment, Some(ClubUrlName("club-a")), None, 12, enabled = true, None)
-    val disabled = JobSchedule(0L, JobKind.Membership, Some(ClubUrlName("club-b")), None, 24, enabled = false, None)
+    val enabled  = JobSchedule(0L, JobKind.Recruitment, Some(ClubSlug("club-a")), None, 12, enabled = true, None)
+    val disabled = JobSchedule(0L, JobKind.Membership, Some(ClubSlug("club-b")), None, 24, enabled = false, None)
     for {
       _      <- deleteAll
       _      <- JobSchedule.insert(enabled)
@@ -83,7 +83,7 @@ object TestJobScheduleSql extends ZIOSpecDefault {
   }
 
   private def testUpdateLastRunAt = test("updateLastRunAt sets timestamp") {
-    val schedule = JobSchedule(0L, JobKind.Recruitment, Some(ClubUrlName("club-a")), None, 12, enabled = true, None)
+    val schedule = JobSchedule(0L, JobKind.Recruitment, Some(ClubSlug("club-a")), None, 12, enabled = true, None)
     for {
       _      <- deleteAll
       id     <- JobSchedule.insert(schedule)
@@ -93,7 +93,7 @@ object TestJobScheduleSql extends ZIOSpecDefault {
   }
 
   private def testUpdateAllFields = test("update with all optional fields") {
-    val schedule = JobSchedule(0L, JobKind.Recruitment, Some(ClubUrlName("club-a")), None, 12, enabled = true, None)
+    val schedule = JobSchedule(0L, JobKind.Recruitment, Some(ClubSlug("club-a")), None, 12, enabled = true, None)
     for {
       _      <- deleteAll
       id     <- JobSchedule.insert(schedule)
@@ -108,7 +108,7 @@ object TestJobScheduleSql extends ZIOSpecDefault {
 
   private def testUpdatePartialFields = test("update with partial fields") {
     val schedule =
-      JobSchedule(0L, JobKind.Recruitment, Some(ClubUrlName("club-a")), Some("original"), 12, enabled = true, None)
+      JobSchedule(0L, JobKind.Recruitment, Some(ClubSlug("club-a")), Some("original"), 12, enabled = true, None)
     for {
       _      <- deleteAll
       id     <- JobSchedule.insert(schedule)
@@ -122,7 +122,7 @@ object TestJobScheduleSql extends ZIOSpecDefault {
   }
 
   private def testUpdateNoFields = test("update with no fields is a no-op") {
-    val schedule = JobSchedule(0L, JobKind.Recruitment, Some(ClubUrlName("club-a")), None, 12, enabled = true, None)
+    val schedule = JobSchedule(0L, JobKind.Recruitment, Some(ClubSlug("club-a")), None, 12, enabled = true, None)
     for {
       _      <- deleteAll
       id     <- JobSchedule.insert(schedule)
@@ -136,7 +136,7 @@ object TestJobScheduleSql extends ZIOSpecDefault {
 
   private def testUpdateSetParamsToNull = test("update can set params to null via Some(None)") {
     val schedule =
-      JobSchedule(0L, JobKind.Recruitment, Some(ClubUrlName("club-a")), Some("original"), 12, enabled = true, None)
+      JobSchedule(0L, JobKind.Recruitment, Some(ClubSlug("club-a")), Some("original"), 12, enabled = true, None)
     for {
       _      <- deleteAll
       id     <- JobSchedule.insert(schedule)
@@ -150,7 +150,7 @@ object TestJobScheduleSql extends ZIOSpecDefault {
   }
 
   private def testDelete = test("delete removes the schedule") {
-    val schedule = JobSchedule(0L, JobKind.Recruitment, Some(ClubUrlName("club-a")), None, 12, enabled = true, None)
+    val schedule = JobSchedule(0L, JobKind.Recruitment, Some(ClubSlug("club-a")), None, 12, enabled = true, None)
     for {
       _      <- deleteAll
       id     <- JobSchedule.insert(schedule)
@@ -159,9 +159,9 @@ object TestJobScheduleSql extends ZIOSpecDefault {
     } yield assertTrue(result.isEmpty)
   }
 
-  private def testUniqueConstraint = test("unique constraint on (kind, club_url_name)") {
-    val s1 = JobSchedule(0L, JobKind.Recruitment, Some(ClubUrlName("club-a")), None, 12, enabled = true, None)
-    val s2 = JobSchedule(0L, JobKind.Recruitment, Some(ClubUrlName("club-a")), None, 24, enabled = false, None)
+  private def testUniqueConstraint = test("unique constraint on (kind, club_slug)") {
+    val s1 = JobSchedule(0L, JobKind.Recruitment, Some(ClubSlug("club-a")), None, 12, enabled = true, None)
+    val s2 = JobSchedule(0L, JobKind.Recruitment, Some(ClubSlug("club-a")), None, 24, enabled = false, None)
     for {
       _      <- deleteAll
       _      <- JobSchedule.insert(s1)

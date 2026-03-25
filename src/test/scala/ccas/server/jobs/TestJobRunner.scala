@@ -6,7 +6,7 @@ import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.analysis.tables.RunTrigger
-import ccas.api.misc.subtypes.ClubUrlName
+import ccas.api.misc.subtypes.ClubSlug
 import ccas.server.ServerTables
 import ccas.utils.client.ChessComClient
 import ccas.utils.sql.FreshSchemaLayer
@@ -91,7 +91,7 @@ object TestJobRunner extends ZIOSpecDefault {
     for {
       _      <- deleteAllJobRuns
       runner <- ZIO.service[JobRunner]
-      id     <- runner.submit(JobKind.Recruitment, Some(ClubUrlName("test-club")), None, RunTrigger.Cli, ZIO.unit)
+      id     <- runner.submit(JobKind.Recruitment, Some(ClubSlug("test-club")), None, RunTrigger.Cli, ZIO.unit)
       job    <- awaitStatus(runner, id)
     } yield assertTrue(
       job.status == JobRunStatus.Completed,
@@ -115,8 +115,8 @@ object TestJobRunner extends ZIOSpecDefault {
     for {
       _      <- deleteAllJobRuns
       runner <- ZIO.service[JobRunner]
-      _      <- runner.submit(JobKind.Recruitment, Some(ClubUrlName("dup-club")), None, RunTrigger.Cli, ZIO.never)
-      result <- runner.submit(JobKind.Recruitment, Some(ClubUrlName("dup-club")), None, RunTrigger.Cli, ZIO.unit).either
+      _      <- runner.submit(JobKind.Recruitment, Some(ClubSlug("dup-club")), None, RunTrigger.Cli, ZIO.never)
+      result <- runner.submit(JobKind.Recruitment, Some(ClubSlug("dup-club")), None, RunTrigger.Cli, ZIO.unit).either
     } yield assertTrue(
       result.isLeft,
       result.left.exists(_.isInstanceOf[JobConflictException])
@@ -127,8 +127,8 @@ object TestJobRunner extends ZIOSpecDefault {
     for {
       _      <- deleteAllJobRuns
       runner <- ZIO.service[JobRunner]
-      _      <- runner.submit(JobKind.Recruitment, Some(ClubUrlName("club-a")), None, RunTrigger.Cli, ZIO.never)
-      id2    <- runner.submit(JobKind.Recruitment, Some(ClubUrlName("club-b")), None, RunTrigger.Cli, ZIO.unit)
+      _      <- runner.submit(JobKind.Recruitment, Some(ClubSlug("club-a")), None, RunTrigger.Cli, ZIO.never)
+      id2    <- runner.submit(JobKind.Recruitment, Some(ClubSlug("club-b")), None, RunTrigger.Cli, ZIO.unit)
     } yield assertTrue(JobRunId.unwrap(id2).nonEmpty)
   }
 
@@ -136,8 +136,8 @@ object TestJobRunner extends ZIOSpecDefault {
     for {
       _      <- deleteAllJobRuns
       runner <- ZIO.service[JobRunner]
-      _      <- runner.submit(JobKind.Recruitment, Some(ClubUrlName("club-c")), None, RunTrigger.Cli, ZIO.never)
-      id2    <- runner.submit(JobKind.Membership, Some(ClubUrlName("club-c")), None, RunTrigger.Cli, ZIO.unit)
+      _      <- runner.submit(JobKind.Recruitment, Some(ClubSlug("club-c")), None, RunTrigger.Cli, ZIO.never)
+      id2    <- runner.submit(JobKind.Membership, Some(ClubSlug("club-c")), None, RunTrigger.Cli, ZIO.unit)
     } yield assertTrue(JobRunId.unwrap(id2).nonEmpty)
   }
 

@@ -1,4 +1,4 @@
-package ccas.analysis.apps.matchref
+package ccas.analysis.apps.ref
 
 import java.time.{Instant, LocalDateTime, ZoneOffset}
 
@@ -8,11 +8,11 @@ import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.analysis.tables.*
-import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubUrlName, PlayerId, Username}
+import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username}
 import ccas.utils.client.ChessComClient
 import ccas.utils.sql.{FreshSchemaLayer, SqlZioTypes}
 
-object TestMatchRefApp extends ZIOSpecDefault {
+object TestRefApp extends ZIOSpecDefault {
 
   // --- Timestamps ---
 
@@ -26,8 +26,8 @@ object TestMatchRefApp extends ZIOSpecDefault {
 
   private val clubId0      = ClubId(700)
   private val clubId1      = ClubId(701)
-  private val clubUrlName0 = ClubUrlName("our-club")
-  private val clubUrlName1 = ClubUrlName("other-club")
+  private val clubSlug0 = ClubSlug("our-club")
+  private val clubSlug1 = ClubSlug("other-club")
 
   private val matchId1 = 9001L
   private val matchId2 = 9002L
@@ -220,16 +220,16 @@ object TestMatchRefApp extends ZIOSpecDefault {
       _ <- PlayerSnapshot.insert(
         PlayerSnapshot(pid2, t0, Username("charlie"), ccas.api.misc.enums.PlayerStatusCategory.Active, None)
       )
-      _ <- Club.upsert(Club(clubId0, t0, clubUrlName0))
-      _ <- Club.upsert(Club(clubId1, t0, clubUrlName1))
+      _ <- Club.upsert(Club(clubId0, t0, clubSlug0))
+      _ <- Club.upsert(Club(clubId1, t0, clubSlug1))
     } yield ()
 
   private def runPopulate(client: ChessComClient): RIO[Transactor, Unit] =
-    MatchRefApp.populate().provideSomeLayer(ZLayer.succeed(client))
+    RefApp.populate().provideSomeLayer(ZLayer.succeed(client))
 
   // --- Spec ---
 
-  override def spec: Spec[Any, Throwable] = suite("TestMatchRefApp")(
+  override def spec: Spec[Any, Throwable] = suite("TestRefApp")(
     suitePlayerResolution,
     suiteClubResolution,
     suiteFullPopulate

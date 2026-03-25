@@ -32,9 +32,9 @@ object ClubId extends LongCompanion {
     Either.cond(raw >= 0L, raw, s"$name must be >= 0")
 }
 
-type ClubUrlName = ClubUrlName.Type
+type ClubSlug = ClubSlug.Type
 
-object ClubUrlName extends StringKeyCompanion {
+object ClubSlug extends StringKeyCompanion {
   override protected def validateRaw(raw: String): Either[String, String] =
     Either.cond(raw.nonEmpty, raw, s"$name must not be empty")
 }
@@ -60,4 +60,13 @@ type ClubAlias = ClubAlias.Type
 object ClubAlias extends StringCompanion {
   override protected def validateRaw(raw: String): Either[String, String] =
     Either.cond(raw.nonEmpty, raw, s"$name must not be empty")
+}
+
+type TournamentSlug = TournamentSlug.Type
+
+object TournamentSlug extends StringCompanion {
+  override protected def validateRaw(raw: String): Either[String, String] =
+    Either.cond(raw.nonEmpty, raw, s"$name must not be empty")
+
+  def fromUrl(url: URL): TournamentSlug = wrap(url.path.segments.last)
 }

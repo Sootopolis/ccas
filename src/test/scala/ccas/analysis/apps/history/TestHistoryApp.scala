@@ -8,7 +8,7 @@ import zio.test.{assertTrue, Spec, ZIOSpecDefault}
 
 import ccas.api.clubmatch.ApiDailyMatch
 import ccas.api.misc.enums.{BoardGameWinner, ClubMatchResult, ClubMatchStatus, GameResultDetail, TimeClass}
-import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubUrlName}
+import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug}
 import ccas.api.player.ApiPlayerMatches.ApiPlayerMatch
 
 object TestHistoryApp extends ZIOSpecDefault {
@@ -46,19 +46,19 @@ object TestHistoryApp extends ZIOSpecDefault {
 
   private def testFindOurTeamTeam1 = test("findOurTeam returns true when club is team1") {
     matchFixture.map { m =>
-      assertTrue(HistoryApp.findOurTeam(m.teams, ClubUrlName("turk-chess-players")) == Some(true))
+      assertTrue(HistoryApp.findOurTeam(m.teams, ClubSlug("turk-chess-players")) == Some(true))
     }
   }
 
   private def testFindOurTeamTeam2 = test("findOurTeam returns false when club is team2") {
     matchFixture.map { m =>
-      assertTrue(HistoryApp.findOurTeam(m.teams, ClubUrlName("the-great-british-empire")) == Some(false))
+      assertTrue(HistoryApp.findOurTeam(m.teams, ClubSlug("the-great-british-empire")) == Some(false))
     }
   }
 
   private def testFindOurTeamNotFound = test("findOurTeam returns None for unknown club") {
     matchFixture.map { m =>
-      assertTrue(HistoryApp.findOurTeam(m.teams, ClubUrlName("not-a-club")) == None)
+      assertTrue(HistoryApp.findOurTeam(m.teams, ClubSlug("not-a-club")) == None)
     }
   }
 
@@ -158,7 +158,7 @@ object TestHistoryApp extends ZIOSpecDefault {
       "https://api.chess.com/pub/club/devon-chess",
       "https://api.chess.com/pub/match/1597947"
     )
-    assertTrue(HistoryApp.isClubDailyMatch(m, ClubUrlName("devon-chess")))
+    assertTrue(HistoryApp.isClubDailyMatch(m, ClubSlug("devon-chess")))
   }
 
   private def testIsClubDailyMatchRejectsOtherClub = test("isClubDailyMatch rejects match for different club") {
@@ -166,7 +166,7 @@ object TestHistoryApp extends ZIOSpecDefault {
       "https://api.chess.com/pub/club/other-club",
       "https://api.chess.com/pub/match/1597947"
     )
-    assertTrue(!HistoryApp.isClubDailyMatch(m, ClubUrlName("devon-chess")))
+    assertTrue(!HistoryApp.isClubDailyMatch(m, ClubSlug("devon-chess")))
   }
 
   private def testIsClubDailyMatchRejectsLiveMatch = test("isClubDailyMatch rejects live match") {
@@ -174,7 +174,7 @@ object TestHistoryApp extends ZIOSpecDefault {
       "https://api.chess.com/pub/club/devon-chess",
       "https://api.chess.com/pub/match/live/1597947"
     )
-    assertTrue(!HistoryApp.isClubDailyMatch(m, ClubUrlName("devon-chess")))
+    assertTrue(!HistoryApp.isClubDailyMatch(m, ClubSlug("devon-chess")))
   }
 
   private def testIsClubDailyMatchCaseInsensitive = test("isClubDailyMatch is case-insensitive on club name") {
@@ -182,7 +182,7 @@ object TestHistoryApp extends ZIOSpecDefault {
       "https://api.chess.com/pub/club/Devon-Chess",
       "https://api.chess.com/pub/match/1597947"
     )
-    assertTrue(HistoryApp.isClubDailyMatch(m, ClubUrlName("devon-chess")))
+    assertTrue(HistoryApp.isClubDailyMatch(m, ClubSlug("devon-chess")))
   }
 
   // --- normalizeGameOutcome ---

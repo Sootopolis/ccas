@@ -9,7 +9,7 @@ import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.analysis.tables.*
 import ccas.api.club.ApiClubMatches
-import ccas.api.misc.subtypes.{ClubId, ClubUrlName, PlayerId, Username}
+import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
 import ccas.utils.client.ChessComClient
 import ccas.utils.sql.{FreshSchemaLayer, SqlZioTypes}
 import ccas.utils.sql.DbCodecs.given
@@ -28,8 +28,8 @@ object TestRecruitmentApp extends ZIOSpecDefault {
   // --- IDs ---
 
   private val clubId      = ClubId(500)
-  private val clubUrlName = ClubUrlName("test-club")
-  private val club        = Club(clubId, Times.t0, clubUrlName)
+  private val clubSlug = ClubSlug("test-club")
+  private val club        = Club(clubId, Times.t0, clubSlug)
 
   private val sourceClubId    = ClubId(600)
   private val intSourceClubId = ClubId(901)
@@ -63,10 +63,10 @@ object TestRecruitmentApp extends ZIOSpecDefault {
     fields.mkString("{\n", ",\n", "\n}")
   }
 
-  private def apiClubJson(clubId: Long, urlName: String, admins: List[String] = Nil): String = {
+  private def apiClubJson(clubId: Long, slug: String, admins: List[String] = Nil): String = {
     val adminJson = admins.map(u => s""""https://api.chess.com/pub/player/$u"""").mkString("[", ",", "]")
     s"""{
-       |  "@id": "https://api.chess.com/pub/club/$urlName",
+       |  "@id": "https://api.chess.com/pub/club/$slug",
        |  "name": "Test Club",
        |  "club_id": $clubId,
        |  "country": "https://api.chess.com/pub/country/US",
@@ -75,7 +75,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
        |  "created": ${Times.t0.getEpochSecond},
        |  "last_activity": ${Times.t1.getEpochSecond},
        |  "visibility": "public",
-       |  "join_request": "https://api.chess.com/pub/club/$urlName/join",
+       |  "join_request": "https://api.chess.com/pub/club/$slug/join",
        |  "admin": $adminJson,
        |  "description": "A test club"
        |}""".stripMargin
@@ -444,13 +444,13 @@ object TestRecruitmentApp extends ZIOSpecDefault {
     target: Int = 30
   ): RIO[Transactor, List[Username]] =
     for {
-      clubMatches <- client.get[ApiClubMatches](ApiClubMatches.getUrl(clubUrlName))
+      clubMatches <- client.get[ApiClubMatches](ApiClubMatches.getUrl(clubSlug))
       targetMatchIds = (clubMatches.registered.map(_.`@id`) ++ clubMatches.inProgress.map(_.`@id`)).toSet
       formerMemberIds <-
         if (criteria.excludeFormerMembers)
           ClubMember.selectClubFormer(clubId).map(_.map(_.playerId).toSet)
         else ZIO.succeed(Set.empty[PlayerId])
-      discoveredClubs     <- Ref.make(Set.empty[ClubUrlName])
+      discoveredClubs     <- Ref.make(Set.empty[ClubSlug])
       discoveredOpponents <- Ref.make(Set.empty[Username])
       runCtx = RunContext(
         client,
@@ -523,10 +523,10 @@ object TestRecruitmentApp extends ZIOSpecDefault {
   // ==========================================================================
 
   private def suiteCriteriaHelpers = suite("criteria helpers")(
-    test("excludeClubNames wraps strings to ClubUrlName") {
+    test("excludeClubNames wraps strings to ClubSlug") {
       val criteria = makeCriteria(excludeClubs = List("club-x"))
       assertTrue(
-        criteria.excludeClubNames == List(ClubUrlName("club-x"))
+        criteria.excludeClubNames == List(ClubSlug("club-x"))
       )
     },
     test("defaultDaily returns expected field values") {
@@ -1115,7 +1115,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       val responses = Map(
         "player/alice"               -> apiPlayerJson(200, "alice"),
         "player/alice/matches"       -> apiPlayerMatchesJson(registeredIds = List(matchId)),
-        s"club/$clubUrlName/matches" -> apiClubMatchesJson(registeredIds = List(matchId))
+        s"club/$clubSlug/matches" -> apiClubMatchesJson(registeredIds = List(matchId))
       )
       for { outcome <- evalSingle(responses, makeCriteria()) } yield assertTrue(outcome == CandidateOutcome.Rejected)
     },
@@ -1123,7 +1123,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       val responses = Map(
         "player/alice"         -> apiPlayerJson(200, "alice"),
         "player/alice/matches" -> apiPlayerMatchesJson(registeredIds = List("https://api.chess.com/pub/match/999")),
-        s"club/$clubUrlName/matches" -> apiClubMatchesJson(registeredIds = List("https://api.chess.com/pub/match/888"))
+        s"club/$clubSlug/matches" -> apiClubMatchesJson(registeredIds = List("https://api.chess.com/pub/match/888"))
       )
       for { outcome <- evalSingle(responses, makeCriteria()) } yield assertTrue(outcome == CandidateOutcome.Invited)
     },
@@ -1162,7 +1162,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         client <- fakeChessComClient(responses)
         candidates <- RecruitmentExplore.gatherClubCandidates(
           client,
-          ClubUrlName("source-club"),
+          ClubSlug("source-club"),
           excludeSourceAdmins = false,
           existingUsernames = Set(Username("existing-member")),
           evaluatedUsernames = Set(Username("already-evaluated"))
@@ -1186,7 +1186,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         client <- fakeChessComClient(responses)
         candidates <- RecruitmentExplore.gatherClubCandidates(
           client,
-          ClubUrlName("source-club"),
+          ClubSlug("source-club"),
           excludeSourceAdmins = true,
           existingUsernames = Set.empty,
           evaluatedUsernames = Set.empty
@@ -1211,7 +1211,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         client <- fakeChessComClient(responses)
         candidates <- RecruitmentExplore.gatherClubCandidates(
           client,
-          ClubUrlName("source-club"),
+          ClubSlug("source-club"),
           excludeSourceAdmins = false,
           existingUsernames = Set.empty,
           evaluatedUsernames = Set.empty
@@ -1335,13 +1335,13 @@ object TestRecruitmentApp extends ZIOSpecDefault {
   // ==========================================================================
 
   private val blacklistClubId      = ClubId(700)
-  private val blacklistClubUrlName = ClubUrlName("blacklist-club")
+  private val blacklistClubSlug = ClubSlug("blacklist-club")
 
   private def suiteBlacklistApp = suite("BlacklistApp")(
     test("inserts blacklist entry with reason and expiresAt") {
       val futureInstant = Times.t3
       val responses = Map(
-        s"club/$blacklistClubUrlName" -> apiClubJson(700, blacklistClubUrlName.value, Nil),
+        s"club/$blacklistClubSlug" -> apiClubJson(700, blacklistClubSlug.value, Nil),
         "player/target-player"        -> apiPlayerJson(203, "target-player")
       )
       for {
@@ -1349,7 +1349,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         client <- fakeChessComClient(responses)
         xa     <- ZIO.service[Transactor]
         _ <- BlacklistApp.addToBlacklist(
-          blacklistClubUrlName,
+          blacklistClubSlug,
           Username("target-player"),
           Some("toxic"),
           Some(futureInstant)
@@ -1365,14 +1365,14 @@ object TestRecruitmentApp extends ZIOSpecDefault {
     },
     test("inserts blacklist entry without optional fields") {
       val responses = Map(
-        s"club/$blacklistClubUrlName" -> apiClubJson(700, blacklistClubUrlName.value, Nil),
+        s"club/$blacklistClubSlug" -> apiClubJson(700, blacklistClubSlug.value, Nil),
         "player/target-player"        -> apiPlayerJson(203, "target-player")
       )
       for {
         _      <- seedDb
         client <- fakeChessComClient(responses)
         xa     <- ZIO.service[Transactor]
-        _ <- BlacklistApp.addToBlacklist(blacklistClubUrlName, Username("target-player"), None, None)
+        _ <- BlacklistApp.addToBlacklist(blacklistClubSlug, Username("target-player"), None, None)
           .provideEnvironment(zio.ZEnvironment(client, xa))
         entries <- RecruitmentBlacklist.selectByClub(blacklistClubId)
       } yield assertTrue(
@@ -1383,9 +1383,9 @@ object TestRecruitmentApp extends ZIOSpecDefault {
     },
     test("upserts club before inserting blacklist entry") {
       val freshClubId      = ClubId(701)
-      val freshClubUrlName = ClubUrlName("fresh-club")
+      val freshClubSlug = ClubSlug("fresh-club")
       val responses = Map(
-        s"club/$freshClubUrlName" -> apiClubJson(701, freshClubUrlName.value, Nil),
+        s"club/$freshClubSlug" -> apiClubJson(701, freshClubSlug.value, Nil),
         "player/target-player"    -> apiPlayerJson(203, "target-player")
       )
       for {
@@ -1393,13 +1393,13 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         client <- fakeChessComClient(responses)
         xa     <- ZIO.service[Transactor]
         before <- Club.selectId(freshClubId)
-        _ <- BlacklistApp.addToBlacklist(freshClubUrlName, Username("target-player"), None, None)
+        _ <- BlacklistApp.addToBlacklist(freshClubSlug, Username("target-player"), None, None)
           .provideEnvironment(zio.ZEnvironment(client, xa))
         after <- Club.selectId(freshClubId)
       } yield assertTrue(
         before.isEmpty,
         after.isDefined,
-        after.get.urlName == freshClubUrlName
+        after.get.slug == freshClubSlug
       )
     }
   )
@@ -1547,8 +1547,8 @@ object TestRecruitmentApp extends ZIOSpecDefault {
   private def suiteFullWorkflow = suite("full workflow")(
     test("recruit end-to-end") {
       val responses = Map(
-        s"club/$clubUrlName" -> apiClubJson(clubId.value, clubUrlName.value),
-        s"club/$clubUrlName/members" -> apiClubMembersJson(
+        s"club/$clubSlug" -> apiClubJson(clubId.value, clubSlug.value),
+        s"club/$clubSlug/members" -> apiClubMembersJson(
           List(
             ("existing", Times.t0.getEpochSecond)
           )
@@ -1572,7 +1572,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         _      <- seedCriteria(criteria)
         client <- fakeChessComClient(responses)
         xa     <- ZIO.service[Transactor]
-        result <- RecruitmentApp.recruit(clubUrlName, "default", sourceClubs = List(ClubUrlName("source-club")))
+        result <- RecruitmentApp.recruit(clubSlug, "default", sourceClubs = List(ClubSlug("source-club")))
           .provideEnvironment(zio.ZEnvironment(client, xa))
         // Verify run record
         run <- RecruitmentRun.selectId(result.runId)
@@ -1597,7 +1597,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
   // ==========================================================================
 
   private val discoverableClubId      = ClubId(701)
-  private val discoverableClubUrlName = ClubUrlName("discoverable-club")
+  private val discoverableClubSlug = ClubSlug("discoverable-club")
 
   private def suiteExploreMode = suite("explore mode")(
     test("isGrim pure logic") {
@@ -1611,10 +1611,10 @@ object TestRecruitmentApp extends ZIOSpecDefault {
     },
     test("explore=false does not explore beyond source clubs") {
       val responses = Map(
-        s"club/$clubUrlName"             -> apiClubJson(clubId.value, clubUrlName.value),
-        s"club/$clubUrlName/members"     -> apiClubMembersJson(Nil),
-        s"club/$discoverableClubUrlName" -> apiClubJson(discoverableClubId.value, discoverableClubUrlName.value),
-        s"club/$discoverableClubUrlName/members" -> apiClubMembersJson(
+        s"club/$clubSlug"             -> apiClubJson(clubId.value, clubSlug.value),
+        s"club/$clubSlug/members"     -> apiClubMembersJson(Nil),
+        s"club/$discoverableClubSlug" -> apiClubJson(discoverableClubId.value, discoverableClubSlug.value),
+        s"club/$discoverableClubSlug/members" -> apiClubMembersJson(
           List(("explorer", Times.t0.getEpochSecond))
         ),
         "player/explorer" -> apiPlayerJson(210, "explorer")
@@ -1623,11 +1623,11 @@ object TestRecruitmentApp extends ZIOSpecDefault {
 
       for {
         _      <- seedDb
-        _      <- Club.upsert(Club(discoverableClubId, Times.t0, discoverableClubUrlName))
+        _      <- Club.upsert(Club(discoverableClubId, Times.t0, discoverableClubSlug))
         _      <- seedCriteria(criteria)
         client <- fakeChessComClient(responses)
         xa     <- ZIO.service[Transactor]
-        result <- RecruitmentApp.recruit(clubUrlName, "default", sourceClubs = Nil, explore = false)
+        result <- RecruitmentApp.recruit(clubSlug, "default", sourceClubs = Nil, explore = false)
           .provideEnvironment(zio.ZEnvironment(client, xa))
         candidates <- RecruitmentCandidate.selectByRun(result.runId)
       } yield assertTrue(
@@ -1636,10 +1636,10 @@ object TestRecruitmentApp extends ZIOSpecDefault {
     },
     test("explore=true discovers candidates from DB clubs") {
       val responses = Map(
-        s"club/$clubUrlName"             -> apiClubJson(clubId.value, clubUrlName.value),
-        s"club/$clubUrlName/members"     -> apiClubMembersJson(Nil),
-        s"club/$discoverableClubUrlName" -> apiClubJson(discoverableClubId.value, discoverableClubUrlName.value),
-        s"club/$discoverableClubUrlName/members" -> apiClubMembersJson(
+        s"club/$clubSlug"             -> apiClubJson(clubId.value, clubSlug.value),
+        s"club/$clubSlug/members"     -> apiClubMembersJson(Nil),
+        s"club/$discoverableClubSlug" -> apiClubJson(discoverableClubId.value, discoverableClubSlug.value),
+        s"club/$discoverableClubSlug/members" -> apiClubMembersJson(
           List(("explorer", Times.t0.getEpochSecond))
         ),
         "player/explorer" -> apiPlayerJson(210, "explorer")
@@ -1648,11 +1648,11 @@ object TestRecruitmentApp extends ZIOSpecDefault {
 
       for {
         _      <- seedDb
-        _      <- Club.upsert(Club(discoverableClubId, Times.t0, discoverableClubUrlName))
+        _      <- Club.upsert(Club(discoverableClubId, Times.t0, discoverableClubSlug))
         _      <- seedCriteria(criteria)
         client <- fakeChessComClient(responses)
         xa     <- ZIO.service[Transactor]
-        result <- RecruitmentApp.recruit(clubUrlName, "default", sourceClubs = Nil, explore = true)
+        result <- RecruitmentApp.recruit(clubSlug, "default", sourceClubs = Nil, explore = true)
           .provideEnvironment(zio.ZEnvironment(client, xa))
         candidates <- RecruitmentCandidate.selectByRun(result.runId)
       } yield assertTrue(
@@ -1666,9 +1666,9 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         s"""{"finished": [{"name": "match", "@id": "https://api.chess.com/pub/match/99", "opponent": "https://api.chess.com/pub/club/opponent-club", "time_class": "daily", "start_time": ${Times.t0.getEpochSecond}, "result": "win"}], "in_progress": [], "registered": []}"""
       val opponentClubId = ClubId(702)
       val responses = Map(
-        s"club/$clubUrlName"         -> apiClubJson(clubId.value, clubUrlName.value),
-        s"club/$clubUrlName/members" -> apiClubMembersJson(Nil),
-        s"club/$clubUrlName/matches" -> clubMatchesWithOpponent,
+        s"club/$clubSlug"         -> apiClubJson(clubId.value, clubSlug.value),
+        s"club/$clubSlug/members" -> apiClubMembersJson(Nil),
+        s"club/$clubSlug/matches" -> clubMatchesWithOpponent,
         "club/opponent-club"         -> apiClubJson(opponentClubId.value, "opponent-club"),
         "club/opponent-club/members" -> apiClubMembersJson(
           List(("opp-player", Times.t0.getEpochSecond))
@@ -1682,7 +1682,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         _      <- seedCriteria(criteria)
         client <- fakeChessComClient(responses)
         xa     <- ZIO.service[Transactor]
-        result <- RecruitmentApp.recruit(clubUrlName, "default", sourceClubs = Nil, explore = true)
+        result <- RecruitmentApp.recruit(clubSlug, "default", sourceClubs = Nil, explore = true)
           .provideEnvironment(zio.ZEnvironment(client, xa))
         candidates <- RecruitmentCandidate.selectByRun(result.runId)
       } yield assertTrue(
@@ -1692,11 +1692,11 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       )
     },
     test("explore=true respects invite cap across sources") {
-      val source1 = ClubUrlName("source-1")
-      val source2 = ClubUrlName("source-2")
+      val source1 = ClubSlug("source-1")
+      val source2 = ClubSlug("source-2")
       val responses = Map(
-        s"club/$clubUrlName"         -> apiClubJson(clubId.value, clubUrlName.value),
-        s"club/$clubUrlName/members" -> apiClubMembersJson(Nil),
+        s"club/$clubSlug"         -> apiClubJson(clubId.value, clubSlug.value),
+        s"club/$clubSlug/members" -> apiClubMembersJson(Nil),
         s"club/$source1"             -> apiClubJson(ClubId(801).value, source1.value),
         s"club/$source1/members" -> apiClubMembersJson(
           List(("cap-a", Times.t0.getEpochSecond), ("cap-b", Times.t0.getEpochSecond))
@@ -1717,7 +1717,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         _      <- seedCriteria(criteria)
         client <- fakeChessComClient(responses)
         xa     <- ZIO.service[Transactor]
-        result <- RecruitmentApp.recruit(clubUrlName, "default", target = Some(3), sourceClubs = List(source1, source2))
+        result <- RecruitmentApp.recruit(clubSlug, "default", target = Some(3), sourceClubs = List(source1, source2))
           .provideEnvironment(zio.ZEnvironment(client, xa))
         candidates <- RecruitmentCandidate.selectByRun(result.runId)
         invited  = candidates.filter(_.outcome == CandidateOutcome.Invited)
@@ -1730,11 +1730,11 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       )
     },
     test("interrupted recruit persists partial results") {
-      val intSource      = ClubUrlName("int-source")
+      val intSource      = ClubSlug("int-source")
       val candidateNames = (0 to 4).map(i => s"int-cand-$i").toList
       val responses = Map(
-        s"club/$clubUrlName"         -> apiClubJson(clubId.value, clubUrlName.value),
-        s"club/$clubUrlName/members" -> apiClubMembersJson(Nil),
+        s"club/$clubSlug"         -> apiClubJson(clubId.value, clubSlug.value),
+        s"club/$clubSlug/members" -> apiClubMembersJson(Nil),
         s"club/$intSource"           -> apiClubJson(intSourceClubId.value, intSource.value),
         s"club/$intSource/members" -> apiClubMembersJson(
           candidateNames.map(n => (n, Times.t0.getEpochSecond))
@@ -1751,7 +1751,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         gate    <- Promise.make[Nothing, Unit]
         client  <- fakeChessComClientWithBlock(responses, blockAfterN = 4, reached, gate)
         xa      <- ZIO.service[Transactor]
-        fiber <- RecruitmentApp.recruit(clubUrlName, "default", sourceClubs = List(intSource))
+        fiber <- RecruitmentApp.recruit(clubSlug, "default", sourceClubs = List(intSource))
           .provideEnvironment(zio.ZEnvironment(client, xa))
           .fork
         _      <- reached.await
@@ -1768,12 +1768,12 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       )
     } @@ TestAspect.withLiveClock,
     test("excess invited candidates are reclassified as Deferred") {
-      val source = ClubUrlName("defer-source")
+      val source = ClubSlug("defer-source")
       // 6 candidates, target=2 → should get exactly 2 Invited, rest Deferred or Rejected
       val candidateNames = (0 to 5).map(i => s"defer-cand-$i").toList
       val responses = Map(
-        s"club/$clubUrlName"         -> apiClubJson(clubId.value, clubUrlName.value),
-        s"club/$clubUrlName/members" -> apiClubMembersJson(Nil),
+        s"club/$clubSlug"         -> apiClubJson(clubId.value, clubSlug.value),
+        s"club/$clubSlug/members" -> apiClubMembersJson(Nil),
         s"club/$source"              -> apiClubJson(ClubId(901).value, source.value),
         s"club/$source/members" -> apiClubMembersJson(
           candidateNames.map(n => (n, Times.t0.getEpochSecond))
@@ -1788,7 +1788,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         _      <- seedCriteria(criteria)
         client <- fakeChessComClient(responses)
         xa     <- ZIO.service[Transactor]
-        result <- RecruitmentApp.recruit(clubUrlName, "default", target = Some(2), sourceClubs = List(source))
+        result <- RecruitmentApp.recruit(clubSlug, "default", target = Some(2), sourceClubs = List(source))
           .provideEnvironment(zio.ZEnvironment(client, xa))
         candidates <- RecruitmentCandidate.selectByRun(result.runId)
         invited  = candidates.filter(_.outcome == CandidateOutcome.Invited)
@@ -1801,11 +1801,11 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       )
     },
     test("deferred candidates from prior run are prioritised in next run") {
-      val source = ClubUrlName("prio-source")
+      val source = ClubSlug("prio-source")
       // Seed a prior run with a Deferred candidate, then run again
       val responses = Map(
-        s"club/$clubUrlName"         -> apiClubJson(clubId.value, clubUrlName.value),
-        s"club/$clubUrlName/members" -> apiClubMembersJson(Nil),
+        s"club/$clubSlug"         -> apiClubJson(clubId.value, clubSlug.value),
+        s"club/$clubSlug/members" -> apiClubMembersJson(Nil),
         s"club/$source"              -> apiClubJson(ClubId(902).value, source.value),
         s"club/$source/members" -> apiClubMembersJson(
           List(("prio-new", Times.t0.getEpochSecond))
@@ -1842,7 +1842,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         deferredBefore <- RecruitmentCandidate.selectDeferredByClub(clubId)
 
         // Run recruitment — deferred candidate should be picked up as priority
-        result <- RecruitmentApp.recruit(clubUrlName, "default", target = Some(10), sourceClubs = List(source))
+        result <- RecruitmentApp.recruit(clubSlug, "default", target = Some(10), sourceClubs = List(source))
           .provideEnvironment(zio.ZEnvironment(client, xa))
 
         // The deferred candidate should now have an Invited outcome in the new run
@@ -1923,7 +1923,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
           .insert(
             RecruitmentCandidate(runId, pid1, Times.t0, CandidateOutcome.Invited, None)
           )
-        _ <- RecruitmentApp.showReport(clubUrlName, Some(runId.toString))
+        _ <- RecruitmentApp.showReport(clubSlug, Some(runId.toString))
       } yield assertTrue(true)
     },
     test("showReport with latest run") {
@@ -1937,7 +1937,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
           .insert(
             RecruitmentCandidate(runId, pid0, Times.t0, CandidateOutcome.Invited, None)
           )
-        _ <- RecruitmentApp.showReport(clubUrlName, None)
+        _ <- RecruitmentApp.showReport(clubSlug, None)
       } yield assertTrue(true)
     }
   )

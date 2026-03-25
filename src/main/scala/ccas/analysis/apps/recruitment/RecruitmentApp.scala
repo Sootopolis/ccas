@@ -9,7 +9,7 @@ import zio.http.Client
 import ccas.analysis.apps.membership.MembershipApp
 import ccas.analysis.tables.*
 import ccas.api.club.{ApiClub, ApiClubMatches, ApiClubMembers}
-import ccas.api.misc.subtypes.{ClubUrlName, PlayerId, Username}
+import ccas.api.misc.subtypes.{ClubSlug, PlayerId, Username}
 import ccas.api.player.ApiPlayer
 import ccas.utils.client.ChessComClient
 import ccas.utils.errors.ExternalException
@@ -23,8 +23,8 @@ object RecruitmentApp extends ZIOAppDefault {
   private val DefaultEvalChunkSize      = 32 // candidates per checkpoint (source-switch interval)
 
   private val help =
-    """Usage: RecruitmentApp <club-url-name> [alias] [source-clubs...] [--target N] [--cumulative] [--focus]
-      |       RecruitmentApp report <club-url-name> [run-id]
+    """Usage: RecruitmentApp <club-slug> [alias] [source-clubs...] [--target N] [--cumulative] [--focus]
+      |       RecruitmentApp report <club-slug> [run-id]
       |
       |  --focus    Only recruit from the given source clubs (no exploration)""".stripMargin
 
@@ -33,11 +33,11 @@ object RecruitmentApp extends ZIOAppDefault {
       args <- ZIOAppArgs.getArgs
       _ <- (args.toList match {
         case "report" :: clubStr :: rest =>
-          val clubUrlName = ClubUrlName.wrap(clubStr)
-          showReport(clubUrlName, rest.headOption).flatMap { case (usernames, evaluatedCount, reportRun) =>
+          val clubSlug = ClubSlug.wrap(clubStr)
+          showReport(clubSlug, rest.headOption).flatMap { case (usernames, evaluatedCount, reportRun) =>
             val startedAt   = reportRun.startedAt
             val completedAt = reportRun.completedAt.getOrElse(Instant.now())
-            OutputFile.writeAndLog("recruitment", clubUrlName, formatRecruitmentOutput(usernames, evaluatedCount, startedAt, completedAt))
+            OutputFile.writeAndLog("recruitment", clubSlug, formatRecruitmentOutput(usernames, evaluatedCount, startedAt, completedAt))
           }
         case clubStr :: rest =>
           val (flags, positional) = rest.partition(_.startsWith("--"))
@@ -50,10 +50,10 @@ object RecruitmentApp extends ZIOAppDefault {
           val focus           = flags.contains("--focus")
           val positionalClean = positional.filterNot(_ == "--cumulative")
           val alias           = positionalClean.headOption.getOrElse("default")
-          val sourceClubs     = positionalClean.drop(1).map(ClubUrlName.wrap)
-          val clubUrlName     = ClubUrlName.wrap(clubStr)
+          val sourceClubs     = positionalClean.drop(1).map(ClubSlug.wrap)
+          val clubSlug     = ClubSlug.wrap(clubStr)
           recruit(
-            clubUrlName,
+            clubSlug,
             alias,
             target = targetOpt,
             cumulative = cumulative,
@@ -70,7 +70,7 @@ object RecruitmentApp extends ZIOAppDefault {
                   .map(_.fold(Username.wrap(s"[pid=${c.playerId}]"))(_.username))
               )
               evaluatedCount <- RecruitmentCandidate.selectCountByRun(run.runId)
-              _ <- OutputFile.write("recruitment", clubUrlName, formatRecruitmentOutput(usernames, evaluatedCount, run.startedAt, run.completedAt.getOrElse(Instant.now())))
+              _ <- OutputFile.write("recruitment", clubSlug, formatRecruitmentOutput(usernames, evaluatedCount, run.startedAt, run.completedAt.getOrElse(Instant.now())))
                 .flatMap(path => ZIO.logInfo(s"Output written to $path"))
             } yield ()
           }
@@ -85,25 +85,25 @@ object RecruitmentApp extends ZIOAppDefault {
   // --- Phase 1: Initialize ---
 
   def recruit(
-    clubUrlName: ClubUrlName,
+    clubSlug: ClubSlug,
     alias: String,
     target: Option[Int] = None,
     cumulative: Boolean = false,
-    sourceClubs: List[ClubUrlName] = Nil,
+    sourceClubs: List[ClubSlug] = Nil,
     timeLimitMinutes: Option[Int] = None,
     explore: Boolean = true,
     showProgress: Boolean = false,
     trigger: RunTrigger = RunTrigger.Cli
   ): RIO[ChessComClient & Transactor, RecruitmentRun] = ZIO.scoped {
     for {
-      _       <- MembershipApp.reconcile(clubUrlName, trackRun = false)
+      _       <- MembershipApp.reconcile(clubSlug, trackRun = false)
       client  <- ZIO.service[ChessComClient]
-      apiClub <- ApiClub.get(client, clubUrlName)
+      apiClub <- ApiClub.get(client, clubSlug)
       clubId = apiClub.clubId
-      club   = Club(clubId, Instant.ofEpochSecond(apiClub.created), clubUrlName)
+      club   = Club(clubId, Instant.ofEpochSecond(apiClub.created), clubSlug)
       _ <- Club.upsert(club)
       aliasRow <- RecruitmentAlias.selectLatest(clubId, alias)
-        .someOrFail(ExternalException(s"No recruitment alias '$alias' found for club '$clubUrlName'"))
+        .someOrFail(ExternalException(s"No recruitment alias '$alias' found for club '$clubSlug'"))
       criteria <- RecruitmentCriteria.selectId(aliasRow.criteriaId)
         .someOrFail(ExternalException(s"Criteria ${aliasRow.criteriaId} referenced by alias '$alias' not found"))
       resolvedTarget = target.getOrElse(DefaultTarget)
@@ -115,12 +115,12 @@ object RecruitmentApp extends ZIOAppDefault {
       runId <- RecruitmentRun.insert(clubId, criteria.criteriaId, trigger, now)
 
       // --- Shared setup ---
-      targetMembers <- ApiClubMembers.get(client, clubUrlName)
+      targetMembers <- ApiClubMembers.get(client, clubSlug)
       membersMap        = targetMembers.toMap
       existingUsernames = membersMap.keySet
       targetMemberNames = membersMap.keys.toList
 
-      clubMatches <- client.get[ApiClubMatches](ApiClubMatches.getUrl(clubUrlName))
+      clubMatches <- client.get[ApiClubMatches](ApiClubMatches.getUrl(clubSlug))
       targetMatchIds = (clubMatches.registered.map(_.`@id`) ++ clubMatches.inProgress.map(_.`@id`)).toSet
 
       formerMemberIds <-
@@ -128,7 +128,7 @@ object RecruitmentApp extends ZIOAppDefault {
           ClubMember.selectClubFormer(clubId).map(_.map(_.playerId).toSet)
         else ZIO.succeed(Set.empty[PlayerId])
 
-      discoveredClubs     <- Ref.make(Set.empty[ClubUrlName])
+      discoveredClubs     <- Ref.make(Set.empty[ClubSlug])
       discoveredOpponents <- Ref.make(Set.empty[Username])
       invitedRef          <- Ref.make(List.empty[Username])
       evaluatedRef        <- Ref.make(Set.empty[Username])
@@ -151,7 +151,7 @@ object RecruitmentApp extends ZIOAppDefault {
       progressBar <- ccas.utils.ProgressBar.scoped
       ctx = ExploreContext(
         runId = runId,
-        clubUrlName = clubUrlName,
+        clubSlug = clubSlug,
         filters = filters,
         runCtx = runCtx,
         invitedRef = invitedRef,
@@ -234,8 +234,8 @@ object RecruitmentApp extends ZIOAppDefault {
               if (!explore) Nil
               else
                 List(
-                  RecruitmentExplore.discoverOwnMemberClubs(client, clubUrlName, targetMemberNames),
-                  RecruitmentExplore.discoverDbClubs(clubUrlName),
+                  RecruitmentExplore.discoverOwnMemberClubs(client, clubSlug, targetMemberNames),
+                  RecruitmentExplore.discoverDbClubs(clubSlug),
                   RecruitmentExplore.discoverMatchOpponents(clubMatches),
                   RecruitmentExplore.discoverCandidateOpponents(client, now)
                 )
@@ -281,10 +281,10 @@ object RecruitmentApp extends ZIOAppDefault {
     s"$timing$stats\n\n$header\n\n$detail\n"
   }
 
-  def showReport(clubUrlName: ClubUrlName, runIdOpt: Option[String]): RIO[Transactor, (List[Username], Int, RecruitmentRun)] =
+  def showReport(clubSlug: ClubSlug, runIdOpt: Option[String]): RIO[Transactor, (List[Username], Int, RecruitmentRun)] =
     for {
-      club <- Club.selectByUrlName(clubUrlName)
-        .someOrFail(ExternalException(s"Club '$clubUrlName' not found in database"))
+      club <- Club.selectBySlug(clubSlug)
+        .someOrFail(ExternalException(s"Club '$clubSlug' not found in database"))
       clubId = club.clubId
       run <- runIdOpt match {
         case Some(id) =>
@@ -294,11 +294,11 @@ object RecruitmentApp extends ZIOAppDefault {
             .someOrFail(ExternalException(s"Run $id not found"))
         case None =>
           RecruitmentRun.selectLatest(clubId)
-            .someOrFail(ExternalException(s"No runs found for club '$clubUrlName'"))
+            .someOrFail(ExternalException(s"No runs found for club '$clubSlug'"))
       }
       invited        <- RecruitmentCandidate.selectInvitedByRun(run.runId)
       evaluatedCount <- RecruitmentCandidate.selectCountByRun(run.runId)
-      _              <- ZIO.logInfo(s"=== Recruitment Report for $clubUrlName (run ${run.runId}) ===")
+      _              <- ZIO.logInfo(s"=== Recruitment Report for $clubSlug (run ${run.runId}) ===")
       _              <- ZIO.logInfo(s"Started: ${run.startedAt}")
       _              <- ZIO.logInfo(s"Completed: ${run.completedAt.getOrElse("in progress")}")
       _              <- ZIO.logInfo(s"Evaluated: $evaluatedCount | Invited: ${invited.size}")

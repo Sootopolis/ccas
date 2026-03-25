@@ -5,7 +5,7 @@ import zio.json.{jsonMemberNames, DeriveJsonDecoder, JsonDecoder, SnakeCase}
 import zio.Chunk
 
 import ccas.api.club.ApiClub
-import ccas.api.misc.subtypes.{ClubUrlName, Username}
+import ccas.api.misc.subtypes.{ClubSlug, Username}
 import ccas.api.player.ApiPlayerClubs.ApiPlayerClub
 import ccas.utils.json.JsonDecoding
 
@@ -20,7 +20,7 @@ object ApiPlayerClubs extends JsonDecoding[ApiPlayerClubs] {
   @jsonMemberNames(SnakeCase)
   final case class ApiPlayerClub(name: String, lastActivity: Long, icon: Option[URL], url: URL, joined: Long)
       derives JsonDecoder {
-    def clubName: ClubUrlName = ClubUrlName.wrap(url.path.segments.last)
+    def clubName: ClubSlug = ClubSlug.wrap(url.path.segments.last)
 
     def clubApiUrl: URL = ApiClub.getUrl(clubName)
   }
