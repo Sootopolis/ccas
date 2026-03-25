@@ -27,7 +27,7 @@ object OutputFile {
 
   def write(appName: String, content: String): Task[Path] = {
     val date = LocalDateTime.now().format(dateTimeFormat)
-    val dir  = Paths.get("out")
+    val dir  = Paths.get("out", "_ccas")
     val path = dir.resolve(s"$date-$appName.txt")
     ZIO.attemptBlocking(Files.createDirectories(dir)) *>
       ZIO.attemptBlocking(archiveExisting(dir, appName)) *>
