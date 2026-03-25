@@ -8,7 +8,7 @@ import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.analysis.tables.*
-import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username}
+import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, TournamentSlug, Username}
 import ccas.utils.client.ChessComClient
 import ccas.utils.sql.{FreshSchemaLayer, SqlZioTypes}
 
@@ -112,8 +112,26 @@ object TestRefApp extends ZIOSpecDefault {
     }"""
   }
 
-  private val emptyPlayerMatchesJson = """{"finished": [], "in_progress": [], "registered": []}"""
-  private val emptyClubMatchesJson   = """{"finished": [], "in_progress": [], "registered": []}"""
+  private def apiPlayerTournamentsJson(finished: List[String]): String = {
+    val items = finished.map { slug =>
+      s"""{
+        "url": "https://www.chess.com/tournament/$slug",
+        "@id": "https://api.chess.com/pub/tournament/$slug",
+        "wins": 1, "losses": 0, "draws": 0,
+        "points_awarded": 1.0, "placement": 1, "status": "eliminated", "total_players": 5
+      }"""
+    }
+    s"""{"finished": [${items.mkString(",")}], "in_progress": [], "registered": []}"""
+  }
+
+  private def apiTournamentRoundJson(players: List[String]): String = {
+    val items = players.map(u => s"""{"username": "$u"}""")
+    s"""{"groups": [], "players": [${items.mkString(",")}]}"""
+  }
+
+  private val emptyPlayerMatchesJson     = """{"finished": [], "in_progress": [], "registered": []}"""
+  private val emptyPlayerTournamentsJson = """{"finished": [], "in_progress": [], "registered": []}"""
+  private val emptyClubMatchesJson       = """{"finished": [], "in_progress": [], "registered": []}"""
 
   // --- Fake client ---
 
@@ -128,6 +146,10 @@ object TestRefApp extends ZIOSpecDefault {
       throttled  <- Ref.make(false)
     } yield {
       val routes: Routes[Any, Response] = Routes(
+        Method.GET / "pub" / "player" / string("username") / "tournaments" -> handler { (username: String, _: Request) =>
+          if (failures.contains(username)) Response(status = Status.InternalServerError)
+          else responses.get(s"player/$username/tournaments").fold(Response.json(emptyPlayerTournamentsJson))(Response.json(_))
+        },
         Method.GET / "pub" / "player" / string("username") / "matches" -> handler { (username: String, _: Request) =>
           if (failures.contains(username)) Response(status = Status.InternalServerError)
           else responses.get(s"player/$username/matches").fold(Response.json(emptyPlayerMatchesJson))(Response.json(_))
@@ -144,6 +166,9 @@ object TestRefApp extends ZIOSpecDefault {
         },
         Method.GET / "pub" / "match" / long("matchId") -> handler { (matchId: Long, _: Request) =>
           responses.get(s"match/$matchId").fold(Response(status = Status.NotFound))(Response.json(_))
+        },
+        Method.GET / "pub" / "tournament" / string("slug") / int("round") -> handler { (slug: String, round: Int, _: Request) =>
+          responses.get(s"tournament/$slug/$round").fold(Response(status = Status.NotFound))(Response.json(_))
         }
       )
       val driver = new ZClient.Driver[Any, Scope, Throwable] {
@@ -197,6 +222,7 @@ object TestRefApp extends ZIOSpecDefault {
     for {
       // Clean in FK-safe order
       _ <- PlayerMatchRef.deleteAll
+      _ <- PlayerTournamentRef.deleteAll
       _ <- ClubMatchRef.deleteAll
       _ <- ZIO.foreachDiscard(testPlayerIds) { pid =>
         SqlZioTypes.connectZIO(sql"DELETE FROM player_snapshot WHERE player_id = $pid".update.run())
@@ -232,6 +258,8 @@ object TestRefApp extends ZIOSpecDefault {
   override def spec: Spec[Any, Throwable] = suite("TestRefApp")(
     suitePlayerResolution,
     suiteClubResolution,
+    suiteTournamentResolution,
+    suiteIteration,
     suiteFullPopulate
   ).provideShared(
     FreshSchemaLayer("test_match_ref_app", onInit = Tables.ensureTables)
@@ -460,6 +488,194 @@ object TestRefApp extends ZIOSpecDefault {
         _   <- runPopulate(client)
         ref <- ClubMatchRef.selectId(clubId0)
       } yield assertTrue(ref.isEmpty)
+    }
+  )
+
+  // ==========================================================================
+  // Suite: tournament resolution
+  // ==========================================================================
+
+  private def suiteTournamentResolution = suite("tournament resolution")(
+    test("resolves player via tournament round 1") {
+      for {
+        _ <- seedDb
+        client <- fakeChessComClient(
+          Map(
+            s"player/alice/matches"       -> emptyPlayerMatchesJson,
+            s"player/bob/matches"         -> emptyPlayerMatchesJson,
+            s"player/charlie/matches"     -> emptyPlayerMatchesJson,
+            s"player/alice/tournaments"   -> apiPlayerTournamentsJson(List("tourney-1")),
+            s"player/bob/tournaments"     -> emptyPlayerTournamentsJson,
+            s"player/charlie/tournaments" -> emptyPlayerTournamentsJson,
+            s"tournament/tourney-1/1"     -> apiTournamentRoundJson(List("other-player", "alice", "third-player"))
+          )
+        )
+        _   <- runPopulate(client)
+        ref <- PlayerTournamentRef.selectId(pid0)
+      } yield assertTrue(
+        ref.isDefined,
+        ref.get.tournamentSlug == TournamentSlug("tourney-1"),
+        ref.get.playerIdx == 1 // index in round 1 players
+      )
+    },
+    test("skips tournament where player not found in round 1") {
+      for {
+        _ <- seedDb
+        client <- fakeChessComClient(
+          Map(
+            s"player/alice/matches"       -> emptyPlayerMatchesJson,
+            s"player/bob/matches"         -> emptyPlayerMatchesJson,
+            s"player/charlie/matches"     -> emptyPlayerMatchesJson,
+            s"player/alice/tournaments"   -> apiPlayerTournamentsJson(List("tourney-1")),
+            s"player/bob/tournaments"     -> emptyPlayerTournamentsJson,
+            s"player/charlie/tournaments" -> emptyPlayerTournamentsJson,
+            s"tournament/tourney-1/1"     -> apiTournamentRoundJson(List("stranger1", "stranger2"))
+          )
+        )
+        _   <- runPopulate(client)
+        ref <- PlayerTournamentRef.selectId(pid0)
+      } yield assertTrue(ref.isEmpty)
+    }
+  )
+
+  // ==========================================================================
+  // Suite: iteration and failed-URL cache
+  // ==========================================================================
+
+  private val matchId3 = 9003L
+
+  private def suiteIteration = suite("iteration and failed-URL cache")(
+    test("falls back to second match when first match 404s") {
+      val matchJson2 = apiDailyMatchJson(
+        matchId2,
+        "our-club",
+        "other-club",
+        team1Players = List(("alice", 5)),
+        team2Players = List(("opponent1", 1))
+      )
+      for {
+        _ <- seedDb
+        client <- fakeChessComClient(
+          Map(
+            // alice has two matches; matchId1 will 404 (not in responses), matchId2 succeeds
+            s"player/alice/matches"   -> apiPlayerMatchesJson(List((matchId1, Some(3)), (matchId2, Some(5)))),
+            s"player/bob/matches"     -> emptyPlayerMatchesJson,
+            s"player/charlie/matches" -> emptyPlayerMatchesJson,
+            s"match/$matchId2"        -> matchJson2
+            // match/$matchId1 not present → 404
+          )
+        )
+        _   <- runPopulate(client)
+        ref <- PlayerMatchRef.selectId(pid0)
+      } yield assertTrue(
+        ref.isDefined,
+        ref.get.matchId == ClubMatchId.wrap(matchId2),
+        ref.get.boardIdx == 5
+      )
+    },
+    test("falls back to tournament when all matches fail") {
+      for {
+        _ <- seedDb
+        client <- fakeChessComClient(
+          Map(
+            // alice has a match that will 404, then falls back to tournament
+            s"player/alice/matches"       -> apiPlayerMatchesJson(List((matchId1, Some(3)))),
+            s"player/bob/matches"         -> emptyPlayerMatchesJson,
+            s"player/charlie/matches"     -> emptyPlayerMatchesJson,
+            s"player/alice/tournaments"   -> apiPlayerTournamentsJson(List("tourney-1")),
+            s"player/bob/tournaments"     -> emptyPlayerTournamentsJson,
+            s"player/charlie/tournaments" -> emptyPlayerTournamentsJson,
+            s"tournament/tourney-1/1"     -> apiTournamentRoundJson(List("alice", "other-player"))
+            // match/$matchId1 not present → 404
+          )
+        )
+        _        <- runPopulate(client)
+        matchRef <- PlayerMatchRef.selectId(pid0)
+        tournRef <- PlayerTournamentRef.selectId(pid0)
+      } yield assertTrue(
+        matchRef.isEmpty,
+        tournRef.isDefined,
+        tournRef.get.tournamentSlug == TournamentSlug("tourney-1"),
+        tournRef.get.playerIdx == 0
+      )
+    },
+    test("falls back to second tournament when first tournament round 404s") {
+      for {
+        _ <- seedDb
+        client <- fakeChessComClient(
+          Map(
+            s"player/alice/matches"       -> emptyPlayerMatchesJson,
+            s"player/bob/matches"         -> emptyPlayerMatchesJson,
+            s"player/charlie/matches"     -> emptyPlayerMatchesJson,
+            s"player/alice/tournaments"   -> apiPlayerTournamentsJson(List("bad-tourney", "good-tourney")),
+            s"player/bob/tournaments"     -> emptyPlayerTournamentsJson,
+            s"player/charlie/tournaments" -> emptyPlayerTournamentsJson,
+            // bad-tourney/1 not present → 404
+            s"tournament/good-tourney/1"  -> apiTournamentRoundJson(List("alice", "someone"))
+          )
+        )
+        _   <- runPopulate(client)
+        ref <- PlayerTournamentRef.selectId(pid0)
+      } yield assertTrue(
+        ref.isDefined,
+        ref.get.tournamentSlug == TournamentSlug("good-tourney"),
+        ref.get.playerIdx == 0
+      )
+    },
+    test("failed tournament URL is not retried for another player") {
+      // Both alice and bob share bad-tourney (which 404s) and good-tourney
+      for {
+        _ <- seedDb
+        client <- fakeChessComClient(
+          Map(
+            s"player/alice/matches"       -> emptyPlayerMatchesJson,
+            s"player/bob/matches"         -> emptyPlayerMatchesJson,
+            s"player/charlie/matches"     -> emptyPlayerMatchesJson,
+            s"player/alice/tournaments"   -> apiPlayerTournamentsJson(List("bad-tourney", "good-tourney")),
+            s"player/bob/tournaments"     -> apiPlayerTournamentsJson(List("bad-tourney", "good-tourney")),
+            s"player/charlie/tournaments" -> emptyPlayerTournamentsJson,
+            // bad-tourney/1 not present → 404 (should only be tried once across both players)
+            s"tournament/good-tourney/1"  -> apiTournamentRoundJson(List("alice", "bob", "someone"))
+          )
+        )
+        _        <- runPopulate(client)
+        aliceRef <- PlayerTournamentRef.selectId(pid0)
+        bobRef   <- PlayerTournamentRef.selectId(pid1)
+      } yield assertTrue(
+        aliceRef.isDefined,
+        aliceRef.get.tournamentSlug == TournamentSlug("good-tourney"),
+        bobRef.isDefined,
+        bobRef.get.tournamentSlug == TournamentSlug("good-tourney")
+      )
+    },
+    test("club resolution iterates past failed match") {
+      val matchJson3 = apiDailyMatchJson(
+        matchId3,
+        "our-club",
+        "other-club",
+        team1Players = List(("player1", 1)),
+        team2Players = List(("player2", 2))
+      )
+      for {
+        _ <- seedDb
+        client <- fakeChessComClient(
+          Map(
+            s"player/alice/matches"    -> emptyPlayerMatchesJson,
+            s"player/bob/matches"      -> emptyPlayerMatchesJson,
+            s"player/charlie/matches"  -> emptyPlayerMatchesJson,
+            s"club/our-club/matches"   -> apiClubMatchesJson(List(matchId1, matchId3)),
+            s"club/other-club/matches" -> emptyClubMatchesJson,
+            // match/$matchId1 not present → 404
+            s"match/$matchId3"         -> matchJson3
+          )
+        )
+        _   <- runPopulate(client)
+        ref <- ClubMatchRef.selectId(clubId0)
+      } yield assertTrue(
+        ref.isDefined,
+        ref.get.matchId == ClubMatchId.wrap(matchId3),
+        ref.get.isTeam1
+      )
     }
   )
 

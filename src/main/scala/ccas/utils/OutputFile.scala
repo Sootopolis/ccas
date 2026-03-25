@@ -25,6 +25,18 @@ object OutputFile {
   def writeAndLog(appName: String, clubSlug: ClubSlug, content: String): Task[Unit] =
     write(appName, clubSlug, content).flatMap(path => ZIO.logInfo(s"Output written to $path"))
 
+  def write(appName: String, content: String): Task[Path] = {
+    val date = LocalDateTime.now().format(dateTimeFormat)
+    val dir  = Paths.get("out")
+    val path = dir.resolve(s"$date-$appName.txt")
+    ZIO.attemptBlocking(Files.createDirectories(dir)) *>
+      ZIO.attemptBlocking(archiveExisting(dir, appName)) *>
+      ZIO.writeFile(path.toString, content).as(path)
+  }
+
+  def writeAndLog(appName: String, content: String): Task[Unit] =
+    write(appName, content).flatMap(path => ZIO.logInfo(s"Output written to $path"))
+
   private def archiveExisting(clubDir: Path, appName: String): Unit =
     if (Files.exists(clubDir)) {
       val suffix     = s"-$appName.txt"
