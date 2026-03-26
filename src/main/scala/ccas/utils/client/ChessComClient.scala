@@ -10,7 +10,7 @@ import zio.json.JsonDecoder
 
 import ccas.analysis.tables.ApiFetchFailure
 import ccas.info.BuildInfo
-import ccas.utils.errors.ExternalException
+
 import ccas.utils.json.JsonDecodingException
 
 final class ChessComClient(
@@ -24,7 +24,7 @@ final class ChessComClient(
   retryBase: Duration = 1.second
 ) {
   private val batchedClient = (client @@ ZClientAspect.followRedirects(3) { (_, message) =>
-    ZIO.fail(ExternalException(s"Redirect failed: $message"))
+    ZIO.fail(Exception(s"Redirect failed: $message"))
   }).batched
 
   private def rawGet[T](url: URL)(using jsonDecoder: JsonDecoder[T]): Task[T] = for {

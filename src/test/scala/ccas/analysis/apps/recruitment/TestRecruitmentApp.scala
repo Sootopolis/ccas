@@ -747,7 +747,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       val now = Instant.now()
       val failure = ApiFetchFailure(
         url = "https://api.chess.com/pub/player/alice/games/2026/03",
-        errorType = "ExternalException",
+        errorType = "UserFacingException",
         errorMessage = Some("HTTP 404"),
         occurredAt = now
       )
@@ -759,7 +759,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       } yield assertTrue(
         recent.size == 1,
         recent.head.url == failure.url,
-        recent.head.errorType == "ExternalException",
+        recent.head.errorType == "UserFacingException",
         recent.head.errorMessage.contains("HTTP 404"),
         tooEarly.isEmpty
       )

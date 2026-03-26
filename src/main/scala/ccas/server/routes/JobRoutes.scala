@@ -16,7 +16,7 @@ import ccas.api.misc.subtypes.{ClubSlug, Username}
 import ccas.server.jobs.*
 import ccas.server.routes.RouteHelpers.*
 import ccas.utils.client.{ChessComClient, HttpStatusException}
-import ccas.utils.errors.ExternalException
+import ccas.utils.errors.{NotFoundException, UserFacingException}
 
 object JobRoutes {
 
@@ -102,10 +102,11 @@ object JobRoutes {
   }
 
   private def handleJobError(error: Throwable): Response = error match {
-    case e: JobConflictException  => jsonResponse(Status.Conflict, ErrorResponse(e.getMessage))
-    case e: HttpStatusException   => jsonResponse(Status.BadGateway, ErrorResponse(e.getMessage))
-    case e: ExternalException     => jsonResponse(Status.BadRequest, ErrorResponse(e.getMessage))
-    case e                        => jsonResponse(Status.InternalServerError, ErrorResponse(e.getMessage))
+    case e: JobConflictException => jsonResponse(Status.Conflict, ErrorResponse(e.getMessage))
+    case e: HttpStatusException  => jsonResponse(Status.BadGateway, ErrorResponse(e.getMessage))
+    case e: NotFoundException    => jsonResponse(Status.NotFound, ErrorResponse(e.getMessage))
+    case e: UserFacingException  => jsonResponse(Status.BadRequest, ErrorResponse(e.getMessage))
+    case _                       => jsonResponse(Status.InternalServerError, ErrorResponse("Internal server error"))
   }
 
   // --- Routes ---

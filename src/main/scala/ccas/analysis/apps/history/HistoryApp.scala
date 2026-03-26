@@ -13,13 +13,33 @@ import ccas.api.misc.enums.*
 import ccas.api.misc.subtypes.*
 import ccas.api.player.{ApiPlayer, ApiPlayerClubs, ApiPlayerMatches}
 import ccas.utils.client.ChessComClient
-import ccas.utils.errors.ExternalException
+import ccas.utils.errors.BadRequestException
 import ccas.utils.sql.DataSourceLayer
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.SqlZioTypes.{connectZIO, withTransaction}
 import ccas.utils.{CcasLogger, OutputFile, ProgressBar}
 
 object HistoryApp extends ZIOAppDefault {
+  private val help = "Usage: HistoryApp <club-slug> [--full] [--refresh]"
+
+  // --- CLI entry point ---
+
+  override def run: RIO[ZIOAppArgs & Scope, Unit] =
+    (for {
+      args <- ZIOAppArgs.getArgs
+      clubName <- args.headOption match {
+        case None    => ZIO.fail(BadRequestException(help))
+        case Some(s) => ZIO.succeed(ClubSlug.wrap(s))
+      }
+      full    = args.contains("--full")
+      refresh = args.contains("--refresh")
+      _ <- discover(clubName, full, refresh)
+    } yield ()).provideSomeAuto(
+      CcasLogger.live(showProgress = true),
+      ChessComClient.live(),
+      Client.default,
+      DataSourceLayer.liveFromPrefix(onInit = Tables.ensureTables)
+    )
 
   private val BatchSize = 500
 
@@ -105,25 +125,6 @@ object HistoryApp extends ZIOAppDefault {
       )
   }
 
-  // --- CLI entry point ---
-
-  override def run: RIO[ZIOAppArgs & Scope, Unit] =
-    (for {
-      args <- ZIOAppArgs.getArgs
-      clubName <- args.headOption match {
-        case None    => ZIO.fail(ExternalException("Usage: HistoryApp <club-slug> [--full] [--refresh]"))
-        case Some(s) => ZIO.succeed(ClubSlug.wrap(s))
-      }
-      full    = args.contains("--full")
-      refresh = args.contains("--refresh")
-      _ <- discover(clubName, full, refresh)
-    } yield ()).provideSomeAuto(
-      CcasLogger.live(showProgress = true),
-      ChessComClient.live(),
-      Client.default,
-      DataSourceLayer.liveFromPrefix(onInit = Tables.ensureTables)
-    )
-
   // --- Main workflow ---
 
   def discover(
@@ -142,7 +143,7 @@ object HistoryApp extends ZIOAppDefault {
       _ <- CcasLogger.info("Phase 1: Initializing...")
       _ <- MembershipApp.reconcile(clubSlug, trackRun = false)
       club <- Club.selectBySlug(clubSlug)
-        .someOrFail(ExternalException(s"Club '$clubSlug' not found"))
+        .someOrFail(IllegalStateException(s"Club '$clubSlug' not found after reconcile"))
       clubId = club.clubId
       (allMembers, latestSnaps, processedCount, queriedIds) <-
         ClubMember.selectClub(clubId) <&>
@@ -401,7 +402,7 @@ object HistoryApp extends ZIOAppDefault {
       dailyMatch <- fetchMatch(ctx, matchId)
       weAreTeam1 <- ZIO.fromOption(findOurTeam(dailyMatch.teams, ctx.clubSlug))
         .orElse(findOurTeamByClubId(dailyMatch.teams, ctx.clubId))
-        .orElseFail(ExternalException(s"Club ${ctx.clubId} not found in match $matchId teams"))
+        .orElseFail(Exception(s"Club ${ctx.clubId} not found in match $matchId teams"))
 
       opponentTeam = if (weAreTeam1) { dailyMatch.teams.team2 } else { dailyMatch.teams.team1 }
 
@@ -425,7 +426,7 @@ object HistoryApp extends ZIOAppDefault {
       liveMatch <- fetchLiveMatch(ctx, matchId)
       weAreTeam1 <- ZIO.fromOption(findOurTeam(liveMatch.teams, ctx.clubSlug))
         .orElse(findOurTeamByClubId(liveMatch.teams, ctx.clubId))
-        .orElseFail(ExternalException(s"Club ${ctx.clubId} not found in live match $matchId teams"))
+        .orElseFail(Exception(s"Club ${ctx.clubId} not found in live match $matchId teams"))
 
       opponentTeam = if (weAreTeam1) { liveMatch.teams.team2 } else { liveMatch.teams.team1 }
       _ <- resolveClubIdFromTeamUrl(opponentTeam.`@id`)
@@ -467,9 +468,9 @@ object HistoryApp extends ZIOAppDefault {
         ZIO.foreachPar(allBoards) { boardNum =>
           for {
             t1Player <- ZIO.fromOption(team1ByBoard.get(boardNum))
-              .orElseFail(ExternalException(s"Match $matchId board $boardNum: missing team1 player"))
+              .orElseFail(Exception(s"Match $matchId board $boardNum: missing team1 player"))
             t2Player <- ZIO.fromOption(team2ByBoard.get(boardNum))
-              .orElseFail(ExternalException(s"Match $matchId board $boardNum: missing team2 player"))
+              .orElseFail(Exception(s"Match $matchId board $boardNum: missing team2 player"))
 
             t1Username = t1Player.username
             t2Username = t2Player.username
@@ -740,7 +741,7 @@ object HistoryApp extends ZIOAppDefault {
         else {
           resolveClubIdFromTeamUrl(teams.team2.`@id`).flatMap {
             case Some(id) if id == clubId => ZIO.succeed(false)
-            case _                        => ZIO.fail(ExternalException("Club not found in either team"))
+            case _                        => ZIO.fail(Exception("Club not found in either team"))
           }
         }
     } yield result

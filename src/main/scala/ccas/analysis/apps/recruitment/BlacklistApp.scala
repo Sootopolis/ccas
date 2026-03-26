@@ -11,10 +11,11 @@ import ccas.api.club.ApiClub
 import ccas.api.misc.subtypes.{ClubSlug, Username}
 import ccas.api.player.ApiPlayer
 import ccas.utils.client.ChessComClient
-import ccas.utils.errors.ExternalException
+import ccas.utils.errors.BadRequestException
 import ccas.utils.sql.DataSourceLayer
 
 object BlacklistApp extends ZIOAppDefault {
+  private val help = "Usage: BlacklistApp <club-slug> <username> [reason] [expires-at]"
 
   override def run: RIO[ZIOAppArgs & Scope, Unit] =
     (for {
@@ -27,7 +28,7 @@ object BlacklistApp extends ZIOAppDefault {
             reason = rest.headOption,
             expiresAt = rest.lift(1).map(Instant.parse)
           )
-        case _ => ZIO.fail(ExternalException("Usage: BlacklistApp <club-slug> <username> [reason] [expires-at]"))
+        case _ => ZIO.fail(BadRequestException(help))
       }
     } yield ()).provideSomeAuto(
       ChessComClient.live(),

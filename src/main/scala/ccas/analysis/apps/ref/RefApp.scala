@@ -21,6 +21,13 @@ import ccas.utils.sql.DataSourceLayer
 import ccas.utils.sql.SqlZioTypes.connectZIO
 
 object RefApp extends ZIOAppDefault {
+  override def run: RIO[Scope, Unit] =
+    populate().provideSome[Scope](
+      CcasLogger.live(showProgress = true),
+      ChessComClient.live(),
+      Client.default,
+      DataSourceLayer.liveFromPrefix(onInit = Tables.ensureTables)
+    )
 
   private final case class UnresolvedPlayer(playerId: PlayerId, username: Username)
   private final case class UnresolvedClub(clubId: ClubId, slug: ClubSlug)
@@ -30,14 +37,6 @@ object RefApp extends ZIOAppDefault {
     case NotFound
     case SkipPlayer // player ID mismatch — don't try more matches/tournaments
   }
-
-  override def run: RIO[Scope, Unit] =
-    populate().provideSome[Scope](
-      CcasLogger.live(showProgress = true),
-      ChessComClient.live(),
-      Client.default,
-      DataSourceLayer.liveFromPrefix(onInit = Tables.ensureTables)
-    )
 
   // trigger accepted for consistency with other app entry points but not persisted (no run table)
   @nowarn("msg=unused")

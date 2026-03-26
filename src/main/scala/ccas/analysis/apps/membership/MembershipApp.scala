@@ -10,7 +10,7 @@ import ccas.api.player.{ApiPlayer, ApiPlayerClubs}
 import ccas.api.tournament.ApiTournament
 import ccas.utils.{CcasLogger, OutputFile}
 import ccas.utils.client.ChessComClient
-import ccas.utils.errors.ExternalException
+import ccas.utils.errors.{BadRequestException, NotFoundException}
 import ccas.utils.sql.DataSourceLayer
 import com.augustnagro.magnum.Transactor
 import zio.http.Client
@@ -20,33 +20,13 @@ import java.time.{Instant, Duration as JDuration}
 import scala.annotation.nowarn
 
 object MembershipApp extends ZIOAppDefault {
-
-  private sealed trait RunMode
-  private case object ReconcileOnly                             extends RunMode
-  private case class SinceNow(since: Instant)                   extends RunMode
-  private case class SinceUntil(since: Instant, until: Instant) extends RunMode
-
-  private def parseRunMode(args: Chunk[String]): Task[RunMode] =
-    args.lift(1) match {
-      case None => ZIO.succeed(ReconcileOnly)
-      case Some(sinceStr) =>
-        ZIO.attempt(Instant.parse(sinceStr))
-          .orElseFail(ExternalException(s"Invalid date format: $sinceStr"))
-          .flatMap { since =>
-            args.lift(2) match {
-              case None => ZIO.succeed(SinceNow(since))
-              case Some(untilStr) =>
-                ZIO.attempt(Instant.parse(untilStr))
-                  .mapBoth(_ => ExternalException(s"Invalid date format: $untilStr"), SinceUntil(since, _))
-            }
-          }
-    }
+  private val help = "Usage: MembershipApp <club-slug> [since [until]]"
 
   override def run: RIO[ZIOAppArgs & Scope, Unit] =
     (for {
       args <- ZIOAppArgs.getArgs
       clubName <- args.headOption match {
-        case None    => ZIO.fail(ExternalException("Usage: MembershipApp <club-slug> [since [until]]"))
+        case None    => ZIO.fail(BadRequestException(help))
         case Some(s) => ZIO.succeed(ClubSlug.wrap(s))
       }
       mode <- parseRunMode(args)
@@ -71,6 +51,27 @@ object MembershipApp extends ZIOAppDefault {
       Client.default,
       DataSourceLayer.liveFromPrefix(onInit = Tables.ensureTables)
     )
+
+  private sealed trait RunMode
+  private case object ReconcileOnly                             extends RunMode
+  private case class SinceNow(since: Instant)                   extends RunMode
+  private case class SinceUntil(since: Instant, until: Instant) extends RunMode
+
+  private def parseRunMode(args: Chunk[String]): Task[RunMode] =
+    args.lift(1) match {
+      case None => ZIO.succeed(ReconcileOnly)
+      case Some(sinceStr) =>
+        ZIO.attempt(Instant.parse(sinceStr))
+          .orElseFail(BadRequestException(s"Invalid date format: $sinceStr"))
+          .flatMap { since =>
+            args.lift(2) match {
+              case None => ZIO.succeed(SinceNow(since))
+              case Some(untilStr) =>
+                ZIO.attempt(Instant.parse(untilStr))
+                  .mapBoth(_ => BadRequestException(s"Invalid date format: $untilStr"), SinceUntil(since, _))
+            }
+          }
+    }
 
   private def reconcileIfStale(clubSlug: ClubSlug, until: Instant): RIO[CcasLogger & ChessComClient & Transactor, Unit] =
     for {
@@ -660,7 +661,7 @@ object MembershipApp extends ZIOAppDefault {
   private def report(clubSlug: ClubSlug, since: Instant, until: Instant): RIO[CcasLogger & Transactor, ReportResult] =
     for {
       club <- Club.selectBySlug(clubSlug)
-        .someOrFail(ExternalException(s"Club '$clubSlug' not found in database"))
+        .someOrFail(NotFoundException(s"Club '$clubSlug' not found in database"))
       clubId = club.clubId
       members <- ClubMember.selectClub(clubId)
       snaps   <- PlayerSnapshot.selectSince(since)

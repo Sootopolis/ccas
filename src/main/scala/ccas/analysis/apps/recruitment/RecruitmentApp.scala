@@ -13,7 +13,7 @@ import ccas.api.misc.subtypes.{ClubSlug, PlayerId, Username}
 import ccas.api.player.ApiPlayer
 import ccas.utils.CcasLogger
 import ccas.utils.client.ChessComClient
-import ccas.utils.errors.ExternalException
+import ccas.utils.errors.{BadRequestException, NotFoundException}
 import ccas.utils.sql.DataSourceLayer
 import ccas.utils.OutputFile
 
@@ -74,7 +74,7 @@ object RecruitmentApp extends ZIOAppDefault {
               _ <- OutputFile.writeAndLog("recruitment", clubSlug, formatRecruitmentOutput(usernames, evaluatedCount, run.startedAt, run.completedAt.getOrElse(Instant.now())))
             } yield ()
           }
-        case _ => ZIO.fail(ExternalException(help))
+        case _ => ZIO.fail(BadRequestException(help))
       }).provideSome[Scope](
         CcasLogger.live(showProgress = true),
         ChessComClient.live(),
@@ -105,9 +105,9 @@ object RecruitmentApp extends ZIOAppDefault {
       club   = Club(clubId, Instant.ofEpochSecond(apiClub.created), clubSlug)
       _ <- Club.upsert(club)
       aliasRow <- RecruitmentAlias.selectLatest(clubId, alias)
-        .someOrFail(ExternalException(s"No recruitment alias '$alias' found for club '$clubSlug'"))
+        .someOrFail(NotFoundException(s"No recruitment alias '$alias' found for club '$clubSlug'"))
       criteria <- RecruitmentCriteria.selectId(aliasRow.criteriaId)
-        .someOrFail(ExternalException(s"Criteria ${aliasRow.criteriaId} referenced by alias '$alias' not found"))
+        .someOrFail(IllegalStateException(s"Criteria ${aliasRow.criteriaId} referenced by alias '$alias' not found"))
       resolvedTarget = target.getOrElse(DefaultTarget)
       alreadyFound <-
         if (cumulative) RecruitmentRun.sumCandidatesFoundToday(clubId, alias)
@@ -286,17 +286,17 @@ object RecruitmentApp extends ZIOAppDefault {
   def showReport(clubSlug: ClubSlug, runIdOpt: Option[String]): RIO[CcasLogger & Transactor, (List[Username], Int, RecruitmentRun)] =
     for {
       club <- Club.selectBySlug(clubSlug)
-        .someOrFail(ExternalException(s"Club '$clubSlug' not found in database"))
+        .someOrFail(NotFoundException(s"Club '$clubSlug' not found in database"))
       clubId = club.clubId
       run <- runIdOpt match {
         case Some(id) =>
           ZIO.attempt(id.toLong)
-            .orElseFail(ExternalException(s"Invalid run ID: '$id' (expected a number)"))
+            .orElseFail(BadRequestException(s"Invalid run ID: '$id' (expected a number)"))
             .flatMap(RecruitmentRun.selectId)
-            .someOrFail(ExternalException(s"Run $id not found"))
+            .someOrFail(NotFoundException(s"Run $id not found"))
         case None =>
           RecruitmentRun.selectLatest(clubId)
-            .someOrFail(ExternalException(s"No runs found for club '$clubSlug'"))
+            .someOrFail(NotFoundException(s"No runs found for club '$clubSlug'"))
       }
       invited        <- RecruitmentCandidate.selectInvitedByRun(run.runId)
       evaluatedCount <- RecruitmentCandidate.selectCountByRun(run.runId)
