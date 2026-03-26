@@ -4,7 +4,7 @@ import java.time.Instant
 
 import com.augustnagro.magnum.Transactor
 import zio.{durationInt, Chunk, Duration, Ref, Schedule, Semaphore, Task, ZEnvironment, ZIO, ZLayer}
-import zio.http.{Client, Header, Headers, Request, Status, URL}
+import zio.http.{Client, Header, Headers, Request, Status, URL, ZClientAspect}
 import zio.http.Method.GET
 import zio.json.JsonDecoder
 
@@ -23,7 +23,9 @@ final class ChessComClient(
   cooldown: Duration,
   retryBase: Duration = 1.second
 ) {
-  private val batchedClient = client.batched
+  private val batchedClient = (client @@ ZClientAspect.followRedirects(3) { (_, message) =>
+    ZIO.fail(ExternalException(s"Redirect failed: $message"))
+  }).batched
 
   private def rawGet[T](url: URL)(using jsonDecoder: JsonDecoder[T]): Task[T] = for {
     response <- batchedClient(Request(method = GET, url = url).addHeaders(headers))

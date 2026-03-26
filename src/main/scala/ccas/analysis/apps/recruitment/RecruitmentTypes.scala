@@ -118,7 +118,7 @@ private[recruitment] case class ExploreContext(
 
 /** Returns the opponent's username if they did not lose by timeout. */
 private[recruitment] def nonTimeoutOpponent(g: ApiPlayerArchiveGame, username: Username): Option[Username] = {
-  val isWhite        = g.white.username.equalsIgnoreCase(username)
+  val isWhite        = g.white.username == username
   val opponentResult = if (isWhite) g.black.result else g.white.result
   val opponentName   = if (isWhite) g.black.username else g.white.username
   Option.when(opponentResult != GameResultDetail.Timeout)(opponentName)
@@ -126,4 +126,4 @@ private[recruitment] def nonTimeoutOpponent(g: ApiPlayerArchiveGame, username: U
 
 /** Returns the player's own result in the game. */
 private[recruitment] def playerResult(g: ApiPlayerArchiveGame, username: Username): GameResultDetail =
-  if (g.white.username.equalsIgnoreCase(username)) g.white.result else g.black.result
+  if (g.white.username == username) g.white.result else g.black.result

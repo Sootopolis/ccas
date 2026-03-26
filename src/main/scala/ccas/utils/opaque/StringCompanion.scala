@@ -9,14 +9,20 @@ import zio.Config.Error.InvalidData
 trait StringCompanion {
   opaque type Type = String
 
-  def apply(value: String): Type  = value
-  def wrap(value: String): Type   = value
+  protected def normalize(raw: String): String = raw
+
+  def apply(value: String): Type  = normalize(value)
+  def wrap(value: String): Type   = if (value == null) value else normalize(value)
   def unwrap(value: Type): String = value
 
   protected val name: String = getClass.getSimpleName.stripSuffix("$")
 
   protected def validateRaw(raw: String): Either[String, String] = Right(raw)
-  protected def validated(raw: String): Either[String, Type]     = validateRaw(raw).map(wrap)
+
+  protected def validated(raw: String): Either[String, Type] = {
+    val n = normalize(raw)
+    validateRaw(n).map(_ => n)
+  }
 
   given JsonCodec[Type]    = JsonCodec.string.transformOrFail(validated, unwrap)
   given JsonDecoder[Type]  = summon[JsonCodec[Type]].decoder

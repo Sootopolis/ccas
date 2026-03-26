@@ -161,9 +161,7 @@ object HistoryApp extends ZIOAppDefault {
       _ <- ZIO.whenDiscard(full) {
         CcasLogger.info("  --full: clearing member query history") *> HistoryMemberQuery.deleteClub(clubId)
       }
-      effectiveQueriedIds =
-        if (full) { Set.empty[PlayerId] }
-        else { queriedIds }
+      effectiveQueriedIds = if (full) { Set.empty[PlayerId] } else { queriedIds }
 
       seedClub <- seedFromClubMatches(client, clubId, clubSlug)
       _        <- CcasLogger.info(s"  Club matches endpoint: $seedClub new match IDs")
@@ -180,7 +178,7 @@ object HistoryApp extends ZIOAppDefault {
 
       // === Phase 3: Process matches (BFS waves) ===
       _ <- CcasLogger.info("Phase 3: Processing matches...")
-      knownPlayersInit = latestSnaps.map(s => Username.unwrap(s.username).toLowerCase -> s.playerId).toMap
+      knownPlayersInit = latestSnaps.map(s => s.username.value -> s.playerId).toMap
       ctx       <- ProcessingContext.make(client, clubId, clubSlug, knownPlayersInit)
       waveStats <- processWaves(ctx).onInterrupt(
         finalizeInterrupted(ctx, runId, startedAt, clubSlug, memberSeed, membersSkipped, seedClub, seedStale)
@@ -264,12 +262,12 @@ object HistoryApp extends ZIOAppDefault {
   }
 
   private[history] def isClubDailyMatch(m: ApiPlayerMatches.ApiPlayerMatch, clubSlug: ClubSlug): Boolean =
-    m.club.path.segments.lastOption.exists(_.equalsIgnoreCase(ClubSlug.unwrap(clubSlug))) &&
-      !m.`@id`.path.segments.contains("live")
+    m.club.path.segments.lastOption.map(ClubSlug.wrap).contains(clubSlug)
+      && !m.`@id`.path.segments.contains("live")
 
   private[history] def isClubLiveMatch(m: ApiPlayerMatches.ApiPlayerMatch, clubSlug: ClubSlug): Boolean =
-    m.club.path.segments.lastOption.exists(_.equalsIgnoreCase(ClubSlug.unwrap(clubSlug))) &&
-      m.`@id`.path.segments.contains("live")
+    m.club.path.segments.lastOption.map(ClubSlug.wrap).contains(clubSlug)
+      && m.`@id`.path.segments.contains("live")
 
   private def seedMatchesForPlayer(
     client: ChessComClient,
@@ -454,8 +452,8 @@ object HistoryApp extends ZIOAppDefault {
       case _: ApiDailyMatchRegistered => ZIO.succeed(Nil)
       case _ =>
         val teams        = dailyMatch.teams
-        val team1FpLower = teams.team1.fairPlayRemovals.map(u => Username.unwrap(u).toLowerCase)
-        val team2FpLower = teams.team2.fairPlayRemovals.map(u => Username.unwrap(u).toLowerCase)
+        val team1Fp = teams.team1.fairPlayRemovals.map(_.value)
+        val team2Fp = teams.team2.fairPlayRemovals.map(_.value)
 
         val team1ByBoard: Map[Int, MatchPlayerStarted] = teams.team1.players.collect {
           case p: MatchPlayerStarted => p.board.path.segments.last.toInt -> p
@@ -475,8 +473,8 @@ object HistoryApp extends ZIOAppDefault {
 
             t1Username = t1Player.username
             t2Username = t2Player.username
-            t1FairPlay = team1FpLower.contains(Username.unwrap(t1Username).toLowerCase)
-            t2FairPlay = team2FpLower.contains(Username.unwrap(t2Username).toLowerCase)
+            t1FairPlay = team1Fp.contains(t1Username.value)
+            t2FairPlay = team2Fp.contains(t2Username.value)
 
             t1Pid <-
               if (weAreTeam1) { resolvePlayerId(ctx, t1Username, isOurTeam = true, matchStartTime) }
@@ -566,7 +564,7 @@ object HistoryApp extends ZIOAppDefault {
     isOurTeam: Boolean,
     matchStartTime: Option[Instant]
   ): RIO[CcasLogger & Transactor, Option[PlayerId]] = {
-    val key = Username.unwrap(username).toLowerCase
+    val key = username.value
     ctx.knownPlayers.get.map(_.get(key)).flatMap {
       case Some(playerId) => ctx.playersKnown.update(_ + 1).as(Some(playerId))
       case None if !isOurTeam => ZIO.none
@@ -729,9 +727,8 @@ object HistoryApp extends ZIOAppDefault {
   // === Helpers ===
 
   private[history] def findOurTeam(teams: TeamMatchTeams, clubSlug: ClubSlug): Option[Boolean] = {
-    val name = ClubSlug.unwrap(clubSlug)
-    if (teams.team1.`@id`.path.segments.lastOption.exists(_.equalsIgnoreCase(name))) { Some(true) }
-    else if (teams.team2.`@id`.path.segments.lastOption.exists(_.equalsIgnoreCase(name))) { Some(false) }
+    if (teams.team1.`@id`.path.segments.lastOption.map(ClubSlug.wrap).contains(clubSlug)) { Some(true) }
+    else if (teams.team2.`@id`.path.segments.lastOption.map(ClubSlug.wrap).contains(clubSlug)) { Some(false) }
     else { None }
   }
 

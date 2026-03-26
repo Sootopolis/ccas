@@ -285,7 +285,7 @@ object RefApp extends ZIOAppDefault {
           error => recordFailedUrl(failedUrls, roundUrl, error).as(ResolveResult.NotFound),
           round => {
             val playerIdx = round.players.indexWhere(rp =>
-              Username.unwrap(rp.username).equalsIgnoreCase(Username.unwrap(player.username))
+              rp.username == player.username
             )
             if (playerIdx < 0) {
               ZIO.succeed(ResolveResult.NotFound)
@@ -403,16 +403,14 @@ object RefApp extends ZIOAppDefault {
   // --- Shared helpers ---
 
   private def findIsTeam1(teams: TeamMatchTeams, username: Username): Option[Boolean] = {
-    val u = Username.unwrap(username)
-    if (teams.team1.players.exists(p => Username.unwrap(p.username).equalsIgnoreCase(u))) { Some(true) }
-    else if (teams.team2.players.exists(p => Username.unwrap(p.username).equalsIgnoreCase(u))) { Some(false) }
+    if (teams.team1.players.exists(_.username == username)) { Some(true) }
+    else if (teams.team2.players.exists(_.username == username)) { Some(false) }
     else { None }
   }
 
   private def findClubIsTeam1(teams: TeamMatchTeams, slug: ClubSlug): Option[Boolean] = {
-    val name = ClubSlug.unwrap(slug)
-    if (teams.team1.`@id`.path.segments.lastOption.exists(_.equalsIgnoreCase(name))) { Some(true) }
-    else if (teams.team2.`@id`.path.segments.lastOption.exists(_.equalsIgnoreCase(name))) { Some(false) }
+    if (teams.team1.`@id`.path.segments.lastOption.map(ClubSlug.wrap).contains(slug)) { Some(true) }
+    else if (teams.team2.`@id`.path.segments.lastOption.map(ClubSlug.wrap).contains(slug)) { Some(false) }
     else { None }
   }
 
