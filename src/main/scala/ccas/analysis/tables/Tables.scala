@@ -34,5 +34,7 @@ object Tables extends ZIOAppDefault {
       _ <- HistoryMemberQuery.createTable
       _ <- HistoryPendingMatch.createTable
       _ <- HistoryRun.createTable
+      _ <- UnresolvedBoardPlayer.createTable
+      _ <- UnresolvedMatchClub.createTable
     } yield ()
 }

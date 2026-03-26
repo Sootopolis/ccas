@@ -78,6 +78,7 @@ object HistoryApp extends ZIOAppDefault {
     val matchCache: Ref[Map[ClubMatchId, Promise[Throwable, ApiDailyMatch]]],
     val liveMatchCache: Ref[Map[ClubMatchId, Promise[Throwable, ApiLiveMatch]]],
     val discoveryCache: Ref[Map[String, Promise[Throwable, Option[PlayerId]]]],
+    val clubCache: Ref[Map[String, Promise[Throwable, Option[ClubId]]]],
     val knownPlayers: Ref[Map[String, PlayerId]],
     val newPlayers: Ref[Set[DiscoveredPlayer]],
     val matchesProcessed: Ref[Int],
@@ -99,6 +100,7 @@ object HistoryApp extends ZIOAppDefault {
         matchCache        <- Ref.make(Map.empty[ClubMatchId, Promise[Throwable, ApiDailyMatch]])
         liveMatchCache    <- Ref.make(Map.empty[ClubMatchId, Promise[Throwable, ApiLiveMatch]])
         discoveryCache    <- Ref.make(Map.empty[String, Promise[Throwable, Option[PlayerId]]])
+        clubCache         <- Ref.make(Map.empty[String, Promise[Throwable, Option[ClubId]]])
         knownPlayers      <- Ref.make(initialKnownPlayers)
         newPlayers        <- Ref.make(Set.empty[DiscoveredPlayer])
         matchesProcessed  <- Ref.make(0)
@@ -114,6 +116,7 @@ object HistoryApp extends ZIOAppDefault {
         matchCache,
         liveMatchCache,
         discoveryCache,
+        clubCache,
         knownPlayers,
         newPlayers,
         matchesProcessed,
@@ -401,12 +404,18 @@ object HistoryApp extends ZIOAppDefault {
     for {
       dailyMatch <- fetchMatch(ctx, matchId)
       weAreTeam1 <- ZIO.fromOption(findOurTeam(dailyMatch.teams, ctx.clubSlug))
-        .orElse(findOurTeamByClubId(dailyMatch.teams, ctx.clubId))
+        .orElse(findOurTeamByClubId(ctx, dailyMatch.teams, ctx.clubId))
         .orElseFail(Exception(s"Club ${ctx.clubId} not found in match $matchId teams"))
 
       opponentTeam = if (weAreTeam1) { dailyMatch.teams.team2 } else { dailyMatch.teams.team1 }
 
-      opponentClubId <- resolveClubIdFromTeamUrl(opponentTeam.`@id`)
+      opponentClubId <- resolveClubIdFromTeamUrl(ctx, opponentTeam.`@id`)
+      _ <- ZIO.whenDiscard(opponentClubId.isEmpty) {
+        opponentTeam.`@id`.path.segments.lastOption match {
+          case Some(segment) => UnresolvedMatchClub.upsert(matchId, !weAreTeam1, ClubSlug.wrap(segment)).ignore
+          case None          => ZIO.unit
+        }
+      }
       clubMatch = buildClubMatchRow(matchId, dailyMatch, ctx.clubId, weAreTeam1, opponentClubId)
 
       boardRows <- buildBoardRows(ctx, matchId, dailyMatch, weAreTeam1, clubMatch.startTime)
@@ -425,11 +434,11 @@ object HistoryApp extends ZIOAppDefault {
     for {
       liveMatch <- fetchLiveMatch(ctx, matchId)
       weAreTeam1 <- ZIO.fromOption(findOurTeam(liveMatch.teams, ctx.clubSlug))
-        .orElse(findOurTeamByClubId(liveMatch.teams, ctx.clubId))
+        .orElse(findOurTeamByClubId(ctx, liveMatch.teams, ctx.clubId))
         .orElseFail(Exception(s"Club ${ctx.clubId} not found in live match $matchId teams"))
 
       opponentTeam = if (weAreTeam1) { liveMatch.teams.team2 } else { liveMatch.teams.team1 }
-      _ <- resolveClubIdFromTeamUrl(opponentTeam.`@id`)
+      _ <- resolveClubIdFromTeamUrl(ctx, opponentTeam.`@id`)
 
       // Discover players from both teams (for BFS wave expansion)
       startTime = Some(Instant.ofEpochSecond(liveMatch.startTime))
@@ -477,12 +486,14 @@ object HistoryApp extends ZIOAppDefault {
             t1FairPlay = team1Fp.contains(t1Username.value)
             t2FairPlay = team2Fp.contains(t2Username.value)
 
-            t1Pid <-
-              if (weAreTeam1) { resolvePlayerId(ctx, t1Username, isOurTeam = true, matchStartTime) }
-              else { ZIO.none }
-            t2Pid <-
-              if (!weAreTeam1) { resolvePlayerId(ctx, t2Username, isOurTeam = true, matchStartTime) }
-              else { ZIO.none }
+            t1Pid <- resolvePlayerId(ctx, t1Username, isOurTeam = weAreTeam1, matchStartTime)
+            t2Pid <- resolvePlayerId(ctx, t2Username, isOurTeam = !weAreTeam1, matchStartTime)
+            _ <- ZIO.whenDiscard(t1Pid.isEmpty)(
+              UnresolvedBoardPlayer.upsert(matchId, boardNum, isTeam1 = true, t1Username).ignore
+            )
+            _ <- ZIO.whenDiscard(t2Pid.isEmpty)(
+              UnresolvedBoardPlayer.upsert(matchId, boardNum, isTeam1 = false, t2Username).ignore
+            )
           } yield {
             val (g1Winner, g1Detail) =
               normalizeGameOutcome(t1Player.playedAsWhite, t2Player.playedAsBlack, whiteTeamIsTeam1 = true)
@@ -494,10 +505,8 @@ object HistoryApp extends ZIOAppDefault {
               matchId = matchId,
               board = boardNum,
               team1PlayerId = t1Pid,
-              team1Username = t1Username,
               team1FairPlay = t1FairPlay,
               team2PlayerId = t2Pid,
-              team2Username = t2Username,
               team2FairPlay = t2FairPlay,
               game1Winner = g1Winner,
               game1Detail = g1Detail,
@@ -568,8 +577,7 @@ object HistoryApp extends ZIOAppDefault {
     val key = username.value
     ctx.knownPlayers.get.map(_.get(key)).flatMap {
       case Some(playerId) => ctx.playersKnown.update(_ + 1).as(Some(playerId))
-      case None if !isOurTeam => ZIO.none
-      case None => discoverPlayer(ctx, username, key, matchStartTime)
+      case None => discoverPlayer(ctx, username, key, isOurTeam, matchStartTime)
     }
   }
 
@@ -580,6 +588,7 @@ object HistoryApp extends ZIOAppDefault {
     ctx: ProcessingContext,
     username: Username,
     key: String,
+    isOurTeam: Boolean,
     matchStartTime: Option[Instant]
   ): RIO[CcasLogger & Transactor, Option[PlayerId]] =
     for {
@@ -587,7 +596,7 @@ object HistoryApp extends ZIOAppDefault {
       action <- ctx.discoveryCache.modify { m =>
         m.get(key) match {
           case Some(existing) => (existing.await, m)
-          case None           => (doDiscoverPlayer(ctx, username, key, promise, matchStartTime), m + (key -> promise))
+          case None           => (doDiscoverPlayer(ctx, username, key, promise, isOurTeam, matchStartTime), m + (key -> promise))
         }
       }
       result <- action
@@ -598,6 +607,7 @@ object HistoryApp extends ZIOAppDefault {
     username: Username,
     key: String,
     promise: Promise[Throwable, Option[PlayerId]],
+    isOurTeam: Boolean,
     matchStartTime: Option[Instant]
   ): RIO[CcasLogger & Transactor, Option[PlayerId]] = {
     val work = for {
@@ -629,9 +639,9 @@ object HistoryApp extends ZIOAppDefault {
               val snapshot = PlayerSnapshot(playerId, snapshotSince, username, statusCategory, apiPlayer.title)
               for {
                 _ <- PlayerSnapshot.insert(snapshot)
-                _ <- createClubMemberForDiscovered(ctx, apiPlayer, matchStartTime)
+                _ <- ZIO.whenDiscard(isOurTeam)(createClubMemberForDiscovered(ctx, apiPlayer, matchStartTime))
                 _ <- ctx.knownPlayers.update(_ + (key -> playerId))
-                _ <- ctx.newPlayers.update(_ + DiscoveredPlayer(playerId, username))
+                _ <- ZIO.whenDiscard(isOurTeam)(ctx.newPlayers.update(_ + DiscoveredPlayer(playerId, username)))
                 _ <- ctx.playersDiscovered.update(_ + 1)
               } yield Some(playerId)
             }
@@ -733,23 +743,37 @@ object HistoryApp extends ZIOAppDefault {
     else { None }
   }
 
-  private def findOurTeamByClubId(teams: TeamMatchTeams, clubId: ClubId): RIO[Transactor, Boolean] =
+  private def findOurTeamByClubId(ctx: ProcessingContext, teams: TeamMatchTeams, clubId: ClubId): RIO[Transactor, Boolean] =
     for {
-      t1Id <- resolveClubIdFromTeamUrl(teams.team1.`@id`)
+      t1Id <- resolveClubIdFromTeamUrl(ctx, teams.team1.`@id`)
       result <-
         if (t1Id.contains(clubId)) { ZIO.succeed(true) }
         else {
-          resolveClubIdFromTeamUrl(teams.team2.`@id`).flatMap {
+          resolveClubIdFromTeamUrl(ctx, teams.team2.`@id`).flatMap {
             case Some(id) if id == clubId => ZIO.succeed(false)
             case _                        => ZIO.fail(Exception("Club not found in either team"))
           }
         }
     } yield result
 
-  private def resolveClubIdFromTeamUrl(teamUrl: URL): RIO[Transactor, Option[ClubId]] =
+  private def resolveClubIdFromTeamUrl(ctx: ProcessingContext, teamUrl: URL): RIO[Transactor, Option[ClubId]] =
     teamUrl.path.segments.lastOption match {
-      case None          => ZIO.none
-      case Some(segment) => Club.selectBySlug(ClubSlug.wrap(segment)).map(_.map(_.clubId))
+      case None => ZIO.none
+      case Some(segment) =>
+        val slug = ClubSlug.wrap(segment)
+        val key = slug.value
+        for {
+          promise <- Promise.make[Throwable, Option[ClubId]]
+          action <- ctx.clubCache.modify { m =>
+            m.get(key) match {
+              case Some(existing) => (existing.await, m)
+              case None =>
+                val work = Club.resolveOrFetch(ctx.client, slug).tapBoth(promise.fail, promise.succeed)
+                (work, m + (key -> promise))
+            }
+          }
+          result <- action
+        } yield result
     }
 
   private[history] def buildClubMatchRow(
@@ -786,11 +810,9 @@ object HistoryApp extends ZIOAppDefault {
       endTime = endTime,
       boards = dailyMatch.boards,
       team1ClubId = team1ClubId,
-      team1Name = teams.team1.name,
       team1Score = teams.team1.score,
       team1Result = team1Result,
       team2ClubId = team2ClubId,
-      team2Name = teams.team2.name,
       team2Score = teams.team2.score,
       team2Result = team2Result,
       fetchedAt = Instant.now()

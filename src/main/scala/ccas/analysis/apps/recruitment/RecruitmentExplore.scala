@@ -304,7 +304,7 @@ private[recruitment] object RecruitmentExplore {
             for {
               clubs <- ctx.runCtx.discoveredClubs.get
               newClubs = clubs.diff(visitedClubs).filterNot(_ == ctx.clubSlug)
-                .filterNot(ctx.runCtx.criteria.excludeClubNames.contains)
+                .filterNot(ctx.runCtx.excludedSlugs.contains)
               result <-
                 if (newClubs.nonEmpty) {
                   CcasLogger.info(s"[Explore] Discovered ${newClubs.size} candidate clubs")
@@ -319,7 +319,7 @@ private[recruitment] object RecruitmentExplore {
                         filtered = sources.filter {
                           case ClubSource(name) =>
                             !visitedClubs.contains(name) && name != ctx.clubSlug &&
-                            !ctx.runCtx.criteria.excludeClubNames.contains(name)
+                            !ctx.runCtx.excludedSlugs.contains(name)
                           case _ => true
                         }
                         _ <- CcasLogger.info(s"[Explore] Static strategy yielded ${filtered.size} sources")

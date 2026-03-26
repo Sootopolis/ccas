@@ -32,16 +32,33 @@ object DbCodecs {
       else { url.encode }
   )
 
-  given DbCodec[List[String]] = new DbCodec[List[String]] {
+  given listCodec[T: DbCodec as dbCodec]: DbCodec[List[T]] = new DbCodec[List[T]] {
     override def cols: IArray[Int] = IArray(Types.ARRAY)
-    override def readSingle(rs: ResultSet, pos: Int): List[String] =
+
+    private val (sqlTypeName, toJdbc): (String, T => AnyRef) = dbCodec.cols(0) match {
+      case Types.VARCHAR | Types.LONGVARCHAR => ("TEXT", (v: T) => v.asInstanceOf[AnyRef])
+      case Types.BIGINT                      => ("BIGINT", (v: T) => Long.box(v.asInstanceOf[Long]))
+      case Types.INTEGER                     => ("INTEGER", (v: T) => Int.box(v.asInstanceOf[Int]))
+      case other => throw IllegalStateException(s"Unsupported array element JDBC type: $other")
+    }
+
+    override def readSingle(rs: ResultSet, pos: Int): List[T] =
       val arr = rs.getArray(pos)
-      // safe: JDBC Array.getArray returns Object[] for TEXT[] columns
       if (arr == null) { Nil }
-      else { arr.getArray.asInstanceOf[Array[AnyRef]].map(_.toString).toList }
-    override def writeSingle(value: List[String], ps: PreparedStatement, pos: Int): Unit =
-      val arr = ps.getConnection.createArrayOf("TEXT", value.toArray[AnyRef])
+      else {
+        val innerRs = arr.getResultSet
+        val builder = List.newBuilder[T]
+        while (innerRs.next()) {
+          builder += dbCodec.readSingle(innerRs, 2)
+        }
+        innerRs.close()
+        builder.result()
+      }
+
+    override def writeSingle(value: List[T], ps: PreparedStatement, pos: Int): Unit =
+      val arr = ps.getConnection.createArrayOf(sqlTypeName, value.map(toJdbc).toArray)
       ps.setArray(pos, arr)
+
     override def queryRepr: String = "?"
   }
 }

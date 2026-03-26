@@ -247,8 +247,8 @@ object TestRefApp extends ZIOSpecDefault {
       _ <- PlayerSnapshot.insert(
         PlayerSnapshot(pid2, t0, Username("charlie"), ccas.api.misc.enums.PlayerStatusCategory.Active, None)
       )
-      _ <- Club.upsert(Club(clubId0, t0, clubSlug0))
-      _ <- Club.upsert(Club(clubId1, t0, clubSlug1))
+      _ <- Club.upsert(Club(clubId0, t0, clubSlug0, "Club 0"))
+      _ <- Club.upsert(Club(clubId1, t0, clubSlug1, "Club 1"))
     } yield ()
 
   private def runPopulate(client: ChessComClient): RIO[Scope & Transactor, Unit] =

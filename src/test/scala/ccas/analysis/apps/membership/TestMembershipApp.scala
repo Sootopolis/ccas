@@ -37,7 +37,7 @@ object TestMembershipApp extends ZIOSpecDefault {
   private val pid5 = PlayerId(105)
 
   private val clubId = ClubId(500)
-  private val club   = Club(clubId, Times.t0, ClubSlug("test-club"))
+  private val club   = Club(clubId, Times.t0, ClubSlug("test-club"), "Test Club")
 
   // --- Helpers ---
 

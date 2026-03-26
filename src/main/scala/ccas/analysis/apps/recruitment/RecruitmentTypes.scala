@@ -27,6 +27,7 @@ private[recruitment] case class RunContext(
   alias: String,
   clubMatchIds: Set[URL],
   formerMemberIds: Set[PlayerId],
+  excludedSlugs: Set[ClubSlug],
   now: Instant,
   discoveredClubs: Ref[Set[ClubSlug]],
   discoveredOpponents: Ref[Set[Username]]

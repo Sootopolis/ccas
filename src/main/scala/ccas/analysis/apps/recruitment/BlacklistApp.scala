@@ -45,7 +45,7 @@ object BlacklistApp extends ZIOAppDefault {
     for {
       client  <- ZIO.service[ChessComClient]
       apiClub <- ApiClub.get(client, clubSlug)
-      club = Club(apiClub.clubId, Instant.ofEpochSecond(apiClub.created), clubSlug)
+      club = Club(apiClub.clubId, Instant.ofEpochSecond(apiClub.created), clubSlug, apiClub.name)
       _         <- Club.upsert(club)
       apiPlayer <- client.get[ApiPlayer](ApiPlayer.getUrl(username))
       now = Instant.now()

@@ -246,7 +246,7 @@ private[recruitment] object RecruitmentFilters {
         val criteria  = env.run.criteria
         val rejected =
           criteria.maxClubs.exists(clubCount > _)
-          || criteria.excludeClubNames.exists(clubNames.contains)
+          || env.run.excludedSlugs.exists(clubNames.contains)
         val updatedCache = getOrUpdateCache(env)(_.copy(clubCount = Some(clubCount)))
         FilterResult(rejected, env.candidate.copy(cache = Some(updatedCache)))
       }

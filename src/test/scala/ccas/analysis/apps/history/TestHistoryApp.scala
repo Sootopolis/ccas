@@ -80,11 +80,9 @@ object TestHistoryApp extends ZIOSpecDefault {
         row.endTime.contains(Instant.ofEpochSecond(1735309563L)),
         row.boards == 13,
         row.team1ClubId.contains(clubId),
-        row.team1Name == "TURK CHESS PLAYERS",
         row.team1Score == 10.0,
         row.team1Result.contains(ClubMatchResult.Lose),
         row.team2ClubId == oppId,
-        row.team2Name == "The Great British Empire.",
         row.team2Score == 16.0,
         row.team2Result.contains(ClubMatchResult.Win)
       )

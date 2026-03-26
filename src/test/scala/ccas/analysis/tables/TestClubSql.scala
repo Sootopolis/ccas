@@ -37,8 +37,8 @@ object TestClubSql extends ZIOSpecDefault {
     val t3: Instant = t0.plus(Duration.ofDays(3))
   }
 
-  private val clubA = Club(ClubId(200), Timestamps.t0, ClubSlug("club-a"))
-  private val clubB = Club(ClubId(201), Timestamps.t0, ClubSlug("club-b"))
+  private val clubA = Club(ClubId(200), Timestamps.t0, ClubSlug("club-a"), "Club A")
+  private val clubB = Club(ClubId(201), Timestamps.t0, ClubSlug("club-b"), "Club B")
 
   private val player0 = Player(PlayerId(10), Timestamps.t0)
   private val player1 = Player(PlayerId(11), Timestamps.t0)
