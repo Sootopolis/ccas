@@ -167,7 +167,7 @@ object RefApp extends ZIOAppDefault {
       // Try DB first (from HistoryApp's club_match_board data)
       dbRef <- ClubMatchBoard.selectPlayerMatchRef(player.playerId)
       resolved <- dbRef match {
-        case Some(ref) => PlayerMatchRef.upsert(ref).as(true)
+        case Some(ref) => PlayerMatchRef.insert(ref).as(true)
         case None =>
           resolvePlayerViaMatch(client, cache, failedUrls, player).flatMap {
             case ResolveResult.Resolved   => ZIO.succeed(true)
@@ -234,7 +234,7 @@ object RefApp extends ZIOAppDefault {
                   CcasLogger.warn(s"  ${player.username}: player_id mismatch, skipping").as(ResolveResult.SkipPlayer)
                 case true =>
                   val ref = PlayerMatchRef(player.playerId, matchId, isLive, isTeam1, boardIdx)
-                  PlayerMatchRef.upsert(ref).as(ResolveResult.Resolved)
+                  PlayerMatchRef.insert(ref).as(ResolveResult.Resolved)
               }
           }
         )
@@ -294,7 +294,7 @@ object RefApp extends ZIOAppDefault {
                   CcasLogger.warn(s"  ${player.username}: player_id mismatch, skipping").as(ResolveResult.SkipPlayer)
                 case true =>
                   val ref = PlayerTournamentRef(player.playerId, slug, playerIdx)
-                  PlayerTournamentRef.upsert(ref).as(ResolveResult.Resolved)
+                  PlayerTournamentRef.insert(ref).as(ResolveResult.Resolved)
               }
             }
           }
@@ -314,7 +314,7 @@ object RefApp extends ZIOAppDefault {
       // Try DB first (from HistoryApp's club_match data)
       dbRef <- ClubMatch.selectClubMatchRef(club.clubId)
       resolved <- dbRef match {
-        case Some(ref) => ClubMatchRef.upsert(ref).as(true)
+        case Some(ref) => ClubMatchRef.insert(ref).as(true)
         case None =>
           // Fall back to API — iterate finished team matches (daily or live)
           for {
@@ -361,7 +361,7 @@ object RefApp extends ZIOAppDefault {
             case None => ZIO.succeed(false)
             case Some(isTeam1) =>
               val ref = ClubMatchRef(club.clubId, matchId, isLive, isTeam1)
-              ClubMatchRef.upsert(ref).as(true)
+              ClubMatchRef.insert(ref).as(true)
           }
         )
     }

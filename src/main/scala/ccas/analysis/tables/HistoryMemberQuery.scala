@@ -30,7 +30,7 @@ object HistoryMemberQuery {
         .query[PlayerId].run().toSet
     }
 
-  def insert(item: HistoryMemberQuery): ZIO[Transactor, SQLException, Int] =
+  def upsert(item: HistoryMemberQuery): ZIO[Transactor, SQLException, Int] =
     connectZIO {
       sql"""INSERT INTO history_member_query (club_id, player_id, queried_at)
             VALUES (${item.clubId}, ${item.playerId}, ${item.queriedAt})

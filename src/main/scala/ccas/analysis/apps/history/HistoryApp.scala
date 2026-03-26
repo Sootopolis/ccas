@@ -293,7 +293,7 @@ object HistoryApp extends ZIOAppDefault {
       }
       all = dailyPending ++ livePending
       _ <- insertPendingMatches(all)
-      _ <- HistoryMemberQuery.insert(HistoryMemberQuery(clubId, playerId, Instant.now()))
+      _ <- HistoryMemberQuery.upsert(HistoryMemberQuery(clubId, playerId, Instant.now()))
     } yield all.size
 
   private def insertPendingMatches(items: Iterable[HistoryPendingMatch]): RIO[Transactor, Unit] =
@@ -412,7 +412,7 @@ object HistoryApp extends ZIOAppDefault {
       opponentClubId <- resolveClubIdFromTeamUrl(ctx, opponentTeam.`@id`)
       _ <- ZIO.whenDiscard(opponentClubId.isEmpty) {
         opponentTeam.`@id`.path.segments.lastOption match {
-          case Some(segment) => UnresolvedMatchClub.upsert(matchId, !weAreTeam1, ClubSlug.wrap(segment)).ignore
+          case Some(segment) => UnresolvedMatchClub.insert(matchId, !weAreTeam1, ClubSlug.wrap(segment)).ignore
           case None          => ZIO.unit
         }
       }
@@ -489,10 +489,10 @@ object HistoryApp extends ZIOAppDefault {
             t1Pid <- resolvePlayerId(ctx, t1Username, isOurTeam = weAreTeam1, matchStartTime)
             t2Pid <- resolvePlayerId(ctx, t2Username, isOurTeam = !weAreTeam1, matchStartTime)
             _ <- ZIO.whenDiscard(t1Pid.isEmpty)(
-              UnresolvedBoardPlayer.upsert(matchId, boardNum, isTeam1 = true, t1Username).ignore
+              UnresolvedBoardPlayer.insert(matchId, boardNum, isTeam1 = true, t1Username).ignore
             )
             _ <- ZIO.whenDiscard(t2Pid.isEmpty)(
-              UnresolvedBoardPlayer.upsert(matchId, boardNum, isTeam1 = false, t2Username).ignore
+              UnresolvedBoardPlayer.insert(matchId, boardNum, isTeam1 = false, t2Username).ignore
             )
           } yield {
             val (g1Winner, g1Detail) =

@@ -22,7 +22,7 @@ object UnresolvedMatchClub {
             )""".update.run()
     }
 
-  def upsert(matchId: ClubMatchId, isTeam1: Boolean, slug: ClubSlug): ZIO[Transactor, SQLException, Int] =
+  def insert(matchId: ClubMatchId, isTeam1: Boolean, slug: ClubSlug): ZIO[Transactor, SQLException, Int] =
     connectZIO {
       sql"""INSERT INTO unresolved_match_club (match_id, is_team1, slug, first_seen)
             VALUES ($matchId, $isTeam1, $slug, ${Instant.now()})

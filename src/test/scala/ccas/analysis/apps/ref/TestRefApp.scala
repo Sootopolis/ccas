@@ -720,8 +720,8 @@ object TestRefApp extends ZIOSpecDefault {
       for {
         _ <- seedDb
         // Pre-seed match refs
-        _ <- PlayerMatchRef.upsert(PlayerMatchRef(pid0, ClubMatchId.wrap(matchId1), isLive = false, true, 3))
-        _ <- ClubMatchRef.upsert(ClubMatchRef(clubId0, ClubMatchId.wrap(matchId1), isLive = false, true))
+        _ <- PlayerMatchRef.insert(PlayerMatchRef(pid0, ClubMatchId.wrap(matchId1), isLive = false, true, 3))
+        _ <- ClubMatchRef.insert(ClubMatchRef(clubId0, ClubMatchId.wrap(matchId1), isLive = false, true))
         // Provide no API responses — if populate tries to fetch, it would get empty/404
         client <- fakeChessComClient(
           Map(

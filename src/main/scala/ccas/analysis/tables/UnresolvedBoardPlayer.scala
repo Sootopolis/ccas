@@ -23,7 +23,7 @@ object UnresolvedBoardPlayer {
             )""".update.run()
     }
 
-  def upsert(matchId: ClubMatchId, board: Int, isTeam1: Boolean, username: Username): ZIO[Transactor, SQLException, Int] =
+  def insert(matchId: ClubMatchId, board: Int, isTeam1: Boolean, username: Username): ZIO[Transactor, SQLException, Int] =
     connectZIO {
       sql"""INSERT INTO unresolved_board_player (match_id, board, is_team1, username, first_seen)
             VALUES ($matchId, $board, $isTeam1, $username, ${Instant.now()})

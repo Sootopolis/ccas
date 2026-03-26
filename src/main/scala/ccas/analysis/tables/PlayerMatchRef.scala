@@ -35,19 +35,17 @@ object PlayerMatchRef {
   def selectId(playerId: PlayerId): ZIO[Transactor, SQLException, Option[PlayerMatchRef]] =
     connectZIO(repo.findById(playerId))
 
-  def upsert(ref: PlayerMatchRef): ZIO[Transactor, SQLException, Int] =
+  def insert(ref: PlayerMatchRef): ZIO[Transactor, SQLException, Int] =
     connectZIO {
       sql"""INSERT INTO player_match_ref (player_id, match_id, is_live, is_team1, board_idx)
-            VALUES (${ref.playerId}, ${ref.matchId}, ${ref.isLive}, ${ref.isTeam1}, ${ref.boardIdx})
-            ON CONFLICT (player_id) DO UPDATE SET match_id = EXCLUDED.match_id, is_live = EXCLUDED.is_live, is_team1 = EXCLUDED.is_team1, board_idx = EXCLUDED.board_idx""".update.run()
+            VALUES (${ref.playerId}, ${ref.matchId}, ${ref.isLive}, ${ref.isTeam1}, ${ref.boardIdx})""".update.run()
     }
 
-  def upsertBatch(refs: Iterable[PlayerMatchRef]): ZIO[Transactor, SQLException, BatchUpdateResult] =
+  def insertBatch(refs: Iterable[PlayerMatchRef]): ZIO[Transactor, SQLException, BatchUpdateResult] =
     transactZIO {
       batchUpdate(refs) { ref =>
         sql"""INSERT INTO player_match_ref (player_id, match_id, is_live, is_team1, board_idx)
-              VALUES (${ref.playerId}, ${ref.matchId}, ${ref.isLive}, ${ref.isTeam1}, ${ref.boardIdx})
-              ON CONFLICT (player_id) DO UPDATE SET match_id = EXCLUDED.match_id, is_live = EXCLUDED.is_live, is_team1 = EXCLUDED.is_team1, board_idx = EXCLUDED.board_idx""".update
+              VALUES (${ref.playerId}, ${ref.matchId}, ${ref.isLive}, ${ref.isTeam1}, ${ref.boardIdx})""".update
       }
     }
 

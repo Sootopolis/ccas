@@ -23,13 +23,13 @@ object TestClubMatchSql extends ZIOSpecDefault {
     testHistoryPendingMatchBatch,
     testHistoryPendingMatchSelectClubBatch,
     testHistoryPendingMatchDelete,
-    testHistoryMemberQueryInsert,
+    testHistoryMemberQueryUpsert,
     testHistoryMemberQueryDeleteClub,
     testHistoryRunInsertAndComplete,
-    testUnresolvedBoardPlayerUpsertAndSelect,
+    testUnresolvedBoardPlayerInsertAndSelect,
     testUnresolvedBoardPlayerDoNothing,
     testUnresolvedBoardPlayerDelete,
-    testUnresolvedMatchClubUpsertAndSelect,
+    testUnresolvedMatchClubInsertAndSelect,
     testUnresolvedMatchClubDoNothing,
     testUnresolvedMatchClubDelete
   ).provideShared(
@@ -277,13 +277,13 @@ object TestClubMatchSql extends ZIOSpecDefault {
 
   // --- HistoryMemberQuery tests ---
 
-  private def testHistoryMemberQueryInsert = test("HistoryMemberQuery insert and upsert") {
+  private def testHistoryMemberQueryUpsert = test("HistoryMemberQuery upsert") {
     for {
-      _   <- HistoryMemberQuery.insert(HistoryMemberQuery(clubA.clubId, player0.playerId, Times.t1))
-      _   <- HistoryMemberQuery.insert(HistoryMemberQuery(clubA.clubId, player1.playerId, Times.t1))
+      _   <- HistoryMemberQuery.upsert(HistoryMemberQuery(clubA.clubId, player0.playerId, Times.t1))
+      _   <- HistoryMemberQuery.upsert(HistoryMemberQuery(clubA.clubId, player1.playerId, Times.t1))
       ids <- HistoryMemberQuery.selectClubPlayerIds(clubA.clubId)
       // Upsert same player with new timestamp
-      _        <- HistoryMemberQuery.insert(HistoryMemberQuery(clubA.clubId, player0.playerId, Times.t2))
+      _        <- HistoryMemberQuery.upsert(HistoryMemberQuery(clubA.clubId, player0.playerId, Times.t2))
       idsAfter <- HistoryMemberQuery.selectClubPlayerIds(clubA.clubId)
     } yield assertTrue(
       ids == Set(player0.playerId, player1.playerId),
@@ -312,10 +312,10 @@ object TestClubMatchSql extends ZIOSpecDefault {
 
   // --- UnresolvedBoardPlayer tests ---
 
-  private def testUnresolvedBoardPlayerUpsertAndSelect = test("UnresolvedBoardPlayer upsert and selectAll") {
+  private def testUnresolvedBoardPlayerInsertAndSelect = test("UnresolvedBoardPlayer insert and selectAll") {
     for {
-      r1  <- UnresolvedBoardPlayer.upsert(ClubMatchId(1001), 1, isTeam1 = false, Username("opp1"))
-      r2  <- UnresolvedBoardPlayer.upsert(ClubMatchId(1001), 2, isTeam1 = true, Username("opp2"))
+      r1  <- UnresolvedBoardPlayer.insert(ClubMatchId(1001), 1, isTeam1 = false, Username("opp1"))
+      r2  <- UnresolvedBoardPlayer.insert(ClubMatchId(1001), 2, isTeam1 = true, Username("opp2"))
       all <- UnresolvedBoardPlayer.selectAll
     } yield assertTrue(
       r1 == 1,
@@ -328,7 +328,7 @@ object TestClubMatchSql extends ZIOSpecDefault {
 
   private def testUnresolvedBoardPlayerDoNothing = test("UnresolvedBoardPlayer ON CONFLICT DO NOTHING") {
     for {
-      r <- UnresolvedBoardPlayer.upsert(ClubMatchId(1001), 1, isTeam1 = false, Username("opp1-updated"))
+      r <- UnresolvedBoardPlayer.insert(ClubMatchId(1001), 1, isTeam1 = false, Username("opp1-updated"))
     } yield assertTrue(r == 0)
   }
 
@@ -345,9 +345,9 @@ object TestClubMatchSql extends ZIOSpecDefault {
 
   // --- UnresolvedMatchClub tests ---
 
-  private def testUnresolvedMatchClubUpsertAndSelect = test("UnresolvedMatchClub upsert and selectAll") {
+  private def testUnresolvedMatchClubInsertAndSelect = test("UnresolvedMatchClub insert and selectAll") {
     for {
-      r1  <- UnresolvedMatchClub.upsert(ClubMatchId(1001), isTeam1 = false, ClubSlug("unknown-club"))
+      r1  <- UnresolvedMatchClub.insert(ClubMatchId(1001), isTeam1 = false, ClubSlug("unknown-club"))
       all <- UnresolvedMatchClub.selectAll
     } yield assertTrue(
       r1 == 1,
@@ -358,7 +358,7 @@ object TestClubMatchSql extends ZIOSpecDefault {
 
   private def testUnresolvedMatchClubDoNothing = test("UnresolvedMatchClub ON CONFLICT DO NOTHING") {
     for {
-      r <- UnresolvedMatchClub.upsert(ClubMatchId(1001), isTeam1 = false, ClubSlug("different-slug"))
+      r <- UnresolvedMatchClub.insert(ClubMatchId(1001), isTeam1 = false, ClubSlug("different-slug"))
     } yield assertTrue(r == 0)
   }
 
