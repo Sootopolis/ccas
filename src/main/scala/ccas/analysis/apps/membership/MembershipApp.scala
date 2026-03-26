@@ -8,13 +8,13 @@ import ccas.api.misc.enums.PlayerStatusCategory
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username}
 import ccas.api.player.{ApiPlayer, ApiPlayerClubs}
 import ccas.api.tournament.ApiTournament
-import ccas.utils.{OutputFile, ProgressBar}
+import ccas.utils.{CcasLogger, OutputFile}
 import ccas.utils.client.ChessComClient
 import ccas.utils.errors.ExternalException
 import ccas.utils.sql.DataSourceLayer
 import com.augustnagro.magnum.Transactor
 import zio.http.Client
-import zio.{Chunk, RIO, Ref, Scope, Task, UIO, ZIO, ZIOAppArgs, ZIOAppDefault}
+import zio.{Chunk, RIO, Ref, Scope, Task, UIO, URIO, ZIO, ZIOAppArgs, ZIOAppDefault}
 
 import java.time.{Instant, Duration as JDuration}
 import scala.annotation.nowarn
@@ -66,12 +66,13 @@ object MembershipApp extends ZIOAppDefault {
           }
       }
     } yield ()).provideSomeAuto(
+      CcasLogger.live(showProgress = true),
       ChessComClient.live(),
       Client.default,
       DataSourceLayer.liveFromPrefix(onInit = Tables.ensureTables)
     )
 
-  private def reconcileIfStale(clubSlug: ClubSlug, until: Instant): RIO[ChessComClient & Transactor, Unit] =
+  private def reconcileIfStale(clubSlug: ClubSlug, until: Instant): RIO[CcasLogger & ChessComClient & Transactor, Unit] =
     for {
       clubOpt <- Club.selectBySlug(clubSlug)
       _ <- ZIO.fromOption(clubOpt).flatMap { club =>
@@ -89,7 +90,7 @@ object MembershipApp extends ZIOAppDefault {
     trustUsernames: Boolean = true,
     trackRun: Boolean = true,
     trigger: RunTrigger = RunTrigger.Cli
-  ): RIO[ChessComClient & Transactor, ReconciliationResult] =
+  ): RIO[CcasLogger & ChessComClient & Transactor, ReconciliationResult] =
     for {
       startedAt <- ZIO.succeed(Instant.now())
       client    <- ZIO.service[ChessComClient]
@@ -144,12 +145,12 @@ object MembershipApp extends ZIOAppDefault {
     dbState: DbState,
     now: Instant,
     trustUsernames: Boolean = true
-  ): RIO[Transactor, PhaseBResult] = {
+  ): RIO[CcasLogger & Transactor, PhaseBResult] = {
     val total   = apiMap.size
     val initial = PhaseBResult(Set.empty, Chunk.empty, Chunk.empty, Chunk.empty, Chunk.empty, Chunk.empty)
     ZIO.scoped {
       for {
-        bar     <- ProgressBar.scoped
+        bar     <- CcasLogger.progressBar
         counter <- Ref.make(0)
         result <- ZIO.foldLeft(apiMap.toList)(initial) { case (acc, (username, joinedEpoch)) =>
           counter.updateAndGet(_ + 1).flatMap(n =>
@@ -315,14 +316,14 @@ object MembershipApp extends ZIOAppDefault {
     apiMap: Map[Username, Long],
     clubSlug: ClubSlug,
     now: Instant
-  ): RIO[Transactor, PhaseCResult] = {
+  ): RIO[CcasLogger & Transactor, PhaseCResult] = {
     val disappearedList = dbState.membersByPlayerId.values.filterNot(s => resolvedIds.contains(s.player.playerId)).toList
     val total           = disappearedList.size
     val initial         = PhaseCResult(Chunk.empty, Chunk.empty, Chunk.empty)
 
     ZIO.scoped {
       for {
-        bar     <- ProgressBar.scoped
+        bar     <- CcasLogger.progressBar
         counter <- Ref.make(0)
         result <- ZIO.foldLeft(disappearedList)(initial) { case (acc, state) =>
           counter.updateAndGet(_ + 1).flatMap(n =>
@@ -577,27 +578,27 @@ object MembershipApp extends ZIOAppDefault {
 
   // --- Reporting ---
 
-  private def reportReconciliation(result: ReconciliationResult): UIO[Unit] = {
+  private def reportReconciliation(result: ReconciliationResult): URIO[CcasLogger, Unit] = {
     val delta    = result.currentMemberCount - result.previousMemberCount
     val sign     = if (delta >= 0) "+" else ""
     val duration = JDuration.between(result.startedAt, result.completedAt)
     for {
-      _ <- ZIO.logInfo(s"=== Reconciliation Complete ===")
-      _ <- ZIO.logInfo(s"Duration:           ${duration.toMinutes}m ${duration.toSecondsPart}s")
-      _ <- ZIO.logInfo(s"Total members:      ${result.currentMemberCount} ($sign$delta)")
-      _ <- ZIO.logInfo(s"New players:        ${result.newPlayers.size}")
-      _ <- ZIO.logInfo(s"New snapshots:      ${result.newSnapshots.size}")
-      _ <- ZIO.logInfo(s"New memberships:    ${result.newMemberships.size}")
-      _ <- ZIO.logInfo(s"Closed memberships: ${result.closedMemberships.size}")
-      _ <- ZIO.logInfo("")
+      _ <- CcasLogger.info(s"=== Reconciliation Complete ===")
+      _ <- CcasLogger.info(s"Duration:           ${duration.toMinutes}m ${duration.toSecondsPart}s")
+      _ <- CcasLogger.info(s"Total members:      ${result.currentMemberCount} ($sign$delta)")
+      _ <- CcasLogger.info(s"New players:        ${result.newPlayers.size}")
+      _ <- CcasLogger.info(s"New snapshots:      ${result.newSnapshots.size}")
+      _ <- CcasLogger.info(s"New memberships:    ${result.newMemberships.size}")
+      _ <- CcasLogger.info(s"Closed memberships: ${result.closedMemberships.size}")
+      _ <- CcasLogger.info("")
       _ <- ZIO.foreachDiscard(result.changes)(printChangeSummary)
     } yield ()
   }
 
-  private def printChangeSummary(summary: MemberChangeSummary): UIO[Unit] =
+  private def printChangeSummary(summary: MemberChangeSummary): URIO[CcasLogger, Unit] =
     for {
-      _ <- ZIO.logInfo(s"${summary.username}:")
-      _ <- ZIO.foreachDiscard(summary.changes)(change => ZIO.logInfo(s"  ${formatChange(change)}"))
+      _ <- CcasLogger.info(s"${summary.username}:")
+      _ <- ZIO.foreachDiscard(summary.changes)(change => CcasLogger.info(s"  ${formatChange(change)}"))
     } yield ()
 
   private def formatChange(change: MemberChange): String = change match {
@@ -656,7 +657,7 @@ object MembershipApp extends ZIOAppDefault {
     memberCountAtEnd: Int
   )
 
-  private def report(clubSlug: ClubSlug, since: Instant, until: Instant): RIO[Transactor, ReportResult] =
+  private def report(clubSlug: ClubSlug, since: Instant, until: Instant): RIO[CcasLogger & Transactor, ReportResult] =
     for {
       club <- Club.selectBySlug(clubSlug)
         .someOrFail(ExternalException(s"Club '$clubSlug' not found in database"))
@@ -666,8 +667,8 @@ object MembershipApp extends ZIOAppDefault {
       summaries    = classifyFromDb(clubId, members, snaps, since, until)
       countAtStart = members.count(m => !m.since.isAfter(since) && m.until.forall(_.isAfter(since)))
       countAtEnd   = members.count(m => !m.since.isAfter(until) && m.until.forall(_.isAfter(until)))
-      _ <- ZIO.logInfo(s"=== Report for $clubSlug from $since to $until ===")
-      _ <- ZIO.logInfo(s"Members: $countAtStart -> $countAtEnd")
+      _ <- CcasLogger.info(s"=== Report for $clubSlug from $since to $until ===")
+      _ <- CcasLogger.info(s"Members: $countAtStart -> $countAtEnd")
       _ <- ZIO.foreachDiscard(summaries)(printChangeSummary)
     } yield ReportResult(summaries, countAtStart, countAtEnd)
 

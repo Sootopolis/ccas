@@ -11,6 +11,7 @@ import ccas.analysis.tables.RunTrigger
 import ccas.api.misc.subtypes.ClubSlug
 import ccas.server.jobs.*
 import ccas.server.ServerTables
+import ccas.utils.CcasLogger
 import ccas.utils.client.ChessComClient
 import ccas.utils.sql.FreshSchemaLayer
 import ccas.utils.sql.SqlZioTypes.connectZIO
@@ -43,7 +44,7 @@ object TestRoutes extends ZIOSpecDefault {
       clubSlug: Option[ClubSlug],
       params: Option[String],
       trigger: RunTrigger,
-      effect: RIO[ChessComClient & Transactor, Any]
+      effect: RIO[CcasLogger & ChessComClient & Transactor, Any]
     ): RIO[Transactor, JobRunId] =
       nextAction.get.flatMap {
         case Action.Succeed =>

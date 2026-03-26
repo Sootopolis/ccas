@@ -11,6 +11,7 @@ import ccas.analysis.tables.*
 import ccas.api.club.{ApiClub, ApiClubMatches, ApiClubMembers}
 import ccas.api.misc.subtypes.{ClubSlug, PlayerId, Username}
 import ccas.api.player.ApiPlayer
+import ccas.utils.CcasLogger
 import ccas.utils.client.ChessComClient
 import ccas.utils.errors.ExternalException
 import ccas.utils.sql.DataSourceLayer
@@ -59,7 +60,7 @@ object RecruitmentApp extends ZIOAppDefault {
             cumulative = cumulative,
             sourceClubs = sourceClubs,
             explore = sourceClubs.isEmpty || !focus,
-            showProgress = true
+            showHints = true
           ).flatMap { run =>
             for {
               candidates <-
@@ -70,12 +71,12 @@ object RecruitmentApp extends ZIOAppDefault {
                   .map(_.fold(Username.wrap(s"[pid=${c.playerId}]"))(_.username))
               )
               evaluatedCount <- RecruitmentCandidate.selectCountByRun(run.runId)
-              _ <- OutputFile.write("recruitment", clubSlug, formatRecruitmentOutput(usernames, evaluatedCount, run.startedAt, run.completedAt.getOrElse(Instant.now())))
-                .flatMap(path => ZIO.logInfo(s"Output written to $path"))
+              _ <- OutputFile.writeAndLog("recruitment", clubSlug, formatRecruitmentOutput(usernames, evaluatedCount, run.startedAt, run.completedAt.getOrElse(Instant.now())))
             } yield ()
           }
         case _ => ZIO.fail(ExternalException(help))
-      }).provide(
+      }).provideSome[Scope](
+        CcasLogger.live(showProgress = true),
         ChessComClient.live(),
         Client.default,
         DataSourceLayer.liveFromPrefix(onInit = Tables.ensureTables)
@@ -92,12 +93,13 @@ object RecruitmentApp extends ZIOAppDefault {
     sourceClubs: List[ClubSlug] = Nil,
     timeLimitMinutes: Option[Int] = None,
     explore: Boolean = true,
-    showProgress: Boolean = false,
+    showHints: Boolean = false,
     trigger: RunTrigger = RunTrigger.Cli
-  ): RIO[ChessComClient & Transactor, RecruitmentRun] = ZIO.scoped {
+  ): RIO[CcasLogger & ChessComClient & Transactor, RecruitmentRun] = ZIO.scoped {
     for {
       _       <- MembershipApp.reconcile(clubSlug, trackRun = false)
       client  <- ZIO.service[ChessComClient]
+      logger  <- ZIO.service[CcasLogger]
       apiClub <- ApiClub.get(client, clubSlug)
       clubId = apiClub.clubId
       club   = Club(clubId, Instant.ofEpochSecond(apiClub.created), clubSlug)
@@ -148,7 +150,7 @@ object RecruitmentApp extends ZIOAppDefault {
       filters              = RecruitmentFilters.buildFilterChain(criteria)
       effectiveConcurrency = DefaultExploreConcurrency
 
-      progressBar <- ccas.utils.ProgressBar.scoped
+      progressBar <- CcasLogger.progressBar
       ctx = ExploreContext(
         runId = runId,
         clubSlug = clubSlug,
@@ -162,7 +164,7 @@ object RecruitmentApp extends ZIOAppDefault {
         exploreConcurrency = effectiveConcurrency,
         evalChunkSize = DefaultEvalChunkSize,
         explore = explore,
-        showProgress = showProgress,
+        showHints = showHints,
         progressBar = progressBar
       )
 
@@ -170,7 +172,7 @@ object RecruitmentApp extends ZIOAppDefault {
 
       finalizeRun = (label: String) =>
         for {
-          _             <- ZIO.whenDiscard(showProgress)(progressBar.finish)
+          _             <- progressBar.finish
           _             <- RecruitmentExplore.reclassifyExcessInvited(ctx)
           invited       <- invitedRef.get.map(_.reverse)
           evalCount     <- evalCountRef.get
@@ -179,12 +181,12 @@ object RecruitmentApp extends ZIOAppDefault {
           duration    = JDuration.between(now, completedAt)
           finalRun    = RecruitmentRun(runId, clubId, criteria.criteriaId, trigger, now, Some(completedAt), invited.size)
           _ <- RecruitmentRun.update(finalRun)
-          _ <- ZIO.logInfo(s"=== $label ===")
-          _ <- ZIO.logInfo(s"Duration: ${duration.toMinutes}m ${duration.toSecondsPart}s")
-          _ <- ZIO.logInfo(s"Candidates evaluated: $evalCount")
-          _ <- ZIO.logInfo(s"Invited: ${invited.size}")
-          _ <- ZIO.whenDiscard(deferredCount > 0)(ZIO.logInfo(s"Deferred: $deferredCount"))
-          _ <- ZIO.foreachDiscard(invited)(u => ZIO.logInfo(s"  $u"))
+          _ <- CcasLogger.info(s"=== $label ===")
+          _ <- CcasLogger.info(s"Duration: ${duration.toMinutes}m ${duration.toSecondsPart}s")
+          _ <- CcasLogger.info(s"Candidates evaluated: $evalCount")
+          _ <- CcasLogger.info(s"Invited: ${invited.size}")
+          _ <- ZIO.whenDiscard(deferredCount > 0)(CcasLogger.info(s"Deferred: $deferredCount"))
+          _ <- ZIO.foreachDiscard(invited)(u => CcasLogger.info(s"  $u"))
           // Cumulative summary: show today's total across all runs
           _ <- ZIO.whenDiscard(cumulative && alreadyFound > 0) {
             for {
@@ -194,24 +196,24 @@ object RecruitmentApp extends ZIOAppDefault {
                   .map(_.fold(Username.wrap(s"[pid=${c.playerId}]"))(_.username))
               )
               allToday = earlierUsernames ++ invited
-              _ <- ZIO.logInfo(s"=== Today's Total: ${allToday.size} ===")
-              _ <- ZIO.foreachDiscard(allToday)(u => ZIO.logInfo(s"  $u"))
+              _ <- CcasLogger.info(s"=== Today's Total: ${allToday.size} ===")
+              _ <- ZIO.foreachDiscard(allToday)(u => CcasLogger.info(s"  $u"))
             } yield ()
           }
         } yield finalRun
 
       _ <- ZIO.whenDiscard(cumulative && alreadyFound > 0)(
-        ZIO.logInfo(s"[Cumulative] Already found $alreadyFound today, effective target: $effectiveTarget")
+        CcasLogger.info(s"[Cumulative] Already found $alreadyFound today, effective target: $effectiveTarget")
       )
 
       finalRun <-
         if (effectiveTarget == 0) {
-          ZIO.logInfo("[Cumulative] Target already met, skipping explore") *>
+          CcasLogger.info("[Cumulative] Target already met, skipping explore") *>
             finalizeRun("Recruitment Complete (target already met)")
         } else {
           for {
-            _ <- ZIO.whenDiscard(showProgress)(
-              ZIO.logInfo("[Hint] Press Ctrl+C to stop gracefully (candidates found so far will be listed)")
+            _ <- ZIO.whenDiscard(showHints)(
+              CcasLogger.info("[Hint] Press Ctrl+C to stop gracefully (candidates found so far will be listed)")
             )
 
             // --- Load deferred candidates from prior runs as a priority source ---
@@ -220,7 +222,7 @@ object RecruitmentApp extends ZIOAppDefault {
               PlayerSnapshot.selectIdLatest(c.playerId).map(_.map(_.username))
             ).map(_.flatten.filterNot(existingUsernames))
             _ <- ZIO.whenDiscard(deferredUsernames.nonEmpty)(
-              ZIO.logInfo(s"[Deferred] Found ${deferredUsernames.size} deferred candidates from prior runs")
+              CcasLogger.info(s"[Deferred] Found ${deferredUsernames.size} deferred candidates from prior runs")
             )
 
             // --- Build initial sources from provided source clubs ---
@@ -230,7 +232,7 @@ object RecruitmentApp extends ZIOAppDefault {
             initialSources = deferredSource.toList ++ sourceClubs.map(ClubSource(_))
 
             // --- Build static strategy list (only used when explore == true) ---
-            staticStrategies: List[RIO[Transactor, List[SourceDescriptor]]] =
+            staticStrategies: List[RIO[CcasLogger & Transactor, List[SourceDescriptor]]] =
               if (!explore) Nil
               else
                 List(
@@ -254,7 +256,7 @@ object RecruitmentApp extends ZIOAppDefault {
               case None          => loopEffect.unit
             }).onInterrupt(
               finalizeRun("Recruitment Interrupted")
-                .provideEnvironment(ZEnvironment(transactor))
+                .provideEnvironment(ZEnvironment(logger, transactor))
                 .orDie
             )
 
@@ -281,7 +283,7 @@ object RecruitmentApp extends ZIOAppDefault {
     s"$timing$stats\n\n$header\n\n$detail\n"
   }
 
-  def showReport(clubSlug: ClubSlug, runIdOpt: Option[String]): RIO[Transactor, (List[Username], Int, RecruitmentRun)] =
+  def showReport(clubSlug: ClubSlug, runIdOpt: Option[String]): RIO[CcasLogger & Transactor, (List[Username], Int, RecruitmentRun)] =
     for {
       club <- Club.selectBySlug(clubSlug)
         .someOrFail(ExternalException(s"Club '$clubSlug' not found in database"))
@@ -298,18 +300,18 @@ object RecruitmentApp extends ZIOAppDefault {
       }
       invited        <- RecruitmentCandidate.selectInvitedByRun(run.runId)
       evaluatedCount <- RecruitmentCandidate.selectCountByRun(run.runId)
-      _              <- ZIO.logInfo(s"=== Recruitment Report for $clubSlug (run ${run.runId}) ===")
-      _              <- ZIO.logInfo(s"Started: ${run.startedAt}")
-      _              <- ZIO.logInfo(s"Completed: ${run.completedAt.getOrElse("in progress")}")
-      _              <- ZIO.logInfo(s"Evaluated: $evaluatedCount | Invited: ${invited.size}")
+      _              <- CcasLogger.info(s"=== Recruitment Report for $clubSlug (run ${run.runId}) ===")
+      _              <- CcasLogger.info(s"Started: ${run.startedAt}")
+      _              <- CcasLogger.info(s"Completed: ${run.completedAt.getOrElse("in progress")}")
+      _              <- CcasLogger.info(s"Evaluated: $evaluatedCount | Invited: ${invited.size}")
       usernames <- ZIO.foreach(invited) { c =>
         PlayerSnapshot.selectIdLatest(c.playerId)
           .map(_.fold(Username.wrap(s"[pid=${c.playerId}]"))(_.username))
       }
-      _ <- ZIO.logInfo(usernames.mkString(" "))
-      _ <- ZIO.logInfo("")
+      _ <- CcasLogger.info(usernames.mkString(" "))
+      _ <- CcasLogger.info("")
       _ <- ZIO.foreachDiscard(usernames) { name =>
-        ZIO.logInfo(ApiPlayer.getProfileUrl(name).toString)
+        CcasLogger.info(ApiPlayer.getProfileUrl(name).toString)
       }
     } yield (usernames, evaluatedCount, run)
 }

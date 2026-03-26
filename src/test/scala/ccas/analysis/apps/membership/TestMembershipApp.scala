@@ -12,6 +12,7 @@ import ccas.analysis.apps.membership.MembershipChange.*
 import ccas.analysis.tables.{Club, ClubMember, Player, PlayerSnapshot, Tables}
 import ccas.api.misc.enums.PlayerStatusCategory.{Active, Closed}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
+import ccas.utils.CcasLogger
 import ccas.utils.client.ChessComClient
 import ccas.utils.sql.{FreshSchemaLayer, SqlZioTypes}
 
@@ -139,7 +140,9 @@ object TestMembershipApp extends ZIOSpecDefault {
     suiteClassifyApiMembers,
     suiteClassifyDisappeared
   ).provideShared(
-    FreshSchemaLayer("test_membership_app", onInit = Tables.ensureTables)
+    FreshSchemaLayer("test_membership_app", onInit = Tables.ensureTables),
+    Scope.default,
+    CcasLogger.live(showProgress = false)
   ) @@ TestAspect.sequential
 
   // ==========================================================================

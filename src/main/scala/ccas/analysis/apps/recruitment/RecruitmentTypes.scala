@@ -110,7 +110,7 @@ private[recruitment] case class ExploreContext(
   exploreConcurrency: Int,
   evalChunkSize: Int,
   explore: Boolean,
-  showProgress: Boolean,
+  showHints: Boolean,
   progressBar: ProgressBar
 )
 

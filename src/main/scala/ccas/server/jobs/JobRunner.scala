@@ -1,12 +1,11 @@
 package ccas.server.jobs
 
 import java.time.Instant
-
 import com.augustnagro.magnum.Transactor
-import zio.{Fiber, RIO, Ref, UIO, ZIO, ZLayer}
-
+import zio.{Fiber, RIO, RLayer, Ref, UIO, ZIO, ZLayer}
 import ccas.analysis.tables.RunTrigger
 import ccas.api.misc.subtypes.ClubSlug
+import ccas.utils.CcasLogger
 import ccas.utils.client.ChessComClient
 import ccas.utils.errors.safeMessage
 
@@ -16,7 +15,7 @@ trait JobRunner {
     clubSlug: Option[ClubSlug],
     params: Option[String],
     trigger: RunTrigger,
-    effect: RIO[ChessComClient & Transactor, Any]
+    effect: RIO[CcasLogger & ChessComClient & Transactor, Any]
   ): RIO[Transactor, JobRunId]
 
   def status(id: JobRunId): RIO[Transactor, Option[JobRun]]
@@ -26,29 +25,30 @@ trait JobRunner {
 
 object JobRunner {
 
-  val live: ZLayer[ChessComClient & Transactor, Throwable, JobRunner] =
+  val live: RLayer[CcasLogger & ChessComClient & Transactor, JobRunner] =
     ZLayer.scoped {
       for {
+        logger <- ZIO.service[CcasLogger]
         client <- ZIO.service[ChessComClient]
         xa     <- ZIO.service[Transactor]
         fibers <- Ref.make(Set.empty[Fiber.Runtime[Nothing, Unit]])
         _      <- JobRun.markOrphansAsFailed.provideEnvironment(zio.ZEnvironment(xa))
-        runner = new JobRunnerLive(client, xa, fibers)
+        runner = new JobRunnerLive(logger, client, xa, fibers)
         _ <- ZIO.addFinalizer(runner.awaitAll)
       } yield runner
     }
 
-  private class JobRunnerLive(client: ChessComClient, xa: Transactor, fibers: Ref[Set[Fiber.Runtime[Nothing, Unit]]])
+  private class JobRunnerLive(logger: CcasLogger, client: ChessComClient, xa: Transactor, fibers: Ref[Set[Fiber.Runtime[Nothing, Unit]]])
       extends JobRunner {
 
-    private val env = zio.ZEnvironment(client, xa)
+    private val env = zio.ZEnvironment(logger, client, xa)
 
     override def submit(
       kind: JobKind,
       clubSlug: Option[ClubSlug],
       params: Option[String],
       trigger: RunTrigger,
-      effect: RIO[ChessComClient & Transactor, Any]
+      effect: RIO[CcasLogger & ChessComClient & Transactor, Any]
     ): RIO[Transactor, JobRunId] =
       for {
         existing <- JobRun.selectRunning(kind, clubSlug)
@@ -71,7 +71,7 @@ object JobRunner {
     private def runJob(
       id: JobRunId,
       kind: JobKind,
-      effect: RIO[ChessComClient & Transactor, Any]
+      effect: RIO[CcasLogger & ChessComClient & Transactor, Any]
     ): UIO[Unit] =
       def onFailure(error: Throwable): UIO[Unit] = {
         val msg = error.safeMessage

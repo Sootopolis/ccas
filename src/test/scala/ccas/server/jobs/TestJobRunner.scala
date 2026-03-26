@@ -8,6 +8,7 @@ import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 import ccas.analysis.tables.RunTrigger
 import ccas.api.misc.subtypes.ClubSlug
 import ccas.server.ServerTables
+import ccas.utils.CcasLogger
 import ccas.utils.client.ChessComClient
 import ccas.utils.sql.FreshSchemaLayer
 import ccas.utils.sql.SqlZioTypes.connectZIO
@@ -25,7 +26,9 @@ object TestJobRunner extends ZIOSpecDefault {
   ).provideShared(
     FreshSchemaLayer("test_job_runner", onInit = ServerTables.ensureTables),
     dummyChessComClientLayer,
-    JobRunner.live
+    JobRunner.live,
+    Scope.default,
+    CcasLogger.live(showProgress = false)
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock @@ TestAspect.timeout(30.seconds)
 
   private val deleteAllJobRuns = connectZIO { val _ = sql"DELETE FROM job_run".update.run() }

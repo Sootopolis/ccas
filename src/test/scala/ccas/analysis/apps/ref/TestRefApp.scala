@@ -9,6 +9,7 @@ import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.analysis.tables.*
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, TournamentSlug, Username}
+import ccas.utils.CcasLogger
 import ccas.utils.client.ChessComClient
 import ccas.utils.sql.{FreshSchemaLayer, SqlZioTypes}
 
@@ -250,8 +251,8 @@ object TestRefApp extends ZIOSpecDefault {
       _ <- Club.upsert(Club(clubId1, t0, clubSlug1))
     } yield ()
 
-  private def runPopulate(client: ChessComClient): RIO[Transactor, Unit] =
-    RefApp.populate().provideSomeLayer(ZLayer.succeed(client))
+  private def runPopulate(client: ChessComClient): RIO[Scope & Transactor, Unit] =
+    RefApp.populate(outputDir = "_test").provideSomeLayer(ZLayer.succeed(client) ++ CcasLogger.live(showProgress = false))
 
   // --- Spec ---
 
@@ -262,7 +263,8 @@ object TestRefApp extends ZIOSpecDefault {
     suiteIteration,
     suiteFullPopulate
   ).provideShared(
-    FreshSchemaLayer("test_match_ref_app", onInit = Tables.ensureTables)
+    FreshSchemaLayer("test_match_ref_app", onInit = Tables.ensureTables),
+    Scope.default
   ) @@ TestAspect.sequential
 
   // ==========================================================================
