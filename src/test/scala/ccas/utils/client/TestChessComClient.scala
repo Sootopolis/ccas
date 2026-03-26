@@ -110,7 +110,7 @@ object TestChessComClient extends ZIOSpecDefault {
         throttledAfter <- throttled.get
       } yield assertTrue(throttledBefore, !throttledAfter)
     },
-    test("exhausted retries surface RateLimitedException") {
+    test("exhausted retries surface HttpStatusException") {
       for {
         (client, _) <- makeClient(_ => ZIO.succeed(Response(status = Status.TooManyRequests)))
         exit        <- client.get[Payload](testUrl).exit

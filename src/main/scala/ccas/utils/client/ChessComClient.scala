@@ -29,11 +29,9 @@ final class ChessComClient(
 
   private def rawGet[T](url: URL)(using jsonDecoder: JsonDecoder[T]): Task[T] = for {
     response <- batchedClient(Request(method = GET, url = url).addHeaders(headers))
-    _ <- ZIO.whenDiscard(response.status == Status.TooManyRequests)(
-      activateThrottle *> ZIO.fail(RateLimitedException(url))
-    )
+    _ <- ZIO.whenDiscard(response.status == Status.TooManyRequests)(activateThrottle)
     _ <- ZIO.whenDiscard(!response.status.isSuccess)(
-      ZIO.fail(ExternalException(s"HTTP ${response.status.code} for $url"))
+      ZIO.fail(HttpStatusException(response.status.code, url))
     )
     string <- response.body.asString
     value  <- ZIO.fromEither(jsonDecoder.decodeJson(string)).mapError(JsonDecodingException(_))
@@ -67,8 +65,8 @@ final class ChessComClient(
 
   private val retrySchedule: Schedule[Any, Throwable, Any] =
     Schedule.exponential(retryBase) && Schedule.recurs(4) && Schedule.recurWhile[Throwable] {
-      case _: RateLimitedException => true
-      case _                       => false
+      case e: HttpStatusException => e.statusCode == 429 || e.statusCode == 403
+      case _                      => false
     }
 }
 
