@@ -873,12 +873,12 @@ object HistoryApp extends ZIOAppDefault {
       _ <- CcasLogger.info("=== History Discovery Complete ===")
       _ <- CcasLogger.info(s"Duration: ${duration.toMinutes}m ${duration.toSecondsPart}s")
       _ <- CcasLogger.info(
-        s"Members queried: ${stats.membersQueried} / skipped: ${stats.membersSkipped} / failed: ${stats.membersFailed}"
+        s"Members queried: ${stats.membersQueried} | skipped: ${stats.membersSkipped} | failed: ${stats.membersFailed}"
       )
       _ <- CcasLogger.info(s"Matches seeded: ${stats.matchesSeeded}")
-      _ <- CcasLogger.info(s"Matches processed: ${stats.matchesProcessed} / failed: ${stats.matchesFailed}")
+      _ <- CcasLogger.info(s"Matches processed: ${stats.matchesProcessed} | failed: ${stats.matchesFailed}")
       _ <- CcasLogger.info(
-        s"Players discovered: ${stats.playersDiscovered} / known: ${stats.playersKnown} / failed: ${stats.playersFailed}"
+        s"Players discovered: ${stats.playersDiscovered} | known: ${stats.playersKnown} | failed: ${stats.playersFailed}"
       )
       _ <- CcasLogger.info(s"Waves: ${stats.waveCount}")
       _ <- CcasLogger.info(s"Pending remaining: ${stats.pendingRemaining}")
