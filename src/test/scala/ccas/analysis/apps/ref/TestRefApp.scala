@@ -272,7 +272,7 @@ object TestRefApp extends ZIOSpecDefault {
   ).provideShared(
     FreshSchemaLayer("test_match_ref_app", onInit = Tables.ensureTables),
     Scope.default
-  ) @@ TestAspect.sequential
+  ) @@ TestAspect.sequential @@ TestAspect.withLiveClock
 
   // ==========================================================================
   // Suite: player resolution
