@@ -23,6 +23,10 @@ object TestClubMatchSql extends ZIOSpecDefault {
     testHistoryPendingMatchBatch,
     testHistoryPendingMatchSelectClubBatch,
     testHistoryPendingMatchDelete,
+    testHistoryPendingMatchUpdateStatus,
+    testHistoryPendingMatchCountNew,
+    testHistoryPendingMatchSelectClubBatchFiltersStatus,
+    testHistoryPendingMatchResetStatuses,
     testHistoryMemberQueryUpsert,
     testHistoryMemberQueryDeleteClub,
     testHistoryRunInsertAndComplete,
@@ -232,7 +236,7 @@ object TestClubMatchSql extends ZIOSpecDefault {
     } yield assertTrue(
       r1 == 1,
       r2 == 0,
-      ids == List(HistoryPendingMatch(clubA.clubId, ClubMatchId(2001), isLive = false))
+      ids == List(HistoryPendingMatch(clubA.clubId, ClubMatchId(2001), isLive = false, PendingMatchStatus.New))
     )
   }
 
@@ -272,6 +276,53 @@ object TestClubMatchSql extends ZIOSpecDefault {
     } yield assertTrue(
       deleted == 1,
       remaining == 2L
+    )
+  }
+
+  // After the delete test, 2 entries remain: matchId 2002 and 2003, both New.
+
+  private def testHistoryPendingMatchUpdateStatus = test("HistoryPendingMatch updateStatus") {
+    for {
+      updated <- HistoryPendingMatch.updateStatus(clubA.clubId, ClubMatchId(2002), isLive = false, PendingMatchStatus.ApiError)
+      entries <- HistoryPendingMatch.selectClub(clubA.clubId)
+      statuses = entries.map(e => (e.matchId, e.status)).toMap
+    } yield assertTrue(
+      updated == 1,
+      statuses(ClubMatchId(2002)) == PendingMatchStatus.ApiError,
+      statuses(ClubMatchId(2003)) == PendingMatchStatus.New
+    )
+  }
+
+  private def testHistoryPendingMatchCountNew = test("HistoryPendingMatch countNew excludes non-New") {
+    for {
+      total  <- HistoryPendingMatch.count(clubA.clubId)
+      newOnly <- HistoryPendingMatch.countNew(clubA.clubId)
+    } yield assertTrue(
+      total == 2L,
+      newOnly == 1L // only 2003 is New; 2002 is ApiError
+    )
+  }
+
+  private def testHistoryPendingMatchSelectClubBatchFiltersStatus =
+    test("HistoryPendingMatch selectClubBatch only returns New") {
+      for {
+        batch <- HistoryPendingMatch.selectClubBatch(clubA.clubId, 10)
+      } yield assertTrue(
+        batch.size == 1,
+        batch.head.matchId == ClubMatchId(2003)
+      )
+    }
+
+  private def testHistoryPendingMatchResetStatuses = test("HistoryPendingMatch resetStatuses resets all to New") {
+    for {
+      _ <- HistoryPendingMatch.updateStatus(clubA.clubId, ClubMatchId(2003), isLive = false, PendingMatchStatus.Unidentified)
+      beforeNew <- HistoryPendingMatch.countNew(clubA.clubId)
+      reset     <- HistoryPendingMatch.resetStatuses(clubA.clubId)
+      afterNew  <- HistoryPendingMatch.countNew(clubA.clubId)
+    } yield assertTrue(
+      beforeNew == 0L, // both 2002=ApiError, 2003=Unidentified
+      reset == 2,
+      afterNew == 2L
     )
   }
 

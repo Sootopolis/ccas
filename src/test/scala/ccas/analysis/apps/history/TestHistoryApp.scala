@@ -14,11 +14,8 @@ import ccas.api.player.ApiPlayerMatches.ApiPlayerMatch
 object TestHistoryApp extends ZIOSpecDefault {
   override def spec: Spec[Any, Throwable] = suite("TestHistoryApp")(
     testClubMatchIdFromUrl,
-    testFindOurTeamTeam1,
-    testFindOurTeamTeam2,
-    testFindOurTeamNotFound,
     testBuildClubMatchRowFinished,
-    testBuildClubMatchRowTeam2IsOurs,
+    testBuildClubMatchRowWithNoneClubId,
     testBuildClubMatchRowInProgress,
     testBuildClubMatchRowRegistered,
     testIsClubDailyMatchAcceptsOwnClub,
@@ -39,37 +36,17 @@ object TestHistoryApp extends ZIOSpecDefault {
     assertTrue(ClubMatchId.unwrap(id) == 1650919L)
   }
 
-  // --- findOurTeamIdx ---
+  // --- buildClubMatchRow ---
 
   private val matchFixture =
     readJsonLinesAs[ApiDailyMatch]("data/test/api/matchFinished.json").runHead.someOrFailException
 
-  private def testFindOurTeamTeam1 = test("findOurTeam returns true when club is team1") {
-    matchFixture.map { m =>
-      assertTrue(HistoryApp.findOurTeam(m.teams, ClubSlug("turk-chess-players")) == Some(true))
-    }
-  }
-
-  private def testFindOurTeamTeam2 = test("findOurTeam returns false when club is team2") {
-    matchFixture.map { m =>
-      assertTrue(HistoryApp.findOurTeam(m.teams, ClubSlug("the-great-british-empire")) == Some(false))
-    }
-  }
-
-  private def testFindOurTeamNotFound = test("findOurTeam returns None for unknown club") {
-    matchFixture.map { m =>
-      assertTrue(HistoryApp.findOurTeam(m.teams, ClubSlug("not-a-club")) == None)
-    }
-  }
-
-  // --- buildClubMatchRow ---
-
   private def testBuildClubMatchRowFinished = test("buildClubMatchRow correctly maps a finished match") {
     matchFixture.map { m =>
-      val matchId = ClubMatchId.fromUrl(m.`@id`)
-      val clubId  = ClubId(100)
-      val oppId   = Some(ClubId(200))
-      val row     = HistoryApp.buildClubMatchRow(matchId, m, clubId, weAreTeam1 = true, opponentClubId = oppId)
+      val matchId     = ClubMatchId.fromUrl(m.`@id`)
+      val team1ClubId = Some(ClubId(100))
+      val team2ClubId = Some(ClubId(200))
+      val row         = HistoryApp.buildClubMatchRow(matchId, m, team1ClubId, team2ClubId)
 
       assertTrue(
         row.matchId == ClubMatchId(1650919),
@@ -79,29 +56,28 @@ object TestHistoryApp extends ZIOSpecDefault {
         row.startTime.contains(Instant.ofEpochSecond(1720908242L)),
         row.endTime.contains(Instant.ofEpochSecond(1735309563L)),
         row.boards == 13,
-        row.team1ClubId.contains(clubId),
+        row.team1ClubId == team1ClubId,
         row.team1Score == 10.0,
         row.team1Result.contains(ClubMatchResult.Lose),
-        row.team2ClubId == oppId,
+        row.team2ClubId == team2ClubId,
         row.team2Score == 16.0,
         row.team2Result.contains(ClubMatchResult.Win)
       )
     }
   }
 
-  private def testBuildClubMatchRowTeam2IsOurs = test("buildClubMatchRow swaps club IDs when we are team2") {
-    matchFixture.map { m =>
-      val matchId = ClubMatchId.fromUrl(m.`@id`)
-      val clubId  = ClubId(200)
-      val oppId   = Some(ClubId(100))
-      val row     = HistoryApp.buildClubMatchRow(matchId, m, clubId, weAreTeam1 = false, opponentClubId = oppId)
+  private def testBuildClubMatchRowWithNoneClubId =
+    test("buildClubMatchRow passes through None club IDs") {
+      matchFixture.map { m =>
+        val matchId = ClubMatchId.fromUrl(m.`@id`)
+        val row     = HistoryApp.buildClubMatchRow(matchId, m, None, Some(ClubId(200)))
 
-      assertTrue(
-        row.team1ClubId == oppId,
-        row.team2ClubId.contains(clubId)
-      )
+        assertTrue(
+          row.team1ClubId.isEmpty,
+          row.team2ClubId.contains(ClubId(200))
+        )
+      }
     }
-  }
 
   private val inProgressFixture =
     readJsonLinesAs[ApiDailyMatch]("data/test/api/matchInProgress.json").runHead.someOrFailException
@@ -113,7 +89,7 @@ object TestHistoryApp extends ZIOSpecDefault {
     test("buildClubMatchRow maps in-progress match with no endTime/results") {
       inProgressFixture.map { m =>
         val matchId = ClubMatchId.fromUrl(m.`@id`)
-        val row     = HistoryApp.buildClubMatchRow(matchId, m, ClubId(100), weAreTeam1 = true, opponentClubId = None)
+        val row     = HistoryApp.buildClubMatchRow(matchId, m, Some(ClubId(100)), None)
 
         assertTrue(
           row.status == ClubMatchStatus.InProgress,
@@ -128,7 +104,7 @@ object TestHistoryApp extends ZIOSpecDefault {
   private def testBuildClubMatchRowRegistered = test("buildClubMatchRow maps registered match with optional startTime") {
     registeredFixture.map { m =>
       val matchId = ClubMatchId.fromUrl(m.`@id`)
-      val row     = HistoryApp.buildClubMatchRow(matchId, m, ClubId(100), weAreTeam1 = true, opponentClubId = None)
+      val row     = HistoryApp.buildClubMatchRow(matchId, m, Some(ClubId(100)), None)
 
       assertTrue(
         row.status == ClubMatchStatus.Registration,
