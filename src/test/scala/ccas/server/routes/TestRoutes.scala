@@ -3,7 +3,7 @@ package ccas.server.routes
 import java.time.{Instant, LocalDateTime, ZoneOffset}
 
 import com.augustnagro.magnum.{sql, Transactor}
-import zio.{RIO, Ref, Scope, Semaphore, Trace, UIO, URIO, ZIO, ZLayer}
+import zio.{durationInt, Fiber, RIO, Ref, Scope, Semaphore, Trace, UIO, URIO, ZIO, ZLayer}
 import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
@@ -11,7 +11,7 @@ import ccas.analysis.tables.RunTrigger
 import ccas.api.misc.subtypes.ClubSlug
 import ccas.server.jobs.*
 import ccas.server.ServerTables
-import ccas.utils.CcasLogger
+import ccas.utils.{CcasLogger, TestCcasLogger}
 import ccas.utils.client.ChessComClient
 import ccas.utils.sql.FreshSchemaLayer
 import ccas.utils.sql.SqlZioTypes.connectZIO
@@ -80,9 +80,12 @@ object TestRoutes extends ZIOSpecDefault {
   private val dummyChessComClientLayer: ZLayer[Any, Nothing, ChessComClient] =
     ZLayer.fromZIO {
       for {
-        semaphore <- Semaphore.make(1)
-        mutex     <- Semaphore.make(1)
-        throttled <- Ref.make(false)
+        semaphore  <- Semaphore.make(1)
+        stateRef   <- Ref.make(ChessComClient.ThrottleState(1, 0, Vector.empty))
+        reserveRef  <- Ref.make(Option.empty[Fiber.Runtime[Nothing, Nothing]])
+        adjustMutex <- Semaphore.make(1)
+        activeRef   <- Ref.make(0)
+        bar        <- TestCcasLogger.noopBar
       } yield {
         val routes: Routes[Any, Response] = Routes(
           Method.GET / trailing -> handler(Response(status = Status.NotFound))
@@ -114,10 +117,14 @@ object TestRoutes extends ZIOSpecDefault {
           ZClient.fromDriver(driver),
           Transactor(null),
           Headers.empty,
+          TestCcasLogger.noop,
           semaphore,
-          mutex,
-          throttled,
-          zio.Duration.fromSeconds(30)
+          stateRef,
+          reserveRef,
+          adjustMutex,
+          activeRef,
+          bar,
+          ChessComClient.ThrottleConfig(1, 30.seconds, 1.second, 50, 0.2, 10)
         )
       }
     }

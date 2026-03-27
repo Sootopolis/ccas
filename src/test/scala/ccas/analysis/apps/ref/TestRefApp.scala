@@ -3,13 +3,13 @@ package ccas.analysis.apps.ref
 import java.time.{Instant, LocalDateTime, ZoneOffset}
 
 import com.augustnagro.magnum.{sql, Transactor}
-import zio.{RIO, Ref, Scope, Semaphore, ZIO, ZLayer}
+import zio.{durationInt, Fiber, RIO, Ref, Scope, Semaphore, ZIO, ZLayer}
 import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.analysis.tables.*
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, TournamentSlug, Username}
-import ccas.utils.CcasLogger
+import ccas.utils.{CcasLogger, TestCcasLogger}
 import ccas.utils.client.ChessComClient
 import ccas.utils.sql.{FreshSchemaLayer, SqlZioTypes}
 
@@ -143,8 +143,11 @@ object TestRefApp extends ZIOSpecDefault {
     for {
       transactor <- ZIO.service[Transactor]
       semaphore  <- Semaphore.make(5)
-      mutex      <- Semaphore.make(1)
-      throttled  <- Ref.make(false)
+      stateRef   <- Ref.make(ChessComClient.ThrottleState(5, 0, Vector.empty))
+      reserveRef  <- Ref.make(Option.empty[Fiber.Runtime[Nothing, Nothing]])
+      adjustMutex <- Semaphore.make(1)
+      activeRef   <- Ref.make(0)
+      bar        <- TestCcasLogger.noopBar
     } yield {
       val routes: Routes[Any, Response] = Routes(
         Method.GET / "pub" / "player" / string("username") / "tournaments" -> handler { (username: String, _: Request) =>
@@ -199,10 +202,14 @@ object TestRefApp extends ZIOSpecDefault {
         ZClient.fromDriver(driver),
         transactor,
         Headers.empty,
+        TestCcasLogger.noop,
         semaphore,
-        mutex,
-        throttled,
-        zio.Duration.fromSeconds(30)
+        stateRef,
+        reserveRef,
+        adjustMutex,
+        activeRef,
+        bar,
+        ChessComClient.ThrottleConfig(5, 30.seconds, 1.second, 50, 0.2, 10)
       )
     }
 

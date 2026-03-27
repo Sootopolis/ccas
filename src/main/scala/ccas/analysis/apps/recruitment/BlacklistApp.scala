@@ -10,6 +10,7 @@ import ccas.analysis.tables.*
 import ccas.api.club.ApiClub
 import ccas.api.misc.subtypes.{ClubSlug, Username}
 import ccas.api.player.ApiPlayer
+import ccas.utils.CcasLogger
 import ccas.utils.client.ChessComClient
 import ccas.utils.errors.BadRequestException
 import ccas.utils.sql.DataSourceLayer
@@ -31,6 +32,7 @@ object BlacklistApp extends ZIOAppDefault {
         case _ => ZIO.fail(BadRequestException(help))
       }
     } yield ()).provideSomeAuto(
+      CcasLogger.live(showProgress = true),
       ChessComClient.live,
       Client.default,
       DataSourceLayer.liveFromPrefix(onInit = Tables.ensureTables)

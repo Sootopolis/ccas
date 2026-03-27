@@ -3,14 +3,14 @@ package ccas.analysis.apps.recruitment
 import java.time.{Duration, Instant, LocalDateTime, ZoneOffset}
 
 import com.augustnagro.magnum.{sql, Transactor}
-import zio.{durationInt, Promise, RIO, Ref, Scope, Semaphore, ZIO}
+import zio.{durationInt, Fiber, Promise, RIO, Ref, Scope, Semaphore, ZIO}
 import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.analysis.tables.*
 import ccas.api.club.ApiClubMatches
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
-import ccas.utils.CcasLogger
+import ccas.utils.{CcasLogger, TestCcasLogger}
 import ccas.utils.client.ChessComClient
 import ccas.utils.sql.{FreshSchemaLayer, SqlZioTypes}
 import ccas.utils.sql.DbCodecs.given
@@ -206,8 +206,11 @@ object TestRecruitmentApp extends ZIOSpecDefault {
     for {
       transactor <- ZIO.service[Transactor]
       semaphore  <- Semaphore.make(1)
-      mutex      <- Semaphore.make(1)
-      throttled  <- Ref.make(false)
+      stateRef   <- Ref.make(ChessComClient.ThrottleState(1, 0, Vector.empty))
+      reserveRef  <- Ref.make(Option.empty[Fiber.Runtime[Nothing, Nothing]])
+      adjustMutex <- Semaphore.make(1)
+      activeRef   <- Ref.make(0)
+      bar        <- TestCcasLogger.noopBar
     } yield {
       val routes: Routes[Any, Response] = Routes(
         // Player stats endpoint
@@ -277,10 +280,14 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         ZClient.fromDriver(driver),
         transactor,
         Headers.empty,
+        TestCcasLogger.noop,
         semaphore,
-        mutex,
-        throttled,
-        zio.Duration.fromSeconds(30)
+        stateRef,
+        reserveRef,
+        adjustMutex,
+        activeRef,
+        bar,
+        ChessComClient.ThrottleConfig(1, 30.seconds, 1.second, 50, 0.2, 10)
       )
     }
 
@@ -298,8 +305,11 @@ object TestRecruitmentApp extends ZIOSpecDefault {
     for {
       transactor  <- ZIO.service[Transactor]
       semaphore   <- Semaphore.make(5)
-      mutex       <- Semaphore.make(1)
-      throttled   <- Ref.make(false)
+      stateRef    <- Ref.make(ChessComClient.ThrottleState(5, 0, Vector.empty))
+      reserveRef  <- Ref.make(Option.empty[Fiber.Runtime[Nothing, Nothing]])
+      adjustMutex <- Semaphore.make(1)
+      activeRef   <- Ref.make(0)
+      bar         <- TestCcasLogger.noopBar
       playerCount <- Ref.make(0)
     } yield {
       val routes: Routes[Any, Response] = Routes(
@@ -366,10 +376,14 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         ZClient.fromDriver(driver),
         transactor,
         Headers.empty,
+        TestCcasLogger.noop,
         semaphore,
-        mutex,
-        throttled,
-        zio.Duration.fromSeconds(30)
+        stateRef,
+        reserveRef,
+        adjustMutex,
+        activeRef,
+        bar,
+        ChessComClient.ThrottleConfig(5, 30.seconds, 1.second, 50, 0.2, 10)
       )
     }
 
