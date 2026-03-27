@@ -372,8 +372,8 @@ object TestClubMatchSql extends ZIOSpecDefault {
       r1 == 1,
       r2 == 1,
       all.size == 2,
-      all.exists(_._4 == Username("opp1")),
-      all.exists(_._4 == Username("opp2"))
+      all.exists(_.username == Username("opp1")),
+      all.exists(_.username == Username("opp2"))
     )
   }
 
@@ -390,7 +390,7 @@ object TestClubMatchSql extends ZIOSpecDefault {
     } yield assertTrue(
       deleted == 1,
       remaining.size == 1,
-      remaining.head._4 == Username("opp2")
+      remaining.head.username == Username("opp2")
     )
   }
 
@@ -403,7 +403,7 @@ object TestClubMatchSql extends ZIOSpecDefault {
     } yield assertTrue(
       r1 == 1,
       all.size == 1,
-      all.head._3 == ClubSlug("unknown-club")
+      all.head.slug == ClubSlug("unknown-club")
     )
   }
 

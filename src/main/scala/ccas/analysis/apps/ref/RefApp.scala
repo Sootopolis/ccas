@@ -7,7 +7,7 @@ import com.augustnagro.magnum.{sql, Transactor}
 import zio.{Promise, RIO, Ref, Scope, Task, UIO, ZIO, ZIOAppDefault}
 import zio.http.{Client, URL}
 
-import ccas.analysis.tables.{ClubMatch, ClubMatchBoard, ClubMatchRef, PlayerMatchRef, PlayerTournamentRef, RunTrigger, Tables}
+import ccas.analysis.tables.{ClubMatch, ClubMatchBoard, ClubMatchRef, MatchKey, PlayerMatchRef, PlayerTournamentRef, RunTrigger, Tables}
 import ccas.api.club.ApiClubMatches
 import ccas.api.clubmatch.{ApiDailyMatch, ApiLiveMatch, TeamMatchTeams}
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, TournamentSlug, Username}
@@ -44,7 +44,7 @@ object RefApp extends ZIOAppDefault {
     for {
       startedAt  <- ZIO.succeed(Instant.now())
       client     <- ZIO.service[ChessComClient]
-      cache      <- Ref.make(Map.empty[(ClubMatchId, Boolean), Promise[Throwable, TeamMatchTeams]])
+      cache      <- Ref.make(Map.empty[MatchKey, Promise[Throwable, TeamMatchTeams]])
       failedUrls <- Ref.make(Map.empty[String, String])
       // Clubs
       clubs       <- selectUnresolvedClubs
@@ -159,7 +159,7 @@ object RefApp extends ZIOAppDefault {
 
   private def resolvePlayer(
     client: ChessComClient,
-    cache: Ref[Map[(ClubMatchId, Boolean), Promise[Throwable, TeamMatchTeams]]],
+    cache: Ref[Map[MatchKey, Promise[Throwable, TeamMatchTeams]]],
     failedUrls: Ref[Map[String, String]],
     player: UnresolvedPlayer
   ): RIO[CcasLogger & Transactor, Boolean] =
@@ -182,7 +182,7 @@ object RefApp extends ZIOAppDefault {
 
   private def resolvePlayerViaMatch(
     client: ChessComClient,
-    cache: Ref[Map[(ClubMatchId, Boolean), Promise[Throwable, TeamMatchTeams]]],
+    cache: Ref[Map[MatchKey, Promise[Throwable, TeamMatchTeams]]],
     failedUrls: Ref[Map[String, String]],
     player: UnresolvedPlayer
   ): RIO[CcasLogger & Transactor, ResolveResult] =
@@ -198,7 +198,7 @@ object RefApp extends ZIOAppDefault {
 
   private def tryMatches(
     client: ChessComClient,
-    cache: Ref[Map[(ClubMatchId, Boolean), Promise[Throwable, TeamMatchTeams]]],
+    cache: Ref[Map[MatchKey, Promise[Throwable, TeamMatchTeams]]],
     failedUrls: Ref[Map[String, String]],
     player: UnresolvedPlayer,
     candidates: List[ApiPlayerMatch]
@@ -212,7 +212,7 @@ object RefApp extends ZIOAppDefault {
 
   private def tryOneMatch(
     client: ChessComClient,
-    cache: Ref[Map[(ClubMatchId, Boolean), Promise[Throwable, TeamMatchTeams]]],
+    cache: Ref[Map[MatchKey, Promise[Throwable, TeamMatchTeams]]],
     failedUrls: Ref[Map[String, String]],
     player: UnresolvedPlayer,
     m: ApiPlayerMatch
@@ -306,7 +306,7 @@ object RefApp extends ZIOAppDefault {
 
   private def resolveClub(
     client: ChessComClient,
-    cache: Ref[Map[(ClubMatchId, Boolean), Promise[Throwable, TeamMatchTeams]]],
+    cache: Ref[Map[MatchKey, Promise[Throwable, TeamMatchTeams]]],
     failedUrls: Ref[Map[String, String]],
     club: UnresolvedClub
   ): RIO[CcasLogger & Transactor, Boolean] =
@@ -332,7 +332,7 @@ object RefApp extends ZIOAppDefault {
 
   private def tryClubMatches(
     client: ChessComClient,
-    cache: Ref[Map[(ClubMatchId, Boolean), Promise[Throwable, TeamMatchTeams]]],
+    cache: Ref[Map[MatchKey, Promise[Throwable, TeamMatchTeams]]],
     failedUrls: Ref[Map[String, String]],
     club: UnresolvedClub,
     candidates: List[ApiClubMatches.ApiClubMatchFinished]
@@ -344,7 +344,7 @@ object RefApp extends ZIOAppDefault {
 
   private def tryOneClubMatch(
     client: ChessComClient,
-    cache: Ref[Map[(ClubMatchId, Boolean), Promise[Throwable, TeamMatchTeams]]],
+    cache: Ref[Map[MatchKey, Promise[Throwable, TeamMatchTeams]]],
     failedUrls: Ref[Map[String, String]],
     club: UnresolvedClub,
     m: ApiClubMatches.ApiClubMatchFinished
@@ -371,13 +371,13 @@ object RefApp extends ZIOAppDefault {
 
   private def fetchMatch(
     client: ChessComClient,
-    cache: Ref[Map[(ClubMatchId, Boolean), Promise[Throwable, TeamMatchTeams]]],
+    cache: Ref[Map[MatchKey, Promise[Throwable, TeamMatchTeams]]],
     matchId: ClubMatchId,
     isLive: Boolean
   ): Task[TeamMatchTeams] =
     for {
       promise <- Promise.make[Throwable, TeamMatchTeams]
-      key = (matchId, isLive)
+      key = MatchKey(matchId, isLive)
       action <- cache.modify { m =>
         m.get(key) match {
           case Some(existing) => (existing.await, m)

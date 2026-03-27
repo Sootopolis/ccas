@@ -66,7 +66,7 @@ object HistoryApp extends ZIOAppDefault {
     waveCount: Int = 0,
     pendingRemaining: Int = 0,
     waveDetails: List[(Int, Int)] = Nil,
-    failedMatches: List[((ClubMatchId, Boolean), String)] = Nil,
+    failedMatches: List[(MatchKey, String)] = Nil,
     failedMembers: List[(Username, String)] = Nil
   )
 
@@ -88,7 +88,7 @@ object HistoryApp extends ZIOAppDefault {
     val playersDiscovered: Ref[Int],
     val playersKnown: Ref[Int],
     val playersFailed: Ref[Int],
-    val failedMatches: Ref[List[((ClubMatchId, Boolean), String)]]
+    val failedMatches: Ref[List[(MatchKey, String)]]
   )
 
   private object ProcessingContext {
@@ -111,7 +111,7 @@ object HistoryApp extends ZIOAppDefault {
         playersDiscovered   <- Ref.make(0)
         playersKnown        <- Ref.make(0)
         playersFailed       <- Ref.make(0)
-        failedMatches       <- Ref.make(List.empty[((ClubMatchId, Boolean), String)])
+        failedMatches       <- Ref.make(List.empty[(MatchKey, String)])
       } yield new ProcessingContext(
         client,
         clubId,
@@ -393,7 +393,7 @@ object HistoryApp extends ZIOAppDefault {
         .zipLeft(ctx.matchesProcessed.update(_ + 1))
         .catchAll { error =>
           ctx.matchesFailed.update(_ + 1) *>
-            ctx.failedMatches.update(_ :+ ((pm.matchId, pm.isLive), error.getMessage)) *>
+            ctx.failedMatches.update(_ :+ (MatchKey(pm.matchId, pm.isLive), error.getMessage)) *>
             HistoryPendingMatch.updateStatus(ctx.clubId, pm.matchId, pm.isLive, PendingMatchStatus.ApiError) *>
             CcasLogger.warn(s"    Match ${pm.matchId}${if (pm.isLive) " (live)" else ""}: ${error.getMessage}")
         } *> counter.updateAndGet(_ + 1).flatMap { n =>
@@ -931,7 +931,7 @@ object HistoryApp extends ZIOAppDefault {
 
     if (stats.failedMatches.nonEmpty) {
       sb.append("--- Failed Matches ---\n")
-      stats.failedMatches.foreach { case ((matchId, isLive), error) =>
+      stats.failedMatches.foreach { case (MatchKey(matchId, isLive), error) =>
         val kind = if (isLive) { " (live)" } else { "" }
         sb.append(s"  Match $matchId$kind: $error\n")
       }
