@@ -18,7 +18,7 @@ class ProgressBar private[utils] (id: Int, display: ProgressDisplay) {
     */
   def print(current: Int, total: Int, text: String): UIO[Unit] = {
     val pct      = if (total == 0) 100.0 else (current * 100.0) / total
-    val filled   = (pct / 5).toInt
+    val filled   = (pct / 5).toInt.min(20)
     val bar      = "\u2588" * filled + "\u2591" * (20 - filled)
     val full     = f"$text $bar $pct%.1f%%"
     val lineCount = full.count(_ == '\n') + 1
