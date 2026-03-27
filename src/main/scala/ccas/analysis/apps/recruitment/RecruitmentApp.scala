@@ -130,8 +130,7 @@ object RecruitmentApp extends ZIOAppDefault {
           ClubMember.selectClubFormer(clubId).map(_.map(_.playerId).toSet)
         else ZIO.succeed(Set.empty[PlayerId])
 
-      excludedSlugs <- ZIO.foreach(criteria.excludeClubs)(Club.selectId(_))
-        .map(_.flatten.map(_.slug).toSet)
+      excludedSlugs <- ZIO.foreach(criteria.excludeClubs)(Club.selectId).map(_.flatten.map(_.slug).toSet)
       discoveredClubs     <- Ref.make(Set.empty[ClubSlug])
       discoveredOpponents <- Ref.make(Set.empty[Username])
       invitedRef          <- Ref.make(List.empty[Username])
