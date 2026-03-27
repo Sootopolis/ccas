@@ -3,7 +3,7 @@ package ccas.analysis.apps.recruitment
 import ccas.analysis.tables.{PlayerRecruitmentCache, RecruitmentCriteria}
 import ccas.api.misc.enums.GameResultDetail
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
-import ccas.api.player.ApiPlayer
+import ccas.api.player.{ApiPlayer, ApiPlayerMatches}
 import ccas.api.player.ApiPlayerArchive.ApiPlayerArchiveGame
 import ccas.utils.ProgressBar
 import ccas.utils.client.ChessComClient
@@ -47,7 +47,8 @@ private[recruitment] case class CandidateContext(
   isNewPlayer: Boolean,
   cache: Option[PlayerRecruitmentCache],
   recentArchives: Option[List[ccas.api.player.ApiPlayerArchive]] = None,
-  cacheRejected: Boolean = false
+  cacheRejected: Boolean = false,
+  playerMatches: Option[ApiPlayerMatches] = None
 )
 private[recruitment] object CandidateContext {
   def initial(username: Username): CandidateContext =

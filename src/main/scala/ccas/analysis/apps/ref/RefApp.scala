@@ -9,7 +9,7 @@ import zio.http.{Client, URL}
 
 import ccas.analysis.tables.{ClubMatch, ClubMatchBoard, ClubMatchRef, MatchKey, PlayerMatchRef, PlayerTournamentRef, RunTrigger, Tables}
 import ccas.api.club.ApiClubMatches
-import ccas.api.clubmatch.{ApiDailyMatch, ApiLiveMatch, TeamMatchTeams}
+import ccas.api.clubmatch.TeamMatchTeams
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, TournamentSlug, Username}
 import ccas.api.player.{ApiPlayer, ApiPlayerMatches, ApiPlayerTournaments}
 import ccas.api.player.ApiPlayerMatches.ApiPlayerMatch
@@ -19,6 +19,7 @@ import ccas.utils.client.ChessComClient
 import ccas.utils.errors.safeMessage
 import ccas.utils.sql.DataSourceLayer
 import ccas.utils.sql.SqlZioTypes.connectZIO
+import ccas.analysis.apps.ref.RefHelpers.parseMatchUrl
 
 object RefApp extends ZIOAppDefault {
   override def run: RIO[Scope, Unit] =
@@ -71,16 +72,6 @@ object RefApp extends ZIOAppDefault {
       )
   }
 
-  // --- Match URL parsing ---
-
-  private case class ParsedMatch(matchId: ClubMatchId, isLive: Boolean, matchUrl: URL)
-
-  private def parseMatchUrl(atId: URL): ParsedMatch = {
-    val matchId  = ClubMatchId.fromUrl(atId)
-    val isLive   = atId.path.segments.contains("live")
-    val matchUrl = if (isLive) { ApiLiveMatch.getUrl(matchId) } else { ApiDailyMatch.getUrl(matchId) }
-    ParsedMatch(matchId, isLive, matchUrl)
-  }
 
   // --- Entry point ---
 
@@ -309,7 +300,7 @@ object RefApp extends ZIOAppDefault {
           case false =>
             fetchMatch(ctx, parsed.matchId, parsed.isLive).foldZIO(
               error => recordFailedUrl(ctx, parsed.matchUrl, error, "player").as(ResolveResult.NotFound),
-              teams => findIsTeam1(teams, player.username) match {
+              teams => RefHelpers.findPlayerIsTeam1(teams, player.username) match {
                 case None => ZIO.succeed(ResolveResult.NotFound)
                 case Some(isTeam1) =>
                   handleVerification(ctx, player) {
@@ -423,7 +414,7 @@ object RefApp extends ZIOAppDefault {
       case false =>
         fetchMatch(ctx, parsed.matchId, parsed.isLive).foldZIO(
           error => recordFailedUrl(ctx, parsed.matchUrl, error, "club").as(false),
-          teams => findClubIsTeam1(teams, club.slug) match {
+          teams => RefHelpers.findClubIsTeam1(teams, club.slug) match {
             case None => ZIO.succeed(false)
             case Some(isTeam1) =>
               val ref = ClubMatchRef(club.clubId, parsed.matchId, parsed.isLive, isTeam1)
@@ -457,26 +448,10 @@ object RefApp extends ZIOAppDefault {
     promise: Promise[Throwable, TeamMatchTeams],
     matchId: ClubMatchId,
     isLive: Boolean
-  ): Task[TeamMatchTeams] = {
-    val fetch: Task[TeamMatchTeams] =
-      if (isLive) { client.get[ApiLiveMatch](ApiLiveMatch.getUrl(matchId)).map(_.teams) }
-      else { client.get[ApiDailyMatch](ApiDailyMatch.getUrl(matchId)).map(_.teams) }
-    fetch.tapBoth(promise.fail, promise.succeed)
-  }
+  ): Task[TeamMatchTeams] =
+    RefHelpers.fetchTeamMatchTeams(client, matchId, isLive).tapBoth(promise.fail, promise.succeed)
 
   // --- Shared helpers ---
-
-  private def findIsTeam1(teams: TeamMatchTeams, username: Username): Option[Boolean] = {
-    if (teams.team1.players.exists(_.username == username)) { Some(true) }
-    else if (teams.team2.players.exists(_.username == username)) { Some(false) }
-    else { None }
-  }
-
-  private def findClubIsTeam1(teams: TeamMatchTeams, slug: ClubSlug): Option[Boolean] = {
-    if (teams.team1.`@id`.path.segments.lastOption.map(ClubSlug.wrap).contains(slug)) { Some(true) }
-    else if (teams.team2.`@id`.path.segments.lastOption.map(ClubSlug.wrap).contains(slug)) { Some(false) }
-    else { None }
-  }
 
   private def verifyPlayerId(
     client: ChessComClient,

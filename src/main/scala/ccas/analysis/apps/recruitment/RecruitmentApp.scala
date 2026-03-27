@@ -7,9 +7,10 @@ import zio.{RIO, Ref, Scope, ZEnvironment, ZIO, ZIOAppArgs, ZIOAppDefault}
 import zio.http.Client
 
 import ccas.analysis.apps.membership.MembershipApp
+import ccas.analysis.apps.ref.RefHelpers
 import ccas.analysis.tables.*
 import ccas.api.club.{ApiClub, ApiClubMatches, ApiClubMembers}
-import ccas.api.misc.subtypes.{ClubSlug, PlayerId, Username}
+import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
 import ccas.api.player.ApiPlayer
 import ccas.utils.CcasLogger
 import ccas.utils.client.ChessComClient
@@ -124,6 +125,7 @@ object RecruitmentApp extends ZIOAppDefault {
 
       clubMatches <- client.get[ApiClubMatches](ApiClubMatches.getUrl(clubSlug))
       targetMatchIds = (clubMatches.registered.map(_.`@id`) ++ clubMatches.inProgress.map(_.`@id`)).toSet
+      _ <- writeClubMatchRef(client, clubId, clubSlug, clubMatches).catchAll(_ => ZIO.unit)
 
       formerMemberIds <-
         if (criteria.excludeFormerMembers)
@@ -316,4 +318,29 @@ object RecruitmentApp extends ZIOAppDefault {
         CcasLogger.info(ApiPlayer.getProfileUrl(name).toString)
       }
     } yield (usernames, evaluatedCount, run)
+
+  // --- Match ref writing ---
+
+  private def writeClubMatchRef(
+    client: ChessComClient,
+    clubId: ClubId,
+    clubSlug: ClubSlug,
+    clubMatches: ApiClubMatches
+  ): RIO[Transactor, Unit] =
+    ClubMatchRef.selectId(clubId).flatMap {
+      case Some(_) => ZIO.unit
+      case None =>
+        ClubMatch.selectClubMatchRef(clubId).flatMap {
+          case Some(ref) => ClubMatchRef.insert(ref).unit
+          case None =>
+            ZIO.foreachDiscard(clubMatches.finished.headOption) { m =>
+              val parsed = RefHelpers.parseMatchUrl(m.`@id`)
+              RefHelpers.fetchTeamMatchTeams(client, parsed.matchId, parsed.isLive).flatMap { teams =>
+                ZIO.foreachDiscard(RefHelpers.findClubIsTeam1(teams, clubSlug)) { t1 =>
+                  ClubMatchRef.insert(ClubMatchRef(clubId, parsed.matchId, parsed.isLive, t1)).unit
+                }
+              }
+            }
+        }
+    }
 }
