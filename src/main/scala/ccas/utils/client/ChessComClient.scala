@@ -1,18 +1,17 @@
 package ccas.utils.client
 
-import java.time.Instant
-
-import com.augustnagro.magnum.Transactor
-import com.typesafe.config.ConfigFactory
-import zio.{durationInt, durationLong, Chunk, Duration, Fiber, Ref, Schedule, Semaphore, Task, ZEnvironment, ZIO, ZLayer}
-import zio.http.{Client, Header, Headers, Request, Status, URL, ZClientAspect}
-import zio.http.Method.GET
-import zio.json.JsonDecoder
-
 import ccas.analysis.tables.ApiFetchFailure
 import ccas.info.BuildInfo
-import ccas.utils.{CcasLogger, ProgressBar}
 import ccas.utils.json.JsonDecodingException
+import ccas.utils.{CcasLogger, ProgressBar}
+import com.augustnagro.magnum.Transactor
+import com.typesafe.config.ConfigFactory
+import zio.http.Method.GET
+import zio.http.*
+import zio.json.JsonDecoder
+import zio.{Chunk, Duration, Fiber, Ref, Schedule, Semaphore, Task, ZEnvironment, ZIO, ZLayer, durationInt, durationLong}
+
+import java.time.Instant
 
 final class ChessComClient(
   client: Client,
@@ -222,7 +221,10 @@ object ChessComClient {
   )
 
   private def userAgentHeaders(contactEmail: String): Headers =
-    Headers(Header.Custom("User-Agent", s"${BuildInfo.name.toUpperCase}/${BuildInfo.version} (contact: $contactEmail)"))
+    Headers(
+      Header.Custom("User-Agent", s"${BuildInfo.name.toUpperCase}/${BuildInfo.version} (contact: $contactEmail)"),
+      Header.Accept(MediaType.application.json),
+    )
 
   def live: ZLayer[Client & Transactor & CcasLogger, Throwable, ChessComClient] =
     ZLayer.scoped {
