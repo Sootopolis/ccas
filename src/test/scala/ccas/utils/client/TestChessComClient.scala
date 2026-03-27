@@ -28,7 +28,7 @@ object TestChessComClient extends ZIOSpecDefault {
       adjustMutex <- Semaphore.make(1)
       activeRef   <- Ref.make(0)
       bar         <- TestCcasLogger.noopBar
-      config = ChessComClient.ThrottleConfig(permits, cooldown, retryBase, failureWindowSize, failureThreshold, 10)
+      config = ChessComClient.ThrottleConfig(permits, cooldown, retryBase, 10.millis, failureWindowSize, failureThreshold, 10)
     } yield {
       val driver = new ZClient.Driver[Any, Scope, Throwable] {
         override def request(
@@ -212,7 +212,7 @@ object TestChessComClient extends ZIOSpecDefault {
           activeRef   <- Ref.make(0)
           bar         <- TestCcasLogger.noopBar
           counter   <- Ref.make(0)
-          config = ChessComClient.ThrottleConfig(5, 60.seconds, 10.millis, 20, 0.2, 10)
+          config = ChessComClient.ThrottleConfig(5, 60.seconds, 10.millis, 10.millis, 20, 0.2, 10)
           // Reserve 4 permits to enforce effective limit of 1
           reserveFibers <- ZIO.foreach(Chunk.range(0, 4))(_ => semaphore.withPermit(ZIO.never).forkDaemon)
           _ <- reserveRef.set(reserveFibers)

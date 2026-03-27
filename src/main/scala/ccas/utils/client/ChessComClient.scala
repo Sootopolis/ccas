@@ -34,20 +34,24 @@ final class ChessComClient(
   private def rawGet[T](url: URL)(using jsonDecoder: JsonDecoder[T]): Task[T] = for {
     response <- batchedClient(Request(method = GET, url = url).addHeaders(headers))
     _        <- recordOutcome(response.status != Status.TooManyRequests)
+    string   <- response.body.asString
     _ <- ZIO.whenDiscard(!response.status.isSuccess)(
-      ZIO.fail(HttpStatusException(response.status.code, url))
+      ZIO.fail(HttpStatusException(response.status.code, url, string))
     )
-    string <- response.body.asString
-    value  <- ZIO.fromEither(jsonDecoder.decodeJson(string)).mapError(JsonDecodingException(_))
+    value <- ZIO.fromEither(jsonDecoder.decodeJson(string)).mapError(JsonDecodingException(_))
   } yield value
 
   def get[T](url: URL)(using jsonDecoder: JsonDecoder[T]): Task[T] =
     semaphore.withPermit {
       (activeRef.updateAndGet(_ + 1).flatMap(updateBar) *> rawGet(url))
         .ensuring(activeRef.updateAndGet(_ - 1).flatMap(updateBar).ignore)
-    }.retry(retrySchedule).tapError { error =>
+    }.retry(retry429Schedule).retry(retryOnceSchedule).tapError { error =>
+      val (msg, body) = error match {
+        case e: HttpStatusException => (Some(e.statusCode.toString), Some(e.responseBody))
+        case other                  => (Option(other.getMessage), None)
+      }
       ApiFetchFailure
-        .insert(ApiFetchFailure(url.encode, error.getClass.getSimpleName, Option(error.getMessage), Instant.now()))
+        .insert(ApiFetchFailure(Instant.now(), url.encode, error.getClass.getSimpleName, msg, body))
         .provideEnvironment(ZEnvironment(transactor))
         .ignore
     }
@@ -178,9 +182,15 @@ final class ChessComClient(
     if (outcomes.isEmpty) 0.0
     else outcomes.count(!_).toDouble / outcomes.size
 
-  private val retrySchedule: Schedule[Any, Throwable, Any] =
+  private val retry429Schedule: Schedule[Any, Throwable, Any] =
     Schedule.exponential(config.retryBase).jittered && Schedule.recurs(5) && Schedule.recurWhile[Throwable] {
-      case e: HttpStatusException => e.statusCode == 429 || e.statusCode == 403
+      case e: HttpStatusException => e.statusCode == 429
+      case _                      => false
+    }
+
+  private val retryOnceSchedule: Schedule[Any, Throwable, Any] =
+    Schedule.fixed(config.singleRetryDelay) && Schedule.recurs(1) && Schedule.recurWhile[Throwable] {
+      case e: HttpStatusException => e.statusCode == 403 || e.statusCode == 404
       case _                      => false
     }
 }
@@ -193,17 +203,19 @@ object ChessComClient {
     coolingDown: Boolean = false
   )
 
-  /** @param maxPermits      Maximum concurrent requests (semaphore permits). Throttle-down halves from here; recovery doubles back.
-    * @param cooldown        Time to wait after a throttle-down before attempting recovery.
-    * @param retryBase       Base duration for exponential-backoff retry on 429/403 responses.
+  /** @param maxPermits       Maximum concurrent requests (semaphore permits). Throttle-down halves from here; recovery doubles back.
+    * @param cooldown         Time to wait after a throttle-down before attempting recovery.
+    * @param retryBase        Base duration for exponential-backoff retry on 429 responses.
+    * @param singleRetryDelay Fixed delay for a single retry on 403/404 responses.
     * @param failureWindowSize Rolling window size for tracking success/failure outcomes.
     * @param failureThreshold Fraction of failures in the window (0.0–1.0) that triggers a throttle-down.
-    * @param minSampleSize   Minimum outcomes in the window before the failure rate is evaluated.
+    * @param minSampleSize    Minimum outcomes in the window before the failure rate is evaluated.
     */
   private[ccas] case class ThrottleConfig(
     maxPermits: Long,
     cooldown: Duration,
     retryBase: Duration,
+    singleRetryDelay: Duration,
     failureWindowSize: Int,
     failureThreshold: Double,
     minSampleSize: Int
@@ -220,7 +232,8 @@ object ChessComClient {
       val windowSize     = typesafeConfig.getInt("failure-window-size")
       val threshold      = typesafeConfig.getDouble("failure-threshold")
       val minSample      = typesafeConfig.getInt("min-sample-size")
-      val throttleConfig = ThrottleConfig(permits, cooldown, 1.second, windowSize, threshold, minSample)
+      val singleDelay    = typesafeConfig.getLong("single-retry-delay-seconds").seconds
+      val throttleConfig = ThrottleConfig(permits, cooldown, 1.second, singleDelay, windowSize, threshold, minSample)
       for {
         contactEmail <- ZIO.attempt(typesafeConfig.getString("contact-email"))
         client       <- ZIO.service[Client]

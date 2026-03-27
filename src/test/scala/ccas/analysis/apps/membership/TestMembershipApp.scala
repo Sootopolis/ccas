@@ -115,7 +115,7 @@ object TestMembershipApp extends ZIOSpecDefault {
         adjustMutex,
         activeRef,
         bar,
-        ChessComClient.ThrottleConfig(1, 30.seconds, 1.second, 20, 0.2, 10)
+        ChessComClient.ThrottleConfig(1, 30.seconds, 1.second, 5.seconds, 20, 0.2, 10)
       )
     }
 

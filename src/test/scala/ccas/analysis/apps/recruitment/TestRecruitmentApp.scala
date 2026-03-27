@@ -287,7 +287,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         adjustMutex,
         activeRef,
         bar,
-        ChessComClient.ThrottleConfig(1, 30.seconds, 1.second, 20, 0.2, 10)
+        ChessComClient.ThrottleConfig(1, 30.seconds, 1.second, 5.seconds, 20, 0.2, 10)
       )
     }
 
@@ -383,7 +383,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         adjustMutex,
         activeRef,
         bar,
-        ChessComClient.ThrottleConfig(5, 30.seconds, 1.second, 20, 0.2, 10)
+        ChessComClient.ThrottleConfig(5, 30.seconds, 1.second, 5.seconds, 20, 0.2, 10)
       )
     }
 
@@ -757,10 +757,11 @@ object TestRecruitmentApp extends ZIOSpecDefault {
     test("ApiFetchFailure insert and selectRecent") {
       val now = Instant.now()
       val failure = ApiFetchFailure(
+        occurredAt = now,
         url = "https://api.chess.com/pub/player/alice/games/2026/03",
         errorType = "UserFacingException",
         errorMessage = Some("HTTP 404"),
-        occurredAt = now
+        responseBody = None
       )
       for {
         _        <- seedDb
