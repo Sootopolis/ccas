@@ -287,7 +287,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         adjustMutex,
         activeRef,
         bar,
-        ChessComClient.ThrottleConfig(1, 30.seconds, 1.second, 5.seconds, 20, 0.2, 10)
+        ChessComClient.ThrottleConfig(1, 30.seconds, 1.second, 5.seconds, 10.seconds, 20, 0.2, 10)
       )
     }
 
@@ -383,7 +383,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         adjustMutex,
         activeRef,
         bar,
-        ChessComClient.ThrottleConfig(5, 30.seconds, 1.second, 5.seconds, 20, 0.2, 10)
+        ChessComClient.ThrottleConfig(5, 30.seconds, 1.second, 5.seconds, 10.seconds, 20, 0.2, 10)
       )
     }
 
@@ -536,7 +536,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
     FreshSchemaLayer("test_recruitment_app", onInit = Tables.ensureTables),
     Scope.default,
     CcasLogger.live(showProgress = false)
-  ) @@ TestAspect.sequential
+  ) @@ TestAspect.sequential @@ TestAspect.withLiveClock
 
   // ==========================================================================
   // Suite: Criteria helper methods (pure)

@@ -31,9 +31,10 @@ final class ChessComClient(
   }).batched
 
   private def rawGet[T](url: URL)(using jsonDecoder: JsonDecoder[T]): Task[T] = for {
-    response <- batchedClient(Request(method = GET, url = url).addHeaders(headers))
-    _        <- recordOutcome(response.status != Status.TooManyRequests)
-    string   <- response.body.asString
+    response    <- batchedClient(Request(method = GET, url = url).addHeaders(headers))
+    string      <- response.body.asString
+    cfChallenge  = isCloudflareChallenge(response, string)
+    _           <- if (cfChallenge) throttleDown(4) else recordOutcome(response.status != Status.TooManyRequests)
     _ <- ZIO.whenDiscard(!response.status.isSuccess)(
       ZIO.fail(HttpStatusException(response.status.code, url, string))
     )
@@ -44,7 +45,7 @@ final class ChessComClient(
     semaphore.withPermit {
       (activeRef.updateAndGet(_ + 1).flatMap(updateBar) *> rawGet(url))
         .ensuring(activeRef.updateAndGet(_ - 1).flatMap(updateBar).ignore)
-    }.retry(retry429Schedule).retry(retryOnceSchedule).tapError { error =>
+    }.retry(retry429Schedule).retry(retryCfSchedule).retry(retryOnceSchedule).tapError { error =>
       val (msg, body) = error match {
         case e: HttpStatusException => (Some(e.statusCode.toString), Some(e.responseBody))
         case other                  => (Option(other.getMessage), None)
@@ -88,18 +89,18 @@ final class ChessComClient(
         failureRate(newOutcomes) > config.failureThreshold
       (shouldThrottle, state.copy(outcomes = newOutcomes))
     }.flatMap { shouldThrottle =>
-      ZIO.whenDiscard(shouldThrottle)(throttleDown)
+      ZIO.whenDiscard(shouldThrottle)(throttleDown())
     }
 
-  /** Halve the effective permit limit and schedule recovery.
+  /** Reduce the effective permit limit by the given divisor and schedule recovery.
     * Clears the outcome window and sets coolingDown to prevent cascading reductions.
     */
-  private def throttleDown: Task[Unit] =
+  private def throttleDown(divisor: Int = 2): Task[Unit] =
     stateRef.modify { state =>
       if (state.coolingDown) {
         (None, state)
       } else {
-        val newMax = (state.currentMax / 2).max(1)
+        val newMax = (state.currentMax / divisor).max(1)
         if (newMax == state.currentMax) {
           (None, state)
         } else {
@@ -177,6 +178,9 @@ final class ChessComClient(
       }
     }
 
+  private def isCloudflareChallenge(response: Response, body: String): Boolean =
+    response.status == Status.Forbidden && body.contains("/cdn-cgi/challenge-platform/")
+
   private def failureRate(outcomes: Vector[Boolean]): Double =
     if (outcomes.isEmpty) 0.0
     else outcomes.count(!_).toDouble / outcomes.size
@@ -187,10 +191,19 @@ final class ChessComClient(
       case _                      => false
     }
 
+  private val retryCfSchedule: Schedule[Any, Throwable, Any] =
+    Schedule.fixed(config.cfRetryDelay) && Schedule.recurs(2) && Schedule.recurWhile[Throwable] {
+      case e: HttpStatusException =>
+        e.statusCode == 403 && e.responseBody.contains("/cdn-cgi/challenge-platform/")
+      case _ => false
+    }
+
   private val retryOnceSchedule: Schedule[Any, Throwable, Any] =
     Schedule.fixed(config.singleRetryDelay) && Schedule.recurs(1) && Schedule.recurWhile[Throwable] {
-      case e: HttpStatusException => e.statusCode == 403 || e.statusCode == 404
-      case _                      => false
+      case e: HttpStatusException =>
+        (e.statusCode == 403 && !e.responseBody.contains("/cdn-cgi/challenge-platform/")) ||
+        e.statusCode == 404
+      case _ => false
     }
 }
 
@@ -206,6 +219,7 @@ object ChessComClient {
     * @param cooldown         Time to wait after a throttle-down before attempting recovery.
     * @param retryBase        Base duration for exponential-backoff retry on 429 responses.
     * @param singleRetryDelay Fixed delay for a single retry on 403/404 responses.
+    * @param cfRetryDelay     Fixed delay between retries on Cloudflare challenge 403 responses.
     * @param failureWindowSize Rolling window size for tracking success/failure outcomes.
     * @param failureThreshold Fraction of failures in the window (0.0–1.0) that triggers a throttle-down.
     * @param minSampleSize    Minimum outcomes in the window before the failure rate is evaluated.
@@ -215,6 +229,7 @@ object ChessComClient {
     cooldown: Duration,
     retryBase: Duration,
     singleRetryDelay: Duration,
+    cfRetryDelay: Duration,
     failureWindowSize: Int,
     failureThreshold: Double,
     minSampleSize: Int
@@ -235,7 +250,8 @@ object ChessComClient {
       val threshold      = typesafeConfig.getDouble("failure-threshold")
       val minSample      = typesafeConfig.getInt("min-sample-size")
       val singleDelay    = typesafeConfig.getLong("single-retry-delay-seconds").seconds
-      val throttleConfig = ThrottleConfig(permits, cooldown, 1.second, singleDelay, windowSize, threshold, minSample)
+      val cfDelay        = typesafeConfig.getLong("cf-retry-delay-seconds").seconds
+      val throttleConfig = ThrottleConfig(permits, cooldown, 1.second, singleDelay, cfDelay, windowSize, threshold, minSample)
       for {
         contactEmail <- ZIO.attempt(typesafeConfig.getString("contact-email"))
         client       <- ZIO.service[Client]

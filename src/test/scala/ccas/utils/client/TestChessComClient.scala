@@ -28,7 +28,7 @@ object TestChessComClient extends ZIOSpecDefault {
       adjustMutex <- Semaphore.make(1)
       activeRef   <- Ref.make(0)
       bar         <- TestCcasLogger.noopBar
-      config = ChessComClient.ThrottleConfig(permits, cooldown, retryBase, 10.millis, failureWindowSize, failureThreshold, 10)
+      config = ChessComClient.ThrottleConfig(permits, cooldown, retryBase, 10.millis, 10.millis, failureWindowSize, failureThreshold, 10)
     } yield {
       val driver = new ZClient.Driver[Any, Scope, Throwable] {
         override def request(
@@ -71,6 +71,7 @@ object TestChessComClient extends ZIOSpecDefault {
 
   private val testUrl  = URL.decode("http://test.example.com/api").toOption.get
   private val jsonBody = """{"value":"ok"}"""
+  private val cfBody   = """<html><head><title>Just a moment...</title></head><body><script src="/cdn-cgi/challenge-platform/scripts/jsd/main.js"></script></body></html>"""
 
   override def spec: Spec[TestEnvironment, Any] = suite("TestChessComClient")(
     test("normal 200 succeeds without throttle activation") {
@@ -201,6 +202,47 @@ object TestChessComClient extends ZIOSpecDefault {
         )
       }
     },
+    test("Cloudflare 403 triggers hard throttle-down") {
+      ZIO.scoped {
+        for {
+          (client, stateRef) <- makeClient(
+            handler = _ => ZIO.succeed(Response(status = Status.Forbidden, body = Body.fromString(cfBody))),
+            permits = 16,
+            cooldown = 60.seconds,
+            failureThreshold = 0.2
+          )
+          _ <- ZIO.foreachParDiscard(1 to 5)(i =>
+            client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get).exit
+          )
+          state <- stateRef.get
+        } yield assertTrue(state.currentMax == 4L, state.coolingDown)
+      }
+    },
+    test("Cloudflare 403 is not retried by single-retry schedule") {
+      ZIO.scoped {
+        for {
+          counter <- Ref.make(0)
+          (client, _) <- makeClient { _ =>
+            counter.getAndUpdate(_ + 1).as(Response(status = Status.Forbidden, body = Body.fromString(cfBody)))
+          }
+          _     <- client.get[Payload](testUrl).exit
+          count <- counter.get
+          // 1 initial + 2 CF retries = 3 (no extra single-retry on top)
+        } yield assertTrue(count == 3)
+      }
+    },
+    test("normal 403 still gets single retry") {
+      ZIO.scoped {
+        for {
+          counter <- Ref.make(0)
+          (client, _) <- makeClient { _ =>
+            counter.getAndUpdate(_ + 1).as(Response(status = Status.Forbidden, body = Body.fromString("Forbidden")))
+          }
+          _     <- client.get[Payload](testUrl).exit
+          count <- counter.get
+        } yield assertTrue(count == 2)
+      }
+    },
     test("sequential ordering when throttled to 1 permit") {
       ZIO.scoped {
         for {
@@ -212,7 +254,7 @@ object TestChessComClient extends ZIOSpecDefault {
           activeRef   <- Ref.make(0)
           bar         <- TestCcasLogger.noopBar
           counter   <- Ref.make(0)
-          config = ChessComClient.ThrottleConfig(5, 60.seconds, 10.millis, 10.millis, 20, 0.2, 10)
+          config = ChessComClient.ThrottleConfig(5, 60.seconds, 10.millis, 10.millis, 10.millis, 20, 0.2, 10)
           // Reserve 4 permits to enforce effective limit of 1
           reserveFibers <- ZIO.foreach(Chunk.range(0, 4))(_ => semaphore.withPermit(ZIO.never).forkDaemon)
           _ <- reserveRef.set(reserveFibers)
