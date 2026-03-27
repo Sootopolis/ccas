@@ -10,7 +10,7 @@ import ccas.api.misc.subtypes.{ClubMatchId, Username}
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.SqlZioTypes.connectZIO
 
-final case class UnresolvedBoardPlayerRow(
+final case class UnresolvedBoardPlayer(
   matchId: ClubMatchId,
   board: Int,
   isTeam1: Boolean,
@@ -37,10 +37,10 @@ object UnresolvedBoardPlayer {
             ON CONFLICT (match_id, board, is_team1) DO NOTHING""".update.run()
     }
 
-  def selectAll: ZIO[Transactor, SQLException, List[UnresolvedBoardPlayerRow]] =
+  def selectAll: ZIO[Transactor, SQLException, List[UnresolvedBoardPlayer]] =
     connectZIO {
       sql"SELECT match_id, board, is_team1, username FROM unresolved_board_player"
-        .query[UnresolvedBoardPlayerRow].run().toList
+        .query[UnresolvedBoardPlayer].run().toList
     }
 
   def delete(matchId: ClubMatchId, board: Int, isTeam1: Boolean): ZIO[Transactor, SQLException, Int] =
