@@ -25,7 +25,7 @@ object TestProgressBar extends ZIOSpecDefault {
         val all = output.mkString
         assertTrue(
           all.contains("Working"),
-          all.contains("50%"),
+          all.contains("50.0%"),
           all.contains("\u2588"),
           all.contains("\u2591")
         )
@@ -39,7 +39,7 @@ object TestProgressBar extends ZIOSpecDefault {
         bar    <- CcasLogger.progressBar
         _      <- bar.print(0, 0, "Empty")
         output <- TestConsole.output
-      } yield assertTrue(output.mkString.contains("100%"))
+      } yield assertTrue(output.mkString.contains("100.0%"))
     }
   }
 
