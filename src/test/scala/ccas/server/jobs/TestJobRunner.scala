@@ -1,7 +1,7 @@
 package ccas.server.jobs
 
 import com.augustnagro.magnum.{sql, Transactor}
-import zio.{durationInt, Fiber, Ref, Scope, Semaphore, Trace, ZIO, ZLayer}
+import zio.{durationInt, Chunk, Fiber, Ref, Scope, Semaphore, Trace, ZIO, ZLayer}
 import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
@@ -38,10 +38,10 @@ object TestJobRunner extends ZIOSpecDefault {
       for {
         semaphore  <- Semaphore.make(1)
         stateRef   <- Ref.make(ChessComClient.ThrottleState(1, 0, Vector.empty))
-        reserveRef  <- Ref.make(Option.empty[Fiber.Runtime[Nothing, Nothing]])
+        reserveRef  <- Ref.make(Chunk.empty[Fiber.Runtime[Nothing, Nothing]])
         adjustMutex <- Semaphore.make(1)
         activeRef   <- Ref.make(0)
-        bar        <- TestCcasLogger.noopBar
+        bar         <- TestCcasLogger.noopBar
       } yield {
         val routes: Routes[Any, Response] = Routes(
           Method.GET / trailing -> handler(Response(status = Status.NotFound))
@@ -80,7 +80,7 @@ object TestJobRunner extends ZIOSpecDefault {
           adjustMutex,
           activeRef,
           bar,
-          ChessComClient.ThrottleConfig(1, 30.seconds, 1.second, 50, 0.2, 10)
+          ChessComClient.ThrottleConfig(1, 30.seconds, 1.second, 20, 0.2, 10)
         )
       }
     }

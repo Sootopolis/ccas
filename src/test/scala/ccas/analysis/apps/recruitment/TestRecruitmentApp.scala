@@ -3,7 +3,7 @@ package ccas.analysis.apps.recruitment
 import java.time.{Duration, Instant, LocalDateTime, ZoneOffset}
 
 import com.augustnagro.magnum.{sql, Transactor}
-import zio.{durationInt, Fiber, Promise, RIO, Ref, Scope, Semaphore, ZIO}
+import zio.{durationInt, Chunk, Fiber, Promise, RIO, Ref, Scope, Semaphore, ZIO}
 import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
@@ -207,10 +207,10 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       transactor <- ZIO.service[Transactor]
       semaphore  <- Semaphore.make(1)
       stateRef   <- Ref.make(ChessComClient.ThrottleState(1, 0, Vector.empty))
-      reserveRef  <- Ref.make(Option.empty[Fiber.Runtime[Nothing, Nothing]])
+      reserveRef  <- Ref.make(Chunk.empty[Fiber.Runtime[Nothing, Nothing]])
       adjustMutex <- Semaphore.make(1)
       activeRef   <- Ref.make(0)
-      bar        <- TestCcasLogger.noopBar
+      bar         <- TestCcasLogger.noopBar
     } yield {
       val routes: Routes[Any, Response] = Routes(
         // Player stats endpoint
@@ -287,7 +287,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         adjustMutex,
         activeRef,
         bar,
-        ChessComClient.ThrottleConfig(1, 30.seconds, 1.second, 50, 0.2, 10)
+        ChessComClient.ThrottleConfig(1, 30.seconds, 1.second, 20, 0.2, 10)
       )
     }
 
@@ -306,7 +306,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       transactor  <- ZIO.service[Transactor]
       semaphore   <- Semaphore.make(5)
       stateRef    <- Ref.make(ChessComClient.ThrottleState(5, 0, Vector.empty))
-      reserveRef  <- Ref.make(Option.empty[Fiber.Runtime[Nothing, Nothing]])
+      reserveRef  <- Ref.make(Chunk.empty[Fiber.Runtime[Nothing, Nothing]])
       adjustMutex <- Semaphore.make(1)
       activeRef   <- Ref.make(0)
       bar         <- TestCcasLogger.noopBar
@@ -383,7 +383,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         adjustMutex,
         activeRef,
         bar,
-        ChessComClient.ThrottleConfig(5, 30.seconds, 1.second, 50, 0.2, 10)
+        ChessComClient.ThrottleConfig(5, 30.seconds, 1.second, 20, 0.2, 10)
       )
     }
 

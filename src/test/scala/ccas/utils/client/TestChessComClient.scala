@@ -18,16 +18,16 @@ object TestChessComClient extends ZIOSpecDefault {
     permits: Long = 5,
     cooldown: Duration = 50.millis,
     retryBase: Duration = 10.millis,
-    failureWindowSize: Int = 50,
+    failureWindowSize: Int = 20,
     failureThreshold: Double = 0.2
   ): ZIO[Scope, Nothing, (ChessComClient, Ref[ChessComClient.ThrottleState])] =
     for {
       semaphore  <- Semaphore.make(permits)
       stateRef   <- Ref.make(ChessComClient.ThrottleState(permits, 0, Vector.empty))
-      reserveRef  <- Ref.make(Option.empty[Fiber.Runtime[Nothing, Nothing]])
+      reserveRef  <- Ref.make(Chunk.empty[Fiber.Runtime[Nothing, Nothing]])
       adjustMutex <- Semaphore.make(1)
       activeRef   <- Ref.make(0)
-      bar         <- TestCcasLogger.noop.progressBar
+      bar         <- TestCcasLogger.noopBar
       config = ChessComClient.ThrottleConfig(permits, cooldown, retryBase, failureWindowSize, failureThreshold, 10)
     } yield {
       val driver = new ZClient.Driver[Any, Scope, Throwable] {
@@ -124,20 +124,21 @@ object TestChessComClient extends ZIOSpecDefault {
         } yield assertTrue(state.currentMax == 5L) // unchanged from initial permits
       }
     },
-    test("failure rate above threshold triggers graduated throttle-down") {
+    test("failure rate above threshold triggers throttle-down") {
       ZIO.scoped {
         for {
-          // All requests return 429 — guaranteed to generate enough failures
+          // All requests return 429 — coolingDown limits to one halving per cooldown cycle
           (client, stateRef) <- makeClient(
             handler = _ => ZIO.succeed(Response(status = Status.TooManyRequests)),
             permits = 20,
+            cooldown = 60.seconds,
             failureThreshold = 0.2
           )
           _ <- ZIO.foreachParDiscard(1 to 5)(i =>
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get).exit
           )
           state <- stateRef.get
-        } yield assertTrue(state.currentMax < 20L)
+        } yield assertTrue(state.currentMax == 10L, state.coolingDown)
       }
     },
     test("recovery doubles permits after cooldown when failure rate drops") {
@@ -153,8 +154,7 @@ object TestChessComClient extends ZIOSpecDefault {
             },
             permits = 20,
             cooldown = 100.millis,
-            failureThreshold = 0.2,
-            failureWindowSize = 20
+            failureThreshold = 0.2
           )
           // Phase 1: Sustained failures → throttle down
           _ <- ZIO.foreachParDiscard(1 to 5)(i =>
@@ -183,7 +183,7 @@ object TestChessComClient extends ZIOSpecDefault {
           (client, stateRef) <- makeClient(
             handler = { _ =>
               counter.getAndUpdate(_ + 1).map { n =>
-                // Sustained failures to trigger multiple throttle-downs
+                // Sustained failures to trigger throttle-down
                 if (n < 30) { Response(status = Status.TooManyRequests) }
                 else { Response.json(jsonBody) }
               }
@@ -207,15 +207,15 @@ object TestChessComClient extends ZIOSpecDefault {
           order     <- Ref.make(Chunk.empty[Int])
           stateRef  <- Ref.make(ChessComClient.ThrottleState(1, 0, Vector.empty))
           semaphore <- Semaphore.make(5)
-          reserveRef  <- Ref.make(Option.empty[Fiber.Runtime[Nothing, Nothing]])
+          reserveRef  <- Ref.make(Chunk.empty[Fiber.Runtime[Nothing, Nothing]])
           adjustMutex <- Semaphore.make(1)
           activeRef   <- Ref.make(0)
-          bar         <- TestCcasLogger.noop.progressBar
+          bar         <- TestCcasLogger.noopBar
           counter   <- Ref.make(0)
-          config = ChessComClient.ThrottleConfig(5, 60.seconds, 10.millis, 50, 0.2, 10)
+          config = ChessComClient.ThrottleConfig(5, 60.seconds, 10.millis, 20, 0.2, 10)
           // Reserve 4 permits to enforce effective limit of 1
-          reserveFiber <- semaphore.withPermits(4)(ZIO.never).forkDaemon
-          _ <- reserveRef.set(Some(reserveFiber))
+          reserveFibers <- ZIO.foreach(Chunk.range(0, 4))(_ => semaphore.withPermit(ZIO.never).forkDaemon)
+          _ <- reserveRef.set(reserveFibers)
           driver = new ZClient.Driver[Any, Scope, Throwable] {
             override def request(
               version: Version,

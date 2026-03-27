@@ -4,7 +4,7 @@ import java.util.concurrent.atomic.AtomicInteger
 
 import zio.{Console, Ref, Scope, Semaphore, UIO, ZIO}
 
-/** Manages a stack of progress bars rendered as a vertical block on stdout.
+/** Manages progress bars rendered as a single line on stdout, overwritten in-place via `\r`.
   *
   * All stdout operations (`render`, `logAboveBars`, `removeBar`) are serialized via a
   * `Semaphore(1)` to ensure atomic erase-print-redraw sequences.
@@ -20,8 +20,6 @@ class ProgressDisplay private[utils] (
 ) {
 
   private val idGen = new AtomicInteger(0)
-
-  private val EraseLine = "\u001b[A\u001b[2K"
 
   // ---------------------------------------------------------------------------
   // Bar lifecycle
@@ -47,7 +45,6 @@ class ProgressDisplay private[utils] (
     ZIO.whenDiscard(enabled)(mutex.withPermit {
       for {
         bars <- state.get
-        _    <- eraseAll(bars)
         updated = bars.map { b =>
           if (b.id == barId) ProgressDisplay.BarState(barId, lineCount, output)
           else b
@@ -62,7 +59,7 @@ class ProgressDisplay private[utils] (
     ZIO.whenDiscard(enabled)(mutex.withPermit {
       for {
         bars <- state.get
-        _    <- eraseAll(bars)
+        _ <- clearLine(bars)
         updated = bars.filterNot(_.id == barId)
         _ <- state.set(updated)
         _ <- drawAll(updated)
@@ -74,8 +71,8 @@ class ProgressDisplay private[utils] (
     ZIO.whenDiscard(enabled)(mutex.withPermit {
       for {
         bars <- state.get
-        _    <- eraseAll(bars)
-        _    <- state.set(Nil)
+        _ <- clearLine(bars)
+        _ <- state.set(Nil)
       } yield ()
     })
 
@@ -92,7 +89,7 @@ class ProgressDisplay private[utils] (
         for {
           bars <- state.get
           hasRendered = bars.exists(_.lineCount > 0)
-          _ <- ZIO.whenDiscard(hasRendered)(eraseAll(bars))
+          _ <- ZIO.whenDiscard(hasRendered)(clearLine(bars))
           _ <- Console.printLine(msg).ignore
           _ <- ZIO.whenDiscard(hasRendered)(drawAll(bars))
         } yield ()
@@ -100,17 +97,19 @@ class ProgressDisplay private[utils] (
     }
 
   // ---------------------------------------------------------------------------
-  // Internal ANSI rendering
+  // Internal rendering — single-line, \r-based (no cursor-up needed)
   // ---------------------------------------------------------------------------
 
-  private def eraseAll(bars: List[ProgressDisplay.BarState]): UIO[Unit] = {
-    val n = bars.map(_.lineCount).sum
-    ZIO.whenDiscard(n > 0)(Console.print(EraseLine * n + "\r").ignore)
+  /** Clear the current bar line. */
+  private def clearLine(bars: List[ProgressDisplay.BarState]): UIO[Unit] = {
+    val hasOutput = bars.exists(_.lineCount > 0)
+    ZIO.whenDiscard(hasOutput)(Console.print("\r\u001b[K").ignore)
   }
 
+  /** Render all active bars as a single \r-overwritten line. */
   private def drawAll(bars: List[ProgressDisplay.BarState]): UIO[Unit] = {
-    val output = bars.filter(_.lineCount > 0).map(_.lastOutput).mkString("\n")
-    ZIO.whenDiscard(output.nonEmpty)(Console.print(output).ignore)
+    val parts = bars.filter(_.lineCount > 0).map(_.lastOutput.trim)
+    ZIO.whenDiscard(parts.nonEmpty)(Console.print("\r" + parts.mkString("  ") + "\u001b[K").ignore)
   }
 }
 

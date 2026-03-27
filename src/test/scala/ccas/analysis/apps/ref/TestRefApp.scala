@@ -3,7 +3,7 @@ package ccas.analysis.apps.ref
 import java.time.{Instant, LocalDateTime, ZoneOffset}
 
 import com.augustnagro.magnum.{sql, Transactor}
-import zio.{durationInt, Fiber, RIO, Ref, Scope, Semaphore, ZIO, ZLayer}
+import zio.{durationInt, Chunk, Fiber, RIO, Ref, Scope, Semaphore, ZIO, ZLayer}
 import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
@@ -144,10 +144,10 @@ object TestRefApp extends ZIOSpecDefault {
       transactor <- ZIO.service[Transactor]
       semaphore  <- Semaphore.make(5)
       stateRef   <- Ref.make(ChessComClient.ThrottleState(5, 0, Vector.empty))
-      reserveRef  <- Ref.make(Option.empty[Fiber.Runtime[Nothing, Nothing]])
+      reserveRef  <- Ref.make(Chunk.empty[Fiber.Runtime[Nothing, Nothing]])
       adjustMutex <- Semaphore.make(1)
       activeRef   <- Ref.make(0)
-      bar        <- TestCcasLogger.noopBar
+      bar         <- TestCcasLogger.noopBar
     } yield {
       val routes: Routes[Any, Response] = Routes(
         Method.GET / "pub" / "player" / string("username") / "tournaments" -> handler { (username: String, _: Request) =>
@@ -209,7 +209,7 @@ object TestRefApp extends ZIOSpecDefault {
         adjustMutex,
         activeRef,
         bar,
-        ChessComClient.ThrottleConfig(5, 30.seconds, 1.second, 50, 0.2, 10)
+        ChessComClient.ThrottleConfig(5, 30.seconds, 1.second, 20, 0.2, 10)
       )
     }
 
