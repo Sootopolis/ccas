@@ -47,7 +47,7 @@ object MembershipApp extends ZIOAppDefault {
       }
     } yield ()).provideSomeAuto(
       CcasLogger.live(showProgress = true),
-      ChessComClient.live(),
+      ChessComClient.live,
       Client.default,
       DataSourceLayer.liveFromPrefix(onInit = Tables.ensureTables)
     )

@@ -31,7 +31,7 @@ object BlacklistApp extends ZIOAppDefault {
         case _ => ZIO.fail(BadRequestException(help))
       }
     } yield ()).provideSomeAuto(
-      ChessComClient.live(),
+      ChessComClient.live,
       Client.default,
       DataSourceLayer.liveFromPrefix(onInit = Tables.ensureTables)
     )

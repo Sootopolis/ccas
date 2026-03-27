@@ -77,7 +77,7 @@ object RecruitmentApp extends ZIOAppDefault {
         case _ => ZIO.fail(BadRequestException(help))
       }).provideSome[Scope](
         CcasLogger.live(showProgress = true),
-        ChessComClient.live(),
+        ChessComClient.live,
         Client.default,
         DataSourceLayer.liveFromPrefix(onInit = Tables.ensureTables)
       )

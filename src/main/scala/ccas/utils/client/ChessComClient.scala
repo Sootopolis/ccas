@@ -3,7 +3,8 @@ package ccas.utils.client
 import java.time.Instant
 
 import com.augustnagro.magnum.Transactor
-import zio.{durationInt, Chunk, Duration, Ref, Schedule, Semaphore, Task, ZEnvironment, ZIO, ZLayer}
+import com.typesafe.config.ConfigFactory
+import zio.{durationInt, durationLong, Chunk, Duration, Ref, Schedule, Semaphore, Task, ZEnvironment, ZIO, ZLayer}
 import zio.http.{Client, Header, Headers, Request, Status, URL, ZClientAspect}
 import zio.http.Method.GET
 import zio.json.JsonDecoder
@@ -74,22 +75,18 @@ object ChessComClient {
   private def userAgentHeaders(contactEmail: String): Headers =
     Headers(Header.Custom("User-Agent", s"${BuildInfo.name.toUpperCase}/${BuildInfo.version} (contact: $contactEmail)"))
 
-  def live(
-    permits: Long = 20,
-    cooldown: Duration = 30.seconds
-  ): ZLayer[Client & Transactor, Throwable, ChessComClient] =
+  def live: ZLayer[Client & Transactor, Throwable, ChessComClient] =
     ZLayer.fromZIO {
-      val effectivePermits  = sys.env.get("CHESS_COM_API_PERMITS").flatMap(_.toLongOption).getOrElse(permits)
-      val effectiveCooldown = sys.env.get("CHESS_COM_API_COOLDOWN_SECONDS").flatMap(_.toIntOption)
-        .fold(cooldown)(_.seconds)
+      val config   = ConfigFactory.load().getConfig("chess-com-client")
+      val permits  = config.getLong("permits")
+      val cooldown = config.getLong("cooldown-seconds").seconds
       for {
-        contactEmail <- ZIO.fromOption(Option(System.getenv("CCAS_CONTACT_EMAIL")))
-          .orElseFail(IllegalStateException("CCAS_CONTACT_EMAIL environment variable is required"))
-        client      <- ZIO.service[Client]
-        transactor  <- ZIO.service[Transactor]
-        semaphore   <- Semaphore.make(effectivePermits)
-        mutex       <- Semaphore.make(1)
-        throttled   <- Ref.make(false)
-      } yield ChessComClient(client, transactor, userAgentHeaders(contactEmail), semaphore, mutex, throttled, effectiveCooldown)
+        contactEmail <- ZIO.attempt(config.getString("contact-email"))
+        client       <- ZIO.service[Client]
+        transactor   <- ZIO.service[Transactor]
+        semaphore    <- Semaphore.make(permits)
+        mutex        <- Semaphore.make(1)
+        throttled    <- Ref.make(false)
+      } yield ChessComClient(client, transactor, userAgentHeaders(contactEmail), semaphore, mutex, throttled, cooldown)
     }
 }
