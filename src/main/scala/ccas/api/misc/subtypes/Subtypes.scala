@@ -21,6 +21,7 @@ object PlayerId extends LongCompanion {
 type Username = Username.Type
 
 object Username extends StringKeyCompanion {
+  override protected def normalize(raw: String): String = raw.toLowerCase
   override protected def validateRaw(raw: String): Either[String, String] =
     Either.cond(raw.nonEmpty, raw, s"$name must not be empty")
 }
@@ -35,6 +36,7 @@ object ClubId extends LongCompanion {
 type ClubSlug = ClubSlug.Type
 
 object ClubSlug extends StringKeyCompanion {
+  override protected def normalize(raw: String): String = raw.toLowerCase
   override protected def validateRaw(raw: String): Either[String, String] =
     Either.cond(raw.nonEmpty, raw, s"$name must not be empty")
 }
@@ -65,6 +67,7 @@ object ClubAlias extends StringCompanion {
 type TournamentSlug = TournamentSlug.Type
 
 object TournamentSlug extends StringCompanion {
+  override protected def normalize(raw: String): String = raw.toLowerCase
   override protected def validateRaw(raw: String): Either[String, String] =
     Either.cond(raw.nonEmpty, raw, s"$name must not be empty")
 

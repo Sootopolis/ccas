@@ -1,92 +1,274 @@
 package ccas.utils.client
 
-import java.time.Instant
-
-import com.augustnagro.magnum.Transactor
-import zio.{durationInt, Chunk, Duration, Ref, Schedule, Semaphore, Task, ZEnvironment, ZIO, ZLayer}
-import zio.http.{Client, Header, Headers, Request, Status, URL}
-import zio.http.Method.GET
-import zio.json.JsonDecoder
-
 import ccas.analysis.tables.ApiFetchFailure
 import ccas.info.BuildInfo
-import ccas.utils.errors.ExternalException
 import ccas.utils.json.JsonDecodingException
+import ccas.utils.{CcasLogger, ProgressBar}
+import com.augustnagro.magnum.Transactor
+import com.typesafe.config.ConfigFactory
+import zio.http.Method.GET
+import zio.http.*
+import zio.json.JsonDecoder
+import zio.{Chunk, Duration, Fiber, Ref, Schedule, Semaphore, Task, ZEnvironment, ZIO, ZLayer, durationInt, durationLong}
+
+import java.time.Instant
 
 final class ChessComClient(
   client: Client,
   transactor: Transactor,
   headers: Headers,
+  logger: CcasLogger,
   semaphore: Semaphore,
-  mutex: Semaphore,
-  throttled: Ref[Boolean],
-  cooldown: Duration,
-  retryBase: Duration = 1.second
+  stateRef: Ref[ChessComClient.ThrottleState],
+  reserveFibersRef: Ref[Chunk[Fiber.Runtime[Nothing, Nothing]]],
+  adjustMutex: Semaphore,
+  activeRef: Ref[Int],
+  progressBar: ProgressBar,
+  config: ChessComClient.ThrottleConfig
 ) {
-  private val batchedClient = client.batched
+  private val batchedClient = (client @@ ZClientAspect.followRedirects(3) { (_, message) =>
+    ZIO.fail(Exception(s"Redirect failed: $message"))
+  }).batched
 
   private def rawGet[T](url: URL)(using jsonDecoder: JsonDecoder[T]): Task[T] = for {
-    response <- batchedClient(Request(method = GET, url = url).addHeaders(headers))
-    _ <- ZIO.whenDiscard(response.status == Status.TooManyRequests)(
-      activateThrottle *> ZIO.fail(RateLimitedException(url))
-    )
+    response    <- batchedClient(Request(method = GET, url = url).addHeaders(headers))
+    string      <- response.body.asString
+    cfChallenge  = isCloudflareChallenge(response, string)
+    _           <- if (cfChallenge) throttleDown(4) else recordOutcome(response.status != Status.TooManyRequests)
     _ <- ZIO.whenDiscard(!response.status.isSuccess)(
-      ZIO.fail(ExternalException(s"HTTP ${response.status.code} for $url"))
+      ZIO.fail(HttpStatusException(response.status.code, url, string))
     )
-    string <- response.body.asString
-    value  <- ZIO.fromEither(jsonDecoder.decodeJson(string)).mapError(JsonDecodingException(_))
+    value <- ZIO.fromEither(jsonDecoder.decodeJson(string)).mapError(JsonDecodingException(_))
   } yield value
 
-  def get[T](url: URL)(using jsonDecoder: JsonDecoder[T]): Task[T] = {
-    val acquireAndCall = for {
-      isThrottled <- throttled.get
-      permit =
-        if (isThrottled) { mutex }
-        else { semaphore }
-      result <- permit.withPermit(rawGet(url))
-    } yield result
-    acquireAndCall.retry(retrySchedule).tapError { error =>
+  def get[T](url: URL)(using jsonDecoder: JsonDecoder[T]): Task[T] =
+    semaphore.withPermit {
+      (activeRef.updateAndGet(_ + 1).flatMap(updateBar) *> rawGet(url))
+        .ensuring(activeRef.updateAndGet(_ - 1).flatMap(updateBar).ignore)
+    }.retry(retry429Schedule).retry(retryCfSchedule).retry(retryOnceSchedule).tapError { error =>
+      val (msg, body) = error match {
+        case e: HttpStatusException => (Some(e.statusCode.toString), Some(e.responseBody))
+        case other                  => (Option(other.getMessage), None)
+      }
       ApiFetchFailure
-        .insert(ApiFetchFailure(url.encode, error.getClass.getSimpleName, Option(error.getMessage), Instant.now()))
+        .insert(ApiFetchFailure(Instant.now(), url.encode, error.getClass.getSimpleName, msg, body))
         .provideEnvironment(ZEnvironment(transactor))
         .ignore
     }
-  }
 
   def getAll[T](urls: Iterable[URL])(using jsonDecoder: JsonDecoder[T]): Task[Chunk[T]] =
     ZIO.foreachPar(Chunk.from(urls))(get)
 
-  // Fiber safety: getAndSet is atomic, so only the first 429 forks a cooldown fiber.
-  // Subsequent 429s during the cooldown see wasThrottled=true and skip the fork.
-  private def activateThrottle: Task[Unit] =
-    throttled.getAndSet(true).flatMap { wasThrottled =>
-      ZIO.unlessDiscard(wasThrottled)(throttled.set(false).delay(cooldown).forkDaemon.unit)
+  // ---------------------------------------------------------------------------
+  // Progress bar
+  // ---------------------------------------------------------------------------
+
+  private def updateBar(active: Int): ZIO[Any, Nothing, Unit] =
+    stateRef.get.flatMap { state =>
+      val suffix = if (state.currentMax < config.maxPermits) " (throttled)" else ""
+      progressBar.print(active, state.currentMax.toInt, s"  API: $active/${state.currentMax.toInt}$suffix")
     }
 
-  private val retrySchedule: Schedule[Any, Throwable, Any] =
-    Schedule.exponential(retryBase) && Schedule.recurs(4) && Schedule.recurWhile[Throwable] {
-      case _: RateLimitedException => true
-      case _                       => false
+  // ---------------------------------------------------------------------------
+  // Adaptive throttle
+  // ---------------------------------------------------------------------------
+
+  /** Record a request outcome and trigger throttle-down if failure rate exceeds threshold.
+    * Skipped while cooling down (after a recent throttle-down) to prevent cascading reductions
+    * from a single burst of 429s.
+    */
+  private def recordOutcome(success: Boolean): Task[Unit] =
+    stateRef.modify { state =>
+      val newOutcomes =
+        if (state.outcomes.size >= config.failureWindowSize) { state.outcomes.tail :+ success }
+        else { state.outcomes :+ success }
+      val shouldThrottle = !success &&
+        !state.coolingDown &&
+        newOutcomes.size >= config.minSampleSize &&
+        state.currentMax > 1 &&
+        failureRate(newOutcomes) > config.failureThreshold
+      (shouldThrottle, state.copy(outcomes = newOutcomes))
+    }.flatMap { shouldThrottle =>
+      ZIO.whenDiscard(shouldThrottle)(throttleDown())
+    }
+
+  /** Reduce the effective permit limit by the given divisor and schedule recovery.
+    * Clears the outcome window and sets coolingDown to prevent cascading reductions.
+    */
+  private def throttleDown(divisor: Int = 2): Task[Unit] =
+    stateRef.modify { state =>
+      if (state.coolingDown) {
+        (None, state)
+      } else {
+        val newMax = (state.currentMax / divisor).max(1)
+        if (newMax == state.currentMax) {
+          (None, state)
+        } else {
+        val newGen = state.generation + 1
+        val newState = state.copy(
+          currentMax = newMax,
+          generation = newGen,
+          outcomes = Vector.empty,
+          coolingDown = true
+        )
+        (Some((state.currentMax, newMax, newGen)), newState)
+        }
+      }
+    }.flatMap {
+      case None => ZIO.unit
+      case Some((oldMax, newMax, gen)) =>
+        adjustPermits(newMax) *>
+          logger.warn(s"Rate limit throttle: $oldMax \u2192 $newMax permits") *>
+          scheduleRecovery(gen).forkDaemon.unit
+    }
+
+  /** Adjust the reservation fibers to enforce `newMax` effective permits.
+    * Each reserve fiber holds exactly 1 permit via `withPermit(ZIO.never)`, so permits
+    * are acquired incrementally as they become available — avoiding the starvation problem
+    * where a single `withPermits(N)` call can never acquire N permits atomically.
+    * Serialized via mutex to prevent concurrent calls from leaking reserve fibers.
+    */
+  private def adjustPermits(newMax: Long): Task[Unit] =
+    adjustMutex.withPermit {
+      for {
+        oldFibers <- reserveFibersRef.getAndSet(Chunk.empty)
+        _         <- ZIO.foreachDiscard(oldFibers)(_.interrupt)
+        toReserve = config.maxPermits - newMax
+        newFibers <- ZIO.foreach(Chunk.range(0, toReserve.toInt))(_ =>
+          semaphore.withPermit(ZIO.never).forkDaemon
+        )
+        _ <- reserveFibersRef.set(newFibers)
+      } yield ()
+    }
+
+  /** Sleep for cooldown, then recover permits if failure rate has dropped.
+    * Clears coolingDown so further throttle-downs can occur if needed.
+    */
+  private def scheduleRecovery(generation: Long): Task[Unit] =
+    ZIO.sleep(config.cooldown) *> {
+      stateRef.modify { state =>
+        if (state.generation != generation) {
+          (None, state)
+        } else if (failureRate(state.outcomes) > config.failureThreshold) {
+          (Some((state.currentMax, state.currentMax, generation)), state.copy(coolingDown = false))
+        } else {
+          val newMax        = (state.currentMax * 2).min(config.maxPermits)
+          val clearOutcomes = newMax == config.maxPermits
+          val newState = state.copy(
+            currentMax = newMax,
+            coolingDown = false,
+            outcomes = if (clearOutcomes) Vector.empty else state.outcomes
+          )
+          (Some((state.currentMax, newMax, generation)), newState)
+        }
+      }.flatMap {
+        case None => ZIO.unit
+        case Some((oldMax, newMax, gen)) =>
+          if (oldMax == newMax) {
+            logger.warn(s"Rate limit still elevated, holding at $newMax permits") *>
+              scheduleRecovery(gen)
+          } else {
+            val msg =
+              if (newMax == config.maxPermits) "Rate limit throttle lifted"
+              else s"Rate limit easing: $oldMax \u2192 $newMax permits"
+            adjustPermits(newMax) *>
+              logger.info(msg) *>
+              ZIO.unlessDiscard(newMax == config.maxPermits)(scheduleRecovery(gen))
+          }
+      }
+    }
+
+  private val CfChallengeMarker = "/cdn-cgi/challenge-platform/"
+
+  private def isCloudflareChallenge(response: Response, body: String): Boolean =
+    response.status == Status.Forbidden && body.contains(CfChallengeMarker)
+
+  private def failureRate(outcomes: Vector[Boolean]): Double =
+    if (outcomes.isEmpty) 0.0
+    else outcomes.count(!_).toDouble / outcomes.size
+
+  private val retry429Schedule: Schedule[Any, Throwable, Any] =
+    Schedule.exponential(config.retryBase).jittered && Schedule.recurs(5) && Schedule.recurWhile[Throwable] {
+      case e: HttpStatusException => e.statusCode == 429
+      case _                      => false
+    }
+
+  private val retryCfSchedule: Schedule[Any, Throwable, Any] =
+    Schedule.fixed(config.cfRetryDelay) && Schedule.recurs(2) && Schedule.recurWhile[Throwable] {
+      case e: HttpStatusException =>
+        e.statusCode == 403 && e.responseBody.contains(CfChallengeMarker)
+      case _ => false
+    }
+
+  private val retryOnceSchedule: Schedule[Any, Throwable, Any] =
+    Schedule.fixed(config.singleRetryDelay) && Schedule.recurs(1) && Schedule.recurWhile[Throwable] {
+      case e: HttpStatusException =>
+        (e.statusCode == 403 && !e.responseBody.contains(CfChallengeMarker)) ||
+        e.statusCode == 404
+      case _ => false
     }
 }
 
 object ChessComClient {
-  private def userAgentHeaders(contactEmail: String): Headers =
-    Headers(Header.Custom("User-Agent", s"${BuildInfo.name.toUpperCase}/${BuildInfo.version} (contact: $contactEmail)"))
+  private[ccas] case class ThrottleState(
+    currentMax: Long,
+    generation: Long,
+    outcomes: Vector[Boolean],
+    coolingDown: Boolean = false
+  )
 
-  def live(
-    permits: Long = 20,
-    cooldown: Duration = 30.seconds
-  ): ZLayer[Client & Transactor, Throwable, ChessComClient] =
-    ZLayer.fromZIO {
+  /** @param maxPermits       Maximum concurrent requests (semaphore permits). Throttle-down halves from here; recovery doubles back.
+    * @param cooldown         Time to wait after a throttle-down before attempting recovery.
+    * @param retryBase        Base duration for exponential-backoff retry on 429 responses.
+    * @param singleRetryDelay Fixed delay for a single retry on 403/404 responses.
+    * @param cfRetryDelay     Fixed delay between retries on Cloudflare challenge 403 responses.
+    * @param failureWindowSize Rolling window size for tracking success/failure outcomes.
+    * @param failureThreshold Fraction of failures in the window (0.0–1.0) that triggers a throttle-down.
+    * @param minSampleSize    Minimum outcomes in the window before the failure rate is evaluated.
+    */
+  private[ccas] case class ThrottleConfig(
+    maxPermits: Long,
+    cooldown: Duration,
+    retryBase: Duration,
+    singleRetryDelay: Duration,
+    cfRetryDelay: Duration,
+    failureWindowSize: Int,
+    failureThreshold: Double,
+    minSampleSize: Int
+  )
+
+  private def userAgentHeaders(contactEmail: String): Headers =
+    Headers(
+      Header.Custom("User-Agent", s"${BuildInfo.name.toUpperCase}/${BuildInfo.version} (contact: $contactEmail)"),
+      Header.Accept(MediaType.application.json),
+    )
+
+  def live: ZLayer[Client & Transactor & CcasLogger, Throwable, ChessComClient] =
+    ZLayer.scoped {
+      val typesafeConfig = ConfigFactory.load().getConfig("chess-com-client")
+      val permits        = typesafeConfig.getLong("permits")
+      val cooldown       = typesafeConfig.getLong("cooldown-seconds").seconds
+      val windowSize     = typesafeConfig.getInt("failure-window-size")
+      val threshold      = typesafeConfig.getDouble("failure-threshold")
+      val minSample      = typesafeConfig.getInt("min-sample-size")
+      val singleDelay    = typesafeConfig.getLong("single-retry-delay-seconds").seconds
+      val cfDelay        = typesafeConfig.getLong("cf-retry-delay-seconds").seconds
+      val throttleConfig = ThrottleConfig(permits, cooldown, 1.second, singleDelay, cfDelay, windowSize, threshold, minSample)
       for {
-        contactEmail <- ZIO.fromOption(Option(System.getenv("CCAS_CONTACT_EMAIL")))
-          .orElseFail(IllegalStateException("CCAS_CONTACT_EMAIL environment variable is required"))
-        client      <- ZIO.service[Client]
-        transactor  <- ZIO.service[Transactor]
-        semaphore   <- Semaphore.make(permits)
-        mutex       <- Semaphore.make(1)
-        throttled   <- Ref.make(false)
-      } yield ChessComClient(client, transactor, userAgentHeaders(contactEmail), semaphore, mutex, throttled, cooldown)
+        contactEmail <- ZIO.attempt(typesafeConfig.getString("contact-email"))
+        client       <- ZIO.service[Client]
+        transactor   <- ZIO.service[Transactor]
+        logger       <- ZIO.service[CcasLogger]
+        semaphore    <- Semaphore.make(permits)
+        stateRef     <- Ref.make(ThrottleState(permits, 0, Vector.empty))
+        reserveRef   <- Ref.make(Chunk.empty[Fiber.Runtime[Nothing, Nothing]])
+        adjustMutex  <- Semaphore.make(1)
+        activeRef    <- Ref.make(0)
+        bar          <- logger.progressBar
+        _            <- ZIO.addFinalizer(reserveRef.get.flatMap(fibers => ZIO.foreachDiscard(fibers)(_.interrupt)))
+      } yield ChessComClient(
+        client, transactor, userAgentHeaders(contactEmail), logger,
+        semaphore, stateRef, reserveRef, adjustMutex, activeRef, bar, throttleConfig
+      )
     }
 }

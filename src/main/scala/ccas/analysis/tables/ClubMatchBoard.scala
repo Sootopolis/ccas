@@ -6,17 +6,15 @@ import com.augustnagro.magnum.*
 import zio.ZIO
 
 import ccas.api.misc.enums.{BoardGameWinner, GameResultDetail}
-import ccas.api.misc.subtypes.{ClubMatchId, PlayerId, Username}
+import ccas.api.misc.subtypes.{ClubMatchId, PlayerId}
 import ccas.utils.sql.SqlZioTypes.{connectZIO, transactZIO}
 
 final case class ClubMatchBoard(
   matchId: ClubMatchId,
   board: Int,
   team1PlayerId: Option[PlayerId],
-  team1Username: Username,
   team1FairPlay: Boolean,
   team2PlayerId: Option[PlayerId],
-  team2Username: Username,
   team2FairPlay: Boolean,
   game1Winner: Option[BoardGameWinner],
   game1Detail: Option[GameResultDetail],
@@ -28,8 +26,8 @@ final case class ClubMatchBoard(
 
 object ClubMatchBoard {
   private val selectCols = SqlLiteral(
-    "match_id, board, team1_player_id, team1_username, team1_fair_play, " +
-      "team2_player_id, team2_username, team2_fair_play, " +
+    "match_id, board, team1_player_id, team1_fair_play, " +
+      "team2_player_id, team2_fair_play, " +
       "game1_winner, game1_detail, game2_winner, game2_detail, team1_score_x2, team2_score_x2"
   )
 
@@ -39,10 +37,8 @@ object ClubMatchBoard {
               match_id         BIGINT NOT NULL REFERENCES club_match (match_id) ON DELETE CASCADE,
               board            INT NOT NULL,
               team1_player_id  BIGINT REFERENCES player (player_id),
-              team1_username   VARCHAR NOT NULL,
               team1_fair_play  BOOLEAN NOT NULL,
               team2_player_id  BIGINT REFERENCES player (player_id),
-              team2_username   VARCHAR NOT NULL,
               team2_fair_play  BOOLEAN NOT NULL,
               game1_winner     VARCHAR,
               game1_detail     VARCHAR,
@@ -69,12 +65,12 @@ object ClubMatchBoard {
 
   def insert(item: ClubMatchBoard): ZIO[Transactor, SQLException, Int] =
     connectZIO {
-      sql"""INSERT INTO club_match_board (match_id, board, team1_player_id, team1_username, team1_fair_play,
-              team2_player_id, team2_username, team2_fair_play,
+      sql"""INSERT INTO club_match_board (match_id, board, team1_player_id, team1_fair_play,
+              team2_player_id, team2_fair_play,
               game1_winner, game1_detail, game2_winner, game2_detail,
               team1_score_x2, team2_score_x2)
-            VALUES (${item.matchId}, ${item.board}, ${item.team1PlayerId}, ${item.team1Username},
-              ${item.team1FairPlay}, ${item.team2PlayerId}, ${item.team2Username}, ${item.team2FairPlay},
+            VALUES (${item.matchId}, ${item.board}, ${item.team1PlayerId},
+              ${item.team1FairPlay}, ${item.team2PlayerId}, ${item.team2FairPlay},
               ${item.game1Winner.map(_.toString)}, ${item.game1Detail.map(_.toString)},
               ${item.game2Winner.map(_.toString)}, ${item.game2Detail.map(_.toString)},
               ${item.team1ScoreX2}, ${item.team2ScoreX2})""".update.run()
@@ -83,12 +79,12 @@ object ClubMatchBoard {
   def insertBatch(items: Iterable[ClubMatchBoard]): ZIO[Transactor, SQLException, BatchUpdateResult] =
     transactZIO {
       batchUpdate(items) { item =>
-        sql"""INSERT INTO club_match_board (match_id, board, team1_player_id, team1_username, team1_fair_play,
-                team2_player_id, team2_username, team2_fair_play,
+        sql"""INSERT INTO club_match_board (match_id, board, team1_player_id, team1_fair_play,
+                team2_player_id, team2_fair_play,
                 game1_winner, game1_detail, game2_winner, game2_detail,
                 team1_score_x2, team2_score_x2)
-              VALUES (${item.matchId}, ${item.board}, ${item.team1PlayerId}, ${item.team1Username},
-                ${item.team1FairPlay}, ${item.team2PlayerId}, ${item.team2Username}, ${item.team2FairPlay},
+              VALUES (${item.matchId}, ${item.board}, ${item.team1PlayerId},
+                ${item.team1FairPlay}, ${item.team2PlayerId}, ${item.team2FairPlay},
                 ${item.game1Winner.map(_.toString)}, ${item.game1Detail.map(_.toString)},
                 ${item.game2Winner.map(_.toString)}, ${item.game2Detail.map(_.toString)},
                 ${item.team1ScoreX2}, ${item.team2ScoreX2})""".update

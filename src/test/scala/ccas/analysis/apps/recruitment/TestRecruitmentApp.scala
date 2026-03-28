@@ -3,13 +3,14 @@ package ccas.analysis.apps.recruitment
 import java.time.{Duration, Instant, LocalDateTime, ZoneOffset}
 
 import com.augustnagro.magnum.{sql, Transactor}
-import zio.{durationInt, Promise, RIO, Ref, Scope, Semaphore, ZIO}
+import zio.{durationInt, Chunk, Fiber, Promise, RIO, Ref, Scope, Semaphore, ZIO}
 import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.analysis.tables.*
 import ccas.api.club.ApiClubMatches
-import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
+import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username}
+import ccas.utils.{CcasLogger, TestCcasLogger}
 import ccas.utils.client.ChessComClient
 import ccas.utils.sql.{FreshSchemaLayer, SqlZioTypes}
 import ccas.utils.sql.DbCodecs.given
@@ -29,7 +30,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
 
   private val clubId      = ClubId(500)
   private val clubSlug = ClubSlug("test-club")
-  private val club        = Club(clubId, Times.t0, clubSlug)
+  private val club        = Club(clubId, Times.t0, clubSlug, "Test Club")
 
   private val sourceClubId    = ClubId(600)
   private val intSourceClubId = ClubId(901)
@@ -81,11 +82,17 @@ object TestRecruitmentApp extends ZIOSpecDefault {
        |}""".stripMargin
   }
 
-  private def apiClubMatchesJson(registeredIds: List[String] = Nil): String = {
+  private def apiClubMatchesJson(
+    registeredIds: List[String] = Nil,
+    finishedIds: List[Long] = Nil
+  ): String = {
     val regs = registeredIds.map { id =>
       s"""{"name": "match", "@id": "$id", "opponent": "https://api.chess.com/pub/club/other", "time_class": "daily"}"""
     }
-    s"""{"finished": [], "in_progress": [], "registered": [${regs.mkString(",")}]}"""
+    val finished = finishedIds.map { matchId =>
+      s"""{"name": "Match $matchId", "@id": "https://api.chess.com/pub/match/$matchId", "opponent": "https://api.chess.com/pub/club/other", "time_class": "daily", "start_time": ${Times.t0.getEpochSecond}, "result": "win"}"""
+    }
+    s"""{"finished": [${finished.mkString(",")}], "in_progress": [], "registered": [${regs.mkString(",")}]}"""
   }
 
   private def apiPlayerMatchesJson(registeredIds: List[String] = Nil): String = {
@@ -191,6 +198,35 @@ object TestRecruitmentApp extends ZIOSpecDefault {
   private def archiveJson(games: List[String]): String =
     s"""{"games": [${games.mkString(",")}]}"""
 
+  private def apiPlayerMatchesJsonWithFinished(
+    finishedMatches: List[(Long, Int)] = Nil,
+    registeredIds: List[String] = Nil
+  ): String = {
+    val finished = finishedMatches.map { (matchId, boardIdx) =>
+      s"""{"name": "match", "url": "https://chess.com/match/$matchId", "@id": "https://api.chess.com/pub/match/$matchId", "club": "https://api.chess.com/pub/club/some-club", "board": "https://api.chess.com/pub/match/$matchId/$boardIdx"}"""
+    }
+    val regs = registeredIds.map { id =>
+      s"""{"name": "match", "url": "https://chess.com/match/1", "@id": "$id", "club": "https://api.chess.com/pub/club/test", "board": "https://chess.com/board/1"}"""
+    }
+    s"""{"finished": [${finished.mkString(",")}], "in_progress": [], "registered": [${regs.mkString(",")}]}"""
+  }
+
+  private def apiDailyMatchJson(
+    matchId: Long,
+    team1Club: String,
+    team2Club: String,
+    team1Players: List[(String, Int)],
+    team2Players: List[(String, Int)]
+  ): String = {
+    def playerJson(username: String, boardIdx: Int): String =
+      s"""{"username": "$username", "stats": "https://api.chess.com/pub/player/$username/stats", "status": "basic", "played_as_white": "win", "played_as_black": "win", "board": "https://api.chess.com/pub/match/$matchId/$boardIdx"}"""
+    def teamJson(club: String, players: List[(String, Int)], result: String): String = {
+      val playersStr = players.map((u, b) => playerJson(u, b)).mkString(",")
+      s"""{"@id": "https://api.chess.com/pub/club/$club", "name": "${club.capitalize}", "url": "https://www.chess.com/club/$club", "score": 10.0, "result": "$result", "players": [$playersStr], "fair_play_removals": []}"""
+    }
+    s"""{"@id": "https://api.chess.com/pub/match/$matchId", "name": "Match $matchId", "url": "https://www.chess.com/club/matches/$matchId", "status": "finished", "start_time": ${Times.t0.getEpochSecond}, "end_time": ${Times.t1.getEpochSecond}, "boards": ${(team1Players ++ team2Players).size}, "settings": {"rules": "chess", "time_class": "daily", "time_control": "1/259200", "min_required_games": 0}, "teams": {"team1": ${teamJson(team1Club, team1Players, "win")}, "team2": ${teamJson(team2Club, team2Players, "lose")}}}"""
+  }
+
   private def apiClubMembersJson(members: List[(String, Long)]): String = {
     val memberJsons = members.map { (username, joined) =>
       s"""{"username": "$username", "joined": $joined}"""
@@ -205,8 +241,11 @@ object TestRecruitmentApp extends ZIOSpecDefault {
     for {
       transactor <- ZIO.service[Transactor]
       semaphore  <- Semaphore.make(1)
-      mutex      <- Semaphore.make(1)
-      throttled  <- Ref.make(false)
+      stateRef   <- Ref.make(ChessComClient.ThrottleState(1, 0, Vector.empty))
+      reserveRef  <- Ref.make(Chunk.empty[Fiber.Runtime[Nothing, Nothing]])
+      adjustMutex <- Semaphore.make(1)
+      activeRef   <- Ref.make(0)
+      bar         <- TestCcasLogger.noopBar
     } yield {
       val routes: Routes[Any, Response] = Routes(
         // Player stats endpoint
@@ -247,6 +286,10 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         // Club endpoint
         Method.GET / "pub" / "club" / string("club") -> handler { (clubName: String, _: Request) =>
           responses.get(s"club/$clubName").fold(Response(status = Status.NotFound))(Response.json(_))
+        },
+        // Match endpoint (for ref resolution)
+        Method.GET / "pub" / "match" / long("matchId") -> handler { (matchId: Long, _: Request) =>
+          responses.get(s"match/$matchId").fold(Response(status = Status.NotFound))(Response.json(_))
         }
       )
       val driver = new ZClient.Driver[Any, Scope, Throwable] {
@@ -276,10 +319,14 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         ZClient.fromDriver(driver),
         transactor,
         Headers.empty,
+        TestCcasLogger.noop,
         semaphore,
-        mutex,
-        throttled,
-        zio.Duration.fromSeconds(30)
+        stateRef,
+        reserveRef,
+        adjustMutex,
+        activeRef,
+        bar,
+        ChessComClient.ThrottleConfig(1, 30.seconds, 1.second, 5.seconds, 10.seconds, 20, 0.2, 10)
       )
     }
 
@@ -297,8 +344,11 @@ object TestRecruitmentApp extends ZIOSpecDefault {
     for {
       transactor  <- ZIO.service[Transactor]
       semaphore   <- Semaphore.make(5)
-      mutex       <- Semaphore.make(1)
-      throttled   <- Ref.make(false)
+      stateRef    <- Ref.make(ChessComClient.ThrottleState(5, 0, Vector.empty))
+      reserveRef  <- Ref.make(Chunk.empty[Fiber.Runtime[Nothing, Nothing]])
+      adjustMutex <- Semaphore.make(1)
+      activeRef   <- Ref.make(0)
+      bar         <- TestCcasLogger.noopBar
       playerCount <- Ref.make(0)
     } yield {
       val routes: Routes[Any, Response] = Routes(
@@ -365,10 +415,14 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         ZClient.fromDriver(driver),
         transactor,
         Headers.empty,
+        TestCcasLogger.noop,
         semaphore,
-        mutex,
-        throttled,
-        zio.Duration.fromSeconds(30)
+        stateRef,
+        reserveRef,
+        adjustMutex,
+        activeRef,
+        bar,
+        ChessComClient.ThrottleConfig(5, 30.seconds, 1.second, 5.seconds, 10.seconds, 20, 0.2, 10)
       )
     }
 
@@ -392,10 +446,13 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       _ <- SqlZioTypes.connectZIO(sql"DELETE FROM club_member WHERE club_id = $sourceClubId".update.run())
       _ <- SqlZioTypes.connectZIO(sql"DELETE FROM club_member WHERE club_id = $intSourceClubId".update.run())
       _ <- ZIO.foreachDiscard(
-        List(blacklistClubId, ClubId(701), ClubId(702), ClubId(801), ClubId(802), intSourceClubId)
+        List(blacklistClubId, ClubId(701), ClubId(702), ClubId(777), ClubId(801), ClubId(802), intSourceClubId)
       ) { cid =>
         SqlZioTypes.connectZIO(sql"DELETE FROM club WHERE club_id = $cid".update.run())
       }
+      _ <- SqlZioTypes.connectZIO(sql"DELETE FROM club_match_ref WHERE club_id = $clubId".update.run())
+      _ <- SqlZioTypes.connectZIO(sql"DELETE FROM club_match_board WHERE match_id IN (8001, 8002)".update.run())
+      _ <- SqlZioTypes.connectZIO(sql"DELETE FROM club_match WHERE match_id IN (8001, 8002)".update.run())
       _ <- ZIO.foreachDiscard(
         List(
           PlayerId(199),
@@ -417,10 +474,12 @@ object TestRecruitmentApp extends ZIOSpecDefault {
           PlayerId(301),
           PlayerId(302),
           PlayerId(303),
-          PlayerId(304)
+          PlayerId(304),
+          PlayerId(999)
         )
       ) { pid =>
-        SqlZioTypes.connectZIO(sql"DELETE FROM player_snapshot WHERE player_id = $pid".update.run()) *>
+        SqlZioTypes.connectZIO(sql"DELETE FROM player_match_ref WHERE player_id = $pid".update.run()) *>
+          SqlZioTypes.connectZIO(sql"DELETE FROM player_snapshot WHERE player_id = $pid".update.run()) *>
           SqlZioTypes.connectZIO(sql"DELETE FROM player WHERE player_id = $pid".update.run())
       }
       _ <- Club.upsert(club)
@@ -452,6 +511,8 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         else ZIO.succeed(Set.empty[PlayerId])
       discoveredClubs     <- Ref.make(Set.empty[ClubSlug])
       discoveredOpponents <- Ref.make(Set.empty[Username])
+      excludedSlugs <- ZIO.foreach(criteria.excludeClubs)(Club.selectId(_))
+        .map(_.flatten.map(_.slug).toSet)
       runCtx = RunContext(
         client,
         criteria,
@@ -459,6 +520,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         "default",
         targetMatchIds,
         formerMemberIds,
+        excludedSlugs,
         Instant.now(),
         discoveredClubs,
         discoveredOpponents
@@ -474,7 +536,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
     } yield revInvited.reverse
 
   private def makeCriteria(
-    excludeClubs: List[String] = Nil,
+    excludeClubs: List[ClubId] = Nil,
     excludeFormerMembers: Boolean = false,
     daysSinceRejected: Option[Int] = None
   ): RecruitmentCriteria =
@@ -513,22 +575,19 @@ object TestRecruitmentApp extends ZIOSpecDefault {
     suiteCacheFilters,
     suiteFullWorkflow,
     suiteExploreMode,
-    suiteReport
+    suiteReport,
+    suiteMatchRefWriting
   ).provideShared(
-    FreshSchemaLayer("test_recruitment_app", onInit = Tables.ensureTables)
-  ) @@ TestAspect.sequential
+    FreshSchemaLayer("test_recruitment_app", onInit = Tables.ensureTables),
+    Scope.default,
+    CcasLogger.live(showProgress = false)
+  ) @@ TestAspect.sequential @@ TestAspect.withLiveClock
 
   // ==========================================================================
   // Suite: Criteria helper methods (pure)
   // ==========================================================================
 
   private def suiteCriteriaHelpers = suite("criteria helpers")(
-    test("excludeClubNames wraps strings to ClubSlug") {
-      val criteria = makeCriteria(excludeClubs = List("club-x"))
-      assertTrue(
-        criteria.excludeClubNames == List(ClubSlug("club-x"))
-      )
-    },
     test("defaultDaily returns expected field values") {
       val criteria = RecruitmentCriteria.defaultDaily
       assertTrue(
@@ -562,14 +621,14 @@ object TestRecruitmentApp extends ZIOSpecDefault {
 
   private def suiteDbCrud = suite("DB CRUD")(
     test("RecruitmentCriteria insert and selectId") {
-      val criteria = makeCriteria(excludeClubs = List("club-x"))
+      val criteria = makeCriteria(excludeClubs = List(ClubId(700)))
       for {
         _          <- seedDb
         criteriaId <- seedCriteria(criteria)
         loaded     <- RecruitmentCriteria.selectId(criteriaId)
       } yield assertTrue(
         loaded.isDefined,
-        loaded.get.excludeClubs == List("club-x")
+        loaded.get.excludeClubs == List(ClubId(700))
       )
     },
     test("RecruitmentAlias selectClub") {
@@ -596,16 +655,16 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         loaded2.get.dailyMinElo.contains(1500)
       )
     },
-    test("RecruitmentCriteria TEXT[] array round-trip") {
+    test("RecruitmentCriteria array round-trip") {
       val criteria = makeCriteria(
-        excludeClubs = List("delta")
+        excludeClubs = List(ClubId(800))
       ).copy(nationalityCountries = List("US", "GB", "DE"))
       for {
         _          <- seedDb
         criteriaId <- seedCriteria(criteria)
         loaded     <- RecruitmentCriteria.selectId(criteriaId)
       } yield assertTrue(
-        loaded.get.excludeClubs == List("delta"),
+        loaded.get.excludeClubs == List(ClubId(800)),
         loaded.get.nationalityCountries == List("US", "GB", "DE")
       )
     },
@@ -743,10 +802,11 @@ object TestRecruitmentApp extends ZIOSpecDefault {
     test("ApiFetchFailure insert and selectRecent") {
       val now = Instant.now()
       val failure = ApiFetchFailure(
+        occurredAt = now,
         url = "https://api.chess.com/pub/player/alice/games/2026/03",
-        errorType = "ExternalException",
+        errorType = "UserFacingException",
         errorMessage = Some("HTTP 404"),
-        occurredAt = now
+        responseBody = None
       )
       for {
         _        <- seedDb
@@ -756,7 +816,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       } yield assertTrue(
         recent.size == 1,
         recent.head.url == failure.url,
-        recent.head.errorType == "ExternalException",
+        recent.head.errorType == "UserFacingException",
         recent.head.errorMessage.contains("HTTP 404"),
         tooEarly.isEmpty
       )
@@ -1103,12 +1163,21 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       for { outcome <- evalSingle(responses, criteria) } yield assertTrue(outcome == CandidateOutcome.Rejected)
     },
     test("rejects by excludeClubs") {
+      val bannedClubId = ClubId(777)
       val responses = Map(
         "player/alice"       -> apiPlayerJson(200, "alice"),
         "player/alice/clubs" -> apiPlayerClubsJson(List("good-club", "banned-club"))
       )
-      val criteria = makeCriteria(excludeClubs = List("banned-club"))
-      for { outcome <- evalSingle(responses, criteria) } yield assertTrue(outcome == CandidateOutcome.Rejected)
+      val criteria = makeCriteria(excludeClubs = List(bannedClubId))
+      for {
+        _          <- seedDb
+        _          <- Club.upsert(Club(bannedClubId, Times.t0, ClubSlug("banned-club"), "Banned Club"))
+        criteriaId <- seedCriteria(criteria)
+        runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Instant.now())
+        client     <- fakeChessComClient(responses)
+        _          <- evalCandidates(client, runId, List(Username.wrap("alice")), criteria)
+        cands      <- RecruitmentCandidate.selectByRun(runId)
+      } yield assertTrue(cands.head.outcome == CandidateOutcome.Rejected)
     },
     test("rejects when player has match against target club") {
       val matchId = "https://api.chess.com/pub/match/12345"
@@ -1572,8 +1641,9 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         _      <- seedCriteria(criteria)
         client <- fakeChessComClient(responses)
         xa     <- ZIO.service[Transactor]
+        logger <- ZIO.service[CcasLogger]
         result <- RecruitmentApp.recruit(clubSlug, "default", sourceClubs = List(ClubSlug("source-club")))
-          .provideEnvironment(zio.ZEnvironment(client, xa))
+          .provideEnvironment(zio.ZEnvironment(client, xa, logger))
         // Verify run record
         run <- RecruitmentRun.selectId(result.runId)
         // Verify candidates
@@ -1623,12 +1693,13 @@ object TestRecruitmentApp extends ZIOSpecDefault {
 
       for {
         _      <- seedDb
-        _      <- Club.upsert(Club(discoverableClubId, Times.t0, discoverableClubSlug))
+        _      <- Club.upsert(Club(discoverableClubId, Times.t0, discoverableClubSlug, "Discoverable Club"))
         _      <- seedCriteria(criteria)
         client <- fakeChessComClient(responses)
         xa     <- ZIO.service[Transactor]
+        logger <- ZIO.service[CcasLogger]
         result <- RecruitmentApp.recruit(clubSlug, "default", sourceClubs = Nil, explore = false)
-          .provideEnvironment(zio.ZEnvironment(client, xa))
+          .provideEnvironment(zio.ZEnvironment(client, xa, logger))
         candidates <- RecruitmentCandidate.selectByRun(result.runId)
       } yield assertTrue(
         candidates.isEmpty
@@ -1648,12 +1719,13 @@ object TestRecruitmentApp extends ZIOSpecDefault {
 
       for {
         _      <- seedDb
-        _      <- Club.upsert(Club(discoverableClubId, Times.t0, discoverableClubSlug))
+        _      <- Club.upsert(Club(discoverableClubId, Times.t0, discoverableClubSlug, "Discoverable Club"))
         _      <- seedCriteria(criteria)
         client <- fakeChessComClient(responses)
         xa     <- ZIO.service[Transactor]
+        logger <- ZIO.service[CcasLogger]
         result <- RecruitmentApp.recruit(clubSlug, "default", sourceClubs = Nil, explore = true)
-          .provideEnvironment(zio.ZEnvironment(client, xa))
+          .provideEnvironment(zio.ZEnvironment(client, xa, logger))
         candidates <- RecruitmentCandidate.selectByRun(result.runId)
       } yield assertTrue(
         candidates.size == 1,
@@ -1682,8 +1754,9 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         _      <- seedCriteria(criteria)
         client <- fakeChessComClient(responses)
         xa     <- ZIO.service[Transactor]
+        logger <- ZIO.service[CcasLogger]
         result <- RecruitmentApp.recruit(clubSlug, "default", sourceClubs = Nil, explore = true)
-          .provideEnvironment(zio.ZEnvironment(client, xa))
+          .provideEnvironment(zio.ZEnvironment(client, xa, logger))
         candidates <- RecruitmentCandidate.selectByRun(result.runId)
       } yield assertTrue(
         candidates.size == 1,
@@ -1717,8 +1790,9 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         _      <- seedCriteria(criteria)
         client <- fakeChessComClient(responses)
         xa     <- ZIO.service[Transactor]
+        logger <- ZIO.service[CcasLogger]
         result <- RecruitmentApp.recruit(clubSlug, "default", target = Some(3), sourceClubs = List(source1, source2))
-          .provideEnvironment(zio.ZEnvironment(client, xa))
+          .provideEnvironment(zio.ZEnvironment(client, xa, logger))
         candidates <- RecruitmentCandidate.selectByRun(result.runId)
         invited  = candidates.filter(_.outcome == CandidateOutcome.Invited)
         deferred = candidates.filter(_.outcome == CandidateOutcome.Deferred)
@@ -1751,8 +1825,9 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         gate    <- Promise.make[Nothing, Unit]
         client  <- fakeChessComClientWithBlock(responses, blockAfterN = 4, reached, gate)
         xa      <- ZIO.service[Transactor]
+        logger  <- ZIO.service[CcasLogger]
         fiber <- RecruitmentApp.recruit(clubSlug, "default", sourceClubs = List(intSource))
-          .provideEnvironment(zio.ZEnvironment(client, xa))
+          .provideEnvironment(zio.ZEnvironment(client, xa, logger))
           .fork
         _      <- reached.await
         _      <- ZIO.sleep(200.millis)
@@ -1788,8 +1863,9 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         _      <- seedCriteria(criteria)
         client <- fakeChessComClient(responses)
         xa     <- ZIO.service[Transactor]
+        logger <- ZIO.service[CcasLogger]
         result <- RecruitmentApp.recruit(clubSlug, "default", target = Some(2), sourceClubs = List(source))
-          .provideEnvironment(zio.ZEnvironment(client, xa))
+          .provideEnvironment(zio.ZEnvironment(client, xa, logger))
         candidates <- RecruitmentCandidate.selectByRun(result.runId)
         invited  = candidates.filter(_.outcome == CandidateOutcome.Invited)
         deferred = candidates.filter(_.outcome == CandidateOutcome.Deferred)
@@ -1842,8 +1918,9 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         deferredBefore <- RecruitmentCandidate.selectDeferredByClub(clubId)
 
         // Run recruitment — deferred candidate should be picked up as priority
+        logger <- ZIO.service[CcasLogger]
         result <- RecruitmentApp.recruit(clubSlug, "default", target = Some(10), sourceClubs = List(source))
-          .provideEnvironment(zio.ZEnvironment(client, xa))
+          .provideEnvironment(zio.ZEnvironment(client, xa, logger))
 
         // The deferred candidate should now have an Invited outcome in the new run
         newCandidates <- RecruitmentCandidate.selectByRun(result.runId)
@@ -1939,6 +2016,146 @@ object TestRecruitmentApp extends ZIOSpecDefault {
           )
         _ <- RecruitmentApp.showReport(clubSlug, None)
       } yield assertTrue(true)
+    }
+  )
+
+  // ==========================================================================
+  // Suite: Match ref writing
+  // ==========================================================================
+
+  private val refMatchId = ClubMatchId(8001)
+
+  private def suiteMatchRefWriting = suite("match ref writing")(
+    test("player ref resolved via DB when club_match_board data exists") {
+      val candidatePid = PlayerId(300)
+      val responses = Map(
+        s"club/$clubSlug"         -> apiClubJson(clubId.value, clubSlug.value),
+        s"club/$clubSlug/members" -> apiClubMembersJson(Nil),
+        s"player/ref-db-player"   -> apiPlayerJson(candidatePid.value, "ref-db-player"),
+        s"player/ref-db-player/matches" -> emptyPlayerMatchesJson
+      )
+      val criteria = makeCriteria()
+      for {
+        _ <- seedDb
+        _ <- seedCriteria(criteria)
+        // Seed player rows (FK targets for club_match_board)
+        _ <- seedPlayer(candidatePid)
+        _ <- seedPlayer(PlayerId(999))
+        // Seed club_match and club_match_board for the candidate
+        _ <- ClubMatch.upsert(ClubMatch(
+          refMatchId, "Test Match", "https://chess.com/match/8001",
+          ccas.api.misc.enums.ClubMatchStatus.Finished, ccas.api.misc.enums.TimeClass.Daily,
+          Some(Times.t0), Some(Times.t1), 1,
+          Some(clubId), 10.0, Some(ccas.api.misc.enums.ClubMatchResult.Win),
+          None, 5.0, Some(ccas.api.misc.enums.ClubMatchResult.Lose),
+          Times.t0
+        ))
+        _ <- ClubMatchBoard.insertBatch(List(ClubMatchBoard(
+          refMatchId, 1,
+          Some(candidatePid), false,
+          Some(PlayerId(999)), false,
+          None, None, None, None, 2, 0
+        )))
+        client <- fakeChessComClient(responses)
+        runId  <- RecruitmentRun.insert(clubId, 1L, RunTrigger.Cli, Instant.now())
+        _      <- evalCandidates(client, runId, List(Username("ref-db-player")), criteria)
+        ref    <- PlayerMatchRef.selectId(candidatePid)
+      } yield assertTrue(
+        ref.isDefined,
+        ref.get.matchId == refMatchId,
+        ref.get.isTeam1,
+        ref.get.boardIdx == 1
+      )
+    },
+    test("player ref resolved via API when DB has no match data") {
+      val candidatePid = PlayerId(301)
+      val matchId      = 8002L
+      val responses = Map(
+        s"club/$clubSlug"         -> apiClubJson(clubId.value, clubSlug.value),
+        s"club/$clubSlug/members" -> apiClubMembersJson(Nil),
+        s"player/ref-api-player"  -> apiPlayerJson(candidatePid.value, "ref-api-player"),
+        s"player/ref-api-player/matches" -> apiPlayerMatchesJsonWithFinished(
+          finishedMatches = List((matchId, 3))
+        ),
+        s"match/$matchId" -> apiDailyMatchJson(
+          matchId,
+          team1Club = "alpha-club",
+          team2Club = "beta-club",
+          team1Players = List(("ref-api-player", 3)),
+          team2Players = List(("opponent-x", 3))
+        )
+      )
+      val criteria = makeCriteria()
+      for {
+        _ <- seedDb
+        _ <- seedCriteria(criteria)
+        client <- fakeChessComClient(responses)
+        runId  <- RecruitmentRun.insert(clubId, 1L, RunTrigger.Cli, Instant.now())
+        _      <- evalCandidates(client, runId, List(Username("ref-api-player")), criteria)
+        ref    <- PlayerMatchRef.selectId(candidatePid)
+      } yield assertTrue(
+        ref.isDefined,
+        ref.get.matchId == ClubMatchId(matchId),
+        ref.get.isTeam1,
+        ref.get.boardIdx == 3
+      )
+    },
+    test("club ref resolved via API during recruitment init") {
+      val matchId = 8001L
+      val responses = Map(
+        s"club/$clubSlug" -> apiClubJson(clubId.value, clubSlug.value),
+        s"club/$clubSlug/members" -> apiClubMembersJson(Nil),
+        s"club/$clubSlug/matches" -> apiClubMatchesJson(finishedIds = List(matchId)),
+        s"match/$matchId" -> apiDailyMatchJson(
+          matchId,
+          team1Club = clubSlug.value,
+          team2Club = "opponent-club",
+          team1Players = List(("player-a", 1)),
+          team2Players = List(("player-b", 1))
+        ),
+        "club/source-club" -> apiClubJson(sourceClubId.value, "source-club"),
+        "club/source-club/members" -> apiClubMembersJson(Nil)
+      )
+      val criteria = makeCriteria()
+      for {
+        _      <- seedDb
+        _      <- seedCriteria(criteria)
+        client <- fakeChessComClient(responses)
+        xa     <- ZIO.service[Transactor]
+        logger <- ZIO.service[CcasLogger]
+        _      <- RecruitmentApp.recruit(clubSlug, "default", sourceClubs = List(ClubSlug("source-club")), explore = false)
+          .provideEnvironment(zio.ZEnvironment(client, xa, logger))
+        ref <- ClubMatchRef.selectId(clubId)
+      } yield assertTrue(
+        ref.isDefined,
+        ref.get.matchId == ClubMatchId(matchId),
+        ref.get.isTeam1
+      )
+    },
+    test("ref failure does not affect recruitment outcome") {
+      val candidatePid = PlayerId(302)
+      // Provide finished matches but NO match endpoint response → API fallback fails with 404
+      val responses = Map(
+        s"club/$clubSlug"         -> apiClubJson(clubId.value, clubSlug.value),
+        s"club/$clubSlug/members" -> apiClubMembersJson(Nil),
+        s"player/ref-fail-player" -> apiPlayerJson(candidatePid.value, "ref-fail-player"),
+        s"player/ref-fail-player/matches" -> apiPlayerMatchesJsonWithFinished(
+          finishedMatches = List((9999L, 1))
+        )
+        // match/9999 intentionally missing → 404
+      )
+      val criteria = makeCriteria()
+      for {
+        _       <- seedDb
+        _       <- seedCriteria(criteria)
+        client  <- fakeChessComClient(responses)
+        runId   <- RecruitmentRun.insert(clubId, 1L, RunTrigger.Cli, Instant.now())
+        invited <- evalCandidates(client, runId, List(Username("ref-fail-player")), criteria)
+        ref     <- PlayerMatchRef.selectId(candidatePid)
+      } yield assertTrue(
+        invited.contains(Username("ref-fail-player")),
+        ref.isEmpty
+      )
     }
   )
 }

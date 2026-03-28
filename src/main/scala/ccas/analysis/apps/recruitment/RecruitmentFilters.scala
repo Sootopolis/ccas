@@ -6,14 +6,14 @@ import java.time.temporal.ChronoUnit
 import com.augustnagro.magnum.Transactor
 import zio.{RIO, Ref, ZIO}
 
+import ccas.analysis.apps.ref.RefHelpers
 import ccas.analysis.tables.*
-import ccas.api.misc.enums.GameResultDetail
-import ccas.api.misc.subtypes.Username
+import ccas.api.misc.enums.{GameResultDetail, PlayerStatusCategory}
+import ccas.api.misc.subtypes.{PlayerId, Username}
 import ccas.api.player.*
 import ccas.utils.client.ChessComClient
 import ccas.utils.errors.safeMessage
 import ccas.utils.sql.SqlZioTypes.withTransaction
-import ccas.api.misc.enums.PlayerStatusCategory
 
 private[recruitment] object RecruitmentFilters {
 
@@ -38,6 +38,7 @@ private[recruitment] object RecruitmentFilters {
       result <- (for {
         (outcome, finalCandidate) <- runFilters(env, filters, ctxRef)
         _                         <- persistCandidateResults(runId, now, finalCandidate, outcome)
+        _                         <- writePlayerMatchRef(env.run.client, finalCandidate).catchAll(_ => ZIO.unit)
       } yield outcome).catchAll(onEvaluationError(ctxRef))
     } yield result
   }
@@ -230,7 +231,10 @@ private[recruitment] object RecruitmentFilters {
       env.run.client.get[ApiPlayerMatches](ApiPlayerMatches.getUrl(env.candidate.username)).map { playerMatches =>
         val registeredIds = playerMatches.registered.map(_.`@id`).toSet ++
           playerMatches.inProgress.map(_.`@id`).toSet
-        FilterResult(registeredIds.exists(env.run.clubMatchIds.contains), env.candidate)
+        FilterResult(
+          registeredIds.exists(env.run.clubMatchIds.contains),
+          env.candidate.copy(playerMatches = Some(playerMatches))
+        )
       }
   }
 
@@ -246,7 +250,7 @@ private[recruitment] object RecruitmentFilters {
         val criteria  = env.run.criteria
         val rejected =
           criteria.maxClubs.exists(clubCount > _)
-          || criteria.excludeClubNames.exists(clubNames.contains)
+          || env.run.excludedSlugs.exists(clubNames.contains)
         val updatedCache = getOrUpdateCache(env)(_.copy(clubCount = Some(clubCount)))
         FilterResult(rejected, env.candidate.copy(cache = Some(updatedCache)))
       }
@@ -460,5 +464,49 @@ private[recruitment] object RecruitmentFilters {
     val startMonth = YearMonth.from(cutoff)
     val endMonth   = YearMonth.from(today)
     Iterator.iterate(startMonth)(_.plusMonths(1)).takeWhile(!_.isAfter(endMonth)).toList
+  }
+
+  // --- Match ref writing ---
+
+  private def writePlayerMatchRef(
+    client: ChessComClient,
+    candidate: CandidateContext
+  ): RIO[Transactor, Unit] = {
+    val data = for {
+      ap <- candidate.apiPlayer
+      pm <- candidate.playerMatches
+    } yield (ap.playerId, candidate.username, pm)
+
+    ZIO.foreachDiscard(data) { case (playerId, username, playerMatches) =>
+      PlayerMatchRef.selectId(playerId).flatMap {
+        case Some(_) => ZIO.unit
+        case None =>
+          ClubMatchBoard.selectPlayerMatchRef(playerId).flatMap {
+            case Some(ref) => PlayerMatchRef.insert(ref).unit
+            case None =>
+              resolvePlayerRefViaApi(client, playerId, username, playerMatches)
+          }
+      }
+    }
+  }
+
+  private def resolvePlayerRefViaApi(
+    client: ChessComClient,
+    playerId: PlayerId,
+    username: Username,
+    playerMatches: ApiPlayerMatches
+  ): RIO[Transactor, Unit] = {
+    val candidates = playerMatches.finished.filter(_.board.isDefined)
+    ZIO.foreachDiscard(candidates.headOption) { m =>
+      val parsed   = RefHelpers.parseMatchUrl(m.`@id`)
+      val boardIdx = m.board.get.path.segments.lastOption.flatMap(_.toIntOption)
+      ZIO.foreachDiscard(boardIdx) { idx =>
+        RefHelpers.fetchTeamMatchTeams(client, parsed.matchId, parsed.isLive).flatMap { teams =>
+          ZIO.foreachDiscard(RefHelpers.findPlayerIsTeam1(teams, username)) { t1 =>
+            PlayerMatchRef.insert(PlayerMatchRef(playerId, parsed.matchId, parsed.isLive, t1, idx)).unit
+          }
+        }
+      }
+    }
   }
 }

@@ -10,11 +10,13 @@ import ccas.analysis.tables.*
 import ccas.api.club.ApiClub
 import ccas.api.misc.subtypes.{ClubSlug, Username}
 import ccas.api.player.ApiPlayer
+import ccas.utils.CcasLogger
 import ccas.utils.client.ChessComClient
-import ccas.utils.errors.ExternalException
+import ccas.utils.errors.BadRequestException
 import ccas.utils.sql.DataSourceLayer
 
 object BlacklistApp extends ZIOAppDefault {
+  private val help = "Usage: BlacklistApp <club-slug> <username> [reason] [expires-at]"
 
   override def run: RIO[ZIOAppArgs & Scope, Unit] =
     (for {
@@ -27,10 +29,11 @@ object BlacklistApp extends ZIOAppDefault {
             reason = rest.headOption,
             expiresAt = rest.lift(1).map(Instant.parse)
           )
-        case _ => ZIO.fail(ExternalException("Usage: BlacklistApp <club-slug> <username> [reason] [expires-at]"))
+        case _ => ZIO.fail(BadRequestException(help))
       }
     } yield ()).provideSomeAuto(
-      ChessComClient.live(),
+      CcasLogger.live(showProgress = true),
+      ChessComClient.live,
       Client.default,
       DataSourceLayer.liveFromPrefix(onInit = Tables.ensureTables)
     )
@@ -44,7 +47,7 @@ object BlacklistApp extends ZIOAppDefault {
     for {
       client  <- ZIO.service[ChessComClient]
       apiClub <- ApiClub.get(client, clubSlug)
-      club = Club(apiClub.clubId, Instant.ofEpochSecond(apiClub.created), clubSlug)
+      club = Club(apiClub.clubId, Instant.ofEpochSecond(apiClub.created), clubSlug, apiClub.name)
       _         <- Club.upsert(club)
       apiPlayer <- client.get[ApiPlayer](ApiPlayer.getUrl(username))
       now = Instant.now()

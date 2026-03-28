@@ -22,11 +22,9 @@ final case class ClubMatch(
   endTime: Option[Instant],
   boards: Int,
   team1ClubId: Option[ClubId],
-  team1Name: String,
   team1Score: Double,
   team1Result: Option[ClubMatchResult],
   team2ClubId: Option[ClubId],
-  team2Name: String,
   team2Score: Double,
   team2Result: Option[ClubMatchResult],
   fetchedAt: Instant
@@ -47,11 +45,9 @@ object ClubMatch {
               end_time       TIMESTAMPTZ,
               boards         INT NOT NULL,
               team1_club_id  BIGINT REFERENCES club (club_id),
-              team1_name     VARCHAR NOT NULL,
               team1_score    DOUBLE PRECISION NOT NULL,
               team1_result   VARCHAR,
               team2_club_id  BIGINT REFERENCES club (club_id),
-              team2_name     VARCHAR NOT NULL,
               team2_score    DOUBLE PRECISION NOT NULL,
               team2_result   VARCHAR,
               fetched_at     TIMESTAMPTZ NOT NULL
@@ -81,20 +77,20 @@ object ClubMatch {
   def upsert(item: ClubMatch): ZIO[Transactor, SQLException, Int] =
     connectZIO {
       sql"""INSERT INTO club_match (match_id, name, url, status, time_class, start_time, end_time, boards,
-              team1_club_id, team1_name, team1_score, team1_result,
-              team2_club_id, team2_name, team2_score, team2_result, fetched_at)
+              team1_club_id, team1_score, team1_result,
+              team2_club_id, team2_score, team2_result, fetched_at)
             VALUES (${item.matchId}, ${item.name}, ${item.url}, ${item.status.toString}, ${item.timeClass.toString},
               ${item.startTime}, ${item.endTime}, ${item.boards},
-              ${item.team1ClubId}, ${item.team1Name}, ${item.team1Score}, ${item.team1Result.map(_.toString)},
-              ${item.team2ClubId}, ${item.team2Name}, ${item.team2Score}, ${item.team2Result.map(_.toString)},
+              ${item.team1ClubId}, ${item.team1Score}, ${item.team1Result.map(_.toString)},
+              ${item.team2ClubId}, ${item.team2Score}, ${item.team2Result.map(_.toString)},
               ${item.fetchedAt})
             ON CONFLICT (match_id) DO UPDATE SET
               name = EXCLUDED.name, url = EXCLUDED.url, status = EXCLUDED.status,
               time_class = EXCLUDED.time_class, start_time = EXCLUDED.start_time, end_time = EXCLUDED.end_time,
               boards = EXCLUDED.boards,
-              team1_club_id = EXCLUDED.team1_club_id, team1_name = EXCLUDED.team1_name,
+              team1_club_id = EXCLUDED.team1_club_id,
               team1_score = EXCLUDED.team1_score, team1_result = EXCLUDED.team1_result,
-              team2_club_id = EXCLUDED.team2_club_id, team2_name = EXCLUDED.team2_name,
+              team2_club_id = EXCLUDED.team2_club_id,
               team2_score = EXCLUDED.team2_score, team2_result = EXCLUDED.team2_result,
               fetched_at = EXCLUDED.fetched_at""".update.run()
     }

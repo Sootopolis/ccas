@@ -8,7 +8,14 @@ import zio.ZIO
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId}
 import ccas.utils.sql.SqlZioTypes.{connectZIO, transactZIO}
 
-final case class HistoryPendingMatch(clubId: ClubId, matchId: ClubMatchId, isLive: Boolean) derives DbCodec
+import PendingMatchStatus.given
+
+final case class HistoryPendingMatch(
+  clubId: ClubId,
+  matchId: ClubMatchId,
+  isLive: Boolean,
+  status: PendingMatchStatus = PendingMatchStatus.New
+) derives DbCodec
 
 object HistoryPendingMatch {
 
@@ -19,35 +26,37 @@ object HistoryPendingMatch {
               club_id    BIGINT NOT NULL REFERENCES club (club_id),
               match_id   BIGINT NOT NULL,
               is_live    BOOLEAN NOT NULL DEFAULT false,
+              status     VARCHAR NOT NULL DEFAULT 'New',
               PRIMARY KEY (club_id, match_id, is_live)
             )""".update.run()
-      sql"""ALTER TABLE history_pending_match ADD COLUMN IF NOT EXISTS is_live BOOLEAN NOT NULL DEFAULT false""".update.run()
     }
 
   def selectClub(clubId: ClubId): ZIO[Transactor, SQLException, List[HistoryPendingMatch]] =
     connectZIO {
-      sql"SELECT club_id, match_id, is_live FROM history_pending_match WHERE club_id = $clubId"
+      sql"SELECT club_id, match_id, is_live, status FROM history_pending_match WHERE club_id = $clubId"
         .query[HistoryPendingMatch].run().toList
     }
 
   def selectClubBatch(clubId: ClubId, limit: Int): ZIO[Transactor, SQLException, List[HistoryPendingMatch]] =
     connectZIO {
-      sql"SELECT club_id, match_id, is_live FROM history_pending_match WHERE club_id = $clubId LIMIT $limit"
+      val status = PendingMatchStatus.New
+      sql"""SELECT club_id, match_id, is_live, status FROM history_pending_match
+            WHERE club_id = $clubId AND status = $status LIMIT $limit"""
         .query[HistoryPendingMatch].run().toList
     }
 
   def insert(item: HistoryPendingMatch): ZIO[Transactor, SQLException, Int] =
     connectZIO {
-      sql"""INSERT INTO history_pending_match (club_id, match_id, is_live)
-            VALUES (${item.clubId}, ${item.matchId}, ${item.isLive})
+      sql"""INSERT INTO history_pending_match (club_id, match_id, is_live, status)
+            VALUES (${item.clubId}, ${item.matchId}, ${item.isLive}, ${item.status})
             ON CONFLICT DO NOTHING""".update.run()
     }
 
   def insertBatch(items: Iterable[HistoryPendingMatch]): ZIO[Transactor, SQLException, BatchUpdateResult] =
     transactZIO {
       batchUpdate(items) { item =>
-        sql"""INSERT INTO history_pending_match (club_id, match_id, is_live)
-              VALUES (${item.clubId}, ${item.matchId}, ${item.isLive})
+        sql"""INSERT INTO history_pending_match (club_id, match_id, is_live, status)
+              VALUES (${item.clubId}, ${item.matchId}, ${item.isLive}, ${item.status})
               ON CONFLICT DO NOTHING""".update
       }
     }
@@ -58,9 +67,34 @@ object HistoryPendingMatch {
         .update.run()
     }
 
+  def updateStatus(
+    clubId: ClubId,
+    matchId: ClubMatchId,
+    isLive: Boolean,
+    status: PendingMatchStatus
+  ): ZIO[Transactor, SQLException, Int] =
+    connectZIO {
+      sql"""UPDATE history_pending_match SET status = $status
+            WHERE club_id = $clubId AND match_id = $matchId AND is_live = $isLive""".update.run()
+    }
+
+  def resetStatuses(clubId: ClubId): ZIO[Transactor, SQLException, Int] =
+    connectZIO {
+      val target = PendingMatchStatus.New
+      sql"""UPDATE history_pending_match SET status = $target
+            WHERE club_id = $clubId AND status != $target""".update.run()
+    }
+
   def count(clubId: ClubId): ZIO[Transactor, SQLException, Long] =
     connectZIO {
       sql"SELECT COUNT(*) FROM history_pending_match WHERE club_id = $clubId"
+        .query[Long].run().head
+    }
+
+  def countNew(clubId: ClubId): ZIO[Transactor, SQLException, Long] =
+    connectZIO {
+      val status = PendingMatchStatus.New
+      sql"SELECT COUNT(*) FROM history_pending_match WHERE club_id = $clubId AND status = $status"
         .query[Long].run().head
     }
 }

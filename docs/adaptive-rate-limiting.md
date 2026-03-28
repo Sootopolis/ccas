@@ -31,9 +31,9 @@ Chess.com's public API tolerates sequential requests but may return 429 (Too Man
 ### How It Works
 
 1. **Normal mode:** Requests acquire the N-permit semaphore (parallel execution)
-2. **On 429:** `rawGet` detects `Status.TooManyRequests`, calls `activateThrottle`, fails with `RateLimitedException`
+2. **On 429:** `rawGet` detects `Status.TooManyRequests`, calls `activateThrottle`, fails with `HttpStatusException`
 3. **Throttled mode:** Requests acquire a `Semaphore(1)` mutex (sequential execution)
-4. **Retry:** `get` wraps requests with exponential backoff retry (up to 4 retries, only on `RateLimitedException`)
+4. **Retry:** `get` wraps requests with exponential backoff retry (up to 4 retries, on `HttpStatusException` with status 429 or 403)
 5. **Cooldown:** A forked fiber resets `throttled` to `false` after 30 seconds (configurable)
 6. **Resume:** After cooldown, requests return to parallel mode
 

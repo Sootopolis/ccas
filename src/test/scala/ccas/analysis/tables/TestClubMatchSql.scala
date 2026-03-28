@@ -23,9 +23,19 @@ object TestClubMatchSql extends ZIOSpecDefault {
     testHistoryPendingMatchBatch,
     testHistoryPendingMatchSelectClubBatch,
     testHistoryPendingMatchDelete,
-    testHistoryMemberQueryInsert,
+    testHistoryPendingMatchUpdateStatus,
+    testHistoryPendingMatchCountNew,
+    testHistoryPendingMatchSelectClubBatchFiltersStatus,
+    testHistoryPendingMatchResetStatuses,
+    testHistoryMemberQueryUpsert,
     testHistoryMemberQueryDeleteClub,
-    testHistoryRunInsertAndComplete
+    testHistoryRunInsertAndComplete,
+    testUnresolvedBoardPlayerInsertAndSelect,
+    testUnresolvedBoardPlayerDoNothing,
+    testUnresolvedBoardPlayerDelete,
+    testUnresolvedMatchClubInsertAndSelect,
+    testUnresolvedMatchClubDoNothing,
+    testUnresolvedMatchClubDelete
   ).provideShared(
     FreshSchemaLayer("test_club_match_sql", onInit = Tables.ensureTables)
   ) @@ TestAspect.sequential
@@ -38,8 +48,8 @@ object TestClubMatchSql extends ZIOSpecDefault {
     val t4: Instant = t0.plus(Duration.ofDays(120)) // unused — reserved for future stale-window tests
   }
 
-  private val clubA = Club(ClubId(300), Times.t0, ClubSlug("club-a"))
-  private val clubB = Club(ClubId(301), Times.t0, ClubSlug("club-b"))
+  private val clubA = Club(ClubId(300), Times.t0, ClubSlug("club-a"), "Club A")
+  private val clubB = Club(ClubId(301), Times.t0, ClubSlug("club-b"), "Club B")
 
   private val player0 = Player(PlayerId(50), Times.t0)
   private val player1 = Player(PlayerId(51), Times.t0)
@@ -59,11 +69,9 @@ object TestClubMatchSql extends ZIOSpecDefault {
     endTime = Some(Times.t1),
     boards = 5,
     team1ClubId = Some(clubA.clubId),
-    team1Name = "Club A",
     team1Score = 6.0,
     team1Result = Some(ClubMatchResult.Win),
     team2ClubId = Some(clubB.clubId),
-    team2Name = "Club B",
     team2Score = 4.0,
     team2Result = Some(ClubMatchResult.Lose),
     fetchedAt = Times.t2
@@ -79,11 +87,9 @@ object TestClubMatchSql extends ZIOSpecDefault {
     endTime = None,
     boards = 3,
     team1ClubId = Some(clubA.clubId),
-    team1Name = "Club A",
     team1Score = 2.0,
     team1Result = None,
     team2ClubId = None,
-    team2Name = "Unknown Club",
     team2Score = 1.0,
     team2Result = None,
     fetchedAt = Times.t2
@@ -149,10 +155,8 @@ object TestClubMatchSql extends ZIOSpecDefault {
     matchId = matchFinished.matchId,
     board = 1,
     team1PlayerId = Some(player0.playerId),
-    team1Username = Username("p0"),
     team1FairPlay = false,
     team2PlayerId = Some(player1.playerId),
-    team2Username = Username("p1"),
     team2FairPlay = false,
     game1Winner = Some(BoardGameWinner.Team1),
     game1Detail = Some(GameResultDetail.Checkmated),
@@ -166,10 +170,8 @@ object TestClubMatchSql extends ZIOSpecDefault {
     matchId = matchFinished.matchId,
     board = 2,
     team1PlayerId = Some(player1.playerId),
-    team1Username = Username("p1"),
     team1FairPlay = false,
     team2PlayerId = None,
-    team2Username = Username("opp2"),
     team2FairPlay = false,
     game1Winner = Some(BoardGameWinner.Draw),
     game1Detail = Some(GameResultDetail.Stalemate),
@@ -191,10 +193,8 @@ object TestClubMatchSql extends ZIOSpecDefault {
       matchId = matchFinished.matchId,
       board = 3,
       team1PlayerId = None,
-      team1Username = Username("t1"),
       team1FairPlay = true,
       team2PlayerId = None,
-      team2Username = Username("t2"),
       team2FairPlay = false,
       game1Winner = None,
       game1Detail = None,
@@ -236,7 +236,7 @@ object TestClubMatchSql extends ZIOSpecDefault {
     } yield assertTrue(
       r1 == 1,
       r2 == 0,
-      ids == List(HistoryPendingMatch(clubA.clubId, ClubMatchId(2001), isLive = false))
+      ids == List(HistoryPendingMatch(clubA.clubId, ClubMatchId(2001), isLive = false, PendingMatchStatus.New))
     )
   }
 
@@ -279,15 +279,62 @@ object TestClubMatchSql extends ZIOSpecDefault {
     )
   }
 
+  // After the delete test, 2 entries remain: matchId 2002 and 2003, both New.
+
+  private def testHistoryPendingMatchUpdateStatus = test("HistoryPendingMatch updateStatus") {
+    for {
+      updated <- HistoryPendingMatch.updateStatus(clubA.clubId, ClubMatchId(2002), isLive = false, PendingMatchStatus.ApiError)
+      entries <- HistoryPendingMatch.selectClub(clubA.clubId)
+      statuses = entries.map(e => (e.matchId, e.status)).toMap
+    } yield assertTrue(
+      updated == 1,
+      statuses(ClubMatchId(2002)) == PendingMatchStatus.ApiError,
+      statuses(ClubMatchId(2003)) == PendingMatchStatus.New
+    )
+  }
+
+  private def testHistoryPendingMatchCountNew = test("HistoryPendingMatch countNew excludes non-New") {
+    for {
+      total  <- HistoryPendingMatch.count(clubA.clubId)
+      newOnly <- HistoryPendingMatch.countNew(clubA.clubId)
+    } yield assertTrue(
+      total == 2L,
+      newOnly == 1L // only 2003 is New; 2002 is ApiError
+    )
+  }
+
+  private def testHistoryPendingMatchSelectClubBatchFiltersStatus =
+    test("HistoryPendingMatch selectClubBatch only returns New") {
+      for {
+        batch <- HistoryPendingMatch.selectClubBatch(clubA.clubId, 10)
+      } yield assertTrue(
+        batch.size == 1,
+        batch.head.matchId == ClubMatchId(2003)
+      )
+    }
+
+  private def testHistoryPendingMatchResetStatuses = test("HistoryPendingMatch resetStatuses resets all to New") {
+    for {
+      _ <- HistoryPendingMatch.updateStatus(clubA.clubId, ClubMatchId(2003), isLive = false, PendingMatchStatus.Unidentified)
+      beforeNew <- HistoryPendingMatch.countNew(clubA.clubId)
+      reset     <- HistoryPendingMatch.resetStatuses(clubA.clubId)
+      afterNew  <- HistoryPendingMatch.countNew(clubA.clubId)
+    } yield assertTrue(
+      beforeNew == 0L, // both 2002=ApiError, 2003=Unidentified
+      reset == 2,
+      afterNew == 2L
+    )
+  }
+
   // --- HistoryMemberQuery tests ---
 
-  private def testHistoryMemberQueryInsert = test("HistoryMemberQuery insert and upsert") {
+  private def testHistoryMemberQueryUpsert = test("HistoryMemberQuery upsert") {
     for {
-      _   <- HistoryMemberQuery.insert(HistoryMemberQuery(clubA.clubId, player0.playerId, Times.t1))
-      _   <- HistoryMemberQuery.insert(HistoryMemberQuery(clubA.clubId, player1.playerId, Times.t1))
+      _   <- HistoryMemberQuery.upsert(HistoryMemberQuery(clubA.clubId, player0.playerId, Times.t1))
+      _   <- HistoryMemberQuery.upsert(HistoryMemberQuery(clubA.clubId, player1.playerId, Times.t1))
       ids <- HistoryMemberQuery.selectClubPlayerIds(clubA.clubId)
       // Upsert same player with new timestamp
-      _        <- HistoryMemberQuery.insert(HistoryMemberQuery(clubA.clubId, player0.playerId, Times.t2))
+      _        <- HistoryMemberQuery.upsert(HistoryMemberQuery(clubA.clubId, player0.playerId, Times.t2))
       idsAfter <- HistoryMemberQuery.selectClubPlayerIds(clubA.clubId)
     } yield assertTrue(
       ids == Set(player0.playerId, player1.playerId),
@@ -312,5 +359,67 @@ object TestClubMatchSql extends ZIOSpecDefault {
       runId <- HistoryRun.insert(clubA.clubId, RunTrigger.Cli, Times.t0)
       _     <- HistoryRun.complete(runId, Times.t1, matchesProcessed = 42, playersDiscovered = 7)
     } yield assertTrue(runId > 0L)
+  }
+
+  // --- UnresolvedBoardPlayer tests ---
+
+  private def testUnresolvedBoardPlayerInsertAndSelect = test("UnresolvedBoardPlayer insert and selectAll") {
+    for {
+      r1  <- UnresolvedBoardPlayer.insert(ClubMatchId(1001), 1, isTeam1 = false, Username("opp1"))
+      r2  <- UnresolvedBoardPlayer.insert(ClubMatchId(1001), 2, isTeam1 = true, Username("opp2"))
+      all <- UnresolvedBoardPlayer.selectAll
+    } yield assertTrue(
+      r1 == 1,
+      r2 == 1,
+      all.size == 2,
+      all.exists(_.username == Username("opp1")),
+      all.exists(_.username == Username("opp2"))
+    )
+  }
+
+  private def testUnresolvedBoardPlayerDoNothing = test("UnresolvedBoardPlayer ON CONFLICT DO NOTHING") {
+    for {
+      r <- UnresolvedBoardPlayer.insert(ClubMatchId(1001), 1, isTeam1 = false, Username("opp1-updated"))
+    } yield assertTrue(r == 0)
+  }
+
+  private def testUnresolvedBoardPlayerDelete = test("UnresolvedBoardPlayer delete") {
+    for {
+      deleted   <- UnresolvedBoardPlayer.delete(ClubMatchId(1001), 1, isTeam1 = false)
+      remaining <- UnresolvedBoardPlayer.selectAll
+    } yield assertTrue(
+      deleted == 1,
+      remaining.size == 1,
+      remaining.head.username == Username("opp2")
+    )
+  }
+
+  // --- UnresolvedMatchClub tests ---
+
+  private def testUnresolvedMatchClubInsertAndSelect = test("UnresolvedMatchClub insert and selectAll") {
+    for {
+      r1  <- UnresolvedMatchClub.insert(ClubMatchId(1001), isTeam1 = false, ClubSlug("unknown-club"))
+      all <- UnresolvedMatchClub.selectAll
+    } yield assertTrue(
+      r1 == 1,
+      all.size == 1,
+      all.head.slug == ClubSlug("unknown-club")
+    )
+  }
+
+  private def testUnresolvedMatchClubDoNothing = test("UnresolvedMatchClub ON CONFLICT DO NOTHING") {
+    for {
+      r <- UnresolvedMatchClub.insert(ClubMatchId(1001), isTeam1 = false, ClubSlug("different-slug"))
+    } yield assertTrue(r == 0)
+  }
+
+  private def testUnresolvedMatchClubDelete = test("UnresolvedMatchClub delete") {
+    for {
+      deleted   <- UnresolvedMatchClub.delete(ClubMatchId(1001), isTeam1 = false)
+      remaining <- UnresolvedMatchClub.selectAll
+    } yield assertTrue(
+      deleted == 1,
+      remaining.isEmpty
+    )
   }
 }

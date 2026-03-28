@@ -29,11 +29,10 @@ object ClubMatchRef {
   def selectId(clubId: ClubId): ZIO[Transactor, SQLException, Option[ClubMatchRef]] =
     connectZIO(repo.findById(clubId))
 
-  def upsert(ref: ClubMatchRef): ZIO[Transactor, SQLException, Int] =
+  def insert(ref: ClubMatchRef): ZIO[Transactor, SQLException, Int] =
     connectZIO {
       sql"""INSERT INTO club_match_ref (club_id, match_id, is_live, is_team1)
-            VALUES (${ref.clubId}, ${ref.matchId}, ${ref.isLive}, ${ref.isTeam1})
-            ON CONFLICT (club_id) DO UPDATE SET match_id = EXCLUDED.match_id, is_live = EXCLUDED.is_live, is_team1 = EXCLUDED.is_team1""".update.run()
+            VALUES (${ref.clubId}, ${ref.matchId}, ${ref.isLive}, ${ref.isTeam1})""".update.run()
     }
 
   def deleteId(clubId: ClubId): ZIO[Transactor, SQLException, Int] =

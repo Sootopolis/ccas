@@ -8,7 +8,7 @@ CCAS (Chess Club Admin System) is a Scala 3 application that pulls data from the
 
 ## Build & Test Commands
 
-This is an SBT project (Scala 3.6.4, SBT 1.12.0).
+This is an SBT project (Scala 3.8.2, SBT 1.12.8).
 
 - **Compile:** `sbt compile`
 - **Run all tests:** `sbt test`
@@ -16,7 +16,7 @@ This is an SBT project (Scala 3.6.4, SBT 1.12.0).
 - **Continuous compile on change:** `sbt ~compile`
 - **Interactive SBT shell:** `sbt` then run commands without the `sbt` prefix
 
-Tests use ZIO Test (`ZIOSpecDefault`). SQL tests require a running PostgreSQL instance with a `ccas` database and `test` schema (see `src/test/resources/application.conf`).
+Tests use ZIO Test (`ZIOSpecDefault`). SQL tests require a running PostgreSQL instance with a `ccas_test` database (see `src/test/resources/application.conf`).
 
 ## Architecture
 
@@ -52,7 +52,7 @@ The codebase has four main packages:
 ### HTTP Client
 
 `ChessComClient` wraps `zio-http` `Client` for making GET requests with automatic JSON decoding. Features include:
-- Configurable concurrency via semaphore (default 5 permits)
+- Configurable concurrency via semaphore (default 16 permits)
 - Adaptive rate limiting: activates a mutex-based throttle on HTTP 429 responses
 - Exponential backoff retry (up to 4 retries) with configurable cooldown (default 30s)
 - Requires `CCAS_CONTACT_EMAIL` environment variable for the `User-Agent` header

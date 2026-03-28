@@ -8,6 +8,7 @@ import zio.{RIO, Task, UIO, ZIO}
 
 import ccas.analysis.tables.*
 import ccas.api.club.{ApiClub, ApiClubMatches, ApiClubMembers}
+import ccas.utils.CcasLogger
 import ccas.api.misc.subtypes.{ClubSlug, Username}
 import ccas.api.player.*
 import ccas.utils.client.ChessComClient
@@ -20,10 +21,10 @@ private[recruitment] object RecruitmentExplore {
     ctx: ExploreContext,
     activePool: Map[String, SourceState],
     pendingSources: List[SourceDescriptor],
-    staticStrategies: List[RIO[Transactor, List[SourceDescriptor]]],
+    staticStrategies: List[RIO[CcasLogger & Transactor, List[SourceDescriptor]]],
     visitedClubs: Set[ClubSlug],
     roundRobinKeys: List[String]
-  ): RIO[Transactor, Unit] =
+  ): RIO[CcasLogger & Transactor, Unit] =
     for {
       invited <- ctx.invitedRef.get
       _ <- ZIO.unlessDiscard(invited.size >= ctx.target) {
@@ -38,9 +39,9 @@ private[recruitment] object RecruitmentExplore {
     ctx: ExploreContext,
     activePool: Map[String, SourceState],
     visitedClubs: Set[ClubSlug],
-    staticStrategies: List[RIO[Transactor, List[SourceDescriptor]]],
+    staticStrategies: List[RIO[CcasLogger & Transactor, List[SourceDescriptor]]],
     roundRobinKeys: List[String]
-  ): RIO[Transactor, Unit] =
+  ): RIO[CcasLogger & Transactor, Unit] =
     for {
       evaluated   <- ctx.evaluatedRef.get
       replenished <- replenish(ctx, evaluated, visitedClubs, staticStrategies)
@@ -54,10 +55,10 @@ private[recruitment] object RecruitmentExplore {
     ctx: ExploreContext,
     activePool: Map[String, SourceState],
     pendingSources: List[SourceDescriptor],
-    staticStrategies: List[RIO[Transactor, List[SourceDescriptor]]],
+    staticStrategies: List[RIO[CcasLogger & Transactor, List[SourceDescriptor]]],
     visitedClubs: Set[ClubSlug],
     roundRobinKeys: List[String]
-  ): RIO[Transactor, Unit] =
+  ): RIO[CcasLogger & Transactor, Unit] =
     for {
       evaluated  <- ctx.evaluatedRef.get
       activation <- activateSources(ctx, activePool, pendingSources, evaluated, visitedClubs)
@@ -122,10 +123,10 @@ private[recruitment] object RecruitmentExplore {
     sourceState: SourceState,
     sourceId: String,
     pendingSources: List[SourceDescriptor],
-    staticStrategies: List[RIO[Transactor, List[SourceDescriptor]]],
+    staticStrategies: List[RIO[CcasLogger & Transactor, List[SourceDescriptor]]],
     visitedClubs: Set[ClubSlug],
     nextKeys: List[String]
-  ): RIO[Transactor, Unit] = {
+  ): RIO[CcasLogger & Transactor, Unit] = {
     val (chunk, rest) = sourceState.remaining.splitAt(ctx.evalChunkSize)
     val pool3         = pool.updated(sourceId, sourceState.copy(remaining = rest))
     for {
@@ -136,19 +137,22 @@ private[recruitment] object RecruitmentExplore {
       recentlyRejected = freshChunk.filterNot(filteredChunk.contains)
       _ <- ctx.evaluatedRef.update(_ ++ recentlyRejected.toSet)
 
-      // Evaluate chunk with bounded parallelism (continuous throughput)
-      results <- ZIO.foreachPar(filteredChunk)(u =>
-        RecruitmentFilters.evaluateCandidate(ctx.runId, u, ctx.runCtx, ctx.filters).map(u -> _)
-      )
+      // Evaluate chunk with bounded parallelism — update refs per-candidate for lively progress
+      results <- ZIO.foreachPar(filteredChunk) { u =>
+        for {
+          outcome <- RecruitmentFilters.evaluateCandidate(ctx.runId, u, ctx.runCtx, ctx.filters)
+          count   <- ctx.evalCountRef.updateAndGet(_ + 1)
+          _       <- ctx.evaluatedRef.update(_ + u)
+          _       <- ZIO.whenDiscard(outcome == CandidateOutcome.Invited)(ctx.invitedRef.update(u :: _))
+          _       <- ZIO.whenDiscard(count % 4 == 0)(printProgress(ctx))
+        } yield (u, outcome)
+      }
+      _ <- printProgress(ctx) // ensure final state is rendered
 
-      // Update refs
-      invitedInBatch  = results.collect { case (u, CandidateOutcome.Invited) => u }
+      // Batch-level cleanup
       rejectedInBatch = results.count { case (_, o) => o == CandidateOutcome.Rejected || o == CandidateOutcome.Error }
-      _ <- ctx.evaluatedRef.update(_ ++ filteredChunk.toSet)
-      _ <- ctx.evalCountRef.update(_ + filteredChunk.size)
-      _ <- ZIO.foreachDiscard(invitedInBatch)(u => ctx.invitedRef.update(u :: _))
+      hadInvite       = results.exists(_._2 == CandidateOutcome.Invited)
       _ <- reclassifyExcessInvited(ctx)
-      _ <- printProgress(ctx)
 
       // Compute consecutive rejects: trailing rejects after last invite in chunk
       chunkConsecutiveRejects = {
@@ -162,12 +166,12 @@ private[recruitment] object RecruitmentExplore {
         evaluated = sourceState.evaluated + filteredChunk.size,
         rejected = sourceState.rejected + rejectedInBatch,
         consecutiveRejects =
-          if (invitedInBatch.nonEmpty) chunkConsecutiveRejects
+          if (hadInvite) chunkConsecutiveRejects
           else sourceState.consecutiveRejects + filteredChunk.size
       )
       pool4 <-
         if (ctx.explore && isGrim(updatedSource)) {
-          ZIO.logInfo(
+          CcasLogger.info(
             s"[Explore] Abandoning grim source: $sourceId (eval=${updatedSource.evaluated}, rej=${updatedSource.rejected})"
           ).as(pool3 - sourceId)
         } else ZIO.succeed(pool3.updated(sourceId, updatedSource))
@@ -176,12 +180,12 @@ private[recruitment] object RecruitmentExplore {
   }
 
   private def printProgress(ctx: ExploreContext): UIO[Unit] =
-    ZIO.whenDiscard(ctx.showProgress)(for {
+    for {
       invited   <- ctx.invitedRef.get
       evalCount <- ctx.evalCountRef.get
       _ <- ctx.progressBar.print(invited.size, ctx.target,
         s"[Progress] Evaluated: $evalCount | Invited: ${invited.size}/${ctx.target}")
-    } yield ())
+    } yield ()
 
   /** When invited count exceeds the target, reclassify the newest excess from Invited to Deferred. */
   def reclassifyExcessInvited(ctx: ExploreContext): RIO[Transactor, Unit] =
@@ -213,7 +217,7 @@ private[recruitment] object RecruitmentExplore {
     pendingSources: List[SourceDescriptor],
     evaluatedUsernames: Set[Username],
     visitedClubs: Set[ClubSlug]
-  ): RIO[Transactor, ActivationResult] = {
+  ): RIO[CcasLogger & Transactor, ActivationResult] = {
     val slotsAvailable = ctx.exploreConcurrency - activePool.size
     if (slotsAvailable <= 0 || pendingSources.isEmpty)
       ZIO.succeed(ActivationResult(activePool, pendingSources, visitedClubs))
@@ -256,7 +260,7 @@ private[recruitment] object RecruitmentExplore {
     ctx: ExploreContext,
     source: SourceDescriptor,
     evaluatedUsernames: Set[Username]
-  ): RIO[Transactor, List[Username]] =
+  ): RIO[CcasLogger & Transactor, List[Username]] =
     source match {
       case ClubSource(clubSlug) =>
         for {
@@ -267,14 +271,14 @@ private[recruitment] object RecruitmentExplore {
             ctx.existingUsernames,
             evaluatedUsernames
           )
-          _ <- ZIO.logInfo(
+          _ <- CcasLogger.info(
             s"[Explore] Activated club source: ${ClubSlug.unwrap(clubSlug)} (${filtered.size} candidates)"
           )
         } yield filtered
       case UsernameSource(id, usernames) =>
         val exclude  = ctx.existingUsernames ++ evaluatedUsernames
         val filtered = usernames.filterNot(exclude)
-        ZIO.logInfo(s"[Explore] Activated username source: $id (${filtered.size} candidates)").as(filtered)
+        CcasLogger.info(s"[Explore] Activated username source: $id (${filtered.size} candidates)").as(filtered)
     }
 
   // --- Replenishment ---
@@ -283,8 +287,8 @@ private[recruitment] object RecruitmentExplore {
     ctx: ExploreContext,
     evaluatedUsernames: Set[Username],
     visitedClubs: Set[ClubSlug],
-    staticStrategies: List[RIO[Transactor, List[SourceDescriptor]]]
-  ): RIO[Transactor, (List[SourceDescriptor], List[RIO[Transactor, List[SourceDescriptor]]])] =
+    staticStrategies: List[RIO[CcasLogger & Transactor, List[SourceDescriptor]]]
+  ): RIO[CcasLogger & Transactor, (List[SourceDescriptor], List[RIO[CcasLogger & Transactor, List[SourceDescriptor]]])] =
     if (!ctx.explore) ZIO.succeed((Nil, staticStrategies))
     else
       for {
@@ -293,17 +297,17 @@ private[recruitment] object RecruitmentExplore {
         newOpponents = opponents -- evaluatedUsernames
         result <-
           if (newOpponents.nonEmpty) {
-            ZIO.logInfo(s"[Explore] Discovered ${newOpponents.size} candidate opponents")
+            CcasLogger.info(s"[Explore] Discovered ${newOpponents.size} candidate opponents")
               .as((List(UsernameSource("candidate-opponents", newOpponents.toList)), staticStrategies))
           } else {
             // Dynamic strategy 2: candidate clubs
             for {
               clubs <- ctx.runCtx.discoveredClubs.get
               newClubs = clubs.diff(visitedClubs).filterNot(_ == ctx.clubSlug)
-                .filterNot(ctx.runCtx.criteria.excludeClubNames.contains)
+                .filterNot(ctx.runCtx.excludedSlugs.contains)
               result <-
                 if (newClubs.nonEmpty) {
-                  ZIO.logInfo(s"[Explore] Discovered ${newClubs.size} candidate clubs")
+                  CcasLogger.info(s"[Explore] Discovered ${newClubs.size} candidate clubs")
                     .as((newClubs.toList.map(ClubSource(_)), staticStrategies))
                 } else {
                   // Static strategies: try next one
@@ -315,10 +319,10 @@ private[recruitment] object RecruitmentExplore {
                         filtered = sources.filter {
                           case ClubSource(name) =>
                             !visitedClubs.contains(name) && name != ctx.clubSlug &&
-                            !ctx.runCtx.criteria.excludeClubNames.contains(name)
+                            !ctx.runCtx.excludedSlugs.contains(name)
                           case _ => true
                         }
-                        _ <- ZIO.logInfo(s"[Explore] Static strategy yielded ${filtered.size} sources")
+                        _ <- CcasLogger.info(s"[Explore] Static strategy yielded ${filtered.size} sources")
                       } yield (filtered, tail)
                   }
                 }
@@ -332,7 +336,7 @@ private[recruitment] object RecruitmentExplore {
     client: ChessComClient,
     clubSlug: ClubSlug,
     targetMemberNames: List[Username]
-  ): RIO[Transactor, List[SourceDescriptor]] = {
+  ): RIO[CcasLogger & Transactor, List[SourceDescriptor]] = {
     val sample = targetMemberNames.take(20)
     for {
       clubSets <- ZIO.foreachPar(sample) { username =>
@@ -341,27 +345,27 @@ private[recruitment] object RecruitmentExplore {
           .catchAll(_ => ZIO.succeed(Set.empty[ClubSlug]))
       }
       allClubs = clubSets.foldLeft(Set.empty[ClubSlug])(_ ++ _) - clubSlug
-      _ <- ZIO.logInfo(s"[Explore] Own member clubs strategy found ${allClubs.size} clubs")
+      _ <- CcasLogger.info(s"[Explore] Own member clubs strategy found ${allClubs.size} clubs")
     } yield allClubs.toList.map(ClubSource(_))
   }
 
-  def discoverDbClubs(clubSlug: ClubSlug): RIO[Transactor, List[SourceDescriptor]] =
+  def discoverDbClubs(clubSlug: ClubSlug): RIO[CcasLogger & Transactor, List[SourceDescriptor]] =
     for {
       clubs <- Club.selectAll
       filtered = scala.util.Random.shuffle(clubs.map(_.slug).filter(_ != clubSlug))
-      _ <- ZIO.logInfo(s"[Explore] DB clubs strategy found ${filtered.size} clubs")
+      _ <- CcasLogger.info(s"[Explore] DB clubs strategy found ${filtered.size} clubs")
     } yield filtered.map(ClubSource(_))
 
-  def discoverMatchOpponents(clubMatches: ApiClubMatches): RIO[Transactor, List[SourceDescriptor]] = {
+  def discoverMatchOpponents(clubMatches: ApiClubMatches): RIO[CcasLogger, List[SourceDescriptor]] = {
     val opponentUrls = clubMatches.finished.map(_.opponent)
       ++ clubMatches.inProgress.map(_.opponent)
       ++ clubMatches.registered.map(_.opponent)
     val opponentClubNames = opponentUrls.map(url => ClubSlug.wrap(url.path.segments.last)).toSet
-    ZIO.logInfo(s"[Explore] Match opponents strategy found ${opponentClubNames.size} clubs")
+    CcasLogger.info(s"[Explore] Match opponents strategy found ${opponentClubNames.size} clubs")
       .as(opponentClubNames.toList.map(ClubSource(_)))
   }
 
-  def discoverCandidateOpponents(client: ChessComClient, now: Instant): RIO[Transactor, List[SourceDescriptor]] = {
+  def discoverCandidateOpponents(client: ChessComClient, now: Instant): RIO[CcasLogger & Transactor, List[SourceDescriptor]] = {
     val cutoff = now.minus(90, ChronoUnit.DAYS)
     val months = RecruitmentFilters.recentArchiveMonths(now, 90)
     for {
@@ -378,7 +382,7 @@ private[recruitment] object RecruitmentExplore {
         }.catchAll(_ => ZIO.succeed(Set.empty[Username]))
       }
       allOpponents = opponentSets.foldLeft(Set.empty[Username])(_ ++ _)
-      _ <- ZIO.logInfo(s"[Explore] Candidate opponents strategy found ${allOpponents.size} opponents")
+      _ <- CcasLogger.info(s"[Explore] Candidate opponents strategy found ${allOpponents.size} opponents")
     } yield
       if (allOpponents.isEmpty) Nil
       else List(UsernameSource("db-candidate-opponents", allOpponents.toList))

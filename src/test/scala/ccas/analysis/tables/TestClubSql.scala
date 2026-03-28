@@ -21,8 +21,7 @@ object TestClubSql extends ZIOSpecDefault {
     testMemberInsertBatch,
     testMemberSelect,
     testMemberUpdate,
-    testClubMatchRefUpsert,
-    testClubMatchRefUpsertUpdate,
+    testClubMatchRefInsert,
     testClubMatchRefDelete,
     testClubMatchRefDeleteAll,
     testReplaceSince
@@ -37,8 +36,8 @@ object TestClubSql extends ZIOSpecDefault {
     val t3: Instant = t0.plus(Duration.ofDays(3))
   }
 
-  private val clubA = Club(ClubId(200), Timestamps.t0, ClubSlug("club-a"))
-  private val clubB = Club(ClubId(201), Timestamps.t0, ClubSlug("club-b"))
+  private val clubA = Club(ClubId(200), Timestamps.t0, ClubSlug("club-a"), "Club A")
+  private val clubB = Club(ClubId(201), Timestamps.t0, ClubSlug("club-b"), "Club B")
 
   private val player0 = Player(PlayerId(10), Timestamps.t0)
   private val player1 = Player(PlayerId(11), Timestamps.t0)
@@ -163,24 +162,16 @@ object TestClubSql extends ZIOSpecDefault {
   private val refA = ClubMatchRef(clubA.clubId, ClubMatchId(9001), isLive = false, isTeam1 = true)
   private val refB = ClubMatchRef(clubB.clubId, ClubMatchId(9002), isLive = false, isTeam1 = false)
 
-  private def testClubMatchRefUpsert = test("testClubMatchRefUpsert") {
+  private def testClubMatchRefInsert = test("testClubMatchRefInsert") {
     for {
-      _      <- ClubMatchRef.upsert(refA)
+      _      <- ClubMatchRef.insert(refA)
       result <- ClubMatchRef.selectId(refA.clubId)
     } yield assertTrue(result.contains(refA))
   }
 
-  private def testClubMatchRefUpsertUpdate = test("testClubMatchRefUpsertUpdate") {
-    val updated = refA.copy(matchId = ClubMatchId(9099), isTeam1 = false)
-    for {
-      _      <- ClubMatchRef.upsert(updated)
-      result <- ClubMatchRef.selectId(refA.clubId)
-    } yield assertTrue(result.contains(updated))
-  }
-
   private def testClubMatchRefDelete = test("testClubMatchRefDelete") {
     for {
-      _      <- ClubMatchRef.upsert(refB)
+      _      <- ClubMatchRef.insert(refB)
       _      <- ClubMatchRef.deleteId(refB.clubId)
       result <- ClubMatchRef.selectId(refB.clubId)
     } yield assertTrue(result.isEmpty)
@@ -188,7 +179,7 @@ object TestClubSql extends ZIOSpecDefault {
 
   private def testClubMatchRefDeleteAll = test("testClubMatchRefDeleteAll") {
     for {
-      _       <- ClubMatchRef.upsert(refB)
+      _       <- ClubMatchRef.insert(refB)
       _       <- ClubMatchRef.deleteAll
       resultA <- ClubMatchRef.selectId(refA.clubId)
       resultB <- ClubMatchRef.selectId(refB.clubId)

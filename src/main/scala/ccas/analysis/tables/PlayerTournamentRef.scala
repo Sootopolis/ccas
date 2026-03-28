@@ -30,11 +30,10 @@ object PlayerTournamentRef {
   def selectId(playerId: PlayerId): ZIO[Transactor, SQLException, Option[PlayerTournamentRef]] =
     connectZIO(repo.findById(playerId))
 
-  def upsert(ref: PlayerTournamentRef): ZIO[Transactor, SQLException, Int] =
+  def insert(ref: PlayerTournamentRef): ZIO[Transactor, SQLException, Int] =
     connectZIO {
       sql"""INSERT INTO player_tournament_ref (player_id, tournament_slug, player_idx)
-            VALUES (${ref.playerId}, ${ref.tournamentSlug}, ${ref.playerIdx})
-            ON CONFLICT (player_id) DO UPDATE SET tournament_slug = EXCLUDED.tournament_slug, player_idx = EXCLUDED.player_idx""".update.run()
+            VALUES (${ref.playerId}, ${ref.tournamentSlug}, ${ref.playerIdx})""".update.run()
     }
 
   def deleteId(playerId: PlayerId): ZIO[Transactor, SQLException, Int] =

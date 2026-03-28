@@ -1,13 +1,14 @@
 package ccas.server.jobs
 
 import com.augustnagro.magnum.{sql, Transactor}
-import zio.{durationInt, Ref, Scope, Semaphore, Trace, ZIO, ZLayer}
+import zio.{durationInt, Chunk, Fiber, Ref, Scope, Semaphore, Trace, ZIO, ZLayer}
 import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.analysis.tables.RunTrigger
 import ccas.api.misc.subtypes.ClubSlug
 import ccas.server.ServerTables
+import ccas.utils.{CcasLogger, TestCcasLogger}
 import ccas.utils.client.ChessComClient
 import ccas.utils.sql.FreshSchemaLayer
 import ccas.utils.sql.SqlZioTypes.connectZIO
@@ -25,7 +26,9 @@ object TestJobRunner extends ZIOSpecDefault {
   ).provideShared(
     FreshSchemaLayer("test_job_runner", onInit = ServerTables.ensureTables),
     dummyChessComClientLayer,
-    JobRunner.live
+    JobRunner.live,
+    Scope.default,
+    CcasLogger.live(showProgress = false)
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock @@ TestAspect.timeout(30.seconds)
 
   private val deleteAllJobRuns = connectZIO { val _ = sql"DELETE FROM job_run".update.run() }
@@ -33,9 +36,12 @@ object TestJobRunner extends ZIOSpecDefault {
   private val dummyChessComClientLayer: ZLayer[Any, Nothing, ChessComClient] =
     ZLayer.fromZIO {
       for {
-        semaphore <- Semaphore.make(1)
-        mutex     <- Semaphore.make(1)
-        throttled <- Ref.make(false)
+        semaphore  <- Semaphore.make(1)
+        stateRef   <- Ref.make(ChessComClient.ThrottleState(1, 0, Vector.empty))
+        reserveRef  <- Ref.make(Chunk.empty[Fiber.Runtime[Nothing, Nothing]])
+        adjustMutex <- Semaphore.make(1)
+        activeRef   <- Ref.make(0)
+        bar         <- TestCcasLogger.noopBar
       } yield {
         val routes: Routes[Any, Response] = Routes(
           Method.GET / trailing -> handler(Response(status = Status.NotFound))
@@ -67,10 +73,14 @@ object TestJobRunner extends ZIOSpecDefault {
           ZClient.fromDriver(driver),
           Transactor(null),
           Headers.empty,
+          TestCcasLogger.noop,
           semaphore,
-          mutex,
-          throttled,
-          zio.Duration.fromSeconds(30)
+          stateRef,
+          reserveRef,
+          adjustMutex,
+          activeRef,
+          bar,
+          ChessComClient.ThrottleConfig(1, 30.seconds, 1.second, 5.seconds, 10.seconds, 20, 0.2, 10)
         )
       }
     }

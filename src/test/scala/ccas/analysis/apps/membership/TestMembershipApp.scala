@@ -3,7 +3,7 @@ package ccas.analysis.apps.membership
 import java.time.{Duration, Instant, LocalDateTime, ZoneOffset}
 
 import com.augustnagro.magnum.{sql, Transactor}
-import zio.{Chunk, RIO, Ref, Scope, Semaphore, Trace, ZIO}
+import zio.{durationInt, Chunk, Fiber, RIO, Ref, Scope, Semaphore, Trace, ZIO}
 import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
@@ -12,6 +12,7 @@ import ccas.analysis.apps.membership.MembershipChange.*
 import ccas.analysis.tables.{Club, ClubMember, Player, PlayerSnapshot, Tables}
 import ccas.api.misc.enums.PlayerStatusCategory.{Active, Closed}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
+import ccas.utils.{CcasLogger, TestCcasLogger}
 import ccas.utils.client.ChessComClient
 import ccas.utils.sql.{FreshSchemaLayer, SqlZioTypes}
 
@@ -36,7 +37,7 @@ object TestMembershipApp extends ZIOSpecDefault {
   private val pid5 = PlayerId(105)
 
   private val clubId = ClubId(500)
-  private val club   = Club(clubId, Times.t0, ClubSlug("test-club"))
+  private val club   = Club(clubId, Times.t0, ClubSlug("test-club"), "Test Club")
 
   // --- Helpers ---
 
@@ -68,8 +69,11 @@ object TestMembershipApp extends ZIOSpecDefault {
     for {
       transactor <- ZIO.service[Transactor]
       semaphore  <- Semaphore.make(1)
-      mutex      <- Semaphore.make(1)
-      throttled  <- Ref.make(false)
+      stateRef   <- Ref.make(ChessComClient.ThrottleState(1, 0, Vector.empty))
+      reserveRef  <- Ref.make(Chunk.empty[Fiber.Runtime[Nothing, Nothing]])
+      adjustMutex <- Semaphore.make(1)
+      activeRef   <- Ref.make(0)
+      bar         <- TestCcasLogger.noopBar
     } yield {
       val routes: Routes[Any, Response] = Routes(
         Method.GET / "pub" / "player" / string("username") -> handler { (username: String, _: Request) =>
@@ -104,10 +108,14 @@ object TestMembershipApp extends ZIOSpecDefault {
         ZClient.fromDriver(driver),
         transactor,
         Headers.empty,
+        TestCcasLogger.noop,
         semaphore,
-        mutex,
-        throttled,
-        zio.Duration.fromSeconds(30)
+        stateRef,
+        reserveRef,
+        adjustMutex,
+        activeRef,
+        bar,
+        ChessComClient.ThrottleConfig(1, 30.seconds, 1.second, 5.seconds, 10.seconds, 20, 0.2, 10)
       )
     }
 
@@ -139,8 +147,10 @@ object TestMembershipApp extends ZIOSpecDefault {
     suiteClassifyApiMembers,
     suiteClassifyDisappeared
   ).provideShared(
-    FreshSchemaLayer("test_membership_app", onInit = Tables.ensureTables)
-  ) @@ TestAspect.sequential
+    FreshSchemaLayer("test_membership_app", onInit = Tables.ensureTables),
+    Scope.default,
+    CcasLogger.live(showProgress = false)
+  ) @@ TestAspect.sequential @@ TestAspect.withLiveClock
 
   // ==========================================================================
   // Suite A: classifyFromDb (pure)

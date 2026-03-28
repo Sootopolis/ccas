@@ -4,7 +4,7 @@ import zio.{Task, ZIO}
 import zio.http.*
 import zio.json.{DeriveJsonCodec, JsonCodec, JsonDecoder, JsonEncoder}
 
-import ccas.utils.errors.ExternalException
+import ccas.utils.errors.BadRequestException
 
 object RouteHelpers {
 
@@ -18,6 +18,6 @@ object RouteHelpers {
 
   def parseJsonBody[T: JsonDecoder](req: Request): Task[T] =
     req.body.asString.flatMap(s =>
-      ZIO.fromEither(summon[JsonDecoder[T]].decodeJson(s)).mapError(e => new ExternalException(e))
+      ZIO.fromEither(summon[JsonDecoder[T]].decodeJson(s)).mapError(e => new BadRequestException(e))
     )
 }

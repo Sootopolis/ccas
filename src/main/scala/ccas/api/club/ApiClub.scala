@@ -25,7 +25,7 @@ final case class ApiClub(
   visibility: ClubVisibility, // whether the club is public or private
   joinRequest: URL,           // location to submit a request to join this club
   admin: Chunk[URL],          // array of URLs to the player profiles for the admins of this club
-  description: String         // text description of the club
+  description: Option[String] // text description of the club
 )
 
 object ApiClub extends JsonDecoding[ApiClub] {

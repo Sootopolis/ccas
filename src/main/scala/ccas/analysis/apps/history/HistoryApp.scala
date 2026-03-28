@@ -2,24 +2,44 @@ package ccas.analysis.apps.history
 
 import java.time.{Instant, Duration as JDuration}
 import com.augustnagro.magnum.{Transactor, sql}
-import zio.{Promise, RIO, Ref, Scope, Task, UIO, ZEnvironment, ZIO, ZIOAppArgs, ZIOAppDefault}
+import zio.{Promise, RIO, Ref, Scope, Task, UIO, URIO, ZEnvironment, ZIO, ZIOAppArgs, ZIOAppDefault}
 import zio.http.{Client, URL}
 import ccas.analysis.apps.membership.MembershipApp
 import ccas.analysis.tables.*
 import ccas.api.club.ApiClubMatches
-import ccas.api.clubmatch.{ApiDailyMatch, ApiLiveMatch, TeamMatchTeams}
+import ccas.api.clubmatch.{ApiDailyMatch, ApiLiveMatch}
 import ccas.api.clubmatch.ApiDailyMatch.*
 import ccas.api.misc.enums.*
 import ccas.api.misc.subtypes.*
 import ccas.api.player.{ApiPlayer, ApiPlayerClubs, ApiPlayerMatches}
 import ccas.utils.client.ChessComClient
-import ccas.utils.errors.ExternalException
+import ccas.utils.errors.BadRequestException
 import ccas.utils.sql.DataSourceLayer
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.SqlZioTypes.{connectZIO, withTransaction}
-import ccas.utils.{OutputFile, ProgressBar}
+import ccas.utils.{CcasLogger, OutputFile, ProgressBar, display}
 
 object HistoryApp extends ZIOAppDefault {
+  private val help = "Usage: HistoryApp <club-slug> [--full] [--refresh]"
+
+  // --- CLI entry point ---
+
+  override def run: RIO[ZIOAppArgs & Scope, Unit] =
+    (for {
+      args <- ZIOAppArgs.getArgs
+      clubName <- args.headOption match {
+        case None    => ZIO.fail(BadRequestException(help))
+        case Some(s) => ZIO.succeed(ClubSlug.wrap(s))
+      }
+      full    = args.contains("--full")
+      refresh = args.contains("--refresh")
+      _ <- discover(clubName, full, refresh)
+    } yield ()).provideSomeAuto(
+      CcasLogger.live(showProgress = true),
+      ChessComClient.live,
+      Client.default,
+      DataSourceLayer.liveFromPrefix(onInit = Tables.ensureTables)
+    )
 
   private val BatchSize = 500
 
@@ -39,13 +59,14 @@ object HistoryApp extends ZIOAppDefault {
     matchesSeeded: Int = 0,
     matchesProcessed: Int = 0,
     matchesFailed: Int = 0,
+    matchesUnidentified: Int = 0,
     playersDiscovered: Int = 0,
     playersKnown: Int = 0,
     playersFailed: Int = 0,
     waveCount: Int = 0,
     pendingRemaining: Int = 0,
     waveDetails: List[(Int, Int)] = Nil,
-    failedMatches: List[((ClubMatchId, Boolean), String)] = Nil,
+    failedMatches: List[(MatchKey, String)] = Nil,
     failedMembers: List[(Username, String)] = Nil
   )
 
@@ -58,14 +79,16 @@ object HistoryApp extends ZIOAppDefault {
     val matchCache: Ref[Map[ClubMatchId, Promise[Throwable, ApiDailyMatch]]],
     val liveMatchCache: Ref[Map[ClubMatchId, Promise[Throwable, ApiLiveMatch]]],
     val discoveryCache: Ref[Map[String, Promise[Throwable, Option[PlayerId]]]],
+    val clubCache: Ref[Map[String, Promise[Throwable, Option[ClubId]]]],
     val knownPlayers: Ref[Map[String, PlayerId]],
     val newPlayers: Ref[Set[DiscoveredPlayer]],
     val matchesProcessed: Ref[Int],
     val matchesFailed: Ref[Int],
+    val matchesUnidentified: Ref[Int],
     val playersDiscovered: Ref[Int],
     val playersKnown: Ref[Int],
     val playersFailed: Ref[Int],
-    val failedMatches: Ref[List[((ClubMatchId, Boolean), String)]]
+    val failedMatches: Ref[List[(MatchKey, String)]]
   )
 
   private object ProcessingContext {
@@ -76,17 +99,19 @@ object HistoryApp extends ZIOAppDefault {
       initialKnownPlayers: Map[String, PlayerId]
     ): ZIO[Any, Nothing, ProcessingContext] =
       for {
-        matchCache        <- Ref.make(Map.empty[ClubMatchId, Promise[Throwable, ApiDailyMatch]])
-        liveMatchCache    <- Ref.make(Map.empty[ClubMatchId, Promise[Throwable, ApiLiveMatch]])
-        discoveryCache    <- Ref.make(Map.empty[String, Promise[Throwable, Option[PlayerId]]])
-        knownPlayers      <- Ref.make(initialKnownPlayers)
-        newPlayers        <- Ref.make(Set.empty[DiscoveredPlayer])
-        matchesProcessed  <- Ref.make(0)
-        matchesFailed     <- Ref.make(0)
-        playersDiscovered <- Ref.make(0)
-        playersKnown      <- Ref.make(0)
-        playersFailed     <- Ref.make(0)
-        failedMatches     <- Ref.make(List.empty[((ClubMatchId, Boolean), String)])
+        matchCache          <- Ref.make(Map.empty[ClubMatchId, Promise[Throwable, ApiDailyMatch]])
+        liveMatchCache      <- Ref.make(Map.empty[ClubMatchId, Promise[Throwable, ApiLiveMatch]])
+        discoveryCache      <- Ref.make(Map.empty[String, Promise[Throwable, Option[PlayerId]]])
+        clubCache           <- Ref.make(Map.empty[String, Promise[Throwable, Option[ClubId]]])
+        knownPlayers        <- Ref.make(initialKnownPlayers)
+        newPlayers          <- Ref.make(Set.empty[DiscoveredPlayer])
+        matchesProcessed    <- Ref.make(0)
+        matchesFailed       <- Ref.make(0)
+        matchesUnidentified <- Ref.make(0)
+        playersDiscovered   <- Ref.make(0)
+        playersKnown        <- Ref.make(0)
+        playersFailed       <- Ref.make(0)
+        failedMatches       <- Ref.make(List.empty[(MatchKey, String)])
       } yield new ProcessingContext(
         client,
         clubId,
@@ -94,34 +119,18 @@ object HistoryApp extends ZIOAppDefault {
         matchCache,
         liveMatchCache,
         discoveryCache,
+        clubCache,
         knownPlayers,
         newPlayers,
         matchesProcessed,
         matchesFailed,
+        matchesUnidentified,
         playersDiscovered,
         playersKnown,
         playersFailed,
         failedMatches
       )
   }
-
-  // --- CLI entry point ---
-
-  override def run: RIO[ZIOAppArgs & Scope, Unit] =
-    (for {
-      args <- ZIOAppArgs.getArgs
-      clubName <- args.headOption match {
-        case None    => ZIO.fail(ExternalException("Usage: HistoryApp <club-slug> [--full] [--refresh]"))
-        case Some(s) => ZIO.succeed(ClubSlug.wrap(s))
-      }
-      full    = args.contains("--full")
-      refresh = args.contains("--refresh")
-      _ <- discover(clubName, full, refresh)
-    } yield ()).provideSomeAuto(
-      ChessComClient.live(),
-      Client.default,
-      DataSourceLayer.liveFromPrefix(onInit = Tables.ensureTables)
-    )
 
   // --- Main workflow ---
 
@@ -130,58 +139,59 @@ object HistoryApp extends ZIOAppDefault {
     full: Boolean = false,
     refresh: Boolean = false,
     trigger: RunTrigger = RunTrigger.Cli
-  ): RIO[ChessComClient & Transactor, Unit] =
+  ): RIO[CcasLogger & ChessComClient & Transactor, Unit] =
     for {
       client     <- ZIO.service[ChessComClient]
       transactor <- ZIO.service[Transactor]
+      logger     <- ZIO.service[CcasLogger]
 
       // === Phase 1: Initialize ===
-      _ <- ZIO.logInfo(s"=== HistoryApp: $clubSlug ===")
-      _ <- ZIO.logInfo("Phase 1: Initializing...")
+      _ <- CcasLogger.info(s"=== HistoryApp: $clubSlug ===")
+      _ <- CcasLogger.info("Phase 1: Initializing...")
       _ <- MembershipApp.reconcile(clubSlug, trackRun = false)
       club <- Club.selectBySlug(clubSlug)
-        .someOrFail(ExternalException(s"Club '$clubSlug' not found"))
+        .someOrFail(IllegalStateException(s"Club '$clubSlug' not found after reconcile"))
       clubId = club.clubId
-      allMembers   <- ClubMember.selectClub(clubId)
-      latestSnaps  <- PlayerSnapshot.selectLatest
-      processedIds <- ClubMatch.selectMatchIdsForClub(clubId)
-      queriedIds   <- HistoryMemberQuery.selectClubPlayerIds(clubId)
+      (allMembers, latestSnaps, processedCount, queriedIds) <-
+        ClubMember.selectClub(clubId) <&>
+        PlayerSnapshot.selectLatest <&>
+        ClubMatch.countForClub(clubId) <&>
+        HistoryMemberQuery.selectClubPlayerIds(clubId)
+      _ <- HistoryPendingMatch.resetStatuses(clubId)
       startedAt = Instant.now()
       runId <- HistoryRun.insert(clubId, trigger, startedAt)
       snapByPlayerId = latestSnaps.map(s => s.playerId -> s).toMap
-      _ <- ZIO.logInfo(
-        s"  Members: ${allMembers.size}, Processed matches: ${processedIds.size}, Queried members: ${queriedIds.size}"
+      _ <- CcasLogger.info(
+        s"  Members: ${allMembers.size}, Processed matches: $processedCount, Queried members: ${queriedIds.size}"
       )
 
       // === Phase 2: Seed match IDs ===
-      _ <- ZIO.logInfo("Phase 2: Seeding match IDs...")
+      _ <- CcasLogger.info("Phase 2: Seeding match IDs...")
       _ <- ZIO.whenDiscard(full) {
-        ZIO.logInfo("  --full: clearing member query history") *> HistoryMemberQuery.deleteClub(clubId)
+        CcasLogger.info("  --full: clearing member query history") *> HistoryMemberQuery.deleteClub(clubId)
       }
-      effectiveQueriedIds =
-        if (full) { Set.empty[PlayerId] }
-        else { queriedIds }
+      effectiveQueriedIds = if (full) { Set.empty[PlayerId] } else { queriedIds }
 
       seedClub <- seedFromClubMatches(client, clubId, clubSlug)
-      _        <- ZIO.logInfo(s"  Club matches endpoint: $seedClub new match IDs")
+      _        <- CcasLogger.info(s"  Club matches endpoint: $seedClub new match IDs")
 
       memberSeed <-
         seedFromMemberMatches(client, clubId, clubSlug, allMembers, effectiveQueriedIds, snapByPlayerId)
       membersSkipped = allMembers.size - memberSeed.queried - memberSeed.failed
-      _ <- ZIO.logInfo(
+      _ <- CcasLogger.info(
         s"  Member match lists: ${memberSeed.seeded} new IDs (queried: ${memberSeed.queried}, skipped: $membersSkipped, failed: ${memberSeed.failed})"
       )
 
       seedStale <- seedStaleMatches(clubId, refresh)
-      _         <- ZIO.logInfo(s"  Stale match refresh: $seedStale matches queued")
+      _         <- CcasLogger.info(s"  Stale match refresh: $seedStale matches queued")
 
       // === Phase 3: Process matches (BFS waves) ===
-      _ <- ZIO.logInfo("Phase 3: Processing matches...")
-      knownPlayersInit = latestSnaps.map(s => Username.unwrap(s.username).toLowerCase -> s.playerId).toMap
+      _ <- CcasLogger.info("Phase 3: Processing matches...")
+      knownPlayersInit = latestSnaps.map(s => s.username.value -> s.playerId).toMap
       ctx       <- ProcessingContext.make(client, clubId, clubSlug, knownPlayersInit)
       waveStats <- processWaves(ctx).onInterrupt(
         finalizeInterrupted(ctx, runId, startedAt, clubSlug, memberSeed, membersSkipped, seedClub, seedStale)
-          .provideEnvironment(ZEnvironment(transactor))
+          .provideEnvironment(ZEnvironment(logger, transactor))
           .orDie
       )
 
@@ -205,7 +215,7 @@ object HistoryApp extends ZIOAppDefault {
     client: ChessComClient,
     clubId: ClubId,
     clubSlug: ClubSlug
-  ): RIO[Transactor, Int] =
+  ): RIO[CcasLogger & Transactor, Int] =
     (for {
       clubMatches <- client.get[ApiClubMatches](ApiClubMatches.getUrl(clubSlug))
       allDaily = clubMatches.dailyFinished ++ clubMatches.dailyInProgress ++ clubMatches.dailyRegistered
@@ -217,7 +227,7 @@ object HistoryApp extends ZIOAppDefault {
       all = dailyPending ++ livePending
       _ <- insertPendingMatches(all)
     } yield all.size).catchAll { error =>
-      ZIO.logWarning(s"  Failed to fetch club matches: ${error.getMessage}").as(0)
+      CcasLogger.warn(s"  Failed to fetch club matches: ${error.getMessage}").as(0)
     }
 
   private def seedFromMemberMatches(
@@ -227,7 +237,7 @@ object HistoryApp extends ZIOAppDefault {
     allMembers: List[ClubMember],
     queriedIds: Set[PlayerId],
     snapByPlayerId: Map[PlayerId, PlayerSnapshot]
-  ): RIO[Transactor, MemberSeedResult] = {
+  ): RIO[CcasLogger & Transactor, MemberSeedResult] = {
     val toQuery = allMembers
       .filterNot(m => queriedIds.contains(m.playerId))
       .flatMap(m => snapByPlayerId.get(m.playerId).map(s => (m.playerId, s.username)))
@@ -240,12 +250,12 @@ object HistoryApp extends ZIOAppDefault {
       total = toQuery.size
       _ <- ZIO.scoped {
         for {
-          bar <- ProgressBar.scoped
+          bar <- CcasLogger.progressBar
           _ <- ZIO.foreachParDiscard(toQuery) { case (playerId, username) =>
             seedMatchesForPlayer(client, clubId, clubSlug, playerId, username).foldZIO(
               error => failRef.update(_ + 1)
                 *> failedMembersRef.update(_ :+ (username, error.getMessage))
-                *> bar.logWarning(s"  $username: failed — ${error.getMessage}"),
+                *> CcasLogger.warn(s"  $username: failed — ${error.getMessage}"),
               count => seedRef.update(_ + count) *> counterRef.updateAndGet(_ + 1).flatMap { n =>
                 bar.print(n, total, s"  Querying member matches: $n/$total")
               }
@@ -261,12 +271,12 @@ object HistoryApp extends ZIOAppDefault {
   }
 
   private[history] def isClubDailyMatch(m: ApiPlayerMatches.ApiPlayerMatch, clubSlug: ClubSlug): Boolean =
-    m.club.path.segments.lastOption.exists(_.equalsIgnoreCase(ClubSlug.unwrap(clubSlug))) &&
-      !m.`@id`.path.segments.contains("live")
+    m.club.path.segments.lastOption.map(ClubSlug.wrap).contains(clubSlug)
+      && !m.`@id`.path.segments.contains("live")
 
   private[history] def isClubLiveMatch(m: ApiPlayerMatches.ApiPlayerMatch, clubSlug: ClubSlug): Boolean =
-    m.club.path.segments.lastOption.exists(_.equalsIgnoreCase(ClubSlug.unwrap(clubSlug))) &&
-      m.`@id`.path.segments.contains("live")
+    m.club.path.segments.lastOption.map(ClubSlug.wrap).contains(clubSlug)
+      && m.`@id`.path.segments.contains("live")
 
   private def seedMatchesForPlayer(
     client: ChessComClient,
@@ -288,7 +298,7 @@ object HistoryApp extends ZIOAppDefault {
       }
       all = dailyPending ++ livePending
       _ <- insertPendingMatches(all)
-      _ <- HistoryMemberQuery.insert(HistoryMemberQuery(clubId, playerId, Instant.now()))
+      _ <- HistoryMemberQuery.upsert(HistoryMemberQuery(clubId, playerId, Instant.now()))
     } yield all.size
 
   private def insertPendingMatches(items: Iterable[HistoryPendingMatch]): RIO[Transactor, Unit] =
@@ -309,43 +319,48 @@ object HistoryApp extends ZIOAppDefault {
 
   // === Phase 3: BFS Wave Processing ===
 
-  private def processWaves(ctx: ProcessingContext): RIO[Transactor, RunStats] = {
-    def waveLoop(waveCount: Int, waveDetails: List[(Int, Int)]): RIO[Transactor, RunStats] =
+  private def processWaves(ctx: ProcessingContext): RIO[CcasLogger & Transactor, RunStats] = {
+    def waveLoop(waveCount: Int, waveDetails: List[(Int, Int)]): RIO[CcasLogger & Transactor, RunStats] =
       for {
-        pendingCount <- HistoryPendingMatch.count(ctx.clubId)
+        pendingCount <- HistoryPendingMatch.countNew(ctx.clubId)
         result <- if (pendingCount == 0) { readStats(ctx, waveCount, waveDetails) } else {
           val wave = waveCount + 1
           for {
-            _ <- ZIO.logInfo(s"  Wave $wave: $pendingCount matches to process")
+            _ <- CcasLogger.info(s"  Wave $wave: $pendingCount matches to process")
             _ <- ctx.newPlayers.set(Set.empty)
             beforeCount <- ctx.matchesProcessed.get
 
             waveCounter <- Ref.make(0)
             _ <- ZIO.scoped {
-              ProgressBar.scoped.flatMap(waveBar => processAllPending(ctx, waveBar, waveCounter, pendingCount))
+              CcasLogger.progressBar.flatMap(waveBar => processAllPending(ctx, waveBar, waveCounter, pendingCount))
             }
 
             afterCount <- ctx.matchesProcessed.get
             failedCount <- ctx.matchesFailed.get
             waveProcessed = afterCount - beforeCount
-            _ <- ZIO.logInfo(s"  Wave $wave complete: $waveProcessed processed, $failedCount failed total")
+            _ <- CcasLogger.info(s"  Wave $wave complete: $waveProcessed processed, $failedCount failed total")
 
             // Seed matches for newly discovered players
             newPlayers <- ctx.newPlayers.get
             _ <- ZIO.whenDiscard(newPlayers.nonEmpty) {
-              ZIO.logInfo(s"  Querying match lists for ${newPlayers.size} discovered players...") *>
+              CcasLogger.info(s"  Querying match lists for ${newPlayers.size} discovered players...") *>
                 ZIO.foreachParDiscard(newPlayers) { dp =>
                   seedMatchesForPlayer(ctx.client, ctx.clubId, ctx.clubSlug, dp.playerId, dp.username).catchAll {
-                    error => ZIO.logWarning(s"  ${dp.username}: failed to seed — ${error.getMessage}")
+                    error => CcasLogger.warn(s"  ${dp.username}: failed to seed — ${error.getMessage}")
                   }
                 }
             }
 
-            newPending <- HistoryPendingMatch.count(ctx.clubId)
+            newPendingNew <- HistoryPendingMatch.countNew(ctx.clubId)
             updatedDetails = waveDetails :+ (wave, waveProcessed)
             r <-
-              if (newPending > 0 && newPlayers.nonEmpty) { waveLoop(wave, updatedDetails) }
-              else { readStats(ctx, wave, updatedDetails).map(_.copy(pendingRemaining = newPending.toInt)) }
+              if (newPendingNew > 0 && newPlayers.nonEmpty) { waveLoop(wave, updatedDetails) }
+              else {
+                for {
+                  pendingTotal <- HistoryPendingMatch.count(ctx.clubId)
+                  stats <- readStats(ctx, wave, updatedDetails)
+                } yield stats.copy(pendingRemaining = pendingTotal.toInt)
+              }
           } yield r
         }
       } yield result
@@ -358,13 +373,11 @@ object HistoryApp extends ZIOAppDefault {
     bar: ProgressBar,
     counter: Ref[Int],
     waveTotal: Long
-  ): RIO[Transactor, Unit] =
+  ): RIO[CcasLogger & Transactor, Unit] =
     for {
-      batch     <- HistoryPendingMatch.selectClubBatch(ctx.clubId, BatchSize)
-      failedKeys <- ctx.failedMatches.get.map(_.map(_._1).toSet)
-      filtered = batch.filterNot(m => failedKeys.contains((m.matchId, m.isLive)))
-      _ <- ZIO.whenDiscard(filtered.nonEmpty) {
-        processMatchBatch(ctx, filtered, bar, counter, waveTotal) *> processAllPending(ctx, bar, counter, waveTotal)
+      batch <- HistoryPendingMatch.selectClubBatch(ctx.clubId, BatchSize)
+      _ <- ZIO.whenDiscard(batch.nonEmpty) {
+        processMatchBatch(ctx, batch, bar, counter, waveTotal) *> processAllPending(ctx, bar, counter, waveTotal)
       }
     } yield ()
 
@@ -374,14 +387,15 @@ object HistoryApp extends ZIOAppDefault {
     bar: ProgressBar,
     counter: Ref[Int],
     waveTotal: Long
-  ): RIO[Transactor, Unit] =
+  ): RIO[CcasLogger & Transactor, Unit] =
     ZIO.foreachParDiscard(pending) { pm =>
-      processMatch(ctx, pm.matchId, pm.isLive, bar)
+      processMatch(ctx, pm.matchId, pm.isLive)
         .zipLeft(ctx.matchesProcessed.update(_ + 1))
         .catchAll { error =>
           ctx.matchesFailed.update(_ + 1) *>
-            ctx.failedMatches.update(_ :+ ((pm.matchId, pm.isLive), error.getMessage)) *>
-            bar.logWarning(s"    Match ${pm.matchId}${if (pm.isLive) " (live)" else ""}: ${error.getMessage}")
+            ctx.failedMatches.update(_ :+ (MatchKey(pm.matchId, pm.isLive), error.getMessage)) *>
+            HistoryPendingMatch.updateStatus(ctx.clubId, pm.matchId, pm.isLive, PendingMatchStatus.ApiError) *>
+            CcasLogger.warn(s"    Match ${pm.matchId}${if (pm.isLive) " (live)" else ""}: ${error.getMessage}")
         } *> counter.updateAndGet(_ + 1).flatMap { n =>
         bar.print(n, waveTotal.toInt, s"    Processing matches: $n/$waveTotal")
       }
@@ -390,50 +404,63 @@ object HistoryApp extends ZIOAppDefault {
   private def processMatch(
     ctx: ProcessingContext,
     matchId: ClubMatchId,
-    isLive: Boolean,
-    bar: ProgressBar
-  ): RIO[Transactor, Unit] =
-    if (isLive) { processLiveMatch(ctx, matchId, bar) }
-    else { processDailyMatch(ctx, matchId, bar) }
+    isLive: Boolean
+  ): RIO[CcasLogger & Transactor, Unit] =
+    if (isLive) { processLiveMatch(ctx, matchId) }
+    else { processDailyMatch(ctx, matchId) }
 
-  private def processDailyMatch(ctx: ProcessingContext, matchId: ClubMatchId, bar: ProgressBar): RIO[Transactor, Unit] =
+  private def processDailyMatch(ctx: ProcessingContext, matchId: ClubMatchId): RIO[CcasLogger & Transactor, Unit] =
     for {
       dailyMatch <- fetchMatch(ctx, matchId)
-      weAreTeam1 <- ZIO.fromOption(findOurTeam(dailyMatch.teams, ctx.clubSlug))
-        .orElse(findOurTeamByClubId(dailyMatch.teams, ctx.clubId))
-        .orElseFail(ExternalException(s"Club ${ctx.clubId} not found in match $matchId teams"))
 
-      opponentTeam = if (weAreTeam1) { dailyMatch.teams.team2 } else { dailyMatch.teams.team1 }
+      // Resolve both team club IDs symmetrically
+      (team1ClubId, team2ClubId) <-
+        resolveClubIdFromTeamUrl(ctx, dailyMatch.teams.team1.`@id`) <&>
+        resolveClubIdFromTeamUrl(ctx, dailyMatch.teams.team2.`@id`)
 
-      opponentClubId <- resolveClubIdFromTeamUrl(opponentTeam.`@id`)
-      clubMatch = buildClubMatchRow(matchId, dailyMatch, ctx.clubId, weAreTeam1, opponentClubId)
+      _ <- trackUnresolvedClub(matchId, isTeam1 = true, dailyMatch.teams.team1.`@id`, team1ClubId) <&>
+           trackUnresolvedClub(matchId, isTeam1 = false, dailyMatch.teams.team2.`@id`, team2ClubId)
 
-      boardRows <- buildBoardRows(ctx, matchId, dailyMatch, weAreTeam1, clubMatch.startTime, bar)
+      clubMatch = buildClubMatchRow(matchId, dailyMatch, team1ClubId, team2ClubId)
+
+      // Determine our team position from resolved IDs
+      weAreTeam1: Option[Boolean] =
+        if (team1ClubId.contains(ctx.clubId)) { Some(true) }
+        else if (team2ClubId.contains(ctx.clubId)) { Some(false) }
+        else { None }
+
+      boardRows <- buildBoardRows(ctx, matchId, dailyMatch, weAreTeam1, clubMatch.startTime)
 
       _ <- withTransaction {
         for {
           _ <- ClubMatch.upsert(clubMatch)
           _ <- ClubMatchBoard.deleteMatch(matchId)
           _ <- ClubMatchBoard.insertBatch(boardRows)
-          _ <- HistoryPendingMatch.delete(ctx.clubId, matchId, isLive = false)
+          _ <- if (weAreTeam1.isDefined) {
+            HistoryPendingMatch.delete(ctx.clubId, matchId, isLive = false)
+          } else {
+            HistoryPendingMatch.updateStatus(ctx.clubId, matchId, false, PendingMatchStatus.Unidentified)
+          }
         } yield ()
+      }
+      _ <- ZIO.whenDiscard(weAreTeam1.isEmpty) {
+        ctx.matchesUnidentified.update(_ + 1) *>
+          CcasLogger.warn(s"    Match $matchId: club ${ctx.clubId} not found in either team (data saved, BFS skipped)")
       }
     } yield ()
 
-  private def processLiveMatch(ctx: ProcessingContext, matchId: ClubMatchId, bar: ProgressBar): RIO[Transactor, Unit] =
+  private def processLiveMatch(ctx: ProcessingContext, matchId: ClubMatchId): RIO[CcasLogger & Transactor, Unit] =
     for {
       liveMatch <- fetchLiveMatch(ctx, matchId)
-      weAreTeam1 <- ZIO.fromOption(findOurTeam(liveMatch.teams, ctx.clubSlug))
-        .orElse(findOurTeamByClubId(liveMatch.teams, ctx.clubId))
-        .orElseFail(ExternalException(s"Club ${ctx.clubId} not found in live match $matchId teams"))
 
-      opponentTeam = if (weAreTeam1) { liveMatch.teams.team2 } else { liveMatch.teams.team1 }
-      _ <- resolveClubIdFromTeamUrl(opponentTeam.`@id`)
+      // Resolve both team club IDs (for caching/persistence)
+      _ <- resolveClubIdFromTeamUrl(ctx, liveMatch.teams.team1.`@id`) <&>
+           resolveClubIdFromTeamUrl(ctx, liveMatch.teams.team2.`@id`)
 
       // Discover players from both teams (for BFS wave expansion)
       startTime = Some(Instant.ofEpochSecond(liveMatch.startTime))
       _ <- ZIO.foreachParDiscard(liveMatch.teams.team1.players ++ liveMatch.teams.team2.players) { p =>
-        resolvePlayerId(ctx, p.username, isOurTeam = false, startTime, bar)
+        resolvePlayerId(ctx, p.username, isOurTeam = false, startTime)
       }
 
       _ <- HistoryPendingMatch.delete(ctx.clubId, matchId, isLive = true)
@@ -445,16 +472,15 @@ object HistoryApp extends ZIOAppDefault {
     ctx: ProcessingContext,
     matchId: ClubMatchId,
     dailyMatch: ApiDailyMatch,
-    weAreTeam1: Boolean,
-    matchStartTime: Option[Instant],
-    bar: ProgressBar
-  ): RIO[Transactor, List[ClubMatchBoard]] =
+    weAreTeam1: Option[Boolean],
+    matchStartTime: Option[Instant]
+  ): RIO[CcasLogger & Transactor, List[ClubMatchBoard]] =
     dailyMatch match {
       case _: ApiDailyMatchRegistered => ZIO.succeed(Nil)
       case _ =>
         val teams        = dailyMatch.teams
-        val team1FpLower = teams.team1.fairPlayRemovals.map(u => Username.unwrap(u).toLowerCase)
-        val team2FpLower = teams.team2.fairPlayRemovals.map(u => Username.unwrap(u).toLowerCase)
+        val team1Fp = teams.team1.fairPlayRemovals.map(_.value)
+        val team2Fp = teams.team2.fairPlayRemovals.map(_.value)
 
         val team1ByBoard: Map[Int, MatchPlayerStarted] = teams.team1.players.collect {
           case p: MatchPlayerStarted => p.board.path.segments.last.toInt -> p
@@ -468,21 +494,23 @@ object HistoryApp extends ZIOAppDefault {
         ZIO.foreachPar(allBoards) { boardNum =>
           for {
             t1Player <- ZIO.fromOption(team1ByBoard.get(boardNum))
-              .orElseFail(ExternalException(s"Match $matchId board $boardNum: missing team1 player"))
+              .orElseFail(Exception(s"Match $matchId board $boardNum: missing team1 player"))
             t2Player <- ZIO.fromOption(team2ByBoard.get(boardNum))
-              .orElseFail(ExternalException(s"Match $matchId board $boardNum: missing team2 player"))
+              .orElseFail(Exception(s"Match $matchId board $boardNum: missing team2 player"))
 
             t1Username = t1Player.username
             t2Username = t2Player.username
-            t1FairPlay = team1FpLower.contains(Username.unwrap(t1Username).toLowerCase)
-            t2FairPlay = team2FpLower.contains(Username.unwrap(t2Username).toLowerCase)
+            t1FairPlay = team1Fp.contains(t1Username.value)
+            t2FairPlay = team2Fp.contains(t2Username.value)
 
-            t1Pid <-
-              if (weAreTeam1) { resolvePlayerId(ctx, t1Username, isOurTeam = true, matchStartTime, bar) }
-              else { ZIO.none }
-            t2Pid <-
-              if (!weAreTeam1) { resolvePlayerId(ctx, t2Username, isOurTeam = true, matchStartTime, bar) }
-              else { ZIO.none }
+            t1Pid <- resolvePlayerId(ctx, t1Username, isOurTeam = weAreTeam1.contains(true), matchStartTime)
+            t2Pid <- resolvePlayerId(ctx, t2Username, isOurTeam = weAreTeam1.contains(false), matchStartTime)
+            _ <- ZIO.whenDiscard(t1Pid.isEmpty)(
+              UnresolvedBoardPlayer.insert(matchId, boardNum, isTeam1 = true, t1Username).ignore
+            )
+            _ <- ZIO.whenDiscard(t2Pid.isEmpty)(
+              UnresolvedBoardPlayer.insert(matchId, boardNum, isTeam1 = false, t2Username).ignore
+            )
           } yield {
             val (g1Winner, g1Detail) =
               normalizeGameOutcome(t1Player.playedAsWhite, t2Player.playedAsBlack, whiteTeamIsTeam1 = true)
@@ -494,10 +522,8 @@ object HistoryApp extends ZIOAppDefault {
               matchId = matchId,
               board = boardNum,
               team1PlayerId = t1Pid,
-              team1Username = t1Username,
               team1FairPlay = t1FairPlay,
               team2PlayerId = t2Pid,
-              team2Username = t2Username,
               team2FairPlay = t2FairPlay,
               game1Winner = g1Winner,
               game1Detail = g1Detail,
@@ -563,14 +589,12 @@ object HistoryApp extends ZIOAppDefault {
     ctx: ProcessingContext,
     username: Username,
     isOurTeam: Boolean,
-    matchStartTime: Option[Instant],
-    bar: ProgressBar
-  ): RIO[Transactor, Option[PlayerId]] = {
-    val key = Username.unwrap(username).toLowerCase
+    matchStartTime: Option[Instant]
+  ): RIO[CcasLogger & Transactor, Option[PlayerId]] = {
+    val key = username.value
     ctx.knownPlayers.get.map(_.get(key)).flatMap {
       case Some(playerId) => ctx.playersKnown.update(_ + 1).as(Some(playerId))
-      case None if !isOurTeam => ZIO.none
-      case None => discoverPlayer(ctx, username, key, matchStartTime, bar)
+      case None => discoverPlayer(ctx, username, key, isOurTeam, matchStartTime)
     }
   }
 
@@ -581,15 +605,15 @@ object HistoryApp extends ZIOAppDefault {
     ctx: ProcessingContext,
     username: Username,
     key: String,
-    matchStartTime: Option[Instant],
-    bar: ProgressBar
-  ): RIO[Transactor, Option[PlayerId]] =
+    isOurTeam: Boolean,
+    matchStartTime: Option[Instant]
+  ): RIO[CcasLogger & Transactor, Option[PlayerId]] =
     for {
       promise <- Promise.make[Throwable, Option[PlayerId]]
       action <- ctx.discoveryCache.modify { m =>
         m.get(key) match {
           case Some(existing) => (existing.await, m)
-          case None           => (doDiscoverPlayer(ctx, username, key, promise, matchStartTime, bar), m + (key -> promise))
+          case None           => (doDiscoverPlayer(ctx, username, key, promise, isOurTeam, matchStartTime), m + (key -> promise))
         }
       }
       result <- action
@@ -600,9 +624,9 @@ object HistoryApp extends ZIOAppDefault {
     username: Username,
     key: String,
     promise: Promise[Throwable, Option[PlayerId]],
-    matchStartTime: Option[Instant],
-    bar: ProgressBar
-  ): RIO[Transactor, Option[PlayerId]] = {
+    isOurTeam: Boolean,
+    matchStartTime: Option[Instant]
+  ): RIO[CcasLogger & Transactor, Option[PlayerId]] = {
     val work = for {
       apiPlayer <- ctx.client.get[ApiPlayer](ApiPlayer.getUrl(username))
       playerId       = apiPlayer.playerId
@@ -632,9 +656,9 @@ object HistoryApp extends ZIOAppDefault {
               val snapshot = PlayerSnapshot(playerId, snapshotSince, username, statusCategory, apiPlayer.title)
               for {
                 _ <- PlayerSnapshot.insert(snapshot)
-                _ <- createClubMemberForDiscovered(ctx, apiPlayer, matchStartTime)
+                _ <- ZIO.whenDiscard(isOurTeam)(createClubMemberForDiscovered(ctx, apiPlayer, matchStartTime))
                 _ <- ctx.knownPlayers.update(_ + (key -> playerId))
-                _ <- ctx.newPlayers.update(_ + DiscoveredPlayer(playerId, username))
+                _ <- ZIO.whenDiscard(isOurTeam)(ctx.newPlayers.update(_ + DiscoveredPlayer(playerId, username)))
                 _ <- ctx.playersDiscovered.update(_ + 1)
               } yield Some(playerId)
             }
@@ -646,7 +670,7 @@ object HistoryApp extends ZIOAppDefault {
     // On failure: log once, count once, resolve promise to None so awaiting fibers get None (not an exception).
     work.foldZIO(
       error => ctx.playersFailed.update(_ + 1)
-        *> bar.logWarning(s"    Cannot resolve player $username: ${error.getMessage}")
+        *> CcasLogger.warn(s"    Cannot resolve player $username: ${error.getMessage}")
         *> promise.succeed(None).as(None),
       result => promise.succeed(result).as(result)
     )
@@ -730,38 +754,44 @@ object HistoryApp extends ZIOAppDefault {
 
   // === Helpers ===
 
-  private[history] def findOurTeam(teams: TeamMatchTeams, clubSlug: ClubSlug): Option[Boolean] = {
-    val name = ClubSlug.unwrap(clubSlug)
-    if (teams.team1.`@id`.path.segments.lastOption.exists(_.equalsIgnoreCase(name))) { Some(true) }
-    else if (teams.team2.`@id`.path.segments.lastOption.exists(_.equalsIgnoreCase(name))) { Some(false) }
-    else { None }
-  }
+  private def trackUnresolvedClub(
+    matchId: ClubMatchId,
+    isTeam1: Boolean,
+    teamUrl: URL,
+    resolvedId: Option[ClubId]
+  ): RIO[Transactor, Unit] =
+    ZIO.whenDiscard(resolvedId.isEmpty) {
+      teamUrl.path.segments.lastOption match {
+        case Some(segment) => UnresolvedMatchClub.insert(matchId, isTeam1, ClubSlug.wrap(segment)).ignore
+        case None          => ZIO.unit
+      }
+    }
 
-  private def findOurTeamByClubId(teams: TeamMatchTeams, clubId: ClubId): RIO[Transactor, Boolean] =
-    for {
-      t1Id <- resolveClubIdFromTeamUrl(teams.team1.`@id`)
-      result <-
-        if (t1Id.contains(clubId)) { ZIO.succeed(true) }
-        else {
-          resolveClubIdFromTeamUrl(teams.team2.`@id`).flatMap {
-            case Some(id) if id == clubId => ZIO.succeed(false)
-            case _                        => ZIO.fail(ExternalException("Club not found in either team"))
-          }
-        }
-    } yield result
-
-  private def resolveClubIdFromTeamUrl(teamUrl: URL): RIO[Transactor, Option[ClubId]] =
+  private def resolveClubIdFromTeamUrl(ctx: ProcessingContext, teamUrl: URL): RIO[Transactor, Option[ClubId]] =
     teamUrl.path.segments.lastOption match {
-      case None          => ZIO.none
-      case Some(segment) => Club.selectBySlug(ClubSlug.wrap(segment)).map(_.map(_.clubId))
+      case None => ZIO.none
+      case Some(segment) =>
+        val slug = ClubSlug.wrap(segment)
+        val key = slug.value
+        for {
+          promise <- Promise.make[Throwable, Option[ClubId]]
+          action <- ctx.clubCache.modify { m =>
+            m.get(key) match {
+              case Some(existing) => (existing.await, m)
+              case None =>
+                val work = Club.resolveOrFetch(ctx.client, slug).tapBoth(promise.fail, promise.succeed)
+                (work, m + (key -> promise))
+            }
+          }
+          result <- action
+        } yield result
     }
 
   private[history] def buildClubMatchRow(
     matchId: ClubMatchId,
     dailyMatch: ApiDailyMatch,
-    clubId: ClubId,
-    weAreTeam1: Boolean,
-    opponentClubId: Option[ClubId]
+    team1ClubId: Option[ClubId],
+    team2ClubId: Option[ClubId]
   ): ClubMatch = {
     val teams = dailyMatch.teams
     val (startTime, endTime) = dailyMatch match {
@@ -777,8 +807,6 @@ object HistoryApp extends ZIOAppDefault {
       case t: ApiDailyMatchTeamsCancelled => (Some(t.team1.result), Some(t.team2.result))
       case _                              => (None, None)
     }
-    val (team1ClubId, team2ClubId) = if (weAreTeam1) { (Some(clubId), opponentClubId) }
-    else { (opponentClubId, Some(clubId)) }
 
     ClubMatch(
       matchId = matchId,
@@ -790,11 +818,9 @@ object HistoryApp extends ZIOAppDefault {
       endTime = endTime,
       boards = dailyMatch.boards,
       team1ClubId = team1ClubId,
-      team1Name = teams.team1.name,
       team1Score = teams.team1.score,
       team1Result = team1Result,
       team2ClubId = team2ClubId,
-      team2Name = teams.team2.name,
       team2Score = teams.team2.score,
       team2Result = team2Result,
       fetchedAt = Instant.now()
@@ -812,7 +838,7 @@ object HistoryApp extends ZIOAppDefault {
     membersSkipped: Int,
     seedClub: Int,
     seedStale: Int
-  ): RIO[Transactor, Unit] =
+  ): RIO[CcasLogger & Transactor, Unit] =
     for {
       partialStats     <- readStats(ctx, waveCount = 0, waveDetails = Nil)
       pendingRemaining <- HistoryPendingMatch.count(ctx.clubId)
@@ -832,15 +858,17 @@ object HistoryApp extends ZIOAppDefault {
 
   private def readStats(ctx: ProcessingContext, waveCount: Int, waveDetails: List[(Int, Int)]): UIO[RunStats] =
     for {
-      matchesProcessed  <- ctx.matchesProcessed.get
-      matchesFailed     <- ctx.matchesFailed.get
-      playersDiscovered <- ctx.playersDiscovered.get
-      playersKnown      <- ctx.playersKnown.get
-      playersFailed     <- ctx.playersFailed.get
-      failedMatches     <- ctx.failedMatches.get
+      matchesProcessed    <- ctx.matchesProcessed.get
+      matchesFailed       <- ctx.matchesFailed.get
+      matchesUnidentified <- ctx.matchesUnidentified.get
+      playersDiscovered   <- ctx.playersDiscovered.get
+      playersKnown        <- ctx.playersKnown.get
+      playersFailed       <- ctx.playersFailed.get
+      failedMatches       <- ctx.failedMatches.get
     } yield RunStats(
       matchesProcessed = matchesProcessed,
       matchesFailed = matchesFailed,
+      matchesUnidentified = matchesUnidentified,
       playersDiscovered = playersDiscovered,
       playersKnown = playersKnown,
       playersFailed = playersFailed,
@@ -849,21 +877,21 @@ object HistoryApp extends ZIOAppDefault {
       failedMatches = failedMatches
     )
 
-  private def logSummary(stats: RunStats, startedAt: Instant, completedAt: Instant): UIO[Unit] = {
+  private def logSummary(stats: RunStats, startedAt: Instant, completedAt: Instant): URIO[CcasLogger, Unit] = {
     val duration = JDuration.between(startedAt, completedAt)
     for {
-      _ <- ZIO.logInfo("=== History Discovery Complete ===")
-      _ <- ZIO.logInfo(s"Duration: ${duration.toMinutes}m ${duration.toSecondsPart}s")
-      _ <- ZIO.logInfo(
-        s"Members queried: ${stats.membersQueried} / skipped: ${stats.membersSkipped} / failed: ${stats.membersFailed}"
+      _ <- CcasLogger.info("=== History Discovery Complete ===")
+      _ <- CcasLogger.info(s"Duration: ${duration.display}")
+      _ <- CcasLogger.info(
+        s"Members queried: ${stats.membersQueried} | skipped: ${stats.membersSkipped} | failed: ${stats.membersFailed}"
       )
-      _ <- ZIO.logInfo(s"Matches seeded: ${stats.matchesSeeded}")
-      _ <- ZIO.logInfo(s"Matches processed: ${stats.matchesProcessed} / failed: ${stats.matchesFailed}")
-      _ <- ZIO.logInfo(
-        s"Players discovered: ${stats.playersDiscovered} / known: ${stats.playersKnown} / failed: ${stats.playersFailed}"
+      _ <- CcasLogger.info(s"Matches seeded: ${stats.matchesSeeded}")
+      _ <- CcasLogger.info(s"Matches processed: ${stats.matchesProcessed} | failed: ${stats.matchesFailed} | unidentified: ${stats.matchesUnidentified}")
+      _ <- CcasLogger.info(
+        s"Players discovered: ${stats.playersDiscovered} | known: ${stats.playersKnown} | failed: ${stats.playersFailed}"
       )
-      _ <- ZIO.logInfo(s"Waves: ${stats.waveCount}")
-      _ <- ZIO.logInfo(s"Pending remaining: ${stats.pendingRemaining}")
+      _ <- CcasLogger.info(s"Waves: ${stats.waveCount}")
+      _ <- CcasLogger.info(s"Pending remaining: ${stats.pendingRemaining}")
     } yield ()
   }
 
@@ -879,7 +907,7 @@ object HistoryApp extends ZIOAppDefault {
     sb.append(s"=== History Discovery Report: $clubSlug ===\n\n")
     sb.append(s"Started:   $startedAt\n")
     sb.append(s"Completed: $completedAt\n")
-    sb.append(s"Duration:  ${duration.toMinutes}m ${duration.toSecondsPart}s\n\n")
+    sb.append(s"Duration:  ${duration.display}\n\n")
 
     sb.append("--- Members ---\n")
     sb.append(s"Queried: ${stats.membersQueried}\n")
@@ -887,9 +915,10 @@ object HistoryApp extends ZIOAppDefault {
     sb.append(s"Failed:  ${stats.membersFailed}\n\n")
 
     sb.append("--- Matches ---\n")
-    sb.append(s"Seeded:    ${stats.matchesSeeded}\n")
-    sb.append(s"Processed: ${stats.matchesProcessed}\n")
-    sb.append(s"Failed:    ${stats.matchesFailed}\n")
+    sb.append(s"Seeded:       ${stats.matchesSeeded}\n")
+    sb.append(s"Processed:    ${stats.matchesProcessed}\n")
+    sb.append(s"Failed:       ${stats.matchesFailed}\n")
+    sb.append(s"Unidentified: ${stats.matchesUnidentified}\n")
     stats.waveDetails.foreach { case (wave, count) =>
       sb.append(s"  Wave $wave: $count matches\n")
     }
@@ -902,7 +931,7 @@ object HistoryApp extends ZIOAppDefault {
 
     if (stats.failedMatches.nonEmpty) {
       sb.append("--- Failed Matches ---\n")
-      stats.failedMatches.foreach { case ((matchId, isLive), error) =>
+      stats.failedMatches.foreach { case (MatchKey(matchId, isLive), error) =>
         val kind = if (isLive) { " (live)" } else { "" }
         sb.append(s"  Match $matchId$kind: $error\n")
       }

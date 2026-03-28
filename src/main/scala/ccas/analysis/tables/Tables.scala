@@ -1,13 +1,16 @@
 package ccas.analysis.tables
 
 import com.augustnagro.magnum.Transactor
-import zio.{RIO, Scope, ZIO, ZIOAppDefault}
+import zio.{RIO, Scope, ZIOAppDefault}
 
+import ccas.utils.CcasLogger
 import ccas.utils.sql.DataSourceLayer
 
 object Tables extends ZIOAppDefault {
+
   override def run: RIO[Scope, Unit] =
-    ensureTables.provide(DataSourceLayer.liveFromPrefix()) <* ZIO.logInfo("All tables ensured")
+    (ensureTables.provide(DataSourceLayer.liveFromPrefix()) <* CcasLogger.info("All tables ensured"))
+      .provideSome[Scope](CcasLogger.live())
 
   def ensureTables: RIO[Transactor, Unit] =
     for {
@@ -17,6 +20,8 @@ object Tables extends ZIOAppDefault {
       _ <- PlayerSnapshot.createTable
       _ <- Club.createTable
       _ <- ClubMatchRef.createTable
+      _ <- PlayerRefSkip.createTable
+      _ <- ClubRefSkip.createTable
       _ <- ClubMember.createTable
       _ <- MembershipRun.createTable
       _ <- RecruitmentCriteria.createTable
@@ -31,5 +36,7 @@ object Tables extends ZIOAppDefault {
       _ <- HistoryMemberQuery.createTable
       _ <- HistoryPendingMatch.createTable
       _ <- HistoryRun.createTable
+      _ <- UnresolvedBoardPlayer.createTable
+      _ <- UnresolvedMatchClub.createTable
     } yield ()
 }
