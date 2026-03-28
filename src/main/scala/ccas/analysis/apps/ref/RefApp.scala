@@ -1,13 +1,14 @@
 package ccas.analysis.apps.ref
 
 import java.time.{Duration as JDuration, Instant}
+import java.time.temporal.ChronoUnit
 import scala.annotation.nowarn
 
 import com.augustnagro.magnum.{sql, Transactor}
 import zio.{Promise, RIO, Ref, Scope, Task, UIO, ZIO, ZIOAppDefault}
 import zio.http.{Client, URL}
 
-import ccas.analysis.tables.{ClubMatch, ClubMatchBoard, ClubMatchRef, MatchKey, PlayerMatchRef, PlayerTournamentRef, RunTrigger, Tables}
+import ccas.analysis.tables.{ClubMatch, ClubMatchBoard, ClubMatchRef, ClubRefSkip, MatchKey, PlayerMatchRef, PlayerRefSkip, PlayerTournamentRef, RefSkipReason, RunTrigger, Tables}
 import ccas.api.club.ApiClubMatches
 import ccas.api.clubmatch.TeamMatchTeams
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, TournamentSlug, Username}
@@ -15,9 +16,10 @@ import ccas.api.player.{ApiPlayer, ApiPlayerMatches, ApiPlayerTournaments}
 import ccas.api.player.ApiPlayerMatches.ApiPlayerMatch
 import ccas.api.tournament.ApiTournamentRound
 import ccas.utils.{CcasLogger, OutputFile}
-import ccas.utils.client.ChessComClient
+import ccas.utils.client.{ChessComClient, HttpStatusException}
 import ccas.utils.errors.safeMessage
 import ccas.utils.sql.DataSourceLayer
+import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.SqlZioTypes.connectZIO
 import ccas.analysis.apps.ref.RefHelpers.parseMatchUrl
 
@@ -35,8 +37,31 @@ object RefApp extends ZIOAppDefault {
 
   private enum ResolveResult {
     case Resolved
-    case NotFound
-    case SkipPlayer // player ID mismatch — don't try more matches/tournaments
+    case NotFound       // had candidates, tried them, none worked
+    case NoData         // API returned empty candidate list
+    case SkipPlayer     // player ID mismatch — don't try more matches/tournaments
+  }
+
+  private object RetryWindows {
+    val NoData: Long            = 14 // days
+    val NotFound: Long          = 30
+    val IdMismatch: Long        = 90
+    val ResolutionFailed: Long  = 7
+    val ApiError: Long          = 3
+
+    def cutoff(reason: RefSkipReason, now: Instant): Instant = {
+      val days = reason match {
+        case RefSkipReason.NoData           => NoData
+        case RefSkipReason.NotFound         => NotFound
+        case RefSkipReason.IdMismatch       => IdMismatch
+        case RefSkipReason.ResolutionFailed => ResolutionFailed
+        case RefSkipReason.ApiError         => ApiError
+      }
+      now.minus(days, ChronoUnit.DAYS)
+    }
+
+    def allCutoffs(now: Instant): Map[RefSkipReason, Instant] =
+      RefSkipReason.values.map(r => r -> cutoff(r, now)).toMap
   }
 
   // --- Context ---
@@ -50,7 +75,9 @@ object RefApp extends ZIOAppDefault {
     val clubsResolvedApi: Ref[Int],
     val playersResolvedDb: Ref[Int],
     val playersResolvedApi: Ref[Int],
-    val skippedPlayers: Ref[List[(PlayerId, Username)]]
+    val skippedPlayers: Ref[List[(PlayerId, Username)]],
+    val playersSkippedNew: Ref[Int],
+    val clubsSkippedNew: Ref[Int]
   )
 
   private object RefContext {
@@ -64,11 +91,13 @@ object RefApp extends ZIOAppDefault {
         playersResolvedDb  <- Ref.make(0)
         playersResolvedApi <- Ref.make(0)
         skippedPlayers     <- Ref.make(List.empty[(PlayerId, Username)])
+        playersSkippedNew  <- Ref.make(0)
+        clubsSkippedNew    <- Ref.make(0)
       } yield new RefContext(
         client, cache, failedUrls, failedUrlSource,
         clubsResolvedDb, clubsResolvedApi,
         playersResolvedDb, playersResolvedApi,
-        skippedPlayers
+        skippedPlayers, playersSkippedNew, clubsSkippedNew
       )
   }
 
@@ -97,9 +126,10 @@ object RefApp extends ZIOAppDefault {
           }
         } yield ()
       }
-      clubsDb  <- ctx.clubsResolvedDb.get
-      clubsApi <- ctx.clubsResolvedApi.get
-      _ <- CcasLogger.info(s"Clubs resolved: $clubsDb (DB) + $clubsApi (API) = ${clubsDb + clubsApi} / ${clubs.size}")
+      clubsDb         <- ctx.clubsResolvedDb.get
+      clubsApi        <- ctx.clubsResolvedApi.get
+      clubsSkippedNew <- ctx.clubsSkippedNew.get
+      _ <- CcasLogger.info(s"Clubs resolved: $clubsDb (DB) + $clubsApi (API) = ${clubsDb + clubsApi} / ${clubs.size}, skipped: $clubsSkippedNew new")
       // Players
       players <- selectUnresolvedPlayers
       _       <- CcasLogger.info(s"Players without match ref: ${players.size}")
@@ -115,11 +145,12 @@ object RefApp extends ZIOAppDefault {
           }
         } yield ()
       }
-      playersDb  <- ctx.playersResolvedDb.get
-      playersApi <- ctx.playersResolvedApi.get
-      skipped    <- ctx.skippedPlayers.get
+      playersDb         <- ctx.playersResolvedDb.get
+      playersApi        <- ctx.playersResolvedApi.get
+      playersSkippedNew <- ctx.playersSkippedNew.get
+      skipped           <- ctx.skippedPlayers.get
       _ <- CcasLogger.info(
-        s"Players resolved: $playersDb (DB) + $playersApi (API) = ${playersDb + playersApi} / ${players.size}"
+        s"Players resolved: $playersDb (DB) + $playersApi (API) = ${playersDb + playersApi} / ${players.size}, skipped: $playersSkippedNew new"
       )
       _ <- ZIO.whenDiscard(skipped.nonEmpty)(
         CcasLogger.warn(s"Players skipped (ID mismatch): ${skipped.size}")
@@ -128,12 +159,18 @@ object RefApp extends ZIOAppDefault {
       duration    = JDuration.between(startedAt, completedAt)
       _ <- CcasLogger.info(s"Duration: ${duration.toMinutes}m ${duration.toSecondsPart}s")
       // Output report
-      failed    <- ctx.failedUrls.get
-      failedSrc <- ctx.failedUrlSource.get
+      failed              <- ctx.failedUrls.get
+      failedSrc           <- ctx.failedUrlSource.get
+      playerSkipsByReason <- PlayerRefSkip.countByReason
+      clubSkipsByReason   <- ClubRefSkip.countByReason
       report = formatReport(ReportData(
         clubsTotal = clubs.size, clubsResolvedDb = clubsDb, clubsResolvedApi = clubsApi,
+        clubsSkippedNew = clubsSkippedNew,
         playersTotal = players.size, playersResolvedDb = playersDb, playersResolvedApi = playersApi,
+        playersSkippedNew = playersSkippedNew,
         skippedPlayers = skipped,
+        playerSkipsByReason = playerSkipsByReason,
+        clubSkipsByReason = clubSkipsByReason,
         startedAt = startedAt, completedAt = completedAt,
         failedQueries = failed, failedUrlSources = failedSrc
       ))
@@ -146,10 +183,14 @@ object RefApp extends ZIOAppDefault {
     clubsTotal: Int,
     clubsResolvedDb: Int,
     clubsResolvedApi: Int,
+    clubsSkippedNew: Int,
     playersTotal: Int,
     playersResolvedDb: Int,
     playersResolvedApi: Int,
+    playersSkippedNew: Int,
     skippedPlayers: List[(PlayerId, Username)],
+    playerSkipsByReason: List[(RefSkipReason, Long)],
+    clubSkipsByReason: List[(RefSkipReason, Long)],
     startedAt: Instant,
     completedAt: Instant,
     failedQueries: Map[String, String],
@@ -169,21 +210,37 @@ object RefApp extends ZIOAppDefault {
     sb.append(s"Total:          ${d.clubsTotal}\n")
     sb.append(s"Resolved (DB):  ${d.clubsResolvedDb}\n")
     sb.append(s"Resolved (API): ${d.clubsResolvedApi}\n")
-    sb.append(s"Unresolved:     ${d.clubsTotal - d.clubsResolvedDb - d.clubsResolvedApi}\n\n")
+    sb.append(s"Skipped (new):  ${d.clubsSkippedNew}\n")
+    sb.append(s"Unresolved:     ${d.clubsTotal - d.clubsResolvedDb - d.clubsResolvedApi - d.clubsSkippedNew}\n\n")
 
     sb.append("--- Players ---\n")
     sb.append(s"Total:          ${d.playersTotal}\n")
     sb.append(s"Resolved (DB):  ${d.playersResolvedDb}\n")
     sb.append(s"Resolved (API): ${d.playersResolvedApi}\n")
-    if (d.skippedPlayers.nonEmpty) {
-      sb.append(s"Skipped (ID mismatch): ${d.skippedPlayers.size}\n")
-    }
-    sb.append(s"Unresolved:     ${d.playersTotal - d.playersResolvedDb - d.playersResolvedApi - d.skippedPlayers.size}\n\n")
+    sb.append(s"Skipped (new):  ${d.playersSkippedNew}\n")
+    sb.append(s"Unresolved:     ${d.playersTotal - d.playersResolvedDb - d.playersResolvedApi - d.playersSkippedNew}\n\n")
 
     if (d.skippedPlayers.nonEmpty) {
-      sb.append(s"--- Skipped Players (${d.skippedPlayers.size}) ---\n")
+      sb.append(s"--- Skipped Players — ID Mismatch (${d.skippedPlayers.size}) ---\n")
       d.skippedPlayers.sortBy(_._2.toString).foreach { case (pid, username) =>
         sb.append(s"  $username (player_id=$pid)\n")
+      }
+      sb.append("\n")
+    }
+
+    if (d.playerSkipsByReason.nonEmpty || d.clubSkipsByReason.nonEmpty) {
+      sb.append("--- Skip Totals ---\n")
+      if (d.playerSkipsByReason.nonEmpty) {
+        sb.append("  Players:\n")
+        d.playerSkipsByReason.sortBy(_._1.toString).foreach { case (reason, count) =>
+          sb.append(s"    $reason: $count\n")
+        }
+      }
+      if (d.clubSkipsByReason.nonEmpty) {
+        sb.append("  Clubs:\n")
+        d.clubSkipsByReason.sortBy(_._1.toString).foreach { case (reason, count) =>
+          sb.append(s"    $reason: $count\n")
+        }
       }
       sb.append("\n")
     }
@@ -212,7 +269,14 @@ object RefApp extends ZIOAppDefault {
 
   // --- Queries ---
 
-  private def selectUnresolvedPlayers: RIO[Transactor, List[UnresolvedPlayer]] =
+  private def selectUnresolvedPlayers: RIO[Transactor, List[UnresolvedPlayer]] = {
+    val now     = Instant.now()
+    val cutoffs = RetryWindows.allCutoffs(now)
+    val cNoData           = cutoffs(RefSkipReason.NoData)
+    val cNotFound         = cutoffs(RefSkipReason.NotFound)
+    val cIdMismatch       = cutoffs(RefSkipReason.IdMismatch)
+    val cResolutionFailed = cutoffs(RefSkipReason.ResolutionFailed)
+    val cApiError         = cutoffs(RefSkipReason.ApiError)
     connectZIO {
       sql"""SELECT p.player_id, ps.username
             FROM player p
@@ -222,16 +286,37 @@ object RefApp extends ZIOAppDefault {
             ) ps ON p.player_id = ps.player_id AND ps.rn = 1
             LEFT JOIN player_match_ref pmr ON p.player_id = pmr.player_id
             LEFT JOIN player_tournament_ref ptr ON p.player_id = ptr.player_id
-            WHERE pmr.player_id IS NULL AND ptr.player_id IS NULL""".query[UnresolvedPlayer].run().toList
+            LEFT JOIN player_ref_skip prs ON p.player_id = prs.player_id
+              AND ((prs.reason = 'NoData'           AND prs.last_attempted > $cNoData)
+                OR (prs.reason = 'NotFound'         AND prs.last_attempted > $cNotFound)
+                OR (prs.reason = 'IdMismatch'       AND prs.last_attempted > $cIdMismatch)
+                OR (prs.reason = 'ResolutionFailed' AND prs.last_attempted > $cResolutionFailed)
+                OR (prs.reason = 'ApiError'         AND prs.last_attempted > $cApiError))
+            WHERE pmr.player_id IS NULL AND ptr.player_id IS NULL AND prs.player_id IS NULL""".query[UnresolvedPlayer].run().toList
     }
+  }
 
-  private def selectUnresolvedClubs: RIO[Transactor, List[UnresolvedClub]] =
+  private def selectUnresolvedClubs: RIO[Transactor, List[UnresolvedClub]] = {
+    val now     = Instant.now()
+    val cutoffs = RetryWindows.allCutoffs(now)
+    val cNoData           = cutoffs(RefSkipReason.NoData)
+    val cNotFound         = cutoffs(RefSkipReason.NotFound)
+    val cIdMismatch       = cutoffs(RefSkipReason.IdMismatch)
+    val cResolutionFailed = cutoffs(RefSkipReason.ResolutionFailed)
+    val cApiError         = cutoffs(RefSkipReason.ApiError)
     connectZIO {
       sql"""SELECT c.club_id, c.slug
             FROM club c
             LEFT JOIN club_match_ref cmr ON c.club_id = cmr.club_id
-            WHERE cmr.club_id IS NULL""".query[UnresolvedClub].run().toList
+            LEFT JOIN club_ref_skip crs ON c.club_id = crs.club_id
+              AND ((crs.reason = 'NoData'           AND crs.last_attempted > $cNoData)
+                OR (crs.reason = 'NotFound'         AND crs.last_attempted > $cNotFound)
+                OR (crs.reason = 'IdMismatch'       AND crs.last_attempted > $cIdMismatch)
+                OR (crs.reason = 'ResolutionFailed' AND crs.last_attempted > $cResolutionFailed)
+                OR (crs.reason = 'ApiError'         AND crs.last_attempted > $cApiError))
+            WHERE cmr.club_id IS NULL AND crs.club_id IS NULL""".query[UnresolvedClub].run().toList
     }
+  }
 
   // --- Player resolution ---
 
@@ -243,20 +328,36 @@ object RefApp extends ZIOAppDefault {
       dbRef <- ClubMatchBoard.selectPlayerMatchRef(player.playerId)
       resolved <- dbRef match {
         case Some(ref) =>
-          PlayerMatchRef.insert(ref) *>
+          PlayerMatchRef.insert(ref) *> PlayerRefSkip.deleteId(player.playerId) *>
             ctx.playersResolvedDb.update(_ + 1) *>
             CcasLogger.debug(s"  ${player.username}: resolved via DB").as(true)
         case None =>
           resolvePlayerViaMatch(ctx, player).flatMap {
             case ResolveResult.Resolved   => ZIO.succeed(true)
-            case ResolveResult.SkipPlayer => ZIO.succeed(false)
-            case ResolveResult.NotFound   =>
-              resolvePlayerViaTournament(ctx, player).map(_ == ResolveResult.Resolved)
+            case ResolveResult.SkipPlayer =>
+              skipPlayer(ctx, player, RefSkipReason.IdMismatch).as(false)
+            case matchOutcome => // NotFound or NoData
+              resolvePlayerViaTournament(ctx, player).flatMap {
+                case ResolveResult.Resolved   => ZIO.succeed(true)
+                case ResolveResult.SkipPlayer =>
+                  skipPlayer(ctx, player, RefSkipReason.IdMismatch).as(false)
+                case tournamentOutcome =>
+                  val reason = (matchOutcome, tournamentOutcome) match {
+                    case (ResolveResult.NoData, ResolveResult.NoData) => RefSkipReason.NoData
+                    case _                                            => RefSkipReason.ResolutionFailed
+                  }
+                  skipPlayer(ctx, player, reason).as(false)
+              }
           }
       }
-    } yield resolved).catchAll(error =>
-      CcasLogger.warn(s"  ${player.username}: error — ${error.safeMessage}").as(false)
-    )
+    } yield resolved).catchAll {
+      case e: HttpStatusException if e.statusCode == 404 =>
+        CcasLogger.warn(s"  ${player.username}: 404 — ${e.safeMessage}") *>
+          skipPlayer(ctx, player, RefSkipReason.NotFound, Some(e.safeMessage)).as(false)
+      case error =>
+        CcasLogger.warn(s"  ${player.username}: error — ${error.safeMessage}") *>
+          skipPlayer(ctx, player, RefSkipReason.ApiError, Some(error.safeMessage)).as(false)
+    }
 
   private def resolvePlayerViaMatch(
     ctx: RefContext,
@@ -266,7 +367,7 @@ object RefApp extends ZIOAppDefault {
       playerMatches <- ctx.client.get[ApiPlayerMatches](ApiPlayerMatches.getUrl(player.username))
       candidates = playerMatches.finished.filter(_.board.isDefined)
       result <- if (candidates.isEmpty) {
-        CcasLogger.debug(s"  ${player.username}: no finished match with board").as(ResolveResult.NotFound)
+        CcasLogger.debug(s"  ${player.username}: no finished match with board").as(ResolveResult.NoData)
       } else {
         tryMatches(ctx, player, candidates.toList)
       }
@@ -305,7 +406,8 @@ object RefApp extends ZIOAppDefault {
                 case Some(isTeam1) =>
                   handleVerification(ctx, player) {
                     val ref = PlayerMatchRef(player.playerId, parsed.matchId, parsed.isLive, isTeam1, boardIdx)
-                    PlayerMatchRef.insert(ref) *> ctx.playersResolvedApi.update(_ + 1).as(ResolveResult.Resolved)
+                    PlayerMatchRef.insert(ref) *> PlayerRefSkip.deleteId(player.playerId) *>
+                      ctx.playersResolvedApi.update(_ + 1).as(ResolveResult.Resolved)
                   }
               }
             )
@@ -321,7 +423,7 @@ object RefApp extends ZIOAppDefault {
       playerTournaments <- ctx.client.get[ApiPlayerTournaments](ApiPlayerTournaments.getUrl(player.username))
       eligible = playerTournaments.finished ++ playerTournaments.inProgress
       result <- if (eligible.isEmpty) {
-        CcasLogger.debug(s"  ${player.username}: no eligible tournaments").as(ResolveResult.NotFound)
+        CcasLogger.debug(s"  ${player.username}: no eligible tournaments").as(ResolveResult.NoData)
       } else {
         tryTournaments(ctx, player, eligible.toList)
       }
@@ -358,7 +460,8 @@ object RefApp extends ZIOAppDefault {
             } else {
               handleVerification(ctx, player) {
                 val ref = PlayerTournamentRef(player.playerId, slug, playerIdx)
-                PlayerTournamentRef.insert(ref) *> ctx.playersResolvedApi.update(_ + 1).as(ResolveResult.Resolved)
+                PlayerTournamentRef.insert(ref) *> PlayerRefSkip.deleteId(player.playerId) *>
+                  ctx.playersResolvedApi.update(_ + 1).as(ResolveResult.Resolved)
               }
             }
           }
@@ -376,22 +479,30 @@ object RefApp extends ZIOAppDefault {
       dbRef <- ClubMatch.selectClubMatchRef(club.clubId)
       resolved <- dbRef match {
         case Some(ref) =>
-          ClubMatchRef.insert(ref) *>
+          ClubMatchRef.insert(ref) *> ClubRefSkip.deleteId(club.clubId) *>
             ctx.clubsResolvedDb.update(_ + 1) *>
             CcasLogger.debug(s"  ${club.slug}: resolved via DB").as(true)
         case None =>
           for {
             clubMatches <- ctx.client.get[ApiClubMatches](ApiClubMatches.getUrl(club.slug))
             result <- if (clubMatches.finished.isEmpty) {
-              CcasLogger.debug(s"  ${club.slug}: no finished match").as(false)
+              skipClub(ctx, club, RefSkipReason.NoData).as(false)
             } else {
-              tryClubMatches(ctx, club, clubMatches.finished.toList)
+              tryClubMatches(ctx, club, clubMatches.finished.toList).flatMap {
+                case true  => ZIO.succeed(true)
+                case false => skipClub(ctx, club, RefSkipReason.ResolutionFailed).as(false)
+              }
             }
           } yield result
       }
-    } yield resolved).catchAll(error =>
-      CcasLogger.warn(s"  ${club.slug}: error — ${error.safeMessage}").as(false)
-    )
+    } yield resolved).catchAll {
+      case e: HttpStatusException if e.statusCode == 404 =>
+        CcasLogger.warn(s"  ${club.slug}: 404 — ${e.safeMessage}") *>
+          skipClub(ctx, club, RefSkipReason.NotFound, Some(e.safeMessage)).as(false)
+      case error =>
+        CcasLogger.warn(s"  ${club.slug}: error — ${error.safeMessage}") *>
+          skipClub(ctx, club, RefSkipReason.ApiError, Some(error.safeMessage)).as(false)
+    }
 
   private def tryClubMatches(
     ctx: RefContext,
@@ -418,7 +529,8 @@ object RefApp extends ZIOAppDefault {
             case None => ZIO.succeed(false)
             case Some(isTeam1) =>
               val ref = ClubMatchRef(club.clubId, parsed.matchId, parsed.isLive, isTeam1)
-              ClubMatchRef.insert(ref) *> ctx.clubsResolvedApi.update(_ + 1).as(true)
+              ClubMatchRef.insert(ref) *> ClubRefSkip.deleteId(club.clubId) *>
+                ctx.clubsResolvedApi.update(_ + 1).as(true)
           }
         )
     }
@@ -485,4 +597,22 @@ object RefApp extends ZIOAppDefault {
   private def recordFailedUrl(ctx: RefContext, url: URL, error: Throwable, source: String): UIO[Unit] =
     ctx.failedUrls.update(_ + (url.encode -> error.safeMessage)) *>
       ctx.failedUrlSource.update(_ + (url.encode -> source))
+
+  private def skipPlayer(
+    ctx: RefContext,
+    player: UnresolvedPlayer,
+    reason: RefSkipReason,
+    detail: Option[String] = None
+  ): RIO[Transactor, Unit] =
+    PlayerRefSkip.upsert(PlayerRefSkip(player.playerId, reason, detail, Instant.now())) *>
+      ctx.playersSkippedNew.update(_ + 1)
+
+  private def skipClub(
+    ctx: RefContext,
+    club: UnresolvedClub,
+    reason: RefSkipReason,
+    detail: Option[String] = None
+  ): RIO[Transactor, Unit] =
+    ClubRefSkip.upsert(ClubRefSkip(club.clubId, reason, detail, Instant.now())) *>
+      ctx.clubsSkippedNew.update(_ + 1)
 }

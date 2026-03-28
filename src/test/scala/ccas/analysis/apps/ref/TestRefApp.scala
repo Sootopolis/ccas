@@ -1,6 +1,7 @@
 package ccas.analysis.apps.ref
 
 import java.time.{Instant, LocalDateTime, ZoneOffset}
+import java.time.temporal.ChronoUnit
 
 import com.augustnagro.magnum.{sql, Transactor}
 import zio.{durationInt, Chunk, Fiber, RIO, Ref, Scope, Semaphore, ZIO, ZLayer}
@@ -229,6 +230,8 @@ object TestRefApp extends ZIOSpecDefault {
   private def seedDb: RIO[Transactor, Unit] =
     for {
       // Clean in FK-safe order
+      _ <- PlayerRefSkip.deleteAll
+      _ <- ClubRefSkip.deleteAll
       _ <- PlayerMatchRef.deleteAll
       _ <- PlayerTournamentRef.deleteAll
       _ <- ClubMatchRef.deleteAll
@@ -268,7 +271,8 @@ object TestRefApp extends ZIOSpecDefault {
     suiteClubResolution,
     suiteTournamentResolution,
     suiteIteration,
-    suiteFullPopulate
+    suiteFullPopulate,
+    suiteSkipTracking
   ).provideShared(
     FreshSchemaLayer("test_match_ref_app", onInit = Tables.ensureTables),
     Scope.default
@@ -748,6 +752,158 @@ object TestRefApp extends ZIOSpecDefault {
         clubRef.isDefined,
         clubRef.get.matchId == ClubMatchId.wrap(matchId1),
         clubRef.get.isTeam1
+      )
+    }
+  )
+
+  // ==========================================================================
+  // Suite: skip tracking
+  // ==========================================================================
+
+  private def suiteSkipTracking = suite("skip tracking")(
+    test("writes NoData skip for player with no matches and no tournaments") {
+      for {
+        _ <- seedDb
+        client <- fakeChessComClient(Map(
+          s"player/alice/matches"    -> emptyPlayerMatchesJson,
+          s"player/bob/matches"     -> emptyPlayerMatchesJson,
+          s"player/charlie/matches" -> emptyPlayerMatchesJson,
+          s"club/our-club/matches"  -> emptyClubMatchesJson,
+          s"club/other-club/matches" -> emptyClubMatchesJson
+        ))
+        _     <- runPopulate(client)
+        skip0 <- PlayerRefSkip.selectId(pid0)
+        skip1 <- PlayerRefSkip.selectId(pid1)
+        skip2 <- PlayerRefSkip.selectId(pid2)
+      } yield assertTrue(
+        skip0.isDefined, skip0.get.reason == RefSkipReason.NoData,
+        skip1.isDefined, skip1.get.reason == RefSkipReason.NoData,
+        skip2.isDefined, skip2.get.reason == RefSkipReason.NoData
+      )
+    },
+    test("writes NoData skip for club with no finished matches") {
+      for {
+        _ <- seedDb
+        client <- fakeChessComClient(Map(
+          s"player/alice/matches"    -> emptyPlayerMatchesJson,
+          s"player/bob/matches"     -> emptyPlayerMatchesJson,
+          s"player/charlie/matches" -> emptyPlayerMatchesJson,
+          s"club/our-club/matches"  -> emptyClubMatchesJson,
+          s"club/other-club/matches" -> emptyClubMatchesJson
+        ))
+        _     <- runPopulate(client)
+        skip0 <- ClubRefSkip.selectId(clubId0)
+        skip1 <- ClubRefSkip.selectId(clubId1)
+      } yield assertTrue(
+        skip0.isDefined, skip0.get.reason == RefSkipReason.NoData,
+        skip1.isDefined, skip1.get.reason == RefSkipReason.NoData
+      )
+    },
+    test("writes ApiError skip for player with API failure") {
+      for {
+        _ <- seedDb
+        client <- fakeChessComClient(
+          responses = Map(
+            s"player/alice/matches"   -> emptyPlayerMatchesJson,
+            s"player/bob/matches"    -> emptyPlayerMatchesJson,
+            s"club/our-club/matches" -> emptyClubMatchesJson,
+            s"club/other-club/matches" -> emptyClubMatchesJson
+          ),
+          failures = Set("charlie")
+        )
+        _    <- runPopulate(client)
+        skip <- PlayerRefSkip.selectId(pid2)
+      } yield assertTrue(
+        skip.isDefined,
+        skip.get.reason == RefSkipReason.ApiError
+      )
+    },
+    test("writes ResolutionFailed skip when player has matches but is not in roster") {
+      val matchJson = apiDailyMatchJson(
+        matchId1, "club-x", "club-y",
+        team1Players = List(("stranger1", 1)),
+        team2Players = List(("stranger2", 2))
+      )
+      for {
+        _ <- seedDb
+        client <- fakeChessComClient(Map(
+          s"player/alice/matches"    -> apiPlayerMatchesJson(List((matchId1, Some(3)))),
+          s"player/bob/matches"     -> emptyPlayerMatchesJson,
+          s"player/charlie/matches" -> emptyPlayerMatchesJson,
+          s"club/our-club/matches"  -> emptyClubMatchesJson,
+          s"club/other-club/matches" -> emptyClubMatchesJson,
+          s"match/$matchId1"        -> matchJson
+        ))
+        _    <- runPopulate(client)
+        skip <- PlayerRefSkip.selectId(pid0)
+      } yield assertTrue(
+        skip.isDefined,
+        skip.get.reason == RefSkipReason.ResolutionFailed
+      )
+    },
+    test("skipped player is excluded from subsequent run") {
+      for {
+        _ <- seedDb
+        // Run 1: all fail → skip rows written
+        client1 <- fakeChessComClient(Map(
+          s"player/alice/matches"    -> emptyPlayerMatchesJson,
+          s"player/bob/matches"     -> emptyPlayerMatchesJson,
+          s"player/charlie/matches" -> emptyPlayerMatchesJson,
+          s"club/our-club/matches"  -> emptyClubMatchesJson,
+          s"club/other-club/matches" -> emptyClubMatchesJson
+        ))
+        _ <- runPopulate(client1)
+        skipAfterRun1 <- PlayerRefSkip.selectId(pid0)
+        // Run 2: provide data that WOULD resolve alice — but she should be skipped
+        matchJson = apiDailyMatchJson(
+          matchId1, "our-club", "other-club",
+          team1Players = List(("alice", 3)),
+          team2Players = List(("opponent1", 1))
+        )
+        client2 <- fakeChessComClient(Map(
+          s"player/alice/matches"   -> apiPlayerMatchesJson(List((matchId1, Some(3)))),
+          s"player/bob/matches"    -> emptyPlayerMatchesJson,
+          s"player/charlie/matches" -> emptyPlayerMatchesJson,
+          s"club/our-club/matches" -> emptyClubMatchesJson,
+          s"club/other-club/matches" -> emptyClubMatchesJson,
+          s"match/$matchId1"       -> matchJson
+        ))
+        _   <- runPopulate(client2)
+        ref <- PlayerMatchRef.selectId(pid0)
+        skipAfterRun2 <- PlayerRefSkip.selectId(pid0)
+      } yield assertTrue(
+        skipAfterRun1.isDefined,
+        ref.isEmpty, // alice was not resolved — she was skipped
+        skipAfterRun2.isDefined,
+        skipAfterRun2.get.lastAttempted == skipAfterRun1.get.lastAttempted // not re-attempted
+      )
+    },
+    test("expired skip allows retry and skip row is deleted on resolution") {
+      val matchJson = apiDailyMatchJson(
+        matchId1, "our-club", "other-club",
+        team1Players = List(("alice", 3)),
+        team2Players = List(("opponent1", 1))
+      )
+      for {
+        _ <- seedDb
+        // Seed an expired skip for alice (last attempted 15 days ago, NoData window is 14 days)
+        expiredTime = Instant.now().minus(15, ChronoUnit.DAYS)
+        _ <- PlayerRefSkip.upsert(PlayerRefSkip(pid0, RefSkipReason.NoData, None, expiredTime))
+        client <- fakeChessComClient(Map(
+          s"player/alice/matches"    -> apiPlayerMatchesJson(List((matchId1, Some(3)))),
+          s"player/bob/matches"     -> emptyPlayerMatchesJson,
+          s"player/charlie/matches" -> emptyPlayerMatchesJson,
+          s"club/our-club/matches"  -> emptyClubMatchesJson,
+          s"club/other-club/matches" -> emptyClubMatchesJson,
+          s"match/$matchId1"        -> matchJson
+        ))
+        _    <- runPopulate(client)
+        ref  <- PlayerMatchRef.selectId(pid0)
+        skip <- PlayerRefSkip.selectId(pid0)
+      } yield assertTrue(
+        ref.isDefined,            // alice was resolved
+        ref.get.boardIdx == 3,
+        skip.isEmpty              // skip row was cleaned up
       )
     }
   )
