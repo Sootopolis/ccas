@@ -28,6 +28,7 @@ object TestChessComClient extends ZIOSpecDefault {
       reserveRef  <- Ref.make(Chunk.empty[Fiber.Runtime[Nothing, Nothing]])
       adjustMutex <- Semaphore.make(1)
       activeRef   <- Ref.make(0)
+      rateLimitGate <- Semaphore.make(1)
       lastReqRef  <- Ref.make(0L)
       bar         <- TestCcasLogger.noopBar
       config = ChessComClient.ThrottleConfig(permits, cooldown, retryBase, 10.millis, 10.millis, failureWindowSize, failureThreshold, 10, throttleDelay)
@@ -65,6 +66,7 @@ object TestChessComClient extends ZIOSpecDefault {
         reserveRef,
         adjustMutex,
         activeRef,
+        rateLimitGate,
         lastReqRef,
         bar,
         config
@@ -255,6 +257,7 @@ object TestChessComClient extends ZIOSpecDefault {
           reserveRef  <- Ref.make(Chunk.empty[Fiber.Runtime[Nothing, Nothing]])
           adjustMutex <- Semaphore.make(1)
           activeRef   <- Ref.make(0)
+          rateLimitGate <- Semaphore.make(1)
           bar         <- TestCcasLogger.noopBar
           counter     <- Ref.make(0)
           lastReqRef  <- Ref.make(0L)
@@ -290,7 +293,7 @@ object TestChessComClient extends ZIOSpecDefault {
           }
           client = ChessComClient(
             ZClient.fromDriver(driver), Transactor(null), Headers.empty, TestCcasLogger.noop,
-            semaphore, stateRef, reserveRef, adjustMutex, activeRef, lastReqRef, bar, config
+            semaphore, stateRef, reserveRef, adjustMutex, activeRef, rateLimitGate, lastReqRef, bar, config
           )
           urls = (1 to 3).map(i => URL.decode(s"http://test.example.com/api/$i").toOption.get)
           _        <- client.getAll[Payload](urls)

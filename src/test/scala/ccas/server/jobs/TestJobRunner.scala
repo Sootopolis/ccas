@@ -41,6 +41,7 @@ object TestJobRunner extends ZIOSpecDefault {
         reserveRef  <- Ref.make(Chunk.empty[Fiber.Runtime[Nothing, Nothing]])
         adjustMutex <- Semaphore.make(1)
         activeRef   <- Ref.make(0)
+        rateLimitGate <- Semaphore.make(1)
         lastReqRef  <- Ref.make(0L)
         bar         <- TestCcasLogger.noopBar
       } yield {
@@ -80,6 +81,7 @@ object TestJobRunner extends ZIOSpecDefault {
           reserveRef,
           adjustMutex,
           activeRef,
+          rateLimitGate,
           lastReqRef,
           bar,
           ChessComClient.ThrottleConfig(1, 30.seconds, 1.second, 5.seconds, 10.seconds, 20, 0.2, 10, Duration.Zero)

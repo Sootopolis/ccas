@@ -249,6 +249,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       reserveRef  <- Ref.make(Chunk.empty[Fiber.Runtime[Nothing, Nothing]])
       adjustMutex <- Semaphore.make(1)
       activeRef   <- Ref.make(0)
+      rateLimitGate <- Semaphore.make(1)
       lastReqRef  <- Ref.make(0L)
       bar         <- TestCcasLogger.noopBar
     } yield {
@@ -330,6 +331,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         reserveRef,
         adjustMutex,
         activeRef,
+        rateLimitGate,
         lastReqRef,
         bar,
         ChessComClient.ThrottleConfig(1, 30.seconds, 1.second, 5.seconds, 10.seconds, 20, 0.2, 10, zio.Duration.Zero)
@@ -354,6 +356,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       reserveRef  <- Ref.make(Chunk.empty[Fiber.Runtime[Nothing, Nothing]])
       adjustMutex <- Semaphore.make(1)
       activeRef   <- Ref.make(0)
+      rateLimitGate <- Semaphore.make(1)
       lastReqRef  <- Ref.make(0L)
       bar         <- TestCcasLogger.noopBar
       playerCount <- Ref.make(0)
@@ -428,6 +431,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         reserveRef,
         adjustMutex,
         activeRef,
+        rateLimitGate,
         lastReqRef,
         bar,
         ChessComClient.ThrottleConfig(5, 30.seconds, 1.second, 5.seconds, 10.seconds, 20, 0.2, 10, zio.Duration.Zero)

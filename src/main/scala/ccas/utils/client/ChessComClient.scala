@@ -23,6 +23,7 @@ final class ChessComClient(
   reserveFibersRef: Ref[Chunk[Fiber.Runtime[Nothing, Nothing]]],
   adjustMutex: Semaphore,
   activeRef: Ref[Int],
+  rateLimitGate: Semaphore,
   lastRequestRef: Ref[Long],
   progressBar: ProgressBar,
   config: ChessComClient.ThrottleConfig
@@ -43,10 +44,10 @@ final class ChessComClient(
   } yield value
 
   def get[T](url: URL)(using jsonDecoder: JsonDecoder[T]): Task[T] =
-    semaphore.withPermit {
-      (rateDelay *> activeRef.updateAndGet(_ + 1).flatMap(updateBar) *> rawGet(url))
+    (rateDelay *> semaphore.withPermit {
+      (activeRef.updateAndGet(_ + 1).flatMap(updateBar) *> rawGet(url))
         .ensuring(activeRef.updateAndGet(_ - 1).flatMap(updateBar).ignore)
-    }.retry(retry429Schedule).retry(retryCfSchedule).retry(retryOnceSchedule).tapError { error =>
+    }).retry(retry429Schedule).retry(retryCfSchedule).retry(retryOnceSchedule).tapError { error =>
       val (msg, body) = error match {
         case e: HttpStatusException => (Some(e.statusCode.toString), Some(e.responseBody))
         case other                  => (Option(other.getMessage), None)
@@ -76,21 +77,22 @@ final class ChessComClient(
 
   /** Enforce a minimum inter-request delay that scales with throttle depth.
     * At full permits the base delay applies (~100ms); when throttled, the delay scales
-    * proportionally (base * maxPermits / currentMax). Reads/updates the last request
-    * timestamp atomically so concurrent permits stagger correctly.
-    * Runs inside `semaphore.withPermit`, so the permit is held during any sleep.
+    * proportionally (base * maxPermits / currentMax). Uses a single-permit gate to
+    * serialize entry so concurrent callers are staggered correctly. Runs outside
+    * `semaphore.withPermit`, so no concurrency permit is held during any sleep.
     */
   private def rateDelay: Task[Unit] =
-    stateRef.get.flatMap { state =>
-      val scaledDelay = config.throttleDelay.toMillis * (config.maxPermits / state.currentMax)
-      for {
-        now <- Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS)
-        sleepMs <- lastRequestRef.modify { last =>
-          val needed = (scaledDelay - (now - last)).max(0)
-          (needed, now + needed)
-        }
-        _ <- ZIO.whenDiscard(sleepMs > 0)(ZIO.sleep(sleepMs.millis))
-      } yield ()
+    rateLimitGate.withPermit {
+      stateRef.get.flatMap { state =>
+        val scaledDelay = config.throttleDelay.toMillis * (config.maxPermits / state.currentMax)
+        for {
+          now  <- Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS)
+          last <- lastRequestRef.get
+          gap   = now - last
+          _    <- ZIO.whenDiscard(gap < scaledDelay)(ZIO.sleep((scaledDelay - gap).millis))
+          _    <- Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS).flatMap(lastRequestRef.set)
+        } yield ()
+      }
     }
 
   /** Record a request outcome and trigger throttle-down if failure rate exceeds threshold.
@@ -289,12 +291,13 @@ object ChessComClient {
         reserveRef   <- Ref.make(Chunk.empty[Fiber.Runtime[Nothing, Nothing]])
         adjustMutex  <- Semaphore.make(1)
         activeRef    <- Ref.make(0)
+        rateLimitGate <- Semaphore.make(1)
         lastReqRef   <- Ref.make(0L)
         bar          <- logger.progressBar
         _            <- ZIO.addFinalizer(reserveRef.get.flatMap(fibers => ZIO.foreachDiscard(fibers)(_.interrupt)))
       } yield ChessComClient(
         client, transactor, userAgentHeaders(contactEmail), logger,
-        semaphore, stateRef, reserveRef, adjustMutex, activeRef, lastReqRef, bar, throttleConfig
+        semaphore, stateRef, reserveRef, adjustMutex, activeRef, rateLimitGate, lastReqRef, bar, throttleConfig
       )
     }
 }
