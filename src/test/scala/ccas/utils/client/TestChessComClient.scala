@@ -1,6 +1,7 @@
 package ccas.utils.client
 
 import com.augustnagro.magnum.Transactor
+import io.netty.handler.codec.PrematureChannelClosureException
 import zio.*
 import zio.http.*
 import zio.json.*
@@ -14,7 +15,7 @@ object TestChessComClient extends ZIOSpecDefault {
   private given JsonDecoder[Payload] = DeriveJsonDecoder.gen[Payload]
 
   private def makeClient(
-    handler: Request => UIO[Response],
+    handler: Request => Task[Response],
     permits: Long = 5,
     cooldown: Duration = 50.millis,
     retryBase: Duration = 10.millis,
@@ -247,6 +248,48 @@ object TestChessComClient extends ZIOSpecDefault {
           _     <- client.get[Payload](testUrl).exit
           count <- counter.get
         } yield assertTrue(count == 2)
+      }
+    },
+    test("IOException triggers connection retry and succeeds") {
+      ZIO.scoped {
+        for {
+          counter <- Ref.make(0)
+          (client, _) <- makeClient { _ =>
+            counter.getAndUpdate(_ + 1).flatMap { n =>
+              if (n == 0) ZIO.fail(java.io.IOException("Connection reset"))
+              else ZIO.succeed(Response.json(jsonBody))
+            }
+          }
+          result <- client.get[Payload](testUrl)
+          count  <- counter.get
+        } yield assertTrue(result.value == "ok", count == 2)
+      }
+    },
+    test("PrematureChannelClosureException triggers connection retry and succeeds") {
+      ZIO.scoped {
+        for {
+          counter <- Ref.make(0)
+          (client, _) <- makeClient { _ =>
+            counter.getAndUpdate(_ + 1).flatMap { n =>
+              if (n == 0) ZIO.fail(PrematureChannelClosureException("Channel closed"))
+              else ZIO.succeed(Response.json(jsonBody))
+            }
+          }
+          result <- client.get[Payload](testUrl)
+          count  <- counter.get
+        } yield assertTrue(result.value == "ok", count == 2)
+      }
+    },
+    test("non-transient non-HTTP error is not retried") {
+      ZIO.scoped {
+        for {
+          counter <- Ref.make(0)
+          (client, _) <- makeClient { _ =>
+            counter.getAndUpdate(_ + 1) *> ZIO.fail(RuntimeException("unexpected"))
+          }
+          exit <- client.get[Payload](testUrl).exit
+          count <- counter.get
+        } yield assertTrue(exit.isFailure, count == 1)
       }
     },
     test("sequential ordering when throttled to 1 permit") {

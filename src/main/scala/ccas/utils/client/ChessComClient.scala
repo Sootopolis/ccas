@@ -6,6 +6,7 @@ import ccas.utils.json.JsonDecodingException
 import ccas.utils.{CcasLogger, ProgressBar}
 import com.augustnagro.magnum.Transactor
 import com.typesafe.config.ConfigFactory
+import io.netty.handler.codec.PrematureChannelClosureException
 import zio.*
 import zio.http.*
 import zio.http.Method.GET
@@ -50,7 +51,7 @@ final class ChessComClient(
         rawGet(url).timed.flatMap { case (duration, result) =>
           updateResponseTimeEma(duration.toMillis).as(result)
         }).ensuring(activeRef.updateAndGet(_ - 1).flatMap(updateBar).ignore)
-    }).retry(retry429Schedule).retry(retryCfSchedule).retry(retryOnceSchedule).tapError { error =>
+    }).retry(retry429Schedule).retry(retryCfSchedule).retry(retryOnceSchedule).retry(retryConnectionSchedule).tapError { error =>
       val (msg, body) = error match {
         case e: HttpStatusException => (Some(e.statusCode.toString), Some(e.responseBody))
         case other                  => (Option(other.getMessage), None)
@@ -246,6 +247,15 @@ final class ChessComClient(
       case e: HttpStatusException =>
         (e.statusCode == 403 && !e.responseBody.contains(CfChallengeMarker)) || e.statusCode == 404
       case _ => false
+    }
+
+  private val retryConnectionSchedule: Schedule[Any, Throwable, Any] =
+    Schedule.exponential(500.millis) && Schedule.recurs(3) && Schedule.recurWhile[Throwable] {
+      case _: HttpStatusException              => false
+      case _: JsonDecodingException            => false
+      case _: java.io.IOException              => true
+      case _: PrematureChannelClosureException => true
+      case _                                   => false
     }
 }
 
