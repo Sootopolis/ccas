@@ -36,7 +36,7 @@ private[recruitment] case class RunContext(
 /** Accumulated per-candidate state — populated as filters run.
   *
   * @param cacheRejected
-  *   Set by [[RecruitmentFilters.CheckCacheCriteria]] when the candidate is rejected purely on
+  *   Set by [[RecruitmentFilterDefs.CheckCacheCriteria]] when the candidate is rejected purely on
   *   cached stats (no fresh API data fetched beyond the initial player lookup). When true,
   *   no [[ccas.analysis.tables.RecruitmentCandidate]] row is persisted so the candidate is not
   *   blocked by the `daysSinceRejected` cooldown and can be re-evaluated once the cache ages out.

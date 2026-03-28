@@ -98,6 +98,7 @@ object JobRunner {
           JobRun.updateStatus(id, JobRunStatus.Completed, Some(Instant.now()), None)
             .provideEnvironment(env)
             .unit.orDie
+        // Follow-up kinds kept in sync with JobScheduler.runSchedule
         val followUp =
           ZIO.whenDiscard(kind == JobKind.Recruitment || kind == JobKind.Membership || kind == JobKind.History)(
             submitRef.provideEnvironment(env).ignore

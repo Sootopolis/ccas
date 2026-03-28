@@ -2,7 +2,6 @@ package ccas.analysis.apps.ref
 
 import java.time.{Duration as JDuration, Instant}
 import scala.annotation.nowarn
-
 import com.augustnagro.magnum.{sql, Transactor}
 import zio.{RIO, Ref, Scope, ZIO, ZIOAppDefault}
 import zio.http.Client
@@ -27,8 +26,8 @@ object RefApp extends ZIOAppDefault {
   // --- Entry point ---
 
   // trigger accepted for consistency with other app entry points but not persisted (no run table)
-  @nowarn("msg=unused")
-  def populate(trigger: RunTrigger = RunTrigger.Cli, outputDir: Option[String] = Some("_ccas")): RIO[CcasLogger & ChessComClient & Transactor, Unit] =
+  @nowarn("msg=unused explicit parameter")
+  def populate(_trigger: RunTrigger = RunTrigger.Cli, outputDir: Option[String] = Some("_ccas")): RIO[CcasLogger & ChessComClient & Transactor, Unit] =
     for {
       startedAt <- ZIO.succeed(Instant.now())
       client    <- ZIO.service[ChessComClient]

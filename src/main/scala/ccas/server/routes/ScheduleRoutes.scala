@@ -10,6 +10,8 @@ import ccas.server.jobs.JobKind
 import ccas.server.routes.RouteHelpers.*
 import ccas.server.scheduler.JobSchedule
 
+import scala.util.chaining.*
+
 object ScheduleRoutes {
 
   // --- Request/response types ---
@@ -66,7 +68,7 @@ object ScheduleRoutes {
     Method.GET / "api" / "schedules" -> handler {
       JobSchedule.selectAll
         .map(list => jsonResponse(Status.Ok, list.map(ScheduleResponse.fromSchedule)))
-        .catchAll(e => ZIO.succeed(handleError(e)))
+        .pipe(withErrorHandling)
     },
     Method.POST / "api" / "schedules" -> handler { (req: Request) =>
       (for {
@@ -77,7 +79,7 @@ object ScheduleRoutes {
         id      <- JobSchedule.insert(schedule)
         created <- JobSchedule.selectId(id).someOrFail(new Exception("Failed to read back schedule"))
       } yield jsonResponse(Status.Created, ScheduleResponse.fromSchedule(created)))
-        .catchAll(e => ZIO.succeed(handleError(e)))
+        .pipe(withErrorHandling)
     },
     Method.PUT / "api" / "schedules" / long("id") -> handler { (id: Long, req: Request) =>
       (for {
@@ -85,12 +87,12 @@ object ScheduleRoutes {
         _       <- JobSchedule.update(id, body.intervalHours, body.enabled, body.params.map(Some(_)))
         updated <- JobSchedule.selectId(id).someOrFail(new Exception(s"Schedule $id not found"))
       } yield jsonResponse(Status.Ok, ScheduleResponse.fromSchedule(updated)))
-        .catchAll(e => ZIO.succeed(handleError(e)))
+        .pipe(withErrorHandling)
     },
     Method.DELETE / "api" / "schedules" / long("id") -> handler { (id: Long, _: Request) =>
       JobSchedule.delete(id)
         .as(Response(status = Status.NoContent))
-        .catchAll(e => ZIO.succeed(handleError(e)))
+        .pipe(withErrorHandling)
     }
   )
 }

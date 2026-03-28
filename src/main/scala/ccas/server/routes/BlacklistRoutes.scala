@@ -3,7 +3,6 @@ package ccas.server.routes
 import java.time.{Instant, ZoneOffset}
 
 import com.augustnagro.magnum.Transactor
-import zio.ZIO
 import zio.http.*
 import zio.json.{DeriveJsonCodec, JsonCodec}
 
@@ -13,6 +12,8 @@ import ccas.api.misc.subtypes.{ClubSlug, PlayerId, Username}
 import ccas.server.routes.RouteHelpers.*
 import ccas.utils.client.ChessComClient
 import ccas.utils.errors.NotFoundException
+
+import scala.util.chaining.*
 
 object BlacklistRoutes {
 
@@ -60,7 +61,7 @@ object BlacklistRoutes {
         now = Instant.now()
         entries <- RecruitmentBlacklist.selectActiveByClub(club.clubId, now)
       } yield jsonResponse(Status.Ok, entries.map(BlacklistEntryResponse.fromEntry(_, clubSlug))))
-        .catchAll(e => ZIO.succeed(handleError(e)))
+        .pipe(withErrorHandling)
     },
     Method.POST / "api" / "blacklist" -> handler { (req: Request) =>
       (for {
@@ -68,14 +69,14 @@ object BlacklistRoutes {
         expiresAt = body.months.map(m => Instant.now().atZone(ZoneOffset.UTC).plusMonths(m.toLong).toInstant)
         _ <- BlacklistApp.addToBlacklist(body.clubSlug, body.usernames, body.reason, expiresAt)
       } yield Response.ok)
-        .catchAll(e => ZIO.succeed(handleError(e)))
+        .pipe(withErrorHandling)
     },
     Method.DELETE / "api" / "blacklist" / string("clubSlug") / string("username") -> handler {
       (clubSlugStr: String, usernameStr: String, _: Request) =>
         (for {
           _ <- BlacklistApp.removeFromBlacklist(ClubSlug.wrap(clubSlugStr), Username.wrap(usernameStr))
         } yield Response(status = Status.NoContent))
-          .catchAll(e => ZIO.succeed(handleError(e)))
+          .pipe(withErrorHandling)
     }
   )
 }

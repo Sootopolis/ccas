@@ -23,6 +23,9 @@ object RouteHelpers {
       ZIO.fromEither(summon[JsonDecoder[T]].decodeJson(s)).mapError(e => new BadRequestException(e))
     )
 
+  def withErrorHandling[R](effect: ZIO[R, Throwable, Response]): ZIO[R, Nothing, Response] =
+    effect.catchAll(e => ZIO.succeed(handleError(e)))
+
   def handleError(error: Throwable): Response = error match {
     case e: JobConflictException => jsonResponse(Status.Conflict, ErrorResponse(e.getMessage))
     case e: HttpStatusException  => jsonResponse(Status.BadGateway, ErrorResponse(e.getMessage))

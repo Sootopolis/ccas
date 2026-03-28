@@ -13,21 +13,17 @@ object OutputFile {
 
   private val dateTimeFormat = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")
 
-  def write(appName: String, clubSlug: ClubSlug, content: String): Task[Path] = {
-    val date = LocalDateTime.now().format(dateTimeFormat)
-    val dir  = Paths.get("out", ClubSlug.unwrap(clubSlug))
-    val path = dir.resolve(s"$date-$appName.txt")
-    ZIO.attemptBlocking(Files.createDirectories(dir)) *>
-      ZIO.attemptBlocking(archiveExisting(dir, appName)) *>
-      ZIO.writeFile(path.toString, content).as(path)
-  }
+  def write(appName: String, clubSlug: ClubSlug, content: String): Task[Path] =
+    writeInternal(Paths.get("out", ClubSlug.unwrap(clubSlug)), appName, content)
 
   def writeAndLog(appName: String, clubSlug: ClubSlug, content: String): RIO[CcasLogger, Unit] =
     write(appName, clubSlug, content).flatMap(path => CcasLogger.info(s"Output written to $path"))
 
-  def writeGlobal(appName: String, content: String, subDir: String = "_ccas"): Task[Path] = {
+  def writeGlobal(appName: String, content: String, subDir: String = "_ccas"): Task[Path] =
+    writeInternal(Paths.get("out", subDir), appName, content)
+
+  private def writeInternal(dir: Path, appName: String, content: String): Task[Path] = {
     val date = LocalDateTime.now().format(dateTimeFormat)
-    val dir  = Paths.get("out", subDir)
     val path = dir.resolve(s"$date-$appName.txt")
     ZIO.attemptBlocking(Files.createDirectories(dir)) *>
       ZIO.attemptBlocking(archiveExisting(dir, appName)) *>

@@ -367,7 +367,7 @@ private[recruitment] object RecruitmentExplore {
 
   def discoverCandidateOpponents(client: ChessComClient, now: Instant): RIO[CcasLogger & Transactor, List[SourceDescriptor]] = {
     val cutoff = now.minus(90, ChronoUnit.DAYS)
-    val months = RecruitmentFilters.recentArchiveMonths(now, 90)
+    val months = RecruitmentStatsHelpers.recentArchiveMonths(now, 90)
     for {
       tmPlayers <- PlayerRecruitmentCache.selectTmActive(20)
       snapshots <- ZIO.foreach(tmPlayers)(c => PlayerSnapshot.selectIdLatest(c.playerId))

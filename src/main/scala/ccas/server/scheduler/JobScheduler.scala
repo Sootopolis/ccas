@@ -28,14 +28,14 @@ object JobScheduler {
       val pollMinutes =
         if config.hasPath("scheduler.pollIntervalMinutes")
         then config.getInt("scheduler.pollIntervalMinutes")
-        else 5
+        else 5 // default poll interval in minutes
       val pollInterval = pollMinutes.toLong.minutes
       new JobSchedulerLive(logger, runner, xa, pollInterval)
     }
 
   private class JobSchedulerLive(logger: CcasLogger, runner: JobRunner, xa: Transactor, pollInterval: Duration) extends JobScheduler {
 
-    private val env = zio.ZEnvironment(xa)
+    private val transactorEnv = zio.ZEnvironment(xa)
     private val loggerEnv = zio.ZEnvironment(logger)
 
     override def start: UIO[Unit] =
@@ -46,7 +46,7 @@ object JobScheduler {
 
     private def pollLoop: UIO[Unit] =
       (for {
-        schedules <- JobSchedule.selectEnabled.provideEnvironment(env)
+        schedules <- JobSchedule.selectEnabled.provideEnvironment(transactorEnv)
         now = Instant.now()
         _ <- ZIO.foreachDiscard(schedules) { schedule =>
           val isDue = schedule.lastRunAt.forall(ts => ChronoUnit.HOURS.between(ts, now) >= schedule.intervalHours)
@@ -60,6 +60,7 @@ object JobScheduler {
         ZIO.fromOption(schedule.clubSlug)
           .orElseFail(new IllegalStateException(s"${schedule.kind} schedule missing clubSlug"))
 
+      // Job kind dispatch kept in sync with JobRunner.runJob follow-up logic
       val effect = schedule.kind match {
         case JobKind.Recruitment =>
           requireClubSlug.flatMap(name => RecruitmentApp.recruit(name, "default", timeLimitMinutes = Some(30), trigger = RunTrigger.Scheduled).unit)
@@ -72,8 +73,8 @@ object JobScheduler {
       }
 
       runner.submit(schedule.kind, schedule.clubSlug, schedule.params, RunTrigger.Scheduled, effect)
-        .provideEnvironment(env) *>
-        JobSchedule.updateLastRunAt(schedule.id, now).provideEnvironment(env).unit
+        .provideEnvironment(transactorEnv) *>
+        JobSchedule.updateLastRunAt(schedule.id, now).provideEnvironment(transactorEnv).unit
     }
   }
 }
