@@ -570,6 +570,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
   // --- Spec ---
 
   override def spec: Spec[Any, Throwable] = suite("TestRecruitmentApp")(
+    suiteParseRecruitArgs,
     suiteCriteriaHelpers,
     suiteDbCrud,
     suiteEvaluateCandidates,
@@ -586,6 +587,65 @@ object TestRecruitmentApp extends ZIOSpecDefault {
     Scope.default,
     CcasLogger.live(showProgress = false)
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock
+
+  // ==========================================================================
+  // Suite: CLI argument parsing (pure)
+  // ==========================================================================
+
+  private def suiteParseRecruitArgs = suite("parseRecruitArgs")(
+    test("alias and target from positional + flag") {
+      val r = RecruitmentApp.parseRecruitArgs(List("default", "--target", "3"))
+      assertTrue(
+        r.alias == "default",
+        r.target.contains(3),
+        r.sourceClubs.isEmpty,
+        !r.cumulative,
+        !r.focus
+      )
+    },
+    test("source clubs before flags") {
+      val r = RecruitmentApp.parseRecruitArgs(List("myalias", "club-a", "club-b", "--target", "10"))
+      assertTrue(
+        r.alias == "myalias",
+        r.sourceClubs.map(ClubSlug.unwrap) == List("club-a", "club-b"),
+        r.target.contains(10)
+      )
+    },
+    test("no flags defaults") {
+      val r = RecruitmentApp.parseRecruitArgs(List("myalias"))
+      assertTrue(
+        r.alias == "myalias",
+        r.target.isEmpty,
+        r.sourceClubs.isEmpty,
+        !r.cumulative,
+        !r.focus
+      )
+    },
+    test("empty args gives default alias") {
+      val r = RecruitmentApp.parseRecruitArgs(Nil)
+      assertTrue(r.alias == "default", r.target.isEmpty)
+    },
+    test("boolean flags without target") {
+      val r = RecruitmentApp.parseRecruitArgs(List("default", "--cumulative", "--focus"))
+      assertTrue(r.cumulative, r.focus, r.target.isEmpty)
+    },
+    test("target between boolean flags") {
+      val r = RecruitmentApp.parseRecruitArgs(List("default", "--cumulative", "--target", "5", "--focus"))
+      assertTrue(r.cumulative, r.focus, r.target.contains(5))
+    },
+    test("target without value is None") {
+      val r = RecruitmentApp.parseRecruitArgs(List("default", "--target"))
+      assertTrue(r.target.isEmpty)
+    },
+    test("target with non-int value is None") {
+      val r = RecruitmentApp.parseRecruitArgs(List("default", "--target", "abc"))
+      assertTrue(r.target.isEmpty)
+    },
+    test("flags only, no positional") {
+      val r = RecruitmentApp.parseRecruitArgs(List("--target", "20", "--cumulative"))
+      assertTrue(r.alias == "default", r.target.contains(20), r.cumulative)
+    }
+  )
 
   // ==========================================================================
   // Suite: Criteria helper methods (pure)

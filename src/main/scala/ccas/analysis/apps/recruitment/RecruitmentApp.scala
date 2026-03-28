@@ -27,7 +27,39 @@ object RecruitmentApp extends ZIOAppDefault {
     """Usage: RecruitmentApp <club-slug> [alias] [source-clubs...] [--target N] [--cumulative] [--focus]
       |       RecruitmentApp report <club-slug> [run-id]
       |
-      |  --focus    Only recruit from the given source clubs (no exploration)""".stripMargin
+      |  --target N      Number of candidates to find (default: 30)
+      |  --cumulative    Count today's earlier finds toward the target
+      |  --focus         Only recruit from the given source clubs (no exploration)""".stripMargin
+
+  /** Parsed CLI arguments for the recruit command. */
+  private[recruitment] case class RecruitArgs(
+    alias: String,
+    sourceClubs: List[ClubSlug],
+    target: Option[Int],
+    cumulative: Boolean,
+    focus: Boolean
+  )
+
+  /** Parses the arguments after the club-slug token.
+    *
+    * Positional args (alias, source clubs) must appear before any flags.
+    * Flags start at the first `--`-prefixed token; `--target` consumes the next token as its value.
+    */
+  private[recruitment] def parseRecruitArgs(rest: List[String]): RecruitArgs = {
+    val flagStart                  = rest.indexWhere(_.startsWith("--"))
+    val (positional, flagTokens)   = if (flagStart < 0) (rest, Nil) else rest.splitAt(flagStart)
+    val target = flagTokens.indexOf("--target") match {
+      case i if i >= 0 && i + 1 < flagTokens.size => flagTokens(i + 1).toIntOption
+      case _                                       => None
+    }
+    RecruitArgs(
+      alias       = positional.headOption.getOrElse("default"),
+      sourceClubs = positional.drop(1).map(ClubSlug.wrap),
+      target      = target,
+      cumulative  = flagTokens.contains("--cumulative"),
+      focus       = flagTokens.contains("--focus")
+    )
+  }
 
   override def run: RIO[ZIOAppArgs & Scope, Unit] =
     for {
@@ -41,30 +73,20 @@ object RecruitmentApp extends ZIOAppDefault {
             OutputFile.writeAndLog("recruitment", clubSlug, formatRecruitmentOutput(usernames, evaluatedCount, startedAt, completedAt))
           }
         case clubStr :: rest =>
-          val (flags, positional) = rest.partition(_.startsWith("--"))
-          val flagMap = flags.sliding(2, 2).collect { case Seq(k, v) => k -> v }.toMap ++
-            flags.filterNot(f => flags.sliding(2, 2).exists(_.headOption.contains(f)) && !f.startsWith("--c")).collect {
-              case f if f == "--cumulative" => f -> "true"
-            }.toMap
-          val targetOpt       = flagMap.get("--target").flatMap(_.toIntOption)
-          val cumulative      = flags.contains("--cumulative")
-          val focus           = flags.contains("--focus")
-          val positionalClean = positional.filterNot(_ == "--cumulative")
-          val alias           = positionalClean.headOption.getOrElse("default")
-          val sourceClubs     = positionalClean.drop(1).map(ClubSlug.wrap)
-          val clubSlug     = ClubSlug.wrap(clubStr)
+          val parsed   = parseRecruitArgs(rest)
+          val clubSlug = ClubSlug.wrap(clubStr)
           recruit(
             clubSlug,
-            alias,
-            target = targetOpt,
-            cumulative = cumulative,
-            sourceClubs = sourceClubs,
-            explore = sourceClubs.isEmpty || !focus,
+            parsed.alias,
+            target = parsed.target,
+            cumulative = parsed.cumulative,
+            sourceClubs = parsed.sourceClubs,
+            explore = parsed.sourceClubs.isEmpty || !parsed.focus,
             showHints = true
           ).flatMap { run =>
             for {
               candidates <-
-                if (cumulative) RecruitmentCandidate.selectInvitedToday(run.clubId, alias)
+                if (parsed.cumulative) RecruitmentCandidate.selectInvitedToday(run.clubId, parsed.alias)
                 else RecruitmentCandidate.selectInvitedByRun(run.runId)
               usernames <- ZIO.foreach(candidates)(c =>
                 PlayerSnapshot.selectIdLatest(c.playerId)
