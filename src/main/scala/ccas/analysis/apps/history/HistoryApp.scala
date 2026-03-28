@@ -211,7 +211,7 @@ object HistoryApp extends ZIOAppDefault {
 
   // === Phase 2: Seeding ===
 
-  private def seedFromClubMatches(
+  private[history] def seedFromClubMatches(
     client: ChessComClient,
     clubId: ClubId,
     clubSlug: ClubSlug
@@ -225,8 +225,10 @@ object HistoryApp extends ZIOAppDefault {
         clubMatches.registered.filterNot(_.timeClass.isDaily)
       livePending = nonDaily.map(m => HistoryPendingMatch(clubId, ClubMatchId.fromUrl(m.`@id`), isLive = true))
       all = dailyPending ++ livePending
-      _ <- insertPendingMatches(all)
-    } yield all.size).catchAll { error =>
+      knownIds <- ClubMatch.selectMatchIdsForClub(clubId)
+      newOnly = all.filterNot(p => knownIds.contains(p.matchId))
+      _ <- insertPendingMatches(newOnly)
+    } yield newOnly.size).catchAll { error =>
       CcasLogger.warn(s"  Failed to fetch club matches: ${error.getMessage}").as(0)
     }
 
