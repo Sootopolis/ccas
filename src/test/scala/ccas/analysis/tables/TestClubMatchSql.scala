@@ -35,7 +35,9 @@ object TestClubMatchSql extends ZIOSpecDefault {
     testUnresolvedBoardPlayerDelete,
     testUnresolvedMatchClubInsertAndSelect,
     testUnresolvedMatchClubDoNothing,
-    testUnresolvedMatchClubDelete
+    testUnresolvedMatchClubDelete,
+    testClubMatchUpdateTeamClubId,
+    testClubMatchBoardUpdatePlayerId
   ).provideShared(
     FreshSchemaLayer("test_club_match_sql", onInit = Tables.ensureTables)
   ) @@ TestAspect.sequential
@@ -420,6 +422,45 @@ object TestClubMatchSql extends ZIOSpecDefault {
     } yield assertTrue(
       deleted == 1,
       remaining.isEmpty
+    )
+  }
+
+  // --- updateTeamClubId / updatePlayerId tests ---
+
+  private def testClubMatchUpdateTeamClubId = test("ClubMatch updateTeamClubId patches correct team column") {
+    // matchInProgress has team2ClubId = None
+    for {
+      before  <- ClubMatch.selectId(matchInProgress.matchId)
+      _       = assert(before.get.team2ClubId.isEmpty)
+      updated <- ClubMatch.updateTeamClubId(matchInProgress.matchId, isTeam1 = false, clubB.clubId)
+      after   <- ClubMatch.selectId(matchInProgress.matchId)
+      // team1 unchanged
+      noOp    <- ClubMatch.updateTeamClubId(ClubMatchId(9999), isTeam1 = true, clubA.clubId)
+    } yield assertTrue(
+      updated == 1,
+      after.get.team2ClubId.contains(clubB.clubId),
+      after.get.team1ClubId == before.get.team1ClubId,
+      noOp == 0
+    )
+  }
+
+  private def testClubMatchBoardUpdatePlayerId = test("ClubMatchBoard updatePlayerId patches correct team column") {
+    // Re-insert boards since testClubMatchBoardDeleteMatch removed them
+    for {
+      _ <- ClubMatchBoard.insertBatch(List(boardA, boardB))
+      // boardB has team2PlayerId = None — patch it
+      updated  <- ClubMatchBoard.updatePlayerId(boardB.matchId, boardB.board, isTeam1 = false, player0.playerId)
+      boards   <- ClubMatchBoard.selectMatch(matchFinished.matchId)
+      patched  = boards.find(_.board == boardB.board).get
+      original = boards.find(_.board == boardA.board).get
+      // non-existent board returns 0
+      noOp     <- ClubMatchBoard.updatePlayerId(ClubMatchId(9999), 1, isTeam1 = true, player0.playerId)
+    } yield assertTrue(
+      updated == 1,
+      patched.team2PlayerId.contains(player0.playerId),
+      patched.team1PlayerId == boardB.team1PlayerId,
+      original == boardA,
+      noOp == 0
     )
   }
 }

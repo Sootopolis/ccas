@@ -102,6 +102,15 @@ object ClubMatch {
         .query[Long].run().head
     }
 
+  def updateTeamClubId(matchId: ClubMatchId, isTeam1: Boolean, clubId: ClubId): ZIO[Transactor, SQLException, Int] =
+    connectZIO {
+      if (isTeam1) {
+        sql"UPDATE club_match SET team1_club_id = $clubId WHERE match_id = $matchId".update.run()
+      } else {
+        sql"UPDATE club_match SET team2_club_id = $clubId WHERE match_id = $matchId".update.run()
+      }
+    }
+
   def selectClubMatchRef(clubId: ClubId): ZIO[Transactor, SQLException, Option[ClubMatchRef]] =
     connectZIO {
       sql"""SELECT match_id, (team1_club_id = $clubId) AS is_team1

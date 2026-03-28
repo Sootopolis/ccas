@@ -19,6 +19,44 @@ import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.SqlZioTypes.{connectZIO, withTransaction}
 import ccas.utils.{CcasLogger, OutputFile, ProgressBar, display}
 
+/** Discovers and persists a chess club's match history by crawling the Chess.com API.
+  *
+  * Starting from a club's known members, it collects match IDs, fetches match data, and follows links to newly
+  * discovered players via breadth-first search (BFS) waves — expanding the match graph until no new matches remain.
+  *
+  * ==Run Modes==
+  *   - '''Default (incremental):''' Only queries members whose match lists haven't been fetched before. Only re-queues
+  *     stale matches (unfinished or recently completed). This is the cheapest mode for regular updates.
+  *   - '''`--full`:''' Clears member query history so every member's match list is re-fetched from the API. Use when
+  *     you want a complete rebuild of the match graph (e.g., after a long gap or to pick up retroactive API changes).
+  *   - '''`--refresh`:''' Re-queues ALL known matches for reprocessing, not just stale ones. Use to update match data
+  *     across the board (e.g., to pick up score corrections or newly resolved fair-play removals).
+  *
+  * ==Workflow (4 Phases)==
+  *   1. '''Initialize''' — Reconcile club membership, load current state (members, snapshots, processed counts),
+  *      reset pending match statuses, and create a `HistoryRun` record.
+  *   2. '''Seed''' — Collect match IDs into `history_pending_match` from three sources:
+  *      the club matches endpoint, each member's match list, and stale/all existing matches.
+  *      Also retries previously unresolved clubs and board players from prior runs.
+  *   3. '''Process''' — BFS wave loop: fetch and persist match data in parallel batches, discover unknown players,
+  *      seed their match lists, and repeat until no new pending matches remain.
+  *   4. '''Finalize''' — Mark the `HistoryRun` complete, log summary stats, and write a report file.
+  *
+  * ==Unresolved Entities==
+  * During processing, some entities may not be resolvable via the API:
+  *   - '''Unresolved match clubs:''' If a team's club URL can't be resolved to a `ClubId` (club deleted or API error),
+  *     the slug is recorded in `unresolved_match_club`. If ''neither'' team resolves to the target club, the match is
+  *     marked `Unidentified` — data is saved but BFS expansion is skipped for that match.
+  *   - '''Unresolved board players:''' If a player's username can't be resolved to a `PlayerId` (account closed or
+  *     deleted), it is recorded in `unresolved_board_player`. The board row is saved with a `None` player ID.
+  *
+  * Both types are retried at the start of each run. Successfully resolved entries are patched in-place and removed
+  * from their respective unresolved tables.
+  *
+  * ==Invocation==
+  *   - '''CLI:''' `HistoryApp <club-slug> [--full] [--refresh]`
+  *   - '''API:''' `POST /api/jobs/history` with `{"clubSlug": "...", "full": true/false, "refresh": true/false}`
+  */
 object HistoryApp extends ZIOAppDefault {
   private val help = "Usage: HistoryApp <club-slug> [--full] [--refresh]"
 
@@ -70,8 +108,9 @@ object HistoryApp extends ZIOAppDefault {
     failedMembers: List[(Username, String)] = Nil
   )
 
-  // --- Shared state for Phase 3 processing ---
-
+  /** Shared mutable state for concurrent Phase 3 processing: API response caches (deduplicated via Promises),
+    * a player lookup map, counters for statistics, and error tracking.
+    */
   private class ProcessingContext(
     val client: ChessComClient,
     val clubId: ClubId,
@@ -132,8 +171,7 @@ object HistoryApp extends ZIOAppDefault {
       )
   }
 
-  // --- Main workflow ---
-
+  /** Main entry point: orchestrates the 4-phase discover workflow for a club's match history. */
   def discover(
     clubSlug: ClubSlug,
     full: Boolean = false,
@@ -167,6 +205,10 @@ object HistoryApp extends ZIOAppDefault {
 
       // === Phase 2: Seed match IDs ===
       _ <- CcasLogger.info("Phase 2: Seeding match IDs...")
+      (resolvedClubs, resolvedPlayers) <- retryUnresolvedClubs(client) <&> retryUnresolvedPlayers(client)
+      _ <- ZIO.whenDiscard(resolvedClubs > 0 || resolvedPlayers > 0) {
+        CcasLogger.info(s"  Resolved $resolvedClubs clubs, $resolvedPlayers players from previous runs")
+      }
       _ <- ZIO.whenDiscard(full) {
         CcasLogger.info("  --full: clearing member query history") *> HistoryMemberQuery.deleteClub(clubId)
       }
@@ -211,6 +253,51 @@ object HistoryApp extends ZIOAppDefault {
 
   // === Phase 2: Seeding ===
 
+  /** Retries resolution for clubs previously recorded in `unresolved_match_club`. On success, patches the
+    * `club_match` row with the resolved ClubId and removes the unresolved entry. Returns count of resolved clubs.
+    */
+  private def retryUnresolvedClubs(client: ChessComClient): RIO[Transactor, Int] =
+    for {
+      unresolved <- UnresolvedMatchClub.selectAll
+      resolved <- ZIO.filter(unresolved) { entry =>
+        Club.resolveOrFetch(client, entry.slug).flatMap {
+          case Some(clubId) =>
+            ClubMatch.updateTeamClubId(entry.matchId, entry.isTeam1, clubId) *>
+              UnresolvedMatchClub.delete(entry.matchId, entry.isTeam1).as(true)
+          case None => ZIO.succeed(false)
+        }.catchAll(_ => ZIO.succeed(false))
+      }
+    } yield resolved.size
+
+  /** Retries resolution for players previously recorded in `unresolved_board_player`. On success, ensures the player
+    * exists in the DB, patches the `club_match_board` row with the resolved PlayerId, and removes the unresolved entry.
+    * Returns count of resolved players.
+    */
+  private def retryUnresolvedPlayers(client: ChessComClient): RIO[Transactor, Int] =
+    for {
+      unresolved <- UnresolvedBoardPlayer.selectAll
+      resolved <- ZIO.filter(unresolved) { entry =>
+        (for {
+          apiPlayer <- client.get[ApiPlayer](ApiPlayer.getUrl(entry.username))
+          playerId = apiPlayer.playerId
+          _ <- Player.selectId(playerId).flatMap {
+            case Some(_) => ZIO.unit
+            case None =>
+              val joined = Instant.ofEpochSecond(apiPlayer.joined)
+              connectZIO {
+                sql"""INSERT INTO player (player_id, joined) VALUES ($playerId, $joined)
+                      ON CONFLICT (player_id) DO NOTHING""".update.run()
+              } *> PlayerSnapshot.insert(PlayerSnapshot(
+                playerId, Instant.now(), entry.username, apiPlayer.status.category, apiPlayer.title
+              )).unit
+          }
+          _ <- ClubMatchBoard.updatePlayerId(entry.matchId, entry.board, entry.isTeam1, playerId)
+          _ <- UnresolvedBoardPlayer.delete(entry.matchId, entry.board, entry.isTeam1)
+        } yield true).catchAll(_ => ZIO.succeed(false))
+      }
+    } yield resolved.size
+
+  /** Fetches the club's match listing endpoint and inserts any not-yet-known match IDs as pending. */
   private[history] def seedFromClubMatches(
     client: ChessComClient,
     clubId: ClubId,
@@ -232,6 +319,7 @@ object HistoryApp extends ZIOAppDefault {
       CcasLogger.warn(s"  Failed to fetch club matches: ${error.getMessage}").as(0)
     }
 
+  /** Queries each un-queried member's match list to find club match IDs. Skips already-queried members unless --full. */
   private def seedFromMemberMatches(
     client: ChessComClient,
     clubId: ClubId,
@@ -306,6 +394,7 @@ object HistoryApp extends ZIOAppDefault {
   private def insertPendingMatches(items: Iterable[HistoryPendingMatch]): RIO[Transactor, Unit] =
     ZIO.foreachDiscard(items.grouped(1000).toList)(HistoryPendingMatch.insertBatch)
 
+  /** If --refresh, re-queues all known matches; otherwise only stale ones (unfinished or recently completed). */
   private def seedStaleMatches(clubId: ClubId, refresh: Boolean): RIO[Transactor, Int] =
     if (refresh) {
       for {
@@ -321,6 +410,9 @@ object HistoryApp extends ZIOAppDefault {
 
   // === Phase 3: BFS Wave Processing ===
 
+  /** BFS wave loop: processes pending matches in batches, discovers new players, seeds their match lists,
+    * and repeats until no new pending matches remain. Returns accumulated stats.
+    */
   private def processWaves(ctx: ProcessingContext): RIO[CcasLogger & Transactor, RunStats] = {
     def waveLoop(waveCount: Int, waveDetails: List[(Int, Int)]): RIO[CcasLogger & Transactor, RunStats] =
       for {
@@ -411,6 +503,9 @@ object HistoryApp extends ZIOAppDefault {
     if (isLive) { processLiveMatch(ctx, matchId) }
     else { processDailyMatch(ctx, matchId) }
 
+  /** Fetches a daily match from the API, resolves team clubs, builds and persists board rows.
+    * Marks the match Unidentified if the target club is not found in either team (data saved, BFS skipped).
+    */
   private def processDailyMatch(ctx: ProcessingContext, matchId: ClubMatchId): RIO[CcasLogger & Transactor, Unit] =
     for {
       dailyMatch <- fetchMatch(ctx, matchId)
@@ -451,6 +546,7 @@ object HistoryApp extends ZIOAppDefault {
       }
     } yield ()
 
+  /** Fetches a live match and resolves its players for BFS expansion. No board rows are persisted for live matches. */
   private def processLiveMatch(ctx: ProcessingContext, matchId: ClubMatchId): RIO[CcasLogger & Transactor, Unit] =
     for {
       liveMatch <- fetchLiveMatch(ctx, matchId)
@@ -470,6 +566,9 @@ object HistoryApp extends ZIOAppDefault {
 
   // === Board Row Construction ===
 
+  /** Constructs ClubMatchBoard rows by resolving player IDs and normalizing game outcomes.
+    * Players that can't be resolved are recorded in `unresolved_board_player` and the board row gets a None player ID.
+    */
   private def buildBoardRows(
     ctx: ProcessingContext,
     matchId: ClubMatchId,
@@ -587,6 +686,9 @@ object HistoryApp extends ZIOAppDefault {
 
   // === Player Resolution ===
 
+  /** Resolves a username to a PlayerId, checking the in-memory cache first. If unknown, discovers the player via the
+    * API (creating Player and PlayerSnapshot records). Returns None for unresolvable players (closed/deleted accounts).
+    */
   private def resolvePlayerId(
     ctx: ProcessingContext,
     username: Username,
@@ -756,6 +858,7 @@ object HistoryApp extends ZIOAppDefault {
 
   // === Helpers ===
 
+  /** Records a club slug in `unresolved_match_club` when team club URL resolution fails. */
   private def trackUnresolvedClub(
     matchId: ClubMatchId,
     isTeam1: Boolean,
@@ -769,6 +872,7 @@ object HistoryApp extends ZIOAppDefault {
       }
     }
 
+  /** Resolves a team URL to a ClubId via Promise-based cache. Falls back to DB lookup then API fetch. */
   private def resolveClubIdFromTeamUrl(ctx: ProcessingContext, teamUrl: URL): RIO[Transactor, Option[ClubId]] =
     teamUrl.path.segments.lastOption match {
       case None => ZIO.none

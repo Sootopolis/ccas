@@ -91,6 +91,22 @@ object ClubMatchBoard {
       }
     }
 
+  def updatePlayerId(
+    matchId: ClubMatchId,
+    board: Int,
+    isTeam1: Boolean,
+    playerId: PlayerId
+  ): ZIO[Transactor, SQLException, Int] =
+    connectZIO {
+      if (isTeam1) {
+        sql"UPDATE club_match_board SET team1_player_id = $playerId WHERE match_id = $matchId AND board = $board"
+          .update.run()
+      } else {
+        sql"UPDATE club_match_board SET team2_player_id = $playerId WHERE match_id = $matchId AND board = $board"
+          .update.run()
+      }
+    }
+
   def selectPlayerMatchRef(playerId: PlayerId): ZIO[Transactor, SQLException, Option[PlayerMatchRef]] =
     connectZIO {
       sql"""SELECT match_id, board AS board_idx, (team1_player_id = $playerId) AS is_team1
