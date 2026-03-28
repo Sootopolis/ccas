@@ -5,11 +5,11 @@ import zio.{Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
 import zio.http.{Client, Server}
 
 import ccas.server.jobs.JobRunner
-import ccas.server.routes.{HealthRoutes, JobRoutes, ScheduleRoutes}
+import ccas.server.routes.{BlacklistRoutes, HealthRoutes, JobRoutes, ScheduleRoutes}
 import ccas.server.scheduler.JobScheduler
-import ccas.utils.CcasLogger
 import ccas.utils.client.ChessComClient
 import ccas.utils.sql.DataSourceLayer
+import ccas.utils.CcasLogger
 
 object CcasServer extends ZIOAppDefault {
 
@@ -20,7 +20,7 @@ object CcasServer extends ZIOAppDefault {
     (for {
       scheduler <- ZIO.service[JobScheduler]
       _         <- scheduler.start
-      _         <- Server.serve(HealthRoutes.routes ++ JobRoutes.routes ++ ScheduleRoutes.routes)
+      _ <- Server.serve(HealthRoutes.routes ++ JobRoutes.routes ++ ScheduleRoutes.routes ++ BlacklistRoutes.routes)
     } yield ()).provideSome[Scope](
       CcasLogger.live(showProgress = false),
       ChessComClient.live,

@@ -1,6 +1,6 @@
 package ccas.analysis.apps.recruitment
 
-import java.time.Instant
+import java.time.{Instant, ZoneOffset}
 
 import com.augustnagro.magnum.Transactor
 import zio.{Console, RIO, Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
@@ -10,25 +10,33 @@ import ccas.analysis.tables.*
 import ccas.api.club.ApiClub
 import ccas.api.misc.subtypes.{ClubSlug, Username}
 import ccas.api.player.ApiPlayer
-import ccas.utils.CcasLogger
 import ccas.utils.client.ChessComClient
-import ccas.utils.errors.BadRequestException
+import ccas.utils.errors.{BadRequestException, NotFoundException}
 import ccas.utils.sql.DataSourceLayer
+import ccas.utils.CcasLogger
 
 object BlacklistApp extends ZIOAppDefault {
-  private val help = "Usage: BlacklistApp <club-slug> <username> [reason] [expires-at]"
+  private val help =
+    """Usage: BlacklistApp <command> [args]
+      |
+      |Commands:
+      |  add <club-slug> <user1,user2,...> [reason] [months]   Add players to blacklist (indefinite if months omitted)
+      |  list <club-slug>                                       List active blacklist entries
+      |  remove <club-slug> <username>                          Remove player from blacklist""".stripMargin
 
   override def run: RIO[ZIOAppArgs & Scope, Unit] =
     (for {
       args <- ZIOAppArgs.getArgs
       _ <- args.toList match {
-        case clubStr :: usernameStr :: rest =>
-          addToBlacklist(
-            ClubSlug.wrap(clubStr),
-            Username.wrap(usernameStr),
-            reason = rest.headOption,
-            expiresAt = rest.lift(1).map(Instant.parse)
-          )
+        case "add" :: clubStr :: usernamesStr :: rest =>
+          val usernames = usernamesStr.split(',').map(s => Username.wrap(s.trim)).toList
+          val months    = rest.lift(1).map(_.toInt)
+          val expiresAt = months.map(m => Instant.now().atZone(ZoneOffset.UTC).plusMonths(m.toLong).toInstant)
+          addToBlacklist(ClubSlug.wrap(clubStr), usernames, reason = rest.headOption, expiresAt)
+        case "list" :: clubStr :: _ =>
+          listBlacklist(ClubSlug.wrap(clubStr))
+        case "remove" :: clubStr :: usernameStr :: _ =>
+          removeFromBlacklist(ClubSlug.wrap(clubStr), Username.wrap(usernameStr))
         case _ => ZIO.fail(BadRequestException(help))
       }
     } yield ()).provideSomeAuto(
@@ -40,7 +48,7 @@ object BlacklistApp extends ZIOAppDefault {
 
   def addToBlacklist(
     clubSlug: ClubSlug,
-    username: Username,
+    usernames: List[Username],
     reason: Option[String],
     expiresAt: Option[Instant]
   ): RIO[ChessComClient & Transactor, Unit] =
@@ -48,14 +56,47 @@ object BlacklistApp extends ZIOAppDefault {
       client  <- ZIO.service[ChessComClient]
       apiClub <- ApiClub.get(client, clubSlug)
       club = Club(apiClub.clubId, Instant.ofEpochSecond(apiClub.created), clubSlug, apiClub.name)
-      _         <- Club.upsert(club)
-      apiPlayer <- client.get[ApiPlayer](ApiPlayer.getUrl(username))
+      _ <- Club.upsert(club)
+      _ <- ZIO.foreachDiscard(usernames) { username =>
+        for {
+          apiPlayer <- client.get[ApiPlayer](ApiPlayer.getUrl(username))
+          now = Instant.now()
+          _ <- RecruitmentBlacklist.upsert(
+            RecruitmentBlacklist(apiClub.clubId, apiPlayer.playerId, now, expiresAt, reason)
+          )
+          _ <- Console.printLine(
+            s"Blacklisted $username (player_id=${apiPlayer.playerId}) for club $clubSlug"
+          ).orDie
+        } yield ()
+      }
+    } yield ()
+
+  def listBlacklist(clubSlug: ClubSlug): RIO[Transactor, Unit] =
+    for {
+      club <- Club.selectBySlug(clubSlug).someOrFail(NotFoundException(s"Club not found: $clubSlug"))
       now = Instant.now()
-      _ <- RecruitmentBlacklist.insert(
-        RecruitmentBlacklist(apiClub.clubId, apiPlayer.playerId, now, expiresAt, reason)
-      )
+      entries <- RecruitmentBlacklist.selectActiveByClub(club.clubId, now)
+      _ <-
+        if (entries.isEmpty) {
+          Console.printLine(s"No active blacklist entries for $clubSlug").orDie
+        } else {
+          ZIO.foreachDiscard(entries) { e =>
+            val name    = e.username.map(_.toString).getOrElse(s"player_id=${e.playerId}")
+            val expires = e.expiresAt.fold("indefinite")(t => s"expires $t")
+            val reason  = e.reason.fold("")(r => s" reason=$r")
+            Console.printLine(s"  $name  $expires$reason").orDie
+          }
+        }
+    } yield ()
+
+  def removeFromBlacklist(clubSlug: ClubSlug, username: Username): RIO[Transactor, Unit] =
+    for {
+      club <- Club.selectBySlug(clubSlug).someOrFail(NotFoundException(s"Club not found: $clubSlug"))
+      ps   <- PlayerSnapshot.selectNameLatest(username).someOrFail(NotFoundException(s"Player not found: $username"))
+      rows <- RecruitmentBlacklist.delete(club.clubId, ps.playerId)
       _ <- Console.printLine(
-        s"Blacklisted $username (player_id=${apiPlayer.playerId}) for club $clubSlug"
+        if (rows > 0) s"Removed $username from blacklist for $clubSlug"
+        else s"$username was not blacklisted for $clubSlug"
       ).orDie
     } yield ()
 }

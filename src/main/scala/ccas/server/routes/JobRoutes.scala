@@ -1,18 +1,16 @@
 package ccas.server.routes
 
-import java.time.Instant
-
 import com.augustnagro.magnum.Transactor
 import zio.http.*
-import zio.json.{DeriveJsonCodec, EncoderOps, JsonCodec, JsonDecoder, JsonEncoder}
+import zio.json.{DeriveJsonCodec, EncoderOps, JsonCodec}
 import zio.ZIO
 
 import ccas.analysis.apps.history.HistoryApp
-import ccas.analysis.apps.ref.RefApp
 import ccas.analysis.apps.membership.MembershipApp
-import ccas.analysis.apps.recruitment.{BlacklistApp, RecruitmentApp}
+import ccas.analysis.apps.recruitment.RecruitmentApp
+import ccas.analysis.apps.ref.RefApp
 import ccas.analysis.tables.RunTrigger
-import ccas.api.misc.subtypes.{ClubSlug, Username}
+import ccas.api.misc.subtypes.ClubSlug
 import ccas.server.jobs.*
 import ccas.server.routes.RouteHelpers.*
 import ccas.utils.client.{ChessComClient, HttpStatusException}
@@ -46,16 +44,6 @@ object JobRoutes {
   case class HistoryRequest(clubSlug: ClubSlug, full: Option[Boolean], refresh: Option[Boolean])
   object HistoryRequest {
     given JsonCodec[HistoryRequest] = DeriveJsonCodec.gen
-  }
-
-  case class BlacklistRequest(
-    clubSlug: ClubSlug,
-    username: Username,
-    reason: Option[String],
-    expiresAt: Option[Instant]
-  )
-  object BlacklistRequest {
-    given JsonCodec[BlacklistRequest] = DeriveJsonCodec.gen
   }
 
   // --- Response types ---
@@ -92,14 +80,6 @@ object JobRoutes {
   }
 
   // --- Helpers ---
-
-  // ISO-8601 string codecs for the REST API, overriding the global
-  // epoch-seconds codecs in ccas.utils.json (which match Chess.com's format).
-  private given JsonEncoder[Instant] = JsonEncoder.string.contramap(_.toString)
-  private given JsonDecoder[Instant] = JsonDecoder.string.mapOrFail { s =>
-    try Right(Instant.parse(s))
-    catch { case e: Exception => Left(s"Invalid instant: $s (${e.getMessage})") }
-  }
 
   private def handleJobError(error: Throwable): Response = error match {
     case e: JobConflictException => jsonResponse(Status.Conflict, ErrorResponse(e.getMessage))
@@ -154,16 +134,14 @@ object JobRoutes {
       (for {
         body   <- parseJsonBody[HistoryRequest](req)
         runner <- ZIO.service[JobRunner]
-        effect = HistoryApp.discover(body.clubSlug, body.full.getOrElse(false), body.refresh.getOrElse(false), RunTrigger.Api)
+        effect = HistoryApp.discover(
+          body.clubSlug,
+          body.full.getOrElse(false),
+          body.refresh.getOrElse(false),
+          RunTrigger.Api
+        )
         jobId <- runner.submit(JobKind.History, Some(body.clubSlug), Some(body.toJson), RunTrigger.Api, effect)
       } yield jsonResponse(Status.Accepted, JobResponse(JobRunId.unwrap(jobId), "running")))
-        .catchAll(e => ZIO.succeed(handleJobError(e)))
-    },
-    Method.POST / "api" / "jobs" / "blacklist" -> handler { (req: Request) =>
-      (for {
-        body <- parseJsonBody[BlacklistRequest](req)
-        _    <- BlacklistApp.addToBlacklist(body.clubSlug, body.username, body.reason, body.expiresAt)
-      } yield Response.ok)
         .catchAll(e => ZIO.succeed(handleJobError(e)))
     },
     Method.GET / "api" / "jobs" -> handler {
