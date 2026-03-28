@@ -74,22 +74,23 @@ final class ChessComClient(
   // Adaptive throttle
   // ---------------------------------------------------------------------------
 
-  /** When throttled, enforce a minimum inter-request delay. Reads/updates the last request
-    * timestamp atomically so concurrent permits (during partial throttle) stagger correctly.
+  /** Enforce a minimum inter-request delay that scales with throttle depth.
+    * At full permits the base delay applies (~100ms); when throttled, the delay scales
+    * proportionally (base * maxPermits / currentMax). Reads/updates the last request
+    * timestamp atomically so concurrent permits stagger correctly.
     * Runs inside `semaphore.withPermit`, so the permit is held during any sleep.
     */
   private def rateDelay: Task[Unit] =
     stateRef.get.flatMap { state =>
-      ZIO.unlessDiscard(state.currentMax >= config.maxPermits) {
-        for {
-          now <- Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS)
-          sleepMs <- lastRequestRef.modify { last =>
-            val needed = (config.throttleDelay.toMillis - (now - last)).max(0)
-            (needed, now + needed)
-          }
-          _ <- ZIO.whenDiscard(sleepMs > 0)(ZIO.sleep(sleepMs.millis))
-        } yield ()
-      }
+      val scaledDelay = config.throttleDelay.toMillis * (config.maxPermits / state.currentMax)
+      for {
+        now <- Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS)
+        sleepMs <- lastRequestRef.modify { last =>
+          val needed = (scaledDelay - (now - last)).max(0)
+          (needed, now + needed)
+        }
+        _ <- ZIO.whenDiscard(sleepMs > 0)(ZIO.sleep(sleepMs.millis))
+      } yield ()
     }
 
   /** Record a request outcome and trigger throttle-down if failure rate exceeds threshold.
@@ -246,7 +247,7 @@ object ChessComClient {
     * @param failureWindowSize Rolling window size for tracking success/failure outcomes.
     * @param failureThreshold Fraction of failures in the window (0.0–1.0) that triggers a throttle-down.
     * @param minSampleSize    Minimum outcomes in the window before the failure rate is evaluated.
-    * @param throttleDelay    Minimum inter-request delay when throttled (currentMax < maxPermits). Prevents fast-failing 429s from cycling faster than successful responses.
+    * @param throttleDelay    Base inter-request delay, applied at all levels. Scales with throttle depth: actual delay = throttleDelay * (maxPermits / currentMax).
     */
   private[ccas] case class ThrottleConfig(
     maxPermits: Long,
