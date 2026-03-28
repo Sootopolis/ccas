@@ -34,7 +34,7 @@ final class ChessComClient(
     response    <- batchedClient(Request(method = GET, url = url).addHeaders(headers))
     string      <- response.body.asString
     cfChallenge  = isCloudflareChallenge(response, string)
-    _           <- if (cfChallenge) throttleDown(4) else recordOutcome(response.status != Status.TooManyRequests)
+    _           <- if (cfChallenge) throttleDown(_ => 1) else recordOutcome(response.status != Status.TooManyRequests)
     _ <- ZIO.whenDiscard(!response.status.isSuccess)(
       ZIO.fail(HttpStatusException(response.status.code, url, string))
     )
@@ -95,12 +95,12 @@ final class ChessComClient(
   /** Reduce the effective permit limit by the given divisor and schedule recovery.
     * Clears the outcome window and sets coolingDown to prevent cascading reductions.
     */
-  private def throttleDown(divisor: Int = 2): Task[Unit] =
+  private def throttleDown(compute: Long => Long = _ / 2): Task[Unit] =
     stateRef.modify { state =>
       if (state.coolingDown) {
         (None, state)
       } else {
-        val newMax = (state.currentMax / divisor).max(1)
+        val newMax = compute(state.currentMax).max(1)
         if (newMax == state.currentMax) {
           (None, state)
         } else {

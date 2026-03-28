@@ -215,7 +215,7 @@ object TestChessComClient extends ZIOSpecDefault {
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get).exit
           )
           state <- stateRef.get
-        } yield assertTrue(state.currentMax == 4L, state.coolingDown)
+        } yield assertTrue(state.currentMax == 1L, state.coolingDown)
       }
     },
     test("Cloudflare 403 is not retried by single-retry schedule") {
