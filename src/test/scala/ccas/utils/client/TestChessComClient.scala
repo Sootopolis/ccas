@@ -19,7 +19,8 @@ object TestChessComClient extends ZIOSpecDefault {
     cooldown: Duration = 50.millis,
     retryBase: Duration = 10.millis,
     failureWindowSize: Int = 20,
-    failureThreshold: Double = 0.2
+    failureThreshold: Double = 0.2,
+    throttleDelay: Duration = Duration.Zero
   ): ZIO[Scope, Nothing, (ChessComClient, Ref[ChessComClient.ThrottleState])] =
     for {
       semaphore  <- Semaphore.make(permits)
@@ -27,8 +28,9 @@ object TestChessComClient extends ZIOSpecDefault {
       reserveRef  <- Ref.make(Chunk.empty[Fiber.Runtime[Nothing, Nothing]])
       adjustMutex <- Semaphore.make(1)
       activeRef   <- Ref.make(0)
+      lastReqRef  <- Ref.make(0L)
       bar         <- TestCcasLogger.noopBar
-      config = ChessComClient.ThrottleConfig(permits, cooldown, retryBase, 10.millis, 10.millis, failureWindowSize, failureThreshold, 10)
+      config = ChessComClient.ThrottleConfig(permits, cooldown, retryBase, 10.millis, 10.millis, failureWindowSize, failureThreshold, 10, throttleDelay)
     } yield {
       val driver = new ZClient.Driver[Any, Scope, Throwable] {
         override def request(
@@ -63,6 +65,7 @@ object TestChessComClient extends ZIOSpecDefault {
         reserveRef,
         adjustMutex,
         activeRef,
+        lastReqRef,
         bar,
         config
       )
@@ -253,8 +256,9 @@ object TestChessComClient extends ZIOSpecDefault {
           adjustMutex <- Semaphore.make(1)
           activeRef   <- Ref.make(0)
           bar         <- TestCcasLogger.noopBar
-          counter   <- Ref.make(0)
-          config = ChessComClient.ThrottleConfig(5, 60.seconds, 10.millis, 10.millis, 10.millis, 20, 0.2, 10)
+          counter     <- Ref.make(0)
+          lastReqRef  <- Ref.make(0L)
+          config = ChessComClient.ThrottleConfig(5, 60.seconds, 10.millis, 10.millis, 10.millis, 20, 0.2, 10, Duration.Zero)
           // Reserve 4 permits to enforce effective limit of 1
           reserveFibers <- ZIO.foreach(Chunk.range(0, 4))(_ => semaphore.withPermit(ZIO.never).forkDaemon)
           _ <- reserveRef.set(reserveFibers)
@@ -286,7 +290,7 @@ object TestChessComClient extends ZIOSpecDefault {
           }
           client = ChessComClient(
             ZClient.fromDriver(driver), Transactor(null), Headers.empty, TestCcasLogger.noop,
-            semaphore, stateRef, reserveRef, adjustMutex, activeRef, bar, config
+            semaphore, stateRef, reserveRef, adjustMutex, activeRef, lastReqRef, bar, config
           )
           urls = (1 to 3).map(i => URL.decode(s"http://test.example.com/api/$i").toOption.get)
           _        <- client.getAll[Payload](urls)

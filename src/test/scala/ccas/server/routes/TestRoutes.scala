@@ -3,7 +3,7 @@ package ccas.server.routes
 import java.time.{Instant, LocalDateTime, ZoneOffset}
 
 import com.augustnagro.magnum.{sql, Transactor}
-import zio.{durationInt, Chunk, Fiber, RIO, Ref, Scope, Semaphore, Trace, UIO, URIO, ZIO, ZLayer}
+import zio.{durationInt, Chunk, Duration, Fiber, RIO, Ref, Scope, Semaphore, Trace, UIO, URIO, ZIO, ZLayer}
 import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
@@ -85,6 +85,7 @@ object TestRoutes extends ZIOSpecDefault {
         reserveRef  <- Ref.make(Chunk.empty[Fiber.Runtime[Nothing, Nothing]])
         adjustMutex <- Semaphore.make(1)
         activeRef   <- Ref.make(0)
+        lastReqRef  <- Ref.make(0L)
         bar         <- TestCcasLogger.noopBar
       } yield {
         val routes: Routes[Any, Response] = Routes(
@@ -123,8 +124,9 @@ object TestRoutes extends ZIOSpecDefault {
           reserveRef,
           adjustMutex,
           activeRef,
+          lastReqRef,
           bar,
-          ChessComClient.ThrottleConfig(1, 30.seconds, 1.second, 5.seconds, 10.seconds, 20, 0.2, 10)
+          ChessComClient.ThrottleConfig(1, 30.seconds, 1.second, 5.seconds, 10.seconds, 20, 0.2, 10, Duration.Zero)
         )
       }
     }
