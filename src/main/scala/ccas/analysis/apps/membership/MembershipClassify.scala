@@ -1,6 +1,7 @@
 package ccas.analysis.apps.membership
 
 import ccas.analysis.apps.membership.MembershipChange.*
+import ccas.analysis.apps.membership.MembershipChange.MemberChange.*
 import ccas.analysis.apps.ref.RefHelpers
 import ccas.analysis.tables.*
 import ccas.api.clubmatch.TeamMatchPlayerStarted

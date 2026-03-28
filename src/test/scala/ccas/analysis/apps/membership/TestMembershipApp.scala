@@ -9,6 +9,7 @@ import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.analysis.apps.membership.MembershipClassify.{PhaseBResult, PhaseCResult}
 import ccas.analysis.apps.membership.MembershipChange.*
+import ccas.analysis.apps.membership.MembershipChange.MemberChange.*
 import ccas.analysis.tables.{Club, ClubMember, Player, PlayerSnapshot, Tables}
 import ccas.api.misc.enums.PlayerStatusCategory.{Active, Closed}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
@@ -143,6 +144,7 @@ object TestMembershipApp extends ZIOSpecDefault {
   override def spec: Spec[Any, Throwable] = suite("TestMembershipApp")(
     suiteClassifyFromDb,
     suiteMergeResults,
+    suiteFormatReport,
     suiteBuildDbState,
     suiteClassifyApiMembers,
     suiteClassifyDisappeared
@@ -272,7 +274,66 @@ object TestMembershipApp extends ZIOSpecDefault {
   )
 
   // ==========================================================================
-  // Suite C: buildDbState (DB)
+  // Suite C: formatReport (pure)
+  // ==========================================================================
+
+  private def suiteFormatReport = suite("formatReport")(
+    test("empty summaries → 'No changes'") {
+      val rr = MembershipReport.ReportResult(Nil, 10, 10)
+      val output = MembershipReport.formatReport(rr)
+      assertTrue(
+        output.contains("Total members: 10 (+0)"),
+        output.contains("No changes")
+      )
+    },
+    test("groups changes by category, not by player") {
+      val summaries = List(
+        MemberChangeSummary(pid0, Username("alice"), Chunk(NewMember(Times.t1), UsernameChange(Times.t2, Username("alice-old")))),
+        MemberChangeSummary(pid1, Username("bob"), Chunk(NewMember(Times.t1)))
+      )
+      val rr = MembershipReport.ReportResult(summaries, 8, 10)
+      val output = MembershipReport.formatReport(rr)
+      assertTrue(
+        output.contains("[NEW MEMBER]\n  alice"),
+        output.contains("[NEW MEMBER]\n  alice") && output.contains("  bob"),
+        output.contains("[USERNAME CHANGE]\n  alice")
+      )
+    },
+    test("categories appear in enum ordinal order") {
+      val summaries = List(
+        MemberChangeSummary(pid0, Username("alice"), Chunk(UsernameChange(Times.t2, Username("old")))),
+        MemberChangeSummary(pid1, Username("bob"), Chunk(NewMember(Times.t1)))
+      )
+      val rr = MembershipReport.ReportResult(summaries, 8, 9)
+      val output = MembershipReport.formatReport(rr)
+      val newIdx = output.indexOf("[NEW MEMBER]")
+      val usrIdx = output.indexOf("[USERNAME CHANGE]")
+      assertTrue(
+        newIdx >= 0,
+        usrIdx >= 0,
+        newIdx < usrIdx
+      )
+    },
+    test("entries within a category are sorted by timestamp") {
+      val summaries = List(
+        MemberChangeSummary(pid0, Username("bob"), Chunk(NewMember(Times.t2))),
+        MemberChangeSummary(pid1, Username("alice"), Chunk(NewMember(Times.t1)))
+      )
+      val rr = MembershipReport.ReportResult(summaries, 8, 10)
+      val output = MembershipReport.formatReport(rr)
+      val aliceIdx = output.indexOf("alice")
+      val bobIdx   = output.indexOf("bob")
+      assertTrue(aliceIdx < bobIdx)
+    },
+    test("shows member count delta") {
+      val rr = MembershipReport.ReportResult(Nil, 12, 10)
+      val output = MembershipReport.formatReport(rr)
+      assertTrue(output.contains("Total members: 10 (-2)"))
+    }
+  )
+
+  // ==========================================================================
+  // Suite D: buildDbState (DB)
   // ==========================================================================
 
   private def suiteBuildDbState = suite("buildDbState")(

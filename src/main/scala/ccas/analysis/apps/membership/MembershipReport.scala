@@ -2,6 +2,7 @@ package ccas.analysis.apps.membership
 
 import java.time.{Instant, Duration as JDuration}
 import ccas.analysis.apps.membership.MembershipChange.*
+import ccas.analysis.apps.membership.MembershipChange.MemberChange.*
 import ccas.analysis.tables.*
 import ccas.api.misc.enums.PlayerStatusCategory
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
@@ -30,7 +31,7 @@ private[membership] object MembershipReport {
       countAtEnd   = members.count(m => !m.since.isAfter(until) && m.until.forall(_.isAfter(until)))
       _ <- CcasLogger.info(s"=== Report for $clubSlug from $since to $until ===")
       _ <- CcasLogger.info(s"Members: $countAtStart -> $countAtEnd")
-      _ <- ZIO.foreachDiscard(summaries)(printChangeSummary)
+      _ <- printChangeSummaries(summaries)
     } yield ReportResult(summaries, countAtStart, countAtEnd)
 
   def reportReconciliation(result: ReconciliationResult): URIO[CcasLogger, Unit] = {
@@ -46,25 +47,59 @@ private[membership] object MembershipReport {
       _ <- CcasLogger.info(s"New memberships:    ${result.newMemberships.size}")
       _ <- CcasLogger.info(s"Closed memberships: ${result.closedMemberships.size}")
       _ <- CcasLogger.info("")
-      _ <- ZIO.foreachDiscard(result.changes)(printChangeSummary)
+      _ <- printChangeSummaries(result.changes.toList)
     } yield ()
   }
 
-  private def printChangeSummary(summary: MemberChangeSummary): URIO[CcasLogger, Unit] =
-    for {
-      _ <- CcasLogger.info(s"${summary.username}:")
-      _ <- ZIO.foreachDiscard(summary.changes)(change => CcasLogger.info(s"  ${formatChange(change)}"))
-    } yield ()
+  private def printChangeSummaries(summaries: List[MemberChangeSummary]): URIO[CcasLogger, Unit] = {
+    val grouped = groupByCategory(summaries)
+    ZIO.foreachDiscard(grouped) { case (label, entries) =>
+      CcasLogger.info(label) *>
+        ZIO.foreachDiscard(entries) { case (username, detail) =>
+          CcasLogger.info(s"  $username — $detail")
+        }
+    }
+  }
 
-  private def formatChange(change: MemberChange): String = change match {
-    case NewMember(ts)                 => s"[NEW MEMBER] at $ts"
-    case JoinedClub(ts)                => s"[JOINED CLUB] at $ts"
-    case LeftClub(ts)                  => s"[LEFT CLUB] at $ts"
-    case AccountClosed(ts, status)     => s"[ACCOUNT CLOSED] at $ts — status: $status"
-    case Rejoined(ts, prevUntil)       => s"[REJOINED] at $ts — previously left at $prevUntil"
-    case Unresolvable(ts, oldUsername) => s"[UNRESOLVABLE] at $ts — old username: $oldUsername"
-    case UsernameChange(ts, oldName)   => s"[USERNAME CHANGE] at $ts — was: $oldName"
-    case StatusChange(ts, oldStatus)   => s"[STATUS CHANGE] at $ts — was: $oldStatus"
+  private def categoryLabel(change: MemberChange): String = change match {
+    case _: NewMember      => "[NEW MEMBER]"
+    case _: JoinedClub     => "[JOINED CLUB]"
+    case _: Rejoined       => "[REJOINED]"
+    case _: LeftClub       => "[LEFT CLUB]"
+    case _: AccountClosed  => "[ACCOUNT CLOSED]"
+    case _: Unresolvable   => "[UNRESOLVABLE]"
+    case _: UsernameChange => "[USERNAME CHANGE]"
+    case _: StatusChange   => "[STATUS CHANGE]"
+  }
+
+  private def formatChangeDetail(change: MemberChange): String = change match {
+    case NewMember(ts)                 => s"at $ts"
+    case JoinedClub(ts)                => s"at $ts"
+    case Rejoined(ts, prevUntil)       => s"at $ts — previously left at $prevUntil"
+    case LeftClub(ts)                  => s"at $ts"
+    case AccountClosed(ts, status)     => s"at $ts — status: $status"
+    case Unresolvable(ts, oldUsername) => s"at $ts — old username: $oldUsername"
+    case UsernameChange(ts, oldName)   => s"at $ts — was: $oldName"
+    case StatusChange(ts, oldStatus)   => s"at $ts — was: $oldStatus"
+  }
+
+  private def groupByCategory(
+    summaries: List[MemberChangeSummary]
+  ): List[(String, List[(Username, String)])] = {
+    val entries = summaries.flatMap { summary =>
+      summary.changes.map(change => (change, summary.username))
+    }
+    entries
+      .groupBy { case (change, _) => change.ordinal }
+      .toList
+      .sortBy(_._1)
+      .map { case (_, grouped) =>
+        val label = categoryLabel(grouped.head._1)
+        val items = grouped
+          .sortBy(_._1.timestamp)
+          .map { case (change, username) => (username, formatChangeDetail(change)) }
+        (label, items)
+      }
   }
 
   def formatReconciliation(result: ReconciliationResult): String = {
@@ -95,9 +130,13 @@ private[membership] object MembershipReport {
 
   private def formatChangeSummaries(summaries: List[MemberChangeSummary]): String = {
     val sb = new StringBuilder
-    summaries.foreach { summary =>
-      sb.append(s"${summary.username}:\n")
-      summary.changes.foreach(change => sb.append(s"  ${formatChange(change)}\n"))
+    val grouped = groupByCategory(summaries)
+    grouped.foreach { case (label, entries) =>
+      sb.append(s"$label\n")
+      entries.foreach { case (username, detail) =>
+        sb.append(s"  $username — $detail\n")
+      }
+      sb.append("\n")
     }
     sb.toString
   }

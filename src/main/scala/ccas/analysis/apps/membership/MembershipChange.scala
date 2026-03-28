@@ -18,18 +18,16 @@ object MembershipChange {
 
   final case class MemberState(player: PlayerSnapshot, member: ClubMember)
 
-  sealed trait MemberChange {
-    val timestamp: Instant
+  enum MemberChange(val timestamp: Instant) {
+    case NewMember(ts: Instant)                                      extends MemberChange(ts)
+    case JoinedClub(ts: Instant)                                     extends MemberChange(ts)
+    case Rejoined(ts: Instant, previousUntil: Instant)               extends MemberChange(ts)
+    case LeftClub(ts: Instant)                                       extends MemberChange(ts)
+    case AccountClosed(ts: Instant, newStatus: PlayerStatusCategory) extends MemberChange(ts)
+    case Unresolvable(ts: Instant, oldUsername: Username)             extends MemberChange(ts)
+    case UsernameChange(ts: Instant, oldUsername: Username)           extends MemberChange(ts)
+    case StatusChange(ts: Instant, oldStatus: PlayerStatusCategory)  extends MemberChange(ts)
   }
-
-  final case class NewMember(timestamp: Instant)                                      extends MemberChange
-  final case class JoinedClub(timestamp: Instant)                                     extends MemberChange
-  final case class LeftClub(timestamp: Instant)                                       extends MemberChange
-  final case class AccountClosed(timestamp: Instant, newStatus: PlayerStatusCategory) extends MemberChange
-  final case class Rejoined(timestamp: Instant, previousUntil: Instant)               extends MemberChange
-  final case class Unresolvable(timestamp: Instant, oldUsername: Username)            extends MemberChange
-  final case class UsernameChange(timestamp: Instant, oldUsername: Username)          extends MemberChange
-  final case class StatusChange(timestamp: Instant, oldStatus: PlayerStatusCategory)  extends MemberChange
 
   final case class DbState(
     membersByPlayerId: Map[PlayerId, MemberState],
