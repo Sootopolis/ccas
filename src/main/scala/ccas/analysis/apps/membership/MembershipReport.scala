@@ -62,8 +62,8 @@ private[membership] object MembershipReport {
   }
 
   private def categoryLabel(change: MemberChange): String = change match {
-    case _: NewMember      => "[NEW MEMBER]"
-    case _: JoinedClub     => "[JOINED CLUB]"
+    case _: NewMember      => "[JOINED]"
+    case _: JoinedClub     => "[JOINED]"
     case _: Rejoined       => "[REJOINED]"
     case _: LeftClub       => "[LEFT CLUB]"
     case _: AccountClosed  => "[ACCOUNT CLOSED]"
@@ -89,8 +89,12 @@ private[membership] object MembershipReport {
     val entries = summaries.flatMap { summary =>
       summary.changes.map(change => (change, summary.username))
     }
+    def categoryOrder(change: MemberChange): Int = change match {
+      case _: NewMember | _: JoinedClub => 0
+      case other                        => other.ordinal
+    }
     entries
-      .groupBy { case (change, _) => change.ordinal }
+      .groupBy { case (change, _) => categoryOrder(change) }
       .toList
       .sortBy(_._1)
       .map { case (_, grouped) =>

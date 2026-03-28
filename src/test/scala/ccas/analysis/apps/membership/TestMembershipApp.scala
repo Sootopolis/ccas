@@ -46,7 +46,8 @@ object TestMembershipApp extends ZIOSpecDefault {
     playerId: Long,
     username: String,
     status: String = "basic",
-    joined: Long = Times.t0.getEpochSecond
+    joined: Long = Times.t0.getEpochSecond,
+    lastOnline: Long = Times.t0.getEpochSecond
   ): String = {
     val fields = List(
       s""""player_id": $playerId""",
@@ -54,7 +55,7 @@ object TestMembershipApp extends ZIOSpecDefault {
       s""""country": "https://api.chess.com/pub/country/US"""",
       s""""status": "$status"""",
       s""""joined": $joined""",
-      s""""last_online": $joined""",
+      s""""last_online": $lastOnline""",
       s""""followers": 0""",
       s""""is_streamer": false""",
       s""""verified": false""",
@@ -294,8 +295,8 @@ object TestMembershipApp extends ZIOSpecDefault {
       val rr = MembershipReport.ReportResult(summaries, 8, 10)
       val output = MembershipReport.formatReport(rr)
       assertTrue(
-        output.contains("[NEW MEMBER]\n  alice"),
-        output.contains("[NEW MEMBER]\n  alice") && output.contains("  bob"),
+        output.contains("[JOINED]\n  alice"),
+        output.contains("[JOINED]\n  alice") && output.contains("  bob"),
         output.contains("[USERNAME CHANGE]\n  alice")
       )
     },
@@ -306,7 +307,7 @@ object TestMembershipApp extends ZIOSpecDefault {
       )
       val rr = MembershipReport.ReportResult(summaries, 8, 9)
       val output = MembershipReport.formatReport(rr)
-      val newIdx = output.indexOf("[NEW MEMBER]")
+      val newIdx = output.indexOf("[JOINED]")
       val usrIdx = output.indexOf("[USERNAME CHANGE]")
       assertTrue(
         newIdx >= 0,
@@ -420,13 +421,17 @@ object TestMembershipApp extends ZIOSpecDefault {
       for {
         client <- fakeChessComClient(Map.empty)
         result <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, dbState, Times.t2)
-      } yield assertTrue(
-        result.resolvedIds.contains(pid1),
-        result.changes.size == 1,
-        result.changes.head.changes.exists(_.isInstanceOf[Rejoined]),
-        result.closedMemberships.nonEmpty,
-        result.newMemberships.nonEmpty
-      )
+      } yield {
+        val change = result.changes.head.changes.head
+        assertTrue(
+          result.resolvedIds.contains(pid1),
+          result.changes.size == 1,
+          change.isInstanceOf[Rejoined],
+          change.timestamp == Times.t1, // API join time, not reconciliation time
+          result.closedMemberships.nonEmpty,
+          result.newMemberships.nonEmpty
+        )
+      }
     },
     test("username change — same player ID, different username") {
       val snap = PlayerSnapshot(pid2, Times.t0, Username("charlie-old"), Active, None)
@@ -457,14 +462,18 @@ object TestMembershipApp extends ZIOSpecDefault {
         _      <- seedDb()
         client <- fakeChessComClient(responses)
         result <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, dbState, Times.t2)
-      } yield assertTrue(
-        result.resolvedIds.contains(pid3),
-        result.changes.size == 1,
-        result.changes.head.changes.exists(_.isInstanceOf[NewMember]),
-        result.newPlayers.nonEmpty,
-        result.newSnapshots.nonEmpty,
-        result.newMemberships.nonEmpty
-      )
+      } yield {
+        val change = result.changes.head.changes.head
+        assertTrue(
+          result.resolvedIds.contains(pid3),
+          result.changes.size == 1,
+          change.isInstanceOf[NewMember],
+          change.timestamp == Times.t0, // API join time, not reconciliation time
+          result.newPlayers.nonEmpty,
+          result.newSnapshots.nonEmpty,
+          result.newMemberships.nonEmpty
+        )
+      }
     },
     test("existing player joins club") {
       val player4   = Player(pid4, Times.t0)
@@ -477,12 +486,16 @@ object TestMembershipApp extends ZIOSpecDefault {
         _      <- seedDb(players = List(player4), snapshots = List(snap4))
         client <- fakeChessComClient(responses)
         result <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, dbState, Times.t2)
-      } yield assertTrue(
-        result.resolvedIds.contains(pid4),
-        result.changes.size == 1,
-        result.changes.head.changes.exists(_.isInstanceOf[JoinedClub]),
-        result.newMemberships.nonEmpty
-      )
+      } yield {
+        val change = result.changes.head.changes.head
+        assertTrue(
+          result.resolvedIds.contains(pid4),
+          result.changes.size == 1,
+          change.isInstanceOf[JoinedClub],
+          change.timestamp == Times.t1, // API join time, not reconciliation time
+          result.newMemberships.nonEmpty
+        )
+      }
     },
     test("username change + status change") {
       val snap = PlayerSnapshot(pid5, Times.t0, Username("frank-old"), Active, None)
@@ -516,13 +529,17 @@ object TestMembershipApp extends ZIOSpecDefault {
       for {
         client <- fakeChessComClient(Map.empty)
         result <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, dbState, Times.t2)
-      } yield assertTrue(
-        result.resolvedIds.contains(pid3),
-        result.changes.size == 1,
-        result.changes.head.changes.exists(_.isInstanceOf[JoinedClub]),
-        result.newMemberships.nonEmpty,
-        result.newSnapshots.isEmpty
-      )
+      } yield {
+        val change = result.changes.head.changes.head
+        assertTrue(
+          result.resolvedIds.contains(pid3),
+          result.changes.size == 1,
+          change.isInstanceOf[JoinedClub],
+          change.timestamp == Times.t1, // API join time, not reconciliation time
+          result.newMemberships.nonEmpty,
+          result.newSnapshots.isEmpty
+        )
+      }
     },
     test("trust-mode: username change detected without API call") {
       val oldSnap = PlayerSnapshot(pid2, Times.t0, Username("charlie-old"), Active, None)
@@ -601,7 +618,7 @@ object TestMembershipApp extends ZIOSpecDefault {
   // ==========================================================================
 
   private def suiteClassifyDisappeared = suite("classifyDisappeared")(
-    test("active player left club → LeftClub") {
+    test("active player left club → LeftClub with now timestamp") {
       val snap = PlayerSnapshot(pid0, Times.t0, Username("alice"), Active, None)
       val mem  = ClubMember(clubId, pid0, Times.t0, None)
       val dbState = DbState(
@@ -620,20 +637,25 @@ object TestMembershipApp extends ZIOSpecDefault {
           ClubSlug("test-club"),
           Times.t2
         )
-      } yield assertTrue(
-        result.changes.size == 1,
-        result.changes.head.changes.exists(_.isInstanceOf[LeftClub]),
-        result.closedMemberships.nonEmpty
-      )
+      } yield {
+        val change = result.changes.head.changes.head
+        assertTrue(
+          result.changes.size == 1,
+          change.isInstanceOf[LeftClub],
+          change.timestamp == Times.t2, // detection time — no authoritative departure time
+          result.closedMemberships.nonEmpty,
+          result.closedMemberships.head.until.contains(Times.t2)
+        )
+      }
     },
-    test("closed player → AccountClosed") {
+    test("closed player → AccountClosed with lastOnline timestamp") {
       val snap = PlayerSnapshot(pid1, Times.t0, Username("bob"), Active, None)
       val mem  = ClubMember(clubId, pid1, Times.t0, None)
       val dbState = DbState(
         membersByPlayerId = Map(pid1 -> MemberState(snap, mem)),
         membersByUsername = Map(Username("bob") -> MemberState(snap, mem))
       )
-      val responses = Map("bob" -> apiPlayerJson(101, "bob", status = "closed"))
+      val responses = Map("bob" -> apiPlayerJson(101, "bob", status = "closed", lastOnline = Times.t1.getEpochSecond))
 
       for {
         client <- fakeChessComClient(responses)
@@ -645,12 +667,17 @@ object TestMembershipApp extends ZIOSpecDefault {
           ClubSlug("test-club"),
           Times.t2
         )
-      } yield assertTrue(
-        result.changes.size == 1,
-        result.changes.head.changes.exists(_.isInstanceOf[AccountClosed]),
-        result.newSnapshots.nonEmpty,
-        result.closedMemberships.nonEmpty
-      )
+      } yield {
+        val change = result.changes.head.changes.head
+        assertTrue(
+          result.changes.size == 1,
+          change.isInstanceOf[AccountClosed],
+          change.timestamp == Times.t1, // lastOnline, not reconciliation time
+          result.newSnapshots.nonEmpty,
+          result.closedMemberships.nonEmpty,
+          result.closedMemberships.head.until.contains(Times.t1) // until matches lastOnline
+        )
+      }
     },
     test("API 404 → Unresolvable") {
       val snap = PlayerSnapshot(pid2, Times.t0, Username("charlie"), Active, None)
