@@ -8,7 +8,7 @@ CCAS (Chess Club Admin System) is a Scala 3 application that pulls data from the
 
 ## Build & Test Commands
 
-This is an SBT project (Scala 3.8.2, SBT 1.12.1).
+This is an SBT project (Scala 3.8.2, SBT 1.12.8).
 
 - **Compile:** `sbt compile`
 - **Run all tests:** `sbt test`

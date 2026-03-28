@@ -4,7 +4,7 @@ Chess Club Admin System -- a Scala 3 / ZIO application that integrates with the 
 
 ## Tech Stack
 
-- Scala 3.8.2, SBT 1.12.1
+- Scala 3.8.2, SBT 1.12.8
 - ZIO 2.x (zio-http, zio-json, zio-config)
 - Magnum ORM + PostgreSQL 17
 - Docker Compose for local dev
