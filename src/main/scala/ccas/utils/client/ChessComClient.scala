@@ -9,7 +9,7 @@ import com.typesafe.config.ConfigFactory
 import zio.http.Method.GET
 import zio.http.*
 import zio.json.JsonDecoder
-import zio.{Chunk, Clock, Duration, Fiber, Ref, Schedule, Semaphore, Task, ZEnvironment, ZIO, ZLayer, durationInt, durationLong}
+import zio.{Chunk, Clock, Duration, Fiber, Ref, Schedule, Semaphore, Task, UIO, ZEnvironment, ZIO, ZLayer, durationInt, durationLong}
 
 import java.time.Instant
 
@@ -25,6 +25,7 @@ final class ChessComClient(
   activeRef: Ref[Int],
   rateLimitGate: Semaphore,
   lastRequestRef: Ref[Long],
+  responseTimeEma: Ref[Double],
   progressBar: ProgressBar,
   config: ChessComClient.ThrottleConfig
 ) {
@@ -45,8 +46,10 @@ final class ChessComClient(
 
   def get[T](url: URL)(using jsonDecoder: JsonDecoder[T]): Task[T] =
     (rateDelay *> semaphore.withPermit {
-      (activeRef.updateAndGet(_ + 1).flatMap(updateBar) *> rawGet(url))
-        .ensuring(activeRef.updateAndGet(_ - 1).flatMap(updateBar).ignore)
+      (activeRef.updateAndGet(_ + 1).flatMap(updateBar) *>
+        rawGet(url).timed.flatMap { case (duration, result) =>
+          updateResponseTimeEma(duration.toMillis).as(result)
+        }).ensuring(activeRef.updateAndGet(_ - 1).flatMap(updateBar).ignore)
     }).retry(retry429Schedule).retry(retryCfSchedule).retry(retryOnceSchedule).tapError { error =>
       val (msg, body) = error match {
         case e: HttpStatusException => (Some(e.statusCode.toString), Some(e.responseBody))
@@ -75,24 +78,36 @@ final class ChessComClient(
   // Adaptive throttle
   // ---------------------------------------------------------------------------
 
-  /** Enforce a minimum inter-request delay that scales with throttle depth.
-    * At full permits the base delay applies (~100ms); when throttled, the delay scales
-    * proportionally (base * maxPermits / currentMax). Uses a single-permit gate to
-    * serialize entry so concurrent callers are staggered correctly. Runs outside
-    * `semaphore.withPermit`, so no concurrency permit is held during any sleep.
+  /** Adaptive inter-request delay derived from an EMA of successful response times.
+    * Targets full permit utilization: delay = ema / currentMax. When throttled to fewer
+    * permits the delay increases proportionally, naturally slowing the request rate.
+    * Skipped during cold start (EMA = 0) where the semaphore alone governs concurrency.
+    * Uses a single-permit gate to serialize entry so concurrent callers stagger correctly.
+    * Runs outside `semaphore.withPermit`, so no concurrency permit is held during sleep.
     */
   private def rateDelay: Task[Unit] =
-    rateLimitGate.withPermit {
-      stateRef.get.flatMap { state =>
-        val scaledDelay = config.throttleDelay.toMillis * (config.maxPermits / state.currentMax)
-        for {
-          now  <- Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS)
-          last <- lastRequestRef.get
-          gap   = now - last
-          _    <- ZIO.whenDiscard(gap < scaledDelay)(ZIO.sleep((scaledDelay - gap).millis))
-          _    <- Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS).flatMap(lastRequestRef.set)
-        } yield ()
+    responseTimeEma.get.flatMap { ema =>
+      if (ema <= 0) ZIO.unit
+      else rateLimitGate.withPermit {
+        stateRef.get.flatMap { state =>
+          val targetDelay = (ema / state.currentMax).toLong
+          for {
+            now  <- Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS)
+            last <- lastRequestRef.get
+            gap   = now - last
+            _    <- ZIO.whenDiscard(gap < targetDelay)(ZIO.sleep((targetDelay - gap).millis))
+            _    <- Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS).flatMap(lastRequestRef.set)
+          } yield ()
+        }
       }
+    }
+
+  private val emaAlpha = 0.1
+
+  private def updateResponseTimeEma(responseMs: Long): UIO[Unit] =
+    responseTimeEma.update { ema =>
+      if (ema <= 0) responseMs.toDouble
+      else emaAlpha * responseMs + (1 - emaAlpha) * ema
     }
 
   /** Record a request outcome and trigger throttle-down if failure rate exceeds threshold.
@@ -249,7 +264,6 @@ object ChessComClient {
     * @param failureWindowSize Rolling window size for tracking success/failure outcomes.
     * @param failureThreshold Fraction of failures in the window (0.0–1.0) that triggers a throttle-down.
     * @param minSampleSize    Minimum outcomes in the window before the failure rate is evaluated.
-    * @param throttleDelay    Base inter-request delay, applied at all levels. Scales with throttle depth: actual delay = throttleDelay * (maxPermits / currentMax).
     */
   private[ccas] case class ThrottleConfig(
     maxPermits: Long,
@@ -259,8 +273,7 @@ object ChessComClient {
     cfRetryDelay: Duration,
     failureWindowSize: Int,
     failureThreshold: Double,
-    minSampleSize: Int,
-    throttleDelay: Duration
+    minSampleSize: Int
   )
 
   private def userAgentHeaders(contactEmail: String): Headers =
@@ -279,8 +292,7 @@ object ChessComClient {
       val minSample      = typesafeConfig.getInt("min-sample-size")
       val singleDelay    = typesafeConfig.getLong("single-retry-delay-seconds").seconds
       val cfDelay        = typesafeConfig.getLong("cf-retry-delay-seconds").seconds
-      val throttleDelay  = typesafeConfig.getLong("throttle-delay-millis").millis
-      val throttleConfig = ThrottleConfig(permits, cooldown, 1.second, singleDelay, cfDelay, windowSize, threshold, minSample, throttleDelay)
+      val throttleConfig = ThrottleConfig(permits, cooldown, 1.second, singleDelay, cfDelay, windowSize, threshold, minSample)
       for {
         contactEmail <- ZIO.attempt(typesafeConfig.getString("contact-email"))
         client       <- ZIO.service[Client]
@@ -293,11 +305,12 @@ object ChessComClient {
         activeRef    <- Ref.make(0)
         rateLimitGate <- Semaphore.make(1)
         lastReqRef   <- Ref.make(0L)
+        ema          <- Ref.make(0.0)
         bar          <- logger.progressBar
         _            <- ZIO.addFinalizer(reserveRef.get.flatMap(fibers => ZIO.foreachDiscard(fibers)(_.interrupt)))
       } yield ChessComClient(
         client, transactor, userAgentHeaders(contactEmail), logger,
-        semaphore, stateRef, reserveRef, adjustMutex, activeRef, rateLimitGate, lastReqRef, bar, throttleConfig
+        semaphore, stateRef, reserveRef, adjustMutex, activeRef, rateLimitGate, lastReqRef, ema, bar, throttleConfig
       )
     }
 }

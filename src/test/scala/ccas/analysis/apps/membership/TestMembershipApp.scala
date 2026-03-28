@@ -75,6 +75,7 @@ object TestMembershipApp extends ZIOSpecDefault {
       activeRef   <- Ref.make(0)
       rateLimitGate <- Semaphore.make(1)
       lastReqRef  <- Ref.make(0L)
+      ema         <- Ref.make(0.0)
       bar         <- TestCcasLogger.noopBar
     } yield {
       val routes: Routes[Any, Response] = Routes(
@@ -118,8 +119,9 @@ object TestMembershipApp extends ZIOSpecDefault {
         activeRef,
         rateLimitGate,
         lastReqRef,
+        ema,
         bar,
-        ChessComClient.ThrottleConfig(1, 30.seconds, 1.second, 5.seconds, 10.seconds, 20, 0.2, 10, zio.Duration.Zero)
+        ChessComClient.ThrottleConfig(1, 30.seconds, 1.second, 5.seconds, 10.seconds, 20, 0.2, 10)
       )
     }
 
