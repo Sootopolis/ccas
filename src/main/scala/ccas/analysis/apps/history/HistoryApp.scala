@@ -203,41 +203,64 @@ object HistoryApp extends ZIOAppDefault {
         s"  Members: ${allMembers.size}, Processed matches: $processedCount, Queried members: ${queriedIds.size}"
       )
 
-      // === Phase 2: Seed match IDs ===
-      _ <- CcasLogger.info("Phase 2: Seeding match IDs...")
-      (resolvedClubs, resolvedPlayers) <- retryUnresolvedClubs(client) <&> retryUnresolvedPlayers(client)
-      _ <- ZIO.whenDiscard(resolvedClubs > 0 || resolvedPlayers > 0) {
-        CcasLogger.info(s"  Resolved $resolvedClubs clubs, $resolvedPlayers players from previous runs")
-      }
-      _ <- ZIO.whenDiscard(full) {
-        CcasLogger.info("  --full: clearing member query history") *> HistoryMemberQuery.deleteClub(clubId)
-      }
-      effectiveQueriedIds = if (full) { Set.empty[PlayerId] } else { queriedIds }
-
-      seedClub <- seedFromClubMatches(client, clubId, clubSlug)
-      _        <- CcasLogger.info(s"  Club matches endpoint: $seedClub new match IDs")
-
-      memberSeed <-
-        seedFromMemberMatches(client, clubId, clubSlug, allMembers, effectiveQueriedIds, snapByPlayerId)
-      membersSkipped = allMembers.size - memberSeed.queried - memberSeed.failed
-      _ <- CcasLogger.info(
-        s"  Member match lists: ${memberSeed.seeded} new IDs (queried: ${memberSeed.queried}, skipped: $membersSkipped, failed: ${memberSeed.failed})"
-      )
-
-      seedStale <- seedStaleMatches(clubId, refresh)
-      _         <- CcasLogger.info(s"  Stale match refresh: $seedStale matches queued")
-
-      // === Phase 3: Process matches (BFS waves) ===
-      _ <- CcasLogger.info("Phase 3: Processing matches...")
+      // Setup for interrupt safety: create ProcessingContext and Phase 2 tracking Refs before entering the
+      // interrupt-guarded block so partial progress is always available to the onInterrupt handler.
       knownPlayersInit = latestSnaps.map(s => s.username.value -> s.playerId).toMap
-      ctx       <- ProcessingContext.make(client, clubId, clubSlug, knownPlayersInit)
-      waveStats <- processWaves(ctx).onInterrupt(
-        finalizeInterrupted(ctx, runId, startedAt, clubSlug, memberSeed, membersSkipped, seedClub, seedStale)
-          .provideEnvironment(ZEnvironment(logger, transactor))
-          .orDie
-      )
+      ctx           <- ProcessingContext.make(client, clubId, clubSlug, knownPlayersInit)
+      seedClubRef   <- Ref.make(0)
+      memberSeedRef <- Ref.make(MemberSeedResult(0, 0, 0, Nil))
+      seedStaleRef  <- Ref.make(0)
+
+      // === Phases 2-3: Seed + Process (interrupt-safe) ===
+      waveStats <- {
+        for {
+          // Phase 2: Seed match IDs
+          _ <- CcasLogger.info("Phase 2: Seeding match IDs...")
+          (resolvedClubs, resolvedPlayers) <- retryUnresolvedClubs(client) <&> retryUnresolvedPlayers(client)
+          _ <- ZIO.whenDiscard(resolvedClubs > 0 || resolvedPlayers > 0) {
+            CcasLogger.info(s"  Resolved $resolvedClubs clubs, $resolvedPlayers players from previous runs")
+          }
+          _ <- ZIO.whenDiscard(full) {
+            CcasLogger.info("  --full: clearing member query history") *> HistoryMemberQuery.deleteClub(clubId)
+          }
+          effectiveQueriedIds = if (full) { Set.empty[PlayerId] } else { queriedIds }
+
+          seedClub <- seedFromClubMatches(client, clubId, clubSlug)
+          _        <- seedClubRef.set(seedClub)
+          _        <- CcasLogger.info(s"  Club matches endpoint: $seedClub new match IDs")
+
+          memberSeed <-
+            seedFromMemberMatches(client, clubId, clubSlug, allMembers, effectiveQueriedIds, snapByPlayerId)
+          _ <- memberSeedRef.set(memberSeed)
+          membersSkipped = allMembers.size - memberSeed.queried - memberSeed.failed
+          _ <- CcasLogger.info(
+            s"  Member match lists: ${memberSeed.seeded} new IDs (queried: ${memberSeed.queried}, skipped: $membersSkipped, failed: ${memberSeed.failed})"
+          )
+
+          seedStale <- seedStaleMatches(clubId, refresh)
+          _         <- seedStaleRef.set(seedStale)
+          _         <- CcasLogger.info(s"  Stale match refresh: $seedStale matches queued")
+
+          // Phase 3: Process matches (BFS waves)
+          _ <- CcasLogger.info("Phase 3: Processing matches...")
+          ws <- processWaves(ctx)
+        } yield ws
+      }.onInterrupt {
+        for {
+          sc   <- seedClubRef.get
+          ms   <- memberSeedRef.get
+          ss   <- seedStaleRef.get
+          skip = allMembers.size - ms.queried - ms.failed
+          _ <- finalizeInterrupted(ctx, runId, startedAt, clubSlug, ms, skip, sc, ss)
+                 .provideEnvironment(ZEnvironment(logger, transactor)).orDie
+        } yield ()
+      }
 
       // === Phase 4: Finalize ===
+      seedClub   <- seedClubRef.get
+      memberSeed <- memberSeedRef.get
+      seedStale  <- seedStaleRef.get
+      membersSkipped = allMembers.size - memberSeed.queried - memberSeed.failed
       completedAt = Instant.now()
       totalStats = waveStats.copy(
         membersQueried = memberSeed.queried,
@@ -253,49 +276,83 @@ object HistoryApp extends ZIOAppDefault {
 
   // === Phase 2: Seeding ===
 
-  /** Retries resolution for clubs previously recorded in `unresolved_match_club`. On success, patches the
-    * `club_match` row with the resolved ClubId and removes the unresolved entry. Returns count of resolved clubs.
+  /** Retries resolution for clubs previously recorded in `unresolved_match_club`. Groups entries by slug so each
+    * unique club is resolved at most once. On success, patches all matching `club_match` rows and removes the
+    * unresolved entries. Returns total count of resolved entries.
     */
-  private def retryUnresolvedClubs(client: ChessComClient): RIO[Transactor, Int] =
+  private def retryUnresolvedClubs(client: ChessComClient): RIO[CcasLogger & Transactor, Int] =
     for {
       unresolved <- UnresolvedMatchClub.selectAll
-      resolved <- ZIO.filter(unresolved) { entry =>
-        Club.resolveOrFetch(client, entry.slug).flatMap {
-          case Some(clubId) =>
-            ClubMatch.updateTeamClubId(entry.matchId, entry.isTeam1, clubId) *>
-              UnresolvedMatchClub.delete(entry.matchId, entry.isTeam1).as(true)
-          case None => ZIO.succeed(false)
-        }.catchAll(_ => ZIO.succeed(false))
+      result <- if (unresolved.isEmpty) { ZIO.succeed(0) } else {
+        val grouped = unresolved.groupBy(_.slug)
+        val total = grouped.size
+        CcasLogger.info(s"  Retrying ${unresolved.size} unresolved clubs ($total unique)...") *>
+        ZIO.scoped {
+          for {
+            bar        <- CcasLogger.progressBar
+            counterRef <- Ref.make(0)
+            resolvedRef <- Ref.make(0)
+            _ <- ZIO.foreachDiscard(grouped.toList) { case (slug, entries) =>
+              Club.resolveOrFetch(client, slug).flatMap {
+                case Some(clubId) =>
+                  ZIO.foreachDiscard(entries) { entry =>
+                    ClubMatch.updateTeamClubId(entry.matchId, entry.isTeam1, clubId) *>
+                      UnresolvedMatchClub.delete(entry.matchId, entry.isTeam1)
+                  } *> resolvedRef.update(_ + entries.size)
+                case None => ZIO.unit
+              }.catchAll(_ => ZIO.unit) *>
+                counterRef.updateAndGet(_ + 1).flatMap(n => bar.print(n, total, s"  Retrying unresolved clubs: $n/$total"))
+            }
+            resolved <- resolvedRef.get
+          } yield resolved
+        }
       }
-    } yield resolved.size
+    } yield result
 
-  /** Retries resolution for players previously recorded in `unresolved_board_player`. On success, ensures the player
-    * exists in the DB, patches the `club_match_board` row with the resolved PlayerId, and removes the unresolved entry.
-    * Returns count of resolved players.
+  /** Retries resolution for players previously recorded in `unresolved_board_player`. Groups entries by username so
+    * each unique player is fetched at most once. On success, ensures the player exists in the DB, patches all matching
+    * `club_match_board` rows, and removes the unresolved entries. Returns total count of resolved entries.
     */
-  private def retryUnresolvedPlayers(client: ChessComClient): RIO[Transactor, Int] =
+  private def retryUnresolvedPlayers(client: ChessComClient): RIO[CcasLogger & Transactor, Int] =
     for {
       unresolved <- UnresolvedBoardPlayer.selectAll
-      resolved <- ZIO.filter(unresolved) { entry =>
-        (for {
-          apiPlayer <- client.get[ApiPlayer](ApiPlayer.getUrl(entry.username))
-          playerId = apiPlayer.playerId
-          _ <- Player.selectId(playerId).flatMap {
-            case Some(_) => ZIO.unit
-            case None =>
-              val joined = Instant.ofEpochSecond(apiPlayer.joined)
-              connectZIO {
-                sql"""INSERT INTO player (player_id, joined) VALUES ($playerId, $joined)
-                      ON CONFLICT (player_id) DO NOTHING""".update.run()
-              } *> PlayerSnapshot.insert(PlayerSnapshot(
-                playerId, Instant.now(), entry.username, apiPlayer.status.category, apiPlayer.title
-              )).unit
-          }
-          _ <- ClubMatchBoard.updatePlayerId(entry.matchId, entry.board, entry.isTeam1, playerId)
-          _ <- UnresolvedBoardPlayer.delete(entry.matchId, entry.board, entry.isTeam1)
-        } yield true).catchAll(_ => ZIO.succeed(false))
+      result <- if (unresolved.isEmpty) { ZIO.succeed(0) } else {
+        val grouped = unresolved.groupBy(_.username)
+        val total = grouped.size
+        CcasLogger.info(s"  Retrying ${unresolved.size} unresolved players ($total unique)...") *>
+        ZIO.scoped {
+          for {
+            bar        <- CcasLogger.progressBar
+            counterRef <- Ref.make(0)
+            resolvedRef <- Ref.make(0)
+            _ <- ZIO.foreachDiscard(grouped.toList) { case (username, entries) =>
+              (for {
+                apiPlayer <- client.get[ApiPlayer](ApiPlayer.getUrl(username))
+                playerId = apiPlayer.playerId
+                _ <- Player.selectId(playerId).flatMap {
+                  case Some(_) => ZIO.unit
+                  case None =>
+                    val joined = Instant.ofEpochSecond(apiPlayer.joined)
+                    connectZIO {
+                      sql"""INSERT INTO player (player_id, joined) VALUES ($playerId, $joined)
+                            ON CONFLICT (player_id) DO NOTHING""".update.run()
+                    } *> PlayerSnapshot.insert(PlayerSnapshot(
+                      playerId, Instant.now(), username, apiPlayer.status.category, apiPlayer.title
+                    )).unit
+                }
+                _ <- ZIO.foreachDiscard(entries) { entry =>
+                  ClubMatchBoard.updatePlayerId(entry.matchId, entry.board, entry.isTeam1, playerId) *>
+                    UnresolvedBoardPlayer.delete(entry.matchId, entry.board, entry.isTeam1)
+                }
+                _ <- resolvedRef.update(_ + entries.size)
+              } yield ()).catchAll(_ => ZIO.unit) *>
+                counterRef.updateAndGet(_ + 1).flatMap(n => bar.print(n, total, s"  Retrying unresolved players: $n/$total"))
+            }
+            resolved <- resolvedRef.get
+          } yield resolved
+        }
       }
-    } yield resolved.size
+    } yield result
 
   /** Fetches the club's match listing endpoint and inserts any not-yet-known match IDs as pending. */
   private[history] def seedFromClubMatches(
