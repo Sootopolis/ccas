@@ -120,7 +120,7 @@ object RefApp extends ZIOAppDefault {
 
   // trigger accepted for consistency with other app entry points but not persisted (no run table)
   @nowarn("msg=unused")
-  def populate(trigger: RunTrigger = RunTrigger.Cli, outputDir: String = "_ccas"): RIO[CcasLogger & ChessComClient & Transactor, Unit] =
+  def populate(trigger: RunTrigger = RunTrigger.Cli, outputDir: Option[String] = Some("_ccas")): RIO[CcasLogger & ChessComClient & Transactor, Unit] =
     for {
       startedAt <- ZIO.succeed(Instant.now())
       client    <- ZIO.service[ChessComClient]
@@ -188,7 +188,7 @@ object RefApp extends ZIOAppDefault {
         startedAt = startedAt, completedAt = completedAt,
         failedQueries = failed, failedUrlSources = failedSrc
       ))
-      _ <- OutputFile.writeAndLogGlobal("ref", report, outputDir)
+      _ <- ZIO.whenCaseDiscard(outputDir) { case Some(dir) => OutputFile.writeAndLogGlobal("ref", report, dir) }
     } yield ()
 
   // --- Report ---

@@ -262,7 +262,7 @@ object TestRefApp extends ZIOSpecDefault {
     } yield ()
 
   private def runPopulate(client: ChessComClient): RIO[Scope & Transactor, Unit] =
-    RefApp.populate(outputDir = "_test").provideSomeLayer(ZLayer.succeed(client) ++ CcasLogger.live(showProgress = false))
+    RefApp.populate(outputDir = None).provideSomeLayer(ZLayer.succeed(client) ++ CcasLogger.live(showProgress = false))
 
   // --- Spec ---
 
