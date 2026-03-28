@@ -15,7 +15,7 @@ import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Tourname
 import ccas.api.player.{ApiPlayer, ApiPlayerMatches, ApiPlayerTournaments}
 import ccas.api.player.ApiPlayerMatches.ApiPlayerMatch
 import ccas.api.tournament.ApiTournamentRound
-import ccas.utils.{CcasLogger, OutputFile}
+import ccas.utils.{CcasLogger, OutputFile, display}
 import ccas.utils.client.{ChessComClient, HttpStatusException}
 import ccas.utils.errors.safeMessage
 import ccas.utils.sql.DataSourceLayer
@@ -157,7 +157,7 @@ object RefApp extends ZIOAppDefault {
       )
       completedAt = Instant.now()
       duration    = JDuration.between(startedAt, completedAt)
-      _ <- CcasLogger.info(s"Duration: ${duration.toMinutes}m ${duration.toSecondsPart}s")
+      _ <- CcasLogger.info(s"Duration: ${duration.display}")
       // Output report
       failed              <- ctx.failedUrls.get
       failedSrc           <- ctx.failedUrlSource.get
@@ -204,7 +204,7 @@ object RefApp extends ZIOAppDefault {
     sb.append("=== Ref Resolution Report ===\n\n")
     sb.append(s"Started:   ${d.startedAt}\n")
     sb.append(s"Completed: ${d.completedAt}\n")
-    sb.append(s"Duration:  ${duration.toMinutes}m ${duration.toSecondsPart}s\n\n")
+    sb.append(s"Duration:  ${duration.display}\n\n")
 
     sb.append("--- Clubs ---\n")
     sb.append(s"Total:          ${d.clubsTotal}\n")

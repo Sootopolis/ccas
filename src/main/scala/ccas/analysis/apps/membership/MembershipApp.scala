@@ -2,13 +2,14 @@ package ccas.analysis.apps.membership
 
 import ccas.analysis.apps.membership.MembershipChange.*
 import ccas.analysis.tables.*
+import ccas.analysis.apps.ref.RefHelpers
 import ccas.api.club.{ApiClub, ApiClubMembers}
-import ccas.api.clubmatch.{ApiDailyMatch, ApiLiveMatch, TeamMatchPlayerStarted, TeamMatchTeams}
+import ccas.api.clubmatch.TeamMatchPlayerStarted
 import ccas.api.misc.enums.PlayerStatusCategory
-import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username}
+import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
 import ccas.api.player.{ApiPlayer, ApiPlayerClubs}
 import ccas.api.tournament.ApiTournament
-import ccas.utils.{CcasLogger, OutputFile}
+import ccas.utils.{CcasLogger, OutputFile, display}
 import ccas.utils.client.ChessComClient
 import ccas.utils.errors.{BadRequestException, NotFoundException}
 import ccas.utils.sql.DataSourceLayer
@@ -483,7 +484,7 @@ object MembershipApp extends ZIOAppDefault {
     ref: PlayerMatchRef,
     oldUsername: Username
   ): Task[Option[Username]] =
-    fetchTeamMatchTeams(client, ref.matchId, ref.isLive).map { teams =>
+    RefHelpers.fetchTeamMatchTeams(client, ref.matchId, ref.isLive).map { teams =>
       val team = if (ref.isTeam1) { teams.team1 }
       else { teams.team2 }
       val boardSuffix = s"/${ref.boardIdx}"
@@ -500,14 +501,6 @@ object MembershipApp extends ZIOAppDefault {
     client.get[ApiTournament](ApiTournament.getUrl(ref.tournamentSlug)).map { tournament =>
       tournament.players.lift(ref.playerIdx).map(_.username).filter(_ != oldUsername)
     }.catchAll(_ => ZIO.none)
-
-  private def fetchTeamMatchTeams(
-    client: ChessComClient,
-    matchId: ClubMatchId,
-    isLive: Boolean
-  ): Task[TeamMatchTeams] =
-    if (isLive) { client.get[ApiLiveMatch](ApiLiveMatch.getUrl(matchId)).map(_.teams) }
-    else { client.get[ApiDailyMatch](ApiDailyMatch.getUrl(matchId)).map(_.teams) }
 
   private def withNameFallback[Name, T](
     name: Name,
@@ -528,7 +521,7 @@ object MembershipApp extends ZIOAppDefault {
       clubOpt <- Club.selectBySlug(oldUrlName)
       refOpt  <- ZIO.foreach(clubOpt)(club => ClubMatchRef.selectId(club.clubId)).map(_.flatten)
       result <- ZIO.foreach(refOpt) { ref =>
-        fetchTeamMatchTeams(client, ref.matchId, ref.isLive).map { teams =>
+        RefHelpers.fetchTeamMatchTeams(client, ref.matchId, ref.isLive).map { teams =>
           val team = if (ref.isTeam1) { teams.team1 }
           else { teams.team2 }
           team.`@id`.path.segments.lastOption.map(ClubSlug.wrap).filter(_ != oldUrlName)
@@ -569,19 +562,18 @@ object MembershipApp extends ZIOAppDefault {
       completedAt = completedAt
     )
 
-  private def persist(b: PhaseBResult, c: PhaseCResult): RIO[Transactor, Unit] =
+  private def persist(b: PhaseBResult, c: PhaseCResult): RIO[Transactor, Unit] = {
+    val allSnapshots    = b.newSnapshots ++ c.newSnapshots
+    val allClosedMships = b.closedMemberships ++ c.closedMemberships
     for {
       _ <- ZIO.whenDiscard(b.newPlayers.nonEmpty)(Player.insertBatch(b.newPlayers))
       _ <- ZIO.collectAllParDiscard(List(
-        ZIO.whenDiscard((b.newSnapshots ++ c.newSnapshots).nonEmpty)(
-          PlayerSnapshot.insertBatch(b.newSnapshots ++ c.newSnapshots)
-        ),
+        ZIO.whenDiscard(allSnapshots.nonEmpty)(PlayerSnapshot.insertBatch(allSnapshots)),
         ZIO.whenDiscard(b.newMemberships.nonEmpty)(ClubMember.insertBatch(b.newMemberships)),
-        ZIO.whenDiscard((b.closedMemberships ++ c.closedMemberships).nonEmpty)(
-          ClubMember.updateBatch(b.closedMemberships ++ c.closedMemberships)
-        )
+        ZIO.whenDiscard(allClosedMships.nonEmpty)(ClubMember.updateBatch(allClosedMships))
       ))
     } yield ()
+  }
 
   // --- Reporting ---
 
@@ -591,7 +583,7 @@ object MembershipApp extends ZIOAppDefault {
     val duration = JDuration.between(result.startedAt, result.completedAt)
     for {
       _ <- CcasLogger.info(s"=== Reconciliation Complete ===")
-      _ <- CcasLogger.info(s"Duration:           ${duration.toMinutes}m ${duration.toSecondsPart}s")
+      _ <- CcasLogger.info(s"Duration:           ${duration.display}")
       _ <- CcasLogger.info(s"Total members:      ${result.currentMemberCount} ($sign$delta)")
       _ <- CcasLogger.info(s"New players:        ${result.newPlayers.size}")
       _ <- CcasLogger.info(s"New snapshots:      ${result.newSnapshots.size}")
@@ -627,7 +619,7 @@ object MembershipApp extends ZIOAppDefault {
     val sign     = if (delta >= 0) "+" else ""
     val header = s"""Started:   ${result.startedAt}
                     |Completed: ${result.completedAt}
-                    |Duration:  ${duration.toMinutes}m ${duration.toSecondsPart}s
+                    |Duration:  ${duration.display}
                     |
                     |=== Reconciliation Complete ===
                     |Total members:      ${result.currentMemberCount} ($sign$delta)

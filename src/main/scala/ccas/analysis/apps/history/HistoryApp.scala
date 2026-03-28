@@ -17,7 +17,7 @@ import ccas.utils.errors.BadRequestException
 import ccas.utils.sql.DataSourceLayer
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.SqlZioTypes.{connectZIO, withTransaction}
-import ccas.utils.{CcasLogger, OutputFile, ProgressBar}
+import ccas.utils.{CcasLogger, OutputFile, ProgressBar, display}
 
 object HistoryApp extends ZIOAppDefault {
   private val help = "Usage: HistoryApp <club-slug> [--full] [--refresh]"
@@ -881,7 +881,7 @@ object HistoryApp extends ZIOAppDefault {
     val duration = JDuration.between(startedAt, completedAt)
     for {
       _ <- CcasLogger.info("=== History Discovery Complete ===")
-      _ <- CcasLogger.info(s"Duration: ${duration.toMinutes}m ${duration.toSecondsPart}s")
+      _ <- CcasLogger.info(s"Duration: ${duration.display}")
       _ <- CcasLogger.info(
         s"Members queried: ${stats.membersQueried} | skipped: ${stats.membersSkipped} | failed: ${stats.membersFailed}"
       )
@@ -907,7 +907,7 @@ object HistoryApp extends ZIOAppDefault {
     sb.append(s"=== History Discovery Report: $clubSlug ===\n\n")
     sb.append(s"Started:   $startedAt\n")
     sb.append(s"Completed: $completedAt\n")
-    sb.append(s"Duration:  ${duration.toMinutes}m ${duration.toSecondsPart}s\n\n")
+    sb.append(s"Duration:  ${duration.display}\n\n")
 
     sb.append("--- Members ---\n")
     sb.append(s"Queried: ${stats.membersQueried}\n")

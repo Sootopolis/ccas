@@ -12,11 +12,10 @@ import ccas.analysis.tables.*
 import ccas.api.club.{ApiClub, ApiClubMatches, ApiClubMembers}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
 import ccas.api.player.ApiPlayer
-import ccas.utils.CcasLogger
+import ccas.utils.{CcasLogger, OutputFile, display}
 import ccas.utils.client.ChessComClient
 import ccas.utils.errors.{BadRequestException, NotFoundException}
 import ccas.utils.sql.DataSourceLayer
-import ccas.utils.OutputFile
 
 object RecruitmentApp extends ZIOAppDefault {
 
@@ -186,7 +185,7 @@ object RecruitmentApp extends ZIOAppDefault {
           finalRun    = RecruitmentRun(runId, clubId, criteria.criteriaId, trigger, now, Some(completedAt), invited.size)
           _ <- RecruitmentRun.update(finalRun)
           _ <- CcasLogger.info(s"=== $label ===")
-          _ <- CcasLogger.info(s"Duration: ${duration.toMinutes}m ${duration.toSecondsPart}s")
+          _ <- CcasLogger.info(s"Duration: ${duration.display}")
           _ <- CcasLogger.info(s"Candidates evaluated: $evalCount")
           _ <- CcasLogger.info(s"Invited: ${invited.size}")
           _ <- ZIO.whenDiscard(deferredCount > 0)(CcasLogger.info(s"Deferred: $deferredCount"))
@@ -280,7 +279,7 @@ object RecruitmentApp extends ZIOAppDefault {
     completedAt: Instant
   ): String = {
     val duration = JDuration.between(startedAt, completedAt)
-    val timing   = s"Started:   $startedAt\nCompleted: $completedAt\nDuration:  ${duration.toMinutes}m ${duration.toSecondsPart}s\n\n"
+    val timing   = s"Started:   $startedAt\nCompleted: $completedAt\nDuration:  ${duration.display}\n\n"
     val stats    = s"Evaluated: $evaluatedCount | Invited: ${usernames.size}"
     val header   = usernames.mkString(" ")
     val detail   = usernames.map(name => s"$name ${ApiPlayer.getProfileUrl(name)}").mkString("\n")
