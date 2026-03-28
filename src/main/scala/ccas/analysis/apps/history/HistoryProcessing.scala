@@ -1,0 +1,570 @@
+package ccas.analysis.apps.history
+
+import java.time.Instant
+import com.augustnagro.magnum.{Transactor, sql}
+import zio.{Promise, RIO, Ref, Task, UIO, ZIO}
+import zio.http.URL
+import ccas.analysis.tables.*
+import ccas.api.clubmatch.{ApiDailyMatch, ApiLiveMatch}
+import ccas.api.clubmatch.ApiDailyMatch.*
+import ccas.api.misc.enums.*
+import ccas.api.misc.subtypes.*
+import ccas.api.player.{ApiPlayer, ApiPlayerClubs}
+import ccas.utils.{CcasLogger, ProgressBar}
+import ccas.utils.sql.DbCodecs.given
+import ccas.utils.sql.SqlZioTypes.{connectZIO, withTransaction}
+import HistoryUtils.*
+
+private[history] object HistoryProcessing {
+
+  private val BatchSize = 500
+
+  // === BFS Wave Processing ===
+
+  /** BFS wave loop: processes pending matches in batches, discovers new players, seeds their match lists,
+    * and repeats until no new pending matches remain. Returns accumulated stats.
+    */
+  def processWaves(ctx: ProcessingContext): RIO[CcasLogger & Transactor, RunStats] = {
+    def waveLoop(waveCount: Int, waveDetails: List[(Int, Int)]): RIO[CcasLogger & Transactor, RunStats] =
+      for {
+        pendingCount <- HistoryPendingMatch.countNew(ctx.clubId)
+        result <- if (pendingCount == 0) { readStats(ctx, waveCount, waveDetails) } else {
+          val wave = waveCount + 1
+          for {
+            _ <- CcasLogger.info(s"  Wave $wave: $pendingCount matches to process")
+            _ <- ctx.newPlayers.set(Set.empty)
+            beforeCount <- ctx.matchesProcessed.get
+
+            waveCounter <- Ref.make(0)
+            _ <- ZIO.scoped {
+              CcasLogger.progressBar.flatMap(waveBar => processAllPending(ctx, waveBar, waveCounter, pendingCount))
+            }
+
+            afterCount <- ctx.matchesProcessed.get
+            failedCount <- ctx.matchesFailed.get
+            waveProcessed = afterCount - beforeCount
+            _ <- CcasLogger.info(s"  Wave $wave complete: $waveProcessed processed, $failedCount failed total")
+
+            // Seed matches for newly discovered players
+            newPlayers <- ctx.newPlayers.get
+            _ <- ZIO.whenDiscard(newPlayers.nonEmpty) {
+              CcasLogger.info(s"  Querying match lists for ${newPlayers.size} discovered players...") *>
+                ZIO.foreachParDiscard(newPlayers) { dp =>
+                  HistorySeeding.seedMatchesForPlayer(ctx.client, ctx.clubId, ctx.clubSlug, dp.playerId, dp.username)
+                    .catchAll {
+                      error => CcasLogger.warn(s"  ${dp.username}: failed to seed — ${error.getMessage}")
+                    }
+                }
+            }
+
+            newPendingNew <- HistoryPendingMatch.countNew(ctx.clubId)
+            updatedDetails = waveDetails :+ (wave, waveProcessed)
+            r <-
+              if (newPendingNew > 0 && newPlayers.nonEmpty) { waveLoop(wave, updatedDetails) }
+              else {
+                for {
+                  pendingTotal <- HistoryPendingMatch.count(ctx.clubId)
+                  stats <- readStats(ctx, wave, updatedDetails)
+                } yield stats.copy(pendingRemaining = pendingTotal.toInt)
+              }
+          } yield r
+        }
+      } yield result
+
+    waveLoop(0, Nil)
+  }
+
+  private def processAllPending(
+    ctx: ProcessingContext,
+    bar: ProgressBar,
+    counter: Ref[Int],
+    waveTotal: Long
+  ): RIO[CcasLogger & Transactor, Unit] =
+    for {
+      batch <- HistoryPendingMatch.selectClubBatch(ctx.clubId, BatchSize)
+      _ <- ZIO.whenDiscard(batch.nonEmpty) {
+        processMatchBatch(ctx, batch, bar, counter, waveTotal) *> processAllPending(ctx, bar, counter, waveTotal)
+      }
+    } yield ()
+
+  private def processMatchBatch(
+    ctx: ProcessingContext,
+    pending: List[HistoryPendingMatch],
+    bar: ProgressBar,
+    counter: Ref[Int],
+    waveTotal: Long
+  ): RIO[CcasLogger & Transactor, Unit] =
+    ZIO.foreachParDiscard(pending) { pm =>
+      processMatch(ctx, pm.matchId, pm.isLive)
+        .zipLeft(ctx.matchesProcessed.update(_ + 1))
+        .catchAll { error =>
+          ctx.matchesFailed.update(_ + 1) *>
+            ctx.failedMatches.update(_ :+ (MatchKey(pm.matchId, pm.isLive), error.getMessage)) *>
+            HistoryPendingMatch.updateStatus(ctx.clubId, pm.matchId, pm.isLive, PendingMatchStatus.ApiError) *>
+            CcasLogger.warn(s"    Match ${pm.matchId}${if (pm.isLive) " (live)" else ""}: ${error.getMessage}")
+        } *> counter.updateAndGet(_ + 1).flatMap { n =>
+        bar.print(n, waveTotal.toInt, s"    Processing matches: $n/$waveTotal")
+      }
+    }
+
+  private def processMatch(
+    ctx: ProcessingContext,
+    matchId: ClubMatchId,
+    isLive: Boolean
+  ): RIO[CcasLogger & Transactor, Unit] =
+    if (isLive) { processLiveMatch(ctx, matchId) }
+    else { processDailyMatch(ctx, matchId) }
+
+  /** Fetches a daily match from the API, resolves team clubs, builds and persists board rows.
+    * Marks the match Unidentified if the target club is not found in either team (data saved, BFS skipped).
+    */
+  private def processDailyMatch(ctx: ProcessingContext, matchId: ClubMatchId): RIO[CcasLogger & Transactor, Unit] =
+    for {
+      dailyMatch <- fetchMatch(ctx, matchId)
+
+      // Resolve both team club IDs symmetrically
+      (team1ClubId, team2ClubId) <-
+        resolveClubIdFromTeamUrl(ctx, dailyMatch.teams.team1.`@id`) <&>
+        resolveClubIdFromTeamUrl(ctx, dailyMatch.teams.team2.`@id`)
+
+      _ <- trackUnresolvedClub(matchId, isTeam1 = true, dailyMatch.teams.team1.`@id`, team1ClubId) <&>
+           trackUnresolvedClub(matchId, isTeam1 = false, dailyMatch.teams.team2.`@id`, team2ClubId)
+
+      clubMatch = buildClubMatchRow(matchId, dailyMatch, team1ClubId, team2ClubId)
+
+      // Determine our team position from resolved IDs
+      weAreTeam1: Option[Boolean] =
+        if (team1ClubId.contains(ctx.clubId)) { Some(true) }
+        else if (team2ClubId.contains(ctx.clubId)) { Some(false) }
+        else { None }
+
+      boardRows <- buildBoardRows(ctx, matchId, dailyMatch, weAreTeam1, clubMatch.startTime)
+
+      _ <- withTransaction {
+        for {
+          _ <- ClubMatch.upsert(clubMatch)
+          _ <- ClubMatchBoard.deleteMatch(matchId)
+          _ <- ClubMatchBoard.insertBatch(boardRows)
+          _ <- if (weAreTeam1.isDefined) {
+            HistoryPendingMatch.delete(ctx.clubId, matchId, isLive = false)
+          } else {
+            HistoryPendingMatch.updateStatus(ctx.clubId, matchId, false, PendingMatchStatus.Unidentified)
+          }
+        } yield ()
+      }
+      _ <- ZIO.whenDiscard(weAreTeam1.isEmpty) {
+        ctx.matchesUnidentified.update(_ + 1) *>
+          CcasLogger.warn(s"    Match $matchId: club ${ctx.clubId} not found in either team (data saved, BFS skipped)")
+      }
+    } yield ()
+
+  /** Fetches a live match and resolves its players for BFS expansion. No board rows are persisted for live matches. */
+  private def processLiveMatch(ctx: ProcessingContext, matchId: ClubMatchId): RIO[CcasLogger & Transactor, Unit] =
+    for {
+      liveMatch <- fetchLiveMatch(ctx, matchId)
+
+      // Resolve both team club IDs (for caching/persistence)
+      _ <- resolveClubIdFromTeamUrl(ctx, liveMatch.teams.team1.`@id`) <&>
+           resolveClubIdFromTeamUrl(ctx, liveMatch.teams.team2.`@id`)
+
+      // Discover players from both teams (for BFS wave expansion)
+      startTime = Some(Instant.ofEpochSecond(liveMatch.startTime))
+      _ <- ZIO.foreachParDiscard(liveMatch.teams.team1.players ++ liveMatch.teams.team2.players) { p =>
+        resolvePlayerId(ctx, p.username, isOurTeam = false, startTime)
+      }
+
+      _ <- HistoryPendingMatch.delete(ctx.clubId, matchId, isLive = true)
+    } yield ()
+
+  // === Board Row Construction ===
+
+  /** Constructs ClubMatchBoard rows by resolving player IDs and normalizing game outcomes.
+    * Players that can't be resolved are recorded in `unresolved_board_player` and the board row gets a None player ID.
+    */
+  private def buildBoardRows(
+    ctx: ProcessingContext,
+    matchId: ClubMatchId,
+    dailyMatch: ApiDailyMatch,
+    weAreTeam1: Option[Boolean],
+    matchStartTime: Option[Instant]
+  ): RIO[CcasLogger & Transactor, List[ClubMatchBoard]] =
+    dailyMatch match {
+      case _: ApiDailyMatchRegistered => ZIO.succeed(Nil)
+      case _ =>
+        val teams        = dailyMatch.teams
+        val team1Fp = teams.team1.fairPlayRemovals.map(_.value)
+        val team2Fp = teams.team2.fairPlayRemovals.map(_.value)
+
+        val team1ByBoard: Map[Int, MatchPlayerStarted] = teams.team1.players.collect {
+          case p: MatchPlayerStarted => p.board.path.segments.last.toInt -> p
+        }.toMap
+        val team2ByBoard: Map[Int, MatchPlayerStarted] = teams.team2.players.collect {
+          case p: MatchPlayerStarted => p.board.path.segments.last.toInt -> p
+        }.toMap
+
+        val allBoards = (team1ByBoard.keySet ++ team2ByBoard.keySet).toList.sorted
+
+        ZIO.foreachPar(allBoards) { boardNum =>
+          for {
+            t1Player <- ZIO.fromOption(team1ByBoard.get(boardNum))
+              .orElseFail(Exception(s"Match $matchId board $boardNum: missing team1 player"))
+            t2Player <- ZIO.fromOption(team2ByBoard.get(boardNum))
+              .orElseFail(Exception(s"Match $matchId board $boardNum: missing team2 player"))
+
+            t1Username = t1Player.username
+            t2Username = t2Player.username
+            t1FairPlay = team1Fp.contains(t1Username.value)
+            t2FairPlay = team2Fp.contains(t2Username.value)
+
+            t1Pid <- resolvePlayerId(ctx, t1Username, isOurTeam = weAreTeam1.contains(true), matchStartTime)
+            t2Pid <- resolvePlayerId(ctx, t2Username, isOurTeam = weAreTeam1.contains(false), matchStartTime)
+            _ <- ZIO.whenDiscard(t1Pid.isEmpty)(
+              UnresolvedBoardPlayer.insert(matchId, boardNum, isTeam1 = true, t1Username).ignore
+            )
+            _ <- ZIO.whenDiscard(t2Pid.isEmpty)(
+              UnresolvedBoardPlayer.insert(matchId, boardNum, isTeam1 = false, t2Username).ignore
+            )
+          } yield {
+            val (g1Winner, g1Detail) =
+              normalizeGameOutcome(t1Player.playedAsWhite, t2Player.playedAsBlack, whiteTeamIsTeam1 = true)
+            val (g2Winner, g2Detail) =
+              normalizeGameOutcome(t2Player.playedAsWhite, t1Player.playedAsBlack, whiteTeamIsTeam1 = false)
+            val (t1Score, t2Score) = computeScoreX2(g1Winner, g2Winner, t1FairPlay, t2FairPlay)
+
+            ClubMatchBoard(
+              matchId = matchId,
+              board = boardNum,
+              team1PlayerId = t1Pid,
+              team1FairPlay = t1FairPlay,
+              team2PlayerId = t2Pid,
+              team2FairPlay = t2FairPlay,
+              game1Winner = g1Winner,
+              game1Detail = g1Detail,
+              game2Winner = g2Winner,
+              game2Detail = g2Detail,
+              team1ScoreX2 = t1Score,
+              team2ScoreX2 = t2Score
+            )
+          }
+        }
+    }
+
+  // === Game Outcome Normalization ===
+
+  private[history] def normalizeGameOutcome(
+    whiteResult: Option[GameResultDetail],
+    blackResult: Option[GameResultDetail],
+    whiteTeamIsTeam1: Boolean
+  ): (Option[BoardGameWinner], Option[GameResultDetail]) =
+    (whiteResult, blackResult) match {
+      case (Some(GameResultDetail.Win), Some(loss)) =>
+        val winner = if (whiteTeamIsTeam1) { BoardGameWinner.Team1 }
+        else { BoardGameWinner.Team2 }
+        (Some(winner), Some(loss))
+      case (Some(loss), Some(GameResultDetail.Win)) =>
+        val winner = if (whiteTeamIsTeam1) { BoardGameWinner.Team2 }
+        else { BoardGameWinner.Team1 }
+        (Some(winner), Some(loss))
+      case (Some(draw), Some(_)) if draw.category == GameResult.Draw =>
+        (Some(BoardGameWinner.Draw), Some(draw))
+      case (None, None) =>
+        (None, None)
+      case _ =>
+        // Mismatched state (e.g., one side played, other didn't) — treat as not played
+        (None, None)
+    }
+
+  private[history] def computeScoreX2(
+    game1Winner: Option[BoardGameWinner],
+    game2Winner: Option[BoardGameWinner],
+    team1FairPlay: Boolean,
+    team2FairPlay: Boolean
+  ): (Short, Short) = {
+    def gameScore(winner: Option[BoardGameWinner]): (Int, Int) =
+      winner match {
+        case None                                      => (0, 0)
+        case Some(_) if team1FairPlay && team2FairPlay => (1, 1)
+        case Some(_) if team1FairPlay                  => (0, 2)
+        case Some(_) if team2FairPlay                  => (2, 0)
+        case Some(BoardGameWinner.Team1)               => (2, 0)
+        case Some(BoardGameWinner.Team2)               => (0, 2)
+        case Some(BoardGameWinner.Draw)                => (1, 1)
+      }
+
+    val (g1t1, g1t2) = gameScore(game1Winner)
+    val (g2t1, g2t2) = gameScore(game2Winner)
+    ((g1t1 + g2t1).toShort, (g1t2 + g2t2).toShort)
+  }
+
+  // === Player Resolution ===
+
+  /** Resolves a username to a PlayerId, checking the in-memory cache first. If unknown, discovers the player via the
+    * API (creating Player and PlayerSnapshot records). Returns None for unresolvable players (closed/deleted accounts).
+    */
+  private def resolvePlayerId(
+    ctx: ProcessingContext,
+    username: Username,
+    isOurTeam: Boolean,
+    matchStartTime: Option[Instant]
+  ): RIO[CcasLogger & Transactor, Option[PlayerId]] = {
+    val key = username.value
+    ctx.knownPlayers.get.map(_.get(key)).flatMap {
+      case Some(playerId) => ctx.playersKnown.update(_ + 1).as(Some(playerId))
+      case None => discoverPlayer(ctx, username, key, isOurTeam, matchStartTime)
+    }
+  }
+
+  /** Gates the full discovery flow (API fetch + DB insert) behind a Promise so that concurrent fibers resolving the
+    * same unknown player share a single API call and a single DB insert.
+    */
+  private def discoverPlayer(
+    ctx: ProcessingContext,
+    username: Username,
+    key: String,
+    isOurTeam: Boolean,
+    matchStartTime: Option[Instant]
+  ): RIO[CcasLogger & Transactor, Option[PlayerId]] =
+    for {
+      promise <- Promise.make[Throwable, Option[PlayerId]]
+      action <- ctx.discoveryCache.modify { m =>
+        m.get(key) match {
+          case Some(existing) => (existing.await, m)
+          case None           => (doDiscoverPlayer(ctx, username, key, promise, isOurTeam, matchStartTime), m + (key -> promise))
+        }
+      }
+      result <- action
+    } yield result
+
+  private def doDiscoverPlayer(
+    ctx: ProcessingContext,
+    username: Username,
+    key: String,
+    promise: Promise[Throwable, Option[PlayerId]],
+    isOurTeam: Boolean,
+    matchStartTime: Option[Instant]
+  ): RIO[CcasLogger & Transactor, Option[PlayerId]] = {
+    val work = for {
+      apiPlayer <- ctx.client.get[ApiPlayer](ApiPlayer.getUrl(username))
+      playerId       = apiPlayer.playerId
+      statusCategory = apiPlayer.status.category
+      now            = Instant.now()
+
+      result <- Player.selectId(playerId).flatMap {
+        case Some(_) =>
+          // Player exists — username change. Add new snapshot.
+          val snapshot = PlayerSnapshot(playerId, now, username, statusCategory, apiPlayer.title)
+          PlayerSnapshot.insert(snapshot) *>
+            ctx.knownPlayers.update(_ + (key -> playerId)).as(Some(playerId))
+
+        case None =>
+          // Brand new player — ON CONFLICT DO NOTHING handles concurrent inserts
+          val joined = Instant.ofEpochSecond(apiPlayer.joined)
+          connectZIO {
+            sql"""INSERT INTO player (player_id, joined) VALUES ($playerId, $joined)
+                  ON CONFLICT (player_id) DO NOTHING""".update.run()
+          }.flatMap { inserted =>
+            if (inserted == 0) {
+              // Another fiber already created this player — treat as known
+              ctx.knownPlayers.update(_ + (key -> playerId)).as(Some(playerId))
+            } else {
+              val snapshotSince = if (statusCategory == PlayerStatusCategory.Active) { now }
+              else { Instant.ofEpochSecond(apiPlayer.lastOnline) }
+              val snapshot = PlayerSnapshot(playerId, snapshotSince, username, statusCategory, apiPlayer.title)
+              for {
+                _ <- PlayerSnapshot.insert(snapshot)
+                _ <- ZIO.whenDiscard(isOurTeam)(createClubMemberForDiscovered(ctx, apiPlayer, matchStartTime))
+                _ <- ctx.knownPlayers.update(_ + (key -> playerId))
+                _ <- ZIO.whenDiscard(isOurTeam)(ctx.newPlayers.update(_ + DiscoveredPlayer(playerId, username)))
+                _ <- ctx.playersDiscovered.update(_ + 1)
+              } yield Some(playerId)
+            }
+          }
+      }
+    } yield result
+
+    // The doer handles success/failure and completes the promise.
+    // On failure: log once, count once, resolve promise to None so awaiting fibers get None (not an exception).
+    work.foldZIO(
+      error => ctx.playersFailed.update(_ + 1)
+        *> CcasLogger.warn(s"    Cannot resolve player $username: ${error.getMessage}")
+        *> promise.succeed(None).as(None),
+      result => promise.succeed(result).as(result)
+    )
+  }
+
+  private def createClubMemberForDiscovered(
+    ctx: ProcessingContext,
+    apiPlayer: ApiPlayer,
+    matchStartTime: Option[Instant]
+  ): RIO[Transactor, Unit] = {
+    val playerId       = apiPlayer.playerId
+    val statusCategory = apiPlayer.status.category
+    val clubId         = ctx.clubId
+
+    val existsCheck = connectZIO {
+      sql"SELECT COUNT(*) FROM club_member WHERE club_id = $clubId AND player_id = $playerId"
+        .query[Long].run().head > 0
+    }
+
+    existsCheck.flatMap {
+      case true => ZIO.unit
+      case false =>
+        val fromApi = for {
+          playerClubs <- ctx.client.get[ApiPlayerClubs](ApiPlayerClubs.getUrl(apiPlayer.username))
+          clubOpt = playerClubs.clubs.find(_.clubName == ctx.clubSlug)
+          member = clubOpt match {
+            case Some(apiClub) =>
+              val since = Instant.ofEpochSecond(apiClub.joined)
+              val until = if (statusCategory == PlayerStatusCategory.Active) { None }
+              else { Some(Instant.ofEpochSecond(apiPlayer.lastOnline)) }
+              ClubMember(clubId, playerId, since, until, sinceApproximate = false)
+            case None =>
+              val since = matchStartTime.getOrElse(Instant.ofEpochSecond(apiPlayer.joined))
+              val until = if (statusCategory == PlayerStatusCategory.Active) { matchStartTime }
+              else { Some(Instant.ofEpochSecond(apiPlayer.lastOnline)) }
+              ClubMember(clubId, playerId, since, until, sinceApproximate = true)
+          }
+          _ <- ClubMember.insert(member)
+        } yield ()
+
+        fromApi.catchAll { _ =>
+          val since = matchStartTime.getOrElse(Instant.ofEpochSecond(apiPlayer.joined))
+          val until = if (statusCategory == PlayerStatusCategory.Active) { None }
+          else { Some(Instant.ofEpochSecond(apiPlayer.lastOnline)) }
+          ClubMember.insert(ClubMember(clubId, playerId, since, until, sinceApproximate = true)).unit
+        }
+    }
+  }
+
+  // === Caching ===
+
+  private def fetchMatch(ctx: ProcessingContext, matchId: ClubMatchId): Task[ApiDailyMatch] =
+    for {
+      promise <- Promise.make[Throwable, ApiDailyMatch]
+      action <- ctx.matchCache.modify { m =>
+        m.get(matchId) match {
+          case Some(existing) => (existing.await, m)
+          case None =>
+            val fetch =
+              ctx.client.get[ApiDailyMatch](ApiDailyMatch.getUrl(matchId)).tapBoth(promise.fail, promise.succeed)
+            (fetch, m + (matchId -> promise))
+        }
+      }
+      result <- action
+    } yield result
+
+  private def fetchLiveMatch(ctx: ProcessingContext, matchId: ClubMatchId): Task[ApiLiveMatch] =
+    for {
+      promise <- Promise.make[Throwable, ApiLiveMatch]
+      action <- ctx.liveMatchCache.modify { m =>
+        m.get(matchId) match {
+          case Some(existing) => (existing.await, m)
+          case None =>
+            val fetch =
+              ctx.client.get[ApiLiveMatch](ApiLiveMatch.getUrl(matchId)).tapBoth(promise.fail, promise.succeed)
+            (fetch, m + (matchId -> promise))
+        }
+      }
+      result <- action
+    } yield result
+
+  // === Helpers ===
+
+  /** Records a club slug in `unresolved_match_club` when team club URL resolution fails. */
+  private def trackUnresolvedClub(
+    matchId: ClubMatchId,
+    isTeam1: Boolean,
+    teamUrl: URL,
+    resolvedId: Option[ClubId]
+  ): RIO[Transactor, Unit] =
+    ZIO.whenDiscard(resolvedId.isEmpty) {
+      teamUrl.path.segments.lastOption match {
+        case Some(segment) => UnresolvedMatchClub.insert(matchId, isTeam1, ClubSlug.wrap(segment)).ignore
+        case None          => ZIO.unit
+      }
+    }
+
+  /** Resolves a team URL to a ClubId via Promise-based cache. Falls back to DB lookup then API fetch. */
+  private def resolveClubIdFromTeamUrl(ctx: ProcessingContext, teamUrl: URL): RIO[Transactor, Option[ClubId]] =
+    teamUrl.path.segments.lastOption match {
+      case None => ZIO.none
+      case Some(segment) =>
+        val slug = ClubSlug.wrap(segment)
+        val key = slug.value
+        for {
+          promise <- Promise.make[Throwable, Option[ClubId]]
+          action <- ctx.clubCache.modify { m =>
+            m.get(key) match {
+              case Some(existing) => (existing.await, m)
+              case None =>
+                val work = Club.resolveOrFetch(ctx.client, slug).tapBoth(promise.fail, promise.succeed)
+                (work, m + (key -> promise))
+            }
+          }
+          result <- action
+        } yield result
+    }
+
+  private[history] def buildClubMatchRow(
+    matchId: ClubMatchId,
+    dailyMatch: ApiDailyMatch,
+    team1ClubId: Option[ClubId],
+    team2ClubId: Option[ClubId]
+  ): ClubMatch = {
+    val teams = dailyMatch.teams
+    val (startTime, endTime) = dailyMatch match {
+      case m: ApiDailyMatchFinished =>
+        (Some(Instant.ofEpochSecond(m.startTime)), Some(Instant.ofEpochSecond(m.endTime)))
+      case m: ApiDailyMatchCancelled =>
+        (Some(Instant.ofEpochSecond(m.startTime)), Some(Instant.ofEpochSecond(m.endTime)))
+      case m: ApiDailyMatchInProgress => (Some(Instant.ofEpochSecond(m.startTime)), None)
+      case m: ApiDailyMatchRegistered => (m.startTime.map(Instant.ofEpochSecond), None)
+    }
+    val (team1Result, team2Result) = teams match {
+      case t: ApiDailyMatchTeamsFinished  => (Some(t.team1.result), Some(t.team2.result))
+      case t: ApiDailyMatchTeamsCancelled => (Some(t.team1.result), Some(t.team2.result))
+      case _                              => (None, None)
+    }
+
+    ClubMatch(
+      matchId = matchId,
+      name = dailyMatch.name,
+      url = dailyMatch.url.encode,
+      status = dailyMatch.status,
+      timeClass = dailyMatch.settings.timeClass,
+      startTime = startTime,
+      endTime = endTime,
+      boards = dailyMatch.boards,
+      team1ClubId = team1ClubId,
+      team1Score = teams.team1.score,
+      team1Result = team1Result,
+      team2ClubId = team2ClubId,
+      team2Score = teams.team2.score,
+      team2Result = team2Result,
+      fetchedAt = Instant.now()
+    )
+  }
+
+  // === Stats ===
+
+  def readStats(ctx: ProcessingContext, waveCount: Int, waveDetails: List[(Int, Int)]): UIO[RunStats] =
+    for {
+      matchesProcessed    <- ctx.matchesProcessed.get
+      matchesFailed       <- ctx.matchesFailed.get
+      matchesUnidentified <- ctx.matchesUnidentified.get
+      playersDiscovered   <- ctx.playersDiscovered.get
+      playersKnown        <- ctx.playersKnown.get
+      playersFailed       <- ctx.playersFailed.get
+      failedMatches       <- ctx.failedMatches.get
+    } yield RunStats(
+      matchesProcessed = matchesProcessed,
+      matchesFailed = matchesFailed,
+      matchesUnidentified = matchesUnidentified,
+      playersDiscovered = playersDiscovered,
+      playersKnown = playersKnown,
+      playersFailed = playersFailed,
+      waveCount = waveCount,
+      waveDetails = waveDetails,
+      failedMatches = failedMatches
+    )
+}

@@ -7,7 +7,7 @@ import zio.{durationInt, Chunk, Fiber, RIO, Ref, Scope, Semaphore, Trace, ZIO}
 import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
-import ccas.analysis.apps.membership.MembershipApp.{PhaseBResult, PhaseCResult}
+import ccas.analysis.apps.membership.MembershipClassify.{PhaseBResult, PhaseCResult}
 import ccas.analysis.apps.membership.MembershipChange.*
 import ccas.analysis.tables.{Club, ClubMember, Player, PlayerSnapshot, Tables}
 import ccas.api.misc.enums.PlayerStatusCategory.{Active, Closed}
@@ -164,12 +164,12 @@ object TestMembershipApp extends ZIOSpecDefault {
 
   private def suiteClassifyFromDb = suite("classifyFromDb")(
     test("empty inputs") {
-      val result = MembershipApp.classifyFromDb(clubId, Nil, Nil, Times.t0, Times.t2)
+      val result = MembershipReport.classifyFromDb(clubId, Nil, Nil, Times.t0, Times.t2)
       assertTrue(result.isEmpty)
     },
     test("member since in range, no prior snaps → NewMember") {
       val member = ClubMember(clubId, pid0, Times.t1, None)
-      val result = MembershipApp.classifyFromDb(clubId, List(member), Nil, Times.t0, Times.t2)
+      val result = MembershipReport.classifyFromDb(clubId, List(member), Nil, Times.t0, Times.t2)
       assertTrue(
         result.size == 1,
         result.head.playerId == pid0,
@@ -179,7 +179,7 @@ object TestMembershipApp extends ZIOSpecDefault {
     test("member since in range, prior snaps exist → JoinedClub") {
       val member = ClubMember(clubId, pid0, Times.t1, None)
       val snap   = PlayerSnapshot(pid0, Times.t0, Username("alice"), Active, None)
-      val result = MembershipApp.classifyFromDb(clubId, List(member), List(snap), Times.t0, Times.t2)
+      val result = MembershipReport.classifyFromDb(clubId, List(member), List(snap), Times.t0, Times.t2)
       assertTrue(
         result.size == 1,
         result.head.changes.exists(_.isInstanceOf[JoinedClub])
@@ -188,7 +188,7 @@ object TestMembershipApp extends ZIOSpecDefault {
     test("member since in range, prior closed membership → Rejoined") {
       val oldMember = ClubMember(clubId, pid0, Times.t0, Some(Times.t1))
       val newMember = ClubMember(clubId, pid0, Times.t2, None)
-      val result    = MembershipApp.classifyFromDb(clubId, List(oldMember, newMember), Nil, Times.t1, Times.t3)
+      val result    = MembershipReport.classifyFromDb(clubId, List(oldMember, newMember), Nil, Times.t1, Times.t3)
       assertTrue(
         result.size == 1,
         result.head.changes.exists(_.isInstanceOf[Rejoined])
@@ -197,7 +197,7 @@ object TestMembershipApp extends ZIOSpecDefault {
     test("member until in range, latest snap Active → LeftClub") {
       val member = ClubMember(clubId, pid0, Times.t0, Some(Times.t1))
       val snap   = PlayerSnapshot(pid0, Times.t0, Username("alice"), Active, None)
-      val result = MembershipApp.classifyFromDb(clubId, List(member), List(snap), Times.t0, Times.t2)
+      val result = MembershipReport.classifyFromDb(clubId, List(member), List(snap), Times.t0, Times.t2)
       assertTrue(
         result.size == 1,
         result.head.changes.exists(_.isInstanceOf[LeftClub])
@@ -206,7 +206,7 @@ object TestMembershipApp extends ZIOSpecDefault {
     test("member until in range, latest snap Closed → AccountClosed") {
       val member = ClubMember(clubId, pid0, Times.t0, Some(Times.t1))
       val snap   = PlayerSnapshot(pid0, Times.t0, Username("alice"), Closed, None)
-      val result = MembershipApp.classifyFromDb(clubId, List(member), List(snap), Times.t0, Times.t2)
+      val result = MembershipReport.classifyFromDb(clubId, List(member), List(snap), Times.t0, Times.t2)
       assertTrue(
         result.size == 1,
         result.head.changes.exists(_.isInstanceOf[AccountClosed])
@@ -214,7 +214,7 @@ object TestMembershipApp extends ZIOSpecDefault {
     },
     test("member until in range, no snapshot → Unresolvable") {
       val member = ClubMember(clubId, pid0, Times.t0, Some(Times.t1))
-      val result = MembershipApp.classifyFromDb(clubId, List(member), Nil, Times.t0, Times.t2)
+      val result = MembershipReport.classifyFromDb(clubId, List(member), Nil, Times.t0, Times.t2)
       assertTrue(
         result.size == 1,
         result.head.changes.exists(_.isInstanceOf[Unresolvable])
@@ -224,7 +224,7 @@ object TestMembershipApp extends ZIOSpecDefault {
       val member = ClubMember(clubId, pid0, Times.t0, None)
       val snap1  = PlayerSnapshot(pid0, Times.t0, Username("alice-old"), Active, None)
       val snap2  = PlayerSnapshot(pid0, Times.t1, Username("alice-new"), Active, None)
-      val result = MembershipApp.classifyFromDb(clubId, List(member), List(snap1, snap2), Times.t0, Times.t2)
+      val result = MembershipReport.classifyFromDb(clubId, List(member), List(snap1, snap2), Times.t0, Times.t2)
       assertTrue(
         result.size == 1,
         result.head.changes.exists(_.isInstanceOf[UsernameChange])
@@ -234,7 +234,7 @@ object TestMembershipApp extends ZIOSpecDefault {
       val member = ClubMember(clubId, pid0, Times.t0, None)
       val snap1  = PlayerSnapshot(pid0, Times.t0, Username("alice"), Active, None)
       val snap2  = PlayerSnapshot(pid0, Times.t1, Username("alice"), Closed, None)
-      val result = MembershipApp.classifyFromDb(clubId, List(member), List(snap1, snap2), Times.t0, Times.t2)
+      val result = MembershipReport.classifyFromDb(clubId, List(member), List(snap1, snap2), Times.t0, Times.t2)
       assertTrue(
         result.size == 1,
         result.head.changes.exists(_.isInstanceOf[StatusChange])
@@ -243,7 +243,7 @@ object TestMembershipApp extends ZIOSpecDefault {
     test("all dates outside range → empty list") {
       val member = ClubMember(clubId, pid0, Times.t0, None)
       val snap   = PlayerSnapshot(pid0, Times.t0, Username("alice"), Active, None)
-      val result = MembershipApp.classifyFromDb(clubId, List(member), List(snap), Times.t2, Times.t3)
+      val result = MembershipReport.classifyFromDb(clubId, List(member), List(snap), Times.t2, Times.t3)
       assertTrue(result.isEmpty)
     }
   )
@@ -347,7 +347,7 @@ object TestMembershipApp extends ZIOSpecDefault {
 
       for {
         client <- fakeChessComClient(Map.empty)
-        result <- MembershipApp.classifyApiMembers(client, clubId, apiMap, dbState, Times.t2)
+        result <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, dbState, Times.t2)
       } yield assertTrue(
         result.resolvedIds.contains(pid0),
         result.changes.isEmpty
@@ -364,7 +364,7 @@ object TestMembershipApp extends ZIOSpecDefault {
 
       for {
         client <- fakeChessComClient(Map.empty)
-        result <- MembershipApp.classifyApiMembers(client, clubId, apiMap, dbState, Times.t2)
+        result <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, dbState, Times.t2)
       } yield assertTrue(
         result.resolvedIds.contains(pid1),
         result.changes.size == 1,
@@ -385,7 +385,7 @@ object TestMembershipApp extends ZIOSpecDefault {
 
       for {
         client <- fakeChessComClient(responses)
-        result <- MembershipApp.classifyApiMembers(client, clubId, apiMap, dbState, Times.t2)
+        result <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, dbState, Times.t2)
       } yield assertTrue(
         result.resolvedIds.contains(pid2),
         result.changes.size == 1,
@@ -401,7 +401,7 @@ object TestMembershipApp extends ZIOSpecDefault {
       for {
         _      <- seedDb()
         client <- fakeChessComClient(responses)
-        result <- MembershipApp.classifyApiMembers(client, clubId, apiMap, dbState, Times.t2)
+        result <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, dbState, Times.t2)
       } yield assertTrue(
         result.resolvedIds.contains(pid3),
         result.changes.size == 1,
@@ -421,7 +421,7 @@ object TestMembershipApp extends ZIOSpecDefault {
       for {
         _      <- seedDb(players = List(player4), snapshots = List(snap4))
         client <- fakeChessComClient(responses)
-        result <- MembershipApp.classifyApiMembers(client, clubId, apiMap, dbState, Times.t2)
+        result <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, dbState, Times.t2)
       } yield assertTrue(
         result.resolvedIds.contains(pid4),
         result.changes.size == 1,
@@ -441,7 +441,7 @@ object TestMembershipApp extends ZIOSpecDefault {
 
       for {
         client <- fakeChessComClient(responses)
-        result <- MembershipApp.classifyApiMembers(client, clubId, apiMap, dbState, Times.t2)
+        result <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, dbState, Times.t2)
       } yield assertTrue(
         result.resolvedIds.contains(pid5),
         result.changes.size == 1,
@@ -460,7 +460,7 @@ object TestMembershipApp extends ZIOSpecDefault {
 
       for {
         client <- fakeChessComClient(Map.empty)
-        result <- MembershipApp.classifyApiMembers(client, clubId, apiMap, dbState, Times.t2)
+        result <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, dbState, Times.t2)
       } yield assertTrue(
         result.resolvedIds.contains(pid3),
         result.changes.size == 1,
@@ -482,7 +482,7 @@ object TestMembershipApp extends ZIOSpecDefault {
 
       for {
         client <- fakeChessComClient(Map.empty)
-        result <- MembershipApp.classifyApiMembers(client, clubId, apiMap, dbState, Times.t2)
+        result <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, dbState, Times.t2)
       } yield assertTrue(
         result.resolvedIds.contains(pid2),
         result.changes.size == 1,
@@ -506,7 +506,7 @@ object TestMembershipApp extends ZIOSpecDefault {
           members = List(mem)
         )
         client  <- fakeChessComClient(Map.empty)
-        result  <- MembershipApp.classifyApiMembers(client, clubId, apiMap, dbState, Times.t2)
+        result  <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, dbState, Times.t2)
         members <- ClubMember.selectClub(clubId)
       } yield assertTrue(
         result.resolvedIds.contains(pid0),
@@ -529,7 +529,7 @@ object TestMembershipApp extends ZIOSpecDefault {
 
       for {
         client <- fakeChessComClient(Map.empty)
-        result <- MembershipApp.classifyApiMembers(
+        result <- MembershipClassify.classifyApiMembers(
           client,
           clubId,
           apiMap,
@@ -557,7 +557,7 @@ object TestMembershipApp extends ZIOSpecDefault {
 
       for {
         client <- fakeChessComClient(responses)
-        result <- MembershipApp.classifyDisappeared(
+        result <- MembershipClassify.classifyDisappeared(
           client,
           dbState,
           Set.empty,
@@ -582,7 +582,7 @@ object TestMembershipApp extends ZIOSpecDefault {
 
       for {
         client <- fakeChessComClient(responses)
-        result <- MembershipApp.classifyDisappeared(
+        result <- MembershipClassify.classifyDisappeared(
           client,
           dbState,
           Set.empty,
@@ -607,7 +607,7 @@ object TestMembershipApp extends ZIOSpecDefault {
 
       for {
         client <- fakeChessComClient(Map.empty, failures = Set("charlie"))
-        result <- MembershipApp.classifyDisappeared(
+        result <- MembershipClassify.classifyDisappeared(
           client,
           dbState,
           Set.empty,
@@ -632,7 +632,7 @@ object TestMembershipApp extends ZIOSpecDefault {
 
       for {
         client <- fakeChessComClient(responses)
-        result <- MembershipApp.classifyDisappeared(
+        result <- MembershipClassify.classifyDisappeared(
           client,
           dbState,
           Set.empty,
@@ -656,7 +656,7 @@ object TestMembershipApp extends ZIOSpecDefault {
 
       for {
         client <- fakeChessComClient(Map.empty)
-        result <- MembershipApp.classifyDisappeared(
+        result <- MembershipClassify.classifyDisappeared(
           client,
           dbState,
           Set(pid0),
