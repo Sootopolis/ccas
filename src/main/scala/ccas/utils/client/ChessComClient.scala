@@ -178,8 +178,10 @@ final class ChessComClient(
       }
     }
 
+  private val CfChallengeMarker = "/cdn-cgi/challenge-platform/"
+
   private def isCloudflareChallenge(response: Response, body: String): Boolean =
-    response.status == Status.Forbidden && body.contains("/cdn-cgi/challenge-platform/")
+    response.status == Status.Forbidden && body.contains(CfChallengeMarker)
 
   private def failureRate(outcomes: Vector[Boolean]): Double =
     if (outcomes.isEmpty) 0.0
@@ -194,14 +196,14 @@ final class ChessComClient(
   private val retryCfSchedule: Schedule[Any, Throwable, Any] =
     Schedule.fixed(config.cfRetryDelay) && Schedule.recurs(2) && Schedule.recurWhile[Throwable] {
       case e: HttpStatusException =>
-        e.statusCode == 403 && e.responseBody.contains("/cdn-cgi/challenge-platform/")
+        e.statusCode == 403 && e.responseBody.contains(CfChallengeMarker)
       case _ => false
     }
 
   private val retryOnceSchedule: Schedule[Any, Throwable, Any] =
     Schedule.fixed(config.singleRetryDelay) && Schedule.recurs(1) && Schedule.recurWhile[Throwable] {
       case e: HttpStatusException =>
-        (e.statusCode == 403 && !e.responseBody.contains("/cdn-cgi/challenge-platform/")) ||
+        (e.statusCode == 403 && !e.responseBody.contains(CfChallengeMarker)) ||
         e.statusCode == 404
       case _ => false
     }

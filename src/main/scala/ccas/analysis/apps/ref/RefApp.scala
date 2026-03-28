@@ -60,8 +60,22 @@ object RefApp extends ZIOAppDefault {
       now.minus(days, ChronoUnit.DAYS)
     }
 
-    def allCutoffs(now: Instant): Map[RefSkipReason, Instant] =
-      RefSkipReason.values.map(r => r -> cutoff(r, now)).toMap
+    case class Cutoffs(
+      noData: Instant,
+      notFound: Instant,
+      idMismatch: Instant,
+      resolutionFailed: Instant,
+      apiError: Instant
+    )
+
+    def allCutoffs(now: Instant): Cutoffs = Cutoffs(
+      noData           = cutoff(RefSkipReason.NoData, now),
+      notFound         = cutoff(RefSkipReason.NotFound, now),
+      idMismatch       = cutoff(RefSkipReason.IdMismatch, now),
+      resolutionFailed = cutoff(RefSkipReason.ResolutionFailed, now),
+      apiError         = cutoff(RefSkipReason.ApiError, now)
+    )
+
   }
 
   // --- Context ---
@@ -270,13 +284,7 @@ object RefApp extends ZIOAppDefault {
   // --- Queries ---
 
   private def selectUnresolvedPlayers: RIO[Transactor, List[UnresolvedPlayer]] = {
-    val now     = Instant.now()
-    val cutoffs = RetryWindows.allCutoffs(now)
-    val cNoData           = cutoffs(RefSkipReason.NoData)
-    val cNotFound         = cutoffs(RefSkipReason.NotFound)
-    val cIdMismatch       = cutoffs(RefSkipReason.IdMismatch)
-    val cResolutionFailed = cutoffs(RefSkipReason.ResolutionFailed)
-    val cApiError         = cutoffs(RefSkipReason.ApiError)
+    val c = RetryWindows.allCutoffs(Instant.now())
     connectZIO {
       sql"""SELECT p.player_id, ps.username
             FROM player p
@@ -287,33 +295,27 @@ object RefApp extends ZIOAppDefault {
             LEFT JOIN player_match_ref pmr ON p.player_id = pmr.player_id
             LEFT JOIN player_tournament_ref ptr ON p.player_id = ptr.player_id
             LEFT JOIN player_ref_skip prs ON p.player_id = prs.player_id
-              AND ((prs.reason = 'NoData'           AND prs.last_attempted > $cNoData)
-                OR (prs.reason = 'NotFound'         AND prs.last_attempted > $cNotFound)
-                OR (prs.reason = 'IdMismatch'       AND prs.last_attempted > $cIdMismatch)
-                OR (prs.reason = 'ResolutionFailed' AND prs.last_attempted > $cResolutionFailed)
-                OR (prs.reason = 'ApiError'         AND prs.last_attempted > $cApiError))
+              AND ((prs.reason = 'NoData'           AND prs.last_attempted > ${c.noData})
+                OR (prs.reason = 'NotFound'         AND prs.last_attempted > ${c.notFound})
+                OR (prs.reason = 'IdMismatch'       AND prs.last_attempted > ${c.idMismatch})
+                OR (prs.reason = 'ResolutionFailed' AND prs.last_attempted > ${c.resolutionFailed})
+                OR (prs.reason = 'ApiError'         AND prs.last_attempted > ${c.apiError}))
             WHERE pmr.player_id IS NULL AND ptr.player_id IS NULL AND prs.player_id IS NULL""".query[UnresolvedPlayer].run().toList
     }
   }
 
   private def selectUnresolvedClubs: RIO[Transactor, List[UnresolvedClub]] = {
-    val now     = Instant.now()
-    val cutoffs = RetryWindows.allCutoffs(now)
-    val cNoData           = cutoffs(RefSkipReason.NoData)
-    val cNotFound         = cutoffs(RefSkipReason.NotFound)
-    val cIdMismatch       = cutoffs(RefSkipReason.IdMismatch)
-    val cResolutionFailed = cutoffs(RefSkipReason.ResolutionFailed)
-    val cApiError         = cutoffs(RefSkipReason.ApiError)
+    val c = RetryWindows.allCutoffs(Instant.now())
     connectZIO {
       sql"""SELECT c.club_id, c.slug
             FROM club c
             LEFT JOIN club_match_ref cmr ON c.club_id = cmr.club_id
             LEFT JOIN club_ref_skip crs ON c.club_id = crs.club_id
-              AND ((crs.reason = 'NoData'           AND crs.last_attempted > $cNoData)
-                OR (crs.reason = 'NotFound'         AND crs.last_attempted > $cNotFound)
-                OR (crs.reason = 'IdMismatch'       AND crs.last_attempted > $cIdMismatch)
-                OR (crs.reason = 'ResolutionFailed' AND crs.last_attempted > $cResolutionFailed)
-                OR (crs.reason = 'ApiError'         AND crs.last_attempted > $cApiError))
+              AND ((crs.reason = 'NoData'           AND crs.last_attempted > ${c.noData})
+                OR (crs.reason = 'NotFound'         AND crs.last_attempted > ${c.notFound})
+                OR (crs.reason = 'IdMismatch'       AND crs.last_attempted > ${c.idMismatch})
+                OR (crs.reason = 'ResolutionFailed' AND crs.last_attempted > ${c.resolutionFailed})
+                OR (crs.reason = 'ApiError'         AND crs.last_attempted > ${c.apiError}))
             WHERE cmr.club_id IS NULL AND crs.club_id IS NULL""".query[UnresolvedClub].run().toList
     }
   }
