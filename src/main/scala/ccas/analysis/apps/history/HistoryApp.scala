@@ -73,19 +73,21 @@ object HistoryApp extends ZIOAppDefault {
       DataSourceLayer.liveFromPrefix(onInit = Tables.ensureTables)
     )
 
-  /** Main entry point: orchestrates the 4-phase discover workflow for a club's match history. */
-  def discover(
-    clubSlug: ClubSlug,
-    full: Boolean = false,
-    refresh: Boolean = false,
-    trigger: RunTrigger = RunTrigger.Cli
-  ): RIO[CcasLogger & ChessComClient & Transactor, Unit] =
-    for {
-      client     <- ZIO.service[ChessComClient]
-      transactor <- ZIO.service[Transactor]
-      logger     <- ZIO.service[CcasLogger]
+  private case class InitResult(
+    allMembers: List[ClubMember],
+    snapByPlayerId: Map[PlayerId, PlayerSnapshot],
+    queriedIds: Set[PlayerId],
+    ctx: ProcessingContext,
+    startedAt: Instant,
+    runId: Long
+  )
 
-      // === Phase 1: Initialize ===
+  private def initialize(
+    clubSlug: ClubSlug,
+    full: Boolean,
+    trigger: RunTrigger
+  ): RIO[CcasLogger & ChessComClient & Transactor, InitResult] =
+    for {
       _ <- CcasLogger.info(s"=== HistoryApp: $clubSlug ===")
       _ <- CcasLogger.info("Phase 1: Initializing...")
       _ <- MembershipApp.reconcile(clubSlug, trackRun = false)
@@ -104,11 +106,27 @@ object HistoryApp extends ZIOAppDefault {
       _ <- CcasLogger.info(
         s"  Members: ${allMembers.size}, Processed matches: $processedCount, Queried members: ${queriedIds.size}"
       )
-
-      // Setup for interrupt safety: create ProcessingContext and Phase 2 tracking Refs before entering the
-      // interrupt-guarded block so partial progress is always available to the onInterrupt handler.
       knownPlayersInit = latestSnaps.map(s => s.username.value -> s.playerId).toMap
-      ctx           <- ProcessingContext.make(client, clubId, clubSlug, knownPlayersInit)
+      client <- ZIO.service[ChessComClient]
+      ctx <- ProcessingContext.make(client, clubId, clubSlug, knownPlayersInit)
+      effectiveQueriedIds = if (full) { Set.empty[PlayerId] } else { queriedIds }
+    } yield InitResult(allMembers, snapByPlayerId, effectiveQueriedIds, ctx, startedAt, runId)
+
+  /** Main entry point: orchestrates the 4-phase discover workflow for a club's match history. */
+  def discover(
+    clubSlug: ClubSlug,
+    full: Boolean = false,
+    refresh: Boolean = false,
+    trigger: RunTrigger = RunTrigger.Cli
+  ): RIO[CcasLogger & ChessComClient & Transactor, Unit] =
+    for {
+      transactor <- ZIO.service[Transactor]
+      logger     <- ZIO.service[CcasLogger]
+
+      // === Phase 1: Initialize ===
+      InitResult(allMembers, snapByPlayerId, queriedIds, ctx, startedAt, runId) <-
+        initialize(clubSlug, full, trigger)
+
       seedClubRef   <- Ref.make(0)
       memberSeedRef <- Ref.make(MemberSeedResult(0, 0, 0, Nil))
       seedStaleRef  <- Ref.make(0)
@@ -119,28 +137,27 @@ object HistoryApp extends ZIOAppDefault {
           // Phase 2: Seed match IDs
           _ <- CcasLogger.info("Phase 2: Seeding match IDs...")
           (resolvedClubs, resolvedPlayers) <-
-            HistorySeeding.retryUnresolvedClubs(client) <&> HistorySeeding.retryUnresolvedPlayers(client)
+            HistorySeeding.retryUnresolvedClubs(ctx.client) <&> HistorySeeding.retryUnresolvedPlayers(ctx.client)
           _ <- ZIO.whenDiscard(resolvedClubs > 0 || resolvedPlayers > 0) {
             CcasLogger.info(s"  Resolved $resolvedClubs clubs, $resolvedPlayers players from previous runs")
           }
           _ <- ZIO.whenDiscard(full) {
-            CcasLogger.info("  --full: clearing member query history") *> HistoryMemberQuery.deleteClub(clubId)
+            CcasLogger.info("  --full: clearing member query history") *> HistoryMemberQuery.deleteClub(ctx.clubId)
           }
-          effectiveQueriedIds = if (full) { Set.empty[PlayerId] } else { queriedIds }
 
-          seedClub <- HistorySeeding.seedFromClubMatches(client, clubId, clubSlug)
+          seedClub <- HistorySeeding.seedFromClubMatches(ctx.client, ctx.clubId, clubSlug)
           _        <- seedClubRef.set(seedClub)
           _        <- CcasLogger.info(s"  Club matches endpoint: $seedClub new match IDs")
 
           memberSeed <-
-            HistorySeeding.seedFromMemberMatches(client, clubId, clubSlug, allMembers, effectiveQueriedIds, snapByPlayerId)
+            HistorySeeding.seedFromMemberMatches(ctx.client, ctx.clubId, clubSlug, allMembers, queriedIds, snapByPlayerId)
           _ <- memberSeedRef.set(memberSeed)
           membersSkipped = allMembers.size - memberSeed.queried - memberSeed.failed
           _ <- CcasLogger.info(
             s"  Member match lists: ${memberSeed.seeded} new IDs (queried: ${memberSeed.queried}, skipped: $membersSkipped, failed: ${memberSeed.failed})"
           )
 
-          seedStale <- HistorySeeding.seedStaleMatches(clubId, refresh)
+          seedStale <- HistorySeeding.seedStaleMatches(ctx.clubId, refresh)
           _         <- seedStaleRef.set(seedStale)
           _         <- CcasLogger.info(s"  Stale match refresh: $seedStale matches queued")
 

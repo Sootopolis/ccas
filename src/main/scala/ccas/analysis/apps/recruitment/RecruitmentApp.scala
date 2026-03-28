@@ -173,38 +173,6 @@ object RecruitmentApp extends ZIOAppDefault {
 
       transactor <- ZIO.service[Transactor]
 
-      finalizeRun = (label: String) =>
-        for {
-          _             <- progressBar.finish
-          _             <- RecruitmentExplore.reclassifyExcessInvited(ctx)
-          invited       <- invitedRef.get.map(_.reverse)
-          evalCount     <- evalCountRef.get
-          deferredCount <- RecruitmentCandidate.selectDeferredCountByRun(runId)
-          completedAt = Instant.now()
-          duration    = JDuration.between(now, completedAt)
-          finalRun    = RecruitmentRun(runId, clubId, criteria.criteriaId, trigger, now, Some(completedAt), invited.size)
-          _ <- RecruitmentRun.update(finalRun)
-          _ <- CcasLogger.info(s"=== $label ===")
-          _ <- CcasLogger.info(s"Duration: ${duration.display}")
-          _ <- CcasLogger.info(s"Candidates evaluated: $evalCount")
-          _ <- CcasLogger.info(s"Invited: ${invited.size}")
-          _ <- ZIO.whenDiscard(deferredCount > 0)(CcasLogger.info(s"Deferred: $deferredCount"))
-          _ <- ZIO.foreachDiscard(invited)(u => CcasLogger.info(s"  $u"))
-          // Cumulative summary: show today's total across all runs
-          _ <- ZIO.whenDiscard(cumulative && alreadyFound > 0) {
-            for {
-              earlierCandidates <- RecruitmentCandidate.selectInvitedToday(clubId, alias)
-              earlierUsernames <- ZIO.foreach(earlierCandidates)(c =>
-                PlayerSnapshot.selectIdLatest(c.playerId)
-                  .map(_.fold(Username.wrap(s"[pid=${c.playerId}]"))(_.username))
-              )
-              allToday = earlierUsernames ++ invited
-              _ <- CcasLogger.info(s"=== Today's Total: ${allToday.size} ===")
-              _ <- ZIO.foreachDiscard(allToday)(u => CcasLogger.info(s"  $u"))
-            } yield ()
-          }
-        } yield finalRun
-
       _ <- ZIO.whenDiscard(cumulative && alreadyFound > 0)(
         CcasLogger.info(s"[Cumulative] Already found $alreadyFound today, effective target: $effectiveTarget")
       )
@@ -212,63 +180,123 @@ object RecruitmentApp extends ZIOAppDefault {
       finalRun <-
         if (effectiveTarget == 0) {
           CcasLogger.info("[Cumulative] Target already met, skipping explore") *>
-            finalizeRun("Recruitment Complete (target already met)")
+            finalizeRun(ctx, trigger, now, cumulative, alreadyFound, "Recruitment Complete (target already met)")
         } else {
-          for {
-            _ <- ZIO.whenDiscard(showHints)(
-              CcasLogger.info("[Hint] Press Ctrl+C to stop gracefully (candidates found so far will be listed)")
-            )
-
-            // --- Load deferred candidates from prior runs as a priority source ---
-            deferredCandidates <- RecruitmentCandidate.selectDeferredByClub(clubId)
-            deferredUsernames <- ZIO.foreach(deferredCandidates)(c =>
-              PlayerSnapshot.selectIdLatest(c.playerId).map(_.map(_.username))
-            ).map(_.flatten.filterNot(existingUsernames))
-            _ <- ZIO.whenDiscard(deferredUsernames.nonEmpty)(
-              CcasLogger.info(s"[Deferred] Found ${deferredUsernames.size} deferred candidates from prior runs")
-            )
-
-            // --- Build initial sources from provided source clubs ---
-            deferredSource = Option.when(deferredUsernames.nonEmpty)(
-              UsernameSource("deferred-priority", deferredUsernames)
-            )
-            initialSources = deferredSource.toList ++ sourceClubs.map(ClubSource(_))
-
-            // --- Build static strategy list (only used when explore == true) ---
-            staticStrategies: List[RIO[CcasLogger & Transactor, List[SourceDescriptor]]] =
-              if (!explore) Nil
-              else
-                List(
-                  RecruitmentExplore.discoverOwnMemberClubs(client, clubSlug, targetMemberNames),
-                  RecruitmentExplore.discoverDbClubs(clubSlug),
-                  RecruitmentExplore.discoverMatchOpponents(clubMatches),
-                  RecruitmentExplore.discoverCandidateOpponents(client, now)
-                )
-
-            // --- Run the explore loop (with optional timeout) ---
-            loopEffect = RecruitmentExplore.exploreLoop(
-              ctx = ctx,
-              activePool = Map.empty,
-              pendingSources = initialSources,
-              staticStrategies = staticStrategies,
-              visitedClubs = sourceClubs.toSet,
-              roundRobinKeys = Nil
-            )
-            _ <- (timeLimitMinutes match {
-              case Some(minutes) => loopEffect.timeout(zio.durationLong(minutes.toLong).minutes).unit
-              case None          => loopEffect.unit
-            }).onInterrupt(
-              finalizeRun("Recruitment Interrupted")
-                .provideEnvironment(ZEnvironment(logger, transactor))
-                .orDie
-            )
-
-            // --- Finalize ---
-            finalRun <- finalizeRun("Recruitment Complete")
-          } yield finalRun
+          runExplorePhase(
+            ctx, client, logger, transactor, clubMatches,
+            targetMemberNames, sourceClubs, timeLimitMinutes, trigger, now, cumulative, alreadyFound
+          )
         }
     } yield finalRun
   }
+
+  private def runExplorePhase(
+    ctx: ExploreContext,
+    client: ChessComClient,
+    logger: CcasLogger,
+    transactor: Transactor,
+    clubMatches: ApiClubMatches,
+    targetMemberNames: List[Username],
+    sourceClubs: List[ClubSlug],
+    timeLimitMinutes: Option[Int],
+    trigger: RunTrigger,
+    startedAt: Instant,
+    cumulative: Boolean,
+    alreadyFound: Int
+  ): RIO[CcasLogger & ChessComClient & Transactor, RecruitmentRun] =
+    for {
+      _ <- ZIO.whenDiscard(ctx.showHints)(
+        CcasLogger.info("[Hint] Press Ctrl+C to stop gracefully (candidates found so far will be listed)")
+      )
+
+      // --- Load deferred candidates from prior runs as a priority source ---
+      deferredCandidates <- RecruitmentCandidate.selectDeferredByClub(ctx.runCtx.clubId)
+      deferredUsernames <- ZIO.foreach(deferredCandidates)(c =>
+        PlayerSnapshot.selectIdLatest(c.playerId).map(_.map(_.username))
+      ).map(_.flatten.filterNot(ctx.existingUsernames))
+      _ <- ZIO.whenDiscard(deferredUsernames.nonEmpty)(
+        CcasLogger.info(s"[Deferred] Found ${deferredUsernames.size} deferred candidates from prior runs")
+      )
+
+      // --- Build initial sources from provided source clubs ---
+      deferredSource = Option.when(deferredUsernames.nonEmpty)(
+        UsernameSource("deferred-priority", deferredUsernames)
+      )
+      initialSources = deferredSource.toList ++ sourceClubs.map(ClubSource(_))
+
+      // --- Build static strategy list (only used when explore == true) ---
+      staticStrategies: List[RIO[CcasLogger & Transactor, List[SourceDescriptor]]] =
+        if (!ctx.explore) Nil
+        else
+          List(
+            RecruitmentExplore.discoverOwnMemberClubs(client, ctx.clubSlug, targetMemberNames),
+            RecruitmentExplore.discoverDbClubs(ctx.clubSlug),
+            RecruitmentExplore.discoverMatchOpponents(clubMatches),
+            RecruitmentExplore.discoverCandidateOpponents(client, startedAt)
+          )
+
+      // --- Run the explore loop (with optional timeout) ---
+      loopEffect = RecruitmentExplore.exploreLoop(
+        ctx = ctx,
+        activePool = Map.empty,
+        pendingSources = initialSources,
+        staticStrategies = staticStrategies,
+        visitedClubs = sourceClubs.toSet,
+        roundRobinKeys = Nil
+      )
+      _ <- (timeLimitMinutes match {
+        case Some(minutes) => loopEffect.timeout(zio.durationLong(minutes.toLong).minutes).unit
+        case None          => loopEffect.unit
+      }).onInterrupt(
+        finalizeRun(ctx, trigger, startedAt, cumulative, alreadyFound, "Recruitment Interrupted")
+          .provideEnvironment(ZEnvironment(logger, transactor))
+          .orDie
+      )
+
+      // --- Finalize ---
+      finalRun <- finalizeRun(ctx, trigger, startedAt, cumulative, alreadyFound, "Recruitment Complete")
+    } yield finalRun
+
+  private def finalizeRun(
+    ctx: ExploreContext,
+    trigger: RunTrigger,
+    startedAt: Instant,
+    cumulative: Boolean,
+    alreadyFound: Int,
+    label: String
+  ): RIO[CcasLogger & Transactor, RecruitmentRun] =
+    for {
+      _             <- ctx.progressBar.finish
+      _             <- RecruitmentExplore.reclassifyExcessInvited(ctx)
+      invited       <- ctx.invitedRef.get.map(_.reverse)
+      evalCount     <- ctx.evalCountRef.get
+      deferredCount <- RecruitmentCandidate.selectDeferredCountByRun(ctx.runId)
+      completedAt = Instant.now()
+      duration    = JDuration.between(startedAt, completedAt)
+      clubId      = ctx.runCtx.clubId
+      alias       = ctx.runCtx.alias
+      finalRun    = RecruitmentRun(ctx.runId, clubId, ctx.runCtx.criteria.criteriaId, trigger, startedAt, Some(completedAt), invited.size)
+      _ <- RecruitmentRun.update(finalRun)
+      _ <- CcasLogger.info(s"=== $label ===")
+      _ <- CcasLogger.info(s"Duration: ${duration.display}")
+      _ <- CcasLogger.info(s"Candidates evaluated: $evalCount")
+      _ <- CcasLogger.info(s"Invited: ${invited.size}")
+      _ <- ZIO.whenDiscard(deferredCount > 0)(CcasLogger.info(s"Deferred: $deferredCount"))
+      _ <- ZIO.foreachDiscard(invited)(u => CcasLogger.info(s"  $u"))
+      // Cumulative summary: show today's total across all runs
+      _ <- ZIO.whenDiscard(cumulative && alreadyFound > 0) {
+        for {
+          earlierCandidates <- RecruitmentCandidate.selectInvitedToday(clubId, alias)
+          earlierUsernames <- ZIO.foreach(earlierCandidates)(c =>
+            PlayerSnapshot.selectIdLatest(c.playerId)
+              .map(_.fold(Username.wrap(s"[pid=${c.playerId}]"))(_.username))
+          )
+          allToday = earlierUsernames ++ invited
+          _ <- CcasLogger.info(s"=== Today's Total: ${allToday.size} ===")
+          _ <- ZIO.foreachDiscard(allToday)(u => CcasLogger.info(s"  $u"))
+        } yield ()
+      }
+    } yield finalRun
 
   // --- Report mode ---
 

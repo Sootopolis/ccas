@@ -11,14 +11,14 @@ import ccas.analysis.apps.recruitment.BlacklistApp
 import ccas.analysis.tables.*
 import ccas.api.misc.subtypes.{ClubSlug, PlayerId, Username}
 import ccas.server.routes.RouteHelpers.*
-import ccas.utils.client.{ChessComClient, HttpStatusException}
-import ccas.utils.errors.{BadRequestException, NotFoundException, UserFacingException}
+import ccas.utils.client.ChessComClient
+import ccas.utils.errors.NotFoundException
 
 object BlacklistRoutes {
 
   // --- Request/response types ---
 
-  case class CreateBlacklistRequest(
+  private[server] case class CreateBlacklistRequest(
     clubSlug: ClubSlug,
     usernames: List[Username],
     reason: Option[String],
@@ -28,7 +28,7 @@ object BlacklistRoutes {
     given JsonCodec[CreateBlacklistRequest] = DeriveJsonCodec.gen
   }
 
-  case class BlacklistEntryResponse(
+  private[server] case class BlacklistEntryResponse(
     clubSlug: String,
     playerId: Long,
     username: Option[String],
@@ -48,16 +48,6 @@ object BlacklistRoutes {
         expiresAt = entry.expiresAt.map(_.toString),
         reason = entry.reason
       )
-  }
-
-  // --- Helpers ---
-
-  private def handleError(error: Throwable): Response = error match {
-    case e: NotFoundException    => jsonResponse(Status.NotFound, ErrorResponse(e.getMessage))
-    case e: HttpStatusException  => jsonResponse(Status.BadGateway, ErrorResponse(e.getMessage))
-    case e: BadRequestException  => jsonResponse(Status.BadRequest, ErrorResponse(e.getMessage))
-    case e: UserFacingException  => jsonResponse(Status.BadRequest, ErrorResponse(e.getMessage))
-    case _                       => jsonResponse(Status.InternalServerError, ErrorResponse("Internal server error"))
   }
 
   // --- Routes ---

@@ -9,7 +9,18 @@ import ccas.utils.CcasLogger
 import ccas.utils.client.ChessComClient
 import ccas.utils.errors.safeMessage
 
+/** Asynchronous job executor that runs analysis tasks as forked fibers.
+  *
+  * Each submitted job is tracked in the `job_run` database table with a ULID identifier.
+  * Only one job of a given kind (optionally scoped to a club) may run at a time; duplicate
+  * submissions are rejected with a [[JobConflictException]].
+  *
+  * After a Recruitment, Membership, or History job completes successfully, a follow-up
+  * MatchRef job is automatically submitted to resolve any new club/player references.
+  */
 trait JobRunner {
+
+  /** Fork a new job and return its ID. Fails with [[JobConflictException]] if a matching job is already running. */
   def submit(
     kind: JobKind,
     clubSlug: Option[ClubSlug],
@@ -18,8 +29,10 @@ trait JobRunner {
     effect: RIO[CcasLogger & ChessComClient & Transactor, Any]
   ): RIO[Transactor, JobRunId]
 
+  /** Look up a job by ID, returning `None` if no such job exists. */
   def status(id: JobRunId): RIO[Transactor, Option[JobRun]]
 
+  /** Return the most recent jobs ordered by start time descending, up to `limit`. */
   def recentJobs(limit: Int): RIO[Transactor, List[JobRun]]
 }
 

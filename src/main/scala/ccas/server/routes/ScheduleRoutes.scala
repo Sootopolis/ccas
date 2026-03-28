@@ -14,7 +14,7 @@ object ScheduleRoutes {
 
   // --- Request/response types ---
 
-  case class CreateScheduleRequest(
+  private[server] case class CreateScheduleRequest(
     kind: String,
     clubSlug: Option[String],
     params: Option[String],
@@ -24,12 +24,12 @@ object ScheduleRoutes {
     given JsonCodec[CreateScheduleRequest] = DeriveJsonCodec.gen
   }
 
-  case class UpdateScheduleRequest(intervalHours: Option[Int], enabled: Option[Boolean], params: Option[String])
+  private[server] case class UpdateScheduleRequest(intervalHours: Option[Int], enabled: Option[Boolean], params: Option[String])
   object UpdateScheduleRequest {
     given JsonCodec[UpdateScheduleRequest] = DeriveJsonCodec.gen
   }
 
-  case class ScheduleResponse(
+  private[server] case class ScheduleResponse(
     id: Long,
     kind: String,
     clubSlug: Option[String],
@@ -66,7 +66,7 @@ object ScheduleRoutes {
     Method.GET / "api" / "schedules" -> handler {
       JobSchedule.selectAll
         .map(list => jsonResponse(Status.Ok, list.map(ScheduleResponse.fromSchedule)))
-        .catchAll(e => ZIO.succeed(jsonResponse(Status.InternalServerError, ErrorResponse(e.getMessage))))
+        .catchAll(e => ZIO.succeed(handleError(e)))
     },
     Method.POST / "api" / "schedules" -> handler { (req: Request) =>
       (for {
@@ -77,7 +77,7 @@ object ScheduleRoutes {
         id      <- JobSchedule.insert(schedule)
         created <- JobSchedule.selectId(id).someOrFail(new Exception("Failed to read back schedule"))
       } yield jsonResponse(Status.Created, ScheduleResponse.fromSchedule(created)))
-        .catchAll(e => ZIO.succeed(jsonResponse(Status.InternalServerError, ErrorResponse(e.getMessage))))
+        .catchAll(e => ZIO.succeed(handleError(e)))
     },
     Method.PUT / "api" / "schedules" / long("id") -> handler { (id: Long, req: Request) =>
       (for {
@@ -85,12 +85,12 @@ object ScheduleRoutes {
         _       <- JobSchedule.update(id, body.intervalHours, body.enabled, body.params.map(Some(_)))
         updated <- JobSchedule.selectId(id).someOrFail(new Exception(s"Schedule $id not found"))
       } yield jsonResponse(Status.Ok, ScheduleResponse.fromSchedule(updated)))
-        .catchAll(e => ZIO.succeed(jsonResponse(Status.InternalServerError, ErrorResponse(e.getMessage))))
+        .catchAll(e => ZIO.succeed(handleError(e)))
     },
     Method.DELETE / "api" / "schedules" / long("id") -> handler { (id: Long, _: Request) =>
       JobSchedule.delete(id)
         .as(Response(status = Status.NoContent))
-        .catchAll(e => ZIO.succeed(jsonResponse(Status.InternalServerError, ErrorResponse(e.getMessage))))
+        .catchAll(e => ZIO.succeed(handleError(e)))
     }
   )
 }

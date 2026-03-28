@@ -14,22 +14,39 @@ import zio.json.JsonDecoder
 
 import java.time.Instant
 
+/** HTTP client for the Chess.com public API with adaptive rate limiting.
+  *
+  * Wraps a `zio-http` `Client` and adds several layers of concurrency and error management:
+  *
+  *   - '''Concurrency semaphore''' — bounds parallel in-flight requests to `maxPermits`.
+  *   - '''EMA-based rate delay''' — tracks an exponential moving average of response times and
+  *     staggers outgoing requests so that the full permit budget is utilised without bursting.
+  *     When permits are reduced the per-request delay grows proportionally.
+  *   - '''Failure-window throttle-down''' — maintains a rolling window of success/failure outcomes.
+  *     When the failure rate exceeds a configurable threshold, the effective permit limit is halved
+  *     by forking daemon fibers that hold reserve permits (so no queued request accidentally
+  *     grabs a permit during the transition).
+  *   - '''Generation-gated recovery''' — after a cooldown period, a background fiber doubles the
+  *     permit limit back (or holds if failures persist). A generation counter ensures that only
+  *     the most recent throttle-down triggers recovery, preventing stale fibers from interfering.
+  *   - '''Retry schedules''' — separate schedules handle HTTP 429 (exponential backoff),
+  *     Cloudflare challenge 403s (fixed delay), normal 403/404 (single retry), and transient
+  *     connection errors (exponential backoff).
+  *
+  * Constructed via the `ChessComClient.live` ZLayer which reads configuration from
+  * `application.conf` under the `chess-com-client` prefix.
+  */
 final class ChessComClient(
   client: Client,
   transactor: Transactor,
   headers: Headers,
   logger: CcasLogger,
-  semaphore: Semaphore,
-  stateRef: Ref[ChessComClient.ThrottleState],
-  reserveFibersRef: Ref[Chunk[Fiber.Runtime[Nothing, Nothing]]],
-  adjustMutex: Semaphore,
-  activeRef: Ref[Int],
-  rateLimitGate: Semaphore,
-  lastRequestRef: Ref[Long],
-  responseTimeEma: Ref[Double],
+  throttle: ChessComClient.ThrottleRefs,
   progressBar: ProgressBar,
   config: ChessComClient.ThrottleConfig
 ) {
+  import throttle.*
+
   private val batchedClient = client.batched @@ ZClientAspect.followRedirects(3) { (_, message) =>
     ZIO.fail(Exception(s"Redirect failed: $message"))
   }
@@ -260,6 +277,17 @@ final class ChessComClient(
 }
 
 object ChessComClient {
+  private[ccas] case class ThrottleRefs(
+    semaphore: Semaphore,
+    stateRef: Ref[ThrottleState],
+    reserveFibersRef: Ref[Chunk[Fiber.Runtime[Nothing, Nothing]]],
+    adjustMutex: Semaphore,
+    activeRef: Ref[Int],
+    rateLimitGate: Semaphore,
+    lastRequestRef: Ref[Long],
+    responseTimeEma: Ref[Double]
+  )
+
   private[ccas] case class ThrottleState(
     currentMax: Long,
     generation: Long,
@@ -318,10 +346,8 @@ object ChessComClient {
         lastReqRef   <- Ref.make(0L)
         ema          <- Ref.make(0.0)
         bar          <- logger.progressBar
+        refs = ThrottleRefs(semaphore, stateRef, reserveRef, adjustMutex, activeRef, rateLimitGate, lastReqRef, ema)
         _            <- ZIO.addFinalizer(reserveRef.get.flatMap(fibers => ZIO.foreachDiscard(fibers)(_.interrupt)))
-      } yield ChessComClient(
-        client, transactor, userAgentHeaders(contactEmail), logger,
-        semaphore, stateRef, reserveRef, adjustMutex, activeRef, rateLimitGate, lastReqRef, ema, bar, throttleConfig
-      )
+      } yield ChessComClient(client, transactor, userAgentHeaders(contactEmail), logger, refs, bar, throttleConfig)
     }
 }

@@ -13,8 +13,7 @@ import ccas.analysis.tables.RunTrigger
 import ccas.api.misc.subtypes.ClubSlug
 import ccas.server.jobs.*
 import ccas.server.routes.RouteHelpers.*
-import ccas.utils.client.{ChessComClient, HttpStatusException}
-import ccas.utils.errors.{NotFoundException, UserFacingException}
+import ccas.utils.client.ChessComClient
 
 object JobRoutes {
 
@@ -23,7 +22,7 @@ object JobRoutes {
   private val MaxTarget           = 40
   private val MaxTimeLimitMinutes = 30
 
-  case class RecruitmentRequest(
+  private[server] case class RecruitmentRequest(
     clubSlug: ClubSlug,
     alias: Option[String],
     target: Option[Int],
@@ -36,24 +35,24 @@ object JobRoutes {
     given JsonCodec[RecruitmentRequest] = DeriveJsonCodec.gen
   }
 
-  case class MembershipRequest(clubSlug: ClubSlug, trustUsernames: Option[Boolean])
+  private[server] case class MembershipRequest(clubSlug: ClubSlug, trustUsernames: Option[Boolean])
   object MembershipRequest {
     given JsonCodec[MembershipRequest] = DeriveJsonCodec.gen
   }
 
-  case class HistoryRequest(clubSlug: ClubSlug, full: Option[Boolean], refresh: Option[Boolean])
+  private[server] case class HistoryRequest(clubSlug: ClubSlug, full: Option[Boolean], refresh: Option[Boolean])
   object HistoryRequest {
     given JsonCodec[HistoryRequest] = DeriveJsonCodec.gen
   }
 
   // --- Response types ---
 
-  case class JobResponse(jobId: String, status: String)
+  private[server] case class JobResponse(jobId: String, status: String)
   object JobResponse {
     given JsonCodec[JobResponse] = DeriveJsonCodec.gen
   }
 
-  case class JobStatusResponse(
+  private[server] case class JobStatusResponse(
     id: String,
     kind: String,
     status: String,
@@ -79,16 +78,6 @@ object JobRoutes {
       )
   }
 
-  // --- Helpers ---
-
-  private def handleJobError(error: Throwable): Response = error match {
-    case e: JobConflictException => jsonResponse(Status.Conflict, ErrorResponse(e.getMessage))
-    case e: HttpStatusException  => jsonResponse(Status.BadGateway, ErrorResponse(e.getMessage))
-    case e: NotFoundException    => jsonResponse(Status.NotFound, ErrorResponse(e.getMessage))
-    case e: UserFacingException  => jsonResponse(Status.BadRequest, ErrorResponse(e.getMessage))
-    case _                       => jsonResponse(Status.InternalServerError, ErrorResponse("Internal server error"))
-  }
-
   // --- Routes ---
 
   def routes: Routes[JobRunner & ChessComClient & Transactor, Nothing] = Routes(
@@ -112,7 +101,7 @@ object JobRoutes {
         params    = if (paramsStr.length > 1024) paramsStr.take(1024) + "..." else paramsStr
         jobId <- runner.submit(JobKind.Recruitment, Some(body.clubSlug), Some(params), RunTrigger.Api, effect)
       } yield jsonResponse(Status.Accepted, JobResponse(JobRunId.unwrap(jobId), "running")))
-        .catchAll(e => ZIO.succeed(handleJobError(e)))
+        .catchAll(e => ZIO.succeed(handleError(e)))
     },
     Method.POST / "api" / "jobs" / "membership" -> handler { (req: Request) =>
       (for {
@@ -121,14 +110,14 @@ object JobRoutes {
         effect = MembershipApp.reconcile(body.clubSlug, body.trustUsernames.getOrElse(true), trigger = RunTrigger.Api)
         jobId <- runner.submit(JobKind.Membership, Some(body.clubSlug), None, RunTrigger.Api, effect)
       } yield jsonResponse(Status.Accepted, JobResponse(JobRunId.unwrap(jobId), "running")))
-        .catchAll(e => ZIO.succeed(handleJobError(e)))
+        .catchAll(e => ZIO.succeed(handleError(e)))
     },
     Method.POST / "api" / "jobs" / "matchref" -> handler {
       (for {
         runner <- ZIO.service[JobRunner]
         jobId  <- runner.submit(JobKind.MatchRef, None, None, RunTrigger.Api, RefApp.populate(RunTrigger.Api))
       } yield jsonResponse(Status.Accepted, JobResponse(JobRunId.unwrap(jobId), "running")))
-        .catchAll(e => ZIO.succeed(handleJobError(e)))
+        .catchAll(e => ZIO.succeed(handleError(e)))
     },
     Method.POST / "api" / "jobs" / "history" -> handler { (req: Request) =>
       (for {
@@ -142,14 +131,14 @@ object JobRoutes {
         )
         jobId <- runner.submit(JobKind.History, Some(body.clubSlug), Some(body.toJson), RunTrigger.Api, effect)
       } yield jsonResponse(Status.Accepted, JobResponse(JobRunId.unwrap(jobId), "running")))
-        .catchAll(e => ZIO.succeed(handleJobError(e)))
+        .catchAll(e => ZIO.succeed(handleError(e)))
     },
     Method.GET / "api" / "jobs" -> handler {
       (for {
         runner <- ZIO.service[JobRunner]
         jobs   <- runner.recentJobs(50)
       } yield jsonResponse(Status.Ok, jobs.map(JobStatusResponse.fromJobRun)))
-        .catchAll(e => ZIO.succeed(handleJobError(e)))
+        .catchAll(e => ZIO.succeed(handleError(e)))
     },
     Method.GET / "api" / "jobs" / string("jobId") -> handler { (jobId: String, _: Request) =>
       (for {
@@ -159,7 +148,7 @@ object JobRoutes {
       } yield jobOpt match {
         case Some(job) => jsonResponse(Status.Ok, JobStatusResponse.fromJobRun(job))
         case None      => jsonResponse(Status.NotFound, ErrorResponse(s"Job $jobId not found"))
-      }).catchAll(e => ZIO.succeed(handleJobError(e)))
+      }).catchAll(e => ZIO.succeed(handleError(e)))
     }
   )
 }

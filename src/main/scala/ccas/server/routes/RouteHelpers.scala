@@ -4,7 +4,9 @@ import zio.{Task, ZIO}
 import zio.http.*
 import zio.json.{DeriveJsonCodec, JsonCodec, JsonDecoder, JsonEncoder}
 
-import ccas.utils.errors.BadRequestException
+import ccas.server.jobs.JobConflictException
+import ccas.utils.client.HttpStatusException
+import ccas.utils.errors.{BadRequestException, NotFoundException, UserFacingException}
 
 object RouteHelpers {
 
@@ -20,4 +22,13 @@ object RouteHelpers {
     req.body.asString.flatMap(s =>
       ZIO.fromEither(summon[JsonDecoder[T]].decodeJson(s)).mapError(e => new BadRequestException(e))
     )
+
+  def handleError(error: Throwable): Response = error match {
+    case e: JobConflictException => jsonResponse(Status.Conflict, ErrorResponse(e.getMessage))
+    case e: HttpStatusException  => jsonResponse(Status.BadGateway, ErrorResponse(e.getMessage))
+    case e: NotFoundException    => jsonResponse(Status.NotFound, ErrorResponse(e.getMessage))
+    case e: BadRequestException  => jsonResponse(Status.BadRequest, ErrorResponse(e.getMessage))
+    case e: UserFacingException  => jsonResponse(Status.BadRequest, ErrorResponse(e.getMessage))
+    case _                       => jsonResponse(Status.InternalServerError, ErrorResponse("Internal server error"))
+  }
 }

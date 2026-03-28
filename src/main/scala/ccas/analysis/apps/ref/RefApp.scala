@@ -33,7 +33,33 @@ object RefApp extends ZIOAppDefault {
       startedAt <- ZIO.succeed(Instant.now())
       client    <- ZIO.service[ChessComClient]
       ctx       <- RefContext.make(client)
-      // Clubs
+      (clubsTotal, clubsResolvedDb, clubsResolvedApi, clubsSkippedNew) <- resolveClubs(ctx)
+      (playersTotal, playersResolvedDb, playersResolvedApi, playersSkippedNew) <- resolvePlayers(ctx)
+      skipped <- ctx.skippedPlayers.get
+      completedAt = Instant.now()
+      duration    = JDuration.between(startedAt, completedAt)
+      _ <- CcasLogger.info(s"Duration: ${duration.display}")
+      // Output report
+      failed              <- ctx.failedUrls.get
+      failedSrc           <- ctx.failedUrlSource.get
+      playerSkipsByReason <- PlayerRefSkip.countByReason
+      clubSkipsByReason   <- ClubRefSkip.countByReason
+      report = formatReport(ReportData(
+        clubsTotal = clubsTotal, clubsResolvedDb = clubsResolvedDb, clubsResolvedApi = clubsResolvedApi,
+        clubsSkippedNew = clubsSkippedNew,
+        playersTotal = playersTotal, playersResolvedDb = playersResolvedDb, playersResolvedApi = playersResolvedApi,
+        playersSkippedNew = playersSkippedNew,
+        skippedPlayers = skipped,
+        playerSkipsByReason = playerSkipsByReason,
+        clubSkipsByReason = clubSkipsByReason,
+        startedAt = startedAt, completedAt = completedAt,
+        failedQueries = failed, failedUrlSources = failedSrc
+      ))
+      _ <- ZIO.whenCaseDiscard(outputDir) { case Some(dir) => OutputFile.writeAndLogGlobal("ref", report, dir) }
+    } yield ()
+
+  private def resolveClubs(ctx: RefContext): RIO[CcasLogger & ChessComClient & Transactor, (Int, Int, Int, Int)] =
+    for {
       clubs <- selectUnresolvedClubs
       _     <- CcasLogger.info(s"Clubs without match ref: ${clubs.size}")
       clubProcessed <- Ref.make(0)
@@ -48,11 +74,14 @@ object RefApp extends ZIOAppDefault {
           }
         } yield ()
       }
-      clubsDb         <- ctx.clubsResolvedDb.get
-      clubsApi        <- ctx.clubsResolvedApi.get
-      clubsSkippedNew <- ctx.clubsSkippedNew.get
-      _ <- CcasLogger.info(s"Clubs resolved: $clubsDb (DB) + $clubsApi (API) = ${clubsDb + clubsApi} / ${clubs.size}, skipped: $clubsSkippedNew new")
-      // Players
+      db         <- ctx.clubsResolvedDb.get
+      api        <- ctx.clubsResolvedApi.get
+      skippedNew <- ctx.clubsSkippedNew.get
+      _ <- CcasLogger.info(s"Clubs resolved: $db (DB) + $api (API) = ${db + api} / ${clubs.size}, skipped: $skippedNew new")
+    } yield (clubs.size, db, api, skippedNew)
+
+  private def resolvePlayers(ctx: RefContext): RIO[CcasLogger & ChessComClient & Transactor, (Int, Int, Int, Int)] =
+    for {
       players <- selectUnresolvedPlayers
       _       <- CcasLogger.info(s"Players without match ref: ${players.size}")
       playerProcessed <- Ref.make(0)
@@ -67,37 +96,17 @@ object RefApp extends ZIOAppDefault {
           }
         } yield ()
       }
-      playersDb         <- ctx.playersResolvedDb.get
-      playersApi        <- ctx.playersResolvedApi.get
-      playersSkippedNew <- ctx.playersSkippedNew.get
-      skipped           <- ctx.skippedPlayers.get
+      db         <- ctx.playersResolvedDb.get
+      api        <- ctx.playersResolvedApi.get
+      skippedNew <- ctx.playersSkippedNew.get
+      skipped    <- ctx.skippedPlayers.get
       _ <- CcasLogger.info(
-        s"Players resolved: $playersDb (DB) + $playersApi (API) = ${playersDb + playersApi} / ${players.size}, skipped: $playersSkippedNew new"
+        s"Players resolved: $db (DB) + $api (API) = ${db + api} / ${players.size}, skipped: $skippedNew new"
       )
       _ <- ZIO.whenDiscard(skipped.nonEmpty)(
         CcasLogger.warn(s"Players skipped (ID mismatch): ${skipped.size}")
       )
-      completedAt = Instant.now()
-      duration    = JDuration.between(startedAt, completedAt)
-      _ <- CcasLogger.info(s"Duration: ${duration.display}")
-      // Output report
-      failed              <- ctx.failedUrls.get
-      failedSrc           <- ctx.failedUrlSource.get
-      playerSkipsByReason <- PlayerRefSkip.countByReason
-      clubSkipsByReason   <- ClubRefSkip.countByReason
-      report = formatReport(ReportData(
-        clubsTotal = clubs.size, clubsResolvedDb = clubsDb, clubsResolvedApi = clubsApi,
-        clubsSkippedNew = clubsSkippedNew,
-        playersTotal = players.size, playersResolvedDb = playersDb, playersResolvedApi = playersApi,
-        playersSkippedNew = playersSkippedNew,
-        skippedPlayers = skipped,
-        playerSkipsByReason = playerSkipsByReason,
-        clubSkipsByReason = clubSkipsByReason,
-        startedAt = startedAt, completedAt = completedAt,
-        failedQueries = failed, failedUrlSources = failedSrc
-      ))
-      _ <- ZIO.whenCaseDiscard(outputDir) { case Some(dir) => OutputFile.writeAndLogGlobal("ref", report, dir) }
-    } yield ()
+    } yield (players.size, db, api, skippedNew)
 
   // --- Queries ---
 

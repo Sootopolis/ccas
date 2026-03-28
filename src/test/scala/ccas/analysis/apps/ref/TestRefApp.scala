@@ -202,19 +202,13 @@ object TestRefApp extends ZIOSpecDefault {
         ): ZIO[Env1 & Scope, Throwable, Response] =
           ZIO.die(new UnsupportedOperationException)
       }
+      val refs = ChessComClient.ThrottleRefs(semaphore, stateRef, reserveRef, adjustMutex, activeRef, rateLimitGate, lastReqRef, ema)
       ChessComClient(
         ZClient.fromDriver(driver),
         transactor,
         Headers.empty,
         TestCcasLogger.noop,
-        semaphore,
-        stateRef,
-        reserveRef,
-        adjustMutex,
-        activeRef,
-        rateLimitGate,
-        lastReqRef,
-        ema,
+        refs,
         bar,
         ChessComClient.ThrottleConfig(5, 30.seconds, 1.second, 5.seconds, 10.seconds, 20, 0.2, 10)
       )
