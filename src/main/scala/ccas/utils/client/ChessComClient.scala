@@ -80,8 +80,7 @@ final class ChessComClient(
     */
   private def rateDelay: Task[Unit] =
     stateRef.get.flatMap { state =>
-      if (state.currentMax >= config.maxPermits) { ZIO.unit }
-      else {
+      ZIO.unlessDiscard(state.currentMax >= config.maxPermits) {
         for {
           now <- Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS)
           sleepMs <- lastRequestRef.modify { last =>
@@ -142,22 +141,28 @@ final class ChessComClient(
           scheduleRecovery(gen).forkDaemon.unit
     }
 
-  /** Adjust the reservation fibers to enforce `newMax` effective permits.
-    * Each reserve fiber holds exactly 1 permit via `withPermit(ZIO.never)`, so permits
-    * are acquired incrementally as they become available — avoiding the starvation problem
-    * where a single `withPermits(N)` call can never acquire N permits atomically.
-    * Serialized via mutex to prevent concurrent calls from leaking reserve fibers.
+  /** Incrementally adjust reserve fibers to enforce `newMax` effective permits.
+    * Throttle-down only forks additional reserve fibers (never releasing existing ones),
+    * so no permits are briefly returned to the semaphore for queued requests to grab.
+    * Recovery only interrupts the excess. Serialized via mutex.
     */
   private def adjustPermits(newMax: Long): Task[Unit] =
     adjustMutex.withPermit {
       for {
-        oldFibers <- reserveFibersRef.getAndSet(Chunk.empty)
-        _         <- ZIO.foreachDiscard(oldFibers)(_.interrupt)
-        toReserve = config.maxPermits - newMax
-        newFibers <- ZIO.foreach(Chunk.range(0, toReserve.toInt))(_ =>
-          semaphore.withPermit(ZIO.never).forkDaemon
-        )
-        _ <- reserveFibersRef.set(newFibers)
+        oldFibers <- reserveFibersRef.get
+        toReserve  = (config.maxPermits - newMax).toInt
+        current    = oldFibers.size
+        delta      = toReserve - current
+        _ <- if (delta > 0) {
+          ZIO.foreach(Chunk.range(0, delta))(_ =>
+            semaphore.withPermit(ZIO.never).forkDaemon
+          ).flatMap(added => reserveFibersRef.set(oldFibers ++ added))
+        } else {
+          ZIO.whenDiscard(delta < 0) {
+            val (keep, release) = oldFibers.splitAt(current + delta)
+            ZIO.foreachDiscard(release)(_.interrupt) *> reserveFibersRef.set(keep)
+          }
+        }
       } yield ()
     }
 
