@@ -336,13 +336,11 @@ object RefApp extends ZIOAppDefault {
         case None =>
           resolvePlayerViaMatch(ctx, player).flatMap {
             case ResolveResult.Resolved   => ZIO.succeed(true)
-            case ResolveResult.SkipPlayer =>
-              skipPlayer(ctx, player, RefSkipReason.IdMismatch).as(false)
+            case ResolveResult.SkipPlayer => skipPlayer(ctx, player, RefSkipReason.IdMismatch).as(false)
             case matchOutcome => // NotFound or NoData
               resolvePlayerViaTournament(ctx, player).flatMap {
                 case ResolveResult.Resolved   => ZIO.succeed(true)
-                case ResolveResult.SkipPlayer =>
-                  skipPlayer(ctx, player, RefSkipReason.IdMismatch).as(false)
+                case ResolveResult.SkipPlayer => skipPlayer(ctx, player, RefSkipReason.IdMismatch).as(false)
                 case tournamentOutcome =>
                   val reason = (matchOutcome, tournamentOutcome) match {
                     case (ResolveResult.NoData, ResolveResult.NoData) => RefSkipReason.NoData

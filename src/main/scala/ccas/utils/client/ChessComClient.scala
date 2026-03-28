@@ -26,9 +26,9 @@ final class ChessComClient(
   progressBar: ProgressBar,
   config: ChessComClient.ThrottleConfig
 ) {
-  private val batchedClient = (client @@ ZClientAspect.followRedirects(3) { (_, message) =>
+  private val batchedClient = client.batched @@ ZClientAspect.followRedirects(3) { (_, message) =>
     ZIO.fail(Exception(s"Redirect failed: $message"))
-  }).batched
+  }
 
   private def rawGet[T](url: URL)(using jsonDecoder: JsonDecoder[T]): Task[T] = for {
     response    <- batchedClient(Request(method = GET, url = url).addHeaders(headers))
@@ -145,14 +145,15 @@ final class ChessComClient(
     * Clears coolingDown so further throttle-downs can occur if needed.
     */
   private def scheduleRecovery(generation: Long): Task[Unit] =
-    ZIO.sleep(config.cooldown) *> {
-      stateRef.modify { state =>
-        if (state.generation != generation) {
-          (None, state)
-        } else if (failureRate(state.outcomes) > config.failureThreshold) {
+    for {
+      _ <- ZIO.sleep(config.cooldown)
+      option <- stateRef.modify { state =>
+        if (state.generation != generation) (None, state)
+        else if (failureRate(state.outcomes) > config.failureThreshold) {
           (Some((state.currentMax, state.currentMax, generation)), state.copy(coolingDown = false))
-        } else {
-          val newMax        = (state.currentMax * 2).min(config.maxPermits)
+        }
+        else {
+          val newMax = (state.currentMax * 2).min(config.maxPermits)
           val clearOutcomes = newMax == config.maxPermits
           val newState = state.copy(
             currentMax = newMax,
@@ -161,22 +162,20 @@ final class ChessComClient(
           )
           (Some((state.currentMax, newMax, generation)), newState)
         }
-      }.flatMap {
-        case None => ZIO.unit
-        case Some((oldMax, newMax, gen)) =>
-          if (oldMax == newMax) {
-            logger.warn(s"Rate limit still elevated, holding at $newMax permits") *>
-              scheduleRecovery(gen)
-          } else {
-            val msg =
-              if (newMax == config.maxPermits) "Rate limit throttle lifted"
-              else s"Rate limit easing: $oldMax \u2192 $newMax permits"
-            adjustPermits(newMax) *>
-              logger.info(msg) *>
-              ZIO.unlessDiscard(newMax == config.maxPermits)(scheduleRecovery(gen))
-          }
       }
-    }
+      _ <- ZIO.foreachDiscard(option) { case (oldMax, newMax, gen) =>
+        if (oldMax == newMax) {
+          logger.warn(s"Rate limit still elevated, holding at $newMax permits") *> scheduleRecovery(gen)
+        }
+        else {
+          val msg =
+            if (newMax == config.maxPermits) "Rate limit throttle lifted"
+            else s"Rate limit easing: $oldMax \u2192 $newMax permits"
+          adjustPermits(newMax) *> logger.info(msg) *>
+            ZIO.unlessDiscard(newMax == config.maxPermits)(scheduleRecovery(gen))
+        }
+      }
+    } yield ()
 
   private val CfChallengeMarker = "/cdn-cgi/challenge-platform/"
 
@@ -184,8 +183,7 @@ final class ChessComClient(
     response.status == Status.Forbidden && body.contains(CfChallengeMarker)
 
   private def failureRate(outcomes: Vector[Boolean]): Double =
-    if (outcomes.isEmpty) 0.0
-    else outcomes.count(!_).toDouble / outcomes.size
+    if (outcomes.isEmpty) 0.0 else outcomes.count(!_).toDouble / outcomes.size
 
   private val retry429Schedule: Schedule[Any, Throwable, Any] =
     Schedule.exponential(config.retryBase).jittered && Schedule.recurs(5) && Schedule.recurWhile[Throwable] {
@@ -195,16 +193,14 @@ final class ChessComClient(
 
   private val retryCfSchedule: Schedule[Any, Throwable, Any] =
     Schedule.fixed(config.cfRetryDelay) && Schedule.recurs(2) && Schedule.recurWhile[Throwable] {
-      case e: HttpStatusException =>
-        e.statusCode == 403 && e.responseBody.contains(CfChallengeMarker)
+      case e: HttpStatusException => e.statusCode == 403 && e.responseBody.contains(CfChallengeMarker)
       case _ => false
     }
 
   private val retryOnceSchedule: Schedule[Any, Throwable, Any] =
     Schedule.fixed(config.singleRetryDelay) && Schedule.recurs(1) && Schedule.recurWhile[Throwable] {
       case e: HttpStatusException =>
-        (e.statusCode == 403 && !e.responseBody.contains(CfChallengeMarker)) ||
-        e.statusCode == 404
+        (e.statusCode == 403 && !e.responseBody.contains(CfChallengeMarker)) || e.statusCode == 404
       case _ => false
     }
 }
