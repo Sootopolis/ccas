@@ -6,10 +6,10 @@ import ccas.utils.json.JsonDecodingException
 import ccas.utils.{CcasLogger, ProgressBar}
 import com.augustnagro.magnum.Transactor
 import com.typesafe.config.ConfigFactory
-import zio.http.Method.GET
+import zio.*
 import zio.http.*
+import zio.http.Method.GET
 import zio.json.JsonDecoder
-import zio.{Chunk, Clock, Duration, Fiber, Ref, Schedule, Semaphore, Task, UIO, ZEnvironment, ZIO, ZLayer, durationInt, durationLong}
 
 import java.time.Instant
 
@@ -87,17 +87,18 @@ final class ChessComClient(
     */
   private def rateDelay: Task[Unit] =
     responseTimeEma.get.flatMap { ema =>
-      if (ema <= 0) ZIO.unit
-      else rateLimitGate.withPermit {
-        stateRef.get.flatMap { state =>
-          val targetDelay = (ema / state.currentMax).toLong
-          for {
-            now  <- Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS)
-            last <- lastRequestRef.get
-            gap   = now - last
-            _    <- ZIO.whenDiscard(gap < targetDelay)(ZIO.sleep((targetDelay - gap).millis))
-            _    <- Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS).flatMap(lastRequestRef.set)
-          } yield ()
+      ZIO.unlessDiscard(ema <= 0) {
+        rateLimitGate.withPermit {
+          stateRef.get.flatMap { state =>
+            val targetDelay = (ema / state.currentMax).toLong
+            for {
+              now <- Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS)
+              last <- lastRequestRef.get
+              gap = now - last
+              _ <- ZIO.whenDiscard(gap < targetDelay)(ZIO.sleep((targetDelay - gap).millis))
+              _ <- Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS).flatMap(lastRequestRef.set)
+            } yield ()
+          }
         }
       }
     }
