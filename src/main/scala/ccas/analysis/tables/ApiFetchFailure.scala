@@ -28,6 +28,8 @@ object ApiFetchFailure {
               error_message  VARCHAR,
               response_body  VARCHAR
             )""".update.run()
+      sql"""CREATE INDEX IF NOT EXISTS idx_api_fetch_failure_occurred_at
+            ON api_fetch_failure (occurred_at)""".update.run()
     }
 
   def insert(item: ApiFetchFailure): ZIO[Transactor, SQLException, Int] =

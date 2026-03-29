@@ -29,6 +29,8 @@ object HistoryPendingMatch {
               status     VARCHAR NOT NULL,
               PRIMARY KEY (club_id, match_id, is_live)
             )""".update.run()
+      sql"""CREATE INDEX IF NOT EXISTS idx_history_pending_new
+            ON history_pending_match (club_id) WHERE status = 'New'""".update.run()
     }
 
   def selectClub(clubId: ClubId): ZIO[Transactor, SQLException, List[HistoryPendingMatch]] =

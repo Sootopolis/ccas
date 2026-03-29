@@ -44,6 +44,10 @@ object JobRun {
               completed_at   TIMESTAMPTZ,
               error          TEXT
             )""".update.run()
+      sql"""CREATE INDEX IF NOT EXISTS idx_job_run_running
+            ON job_run (kind, club_id) WHERE status = 'Running'""".update.run()
+      sql"""CREATE INDEX IF NOT EXISTS idx_job_run_started_at
+            ON job_run (started_at DESC)""".update.run()
     }
 
   def insert(jobRun: JobRun): ZIO[Transactor, SQLException, Int] =

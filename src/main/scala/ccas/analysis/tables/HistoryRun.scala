@@ -36,6 +36,7 @@ object HistoryRun {
               players_discovered INT,
               job_run_id   TEXT
             )""".update.run()
+      sql"""CREATE INDEX IF NOT EXISTS idx_history_run_club_id ON history_run (club_id)""".update.run()
     }
 
   def insert(

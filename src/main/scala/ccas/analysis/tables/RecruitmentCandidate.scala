@@ -36,6 +36,8 @@ object RecruitmentCandidate {
               FOREIGN KEY (player_id) REFERENCES player (player_id) ON DELETE RESTRICT
             )""".update.run()
       sql"""CREATE INDEX IF NOT EXISTS idx_rc_player_id ON recruitment_candidate (player_id)""".update.run()
+      sql"""CREATE INDEX IF NOT EXISTS idx_rc_player_outcome_eval
+            ON recruitment_candidate (player_id, outcome, evaluated_at DESC)""".update.run()
     }
 
   def insert(item: RecruitmentCandidate): ZIO[Transactor, SQLException, Int] =

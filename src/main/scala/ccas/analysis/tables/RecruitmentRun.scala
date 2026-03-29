@@ -38,7 +38,8 @@ object RecruitmentRun {
               job_run_id        TEXT,
               FOREIGN KEY (club_id) REFERENCES club (club_id) ON DELETE RESTRICT
             )""".update.run()
-      sql"""CREATE INDEX IF NOT EXISTS idx_recruitment_run_club_id ON recruitment_run(club_id)""".update.run()
+      sql"""CREATE INDEX IF NOT EXISTS idx_recruitment_run_club_started
+            ON recruitment_run (club_id, started_at DESC)""".update.run()
     }
 
   def insert(
