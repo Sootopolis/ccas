@@ -7,7 +7,7 @@ import zio.json.readJsonLinesAs
 import zio.test.{assertTrue, Spec, ZIOSpecDefault}
 
 import ccas.api.clubmatch.ApiDailyMatch
-import ccas.api.misc.enums.{BoardGameWinner, ClubMatchResult, ClubMatchStatus, GameResultDetail, TimeClass}
+import ccas.api.misc.enums.{BoardGameWinner, ClubMatchStatus, GameResultDetail, TimeClass}
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug}
 import ccas.api.player.ApiPlayerMatches.ApiPlayerMatch
 
@@ -57,11 +57,9 @@ object TestHistoryApp extends ZIOSpecDefault {
         row.endTime.contains(Instant.ofEpochSecond(1735309563L)),
         row.boards == 13,
         row.team1ClubId == team1ClubId,
-        row.team1Score == 10.0,
-        row.team1Result.contains(ClubMatchResult.Lose),
+        row.team1ScoreX2 == 20,
         row.team2ClubId == team2ClubId,
-        row.team2Score == 16.0,
-        row.team2Result.contains(ClubMatchResult.Win)
+        row.team2ScoreX2 == 32
       )
     }
   }
@@ -94,9 +92,7 @@ object TestHistoryApp extends ZIOSpecDefault {
         assertTrue(
           row.status == ClubMatchStatus.InProgress,
           row.startTime.isDefined,
-          row.endTime.isEmpty,
-          row.team1Result.isEmpty,
-          row.team2Result.isEmpty
+          row.endTime.isEmpty
         )
       }
     }
@@ -108,9 +104,7 @@ object TestHistoryApp extends ZIOSpecDefault {
 
       assertTrue(
         row.status == ClubMatchStatus.Registration,
-        row.endTime.isEmpty,
-        row.team1Result.isEmpty,
-        row.team2Result.isEmpty
+        row.endTime.isEmpty
       )
     }
   }

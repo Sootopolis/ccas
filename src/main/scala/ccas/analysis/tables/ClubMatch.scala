@@ -6,7 +6,7 @@ import java.time.Instant
 import com.augustnagro.magnum.*
 import zio.ZIO
 
-import ccas.api.misc.enums.{ClubMatchResult, ClubMatchStatus, TimeClass}
+import ccas.api.misc.enums.{ClubMatchStatus, TimeClass}
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId}
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.SqlZioTypes.connectZIO
@@ -15,18 +15,15 @@ import ccas.utils.sql.SqlZioTypes.connectZIO
 final case class ClubMatch(
   @Id matchId: ClubMatchId,
   name: String,
-  url: String,
   status: ClubMatchStatus,
   timeClass: TimeClass,
   startTime: Option[Instant],
   endTime: Option[Instant],
   boards: Int,
   team1ClubId: Option[ClubId],
-  team1Score: Double,
-  team1Result: Option[ClubMatchResult],
+  team1ScoreX2: Int,
   team2ClubId: Option[ClubId],
-  team2Score: Double,
-  team2Result: Option[ClubMatchResult],
+  team2ScoreX2: Int,
   fetchedAt: Instant
 ) derives DbCodec
 
@@ -36,21 +33,18 @@ object ClubMatch {
   def createTable: ZIO[Transactor, SQLException, Int] =
     connectZIO {
       sql"""CREATE TABLE IF NOT EXISTS club_match (
-              match_id       BIGINT PRIMARY KEY,
-              name           VARCHAR NOT NULL,
-              url            VARCHAR NOT NULL,
-              status         VARCHAR NOT NULL,
-              time_class     VARCHAR NOT NULL,
-              start_time     TIMESTAMPTZ,
-              end_time       TIMESTAMPTZ,
-              boards         INT NOT NULL,
-              team1_club_id  BIGINT REFERENCES club (club_id),
-              team1_score    DOUBLE PRECISION NOT NULL,
-              team1_result   VARCHAR,
-              team2_club_id  BIGINT REFERENCES club (club_id),
-              team2_score    DOUBLE PRECISION NOT NULL,
-              team2_result   VARCHAR,
-              fetched_at     TIMESTAMPTZ NOT NULL
+              match_id        BIGINT PRIMARY KEY,
+              name            VARCHAR NOT NULL,
+              status          VARCHAR NOT NULL,
+              time_class      VARCHAR NOT NULL,
+              start_time      TIMESTAMPTZ,
+              end_time        TIMESTAMPTZ,
+              boards          INT NOT NULL,
+              team1_club_id   BIGINT REFERENCES club (club_id),
+              team1_score_x2  INT NOT NULL,
+              team2_club_id   BIGINT REFERENCES club (club_id),
+              team2_score_x2  INT NOT NULL,
+              fetched_at      TIMESTAMPTZ NOT NULL
             )""".update.run()
       sql"""CREATE INDEX IF NOT EXISTS idx_club_match_team1_club ON club_match (team1_club_id)""".update.run()
       sql"""CREATE INDEX IF NOT EXISTS idx_club_match_team2_club ON club_match (team2_club_id)""".update.run()
@@ -76,22 +70,20 @@ object ClubMatch {
 
   def upsert(item: ClubMatch): ZIO[Transactor, SQLException, Int] =
     connectZIO {
-      sql"""INSERT INTO club_match (match_id, name, url, status, time_class, start_time, end_time, boards,
-              team1_club_id, team1_score, team1_result,
-              team2_club_id, team2_score, team2_result, fetched_at)
-            VALUES (${item.matchId}, ${item.name}, ${item.url}, ${item.status.toString}, ${item.timeClass.toString},
+      sql"""INSERT INTO club_match (match_id, name, status, time_class, start_time, end_time, boards,
+              team1_club_id, team1_score_x2,
+              team2_club_id, team2_score_x2, fetched_at)
+            VALUES (${item.matchId}, ${item.name}, ${item.status.toString}, ${item.timeClass.toString},
               ${item.startTime}, ${item.endTime}, ${item.boards},
-              ${item.team1ClubId}, ${item.team1Score}, ${item.team1Result.map(_.toString)},
-              ${item.team2ClubId}, ${item.team2Score}, ${item.team2Result.map(_.toString)},
+              ${item.team1ClubId}, ${item.team1ScoreX2},
+              ${item.team2ClubId}, ${item.team2ScoreX2},
               ${item.fetchedAt})
             ON CONFLICT (match_id) DO UPDATE SET
-              name = EXCLUDED.name, url = EXCLUDED.url, status = EXCLUDED.status,
+              name = EXCLUDED.name, status = EXCLUDED.status,
               time_class = EXCLUDED.time_class, start_time = EXCLUDED.start_time, end_time = EXCLUDED.end_time,
               boards = EXCLUDED.boards,
-              team1_club_id = EXCLUDED.team1_club_id,
-              team1_score = EXCLUDED.team1_score, team1_result = EXCLUDED.team1_result,
-              team2_club_id = EXCLUDED.team2_club_id,
-              team2_score = EXCLUDED.team2_score, team2_result = EXCLUDED.team2_result,
+              team1_club_id = EXCLUDED.team1_club_id, team1_score_x2 = EXCLUDED.team1_score_x2,
+              team2_club_id = EXCLUDED.team2_club_id, team2_score_x2 = EXCLUDED.team2_score_x2,
               fetched_at = EXCLUDED.fetched_at""".update.run()
     }
 

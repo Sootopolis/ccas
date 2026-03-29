@@ -684,18 +684,15 @@ object TestRecruitmentApp extends ZIOSpecDefault {
           ClubMatch(
             refMatchId,
             "Test Match",
-            "https://chess.com/match/8001",
             ccas.api.misc.enums.ClubMatchStatus.Finished,
             ccas.api.misc.enums.TimeClass.Daily,
             Some(Times.t0),
             Some(Times.t1),
             1,
             Some(clubId),
-            10.0,
-            Some(ccas.api.misc.enums.ClubMatchResult.Win),
+            20,
             None,
-            5.0,
-            Some(ccas.api.misc.enums.ClubMatchResult.Lose),
+            10,
             Times.t0
           )
         )

@@ -520,27 +520,18 @@ private[history] object HistoryProcessing {
       case m: ApiDailyMatchInProgress => (Some(Instant.ofEpochSecond(m.startTime)), None)
       case m: ApiDailyMatchRegistered => (m.startTime.map(Instant.ofEpochSecond), None)
     }
-    val (team1Result, team2Result) = teams match {
-      case t: ApiDailyMatchTeamsFinished  => (Some(t.team1.result), Some(t.team2.result))
-      case t: ApiDailyMatchTeamsCancelled => (Some(t.team1.result), Some(t.team2.result))
-      case _                              => (None, None)
-    }
-
     ClubMatch(
       matchId = matchId,
       name = dailyMatch.name,
-      url = dailyMatch.url.encode,
       status = dailyMatch.status,
       timeClass = dailyMatch.settings.timeClass,
       startTime = startTime,
       endTime = endTime,
       boards = dailyMatch.boards,
       team1ClubId = team1ClubId,
-      team1Score = teams.team1.score,
-      team1Result = team1Result,
+      team1ScoreX2 = (teams.team1.score * 2).toInt,
       team2ClubId = team2ClubId,
-      team2Score = teams.team2.score,
-      team2Result = team2Result,
+      team2ScoreX2 = (teams.team2.score * 2).toInt,
       fetchedAt = Instant.now()
     )
   }

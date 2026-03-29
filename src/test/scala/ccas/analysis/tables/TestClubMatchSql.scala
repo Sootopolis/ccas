@@ -4,7 +4,7 @@ import java.time.{Duration, Instant, LocalDateTime, ZoneOffset}
 
 import zio.test.{assertCompletes, assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
-import ccas.api.misc.enums.{BoardGameWinner, ClubMatchResult, ClubMatchStatus, GameResultDetail, TimeClass}
+import ccas.api.misc.enums.{BoardGameWinner, ClubMatchStatus, GameResultDetail, TimeClass}
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username}
 import ccas.utils.sql.FreshSchemaLayer
 
@@ -64,36 +64,30 @@ object TestClubMatchSql extends ZIOSpecDefault {
   private val matchFinished = ClubMatch(
     matchId = ClubMatchId(1001),
     name = "Club A vs Club B",
-    url = "https://www.chess.com/club/matches/1001",
     status = ClubMatchStatus.Finished,
     timeClass = TimeClass.Daily,
     startTime = Some(Times.t0),
     endTime = Some(Times.t1),
     boards = 5,
     team1ClubId = Some(clubA.clubId),
-    team1Score = 6.0,
-    team1Result = Some(ClubMatchResult.Win),
+    team1ScoreX2 = 12,
     team2ClubId = Some(clubB.clubId),
-    team2Score = 4.0,
-    team2Result = Some(ClubMatchResult.Lose),
+    team2ScoreX2 = 8,
     fetchedAt = Times.t2
   )
 
   private val matchInProgress = ClubMatch(
     matchId = ClubMatchId(1002),
     name = "Club A vs Unknown",
-    url = "https://www.chess.com/club/matches/1002",
     status = ClubMatchStatus.InProgress,
     timeClass = TimeClass.Daily,
     startTime = Some(Times.t1),
     endTime = None,
     boards = 3,
     team1ClubId = Some(clubA.clubId),
-    team1Score = 2.0,
-    team1Result = None,
+    team1ScoreX2 = 4,
     team2ClubId = None,
-    team2Score = 1.0,
-    team2Result = None,
+    team2ScoreX2 = 2,
     fetchedAt = Times.t2
   )
 
@@ -115,13 +109,13 @@ object TestClubMatchSql extends ZIOSpecDefault {
   }
 
   private def testClubMatchUpsertUpdate = test("ClubMatch upsert update") {
-    val updated = matchFinished.copy(team1Score = 7.0, fetchedAt = Times.t3)
+    val updated = matchFinished.copy(team1ScoreX2 = 14, fetchedAt = Times.t3)
     for {
       _      <- ClubMatch.upsert(updated)
       result <- ClubMatch.selectId(matchFinished.matchId)
     } yield assertTrue(
       result.contains(updated),
-      result.get.team1Score == 7.0,
+      result.get.team1ScoreX2 == 14,
       result.get.fetchedAt == Times.t3
     )
   }

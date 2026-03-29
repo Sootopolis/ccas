@@ -8,7 +8,7 @@ import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.analysis.tables.{Club, ClubMatch, HistoryPendingMatch, Tables}
-import ccas.api.misc.enums.{ClubMatchResult, ClubMatchStatus, TimeClass}
+import ccas.api.misc.enums.{ClubMatchStatus, TimeClass}
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug}
 import ccas.utils.{CcasLogger, TestCcasLogger}
 import ccas.utils.client.ChessComClient
@@ -31,18 +31,15 @@ object TestSeedFromClubMatches extends ZIOSpecDefault {
     ClubMatch(
       matchId = ClubMatchId(matchId),
       name = s"Match $matchId",
-      url = s"https://www.chess.com/club/matches/$matchId",
       status = status,
       timeClass = TimeClass.Daily,
       startTime = Some(Times.t0),
       endTime = if (status == ClubMatchStatus.Finished) Some(Times.t1) else None,
       boards = 10,
       team1ClubId = Some(clubId),
-      team1Score = 5.0,
-      team1Result = if (status == ClubMatchStatus.Finished) Some(ClubMatchResult.Win) else None,
+      team1ScoreX2 = 10,
       team2ClubId = Some(ClubId(999)),
-      team2Score = 5.0,
-      team2Result = if (status == ClubMatchStatus.Finished) Some(ClubMatchResult.Lose) else None,
+      team2ScoreX2 = 10,
       fetchedAt = Times.t1
     )
 
