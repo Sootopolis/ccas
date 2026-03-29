@@ -116,7 +116,8 @@ object RecruitmentApp extends ZIOAppDefault {
     timeLimitMinutes: Option[Int] = None,
     explore: Boolean = true,
     showHints: Boolean = false,
-    trigger: RunTrigger = RunTrigger.Cli
+    trigger: RunTrigger = RunTrigger.Cli,
+    jobRunId: Option[String] = None
   ): RIO[CcasLogger & ChessComClient & Transactor, RecruitmentRun] = ZIO.scoped {
     for {
       _       <- MembershipApp.reconcile(clubSlug, trackRun = false)
@@ -125,7 +126,7 @@ object RecruitmentApp extends ZIOAppDefault {
       apiClub <- ApiClub.get(client, clubSlug)
       clubId = apiClub.clubId
       club   = Club(clubId, Instant.ofEpochSecond(apiClub.created), clubSlug, apiClub.name)
-      _ <- Club.upsert(club)
+      _ <- Club.upsertResolvingSlugConflict(club, client)
       aliasRow <- RecruitmentAlias.selectLatest(clubId, alias)
         .someOrFail(NotFoundException(s"No recruitment alias '$alias' found for club '$clubSlug'"))
       criteria <- RecruitmentCriteria.selectId(aliasRow.criteriaId)
@@ -136,7 +137,7 @@ object RecruitmentApp extends ZIOAppDefault {
         else ZIO.succeed(0)
       effectiveTarget = (resolvedTarget - alreadyFound) max 0
       now             = Instant.now()
-      runId <- RecruitmentRun.insert(clubId, criteria.criteriaId, trigger, now)
+      runId <- RecruitmentRun.insert(clubId, criteria.criteriaId, trigger, now, jobRunId)
 
       // --- Shared setup ---
       targetMembers <- ApiClubMembers.get(client, clubSlug)
@@ -202,11 +203,11 @@ object RecruitmentApp extends ZIOAppDefault {
       finalRun <-
         if (effectiveTarget == 0) {
           CcasLogger.info("[Cumulative] Target already met, skipping explore") *>
-            finalizeRun(ctx, trigger, now, cumulative, alreadyFound, "Recruitment Complete (target already met)")
+            finalizeRun(ctx, trigger, now, cumulative, alreadyFound, "Recruitment Complete (target already met)", jobRunId = jobRunId)
         } else {
           runExplorePhase(
             ctx, client, logger, transactor, clubMatches,
-            targetMemberNames, sourceClubs, timeLimitMinutes, trigger, now, cumulative, alreadyFound
+            targetMemberNames, sourceClubs, timeLimitMinutes, trigger, now, cumulative, alreadyFound, jobRunId
           )
         }
     } yield finalRun
@@ -224,7 +225,8 @@ object RecruitmentApp extends ZIOAppDefault {
     trigger: RunTrigger,
     startedAt: Instant,
     cumulative: Boolean,
-    alreadyFound: Int
+    alreadyFound: Int,
+    jobRunId: Option[String] = None
   ): RIO[CcasLogger & ChessComClient & Transactor, RecruitmentRun] =
     for {
       _ <- ZIO.whenDiscard(ctx.showHints)(
@@ -270,13 +272,13 @@ object RecruitmentApp extends ZIOAppDefault {
         case Some(minutes) => loopEffect.timeout(zio.durationLong(minutes.toLong).minutes).unit
         case None          => loopEffect.unit
       }).onInterrupt(
-        finalizeRun(ctx, trigger, startedAt, cumulative, alreadyFound, "Recruitment Interrupted", interrupted = true)
+        finalizeRun(ctx, trigger, startedAt, cumulative, alreadyFound, "Recruitment Interrupted", interrupted = true, jobRunId = jobRunId)
           .provideEnvironment(ZEnvironment(logger, transactor))
           .orDie
       )
 
       // --- Finalize ---
-      finalRun <- finalizeRun(ctx, trigger, startedAt, cumulative, alreadyFound, "Recruitment Complete")
+      finalRun <- finalizeRun(ctx, trigger, startedAt, cumulative, alreadyFound, "Recruitment Complete", jobRunId = jobRunId)
     } yield finalRun
 
   private def finalizeRun(
@@ -286,7 +288,8 @@ object RecruitmentApp extends ZIOAppDefault {
     cumulative: Boolean,
     alreadyFound: Int,
     label: String,
-    interrupted: Boolean = false
+    interrupted: Boolean = false,
+    jobRunId: Option[String] = None
   ): RIO[CcasLogger & Transactor, RecruitmentRun] =
     for {
       _     <- ctx.progressBar.finish
@@ -311,7 +314,7 @@ object RecruitmentApp extends ZIOAppDefault {
       duration    = JDuration.between(startedAt, completedAt)
       clubId      = ctx.runCtx.clubId
       alias       = ctx.runCtx.alias
-      finalRun    = RecruitmentRun(ctx.runId, clubId, ctx.runCtx.criteria.criteriaId, trigger, startedAt, Some(completedAt), confirmed.size)
+      finalRun    = RecruitmentRun(ctx.runId, clubId, ctx.runCtx.criteria.criteriaId, trigger, startedAt, Some(completedAt), confirmed.size, jobRunId)
       _ <- RecruitmentRun.update(finalRun)
       _ <- CcasLogger.info(s"=== $label ===")
       _ <- CcasLogger.info(s"Duration: ${duration.display}")

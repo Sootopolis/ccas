@@ -38,7 +38,8 @@ object RecruitmentBlacklist {
               expires_at TIMESTAMPTZ,
               reason     VARCHAR,
               PRIMARY KEY (club_id, player_id),
-              FOREIGN KEY (club_id) REFERENCES club (club_id) ON DELETE RESTRICT
+              FOREIGN KEY (club_id) REFERENCES club (club_id) ON DELETE RESTRICT,
+              FOREIGN KEY (player_id) REFERENCES player (player_id) ON DELETE RESTRICT
             )""".update.run()
     }
 

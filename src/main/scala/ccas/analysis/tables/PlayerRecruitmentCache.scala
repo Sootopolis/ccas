@@ -51,7 +51,7 @@ object PlayerRecruitmentCache {
   def createTable: ZIO[Transactor, SQLException, Int] =
     connectZIO {
       sql"""CREATE TABLE IF NOT EXISTS player_recruitment_cache (
-              player_id              BIGINT PRIMARY KEY,
+              player_id              BIGINT PRIMARY KEY REFERENCES player (player_id) ON DELETE RESTRICT,
               fetched_at             TIMESTAMPTZ NOT NULL,
               daily_elo              INT,
               daily_timeout_pct      DOUBLE PRECISION,
@@ -64,16 +64,6 @@ object PlayerRecruitmentCache {
               last_daily_timeout_at  TIMESTAMPTZ,
               last_tm_timeout_at     TIMESTAMPTZ
             )""".update.run()
-    } *> connectZIO {
-      sql"ALTER TABLE player_recruitment_cache ADD COLUMN IF NOT EXISTS last_daily_timeout_at TIMESTAMPTZ".update.run()
-    } *> connectZIO {
-      sql"ALTER TABLE player_recruitment_cache ADD COLUMN IF NOT EXISTS last_tm_timeout_at TIMESTAMPTZ".update.run()
-    } *> connectZIO {
-      sql"ALTER TABLE player_recruitment_cache ALTER COLUMN ongoing_games DROP NOT NULL".update.run()
-    } *> connectZIO {
-      sql"ALTER TABLE player_recruitment_cache ALTER COLUMN ongoing_team_matches DROP NOT NULL".update.run()
-    } *> connectZIO {
-      sql"ALTER TABLE player_recruitment_cache ALTER COLUMN tm_games_finished_90d DROP NOT NULL".update.run()
     }
 
   def selectId(playerId: PlayerId): ZIO[Transactor, SQLException, Option[PlayerRecruitmentCache]] =

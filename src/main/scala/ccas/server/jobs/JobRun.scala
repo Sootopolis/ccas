@@ -8,7 +8,7 @@ import zio.ZIO
 
 import ccas.analysis.tables.RunTrigger
 import ccas.analysis.tables.RunTrigger.given
-import ccas.api.misc.subtypes.ClubSlug
+import ccas.api.misc.subtypes.ClubId
 import ccas.server.jobs.JobKind.given
 import ccas.server.jobs.JobRunStatus.given
 import ccas.utils.sql.DbCodecs.given
@@ -18,9 +18,9 @@ import ccas.utils.sql.SqlZioTypes.connectZIO
 case class JobRun(
   @Id id: JobRunId,
   kind: JobKind,
+  clubId: Option[ClubId],
   trigger: RunTrigger,
   status: JobRunStatus,
-  clubSlug: Option[ClubSlug],
   params: Option[String],
   startedAt: Instant,
   completedAt: Option[Instant],
@@ -29,16 +29,16 @@ case class JobRun(
 
 object JobRun {
 
-  private val selectCols = SqlLiteral("id, kind, trigger, status, club_slug, params, started_at, completed_at, error")
+  private val selectCols = SqlLiteral("id, kind, club_id, trigger, status, params, started_at, completed_at, error")
 
   def createTable: ZIO[Transactor, SQLException, Int] =
     connectZIO {
       sql"""CREATE TABLE IF NOT EXISTS job_run (
               id             TEXT PRIMARY KEY,
               kind           TEXT NOT NULL,
+              club_id        BIGINT REFERENCES club (club_id),
               trigger        TEXT NOT NULL,
               status         TEXT NOT NULL,
-              club_slug  TEXT,
               params         TEXT,
               started_at     TIMESTAMPTZ NOT NULL,
               completed_at   TIMESTAMPTZ,
@@ -48,8 +48,8 @@ object JobRun {
 
   def insert(jobRun: JobRun): ZIO[Transactor, SQLException, Int] =
     connectZIO {
-      sql"""INSERT INTO job_run (id, kind, trigger, status, club_slug, params, started_at, completed_at, error)
-             VALUES (${jobRun.id}, ${jobRun.kind}, ${jobRun.trigger}, ${jobRun.status}, ${jobRun.clubSlug},
+      sql"""INSERT INTO job_run (id, kind, club_id, trigger, status, params, started_at, completed_at, error)
+             VALUES (${jobRun.id}, ${jobRun.kind}, ${jobRun.clubId}, ${jobRun.trigger}, ${jobRun.status},
                      ${jobRun.params}, ${jobRun.startedAt}, ${jobRun.completedAt}, ${jobRun.error})
           """.update.run()
     }
@@ -79,15 +79,15 @@ object JobRun {
         .query[JobRun].run().headOption
     }
 
-  def selectRunning(kind: JobKind, clubSlug: Option[ClubSlug]): ZIO[Transactor, SQLException, Option[JobRun]] =
+  def selectRunning(kind: JobKind, clubId: Option[ClubId]): ZIO[Transactor, SQLException, Option[JobRun]] =
     connectZIO {
       val running = JobRunStatus.Running
-      clubSlug match {
-        case Some(name) =>
-          sql"SELECT $selectCols FROM job_run WHERE kind = $kind AND club_slug = $name AND status = $running"
+      clubId match {
+        case Some(cid) =>
+          sql"SELECT $selectCols FROM job_run WHERE kind = $kind AND club_id = $cid AND status = $running"
             .query[JobRun].run().headOption
         case None =>
-          sql"SELECT $selectCols FROM job_run WHERE kind = $kind AND club_slug IS NULL AND status = $running"
+          sql"SELECT $selectCols FROM job_run WHERE kind = $kind AND club_id IS NULL AND status = $running"
             .query[JobRun].run().headOption
       }
     }

@@ -4,7 +4,7 @@ import java.time.Instant
 import com.augustnagro.magnum.Transactor
 import zio.{Fiber, RIO, RLayer, Ref, UIO, ZIO, ZLayer}
 import ccas.analysis.tables.RunTrigger
-import ccas.api.misc.subtypes.ClubSlug
+import ccas.api.misc.subtypes.ClubId
 import ccas.utils.CcasLogger
 import ccas.utils.client.ChessComClient
 import ccas.utils.errors.safeMessage
@@ -20,13 +20,17 @@ import ccas.utils.errors.safeMessage
   */
 trait JobRunner {
 
-  /** Fork a new job and return its ID. Fails with [[JobConflictException]] if a matching job is already running. */
+  /** Fork a new job and return its ID. Fails with [[JobConflictException]] if a matching job is already running.
+    *
+    * The effect receives the job run ID (as a string) so that analysis apps can link their own
+    * run records back to the server-level job.
+    */
   def submit(
     kind: JobKind,
-    clubSlug: Option[ClubSlug],
+    clubId: Option[ClubId],
     params: Option[String],
     trigger: RunTrigger,
-    effect: RIO[CcasLogger & ChessComClient & Transactor, Any]
+    effect: Option[String] => RIO[CcasLogger & ChessComClient & Transactor, Any]
   ): RIO[Transactor, JobRunId]
 
   /** Look up a job by ID, returning `None` if no such job exists. */
@@ -58,26 +62,26 @@ object JobRunner {
 
     override def submit(
       kind: JobKind,
-      clubSlug: Option[ClubSlug],
+      clubId: Option[ClubId],
       params: Option[String],
       trigger: RunTrigger,
-      effect: RIO[CcasLogger & ChessComClient & Transactor, Any]
+      effect: Option[String] => RIO[CcasLogger & ChessComClient & Transactor, Any]
     ): RIO[Transactor, JobRunId] =
       for {
-        existing <- JobRun.selectRunning(kind, clubSlug)
+        existing <- JobRun.selectRunning(kind, clubId)
         _ <- ZIO.whenDiscard(existing.isDefined)(
           ZIO.fail(
             new JobConflictException(
               s"A ${kind} job is already running" +
-                clubSlug.fold("")(c => s" for club $c")
+                clubId.fold("")(c => s" for club $c")
             )
           )
         )
         id     = JobRunId.generate()
         now    = Instant.now()
-        jobRun = JobRun(id, kind, trigger, JobRunStatus.Running, clubSlug, params, now, None, None)
+        jobRun = JobRun(id, kind, clubId, trigger, JobRunStatus.Running, params, now, None, None)
         _     <- JobRun.insert(jobRun)
-        fiber <- runJob(id, kind, effect).fork
+        fiber <- runJob(id, kind, effect(Some(JobRunId.unwrap(id)))).fork
         _     <- fibers.update(_ + fiber)
       } yield id
 
@@ -110,7 +114,7 @@ object JobRunner {
 
     private def submitRef: RIO[Transactor, Unit] = {
       import ccas.analysis.apps.ref.RefApp
-      submit(JobKind.MatchRef, None, None, RunTrigger.FollowUp, RefApp.populate(RunTrigger.FollowUp)).ignore
+      submit(JobKind.MatchRef, None, None, RunTrigger.FollowUp, _ => RefApp.populate(RunTrigger.FollowUp)).ignore
     }
 
     def awaitAll: UIO[Unit] =

@@ -85,7 +85,8 @@ object MembershipApp extends ZIOAppDefault {
     clubSlug: ClubSlug,
     trustUsernames: Boolean = true,
     trackRun: Boolean = true,
-    trigger: RunTrigger = RunTrigger.Cli
+    trigger: RunTrigger = RunTrigger.Cli,
+    jobRunId: Option[String] = None
   ): RIO[CcasLogger & ChessComClient & Transactor, ReconciliationResult] =
     for {
       startedAt <- ZIO.succeed(Instant.now())
@@ -97,8 +98,8 @@ object MembershipApp extends ZIOAppDefault {
       )
       clubId = apiClub.clubId
       club   = Club(clubId, Instant.ofEpochSecond(apiClub.created), resolvedUrlName, apiClub.name)
-      _                     <- Club.upsert(club)
-      runId                 <- ZIO.when(trackRun)(MembershipRun.insert(clubId, trigger, startedAt))
+      _                     <- Club.upsertResolvingSlugConflict(club, client)
+      runId                 <- ZIO.when(trackRun)(MembershipRun.insert(clubId, trigger, startedAt, jobRunId))
       (apiMembers, dbState) <- ApiClubMembers.get(client, resolvedUrlName).zipPar(buildDbState(clubId))
       apiMap = apiMembers.toMap
       now    = Instant.now()

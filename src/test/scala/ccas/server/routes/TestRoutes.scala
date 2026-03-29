@@ -7,8 +7,8 @@ import zio.{RIO, Ref, Scope, UIO, URIO, ZIO, ZLayer}
 import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
-import ccas.analysis.tables.RunTrigger
-import ccas.api.misc.subtypes.ClubSlug
+import ccas.analysis.tables.{Club, RunTrigger}
+import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 import ccas.server.jobs.*
 import ccas.server.ServerTables
 import ccas.utils.CcasLogger
@@ -41,16 +41,16 @@ object TestRoutes extends ZIOSpecDefault {
 
     override def submit(
       kind: JobKind,
-      clubSlug: Option[ClubSlug],
+      clubId: Option[ClubId],
       params: Option[String],
       trigger: RunTrigger,
-      effect: RIO[CcasLogger & ChessComClient & Transactor, Any]
+      effect: Option[String] => RIO[CcasLogger & ChessComClient & Transactor, Any]
     ): RIO[Transactor, JobRunId] =
       nextAction.get.flatMap {
         case Action.Succeed =>
           val id  = JobRunId.generate()
           val now = Instant.now()
-          val job = JobRun(id, kind, trigger, JobRunStatus.Running, clubSlug, params, now, None, None)
+          val job = JobRun(id, kind, clubId, trigger, JobRunStatus.Running, params, now, None, None)
           jobs.update(_ + (id -> job)).as(id)
         case Action.Conflict =>
           ZIO.fail(new JobConflictException(s"A $kind job is already running"))
@@ -117,6 +117,7 @@ object TestRoutes extends ZIOSpecDefault {
   private def suiteJobRoutes = suite("JobRoutes")(
     test("POST /api/jobs/recruitment returns 202") {
       for {
+        _    <- ensureClubs
         fake <- getFakeRunner
         _    <- fake.setNextAction(Action.Succeed)
         response <- JobRoutes.routes.runZIO(
@@ -126,6 +127,7 @@ object TestRoutes extends ZIOSpecDefault {
     },
     test("POST /api/jobs/recruitment returns 409 on conflict") {
       for {
+        _    <- ensureClubs
         fake <- getFakeRunner
         _    <- fake.setNextAction(Action.Conflict)
         response <- JobRoutes.routes.runZIO(
@@ -140,6 +142,7 @@ object TestRoutes extends ZIOSpecDefault {
     },
     test("POST /api/jobs/membership returns 202") {
       for {
+        _    <- ensureClubs
         fake <- getFakeRunner
         _    <- fake.setNextAction(Action.Succeed)
         response <- JobRoutes.routes.runZIO(
@@ -159,9 +162,9 @@ object TestRoutes extends ZIOSpecDefault {
       val job = JobRun(
         JobRunId.wrap("list-id"),
         JobKind.Recruitment,
+        Some(ClubId(200)),
         RunTrigger.Cli,
         JobRunStatus.Completed,
-        Some(ClubSlug("c")),
         None,
         t0,
         Some(t0),
@@ -179,7 +182,7 @@ object TestRoutes extends ZIOSpecDefault {
     },
     test("GET /api/jobs/:id returns 200 for existing") {
       val t0  = LocalDateTime.of(2025, 6, 1, 0, 0).toInstant(ZoneOffset.UTC)
-      val job = JobRun(JobRunId.wrap("detail-id"), JobKind.Membership, RunTrigger.Cli, JobRunStatus.Running, None, None, t0, None, None)
+      val job = JobRun(JobRunId.wrap("detail-id"), JobKind.Membership, None, RunTrigger.Cli, JobRunStatus.Running, None, t0, None, None)
       for {
         fake     <- getFakeRunner
         _        <- fake.prePopulate(job)
@@ -202,7 +205,16 @@ object TestRoutes extends ZIOSpecDefault {
   // Suite: ScheduleRoutes
   // ==========================================================================
 
-  private val deleteAllSchedules = connectZIO { val _ = sql"DELETE FROM job_schedule".update.run() }
+  private val t0 = LocalDateTime.of(2025, 6, 1, 0, 0).toInstant(ZoneOffset.UTC)
+
+  private val ensureClubs = for {
+    _ <- Club.upsert(Club(ClubId(200), t0, ClubSlug("test-club"), "Test Club"))
+  } yield ()
+
+  private val deleteAllSchedules = for {
+    _ <- connectZIO { val _ = sql"DELETE FROM job_schedule".update.run() }
+    _ <- ensureClubs
+  } yield ()
 
   private def suiteScheduleRoutes = suite("ScheduleRoutes")(
     test("GET /api/schedules returns empty list") {
@@ -229,7 +241,7 @@ object TestRoutes extends ZIOSpecDefault {
       } yield assertTrue(
         response.status == Status.Created,
         body.contains("Recruitment"),
-        body.contains("test-club")
+        body.contains("200") // clubId
       )
     },
     test("GET /api/schedules returns created schedule") {

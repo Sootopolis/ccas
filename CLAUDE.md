@@ -62,13 +62,13 @@ The codebase has four main packages:
 
 `CcasServer` (`ccas.server`) is a zio-http server that exposes REST endpoints and runs background jobs:
 - **Routes:** `HealthRoutes` (health/readiness), `JobRoutes` (submit and query jobs), `ScheduleRoutes` (CRUD for scheduled jobs). Route handlers use inline JSON codecs for request/response types and map domain exceptions to HTTP status codes (e.g., `JobConflictException` → 409).
-- **JobRunner:** Trait-based (`JobRunnerLive`) async executor that forks fibers per job, tracks state in `JobRun` table (ULID IDs via `ulid-creator`), and auto-submits follow-up jobs (e.g., MatchRef after Recruitment, Membership, or History completes). Marks orphaned running jobs as failed on startup.
+- **JobRunner:** Trait-based (`JobRunnerLive`) async executor that forks fibers per job, tracks state in `JobRun` table (ULID IDs via `ulid-creator`), and auto-submits follow-up jobs (e.g., MatchRef after Recruitment, Membership, or History completes). Marks orphaned running jobs as failed on startup. The `submit` method takes an `Option[String] => RIO[..., Any]` effect function, passing the generated job run ID so analysis apps can link their run records back via `job_run_id`.
 - **JobScheduler:** Polling daemon (configurable interval) that checks enabled `JobSchedule` entries and submits due jobs to the `JobRunner`.
 - **ServerTables:** Ensures both analysis and server database tables exist on startup.
 
 ### Database
 
-Uses Magnum (`com.augustnagro.magnum`) for SQL access with PostgreSQL. `DataSourceLayer` reads config from `application.conf` under the `database` prefix and provides a `Transactor` ZLayer. Custom `DbCodec` instances handle `Instant` (via `TIMESTAMPTZ`), `URL`, and `List[String]` (PostgreSQL arrays). Table names are derived from case class names via `CamelToSnakeCase` naming strategy.
+Uses Magnum (`com.augustnagro.magnum`) for SQL access with PostgreSQL. `DataSourceLayer` reads config from `application.conf` under the `database` prefix and provides a `Transactor` ZLayer. Custom `DbCodec` instances handle `Instant` (via `TIMESTAMPTZ`), `URL`, and `List[String]` (PostgreSQL arrays). Table names are derived from case class names via `CamelToSnakeCase` naming strategy. Server tables (`JobRun`, `JobSchedule`) reference clubs by `club_id` FK; route handlers resolve the slug from HTTP requests to a `ClubId` before submitting jobs. Analysis run tables (`MembershipRun`, `RecruitmentRun`, `HistoryRun`) have an optional `job_run_id` column linking back to the server-level job. Schema migrations for existing databases are managed via manual SQL scripts in the `sql/` directory.
 
 ### Test Data
 

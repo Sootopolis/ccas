@@ -5,8 +5,8 @@ import java.time.{Duration, Instant, LocalDateTime, ZoneOffset}
 import com.augustnagro.magnum.sql
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
-import ccas.analysis.tables.RunTrigger
-import ccas.api.misc.subtypes.ClubSlug
+import ccas.analysis.tables.{Club, RunTrigger}
+import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 import ccas.server.ServerTables
 import ccas.utils.sql.FreshSchemaLayer
 import ccas.utils.sql.SqlZioTypes.connectZIO
@@ -37,13 +37,20 @@ object TestJobRunSql extends ZIOSpecDefault {
   private val id1 = JobRunId.wrap("test-id-1")
   private val id2 = JobRunId.wrap("test-id-2")
 
-  private val run0 =
-    JobRun(id0, JobKind.Recruitment, RunTrigger.Cli, JobRunStatus.Running, Some(ClubSlug("club-a")), None, Times.t0, None, None)
-  private val run1 =
-    JobRun(id1, JobKind.Membership, RunTrigger.Cli, JobRunStatus.Running, Some(ClubSlug("club-a")), None, Times.t1, None, None)
-  private val run2 = JobRun(id2, JobKind.MatchRef, RunTrigger.Cli, JobRunStatus.Running, None, Some("params"), Times.t2, None, None)
+  private val clubIdA = ClubId(200)
+  private val clubIdB = ClubId(201)
 
-  private val deleteAll = connectZIO { val _ = sql"DELETE FROM job_run".update.run() }
+  private val run0 =
+    JobRun(id0, JobKind.Recruitment, Some(clubIdA), RunTrigger.Cli, JobRunStatus.Running, None, Times.t0, None, None)
+  private val run1 =
+    JobRun(id1, JobKind.Membership, Some(clubIdA), RunTrigger.Cli, JobRunStatus.Running, None, Times.t1, None, None)
+  private val run2 = JobRun(id2, JobKind.MatchRef, None, RunTrigger.Cli, JobRunStatus.Running, Some("params"), Times.t2, None, None)
+
+  private val deleteAll = for {
+    _ <- connectZIO { val _ = sql"DELETE FROM job_run".update.run() }
+    _ <- Club.upsert(Club(clubIdA, Times.t0, ClubSlug("club-a"), "Club A"))
+    _ <- Club.upsert(Club(clubIdB, Times.t0, ClubSlug("club-b"), "Club B"))
+  } yield ()
 
   // --- Tests ---
 
@@ -57,7 +64,7 @@ object TestJobRunSql extends ZIOSpecDefault {
       result.get.id == id0,
       result.get.kind == JobKind.Recruitment,
       result.get.status == JobRunStatus.Running,
-      result.get.clubSlug.contains(ClubSlug("club-a")),
+      result.get.clubId.contains(clubIdA),
       result.get.params.isEmpty,
       result.get.completedAt.isEmpty,
       result.get.error.isEmpty
@@ -98,25 +105,25 @@ object TestJobRunSql extends ZIOSpecDefault {
       )
     }
 
-  private def testSelectRunningByKindAndClub = test("selectRunning finds by kind + clubSlug (Some)") {
+  private def testSelectRunningByKindAndClub = test("selectRunning finds by kind + clubId (Some)") {
     for {
       _           <- deleteAll
       _           <- JobRun.insert(run0) // Recruitment, club-a
       _           <- JobRun.insert(run1) // Membership, club-a
-      recruitment <- JobRun.selectRunning(JobKind.Recruitment, Some(ClubSlug("club-a")))
-      membership  <- JobRun.selectRunning(JobKind.Membership, Some(ClubSlug("club-a")))
+      recruitment <- JobRun.selectRunning(JobKind.Recruitment, Some(clubIdA))
+      membership  <- JobRun.selectRunning(JobKind.Membership, Some(clubIdA))
     } yield assertTrue(
       recruitment.get.id == id0,
       membership.get.id == id1
     )
   }
 
-  private def testSelectRunningNullClub = test("selectRunning finds by kind when clubSlug is None") {
+  private def testSelectRunningNullClub = test("selectRunning finds by kind when clubId is None") {
     for {
       _        <- deleteAll
       _        <- JobRun.insert(run2) // MatchRef, None
       found    <- JobRun.selectRunning(JobKind.MatchRef, None)
-      notFound <- JobRun.selectRunning(JobKind.MatchRef, Some(ClubSlug("x")))
+      notFound <- JobRun.selectRunning(JobKind.MatchRef, Some(clubIdB))
     } yield assertTrue(
       found.get.id == id2,
       notFound.isEmpty
@@ -127,9 +134,9 @@ object TestJobRunSql extends ZIOSpecDefault {
     val completed = JobRun(
       id0,
       JobKind.Recruitment,
+      Some(clubIdA),
       RunTrigger.Cli,
       JobRunStatus.Completed,
-      Some(ClubSlug("club-a")),
       None,
       Times.t0,
       Some(Times.t1),
@@ -138,9 +145,9 @@ object TestJobRunSql extends ZIOSpecDefault {
     val failed = JobRun(
       id1,
       JobKind.Recruitment,
+      Some(clubIdA),
       RunTrigger.Cli,
       JobRunStatus.Failed,
-      Some(ClubSlug("club-a")),
       None,
       Times.t0,
       Some(Times.t1),
@@ -150,7 +157,7 @@ object TestJobRunSql extends ZIOSpecDefault {
       _      <- deleteAll
       _      <- JobRun.insert(completed)
       _      <- JobRun.insert(failed)
-      result <- JobRun.selectRunning(JobKind.Recruitment, Some(ClubSlug("club-a")))
+      result <- JobRun.selectRunning(JobKind.Recruitment, Some(clubIdA))
     } yield assertTrue(result.isEmpty)
   }
 
@@ -169,9 +176,9 @@ object TestJobRunSql extends ZIOSpecDefault {
   }
 
   private def testMarkOrphansAsFailed = test("markOrphansAsFailed marks Running → Failed") {
-    val running1  = JobRun(id0, JobKind.Recruitment, RunTrigger.Cli, JobRunStatus.Running, None, None, Times.t0, None, None)
-    val running2  = JobRun(id1, JobKind.Membership, RunTrigger.Cli, JobRunStatus.Running, None, None, Times.t1, None, None)
-    val completed = JobRun(id2, JobKind.MatchRef, RunTrigger.Cli, JobRunStatus.Completed, None, None, Times.t2, Some(Times.t2), None)
+    val running1  = JobRun(id0, JobKind.Recruitment, None, RunTrigger.Cli, JobRunStatus.Running, None, Times.t0, None, None)
+    val running2  = JobRun(id1, JobKind.Membership, None, RunTrigger.Cli, JobRunStatus.Running, None, Times.t1, None, None)
+    val completed = JobRun(id2, JobKind.MatchRef, None, RunTrigger.Cli, JobRunStatus.Completed, None, Times.t2, Some(Times.t2), None)
     for {
       _     <- deleteAll
       _     <- JobRun.insert(running1)

@@ -18,7 +18,8 @@ final case class HistoryRun(
   startedAt: Instant,
   completedAt: Option[Instant],
   matchesProcessed: Option[Int],
-  playersDiscovered: Option[Int]
+  playersDiscovered: Option[Int],
+  jobRunId: Option[String]
 ) derives DbCodec
 
 object HistoryRun {
@@ -32,14 +33,20 @@ object HistoryRun {
               started_at   TIMESTAMPTZ NOT NULL,
               completed_at TIMESTAMPTZ,
               matches_processed  INT,
-              players_discovered INT
+              players_discovered INT,
+              job_run_id   TEXT
             )""".update.run()
     }
 
-  def insert(clubId: ClubId, trigger: RunTrigger, startedAt: Instant): ZIO[Transactor, SQLException, Long] =
+  def insert(
+    clubId: ClubId,
+    trigger: RunTrigger,
+    startedAt: Instant,
+    jobRunId: Option[String] = None
+  ): ZIO[Transactor, SQLException, Long] =
     connectZIO {
-      sql"""INSERT INTO history_run (club_id, trigger, started_at)
-            VALUES ($clubId, $trigger, $startedAt)
+      sql"""INSERT INTO history_run (club_id, trigger, started_at, job_run_id)
+            VALUES ($clubId, $trigger, $startedAt, $jobRunId)
             RETURNING run_id""".query[Long].run().headOption
     }.someOrFail(new SQLException("INSERT RETURNING produced no rows"))
 

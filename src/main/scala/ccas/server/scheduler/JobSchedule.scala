@@ -6,7 +6,7 @@ import java.time.Instant
 import com.augustnagro.magnum.*
 import zio.ZIO
 
-import ccas.api.misc.subtypes.ClubSlug
+import ccas.api.misc.subtypes.ClubId
 import ccas.server.jobs.JobKind
 import ccas.server.jobs.JobKind.given
 import ccas.utils.sql.DbCodecs.given
@@ -16,7 +16,7 @@ import ccas.utils.sql.SqlZioTypes.connectZIO
 case class JobSchedule(
   @Id id: Long,
   kind: JobKind,
-  clubSlug: Option[ClubSlug],
+  clubId: Option[ClubId],
   params: Option[String],
   intervalHours: Int,
   enabled: Boolean,
@@ -30,16 +30,16 @@ object JobSchedule {
       sql"""CREATE TABLE IF NOT EXISTS job_schedule (
               id              BIGSERIAL PRIMARY KEY,
               kind            TEXT NOT NULL,
-              club_slug   TEXT,
+              club_id         BIGINT REFERENCES club (club_id),
               params          TEXT,
               interval_hours  INT NOT NULL,
-              enabled         BOOLEAN NOT NULL DEFAULT TRUE,
+              enabled         BOOLEAN NOT NULL,
               last_run_at     TIMESTAMPTZ,
-              UNIQUE (kind, club_slug)
+              UNIQUE (kind, club_id)
             )""".update.run()
     }
 
-  private val columns = SqlLiteral("id, kind, club_slug, params, interval_hours, enabled, last_run_at")
+  private val columns = SqlLiteral("id, kind, club_id, params, interval_hours, enabled, last_run_at")
 
   def selectAll: ZIO[Transactor, SQLException, List[JobSchedule]] =
     connectZIO {
@@ -58,8 +58,8 @@ object JobSchedule {
 
   def insert(schedule: JobSchedule): ZIO[Transactor, SQLException, Long] =
     connectZIO {
-      sql"""INSERT INTO job_schedule (kind, club_slug, params, interval_hours, enabled, last_run_at)
-            VALUES (${schedule.kind}, ${schedule.clubSlug}, ${schedule.params},
+      sql"""INSERT INTO job_schedule (kind, club_id, params, interval_hours, enabled, last_run_at)
+            VALUES (${schedule.kind}, ${schedule.clubId}, ${schedule.params},
                     ${schedule.intervalHours}, ${schedule.enabled}, ${schedule.lastRunAt})
             RETURNING id""".query[Long].run().headOption
     }.someOrFail(new SQLException("INSERT RETURNING produced no rows"))

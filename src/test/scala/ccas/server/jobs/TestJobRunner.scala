@@ -5,8 +5,8 @@ import zio.{durationInt, Scope, ZIO}
 import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
-import ccas.analysis.tables.RunTrigger
-import ccas.api.misc.subtypes.ClubSlug
+import ccas.analysis.tables.{Club, RunTrigger}
+import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 import ccas.server.ServerTables
 import ccas.utils.CcasLogger
 import ccas.utils.client.TestChessComClient
@@ -31,7 +31,22 @@ object TestJobRunner extends ZIOSpecDefault {
     CcasLogger.live(showProgress = false)
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock @@ TestAspect.timeout(30.seconds)
 
-  private val deleteAllJobRuns = connectZIO { val _ = sql"DELETE FROM job_run".update.run() }
+  private object Times {
+    val t0: java.time.Instant = java.time.Instant.parse("2025-06-01T00:00:00Z")
+  }
+
+  private val clubIdA = ClubId(200)
+  private val clubIdB = ClubId(201)
+  private val clubIdC = ClubId(202)
+
+  private val deleteAllJobRuns = for {
+    _ <- connectZIO { val _ = sql"DELETE FROM job_run".update.run() }
+    _ <- Club.upsert(Club(clubIdA, Times.t0, ClubSlug("club-a"), "Club A"))
+    _ <- Club.upsert(Club(clubIdB, Times.t0, ClubSlug("club-b"), "Club B"))
+    _ <- Club.upsert(Club(clubIdC, Times.t0, ClubSlug("club-c"), "Club C"))
+    _ <- Club.upsert(Club(ClubId(203), Times.t0, ClubSlug("test-club"), "Test Club"))
+    _ <- Club.upsert(Club(ClubId(204), Times.t0, ClubSlug("dup-club"), "Dup Club"))
+  } yield ()
 
   private def awaitStatus(
     runner: JobRunner,
@@ -49,7 +64,7 @@ object TestJobRunner extends ZIOSpecDefault {
     for {
       _      <- deleteAllJobRuns
       runner <- ZIO.service[JobRunner]
-      id     <- runner.submit(JobKind.Recruitment, Some(ClubSlug("test-club")), None, RunTrigger.Cli, ZIO.unit)
+      id     <- runner.submit(JobKind.Recruitment, Some(ClubId(203)), None, RunTrigger.Cli, _ => ZIO.unit)
       job    <- awaitStatus(runner, id)
     } yield assertTrue(
       job.status == JobRunStatus.Completed,
@@ -61,7 +76,7 @@ object TestJobRunner extends ZIOSpecDefault {
     for {
       _      <- deleteAllJobRuns
       runner <- ZIO.service[JobRunner]
-      id     <- runner.submit(JobKind.MatchRef, None, None, RunTrigger.Cli, ZIO.fail(new Exception("boom")))
+      id     <- runner.submit(JobKind.MatchRef, None, None, RunTrigger.Cli, _ => ZIO.fail(new Exception("boom")))
       job    <- awaitStatus(runner, id)
     } yield assertTrue(
       job.status == JobRunStatus.Failed,
@@ -73,8 +88,8 @@ object TestJobRunner extends ZIOSpecDefault {
     for {
       _      <- deleteAllJobRuns
       runner <- ZIO.service[JobRunner]
-      _      <- runner.submit(JobKind.Recruitment, Some(ClubSlug("dup-club")), None, RunTrigger.Cli, ZIO.never)
-      result <- runner.submit(JobKind.Recruitment, Some(ClubSlug("dup-club")), None, RunTrigger.Cli, ZIO.unit).either
+      _      <- runner.submit(JobKind.Recruitment, Some(ClubId(204)), None, RunTrigger.Cli, _ => ZIO.never)
+      result <- runner.submit(JobKind.Recruitment, Some(ClubId(204)), None, RunTrigger.Cli, _ => ZIO.unit).either
     } yield assertTrue(
       result.isLeft,
       result.left.exists(_.isInstanceOf[JobConflictException])
@@ -85,8 +100,8 @@ object TestJobRunner extends ZIOSpecDefault {
     for {
       _      <- deleteAllJobRuns
       runner <- ZIO.service[JobRunner]
-      _      <- runner.submit(JobKind.Recruitment, Some(ClubSlug("club-a")), None, RunTrigger.Cli, ZIO.never)
-      id2    <- runner.submit(JobKind.Recruitment, Some(ClubSlug("club-b")), None, RunTrigger.Cli, ZIO.unit)
+      _      <- runner.submit(JobKind.Recruitment, Some(clubIdA), None, RunTrigger.Cli, _ => ZIO.never)
+      id2    <- runner.submit(JobKind.Recruitment, Some(clubIdB), None, RunTrigger.Cli, _ => ZIO.unit)
     } yield assertTrue(JobRunId.unwrap(id2).nonEmpty)
   }
 
@@ -94,8 +109,8 @@ object TestJobRunner extends ZIOSpecDefault {
     for {
       _      <- deleteAllJobRuns
       runner <- ZIO.service[JobRunner]
-      _      <- runner.submit(JobKind.Recruitment, Some(ClubSlug("club-c")), None, RunTrigger.Cli, ZIO.never)
-      id2    <- runner.submit(JobKind.Membership, Some(ClubSlug("club-c")), None, RunTrigger.Cli, ZIO.unit)
+      _      <- runner.submit(JobKind.Recruitment, Some(clubIdC), None, RunTrigger.Cli, _ => ZIO.never)
+      id2    <- runner.submit(JobKind.Membership, Some(clubIdC), None, RunTrigger.Cli, _ => ZIO.unit)
     } yield assertTrue(JobRunId.unwrap(id2).nonEmpty)
   }
 
@@ -110,9 +125,9 @@ object TestJobRunner extends ZIOSpecDefault {
     for {
       _      <- deleteAllJobRuns
       runner <- ZIO.service[JobRunner]
-      id1    <- runner.submit(JobKind.MatchRef, None, None, RunTrigger.Cli, ZIO.unit)
+      id1    <- runner.submit(JobKind.MatchRef, None, None, RunTrigger.Cli, _ => ZIO.unit)
       _      <- awaitStatus(runner, id1)
-      id2    <- runner.submit(JobKind.MatchRef, None, None, RunTrigger.Cli, ZIO.unit)
+      id2    <- runner.submit(JobKind.MatchRef, None, None, RunTrigger.Cli, _ => ZIO.unit)
       _      <- awaitStatus(runner, id2)
       // Wait briefly for any auto-follow-up MatchRef jobs to settle
       _      <- ZIO.sleep(500.millis)

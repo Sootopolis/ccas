@@ -9,8 +9,8 @@ import ccas.analysis.apps.history.HistoryApp
 import ccas.analysis.apps.membership.MembershipApp
 import ccas.analysis.apps.recruitment.RecruitmentApp
 import ccas.analysis.apps.ref.RefApp
-import ccas.analysis.tables.RunTrigger
-import ccas.api.misc.subtypes.ClubSlug
+import ccas.analysis.tables.{Club, RunTrigger}
+import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 import ccas.server.jobs.*
 import ccas.server.routes.RouteHelpers.*
 import ccas.utils.client.ChessComClient
@@ -58,7 +58,7 @@ object JobRoutes {
     id: String,
     kind: String,
     status: String,
-    clubSlug: Option[String],
+    clubId: Option[Long],
     startedAt: String,
     completedAt: Option[String],
     error: Option[String],
@@ -72,7 +72,7 @@ object JobRoutes {
         id = JobRunId.unwrap(jr.id),
         kind = jr.kind.toString,
         status = jr.status.toString,
-        clubSlug = jr.clubSlug.map(ClubSlug.unwrap),
+        clubId = jr.clubId.map(ClubId.unwrap),
         startedAt = jr.startedAt.toString,
         completedAt = jr.completedAt.map(_.toString),
         error = jr.error,
@@ -87,9 +87,11 @@ object JobRoutes {
       (for {
         body   <- parseJsonBody[RecruitmentRequest](req)
         runner <- ZIO.service[JobRunner]
+        club   <- Club.selectBySlug(body.clubSlug)
+          .someOrFail(new Exception(s"Club not found: ${body.clubSlug}"))
         cappedTarget       = body.target.map(_ min MaxTarget)
         effectiveTimeLimit = body.timeLimitMinutes.map(_ min MaxTimeLimitMinutes)
-        effect = RecruitmentApp.recruit(
+        effect = (jobRunId: Option[String]) => RecruitmentApp.recruit(
           body.clubSlug,
           body.alias.getOrElse("default"),
           target = cappedTarget,
@@ -97,11 +99,12 @@ object JobRoutes {
           sourceClubs = body.sourceClubs.getOrElse(Nil),
           timeLimitMinutes = effectiveTimeLimit,
           explore = body.explore.getOrElse(true),
-          trigger = RunTrigger.Api
+          trigger = RunTrigger.Api,
+          jobRunId = jobRunId
         )
         paramsStr = body.toJson
         params    = if (paramsStr.length > 1024) paramsStr.take(1024) + "..." else paramsStr
-        jobId <- runner.submit(JobKind.Recruitment, Some(body.clubSlug), Some(params), RunTrigger.Api, effect)
+        jobId <- runner.submit(JobKind.Recruitment, Some(club.clubId), Some(params), RunTrigger.Api, effect)
       } yield jsonResponse(Status.Accepted, JobResponse(JobRunId.unwrap(jobId), "running")))
         .pipe(withErrorHandling)
     },
@@ -109,15 +112,18 @@ object JobRoutes {
       (for {
         body   <- parseJsonBody[MembershipRequest](req)
         runner <- ZIO.service[JobRunner]
-        effect = MembershipApp.reconcile(body.clubSlug, body.trustUsernames.getOrElse(true), trigger = RunTrigger.Api)
-        jobId <- runner.submit(JobKind.Membership, Some(body.clubSlug), None, RunTrigger.Api, effect)
+        club   <- Club.selectBySlug(body.clubSlug)
+          .someOrFail(new Exception(s"Club not found: ${body.clubSlug}"))
+        effect = (jobRunId: Option[String]) =>
+          MembershipApp.reconcile(body.clubSlug, body.trustUsernames.getOrElse(true), trigger = RunTrigger.Api, jobRunId = jobRunId)
+        jobId <- runner.submit(JobKind.Membership, Some(club.clubId), None, RunTrigger.Api, effect)
       } yield jsonResponse(Status.Accepted, JobResponse(JobRunId.unwrap(jobId), "running")))
         .pipe(withErrorHandling)
     },
     Method.POST / "api" / "jobs" / "matchref" -> handler {
       (for {
         runner <- ZIO.service[JobRunner]
-        jobId  <- runner.submit(JobKind.MatchRef, None, None, RunTrigger.Api, RefApp.populate(RunTrigger.Api))
+        jobId  <- runner.submit(JobKind.MatchRef, None, None, RunTrigger.Api, _ => RefApp.populate(RunTrigger.Api))
       } yield jsonResponse(Status.Accepted, JobResponse(JobRunId.unwrap(jobId), "running")))
         .pipe(withErrorHandling)
     },
@@ -125,13 +131,16 @@ object JobRoutes {
       (for {
         body   <- parseJsonBody[HistoryRequest](req)
         runner <- ZIO.service[JobRunner]
-        effect = HistoryApp.discover(
+        club   <- Club.selectBySlug(body.clubSlug)
+          .someOrFail(new Exception(s"Club not found: ${body.clubSlug}"))
+        effect = (jobRunId: Option[String]) => HistoryApp.discover(
           body.clubSlug,
           body.full.getOrElse(false),
           body.refresh.getOrElse(false),
-          RunTrigger.Api
+          RunTrigger.Api,
+          jobRunId = jobRunId
         )
-        jobId <- runner.submit(JobKind.History, Some(body.clubSlug), Some(body.toJson), RunTrigger.Api, effect)
+        jobId <- runner.submit(JobKind.History, Some(club.clubId), Some(body.toJson), RunTrigger.Api, effect)
       } yield jsonResponse(Status.Accepted, JobResponse(JobRunId.unwrap(jobId), "running")))
         .pipe(withErrorHandling)
     },

@@ -25,11 +25,10 @@ object PlayerMatchRef {
       sql"""CREATE TABLE IF NOT EXISTS player_match_ref (
               player_id  BIGINT PRIMARY KEY REFERENCES player (player_id),
               match_id   BIGINT NOT NULL,
-              is_live    BOOLEAN NOT NULL DEFAULT false,
+              is_live    BOOLEAN NOT NULL,
               is_team1   BOOLEAN NOT NULL,
               board_idx  SMALLINT NOT NULL
             )""".update.run()
-      sql"""ALTER TABLE player_match_ref ADD COLUMN IF NOT EXISTS is_live BOOLEAN NOT NULL DEFAULT false""".update.run()
     }
 
   def selectId(playerId: PlayerId): ZIO[Transactor, SQLException, Option[PlayerMatchRef]] =

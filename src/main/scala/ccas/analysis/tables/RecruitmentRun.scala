@@ -18,11 +18,12 @@ final case class RecruitmentRun(
   trigger: RunTrigger,
   startedAt: Instant,
   completedAt: Option[Instant],
-  candidatesFound: Int
+  candidatesFound: Int,
+  jobRunId: Option[String]
 ) derives DbCodec
 
 object RecruitmentRun {
-  private val selectCols = SqlLiteral("run_id, club_id, criteria_id, trigger, started_at, completed_at, candidates_found")
+  private val selectCols = SqlLiteral("run_id, club_id, criteria_id, trigger, started_at, completed_at, candidates_found, job_run_id")
 
   def createTable: ZIO[Transactor, SQLException, Int] =
     connectZIO {
@@ -34,15 +35,22 @@ object RecruitmentRun {
               started_at        TIMESTAMPTZ NOT NULL,
               completed_at      TIMESTAMPTZ,
               candidates_found  INT NOT NULL,
+              job_run_id        TEXT,
               FOREIGN KEY (club_id) REFERENCES club (club_id) ON DELETE RESTRICT
             )""".update.run()
       sql"""CREATE INDEX IF NOT EXISTS idx_recruitment_run_club_id ON recruitment_run(club_id)""".update.run()
     }
 
-  def insert(clubId: ClubId, criteriaId: Long, trigger: RunTrigger, startedAt: Instant): ZIO[Transactor, SQLException, Long] =
+  def insert(
+    clubId: ClubId,
+    criteriaId: Long,
+    trigger: RunTrigger,
+    startedAt: Instant,
+    jobRunId: Option[String] = None
+  ): ZIO[Transactor, SQLException, Long] =
     connectZIO {
-      sql"""INSERT INTO recruitment_run (club_id, criteria_id, trigger, started_at, candidates_found)
-            VALUES ($clubId, $criteriaId, $trigger, $startedAt, 0)
+      sql"""INSERT INTO recruitment_run (club_id, criteria_id, trigger, started_at, candidates_found, job_run_id)
+            VALUES ($clubId, $criteriaId, $trigger, $startedAt, 0, $jobRunId)
             RETURNING run_id""".query[Long].run().headOption
     }.someOrFail(new SQLException("INSERT RETURNING produced no rows"))
 

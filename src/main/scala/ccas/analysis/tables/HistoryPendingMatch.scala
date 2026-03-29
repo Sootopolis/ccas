@@ -25,8 +25,8 @@ object HistoryPendingMatch {
       sql"""CREATE TABLE IF NOT EXISTS history_pending_match (
               club_id    BIGINT NOT NULL REFERENCES club (club_id),
               match_id   BIGINT NOT NULL,
-              is_live    BOOLEAN NOT NULL DEFAULT false,
-              status     VARCHAR NOT NULL DEFAULT 'New',
+              is_live    BOOLEAN NOT NULL,
+              status     VARCHAR NOT NULL,
               PRIMARY KEY (club_id, match_id, is_live)
             )""".update.run()
     }

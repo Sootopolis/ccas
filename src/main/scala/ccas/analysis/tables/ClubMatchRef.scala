@@ -20,10 +20,9 @@ object ClubMatchRef {
       sql"""CREATE TABLE IF NOT EXISTS club_match_ref (
               club_id  BIGINT PRIMARY KEY REFERENCES club (club_id),
               match_id BIGINT NOT NULL,
-              is_live  BOOLEAN NOT NULL DEFAULT false,
+              is_live  BOOLEAN NOT NULL,
               is_team1 BOOLEAN NOT NULL
             )""".update.run()
-      sql"""ALTER TABLE club_match_ref ADD COLUMN IF NOT EXISTS is_live BOOLEAN NOT NULL DEFAULT false""".update.run()
     }
 
   def selectId(clubId: ClubId): ZIO[Transactor, SQLException, Option[ClubMatchRef]] =

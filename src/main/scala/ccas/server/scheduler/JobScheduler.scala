@@ -8,13 +8,13 @@ import com.typesafe.config.ConfigFactory
 import zio.{durationLong, Duration, Task, UIO, ZIO, ZLayer}
 
 import ccas.analysis.apps.history.HistoryApp
-import ccas.utils.CcasLogger
-import ccas.analysis.apps.ref.RefApp
 import ccas.analysis.apps.membership.MembershipApp
 import ccas.analysis.apps.recruitment.RecruitmentApp
-import ccas.analysis.tables.RunTrigger
+import ccas.analysis.apps.ref.RefApp
+import ccas.analysis.tables.{Club, RunTrigger}
 import ccas.api.misc.subtypes.ClubSlug
 import ccas.server.jobs.{JobKind, JobRunner}
+import ccas.utils.CcasLogger
 
 trait JobScheduler {
   def start: UIO[Unit]
@@ -57,22 +57,33 @@ object JobScheduler {
 
     private def runSchedule(schedule: JobSchedule, now: Instant): Task[Unit] = {
       def requireClubSlug: Task[ClubSlug] =
-        ZIO.fromOption(schedule.clubSlug)
-          .orElseFail(new IllegalStateException(s"${schedule.kind} schedule missing clubSlug"))
+        ZIO.fromOption(schedule.clubId)
+          .orElseFail(new IllegalStateException(s"${schedule.kind} schedule missing clubId"))
+          .flatMap { cid =>
+            Club.selectId(cid).provideEnvironment(transactorEnv)
+              .someOrFail(new IllegalStateException(s"Club $cid not found in database"))
+              .map(_.slug)
+          }
 
       // Job kind dispatch kept in sync with JobRunner.runJob follow-up logic
       val effect = schedule.kind match {
-        case JobKind.Recruitment =>
-          requireClubSlug.flatMap(name => RecruitmentApp.recruit(name, "default", timeLimitMinutes = Some(30), trigger = RunTrigger.Scheduled).unit)
-        case JobKind.Membership =>
-          requireClubSlug.flatMap(name => MembershipApp.reconcile(name, trigger = RunTrigger.Scheduled).unit)
-        case JobKind.MatchRef =>
+        case JobKind.Recruitment => (jobRunId: Option[String]) =>
+          requireClubSlug.flatMap(name =>
+            RecruitmentApp.recruit(name, "default", timeLimitMinutes = Some(30), trigger = RunTrigger.Scheduled, jobRunId = jobRunId).unit
+          )
+        case JobKind.Membership => (jobRunId: Option[String]) =>
+          requireClubSlug.flatMap(name =>
+            MembershipApp.reconcile(name, trigger = RunTrigger.Scheduled, jobRunId = jobRunId).unit
+          )
+        case JobKind.MatchRef => (_: Option[String]) =>
           RefApp.populate(RunTrigger.Scheduled)
-        case JobKind.History =>
-          requireClubSlug.flatMap(name => HistoryApp.discover(name, trigger = RunTrigger.Scheduled).unit)
+        case JobKind.History => (jobRunId: Option[String]) =>
+          requireClubSlug.flatMap(name =>
+            HistoryApp.discover(name, trigger = RunTrigger.Scheduled, jobRunId = jobRunId).unit
+          )
       }
 
-      runner.submit(schedule.kind, schedule.clubSlug, schedule.params, RunTrigger.Scheduled, effect)
+      runner.submit(schedule.kind, schedule.clubId, schedule.params, RunTrigger.Scheduled, effect)
         .provideEnvironment(transactorEnv) *>
         JobSchedule.updateLastRunAt(schedule.id, now).provideEnvironment(transactorEnv).unit
     }

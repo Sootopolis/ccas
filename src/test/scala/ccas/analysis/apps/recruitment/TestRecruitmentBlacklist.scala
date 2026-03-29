@@ -32,6 +32,7 @@ object TestRecruitmentBlacklist extends ZIOSpecDefault {
       val criteria  = makeCriteria()
       for {
         _          <- seedDb
+        _          <- seedPlayer(pid0)
         criteriaId <- seedCriteria(criteria)
         // Blacklist alice (indefinite)
         _ <- RecruitmentBlacklist.insert(
@@ -52,6 +53,7 @@ object TestRecruitmentBlacklist extends ZIOSpecDefault {
       val criteria  = makeCriteria()
       for {
         _          <- seedDb
+        _          <- seedPlayer(pid0)
         criteriaId <- seedCriteria(criteria)
         // Blacklist alice with an already-expired entry
         _ <- RecruitmentBlacklist.insert(

@@ -31,7 +31,7 @@ object ClubMember {
               player_id         BIGINT NOT NULL,
               since             TIMESTAMPTZ NOT NULL,
               until             TIMESTAMPTZ,
-              since_approximate BOOLEAN NOT NULL DEFAULT false,
+              since_approximate BOOLEAN NOT NULL,
               PRIMARY KEY (club_id, player_id, since),
               FOREIGN KEY (club_id) REFERENCES club (club_id) ON DELETE RESTRICT,
               FOREIGN KEY (player_id) REFERENCES player (player_id) ON DELETE RESTRICT

@@ -85,7 +85,8 @@ object HistoryApp extends ZIOAppDefault {
   private def initialize(
     clubSlug: ClubSlug,
     full: Boolean,
-    trigger: RunTrigger
+    trigger: RunTrigger,
+    jobRunId: Option[String] = None
   ): RIO[CcasLogger & ChessComClient & Transactor, InitResult] =
     for {
       _ <- CcasLogger.info(s"=== HistoryApp: $clubSlug ===")
@@ -101,7 +102,7 @@ object HistoryApp extends ZIOAppDefault {
         HistoryMemberQuery.selectClubPlayerIds(clubId)
       _ <- HistoryPendingMatch.resetStatuses(clubId)
       startedAt = Instant.now()
-      runId <- HistoryRun.insert(clubId, trigger, startedAt)
+      runId <- HistoryRun.insert(clubId, trigger, startedAt, jobRunId)
       snapByPlayerId = latestSnaps.map(s => s.playerId -> s).toMap
       _ <- CcasLogger.info(
         s"  Members: ${allMembers.size}, Processed matches: $processedCount, Queried members: ${queriedIds.size}"
@@ -117,7 +118,8 @@ object HistoryApp extends ZIOAppDefault {
     clubSlug: ClubSlug,
     full: Boolean = false,
     refresh: Boolean = false,
-    trigger: RunTrigger = RunTrigger.Cli
+    trigger: RunTrigger = RunTrigger.Cli,
+    jobRunId: Option[String] = None
   ): RIO[CcasLogger & ChessComClient & Transactor, Unit] =
     for {
       transactor <- ZIO.service[Transactor]
@@ -125,7 +127,7 @@ object HistoryApp extends ZIOAppDefault {
 
       // === Phase 1: Initialize ===
       InitResult(allMembers, snapByPlayerId, queriedIds, ctx, startedAt, runId) <-
-        initialize(clubSlug, full, trigger)
+        initialize(clubSlug, full, trigger, jobRunId)
 
       seedClubRef   <- Ref.make(0)
       memberSeedRef <- Ref.make(MemberSeedResult(0, 0, 0, Nil))

@@ -5,7 +5,8 @@ import zio.http.*
 import zio.json.{DeriveJsonCodec, JsonCodec}
 import zio.ZIO
 
-import ccas.api.misc.subtypes.ClubSlug
+import ccas.analysis.tables.Club
+import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 import ccas.server.jobs.JobKind
 import ccas.server.routes.RouteHelpers.*
 import ccas.server.scheduler.JobSchedule
@@ -34,7 +35,7 @@ object ScheduleRoutes {
   private[server] case class ScheduleResponse(
     id: Long,
     kind: String,
-    clubSlug: Option[String],
+    clubId: Option[Long],
     params: Option[String],
     intervalHours: Int,
     enabled: Boolean,
@@ -47,7 +48,7 @@ object ScheduleRoutes {
       ScheduleResponse(
         id = s.id,
         kind = s.kind.toString,
-        clubSlug = s.clubSlug.map(ClubSlug.unwrap),
+        clubId = s.clubId.map(ClubId.unwrap),
         params = s.params,
         intervalHours = s.intervalHours,
         enabled = s.enabled,
@@ -74,8 +75,12 @@ object ScheduleRoutes {
       (for {
         body <- parseJsonBody[CreateScheduleRequest](req)
         kind <- ZIO.fromEither(parseJobKind(body.kind)).mapError(e => new Exception(e))
-        clubSlug = body.clubSlug.map(ClubSlug.wrap)
-        schedule = JobSchedule(0L, kind, clubSlug, body.params, body.intervalHours, enabled = true, lastRunAt = None)
+        clubId <- ZIO.foreach(body.clubSlug) { slug =>
+          Club.selectBySlug(ClubSlug.wrap(slug))
+            .someOrFail(new Exception(s"Club not found: $slug"))
+            .map(_.clubId)
+        }
+        schedule = JobSchedule(0L, kind, clubId, body.params, body.intervalHours, enabled = true, lastRunAt = None)
         id      <- JobSchedule.insert(schedule)
         created <- JobSchedule.selectId(id).someOrFail(new Exception("Failed to read back schedule"))
       } yield jsonResponse(Status.Created, ScheduleResponse.fromSchedule(created)))

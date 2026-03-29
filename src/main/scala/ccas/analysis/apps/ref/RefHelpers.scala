@@ -7,8 +7,8 @@ import ccas.api.clubmatch.{ApiDailyMatch, ApiLiveMatch, TeamMatchTeams}
 import ccas.api.misc.subtypes.{ClubMatchId, ClubSlug, Username}
 import ccas.utils.client.ChessComClient
 
-/** Shared helpers for match-ref resolution, used by both RefApp and RecruitmentApp. */
-private[apps] object RefHelpers {
+/** Shared helpers for match-ref resolution, used by RefApp, RecruitmentApp, and Club slug conflict resolution. */
+private[analysis] object RefHelpers {
 
   case class ParsedMatch(matchId: ClubMatchId, isLive: Boolean, matchUrl: URL)
 
