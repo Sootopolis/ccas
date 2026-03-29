@@ -270,7 +270,7 @@ object RecruitmentApp extends ZIOAppDefault {
         case Some(minutes) => loopEffect.timeout(zio.durationLong(minutes.toLong).minutes).unit
         case None          => loopEffect.unit
       }).onInterrupt(
-        finalizeRun(ctx, trigger, startedAt, cumulative, alreadyFound, "Recruitment Interrupted")
+        finalizeRun(ctx, trigger, startedAt, cumulative, alreadyFound, "Recruitment Interrupted", interrupted = true)
           .provideEnvironment(ZEnvironment(logger, transactor))
           .orDie
       )
@@ -285,26 +285,46 @@ object RecruitmentApp extends ZIOAppDefault {
     startedAt: Instant,
     cumulative: Boolean,
     alreadyFound: Int,
-    label: String
+    label: String,
+    interrupted: Boolean = false
   ): RIO[CcasLogger & Transactor, RecruitmentRun] =
     for {
-      _             <- ctx.progressBar.finish
-      _             <- RecruitmentExplore.reclassifyExcessInvited(ctx)
-      invited       <- ctx.invitedRef.get.map(_.reverse)
+      _     <- ctx.progressBar.finish
+      _     <- RecruitmentExplore.reclassifyExcessInvited(ctx)
+      found <- ctx.invitedRef.get.map(_.reverse)
+
+      // --- Confirmation step: Deferred → Invited ---
+      confirmed <-
+        if (interrupted || found.isEmpty) ZIO.succeed(List.empty[Username])
+        else if (trigger == RunTrigger.Cli) promptConfirmation(found)
+        else ZIO.succeed(found) // Api, Scheduled, FollowUp: auto-confirm
+
+      _ <- ZIO.foreachDiscard(confirmed) { u =>
+        PlayerSnapshot.selectNameLatest(u)
+          .someOrFail(new java.sql.SQLException(s"No snapshot for confirmed candidate $u"))
+          .flatMap(snap => RecruitmentCandidate.updateOutcome(ctx.runId, snap.playerId, CandidateOutcome.Invited))
+      }
+
       evalCount     <- ctx.evalCountRef.get
       deferredCount <- RecruitmentCandidate.selectDeferredCountByRun(ctx.runId)
       completedAt = Instant.now()
       duration    = JDuration.between(startedAt, completedAt)
       clubId      = ctx.runCtx.clubId
       alias       = ctx.runCtx.alias
-      finalRun    = RecruitmentRun(ctx.runId, clubId, ctx.runCtx.criteria.criteriaId, trigger, startedAt, Some(completedAt), invited.size)
+      finalRun    = RecruitmentRun(ctx.runId, clubId, ctx.runCtx.criteria.criteriaId, trigger, startedAt, Some(completedAt), confirmed.size)
       _ <- RecruitmentRun.update(finalRun)
       _ <- CcasLogger.info(s"=== $label ===")
       _ <- CcasLogger.info(s"Duration: ${duration.display}")
       _ <- CcasLogger.info(s"Candidates evaluated: $evalCount")
-      _ <- CcasLogger.info(s"Invited: ${invited.size}")
+      _ <- CcasLogger.info(s"Invited: ${confirmed.size}")
+      _ <- ZIO.whenDiscard(found.nonEmpty && confirmed.isEmpty)(
+        CcasLogger.info(s"Found (not confirmed): ${found.size}")
+      )
       _ <- ZIO.whenDiscard(deferredCount > 0)(CcasLogger.info(s"Deferred: $deferredCount"))
-      _ <- ZIO.foreachDiscard(invited)(u => CcasLogger.info(s"  $u"))
+      // CLI prompt already displayed candidates; skip redundant listing
+      _ <- ZIO.whenDiscard(trigger != RunTrigger.Cli)(
+        ZIO.foreachDiscard(confirmed)(u => CcasLogger.info(s"  $u"))
+      )
       // Cumulative summary: show today's total across all runs
       _ <- ZIO.whenDiscard(cumulative && alreadyFound > 0) {
         for {
@@ -313,12 +333,24 @@ object RecruitmentApp extends ZIOAppDefault {
             PlayerSnapshot.selectIdLatest(c.playerId)
               .map(_.fold(Username.wrap(s"[pid=${c.playerId}]"))(_.username))
           )
-          allToday = earlierUsernames ++ invited
+          allToday = earlierUsernames ++ confirmed
           _ <- CcasLogger.info(s"=== Today's Total: ${allToday.size} ===")
           _ <- ZIO.foreachDiscard(allToday)(u => CcasLogger.info(s"  $u"))
         } yield ()
       }
     } yield finalRun
+
+  private def promptConfirmation(found: List[Username]): RIO[CcasLogger, List[Username]] =
+    for {
+      _ <- CcasLogger.info(s"\nFound ${found.size} candidates:")
+      _ <- ZIO.foreachDiscard(found)(u => CcasLogger.info(s"  $u"))
+      answer <- ZIO.attemptBlocking(
+        scala.io.StdIn.readLine(s"Mark all ${found.size} candidates as Invited? [Y/n] ")
+      ).orElse(ZIO.succeed("n"))
+    } yield {
+      if (answer == null || answer.trim.isEmpty || answer.trim.toLowerCase.startsWith("y")) found
+      else Nil
+    }
 
   // --- Report mode ---
 

@@ -40,8 +40,10 @@ private[recruitment] object RecruitmentPersistence {
           }
           _ <- ZIO.foreachDiscard(candidate.cache)(PlayerRecruitmentCache.upsert)
           // Skip candidate row for cache-only rejections so they aren't blocked by daysSinceRejected
+          // Passing candidates are written as Deferred; only flipped to Invited after confirmation at finalization
+          dbOutcome = if (outcome == CandidateOutcome.Invited) CandidateOutcome.Deferred else outcome
           _ <- ZIO.unlessDiscard(candidate.cacheRejected)(
-            RecruitmentCandidate.insert(RecruitmentCandidate(runId, ap.playerId, now, outcome, errorMessage))
+            RecruitmentCandidate.insert(RecruitmentCandidate(runId, ap.playerId, now, dbOutcome, errorMessage))
           )
         } yield ()
       }

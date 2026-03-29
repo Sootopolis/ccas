@@ -187,26 +187,15 @@ private[recruitment] object RecruitmentExplore {
         s"[Progress] Evaluated: $evalCount | Invited: ${invited.size}/${ctx.target}")
     } yield ()
 
-  /** When invited count exceeds the target, reclassify the newest excess from Invited to Deferred. */
+  /** When found count exceeds the target, trim the newest excess from invitedRef.
+    * All candidates are already Deferred in the DB; no status flip needed here.
+    */
   def reclassifyExcessInvited(ctx: ExploreContext): RIO[Transactor, Unit] =
     for {
       invited <- ctx.invitedRef.get
       excess = invited.size - ctx.target
-      _ <- ZIO.whenDiscard(excess > 0) {
-        // invitedRef is prepend-ordered (newest first), so take excess from the head
-        val toDefer = invited.take(excess)
-        for {
-          playerIds <- ZIO.foreach(toDefer)(u =>
-            PlayerSnapshot.selectNameLatest(u)
-              .someOrFail(new java.sql.SQLException(s"No snapshot for deferred candidate $u"))
-              .map(_.playerId)
-          )
-          _ <- ZIO.foreachDiscard(playerIds)(pid =>
-            RecruitmentCandidate.updateOutcome(ctx.runId, pid, CandidateOutcome.Deferred)
-          )
-          _ <- ctx.invitedRef.set(invited.drop(excess))
-        } yield ()
-      }
+      // invitedRef is prepend-ordered (newest first), so drop excess from the head
+      _ <- ZIO.whenDiscard(excess > 0)(ctx.invitedRef.set(invited.drop(excess)))
     } yield ()
 
   // --- Source activation ---
