@@ -15,6 +15,7 @@ object TestClubMatchSql extends ZIOSpecDefault {
     testClubMatchUpsertUpdate,
     testClubMatchSelectMatchIdsForClub,
     testClubMatchSelectStaleForClub,
+    testClubMatchSelectSettledForClub,
     testClubMatchBoardInsertAndSelect,
     testClubMatchBoardNullableGameFields,
     testClubMatchBoardDeleteMatch,
@@ -47,7 +48,7 @@ object TestClubMatchSql extends ZIOSpecDefault {
     val t1: Instant = t0.plus(Duration.ofDays(1))
     val t2: Instant = t0.plus(Duration.ofDays(2))
     val t3: Instant = t0.plus(Duration.ofDays(30))
-    val t4: Instant = t0.plus(Duration.ofDays(120)) // unused — reserved for future stale-window tests
+    val t4: Instant = t0.plus(Duration.ofDays(120))
   }
 
   private val clubA = Club(ClubId(300), Times.t0, ClubSlug("club-a"), "Club A")
@@ -144,6 +145,29 @@ object TestClubMatchSql extends ZIOSpecDefault {
       staleA.toSet == Set(ClubMatchId(1001), ClubMatchId(1002))
     )
   }
+
+  private def testClubMatchSelectSettledForClub =
+    test("selectSettledMatchIdsForClub returns only finished matches fetched past stale window") {
+      // Upsert matchFinished with fetchedAt=t4 (day 120). end_time=t1 (day 1).
+      // t4 >= t1 + 90 days (day 91) → settled.
+      // matchInProgress is not finished → never settled.
+      val settled = matchFinished.copy(fetchedAt = Times.t4)
+      for {
+        _          <- ClubMatch.upsert(settled)
+        settledA   <- ClubMatch.selectSettledMatchIdsForClub(clubA.clubId)
+        settledB   <- ClubMatch.selectSettledMatchIdsForClub(clubB.clubId)
+        settledNone <- ClubMatch.selectSettledMatchIdsForClub(ClubId(999))
+        // Also verify it's no longer stale
+        staleA     <- ClubMatch.selectStaleForClub(clubA.clubId)
+        // Restore original fetchedAt for subsequent tests
+        _          <- ClubMatch.upsert(matchFinished)
+      } yield assertTrue(
+        settledA == Set(ClubMatchId(1001)),
+        settledB == Set(ClubMatchId(1001)),
+        settledNone.isEmpty,
+        staleA.toSet == Set(ClubMatchId(1002)) // only matchInProgress is stale now
+      )
+    }
 
   // --- ClubMatchBoard tests ---
 

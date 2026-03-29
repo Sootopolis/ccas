@@ -19,8 +19,9 @@ import HistoryUtils.*
   * discovered players via breadth-first search (BFS) waves — expanding the match graph until no new matches remain.
   *
   * ==Run Modes==
-  *   - '''Default (incremental):''' Only queries members whose match lists haven't been fetched before. Only re-queues
-  *     stale matches (unfinished or recently completed). This is the cheapest mode for regular updates.
+  *   - '''Default (incremental):''' Only queries members whose match lists haven't been fetched before. Skips seeding
+  *     settled matches (finished and fetched past the stale window) to avoid redundant API calls for matches already
+  *     stored by another club's run. Only re-queues stale matches. This is the cheapest mode for regular updates.
   *   - '''`--full`:''' Clears member query history so every member's match list is re-fetched from the API. Use when
   *     you want a complete rebuild of the match graph (e.g., after a long gap or to pick up retroactive API changes).
   *   - '''`--refresh`:''' Re-queues ALL known matches for reprocessing, not just stale ones. Use to update match data
@@ -146,13 +147,14 @@ object HistoryApp extends ZIOAppDefault {
           _ <- ZIO.whenDiscard(full) {
             CcasLogger.info("  --full: clearing member query history") *> HistoryMemberQuery.deleteClub(ctx.clubId)
           }
+          settledMatchIds <- ClubMatch.selectSettledMatchIdsForClub(ctx.clubId)
 
           seedClub <- HistorySeeding.seedFromClubMatches(ctx.client, ctx.clubId, clubSlug)
           _        <- seedClubRef.set(seedClub)
           _        <- CcasLogger.info(s"  Club matches endpoint: $seedClub new match IDs")
 
           memberSeed <-
-            HistorySeeding.seedFromMemberMatches(ctx.client, ctx.clubId, clubSlug, allMembers, queriedIds, snapByPlayerId)
+            HistorySeeding.seedFromMemberMatches(ctx.client, ctx.clubId, clubSlug, allMembers, queriedIds, snapByPlayerId, settledMatchIds)
           _ <- memberSeedRef.set(memberSeed)
           membersSkipped = allMembers.size - memberSeed.queried - memberSeed.failed
           _ <- CcasLogger.info(
@@ -165,7 +167,7 @@ object HistoryApp extends ZIOAppDefault {
 
           // Phase 3: Process matches (BFS waves)
           _ <- CcasLogger.info("Phase 3: Processing matches...")
-          ws <- HistoryProcessing.processWaves(ctx)
+          ws <- HistoryProcessing.processWaves(ctx, settledMatchIds)
         } yield ws
       }.onInterrupt {
         for {

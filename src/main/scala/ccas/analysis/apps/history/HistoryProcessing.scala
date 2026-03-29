@@ -24,7 +24,7 @@ private[history] object HistoryProcessing {
   /** BFS wave loop: processes pending matches in batches, discovers new players, seeds their match lists,
     * and repeats until no new pending matches remain. Returns accumulated stats.
     */
-  def processWaves(ctx: ProcessingContext): RIO[CcasLogger & Transactor, RunStats] = {
+  def processWaves(ctx: ProcessingContext, settledMatchIds: Set[ClubMatchId]): RIO[CcasLogger & Transactor, RunStats] = {
     def waveLoop(waveCount: Int, waveDetails: List[(Int, Int)]): RIO[CcasLogger & Transactor, RunStats] =
       for {
         pendingCount <- HistoryPendingMatch.countNew(ctx.clubId)
@@ -50,7 +50,7 @@ private[history] object HistoryProcessing {
             _ <- ZIO.whenDiscard(newPlayers.nonEmpty) {
               CcasLogger.info(s"  Querying match lists for ${newPlayers.size} discovered players...") *>
                 ZIO.foreachParDiscard(newPlayers) { dp =>
-                  HistorySeeding.seedMatchesForPlayer(ctx.client, ctx.clubId, ctx.clubSlug, dp.playerId, dp.username)
+                  HistorySeeding.seedMatchesForPlayer(ctx.client, ctx.clubId, ctx.clubSlug, dp.playerId, dp.username, settledMatchIds)
                     .catchAll {
                       error => CcasLogger.warn(s"  ${dp.username}: failed to seed — ${error.getMessage}")
                     }

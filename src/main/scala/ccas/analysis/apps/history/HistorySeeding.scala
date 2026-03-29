@@ -122,7 +122,8 @@ private[history] object HistorySeeding {
     clubSlug: ClubSlug,
     allMembers: List[ClubMember],
     queriedIds: Set[PlayerId],
-    snapByPlayerId: Map[PlayerId, PlayerSnapshot]
+    snapByPlayerId: Map[PlayerId, PlayerSnapshot],
+    settledMatchIds: Set[ClubMatchId]
   ): RIO[CcasLogger & Transactor, MemberSeedResult] = {
     val toQuery = allMembers
       .filterNot(m => queriedIds.contains(m.playerId))
@@ -138,7 +139,7 @@ private[history] object HistorySeeding {
         for {
           bar <- CcasLogger.progressBar
           _ <- ZIO.foreachParDiscard(toQuery) { case (playerId, username) =>
-            seedMatchesForPlayer(client, clubId, clubSlug, playerId, username).foldZIO(
+            seedMatchesForPlayer(client, clubId, clubSlug, playerId, username, settledMatchIds).foldZIO(
               error => failRef.update(_ + 1)
                 *> failedMembersRef.update(_ :+ (username, error.getMessage))
                 *> CcasLogger.warn(s"  $username: failed — ${error.getMessage}"),
@@ -169,7 +170,8 @@ private[history] object HistorySeeding {
     clubId: ClubId,
     clubSlug: ClubSlug,
     playerId: PlayerId,
-    username: Username
+    username: Username,
+    settledMatchIds: Set[ClubMatchId]
   ): RIO[Transactor, Int] =
     for {
       playerMatches <- client.get[ApiPlayerMatches](ApiPlayerMatches.getUrl(username))
@@ -182,7 +184,7 @@ private[history] object HistorySeeding {
         case m if isClubLiveMatch(m, clubSlug) =>
           HistoryPendingMatch(clubId, ClubMatchId.fromUrl(m.`@id`), isLive = true)
       }
-      all = dailyPending ++ livePending
+      all = (dailyPending ++ livePending).filterNot(p => settledMatchIds.contains(p.matchId))
       _ <- insertPendingMatches(all)
       _ <- HistoryMemberQuery.upsert(HistoryMemberQuery(clubId, playerId, Instant.now()))
     } yield all.size

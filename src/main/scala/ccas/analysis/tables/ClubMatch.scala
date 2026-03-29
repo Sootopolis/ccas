@@ -29,6 +29,7 @@ final case class ClubMatch(
 
 object ClubMatch {
   private val repo = ImmutableRepo[ClubMatch, ClubMatchId]
+  private val StaleWindowDays = 90
 
   def createTable: ZIO[Transactor, SQLException, Int] =
     connectZIO {
@@ -64,7 +65,7 @@ object ClubMatch {
     connectZIO {
       sql"""SELECT match_id FROM club_match
             WHERE (team1_club_id = $clubId OR team2_club_id = $clubId)
-            AND (status != 'Finished' OR fetched_at < end_time + INTERVAL '90 days')"""
+            AND (status != 'Finished' OR fetched_at < end_time + $StaleWindowDays * INTERVAL '1 day')"""
         .query[ClubMatchId].run().toList
     }
 
@@ -85,6 +86,18 @@ object ClubMatch {
               team1_club_id = EXCLUDED.team1_club_id, team1_score_x2 = EXCLUDED.team1_score_x2,
               team2_club_id = EXCLUDED.team2_club_id, team2_score_x2 = EXCLUDED.team2_score_x2,
               fetched_at = EXCLUDED.fetched_at""".update.run()
+    }
+
+  /** Returns match IDs that are finished and were fetched past the stale window (inverse of `selectStaleForClub`).
+    * These matches have stable data and don't need re-fetching.
+    */
+  def selectSettledMatchIdsForClub(clubId: ClubId): ZIO[Transactor, SQLException, Set[ClubMatchId]] =
+    connectZIO {
+      sql"""SELECT match_id FROM club_match
+            WHERE (team1_club_id = $clubId OR team2_club_id = $clubId)
+            AND status = 'Finished'
+            AND fetched_at >= end_time + $StaleWindowDays * INTERVAL '1 day'"""
+        .query[ClubMatchId].run().toSet
     }
 
   def countForClub(clubId: ClubId): ZIO[Transactor, SQLException, Long] =
