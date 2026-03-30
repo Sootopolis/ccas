@@ -348,7 +348,7 @@ object RecruitmentApp extends ZIOAppDefault {
       _ <- CcasLogger.info(s"\nFound ${found.size} candidates:")
       _ <- ZIO.foreachDiscard(found)(u => CcasLogger.info(s"  $u"))
       answer <- ZIO.attemptBlocking(
-        scala.io.StdIn.readLine(s"Mark all ${found.size} candidates as Invited? [Y/n] ")
+        scala.io.StdIn.readLine(s"\nMark all ${found.size} candidates as Invited? [Y/n] ")
       ).orElse(ZIO.succeed("n"))
     } yield {
       if (answer == null || answer.trim.isEmpty || answer.trim.toLowerCase.startsWith("y")) found
