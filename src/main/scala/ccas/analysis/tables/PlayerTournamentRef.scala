@@ -21,8 +21,8 @@ object PlayerTournamentRef {
   def createTable: ZIO[Transactor, SQLException, Int] =
     connectZIO {
       sql"""CREATE TABLE IF NOT EXISTS player_tournament_ref (
-              player_id        BIGINT PRIMARY KEY REFERENCES player (player_id),
-              tournament_slug  VARCHAR NOT NULL,
+              player_id        BIGINT PRIMARY KEY REFERENCES player (player_id) ON DELETE RESTRICT,
+              tournament_slug  TEXT NOT NULL,
               player_idx       INT NOT NULL
             )""".update.run()
     }

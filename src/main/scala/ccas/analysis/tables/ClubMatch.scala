@@ -19,11 +19,11 @@ final case class ClubMatch(
   timeClass: TimeClass,
   startTime: Option[Instant],
   endTime: Option[Instant],
-  boards: Int,
+  boards: Short,
   team1ClubId: Option[ClubId],
-  team1ScoreX2: Int,
+  team1ScoreX2: Short,
   team2ClubId: Option[ClubId],
-  team2ScoreX2: Int,
+  team2ScoreX2: Short,
   fetchedAt: Instant
 ) derives DbCodec
 
@@ -35,16 +35,16 @@ object ClubMatch {
     connectZIO {
       sql"""CREATE TABLE IF NOT EXISTS club_match (
               match_id        BIGINT PRIMARY KEY,
-              name            VARCHAR NOT NULL,
-              status          VARCHAR NOT NULL,
-              time_class      VARCHAR NOT NULL,
+              name            TEXT NOT NULL,
+              status          TEXT NOT NULL,
+              time_class      TEXT NOT NULL,
               start_time      TIMESTAMPTZ,
               end_time        TIMESTAMPTZ,
-              boards          INT NOT NULL,
-              team1_club_id   BIGINT REFERENCES club (club_id),
-              team1_score_x2  INT NOT NULL,
-              team2_club_id   BIGINT REFERENCES club (club_id),
-              team2_score_x2  INT NOT NULL,
+              boards          SMALLINT NOT NULL,
+              team1_club_id   BIGINT REFERENCES club (club_id) ON DELETE RESTRICT,
+              team1_score_x2  SMALLINT NOT NULL,
+              team2_club_id   BIGINT REFERENCES club (club_id) ON DELETE RESTRICT,
+              team2_score_x2  SMALLINT NOT NULL,
               fetched_at      TIMESTAMPTZ NOT NULL
             )""".update.run()
       sql"""CREATE INDEX IF NOT EXISTS idx_club_match_team1_club ON club_match (team1_club_id)""".update.run()
@@ -69,6 +69,35 @@ object ClubMatch {
         .query[ClubMatchId].run().toList
     }
 
+  /** Returns match IDs that are finished and were fetched past the stale window (inverse of `selectStaleForClub`).
+    * These matches have stable data and don't need re-fetching.
+    */
+  def selectSettledMatchIdsForClub(clubId: ClubId): ZIO[Transactor, SQLException, Set[ClubMatchId]] =
+    connectZIO {
+      sql"""SELECT match_id FROM club_match
+            WHERE (team1_club_id = $clubId OR team2_club_id = $clubId)
+            AND status = 'Finished'
+            AND fetched_at >= end_time + $StaleWindowDays * INTERVAL '1 day'"""
+        .query[ClubMatchId].run().toSet
+    }
+
+  def selectClubMatchRef(clubId: ClubId): ZIO[Transactor, SQLException, Option[ClubMatchRef]] =
+    connectZIO {
+      sql"""SELECT match_id, (team1_club_id = $clubId) AS is_team1
+            FROM club_match
+            WHERE team1_club_id = $clubId OR team2_club_id = $clubId
+            LIMIT 1""".query[(ClubMatchId, Boolean)].run().headOption.map {
+        case (matchId, isTeam1) => ClubMatchRef(clubId, matchId, isLive = false, isTeam1)
+      }
+    }
+
+  def countForClub(clubId: ClubId): ZIO[Transactor, SQLException, Long] =
+    connectZIO {
+      sql"""SELECT COUNT(*) FROM club_match
+            WHERE team1_club_id = $clubId OR team2_club_id = $clubId"""
+        .query[Long].run().head
+    }
+
   def upsert(item: ClubMatch): ZIO[Transactor, SQLException, Int] =
     connectZIO {
       sql"""INSERT INTO club_match (match_id, name, status, time_class, start_time, end_time, boards,
@@ -88,41 +117,12 @@ object ClubMatch {
               fetched_at = EXCLUDED.fetched_at""".update.run()
     }
 
-  /** Returns match IDs that are finished and were fetched past the stale window (inverse of `selectStaleForClub`).
-    * These matches have stable data and don't need re-fetching.
-    */
-  def selectSettledMatchIdsForClub(clubId: ClubId): ZIO[Transactor, SQLException, Set[ClubMatchId]] =
-    connectZIO {
-      sql"""SELECT match_id FROM club_match
-            WHERE (team1_club_id = $clubId OR team2_club_id = $clubId)
-            AND status = 'Finished'
-            AND fetched_at >= end_time + $StaleWindowDays * INTERVAL '1 day'"""
-        .query[ClubMatchId].run().toSet
-    }
-
-  def countForClub(clubId: ClubId): ZIO[Transactor, SQLException, Long] =
-    connectZIO {
-      sql"""SELECT COUNT(*) FROM club_match
-            WHERE team1_club_id = $clubId OR team2_club_id = $clubId"""
-        .query[Long].run().head
-    }
-
   def updateTeamClubId(matchId: ClubMatchId, isTeam1: Boolean, clubId: ClubId): ZIO[Transactor, SQLException, Int] =
     connectZIO {
       if (isTeam1) {
         sql"UPDATE club_match SET team1_club_id = $clubId WHERE match_id = $matchId".update.run()
       } else {
         sql"UPDATE club_match SET team2_club_id = $clubId WHERE match_id = $matchId".update.run()
-      }
-    }
-
-  def selectClubMatchRef(clubId: ClubId): ZIO[Transactor, SQLException, Option[ClubMatchRef]] =
-    connectZIO {
-      sql"""SELECT match_id, (team1_club_id = $clubId) AS is_team1
-            FROM club_match
-            WHERE team1_club_id = $clubId OR team2_club_id = $clubId
-            LIMIT 1""".query[(ClubMatchId, Boolean)].run().headOption.map {
-        case (matchId, isTeam1) => ClubMatchRef(clubId, matchId, isLive = false, isTeam1)
       }
     }
 }

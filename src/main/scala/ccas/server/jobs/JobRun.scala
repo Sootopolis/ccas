@@ -36,7 +36,7 @@ object JobRun {
       sql"""CREATE TABLE IF NOT EXISTS job_run (
               id             TEXT PRIMARY KEY,
               kind           TEXT NOT NULL,
-              club_id        BIGINT REFERENCES club (club_id),
+              club_id        BIGINT REFERENCES club (club_id) ON DELETE RESTRICT,
               trigger        TEXT NOT NULL,
               status         TEXT NOT NULL,
               params         TEXT,
@@ -48,6 +48,31 @@ object JobRun {
             ON job_run (kind, club_id) WHERE status = 'Running'""".update.run()
       sql"""CREATE INDEX IF NOT EXISTS idx_job_run_started_at
             ON job_run (started_at DESC)""".update.run()
+    }
+
+  def selectId(id: JobRunId): ZIO[Transactor, SQLException, Option[JobRun]] =
+    connectZIO {
+      sql"SELECT $selectCols FROM job_run WHERE id = $id"
+        .query[JobRun].run().headOption
+    }
+
+  def selectRunning(kind: JobKind, clubId: Option[ClubId]): ZIO[Transactor, SQLException, Option[JobRun]] =
+    connectZIO {
+      val running = JobRunStatus.Running
+      clubId match {
+        case Some(cid) =>
+          sql"SELECT $selectCols FROM job_run WHERE kind = $kind AND club_id = $cid AND status = $running"
+            .query[JobRun].run().headOption
+        case None =>
+          sql"SELECT $selectCols FROM job_run WHERE kind = $kind AND club_id IS NULL AND status = $running"
+            .query[JobRun].run().headOption
+      }
+    }
+
+  def selectRecent(limit: Int): ZIO[Transactor, SQLException, List[JobRun]] =
+    connectZIO {
+      sql"SELECT $selectCols FROM job_run ORDER BY started_at DESC LIMIT $limit"
+        .query[JobRun].run().toList
     }
 
   def insert(jobRun: JobRun): ZIO[Transactor, SQLException, Int] =
@@ -77,36 +102,19 @@ object JobRun {
              WHERE id = $id""".update.run()
     }
 
-  def selectId(id: JobRunId): ZIO[Transactor, SQLException, Option[JobRun]] =
-    connectZIO {
-      sql"SELECT $selectCols FROM job_run WHERE id = $id"
-        .query[JobRun].run().headOption
-    }
-
-  def selectRunning(kind: JobKind, clubId: Option[ClubId]): ZIO[Transactor, SQLException, Option[JobRun]] =
-    connectZIO {
-      val running = JobRunStatus.Running
-      clubId match {
-        case Some(cid) =>
-          sql"SELECT $selectCols FROM job_run WHERE kind = $kind AND club_id = $cid AND status = $running"
-            .query[JobRun].run().headOption
-        case None =>
-          sql"SELECT $selectCols FROM job_run WHERE kind = $kind AND club_id IS NULL AND status = $running"
-            .query[JobRun].run().headOption
-      }
-    }
-
-  def selectRecent(limit: Int): ZIO[Transactor, SQLException, List[JobRun]] =
-    connectZIO {
-      sql"SELECT $selectCols FROM job_run ORDER BY started_at DESC LIMIT $limit"
-        .query[JobRun].run().toList
-    }
-
   def markOrphansAsFailed: ZIO[Transactor, SQLException, Int] =
     connectZIO {
       val failed  = JobRunStatus.Failed
       val running = JobRunStatus.Running
       sql"""UPDATE job_run SET status = $failed, completed_at = NOW(), error = 'Service restarted'
             WHERE status = $running""".update.run()
+    }
+
+  def deleteBefore(cutoff: Instant): ZIO[Transactor, SQLException, Int] =
+    connectZIO {
+      val completed = JobRunStatus.Completed
+      val failed    = JobRunStatus.Failed
+      sql"""DELETE FROM job_run WHERE started_at < $cutoff
+            AND status IN ($completed, $failed)""".update.run()
     }
 }

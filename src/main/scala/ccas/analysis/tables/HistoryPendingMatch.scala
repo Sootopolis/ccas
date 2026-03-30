@@ -23,10 +23,10 @@ object HistoryPendingMatch {
     connectZIO {
       // Transient work queue — PK includes is_live to distinguish daily/live match IDs.
       sql"""CREATE TABLE IF NOT EXISTS history_pending_match (
-              club_id    BIGINT NOT NULL REFERENCES club (club_id),
+              club_id    BIGINT NOT NULL REFERENCES club (club_id) ON DELETE RESTRICT,
               match_id   BIGINT NOT NULL,
               is_live    BOOLEAN NOT NULL,
-              status     VARCHAR NOT NULL,
+              status     TEXT NOT NULL,
               PRIMARY KEY (club_id, match_id, is_live)
             )""".update.run()
       sql"""CREATE INDEX IF NOT EXISTS idx_history_pending_new
@@ -47,6 +47,19 @@ object HistoryPendingMatch {
         .query[HistoryPendingMatch].run().toList
     }
 
+  def count(clubId: ClubId): ZIO[Transactor, SQLException, Long] =
+    connectZIO {
+      sql"SELECT COUNT(*) FROM history_pending_match WHERE club_id = $clubId"
+        .query[Long].run().head
+    }
+
+  def countNew(clubId: ClubId): ZIO[Transactor, SQLException, Long] =
+    connectZIO {
+      val status = PendingMatchStatus.New
+      sql"SELECT COUNT(*) FROM history_pending_match WHERE club_id = $clubId AND status = $status"
+        .query[Long].run().head
+    }
+
   def insert(item: HistoryPendingMatch): ZIO[Transactor, SQLException, Int] =
     connectZIO {
       sql"""INSERT INTO history_pending_match (club_id, match_id, is_live, status)
@@ -61,12 +74,6 @@ object HistoryPendingMatch {
               VALUES (${item.clubId}, ${item.matchId}, ${item.isLive}, ${item.status})
               ON CONFLICT DO NOTHING""".update
       }
-    }
-
-  def delete(clubId: ClubId, matchId: ClubMatchId, isLive: Boolean): ZIO[Transactor, SQLException, Int] =
-    connectZIO {
-      sql"DELETE FROM history_pending_match WHERE club_id = $clubId AND match_id = $matchId AND is_live = $isLive"
-        .update.run()
     }
 
   def updateStatus(
@@ -87,16 +94,9 @@ object HistoryPendingMatch {
             WHERE club_id = $clubId AND status != $target""".update.run()
     }
 
-  def count(clubId: ClubId): ZIO[Transactor, SQLException, Long] =
+  def delete(clubId: ClubId, matchId: ClubMatchId, isLive: Boolean): ZIO[Transactor, SQLException, Int] =
     connectZIO {
-      sql"SELECT COUNT(*) FROM history_pending_match WHERE club_id = $clubId"
-        .query[Long].run().head
-    }
-
-  def countNew(clubId: ClubId): ZIO[Transactor, SQLException, Long] =
-    connectZIO {
-      val status = PendingMatchStatus.New
-      sql"SELECT COUNT(*) FROM history_pending_match WHERE club_id = $clubId AND status = $status"
-        .query[Long].run().head
+      sql"DELETE FROM history_pending_match WHERE club_id = $clubId AND match_id = $matchId AND is_live = $isLive"
+        .update.run()
     }
 }

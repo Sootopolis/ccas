@@ -114,10 +114,10 @@ object RefApp extends ZIOAppDefault {
     connectZIO {
       sql"""SELECT p.player_id, ps.username
             FROM player p
-            INNER JOIN (
-              SELECT player_id, username, ROW_NUMBER() OVER (PARTITION BY player_id ORDER BY since DESC) AS rn
-              FROM player_snapshot
-            ) ps ON p.player_id = ps.player_id AND ps.rn = 1
+            JOIN LATERAL (
+              SELECT username FROM player_snapshot
+              WHERE player_id = p.player_id ORDER BY since DESC LIMIT 1
+            ) ps ON true
             LEFT JOIN player_match_ref pmr ON p.player_id = pmr.player_id
             LEFT JOIN player_tournament_ref ptr ON p.player_id = ptr.player_id
             LEFT JOIN player_ref_skip prs ON p.player_id = prs.player_id

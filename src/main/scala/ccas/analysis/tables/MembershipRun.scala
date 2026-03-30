@@ -38,6 +38,12 @@ object MembershipRun {
             ON membership_run (club_id, started_at DESC)""".update.run()
     }
 
+  def selectLatest(clubId: ClubId): ZIO[Transactor, SQLException, Option[MembershipRun]] =
+    connectZIO {
+      sql"SELECT $selectCols FROM membership_run WHERE club_id = $clubId ORDER BY started_at DESC LIMIT 1"
+        .query[MembershipRun].run().headOption
+    }
+
   def insert(
     clubId: ClubId,
     trigger: RunTrigger,
@@ -54,12 +60,6 @@ object MembershipRun {
     connectZIO {
       sql"""UPDATE membership_run SET completed_at = $completedAt
             WHERE run_id = $runId""".update.run()
-    }
-
-  def selectLatest(clubId: ClubId): ZIO[Transactor, SQLException, Option[MembershipRun]] =
-    connectZIO {
-      sql"SELECT $selectCols FROM membership_run WHERE club_id = $clubId ORDER BY started_at DESC LIMIT 1"
-        .query[MembershipRun].run().headOption
     }
 
   def deleteAll: ZIO[Transactor, SQLException, Int] =

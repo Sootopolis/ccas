@@ -36,32 +36,11 @@ object RecruitmentBlacklist {
               player_id  BIGINT NOT NULL,
               added_at   TIMESTAMPTZ NOT NULL,
               expires_at TIMESTAMPTZ,
-              reason     VARCHAR,
+              reason     TEXT,
               PRIMARY KEY (club_id, player_id),
               FOREIGN KEY (club_id) REFERENCES club (club_id) ON DELETE RESTRICT,
               FOREIGN KEY (player_id) REFERENCES player (player_id) ON DELETE RESTRICT
             )""".update.run()
-    }
-
-  def insert(item: RecruitmentBlacklist): ZIO[Transactor, SQLException, Int] =
-    connectZIO {
-      sql"""INSERT INTO recruitment_blacklist (club_id, player_id, added_at, expires_at, reason)
-            VALUES (${item.clubId}, ${item.playerId}, ${item.addedAt}, ${item.expiresAt}, ${item.reason})""".update.run()
-    }
-
-  def upsert(item: RecruitmentBlacklist): ZIO[Transactor, SQLException, Int] =
-    connectZIO {
-      sql"""INSERT INTO recruitment_blacklist (club_id, player_id, added_at, expires_at, reason)
-            VALUES (${item.clubId}, ${item.playerId}, ${item.addedAt}, ${item.expiresAt}, ${item.reason})
-            ON CONFLICT (club_id, player_id) DO UPDATE SET
-              added_at = EXCLUDED.added_at,
-              expires_at = EXCLUDED.expires_at,
-              reason = EXCLUDED.reason""".update.run()
-    }
-
-  def delete(clubId: ClubId, playerId: PlayerId): ZIO[Transactor, SQLException, Int] =
-    connectZIO {
-      sql"DELETE FROM recruitment_blacklist WHERE club_id = $clubId AND player_id = $playerId".update.run()
     }
 
   def selectByClub(clubId: ClubId): ZIO[Transactor, SQLException, List[RecruitmentBlacklist]] =
@@ -90,6 +69,27 @@ object RecruitmentBlacklist {
             WHERE club_id = $clubId AND player_id = $playerId
               AND (expires_at IS NULL OR expires_at > $now)"""
         .query[Int].run().nonEmpty
+    }
+
+  def insert(item: RecruitmentBlacklist): ZIO[Transactor, SQLException, Int] =
+    connectZIO {
+      sql"""INSERT INTO recruitment_blacklist (club_id, player_id, added_at, expires_at, reason)
+            VALUES (${item.clubId}, ${item.playerId}, ${item.addedAt}, ${item.expiresAt}, ${item.reason})""".update.run()
+    }
+
+  def upsert(item: RecruitmentBlacklist): ZIO[Transactor, SQLException, Int] =
+    connectZIO {
+      sql"""INSERT INTO recruitment_blacklist (club_id, player_id, added_at, expires_at, reason)
+            VALUES (${item.clubId}, ${item.playerId}, ${item.addedAt}, ${item.expiresAt}, ${item.reason})
+            ON CONFLICT (club_id, player_id) DO UPDATE SET
+              added_at = EXCLUDED.added_at,
+              expires_at = EXCLUDED.expires_at,
+              reason = EXCLUDED.reason""".update.run()
+    }
+
+  def delete(clubId: ClubId, playerId: PlayerId): ZIO[Transactor, SQLException, Int] =
+    connectZIO {
+      sql"DELETE FROM recruitment_blacklist WHERE club_id = $clubId AND player_id = $playerId".update.run()
     }
 
   def deleteAll: ZIO[Transactor, SQLException, Int] =

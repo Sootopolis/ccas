@@ -37,11 +37,34 @@ object RecruitmentRun {
               candidates_found  INT NOT NULL,
               job_run_id        TEXT,
               FOREIGN KEY (club_id) REFERENCES club (club_id) ON DELETE RESTRICT,
-              FOREIGN KEY (criteria_id) REFERENCES recruitment_criteria (criteria_id)
+              FOREIGN KEY (criteria_id) REFERENCES recruitment_criteria (criteria_id) ON DELETE RESTRICT
             )""".update.run()
       sql"""CREATE INDEX IF NOT EXISTS idx_recruitment_run_club_started
             ON recruitment_run (club_id, started_at DESC)""".update.run()
     }
+
+  def selectId(runId: Long): ZIO[Transactor, SQLException, Option[RecruitmentRun]] =
+    connectZIO {
+      sql"SELECT $selectCols FROM recruitment_run WHERE run_id = $runId".query[RecruitmentRun].run().headOption
+    }
+
+  def selectLatest(clubId: ClubId): ZIO[Transactor, SQLException, Option[RecruitmentRun]] =
+    connectZIO {
+      sql"SELECT $selectCols FROM recruitment_run WHERE club_id = $clubId ORDER BY started_at DESC LIMIT 1"
+        .query[RecruitmentRun].run().headOption
+    }
+
+  def sumCandidatesFoundToday(clubId: ClubId, alias: String): ZIO[Transactor, SQLException, Int] =
+    connectZIO {
+      sql"""SELECT COALESCE(SUM(candidates_found), 0) FROM recruitment_run
+            WHERE club_id = $clubId AND criteria_id IN (
+              SELECT criteria_id FROM recruitment_alias WHERE club_id = $clubId AND alias = $alias
+            )
+              AND completed_at IS NOT NULL
+              AND started_at >= date_trunc('day', NOW() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+              AND started_at < date_trunc('day', NOW() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' + INTERVAL '1 day'"""
+        .query[Int].run().headOption
+    }.someOrFail(new SQLException("COALESCE query produced no rows"))
 
   def insert(
     clubId: ClubId,
@@ -61,28 +84,6 @@ object RecruitmentRun {
       sql"""UPDATE recruitment_run SET completed_at = ${item.completedAt}, candidates_found = ${item.candidatesFound}
             WHERE run_id = ${item.runId}""".update.run()
     }
-
-  def selectLatest(clubId: ClubId): ZIO[Transactor, SQLException, Option[RecruitmentRun]] =
-    connectZIO {
-      sql"SELECT $selectCols FROM recruitment_run WHERE club_id = $clubId ORDER BY started_at DESC LIMIT 1"
-        .query[RecruitmentRun].run().headOption
-    }
-
-  def selectId(runId: Long): ZIO[Transactor, SQLException, Option[RecruitmentRun]] =
-    connectZIO {
-      sql"SELECT $selectCols FROM recruitment_run WHERE run_id = $runId".query[RecruitmentRun].run().headOption
-    }
-
-  def sumCandidatesFoundToday(clubId: ClubId, alias: String): ZIO[Transactor, SQLException, Int] =
-    connectZIO {
-      sql"""SELECT COALESCE(SUM(candidates_found), 0) FROM recruitment_run
-            WHERE club_id = $clubId AND criteria_id IN (
-              SELECT criteria_id FROM recruitment_alias WHERE club_id = $clubId AND alias = $alias
-            )
-              AND completed_at IS NOT NULL
-              AND (started_at AT TIME ZONE 'UTC')::date = (NOW() AT TIME ZONE 'UTC')::date"""
-        .query[Int].run().headOption
-    }.someOrFail(new SQLException("COALESCE query produced no rows"))
 
   def deleteAll: ZIO[Transactor, SQLException, Int] =
     connectZIO {

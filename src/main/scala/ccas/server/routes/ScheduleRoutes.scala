@@ -80,7 +80,7 @@ object ScheduleRoutes {
             .someOrFail(new Exception(s"Club not found: $slug"))
             .map(_.clubId)
         }
-        schedule = JobSchedule(0L, kind, clubId, body.params, body.intervalHours, enabled = true, lastRunAt = None)
+        schedule = JobSchedule(0L, kind, clubId, body.params, body.intervalHours.toShort, enabled = true, lastRunAt = None)
         id      <- JobSchedule.insert(schedule)
         created <- JobSchedule.selectId(id).someOrFail(new Exception("Failed to read back schedule"))
       } yield jsonResponse(Status.Created, ScheduleResponse.fromSchedule(created)))
@@ -89,7 +89,7 @@ object ScheduleRoutes {
     Method.PUT / "api" / "schedules" / long("id") -> handler { (id: Long, req: Request) =>
       (for {
         body    <- parseJsonBody[UpdateScheduleRequest](req)
-        _       <- JobSchedule.update(id, body.intervalHours, body.enabled, body.params.map(Some(_)))
+        _       <- JobSchedule.update(id, body.intervalHours.map(_.toShort), body.enabled, body.params.map(Some(_)))
         updated <- JobSchedule.selectId(id).someOrFail(new Exception(s"Schedule $id not found"))
       } yield jsonResponse(Status.Ok, ScheduleResponse.fromSchedule(updated)))
         .pipe(withErrorHandling)

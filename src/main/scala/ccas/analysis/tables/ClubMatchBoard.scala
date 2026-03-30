@@ -11,7 +11,7 @@ import ccas.utils.sql.SqlZioTypes.{connectZIO, transactZIO}
 
 final case class ClubMatchBoard(
   matchId: ClubMatchId,
-  board: Int,
+  board: Short,
   team1PlayerId: Option[PlayerId],
   team1FairPlay: Boolean,
   team2PlayerId: Option[PlayerId],
@@ -35,15 +35,15 @@ object ClubMatchBoard {
     connectZIO {
       sql"""CREATE TABLE IF NOT EXISTS club_match_board (
               match_id         BIGINT NOT NULL REFERENCES club_match (match_id) ON DELETE CASCADE,
-              board            INT NOT NULL,
-              team1_player_id  BIGINT REFERENCES player (player_id),
+              board            SMALLINT NOT NULL,
+              team1_player_id  BIGINT REFERENCES player (player_id) ON DELETE RESTRICT,
               team1_fair_play  BOOLEAN NOT NULL,
-              team2_player_id  BIGINT REFERENCES player (player_id),
+              team2_player_id  BIGINT REFERENCES player (player_id) ON DELETE RESTRICT,
               team2_fair_play  BOOLEAN NOT NULL,
-              game1_winner     VARCHAR,
-              game1_detail     VARCHAR,
-              game2_winner     VARCHAR,
-              game2_detail     VARCHAR,
+              game1_winner     TEXT,
+              game1_detail     TEXT,
+              game2_winner     TEXT,
+              game2_detail     TEXT,
               team1_score_x2   SMALLINT NOT NULL,
               team2_score_x2   SMALLINT NOT NULL,
               PRIMARY KEY (match_id, board)
@@ -58,9 +58,14 @@ object ClubMatchBoard {
         .query[ClubMatchBoard].run().toList
     }
 
-  def deleteMatch(matchId: ClubMatchId): ZIO[Transactor, SQLException, Int] =
+  def selectPlayerMatchRef(playerId: PlayerId): ZIO[Transactor, SQLException, Option[PlayerMatchRef]] =
     connectZIO {
-      sql"DELETE FROM club_match_board WHERE match_id = $matchId".update.run()
+      sql"""SELECT match_id, board AS board_idx, (team1_player_id = $playerId) AS is_team1
+            FROM club_match_board
+            WHERE team1_player_id = $playerId OR team2_player_id = $playerId
+            LIMIT 1""".query[(ClubMatchId, Short, Boolean)].run().headOption.map {
+        case (matchId, boardIdx, isTeam1) => PlayerMatchRef(playerId, matchId, isLive = false, isTeam1, boardIdx)
+      }
     }
 
   def insert(item: ClubMatchBoard): ZIO[Transactor, SQLException, Int] =
@@ -93,7 +98,7 @@ object ClubMatchBoard {
 
   def updatePlayerId(
     matchId: ClubMatchId,
-    board: Int,
+    board: Short,
     isTeam1: Boolean,
     playerId: PlayerId
   ): ZIO[Transactor, SQLException, Int] =
@@ -107,13 +112,8 @@ object ClubMatchBoard {
       }
     }
 
-  def selectPlayerMatchRef(playerId: PlayerId): ZIO[Transactor, SQLException, Option[PlayerMatchRef]] =
+  def deleteMatch(matchId: ClubMatchId): ZIO[Transactor, SQLException, Int] =
     connectZIO {
-      sql"""SELECT match_id, board AS board_idx, (team1_player_id = $playerId) AS is_team1
-            FROM club_match_board
-            WHERE team1_player_id = $playerId OR team2_player_id = $playerId
-            LIMIT 1""".query[(ClubMatchId, Int, Boolean)].run().headOption.map {
-        case (matchId, boardIdx, isTeam1) => PlayerMatchRef(playerId, matchId, isLive = false, isTeam1, boardIdx)
-      }
+      sql"DELETE FROM club_match_board WHERE match_id = $matchId".update.run()
     }
 }

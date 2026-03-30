@@ -18,7 +18,7 @@ object ClubMatchRef {
   def createTable: ZIO[Transactor, SQLException, Int] =
     connectZIO {
       sql"""CREATE TABLE IF NOT EXISTS club_match_ref (
-              club_id  BIGINT PRIMARY KEY REFERENCES club (club_id),
+              club_id  BIGINT PRIMARY KEY REFERENCES club (club_id) ON DELETE RESTRICT,
               match_id BIGINT NOT NULL,
               is_live  BOOLEAN NOT NULL,
               is_team1 BOOLEAN NOT NULL

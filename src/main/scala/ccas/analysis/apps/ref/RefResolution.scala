@@ -92,7 +92,7 @@ private[ref] object RefResolution {
     m: ApiPlayerMatch
   ): RIO[CcasLogger & Transactor, ResolveResult] = {
     val parsed      = parseMatchUrl(m.`@id`)
-    val boardIdxOpt = m.board.get.path.segments.lastOption.flatMap(_.toIntOption)
+    val boardIdxOpt = m.board.get.path.segments.lastOption.flatMap(_.toIntOption).map(_.toShort)
     boardIdxOpt match {
       case None =>
         CcasLogger.debug(s"  ${player.username}: malformed board URL ${m.board.get}").as(ResolveResult.NotFound)

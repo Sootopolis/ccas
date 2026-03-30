@@ -24,10 +24,9 @@ object Club {
       sql"""CREATE TABLE IF NOT EXISTS club (
               club_id  BIGINT PRIMARY KEY,
               created  TIMESTAMPTZ NOT NULL,
-              slug     VARCHAR NOT NULL,
-              name     VARCHAR NOT NULL
+              slug     TEXT NOT NULL,
+              name     TEXT NOT NULL
             )""".update.run()
-    } *> connectZIO {
       sql"CREATE UNIQUE INDEX IF NOT EXISTS club_slug_key ON club (slug)".update.run()
     }
 

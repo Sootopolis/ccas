@@ -7,7 +7,6 @@ import com.augustnagro.magnum.*
 import zio.ZIO
 
 import ccas.api.misc.enums.PlayerStatusCategory
-import ccas.api.misc.enums.PlayerStatusCategory.Active
 import ccas.api.misc.enums.Title
 import ccas.api.misc.subtypes.{PlayerId, Username}
 import ccas.utils.sql.DbCodecs.given
@@ -29,9 +28,9 @@ object PlayerSnapshot {
       sql"""CREATE TABLE IF NOT EXISTS player_snapshot (
               player_id BIGINT NOT NULL,
               since     TIMESTAMPTZ NOT NULL,
-              username  VARCHAR NOT NULL,
-              status    VARCHAR NOT NULL,
-              title     VARCHAR,
+              username  TEXT NOT NULL,
+              status    TEXT NOT NULL,
+              title     TEXT,
               PRIMARY KEY (player_id, since),
               FOREIGN KEY (player_id) REFERENCES player (player_id) ON DELETE RESTRICT
             )""".update.run()
@@ -39,21 +38,10 @@ object PlayerSnapshot {
             ON player_snapshot (username, since DESC)""".update.run()
     }
 
-  def selectAll: ZIO[Transactor, SQLException, List[PlayerSnapshot]] =
-    connectZIO(sql"SELECT $selectCols FROM player_snapshot".query[PlayerSnapshot].run().toList)
-
   def selectLatest: ZIO[Transactor, SQLException, List[PlayerSnapshot]] =
     connectZIO(
       sql"""SELECT DISTINCT ON (player_id) $selectCols FROM player_snapshot
             ORDER BY player_id, since DESC""".query[PlayerSnapshot].run().toList
-    )
-
-  def selectActive: ZIO[Transactor, SQLException, List[PlayerSnapshot]] =
-    connectZIO(
-      sql"""SELECT $selectCols FROM (
-              SELECT DISTINCT ON (player_id) $selectCols FROM player_snapshot
-              ORDER BY player_id, since DESC
-            ) latest WHERE status = ${Active.toString}""".query[PlayerSnapshot].run().toList
     )
 
   def selectId(playerId: PlayerId): ZIO[Transactor, SQLException, List[PlayerSnapshot]] =

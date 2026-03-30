@@ -19,7 +19,7 @@ object RecruitmentAlias {
     connectZIO {
       sql"""CREATE TABLE IF NOT EXISTS recruitment_alias (
               club_id      BIGINT NOT NULL,
-              alias        VARCHAR NOT NULL,
+              alias        TEXT NOT NULL,
               since        TIMESTAMPTZ NOT NULL,
               criteria_id  BIGINT NOT NULL,
               PRIMARY KEY (club_id, alias, since),

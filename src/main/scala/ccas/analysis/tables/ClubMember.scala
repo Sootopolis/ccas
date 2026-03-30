@@ -38,6 +38,8 @@ object ClubMember {
             )""".update.run()
       sql"""CREATE INDEX IF NOT EXISTS idx_club_member_player_id
             ON club_member (player_id)""".update.run()
+      sql"""CREATE INDEX IF NOT EXISTS idx_club_member_current
+            ON club_member (club_id) WHERE until IS NULL""".update.run()
     }
 
   def selectAll: ZIO[Transactor, SQLException, List[ClubMember]] =
@@ -54,11 +56,11 @@ object ClubMember {
   def selectClubActive(clubId: ClubId): ZIO[Transactor, SQLException, List[ClubMember]] =
     connectZIO(
       sql"""SELECT cm.club_id, cm.player_id, cm.since, cm.until, cm.since_approximate FROM club_member cm
-            JOIN (
-              SELECT DISTINCT ON (player_id) player_id, status FROM player_snapshot
-              ORDER BY player_id, since DESC
-            ) ps ON cm.player_id = ps.player_id
-            WHERE cm.club_id = $clubId AND cm.until IS NULL AND ps.status = ${Active.toString}""".query[ClubMember]
+            JOIN LATERAL (
+              SELECT status FROM player_snapshot
+              WHERE player_id = cm.player_id ORDER BY since DESC LIMIT 1
+            ) ps ON ps.status = ${Active.toString}
+            WHERE cm.club_id = $clubId AND cm.until IS NULL""".query[ClubMember]
         .run().toList
     )
 
@@ -98,6 +100,12 @@ object ClubMember {
       }
     }
 
+  def exists(clubId: ClubId, playerId: PlayerId): ZIO[Transactor, SQLException, Boolean] =
+    connectZIO {
+      sql"SELECT 1 FROM club_member WHERE club_id = $clubId AND player_id = $playerId LIMIT 1"
+        .query[Int].run().nonEmpty
+    }
+
   def replaceSince(
     clubId: ClubId,
     playerId: PlayerId,
@@ -108,12 +116,6 @@ object ClubMember {
       sql"""UPDATE club_member SET since = $newSince, since_approximate = false
             WHERE club_id = $clubId AND player_id = $playerId AND since = $oldSince
               AND since_approximate = true""".update.run()
-    }
-
-  def exists(clubId: ClubId, playerId: PlayerId): ZIO[Transactor, SQLException, Boolean] =
-    connectZIO {
-      sql"SELECT 1 FROM club_member WHERE club_id = $clubId AND player_id = $playerId LIMIT 1"
-        .query[Int].run().nonEmpty
     }
 
   def deleteAll: ZIO[Transactor, SQLException, Int] =

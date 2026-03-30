@@ -14,7 +14,7 @@ final case class PlayerMatchRef(
   matchId: ClubMatchId,
   isLive: Boolean,
   isTeam1: Boolean,
-  boardIdx: Int
+  boardIdx: Short
 ) derives DbCodec
 
 object PlayerMatchRef {
@@ -23,7 +23,7 @@ object PlayerMatchRef {
   def createTable: ZIO[Transactor, SQLException, Int] =
     connectZIO {
       sql"""CREATE TABLE IF NOT EXISTS player_match_ref (
-              player_id  BIGINT PRIMARY KEY REFERENCES player (player_id),
+              player_id  BIGINT PRIMARY KEY REFERENCES player (player_id) ON DELETE RESTRICT,
               match_id   BIGINT NOT NULL,
               is_live    BOOLEAN NOT NULL,
               is_team1   BOOLEAN NOT NULL,

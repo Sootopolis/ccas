@@ -29,30 +29,14 @@ object RecruitmentCandidate {
               run_id            BIGINT NOT NULL,
               player_id         BIGINT NOT NULL,
               evaluated_at      TIMESTAMPTZ NOT NULL,
-              outcome           VARCHAR NOT NULL CHECK (outcome IN ('Invited', 'Rejected', 'AlreadyMember', 'Error', 'Deferred')),
-              rejection_reason  VARCHAR,
+              outcome           TEXT NOT NULL CHECK (outcome IN ('Invited', 'Rejected', 'AlreadyMember', 'Error', 'Deferred')),
+              rejection_reason  TEXT,
               PRIMARY KEY (run_id, player_id),
               FOREIGN KEY (run_id) REFERENCES recruitment_run (run_id) ON DELETE RESTRICT,
               FOREIGN KEY (player_id) REFERENCES player (player_id) ON DELETE RESTRICT
             )""".update.run()
       sql"""CREATE INDEX IF NOT EXISTS idx_rc_player_outcome_eval
             ON recruitment_candidate (player_id, outcome, evaluated_at DESC)""".update.run()
-    }
-
-  def insert(item: RecruitmentCandidate): ZIO[Transactor, SQLException, Int] =
-    connectZIO {
-      sql"""INSERT INTO recruitment_candidate (run_id, player_id, evaluated_at, outcome, rejection_reason)
-            VALUES (${item.runId}, ${item.playerId}, ${item.evaluatedAt}, ${item.outcome.toString}, ${item
-          .rejectionReason})""".update.run()
-    }
-
-  def insertBatch(items: Iterable[RecruitmentCandidate]): ZIO[Transactor, SQLException, BatchUpdateResult] =
-    transactZIO {
-      batchUpdate(items) { item =>
-        sql"""INSERT INTO recruitment_candidate (run_id, player_id, evaluated_at, outcome, rejection_reason)
-              VALUES (${item.runId}, ${item.playerId}, ${item.evaluatedAt}, ${item.outcome.toString}, ${item
-            .rejectionReason})""".update
-      }
     }
 
   def selectByRun(runId: Long): ZIO[Transactor, SQLException, List[RecruitmentCandidate]] =
@@ -105,7 +89,8 @@ object RecruitmentCandidate {
               SELECT criteria_id FROM recruitment_alias WHERE club_id = $clubId AND alias = $alias
             )
               AND rr.completed_at IS NOT NULL
-              AND (rr.started_at AT TIME ZONE 'UTC')::date = (NOW() AT TIME ZONE 'UTC')::date
+              AND rr.started_at >= date_trunc('day', NOW() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+              AND rr.started_at < date_trunc('day', NOW() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' + INTERVAL '1 day'
               AND rc.outcome = $invited"""
         .query[RecruitmentCandidate].run().toList
     }
@@ -122,12 +107,6 @@ object RecruitmentCandidate {
       sql"SELECT COUNT(*) FROM recruitment_candidate WHERE run_id = $runId AND outcome = $deferred"
         .query[Int].run().headOption
     }.someOrFail(new SQLException("COUNT query produced no rows"))
-
-  def updateOutcome(runId: Long, playerId: PlayerId, outcome: CandidateOutcome): ZIO[Transactor, SQLException, Int] =
-    connectZIO {
-      sql"""UPDATE recruitment_candidate SET outcome = ${outcome.toString}
-            WHERE run_id = $runId AND player_id = $playerId""".update.run()
-    }
 
   /** Returns deferred candidates for a club that have not been resolved (Invited/Rejected) in a later run. */
   def selectDeferredByClub(clubId: ClubId): ZIO[Transactor, SQLException, List[RecruitmentCandidate]] =
@@ -150,6 +129,28 @@ object RecruitmentCandidate {
               )
             ORDER BY rc.evaluated_at DESC"""
         .query[RecruitmentCandidate].run().toList
+    }
+
+  def insert(item: RecruitmentCandidate): ZIO[Transactor, SQLException, Int] =
+    connectZIO {
+      sql"""INSERT INTO recruitment_candidate (run_id, player_id, evaluated_at, outcome, rejection_reason)
+            VALUES (${item.runId}, ${item.playerId}, ${item.evaluatedAt}, ${item.outcome.toString}, ${item
+          .rejectionReason})""".update.run()
+    }
+
+  def insertBatch(items: Iterable[RecruitmentCandidate]): ZIO[Transactor, SQLException, BatchUpdateResult] =
+    transactZIO {
+      batchUpdate(items) { item =>
+        sql"""INSERT INTO recruitment_candidate (run_id, player_id, evaluated_at, outcome, rejection_reason)
+              VALUES (${item.runId}, ${item.playerId}, ${item.evaluatedAt}, ${item.outcome.toString}, ${item
+            .rejectionReason})""".update
+      }
+    }
+
+  def updateOutcome(runId: Long, playerId: PlayerId, outcome: CandidateOutcome): ZIO[Transactor, SQLException, Int] =
+    connectZIO {
+      sql"""UPDATE recruitment_candidate SET outcome = ${outcome.toString}
+            WHERE run_id = $runId AND player_id = $playerId""".update.run()
     }
 
   def deleteAll: ZIO[Transactor, SQLException, Int] =

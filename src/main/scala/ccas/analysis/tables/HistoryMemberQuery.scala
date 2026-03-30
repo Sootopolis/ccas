@@ -17,8 +17,8 @@ object HistoryMemberQuery {
   def createTable: ZIO[Transactor, SQLException, Int] =
     connectZIO {
       sql"""CREATE TABLE IF NOT EXISTS history_member_query (
-              club_id    BIGINT NOT NULL REFERENCES club (club_id),
-              player_id  BIGINT NOT NULL REFERENCES player (player_id),
+              club_id    BIGINT NOT NULL REFERENCES club (club_id) ON DELETE RESTRICT,
+              player_id  BIGINT NOT NULL REFERENCES player (player_id) ON DELETE RESTRICT,
               queried_at TIMESTAMPTZ NOT NULL,
               PRIMARY KEY (club_id, player_id)
             )""".update.run()

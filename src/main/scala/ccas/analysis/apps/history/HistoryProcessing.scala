@@ -194,11 +194,11 @@ private[history] object HistoryProcessing {
         val team1Fp = teams.team1.fairPlayRemovals.map(_.value)
         val team2Fp = teams.team2.fairPlayRemovals.map(_.value)
 
-        val team1ByBoard: Map[Int, MatchPlayerStarted] = teams.team1.players.collect {
-          case p: MatchPlayerStarted => p.board.path.segments.last.toInt -> p
+        val team1ByBoard: Map[Short, MatchPlayerStarted] = teams.team1.players.collect {
+          case p: MatchPlayerStarted => p.board.path.segments.last.toShort -> p
         }.toMap
-        val team2ByBoard: Map[Int, MatchPlayerStarted] = teams.team2.players.collect {
-          case p: MatchPlayerStarted => p.board.path.segments.last.toInt -> p
+        val team2ByBoard: Map[Short, MatchPlayerStarted] = teams.team2.players.collect {
+          case p: MatchPlayerStarted => p.board.path.segments.last.toShort -> p
         }.toMap
 
         val allBoards = (team1ByBoard.keySet ++ team2ByBoard.keySet).toList.sorted
@@ -518,11 +518,11 @@ private[history] object HistoryProcessing {
       timeClass = dailyMatch.settings.timeClass,
       startTime = startTime,
       endTime = endTime,
-      boards = dailyMatch.boards,
+      boards = dailyMatch.boards.toShort,
       team1ClubId = team1ClubId,
-      team1ScoreX2 = (teams.team1.score * 2).toInt,
+      team1ScoreX2 = (teams.team1.score * 2).toShort,
       team2ClubId = team2ClubId,
-      team2ScoreX2 = (teams.team2.score * 2).toInt,
+      team2ScoreX2 = (teams.team2.score * 2).toShort,
       fetchedAt = Instant.now()
     )
   }

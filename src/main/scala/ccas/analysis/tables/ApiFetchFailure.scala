@@ -24,13 +24,20 @@ object ApiFetchFailure {
       sql"""CREATE TABLE IF NOT EXISTS api_fetch_failure (
               failure_id     BIGSERIAL PRIMARY KEY,
               occurred_at    TIMESTAMPTZ NOT NULL,
-              url            VARCHAR NOT NULL,
-              error_type     VARCHAR NOT NULL,
-              error_message  VARCHAR,
-              response_body  VARCHAR
+              url            TEXT NOT NULL,
+              error_type     TEXT NOT NULL,
+              error_message  TEXT,
+              response_body  TEXT
             )""".update.run()
       sql"""CREATE INDEX IF NOT EXISTS idx_api_fetch_failure_occurred_at
             ON api_fetch_failure (occurred_at)""".update.run()
+    }
+
+  def selectRecent(since: Instant): ZIO[Transactor, SQLException, List[ApiFetchFailure]] =
+    connectZIO {
+      sql"""SELECT occurred_at, url, error_type, error_message, response_body
+            FROM api_fetch_failure WHERE occurred_at >= $since"""
+        .query[ApiFetchFailure].run().toList
     }
 
   def insert(item: ApiFetchFailure): ZIO[Transactor, SQLException, Int] =
@@ -40,11 +47,9 @@ object ApiFetchFailure {
         .run()
     }
 
-  def selectRecent(since: Instant): ZIO[Transactor, SQLException, List[ApiFetchFailure]] =
+  def deleteBefore(cutoff: Instant): ZIO[Transactor, SQLException, Int] =
     connectZIO {
-      sql"""SELECT occurred_at, url, error_type, error_message, response_body
-            FROM api_fetch_failure WHERE occurred_at >= $since"""
-        .query[ApiFetchFailure].run().toList
+      sql"DELETE FROM api_fetch_failure WHERE occurred_at < $cutoff".update.run()
     }
 
   def deleteAll: ZIO[Transactor, SQLException, Int] =

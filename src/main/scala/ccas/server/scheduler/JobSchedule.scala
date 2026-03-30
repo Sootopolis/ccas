@@ -18,28 +18,28 @@ case class JobSchedule(
   kind: JobKind,
   clubId: Option[ClubId],
   params: Option[String],
-  intervalHours: Int,
+  intervalHours: Short,
   enabled: Boolean,
   lastRunAt: Option[Instant]
 ) derives DbCodec
 
 object JobSchedule {
 
+  private val columns = SqlLiteral("id, kind, club_id, params, interval_hours, enabled, last_run_at")
+
   def createTable: ZIO[Transactor, SQLException, Int] =
     connectZIO {
       sql"""CREATE TABLE IF NOT EXISTS job_schedule (
               id              BIGSERIAL PRIMARY KEY,
               kind            TEXT NOT NULL,
-              club_id         BIGINT REFERENCES club (club_id),
+              club_id         BIGINT REFERENCES club (club_id) ON DELETE RESTRICT,
               params          TEXT,
-              interval_hours  INT NOT NULL,
+              interval_hours  SMALLINT NOT NULL,
               enabled         BOOLEAN NOT NULL,
               last_run_at     TIMESTAMPTZ,
               UNIQUE (kind, club_id)
             )""".update.run()
     }
-
-  private val columns = SqlLiteral("id, kind, club_id, params, interval_hours, enabled, last_run_at")
 
   def selectAll: ZIO[Transactor, SQLException, List[JobSchedule]] =
     connectZIO {
@@ -71,7 +71,7 @@ object JobSchedule {
 
   def update(
     id: Long,
-    intervalHours: Option[Int],
+    intervalHours: Option[Short],
     enabled: Option[Boolean],
     params: Option[Option[String]]
   ): ZIO[Transactor, SQLException, Int] =

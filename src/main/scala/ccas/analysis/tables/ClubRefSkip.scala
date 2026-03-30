@@ -24,21 +24,11 @@ object ClubRefSkip {
   def createTable: ZIO[Transactor, SQLException, Int] =
     connectZIO {
       sql"""CREATE TABLE IF NOT EXISTS club_ref_skip (
-              club_id        BIGINT PRIMARY KEY REFERENCES club (club_id),
-              reason         VARCHAR NOT NULL,
-              detail         VARCHAR,
+              club_id        BIGINT PRIMARY KEY REFERENCES club (club_id) ON DELETE RESTRICT,
+              reason         TEXT NOT NULL,
+              detail         TEXT,
               last_attempted TIMESTAMPTZ NOT NULL
             )""".update.run()
-    }
-
-  def upsert(item: ClubRefSkip): ZIO[Transactor, SQLException, Int] =
-    connectZIO {
-      sql"""INSERT INTO club_ref_skip (club_id, reason, detail, last_attempted)
-            VALUES (${item.clubId}, ${item.reason}, ${item.detail}, ${item.lastAttempted})
-            ON CONFLICT (club_id) DO UPDATE SET
-              reason = EXCLUDED.reason,
-              detail = EXCLUDED.detail,
-              last_attempted = EXCLUDED.last_attempted""".update.run()
     }
 
   def selectId(clubId: ClubId): ZIO[Transactor, SQLException, Option[ClubRefSkip]] =
@@ -51,6 +41,16 @@ object ClubRefSkip {
     connectZIO {
       sql"SELECT reason, COUNT(*) FROM club_ref_skip GROUP BY reason"
         .query[(RefSkipReason, Long)].run().toList
+    }
+
+  def upsert(item: ClubRefSkip): ZIO[Transactor, SQLException, Int] =
+    connectZIO {
+      sql"""INSERT INTO club_ref_skip (club_id, reason, detail, last_attempted)
+            VALUES (${item.clubId}, ${item.reason}, ${item.detail}, ${item.lastAttempted})
+            ON CONFLICT (club_id) DO UPDATE SET
+              reason = EXCLUDED.reason,
+              detail = EXCLUDED.detail,
+              last_attempted = EXCLUDED.last_attempted""".update.run()
     }
 
   def deleteId(clubId: ClubId): ZIO[Transactor, SQLException, Int] =

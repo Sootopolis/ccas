@@ -28,7 +28,7 @@ object HistoryRun {
     connectZIO {
       sql"""CREATE TABLE IF NOT EXISTS history_run (
               run_id       BIGSERIAL PRIMARY KEY,
-              club_id      BIGINT NOT NULL REFERENCES club (club_id),
+              club_id      BIGINT NOT NULL REFERENCES club (club_id) ON DELETE RESTRICT,
               trigger      TEXT NOT NULL,
               started_at   TIMESTAMPTZ NOT NULL,
               completed_at TIMESTAMPTZ,
