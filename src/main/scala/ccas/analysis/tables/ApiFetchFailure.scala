@@ -22,6 +22,7 @@ object ApiFetchFailure {
   def createTable: ZIO[Transactor, SQLException, Int] =
     connectZIO {
       sql"""CREATE TABLE IF NOT EXISTS api_fetch_failure (
+              failure_id     BIGSERIAL PRIMARY KEY,
               occurred_at    TIMESTAMPTZ NOT NULL,
               url            VARCHAR NOT NULL,
               error_type     VARCHAR NOT NULL,
