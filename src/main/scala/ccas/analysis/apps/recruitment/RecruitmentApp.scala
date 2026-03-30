@@ -237,7 +237,7 @@ object RecruitmentApp extends ZIOAppDefault {
       deferredCandidates <- RecruitmentCandidate.selectDeferredByClub(ctx.runCtx.clubId)
       deferredUsernames <- ZIO.foreach(deferredCandidates)(c =>
         PlayerSnapshot.selectIdLatest(c.playerId).map(_.map(_.username))
-      ).map(_.flatten.filterNot(ctx.existingUsernames))
+      ).map(_.flatten.filterNot(ctx.existingUsernames).distinct)
       _ <- ZIO.whenDiscard(deferredUsernames.nonEmpty)(
         CcasLogger.info(s"[Deferred] Found ${deferredUsernames.size} deferred candidates from prior runs")
       )
