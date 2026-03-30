@@ -583,6 +583,7 @@ object TestRecruitmentFilters extends ZIOSpecDefault {
         playerId = pid0,
         fetchedAt = now.minus(java.time.Duration.ofDays(30)), // very old cache
         dailyElo = Some(1500),
+        dailyScoreRate = None,
         dailyTimeoutPct = Some(0.0),
         dailyGamesFinished = Some(200),
         clubCount = Some(5),
@@ -606,6 +607,7 @@ object TestRecruitmentFilters extends ZIOSpecDefault {
         playerId = pid0,
         fetchedAt = now.minus(java.time.Duration.ofHours(48)),
         dailyElo = Some(1500),
+        dailyScoreRate = None,
         dailyTimeoutPct = Some(0.0),
         dailyGamesFinished = Some(200),
         clubCount = Some(120), // way over limit
@@ -629,6 +631,7 @@ object TestRecruitmentFilters extends ZIOSpecDefault {
         playerId = pid0,
         fetchedAt = now.minus(java.time.Duration.ofDays(31)),
         dailyElo = Some(500),
+        dailyScoreRate = None,
         dailyTimeoutPct = Some(50.0),
         dailyGamesFinished = Some(5),
         clubCount = Some(120),
@@ -660,6 +663,7 @@ object TestRecruitmentFilters extends ZIOSpecDefault {
         playerId = pid0,
         fetchedAt = now.minus(Duration.ofHours(12)),
         dailyElo = Some(1500),
+        dailyScoreRate = None,
         dailyTimeoutPct = Some(0.0),
         dailyGamesFinished = Some(200),
         clubCount = Some(120), // over limit

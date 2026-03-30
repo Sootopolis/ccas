@@ -14,6 +14,7 @@ final case class PlayerRecruitmentCache(
   playerId: PlayerId,
   fetchedAt: Instant,
   dailyElo: Option[Int],
+  dailyScoreRate: Option[Double],
   dailyTimeoutPct: Option[Double],
   dailyGamesFinished: Option[Int],
   clubCount: Option[Int],
@@ -31,6 +32,7 @@ object PlayerRecruitmentCache {
       playerId,
       fetchedAt,
       dailyElo = None,
+      dailyScoreRate = None,
       dailyTimeoutPct = None,
       dailyGamesFinished = None,
       clubCount = clubCount,
@@ -43,7 +45,7 @@ object PlayerRecruitmentCache {
     )
 
   private val selectCols = SqlLiteral(
-    """player_id, fetched_at, daily_elo, daily_timeout_pct, daily_games_finished,
+    """player_id, fetched_at, daily_elo, daily_score_rate, daily_timeout_pct, daily_games_finished,
        club_count, ongoing_games, ongoing_team_matches, tm_games_finished_90d, tm_timeout_pct_90d,
        last_daily_timeout_at, last_tm_timeout_at"""
   )
@@ -54,6 +56,7 @@ object PlayerRecruitmentCache {
               player_id              BIGINT PRIMARY KEY REFERENCES player (player_id) ON DELETE RESTRICT,
               fetched_at             TIMESTAMPTZ NOT NULL,
               daily_elo              INT,
+              daily_score_rate       DOUBLE PRECISION,
               daily_timeout_pct      DOUBLE PRECISION,
               daily_games_finished   INT,
               club_count             INT,
@@ -83,17 +86,19 @@ object PlayerRecruitmentCache {
   def upsert(item: PlayerRecruitmentCache): ZIO[Transactor, SQLException, Int] =
     connectZIO {
       sql"""INSERT INTO player_recruitment_cache (
-              player_id, fetched_at, daily_elo, daily_timeout_pct, daily_games_finished,
+              player_id, fetched_at, daily_elo, daily_score_rate, daily_timeout_pct, daily_games_finished,
               club_count, ongoing_games, ongoing_team_matches, tm_games_finished_90d, tm_timeout_pct_90d,
               last_daily_timeout_at, last_tm_timeout_at
             ) VALUES (
-              ${item.playerId}, ${item.fetchedAt}, ${item.dailyElo}, ${item.dailyTimeoutPct}, ${item.dailyGamesFinished},
+              ${item.playerId}, ${item.fetchedAt}, ${item.dailyElo}, ${item.dailyScoreRate},
+              ${item.dailyTimeoutPct}, ${item.dailyGamesFinished},
               ${item.clubCount}, ${item.ongoingGames}, ${item.ongoingTeamMatches},
               ${item.tmGamesFinished90d}, ${item.tmTimeoutPct90d},
               ${item.lastDailyTimeoutAt}, ${item.lastTmTimeoutAt}
             ) ON CONFLICT (player_id) DO UPDATE SET
               fetched_at = EXCLUDED.fetched_at,
               daily_elo = EXCLUDED.daily_elo,
+              daily_score_rate = EXCLUDED.daily_score_rate,
               daily_timeout_pct = EXCLUDED.daily_timeout_pct,
               daily_games_finished = EXCLUDED.daily_games_finished,
               club_count = EXCLUDED.club_count,

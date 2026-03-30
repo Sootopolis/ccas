@@ -562,6 +562,8 @@ object RecruitmentTestSupport {
       excludeFormerMembers = excludeFormerMembers,
       dailyMinElo = None,
       dailyMaxElo = None,
+      dailyMinScoreRate = None,
+      dailyMaxScoreRate = None,
       dailyMinGamesFinished = None,
       dailyMinTmGamesFinished = None,
       dailyMaxTimeoutPercent = None,

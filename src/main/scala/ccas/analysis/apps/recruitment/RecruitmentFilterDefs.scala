@@ -118,6 +118,14 @@ private[recruitment] object RecruitmentFilterDefs {
     CacheCriterion(30L, (cache, criteria) =>
       criteria.dailyMaxElo.exists(max => cache.dailyElo.exists(_ > max))
     ),
+    // Min daily score rate (30d)
+    CacheCriterion(30L, (cache, criteria) =>
+      criteria.dailyMinScoreRate.exists(min => cache.dailyScoreRate.exists(_ < min))
+    ),
+    // Max daily score rate (30d)
+    CacheCriterion(30L, (cache, criteria) =>
+      criteria.dailyMaxScoreRate.exists(max => cache.dailyScoreRate.exists(_ > max))
+    ),
     // Max daily timeout % (30d)
     CacheCriterion(30L, (cache, criteria) =>
       criteria.dailyMaxTimeoutPercent.exists(max => cache.dailyTimeoutPct.exists(_ > max))
@@ -237,6 +245,8 @@ private[recruitment] object RecruitmentFilterDefs {
         val rejected =
           criteria.dailyMinElo.exists(dailyElo.value < _)
           || criteria.dailyMaxElo.exists(dailyElo.value > _)
+          || criteria.dailyMinScoreRate.exists(dailyStats.record.scoreRate < _)
+          || criteria.dailyMaxScoreRate.exists(dailyStats.record.scoreRate > _)
           || criteria.dailyMaxTimeoutPercent.exists(dailyTimeoutPct > _)
           || criteria.dailyMinGamesFinished.exists(min => dailyGamesFinished90d.getOrElse(dailyGamesFinished) < min)
           || criteria.dailyMaxHoursPerMove.exists(maxHours => dailyTimePerMove > maxHours * 3600)
@@ -246,7 +256,8 @@ private[recruitment] object RecruitmentFilterDefs {
             dailyElo = Some(dailyElo.value),
             dailyTimeoutPct = Some(dailyTimeoutPct),
             dailyGamesFinished = Some(dailyGamesFinished90d.getOrElse(dailyGamesFinished)),
-            lastDailyTimeoutAt = mergedDailyTimeout
+            lastDailyTimeoutAt = mergedDailyTimeout,
+            dailyScoreRate = Some(dailyStats.record.scoreRate)
           )
         )
         FilterResult(rejected, env.candidate.copy(cache = Some(updatedCache), recentArchives = archives))

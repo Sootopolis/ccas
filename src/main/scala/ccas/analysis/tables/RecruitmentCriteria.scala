@@ -22,6 +22,8 @@ final case class RecruitmentCriteria(
   excludeFormerMembers: Boolean,
   dailyMinElo: Option[Int],
   dailyMaxElo: Option[Int],
+  dailyMinScoreRate: Option[Double],
+  dailyMaxScoreRate: Option[Double],
   dailyMinGamesFinished: Option[Int],
   dailyMinTmGamesFinished: Option[Int],
   dailyMaxTimeoutPercent: Option[Double],
@@ -45,7 +47,8 @@ object RecruitmentCriteria {
        min_days_since_registration, days_since_last_invited, days_since_rejected,
        nationality_exclude, nationality_countries,
        exclude_clubs, max_clubs, exclude_source_admins, exclude_former_members,
-       daily_min_elo, daily_max_elo, daily_min_games_finished, daily_min_tm_games_finished,
+       daily_min_elo, daily_max_elo, daily_min_score_rate, daily_max_score_rate,
+       daily_min_games_finished, daily_min_tm_games_finished,
        daily_max_timeout_percent, daily_max_tm_timeout_percent, daily_max_hours_per_move,
        daily_min_ongoing_games, daily_max_ongoing_games, daily_min_ongoing_team_matches"""
   )
@@ -65,6 +68,8 @@ object RecruitmentCriteria {
               exclude_former_members         BOOLEAN NOT NULL,
               daily_min_elo                  INT,
               daily_max_elo                  INT,
+              daily_min_score_rate           DOUBLE PRECISION,
+              daily_max_score_rate           DOUBLE PRECISION,
               daily_min_games_finished       INT,
               daily_min_tm_games_finished    INT,
               daily_max_timeout_percent      DOUBLE PRECISION,
@@ -89,14 +94,16 @@ object RecruitmentCriteria {
               min_days_since_registration, days_since_last_invited, days_since_rejected,
               nationality_exclude, nationality_countries,
               exclude_clubs, max_clubs, exclude_source_admins, exclude_former_members,
-              daily_min_elo, daily_max_elo, daily_min_games_finished, daily_min_tm_games_finished,
+              daily_min_elo, daily_max_elo, daily_min_score_rate, daily_max_score_rate,
+              daily_min_games_finished, daily_min_tm_games_finished,
               daily_max_timeout_percent, daily_max_tm_timeout_percent, daily_max_hours_per_move,
               daily_min_ongoing_games, daily_max_ongoing_games, daily_min_ongoing_team_matches
             ) VALUES (
               ${criteria.minDaysSinceRegistration}, ${criteria.daysSinceLastInvited}, ${criteria.daysSinceRejected},
               ${criteria.nationalityExclude}, ${criteria.nationalityCountries},
               ${criteria.excludeClubs}, ${criteria.maxClubs}, ${criteria.excludeSourceAdmins}, ${criteria.excludeFormerMembers},
-              ${criteria.dailyMinElo}, ${criteria.dailyMaxElo}, ${criteria.dailyMinGamesFinished}, ${criteria.dailyMinTmGamesFinished},
+              ${criteria.dailyMinElo}, ${criteria.dailyMaxElo}, ${criteria.dailyMinScoreRate}, ${criteria.dailyMaxScoreRate},
+              ${criteria.dailyMinGamesFinished}, ${criteria.dailyMinTmGamesFinished},
               ${criteria.dailyMaxTimeoutPercent}, ${criteria.dailyMaxTmTimeoutPercent}, ${criteria.dailyMaxHoursPerMove},
               ${criteria.dailyMinOngoingGames}, ${criteria.dailyMaxOngoingGames}, ${criteria.dailyMinOngoingTeamMatches}
             ) RETURNING criteria_id""".query[Long].run().headOption
@@ -117,6 +124,8 @@ object RecruitmentCriteria {
       excludeFormerMembers = true,
       dailyMinElo = Some(1000),
       dailyMaxElo = None,
+      dailyMinScoreRate = Some(3.0 / 8),
+      dailyMaxScoreRate = Some(7.0 / 8),
       dailyMinGamesFinished = Some(20),
       dailyMinTmGamesFinished = Some(10),
       dailyMaxTimeoutPercent = Some(5.0),

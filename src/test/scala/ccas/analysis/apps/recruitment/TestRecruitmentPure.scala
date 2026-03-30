@@ -91,6 +91,8 @@ object TestRecruitmentPure extends ZIOSpecDefault {
         criteria.excludeFormerMembers,
         criteria.dailyMinElo.contains(1000),
         criteria.dailyMaxElo.isEmpty,
+        criteria.dailyMinScoreRate.contains(3.0 / 8),
+        criteria.dailyMaxScoreRate.contains(7.0 / 8),
         criteria.dailyMinGamesFinished.contains(20),
         criteria.dailyMinTmGamesFinished.contains(10),
         criteria.dailyMaxTimeoutPercent.contains(5.0),
