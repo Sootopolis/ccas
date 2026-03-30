@@ -1,7 +1,7 @@
 package ccas.analysis.apps.history
 
 import java.time.Instant
-import com.augustnagro.magnum.{Transactor, sql}
+import com.augustnagro.magnum.Transactor
 import zio.{RIO, Ref, ZIO}
 import ccas.analysis.tables.*
 import ccas.api.club.ApiClubMatches
@@ -9,8 +9,6 @@ import ccas.api.misc.subtypes.*
 import ccas.api.player.{ApiPlayer, ApiPlayerMatches}
 import ccas.utils.CcasLogger
 import ccas.utils.client.ChessComClient
-import ccas.utils.sql.DbCodecs.given
-import ccas.utils.sql.SqlZioTypes.connectZIO
 import HistoryUtils.*
 
 private[history] object HistorySeeding {
@@ -72,10 +70,7 @@ private[history] object HistorySeeding {
                   case Some(_) => ZIO.unit
                   case None =>
                     val joined = Instant.ofEpochSecond(apiPlayer.joined)
-                    connectZIO {
-                      sql"""INSERT INTO player (player_id, joined) VALUES ($playerId, $joined)
-                            ON CONFLICT (player_id) DO NOTHING""".update.run()
-                    } *> PlayerSnapshot.insert(PlayerSnapshot(
+                    Player.insertIfNew(playerId, joined) *> PlayerSnapshot.insert(PlayerSnapshot(
                       playerId, Instant.now(), username, apiPlayer.status.category, apiPlayer.title
                     )).unit
                 }

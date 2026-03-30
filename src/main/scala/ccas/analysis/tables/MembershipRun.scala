@@ -58,7 +58,7 @@ object MembershipRun {
 
   def selectLatest(clubId: ClubId): ZIO[Transactor, SQLException, Option[MembershipRun]] =
     connectZIO {
-      sql"SELECT $selectCols FROM membership_run WHERE club_id = $clubId ORDER BY started_at DESC"
+      sql"SELECT $selectCols FROM membership_run WHERE club_id = $clubId ORDER BY started_at DESC LIMIT 1"
         .query[MembershipRun].run().headOption
     }
 

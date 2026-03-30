@@ -1,7 +1,7 @@
 package ccas.analysis.apps.history
 
 import java.time.Instant
-import com.augustnagro.magnum.{Transactor, sql}
+import com.augustnagro.magnum.Transactor
 import zio.{Promise, RIO, Ref, Task, UIO, ZIO}
 import zio.http.URL
 import ccas.analysis.tables.*
@@ -11,8 +11,7 @@ import ccas.api.misc.enums.*
 import ccas.api.misc.subtypes.*
 import ccas.api.player.{ApiPlayer, ApiPlayerClubs}
 import ccas.utils.{CcasLogger, ProgressBar}
-import ccas.utils.sql.DbCodecs.given
-import ccas.utils.sql.SqlZioTypes.{connectZIO, withTransaction}
+import ccas.utils.sql.SqlZioTypes.withTransaction
 import HistoryUtils.*
 
 private[history] object HistoryProcessing {
@@ -359,10 +358,7 @@ private[history] object HistoryProcessing {
         case None =>
           // Brand new player — ON CONFLICT DO NOTHING handles concurrent inserts
           val joined = Instant.ofEpochSecond(apiPlayer.joined)
-          connectZIO {
-            sql"""INSERT INTO player (player_id, joined) VALUES ($playerId, $joined)
-                  ON CONFLICT (player_id) DO NOTHING""".update.run()
-          }.flatMap { inserted =>
+          Player.insertIfNew(playerId, joined).flatMap { inserted =>
             if (inserted == 0) {
               // Another fiber already created this player — treat as known
               ctx.knownPlayers.update(_ + (key -> playerId)).as(Some(playerId))
@@ -401,12 +397,7 @@ private[history] object HistoryProcessing {
     val statusCategory = apiPlayer.status.category
     val clubId         = ctx.clubId
 
-    val existsCheck = connectZIO {
-      sql"SELECT COUNT(*) FROM club_member WHERE club_id = $clubId AND player_id = $playerId"
-        .query[Long].run().head > 0
-    }
-
-    existsCheck.flatMap {
+    ClubMember.exists(clubId, playerId).flatMap {
       case true => ZIO.unit
       case false =>
         val fromApi = for {

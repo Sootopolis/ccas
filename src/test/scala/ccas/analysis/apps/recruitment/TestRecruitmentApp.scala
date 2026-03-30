@@ -674,8 +674,8 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       )
       val criteria = makeCriteria()
       for {
-        _ <- seedDb
-        _ <- seedCriteria(criteria)
+        _          <- seedDb
+        criteriaId <- seedCriteria(criteria)
         // Seed player rows (FK targets for club_match_board)
         _ <- seedPlayer(candidatePid)
         _ <- seedPlayer(PlayerId(999))
@@ -715,7 +715,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
           )
         )
         client <- fakeChessComClient(responses)
-        runId  <- RecruitmentRun.insert(clubId, 1L, RunTrigger.Cli, Instant.now())
+        runId  <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Instant.now())
         _      <- evalCandidates(client, runId, List(Username("ref-db-player")), criteria)
         ref    <- PlayerMatchRef.selectId(candidatePid)
       } yield assertTrue(
@@ -745,11 +745,11 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       )
       val criteria = makeCriteria()
       for {
-        _      <- seedDb
-        _      <- seedCriteria(criteria)
-        client <- fakeChessComClient(responses)
-        runId  <- RecruitmentRun.insert(clubId, 1L, RunTrigger.Cli, Instant.now())
-        _      <- evalCandidates(client, runId, List(Username("ref-api-player")), criteria)
+        _          <- seedDb
+        criteriaId <- seedCriteria(criteria)
+        client     <- fakeChessComClient(responses)
+        runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Instant.now())
+        _          <- evalCandidates(client, runId, List(Username("ref-api-player")), criteria)
         ref    <- PlayerMatchRef.selectId(candidatePid)
       } yield assertTrue(
         ref.isDefined,
@@ -804,10 +804,10 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       )
       val criteria = makeCriteria()
       for {
-        _       <- seedDb
-        _       <- seedCriteria(criteria)
-        client  <- fakeChessComClient(responses)
-        runId   <- RecruitmentRun.insert(clubId, 1L, RunTrigger.Cli, Instant.now())
+        _          <- seedDb
+        criteriaId <- seedCriteria(criteria)
+        client     <- fakeChessComClient(responses)
+        runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Instant.now())
         invited <- evalCandidates(client, runId, List(Username("ref-fail-player")), criteria)
         ref     <- PlayerMatchRef.selectId(candidatePid)
       } yield assertTrue(

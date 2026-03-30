@@ -54,9 +54,10 @@ object ClubMember {
   def selectClubActive(clubId: ClubId): ZIO[Transactor, SQLException, List[ClubMember]] =
     connectZIO(
       sql"""SELECT cm.club_id, cm.player_id, cm.since, cm.until, cm.since_approximate FROM club_member cm
-            JOIN player_snapshot ps ON cm.player_id = ps.player_id
-            JOIN (SELECT player_id, MAX(since) AS since FROM player_snapshot GROUP BY player_id) latest
-            ON ps.player_id = latest.player_id AND ps.since = latest.since
+            JOIN (
+              SELECT DISTINCT ON (player_id) player_id, status FROM player_snapshot
+              ORDER BY player_id, since DESC
+            ) ps ON cm.player_id = ps.player_id
             WHERE cm.club_id = $clubId AND cm.until IS NULL AND ps.status = ${Active.toString}""".query[ClubMember]
         .run().toList
     )
@@ -107,6 +108,12 @@ object ClubMember {
       sql"""UPDATE club_member SET since = $newSince, since_approximate = false
             WHERE club_id = $clubId AND player_id = $playerId AND since = $oldSince
               AND since_approximate = true""".update.run()
+    }
+
+  def exists(clubId: ClubId, playerId: PlayerId): ZIO[Transactor, SQLException, Boolean] =
+    connectZIO {
+      sql"SELECT 1 FROM club_member WHERE club_id = $clubId AND player_id = $playerId LIMIT 1"
+        .query[Int].run().nonEmpty
     }
 
   def deleteAll: ZIO[Transactor, SQLException, Int] =

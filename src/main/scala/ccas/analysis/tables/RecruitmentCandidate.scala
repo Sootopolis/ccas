@@ -35,7 +35,6 @@ object RecruitmentCandidate {
               FOREIGN KEY (run_id) REFERENCES recruitment_run (run_id) ON DELETE RESTRICT,
               FOREIGN KEY (player_id) REFERENCES player (player_id) ON DELETE RESTRICT
             )""".update.run()
-      sql"""CREATE INDEX IF NOT EXISTS idx_rc_player_id ON recruitment_candidate (player_id)""".update.run()
       sql"""CREATE INDEX IF NOT EXISTS idx_rc_player_outcome_eval
             ON recruitment_candidate (player_id, outcome, evaluated_at DESC)""".update.run()
     }
@@ -73,7 +72,7 @@ object RecruitmentCandidate {
       val invited = CandidateOutcome.Invited.toString
       sql"""SELECT $selectCols FROM recruitment_candidate
             WHERE player_id = $playerId AND outcome = $invited
-            ORDER BY evaluated_at DESC""".query[RecruitmentCandidate].run().headOption
+            ORDER BY evaluated_at DESC LIMIT 1""".query[RecruitmentCandidate].run().headOption
     }
 
   def selectLatestRejectedByAlias(

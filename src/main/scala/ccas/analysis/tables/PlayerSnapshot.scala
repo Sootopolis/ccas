@@ -22,8 +22,7 @@ final case class PlayerSnapshot(
 ) derives DbCodec
 
 object PlayerSnapshot {
-  private val selectCols   = SqlLiteral("player_id, since, username, status, title")
-  private val selectColsPs = SqlLiteral("ps.player_id, ps.since, ps.username, ps.status, ps.title")
+  private val selectCols = SqlLiteral("player_id, since, username, status, title")
 
   def createTable: ZIO[Transactor, SQLException, Int] =
     connectZIO {
@@ -37,7 +36,7 @@ object PlayerSnapshot {
               FOREIGN KEY (player_id) REFERENCES player (player_id) ON DELETE RESTRICT
             )""".update.run()
       sql"""CREATE INDEX IF NOT EXISTS idx_player_snapshot_username
-            ON player_snapshot (username)""".update.run()
+            ON player_snapshot (username, since DESC)""".update.run()
     }
 
   def selectAll: ZIO[Transactor, SQLException, List[PlayerSnapshot]] =
@@ -45,17 +44,16 @@ object PlayerSnapshot {
 
   def selectLatest: ZIO[Transactor, SQLException, List[PlayerSnapshot]] =
     connectZIO(
-      sql"""SELECT $selectColsPs FROM player_snapshot ps
-            INNER JOIN (SELECT player_id, MAX(since) AS since FROM player_snapshot GROUP BY player_id) latest
-            ON ps.player_id = latest.player_id AND ps.since = latest.since""".query[PlayerSnapshot].run().toList
+      sql"""SELECT DISTINCT ON (player_id) $selectCols FROM player_snapshot
+            ORDER BY player_id, since DESC""".query[PlayerSnapshot].run().toList
     )
 
   def selectActive: ZIO[Transactor, SQLException, List[PlayerSnapshot]] =
     connectZIO(
-      sql"""SELECT $selectColsPs FROM player_snapshot ps
-            INNER JOIN (SELECT player_id, MAX(since) AS since FROM player_snapshot GROUP BY player_id) latest
-            ON ps.player_id = latest.player_id AND ps.since = latest.since
-            WHERE ps.status = ${Active.toString}""".query[PlayerSnapshot].run().toList
+      sql"""SELECT $selectCols FROM (
+              SELECT DISTINCT ON (player_id) $selectCols FROM player_snapshot
+              ORDER BY player_id, since DESC
+            ) latest WHERE status = ${Active.toString}""".query[PlayerSnapshot].run().toList
     )
 
   def selectId(playerId: PlayerId): ZIO[Transactor, SQLException, List[PlayerSnapshot]] =
@@ -70,22 +68,21 @@ object PlayerSnapshot {
 
   def selectIdLatest(playerId: PlayerId): ZIO[Transactor, SQLException, Option[PlayerSnapshot]] =
     connectZIO(
-      sql"SELECT $selectCols FROM player_snapshot WHERE player_id = $playerId ORDER BY since DESC".query[PlayerSnapshot]
+      sql"SELECT $selectCols FROM player_snapshot WHERE player_id = $playerId ORDER BY since DESC LIMIT 1".query[PlayerSnapshot]
         .run().headOption
     )
 
   def selectNameLatest(username: Username): ZIO[Transactor, SQLException, Option[PlayerSnapshot]] =
     connectZIO(
-      sql"SELECT $selectCols FROM player_snapshot WHERE username = $username ORDER BY since DESC".query[PlayerSnapshot]
+      sql"SELECT $selectCols FROM player_snapshot WHERE username = $username ORDER BY since DESC LIMIT 1".query[PlayerSnapshot]
         .run().headOption
     )
 
   def selectSince(since: Instant): ZIO[Transactor, SQLException, List[PlayerSnapshot]] =
     connectZIO(
-      sql"""SELECT $selectColsPs FROM player_snapshot ps
-            INNER JOIN (SELECT player_id, MAX(since) AS since FROM player_snapshot WHERE since <= $since GROUP BY player_id) jb
-            ON ps.player_id = jb.player_id AND ps.since = jb.since
-            UNION
+      sql"""(SELECT DISTINCT ON (player_id) $selectCols FROM player_snapshot
+             WHERE since <= $since ORDER BY player_id, since DESC)
+            UNION ALL
             SELECT $selectCols FROM player_snapshot WHERE since > $since""".query[PlayerSnapshot].run().toList
     )
 

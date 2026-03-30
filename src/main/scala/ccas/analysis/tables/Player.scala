@@ -39,6 +39,12 @@ object Player {
   def deleteAll: ZIO[Transactor, SQLException, Int] =
     connectZIO(sql"DELETE FROM player".update.run())
 
+  def insertIfNew(playerId: PlayerId, joined: Instant): ZIO[Transactor, SQLException, Int] =
+    connectZIO {
+      sql"""INSERT INTO player (player_id, joined) VALUES ($playerId, $joined)
+            ON CONFLICT (player_id) DO NOTHING""".update.run()
+    }
+
   def deleteId(playerId: PlayerId): ZIO[Transactor, SQLException, Unit] =
     connectZIO(repo.deleteById(playerId))
 }

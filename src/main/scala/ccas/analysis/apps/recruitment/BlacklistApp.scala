@@ -2,7 +2,7 @@ package ccas.analysis.apps.recruitment
 
 import java.time.{Instant, ZoneOffset}
 
-import com.augustnagro.magnum.{sql, Transactor}
+import com.augustnagro.magnum.Transactor
 import zio.{Console, RIO, Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
 import zio.http.Client
 
@@ -13,8 +13,6 @@ import ccas.api.player.ApiPlayer
 import ccas.utils.client.ChessComClient
 import ccas.utils.errors.{BadRequestException, NotFoundException}
 import ccas.utils.sql.DataSourceLayer
-import ccas.utils.sql.DbCodecs.given
-import ccas.utils.sql.SqlZioTypes.connectZIO
 import ccas.utils.CcasLogger
 
 object BlacklistApp extends ZIOAppDefault {
@@ -63,10 +61,7 @@ object BlacklistApp extends ZIOAppDefault {
         for {
           apiPlayer <- client.get[ApiPlayer](ApiPlayer.getUrl(username))
           now = Instant.now()
-          _ <- connectZIO {
-            sql"""INSERT INTO player (player_id, joined) VALUES (${apiPlayer.playerId}, ${Instant.ofEpochSecond(apiPlayer.joined)})
-                  ON CONFLICT (player_id) DO NOTHING""".update.run()
-          }
+          _ <- Player.insertIfNew(apiPlayer.playerId, Instant.ofEpochSecond(apiPlayer.joined))
           _ <- RecruitmentBlacklist.upsert(
             RecruitmentBlacklist(apiClub.clubId, apiPlayer.playerId, now, expiresAt, reason)
           )

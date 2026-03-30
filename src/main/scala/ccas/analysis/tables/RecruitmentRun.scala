@@ -36,7 +36,8 @@ object RecruitmentRun {
               completed_at      TIMESTAMPTZ,
               candidates_found  INT NOT NULL,
               job_run_id        TEXT,
-              FOREIGN KEY (club_id) REFERENCES club (club_id) ON DELETE RESTRICT
+              FOREIGN KEY (club_id) REFERENCES club (club_id) ON DELETE RESTRICT,
+              FOREIGN KEY (criteria_id) REFERENCES recruitment_criteria (criteria_id)
             )""".update.run()
       sql"""CREATE INDEX IF NOT EXISTS idx_recruitment_run_club_started
             ON recruitment_run (club_id, started_at DESC)""".update.run()
@@ -63,7 +64,7 @@ object RecruitmentRun {
 
   def selectLatest(clubId: ClubId): ZIO[Transactor, SQLException, Option[RecruitmentRun]] =
     connectZIO {
-      sql"SELECT $selectCols FROM recruitment_run WHERE club_id = $clubId ORDER BY started_at DESC"
+      sql"SELECT $selectCols FROM recruitment_run WHERE club_id = $clubId ORDER BY started_at DESC LIMIT 1"
         .query[RecruitmentRun].run().headOption
     }
 
