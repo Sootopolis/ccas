@@ -7,9 +7,10 @@ import com.augustnagro.magnum.Transactor
 import zio.{RIO, Task, UIO, ZIO}
 
 import ccas.analysis.tables.*
-import ccas.api.club.{ApiClub, ApiClubMatches, ApiClubMembers}
+import ccas.api.club.{ApiClub, ApiClubMembers}
 import ccas.utils.CcasLogger
-import ccas.api.misc.subtypes.{ClubSlug, Username}
+import ccas.api.misc.enums.ClubMatchStatus
+import ccas.api.misc.subtypes.{ClubId, ClubSlug, Username}
 import ccas.api.player.*
 import ccas.utils.client.ChessComClient
 
@@ -44,7 +45,7 @@ private[recruitment] object RecruitmentExplore {
   ): RIO[CcasLogger & Transactor, Unit] =
     for {
       evaluated   <- ctx.evaluatedRef.get
-      replenished <- replenish(ctx, evaluated, visitedClubs, staticStrategies)
+      replenished <- replenish(ctx, evaluated, staticStrategies)
       (newSources, remainingStrategies) = replenished
       _ <- ZIO.unlessDiscard(newSources.isEmpty && remainingStrategies.isEmpty)(
         exploreLoop(ctx, activePool, newSources, remainingStrategies, visitedClubs, roundRobinKeys)
@@ -144,10 +145,10 @@ private[recruitment] object RecruitmentExplore {
           count   <- ctx.evalCountRef.updateAndGet(_ + 1)
           _       <- ctx.evaluatedRef.update(_ + u)
           _       <- ZIO.whenDiscard(outcome == CandidateOutcome.Invited)(ctx.invitedRef.update(u :: _))
-          _       <- ZIO.whenDiscard(count % 4 == 0)(printProgress(ctx))
+          _       <- ZIO.whenDiscard(count % 4 == 0)(printProgress(ctx, sourceId))
         } yield (u, outcome)
       }
-      _ <- printProgress(ctx) // ensure final state is rendered
+      _ <- printProgress(ctx, sourceId) // ensure final state is rendered
 
       // Batch-level cleanup
       rejectedInBatch = results.count { case (_, o) => o == CandidateOutcome.Rejected || o == CandidateOutcome.Error }
@@ -179,12 +180,12 @@ private[recruitment] object RecruitmentExplore {
     } yield ()
   }
 
-  private def printProgress(ctx: ExploreContext): UIO[Unit] =
+  private def printProgress(ctx: ExploreContext, sourceId: String): UIO[Unit] =
     for {
       invited   <- ctx.invitedRef.get
       evalCount <- ctx.evalCountRef.get
       _ <- ctx.progressBar.print(invited.size, ctx.target,
-        s"[Progress] Evaluated: $evalCount | Invited: ${invited.size}/${ctx.target}")
+        s"[Progress] $sourceId | Evaluated: $evalCount | Invited: ${invited.size}/${ctx.target}")
     } yield ()
 
   /** When found count exceeds the target, trim the newest excess from invitedRef.
@@ -275,13 +276,12 @@ private[recruitment] object RecruitmentExplore {
   private def replenish(
     ctx: ExploreContext,
     evaluatedUsernames: Set[Username],
-    visitedClubs: Set[ClubSlug],
     staticStrategies: List[RIO[CcasLogger & Transactor, List[SourceDescriptor]]]
   ): RIO[CcasLogger & Transactor, (List[SourceDescriptor], List[RIO[CcasLogger & Transactor, List[SourceDescriptor]]])] =
     if (!ctx.explore) ZIO.succeed((Nil, staticStrategies))
     else
       for {
-        // Dynamic strategy 1: candidate opponents
+        // Dynamic: candidate opponents discovered during evaluation
         opponents <- ctx.runCtx.discoveredOpponents.get
         newOpponents = opponents -- evaluatedUsernames
         result <-
@@ -289,70 +289,19 @@ private[recruitment] object RecruitmentExplore {
             CcasLogger.info(s"[Explore] Discovered ${newOpponents.size} candidate opponents")
               .as((List(UsernameSource("candidate-opponents", newOpponents.toList)), staticStrategies))
           } else {
-            // Dynamic strategy 2: candidate clubs
-            for {
-              clubs <- ctx.runCtx.discoveredClubs.get
-              newClubs = clubs.diff(visitedClubs).filterNot(_ == ctx.clubSlug)
-                .filterNot(ctx.runCtx.excludedSlugs.contains)
-              result <-
-                if (newClubs.nonEmpty) {
-                  CcasLogger.info(s"[Explore] Discovered ${newClubs.size} candidate clubs")
-                    .as((newClubs.toList.map(ClubSource(_)), staticStrategies))
-                } else {
-                  // Static strategies: try next one
-                  staticStrategies match {
-                    case Nil => ZIO.succeed((Nil, Nil))
-                    case head :: tail =>
-                      for {
-                        sources <- head
-                        filtered = sources.filter {
-                          case ClubSource(name) =>
-                            !visitedClubs.contains(name) && name != ctx.clubSlug &&
-                            !ctx.runCtx.excludedSlugs.contains(name)
-                          case _ => true
-                        }
-                        _ <- CcasLogger.info(s"[Explore] Static strategy yielded ${filtered.size} sources")
-                      } yield (filtered, tail)
-                  }
-                }
-            } yield result
+            // Static strategies: try next one
+            staticStrategies match {
+              case Nil => ZIO.succeed((Nil, Nil))
+              case head :: tail =>
+                for {
+                  sources <- head
+                  _ <- CcasLogger.info(s"[Explore] Static strategy yielded ${sources.size} sources")
+                } yield (sources, tail)
+            }
           }
       } yield result
 
   // --- Discovery strategies ---
-
-  def discoverOwnMemberClubs(
-    client: ChessComClient,
-    clubSlug: ClubSlug,
-    targetMemberNames: List[Username]
-  ): RIO[CcasLogger & Transactor, List[SourceDescriptor]] = {
-    val sample = targetMemberNames.take(20)
-    for {
-      clubSets <- ZIO.foreachPar(sample) { username =>
-        client.get[ApiPlayerClubs](ApiPlayerClubs.getUrl(username))
-          .map(_.clubs.map(_.clubName).toSet)
-          .catchAll(_ => ZIO.succeed(Set.empty[ClubSlug]))
-      }
-      allClubs = clubSets.foldLeft(Set.empty[ClubSlug])(_ ++ _) - clubSlug
-      _ <- CcasLogger.info(s"[Explore] Own member clubs strategy found ${allClubs.size} clubs")
-    } yield allClubs.toList.map(ClubSource(_))
-  }
-
-  def discoverDbClubs(clubSlug: ClubSlug): RIO[CcasLogger & Transactor, List[SourceDescriptor]] =
-    for {
-      clubs <- Club.selectAll
-      filtered = scala.util.Random.shuffle(clubs.map(_.slug).filter(_ != clubSlug))
-      _ <- CcasLogger.info(s"[Explore] DB clubs strategy found ${filtered.size} clubs")
-    } yield filtered.map(ClubSource(_))
-
-  def discoverMatchOpponents(clubMatches: ApiClubMatches): RIO[CcasLogger, List[SourceDescriptor]] = {
-    val opponentUrls = clubMatches.finished.map(_.opponent)
-      ++ clubMatches.inProgress.map(_.opponent)
-      ++ clubMatches.registered.map(_.opponent)
-    val opponentClubNames = opponentUrls.map(url => ClubSlug.wrap(url.path.segments.last)).toSet
-    CcasLogger.info(s"[Explore] Match opponents strategy found ${opponentClubNames.size} clubs")
-      .as(opponentClubNames.toList.map(ClubSource(_)))
-  }
 
   def discoverCandidateOpponents(client: ChessComClient, now: Instant): RIO[CcasLogger & Transactor, List[SourceDescriptor]] = {
     val cutoff = now.minus(90, ChronoUnit.DAYS)
@@ -376,6 +325,23 @@ private[recruitment] object RecruitmentExplore {
       if (allOpponents.isEmpty) Nil
       else List(UsernameSource("db-candidate-opponents", allOpponents.toList))
   }
+
+  def discoverMatchBoardOpponents(clubId: ClubId): RIO[CcasLogger & Transactor, List[SourceDescriptor]] =
+    for {
+      matchIds <- ClubMatch.selectMatchIdsForClub(clubId)
+      matches  <- ZIO.foreach(matchIds.toList)(ClubMatch.selectId).map(_.flatten.filter(_.status == ClubMatchStatus.Finished))
+      boards   <- ZIO.foreach(matches)(m => ClubMatchBoard.selectMatch(m.matchId))
+      opponentIds = matches.zip(boards).flatMap { (m, bs) =>
+        val isTeam1 = m.team1ClubId.contains(clubId)
+        bs.flatMap(b => if (isTeam1) b.team2PlayerId else b.team1PlayerId)
+      }.toSet
+      snapshots <- ZIO.foreach(opponentIds.toList)(PlayerSnapshot.selectIdLatest)
+      usernames = snapshots.flatten.map(_.username)
+      _ <- CcasLogger.info(s"[Explore] Match board opponents strategy found ${usernames.size} players")
+    } yield {
+      if (usernames.isEmpty) Nil
+      else List(UsernameSource("match-board-opponents", usernames))
+    }
 
   private def extractAdminUsernames(apiClub: ApiClub): Set[Username] =
     apiClub.admin.map(url => Username.wrap(url.path.segments.last)).toSet

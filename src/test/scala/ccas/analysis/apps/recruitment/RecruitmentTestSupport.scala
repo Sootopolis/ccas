@@ -460,8 +460,8 @@ object RecruitmentTestSupport {
         SqlZioTypes.connectZIO(sql"DELETE FROM club WHERE club_id = $cid".update.run())
       }
       _ <- SqlZioTypes.connectZIO(sql"DELETE FROM club_match_ref WHERE club_id = $clubId".update.run())
-      _ <- SqlZioTypes.connectZIO(sql"DELETE FROM club_match_board WHERE match_id IN (8001, 8002)".update.run())
-      _ <- SqlZioTypes.connectZIO(sql"DELETE FROM club_match WHERE match_id IN (8001, 8002)".update.run())
+      _ <- SqlZioTypes.connectZIO(sql"DELETE FROM club_match_board WHERE match_id IN (8001, 8002, 9001)".update.run())
+      _ <- SqlZioTypes.connectZIO(sql"DELETE FROM club_match WHERE match_id IN (8001, 8002, 9001)".update.run())
       _ <- ZIO.foreachDiscard(
         List(
           PlayerId(199),
@@ -487,7 +487,8 @@ object RecruitmentTestSupport {
           PlayerId(999)
         )
       ) { pid =>
-        SqlZioTypes.connectZIO(sql"DELETE FROM player_match_ref WHERE player_id = $pid".update.run()) *>
+        SqlZioTypes.connectZIO(sql"DELETE FROM club_match_board WHERE team1_player_id = $pid OR team2_player_id = $pid".update.run()) *>
+          SqlZioTypes.connectZIO(sql"DELETE FROM player_match_ref WHERE player_id = $pid".update.run()) *>
           SqlZioTypes.connectZIO(sql"DELETE FROM player_snapshot WHERE player_id = $pid".update.run()) *>
           SqlZioTypes.connectZIO(sql"DELETE FROM player WHERE player_id = $pid".update.run())
       }

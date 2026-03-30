@@ -334,53 +334,31 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         candidates.isEmpty
       )
     },
-    test("explore=true discovers candidates from DB clubs") {
-      val responses = Map(
-        s"club/$clubSlug"             -> apiClubJson(clubId.value, clubSlug.value),
-        s"club/$clubSlug/members"     -> apiClubMembersJson(Nil),
-        s"club/$discoverableClubSlug" -> apiClubJson(discoverableClubId.value, discoverableClubSlug.value),
-        s"club/$discoverableClubSlug/members" -> apiClubMembersJson(
-          List(("explorer", Times.t0.getEpochSecond))
-        ),
-        "player/explorer" -> apiPlayerJson(210, "explorer")
-      )
-      val criteria = makeCriteria()
-
-      for {
-        _      <- seedDb
-        _      <- Club.upsert(Club(discoverableClubId, Times.t0, discoverableClubSlug, "Discoverable Club"))
-        _      <- seedCriteria(criteria)
-        client <- fakeChessComClient(responses)
-        xa     <- ZIO.service[Transactor]
-        logger <- ZIO.service[CcasLogger]
-        result <- RecruitmentApp.recruit(clubSlug, "default", sourceClubs = Nil, explore = true, trigger = RunTrigger.Api)
-          .provideEnvironment(zio.ZEnvironment(client, xa, logger))
-        candidates <- RecruitmentCandidate.selectByRun(result.runId)
-      } yield assertTrue(
-        candidates.size == 1,
-        candidates.head.outcome == CandidateOutcome.Invited,
-        candidates.head.playerId == PlayerId(210)
-      )
-    },
-    test("explore=true discovers candidates from match opponents") {
-      val clubMatchesWithOpponent =
-        s"""{"finished": [{"name": "match", "@id": "https://api.chess.com/pub/match/99", "opponent": "https://api.chess.com/pub/club/opponent-club", "time_class": "daily", "start_time": ${Times.t0.getEpochSecond}, "result": "win"}], "in_progress": [], "registered": []}"""
-      val opponentClubId = ClubId(702)
+    test("explore=true discovers candidates from match board opponents") {
+      val oppPlayerId = PlayerId(211)
+      val matchId     = ClubMatchId(9001)
       val responses = Map(
         s"club/$clubSlug"         -> apiClubJson(clubId.value, clubSlug.value),
         s"club/$clubSlug/members" -> apiClubMembersJson(Nil),
-        s"club/$clubSlug/matches" -> clubMatchesWithOpponent,
-        "club/opponent-club"      -> apiClubJson(opponentClubId.value, "opponent-club"),
-        "club/opponent-club/members" -> apiClubMembersJson(
-          List(("opp-player", Times.t0.getEpochSecond))
-        ),
-        "player/opp-player" -> apiPlayerJson(211, "opp-player")
+        s"club/$clubSlug/matches" -> apiClubMatchesJson(),
+        "player/opp-player"       -> apiPlayerJson(oppPlayerId.value, "opp-player")
       )
       val criteria = makeCriteria()
 
       for {
         _      <- seedDb
         _      <- seedCriteria(criteria)
+        // Seed opponent player and snapshot so discoverMatchBoardOpponents can resolve the username
+        _ <- seedPlayer(oppPlayerId)
+        _ <- PlayerSnapshot.insert(PlayerSnapshot(oppPlayerId, Times.t0, Username("opp-player"),
+          ccas.api.misc.enums.PlayerStatusCategory.Active, None))
+        // Seed a finished match where our club is team1 and the opponent is on team2
+        _ <- ClubMatch.upsert(ClubMatch(matchId, "Explore Match",
+          ccas.api.misc.enums.ClubMatchStatus.Finished, ccas.api.misc.enums.TimeClass.Daily,
+          Some(Times.t0), Some(Times.t1), 1, Some(clubId), 20, None, 10, Times.t0))
+        _ <- seedPlayer(PlayerId(999)) // team1 player FK
+        _ <- ClubMatchBoard.insertBatch(List(ClubMatchBoard(matchId, 1,
+          Some(PlayerId(999)), false, Some(oppPlayerId), false, None, None, None, None, 2, 0)))
         client <- fakeChessComClient(responses)
         xa     <- ZIO.service[Transactor]
         logger <- ZIO.service[CcasLogger]
@@ -390,7 +368,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       } yield assertTrue(
         candidates.size == 1,
         candidates.head.outcome == CandidateOutcome.Invited,
-        candidates.head.playerId == PlayerId(211)
+        candidates.head.playerId == oppPlayerId
       )
     },
     test("explore=true respects invite cap across sources") {

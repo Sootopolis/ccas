@@ -52,24 +52,21 @@ private[recruitment] object RecruitmentPersistence {
   def writePlayerMatchRef(
     client: ChessComClient,
     candidate: CandidateContext
-  ): RIO[Transactor, Unit] = {
-    val data = for {
-      ap <- candidate.apiPlayer
-      pm <- candidate.playerMatches
-    } yield (ap.playerId, candidate.username, pm)
-
-    ZIO.foreachDiscard(data) { case (playerId, username, playerMatches) =>
+  ): RIO[Transactor, Unit] =
+    ZIO.foreachDiscard(candidate.apiPlayer) { ap =>
+      val playerId = ap.playerId
       PlayerMatchRef.selectId(playerId).flatMap {
         case Some(_) => ZIO.unit
         case None =>
           ClubMatchBoard.selectPlayerMatchRef(playerId).flatMap {
             case Some(ref) => PlayerMatchRef.insert(ref).unit
             case None =>
-              resolvePlayerRefViaApi(client, playerId, username, playerMatches)
+              ZIO.foreachDiscard(candidate.playerMatches) { playerMatches =>
+                resolvePlayerRefViaApi(client, playerId, candidate.username, playerMatches)
+              }
           }
       }
     }
-  }
 
   private def resolvePlayerRefViaApi(
     client: ChessComClient,

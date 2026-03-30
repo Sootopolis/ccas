@@ -141,9 +141,7 @@ object RecruitmentApp extends ZIOAppDefault {
 
       // --- Shared setup ---
       targetMembers <- ApiClubMembers.get(client, clubSlug)
-      membersMap        = targetMembers.toMap
-      existingUsernames = membersMap.keySet
-      targetMemberNames = membersMap.keys.toList
+      existingUsernames = targetMembers.toMap.keySet
 
       clubMatches <- client.get[ApiClubMatches](ApiClubMatches.getUrl(clubSlug))
       targetMatchIds = (clubMatches.registered.map(_.`@id`) ++ clubMatches.inProgress.map(_.`@id`)).toSet
@@ -206,8 +204,8 @@ object RecruitmentApp extends ZIOAppDefault {
             finalizeRun(ctx, trigger, now, cumulative, alreadyFound, "Recruitment Complete (target already met)", jobRunId = jobRunId)
         } else {
           runExplorePhase(
-            ctx, client, logger, transactor, clubMatches,
-            targetMemberNames, sourceClubs, timeLimitMinutes, trigger, now, cumulative, alreadyFound, jobRunId
+            ctx, client, logger, transactor,
+            sourceClubs, timeLimitMinutes, trigger, now, cumulative, alreadyFound, jobRunId
           )
         }
     } yield finalRun
@@ -218,8 +216,6 @@ object RecruitmentApp extends ZIOAppDefault {
     client: ChessComClient,
     logger: CcasLogger,
     transactor: Transactor,
-    clubMatches: ApiClubMatches,
-    targetMemberNames: List[Username],
     sourceClubs: List[ClubSlug],
     timeLimitMinutes: Option[Int],
     trigger: RunTrigger,
@@ -253,10 +249,8 @@ object RecruitmentApp extends ZIOAppDefault {
         if (!ctx.explore) Nil
         else
           List(
-            RecruitmentExplore.discoverOwnMemberClubs(client, ctx.clubSlug, targetMemberNames),
-            RecruitmentExplore.discoverDbClubs(ctx.clubSlug),
-            RecruitmentExplore.discoverMatchOpponents(clubMatches),
-            RecruitmentExplore.discoverCandidateOpponents(client, startedAt)
+            RecruitmentExplore.discoverCandidateOpponents(client, startedAt),
+            RecruitmentExplore.discoverMatchBoardOpponents(ctx.runCtx.clubId)
           )
 
       // --- Run the explore loop (with optional timeout) ---
