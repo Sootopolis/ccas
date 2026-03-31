@@ -31,7 +31,7 @@ object TestPlayerSql extends ZIOSpecDefault {
     val t3: Instant = t0.plus(Duration.ofDays(3))
   }
 
-  private val player0 = Player(PlayerId(0), Timestamps.t0, Username("player0_0"), Active, None, Timestamps.t0)
+  private val player0 = Player(PlayerId(0), Timestamps.t0, Username("player0_0"), Active, None, Timestamps.t2)
   private val player1 = Player(PlayerId(1), Timestamps.t1, Username("player1"), Active, Some(CM), Timestamps.t1)
 
   // Historical snapshots — represent past states that were archived
@@ -90,7 +90,7 @@ object TestPlayerSql extends ZIOSpecDefault {
       existing <- Player.selectId(player0.playerId).map(_.get)
       archive = PlayerSnapshot(existing.playerId, existing.since, existing.username, existing.status, existing.title)
       _ <- PlayerSnapshot.insert(archive)
-      updated = existing.copy(username = Username("player0_new"), since = Timestamps.t2)
+      updated = existing.copy(username = Username("player0_new"), since = Timestamps.t3)
       rows <- Player.updateCurrentState(updated)
       // Verify
       current  <- Player.selectId(player0.playerId)
@@ -98,7 +98,7 @@ object TestPlayerSql extends ZIOSpecDefault {
     } yield assertTrue(
       rows == 1,
       current.exists(_.username == Username("player0_new")),
-      current.exists(_.since == Timestamps.t2),
+      current.exists(_.since == Timestamps.t3),
       history.size == 3 // player0Snapshot0 + player0Snapshot1 + the archive we just created
     )
   }
