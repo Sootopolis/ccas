@@ -119,7 +119,13 @@ object JobRunner {
 
     private def submitRef: RIO[Transactor, Unit] = {
       import ccas.analysis.apps.ref.RefApp
-      submit(JobKind.MatchRef, None, None, RunTrigger.FollowUp, _ => RefApp.populate(RunTrigger.FollowUp)).ignore
+      submit(
+        JobKind.MatchRef,
+        None,
+        None,
+        RunTrigger.FollowUp,
+        _ => RefApp.populate(RunTrigger.FollowUp, forceSkipped = false, upgradeRefs = false)
+      ).ignore
     }
 
     def awaitAll: UIO[Unit] =

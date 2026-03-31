@@ -129,7 +129,13 @@ object JobRoutes {
     Method.POST / "api" / "jobs" / "matchref" -> handler {
       (for {
         runner <- ZIO.service[JobRunner]
-        jobId  <- runner.submit(JobKind.MatchRef, None, None, RunTrigger.Api, _ => RefApp.populate(RunTrigger.Api))
+        jobId <- runner.submit(
+          JobKind.MatchRef,
+          None,
+          None,
+          RunTrigger.Api,
+          _ => RefApp.populate(RunTrigger.Api, forceSkipped = false, upgradeRefs = false)
+        )
       } yield jsonResponse(Status.Accepted, JobResponse(JobRunId.unwrap(jobId), "running")))
         .pipe(withErrorHandling)
     },

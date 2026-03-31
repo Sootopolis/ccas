@@ -45,7 +45,7 @@ private[ref] object RefResolution {
             ctx.playersResolvedDb.update(_ + 1) *>
             CcasLogger.debug(s"  ${player.username}: resolved via DB").as(true)
         case None =>
-          resolvePlayerViaMatch(ctx, player).flatMap {
+          resolvePlayerViaMatch(ctx, player, countResolved = true).flatMap {
             case ResolveResult.Resolved   => ZIO.succeed(true)
             case ResolveResult.SkipPlayer => skipPlayer(ctx, player, RefSkipReason.IdMismatch).as(false)
             case matchOutcome => // NotFound or NoData
@@ -72,7 +72,8 @@ private[ref] object RefResolution {
 
   private def resolvePlayerViaMatch(
     ctx: RefContext,
-    player: UnresolvedPlayer
+    player: UnresolvedPlayer,
+    countResolved: Boolean
   ): RIO[CcasLogger & Transactor, ResolveResult] =
     for {
       playerMatches <- ctx.client.get[ApiPlayerMatches](ApiPlayerMatches.getUrl(player.username))
@@ -81,18 +82,19 @@ private[ref] object RefResolution {
         if (candidates.isEmpty) {
           CcasLogger.debug(s"  ${player.username}: no finished match with board").as(ResolveResult.NoData)
         } else {
-          tryMatches(ctx, player, candidates.toList)
+          tryMatches(ctx, player, candidates.toList, countResolved)
         }
     } yield result
 
   private def tryMatches(
     ctx: RefContext,
     player: UnresolvedPlayer,
-    candidates: List[ApiPlayerMatch]
+    candidates: List[ApiPlayerMatch],
+    countResolved: Boolean
   ): RIO[CcasLogger & Transactor, ResolveResult] =
     ZIO.foldLeft(candidates)(ResolveResult.NotFound: ResolveResult) { (status, m) =>
       status match {
-        case ResolveResult.NotFound => tryOneMatch(ctx, player, m)
+        case ResolveResult.NotFound => tryOneMatch(ctx, player, m, countResolved)
         case other                  => ZIO.succeed(other)
       }
     }
@@ -100,7 +102,8 @@ private[ref] object RefResolution {
   private def tryOneMatch(
     ctx: RefContext,
     player: UnresolvedPlayer,
-    m: ApiPlayerMatch
+    m: ApiPlayerMatch,
+    countResolved: Boolean
   ): RIO[CcasLogger & Transactor, ResolveResult] = {
     val parsed      = parseMatchUrl(m.`@id`)
     val boardIdxOpt = m.board.get.path.segments.lastOption.flatMap(_.toIntOption).map(_.toShort)
@@ -120,7 +123,7 @@ private[ref] object RefResolution {
                     handleVerification(ctx, player) {
                       val ref = PlayerMatchRef(player.playerId, parsed.matchId, parsed.isLive, isTeam1, boardIdx)
                       PlayerMatchRef.insert(ref) *> PlayerRefSkip.deleteId(player.playerId) *>
-                        ctx.playersResolvedApi.update(_ + 1).as(ResolveResult.Resolved)
+                        ZIO.whenDiscard(countResolved)(ctx.playersResolvedApi.update(_ + 1)).as(ResolveResult.Resolved)
                     }
                 }
             )
@@ -134,7 +137,8 @@ private[ref] object RefResolution {
   ): RIO[CcasLogger & Transactor, ResolveResult] =
     for {
       playerTournaments <- ctx.client.get[ApiPlayerTournaments](ApiPlayerTournaments.getUrl(player.username))
-      eligible = playerTournaments.finished ++ playerTournaments.inProgress
+      eligible = (playerTournaments.finished ++ playerTournaments.inProgress)
+        .sortBy(_.totalPlayers.getOrElse(Int.MaxValue))
       result <-
         if (eligible.isEmpty) {
           CcasLogger.debug(s"  ${player.username}: no eligible tournaments").as(ResolveResult.NoData)
@@ -331,4 +335,28 @@ private[ref] object RefResolution {
   ): RIO[Transactor, Unit] =
     ClubRefSkip.upsert(ClubRefSkip(club.clubId, reason, detail, Instant.now())) *>
       ctx.clubsSkippedNew.update(_ + 1)
+
+  // --- Upgrade: tournament ref → match ref ---
+
+  /** Attempt to find a match ref for a player who currently only has a tournament ref. Returns true if upgraded
+    * successfully. Does not create skip records or bump resolution counters. The caller is responsible for deleting the
+    * old tournament ref on success.
+    */
+  private[ref] def tryUpgradeToMatchRef(
+    ctx: RefContext,
+    player: UnresolvedPlayer
+  ): RIO[CcasLogger & Transactor, Boolean] =
+    (for {
+      dbRef <- ClubMatchBoard.selectPlayerMatchRef(player.playerId)
+      resolved <- dbRef match {
+        case Some(ref) =>
+          PlayerMatchRef.insert(ref) *>
+            CcasLogger.debug(s"  ${player.username}: upgraded via DB").as(true)
+        case None =>
+          resolvePlayerViaMatch(ctx, player, countResolved = false).map {
+            case ResolveResult.Resolved => true
+            case _                      => false
+          }
+      }
+    } yield resolved).catchAll(_ => ZIO.succeed(false))
 }

@@ -111,6 +111,8 @@ private[ref] object RefUtils {
     skippedPlayers: List[(PlayerId, Username)],
     playerSkipsByReason: List[(RefSkipReason, Long)],
     clubSkipsByReason: List[(RefSkipReason, Long)],
+    upgradeEligible: Int,
+    upgradeSucceeded: Int,
     startedAt: Instant,
     completedAt: Instant,
     failedQueries: Map[String, String],
