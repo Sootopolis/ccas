@@ -52,11 +52,9 @@ object RecruitmentBlacklist {
 
   def selectActiveByClub(clubId: ClubId, now: Instant): ZIO[Transactor, SQLException, List[BlacklistEntry]] =
     connectZIO {
-      sql"""SELECT rb.club_id, rb.player_id, ps.username, rb.added_at, rb.expires_at, rb.reason
+      sql"""SELECT rb.club_id, rb.player_id, p.username, rb.added_at, rb.expires_at, rb.reason
             FROM recruitment_blacklist rb
-            LEFT JOIN LATERAL (
-              SELECT username FROM player_snapshot WHERE player_id = rb.player_id ORDER BY since DESC LIMIT 1
-            ) ps ON true
+            LEFT JOIN player p ON p.player_id = rb.player_id
             WHERE rb.club_id = $clubId
               AND (rb.expires_at IS NULL OR rb.expires_at > $now)
             ORDER BY rb.added_at DESC"""

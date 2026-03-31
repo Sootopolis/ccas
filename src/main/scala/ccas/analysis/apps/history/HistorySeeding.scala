@@ -66,14 +66,9 @@ private[history] object HistorySeeding {
               (for {
                 apiPlayer <- client.get[ApiPlayer](ApiPlayer.getUrl(username))
                 playerId = apiPlayer.playerId
-                _ <- Player.selectId(playerId).flatMap {
-                  case Some(_) => ZIO.unit
-                  case None =>
-                    val joined = Instant.ofEpochSecond(apiPlayer.joined)
-                    Player.insertIfNew(playerId, joined) *> PlayerSnapshot.insert(PlayerSnapshot(
-                      playerId, Instant.now(), username, apiPlayer.status.category, apiPlayer.title
-                    )).unit
-                }
+                _ <- Player.insertIfNew(Player(
+                  playerId, apiPlayer.joinedAt, username, apiPlayer.status.category, apiPlayer.title, Instant.now()
+                ))
                 _ <- ZIO.foreachDiscard(entries) { entry =>
                   ClubMatchBoard.updatePlayerId(entry.matchId, entry.board, entry.isTeam1, playerId) *>
                     UnresolvedBoardPlayer.delete(entry.matchId, entry.board, entry.isTeam1)
@@ -117,12 +112,12 @@ private[history] object HistorySeeding {
     clubSlug: ClubSlug,
     allMembers: List[ClubMember],
     queriedIds: Set[PlayerId],
-    snapByPlayerId: Map[PlayerId, PlayerSnapshot],
+    playerById: Map[PlayerId, Player],
     settledMatchIds: Set[ClubMatchId]
   ): RIO[CcasLogger & Transactor, MemberSeedResult] = {
     val toQuery = allMembers
       .filterNot(m => queriedIds.contains(m.playerId))
-      .flatMap(m => snapByPlayerId.get(m.playerId).map(s => (m.playerId, s.username)))
+      .flatMap(m => playerById.get(m.playerId).map(s => (m.playerId, s.username)))
       .distinctBy(_._1)
     for {
       counterRef       <- Ref.make(0)

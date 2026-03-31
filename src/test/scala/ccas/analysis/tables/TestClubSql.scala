@@ -39,14 +39,9 @@ object TestClubSql extends ZIOSpecDefault {
   private val clubA = Club(ClubId(200), Timestamps.t0, ClubSlug("club-a"), "Club A")
   private val clubB = Club(ClubId(201), Timestamps.t0, ClubSlug("club-b"), "Club B")
 
-  private val player0 = Player(PlayerId(10), Timestamps.t0)
-  private val player1 = Player(PlayerId(11), Timestamps.t0)
-  private val player2 = Player(PlayerId(12), Timestamps.t0)
-
-  // Latest snapshots: player0 Active, player1 Active, player2 Closed
-  private val snap0 = PlayerSnapshot(player0.playerId, Timestamps.t1, Username("p0"), Active, None)
-  private val snap1 = PlayerSnapshot(player1.playerId, Timestamps.t1, Username("p1"), Active, None)
-  private val snap2 = PlayerSnapshot(player2.playerId, Timestamps.t1, Username("p2"), Closed, None)
+  private val player0 = Player(PlayerId(10), Timestamps.t0, Username("p0"), Active, None, Timestamps.t1)
+  private val player1 = Player(PlayerId(11), Timestamps.t0, Username("p1"), Active, None, Timestamps.t1)
+  private val player2 = Player(PlayerId(12), Timestamps.t0, Username("p2"), Closed, None, Timestamps.t1)
 
   // Club A: player0 (current), player1 (current), player2 (former)
   // Club B: player0 (current)
@@ -112,7 +107,6 @@ object TestClubSql extends ZIOSpecDefault {
   private def testMemberInsert = test("testMemberInsert") {
     for {
       _   <- Player.insertBatch(Chunk(player0, player1, player2))
-      _   <- PlayerSnapshot.insertBatch(Chunk(snap0, snap1, snap2))
       _   <- ClubMember.insert(memA0)
       all <- ClubMember.selectAll
     } yield assertTrue(all == List(memA0))

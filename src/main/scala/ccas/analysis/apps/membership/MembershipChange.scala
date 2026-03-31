@@ -16,7 +16,7 @@ object MembershipChange {
       new MemberChangeSummary(playerId, username, changes.sortBy(_.timestamp))
   }
 
-  final case class MemberState(player: PlayerSnapshot, member: ClubMember)
+  final case class MemberState(player: Player, member: ClubMember)
 
   enum MemberChange(val timestamp: Instant) {
     case NewMember(ts: Instant)                                      extends MemberChange(ts)
@@ -32,13 +32,14 @@ object MembershipChange {
   final case class DbState(
     membersByPlayerId: Map[PlayerId, MemberState],
     membersByUsername: Map[Username, MemberState],
-    knownPlayersByUsername: Map[Username, PlayerSnapshot] = Map.empty
+    knownPlayersByUsername: Map[Username, Player] = Map.empty
   )
 
   final case class ReconciliationResult(
     changes: Chunk[MemberChangeSummary],
     newPlayers: Chunk[Player],
-    newSnapshots: Chunk[PlayerSnapshot],
+    updatedPlayers: Chunk[Player],
+    archivedSnapshots: Chunk[PlayerSnapshot],
     newMemberships: Chunk[ClubMember],
     closedMemberships: Chunk[ClubMember],
     currentMemberCount: Int,

@@ -9,6 +9,7 @@ import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.analysis.tables.*
+import ccas.api.misc.enums.PlayerStatusCategory.Active
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, TournamentSlug, Username}
 import ccas.utils.{CcasLogger, TestCcasLogger}
 import ccas.utils.client.ChessComClient
@@ -245,18 +246,9 @@ object TestRefApp extends ZIOSpecDefault {
         SqlZioTypes.connectZIO(sql"DELETE FROM club WHERE club_id = $cid".update.run())
       }
       // Insert test data
-      _ <- Player.insert(Player(pid0, t0))
-      _ <- Player.insert(Player(pid1, t0))
-      _ <- Player.insert(Player(pid2, t0))
-      _ <- PlayerSnapshot.insert(
-        PlayerSnapshot(pid0, t0, Username("alice"), ccas.api.misc.enums.PlayerStatusCategory.Active, None)
-      )
-      _ <- PlayerSnapshot.insert(
-        PlayerSnapshot(pid1, t0, Username("bob"), ccas.api.misc.enums.PlayerStatusCategory.Active, None)
-      )
-      _ <- PlayerSnapshot.insert(
-        PlayerSnapshot(pid2, t0, Username("charlie"), ccas.api.misc.enums.PlayerStatusCategory.Active, None)
-      )
+      _ <- Player.insert(Player(pid0, t0, Username("alice"), Active, None, t0))
+      _ <- Player.insert(Player(pid1, t0, Username("bob"), Active, None, t0))
+      _ <- Player.insert(Player(pid2, t0, Username("charlie"), Active, None, t0))
       _ <- Club.upsert(Club(clubId0, t0, clubSlug0, "Club 0"))
       _ <- Club.upsert(Club(clubId1, t0, clubSlug1, "Club 1"))
     } yield ()

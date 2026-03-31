@@ -8,6 +8,7 @@ import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.*
 import ccas.analysis.tables.*
+import ccas.api.misc.enums.PlayerStatusCategory.Active
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username}
 import ccas.utils.CcasLogger
 import ccas.utils.sql.FreshSchemaLayer
@@ -348,10 +349,8 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       for {
         _      <- seedDb
         _      <- seedCriteria(criteria)
-        // Seed opponent player and snapshot so discoverMatchBoardOpponents can resolve the username
-        _ <- seedPlayer(oppPlayerId)
-        _ <- PlayerSnapshot.insert(PlayerSnapshot(oppPlayerId, Times.t0, Username("opp-player"),
-          ccas.api.misc.enums.PlayerStatusCategory.Active, None))
+        // Seed opponent player so discoverMatchBoardOpponents can resolve the username
+        _ <- Player.insert(Player(oppPlayerId, Times.t0, Username("opp-player"), Active, None, Times.t0))
         // Seed a finished match where our club is team1 and the opponent is on team2
         _ <- ClubMatch.upsert(ClubMatch(matchId, "Explore Match",
           ccas.api.misc.enums.ClubMatchStatus.Finished, ccas.api.misc.enums.TimeClass.Daily,
@@ -505,17 +504,8 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         client     <- fakeChessComClient(responses)
         xa         <- ZIO.service[Transactor]
 
-        // Seed prior run with a Deferred candidate (need Player + Snapshot)
-        _ <- seedPlayer(PlayerId(500))
-        _ <- PlayerSnapshot.insert(
-          PlayerSnapshot(
-            PlayerId(500),
-            Times.t0,
-            Username.wrap("prio-deferred"),
-            ccas.api.misc.enums.PlayerStatusCategory.Active,
-            None
-          )
-        )
+        // Seed prior run with a Deferred candidate (need Player row)
+        _ <- Player.insert(Player(PlayerId(500), Times.t0, Username("prio-deferred"), Active, None, Times.t0))
         priorRunId <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0)
         _ <- RecruitmentRun.update(
           RecruitmentRun(priorRunId, clubId, criteriaId, RunTrigger.Cli, Times.t0, Some(Times.t1), 0, None)
@@ -552,16 +542,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       for {
         _          <- seedDb
         criteriaId <- seedCriteria(criteria)
-        _          <- seedPlayer(PlayerId(600))
-        _ <- PlayerSnapshot.insert(
-          PlayerSnapshot(
-            PlayerId(600),
-            Times.t0,
-            Username.wrap("resolved-player"),
-            ccas.api.misc.enums.PlayerStatusCategory.Active,
-            None
-          )
-        )
+        _ <- Player.insert(Player(PlayerId(600), Times.t0, Username("resolved-player"), Active, None, Times.t0))
 
         // Run 1: candidate is Deferred
         runId1 <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0)

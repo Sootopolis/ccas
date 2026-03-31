@@ -54,13 +54,10 @@ object TestClubMatchSql extends ZIOSpecDefault {
   private val clubA = Club(ClubId(300), Times.t0, ClubSlug("club-a"), "Club A")
   private val clubB = Club(ClubId(301), Times.t0, ClubSlug("club-b"), "Club B")
 
-  private val player0 = Player(PlayerId(50), Times.t0)
-  private val player1 = Player(PlayerId(51), Times.t0)
-
-  private val snap0 =
-    PlayerSnapshot(player0.playerId, Times.t0, Username("p0"), ccas.api.misc.enums.PlayerStatusCategory.Active, None)
-  private val snap1 =
-    PlayerSnapshot(player1.playerId, Times.t0, Username("p1"), ccas.api.misc.enums.PlayerStatusCategory.Active, None)
+  private val player0 =
+    Player(PlayerId(50), Times.t0, Username("p0"), ccas.api.misc.enums.PlayerStatusCategory.Active, None, Times.t0)
+  private val player1 =
+    Player(PlayerId(51), Times.t0, Username("p1"), ccas.api.misc.enums.PlayerStatusCategory.Active, None, Times.t0)
 
   private val matchFinished = ClubMatch(
     matchId = ClubMatchId(1001),
@@ -98,7 +95,6 @@ object TestClubMatchSql extends ZIOSpecDefault {
     for {
       _ <- Club.upsertBatch(List(clubA, clubB))
       _ <- Player.insertBatch(List(player0, player1))
-      _ <- PlayerSnapshot.insertBatch(List(snap0, snap1))
     } yield assertCompletes
   }
 

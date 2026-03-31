@@ -88,10 +88,8 @@ object RecruitmentApp extends ZIOAppDefault {
               candidates <-
                 if (parsed.cumulative) RecruitmentCandidate.selectInvitedToday(run.clubId, parsed.alias)
                 else RecruitmentCandidate.selectInvitedByRun(run.runId)
-              usernames <- ZIO.foreach(candidates)(c =>
-                PlayerSnapshot.selectIdLatest(c.playerId)
-                  .map(_.fold(Username.wrap(s"[pid=${c.playerId}]"))(_.username))
-              )
+              resolvedMap <- Player.resolveUsernames(candidates.map(_.playerId))
+              usernames = candidates.map(c => resolvedMap.getOrElse(c.playerId, Username.wrap(s"[pid=${c.playerId}]")))
               evaluatedCount <- RecruitmentCandidate.selectCountByRun(run.runId)
               _ <- OutputFile.writeAndLog("recruitment", clubSlug, formatRecruitmentOutput(usernames, evaluatedCount, run.startedAt, run.completedAt.getOrElse(Instant.now())))
             } yield ()
@@ -231,9 +229,8 @@ object RecruitmentApp extends ZIOAppDefault {
 
       // --- Load deferred candidates from prior runs as a priority source ---
       deferredCandidates <- RecruitmentCandidate.selectDeferredByClub(ctx.runCtx.clubId)
-      deferredUsernames <- ZIO.foreach(deferredCandidates)(c =>
-        PlayerSnapshot.selectIdLatest(c.playerId).map(_.map(_.username))
-      ).map(_.flatten.filterNot(ctx.existingUsernames).distinct)
+      deferredResolvedMap <- Player.resolveUsernames(deferredCandidates.map(_.playerId))
+      deferredUsernames = deferredResolvedMap.values.filterNot(ctx.existingUsernames).toList.distinct
       _ <- ZIO.whenDiscard(deferredUsernames.nonEmpty)(
         CcasLogger.info(s"[Deferred] Found ${deferredUsernames.size} deferred candidates from prior runs")
       )
@@ -297,9 +294,9 @@ object RecruitmentApp extends ZIOAppDefault {
         else ZIO.succeed(found) // Api, Scheduled, FollowUp: auto-confirm
 
       _ <- ZIO.foreachDiscard(confirmed) { u =>
-        PlayerSnapshot.selectNameLatest(u)
-          .someOrFail(new java.sql.SQLException(s"No snapshot for confirmed candidate $u"))
-          .flatMap(snap => RecruitmentCandidate.updateOutcome(ctx.runId, snap.playerId, CandidateOutcome.Invited))
+        Player.selectByUsername(u)
+          .someOrFail(new java.sql.SQLException(s"No player found for confirmed candidate $u"))
+          .flatMap(p => RecruitmentCandidate.updateOutcome(ctx.runId, p.playerId, CandidateOutcome.Invited))
       }
 
       evalCount     <- ctx.evalCountRef.get
@@ -326,9 +323,9 @@ object RecruitmentApp extends ZIOAppDefault {
       _ <- ZIO.whenDiscard(cumulative && alreadyFound > 0) {
         for {
           earlierCandidates <- RecruitmentCandidate.selectInvitedToday(clubId, alias)
-          earlierUsernames <- ZIO.foreach(earlierCandidates)(c =>
-            PlayerSnapshot.selectIdLatest(c.playerId)
-              .map(_.fold(Username.wrap(s"[pid=${c.playerId}]"))(_.username))
+          earlierResolvedMap <- Player.resolveUsernames(earlierCandidates.map(_.playerId))
+          earlierUsernames = earlierCandidates.map(c =>
+            earlierResolvedMap.getOrElse(c.playerId, Username.wrap(s"[pid=${c.playerId}]"))
           )
           allToday = earlierUsernames ++ confirmed
           _ <- CcasLogger.info(s"=== Today's Total: ${allToday.size} ===")
@@ -386,10 +383,8 @@ object RecruitmentApp extends ZIOAppDefault {
       _              <- CcasLogger.info(s"Started: ${run.startedAt}")
       _              <- CcasLogger.info(s"Completed: ${run.completedAt.getOrElse("in progress")}")
       _              <- CcasLogger.info(s"Evaluated: $evaluatedCount | Invited: ${invited.size}")
-      usernames <- ZIO.foreach(invited) { c =>
-        PlayerSnapshot.selectIdLatest(c.playerId)
-          .map(_.fold(Username.wrap(s"[pid=${c.playerId}]"))(_.username))
-      }
+      resolvedMap <- Player.resolveUsernames(invited.map(_.playerId))
+      usernames = invited.map(c => resolvedMap.getOrElse(c.playerId, Username.wrap(s"[pid=${c.playerId}]")))
       _ <- CcasLogger.info(usernames.mkString(" "))
       _ <- CcasLogger.info("")
       _ <- ZIO.foreachDiscard(usernames) { name =>

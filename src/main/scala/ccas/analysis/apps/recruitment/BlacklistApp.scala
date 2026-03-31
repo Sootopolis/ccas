@@ -61,7 +61,9 @@ object BlacklistApp extends ZIOAppDefault {
         for {
           apiPlayer <- client.get[ApiPlayer](ApiPlayer.getUrl(username))
           now = Instant.now()
-          _ <- Player.insertIfNew(apiPlayer.playerId, Instant.ofEpochSecond(apiPlayer.joined))
+          _ <- Player.insertIfNew(Player(
+            apiPlayer.playerId, apiPlayer.joinedAt, username, apiPlayer.status.category, apiPlayer.title, now
+          ))
           _ <- RecruitmentBlacklist.upsert(
             RecruitmentBlacklist(apiClub.clubId, apiPlayer.playerId, now, expiresAt, reason)
           )
@@ -93,7 +95,7 @@ object BlacklistApp extends ZIOAppDefault {
   def removeFromBlacklist(clubSlug: ClubSlug, username: Username): RIO[Transactor, Unit] =
     for {
       club <- Club.selectBySlug(clubSlug).someOrFail(NotFoundException(s"Club not found: $clubSlug"))
-      ps   <- PlayerSnapshot.selectNameLatest(username).someOrFail(NotFoundException(s"Player not found: $username"))
+      ps   <- Player.selectByUsername(username).someOrFail(NotFoundException(s"Player not found: $username"))
       rows <- RecruitmentBlacklist.delete(club.clubId, ps.playerId)
       _ <- Console.printLine(
         if (rows > 0) s"Removed $username from blacklist for $clubSlug"

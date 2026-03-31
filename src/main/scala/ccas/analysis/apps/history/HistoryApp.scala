@@ -76,7 +76,7 @@ object HistoryApp extends ZIOAppDefault {
 
   private case class InitResult(
     allMembers: List[ClubMember],
-    snapByPlayerId: Map[PlayerId, PlayerSnapshot],
+    playerById: Map[PlayerId, Player],
     queriedIds: Set[PlayerId],
     ctx: ProcessingContext,
     startedAt: Instant,
@@ -96,23 +96,23 @@ object HistoryApp extends ZIOAppDefault {
       club <- Club.selectBySlug(clubSlug)
         .someOrFail(IllegalStateException(s"Club '$clubSlug' not found after reconcile"))
       clubId = club.clubId
-      (allMembers, latestSnaps, processedCount, queriedIds) <-
+      (allMembers, allPlayers, processedCount, queriedIds) <-
         ClubMember.selectClub(clubId) <&>
-        PlayerSnapshot.selectLatest <&>
+        Player.selectAll <&>
         ClubMatch.countForClub(clubId) <&>
         HistoryMemberQuery.selectClubPlayerIds(clubId)
       _ <- HistoryPendingMatch.resetStatuses(clubId)
       startedAt = Instant.now()
       runId <- HistoryRun.insert(clubId, trigger, startedAt, jobRunId)
-      snapByPlayerId = latestSnaps.map(s => s.playerId -> s).toMap
+      playerById = allPlayers.map(p => p.playerId -> p).toMap
       _ <- CcasLogger.info(
         s"  Members: ${allMembers.size}, Processed matches: $processedCount, Queried members: ${queriedIds.size}"
       )
-      knownPlayersInit = latestSnaps.map(s => s.username.value -> s.playerId).toMap
+      knownPlayersInit = allPlayers.map(p => p.username.value -> p.playerId).toMap
       client <- ZIO.service[ChessComClient]
       ctx <- ProcessingContext.make(client, clubId, clubSlug, knownPlayersInit)
       effectiveQueriedIds = if (full) { Set.empty[PlayerId] } else { queriedIds }
-    } yield InitResult(allMembers, snapByPlayerId, effectiveQueriedIds, ctx, startedAt, runId)
+    } yield InitResult(allMembers, playerById, effectiveQueriedIds, ctx, startedAt, runId)
 
   /** Main entry point: orchestrates the 4-phase discover workflow for a club's match history. */
   def discover(
@@ -127,7 +127,7 @@ object HistoryApp extends ZIOAppDefault {
       logger     <- ZIO.service[CcasLogger]
 
       // === Phase 1: Initialize ===
-      InitResult(allMembers, snapByPlayerId, queriedIds, ctx, startedAt, runId) <-
+      InitResult(allMembers, playerById, queriedIds, ctx, startedAt, runId) <-
         initialize(clubSlug, full, trigger, jobRunId)
 
       seedClubRef   <- Ref.make(0)
@@ -154,7 +154,7 @@ object HistoryApp extends ZIOAppDefault {
           _        <- CcasLogger.info(s"  Club matches endpoint: $seedClub new match IDs")
 
           memberSeed <-
-            HistorySeeding.seedFromMemberMatches(ctx.client, ctx.clubId, clubSlug, allMembers, queriedIds, snapByPlayerId, settledMatchIds)
+            HistorySeeding.seedFromMemberMatches(ctx.client, ctx.clubId, clubSlug, allMembers, queriedIds, playerById, settledMatchIds)
           _ <- memberSeedRef.set(memberSeed)
           membersSkipped = allMembers.size - memberSeed.queried - memberSeed.failed
           _ <- CcasLogger.info(

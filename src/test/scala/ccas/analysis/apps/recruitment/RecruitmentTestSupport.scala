@@ -495,12 +495,14 @@ object RecruitmentTestSupport {
       _ <- Club.upsert(club)
     } yield ()
 
-  def seedPlayer(playerId: PlayerId): RIO[Transactor, Unit] =
+  def seedPlayer(playerId: PlayerId): RIO[Transactor, Unit] = {
+    val username = Username.wrap(s"player_${PlayerId.unwrap(playerId)}")
     SqlZioTypes.connectZIO {
-      sql"""INSERT INTO player (player_id, joined)
-            VALUES ($playerId, ${Times.t0})
+      sql"""INSERT INTO player (player_id, joined, username, status, title, since)
+            VALUES ($playerId, ${Times.t0}, $username, 'Active', NULL, ${Times.t0})
             ON CONFLICT (player_id) DO NOTHING""".update.run()
     }.unit
+  }
 
   /** Test-side helper that calls real production code: builds a RunContext, filter chain, and loops evaluateCandidate —
     * matching what the explore loop does.

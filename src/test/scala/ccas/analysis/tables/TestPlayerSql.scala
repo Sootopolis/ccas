@@ -17,7 +17,9 @@ object TestPlayerSql extends ZIOSpecDefault {
     testInsert,
     testInsertBatch,
     testSelect,
-    testUpdate
+    testUpdate,
+    testArchiveAndUpdate,
+    testSelectByUsername
   ).provideShared(
     FreshSchemaLayer("test_player_sql", onInit = Tables.ensureTables)
   ) @@ TestAspect.sequential
@@ -26,15 +28,15 @@ object TestPlayerSql extends ZIOSpecDefault {
     val t0: Instant = LocalDateTime.of(2025, 1, 1, 0, 0).toInstant(ZoneOffset.UTC)
     val t1: Instant = t0.plus(Duration.ofDays(1))
     val t2: Instant = t0.plus(Duration.ofDays(2))
+    val t3: Instant = t0.plus(Duration.ofDays(3))
   }
 
-  private val player0          = Player(PlayerId(0), Timestamps.t0)
-  private val player1          = Player(PlayerId(1), Timestamps.t1)
-  private val player0Snapshot0 = PlayerSnapshot(player0.playerId, Timestamps.t0, Username("player0_0"), Active, None)
-  private val player0Snapshot1 = player0Snapshot0.copy(since = Timestamps.t1, username = Username("player0_1"))
-  private val player0Snapshot2 = player0Snapshot1.copy(since = Timestamps.t2, status = Fairplay)
-  private val player1Snapshot1 = player0Snapshot1.copy(playerId = player1.playerId, username = Username("player1"))
-  private val player1Snapshot2 = player1Snapshot1.copy(since = Timestamps.t2, title = Some(CM))
+  private val player0 = Player(PlayerId(0), Timestamps.t0, Username("player0_0"), Active, None, Timestamps.t0)
+  private val player1 = Player(PlayerId(1), Timestamps.t1, Username("player1"), Active, Some(CM), Timestamps.t1)
+
+  // Historical snapshots — represent past states that were archived
+  private val player0Snapshot0 = PlayerSnapshot(player0.playerId, Timestamps.t0, Username("player0_old"), Active, None)
+  private val player0Snapshot1 = PlayerSnapshot(player0.playerId, Timestamps.t1, Username("player0_mid"), Fairplay, None)
 
   private def testCreateTables = test("testCreateTables") {
     assertCompletes
@@ -57,7 +59,7 @@ object TestPlayerSql extends ZIOSpecDefault {
   private def testInsertBatch = test("testInsertBatch") {
     for {
       _ <- Player.insertBatch(Chunk(player1))
-      _ <- PlayerSnapshot.insertBatch(Chunk(player0Snapshot1, player0Snapshot2, player1Snapshot1, player1Snapshot2))
+      _ <- PlayerSnapshot.insertBatch(Chunk(player0Snapshot1))
     } yield assertCompletes
   }
 
@@ -65,25 +67,49 @@ object TestPlayerSql extends ZIOSpecDefault {
     for {
       players     <- Player.selectAll
       nonExistent <- Player.selectId(PlayerId(3))
-      latest      <- PlayerSnapshot.selectLatest
-      p0Latest    <- PlayerSnapshot.selectIdLatest(player0.playerId)
-      p0All       <- PlayerSnapshot.selectId(player0.playerId)
-      sinceT1     <- PlayerSnapshot.selectSince(Timestamps.t1)
+      p0          <- Player.selectId(player0.playerId)
+      p0History   <- PlayerSnapshot.selectId(player0.playerId)
     } yield assertTrue(
       players.toSet == Set(player0, player1),
       nonExistent.isEmpty,
-      latest.toSet == Set(player0Snapshot2, player1Snapshot2),
-      p0Latest.contains(player0Snapshot2),
-      p0All.toSet == Set(player0Snapshot0, player0Snapshot1, player0Snapshot2),
-      sinceT1.toSet == Set(player0Snapshot1, player1Snapshot1, player0Snapshot2, player1Snapshot2)
+      p0.contains(player0),
+      p0History.toSet == Set(player0Snapshot0, player0Snapshot1)
     )
   }
 
   private def testUpdate = test("testUpdate") {
     for {
-      _       <- PlayerSnapshot.update(player0Snapshot0.copy(title = Some(IM)))
-      _       <- PlayerSnapshot.updateBatch(Chunk(player0Snapshot1, player0Snapshot2).map(_.copy(title = Some(GM))))
+      _ <- PlayerSnapshot.update(player0Snapshot0.copy(title = Some(IM)))
       results <- PlayerSnapshot.selectId(player0.playerId).map(_.sortBy(_.since).flatMap(_.title))
-    } yield assertTrue(results == List(IM, GM, GM))
+    } yield assertTrue(results == List(IM))
+  }
+
+  private def testArchiveAndUpdate = test("testArchiveAndUpdate") {
+    for {
+      // Archive player0's current state and update to new username
+      existing <- Player.selectId(player0.playerId).map(_.get)
+      archive = PlayerSnapshot(existing.playerId, existing.since, existing.username, existing.status, existing.title)
+      _ <- PlayerSnapshot.insert(archive)
+      updated = existing.copy(username = Username("player0_new"), since = Timestamps.t2)
+      rows <- Player.updateCurrentState(updated)
+      // Verify
+      current  <- Player.selectId(player0.playerId)
+      history  <- PlayerSnapshot.selectId(player0.playerId)
+    } yield assertTrue(
+      rows == 1,
+      current.exists(_.username == Username("player0_new")),
+      current.exists(_.since == Timestamps.t2),
+      history.size == 3 // player0Snapshot0 + player0Snapshot1 + the archive we just created
+    )
+  }
+
+  private def testSelectByUsername = test("testSelectByUsername") {
+    for {
+      found    <- Player.selectByUsername(Username("player0_new")) // updated in previous test
+      notFound <- Player.selectByUsername(Username("nonexistent"))
+    } yield assertTrue(
+      found.exists(_.playerId == player0.playerId),
+      notFound.isEmpty
+    )
   }
 }

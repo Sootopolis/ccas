@@ -251,23 +251,26 @@ object TestMembershipApp extends ZIOSpecDefault {
 
   private def suiteMergeResults = suite("mergeResults")(
     test("concatenates PhaseBResult and PhaseCResult fields") {
-      val bChange = MemberChangeSummary(pid0, Username("alice"), Chunk(NewMember(Times.t1)))
-      val cChange = MemberChangeSummary(pid1, Username("bob"), Chunk(LeftClub(Times.t1)))
-      val bPlayer = Player(pid0, Times.t0)
-      val bSnap   = PlayerSnapshot(pid0, Times.t1, Username("alice"), Active, None)
-      val cSnap   = PlayerSnapshot(pid1, Times.t1, Username("bob"), Active, None)
-      val bMember = ClubMember(clubId, pid0, Times.t1, None)
-      val bClosed = ClubMember(clubId, pid2, Times.t0, Some(Times.t1))
-      val cClosed = ClubMember(clubId, pid1, Times.t0, Some(Times.t1))
+      val bChange    = MemberChangeSummary(pid0, Username("alice"), Chunk(NewMember(Times.t1)))
+      val cChange    = MemberChangeSummary(pid1, Username("bob"), Chunk(LeftClub(Times.t1)))
+      val bPlayer    = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0)
+      val bUpdated   = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t1)
+      val bArchived  = PlayerSnapshot(pid0, Times.t0, Username("alice"), Active, None)
+      val cUpdated   = Player(pid1, Times.t0, Username("bob"), Closed, None, Times.t1)
+      val cArchived  = PlayerSnapshot(pid1, Times.t0, Username("bob"), Active, None)
+      val bMember    = ClubMember(clubId, pid0, Times.t1, None)
+      val bClosed    = ClubMember(clubId, pid2, Times.t0, Some(Times.t1))
+      val cClosed    = ClubMember(clubId, pid1, Times.t0, Some(Times.t1))
 
-      val phaseB = PhaseBResult(Set(pid0), Chunk(bChange), Chunk(bPlayer), Chunk(bSnap), Chunk(bMember), Chunk(bClosed))
-      val phaseC = PhaseCResult(Chunk(cChange), Chunk(cSnap), Chunk(cClosed))
+      val phaseB = PhaseBResult(Set(pid0), Chunk(bChange), Chunk(bPlayer), Chunk(bUpdated), Chunk(bArchived), Chunk(bMember), Chunk(bClosed))
+      val phaseC = PhaseCResult(Chunk(cChange), Chunk(cUpdated), Chunk(cArchived), Chunk(cClosed))
       val result = MembershipApp.mergeResults(phaseB, phaseC, 10, 8, Times.t0, Times.t1)
 
       assertTrue(
         result.changes == Chunk(bChange, cChange),
         result.newPlayers == Chunk(bPlayer),
-        result.newSnapshots == Chunk(bSnap, cSnap),
+        result.updatedPlayers == Chunk(bUpdated, cUpdated),
+        result.archivedSnapshots == Chunk(bArchived, cArchived),
         result.newMemberships == Chunk(bMember),
         result.closedMemberships == Chunk(bClosed, cClosed)
       )
@@ -339,17 +342,14 @@ object TestMembershipApp extends ZIOSpecDefault {
 
   private def suiteBuildDbState = suite("buildDbState")(
     test("builds correct DbState maps") {
-      val player0 = Player(pid0, Times.t0)
-      val player1 = Player(pid1, Times.t0)
-      val snap0   = PlayerSnapshot(pid0, Times.t1, Username("alice"), Active, None)
-      val snap1   = PlayerSnapshot(pid1, Times.t1, Username("bob"), Active, None)
+      val player0 = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t1)
+      val player1 = Player(pid1, Times.t0, Username("bob"), Active, None, Times.t1)
       val mem0    = ClubMember(clubId, pid0, Times.t1, None)
       val mem1    = ClubMember(clubId, pid1, Times.t1, None)
 
       for {
         _ <- seedDb(
           players = List(player0, player1),
-          snapshots = List(snap0, snap1),
           members = List(mem0, mem1)
         )
         dbState <- MembershipApp.buildDbState(clubId)
@@ -357,26 +357,24 @@ object TestMembershipApp extends ZIOSpecDefault {
         dbState.membersByPlayerId.size == 2,
         dbState.membersByPlayerId.contains(pid0),
         dbState.membersByPlayerId.contains(pid1),
-        dbState.membersByPlayerId(pid0).player == snap0,
+        dbState.membersByPlayerId(pid0).player == player0,
         dbState.membersByPlayerId(pid0).member == mem0,
         dbState.membersByUsername.size == 2,
         dbState.membersByUsername.contains(Username("alice")),
         dbState.membersByUsername.contains(Username("bob")),
         dbState.knownPlayersByUsername.contains(Username("alice")),
         dbState.knownPlayersByUsername.contains(Username("bob")),
-        dbState.knownPlayersByUsername(Username("alice")) == snap0,
-        dbState.knownPlayersByUsername(Username("bob")) == snap1
+        dbState.knownPlayersByUsername(Username("alice")) == player0,
+        dbState.knownPlayersByUsername(Username("bob")) == player1
       )
     },
     test("excludes former members from DbState") {
-      val player0   = Player(pid0, Times.t0)
-      val snap0     = PlayerSnapshot(pid0, Times.t1, Username("alice"), Active, None)
+      val player0   = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t1)
       val formerMem = ClubMember(clubId, pid0, Times.t0, Some(Times.t1))
 
       for {
         _ <- seedDb(
           players = List(player0),
-          snapshots = List(snap0),
           members = List(formerMem)
         )
         dbState <- MembershipApp.buildDbState(clubId)
@@ -393,11 +391,11 @@ object TestMembershipApp extends ZIOSpecDefault {
 
   private def suiteClassifyApiMembers = suite("classifyApiMembers")(
     test("unchanged member — matching since") {
-      val snap = PlayerSnapshot(pid0, Times.t1, Username("alice"), Active, None)
-      val mem  = ClubMember(clubId, pid0, Times.t1, None)
+      val player = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t1)
+      val mem    = ClubMember(clubId, pid0, Times.t1, None)
       val dbState = DbState(
-        membersByPlayerId = Map(pid0 -> MemberState(snap, mem)),
-        membersByUsername = Map(Username("alice") -> MemberState(snap, mem))
+        membersByPlayerId = Map(pid0 -> MemberState(player, mem)),
+        membersByUsername = Map(Username("alice") -> MemberState(player, mem))
       )
       val apiMap = Map(Username("alice") -> Times.t1.getEpochSecond)
 
@@ -410,11 +408,11 @@ object TestMembershipApp extends ZIOSpecDefault {
       )
     },
     test("different since → Rejoined") {
-      val snap = PlayerSnapshot(pid1, Times.t0, Username("bob"), Active, None)
-      val mem  = ClubMember(clubId, pid1, Times.t0, None)
+      val player = Player(pid1, Times.t0, Username("bob"), Active, None, Times.t0)
+      val mem    = ClubMember(clubId, pid1, Times.t0, None)
       val dbState = DbState(
-        membersByPlayerId = Map(pid1 -> MemberState(snap, mem)),
-        membersByUsername = Map(Username("bob") -> MemberState(snap, mem))
+        membersByPlayerId = Map(pid1 -> MemberState(player, mem)),
+        membersByUsername = Map(Username("bob") -> MemberState(player, mem))
       )
       val apiMap = Map(Username("bob") -> Times.t1.getEpochSecond)
 
@@ -434,11 +432,11 @@ object TestMembershipApp extends ZIOSpecDefault {
       }
     },
     test("username change — same player ID, different username") {
-      val snap = PlayerSnapshot(pid2, Times.t0, Username("charlie-old"), Active, None)
-      val mem  = ClubMember(clubId, pid2, Times.t0, None)
+      val player = Player(pid2, Times.t0, Username("charlie-old"), Active, None, Times.t0)
+      val mem    = ClubMember(clubId, pid2, Times.t0, None)
       val dbState = DbState(
-        membersByPlayerId = Map(pid2 -> MemberState(snap, mem)),
-        membersByUsername = Map(Username("charlie-old") -> MemberState(snap, mem))
+        membersByPlayerId = Map(pid2 -> MemberState(player, mem)),
+        membersByUsername = Map(Username("charlie-old") -> MemberState(player, mem))
       )
       val apiMap    = Map(Username("charlie-new") -> Times.t0.getEpochSecond)
       val responses = Map("charlie-new" -> apiPlayerJson(102, "charlie-new"))
@@ -450,7 +448,7 @@ object TestMembershipApp extends ZIOSpecDefault {
         result.resolvedIds.contains(pid2),
         result.changes.size == 1,
         result.changes.head.changes.exists(_.isInstanceOf[UsernameChange]),
-        result.newSnapshots.nonEmpty
+        result.updatedPlayers.nonEmpty
       )
     },
     test("new player — not in DB") {
@@ -470,20 +468,18 @@ object TestMembershipApp extends ZIOSpecDefault {
           change.isInstanceOf[NewMember],
           change.timestamp == Times.t0, // API join time, not reconciliation time
           result.newPlayers.nonEmpty,
-          result.newSnapshots.nonEmpty,
           result.newMemberships.nonEmpty
         )
       }
     },
     test("existing player joins club") {
-      val player4   = Player(pid4, Times.t0)
-      val snap4     = PlayerSnapshot(pid4, Times.t0, Username("eve"), Active, None)
+      val player4   = Player(pid4, Times.t0, Username("eve"), Active, None, Times.t0)
       val dbState   = DbState(Map.empty, Map.empty)
       val apiMap    = Map(Username("eve") -> Times.t1.getEpochSecond)
       val responses = Map("eve" -> apiPlayerJson(104, "eve"))
 
       for {
-        _      <- seedDb(players = List(player4), snapshots = List(snap4))
+        _      <- seedDb(players = List(player4))
         client <- fakeChessComClient(responses)
         result <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, dbState, Times.t2)
       } yield {
@@ -498,11 +494,11 @@ object TestMembershipApp extends ZIOSpecDefault {
       }
     },
     test("username change + status change") {
-      val snap = PlayerSnapshot(pid5, Times.t0, Username("frank-old"), Active, None)
-      val mem  = ClubMember(clubId, pid5, Times.t0, None)
+      val player = Player(pid5, Times.t0, Username("frank-old"), Active, None, Times.t0)
+      val mem    = ClubMember(clubId, pid5, Times.t0, None)
       val dbState = DbState(
-        membersByPlayerId = Map(pid5 -> MemberState(snap, mem)),
-        membersByUsername = Map(Username("frank-old") -> MemberState(snap, mem))
+        membersByPlayerId = Map(pid5 -> MemberState(player, mem)),
+        membersByUsername = Map(Username("frank-old") -> MemberState(player, mem))
       )
       val apiMap    = Map(Username("frank-new") -> Times.t0.getEpochSecond)
       val responses = Map("frank-new" -> apiPlayerJson(105, "frank-new", status = "closed"))
@@ -518,11 +514,11 @@ object TestMembershipApp extends ZIOSpecDefault {
       )
     },
     test("trust-mode: known player joins club without API call") {
-      val snap = PlayerSnapshot(pid3, Times.t0, Username("diana"), Active, None)
+      val player = Player(pid3, Times.t0, Username("diana"), Active, None, Times.t0)
       val dbState = DbState(
         membersByPlayerId = Map.empty,
         membersByUsername = Map.empty,
-        knownPlayersByUsername = Map(Username("diana") -> snap)
+        knownPlayersByUsername = Map(Username("diana") -> player)
       )
       val apiMap = Map(Username("diana") -> Times.t1.getEpochSecond)
 
@@ -537,18 +533,18 @@ object TestMembershipApp extends ZIOSpecDefault {
           change.isInstanceOf[JoinedClub],
           change.timestamp == Times.t1, // API join time, not reconciliation time
           result.newMemberships.nonEmpty,
-          result.newSnapshots.isEmpty
+          result.updatedPlayers.isEmpty
         )
       }
     },
     test("trust-mode: username change detected without API call") {
-      val oldSnap = PlayerSnapshot(pid2, Times.t0, Username("charlie-old"), Active, None)
-      val mem     = ClubMember(clubId, pid2, Times.t0, None)
-      val newSnap = PlayerSnapshot(pid2, Times.t1, Username("charlie-new"), Active, None)
+      val oldPlayer = Player(pid2, Times.t0, Username("charlie-old"), Active, None, Times.t0)
+      val mem       = ClubMember(clubId, pid2, Times.t0, None)
+      val newPlayer = Player(pid2, Times.t0, Username("charlie-new"), Active, None, Times.t1)
       val dbState = DbState(
-        membersByPlayerId = Map(pid2 -> MemberState(oldSnap, mem)),
-        membersByUsername = Map(Username("charlie-old") -> MemberState(oldSnap, mem)),
-        knownPlayersByUsername = Map(Username("charlie-new") -> newSnap)
+        membersByPlayerId = Map(pid2 -> MemberState(oldPlayer, mem)),
+        membersByUsername = Map(Username("charlie-old") -> MemberState(oldPlayer, mem)),
+        knownPlayersByUsername = Map(Username("charlie-new") -> newPlayer)
       )
       val apiMap = Map(Username("charlie-new") -> Times.t0.getEpochSecond)
 
@@ -559,22 +555,21 @@ object TestMembershipApp extends ZIOSpecDefault {
         result.resolvedIds.contains(pid2),
         result.changes.size == 1,
         result.changes.head.changes.exists(_.isInstanceOf[UsernameChange]),
-        result.newSnapshots.nonEmpty
+        result.updatedPlayers.nonEmpty
       )
     },
     test("sinceApproximate member → replaceSince, not Rejoined") {
-      val snap = PlayerSnapshot(pid0, Times.t0, Username("alice"), Active, None)
-      val mem  = ClubMember(clubId, pid0, Times.t0, None, sinceApproximate = true)
+      val player = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0)
+      val mem    = ClubMember(clubId, pid0, Times.t0, None, sinceApproximate = true)
       val dbState = DbState(
-        membersByPlayerId = Map(pid0 -> MemberState(snap, mem)),
-        membersByUsername = Map(Username("alice") -> MemberState(snap, mem))
+        membersByPlayerId = Map(pid0 -> MemberState(player, mem)),
+        membersByUsername = Map(Username("alice") -> MemberState(player, mem))
       )
       val apiMap = Map(Username("alice") -> Times.t1.getEpochSecond)
 
       for {
         _ <- seedDb(
-          players = List(Player(pid0, Times.t0)),
-          snapshots = List(snap),
+          players = List(player),
           members = List(mem)
         )
         client  <- fakeChessComClient(Map.empty)
@@ -591,11 +586,11 @@ object TestMembershipApp extends ZIOSpecDefault {
       )
     },
     test("trustUsernames=false bypasses known player lookup") {
-      val snap = PlayerSnapshot(pid3, Times.t0, Username("diana"), Active, None)
+      val player = Player(pid3, Times.t0, Username("diana"), Active, None, Times.t0)
       val dbState = DbState(
         membersByPlayerId = Map.empty,
         membersByUsername = Map.empty,
-        knownPlayersByUsername = Map(Username("diana") -> snap)
+        knownPlayersByUsername = Map(Username("diana") -> player)
       )
       val apiMap = Map(Username("diana") -> Times.t0.getEpochSecond)
 
@@ -619,11 +614,11 @@ object TestMembershipApp extends ZIOSpecDefault {
 
   private def suiteClassifyDisappeared = suite("classifyDisappeared")(
     test("active player left club → LeftClub with now timestamp") {
-      val snap = PlayerSnapshot(pid0, Times.t0, Username("alice"), Active, None)
-      val mem  = ClubMember(clubId, pid0, Times.t0, None)
+      val player = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0)
+      val mem    = ClubMember(clubId, pid0, Times.t0, None)
       val dbState = DbState(
-        membersByPlayerId = Map(pid0 -> MemberState(snap, mem)),
-        membersByUsername = Map(Username("alice") -> MemberState(snap, mem))
+        membersByPlayerId = Map(pid0 -> MemberState(player, mem)),
+        membersByUsername = Map(Username("alice") -> MemberState(player, mem))
       )
       val responses = Map("alice" -> apiPlayerJson(100, "alice"))
 
@@ -649,11 +644,11 @@ object TestMembershipApp extends ZIOSpecDefault {
       }
     },
     test("closed player → AccountClosed with lastOnline timestamp") {
-      val snap = PlayerSnapshot(pid1, Times.t0, Username("bob"), Active, None)
-      val mem  = ClubMember(clubId, pid1, Times.t0, None)
+      val player = Player(pid1, Times.t0, Username("bob"), Active, None, Times.t0)
+      val mem    = ClubMember(clubId, pid1, Times.t0, None)
       val dbState = DbState(
-        membersByPlayerId = Map(pid1 -> MemberState(snap, mem)),
-        membersByUsername = Map(Username("bob") -> MemberState(snap, mem))
+        membersByPlayerId = Map(pid1 -> MemberState(player, mem)),
+        membersByUsername = Map(Username("bob") -> MemberState(player, mem))
       )
       val responses = Map("bob" -> apiPlayerJson(101, "bob", status = "closed", lastOnline = Times.t1.getEpochSecond))
 
@@ -673,18 +668,18 @@ object TestMembershipApp extends ZIOSpecDefault {
           result.changes.size == 1,
           change.isInstanceOf[AccountClosed],
           change.timestamp == Times.t1, // lastOnline, not reconciliation time
-          result.newSnapshots.nonEmpty,
+          result.updatedPlayers.nonEmpty,
           result.closedMemberships.nonEmpty,
           result.closedMemberships.head.until.contains(Times.t1) // until matches lastOnline
         )
       }
     },
     test("API 404 → Unresolvable") {
-      val snap = PlayerSnapshot(pid2, Times.t0, Username("charlie"), Active, None)
-      val mem  = ClubMember(clubId, pid2, Times.t0, None)
+      val player = Player(pid2, Times.t0, Username("charlie"), Active, None, Times.t0)
+      val mem    = ClubMember(clubId, pid2, Times.t0, None)
       val dbState = DbState(
-        membersByPlayerId = Map(pid2 -> MemberState(snap, mem)),
-        membersByUsername = Map(Username("charlie") -> MemberState(snap, mem))
+        membersByPlayerId = Map(pid2 -> MemberState(player, mem)),
+        membersByUsername = Map(Username("charlie") -> MemberState(player, mem))
       )
 
       for {
@@ -704,11 +699,11 @@ object TestMembershipApp extends ZIOSpecDefault {
       )
     },
     test("different player ID at same username → Unresolvable") {
-      val snap = PlayerSnapshot(pid3, Times.t0, Username("diana"), Active, None)
-      val mem  = ClubMember(clubId, pid3, Times.t0, None)
+      val player = Player(pid3, Times.t0, Username("diana"), Active, None, Times.t0)
+      val mem    = ClubMember(clubId, pid3, Times.t0, None)
       val dbState = DbState(
-        membersByPlayerId = Map(pid3 -> MemberState(snap, mem)),
-        membersByUsername = Map(Username("diana") -> MemberState(snap, mem))
+        membersByPlayerId = Map(pid3 -> MemberState(player, mem)),
+        membersByUsername = Map(Username("diana") -> MemberState(player, mem))
       )
       val responses = Map("diana" -> apiPlayerJson(999, "diana"))
 
@@ -729,11 +724,11 @@ object TestMembershipApp extends ZIOSpecDefault {
       )
     },
     test("all resolved → empty results") {
-      val snap = PlayerSnapshot(pid0, Times.t0, Username("alice"), Active, None)
-      val mem  = ClubMember(clubId, pid0, Times.t0, None)
+      val player = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0)
+      val mem    = ClubMember(clubId, pid0, Times.t0, None)
       val dbState = DbState(
-        membersByPlayerId = Map(pid0 -> MemberState(snap, mem)),
-        membersByUsername = Map(Username("alice") -> MemberState(snap, mem))
+        membersByPlayerId = Map(pid0 -> MemberState(player, mem)),
+        membersByUsername = Map(Username("alice") -> MemberState(player, mem))
       )
 
       for {
@@ -748,7 +743,7 @@ object TestMembershipApp extends ZIOSpecDefault {
         )
       } yield assertTrue(
         result.changes.isEmpty,
-        result.newSnapshots.isEmpty,
+        result.updatedPlayers.isEmpty,
         result.closedMemberships.isEmpty
       )
     }

@@ -56,10 +56,7 @@ object ClubMember {
   def selectClubActive(clubId: ClubId): ZIO[Transactor, SQLException, List[ClubMember]] =
     connectZIO(
       sql"""SELECT cm.club_id, cm.player_id, cm.since, cm.until, cm.since_approximate FROM club_member cm
-            JOIN LATERAL (
-              SELECT status FROM player_snapshot
-              WHERE player_id = cm.player_id ORDER BY since DESC LIMIT 1
-            ) ps ON ps.status = ${Active.toString}
+            JOIN player p ON p.player_id = cm.player_id AND p.status = ${Active.toString}
             WHERE cm.club_id = $clubId AND cm.until IS NULL""".query[ClubMember]
         .run().toList
     )

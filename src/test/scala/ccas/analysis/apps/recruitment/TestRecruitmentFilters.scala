@@ -2,15 +2,14 @@ package ccas.analysis.apps.recruitment
 
 import java.time.{Duration, Instant}
 
-import com.augustnagro.magnum.{sql, Transactor}
+import com.augustnagro.magnum.Transactor
 import zio.RIO
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.*
 import ccas.analysis.tables.*
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
-import ccas.utils.sql.{FreshSchemaLayer, SqlZioTypes}
-import ccas.utils.sql.DbCodecs.given
+import ccas.utils.sql.FreshSchemaLayer
 
 object TestRecruitmentFilters extends ZIOSpecDefault {
 
@@ -42,21 +41,16 @@ object TestRecruitmentFilters extends ZIOSpecDefault {
         invited    <- evalCandidates(client, runId, List(Username("alice"), Username("bob")), criteria)
         // Check invited list
         _ = assertTrue(invited.size == 2)
-        // Check Player table
+        // Check Player table (now includes current username/status/title)
         playerA <- Player.selectId(pid0)
         playerB <- Player.selectId(pid1)
-        // Check PlayerSnapshot table
-        snapA <- PlayerSnapshot.selectIdLatest(pid0)
-        snapB <- PlayerSnapshot.selectIdLatest(pid1)
         // Check RecruitmentCandidate table
         candidates <- RecruitmentCandidate.selectByRun(runId)
       } yield assertTrue(
         playerA.isDefined,
         playerB.isDefined,
-        snapA.isDefined,
-        snapA.get.username == Username("alice"),
-        snapB.isDefined,
-        snapB.get.username == Username("bob"),
+        playerA.get.username == Username("alice"),
+        playerB.get.username == Username("bob"),
         candidates.size == 2,
         candidates.forall(_.outcome == CandidateOutcome.Deferred)
       )
@@ -518,10 +512,7 @@ object TestRecruitmentFilters extends ZIOSpecDefault {
         _          <- seedDb
         criteriaId <- seedCriteria(criteria)
         // Seed alice as a former member of the club (player row needed for FK)
-        _ <- SqlZioTypes.connectZIO {
-          sql"""INSERT INTO player (player_id, joined) VALUES ($pid0, ${Times.t0})
-                ON CONFLICT (player_id) DO NOTHING""".update.run()
-        }
+        _ <- seedPlayer(pid0)
         _      <- ClubMember.insert(ClubMember(clubId, pid0, Times.t0, Some(Times.t1)))
         runId  <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Instant.now())
         client <- fakeChessComClient(responses)
@@ -536,10 +527,7 @@ object TestRecruitmentFilters extends ZIOSpecDefault {
         _          <- seedDb
         criteriaId <- seedCriteria(criteria)
         // Seed alice as a former member of the club
-        _ <- SqlZioTypes.connectZIO {
-          sql"""INSERT INTO player (player_id, joined) VALUES ($pid0, ${Times.t0})
-                ON CONFLICT (player_id) DO NOTHING""".update.run()
-        }
+        _ <- seedPlayer(pid0)
         _      <- ClubMember.insert(ClubMember(clubId, pid0, Times.t0, Some(Times.t1)))
         runId  <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Instant.now())
         client <- fakeChessComClient(responses)
@@ -563,11 +551,7 @@ object TestRecruitmentFilters extends ZIOSpecDefault {
     for {
       _ <- seedDb
       // Seed player row for FK constraint, then seed cache
-      _ <- SqlZioTypes.connectZIO {
-        sql"""INSERT INTO player (player_id, joined)
-              VALUES (${cache.playerId}, ${Times.t0})
-              ON CONFLICT (player_id) DO NOTHING""".update.run()
-      }
+      _ <- seedPlayer(cache.playerId)
       _          <- PlayerRecruitmentCache.upsert(cache)
       criteriaId <- seedCriteria(criteria)
       runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Instant.now())

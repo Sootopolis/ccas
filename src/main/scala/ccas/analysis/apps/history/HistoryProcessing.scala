@@ -4,6 +4,7 @@ import java.time.Instant
 import com.augustnagro.magnum.Transactor
 import zio.{Promise, RIO, Ref, Task, UIO, ZIO}
 import zio.http.URL
+import ccas.analysis.apps.PlayerUpdater
 import ccas.analysis.tables.*
 import ccas.api.clubmatch.{ApiDailyMatch, ApiLiveMatch}
 import ccas.api.clubmatch.ApiDailyMatch.*
@@ -348,34 +349,31 @@ private[history] object HistoryProcessing {
       statusCategory = apiPlayer.status.category
       now            = Instant.now()
 
-      result <- Player.selectId(playerId).flatMap {
-        case Some(_) =>
-          // Player exists — username change. Add new snapshot.
-          val snapshot = PlayerSnapshot(playerId, now, username, statusCategory, apiPlayer.title)
-          PlayerSnapshot.insert(snapshot) *>
-            ctx.knownPlayers.update(_ + (key -> playerId)).as(Some(playerId))
+      isNew <- withTransaction {
+        Player.selectIdForUpdate(playerId).flatMap {
+          case Some(existing) =>
+            val changed = !existing.stateMatches(username, statusCategory, apiPlayer.title)
+            ZIO.whenDiscard(changed) {
+              PlayerUpdater.archiveAndUpdate(existing, username, statusCategory, apiPlayer.title, now, ctx.client)
+            }.as(false)
 
-        case None =>
-          // Brand new player — ON CONFLICT DO NOTHING handles concurrent inserts
-          val joined = Instant.ofEpochSecond(apiPlayer.joined)
-          Player.insertIfNew(playerId, joined).flatMap { inserted =>
-            if (inserted == 0) {
-              // Another fiber already created this player — treat as known
-              ctx.knownPlayers.update(_ + (key -> playerId)).as(Some(playerId))
-            } else {
-              val snapshotSince = if (statusCategory == PlayerStatusCategory.Active) { now }
-              else { Instant.ofEpochSecond(apiPlayer.lastOnline) }
-              val snapshot = PlayerSnapshot(playerId, snapshotSince, username, statusCategory, apiPlayer.title)
-              for {
-                _ <- PlayerSnapshot.insert(snapshot)
-                _ <- ZIO.whenDiscard(isOurTeam)(createClubMemberForDiscovered(ctx, apiPlayer, matchStartTime))
-                _ <- ctx.knownPlayers.update(_ + (key -> playerId))
-                _ <- ZIO.whenDiscard(isOurTeam)(ctx.newPlayers.update(_ + DiscoveredPlayer(playerId, username)))
-                _ <- ctx.playersDiscovered.update(_ + 1)
-              } yield Some(playerId)
+          case None =>
+            val since = if (statusCategory == PlayerStatusCategory.Active) { now }
+            else { apiPlayer.lastOnlineAt }
+            Player.insertIfNew(Player(playerId, apiPlayer.joinedAt, username, statusCategory, apiPlayer.title, since)).flatMap { inserted =>
+              if (inserted == 0) { ZIO.succeed(false) }
+              else {
+                ZIO.whenDiscard(isOurTeam)(createClubMemberForDiscovered(ctx, apiPlayer, matchStartTime))
+                  .as(true)
+              }
             }
-          }
+        }
       }
+      result <- {
+        ctx.knownPlayers.update(_ + (key -> playerId)) *>
+          ZIO.whenDiscard(isNew && isOurTeam)(ctx.newPlayers.update(_ + DiscoveredPlayer(playerId, username))) *>
+          ZIO.whenDiscard(isNew)(ctx.playersDiscovered.update(_ + 1))
+      }.as(Some(playerId))
     } yield result
 
     // The doer handles success/failure and completes the promise.

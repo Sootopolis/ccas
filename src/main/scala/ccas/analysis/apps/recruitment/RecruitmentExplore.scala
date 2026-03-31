@@ -107,10 +107,10 @@ private[recruitment] object RecruitmentExplore {
   private def checkRecentlyRejected(ctx: ExploreContext, username: Username): RIO[Transactor, Boolean] =
     ctx.runCtx.criteria.daysSinceRejected.fold(ZIO.succeed(false)) { days =>
       for {
-        snapOpt <- PlayerSnapshot.selectNameLatest(username)
-        rejectOpt <- ZIO.foreach(snapOpt)(snap =>
+        playerOpt <- Player.selectByUsername(username)
+        rejectOpt <- ZIO.foreach(playerOpt)(p =>
           RecruitmentCandidate.selectLatestRejectedByAlias(
-            snap.playerId,
+            p.playerId,
             ctx.runCtx.clubId,
             ctx.runCtx.alias
           )
@@ -308,8 +308,8 @@ private[recruitment] object RecruitmentExplore {
     val months = RecruitmentStatsHelpers.recentArchiveMonths(now, 90)
     for {
       tmPlayers <- PlayerRecruitmentCache.selectTmActive(20)
-      snapshots <- ZIO.foreach(tmPlayers)(c => PlayerSnapshot.selectIdLatest(c.playerId))
-      usernames = snapshots.flatten.map(_.username)
+      players <- Player.selectByIds(tmPlayers.map(_.playerId))
+      usernames = players.map(_.username)
       opponentSets <- ZIO.foreachPar(usernames) { username =>
         ZIO.foreachPar(months) { ym =>
           client.get[ApiPlayerArchive](ApiPlayerArchive.getUrl(username, ym.getYear, ym.getMonthValue))
@@ -335,8 +335,8 @@ private[recruitment] object RecruitmentExplore {
         val isTeam1 = m.team1ClubId.contains(clubId)
         bs.flatMap(b => if (isTeam1) b.team2PlayerId else b.team1PlayerId)
       }.toSet
-      snapshots <- ZIO.foreach(opponentIds.toList)(PlayerSnapshot.selectIdLatest)
-      usernames = snapshots.flatten.map(_.username)
+      players <- Player.selectByIds(opponentIds)
+      usernames = players.map(_.username)
       _ <- CcasLogger.info(s"[Explore] Match board opponents strategy found ${usernames.size} players")
     } yield {
       if (usernames.isEmpty) Nil

@@ -43,7 +43,7 @@ private[membership] object MembershipReport {
       _ <- CcasLogger.info(s"Duration:           ${duration.display}")
       _ <- CcasLogger.info(s"Total members:      ${result.currentMemberCount} ($sign$delta)")
       _ <- CcasLogger.info(s"New players:        ${result.newPlayers.size}")
-      _ <- CcasLogger.info(s"New snapshots:      ${result.newSnapshots.size}")
+      _ <- CcasLogger.info(s"Updated players:    ${result.updatedPlayers.size}")
       _ <- CcasLogger.info(s"New memberships:    ${result.newMemberships.size}")
       _ <- CcasLogger.info(s"Closed memberships: ${result.closedMemberships.size}")
       _ <- CcasLogger.info("")
@@ -117,7 +117,7 @@ private[membership] object MembershipReport {
                     |=== Reconciliation Complete ===
                     |Total members:      ${result.currentMemberCount} ($sign$delta)
                     |New players:        ${result.newPlayers.size}
-                    |New snapshots:      ${result.newSnapshots.size}
+                    |Updated players:    ${result.updatedPlayers.size}
                     |New memberships:    ${result.newMemberships.size}
                     |Closed memberships: ${result.closedMemberships.size}
                     |""".stripMargin

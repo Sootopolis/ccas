@@ -1,5 +1,7 @@
 package ccas.api.player
 
+import java.time.Instant
+
 import zio.http.URL
 import zio.json.{jsonMemberNames, DeriveJsonDecoder, JsonDecoder, SnakeCase}
 
@@ -26,9 +28,11 @@ final case class ApiPlayer(
   league: Option[League],
   fide: Option[Elo] // FIDE rating
 ) {
-  val profileUrl: URL  = ApiPlayer.getProfileUrl(username)
-  val apiUrl: URL      = ApiPlayer.getUrl(username)
-  val apiStatsUrl: URL = ApiPlayerStats.getUrl(username)
+  val profileUrl: URL      = ApiPlayer.getProfileUrl(username)
+  val apiUrl: URL          = ApiPlayer.getUrl(username)
+  val apiStatsUrl: URL     = ApiPlayerStats.getUrl(username)
+  val joinedAt: Instant    = Instant.ofEpochSecond(joined)
+  val lastOnlineAt: Instant = Instant.ofEpochSecond(lastOnline)
 }
 
 object ApiPlayer extends JsonDecoding[ApiPlayer] {

@@ -38,40 +38,34 @@ object PlayerSnapshot {
             ON player_snapshot (username, since DESC)""".update.run()
     }
 
-  def selectLatest: ZIO[Transactor, SQLException, List[PlayerSnapshot]] =
-    connectZIO(
-      sql"""SELECT DISTINCT ON (player_id) $selectCols FROM player_snapshot
-            ORDER BY player_id, since DESC""".query[PlayerSnapshot].run().toList
-    )
-
+  /** All historical snapshots for a player. */
   def selectId(playerId: PlayerId): ZIO[Transactor, SQLException, List[PlayerSnapshot]] =
     connectZIO(
       sql"SELECT $selectCols FROM player_snapshot WHERE player_id = $playerId".query[PlayerSnapshot].run().toList
     )
 
+  /** All historical snapshots for a username. */
   def selectName(username: Username): ZIO[Transactor, SQLException, List[PlayerSnapshot]] =
     connectZIO(
       sql"SELECT $selectCols FROM player_snapshot WHERE username = $username".query[PlayerSnapshot].run().toList
     )
 
-  def selectIdLatest(playerId: PlayerId): ZIO[Transactor, SQLException, Option[PlayerSnapshot]] =
-    connectZIO(
-      sql"SELECT $selectCols FROM player_snapshot WHERE player_id = $playerId ORDER BY since DESC LIMIT 1".query[PlayerSnapshot]
-        .run().headOption
-    )
-
-  def selectNameLatest(username: Username): ZIO[Transactor, SQLException, Option[PlayerSnapshot]] =
-    connectZIO(
-      sql"SELECT $selectCols FROM player_snapshot WHERE username = $username ORDER BY since DESC LIMIT 1".query[PlayerSnapshot]
-        .run().headOption
-    )
-
+  /** Historical snapshots plus current player state, for time-range reporting.
+    * Returns all snapshots whose `since` is after the given instant, plus
+    * the current state from `player` if its `since` falls after the cutoff.
+    */
   def selectSince(since: Instant): ZIO[Transactor, SQLException, List[PlayerSnapshot]] =
     connectZIO(
-      sql"""(SELECT DISTINCT ON (player_id) $selectCols FROM player_snapshot
+      sql"""WITH all_states AS (
+              SELECT $selectCols FROM player_snapshot
+              UNION ALL
+              SELECT player_id, since, username, status, title FROM player
+            )
+            (SELECT DISTINCT ON (player_id) $selectCols FROM all_states
              WHERE since <= $since ORDER BY player_id, since DESC)
             UNION ALL
-            SELECT $selectCols FROM player_snapshot WHERE since > $since""".query[PlayerSnapshot].run().toList
+            SELECT $selectCols FROM all_states WHERE since > $since"""
+        .query[PlayerSnapshot].run().toList
     )
 
   def insert(item: PlayerSnapshot): ZIO[Transactor, SQLException, Int] =

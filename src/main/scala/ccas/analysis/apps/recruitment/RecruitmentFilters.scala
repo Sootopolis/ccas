@@ -27,14 +27,14 @@ private[recruitment] object RecruitmentFilters {
     val env          = FilterEnv(runCtx.copy(now = now), candidateCtx)
     def onEvaluationError(ctxRef: Ref[CandidateContext])(error: Throwable): RIO[Transactor, CandidateOutcome] =
       ctxRef.get.flatMap { latestCtx =>
-        persistCandidateResults(runId, now, latestCtx, CandidateOutcome.Error, Some(error.safeMessage))
+        persistCandidateResults(runId, now, latestCtx, CandidateOutcome.Error, env.run.client, Some(error.safeMessage))
       }.as(CandidateOutcome.Error)
 
     for {
       ctxRef <- Ref.make(candidateCtx)
       result <- (for {
         (outcome, finalCandidate) <- runFilters(env, filters, ctxRef)
-        _                         <- persistCandidateResults(runId, now, finalCandidate, outcome)
+        _                         <- persistCandidateResults(runId, now, finalCandidate, outcome, env.run.client)
         _                         <- writePlayerMatchRef(env.run.client, finalCandidate).catchAll(_ => ZIO.unit)
       } yield outcome).catchAll(onEvaluationError(ctxRef))
     } yield result

@@ -8,6 +8,7 @@ import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.*
 import ccas.analysis.tables.*
+import ccas.api.misc.enums.PlayerStatusCategory.Active
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, Username}
 import ccas.utils.sql.FreshSchemaLayer
 
@@ -153,10 +154,7 @@ object TestRecruitmentBlacklist extends ZIOSpecDefault {
       for {
         _ <- seedDb
         _ <- Club.upsert(Club(blacklistClubId, Times.t0, blacklistClubSlug, "Blacklist Club"))
-        _ <- seedPlayer(pid0)
-        _ <- PlayerSnapshot.insert(
-          PlayerSnapshot(pid0, Times.t0, Username("alice"), ccas.api.misc.enums.PlayerStatusCategory.Active, None)
-        )
+        _ <- Player.insert(Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0))
         _ <- RecruitmentBlacklist.insert(
           RecruitmentBlacklist(blacklistClubId, pid0, Times.t0, None, Some("indefinite"))
         )
@@ -183,10 +181,7 @@ object TestRecruitmentBlacklist extends ZIOSpecDefault {
       for {
         _ <- seedDb
         _ <- Club.upsert(Club(blacklistClubId, Times.t0, blacklistClubSlug, "Blacklist Club"))
-        _ <- seedPlayer(pid0)
-        _ <- PlayerSnapshot.insert(
-          PlayerSnapshot(pid0, Times.t0, Username("alice"), ccas.api.misc.enums.PlayerStatusCategory.Active, None)
-        )
+        _ <- Player.insert(Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0))
         _ <- RecruitmentBlacklist.insert(
           RecruitmentBlacklist(blacklistClubId, pid0, Times.t0, None, Some("banned"))
         )

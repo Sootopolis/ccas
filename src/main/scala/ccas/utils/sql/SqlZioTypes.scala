@@ -23,7 +23,7 @@ object SqlZioTypes {
   /** Run a ZIO effect that uses `connectZIO` calls within a single JDBC transaction. Every `connectZIO` inside `f`
     * shares the same underlying connection. Commits on success, rolls back on failure or interruption.
     */
-  def withTransaction[A](f: ZIO[Transactor, SQLException, A]): ZIO[Transactor, SQLException, A] =
+  def withTransaction[E >: SQLException <: Throwable, A](f: ZIO[Transactor, E, A]): ZIO[Transactor, E, A] =
     ZIO.serviceWithZIO[Transactor] { xa =>
       ZIO.acquireReleaseWith(
         acquire = ZIO.attempt(xa.dataSource.getConnection).refineToOrDie[SQLException]
@@ -31,7 +31,7 @@ object SqlZioTypes {
         release = con => ZIO.succeed(con.close())
       ) { con =>
         con.setAutoCommit(false)
-        val proxy    = noCloseProxy(con)
+        val proxy    = transactionProxy(con)
         val scopedXa = xa.copy(dataSource = SingleConnectionDataSource(proxy))
         f.provideLayer(ZLayer.succeed(scopedXa))
           .foldCauseZIO(
@@ -41,15 +41,19 @@ object SqlZioTypes {
       }
     }
 
-  /** Wraps a Connection in a Proxy whose `close()` is a no-op. */
-  private def noCloseProxy(con: Connection): Connection =
+  /** Wraps a Connection in a Proxy that suppresses close/commit/rollback/setAutoCommit,
+    * so nested transactZIO calls inside withTransaction cannot break the outer transaction.
+    */
+  private def transactionProxy(con: Connection): Connection =
     Proxy.newProxyInstance(
       con.getClass.getClassLoader,
       Array(classOf[Connection]),
-      (_, method: Method, args: Array[AnyRef]) =>
-        if (method.getName == "close") { () }
-        else if (args == null) { method.invoke(con) }
-        else { method.invoke(con, args*) }
+      (_, method: Method, args: Array[AnyRef]) => method.getName match {
+        case "close" | "commit" | "rollback" => ()
+        case "setAutoCommit"                 => ()
+        case _ if args == null               => method.invoke(con)
+        case _                               => method.invoke(con, args*)
+      }
     ).asInstanceOf[Connection] // safe: proxy implements Connection interface
 
   /** Minimal DataSource that always returns the same (proxied) connection. */

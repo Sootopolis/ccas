@@ -22,7 +22,8 @@ private[membership] object MembershipClassify {
     resolvedIds: Set[PlayerId],
     changes: Chunk[MemberChangeSummary],
     newPlayers: Chunk[Player],
-    newSnapshots: Chunk[PlayerSnapshot],
+    updatedPlayers: Chunk[Player],
+    archivedSnapshots: Chunk[PlayerSnapshot],
     newMemberships: Chunk[ClubMember],
     closedMemberships: Chunk[ClubMember]
   )
@@ -31,7 +32,8 @@ private[membership] object MembershipClassify {
     resolvedId: PlayerId,
     changes: Chunk[MemberChangeSummary],
     newPlayers: Chunk[Player],
-    newSnapshots: Chunk[PlayerSnapshot],
+    updatedPlayers: Chunk[Player],
+    archivedSnapshots: Chunk[PlayerSnapshot],
     newMemberships: Chunk[ClubMember],
     closedMemberships: Chunk[ClubMember]
   )
@@ -59,7 +61,8 @@ private[membership] object MembershipClassify {
         resolvedIds = results.map(_.resolvedId).toSet,
         changes = results.flatMap(_.changes),
         newPlayers = results.flatMap(_.newPlayers),
-        newSnapshots = results.flatMap(_.newSnapshots),
+        updatedPlayers = results.flatMap(_.updatedPlayers),
+        archivedSnapshots = results.flatMap(_.archivedSnapshots),
         newMemberships = results.flatMap(_.newMemberships),
         closedMemberships = results.flatMap(_.closedMemberships)
       )
@@ -77,7 +80,7 @@ private[membership] object MembershipClassify {
   ): RIO[Transactor, PhaseBMemberResult] = {
     val since = java.time.Instant.ofEpochSecond(joinedEpoch)
     def resolved(playerId: PlayerId) =
-      PhaseBMemberResult(playerId, Chunk.empty, Chunk.empty, Chunk.empty, Chunk.empty, Chunk.empty)
+      PhaseBMemberResult(playerId, Chunk.empty, Chunk.empty, Chunk.empty, Chunk.empty, Chunk.empty, Chunk.empty)
 
     dbState.membersByUsername.get(username) match {
       case Some(state) if state.member.sinceApproximate =>
@@ -95,7 +98,7 @@ private[membership] object MembershipClassify {
         val newMember    = ClubMember(clubId, state.player.playerId, since, None, sinceApproximate = false)
         val change = MemberChangeSummary(state.player.playerId, username, Chunk(Rejoined(since, state.member.since)))
         ZIO.succeed(PhaseBMemberResult(
-          state.player.playerId, Chunk(change), Chunk.empty, Chunk.empty, Chunk(newMember), Chunk(closedMember)
+          state.player.playerId, Chunk(change), Chunk.empty, Chunk.empty, Chunk.empty, Chunk(newMember), Chunk(closedMember)
         ))
 
       case None =>
@@ -104,23 +107,24 @@ private[membership] object MembershipClassify {
         else {
           dbState.knownPlayersByUsername.get(username) match {
             case None => fetchAndClassifyNewMember(client, clubId, username, since, dbState, now)
-            case Some(snapshot) =>
-              val playerId = snapshot.playerId
+            case Some(knownPlayer) =>
+              val playerId = knownPlayer.playerId
               dbState.membersByPlayerId.get(playerId) match {
                 case Some(state) =>
-                  // Username change detected via trusted snapshot
+                  // Username change detected via trusted player lookup
                   val change =
                     MemberChangeSummary(playerId, username, Chunk(UsernameChange(now, state.player.username)))
-                  val newSnapshot = PlayerSnapshot(playerId, now, username, snapshot.status, snapshot.title)
+                  val archive = state.player.toSnapshot
+                  val updated = state.player.copy(username = username, since = now)
                   ZIO.succeed(PhaseBMemberResult(
-                    playerId, Chunk(change), Chunk.empty, Chunk(newSnapshot), Chunk.empty, Chunk.empty
+                    playerId, Chunk(change), Chunk.empty, Chunk(updated), Chunk(archive), Chunk.empty, Chunk.empty
                   ))
                 case None =>
                   // Known player joined this club
                   val newMember = ClubMember(clubId, playerId, since, None, sinceApproximate = false)
                   val change    = MemberChangeSummary(playerId, username, Chunk(JoinedClub(since)))
                   ZIO.succeed(PhaseBMemberResult(
-                    playerId, Chunk(change), Chunk.empty, Chunk.empty, Chunk(newMember), Chunk.empty
+                    playerId, Chunk(change), Chunk.empty, Chunk.empty, Chunk.empty, Chunk(newMember), Chunk.empty
                   ))
               }
           }
@@ -143,49 +147,45 @@ private[membership] object MembershipClassify {
       dbState.membersByPlayerId.get(playerId) match {
         case Some(state) =>
           // Username change: same player ID, different username
-          val (snapshots, changes) = snapshotChanges(state, username, statusCategory, apiPlayer.title, playerId, now)
-          val summary              = MemberChangeSummary(playerId, username, changes)
-          ZIO.succeed(PhaseBMemberResult(playerId, Chunk(summary), Chunk.empty, snapshots, Chunk.empty, Chunk.empty))
+          val (updated, archive, changes) = playerChanges(state, username, statusCategory, apiPlayer.title, now)
+          val summary = MemberChangeSummary(playerId, username, changes)
+          ZIO.succeed(PhaseBMemberResult(
+            playerId, Chunk(summary), Chunk.empty, Chunk.fromIterable(updated), Chunk.fromIterable(archive), Chunk.empty, Chunk.empty
+          ))
 
         case None =>
           // Check if player exists in DB at all
-          Player.selectId(playerId).flatMap {
-            case Some(_) =>
+          Player.selectId(playerId).map {
+            case Some(existing) =>
               // Player exists but not current club member — joined club
-              val newMember      = ClubMember(clubId, playerId, since, None, sinceApproximate = false)
-              val snapshotChunks = Chunk.newBuilder[PlayerSnapshot]
-              val changeChunks   = Chunk.newBuilder[MemberChange]
-
+              val newMember    = ClubMember(clubId, playerId, since, None, sinceApproximate = false)
+              val changeChunks = Chunk.newBuilder[MemberChange]
               changeChunks += JoinedClub(since)
 
-              // Check if snapshot needs updating
-              PlayerSnapshot.selectIdLatest(playerId).map { latestOpt =>
-                val needsSnapshot = latestOpt.forall(l =>
-                  l.username != username || l.status != statusCategory || l.title != apiPlayer.title
-                )
-                if (needsSnapshot) {
-                  snapshotChunks += PlayerSnapshot(playerId, now, username, statusCategory, apiPlayer.title)
-                  latestOpt.foreach { latest =>
-                    if (latest.username != username) { changeChunks += UsernameChange(now, latest.username) }
-                    if (latest.status != statusCategory) { changeChunks += StatusChange(now, latest.status) }
-                  }
-                }
+              val needsUpdate = !existing.stateMatches(username, statusCategory, apiPlayer.title)
+              val (updatedOpt, archiveOpt) = if (needsUpdate) {
+                if (existing.username != username) { changeChunks += UsernameChange(now, existing.username) }
+                if (existing.status != statusCategory) { changeChunks += StatusChange(now, existing.status) }
+                val archive = existing.toSnapshot
+                val updated = existing.copy(username = username, status = statusCategory, title = apiPlayer.title, since = now)
+                (Chunk(updated), Chunk(archive))
+              } else { (Chunk.empty, Chunk.empty) }
 
-                val summary = MemberChangeSummary(playerId, username, changeChunks.result())
-                PhaseBMemberResult(
-                  playerId, Chunk(summary), Chunk.empty, snapshotChunks.result(), Chunk(newMember), Chunk.empty
-                )
-              }
+              val summary = MemberChangeSummary(playerId, username, changeChunks.result())
+              PhaseBMemberResult(
+                playerId, Chunk(summary), Chunk.empty, updatedOpt, archiveOpt, Chunk(newMember), Chunk.empty
+              )
 
             case None =>
-              // Brand new player
-              val player   = Player(playerId, java.time.Instant.ofEpochSecond(apiPlayer.joined))
-              val snapshot = PlayerSnapshot(playerId, now, username, statusCategory, apiPlayer.title)
-              val member   = ClubMember(clubId, playerId, since, None, sinceApproximate = false)
-              val summary  = MemberChangeSummary(playerId, username, Chunk(NewMember(since)))
-              ZIO.succeed(PhaseBMemberResult(
-                playerId, Chunk(summary), Chunk(player), Chunk(snapshot), Chunk(member), Chunk.empty
-              ))
+              // Brand new player — create with all fields, no snapshot
+              val player = Player(
+                playerId, apiPlayer.joinedAt, username, statusCategory, apiPlayer.title, now
+              )
+              val member  = ClubMember(clubId, playerId, since, None, sinceApproximate = false)
+              val summary = MemberChangeSummary(playerId, username, Chunk(NewMember(since)))
+              PhaseBMemberResult(
+                playerId, Chunk(summary), Chunk(player), Chunk.empty, Chunk.empty, Chunk(member), Chunk.empty
+              )
           }
       }
     }
@@ -194,13 +194,15 @@ private[membership] object MembershipClassify {
 
   final case class PhaseCResult(
     changes: Chunk[MemberChangeSummary],
-    newSnapshots: Chunk[PlayerSnapshot],
+    updatedPlayers: Chunk[Player],
+    archivedSnapshots: Chunk[PlayerSnapshot],
     closedMemberships: Chunk[ClubMember]
   )
 
   private case class PhaseCMemberResult(
     changes: Chunk[MemberChangeSummary],
-    newSnapshots: Chunk[PlayerSnapshot],
+    updatedPlayers: Chunk[Player],
+    archivedSnapshots: Chunk[PlayerSnapshot],
     closedMemberships: Chunk[ClubMember]
   )
 
@@ -227,7 +229,8 @@ private[membership] object MembershipClassify {
         }
       } yield PhaseCResult(
         changes = results.flatMap(_.changes),
-        newSnapshots = results.flatMap(_.newSnapshots),
+        updatedPlayers = results.flatMap(_.updatedPlayers),
+        archivedSnapshots = results.flatMap(_.archivedSnapshots),
         closedMemberships = results.flatMap(_.closedMemberships)
       )
     }
@@ -250,10 +253,10 @@ private[membership] object MembershipClassify {
         if (apiPlayer.playerId != playerId) {
           matchRefFallback(client, state, closedMember, apiMap, clubSlug, now)
         } else {
-          val statusCategory   = apiPlayer.status.category
+          val statusCategory    = apiPlayer.status.category
           val lastOnlineInstant = java.time.Instant.ofEpochSecond(apiPlayer.lastOnline)
-          val (snapshots, extraChanges) =
-            snapshotChanges(state, apiPlayer.username, statusCategory, apiPlayer.title, playerId, now)
+          val (updated, archive, extraChanges) =
+            playerChanges(state, apiPlayer.username, statusCategory, apiPlayer.title, now)
           val primaryChange =
             if (statusCategory == PlayerStatusCategory.Active) { Chunk(LeftClub(now)) }
             else { Chunk(AccountClosed(lastOnlineInstant, statusCategory)) }
@@ -261,12 +264,12 @@ private[membership] object MembershipClassify {
           val summary    = MemberChangeSummary(playerId, apiPlayer.username, allChanges)
 
           if (statusCategory == PlayerStatusCategory.Active) {
-            ZIO.succeed(PhaseCMemberResult(Chunk(summary), snapshots, Chunk(closedMember)))
+            ZIO.succeed(PhaseCMemberResult(Chunk(summary), Chunk.fromIterable(updated), Chunk.fromIterable(archive), Chunk(closedMember)))
           } else {
             val closedAtLastOnline = state.member.copy(until = Some(lastOnlineInstant))
             checkClubMembership(client, clubSlug, apiPlayer.username).map { stillMember =>
               PhaseCMemberResult(
-                Chunk(summary), snapshots,
+                Chunk(summary), Chunk.fromIterable(updated), Chunk.fromIterable(archive),
                 if (stillMember) { Chunk.empty } else { Chunk(closedAtLastOnline) }
               )
             }
@@ -275,21 +278,24 @@ private[membership] object MembershipClassify {
     )
   }
 
-  private def snapshotChanges(
+  /** Compares new API data against the existing player state. If anything changed,
+    * returns the updated Player, an archive snapshot of the old state, and the changes.
+    */
+  private def playerChanges(
     state: MemberState,
     username: Username,
     statusCategory: PlayerStatusCategory,
     title: Option[ccas.api.misc.enums.Title],
-    playerId: PlayerId,
     now: java.time.Instant
-  ): (Chunk[PlayerSnapshot], Chunk[MemberChange]) =
-    if (state.player.status != statusCategory || state.player.username != username || state.player.title != title) {
-      val snapshot = PlayerSnapshot(playerId, now, username, statusCategory, title)
-      val changes  = Chunk.newBuilder[MemberChange]
+  ): (Option[Player], Option[PlayerSnapshot], Chunk[MemberChange]) =
+    if (!state.player.stateMatches(username, statusCategory, title)) {
+      val archive = state.player.toSnapshot
+      val updated = state.player.copy(username = username, status = statusCategory, title = title, since = now)
+      val changes = Chunk.newBuilder[MemberChange]
       if (state.player.status != statusCategory) { changes += StatusChange(now, state.player.status) }
       if (state.player.username != username) { changes += UsernameChange(now, state.player.username) }
-      (Chunk(snapshot), changes.result())
-    } else { (Chunk.empty, Chunk.empty) }
+      (Some(updated), Some(archive), changes.result())
+    } else { (None, None, Chunk.empty) }
 
   private def checkClubMembership(
     client: ChessComClient,
@@ -314,6 +320,7 @@ private[membership] object MembershipClassify {
     def unresolvable: PhaseCMemberResult = PhaseCMemberResult(
       Chunk(MemberChangeSummary(playerId, oldUsername, Chunk(Unresolvable(now, oldUsername)))),
       Chunk.empty,
+      Chunk.empty,
       Chunk(closedMember)
     )
 
@@ -328,11 +335,13 @@ private[membership] object MembershipClassify {
       case None => ZIO.succeed(unresolvable)
       case Some(resolvedUsername) =>
         def onProfileFetchFailed: UIO[PhaseCMemberResult] = {
-          val snapshot = PlayerSnapshot(playerId, now, resolvedUsername, state.player.status, state.player.title)
-          val changes  = Chunk(UsernameChange(now, oldUsername))
+          val archive = state.player.toSnapshot
+          val updated = state.player.copy(username = resolvedUsername, since = now)
+          val changes = Chunk(UsernameChange(now, oldUsername))
           ZIO.succeed(PhaseCMemberResult(
             Chunk(MemberChangeSummary(playerId, resolvedUsername, changes)),
-            Chunk(snapshot),
+            Chunk(updated),
+            Chunk(archive),
             Chunk(closedMember)
           ))
         }
@@ -340,7 +349,10 @@ private[membership] object MembershipClassify {
         def onProfileResolved(resolvedProfile: ApiPlayer): Task[PhaseCMemberResult] = {
           val statusCategory    = resolvedProfile.status.category
           val lastOnlineInstant = java.time.Instant.ofEpochSecond(resolvedProfile.lastOnline)
-          val snapshot = PlayerSnapshot(playerId, now, resolvedUsername, statusCategory, resolvedProfile.title)
+          val archive = state.player.toSnapshot
+          val updated = state.player.copy(
+            username = resolvedUsername, status = statusCategory, title = resolvedProfile.title, since = now
+          )
           val changes = Chunk(UsernameChange(now, oldUsername)) ++
             Option.when(state.player.status != statusCategory)(StatusChange(now, state.player.status))
 
@@ -349,7 +361,8 @@ private[membership] object MembershipClassify {
             val leftOpt = Option.unless(hasLeft)(LeftClub(now))
             ZIO.succeed(PhaseCMemberResult(
               Chunk(MemberChangeSummary(playerId, resolvedUsername, changes ++ leftOpt)),
-              Chunk(snapshot),
+              Chunk(updated),
+              Chunk(archive),
               Chunk.fromIterable(Option.when(hasLeft)(closedMember))
             ))
           } else {
@@ -358,7 +371,8 @@ private[membership] object MembershipClassify {
               val allChanges = changes :+ AccountClosed(lastOnlineInstant, statusCategory)
               PhaseCMemberResult(
                 Chunk(MemberChangeSummary(playerId, resolvedUsername, allChanges)),
-                Chunk(snapshot),
+                Chunk(updated),
+                Chunk(archive),
                 if (stillMember) { Chunk.empty } else { Chunk(closedAtLastOnline) }
               )
             }

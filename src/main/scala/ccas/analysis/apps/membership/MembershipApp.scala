@@ -8,6 +8,7 @@ import ccas.utils.{CcasLogger, OutputFile}
 import ccas.utils.client.ChessComClient
 import ccas.utils.errors.BadRequestException
 import ccas.utils.sql.DataSourceLayer
+import ccas.utils.sql.SqlZioTypes.withTransaction
 import com.augustnagro.magnum.Transactor
 import zio.http.Client
 import zio.{Chunk, RIO, Scope, Task, ZIO, ZIOAppArgs, ZIOAppDefault}
@@ -112,15 +113,15 @@ object MembershipApp extends ZIOAppDefault {
 
   private[membership] def buildDbState(clubId: ClubId): RIO[Transactor, DbState] =
     for {
-      snapshots <- PlayerSnapshot.selectLatest
-      members   <- ClubMember.selectClubCurrent(clubId)
+      players <- Player.selectAll
+      members <- ClubMember.selectClubCurrent(clubId)
     } yield {
-      val snapshotMap = snapshots.map(s => s.playerId -> s).toMap
-      val states      = members.flatMap(m => snapshotMap.get(m.playerId).map(s => MemberState(s, m)))
+      val playerMap = players.map(p => p.playerId -> p).toMap
+      val states    = members.flatMap(m => playerMap.get(m.playerId).map(p => MemberState(p, m)))
       DbState(
         membersByPlayerId = states.map(s => s.player.playerId -> s).toMap,
         membersByUsername = states.map(s => s.player.username -> s).toMap,
-        knownPlayersByUsername = snapshots.map(s => s.username -> s).toMap
+        knownPlayersByUsername = players.map(p => p.username -> p).toMap
       )
     }
 
@@ -137,7 +138,8 @@ object MembershipApp extends ZIOAppDefault {
     ReconciliationResult(
       changes = b.changes ++ c.changes,
       newPlayers = b.newPlayers,
-      newSnapshots = b.newSnapshots ++ c.newSnapshots,
+      updatedPlayers = b.updatedPlayers ++ c.updatedPlayers,
+      archivedSnapshots = b.archivedSnapshots ++ c.archivedSnapshots,
       newMemberships = b.newMemberships,
       closedMemberships = b.closedMemberships ++ c.closedMemberships,
       currentMemberCount = currentMemberCount,
@@ -146,17 +148,24 @@ object MembershipApp extends ZIOAppDefault {
       completedAt = completedAt
     )
 
-  private def persist(b: MembershipClassify.PhaseBResult, c: MembershipClassify.PhaseCResult): RIO[Transactor, Unit] = {
-    val allSnapshots    = b.newSnapshots ++ c.newSnapshots
+  private def persist(
+    b: MembershipClassify.PhaseBResult,
+    c: MembershipClassify.PhaseCResult
+  ): RIO[Transactor, Unit] = {
+    val allUpdated      = b.updatedPlayers ++ c.updatedPlayers
+    val allArchived     = b.archivedSnapshots ++ c.archivedSnapshots
     val allClosedMships = b.closedMemberships ++ c.closedMemberships
-    for {
-      _ <- ZIO.whenDiscard(b.newPlayers.nonEmpty)(Player.insertBatch(b.newPlayers))
-      _ <- ZIO.collectAllParDiscard(List(
-        ZIO.whenDiscard(allSnapshots.nonEmpty)(PlayerSnapshot.insertBatch(allSnapshots)),
-        ZIO.whenDiscard(b.newMemberships.nonEmpty)(ClubMember.insertBatch(b.newMemberships)),
-        ZIO.whenDiscard(allClosedMships.nonEmpty)(ClubMember.updateBatch(allClosedMships))
-      ))
-    } yield ()
+    // Username swaps within the batch are handled by the DEFERRABLE INITIALLY DEFERRED
+    // constraint, which checks uniqueness at commit time rather than per-statement.
+    withTransaction {
+      for {
+        _ <- ZIO.whenDiscard(b.newPlayers.nonEmpty)(Player.insertBatch(b.newPlayers))
+        _ <- ZIO.whenDiscard(allArchived.nonEmpty)(PlayerSnapshot.insertBatch(allArchived))
+        _ <- ZIO.whenDiscard(allUpdated.nonEmpty)(Player.updateCurrentStateBatch(allUpdated))
+        _ <- ZIO.whenDiscard(b.newMemberships.nonEmpty)(ClubMember.insertBatch(b.newMemberships))
+        _ <- ZIO.whenDiscard(allClosedMships.nonEmpty)(ClubMember.updateBatch(allClosedMships))
+      } yield ()
+    }
   }
 
   // --- Helpers ---

@@ -112,12 +112,8 @@ object RefApp extends ZIOAppDefault {
   private def selectUnresolvedPlayers: RIO[Transactor, List[UnresolvedPlayer]] = {
     val c = RetryWindows.allCutoffs(Instant.now())
     connectZIO {
-      sql"""SELECT p.player_id, ps.username
+      sql"""SELECT p.player_id, p.username
             FROM player p
-            JOIN LATERAL (
-              SELECT username FROM player_snapshot
-              WHERE player_id = p.player_id ORDER BY since DESC LIMIT 1
-            ) ps ON true
             LEFT JOIN player_match_ref pmr ON p.player_id = pmr.player_id
             LEFT JOIN player_tournament_ref ptr ON p.player_id = ptr.player_id
             LEFT JOIN player_ref_skip prs ON p.player_id = prs.player_id

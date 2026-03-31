@@ -5,6 +5,7 @@ import java.time.Instant
 import com.augustnagro.magnum.Transactor
 import zio.{RIO, ZIO}
 
+import ccas.analysis.apps.PlayerUpdater
 import ccas.analysis.apps.ref.RefHelpers
 import ccas.analysis.tables.*
 import ccas.api.misc.subtypes.{PlayerId, Username}
@@ -19,23 +20,28 @@ private[recruitment] object RecruitmentPersistence {
     now: Instant,
     candidate: CandidateContext,
     outcome: CandidateOutcome,
+    client: ChessComClient,
     errorMessage: Option[String] = None
   ): RIO[Transactor, Unit] =
     // No player data (transient API error) — skip persistence, retry next run
     ZIO.foreachDiscard(candidate.apiPlayer) { ap =>
       withTransaction {
         for {
-          _ <- ZIO.whenDiscard(candidate.isNewPlayer)(
-            Player.insert(Player(ap.playerId, Instant.ofEpochSecond(ap.joined)))
-          )
-          _ <- {
-            val snap = PlayerSnapshot(ap.playerId, now, candidate.username, ap.status.category, ap.title)
-            PlayerSnapshot.selectIdLatest(ap.playerId).flatMap {
-              case Some(latest)
-                  if latest.username == snap.username && latest.status == snap.status && latest.title == snap.title =>
+          _ <- if (candidate.isNewPlayer) {
+            Player.insert(Player(
+              ap.playerId, ap.joinedAt,
+              candidate.username, ap.status.category, ap.title, now
+            )).unit
+          } else {
+            Player.selectIdForUpdate(ap.playerId).flatMap {
+              case Some(existing)
+                  if existing.stateMatches(candidate.username, ap.status.category, ap.title) =>
                 ZIO.unit
-              case _ =>
-                PlayerSnapshot.insert(snap)
+              case Some(existing) =>
+                PlayerUpdater.archiveAndUpdate(
+                  existing, candidate.username, ap.status.category, ap.title, now, client
+                ).unit
+              case None => ZIO.unit
             }
           }
           _ <- ZIO.foreachDiscard(candidate.cache)(PlayerRecruitmentCache.upsert)
