@@ -3,8 +3,8 @@ package ccas.analysis.apps.recruitment
 import java.time.{Duration, Instant}
 
 import com.augustnagro.magnum.Transactor
-import zio.ZIO
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
+import zio.ZIO
 
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.*
 import ccas.analysis.tables.*

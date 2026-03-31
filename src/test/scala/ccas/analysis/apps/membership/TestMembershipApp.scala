@@ -7,9 +7,9 @@ import zio.{durationInt, Chunk, Fiber, RIO, Ref, Scope, Semaphore, Trace, ZIO}
 import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
-import ccas.analysis.apps.membership.MembershipClassify.{PhaseBResult, PhaseCResult}
 import ccas.analysis.apps.membership.MembershipChange.*
 import ccas.analysis.apps.membership.MembershipChange.MemberChange.*
+import ccas.analysis.apps.membership.MembershipClassify.{PhaseBResult, PhaseCResult}
 import ccas.analysis.tables.{Club, ClubMember, Player, PlayerSnapshot, Tables}
 import ccas.api.misc.enums.PlayerStatusCategory.{Active, Closed}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
@@ -69,17 +69,17 @@ object TestMembershipApp extends ZIOSpecDefault {
     failures: Set[String] = Set.empty
   ): RIO[Transactor, ChessComClient] =
     for {
-      transactor <- ZIO.service[Transactor]
-      semaphore  <- Semaphore.make(1)
-      stateRef   <- Ref.make(ChessComClient.ThrottleState(1, 0, Vector.empty))
-      reserveRef  <- Ref.make(Chunk.empty[Fiber.Runtime[Nothing, Nothing]])
-      adjustMutex <- Semaphore.make(1)
-      activeRef   <- Ref.make(0)
+      transactor    <- ZIO.service[Transactor]
+      semaphore     <- Semaphore.make(1)
+      stateRef      <- Ref.make(ChessComClient.ThrottleState(1, 0, Vector.empty))
+      reserveRef    <- Ref.make(Chunk.empty[Fiber.Runtime[Nothing, Nothing]])
+      adjustMutex   <- Semaphore.make(1)
+      activeRef     <- Ref.make(0)
       rateLimitGate <- Semaphore.make(1)
-      lastReqRef  <- Ref.make(0L)
-      ema         <- Ref.make(0.0)
-      bar         <- TestCcasLogger.noopBar
-      stats       <- Ref.make(ChessComClient.StatsAccumulator())
+      lastReqRef    <- Ref.make(0L)
+      ema           <- Ref.make(0.0)
+      bar           <- TestCcasLogger.noopBar
+      stats         <- Ref.make(ChessComClient.StatsAccumulator())
     } yield {
       val routes: Routes[Any, Response] = Routes(
         Method.GET / "pub" / "player" / string("username") -> handler { (username: String, _: Request) =>
@@ -110,7 +110,16 @@ object TestMembershipApp extends ZIOSpecDefault {
         ): ZIO[Env1 & Scope, Throwable, Response] =
           ZIO.die(new UnsupportedOperationException)
       }
-      val refs = ChessComClient.ThrottleRefs(semaphore, stateRef, reserveRef, adjustMutex, activeRef, rateLimitGate, lastReqRef, ema)
+      val refs = ChessComClient.ThrottleRefs(
+        semaphore,
+        stateRef,
+        reserveRef,
+        adjustMutex,
+        activeRef,
+        rateLimitGate,
+        lastReqRef,
+        ema
+      )
       ChessComClient(
         ZClient.fromDriver(driver),
         transactor,
@@ -253,18 +262,26 @@ object TestMembershipApp extends ZIOSpecDefault {
 
   private def suiteMergeResults = suite("mergeResults")(
     test("concatenates PhaseBResult and PhaseCResult fields") {
-      val bChange    = MemberChangeSummary(pid0, Username("alice"), Chunk(NewMember(Times.t1)))
-      val cChange    = MemberChangeSummary(pid1, Username("bob"), Chunk(LeftClub(Times.t1)))
-      val bPlayer    = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0)
-      val bUpdated   = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t1)
-      val bArchived  = PlayerSnapshot(pid0, Times.t0, Username("alice"), Active, None)
-      val cUpdated   = Player(pid1, Times.t0, Username("bob"), Closed, None, Times.t1)
-      val cArchived  = PlayerSnapshot(pid1, Times.t0, Username("bob"), Active, None)
-      val bMember    = ClubMember(clubId, pid0, Times.t1, None)
-      val bClosed    = ClubMember(clubId, pid2, Times.t0, Some(Times.t1))
-      val cClosed    = ClubMember(clubId, pid1, Times.t0, Some(Times.t1))
+      val bChange   = MemberChangeSummary(pid0, Username("alice"), Chunk(NewMember(Times.t1)))
+      val cChange   = MemberChangeSummary(pid1, Username("bob"), Chunk(LeftClub(Times.t1)))
+      val bPlayer   = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0)
+      val bUpdated  = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t1)
+      val bArchived = PlayerSnapshot(pid0, Times.t0, Username("alice"), Active, None)
+      val cUpdated  = Player(pid1, Times.t0, Username("bob"), Closed, None, Times.t1)
+      val cArchived = PlayerSnapshot(pid1, Times.t0, Username("bob"), Active, None)
+      val bMember   = ClubMember(clubId, pid0, Times.t1, None)
+      val bClosed   = ClubMember(clubId, pid2, Times.t0, Some(Times.t1))
+      val cClosed   = ClubMember(clubId, pid1, Times.t0, Some(Times.t1))
 
-      val phaseB = PhaseBResult(Set(pid0), Chunk(bChange), Chunk(bPlayer), Chunk(bUpdated), Chunk(bArchived), Chunk(bMember), Chunk(bClosed))
+      val phaseB = PhaseBResult(
+        Set(pid0),
+        Chunk(bChange),
+        Chunk(bPlayer),
+        Chunk(bUpdated),
+        Chunk(bArchived),
+        Chunk(bMember),
+        Chunk(bClosed)
+      )
       val phaseC = PhaseCResult(Chunk(cChange), Chunk(cUpdated), Chunk(cArchived), Chunk(cClosed))
       val result = MembershipApp.mergeResults(phaseB, phaseC, 10, 8, Times.t0, Times.t1)
 
@@ -285,7 +302,7 @@ object TestMembershipApp extends ZIOSpecDefault {
 
   private def suiteFormatReport = suite("formatReport")(
     test("empty summaries → 'No changes'") {
-      val rr = MembershipReport.ReportResult(Nil, 10, 10)
+      val rr     = MembershipReport.ReportResult(Nil, 10, 10)
       val output = MembershipReport.formatReport(rr)
       assertTrue(
         output.contains("Total members: 10 (+0)"),
@@ -294,10 +311,14 @@ object TestMembershipApp extends ZIOSpecDefault {
     },
     test("groups changes by category, not by player") {
       val summaries = List(
-        MemberChangeSummary(pid0, Username("alice"), Chunk(NewMember(Times.t1), UsernameChange(Times.t2, Username("alice-old")))),
+        MemberChangeSummary(
+          pid0,
+          Username("alice"),
+          Chunk(NewMember(Times.t1), UsernameChange(Times.t2, Username("alice-old")))
+        ),
         MemberChangeSummary(pid1, Username("bob"), Chunk(NewMember(Times.t1)))
       )
-      val rr = MembershipReport.ReportResult(summaries, 8, 10)
+      val rr     = MembershipReport.ReportResult(summaries, 8, 10)
       val output = MembershipReport.formatReport(rr)
       assertTrue(
         output.contains("[JOINED]\n  alice"),
@@ -310,7 +331,7 @@ object TestMembershipApp extends ZIOSpecDefault {
         MemberChangeSummary(pid0, Username("alice"), Chunk(UsernameChange(Times.t2, Username("old")))),
         MemberChangeSummary(pid1, Username("bob"), Chunk(NewMember(Times.t1)))
       )
-      val rr = MembershipReport.ReportResult(summaries, 8, 9)
+      val rr     = MembershipReport.ReportResult(summaries, 8, 9)
       val output = MembershipReport.formatReport(rr)
       val newIdx = output.indexOf("[JOINED]")
       val usrIdx = output.indexOf("[USERNAME CHANGE]")
@@ -325,14 +346,14 @@ object TestMembershipApp extends ZIOSpecDefault {
         MemberChangeSummary(pid0, Username("bob"), Chunk(NewMember(Times.t2))),
         MemberChangeSummary(pid1, Username("alice"), Chunk(NewMember(Times.t1)))
       )
-      val rr = MembershipReport.ReportResult(summaries, 8, 10)
-      val output = MembershipReport.formatReport(rr)
+      val rr       = MembershipReport.ReportResult(summaries, 8, 10)
+      val output   = MembershipReport.formatReport(rr)
       val aliceIdx = output.indexOf("alice")
       val bobIdx   = output.indexOf("bob")
       assertTrue(aliceIdx < bobIdx)
     },
     test("shows member count delta") {
-      val rr = MembershipReport.ReportResult(Nil, 12, 10)
+      val rr     = MembershipReport.ReportResult(Nil, 12, 10)
       val output = MembershipReport.formatReport(rr)
       assertTrue(output.contains("Total members: 10 (-2)"))
     }

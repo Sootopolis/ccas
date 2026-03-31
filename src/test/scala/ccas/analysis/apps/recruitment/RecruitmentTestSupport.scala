@@ -9,10 +9,10 @@ import zio.http.*
 import ccas.analysis.tables.*
 import ccas.api.club.ApiClubMatches
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
-import ccas.utils.TestCcasLogger
 import ccas.utils.client.ChessComClient
-import ccas.utils.sql.SqlZioTypes
 import ccas.utils.sql.DbCodecs.given
+import ccas.utils.sql.SqlZioTypes
+import ccas.utils.TestCcasLogger
 
 object RecruitmentTestSupport {
 
@@ -246,17 +246,17 @@ object RecruitmentTestSupport {
     failures: Set[String] = Set.empty
   ): RIO[Transactor, ChessComClient] =
     for {
-      transactor  <- ZIO.service[Transactor]
-      semaphore   <- Semaphore.make(1)
-      stateRef    <- Ref.make(ChessComClient.ThrottleState(1, 0, Vector.empty))
-      reserveRef  <- Ref.make(Chunk.empty[Fiber.Runtime[Nothing, Nothing]])
-      adjustMutex <- Semaphore.make(1)
-      activeRef   <- Ref.make(0)
+      transactor    <- ZIO.service[Transactor]
+      semaphore     <- Semaphore.make(1)
+      stateRef      <- Ref.make(ChessComClient.ThrottleState(1, 0, Vector.empty))
+      reserveRef    <- Ref.make(Chunk.empty[Fiber.Runtime[Nothing, Nothing]])
+      adjustMutex   <- Semaphore.make(1)
+      activeRef     <- Ref.make(0)
       rateLimitGate <- Semaphore.make(1)
-      lastReqRef  <- Ref.make(0L)
-      ema         <- Ref.make(0.0)
-      bar         <- TestCcasLogger.noopBar
-      stats       <- Ref.make(ChessComClient.StatsAccumulator())
+      lastReqRef    <- Ref.make(0L)
+      ema           <- Ref.make(0.0)
+      bar           <- TestCcasLogger.noopBar
+      stats         <- Ref.make(ChessComClient.StatsAccumulator())
     } yield {
       val routes: Routes[Any, Response] = Routes(
         // Player stats endpoint
@@ -326,7 +326,16 @@ object RecruitmentTestSupport {
         ): ZIO[Env1 & Scope, Throwable, Response] =
           ZIO.die(new UnsupportedOperationException)
       }
-      val refs = ChessComClient.ThrottleRefs(semaphore, stateRef, reserveRef, adjustMutex, activeRef, rateLimitGate, lastReqRef, ema)
+      val refs = ChessComClient.ThrottleRefs(
+        semaphore,
+        stateRef,
+        reserveRef,
+        adjustMutex,
+        activeRef,
+        rateLimitGate,
+        lastReqRef,
+        ema
+      )
       ChessComClient(
         ZClient.fromDriver(driver),
         transactor,
@@ -351,18 +360,18 @@ object RecruitmentTestSupport {
     gate: Promise[Nothing, Unit]
   ): RIO[Transactor, ChessComClient] =
     for {
-      transactor  <- ZIO.service[Transactor]
-      semaphore   <- Semaphore.make(5)
-      stateRef    <- Ref.make(ChessComClient.ThrottleState(5, 0, Vector.empty))
-      reserveRef  <- Ref.make(Chunk.empty[Fiber.Runtime[Nothing, Nothing]])
-      adjustMutex <- Semaphore.make(1)
-      activeRef   <- Ref.make(0)
+      transactor    <- ZIO.service[Transactor]
+      semaphore     <- Semaphore.make(5)
+      stateRef      <- Ref.make(ChessComClient.ThrottleState(5, 0, Vector.empty))
+      reserveRef    <- Ref.make(Chunk.empty[Fiber.Runtime[Nothing, Nothing]])
+      adjustMutex   <- Semaphore.make(1)
+      activeRef     <- Ref.make(0)
       rateLimitGate <- Semaphore.make(1)
-      lastReqRef  <- Ref.make(0L)
-      ema         <- Ref.make(0.0)
-      bar         <- TestCcasLogger.noopBar
-      stats       <- Ref.make(ChessComClient.StatsAccumulator())
-      playerCount <- Ref.make(0)
+      lastReqRef    <- Ref.make(0L)
+      ema           <- Ref.make(0.0)
+      bar           <- TestCcasLogger.noopBar
+      stats         <- Ref.make(ChessComClient.StatsAccumulator())
+      playerCount   <- Ref.make(0)
     } yield {
       val routes: Routes[Any, Response] = Routes(
         Method.GET / "pub" / "player" / string("username") / "stats" -> handler { (username: String, _: Request) =>
@@ -424,7 +433,16 @@ object RecruitmentTestSupport {
         ): ZIO[Env1 & Scope, Throwable, Response] =
           ZIO.die(new UnsupportedOperationException)
       }
-      val refs = ChessComClient.ThrottleRefs(semaphore, stateRef, reserveRef, adjustMutex, activeRef, rateLimitGate, lastReqRef, ema)
+      val refs = ChessComClient.ThrottleRefs(
+        semaphore,
+        stateRef,
+        reserveRef,
+        adjustMutex,
+        activeRef,
+        rateLimitGate,
+        lastReqRef,
+        ema
+      )
       ChessComClient(
         ZClient.fromDriver(driver),
         transactor,
@@ -491,7 +509,9 @@ object RecruitmentTestSupport {
           PlayerId(999)
         )
       ) { pid =>
-        SqlZioTypes.connectZIO(sql"DELETE FROM club_match_board WHERE team1_player_id = $pid OR team2_player_id = $pid".update.run()) *>
+        SqlZioTypes.connectZIO(
+          sql"DELETE FROM club_match_board WHERE team1_player_id = $pid OR team2_player_id = $pid".update.run()
+        ) *>
           SqlZioTypes.connectZIO(sql"DELETE FROM player_match_ref WHERE player_id = $pid".update.run()) *>
           SqlZioTypes.connectZIO(sql"DELETE FROM player_snapshot WHERE player_id = $pid".update.run()) *>
           SqlZioTypes.connectZIO(sql"DELETE FROM player WHERE player_id = $pid".update.run())

@@ -7,10 +7,10 @@ import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 import ccas.analysis.tables.{Club, RunTrigger}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 import ccas.server.ServerTables
-import ccas.utils.CcasLogger
 import ccas.utils.client.TestChessComClient
 import ccas.utils.sql.FreshSchemaLayer
 import ccas.utils.sql.SqlZioTypes.connectZIO
+import ccas.utils.CcasLogger
 
 object TestJobRunner extends ZIOSpecDefault {
 

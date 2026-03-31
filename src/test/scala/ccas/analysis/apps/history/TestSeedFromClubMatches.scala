@@ -48,7 +48,9 @@ object TestSeedFromClubMatches extends ZIOSpecDefault {
       s"""{"name":"Match $id","@id":"https://api.chess.com/pub/match/$id","opponent":"https://api.chess.com/pub/club/other","time_class":"daily","start_time":${Times.t0.getEpochSecond},"result":"win"}"""
     def inProgressEntry(id: Long): String =
       s"""{"name":"Match $id","@id":"https://api.chess.com/pub/match/$id","opponent":"https://api.chess.com/pub/club/other","time_class":"daily","start_time":${Times.t0.getEpochSecond}}"""
-    s"""{"finished":[${finishedIds.map(finishedEntry).mkString(",")}],"in_progress":[${inProgressIds.map(inProgressEntry).mkString(",")}],"registered":[]}"""
+    s"""{"finished":[${finishedIds.map(finishedEntry).mkString(",")}],"in_progress":[${inProgressIds.map(
+        inProgressEntry
+      ).mkString(",")}],"registered":[]}"""
   }
 
   private def fakeChessComClient(
@@ -95,7 +97,16 @@ object TestSeedFromClubMatches extends ZIOSpecDefault {
         ): ZIO[Env1 & Scope, Throwable, Response] =
           ZIO.die(new UnsupportedOperationException)
       }
-      val refs = ChessComClient.ThrottleRefs(semaphore, stateRef, reserveRef, adjustMutex, activeRef, rateLimitGate, lastReqRef, ema)
+      val refs = ChessComClient.ThrottleRefs(
+        semaphore,
+        stateRef,
+        reserveRef,
+        adjustMutex,
+        activeRef,
+        rateLimitGate,
+        lastReqRef,
+        ema
+      )
       ChessComClient(
         ZClient.fromDriver(driver),
         transactor,
@@ -124,7 +135,7 @@ object TestSeedFromClubMatches extends ZIOSpecDefault {
       _      <- ClubMatch.upsert(clubMatchRow(1001))
       _      <- ClubMatch.upsert(clubMatchRow(1002))
       client <- fakeChessComClient(json)
-      count  <- HistorySeeding.seedFromClubMatches(client, clubId, clubSlug)
+      count <- HistorySeeding.seedFromClubMatches(client, clubId, clubSlug)
         .provideSomeEnvironment[Transactor](_.add[CcasLogger](TestCcasLogger.noop))
       pending <- HistoryPendingMatch.selectClub(clubId)
     } yield assertTrue(count == 0, pending.isEmpty)
@@ -133,10 +144,10 @@ object TestSeedFromClubMatches extends ZIOSpecDefault {
   private def testSeedsAllWhenNoneKnown = test("seeds all matches when none are in club_match") {
     val json = apiClubMatchesJson(List(2001, 2002, 2003))
     for {
-      _       <- Club.upsert(club)
-      _       <- Club.upsert(opponentClub)
-      client  <- fakeChessComClient(json)
-      count   <- HistorySeeding.seedFromClubMatches(client, clubId, clubSlug)
+      _      <- Club.upsert(club)
+      _      <- Club.upsert(opponentClub)
+      client <- fakeChessComClient(json)
+      count <- HistorySeeding.seedFromClubMatches(client, clubId, clubSlug)
         .provideSomeEnvironment[Transactor](_.add[CcasLogger](TestCcasLogger.noop))
       pending <- HistoryPendingMatch.selectClub(clubId)
       _       <- ZIO.foreachDiscard(pending)(p => HistoryPendingMatch.delete(clubId, p.matchId, p.isLive))
@@ -149,11 +160,11 @@ object TestSeedFromClubMatches extends ZIOSpecDefault {
   private def testSeedsNewAlongsideKnown = test("seeds only new matches when some are already known") {
     val json = apiClubMatchesJson(List(3001, 3002, 3003))
     for {
-      _       <- Club.upsert(club)
-      _       <- Club.upsert(opponentClub)
-      _       <- ClubMatch.upsert(clubMatchRow(3001))
-      client  <- fakeChessComClient(json)
-      count   <- HistorySeeding.seedFromClubMatches(client, clubId, clubSlug)
+      _      <- Club.upsert(club)
+      _      <- Club.upsert(opponentClub)
+      _      <- ClubMatch.upsert(clubMatchRow(3001))
+      client <- fakeChessComClient(json)
+      count <- HistorySeeding.seedFromClubMatches(client, clubId, clubSlug)
         .provideSomeEnvironment[Transactor](_.add[CcasLogger](TestCcasLogger.noop))
       pending <- HistoryPendingMatch.selectClub(clubId)
       _       <- ZIO.foreachDiscard(pending)(p => HistoryPendingMatch.delete(clubId, p.matchId, p.isLive))

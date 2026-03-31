@@ -3,8 +3,8 @@ package ccas.analysis.apps.recruitment
 import java.time.{Duration, Instant}
 
 import com.augustnagro.magnum.Transactor
-import zio.RIO
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
+import zio.RIO
 
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.*
 import ccas.analysis.tables.*
@@ -129,9 +129,9 @@ object TestRecruitmentFilters extends ZIOSpecDefault {
   // Suite: Filter chain
   // ==========================================================================
 
-  /** Returns the filter chain outcome (in-memory) for a single candidate.
-    * Passing candidates are persisted as Deferred (pre-confirmation), but this helper
-    * reports the filter's judgment: Invited if the candidate passed, Rejected otherwise.
+  /** Returns the filter chain outcome (in-memory) for a single candidate. Passing candidates are persisted as Deferred
+    * (pre-confirmation), but this helper reports the filter's judgment: Invited if the candidate passed, Rejected
+    * otherwise.
     */
   private def evalSingle(
     responses: Map[String, String],
@@ -144,8 +144,9 @@ object TestRecruitmentFilters extends ZIOSpecDefault {
       runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Instant.now())
       client     <- fakeChessComClient(responses)
       invited    <- evalCandidates(client, runId, List(Username.wrap(username)), criteria)
-    } yield if (invited.contains(Username.wrap(username))) CandidateOutcome.Invited
-            else CandidateOutcome.Rejected
+    } yield
+      if (invited.contains(Username.wrap(username))) CandidateOutcome.Invited
+      else CandidateOutcome.Rejected
 
   private def suiteFilterChain = suite("filter chain")(
     test("rejects closed account") {
@@ -512,7 +513,7 @@ object TestRecruitmentFilters extends ZIOSpecDefault {
         _          <- seedDb
         criteriaId <- seedCriteria(criteria)
         // Seed alice as a former member of the club (player row needed for FK)
-        _ <- seedPlayer(pid0)
+        _      <- seedPlayer(pid0)
         _      <- ClubMember.insert(ClubMember(clubId, pid0, Times.t0, Some(Times.t1)))
         runId  <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Instant.now())
         client <- fakeChessComClient(responses)
@@ -527,7 +528,7 @@ object TestRecruitmentFilters extends ZIOSpecDefault {
         _          <- seedDb
         criteriaId <- seedCriteria(criteria)
         // Seed alice as a former member of the club
-        _ <- seedPlayer(pid0)
+        _      <- seedPlayer(pid0)
         _      <- ClubMember.insert(ClubMember(clubId, pid0, Times.t0, Some(Times.t1)))
         runId  <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Instant.now())
         client <- fakeChessComClient(responses)
@@ -551,7 +552,7 @@ object TestRecruitmentFilters extends ZIOSpecDefault {
     for {
       _ <- seedDb
       // Seed player row for FK constraint, then seed cache
-      _ <- seedPlayer(cache.playerId)
+      _          <- seedPlayer(cache.playerId)
       _          <- PlayerRecruitmentCache.upsert(cache)
       criteriaId <- seedCriteria(criteria)
       runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Instant.now())

@@ -58,7 +58,7 @@ final class ChessComClient(
       case e if isConnectionError(e) => statsRef.update(_.incConnectionErrors)
       case _                         => ZIO.unit
     }
-    string   <- response.body.asString
+    string <- response.body.asString
     cfChallenge = isCloudflareChallenge(response, string)
     _ <- if (cfChallenge) throttleDown(config.cfCooldown) else recordOutcome(response.status != Status.TooManyRequests)
     _ <- ZIO.whenDiscard(!response.status.isSuccess) {
@@ -70,27 +70,26 @@ final class ChessComClient(
 
   def get[T](url: URL)(using jsonDecoder: JsonDecoder[T]): Task[T] =
     statsRef.update(_.incRequests) *>
-    (rateDelay *> semaphore.withPermit {
-      (activeRef.updateAndGet(_ + 1).flatMap(n => updateBar(n) *> statsRef.update(_.updatePeak(n))) *>
-        rawGet(url).timed.flatMap { case (duration, result) =>
-          val ms = duration.toMillis
-          updateResponseTimeEma(ms) *> statsRef.update(_.recordLatency(ms)).as(result)
-        }).ensuring(activeRef.updateAndGet(_ - 1).flatMap(updateBar).ignore)
-    }).retry(retry429Schedule).retry(retryCfSchedule).retry(retry403Schedule).retry(retryConnectionSchedule).tapBoth(
-      error => {
-        statsRef.update(_.incFailures) *> {
-          val (msg, body) = error match {
-            case e: HttpStatusException => (Some(e.statusCode.toString), Some(e.responseBody))
-            case other                  => (Option(other.getMessage), None)
-          }
-          ApiFetchFailure
-            .insert(ApiFetchFailure(Instant.now(), url.encode, error.getClass.getSimpleName, msg, body))
-            .provideEnvironment(ZEnvironment(transactor))
-            .ignore
-        }
-      },
-      _ => statsRef.update(_.incSuccesses)
-    )
+      (rateDelay *> semaphore.withPermit {
+        (activeRef.updateAndGet(_ + 1).flatMap(n => updateBar(n) *> statsRef.update(_.updatePeak(n))) *>
+          rawGet(url).timed.flatMap { case (duration, result) =>
+            val ms = duration.toMillis
+            updateResponseTimeEma(ms) *> statsRef.update(_.recordLatency(ms)).as(result)
+          }).ensuring(activeRef.updateAndGet(_ - 1).flatMap(updateBar).ignore)
+      }).retry(retry429Schedule).retry(retryCfSchedule).retry(retry403Schedule).retry(retryConnectionSchedule).tapBoth(
+        error =>
+          statsRef.update(_.incFailures) *> {
+            val (msg, body) = error match {
+              case e: HttpStatusException => (Some(e.statusCode.toString), Some(e.responseBody))
+              case other                  => (Option(other.getMessage), None)
+            }
+            ApiFetchFailure
+              .insert(ApiFetchFailure(Instant.now(), url.encode, error.getClass.getSimpleName, msg, body))
+              .provideEnvironment(ZEnvironment(transactor))
+              .ignore
+          },
+        _ => statsRef.update(_.incSuccesses)
+      )
 
   def getAll[T](urls: Iterable[URL])(using jsonDecoder: JsonDecoder[T]): Task[Chunk[T]] =
     ZIO.foreachPar(Chunk.from(urls))(get)
@@ -211,8 +210,8 @@ final class ChessComClient(
       } yield ()
     }
 
-  /** Wait for in-flight requests to drain, sleep for cooldown, then recover permits if failure rate has dropped.
-    * Clears coolingDown so further throttle-downs can occur if needed.
+  /** Wait for in-flight requests to drain, sleep for cooldown, then recover permits if failure rate has dropped. Clears
+    * coolingDown so further throttle-downs can occur if needed.
     */
   private def scheduleRecovery(generation: Long, cooldown: Duration): Task[Unit] =
     for {
@@ -350,13 +349,13 @@ object ChessComClient {
     latencySumMs: Long = 0,
     latencyCount: Long = 0
   ) {
-    def incRequests: StatsAccumulator        = copy(requests = requests + 1)
-    def incSuccesses: StatsAccumulator       = copy(successes = successes + 1)
-    def incFailures: StatsAccumulator        = copy(failures = failures + 1)
-    def incAttempts: StatsAccumulator        = copy(attempts = attempts + 1)
+    def incRequests: StatsAccumulator         = copy(requests = requests + 1)
+    def incSuccesses: StatsAccumulator        = copy(successes = successes + 1)
+    def incFailures: StatsAccumulator         = copy(failures = failures + 1)
+    def incAttempts: StatsAccumulator         = copy(attempts = attempts + 1)
     def incConnectionErrors: StatsAccumulator = copy(connectionErrors = connectionErrors + 1)
-    def incThrottleDowns: StatsAccumulator   = copy(throttleDowns = throttleDowns + 1)
-    def updatePeak(n: Int): StatsAccumulator = copy(peakConcurrent = peakConcurrent.max(n))
+    def incThrottleDowns: StatsAccumulator    = copy(throttleDowns = throttleDowns + 1)
+    def updatePeak(n: Int): StatsAccumulator  = copy(peakConcurrent = peakConcurrent.max(n))
 
     def incError(statusCode: Int): StatsAccumulator = statusCode match {
       case 429 => copy(errors429 = errors429 + 1)
@@ -372,7 +371,12 @@ object ChessComClient {
       latencyCount = latencyCount + 1
     )
 
-    def toClientStats(appLabel: String, startedAt: Instant, completedAt: Instant, config: ThrottleConfig): ClientStats = {
+    def toClientStats(
+      appLabel: String,
+      startedAt: Instant,
+      completedAt: Instant,
+      config: ThrottleConfig
+    ): ClientStats = {
       val minDisplay  = if (latencyMinMs == Long.MaxValue) 0L else latencyMinMs
       val meanLatency = if (latencyCount > 0) latencySumMs / latencyCount else 0L
       ClientStats(
@@ -472,6 +476,15 @@ object ChessComClient {
         refs = ThrottleRefs(semaphore, stateRef, reserveRef, adjustMutex, activeRef, rateLimitGate, lastReqRef, ema)
         _ <- ZIO.addFinalizer(logAndPersistStats(appLabel, startedAt, stats, throttleConfig, logger, transactor))
         _ <- ZIO.addFinalizer(reserveRef.get.flatMap(fibers => ZIO.foreachDiscard(fibers)(_.interrupt)))
-      } yield ChessComClient(client, transactor, userAgentHeaders(contactEmail), logger, refs, stats, bar, throttleConfig)
+      } yield ChessComClient(
+        client,
+        transactor,
+        userAgentHeaders(contactEmail),
+        logger,
+        refs,
+        stats,
+        bar,
+        throttleConfig
+      )
     }
 }

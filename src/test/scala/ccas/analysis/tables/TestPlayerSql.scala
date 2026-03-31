@@ -36,7 +36,8 @@ object TestPlayerSql extends ZIOSpecDefault {
 
   // Historical snapshots — represent past states that were archived
   private val player0Snapshot0 = PlayerSnapshot(player0.playerId, Timestamps.t0, Username("player0_old"), Active, None)
-  private val player0Snapshot1 = PlayerSnapshot(player0.playerId, Timestamps.t1, Username("player0_mid"), Fairplay, None)
+  private val player0Snapshot1 =
+    PlayerSnapshot(player0.playerId, Timestamps.t1, Username("player0_mid"), Fairplay, None)
 
   private def testCreateTables = test("testCreateTables") {
     assertCompletes
@@ -79,7 +80,7 @@ object TestPlayerSql extends ZIOSpecDefault {
 
   private def testUpdate = test("testUpdate") {
     for {
-      _ <- PlayerSnapshot.update(player0Snapshot0.copy(title = Some(IM)))
+      _       <- PlayerSnapshot.update(player0Snapshot0.copy(title = Some(IM)))
       results <- PlayerSnapshot.selectId(player0.playerId).map(_.sortBy(_.since).flatMap(_.title))
     } yield assertTrue(results == List(IM))
   }
@@ -93,8 +94,8 @@ object TestPlayerSql extends ZIOSpecDefault {
       updated = existing.copy(username = Username("player0_new"), since = Timestamps.t3)
       rows <- Player.updateCurrentState(updated)
       // Verify
-      current  <- Player.selectId(player0.playerId)
-      history  <- PlayerSnapshot.selectId(player0.playerId)
+      current <- Player.selectId(player0.playerId)
+      history <- PlayerSnapshot.selectId(player0.playerId)
     } yield assertTrue(
       rows == 1,
       current.exists(_.username == Username("player0_new")),

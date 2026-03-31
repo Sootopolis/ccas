@@ -44,7 +44,8 @@ object TestJobRunSql extends ZIOSpecDefault {
     JobRun(id0, JobKind.Recruitment, Some(clubIdA), RunTrigger.Cli, JobRunStatus.Running, None, Times.t0, None, None)
   private val run1 =
     JobRun(id1, JobKind.Membership, Some(clubIdA), RunTrigger.Cli, JobRunStatus.Running, None, Times.t1, None, None)
-  private val run2 = JobRun(id2, JobKind.MatchRef, None, RunTrigger.Cli, JobRunStatus.Running, Some("params"), Times.t2, None, None)
+  private val run2 =
+    JobRun(id2, JobKind.MatchRef, None, RunTrigger.Cli, JobRunStatus.Running, Some("params"), Times.t2, None, None)
 
   private val deleteAll = for {
     _ <- connectZIO { val _ = sql"DELETE FROM job_run".update.run() }
@@ -176,9 +177,12 @@ object TestJobRunSql extends ZIOSpecDefault {
   }
 
   private def testMarkOrphansAsFailed = test("markOrphansAsFailed marks Running → Failed") {
-    val running1  = JobRun(id0, JobKind.Recruitment, None, RunTrigger.Cli, JobRunStatus.Running, None, Times.t0, None, None)
-    val running2  = JobRun(id1, JobKind.Membership, None, RunTrigger.Cli, JobRunStatus.Running, None, Times.t1, None, None)
-    val completed = JobRun(id2, JobKind.MatchRef, None, RunTrigger.Cli, JobRunStatus.Completed, None, Times.t2, Some(Times.t2), None)
+    val running1 =
+      JobRun(id0, JobKind.Recruitment, None, RunTrigger.Cli, JobRunStatus.Running, None, Times.t0, None, None)
+    val running2 =
+      JobRun(id1, JobKind.Membership, None, RunTrigger.Cli, JobRunStatus.Running, None, Times.t1, None, None)
+    val completed =
+      JobRun(id2, JobKind.MatchRef, None, RunTrigger.Cli, JobRunStatus.Completed, None, Times.t2, Some(Times.t2), None)
     for {
       _     <- deleteAll
       _     <- JobRun.insert(running1)

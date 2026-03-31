@@ -11,10 +11,10 @@ import ccas.analysis.tables.{Club, RunTrigger}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 import ccas.server.jobs.*
 import ccas.server.ServerTables
-import ccas.utils.CcasLogger
 import ccas.utils.client.{ChessComClient, TestChessComClient}
 import ccas.utils.sql.FreshSchemaLayer
 import ccas.utils.sql.SqlZioTypes.connectZIO
+import ccas.utils.CcasLogger
 
 object TestRoutes extends ZIOSpecDefault {
 
@@ -181,8 +181,18 @@ object TestRoutes extends ZIOSpecDefault {
       )
     },
     test("GET /api/jobs/:id returns 200 for existing") {
-      val t0  = LocalDateTime.of(2025, 6, 1, 0, 0).toInstant(ZoneOffset.UTC)
-      val job = JobRun(JobRunId.wrap("detail-id"), JobKind.Membership, None, RunTrigger.Cli, JobRunStatus.Running, None, t0, None, None)
+      val t0 = LocalDateTime.of(2025, 6, 1, 0, 0).toInstant(ZoneOffset.UTC)
+      val job = JobRun(
+        JobRunId.wrap("detail-id"),
+        JobKind.Membership,
+        None,
+        RunTrigger.Cli,
+        JobRunStatus.Running,
+        None,
+        t0,
+        None,
+        None
+      )
       for {
         fake     <- getFakeRunner
         _        <- fake.prePopulate(job)
