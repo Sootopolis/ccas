@@ -213,7 +213,7 @@ object TestRefApp extends ZIOSpecDefault {
         refs,
         stats,
         bar,
-        ChessComClient.ThrottleConfig(5, 30.seconds, 1.second, 5.seconds, 10.seconds, 20, 0.2, 10)
+        ChessComClient.ThrottleConfig(5, 30.seconds, 5.seconds, 1.second, 5.seconds, 10.seconds, 20, 0.2, 10)
       )
     }
 

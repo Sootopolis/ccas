@@ -25,6 +25,7 @@ final case class ClientStats(
   peakConcurrent: Int,
   configPermits: Int,
   configCooldownSecs: Int,
+  configCfCooldownSecs: Int,
   configRetryBaseSecs: Int,
   config403RetrySecs: Int,
   configCfRetrySecs: Int,
@@ -57,6 +58,7 @@ object ClientStats {
               peak_concurrent          INT NOT NULL,
               config_permits           INT NOT NULL,
               config_cooldown_secs     INT NOT NULL,
+              config_cf_cooldown_secs  INT NOT NULL,
               config_retry_base_secs   INT NOT NULL,
               config_403_retry_secs    INT NOT NULL,
               config_cf_retry_secs     INT NOT NULL,
@@ -78,7 +80,7 @@ object ClientStats {
               requests, successes, failures, attempts,
               errors_429, errors_403, errors_404, connection_errors,
               throttle_downs, peak_concurrent,
-              config_permits, config_cooldown_secs,
+              config_permits, config_cooldown_secs, config_cf_cooldown_secs,
               config_retry_base_secs, config_403_retry_secs, config_cf_retry_secs,
               config_failure_window_size, config_failure_threshold, config_min_sample_size,
               latency_min_ms, latency_max_ms, latency_mean_ms
@@ -87,7 +89,7 @@ object ClientStats {
               ${item.requests}, ${item.successes}, ${item.failures}, ${item.attempts},
               ${item.errors429}, ${item.errors403}, ${item.errors404}, ${item.connectionErrors},
               ${item.throttleDowns}, ${item.peakConcurrent},
-              ${item.configPermits}, ${item.configCooldownSecs},
+              ${item.configPermits}, ${item.configCooldownSecs}, ${item.configCfCooldownSecs},
               ${item.configRetryBaseSecs}, ${item.config403RetrySecs}, ${item.configCfRetrySecs},
               ${item.configFailureWindowSize}, ${item.configFailureThreshold}, ${item.configMinSampleSize},
               ${item.latencyMinMs}, ${item.latencyMaxMs}, ${item.latencyMeanMs}

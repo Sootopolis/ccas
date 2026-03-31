@@ -104,7 +104,7 @@ object TestSeedFromClubMatches extends ZIOSpecDefault {
         refs,
         stats,
         bar,
-        ChessComClient.ThrottleConfig(1, 30.seconds, 1.second, 5.seconds, 10.seconds, 20, 0.2, 10)
+        ChessComClient.ThrottleConfig(1, 30.seconds, 5.seconds, 1.second, 5.seconds, 10.seconds, 20, 0.2, 10)
       )
     }
 

@@ -60,7 +60,7 @@ final class ChessComClient(
     }
     string   <- response.body.asString
     cfChallenge = isCloudflareChallenge(response, string)
-    _ <- if (cfChallenge) throttleDown(_ => 1) else recordOutcome(response.status != Status.TooManyRequests)
+    _ <- if (cfChallenge) throttleDown(config.cfCooldown) else recordOutcome(response.status != Status.TooManyRequests)
     _ <- ZIO.whenDiscard(!response.status.isSuccess) {
       statsRef.update(_.incError(response.status.code)) *>
         ZIO.fail(HttpStatusException(response.status.code, url, string))
@@ -159,35 +159,31 @@ final class ChessComClient(
       ZIO.whenDiscard(shouldThrottle)(throttleDown())
     }
 
-  /** Reduce the effective permit limit by the given divisor and schedule recovery. Clears the outcome window and sets
-    * coolingDown to prevent cascading reductions.
+  /** Drop the effective permit limit to 1 and schedule drain-then-recover. Clears the outcome window and sets
+    * coolingDown to prevent cascading reductions. The `cooldown` parameter controls how long to wait after in-flight
+    * requests have drained before attempting recovery.
     */
-  private def throttleDown(compute: Long => Long = _ / 2): Task[Unit] =
+  private def throttleDown(cooldown: Duration = config.cooldown): Task[Unit] =
     stateRef.modify { state =>
-      if (state.coolingDown) {
+      if (state.coolingDown || state.currentMax <= 1) {
         (None, state)
       } else {
-        val newMax = compute(state.currentMax).max(1)
-        if (newMax == state.currentMax) {
-          (None, state)
-        } else {
-          val newGen = state.generation + 1
-          val newState = state.copy(
-            currentMax = newMax,
-            generation = newGen,
-            outcomes = Vector.empty,
-            coolingDown = true
-          )
-          (Some((state.currentMax, newMax, newGen)), newState)
-        }
+        val newGen = state.generation + 1
+        val newState = state.copy(
+          currentMax = 1,
+          generation = newGen,
+          outcomes = Vector.empty,
+          coolingDown = true
+        )
+        (Some((state.currentMax, newGen)), newState)
       }
     }.flatMap {
       case None => ZIO.unit
-      case Some((oldMax, newMax, gen)) =>
+      case Some((oldMax, gen)) =>
         statsRef.update(_.incThrottleDowns) *>
-          adjustPermits(newMax) *>
-          logger.warn(s"Rate limit throttle: $oldMax \u2192 $newMax permits") *>
-          scheduleRecovery(gen).forkDaemon.unit
+          adjustPermits(1) *>
+          logger.warn(s"Rate limit throttle: $oldMax \u2192 1 permit") *>
+          scheduleRecovery(gen, cooldown).forkDaemon.unit
     }
 
   /** Incrementally adjust reserve fibers to enforce `newMax` effective permits. Throttle-down only forks additional
@@ -215,12 +211,13 @@ final class ChessComClient(
       } yield ()
     }
 
-  /** Sleep for cooldown, then recover permits if failure rate has dropped. Clears coolingDown so further throttle-downs
-    * can occur if needed.
+  /** Wait for in-flight requests to drain, sleep for cooldown, then recover permits if failure rate has dropped.
+    * Clears coolingDown so further throttle-downs can occur if needed.
     */
-  private def scheduleRecovery(generation: Long): Task[Unit] =
+  private def scheduleRecovery(generation: Long, cooldown: Duration): Task[Unit] =
     for {
-      _ <- ZIO.sleep(config.cooldown)
+      _ <- activeRef.get.repeat(Schedule.spaced(200.millis) && Schedule.recurWhile(_ > 1)).unit
+      _ <- ZIO.sleep(cooldown)
       option <- stateRef.modify { state =>
         if (state.generation != generation) (None, state)
         else if (failureRate(state.outcomes) > config.failureThreshold) {
@@ -238,13 +235,13 @@ final class ChessComClient(
       }
       _ <- ZIO.foreachDiscard(option) { case (oldMax, newMax, gen) =>
         if (oldMax == newMax) {
-          logger.warn(s"Rate limit still elevated, holding at $newMax permits") *> scheduleRecovery(gen)
+          logger.warn(s"Rate limit still elevated, holding at $newMax permits") *> scheduleRecovery(gen, cooldown)
         } else {
           val msg =
             if (newMax == config.maxPermits) "Rate limit throttle lifted"
             else s"Rate limit easing: $oldMax \u2192 $newMax permits"
           adjustPermits(newMax) *> logger.info(msg) *>
-            ZIO.unlessDiscard(newMax == config.maxPermits)(scheduleRecovery(gen))
+            ZIO.unlessDiscard(newMax == config.maxPermits)(scheduleRecovery(gen, cooldown))
         }
       }
     } yield ()
@@ -307,9 +304,11 @@ object ChessComClient {
   )
 
   /** @param maxPermits
-    *   Maximum concurrent requests (semaphore permits). Throttle-down halves from here; recovery doubles back.
+    *   Maximum concurrent requests (semaphore permits). Throttle-down drops to 1; recovery doubles back.
     * @param cooldown
-    *   Time to wait after a throttle-down before attempting recovery.
+    *   Time to wait after draining in-flight requests before attempting recovery from a failure-rate throttle-down.
+    * @param cfCooldown
+    *   Time to wait after draining in-flight requests before attempting recovery from a Cloudflare throttle-down.
     * @param retryBase
     *   Base duration for exponential-backoff retry on 429 responses.
     * @param singleRetryDelay
@@ -326,6 +325,7 @@ object ChessComClient {
   private[ccas] case class ThrottleConfig(
     maxPermits: Long,
     cooldown: Duration,
+    cfCooldown: Duration,
     retryBase: Duration,
     singleRetryDelay: Duration,
     cfRetryDelay: Duration,
@@ -391,6 +391,7 @@ object ChessComClient {
         peakConcurrent = peakConcurrent,
         configPermits = config.maxPermits.toInt,
         configCooldownSecs = config.cooldown.getSeconds.toInt,
+        configCfCooldownSecs = config.cfCooldown.getSeconds.toInt,
         configRetryBaseSecs = config.retryBase.getSeconds.toInt,
         config403RetrySecs = config.singleRetryDelay.getSeconds.toInt,
         configCfRetrySecs = config.cfRetryDelay.getSeconds.toInt,
@@ -444,13 +445,14 @@ object ChessComClient {
       val typesafeConfig = ConfigFactory.load().getConfig("chess-com-client")
       val permits        = typesafeConfig.getLong("permits")
       val cooldown       = typesafeConfig.getLong("cooldown-seconds").seconds
+      val cfCooldown     = typesafeConfig.getLong("cf-cooldown-seconds").seconds
       val windowSize     = typesafeConfig.getInt("failure-window-size")
       val threshold      = typesafeConfig.getDouble("failure-threshold")
       val minSample      = typesafeConfig.getInt("min-sample-size")
       val singleDelay    = typesafeConfig.getLong("single-retry-delay-seconds").seconds
       val cfDelay        = typesafeConfig.getLong("cf-retry-delay-seconds").seconds
       val throttleConfig =
-        ThrottleConfig(permits, cooldown, 1.second, singleDelay, cfDelay, windowSize, threshold, minSample)
+        ThrottleConfig(permits, cooldown, cfCooldown, 1.second, singleDelay, cfDelay, windowSize, threshold, minSample)
       for {
         contactEmail  <- ZIO.attempt(typesafeConfig.getString("contact-email"))
         client        <- ZIO.service[Client]

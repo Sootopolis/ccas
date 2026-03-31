@@ -33,7 +33,7 @@ object TestChessComClient extends ZIOSpecDefault {
       ema         <- Ref.make(0.0)
       bar         <- TestCcasLogger.noopBar
       stats       <- Ref.make(ChessComClient.StatsAccumulator())
-      config = ChessComClient.ThrottleConfig(permits, cooldown, retryBase, 10.millis, 10.millis, failureWindowSize, failureThreshold, 10)
+      config = ChessComClient.ThrottleConfig(permits, cooldown, cooldown, retryBase, 10.millis, 10.millis, failureWindowSize, failureThreshold, 10)
       refs   = ChessComClient.ThrottleRefs(semaphore, stateRef, reserveRef, adjustMutex, activeRef, rateLimitGate, lastReqRef, ema)
     } yield {
       val driver = new ZClient.Driver[Any, Scope, Throwable] {
@@ -130,7 +130,7 @@ object TestChessComClient extends ZIOSpecDefault {
     test("failure rate above threshold triggers throttle-down") {
       ZIO.scoped {
         for {
-          // All requests return 429 — coolingDown limits to one halving per cooldown cycle
+          // All requests return 429 — coolingDown limits to one drop per cooldown cycle
           (client, stateRef) <- makeClient(
             handler = _ => ZIO.succeed(Response(status = Status.TooManyRequests)),
             permits = 20,
@@ -141,7 +141,7 @@ object TestChessComClient extends ZIOSpecDefault {
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get).exit
           )
           state <- stateRef.get
-        } yield assertTrue(state.currentMax == 10L, state.coolingDown)
+        } yield assertTrue(state.currentMax == 1L, state.coolingDown)
       }
     },
     test("recovery doubles permits after cooldown when failure rate drops") {
@@ -302,7 +302,7 @@ object TestChessComClient extends ZIOSpecDefault {
           counter     <- Ref.make(0)
           lastReqRef  <- Ref.make(0L)
           ema         <- Ref.make(0.0)
-          config = ChessComClient.ThrottleConfig(5, 60.seconds, 10.millis, 10.millis, 10.millis, 20, 0.2, 10)
+          config = ChessComClient.ThrottleConfig(5, 60.seconds, 60.seconds, 10.millis, 10.millis, 10.millis, 20, 0.2, 10)
           // Reserve 4 permits to enforce effective limit of 1
           reserveFibers <- ZIO.foreach(Chunk.range(0, 4))(_ => semaphore.withPermit(ZIO.never).forkDaemon)
           _ <- reserveRef.set(reserveFibers)
