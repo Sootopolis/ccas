@@ -2,13 +2,13 @@ package ccas.api.club
 
 import zio.{Chunk, Task}
 import zio.http.URL
-import zio.json.{jsonMemberNames, DeriveJsonDecoder, JsonDecoder, SnakeCase}
+import zio.json.{jsonMemberNames, JsonDecoder, SnakeCase}
 
 import ccas.api.misc.enums.ClubVisibility
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, Elo}
 import ccas.api.misc.Hosts
 import ccas.utils.client.ChessComClient
-import ccas.utils.json.JsonDecoding
+import ccas.utils.json.JsonDecoding.given
 
 @jsonMemberNames(SnakeCase)
 final case class ApiClub(
@@ -26,11 +26,9 @@ final case class ApiClub(
   joinRequest: URL,           // location to submit a request to join this club
   admin: Chunk[URL],          // array of URLs to the player profiles for the admins of this club
   description: Option[String] // text description of the club
-)
+) derives JsonDecoder
 
-object ApiClub extends JsonDecoding[ApiClub] {
-  override protected val jsonDecoderDerived: JsonDecoder[ApiClub] = DeriveJsonDecoder.gen
-
+object ApiClub {
   val host: URL = Hosts.api.addPath("club")
 
   def getUrl(clubSlug: ClubSlug): URL = host.addPath(clubSlug.value)

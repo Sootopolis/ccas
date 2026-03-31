@@ -1,19 +1,18 @@
 package ccas.api.player
 
 import zio.http.URL
-import zio.json.{jsonMemberNames, DeriveJsonDecoder, JsonDecoder, SnakeCase}
+import zio.json.{jsonMemberNames, JsonDecoder, SnakeCase}
 import zio.Chunk
 
 import ccas.api.misc.enums.{Colour, GameRule, TimeClass}
 import ccas.api.misc.subtypes.Username
 import ccas.api.player.ApiPlayerGamesCurrent.ApiPlayerCurrentDailyGame
-import ccas.utils.json.JsonDecoding
+import ccas.utils.json.JsonDecoding.given
 
 @jsonMemberNames(SnakeCase)
-final case class ApiPlayerGamesCurrent(games: Chunk[ApiPlayerCurrentDailyGame])
+final case class ApiPlayerGamesCurrent(games: Chunk[ApiPlayerCurrentDailyGame]) derives JsonDecoder
 
-object ApiPlayerGamesCurrent extends JsonDecoding[ApiPlayerGamesCurrent] {
-  override protected val jsonDecoderDerived: JsonDecoder[ApiPlayerGamesCurrent] = DeriveJsonDecoder.gen
+object ApiPlayerGamesCurrent {
 
   @jsonMemberNames(SnakeCase)
   final case class ApiPlayerCurrentDailyGame(

@@ -1,14 +1,14 @@
 package ccas.api.clubmatch
 
 import zio.http.URL
-import zio.json.{jsonMemberNames, DeriveJsonDecoder, JsonDecoder, SnakeCase}
+import zio.json.{jsonMemberNames, JsonDecoder, SnakeCase}
 
 import ccas.api.clubmatch.ApiDailyMatch.MatchTeamFinished
 import ccas.api.clubmatch.ApiLiveMatch.{ApiLiveMatchSettings, ApiLiveMatchTeams}
 import ccas.api.misc.*
 import ccas.api.misc.enums.*
 import ccas.api.misc.subtypes.ClubMatchId
-import ccas.utils.json.JsonDecoding
+import ccas.utils.json.JsonDecoding.given
 
 // Only models the finished variant — live matches are transient (minutes, not weeks),
 // so registration/in-progress are not useful for identification.
@@ -23,11 +23,9 @@ final case class ApiLiveMatch(
   boards: Int,
   settings: ApiLiveMatchSettings,
   teams: ApiLiveMatchTeams
-)
+) derives JsonDecoder
 
-object ApiLiveMatch extends JsonDecoding[ApiLiveMatch] {
-  override protected val jsonDecoderDerived: JsonDecoder[ApiLiveMatch] = DeriveJsonDecoder.gen
-
+object ApiLiveMatch {
   val host: URL = Hosts.api.addPath("match").addPath("live")
 
   def getUrl(clubMatchId: ClubMatchId): URL = host.addPath(clubMatchId.toString)

@@ -1,12 +1,12 @@
 package ccas.api.player
 
 import zio.http.URL
-import zio.json.{jsonMemberNames, DeriveJsonDecoder, JsonDecoder, SnakeCase}
+import zio.json.{jsonMemberNames, JsonDecoder, SnakeCase}
 
 import ccas.api.misc.enums.GameResult
 import ccas.api.misc.subtypes.{Elo, Username}
 import ccas.api.player.ApiPlayerStats.{ApiPlayerDailyStats, ApiPlayerLiveStats}
-import ccas.utils.json.JsonDecoding
+import ccas.utils.json.JsonDecoding.given
 
 @jsonMemberNames(SnakeCase)
 final case class ApiPlayerStats(
@@ -15,11 +15,9 @@ final case class ApiPlayerStats(
   chessRapid: Option[ApiPlayerLiveStats],
   chessBlitz: Option[ApiPlayerLiveStats],
   chessBullet: Option[ApiPlayerLiveStats]
-)
+) derives JsonDecoder
 
-object ApiPlayerStats extends JsonDecoding[ApiPlayerStats] {
-  override protected val jsonDecoderDerived: JsonDecoder[ApiPlayerStats] = DeriveJsonDecoder.gen
-
+object ApiPlayerStats {
   def getUrl(username: Username): URL = ApiPlayer.getUrl(username).addPath("stats")
 
   sealed trait ApiPlayerGameTypeStats[Record <: ApiPlayerGameTypeRecord] {
@@ -55,8 +53,7 @@ object ApiPlayerStats extends JsonDecoding[ApiPlayerStats] {
     val win: Int
     val loss: Int
     val draw: Int
-    lazy val nGames: Int     = win + loss + draw
-    lazy val winRate: Double = if (nGames == 0) 0.0 else win / nGames.toDouble
+    lazy val nGames: Int = win + loss + draw
     lazy val scoreRate: Double = // not hardcoding in case chess scoring rules change
       if (nGames == 0) 0.0
       else (win * GameResult.Win.score + draw * GameResult.Draw.score + loss * GameResult.Loss.score) / nGames

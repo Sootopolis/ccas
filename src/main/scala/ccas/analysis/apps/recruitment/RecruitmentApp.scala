@@ -220,7 +220,7 @@ object RecruitmentApp extends ZIOAppDefault {
     startedAt: Instant,
     cumulative: Boolean,
     alreadyFound: Int,
-    jobRunId: Option[String] = None
+    jobRunId: Option[String]
   ): RIO[CcasLogger & ChessComClient & Transactor, RecruitmentRun] =
     for {
       _ <- ZIO.whenDiscard(ctx.showHints)(
@@ -280,7 +280,7 @@ object RecruitmentApp extends ZIOAppDefault {
     alreadyFound: Int,
     label: String,
     interrupted: Boolean = false,
-    jobRunId: Option[String] = None
+    jobRunId: Option[String]
   ): RIO[CcasLogger & Transactor, RecruitmentRun] =
     for {
       _     <- ctx.progressBar.finish

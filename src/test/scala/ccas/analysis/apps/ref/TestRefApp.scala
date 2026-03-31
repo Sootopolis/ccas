@@ -4,7 +4,7 @@ import java.time.{Instant, LocalDateTime, ZoneOffset}
 import java.time.temporal.ChronoUnit
 
 import com.augustnagro.magnum.{sql, Transactor}
-import zio.{durationInt, Chunk, Duration, Fiber, RIO, Ref, Scope, Semaphore, ZIO, ZLayer}
+import zio.{durationInt, Chunk, Fiber, RIO, Ref, Scope, Semaphore, ZIO, ZLayer}
 import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 

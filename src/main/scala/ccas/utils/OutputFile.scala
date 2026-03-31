@@ -19,7 +19,7 @@ object OutputFile {
   def writeAndLog(appName: String, clubSlug: ClubSlug, content: String): RIO[CcasLogger, Unit] =
     write(appName, clubSlug, content).flatMap(path => CcasLogger.info(s"Output written to $path"))
 
-  def writeGlobal(appName: String, content: String, subDir: String = "_ccas"): Task[Path] =
+  def writeGlobal(appName: String, content: String, subDir: String): Task[Path] =
     writeInternal(Paths.get("out", subDir), appName, content)
 
   private def writeInternal(dir: Path, appName: String, content: String): Task[Path] = {
@@ -30,7 +30,7 @@ object OutputFile {
       ZIO.writeFile(path.toString, content).as(path)
   }
 
-  def writeAndLogGlobal(appName: String, content: String, subDir: String = "_ccas"): RIO[CcasLogger, Unit] =
+  def writeAndLogGlobal(appName: String, content: String, subDir: String): RIO[CcasLogger, Unit] =
     writeGlobal(appName, content, subDir).flatMap(path => CcasLogger.info(s"Output written to $path"))
 
   private def archiveExisting(clubDir: Path, appName: String): Unit =

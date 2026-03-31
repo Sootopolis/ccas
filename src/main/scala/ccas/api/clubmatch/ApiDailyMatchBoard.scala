@@ -1,23 +1,22 @@
 package ccas.api.clubmatch
 
 import zio.http.URL
-import zio.json.{jsonMemberNames, DeriveJsonDecoder, JsonDecoder, SnakeCase}
+import zio.json.{jsonMemberNames, JsonDecoder, SnakeCase}
 import zio.Chunk
 
 import ccas.api.clubmatch.ApiDailyMatchBoard.ApiDailyBoardGame
 import ccas.api.misc.enums.{GameResultDetail, GameRule, TimeClass}
 import ccas.api.misc.subtypes.{ClubMatchId, Elo, Username}
 import ccas.api.misc.Accuracies
-import ccas.utils.json.JsonDecoding
+import ccas.utils.json.JsonDecoding.given
 
 @jsonMemberNames(SnakeCase)
-final case class ApiDailyMatchBoard(boardScores: Map[Username, Double], games: Chunk[ApiDailyBoardGame]) {
+final case class ApiDailyMatchBoard(boardScores: Map[Username, Double], games: Chunk[ApiDailyBoardGame])
+    derives JsonDecoder {
   require(games.nonEmpty && games.length <= 2, s"A board can only have 1 or 2 games:\n$this")
 }
 
-object ApiDailyMatchBoard extends JsonDecoding[ApiDailyMatchBoard] {
-  override protected val jsonDecoderDerived: JsonDecoder[ApiDailyMatchBoard] = DeriveJsonDecoder.gen
-
+object ApiDailyMatchBoard {
   def getUrl(clubMatchId: ClubMatchId, boardId: Int): URL = ApiDailyMatch.getUrl(clubMatchId).addPath(boardId.toString)
 
   @jsonMemberNames(SnakeCase)

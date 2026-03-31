@@ -2,27 +2,24 @@ package ccas.api.club
 
 import zio.{Chunk, Task}
 import zio.http.URL
-import zio.json.{jsonMemberNames, DeriveJsonDecoder, JsonDecoder, SnakeCase}
+import zio.json.{jsonMemberNames, JsonDecoder, SnakeCase}
 
 import ccas.api.club.ApiClubMembers.ApiClubMember
 import ccas.api.misc.subtypes.{ClubSlug, Username}
 import ccas.utils.client.ChessComClient
-import ccas.utils.json.JsonDecoding
 
 @jsonMemberNames(SnakeCase)
 final case class ApiClubMembers(
   weekly: Chunk[ApiClubMember],
   monthly: Chunk[ApiClubMember],
   allTime: Chunk[ApiClubMember]
-) {
+) derives JsonDecoder {
   def all: Chunk[ApiClubMember] = weekly ++ monthly ++ allTime
 
   def toMap: Map[Username, Long] = all.map(member => member.username -> member.joined).toMap
 }
 
-object ApiClubMembers extends JsonDecoding[ApiClubMembers] {
-  override protected val jsonDecoderDerived: JsonDecoder[ApiClubMembers] = DeriveJsonDecoder.gen
-
+object ApiClubMembers {
   @jsonMemberNames(SnakeCase)
   final case class ApiClubMember(username: Username, joined: Long) derives JsonDecoder
 

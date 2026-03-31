@@ -9,7 +9,7 @@ import ccas.api.clubmatch.ApiDailyMatch.{ApiDailyMatchSettings, ApiDailyMatchTea
 import ccas.api.misc.*
 import ccas.api.misc.enums.*
 import ccas.api.misc.subtypes.{ClubMatchId, Elo, Username}
-import ccas.utils.json.JsonDecoding
+import ccas.utils.json.JsonDecoding.given
 
 // match
 @jsonDiscriminator("status") @jsonMemberNames(SnakeCase)
@@ -23,8 +23,8 @@ sealed trait ApiDailyMatch {
   val teams: ApiDailyMatchTeams
 }
 
-object ApiDailyMatch extends JsonDecoding[ApiDailyMatch] {
-  override protected val jsonDecoderDerived: JsonDecoder[ApiDailyMatch] = {
+object ApiDailyMatch {
+  given JsonDecoder[ApiDailyMatch] = {
     val gen       = DeriveJsonDecoder.gen[ApiDailyMatch]
     val cancelled = JsonDecoder[ApiDailyMatchCancelled]
     JsonDecoder[Json].mapOrFail { json =>

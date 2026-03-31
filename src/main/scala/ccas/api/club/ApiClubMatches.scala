@@ -1,20 +1,20 @@
 package ccas.api.club
 
 import zio.http.URL
-import zio.json.{jsonMemberNames, DeriveJsonDecoder, JsonDecoder, SnakeCase}
+import zio.json.{jsonMemberNames, JsonDecoder, SnakeCase}
 import zio.Chunk
 
 import ccas.api.club.ApiClubMatches.{ApiClubMatchFinished, ApiClubMatchInProgress, ApiClubMatchRegistered}
 import ccas.api.misc.enums.{ClubMatchResult, TimeClass}
 import ccas.api.misc.subtypes.ClubSlug
-import ccas.utils.json.JsonDecoding
+import ccas.utils.json.JsonDecoding.given
 
 @jsonMemberNames(SnakeCase)
 final case class ApiClubMatches(
   finished: Chunk[ApiClubMatchFinished],
   inProgress: Chunk[ApiClubMatchInProgress],
   registered: Chunk[ApiClubMatchRegistered]
-) {
+) derives JsonDecoder {
   def dailyFinished: Chunk[ApiClubMatchFinished] = finished.filter(_.timeClass == TimeClass.Daily)
 
   def dailyInProgress: Chunk[ApiClubMatchInProgress] = inProgress.filter(_.timeClass == TimeClass.Daily)
@@ -22,9 +22,7 @@ final case class ApiClubMatches(
   def dailyRegistered: Chunk[ApiClubMatchRegistered] = registered.filter(_.timeClass == TimeClass.Daily)
 }
 
-object ApiClubMatches extends JsonDecoding[ApiClubMatches] {
-  override protected val jsonDecoderDerived: JsonDecoder[ApiClubMatches] = DeriveJsonDecoder.gen
-
+object ApiClubMatches {
   sealed trait ApiClubMatch {
     val name: String
     val `@id`: URL

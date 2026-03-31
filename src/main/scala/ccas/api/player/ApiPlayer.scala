@@ -3,12 +3,12 @@ package ccas.api.player
 import java.time.Instant
 
 import zio.http.URL
-import zio.json.{jsonMemberNames, DeriveJsonDecoder, JsonDecoder, SnakeCase}
+import zio.json.{jsonMemberNames, JsonDecoder, SnakeCase}
 
 import ccas.api.misc.enums.{League, PlayerStatus, Title}
 import ccas.api.misc.subtypes.{Elo, PlayerId, Username}
 import ccas.api.misc.Hosts
-import ccas.utils.json.JsonDecoding
+import ccas.utils.json.JsonDecoding.given
 
 @jsonMemberNames(SnakeCase)
 final case class ApiPlayer(
@@ -27,17 +27,12 @@ final case class ApiPlayer(
   verified: Boolean,
   league: Option[League],
   fide: Option[Elo] // FIDE rating
-) {
-  val profileUrl: URL      = ApiPlayer.getProfileUrl(username)
-  val apiUrl: URL          = ApiPlayer.getUrl(username)
-  val apiStatsUrl: URL     = ApiPlayerStats.getUrl(username)
+) derives JsonDecoder {
   val joinedAt: Instant    = Instant.ofEpochSecond(joined)
   val lastOnlineAt: Instant = Instant.ofEpochSecond(lastOnline)
 }
 
-object ApiPlayer extends JsonDecoding[ApiPlayer] {
-  override protected val jsonDecoderDerived: JsonDecoder[ApiPlayer] = DeriveJsonDecoder.gen
-
+object ApiPlayer {
   val host: URL = Hosts.api.addPath("player")
 
   def getUrl(username: Username): URL = host.addPath(username.value)

@@ -4,20 +4,19 @@ import java.time.{Month, Year}
 import java.util.UUID
 
 import zio.http.URL
-import zio.json.{jsonMemberNames, DeriveJsonDecoder, JsonDecoder, SnakeCase}
+import zio.json.{jsonMemberNames, JsonDecoder, SnakeCase}
 import zio.Chunk
 
 import ccas.api.misc.enums.{GameResultDetail, GameRule}
 import ccas.api.misc.subtypes.{Elo, Username}
 import ccas.api.misc.Accuracies
 import ccas.api.player.ApiPlayerArchive.ApiPlayerArchiveGame
-import ccas.utils.json.JsonDecoding
+import ccas.utils.json.JsonDecoding.given
 
 @jsonMemberNames(SnakeCase)
-final case class ApiPlayerArchive(games: Chunk[ApiPlayerArchiveGame])
+final case class ApiPlayerArchive(games: Chunk[ApiPlayerArchiveGame]) derives JsonDecoder
 
-object ApiPlayerArchive extends JsonDecoding[ApiPlayerArchive] {
-  override protected val jsonDecoderDerived: JsonDecoder[ApiPlayerArchive] = DeriveJsonDecoder.gen
+object ApiPlayerArchive {
 
   @jsonMemberNames(SnakeCase)
   final case class ApiPlayerArchiveGame(
