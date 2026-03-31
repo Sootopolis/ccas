@@ -1,29 +1,30 @@
 package ccas.server.jobs
 
 import java.time.Instant
+
 import com.augustnagro.magnum.Transactor
 import zio.{Fiber, RIO, RLayer, Ref, UIO, ZIO, ZLayer}
+
 import ccas.analysis.tables.RunTrigger
 import ccas.api.misc.subtypes.ClubId
-import ccas.utils.CcasLogger
 import ccas.utils.client.ChessComClient
 import ccas.utils.errors.safeMessage
+import ccas.utils.CcasLogger
 
 /** Asynchronous job executor that runs analysis tasks as forked fibers.
   *
-  * Each submitted job is tracked in the `job_run` database table with a ULID identifier.
-  * Only one job of a given kind (optionally scoped to a club) may run at a time; duplicate
-  * submissions are rejected with a [[JobConflictException]].
+  * Each submitted job is tracked in the `job_run` database table with a ULID identifier. Only one job of a given kind
+  * (optionally scoped to a club) may run at a time; duplicate submissions are rejected with a [[JobConflictException]].
   *
-  * After a Recruitment, Membership, or History job completes successfully, a follow-up
-  * MatchRef job is automatically submitted to resolve any new club/player references.
+  * After a Recruitment, Membership, or History job completes successfully, a follow-up MatchRef job is automatically
+  * submitted to resolve any new club/player references.
   */
 trait JobRunner {
 
   /** Fork a new job and return its ID. Fails with [[JobConflictException]] if a matching job is already running.
     *
-    * The effect receives the job run ID (as a string) so that analysis apps can link their own
-    * run records back to the server-level job.
+    * The effect receives the job run ID (as a string) so that analysis apps can link their own run records back to the
+    * server-level job.
     */
   def submit(
     kind: JobKind,
@@ -55,8 +56,12 @@ object JobRunner {
       } yield runner
     }
 
-  private class JobRunnerLive(logger: CcasLogger, client: ChessComClient, xa: Transactor, fibers: Ref[Set[Fiber.Runtime[Nothing, Unit]]])
-      extends JobRunner {
+  private class JobRunnerLive(
+    logger: CcasLogger,
+    client: ChessComClient,
+    xa: Transactor,
+    fibers: Ref[Set[Fiber.Runtime[Nothing, Unit]]]
+  ) extends JobRunner {
 
     private val env = zio.ZEnvironment(logger, client, xa)
 

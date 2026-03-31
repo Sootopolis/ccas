@@ -208,7 +208,8 @@ object ApiDailyMatch {
     playedAsWhite: Option[GameResultDetail],
     playedAsBlack: Option[GameResultDetail],
     board: URL
-  ) extends ApiDailyMatchPlayer with TeamMatchPlayerStarted derives JsonDecoder
+  ) extends ApiDailyMatchPlayer
+      with TeamMatchPlayerStarted derives JsonDecoder
 
   @jsonMemberNames(SnakeCase)
   final case class ApiDailyMatchPlayerCancelled(

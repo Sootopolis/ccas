@@ -2,11 +2,12 @@ package ccas.server
 
 import com.augustnagro.magnum.Transactor
 import zio.{RIO, Scope, ZIOAppDefault}
+
 import ccas.analysis.tables.Tables
 import ccas.server.jobs.JobRun
 import ccas.server.scheduler.JobSchedule
-import ccas.utils.CcasLogger
 import ccas.utils.sql.DataSourceLayer
+import ccas.utils.CcasLogger
 
 object ServerTables extends ZIOAppDefault {
 

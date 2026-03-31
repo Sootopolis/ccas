@@ -10,11 +10,11 @@ import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.SqlZioTypes.connectZIO
 
 final case class ApiFetchFailure(
-    occurredAt: Instant,
-    url: String,
-    errorType: String,
-    errorMessage: Option[String],
-    responseBody: Option[String]
+  occurredAt: Instant,
+  url: String,
+  errorType: String,
+  errorMessage: Option[String],
+  responseBody: Option[String]
 ) derives DbCodec
 
 object ApiFetchFailure {

@@ -1,5 +1,7 @@
 package ccas.server.routes
 
+import scala.util.chaining.*
+
 import com.augustnagro.magnum.Transactor
 import zio.http.*
 import zio.json.{DeriveJsonCodec, EncoderOps, JsonCodec}
@@ -14,8 +16,6 @@ import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 import ccas.server.jobs.*
 import ccas.server.routes.RouteHelpers.*
 import ccas.utils.client.ChessComClient
-
-import scala.util.chaining.*
 
 object JobRoutes {
 
@@ -87,21 +87,22 @@ object JobRoutes {
       (for {
         body   <- parseJsonBody[RecruitmentRequest](req)
         runner <- ZIO.service[JobRunner]
-        club   <- Club.selectBySlug(body.clubSlug)
+        club <- Club.selectBySlug(body.clubSlug)
           .someOrFail(new Exception(s"Club not found: ${body.clubSlug}"))
         cappedTarget       = body.target.map(_ min MaxTarget)
         effectiveTimeLimit = body.timeLimitMinutes.map(_ min MaxTimeLimitMinutes)
-        effect = (jobRunId: Option[String]) => RecruitmentApp.recruit(
-          body.clubSlug,
-          body.alias.getOrElse("default"),
-          target = cappedTarget,
-          cumulative = body.cumulative.getOrElse(false),
-          sourceClubs = body.sourceClubs.getOrElse(Nil),
-          timeLimitMinutes = effectiveTimeLimit,
-          explore = body.explore.getOrElse(true),
-          trigger = RunTrigger.Api,
-          jobRunId = jobRunId
-        )
+        effect = (jobRunId: Option[String]) =>
+          RecruitmentApp.recruit(
+            body.clubSlug,
+            body.alias.getOrElse("default"),
+            target = cappedTarget,
+            cumulative = body.cumulative.getOrElse(false),
+            sourceClubs = body.sourceClubs.getOrElse(Nil),
+            timeLimitMinutes = effectiveTimeLimit,
+            explore = body.explore.getOrElse(true),
+            trigger = RunTrigger.Api,
+            jobRunId = jobRunId
+          )
         paramsStr = body.toJson
         params    = if (paramsStr.length > 1024) paramsStr.take(1024) + "..." else paramsStr
         jobId <- runner.submit(JobKind.Recruitment, Some(club.clubId), Some(params), RunTrigger.Api, effect)
@@ -112,10 +113,15 @@ object JobRoutes {
       (for {
         body   <- parseJsonBody[MembershipRequest](req)
         runner <- ZIO.service[JobRunner]
-        club   <- Club.selectBySlug(body.clubSlug)
+        club <- Club.selectBySlug(body.clubSlug)
           .someOrFail(new Exception(s"Club not found: ${body.clubSlug}"))
         effect = (jobRunId: Option[String]) =>
-          MembershipApp.reconcile(body.clubSlug, body.trustUsernames.getOrElse(true), trigger = RunTrigger.Api, jobRunId = jobRunId)
+          MembershipApp.reconcile(
+            body.clubSlug,
+            body.trustUsernames.getOrElse(true),
+            trigger = RunTrigger.Api,
+            jobRunId = jobRunId
+          )
         jobId <- runner.submit(JobKind.Membership, Some(club.clubId), None, RunTrigger.Api, effect)
       } yield jsonResponse(Status.Accepted, JobResponse(JobRunId.unwrap(jobId), "running")))
         .pipe(withErrorHandling)
@@ -131,15 +137,16 @@ object JobRoutes {
       (for {
         body   <- parseJsonBody[HistoryRequest](req)
         runner <- ZIO.service[JobRunner]
-        club   <- Club.selectBySlug(body.clubSlug)
+        club <- Club.selectBySlug(body.clubSlug)
           .someOrFail(new Exception(s"Club not found: ${body.clubSlug}"))
-        effect = (jobRunId: Option[String]) => HistoryApp.discover(
-          body.clubSlug,
-          body.full.getOrElse(false),
-          body.refresh.getOrElse(false),
-          RunTrigger.Api,
-          jobRunId = jobRunId
-        )
+        effect = (jobRunId: Option[String]) =>
+          HistoryApp.discover(
+            body.clubSlug,
+            body.full.getOrElse(false),
+            body.refresh.getOrElse(false),
+            RunTrigger.Api,
+            jobRunId = jobRunId
+          )
         jobId <- runner.submit(JobKind.History, Some(club.clubId), Some(body.toJson), RunTrigger.Api, effect)
       } yield jsonResponse(Status.Accepted, JobResponse(JobRunId.unwrap(jobId), "running")))
         .pipe(withErrorHandling)

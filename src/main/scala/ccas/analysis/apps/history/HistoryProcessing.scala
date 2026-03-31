@@ -1,9 +1,12 @@
 package ccas.analysis.apps.history
 
 import java.time.Instant
+
 import com.augustnagro.magnum.Transactor
 import zio.{Promise, RIO, Ref, Task, UIO, ZIO}
 import zio.http.URL
+import HistoryUtils.*
+
 import ccas.analysis.apps.PlayerUpdater
 import ccas.analysis.tables.*
 import ccas.api.clubmatch.{ApiDailyMatch, ApiLiveMatch}
@@ -13,7 +16,6 @@ import ccas.api.misc.subtypes.*
 import ccas.api.player.{ApiPlayer, ApiPlayerClubs}
 import ccas.utils.{CcasLogger, ProgressBar}
 import ccas.utils.sql.SqlZioTypes.withTransaction
-import HistoryUtils.*
 
 private[history] object HistoryProcessing {
 
@@ -21,54 +23,63 @@ private[history] object HistoryProcessing {
 
   // === BFS Wave Processing ===
 
-  /** BFS wave loop: processes pending matches in batches, discovers new players, seeds their match lists,
-    * and repeats until no new pending matches remain. Returns accumulated stats.
+  /** BFS wave loop: processes pending matches in batches, discovers new players, seeds their match lists, and repeats
+    * until no new pending matches remain. Returns accumulated stats.
     */
-  def processWaves(ctx: ProcessingContext, settledMatchIds: Set[ClubMatchId]): RIO[CcasLogger & Transactor, RunStats] = {
+  def processWaves(
+    ctx: ProcessingContext,
+    settledMatchIds: Set[ClubMatchId]
+  ): RIO[CcasLogger & Transactor, RunStats] = {
     def waveLoop(waveCount: Int, waveDetails: List[(Int, Int)]): RIO[CcasLogger & Transactor, RunStats] =
       for {
         pendingCount <- HistoryPendingMatch.countNew(ctx.clubId)
-        result <- if (pendingCount == 0) { readStats(ctx, waveCount, waveDetails) } else {
-          val wave = waveCount + 1
-          for {
-            _ <- CcasLogger.info(s"  Wave $wave: $pendingCount matches to process")
-            _ <- ctx.newPlayers.set(Set.empty)
-            beforeCount <- ctx.matchesProcessed.get
+        result <-
+          if (pendingCount == 0) { readStats(ctx, waveCount, waveDetails) }
+          else {
+            val wave = waveCount + 1
+            for {
+              _           <- CcasLogger.info(s"  Wave $wave: $pendingCount matches to process")
+              _           <- ctx.newPlayers.set(Set.empty)
+              beforeCount <- ctx.matchesProcessed.get
 
-            waveCounter <- Ref.make(0)
-            _ <- ZIO.scoped {
-              CcasLogger.progressBar.flatMap(waveBar => processAllPending(ctx, waveBar, waveCounter, pendingCount))
-            }
-
-            afterCount <- ctx.matchesProcessed.get
-            failedCount <- ctx.matchesFailed.get
-            waveProcessed = afterCount - beforeCount
-            _ <- CcasLogger.info(s"  Wave $wave complete: $waveProcessed processed, $failedCount failed total")
-
-            // Seed matches for newly discovered players
-            newPlayers <- ctx.newPlayers.get
-            _ <- ZIO.whenDiscard(newPlayers.nonEmpty) {
-              CcasLogger.info(s"  Querying match lists for ${newPlayers.size} discovered players...") *>
-                ZIO.foreachParDiscard(newPlayers) { dp =>
-                  HistorySeeding.seedMatchesForPlayer(ctx.client, ctx.clubId, ctx.clubSlug, dp.playerId, dp.username, settledMatchIds)
-                    .catchAll {
-                      error => CcasLogger.warn(s"  ${dp.username}: failed to seed — ${error.getMessage}")
-                    }
-                }
-            }
-
-            newPendingNew <- HistoryPendingMatch.countNew(ctx.clubId)
-            updatedDetails = waveDetails :+ (wave, waveProcessed)
-            r <-
-              if (newPendingNew > 0 && newPlayers.nonEmpty) { waveLoop(wave, updatedDetails) }
-              else {
-                for {
-                  pendingTotal <- HistoryPendingMatch.count(ctx.clubId)
-                  stats <- readStats(ctx, wave, updatedDetails)
-                } yield stats.copy(pendingRemaining = pendingTotal.toInt)
+              waveCounter <- Ref.make(0)
+              _ <- ZIO.scoped {
+                CcasLogger.progressBar.flatMap(waveBar => processAllPending(ctx, waveBar, waveCounter, pendingCount))
               }
-          } yield r
-        }
+
+              afterCount  <- ctx.matchesProcessed.get
+              failedCount <- ctx.matchesFailed.get
+              waveProcessed = afterCount - beforeCount
+              _ <- CcasLogger.info(s"  Wave $wave complete: $waveProcessed processed, $failedCount failed total")
+
+              // Seed matches for newly discovered players
+              newPlayers <- ctx.newPlayers.get
+              _ <- ZIO.whenDiscard(newPlayers.nonEmpty) {
+                CcasLogger.info(s"  Querying match lists for ${newPlayers.size} discovered players...") *>
+                  ZIO.foreachParDiscard(newPlayers) { dp =>
+                    HistorySeeding.seedMatchesForPlayer(
+                      ctx.client,
+                      ctx.clubId,
+                      ctx.clubSlug,
+                      dp.playerId,
+                      dp.username,
+                      settledMatchIds
+                    ).catchAll(error => CcasLogger.warn(s"  ${dp.username}: failed to seed — ${error.getMessage}"))
+                  }
+              }
+
+              newPendingNew <- HistoryPendingMatch.countNew(ctx.clubId)
+              updatedDetails = waveDetails :+ (wave, waveProcessed)
+              r <-
+                if (newPendingNew > 0 && newPlayers.nonEmpty) { waveLoop(wave, updatedDetails) }
+                else {
+                  for {
+                    pendingTotal <- HistoryPendingMatch.count(ctx.clubId)
+                    stats        <- readStats(ctx, wave, updatedDetails)
+                  } yield stats.copy(pendingRemaining = pendingTotal.toInt)
+                }
+            } yield r
+          }
       } yield result
 
     waveLoop(0, Nil)
@@ -115,8 +126,8 @@ private[history] object HistoryProcessing {
     if (isLive) { processLiveMatch(ctx, matchId) }
     else { processDailyMatch(ctx, matchId) }
 
-  /** Fetches a daily match from the API, resolves team clubs, builds and persists board rows.
-    * Marks the match Unidentified if the target club is not found in either team (data saved, BFS skipped).
+  /** Fetches a daily match from the API, resolves team clubs, builds and persists board rows. Marks the match
+    * Unidentified if the target club is not found in either team (data saved, BFS skipped).
     */
   private def processDailyMatch(ctx: ProcessingContext, matchId: ClubMatchId): RIO[CcasLogger & Transactor, Unit] =
     for {
@@ -125,10 +136,10 @@ private[history] object HistoryProcessing {
       // Resolve both team club IDs symmetrically
       (team1ClubId, team2ClubId) <-
         resolveClubIdFromTeamUrl(ctx, dailyMatch.teams.team1.`@id`) <&>
-        resolveClubIdFromTeamUrl(ctx, dailyMatch.teams.team2.`@id`)
+          resolveClubIdFromTeamUrl(ctx, dailyMatch.teams.team2.`@id`)
 
       _ <- trackUnresolvedClub(matchId, isTeam1 = true, dailyMatch.teams.team1.`@id`, team1ClubId) <&>
-           trackUnresolvedClub(matchId, isTeam1 = false, dailyMatch.teams.team2.`@id`, team2ClubId)
+        trackUnresolvedClub(matchId, isTeam1 = false, dailyMatch.teams.team2.`@id`, team2ClubId)
 
       clubMatch = buildClubMatchRow(matchId, dailyMatch, team1ClubId, team2ClubId)
 
@@ -145,11 +156,12 @@ private[history] object HistoryProcessing {
           _ <- ClubMatch.upsert(clubMatch)
           _ <- ClubMatchBoard.deleteMatch(matchId)
           _ <- ClubMatchBoard.insertBatch(boardRows)
-          _ <- if (weAreTeam1.isDefined) {
-            HistoryPendingMatch.delete(ctx.clubId, matchId, isLive = false)
-          } else {
-            HistoryPendingMatch.updateStatus(ctx.clubId, matchId, false, PendingMatchStatus.Unidentified)
-          }
+          _ <-
+            if (weAreTeam1.isDefined) {
+              HistoryPendingMatch.delete(ctx.clubId, matchId, isLive = false)
+            } else {
+              HistoryPendingMatch.updateStatus(ctx.clubId, matchId, false, PendingMatchStatus.Unidentified)
+            }
         } yield ()
       }
       _ <- ZIO.whenDiscard(weAreTeam1.isEmpty) {
@@ -165,7 +177,7 @@ private[history] object HistoryProcessing {
 
       // Resolve both team club IDs (for caching/persistence)
       _ <- resolveClubIdFromTeamUrl(ctx, liveMatch.teams.team1.`@id`) <&>
-           resolveClubIdFromTeamUrl(ctx, liveMatch.teams.team2.`@id`)
+        resolveClubIdFromTeamUrl(ctx, liveMatch.teams.team2.`@id`)
 
       // Discover players from both teams (for BFS wave expansion)
       startTime = Some(Instant.ofEpochSecond(liveMatch.startTime))
@@ -178,8 +190,8 @@ private[history] object HistoryProcessing {
 
   // === Board Row Construction ===
 
-  /** Constructs ClubMatchBoard rows by resolving player IDs and normalizing game outcomes.
-    * Players that can't be resolved are recorded in `unresolved_board_player` and the board row gets a None player ID.
+  /** Constructs ClubMatchBoard rows by resolving player IDs and normalizing game outcomes. Players that can't be
+    * resolved are recorded in `unresolved_board_player` and the board row gets a None player ID.
     */
   private def buildBoardRows(
     ctx: ProcessingContext,
@@ -191,15 +203,15 @@ private[history] object HistoryProcessing {
     dailyMatch match {
       case _: ApiDailyMatchRegistered => ZIO.succeed(Nil)
       case _ =>
-        val teams        = dailyMatch.teams
+        val teams   = dailyMatch.teams
         val team1Fp = teams.team1.fairPlayRemovals.map(_.value)
         val team2Fp = teams.team2.fairPlayRemovals.map(_.value)
 
-        val team1ByBoard: Map[Short, MatchPlayerStarted] = teams.team1.players.collect {
-          case p: MatchPlayerStarted => p.board.path.segments.last.toShort -> p
+        val team1ByBoard: Map[Short, MatchPlayerStarted] = teams.team1.players.collect { case p: MatchPlayerStarted =>
+          p.board.path.segments.last.toShort -> p
         }.toMap
-        val team2ByBoard: Map[Short, MatchPlayerStarted] = teams.team2.players.collect {
-          case p: MatchPlayerStarted => p.board.path.segments.last.toShort -> p
+        val team2ByBoard: Map[Short, MatchPlayerStarted] = teams.team2.players.collect { case p: MatchPlayerStarted =>
+          p.board.path.segments.last.toShort -> p
         }.toMap
 
         val allBoards = (team1ByBoard.keySet ++ team2ByBoard.keySet).toList.sorted
@@ -310,7 +322,7 @@ private[history] object HistoryProcessing {
     val key = username.value
     ctx.knownPlayers.get.map(_.get(key)).flatMap {
       case Some(playerId) => ctx.playersKnown.update(_ + 1).as(Some(playerId))
-      case None => discoverPlayer(ctx, username, key, isOurTeam, matchStartTime)
+      case None           => discoverPlayer(ctx, username, key, isOurTeam, matchStartTime)
     }
   }
 
@@ -329,7 +341,7 @@ private[history] object HistoryProcessing {
       action <- ctx.discoveryCache.modify { m =>
         m.get(key) match {
           case Some(existing) => (existing.await, m)
-          case None           => (doDiscoverPlayer(ctx, username, key, promise, isOurTeam, matchStartTime), m + (key -> promise))
+          case None => (doDiscoverPlayer(ctx, username, key, promise, isOurTeam, matchStartTime), m + (key -> promise))
         }
       }
       result <- action
@@ -358,15 +370,14 @@ private[history] object HistoryProcessing {
             }.as(false)
 
           case None =>
-            val since = if (statusCategory == PlayerStatusCategory.Active) { now }
-            else { apiPlayer.lastOnlineAt }
-            Player.insertIfNew(Player(playerId, apiPlayer.joinedAt, username, statusCategory, apiPlayer.title, since)).flatMap { inserted =>
-              if (inserted == 0) { ZIO.succeed(false) }
-              else {
-                ZIO.whenDiscard(isOurTeam)(createClubMemberForDiscovered(ctx, apiPlayer, matchStartTime))
-                  .as(true)
+            val since = if (statusCategory == PlayerStatusCategory.Active) now else apiPlayer.lastOnlineAt
+            Player.insertIfNew(Player(playerId, apiPlayer.joinedAt, username, statusCategory, apiPlayer.title, since))
+              .flatMap { inserted =>
+                if (inserted == 0) ZIO.succeed(false)
+                else {
+                  ZIO.whenDiscard(isOurTeam)(createClubMemberForDiscovered(ctx, apiPlayer, matchStartTime)).as(true)
+                }
               }
-            }
         }
       }
       result <- {
@@ -379,9 +390,10 @@ private[history] object HistoryProcessing {
     // The doer handles success/failure and completes the promise.
     // On failure: log once, count once, resolve promise to None so awaiting fibers get None (not an exception).
     work.foldZIO(
-      error => ctx.playersFailed.update(_ + 1)
-        *> CcasLogger.warn(s"    Cannot resolve player $username: ${error.getMessage}")
-        *> promise.succeed(None).as(None),
+      error =>
+        ctx.playersFailed.update(_ + 1)
+          *> CcasLogger.warn(s"    Cannot resolve player $username: ${error.getMessage}")
+          *> promise.succeed(None).as(None),
       result => promise.succeed(result).as(result)
     )
   }
@@ -479,7 +491,7 @@ private[history] object HistoryProcessing {
       case None => ZIO.none
       case Some(segment) =>
         val slug = ClubSlug.wrap(segment)
-        val key = slug.value
+        val key  = slug.value
         for {
           promise <- Promise.make[Throwable, Option[ClubId]]
           action <- ctx.clubCache.modify { m =>

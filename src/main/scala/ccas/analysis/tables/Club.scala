@@ -6,9 +6,9 @@ import java.time.Instant
 import com.augustnagro.magnum.*
 import zio.ZIO
 
+import ccas.analysis.apps.ref.RefHelpers
 import ccas.api.club.ApiClub
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
-import ccas.analysis.apps.ref.RefHelpers
 import ccas.utils.client.ChessComClient
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.SqlZioTypes.{connectZIO, transactZIO}
@@ -50,9 +50,9 @@ object Club {
 
   /** Upsert that handles slug conflicts by resolving the stale club's current slug via match ref.
     *
-    * When another club already holds the target slug in the database, this method looks up one of
-    * the stale club's matches and fetches the team URL from the Chess.com API to discover its
-    * current slug. Falls back to a placeholder if the stale club has no matches.
+    * When another club already holds the target slug in the database, this method looks up one of the stale club's
+    * matches and fetches the team URL from the Chess.com API to discover its current slug. Falls back to a placeholder
+    * if the stale club has no matches.
     */
   def upsertResolvingSlugConflict(club: Club, client: ChessComClient): ZIO[Transactor, Throwable, Int] =
     for {
@@ -68,7 +68,8 @@ object Club {
     ClubMatch.selectClubMatchRef(stale.clubId).flatMap {
       case Some(ref) =>
         RefHelpers.fetchTeamMatchTeams(client, ref.matchId, ref.isLive).flatMap { teams =>
-          val team = if (ref.isTeam1) { teams.team1 } else { teams.team2 }
+          val team = if (ref.isTeam1) { teams.team1 }
+          else { teams.team2 }
           val newSlug = ClubSlug.wrap(team.`@id`.path.segments.last)
           connectZIO {
             sql"UPDATE club SET slug = $newSlug WHERE club_id = ${stale.clubId}".update.run()

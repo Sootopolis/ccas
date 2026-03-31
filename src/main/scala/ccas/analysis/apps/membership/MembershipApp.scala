@@ -1,5 +1,11 @@
 package ccas.analysis.apps.membership
 
+import java.time.Instant
+
+import com.augustnagro.magnum.Transactor
+import zio.{Chunk, RIO, Scope, Task, ZIO, ZIOAppArgs, ZIOAppDefault}
+import zio.http.Client
+
 import ccas.analysis.apps.membership.MembershipChange.*
 import ccas.analysis.tables.*
 import ccas.api.club.{ApiClub, ApiClubMembers}
@@ -9,11 +15,6 @@ import ccas.utils.client.ChessComClient
 import ccas.utils.errors.BadRequestException
 import ccas.utils.sql.DataSourceLayer
 import ccas.utils.sql.SqlZioTypes.withTransaction
-import com.augustnagro.magnum.Transactor
-import zio.http.Client
-import zio.{Chunk, RIO, Scope, Task, ZIO, ZIOAppArgs, ZIOAppDefault}
-
-import java.time.Instant
 
 object MembershipApp extends ZIOAppDefault {
   private val help = "Usage: MembershipApp <club-slug> [since [until]]"
@@ -69,13 +70,16 @@ object MembershipApp extends ZIOAppDefault {
           }
     }
 
-  private def reconcileIfStale(clubSlug: ClubSlug, until: Instant): RIO[CcasLogger & ChessComClient & Transactor, Unit] =
+  private def reconcileIfStale(
+    clubSlug: ClubSlug,
+    until: Instant
+  ): RIO[CcasLogger & ChessComClient & Transactor, Unit] =
     for {
       clubOpt <- Club.selectBySlug(clubSlug)
       _ <- ZIO.fromOption(clubOpt).flatMap { club =>
         MembershipRun.selectLatest(club.clubId).flatMap {
           case Some(run) if !until.isAfter(run.startedAt) => ZIO.unit
-          case _                                      => reconcile(clubSlug).unit
+          case _                                          => reconcile(clubSlug).unit
         }
       }.orElse(reconcile(clubSlug).unit)
     } yield ()
@@ -104,11 +108,18 @@ object MembershipApp extends ZIOAppDefault {
       (apiMembers, dbState) <- ApiClubMembers.get(client, resolvedUrlName).zipPar(buildDbState(clubId))
       apiMap = apiMembers.toMap
       now    = Instant.now()
-      phaseB      <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, dbState, now, trustUsernames)
-      phaseC      <- MembershipClassify.classifyDisappeared(client, dbState, phaseB.resolvedIds, apiMap, resolvedUrlName, now)
-      _           <- persist(phaseB, phaseC)
+      phaseB <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, dbState, now, trustUsernames)
+      phaseC <- MembershipClassify.classifyDisappeared(
+        client,
+        dbState,
+        phaseB.resolvedIds,
+        apiMap,
+        resolvedUrlName,
+        now
+      )
+      _ <- persist(phaseB, phaseC)
       completedAt = Instant.now()
-      _           <- ZIO.foreachDiscard(runId)(id => MembershipRun.complete(id, completedAt))
+      _ <- ZIO.foreachDiscard(runId)(id => MembershipRun.complete(id, completedAt))
     } yield mergeResults(phaseB, phaseC, apiMap.size, dbState.membersByPlayerId.size, startedAt, completedAt)
 
   private[membership] def buildDbState(clubId: ClubId): RIO[Transactor, DbState] =

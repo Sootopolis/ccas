@@ -1,18 +1,18 @@
 package ccas.analysis.apps.recruitment
 
-import java.time.Instant
 import java.time.temporal.ChronoUnit
+import java.time.Instant
 
 import com.augustnagro.magnum.Transactor
 import zio.{RIO, Task, UIO, ZIO}
 
 import ccas.analysis.tables.*
 import ccas.api.club.{ApiClub, ApiClubMembers}
-import ccas.utils.CcasLogger
 import ccas.api.misc.enums.ClubMatchStatus
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, Username}
 import ccas.api.player.*
 import ccas.utils.client.ChessComClient
+import ccas.utils.CcasLogger
 
 private[recruitment] object RecruitmentExplore {
 
@@ -184,12 +184,15 @@ private[recruitment] object RecruitmentExplore {
     for {
       invited   <- ctx.invitedRef.get
       evalCount <- ctx.evalCountRef.get
-      _ <- ctx.progressBar.print(invited.size, ctx.target,
-        s"[Progress] $sourceId | Evaluated: $evalCount | Invited: ${invited.size}/${ctx.target}")
+      _ <- ctx.progressBar.print(
+        invited.size,
+        ctx.target,
+        s"[Progress] $sourceId | Evaluated: $evalCount | Invited: ${invited.size}/${ctx.target}"
+      )
     } yield ()
 
-  /** When found count exceeds the target, trim the newest excess from invitedRef.
-    * All candidates are already Deferred in the DB; no status flip needed here.
+  /** When found count exceeds the target, trim the newest excess from invitedRef. All candidates are already Deferred
+    * in the DB; no status flip needed here.
     */
   def reclassifyExcessInvited(ctx: ExploreContext): RIO[Transactor, Unit] =
     for {
@@ -216,13 +219,14 @@ private[recruitment] object RecruitmentExplore {
       ZIO.foreachPar(toActivate) { source =>
         activateSource(ctx, source, evaluatedUsernames).map(members => (source, members))
       }.map { results =>
-        val (pool2, visited2) = results.foldLeft((activePool, visitedClubs)) { case ((pool, visited), (source, members)) =>
-          val newVisited = source match {
-            case ClubSource(name) => visited + name
-            case _                => visited
-          }
-          if (members.isEmpty) (pool, newVisited)
-          else (pool + (source.id -> SourceState(members, 0, 0, 0)), newVisited)
+        val (pool2, visited2) = results.foldLeft((activePool, visitedClubs)) {
+          case ((pool, visited), (source, members)) =>
+            val newVisited = source match {
+              case ClubSource(name) => visited + name
+              case _                => visited
+            }
+            if (members.isEmpty) (pool, newVisited)
+            else (pool + (source.id -> SourceState(members, 0, 0, 0)), newVisited)
         }
         ActivationResult(pool2, remaining, visited2)
       }
@@ -277,7 +281,10 @@ private[recruitment] object RecruitmentExplore {
     ctx: ExploreContext,
     evaluatedUsernames: Set[Username],
     staticStrategies: List[RIO[CcasLogger & Transactor, List[SourceDescriptor]]]
-  ): RIO[CcasLogger & Transactor, (List[SourceDescriptor], List[RIO[CcasLogger & Transactor, List[SourceDescriptor]]])] =
+  ): RIO[
+    CcasLogger & Transactor,
+    (List[SourceDescriptor], List[RIO[CcasLogger & Transactor, List[SourceDescriptor]]])
+  ] =
     if (!ctx.explore) ZIO.succeed((Nil, staticStrategies))
     else
       for {
@@ -295,7 +302,7 @@ private[recruitment] object RecruitmentExplore {
               case head :: tail =>
                 for {
                   sources <- head
-                  _ <- CcasLogger.info(s"[Explore] Static strategy yielded ${sources.size} sources")
+                  _       <- CcasLogger.info(s"[Explore] Static strategy yielded ${sources.size} sources")
                 } yield (sources, tail)
             }
           }
@@ -303,12 +310,15 @@ private[recruitment] object RecruitmentExplore {
 
   // --- Discovery strategies ---
 
-  def discoverCandidateOpponents(client: ChessComClient, now: Instant): RIO[CcasLogger & Transactor, List[SourceDescriptor]] = {
+  def discoverCandidateOpponents(
+    client: ChessComClient,
+    now: Instant
+  ): RIO[CcasLogger & Transactor, List[SourceDescriptor]] = {
     val cutoff = now.minus(90, ChronoUnit.DAYS)
     val months = RecruitmentStatsHelpers.recentArchiveMonths(now, 90)
     for {
       tmPlayers <- PlayerRecruitmentCache.selectTmActive(20)
-      players <- Player.selectByIds(tmPlayers.map(_.playerId))
+      players   <- Player.selectByIds(tmPlayers.map(_.playerId))
       usernames = players.map(_.username)
       opponentSets <- ZIO.foreachPar(usernames) { username =>
         ZIO.foreachPar(months) { ym =>
@@ -329,8 +339,10 @@ private[recruitment] object RecruitmentExplore {
   def discoverMatchBoardOpponents(clubId: ClubId): RIO[CcasLogger & Transactor, List[SourceDescriptor]] =
     for {
       matchIds <- ClubMatch.selectMatchIdsForClub(clubId)
-      matches  <- ZIO.foreach(matchIds.toList)(ClubMatch.selectId).map(_.flatten.filter(_.status == ClubMatchStatus.Finished))
-      boards   <- ZIO.foreach(matches)(m => ClubMatchBoard.selectMatch(m.matchId))
+      matches <- ZIO.foreach(matchIds.toList)(ClubMatch.selectId).map(
+        _.flatten.filter(_.status == ClubMatchStatus.Finished)
+      )
+      boards <- ZIO.foreach(matches)(m => ClubMatchBoard.selectMatch(m.matchId))
       opponentIds = matches.zip(boards).flatMap { (m, bs) =>
         val isTeam1 = m.team1ClubId.contains(clubId)
         bs.flatMap(b => if (isTeam1) b.team2PlayerId else b.team1PlayerId)
@@ -338,10 +350,9 @@ private[recruitment] object RecruitmentExplore {
       players <- Player.selectByIds(opponentIds)
       usernames = players.map(_.username)
       _ <- CcasLogger.info(s"[Explore] Match board opponents strategy found ${usernames.size} players")
-    } yield {
+    } yield
       if (usernames.isEmpty) Nil
       else List(UsernameSource("match-board-opponents", usernames))
-    }
 
   private def extractAdminUsernames(apiClub: ApiClub): Set[Username] =
     apiClub.admin.map(url => Username.wrap(url.path.segments.last)).toSet

@@ -1,6 +1,7 @@
 package ccas.server.routes
 
 import java.time.{Instant, ZoneOffset}
+import scala.util.chaining.*
 
 import com.augustnagro.magnum.Transactor
 import zio.http.*
@@ -12,8 +13,6 @@ import ccas.api.misc.subtypes.{ClubSlug, PlayerId, Username}
 import ccas.server.routes.RouteHelpers.*
 import ccas.utils.client.ChessComClient
 import ccas.utils.errors.NotFoundException
-
-import scala.util.chaining.*
 
 object BlacklistRoutes {
 

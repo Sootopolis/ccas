@@ -5,8 +5,8 @@ import java.time.Instant
 import com.augustnagro.magnum.Transactor
 import zio.{RIO, ZIO}
 
-import ccas.analysis.apps.PlayerUpdater
 import ccas.analysis.apps.ref.RefHelpers
+import ccas.analysis.apps.PlayerUpdater
 import ccas.analysis.tables.*
 import ccas.api.misc.subtypes.{PlayerId, Username}
 import ccas.api.player.ApiPlayerMatches
@@ -27,23 +27,34 @@ private[recruitment] object RecruitmentPersistence {
     ZIO.foreachDiscard(candidate.apiPlayer) { ap =>
       withTransaction {
         for {
-          _ <- if (candidate.isNewPlayer) {
-            Player.insert(Player(
-              ap.playerId, ap.joinedAt,
-              candidate.username, ap.status.category, ap.title, now
-            )).unit
-          } else {
-            Player.selectIdForUpdate(ap.playerId).flatMap {
-              case Some(existing)
-                  if existing.stateMatches(candidate.username, ap.status.category, ap.title) =>
-                ZIO.unit
-              case Some(existing) =>
-                PlayerUpdater.archiveAndUpdate(
-                  existing, candidate.username, ap.status.category, ap.title, now, client
-                ).unit
-              case None => ZIO.unit
+          _ <-
+            if (candidate.isNewPlayer) {
+              Player.insert(
+                Player(
+                  ap.playerId,
+                  ap.joinedAt,
+                  candidate.username,
+                  ap.status.category,
+                  ap.title,
+                  now
+                )
+              ).unit
+            } else {
+              Player.selectIdForUpdate(ap.playerId).flatMap {
+                case Some(existing) if existing.stateMatches(candidate.username, ap.status.category, ap.title) =>
+                  ZIO.unit
+                case Some(existing) =>
+                  PlayerUpdater.archiveAndUpdate(
+                    existing,
+                    candidate.username,
+                    ap.status.category,
+                    ap.title,
+                    now,
+                    client
+                  ).unit
+                case None => ZIO.unit
+              }
             }
-          }
           _ <- ZIO.foreachDiscard(candidate.cache)(PlayerRecruitmentCache.upsert)
           // Skip candidate row for cache-only rejections so they aren't blocked by daysSinceRejected
           // Passing candidates are written as Deferred; only flipped to Invited after confirmation at finalization

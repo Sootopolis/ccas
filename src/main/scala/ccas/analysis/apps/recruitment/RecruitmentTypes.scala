@@ -1,17 +1,18 @@
 package ccas.analysis.apps.recruitment
 
+import java.time.Instant
+
+import com.augustnagro.magnum.Transactor
+import zio.{RIO, Ref}
+import zio.http.URL
+
 import ccas.analysis.tables.{PlayerRecruitmentCache, RecruitmentCriteria}
 import ccas.api.misc.enums.GameResultDetail
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
 import ccas.api.player.{ApiPlayer, ApiPlayerMatches}
 import ccas.api.player.ApiPlayerArchive.ApiPlayerArchiveGame
-import ccas.utils.ProgressBar
 import ccas.utils.client.ChessComClient
-import com.augustnagro.magnum.Transactor
-import zio.http.URL
-import zio.{RIO, Ref}
-
-import java.time.Instant
+import ccas.utils.ProgressBar
 
 // --- Filter pipeline types ---
 
@@ -36,10 +37,10 @@ private[recruitment] case class RunContext(
 /** Accumulated per-candidate state — populated as filters run.
   *
   * @param cacheRejected
-  *   Set by [[RecruitmentFilterDefs.CheckCacheCriteria]] when the candidate is rejected purely on
-  *   cached stats (no fresh API data fetched beyond the initial player lookup). When true,
-  *   no [[ccas.analysis.tables.RecruitmentCandidate]] row is persisted so the candidate is not
-  *   blocked by the `daysSinceRejected` cooldown and can be re-evaluated once the cache ages out.
+  *   Set by [[RecruitmentFilterDefs.CheckCacheCriteria]] when the candidate is rejected purely on cached stats (no
+  *   fresh API data fetched beyond the initial player lookup). When true, no
+  *   [[ccas.analysis.tables.RecruitmentCandidate]] row is persisted so the candidate is not blocked by the
+  *   `daysSinceRejected` cooldown and can be re-evaluated once the cache ages out.
   */
 private[recruitment] case class CandidateContext(
   username: Username,

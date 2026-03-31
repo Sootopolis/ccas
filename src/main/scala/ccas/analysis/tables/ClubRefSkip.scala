@@ -5,12 +5,11 @@ import java.time.Instant
 
 import com.augustnagro.magnum.*
 import zio.ZIO
+import RefSkipReason.given
 
 import ccas.api.misc.subtypes.ClubId
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.SqlZioTypes.connectZIO
-
-import RefSkipReason.given
 
 final case class ClubRefSkip(
   clubId: ClubId,

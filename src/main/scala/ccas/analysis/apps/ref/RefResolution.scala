@@ -5,19 +5,29 @@ import java.time.Instant
 import com.augustnagro.magnum.Transactor
 import zio.{Promise, RIO, Task, UIO, ZIO}
 import zio.http.URL
+import RefUtils.*
 
-import ccas.analysis.tables.{ClubMatch, ClubMatchBoard, ClubMatchRef, ClubRefSkip, MatchKey, PlayerMatchRef, PlayerRefSkip, PlayerTournamentRef, RefSkipReason}
+import ccas.analysis.apps.ref.RefHelpers.parseMatchUrl
+import ccas.analysis.tables.{
+  ClubMatch,
+  ClubMatchBoard,
+  ClubMatchRef,
+  ClubRefSkip,
+  MatchKey,
+  PlayerMatchRef,
+  PlayerRefSkip,
+  PlayerTournamentRef,
+  RefSkipReason
+}
 import ccas.api.club.ApiClubMatches
 import ccas.api.clubmatch.TeamMatchTeams
 import ccas.api.misc.subtypes.{ClubMatchId, PlayerId, TournamentSlug, Username}
 import ccas.api.player.{ApiPlayer, ApiPlayerMatches, ApiPlayerTournaments}
 import ccas.api.player.ApiPlayerMatches.ApiPlayerMatch
 import ccas.api.tournament.ApiTournamentRound
-import ccas.utils.CcasLogger
 import ccas.utils.client.{ChessComClient, HttpStatusException}
 import ccas.utils.errors.safeMessage
-import ccas.analysis.apps.ref.RefHelpers.parseMatchUrl
-import RefUtils.*
+import ccas.utils.CcasLogger
 
 private[ref] object RefResolution {
 
@@ -67,11 +77,12 @@ private[ref] object RefResolution {
     for {
       playerMatches <- ctx.client.get[ApiPlayerMatches](ApiPlayerMatches.getUrl(player.username))
       candidates = playerMatches.finished.filter(_.board.isDefined)
-      result <- if (candidates.isEmpty) {
-        CcasLogger.debug(s"  ${player.username}: no finished match with board").as(ResolveResult.NoData)
-      } else {
-        tryMatches(ctx, player, candidates.toList)
-      }
+      result <-
+        if (candidates.isEmpty) {
+          CcasLogger.debug(s"  ${player.username}: no finished match with board").as(ResolveResult.NoData)
+        } else {
+          tryMatches(ctx, player, candidates.toList)
+        }
     } yield result
 
   private def tryMatches(
@@ -102,15 +113,16 @@ private[ref] object RefResolution {
           case false =>
             fetchMatch(ctx, parsed.matchId, parsed.isLive).foldZIO(
               error => recordFailedUrl(ctx, parsed.matchUrl, error, "player").as(ResolveResult.NotFound),
-              teams => RefHelpers.findPlayerIsTeam1(teams, player.username) match {
-                case None => ZIO.succeed(ResolveResult.NotFound)
-                case Some(isTeam1) =>
-                  handleVerification(ctx, player) {
-                    val ref = PlayerMatchRef(player.playerId, parsed.matchId, parsed.isLive, isTeam1, boardIdx)
-                    PlayerMatchRef.insert(ref) *> PlayerRefSkip.deleteId(player.playerId) *>
-                      ctx.playersResolvedApi.update(_ + 1).as(ResolveResult.Resolved)
-                  }
-              }
+              teams =>
+                RefHelpers.findPlayerIsTeam1(teams, player.username) match {
+                  case None => ZIO.succeed(ResolveResult.NotFound)
+                  case Some(isTeam1) =>
+                    handleVerification(ctx, player) {
+                      val ref = PlayerMatchRef(player.playerId, parsed.matchId, parsed.isLive, isTeam1, boardIdx)
+                      PlayerMatchRef.insert(ref) *> PlayerRefSkip.deleteId(player.playerId) *>
+                        ctx.playersResolvedApi.update(_ + 1).as(ResolveResult.Resolved)
+                    }
+                }
             )
         }
     }
@@ -123,11 +135,12 @@ private[ref] object RefResolution {
     for {
       playerTournaments <- ctx.client.get[ApiPlayerTournaments](ApiPlayerTournaments.getUrl(player.username))
       eligible = playerTournaments.finished ++ playerTournaments.inProgress
-      result <- if (eligible.isEmpty) {
-        CcasLogger.debug(s"  ${player.username}: no eligible tournaments").as(ResolveResult.NoData)
-      } else {
-        tryTournaments(ctx, player, eligible.toList)
-      }
+      result <-
+        if (eligible.isEmpty) {
+          CcasLogger.debug(s"  ${player.username}: no eligible tournaments").as(ResolveResult.NoData)
+        } else {
+          tryTournaments(ctx, player, eligible.toList)
+        }
     } yield result
 
   private def tryTournaments(
@@ -186,14 +199,15 @@ private[ref] object RefResolution {
         case None =>
           for {
             clubMatches <- ctx.client.get[ApiClubMatches](ApiClubMatches.getUrl(club.slug))
-            result <- if (clubMatches.finished.isEmpty) {
-              skipClub(ctx, club, RefSkipReason.NoData).as(false)
-            } else {
-              tryClubMatches(ctx, club, clubMatches.finished.toList).flatMap {
-                case true  => ZIO.succeed(true)
-                case false => skipClub(ctx, club, RefSkipReason.ResolutionFailed).as(false)
+            result <-
+              if (clubMatches.finished.isEmpty) {
+                skipClub(ctx, club, RefSkipReason.NoData).as(false)
+              } else {
+                tryClubMatches(ctx, club, clubMatches.finished.toList).flatMap {
+                  case true  => ZIO.succeed(true)
+                  case false => skipClub(ctx, club, RefSkipReason.ResolutionFailed).as(false)
+                }
               }
-            }
           } yield result
       }
     } yield resolved).catchAll {
@@ -226,13 +240,14 @@ private[ref] object RefResolution {
       case false =>
         fetchMatch(ctx, parsed.matchId, parsed.isLive).foldZIO(
           error => recordFailedUrl(ctx, parsed.matchUrl, error, "club").as(false),
-          teams => RefHelpers.findClubIsTeam1(teams, club.slug) match {
-            case None => ZIO.succeed(false)
-            case Some(isTeam1) =>
-              val ref = ClubMatchRef(club.clubId, parsed.matchId, parsed.isLive, isTeam1)
-              ClubMatchRef.insert(ref) *> ClubRefSkip.deleteId(club.clubId) *>
-                ctx.clubsResolvedApi.update(_ + 1).as(true)
-          }
+          teams =>
+            RefHelpers.findClubIsTeam1(teams, club.slug) match {
+              case None => ZIO.succeed(false)
+              case Some(isTeam1) =>
+                val ref = ClubMatchRef(club.clubId, parsed.matchId, parsed.isLive, isTeam1)
+                ClubMatchRef.insert(ref) *> ClubRefSkip.deleteId(club.clubId) *>
+                  ctx.clubsResolvedApi.update(_ + 1).as(true)
+            }
         )
     }
   }

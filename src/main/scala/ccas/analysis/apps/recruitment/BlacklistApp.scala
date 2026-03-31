@@ -61,9 +61,16 @@ object BlacklistApp extends ZIOAppDefault {
         for {
           apiPlayer <- client.get[ApiPlayer](ApiPlayer.getUrl(username))
           now = Instant.now()
-          _ <- Player.insertIfNew(Player(
-            apiPlayer.playerId, apiPlayer.joinedAt, username, apiPlayer.status.category, apiPlayer.title, now
-          ))
+          _ <- Player.insertIfNew(
+            Player(
+              apiPlayer.playerId,
+              apiPlayer.joinedAt,
+              username,
+              apiPlayer.status.category,
+              apiPlayer.title,
+              now
+            )
+          )
           _ <- RecruitmentBlacklist.upsert(
             RecruitmentBlacklist(apiClub.clubId, apiPlayer.playerId, now, expiresAt, reason)
           )
@@ -84,7 +91,7 @@ object BlacklistApp extends ZIOAppDefault {
           Console.printLine(s"No active blacklist entries for $clubSlug").orDie
         } else {
           ZIO.foreachDiscard(entries) { e =>
-            val name    = e.username.map(_.toString).getOrElse(s"player_id=${e.playerId}")
+            val name    = e.username.fold(s"player_id=${e.playerId}")(_.toString)
             val expires = e.expiresAt.fold("indefinite")(t => s"expires $t")
             val reason  = e.reason.fold("")(r => s" reason=$r")
             Console.printLine(s"  $name  $expires$reason").orDie

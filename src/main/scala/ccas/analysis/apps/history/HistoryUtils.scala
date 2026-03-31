@@ -1,6 +1,7 @@
 package ccas.analysis.apps.history
 
 import zio.{Promise, Ref, ZIO}
+
 import ccas.analysis.tables.MatchKey
 import ccas.api.clubmatch.{ApiDailyMatch, ApiLiveMatch}
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username}
@@ -35,8 +36,8 @@ private[history] object HistoryUtils {
     failedMembers: List[(Username, String)] = Nil
   )
 
-  /** Shared mutable state for concurrent Phase 3 processing: API response caches (deduplicated via Promises),
-    * a player lookup map, counters for statistics, and error tracking.
+  /** Shared mutable state for concurrent Phase 3 processing: API response caches (deduplicated via Promises), a player
+    * lookup map, counters for statistics, and error tracking.
     */
   class ProcessingContext(
     val client: ChessComClient,

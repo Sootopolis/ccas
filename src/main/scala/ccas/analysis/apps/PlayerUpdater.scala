@@ -12,8 +12,8 @@ import ccas.api.misc.subtypes.Username
 import ccas.api.player.ApiPlayer
 import ccas.utils.client.ChessComClient
 
-/** Shared helper for updating a player's current state with archive-to-snapshot
-  * and username conflict resolution. Must be called within `withTransaction`.
+/** Shared helper for updating a player's current state with archive-to-snapshot and username conflict resolution. Must
+  * be called within `withTransaction`.
   */
 object PlayerUpdater {
 
@@ -30,7 +30,14 @@ object PlayerUpdater {
         case Some(conflicting) =>
           client.get[ApiPlayer](ApiPlayer.getUrl(conflicting.username)).flatMap { apiPlayer =>
             if (!conflicting.stateMatches(apiPlayer.username, apiPlayer.status.category, apiPlayer.title)) {
-              archiveAndUpdate(conflicting, apiPlayer.username, apiPlayer.status.category, apiPlayer.title, Instant.now(), client)
+              archiveAndUpdate(
+                conflicting,
+                apiPlayer.username,
+                apiPlayer.status.category,
+                apiPlayer.title,
+                Instant.now(),
+                client
+              )
             } else {
               ZIO.succeed(0)
             }

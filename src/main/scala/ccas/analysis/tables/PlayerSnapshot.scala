@@ -50,9 +50,8 @@ object PlayerSnapshot {
       sql"SELECT $selectCols FROM player_snapshot WHERE username = $username".query[PlayerSnapshot].run().toList
     )
 
-  /** Historical snapshots plus current player state, for time-range reporting.
-    * Returns all snapshots whose `since` is after the given instant, plus
-    * the current state from `player` if its `since` falls after the cutoff.
+  /** Historical snapshots plus current player state, for time-range reporting. Returns all snapshots whose `since` is
+    * after the given instant, plus the current state from `player` if its `since` falls after the cutoff.
     */
   def selectSince(since: Instant): ZIO[Transactor, SQLException, List[PlayerSnapshot]] =
     connectZIO(

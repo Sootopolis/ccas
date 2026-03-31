@@ -1,15 +1,17 @@
 package ccas.analysis.apps.membership
 
-import java.time.{Instant, Duration as JDuration}
+import java.time.{Duration as JDuration, Instant}
+
+import com.augustnagro.magnum.Transactor
+import zio.{Chunk, RIO, URIO, ZIO}
+
 import ccas.analysis.apps.membership.MembershipChange.*
 import ccas.analysis.apps.membership.MembershipChange.MemberChange.*
 import ccas.analysis.tables.*
 import ccas.api.misc.enums.PlayerStatusCategory
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
-import ccas.utils.{CcasLogger, display}
+import ccas.utils.{display, CcasLogger}
 import ccas.utils.errors.NotFoundException
-import com.augustnagro.magnum.Transactor
-import zio.{Chunk, RIO, URIO, ZIO}
 
 private[membership] object MembershipReport {
 
@@ -133,7 +135,7 @@ private[membership] object MembershipReport {
   }
 
   private def formatChangeSummaries(summaries: List[MemberChangeSummary]): String = {
-    val sb = new StringBuilder
+    val sb      = new StringBuilder
     val grouped = groupByCategory(summaries)
     grouped.foreach { case (label, entries) =>
       sb.append(s"$label\n")

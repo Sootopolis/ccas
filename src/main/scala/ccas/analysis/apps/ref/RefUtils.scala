@@ -1,7 +1,7 @@
 package ccas.analysis.apps.ref
 
-import java.time.Instant
 import java.time.temporal.ChronoUnit
+import java.time.Instant
 
 import zio.{Promise, Ref, UIO}
 
@@ -17,17 +17,17 @@ private[ref] object RefUtils {
 
   enum ResolveResult {
     case Resolved
-    case NotFound       // had candidates, tried them, none worked
-    case NoData         // API returned empty candidate list
-    case SkipPlayer     // player ID mismatch — don't try more matches/tournaments
+    case NotFound   // had candidates, tried them, none worked
+    case NoData     // API returned empty candidate list
+    case SkipPlayer // player ID mismatch — don't try more matches/tournaments
   }
 
   object RetryWindows {
-    val NoData: Long            = 14 // days
-    val NotFound: Long          = 30
-    val IdMismatch: Long        = 90
-    val ResolutionFailed: Long  = 7
-    val ApiError: Long          = 3
+    val NoData: Long           = 14 // days
+    val NotFound: Long         = 30
+    val IdMismatch: Long       = 90
+    val ResolutionFailed: Long = 7
+    val ApiError: Long         = 3
 
     def cutoff(reason: RefSkipReason, now: Instant): Instant = {
       val days = reason match {
@@ -49,11 +49,11 @@ private[ref] object RefUtils {
     )
 
     def allCutoffs(now: Instant): Cutoffs = Cutoffs(
-      noData           = cutoff(RefSkipReason.NoData, now),
-      notFound         = cutoff(RefSkipReason.NotFound, now),
-      idMismatch       = cutoff(RefSkipReason.IdMismatch, now),
+      noData = cutoff(RefSkipReason.NoData, now),
+      notFound = cutoff(RefSkipReason.NotFound, now),
+      idMismatch = cutoff(RefSkipReason.IdMismatch, now),
       resolutionFailed = cutoff(RefSkipReason.ResolutionFailed, now),
-      apiError         = cutoff(RefSkipReason.ApiError, now)
+      apiError = cutoff(RefSkipReason.ApiError, now)
     )
   }
 
@@ -85,10 +85,17 @@ private[ref] object RefUtils {
         playersSkippedNew  <- Ref.make(0)
         clubsSkippedNew    <- Ref.make(0)
       } yield new RefContext(
-        client, cache, failedUrls, failedUrlSource,
-        clubsResolvedDb, clubsResolvedApi,
-        playersResolvedDb, playersResolvedApi,
-        skippedPlayers, playersSkippedNew, clubsSkippedNew
+        client,
+        cache,
+        failedUrls,
+        failedUrlSource,
+        clubsResolvedDb,
+        clubsResolvedApi,
+        playersResolvedDb,
+        playersResolvedApi,
+        skippedPlayers,
+        playersSkippedNew,
+        clubsSkippedNew
       )
   }
 

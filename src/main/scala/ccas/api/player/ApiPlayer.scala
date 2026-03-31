@@ -28,7 +28,7 @@ final case class ApiPlayer(
   league: Option[League],
   fide: Option[Elo] // FIDE rating
 ) derives JsonDecoder {
-  val joinedAt: Instant    = Instant.ofEpochSecond(joined)
+  val joinedAt: Instant     = Instant.ofEpochSecond(joined)
   val lastOnlineAt: Instant = Instant.ofEpochSecond(lastOnline)
 }
 

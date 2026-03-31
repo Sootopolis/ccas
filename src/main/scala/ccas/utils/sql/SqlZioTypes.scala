@@ -41,19 +41,20 @@ object SqlZioTypes {
       }
     }
 
-  /** Wraps a Connection in a Proxy that suppresses close/commit/rollback/setAutoCommit,
-    * so nested transactZIO calls inside withTransaction cannot break the outer transaction.
+  /** Wraps a Connection in a Proxy that suppresses close/commit/rollback/setAutoCommit, so nested transactZIO calls
+    * inside withTransaction cannot break the outer transaction.
     */
   private def transactionProxy(con: Connection): Connection =
     Proxy.newProxyInstance(
       con.getClass.getClassLoader,
       Array(classOf[Connection]),
-      (_, method: Method, args: Array[AnyRef]) => method.getName match {
-        case "close" | "commit" | "rollback" => ()
-        case "setAutoCommit"                 => ()
-        case _ if args == null               => method.invoke(con)
-        case _                               => method.invoke(con, args*)
-      }
+      (_, method: Method, args: Array[AnyRef]) =>
+        method.getName match {
+          case "close" | "commit" | "rollback" => ()
+          case "setAutoCommit"                 => ()
+          case _ if args == null               => method.invoke(con)
+          case _                               => method.invoke(con, args*)
+        }
     ).asInstanceOf[Connection] // safe: proxy implements Connection interface
 
   /** Minimal DataSource that always returns the same (proxied) connection. */

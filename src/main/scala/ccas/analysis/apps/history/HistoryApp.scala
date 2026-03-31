@@ -1,17 +1,19 @@
 package ccas.analysis.apps.history
 
-import java.time.{Instant, Duration as JDuration}
+import java.time.{Duration as JDuration, Instant}
+
 import com.augustnagro.magnum.Transactor
 import zio.{RIO, Ref, Scope, URIO, ZEnvironment, ZIO, ZIOAppArgs, ZIOAppDefault}
 import zio.http.Client
+import HistoryUtils.*
+
 import ccas.analysis.apps.membership.MembershipApp
 import ccas.analysis.tables.*
 import ccas.api.misc.subtypes.*
+import ccas.utils.{display, CcasLogger, OutputFile}
 import ccas.utils.client.ChessComClient
 import ccas.utils.errors.BadRequestException
 import ccas.utils.sql.DataSourceLayer
-import ccas.utils.{CcasLogger, OutputFile, display}
-import HistoryUtils.*
 
 /** Discovers and persists a chess club's match history by crawling the Chess.com API.
   *
@@ -28,13 +30,13 @@ import HistoryUtils.*
   *     across the board (e.g., to pick up score corrections or newly resolved fair-play removals).
   *
   * ==Workflow (4 Phases)==
-  *   1. '''Initialize''' — Reconcile club membership, load current state (members, snapshots, processed counts),
-  *      reset pending match statuses, and create a `HistoryRun` record.
-  *   2. '''Seed''' — Collect match IDs into `history_pending_match` from three sources:
-  *      the club matches endpoint, each member's match list, and stale/all existing matches.
-  *      Also retries previously unresolved clubs and board players from prior runs.
-  *   3. '''Process''' — BFS wave loop: fetch and persist match data in parallel batches, discover unknown players,
-  *      seed their match lists, and repeat until no new pending matches remain.
+  *   1. '''Initialize''' — Reconcile club membership, load current state (members, snapshots, processed counts), reset
+  *      pending match statuses, and create a `HistoryRun` record.
+  *   2. '''Seed''' — Collect match IDs into `history_pending_match` from three sources: the club matches endpoint, each
+  *      member's match list, and stale/all existing matches. Also retries previously unresolved clubs and board players
+  *      from prior runs.
+  *   3. '''Process''' — BFS wave loop: fetch and persist match data in parallel batches, discover unknown players, seed
+  *      their match lists, and repeat until no new pending matches remain.
   *   4. '''Finalize''' — Mark the `HistoryRun` complete, log summary stats, and write a report file.
   *
   * ==Unresolved Entities==
@@ -45,8 +47,8 @@ import HistoryUtils.*
   *   - '''Unresolved board players:''' If a player's username can't be resolved to a `PlayerId` (account closed or
   *     deleted), it is recorded in `unresolved_board_player`. The board row is saved with a `None` player ID.
   *
-  * Both types are retried at the start of each run. Successfully resolved entries are patched in-place and removed
-  * from their respective unresolved tables.
+  * Both types are retried at the start of each run. Successfully resolved entries are patched in-place and removed from
+  * their respective unresolved tables.
   *
   * ==Invocation==
   *   - '''CLI:''' `HistoryApp <club-slug> [--full] [--refresh]`
@@ -87,7 +89,7 @@ object HistoryApp extends ZIOAppDefault {
     clubSlug: ClubSlug,
     full: Boolean,
     trigger: RunTrigger,
-    jobRunId: Option[String] = None
+    jobRunId: Option[String]
   ): RIO[CcasLogger & ChessComClient & Transactor, InitResult] =
     for {
       _ <- CcasLogger.info(s"=== HistoryApp: $clubSlug ===")
@@ -98,9 +100,9 @@ object HistoryApp extends ZIOAppDefault {
       clubId = club.clubId
       (allMembers, allPlayers, processedCount, queriedIds) <-
         ClubMember.selectClub(clubId) <&>
-        Player.selectAll <&>
-        ClubMatch.countForClub(clubId) <&>
-        HistoryMemberQuery.selectClubPlayerIds(clubId)
+          Player.selectAll <&>
+          ClubMatch.countForClub(clubId) <&>
+          HistoryMemberQuery.selectClubPlayerIds(clubId)
       _ <- HistoryPendingMatch.resetStatuses(clubId)
       startedAt = Instant.now()
       runId <- HistoryRun.insert(clubId, trigger, startedAt, jobRunId)
@@ -110,8 +112,10 @@ object HistoryApp extends ZIOAppDefault {
       )
       knownPlayersInit = allPlayers.map(p => p.username.value -> p.playerId).toMap
       client <- ZIO.service[ChessComClient]
-      ctx <- ProcessingContext.make(client, clubId, clubSlug, knownPlayersInit)
-      effectiveQueriedIds = if (full) { Set.empty[PlayerId] } else { queriedIds }
+      ctx    <- ProcessingContext.make(client, clubId, clubSlug, knownPlayersInit)
+      effectiveQueriedIds =
+        if (full) { Set.empty[PlayerId] }
+        else { queriedIds }
     } yield InitResult(allMembers, playerById, effectiveQueriedIds, ctx, startedAt, runId)
 
   /** Main entry point: orchestrates the 4-phase discover workflow for a club's match history. */
@@ -154,7 +158,15 @@ object HistoryApp extends ZIOAppDefault {
           _        <- CcasLogger.info(s"  Club matches endpoint: $seedClub new match IDs")
 
           memberSeed <-
-            HistorySeeding.seedFromMemberMatches(ctx.client, ctx.clubId, clubSlug, allMembers, queriedIds, playerById, settledMatchIds)
+            HistorySeeding.seedFromMemberMatches(
+              ctx.client,
+              ctx.clubId,
+              clubSlug,
+              allMembers,
+              queriedIds,
+              playerById,
+              settledMatchIds
+            )
           _ <- memberSeedRef.set(memberSeed)
           membersSkipped = allMembers.size - memberSeed.queried - memberSeed.failed
           _ <- CcasLogger.info(
@@ -166,17 +178,17 @@ object HistoryApp extends ZIOAppDefault {
           _         <- CcasLogger.info(s"  Stale match refresh: $seedStale matches queued")
 
           // Phase 3: Process matches (BFS waves)
-          _ <- CcasLogger.info("Phase 3: Processing matches...")
+          _  <- CcasLogger.info("Phase 3: Processing matches...")
           ws <- HistoryProcessing.processWaves(ctx, settledMatchIds)
         } yield ws
       }.onInterrupt {
         for {
-          sc   <- seedClubRef.get
-          ms   <- memberSeedRef.get
-          ss   <- seedStaleRef.get
+          sc <- seedClubRef.get
+          ms <- memberSeedRef.get
+          ss <- seedStaleRef.get
           skip = allMembers.size - ms.queried - ms.failed
           _ <- finalizeInterrupted(ctx, runId, startedAt, clubSlug, ms, skip, sc, ss)
-                 .provideEnvironment(ZEnvironment(logger, transactor)).orDie
+            .provideEnvironment(ZEnvironment(logger, transactor)).orDie
         } yield ()
       }
 
@@ -185,7 +197,7 @@ object HistoryApp extends ZIOAppDefault {
       memberSeed <- memberSeedRef.get
       seedStale  <- seedStaleRef.get
       membersSkipped = allMembers.size - memberSeed.queried - memberSeed.failed
-      completedAt = Instant.now()
+      completedAt    = Instant.now()
       totalStats = waveStats.copy(
         membersQueried = memberSeed.queried,
         membersSkipped = membersSkipped,
@@ -236,7 +248,9 @@ object HistoryApp extends ZIOAppDefault {
         s"Members queried: ${stats.membersQueried} | skipped: ${stats.membersSkipped} | failed: ${stats.membersFailed}"
       )
       _ <- CcasLogger.info(s"Matches seeded: ${stats.matchesSeeded}")
-      _ <- CcasLogger.info(s"Matches processed: ${stats.matchesProcessed} | failed: ${stats.matchesFailed} | unidentified: ${stats.matchesUnidentified}")
+      _ <- CcasLogger.info(
+        s"Matches processed: ${stats.matchesProcessed} | failed: ${stats.matchesFailed} | unidentified: ${stats.matchesUnidentified}"
+      )
       _ <- CcasLogger.info(
         s"Players discovered: ${stats.playersDiscovered} | known: ${stats.playersKnown} | failed: ${stats.playersFailed}"
       )
@@ -282,7 +296,8 @@ object HistoryApp extends ZIOAppDefault {
     if (stats.failedMatches.nonEmpty) {
       sb.append("--- Failed Matches ---\n")
       stats.failedMatches.foreach { case (MatchKey(matchId, isLive), error) =>
-        val kind = if (isLive) { " (live)" } else { "" }
+        val kind = if (isLive) { " (live)" }
+        else { "" }
         sb.append(s"  Match $matchId$kind: $error\n")
       }
       sb.append("\n")

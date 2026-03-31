@@ -1,16 +1,15 @@
 package ccas.analysis.apps.recruitment
 
-import java.time.Instant
 import java.time.temporal.ChronoUnit
+import java.time.Instant
 
 import com.augustnagro.magnum.Transactor
 import zio.{RIO, ZIO}
+import RecruitmentStatsHelpers.*
 
 import ccas.analysis.tables.*
 import ccas.api.misc.enums.PlayerStatusCategory
 import ccas.api.player.*
-
-import RecruitmentStatsHelpers.*
 
 private[recruitment] object RecruitmentFilterDefs {
 
@@ -20,8 +19,9 @@ private[recruitment] object RecruitmentFilterDefs {
     ZIO.fromOption(env.candidate.apiPlayer)
       .orElseFail(new NoSuchElementException("apiPlayer not set — FetchAndCheckPlayer must run first"))
 
-  private def getOrUpdateCache(env: FilterEnv)
-                              (update: PlayerRecruitmentCache => PlayerRecruitmentCache): PlayerRecruitmentCache = {
+  private def getOrUpdateCache(
+    env: FilterEnv
+  )(update: PlayerRecruitmentCache => PlayerRecruitmentCache): PlayerRecruitmentCache = {
     val playerId = env.candidate.apiPlayer.get.playerId
     val base = env.candidate.cache.getOrElse(
       PlayerRecruitmentCache.empty(playerId, env.run.now, None)
@@ -50,14 +50,14 @@ private[recruitment] object RecruitmentFilterDefs {
         )
         val rejected =
           statusCat != PlayerStatusCategory.Active
-          || criteria.minDaysSinceRegistration.exists { days =>
-            ChronoUnit.DAYS.between(Instant.ofEpochSecond(apiPlayer.joined), now) < days
-          }
-          || (criteria.nationalityCountries.nonEmpty && {
-            val countryCode = apiPlayer.country.path.segments.last
-            val listed = criteria.nationalityCountries.contains(countryCode)
-            criteria.nationalityExclude == listed
-          })
+            || criteria.minDaysSinceRegistration.exists { days =>
+              ChronoUnit.DAYS.between(Instant.ofEpochSecond(apiPlayer.joined), now) < days
+            }
+            || (criteria.nationalityCountries.nonEmpty && {
+              val countryCode = apiPlayer.country.path.segments.last
+              val listed      = criteria.nationalityCountries.contains(countryCode)
+              criteria.nationalityExclude == listed
+            })
         FilterResult(rejected, updatedCtx)
       }
   }
@@ -99,60 +99,65 @@ private[recruitment] object RecruitmentFilterDefs {
 
   private val cacheCriteria: List[CacheCriterion] = List(
     // Zero-tolerance daily timeout (90d — matches API stats window)
-    CacheCriterion(90L, (cache, criteria) =>
-      criteria.dailyMaxTimeoutPercent.contains(0.0) && cache.lastDailyTimeoutAt.isDefined
+    CacheCriterion(
+      90L,
+      (cache, criteria) => criteria.dailyMaxTimeoutPercent.contains(0.0) && cache.lastDailyTimeoutAt.isDefined
     ),
     // Zero-tolerance TM timeout (90d — matches API stats window)
-    CacheCriterion(90L, (cache, criteria) =>
-      criteria.dailyMaxTmTimeoutPercent.contains(0.0) && cache.lastTmTimeoutAt.isDefined
+    CacheCriterion(
+      90L,
+      (cache, criteria) => criteria.dailyMaxTmTimeoutPercent.contains(0.0) && cache.lastTmTimeoutAt.isDefined
     ),
     // Max clubs (30d)
-    CacheCriterion(30L, (cache, criteria) =>
-      criteria.maxClubs.exists(max => cache.clubCount.exists(_ > max))
-    ),
+    CacheCriterion(30L, (cache, criteria) => criteria.maxClubs.exists(max => cache.clubCount.exists(_ > max))),
     // Min daily ELO (30d)
-    CacheCriterion(30L, (cache, criteria) =>
-      criteria.dailyMinElo.exists(min => cache.dailyElo.exists(_ < min))
-    ),
+    CacheCriterion(30L, (cache, criteria) => criteria.dailyMinElo.exists(min => cache.dailyElo.exists(_ < min))),
     // Max daily ELO (30d)
-    CacheCriterion(30L, (cache, criteria) =>
-      criteria.dailyMaxElo.exists(max => cache.dailyElo.exists(_ > max))
-    ),
+    CacheCriterion(30L, (cache, criteria) => criteria.dailyMaxElo.exists(max => cache.dailyElo.exists(_ > max))),
     // Min daily score rate (30d)
-    CacheCriterion(30L, (cache, criteria) =>
-      criteria.dailyMinScoreRate.exists(min => cache.dailyScoreRate.exists(_ < min))
+    CacheCriterion(
+      30L,
+      (cache, criteria) => criteria.dailyMinScoreRate.exists(min => cache.dailyScoreRate.exists(_ < min))
     ),
     // Max daily score rate (30d)
-    CacheCriterion(30L, (cache, criteria) =>
-      criteria.dailyMaxScoreRate.exists(max => cache.dailyScoreRate.exists(_ > max))
+    CacheCriterion(
+      30L,
+      (cache, criteria) => criteria.dailyMaxScoreRate.exists(max => cache.dailyScoreRate.exists(_ > max))
     ),
     // Max daily timeout % (30d)
-    CacheCriterion(30L, (cache, criteria) =>
-      criteria.dailyMaxTimeoutPercent.exists(max => cache.dailyTimeoutPct.exists(_ > max))
+    CacheCriterion(
+      30L,
+      (cache, criteria) => criteria.dailyMaxTimeoutPercent.exists(max => cache.dailyTimeoutPct.exists(_ > max))
     ),
     // Min daily games finished (30d)
-    CacheCriterion(30L, (cache, criteria) =>
-      criteria.dailyMinGamesFinished.exists(min => cache.dailyGamesFinished.exists(_ < min))
+    CacheCriterion(
+      30L,
+      (cache, criteria) => criteria.dailyMinGamesFinished.exists(min => cache.dailyGamesFinished.exists(_ < min))
     ),
     // Min ongoing games (30d)
-    CacheCriterion(30L, (cache, criteria) =>
-      criteria.dailyMinOngoingGames.exists(min => cache.ongoingGames.exists(_ < min))
+    CacheCriterion(
+      30L,
+      (cache, criteria) => criteria.dailyMinOngoingGames.exists(min => cache.ongoingGames.exists(_ < min))
     ),
     // Max ongoing games (30d)
-    CacheCriterion(30L, (cache, criteria) =>
-      criteria.dailyMaxOngoingGames.exists(max => cache.ongoingGames.exists(_ > max))
+    CacheCriterion(
+      30L,
+      (cache, criteria) => criteria.dailyMaxOngoingGames.exists(max => cache.ongoingGames.exists(_ > max))
     ),
     // Min ongoing team matches (30d)
-    CacheCriterion(30L, (cache, criteria) =>
-      criteria.dailyMinOngoingTeamMatches.exists(min => cache.ongoingTeamMatches.exists(_ < min))
+    CacheCriterion(
+      30L,
+      (cache, criteria) => criteria.dailyMinOngoingTeamMatches.exists(min => cache.ongoingTeamMatches.exists(_ < min))
     ),
     // Min TM games finished 90d (30d)
-    CacheCriterion(30L, (cache, criteria) =>
-      criteria.dailyMinTmGamesFinished.exists(min => cache.tmGamesFinished90d.exists(_ < min))
+    CacheCriterion(
+      30L,
+      (cache, criteria) => criteria.dailyMinTmGamesFinished.exists(min => cache.tmGamesFinished90d.exists(_ < min))
     ),
     // Max TM timeout % 90d (30d)
-    CacheCriterion(30L, (cache, criteria) =>
-      criteria.dailyMaxTmTimeoutPercent.exists(max => cache.tmTimeoutPct90d.exists(_ > max))
+    CacheCriterion(
+      30L,
+      (cache, criteria) => criteria.dailyMaxTmTimeoutPercent.exists(max => cache.tmTimeoutPct90d.exists(_ > max))
     )
   )
 
@@ -197,7 +202,7 @@ private[recruitment] object RecruitmentFilterDefs {
         val criteria  = env.run.criteria
         val rejected =
           criteria.maxClubs.exists(clubCount > _)
-          || env.run.excludedSlugs.exists(clubNames.contains)
+            || env.run.excludedSlugs.exists(clubNames.contains)
         val updatedCache = getOrUpdateCache(env)(_.copy(clubCount = Some(clubCount)))
         FilterResult(rejected, env.candidate.copy(cache = Some(updatedCache)))
       }
@@ -244,12 +249,12 @@ private[recruitment] object RecruitmentFilterDefs {
         val criteria         = env.run.criteria
         val rejected =
           criteria.dailyMinElo.exists(dailyElo.value < _)
-          || criteria.dailyMaxElo.exists(dailyElo.value > _)
-          || criteria.dailyMinScoreRate.exists(dailyStats.record.scoreRate < _)
-          || criteria.dailyMaxScoreRate.exists(dailyStats.record.scoreRate > _)
-          || criteria.dailyMaxTimeoutPercent.exists(dailyTimeoutPct > _)
-          || criteria.dailyMinGamesFinished.exists(min => dailyGamesFinished90d.getOrElse(dailyGamesFinished) < min)
-          || criteria.dailyMaxHoursPerMove.exists(maxHours => dailyTimePerMove > maxHours * 3600)
+            || criteria.dailyMaxElo.exists(dailyElo.value > _)
+            || criteria.dailyMinScoreRate.exists(dailyStats.record.scoreRate < _)
+            || criteria.dailyMaxScoreRate.exists(dailyStats.record.scoreRate > _)
+            || criteria.dailyMaxTimeoutPercent.exists(dailyTimeoutPct > _)
+            || criteria.dailyMinGamesFinished.exists(min => dailyGamesFinished90d.getOrElse(dailyGamesFinished) < min)
+            || criteria.dailyMaxHoursPerMove.exists(maxHours => dailyTimePerMove > maxHours * 3600)
         val updatedCache = getOrUpdateCache(env)(
           _.copy(
             fetchedAt = env.run.now,
@@ -269,15 +274,15 @@ private[recruitment] object RecruitmentFilterDefs {
     def apply(env: FilterEnv): RIO[Transactor, FilterResult] =
       for {
         currentGames <- env.run.client.get[ApiPlayerGamesCurrent](ApiPlayerGamesCurrent.getUrl(env.candidate.username))
-        _ <- requireApiPlayer(env)
+        _            <- requireApiPlayer(env)
       } yield {
         val ongoingGames       = currentGames.games.size
         val ongoingTeamMatches = currentGames.games.count(_.`match`.isDefined)
-        val criteria = env.run.criteria
+        val criteria           = env.run.criteria
         val rejected =
           criteria.dailyMinOngoingGames.exists(ongoingGames < _)
-          || criteria.dailyMaxOngoingGames.exists(ongoingGames > _)
-          || criteria.dailyMinOngoingTeamMatches.exists(ongoingTeamMatches < _)
+            || criteria.dailyMaxOngoingGames.exists(ongoingGames > _)
+            || criteria.dailyMinOngoingTeamMatches.exists(ongoingTeamMatches < _)
         val updatedCache = getOrUpdateCache(env)(
           _.copy(ongoingGames = Some(ongoingGames), ongoingTeamMatches = Some(ongoingTeamMatches))
         )
@@ -291,8 +296,12 @@ private[recruitment] object RecruitmentFilterDefs {
         cache <- ZIO.fromOption(env.candidate.cache)
           .orElseFail(new NoSuchElementException("cache not set — CheckDailyStats must run before CheckTmStats"))
         tmStats <- fetchTmStats(
-          env.run.client, env.candidate.username, env.run.criteria,
-          cache.dailyTimeoutPct.getOrElse(0.0), env.run.now, env.candidate.recentArchives
+          env.run.client,
+          env.candidate.username,
+          env.run.criteria,
+          cache.dailyTimeoutPct.getOrElse(0.0),
+          env.run.now,
+          env.candidate.recentArchives
         )
         _ <- env.run.discoveredOpponents.update(_ ++ tmStats.opponentUsernames)
       } yield {
@@ -305,7 +314,7 @@ private[recruitment] object RecruitmentFilterDefs {
         val criteria = env.run.criteria
         val rejected =
           criteria.dailyMinTmGamesFinished.exists(tmStats.gamesFinished < _)
-          || criteria.dailyMaxTmTimeoutPercent.exists(max => tmStats.timeoutPct.exists(_ > max))
+            || criteria.dailyMaxTmTimeoutPercent.exists(max => tmStats.timeoutPct.exists(_ > max))
         FilterResult(rejected, env.candidate.copy(cache = Some(updatedCache)))
       }
   }

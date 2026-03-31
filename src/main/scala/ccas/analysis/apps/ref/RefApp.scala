@@ -2,17 +2,18 @@ package ccas.analysis.apps.ref
 
 import java.time.{Duration as JDuration, Instant}
 import scala.annotation.nowarn
+
 import com.augustnagro.magnum.{sql, Transactor}
 import zio.{RIO, Ref, Scope, ZIO, ZIOAppDefault}
 import zio.http.Client
+import RefUtils.*
 
 import ccas.analysis.tables.{ClubRefSkip, PlayerRefSkip, RunTrigger, Tables}
-import ccas.utils.{CcasLogger, OutputFile, display}
+import ccas.utils.{display, CcasLogger, OutputFile}
 import ccas.utils.client.ChessComClient
 import ccas.utils.sql.DataSourceLayer
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.SqlZioTypes.connectZIO
-import RefUtils.*
 
 object RefApp extends ZIOAppDefault {
   override def run: RIO[Scope, Unit] =
@@ -27,14 +28,17 @@ object RefApp extends ZIOAppDefault {
 
   // trigger accepted for consistency with other app entry points but not persisted (no run table)
   @nowarn("msg=unused explicit parameter")
-  def populate(_trigger: RunTrigger = RunTrigger.Cli, outputDir: Option[String] = Some("_ccas")): RIO[CcasLogger & ChessComClient & Transactor, Unit] =
+  def populate(
+    _trigger: RunTrigger = RunTrigger.Cli,
+    outputDir: Option[String] = Some("_ccas")
+  ): RIO[CcasLogger & ChessComClient & Transactor, Unit] =
     for {
-      startedAt <- ZIO.succeed(Instant.now())
-      client    <- ZIO.service[ChessComClient]
-      ctx       <- RefContext.make(client)
-      (clubsTotal, clubsResolvedDb, clubsResolvedApi, clubsSkippedNew) <- resolveClubs(ctx)
+      startedAt                                                                <- ZIO.succeed(Instant.now())
+      client                                                                   <- ZIO.service[ChessComClient]
+      ctx                                                                      <- RefContext.make(client)
+      (clubsTotal, clubsResolvedDb, clubsResolvedApi, clubsSkippedNew)         <- resolveClubs(ctx)
       (playersTotal, playersResolvedDb, playersResolvedApi, playersSkippedNew) <- resolvePlayers(ctx)
-      skipped <- ctx.skippedPlayers.get
+      skipped                                                                  <- ctx.skippedPlayers.get
       completedAt = Instant.now()
       duration    = JDuration.between(startedAt, completedAt)
       _ <- CcasLogger.info(s"Duration: ${duration.display}")
@@ -43,24 +47,32 @@ object RefApp extends ZIOAppDefault {
       failedSrc           <- ctx.failedUrlSource.get
       playerSkipsByReason <- PlayerRefSkip.countByReason
       clubSkipsByReason   <- ClubRefSkip.countByReason
-      report = formatReport(ReportData(
-        clubsTotal = clubsTotal, clubsResolvedDb = clubsResolvedDb, clubsResolvedApi = clubsResolvedApi,
-        clubsSkippedNew = clubsSkippedNew,
-        playersTotal = playersTotal, playersResolvedDb = playersResolvedDb, playersResolvedApi = playersResolvedApi,
-        playersSkippedNew = playersSkippedNew,
-        skippedPlayers = skipped,
-        playerSkipsByReason = playerSkipsByReason,
-        clubSkipsByReason = clubSkipsByReason,
-        startedAt = startedAt, completedAt = completedAt,
-        failedQueries = failed, failedUrlSources = failedSrc
-      ))
+      report = formatReport(
+        ReportData(
+          clubsTotal = clubsTotal,
+          clubsResolvedDb = clubsResolvedDb,
+          clubsResolvedApi = clubsResolvedApi,
+          clubsSkippedNew = clubsSkippedNew,
+          playersTotal = playersTotal,
+          playersResolvedDb = playersResolvedDb,
+          playersResolvedApi = playersResolvedApi,
+          playersSkippedNew = playersSkippedNew,
+          skippedPlayers = skipped,
+          playerSkipsByReason = playerSkipsByReason,
+          clubSkipsByReason = clubSkipsByReason,
+          startedAt = startedAt,
+          completedAt = completedAt,
+          failedQueries = failed,
+          failedUrlSources = failedSrc
+        )
+      )
       _ <- ZIO.whenCaseDiscard(outputDir) { case Some(dir) => OutputFile.writeAndLogGlobal("ref", report, dir) }
     } yield ()
 
   private def resolveClubs(ctx: RefContext): RIO[CcasLogger & ChessComClient & Transactor, (Int, Int, Int, Int)] =
     for {
-      clubs <- selectUnresolvedClubs
-      _     <- CcasLogger.info(s"Clubs without match ref: ${clubs.size}")
+      clubs         <- selectUnresolvedClubs
+      _             <- CcasLogger.info(s"Clubs without match ref: ${clubs.size}")
       clubProcessed <- Ref.make(0)
       _ <- ZIO.scoped {
         for {
@@ -76,13 +88,15 @@ object RefApp extends ZIOAppDefault {
       db         <- ctx.clubsResolvedDb.get
       api        <- ctx.clubsResolvedApi.get
       skippedNew <- ctx.clubsSkippedNew.get
-      _ <- CcasLogger.info(s"Clubs resolved: $db (DB) + $api (API) = ${db + api} / ${clubs.size}, skipped: $skippedNew new")
+      _ <- CcasLogger.info(
+        s"Clubs resolved: $db (DB) + $api (API) = ${db + api} / ${clubs.size}, skipped: $skippedNew new"
+      )
     } yield (clubs.size, db, api, skippedNew)
 
   private def resolvePlayers(ctx: RefContext): RIO[CcasLogger & ChessComClient & Transactor, (Int, Int, Int, Int)] =
     for {
-      players <- selectUnresolvedPlayers
-      _       <- CcasLogger.info(s"Players without match ref: ${players.size}")
+      players         <- selectUnresolvedPlayers
+      _               <- CcasLogger.info(s"Players without match ref: ${players.size}")
       playerProcessed <- Ref.make(0)
       _ <- ZIO.scoped {
         for {
@@ -122,7 +136,9 @@ object RefApp extends ZIOAppDefault {
                 OR (prs.reason = 'IdMismatch'       AND prs.last_attempted > ${c.idMismatch})
                 OR (prs.reason = 'ResolutionFailed' AND prs.last_attempted > ${c.resolutionFailed})
                 OR (prs.reason = 'ApiError'         AND prs.last_attempted > ${c.apiError}))
-            WHERE pmr.player_id IS NULL AND ptr.player_id IS NULL AND prs.player_id IS NULL""".query[UnresolvedPlayer].run().toList
+            WHERE pmr.player_id IS NULL AND ptr.player_id IS NULL AND prs.player_id IS NULL""".query[
+        UnresolvedPlayer
+      ].run().toList
     }
   }
 
@@ -165,7 +181,9 @@ object RefApp extends ZIOAppDefault {
     sb.append(s"Resolved (DB):  ${d.playersResolvedDb}\n")
     sb.append(s"Resolved (API): ${d.playersResolvedApi}\n")
     sb.append(s"Skipped (new):  ${d.playersSkippedNew}\n")
-    sb.append(s"Unresolved:     ${d.playersTotal - d.playersResolvedDb - d.playersResolvedApi - d.playersSkippedNew}\n\n")
+    sb.append(
+      s"Unresolved:     ${d.playersTotal - d.playersResolvedDb - d.playersResolvedApi - d.playersSkippedNew}\n\n"
+    )
 
     if (d.skippedPlayers.nonEmpty) {
       sb.append(s"--- Skipped Players — ID Mismatch (${d.skippedPlayers.size}) ---\n")

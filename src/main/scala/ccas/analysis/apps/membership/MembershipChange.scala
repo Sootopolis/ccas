@@ -24,8 +24,8 @@ object MembershipChange {
     case Rejoined(ts: Instant, previousUntil: Instant)               extends MemberChange(ts)
     case LeftClub(ts: Instant)                                       extends MemberChange(ts)
     case AccountClosed(ts: Instant, newStatus: PlayerStatusCategory) extends MemberChange(ts)
-    case Unresolvable(ts: Instant, oldUsername: Username)             extends MemberChange(ts)
-    case UsernameChange(ts: Instant, oldUsername: Username)           extends MemberChange(ts)
+    case Unresolvable(ts: Instant, oldUsername: Username)            extends MemberChange(ts)
+    case UsernameChange(ts: Instant, oldUsername: Username)          extends MemberChange(ts)
     case StatusChange(ts: Instant, oldStatus: PlayerStatusCategory)  extends MemberChange(ts)
   }
 

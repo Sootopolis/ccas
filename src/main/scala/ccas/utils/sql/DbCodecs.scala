@@ -48,9 +48,8 @@ object DbCodecs {
       else {
         val innerRs = arr.getResultSet
         val builder = List.newBuilder[T]
-        while (innerRs.next()) {
+        while (innerRs.next())
           builder += dbCodec.readSingle(innerRs, 2)
-        }
         innerRs.close()
         builder.result()
       }

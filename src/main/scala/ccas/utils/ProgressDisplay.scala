@@ -6,8 +6,8 @@ import zio.{Console, Ref, Scope, Semaphore, UIO, ZIO}
 
 /** Manages progress bars rendered as a single line on stdout, overwritten in-place via `\r`.
   *
-  * All stdout operations (`render`, `logAboveBars`, `removeBar`) are serialized via a
-  * `Semaphore(1)` to ensure atomic erase-print-redraw sequences.
+  * All stdout operations (`render`, `logAboveBars`, `removeBar`) are serialized via a `Semaphore(1)` to ensure atomic
+  * erase-print-redraw sequences.
   *
   * When `enabled` is false all methods are no-ops — suitable for server/non-interactive mode.
   *
@@ -59,7 +59,7 @@ class ProgressDisplay private[utils] (
     ZIO.whenDiscard(enabled)(mutex.withPermit {
       for {
         bars <- state.get
-        _ <- clearLine(bars)
+        _    <- clearLine(bars)
         updated = bars.filterNot(_.id == barId)
         _ <- state.set(updated)
         _ <- drawAll(updated)
@@ -71,8 +71,8 @@ class ProgressDisplay private[utils] (
     ZIO.whenDiscard(enabled)(mutex.withPermit {
       for {
         bars <- state.get
-        _ <- clearLine(bars)
-        _ <- state.set(Nil)
+        _    <- clearLine(bars)
+        _    <- state.set(Nil)
       } yield ()
     })
 

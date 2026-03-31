@@ -8,7 +8,7 @@ import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.*
 import ccas.analysis.tables.*
-import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
+import ccas.api.misc.subtypes.{ClubId, ClubSlug, Username}
 import ccas.utils.sql.FreshSchemaLayer
 
 object TestRecruitmentFilters extends ZIOSpecDefault {

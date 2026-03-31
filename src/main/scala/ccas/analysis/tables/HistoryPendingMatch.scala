@@ -4,11 +4,10 @@ import java.sql.SQLException
 
 import com.augustnagro.magnum.*
 import zio.ZIO
+import PendingMatchStatus.given
 
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId}
 import ccas.utils.sql.SqlZioTypes.{connectZIO, transactZIO}
-
-import PendingMatchStatus.given
 
 final case class HistoryPendingMatch(
   clubId: ClubId,

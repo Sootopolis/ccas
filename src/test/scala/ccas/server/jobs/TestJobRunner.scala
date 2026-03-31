@@ -2,7 +2,6 @@ package ccas.server.jobs
 
 import com.augustnagro.magnum.{sql, Transactor}
 import zio.{durationInt, Scope, ZIO}
-import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.analysis.tables.{Club, RunTrigger}

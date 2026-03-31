@@ -4,13 +4,12 @@ import java.time.Instant
 
 import com.augustnagro.magnum.Transactor
 import zio.{RIO, Ref, ZIO}
+import RecruitmentFilterDefs.*
+import RecruitmentPersistence.*
 
 import ccas.analysis.tables.RecruitmentCriteria
 import ccas.api.misc.subtypes.Username
 import ccas.utils.errors.safeMessage
-
-import RecruitmentFilterDefs.*
-import RecruitmentPersistence.*
 
 private[recruitment] object RecruitmentFilters {
 
@@ -35,7 +34,7 @@ private[recruitment] object RecruitmentFilters {
       result <- (for {
         (outcome, finalCandidate) <- runFilters(env, filters, ctxRef)
         _                         <- persistCandidateResults(runId, now, finalCandidate, outcome, env.run.client)
-        _                         <- writePlayerMatchRef(env.run.client, finalCandidate).catchAll(_ => ZIO.unit)
+        _                         <- writePlayerMatchRef(env.run.client, finalCandidate).ignore
       } yield outcome).catchAll(onEvaluationError(ctxRef))
     } yield result
   }

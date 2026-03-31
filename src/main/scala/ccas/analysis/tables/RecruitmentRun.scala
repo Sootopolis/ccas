@@ -23,7 +23,9 @@ final case class RecruitmentRun(
 ) derives DbCodec
 
 object RecruitmentRun {
-  private val selectCols = SqlLiteral("run_id, club_id, criteria_id, trigger, started_at, completed_at, candidates_found, job_run_id")
+  private val selectCols = SqlLiteral(
+    "run_id, club_id, criteria_id, trigger, started_at, completed_at, candidates_found, job_run_id"
+  )
 
   def createTable: ZIO[Transactor, SQLException, Int] =
     connectZIO {

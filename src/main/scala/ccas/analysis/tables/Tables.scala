@@ -3,8 +3,8 @@ package ccas.analysis.tables
 import com.augustnagro.magnum.Transactor
 import zio.{RIO, Scope, ZIOAppDefault}
 
-import ccas.utils.CcasLogger
 import ccas.utils.sql.DataSourceLayer
+import ccas.utils.CcasLogger
 
 object Tables extends ZIOAppDefault {
 

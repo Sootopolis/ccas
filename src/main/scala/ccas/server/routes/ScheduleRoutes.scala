@@ -1,5 +1,7 @@
 package ccas.server.routes
 
+import scala.util.chaining.*
+
 import com.augustnagro.magnum.Transactor
 import zio.http.*
 import zio.json.{DeriveJsonCodec, JsonCodec}
@@ -10,8 +12,6 @@ import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 import ccas.server.jobs.JobKind
 import ccas.server.routes.RouteHelpers.*
 import ccas.server.scheduler.JobSchedule
-
-import scala.util.chaining.*
 
 object ScheduleRoutes {
 
@@ -27,7 +27,11 @@ object ScheduleRoutes {
     given JsonCodec[CreateScheduleRequest] = DeriveJsonCodec.gen
   }
 
-  private[server] case class UpdateScheduleRequest(intervalHours: Option[Int], enabled: Option[Boolean], params: Option[String])
+  private[server] case class UpdateScheduleRequest(
+    intervalHours: Option[Int],
+    enabled: Option[Boolean],
+    params: Option[String]
+  )
   object UpdateScheduleRequest {
     given JsonCodec[UpdateScheduleRequest] = DeriveJsonCodec.gen
   }
@@ -80,7 +84,15 @@ object ScheduleRoutes {
             .someOrFail(new Exception(s"Club not found: $slug"))
             .map(_.clubId)
         }
-        schedule = JobSchedule(0L, kind, clubId, body.params, body.intervalHours.toShort, enabled = true, lastRunAt = None)
+        schedule = JobSchedule(
+          0L,
+          kind,
+          clubId,
+          body.params,
+          body.intervalHours.toShort,
+          enabled = true,
+          lastRunAt = None
+        )
         id      <- JobSchedule.insert(schedule)
         created <- JobSchedule.selectId(id).someOrFail(new Exception("Failed to read back schedule"))
       } yield jsonResponse(Status.Created, ScheduleResponse.fromSchedule(created)))

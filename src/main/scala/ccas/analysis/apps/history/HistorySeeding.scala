@@ -1,49 +1,54 @@
 package ccas.analysis.apps.history
 
 import java.time.Instant
+
 import com.augustnagro.magnum.Transactor
 import zio.{RIO, Ref, ZIO}
+import HistoryUtils.*
+
 import ccas.analysis.tables.*
 import ccas.api.club.ApiClubMatches
 import ccas.api.misc.subtypes.*
 import ccas.api.player.{ApiPlayer, ApiPlayerMatches}
-import ccas.utils.CcasLogger
 import ccas.utils.client.ChessComClient
-import HistoryUtils.*
+import ccas.utils.CcasLogger
 
 private[history] object HistorySeeding {
 
-  /** Retries resolution for clubs previously recorded in `unresolved_match_club`. Groups entries by slug so each
-    * unique club is resolved at most once. On success, patches all matching `club_match` rows and removes the
-    * unresolved entries. Returns total count of resolved entries.
+  /** Retries resolution for clubs previously recorded in `unresolved_match_club`. Groups entries by slug so each unique
+    * club is resolved at most once. On success, patches all matching `club_match` rows and removes the unresolved
+    * entries. Returns total count of resolved entries.
     */
   def retryUnresolvedClubs(client: ChessComClient): RIO[CcasLogger & Transactor, Int] =
     for {
       unresolved <- UnresolvedMatchClub.selectAll
-      result <- if (unresolved.isEmpty) { ZIO.succeed(0) } else {
-        val grouped = unresolved.groupBy(_.slug)
-        val total = grouped.size
-        CcasLogger.info(s"  Retrying ${unresolved.size} unresolved clubs ($total unique)...") *>
-        ZIO.scoped {
-          for {
-            bar        <- CcasLogger.progressBar
-            counterRef <- Ref.make(0)
-            resolvedRef <- Ref.make(0)
-            _ <- ZIO.foreachDiscard(grouped.toList) { case (slug, entries) =>
-              Club.resolveOrFetch(client, slug).flatMap {
-                case Some(clubId) =>
-                  ZIO.foreachDiscard(entries) { entry =>
-                    ClubMatch.updateTeamClubId(entry.matchId, entry.isTeam1, clubId) *>
-                      UnresolvedMatchClub.delete(entry.matchId, entry.isTeam1)
-                  } *> resolvedRef.update(_ + entries.size)
-                case None => ZIO.unit
-              }.catchAll(_ => ZIO.unit) *>
-                counterRef.updateAndGet(_ + 1).flatMap(n => bar.print(n, total, s"  Retrying unresolved clubs: $n/$total"))
+      result <-
+        if (unresolved.isEmpty) { ZIO.succeed(0) }
+        else {
+          val grouped = unresolved.groupBy(_.slug)
+          val total   = grouped.size
+          CcasLogger.info(s"  Retrying ${unresolved.size} unresolved clubs ($total unique)...") *>
+            ZIO.scoped {
+              for {
+                bar         <- CcasLogger.progressBar
+                counterRef  <- Ref.make(0)
+                resolvedRef <- Ref.make(0)
+                _ <- ZIO.foreachDiscard(grouped.toList) { case (slug, entries) =>
+                  Club.resolveOrFetch(client, slug).flatMap {
+                    case Some(clubId) =>
+                      ZIO.foreachDiscard(entries) { entry =>
+                        ClubMatch.updateTeamClubId(entry.matchId, entry.isTeam1, clubId) *>
+                          UnresolvedMatchClub.delete(entry.matchId, entry.isTeam1)
+                      } *> resolvedRef.update(_ + entries.size)
+                    case None => ZIO.unit
+                  }.ignore *>
+                    counterRef.updateAndGet(_ + 1)
+                      .flatMap(n => bar.print(n, total, s"  Retrying unresolved clubs: $n/$total"))
+                }
+                resolved <- resolvedRef.get
+              } yield resolved
             }
-            resolved <- resolvedRef.get
-          } yield resolved
         }
-      }
     } yield result
 
   /** Retries resolution for players previously recorded in `unresolved_board_player`. Groups entries by username so
@@ -53,34 +58,44 @@ private[history] object HistorySeeding {
   def retryUnresolvedPlayers(client: ChessComClient): RIO[CcasLogger & Transactor, Int] =
     for {
       unresolved <- UnresolvedBoardPlayer.selectAll
-      result <- if (unresolved.isEmpty) { ZIO.succeed(0) } else {
-        val grouped = unresolved.groupBy(_.username)
-        val total = grouped.size
-        CcasLogger.info(s"  Retrying ${unresolved.size} unresolved players ($total unique)...") *>
-        ZIO.scoped {
-          for {
-            bar        <- CcasLogger.progressBar
-            counterRef <- Ref.make(0)
-            resolvedRef <- Ref.make(0)
-            _ <- ZIO.foreachDiscard(grouped.toList) { case (username, entries) =>
-              (for {
-                apiPlayer <- client.get[ApiPlayer](ApiPlayer.getUrl(username))
-                playerId = apiPlayer.playerId
-                _ <- Player.insertIfNew(Player(
-                  playerId, apiPlayer.joinedAt, username, apiPlayer.status.category, apiPlayer.title, Instant.now()
-                ))
-                _ <- ZIO.foreachDiscard(entries) { entry =>
-                  ClubMatchBoard.updatePlayerId(entry.matchId, entry.board, entry.isTeam1, playerId) *>
-                    UnresolvedBoardPlayer.delete(entry.matchId, entry.board, entry.isTeam1)
+      result <-
+        if (unresolved.isEmpty) { ZIO.succeed(0) }
+        else {
+          val grouped = unresolved.groupBy(_.username)
+          val total   = grouped.size
+          CcasLogger.info(s"  Retrying ${unresolved.size} unresolved players ($total unique)...") *>
+            ZIO.scoped {
+              for {
+                bar         <- CcasLogger.progressBar
+                counterRef  <- Ref.make(0)
+                resolvedRef <- Ref.make(0)
+                _ <- ZIO.foreachDiscard(grouped.toList) { case (username, entries) =>
+                  (for {
+                    apiPlayer <- client.get[ApiPlayer](ApiPlayer.getUrl(username))
+                    playerId = apiPlayer.playerId
+                    _ <- Player.insertIfNew(
+                      Player(
+                        playerId,
+                        apiPlayer.joinedAt,
+                        username,
+                        apiPlayer.status.category,
+                        apiPlayer.title,
+                        Instant.now()
+                      )
+                    )
+                    _ <- ZIO.foreachDiscard(entries) { entry =>
+                      ClubMatchBoard.updatePlayerId(entry.matchId, entry.board, entry.isTeam1, playerId) *>
+                        UnresolvedBoardPlayer.delete(entry.matchId, entry.board, entry.isTeam1)
+                    }
+                    _ <- resolvedRef.update(_ + entries.size)
+                  } yield ()).ignore *>
+                    counterRef.updateAndGet(_ + 1)
+                      .flatMap(n => bar.print(n, total, s"  Retrying unresolved players: $n/$total"))
                 }
-                _ <- resolvedRef.update(_ + entries.size)
-              } yield ()).catchAll(_ => ZIO.unit) *>
-                counterRef.updateAndGet(_ + 1).flatMap(n => bar.print(n, total, s"  Retrying unresolved players: $n/$total"))
+                resolved <- resolvedRef.get
+              } yield resolved
             }
-            resolved <- resolvedRef.get
-          } yield resolved
         }
-      }
     } yield result
 
   /** Fetches the club's match listing endpoint and inserts any not-yet-known match IDs as pending. */
@@ -91,13 +106,13 @@ private[history] object HistorySeeding {
   ): RIO[CcasLogger & Transactor, Int] =
     (for {
       clubMatches <- client.get[ApiClubMatches](ApiClubMatches.getUrl(clubSlug))
-      allDaily = clubMatches.dailyFinished ++ clubMatches.dailyInProgress ++ clubMatches.dailyRegistered
+      allDaily     = clubMatches.dailyFinished ++ clubMatches.dailyInProgress ++ clubMatches.dailyRegistered
       dailyPending = allDaily.map(m => HistoryPendingMatch(clubId, ClubMatchId.fromUrl(m.`@id`), isLive = false))
       nonDaily = clubMatches.finished.filterNot(_.timeClass.isDaily) ++
         clubMatches.inProgress.filterNot(_.timeClass.isDaily) ++
         clubMatches.registered.filterNot(_.timeClass.isDaily)
       livePending = nonDaily.map(m => HistoryPendingMatch(clubId, ClubMatchId.fromUrl(m.`@id`), isLive = true))
-      all = dailyPending ++ livePending
+      all         = dailyPending ++ livePending
       knownIds <- ClubMatch.selectMatchIdsForClub(clubId)
       newOnly = all.filterNot(p => knownIds.contains(p.matchId))
       _ <- insertPendingMatches(newOnly)
@@ -105,7 +120,8 @@ private[history] object HistorySeeding {
       CcasLogger.warn(s"  Failed to fetch club matches: ${error.getMessage}").as(0)
     }
 
-  /** Queries each un-queried member's match list to find club match IDs. Skips already-queried members unless --full. */
+  /** Queries each un-queried member's match list to find club match IDs. Skips already-queried members unless --full.
+    */
   def seedFromMemberMatches(
     client: ChessComClient,
     clubId: ClubId,
@@ -130,12 +146,14 @@ private[history] object HistorySeeding {
           bar <- CcasLogger.progressBar
           _ <- ZIO.foreachParDiscard(toQuery) { case (playerId, username) =>
             seedMatchesForPlayer(client, clubId, clubSlug, playerId, username, settledMatchIds).foldZIO(
-              error => failRef.update(_ + 1)
-                *> failedMembersRef.update(_ :+ (username, error.getMessage))
-                *> CcasLogger.warn(s"  $username: failed — ${error.getMessage}"),
-              count => seedRef.update(_ + count) *> counterRef.updateAndGet(_ + 1).flatMap { n =>
-                bar.print(n, total, s"  Querying member matches: $n/$total")
-              }
+              error =>
+                failRef.update(_ + 1)
+                  *> failedMembersRef.update(_ :+ (username, error.getMessage))
+                  *> CcasLogger.warn(s"  $username: failed — ${error.getMessage}"),
+              count =>
+                seedRef.update(_ + count) *> counterRef.updateAndGet(_ + 1).flatMap { n =>
+                  bar.print(n, total, s"  Querying member matches: $n/$total")
+                }
             )
           }
         } yield ()
@@ -184,15 +202,8 @@ private[history] object HistorySeeding {
 
   /** If --refresh, re-queues all known matches; otherwise only stale ones (unfinished or recently completed). */
   def seedStaleMatches(clubId: ClubId, refresh: Boolean): RIO[Transactor, Int] =
-    if (refresh) {
-      for {
-        matchIds <- ClubMatch.selectMatchIdsForClub(clubId)
-        _        <- insertPendingMatches(matchIds.map(id => HistoryPendingMatch(clubId, id, isLive = false)))
-      } yield matchIds.size
-    } else {
-      for {
-        staleIds <- ClubMatch.selectStaleForClub(clubId)
-        _        <- insertPendingMatches(staleIds.map(id => HistoryPendingMatch(clubId, id, isLive = false)))
-      } yield staleIds.size
-    }
+    for {
+      ids <- if (refresh) ClubMatch.selectMatchIdsForClub(clubId) else ClubMatch.selectStaleForClub(clubId)
+      _   <- insertPendingMatches(ids.map(id => HistoryPendingMatch(clubId, id, isLive = false)))
+    } yield ids.size
 }
