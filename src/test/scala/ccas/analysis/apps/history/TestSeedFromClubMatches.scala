@@ -65,6 +65,7 @@ object TestSeedFromClubMatches extends ZIOSpecDefault {
       lastReqRef    <- Ref.make(0L)
       ema           <- Ref.make(0.0)
       bar           <- TestCcasLogger.noopBar
+      stats         <- Ref.make(ChessComClient.StatsAccumulator())
     } yield {
       val routes: Routes[Any, Response] = Routes(
         Method.GET / "pub" / "club" / string("club") / "matches" -> handler { (_: String, _: Request) =>
@@ -101,6 +102,7 @@ object TestSeedFromClubMatches extends ZIOSpecDefault {
         Headers.empty,
         TestCcasLogger.noop,
         refs,
+        stats,
         bar,
         ChessComClient.ThrottleConfig(1, 30.seconds, 1.second, 5.seconds, 10.seconds, 20, 0.2, 10)
       )

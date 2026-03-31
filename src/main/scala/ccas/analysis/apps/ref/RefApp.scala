@@ -19,7 +19,7 @@ object RefApp extends ZIOAppDefault {
   override def run: RIO[Scope, Unit] =
     populate().provideSome[Scope](
       CcasLogger.live(showProgress = true),
-      ChessComClient.live,
+      ChessComClient.live("ref"),
       Client.default,
       DataSourceLayer.liveFromPrefix(onInit = Tables.ensureTables)
     )

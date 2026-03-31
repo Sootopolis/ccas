@@ -71,7 +71,7 @@ object HistoryApp extends ZIOAppDefault {
       _ <- discover(clubName, full, refresh)
     } yield ()).provideSomeAuto(
       CcasLogger.live(showProgress = true),
-      ChessComClient.live,
+      ChessComClient.live("history"),
       Client.default,
       DataSourceLayer.liveFromPrefix(onInit = Tables.ensureTables)
     )

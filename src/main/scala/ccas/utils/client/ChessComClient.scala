@@ -10,7 +10,7 @@ import zio.http.*
 import zio.http.Method.GET
 import zio.json.JsonDecoder
 
-import ccas.analysis.tables.ApiFetchFailure
+import ccas.analysis.tables.{ApiFetchFailure, ClientStats}
 import ccas.info.BuildInfo
 import ccas.utils.{CcasLogger, ProgressBar}
 import ccas.utils.json.JsonDecodingException
@@ -30,7 +30,8 @@ import ccas.utils.json.JsonDecodingException
   *     holds if failures persist). A generation counter ensures that only the most recent throttle-down triggers
   *     recovery, preventing stale fibers from interfering.
   *   - '''Retry schedules''' — separate schedules handle HTTP 429 (exponential backoff), Cloudflare challenge 403s
-  *     (fixed delay), normal 403/404 (single retry), and transient connection errors (exponential backoff).
+  *     (fixed delay), normal 403 (single retry), and transient connection errors (exponential backoff). HTTP 404s are
+  *     not retried as they are almost always permanent (e.g. cancelled matches on Chess.com).
   *
   * Constructed via the `ChessComClient.live` ZLayer which reads configuration from `application.conf` under the
   * `chess-com-client` prefix.
@@ -41,6 +42,7 @@ final class ChessComClient(
   headers: Headers,
   logger: CcasLogger,
   throttle: ChessComClient.ThrottleRefs,
+  statsRef: Ref[ChessComClient.StatsAccumulator],
   progressBar: ProgressBar,
   config: ChessComClient.ThrottleConfig
 ) {
@@ -51,33 +53,44 @@ final class ChessComClient(
   }
 
   private def rawGet[T](url: URL)(using jsonDecoder: JsonDecoder[T]): Task[T] = for {
-    response <- batchedClient(Request(method = GET, url = url).addHeaders(headers))
+    _ <- statsRef.update(_.incAttempts)
+    response <- batchedClient(Request(method = GET, url = url).addHeaders(headers)).tapError {
+      case e if isConnectionError(e) => statsRef.update(_.incConnectionErrors)
+      case _                         => ZIO.unit
+    }
     string   <- response.body.asString
     cfChallenge = isCloudflareChallenge(response, string)
     _ <- if (cfChallenge) throttleDown(_ => 1) else recordOutcome(response.status != Status.TooManyRequests)
-    _ <- ZIO.whenDiscard(!response.status.isSuccess)(
-      ZIO.fail(HttpStatusException(response.status.code, url, string))
-    )
+    _ <- ZIO.whenDiscard(!response.status.isSuccess) {
+      statsRef.update(_.incError(response.status.code)) *>
+        ZIO.fail(HttpStatusException(response.status.code, url, string))
+    }
     value <- ZIO.fromEither(jsonDecoder.decodeJson(string)).mapError(JsonDecodingException(_))
   } yield value
 
   def get[T](url: URL)(using jsonDecoder: JsonDecoder[T]): Task[T] =
+    statsRef.update(_.incRequests) *>
     (rateDelay *> semaphore.withPermit {
-      (activeRef.updateAndGet(_ + 1).flatMap(updateBar) *>
+      (activeRef.updateAndGet(_ + 1).flatMap(n => updateBar(n) *> statsRef.update(_.updatePeak(n))) *>
         rawGet(url).timed.flatMap { case (duration, result) =>
-          updateResponseTimeEma(duration.toMillis).as(result)
+          val ms = duration.toMillis
+          updateResponseTimeEma(ms) *> statsRef.update(_.recordLatency(ms)).as(result)
         }).ensuring(activeRef.updateAndGet(_ - 1).flatMap(updateBar).ignore)
-    }).retry(retry429Schedule).retry(retryCfSchedule).retry(retryOnceSchedule).retry(retryConnectionSchedule).tapError {
-      error =>
-        val (msg, body) = error match {
-          case e: HttpStatusException => (Some(e.statusCode.toString), Some(e.responseBody))
-          case other                  => (Option(other.getMessage), None)
+    }).retry(retry429Schedule).retry(retryCfSchedule).retry(retry403Schedule).retry(retryConnectionSchedule).tapBoth(
+      error => {
+        statsRef.update(_.incFailures) *> {
+          val (msg, body) = error match {
+            case e: HttpStatusException => (Some(e.statusCode.toString), Some(e.responseBody))
+            case other                  => (Option(other.getMessage), None)
+          }
+          ApiFetchFailure
+            .insert(ApiFetchFailure(Instant.now(), url.encode, error.getClass.getSimpleName, msg, body))
+            .provideEnvironment(ZEnvironment(transactor))
+            .ignore
         }
-        ApiFetchFailure
-          .insert(ApiFetchFailure(Instant.now(), url.encode, error.getClass.getSimpleName, msg, body))
-          .provideEnvironment(ZEnvironment(transactor))
-          .ignore
-    }
+      },
+      _ => statsRef.update(_.incSuccesses)
+    )
 
   def getAll[T](urls: Iterable[URL])(using jsonDecoder: JsonDecoder[T]): Task[Chunk[T]] =
     ZIO.foreachPar(Chunk.from(urls))(get)
@@ -171,7 +184,8 @@ final class ChessComClient(
     }.flatMap {
       case None => ZIO.unit
       case Some((oldMax, newMax, gen)) =>
-        adjustPermits(newMax) *>
+        statsRef.update(_.incThrottleDowns) *>
+          adjustPermits(newMax) *>
           logger.warn(s"Rate limit throttle: $oldMax \u2192 $newMax permits") *>
           scheduleRecovery(gen).forkDaemon.unit
     }
@@ -255,21 +269,22 @@ final class ChessComClient(
       case _                      => false
     }
 
-  private val retryOnceSchedule: Schedule[Any, Throwable, Any] =
+  private val retry403Schedule: Schedule[Any, Throwable, Any] =
     Schedule.fixed(config.singleRetryDelay) && Schedule.recurs(1) && Schedule.recurWhile[Throwable] {
-      case e: HttpStatusException =>
-        (e.statusCode == 403 && !e.responseBody.contains(CfChallengeMarker)) || e.statusCode == 404
-      case _ => false
+      case e: HttpStatusException => e.statusCode == 403 && !e.responseBody.contains(CfChallengeMarker)
+      case _                      => false
     }
 
+  private def isConnectionError(e: Throwable): Boolean = e match {
+    case _: HttpStatusException              => false
+    case _: JsonDecodingException            => false
+    case _: java.io.IOException              => true
+    case _: PrematureChannelClosureException => true
+    case _                                   => false
+  }
+
   private val retryConnectionSchedule: Schedule[Any, Throwable, Any] =
-    Schedule.exponential(500.millis) && Schedule.recurs(3) && Schedule.recurWhile[Throwable] {
-      case _: HttpStatusException              => false
-      case _: JsonDecodingException            => false
-      case _: java.io.IOException              => true
-      case _: PrematureChannelClosureException => true
-      case _                                   => false
-    }
+    Schedule.exponential(500.millis) && Schedule.recurs(3) && Schedule.recurWhile[Throwable](isConnectionError)
 }
 
 object ChessComClient {
@@ -298,7 +313,7 @@ object ChessComClient {
     * @param retryBase
     *   Base duration for exponential-backoff retry on 429 responses.
     * @param singleRetryDelay
-    *   Fixed delay for a single retry on 403/404 responses.
+    *   Fixed delay for a single retry on non-Cloudflare 403 responses.
     * @param cfRetryDelay
     *   Fixed delay between retries on Cloudflare challenge 403 responses.
     * @param failureWindowSize
@@ -319,13 +334,112 @@ object ChessComClient {
     minSampleSize: Int
   )
 
+  private[ccas] case class StatsAccumulator(
+    requests: Long = 0,
+    successes: Long = 0,
+    failures: Long = 0,
+    attempts: Long = 0,
+    errors429: Long = 0,
+    errors403: Long = 0,
+    errors404: Long = 0,
+    connectionErrors: Long = 0,
+    throttleDowns: Long = 0,
+    peakConcurrent: Int = 0,
+    latencyMinMs: Long = Long.MaxValue,
+    latencyMaxMs: Long = 0,
+    latencySumMs: Long = 0,
+    latencyCount: Long = 0
+  ) {
+    def incRequests: StatsAccumulator        = copy(requests = requests + 1)
+    def incSuccesses: StatsAccumulator       = copy(successes = successes + 1)
+    def incFailures: StatsAccumulator        = copy(failures = failures + 1)
+    def incAttempts: StatsAccumulator        = copy(attempts = attempts + 1)
+    def incConnectionErrors: StatsAccumulator = copy(connectionErrors = connectionErrors + 1)
+    def incThrottleDowns: StatsAccumulator   = copy(throttleDowns = throttleDowns + 1)
+    def updatePeak(n: Int): StatsAccumulator = copy(peakConcurrent = peakConcurrent.max(n))
+
+    def incError(statusCode: Int): StatsAccumulator = statusCode match {
+      case 429 => copy(errors429 = errors429 + 1)
+      case 403 => copy(errors403 = errors403 + 1)
+      case 404 => copy(errors404 = errors404 + 1)
+      case _   => this
+    }
+
+    def recordLatency(ms: Long): StatsAccumulator = copy(
+      latencyMinMs = latencyMinMs.min(ms),
+      latencyMaxMs = latencyMaxMs.max(ms),
+      latencySumMs = latencySumMs + ms,
+      latencyCount = latencyCount + 1
+    )
+
+    def toClientStats(appLabel: String, startedAt: Instant, completedAt: Instant, config: ThrottleConfig): ClientStats = {
+      val minDisplay  = if (latencyMinMs == Long.MaxValue) 0L else latencyMinMs
+      val meanLatency = if (latencyCount > 0) latencySumMs / latencyCount else 0L
+      ClientStats(
+        appLabel = appLabel,
+        startedAt = startedAt,
+        completedAt = completedAt,
+        requests = requests,
+        successes = successes,
+        failures = failures,
+        attempts = attempts,
+        errors429 = errors429,
+        errors403 = errors403,
+        errors404 = errors404,
+        connectionErrors = connectionErrors,
+        throttleDowns = throttleDowns,
+        peakConcurrent = peakConcurrent,
+        configPermits = config.maxPermits.toInt,
+        configCooldownSecs = config.cooldown.getSeconds.toInt,
+        configRetryBaseSecs = config.retryBase.getSeconds.toInt,
+        config403RetrySecs = config.singleRetryDelay.getSeconds.toInt,
+        configCfRetrySecs = config.cfRetryDelay.getSeconds.toInt,
+        configFailureWindowSize = config.failureWindowSize,
+        configFailureThreshold = config.failureThreshold,
+        configMinSampleSize = config.minSampleSize,
+        latencyMinMs = minDisplay,
+        latencyMaxMs = latencyMaxMs,
+        latencyMeanMs = meanLatency
+      )
+    }
+
+    def summary: String = {
+      val retries        = attempts - requests
+      val meanLatency    = if (latencyCount > 0) latencySumMs / latencyCount else 0L
+      val minDisplay     = if (latencyMinMs == Long.MaxValue) 0L else latencyMinMs
+      val failedSuffix   = if (failures > 0) s" ($failures failed)" else ""
+      val retrySuffix    = if (retries > 0) s", $retries retries" else ""
+      val throttleSuffix = if (throttleDowns > 0) s", $throttleDowns throttle-downs" else ""
+      val latencySuffix =
+        if (latencyCount > 0) s", latency min/mean/max = $minDisplay/${meanLatency}/${latencyMaxMs}ms"
+        else ""
+      s"API stats: $requests requests$failedSuffix$retrySuffix$throttleSuffix$latencySuffix"
+    }
+  }
+
+  private def logAndPersistStats(
+    appLabel: String,
+    startedAt: Instant,
+    statsRef: Ref[StatsAccumulator],
+    config: ThrottleConfig,
+    logger: CcasLogger,
+    transactor: Transactor
+  ): UIO[Unit] =
+    statsRef.get.flatMap { s =>
+      ZIO.whenDiscard(s.requests > 0) {
+        val row = s.toClientStats(appLabel, startedAt, Instant.now(), config)
+        ClientStats.insert(row).provideEnvironment(ZEnvironment(transactor)).ignore *>
+          logger.info(s.summary)
+      }
+    }
+
   private def userAgentHeaders(contactEmail: String): Headers =
     Headers(
       Header.Custom("User-Agent", s"${BuildInfo.name.toUpperCase}/${BuildInfo.version} (contact: $contactEmail)"),
       Header.Accept(MediaType.application.json)
     )
 
-  def live: ZLayer[Client & Transactor & CcasLogger, Throwable, ChessComClient] =
+  def live(appLabel: String): ZLayer[Client & Transactor & CcasLogger, Throwable, ChessComClient] =
     ZLayer.scoped {
       val typesafeConfig = ConfigFactory.load().getConfig("chess-com-client")
       val permits        = typesafeConfig.getLong("permits")
@@ -350,9 +464,12 @@ object ChessComClient {
         rateLimitGate <- Semaphore.make(1)
         lastReqRef    <- Ref.make(0L)
         ema           <- Ref.make(0.0)
+        startedAt     <- ZIO.succeed(Instant.now())
+        stats         <- Ref.make(StatsAccumulator())
         bar           <- logger.progressBar
         refs = ThrottleRefs(semaphore, stateRef, reserveRef, adjustMutex, activeRef, rateLimitGate, lastReqRef, ema)
+        _ <- ZIO.addFinalizer(logAndPersistStats(appLabel, startedAt, stats, throttleConfig, logger, transactor))
         _ <- ZIO.addFinalizer(reserveRef.get.flatMap(fibers => ZIO.foreachDiscard(fibers)(_.interrupt)))
-      } yield ChessComClient(client, transactor, userAgentHeaders(contactEmail), logger, refs, bar, throttleConfig)
+      } yield ChessComClient(client, transactor, userAgentHeaders(contactEmail), logger, refs, stats, bar, throttleConfig)
     }
 }

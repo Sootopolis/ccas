@@ -176,7 +176,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         _ <- ZIO.foreachDiscard(outcomes.zip(enumPids)) { (outcome, pid) =>
           RecruitmentCandidate
             .insert(
-              RecruitmentCandidate(runId, pid, Times.t0, outcome, Some(s"reason-${pid}"))
+              RecruitmentCandidate(runId, pid, Times.t0, outcome, Some(s"reason-$pid"))
             )
         }
         candidates <- RecruitmentCandidate.selectByRun(runId)

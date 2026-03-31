@@ -32,6 +32,7 @@ object TestChessComClient extends ZIOSpecDefault {
       lastReqRef  <- Ref.make(0L)
       ema         <- Ref.make(0.0)
       bar         <- TestCcasLogger.noopBar
+      stats       <- Ref.make(ChessComClient.StatsAccumulator())
       config = ChessComClient.ThrottleConfig(permits, cooldown, retryBase, 10.millis, 10.millis, failureWindowSize, failureThreshold, 10)
       refs   = ChessComClient.ThrottleRefs(semaphore, stateRef, reserveRef, adjustMutex, activeRef, rateLimitGate, lastReqRef, ema)
     } yield {
@@ -58,7 +59,7 @@ object TestChessComClient extends ZIOSpecDefault {
         ): ZIO[Env1 & Scope, Throwable, Response] =
           ZIO.die(new UnsupportedOperationException)
       }
-      val client = ChessComClient(ZClient.fromDriver(driver), Transactor(null), Headers.empty, TestCcasLogger.noop, refs, bar, config)
+      val client = ChessComClient(ZClient.fromDriver(driver), Transactor(null), Headers.empty, TestCcasLogger.noop, refs, stats, bar, config)
       (client, stateRef)
     }
 
@@ -297,6 +298,7 @@ object TestChessComClient extends ZIOSpecDefault {
           activeRef   <- Ref.make(0)
           rateLimitGate <- Semaphore.make(1)
           bar         <- TestCcasLogger.noopBar
+          stats       <- Ref.make(ChessComClient.StatsAccumulator())
           counter     <- Ref.make(0)
           lastReqRef  <- Ref.make(0L)
           ema         <- Ref.make(0.0)
@@ -331,7 +333,7 @@ object TestChessComClient extends ZIOSpecDefault {
             ): ZIO[Env1 & Scope, Throwable, Response] =
               ZIO.die(new UnsupportedOperationException)
           }
-          client = ChessComClient(ZClient.fromDriver(driver), Transactor(null), Headers.empty, TestCcasLogger.noop, refs, bar, config)
+          client = ChessComClient(ZClient.fromDriver(driver), Transactor(null), Headers.empty, TestCcasLogger.noop, refs, stats, bar, config)
           urls = (1 to 3).map(i => URL.decode(s"http://test.example.com/api/$i").toOption.get)
           _        <- client.getAll[Payload](urls)
           recorded <- order.get

@@ -41,7 +41,7 @@ object BlacklistApp extends ZIOAppDefault {
       }
     } yield ()).provideSomeAuto(
       CcasLogger.live(showProgress = true),
-      ChessComClient.live,
+      ChessComClient.live("blacklist"),
       Client.default,
       DataSourceLayer.liveFromPrefix(onInit = Tables.ensureTables)
     )

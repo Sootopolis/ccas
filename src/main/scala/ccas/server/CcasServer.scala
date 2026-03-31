@@ -23,7 +23,7 @@ object CcasServer extends ZIOAppDefault {
       _ <- Server.serve(HealthRoutes.routes ++ JobRoutes.routes ++ ScheduleRoutes.routes ++ BlacklistRoutes.routes)
     } yield ()).provideSome[Scope](
       CcasLogger.live(showProgress = false),
-      ChessComClient.live,
+      ChessComClient.live("server"),
       Client.default,
       DataSourceLayer.liveFromPrefix(onInit = ServerTables.ensureTables),
       JobRunner.live,
