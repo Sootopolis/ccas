@@ -4,20 +4,29 @@ import java.time.{Duration as JDuration, Instant}
 import scala.annotation.nowarn
 
 import com.augustnagro.magnum.{sql, Transactor}
-import zio.{RIO, Ref, Scope, ZIO, ZIOAppDefault}
+import zio.{RIO, Ref, Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
 import zio.http.Client
 import RefUtils.*
 
 import ccas.analysis.tables.{ClubRefSkip, PlayerRefSkip, PlayerTournamentRef, RunTrigger, Tables}
 import ccas.utils.{display, CcasLogger, OutputFile}
+import ccas.utils.errors.BadRequestException
 import ccas.utils.client.ChessComClient
 import ccas.utils.sql.DataSourceLayer
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.SqlZioTypes.connectZIO
 
 object RefApp extends ZIOAppDefault {
-  override def run: RIO[Scope, Unit] =
-    populate(forceSkipped = false, upgradeRefs = false).provideSome[Scope](
+  private val help = "Usage: RefApp [--force-skipped] [--upgrade-refs]"
+
+  override def run: RIO[ZIOAppArgs & Scope, Unit] =
+    (for {
+      args <- ZIOAppArgs.getArgs
+      _    <- ZIO.whenDiscard(args.contains("--help"))(ZIO.fail(BadRequestException(help)))
+      forceSkipped = args.contains("--force-skipped")
+      upgradeRefs  = args.contains("--upgrade-refs")
+      _           <- populate(forceSkipped = forceSkipped, upgradeRefs = upgradeRefs)
+    } yield ()).provideSome[ZIOAppArgs & Scope](
       CcasLogger.live(showProgress = true),
       ChessComClient.live("ref"),
       Client.default,
