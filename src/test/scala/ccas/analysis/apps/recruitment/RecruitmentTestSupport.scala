@@ -3,7 +3,7 @@ package ccas.analysis.apps.recruitment
 import java.time.{Duration, Instant, LocalDateTime, ZoneOffset}
 
 import com.augustnagro.magnum.{sql, Transactor}
-import zio.{durationInt, Chunk, Fiber, Promise, RIO, Ref, Scope, Semaphore, ZIO}
+import zio.{durationInt, Promise, RIO, Ref, Scope, Semaphore, ZIO}
 import zio.http.*
 
 import ccas.analysis.tables.*
@@ -247,10 +247,7 @@ object RecruitmentTestSupport {
   ): RIO[Transactor, ChessComClient] =
     for {
       transactor    <- ZIO.service[Transactor]
-      semaphore     <- Semaphore.make(1)
       stateRef      <- Ref.make(ChessComClient.ThrottleState(1, 0, Vector.empty))
-      reserveRef    <- Ref.make(Chunk.empty[Fiber.Runtime[Nothing, Nothing]])
-      adjustMutex   <- Semaphore.make(1)
       activeRef     <- Ref.make(0)
       rateLimitGate <- Semaphore.make(1)
       lastReqRef    <- Ref.make(0L)
@@ -327,10 +324,7 @@ object RecruitmentTestSupport {
           ZIO.die(new UnsupportedOperationException)
       }
       val refs = ChessComClient.ThrottleRefs(
-        semaphore,
         stateRef,
-        reserveRef,
-        adjustMutex,
         activeRef,
         rateLimitGate,
         lastReqRef,
@@ -361,10 +355,7 @@ object RecruitmentTestSupport {
   ): RIO[Transactor, ChessComClient] =
     for {
       transactor    <- ZIO.service[Transactor]
-      semaphore     <- Semaphore.make(5)
       stateRef      <- Ref.make(ChessComClient.ThrottleState(5, 0, Vector.empty))
-      reserveRef    <- Ref.make(Chunk.empty[Fiber.Runtime[Nothing, Nothing]])
-      adjustMutex   <- Semaphore.make(1)
       activeRef     <- Ref.make(0)
       rateLimitGate <- Semaphore.make(1)
       lastReqRef    <- Ref.make(0L)
@@ -434,10 +425,7 @@ object RecruitmentTestSupport {
           ZIO.die(new UnsupportedOperationException)
       }
       val refs = ChessComClient.ThrottleRefs(
-        semaphore,
         stateRef,
-        reserveRef,
-        adjustMutex,
         activeRef,
         rateLimitGate,
         lastReqRef,

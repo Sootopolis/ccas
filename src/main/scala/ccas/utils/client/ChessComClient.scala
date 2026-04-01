@@ -19,13 +19,17 @@ import ccas.utils.json.JsonDecodingException
   *
   * Wraps a `zio-http` `Client` and adds several layers of concurrency and error management:
   *
-  *   - '''Concurrency semaphore''' — bounds parallel in-flight requests to `maxPermits`.
+  *   - '''Gate-based admission control''' — a single-permit gate serializes request admission. Before each request, the
+  *     gate checks that the number of in-flight requests (`activeRef`) is below `currentMax`. If not, it polls until a
+  *     slot opens. This enforces the concurrency limit without a semaphore, so throttle-down takes effect immediately
+  *     for all requests that haven't yet entered the gate.
   *   - '''EMA-based rate delay''' — tracks an exponential moving average of response times and staggers outgoing
   *     requests so that the full permit budget is utilised without bursting. When permits are reduced the per-request
   *     delay grows proportionally.
-  *   - '''Failure-window throttle-down''' — maintains a rolling window of success/failure outcomes. When the failure
-  *     rate exceeds a configurable threshold, the effective permit limit is halved by forking daemon fibers that hold
-  *     reserve permits (so no queued request accidentally grabs a permit during the transition).
+  *   - '''Failure-window throttle-down''' — maintains a rolling window of success/failure outcomes. Rate-limiting signals
+  *     (429 and non-Cloudflare 403) count as failures; other errors (404, 500) do not. Cloudflare challenge 403s bypass
+  *     the window and trigger an immediate hard throttle. When the failure rate in the window exceeds a configurable
+  *     threshold, `currentMax` drops to 1 and the gate immediately enforces it.
   *   - '''Generation-gated recovery''' — after a cooldown period, a background fiber doubles the permit limit back (or
   *     holds if failures persist). A generation counter ensures that only the most recent throttle-down triggers
   *     recovery, preventing stale fibers from interfering.
@@ -52,42 +56,50 @@ final class ChessComClient(
     ZIO.fail(Exception(s"Redirect failed: $message"))
   }
 
-  private def rawGet[T](url: URL)(using jsonDecoder: JsonDecoder[T]): Task[T] = for {
+  private def rawGet[T](url: URL)(using jsonDecoder: JsonDecoder[T]): Task[T] = (for {
     _ <- statsRef.update(_.incAttempts)
-    response <- batchedClient(Request(method = GET, url = url).addHeaders(headers)).tapError {
-      case e if isConnectionError(e) => statsRef.update(_.incConnectionErrors)
-      case _                         => ZIO.unit
+    response <- batchedClient(Request(method = GET, url = url).addHeaders(headers)).tapError { e =>
+      ZIO.whenDiscard(isConnectionError(e))(statsRef.update(_.incConnectionErrors))
     }
     string <- response.body.asString
     cfChallenge = isCloudflareChallenge(response, string)
-    _ <- if (cfChallenge) throttleDown(config.cfCooldown) else recordOutcome(response.status != Status.TooManyRequests)
+    _ <- if (cfChallenge) throttleDown(config.cfCooldown)
+         else recordOutcome(response.status != Status.TooManyRequests && response.status != Status.Forbidden)
     _ <- ZIO.whenDiscard(!response.status.isSuccess) {
       statsRef.update(_.incError(response.status.code)) *>
         ZIO.fail(HttpStatusException(response.status.code, url, string))
     }
     value <- ZIO.fromEither(jsonDecoder.decodeJson(string)).mapError(JsonDecodingException(_))
-  } yield value
+  } yield value).tapError { e =>
+    val (errorType, msg, body) = e match {
+      case e: HttpStatusException => (e.getClass.getSimpleName, Some(e.statusCode.toString), Some(e.responseBody))
+      case other                  => (other.getClass.getSimpleName, Option(other.getMessage), None)
+    }
+    ApiFetchFailure
+      .insert(ApiFetchFailure(Instant.now(), url.encode, errorType, msg, body))
+      .provideEnvironment(ZEnvironment(transactor))
+      .ignore
+  }
 
   def get[T](url: URL)(using jsonDecoder: JsonDecoder[T]): Task[T] =
-    statsRef.update(_.incRequests) *>
-      (rateDelay *> semaphore.withPermit {
-        (activeRef.updateAndGet(_ + 1).flatMap(n => updateBar(n) *> statsRef.update(_.updatePeak(n))) *>
-          rawGet(url).timed.flatMap { case (duration, result) =>
-            val ms = duration.toMillis
-            updateResponseTimeEma(ms) *> statsRef.update(_.recordLatency(ms)).as(result)
-          }).ensuring(activeRef.updateAndGet(_ - 1).flatMap(updateBar).ignore)
-      }).retry(retry429Schedule).retry(retryCfSchedule).retry(retry403Schedule).retry(retryConnectionSchedule).tapBoth(
-        error =>
-          statsRef.update(_.incFailures) *> {
-            val (msg, body) = error match {
-              case e: HttpStatusException => (Some(e.statusCode.toString), Some(e.responseBody))
-              case other                  => (Option(other.getMessage), None)
-            }
-            ApiFetchFailure
-              .insert(ApiFetchFailure(Instant.now(), url.encode, error.getClass.getSimpleName, msg, body))
-              .provideEnvironment(ZEnvironment(transactor))
-              .ignore
-          },
+    statsRef.update(_.incRequests) *> withRetries {
+      for {
+        (duration, result) <- ZIO.acquireReleaseWith(acquireSlot)(_ => releaseSlot()) { active =>
+          statsRef.update(_.updatePeak(active)) *> rawGet(url).timed
+        }
+        ms = duration.toMillis
+        _ <- updateResponseTimeEma(ms) *> statsRef.update(_.recordLatency(ms))
+      } yield result
+    }
+
+  private def withRetries[T](effect: Task[T]): Task[T] =
+    effect
+      .retry(retry429Schedule)
+      .retry(retryCfSchedule)
+      .retry(retry403Schedule)
+      .retry(retryConnectionSchedule)
+      .tapBoth(
+        _ => statsRef.update(_.incFailures),
         _ => statsRef.update(_.incSuccesses)
       )
 
@@ -108,26 +120,37 @@ final class ChessComClient(
   // Adaptive throttle
   // ---------------------------------------------------------------------------
 
-  /** Adaptive inter-request delay derived from an EMA of successful response times. Targets full permit utilization:
-    * delay = ema / currentMax. When throttled to fewer permits the delay increases proportionally, naturally slowing
-    * the request rate. Skipped during cold start (EMA = 0) where the semaphore alone governs concurrency. Uses a
-    * single-permit gate to serialize entry so concurrent callers stagger correctly. Runs outside
-    * `semaphore.withPermit`, so no concurrency permit is held during sleep.
+  /** Acquire an in-flight slot: waits for capacity inside the serializing gate, applies the EMA-based inter-request
+    * delay, then atomically increments `activeRef` before releasing the gate. This ensures the next request through the
+    * gate sees the updated count, preventing overshoot.
     */
-  private def rateDelay: Task[Unit] =
+  private def acquireSlot: Task[Int] =
+    rateLimitGate.withPermit {
+      awaitCapacity *> emaDelay *> activeRef.updateAndGet(_ + 1).tap(updateBar)
+    }
+
+  private def releaseSlot(): UIO[Unit] =
+    activeRef.updateAndGet(_ - 1).flatMap(updateBar).ignore
+
+  private def awaitCapacity: Task[Unit] =
+    (for {
+      active <- activeRef.get
+      state  <- stateRef.get
+    } yield active < state.currentMax.toInt)
+      .repeat(Schedule.spaced(10.millis) && Schedule.recurWhile(!_)).unit
+
+  private def emaDelay: Task[Unit] =
     responseTimeEma.get.flatMap { ema =>
       ZIO.unlessDiscard(ema <= 0) {
-        rateLimitGate.withPermit {
-          stateRef.get.flatMap { state =>
-            val targetDelay = (ema / state.currentMax).toLong
-            for {
-              now  <- Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS)
-              last <- lastRequestRef.get
-              gap = now - last
-              _ <- ZIO.whenDiscard(gap < targetDelay)(ZIO.sleep((targetDelay - gap).millis))
-              _ <- Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS).flatMap(lastRequestRef.set)
-            } yield ()
-          }
+        stateRef.get.flatMap { state =>
+          val targetDelay = (ema / state.currentMax).toLong
+          for {
+            now  <- Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS)
+            last <- lastRequestRef.get
+            gap = now - last
+            _ <- ZIO.whenDiscard(gap < targetDelay)(ZIO.sleep((targetDelay - gap).millis))
+            _ <- Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS).flatMap(lastRequestRef.set)
+          } yield ()
         }
       }
     }
@@ -141,7 +164,7 @@ final class ChessComClient(
     }
 
   /** Record a request outcome and trigger throttle-down if failure rate exceeds threshold. Skipped while cooling down
-    * (after a recent throttle-down) to prevent cascading reductions from a single burst of 429s.
+    * (after a recent throttle-down) to prevent cascading reductions from a single burst of failures.
     */
   private def recordOutcome(success: Boolean): Task[Unit] =
     stateRef.modify { state =>
@@ -158,7 +181,7 @@ final class ChessComClient(
       ZIO.whenDiscard(shouldThrottle)(throttleDown())
     }
 
-  /** Drop the effective permit limit to 1 and schedule drain-then-recover. Clears the outcome window and sets
+  /** Drop the effective concurrency limit to 1 and schedule drain-then-recover. Clears the outcome window and sets
     * coolingDown to prevent cascading reductions. The `cooldown` parameter controls how long to wait after in-flight
     * requests have drained before attempting recovery.
     */
@@ -180,34 +203,8 @@ final class ChessComClient(
       case None => ZIO.unit
       case Some((oldMax, gen)) =>
         statsRef.update(_.incThrottleDowns) *>
-          adjustPermits(1) *>
           logger.warn(s"Rate limit throttle: $oldMax \u2192 1 permit") *>
           scheduleRecovery(gen, cooldown).forkDaemon.unit
-    }
-
-  /** Incrementally adjust reserve fibers to enforce `newMax` effective permits. Throttle-down only forks additional
-    * reserve fibers (never releasing existing ones), so no permits are briefly returned to the semaphore for queued
-    * requests to grab. Recovery only interrupts the excess. Serialized via mutex.
-    */
-  private def adjustPermits(newMax: Long): Task[Unit] =
-    adjustMutex.withPermit {
-      for {
-        oldFibers <- reserveFibersRef.get
-        toReserve = (config.maxPermits - newMax).toInt
-        current   = oldFibers.size
-        delta     = toReserve - current
-        _ <-
-          if (delta > 0) {
-            ZIO.foreach(Chunk.range(0, delta))(_ => semaphore.withPermit(ZIO.never).forkDaemon).flatMap(added =>
-              reserveFibersRef.set(oldFibers ++ added)
-            )
-          } else {
-            ZIO.whenDiscard(delta < 0) {
-              val (keep, release) = oldFibers.splitAt(current + delta)
-              ZIO.foreachDiscard(release)(_.interrupt) *> reserveFibersRef.set(keep)
-            }
-          }
-      } yield ()
     }
 
   /** Wait for in-flight requests to drain, sleep for cooldown, then recover permits if failure rate has dropped. Clears
@@ -239,7 +236,7 @@ final class ChessComClient(
           val msg =
             if (newMax == config.maxPermits) "Rate limit throttle lifted"
             else s"Rate limit easing: $oldMax \u2192 $newMax permits"
-          adjustPermits(newMax) *> logger.info(msg) *>
+          logger.info(msg) *>
             ZIO.unlessDiscard(newMax == config.maxPermits)(scheduleRecovery(gen, cooldown))
         }
       }
@@ -285,10 +282,7 @@ final class ChessComClient(
 
 object ChessComClient {
   private[ccas] case class ThrottleRefs(
-    semaphore: Semaphore,
     stateRef: Ref[ThrottleState],
-    reserveFibersRef: Ref[Chunk[Fiber.Runtime[Nothing, Nothing]]],
-    adjustMutex: Semaphore,
     activeRef: Ref[Int],
     rateLimitGate: Semaphore,
     lastRequestRef: Ref[Long],
@@ -303,7 +297,7 @@ object ChessComClient {
   )
 
   /** @param maxPermits
-    *   Maximum concurrent requests (semaphore permits). Throttle-down drops to 1; recovery doubles back.
+    *   Maximum concurrent in-flight requests. Throttle-down drops to 1; recovery doubles back.
     * @param cooldown
     *   Time to wait after draining in-flight requests before attempting recovery from a failure-rate throttle-down.
     * @param cfCooldown
@@ -416,8 +410,7 @@ object ChessComClient {
       val retrySuffix    = if (retries > 0) s", $retries retries" else ""
       val throttleSuffix = if (throttleDowns > 0) s", $throttleDowns throttle-downs" else ""
       val latencySuffix =
-        if (latencyCount > 0) s", latency min/mean/max = $minDisplay/${meanLatency}/${latencyMaxMs}ms"
-        else ""
+        if (latencyCount > 0) s", latency min/mean/max = $minDisplay/$meanLatency/${latencyMaxMs}ms" else ""
       s"API stats: $requests requests$failedSuffix$retrySuffix$throttleSuffix$latencySuffix"
     }
   }
@@ -462,10 +455,7 @@ object ChessComClient {
         client        <- ZIO.service[Client]
         transactor    <- ZIO.service[Transactor]
         logger        <- ZIO.service[CcasLogger]
-        semaphore     <- Semaphore.make(permits)
         stateRef      <- Ref.make(ThrottleState(permits, 0, Vector.empty))
-        reserveRef    <- Ref.make(Chunk.empty[Fiber.Runtime[Nothing, Nothing]])
-        adjustMutex   <- Semaphore.make(1)
         activeRef     <- Ref.make(0)
         rateLimitGate <- Semaphore.make(1)
         lastReqRef    <- Ref.make(0L)
@@ -473,9 +463,8 @@ object ChessComClient {
         startedAt     <- ZIO.succeed(Instant.now())
         stats         <- Ref.make(StatsAccumulator())
         bar           <- logger.progressBar
-        refs = ThrottleRefs(semaphore, stateRef, reserveRef, adjustMutex, activeRef, rateLimitGate, lastReqRef, ema)
+        refs = ThrottleRefs(stateRef, activeRef, rateLimitGate, lastReqRef, ema)
         _ <- ZIO.addFinalizer(logAndPersistStats(appLabel, startedAt, stats, throttleConfig, logger, transactor))
-        _ <- ZIO.addFinalizer(reserveRef.get.flatMap(fibers => ZIO.foreachDiscard(fibers)(_.interrupt)))
       } yield ChessComClient(
         client,
         transactor,

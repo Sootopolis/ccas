@@ -7,7 +7,9 @@ import zio.http.*
 import zio.json.*
 import zio.test.*
 
+import ccas.analysis.tables.Tables
 import ccas.utils.TestCcasLogger
+import ccas.utils.sql.FreshSchemaLayer
 
 object TestChessComClient extends ZIOSpecDefault {
 
@@ -21,12 +23,10 @@ object TestChessComClient extends ZIOSpecDefault {
     retryBase: Duration = 10.millis,
     failureWindowSize: Int = 20,
     failureThreshold: Double = 0.2
-  ): ZIO[Scope, Nothing, (ChessComClient, Ref[ChessComClient.ThrottleState])] =
+  ): ZIO[Scope & Transactor, Nothing, (ChessComClient, Ref[ChessComClient.ThrottleState])] =
     for {
-      semaphore     <- Semaphore.make(permits)
+      transactor    <- ZIO.service[Transactor]
       stateRef      <- Ref.make(ChessComClient.ThrottleState(permits, 0, Vector.empty))
-      reserveRef    <- Ref.make(Chunk.empty[Fiber.Runtime[Nothing, Nothing]])
-      adjustMutex   <- Semaphore.make(1)
       activeRef     <- Ref.make(0)
       rateLimitGate <- Semaphore.make(1)
       lastReqRef    <- Ref.make(0L)
@@ -45,10 +45,7 @@ object TestChessComClient extends ZIOSpecDefault {
         10
       )
       refs = ChessComClient.ThrottleRefs(
-        semaphore,
         stateRef,
-        reserveRef,
-        adjustMutex,
         activeRef,
         rateLimitGate,
         lastReqRef,
@@ -80,7 +77,7 @@ object TestChessComClient extends ZIOSpecDefault {
       }
       val client = ChessComClient(
         ZClient.fromDriver(driver),
-        Transactor(null),
+        transactor,
         Headers.empty,
         TestCcasLogger.noop,
         refs,
@@ -94,9 +91,9 @@ object TestChessComClient extends ZIOSpecDefault {
   /** Dummy ChessComClient layer that returns 404 for all requests. Useful for tests that need a ChessComClient in the
     * environment but never actually make HTTP calls.
     */
-  val dummyLayer: ZLayer[Any, Nothing, ChessComClient] =
+  val dummyLayer: ZLayer[Transactor, Nothing, ChessComClient] =
     ZLayer.fromZIO {
-      makeClient(_ => ZIO.succeed(Response(status = Status.NotFound))).provideLayer(Scope.default).map(_._1)
+      makeClient(_ => ZIO.succeed(Response(status = Status.NotFound))).provideSomeLayer(Scope.default).map(_._1)
     }
 
   private val testUrl  = URL.decode("http://test.example.com/api").toOption.get
@@ -319,77 +316,17 @@ object TestChessComClient extends ZIOSpecDefault {
     test("sequential ordering when throttled to 1 permit") {
       ZIO.scoped {
         for {
-          order         <- Ref.make(Chunk.empty[Int])
-          stateRef      <- Ref.make(ChessComClient.ThrottleState(1, 0, Vector.empty))
-          semaphore     <- Semaphore.make(5)
-          reserveRef    <- Ref.make(Chunk.empty[Fiber.Runtime[Nothing, Nothing]])
-          adjustMutex   <- Semaphore.make(1)
-          activeRef     <- Ref.make(0)
-          rateLimitGate <- Semaphore.make(1)
-          bar           <- TestCcasLogger.noopBar
-          stats         <- Ref.make(ChessComClient.StatsAccumulator())
-          counter       <- Ref.make(0)
-          lastReqRef    <- Ref.make(0L)
-          ema           <- Ref.make(0.0)
-          config = ChessComClient.ThrottleConfig(
-            5,
-            60.seconds,
-            60.seconds,
-            10.millis,
-            10.millis,
-            10.millis,
-            20,
-            0.2,
-            10
-          )
-          // Reserve 4 permits to enforce effective limit of 1
-          reserveFibers <- ZIO.foreach(Chunk.range(0, 4))(_ => semaphore.withPermit(ZIO.never).forkDaemon)
-          _             <- reserveRef.set(reserveFibers)
-          refs = ChessComClient.ThrottleRefs(
-            semaphore,
-            stateRef,
-            reserveRef,
-            adjustMutex,
-            activeRef,
-            rateLimitGate,
-            lastReqRef,
-            ema
-          )
-          driver = new ZClient.Driver[Any, Scope, Throwable] {
-            override def request(
-              version: Version,
-              method: Method,
-              url: URL,
-              headers: Headers,
-              body: Body,
-              sslConfig: Option[ClientSSLConfig],
-              proxy: Option[Proxy]
-            )(implicit trace: Trace): ZIO[Scope, Throwable, Response] =
+          counter <- Ref.make(0)
+          order   <- Ref.make(Chunk.empty[Int])
+          // currentMax = 1 enforces sequential execution via the gate
+          (client, _) <- makeClient(
+            handler = { _ =>
               for {
                 n <- counter.getAndUpdate(_ + 1)
                 _ <- order.update(_ :+ n)
               } yield Response.json(jsonBody)
-
-            override def socket[Env1 <: Any](
-              version: Version,
-              url: URL,
-              headers: Headers,
-              app: WebSocketApp[Env1]
-            )(implicit
-              trace: Trace,
-              ev: Scope =:= Scope
-            ): ZIO[Env1 & Scope, Throwable, Response] =
-              ZIO.die(new UnsupportedOperationException)
-          }
-          client = ChessComClient(
-            ZClient.fromDriver(driver),
-            Transactor(null),
-            Headers.empty,
-            TestCcasLogger.noop,
-            refs,
-            stats,
-            bar,
-            config
+            },
+            permits = 1
           )
           urls = (1 to 3).map(i => URL.decode(s"http://test.example.com/api/$i").toOption.get)
           _        <- client.getAll[Payload](urls)
@@ -397,5 +334,7 @@ object TestChessComClient extends ZIOSpecDefault {
         } yield assertTrue(recorded == Chunk(0, 1, 2))
       }
     }
+  ).provideShared(
+    FreshSchemaLayer("test_client", Tables.ensureTables)
   ) @@ TestAspect.withLiveClock @@ TestAspect.timeout(15.seconds)
 }

@@ -30,6 +30,7 @@ object Tables extends ZIOAppDefault {
       _ <- RecruitmentRun.createTable
       _ <- RecruitmentCandidate.createTable
       _ <- PlayerRecruitmentCache.createTable
+      _ <- ApiResponseBody.createTable
       _ <- ApiFetchFailure.createTable
       _ <- ClubMatch.createTable
       _ <- ClubMatchBoard.createTable

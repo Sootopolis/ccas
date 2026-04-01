@@ -58,10 +58,7 @@ object TestSeedFromClubMatches extends ZIOSpecDefault {
   ): RIO[Transactor, ChessComClient] =
     for {
       transactor    <- ZIO.service[Transactor]
-      semaphore     <- Semaphore.make(1)
       stateRef      <- Ref.make(ChessComClient.ThrottleState(1, 0, Vector.empty))
-      reserveRef    <- Ref.make(Chunk.empty[Fiber.Runtime[Nothing, Nothing]])
-      adjustMutex   <- Semaphore.make(1)
       activeRef     <- Ref.make(0)
       rateLimitGate <- Semaphore.make(1)
       lastReqRef    <- Ref.make(0L)
@@ -98,10 +95,7 @@ object TestSeedFromClubMatches extends ZIOSpecDefault {
           ZIO.die(new UnsupportedOperationException)
       }
       val refs = ChessComClient.ThrottleRefs(
-        semaphore,
         stateRef,
-        reserveRef,
-        adjustMutex,
         activeRef,
         rateLimitGate,
         lastReqRef,

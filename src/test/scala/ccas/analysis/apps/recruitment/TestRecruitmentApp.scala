@@ -2,7 +2,7 @@ package ccas.analysis.apps.recruitment
 
 import java.time.{Duration, Instant}
 
-import com.augustnagro.magnum.Transactor
+import com.augustnagro.magnum.{sql, Transactor}
 import zio.{durationInt, Promise, Scope, ZIO}
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
@@ -10,7 +10,7 @@ import ccas.analysis.apps.recruitment.RecruitmentTestSupport.*
 import ccas.analysis.tables.*
 import ccas.api.misc.enums.PlayerStatusCategory.Active
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username}
-import ccas.utils.sql.FreshSchemaLayer
+import ccas.utils.sql.{FreshSchemaLayer, SqlZioTypes}
 import ccas.utils.CcasLogger
 
 object TestRecruitmentApp extends ZIOSpecDefault {
@@ -238,6 +238,23 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         recent.head.errorType == "UserFacingException",
         recent.head.errorMessage.contains("HTTP 404"),
         tooEarly.isEmpty
+      )
+    },
+    test("ApiFetchFailure deduplicates response bodies") {
+      val now  = Instant.now()
+      val body = """{"code":3024,"message":"An internal error has occurred."}"""
+      val failure1 = ApiFetchFailure(now, "https://api.chess.com/pub/match/1", "HttpStatusException", Some("404"), Some(body))
+      val failure2 = ApiFetchFailure(now, "https://api.chess.com/pub/match/2", "HttpStatusException", Some("404"), Some(body))
+      for {
+        _       <- seedDb
+        _       <- ApiFetchFailure.insert(failure1)
+        _       <- ApiFetchFailure.insert(failure2)
+        recent  <- ApiFetchFailure.selectRecent(now.minus(Duration.ofMinutes(1)))
+        bodyRow <- SqlZioTypes.connectZIO(sql"SELECT count(*) FROM api_response_body".query[Long].run().head)
+      } yield assertTrue(
+        recent.size == 2,
+        recent.forall(_.responseBody.contains(body)),
+        bodyRow == 1L
       )
     }
   )
