@@ -26,10 +26,10 @@ import ccas.utils.json.JsonDecodingException
   *   - '''EMA-based rate delay''' — tracks an exponential moving average of response times and staggers outgoing
   *     requests so that the full permit budget is utilised without bursting. When permits are reduced the per-request
   *     delay grows proportionally.
-  *   - '''Failure-window throttle-down''' — maintains a rolling window of success/failure outcomes. Rate-limiting signals
-  *     (429 and non-Cloudflare 403) count as failures; other errors (404, 500) do not. Cloudflare challenge 403s bypass
-  *     the window and trigger an immediate hard throttle. When the failure rate in the window exceeds a configurable
-  *     threshold, `currentMax` drops to 1 and the gate immediately enforces it.
+  *   - '''Failure-window throttle-down''' — maintains a rolling window of success/failure outcomes. Rate-limiting
+  *     signals (429 and non-Cloudflare 403) count as failures; other errors (404, 500) do not. Cloudflare challenge
+  *     403s bypass the window and trigger an immediate hard throttle. When the failure rate in the window exceeds a
+  *     configurable threshold, `currentMax` drops to 1 and the gate immediately enforces it.
   *   - '''Generation-gated recovery''' — after a cooldown period, a background fiber doubles the permit limit back (or
   *     holds if failures persist). A generation counter ensures that only the most recent throttle-down triggers
   *     recovery, preventing stale fibers from interfering.
@@ -63,8 +63,9 @@ final class ChessComClient(
     }
     string <- response.body.asString
     cfChallenge = isCloudflareChallenge(response, string)
-    _ <- if (cfChallenge) throttleDown(config.cfCooldown)
-         else recordOutcome(response.status != Status.TooManyRequests && response.status != Status.Forbidden)
+    _ <-
+      if (cfChallenge) throttleDown(config.cfCooldown)
+      else recordOutcome(response.status != Status.TooManyRequests && response.status != Status.Forbidden)
     _ <- ZIO.whenDiscard(!response.status.isSuccess) {
       statsRef.update(_.incError(response.status.code)) *>
         ZIO.fail(HttpStatusException(response.status.code, url, string))

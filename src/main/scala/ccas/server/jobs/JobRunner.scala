@@ -15,9 +15,6 @@ import ccas.utils.CcasLogger
   *
   * Each submitted job is tracked in the `job_run` database table with a ULID identifier. Only one job of a given kind
   * (optionally scoped to a club) may run at a time; duplicate submissions are rejected with a [[JobConflictException]].
-  *
-  * After a Recruitment, Membership, or History job completes successfully, a follow-up MatchRef job is automatically
-  * submitted to resolve any new club/player references.
   */
 trait JobRunner {
 
@@ -86,13 +83,12 @@ object JobRunner {
         now    = Instant.now()
         jobRun = JobRun(id, kind, clubId, trigger, JobRunStatus.Running, params, now, None, None)
         _     <- JobRun.insert(jobRun)
-        fiber <- runJob(id, kind, effect(Some(JobRunId.unwrap(id)))).fork
+        fiber <- runJob(id, effect(Some(JobRunId.unwrap(id)))).fork
         _     <- fibers.update(_ + fiber)
       } yield id
 
     private def runJob(
       id: JobRunId,
-      kind: JobKind,
       effect: RIO[CcasLogger & ChessComClient & Transactor, Any]
     ): UIO[Unit] =
       def onFailure(error: Throwable): UIO[Unit] = {
@@ -102,31 +98,12 @@ object JobRunner {
           .unit.orDie
       }
 
-      def onSuccess: UIO[Unit] = {
-        val complete =
-          JobRun.updateStatus(id, JobRunStatus.Completed, Some(Instant.now()), None)
-            .provideEnvironment(env)
-            .unit.orDie
-        // Follow-up kinds kept in sync with JobScheduler.runSchedule
-        val followUp =
-          ZIO.whenDiscard(kind == JobKind.Recruitment || kind == JobKind.Membership || kind == JobKind.History)(
-            submitRef.provideEnvironment(env).ignore
-          )
-        complete *> followUp
-      }
+      def onSuccess: UIO[Unit] =
+        JobRun.updateStatus(id, JobRunStatus.Completed, Some(Instant.now()), None)
+          .provideEnvironment(env)
+          .unit.orDie
 
       effect.provideEnvironment(env).foldZIO(onFailure, _ => onSuccess)
-
-    private def submitRef: RIO[Transactor, Unit] = {
-      import ccas.analysis.apps.ref.RefApp
-      submit(
-        JobKind.MatchRef,
-        None,
-        None,
-        RunTrigger.FollowUp,
-        _ => RefApp.populate(RunTrigger.FollowUp, forceSkipped = false, upgradeRefs = false)
-      ).ignore
-    }
 
     def awaitAll: UIO[Unit] =
       fibers.get.flatMap(fs => ZIO.foreachDiscard(fs)(_.await))

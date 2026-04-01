@@ -66,7 +66,6 @@ object JobScheduler {
               .map(_.slug)
           }
 
-      // Job kind dispatch kept in sync with JobRunner.runJob follow-up logic
       val effect = schedule.kind match {
         case JobKind.Recruitment =>
           (jobRunId: Option[String]) =>

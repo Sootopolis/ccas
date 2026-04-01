@@ -10,8 +10,8 @@ import RefUtils.*
 
 import ccas.analysis.tables.{ClubRefSkip, PlayerRefSkip, PlayerTournamentRef, RunTrigger, Tables}
 import ccas.utils.{display, CcasLogger, OutputFile}
-import ccas.utils.errors.BadRequestException
 import ccas.utils.client.ChessComClient
+import ccas.utils.errors.BadRequestException
 import ccas.utils.sql.DataSourceLayer
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.SqlZioTypes.connectZIO
@@ -25,7 +25,7 @@ object RefApp extends ZIOAppDefault {
       _    <- ZIO.whenDiscard(args.contains("--help"))(ZIO.fail(BadRequestException(help)))
       forceSkipped = args.contains("--force-skipped")
       upgradeRefs  = args.contains("--upgrade-refs")
-      _           <- populate(forceSkipped = forceSkipped, upgradeRefs = upgradeRefs)
+      _ <- populate(forceSkipped = forceSkipped, upgradeRefs = upgradeRefs)
     } yield ()).provideSome[ZIOAppArgs & Scope](
       CcasLogger.live(showProgress = true),
       ChessComClient.live("ref"),

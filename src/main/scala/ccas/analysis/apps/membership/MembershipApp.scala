@@ -1,9 +1,10 @@
 package ccas.analysis.apps.membership
 
 import java.time.Instant
+import scala.annotation.tailrec
 
 import com.augustnagro.magnum.Transactor
-import zio.{Chunk, RIO, Scope, Task, ZIO, ZIOAppArgs, ZIOAppDefault}
+import zio.{Chunk, NonEmptyChunk, RIO, Scope, Task, ZIO, ZIOAppArgs, ZIOAppDefault}
 import zio.http.Client
 
 import ccas.analysis.apps.membership.MembershipChange.*
@@ -17,30 +18,29 @@ import ccas.utils.sql.DataSourceLayer
 import ccas.utils.sql.SqlZioTypes.withTransaction
 
 object MembershipApp extends ZIOAppDefault {
-  private val help = "Usage: MembershipApp <club-slug> [since [until]]"
+  private val help = "Usage: MembershipApp <club-slug> [club-slug ...] [--since <date>] [--until <date>]"
 
   override def run: RIO[ZIOAppArgs & Scope, Unit] =
     (for {
-      args <- ZIOAppArgs.getArgs
-      clubName <- args.headOption match {
-        case None    => ZIO.fail(BadRequestException(help))
-        case Some(s) => ZIO.succeed(ClubSlug.wrap(s))
-      }
-      mode <- parseRunMode(args)
-      _ <- mode match {
-        case ReconcileOnly =>
-          reconcile(clubName).flatMap { result =>
-            MembershipReport.reportReconciliation(result) *>
-              OutputFile.writeAndLog("membership", clubName, MembershipReport.formatReconciliation(result))
-          }
-        case SinceNow(since) =>
-          reconcile(clubName) *> MembershipReport.report(clubName, since, Instant.now()).flatMap { rr =>
-            OutputFile.writeAndLog("membership", clubName, MembershipReport.formatReport(rr))
-          }
-        case SinceUntil(since, until) =>
-          reconcileIfStale(clubName, until) *> MembershipReport.report(clubName, since, until).flatMap { rr =>
-            OutputFile.writeAndLog("membership", clubName, MembershipReport.formatReport(rr))
-          }
+      args           <- ZIOAppArgs.getArgs
+      (slugs, flags) <- parseArgs(args)
+      mode           <- parseRunMode(flags)
+      _ <- ZIO.foreachDiscard(slugs) { clubName =>
+        mode match {
+          case ReconcileOnly =>
+            reconcile(clubName).flatMap { result =>
+              MembershipReport.reportReconciliation(result) *>
+                OutputFile.writeAndLog("membership", clubName, MembershipReport.formatReconciliation(result))
+            }
+          case SinceNow(since) =>
+            reconcile(clubName) *> MembershipReport.report(clubName, since, Instant.now()).flatMap { rr =>
+              OutputFile.writeAndLog("membership", clubName, MembershipReport.formatReport(rr))
+            }
+          case SinceUntil(since, until) =>
+            reconcileIfStale(clubName, until) *> MembershipReport.report(clubName, since, until).flatMap { rr =>
+              OutputFile.writeAndLog("membership", clubName, MembershipReport.formatReport(rr))
+            }
+        }
       }
     } yield ()).provideSomeAuto(
       CcasLogger.live(showProgress = true),
@@ -54,19 +54,44 @@ object MembershipApp extends ZIOAppDefault {
   private case class SinceNow(since: Instant)                   extends RunMode
   private case class SinceUntil(since: Instant, until: Instant) extends RunMode
 
-  private def parseRunMode(args: Chunk[String]): Task[RunMode] =
-    args.lift(1) match {
-      case None => ZIO.succeed(ReconcileOnly)
-      case Some(sinceStr) =>
+  private def parseArgs(args: Chunk[String]): Task[(NonEmptyChunk[ClubSlug], Map[String, String])] = {
+    @tailrec
+    def loop(
+      remaining: List[String],
+      slugs: List[ClubSlug],
+      flags: Map[String, String]
+    ): Either[String, (List[ClubSlug], Map[String, String])] = remaining match {
+      case Nil                                      => Right((slugs.reverse, flags))
+      case ("--since" | "--until") :: value :: rest => loop(rest, slugs, flags + (remaining.head -> value))
+      case ("--since" | "--until") :: Nil           => Left(s"${remaining.head} requires a value")
+      case flag :: _ if flag.startsWith("--")       => Left(s"Unknown flag: $flag")
+      case slug :: rest                             => loop(rest, ClubSlug.wrap(slug) :: slugs, flags)
+    }
+    ZIO.fromEither(loop(args.toList, Nil, Map.empty))
+      .mapError(BadRequestException(_))
+      .flatMap { case (slugs, flags) =>
+        NonEmptyChunk.fromChunk(Chunk.from(slugs)) match {
+          case None      => ZIO.fail(BadRequestException(help))
+          case Some(nec) => ZIO.succeed((nec, flags))
+        }
+      }
+  }
+
+  private def parseRunMode(flags: Map[String, String]): Task[RunMode] =
+    (flags.get("--since"), flags.get("--until")) match {
+      case (None, None) => ZIO.succeed(ReconcileOnly)
+      case (None, Some(_)) =>
+        ZIO.fail(BadRequestException("--until requires --since"))
+      case (Some(sinceStr), None) =>
         ZIO.attempt(Instant.parse(sinceStr))
-          .orElseFail(BadRequestException(s"Invalid date format: $sinceStr"))
+          .mapError(_ => BadRequestException(s"Invalid date format: $sinceStr"))
+          .map(SinceNow(_))
+      case (Some(sinceStr), Some(untilStr)) =>
+        ZIO.attempt(Instant.parse(sinceStr))
+          .mapError(_ => BadRequestException(s"Invalid date format: $sinceStr"))
           .flatMap { since =>
-            args.lift(2) match {
-              case None => ZIO.succeed(SinceNow(since))
-              case Some(untilStr) =>
-                ZIO.attempt(Instant.parse(untilStr))
-                  .mapBoth(_ => BadRequestException(s"Invalid date format: $untilStr"), SinceUntil(since, _))
-            }
+            ZIO.attempt(Instant.parse(untilStr))
+              .mapBoth(_ => BadRequestException(s"Invalid date format: $untilStr"), SinceUntil(since, _))
           }
     }
 

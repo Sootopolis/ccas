@@ -4,7 +4,6 @@ import zio.{Task, ZIO}
 import zio.http.*
 import zio.json.{DeriveJsonCodec, JsonCodec, JsonDecoder, JsonEncoder}
 
-import ccas.server.jobs.JobConflictException
 import ccas.utils.client.HttpStatusException
 import ccas.utils.errors.{BadRequestException, NotFoundException, UserFacingException}
 
@@ -27,11 +26,10 @@ object RouteHelpers {
     effect.catchAll(e => ZIO.succeed(handleError(e)))
 
   def handleError(error: Throwable): Response = error match {
-    case e: JobConflictException => jsonResponse(Status.Conflict, ErrorResponse(e.getMessage))
-    case e: HttpStatusException  => jsonResponse(Status.BadGateway, ErrorResponse(e.getMessage))
-    case e: NotFoundException    => jsonResponse(Status.NotFound, ErrorResponse(e.getMessage))
-    case e: BadRequestException  => jsonResponse(Status.BadRequest, ErrorResponse(e.getMessage))
-    case e: UserFacingException  => jsonResponse(Status.BadRequest, ErrorResponse(e.getMessage))
-    case _                       => jsonResponse(Status.InternalServerError, ErrorResponse("Internal server error"))
+    case e: HttpStatusException => jsonResponse(Status.BadGateway, ErrorResponse(e.getMessage))
+    case e: NotFoundException   => jsonResponse(Status.NotFound, ErrorResponse(e.getMessage))
+    case e: BadRequestException => jsonResponse(Status.BadRequest, ErrorResponse(e.getMessage))
+    case e: UserFacingException => jsonResponse(Status.BadRequest, ErrorResponse(e.getMessage))
+    case _                      => jsonResponse(Status.InternalServerError, ErrorResponse("Internal server error"))
   }
 }

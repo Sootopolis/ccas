@@ -49,7 +49,7 @@ object ApiResponseBody {
 
   private def sha256(input: String): String = {
     val digest = MessageDigest.getInstance("SHA-256")
-    val bytes = digest.digest(input.getBytes(StandardCharsets.UTF_8))
+    val bytes  = digest.digest(input.getBytes(StandardCharsets.UTF_8))
     bytes.map(b => String.format("%02x", b)).mkString
   }
 }

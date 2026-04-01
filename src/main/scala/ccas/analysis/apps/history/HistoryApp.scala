@@ -3,7 +3,7 @@ package ccas.analysis.apps.history
 import java.time.{Duration as JDuration, Instant}
 
 import com.augustnagro.magnum.Transactor
-import zio.{RIO, Ref, Scope, URIO, ZEnvironment, ZIO, ZIOAppArgs, ZIOAppDefault}
+import zio.{NonEmptyChunk, RIO, Ref, Scope, URIO, ZEnvironment, ZIO, ZIOAppArgs, ZIOAppDefault}
 import zio.http.Client
 import HistoryUtils.*
 
@@ -51,24 +51,24 @@ import ccas.utils.sql.DataSourceLayer
   * their respective unresolved tables.
   *
   * ==Invocation==
-  *   - '''CLI:''' `HistoryApp <club-slug> [--full] [--refresh]`
-  *   - '''API:''' `POST /api/jobs/history` with `{"clubSlug": "...", "full": true/false, "refresh": true/false}`
+  *   - '''CLI:''' `HistoryApp <club-slug> [club-slug ...] [--full] [--refresh]`
+  *   - '''API:''' `POST /api/jobs/history` with `{"clubSlugs": ["..."], "full": true/false, "refresh": true/false}`
   */
 object HistoryApp extends ZIOAppDefault {
-  private val help = "Usage: HistoryApp <club-slug> [--full] [--refresh]"
+  private val help = "Usage: HistoryApp <club-slug> [club-slug ...] [--full] [--refresh]"
 
   // --- CLI entry point ---
 
   override def run: RIO[ZIOAppArgs & Scope, Unit] =
     (for {
       args <- ZIOAppArgs.getArgs
-      clubName <- args.headOption match {
-        case None    => ZIO.fail(BadRequestException(help))
-        case Some(s) => ZIO.succeed(ClubSlug.wrap(s))
-      }
       full    = args.contains("--full")
       refresh = args.contains("--refresh")
-      _ <- discover(clubName, full, refresh)
+      slugs <- NonEmptyChunk.fromChunk(args.filterNot(_.startsWith("--")).map(ClubSlug.wrap)) match {
+        case None        => ZIO.fail(BadRequestException(help))
+        case Some(slugs) => ZIO.succeed(slugs)
+      }
+      _ <- ZIO.foreachDiscard(slugs)(discover(_, full, refresh))
     } yield ()).provideSomeAuto(
       CcasLogger.live(showProgress = true),
       ChessComClient.live("history"),
