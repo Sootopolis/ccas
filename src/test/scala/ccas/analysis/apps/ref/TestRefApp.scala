@@ -4,15 +4,15 @@ import java.time.{Instant, LocalDateTime, ZoneOffset}
 import java.time.temporal.ChronoUnit
 
 import com.augustnagro.magnum.{sql, Transactor}
-import zio.{durationInt, Chunk, Fiber, RIO, Ref, Scope, Semaphore, ZIO, ZLayer}
+import zio.{RIO, Scope, ZIO, ZLayer}
 import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.analysis.tables.*
 import ccas.api.misc.enums.PlayerStatusCategory.Active
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, TournamentSlug, Username}
-import ccas.utils.{CcasLogger, TestCcasLogger}
-import ccas.utils.client.ChessComClient
+import ccas.utils.CcasLogger
+import ccas.utils.client.{ChessComClient, TestChessComClientSupport}
 import ccas.utils.sql.{FreshSchemaLayer, SqlZioTypes}
 
 object TestRefApp extends ZIOSpecDefault {
@@ -141,88 +141,39 @@ object TestRefApp extends ZIOSpecDefault {
   private def fakeChessComClient(
     responses: Map[String, String],
     failures: Set[String] = Set.empty
-  ): RIO[Transactor, ChessComClient] =
-    for {
-      transactor    <- ZIO.service[Transactor]
-      stateRef      <- Ref.make(ChessComClient.ThrottleState(5, 0, Vector.empty))
-      activeRef     <- Ref.make(0)
-      rateLimitGate <- Semaphore.make(1)
-      lastReqRef    <- Ref.make(0L)
-      ema           <- Ref.make(0.0)
-      bar           <- TestCcasLogger.noopBar
-      stats         <- Ref.make(ChessComClient.StatsAccumulator())
-    } yield {
-      val routes: Routes[Any, Response] = Routes(
-        Method.GET / "pub" / "player" / string("username") / "tournaments" -> handler { (username: String, _: Request) =>
-          if (failures.contains(username)) Response(status = Status.InternalServerError)
-          else
-            responses.get(s"player/$username/tournaments").fold(Response.json(emptyPlayerTournamentsJson))(
-              Response.json(_)
-            )
-        },
-        Method.GET / "pub" / "player" / string("username") / "matches" -> handler { (username: String, _: Request) =>
-          if (failures.contains(username)) Response(status = Status.InternalServerError)
-          else responses.get(s"player/$username/matches").fold(Response.json(emptyPlayerMatchesJson))(Response.json(_))
-        },
-        Method.GET / "pub" / "player" / string("username") -> handler { (username: String, _: Request) =>
-          if (failures.contains(username)) Response(status = Status.InternalServerError)
-          else {
-            val pid = playerIdByUsername.getOrElse(username.toLowerCase, 0L)
-            Response.json(apiPlayerJson(username, pid))
-          }
-        },
-        Method.GET / "pub" / "club" / string("club") / "matches" -> handler { (clubName: String, _: Request) =>
-          responses.get(s"club/$clubName/matches").fold(Response.json(emptyClubMatchesJson))(Response.json(_))
-        },
-        Method.GET / "pub" / "match" / long("matchId") -> handler { (matchId: Long, _: Request) =>
-          responses.get(s"match/$matchId").fold(Response(status = Status.NotFound))(Response.json(_))
-        },
-        Method.GET / "pub" / "tournament" / string("slug") / int("round") -> handler {
-          (slug: String, round: Int, _: Request) =>
-            responses.get(s"tournament/$slug/$round").fold(Response(status = Status.NotFound))(Response.json(_))
+  ): RIO[Transactor, ChessComClient] = {
+    val routes: Routes[Any, Response] = Routes(
+      Method.GET / "pub" / "player" / string("username") / "tournaments" -> handler { (username: String, _: Request) =>
+        if (failures.contains(username)) Response(status = Status.InternalServerError)
+        else
+          responses.get(s"player/$username/tournaments").fold(Response.json(emptyPlayerTournamentsJson))(
+            Response.json(_)
+          )
+      },
+      Method.GET / "pub" / "player" / string("username") / "matches" -> handler { (username: String, _: Request) =>
+        if (failures.contains(username)) Response(status = Status.InternalServerError)
+        else responses.get(s"player/$username/matches").fold(Response.json(emptyPlayerMatchesJson))(Response.json(_))
+      },
+      Method.GET / "pub" / "player" / string("username") -> handler { (username: String, _: Request) =>
+        if (failures.contains(username)) Response(status = Status.InternalServerError)
+        else {
+          val pid = playerIdByUsername.getOrElse(username.toLowerCase, 0L)
+          Response.json(apiPlayerJson(username, pid))
         }
-      )
-      val driver = new ZClient.Driver[Any, Scope, Throwable] {
-        override def request(
-          version: Version,
-          method: Method,
-          url: URL,
-          headers: Headers,
-          body: Body,
-          sslConfig: Option[ClientSSLConfig],
-          proxy: Option[Proxy]
-        )(implicit trace: zio.Trace): ZIO[Scope, Throwable, Response] =
-          routes.runZIO(Request(method = method, url = url, headers = headers, body = body))
-
-        override def socket[Env1 <: Any](
-          version: Version,
-          url: URL,
-          headers: Headers,
-          app: WebSocketApp[Env1]
-        )(implicit
-          trace: zio.Trace,
-          ev: Scope =:= Scope
-        ): ZIO[Env1 & Scope, Throwable, Response] =
-          ZIO.die(new UnsupportedOperationException)
+      },
+      Method.GET / "pub" / "club" / string("club") / "matches" -> handler { (clubName: String, _: Request) =>
+        responses.get(s"club/$clubName/matches").fold(Response.json(emptyClubMatchesJson))(Response.json(_))
+      },
+      Method.GET / "pub" / "match" / long("matchId") -> handler { (matchId: Long, _: Request) =>
+        responses.get(s"match/$matchId").fold(Response(status = Status.NotFound))(Response.json(_))
+      },
+      Method.GET / "pub" / "tournament" / string("slug") / int("round") -> handler {
+        (slug: String, round: Int, _: Request) =>
+          responses.get(s"tournament/$slug/$round").fold(Response(status = Status.NotFound))(Response.json(_))
       }
-      val refs = ChessComClient.ThrottleRefs(
-        stateRef,
-        activeRef,
-        rateLimitGate,
-        lastReqRef,
-        ema
-      )
-      ChessComClient(
-        ZClient.fromDriver(driver),
-        transactor,
-        Headers.empty,
-        TestCcasLogger.noop,
-        refs,
-        stats,
-        bar,
-        ChessComClient.ThrottleConfig(5, 30.seconds, 5.seconds, 1.second, 5.seconds, 10.seconds, 20, 0.2, 10)
-      )
-    }
+    )
+    TestChessComClientSupport.fakeClient(routes, permits = 5)
+  }
 
   // --- DB helpers ---
 

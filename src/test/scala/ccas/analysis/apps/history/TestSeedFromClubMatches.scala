@@ -3,7 +3,7 @@ package ccas.analysis.apps.history
 import java.time.{Duration, Instant, LocalDateTime, ZoneOffset}
 
 import com.augustnagro.magnum.Transactor
-import zio.{durationInt, Chunk, Fiber, RIO, Ref, Scope, Semaphore, Trace, ZIO}
+import zio.{RIO, ZIO}
 import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
@@ -11,7 +11,7 @@ import ccas.analysis.tables.{Club, ClubMatch, HistoryPendingMatch, Tables}
 import ccas.api.misc.enums.{ClubMatchStatus, TimeClass}
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug}
 import ccas.utils.{CcasLogger, TestCcasLogger}
-import ccas.utils.client.ChessComClient
+import ccas.utils.client.{ChessComClient, TestChessComClientSupport}
 import ccas.utils.sql.FreshSchemaLayer
 
 object TestSeedFromClubMatches extends ZIOSpecDefault {
@@ -55,63 +55,14 @@ object TestSeedFromClubMatches extends ZIOSpecDefault {
 
   private def fakeChessComClient(
     clubMatchesJson: String
-  ): RIO[Transactor, ChessComClient] =
-    for {
-      transactor    <- ZIO.service[Transactor]
-      stateRef      <- Ref.make(ChessComClient.ThrottleState(1, 0, Vector.empty))
-      activeRef     <- Ref.make(0)
-      rateLimitGate <- Semaphore.make(1)
-      lastReqRef    <- Ref.make(0L)
-      ema           <- Ref.make(0.0)
-      bar           <- TestCcasLogger.noopBar
-      stats         <- Ref.make(ChessComClient.StatsAccumulator())
-    } yield {
-      val routes: Routes[Any, Response] = Routes(
-        Method.GET / "pub" / "club" / string("club") / "matches" -> handler { (_: String, _: Request) =>
-          Response.json(clubMatchesJson)
-        }
-      )
-      val driver = new ZClient.Driver[Any, Scope, Throwable] {
-        override def request(
-          version: Version,
-          method: Method,
-          url: URL,
-          headers: Headers,
-          body: Body,
-          sslConfig: Option[ClientSSLConfig],
-          proxy: Option[Proxy]
-        )(implicit trace: Trace): ZIO[Scope, Throwable, Response] =
-          routes.runZIO(Request(method = method, url = url, headers = headers, body = body))
-
-        override def socket[Env1 <: Any](
-          version: Version,
-          url: URL,
-          headers: Headers,
-          app: WebSocketApp[Env1]
-        )(implicit
-          trace: Trace,
-          ev: Scope =:= Scope
-        ): ZIO[Env1 & Scope, Throwable, Response] =
-          ZIO.die(new UnsupportedOperationException)
+  ): RIO[Transactor, ChessComClient] = {
+    val routes: Routes[Any, Response] = Routes(
+      Method.GET / "pub" / "club" / string("club") / "matches" -> handler { (_: String, _: Request) =>
+        Response.json(clubMatchesJson)
       }
-      val refs = ChessComClient.ThrottleRefs(
-        stateRef,
-        activeRef,
-        rateLimitGate,
-        lastReqRef,
-        ema
-      )
-      ChessComClient(
-        ZClient.fromDriver(driver),
-        transactor,
-        Headers.empty,
-        TestCcasLogger.noop,
-        refs,
-        stats,
-        bar,
-        ChessComClient.ThrottleConfig(1, 30.seconds, 5.seconds, 1.second, 5.seconds, 10.seconds, 20, 0.2, 10)
-      )
-    }
+    )
+    TestChessComClientSupport.fakeClient(routes)
+  }
 
   private val layer = FreshSchemaLayer("test_seed_club", Tables.ensureTables)
 

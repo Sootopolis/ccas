@@ -9,7 +9,7 @@ import zio.http.*
 import ccas.analysis.tables.*
 import ccas.api.club.ApiClubMatches
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
-import ccas.utils.client.ChessComClient
+import ccas.utils.client.{ChessComClient, TestChessComClientSupport}
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.SqlZioTypes
 import ccas.utils.TestCcasLogger
@@ -244,103 +244,54 @@ object RecruitmentTestSupport {
   def fakeChessComClient(
     responses: Map[String, String],
     failures: Set[String] = Set.empty
-  ): RIO[Transactor, ChessComClient] =
-    for {
-      transactor    <- ZIO.service[Transactor]
-      stateRef      <- Ref.make(ChessComClient.ThrottleState(1, 0, Vector.empty))
-      activeRef     <- Ref.make(0)
-      rateLimitGate <- Semaphore.make(1)
-      lastReqRef    <- Ref.make(0L)
-      ema           <- Ref.make(0.0)
-      bar           <- TestCcasLogger.noopBar
-      stats         <- Ref.make(ChessComClient.StatsAccumulator())
-    } yield {
-      val routes: Routes[Any, Response] = Routes(
-        // Player stats endpoint
-        Method.GET / "pub" / "player" / string("username") / "stats" -> handler { (username: String, _: Request) =>
-          responses.get(s"player/$username/stats").fold(Response.json(apiPlayerStatsJson()))(Response.json(_))
-        },
-        // Player clubs endpoint
-        Method.GET / "pub" / "player" / string("username") / "clubs" -> handler { (username: String, _: Request) =>
-          responses.get(s"player/$username/clubs").fold(Response.json(apiPlayerClubsJson()))(Response.json(_))
-        },
-        // Player matches endpoint
-        Method.GET / "pub" / "player" / string("username") / "matches" -> handler { (username: String, _: Request) =>
-          responses.get(s"player/$username/matches").fold(Response.json(emptyPlayerMatchesJson))(Response.json(_))
-        },
-        // Player current games endpoint
-        Method.GET / "pub" / "player" / string("username") / "games" -> handler { (username: String, _: Request) =>
-          responses.get(s"player/$username/games").fold(Response.json(emptyCurrentGamesJson))(Response.json(_))
-        },
-        // Player archive endpoint (year/month)
-        Method.GET / "pub" / "player" / string("username") / "games" / string("year") / string("month") -> handler {
-          (username: String, year: String, month: String, _: Request) =>
-            responses.get(s"player/$username/games/$year/$month")
-              .fold(Response.json(emptyArchiveJson))(Response.json(_))
-        },
-        // Player endpoint
-        Method.GET / "pub" / "player" / string("username") -> handler { (username: String, _: Request) =>
-          if (failures.contains(username)) { Response(status = Status.NotFound) }
-          else { responses.get(s"player/$username").fold(Response(status = Status.NotFound))(Response.json(_)) }
-        },
-        // Club matches endpoint
-        Method.GET / "pub" / "club" / string("club") / "matches" -> handler { (clubName: String, _: Request) =>
-          responses.get(s"club/$clubName/matches").fold(Response.json(emptyClubMatchesJson))(Response.json(_))
-        },
-        // Club members endpoint
-        Method.GET / "pub" / "club" / string("club") / "members" -> handler { (clubName: String, _: Request) =>
-          responses.get(s"club/$clubName/members").fold(Response(status = Status.NotFound))(Response.json(_))
-        },
-        // Club endpoint
-        Method.GET / "pub" / "club" / string("club") -> handler { (clubName: String, _: Request) =>
-          responses.get(s"club/$clubName").fold(Response(status = Status.NotFound))(Response.json(_))
-        },
-        // Match endpoint (for ref resolution)
-        Method.GET / "pub" / "match" / long("matchId") -> handler { (matchId: Long, _: Request) =>
-          responses.get(s"match/$matchId").fold(Response(status = Status.NotFound))(Response.json(_))
-        }
-      )
-      val driver = new ZClient.Driver[Any, Scope, Throwable] {
-        override def request(
-          version: Version,
-          method: Method,
-          url: URL,
-          headers: Headers,
-          body: Body,
-          sslConfig: Option[ClientSSLConfig],
-          proxy: Option[Proxy]
-        )(implicit trace: zio.Trace): ZIO[Scope, Throwable, Response] =
-          routes.runZIO(Request(method = method, url = url, headers = headers, body = body))
-
-        override def socket[Env1 <: Any](
-          version: Version,
-          url: URL,
-          headers: Headers,
-          app: WebSocketApp[Env1]
-        )(implicit
-          trace: zio.Trace,
-          ev: Scope =:= Scope
-        ): ZIO[Env1 & Scope, Throwable, Response] =
-          ZIO.die(new UnsupportedOperationException)
+  ): RIO[Transactor, ChessComClient] = {
+    val routes: Routes[Any, Response] = Routes(
+      // Player stats endpoint
+      Method.GET / "pub" / "player" / string("username") / "stats" -> handler { (username: String, _: Request) =>
+        responses.get(s"player/$username/stats").fold(Response.json(apiPlayerStatsJson()))(Response.json(_))
+      },
+      // Player clubs endpoint
+      Method.GET / "pub" / "player" / string("username") / "clubs" -> handler { (username: String, _: Request) =>
+        responses.get(s"player/$username/clubs").fold(Response.json(apiPlayerClubsJson()))(Response.json(_))
+      },
+      // Player matches endpoint
+      Method.GET / "pub" / "player" / string("username") / "matches" -> handler { (username: String, _: Request) =>
+        responses.get(s"player/$username/matches").fold(Response.json(emptyPlayerMatchesJson))(Response.json(_))
+      },
+      // Player current games endpoint
+      Method.GET / "pub" / "player" / string("username") / "games" -> handler { (username: String, _: Request) =>
+        responses.get(s"player/$username/games").fold(Response.json(emptyCurrentGamesJson))(Response.json(_))
+      },
+      // Player archive endpoint (year/month)
+      Method.GET / "pub" / "player" / string("username") / "games" / string("year") / string("month") -> handler {
+        (username: String, year: String, month: String, _: Request) =>
+          responses.get(s"player/$username/games/$year/$month")
+            .fold(Response.json(emptyArchiveJson))(Response.json(_))
+      },
+      // Player endpoint
+      Method.GET / "pub" / "player" / string("username") -> handler { (username: String, _: Request) =>
+        if (failures.contains(username)) { Response(status = Status.NotFound) }
+        else { responses.get(s"player/$username").fold(Response(status = Status.NotFound))(Response.json(_)) }
+      },
+      // Club matches endpoint
+      Method.GET / "pub" / "club" / string("club") / "matches" -> handler { (clubName: String, _: Request) =>
+        responses.get(s"club/$clubName/matches").fold(Response.json(emptyClubMatchesJson))(Response.json(_))
+      },
+      // Club members endpoint
+      Method.GET / "pub" / "club" / string("club") / "members" -> handler { (clubName: String, _: Request) =>
+        responses.get(s"club/$clubName/members").fold(Response(status = Status.NotFound))(Response.json(_))
+      },
+      // Club endpoint
+      Method.GET / "pub" / "club" / string("club") -> handler { (clubName: String, _: Request) =>
+        responses.get(s"club/$clubName").fold(Response(status = Status.NotFound))(Response.json(_))
+      },
+      // Match endpoint (for ref resolution)
+      Method.GET / "pub" / "match" / long("matchId") -> handler { (matchId: Long, _: Request) =>
+        responses.get(s"match/$matchId").fold(Response(status = Status.NotFound))(Response.json(_))
       }
-      val refs = ChessComClient.ThrottleRefs(
-        stateRef,
-        activeRef,
-        rateLimitGate,
-        lastReqRef,
-        ema
-      )
-      ChessComClient(
-        ZClient.fromDriver(driver),
-        transactor,
-        Headers.empty,
-        TestCcasLogger.noop,
-        refs,
-        stats,
-        bar,
-        ChessComClient.ThrottleConfig(1, 30.seconds, 5.seconds, 1.second, 5.seconds, 10.seconds, 20, 0.2, 10)
-      )
-    }
+    )
+    TestChessComClientSupport.fakeClient(routes)
+  }
 
   /** A variant of fakeChessComClient where the Nth player profile request blocks. After `blockAfterN` successful player
     * profile fetches, the next fetch completes `reached` and then awaits `gate` before responding. This ensures exactly

@@ -333,8 +333,52 @@ object TestChessComClient extends ZIOSpecDefault {
           recorded <- order.get
         } yield assertTrue(recorded == Chunk(0, 1, 2))
       }
-    }
+    },
+    suiteStatsAccumulator
   ).provideShared(
     FreshSchemaLayer("test_client", Tables.ensureTables)
   ) @@ TestAspect.withLiveClock @@ TestAspect.timeout(15.seconds)
+
+  // ==========================================================================
+  // StatsAccumulator (pure)
+  // ==========================================================================
+
+  private def suiteStatsAccumulator = suite("StatsAccumulator")(
+    test("incError routes 429 to errors429") {
+      val s = ChessComClient.StatsAccumulator().incError(429)
+      assertTrue(s.errors429 == 1L, s.errors403 == 0L, s.errors404 == 0L)
+    },
+    test("incError routes 403 to errors403") {
+      val s = ChessComClient.StatsAccumulator().incError(403)
+      assertTrue(s.errors403 == 1L, s.errors429 == 0L, s.errors404 == 0L)
+    },
+    test("incError routes 404 to errors404") {
+      val s = ChessComClient.StatsAccumulator().incError(404)
+      assertTrue(s.errors404 == 1L, s.errors429 == 0L, s.errors403 == 0L)
+    },
+    test("incError ignores other status codes") {
+      val s = ChessComClient.StatsAccumulator().incError(500)
+      assertTrue(s.errors429 == 0L, s.errors403 == 0L, s.errors404 == 0L)
+    },
+    test("recordLatency tracks min and max") {
+      val s = ChessComClient.StatsAccumulator()
+        .recordLatency(100)
+        .recordLatency(50)
+        .recordLatency(200)
+      assertTrue(
+        s.latencyMinMs == 50L,
+        s.latencyMaxMs == 200L,
+        s.latencySumMs == 350L,
+        s.latencyCount == 3L
+      )
+    },
+    test("updatePeak tracks maximum concurrent") {
+      val s = ChessComClient.StatsAccumulator()
+        .updatePeak(3)
+        .updatePeak(1)
+        .updatePeak(5)
+        .updatePeak(2)
+      assertTrue(s.peakConcurrent == 5)
+    }
+  )
 }
