@@ -10,6 +10,7 @@ import ccas.analysis.apps.history.HistoryApp
 import ccas.analysis.apps.membership.MembershipApp
 import ccas.analysis.apps.recruitment.RecruitmentApp
 import ccas.analysis.apps.ref.RefApp
+import ccas.analysis.apps.stats.StatsApp
 import ccas.analysis.tables.{Club, RunTrigger}
 import ccas.api.misc.subtypes.{ClubSlug, JobRunId}
 import ccas.server.jobs.{JobKind, JobRunner}
@@ -89,6 +90,11 @@ object JobScheduler {
           (jobRunId: Option[JobRunId]) =>
             requireClubSlug.flatMap(name =>
               HistoryApp.discover(name, trigger = RunTrigger.Scheduled, jobRunId = jobRunId).unit
+            )
+        case JobKind.Stats =>
+          (jobRunId: Option[JobRunId]) =>
+            requireClubSlug.flatMap(name =>
+              StatsApp.memberStats(name, trigger = RunTrigger.Scheduled, jobRunId = jobRunId)
             )
       }
 

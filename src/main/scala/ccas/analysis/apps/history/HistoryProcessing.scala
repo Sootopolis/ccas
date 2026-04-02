@@ -6,6 +6,7 @@ import zio.{Promise, RIO, Ref, Task, UIO, ZIO}
 import zio.http.URL
 import HistoryUtils.*
 
+import ccas.analysis.GameScoring
 import ccas.analysis.apps.PlayerUpdater
 import ccas.analysis.tables.*
 import ccas.api.clubmatch.{ApiDailyMatch, ApiLiveMatch}
@@ -292,16 +293,11 @@ private[history] object HistoryProcessing {
     team1FairPlay: Boolean,
     team2FairPlay: Boolean
   ): (Short, Short) = {
-    def gameScore(winner: Option[BoardGameWinner]): (Int, Int) =
-      winner match {
-        case None                                      => (0, 0)
-        case Some(_) if team1FairPlay && team2FairPlay => (1, 1)
-        case Some(_) if team1FairPlay                  => (0, 2)
-        case Some(_) if team2FairPlay                  => (2, 0)
-        case Some(BoardGameWinner.Team1)               => (2, 0)
-        case Some(BoardGameWinner.Team2)               => (0, 2)
-        case Some(BoardGameWinner.Draw)                => (1, 1)
-      }
+    def gameScore(winner: Option[BoardGameWinner]): (Int, Int) = {
+      val t1 = GameScoring.classifyGame(winner, team1FairPlay, team2FairPlay).fold(0)(GameScoring.scoreX2)
+      val t2 = winner.fold(0)(_ => 2 - t1)
+      (t1, t2)
+    }
 
     val (g1t1, g1t2) = gameScore(game1Winner)
     val (g2t1, g2t2) = gameScore(game2Winner)

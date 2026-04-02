@@ -1,5 +1,7 @@
 package ccas.server.routes
 
+import java.time.Instant
+
 import scala.util.chaining.*
 
 import ccas.utils.sql.PostgresClient
@@ -11,6 +13,7 @@ import ccas.analysis.apps.history.HistoryApp
 import ccas.analysis.apps.membership.MembershipApp
 import ccas.analysis.apps.recruitment.RecruitmentApp
 import ccas.analysis.apps.ref.RefApp
+import ccas.analysis.apps.stats.StatsApp
 import ccas.analysis.tables.{Club, RunTrigger}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId}
 import ccas.server.jobs.*
@@ -50,6 +53,16 @@ object JobRoutes {
   )
   object HistoryRequest {
     given JsonCodec[HistoryRequest] = DeriveJsonCodec.gen
+  }
+
+  private[server] case class StatsRequest(
+    clubSlug: ClubSlug,
+    since: Option[String],
+    until: Option[String],
+    minGames: Option[Int]
+  )
+  object StatsRequest {
+    given JsonCodec[StatsRequest] = DeriveJsonCodec.gen
   }
 
   // --- Response types ---
@@ -185,6 +198,31 @@ object JobRoutes {
           )
         )
       } yield jsonResponse(Status.Ok, results)).pipe(withErrorHandling)
+    },
+    Method.POST / "api" / "jobs" / "stats" -> handler { (req: Request) =>
+      (for {
+        body   <- parseJsonBody[StatsRequest](req)
+        runner <- ZIO.service[JobRunner]
+        result <- submitClubJob(
+          runner,
+          JobKind.Stats,
+          body.clubSlug,
+          Some(body.toJson),
+          jobRunId =>
+            (body.since, body.until) match {
+              case (Some(sinceStr), Some(untilStr)) =>
+                val since = Instant.parse(sinceStr)
+                val until = Instant.parse(untilStr)
+                StatsApp.playerOfPeriod(
+                  body.clubSlug, since, until,
+                  body.minGames.getOrElse(4),
+                  RunTrigger.Api, jobRunId
+                )
+              case _ =>
+                StatsApp.memberStats(body.clubSlug, RunTrigger.Api, jobRunId)
+            }
+        )
+      } yield jsonResponse(Status.Ok, result)).pipe(withErrorHandling)
     },
     Method.GET / "api" / "jobs" -> handler {
       (for {
