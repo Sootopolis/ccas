@@ -153,6 +153,17 @@ object PostgresClient {
       } yield client
     }
 
+  /** Build a PostgresClient from a pre-existing DataSource. Unlike `live`, this does not manage the DataSource
+    * lifecycle (no close on scope exit) and does not read configuration. Useful for testing with custom DataSource
+    * wrappers or for bringing your own connection pool.
+    */
+  def fromDataSource(
+    dataSource: javax.sql.DataSource,
+    retryBaseDelay: Duration = 100.millis,
+    retryMaxRetries: Int = 3
+  ): PostgresClient =
+    new PostgresClient(Transactor(dataSource), retryBaseDelay, retryMaxRetries)
+
   // --- Transient error detection ---
 
   private[sql] def isTransient(e: Throwable): Boolean = e match {
