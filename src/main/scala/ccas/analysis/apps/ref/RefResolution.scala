@@ -77,10 +77,10 @@ private[ref] object RefResolution {
   ): RIO[CcasLogger & PostgresClient, ResolveResult] =
     for {
       playerMatches <- ctx.client.get[ApiPlayerMatches](ApiPlayerMatches.getUrl(player.username))
-      candidates = playerMatches.finished.filter(_.board.isDefined)
+      candidates = (playerMatches.finished ++ playerMatches.inProgress).filter(_.board.isDefined)
       result <-
         if (candidates.isEmpty) {
-          CcasLogger.debug(s"  ${player.username}: no finished match with board").as(ResolveResult.NoData)
+          CcasLogger.debug(s"  ${player.username}: no match with board").as(ResolveResult.NoData)
         } else {
           tryMatches(ctx, player, candidates.toList, countResolved)
         }
