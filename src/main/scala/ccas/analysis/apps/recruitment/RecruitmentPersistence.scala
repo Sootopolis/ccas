@@ -2,7 +2,6 @@ package ccas.analysis.apps.recruitment
 
 import java.time.Instant
 
-import com.augustnagro.magnum.Transactor
 import zio.{RIO, ZIO}
 
 import ccas.analysis.apps.ref.RefHelpers
@@ -11,7 +10,8 @@ import ccas.analysis.tables.*
 import ccas.api.misc.subtypes.{PlayerId, Username}
 import ccas.api.player.ApiPlayerMatches
 import ccas.utils.client.ChessComClient
-import ccas.utils.sql.SqlZioTypes.withTransaction
+import ccas.utils.sql.PostgresClient
+import ccas.utils.sql.PostgresClient.withTransaction
 
 private[recruitment] object RecruitmentPersistence {
 
@@ -22,7 +22,7 @@ private[recruitment] object RecruitmentPersistence {
     outcome: CandidateOutcome,
     client: ChessComClient,
     errorMessage: Option[String] = None
-  ): RIO[Transactor, Unit] =
+  ): RIO[PostgresClient, Unit] =
     // No player data (transient API error) — skip persistence, retry next run
     ZIO.foreachDiscard(candidate.apiPlayer) { ap =>
       withTransaction {
@@ -69,7 +69,7 @@ private[recruitment] object RecruitmentPersistence {
   def writePlayerMatchRef(
     client: ChessComClient,
     candidate: CandidateContext
-  ): RIO[Transactor, Unit] =
+  ): RIO[PostgresClient, Unit] =
     ZIO.foreachDiscard(candidate.apiPlayer) { ap =>
       val playerId = ap.playerId
       PlayerMatchRef.selectId(playerId).flatMap {
@@ -90,7 +90,7 @@ private[recruitment] object RecruitmentPersistence {
     playerId: PlayerId,
     username: Username,
     playerMatches: ApiPlayerMatches
-  ): RIO[Transactor, Unit] = {
+  ): RIO[PostgresClient, Unit] = {
     val candidates = playerMatches.finished.filter(_.board.isDefined)
     ZIO.foreachDiscard(candidates.headOption) { m =>
       val parsed   = RefHelpers.parseMatchUrl(m.`@id`)

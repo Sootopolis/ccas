@@ -2,7 +2,7 @@ package ccas.analysis.apps.membership
 
 import java.time.{Duration, Instant, LocalDateTime, ZoneOffset}
 
-import com.augustnagro.magnum.{sql, Transactor}
+import com.augustnagro.magnum.sql
 import zio.{Chunk, RIO, Scope, ZIO}
 import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
@@ -15,7 +15,8 @@ import ccas.api.misc.enums.PlayerStatusCategory.{Active, Closed}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
 import ccas.utils.CcasLogger
 import ccas.utils.client.{ChessComClient, TestChessComClientSupport}
-import ccas.utils.sql.{FreshSchemaLayer, SqlZioTypes}
+import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
+import ccas.utils.sql.PostgresClient.connectZIO
 
 object TestMembershipApp extends ZIOSpecDefault {
 
@@ -67,7 +68,7 @@ object TestMembershipApp extends ZIOSpecDefault {
   private def fakeChessComClient(
     responses: Map[String, String],
     failures: Set[String] = Set.empty
-  ): RIO[Transactor, ChessComClient] = {
+  ): RIO[PostgresClient, ChessComClient] = {
     val routes: Routes[Any, Response] = Routes(
       Method.GET / "pub" / "player" / string("username") -> handler { (username: String, _: Request) =>
         if (failures.contains(username)) { Response(status = Status.NotFound) }
@@ -83,12 +84,12 @@ object TestMembershipApp extends ZIOSpecDefault {
     players: List[Player] = Nil,
     snapshots: List[PlayerSnapshot] = Nil,
     members: List[ClubMember] = Nil
-  ): RIO[Transactor, Unit] =
+  ): RIO[PostgresClient, Unit] =
     for {
-      _ <- SqlZioTypes.connectZIO(sql"DELETE FROM club_member WHERE club_id = $clubId".update.run())
+      _ <- connectZIO(sql"DELETE FROM club_member WHERE club_id = $clubId".update.run())
       _ <- ZIO.foreachDiscard(testPlayerIds) { pid =>
-        SqlZioTypes.connectZIO(sql"DELETE FROM player_snapshot WHERE player_id = $pid".update.run()) *>
-          SqlZioTypes.connectZIO(sql"DELETE FROM player WHERE player_id = $pid".update.run())
+        connectZIO(sql"DELETE FROM player_snapshot WHERE player_id = $pid".update.run()) *>
+          connectZIO(sql"DELETE FROM player WHERE player_id = $pid".update.run())
       }
       _ <- Club.upsert(club)
       _ <- ZIO.whenDiscard(players.nonEmpty)(Player.insertBatch(players))

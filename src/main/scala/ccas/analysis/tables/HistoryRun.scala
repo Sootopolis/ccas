@@ -9,7 +9,8 @@ import zio.ZIO
 import ccas.analysis.tables.RunTrigger.given
 import ccas.api.misc.subtypes.{ClubId, JobRunId}
 import ccas.utils.sql.DbCodecs.given
-import ccas.utils.sql.SqlZioTypes.connectZIO
+import ccas.utils.sql.PostgresClient
+import ccas.utils.sql.PostgresClient.connectZIO
 
 final case class HistoryRun(
   runId: Long,
@@ -24,7 +25,7 @@ final case class HistoryRun(
 
 object HistoryRun {
 
-  def createTable: ZIO[Transactor, SQLException, Int] =
+  def createTable: ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""CREATE TABLE IF NOT EXISTS history_run (
               run_id       BIGSERIAL PRIMARY KEY,
@@ -45,7 +46,7 @@ object HistoryRun {
     trigger: RunTrigger,
     startedAt: Instant,
     jobRunId: Option[JobRunId] = None
-  ): ZIO[Transactor, SQLException, Long] =
+  ): ZIO[PostgresClient, SQLException, Long] =
     connectZIO {
       sql"""INSERT INTO history_run (club_id, trigger, started_at, job_run_id)
             VALUES ($clubId, $trigger, $startedAt, $jobRunId)
@@ -57,7 +58,7 @@ object HistoryRun {
     completedAt: Instant,
     matchesProcessed: Int,
     playersDiscovered: Int
-  ): ZIO[Transactor, SQLException, Int] =
+  ): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""UPDATE history_run
             SET completed_at = $completedAt, matches_processed = $matchesProcessed, players_discovered = $playersDiscovered

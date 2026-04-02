@@ -2,7 +2,7 @@ package ccas.analysis.apps.recruitment
 
 import java.time.{Duration, Instant}
 
-import com.augustnagro.magnum.{sql, Transactor}
+import com.augustnagro.magnum.sql
 import zio.{durationInt, Promise, Scope, ZIO}
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
@@ -10,7 +10,8 @@ import ccas.analysis.apps.recruitment.RecruitmentTestSupport.*
 import ccas.analysis.tables.*
 import ccas.api.misc.enums.PlayerStatusCategory.Active
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, Elo, PlayerId, Username}
-import ccas.utils.sql.{FreshSchemaLayer, SqlZioTypes}
+import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
+import ccas.utils.sql.PostgresClient.connectZIO
 import ccas.utils.CcasLogger
 
 object TestRecruitmentApp extends ZIOSpecDefault {
@@ -250,7 +251,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         _       <- ApiFetchFailure.insert(failure1)
         _       <- ApiFetchFailure.insert(failure2)
         recent  <- ApiFetchFailure.selectRecent(now.minus(Duration.ofMinutes(1)))
-        bodyRow <- SqlZioTypes.connectZIO(sql"SELECT count(*) FROM api_response_body".query[Long].run().head)
+        bodyRow <- connectZIO(sql"SELECT count(*) FROM api_response_body".query[Long].run().head)
       } yield assertTrue(
         recent.size == 2,
         recent.forall(_.responseBody.contains(body)),
@@ -290,7 +291,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         _      <- seedDb
         _      <- seedCriteria(criteria)
         client <- fakeChessComClient(responses)
-        xa     <- ZIO.service[Transactor]
+        xa     <- ZIO.service[PostgresClient]
         logger <- ZIO.service[CcasLogger]
         result <- RecruitmentApp.recruit(
           clubSlug,
@@ -348,7 +349,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         _      <- Club.upsert(Club(discoverableClubId, Times.t0, discoverableClubSlug, "Discoverable Club"))
         _      <- seedCriteria(criteria)
         client <- fakeChessComClient(responses)
-        xa     <- ZIO.service[Transactor]
+        xa     <- ZIO.service[PostgresClient]
         logger <- ZIO.service[CcasLogger]
         result <- RecruitmentApp.recruit(
           clubSlug,
@@ -416,7 +417,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
           )
         )
         client <- fakeChessComClient(responses)
-        xa     <- ZIO.service[Transactor]
+        xa     <- ZIO.service[PostgresClient]
         logger <- ZIO.service[CcasLogger]
         result <- RecruitmentApp.recruit(
           clubSlug,
@@ -458,7 +459,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         _      <- seedDb
         _      <- seedCriteria(criteria)
         client <- fakeChessComClient(responses)
-        xa     <- ZIO.service[Transactor]
+        xa     <- ZIO.service[PostgresClient]
         logger <- ZIO.service[CcasLogger]
         result <- RecruitmentApp.recruit(
           clubSlug,
@@ -499,7 +500,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         reached <- Promise.make[Nothing, Unit]
         gate    <- Promise.make[Nothing, Unit]
         client  <- fakeChessComClientWithBlock(responses, blockAfterN = 4, reached, gate)
-        xa      <- ZIO.service[Transactor]
+        xa      <- ZIO.service[PostgresClient]
         logger  <- ZIO.service[CcasLogger]
         fiber <- RecruitmentApp.recruit(clubSlug, "default", sourceClubs = List(intSource))
           .provideEnvironment(zio.ZEnvironment(client, xa, logger))
@@ -538,7 +539,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         _      <- seedDb
         _      <- seedCriteria(criteria)
         client <- fakeChessComClient(responses)
-        xa     <- ZIO.service[Transactor]
+        xa     <- ZIO.service[PostgresClient]
         logger <- ZIO.service[CcasLogger]
         result <- RecruitmentApp.recruit(
           clubSlug,
@@ -577,7 +578,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         _          <- seedDb
         criteriaId <- seedCriteria(criteria)
         client     <- fakeChessComClient(responses)
-        xa         <- ZIO.service[Transactor]
+        xa         <- ZIO.service[PostgresClient]
 
         // Seed prior run with a Deferred candidate (need Player row)
         _          <- Player.insert(Player(PlayerId(500), Times.t0, Username("prio-deferred"), Active, None, Times.t0))
@@ -819,7 +820,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         _      <- seedDb
         _      <- seedCriteria(criteria)
         client <- fakeChessComClient(responses)
-        xa     <- ZIO.service[Transactor]
+        xa     <- ZIO.service[PostgresClient]
         logger <- ZIO.service[CcasLogger]
         _ <- RecruitmentApp.recruit(
           clubSlug,

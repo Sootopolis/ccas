@@ -12,7 +12,8 @@ import ccas.api.misc.subtypes.{ClubId, JobRunId}
 import ccas.server.jobs.JobKind.given
 import ccas.server.jobs.JobRunStatus.given
 import ccas.utils.sql.DbCodecs.given
-import ccas.utils.sql.SqlZioTypes.connectZIO
+import ccas.utils.sql.PostgresClient
+import ccas.utils.sql.PostgresClient.connectZIO
 
 @Table(PostgresDbType, SqlNameMapper.CamelToSnakeCase)
 case class JobRun(
@@ -31,7 +32,7 @@ object JobRun {
 
   private val selectCols = SqlLiteral("id, kind, club_id, trigger, status, params, started_at, completed_at, error")
 
-  def createTable: ZIO[Transactor, SQLException, Int] =
+  def createTable: ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""CREATE TABLE IF NOT EXISTS job_run (
               id             TEXT PRIMARY KEY,
@@ -50,13 +51,13 @@ object JobRun {
             ON job_run (started_at DESC)""".update.run()
     }
 
-  def selectId(id: JobRunId): ZIO[Transactor, SQLException, Option[JobRun]] =
+  def selectId(id: JobRunId): ZIO[PostgresClient, SQLException, Option[JobRun]] =
     connectZIO {
       sql"SELECT $selectCols FROM job_run WHERE id = $id"
         .query[JobRun].run().headOption
     }
 
-  def selectRunning(kind: JobKind, clubId: Option[ClubId]): ZIO[Transactor, SQLException, Option[JobRun]] =
+  def selectRunning(kind: JobKind, clubId: Option[ClubId]): ZIO[PostgresClient, SQLException, Option[JobRun]] =
     connectZIO {
       val running = JobRunStatus.Running
       clubId match {
@@ -69,13 +70,13 @@ object JobRun {
       }
     }
 
-  def selectRecent(limit: Int): ZIO[Transactor, SQLException, List[JobRun]] =
+  def selectRecent(limit: Int): ZIO[PostgresClient, SQLException, List[JobRun]] =
     connectZIO {
       sql"SELECT $selectCols FROM job_run ORDER BY started_at DESC LIMIT $limit"
         .query[JobRun].run().toList
     }
 
-  def insert(jobRun: JobRun): ZIO[Transactor, SQLException, Int] =
+  def insert(jobRun: JobRun): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""INSERT INTO job_run (id, kind, club_id, trigger, status, params, started_at, completed_at, error)
              VALUES (${jobRun.id}, ${jobRun.kind}, ${jobRun.clubId}, ${jobRun.trigger}, ${jobRun.status},
@@ -83,7 +84,7 @@ object JobRun {
           """.update.run()
     }
 
-  def update(jobRun: JobRun): ZIO[Transactor, SQLException, Int] =
+  def update(jobRun: JobRun): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""UPDATE job_run
              SET status = ${jobRun.status}, completed_at = ${jobRun.completedAt}, error = ${jobRun.error}
@@ -96,13 +97,13 @@ object JobRun {
     status: JobRunStatus,
     completedAt: Option[Instant],
     error: Option[String]
-  ): ZIO[Transactor, SQLException, Int] =
+  ): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""UPDATE job_run SET status = $status, completed_at = $completedAt, error = $error
              WHERE id = $id""".update.run()
     }
 
-  def markOrphansAsFailed: ZIO[Transactor, SQLException, Int] =
+  def markOrphansAsFailed: ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       val failed  = JobRunStatus.Failed
       val running = JobRunStatus.Running
@@ -110,7 +111,7 @@ object JobRun {
             WHERE status = $running""".update.run()
     }
 
-  def deleteBefore(cutoff: Instant): ZIO[Transactor, SQLException, Int] =
+  def deleteBefore(cutoff: Instant): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       val completed = JobRunStatus.Completed
       val failed    = JobRunStatus.Failed

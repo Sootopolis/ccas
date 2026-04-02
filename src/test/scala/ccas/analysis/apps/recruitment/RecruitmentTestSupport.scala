@@ -2,7 +2,7 @@ package ccas.analysis.apps.recruitment
 
 import java.time.{Duration, Instant, LocalDateTime, ZoneOffset}
 
-import com.augustnagro.magnum.{sql, Transactor}
+import com.augustnagro.magnum.sql
 import zio.{durationInt, Promise, RIO, Ref, Scope, Semaphore, ZIO}
 import zio.http.*
 
@@ -11,7 +11,7 @@ import ccas.api.club.ApiClubMatches
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
 import ccas.utils.client.{ChessComClient, TestChessComClientSupport}
 import ccas.utils.sql.DbCodecs.given
-import ccas.utils.sql.SqlZioTypes
+import ccas.utils.sql.PostgresClient
 import ccas.utils.TestCcasLogger
 
 object RecruitmentTestSupport {
@@ -244,7 +244,7 @@ object RecruitmentTestSupport {
   def fakeChessComClient(
     responses: Map[String, String],
     failures: Set[String] = Set.empty
-  ): RIO[Transactor, ChessComClient] = {
+  ): RIO[PostgresClient, ChessComClient] = {
     val routes: Routes[Any, Response] = Routes(
       // Player stats endpoint
       Method.GET / "pub" / "player" / string("username") / "stats" -> handler { (username: String, _: Request) =>
@@ -303,9 +303,9 @@ object RecruitmentTestSupport {
     blockAfterN: Int,
     reached: Promise[Nothing, Unit],
     gate: Promise[Nothing, Unit]
-  ): RIO[Transactor, ChessComClient] =
+  ): RIO[PostgresClient, ChessComClient] =
     for {
-      transactor    <- ZIO.service[Transactor]
+      pgClient      <- ZIO.service[PostgresClient]
       stateRef      <- Ref.make(ChessComClient.ThrottleState(5, 0, Vector.empty))
       activeRef     <- Ref.make(0)
       rateLimitGate <- Semaphore.make(1)
@@ -384,7 +384,7 @@ object RecruitmentTestSupport {
       )
       ChessComClient(
         ZClient.fromDriver(driver),
-        transactor,
+        pgClient,
         Headers.empty,
         TestCcasLogger.noop,
         refs,
@@ -396,13 +396,13 @@ object RecruitmentTestSupport {
 
   // --- DB seeders ---
 
-  def seedCriteria(criteria: RecruitmentCriteria): RIO[Transactor, Long] =
+  def seedCriteria(criteria: RecruitmentCriteria): RIO[PostgresClient, Long] =
     for {
       criteriaId <- RecruitmentCriteria.insert(criteria)
       _          <- RecruitmentAlias.insert(RecruitmentAlias(clubId, "default", Instant.now(), criteriaId))
     } yield criteriaId
 
-  def seedDb: RIO[Transactor, Unit] =
+  def seedDb: RIO[PostgresClient, Unit] =
     for {
       // Clean up test data
       _ <- RecruitmentCandidate.deleteAll
@@ -412,17 +412,17 @@ object RecruitmentTestSupport {
       _ <- RecruitmentCriteria.deleteAll
       _ <- PlayerRecruitmentCache.deleteAll
       _ <- ApiFetchFailure.deleteAll
-      _ <- SqlZioTypes.connectZIO(sql"DELETE FROM club_member WHERE club_id = $clubId".update.run())
-      _ <- SqlZioTypes.connectZIO(sql"DELETE FROM club_member WHERE club_id = $sourceClubId".update.run())
-      _ <- SqlZioTypes.connectZIO(sql"DELETE FROM club_member WHERE club_id = $intSourceClubId".update.run())
+      _ <- PostgresClient.connectZIO(sql"DELETE FROM club_member WHERE club_id = $clubId".update.run())
+      _ <- PostgresClient.connectZIO(sql"DELETE FROM club_member WHERE club_id = $sourceClubId".update.run())
+      _ <- PostgresClient.connectZIO(sql"DELETE FROM club_member WHERE club_id = $intSourceClubId".update.run())
       _ <- ZIO.foreachDiscard(
         List(blacklistClubId, ClubId(701), ClubId(702), ClubId(777), ClubId(801), ClubId(802), intSourceClubId)
       ) { cid =>
-        SqlZioTypes.connectZIO(sql"DELETE FROM club WHERE club_id = $cid".update.run())
+        PostgresClient.connectZIO(sql"DELETE FROM club WHERE club_id = $cid".update.run())
       }
-      _ <- SqlZioTypes.connectZIO(sql"DELETE FROM club_match_ref WHERE club_id = $clubId".update.run())
-      _ <- SqlZioTypes.connectZIO(sql"DELETE FROM club_match_board WHERE match_id IN (8001, 8002, 9001)".update.run())
-      _ <- SqlZioTypes.connectZIO(sql"DELETE FROM club_match WHERE match_id IN (8001, 8002, 9001)".update.run())
+      _ <- PostgresClient.connectZIO(sql"DELETE FROM club_match_ref WHERE club_id = $clubId".update.run())
+      _ <- PostgresClient.connectZIO(sql"DELETE FROM club_match_board WHERE match_id IN (8001, 8002, 9001)".update.run())
+      _ <- PostgresClient.connectZIO(sql"DELETE FROM club_match WHERE match_id IN (8001, 8002, 9001)".update.run())
       _ <- ZIO.foreachDiscard(
         List(
           PlayerId(199),
@@ -448,19 +448,19 @@ object RecruitmentTestSupport {
           PlayerId(999)
         )
       ) { pid =>
-        SqlZioTypes.connectZIO(
+        PostgresClient.connectZIO(
           sql"DELETE FROM club_match_board WHERE team1_player_id = $pid OR team2_player_id = $pid".update.run()
         ) *>
-          SqlZioTypes.connectZIO(sql"DELETE FROM player_match_ref WHERE player_id = $pid".update.run()) *>
-          SqlZioTypes.connectZIO(sql"DELETE FROM player_snapshot WHERE player_id = $pid".update.run()) *>
-          SqlZioTypes.connectZIO(sql"DELETE FROM player WHERE player_id = $pid".update.run())
+          PostgresClient.connectZIO(sql"DELETE FROM player_match_ref WHERE player_id = $pid".update.run()) *>
+          PostgresClient.connectZIO(sql"DELETE FROM player_snapshot WHERE player_id = $pid".update.run()) *>
+          PostgresClient.connectZIO(sql"DELETE FROM player WHERE player_id = $pid".update.run())
       }
       _ <- Club.upsert(club)
     } yield ()
 
-  def seedPlayer(playerId: PlayerId): RIO[Transactor, Unit] = {
+  def seedPlayer(playerId: PlayerId): RIO[PostgresClient, Unit] = {
     val username = Username.wrap(s"player_${PlayerId.unwrap(playerId)}")
-    SqlZioTypes.connectZIO {
+    PostgresClient.connectZIO {
       sql"""INSERT INTO player (player_id, joined, username, status, title, since)
             VALUES ($playerId, ${Times.t0}, $username, 'Active', NULL, ${Times.t0})
             ON CONFLICT (player_id) DO NOTHING""".update.run()
@@ -476,7 +476,7 @@ object RecruitmentTestSupport {
     candidates: List[Username],
     criteria: RecruitmentCriteria,
     target: Int = 30
-  ): RIO[Transactor, List[Username]] =
+  ): RIO[PostgresClient, List[Username]] =
     for {
       clubMatches <- client.get[ApiClubMatches](ApiClubMatches.getUrl(clubSlug))
       targetMatchIds = (clubMatches.registered.map(_.`@id`) ++ clubMatches.inProgress.map(_.`@id`)).toSet

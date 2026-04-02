@@ -2,7 +2,7 @@ package ccas.analysis.apps.recruitment
 
 import java.time.Instant
 
-import com.augustnagro.magnum.Transactor
+import ccas.utils.sql.PostgresClient
 import zio.{RIO, Ref, ZIO}
 import RecruitmentFilterDefs.*
 import RecruitmentPersistence.*
@@ -20,11 +20,11 @@ private[recruitment] object RecruitmentFilters {
     username: Username,
     runCtx: RunContext,
     filters: List[RecruitmentFilter]
-  ): RIO[Transactor, CandidateOutcome] = {
+  ): RIO[PostgresClient, CandidateOutcome] = {
     val now          = Instant.now()
     val candidateCtx = CandidateContext.initial(username)
     val env          = FilterEnv(runCtx.copy(now = now), candidateCtx)
-    def onEvaluationError(ctxRef: Ref[CandidateContext])(error: Throwable): RIO[Transactor, CandidateOutcome] =
+    def onEvaluationError(ctxRef: Ref[CandidateContext])(error: Throwable): RIO[PostgresClient, CandidateOutcome] =
       ctxRef.get.flatMap { latestCtx =>
         persistCandidateResults(runId, now, latestCtx, CandidateOutcome.Error, env.run.client, Some(error.safeMessage))
       }.as(CandidateOutcome.Error)
@@ -65,7 +65,7 @@ private[recruitment] object RecruitmentFilters {
     env: FilterEnv,
     filters: List[RecruitmentFilter],
     ctxRef: Ref[CandidateContext]
-  ): RIO[Transactor, (CandidateOutcome, CandidateContext)] =
+  ): RIO[PostgresClient, (CandidateOutcome, CandidateContext)] =
     ZIO.foldLeft(filters)(FilterResult(false, env.candidate)) {
       case (r @ FilterResult(true, _), _)     => ZIO.succeed(r)
       case (FilterResult(false, ctx), filter) => ctxRef.set(ctx) *> filter(env.copy(candidate = ctx))

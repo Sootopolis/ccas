@@ -2,7 +2,7 @@ package ccas.analysis.apps.recruitment
 
 import java.time.Instant
 
-import com.augustnagro.magnum.Transactor
+import ccas.utils.sql.PostgresClient
 import zio.{RIO, Ref}
 import zio.http.URL
 
@@ -17,7 +17,7 @@ import ccas.utils.ProgressBar
 // --- Filter pipeline types ---
 
 private[recruitment] trait RecruitmentFilter {
-  def apply(env: FilterEnv): RIO[Transactor, FilterResult]
+  def apply(env: FilterEnv): RIO[PostgresClient, FilterResult]
 }
 
 /** Shared across all candidates in a run. */

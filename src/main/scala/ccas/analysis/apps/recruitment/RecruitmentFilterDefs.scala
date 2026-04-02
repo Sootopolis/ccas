@@ -3,7 +3,7 @@ package ccas.analysis.apps.recruitment
 import java.time.temporal.ChronoUnit
 import java.time.Instant
 
-import com.augustnagro.magnum.Transactor
+import ccas.utils.sql.PostgresClient
 import zio.{RIO, ZIO}
 import RecruitmentStatsHelpers.*
 
@@ -32,7 +32,7 @@ private[recruitment] object RecruitmentFilterDefs {
   // --- Filter implementations ---
 
   object FetchAndCheckPlayer extends RecruitmentFilter {
-    def apply(env: FilterEnv): RIO[Transactor, FilterResult] =
+    def apply(env: FilterEnv): RIO[PostgresClient, FilterResult] =
       for {
         apiPlayer      <- env.run.client.get[ApiPlayer](ApiPlayer.getUrl(env.candidate.username))
         existingPlayer <- Player.selectId(apiPlayer.playerId)
@@ -63,7 +63,7 @@ private[recruitment] object RecruitmentFilterDefs {
   }
 
   object CheckInvitedTooRecently extends RecruitmentFilter {
-    def apply(env: FilterEnv): RIO[Transactor, FilterResult] =
+    def apply(env: FilterEnv): RIO[PostgresClient, FilterResult] =
       for {
         apiPlayer    <- requireApiPlayer(env)
         recentInvite <- RecruitmentCandidate.selectLatestInvited(apiPlayer.playerId)
@@ -76,7 +76,7 @@ private[recruitment] object RecruitmentFilterDefs {
   }
 
   object CheckBlacklist extends RecruitmentFilter {
-    def apply(env: FilterEnv): RIO[Transactor, FilterResult] =
+    def apply(env: FilterEnv): RIO[PostgresClient, FilterResult] =
       for {
         apiPlayer   <- requireApiPlayer(env)
         blacklisted <- RecruitmentBlacklist.isBlacklisted(env.run.clubId, apiPlayer.playerId, env.run.now)
@@ -84,7 +84,7 @@ private[recruitment] object RecruitmentFilterDefs {
   }
 
   object CheckFormerMember extends RecruitmentFilter {
-    def apply(env: FilterEnv): RIO[Transactor, FilterResult] =
+    def apply(env: FilterEnv): RIO[PostgresClient, FilterResult] =
       requireApiPlayer(env).map { apiPlayer =>
         FilterResult(env.run.formerMemberIds.contains(apiPlayer.playerId), env.candidate)
       }
@@ -171,7 +171,7 @@ private[recruitment] object RecruitmentFilterDefs {
   }
 
   object CheckCacheCriteria extends RecruitmentFilter {
-    def apply(env: FilterEnv): RIO[Transactor, FilterResult] =
+    def apply(env: FilterEnv): RIO[PostgresClient, FilterResult] =
       ZIO.succeed {
         val rejected = env.candidate.cache.exists(runCacheCriteria(_, env.run.criteria, env.run.now))
         FilterResult(rejected, if (rejected) env.candidate.copy(cacheRejected = true) else env.candidate)
@@ -179,7 +179,7 @@ private[recruitment] object RecruitmentFilterDefs {
   }
 
   object CheckOpponentMatch extends RecruitmentFilter {
-    def apply(env: FilterEnv): RIO[Transactor, FilterResult] =
+    def apply(env: FilterEnv): RIO[PostgresClient, FilterResult] =
       env.run.client.get[ApiPlayerMatches](ApiPlayerMatches.getUrl(env.candidate.username)).map { playerMatches =>
         val registeredIds = playerMatches.registered.map(_.`@id`).toSet ++
           playerMatches.inProgress.map(_.`@id`).toSet
@@ -191,7 +191,7 @@ private[recruitment] object RecruitmentFilterDefs {
   }
 
   object CheckClubs extends RecruitmentFilter {
-    def apply(env: FilterEnv): RIO[Transactor, FilterResult] =
+    def apply(env: FilterEnv): RIO[PostgresClient, FilterResult] =
       for {
         playerClubs <- env.run.client.get[ApiPlayerClubs](ApiPlayerClubs.getUrl(env.candidate.username))
         clubNames = playerClubs.clubs.map(_.clubName).toSet
@@ -209,7 +209,7 @@ private[recruitment] object RecruitmentFilterDefs {
   }
 
   object CheckDailyStats extends RecruitmentFilter {
-    def apply(env: FilterEnv): RIO[Transactor, FilterResult] =
+    def apply(env: FilterEnv): RIO[PostgresClient, FilterResult] =
       env.run.client.get[ApiPlayerStats](ApiPlayerStats.getUrl(env.candidate.username)).flatMap { playerStats =>
         playerStats.chessDaily match {
           case None             => ZIO.succeed(FilterResult(true, env.candidate))
@@ -220,7 +220,7 @@ private[recruitment] object RecruitmentFilterDefs {
     private def applyDailyStats(
       env: FilterEnv,
       dailyStats: ApiPlayerStats.ApiPlayerDailyStats
-    ): RIO[Transactor, FilterResult] = {
+    ): RIO[PostgresClient, FilterResult] = {
       val dailyElo           = dailyStats.last.rating
       val dailyTimeoutPct    = dailyStats.record.timeoutPercent
       val dailyGamesFinished = dailyStats.record.nGames
@@ -271,7 +271,7 @@ private[recruitment] object RecruitmentFilterDefs {
   }
 
   object CheckOngoingGames extends RecruitmentFilter {
-    def apply(env: FilterEnv): RIO[Transactor, FilterResult] =
+    def apply(env: FilterEnv): RIO[PostgresClient, FilterResult] =
       for {
         currentGames <- env.run.client.get[ApiPlayerGamesCurrent](ApiPlayerGamesCurrent.getUrl(env.candidate.username))
         _            <- requireApiPlayer(env)
@@ -291,7 +291,7 @@ private[recruitment] object RecruitmentFilterDefs {
   }
 
   object CheckTmStats extends RecruitmentFilter {
-    def apply(env: FilterEnv): RIO[Transactor, FilterResult] =
+    def apply(env: FilterEnv): RIO[PostgresClient, FilterResult] =
       for {
         cache <- ZIO.fromOption(env.candidate.cache)
           .orElseFail(new NoSuchElementException("cache not set — CheckDailyStats must run before CheckTmStats"))

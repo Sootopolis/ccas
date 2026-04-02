@@ -2,7 +2,7 @@ package ccas.server.routes
 
 import scala.util.chaining.*
 
-import com.augustnagro.magnum.Transactor
+import ccas.utils.sql.PostgresClient
 import zio.{NonEmptyChunk, RIO, ZIO}
 import zio.http.*
 import zio.json.{DeriveJsonCodec, EncoderOps, JsonCodec}
@@ -94,7 +94,7 @@ object JobRoutes {
 
   // --- Routes ---
 
-  def routes: Routes[JobRunner & ChessComClient & Transactor, Nothing] = Routes(
+  def routes: Routes[JobRunner & ChessComClient & PostgresClient, Nothing] = Routes(
     Method.POST / "api" / "jobs" / "recruitment" -> handler { (req: Request) =>
       (for {
         body   <- parseJsonBody[RecruitmentRequest](req)
@@ -213,8 +213,8 @@ object JobRoutes {
     kind: JobKind,
     slug: ClubSlug,
     params: Option[String],
-    effect: Option[JobRunId] => RIO[CcasLogger & ChessComClient & Transactor, Any]
-  ): RIO[Transactor, ClubJobResult] =
+    effect: Option[JobRunId] => RIO[CcasLogger & ChessComClient & PostgresClient, Any]
+  ): RIO[PostgresClient, ClubJobResult] =
     Club.selectBySlug(slug).flatMap {
       case None => ZIO.succeed(ClubJobResult(ClubSlug.unwrap(slug), None, Some("Club not found")))
       case Some(club) =>

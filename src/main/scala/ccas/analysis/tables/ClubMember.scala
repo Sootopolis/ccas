@@ -9,7 +9,8 @@ import zio.ZIO
 import ccas.api.misc.enums.PlayerStatusCategory.Active
 import ccas.api.misc.subtypes.{ClubId, PlayerId}
 import ccas.utils.sql.DbCodecs.given
-import ccas.utils.sql.SqlZioTypes.{connectZIO, transactZIO}
+import ccas.utils.sql.PostgresClient
+import ccas.utils.sql.PostgresClient.{connectZIO, transactZIO}
 
 final case class ClubMember(
   clubId: ClubId,
@@ -24,7 +25,7 @@ final case class ClubMember(
 object ClubMember {
   private val selectCols = SqlLiteral("club_id, player_id, since, until, since_approximate")
 
-  def createTable: ZIO[Transactor, SQLException, Int] =
+  def createTable: ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""CREATE TABLE IF NOT EXISTS club_member (
               club_id           BIGINT NOT NULL,
@@ -42,18 +43,18 @@ object ClubMember {
             ON club_member (club_id) WHERE until IS NULL""".update.run()
     }
 
-  def selectAll: ZIO[Transactor, SQLException, List[ClubMember]] =
+  def selectAll: ZIO[PostgresClient, SQLException, List[ClubMember]] =
     connectZIO(sql"SELECT $selectCols FROM club_member".query[ClubMember].run().toList)
 
-  def selectClub(clubId: ClubId): ZIO[Transactor, SQLException, List[ClubMember]] =
+  def selectClub(clubId: ClubId): ZIO[PostgresClient, SQLException, List[ClubMember]] =
     connectZIO(sql"SELECT $selectCols FROM club_member WHERE club_id = $clubId".query[ClubMember].run().toList)
 
-  def selectClubCurrent(clubId: ClubId): ZIO[Transactor, SQLException, List[ClubMember]] =
+  def selectClubCurrent(clubId: ClubId): ZIO[PostgresClient, SQLException, List[ClubMember]] =
     connectZIO(
       sql"SELECT $selectCols FROM club_member WHERE club_id = $clubId AND until IS NULL".query[ClubMember].run().toList
     )
 
-  def selectClubActive(clubId: ClubId): ZIO[Transactor, SQLException, List[ClubMember]] =
+  def selectClubActive(clubId: ClubId): ZIO[PostgresClient, SQLException, List[ClubMember]] =
     connectZIO(
       sql"""SELECT cm.club_id, cm.player_id, cm.since, cm.until, cm.since_approximate FROM club_member cm
             JOIN player p ON p.player_id = cm.player_id AND p.status = ${Active.toString}
@@ -61,20 +62,20 @@ object ClubMember {
         .run().toList
     )
 
-  def selectClubFormer(clubId: ClubId): ZIO[Transactor, SQLException, List[ClubMember]] =
+  def selectClubFormer(clubId: ClubId): ZIO[PostgresClient, SQLException, List[ClubMember]] =
     connectZIO(
       sql"SELECT $selectCols FROM club_member WHERE club_id = $clubId AND until IS NOT NULL".query[ClubMember].run()
         .toList
     )
 
-  def insert(item: ClubMember): ZIO[Transactor, SQLException, Int] =
+  def insert(item: ClubMember): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""INSERT INTO club_member (club_id, player_id, since, until, since_approximate)
             VALUES (${item.clubId}, ${item.playerId}, ${item.since}, ${item.until},
               ${item.sinceApproximate})""".update.run()
     }
 
-  def insertBatch(items: Iterable[ClubMember]): ZIO[Transactor, SQLException, BatchUpdateResult] =
+  def insertBatch(items: Iterable[ClubMember]): ZIO[PostgresClient, SQLException, BatchUpdateResult] =
     transactZIO {
       batchUpdate(items) { item =>
         sql"""INSERT INTO club_member (club_id, player_id, since, until, since_approximate)
@@ -83,13 +84,13 @@ object ClubMember {
       }
     }
 
-  def update(item: ClubMember): ZIO[Transactor, SQLException, Int] =
+  def update(item: ClubMember): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""UPDATE club_member SET until = ${item.until}, since_approximate = ${item.sinceApproximate}
             WHERE club_id = ${item.clubId} AND player_id = ${item.playerId} AND since = ${item.since}""".update.run()
     }
 
-  def updateBatch(items: Iterable[ClubMember]): ZIO[Transactor, SQLException, BatchUpdateResult] =
+  def updateBatch(items: Iterable[ClubMember]): ZIO[PostgresClient, SQLException, BatchUpdateResult] =
     transactZIO {
       batchUpdate(items) { item =>
         sql"""UPDATE club_member SET until = ${item.until}, since_approximate = ${item.sinceApproximate}
@@ -97,7 +98,7 @@ object ClubMember {
       }
     }
 
-  def exists(clubId: ClubId, playerId: PlayerId): ZIO[Transactor, SQLException, Boolean] =
+  def exists(clubId: ClubId, playerId: PlayerId): ZIO[PostgresClient, SQLException, Boolean] =
     connectZIO {
       sql"SELECT 1 FROM club_member WHERE club_id = $clubId AND player_id = $playerId LIMIT 1"
         .query[Int].run().nonEmpty
@@ -108,14 +109,14 @@ object ClubMember {
     playerId: PlayerId,
     oldSince: Instant,
     newSince: Instant
-  ): ZIO[Transactor, SQLException, Int] =
+  ): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""UPDATE club_member SET since = $newSince, since_approximate = false
             WHERE club_id = $clubId AND player_id = $playerId AND since = $oldSince
               AND since_approximate = true""".update.run()
     }
 
-  def deleteAll: ZIO[Transactor, SQLException, Int] =
+  def deleteAll: ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"DELETE FROM club_member".update.run()
     }

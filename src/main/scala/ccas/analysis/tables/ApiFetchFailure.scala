@@ -7,7 +7,8 @@ import com.augustnagro.magnum.*
 import zio.ZIO
 
 import ccas.utils.sql.DbCodecs.given
-import ccas.utils.sql.SqlZioTypes.connectZIO
+import ccas.utils.sql.PostgresClient
+import ccas.utils.sql.PostgresClient.connectZIO
 
 final case class ApiFetchFailure(
   occurredAt: Instant,
@@ -19,7 +20,7 @@ final case class ApiFetchFailure(
 
 object ApiFetchFailure {
 
-  def createTable: ZIO[Transactor, SQLException, Int] =
+  def createTable: ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""CREATE TABLE IF NOT EXISTS api_fetch_failure (
               failure_id       BIGSERIAL PRIMARY KEY,
@@ -33,7 +34,7 @@ object ApiFetchFailure {
             ON api_fetch_failure (occurred_at)""".update.run()
     }
 
-  def selectRecent(since: Instant): ZIO[Transactor, SQLException, List[ApiFetchFailure]] =
+  def selectRecent(since: Instant): ZIO[PostgresClient, SQLException, List[ApiFetchFailure]] =
     connectZIO {
       sql"""SELECT f.occurred_at, f.url, f.error_type, f.error_message, b.body
             FROM api_fetch_failure f
@@ -43,7 +44,7 @@ object ApiFetchFailure {
         .query[ApiFetchFailure].run().toList
     }
 
-  def insert(item: ApiFetchFailure): ZIO[Transactor, SQLException, Int] =
+  def insert(item: ApiFetchFailure): ZIO[PostgresClient, SQLException, Int] =
     ZIO.foreach(item.responseBody)(ApiResponseBody.ensureBody).flatMap { bodyIdOpt =>
       connectZIO {
         sql"""INSERT INTO api_fetch_failure (occurred_at, url, error_type, error_message, response_body_id)
@@ -52,14 +53,14 @@ object ApiFetchFailure {
       }
     }
 
-  def deleteBefore(cutoff: Instant): ZIO[Transactor, SQLException, Int] =
+  def deleteBefore(cutoff: Instant): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"DELETE FROM api_fetch_failure WHERE occurred_at < $cutoff".update.run()
     }.flatMap { count =>
       ApiResponseBody.deleteOrphans.as(count)
     }
 
-  def deleteAll: ZIO[Transactor, SQLException, Int] =
+  def deleteAll: ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"DELETE FROM api_fetch_failure".update.run()
     }.flatMap { count =>

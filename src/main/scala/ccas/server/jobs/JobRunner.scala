@@ -2,7 +2,7 @@ package ccas.server.jobs
 
 import java.time.Instant
 
-import com.augustnagro.magnum.Transactor
+import ccas.utils.sql.PostgresClient
 import zio.{Fiber, RIO, RLayer, Ref, UIO, ZIO, ZLayer}
 
 import ccas.analysis.tables.RunTrigger
@@ -28,27 +28,27 @@ trait JobRunner {
     clubId: Option[ClubId],
     params: Option[String],
     trigger: RunTrigger,
-    effect: Option[JobRunId] => RIO[CcasLogger & ChessComClient & Transactor, Any]
-  ): RIO[Transactor, JobRunId]
+    effect: Option[JobRunId] => RIO[CcasLogger & ChessComClient & PostgresClient, Any]
+  ): RIO[PostgresClient, JobRunId]
 
   /** Look up a job by ID, returning `None` if no such job exists. */
-  def status(id: JobRunId): RIO[Transactor, Option[JobRun]]
+  def status(id: JobRunId): RIO[PostgresClient, Option[JobRun]]
 
   /** Return the most recent jobs ordered by start time descending, up to `limit`. */
-  def recentJobs(limit: Int): RIO[Transactor, List[JobRun]]
+  def recentJobs(limit: Int): RIO[PostgresClient, List[JobRun]]
 }
 
 object JobRunner {
 
-  val live: RLayer[CcasLogger & ChessComClient & Transactor, JobRunner] =
+  val live: RLayer[CcasLogger & ChessComClient & PostgresClient, JobRunner] =
     ZLayer.scoped {
       for {
         logger <- ZIO.service[CcasLogger]
         client <- ZIO.service[ChessComClient]
-        xa     <- ZIO.service[Transactor]
-        fibers <- Ref.make(Set.empty[Fiber.Runtime[Nothing, Unit]])
-        _      <- JobRun.markOrphansAsFailed.provideEnvironment(zio.ZEnvironment(xa))
-        runner = new JobRunnerLive(logger, client, xa, fibers)
+        pgClient <- ZIO.service[PostgresClient]
+        fibers   <- Ref.make(Set.empty[Fiber.Runtime[Nothing, Unit]])
+        _        <- JobRun.markOrphansAsFailed.provideEnvironment(zio.ZEnvironment(pgClient))
+        runner = new JobRunnerLive(logger, client, pgClient, fibers)
         _ <- ZIO.addFinalizer(runner.awaitAll)
       } yield runner
     }
@@ -56,19 +56,19 @@ object JobRunner {
   private class JobRunnerLive(
     logger: CcasLogger,
     client: ChessComClient,
-    xa: Transactor,
+    pgClient: PostgresClient,
     fibers: Ref[Set[Fiber.Runtime[Nothing, Unit]]]
   ) extends JobRunner {
 
-    private val env = zio.ZEnvironment(logger, client, xa)
+    private val env = zio.ZEnvironment(logger, client, pgClient)
 
     override def submit(
       kind: JobKind,
       clubId: Option[ClubId],
       params: Option[String],
       trigger: RunTrigger,
-      effect: Option[JobRunId] => RIO[CcasLogger & ChessComClient & Transactor, Any]
-    ): RIO[Transactor, JobRunId] =
+      effect: Option[JobRunId] => RIO[CcasLogger & ChessComClient & PostgresClient, Any]
+    ): RIO[PostgresClient, JobRunId] =
       for {
         existing <- JobRun.selectRunning(kind, clubId)
         _ <- ZIO.whenDiscard(existing.isDefined)(
@@ -89,29 +89,29 @@ object JobRunner {
 
     private def runJob(
       id: JobRunId,
-      effect: RIO[CcasLogger & ChessComClient & Transactor, Any]
+      effect: RIO[CcasLogger & ChessComClient & PostgresClient, Any]
     ): UIO[Unit] =
       def onFailure(error: Throwable): UIO[Unit] = {
         val msg = error.safeMessage
         JobRun.updateStatus(id, JobRunStatus.Failed, Some(Instant.now()), Some(msg))
           .provideEnvironment(env)
-          .unit.orDie
+          .unit.catchAll(e => ZIO.logError(s"Failed to record job failure: ${e.safeMessage}"))
       }
 
       def onSuccess: UIO[Unit] =
         JobRun.updateStatus(id, JobRunStatus.Completed, Some(Instant.now()), None)
           .provideEnvironment(env)
-          .unit.orDie
+          .unit.catchAll(e => ZIO.logError(s"Failed to record job completion: ${e.safeMessage}"))
 
       effect.provideEnvironment(env).foldZIO(onFailure, _ => onSuccess)
 
     def awaitAll: UIO[Unit] =
       fibers.get.flatMap(fs => ZIO.foreachDiscard(fs)(_.await))
 
-    override def status(id: JobRunId): RIO[Transactor, Option[JobRun]] =
+    override def status(id: JobRunId): RIO[PostgresClient, Option[JobRun]] =
       JobRun.selectId(id)
 
-    override def recentJobs(limit: Int): RIO[Transactor, List[JobRun]] =
+    override def recentJobs(limit: Int): RIO[PostgresClient, List[JobRun]] =
       JobRun.selectRecent(limit)
   }
 }

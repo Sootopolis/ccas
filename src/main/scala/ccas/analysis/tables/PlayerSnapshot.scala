@@ -10,7 +10,8 @@ import ccas.api.misc.enums.PlayerStatusCategory
 import ccas.api.misc.enums.Title
 import ccas.api.misc.subtypes.{PlayerId, Username}
 import ccas.utils.sql.DbCodecs.given
-import ccas.utils.sql.SqlZioTypes.{connectZIO, transactZIO}
+import ccas.utils.sql.PostgresClient
+import ccas.utils.sql.PostgresClient.{connectZIO, transactZIO}
 
 final case class PlayerSnapshot(
   playerId: PlayerId,
@@ -23,7 +24,7 @@ final case class PlayerSnapshot(
 object PlayerSnapshot {
   private val selectCols = SqlLiteral("player_id, since, username, status, title")
 
-  def createTable: ZIO[Transactor, SQLException, Int] =
+  def createTable: ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""CREATE TABLE IF NOT EXISTS player_snapshot (
               player_id BIGINT NOT NULL,
@@ -39,13 +40,13 @@ object PlayerSnapshot {
     }
 
   /** All historical snapshots for a player. */
-  def selectId(playerId: PlayerId): ZIO[Transactor, SQLException, List[PlayerSnapshot]] =
+  def selectId(playerId: PlayerId): ZIO[PostgresClient, SQLException, List[PlayerSnapshot]] =
     connectZIO(
       sql"SELECT $selectCols FROM player_snapshot WHERE player_id = $playerId".query[PlayerSnapshot].run().toList
     )
 
   /** All historical snapshots for a username. */
-  def selectName(username: Username): ZIO[Transactor, SQLException, List[PlayerSnapshot]] =
+  def selectName(username: Username): ZIO[PostgresClient, SQLException, List[PlayerSnapshot]] =
     connectZIO(
       sql"SELECT $selectCols FROM player_snapshot WHERE username = $username".query[PlayerSnapshot].run().toList
     )
@@ -53,7 +54,7 @@ object PlayerSnapshot {
   /** Historical snapshots plus current player state, for time-range reporting. Returns all snapshots whose `since` is
     * after the given instant, plus the current state from `player` if its `since` falls after the cutoff.
     */
-  def selectSince(since: Instant): ZIO[Transactor, SQLException, List[PlayerSnapshot]] =
+  def selectSince(since: Instant): ZIO[PostgresClient, SQLException, List[PlayerSnapshot]] =
     connectZIO(
       sql"""WITH all_states AS (
               SELECT $selectCols FROM player_snapshot
@@ -67,7 +68,7 @@ object PlayerSnapshot {
         .query[PlayerSnapshot].run().toList
     )
 
-  def insert(item: PlayerSnapshot): ZIO[Transactor, SQLException, Int] =
+  def insert(item: PlayerSnapshot): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""INSERT INTO player_snapshot (player_id, since, username, status, title)
             VALUES (${item.playerId}, ${item.since}, ${item.username}, ${item.status.toString}, ${item.title.map(
@@ -75,7 +76,7 @@ object PlayerSnapshot {
         )})""".update.run()
     }
 
-  def insertBatch(items: Iterable[PlayerSnapshot]): ZIO[Transactor, SQLException, BatchUpdateResult] =
+  def insertBatch(items: Iterable[PlayerSnapshot]): ZIO[PostgresClient, SQLException, BatchUpdateResult] =
     transactZIO {
       batchUpdate(items) { item =>
         sql"""INSERT INTO player_snapshot (player_id, since, username, status, title)
@@ -85,14 +86,14 @@ object PlayerSnapshot {
       }
     }
 
-  def update(item: PlayerSnapshot): ZIO[Transactor, SQLException, Int] =
+  def update(item: PlayerSnapshot): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""UPDATE player_snapshot SET username = ${item.username}, status = ${item.status.toString}, title = ${item
           .title.map(_.toString)}
             WHERE player_id = ${item.playerId} AND since = ${item.since}""".update.run()
     }
 
-  def updateBatch(items: Iterable[PlayerSnapshot]): ZIO[Transactor, SQLException, BatchUpdateResult] =
+  def updateBatch(items: Iterable[PlayerSnapshot]): ZIO[PostgresClient, SQLException, BatchUpdateResult] =
     transactZIO {
       batchUpdate(items) { item =>
         sql"""UPDATE player_snapshot SET username = ${item.username}, status = ${item.status.toString}, title = ${item
@@ -101,7 +102,7 @@ object PlayerSnapshot {
       }
     }
 
-  def deleteAll: ZIO[Transactor, SQLException, Int] =
+  def deleteAll: ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"DELETE FROM player_snapshot".update.run()
     }

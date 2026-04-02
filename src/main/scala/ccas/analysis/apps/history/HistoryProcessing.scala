@@ -2,7 +2,6 @@ package ccas.analysis.apps.history
 
 import java.time.Instant
 
-import com.augustnagro.magnum.Transactor
 import zio.{Promise, RIO, Ref, Task, UIO, ZIO}
 import zio.http.URL
 import HistoryUtils.*
@@ -15,7 +14,8 @@ import ccas.api.misc.enums.*
 import ccas.api.misc.subtypes.*
 import ccas.api.player.{ApiPlayer, ApiPlayerClubs}
 import ccas.utils.{CcasLogger, ProgressBar}
-import ccas.utils.sql.SqlZioTypes.withTransaction
+import ccas.utils.sql.PostgresClient
+import ccas.utils.sql.PostgresClient.withTransaction
 
 private[history] object HistoryProcessing {
 
@@ -29,8 +29,8 @@ private[history] object HistoryProcessing {
   def processWaves(
     ctx: ProcessingContext,
     settledMatchIds: Set[ClubMatchId]
-  ): RIO[CcasLogger & Transactor, RunStats] = {
-    def waveLoop(waveCount: Int, waveDetails: List[(Int, Int)]): RIO[CcasLogger & Transactor, RunStats] =
+  ): RIO[CcasLogger & PostgresClient, RunStats] = {
+    def waveLoop(waveCount: Int, waveDetails: List[(Int, Int)]): RIO[CcasLogger & PostgresClient, RunStats] =
       for {
         pendingCount <- HistoryPendingMatch.countNew(ctx.clubId)
         result <-
@@ -90,7 +90,7 @@ private[history] object HistoryProcessing {
     bar: ProgressBar,
     counter: Ref[Int],
     waveTotal: Long
-  ): RIO[CcasLogger & Transactor, Unit] =
+  ): RIO[CcasLogger & PostgresClient, Unit] =
     for {
       batch <- HistoryPendingMatch.selectClubBatch(ctx.clubId, BatchSize)
       _ <- ZIO.whenDiscard(batch.nonEmpty) {
@@ -104,7 +104,7 @@ private[history] object HistoryProcessing {
     bar: ProgressBar,
     counter: Ref[Int],
     waveTotal: Long
-  ): RIO[CcasLogger & Transactor, Unit] =
+  ): RIO[CcasLogger & PostgresClient, Unit] =
     ZIO.foreachParDiscard(pending) { pm =>
       processMatch(ctx, pm.matchId, pm.isLive)
         .zipLeft(ctx.matchesProcessed.update(_ + 1))
@@ -122,14 +122,14 @@ private[history] object HistoryProcessing {
     ctx: ProcessingContext,
     matchId: ClubMatchId,
     isLive: Boolean
-  ): RIO[CcasLogger & Transactor, Unit] =
+  ): RIO[CcasLogger & PostgresClient, Unit] =
     if (isLive) { processLiveMatch(ctx, matchId) }
     else { processDailyMatch(ctx, matchId) }
 
   /** Fetches a daily match from the API, resolves team clubs, builds and persists board rows. Marks the match
     * Unidentified if the target club is not found in either team (data saved, BFS skipped).
     */
-  private def processDailyMatch(ctx: ProcessingContext, matchId: ClubMatchId): RIO[CcasLogger & Transactor, Unit] =
+  private def processDailyMatch(ctx: ProcessingContext, matchId: ClubMatchId): RIO[CcasLogger & PostgresClient, Unit] =
     for {
       dailyMatch <- fetchMatch(ctx, matchId)
 
@@ -171,7 +171,7 @@ private[history] object HistoryProcessing {
     } yield ()
 
   /** Fetches a live match and resolves its players for BFS expansion. No board rows are persisted for live matches. */
-  private def processLiveMatch(ctx: ProcessingContext, matchId: ClubMatchId): RIO[CcasLogger & Transactor, Unit] =
+  private def processLiveMatch(ctx: ProcessingContext, matchId: ClubMatchId): RIO[CcasLogger & PostgresClient, Unit] =
     for {
       liveMatch <- fetchLiveMatch(ctx, matchId)
 
@@ -199,7 +199,7 @@ private[history] object HistoryProcessing {
     dailyMatch: ApiDailyMatch,
     weAreTeam1: Option[Boolean],
     matchStartTime: Option[Instant]
-  ): RIO[CcasLogger & Transactor, List[ClubMatchBoard]] =
+  ): RIO[CcasLogger & PostgresClient, List[ClubMatchBoard]] =
     dailyMatch match {
       case _: ApiDailyMatchRegistered => ZIO.succeed(Nil)
       case _ =>
@@ -318,7 +318,7 @@ private[history] object HistoryProcessing {
     username: Username,
     isOurTeam: Boolean,
     matchStartTime: Option[Instant]
-  ): RIO[CcasLogger & Transactor, Option[PlayerId]] = {
+  ): RIO[CcasLogger & PostgresClient, Option[PlayerId]] = {
     val key = username.value
     ctx.knownPlayers.get.map(_.get(key)).flatMap {
       case Some(playerId) => ctx.playersKnown.update(_ + 1).as(Some(playerId))
@@ -335,7 +335,7 @@ private[history] object HistoryProcessing {
     key: String,
     isOurTeam: Boolean,
     matchStartTime: Option[Instant]
-  ): RIO[CcasLogger & Transactor, Option[PlayerId]] =
+  ): RIO[CcasLogger & PostgresClient, Option[PlayerId]] =
     for {
       promise <- Promise.make[Throwable, Option[PlayerId]]
       action <- ctx.discoveryCache.modify { m =>
@@ -354,7 +354,7 @@ private[history] object HistoryProcessing {
     promise: Promise[Throwable, Option[PlayerId]],
     isOurTeam: Boolean,
     matchStartTime: Option[Instant]
-  ): RIO[CcasLogger & Transactor, Option[PlayerId]] = {
+  ): RIO[CcasLogger & PostgresClient, Option[PlayerId]] = {
     val work = for {
       apiPlayer <- ctx.client.get[ApiPlayer](ApiPlayer.getUrl(username))
       playerId       = apiPlayer.playerId
@@ -402,7 +402,7 @@ private[history] object HistoryProcessing {
     ctx: ProcessingContext,
     apiPlayer: ApiPlayer,
     matchStartTime: Option[Instant]
-  ): RIO[Transactor, Unit] = {
+  ): RIO[PostgresClient, Unit] = {
     val playerId       = apiPlayer.playerId
     val statusCategory = apiPlayer.status.category
     val clubId         = ctx.clubId
@@ -477,7 +477,7 @@ private[history] object HistoryProcessing {
     isTeam1: Boolean,
     teamUrl: URL,
     resolvedId: Option[ClubId]
-  ): RIO[Transactor, Unit] =
+  ): RIO[PostgresClient, Unit] =
     ZIO.whenDiscard(resolvedId.isEmpty) {
       teamUrl.path.segments.lastOption match {
         case Some(segment) => UnresolvedMatchClub.insert(matchId, isTeam1, ClubSlug.wrap(segment)).ignore
@@ -486,7 +486,7 @@ private[history] object HistoryProcessing {
     }
 
   /** Resolves a team URL to a ClubId via Promise-based cache. Falls back to DB lookup then API fetch. */
-  private def resolveClubIdFromTeamUrl(ctx: ProcessingContext, teamUrl: URL): RIO[Transactor, Option[ClubId]] =
+  private def resolveClubIdFromTeamUrl(ctx: ProcessingContext, teamUrl: URL): RIO[PostgresClient, Option[ClubId]] =
     teamUrl.path.segments.lastOption match {
       case None => ZIO.none
       case Some(segment) =>

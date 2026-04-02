@@ -9,7 +9,8 @@ import RefSkipReason.given
 
 import ccas.api.misc.subtypes.ClubId
 import ccas.utils.sql.DbCodecs.given
-import ccas.utils.sql.SqlZioTypes.connectZIO
+import ccas.utils.sql.PostgresClient
+import ccas.utils.sql.PostgresClient.connectZIO
 
 final case class ClubRefSkip(
   clubId: ClubId,
@@ -20,7 +21,7 @@ final case class ClubRefSkip(
 
 object ClubRefSkip {
 
-  def createTable: ZIO[Transactor, SQLException, Int] =
+  def createTable: ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""CREATE TABLE IF NOT EXISTS club_ref_skip (
               club_id        BIGINT PRIMARY KEY REFERENCES club (club_id) ON DELETE RESTRICT,
@@ -30,19 +31,19 @@ object ClubRefSkip {
             )""".update.run()
     }
 
-  def selectId(clubId: ClubId): ZIO[Transactor, SQLException, Option[ClubRefSkip]] =
+  def selectId(clubId: ClubId): ZIO[PostgresClient, SQLException, Option[ClubRefSkip]] =
     connectZIO {
       sql"SELECT club_id, reason, detail, last_attempted FROM club_ref_skip WHERE club_id = $clubId"
         .query[ClubRefSkip].run().headOption
     }
 
-  def countByReason: ZIO[Transactor, SQLException, List[(RefSkipReason, Long)]] =
+  def countByReason: ZIO[PostgresClient, SQLException, List[(RefSkipReason, Long)]] =
     connectZIO {
       sql"SELECT reason, COUNT(*) FROM club_ref_skip GROUP BY reason"
         .query[(RefSkipReason, Long)].run().toList
     }
 
-  def upsert(item: ClubRefSkip): ZIO[Transactor, SQLException, Int] =
+  def upsert(item: ClubRefSkip): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""INSERT INTO club_ref_skip (club_id, reason, detail, last_attempted)
             VALUES (${item.clubId}, ${item.reason}, ${item.detail}, ${item.lastAttempted})
@@ -52,9 +53,9 @@ object ClubRefSkip {
               last_attempted = EXCLUDED.last_attempted""".update.run()
     }
 
-  def deleteId(clubId: ClubId): ZIO[Transactor, SQLException, Int] =
+  def deleteId(clubId: ClubId): ZIO[PostgresClient, SQLException, Int] =
     connectZIO(sql"DELETE FROM club_ref_skip WHERE club_id = $clubId".update.run())
 
-  def deleteAll: ZIO[Transactor, SQLException, Int] =
+  def deleteAll: ZIO[PostgresClient, SQLException, Int] =
     connectZIO(sql"DELETE FROM club_ref_skip".update.run())
 }

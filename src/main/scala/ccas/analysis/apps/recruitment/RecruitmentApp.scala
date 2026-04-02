@@ -2,7 +2,6 @@ package ccas.analysis.apps.recruitment
 
 import java.time.{Duration as JDuration, Instant}
 
-import com.augustnagro.magnum.Transactor
 import zio.{RIO, Ref, Scope, ZEnvironment, ZIO, ZIOAppArgs, ZIOAppDefault}
 import zio.http.Client
 
@@ -15,7 +14,7 @@ import ccas.api.player.ApiPlayer
 import ccas.utils.{display, CcasLogger, OutputFile}
 import ccas.utils.client.ChessComClient
 import ccas.utils.errors.{BadRequestException, NotFoundException}
-import ccas.utils.sql.DataSourceLayer
+import ccas.utils.sql.PostgresClient
 
 object RecruitmentApp extends ZIOAppDefault {
 
@@ -109,7 +108,7 @@ object RecruitmentApp extends ZIOAppDefault {
         CcasLogger.live(showProgress = true),
         ChessComClient.live("recruitment"),
         Client.default,
-        DataSourceLayer.liveFromPrefix(onInit = Tables.ensureTables)
+        PostgresClient.live(onInit = Tables.ensureTables)
       )
     } yield ()
 
@@ -126,7 +125,7 @@ object RecruitmentApp extends ZIOAppDefault {
     showHints: Boolean = false,
     trigger: RunTrigger = RunTrigger.Cli,
     jobRunId: Option[JobRunId] = None
-  ): RIO[CcasLogger & ChessComClient & Transactor, RecruitmentRun] = ZIO.scoped {
+  ): RIO[CcasLogger & ChessComClient & PostgresClient, RecruitmentRun] = ZIO.scoped {
     for {
       _       <- MembershipApp.reconcile(clubSlug, trackRun = false)
       client  <- ZIO.service[ChessComClient]
@@ -200,7 +199,7 @@ object RecruitmentApp extends ZIOAppDefault {
         progressBar = progressBar
       )
 
-      transactor <- ZIO.service[Transactor]
+      pgClient <- ZIO.service[PostgresClient]
 
       _ <- ZIO.whenDiscard(cumulative && alreadyFound > 0)(
         CcasLogger.info(s"[Cumulative] Already found $alreadyFound today, effective target: $effectiveTarget")
@@ -223,7 +222,7 @@ object RecruitmentApp extends ZIOAppDefault {
             ctx,
             client,
             logger,
-            transactor,
+            pgClient,
             sourceClubs,
             timeLimitMinutes,
             trigger,
@@ -240,7 +239,7 @@ object RecruitmentApp extends ZIOAppDefault {
     ctx: ExploreContext,
     client: ChessComClient,
     logger: CcasLogger,
-    transactor: Transactor,
+    pgClient: PostgresClient,
     sourceClubs: List[ClubSlug],
     timeLimitMinutes: Option[Int],
     trigger: RunTrigger,
@@ -248,7 +247,7 @@ object RecruitmentApp extends ZIOAppDefault {
     cumulative: Boolean,
     alreadyFound: Int,
     jobRunId: Option[JobRunId]
-  ): RIO[CcasLogger & ChessComClient & Transactor, RecruitmentRun] =
+  ): RIO[CcasLogger & ChessComClient & PostgresClient, RecruitmentRun] =
     for {
       _ <- ZIO.whenDiscard(ctx.showHints)(
         CcasLogger.info("[Hint] Press Ctrl+C to stop gracefully (candidates found so far will be listed)")
@@ -269,7 +268,7 @@ object RecruitmentApp extends ZIOAppDefault {
       initialSources = deferredSource.toList ++ sourceClubs.map(ClubSource(_))
 
       // --- Build static strategy list (only used when explore == true) ---
-      staticStrategies: List[RIO[CcasLogger & Transactor, List[SourceDescriptor]]] =
+      staticStrategies: List[RIO[CcasLogger & PostgresClient, List[SourceDescriptor]]] =
         if (!ctx.explore) Nil
         else
           List(
@@ -300,7 +299,7 @@ object RecruitmentApp extends ZIOAppDefault {
           interrupted = true,
           jobRunId = jobRunId
         )
-          .provideEnvironment(ZEnvironment(logger, transactor))
+          .provideEnvironment(ZEnvironment(logger, pgClient))
           .orDie
       )
 
@@ -325,7 +324,7 @@ object RecruitmentApp extends ZIOAppDefault {
     label: String,
     interrupted: Boolean = false,
     jobRunId: Option[JobRunId]
-  ): RIO[CcasLogger & Transactor, RecruitmentRun] =
+  ): RIO[CcasLogger & PostgresClient, RecruitmentRun] =
     for {
       _     <- ctx.progressBar.finish
       _     <- RecruitmentExplore.reclassifyExcessInvited(ctx)
@@ -417,7 +416,7 @@ object RecruitmentApp extends ZIOAppDefault {
   def showReport(
     clubSlug: ClubSlug,
     runIdOpt: Option[String]
-  ): RIO[CcasLogger & Transactor, (List[Username], Int, RecruitmentRun)] =
+  ): RIO[CcasLogger & PostgresClient, (List[Username], Int, RecruitmentRun)] =
     for {
       club <- Club.selectBySlug(clubSlug)
         .someOrFail(NotFoundException(s"Club '$clubSlug' not found in database"))
@@ -454,7 +453,7 @@ object RecruitmentApp extends ZIOAppDefault {
     clubId: ClubId,
     clubSlug: ClubSlug,
     clubMatches: ApiClubMatches
-  ): RIO[Transactor, Unit] =
+  ): RIO[PostgresClient, Unit] =
     ClubMatchRef.selectId(clubId).flatMap {
       case Some(_) => ZIO.unit
       case None =>

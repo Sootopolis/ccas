@@ -2,7 +2,7 @@ package ccas.analysis.apps.recruitment
 
 import java.time.{Duration, Instant}
 
-import com.augustnagro.magnum.Transactor
+import ccas.utils.sql.PostgresClient
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 import zio.RIO
 
@@ -137,7 +137,7 @@ object TestRecruitmentFilters extends ZIOSpecDefault {
     responses: Map[String, String],
     criteria: RecruitmentCriteria,
     username: String = "alice"
-  ): RIO[Transactor, CandidateOutcome] =
+  ): RIO[PostgresClient, CandidateOutcome] =
     for {
       _          <- seedDb
       criteriaId <- seedCriteria(criteria)
@@ -548,7 +548,7 @@ object TestRecruitmentFilters extends ZIOSpecDefault {
     criteria: RecruitmentCriteria,
     cache: PlayerRecruitmentCache,
     username: String = "alice"
-  ): RIO[Transactor, Option[CandidateOutcome]] =
+  ): RIO[PostgresClient, Option[CandidateOutcome]] =
     for {
       _ <- seedDb
       // Seed player row for FK constraint, then seed cache

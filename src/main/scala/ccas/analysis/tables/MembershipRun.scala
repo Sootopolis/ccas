@@ -9,7 +9,8 @@ import zio.ZIO
 import ccas.analysis.tables.RunTrigger.given
 import ccas.api.misc.subtypes.{ClubId, JobRunId}
 import ccas.utils.sql.DbCodecs.given
-import ccas.utils.sql.SqlZioTypes.connectZIO
+import ccas.utils.sql.PostgresClient
+import ccas.utils.sql.PostgresClient.connectZIO
 
 final case class MembershipRun(
   runId: Long,
@@ -23,7 +24,7 @@ final case class MembershipRun(
 object MembershipRun {
   private val selectCols = SqlLiteral("run_id, club_id, trigger, started_at, completed_at, job_run_id")
 
-  def createTable: ZIO[Transactor, SQLException, Int] =
+  def createTable: ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""CREATE TABLE IF NOT EXISTS membership_run (
               run_id       BIGSERIAL PRIMARY KEY,
@@ -38,7 +39,7 @@ object MembershipRun {
             ON membership_run (club_id, started_at DESC)""".update.run()
     }
 
-  def selectLatest(clubId: ClubId): ZIO[Transactor, SQLException, Option[MembershipRun]] =
+  def selectLatest(clubId: ClubId): ZIO[PostgresClient, SQLException, Option[MembershipRun]] =
     connectZIO {
       sql"SELECT $selectCols FROM membership_run WHERE club_id = $clubId ORDER BY started_at DESC LIMIT 1"
         .query[MembershipRun].run().headOption
@@ -49,20 +50,20 @@ object MembershipRun {
     trigger: RunTrigger,
     startedAt: Instant,
     jobRunId: Option[JobRunId] = None
-  ): ZIO[Transactor, SQLException, Long] =
+  ): ZIO[PostgresClient, SQLException, Long] =
     connectZIO {
       sql"""INSERT INTO membership_run (club_id, trigger, started_at, job_run_id)
             VALUES ($clubId, $trigger, $startedAt, $jobRunId)
             RETURNING run_id""".query[Long].run().headOption
     }.someOrFail(new SQLException("INSERT RETURNING produced no rows"))
 
-  def complete(runId: Long, completedAt: Instant): ZIO[Transactor, SQLException, Int] =
+  def complete(runId: Long, completedAt: Instant): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""UPDATE membership_run SET completed_at = $completedAt
             WHERE run_id = $runId""".update.run()
     }
 
-  def deleteAll: ZIO[Transactor, SQLException, Int] =
+  def deleteAll: ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"DELETE FROM membership_run".update.run()
     }

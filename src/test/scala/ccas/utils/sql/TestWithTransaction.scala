@@ -11,7 +11,7 @@ import ccas.analysis.tables.RunTrigger
 import ccas.api.misc.subtypes.JobRunId
 import ccas.server.jobs.{JobKind, JobRun, JobRunStatus}
 import ccas.server.ServerTables
-import ccas.utils.sql.SqlZioTypes.{connectZIO, withTransaction}
+import ccas.utils.sql.PostgresClient.{connectZIO, withTransaction}
 
 object TestWithTransaction extends ZIOSpecDefault {
 

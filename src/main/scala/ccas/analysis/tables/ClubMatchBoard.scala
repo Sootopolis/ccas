@@ -7,7 +7,8 @@ import zio.ZIO
 
 import ccas.api.misc.enums.{BoardGameWinner, GameResultDetail}
 import ccas.api.misc.subtypes.{ClubMatchId, PlayerId}
-import ccas.utils.sql.SqlZioTypes.{connectZIO, transactZIO}
+import ccas.utils.sql.PostgresClient
+import ccas.utils.sql.PostgresClient.{connectZIO, transactZIO}
 
 final case class ClubMatchBoard(
   matchId: ClubMatchId,
@@ -31,7 +32,7 @@ object ClubMatchBoard {
       "game1_winner, game1_detail, game2_winner, game2_detail, team1_score_x2, team2_score_x2"
   )
 
-  def createTable: ZIO[Transactor, SQLException, Int] =
+  def createTable: ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""CREATE TABLE IF NOT EXISTS club_match_board (
               match_id         BIGINT NOT NULL REFERENCES club_match (match_id) ON DELETE CASCADE,
@@ -52,13 +53,13 @@ object ClubMatchBoard {
       sql"""CREATE INDEX IF NOT EXISTS idx_club_match_board_team2_player ON club_match_board (team2_player_id)""".update.run()
     }
 
-  def selectMatch(matchId: ClubMatchId): ZIO[Transactor, SQLException, List[ClubMatchBoard]] =
+  def selectMatch(matchId: ClubMatchId): ZIO[PostgresClient, SQLException, List[ClubMatchBoard]] =
     connectZIO {
       sql"SELECT $selectCols FROM club_match_board WHERE match_id = $matchId"
         .query[ClubMatchBoard].run().toList
     }
 
-  def selectPlayerMatchRef(playerId: PlayerId): ZIO[Transactor, SQLException, Option[PlayerMatchRef]] =
+  def selectPlayerMatchRef(playerId: PlayerId): ZIO[PostgresClient, SQLException, Option[PlayerMatchRef]] =
     connectZIO {
       sql"""SELECT match_id, board AS board_idx, (team1_player_id = $playerId) AS is_team1
             FROM club_match_board
@@ -68,7 +69,7 @@ object ClubMatchBoard {
       }
     }
 
-  def insert(item: ClubMatchBoard): ZIO[Transactor, SQLException, Int] =
+  def insert(item: ClubMatchBoard): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""INSERT INTO club_match_board (match_id, board, team1_player_id, team1_fair_play,
               team2_player_id, team2_fair_play,
@@ -81,7 +82,7 @@ object ClubMatchBoard {
               ${item.team1ScoreX2}, ${item.team2ScoreX2})""".update.run()
     }
 
-  def insertBatch(items: Iterable[ClubMatchBoard]): ZIO[Transactor, SQLException, BatchUpdateResult] =
+  def insertBatch(items: Iterable[ClubMatchBoard]): ZIO[PostgresClient, SQLException, BatchUpdateResult] =
     transactZIO {
       batchUpdate(items) { item =>
         sql"""INSERT INTO club_match_board (match_id, board, team1_player_id, team1_fair_play,
@@ -101,7 +102,7 @@ object ClubMatchBoard {
     board: Short,
     isTeam1: Boolean,
     playerId: PlayerId
-  ): ZIO[Transactor, SQLException, Int] =
+  ): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       if (isTeam1) {
         sql"UPDATE club_match_board SET team1_player_id = $playerId WHERE match_id = $matchId AND board = $board"
@@ -112,7 +113,7 @@ object ClubMatchBoard {
       }
     }
 
-  def deleteMatch(matchId: ClubMatchId): ZIO[Transactor, SQLException, Int] =
+  def deleteMatch(matchId: ClubMatchId): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"DELETE FROM club_match_board WHERE match_id = $matchId".update.run()
     }

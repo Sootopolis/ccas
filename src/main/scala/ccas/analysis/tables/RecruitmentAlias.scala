@@ -8,14 +8,15 @@ import zio.ZIO
 
 import ccas.api.misc.subtypes.ClubId
 import ccas.utils.sql.DbCodecs.given
-import ccas.utils.sql.SqlZioTypes.connectZIO
+import ccas.utils.sql.PostgresClient
+import ccas.utils.sql.PostgresClient.connectZIO
 
 final case class RecruitmentAlias(clubId: ClubId, alias: String, since: Instant, criteriaId: Long) derives DbCodec
 
 object RecruitmentAlias {
   private val selectCols = SqlLiteral("club_id, alias, since, criteria_id")
 
-  def createTable: ZIO[Transactor, SQLException, Int] =
+  def createTable: ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""CREATE TABLE IF NOT EXISTS recruitment_alias (
               club_id      BIGINT NOT NULL,
@@ -28,7 +29,7 @@ object RecruitmentAlias {
             )""".update.run()
     }
 
-  def selectLatest(clubId: ClubId, alias: String): ZIO[Transactor, SQLException, Option[RecruitmentAlias]] =
+  def selectLatest(clubId: ClubId, alias: String): ZIO[PostgresClient, SQLException, Option[RecruitmentAlias]] =
     connectZIO {
       sql"""SELECT $selectCols FROM recruitment_alias
             WHERE club_id = $clubId AND alias = $alias
@@ -36,7 +37,7 @@ object RecruitmentAlias {
         .query[RecruitmentAlias].run().headOption
     }
 
-  def selectClub(clubId: ClubId): ZIO[Transactor, SQLException, List[RecruitmentAlias]] =
+  def selectClub(clubId: ClubId): ZIO[PostgresClient, SQLException, List[RecruitmentAlias]] =
     connectZIO {
       sql"""SELECT DISTINCT ON (alias) $selectCols FROM recruitment_alias
             WHERE club_id = $clubId
@@ -44,20 +45,20 @@ object RecruitmentAlias {
         .query[RecruitmentAlias].run().toList
     }
 
-  def countDistinct(clubId: ClubId): ZIO[Transactor, SQLException, Int] =
+  def countDistinct(clubId: ClubId): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"SELECT COUNT(DISTINCT alias) FROM recruitment_alias WHERE club_id = $clubId"
         .query[Int].run().head
     }
 
-  def insert(item: RecruitmentAlias): ZIO[Transactor, SQLException, Int] =
+  def insert(item: RecruitmentAlias): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""INSERT INTO recruitment_alias (club_id, alias, since, criteria_id)
             VALUES (${item.clubId}, ${item.alias}, ${item.since}, ${item.criteriaId})"""
         .update.run()
     }
 
-  def deleteAll: ZIO[Transactor, SQLException, Int] =
+  def deleteAll: ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"DELETE FROM recruitment_alias".update.run()
     }

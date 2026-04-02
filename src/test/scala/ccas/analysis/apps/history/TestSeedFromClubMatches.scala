@@ -2,7 +2,7 @@ package ccas.analysis.apps.history
 
 import java.time.{Duration, Instant, LocalDateTime, ZoneOffset}
 
-import com.augustnagro.magnum.Transactor
+import ccas.utils.sql.PostgresClient
 import zio.{RIO, ZIO}
 import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
@@ -55,7 +55,7 @@ object TestSeedFromClubMatches extends ZIOSpecDefault {
 
   private def fakeChessComClient(
     clubMatchesJson: String
-  ): RIO[Transactor, ChessComClient] = {
+  ): RIO[PostgresClient, ChessComClient] = {
     val routes: Routes[Any, Response] = Routes(
       Method.GET / "pub" / "club" / string("club") / "matches" -> handler { (_: String, _: Request) =>
         Response.json(clubMatchesJson)
@@ -81,7 +81,7 @@ object TestSeedFromClubMatches extends ZIOSpecDefault {
       _      <- ClubMatch.upsert(clubMatchRow(1002))
       client <- fakeChessComClient(json)
       count <- HistorySeeding.seedFromClubMatches(client, clubId, clubSlug)
-        .provideSomeEnvironment[Transactor](_.add[CcasLogger](TestCcasLogger.noop))
+        .provideSomeEnvironment[PostgresClient](_.add[CcasLogger](TestCcasLogger.noop))
       pending <- HistoryPendingMatch.selectClub(clubId)
     } yield assertTrue(count == 0, pending.isEmpty)
   }
@@ -93,7 +93,7 @@ object TestSeedFromClubMatches extends ZIOSpecDefault {
       _      <- Club.upsert(opponentClub)
       client <- fakeChessComClient(json)
       count <- HistorySeeding.seedFromClubMatches(client, clubId, clubSlug)
-        .provideSomeEnvironment[Transactor](_.add[CcasLogger](TestCcasLogger.noop))
+        .provideSomeEnvironment[PostgresClient](_.add[CcasLogger](TestCcasLogger.noop))
       pending <- HistoryPendingMatch.selectClub(clubId)
       _       <- ZIO.foreachDiscard(pending)(p => HistoryPendingMatch.delete(clubId, p.matchId, p.isLive))
     } yield assertTrue(
@@ -110,7 +110,7 @@ object TestSeedFromClubMatches extends ZIOSpecDefault {
       _      <- ClubMatch.upsert(clubMatchRow(3001))
       client <- fakeChessComClient(json)
       count <- HistorySeeding.seedFromClubMatches(client, clubId, clubSlug)
-        .provideSomeEnvironment[Transactor](_.add[CcasLogger](TestCcasLogger.noop))
+        .provideSomeEnvironment[PostgresClient](_.add[CcasLogger](TestCcasLogger.noop))
       pending <- HistoryPendingMatch.selectClub(clubId)
       _       <- ZIO.foreachDiscard(pending)(p => HistoryPendingMatch.delete(clubId, p.matchId, p.isLive))
     } yield assertTrue(

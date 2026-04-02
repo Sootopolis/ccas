@@ -3,7 +3,6 @@ package ccas.analysis.apps.membership
 import java.time.Instant
 import scala.annotation.tailrec
 
-import com.augustnagro.magnum.Transactor
 import zio.{Chunk, NonEmptyChunk, RIO, Scope, Task, ZIO, ZIOAppArgs, ZIOAppDefault}
 import zio.http.Client
 
@@ -14,8 +13,8 @@ import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId}
 import ccas.utils.{CcasLogger, OutputFile}
 import ccas.utils.client.ChessComClient
 import ccas.utils.errors.BadRequestException
-import ccas.utils.sql.DataSourceLayer
-import ccas.utils.sql.SqlZioTypes.withTransaction
+import ccas.utils.sql.PostgresClient
+import ccas.utils.sql.PostgresClient.withTransaction
 
 object MembershipApp extends ZIOAppDefault {
   private val help = "Usage: MembershipApp <club-slug> [club-slug ...] [--since <date>] [--until <date>]"
@@ -46,7 +45,7 @@ object MembershipApp extends ZIOAppDefault {
       CcasLogger.live(showProgress = true),
       ChessComClient.live("membership"),
       Client.default,
-      DataSourceLayer.liveFromPrefix(onInit = Tables.ensureTables)
+      PostgresClient.live(onInit = Tables.ensureTables)
     )
 
   private sealed trait RunMode
@@ -98,7 +97,7 @@ object MembershipApp extends ZIOAppDefault {
   private def reconcileIfStale(
     clubSlug: ClubSlug,
     until: Instant
-  ): RIO[CcasLogger & ChessComClient & Transactor, Unit] =
+  ): RIO[CcasLogger & ChessComClient & PostgresClient, Unit] =
     for {
       clubOpt <- Club.selectBySlug(clubSlug)
       _ <- ZIO.fromOption(clubOpt).flatMap { club =>
@@ -117,7 +116,7 @@ object MembershipApp extends ZIOAppDefault {
     trackRun: Boolean = true,
     trigger: RunTrigger = RunTrigger.Cli,
     jobRunId: Option[JobRunId] = None
-  ): RIO[CcasLogger & ChessComClient & Transactor, ReconciliationResult] =
+  ): RIO[CcasLogger & ChessComClient & PostgresClient, ReconciliationResult] =
     for {
       startedAt <- ZIO.succeed(Instant.now())
       client    <- ZIO.service[ChessComClient]
@@ -147,7 +146,7 @@ object MembershipApp extends ZIOAppDefault {
       _ <- ZIO.foreachDiscard(runId)(id => MembershipRun.complete(id, completedAt))
     } yield mergeResults(phaseB, phaseC, apiMap.size, dbState.membersByPlayerId.size, startedAt, completedAt)
 
-  private[membership] def buildDbState(clubId: ClubId): RIO[Transactor, DbState] =
+  private[membership] def buildDbState(clubId: ClubId): RIO[PostgresClient, DbState] =
     for {
       players <- Player.selectAll
       members <- ClubMember.selectClubCurrent(clubId)
@@ -187,7 +186,7 @@ object MembershipApp extends ZIOAppDefault {
   private def persist(
     b: MembershipClassify.PhaseBResult,
     c: MembershipClassify.PhaseCResult
-  ): RIO[Transactor, Unit] = {
+  ): RIO[PostgresClient, Unit] = {
     val allUpdated      = b.updatedPlayers ++ c.updatedPlayers
     val allArchived     = b.archivedSnapshots ++ c.archivedSnapshots
     val allClosedMships = b.closedMemberships ++ c.closedMemberships
@@ -209,8 +208,8 @@ object MembershipApp extends ZIOAppDefault {
   private def withNameFallback[Name, T](
     name: Name,
     effect: Name => Task[T],
-    resolve: Name => RIO[Transactor, Option[Name]]
-  ): RIO[Transactor, (T, Name)] = effect(name).map(_ -> name).catchAll { originalError =>
+    resolve: Name => RIO[PostgresClient, Option[Name]]
+  ): RIO[PostgresClient, (T, Name)] = effect(name).map(_ -> name).catchAll { originalError =>
     resolve(name).flatMap {
       case None          => ZIO.fail(originalError)
       case Some(newName) => effect(newName).map(_ -> newName)
@@ -220,7 +219,7 @@ object MembershipApp extends ZIOAppDefault {
   private def resolveClubSlug(
     client: ChessComClient,
     oldUrlName: ClubSlug
-  ): RIO[Transactor, Option[ClubSlug]] =
+  ): RIO[PostgresClient, Option[ClubSlug]] =
     (for {
       clubOpt <- Club.selectBySlug(oldUrlName)
       refOpt  <- ZIO.foreach(clubOpt)(club => ClubMatchRef.selectId(club.clubId)).map(_.flatten)

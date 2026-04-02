@@ -3,7 +3,7 @@ package ccas.analysis.apps.recruitment
 import java.time.temporal.ChronoUnit
 import java.time.Instant
 
-import com.augustnagro.magnum.Transactor
+import ccas.utils.sql.PostgresClient
 import zio.{RIO, Task, UIO, ZIO}
 
 import ccas.analysis.tables.*
@@ -22,10 +22,10 @@ private[recruitment] object RecruitmentExplore {
     ctx: ExploreContext,
     activePool: Map[String, SourceState],
     pendingSources: List[SourceDescriptor],
-    staticStrategies: List[RIO[CcasLogger & Transactor, List[SourceDescriptor]]],
+    staticStrategies: List[RIO[CcasLogger & PostgresClient, List[SourceDescriptor]]],
     visitedClubs: Set[ClubSlug],
     roundRobinKeys: List[String]
-  ): RIO[CcasLogger & Transactor, Unit] =
+  ): RIO[CcasLogger & PostgresClient, Unit] =
     for {
       invited <- ctx.invitedRef.get
       _ <- ZIO.unlessDiscard(invited.size >= ctx.target) {
@@ -40,9 +40,9 @@ private[recruitment] object RecruitmentExplore {
     ctx: ExploreContext,
     activePool: Map[String, SourceState],
     visitedClubs: Set[ClubSlug],
-    staticStrategies: List[RIO[CcasLogger & Transactor, List[SourceDescriptor]]],
+    staticStrategies: List[RIO[CcasLogger & PostgresClient, List[SourceDescriptor]]],
     roundRobinKeys: List[String]
-  ): RIO[CcasLogger & Transactor, Unit] =
+  ): RIO[CcasLogger & PostgresClient, Unit] =
     for {
       evaluated   <- ctx.evaluatedRef.get
       replenished <- replenish(ctx, evaluated, staticStrategies)
@@ -56,10 +56,10 @@ private[recruitment] object RecruitmentExplore {
     ctx: ExploreContext,
     activePool: Map[String, SourceState],
     pendingSources: List[SourceDescriptor],
-    staticStrategies: List[RIO[CcasLogger & Transactor, List[SourceDescriptor]]],
+    staticStrategies: List[RIO[CcasLogger & PostgresClient, List[SourceDescriptor]]],
     visitedClubs: Set[ClubSlug],
     roundRobinKeys: List[String]
-  ): RIO[CcasLogger & Transactor, Unit] =
+  ): RIO[CcasLogger & PostgresClient, Unit] =
     for {
       evaluated  <- ctx.evaluatedRef.get
       activation <- activateSources(ctx, activePool, pendingSources, evaluated, visitedClubs)
@@ -104,7 +104,7 @@ private[recruitment] object RecruitmentExplore {
         }
     } yield ()
 
-  private def checkRecentlyRejected(ctx: ExploreContext, username: Username): RIO[Transactor, Boolean] =
+  private def checkRecentlyRejected(ctx: ExploreContext, username: Username): RIO[PostgresClient, Boolean] =
     ctx.runCtx.criteria.daysSinceRejected.fold(ZIO.succeed(false)) { days =>
       for {
         playerOpt <- Player.selectByUsername(username)
@@ -124,10 +124,10 @@ private[recruitment] object RecruitmentExplore {
     sourceState: SourceState,
     sourceId: String,
     pendingSources: List[SourceDescriptor],
-    staticStrategies: List[RIO[CcasLogger & Transactor, List[SourceDescriptor]]],
+    staticStrategies: List[RIO[CcasLogger & PostgresClient, List[SourceDescriptor]]],
     visitedClubs: Set[ClubSlug],
     nextKeys: List[String]
-  ): RIO[CcasLogger & Transactor, Unit] = {
+  ): RIO[CcasLogger & PostgresClient, Unit] = {
     val (chunk, rest) = sourceState.remaining.splitAt(ctx.evalChunkSize)
     val pool3         = pool.updated(sourceId, sourceState.copy(remaining = rest))
     for {
@@ -194,7 +194,7 @@ private[recruitment] object RecruitmentExplore {
   /** When found count exceeds the target, trim the newest excess from invitedRef. All candidates are already Deferred
     * in the DB; no status flip needed here.
     */
-  def reclassifyExcessInvited(ctx: ExploreContext): RIO[Transactor, Unit] =
+  def reclassifyExcessInvited(ctx: ExploreContext): RIO[PostgresClient, Unit] =
     for {
       invited <- ctx.invitedRef.get
       excess = invited.size - ctx.target
@@ -210,7 +210,7 @@ private[recruitment] object RecruitmentExplore {
     pendingSources: List[SourceDescriptor],
     evaluatedUsernames: Set[Username],
     visitedClubs: Set[ClubSlug]
-  ): RIO[CcasLogger & Transactor, ActivationResult] = {
+  ): RIO[CcasLogger & PostgresClient, ActivationResult] = {
     val slotsAvailable = ctx.exploreConcurrency - activePool.size
     if (slotsAvailable <= 0 || pendingSources.isEmpty)
       ZIO.succeed(ActivationResult(activePool, pendingSources, visitedClubs))
@@ -254,7 +254,7 @@ private[recruitment] object RecruitmentExplore {
     ctx: ExploreContext,
     source: SourceDescriptor,
     evaluatedUsernames: Set[Username]
-  ): RIO[CcasLogger & Transactor, List[Username]] =
+  ): RIO[CcasLogger & PostgresClient, List[Username]] =
     source match {
       case ClubSource(clubSlug) =>
         for {
@@ -280,10 +280,10 @@ private[recruitment] object RecruitmentExplore {
   private def replenish(
     ctx: ExploreContext,
     evaluatedUsernames: Set[Username],
-    staticStrategies: List[RIO[CcasLogger & Transactor, List[SourceDescriptor]]]
+    staticStrategies: List[RIO[CcasLogger & PostgresClient, List[SourceDescriptor]]]
   ): RIO[
-    CcasLogger & Transactor,
-    (List[SourceDescriptor], List[RIO[CcasLogger & Transactor, List[SourceDescriptor]]])
+    CcasLogger & PostgresClient,
+    (List[SourceDescriptor], List[RIO[CcasLogger & PostgresClient, List[SourceDescriptor]]])
   ] =
     if (!ctx.explore) ZIO.succeed((Nil, staticStrategies))
     else
@@ -313,7 +313,7 @@ private[recruitment] object RecruitmentExplore {
   def discoverCandidateOpponents(
     client: ChessComClient,
     now: Instant
-  ): RIO[CcasLogger & Transactor, List[SourceDescriptor]] = {
+  ): RIO[CcasLogger & PostgresClient, List[SourceDescriptor]] = {
     val cutoff = now.minus(90, ChronoUnit.DAYS)
     val months = RecruitmentStatsHelpers.recentArchiveMonths(now, 90)
     for {
@@ -336,7 +336,7 @@ private[recruitment] object RecruitmentExplore {
       else List(UsernameSource("db-candidate-opponents", allOpponents.toList))
   }
 
-  def discoverMatchBoardOpponents(clubId: ClubId): RIO[CcasLogger & Transactor, List[SourceDescriptor]] =
+  def discoverMatchBoardOpponents(clubId: ClubId): RIO[CcasLogger & PostgresClient, List[SourceDescriptor]] =
     for {
       matchIds <- ClubMatch.selectMatchIdsForClub(clubId)
       matches <- ZIO.foreach(matchIds.toList)(ClubMatch.selectId).map(

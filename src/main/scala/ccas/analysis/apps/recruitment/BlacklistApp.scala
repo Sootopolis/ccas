@@ -2,7 +2,6 @@ package ccas.analysis.apps.recruitment
 
 import java.time.{Instant, ZoneOffset}
 
-import com.augustnagro.magnum.Transactor
 import zio.{Console, RIO, Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
 import zio.http.Client
 
@@ -12,7 +11,7 @@ import ccas.api.misc.subtypes.{ClubSlug, Username}
 import ccas.api.player.ApiPlayer
 import ccas.utils.client.ChessComClient
 import ccas.utils.errors.{BadRequestException, NotFoundException}
-import ccas.utils.sql.DataSourceLayer
+import ccas.utils.sql.PostgresClient
 import ccas.utils.CcasLogger
 
 object BlacklistApp extends ZIOAppDefault {
@@ -43,7 +42,7 @@ object BlacklistApp extends ZIOAppDefault {
       CcasLogger.live(showProgress = true),
       ChessComClient.live("blacklist"),
       Client.default,
-      DataSourceLayer.liveFromPrefix(onInit = Tables.ensureTables)
+      PostgresClient.live(onInit = Tables.ensureTables)
     )
 
   def addToBlacklist(
@@ -51,7 +50,7 @@ object BlacklistApp extends ZIOAppDefault {
     usernames: List[Username],
     reason: Option[String],
     expiresAt: Option[Instant]
-  ): RIO[ChessComClient & Transactor, Unit] =
+  ): RIO[ChessComClient & PostgresClient, Unit] =
     for {
       client  <- ZIO.service[ChessComClient]
       apiClub <- ApiClub.get(client, clubSlug)
@@ -81,7 +80,7 @@ object BlacklistApp extends ZIOAppDefault {
       }
     } yield ()
 
-  def listBlacklist(clubSlug: ClubSlug): RIO[Transactor, Unit] =
+  def listBlacklist(clubSlug: ClubSlug): RIO[PostgresClient, Unit] =
     for {
       club <- Club.selectBySlug(clubSlug).someOrFail(NotFoundException(s"Club not found: $clubSlug"))
       now = Instant.now()
@@ -99,7 +98,7 @@ object BlacklistApp extends ZIOAppDefault {
         }
     } yield ()
 
-  def removeFromBlacklist(clubSlug: ClubSlug, username: Username): RIO[Transactor, Unit] =
+  def removeFromBlacklist(clubSlug: ClubSlug, username: Username): RIO[PostgresClient, Unit] =
     for {
       club <- Club.selectBySlug(clubSlug).someOrFail(NotFoundException(s"Club not found: $clubSlug"))
       ps   <- Player.selectByUsername(username).someOrFail(NotFoundException(s"Player not found: $username"))

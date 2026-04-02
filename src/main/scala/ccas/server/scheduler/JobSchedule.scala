@@ -10,7 +10,8 @@ import ccas.api.misc.subtypes.ClubId
 import ccas.server.jobs.JobKind
 import ccas.server.jobs.JobKind.given
 import ccas.utils.sql.DbCodecs.given
-import ccas.utils.sql.SqlZioTypes.connectZIO
+import ccas.utils.sql.PostgresClient
+import ccas.utils.sql.PostgresClient.connectZIO
 
 @Table(PostgresDbType, SqlNameMapper.CamelToSnakeCase)
 case class JobSchedule(
@@ -27,7 +28,7 @@ object JobSchedule {
 
   private val columns = SqlLiteral("id, kind, club_id, params, interval_hours, enabled, last_run_at")
 
-  def createTable: ZIO[Transactor, SQLException, Int] =
+  def createTable: ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""CREATE TABLE IF NOT EXISTS job_schedule (
               id              BIGSERIAL PRIMARY KEY,
@@ -41,22 +42,22 @@ object JobSchedule {
             )""".update.run()
     }
 
-  def selectAll: ZIO[Transactor, SQLException, List[JobSchedule]] =
+  def selectAll: ZIO[PostgresClient, SQLException, List[JobSchedule]] =
     connectZIO {
       sql"SELECT $columns FROM job_schedule ORDER BY id".query[JobSchedule].run().toList
     }
 
-  def selectEnabled: ZIO[Transactor, SQLException, List[JobSchedule]] =
+  def selectEnabled: ZIO[PostgresClient, SQLException, List[JobSchedule]] =
     connectZIO {
       sql"SELECT $columns FROM job_schedule WHERE enabled = TRUE".query[JobSchedule].run().toList
     }
 
-  def selectId(id: Long): ZIO[Transactor, SQLException, Option[JobSchedule]] =
+  def selectId(id: Long): ZIO[PostgresClient, SQLException, Option[JobSchedule]] =
     connectZIO {
       sql"SELECT $columns FROM job_schedule WHERE id = $id".query[JobSchedule].run().headOption
     }
 
-  def insert(schedule: JobSchedule): ZIO[Transactor, SQLException, Long] =
+  def insert(schedule: JobSchedule): ZIO[PostgresClient, SQLException, Long] =
     connectZIO {
       sql"""INSERT INTO job_schedule (kind, club_id, params, interval_hours, enabled, last_run_at)
             VALUES (${schedule.kind}, ${schedule.clubId}, ${schedule.params},
@@ -64,7 +65,7 @@ object JobSchedule {
             RETURNING id""".query[Long].run().headOption
     }.someOrFail(new SQLException("INSERT RETURNING produced no rows"))
 
-  def updateLastRunAt(id: Long, at: Instant): ZIO[Transactor, SQLException, Int] =
+  def updateLastRunAt(id: Long, at: Instant): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"UPDATE job_schedule SET last_run_at = $at WHERE id = $id".update.run()
     }
@@ -74,7 +75,7 @@ object JobSchedule {
     intervalHours: Option[Short],
     enabled: Option[Boolean],
     params: Option[Option[String]]
-  ): ZIO[Transactor, SQLException, Int] =
+  ): ZIO[PostgresClient, SQLException, Int] =
     if (intervalHours.isEmpty && enabled.isEmpty && params.isEmpty) ZIO.succeed(0)
     else {
       val hasParams   = params.isDefined
@@ -88,7 +89,7 @@ object JobSchedule {
       }
     }
 
-  def delete(id: Long): ZIO[Transactor, SQLException, Int] =
+  def delete(id: Long): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"DELETE FROM job_schedule WHERE id = $id".update.run()
     }

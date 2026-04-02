@@ -11,7 +11,8 @@ import ccas.api.club.ApiClub
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 import ccas.utils.client.ChessComClient
 import ccas.utils.sql.DbCodecs.given
-import ccas.utils.sql.SqlZioTypes.{connectZIO, transactZIO}
+import ccas.utils.sql.PostgresClient
+import ccas.utils.sql.PostgresClient.{connectZIO, transactZIO}
 
 @Table(PostgresDbType, SqlNameMapper.CamelToSnakeCase)
 final case class Club(@Id clubId: ClubId, created: Instant, slug: ClubSlug, name: String) derives DbCodec
@@ -19,7 +20,7 @@ final case class Club(@Id clubId: ClubId, created: Instant, slug: ClubSlug, name
 object Club {
   private val repo = ImmutableRepo[Club, ClubId]
 
-  def createTable: ZIO[Transactor, SQLException, Int] =
+  def createTable: ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""CREATE TABLE IF NOT EXISTS club (
               club_id  BIGINT PRIMARY KEY,
@@ -30,19 +31,19 @@ object Club {
       sql"CREATE UNIQUE INDEX IF NOT EXISTS club_slug_key ON club (slug)".update.run()
     }
 
-  def selectAll: ZIO[Transactor, SQLException, List[Club]] =
+  def selectAll: ZIO[PostgresClient, SQLException, List[Club]] =
     connectZIO(repo.findAll.toList)
 
-  def selectId(clubId: ClubId): ZIO[Transactor, SQLException, Option[Club]] =
+  def selectId(clubId: ClubId): ZIO[PostgresClient, SQLException, Option[Club]] =
     connectZIO(repo.findById(clubId))
 
-  def selectBySlug(slug: ClubSlug): ZIO[Transactor, SQLException, Option[Club]] =
+  def selectBySlug(slug: ClubSlug): ZIO[PostgresClient, SQLException, Option[Club]] =
     connectZIO {
       sql"SELECT club_id, created, slug, name FROM club WHERE slug = $slug"
         .query[Club].run().headOption
     }
 
-  def upsert(club: Club): ZIO[Transactor, SQLException, Int] =
+  def upsert(club: Club): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""INSERT INTO club (club_id, created, slug, name) VALUES (${club.clubId}, ${club.created}, ${club.slug}, ${club.name})
             ON CONFLICT (club_id) DO UPDATE SET slug = EXCLUDED.slug, name = EXCLUDED.name""".update.run()
@@ -54,7 +55,7 @@ object Club {
     * matches and fetches the team URL from the Chess.com API to discover its current slug. Falls back to a placeholder
     * if the stale club has no matches.
     */
-  def upsertResolvingSlugConflict(club: Club, client: ChessComClient): ZIO[Transactor, Throwable, Int] =
+  def upsertResolvingSlugConflict(club: Club, client: ChessComClient): ZIO[PostgresClient, Throwable, Int] =
     for {
       existing <- selectBySlug(club.slug)
       _ <- existing match {
@@ -64,7 +65,7 @@ object Club {
       result <- upsert(club)
     } yield result
 
-  private def resolveStaleSlug(stale: Club, client: ChessComClient): ZIO[Transactor, Throwable, Unit] =
+  private def resolveStaleSlug(stale: Club, client: ChessComClient): ZIO[PostgresClient, Throwable, Unit] =
     ClubMatch.selectClubMatchRef(stale.clubId).flatMap {
       case Some(ref) =>
         RefHelpers.fetchTeamMatchTeams(client, ref.matchId, ref.isLive).flatMap { teams =>
@@ -83,7 +84,7 @@ object Club {
     }
 
   /** Resolves a club slug to its ID, fetching from the Chess.com API and persisting if not already in the database. */
-  def resolveOrFetch(client: ChessComClient, slug: ClubSlug): ZIO[Transactor, SQLException, Option[ClubId]] =
+  def resolveOrFetch(client: ChessComClient, slug: ClubSlug): ZIO[PostgresClient, SQLException, Option[ClubId]] =
     selectBySlug(slug).flatMap {
       case Some(club) => ZIO.some(club.clubId)
       case None =>
@@ -94,7 +95,7 @@ object Club {
         } yield Option(apiClub.clubId)).catchAll(_ => ZIO.none)
     }
 
-  def upsertBatch(clubs: Iterable[Club]): ZIO[Transactor, SQLException, BatchUpdateResult] =
+  def upsertBatch(clubs: Iterable[Club]): ZIO[PostgresClient, SQLException, BatchUpdateResult] =
     transactZIO {
       batchUpdate(clubs) { club =>
         sql"""INSERT INTO club (club_id, created, slug, name) VALUES (${club.clubId}, ${club.created}, ${club.slug}, ${club.name})

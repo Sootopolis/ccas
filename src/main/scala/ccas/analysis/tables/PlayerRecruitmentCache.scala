@@ -8,7 +8,8 @@ import zio.ZIO
 
 import ccas.api.misc.subtypes.{Elo, PlayerId}
 import ccas.utils.sql.DbCodecs.given
-import ccas.utils.sql.SqlZioTypes.connectZIO
+import ccas.utils.sql.PostgresClient
+import ccas.utils.sql.PostgresClient.connectZIO
 
 final case class PlayerRecruitmentCache(
   playerId: PlayerId,
@@ -50,7 +51,7 @@ object PlayerRecruitmentCache {
        last_daily_timeout_at, last_tm_timeout_at"""
   )
 
-  def createTable: ZIO[Transactor, SQLException, Int] =
+  def createTable: ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""CREATE TABLE IF NOT EXISTS player_recruitment_cache (
               player_id              BIGINT PRIMARY KEY REFERENCES player (player_id) ON DELETE RESTRICT,
@@ -69,13 +70,13 @@ object PlayerRecruitmentCache {
             )""".update.run()
     }
 
-  def selectId(playerId: PlayerId): ZIO[Transactor, SQLException, Option[PlayerRecruitmentCache]] =
+  def selectId(playerId: PlayerId): ZIO[PostgresClient, SQLException, Option[PlayerRecruitmentCache]] =
     connectZIO {
       sql"SELECT $selectCols FROM player_recruitment_cache WHERE player_id = $playerId"
         .query[PlayerRecruitmentCache].run().headOption
     }
 
-  def selectTmActive(limit: Int): ZIO[Transactor, SQLException, Vector[PlayerRecruitmentCache]] =
+  def selectTmActive(limit: Int): ZIO[PostgresClient, SQLException, Vector[PlayerRecruitmentCache]] =
     connectZIO {
       sql"""SELECT $selectCols FROM player_recruitment_cache
             WHERE tm_games_finished_90d > 0 OR ongoing_team_matches > 0
@@ -83,7 +84,7 @@ object PlayerRecruitmentCache {
         .query[PlayerRecruitmentCache].run()
     }
 
-  def upsert(item: PlayerRecruitmentCache): ZIO[Transactor, SQLException, Int] =
+  def upsert(item: PlayerRecruitmentCache): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""INSERT INTO player_recruitment_cache (
               player_id, fetched_at, daily_elo, daily_score_rate, daily_timeout_pct, daily_games_finished,
@@ -110,7 +111,7 @@ object PlayerRecruitmentCache {
               last_tm_timeout_at = EXCLUDED.last_tm_timeout_at""".update.run()
     }
 
-  def deleteAll: ZIO[Transactor, SQLException, Int] =
+  def deleteAll: ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"DELETE FROM player_recruitment_cache".update.run()
     }

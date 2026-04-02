@@ -8,7 +8,8 @@ import zio.ZIO
 
 import ccas.api.misc.subtypes.{ClubId, PlayerId, Username}
 import ccas.utils.sql.DbCodecs.given
-import ccas.utils.sql.SqlZioTypes.connectZIO
+import ccas.utils.sql.PostgresClient
+import ccas.utils.sql.PostgresClient.connectZIO
 
 final case class BlacklistEntry(
   clubId: ClubId,
@@ -29,7 +30,7 @@ final case class RecruitmentBlacklist(
 
 object RecruitmentBlacklist {
 
-  def createTable: ZIO[Transactor, SQLException, Int] =
+  def createTable: ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""CREATE TABLE IF NOT EXISTS recruitment_blacklist (
               club_id    BIGINT NOT NULL,
@@ -43,14 +44,14 @@ object RecruitmentBlacklist {
             )""".update.run()
     }
 
-  def selectByClub(clubId: ClubId): ZIO[Transactor, SQLException, List[RecruitmentBlacklist]] =
+  def selectByClub(clubId: ClubId): ZIO[PostgresClient, SQLException, List[RecruitmentBlacklist]] =
     connectZIO {
       sql"""SELECT club_id, player_id, added_at, expires_at, reason
             FROM recruitment_blacklist WHERE club_id = $clubId"""
         .query[RecruitmentBlacklist].run().toList
     }
 
-  def selectActiveByClub(clubId: ClubId, now: Instant): ZIO[Transactor, SQLException, List[BlacklistEntry]] =
+  def selectActiveByClub(clubId: ClubId, now: Instant): ZIO[PostgresClient, SQLException, List[BlacklistEntry]] =
     connectZIO {
       sql"""SELECT rb.club_id, rb.player_id, p.username, rb.added_at, rb.expires_at, rb.reason
             FROM recruitment_blacklist rb
@@ -61,7 +62,7 @@ object RecruitmentBlacklist {
         .query[BlacklistEntry].run().toList
     }
 
-  def isBlacklisted(clubId: ClubId, playerId: PlayerId, now: Instant): ZIO[Transactor, SQLException, Boolean] =
+  def isBlacklisted(clubId: ClubId, playerId: PlayerId, now: Instant): ZIO[PostgresClient, SQLException, Boolean] =
     connectZIO {
       sql"""SELECT 1 FROM recruitment_blacklist
             WHERE club_id = $clubId AND player_id = $playerId
@@ -69,13 +70,13 @@ object RecruitmentBlacklist {
         .query[Int].run().nonEmpty
     }
 
-  def insert(item: RecruitmentBlacklist): ZIO[Transactor, SQLException, Int] =
+  def insert(item: RecruitmentBlacklist): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""INSERT INTO recruitment_blacklist (club_id, player_id, added_at, expires_at, reason)
             VALUES (${item.clubId}, ${item.playerId}, ${item.addedAt}, ${item.expiresAt}, ${item.reason})""".update.run()
     }
 
-  def upsert(item: RecruitmentBlacklist): ZIO[Transactor, SQLException, Int] =
+  def upsert(item: RecruitmentBlacklist): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""INSERT INTO recruitment_blacklist (club_id, player_id, added_at, expires_at, reason)
             VALUES (${item.clubId}, ${item.playerId}, ${item.addedAt}, ${item.expiresAt}, ${item.reason})
@@ -85,12 +86,12 @@ object RecruitmentBlacklist {
               reason = EXCLUDED.reason""".update.run()
     }
 
-  def delete(clubId: ClubId, playerId: PlayerId): ZIO[Transactor, SQLException, Int] =
+  def delete(clubId: ClubId, playerId: PlayerId): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"DELETE FROM recruitment_blacklist WHERE club_id = $clubId AND player_id = $playerId".update.run()
     }
 
-  def deleteAll: ZIO[Transactor, SQLException, Int] =
+  def deleteAll: ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"DELETE FROM recruitment_blacklist".update.run()
     }

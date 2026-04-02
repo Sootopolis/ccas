@@ -6,7 +6,8 @@ import com.augustnagro.magnum.*
 import zio.ZIO
 
 import ccas.api.misc.subtypes.{ClubMatchId, PlayerId}
-import ccas.utils.sql.SqlZioTypes.{connectZIO, transactZIO}
+import ccas.utils.sql.PostgresClient
+import ccas.utils.sql.PostgresClient.{connectZIO, transactZIO}
 
 @Table(PostgresDbType, SqlNameMapper.CamelToSnakeCase)
 final case class PlayerMatchRef(
@@ -20,7 +21,7 @@ final case class PlayerMatchRef(
 object PlayerMatchRef {
   private val repo = ImmutableRepo[PlayerMatchRef, PlayerId]
 
-  def createTable: ZIO[Transactor, SQLException, Int] =
+  def createTable: ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""CREATE TABLE IF NOT EXISTS player_match_ref (
               player_id  BIGINT PRIMARY KEY REFERENCES player (player_id) ON DELETE RESTRICT,
@@ -31,16 +32,16 @@ object PlayerMatchRef {
             )""".update.run()
     }
 
-  def selectId(playerId: PlayerId): ZIO[Transactor, SQLException, Option[PlayerMatchRef]] =
+  def selectId(playerId: PlayerId): ZIO[PostgresClient, SQLException, Option[PlayerMatchRef]] =
     connectZIO(repo.findById(playerId))
 
-  def insert(ref: PlayerMatchRef): ZIO[Transactor, SQLException, Int] =
+  def insert(ref: PlayerMatchRef): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""INSERT INTO player_match_ref (player_id, match_id, is_live, is_team1, board_idx)
             VALUES (${ref.playerId}, ${ref.matchId}, ${ref.isLive}, ${ref.isTeam1}, ${ref.boardIdx})""".update.run()
     }
 
-  def insertBatch(refs: Iterable[PlayerMatchRef]): ZIO[Transactor, SQLException, BatchUpdateResult] =
+  def insertBatch(refs: Iterable[PlayerMatchRef]): ZIO[PostgresClient, SQLException, BatchUpdateResult] =
     transactZIO {
       batchUpdate(refs) { ref =>
         sql"""INSERT INTO player_match_ref (player_id, match_id, is_live, is_team1, board_idx)
@@ -48,9 +49,9 @@ object PlayerMatchRef {
       }
     }
 
-  def deleteId(playerId: PlayerId): ZIO[Transactor, SQLException, Int] =
+  def deleteId(playerId: PlayerId): ZIO[PostgresClient, SQLException, Int] =
     connectZIO(sql"DELETE FROM player_match_ref WHERE player_id = $playerId".update.run())
 
-  def deleteAll: ZIO[Transactor, SQLException, Int] =
+  def deleteAll: ZIO[PostgresClient, SQLException, Int] =
     connectZIO(sql"DELETE FROM player_match_ref".update.run())
 }

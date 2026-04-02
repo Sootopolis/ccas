@@ -10,7 +10,8 @@ import ccas.api.misc.enums.PlayerStatusCategory
 import ccas.api.misc.enums.Title
 import ccas.api.misc.subtypes.{PlayerId, Username}
 import ccas.utils.sql.DbCodecs.given
-import ccas.utils.sql.SqlZioTypes.{connectZIO, transactZIO}
+import ccas.utils.sql.PostgresClient
+import ccas.utils.sql.PostgresClient.{connectZIO, transactZIO}
 
 @Table(PostgresDbType, SqlNameMapper.CamelToSnakeCase)
 final case class Player(
@@ -34,7 +35,7 @@ object Player {
 
   private val selectCols = SqlLiteral("player_id, joined, username, status, title, since")
 
-  def createTable: ZIO[Transactor, SQLException, Int] =
+  def createTable: ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""CREATE TABLE IF NOT EXISTS player (
               player_id BIGINT PRIMARY KEY,
@@ -47,13 +48,13 @@ object Player {
             )""".update.run()
     }
 
-  def selectAll: ZIO[Transactor, SQLException, List[Player]] =
+  def selectAll: ZIO[PostgresClient, SQLException, List[Player]] =
     connectZIO(repo.findAll.toList)
 
-  def selectId(playerId: PlayerId): ZIO[Transactor, SQLException, Option[Player]] =
+  def selectId(playerId: PlayerId): ZIO[PostgresClient, SQLException, Option[Player]] =
     connectZIO(repo.findById(playerId))
 
-  def selectByIds(playerIds: Iterable[PlayerId]): ZIO[Transactor, SQLException, List[Player]] =
+  def selectByIds(playerIds: Iterable[PlayerId]): ZIO[PostgresClient, SQLException, List[Player]] =
     if (playerIds.isEmpty) { ZIO.succeed(Nil) }
     else {
       connectZIO {
@@ -62,7 +63,7 @@ object Player {
       }
     }
 
-  def resolveUsernames(playerIds: Iterable[PlayerId]): ZIO[Transactor, SQLException, Map[PlayerId, Username]] =
+  def resolveUsernames(playerIds: Iterable[PlayerId]): ZIO[PostgresClient, SQLException, Map[PlayerId, Username]] =
     if (playerIds.isEmpty) { ZIO.succeed(Map.empty) }
     else {
       connectZIO {
@@ -72,28 +73,28 @@ object Player {
       }
     }
 
-  def selectByUsername(username: Username): ZIO[Transactor, SQLException, Option[Player]] =
+  def selectByUsername(username: Username): ZIO[PostgresClient, SQLException, Option[Player]] =
     connectZIO(
       sql"SELECT $selectCols FROM player WHERE username = $username".query[Player].run().headOption
     )
 
-  def selectIdForUpdate(playerId: PlayerId): ZIO[Transactor, SQLException, Option[Player]] =
+  def selectIdForUpdate(playerId: PlayerId): ZIO[PostgresClient, SQLException, Option[Player]] =
     connectZIO(
       sql"SELECT $selectCols FROM player WHERE player_id = $playerId FOR UPDATE".query[Player].run().headOption
     )
 
-  def selectByUsernameForUpdate(username: Username): ZIO[Transactor, SQLException, Option[Player]] =
+  def selectByUsernameForUpdate(username: Username): ZIO[PostgresClient, SQLException, Option[Player]] =
     connectZIO(
       sql"SELECT $selectCols FROM player WHERE username = $username FOR UPDATE".query[Player].run().headOption
     )
 
-  def insert(player: Player): ZIO[Transactor, SQLException, Unit] =
+  def insert(player: Player): ZIO[PostgresClient, SQLException, Unit] =
     connectZIO(repo.insert(player))
 
-  def insertBatch(players: Iterable[Player]): ZIO[Transactor, SQLException, Unit] =
+  def insertBatch(players: Iterable[Player]): ZIO[PostgresClient, SQLException, Unit] =
     transactZIO(repo.insertAll(players))
 
-  def insertIfNew(player: Player): ZIO[Transactor, SQLException, Int] =
+  def insertIfNew(player: Player): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""INSERT INTO player (player_id, joined, username, status, title, since)
             VALUES (${player.playerId}, ${player.joined}, ${player.username},
@@ -101,14 +102,14 @@ object Player {
             ON CONFLICT (player_id) DO NOTHING""".update.run()
     }
 
-  def updateCurrentState(player: Player): ZIO[Transactor, SQLException, Int] =
+  def updateCurrentState(player: Player): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""UPDATE player SET username = ${player.username}, status = ${player.status.toString},
               title = ${player.title.map(_.toString)}, since = ${player.since}
             WHERE player_id = ${player.playerId}""".update.run()
     }
 
-  def updateCurrentStateBatch(players: Iterable[Player]): ZIO[Transactor, SQLException, BatchUpdateResult] =
+  def updateCurrentStateBatch(players: Iterable[Player]): ZIO[PostgresClient, SQLException, BatchUpdateResult] =
     transactZIO {
       batchUpdate(players) { player =>
         sql"""UPDATE player SET username = ${player.username}, status = ${player.status.toString},
@@ -117,9 +118,9 @@ object Player {
       }
     }
 
-  def deleteId(playerId: PlayerId): ZIO[Transactor, SQLException, Unit] =
+  def deleteId(playerId: PlayerId): ZIO[PostgresClient, SQLException, Unit] =
     connectZIO(repo.deleteById(playerId))
 
-  def deleteAll: ZIO[Transactor, SQLException, Int] =
+  def deleteAll: ZIO[PostgresClient, SQLException, Int] =
     connectZIO(sql"DELETE FROM player".update.run())
 }

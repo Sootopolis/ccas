@@ -1,16 +1,15 @@
 package ccas.utils.sql
 
-import com.augustnagro.magnum.Transactor
 import zio.{RIO, TaskLayer, ZIO}
 
 object FreshSchemaLayer {
   private val schemaNamePattern = "^[a-z_][a-z0-9_]*$".r
 
-  def apply(schema: String, onInit: RIO[Transactor, Unit] = ZIO.unit): TaskLayer[Transactor] = {
-    val resetSchema: RIO[Transactor, Unit] = ZIO.serviceWithZIO[Transactor] { xa =>
+  def apply(schema: String, onInit: RIO[PostgresClient, Unit] = ZIO.unit): TaskLayer[PostgresClient] = {
+    val resetSchema: RIO[PostgresClient, Unit] = ZIO.serviceWithZIO[PostgresClient] { pgClient =>
       ZIO.attempt {
         require(schemaNamePattern.matches(schema), s"Invalid schema name: $schema")
-        val conn = xa.dataSource.getConnection
+        val conn = pgClient.transactor.dataSource.getConnection
         try {
           val stmt = conn.createStatement()
           try {
@@ -20,6 +19,6 @@ object FreshSchemaLayer {
         } finally conn.close()
       }
     }
-    DataSourceLayer.liveFromPrefix(schema = Some(schema), onInit = resetSchema *> onInit)
+    PostgresClient.live(schema = Some(schema), onInit = resetSchema *> onInit)
   }
 }

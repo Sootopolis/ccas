@@ -1,6 +1,8 @@
 package ccas.server.jobs
 
-import com.augustnagro.magnum.{sql, Transactor}
+import com.augustnagro.magnum.sql
+
+import ccas.utils.sql.PostgresClient
 import zio.{durationInt, Scope, ZIO}
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
@@ -9,7 +11,7 @@ import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId}
 import ccas.server.ServerTables
 import ccas.utils.client.TestChessComClient
 import ccas.utils.sql.FreshSchemaLayer
-import ccas.utils.sql.SqlZioTypes.connectZIO
+import ccas.utils.sql.PostgresClient.connectZIO
 import ccas.utils.CcasLogger
 
 object TestJobRunner extends ZIOSpecDefault {
@@ -51,7 +53,7 @@ object TestJobRunner extends ZIOSpecDefault {
     runner: JobRunner,
     id: JobRunId,
     maxWait: zio.Duration = 10.seconds
-  ): ZIO[com.augustnagro.magnum.Transactor, Throwable, JobRun] =
+  ): ZIO[ccas.utils.sql.PostgresClient, Throwable, JobRun] =
     runner.status(id).flatMap {
       case Some(job) if job.status != JobRunStatus.Running => ZIO.succeed(job)
       case _                                               => ZIO.sleep(100.millis) *> awaitStatus(runner, id, maxWait)

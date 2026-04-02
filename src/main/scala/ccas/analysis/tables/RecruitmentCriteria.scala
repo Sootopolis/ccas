@@ -7,7 +7,8 @@ import zio.ZIO
 
 import ccas.api.misc.subtypes.{ClubId, Elo}
 import ccas.utils.sql.DbCodecs.given
-import ccas.utils.sql.SqlZioTypes.connectZIO
+import ccas.utils.sql.PostgresClient
+import ccas.utils.sql.PostgresClient.connectZIO
 
 final case class RecruitmentCriteria(
   criteriaId: Long,
@@ -53,7 +54,7 @@ object RecruitmentCriteria {
        daily_min_ongoing_games, daily_max_ongoing_games, daily_min_ongoing_team_matches"""
   )
 
-  def createTable: ZIO[Transactor, SQLException, Int] =
+  def createTable: ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""CREATE TABLE IF NOT EXISTS recruitment_criteria (
               criteria_id                    BIGSERIAL PRIMARY KEY,
@@ -81,13 +82,13 @@ object RecruitmentCriteria {
             )""".update.run()
     }
 
-  def selectId(criteriaId: Long): ZIO[Transactor, SQLException, Option[RecruitmentCriteria]] =
+  def selectId(criteriaId: Long): ZIO[PostgresClient, SQLException, Option[RecruitmentCriteria]] =
     connectZIO {
       sql"SELECT $selectCols FROM recruitment_criteria WHERE criteria_id = $criteriaId"
         .query[RecruitmentCriteria].run().headOption
     }
 
-  def insert(item: RecruitmentCriteria): ZIO[Transactor, SQLException, Long] = {
+  def insert(item: RecruitmentCriteria): ZIO[PostgresClient, SQLException, Long] = {
     val criteria = item.capped
     connectZIO {
       sql"""INSERT INTO recruitment_criteria (
@@ -136,7 +137,7 @@ object RecruitmentCriteria {
       dailyMinOngoingTeamMatches = None
     )
 
-  def deleteAll: ZIO[Transactor, SQLException, Int] =
+  def deleteAll: ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"DELETE FROM recruitment_criteria".update.run()
     }

@@ -1,6 +1,6 @@
 package ccas.utils.client
 
-import com.augustnagro.magnum.Transactor
+import ccas.utils.sql.PostgresClient
 import io.netty.handler.codec.PrematureChannelClosureException
 import zio.*
 import zio.http.*
@@ -23,9 +23,9 @@ object TestChessComClient extends ZIOSpecDefault {
     retryBase: Duration = 10.millis,
     failureWindowSize: Int = 20,
     failureThreshold: Double = 0.2
-  ): ZIO[Scope & Transactor, Nothing, (ChessComClient, Ref[ChessComClient.ThrottleState])] =
+  ): ZIO[Scope & PostgresClient, Nothing, (ChessComClient, Ref[ChessComClient.ThrottleState])] =
     for {
-      transactor    <- ZIO.service[Transactor]
+      pgClient      <- ZIO.service[PostgresClient]
       stateRef      <- Ref.make(ChessComClient.ThrottleState(permits, 0, Vector.empty))
       activeRef     <- Ref.make(0)
       rateLimitGate <- Semaphore.make(1)
@@ -77,7 +77,7 @@ object TestChessComClient extends ZIOSpecDefault {
       }
       val client = ChessComClient(
         ZClient.fromDriver(driver),
-        transactor,
+        pgClient,
         Headers.empty,
         TestCcasLogger.noop,
         refs,
@@ -91,7 +91,7 @@ object TestChessComClient extends ZIOSpecDefault {
   /** Dummy ChessComClient layer that returns 404 for all requests. Useful for tests that need a ChessComClient in the
     * environment but never actually make HTTP calls.
     */
-  val dummyLayer: URLayer[Transactor, ChessComClient] =
+  val dummyLayer: URLayer[PostgresClient, ChessComClient] =
     ZLayer.fromZIO {
       makeClient(_ => ZIO.succeed(Response(status = Status.NotFound))).provideSomeLayer(Scope.default).map(_._1)
     }

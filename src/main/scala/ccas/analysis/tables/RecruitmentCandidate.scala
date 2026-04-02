@@ -10,7 +10,8 @@ import ccas.analysis.apps.recruitment.CandidateOutcome
 import ccas.analysis.apps.recruitment.CandidateOutcome.given
 import ccas.api.misc.subtypes.{ClubId, PlayerId}
 import ccas.utils.sql.DbCodecs.given
-import ccas.utils.sql.SqlZioTypes.{connectZIO, transactZIO}
+import ccas.utils.sql.PostgresClient
+import ccas.utils.sql.PostgresClient.{connectZIO, transactZIO}
 
 final case class RecruitmentCandidate(
   runId: Long,
@@ -23,7 +24,7 @@ final case class RecruitmentCandidate(
 object RecruitmentCandidate {
   private val selectCols = SqlLiteral("run_id, player_id, evaluated_at, outcome, rejection_reason")
 
-  def createTable: ZIO[Transactor, SQLException, Int] =
+  def createTable: ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""CREATE TABLE IF NOT EXISTS recruitment_candidate (
               run_id            BIGINT NOT NULL,
@@ -39,19 +40,19 @@ object RecruitmentCandidate {
             ON recruitment_candidate (player_id, outcome, evaluated_at DESC)""".update.run()
     }
 
-  def selectByRun(runId: Long): ZIO[Transactor, SQLException, List[RecruitmentCandidate]] =
+  def selectByRun(runId: Long): ZIO[PostgresClient, SQLException, List[RecruitmentCandidate]] =
     connectZIO {
       sql"SELECT $selectCols FROM recruitment_candidate WHERE run_id = $runId".query[RecruitmentCandidate].run().toList
     }
 
-  def selectInvitedByRun(runId: Long): ZIO[Transactor, SQLException, List[RecruitmentCandidate]] =
+  def selectInvitedByRun(runId: Long): ZIO[PostgresClient, SQLException, List[RecruitmentCandidate]] =
     connectZIO {
       val invited = CandidateOutcome.Invited.toString
       sql"SELECT $selectCols FROM recruitment_candidate WHERE run_id = $runId AND outcome = $invited"
         .query[RecruitmentCandidate].run().toList
     }
 
-  def selectLatestInvited(playerId: PlayerId): ZIO[Transactor, SQLException, Option[RecruitmentCandidate]] =
+  def selectLatestInvited(playerId: PlayerId): ZIO[PostgresClient, SQLException, Option[RecruitmentCandidate]] =
     connectZIO {
       val invited = CandidateOutcome.Invited.toString
       sql"""SELECT $selectCols FROM recruitment_candidate
@@ -63,7 +64,7 @@ object RecruitmentCandidate {
     playerId: PlayerId,
     clubId: ClubId,
     alias: String
-  ): ZIO[Transactor, SQLException, Option[RecruitmentCandidate]] =
+  ): ZIO[PostgresClient, SQLException, Option[RecruitmentCandidate]] =
     connectZIO {
       val rejected = CandidateOutcome.Rejected.toString
       val selectColsQualified = SqlLiteral(
@@ -79,7 +80,7 @@ object RecruitmentCandidate {
             ORDER BY rc.evaluated_at DESC LIMIT 1""".query[RecruitmentCandidate].run().headOption
     }
 
-  def selectInvitedToday(clubId: ClubId, alias: String): ZIO[Transactor, SQLException, List[RecruitmentCandidate]] =
+  def selectInvitedToday(clubId: ClubId, alias: String): ZIO[PostgresClient, SQLException, List[RecruitmentCandidate]] =
     connectZIO {
       val invited = CandidateOutcome.Invited.toString
       sql"""SELECT rc.run_id, rc.player_id, rc.evaluated_at, rc.outcome, rc.rejection_reason
@@ -95,13 +96,13 @@ object RecruitmentCandidate {
         .query[RecruitmentCandidate].run().toList
     }
 
-  def selectCountByRun(runId: Long): ZIO[Transactor, SQLException, Int] =
+  def selectCountByRun(runId: Long): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"SELECT COUNT(*) FROM recruitment_candidate WHERE run_id = $runId"
         .query[Int].run().headOption
     }.someOrFail(new SQLException("COUNT query produced no rows"))
 
-  def selectDeferredCountByRun(runId: Long): ZIO[Transactor, SQLException, Int] =
+  def selectDeferredCountByRun(runId: Long): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       val deferred = CandidateOutcome.Deferred.toString
       sql"SELECT COUNT(*) FROM recruitment_candidate WHERE run_id = $runId AND outcome = $deferred"
@@ -109,7 +110,7 @@ object RecruitmentCandidate {
     }.someOrFail(new SQLException("COUNT query produced no rows"))
 
   /** Returns deferred candidates for a club that have not been resolved (Invited/Rejected) in a later run. */
-  def selectDeferredByClub(clubId: ClubId): ZIO[Transactor, SQLException, List[RecruitmentCandidate]] =
+  def selectDeferredByClub(clubId: ClubId): ZIO[PostgresClient, SQLException, List[RecruitmentCandidate]] =
     connectZIO {
       val deferred = CandidateOutcome.Deferred.toString
       val invited  = CandidateOutcome.Invited.toString
@@ -131,14 +132,14 @@ object RecruitmentCandidate {
         .query[RecruitmentCandidate].run().toList
     }
 
-  def insert(item: RecruitmentCandidate): ZIO[Transactor, SQLException, Int] =
+  def insert(item: RecruitmentCandidate): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""INSERT INTO recruitment_candidate (run_id, player_id, evaluated_at, outcome, rejection_reason)
             VALUES (${item.runId}, ${item.playerId}, ${item.evaluatedAt}, ${item.outcome.toString}, ${item
           .rejectionReason})""".update.run()
     }
 
-  def insertBatch(items: Iterable[RecruitmentCandidate]): ZIO[Transactor, SQLException, BatchUpdateResult] =
+  def insertBatch(items: Iterable[RecruitmentCandidate]): ZIO[PostgresClient, SQLException, BatchUpdateResult] =
     transactZIO {
       batchUpdate(items) { item =>
         sql"""INSERT INTO recruitment_candidate (run_id, player_id, evaluated_at, outcome, rejection_reason)
@@ -147,13 +148,13 @@ object RecruitmentCandidate {
       }
     }
 
-  def updateOutcome(runId: Long, playerId: PlayerId, outcome: CandidateOutcome): ZIO[Transactor, SQLException, Int] =
+  def updateOutcome(runId: Long, playerId: PlayerId, outcome: CandidateOutcome): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""UPDATE recruitment_candidate SET outcome = ${outcome.toString}
             WHERE run_id = $runId AND player_id = $playerId""".update.run()
     }
 
-  def deleteAll: ZIO[Transactor, SQLException, Int] =
+  def deleteAll: ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"DELETE FROM recruitment_candidate".update.run()
     }

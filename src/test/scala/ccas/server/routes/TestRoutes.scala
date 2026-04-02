@@ -2,7 +2,9 @@ package ccas.server.routes
 
 import java.time.{Instant, LocalDateTime, ZoneOffset}
 
-import com.augustnagro.magnum.{sql, Transactor}
+import com.augustnagro.magnum.sql
+
+import ccas.utils.sql.PostgresClient
 import zio.{RIO, Ref, Scope, UIO, ULayer, URIO, ZIO, ZLayer}
 import zio.http.*
 import zio.json.DecoderOps
@@ -14,7 +16,7 @@ import ccas.server.jobs.*
 import ccas.server.ServerTables
 import ccas.utils.client.{ChessComClient, TestChessComClient}
 import ccas.utils.sql.FreshSchemaLayer
-import ccas.utils.sql.SqlZioTypes.connectZIO
+import ccas.utils.sql.PostgresClient.connectZIO
 import ccas.utils.CcasLogger
 
 object TestRoutes extends ZIOSpecDefault {
@@ -45,8 +47,8 @@ object TestRoutes extends ZIOSpecDefault {
       clubId: Option[ClubId],
       params: Option[String],
       trigger: RunTrigger,
-      effect: Option[JobRunId] => RIO[CcasLogger & ChessComClient & Transactor, Any]
-    ): RIO[Transactor, JobRunId] =
+      effect: Option[JobRunId] => RIO[CcasLogger & ChessComClient & PostgresClient, Any]
+    ): RIO[PostgresClient, JobRunId] =
       nextAction.get.flatMap {
         case Action.Succeed =>
           val id  = JobRunId.generate()
@@ -59,10 +61,10 @@ object TestRoutes extends ZIOSpecDefault {
           ZIO.fail(new Exception(msg))
       }
 
-    override def status(id: JobRunId): RIO[Transactor, Option[JobRun]] =
+    override def status(id: JobRunId): RIO[PostgresClient, Option[JobRun]] =
       jobs.get.map(_.get(id))
 
-    override def recentJobs(limit: Int): RIO[Transactor, List[JobRun]] =
+    override def recentJobs(limit: Int): RIO[PostgresClient, List[JobRun]] =
       jobs.get.map(_.values.toList.sortBy(_.startedAt)(using Ordering[Instant].reverse).take(limit))
 
     def setNextAction(action: Action): UIO[Unit] = nextAction.set(action)

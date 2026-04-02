@@ -7,7 +7,8 @@ import com.augustnagro.magnum.*
 import zio.ZIO
 
 import ccas.utils.sql.DbCodecs.given
-import ccas.utils.sql.SqlZioTypes.connectZIO
+import ccas.utils.sql.PostgresClient
+import ccas.utils.sql.PostgresClient.connectZIO
 
 final case class ClientStats(
   appLabel: String,
@@ -39,7 +40,7 @@ final case class ClientStats(
 
 object ClientStats {
 
-  def createTable: ZIO[Transactor, SQLException, Int] =
+  def createTable: ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""CREATE TABLE IF NOT EXISTS client_stats (
               id                       BIGSERIAL PRIMARY KEY,
@@ -73,7 +74,7 @@ object ClientStats {
             ON client_stats (started_at)""".update.run()
     }
 
-  def insert(item: ClientStats): ZIO[Transactor, SQLException, Int] =
+  def insert(item: ClientStats): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""INSERT INTO client_stats (
               app_label, started_at, completed_at,
@@ -96,7 +97,7 @@ object ClientStats {
             )""".update.run()
     }
 
-  def selectRecent(since: Instant): ZIO[Transactor, SQLException, List[ClientStats]] =
+  def selectRecent(since: Instant): ZIO[PostgresClient, SQLException, List[ClientStats]] =
     connectZIO {
       sql"""SELECT app_label, started_at, completed_at,
                    requests, successes, failures, attempts,
@@ -111,12 +112,12 @@ object ClientStats {
         .query[ClientStats].run().toList
     }
 
-  def deleteBefore(cutoff: Instant): ZIO[Transactor, SQLException, Int] =
+  def deleteBefore(cutoff: Instant): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"DELETE FROM client_stats WHERE started_at < $cutoff".update.run()
     }
 
-  def deleteAll: ZIO[Transactor, SQLException, Int] =
+  def deleteAll: ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"DELETE FROM client_stats".update.run()
     }

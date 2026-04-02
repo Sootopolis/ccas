@@ -1,6 +1,6 @@
 package ccas.utils.client
 
-import com.augustnagro.magnum.Transactor
+import ccas.utils.sql.PostgresClient
 import zio.{durationInt, RIO, Ref, Scope, Semaphore, ZIO}
 import zio.http.*
 
@@ -20,9 +20,9 @@ object TestChessComClientSupport {
   def fakeClient(
     routes: Routes[Any, Response],
     permits: Long = 1
-  ): RIO[Transactor, ChessComClient] =
+  ): RIO[PostgresClient, ChessComClient] =
     for {
-      transactor    <- ZIO.service[Transactor]
+      pgClient      <- ZIO.service[PostgresClient]
       stateRef      <- Ref.make(ChessComClient.ThrottleState(permits, 0, Vector.empty))
       activeRef     <- Ref.make(0)
       rateLimitGate <- Semaphore.make(1)
@@ -63,7 +63,7 @@ object TestChessComClientSupport {
       )
       ChessComClient(
         ZClient.fromDriver(driver),
-        transactor,
+        pgClient,
         Headers.empty,
         TestCcasLogger.noop,
         refs,

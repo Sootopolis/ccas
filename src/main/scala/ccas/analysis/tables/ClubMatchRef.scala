@@ -6,7 +6,8 @@ import com.augustnagro.magnum.*
 import zio.ZIO
 
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId}
-import ccas.utils.sql.SqlZioTypes.connectZIO
+import ccas.utils.sql.PostgresClient
+import ccas.utils.sql.PostgresClient.connectZIO
 
 @Table(PostgresDbType, SqlNameMapper.CamelToSnakeCase)
 final case class ClubMatchRef(@Id clubId: ClubId, matchId: ClubMatchId, isLive: Boolean, isTeam1: Boolean)
@@ -15,7 +16,7 @@ final case class ClubMatchRef(@Id clubId: ClubId, matchId: ClubMatchId, isLive: 
 object ClubMatchRef {
   private val repo = ImmutableRepo[ClubMatchRef, ClubId]
 
-  def createTable: ZIO[Transactor, SQLException, Int] =
+  def createTable: ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""CREATE TABLE IF NOT EXISTS club_match_ref (
               club_id  BIGINT PRIMARY KEY REFERENCES club (club_id) ON DELETE RESTRICT,
@@ -25,18 +26,18 @@ object ClubMatchRef {
             )""".update.run()
     }
 
-  def selectId(clubId: ClubId): ZIO[Transactor, SQLException, Option[ClubMatchRef]] =
+  def selectId(clubId: ClubId): ZIO[PostgresClient, SQLException, Option[ClubMatchRef]] =
     connectZIO(repo.findById(clubId))
 
-  def insert(ref: ClubMatchRef): ZIO[Transactor, SQLException, Int] =
+  def insert(ref: ClubMatchRef): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""INSERT INTO club_match_ref (club_id, match_id, is_live, is_team1)
             VALUES (${ref.clubId}, ${ref.matchId}, ${ref.isLive}, ${ref.isTeam1})""".update.run()
     }
 
-  def deleteId(clubId: ClubId): ZIO[Transactor, SQLException, Int] =
+  def deleteId(clubId: ClubId): ZIO[PostgresClient, SQLException, Int] =
     connectZIO(sql"DELETE FROM club_match_ref WHERE club_id = $clubId".update.run())
 
-  def deleteAll: ZIO[Transactor, SQLException, Int] =
+  def deleteAll: ZIO[PostgresClient, SQLException, Int] =
     connectZIO(sql"DELETE FROM club_match_ref".update.run())
 }

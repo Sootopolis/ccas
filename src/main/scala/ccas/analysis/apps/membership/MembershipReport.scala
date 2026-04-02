@@ -2,7 +2,7 @@ package ccas.analysis.apps.membership
 
 import java.time.{Duration as JDuration, Instant}
 
-import com.augustnagro.magnum.Transactor
+import ccas.utils.sql.PostgresClient
 import zio.{Chunk, RIO, URIO, ZIO}
 
 import ccas.analysis.apps.membership.MembershipChange.*
@@ -21,7 +21,7 @@ private[membership] object MembershipReport {
     memberCountAtEnd: Int
   )
 
-  def report(clubSlug: ClubSlug, since: Instant, until: Instant): RIO[CcasLogger & Transactor, ReportResult] =
+  def report(clubSlug: ClubSlug, since: Instant, until: Instant): RIO[CcasLogger & PostgresClient, ReportResult] =
     for {
       club <- Club.selectBySlug(clubSlug)
         .someOrFail(NotFoundException(s"Club '$clubSlug' not found in database"))

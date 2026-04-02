@@ -3,7 +3,7 @@ package ccas.analysis.apps.ref
 import java.time.{Instant, LocalDateTime, ZoneOffset}
 import java.time.temporal.ChronoUnit
 
-import com.augustnagro.magnum.{sql, Transactor}
+import com.augustnagro.magnum.sql
 import zio.{RIO, Scope, ZIO, ZLayer}
 import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
@@ -13,7 +13,8 @@ import ccas.api.misc.enums.PlayerStatusCategory.Active
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, TournamentSlug, Username}
 import ccas.utils.CcasLogger
 import ccas.utils.client.{ChessComClient, TestChessComClientSupport}
-import ccas.utils.sql.{FreshSchemaLayer, SqlZioTypes}
+import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
+import ccas.utils.sql.PostgresClient.connectZIO
 
 object TestRefApp extends ZIOSpecDefault {
 
@@ -141,7 +142,7 @@ object TestRefApp extends ZIOSpecDefault {
   private def fakeChessComClient(
     responses: Map[String, String],
     failures: Set[String] = Set.empty
-  ): RIO[Transactor, ChessComClient] = {
+  ): RIO[PostgresClient, ChessComClient] = {
     val routes: Routes[Any, Response] = Routes(
       Method.GET / "pub" / "player" / string("username") / "tournaments" -> handler { (username: String, _: Request) =>
         if (failures.contains(username)) Response(status = Status.InternalServerError)
@@ -190,7 +191,7 @@ object TestRefApp extends ZIOSpecDefault {
   private val testPlayerIds = List(pid0, pid1, pid2)
   private val testClubIds   = List(clubId0, clubId1)
 
-  private def seedDb: RIO[Transactor, Unit] =
+  private def seedDb: RIO[PostgresClient, Unit] =
     for {
       // Clean in FK-safe order
       _ <- PlayerRefSkip.deleteAll
@@ -199,13 +200,13 @@ object TestRefApp extends ZIOSpecDefault {
       _ <- PlayerTournamentRef.deleteAll
       _ <- ClubMatchRef.deleteAll
       _ <- ZIO.foreachDiscard(testPlayerIds) { pid =>
-        SqlZioTypes.connectZIO(sql"DELETE FROM player_snapshot WHERE player_id = $pid".update.run())
+        connectZIO(sql"DELETE FROM player_snapshot WHERE player_id = $pid".update.run())
       }
       _ <- ZIO.foreachDiscard(testPlayerIds) { pid =>
-        SqlZioTypes.connectZIO(sql"DELETE FROM player WHERE player_id = $pid".update.run())
+        connectZIO(sql"DELETE FROM player WHERE player_id = $pid".update.run())
       }
       _ <- ZIO.foreachDiscard(testClubIds) { cid =>
-        SqlZioTypes.connectZIO(sql"DELETE FROM club WHERE club_id = $cid".update.run())
+        connectZIO(sql"DELETE FROM club WHERE club_id = $cid".update.run())
       }
       // Insert test data
       _ <- Player.insert(Player(pid0, t0, Username("alice"), Active, None, t0))
@@ -219,7 +220,7 @@ object TestRefApp extends ZIOSpecDefault {
     client: ChessComClient,
     forceSkipped: Boolean,
     upgradeRefs: Boolean
-  ): RIO[Scope & Transactor, Unit] =
+  ): RIO[Scope & PostgresClient, Unit] =
     RefApp
       .populate(outputDir = None, forceSkipped = forceSkipped, upgradeRefs = upgradeRefs)
       .provideSomeLayer(ZLayer.succeed(client) ++ CcasLogger.live(showProgress = false))

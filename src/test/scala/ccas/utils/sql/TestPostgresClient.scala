@@ -1,12 +1,11 @@
 package ccas.utils.sql
 
-import com.augustnagro.magnum.Transactor
 import com.zaxxer.hikari.HikariDataSource
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 import zio.ZIO
 
-object TestDataSourceLayer extends ZIOSpecDefault {
-  override def spec: Spec[Any, Throwable] = suite("TestDataSourceLayer")(
+object TestPostgresClient extends ZIOSpecDefault {
+  override def spec: Spec[Any, Throwable] = suite("TestPostgresClient")(
     testIsHikariDataSource,
     testPoolConfigApplied,
     testConnectionFunctional,
@@ -19,14 +18,14 @@ object TestDataSourceLayer extends ZIOSpecDefault {
 
   private def testIsHikariDataSource = test("underlying DataSource is HikariDataSource") {
     for {
-      xa <- ZIO.service[Transactor]
-    } yield assertTrue(xa.dataSource.isInstanceOf[HikariDataSource])
+      pgClient <- ZIO.service[PostgresClient]
+    } yield assertTrue(pgClient.transactor.dataSource.isInstanceOf[HikariDataSource])
   }
 
   private def testPoolConfigApplied = test("pool config is applied from application.conf") {
     for {
-      xa <- ZIO.service[Transactor]
-      hikariDs = xa.dataSource.asInstanceOf[HikariDataSource]
+      pgClient <- ZIO.service[PostgresClient]
+      hikariDs = pgClient.transactor.dataSource.asInstanceOf[HikariDataSource]
     } yield assertTrue(
       hikariDs.getMaximumPoolSize == 3,
       hikariDs.getMinimumIdle == 1,
@@ -36,9 +35,9 @@ object TestDataSourceLayer extends ZIOSpecDefault {
 
   private def testConnectionFunctional = test("connections are functional") {
     for {
-      xa <- ZIO.service[Transactor]
+      pgClient <- ZIO.service[PostgresClient]
       result <- ZIO.attempt {
-        val conn = xa.dataSource.getConnection
+        val conn = pgClient.transactor.dataSource.getConnection
         try {
           val stmt = conn.createStatement()
           val rs   = stmt.executeQuery("SELECT 1")
@@ -54,9 +53,9 @@ object TestDataSourceLayer extends ZIOSpecDefault {
 
   private def testSchemaOverride = test("FreshSchemaLayer creates schema") {
     for {
-      xa <- ZIO.service[Transactor]
+      pgClient <- ZIO.service[PostgresClient]
       exists <- ZIO.attempt {
-        val conn = xa.dataSource.getConnection
+        val conn = pgClient.transactor.dataSource.getConnection
         try {
           val stmt = conn.createStatement()
           val rs = stmt.executeQuery(
@@ -75,8 +74,8 @@ object TestDataSourceLayer extends ZIOSpecDefault {
     for {
       hikariDs <- ZIO.scoped {
         for {
-          xa <- DataSourceLayer.liveFromPrefix(schema = Some("test_dsl_close")).build
-          ds = xa.get[Transactor].dataSource.asInstanceOf[HikariDataSource]
+          xa <- PostgresClient.live(schema = Some("test_dsl_close")).build
+          ds = xa.get[PostgresClient].transactor.dataSource.asInstanceOf[HikariDataSource]
         } yield ds
       }
     } yield assertTrue(hikariDs.isClosed)

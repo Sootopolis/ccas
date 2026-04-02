@@ -2,7 +2,6 @@ package ccas.analysis.apps.history
 
 import java.time.{Duration as JDuration, Instant}
 
-import com.augustnagro.magnum.Transactor
 import zio.{NonEmptyChunk, RIO, Ref, Scope, URIO, ZEnvironment, ZIO, ZIOAppArgs, ZIOAppDefault}
 import zio.http.Client
 import HistoryUtils.*
@@ -13,7 +12,7 @@ import ccas.api.misc.subtypes.*
 import ccas.utils.{display, CcasLogger, OutputFile}
 import ccas.utils.client.ChessComClient
 import ccas.utils.errors.BadRequestException
-import ccas.utils.sql.DataSourceLayer
+import ccas.utils.sql.PostgresClient
 
 /** Discovers and persists a chess club's match history by crawling the Chess.com API.
   *
@@ -73,7 +72,7 @@ object HistoryApp extends ZIOAppDefault {
       CcasLogger.live(showProgress = true),
       ChessComClient.live("history"),
       Client.default,
-      DataSourceLayer.liveFromPrefix(onInit = Tables.ensureTables)
+      PostgresClient.live(onInit = Tables.ensureTables)
     )
 
   private case class InitResult(
@@ -90,7 +89,7 @@ object HistoryApp extends ZIOAppDefault {
     full: Boolean,
     trigger: RunTrigger,
     jobRunId: Option[JobRunId]
-  ): RIO[CcasLogger & ChessComClient & Transactor, InitResult] =
+  ): RIO[CcasLogger & ChessComClient & PostgresClient, InitResult] =
     for {
       _ <- CcasLogger.info(s"=== HistoryApp: $clubSlug ===")
       _ <- CcasLogger.info("Phase 1: Initializing...")
@@ -125,10 +124,10 @@ object HistoryApp extends ZIOAppDefault {
     refresh: Boolean = false,
     trigger: RunTrigger = RunTrigger.Cli,
     jobRunId: Option[JobRunId] = None
-  ): RIO[CcasLogger & ChessComClient & Transactor, Unit] =
+  ): RIO[CcasLogger & ChessComClient & PostgresClient, Unit] =
     for {
-      transactor <- ZIO.service[Transactor]
-      logger     <- ZIO.service[CcasLogger]
+      pgClient <- ZIO.service[PostgresClient]
+      logger   <- ZIO.service[CcasLogger]
 
       // === Phase 1: Initialize ===
       InitResult(allMembers, playerById, queriedIds, ctx, startedAt, runId) <-
@@ -188,7 +187,7 @@ object HistoryApp extends ZIOAppDefault {
           ss <- seedStaleRef.get
           skip = allMembers.size - ms.queried - ms.failed
           _ <- finalizeInterrupted(ctx, runId, startedAt, clubSlug, ms, skip, sc, ss)
-            .provideEnvironment(ZEnvironment(logger, transactor)).orDie
+            .provideEnvironment(ZEnvironment(logger, pgClient)).orDie
         } yield ()
       }
 
@@ -221,7 +220,7 @@ object HistoryApp extends ZIOAppDefault {
     membersSkipped: Int,
     seedClub: Int,
     seedStale: Int
-  ): RIO[CcasLogger & Transactor, Unit] =
+  ): RIO[CcasLogger & PostgresClient, Unit] =
     for {
       partialStats     <- HistoryProcessing.readStats(ctx, waveCount = 0, waveDetails = Nil)
       pendingRemaining <- HistoryPendingMatch.count(ctx.clubId)

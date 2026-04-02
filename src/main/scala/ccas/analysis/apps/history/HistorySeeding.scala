@@ -2,7 +2,7 @@ package ccas.analysis.apps.history
 
 import java.time.Instant
 
-import com.augustnagro.magnum.Transactor
+import ccas.utils.sql.PostgresClient
 import zio.{RIO, Ref, ZIO}
 import HistoryUtils.*
 
@@ -19,7 +19,7 @@ private[history] object HistorySeeding {
     * club is resolved at most once. On success, patches all matching `club_match` rows and removes the unresolved
     * entries. Returns total count of resolved entries.
     */
-  def retryUnresolvedClubs(client: ChessComClient): RIO[CcasLogger & Transactor, Int] =
+  def retryUnresolvedClubs(client: ChessComClient): RIO[CcasLogger & PostgresClient, Int] =
     for {
       unresolved <- UnresolvedMatchClub.selectAll
       result <-
@@ -55,7 +55,7 @@ private[history] object HistorySeeding {
     * each unique player is fetched at most once. On success, ensures the player exists in the DB, patches all matching
     * `club_match_board` rows, and removes the unresolved entries. Returns total count of resolved entries.
     */
-  def retryUnresolvedPlayers(client: ChessComClient): RIO[CcasLogger & Transactor, Int] =
+  def retryUnresolvedPlayers(client: ChessComClient): RIO[CcasLogger & PostgresClient, Int] =
     for {
       unresolved <- UnresolvedBoardPlayer.selectAll
       result <-
@@ -103,7 +103,7 @@ private[history] object HistorySeeding {
     client: ChessComClient,
     clubId: ClubId,
     clubSlug: ClubSlug
-  ): RIO[CcasLogger & Transactor, Int] =
+  ): RIO[CcasLogger & PostgresClient, Int] =
     (for {
       clubMatches <- client.get[ApiClubMatches](ApiClubMatches.getUrl(clubSlug))
       allDaily     = clubMatches.dailyFinished ++ clubMatches.dailyInProgress ++ clubMatches.dailyRegistered
@@ -130,7 +130,7 @@ private[history] object HistorySeeding {
     queriedIds: Set[PlayerId],
     playerById: Map[PlayerId, Player],
     settledMatchIds: Set[ClubMatchId]
-  ): RIO[CcasLogger & Transactor, MemberSeedResult] = {
+  ): RIO[CcasLogger & PostgresClient, MemberSeedResult] = {
     val toQuery = allMembers
       .filterNot(m => queriedIds.contains(m.playerId))
       .flatMap(m => playerById.get(m.playerId).map(s => (m.playerId, s.username)))
@@ -180,7 +180,7 @@ private[history] object HistorySeeding {
     playerId: PlayerId,
     username: Username,
     settledMatchIds: Set[ClubMatchId]
-  ): RIO[Transactor, Int] =
+  ): RIO[PostgresClient, Int] =
     for {
       playerMatches <- client.get[ApiPlayerMatches](ApiPlayerMatches.getUrl(username))
       allMatches = playerMatches.finished ++ playerMatches.inProgress ++ playerMatches.registered
@@ -197,11 +197,11 @@ private[history] object HistorySeeding {
       _ <- HistoryMemberQuery.upsert(HistoryMemberQuery(clubId, playerId, Instant.now()))
     } yield all.size
 
-  private def insertPendingMatches(items: Iterable[HistoryPendingMatch]): RIO[Transactor, Unit] =
+  private def insertPendingMatches(items: Iterable[HistoryPendingMatch]): RIO[PostgresClient, Unit] =
     ZIO.foreachDiscard(items.grouped(1000).toList)(HistoryPendingMatch.insertBatch)
 
   /** If --refresh, re-queues all known matches; otherwise only stale ones (unfinished or recently completed). */
-  def seedStaleMatches(clubId: ClubId, refresh: Boolean): RIO[Transactor, Int] =
+  def seedStaleMatches(clubId: ClubId, refresh: Boolean): RIO[PostgresClient, Int] =
     for {
       ids <- if (refresh) ClubMatch.selectMatchIdsForClub(clubId) else ClubMatch.selectStaleForClub(clubId)
       _   <- insertPendingMatches(ids.map(id => HistoryPendingMatch(clubId, id, isLive = false)))

@@ -3,7 +3,7 @@ package ccas.analysis.apps.ref
 import java.time.{Duration as JDuration, Instant}
 import scala.annotation.nowarn
 
-import com.augustnagro.magnum.{sql, Transactor}
+import com.augustnagro.magnum.sql
 import zio.{RIO, Ref, Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
 import zio.http.Client
 import RefUtils.*
@@ -12,9 +12,9 @@ import ccas.analysis.tables.{ClubRefSkip, PlayerRefSkip, PlayerTournamentRef, Ru
 import ccas.utils.{display, CcasLogger, OutputFile}
 import ccas.utils.client.ChessComClient
 import ccas.utils.errors.BadRequestException
-import ccas.utils.sql.DataSourceLayer
 import ccas.utils.sql.DbCodecs.given
-import ccas.utils.sql.SqlZioTypes.connectZIO
+import ccas.utils.sql.PostgresClient
+import ccas.utils.sql.PostgresClient.connectZIO
 
 object RefApp extends ZIOAppDefault {
   private val help = "Usage: RefApp [--force-skipped] [--upgrade-refs]"
@@ -30,7 +30,7 @@ object RefApp extends ZIOAppDefault {
       CcasLogger.live(showProgress = true),
       ChessComClient.live("ref"),
       Client.default,
-      DataSourceLayer.liveFromPrefix(onInit = Tables.ensureTables)
+      PostgresClient.live(onInit = Tables.ensureTables)
     )
 
   // --- Entry point ---
@@ -42,7 +42,7 @@ object RefApp extends ZIOAppDefault {
     outputDir: Option[String] = Some("_ccas"),
     forceSkipped: Boolean,
     upgradeRefs: Boolean
-  ): RIO[CcasLogger & ChessComClient & Transactor, Unit] =
+  ): RIO[CcasLogger & ChessComClient & PostgresClient, Unit] =
     for {
       startedAt                                                                <- ZIO.succeed(Instant.now())
       client                                                                   <- ZIO.service[ChessComClient]
@@ -86,7 +86,7 @@ object RefApp extends ZIOAppDefault {
   private def resolveClubs(
     ctx: RefContext,
     forceSkipped: Boolean
-  ): RIO[CcasLogger & ChessComClient & Transactor, (Int, Int, Int, Int)] =
+  ): RIO[CcasLogger & ChessComClient & PostgresClient, (Int, Int, Int, Int)] =
     for {
       clubs         <- selectUnresolvedClubs(forceSkipped)
       _             <- CcasLogger.info(s"Clubs without match ref: ${clubs.size}")
@@ -113,7 +113,7 @@ object RefApp extends ZIOAppDefault {
   private def resolvePlayers(
     ctx: RefContext,
     forceSkipped: Boolean
-  ): RIO[CcasLogger & ChessComClient & Transactor, (Int, Int, Int, Int)] =
+  ): RIO[CcasLogger & ChessComClient & PostgresClient, (Int, Int, Int, Int)] =
     for {
       players         <- selectUnresolvedPlayers(forceSkipped)
       _               <- CcasLogger.info(s"Players without match ref: ${players.size}")
@@ -143,7 +143,7 @@ object RefApp extends ZIOAppDefault {
 
   // --- Queries ---
 
-  private def selectUnresolvedPlayers(forceSkipped: Boolean): RIO[Transactor, List[UnresolvedPlayer]] =
+  private def selectUnresolvedPlayers(forceSkipped: Boolean): RIO[PostgresClient, List[UnresolvedPlayer]] =
     if (forceSkipped) {
       connectZIO {
         sql"""SELECT p.player_id, p.username
@@ -171,7 +171,7 @@ object RefApp extends ZIOAppDefault {
       }
     }
 
-  private def selectUnresolvedClubs(forceSkipped: Boolean): RIO[Transactor, List[UnresolvedClub]] =
+  private def selectUnresolvedClubs(forceSkipped: Boolean): RIO[PostgresClient, List[UnresolvedClub]] =
     if (forceSkipped) {
       connectZIO {
         sql"""SELECT c.club_id, c.slug
@@ -200,7 +200,7 @@ object RefApp extends ZIOAppDefault {
   private def upgradeTournamentPlayers(
     ctx: RefContext,
     upgradeRefs: Boolean
-  ): RIO[CcasLogger & Transactor, (Int, Int)] =
+  ): RIO[CcasLogger & PostgresClient, (Int, Int)] =
     if (!upgradeRefs) { ZIO.succeed((0, 0)) }
     else {
       for {
@@ -226,7 +226,7 @@ object RefApp extends ZIOAppDefault {
       } yield (players.size, upgradedCount)
     }
 
-  private def selectTournamentOnlyPlayers: RIO[Transactor, List[UnresolvedPlayer]] =
+  private def selectTournamentOnlyPlayers: RIO[PostgresClient, List[UnresolvedPlayer]] =
     connectZIO {
       sql"""SELECT p.player_id, p.username
             FROM player p

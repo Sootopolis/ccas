@@ -3,7 +3,7 @@ package ccas.analysis.apps.recruitment
 import java.time.{Instant, LocalDate, YearMonth, ZoneOffset}
 import java.time.temporal.ChronoUnit
 
-import com.augustnagro.magnum.Transactor
+import ccas.utils.sql.PostgresClient
 import zio.{RIO, ZIO}
 
 import ccas.analysis.tables.RecruitmentCriteria
@@ -21,7 +21,7 @@ private[recruitment] object RecruitmentStatsHelpers {
     overallTimeoutPct: Double,
     now: Instant,
     recentArchives: Option[List[ApiPlayerArchive]]
-  ): RIO[Transactor, TmStatsResult] = {
+  ): RIO[PostgresClient, TmStatsResult] = {
     val needsTmStats = criteria.dailyMinTmGamesFinished.isDefined || criteria.dailyMaxTmTimeoutPercent.isDefined
     if (!needsTmStats) ZIO.succeed(TmStatsResult(0, None, None, Set.empty))
     else {

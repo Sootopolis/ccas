@@ -9,7 +9,8 @@ import zio.ZIO
 import ccas.api.misc.enums.{ClubMatchStatus, TimeClass}
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId}
 import ccas.utils.sql.DbCodecs.given
-import ccas.utils.sql.SqlZioTypes.connectZIO
+import ccas.utils.sql.PostgresClient
+import ccas.utils.sql.PostgresClient.connectZIO
 
 @Table(PostgresDbType, SqlNameMapper.CamelToSnakeCase)
 final case class ClubMatch(
@@ -31,7 +32,7 @@ object ClubMatch {
   private val repo            = ImmutableRepo[ClubMatch, ClubMatchId]
   private val StaleWindowDays = 90
 
-  def createTable: ZIO[Transactor, SQLException, Int] =
+  def createTable: ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""CREATE TABLE IF NOT EXISTS club_match (
               match_id        BIGINT PRIMARY KEY,
@@ -51,17 +52,17 @@ object ClubMatch {
       sql"""CREATE INDEX IF NOT EXISTS idx_club_match_team2_club ON club_match (team2_club_id)""".update.run()
     }
 
-  def selectId(matchId: ClubMatchId): ZIO[Transactor, SQLException, Option[ClubMatch]] =
+  def selectId(matchId: ClubMatchId): ZIO[PostgresClient, SQLException, Option[ClubMatch]] =
     connectZIO(repo.findById(matchId))
 
-  def selectMatchIdsForClub(clubId: ClubId): ZIO[Transactor, SQLException, Set[ClubMatchId]] =
+  def selectMatchIdsForClub(clubId: ClubId): ZIO[PostgresClient, SQLException, Set[ClubMatchId]] =
     connectZIO {
       sql"""SELECT match_id FROM club_match
             WHERE team1_club_id = $clubId OR team2_club_id = $clubId"""
         .query[ClubMatchId].run().toSet
     }
 
-  def selectStaleForClub(clubId: ClubId): ZIO[Transactor, SQLException, List[ClubMatchId]] =
+  def selectStaleForClub(clubId: ClubId): ZIO[PostgresClient, SQLException, List[ClubMatchId]] =
     connectZIO {
       sql"""SELECT match_id FROM club_match
             WHERE (team1_club_id = $clubId OR team2_club_id = $clubId)
@@ -72,7 +73,7 @@ object ClubMatch {
   /** Returns match IDs that are finished and were fetched past the stale window (inverse of `selectStaleForClub`).
     * These matches have stable data and don't need re-fetching.
     */
-  def selectSettledMatchIdsForClub(clubId: ClubId): ZIO[Transactor, SQLException, Set[ClubMatchId]] =
+  def selectSettledMatchIdsForClub(clubId: ClubId): ZIO[PostgresClient, SQLException, Set[ClubMatchId]] =
     connectZIO {
       sql"""SELECT match_id FROM club_match
             WHERE (team1_club_id = $clubId OR team2_club_id = $clubId)
@@ -81,7 +82,7 @@ object ClubMatch {
         .query[ClubMatchId].run().toSet
     }
 
-  def selectClubMatchRef(clubId: ClubId): ZIO[Transactor, SQLException, Option[ClubMatchRef]] =
+  def selectClubMatchRef(clubId: ClubId): ZIO[PostgresClient, SQLException, Option[ClubMatchRef]] =
     connectZIO {
       sql"""SELECT match_id, (team1_club_id = $clubId) AS is_team1
             FROM club_match
@@ -91,14 +92,14 @@ object ClubMatch {
       }
     }
 
-  def countForClub(clubId: ClubId): ZIO[Transactor, SQLException, Long] =
+  def countForClub(clubId: ClubId): ZIO[PostgresClient, SQLException, Long] =
     connectZIO {
       sql"""SELECT COUNT(*) FROM club_match
             WHERE team1_club_id = $clubId OR team2_club_id = $clubId"""
         .query[Long].run().head
     }
 
-  def upsert(item: ClubMatch): ZIO[Transactor, SQLException, Int] =
+  def upsert(item: ClubMatch): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""INSERT INTO club_match (match_id, name, status, time_class, start_time, end_time, boards,
               team1_club_id, team1_score_x2,
@@ -117,7 +118,7 @@ object ClubMatch {
               fetched_at = EXCLUDED.fetched_at""".update.run()
     }
 
-  def updateTeamClubId(matchId: ClubMatchId, isTeam1: Boolean, clubId: ClubId): ZIO[Transactor, SQLException, Int] =
+  def updateTeamClubId(matchId: ClubMatchId, isTeam1: Boolean, clubId: ClubId): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       if (isTeam1) {
         sql"UPDATE club_match SET team1_club_id = $clubId WHERE match_id = $matchId".update.run()

@@ -9,7 +9,8 @@ import RefSkipReason.given
 
 import ccas.api.misc.subtypes.PlayerId
 import ccas.utils.sql.DbCodecs.given
-import ccas.utils.sql.SqlZioTypes.connectZIO
+import ccas.utils.sql.PostgresClient
+import ccas.utils.sql.PostgresClient.connectZIO
 
 final case class PlayerRefSkip(
   playerId: PlayerId,
@@ -20,7 +21,7 @@ final case class PlayerRefSkip(
 
 object PlayerRefSkip {
 
-  def createTable: ZIO[Transactor, SQLException, Int] =
+  def createTable: ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""CREATE TABLE IF NOT EXISTS player_ref_skip (
               player_id      BIGINT PRIMARY KEY REFERENCES player (player_id) ON DELETE RESTRICT,
@@ -30,19 +31,19 @@ object PlayerRefSkip {
             )""".update.run()
     }
 
-  def selectId(playerId: PlayerId): ZIO[Transactor, SQLException, Option[PlayerRefSkip]] =
+  def selectId(playerId: PlayerId): ZIO[PostgresClient, SQLException, Option[PlayerRefSkip]] =
     connectZIO {
       sql"SELECT player_id, reason, detail, last_attempted FROM player_ref_skip WHERE player_id = $playerId"
         .query[PlayerRefSkip].run().headOption
     }
 
-  def countByReason: ZIO[Transactor, SQLException, List[(RefSkipReason, Long)]] =
+  def countByReason: ZIO[PostgresClient, SQLException, List[(RefSkipReason, Long)]] =
     connectZIO {
       sql"SELECT reason, COUNT(*) FROM player_ref_skip GROUP BY reason"
         .query[(RefSkipReason, Long)].run().toList
     }
 
-  def upsert(item: PlayerRefSkip): ZIO[Transactor, SQLException, Int] =
+  def upsert(item: PlayerRefSkip): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""INSERT INTO player_ref_skip (player_id, reason, detail, last_attempted)
             VALUES (${item.playerId}, ${item.reason}, ${item.detail}, ${item.lastAttempted})
@@ -52,9 +53,9 @@ object PlayerRefSkip {
               last_attempted = EXCLUDED.last_attempted""".update.run()
     }
 
-  def deleteId(playerId: PlayerId): ZIO[Transactor, SQLException, Int] =
+  def deleteId(playerId: PlayerId): ZIO[PostgresClient, SQLException, Int] =
     connectZIO(sql"DELETE FROM player_ref_skip WHERE player_id = $playerId".update.run())
 
-  def deleteAll: ZIO[Transactor, SQLException, Int] =
+  def deleteAll: ZIO[PostgresClient, SQLException, Int] =
     connectZIO(sql"DELETE FROM player_ref_skip".update.run())
 }

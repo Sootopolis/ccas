@@ -7,7 +7,8 @@ import java.sql.SQLException
 import com.augustnagro.magnum.*
 import zio.ZIO
 
-import ccas.utils.sql.SqlZioTypes.connectZIO
+import ccas.utils.sql.PostgresClient
+import ccas.utils.sql.PostgresClient.connectZIO
 
 final case class ApiResponseBody(
   bodyHash: String,
@@ -16,7 +17,7 @@ final case class ApiResponseBody(
 
 object ApiResponseBody {
 
-  def createTable: ZIO[Transactor, SQLException, Int] =
+  def createTable: ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""CREATE TABLE IF NOT EXISTS api_response_body (
               body_id   BIGSERIAL PRIMARY KEY,
@@ -25,7 +26,7 @@ object ApiResponseBody {
             )""".update.run()
     }
 
-  def ensureBody(body: String): ZIO[Transactor, SQLException, Long] = {
+  def ensureBody(body: String): ZIO[PostgresClient, SQLException, Long] = {
     val hash = sha256(body)
     connectZIO {
       sql"INSERT INTO api_response_body (body_hash, body) VALUES ($hash, $body) ON CONFLICT (body_hash) DO NOTHING"
@@ -34,7 +35,7 @@ object ApiResponseBody {
     }
   }
 
-  def deleteOrphans: ZIO[Transactor, SQLException, Int] =
+  def deleteOrphans: ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""DELETE FROM api_response_body b
             WHERE NOT EXISTS (
@@ -42,7 +43,7 @@ object ApiResponseBody {
             )""".update.run()
     }
 
-  def deleteAll: ZIO[Transactor, SQLException, Int] =
+  def deleteAll: ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"DELETE FROM api_response_body".update.run()
     }

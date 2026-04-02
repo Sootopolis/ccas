@@ -3,7 +3,7 @@ package ccas.server.routes
 import java.time.{Instant, ZoneOffset}
 import scala.util.chaining.*
 
-import com.augustnagro.magnum.Transactor
+import ccas.utils.sql.PostgresClient
 import zio.http.*
 import zio.json.{DeriveJsonCodec, JsonCodec}
 
@@ -52,7 +52,7 @@ object BlacklistRoutes {
 
   // --- Routes ---
 
-  val routes: Routes[ChessComClient & Transactor, Nothing] = Routes(
+  val routes: Routes[ChessComClient & PostgresClient, Nothing] = Routes(
     Method.GET / "api" / "blacklist" / string("clubSlug") -> handler { (clubSlugStr: String, _: Request) =>
       val clubSlug = ClubSlug.wrap(clubSlugStr)
       (for {

@@ -1,18 +1,17 @@
 package ccas.analysis.tables
 
-import com.augustnagro.magnum.Transactor
 import zio.{RIO, Scope, ZIOAppDefault}
 
-import ccas.utils.sql.DataSourceLayer
+import ccas.utils.sql.PostgresClient
 import ccas.utils.CcasLogger
 
 object Tables extends ZIOAppDefault {
 
   override def run: RIO[Scope, Unit] =
-    (ensureTables.provide(DataSourceLayer.liveFromPrefix()) <* CcasLogger.info("All tables ensured"))
+    (ensureTables.provide(PostgresClient.live()) <* CcasLogger.info("All tables ensured"))
       .provideSome[Scope](CcasLogger.live())
 
-  def ensureTables: RIO[Transactor, Unit] =
+  def ensureTables: RIO[PostgresClient, Unit] =
     for {
       _ <- Player.createTable
       _ <- PlayerMatchRef.createTable

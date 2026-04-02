@@ -2,7 +2,7 @@ package ccas.server.routes
 
 import scala.util.chaining.*
 
-import com.augustnagro.magnum.Transactor
+import ccas.utils.sql.PostgresClient
 import zio.http.*
 import zio.json.{DeriveJsonCodec, JsonCodec}
 import zio.ZIO
@@ -69,7 +69,7 @@ object ScheduleRoutes {
 
   // --- Routes ---
 
-  val routes: Routes[Transactor, Nothing] = Routes(
+  val routes: Routes[PostgresClient, Nothing] = Routes(
     Method.GET / "api" / "schedules" -> handler {
       JobSchedule.selectAll
         .map(list => jsonResponse(Status.Ok, list.map(ScheduleResponse.fromSchedule)))

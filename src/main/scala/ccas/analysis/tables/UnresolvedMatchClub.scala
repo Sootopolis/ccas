@@ -8,7 +8,8 @@ import zio.ZIO
 
 import ccas.api.misc.subtypes.{ClubMatchId, ClubSlug}
 import ccas.utils.sql.DbCodecs.given
-import ccas.utils.sql.SqlZioTypes.connectZIO
+import ccas.utils.sql.PostgresClient
+import ccas.utils.sql.PostgresClient.connectZIO
 
 final case class UnresolvedMatchClub(
   matchId: ClubMatchId,
@@ -17,7 +18,7 @@ final case class UnresolvedMatchClub(
 ) derives DbCodec
 
 object UnresolvedMatchClub {
-  def createTable: ZIO[Transactor, SQLException, Int] =
+  def createTable: ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""CREATE TABLE IF NOT EXISTS unresolved_match_club (
               match_id   BIGINT NOT NULL,
@@ -28,20 +29,20 @@ object UnresolvedMatchClub {
             )""".update.run()
     }
 
-  def selectAll: ZIO[Transactor, SQLException, List[UnresolvedMatchClub]] =
+  def selectAll: ZIO[PostgresClient, SQLException, List[UnresolvedMatchClub]] =
     connectZIO {
       sql"SELECT match_id, is_team1, slug FROM unresolved_match_club"
         .query[UnresolvedMatchClub].run().toList
     }
 
-  def insert(matchId: ClubMatchId, isTeam1: Boolean, slug: ClubSlug): ZIO[Transactor, SQLException, Int] =
+  def insert(matchId: ClubMatchId, isTeam1: Boolean, slug: ClubSlug): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""INSERT INTO unresolved_match_club (match_id, is_team1, slug, first_seen)
             VALUES ($matchId, $isTeam1, $slug, ${Instant.now()})
             ON CONFLICT (match_id, is_team1) DO NOTHING""".update.run()
     }
 
-  def delete(matchId: ClubMatchId, isTeam1: Boolean): ZIO[Transactor, SQLException, Int] =
+  def delete(matchId: ClubMatchId, isTeam1: Boolean): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"DELETE FROM unresolved_match_club WHERE match_id = $matchId AND is_team1 = $isTeam1"
         .update.run()

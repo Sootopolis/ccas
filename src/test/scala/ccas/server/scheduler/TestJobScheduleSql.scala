@@ -10,7 +10,7 @@ import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 import ccas.server.jobs.JobKind
 import ccas.server.ServerTables
 import ccas.utils.sql.FreshSchemaLayer
-import ccas.utils.sql.SqlZioTypes.connectZIO
+import ccas.utils.sql.PostgresClient.connectZIO
 
 object TestJobScheduleSql extends ZIOSpecDefault {
 

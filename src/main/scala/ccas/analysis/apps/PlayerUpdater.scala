@@ -2,7 +2,7 @@ package ccas.analysis.apps
 
 import java.time.Instant
 
-import com.augustnagro.magnum.Transactor
+import ccas.utils.sql.PostgresClient
 import zio.{RIO, ZIO}
 
 import ccas.analysis.tables.{Player, PlayerSnapshot}
@@ -24,7 +24,7 @@ object PlayerUpdater {
     newTitle: Option[Title],
     since: Instant,
     client: ChessComClient
-  ): RIO[Transactor, Int] = {
+  ): RIO[PostgresClient, Int] = {
     val resolveConflict = if (newUsername != existing.username) {
       Player.selectByUsernameForUpdate(newUsername).flatMap {
         case Some(conflicting) =>

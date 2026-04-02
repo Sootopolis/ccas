@@ -1,6 +1,6 @@
 package ccas.analysis.apps.membership
 
-import com.augustnagro.magnum.Transactor
+import ccas.utils.sql.PostgresClient
 import zio.{Chunk, RIO, Ref, Task, UIO, ZIO}
 
 import ccas.analysis.apps.membership.MembershipChange.*
@@ -46,7 +46,7 @@ private[membership] object MembershipClassify {
     dbState: DbState,
     now: java.time.Instant,
     trustUsernames: Boolean = true
-  ): RIO[CcasLogger & Transactor, PhaseBResult] = {
+  ): RIO[CcasLogger & PostgresClient, PhaseBResult] = {
     val total = apiMap.size
     ZIO.scoped {
       for {
@@ -76,7 +76,7 @@ private[membership] object MembershipClassify {
     dbState: DbState,
     now: java.time.Instant,
     trustUsernames: Boolean
-  ): RIO[Transactor, PhaseBMemberResult] = {
+  ): RIO[PostgresClient, PhaseBMemberResult] = {
     val since = java.time.Instant.ofEpochSecond(joinedEpoch)
     def resolved(playerId: PlayerId) =
       PhaseBMemberResult(playerId, Chunk.empty, Chunk.empty, Chunk.empty, Chunk.empty, Chunk.empty, Chunk.empty)
@@ -162,7 +162,7 @@ private[membership] object MembershipClassify {
     since: java.time.Instant,
     dbState: DbState,
     now: java.time.Instant
-  ): RIO[Transactor, PhaseBMemberResult] =
+  ): RIO[PostgresClient, PhaseBMemberResult] =
     client.get[ApiPlayer](ApiPlayer.getUrl(username)).flatMap { apiPlayer =>
       val playerId       = apiPlayer.playerId
       val statusCategory = apiPlayer.status.category
@@ -262,7 +262,7 @@ private[membership] object MembershipClassify {
     apiMap: Map[Username, Long],
     clubSlug: ClubSlug,
     now: java.time.Instant
-  ): RIO[CcasLogger & Transactor, PhaseCResult] = {
+  ): RIO[CcasLogger & PostgresClient, PhaseCResult] = {
     val disappearedList =
       dbState.membersByPlayerId.values.filterNot(s => resolvedIds.contains(s.player.playerId)).toList
     val total = disappearedList.size
@@ -291,7 +291,7 @@ private[membership] object MembershipClassify {
     apiMap: Map[Username, Long],
     clubSlug: ClubSlug,
     now: java.time.Instant
-  ): RIO[Transactor, PhaseCMemberResult] = {
+  ): RIO[PostgresClient, PhaseCMemberResult] = {
     val playerId     = state.player.playerId
     val oldUsername  = state.player.username
     val closedMember = state.member.copy(until = Some(now))
@@ -372,7 +372,7 @@ private[membership] object MembershipClassify {
     apiMap: Map[Username, Long],
     clubSlug: ClubSlug,
     now: java.time.Instant
-  ): RIO[Transactor, PhaseCMemberResult] = {
+  ): RIO[PostgresClient, PhaseCMemberResult] = {
     val playerId    = state.player.playerId
     val oldUsername = state.player.username
 

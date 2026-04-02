@@ -2,7 +2,7 @@ package ccas.utils.client
 
 import java.time.Instant
 
-import com.augustnagro.magnum.Transactor
+import ccas.utils.sql.PostgresClient
 import com.typesafe.config.ConfigFactory
 import io.netty.handler.codec.PrematureChannelClosureException
 import zio.*
@@ -42,7 +42,7 @@ import ccas.utils.json.JsonDecodingException
   */
 final class ChessComClient(
   client: Client,
-  transactor: Transactor,
+  pgClient: PostgresClient,
   headers: Headers,
   logger: CcasLogger,
   throttle: ChessComClient.ThrottleRefs,
@@ -78,7 +78,7 @@ final class ChessComClient(
     }
     ApiFetchFailure
       .insert(ApiFetchFailure(Instant.now(), url.encode, errorType, msg, body))
-      .provideEnvironment(ZEnvironment(transactor))
+      .provideEnvironment(ZEnvironment(pgClient))
       .ignore
   }
 
@@ -422,12 +422,12 @@ object ChessComClient {
     statsRef: Ref[StatsAccumulator],
     config: ThrottleConfig,
     logger: CcasLogger,
-    transactor: Transactor
+    pgClient: PostgresClient
   ): UIO[Unit] =
     statsRef.get.flatMap { s =>
       ZIO.whenDiscard(s.requests > 0) {
         val row = s.toClientStats(appLabel, startedAt, Instant.now(), config)
-        ClientStats.insert(row).provideEnvironment(ZEnvironment(transactor)).ignore *>
+        ClientStats.insert(row).provideEnvironment(ZEnvironment(pgClient)).ignore *>
           logger.info(s.summary)
       }
     }
@@ -438,7 +438,7 @@ object ChessComClient {
       Header.Accept(MediaType.application.json)
     )
 
-  def live(appLabel: String): RLayer[Client & Transactor & CcasLogger, ChessComClient] =
+  def live(appLabel: String): RLayer[Client & PostgresClient & CcasLogger, ChessComClient] =
     ZLayer.scoped {
       val typesafeConfig = ConfigFactory.load().getConfig("chess-com-client")
       val permits        = typesafeConfig.getLong("permits")
@@ -454,7 +454,7 @@ object ChessComClient {
       for {
         contactEmail  <- ZIO.attempt(typesafeConfig.getString("contact-email"))
         client        <- ZIO.service[Client]
-        transactor    <- ZIO.service[Transactor]
+        pgClient      <- ZIO.service[PostgresClient]
         logger        <- ZIO.service[CcasLogger]
         stateRef      <- Ref.make(ThrottleState(permits, 0, Vector.empty))
         activeRef     <- Ref.make(0)
@@ -465,10 +465,10 @@ object ChessComClient {
         stats         <- Ref.make(StatsAccumulator())
         bar           <- logger.progressBar
         refs = ThrottleRefs(stateRef, activeRef, rateLimitGate, lastReqRef, ema)
-        _ <- ZIO.addFinalizer(logAndPersistStats(appLabel, startedAt, stats, throttleConfig, logger, transactor))
+        _ <- ZIO.addFinalizer(logAndPersistStats(appLabel, startedAt, stats, throttleConfig, logger, pgClient))
       } yield ChessComClient(
         client,
-        transactor,
+        pgClient,
         userAgentHeaders(contactEmail),
         logger,
         refs,

@@ -9,7 +9,8 @@ import zio.ZIO
 import ccas.analysis.tables.RunTrigger.given
 import ccas.api.misc.subtypes.{ClubId, JobRunId}
 import ccas.utils.sql.DbCodecs.given
-import ccas.utils.sql.SqlZioTypes.connectZIO
+import ccas.utils.sql.PostgresClient
+import ccas.utils.sql.PostgresClient.connectZIO
 
 final case class RecruitmentRun(
   runId: Long,
@@ -27,7 +28,7 @@ object RecruitmentRun {
     "run_id, club_id, criteria_id, trigger, started_at, completed_at, candidates_found, job_run_id"
   )
 
-  def createTable: ZIO[Transactor, SQLException, Int] =
+  def createTable: ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""CREATE TABLE IF NOT EXISTS recruitment_run (
               run_id            BIGSERIAL PRIMARY KEY,
@@ -45,18 +46,18 @@ object RecruitmentRun {
             ON recruitment_run (club_id, started_at DESC)""".update.run()
     }
 
-  def selectId(runId: Long): ZIO[Transactor, SQLException, Option[RecruitmentRun]] =
+  def selectId(runId: Long): ZIO[PostgresClient, SQLException, Option[RecruitmentRun]] =
     connectZIO {
       sql"SELECT $selectCols FROM recruitment_run WHERE run_id = $runId".query[RecruitmentRun].run().headOption
     }
 
-  def selectLatest(clubId: ClubId): ZIO[Transactor, SQLException, Option[RecruitmentRun]] =
+  def selectLatest(clubId: ClubId): ZIO[PostgresClient, SQLException, Option[RecruitmentRun]] =
     connectZIO {
       sql"SELECT $selectCols FROM recruitment_run WHERE club_id = $clubId ORDER BY started_at DESC LIMIT 1"
         .query[RecruitmentRun].run().headOption
     }
 
-  def sumCandidatesFoundToday(clubId: ClubId, alias: String): ZIO[Transactor, SQLException, Int] =
+  def sumCandidatesFoundToday(clubId: ClubId, alias: String): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""SELECT COALESCE(SUM(candidates_found), 0) FROM recruitment_run
             WHERE club_id = $clubId AND criteria_id IN (
@@ -74,20 +75,20 @@ object RecruitmentRun {
     trigger: RunTrigger,
     startedAt: Instant,
     jobRunId: Option[JobRunId] = None
-  ): ZIO[Transactor, SQLException, Long] =
+  ): ZIO[PostgresClient, SQLException, Long] =
     connectZIO {
       sql"""INSERT INTO recruitment_run (club_id, criteria_id, trigger, started_at, candidates_found, job_run_id)
             VALUES ($clubId, $criteriaId, $trigger, $startedAt, 0, $jobRunId)
             RETURNING run_id""".query[Long].run().headOption
     }.someOrFail(new SQLException("INSERT RETURNING produced no rows"))
 
-  def update(item: RecruitmentRun): ZIO[Transactor, SQLException, Int] =
+  def update(item: RecruitmentRun): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""UPDATE recruitment_run SET completed_at = ${item.completedAt}, candidates_found = ${item.candidatesFound}
             WHERE run_id = ${item.runId}""".update.run()
     }
 
-  def deleteAll: ZIO[Transactor, SQLException, Int] =
+  def deleteAll: ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"DELETE FROM recruitment_run".update.run()
     }

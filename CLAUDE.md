@@ -30,14 +30,14 @@ The codebase has four main packages:
 
 3. **`ccas.server`** — Backend HTTP server with job execution and scheduling. `server.jobs` has `JobRunner` (async job execution via forked fibers), `JobRun`/`JobSchedule` (database entities). `server.routes` has zio-http route handlers for jobs, schedules, and health checks. `server.scheduler` has `JobScheduler` (polling-based scheduled job execution). Entry point is `CcasServer extends ZIOAppDefault`.
 
-4. **`ccas.utils`** — Shared infrastructure: HTTP client (`client/`), JSON traits (`json/`), SQL helpers (`sql/`), opaque type utilities (`opaque/`), and pretty-printing (`prettyprinting/`).
+4. **`ccas.utils`** — Shared infrastructure: HTTP client (`client/`), JSON traits (`json/`), SQL client and helpers (`sql/`), opaque type utilities (`opaque/`), and pretty-printing (`prettyprinting/`).
 
 ### Key Patterns
 
 **Table entity pattern with Magnum:** Each database entity (e.g., `Club`, `Player`) follows a consistent structure:
 - A case class annotated with `@Table(PostgresDbType, SqlNameMapper.CamelToSnakeCase)` and `derives DbCodec`
 - Its companion object provides static methods: `createTable`, `selectAll`, `selectId`, `insert`, `insertBatch`, `update`, `upsert`, etc.
-- All SQL operations wrap Magnum queries in `connectZIO` (reads) or `transactZIO` (writes/batches)
+- All SQL operations wrap Magnum queries in `PostgresClient.connectZIO` (reads) or `PostgresClient.transactZIO` (writes/batches)
 - Complex queries use `SqlLiteral` for reusable column lists and raw SQL interpolation (`sql"""..."""`)
 - Some entities also use Magnum's `Repo[T, T, ID]` or `ImmutableRepo[T, ID]` for standard CRUD
 
@@ -47,7 +47,7 @@ The codebase has four main packages:
 
 **JSON decoding trait:** API model companions extend `JsonDecoding[T]`, which wraps `JsonDecoder` with convenience methods (`decodeZIO`, string extensions). The derived decoder is provided via `jsonDecoderDerived`. API models use `@jsonMemberNames(SnakeCase)` for field mapping. Global decoders for `Instant` and `URL` are exported automatically.
 
-**ZIO effect types:** SQL operations use `SqlTask[A]` (alias for `IO[SQLException, A]`). Helper functions `connectZIO` and `transactZIO` (in `ccas.utils.sql.SqlZioTypes`) provide the bridge between Magnum's context-function-based API and ZIO effects, returning `ZIO[Transactor, SQLException, A]`. For multi-statement atomic operations, `withTransaction` wraps multiple `connectZIO` calls in a single JDBC transaction (commits on success, rolls back on any failure or interruption) by sharing a proxied connection via a scoped `Transactor`.
+**ZIO effect types:** Helper functions `connectZIO` and `transactZIO` (in `ccas.utils.sql.PostgresClient` companion) provide the bridge between Magnum's context-function-based API and ZIO effects, returning `ZIO[PostgresClient, SQLException, A]`. For multi-statement atomic operations, `withTransaction` runs multiple `connectZIO` calls in a single JDBC transaction (commits on success, rolls back on any failure or interruption) by sharing a proxied connection via a scoped `PostgresClient`. All three functions retry automatically on transient connection errors (SQLState `08xxx`).
 
 ### HTTP Client
 
@@ -69,7 +69,7 @@ The codebase has four main packages:
 
 ### Database
 
-Uses Magnum (`com.augustnagro.magnum`) for SQL access with PostgreSQL. `DataSourceLayer` reads config from `application.conf` under the `database` prefix and provides a `Transactor` ZLayer. Custom `DbCodec` instances handle `Instant` (via `TIMESTAMPTZ`), `URL`, and `List[String]` (PostgreSQL arrays). Table names are derived from case class names via `CamelToSnakeCase` naming strategy. Server tables (`JobRun`, `JobSchedule`) reference clubs by `club_id` FK; route handlers resolve the slug from HTTP requests to a `ClubId` before submitting jobs. Analysis run tables (`MembershipRun`, `RecruitmentRun`, `HistoryRun`) have an optional `job_run_id` column linking back to the server-level job. Schema migrations for existing databases are managed via manual SQL scripts in the `sql/` directory.
+Uses Magnum (`com.augustnagro.magnum`) for SQL access with PostgreSQL. `PostgresClient` (`ccas.utils.sql`) wraps a Magnum `Transactor` backed by HikariCP and adds connection-pool hardening (keepalive probes, validation queries, lazy initialization) and transient-error retry (exponential backoff on SQLState `08xxx`). `PostgresClient.live` reads config from `application.conf` under the `database` prefix and provides a `PostgresClient` ZLayer; all app and server code depends on `PostgresClient` rather than `Transactor` directly. Custom `DbCodec` instances handle `Instant` (via `TIMESTAMPTZ`), `URL`, and `List[String]` (PostgreSQL arrays). Table names are derived from case class names via `CamelToSnakeCase` naming strategy. Server tables (`JobRun`, `JobSchedule`) reference clubs by `club_id` FK; route handlers resolve the slug from HTTP requests to a `ClubId` before submitting jobs. Analysis run tables (`MembershipRun`, `RecruitmentRun`, `HistoryRun`) have an optional `job_run_id` column linking back to the server-level job. Schema migrations for existing databases are managed via manual SQL scripts in the `sql/` directory.
 
 ### Test Data
 
