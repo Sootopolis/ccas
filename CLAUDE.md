@@ -8,7 +8,7 @@ CCAS (Chess Club Admin System) is a Scala 3 application that pulls data from the
 
 ## Build & Test Commands
 
-This is an SBT project (Scala 3.8.2, SBT 1.12.8).
+This is an SBT project (Scala 3.8.3, SBT 1.12.8).
 
 - **Compile:** `sbt compile`
 - **Run all tests:** `sbt test`
@@ -41,7 +41,7 @@ The codebase has four main packages:
 - Complex queries use `SqlLiteral` for reusable column lists and raw SQL interpolation (`sql"""..."""`)
 - Some entities also use Magnum's `Repo[T, T, ID]` or `ImmutableRepo[T, ID]` for standard CRUD
 
-**Type safety with Subtypes:** Domain IDs and constrained values use `zio-prelude` `Subtype` via `CcasSubtype[T]` and `CcasKeySubtype[T]` (in `ccas.api.misc.subtypes`). These provide `JsonCodec`, `DbCodec`, and `DeriveConfig` instances in one place. `CcasKeySubtype` additionally provides `JsonFieldEncoder`/`JsonFieldDecoder` for types used as JSON object keys. Types include: `PlayerId`, `ClubId`, `Username`, `ClubUrlName`, `Elo`, `Percentage`, etc.
+**Type safety with opaque types:** Domain IDs and constrained values use Scala 3 opaque types with companion traits (`StringCompanion`, `StringKeyCompanion`, `IntCompanion`, `LongCompanion`, `DoubleCompanion`) defined in `ccas.utils.opaque`. Each companion provides `JsonCodec`, `DbCodec`, and `DeriveConfig` instances, plus optional validation via `validateRaw` and normalization via `normalize`. `StringKeyCompanion` extends `StringCompanion` with `JsonFieldEncoder`/`JsonFieldDecoder` for types used as JSON object keys. Concrete types are defined in `ccas.api.misc.subtypes` and include: `PlayerId`, `ClubId`, `Username`, `ClubUrlName`, `Elo`, `Percentage`, etc.
 
 **Enum serialization:** Enums extend `EnumJson[T]` for JSON (snake_case wire format, PascalCase in Scala) and/or `EnumSql[T]` for database persistence. Both provide codec instances via `given`. Some enums override `jsonToEnum` for non-standard Chess.com API mappings (e.g., `"closed:fair_play_violations"` → `Fairplay`).
 

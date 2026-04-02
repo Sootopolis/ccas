@@ -1,7 +1,7 @@
 object Versions {
   // core
   val vCcas  = "0.1.0-SNAPSHOT"
-  val vScala = "3.8.2"
+  val vScala = "3.8.3"
   val vSbt   = "1.12.8"
 
   // libraries
