@@ -201,7 +201,7 @@ object PostgresClient {
   private class SingleConnectionDataSource(con: Connection) extends DataSource {
     override def getConnection: Connection                                     = con
     override def getConnection(username: String, password: String): Connection = con
-    override def getLogWriter: PrintWriter                                     = null
+    override def getLogWriter: PrintWriter                                     = new PrintWriter(java.io.OutputStream.nullOutputStream)
     override def setLogWriter(out: PrintWriter): Unit                          = ()
     override def setLoginTimeout(seconds: Int): Unit                           = ()
     override def getLoginTimeout: Int                                          = 0
