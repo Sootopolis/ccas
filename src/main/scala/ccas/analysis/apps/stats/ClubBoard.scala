@@ -29,7 +29,7 @@ final case class ClubBoard(
 
 object ClubBoard {
 
-  private val Finished = SqlLiteral("Finished")
+  private val Finished = SqlLiteral("'Finished'")
 
   /** All finished boards for a club, normalized to our-team perspective. */
   def selectClubBoards(clubId: ClubId): ZIO[PostgresClient, SQLException, List[ClubBoard]] =

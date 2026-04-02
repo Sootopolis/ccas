@@ -36,9 +36,9 @@ object StatsApp extends ZIOAppDefault {
         case Some(s) => ZIO.succeed(ClubSlug.wrap(s))
         case None    => ZIO.fail(BadRequestException(help))
       }
-      since    = flagValue(args, "--since").map(Instant.parse)
-      until    = flagValue(args, "--until").map(Instant.parse)
-      minGames = flagValue(args, "--min-games").map(_.toInt)
+      since <- ZIO.foreach(flagValue(args, "--since"))(s => ZIO.attempt(Instant.parse(s)))
+      until <- ZIO.foreach(flagValue(args, "--until"))(s => ZIO.attempt(Instant.parse(s)))
+      minGames <- ZIO.foreach(flagValue(args, "--min-games"))(s => ZIO.attempt(s.toInt))
       _ <- (since, until) match {
         case (Some(s), Some(u)) => playerOfPeriod(slug, s, u, minGames.getOrElse(4))
         case (None, None)       => memberStats(slug)

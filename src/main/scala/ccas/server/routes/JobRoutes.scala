@@ -211,13 +211,15 @@ object JobRoutes {
           jobRunId =>
             (body.since, body.until) match {
               case (Some(sinceStr), Some(untilStr)) =>
-                val since = Instant.parse(sinceStr)
-                val until = Instant.parse(untilStr)
-                StatsApp.playerOfPeriod(
-                  body.clubSlug, since, until,
-                  body.minGames.getOrElse(4),
-                  RunTrigger.Api, jobRunId
-                )
+                for {
+                  since <- ZIO.attempt(Instant.parse(sinceStr))
+                  until <- ZIO.attempt(Instant.parse(untilStr))
+                  _     <- StatsApp.playerOfPeriod(
+                    body.clubSlug, since, until,
+                    body.minGames.getOrElse(4),
+                    RunTrigger.Api, jobRunId
+                  )
+                } yield ()
               case _ =>
                 StatsApp.memberStats(body.clubSlug, RunTrigger.Api, jobRunId)
             }
