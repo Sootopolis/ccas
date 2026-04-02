@@ -6,14 +6,14 @@ import java.time.Instant
 import com.augustnagro.magnum.*
 import zio.ZIO
 
-import ccas.api.misc.subtypes.PlayerId
+import ccas.api.misc.subtypes.{Elo, PlayerId}
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.SqlZioTypes.connectZIO
 
 final case class PlayerRecruitmentCache(
   playerId: PlayerId,
   fetchedAt: Instant,
-  dailyElo: Option[Int],
+  dailyElo: Option[Elo],
   dailyScoreRate: Option[Double],
   dailyTimeoutPct: Option[Double],
   dailyGamesFinished: Option[Int],

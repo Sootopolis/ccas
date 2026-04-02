@@ -7,7 +7,7 @@ import com.augustnagro.magnum.*
 import zio.ZIO
 
 import ccas.analysis.tables.RunTrigger.given
-import ccas.api.misc.subtypes.ClubId
+import ccas.api.misc.subtypes.{ClubId, JobRunId}
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.SqlZioTypes.connectZIO
 
@@ -19,7 +19,7 @@ final case class RecruitmentRun(
   startedAt: Instant,
   completedAt: Option[Instant],
   candidatesFound: Int,
-  jobRunId: Option[String]
+  jobRunId: Option[JobRunId]
 ) derives DbCodec
 
 object RecruitmentRun {
@@ -73,7 +73,7 @@ object RecruitmentRun {
     criteriaId: Long,
     trigger: RunTrigger,
     startedAt: Instant,
-    jobRunId: Option[String] = None
+    jobRunId: Option[JobRunId] = None
   ): ZIO[Transactor, SQLException, Long] =
     connectZIO {
       sql"""INSERT INTO recruitment_run (club_id, criteria_id, trigger, started_at, candidates_found, job_run_id)

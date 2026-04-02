@@ -12,7 +12,7 @@ import ccas.analysis.apps.membership.MembershipApp
 import ccas.analysis.apps.recruitment.RecruitmentApp
 import ccas.analysis.apps.ref.RefApp
 import ccas.analysis.tables.{Club, RunTrigger}
-import ccas.api.misc.subtypes.{ClubId, ClubSlug}
+import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId}
 import ccas.server.jobs.*
 import ccas.server.routes.RouteHelpers.*
 import ccas.utils.client.ChessComClient
@@ -104,7 +104,7 @@ object JobRoutes {
           case Some(club) =>
             val cappedTarget       = body.target.map(_ min MaxTarget)
             val effectiveTimeLimit = body.timeLimitMinutes.map(_ min MaxTimeLimitMinutes)
-            val effect = (jobRunId: Option[String]) =>
+            val effect = (jobRunId: Option[JobRunId]) =>
               RecruitmentApp.recruit(
                 body.clubSlug,
                 body.alias.getOrElse("default"),
@@ -213,7 +213,7 @@ object JobRoutes {
     kind: JobKind,
     slug: ClubSlug,
     params: Option[String],
-    effect: Option[String] => RIO[CcasLogger & ChessComClient & Transactor, Any]
+    effect: Option[JobRunId] => RIO[CcasLogger & ChessComClient & Transactor, Any]
   ): RIO[Transactor, ClubJobResult] =
     Club.selectBySlug(slug).flatMap {
       case None => ZIO.succeed(ClubJobResult(ClubSlug.unwrap(slug), None, Some("Club not found")))

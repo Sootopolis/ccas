@@ -23,6 +23,7 @@ trait LongCompanion {
   given JsonEncoder[Type]  = summon[JsonCodec[Type]].encoder
   given DbCodec[Type]      = DbCodec[Long].biMap(wrap, unwrap)
   given DeriveConfig[Type] = DeriveConfig[Long].mapOrFail(validated(_).left.map(InvalidData(Chunk.empty, _)))
+  given Ordering[Type]     = Ordering.by(unwrap)
 
   extension (l: Type) {
     def value: Long = unwrap(l)

@@ -5,7 +5,7 @@ import java.sql.SQLException
 import com.augustnagro.magnum.*
 import zio.ZIO
 
-import ccas.api.misc.subtypes.ClubId
+import ccas.api.misc.subtypes.{ClubId, Elo}
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.SqlZioTypes.connectZIO
 
@@ -20,8 +20,8 @@ final case class RecruitmentCriteria(
   maxClubs: Option[Int],
   excludeSourceAdmins: Boolean,
   excludeFormerMembers: Boolean,
-  dailyMinElo: Option[Int],
-  dailyMaxElo: Option[Int],
+  dailyMinElo: Option[Elo],
+  dailyMaxElo: Option[Elo],
   dailyMinScoreRate: Option[Double],
   dailyMaxScoreRate: Option[Double],
   dailyMinGamesFinished: Option[Int],
@@ -122,7 +122,7 @@ object RecruitmentCriteria {
       maxClubs = Some(40),
       excludeSourceAdmins = true,
       excludeFormerMembers = true,
-      dailyMinElo = Some(1000),
+      dailyMinElo = Some(Elo(1000)),
       dailyMaxElo = None,
       dailyMinScoreRate = Some(3.0 / 8),
       dailyMaxScoreRate = Some(7.0 / 8),

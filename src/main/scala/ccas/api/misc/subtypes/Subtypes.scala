@@ -1,8 +1,9 @@
 package ccas.api.misc.subtypes
 
+import com.github.f4b6a3.ulid.UlidCreator
 import zio.http.URL
 
-import ccas.utils.opaque.{DoubleCompanion, IntCompanion, LongCompanion, StringCompanion, StringKeyCompanion}
+import ccas.utils.opaque.{IntCompanion, LongCompanion, StringCompanion, StringKeyCompanion}
 
 type Elo = Elo.Type
 
@@ -50,13 +51,6 @@ object ClubMatchId extends LongCompanion {
   def fromUrl(url: URL): ClubMatchId = wrap(url.path.segments.last.toLong)
 }
 
-type Percentage = Percentage.Type
-
-object Percentage extends DoubleCompanion {
-  override protected def validateRaw(raw: Double): Either[String, Double] =
-    Either.cond(raw >= 0.0 && raw <= 1.0, raw, s"$name must be between 0.0 and 1.0")
-}
-
 type ClubAlias = ClubAlias.Type
 
 object ClubAlias extends StringCompanion {
@@ -72,4 +66,10 @@ object TournamentSlug extends StringCompanion {
     Either.cond(raw.nonEmpty, raw, s"$name must not be empty")
 
   def fromUrl(url: URL): TournamentSlug = wrap(url.path.segments.last)
+}
+
+type JobRunId = JobRunId.Type
+
+object JobRunId extends StringCompanion {
+  def generate(): JobRunId = wrap(UlidCreator.getMonotonicUlid().toString)
 }

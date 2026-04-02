@@ -89,7 +89,7 @@ object HistoryApp extends ZIOAppDefault {
     clubSlug: ClubSlug,
     full: Boolean,
     trigger: RunTrigger,
-    jobRunId: Option[String]
+    jobRunId: Option[JobRunId]
   ): RIO[CcasLogger & ChessComClient & Transactor, InitResult] =
     for {
       _ <- CcasLogger.info(s"=== HistoryApp: $clubSlug ===")
@@ -124,7 +124,7 @@ object HistoryApp extends ZIOAppDefault {
     full: Boolean = false,
     refresh: Boolean = false,
     trigger: RunTrigger = RunTrigger.Cli,
-    jobRunId: Option[String] = None
+    jobRunId: Option[JobRunId] = None
   ): RIO[CcasLogger & ChessComClient & Transactor, Unit] =
     for {
       transactor <- ZIO.service[Transactor]

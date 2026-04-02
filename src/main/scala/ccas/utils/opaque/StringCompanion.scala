@@ -29,6 +29,7 @@ trait StringCompanion {
   given JsonEncoder[Type]  = summon[JsonCodec[Type]].encoder
   given DbCodec[Type]      = DbCodec[String].biMap(wrap, unwrap)
   given DeriveConfig[Type] = DeriveConfig[String].mapOrFail(validated(_).left.map(InvalidData(Chunk.empty, _)))
+  given Ordering[Type]     = Ordering.by(unwrap)
 
   extension (s: Type) {
     def value: String                          = unwrap(s)

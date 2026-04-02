@@ -23,6 +23,7 @@ trait IntCompanion {
   given JsonEncoder[Type]  = summon[JsonCodec[Type]].encoder
   given DbCodec[Type]      = DbCodec[Int].biMap(wrap, unwrap)
   given DeriveConfig[Type] = DeriveConfig[Int].mapOrFail(validated(_).left.map(InvalidData(Chunk.empty, _)))
+  given Ordering[Type]     = Ordering.by(unwrap)
 
   extension (i: Type) {
     def value: Int = unwrap(i)

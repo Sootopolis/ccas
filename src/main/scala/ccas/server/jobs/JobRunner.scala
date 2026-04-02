@@ -6,7 +6,7 @@ import com.augustnagro.magnum.Transactor
 import zio.{Fiber, RIO, RLayer, Ref, UIO, ZIO, ZLayer}
 
 import ccas.analysis.tables.RunTrigger
-import ccas.api.misc.subtypes.ClubId
+import ccas.api.misc.subtypes.{ClubId, JobRunId}
 import ccas.utils.client.ChessComClient
 import ccas.utils.errors.safeMessage
 import ccas.utils.CcasLogger
@@ -28,7 +28,7 @@ trait JobRunner {
     clubId: Option[ClubId],
     params: Option[String],
     trigger: RunTrigger,
-    effect: Option[String] => RIO[CcasLogger & ChessComClient & Transactor, Any]
+    effect: Option[JobRunId] => RIO[CcasLogger & ChessComClient & Transactor, Any]
   ): RIO[Transactor, JobRunId]
 
   /** Look up a job by ID, returning `None` if no such job exists. */
@@ -67,7 +67,7 @@ object JobRunner {
       clubId: Option[ClubId],
       params: Option[String],
       trigger: RunTrigger,
-      effect: Option[String] => RIO[CcasLogger & ChessComClient & Transactor, Any]
+      effect: Option[JobRunId] => RIO[CcasLogger & ChessComClient & Transactor, Any]
     ): RIO[Transactor, JobRunId] =
       for {
         existing <- JobRun.selectRunning(kind, clubId)
@@ -83,7 +83,7 @@ object JobRunner {
         now    = Instant.now()
         jobRun = JobRun(id, kind, clubId, trigger, JobRunStatus.Running, params, now, None, None)
         _     <- JobRun.insert(jobRun)
-        fiber <- runJob(id, effect(Some(JobRunId.unwrap(id)))).fork
+        fiber <- runJob(id, effect(Some(id))).fork
         _     <- fibers.update(_ + fiber)
       } yield id
 

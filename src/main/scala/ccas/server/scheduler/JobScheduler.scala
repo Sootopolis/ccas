@@ -12,7 +12,7 @@ import ccas.analysis.apps.membership.MembershipApp
 import ccas.analysis.apps.recruitment.RecruitmentApp
 import ccas.analysis.apps.ref.RefApp
 import ccas.analysis.tables.{Club, RunTrigger}
-import ccas.api.misc.subtypes.ClubSlug
+import ccas.api.misc.subtypes.{ClubSlug, JobRunId}
 import ccas.server.jobs.{JobKind, JobRunner}
 import ccas.utils.CcasLogger
 
@@ -68,7 +68,7 @@ object JobScheduler {
 
       val effect = schedule.kind match {
         case JobKind.Recruitment =>
-          (jobRunId: Option[String]) =>
+          (jobRunId: Option[JobRunId]) =>
             requireClubSlug.flatMap(name =>
               RecruitmentApp.recruit(
                 name,
@@ -79,14 +79,14 @@ object JobScheduler {
               ).unit
             )
         case JobKind.Membership =>
-          (jobRunId: Option[String]) =>
+          (jobRunId: Option[JobRunId]) =>
             requireClubSlug.flatMap(name =>
               MembershipApp.reconcile(name, trigger = RunTrigger.Scheduled, jobRunId = jobRunId).unit
             )
         case JobKind.MatchRef =>
-          (_: Option[String]) => RefApp.populate(RunTrigger.Scheduled, forceSkipped = false, upgradeRefs = false)
+          (_: Option[JobRunId]) => RefApp.populate(RunTrigger.Scheduled, forceSkipped = false, upgradeRefs = false)
         case JobKind.History =>
-          (jobRunId: Option[String]) =>
+          (jobRunId: Option[JobRunId]) =>
             requireClubSlug.flatMap(name =>
               HistoryApp.discover(name, trigger = RunTrigger.Scheduled, jobRunId = jobRunId).unit
             )

@@ -9,7 +9,7 @@ import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.*
 import ccas.analysis.tables.*
 import ccas.api.misc.enums.PlayerStatusCategory.Active
-import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username}
+import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, Elo, PlayerId, Username}
 import ccas.utils.sql.{FreshSchemaLayer, SqlZioTypes}
 import ccas.utils.CcasLogger
 
@@ -63,7 +63,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       for {
         _       <- seedDb
         cid1    <- RecruitmentCriteria.insert(criteria)
-        cid2    <- RecruitmentCriteria.insert(criteria.copy(dailyMinElo = Some(1500)))
+        cid2    <- RecruitmentCriteria.insert(criteria.copy(dailyMinElo = Some(Elo(1500))))
         loaded1 <- RecruitmentCriteria.selectId(cid1)
         loaded2 <- RecruitmentCriteria.selectId(cid2)
       } yield assertTrue(

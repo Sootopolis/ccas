@@ -8,7 +8,8 @@ import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 import zio.ZIO
 
 import ccas.analysis.tables.RunTrigger
-import ccas.server.jobs.{JobKind, JobRun, JobRunId, JobRunStatus}
+import ccas.api.misc.subtypes.JobRunId
+import ccas.server.jobs.{JobKind, JobRun, JobRunStatus}
 import ccas.server.ServerTables
 import ccas.utils.sql.SqlZioTypes.{connectZIO, withTransaction}
 

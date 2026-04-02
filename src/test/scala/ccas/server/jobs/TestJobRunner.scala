@@ -5,7 +5,7 @@ import zio.{durationInt, Scope, ZIO}
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.analysis.tables.{Club, RunTrigger}
-import ccas.api.misc.subtypes.{ClubId, ClubSlug}
+import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId}
 import ccas.server.ServerTables
 import ccas.utils.client.TestChessComClient
 import ccas.utils.sql.FreshSchemaLayer

@@ -8,7 +8,7 @@ import zio.RIO
 
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.*
 import ccas.analysis.tables.*
-import ccas.api.misc.subtypes.{ClubId, ClubSlug, Username}
+import ccas.api.misc.subtypes.{ClubId, ClubSlug, Elo, Username}
 import ccas.utils.sql.FreshSchemaLayer
 
 object TestRecruitmentFilters extends ZIOSpecDefault {
@@ -192,7 +192,7 @@ object TestRecruitmentFilters extends ZIOSpecDefault {
         "player/alice"       -> apiPlayerJson(200, "alice"),
         "player/alice/stats" -> apiPlayerStatsJson(dailyElo = 800)
       )
-      val criteria = makeCriteria().copy(dailyMinElo = Some(1000))
+      val criteria = makeCriteria().copy(dailyMinElo = Some(Elo(1000)))
       for { outcome <- evalSingle(responses, criteria) } yield assertTrue(outcome == CandidateOutcome.Rejected)
     },
     test("rejects by dailyMaxElo") {
@@ -200,7 +200,7 @@ object TestRecruitmentFilters extends ZIOSpecDefault {
         "player/alice"       -> apiPlayerJson(200, "alice"),
         "player/alice/stats" -> apiPlayerStatsJson(dailyElo = 2200)
       )
-      val criteria = makeCriteria().copy(dailyMaxElo = Some(2000))
+      val criteria = makeCriteria().copy(dailyMaxElo = Some(Elo(2000)))
       for { outcome <- evalSingle(responses, criteria) } yield assertTrue(outcome == CandidateOutcome.Rejected)
     },
     test("accepts player within Elo range") {
@@ -208,7 +208,7 @@ object TestRecruitmentFilters extends ZIOSpecDefault {
         "player/alice"       -> apiPlayerJson(200, "alice"),
         "player/alice/stats" -> apiPlayerStatsJson(dailyElo = 1500)
       )
-      val criteria = makeCriteria().copy(dailyMinElo = Some(1000), dailyMaxElo = Some(2000))
+      val criteria = makeCriteria().copy(dailyMinElo = Some(Elo(1000)), dailyMaxElo = Some(Elo(2000)))
       for { outcome <- evalSingle(responses, criteria) } yield assertTrue(outcome == CandidateOutcome.Invited)
     },
     test("rejects by dailyMaxTimeoutPercent") {
@@ -567,7 +567,7 @@ object TestRecruitmentFilters extends ZIOSpecDefault {
       val staleCache = PlayerRecruitmentCache(
         playerId = pid0,
         fetchedAt = now.minus(java.time.Duration.ofDays(30)), // very old cache
-        dailyElo = Some(1500),
+        dailyElo = Some(Elo(1500)),
         dailyScoreRate = None,
         dailyTimeoutPct = Some(0.0),
         dailyGamesFinished = Some(200),
@@ -591,7 +591,7 @@ object TestRecruitmentFilters extends ZIOSpecDefault {
       val cache48h = PlayerRecruitmentCache(
         playerId = pid0,
         fetchedAt = now.minus(java.time.Duration.ofHours(48)),
-        dailyElo = Some(1500),
+        dailyElo = Some(Elo(1500)),
         dailyScoreRate = None,
         dailyTimeoutPct = Some(0.0),
         dailyGamesFinished = Some(200),
@@ -615,7 +615,7 @@ object TestRecruitmentFilters extends ZIOSpecDefault {
       val staleCache = PlayerRecruitmentCache(
         playerId = pid0,
         fetchedAt = now.minus(java.time.Duration.ofDays(31)),
-        dailyElo = Some(500),
+        dailyElo = Some(Elo(500)),
         dailyScoreRate = None,
         dailyTimeoutPct = Some(50.0),
         dailyGamesFinished = Some(5),
@@ -629,7 +629,7 @@ object TestRecruitmentFilters extends ZIOSpecDefault {
       )
       val criteria = makeCriteria().copy(
         maxClubs = Some(50),
-        dailyMinElo = Some(1000),
+        dailyMinElo = Some(Elo(1000)),
         dailyMaxTimeoutPercent = Some(10.0)
       )
       val responses = Map(
@@ -647,7 +647,7 @@ object TestRecruitmentFilters extends ZIOSpecDefault {
       val cache = PlayerRecruitmentCache(
         playerId = pid0,
         fetchedAt = now.minus(Duration.ofHours(12)),
-        dailyElo = Some(1500),
+        dailyElo = Some(Elo(1500)),
         dailyScoreRate = None,
         dailyTimeoutPct = Some(0.0),
         dailyGamesFinished = Some(200),

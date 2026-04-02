@@ -10,7 +10,7 @@ import zio.http.Client
 import ccas.analysis.apps.membership.MembershipChange.*
 import ccas.analysis.tables.*
 import ccas.api.club.{ApiClub, ApiClubMembers}
-import ccas.api.misc.subtypes.{ClubId, ClubSlug}
+import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId}
 import ccas.utils.{CcasLogger, OutputFile}
 import ccas.utils.client.ChessComClient
 import ccas.utils.errors.BadRequestException
@@ -116,7 +116,7 @@ object MembershipApp extends ZIOAppDefault {
     trustUsernames: Boolean = true,
     trackRun: Boolean = true,
     trigger: RunTrigger = RunTrigger.Cli,
-    jobRunId: Option[String] = None
+    jobRunId: Option[JobRunId] = None
   ): RIO[CcasLogger & ChessComClient & Transactor, ReconciliationResult] =
     for {
       startedAt <- ZIO.succeed(Instant.now())

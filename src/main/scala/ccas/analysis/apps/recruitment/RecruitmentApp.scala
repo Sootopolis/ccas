@@ -10,7 +10,7 @@ import ccas.analysis.apps.membership.MembershipApp
 import ccas.analysis.apps.ref.RefHelpers
 import ccas.analysis.tables.*
 import ccas.api.club.{ApiClub, ApiClubMatches, ApiClubMembers}
-import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
+import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId, PlayerId, Username}
 import ccas.api.player.ApiPlayer
 import ccas.utils.{display, CcasLogger, OutputFile}
 import ccas.utils.client.ChessComClient
@@ -125,7 +125,7 @@ object RecruitmentApp extends ZIOAppDefault {
     explore: Boolean = true,
     showHints: Boolean = false,
     trigger: RunTrigger = RunTrigger.Cli,
-    jobRunId: Option[String] = None
+    jobRunId: Option[JobRunId] = None
   ): RIO[CcasLogger & ChessComClient & Transactor, RecruitmentRun] = ZIO.scoped {
     for {
       _       <- MembershipApp.reconcile(clubSlug, trackRun = false)
@@ -247,7 +247,7 @@ object RecruitmentApp extends ZIOAppDefault {
     startedAt: Instant,
     cumulative: Boolean,
     alreadyFound: Int,
-    jobRunId: Option[String]
+    jobRunId: Option[JobRunId]
   ): RIO[CcasLogger & ChessComClient & Transactor, RecruitmentRun] =
     for {
       _ <- ZIO.whenDiscard(ctx.showHints)(
@@ -324,7 +324,7 @@ object RecruitmentApp extends ZIOAppDefault {
     alreadyFound: Int,
     label: String,
     interrupted: Boolean = false,
-    jobRunId: Option[String]
+    jobRunId: Option[JobRunId]
   ): RIO[CcasLogger & Transactor, RecruitmentRun] =
     for {
       _     <- ctx.progressBar.finish

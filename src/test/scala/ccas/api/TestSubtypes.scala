@@ -14,7 +14,6 @@ object TestSubtypes extends ZIOSpecDefault {
     suiteClubId,
     suiteClubSlug,
     suiteClubMatchId,
-    suitePercentage,
     suiteClubAlias,
     suiteTournamentSlug
   )
@@ -108,26 +107,6 @@ object TestSubtypes extends ZIOSpecDefault {
     test("fromUrl extracts ID from last path segment") {
       val url = URL.decode("https://api.chess.com/pub/match/1650919").toOption.get
       assertTrue(ClubMatchId.fromUrl(url) == ClubMatchId(1650919))
-    }
-  )
-
-  // --- Percentage (DoubleCompanion) ---
-
-  private def suitePercentage = suite("Percentage")(
-    test("accepts 0.0") {
-      assertTrue("0.0".fromJson[Percentage] == Right(Percentage(0.0)))
-    },
-    test("accepts 1.0") {
-      assertTrue("1.0".fromJson[Percentage] == Right(Percentage(1.0)))
-    },
-    test("accepts mid-range") {
-      assertTrue("0.5".fromJson[Percentage] == Right(Percentage(0.5)))
-    },
-    test("rejects below zero") {
-      assertTrue("-0.1".fromJson[Percentage].isLeft)
-    },
-    test("rejects above one") {
-      assertTrue("1.1".fromJson[Percentage].isLeft)
     }
   )
 

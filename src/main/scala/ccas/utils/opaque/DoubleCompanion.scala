@@ -23,6 +23,7 @@ trait DoubleCompanion {
   given JsonEncoder[Type]  = summon[JsonCodec[Type]].encoder
   given DbCodec[Type]      = DbCodec[Double].biMap(wrap, unwrap)
   given DeriveConfig[Type] = DeriveConfig[Double].mapOrFail(validated(_).left.map(InvalidData(Chunk.empty, _)))
+  given Ordering[Type]     = Ordering.by(unwrap)
 
   extension (d: Type) {
     def value: Double = unwrap(d)

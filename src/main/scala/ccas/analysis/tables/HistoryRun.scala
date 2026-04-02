@@ -7,7 +7,7 @@ import com.augustnagro.magnum.*
 import zio.ZIO
 
 import ccas.analysis.tables.RunTrigger.given
-import ccas.api.misc.subtypes.ClubId
+import ccas.api.misc.subtypes.{ClubId, JobRunId}
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.SqlZioTypes.connectZIO
 
@@ -19,7 +19,7 @@ final case class HistoryRun(
   completedAt: Option[Instant],
   matchesProcessed: Option[Int],
   playersDiscovered: Option[Int],
-  jobRunId: Option[String]
+  jobRunId: Option[JobRunId]
 ) derives DbCodec
 
 object HistoryRun {
@@ -44,7 +44,7 @@ object HistoryRun {
     clubId: ClubId,
     trigger: RunTrigger,
     startedAt: Instant,
-    jobRunId: Option[String] = None
+    jobRunId: Option[JobRunId] = None
   ): ZIO[Transactor, SQLException, Long] =
     connectZIO {
       sql"""INSERT INTO history_run (club_id, trigger, started_at, job_run_id)
