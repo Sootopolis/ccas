@@ -91,7 +91,7 @@ object TestChessComClient extends ZIOSpecDefault {
   /** Dummy ChessComClient layer that returns 404 for all requests. Useful for tests that need a ChessComClient in the
     * environment but never actually make HTTP calls.
     */
-  val dummyLayer: ZLayer[Transactor, Nothing, ChessComClient] =
+  val dummyLayer: URLayer[Transactor, ChessComClient] =
     ZLayer.fromZIO {
       makeClient(_ => ZIO.succeed(Response(status = Status.NotFound))).provideSomeLayer(Scope.default).map(_._1)
     }

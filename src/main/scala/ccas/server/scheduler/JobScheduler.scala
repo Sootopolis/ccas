@@ -5,7 +5,7 @@ import java.time.Instant
 
 import com.augustnagro.magnum.Transactor
 import com.typesafe.config.ConfigFactory
-import zio.{durationLong, Duration, Task, UIO, ZIO, ZLayer}
+import zio.{durationLong, Duration, Task, UIO, URLayer, ZIO, ZLayer}
 
 import ccas.analysis.apps.history.HistoryApp
 import ccas.analysis.apps.membership.MembershipApp
@@ -22,7 +22,7 @@ trait JobScheduler {
 
 object JobScheduler {
 
-  val live: ZLayer[CcasLogger & JobRunner & Transactor, Nothing, JobScheduler] =
+  val live: URLayer[CcasLogger & JobRunner & Transactor, JobScheduler] =
     ZLayer.fromFunction { (logger: CcasLogger, runner: JobRunner, xa: Transactor) =>
       val config = ConfigFactory.load()
       val pollMinutes =

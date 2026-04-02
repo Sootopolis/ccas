@@ -3,7 +3,7 @@ package ccas.server.routes
 import java.time.{Instant, LocalDateTime, ZoneOffset}
 
 import com.augustnagro.magnum.{sql, Transactor}
-import zio.{RIO, Ref, Scope, UIO, URIO, ZIO, ZLayer}
+import zio.{RIO, Ref, Scope, UIO, ULayer, URIO, ZIO, ZLayer}
 import zio.http.*
 import zio.json.DecoderOps
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
@@ -70,7 +70,7 @@ object TestRoutes extends ZIOSpecDefault {
     def prePopulate(jobRun: JobRun): UIO[Unit] = jobs.update(_ + (jobRun.id -> jobRun))
   }
 
-  private val fakeJobRunnerLayer: ZLayer[Any, Nothing, JobRunner] =
+  private val fakeJobRunnerLayer: ULayer[JobRunner] =
     ZLayer.fromZIO {
       for {
         jobs       <- Ref.make(Map.empty[JobRunId, JobRun])

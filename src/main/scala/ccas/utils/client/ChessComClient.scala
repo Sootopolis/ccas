@@ -438,7 +438,7 @@ object ChessComClient {
       Header.Accept(MediaType.application.json)
     )
 
-  def live(appLabel: String): ZLayer[Client & Transactor & CcasLogger, Throwable, ChessComClient] =
+  def live(appLabel: String): RLayer[Client & Transactor & CcasLogger, ChessComClient] =
     ZLayer.scoped {
       val typesafeConfig = ConfigFactory.load().getConfig("chess-com-client")
       val permits        = typesafeConfig.getLong("permits")
