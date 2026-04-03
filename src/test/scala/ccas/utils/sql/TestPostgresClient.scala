@@ -36,7 +36,7 @@ object TestPostgresClient extends ZIOSpecDefault {
   private def testConnectionFunctional = test("connections are functional") {
     for {
       pgClient <- ZIO.service[PostgresClient]
-      result <- ZIO.attempt {
+      result <- ZIO.attemptBlocking {
         val conn = pgClient.transactor.dataSource.getConnection
         try {
           val stmt = conn.createStatement()
@@ -54,7 +54,7 @@ object TestPostgresClient extends ZIOSpecDefault {
   private def testSchemaOverride = test("FreshSchemaLayer creates schema") {
     for {
       pgClient <- ZIO.service[PostgresClient]
-      exists <- ZIO.attempt {
+      exists <- ZIO.attemptBlocking {
         val conn = pgClient.transactor.dataSource.getConnection
         try {
           val stmt = conn.createStatement()

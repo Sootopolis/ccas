@@ -39,7 +39,7 @@ final class PostgresClient private (
   /** Run a read-only block with a pooled connection, retrying on transient errors. */
   def connect[A](f: DbCon ?=> A): IO[SQLException, A] =
     ZIO
-      .attempt(com.augustnagro.magnum.connect(transactor)(f))
+      .attemptBlocking(com.augustnagro.magnum.connect(transactor)(f))
       .mapError(unwrapSqlCause)
       .refineToOrDie[SQLException]
       .retry(retrySchedule)
@@ -47,7 +47,7 @@ final class PostgresClient private (
   /** Run a single-statement write in its own transaction, retrying on transient errors. */
   def transact[A](f: DbTx ?=> A): IO[SQLException, A] =
     ZIO
-      .attempt(com.augustnagro.magnum.transact(transactor)(f))
+      .attemptBlocking(com.augustnagro.magnum.transact(transactor)(f))
       .mapError(unwrapSqlCause)
       .refineToOrDie[SQLException]
       .retry(retrySchedule)
@@ -66,7 +66,7 @@ final class PostgresClient private (
     f: ZIO[R & PostgresClient, E, A]
   ): ZIO[R, E, A] = {
     val attempt: ZIO[R, E, A] = ZIO.acquireReleaseWith(
-      acquire = ZIO.attempt(transactor.dataSource.getConnection).refineToOrDie[SQLException]
+      acquire = ZIO.attemptBlocking(transactor.dataSource.getConnection).refineToOrDie[SQLException]
     )(
       release = con => ZIO.succeed(con.close())
     ) { con =>
@@ -76,8 +76,8 @@ final class PostgresClient private (
       val txClient = new PostgresClient(scopedXa, retryBaseDelay, retryMaxRetries = 0)
       f.provideSome[R](ZLayer.succeed(txClient))
         .foldCauseZIO(
-          failure = cause => ZIO.attempt(con.rollback()).ignore *> ZIO.failCause(cause),
-          success = a => ZIO.attempt(con.commit()).refineToOrDie[SQLException].as(a)
+          failure = cause => ZIO.attemptBlocking(con.rollback()).ignore *> ZIO.failCause(cause),
+          success = a => ZIO.attemptBlocking(con.commit()).refineToOrDie[SQLException].as(a)
         )
     }
     attempt.retry(retrySchedule)
@@ -110,7 +110,7 @@ object PostgresClient {
     ZLayer.scoped {
       for {
         triple <- ZIO.acquireRelease(
-          ZIO.attempt {
+          ZIO.attemptBlocking {
             val config       = ConfigFactory.load().getConfig(prefix)
             val hikariConfig = new HikariConfig()
 

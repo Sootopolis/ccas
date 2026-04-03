@@ -7,7 +7,7 @@ object FreshSchemaLayer {
 
   def apply(schema: String, onInit: RIO[PostgresClient, Unit] = ZIO.unit): TaskLayer[PostgresClient] = {
     val resetSchema: RIO[PostgresClient, Unit] = ZIO.serviceWithZIO[PostgresClient] { pgClient =>
-      ZIO.attempt {
+      ZIO.attemptBlocking {
         require(schemaNamePattern.matches(schema), s"Invalid schema name: $schema")
         val conn = pgClient.transactor.dataSource.getConnection
         try {
