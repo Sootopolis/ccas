@@ -69,7 +69,8 @@ object TestChessComClientSupport {
         refs,
         stats,
         bar,
-        ChessComClient.ThrottleConfig(permits, 30.seconds, 5.seconds, 1.second, 5.seconds, 10.seconds, 20, 0.2, 10)
+        ChessComClient.ThrottleConfig(permits, 30.seconds, 5.seconds, 1.second, 5.seconds, 10.seconds, 20, 0.2, 10),
+        Scope.global
       )
     }
 }

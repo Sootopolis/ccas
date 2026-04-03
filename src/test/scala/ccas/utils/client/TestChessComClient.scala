@@ -27,6 +27,7 @@ object TestChessComClient extends ZIOSpecDefault {
     failureThreshold: Double = 0.2
   ): ZIO[Scope & PostgresClient, Nothing, (ChessComClient, Ref[ChessComClient.ThrottleState])] =
     for {
+      testScope     <- ZIO.service[Scope]
       pgClient      <- ZIO.service[PostgresClient]
       stateRef      <- Ref.make(ChessComClient.ThrottleState(permits, 0, Vector.empty))
       activeRef     <- Ref.make(0)
@@ -85,7 +86,8 @@ object TestChessComClient extends ZIOSpecDefault {
         refs,
         stats,
         bar,
-        config
+        config,
+        testScope
       )
       (client, stateRef)
     }
@@ -314,6 +316,29 @@ object TestChessComClient extends ZIOSpecDefault {
           count <- counter.get
         } yield assertTrue(exit.isFailure, count == 1)
       }
+    },
+    test("recovery fibers are interrupted when scope closes") {
+      for {
+        // Create client and trigger throttle-down inside a scope, then let the scope close
+        stateRef <- ZIO.scoped {
+          for {
+            (client, stateRef) <- makeClient(
+              handler = _ => ZIO.succeed(Response(status = Status.TooManyRequests)),
+              permits = 20,
+              cooldown = 50.millis,
+              failureThreshold = 0.2
+            )
+            _ <- ZIO.foreachParDiscard(1 to 5)(i =>
+              client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get).exit
+            )
+            state <- stateRef.get
+            _ <- ZIO.succeed(assertTrue(state.currentMax == 1L))
+          } yield stateRef // scope closes here, recovery fibers should be interrupted
+        }
+        // Wait longer than the cooldown — if recovery were alive, it would double permits
+        _ <- ZIO.sleep(300.millis)
+        state <- stateRef.get
+      } yield assertTrue(state.currentMax == 1L)
     },
     test("sequential ordering when throttled to 1 permit") {
       ZIO.scoped {

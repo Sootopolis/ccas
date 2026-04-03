@@ -32,7 +32,8 @@ import ccas.utils.json.JsonDecodingException
   *     configurable threshold, `currentMax` drops to 1 and the gate immediately enforces it.
   *   - '''Generation-gated recovery''' — after a cooldown period, a background fiber doubles the permit limit back (or
   *     holds if failures persist). A generation counter ensures that only the most recent throttle-down triggers
-  *     recovery, preventing stale fibers from interfering.
+  *     recovery, preventing stale fibers from interfering. Recovery fibers are scoped to the client's lifetime and
+  *     interrupted when the layer is torn down.
   *   - '''Retry schedules''' — separate schedules handle HTTP 429 (exponential backoff), Cloudflare challenge 403s
   *     (fixed delay), normal 403 (single retry), and transient connection errors (exponential backoff). HTTP 404s are
   *     not retried as they are almost always permanent (e.g. cancelled matches on Chess.com).
@@ -52,7 +53,8 @@ final class ChessComClient(
   throttle: ChessComClient.ThrottleRefs,
   statsRef: Ref[ChessComClient.StatsAccumulator],
   progressBar: ProgressBar,
-  config: ChessComClient.ThrottleConfig
+  config: ChessComClient.ThrottleConfig,
+  scope: Scope
 ) {
   import throttle.*
 
@@ -209,7 +211,8 @@ final class ChessComClient(
       case Some((oldMax, gen)) =>
         statsRef.update(_.incThrottleDowns) *>
           logger.warn(s"Rate limit throttle: $oldMax \u2192 1 permit") *>
-          scheduleRecovery(gen, cooldown).forkDaemon.unit
+          scheduleRecovery(gen, cooldown).forkDaemon
+            .flatMap(f => scope.addFinalizerExit(_ => f.interrupt)).unit
     }
 
   /** Wait for in-flight requests to drain, sleep for cooldown, then recover permits if failure rate has dropped. Clears
@@ -483,6 +486,7 @@ object ChessComClient {
         ThrottleConfig(permits, cooldown, cfCooldown, 1.second, singleDelay, cfDelay, windowSize, threshold, minSample)
       for {
         contactEmail  <- ZIO.attempt(typesafeConfig.getString("contact-email"))
+        clientScope   <- ZIO.service[Scope]
         client        <- ZIO.service[Client]
         pgClient      <- ZIO.service[PostgresClient]
         logger        <- ZIO.service[CcasLogger]
@@ -511,7 +515,8 @@ object ChessComClient {
         refs,
         stats,
         bar,
-        throttleConfig
+        throttleConfig,
+        clientScope
       )
     }
 }
