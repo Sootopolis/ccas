@@ -7,9 +7,11 @@ import zio.http.*
 import zio.json.*
 import zio.test.*
 
-import ccas.analysis.tables.Tables
+import ccas.analysis.tables.{ClientStats, Tables}
 import ccas.utils.TestCcasLogger
 import ccas.utils.sql.FreshSchemaLayer
+
+import java.time.Instant
 
 object TestChessComClient extends ZIOSpecDefault {
 
@@ -334,7 +336,8 @@ object TestChessComClient extends ZIOSpecDefault {
         } yield assertTrue(recorded == Chunk(0, 1, 2))
       }
     },
-    suiteStatsAccumulator
+    suiteStatsAccumulator,
+    suitePersistStats
   ).provideShared(
     FreshSchemaLayer("test_client", Tables.ensureTables)
   ) @@ TestAspect.withLiveClock @@ TestAspect.timeout(15.seconds)
@@ -379,6 +382,50 @@ object TestChessComClient extends ZIOSpecDefault {
         .updatePeak(5)
         .updatePeak(2)
       assertTrue(s.peakConcurrent == 5)
+    }
+  )
+
+  // ==========================================================================
+  // persistStats (DB)
+  // ==========================================================================
+
+  private def suitePersistStats = suite("persistStats")(
+    test("inserts on first call and updates on subsequent calls") {
+      for {
+        pgClient  <- ZIO.service[PostgresClient]
+        statsRef  <- Ref.make(ChessComClient.StatsAccumulator().copy(requests = 5, successes = 4, failures = 1))
+        rowIdRef  <- Ref.make(Option.empty[Long])
+        startedAt <- ZIO.succeed(Instant.now())
+        config = ChessComClient.ThrottleConfig(8, 30.seconds, 5.seconds, 1.second, 5.seconds, 10.seconds, 20, 0.2, 10)
+        // First flush: should insert
+        _ <- ChessComClient.persistStats("test-persist", startedAt, statsRef, rowIdRef, config, pgClient)
+        rowId1 <- rowIdRef.get
+        // Second flush after more requests: should update same row
+        _ <- statsRef.update(_.copy(requests = 10, successes = 9))
+        _ <- ChessComClient.persistStats("test-persist", startedAt, statsRef, rowIdRef, config, pgClient)
+        rowId2 <- rowIdRef.get
+        recent <- ClientStats.selectRecent(startedAt.minusSeconds(60))
+      } yield assertTrue(
+        rowId1.isDefined,
+        rowId2 == rowId1,
+        recent.count(_.appLabel == "test-persist") == 1,
+        recent.find(_.appLabel == "test-persist").get.requests == 10L
+      )
+    },
+    test("skips persist when no requests made") {
+      for {
+        pgClient  <- ZIO.service[PostgresClient]
+        statsRef  <- Ref.make(ChessComClient.StatsAccumulator())
+        rowIdRef  <- Ref.make(Option.empty[Long])
+        startedAt <- ZIO.succeed(Instant.now())
+        config = ChessComClient.ThrottleConfig(8, 30.seconds, 5.seconds, 1.second, 5.seconds, 10.seconds, 20, 0.2, 10)
+        _ <- ChessComClient.persistStats("test-noop", startedAt, statsRef, rowIdRef, config, pgClient)
+        rowId  <- rowIdRef.get
+        recent <- ClientStats.selectRecent(startedAt.minusSeconds(60))
+      } yield assertTrue(
+        rowId.isEmpty,
+        recent.count(_.appLabel == "test-noop") == 0
+      )
     }
   )
 }

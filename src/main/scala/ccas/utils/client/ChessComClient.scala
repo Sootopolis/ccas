@@ -36,6 +36,10 @@ import ccas.utils.json.JsonDecodingException
   *   - '''Retry schedules''' — separate schedules handle HTTP 429 (exponential backoff), Cloudflare challenge 403s
   *     (fixed delay), normal 403 (single retry), and transient connection errors (exponential backoff). HTTP 404s are
   *     not retried as they are almost always permanent (e.g. cancelled matches on Chess.com).
+  *   - '''Periodic stats flushing''' — a background daemon fiber persists accumulated request statistics to the
+  *     `client_stats` table at a configurable interval (`stats-flush-interval-seconds`). On first flush an INSERT
+  *     captures the row ID; subsequent flushes UPDATE the same row in place. A final flush runs in the scope finalizer.
+  *     This ensures stats survive non-graceful shutdowns with at most one interval's worth of data loss.
   *
   * Constructed via the `ChessComClient.live` ZLayer which reads configuration from `application.conf` under the
   * `chess-com-client` prefix.
@@ -416,21 +420,46 @@ object ChessComClient {
     }
   }
 
-  private def logAndPersistStats(
+  /** Persist a snapshot of accumulated stats to the database. Inserts a new row on the first call with `requests > 0`
+    * and updates the same row on subsequent calls. Silently swallows DB errors so it is safe to call from finalizers and
+    * background fibers.
+    */
+  private[ccas] def persistStats(
     appLabel: String,
     startedAt: Instant,
     statsRef: Ref[StatsAccumulator],
+    statsRowId: Ref[Option[Long]],
+    config: ThrottleConfig,
+    pgClient: PostgresClient
+  ): UIO[Unit] =
+    (for {
+      s <- statsRef.get
+      _ <- ZIO.whenDiscard(s.requests > 0) {
+        val row = s.toClientStats(appLabel, startedAt, Instant.now(), config)
+        statsRowId.get.flatMap {
+          case Some(id) =>
+            ClientStats.updateById(id, row).provideEnvironment(ZEnvironment(pgClient)).unit
+          case None =>
+            ClientStats.insertReturningId(row).provideEnvironment(ZEnvironment(pgClient))
+              .flatMap(id => statsRowId.set(Some(id)))
+        }
+      }
+    } yield ()).ignore
+
+  /** Final stats flush: persists the latest snapshot and logs a human-readable summary. Called by the scope finalizer. */
+  private def finalFlush(
+    appLabel: String,
+    startedAt: Instant,
+    statsRef: Ref[StatsAccumulator],
+    statsRowId: Ref[Option[Long]],
     config: ThrottleConfig,
     logger: CcasLogger,
     pgClient: PostgresClient
   ): UIO[Unit] =
-    statsRef.get.flatMap { s =>
-      ZIO.whenDiscard(s.requests > 0) {
-        val row = s.toClientStats(appLabel, startedAt, Instant.now(), config)
-        ClientStats.insert(row).provideEnvironment(ZEnvironment(pgClient)).ignore *>
-          logger.info(s.summary)
+    persistStats(appLabel, startedAt, statsRef, statsRowId, config, pgClient) *>
+      statsRef.get.flatMap { s =>
+        ZIO.whenDiscard(s.requests > 0)(logger.info(s.summary))
       }
-    }
 
   private def userAgentHeaders(contactEmail: String): Headers =
     Headers(
@@ -449,6 +478,7 @@ object ChessComClient {
       val minSample      = typesafeConfig.getInt("min-sample-size")
       val singleDelay    = typesafeConfig.getLong("single-retry-delay-seconds").seconds
       val cfDelay        = typesafeConfig.getLong("cf-retry-delay-seconds").seconds
+      val statsFlushInterval = typesafeConfig.getLong("stats-flush-interval-seconds").seconds
       val throttleConfig =
         ThrottleConfig(permits, cooldown, cfCooldown, 1.second, singleDelay, cfDelay, windowSize, threshold, minSample)
       for {
@@ -463,9 +493,16 @@ object ChessComClient {
         ema           <- Ref.make(0.0)
         startedAt     <- ZIO.succeed(Instant.now())
         stats         <- Ref.make(StatsAccumulator())
+        statsRowId    <- Ref.make(Option.empty[Long])
         bar           <- logger.progressBar
         refs = ThrottleRefs(stateRef, activeRef, rateLimitGate, lastReqRef, ema)
-        _ <- ZIO.addFinalizer(logAndPersistStats(appLabel, startedAt, stats, throttleConfig, logger, pgClient))
+        flushFiber <- persistStats(appLabel, startedAt, stats, statsRowId, throttleConfig, pgClient)
+          .repeat(Schedule.fixed(statsFlushInterval))
+          .forkDaemon
+        _ <- ZIO.addFinalizer(
+          flushFiber.interrupt *>
+            finalFlush(appLabel, startedAt, stats, statsRowId, throttleConfig, logger, pgClient)
+        )
       } yield ChessComClient(
         client,
         pgClient,
