@@ -38,16 +38,14 @@ final class PostgresClient private (
 
   /** Run a read-only block with a pooled connection, retrying on transient errors. */
   def connect[A](f: DbCon ?=> A): IO[SQLException, A] =
-    ZIO
-      .attemptBlocking(com.augustnagro.magnum.connect(transactor)(f))
+    ZIO.attemptBlocking(com.augustnagro.magnum.connect(transactor)(f))
       .mapError(unwrapSqlCause)
       .refineToOrDie[SQLException]
       .retry(retrySchedule)
 
   /** Run a single-statement write in its own transaction, retrying on transient errors. */
   def transact[A](f: DbTx ?=> A): IO[SQLException, A] =
-    ZIO
-      .attemptBlocking(com.augustnagro.magnum.transact(transactor)(f))
+    ZIO.attemptBlocking(com.augustnagro.magnum.transact(transactor)(f))
       .mapError(unwrapSqlCause)
       .refineToOrDie[SQLException]
       .retry(retrySchedule)
@@ -62,26 +60,22 @@ final class PostgresClient private (
     * The `R` type parameter passes through any additional service requirements (e.g. `CcasLogger`) — only
     * `PostgresClient` is provided/eliminated by this method.
     */
-  def withTransaction[R, E >: SQLException <: Throwable, A](
-    f: ZIO[R & PostgresClient, E, A]
-  ): ZIO[R, E, A] = {
-    val attempt: ZIO[R, E, A] = ZIO.acquireReleaseWith(
-      acquire = ZIO.attemptBlocking(transactor.dataSource.getConnection).refineToOrDie[SQLException]
-    )(
-      release = con => ZIO.succeed(con.close())
-    ) { con =>
-      con.setAutoCommit(false)
-      val proxy    = transactionProxy(con)
-      val scopedXa = transactor.copy(dataSource = SingleConnectionDataSource(proxy))
-      val txClient = new PostgresClient(scopedXa, retryBaseDelay, retryMaxRetries = 0)
-      f.provideSome[R](ZLayer.succeed(txClient))
-        .foldCauseZIO(
-          failure = cause => ZIO.attemptBlocking(con.rollback()).ignore *> ZIO.failCause(cause),
-          success = a => ZIO.attemptBlocking(con.commit()).refineToOrDie[SQLException].as(a)
+  def withTransaction[R, E >: SQLException <: Throwable, A](f: ZIO[R & PostgresClient, E, A]): ZIO[R, E, A] =
+    ZIO.scoped[R] {
+      for {
+        conn <- ZIO.fromAutoCloseable {
+          ZIO.attemptBlocking(transactor.dataSource.getConnection).refineToOrDie[SQLException]
+        }
+        _ <- ZIO.attemptBlocking(conn.setAutoCommit(false)).refineToOrDie[SQLException]
+        proxy    = transactionProxy(conn)
+        scopedXa = transactor.copy(dataSource = SingleConnectionDataSource(proxy))
+        txClient = new PostgresClient(scopedXa, retryBaseDelay, retryMaxRetries = 0)
+        result <- f.provideSomeLayer[R](ZLayer.succeed(txClient)).foldCauseZIO(
+          failure = cause => ZIO.attemptBlocking(conn.rollback()).ignore *> ZIO.failCause(cause),
+          success = a => ZIO.attemptBlocking(conn.commit()).refineToOrDie[SQLException].as(a)
         )
-    }
-    attempt.retry(retrySchedule)
-  }
+      } yield result
+    }.retry(retrySchedule)
 }
 
 object PostgresClient {
@@ -109,47 +103,45 @@ object PostgresClient {
   ): TaskLayer[PostgresClient] =
     ZLayer.scoped {
       for {
-        triple <- ZIO.acquireRelease(
-          ZIO.attemptBlocking {
-            val config       = ConfigFactory.load().getConfig(prefix)
-            val hikariConfig = new HikariConfig()
+        (hikariConfig, baseDelay, maxRetries) <- ZIO.attemptBlocking {
+          val config       = ConfigFactory.load().getConfig(prefix)
+          val hikariConfig = new HikariConfig()
 
-            if (config.hasPath("url")) {
-              hikariConfig.setJdbcUrl(config.getString("url"))
-            } else {
-              val dsConfig = config.getConfig("dataSource")
-              hikariConfig.setJdbcUrl(
-                s"jdbc:postgresql://${dsConfig.getString("serverName")}:${dsConfig.getInt("portNumber")}/${dsConfig.getString("databaseName")}"
-              )
-              hikariConfig.setUsername(dsConfig.getString("user"))
-              hikariConfig.setPassword(dsConfig.getString("password"))
-              hikariConfig.setSchema(schema.getOrElse(dsConfig.getString("currentSchema")))
-            }
-
-            if (config.hasPath("pool")) {
-              val poolConfig = config.getConfig("pool")
-              if (poolConfig.hasPath("maximumPoolSize"))
-                hikariConfig.setMaximumPoolSize(poolConfig.getInt("maximumPoolSize"))
-              if (poolConfig.hasPath("minimumIdle")) hikariConfig.setMinimumIdle(poolConfig.getInt("minimumIdle"))
-              if (poolConfig.hasPath("connectionTimeout"))
-                hikariConfig.setConnectionTimeout(poolConfig.getLong("connectionTimeout"))
-              if (poolConfig.hasPath("idleTimeout")) hikariConfig.setIdleTimeout(poolConfig.getLong("idleTimeout"))
-              if (poolConfig.hasPath("maxLifetime")) hikariConfig.setMaxLifetime(poolConfig.getLong("maxLifetime"))
-              if (poolConfig.hasPath("keepaliveTime"))
-                hikariConfig.setKeepaliveTime(poolConfig.getLong("keepaliveTime"))
-              if (poolConfig.hasPath("connectionTestQuery"))
-                hikariConfig.setConnectionTestQuery(poolConfig.getString("connectionTestQuery"))
-              if (poolConfig.hasPath("initializationFailTimeout"))
-                hikariConfig.setInitializationFailTimeout(poolConfig.getLong("initializationFailTimeout"))
-            }
-
-            val baseDelay  = if (config.hasPath("retry.baseDelayMs")) config.getLong("retry.baseDelayMs") else 100L
-            val maxRetries = if (config.hasPath("retry.maxRetries")) config.getInt("retry.maxRetries") else 3
-
-            (new HikariDataSource(hikariConfig), baseDelay, maxRetries)
+          if (config.hasPath("url")) {
+            hikariConfig.setJdbcUrl(config.getString("url"))
+          } else {
+            val dsConfig = config.getConfig("dataSource")
+            hikariConfig.setJdbcUrl(
+              s"jdbc:postgresql://${dsConfig.getString("serverName")}:${dsConfig.getInt("portNumber")}/${dsConfig.getString("databaseName")}"
+            )
+            hikariConfig.setUsername(dsConfig.getString("user"))
+            hikariConfig.setPassword(dsConfig.getString("password"))
+            hikariConfig.setSchema(schema.getOrElse(dsConfig.getString("currentSchema")))
           }
-        ) { case (ds, _, _) => ZIO.succeed(ds.close()) }
-        (hikariDs, baseDelay, maxRetries) = triple
+
+          if (config.hasPath("pool")) {
+            val poolConfig = config.getConfig("pool")
+            if (poolConfig.hasPath("maximumPoolSize"))
+              hikariConfig.setMaximumPoolSize(poolConfig.getInt("maximumPoolSize"))
+            if (poolConfig.hasPath("minimumIdle")) hikariConfig.setMinimumIdle(poolConfig.getInt("minimumIdle"))
+            if (poolConfig.hasPath("connectionTimeout"))
+              hikariConfig.setConnectionTimeout(poolConfig.getLong("connectionTimeout"))
+            if (poolConfig.hasPath("idleTimeout")) hikariConfig.setIdleTimeout(poolConfig.getLong("idleTimeout"))
+            if (poolConfig.hasPath("maxLifetime")) hikariConfig.setMaxLifetime(poolConfig.getLong("maxLifetime"))
+            if (poolConfig.hasPath("keepaliveTime"))
+              hikariConfig.setKeepaliveTime(poolConfig.getLong("keepaliveTime"))
+            if (poolConfig.hasPath("connectionTestQuery"))
+              hikariConfig.setConnectionTestQuery(poolConfig.getString("connectionTestQuery"))
+            if (poolConfig.hasPath("initializationFailTimeout"))
+              hikariConfig.setInitializationFailTimeout(poolConfig.getLong("initializationFailTimeout"))
+          }
+
+          val baseDelay  = if (config.hasPath("retry.baseDelayMs")) config.getLong("retry.baseDelayMs") else 100L
+          val maxRetries = if (config.hasPath("retry.maxRetries")) config.getInt("retry.maxRetries") else 3
+
+          (hikariConfig, baseDelay, maxRetries)
+        }
+        hikariDs <- ZIO.fromAutoCloseable(ZIO.attemptBlocking(new HikariDataSource(hikariConfig)))
         client = new PostgresClient(Transactor(hikariDs), baseDelay.millis, maxRetries)
         _ <- onInit.provideEnvironment(zio.ZEnvironment(client))
       } yield client
@@ -186,11 +178,11 @@ object PostgresClient {
   private[sql] def isTransient(e: Throwable): Boolean = e match {
     case sql: SQLException =>
       Option(sql.getSQLState).exists(_.startsWith("08")) ||
-        Option(sql.getMessage).exists { msg =>
-          msg.contains("terminating connection") ||
-          msg.contains("Connection is closed") ||
-          msg.contains("This connection has been closed")
-        }
+      Option(sql.getMessage).exists { msg =>
+        msg.contains("terminating connection") ||
+        msg.contains("Connection is closed") ||
+        msg.contains("This connection has been closed")
+      }
     case _ => false
   }
 
@@ -199,30 +191,30 @@ object PostgresClient {
   /** Wraps a Connection in a Proxy that suppresses close/commit/rollback/setAutoCommit, so nested transactZIO calls
     * inside withTransaction cannot break the outer transaction.
     */
-  private def transactionProxy(con: Connection): Connection =
+  private def transactionProxy(conn: Connection): Connection =
     java.lang.reflect.Proxy
       .newProxyInstance(
-        con.getClass.getClassLoader,
+        conn.getClass.getClassLoader,
         Array(classOf[Connection]),
         (_, method: Method, args: Array[AnyRef]) =>
           method.getName match {
             case "close" | "commit" | "rollback" => ()
             case "setAutoCommit"                 => ()
-            case _ if args == null               => method.invoke(con)
-            case _                               => method.invoke(con, args*)
+            case _ if args == null               => method.invoke(conn)
+            case _                               => method.invoke(conn, args*)
           }
       )
       .asInstanceOf[Connection] // safe: proxy implements Connection interface
 
   /** Minimal DataSource that always returns the same (proxied) connection. */
-  private class SingleConnectionDataSource(con: Connection) extends DataSource {
-    override def getConnection: Connection                                     = con
-    override def getConnection(username: String, password: String): Connection = con
-    override def getLogWriter: PrintWriter                                     = new PrintWriter(java.io.OutputStream.nullOutputStream)
-    override def setLogWriter(out: PrintWriter): Unit                          = ()
-    override def setLoginTimeout(seconds: Int): Unit                           = ()
-    override def getLoginTimeout: Int                                          = 0
-    override def getParentLogger: JLogger = JLogger.getLogger("SingleConnectionDataSource")
+  private class SingleConnectionDataSource(conn: Connection) extends DataSource {
+    override def getConnection: Connection                                     = conn
+    override def getConnection(username: String, password: String): Connection = conn
+    override def getLogWriter: PrintWriter            = new PrintWriter(java.io.OutputStream.nullOutputStream)
+    override def setLogWriter(out: PrintWriter): Unit = ()
+    override def setLoginTimeout(seconds: Int): Unit  = ()
+    override def getLoginTimeout: Int                 = 0
+    override def getParentLogger: JLogger             = JLogger.getLogger("SingleConnectionDataSource")
     override def unwrap[T](iface: Class[T]): T =
       if (iface.isInstance(this)) { iface.cast(this) }
       else { throw new SQLException(s"Cannot unwrap to ${iface.getName}") }

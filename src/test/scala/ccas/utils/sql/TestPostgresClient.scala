@@ -36,17 +36,16 @@ object TestPostgresClient extends ZIOSpecDefault {
   private def testConnectionFunctional = test("connections are functional") {
     for {
       pgClient <- ZIO.service[PostgresClient]
-      result <- ZIO.attemptBlocking {
-        val conn = pgClient.transactor.dataSource.getConnection
-        try {
-          val stmt = conn.createStatement()
-          val rs   = stmt.executeQuery("SELECT 1")
-          rs.next()
-          val value = rs.getInt(1)
-          rs.close()
-          stmt.close()
-          value
-        } finally conn.close()
+      result <- ZIO.scoped {
+        for {
+          conn <- ZIO.fromAutoCloseable(ZIO.attemptBlocking(pgClient.transactor.dataSource.getConnection))
+          stmt <- ZIO.fromAutoCloseable(ZIO.attemptBlocking(conn.createStatement()))
+          value <- ZIO.attemptBlocking {
+            val rs = stmt.executeQuery("SELECT 1")
+            rs.next()
+            rs.getInt(1)
+          }
+        } yield value
       }
     } yield assertTrue(result == 1)
   }
@@ -54,18 +53,17 @@ object TestPostgresClient extends ZIOSpecDefault {
   private def testSchemaOverride = test("FreshSchemaLayer creates schema") {
     for {
       pgClient <- ZIO.service[PostgresClient]
-      exists <- ZIO.attemptBlocking {
-        val conn = pgClient.transactor.dataSource.getConnection
-        try {
-          val stmt = conn.createStatement()
-          val rs = stmt.executeQuery(
-            "SELECT 1 FROM information_schema.schemata WHERE schema_name = 'test_dsl'"
-          )
-          val found = rs.next()
-          rs.close()
-          stmt.close()
-          found
-        } finally conn.close()
+      exists <- ZIO.scoped {
+        for {
+          conn <- ZIO.fromAutoCloseable(ZIO.attemptBlocking(pgClient.transactor.dataSource.getConnection))
+          stmt <- ZIO.fromAutoCloseable(ZIO.attemptBlocking(conn.createStatement()))
+          found <- ZIO.attemptBlocking {
+            val rs = stmt.executeQuery(
+              "SELECT 1 FROM information_schema.schemata WHERE schema_name = 'test_dsl'"
+            )
+            rs.next()
+          }
+        } yield found
       }
     } yield assertTrue(exists)
   }
