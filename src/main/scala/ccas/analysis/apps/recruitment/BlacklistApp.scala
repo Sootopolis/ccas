@@ -12,6 +12,7 @@ import ccas.api.player.ApiPlayer
 import ccas.utils.client.ChessComClient
 import ccas.utils.errors.{BadRequestException, NotFoundException}
 import ccas.utils.sql.PostgresClient
+import ccas.utils.sql.PostgresClient.withTransaction
 import ccas.utils.CcasLogger
 
 object BlacklistApp extends ZIOAppDefault {
@@ -60,19 +61,20 @@ object BlacklistApp extends ZIOAppDefault {
         for {
           apiPlayer <- client.get[ApiPlayer](ApiPlayer.getUrl(username))
           now = Instant.now()
-          _ <- Player.insertIfNew(
-            Player(
-              apiPlayer.playerId,
-              apiPlayer.joinedAt,
-              username,
-              apiPlayer.status.category,
-              apiPlayer.title,
-              now
+          _ <- withTransaction {
+            Player.insertIfNew(
+              Player(
+                apiPlayer.playerId,
+                apiPlayer.joinedAt,
+                username,
+                apiPlayer.status.category,
+                apiPlayer.title,
+                now
+              )
+            ) *> RecruitmentBlacklist.upsert(
+              RecruitmentBlacklist(apiClub.clubId, apiPlayer.playerId, now, expiresAt, reason)
             )
-          )
-          _ <- RecruitmentBlacklist.upsert(
-            RecruitmentBlacklist(apiClub.clubId, apiPlayer.playerId, now, expiresAt, reason)
-          )
+          }
           _ <- Console.printLine(
             s"Blacklisted $username (player_id=${apiPlayer.playerId}) for club $clubSlug"
           ).orDie

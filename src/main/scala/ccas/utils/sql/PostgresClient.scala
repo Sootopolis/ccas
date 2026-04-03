@@ -40,6 +40,7 @@ final class PostgresClient private (
   def connect[A](f: DbCon ?=> A): IO[SQLException, A] =
     ZIO
       .attempt(com.augustnagro.magnum.connect(transactor)(f))
+      .mapError(unwrapSqlCause)
       .refineToOrDie[SQLException]
       .retry(retrySchedule)
 
@@ -47,6 +48,7 @@ final class PostgresClient private (
   def transact[A](f: DbTx ?=> A): IO[SQLException, A] =
     ZIO
       .attempt(com.augustnagro.magnum.transact(transactor)(f))
+      .mapError(unwrapSqlCause)
       .refineToOrDie[SQLException]
       .retry(retrySchedule)
 
@@ -163,6 +165,21 @@ object PostgresClient {
     retryMaxRetries: Int = 3
   ): PostgresClient =
     new PostgresClient(Transactor(dataSource), retryBaseDelay, retryMaxRetries)
+
+  // --- Exception unwrapping ---
+
+  /** Magnum wraps JDBC exceptions in its own `SqlException extends RuntimeException`, which causes
+    * `refineToOrDie[SQLException]` to discard the real exception as a defect. This extracts the underlying
+    * `SQLException` from the cause chain so it surfaces as a typed ZIO failure.
+    */
+  private def unwrapSqlCause(e: Throwable): Throwable = e match {
+    case se: SQLException => se
+    case _ =>
+      e.getCause match {
+        case se: SQLException => se
+        case _                => e
+      }
+  }
 
   // --- Transient error detection ---
 

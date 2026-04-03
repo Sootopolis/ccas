@@ -45,8 +45,8 @@ object JobRun {
               completed_at   TIMESTAMPTZ,
               error          TEXT
             )""".update.run()
-      sql"""CREATE INDEX IF NOT EXISTS idx_job_run_running
-            ON job_run (kind, club_id) WHERE status = 'Running'""".update.run()
+      sql"""CREATE UNIQUE INDEX IF NOT EXISTS idx_job_run_running_unique
+            ON job_run (kind, COALESCE(club_id, -1)) WHERE status = 'Running'""".update.run()
       sql"""CREATE INDEX IF NOT EXISTS idx_job_run_started_at
             ON job_run (started_at DESC)""".update.run()
     }
@@ -66,6 +66,19 @@ object JobRun {
             .query[JobRun].run().headOption
         case None =>
           sql"SELECT $selectCols FROM job_run WHERE kind = $kind AND club_id IS NULL AND status = $running"
+            .query[JobRun].run().headOption
+      }
+    }
+
+  def selectRunningForUpdate(kind: JobKind, clubId: Option[ClubId]): ZIO[PostgresClient, SQLException, Option[JobRun]] =
+    connectZIO {
+      val running = JobRunStatus.Running
+      clubId match {
+        case Some(cid) =>
+          sql"SELECT $selectCols FROM job_run WHERE kind = $kind AND club_id = $cid AND status = $running FOR UPDATE"
+            .query[JobRun].run().headOption
+        case None =>
+          sql"SELECT $selectCols FROM job_run WHERE kind = $kind AND club_id IS NULL AND status = $running FOR UPDATE"
             .query[JobRun].run().headOption
       }
     }

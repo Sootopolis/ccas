@@ -19,6 +19,7 @@ import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId}
 import ccas.server.jobs.*
 import ccas.server.routes.RouteHelpers.*
 import ccas.utils.client.ChessComClient
+import ccas.utils.errors.BadRequestException
 import ccas.utils.CcasLogger
 
 object JobRoutes {
@@ -203,26 +204,31 @@ object JobRoutes {
       (for {
         body   <- parseJsonBody[StatsRequest](req)
         runner <- ZIO.service[JobRunner]
+        parsed <- (body.since, body.until) match {
+          case (Some(sinceStr), Some(untilStr)) =>
+            for {
+              since <- ZIO.attempt(Instant.parse(sinceStr))
+                .mapError(e => BadRequestException(s"Invalid 'since': ${e.getMessage}"))
+              until <- ZIO.attempt(Instant.parse(untilStr))
+                .mapError(e => BadRequestException(s"Invalid 'until': ${e.getMessage}"))
+            } yield Some((since, until))
+          case _ => ZIO.none
+        }
         result <- submitClubJob(
           runner,
           JobKind.Stats,
           body.clubSlug,
           Some(body.toJson),
-          jobRunId =>
-            (body.since, body.until) match {
-              case (Some(sinceStr), Some(untilStr)) =>
-                for {
-                  since <- ZIO.attempt(Instant.parse(sinceStr))
-                  until <- ZIO.attempt(Instant.parse(untilStr))
-                  _     <- StatsApp.playerOfPeriod(
-                    body.clubSlug, since, until,
-                    body.minGames.getOrElse(4),
-                    RunTrigger.Api, jobRunId
-                  )
-                } yield ()
-              case _ =>
-                StatsApp.memberStats(body.clubSlug, RunTrigger.Api, jobRunId)
-            }
+          jobRunId => parsed match {
+            case Some((since, until)) =>
+              StatsApp.playerOfPeriod(
+                body.clubSlug, since, until,
+                body.minGames.getOrElse(4),
+                RunTrigger.Api, jobRunId
+              ).unit
+            case None =>
+              StatsApp.memberStats(body.clubSlug, RunTrigger.Api, jobRunId)
+          }
         )
       } yield jsonResponse(Status.Ok, result)).pipe(withErrorHandling)
     },

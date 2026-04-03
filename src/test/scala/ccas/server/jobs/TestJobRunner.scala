@@ -20,6 +20,7 @@ object TestJobRunner extends ZIOSpecDefault {
     testSubmitSucceeds,
     testSubmitRecordsFailed,
     testSubmitRejectsDuplicate,
+    testConcurrentSubmitConflict,
     testSubmitAllowsDifferentClub,
     testSubmitAllowsDifferentKind,
     testStatusUnknown,
@@ -94,6 +95,24 @@ object TestJobRunner extends ZIOSpecDefault {
     } yield assertTrue(
       result.isLeft,
       result.left.exists(_.isInstanceOf[JobConflictException])
+    )
+  }
+
+  private def testConcurrentSubmitConflict = test("concurrent submits for same kind/club produce exactly one winner") {
+    for {
+      _      <- deleteAllJobRuns
+      runner <- ZIO.service[JobRunner]
+      gate   <- zio.Promise.make[Nothing, Unit]
+      fibers <- ZIO.foreach(List.fill(5)(()))(
+        _ => (gate.await *> runner.submit(JobKind.Recruitment, Some(ClubId(204)), None, RunTrigger.Cli, _ => ZIO.never).either).fork
+      )
+      _       <- gate.succeed(())
+      results <- ZIO.foreach(fibers)(_.join)
+      successes = results.count(_.isRight)
+      conflicts = results.count(_.left.exists(_.isInstanceOf[JobConflictException]))
+    } yield assertTrue(
+      successes == 1,
+      conflicts == results.size - 1
     )
   }
 

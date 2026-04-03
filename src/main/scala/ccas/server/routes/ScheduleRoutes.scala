@@ -12,6 +12,7 @@ import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 import ccas.server.jobs.JobKind
 import ccas.server.routes.RouteHelpers.*
 import ccas.server.scheduler.JobSchedule
+import ccas.utils.errors.{BadRequestException, NotFoundException}
 
 object ScheduleRoutes {
 
@@ -78,10 +79,11 @@ object ScheduleRoutes {
     Method.POST / "api" / "schedules" -> handler { (req: Request) =>
       (for {
         body <- parseJsonBody[CreateScheduleRequest](req)
-        kind <- ZIO.fromEither(parseJobKind(body.kind)).mapError(e => new Exception(e))
+        kind <- ZIO.fromEither(parseJobKind(body.kind)).mapError(BadRequestException(_))
+        _ <- ZIO.when(body.intervalHours <= 0)(ZIO.fail(BadRequestException("intervalHours must be positive")))
         clubId <- ZIO.foreach(body.clubSlug) { slug =>
           Club.selectBySlug(ClubSlug.wrap(slug))
-            .someOrFail(new Exception(s"Club not found: $slug"))
+            .someOrFail(NotFoundException(s"Club not found: $slug"))
             .map(_.clubId)
         }
         schedule = JobSchedule(
@@ -101,8 +103,11 @@ object ScheduleRoutes {
     Method.PUT / "api" / "schedules" / long("id") -> handler { (id: Long, req: Request) =>
       (for {
         body    <- parseJsonBody[UpdateScheduleRequest](req)
+        _ <- ZIO.whenDiscard(body.intervalHours.exists(_ <= 0))(
+          ZIO.fail(BadRequestException("intervalHours must be positive"))
+        )
         _       <- JobSchedule.update(id, body.intervalHours.map(_.toShort), body.enabled, body.params.map(Some(_)))
-        updated <- JobSchedule.selectId(id).someOrFail(new Exception(s"Schedule $id not found"))
+        updated <- JobSchedule.selectId(id).someOrFail(NotFoundException(s"Schedule $id not found"))
       } yield jsonResponse(Status.Ok, ScheduleResponse.fromSchedule(updated)))
         .pipe(withErrorHandling)
     },

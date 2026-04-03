@@ -1,8 +1,10 @@
 package ccas.server.jobs
 
+import java.sql.SQLException
 import java.time.Instant
 
 import ccas.utils.sql.PostgresClient
+import ccas.utils.sql.PostgresClient.withTransaction
 import zio.{Fiber, RIO, RLayer, Ref, UIO, ZIO, ZLayer}
 
 import ccas.analysis.tables.RunTrigger
@@ -68,24 +70,29 @@ object JobRunner {
       params: Option[String],
       trigger: RunTrigger,
       effect: Option[JobRunId] => RIO[CcasLogger & ChessComClient & PostgresClient, Any]
-    ): RIO[PostgresClient, JobRunId] =
-      for {
-        existing <- JobRun.selectRunning(kind, clubId)
-        _ <- ZIO.whenDiscard(existing.isDefined)(
-          ZIO.fail(
-            new JobConflictException(
-              s"A ${kind} job is already running" +
-                clubId.fold("")(c => s" for club $c")
-            )
-          )
-        )
-        id     = JobRunId.generate()
-        now    = Instant.now()
-        jobRun = JobRun(id, kind, clubId, trigger, JobRunStatus.Running, params, now, None, None)
-        _     <- JobRun.insert(jobRun)
+    ): RIO[PostgresClient, JobRunId] = {
+      def conflictError = new JobConflictException(
+        s"A ${kind} job is already running" + clubId.fold("")(c => s" for club $c")
+      )
+      (for {
+        id <- withTransaction {
+          for {
+            existing <- JobRun.selectRunningForUpdate(kind, clubId)
+            _ <- ZIO.whenDiscard(existing.isDefined)(ZIO.fail(conflictError))
+            id     = JobRunId.generate()
+            now    = Instant.now()
+            jobRun = JobRun(id, kind, clubId, trigger, JobRunStatus.Running, params, now, None, None)
+            _     <- JobRun.insert(jobRun)
+          } yield id
+        }
         fiber <- runJob(id, effect(Some(id))).fork
         _     <- fibers.update(_ + fiber)
-      } yield id
+      } yield id).catchSome {
+        // Phantom-row race: two transactions both saw no running job, the unique partial index
+        // on (kind, COALESCE(club_id, -1)) WHERE status = 'Running' caught the second insert.
+        case e: SQLException if e.getSQLState == "23505" => ZIO.fail(conflictError)
+      }
+    }
 
     private def runJob(
       id: JobRunId,

@@ -321,6 +321,16 @@ object TestRoutes extends ZIOSpecDefault {
       for {
         response <- JobRoutes.routes.runZIO(jsonRequest(Method.GET, "/api/jobs/nonexistent"))
       } yield assertTrue(response.status == Status.NotFound)
+    },
+    test("POST /api/jobs/stats with invalid date returns 400") {
+      for {
+        _    <- ensureClubs
+        fake <- getFakeRunner
+        _    <- fake.setNextAction(Action.Succeed)
+        response <- JobRoutes.routes.runZIO(
+          jsonRequest(Method.POST, "/api/jobs/stats", """{"clubSlug":"test-club","since":"not-a-date","until":"also-bad"}""")
+        )
+      } yield assertTrue(response.status == Status.BadRequest)
     }
   )
 
@@ -401,12 +411,40 @@ object TestRoutes extends ZIOSpecDefault {
         response <- ScheduleRoutes.routes.runZIO(jsonRequest(Method.DELETE, s"/api/schedules/$id"))
       } yield assertTrue(response.status == Status.NoContent)
     },
-    test("POST /api/schedules with invalid kind returns 500") {
+    test("POST /api/schedules with invalid kind returns 400") {
       for {
         response <- ScheduleRoutes.routes.runZIO(
           jsonRequest(Method.POST, "/api/schedules", """{"kind":"InvalidKind","intervalHours":24}""")
         )
-      } yield assertTrue(response.status == Status.InternalServerError)
+      } yield assertTrue(response.status == Status.BadRequest)
+    },
+    test("POST /api/schedules with non-positive intervalHours returns 400") {
+      for {
+        response <- ScheduleRoutes.routes.runZIO(
+          jsonRequest(Method.POST, "/api/schedules", """{"kind":"Recruitment","clubSlug":"test-club","intervalHours":0}""")
+        )
+      } yield assertTrue(response.status == Status.BadRequest)
+    },
+    test("POST /api/schedules with unknown club returns 404") {
+      for {
+        response <- ScheduleRoutes.routes.runZIO(
+          jsonRequest(Method.POST, "/api/schedules", """{"kind":"Recruitment","clubSlug":"no-such-club","intervalHours":24}""")
+        )
+      } yield assertTrue(response.status == Status.NotFound)
+    },
+    test("PUT /api/schedules/:id with non-positive intervalHours returns 400") {
+      for {
+        response <- ScheduleRoutes.routes.runZIO(
+          jsonRequest(Method.PUT, "/api/schedules/1", """{"intervalHours":-1}""")
+        )
+      } yield assertTrue(response.status == Status.BadRequest)
+    },
+    test("PUT /api/schedules with unknown id returns 404") {
+      for {
+        response <- ScheduleRoutes.routes.runZIO(
+          jsonRequest(Method.PUT, "/api/schedules/999999", """{"enabled":false}""")
+        )
+      } yield assertTrue(response.status == Status.NotFound)
     }
   )
 
