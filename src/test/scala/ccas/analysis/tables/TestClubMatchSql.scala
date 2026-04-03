@@ -4,7 +4,7 @@ import java.time.{Duration, Instant, LocalDateTime, ZoneOffset}
 
 import zio.test.{assertCompletes, assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
-import ccas.api.misc.enums.{BoardGameWinner, ClubMatchStatus, GameResultDetail, TimeClass}
+import ccas.api.misc.enums.{ClubMatchStatus, TimeClass}
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username}
 import ccas.utils.sql.FreshSchemaLayer
 
@@ -174,10 +174,6 @@ object TestClubMatchSql extends ZIOSpecDefault {
     team1FairPlay = false,
     team2PlayerId = Some(player1.playerId),
     team2FairPlay = false,
-    game1Winner = Some(BoardGameWinner.Team1),
-    game1Detail = Some(GameResultDetail.Checkmated),
-    game2Winner = Some(BoardGameWinner.Team2),
-    game2Detail = Some(GameResultDetail.Resigned),
     team1ScoreX2 = 2,
     team2ScoreX2 = 2
   )
@@ -189,10 +185,6 @@ object TestClubMatchSql extends ZIOSpecDefault {
     team1FairPlay = false,
     team2PlayerId = None,
     team2FairPlay = false,
-    game1Winner = Some(BoardGameWinner.Draw),
-    game1Detail = Some(GameResultDetail.Stalemate),
-    game2Winner = None,
-    game2Detail = None,
     team1ScoreX2 = 1,
     team2ScoreX2 = 1
   )
@@ -204,29 +196,23 @@ object TestClubMatchSql extends ZIOSpecDefault {
     } yield assertTrue(results.toSet == Set(boardA, boardB))
   }
 
-  private def testClubMatchBoardNullableGameFields = test("ClubMatchBoard with null game fields round-trips") {
-    val noGames = ClubMatchBoard(
+  private def testClubMatchBoardNullableGameFields = test("ClubMatchBoard with null player IDs round-trips") {
+    val noPlayers = ClubMatchBoard(
       matchId = matchFinished.matchId,
       board = 3,
       team1PlayerId = None,
       team1FairPlay = true,
       team2PlayerId = None,
       team2FairPlay = false,
-      game1Winner = None,
-      game1Detail = None,
-      game2Winner = None,
-      game2Detail = None,
       team1ScoreX2 = 0,
       team2ScoreX2 = 0
     )
     for {
-      _       <- ClubMatchBoard.insert(noGames)
+      _       <- ClubMatchBoard.insert(noPlayers)
       results <- ClubMatchBoard.selectMatch(matchFinished.matchId)
       board3 = results.find(_.board == 3).get
     } yield assertTrue(
-      board3 == noGames,
-      board3.game1Winner.isEmpty,
-      board3.game1Detail.isEmpty,
+      board3 == noPlayers,
       board3.team1PlayerId.isEmpty,
       board3.team1FairPlay
     )

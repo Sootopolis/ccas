@@ -33,6 +33,7 @@ object Tables extends ZIOAppDefault {
       _ <- ApiFetchFailure.createTable
       _ <- ClubMatch.createTable
       _ <- ClubMatchBoard.createTable
+      _ <- ClubMatchGame.createTable
       _ <- HistoryMemberQuery.createTable
       _ <- HistoryPendingMatch.createTable
       _ <- HistoryRun.createTable

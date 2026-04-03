@@ -18,7 +18,7 @@ object TestSubtypes extends ZIOSpecDefault {
     suiteTournamentSlug
   )
 
-  // --- Elo (IntCompanion) ---
+  // --- Elo (ShortCompanion) ---
 
   private def suiteElo = suite("Elo")(
     test("accepts zero") {

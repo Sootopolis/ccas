@@ -1,0 +1,32 @@
+{
+  "board_scores": {
+    "wonderfolly": 0,
+    "melayev_77": 0
+  },
+  "games": [
+    {
+      "url": "https://www.chess.com/game/daily/700000001",
+      "time_control": "1/259200",
+      "rated": true,
+      "fen": "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1",
+      "start_time": 1720908244,
+      "time_class": "daily",
+      "rules": "chess",
+      "white": "https://api.chess.com/pub/player/wonderfolly",
+      "black": "https://api.chess.com/pub/player/melayev_77",
+      "match": "https://api.chess.com/pub/match/1650919"
+    },
+    {
+      "url": "https://www.chess.com/game/daily/700000002",
+      "time_control": "1/259200",
+      "rated": true,
+      "fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "start_time": 1720908244,
+      "time_class": "daily",
+      "rules": "chess",
+      "white": "https://api.chess.com/pub/player/melayev_77",
+      "black": "https://api.chess.com/pub/player/wonderfolly",
+      "match": "https://api.chess.com/pub/match/1650919"
+    }
+  ]
+}

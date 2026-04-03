@@ -3,12 +3,12 @@ package ccas.api.misc.subtypes
 import com.github.f4b6a3.ulid.UlidCreator
 import zio.http.URL
 
-import ccas.utils.opaque.{IntCompanion, LongCompanion, StringCompanion, StringKeyCompanion}
+import ccas.utils.opaque.{LongCompanion, ShortCompanion, StringCompanion, StringKeyCompanion}
 
 type Elo = Elo.Type
 
-object Elo extends IntCompanion {
-  override protected def validateRaw(raw: Int): Either[String, Int] =
+object Elo extends ShortCompanion {
+  override protected def validateRaw(raw: Short): Either[String, Short] =
     Either.cond(raw >= 0, raw, s"$name must be >= 0")
 }
 

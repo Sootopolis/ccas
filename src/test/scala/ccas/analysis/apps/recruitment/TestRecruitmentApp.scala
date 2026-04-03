@@ -407,10 +407,6 @@ object TestRecruitmentApp extends ZIOSpecDefault {
               false,
               Some(oppPlayerId),
               false,
-              None,
-              None,
-              None,
-              None,
               2,
               0
             )
@@ -746,10 +742,6 @@ object TestRecruitmentApp extends ZIOSpecDefault {
               false,
               Some(PlayerId(999)),
               false,
-              None,
-              None,
-              None,
-              None,
               2,
               0
             )

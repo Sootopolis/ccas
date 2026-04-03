@@ -7,7 +7,7 @@ import zio.json.{readJsonLinesAs, JsonDecoder}
 import zio.test.{assertCompletes, assertTrue, Spec, ZIOSpecDefault}
 
 import ccas.api.club.{ApiClub, ApiClubMatches, ApiClubMembers}
-import ccas.api.clubmatch.{ApiDailyMatch, ApiDailyMatchBoard, ApiLiveMatch}
+import ccas.api.clubmatch.{ApiDailyMatch, ApiLiveMatch, ApiMatchBoard}
 import ccas.api.misc.enums.{League, PlayerStatus}
 import ccas.api.misc.subtypes.{PlayerId, Username}
 import ccas.api.player.*
@@ -28,7 +28,9 @@ object TestApiJsonParsing extends ZIOSpecDefault {
     generateTest[ApiDailyMatch]("matchInProgress"),
     generateTest[ApiDailyMatch]("matchRegistered"),
     generateTest[ApiDailyMatch]("matchCancelled"),
-    generateTest[ApiDailyMatchBoard]("matchBoard"),
+    generateTest[ApiMatchBoard]("matchBoard"),
+    generateTest[ApiMatchBoard]("matchBoardOngoing"),
+    generateTest[ApiMatchBoard]("matchBoardLive"),
     generateTest[ApiLiveMatch]("liveMatchFinished"),
     generateTest[ApiPlayerTournaments]("playerTournaments"),
     generateTest[ApiTournament]("tournament"),

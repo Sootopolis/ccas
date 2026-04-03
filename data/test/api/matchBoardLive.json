@@ -1,0 +1,50 @@
+{
+  "board_scores": {
+    "guilhermekk": 1,
+    "justoneuser": 1
+  },
+  "games": [
+    {
+      "url": "https://www.chess.com/game/live/4415534342",
+      "time_control": "300+2",
+      "end_time": 1579471485,
+      "rated": true,
+      "fen": "Qk6/p1p2p1p/1p4p1/2p5/7P/1P4P1/P4PBK/4q3 b - -",
+      "time_class": "blitz",
+      "rules": "chess",
+      "white": {
+        "rating": 1519,
+        "result": "win",
+        "@id": "https://api.chess.com/pub/player/guilhermekk",
+        "username": "GuilhermeKK"
+      },
+      "black": {
+        "rating": 1375,
+        "result": "checkmated",
+        "@id": "https://api.chess.com/pub/player/justoneuser",
+        "username": "JustOneUSer"
+      }
+    },
+    {
+      "url": "https://www.chess.com/game/live/4415544139",
+      "time_control": "300+2",
+      "end_time": 1579471973,
+      "rated": true,
+      "fen": "6Q1/5R2/1P4k1/7p/6pP/4p1P1/1r3PK1/8 b - -",
+      "time_class": "blitz",
+      "rules": "chess",
+      "white": {
+        "rating": 1386,
+        "result": "win",
+        "@id": "https://api.chess.com/pub/player/justoneuser",
+        "username": "JustOneUSer"
+      },
+      "black": {
+        "rating": 1508,
+        "result": "resigned",
+        "@id": "https://api.chess.com/pub/player/guilhermekk",
+        "username": "GuilhermeKK"
+      }
+    }
+  ]
+}

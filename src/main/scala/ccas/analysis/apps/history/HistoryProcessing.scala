@@ -9,8 +9,9 @@ import HistoryUtils.*
 import ccas.analysis.GameScoring
 import ccas.analysis.apps.PlayerUpdater
 import ccas.analysis.tables.*
-import ccas.api.clubmatch.{ApiDailyMatch, ApiLiveMatch}
+import ccas.api.clubmatch.{ApiDailyMatch, ApiLiveMatch, ApiMatchBoard}
 import ccas.api.clubmatch.ApiDailyMatch.*
+import ccas.api.clubmatch.ApiMatchBoard.{ApiBoardGame, ApiBoardPlayer}
 import ccas.api.misc.enums.*
 import ccas.api.misc.subtypes.*
 import ccas.api.player.{ApiPlayer, ApiPlayerClubs}
@@ -150,13 +151,16 @@ private[history] object HistoryProcessing {
         else if (team2ClubId.contains(ctx.clubId)) { Some(false) }
         else { None }
 
-      boardRows <- buildBoardRows(ctx, matchId, dailyMatch, weAreTeam1, clubMatch.startTime)
+      boardAndGames <- buildBoardAndGameRows(ctx, matchId, dailyMatch, weAreTeam1, clubMatch.startTime)
+      (boardRows, gameRowLists) = boardAndGames.unzip
+      gameRows = gameRowLists.flatten
 
       _ <- withTransaction {
         for {
           _ <- ClubMatch.upsert(clubMatch)
           _ <- ClubMatchBoard.deleteMatch(matchId)
           _ <- ClubMatchBoard.insertBatch(boardRows)
+          _ <- ClubMatchGame.insertBatch(gameRows)
           _ <-
             if (weAreTeam1.isDefined) {
               HistoryPendingMatch.delete(ctx.clubId, matchId, isLive = false)
@@ -191,16 +195,17 @@ private[history] object HistoryProcessing {
 
   // === Board Row Construction ===
 
-  /** Constructs ClubMatchBoard rows by resolving player IDs and normalizing game outcomes. Players that can't be
-    * resolved are recorded in `unresolved_board_player` and the board row gets a None player ID.
+  /** Constructs ClubMatchBoard and ClubMatchGame rows by resolving player IDs, normalizing game outcomes, and
+    * optionally fetching board-level API data for game IDs, times, and ratings. Players that can't be resolved are
+    * recorded in `unresolved_board_player` and the board row gets a None player ID.
     */
-  private def buildBoardRows(
+  private def buildBoardAndGameRows(
     ctx: ProcessingContext,
     matchId: ClubMatchId,
     dailyMatch: ApiDailyMatch,
     weAreTeam1: Option[Boolean],
     matchStartTime: Option[Instant]
-  ): RIO[CcasLogger & PostgresClient, List[ClubMatchBoard]] =
+  ): RIO[CcasLogger & PostgresClient, List[(ClubMatchBoard, List[ClubMatchGame])]] =
     dailyMatch match {
       case _: ApiDailyMatchRegistered => ZIO.succeed(Nil)
       case _ =>
@@ -237,6 +242,8 @@ private[history] object HistoryProcessing {
             _ <- ZIO.whenDiscard(t2Pid.isEmpty)(
               UnresolvedBoardPlayer.insert(matchId, boardNum, isTeam1 = false, t2Username).ignore
             )
+
+            boardData <- ctx.client.get[ApiMatchBoard](ApiMatchBoard.dailyUrl(matchId, boardNum)).option
           } yield {
             val (g1Winner, g1Detail) =
               normalizeGameOutcome(t1Player.playedAsWhite, t2Player.playedAsBlack, whiteTeamIsTeam1 = true)
@@ -244,23 +251,75 @@ private[history] object HistoryProcessing {
               normalizeGameOutcome(t2Player.playedAsWhite, t1Player.playedAsBlack, whiteTeamIsTeam1 = false)
             val (t1Score, t2Score) = computeScoreX2(g1Winner, g2Winner, t1FairPlay, t2FairPlay)
 
-            ClubMatchBoard(
+            val board = ClubMatchBoard(
               matchId = matchId,
               board = boardNum,
               team1PlayerId = t1Pid,
               team1FairPlay = t1FairPlay,
               team2PlayerId = t2Pid,
               team2FairPlay = t2FairPlay,
-              game1Winner = g1Winner,
-              game1Detail = g1Detail,
-              game2Winner = g2Winner,
-              game2Detail = g2Detail,
               team1ScoreX2 = t1Score,
               team2ScoreX2 = t2Score
             )
+
+            // Partition board API games by team perspective (team1-white vs team2-white)
+            val (game1Data, game2Data) = boardData match {
+              case Some(bd) =>
+                val (t1w, t2w) = bd.games.partition(g => g.white.exists(_.username == t1Username))
+                (t1w.headOption, t2w.headOption)
+              case None => (None, None)
+            }
+
+            val games = List(
+              buildGameRow(matchId, boardNum, team1IsWhite = true, g1Winner, g1Detail, game1Data),
+              buildGameRow(matchId, boardNum, team1IsWhite = false, g2Winner, g2Detail, game2Data)
+            ).flatten
+
+            (board, games)
           }
         }
     }
+
+  /** Builds a ClubMatchGame row if there's a match-level outcome or board-level game data. Extracts game ID,
+    * start/end times, and post-game ratings from the board API data when available.
+    */
+  private def buildGameRow(
+    matchId: ClubMatchId,
+    board: Short,
+    team1IsWhite: Boolean,
+    winner: Option[BoardGameWinner],
+    detail: Option[GameResultDetail],
+    boardGame: Option[ApiBoardGame]
+  ): Option[ClubMatchGame] =
+    Option.unless(winner.isEmpty && boardGame.isEmpty) {
+      val gameId = boardGame.map(g => g.url.path.segments.last.toLong)
+      val startTime = boardGame.flatMap(_.startTime)
+      val endTime = boardGame.flatMap(_.endTime)
+
+      // team1 is white when team1IsWhite=true, so white=team1, black=team2
+      // team1 is black when team1IsWhite=false, so white=team2, black=team1
+      val (t1Rating, t2Rating) = boardGame match {
+        case Some(g) if team1IsWhite => (finishedRating(g.white), finishedRating(g.black))
+        case Some(g)                 => (finishedRating(g.black), finishedRating(g.white))
+        case None                    => (None, None)
+      }
+
+      ClubMatchGame(
+        matchId = matchId,
+        board = board,
+        team1IsWhite = team1IsWhite,
+        gameId = gameId,
+        startTime = startTime,
+        endTime = endTime,
+        winner = winner,
+        detail = detail,
+        team1Rating = t1Rating,
+        team2Rating = t2Rating
+      )
+    }
+
+  private def finishedRating(p: Either[URL, ApiBoardPlayer]): Option[Elo] =
+    p.toOption.filter(_.result.isDefined).map(_.rating)
 
   // === Game Outcome Normalization ===
 

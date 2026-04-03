@@ -6,7 +6,7 @@ import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import com.augustnagro.magnum.sql
 
-import ccas.analysis.tables.{Club, ClubMatch, ClubMatchBoard, Player, Tables}
+import ccas.analysis.tables.{Club, ClubMatch, ClubMatchBoard, ClubMatchGame, Player, Tables}
 import ccas.api.misc.enums.*
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username}
 import ccas.utils.sql.FreshSchemaLayer
@@ -65,20 +65,43 @@ object TestClubBoardSql extends ZIOSpecDefault {
     board: Short,
     team1Player: Option[PlayerId],
     team2Player: Option[PlayerId],
-    g1: Option[BoardGameWinner] = Some(BoardGameWinner.Team1),
-    g2: Option[BoardGameWinner] = Some(BoardGameWinner.Team2),
     team1FP: Boolean = false,
     team2FP: Boolean = false
   ): ClubMatchBoard =
-    ClubMatchBoard(matchId, board, team1Player, team1FP, team2Player, team2FP,
-      g1, None, g2, None, 1, 1)
+    ClubMatchBoard(matchId, board, team1Player, team1FP, team2Player, team2FP, 1, 1)
+
+  private def gameRow(
+    matchId: ClubMatchId,
+    board: Short,
+    team1IsWhite: Boolean,
+    winner: Option[BoardGameWinner]
+  ): ClubMatchGame =
+    ClubMatchGame(matchId, board, team1IsWhite, None, None, None, winner, None, None, None)
 
   private val clearMatches = connectZIO {
+    sql"DELETE FROM club_match_game".update.run()
     sql"DELETE FROM club_match_board".update.run()
     sql"DELETE FROM club_match".update.run()
   }
 
   private val seedAll = clearMatches *> seedClubs *> seedPlayers
+
+  private def insertBoardWithGames(
+    matchId: ClubMatchId,
+    board: Short,
+    team1Player: Option[PlayerId],
+    team2Player: Option[PlayerId],
+    g1: Option[BoardGameWinner] = Some(BoardGameWinner.Team1),
+    g2: Option[BoardGameWinner] = Some(BoardGameWinner.Team2),
+    team1FP: Boolean = false,
+    team2FP: Boolean = false
+  ) = for {
+    _ <- ClubMatchBoard.insert(boardRow(matchId, board, team1Player, team2Player, team1FP, team2FP))
+    _ <- ClubMatchGame.insertBatch(
+      List(g1.map(w => gameRow(matchId, board, team1IsWhite = true, Some(w))),
+           g2.map(w => gameRow(matchId, board, team1IsWhite = false, Some(w)))).flatten
+    )
+  } yield ()
 
   // --- Tests ---
 
@@ -86,7 +109,7 @@ object TestClubBoardSql extends ZIOSpecDefault {
     for {
       _ <- seedAll
       _ <- ClubMatch.upsert(matchRow(matchId1, ourClubId, oppClubId))
-      _ <- ClubMatchBoard.insert(boardRow(matchId1, 1, Some(player1), Some(player2)))
+      _ <- insertBoardWithGames(matchId1, 1, Some(player1), Some(player2))
       boards <- ClubBoard.selectClubBoards(ourClubId)
     } yield assertTrue(
       boards.size == 1,
@@ -102,9 +125,9 @@ object TestClubBoardSql extends ZIOSpecDefault {
     for {
       _ <- seedAll
       _ <- ClubMatch.upsert(matchRow(matchId1, oppClubId, ourClubId))
-      _ <- ClubMatchBoard.insert(boardRow(matchId1, 1, Some(player2), Some(player1),
+      _ <- insertBoardWithGames(matchId1, 1, Some(player2), Some(player1),
         g1 = Some(BoardGameWinner.Team1), g2 = Some(BoardGameWinner.Team2),
-        team1FP = false, team2FP = true))
+        team1FP = false, team2FP = true)
       boards <- ClubBoard.selectClubBoards(ourClubId)
     } yield assertTrue(
       boards.size == 1,
@@ -120,7 +143,7 @@ object TestClubBoardSql extends ZIOSpecDefault {
     for {
       _ <- seedAll
       _ <- ClubMatch.upsert(matchRow(matchId1, ourClubId, oppClubId, status = ClubMatchStatus.InProgress, endTime = None))
-      _ <- ClubMatchBoard.insert(boardRow(matchId1, 1, Some(player1), Some(player2)))
+      _ <- insertBoardWithGames(matchId1, 1, Some(player1), Some(player2))
       boards <- ClubBoard.selectClubBoards(ourClubId)
     } yield assertTrue(boards.isEmpty)
   }
@@ -129,7 +152,7 @@ object TestClubBoardSql extends ZIOSpecDefault {
     for {
       _ <- seedAll
       _ <- ClubMatch.upsert(matchRow(matchId1, ourClubId, oppClubId))
-      _ <- ClubMatchBoard.insert(boardRow(matchId1, 1, None, Some(player2)))
+      _ <- insertBoardWithGames(matchId1, 1, None, Some(player2))
       boards <- ClubBoard.selectClubBoards(ourClubId)
     } yield assertTrue(boards.isEmpty)
   }
@@ -140,9 +163,9 @@ object TestClubBoardSql extends ZIOSpecDefault {
       _ <- ClubMatch.upsert(matchRow(matchId1, ourClubId, oppClubId, endTime = Some(Times.t1)))
       _ <- ClubMatch.upsert(matchRow(matchId2, ourClubId, oppClubId, endTime = Some(Times.t2)))
       _ <- ClubMatch.upsert(matchRow(matchId3, ourClubId, oppClubId, endTime = Some(Times.t3)))
-      _ <- ClubMatchBoard.insert(boardRow(matchId1, 1, Some(player1), Some(player2)))
-      _ <- ClubMatchBoard.insert(boardRow(matchId2, 1, Some(player1), Some(player2)))
-      _ <- ClubMatchBoard.insert(boardRow(matchId3, 1, Some(player1), Some(player2)))
+      _ <- insertBoardWithGames(matchId1, 1, Some(player1), Some(player2))
+      _ <- insertBoardWithGames(matchId2, 1, Some(player1), Some(player2))
+      _ <- insertBoardWithGames(matchId3, 1, Some(player1), Some(player2))
       // only matchId2 falls in [t1+1day, t3)
       since = Times.t1.plus(Duration.ofDays(1))
       boards <- ClubBoard.selectClubBoardsInPeriod(ourClubId, since, Times.t3)
@@ -157,8 +180,8 @@ object TestClubBoardSql extends ZIOSpecDefault {
       _ <- seedAll
       _ <- ClubMatch.upsert(matchRow(matchId1, ourClubId, oppClubId))
       _ <- ClubMatch.upsert(matchRow(matchId2, oppClubId, ourClubId))
-      _ <- ClubMatchBoard.insert(boardRow(matchId1, 1, Some(player1), Some(player2)))
-      _ <- ClubMatchBoard.insert(boardRow(matchId2, 1, Some(player2), Some(player1)))
+      _ <- insertBoardWithGames(matchId1, 1, Some(player1), Some(player2))
+      _ <- insertBoardWithGames(matchId2, 1, Some(player2), Some(player1))
       boards <- ClubBoard.selectClubBoards(ourClubId)
     } yield assertTrue(boards.size == 2)
   }

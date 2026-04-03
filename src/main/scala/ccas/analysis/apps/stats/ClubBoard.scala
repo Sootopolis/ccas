@@ -35,18 +35,22 @@ object ClubBoard {
   def selectClubBoards(clubId: ClubId): ZIO[PostgresClient, SQLException, List[ClubBoard]] =
     connectZIO {
       sql"""SELECT b.match_id, cm.end_time, b.team1_player_id, b.team1_fair_play, b.team2_fair_play,
-                   b.game1_winner, b.game2_winner
+                   g1.winner, g2.winner
             FROM club_match_board b
             JOIN club_match cm ON cm.match_id = b.match_id
+            LEFT JOIN club_match_game g1 ON g1.match_id = b.match_id AND g1.board = b.board AND g1.team1_is_white = true
+            LEFT JOIN club_match_game g2 ON g2.match_id = b.match_id AND g2.board = b.board AND g2.team1_is_white = false
             WHERE cm.team1_club_id = $clubId AND cm.status = $Finished AND b.team1_player_id IS NOT NULL
 
             UNION ALL
 
             SELECT b.match_id, cm.end_time, b.team2_player_id, b.team2_fair_play, b.team1_fair_play,
-                   CASE b.game1_winner WHEN 'Team1' THEN 'Team2' WHEN 'Team2' THEN 'Team1' ELSE b.game1_winner END,
-                   CASE b.game2_winner WHEN 'Team1' THEN 'Team2' WHEN 'Team2' THEN 'Team1' ELSE b.game2_winner END
+                   CASE g1.winner WHEN 'Team1' THEN 'Team2' WHEN 'Team2' THEN 'Team1' ELSE g1.winner END,
+                   CASE g2.winner WHEN 'Team1' THEN 'Team2' WHEN 'Team2' THEN 'Team1' ELSE g2.winner END
             FROM club_match_board b
             JOIN club_match cm ON cm.match_id = b.match_id
+            LEFT JOIN club_match_game g1 ON g1.match_id = b.match_id AND g1.board = b.board AND g1.team1_is_white = true
+            LEFT JOIN club_match_game g2 ON g2.match_id = b.match_id AND g2.board = b.board AND g2.team1_is_white = false
             WHERE cm.team2_club_id = $clubId AND cm.status = $Finished AND b.team2_player_id IS NOT NULL"""
         .query[ClubBoard].run().toList
     }
@@ -59,19 +63,23 @@ object ClubBoard {
   ): ZIO[PostgresClient, SQLException, List[ClubBoard]] =
     connectZIO {
       sql"""SELECT b.match_id, cm.end_time, b.team1_player_id, b.team1_fair_play, b.team2_fair_play,
-                   b.game1_winner, b.game2_winner
+                   g1.winner, g2.winner
             FROM club_match_board b
             JOIN club_match cm ON cm.match_id = b.match_id
+            LEFT JOIN club_match_game g1 ON g1.match_id = b.match_id AND g1.board = b.board AND g1.team1_is_white = true
+            LEFT JOIN club_match_game g2 ON g2.match_id = b.match_id AND g2.board = b.board AND g2.team1_is_white = false
             WHERE cm.team1_club_id = $clubId AND cm.status = $Finished AND b.team1_player_id IS NOT NULL
               AND cm.end_time >= $since AND cm.end_time < $until
 
             UNION ALL
 
             SELECT b.match_id, cm.end_time, b.team2_player_id, b.team2_fair_play, b.team1_fair_play,
-                   CASE b.game1_winner WHEN 'Team1' THEN 'Team2' WHEN 'Team2' THEN 'Team1' ELSE b.game1_winner END,
-                   CASE b.game2_winner WHEN 'Team1' THEN 'Team2' WHEN 'Team2' THEN 'Team1' ELSE b.game2_winner END
+                   CASE g1.winner WHEN 'Team1' THEN 'Team2' WHEN 'Team2' THEN 'Team1' ELSE g1.winner END,
+                   CASE g2.winner WHEN 'Team1' THEN 'Team2' WHEN 'Team2' THEN 'Team1' ELSE g2.winner END
             FROM club_match_board b
             JOIN club_match cm ON cm.match_id = b.match_id
+            LEFT JOIN club_match_game g1 ON g1.match_id = b.match_id AND g1.board = b.board AND g1.team1_is_white = true
+            LEFT JOIN club_match_game g2 ON g2.match_id = b.match_id AND g2.board = b.board AND g2.team1_is_white = false
             WHERE cm.team2_club_id = $clubId AND cm.status = $Finished AND b.team2_player_id IS NOT NULL
               AND cm.end_time >= $since AND cm.end_time < $until"""
         .query[ClubBoard].run().toList
