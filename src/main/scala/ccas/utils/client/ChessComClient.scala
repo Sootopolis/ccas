@@ -22,7 +22,8 @@ import ccas.utils.json.JsonDecodingException
   *   - '''Gate-based admission control''' — a single-permit gate serializes request admission. Before each request, the
   *     gate checks that the number of in-flight requests (`activeRef`) is below `currentMax`. If not, it polls until a
   *     slot opens. This enforces the concurrency limit without a semaphore, so throttle-down takes effect immediately
-  *     for all requests that haven't yet entered the gate.
+  *     for all requests that haven't yet entered the gate. The gate wait is interruptible so that pending requests can
+  *     be cancelled promptly on shutdown; only the fast `activeRef` increment is uninterruptible.
   *   - '''EMA-based rate delay''' — tracks an exponential moving average of response times and staggers outgoing
   *     requests so that the full permit budget is utilised without bursting. When permits are reduced the per-request
   *     delay grows proportionally.
@@ -91,8 +92,9 @@ final class ChessComClient(
   def get[T](url: URL)(using jsonDecoder: JsonDecoder[T]): Task[T] =
     statsRef.update(_.incRequests) *> withRetries {
       for {
-        (duration, result) <- ZIO.acquireReleaseWith(acquireSlot)(_ => releaseSlot()) { active =>
-          statsRef.update(_.updatePeak(active)) *> rawGet(url).timed
+        _                  <- rateLimitGate.withPermit(awaitCapacity *> emaDelay)
+        (duration, result) <- ZIO.acquireReleaseWith(activeRef.updateAndGet(_ + 1).tap(updateBar))(_ => releaseSlot()) {
+          active => statsRef.update(_.updatePeak(active)) *> rawGet(url).timed
         }
         ms = duration.toMillis
         _ <- updateResponseTimeEma(ms) *> statsRef.update(_.recordLatency(ms))
@@ -127,14 +129,10 @@ final class ChessComClient(
   // Adaptive throttle
   // ---------------------------------------------------------------------------
 
-  /** Acquire an in-flight slot: waits for capacity inside the serializing gate, applies the EMA-based inter-request
-    * delay, then atomically increments `activeRef` before releasing the gate. This ensures the next request through the
-    * gate sees the updated count, preventing overshoot.
+  /** Wait for capacity inside the serializing gate and apply the EMA-based inter-request delay. The gate is released
+    * before the request starts so that admission is interruptible — only the fast `activeRef` increment that follows is
+    * uninterruptible (via `acquireReleaseWith` in `get`).
     */
-  private def acquireSlot: Task[Int] =
-    rateLimitGate.withPermit {
-      awaitCapacity *> emaDelay *> activeRef.updateAndGet(_ + 1).tap(updateBar)
-    }
 
   private def releaseSlot(): UIO[Unit] =
     activeRef.updateAndGet(_ - 1).flatMap(updateBar).ignore

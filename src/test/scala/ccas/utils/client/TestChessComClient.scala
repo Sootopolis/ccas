@@ -361,6 +361,29 @@ object TestChessComClient extends ZIOSpecDefault {
         } yield assertTrue(recorded == Chunk(0, 1, 2))
       }
     },
+    test("pending requests cancel promptly on interruption") {
+      ZIO.scoped {
+        for {
+          served <- Ref.make(0)
+          // Slow handler: each request takes 500ms, only 1 permit so requests queue at the gate
+          (client, _) <- makeClient(
+            handler = { _ =>
+              served.update(_ + 1) *> ZIO.sleep(500.millis).as(Response.json(jsonBody))
+            },
+            permits = 1,
+            cooldown = 60.seconds
+          )
+          urls   = (1 to 20).map(i => URL.decode(s"http://test.example.com/api/$i").toOption.get)
+          fiber <- client.getAll[Payload](urls).fork
+          // Let 1-2 requests get through, then interrupt
+          _     <- ZIO.sleep(800.millis)
+          _     <- fiber.interrupt
+          count <- served.get
+          // If gate wait were uninterruptible, all 20 would drain through one-by-one.
+          // With interruptible gate, only the ones already admitted should complete.
+        } yield assertTrue(count <= 3)
+      }
+    },
     suiteStatsAccumulator,
     suitePersistStats
   ).provideShared(
