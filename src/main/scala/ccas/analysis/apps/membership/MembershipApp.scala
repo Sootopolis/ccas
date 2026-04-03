@@ -28,8 +28,13 @@ object MembershipApp extends ZIOAppDefault {
         mode match {
           case ReconcileOnly =>
             reconcile(clubName).flatMap { result =>
-              MembershipReport.reportReconciliation(result) *>
-                OutputFile.writeAndLog("membership", clubName, MembershipReport.formatReconciliation(result))
+              Club.selectBySlug(clubName)
+                .someOrFail(new IllegalStateException(s"Club '$clubName' not found after reconcile"))
+                .flatMap(club => MembershipReport.lookupJoinInvitations(club.clubId, result.changes.toList))
+                .flatMap { invitations =>
+                  MembershipReport.reportReconciliation(result, invitations) *>
+                    OutputFile.writeAndLog("membership", clubName, MembershipReport.formatReconciliation(result, invitations))
+                }
             }
           case SinceNow(since) =>
             reconcile(clubName) *> MembershipReport.report(clubName, since, Instant.now()).flatMap { rr =>
