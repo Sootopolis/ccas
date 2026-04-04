@@ -118,7 +118,7 @@ object TestChessComClient extends ZIOSpecDefault {
       ZIO.scoped {
         for {
           counter <- Ref.make(0)
-          (client, _, _) <- makeClient { _ =>
+          (client, _, statsRef) <- makeClient { _ =>
             counter.getAndUpdate(_ + 1).map { n =>
               if (n == 0) { Response(status = Status.TooManyRequests) }
               else { Response.json(jsonBody) }
@@ -126,15 +126,22 @@ object TestChessComClient extends ZIOSpecDefault {
           }
           result <- client.get[Payload](testUrl)
           count  <- counter.get
-        } yield assertTrue(result.value == "ok", count == 2)
+          s      <- statsRef.get
+          // 1 request, 2 attempts (first 429, second succeeds)
+        } yield assertTrue(
+          result.value == "ok", count == 2,
+          s.requests == 1L, s.attempts == 2L, s.errors429 == 1L, s.successes == 1L, s.failures == 0L
+        )
       }
     },
     test("exhausted retries surface HttpStatusException") {
       ZIO.scoped {
         for {
-          (client, _, _) <- makeClient(_ => ZIO.succeed(Response(status = Status.TooManyRequests)))
-          exit        <- client.get[Payload](testUrl).exit
-        } yield assertTrue(exit.isFailure)
+          (client, _, statsRef) <- makeClient(_ => ZIO.succeed(Response(status = Status.TooManyRequests)))
+          exit <- client.get[Payload](testUrl).exit
+          s    <- statsRef.get
+          // 1 request, 1 initial + 5 retries = 6 attempts, all 429
+        } yield assertTrue(exit.isFailure, s.requests == 1L, s.attempts == 6L, s.errors429 == 6L, s.failures == 1L)
       }
     },
     test("failure rate below threshold does not trigger throttle-down") {
@@ -254,32 +261,35 @@ object TestChessComClient extends ZIOSpecDefault {
       ZIO.scoped {
         for {
           counter <- Ref.make(0)
-          (client, _, _) <- makeClient { _ =>
+          (client, _, statsRef) <- makeClient { _ =>
             counter.getAndUpdate(_ + 1).as(Response(status = Status.Forbidden, body = Body.fromString(cfBody)))
           }
           _     <- client.get[Payload](testUrl).exit
           count <- counter.get
-          // 1 initial + 2 CF retries = 3 (no extra single-retry on top)
-        } yield assertTrue(count == 3)
+          s     <- statsRef.get
+          // 1 initial + 2 CF retries = 3 attempts, all 403
+        } yield assertTrue(count == 3, s.requests == 1L, s.attempts == 3L, s.errors403 == 3L, s.failures == 1L)
       }
     },
     test("normal 403 still gets single retry") {
       ZIO.scoped {
         for {
           counter <- Ref.make(0)
-          (client, _, _) <- makeClient { _ =>
+          (client, _, statsRef) <- makeClient { _ =>
             counter.getAndUpdate(_ + 1).as(Response(status = Status.Forbidden, body = Body.fromString("Forbidden")))
           }
           _     <- client.get[Payload](testUrl).exit
           count <- counter.get
-        } yield assertTrue(count == 2)
+          s     <- statsRef.get
+          // 1 initial + 1 single retry = 2 attempts, all 403
+        } yield assertTrue(count == 2, s.requests == 1L, s.attempts == 2L, s.errors403 == 2L, s.failures == 1L)
       }
     },
     test("IOException triggers connection retry and succeeds") {
       ZIO.scoped {
         for {
           counter <- Ref.make(0)
-          (client, _, _) <- makeClient { _ =>
+          (client, _, statsRef) <- makeClient { _ =>
             counter.getAndUpdate(_ + 1).flatMap { n =>
               if (n == 0) ZIO.fail(java.io.IOException("Connection reset"))
               else ZIO.succeed(Response.json(jsonBody))
@@ -287,14 +297,19 @@ object TestChessComClient extends ZIOSpecDefault {
           }
           result <- client.get[Payload](testUrl)
           count  <- counter.get
-        } yield assertTrue(result.value == "ok", count == 2)
+          s      <- statsRef.get
+          // 1 request, 2 attempts (first IOException, second succeeds)
+        } yield assertTrue(
+          result.value == "ok", count == 2,
+          s.requests == 1L, s.attempts == 2L, s.connectionErrors == 1L, s.successes == 1L, s.failures == 0L
+        )
       }
     },
     test("PrematureChannelClosureException triggers connection retry and succeeds") {
       ZIO.scoped {
         for {
           counter <- Ref.make(0)
-          (client, _, _) <- makeClient { _ =>
+          (client, _, statsRef) <- makeClient { _ =>
             counter.getAndUpdate(_ + 1).flatMap { n =>
               if (n == 0) ZIO.fail(PrematureChannelClosureException("Channel closed"))
               else ZIO.succeed(Response.json(jsonBody))
@@ -302,7 +317,12 @@ object TestChessComClient extends ZIOSpecDefault {
           }
           result <- client.get[Payload](testUrl)
           count  <- counter.get
-        } yield assertTrue(result.value == "ok", count == 2)
+          s      <- statsRef.get
+          // 1 request, 2 attempts (first PrematureChannelClosure, second succeeds)
+        } yield assertTrue(
+          result.value == "ok", count == 2,
+          s.requests == 1L, s.attempts == 2L, s.connectionErrors == 1L, s.successes == 1L, s.failures == 0L
+        )
       }
     },
     test("non-transient non-HTTP error is not retried") {
