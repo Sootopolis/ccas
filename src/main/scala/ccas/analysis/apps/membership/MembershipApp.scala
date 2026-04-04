@@ -3,7 +3,7 @@ package ccas.analysis.apps.membership
 import java.time.Instant
 import scala.annotation.tailrec
 
-import zio.{Chunk, NonEmptyChunk, RIO, Scope, Task, ZIO, ZIOAppArgs, ZIOAppDefault}
+import zio.{Chunk, IO, NonEmptyChunk, RIO, Scope, Task, ZIO, ZIOAppArgs, ZIOAppDefault}
 import zio.http.Client
 
 import ccas.analysis.apps.membership.MembershipChange.*
@@ -17,7 +17,10 @@ import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.withTransaction
 
 object MembershipApp extends ZIOAppDefault {
-  private val help = "Usage: MembershipApp <club-slug> [club-slug ...] [--since <date>] [--until <date>]"
+  private val SINCE = "--since"
+  private val UNTIL = "--until"
+  private val help = s"Usage: MembershipApp <club-slug> [club-slug ...] [$SINCE <date>] [$UNTIL <date>]"
+  private val MEMBERSHIP = "membership"
 
   override def run: RIO[ZIOAppArgs & Scope, Unit] =
     (for {
@@ -29,21 +32,21 @@ object MembershipApp extends ZIOAppDefault {
           case ReconcileOnly =>
             reconcile(clubName).flatMap { result =>
               MembershipReport.reportReconciliation(result) *>
-                OutputFile.writeAndLog("membership", clubName, MembershipReport.formatReconciliation(result))
+                OutputFile.writeAndLog(MEMBERSHIP, clubName, MembershipReport.formatReconciliation(result))
             }
           case SinceNow(since) =>
             reconcile(clubName) *> MembershipReport.report(clubName, since, Instant.now()).flatMap { rr =>
-              OutputFile.writeAndLog("membership", clubName, MembershipReport.formatReport(rr))
+              OutputFile.writeAndLog(MEMBERSHIP, clubName, MembershipReport.formatReport(rr))
             }
           case SinceUntil(since, until) =>
             reconcileIfStale(clubName, until) *> MembershipReport.report(clubName, since, until).flatMap { rr =>
-              OutputFile.writeAndLog("membership", clubName, MembershipReport.formatReport(rr))
+              OutputFile.writeAndLog(MEMBERSHIP, clubName, MembershipReport.formatReport(rr))
             }
         }
       }
     } yield ()).provideSomeAuto(
       CcasLogger.live(showProgress = true),
-      ChessComClient.live("membership"),
+      ChessComClient.live(MEMBERSHIP),
       Client.default,
       PostgresClient.live(onInit = Tables.ensureTables)
     )
@@ -61,8 +64,8 @@ object MembershipApp extends ZIOAppDefault {
       flags: Map[String, String]
     ): Either[String, (List[ClubSlug], Map[String, String])] = remaining match {
       case Nil                                      => Right((slugs.reverse, flags))
-      case ("--since" | "--until") :: value :: rest => loop(rest, slugs, flags + (remaining.head -> value))
-      case ("--since" | "--until") :: Nil           => Left(s"${remaining.head} requires a value")
+      case (SINCE | UNTIL) :: value :: rest => loop(rest, slugs, flags + (remaining.head -> value))
+      case (SINCE | UNTIL) :: Nil           => Left(s"${remaining.head} requires a value")
       case flag :: _ if flag.startsWith("--")       => Left(s"Unknown flag: $flag")
       case slug :: rest                             => loop(rest, ClubSlug.wrap(slug) :: slugs, flags)
     }
@@ -77,22 +80,15 @@ object MembershipApp extends ZIOAppDefault {
   }
 
   private def parseRunMode(flags: Map[String, String]): Task[RunMode] =
-    (flags.get("--since"), flags.get("--until")) match {
+    (flags.get(SINCE), flags.get(UNTIL)) match {
       case (None, None) => ZIO.succeed(ReconcileOnly)
-      case (None, Some(_)) =>
-        ZIO.fail(BadRequestException("--until requires --since"))
-      case (Some(sinceStr), None) =>
-        ZIO.attempt(Instant.parse(sinceStr))
-          .mapError(_ => BadRequestException(s"Invalid date format: $sinceStr"))
-          .map(SinceNow(_))
-      case (Some(sinceStr), Some(untilStr)) =>
-        ZIO.attempt(Instant.parse(sinceStr))
-          .mapError(_ => BadRequestException(s"Invalid date format: $sinceStr"))
-          .flatMap { since =>
-            ZIO.attempt(Instant.parse(untilStr))
-              .mapBoth(_ => BadRequestException(s"Invalid date format: $untilStr"), SinceUntil(since, _))
-          }
+      case (None, Some(_)) => ZIO.fail(BadRequestException("--until requires --since"))
+      case (Some(sinceStr), None) => parseDateArg(sinceStr).map(SinceNow(_))
+      case (Some(sinceStr), Some(untilStr)) => parseDateArg(sinceStr).zip(parseDateArg(untilStr)).map(SinceUntil(_, _))
     }
+
+  private def parseDateArg(string: String): IO[BadRequestException, Instant] =
+    ZIO.attempt(Instant.parse(string)).orElseFail(BadRequestException(s"Invalid date format: $string"))
 
   private def reconcileIfStale(
     clubSlug: ClubSlug,
@@ -216,10 +212,7 @@ object MembershipApp extends ZIOAppDefault {
     }
   }
 
-  private def resolveClubSlug(
-    client: ChessComClient,
-    oldUrlName: ClubSlug
-  ): RIO[PostgresClient, Option[ClubSlug]] =
+  private def resolveClubSlug(client: ChessComClient, oldUrlName: ClubSlug): RIO[PostgresClient, Option[ClubSlug]] =
     (for {
       clubOpt <- Club.selectBySlug(oldUrlName)
       refOpt  <- ZIO.foreach(clubOpt)(club => ClubMatchRef.selectId(club.clubId)).map(_.flatten)
@@ -231,5 +224,4 @@ object MembershipApp extends ZIOAppDefault {
         }
       }.map(_.flatten)
     } yield result).catchAll(_ => ZIO.none)
-
 }
