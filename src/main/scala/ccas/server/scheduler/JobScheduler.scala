@@ -85,17 +85,15 @@ object JobScheduler {
               MembershipApp.reconcile(name, trigger = RunTrigger.Scheduled, jobRunId = jobRunId).unit
             )
         case JobKind.MatchRef =>
-          (_: Option[JobRunId]) => RefApp.populate(RunTrigger.Scheduled, forceSkipped = false, upgradeRefs = false)
+          (_: Option[JobRunId]) => RefApp.populate(forceSkipped = false, upgradeRefs = false).unit
         case JobKind.History =>
           (jobRunId: Option[JobRunId]) =>
             requireClubSlug.flatMap(name =>
               HistoryApp.discover(name, trigger = RunTrigger.Scheduled, jobRunId = jobRunId).unit
             )
         case JobKind.Stats =>
-          (jobRunId: Option[JobRunId]) =>
-            requireClubSlug.flatMap(name =>
-              StatsApp.memberStats(name, trigger = RunTrigger.Scheduled, jobRunId = jobRunId)
-            )
+          (_: Option[JobRunId]) =>
+            requireClubSlug.flatMap(name => StatsApp.memberStats(name).unit)
       }
 
       runner.submit(schedule.kind, schedule.clubId, schedule.params, RunTrigger.Scheduled, effect)

@@ -170,7 +170,7 @@ object JobRoutes {
             None,
             None,
             RunTrigger.Api,
-            _ => RefApp.populate(RunTrigger.Api, forceSkipped = false, upgradeRefs = false)
+            _ => RefApp.populate(forceSkipped = false, upgradeRefs = false).unit
           )
           .map(id => JobResult(Some(JobRunId.unwrap(id)), None))
           .catchSome { case e: JobConflictException =>
@@ -195,7 +195,7 @@ object JobRoutes {
                 body.refresh.getOrElse(false),
                 RunTrigger.Api,
                 jobRunId = jobRunId
-              )
+              ).unit
           )
         )
       } yield jsonResponse(Status.Ok, results)).pipe(withErrorHandling)
@@ -219,15 +219,11 @@ object JobRoutes {
           JobKind.Stats,
           body.clubSlug,
           Some(body.toJson),
-          jobRunId => parsed match {
+          _ => parsed match {
             case Some((since, until)) =>
-              StatsApp.playerOfPeriod(
-                body.clubSlug, since, until,
-                body.minGames.getOrElse(4),
-                RunTrigger.Api, jobRunId
-              ).unit
+              StatsApp.playerOfPeriod(body.clubSlug, since, until).unit
             case None =>
-              StatsApp.memberStats(body.clubSlug, RunTrigger.Api, jobRunId)
+              StatsApp.memberStats(body.clubSlug).unit
           }
         )
       } yield jsonResponse(Status.Ok, result)).pipe(withErrorHandling)

@@ -1,14 +1,13 @@
 package ccas.analysis.apps.ref
 
 import java.time.{Duration as JDuration, Instant}
-import scala.annotation.nowarn
 
 import com.augustnagro.magnum.sql
 import zio.{RIO, Ref, Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
 import zio.http.Client
 import RefUtils.*
 
-import ccas.analysis.tables.{ClubRefSkip, PlayerRefSkip, PlayerTournamentRef, RunTrigger, Tables}
+import ccas.analysis.tables.{ClubRefSkip, PlayerRefSkip, PlayerTournamentRef, Tables}
 import ccas.utils.{display, CcasLogger, OutputFile}
 import ccas.utils.client.ChessComClient
 import ccas.utils.errors.BadRequestException
@@ -25,7 +24,8 @@ object RefApp extends ZIOAppDefault {
       _    <- ZIO.whenDiscard(args.contains("--help"))(ZIO.fail(BadRequestException(help)))
       forceSkipped = args.contains("--force-skipped")
       upgradeRefs  = args.contains("--upgrade-refs")
-      _ <- populate(forceSkipped = forceSkipped, upgradeRefs = upgradeRefs)
+      data <- populate(forceSkipped = forceSkipped, upgradeRefs = upgradeRefs)
+      _    <- OutputFile.writeAndLogGlobal("ref", formatReport(data), "_ccas")
     } yield ()).provideSome[ZIOAppArgs & Scope](
       CcasLogger.live(showProgress = true),
       ChessComClient.live("ref"),
@@ -35,14 +35,10 @@ object RefApp extends ZIOAppDefault {
 
   // --- Entry point ---
 
-  // trigger accepted for consistency with other app entry points but not persisted (no run table)
-  @nowarn("msg=unused explicit parameter")
   def populate(
-    _trigger: RunTrigger = RunTrigger.Cli,
-    outputDir: Option[String] = Some("_ccas"),
     forceSkipped: Boolean,
     upgradeRefs: Boolean
-  ): RIO[CcasLogger & ChessComClient & PostgresClient, Unit] =
+  ): RIO[CcasLogger & ChessComClient & PostgresClient, ReportData] =
     for {
       startedAt                                                                <- ZIO.succeed(Instant.now())
       client                                                                   <- ZIO.service[ChessComClient]
@@ -54,34 +50,29 @@ object RefApp extends ZIOAppDefault {
       completedAt = Instant.now()
       duration    = JDuration.between(startedAt, completedAt)
       _ <- CcasLogger.info(s"Duration: ${duration.display}")
-      // Output report
       failed              <- ctx.failedUrls.get
       failedSrc           <- ctx.failedUrlSource.get
       playerSkipsByReason <- PlayerRefSkip.countByReason
       clubSkipsByReason   <- ClubRefSkip.countByReason
-      report = formatReport(
-        ReportData(
-          clubsTotal = clubsTotal,
-          clubsResolvedDb = clubsResolvedDb,
-          clubsResolvedApi = clubsResolvedApi,
-          clubsSkippedNew = clubsSkippedNew,
-          playersTotal = playersTotal,
-          playersResolvedDb = playersResolvedDb,
-          playersResolvedApi = playersResolvedApi,
-          playersSkippedNew = playersSkippedNew,
-          skippedPlayers = skipped,
-          playerSkipsByReason = playerSkipsByReason,
-          clubSkipsByReason = clubSkipsByReason,
-          upgradeEligible = upgradeEligible,
-          upgradeSucceeded = upgradeSucceeded,
-          startedAt = startedAt,
-          completedAt = completedAt,
-          failedQueries = failed,
-          failedUrlSources = failedSrc
-        )
-      )
-      _ <- ZIO.whenCaseDiscard(outputDir) { case Some(dir) => OutputFile.writeAndLogGlobal("ref", report, dir) }
-    } yield ()
+    } yield ReportData(
+      clubsTotal = clubsTotal,
+      clubsResolvedDb = clubsResolvedDb,
+      clubsResolvedApi = clubsResolvedApi,
+      clubsSkippedNew = clubsSkippedNew,
+      playersTotal = playersTotal,
+      playersResolvedDb = playersResolvedDb,
+      playersResolvedApi = playersResolvedApi,
+      playersSkippedNew = playersSkippedNew,
+      skippedPlayers = skipped,
+      playerSkipsByReason = playerSkipsByReason,
+      clubSkipsByReason = clubSkipsByReason,
+      upgradeEligible = upgradeEligible,
+      upgradeSucceeded = upgradeSucceeded,
+      startedAt = startedAt,
+      completedAt = completedAt,
+      failedQueries = failed,
+      failedUrlSources = failedSrc
+    )
 
   private def resolveClubs(
     ctx: RefContext,
@@ -237,7 +228,7 @@ object RefApp extends ZIOAppDefault {
 
   // --- Report ---
 
-  private def formatReport(d: ReportData): String = {
+  def formatReport(d: ReportData): String = {
     val duration = JDuration.between(d.startedAt, d.completedAt)
     val sb       = new StringBuilder
 

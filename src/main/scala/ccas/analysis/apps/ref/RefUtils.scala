@@ -10,7 +10,7 @@ import ccas.api.clubmatch.TeamMatchTeams
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
 import ccas.utils.client.ChessComClient
 
-private[ref] object RefUtils {
+object RefUtils {
 
   final case class UnresolvedPlayer(playerId: PlayerId, username: Username)
   final case class UnresolvedClub(clubId: ClubId, slug: ClubSlug)

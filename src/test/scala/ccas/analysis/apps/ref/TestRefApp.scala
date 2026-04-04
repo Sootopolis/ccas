@@ -222,7 +222,8 @@ object TestRefApp extends ZIOSpecDefault {
     upgradeRefs: Boolean
   ): RIO[Scope & PostgresClient, Unit] =
     RefApp
-      .populate(outputDir = None, forceSkipped = forceSkipped, upgradeRefs = upgradeRefs)
+      .populate(forceSkipped = forceSkipped, upgradeRefs = upgradeRefs)
+      .unit
       .provideSomeLayer(ZLayer.succeed(client) ++ CcasLogger.live(showProgress = false))
 
   // --- Spec ---

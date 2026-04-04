@@ -102,7 +102,7 @@ object HistoryApp extends ZIOAppDefault {
     full: Boolean,
     refresh: Boolean
   ): RIO[CcasLogger & ChessComClient & PostgresClient, Unit] =
-    if (slugs.size == 1) { discover(slugs.head, full, refresh) }
+    if (slugs.size == 1) { discover(slugs.head, full, refresh).flatMap(outputResult) }
     else {
       for {
         client <- ZIO.service[ChessComClient]
@@ -112,9 +112,15 @@ object HistoryApp extends ZIOAppDefault {
           CcasLogger.info(s"  Resolved $resolvedClubs clubs, $resolvedPlayers players from previous runs")
         }
         shared <- SharedContext.make
-        _ <- ZIO.foreachDiscard(slugs)(discoverClub(_, full, refresh, RunTrigger.Cli, None, Some(shared)))
+        _ <- ZIO.foreachDiscard(slugs) { slug =>
+          discoverClub(slug, full, refresh, RunTrigger.Cli, None, Some(shared)).flatMap(outputResult)
+        }
       } yield ()
     }
+
+  private def outputResult(r: HistoryResult): RIO[CcasLogger, Unit] =
+    logSummary(r.stats, r.startedAt, r.completedAt) *>
+      OutputFile.writeAndLog("history", r.clubSlug, formatReport(r.stats, r.clubSlug, r.startedAt, r.completedAt))
 
   private def initialize(
     clubSlug: ClubSlug,
@@ -149,6 +155,8 @@ object HistoryApp extends ZIOAppDefault {
         else { queriedIds }
     } yield InitResult(allMembers, playerById, effectiveQueriedIds, ctx, startedAt, runId)
 
+  case class HistoryResult(stats: RunStats, clubSlug: ClubSlug, startedAt: Instant, completedAt: Instant)
+
   /** Main entry point: orchestrates the 4-phase discover workflow for a club's match history. */
   def discover(
     clubSlug: ClubSlug,
@@ -156,7 +164,7 @@ object HistoryApp extends ZIOAppDefault {
     refresh: Boolean = false,
     trigger: RunTrigger = RunTrigger.Cli,
     jobRunId: Option[JobRunId] = None
-  ): RIO[CcasLogger & ChessComClient & PostgresClient, Unit] =
+  ): RIO[CcasLogger & ChessComClient & PostgresClient, HistoryResult] =
     discoverClub(clubSlug, full, refresh, trigger, jobRunId, shared = None)
 
   private def discoverClub(
@@ -166,7 +174,7 @@ object HistoryApp extends ZIOAppDefault {
     trigger: RunTrigger,
     jobRunId: Option[JobRunId],
     shared: Option[SharedContext]
-  ): RIO[CcasLogger & ChessComClient & PostgresClient, Unit] = {
+  ): RIO[CcasLogger & ChessComClient & PostgresClient, HistoryResult] = {
     require(shared.isEmpty || trigger == RunTrigger.Cli, "SharedContext requires sequential CLI execution")
     for {
       pgClient <- ZIO.service[PostgresClient]
@@ -256,9 +264,7 @@ object HistoryApp extends ZIOAppDefault {
       _ <- HistoryRun.complete(
         runId, completedAt, totalStats.matchesProcessed + totalStats.matchesSharedSkip, totalStats.playersDiscovered
       )
-      _ <- logSummary(totalStats, startedAt, completedAt)
-      _ <- OutputFile.writeAndLog("history", clubSlug, formatReport(totalStats, clubSlug, startedAt, completedAt))
-    } yield ()
+    } yield HistoryResult(totalStats, clubSlug, startedAt, completedAt)
   }
 
   // === Reporting ===
@@ -312,7 +318,7 @@ object HistoryApp extends ZIOAppDefault {
     } yield ()
   }
 
-  private def formatReport(
+  def formatReport(
     stats: RunStats,
     clubSlug: ClubSlug,
     startedAt: Instant,

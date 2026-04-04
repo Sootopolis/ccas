@@ -94,7 +94,7 @@ private[recruitment] object RecruitmentFilterDefs {
 
   private case class CacheCriterion(
     stalenessDays: Long,
-    check: (PlayerRecruitmentCache, RecruitmentCriteria) => Boolean
+    shouldReject: (PlayerRecruitmentCache, RecruitmentCriteria) => Boolean
   )
 
   private val cacheCriteria: List[CacheCriterion] = List(
@@ -167,7 +167,7 @@ private[recruitment] object RecruitmentFilterDefs {
     now: Instant
   ): Boolean = {
     val ageDays = ChronoUnit.DAYS.between(cache.fetchedAt, now)
-    cacheCriteria.exists(c => c.stalenessDays > ageDays && c.check(cache, criteria))
+    cacheCriteria.exists(c => c.stalenessDays > ageDays && c.shouldReject(cache, criteria))
   }
 
   object CheckCacheCriteria extends RecruitmentFilter {
