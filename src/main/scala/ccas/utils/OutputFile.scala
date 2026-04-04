@@ -13,29 +13,29 @@ object OutputFile {
 
   private val dateTimeFormat = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")
 
-  def write(appName: String, clubSlug: ClubSlug, content: String): Task[Path] =
-    writeInternal(Paths.get("out", ClubSlug.unwrap(clubSlug)), appName, content)
+  def write(appName: String, clubSlug: ClubSlug, content: String, ext: String = "txt"): Task[Path] =
+    writeInternal(Paths.get("out", ClubSlug.unwrap(clubSlug)), appName, content, ext)
 
-  def writeAndLog(appName: String, clubSlug: ClubSlug, content: String): RIO[CcasLogger, Unit] =
-    write(appName, clubSlug, content).flatMap(path => CcasLogger.info(s"Output written to $path"))
+  def writeAndLog(appName: String, clubSlug: ClubSlug, content: String, ext: String = "txt"): RIO[CcasLogger, Unit] =
+    write(appName, clubSlug, content, ext).flatMap(path => CcasLogger.info(s"Output written to $path"))
 
-  def writeGlobal(appName: String, content: String, subDir: String): Task[Path] =
-    writeInternal(Paths.get("out", subDir), appName, content)
+  def writeGlobal(appName: String, content: String, subDir: String, ext: String = "txt"): Task[Path] =
+    writeInternal(Paths.get("out", subDir), appName, content, ext)
 
-  private def writeInternal(dir: Path, appName: String, content: String): Task[Path] = {
+  private def writeInternal(dir: Path, appName: String, content: String, ext: String): Task[Path] = {
     val date = LocalDateTime.now().format(dateTimeFormat)
-    val path = dir.resolve(s"$date-$appName.txt")
+    val path = dir.resolve(s"$date-$appName.$ext")
     ZIO.attemptBlocking(Files.createDirectories(dir)) *>
-      ZIO.attemptBlocking(archiveExisting(dir, appName)) *>
+      ZIO.attemptBlocking(archiveExisting(dir, appName, ext)) *>
       ZIO.writeFile(path.toString, content).as(path)
   }
 
-  def writeAndLogGlobal(appName: String, content: String, subDir: String): RIO[CcasLogger, Unit] =
-    writeGlobal(appName, content, subDir).flatMap(path => CcasLogger.info(s"Output written to $path"))
+  def writeAndLogGlobal(appName: String, content: String, subDir: String, ext: String = "txt"): RIO[CcasLogger, Unit] =
+    writeGlobal(appName, content, subDir, ext).flatMap(path => CcasLogger.info(s"Output written to $path"))
 
-  private def archiveExisting(clubDir: Path, appName: String): Unit =
+  private def archiveExisting(clubDir: Path, appName: String, ext: String): Unit =
     if (Files.exists(clubDir)) {
-      val suffix     = s"-$appName.txt"
+      val suffix     = s"-$appName.$ext"
       val archiveDir = clubDir.resolve("archive")
       Using(Files.list(clubDir)) { stream =>
         stream

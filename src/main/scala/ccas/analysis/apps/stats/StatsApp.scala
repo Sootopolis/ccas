@@ -14,7 +14,7 @@ import java.time.Instant
   *
   * ==Modes==
   *   - '''Member stats (default):''' All-time per-member contribution table with raw and fairplay-adjusted views.
-  *   - '''Player of period:''' Same stats filtered by a date range, ranked by raw score rate.
+  *   - '''Player of period:''' Same stats filtered by a date range, ranked by raw points.
   *
   * ==CLI==
   * {{{
@@ -65,13 +65,12 @@ object StatsApp extends ZIOAppDefault {
       playerIds = rows.map(_.playerId).distinct
       usernameMap <- Player.resolveUsernames(playerIds)
       contributions = aggregate(rows, usernameMap)
-      now           = Instant.now()
-      content = StatsReport.formatContribution(clubSlug, contributions, matchCount, now)
+      content = StatsReport.formatContribution(contributions)
       _ <- CcasLogger.info(s"Players: ${contributions.size}, Boards: ${rows.size}, Matches: $matchCount")
-      _ <- OutputFile.writeAndLog("stats", clubSlug, content)
+      _ <- OutputFile.writeAndLog("stats", clubSlug, content, ext = "csv")
     } yield ()
 
-  /** Per-member stats for a date range, ranked by raw score rate. */
+  /** Per-member stats for a date range, ranked by raw points. */
   @annotation.nowarn("msg=unused explicit parameter")
   def playerOfPeriod(
     clubSlug: ClubSlug,
@@ -89,11 +88,10 @@ object StatsApp extends ZIOAppDefault {
       playerIds = rows.map(_.playerId).distinct
       usernameMap <- Player.resolveUsernames(playerIds)
       contributions = aggregate(rows, usernameMap)
-      now           = Instant.now()
-      content = StatsReport.formatPlayerOfPeriod(clubSlug, contributions, since, until, minGames, now)
+      content = StatsReport.formatPlayerOfPeriod(contributions, minGames)
       eligible = contributions.count(_.raw.games >= minGames)
       _ <- CcasLogger.info(s"Players: ${contributions.size}, Eligible (>=$minGames games): $eligible")
-      _ <- OutputFile.writeAndLog("stats", clubSlug, content)
+      _ <- OutputFile.writeAndLog("stats", clubSlug, content, ext = "csv")
     } yield ()
 
   private def flagValue(args: zio.Chunk[String], flag: String): Option[String] = {

@@ -2,106 +2,63 @@ package ccas.analysis.apps.stats
 
 import ccas.analysis.apps.stats.StatsUtils.{MemberContribution, PlayerBoardStats}
 
-import java.time.Instant
-import ccas.api.misc.subtypes.ClubSlug
-
-/** Formats stats results as aligned text tables for output files. */
+/** Formats stats results as CSV for output files. */
 object StatsReport {
 
-  def formatContribution(
-    clubSlug: ClubSlug,
-    contributions: List[MemberContribution],
-    matchCount: Long,
-    generatedAt: Instant
-  ): String = {
+  /** All-time contribution CSV with both raw and fairplay-adjusted stats, ranked by raw points descending. */
+  def formatContribution(contributions: List[MemberContribution]): String = {
     val sb = new StringBuilder
-    sb.append(s"=== Member Contribution: $clubSlug ===\n")
-    sb.append(s"Generated: $generatedAt\n")
-    sb.append(s"Finished matches: $matchCount\n\n")
+    sb.append("#,Username,Boards,Games,W,D,L,Points,Score%,FP_W,FP_D,FP_L,FP_Points,FP_Score%\n")
 
-    sb.append("--- Raw ---\n")
-    appendTable(sb, contributions, _.raw)
-
-    sb.append("\n--- Fairplay-adjusted ---\n")
-    appendTable(sb, contributions, _.fairPlay)
-
-    sb.toString
-  }
-
-  def formatPlayerOfPeriod(
-    clubSlug: ClubSlug,
-    contributions: List[MemberContribution],
-    since: Instant,
-    until: Instant,
-    minGames: Int,
-    generatedAt: Instant
-  ): String = {
-    val sb = new StringBuilder
-    sb.append(s"=== Player of the Period: $clubSlug ===\n")
-    sb.append(s"Period: $since to $until\n")
-    sb.append(s"Minimum games: $minGames\n")
-    sb.append(s"Generated: $generatedAt\n\n")
-
-    val eligible = contributions.filter(_.raw.games >= minGames).sortBy(-_.raw.scoreRate)
-
-    sb.append("--- Ranking (raw) ---\n")
-    appendRankedTable(sb, eligible)
-
-    sb.toString
-  }
-
-  private def appendTable(
-    sb: StringBuilder,
-    contributions: List[MemberContribution],
-    selectStats: MemberContribution => PlayerBoardStats
-  ): Unit =
-    if (contributions.isEmpty) {
-      sb.append("No data\n")
-    } else {
-      val nameWidth = contributions.map(_.username.value.length).max max 8
-      val fmt       = s"%-${nameWidth}s  %6d  %5d  %3d  %3d  %3d  %6s  %6s\n"
-      val header    = s"%-${nameWidth}s  %6s  %5s  %3s  %3s  %3s  %6s  %6s\n"
-      val sep       = "-" * nameWidth + "  " + "------  -----  ---  ---  ---  ------  ------\n"
-
-      sb.append(header.format("Username", "Boards", "Games", "W", "D", "L", "Points", "Score%"))
-      sb.append(sep)
-
-      contributions.foreach { mc =>
-        val s = selectStats(mc)
-        sb.append(fmt.format(
-          mc.username.value, s.boards, s.games, s.wins, s.draws, s.losses,
-          formatPoints(s.points), formatPercent(s.scoreRate)
-        ))
-      }
-
-      val total = contributions.map(selectStats).foldLeft(PlayerBoardStats.empty)(_ + _)
-      sb.append(sep)
-      sb.append(fmt.format(
-        "TOTAL", total.boards, total.games, total.wins, total.draws, total.losses,
-        formatPoints(total.points), formatPercent(total.scoreRate)
+    val ranked = contributions.sortBy(mc => (-mc.raw.pointsX2, mc.username.value.toLowerCase))
+    ranked.zipWithIndex.foreach { case (mc, idx) =>
+      val r  = mc.raw
+      val fp = mc.fairPlay
+      sb.append(csvRow(
+        (idx + 1).toString, mc.username.value, r.boards.toString, r.games.toString,
+        r.wins.toString, r.draws.toString, r.losses.toString,
+        formatPoints(r.points), formatPercent(r.scoreRate),
+        fp.wins.toString, fp.draws.toString, fp.losses.toString,
+        formatPoints(fp.points), formatPercent(fp.scoreRate)
       ))
     }
 
-  private def appendRankedTable(sb: StringBuilder, ranked: List[MemberContribution]): Unit =
-    if (ranked.isEmpty) {
-      sb.append("No eligible players\n")
-    } else {
-      val nameWidth = ranked.map(_.username.value.length).max max 8
-      val fmt       = s"%3d  %-${nameWidth}s  %5d  %3d  %3d  %3d  %6s  %6s\n"
-      val header    = s"%3s  %-${nameWidth}s  %5s  %3s  %3s  %3s  %6s  %6s\n"
-      val sep       = "---  " + "-" * nameWidth + "  " + "-----  ---  ---  ---  ------  ------\n"
-
-      sb.append(header.format("#", "Username", "Games", "W", "D", "L", "Points", "Score%"))
-      sb.append(sep)
-
-      ranked.zipWithIndex.foreach { case (mc, idx) =>
-        val s = mc.raw
-        sb.append(fmt.format(
-          idx + 1, mc.username.value, s.games, s.wins, s.draws, s.losses,
-          formatPoints(s.points), formatPercent(s.scoreRate)
-        ))
-      }
+    if (contributions.nonEmpty) {
+      val rawTotal = contributions.map(_.raw).foldLeft(PlayerBoardStats.empty)(_ + _)
+      val fpTotal  = contributions.map(_.fairPlay).foldLeft(PlayerBoardStats.empty)(_ + _)
+      sb.append(csvRow(
+        "", "TOTAL", rawTotal.boards.toString, rawTotal.games.toString,
+        rawTotal.wins.toString, rawTotal.draws.toString, rawTotal.losses.toString,
+        formatPoints(rawTotal.points), formatPercent(rawTotal.scoreRate),
+        fpTotal.wins.toString, fpTotal.draws.toString, fpTotal.losses.toString,
+        formatPoints(fpTotal.points), formatPercent(fpTotal.scoreRate)
+      ))
     }
+
+    sb.toString
+  }
+
+  /** Period-filtered CSV ranked by raw points descending, showing only players meeting the minimum games threshold. */
+  def formatPlayerOfPeriod(contributions: List[MemberContribution], minGames: Int): String = {
+    val sb = new StringBuilder
+    sb.append("#,Username,Games,W,D,L,Points,Score%\n")
+
+    val eligible = contributions.filter(_.raw.games >= minGames)
+      .sortBy(mc => (-mc.raw.pointsX2, mc.username.value.toLowerCase))
+
+    eligible.zipWithIndex.foreach { case (mc, idx) =>
+      val s = mc.raw
+      sb.append(csvRow(
+        (idx + 1).toString, mc.username.value, s.games.toString,
+        s.wins.toString, s.draws.toString, s.losses.toString,
+        formatPoints(s.points), formatPercent(s.scoreRate)
+      ))
+    }
+
+    sb.toString
+  }
+
+  private def csvRow(fields: String*): String = fields.mkString(",") + "\n"
 
   private def formatPoints(points: Double): String =
     if (points == points.toLong.toDouble) f"$points%.0f"
