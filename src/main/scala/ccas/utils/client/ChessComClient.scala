@@ -480,7 +480,8 @@ object ChessComClient {
           configId   <- ctx.configIdRef.get.flatMap {
             case Some(id) => ZIO.succeed(id)
             case None =>
-              ClientConfig.insert(toClientConfig(ctx.config)).provideEnvironment(ZEnvironment(ctx.pgClient))
+              ClientConfig.ensureConfig(toClientConfig(ctx.config))
+                .provideEnvironment(ZEnvironment(ctx.pgClient))
                 .tap(id => ctx.configIdRef.set(Some(id)))
           }
           row = adjusted.toClientStats(ctx.appLabel, ctx.startedAt, now, configId)
@@ -495,9 +496,10 @@ object ChessComClient {
       }
     } yield ()).ignore
 
-  private def toClientConfig(config: ThrottleConfig): ClientConfig =
-    ClientConfig(
+  private def toClientConfig(config: ThrottleConfig): ClientConfig = {
+    val cc = ClientConfig(
       configId = 0,
+      configHash = "",
       permits = config.maxPermits.toInt,
       cooldownSecs = config.cooldown.getSeconds.toInt,
       cfCooldownSecs = config.cfCooldown.getSeconds.toInt,
@@ -508,6 +510,8 @@ object ChessComClient {
       failureThreshold = config.failureThreshold,
       minSampleSize = config.minSampleSize
     )
+    cc.copy(configHash = cc.computeHash)
+  }
 
   private def inProgressThrottleMs(stateRef: Ref[ThrottleState]): UIO[Long] =
     Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS).flatMap { now =>

@@ -7,6 +7,7 @@ DROP TABLE IF EXISTS client_stats;
 
 CREATE TABLE IF NOT EXISTS client_config (
   config_id            BIGSERIAL PRIMARY KEY,
+  config_hash          TEXT NOT NULL UNIQUE,
   permits              INT NOT NULL,
   cooldown_secs        INT NOT NULL,
   cf_cooldown_secs     INT NOT NULL,

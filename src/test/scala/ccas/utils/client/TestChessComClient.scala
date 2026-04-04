@@ -7,7 +7,7 @@ import zio.http.*
 import zio.json.*
 import zio.test.*
 
-import ccas.analysis.tables.{ClientStats, Tables}
+import ccas.analysis.tables.{ClientConfig, ClientStats, Tables}
 import ccas.utils.TestCcasLogger
 import ccas.utils.sql.FreshSchemaLayer
 
@@ -569,6 +569,30 @@ object TestChessComClient extends ZIOSpecDefault {
           row.configId == configId1.get
         )
       }
+    },
+    test("ensureConfig deduplicates identical configs") {
+      val cc = { val c = ClientConfig(0L, "", 99, 88, 77, 66, 55, 44, 33, 0.5, 22); c.copy(configHash = c.computeHash) }
+      for {
+        id1 <- ClientConfig.ensureConfig(cc)
+        id2 <- ClientConfig.ensureConfig(cc)
+      } yield assertTrue(id1 == id2)
+    },
+    test("separate sessions with same config reuse existing config row") {
+      for {
+        pgClient <- ZIO.service[PostgresClient]
+        stats1   <- Ref.make(ChessComClient.StatsAccumulator().copy(requests = 3, successes = 3))
+        ctx1     <- makeFlushContext("test-dedup-1", stats1, pgClient)
+        _        <- ChessComClient.persistStats(ctx1)
+        cid1     <- ctx1.configIdRef.get
+        // Second session: fresh configIdRef, same ThrottleConfig
+        stats2 <- Ref.make(ChessComClient.StatsAccumulator().copy(requests = 7, successes = 7))
+        ctx2   <- makeFlushContext("test-dedup-2", stats2, pgClient)
+        _      <- ChessComClient.persistStats(ctx2)
+        cid2   <- ctx2.configIdRef.get
+      } yield assertTrue(
+        cid1.isDefined,
+        cid2 == cid1
+      )
     },
     test("skips persist when no requests made") {
       for {
