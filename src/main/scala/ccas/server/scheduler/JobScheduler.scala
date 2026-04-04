@@ -4,7 +4,7 @@ import java.time.temporal.ChronoUnit
 import java.time.Instant
 
 import com.typesafe.config.ConfigFactory
-import zio.{durationLong, Duration, Task, UIO, URLayer, ZIO, ZLayer}
+import zio.{durationLong, Duration, Scope, Task, UIO, URIO, URLayer, ZIO, ZLayer}
 
 import ccas.analysis.apps.history.HistoryApp
 import ccas.analysis.apps.membership.MembershipApp
@@ -18,7 +18,7 @@ import ccas.utils.CcasLogger
 import ccas.utils.sql.PostgresClient
 
 trait JobScheduler {
-  def start: UIO[Unit]
+  def start: URIO[Scope, Unit]
 }
 
 object JobScheduler {
@@ -34,16 +34,16 @@ object JobScheduler {
       new JobSchedulerLive(logger, runner, pgClient, pollInterval)
     }
 
-  private class JobSchedulerLive(logger: CcasLogger, runner: JobRunner, pgClient: PostgresClient, pollInterval: Duration)
+  private[scheduler] class JobSchedulerLive(logger: CcasLogger, runner: JobRunner, pgClient: PostgresClient, pollInterval: Duration)
       extends JobScheduler {
 
     private val pgClientEnv = zio.ZEnvironment(pgClient)
     private val loggerEnv     = zio.ZEnvironment(logger)
 
-    override def start: UIO[Unit] =
+    override def start: URIO[Scope, Unit] =
       pollLoop
         .repeat(zio.Schedule.fixed(pollInterval))
-        .forkDaemon
+        .forkScoped
         .unit
 
     private def pollLoop: UIO[Unit] =

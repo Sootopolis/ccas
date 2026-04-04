@@ -10,12 +10,14 @@ import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 import ccas.analysis.apps.membership.MembershipChange.*
 import ccas.analysis.apps.membership.MembershipChange.MemberChange.*
 import ccas.analysis.apps.membership.MembershipClassify.{PhaseBResult, PhaseCResult}
-import ccas.analysis.tables.{Club, ClubMember, Player, PlayerSnapshot, Tables}
+import ccas.analysis.apps.recruitment.CandidateOutcome
+import ccas.analysis.tables.{Club, ClubMember, Player, PlayerSnapshot, RecruitmentCandidate, RunTrigger, Tables}
 import ccas.api.misc.enums.PlayerStatusCategory.{Active, Closed}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
 import ccas.utils.CcasLogger
 import ccas.utils.client.{ChessComClient, TestChessComClientSupport}
 import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
+import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient.connectZIO
 
 object TestMembershipApp extends ZIOSpecDefault {
@@ -88,7 +90,8 @@ object TestMembershipApp extends ZIOSpecDefault {
     for {
       _ <- connectZIO(sql"DELETE FROM club_member WHERE club_id = $clubId".update.run())
       _ <- ZIO.foreachDiscard(testPlayerIds) { pid =>
-        connectZIO(sql"DELETE FROM player_snapshot WHERE player_id = $pid".update.run()) *>
+        connectZIO(sql"DELETE FROM recruitment_candidate WHERE player_id = $pid".update.run()) *>
+          connectZIO(sql"DELETE FROM player_snapshot WHERE player_id = $pid".update.run()) *>
           connectZIO(sql"DELETE FROM player WHERE player_id = $pid".update.run())
       }
       _ <- Club.upsert(club)
@@ -103,6 +106,7 @@ object TestMembershipApp extends ZIOSpecDefault {
     suiteClassifyFromDb,
     suiteMergeResults,
     suiteFormatReport,
+    suiteLookupJoinInvitations,
     suiteBuildDbState,
     suiteClassifyApiMembers,
     suiteClassifyDisappeared
@@ -248,7 +252,7 @@ object TestMembershipApp extends ZIOSpecDefault {
 
   private def suiteFormatReport = suite("formatReport")(
     test("empty summaries → 'No changes'") {
-      val rr     = MembershipReport.ReportResult(Nil, 10, 10)
+      val rr     = MembershipReport.ReportResult(Nil, 10, 10, Map.empty)
       val output = MembershipReport.formatReport(rr)
       assertTrue(
         output.contains("Total members: 10 (+0)"),
@@ -264,7 +268,7 @@ object TestMembershipApp extends ZIOSpecDefault {
         ),
         MemberChangeSummary(pid1, Username("bob"), Chunk(NewMember(Times.t1)))
       )
-      val rr     = MembershipReport.ReportResult(summaries, 8, 10)
+      val rr     = MembershipReport.ReportResult(summaries, 8, 10, Map.empty)
       val output = MembershipReport.formatReport(rr)
       assertTrue(
         output.contains("[JOINED]\n  alice"),
@@ -277,7 +281,7 @@ object TestMembershipApp extends ZIOSpecDefault {
         MemberChangeSummary(pid0, Username("alice"), Chunk(UsernameChange(Times.t2, Username("old")))),
         MemberChangeSummary(pid1, Username("bob"), Chunk(NewMember(Times.t1)))
       )
-      val rr     = MembershipReport.ReportResult(summaries, 8, 9)
+      val rr     = MembershipReport.ReportResult(summaries, 8, 9, Map.empty)
       val output = MembershipReport.formatReport(rr)
       val newIdx = output.indexOf("[JOINED]")
       val usrIdx = output.indexOf("[USERNAME CHANGE]")
@@ -292,21 +296,115 @@ object TestMembershipApp extends ZIOSpecDefault {
         MemberChangeSummary(pid0, Username("bob"), Chunk(NewMember(Times.t2))),
         MemberChangeSummary(pid1, Username("alice"), Chunk(NewMember(Times.t1)))
       )
-      val rr       = MembershipReport.ReportResult(summaries, 8, 10)
+      val rr       = MembershipReport.ReportResult(summaries, 8, 10, Map.empty)
       val output   = MembershipReport.formatReport(rr)
       val aliceIdx = output.indexOf("alice")
       val bobIdx   = output.indexOf("bob")
       assertTrue(aliceIdx < bobIdx)
     },
     test("shows member count delta") {
-      val rr     = MembershipReport.ReportResult(Nil, 12, 10)
+      val rr     = MembershipReport.ReportResult(Nil, 12, 10, Map.empty)
       val output = MembershipReport.formatReport(rr)
       assertTrue(output.contains("Total members: 10 (-2)"))
+    },
+    test("shows invitation date on join changes but not on other changes") {
+      val invitedAt = Times.t0
+      val summaries = List(
+        MemberChangeSummary(
+          pid0,
+          Username("alice"),
+          Chunk(NewMember(Times.t1), UsernameChange(Times.t2, Username("alice-old")))
+        ),
+        MemberChangeSummary(pid1, Username("bob"), Chunk(JoinedClub(Times.t1)))
+      )
+      val invitations = Map(pid0 -> invitedAt)
+      val rr          = MembershipReport.ReportResult(summaries, 8, 10, invitations)
+      val output      = MembershipReport.formatReport(rr)
+      val joinedSection = output.substring(output.indexOf("[JOINED]"), output.indexOf("[USERNAME CHANGE]"))
+      val usernameSection = output.substring(output.indexOf("[USERNAME CHANGE]"))
+      assertTrue(
+        joinedSection.contains(s"alice — at ${Times.t1} — invited at $invitedAt"),
+        !joinedSection.contains("bob — at ${Times.t1} — invited"),
+        !usernameSection.contains("invited")
+      )
+    },
+    test("shows invitation date on rejoined changes") {
+      val invitedAt = Times.t1
+      val summaries = List(
+        MemberChangeSummary(pid0, Username("alice"), Chunk(Rejoined(Times.t2, Times.t0)))
+      )
+      val invitations = Map(pid0 -> invitedAt)
+      val rr          = MembershipReport.ReportResult(summaries, 10, 10, invitations)
+      val output      = MembershipReport.formatReport(rr)
+      assertTrue(output.contains(s"at ${Times.t2} — previously left at ${Times.t0} — invited at $invitedAt"))
     }
   )
 
   // ==========================================================================
-  // Suite D: buildDbState (DB)
+  // Suite D: lookupJoinInvitations (DB)
+  // ==========================================================================
+
+  private val otherClubId = ClubId(501)
+  private val otherClub   = Club(otherClubId, Times.t0, ClubSlug("other-club"), "Other Club")
+
+  private def seedRecruitmentInvitation(
+    forClubId: ClubId,
+    playerId: PlayerId,
+    evaluatedAt: Instant
+  ): ZIO[PostgresClient, java.sql.SQLException, Unit] =
+    for {
+      criteriaId <- connectZIO {
+        sql"""INSERT INTO recruitment_criteria (
+                nationality_exclude, nationality_countries, exclude_clubs,
+                exclude_source_admins, exclude_former_members
+              ) VALUES (false, '{}', '{}', false, false)
+              RETURNING criteria_id""".query[Long].run().head
+      }
+      runId <- connectZIO {
+        sql"""INSERT INTO recruitment_run (club_id, criteria_id, trigger, started_at, candidates_found)
+              VALUES ($forClubId, $criteriaId, 'Cli', $evaluatedAt, 1)
+              RETURNING run_id""".query[Long].run().head
+      }
+      _ <- RecruitmentCandidate.insert(
+        RecruitmentCandidate(runId, playerId, evaluatedAt, CandidateOutcome.Invited, None)
+      )
+    } yield ()
+
+  private def suiteLookupJoinInvitations = suite("lookupJoinInvitations")(
+    test("returns invitation for player invited by our club") {
+      val player = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0)
+      val summaries = List(MemberChangeSummary(pid0, Username("alice"), Chunk(NewMember(Times.t2))))
+      for {
+        _ <- seedDb(players = List(player))
+        _ <- seedRecruitmentInvitation(clubId, pid0, Times.t1)
+        result <- MembershipReport.lookupJoinInvitations(clubId, summaries)
+      } yield assertTrue(
+        result.size == 1,
+        result(pid0) == Times.t1
+      )
+    },
+    test("does NOT return invitation from a different club") {
+      val player = Player(pid1, Times.t0, Username("bob"), Active, None, Times.t0)
+      val summaries = List(MemberChangeSummary(pid1, Username("bob"), Chunk(NewMember(Times.t2))))
+      for {
+        _ <- seedDb(players = List(player))
+        _ <- Club.upsert(otherClub)
+        _ <- seedRecruitmentInvitation(otherClubId, pid1, Times.t1)
+        result <- MembershipReport.lookupJoinInvitations(clubId, summaries)
+      } yield assertTrue(result.isEmpty)
+    },
+    test("skips lookup for non-join changes") {
+      val summaries = List(
+        MemberChangeSummary(pid0, Username("alice"), Chunk(UsernameChange(Times.t1, Username("old"))))
+      )
+      for {
+        result <- MembershipReport.lookupJoinInvitations(clubId, summaries)
+      } yield assertTrue(result.isEmpty)
+    }
+  )
+
+  // ==========================================================================
+  // Suite E: buildDbState (DB)
   // ==========================================================================
 
   private def suiteBuildDbState = suite("buildDbState")(
@@ -355,7 +453,7 @@ object TestMembershipApp extends ZIOSpecDefault {
   )
 
   // ==========================================================================
-  // Suite D: classifyApiMembers (DB + fake HTTP)
+  // Suite F: classifyApiMembers (DB + fake HTTP)
   // ==========================================================================
 
   private def suiteClassifyApiMembers = suite("classifyApiMembers")(
@@ -578,7 +676,7 @@ object TestMembershipApp extends ZIOSpecDefault {
   )
 
   // ==========================================================================
-  // Suite E: classifyDisappeared (fake HTTP)
+  // Suite G: classifyDisappeared (fake HTTP)
   // ==========================================================================
 
   private def suiteClassifyDisappeared = suite("classifyDisappeared")(

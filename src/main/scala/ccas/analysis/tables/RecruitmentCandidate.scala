@@ -60,6 +60,21 @@ object RecruitmentCandidate {
             ORDER BY evaluated_at DESC LIMIT 1""".query[RecruitmentCandidate].run().headOption
     }
 
+  def selectLatestInvitedByClub(
+    playerId: PlayerId,
+    clubId: ClubId
+  ): ZIO[PostgresClient, SQLException, Option[RecruitmentCandidate]] =
+    connectZIO {
+      val invited = CandidateOutcome.Invited.toString
+      val selectColsQualified = SqlLiteral(
+        "rc.run_id, rc.player_id, rc.evaluated_at, rc.outcome, rc.rejection_reason"
+      )
+      sql"""SELECT $selectColsQualified FROM recruitment_candidate rc
+            JOIN recruitment_run rr ON rc.run_id = rr.run_id
+            WHERE rc.player_id = $playerId AND rr.club_id = $clubId AND rc.outcome = $invited
+            ORDER BY rc.evaluated_at DESC LIMIT 1""".query[RecruitmentCandidate].run().headOption
+    }
+
   def selectLatestRejectedByAlias(
     playerId: PlayerId,
     clubId: ClubId,

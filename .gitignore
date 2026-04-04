@@ -45,6 +45,7 @@ build/
 
 ### Environment ###
 .env
+.mcp.json
 
 ### Mac OS ###
 .DS_Store

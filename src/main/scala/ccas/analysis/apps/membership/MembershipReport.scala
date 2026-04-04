@@ -1,8 +1,8 @@
 package ccas.analysis.apps.membership
 
+import java.sql.SQLException
 import java.time.{Duration as JDuration, Instant}
 
-import ccas.utils.sql.PostgresClient
 import zio.{Chunk, RIO, URIO, ZIO}
 
 import ccas.analysis.apps.membership.MembershipChange.*
@@ -12,13 +12,15 @@ import ccas.api.misc.enums.PlayerStatusCategory
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
 import ccas.utils.{display, CcasLogger}
 import ccas.utils.errors.NotFoundException
+import ccas.utils.sql.PostgresClient
 
 private[membership] object MembershipReport {
 
   case class ReportResult(
     summaries: List[MemberChangeSummary],
     memberCountAtStart: Int,
-    memberCountAtEnd: Int
+    memberCountAtEnd: Int,
+    invitations: Map[PlayerId, Instant]
   )
 
   def report(clubSlug: ClubSlug, since: Instant, until: Instant): RIO[CcasLogger & PostgresClient, ReportResult] =
@@ -29,14 +31,18 @@ private[membership] object MembershipReport {
       members <- ClubMember.selectClub(clubId)
       snaps   <- PlayerSnapshot.selectSince(since)
       summaries    = classifyFromDb(clubId, members, snaps, since, until)
+      invitations <- lookupJoinInvitations(clubId, summaries)
       countAtStart = members.count(m => !m.since.isAfter(since) && m.until.forall(_.isAfter(since)))
       countAtEnd   = members.count(m => !m.since.isAfter(until) && m.until.forall(_.isAfter(until)))
       _ <- CcasLogger.info(s"=== Report for $clubSlug from $since to $until ===")
       _ <- CcasLogger.info(s"Members: $countAtStart -> $countAtEnd")
-      _ <- printChangeSummaries(summaries)
-    } yield ReportResult(summaries, countAtStart, countAtEnd)
+      _ <- printChangeSummaries(summaries, invitations)
+    } yield ReportResult(summaries, countAtStart, countAtEnd, invitations)
 
-  def reportReconciliation(result: ReconciliationResult): URIO[CcasLogger, Unit] = {
+  def reportReconciliation(
+    result: ReconciliationResult,
+    invitations: Map[PlayerId, Instant]
+  ): URIO[CcasLogger, Unit] = {
     val delta    = result.currentMemberCount - result.previousMemberCount
     val sign     = if (delta >= 0) "+" else ""
     val duration = JDuration.between(result.startedAt, result.completedAt)
@@ -49,12 +55,15 @@ private[membership] object MembershipReport {
       _ <- CcasLogger.info(s"New memberships:    ${result.newMemberships.size}")
       _ <- CcasLogger.info(s"Closed memberships: ${result.closedMemberships.size}")
       _ <- CcasLogger.info("")
-      _ <- printChangeSummaries(result.changes.toList)
+      _ <- printChangeSummaries(result.changes.toList, invitations)
     } yield ()
   }
 
-  private def printChangeSummaries(summaries: List[MemberChangeSummary]): URIO[CcasLogger, Unit] = {
-    val grouped = groupByCategory(summaries)
+  private def printChangeSummaries(
+    summaries: List[MemberChangeSummary],
+    invitations: Map[PlayerId, Instant]
+  ): URIO[CcasLogger, Unit] = {
+    val grouped = groupByCategory(summaries, invitations)
     ZIO.foreachDiscard(grouped) { case (label, entries) =>
       CcasLogger.info(label) *>
         ZIO.foreachDiscard(entries) { case (username, detail) =>
@@ -74,41 +83,46 @@ private[membership] object MembershipReport {
     case _: StatusChange   => "[STATUS CHANGE]"
   }
 
-  private def formatChangeDetail(change: MemberChange): String = change match {
-    case NewMember(ts)                 => s"at $ts"
-    case JoinedClub(ts)                => s"at $ts"
-    case Rejoined(ts, prevUntil)       => s"at $ts — previously left at $prevUntil"
-    case LeftClub(ts)                  => s"at $ts"
-    case AccountClosed(ts, status)     => s"at $ts — status: $status"
-    case Unresolvable(ts, oldUsername) => s"at $ts — old username: $oldUsername"
-    case UsernameChange(ts, oldName)   => s"at $ts — was: $oldName"
-    case StatusChange(ts, oldStatus)   => s"at $ts — was: $oldStatus"
+  private def formatChangeDetail(change: MemberChange, lastInvited: Option[Instant]): String = {
+    val invitedSuffix = lastInvited.fold("")(ts => s" — invited at $ts")
+    change match {
+      case NewMember(ts)                 => s"at $ts$invitedSuffix"
+      case JoinedClub(ts)                => s"at $ts$invitedSuffix"
+      case Rejoined(ts, prevUntil)       => s"at $ts — previously left at $prevUntil$invitedSuffix"
+      case LeftClub(ts)                  => s"at $ts"
+      case AccountClosed(ts, status)     => s"at $ts — status: $status"
+      case Unresolvable(ts, oldUsername) => s"at $ts — old username: $oldUsername"
+      case UsernameChange(ts, oldName)   => s"at $ts — was: $oldName"
+      case StatusChange(ts, oldStatus)   => s"at $ts — was: $oldStatus"
+    }
   }
 
   private def groupByCategory(
-    summaries: List[MemberChangeSummary]
+    summaries: List[MemberChangeSummary],
+    invitations: Map[PlayerId, Instant]
   ): List[(String, List[(Username, String)])] = {
     val entries = summaries.flatMap { summary =>
-      summary.changes.map(change => (change, summary.username))
+      val lastInvited = invitations.get(summary.playerId)
+      summary.changes.map(change => (change, summary.username, lastInvited))
     }
     def categoryOrder(change: MemberChange): Int = change match {
       case _: NewMember | _: JoinedClub => 0
       case other                        => other.ordinal
     }
     entries
-      .groupBy { case (change, _) => categoryOrder(change) }
+      .groupBy { case (change, _, _) => categoryOrder(change) }
       .toList
       .sortBy(_._1)
       .map { case (_, grouped) =>
         val label = categoryLabel(grouped.head._1)
         val items = grouped
           .sortBy(_._1.timestamp)
-          .map { case (change, username) => (username, formatChangeDetail(change)) }
+          .map { case (change, username, lastInvited) => (username, formatChangeDetail(change, lastInvited)) }
         (label, items)
       }
   }
 
-  def formatReconciliation(result: ReconciliationResult): String = {
+  def formatReconciliation(result: ReconciliationResult, invitations: Map[PlayerId, Instant]): String = {
     val duration = JDuration.between(result.startedAt, result.completedAt)
     val delta    = result.currentMemberCount - result.previousMemberCount
     val sign     = if (delta >= 0) "+" else ""
@@ -123,7 +137,7 @@ private[membership] object MembershipReport {
                     |New memberships:    ${result.newMemberships.size}
                     |Closed memberships: ${result.closedMemberships.size}
                     |""".stripMargin
-    header + "\n" + formatChangeSummaries(result.changes.toList)
+    header + "\n" + formatChangeSummaries(result.changes.toList, invitations)
   }
 
   def formatReport(rr: ReportResult): String = {
@@ -131,12 +145,15 @@ private[membership] object MembershipReport {
     val sign   = if (delta >= 0) "+" else ""
     val header = s"Total members: ${rr.memberCountAtEnd} ($sign$delta)\n\n"
     if (rr.summaries.isEmpty) { header + "No changes\n" }
-    else { header + formatChangeSummaries(rr.summaries) }
+    else { header + formatChangeSummaries(rr.summaries, rr.invitations) }
   }
 
-  private def formatChangeSummaries(summaries: List[MemberChangeSummary]): String = {
+  private def formatChangeSummaries(
+    summaries: List[MemberChangeSummary],
+    invitations: Map[PlayerId, Instant]
+  ): String = {
     val sb      = new StringBuilder
-    val grouped = groupByCategory(summaries)
+    val grouped = groupByCategory(summaries, invitations)
     grouped.foreach { case (label, entries) =>
       sb.append(s"$label\n")
       entries.foreach { case (username, detail) =>
@@ -145,6 +162,24 @@ private[membership] object MembershipReport {
       sb.append("\n")
     }
     sb.toString
+  }
+
+  // --- Invitation lookup ---
+
+  private[membership] def lookupJoinInvitations(
+    clubId: ClubId,
+    summaries: List[MemberChangeSummary]
+  ): ZIO[PostgresClient, SQLException, Map[PlayerId, Instant]] = {
+    val joinPlayerIds = summaries
+      .filter(_.changes.exists {
+        case _: NewMember | _: JoinedClub | _: Rejoined => true
+        case _                                          => false
+      })
+      .map(_.playerId)
+      .distinct
+    ZIO.foreach(joinPlayerIds) { pid =>
+      RecruitmentCandidate.selectLatestInvitedByClub(pid, clubId).map(_.map(c => pid -> c.evaluatedAt))
+    }.map(_.flatten.toMap)
   }
 
   // --- Report mode: DB-only ---
