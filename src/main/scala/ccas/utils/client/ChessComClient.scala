@@ -403,15 +403,16 @@ object ChessComClient {
       completedAt: Instant,
       configId: Long
     ): ClientStats = {
-      val minDisplay     = if (latencyMinMs == Long.MaxValue) 0L else latencyMinMs
-      val meanLatency    = if (latencyCount > 0) latencySumMs / latencyCount else 0L
-      val wallClockSecs  = java.time.Duration.between(startedAt, completedAt).toMillis / 1000.0
-      val secsPerRequest = if (successes > 0) wallClockSecs / successes.toDouble else 0.0
+      val minDisplay      = if (latencyMinMs == Long.MaxValue) 0L else latencyMinMs
+      val meanLatency     = if (latencyCount > 0) latencySumMs / latencyCount else 0L
+      val wallClockSecs   = java.time.Duration.between(startedAt, completedAt).toMillis / 1000.0
+      val requestsPerSec  = if (wallClockSecs > 0) successes.toDouble / wallClockSecs else 0.0
       ClientStats(
         appLabel = appLabel,
         startedAt = startedAt,
         completedAt = completedAt,
         configId = configId,
+        requestsPerSec = requestsPerSec,
         requests = requests,
         successes = successes,
         failures = failures,
@@ -421,14 +422,13 @@ object ChessComClient {
         errors404 = errors404,
         connectionErrors = connectionErrors,
         throttleDowns = throttleDowns,
+        throttledMs = throttledMs,
         peakConcurrent = peakConcurrent,
-        latencyMinMs = minDisplay,
-        latencyMaxMs = latencyMaxMs,
-        latencyMeanMs = meanLatency,
         gateWaitMs = gateWaitMs,
         emaDelayMs = emaDelayMs,
-        throttledMs = throttledMs,
-        secsPerRequest = secsPerRequest
+        latencyMinMs = minDisplay,
+        latencyMaxMs = latencyMaxMs,
+        latencyMeanMs = meanLatency
       )
     }
 

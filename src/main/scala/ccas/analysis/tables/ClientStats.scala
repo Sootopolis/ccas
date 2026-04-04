@@ -15,6 +15,7 @@ final case class ClientStats(
   startedAt: Instant,
   completedAt: Instant,
   configId: Long,
+  requestsPerSec: Double,
   requests: Long,
   successes: Long,
   failures: Long,
@@ -24,26 +25,25 @@ final case class ClientStats(
   errors404: Long,
   connectionErrors: Long,
   throttleDowns: Long,
+  throttledMs: Long,
   peakConcurrent: Int,
-  latencyMinMs: Long,
-  latencyMaxMs: Long,
-  latencyMeanMs: Long,
   gateWaitMs: Long,
   emaDelayMs: Long,
-  throttledMs: Long,
-  secsPerRequest: Double
+  latencyMinMs: Long,
+  latencyMaxMs: Long,
+  latencyMeanMs: Long
 ) derives DbCodec
 
 object ClientStats {
 
   private val selectCols = SqlLiteral(
     """app_label, started_at, completed_at, config_id,
+       requests_per_sec,
        requests, successes, failures, attempts,
        errors_429, errors_403, errors_404, connection_errors,
-       throttle_downs, peak_concurrent,
-       latency_min_ms, latency_max_ms, latency_mean_ms,
-       gate_wait_ms, ema_delay_ms, throttled_ms,
-       secs_per_request"""
+       throttle_downs, throttled_ms, peak_concurrent,
+       gate_wait_ms, ema_delay_ms,
+       latency_min_ms, latency_max_ms, latency_mean_ms"""
   )
 
   def createTable: ZIO[PostgresClient, SQLException, Int] =
@@ -54,6 +54,7 @@ object ClientStats {
               started_at        TIMESTAMPTZ NOT NULL,
               completed_at      TIMESTAMPTZ NOT NULL,
               config_id         BIGINT NOT NULL,
+              requests_per_sec  DOUBLE PRECISION NOT NULL,
               requests          BIGINT NOT NULL,
               successes         BIGINT NOT NULL,
               failures          BIGINT NOT NULL,
@@ -63,14 +64,13 @@ object ClientStats {
               errors_404        BIGINT NOT NULL,
               connection_errors BIGINT NOT NULL,
               throttle_downs    BIGINT NOT NULL,
+              throttled_ms      BIGINT NOT NULL,
               peak_concurrent   INT NOT NULL,
+              gate_wait_ms      BIGINT NOT NULL,
+              ema_delay_ms      BIGINT NOT NULL,
               latency_min_ms    BIGINT NOT NULL,
               latency_max_ms    BIGINT NOT NULL,
               latency_mean_ms   BIGINT NOT NULL,
-              gate_wait_ms      BIGINT NOT NULL,
-              ema_delay_ms      BIGINT NOT NULL,
-              throttled_ms      BIGINT NOT NULL,
-              secs_per_request  DOUBLE PRECISION NOT NULL,
               FOREIGN KEY (config_id) REFERENCES client_config (config_id) ON DELETE RESTRICT
             )""".update.run()
       sql"""CREATE INDEX IF NOT EXISTS idx_client_stats_started_at
@@ -81,20 +81,20 @@ object ClientStats {
     connectZIO {
       sql"""INSERT INTO client_stats (
               app_label, started_at, completed_at, config_id,
+              requests_per_sec,
               requests, successes, failures, attempts,
               errors_429, errors_403, errors_404, connection_errors,
-              throttle_downs, peak_concurrent,
-              latency_min_ms, latency_max_ms, latency_mean_ms,
-              gate_wait_ms, ema_delay_ms, throttled_ms,
-              secs_per_request
+              throttle_downs, throttled_ms, peak_concurrent,
+              gate_wait_ms, ema_delay_ms,
+              latency_min_ms, latency_max_ms, latency_mean_ms
             ) VALUES (
               ${item.appLabel}, ${item.startedAt}, ${item.completedAt}, ${item.configId},
+              ${item.requestsPerSec},
               ${item.requests}, ${item.successes}, ${item.failures}, ${item.attempts},
               ${item.errors429}, ${item.errors403}, ${item.errors404}, ${item.connectionErrors},
-              ${item.throttleDowns}, ${item.peakConcurrent},
-              ${item.latencyMinMs}, ${item.latencyMaxMs}, ${item.latencyMeanMs},
-              ${item.gateWaitMs}, ${item.emaDelayMs}, ${item.throttledMs},
-              ${item.secsPerRequest}
+              ${item.throttleDowns}, ${item.throttledMs}, ${item.peakConcurrent},
+              ${item.gateWaitMs}, ${item.emaDelayMs},
+              ${item.latencyMinMs}, ${item.latencyMaxMs}, ${item.latencyMeanMs}
             )""".update.run()
     }
 
@@ -110,20 +110,20 @@ object ClientStats {
     connectZIO {
       sql"""INSERT INTO client_stats (
               app_label, started_at, completed_at, config_id,
+              requests_per_sec,
               requests, successes, failures, attempts,
               errors_429, errors_403, errors_404, connection_errors,
-              throttle_downs, peak_concurrent,
-              latency_min_ms, latency_max_ms, latency_mean_ms,
-              gate_wait_ms, ema_delay_ms, throttled_ms,
-              secs_per_request
+              throttle_downs, throttled_ms, peak_concurrent,
+              gate_wait_ms, ema_delay_ms,
+              latency_min_ms, latency_max_ms, latency_mean_ms
             ) VALUES (
               ${item.appLabel}, ${item.startedAt}, ${item.completedAt}, ${item.configId},
+              ${item.requestsPerSec},
               ${item.requests}, ${item.successes}, ${item.failures}, ${item.attempts},
               ${item.errors429}, ${item.errors403}, ${item.errors404}, ${item.connectionErrors},
-              ${item.throttleDowns}, ${item.peakConcurrent},
-              ${item.latencyMinMs}, ${item.latencyMaxMs}, ${item.latencyMeanMs},
-              ${item.gateWaitMs}, ${item.emaDelayMs}, ${item.throttledMs},
-              ${item.secsPerRequest}
+              ${item.throttleDowns}, ${item.throttledMs}, ${item.peakConcurrent},
+              ${item.gateWaitMs}, ${item.emaDelayMs},
+              ${item.latencyMinMs}, ${item.latencyMaxMs}, ${item.latencyMeanMs}
             ) RETURNING id""".query[Long].run().head
     }
 
@@ -131,16 +131,16 @@ object ClientStats {
     connectZIO {
       sql"""UPDATE client_stats SET
               completed_at = ${item.completedAt},
+              requests_per_sec = ${item.requestsPerSec},
               requests = ${item.requests}, successes = ${item.successes},
               failures = ${item.failures}, attempts = ${item.attempts},
               errors_429 = ${item.errors429}, errors_403 = ${item.errors403},
               errors_404 = ${item.errors404}, connection_errors = ${item.connectionErrors},
-              throttle_downs = ${item.throttleDowns}, peak_concurrent = ${item.peakConcurrent},
-              latency_min_ms = ${item.latencyMinMs}, latency_max_ms = ${item.latencyMaxMs},
-              latency_mean_ms = ${item.latencyMeanMs},
+              throttle_downs = ${item.throttleDowns}, throttled_ms = ${item.throttledMs},
+              peak_concurrent = ${item.peakConcurrent},
               gate_wait_ms = ${item.gateWaitMs}, ema_delay_ms = ${item.emaDelayMs},
-              throttled_ms = ${item.throttledMs},
-              secs_per_request = ${item.secsPerRequest}
+              latency_min_ms = ${item.latencyMinMs}, latency_max_ms = ${item.latencyMaxMs},
+              latency_mean_ms = ${item.latencyMeanMs}
             WHERE id = $id""".update.run()
     }
 
