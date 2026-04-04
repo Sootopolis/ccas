@@ -31,6 +31,7 @@ object Tables extends ZIOAppDefault {
       _ <- PlayerRecruitmentCache.createTable
       _ <- ApiResponseBody.createTable
       _ <- ApiFetchFailure.createTable
+      _ <- ApiResponseBody.normalizeCfBodies
       _ <- ClubMatch.createTable
       _ <- ClubMatchBoard.createTable
       _ <- ClubMatchGame.createTable
@@ -39,6 +40,7 @@ object Tables extends ZIOAppDefault {
       _ <- HistoryRun.createTable
       _ <- UnresolvedBoardPlayer.createTable
       _ <- UnresolvedMatchClub.createTable
+      _ <- ClientConfig.createTable
       _ <- ClientStats.createTable
     } yield ()
 }

@@ -10,7 +10,7 @@ import zio.http.*
 import zio.http.Method.GET
 import zio.json.JsonDecoder
 
-import ccas.analysis.tables.{ApiFetchFailure, ClientStats}
+import ccas.analysis.tables.{ApiFetchFailure, ApiResponseBody, ClientConfig, ClientStats}
 import ccas.info.BuildInfo
 import ccas.utils.{CcasLogger, ProgressBar}
 import ccas.utils.json.JsonDecodingException
@@ -39,8 +39,10 @@ import ccas.utils.json.JsonDecodingException
   *     (fixed delay), normal 403 (single retry), and transient connection errors (exponential backoff). HTTP 404s are
   *     not retried as they are almost always permanent (e.g. cancelled matches on Chess.com).
   *   - '''Periodic stats flushing''' — a background daemon fiber persists accumulated request statistics to the
-  *     `client_stats` table at a configurable interval (`stats-flush-interval-seconds`). On first flush an INSERT
-  *     captures the row ID; subsequent flushes UPDATE the same row in place. A final flush runs in the scope finalizer.
+  *     `client_stats` table at a configurable interval (`stats-flush-interval-seconds`). On first flush, also inserts
+  *     the throttle configuration into `client_config` and links the stats row via FK. Subsequent flushes UPDATE the
+  *     same stats row in place. Stats include gate wait time, EMA delay time, and total time spent at reduced permits
+  *     (`throttled_ms`), plus a `secs_per_request` goodness indicator. A final flush runs in the scope finalizer.
   *     This ensures stats survive non-graceful shutdowns with at most one interval's worth of data loss.
   *
   * Constructed via the `ChessComClient.live` ZLayer which reads configuration from `application.conf` under the
@@ -73,9 +75,10 @@ final class ChessComClient(
     _ <-
       if (cfChallenge) throttleDown(config.cfCooldown)
       else recordOutcome(response.status != Status.TooManyRequests && response.status != Status.Forbidden)
+    errorBody = if (cfChallenge) ApiResponseBody.CfCanonicalBody else string
     _ <- ZIO.whenDiscard(!response.status.isSuccess) {
       statsRef.update(_.incError(response.status.code)) *>
-        ZIO.fail(HttpStatusException(response.status.code, url, string))
+        ZIO.fail(HttpStatusException(response.status.code, url, errorBody))
     }
     value <- ZIO.fromEither(jsonDecoder.decodeJson(string)).mapError(JsonDecodingException(_))
   } yield value).tapError { e =>
@@ -92,7 +95,13 @@ final class ChessComClient(
   def get[T](url: URL)(using jsonDecoder: JsonDecoder[T]): Task[T] =
     statsRef.update(_.incRequests) *> withRetries {
       for {
-        _                  <- rateLimitGate.withPermit(awaitCapacity *> emaDelay)
+        _ <- rateLimitGate.withPermit {
+          for {
+            (gateWait, _) <- awaitCapacity.timed
+            (emaWait, _)  <- emaDelay.timed
+            _             <- statsRef.update(_.addGateWait(gateWait.toMillis).addEmaDelay(emaWait.toMillis))
+          } yield ()
+        }
         (duration, result) <- ZIO.acquireReleaseWith(activeRef.updateAndGet(_ + 1).tap(updateBar))(_ => releaseSlot()) {
           active => statsRef.update(_.updatePeak(active)) *> rawGet(url).timed
         }
@@ -191,18 +200,21 @@ final class ChessComClient(
     * requests have drained before attempting recovery.
     */
   private def throttleDown(cooldown: Duration = config.cooldown): Task[Unit] =
-    stateRef.modify { state =>
-      if (state.coolingDown || state.currentMax <= 1) {
-        (None, state)
-      } else {
-        val newGen = state.generation + 1
-        val newState = state.copy(
-          currentMax = 1,
-          generation = newGen,
-          outcomes = Vector.empty,
-          coolingDown = true
-        )
-        (Some((state.currentMax, newGen)), newState)
+    Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS).flatMap { now =>
+      stateRef.modify { state =>
+        if (state.coolingDown || state.currentMax <= 1) {
+          (None, state)
+        } else {
+          val newGen = state.generation + 1
+          val newState = state.copy(
+            currentMax = 1,
+            generation = newGen,
+            outcomes = Vector.empty,
+            coolingDown = true,
+            throttledSince = Some(now)
+          )
+          (Some((state.currentMax, newGen)), newState)
+        }
       }
     }.flatMap {
       case None => ZIO.unit
@@ -220,30 +232,37 @@ final class ChessComClient(
     for {
       _ <- activeRef.get.repeat(Schedule.spaced(200.millis) && Schedule.recurWhile(_ > 1)).unit
       _ <- ZIO.sleep(cooldown)
+      now <- Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS)
       option <- stateRef.modify { state =>
         if (state.generation != generation) (None, state)
         else if (failureRate(state.outcomes) > config.failureThreshold) {
-          (Some((state.currentMax, state.currentMax, generation)), state.copy(coolingDown = false))
+          (Some((state.currentMax, state.currentMax, generation, 0L)), state.copy(coolingDown = false))
         } else {
           val newMax        = (state.currentMax * 2).min(config.maxPermits)
           val clearOutcomes = newMax == config.maxPermits
+          val throttleDuration =
+            if (clearOutcomes) state.throttledSince.map(now - _).getOrElse(0L)
+            else 0L
           val newState = state.copy(
             currentMax = newMax,
             coolingDown = false,
-            outcomes = if (clearOutcomes) Vector.empty else state.outcomes
+            outcomes = if (clearOutcomes) Vector.empty else state.outcomes,
+            throttledSince = if (clearOutcomes) None else state.throttledSince
           )
-          (Some((state.currentMax, newMax, generation)), newState)
+          (Some((state.currentMax, newMax, generation, throttleDuration)), newState)
         }
       }
-      _ <- ZIO.foreachDiscard(option) { case (oldMax, newMax, gen) =>
-        if (oldMax == newMax) {
-          logger.warn(s"Rate limit still elevated, holding at $newMax permits") *> scheduleRecovery(gen, cooldown)
-        } else {
-          val msg =
-            if (newMax == config.maxPermits) "Rate limit throttle lifted"
-            else s"Rate limit easing: $oldMax \u2192 $newMax permits"
-          logger.info(msg) *>
-            ZIO.unlessDiscard(newMax == config.maxPermits)(scheduleRecovery(gen, cooldown))
+      _ <- ZIO.foreachDiscard(option) { case (oldMax, newMax, gen, throttleDuration) =>
+        ZIO.whenDiscard(throttleDuration > 0)(statsRef.update(_.addThrottled(throttleDuration))) *> {
+          if (oldMax == newMax) {
+            logger.warn(s"Rate limit still elevated, holding at $newMax permits") *> scheduleRecovery(gen, cooldown)
+          } else {
+            val msg =
+              if (newMax == config.maxPermits) "Rate limit throttle lifted"
+              else s"Rate limit easing: $oldMax \u2192 $newMax permits"
+            logger.info(msg) *>
+              ZIO.unlessDiscard(newMax == config.maxPermits)(scheduleRecovery(gen, cooldown))
+          }
         }
       }
     } yield ()
@@ -299,7 +318,8 @@ object ChessComClient {
     currentMax: Long,
     generation: Long,
     outcomes: Vector[Boolean],
-    coolingDown: Boolean = false
+    coolingDown: Boolean = false,
+    throttledSince: Option[Long] = None
   )
 
   /** @param maxPermits
@@ -347,7 +367,10 @@ object ChessComClient {
     latencyMinMs: Long = Long.MaxValue,
     latencyMaxMs: Long = 0,
     latencySumMs: Long = 0,
-    latencyCount: Long = 0
+    latencyCount: Long = 0,
+    gateWaitMs: Long = 0,
+    emaDelayMs: Long = 0,
+    throttledMs: Long = 0
   ) {
     def incRequests: StatsAccumulator         = copy(requests = requests + 1)
     def incSuccesses: StatsAccumulator        = copy(successes = successes + 1)
@@ -356,6 +379,9 @@ object ChessComClient {
     def incConnectionErrors: StatsAccumulator = copy(connectionErrors = connectionErrors + 1)
     def incThrottleDowns: StatsAccumulator    = copy(throttleDowns = throttleDowns + 1)
     def updatePeak(n: Int): StatsAccumulator  = copy(peakConcurrent = peakConcurrent.max(n))
+    def addGateWait(ms: Long): StatsAccumulator = copy(gateWaitMs = gateWaitMs + ms)
+    def addEmaDelay(ms: Long): StatsAccumulator = copy(emaDelayMs = emaDelayMs + ms)
+    def addThrottled(ms: Long): StatsAccumulator = copy(throttledMs = throttledMs + ms)
 
     def incError(statusCode: Int): StatsAccumulator = statusCode match {
       case 429 => copy(errors429 = errors429 + 1)
@@ -375,14 +401,17 @@ object ChessComClient {
       appLabel: String,
       startedAt: Instant,
       completedAt: Instant,
-      config: ThrottleConfig
+      configId: Long
     ): ClientStats = {
-      val minDisplay  = if (latencyMinMs == Long.MaxValue) 0L else latencyMinMs
-      val meanLatency = if (latencyCount > 0) latencySumMs / latencyCount else 0L
+      val minDisplay     = if (latencyMinMs == Long.MaxValue) 0L else latencyMinMs
+      val meanLatency    = if (latencyCount > 0) latencySumMs / latencyCount else 0L
+      val wallClockSecs  = java.time.Duration.between(startedAt, completedAt).toMillis / 1000.0
+      val secsPerRequest = if (successes > 0) wallClockSecs / successes.toDouble else 0.0
       ClientStats(
         appLabel = appLabel,
         startedAt = startedAt,
         completedAt = completedAt,
+        configId = configId,
         requests = requests,
         successes = successes,
         failures = failures,
@@ -393,18 +422,13 @@ object ChessComClient {
         connectionErrors = connectionErrors,
         throttleDowns = throttleDowns,
         peakConcurrent = peakConcurrent,
-        configPermits = config.maxPermits.toInt,
-        configCooldownSecs = config.cooldown.getSeconds.toInt,
-        configCfCooldownSecs = config.cfCooldown.getSeconds.toInt,
-        configRetryBaseSecs = config.retryBase.getSeconds.toInt,
-        config403RetrySecs = config.singleRetryDelay.getSeconds.toInt,
-        configCfRetrySecs = config.cfRetryDelay.getSeconds.toInt,
-        configFailureWindowSize = config.failureWindowSize,
-        configFailureThreshold = config.failureThreshold,
-        configMinSampleSize = config.minSampleSize,
         latencyMinMs = minDisplay,
         latencyMaxMs = latencyMaxMs,
-        latencyMeanMs = meanLatency
+        latencyMeanMs = meanLatency,
+        gateWaitMs = gateWaitMs,
+        emaDelayMs = emaDelayMs,
+        throttledMs = throttledMs,
+        secsPerRequest = secsPerRequest
       )
     }
 
@@ -417,48 +441,83 @@ object ChessComClient {
       val throttleSuffix = if (throttleDowns > 0) s", $throttleDowns throttle-downs" else ""
       val latencySuffix =
         if (latencyCount > 0) s", latency min/mean/max = $minDisplay/$meanLatency/${latencyMaxMs}ms" else ""
-      s"API stats: $requests requests$failedSuffix$retrySuffix$throttleSuffix$latencySuffix"
+      val overheadParts = List(
+        if (gateWaitMs > 0) Some(s"gate=${gateWaitMs}ms") else None,
+        if (emaDelayMs > 0) Some(s"ema=${emaDelayMs}ms") else None,
+        if (throttledMs > 0) Some(s"throttled=${throttledMs}ms") else None
+      ).flatten
+      val overheadSuffix = if (overheadParts.nonEmpty) s", overhead ${overheadParts.mkString(", ")}" else ""
+      s"API stats: $requests requests$failedSuffix$retrySuffix$throttleSuffix$latencySuffix$overheadSuffix"
     }
   }
 
-  /** Persist a snapshot of accumulated stats to the database. Inserts a new row on the first call with `requests > 0`
-    * and updates the same row on subsequent calls. Silently swallows DB errors so it is safe to call from finalizers and
-    * background fibers.
+  /** Bundles the refs and config needed by periodic and final stats flushes. Created once in `live` and passed to
+    * `persistStats` / `finalFlush` so they don't each need eight parameters.
     */
-  private[ccas] def persistStats(
+  private[ccas] case class FlushContext(
     appLabel: String,
     startedAt: Instant,
     statsRef: Ref[StatsAccumulator],
     statsRowId: Ref[Option[Long]],
+    configIdRef: Ref[Option[Long]],
     config: ThrottleConfig,
+    stateRef: Ref[ThrottleState],
     pgClient: PostgresClient
-  ): UIO[Unit] =
+  )
+
+  /** Persist a snapshot of accumulated stats to the database. Inserts a new row on the first call with `requests > 0`
+    * and updates the same row on subsequent calls. On first insert, also inserts the `ClientConfig` row. Silently
+    * swallows DB errors so it is safe to call from finalizers and background fibers.
+    */
+  private[ccas] def persistStats(ctx: FlushContext): UIO[Unit] =
     (for {
-      s <- statsRef.get
+      s <- ctx.statsRef.get
       _ <- ZIO.whenDiscard(s.requests > 0) {
-        val row = s.toClientStats(appLabel, startedAt, Instant.now(), config)
-        statsRowId.get.flatMap {
-          case Some(id) =>
-            ClientStats.updateById(id, row).provideEnvironment(ZEnvironment(pgClient)).unit
-          case None =>
-            ClientStats.insertReturningId(row).provideEnvironment(ZEnvironment(pgClient))
-              .flatMap(id => statsRowId.set(Some(id)))
-        }
+        for {
+          now        <- ZIO.succeed(Instant.now())
+          inProgress <- inProgressThrottleMs(ctx.stateRef)
+          adjusted    = s.addThrottled(inProgress)
+          configId   <- ctx.configIdRef.get.flatMap {
+            case Some(id) => ZIO.succeed(id)
+            case None =>
+              ClientConfig.insert(toClientConfig(ctx.config)).provideEnvironment(ZEnvironment(ctx.pgClient))
+                .tap(id => ctx.configIdRef.set(Some(id)))
+          }
+          row = adjusted.toClientStats(ctx.appLabel, ctx.startedAt, now, configId)
+          _ <- ctx.statsRowId.get.flatMap {
+            case Some(id) =>
+              ClientStats.updateById(id, row).provideEnvironment(ZEnvironment(ctx.pgClient)).unit
+            case None =>
+              ClientStats.insertReturningId(row).provideEnvironment(ZEnvironment(ctx.pgClient))
+                .flatMap(id => ctx.statsRowId.set(Some(id)))
+          }
+        } yield ()
       }
     } yield ()).ignore
 
+  private def toClientConfig(config: ThrottleConfig): ClientConfig =
+    ClientConfig(
+      configId = 0,
+      permits = config.maxPermits.toInt,
+      cooldownSecs = config.cooldown.getSeconds.toInt,
+      cfCooldownSecs = config.cfCooldown.getSeconds.toInt,
+      retryBaseSecs = config.retryBase.getSeconds.toInt,
+      singleRetrySecs = config.singleRetryDelay.getSeconds.toInt,
+      cfRetrySecs = config.cfRetryDelay.getSeconds.toInt,
+      failureWindowSize = config.failureWindowSize,
+      failureThreshold = config.failureThreshold,
+      minSampleSize = config.minSampleSize
+    )
+
+  private def inProgressThrottleMs(stateRef: Ref[ThrottleState]): UIO[Long] =
+    Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS).flatMap { now =>
+      stateRef.get.map(_.throttledSince.map(now - _).getOrElse(0L))
+    }
+
   /** Final stats flush: persists the latest snapshot and logs a human-readable summary. Called by the scope finalizer. */
-  private def finalFlush(
-    appLabel: String,
-    startedAt: Instant,
-    statsRef: Ref[StatsAccumulator],
-    statsRowId: Ref[Option[Long]],
-    config: ThrottleConfig,
-    logger: CcasLogger,
-    pgClient: PostgresClient
-  ): UIO[Unit] =
-    persistStats(appLabel, startedAt, statsRef, statsRowId, config, pgClient) *>
-      statsRef.get.flatMap { s =>
+  private def finalFlush(ctx: FlushContext, logger: CcasLogger): UIO[Unit] =
+    persistStats(ctx) *>
+      ctx.statsRef.get.flatMap { s =>
         ZIO.whenDiscard(s.requests > 0)(logger.info(s.summary))
       }
 
@@ -496,15 +555,12 @@ object ChessComClient {
         startedAt     <- ZIO.succeed(Instant.now())
         stats         <- Ref.make(StatsAccumulator())
         statsRowId    <- Ref.make(Option.empty[Long])
+        configIdRef   <- Ref.make(Option.empty[Long])
         bar           <- logger.progressBar
         refs = ThrottleRefs(stateRef, activeRef, rateLimitGate, lastReqRef, ema)
-        flushFiber <- persistStats(appLabel, startedAt, stats, statsRowId, throttleConfig, pgClient)
-          .repeat(Schedule.fixed(statsFlushInterval))
-          .forkDaemon
-        _ <- ZIO.addFinalizer(
-          flushFiber.interrupt *>
-            finalFlush(appLabel, startedAt, stats, statsRowId, throttleConfig, logger, pgClient)
-        )
+        flushCtx = FlushContext(appLabel, startedAt, stats, statsRowId, configIdRef, throttleConfig, stateRef, pgClient)
+        flushFiber <- persistStats(flushCtx).repeat(Schedule.fixed(statsFlushInterval)).forkDaemon
+        _ <- ZIO.addFinalizer(flushFiber.interrupt *> finalFlush(flushCtx, logger))
       } yield ChessComClient(
         client,
         pgClient,
