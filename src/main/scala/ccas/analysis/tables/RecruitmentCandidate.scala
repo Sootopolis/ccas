@@ -150,7 +150,7 @@ object RecruitmentCandidate {
   def insert(item: RecruitmentCandidate): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""INSERT INTO recruitment_candidate (run_id, player_id, evaluated_at, outcome, rejection_reason)
-            VALUES (${item.runId}, ${item.playerId}, ${item.evaluatedAt}, ${item.outcome.toString}, ${item
+            VALUES (${item.runId}, ${item.playerId}, ${item.evaluatedAt}, ${item.outcome}, ${item
           .rejectionReason})""".update.run()
     }
 
@@ -158,14 +158,14 @@ object RecruitmentCandidate {
     transactZIO {
       batchUpdate(items) { item =>
         sql"""INSERT INTO recruitment_candidate (run_id, player_id, evaluated_at, outcome, rejection_reason)
-              VALUES (${item.runId}, ${item.playerId}, ${item.evaluatedAt}, ${item.outcome.toString}, ${item
+              VALUES (${item.runId}, ${item.playerId}, ${item.evaluatedAt}, ${item.outcome}, ${item
             .rejectionReason})""".update
       }
     }
 
   def updateOutcome(runId: Long, playerId: PlayerId, outcome: CandidateOutcome): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
-      sql"""UPDATE recruitment_candidate SET outcome = ${outcome.toString}
+      sql"""UPDATE recruitment_candidate SET outcome = ${outcome}
             WHERE run_id = $runId AND player_id = $playerId""".update.run()
     }
 

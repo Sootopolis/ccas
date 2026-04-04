@@ -58,8 +58,8 @@ object Player {
     if (playerIds.isEmpty) { ZIO.succeed(Nil) }
     else {
       connectZIO {
-        val ids = playerIds.map(id => PlayerId.unwrap(id).toString).mkString(",")
-        sql"SELECT $selectCols FROM player WHERE player_id IN (${SqlLiteral(ids)})".query[Player].run().toList
+        val ids = playerIds.toList
+        sql"SELECT $selectCols FROM player WHERE player_id = ANY($ids)".query[Player].run().toList
       }
     }
 
@@ -67,8 +67,8 @@ object Player {
     if (playerIds.isEmpty) { ZIO.succeed(Map.empty) }
     else {
       connectZIO {
-        val ids = playerIds.map(id => PlayerId.unwrap(id).toString).mkString(",")
-        sql"SELECT player_id, username FROM player WHERE player_id IN (${SqlLiteral(ids)})"
+        val ids = playerIds.toList
+        sql"SELECT player_id, username FROM player WHERE player_id = ANY($ids)"
           .query[(PlayerId, Username)].run().map((id, u) => id -> u).toMap
       }
     }
@@ -98,22 +98,22 @@ object Player {
     connectZIO {
       sql"""INSERT INTO player (player_id, joined, username, status, title, since)
             VALUES (${player.playerId}, ${player.joined}, ${player.username},
-              ${player.status.toString}, ${player.title.map(_.toString)}, ${player.since})
+              ${player.status}, ${player.title}, ${player.since})
             ON CONFLICT (player_id) DO NOTHING""".update.run()
     }
 
   def updateCurrentState(player: Player): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
-      sql"""UPDATE player SET username = ${player.username}, status = ${player.status.toString},
-              title = ${player.title.map(_.toString)}, since = ${player.since}
+      sql"""UPDATE player SET username = ${player.username}, status = ${player.status},
+              title = ${player.title}, since = ${player.since}
             WHERE player_id = ${player.playerId}""".update.run()
     }
 
   def updateCurrentStateBatch(players: Iterable[Player]): ZIO[PostgresClient, SQLException, BatchUpdateResult] =
     transactZIO {
       batchUpdate(players) { player =>
-        sql"""UPDATE player SET username = ${player.username}, status = ${player.status.toString},
-                title = ${player.title.map(_.toString)}, since = ${player.since}
+        sql"""UPDATE player SET username = ${player.username}, status = ${player.status},
+                title = ${player.title}, since = ${player.since}
               WHERE player_id = ${player.playerId}""".update
       }
     }

@@ -99,15 +99,14 @@ object MembershipApp extends ZIOAppDefault {
     clubSlug: ClubSlug,
     until: Instant
   ): RIO[CcasLogger & ChessComClient & PostgresClient, Unit] =
-    for {
-      clubOpt <- Club.selectBySlug(clubSlug)
-      _ <- ZIO.fromOption(clubOpt).flatMap { club =>
+    Club.selectBySlug(clubSlug).flatMap {
+      case Some(club) =>
         MembershipRun.selectLatest(club.clubId).flatMap {
           case Some(run) if !until.isAfter(run.startedAt) => ZIO.unit
           case _                                          => reconcile(clubSlug).unit
         }
-      }.orElse(reconcile(clubSlug).unit)
-    } yield ()
+      case None => reconcile(clubSlug).unit
+    }
 
   // --- Phase A: Gather data ---
 
@@ -149,11 +148,12 @@ object MembershipApp extends ZIOAppDefault {
 
   private[membership] def buildDbState(clubId: ClubId): RIO[PostgresClient, DbState] =
     for {
-      players <- Player.selectAll
-      members <- ClubMember.selectClubCurrent(clubId)
+      currentMembers <- ClubMember.selectClubCurrent(clubId)
+      allClubMembers <- ClubMember.selectClub(clubId)
+      players        <- Player.selectByIds(allClubMembers.map(_.playerId).distinct)
     } yield {
       val playerMap = players.map(p => p.playerId -> p).toMap
-      val states    = members.flatMap(m => playerMap.get(m.playerId).map(p => MemberState(p, m)))
+      val states    = currentMembers.flatMap(m => playerMap.get(m.playerId).map(p => MemberState(p, m)))
       DbState(
         membersByPlayerId = states.map(s => s.player.playerId -> s).toMap,
         membersByUsername = states.map(s => s.player.username -> s).toMap,

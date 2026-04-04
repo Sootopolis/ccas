@@ -12,7 +12,7 @@ import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 import ccas.utils.client.ChessComClient
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient
-import ccas.utils.sql.PostgresClient.{connectZIO, transactZIO}
+import ccas.utils.sql.PostgresClient.{connectZIO, transactZIO, withTransaction}
 
 @Table(PostgresDbType, SqlNameMapper.CamelToSnakeCase)
 final case class Club(@Id clubId: ClubId, created: Instant, slug: ClubSlug, name: String) derives DbCodec
@@ -56,14 +56,16 @@ object Club {
     * if the stale club has no matches.
     */
   def upsertResolvingSlugConflict(club: Club, client: ChessComClient): ZIO[PostgresClient, Throwable, Int] =
-    for {
-      existing <- selectBySlug(club.slug)
-      _ <- existing match {
-        case Some(stale) if stale.clubId != club.clubId => resolveStaleSlug(stale, client)
-        case _                                          => ZIO.unit
-      }
-      result <- upsert(club)
-    } yield result
+    withTransaction {
+      for {
+        existing <- selectBySlug(club.slug)
+        _ <- existing match {
+          case Some(stale) if stale.clubId != club.clubId => resolveStaleSlug(stale, client)
+          case _                                          => ZIO.unit
+        }
+        result <- upsert(club)
+      } yield result
+    }
 
   private def resolveStaleSlug(stale: Club, client: ChessComClient): ZIO[PostgresClient, Throwable, Unit] =
     ClubMatch.selectClubMatchRef(stale.clubId).flatMap {

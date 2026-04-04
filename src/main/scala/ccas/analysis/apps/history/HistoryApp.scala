@@ -78,10 +78,8 @@ object HistoryApp extends ZIOAppDefault {
       args <- ZIOAppArgs.getArgs
       full    = args.contains("--full")
       refresh = args.contains("--refresh")
-      slugs <- NonEmptyChunk.fromChunk(args.filterNot(_.startsWith("--")).map(ClubSlug.wrap)) match {
-        case None        => ZIO.fail(BadRequestException(help))
-        case Some(slugs) => ZIO.succeed(slugs)
-      }
+      slugs <- ZIO.fromOption(NonEmptyChunk.fromChunk(args.filterNot(_.startsWith("--")).map(ClubSlug.wrap)))
+        .orElseFail(BadRequestException(help))
       _ <- discoverBatch(slugs, full, refresh)
     } yield ()).provideSomeAuto(
       CcasLogger.live(showProgress = true),
@@ -131,19 +129,19 @@ object HistoryApp extends ZIOAppDefault {
       club <- Club.selectBySlug(clubSlug)
         .someOrFail(IllegalStateException(s"Club '$clubSlug' not found after reconcile"))
       clubId = club.clubId
-      (allMembers, allPlayers, processedCount, queriedIds) <-
+      (allMembers, processedCount, queriedIds) <-
         ClubMember.selectClub(clubId) <&>
-          Player.selectAll <&>
           ClubMatch.countForClub(clubId) <&>
           HistoryMemberQuery.selectClubPlayerIds(clubId)
+      memberPlayers <- Player.selectByIds(allMembers.map(_.playerId))
       _ <- HistoryPendingMatch.resetStatuses(clubId)
       startedAt = Instant.now()
       runId <- HistoryRun.insert(clubId, trigger, startedAt, jobRunId)
-      playerById = allPlayers.map(p => p.playerId -> p).toMap
+      playerById = memberPlayers.map(p => p.playerId -> p).toMap
       _ <- CcasLogger.info(
         s"  Members: ${allMembers.size}, Processed matches: $processedCount, Queried members: ${queriedIds.size}"
       )
-      knownPlayersInit = allPlayers.map(p => p.username.value -> p.playerId).toMap
+      knownPlayersInit = memberPlayers.map(p => p.username.value -> p.playerId).toMap
       client <- ZIO.service[ChessComClient]
       ctx    <- ProcessingContext.make(client, clubId, clubSlug, knownPlayersInit)
       effectiveQueriedIds =

@@ -8,7 +8,7 @@ import com.augustnagro.magnum.*
 import zio.ZIO
 
 import ccas.utils.sql.PostgresClient
-import ccas.utils.sql.PostgresClient.connectZIO
+import ccas.utils.sql.PostgresClient.{connectZIO, transactZIO}
 
 final case class ApiResponseBody(
   bodyHash: String,
@@ -62,7 +62,7 @@ object ApiResponseBody {
   /** Normalize all Cloudflare challenge bodies to a single canonical row. Idempotent — safe on every startup. */
   def normalizeCfBodies: ZIO[PostgresClient, SQLException, Int] = {
     val canonicalHash = sha256(CfCanonicalBody)
-    connectZIO {
+    transactZIO {
       sql"""INSERT INTO api_response_body (body_hash, body) VALUES ($canonicalHash, $CfCanonicalBody)
             ON CONFLICT (body_hash) DO NOTHING""".update.run()
       val canonicalId = sql"SELECT body_id FROM api_response_body WHERE body_hash = $canonicalHash"

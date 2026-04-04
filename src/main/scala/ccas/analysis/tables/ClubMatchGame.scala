@@ -52,7 +52,7 @@ object ClubMatchGame {
                 start_time, end_time, winner, detail, team1_rating, team2_rating)
               VALUES (${item.matchId}, ${item.board}, ${item.team1IsWhite}, ${item.gameId},
                 ${item.startTime}, ${item.endTime},
-                ${item.winner.map(_.toString)}, ${item.detail.map(_.toString)},
+                ${item.winner}, ${item.detail},
                 ${item.team1Rating}, ${item.team2Rating})""".update
       }
     }

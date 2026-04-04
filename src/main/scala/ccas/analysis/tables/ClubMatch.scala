@@ -104,7 +104,7 @@ object ClubMatch {
       sql"""INSERT INTO club_match (match_id, name, status, time_class, start_time, end_time, boards,
               team1_club_id, team1_score_x2,
               team2_club_id, team2_score_x2, fetched_at)
-            VALUES (${item.matchId}, ${item.name}, ${item.status.toString}, ${item.timeClass.toString},
+            VALUES (${item.matchId}, ${item.name}, ${item.status}, ${item.timeClass},
               ${item.startTime}, ${item.endTime}, ${item.boards},
               ${item.team1ClubId}, ${item.team1ScoreX2},
               ${item.team2ClubId}, ${item.team2ScoreX2},

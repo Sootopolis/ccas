@@ -71,33 +71,27 @@ object PlayerSnapshot {
   def insert(item: PlayerSnapshot): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""INSERT INTO player_snapshot (player_id, since, username, status, title)
-            VALUES (${item.playerId}, ${item.since}, ${item.username}, ${item.status.toString}, ${item.title.map(
-          _.toString
-        )})""".update.run()
+            VALUES (${item.playerId}, ${item.since}, ${item.username}, ${item.status}, ${item.title})""".update.run()
     }
 
   def insertBatch(items: Iterable[PlayerSnapshot]): ZIO[PostgresClient, SQLException, BatchUpdateResult] =
     transactZIO {
       batchUpdate(items) { item =>
         sql"""INSERT INTO player_snapshot (player_id, since, username, status, title)
-              VALUES (${item.playerId}, ${item.since}, ${item.username}, ${item.status.toString}, ${item.title.map(
-            _.toString
-          )})""".update
+              VALUES (${item.playerId}, ${item.since}, ${item.username}, ${item.status}, ${item.title})""".update
       }
     }
 
   def update(item: PlayerSnapshot): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
-      sql"""UPDATE player_snapshot SET username = ${item.username}, status = ${item.status.toString}, title = ${item
-          .title.map(_.toString)}
+      sql"""UPDATE player_snapshot SET username = ${item.username}, status = ${item.status}, title = ${item.title}
             WHERE player_id = ${item.playerId} AND since = ${item.since}""".update.run()
     }
 
   def updateBatch(items: Iterable[PlayerSnapshot]): ZIO[PostgresClient, SQLException, BatchUpdateResult] =
     transactZIO {
       batchUpdate(items) { item =>
-        sql"""UPDATE player_snapshot SET username = ${item.username}, status = ${item.status.toString}, title = ${item
-            .title.map(_.toString)}
+        sql"""UPDATE player_snapshot SET username = ${item.username}, status = ${item.status}, title = ${item.title}
               WHERE player_id = ${item.playerId} AND since = ${item.since}""".update
       }
     }

@@ -247,18 +247,9 @@ private[history] object HistorySeeding {
     for {
       playerMatches <- client.get[ApiPlayerMatches](ApiPlayerMatches.getUrl(username))
       allMatches = playerMatches.finished ++ playerMatches.inProgress ++ playerMatches.registered
-      dailyPending = allMatches.collect {
-        case m if isClubDailyMatch(m, clubSlug) =>
-          HistoryPendingMatch(clubId, ClubMatchId.fromUrl(m.`@id`), isLive = false)
-      }
-      livePending = allMatches.collect {
-        case m if isClubLiveMatch(m, clubSlug) =>
-          HistoryPendingMatch(clubId, ClubMatchId.fromUrl(m.`@id`), isLive = true)
-      }
-      all = (dailyPending ++ livePending).filterNot(p => settledMatchIds.contains(p.matchId))
-      _ <- insertPendingMatches(all)
-      _ <- HistoryMemberQuery.upsert(HistoryMemberQuery(clubId, playerId, Instant.now()))
-    } yield all.size
+      count <- seedMatchesFromList(clubId, clubSlug, allMatches, settledMatchIds)
+      _     <- HistoryMemberQuery.upsert(HistoryMemberQuery(clubId, playerId, Instant.now()))
+    } yield count
 
   private def insertPendingMatches(items: Iterable[HistoryPendingMatch]): RIO[PostgresClient, Unit] =
     ZIO.foreachDiscard(items.grouped(1000).toList)(HistoryPendingMatch.insertBatch)

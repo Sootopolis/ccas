@@ -8,7 +8,7 @@ import zio.ZIO
 
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient
-import ccas.utils.sql.PostgresClient.connectZIO
+import ccas.utils.sql.PostgresClient.{connectZIO, withTransaction}
 
 final case class ApiFetchFailure(
   occurredAt: Instant,
@@ -45,25 +45,31 @@ object ApiFetchFailure {
     }
 
   def insert(item: ApiFetchFailure): ZIO[PostgresClient, SQLException, Int] =
-    ZIO.foreach(item.responseBody)(ApiResponseBody.ensureBody).flatMap { bodyIdOpt =>
-      connectZIO {
-        sql"""INSERT INTO api_fetch_failure (occurred_at, url, error_type, error_message, response_body_id)
-              VALUES (${item.occurredAt}, ${item.url}, ${item.errorType}, ${item.errorMessage}, $bodyIdOpt)""".update
-          .run()
+    withTransaction {
+      ZIO.foreach(item.responseBody)(ApiResponseBody.ensureBody).flatMap { bodyIdOpt =>
+        connectZIO {
+          sql"""INSERT INTO api_fetch_failure (occurred_at, url, error_type, error_message, response_body_id)
+                VALUES (${item.occurredAt}, ${item.url}, ${item.errorType}, ${item.errorMessage}, $bodyIdOpt)""".update
+            .run()
+        }
       }
     }
 
   def deleteBefore(cutoff: Instant): ZIO[PostgresClient, SQLException, Int] =
-    connectZIO {
-      sql"DELETE FROM api_fetch_failure WHERE occurred_at < $cutoff".update.run()
-    }.flatMap { count =>
-      ApiResponseBody.deleteOrphans.as(count)
+    withTransaction {
+      connectZIO {
+        sql"DELETE FROM api_fetch_failure WHERE occurred_at < $cutoff".update.run()
+      }.flatMap { count =>
+        ApiResponseBody.deleteOrphans.as(count)
+      }
     }
 
   def deleteAll: ZIO[PostgresClient, SQLException, Int] =
-    connectZIO {
-      sql"DELETE FROM api_fetch_failure".update.run()
-    }.flatMap { count =>
-      ApiResponseBody.deleteAll.as(count)
+    withTransaction {
+      connectZIO {
+        sql"DELETE FROM api_fetch_failure".update.run()
+      }.flatMap { count =>
+        ApiResponseBody.deleteAll.as(count)
+      }
     }
 }
