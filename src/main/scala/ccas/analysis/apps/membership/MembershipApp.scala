@@ -3,7 +3,7 @@ package ccas.analysis.apps.membership
 import java.time.Instant
 import scala.annotation.tailrec
 
-import zio.{Chunk, IO, NonEmptyChunk, RIO, Scope, Task, ZIO, ZIOAppArgs, ZIOAppDefault}
+import zio.{Chunk, Clock, IO, NonEmptyChunk, RIO, Scope, Task, ZIO, ZIOAppArgs, ZIOAppDefault}
 import zio.http.Client
 
 import ccas.analysis.apps.membership.MembershipChange.*
@@ -118,7 +118,7 @@ object MembershipApp extends ZIOAppDefault {
     jobRunId: Option[JobRunId] = None
   ): RIO[CcasLogger & ChessComClient & PostgresClient, ReconciliationResult] =
     for {
-      startedAt <- ZIO.succeed(Instant.now())
+      startedAt <- Clock.instant
       client    <- ZIO.service[ChessComClient]
       (apiClub, resolvedUrlName) <- withNameFallback(
         clubSlug,

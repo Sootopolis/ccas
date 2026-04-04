@@ -474,7 +474,7 @@ object ChessComClient {
       s <- ctx.statsRef.get
       _ <- ZIO.whenDiscard(s.requests > 0) {
         for {
-          now        <- ZIO.succeed(Instant.now())
+          now        <- Clock.instant
           inProgress <- inProgressThrottleMs(ctx.stateRef)
           adjusted    = s.addThrottled(inProgress)
           configId   <- ctx.configIdRef.get.flatMap {
@@ -556,7 +556,7 @@ object ChessComClient {
         rateLimitGate <- Semaphore.make(1)
         lastReqRef    <- Ref.make(0L)
         ema           <- Ref.make(0.0)
-        startedAt     <- ZIO.succeed(Instant.now())
+        startedAt     <- Clock.instant
         stats         <- Ref.make(StatsAccumulator())
         statsRowId    <- Ref.make(Option.empty[Long])
         configIdRef   <- Ref.make(Option.empty[Long])

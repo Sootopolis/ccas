@@ -3,7 +3,7 @@ package ccas.analysis.apps.ref
 import java.time.{Duration as JDuration, Instant}
 
 import com.augustnagro.magnum.sql
-import zio.{RIO, Ref, Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
+import zio.{Clock, RIO, Ref, Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
 import zio.http.Client
 import RefUtils.*
 
@@ -40,7 +40,7 @@ object RefApp extends ZIOAppDefault {
     upgradeRefs: Boolean
   ): RIO[CcasLogger & ChessComClient & PostgresClient, ReportData] =
     for {
-      startedAt                                                                <- ZIO.succeed(Instant.now())
+      startedAt                                                                <- Clock.instant
       client                                                                   <- ZIO.service[ChessComClient]
       ctx                                                                      <- RefContext.make(client)
       (clubsTotal, clubsResolvedDb, clubsResolvedApi, clubsSkippedNew)         <- resolveClubs(ctx, forceSkipped)
@@ -79,19 +79,12 @@ object RefApp extends ZIOAppDefault {
     forceSkipped: Boolean
   ): RIO[CcasLogger & ChessComClient & PostgresClient, (Int, Int, Int, Int)] =
     for {
-      clubs         <- selectUnresolvedClubs(forceSkipped)
-      _             <- CcasLogger.info(s"Clubs without match ref: ${clubs.size}")
-      clubProcessed <- Ref.make(0)
+      clubs <- selectUnresolvedClubs(forceSkipped)
+      _     <- CcasLogger.info(s"Clubs without match ref: ${clubs.size}")
       _ <- ZIO.scoped {
-        for {
-          clubBar <- CcasLogger.progressBar
-          _ <- ZIO.foreachParDiscard(clubs) { club =>
-            RefResolution.resolveClub(ctx, club)
-              *> clubProcessed.updateAndGet(_ + 1).flatMap(n =>
-                clubBar.print(n, clubs.size, s"  Resolving clubs: $n/${clubs.size}")
-              )
-          }
-        } yield ()
+        CcasLogger.foreachParProgress(clubs)((n, total) => s"  Resolving clubs: $n/$total") { club =>
+          RefResolution.resolveClub(ctx, club)
+        }
       }
       db         <- ctx.clubsResolvedDb.get
       api        <- ctx.clubsResolvedApi.get
@@ -106,19 +99,12 @@ object RefApp extends ZIOAppDefault {
     forceSkipped: Boolean
   ): RIO[CcasLogger & ChessComClient & PostgresClient, (Int, Int, Int, Int)] =
     for {
-      players         <- selectUnresolvedPlayers(forceSkipped)
-      _               <- CcasLogger.info(s"Players without match ref: ${players.size}")
-      playerProcessed <- Ref.make(0)
+      players <- selectUnresolvedPlayers(forceSkipped)
+      _       <- CcasLogger.info(s"Players without match ref: ${players.size}")
       _ <- ZIO.scoped {
-        for {
-          playerBar <- CcasLogger.progressBar
-          _ <- ZIO.foreachParDiscard(players) { player =>
-            RefResolution.resolvePlayer(ctx, player)
-              *> playerProcessed.updateAndGet(_ + 1).flatMap(n =>
-                playerBar.print(n, players.size, s"  Resolving players: $n/${players.size}")
-              )
-          }
-        } yield ()
+        CcasLogger.foreachParProgress(players)((n, total) => s"  Resolving players: $n/$total") { player =>
+          RefResolution.resolvePlayer(ctx, player)
+        }
       }
       db         <- ctx.playersResolvedDb.get
       api        <- ctx.playersResolvedApi.get
@@ -197,20 +183,13 @@ object RefApp extends ZIOAppDefault {
       for {
         players   <- selectTournamentOnlyPlayers
         _         <- CcasLogger.info(s"Tournament-only players eligible for upgrade: ${players.size}")
-        upgraded  <- Ref.make(0)
-        processed <- Ref.make(0)
+        upgraded <- Ref.make(0)
         _ <- ZIO.scoped {
-          for {
-            bar <- CcasLogger.progressBar
-            _ <- ZIO.foreachParDiscard(players) { player =>
-              (for {
-                success <- RefResolution.tryUpgradeToMatchRef(ctx, player)
-                _ <- ZIO.whenDiscard(success)(PlayerTournamentRef.deleteId(player.playerId) *> upgraded.update(_ + 1))
-              } yield ()) *> processed.updateAndGet(_ + 1).flatMap(n =>
-                bar.print(n, players.size, s"  Upgrading refs: $n/${players.size}")
-              )
+          CcasLogger.foreachParProgress(players)((n, total) => s"  Upgrading refs: $n/$total") { player =>
+            RefResolution.tryUpgradeToMatchRef(ctx, player).flatMap { success =>
+              ZIO.whenDiscard(success)(PlayerTournamentRef.deleteId(player.playerId) *> upgraded.update(_ + 1))
             }
-          } yield ()
+          }
         }
         upgradedCount <- upgraded.get
         _             <- CcasLogger.info(s"Tournament refs upgraded to match refs: $upgradedCount / ${players.size}")

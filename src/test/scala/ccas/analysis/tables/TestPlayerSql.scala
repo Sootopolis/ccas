@@ -19,7 +19,9 @@ object TestPlayerSql extends ZIOSpecDefault {
     testSelect,
     testUpdate,
     testArchiveAndUpdate,
-    testSelectByUsername
+    testSelectByUsername,
+    testSelectByIds,
+    testResolveUsernames
   ).provideShared(
     FreshSchemaLayer("test_player_sql", onInit = Tables.ensureTables)
   ) @@ TestAspect.sequential
@@ -111,6 +113,43 @@ object TestPlayerSql extends ZIOSpecDefault {
     } yield assertTrue(
       found.exists(_.playerId == player0.playerId),
       notFound.isEmpty
+    )
+  }
+
+  private def testSelectByIds = test("testSelectByIds") {
+    for {
+      empty       <- Player.selectByIds(Nil)
+      single      <- Player.selectByIds(List(player0.playerId))
+      both        <- Player.selectByIds(List(player0.playerId, player1.playerId))
+      nonExistent <- Player.selectByIds(List(PlayerId(999)))
+      mixed       <- Player.selectByIds(List(player0.playerId, PlayerId(999)))
+    } yield assertTrue(
+      empty.isEmpty,
+      single.size == 1,
+      single.head.playerId == player0.playerId,
+      both.toSet.map(_.playerId) == Set(player0.playerId, player1.playerId),
+      nonExistent.isEmpty,
+      mixed.size == 1,
+      mixed.head.playerId == player0.playerId
+    )
+  }
+
+  private def testResolveUsernames = test("testResolveUsernames") {
+    for {
+      empty       <- Player.resolveUsernames(Nil)
+      single      <- Player.resolveUsernames(List(player1.playerId))
+      both        <- Player.resolveUsernames(List(player0.playerId, player1.playerId))
+      nonExistent <- Player.resolveUsernames(List(PlayerId(999)))
+      mixed       <- Player.resolveUsernames(List(player0.playerId, PlayerId(999)))
+    } yield assertTrue(
+      empty.isEmpty,
+      single == Map(player1.playerId -> player1.username),
+      both.size == 2,
+      both(player0.playerId) == Username("player0_new"), // updated in earlier test
+      both(player1.playerId) == player1.username,
+      nonExistent.isEmpty,
+      mixed.size == 1,
+      mixed(player0.playerId) == Username("player0_new")
     )
   }
 }

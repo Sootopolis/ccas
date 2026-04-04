@@ -1,6 +1,6 @@
 package ccas.utils
 
-import zio.{LogLevel, Scope, UIO, URIO, URLayer, ZIO, ZLayer}
+import zio.{LogLevel, Ref, Scope, UIO, URIO, URLayer, ZIO, ZLayer}
 
 trait CcasLogger {
   def info(msg: String): UIO[Unit]
@@ -18,6 +18,22 @@ object CcasLogger {
   def debug(msg: String): URIO[CcasLogger, Unit] = ZIO.serviceWithZIO(_.debug(msg))
 
   def progressBar: URIO[CcasLogger & Scope, ProgressBar] = ZIO.serviceWithZIO[CcasLogger](_.progressBar)
+
+  /** Run `action` on each item in parallel, showing a progress bar. The `label` function receives the current count
+    * and total to produce the bar text (e.g. `(n, total) => s"  Processing: $n/$total"`).
+    */
+  def foreachParProgress[R, E, A](items: Iterable[A])(label: (Int, Int) => String)(
+    action: A => ZIO[R, E, Any]
+  ): ZIO[R & CcasLogger & Scope, E, Unit] = {
+    val total = items.size
+    for {
+      bar     <- progressBar
+      counter <- Ref.make(0)
+      _ <- ZIO.foreachParDiscard(items) { item =>
+        action(item) *> counter.updateAndGet(_ + 1).flatMap(n => bar.print(n, total, label(n, total)))
+      }
+    } yield ()
+  }
 
   def live(showProgress: Boolean = true, minLevel: LogLevel = LogLevel.Info): URLayer[Scope, CcasLogger] =
     ZLayer.scoped {
