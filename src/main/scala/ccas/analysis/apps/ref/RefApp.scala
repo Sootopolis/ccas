@@ -7,7 +7,8 @@ import zio.{Clock, RIO, Ref, Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
 import zio.http.Client
 import RefUtils.*
 
-import ccas.analysis.tables.{ClubRefSkip, PlayerRefSkip, PlayerTournamentRef, Tables}
+import ccas.analysis.tables.{ClubRefSkip, PlayerRefSkip, PlayerTournamentRef, RefSkipReason, Tables}
+import ccas.api.misc.subtypes.{PlayerId, Username}
 import ccas.utils.{display, CcasLogger, OutputFile}
 import ccas.utils.client.ChessComClient
 import ccas.utils.errors.BadRequestException
@@ -17,6 +18,26 @@ import ccas.utils.sql.PostgresClient.connectZIO
 
 object RefApp extends ZIOAppDefault {
   private val help = "Usage: RefApp [--force-skipped] [--upgrade-refs]"
+
+  case class ReportData(
+    clubsTotal: Int,
+    clubsResolvedDb: Int,
+    clubsResolvedApi: Int,
+    clubsSkippedNew: Int,
+    playersTotal: Int,
+    playersResolvedDb: Int,
+    playersResolvedApi: Int,
+    playersSkippedNew: Int,
+    skippedPlayers: List[(PlayerId, Username)],
+    playerSkipsByReason: List[(RefSkipReason, Long)],
+    clubSkipsByReason: List[(RefSkipReason, Long)],
+    upgradeEligible: Int,
+    upgradeSucceeded: Int,
+    startedAt: Instant,
+    completedAt: Instant,
+    failedQueries: Map[String, String],
+    failedUrlSources: Map[String, String]
+  )
 
   override def run: RIO[ZIOAppArgs & Scope, Unit] =
     (for {

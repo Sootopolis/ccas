@@ -10,7 +10,7 @@ import ccas.api.clubmatch.TeamMatchTeams
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
 import ccas.utils.client.ChessComClient
 
-object RefUtils {
+private[ref] object RefUtils {
 
   final case class UnresolvedPlayer(playerId: PlayerId, username: Username)
   final case class UnresolvedClub(clubId: ClubId, slug: ClubSlug)
@@ -99,23 +99,4 @@ object RefUtils {
       )
   }
 
-  case class ReportData(
-    clubsTotal: Int,
-    clubsResolvedDb: Int,
-    clubsResolvedApi: Int,
-    clubsSkippedNew: Int,
-    playersTotal: Int,
-    playersResolvedDb: Int,
-    playersResolvedApi: Int,
-    playersSkippedNew: Int,
-    skippedPlayers: List[(PlayerId, Username)],
-    playerSkipsByReason: List[(RefSkipReason, Long)],
-    clubSkipsByReason: List[(RefSkipReason, Long)],
-    upgradeEligible: Int,
-    upgradeSucceeded: Int,
-    startedAt: Instant,
-    completedAt: Instant,
-    failedQueries: Map[String, String],
-    failedUrlSources: Map[String, String]
-  )
 }

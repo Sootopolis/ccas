@@ -6,6 +6,7 @@ import java.time.Instant
 import com.augustnagro.magnum.*
 import zio.ZIO
 
+import ccas.api.misc.enums.PlayerStatusCategory
 import ccas.api.misc.enums.PlayerStatusCategory.Active
 import ccas.api.misc.subtypes.{ClubId, PlayerId}
 import ccas.utils.sql.DbCodecs.given
@@ -57,7 +58,7 @@ object ClubMember {
   def selectClubActive(clubId: ClubId): ZIO[PostgresClient, SQLException, List[ClubMember]] =
     connectZIO(
       sql"""SELECT cm.club_id, cm.player_id, cm.since, cm.until, cm.since_approximate FROM club_member cm
-            JOIN player p ON p.player_id = cm.player_id AND p.status = ${Active.toString}
+            JOIN player p ON p.player_id = cm.player_id AND p.status = ${Active: PlayerStatusCategory}
             WHERE cm.club_id = $clubId AND cm.until IS NULL""".query[ClubMember]
         .run().toList
     )
