@@ -3,7 +3,7 @@ package ccas.analysis.apps.history
 import java.time.Instant
 
 import ccas.utils.sql.PostgresClient
-import zio.{RIO, Ref, ZIO}
+import zio.{Chunk, RIO, Ref, ZIO}
 import HistoryUtils.*
 
 import ccas.analysis.tables.*
@@ -121,6 +121,8 @@ private[history] object HistorySeeding {
     }
 
   /** Queries each un-queried member's match list to find club match IDs. Skips already-queried members unless --full.
+    * When `shared` is present, also skips members already queried by a prior club in the same batch, writing
+    * `HistoryMemberQuery` for the current club so future runs have correct per-club history.
     */
   def seedFromMemberMatches(
     client: ChessComClient,
@@ -129,41 +131,47 @@ private[history] object HistorySeeding {
     allMembers: List[ClubMember],
     queriedIds: Set[PlayerId],
     playerById: Map[PlayerId, Player],
-    settledMatchIds: Set[ClubMatchId]
-  ): RIO[CcasLogger & PostgresClient, MemberSeedResult] = {
-    val toQuery = allMembers
-      .filterNot(m => queriedIds.contains(m.playerId))
-      .flatMap(m => playerById.get(m.playerId).map(s => (m.playerId, s.username)))
-      .distinctBy(_._1)
+    settledMatchIds: Set[ClubMatchId],
+    shared: Option[SharedContext]
+  ): RIO[CcasLogger & PostgresClient, MemberSeedResult] =
     for {
+      sharedQueried <- shared.fold(ZIO.succeed(Set.empty[PlayerId]))(_.queriedPlayers.get)
+      candidates = allMembers
+        .filterNot(m => queriedIds.contains(m.playerId))
+        .flatMap(m => playerById.get(m.playerId).map(s => (m.playerId, s.username)))
+        .distinctBy(_._1)
+      (toQuery, sharedSkipped) = candidates.partition { case (pid, _) => !sharedQueried.contains(pid) }
+
+      // For members skipped via shared dedup, still record HistoryMemberQuery for this club
+      _ <- ZIO.foreachDiscard(sharedSkipped) { case (playerId, _) =>
+        HistoryMemberQuery.upsert(HistoryMemberQuery(clubId, playerId, Instant.now()))
+      }
+
       counterRef       <- Ref.make(0)
       seedRef          <- Ref.make(0)
-      failRef          <- Ref.make(0)
       failedMembersRef <- Ref.make(List.empty[(Username, String)])
       total = toQuery.size
       _ <- ZIO.scoped {
         for {
           bar <- CcasLogger.progressBar
           _ <- ZIO.foreachParDiscard(toQuery) { case (playerId, username) =>
-            seedMatchesForPlayer(client, clubId, clubSlug, playerId, username, settledMatchIds).foldZIO(
-              error =>
-                failRef.update(_ + 1)
-                  *> failedMembersRef.update(_ :+ (username, error.getMessage))
-                  *> CcasLogger.warn(s"  $username: failed — ${error.getMessage}"),
-              count =>
-                seedRef.update(_ + count) *> counterRef.updateAndGet(_ + 1).flatMap { n =>
-                  bar.print(n, total, s"  Querying member matches: $n/$total")
-                }
-            )
+            seedMatchesForPlayerAllClubs(client, clubId, clubSlug, playerId, username, settledMatchIds, shared)
+              .foldZIO(
+                error =>
+                  failedMembersRef.update(_ :+ (username, error.getMessage))
+                    *> CcasLogger.warn(s"  $username: failed — ${error.getMessage}"),
+                count =>
+                  seedRef.update(_ + count) *> counterRef.updateAndGet(_ + 1).flatMap { n =>
+                    bar.print(n, total, s"  Querying member matches: $n/$total")
+                  }
+              )
           }
         } yield ()
       }
       seeded        <- seedRef.get
       queried       <- counterRef.get
-      failed        <- failRef.get
       failedMembers <- failedMembersRef.get
-    } yield MemberSeedResult(seeded, queried, failed, failedMembers)
-  }
+    } yield MemberSeedResult(seeded, queried, failedMembers)
 
   private[history] def isClubDailyMatch(m: ApiPlayerMatches.ApiPlayerMatch, clubSlug: ClubSlug): Boolean =
     m.club.path.segments.lastOption.map(ClubSlug.wrap).contains(clubSlug)
@@ -172,6 +180,61 @@ private[history] object HistorySeeding {
   private[history] def isClubLiveMatch(m: ApiPlayerMatches.ApiPlayerMatch, clubSlug: ClubSlug): Boolean =
     m.club.path.segments.lastOption.map(ClubSlug.wrap).contains(clubSlug)
       && m.`@id`.path.segments.contains("live")
+
+  /** Wraps `seedMatchesForPlayer` with cross-club fan-out when `shared` is present. Fetches the player's match list
+    * once, seeds matches for the primary club (with settled filtering), then seeds for all other resolved clubs in the
+    * batch (without settled filtering). Records `HistoryMemberQuery` for all clubs and adds the player to the shared
+    * queried set. Returns the primary club's seeded count.
+    */
+  private def seedMatchesForPlayerAllClubs(
+    client: ChessComClient,
+    clubId: ClubId,
+    clubSlug: ClubSlug,
+    playerId: PlayerId,
+    username: Username,
+    settledMatchIds: Set[ClubMatchId],
+    shared: Option[SharedContext]
+  ): RIO[PostgresClient, Int] =
+    shared match {
+      case None => seedMatchesForPlayer(client, clubId, clubSlug, playerId, username, settledMatchIds)
+      case Some(sc) =>
+        for {
+          playerMatches <- client.get[ApiPlayerMatches](ApiPlayerMatches.getUrl(username))
+          allMatches = playerMatches.finished ++ playerMatches.inProgress ++ playerMatches.registered
+
+          // Seed for primary club (with settled filtering)
+          primaryCount <- seedMatchesFromList(clubId, clubSlug, allMatches, settledMatchIds)
+          _ <- HistoryMemberQuery.upsert(HistoryMemberQuery(clubId, playerId, Instant.now()))
+
+          // Seed for other resolved clubs (without settled filtering)
+          otherClubs <- sc.resolvedClubs.get.map(_.removed(clubSlug).toList)
+          _ <- ZIO.foreachDiscard(otherClubs) { case (otherSlug, otherClubId) =>
+            seedMatchesFromList(otherClubId, otherSlug, allMatches, Set.empty) *>
+              HistoryMemberQuery.upsert(HistoryMemberQuery(otherClubId, playerId, Instant.now()))
+          }
+
+          _ <- sc.queriedPlayers.update(_ + playerId)
+        } yield primaryCount
+    }
+
+  /** Filters a player's match list for a specific club and inserts matching entries as pending. */
+  private def seedMatchesFromList(
+    clubId: ClubId,
+    clubSlug: ClubSlug,
+    allMatches: Chunk[ApiPlayerMatches.ApiPlayerMatch],
+    settledMatchIds: Set[ClubMatchId]
+  ): RIO[PostgresClient, Int] = {
+    val dailyPending = allMatches.collect {
+      case m if isClubDailyMatch(m, clubSlug) =>
+        HistoryPendingMatch(clubId, ClubMatchId.fromUrl(m.`@id`), isLive = false)
+    }
+    val livePending = allMatches.collect {
+      case m if isClubLiveMatch(m, clubSlug) =>
+        HistoryPendingMatch(clubId, ClubMatchId.fromUrl(m.`@id`), isLive = true)
+    }
+    val all = (dailyPending ++ livePending).filterNot(p => settledMatchIds.contains(p.matchId))
+    insertPendingMatches(all).as(all.size)
+  }
 
   def seedMatchesForPlayer(
     client: ChessComClient,
@@ -200,10 +263,19 @@ private[history] object HistorySeeding {
   private def insertPendingMatches(items: Iterable[HistoryPendingMatch]): RIO[PostgresClient, Unit] =
     ZIO.foreachDiscard(items.grouped(1000).toList)(HistoryPendingMatch.insertBatch)
 
-  /** If --refresh, re-queues all known matches; otherwise only stale ones (unfinished or recently completed). */
-  def seedStaleMatches(clubId: ClubId, refresh: Boolean): RIO[PostgresClient, Int] =
+  /** If --refresh, re-queues all known matches; otherwise only stale ones (unfinished or recently completed). When
+    * `shared` is present, filters out matches already processed by a prior club in this batch.
+    */
+  def seedStaleMatches(
+    clubId: ClubId,
+    refresh: Boolean,
+    shared: Option[SharedContext]
+  ): RIO[PostgresClient, Int] =
     for {
-      ids <- if (refresh) ClubMatch.selectMatchIdsForClub(clubId) else ClubMatch.selectStaleForClub(clubId)
-      _   <- insertPendingMatches(ids.map(id => HistoryPendingMatch(clubId, id, isLive = false)))
-    } yield ids.size
+      ids <- if (refresh) { ClubMatch.selectMatchIdsForClub(clubId) }
+      else { ClubMatch.selectStaleForClub(clubId) }
+      alreadyProcessed <- shared.fold(ZIO.succeed(Set.empty[ClubMatchId]))(_.processedMatches.get)
+      filtered = ids.filterNot(alreadyProcessed.contains)
+      _ <- insertPendingMatches(filtered.map(id => HistoryPendingMatch(clubId, id, isLive = false)))
+    } yield filtered.size
 }

@@ -30,7 +30,8 @@ private[history] object HistoryProcessing {
     */
   def processWaves(
     ctx: ProcessingContext,
-    settledMatchIds: Set[ClubMatchId]
+    settledMatchIds: Set[ClubMatchId],
+    shared: Option[SharedContext] = None
   ): RIO[CcasLogger & PostgresClient, RunStats] = {
     def waveLoop(waveCount: Int, waveDetails: List[(Int, Int)]): RIO[CcasLogger & PostgresClient, RunStats] =
       for {
@@ -46,7 +47,9 @@ private[history] object HistoryProcessing {
 
               waveCounter <- Ref.make(0)
               _ <- ZIO.scoped {
-                CcasLogger.progressBar.flatMap(waveBar => processAllPending(ctx, waveBar, waveCounter, pendingCount))
+                CcasLogger.progressBar.flatMap(waveBar =>
+                  processAllPending(ctx, waveBar, waveCounter, pendingCount, shared)
+                )
               }
 
               afterCount  <- ctx.matchesProcessed.get
@@ -54,19 +57,17 @@ private[history] object HistoryProcessing {
               waveProcessed = afterCount - beforeCount
               _ <- CcasLogger.info(s"  Wave $wave complete: $waveProcessed processed, $failedCount failed total")
 
-              // Seed matches for newly discovered players
+              // Seed matches for newly discovered players (track in shared context so later clubs don't re-query)
               newPlayers <- ctx.newPlayers.get
               _ <- ZIO.whenDiscard(newPlayers.nonEmpty) {
                 CcasLogger.info(s"  Querying match lists for ${newPlayers.size} discovered players...") *>
                   ZIO.foreachParDiscard(newPlayers) { dp =>
-                    HistorySeeding.seedMatchesForPlayer(
-                      ctx.client,
-                      ctx.clubId,
-                      ctx.clubSlug,
-                      dp.playerId,
-                      dp.username,
-                      settledMatchIds
-                    ).catchAll(error => CcasLogger.warn(s"  ${dp.username}: failed to seed — ${error.getMessage}"))
+                    HistorySeeding
+                      .seedMatchesForPlayer(
+                        ctx.client, ctx.clubId, ctx.clubSlug, dp.playerId, dp.username, settledMatchIds
+                      )
+                      .zipLeft(ZIO.foreachDiscard(shared)(_.queriedPlayers.update(_ + dp.playerId)))
+                      .catchAll(error => CcasLogger.warn(s"  ${dp.username}: failed to seed — ${error.getMessage}"))
                   }
               }
 
@@ -91,12 +92,14 @@ private[history] object HistoryProcessing {
     ctx: ProcessingContext,
     bar: ProgressBar,
     counter: Ref[Int],
-    waveTotal: Long
+    waveTotal: Long,
+    shared: Option[SharedContext]
   ): RIO[CcasLogger & PostgresClient, Unit] =
     for {
       batch <- HistoryPendingMatch.selectClubBatch(ctx.clubId, BatchSize)
       _ <- ZIO.whenDiscard(batch.nonEmpty) {
-        processMatchBatch(ctx, batch, bar, counter, waveTotal) *> processAllPending(ctx, bar, counter, waveTotal)
+        processMatchBatch(ctx, batch, bar, counter, waveTotal, shared) *>
+          processAllPending(ctx, bar, counter, waveTotal, shared)
       }
     } yield ()
 
@@ -105,11 +108,11 @@ private[history] object HistoryProcessing {
     pending: List[HistoryPendingMatch],
     bar: ProgressBar,
     counter: Ref[Int],
-    waveTotal: Long
+    waveTotal: Long,
+    shared: Option[SharedContext]
   ): RIO[CcasLogger & PostgresClient, Unit] =
     ZIO.foreachParDiscard(pending) { pm =>
-      processMatch(ctx, pm.matchId, pm.isLive)
-        .zipLeft(ctx.matchesProcessed.update(_ + 1))
+      processMatch(ctx, pm.matchId, pm.isLive, shared)
         .catchAll { error =>
           ctx.matchesFailed.update(_ + 1) *>
             ctx.failedMatches.update(_ :+ (MatchKey(pm.matchId, pm.isLive), error.getMessage)) *>
@@ -123,15 +126,31 @@ private[history] object HistoryProcessing {
   private def processMatch(
     ctx: ProcessingContext,
     matchId: ClubMatchId,
-    isLive: Boolean
+    isLive: Boolean,
+    shared: Option[SharedContext]
   ): RIO[CcasLogger & PostgresClient, Unit] =
-    if (isLive) { processLiveMatch(ctx, matchId) }
-    else { processDailyMatch(ctx, matchId) }
+    for {
+      alreadyProcessed <- shared.fold(ZIO.succeed(false))(_.processedMatches.get.map(_.contains(matchId)))
+      _ <-
+        if (alreadyProcessed) {
+          // Match was fully processed by a prior club in this batch — skip API calls, just clean up pending
+          HistoryPendingMatch.delete(ctx.clubId, matchId, isLive) *>
+            ctx.matchesSharedSkip.update(_ + 1)
+        } else {
+          (if (isLive) { processLiveMatch(ctx, matchId, shared) }
+           else { processDailyMatch(ctx, matchId, shared) }) *>
+            ctx.matchesProcessed.update(_ + 1)
+        }
+    } yield ()
 
   /** Fetches a daily match from the API, resolves team clubs, builds and persists board rows. Marks the match
     * Unidentified if the target club is not found in either team (data saved, BFS skipped).
     */
-  private def processDailyMatch(ctx: ProcessingContext, matchId: ClubMatchId): RIO[CcasLogger & PostgresClient, Unit] =
+  private def processDailyMatch(
+    ctx: ProcessingContext,
+    matchId: ClubMatchId,
+    shared: Option[SharedContext]
+  ): RIO[CcasLogger & PostgresClient, Unit] =
     for {
       dailyMatch <- fetchMatch(ctx, matchId)
 
@@ -173,10 +192,15 @@ private[history] object HistoryProcessing {
         ctx.matchesUnidentified.update(_ + 1) *>
           CcasLogger.warn(s"    Match $matchId: club ${ctx.clubId} not found in either team (data saved, BFS skipped)")
       }
+      _ <- ZIO.foreachDiscard(shared)(_.processedMatches.update(_ + matchId))
     } yield ()
 
   /** Fetches a live match and resolves its players for BFS expansion. No board rows are persisted for live matches. */
-  private def processLiveMatch(ctx: ProcessingContext, matchId: ClubMatchId): RIO[CcasLogger & PostgresClient, Unit] =
+  private def processLiveMatch(
+    ctx: ProcessingContext,
+    matchId: ClubMatchId,
+    shared: Option[SharedContext]
+  ): RIO[CcasLogger & PostgresClient, Unit] =
     for {
       liveMatch <- fetchLiveMatch(ctx, matchId)
 
@@ -191,6 +215,7 @@ private[history] object HistoryProcessing {
       }
 
       _ <- HistoryPendingMatch.delete(ctx.clubId, matchId, isLive = true)
+      _ <- ZIO.foreachDiscard(shared)(_.processedMatches.update(_ + matchId))
     } yield ()
 
   // === Board Row Construction ===
@@ -599,6 +624,7 @@ private[history] object HistoryProcessing {
       matchesProcessed    <- ctx.matchesProcessed.get
       matchesFailed       <- ctx.matchesFailed.get
       matchesUnidentified <- ctx.matchesUnidentified.get
+      matchesSharedSkip   <- ctx.matchesSharedSkip.get
       playersDiscovered   <- ctx.playersDiscovered.get
       playersKnown        <- ctx.playersKnown.get
       playersFailed       <- ctx.playersFailed.get
@@ -607,6 +633,7 @@ private[history] object HistoryProcessing {
       matchesProcessed = matchesProcessed,
       matchesFailed = matchesFailed,
       matchesUnidentified = matchesUnidentified,
+      matchesSharedSkip = matchesSharedSkip,
       playersDiscovered = playersDiscovered,
       playersKnown = playersKnown,
       playersFailed = playersFailed,

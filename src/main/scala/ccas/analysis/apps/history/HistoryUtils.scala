@@ -1,6 +1,6 @@
 package ccas.analysis.apps.history
 
-import zio.{Promise, Ref, ZIO}
+import zio.{Promise, Ref, UIO, ZIO}
 
 import ccas.analysis.tables.MatchKey
 import ccas.api.clubmatch.{ApiDailyMatch, ApiLiveMatch}
@@ -14,9 +14,10 @@ private[history] object HistoryUtils {
   case class MemberSeedResult(
     seeded: Int,
     queried: Int,
-    failed: Int,
     failedMembers: List[(Username, String)]
-  )
+  ) {
+    def failed: Int = failedMembers.size
+  }
 
   case class RunStats(
     membersQueried: Int = 0,
@@ -26,6 +27,7 @@ private[history] object HistoryUtils {
     matchesProcessed: Int = 0,
     matchesFailed: Int = 0,
     matchesUnidentified: Int = 0,
+    matchesSharedSkip: Int = 0,
     playersDiscovered: Int = 0,
     playersKnown: Int = 0,
     playersFailed: Int = 0,
@@ -35,6 +37,24 @@ private[history] object HistoryUtils {
     failedMatches: List[(MatchKey, String)] = Nil,
     failedMembers: List[(Username, String)] = Nil
   )
+
+  /** Cross-club shared state for multi-club invocations. Tracks which players have been queried and which matches have
+    * been processed across sequential club runs, so that subsequent clubs can skip redundant API calls.
+    */
+  class SharedContext(
+    val resolvedClubs: Ref[Map[ClubSlug, ClubId]],
+    val queriedPlayers: Ref[Set[PlayerId]],
+    val processedMatches: Ref[Set[ClubMatchId]]
+  )
+
+  object SharedContext {
+    def make: UIO[SharedContext] =
+      for {
+        rc <- Ref.make(Map.empty[ClubSlug, ClubId])
+        qp <- Ref.make(Set.empty[PlayerId])
+        pm <- Ref.make(Set.empty[ClubMatchId])
+      } yield new SharedContext(rc, qp, pm)
+  }
 
   /** Shared mutable state for concurrent Phase 3 processing: API response caches (deduplicated via Promises), a player
     * lookup map, counters for statistics, and error tracking.
@@ -55,7 +75,8 @@ private[history] object HistoryUtils {
     val playersDiscovered: Ref[Int],
     val playersKnown: Ref[Int],
     val playersFailed: Ref[Int],
-    val failedMatches: Ref[List[(MatchKey, String)]]
+    val failedMatches: Ref[List[(MatchKey, String)]],
+    val matchesSharedSkip: Ref[Int]
   )
 
   object ProcessingContext {
@@ -79,6 +100,7 @@ private[history] object HistoryUtils {
         playersKnown        <- Ref.make(0)
         playersFailed       <- Ref.make(0)
         failedMatches       <- Ref.make(List.empty[(MatchKey, String)])
+        matchesSharedSkip   <- Ref.make(0)
       } yield new ProcessingContext(
         client,
         clubId,
@@ -95,7 +117,8 @@ private[history] object HistoryUtils {
         playersDiscovered,
         playersKnown,
         playersFailed,
-        failedMatches
+        failedMatches,
+        matchesSharedSkip
       )
   }
 }
