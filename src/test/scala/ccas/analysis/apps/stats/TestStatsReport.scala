@@ -80,6 +80,38 @@ object TestStatsReport extends ZIOSpecDefault {
       val dataLine = lines(csv)(1)
       val points = dataLine.split(",").apply(7)
       assertTrue(points == "2.5")
+    },
+    test("TOTAL row sums values correctly") {
+      val csv = StatsReport.formatContribution(List(alice, bob, carol))
+      val totalLine = lines(csv).last
+      val fields = totalLine.split(",", -1)
+      // alice: 4 games, bob: 4 games, carol: 4 games = 12 total games
+      // alice raw: 6 pts, bob raw: 8 pts, carol raw: 6 pts = 20 ptsx2 = 10 points
+      assertTrue(
+        fields(3) == "12",                // total games
+        fields(7) == "10"                 // total raw points (20 / 2 = 10)
+      )
+    },
+    test("score% shows 0.0% for all losses") {
+      val allLosses = mc("loser", rawPtsX2 = 0, fpPtsX2 = 0, games = 4)
+      val csv = StatsReport.formatContribution(List(allLosses))
+      val dataLine = lines(csv)(1)
+      val scoreRate = dataLine.split(",").apply(8)
+      assertTrue(scoreRate == "0.0%")
+    },
+    test("score% shows 100.0% for all wins") {
+      val allWins = mc("winner", rawPtsX2 = 8, fpPtsX2 = 8, games = 4) // 4/4 = 100%
+      val csv = StatsReport.formatContribution(List(allWins))
+      val dataLine = lines(csv)(1)
+      val scoreRate = dataLine.split(",").apply(8)
+      assertTrue(scoreRate == "100.0%")
+    },
+    test("score% shows 50.0% for half wins") {
+      val half = mc("half", rawPtsX2 = 4, fpPtsX2 = 4, games = 4) // 2/4 = 50%
+      val csv = StatsReport.formatContribution(List(half))
+      val dataLine = lines(csv)(1)
+      val scoreRate = dataLine.split(",").apply(8)
+      assertTrue(scoreRate == "50.0%")
     }
   )
 

@@ -15,8 +15,11 @@ object TestStatsApp extends ZIOSpecDefault {
     testMemberStatsReturnsResult,
     testMemberStatsEmptyClub,
     testMemberStatsNotFound,
+    testMemberStatsTeam2Perspective,
+    testMemberStatsMatchesButNoBoards,
     testPlayerOfPeriodFilters,
-    testPlayerOfPeriodNoMatchCount
+    testPlayerOfPeriodNoMatchCount,
+    testPlayerOfPeriodInvertedRange
   ).provideShared(
     FreshSchemaLayer("test_stats_app", onInit = Tables.ensureTables)
   ) @@ TestAspect.sequential
@@ -34,6 +37,8 @@ object TestStatsApp extends ZIOSpecDefault {
   private val pid1     = PlayerId.wrap(1L)
   private val matchId1 = ClubMatchId(1001L)
   private val matchId2 = ClubMatchId(1002L)
+  private val matchId3 = ClubMatchId(1003L)
+  private val pid2     = PlayerId.wrap(2L)
 
   private def testMemberStatsReturnsResult = test("memberStats returns StatsResult with correct counts") {
     for {
@@ -80,6 +85,53 @@ object TestStatsApp extends ZIOSpecDefault {
     } yield assertTrue(exit.isFailure)
   }
 
+  private def testMemberStatsTeam2Perspective = test("memberStats includes boards when club is team2 with winner flipping") {
+    val team2Slug = ClubSlug("team2-club")
+    val team2Id   = ClubId(400)
+    for {
+      _ <- Club.upsert(Club(team2Id, Times.t0, team2Slug, "Team2 Club"))
+      _ <- Player.insertIfNew(
+        Player(pid2, Times.t0, Username.wrap("dave"), PlayerStatusCategory.Active, None, Times.t0)
+      )
+      // Match where team2-club is team2; opponent (clubId=100) wins as Team1
+      _ <- ClubMatch.upsert(
+        ClubMatch(matchId3, "Match 3", ClubMatchStatus.Finished, TimeClass.Daily,
+          Some(Times.t0), Some(Times.t1), 10, Some(clubId), 10, Some(team2Id), 10, Times.t1)
+      )
+      // dave is on team2 side
+      _ <- ClubMatchBoard.insert(
+        ClubMatchBoard(matchId3, 1, None, false, Some(pid2), false, 1, 1)
+      )
+      // game1: Team2 wins (from match perspective). After flip for team2-club, this becomes Team1 = win for dave.
+      _ <- ClubMatchGame.insertBatch(List(
+        ClubMatchGame(matchId3, 1, true, None, None, None, Some(BoardGameWinner.Team2), None, None, None)
+      ))
+      result <- StatsApp.memberStats(team2Slug)
+    } yield assertTrue(
+      result.contributions.size == 1,
+      result.contributions.head.username == Username.wrap("dave"),
+      result.contributions.head.raw.wins == 1,
+      result.contributions.head.raw.losses == 0
+    )
+  }
+
+  private def testMemberStatsMatchesButNoBoards = test("memberStats returns empty contributions when matches exist but no boards") {
+    val noBoardSlug = ClubSlug("noboard-club")
+    val noBoardId   = ClubId(500)
+    for {
+      _ <- Club.upsert(Club(noBoardId, Times.t0, noBoardSlug, "No Board Club"))
+      _ <- ClubMatch.upsert(
+        ClubMatch(ClubMatchId(2001L), "Match NB", ClubMatchStatus.Finished, TimeClass.Daily,
+          Some(Times.t0), Some(Times.t1), 10, Some(noBoardId), 10, Some(oppId), 10, Times.t1)
+      )
+      result <- StatsApp.memberStats(noBoardSlug)
+    } yield assertTrue(
+      result.contributions.isEmpty,
+      result.boardCount == 0,
+      result.matchCount == 1L
+    )
+  }
+
   private def testPlayerOfPeriodFilters = test("playerOfPeriod respects time boundaries") {
     for {
       // matchId1 ends at t1 (within [t0, t2)), matchId2 ends at t3 (outside)
@@ -105,5 +157,14 @@ object TestStatsApp extends ZIOSpecDefault {
     for {
       result <- StatsApp.playerOfPeriod(clubSlug, Times.t0, Times.t2)
     } yield assertTrue(result.matchCount == 0L)
+  }
+
+  private def testPlayerOfPeriodInvertedRange = test("playerOfPeriod returns empty for inverted date range") {
+    for {
+      result <- StatsApp.playerOfPeriod(clubSlug, Times.t2, Times.t0)
+    } yield assertTrue(
+      result.contributions.isEmpty,
+      result.boardCount == 0
+    )
   }
 }

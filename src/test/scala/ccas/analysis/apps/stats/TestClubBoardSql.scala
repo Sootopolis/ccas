@@ -17,6 +17,8 @@ object TestClubBoardSql extends ZIOSpecDefault {
   override def spec: Spec[Any, Throwable] = suite("TestClubBoardSql")(
     testSelectClubBoardsTeam1,
     testSelectClubBoardsTeam2Flipped,
+    testSelectClubBoardsTeam2DrawPreserved,
+    testSelectClubBoardsTeam2NullPreserved,
     testSelectClubBoardsExcludesInProgress,
     testSelectClubBoardsExcludesNullPlayer,
     testSelectClubBoardsInPeriodFilters,
@@ -136,6 +138,34 @@ object TestClubBoardSql extends ZIOSpecDefault {
       boards.head.game2Winner.contains(BoardGameWinner.Team1),
       boards.head.ourFairPlay == true,
       boards.head.oppFairPlay == false
+    )
+  }
+
+  private def testSelectClubBoardsTeam2DrawPreserved = test("Draw stays Draw when flipped for team2") {
+    for {
+      _ <- seedAll
+      _ <- ClubMatch.upsert(matchRow(matchId1, oppClubId, ourClubId))
+      _ <- insertBoardWithGames(matchId1, 1, Some(player2), Some(player1),
+        g1 = Some(BoardGameWinner.Draw), g2 = Some(BoardGameWinner.Draw))
+      boards <- ClubBoard.selectClubBoards(ourClubId)
+    } yield assertTrue(
+      boards.size == 1,
+      boards.head.game1Winner.contains(BoardGameWinner.Draw),
+      boards.head.game2Winner.contains(BoardGameWinner.Draw)
+    )
+  }
+
+  private def testSelectClubBoardsTeam2NullPreserved = test("null winner stays null when flipped for team2") {
+    for {
+      _ <- seedAll
+      _ <- ClubMatch.upsert(matchRow(matchId1, oppClubId, ourClubId))
+      // board with no games at all (both winners null)
+      _ <- ClubMatchBoard.insert(boardRow(matchId1, 1, Some(player2), Some(player1)))
+      boards <- ClubBoard.selectClubBoards(ourClubId)
+    } yield assertTrue(
+      boards.size == 1,
+      boards.head.game1Winner.isEmpty,
+      boards.head.game2Winner.isEmpty
     )
   }
 

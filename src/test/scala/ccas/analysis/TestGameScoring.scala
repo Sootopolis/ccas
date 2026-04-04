@@ -53,12 +53,16 @@ object TestGameScoring extends ZIOSpecDefault {
       assertTrue(
         GameScoring.classifyGame(Some(BoardGameWinner.Team1), ourFairPlay = true, oppFairPlay = false)
           .contains(GameResult.Loss),
+        GameScoring.classifyGame(Some(BoardGameWinner.Team2), ourFairPlay = true, oppFairPlay = false)
+          .contains(GameResult.Loss),
         GameScoring.classifyGame(Some(BoardGameWinner.Draw), ourFairPlay = true, oppFairPlay = false)
           .contains(GameResult.Loss)
       )
     },
     test("opponent fairplay → Win regardless of winner") {
       assertTrue(
+        GameScoring.classifyGame(Some(BoardGameWinner.Team1), ourFairPlay = false, oppFairPlay = true)
+          .contains(GameResult.Win),
         GameScoring.classifyGame(Some(BoardGameWinner.Team2), ourFairPlay = false, oppFairPlay = true)
           .contains(GameResult.Win),
         GameScoring.classifyGame(Some(BoardGameWinner.Draw), ourFairPlay = false, oppFairPlay = true)
@@ -70,6 +74,8 @@ object TestGameScoring extends ZIOSpecDefault {
         GameScoring.classifyGame(Some(BoardGameWinner.Team1), ourFairPlay = true, oppFairPlay = true)
           .contains(GameResult.Draw),
         GameScoring.classifyGame(Some(BoardGameWinner.Team2), ourFairPlay = true, oppFairPlay = true)
+          .contains(GameResult.Draw),
+        GameScoring.classifyGame(Some(BoardGameWinner.Draw), ourFairPlay = true, oppFairPlay = true)
           .contains(GameResult.Draw)
       )
     },

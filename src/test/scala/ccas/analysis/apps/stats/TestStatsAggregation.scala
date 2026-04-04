@@ -4,12 +4,50 @@ import java.time.Instant
 
 import zio.test.{assertTrue, Spec, ZIOSpecDefault}
 
+import ccas.analysis.apps.stats.StatsUtils.PlayerBoardStats
 import ccas.api.misc.enums.BoardGameWinner
 import ccas.api.misc.subtypes.{ClubMatchId, PlayerId, Username}
 
 object TestStatsAggregation extends ZIOSpecDefault {
   override def spec: Spec[Any, Nothing] = suite("StatsAggregation")(
+    suitePlayerBoardStats,
     suiteAggregate
+  )
+
+  private def suitePlayerBoardStats = suite("PlayerBoardStats")(
+    test("points divides pointsX2 by 2") {
+      val even = PlayerBoardStats(1, 2, 1, 0, 1, 4)
+      val odd  = PlayerBoardStats(1, 2, 1, 1, 0, 3)
+      assertTrue(
+        even.points == 2.0,
+        odd.points == 1.5
+      )
+    },
+    test("scoreRate returns 0 when games is 0") {
+      assertTrue(PlayerBoardStats.empty.scoreRate == 0.0)
+    },
+    test("scoreRate computes points / games") {
+      val stats = PlayerBoardStats(2, 4, 2, 1, 1, 5)
+      assertTrue(stats.scoreRate == 2.5 / 4)
+    },
+    test("+ combines two instances") {
+      val a = PlayerBoardStats(1, 2, 1, 0, 1, 2)
+      val b = PlayerBoardStats(2, 3, 2, 1, 0, 5)
+      val c = a + b
+      assertTrue(
+        c.boards == 3,
+        c.games == 5,
+        c.wins == 3,
+        c.draws == 1,
+        c.losses == 1,
+        c.pointsX2 == 7
+      )
+    },
+    test("empty is identity for +") {
+      val a = PlayerBoardStats(1, 2, 1, 0, 1, 2)
+      val c = a + PlayerBoardStats.empty
+      assertTrue(c == a)
+    }
   )
 
   private val player1 = PlayerId.wrap(1L)

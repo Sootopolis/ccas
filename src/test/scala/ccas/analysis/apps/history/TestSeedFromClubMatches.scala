@@ -69,7 +69,9 @@ object TestSeedFromClubMatches extends ZIOSpecDefault {
   override def spec: Spec[Any, Throwable] = suite("seedFromClubMatches")(
     testSkipsKnownMatches,
     testSeedsAllWhenNoneKnown,
-    testSeedsNewAlongsideKnown
+    testSeedsNewAlongsideKnown,
+    testEmptyMatchesListSeedsNothing,
+    testApiFetchErrorReturnsZero
   ).provideLayerShared(layer) @@ TestAspect.sequential
 
   private def testSkipsKnownMatches = test("returns 0 and seeds nothing when all matches are already known") {
@@ -117,5 +119,34 @@ object TestSeedFromClubMatches extends ZIOSpecDefault {
       count == 2,
       pending.map(_.matchId).toSet == Set(ClubMatchId(3002), ClubMatchId(3003))
     )
+  }
+
+  private def testEmptyMatchesListSeedsNothing = test("returns 0 when API returns empty match lists") {
+    val json = apiClubMatchesJson(Nil)
+    for {
+      _      <- Club.upsert(club)
+      client <- fakeChessComClient(json)
+      count <- HistorySeeding.seedFromClubMatches(client, clubId, clubSlug)
+        .provideSomeEnvironment[PostgresClient](_.add[CcasLogger](TestCcasLogger.noop))
+      pending <- HistoryPendingMatch.selectClub(clubId)
+    } yield assertTrue(count == 0, pending.isEmpty)
+  }
+
+  private def fakeChessComClientError: RIO[PostgresClient, ChessComClient] = {
+    val routes: Routes[Any, Response] = Routes(
+      Method.GET / "pub" / "club" / string("club") / "matches" -> handler { (_: String, _: Request) =>
+        Response.status(Status.InternalServerError)
+      }
+    )
+    TestChessComClientSupport.fakeClient(routes)
+  }
+
+  private def testApiFetchErrorReturnsZero = test("returns 0 when API fetch fails") {
+    for {
+      _      <- Club.upsert(club)
+      client <- fakeChessComClientError
+      count <- HistorySeeding.seedFromClubMatches(client, clubId, clubSlug)
+        .provideSomeEnvironment[PostgresClient](_.add[CcasLogger](TestCcasLogger.noop))
+    } yield assertTrue(count == 0)
   }
 }
