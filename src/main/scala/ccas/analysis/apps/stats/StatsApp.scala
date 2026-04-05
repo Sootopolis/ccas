@@ -5,7 +5,7 @@ import ccas.analysis.tables.*
 import ccas.api.misc.subtypes.ClubSlug
 import ccas.utils.errors.{BadRequestException, NotFoundException}
 import ccas.utils.sql.PostgresClient
-import ccas.utils.{CcasLogger, OutputFile}
+import ccas.utils.{CcasLogger, OutputFile, TimeParser}
 import zio.{RIO, Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
 
 import java.time.Instant
@@ -19,14 +19,14 @@ import java.time.Instant
   * ==CLI==
   * {{{
   * StatsApp <club-slug>
-  * StatsApp <club-slug> --since <iso-instant> --until <iso-instant> [--min-games N]
+  * StatsApp <club-slug> --since <date-or-instant> --until <date-or-instant> [--min-games N]
   * }}}
   *
   * ==API==
   * `POST /api/jobs/stats` with `{"clubSlug": "...", "since": "...", "until": "...", "minGames": N}`
   */
 object StatsApp extends ZIOAppDefault {
-  private val help = "Usage: StatsApp <club-slug> [--since <iso-instant>] [--until <iso-instant>] [--min-games N]"
+  private val help = "Usage: StatsApp <club-slug> [--since <date-or-instant>] [--until <date-or-instant>] [--min-games N]"
 
   case class StatsResult(
     contributions: List[MemberContribution],
@@ -42,8 +42,8 @@ object StatsApp extends ZIOAppDefault {
         case Some(s) => ZIO.succeed(ClubSlug.wrap(s))
         case None    => ZIO.fail(BadRequestException(help))
       }
-      since <- ZIO.foreach(flagValue(args, "--since"))(s => ZIO.attempt(Instant.parse(s)))
-      until <- ZIO.foreach(flagValue(args, "--until"))(s => ZIO.attempt(Instant.parse(s)))
+      since <- ZIO.foreach(flagValue(args, "--since"))(s => ZIO.fromEither(TimeParser.parseInstant(s)).mapError(BadRequestException(_)))
+      until <- ZIO.foreach(flagValue(args, "--until"))(s => ZIO.fromEither(TimeParser.parseInstant(s)).mapError(BadRequestException(_)))
       minGames <- ZIO.foreach(flagValue(args, "--min-games"))(s => ZIO.attempt(s.toInt))
       _ <- (since, until) match {
         case (Some(s), Some(u)) =>

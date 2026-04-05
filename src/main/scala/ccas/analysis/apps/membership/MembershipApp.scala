@@ -10,7 +10,7 @@ import ccas.analysis.apps.membership.MembershipChange.*
 import ccas.analysis.tables.*
 import ccas.api.club.{ApiClub, ApiClubMembers}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId}
-import ccas.utils.{CcasLogger, OutputFile}
+import ccas.utils.{CcasLogger, OutputFile, TimeParser}
 import ccas.utils.client.ChessComClient
 import ccas.utils.errors.BadRequestException
 import ccas.utils.sql.PostgresClient
@@ -93,7 +93,7 @@ object MembershipApp extends ZIOAppDefault {
     }
 
   private def parseDateArg(string: String): IO[BadRequestException, Instant] =
-    ZIO.attempt(Instant.parse(string)).orElseFail(BadRequestException(s"Invalid date format: $string"))
+    ZIO.fromEither(TimeParser.parseInstant(string)).mapError(BadRequestException(_))
 
   private def reconcileIfStale(
     clubSlug: ClubSlug,
