@@ -10,6 +10,7 @@ import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.connectZIO
 
+@Table(PostgresDbType, SqlNameMapper.CamelToSnakeCase)
 final case class ClientStats(
   sessionId: String,
   appLabel: String,
@@ -36,12 +37,14 @@ final case class ClientStats(
   latencyMinMs: Long,
   latencyMaxMs: Long,
   latencyMeanMs: Long,
-  latencyBucket0to50: Long,
-  latencyBucket50to100: Long,
-  latencyBucket100to200: Long,
-  latencyBucket200to500: Long,
-  latencyBucket500to1000: Long,
-  latencyBucket1000plus: Long
+  latencyBucket0To50: Long,
+  latencyBucket50To100: Long,
+  latencyBucket100To200: Long,
+  latencyBucket200To500: Long,
+  latencyBucket500To1000: Long,
+  latencyBucket1000Plus: Long,
+  attemptsByTier: String,
+  errors429ByTier: String
 ) derives DbCodec
 
 object ClientStats {
@@ -50,12 +53,13 @@ object ClientStats {
     """session_id, app_label, config_id, started_at, completed_at,
        requests_per_sec, active_ms,
        requests, successes, failures, attempts,
-       errors_429, errors_403, errors_cf_403, errors_404, connection_errors,
+       errors429, errors403, errors_cf403, errors404, connection_errors,
        throttle_downs, throttled_ms, current_permits, peak_concurrent,
        gate_wait_ms, ema_delay_ms,
        latency_min_ms, latency_max_ms, latency_mean_ms,
-       latency_bucket_0_50, latency_bucket_50_100, latency_bucket_100_200,
-       latency_bucket_200_500, latency_bucket_500_1000, latency_bucket_1000_plus"""
+       latency_bucket0_to50, latency_bucket50_to100, latency_bucket100_to200,
+       latency_bucket200_to500, latency_bucket500_to1000, latency_bucket1000_plus,
+       attempts_by_tier, errors429_by_tier"""
   )
 
   def createTable: ZIO[PostgresClient, SQLException, Int] =
@@ -73,10 +77,10 @@ object ClientStats {
               successes                BIGINT NOT NULL,
               failures                 BIGINT NOT NULL,
               attempts                 BIGINT NOT NULL,
-              errors_429               BIGINT NOT NULL,
-              errors_403               BIGINT NOT NULL,
-              errors_cf_403            BIGINT NOT NULL,
-              errors_404               BIGINT NOT NULL,
+              errors429                BIGINT NOT NULL,
+              errors403                BIGINT NOT NULL,
+              errors_cf403             BIGINT NOT NULL,
+              errors404                BIGINT NOT NULL,
               connection_errors        BIGINT NOT NULL,
               throttle_downs           BIGINT NOT NULL,
               throttled_ms             BIGINT NOT NULL,
@@ -87,12 +91,14 @@ object ClientStats {
               latency_min_ms           BIGINT NOT NULL,
               latency_max_ms           BIGINT NOT NULL,
               latency_mean_ms          BIGINT NOT NULL,
-              latency_bucket_0_50      BIGINT NOT NULL,
-              latency_bucket_50_100    BIGINT NOT NULL,
-              latency_bucket_100_200   BIGINT NOT NULL,
-              latency_bucket_200_500   BIGINT NOT NULL,
-              latency_bucket_500_1000  BIGINT NOT NULL,
-              latency_bucket_1000_plus BIGINT NOT NULL,
+              latency_bucket0_to50     BIGINT NOT NULL,
+              latency_bucket50_to100   BIGINT NOT NULL,
+              latency_bucket100_to200  BIGINT NOT NULL,
+              latency_bucket200_to500  BIGINT NOT NULL,
+              latency_bucket500_to1000 BIGINT NOT NULL,
+              latency_bucket1000_plus  BIGINT NOT NULL,
+              attempts_by_tier         TEXT NOT NULL,
+              errors429_by_tier        TEXT NOT NULL,
               FOREIGN KEY (config_id) REFERENCES client_config (config_id) ON DELETE RESTRICT
             )""".update.run()
       sql"""CREATE INDEX IF NOT EXISTS idx_client_stats_session_id
@@ -107,12 +113,13 @@ object ClientStats {
               session_id, app_label, config_id, started_at, completed_at,
               requests_per_sec, active_ms,
               requests, successes, failures, attempts,
-              errors_429, errors_403, errors_cf_403, errors_404, connection_errors,
+              errors429, errors403, errors_cf403, errors404, connection_errors,
               throttle_downs, throttled_ms, current_permits, peak_concurrent,
               gate_wait_ms, ema_delay_ms,
               latency_min_ms, latency_max_ms, latency_mean_ms,
-              latency_bucket_0_50, latency_bucket_50_100, latency_bucket_100_200,
-              latency_bucket_200_500, latency_bucket_500_1000, latency_bucket_1000_plus
+              latency_bucket0_to50, latency_bucket50_to100, latency_bucket100_to200,
+              latency_bucket200_to500, latency_bucket500_to1000, latency_bucket1000_plus,
+              attempts_by_tier, errors429_by_tier
             ) VALUES (
               ${item.sessionId}, ${item.appLabel}, ${item.configId},
               ${item.startedAt}, ${item.completedAt},
@@ -122,8 +129,9 @@ object ClientStats {
               ${item.throttleDowns}, ${item.throttledMs}, ${item.currentPermits}, ${item.peakConcurrent},
               ${item.gateWaitMs}, ${item.emaDelayMs},
               ${item.latencyMinMs}, ${item.latencyMaxMs}, ${item.latencyMeanMs},
-              ${item.latencyBucket0to50}, ${item.latencyBucket50to100}, ${item.latencyBucket100to200},
-              ${item.latencyBucket200to500}, ${item.latencyBucket500to1000}, ${item.latencyBucket1000plus}
+              ${item.latencyBucket0To50}, ${item.latencyBucket50To100}, ${item.latencyBucket100To200},
+              ${item.latencyBucket200To500}, ${item.latencyBucket500To1000}, ${item.latencyBucket1000Plus},
+              ${item.attemptsByTier}, ${item.errors429ByTier}
             )""".update.run()
     }
 

@@ -148,6 +148,21 @@ object TestChessComClient extends ZIOSpecDefault {
         )
       }
     },
+    test("attempts and 429s are attributed to the tier active at the time") {
+      ZIO.scoped {
+        for {
+          (client, _, statsRef) <- makeClient(_ => ZIO.succeed(Response(status = Status.TooManyRequests)))
+          _ <- client.get[Payload](testUrl).exit
+          s <- statsRef.get
+          // permits=5 (default), single URL, 1 initial + 5 retries = 6 attempts all at tier 5
+        } yield assertTrue(
+          s.attempts == 6L,
+          s.attemptsByTier == Map(5 -> 6L),
+          s.errors429 == 6L,
+          s.errors429ByTier == Map(5 -> 6L)
+        )
+      }
+    },
     test("exhausted retries surface HttpStatusException") {
       ZIO.scoped {
         for {
@@ -563,10 +578,6 @@ object TestChessComClient extends ZIOSpecDefault {
   // ==========================================================================
 
   private def suiteStatsAccumulator = suite("StatsAccumulator")(
-    test("incError routes 429 to errors429") {
-      val s = ChessComClient.StatsAccumulator().incError(429)
-      assertTrue(s.errors429 == 1L, s.errors403 == 0L, s.errors404 == 0L)
-    },
     test("incError routes 403 to errors403 (non-CF)") {
       val s = ChessComClient.StatsAccumulator().incError(403)
       assertTrue(s.errors403 == 1L, s.errorsCf403 == 0L, s.errors429 == 0L, s.errors404 == 0L)
@@ -579,9 +590,14 @@ object TestChessComClient extends ZIOSpecDefault {
       val s = ChessComClient.StatsAccumulator().incError(404)
       assertTrue(s.errors404 == 1L, s.errors429 == 0L, s.errors403 == 0L, s.errorsCf403 == 0L)
     },
-    test("incError ignores other status codes") {
-      val s = ChessComClient.StatsAccumulator().incError(500)
-      assertTrue(s.errors429 == 0L, s.errors403 == 0L, s.errorsCf403 == 0L, s.errors404 == 0L)
+    test("incError ignores 429 and other status codes (tier-aware path enforced)") {
+      // incError must not handle 429 — production code goes through incError429AtTier.
+      val s429 = ChessComClient.StatsAccumulator().incError(429)
+      val s500 = ChessComClient.StatsAccumulator().incError(500)
+      assertTrue(
+        s429.errors429 == 0L, s429.errors429ByTier.isEmpty,
+        s500.errors429 == 0L, s500.errors403 == 0L, s500.errorsCf403 == 0L, s500.errors404 == 0L
+      )
     },
     test("recordLatency tracks min, max, and histogram buckets") {
       val s = ChessComClient.StatsAccumulator()
@@ -735,6 +751,58 @@ object TestChessComClient extends ZIOSpecDefault {
         cfg(minSampleSize = 20).isSuccess             // equal to windowSize
       )
     },
+    test("incAttemptAtTier increments both total and per-tier counters") {
+      val s = ChessComClient.StatsAccumulator()
+        .incAttemptAtTier(8)
+        .incAttemptAtTier(8)
+        .incAttemptAtTier(4)
+        .incAttemptAtTier(1)
+      assertTrue(
+        s.attempts == 4L,
+        s.attemptsByTier == Map(8 -> 2L, 4 -> 1L, 1 -> 1L)
+      )
+    },
+    test("incError429AtTier increments both errors429 and per-tier map") {
+      val s = ChessComClient.StatsAccumulator()
+        .incError429AtTier(8)
+        .incError429AtTier(8)
+        .incError429AtTier(4)
+      assertTrue(
+        s.errors429 == 3L,
+        s.errors429ByTier == Map(8 -> 2L, 4 -> 1L)
+      )
+    },
+    test("deltaFrom subtracts per-tier maps element-wise") {
+      val prev = ChessComClient.StatsAccumulator(
+        attempts = 10, attemptsByTier = Map(8 -> 5L, 4 -> 3L, 2 -> 2L),
+        errors429 = 3, errors429ByTier = Map(8 -> 2L, 4 -> 1L)
+      )
+      val current = ChessComClient.StatsAccumulator(
+        attempts = 20, attemptsByTier = Map(8 -> 10L, 4 -> 5L, 2 -> 3L, 1 -> 2L),
+        errors429 = 6, errors429ByTier = Map(8 -> 3L, 4 -> 2L, 1 -> 1L)
+      )
+      val delta = current.deltaFrom(prev)
+      assertTrue(
+        delta.attempts == 10L,
+        delta.attemptsByTier == Map(8 -> 5L, 4 -> 2L, 2 -> 1L, 1 -> 2L),
+        delta.errors429 == 3L,
+        delta.errors429ByTier == Map(8 -> 1L, 4 -> 1L, 1 -> 1L)
+      )
+    },
+    test("serializeTierMap produces sorted pipe-delimited string") {
+      assertTrue(
+        ChessComClient.StatsAccumulator.serializeTierMap(Map(8 -> 5L, 2 -> 3L, 4 -> 1L)) == "2:3|4:1|8:5",
+        ChessComClient.StatsAccumulator.serializeTierMap(Map.empty) == ""
+      )
+    },
+    test("subtractMaps drops zero-delta entries") {
+      // Tier 8 had 5 attempts in prev and 5 in curr → delta 0, should be dropped
+      assertTrue(
+        ChessComClient.StatsAccumulator.subtractMaps(
+          Map(8 -> 5L, 4 -> 3L), Map(8 -> 5L, 4 -> 1L)
+        ) == Map(4 -> 2L)
+      )
+    },
     test("resetWindowFields resets peak, min, max, and buckets") {
       val s = ChessComClient.StatsAccumulator(
         requests = 10, successes = 8, peakConcurrent = 5,
@@ -775,13 +843,23 @@ object TestChessComClient extends ZIOSpecDefault {
     test("each flush inserts a new delta row") {
       for {
         pgClient <- ZIO.service[PostgresClient]
-        statsRef <- Ref.make(ChessComClient.StatsAccumulator().copy(requests = 5, successes = 4, failures = 1, activeMs = 500))
+        statsRef <- Ref.make(
+          ChessComClient.StatsAccumulator().copy(
+            requests = 5, successes = 4, failures = 1, activeMs = 500,
+            attemptsByTier = Map(8 -> 6L, 4 -> 2L),
+            errors429ByTier = Map(8 -> 1L)
+          )
+        )
         ctx      <- makeFlushContext("test-delta", statsRef, pgClient)
         // First flush: insert config + first delta row
         _         <- ChessComClient.persistStats(ctx)
         configId1 <- ctx.configIdRef.get
         // Second flush after more requests: should insert a SECOND row
-        _         <- statsRef.update(_.copy(requests = 12, successes = 11, activeMs = 1200))
+        _         <- statsRef.update(_.copy(
+          requests = 12, successes = 11, activeMs = 1200,
+          attemptsByTier = Map(8 -> 10L, 4 -> 5L),
+          errors429ByTier = Map(8 -> 2L, 4 -> 1L)
+        ))
         _         <- ChessComClient.persistStats(ctx)
         configId2 <- ctx.configIdRef.get
         recent    <- ClientStats.selectRecent(ctx.startedAt.minusSeconds(60))
@@ -798,7 +876,12 @@ object TestChessComClient extends ZIOSpecDefault {
         rows(1).activeMs == 700L, // delta: 1200 - 500
         rows(0).sessionId == rows(1).sessionId,
         rows(0).configId == configId1.get,
-        rows(0).currentPermits == 8  // stateRef initialized at 8 in makeFlushContext
+        rows(0).currentPermits == 8,  // stateRef initialized at 8 in makeFlushContext
+        // Per-tier round-trip: window 1 carries the initial values, window 2 carries the delta
+        rows(0).attemptsByTier == "4:2|8:6",
+        rows(0).errors429ByTier == "8:1",
+        rows(1).attemptsByTier == "4:3|8:4",  // delta: 4→3 more, 8→4 more
+        rows(1).errors429ByTier == "4:1|8:1"  // delta: 4→1 new, 8→1 more
       )
     },
     test("flush resets window-level fields for next window") {

@@ -10,6 +10,7 @@ import zio.ZIO
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.connectZIO
 
+@Table(PostgresDbType, SqlNameMapper.CamelToSnakeCase)
 final case class ClientConfig(
   configId: Long,
   configHash: String,
@@ -49,7 +50,7 @@ object ClientConfig {
               retry_base_secs           INT NOT NULL,
               cf_retry_secs             INT NOT NULL,
               connection_retry_base_secs INT NOT NULL,
-              max_429_retries           INT NOT NULL,
+              max429_retries            INT NOT NULL,
               max_cf_retries            INT NOT NULL,
               max_connection_retries    INT NOT NULL,
               failure_window_size       INT NOT NULL,
@@ -70,7 +71,7 @@ object ClientConfig {
         sql"""INSERT INTO client_config (
                 config_hash, recovery_tiers, cooldown_secs, cf_cooldown_secs,
                 retry_base_secs, cf_retry_secs, connection_retry_base_secs,
-                max_429_retries, max_cf_retries, max_connection_retries,
+                max429_retries, max_cf_retries, max_connection_retries,
                 failure_window_size, failure_threshold, min_sample_size
               ) VALUES (
                 $hash, ${item.recoveryTiers}, ${item.cooldownSecs}, ${item.cfCooldownSecs},

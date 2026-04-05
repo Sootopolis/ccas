@@ -68,7 +68,8 @@ final class ChessComClient(
   }
 
   private def rawGet[T](url: URL)(using jsonDecoder: JsonDecoder[T]): Task[T] = (for {
-    _ <- statsRef.update(_.incAttempts)
+    tier <- stateRef.get.map(_.currentMax.toInt)
+    _ <- statsRef.update(_.incAttemptAtTier(tier))
     response <- batchedClient(Request(method = GET, url = url).addHeaders(headers)).tapError { e =>
       ZIO.whenDiscard(isConnectionError(e))(
         statsRef.update(_.incConnectionErrors) *> recordOutcome(false)
@@ -83,6 +84,7 @@ final class ChessComClient(
     _ <- ZIO.whenDiscard(!response.status.isSuccess) {
       val errorUpdate =
         if (cfChallenge) statsRef.update(_.incCf403)
+        else if (response.status.code == 429) statsRef.update(_.incError429AtTier(tier))
         else statsRef.update(_.incError(response.status.code))
       errorUpdate *> ZIO.fail(HttpStatusException(response.status.code, url, errorBody))
     }
@@ -400,6 +402,22 @@ object ChessComClient {
   /** Bucket count: one per boundary plus an overflow bucket for values >= the largest boundary. */
   private val LatencyBucketCount: Int = LatencyBuckets.length + 1
 
+  private[ccas] object StatsAccumulator {
+    /** Subtract one counter map from another, keyed element-wise. Entries that would become zero are dropped so the
+      * result contains only keys with non-zero delta counts. Since both maps are cumulative (monotonically growing),
+      * keys in `prev` but not in `curr` cannot occur in production.
+      */
+    def subtractMaps(curr: Map[Int, Long], prev: Map[Int, Long]): Map[Int, Long] =
+      curr.iterator
+        .map((k, v) => k -> (v - prev.getOrElse(k, 0L)))
+        .filter(_._2 != 0L)
+        .toMap
+
+    /** Serialize a tier-keyed counter map as a sorted pipe-delimited string: `"tier:count|tier:count|..."`. */
+    def serializeTierMap(m: Map[Int, Long]): String =
+      m.toVector.sortBy(_._1).map((k, v) => s"$k:$v").mkString("|")
+  }
+
   private[ccas] case class StatsAccumulator(
     requests: Long = 0,
     successes: Long = 0,
@@ -420,12 +438,13 @@ object ChessComClient {
     gateWaitMs: Long = 0,
     emaDelayMs: Long = 0,
     activeMs: Long = 0,
-    throttledMs: Long = 0
+    throttledMs: Long = 0,
+    attemptsByTier: Map[Int, Long] = Map.empty,
+    errors429ByTier: Map[Int, Long] = Map.empty
   ) {
     def incRequests: StatsAccumulator         = copy(requests = requests + 1)
     def incSuccesses: StatsAccumulator        = copy(successes = successes + 1)
     def incFailures: StatsAccumulator         = copy(failures = failures + 1)
-    def incAttempts: StatsAccumulator         = copy(attempts = attempts + 1)
     def incConnectionErrors: StatsAccumulator = copy(connectionErrors = connectionErrors + 1)
     def incThrottleDowns: StatsAccumulator    = copy(throttleDowns = throttleDowns + 1)
     def incCf403: StatsAccumulator            = copy(errorsCf403 = errorsCf403 + 1)
@@ -435,9 +454,24 @@ object ChessComClient {
     def addActiveMs(ms: Long): StatsAccumulator = copy(activeMs = activeMs + ms)
     def addThrottled(ms: Long): StatsAccumulator = copy(throttledMs = throttledMs + ms)
 
-    /** Counts non-Cloudflare error status codes. Cloudflare 403 challenges are counted separately via `incCf403`. */
+    /** Increment the attempts counter AND the per-tier attempts counter for the current permit level. */
+    def incAttemptAtTier(tier: Int): StatsAccumulator =
+      copy(
+        attempts = attempts + 1,
+        attemptsByTier = attemptsByTier.updated(tier, attemptsByTier.getOrElse(tier, 0L) + 1)
+      )
+
+    /** Record a 429 error at the given permit tier, incrementing both the total and per-tier counters. */
+    def incError429AtTier(tier: Int): StatsAccumulator =
+      copy(
+        errors429 = errors429 + 1,
+        errors429ByTier = errors429ByTier.updated(tier, errors429ByTier.getOrElse(tier, 0L) + 1)
+      )
+
+    /** Counts error status codes that aren't tracked via dedicated tier-aware methods. 429s should go through
+      * `incError429AtTier` and Cloudflare 403s through `incCf403` to keep per-tier counts consistent.
+      */
     def incError(statusCode: Int): StatsAccumulator = statusCode match {
-      case 429 => copy(errors429 = errors429 + 1)
       case 403 => copy(errors403 = errors403 + 1)
       case 404 => copy(errors404 = errors404 + 1)
       case _   => this
@@ -457,8 +491,9 @@ object ChessComClient {
       )
     }
 
-    /** Compute the delta between this snapshot and a previous one. Additive counters are subtracted; window-level fields
-      * (min, max, peak, buckets) are taken from this snapshot directly since they are reset each flush.
+    /** Compute the delta between this snapshot and a previous one. Additive counters (scalar and map-keyed) are
+      * subtracted; window-level fields (min, max, peak, latency buckets) are taken from this snapshot directly
+      * since they are reset each flush.
       */
     def deltaFrom(prev: StatsAccumulator): StatsAccumulator = StatsAccumulator(
       requests = requests - prev.requests,
@@ -480,7 +515,9 @@ object ChessComClient {
       gateWaitMs = gateWaitMs - prev.gateWaitMs,
       emaDelayMs = emaDelayMs - prev.emaDelayMs,
       activeMs = activeMs - prev.activeMs,
-      throttledMs = throttledMs - prev.throttledMs
+      throttledMs = throttledMs - prev.throttledMs,
+      attemptsByTier = StatsAccumulator.subtractMaps(attemptsByTier, prev.attemptsByTier),
+      errors429ByTier = StatsAccumulator.subtractMaps(errors429ByTier, prev.errors429ByTier)
     )
 
     /** Reset window-level fields that should not carry across flush windows. Additive counters are preserved. */
@@ -529,12 +566,14 @@ object ChessComClient {
         latencyMinMs = minDisplay,
         latencyMaxMs = latencyMaxMs,
         latencyMeanMs = meanLatency,
-        latencyBucket0to50 = latencyBuckets(0),
-        latencyBucket50to100 = latencyBuckets(1),
-        latencyBucket100to200 = latencyBuckets(2),
-        latencyBucket200to500 = latencyBuckets(3),
-        latencyBucket500to1000 = latencyBuckets(4),
-        latencyBucket1000plus = latencyBuckets(5)
+        latencyBucket0To50 = latencyBuckets(0),
+        latencyBucket50To100 = latencyBuckets(1),
+        latencyBucket100To200 = latencyBuckets(2),
+        latencyBucket200To500 = latencyBuckets(3),
+        latencyBucket500To1000 = latencyBuckets(4),
+        latencyBucket1000Plus = latencyBuckets(5),
+        attemptsByTier = StatsAccumulator.serializeTierMap(attemptsByTier),
+        errors429ByTier = StatsAccumulator.serializeTierMap(errors429ByTier)
       )
     }
 
