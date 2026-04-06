@@ -29,12 +29,15 @@ import ccas.utils.json.JsonDecodingException
   *     delay grows proportionally.
   *   - '''Failure-window throttle-down''' — maintains a rolling window of success/failure outcomes. HTTP 429 and
   *     transient connection errors count as failures; non-rate-limit responses (403 non-CF, 404, 500, etc.) count
-  *     as non-failures. Cloudflare challenge 403s bypass the window and trigger an immediate hard throttle. When
-  *     the failure rate in the window exceeds a configurable threshold, `currentMax` drops to 1 and the gate
-  *     immediately enforces it.
+  *     as non-failures. Cloudflare challenge 403s bypass the window and trigger an immediate hard throttle to 1
+  *     permit. When the failure rate in the window exceeds a configurable threshold, `currentMax` drops to the
+  *     lowest recovery tier and the gate immediately enforces it.
   *   - '''Generation-gated recovery''' — after a cooldown period, a background fiber walks `currentMax` up through the
-  *     configured `recoveryTiers` (one step per cooldown cycle), or holds if failures persist. A generation counter
-  *     ensures that only the most recent throttle-down triggers recovery, preventing stale fibers from interfering.
+  *     configured `recoveryTiers` (one step per cooldown cycle), or holds if failures persist. `coolingDown` stays
+  *     true throughout the recovery ladder to prevent `recordOutcome` from triggering additional throttle-downs
+  *     mid-recovery; it is only cleared when permits reach `maxPermits`. A generation counter ensures that only the
+  *     most recent throttle-down triggers recovery, preventing stale fibers from interfering. The response-time EMA
+  *     is reset to zero on full recovery so that stale inflated values do not gate post-recovery request pacing.
   *     Recovery fibers are scoped to the client's lifetime and interrupted when the layer is torn down.
   *   - '''Retry schedules''' — separate schedules handle HTTP 429 (exponential backoff), Cloudflare challenge 403s
   *     (fixed delay), and transient connection errors (exponential backoff); each has an independent retry-count
@@ -77,7 +80,7 @@ final class ChessComClient(
     string <- response.body.asString
     cfChallenge = isCloudflareChallenge(response, string)
     _ <-
-      if (cfChallenge) throttleDown(config.cfCooldown)
+      if (cfChallenge) throttleDown(config.cfCooldown, floor = 1)
       else recordOutcome(response.status != Status.TooManyRequests)
     errorBody = if (cfChallenge) ApiResponseBody.CfCanonicalBody else string
     _ <- ZIO.whenDiscard(!response.status.isSuccess) {
@@ -198,19 +201,20 @@ final class ChessComClient(
       (shouldThrottle, state.copy(outcomes = newOutcomes))
     }.flatMap(shouldThrottle => ZIO.whenDiscard(shouldThrottle)(throttleDown()))
 
-  /** Drop the effective concurrency limit to 1 and schedule drain-then-recover. Clears the outcome window and sets
-    * coolingDown to prevent cascading reductions. The `cooldown` parameter controls how long to wait after in-flight
-    * requests have drained before attempting recovery.
+  /** Drop the effective concurrency limit to `floor` and schedule drain-then-recover. Failure-rate throttles default
+    * to `recoveryTiers.head`; Cloudflare challenges pass `floor = 1` for a hard stop. Clears the outcome window and
+    * sets coolingDown to prevent cascading reductions. The `cooldown` parameter controls how long to wait after
+    * in-flight requests have drained before attempting recovery.
     */
-  private def throttleDown(cooldown: Duration = config.cooldown): Task[Unit] =
+  private def throttleDown(cooldown: Duration = config.cooldown, floor: Long = config.recoveryTiers.head.toLong): Task[Unit] =
     Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS).flatMap { now =>
       stateRef.modify { state =>
-        if (state.coolingDown || state.currentMax <= 1) {
+        if (state.currentMax <= floor) {
           (None, state)
         } else {
           val newGen = state.generation + 1
           val newState = state.copy(
-            currentMax = 1,
+            currentMax = floor,
             generation = newGen,
             outcomes = Vector.empty,
             coolingDown = true,
@@ -222,14 +226,16 @@ final class ChessComClient(
     }.flatMap {
       case None => ZIO.unit
       case Some((oldMax, gen)) =>
+        val permitLabel = if (floor == 1) "1 permit" else s"$floor permits"
         statsRef.update(_.incThrottleDowns) *>
-          logger.warn(s"Rate limit throttle: $oldMax \u2192 1 permit") *>
+          logger.warn(s"Rate limit throttle: $oldMax \u2192 $permitLabel") *>
           scheduleRecovery(gen, cooldown).forkDaemon
             .flatMap(f => scope.addFinalizerExit(_ => f.interrupt)).unit
     }
 
-  /** Wait for in-flight requests to drain, sleep for cooldown, then recover permits if failure rate has dropped. Clears
-    * coolingDown so further throttle-downs can occur if needed.
+  /** Wait for in-flight requests to drain, sleep for cooldown, then recover permits if failure rate has dropped. Keeps
+    * coolingDown true throughout the recovery ladder to prevent mid-recovery re-throttling; clears it only when permits
+    * reach maxPermits. Resets the response-time EMA on full recovery.
     */
   private def scheduleRecovery(generation: Long, cooldown: Duration): Task[Unit] =
     for {
@@ -239,7 +245,7 @@ final class ChessComClient(
       option <- stateRef.modify { state =>
         if (state.generation != generation) (None, state)
         else if (failureRate(state.outcomes) > config.failureThreshold) {
-          (Some((state.currentMax, state.currentMax, generation, 0L)), state.copy(coolingDown = false))
+          (Some((state.currentMax, state.currentMax, generation, 0L)), state)
         } else {
           val newMax        = config.nextTier(state.currentMax)
           val clearOutcomes = newMax == config.maxPermits
@@ -248,7 +254,7 @@ final class ChessComClient(
             else 0L
           val newState = state.copy(
             currentMax = newMax,
-            coolingDown = false,
+            coolingDown = !clearOutcomes,
             outcomes = if (clearOutcomes) Vector.empty else state.outcomes,
             throttledSince = if (clearOutcomes) None else state.throttledSince
           )
@@ -256,17 +262,18 @@ final class ChessComClient(
         }
       }
       _ <- ZIO.foreachDiscard(option) { case (oldMax, newMax, gen, throttleDuration) =>
-        ZIO.whenDiscard(throttleDuration > 0)(statsRef.update(_.addThrottled(throttleDuration))) *> {
-          if (oldMax == newMax) {
-            logger.warn(s"Rate limit still elevated, holding at $newMax permits") *> scheduleRecovery(gen, cooldown)
-          } else {
-            val msg =
-              if (newMax == config.maxPermits) "Rate limit throttle lifted"
-              else s"Rate limit easing: $oldMax \u2192 $newMax permits"
-            logger.info(msg) *>
-              ZIO.unlessDiscard(newMax == config.maxPermits)(scheduleRecovery(gen, cooldown))
+        ZIO.whenDiscard(throttleDuration > 0)(statsRef.update(_.addThrottled(throttleDuration))) *>
+          ZIO.whenDiscard(newMax == config.maxPermits)(responseTimeEma.set(0.0)) *> {
+            if (oldMax == newMax) {
+              logger.warn(s"Rate limit still elevated, holding at $newMax permit(s)") *> scheduleRecovery(gen, cooldown)
+            } else {
+              val msg =
+                if (newMax == config.maxPermits) "Rate limit throttle lifted"
+                else s"Rate limit easing: $oldMax \u2192 $newMax permits"
+              logger.info(msg) *>
+                ZIO.unlessDiscard(newMax == config.maxPermits)(scheduleRecovery(gen, cooldown))
+            }
           }
-        }
       }
     } yield ()
 
@@ -321,8 +328,9 @@ object ChessComClient {
   )
 
   /** @param recoveryTiers
-    *   Strictly-increasing permit counts (all >= 2) that define the recovery ladder. Throttle-down always drops to 1;
-    *   recovery walks up the tiers until reaching the last value, which is the maximum permit count (`maxPermits`).
+    *   Strictly-increasing permit counts (all >= 2) that define the recovery ladder. Failure-rate throttle-downs drop
+    *   to the first tier; Cloudflare throttle-downs drop to 1. Recovery walks up the tiers until reaching the last
+    *   value, which is the maximum permit count (`maxPermits`).
     * @param cooldown
     *   Time to wait after draining in-flight requests before attempting recovery from a failure-rate throttle-down.
     * @param cfCooldown

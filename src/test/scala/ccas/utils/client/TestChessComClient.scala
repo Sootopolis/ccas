@@ -36,7 +36,7 @@ object TestChessComClient extends ZIOSpecDefault {
     max429Retries: Int = 5,
     maxCfRetries: Int = 2,
     maxConnectionRetries: Int = 3
-  ): ZIO[Scope & PostgresClient, Nothing, (ChessComClient, Ref[ChessComClient.ThrottleState], Ref[ChessComClient.StatsAccumulator])] =
+  ): ZIO[Scope & PostgresClient, Nothing, (ChessComClient, Ref[ChessComClient.ThrottleState], Ref[ChessComClient.StatsAccumulator], Ref[Double])] =
     for {
       testScope     <- ZIO.service[Scope]
       pgClient      <- ZIO.service[PostgresClient]
@@ -103,7 +103,7 @@ object TestChessComClient extends ZIOSpecDefault {
         config,
         testScope
       )
-      (client, stateRef, stats)
+      (client, stateRef, stats, ema)
     }
 
   /** Dummy ChessComClient layer that returns 404 for all requests. Useful for tests that need a ChessComClient in the
@@ -123,7 +123,7 @@ object TestChessComClient extends ZIOSpecDefault {
     test("normal 200 succeeds without throttle activation") {
       ZIO.scoped {
         for {
-          (client, _, _) <- makeClient(_ => ZIO.succeed(Response.json(jsonBody)))
+          (client, _, _, _) <- makeClient(_ => ZIO.succeed(Response.json(jsonBody)))
           result      <- client.get[Payload](testUrl)
         } yield assertTrue(result.value == "ok")
       }
@@ -132,7 +132,7 @@ object TestChessComClient extends ZIOSpecDefault {
       ZIO.scoped {
         for {
           counter <- Ref.make(0)
-          (client, _, statsRef) <- makeClient { _ =>
+          (client, _, statsRef, _) <- makeClient { _ =>
             counter.getAndUpdate(_ + 1).map { n =>
               if (n == 0) { Response(status = Status.TooManyRequests) }
               else { Response.json(jsonBody) }
@@ -151,7 +151,7 @@ object TestChessComClient extends ZIOSpecDefault {
     test("attempts and 429s are attributed to the tier active at the time") {
       ZIO.scoped {
         for {
-          (client, _, statsRef) <- makeClient(_ => ZIO.succeed(Response(status = Status.TooManyRequests)))
+          (client, _, statsRef, _) <- makeClient(_ => ZIO.succeed(Response(status = Status.TooManyRequests)))
           _ <- client.get[Payload](testUrl).exit
           s <- statsRef.get
           // permits=5 (default), single URL, 1 initial + 5 retries = 6 attempts all at tier 5
@@ -166,7 +166,7 @@ object TestChessComClient extends ZIOSpecDefault {
     test("exhausted retries surface HttpStatusException") {
       ZIO.scoped {
         for {
-          (client, _, statsRef) <- makeClient(_ => ZIO.succeed(Response(status = Status.TooManyRequests)))
+          (client, _, statsRef, _) <- makeClient(_ => ZIO.succeed(Response(status = Status.TooManyRequests)))
           exit <- client.get[Payload](testUrl).exit
           s    <- statsRef.get
           // 1 request, 1 initial + 5 retries = 6 attempts, all 429
@@ -178,7 +178,7 @@ object TestChessComClient extends ZIOSpecDefault {
         for {
           counter <- Ref.make(0)
           // 1 failure out of 15 requests = 6.7% < 20% threshold
-          (client, stateRef, _) <- makeClient(
+          (client, stateRef, _, _) <- makeClient(
             handler = { _ =>
               counter.getAndUpdate(_ + 1).map { n =>
                 if (n == 5) { Response(status = Status.TooManyRequests) }
@@ -197,7 +197,7 @@ object TestChessComClient extends ZIOSpecDefault {
       ZIO.scoped {
         for {
           // All requests return 429 — coolingDown limits to one drop per cooldown cycle
-          (client, stateRef, _) <- makeClient(
+          (client, stateRef, _, _) <- makeClient(
             handler = _ => ZIO.succeed(Response(status = Status.TooManyRequests)),
             permits = 20,
             cooldown = 60.seconds,
@@ -207,15 +207,15 @@ object TestChessComClient extends ZIOSpecDefault {
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get).exit
           )
           state <- stateRef.get
-        } yield assertTrue(state.currentMax == 1L, state.coolingDown)
+        } yield assertTrue(state.currentMax == 2L, state.coolingDown)
       }
     },
     test("recovery walks configured tiers, not doubling") {
       ZIO.scoped {
         for {
           shouldFail <- Ref.make(true)
-          // Tiers [3, 5] — doubling from 1 would give 2, but tier-based gives 3
-          (client, stateRef, _) <- makeClient(
+          // Tiers [2, 3, 5] — floor is 2; doubling from 2 would give 4, but tier-based gives 3
+          (client, stateRef, _, _) <- makeClient(
             handler = { _ =>
               shouldFail.get.map { fail =>
                 if (fail) Response(status = Status.TooManyRequests)
@@ -225,9 +225,9 @@ object TestChessComClient extends ZIOSpecDefault {
             permits = 5,
             cooldown = 1.second,
             failureThreshold = 0.2,
-            recoveryTiers = Some(Vector(3, 5))
+            recoveryTiers = Some(Vector(2, 3, 5))
           )
-          // Phase 1: trigger throttle-down → currentMax = 1
+          // Phase 1: trigger throttle-down → currentMax = floor (2)
           _ <- ZIO.foreachParDiscard(1 to 5)(i =>
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get).exit
           )
@@ -241,8 +241,8 @@ object TestChessComClient extends ZIOSpecDefault {
           _              <- ZIO.sleep(1200.millis)
           afterFirstStep <- stateRef.get
         } yield assertTrue(
-          throttled.currentMax == 1L,
-          afterFirstStep.currentMax == 3L  // tier value, NOT 2 that doubling would give
+          throttled.currentMax == 2L,
+          afterFirstStep.currentMax == 3L  // tier value, NOT 4 that doubling would give
         )
       }
     },
@@ -250,7 +250,7 @@ object TestChessComClient extends ZIOSpecDefault {
       ZIO.scoped {
         for {
           shouldFail <- Ref.make(true)
-          (client, stateRef, _) <- makeClient(
+          (client, stateRef, _, _) <- makeClient(
             handler = { _ =>
               shouldFail.get.map { fail =>
                 if (fail) { Response(status = Status.TooManyRequests) }
@@ -285,7 +285,7 @@ object TestChessComClient extends ZIOSpecDefault {
       ZIO.scoped {
         for {
           counter <- Ref.make(0)
-          (client, stateRef, _) <- makeClient(
+          (client, stateRef, _, _) <- makeClient(
             handler = { _ =>
               counter.getAndUpdate(_ + 1).map { n =>
                 // Sustained failures to trigger throttle-down
@@ -309,7 +309,7 @@ object TestChessComClient extends ZIOSpecDefault {
     test("Cloudflare 403 triggers hard throttle-down") {
       ZIO.scoped {
         for {
-          (client, stateRef, _) <- makeClient(
+          (client, stateRef, _, _) <- makeClient(
             handler = _ => ZIO.succeed(Response(status = Status.Forbidden, body = Body.fromString(cfBody))),
             permits = 16,
             cooldown = 60.seconds,
@@ -326,7 +326,7 @@ object TestChessComClient extends ZIOSpecDefault {
       ZIO.scoped {
         for {
           counter <- Ref.make(0)
-          (client, _, statsRef) <- makeClient { _ =>
+          (client, _, statsRef, _) <- makeClient { _ =>
             counter.getAndUpdate(_ + 1).as(Response(status = Status.Forbidden, body = Body.fromString(cfBody)))
           }
           _     <- client.get[Payload](testUrl).exit
@@ -343,7 +343,7 @@ object TestChessComClient extends ZIOSpecDefault {
       ZIO.scoped {
         for {
           counter <- Ref.make(0)
-          (client, stateRef, statsRef) <- makeClient { _ =>
+          (client, stateRef, statsRef, _) <- makeClient { _ =>
             counter.getAndUpdate(_ + 1).as(Response(status = Status.Forbidden, body = Body.fromString("Forbidden")))
           }
           _     <- client.get[Payload](testUrl).exit
@@ -362,7 +362,7 @@ object TestChessComClient extends ZIOSpecDefault {
       ZIO.scoped {
         for {
           counter <- Ref.make(0)
-          (client, _, statsRef) <- makeClient { _ =>
+          (client, _, statsRef, _) <- makeClient { _ =>
             counter.getAndUpdate(_ + 1).flatMap { n =>
               if (n == 0) ZIO.fail(java.io.IOException("Connection reset"))
               else ZIO.succeed(Response.json(jsonBody))
@@ -382,7 +382,7 @@ object TestChessComClient extends ZIOSpecDefault {
       ZIO.scoped {
         for {
           counter <- Ref.make(0)
-          (client, _, statsRef) <- makeClient { _ =>
+          (client, _, statsRef, _) <- makeClient { _ =>
             counter.getAndUpdate(_ + 1).flatMap { n =>
               if (n == 0) ZIO.fail(PrematureChannelClosureException("Channel closed"))
               else ZIO.succeed(Response.json(jsonBody))
@@ -401,7 +401,7 @@ object TestChessComClient extends ZIOSpecDefault {
     test("sustained connection errors trigger throttle-down") {
       ZIO.scoped {
         for {
-          (client, stateRef, _) <- makeClient(
+          (client, stateRef, _, _) <- makeClient(
             handler = _ => ZIO.fail(java.io.IOException("Connection reset")),
             permits = 20,
             cooldown = 60.seconds,
@@ -411,14 +411,14 @@ object TestChessComClient extends ZIOSpecDefault {
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get).exit
           )
           state <- stateRef.get
-        } yield assertTrue(state.currentMax == 1L, state.coolingDown)
+        } yield assertTrue(state.currentMax == 2L, state.coolingDown)
       }
     },
     test("max-429-retries = 0 means no retries on 429") {
       ZIO.scoped {
         for {
           counter <- Ref.make(0)
-          (client, _, statsRef) <- makeClient(
+          (client, _, statsRef, _) <- makeClient(
             handler = _ => counter.getAndUpdate(_ + 1).as(Response(status = Status.TooManyRequests)),
             max429Retries = 0
           )
@@ -433,7 +433,7 @@ object TestChessComClient extends ZIOSpecDefault {
       ZIO.scoped {
         for {
           counter <- Ref.make(0)
-          (client, _, _) <- makeClient { _ =>
+          (client, _, _, _) <- makeClient { _ =>
             counter.getAndUpdate(_ + 1) *> ZIO.fail(RuntimeException("unexpected"))
           }
           exit  <- client.get[Payload](testUrl).exit
@@ -446,7 +446,7 @@ object TestChessComClient extends ZIOSpecDefault {
         // Create client and trigger throttle-down inside a scope, then let the scope close
         stateRef <- ZIO.scoped {
           for {
-            (client, stateRef, _) <- makeClient(
+            (client, stateRef, _, _) <- makeClient(
               handler = _ => ZIO.succeed(Response(status = Status.TooManyRequests)),
               permits = 20,
               cooldown = 50.millis,
@@ -456,13 +456,13 @@ object TestChessComClient extends ZIOSpecDefault {
               client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get).exit
             )
             state <- stateRef.get
-            _ <- ZIO.succeed(assertTrue(state.currentMax == 1L))
+            _ <- ZIO.succeed(assertTrue(state.currentMax == 2L))
           } yield stateRef // scope closes here, recovery fibers should be interrupted
         }
-        // Wait longer than the cooldown — if recovery were alive, it would double permits
+        // Wait longer than the cooldown — if recovery were alive, it would advance permits
         _ <- ZIO.sleep(300.millis)
         state <- stateRef.get
-      } yield assertTrue(state.currentMax == 1L)
+      } yield assertTrue(state.currentMax == 2L)
     },
     test("sequential ordering when throttled to 1 permit") {
       ZIO.scoped {
@@ -470,7 +470,7 @@ object TestChessComClient extends ZIOSpecDefault {
           counter <- Ref.make(0)
           order   <- Ref.make(Chunk.empty[Int])
           // currentMax = 1 enforces sequential execution via the gate
-          (client, _, _) <- makeClient(
+          (client, _, _, _) <- makeClient(
             handler = { _ =>
               for {
                 n <- counter.getAndUpdate(_ + 1)
@@ -490,7 +490,7 @@ object TestChessComClient extends ZIOSpecDefault {
         for {
           served <- Ref.make(0)
           // Slow handler: each request takes 500ms, only 1 permit so requests queue at the gate
-          (client, _, _) <- makeClient(
+          (client, _, _, _) <- makeClient(
             handler = { _ =>
               served.update(_ + 1) *> ZIO.sleep(500.millis).as(Response.json(jsonBody))
             },
@@ -508,6 +508,168 @@ object TestChessComClient extends ZIOSpecDefault {
         } yield assertTrue(count <= 3)
       }
     },
+    test("failure-rate throttle drops to recoveryTiers.head, not 1") {
+      ZIO.scoped {
+        for {
+          (client, stateRef, _, _) <- makeClient(
+            handler = _ => ZIO.succeed(Response(status = Status.TooManyRequests)),
+            permits = 8,
+            cooldown = 60.seconds,
+            failureThreshold = 0.2,
+            recoveryTiers = Some(Vector(3, 5, 8))
+          )
+          _ <- ZIO.foreachParDiscard(1 to 5)(i =>
+            client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get).exit
+          )
+          state <- stateRef.get
+        } yield assertTrue(state.currentMax == 3L, state.coolingDown)
+      }
+    },
+    test("Cloudflare throttle during recovery drops to 1") {
+      ZIO.scoped {
+        for {
+          mode <- Ref.make("429")
+          (client, stateRef, _, _) <- makeClient(
+            handler = { _ =>
+              mode.get.map {
+                case "429" => Response(status = Status.TooManyRequests)
+                case _     => Response(status = Status.Forbidden, body = Body.fromString(cfBody))
+              }
+            },
+            permits = 8,
+            cooldown = 60.seconds,
+            failureThreshold = 0.2,
+            recoveryTiers = Some(Vector(3, 5, 8))
+          )
+          // Phase 1: trigger failure-rate throttle → floor = 3
+          _ <- ZIO.foreachParDiscard(1 to 5)(i =>
+            client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get).exit
+          )
+          midState <- stateRef.get
+          gen1 = midState.generation
+          // Phase 2: CF challenge overrides the recovery
+          _ <- mode.set("cf")
+          _ <- client.get[Payload](URL.decode("http://test.example.com/api/cf").toOption.get).exit
+          state <- stateRef.get
+        } yield assertTrue(
+          midState.currentMax == 3L,
+          state.currentMax == 1L,
+          state.generation > gen1
+        )
+      }
+    },
+    test("coolingDown stays true during recovery ladder") {
+      ZIO.scoped {
+        for {
+          shouldFail <- Ref.make(true)
+          (client, stateRef, _, _) <- makeClient(
+            handler = { _ =>
+              shouldFail.get.map { fail =>
+                if (fail) Response(status = Status.TooManyRequests)
+                else Response.json(jsonBody)
+              }
+            },
+            permits = 8,
+            cooldown = 1.second,
+            failureThreshold = 0.2,
+            recoveryTiers = Some(Vector(2, 4, 8))
+          )
+          // Trigger throttle-down → floor = 2
+          _ <- ZIO.foreachParDiscard(1 to 5)(i =>
+            client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get).exit
+          )
+          // Switch to success and flush outcomes
+          _ <- shouldFail.set(false)
+          _ <- ZIO.foreachDiscard(6 to 35)(i =>
+            client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get)
+          )
+          // After one recovery step (drain + 1s cooldown): should be at tier 4, still cooling down
+          _ <- ZIO.sleep(1200.millis)
+          midState <- stateRef.get
+          // After another step: should reach maxPermits (8), coolingDown clears
+          _ <- ZIO.sleep(1200.millis)
+          finalState <- stateRef.get
+        } yield assertTrue(
+          midState.currentMax == 4L,
+          midState.coolingDown,
+          finalState.currentMax == 8L,
+          !finalState.coolingDown
+        )
+      }
+    },
+    test("EMA resets to 0 on full recovery") {
+      ZIO.scoped {
+        for {
+          shouldFail <- Ref.make(true)
+          (client, stateRef, _, emaRef) <- makeClient(
+            handler = { _ =>
+              shouldFail.get.flatMap { fail =>
+                if (fail) ZIO.succeed(Response(status = Status.TooManyRequests))
+                else ZIO.sleep(5.millis).as(Response.json(jsonBody))
+              }
+            },
+            permits = 4,
+            cooldown = 100.millis,
+            failureThreshold = 0.2,
+            recoveryTiers = Some(Vector(2, 4))
+          )
+          // Trigger throttle-down
+          _ <- ZIO.foreachParDiscard(1 to 5)(i =>
+            client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get).exit
+          )
+          // Switch to success, build up EMA
+          _ <- shouldFail.set(false)
+          _ <- ZIO.foreachDiscard(6 to 30)(i =>
+            client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get)
+          )
+          emaBefore <- emaRef.get
+          // Wait for full recovery (2 → 4 = maxPermits, one step)
+          _ <- ZIO.sleep(500.millis)
+          state    <- stateRef.get
+          emaAfter <- emaRef.get
+        } yield assertTrue(
+          emaBefore > 0.0,
+          state.currentMax == 4L,
+          emaAfter == 0.0
+        )
+      }
+    },
+    test("mid-recovery failures do not re-trigger throttle-down") {
+      ZIO.scoped {
+        for {
+          counter <- Ref.make(0)
+          (client, _, statsRef, _) <- makeClient(
+            handler = { _ =>
+              counter.getAndUpdate(_ + 1).map { n =>
+                // First batch: 429s to trigger throttle
+                if (n < 15) Response(status = Status.TooManyRequests)
+                // Mid-recovery: inject some 429s among successes
+                else if (n >= 25 && n < 28) Response(status = Status.TooManyRequests)
+                else Response.json(jsonBody)
+              }
+            },
+            permits = 8,
+            cooldown = 200.millis,
+            failureThreshold = 0.2,
+            recoveryTiers = Some(Vector(2, 4, 8))
+          )
+          // Phase 1: trigger throttle-down
+          _ <- ZIO.foreachParDiscard(1 to 5)(i =>
+            client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get).exit
+          )
+          s1 <- statsRef.get
+          // Phase 2: successes with some 429s mixed in during recovery
+          _ <- ZIO.foreachDiscard(16 to 40)(i =>
+            client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get).catchAll(_ => ZIO.unit)
+          )
+          _ <- ZIO.sleep(1.second)
+          s2 <- statsRef.get
+        } yield assertTrue(
+          s1.throttleDowns == 1L,
+          s2.throttleDowns == 1L
+        )
+      }
+    },
     suiteTimingStats,
     suiteStatsAccumulator,
     suitePersistStats
@@ -523,7 +685,7 @@ object TestChessComClient extends ZIOSpecDefault {
     test("successful requests populate gate wait, EMA delay, and latency") {
       ZIO.scoped {
         for {
-          (client, _, statsRef) <- makeClient(
+          (client, _, statsRef, _) <- makeClient(
             handler = _ => ZIO.sleep(5.millis).as(Response.json(jsonBody)),
             permits = 2
           )
@@ -543,7 +705,7 @@ object TestChessComClient extends ZIOSpecDefault {
       ZIO.scoped {
         for {
           shouldFail <- Ref.make(true)
-          (client, _, statsRef) <- makeClient(
+          (client, _, statsRef, _) <- makeClient(
             handler = { _ =>
               shouldFail.get.map { fail =>
                 if (fail) Response(status = Status.TooManyRequests)
