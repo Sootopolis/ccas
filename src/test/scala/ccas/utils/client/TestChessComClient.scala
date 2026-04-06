@@ -207,14 +207,14 @@ object TestChessComClient extends ZIOSpecDefault {
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get).exit
           )
           state <- stateRef.get
-        } yield assertTrue(state.currentMax == 2L, state.coolingDown)
+        } yield assertTrue(state.currentMax == 1L, state.coolingDown)
       }
     },
     test("recovery walks configured tiers, not doubling") {
       ZIO.scoped {
         for {
           shouldFail <- Ref.make(true)
-          // Tiers [2, 3, 5] — floor is 2; doubling from 2 would give 4, but tier-based gives 3
+          // Tiers [3, 5] — doubling from 1 would give 2, but tier-based gives 3
           (client, stateRef, _, _) <- makeClient(
             handler = { _ =>
               shouldFail.get.map { fail =>
@@ -225,9 +225,9 @@ object TestChessComClient extends ZIOSpecDefault {
             permits = 5,
             cooldown = 1.second,
             failureThreshold = 0.2,
-            recoveryTiers = Some(Vector(2, 3, 5))
+            recoveryTiers = Some(Vector(3, 5))
           )
-          // Phase 1: trigger throttle-down → currentMax = floor (2)
+          // Phase 1: trigger throttle-down → currentMax = 1
           _ <- ZIO.foreachParDiscard(1 to 5)(i =>
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get).exit
           )
@@ -241,8 +241,8 @@ object TestChessComClient extends ZIOSpecDefault {
           _              <- ZIO.sleep(1200.millis)
           afterFirstStep <- stateRef.get
         } yield assertTrue(
-          throttled.currentMax == 2L,
-          afterFirstStep.currentMax == 3L  // tier value, NOT 4 that doubling would give
+          throttled.currentMax == 1L,
+          afterFirstStep.currentMax == 3L  // tier value, NOT 2 that doubling would give
         )
       }
     },
@@ -398,7 +398,7 @@ object TestChessComClient extends ZIOSpecDefault {
         )
       }
     },
-    test("sustained connection errors trigger throttle-down") {
+    test("connection errors do not trigger throttle-down") {
       ZIO.scoped {
         for {
           (client, stateRef, _, _) <- makeClient(
@@ -411,7 +411,7 @@ object TestChessComClient extends ZIOSpecDefault {
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get).exit
           )
           state <- stateRef.get
-        } yield assertTrue(state.currentMax == 2L, state.coolingDown)
+        } yield assertTrue(state.currentMax == 20L, !state.coolingDown)
       }
     },
     test("max-429-retries = 0 means no retries on 429") {
@@ -456,13 +456,13 @@ object TestChessComClient extends ZIOSpecDefault {
               client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get).exit
             )
             state <- stateRef.get
-            _ <- ZIO.succeed(assertTrue(state.currentMax == 2L))
+            _ <- ZIO.succeed(assertTrue(state.currentMax == 1L))
           } yield stateRef // scope closes here, recovery fibers should be interrupted
         }
         // Wait longer than the cooldown — if recovery were alive, it would advance permits
         _ <- ZIO.sleep(300.millis)
         state <- stateRef.get
-      } yield assertTrue(state.currentMax == 2L)
+      } yield assertTrue(state.currentMax == 1L)
     },
     test("sequential ordering when throttled to 1 permit") {
       ZIO.scoped {
@@ -508,23 +508,6 @@ object TestChessComClient extends ZIOSpecDefault {
         } yield assertTrue(count <= 3)
       }
     },
-    test("failure-rate throttle drops to recoveryTiers.head, not 1") {
-      ZIO.scoped {
-        for {
-          (client, stateRef, _, _) <- makeClient(
-            handler = _ => ZIO.succeed(Response(status = Status.TooManyRequests)),
-            permits = 8,
-            cooldown = 60.seconds,
-            failureThreshold = 0.2,
-            recoveryTiers = Some(Vector(3, 5, 8))
-          )
-          _ <- ZIO.foreachParDiscard(1 to 5)(i =>
-            client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get).exit
-          )
-          state <- stateRef.get
-        } yield assertTrue(state.currentMax == 3L, state.coolingDown)
-      }
-    },
     test("Cloudflare throttle during recovery drops to 1") {
       ZIO.scoped {
         for {
@@ -533,26 +516,34 @@ object TestChessComClient extends ZIOSpecDefault {
             handler = { _ =>
               mode.get.map {
                 case "429" => Response(status = Status.TooManyRequests)
-                case _     => Response(status = Status.Forbidden, body = Body.fromString(cfBody))
+                case "cf"  => Response(status = Status.Forbidden, body = Body.fromString(cfBody))
+                case _     => Response.json(jsonBody)
               }
             },
             permits = 8,
-            cooldown = 60.seconds,
+            cooldown = 1.second,
             failureThreshold = 0.2,
             recoveryTiers = Some(Vector(3, 5, 8))
           )
-          // Phase 1: trigger failure-rate throttle → floor = 3
+          // Phase 1: trigger failure-rate throttle → 1
           _ <- ZIO.foreachParDiscard(1 to 5)(i =>
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get).exit
           )
+          // Phase 2: switch to success, flush window, let recovery advance to tier 3
+          _ <- mode.set("ok")
+          _ <- ZIO.foreachDiscard(6 to 35)(i =>
+            client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get)
+          )
+          _ <- ZIO.sleep(1200.millis)
           midState <- stateRef.get
           gen1 = midState.generation
-          // Phase 2: CF challenge overrides the recovery
+          // Phase 3: CF challenge overrides recovery (coolingDown is still true)
           _ <- mode.set("cf")
           _ <- client.get[Payload](URL.decode("http://test.example.com/api/cf").toOption.get).exit
           state <- stateRef.get
         } yield assertTrue(
           midState.currentMax == 3L,
+          midState.coolingDown,
           state.currentMax == 1L,
           state.generation > gen1
         )
@@ -574,7 +565,7 @@ object TestChessComClient extends ZIOSpecDefault {
             failureThreshold = 0.2,
             recoveryTiers = Some(Vector(2, 4, 8))
           )
-          // Trigger throttle-down → floor = 2
+          // Trigger throttle-down → 1
           _ <- ZIO.foreachParDiscard(1 to 5)(i =>
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get).exit
           )
@@ -583,14 +574,14 @@ object TestChessComClient extends ZIOSpecDefault {
           _ <- ZIO.foreachDiscard(6 to 35)(i =>
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get)
           )
-          // After one recovery step (drain + 1s cooldown): should be at tier 4, still cooling down
+          // After one recovery step (drain + 1s cooldown): should be at tier 2, still cooling down
           _ <- ZIO.sleep(1200.millis)
           midState <- stateRef.get
-          // After another step: should reach maxPermits (8), coolingDown clears
-          _ <- ZIO.sleep(1200.millis)
+          // After two more steps: should reach maxPermits (8), coolingDown clears
+          _ <- ZIO.sleep(2400.millis)
           finalState <- stateRef.get
         } yield assertTrue(
-          midState.currentMax == 4L,
+          midState.currentMax == 2L,
           midState.coolingDown,
           finalState.currentMax == 8L,
           !finalState.coolingDown
