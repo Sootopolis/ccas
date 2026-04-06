@@ -69,7 +69,7 @@ private[history] object HistorySeeding {
                 bar         <- CcasLogger.progressBar
                 counterRef  <- Ref.make(0)
                 resolvedRef <- Ref.make(0)
-                _ <- ZIO.foreachDiscard(grouped.toList) { case (username, entries) =>
+                _ <- ZIO.foreachParDiscard(grouped.toList) { case (username, entries) =>
                   (for {
                     apiPlayer <- client.get[ApiPlayer](ApiPlayer.getUrl(username))
                     playerId = apiPlayer.playerId
