@@ -7,6 +7,7 @@ import java.sql.SQLException
 import com.augustnagro.magnum.*
 import zio.ZIO
 
+import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.connectZIO
 
@@ -14,7 +15,7 @@ import ccas.utils.sql.PostgresClient.connectZIO
 final case class ClientConfig(
   configId: Long,
   configHash: String,
-  recoveryTiers: String,
+  recoveryTiers: List[Int],
   cooldownSecs: Int,
   cfCooldownSecs: Int,
   retryBaseSecs: Int,
@@ -30,7 +31,7 @@ final case class ClientConfig(
 
   def computeHash: String = {
     val canonical =
-      s"$recoveryTiers|$cooldownSecs|$cfCooldownSecs|$retryBaseSecs|$cfRetrySecs|$connectionRetryBaseSecs|$max429Retries|$maxCfRetries|$maxConnectionRetries|$failureWindowSize|$failureThreshold|$minSampleSize"
+      s"${recoveryTiers.mkString(",")}|$cooldownSecs|$cfCooldownSecs|$retryBaseSecs|$cfRetrySecs|$connectionRetryBaseSecs|$max429Retries|$maxCfRetries|$maxConnectionRetries|$failureWindowSize|$failureThreshold|$minSampleSize"
     val digest = MessageDigest.getInstance("SHA-256")
     val bytes  = digest.digest(canonical.getBytes(StandardCharsets.UTF_8))
     bytes.map(b => String.format("%02x", b)).mkString
@@ -44,7 +45,7 @@ object ClientConfig {
       sql"""CREATE TABLE IF NOT EXISTS client_config (
               config_id                 BIGSERIAL PRIMARY KEY,
               config_hash               TEXT NOT NULL UNIQUE,
-              recovery_tiers            TEXT NOT NULL,
+              recovery_tiers            INTEGER[] NOT NULL,
               cooldown_secs             INT NOT NULL,
               cf_cooldown_secs          INT NOT NULL,
               retry_base_secs           INT NOT NULL,

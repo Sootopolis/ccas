@@ -40,12 +40,11 @@ import ccas.utils.json.JsonDecodingException
   *     (fixed delay), and transient connection errors (exponential backoff); each has an independent retry-count
   *     budget configured via `max-429-retries`, `max-cf-retries`, and `max-connection-retries`. Non-Cloudflare 403
   *     and HTTP 404 are treated as permanent and never retried.
-  *   - '''Time-series stats flushing''' — a background daemon fiber persists delta snapshots to `client_stats` every
-  *     `stats-flush-interval-seconds`, each row representing the activity within that window (grouped by `sessionId`).
-  *     Window-level fields (latency min/max, peak concurrent, histogram buckets) are reset each flush; additive
-  *     counters are preserved and subtracted against the previous snapshot. The throttle configuration is inserted
-  *     once into `client_config` on first flush and referenced by FK. A final flush runs in the scope finalizer to
-  *     ensure stats survive non-graceful shutdowns with at most one interval's worth of data loss.
+  *   - '''Cumulative stats flushing''' — a background daemon fiber upserts a single `client_stats` row per session
+  *     every `stats-flush-interval-seconds`, overwriting the previous snapshot with cumulative totals. The throttle
+  *     configuration is inserted once into `client_config` on first flush and referenced by FK. A final flush runs
+  *     in the scope finalizer to ensure stats survive non-graceful shutdowns with at most one interval's worth of
+  *     data loss.
   *
   * Constructed via the `ChessComClient.live` ZLayer which reads configuration from `application.conf` under the
   * `chess-com-client` prefix.
@@ -403,16 +402,6 @@ object ChessComClient {
   private val LatencyBucketCount: Int = LatencyBuckets.length + 1
 
   private[ccas] object StatsAccumulator {
-    /** Subtract one counter map from another, keyed element-wise. Entries that would become zero are dropped so the
-      * result contains only keys with non-zero delta counts. Since both maps are cumulative (monotonically growing),
-      * keys in `prev` but not in `curr` cannot occur in production.
-      */
-    def subtractMaps(curr: Map[Int, Long], prev: Map[Int, Long]): Map[Int, Long] =
-      curr.iterator
-        .map((k, v) => k -> (v - prev.getOrElse(k, 0L)))
-        .filter(_._2 != 0L)
-        .toMap
-
     /** Serialize a tier-keyed counter map as a sorted pipe-delimited string: `"tier:count|tier:count|..."`. */
     def serializeTierMap(m: Map[Int, Long]): String =
       m.toVector.sortBy(_._1).map((k, v) => s"$k:$v").mkString("|")
@@ -424,7 +413,6 @@ object ChessComClient {
     failures: Long = 0,
     attempts: Long = 0,
     errors429: Long = 0,
-    errors403: Long = 0,
     errorsCf403: Long = 0,
     errors404: Long = 0,
     connectionErrors: Long = 0,
@@ -468,11 +456,10 @@ object ChessComClient {
         errors429ByTier = errors429ByTier.updated(tier, errors429ByTier.getOrElse(tier, 0L) + 1)
       )
 
-    /** Counts error status codes that aren't tracked via dedicated tier-aware methods. 429s should go through
-      * `incError429AtTier` and Cloudflare 403s through `incCf403` to keep per-tier counts consistent.
+    /** Record a non-rate-limit error by status code. Only 404s are tracked; 429s go through `incError429AtTier`,
+      * Cloudflare 403s through `incCf403`, and other codes (plain 403, 5xx) are not counted individually.
       */
     def incError(statusCode: Int): StatsAccumulator = statusCode match {
-      case 403 => copy(errors403 = errors403 + 1)
       case 404 => copy(errors404 = errors404 + 1)
       case _   => this
     }
@@ -491,50 +478,14 @@ object ChessComClient {
       )
     }
 
-    /** Compute the delta between this snapshot and a previous one. Additive counters (scalar and map-keyed) are
-      * subtracted; window-level fields (min, max, peak, latency buckets) are taken from this snapshot directly
-      * since they are reset each flush.
-      */
-    def deltaFrom(prev: StatsAccumulator): StatsAccumulator = StatsAccumulator(
-      requests = requests - prev.requests,
-      successes = successes - prev.successes,
-      failures = failures - prev.failures,
-      attempts = attempts - prev.attempts,
-      errors429 = errors429 - prev.errors429,
-      errors403 = errors403 - prev.errors403,
-      errorsCf403 = errorsCf403 - prev.errorsCf403,
-      errors404 = errors404 - prev.errors404,
-      connectionErrors = connectionErrors - prev.connectionErrors,
-      throttleDowns = throttleDowns - prev.throttleDowns,
-      peakConcurrent = peakConcurrent,
-      latencyMinMs = latencyMinMs,
-      latencyMaxMs = latencyMaxMs,
-      latencySumMs = latencySumMs - prev.latencySumMs,
-      latencyCount = latencyCount - prev.latencyCount,
-      latencyBuckets = latencyBuckets.zip(prev.latencyBuckets).map((a, b) => a - b),
-      gateWaitMs = gateWaitMs - prev.gateWaitMs,
-      emaDelayMs = emaDelayMs - prev.emaDelayMs,
-      activeMs = activeMs - prev.activeMs,
-      throttledMs = throttledMs - prev.throttledMs,
-      attemptsByTier = StatsAccumulator.subtractMaps(attemptsByTier, prev.attemptsByTier),
-      errors429ByTier = StatsAccumulator.subtractMaps(errors429ByTier, prev.errors429ByTier)
-    )
-
-    /** Reset window-level fields that should not carry across flush windows. Additive counters are preserved. */
-    def resetWindowFields: StatsAccumulator = copy(
-      peakConcurrent = 0,
-      latencyMinMs = Long.MaxValue,
-      latencyMaxMs = 0,
-      latencyBuckets = Vector.fill(LatencyBucketCount)(0L)
-    )
-
     def toClientStats(
       sessionId: String,
       appLabel: String,
       startedAt: Instant,
       completedAt: Instant,
       configId: Long,
-      currentPermits: Int
+      currentPermits: Int,
+      inProgressThrottleMs: Long
     ): ClientStats = {
       val minDisplay     = if (latencyMinMs == Long.MaxValue) 0L else latencyMinMs
       val meanLatency    = if (latencyCount > 0) latencySumMs / latencyCount else 0L
@@ -552,13 +503,14 @@ object ChessComClient {
         successes = successes,
         failures = failures,
         attempts = attempts,
+        attemptsByTier = StatsAccumulator.serializeTierMap(attemptsByTier),
         errors429 = errors429,
-        errors403 = errors403,
+        errors429ByTier = StatsAccumulator.serializeTierMap(errors429ByTier),
         errorsCf403 = errorsCf403,
         errors404 = errors404,
         connectionErrors = connectionErrors,
         throttleDowns = throttleDowns,
-        throttledMs = throttledMs,
+        throttledMs = throttledMs + inProgressThrottleMs,
         currentPermits = currentPermits,
         peakConcurrent = peakConcurrent,
         gateWaitMs = gateWaitMs,
@@ -571,9 +523,7 @@ object ChessComClient {
         latencyBucket100To200 = latencyBuckets(2),
         latencyBucket200To500 = latencyBuckets(3),
         latencyBucket500To1000 = latencyBuckets(4),
-        latencyBucket1000Plus = latencyBuckets(5),
-        attemptsByTier = StatsAccumulator.serializeTierMap(attemptsByTier),
-        errors429ByTier = StatsAccumulator.serializeTierMap(errors429ByTier)
+        latencyBucket1000Plus = latencyBuckets(5)
       )
     }
 
@@ -597,52 +547,40 @@ object ChessComClient {
   }
 
   /** Bundles the refs and config needed by periodic and final stats flushes. Created once in `live` and passed to
-    * `persistStats` / `finalFlush` so they don't each need eight parameters.
+    * `persistStats` / `finalFlush`.
     */
   private[ccas] case class FlushContext(
     sessionId: String,
     appLabel: String,
     startedAt: Instant,
     statsRef: Ref[StatsAccumulator],
-    prevSnapshot: Ref[StatsAccumulator],
-    prevFlushTime: Ref[Instant],
     configIdRef: Ref[Option[Long]],
     config: ThrottleConfig,
     stateRef: Ref[ThrottleState],
     pgClient: PostgresClient
   )
 
-  /** Persist a delta snapshot of accumulated stats to the database. Each call inserts a new row representing the window
-    * since the last flush. On first insert, also inserts the `ClientConfig` row. Atomically reads the current snapshot
-    * and resets window-level fields (latency min/max, peak, buckets) so the next window starts fresh. Silently swallows
-    * DB errors so it is safe to call from finalizers and background fibers.
+  /** Upsert the cumulative stats snapshot for this session. Each call overwrites the single row for this session,
+    * creating it on first flush. On first insert, also inserts the `ClientConfig` row. Silently swallows DB errors
+    * so it is safe to call from finalizers and background fibers.
     */
   private[ccas] def persistStats(ctx: FlushContext): UIO[Unit] =
     (for {
-      current <- ctx.statsRef.modify(s => (s, s.resetWindowFields))
-      prev    <- ctx.prevSnapshot.get
-      _ <- ZIO.whenDiscard(current.requests > prev.requests) {
+      current <- ctx.statsRef.get
+      _ <- ZIO.whenDiscard(current.requests > 0) {
         for {
-          now         <- Clock.instant
-          windowStart <- ctx.prevFlushTime.get
-          inProgress  <- inProgressThrottleMs(ctx.stateRef)
+          now            <- Clock.instant
+          inProgress     <- inProgressThrottleMs(ctx.stateRef)
           currentPermits <- ctx.stateRef.get.map(_.currentMax.toInt)
-          // Bump current's throttledMs by the in-progress throttle duration so the delta reflects ongoing
-          // throttling. Save the bumped value to prevSnapshot so the next window subtracts what we've
-          // already reported (otherwise inProgress would double-count across flushes while throttle persists).
-          bumpedCurrent = current.addThrottled(inProgress)
-          delta         = bumpedCurrent.deltaFrom(prev)
-          configId    <- ctx.configIdRef.get.flatMap {
+          configId <- ctx.configIdRef.get.flatMap {
             case Some(id) => ZIO.succeed(id)
             case None =>
               ClientConfig.ensureConfig(toClientConfig(ctx.config))
                 .provideEnvironment(ZEnvironment(ctx.pgClient))
                 .tap(id => ctx.configIdRef.set(Some(id)))
           }
-          row = delta.toClientStats(ctx.sessionId, ctx.appLabel, windowStart, now, configId, currentPermits)
-          _ <- ClientStats.insert(row).provideEnvironment(ZEnvironment(ctx.pgClient))
-          _ <- ctx.prevSnapshot.set(bumpedCurrent)
-          _ <- ctx.prevFlushTime.set(now)
+          row = current.toClientStats(ctx.sessionId, ctx.appLabel, ctx.startedAt, now, configId, currentPermits, inProgress)
+          _ <- ClientStats.upsert(row).provideEnvironment(ZEnvironment(ctx.pgClient))
         } yield ()
       }
     } yield ()).ignore
@@ -651,7 +589,7 @@ object ChessComClient {
     val cc = ClientConfig(
       configId = 0,
       configHash = "",
-      recoveryTiers = config.recoveryTiers.mkString("|"),
+      recoveryTiers = config.recoveryTiers.toList,
       cooldownSecs = config.cooldown.getSeconds.toInt,
       cfCooldownSecs = config.cfCooldown.getSeconds.toInt,
       retryBaseSecs = config.retryBase.getSeconds.toInt,
@@ -672,9 +610,7 @@ object ChessComClient {
       stateRef.get.map(_.throttledSince.fold(0L)(now - _))
     }
 
-  /** Final stats flush: captures the cumulative snapshot for the summary, persists the final delta, then logs.
-    * Called by the scope finalizer.
-    */
+  /** Final stats flush: upserts the cumulative snapshot, then logs a summary. Called by the scope finalizer. */
   private def finalFlush(ctx: FlushContext, logger: CcasLogger): UIO[Unit] =
     ctx.statsRef.get.flatMap { cumulative =>
       persistStats(ctx) *>
@@ -726,12 +662,10 @@ object ChessComClient {
         startedAt     <- Clock.instant
         sessionId      = startedAt.toString.replace(":", "").replace("-", "")
         stats         <- Ref.make(StatsAccumulator())
-        prevSnapshot  <- Ref.make(StatsAccumulator())
-        prevFlushTime <- Ref.make(startedAt)
         configIdRef   <- Ref.make(Option.empty[Long])
         bar           <- logger.progressBar
         refs = ThrottleRefs(stateRef, activeRef, rateLimitGate, lastReqRef, ema)
-        flushCtx = FlushContext(sessionId, appLabel, startedAt, stats, prevSnapshot, prevFlushTime, configIdRef, throttleConfig, stateRef, pgClient)
+        flushCtx = FlushContext(sessionId, appLabel, startedAt, stats, configIdRef, throttleConfig, stateRef, pgClient)
         flushFiber <- persistStats(flushCtx).repeat(Schedule.fixed(statsFlushInterval)).forkDaemon
         _ <- ZIO.addFinalizer(flushFiber.interrupt *> finalFlush(flushCtx, logger))
       } yield ChessComClient(

@@ -335,7 +335,7 @@ object TestChessComClient extends ZIOSpecDefault {
           // 1 initial + 2 CF retries = 3 attempts, all CF 403
         } yield assertTrue(
           count == 3, s.requests == 1L, s.attempts == 3L,
-          s.errorsCf403 == 3L, s.errors403 == 0L, s.failures == 1L
+          s.errorsCf403 == 3L, s.failures == 1L
         )
       }
     },
@@ -353,7 +353,7 @@ object TestChessComClient extends ZIOSpecDefault {
           // 1 attempt, no retries; non-CF 403 is treated like any non-rate-limit response:
           // it contributes to the outcome window as a non-failure (like 404 or 500).
         } yield assertTrue(
-          count == 1, s.requests == 1L, s.attempts == 1L, s.errors403 == 1L, s.failures == 1L,
+          count == 1, s.requests == 1L, s.attempts == 1L, s.failures == 1L,
           state.outcomes == Vector(true)
         )
       }
@@ -578,17 +578,17 @@ object TestChessComClient extends ZIOSpecDefault {
   // ==========================================================================
 
   private def suiteStatsAccumulator = suite("StatsAccumulator")(
-    test("incError routes 403 to errors403 (non-CF)") {
+    test("incError routes 403 to no-op (non-CF 403 not tracked)") {
       val s = ChessComClient.StatsAccumulator().incError(403)
-      assertTrue(s.errors403 == 1L, s.errorsCf403 == 0L, s.errors429 == 0L, s.errors404 == 0L)
+      assertTrue(s.errorsCf403 == 0L, s.errors429 == 0L, s.errors404 == 0L)
     },
     test("incCf403 routes to errorsCf403 only") {
       val s = ChessComClient.StatsAccumulator().incCf403
-      assertTrue(s.errorsCf403 == 1L, s.errors403 == 0L, s.errors429 == 0L, s.errors404 == 0L)
+      assertTrue(s.errorsCf403 == 1L, s.errors429 == 0L, s.errors404 == 0L)
     },
     test("incError routes 404 to errors404") {
       val s = ChessComClient.StatsAccumulator().incError(404)
-      assertTrue(s.errors404 == 1L, s.errors429 == 0L, s.errors403 == 0L, s.errorsCf403 == 0L)
+      assertTrue(s.errors404 == 1L, s.errors429 == 0L, s.errorsCf403 == 0L)
     },
     test("incError ignores 429 and other status codes (tier-aware path enforced)") {
       // incError must not handle 429 — production code goes through incError429AtTier.
@@ -596,7 +596,7 @@ object TestChessComClient extends ZIOSpecDefault {
       val s500 = ChessComClient.StatsAccumulator().incError(500)
       assertTrue(
         s429.errors429 == 0L, s429.errors429ByTier.isEmpty,
-        s500.errors429 == 0L, s500.errors403 == 0L, s500.errorsCf403 == 0L, s500.errors404 == 0L
+        s500.errors429 == 0L, s500.errorsCf403 == 0L, s500.errors404 == 0L
       )
     },
     test("recordLatency tracks min, max, and histogram buckets") {
@@ -648,36 +648,6 @@ object TestChessComClient extends ZIOSpecDefault {
     test("addActiveMs accumulates total") {
       val s = ChessComClient.StatsAccumulator().addActiveMs(100).addActiveMs(200)
       assertTrue(s.activeMs == 300L)
-    },
-    test("deltaFrom subtracts additive counters and preserves window fields") {
-      val prev = ChessComClient.StatsAccumulator(
-        requests = 10, successes = 8, failures = 2, attempts = 15,
-        errors429 = 3, errors403 = 1, errorsCf403 = 2, errors404 = 5, connectionErrors = 1,
-        throttleDowns = 1, gateWaitMs = 100, emaDelayMs = 50, activeMs = 500,
-        throttledMs = 200, latencySumMs = 1000, latencyCount = 10,
-        latencyBuckets = Vector(2L, 3L, 2L, 1L, 1L, 1L)
-      )
-      val current = ChessComClient.StatsAccumulator(
-        requests = 25, successes = 20, failures = 5, attempts = 35,
-        errors429 = 7, errors403 = 3, errorsCf403 = 5, errors404 = 12, connectionErrors = 3,
-        throttleDowns = 2, peakConcurrent = 6,
-        latencyMinMs = 20, latencyMaxMs = 800,
-        latencySumMs = 3000, latencyCount = 25,
-        latencyBuckets = Vector(5L, 8L, 5L, 3L, 2L, 2L),
-        gateWaitMs = 300, emaDelayMs = 120, activeMs = 1200,
-        throttledMs = 500
-      )
-      val delta = current.deltaFrom(prev)
-      assertTrue(
-        delta.requests == 15L, delta.successes == 12L, delta.failures == 3L, delta.attempts == 20L,
-        delta.errors429 == 4L, delta.errors403 == 2L, delta.errorsCf403 == 3L,
-        delta.errors404 == 7L, delta.connectionErrors == 2L,
-        delta.throttleDowns == 1L, delta.gateWaitMs == 200L, delta.emaDelayMs == 70L, delta.activeMs == 700L,
-        delta.throttledMs == 300L, delta.latencySumMs == 2000L, delta.latencyCount == 15L,
-        delta.latencyBuckets == Vector(3L, 5L, 3L, 2L, 1L, 1L),
-        // Window fields taken from current, not subtracted
-        delta.peakConcurrent == 6, delta.latencyMinMs == 20L, delta.latencyMaxMs == 800L
-      )
     },
     test("ThrottleConfig.nextTier walks up the recovery ladder") {
       val cfg = ChessComClient.ThrottleConfig(
@@ -772,51 +742,12 @@ object TestChessComClient extends ZIOSpecDefault {
         s.errors429ByTier == Map(8 -> 2L, 4 -> 1L)
       )
     },
-    test("deltaFrom subtracts per-tier maps element-wise") {
-      val prev = ChessComClient.StatsAccumulator(
-        attempts = 10, attemptsByTier = Map(8 -> 5L, 4 -> 3L, 2 -> 2L),
-        errors429 = 3, errors429ByTier = Map(8 -> 2L, 4 -> 1L)
-      )
-      val current = ChessComClient.StatsAccumulator(
-        attempts = 20, attemptsByTier = Map(8 -> 10L, 4 -> 5L, 2 -> 3L, 1 -> 2L),
-        errors429 = 6, errors429ByTier = Map(8 -> 3L, 4 -> 2L, 1 -> 1L)
-      )
-      val delta = current.deltaFrom(prev)
-      assertTrue(
-        delta.attempts == 10L,
-        delta.attemptsByTier == Map(8 -> 5L, 4 -> 2L, 2 -> 1L, 1 -> 2L),
-        delta.errors429 == 3L,
-        delta.errors429ByTier == Map(8 -> 1L, 4 -> 1L, 1 -> 1L)
-      )
-    },
     test("serializeTierMap produces sorted pipe-delimited string") {
       assertTrue(
         ChessComClient.StatsAccumulator.serializeTierMap(Map(8 -> 5L, 2 -> 3L, 4 -> 1L)) == "2:3|4:1|8:5",
         ChessComClient.StatsAccumulator.serializeTierMap(Map.empty) == ""
       )
     },
-    test("subtractMaps drops zero-delta entries") {
-      // Tier 8 had 5 attempts in prev and 5 in curr → delta 0, should be dropped
-      assertTrue(
-        ChessComClient.StatsAccumulator.subtractMaps(
-          Map(8 -> 5L, 4 -> 3L), Map(8 -> 5L, 4 -> 1L)
-        ) == Map(4 -> 2L)
-      )
-    },
-    test("resetWindowFields resets peak, min, max, and buckets") {
-      val s = ChessComClient.StatsAccumulator(
-        requests = 10, successes = 8, peakConcurrent = 5,
-        latencyMinMs = 30, latencyMaxMs = 500,
-        latencyBuckets = Vector(1L, 2L, 3L, 2L, 1L, 1L)
-      )
-      val reset = s.resetWindowFields
-      assertTrue(
-        reset.requests == 10L, reset.successes == 8L,
-        reset.peakConcurrent == 0,
-        reset.latencyMinMs == Long.MaxValue, reset.latencyMaxMs == 0L,
-        reset.latencyBuckets == Vector(0L, 0L, 0L, 0L, 0L, 0L)
-      )
-    }
   )
 
   // ==========================================================================
@@ -829,18 +760,16 @@ object TestChessComClient extends ZIOSpecDefault {
     pgClient: PostgresClient
   ): ZIO[Any, Nothing, ChessComClient.FlushContext] =
     for {
-      prevSnapshot  <- Ref.make(ChessComClient.StatsAccumulator())
-      prevFlushTime <- Ref.make(Instant.now())
-      configIdRef   <- Ref.make(Option.empty[Long])
-      stateRef      <- Ref.make(ChessComClient.ThrottleState(8, 0, Vector.empty))
-      startedAt     <- ZIO.succeed(Instant.now())
+      configIdRef <- Ref.make(Option.empty[Long])
+      stateRef    <- Ref.make(ChessComClient.ThrottleState(8, 0, Vector.empty))
+      startedAt   <- ZIO.succeed(Instant.now())
       config = ChessComClient.ThrottleConfig(Vector(2, 4, 8), 30.seconds, 5.seconds, 1.second, 10.seconds, 1.second, 5, 2, 3, 20, 0.2, 10)
     } yield ChessComClient.FlushContext(
-      s"test-$appLabel", appLabel, startedAt, statsRef, prevSnapshot, prevFlushTime, configIdRef, config, stateRef, pgClient
+      s"test-$appLabel", appLabel, startedAt, statsRef, configIdRef, config, stateRef, pgClient
     )
 
   private def suitePersistStats = suite("persistStats")(
-    test("each flush inserts a new delta row") {
+    test("repeated flushes upsert a single cumulative row") {
       for {
         pgClient <- ZIO.service[PostgresClient]
         statsRef <- Ref.make(
@@ -850,11 +779,10 @@ object TestChessComClient extends ZIOSpecDefault {
             errors429ByTier = Map(8 -> 1L)
           )
         )
-        ctx      <- makeFlushContext("test-delta", statsRef, pgClient)
-        // First flush: insert config + first delta row
+        ctx      <- makeFlushContext("test-upsert", statsRef, pgClient)
         _         <- ChessComClient.persistStats(ctx)
         configId1 <- ctx.configIdRef.get
-        // Second flush after more requests: should insert a SECOND row
+        // Second flush after more requests: should UPDATE the same row
         _         <- statsRef.update(_.copy(
           requests = 12, successes = 11, activeMs = 1200,
           attemptsByTier = Map(8 -> 10L, 4 -> 5L),
@@ -863,51 +791,42 @@ object TestChessComClient extends ZIOSpecDefault {
         _         <- ChessComClient.persistStats(ctx)
         configId2 <- ctx.configIdRef.get
         recent    <- ClientStats.selectRecent(ctx.startedAt.minusSeconds(60))
-        rows       = recent.filter(_.appLabel == "test-delta").sortBy(_.startedAt)
+        rows       = recent.filter(_.appLabel == "test-upsert")
       } yield assertTrue(
         configId1.isDefined,
         configId2 == configId1,
-        rows.size == 2,
-        rows(0).requests == 5L,
-        rows(0).successes == 4L,
-        rows(0).activeMs == 500L,
-        rows(1).requests == 7L,   // delta: 12 - 5
-        rows(1).successes == 7L,  // delta: 11 - 4
-        rows(1).activeMs == 700L, // delta: 1200 - 500
-        rows(0).sessionId == rows(1).sessionId,
+        rows.size == 1,
+        rows(0).requests == 12L,
+        rows(0).successes == 11L,
+        rows(0).activeMs == 1200L,
         rows(0).configId == configId1.get,
-        rows(0).currentPermits == 8,  // stateRef initialized at 8 in makeFlushContext
-        // Per-tier round-trip: window 1 carries the initial values, window 2 carries the delta
-        rows(0).attemptsByTier == "4:2|8:6",
-        rows(0).errors429ByTier == "8:1",
-        rows(1).attemptsByTier == "4:3|8:4",  // delta: 4→3 more, 8→4 more
-        rows(1).errors429ByTier == "4:1|8:1"  // delta: 4→1 new, 8→1 more
+        rows(0).currentPermits == 8,
+        rows(0).attemptsByTier == "4:5|8:10",
+        rows(0).errors429ByTier == "4:1|8:2"
       )
     },
-    test("flush resets window-level fields for next window") {
+    test("flush does not mutate the stats accumulator") {
       for {
         pgClient <- ZIO.service[PostgresClient]
         statsRef <- Ref.make(
           ChessComClient.StatsAccumulator().copy(requests = 3, successes = 3, activeMs = 300)
             .updatePeak(5).recordLatency(100).recordLatency(200)
         )
-        ctx <- makeFlushContext("test-reset", statsRef, pgClient)
+        ctx <- makeFlushContext("test-no-mutate", statsRef, pgClient)
         _   <- ChessComClient.persistStats(ctx)
-        // After flush, window fields should be reset
-        s <- statsRef.get
+        s   <- statsRef.get
       } yield assertTrue(
-        s.peakConcurrent == 0,
-        s.latencyMinMs == Long.MaxValue,
-        s.latencyMaxMs == 0L,
-        s.latencyBuckets == Vector(0L, 0L, 0L, 0L, 0L, 0L),
-        // Additive counters preserved
+        s.peakConcurrent == 5,
+        s.latencyMinMs == 100L,
+        s.latencyMaxMs == 200L,
+        s.latencyBuckets == Vector(0L, 0L, 1L, 1L, 0L, 0L),
         s.requests == 3L,
         s.successes == 3L
       )
     },
     test("ensureConfig deduplicates identical configs") {
       val cc = {
-        val c = ClientConfig(0L, "", "2|4|99", 88, 77, 66, 55, 44, 5, 2, 3, 33, 0.5, 22)
+        val c = ClientConfig(0L, "", List(2, 4, 99), 88, 77, 66, 55, 44, 5, 2, 3, 33, 0.5, 22)
         c.copy(configHash = c.computeHash)
       }
       for {
@@ -931,30 +850,24 @@ object TestChessComClient extends ZIOSpecDefault {
         cid2 == cid1
       )
     },
-    test("in-progress throttle does not double-count across flushes") {
+    test("in-progress throttle is included without mutating accumulator") {
       for {
         pgClient <- ZIO.service[PostgresClient]
         statsRef <- Ref.make(ChessComClient.StatsAccumulator().copy(requests = 5, successes = 5, activeMs = 500))
         ctx      <- makeFlushContext("test-ongoing-throttle", statsRef, pgClient)
-        // Manually set an ongoing throttle that started "100s ago"
         nowMs <- Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS)
         _     <- ctx.stateRef.update(_.copy(
           currentMax = 1, coolingDown = true, throttledSince = Some(nowMs - 100_000)
         ))
         _ <- ChessComClient.persistStats(ctx)
-        // More activity, throttle still ongoing (another ~50s later conceptually)
-        _ <- statsRef.update(_.copy(requests = 10, successes = 10, activeMs = 1000))
-        _ <- ctx.stateRef.update(_.copy(throttledSince = Some(nowMs - 150_000)))
-        _ <- ChessComClient.persistStats(ctx)
         recent <- ClientStats.selectRecent(ctx.startedAt.minusSeconds(60))
-        rows    = recent.filter(_.appLabel == "test-ongoing-throttle").sortBy(_.startedAt)
+        row     = recent.filter(_.appLabel == "test-ongoing-throttle").head
+        s      <- statsRef.get
       } yield assertTrue(
-        rows.size == 2,
-        // Each row's throttledMs represents only the portion attributable to that window.
-        // Row 0 covers the first ~100s of throttle, row 1 the next ~50s.
-        // Total across rows should equal the full ongoing duration (~150s), not 250s from double-counting.
-        rows(0).throttledMs >= 95_000L && rows(0).throttledMs <= 105_000L,
-        rows(1).throttledMs >= 45_000L && rows(1).throttledMs <= 55_000L
+        // Row includes ~100s of in-progress throttle
+        row.throttledMs >= 95_000L && row.throttledMs <= 105_000L,
+        // Accumulator itself is unchanged (no in-progress baked in)
+        s.throttledMs == 0L
       )
     },
     test("skips persist when no requests made") {
