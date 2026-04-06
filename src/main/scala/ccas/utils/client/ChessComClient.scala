@@ -87,7 +87,7 @@ final class ChessComClient(
       val errorUpdate =
         if (cfChallenge) statsRef.update(_.incCf403)
         else if (response.status.code == 429) statsRef.update(_.incError429AtTier(tier))
-        else statsRef.update(_.incError(response.status.code))
+        else statsRef.update(_.incErrorOther)
       errorUpdate *> ZIO.fail(HttpStatusException(response.status.code, url, errorBody))
     }
     value <- ZIO.fromEither(jsonDecoder.decodeJson(string)).mapError(JsonDecodingException(_))
@@ -422,7 +422,7 @@ object ChessComClient {
     attempts: Long = 0,
     errors429: Long = 0,
     errorsCf403: Long = 0,
-    errors404: Long = 0,
+    errorsOther: Long = 0,
     connectionErrors: Long = 0,
     throttleDowns: Long = 0,
     peakConcurrent: Int = 0,
@@ -464,13 +464,11 @@ object ChessComClient {
         errors429ByTier = errors429ByTier.updated(tier, errors429ByTier.getOrElse(tier, 0L) + 1)
       )
 
-    /** Record a non-rate-limit error by status code. Only 404s are tracked; 429s go through `incError429AtTier`,
-      * Cloudflare 403s through `incCf403`, and other codes (plain 403, 5xx) are not counted individually.
+    /** Record a non-rate-limit error. 429s go through `incError429AtTier` and Cloudflare 403s through `incCf403`;
+      * everything else (404, plain 403, 5xx, etc.) is counted here.
       */
-    def incError(statusCode: Int): StatsAccumulator = statusCode match {
-      case 404 => copy(errors404 = errors404 + 1)
-      case _   => this
-    }
+    def incErrorOther: StatsAccumulator =
+      copy(errorsOther = errorsOther + 1)
 
     def recordLatency(ms: Long): StatsAccumulator = {
       val idx = LatencyBuckets.indexWhere(ms < _) match {
@@ -515,7 +513,7 @@ object ChessComClient {
         errors429 = errors429,
         errors429ByTier = StatsAccumulator.serializeTierMap(errors429ByTier),
         errorsCf403 = errorsCf403,
-        errors404 = errors404,
+        errorsOther = errorsOther,
         connectionErrors = connectionErrors,
         throttleDowns = throttleDowns,
         throttledMs = throttledMs + inProgressThrottleMs,

@@ -740,26 +740,13 @@ object TestChessComClient extends ZIOSpecDefault {
   // ==========================================================================
 
   private def suiteStatsAccumulator = suite("StatsAccumulator")(
-    test("incError routes 403 to no-op (non-CF 403 not tracked)") {
-      val s = ChessComClient.StatsAccumulator().incError(403)
-      assertTrue(s.errorsCf403 == 0L, s.errors429 == 0L, s.errors404 == 0L)
+    test("incErrorOther increments errorsOther only") {
+      val s = ChessComClient.StatsAccumulator().incErrorOther.incErrorOther
+      assertTrue(s.errorsOther == 2L, s.errorsCf403 == 0L, s.errors429 == 0L)
     },
     test("incCf403 routes to errorsCf403 only") {
       val s = ChessComClient.StatsAccumulator().incCf403
-      assertTrue(s.errorsCf403 == 1L, s.errors429 == 0L, s.errors404 == 0L)
-    },
-    test("incError routes 404 to errors404") {
-      val s = ChessComClient.StatsAccumulator().incError(404)
-      assertTrue(s.errors404 == 1L, s.errors429 == 0L, s.errorsCf403 == 0L)
-    },
-    test("incError ignores 429 and other status codes (tier-aware path enforced)") {
-      // incError must not handle 429 — production code goes through incError429AtTier.
-      val s429 = ChessComClient.StatsAccumulator().incError(429)
-      val s500 = ChessComClient.StatsAccumulator().incError(500)
-      assertTrue(
-        s429.errors429 == 0L, s429.errors429ByTier.isEmpty,
-        s500.errors429 == 0L, s500.errorsCf403 == 0L, s500.errors404 == 0L
-      )
+      assertTrue(s.errorsCf403 == 1L, s.errors429 == 0L, s.errorsOther == 0L)
     },
     test("recordLatency tracks min, max, and histogram buckets") {
       val s = ChessComClient.StatsAccumulator()
