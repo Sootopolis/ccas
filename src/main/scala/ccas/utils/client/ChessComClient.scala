@@ -233,9 +233,11 @@ final class ChessComClient(
             .flatMap(f => scope.addFinalizerExit(_ => f.interrupt)).unit
     }
 
-  /** Wait for in-flight requests to drain, sleep for cooldown, then recover permits if failure rate has dropped. Keeps
-    * coolingDown true throughout the recovery ladder to prevent mid-recovery re-throttling; clears it only when permits
-    * reach maxPermits. Resets the response-time EMA on full recovery.
+  /** Wait for in-flight requests to drain, sleep for cooldown, then recover permits if failure rate has dropped. If the
+    * failure rate is still above threshold, drops back one tier (via `previousTier`) to find a sustainable level rather
+    * than holding at a tier that's too aggressive. Keeps coolingDown true throughout the recovery ladder to prevent
+    * mid-recovery re-throttling; clears it only when permits reach maxPermits. Resets the response-time EMA on full
+    * recovery.
     */
   private def scheduleRecovery(generation: Long, cooldown: Duration): Task[Unit] =
     for {
@@ -245,7 +247,9 @@ final class ChessComClient(
       option <- stateRef.modify { state =>
         if (state.generation != generation) (None, state)
         else if (failureRate(state.outcomes) > config.failureThreshold) {
-          (Some((state.currentMax, state.currentMax, generation, 0L)), state)
+          val dropTo = config.previousTier(state.currentMax)
+          val newState = state.copy(currentMax = dropTo, outcomes = Vector.empty)
+          (Some((state.currentMax, dropTo, generation, 0L)), newState)
         } else {
           val newMax        = config.nextTier(state.currentMax)
           val clearOutcomes = newMax == config.maxPermits
@@ -264,8 +268,9 @@ final class ChessComClient(
       _ <- ZIO.foreachDiscard(option) { case (oldMax, newMax, gen, throttleDuration) =>
         ZIO.whenDiscard(throttleDuration > 0)(statsRef.update(_.addThrottled(throttleDuration))) *>
           ZIO.whenDiscard(newMax == config.maxPermits)(responseTimeEma.set(0.0)) *> {
-            if (oldMax == newMax) {
-              scheduleRecovery(gen, cooldown)
+            if (newMax < oldMax) {
+              logger.warn(s"Rate limit dropping back: $oldMax \u2192 $newMax permit(s)") *>
+                scheduleRecovery(gen, cooldown)
             } else {
               val msg =
                 if (newMax == config.maxPermits) "Rate limit throttle lifted"
@@ -398,6 +403,10 @@ object ChessComClient {
     /** Return the next tier strictly greater than `currentMax`, or `maxPermits` if already at or above the top. */
     def nextTier(currentMax: Long): Long =
       recoveryTiers.find(_.toLong > currentMax).fold(maxPermits)(_.toLong)
+
+    /** Return the previous tier strictly less than `currentMax`, or 1 if already at or below the first tier. */
+    def previousTier(currentMax: Long): Long =
+      recoveryTiers.findLast(_.toLong < currentMax).fold(1L)(_.toLong)
   }
 
   /** Upper-exclusive boundaries for latency histogram buckets, in milliseconds. A latency < 50 lands in bucket 0, a

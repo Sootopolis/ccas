@@ -803,6 +803,19 @@ object TestChessComClient extends ZIOSpecDefault {
         cfg.nextTier(3) == 4L   // between tiers, goes to next
       )
     },
+    test("ThrottleConfig.previousTier walks down the recovery ladder") {
+      val cfg = ChessComClient.ThrottleConfig(
+        Vector(2, 4, 6, 8), 30.seconds, 5.seconds, 1.second, 10.seconds, 1.second, 5, 2, 3, 20, 0.2, 10
+      )
+      assertTrue(
+        cfg.previousTier(8) == 6L,
+        cfg.previousTier(6) == 4L,
+        cfg.previousTier(4) == 2L,
+        cfg.previousTier(2) == 1L,  // below first tier, falls to 1
+        cfg.previousTier(1) == 1L,  // already at 1, stays at 1
+        cfg.previousTier(5) == 4L   // between tiers, goes to previous
+      )
+    },
     test("ThrottleConfig rejects invalid recovery tiers") {
       val cases = List(
         Vector.empty[Int],         // empty
