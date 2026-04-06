@@ -268,7 +268,9 @@ final class ChessComClient(
       _ <- ZIO.foreachDiscard(option) { case (oldMax, newMax, gen, throttleDuration) =>
         ZIO.whenDiscard(throttleDuration > 0)(statsRef.update(_.addThrottled(throttleDuration))) *>
           ZIO.whenDiscard(newMax == config.maxPermits)(responseTimeEma.set(0.0)) *> {
-            if (newMax < oldMax) {
+            if (newMax == oldMax) {
+              scheduleRecovery(gen, cooldown)
+            } else if (newMax < oldMax) {
               logger.warn(s"Rate limit dropping back: $oldMax \u2192 $newMax permit(s)") *>
                 scheduleRecovery(gen, cooldown)
             } else {
