@@ -819,7 +819,7 @@ object TestChessComClient extends ZIOSpecDefault {
     test("ThrottleConfig rejects invalid recovery tiers") {
       val cases = List(
         Vector.empty[Int],         // empty
-        Vector(1, 2, 4),           // contains 1
+        Vector(0, 2, 4),           // contains 0
         Vector(4, 2, 8),           // not sorted
         Vector(2, 2, 4)            // duplicates
       )

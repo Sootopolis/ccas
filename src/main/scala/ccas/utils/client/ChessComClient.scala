@@ -163,7 +163,8 @@ final class ChessComClient(
       .repeat(Schedule.spaced(10.millis) && Schedule.recurWhile(!_)).unit
 
   private def emaDelay: Task[Unit] =
-    responseTimeEma.get.flatMap { ema =>
+    if (config.maxPermits <= 1) ZIO.unit
+    else responseTimeEma.get.flatMap { ema =>
       ZIO.unlessDiscard(ema <= 0) {
         stateRef.get.flatMap { state =>
           val targetDelay = (ema / state.currentMax).toLong
@@ -375,8 +376,8 @@ object ChessComClient {
     minSampleSize: Int
   ) {
     require(
-      recoveryTiers.nonEmpty && recoveryTiers.forall(_ >= 2) && recoveryTiers == recoveryTiers.sorted.distinct,
-      s"recoveryTiers must be a non-empty strictly-increasing list of integers >= 2, got: $recoveryTiers"
+      recoveryTiers.nonEmpty && recoveryTiers.forall(_ >= 1) && recoveryTiers == recoveryTiers.sorted.distinct,
+      s"recoveryTiers must be a non-empty strictly-increasing list of positive integers, got: $recoveryTiers"
     )
     require(!cooldown.isNegative, s"cooldown must be non-negative, got: $cooldown")
     require(!cfCooldown.isNegative, s"cfCooldown must be non-negative, got: $cfCooldown")
