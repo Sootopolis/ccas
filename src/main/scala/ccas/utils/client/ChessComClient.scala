@@ -644,7 +644,8 @@ object ChessComClient {
     ZLayer.scoped {
       val typesafeConfig = ConfigFactory.load().getConfig("chess-com-client")
       import scala.jdk.CollectionConverters.*
-      val tiers          = typesafeConfig.getIntList("recovery-tiers").asScala.map(_.intValue).toVector
+      val tiers = scala.util.Try(typesafeConfig.getIntList("recovery-tiers").asScala.map(_.intValue).toVector)
+        .getOrElse(typesafeConfig.getString("recovery-tiers").split("[,\\s]+").filter(_.nonEmpty).map(_.toInt).toVector)
       val cooldown       = typesafeConfig.getLong("cooldown-seconds").seconds
       val cfCooldown     = typesafeConfig.getLong("cf-cooldown-seconds").seconds
       val windowSize     = typesafeConfig.getInt("failure-window-size")
