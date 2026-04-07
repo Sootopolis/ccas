@@ -66,8 +66,7 @@ object ClientStats {
   def createTable: ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""CREATE TABLE IF NOT EXISTS client_stats (
-              id                       BIGSERIAL PRIMARY KEY,
-              session_id               TEXT NOT NULL UNIQUE,
+              session_id               TEXT PRIMARY KEY,
               app_label                TEXT NOT NULL,
               config_id                BIGINT NOT NULL,
               started_at               TIMESTAMPTZ NOT NULL,
