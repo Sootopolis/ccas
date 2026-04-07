@@ -11,7 +11,7 @@ import ccas.analysis.apps.membership.MembershipChange.*
 import ccas.analysis.apps.membership.MembershipChange.MemberChange.*
 import ccas.analysis.apps.membership.MembershipClassify.{PhaseBResult, PhaseCResult}
 import ccas.analysis.apps.recruitment.CandidateOutcome
-import ccas.analysis.tables.{Club, ClubMember, Player, PlayerSnapshot, RecruitmentCandidate, RunTrigger, Tables}
+import ccas.analysis.tables.{Club, ClubMember, MembershipRun, Player, PlayerSnapshot, RecruitmentCandidate, RunTrigger, Tables}
 import ccas.api.misc.enums.PlayerStatusCategory.{Active, Closed}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
 import ccas.utils.CcasLogger
@@ -108,6 +108,7 @@ object TestMembershipApp extends ZIOSpecDefault {
     suiteFormatReport,
     suiteLookupJoinInvitations,
     suiteBuildDbState,
+    suiteExternalMemberDetection,
     suiteClassifyApiMembers,
     suiteClassifyDisappeared
   ).provideShared(
@@ -453,7 +454,85 @@ object TestMembershipApp extends ZIOSpecDefault {
   )
 
   // ==========================================================================
-  // Suite F: classifyApiMembers (DB + fake HTTP)
+  // Suite F: external member detection (DB)
+  // ==========================================================================
+
+  private def suiteExternalMemberDetection = suite("external member detection")(
+    test("mergeResults includes external changes and memberships") {
+      val phaseB = PhaseBResult(Set(pid0), Chunk.empty, Chunk.empty, Chunk.empty, Chunk.empty, Chunk.empty, Chunk.empty)
+      val phaseC = PhaseCResult(Chunk.empty, Chunk.empty, Chunk.empty, Chunk.empty)
+      val extChange = MemberChangeSummary(pid1, Username("bob"), Chunk(JoinedClub(Times.t1)))
+      val extMember = ClubMember(clubId, pid1, Times.t1, None)
+      val result = MembershipApp.mergeResults(
+        phaseB, phaseC, 10, 8, Times.t0, Times.t1,
+        externalChanges = Chunk(extChange),
+        externalMemberships = Chunk(extMember)
+      )
+      assertTrue(
+        result.changes == Chunk(extChange),
+        result.newMemberships == Chunk(extMember),
+        result.currentMemberCount == 10,
+        result.previousMemberCount == 8
+      )
+    },
+    test("selectPlayerIdsCurrentAt returns members current at given time") {
+      val player0 = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0)
+      val player1 = Player(pid1, Times.t0, Username("bob"), Active, None, Times.t0)
+      // alice: current member since t0
+      val mem0 = ClubMember(clubId, pid0, Times.t0, None)
+      // bob: joined at t2, so not current at t1
+      val mem1 = ClubMember(clubId, pid1, Times.t2, None)
+
+      for {
+        _ <- seedDb(players = List(player0, player1), members = List(mem0, mem1))
+        atT1 <- ClubMember.selectPlayerIdsCurrentAt(clubId, Times.t1)
+        atT3 <- ClubMember.selectPlayerIdsCurrentAt(clubId, Times.t3)
+      } yield assertTrue(
+        atT1 == Set(pid0),
+        atT3 == Set(pid0, pid1)
+      )
+    },
+    test("selectPlayerIdsCurrentAt excludes members who left before the given time") {
+      val player0 = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0)
+      // alice: was member from t0 to t1
+      val mem0 = ClubMember(clubId, pid0, Times.t0, Some(Times.t1))
+
+      for {
+        _ <- seedDb(players = List(player0), members = List(mem0))
+        atT0 <- ClubMember.selectPlayerIdsCurrentAt(clubId, Times.t0)
+        atT2 <- ClubMember.selectPlayerIdsCurrentAt(clubId, Times.t2)
+      } yield assertTrue(
+        atT0 == Set(pid0),
+        atT2.isEmpty
+      )
+    },
+    test("selectLatestCompleted returns only completed runs") {
+      for {
+        _ <- seedDb()
+        // Insert a completed run
+        runId1 <- MembershipRun.insert(clubId, RunTrigger.Cli, Times.t0)
+        _      <- MembershipRun.complete(runId1, Times.t1)
+        // Insert an incomplete run (no completedAt)
+        _ <- MembershipRun.insert(clubId, RunTrigger.Cli, Times.t2)
+        result <- MembershipRun.selectLatestCompleted(clubId)
+      } yield assertTrue(
+        result.isDefined,
+        result.get.startedAt == Times.t0,
+        result.get.completedAt.contains(Times.t1)
+      )
+    },
+    test("selectLatestCompleted returns None when no completed runs exist") {
+      for {
+        _ <- seedDb()
+        _ <- connectZIO(sql"DELETE FROM membership_run WHERE club_id = $clubId".update.run())
+        _ <- MembershipRun.insert(clubId, RunTrigger.Cli, Times.t0)
+        result <- MembershipRun.selectLatestCompleted(clubId)
+      } yield assertTrue(result.isEmpty)
+    }
+  )
+
+  // ==========================================================================
+  // Suite G: classifyApiMembers (DB + fake HTTP)
   // ==========================================================================
 
   private def suiteClassifyApiMembers = suite("classifyApiMembers")(
@@ -676,7 +755,7 @@ object TestMembershipApp extends ZIOSpecDefault {
   )
 
   // ==========================================================================
-  // Suite G: classifyDisappeared (fake HTTP)
+  // Suite H: classifyDisappeared (fake HTTP)
   // ==========================================================================
 
   private def suiteClassifyDisappeared = suite("classifyDisappeared")(

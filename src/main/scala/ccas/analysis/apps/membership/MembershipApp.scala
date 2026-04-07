@@ -7,9 +7,10 @@ import zio.{Chunk, Clock, IO, NonEmptyChunk, RIO, Scope, Task, ZIO, ZIOAppArgs, 
 import zio.http.Client
 
 import ccas.analysis.apps.membership.MembershipChange.*
+import ccas.analysis.apps.membership.MembershipChange.MemberChange.JoinedClub
 import ccas.analysis.tables.*
 import ccas.api.club.{ApiClub, ApiClubMembers}
-import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId}
+import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId, PlayerId}
 import ccas.utils.{CcasLogger, OutputFile, TimeParser}
 import ccas.utils.client.ChessComClient
 import ccas.utils.errors.BadRequestException
@@ -128,8 +129,9 @@ object MembershipApp extends ZIOAppDefault {
       clubId = apiClub.clubId
       club   = Club(clubId, Instant.ofEpochSecond(apiClub.created), resolvedUrlName, apiClub.name)
       _                     <- Club.upsertResolvingSlugConflict(club, client)
-      runId                 <- ZIO.when(trackRun)(MembershipRun.insert(clubId, trigger, startedAt, jobRunId))
+      runId <- ZIO.when(trackRun)(MembershipRun.insert(clubId, trigger, startedAt, jobRunId))
       (apiMembers, dbState) <- ApiClubMembers.get(client, resolvedUrlName).zipPar(buildDbState(clubId))
+      prevMemberIds <- loadPreviousMemberIds(clubId)
       apiMap = apiMembers.toMap
       now    = Instant.now()
       phaseB <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, dbState, now, trustUsernames)
@@ -144,7 +146,22 @@ object MembershipApp extends ZIOAppDefault {
       _ <- persist(phaseB, phaseC)
       completedAt = Instant.now()
       _ <- ZIO.foreachDiscard(runId)(id => MembershipRun.complete(id, completedAt))
-    } yield mergeResults(phaseB, phaseC, apiMap.size, dbState.membersByPlayerId.size, startedAt, completedAt)
+      // Members present in the DB but absent from the previous membership run were added externally
+      // (e.g. by HistoryApp). Report them so joins aren't silently absorbed.
+      phaseBJoinIds = phaseB.newMemberships.map(_.playerId).toSet
+      externallyAdded = dbState.membersByPlayerId.keySet -- prevMemberIds -- phaseBJoinIds
+      externalChanges = Chunk.from(externallyAdded.flatMap { pid =>
+        dbState.membersByPlayerId.get(pid).map { state =>
+          MemberChangeSummary(pid, state.player.username, Chunk(JoinedClub(state.member.since)))
+        }
+      })
+      externalMemberships = Chunk.from(externallyAdded.flatMap { pid =>
+        dbState.membersByPlayerId.get(pid).map(_.member)
+      })
+    } yield mergeResults(
+      phaseB, phaseC, apiMap.size, prevMemberIds.size, startedAt, completedAt,
+      externalChanges, externalMemberships
+    )
 
   private[membership] def buildDbState(clubId: ClubId): RIO[PostgresClient, DbState] =
     for {
@@ -161,6 +178,13 @@ object MembershipApp extends ZIOAppDefault {
       )
     }
 
+  private def loadPreviousMemberIds(clubId: ClubId): RIO[PostgresClient, Set[PlayerId]] =
+    MembershipRun.selectLatestCompleted(clubId).flatMap {
+      case Some(run) if run.completedAt.isDefined =>
+        ClubMember.selectPlayerIdsCurrentAt(clubId, run.completedAt.get)
+      case _ => ZIO.succeed(Set.empty)
+    }
+
   // --- Merge & Persist ---
 
   private[membership] def mergeResults(
@@ -169,14 +193,16 @@ object MembershipApp extends ZIOAppDefault {
     currentMemberCount: Int,
     previousMemberCount: Int,
     startedAt: Instant,
-    completedAt: Instant
+    completedAt: Instant,
+    externalChanges: Chunk[MemberChangeSummary] = Chunk.empty,
+    externalMemberships: Chunk[ClubMember] = Chunk.empty
   ): ReconciliationResult =
     ReconciliationResult(
-      changes = b.changes ++ c.changes,
+      changes = b.changes ++ c.changes ++ externalChanges,
       newPlayers = b.newPlayers,
       updatedPlayers = b.updatedPlayers ++ c.updatedPlayers,
       archivedSnapshots = b.archivedSnapshots ++ c.archivedSnapshots,
-      newMemberships = b.newMemberships,
+      newMemberships = b.newMemberships ++ externalMemberships,
       closedMemberships = b.closedMemberships ++ c.closedMemberships,
       currentMemberCount = currentMemberCount,
       previousMemberCount = previousMemberCount,

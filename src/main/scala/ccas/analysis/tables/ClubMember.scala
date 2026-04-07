@@ -99,6 +99,13 @@ object ClubMember {
       }
     }
 
+  def selectPlayerIdsCurrentAt(clubId: ClubId, at: Instant): ZIO[PostgresClient, SQLException, Set[PlayerId]] =
+    connectZIO {
+      sql"""SELECT player_id FROM club_member
+            WHERE club_id = $clubId AND since <= $at AND (until IS NULL OR until > $at)"""
+        .query[PlayerId].run().toSet
+    }
+
   def exists(clubId: ClubId, playerId: PlayerId): ZIO[PostgresClient, SQLException, Boolean] =
     connectZIO {
       sql"SELECT 1 FROM club_member WHERE club_id = $clubId AND player_id = $playerId LIMIT 1"

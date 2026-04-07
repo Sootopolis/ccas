@@ -45,6 +45,14 @@ object MembershipRun {
         .query[MembershipRun].run().headOption
     }
 
+  def selectLatestCompleted(clubId: ClubId): ZIO[PostgresClient, SQLException, Option[MembershipRun]] =
+    connectZIO {
+      sql"""SELECT $selectCols FROM membership_run
+            WHERE club_id = $clubId AND completed_at IS NOT NULL
+            ORDER BY started_at DESC LIMIT 1"""
+        .query[MembershipRun].run().headOption
+    }
+
   def insert(
     clubId: ClubId,
     trigger: RunTrigger,
