@@ -12,29 +12,33 @@ import ccas.utils.sql.PostgresClient.connectZIO
 
 @Table(PostgresDbType, SqlNameMapper.CamelToSnakeCase)
 final case class ClientStats(
+  // identity
   sessionId: String,
   appLabel: String,
   configId: Long,
   startedAt: Instant,
   completedAt: Instant,
-  requestsPerSec: Double,
-  activeMs: Long,
+  // throughput
   requests: Long,
   successes: Long,
   failures: Long,
   attempts: Long,
   attemptsByTier: String,
+  // errors
   errors429: Long,
   errors429ByTier: String,
   errorsCf403: Long,
   errorsOther: Long,
   connectionErrors: Long,
+  // throttle
   throttleDowns: Long,
   throttledMs: Long,
-  currentPermits: Int,
   peakConcurrent: Int,
+  // overhead
+  activeMs: Long,
   gateWaitMs: Long,
   emaDelayMs: Long,
+  // latency
   latencyMinMs: Long,
   latencyMaxMs: Long,
   latencyMeanMs: Long,
@@ -50,11 +54,10 @@ object ClientStats {
 
   private val allCols = SqlLiteral(
     """session_id, app_label, config_id, started_at, completed_at,
-       requests_per_sec, active_ms,
        requests, successes, failures, attempts, attempts_by_tier,
        errors429, errors429_by_tier, errors_cf403, errors_other, connection_errors,
-       throttle_downs, throttled_ms, current_permits, peak_concurrent,
-       gate_wait_ms, ema_delay_ms,
+       throttle_downs, throttled_ms, peak_concurrent,
+       active_ms, gate_wait_ms, ema_delay_ms,
        latency_min_ms, latency_max_ms, latency_mean_ms,
        latency_bucket0_to50, latency_bucket50_to100, latency_bucket100_to200,
        latency_bucket200_to500, latency_bucket500_to1000, latency_bucket1000_plus"""
@@ -69,8 +72,6 @@ object ClientStats {
               config_id                BIGINT NOT NULL,
               started_at               TIMESTAMPTZ NOT NULL,
               completed_at             TIMESTAMPTZ NOT NULL,
-              requests_per_sec         DOUBLE PRECISION NOT NULL,
-              active_ms                BIGINT NOT NULL,
               requests                 BIGINT NOT NULL,
               successes                BIGINT NOT NULL,
               failures                 BIGINT NOT NULL,
@@ -83,8 +84,8 @@ object ClientStats {
               connection_errors        BIGINT NOT NULL,
               throttle_downs           BIGINT NOT NULL,
               throttled_ms             BIGINT NOT NULL,
-              current_permits          INT NOT NULL,
               peak_concurrent          INT NOT NULL,
+              active_ms                BIGINT NOT NULL,
               gate_wait_ms             BIGINT NOT NULL,
               ema_delay_ms             BIGINT NOT NULL,
               latency_min_ms           BIGINT NOT NULL,
@@ -109,20 +110,17 @@ object ClientStats {
             ) VALUES (
               ${item.sessionId}, ${item.appLabel}, ${item.configId},
               ${item.startedAt}, ${item.completedAt},
-              ${item.requestsPerSec}, ${item.activeMs},
               ${item.requests}, ${item.successes}, ${item.failures},
               ${item.attempts}, ${item.attemptsByTier},
               ${item.errors429}, ${item.errors429ByTier},
               ${item.errorsCf403}, ${item.errorsOther}, ${item.connectionErrors},
-              ${item.throttleDowns}, ${item.throttledMs}, ${item.currentPermits}, ${item.peakConcurrent},
-              ${item.gateWaitMs}, ${item.emaDelayMs},
+              ${item.throttleDowns}, ${item.throttledMs}, ${item.peakConcurrent},
+              ${item.activeMs}, ${item.gateWaitMs}, ${item.emaDelayMs},
               ${item.latencyMinMs}, ${item.latencyMaxMs}, ${item.latencyMeanMs},
               ${item.latencyBucket0To50}, ${item.latencyBucket50To100}, ${item.latencyBucket100To200},
               ${item.latencyBucket200To500}, ${item.latencyBucket500To1000}, ${item.latencyBucket1000Plus}
             ) ON CONFLICT (session_id) DO UPDATE SET
               completed_at = EXCLUDED.completed_at,
-              requests_per_sec = EXCLUDED.requests_per_sec,
-              active_ms = EXCLUDED.active_ms,
               requests = EXCLUDED.requests,
               successes = EXCLUDED.successes,
               failures = EXCLUDED.failures,
@@ -135,8 +133,8 @@ object ClientStats {
               connection_errors = EXCLUDED.connection_errors,
               throttle_downs = EXCLUDED.throttle_downs,
               throttled_ms = EXCLUDED.throttled_ms,
-              current_permits = EXCLUDED.current_permits,
               peak_concurrent = EXCLUDED.peak_concurrent,
+              active_ms = EXCLUDED.active_ms,
               gate_wait_ms = EXCLUDED.gate_wait_ms,
               ema_delay_ms = EXCLUDED.ema_delay_ms,
               latency_min_ms = EXCLUDED.latency_min_ms,

@@ -953,7 +953,6 @@ object TestChessComClient extends ZIOSpecDefault {
         rows(0).successes == 11L,
         rows(0).activeMs == 1200L,
         rows(0).configId == configId1.get,
-        rows(0).currentPermits == 8,
         rows(0).attemptsByTier == "4:5|8:10",
         rows(0).errors429ByTier == "4:1|8:2"
       )

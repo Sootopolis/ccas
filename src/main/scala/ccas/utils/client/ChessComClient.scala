@@ -501,21 +501,16 @@ object ChessComClient {
       startedAt: Instant,
       completedAt: Instant,
       configId: Long,
-      currentPermits: Int,
       inProgressThrottleMs: Long
     ): ClientStats = {
-      val minDisplay     = if (latencyMinMs == Long.MaxValue) 0L else latencyMinMs
-      val meanLatency    = if (latencyCount > 0) latencySumMs / latencyCount else 0L
-      val activeSecs     = activeMs / 1000.0
-      val requestsPerSec = if (activeSecs > 0) successes.toDouble / activeSecs else 0.0
+      val minDisplay  = if (latencyMinMs == Long.MaxValue) 0L else latencyMinMs
+      val meanLatency = if (latencyCount > 0) latencySumMs / latencyCount else 0L
       ClientStats(
         sessionId = sessionId,
         appLabel = appLabel,
         configId = configId,
         startedAt = startedAt,
         completedAt = completedAt,
-        requestsPerSec = requestsPerSec,
-        activeMs = activeMs,
         requests = requests,
         successes = successes,
         failures = failures,
@@ -528,8 +523,8 @@ object ChessComClient {
         connectionErrors = connectionErrors,
         throttleDowns = throttleDowns,
         throttledMs = throttledMs + inProgressThrottleMs,
-        currentPermits = currentPermits,
         peakConcurrent = peakConcurrent,
+        activeMs = activeMs,
         gateWaitMs = gateWaitMs,
         emaDelayMs = emaDelayMs,
         latencyMinMs = minDisplay,
@@ -587,8 +582,7 @@ object ChessComClient {
       _ <- ZIO.whenDiscard(current.requests > 0) {
         for {
           now            <- Clock.instant
-          inProgress     <- inProgressThrottleMs(ctx.stateRef)
-          currentPermits <- ctx.stateRef.get.map(_.currentMax.toInt)
+          inProgress <- inProgressThrottleMs(ctx.stateRef)
           configId <- ctx.configIdRef.get.flatMap {
             case Some(id) => ZIO.succeed(id)
             case None =>
@@ -596,7 +590,7 @@ object ChessComClient {
                 .provideEnvironment(ZEnvironment(ctx.pgClient))
                 .tap(id => ctx.configIdRef.set(Some(id)))
           }
-          row = current.toClientStats(ctx.sessionId, ctx.appLabel, ctx.startedAt, now, configId, currentPermits, inProgress)
+          row = current.toClientStats(ctx.sessionId, ctx.appLabel, ctx.startedAt, now, configId, inProgress)
           _ <- ClientStats.upsert(row).provideEnvironment(ZEnvironment(ctx.pgClient))
         } yield ()
       }
