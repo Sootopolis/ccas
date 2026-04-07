@@ -3,7 +3,7 @@ package ccas.analysis.apps.membership
 import java.time.{Duration, Instant, LocalDateTime, ZoneOffset}
 
 import com.augustnagro.magnum.sql
-import zio.{Chunk, RIO, Scope, ZIO}
+import zio.{Chunk, RIO, Scope, ZIO, ZLayer}
 import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
@@ -14,7 +14,7 @@ import ccas.analysis.apps.recruitment.CandidateOutcome
 import ccas.analysis.tables.{Club, ClubMember, MembershipRun, Player, PlayerSnapshot, RecruitmentCandidate, RunTrigger, Tables}
 import ccas.api.misc.enums.PlayerStatusCategory.{Active, Closed}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
-import ccas.utils.CcasLogger
+import ccas.utils.{CcasLogger, TestCcasLogger}
 import ccas.utils.client.{ChessComClient, TestChessComClientSupport}
 import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
 import ccas.utils.sql.DbCodecs.given
@@ -114,7 +114,7 @@ object TestMembershipApp extends ZIOSpecDefault {
   ).provideShared(
     FreshSchemaLayer("test_membership_app", onInit = Tables.ensureTables),
     Scope.default,
-    CcasLogger.live(showProgress = false)
+    ZLayer.succeed(TestCcasLogger.noop)
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock
 
   // ==========================================================================

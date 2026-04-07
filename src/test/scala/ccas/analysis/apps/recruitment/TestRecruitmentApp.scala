@@ -3,7 +3,7 @@ package ccas.analysis.apps.recruitment
 import java.time.{Duration, Instant}
 
 import com.augustnagro.magnum.sql
-import zio.{durationInt, Promise, Scope, ZIO}
+import zio.{durationInt, Promise, Scope, ZIO, ZLayer}
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.*
@@ -12,7 +12,7 @@ import ccas.api.misc.enums.PlayerStatusCategory.Active
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, Elo, PlayerId, Username}
 import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
 import ccas.utils.sql.PostgresClient.connectZIO
-import ccas.utils.CcasLogger
+import ccas.utils.{CcasLogger, TestCcasLogger}
 
 object TestRecruitmentApp extends ZIOSpecDefault {
 
@@ -30,7 +30,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
   ).provideShared(
     FreshSchemaLayer("test_recruitment_app", onInit = Tables.ensureTables),
     Scope.default,
-    CcasLogger.live(showProgress = false)
+    ZLayer.succeed(TestCcasLogger.noop)
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock
 
   // ==========================================================================

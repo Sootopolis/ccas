@@ -3,7 +3,7 @@ package ccas.server.jobs
 import com.augustnagro.magnum.sql
 
 import ccas.utils.sql.PostgresClient
-import zio.{durationInt, Scope, ZIO}
+import zio.{durationInt, Scope, ZIO, ZLayer}
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.analysis.tables.{Club, RunTrigger}
@@ -12,7 +12,7 @@ import ccas.server.ServerTables
 import ccas.utils.client.TestChessComClient
 import ccas.utils.sql.FreshSchemaLayer
 import ccas.utils.sql.PostgresClient.connectZIO
-import ccas.utils.CcasLogger
+import ccas.utils.TestCcasLogger
 
 object TestJobRunner extends ZIOSpecDefault {
 
@@ -30,7 +30,7 @@ object TestJobRunner extends ZIOSpecDefault {
     TestChessComClient.dummyLayer,
     JobRunner.live,
     Scope.default,
-    CcasLogger.live(showProgress = false)
+    ZLayer.succeed(TestCcasLogger.noop)
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock @@ TestAspect.timeout(30.seconds)
 
   private object Times {

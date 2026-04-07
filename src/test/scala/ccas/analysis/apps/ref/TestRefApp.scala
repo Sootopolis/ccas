@@ -11,7 +11,7 @@ import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 import ccas.analysis.tables.*
 import ccas.api.misc.enums.PlayerStatusCategory.Active
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, TournamentSlug, Username}
-import ccas.utils.CcasLogger
+import ccas.utils.TestCcasLogger
 import ccas.utils.client.{ChessComClient, TestChessComClientSupport}
 import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
 import ccas.utils.sql.PostgresClient.connectZIO
@@ -224,7 +224,7 @@ object TestRefApp extends ZIOSpecDefault {
     RefApp
       .populate(forceSkipped = forceSkipped, upgradeRefs = upgradeRefs)
       .unit
-      .provideSomeLayer(ZLayer.succeed(client) ++ CcasLogger.live(showProgress = false))
+      .provideSomeLayer(ZLayer.succeed(client) ++ ZLayer.succeed(TestCcasLogger.noop))
 
   // --- Spec ---
 
