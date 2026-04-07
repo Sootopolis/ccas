@@ -615,12 +615,11 @@ object TestChessComClient extends ZIOSpecDefault {
           )
           emaBefore <- emaRef.get
           // Wait for full recovery (2 → 4 = maxPermits, one step)
-          _ <- ZIO.sleep(500.millis)
-          state    <- stateRef.get
+          _ <- stateRef.get.repeatUntil(s => s.currentMax == 4L && !s.coolingDown)
+            .timeoutFail(new RuntimeException("recovery did not complete"))(5.seconds)
           emaAfter <- emaRef.get
         } yield assertTrue(
           emaBefore > 0.0,
-          state.currentMax == 4L,
           emaAfter == 0.0
         )
       }
