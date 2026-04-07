@@ -236,9 +236,9 @@ final class ChessComClient(
 
   /** Wait for in-flight requests to drain, sleep for cooldown, then recover permits if failure rate has dropped. If the
     * failure rate is still above threshold, drops back one tier (via `previousTier`) to find a sustainable level rather
-    * than holding at a tier that's too aggressive. Keeps coolingDown true throughout the recovery ladder to prevent
-    * mid-recovery re-throttling; clears it only when permits reach maxPermits. Resets the response-time EMA on full
-    * recovery.
+    * than holding at a tier that's too aggressive. Clears the outcome window on each step so every tier is evaluated on
+    * its own merits. Keeps coolingDown true throughout the recovery ladder to prevent mid-recovery re-throttling; clears
+    * it only when permits reach maxPermits. Resets the response-time EMA on full recovery.
     */
   private def scheduleRecovery(generation: Long, cooldown: Duration): Task[Unit] =
     for {
@@ -252,16 +252,16 @@ final class ChessComClient(
           val newState = state.copy(currentMax = dropTo, outcomes = Vector.empty)
           (Some((state.currentMax, dropTo, generation, 0L)), newState)
         } else {
-          val newMax        = config.nextTier(state.currentMax)
-          val clearOutcomes = newMax == config.maxPermits
+          val newMax         = config.nextTier(state.currentMax)
+          val fullyRecovered = newMax == config.maxPermits
           val throttleDuration =
-            if (clearOutcomes) state.throttledSince.fold(0L)(now - _)
+            if (fullyRecovered) state.throttledSince.fold(0L)(now - _)
             else 0L
           val newState = state.copy(
             currentMax = newMax,
-            coolingDown = !clearOutcomes,
-            outcomes = if (clearOutcomes) Vector.empty else state.outcomes,
-            throttledSince = if (clearOutcomes) None else state.throttledSince
+            coolingDown = !fullyRecovered,
+            outcomes = Vector.empty,
+            throttledSince = if (fullyRecovered) None else state.throttledSince
           )
           (Some((state.currentMax, newMax, generation, throttleDuration)), newState)
         }

@@ -625,6 +625,48 @@ object TestChessComClient extends ZIOSpecDefault {
         )
       }
     },
+    test("recovery drops back when new tier shows failures instead of advancing on stale outcomes") {
+      ZIO.scoped {
+        for {
+          phase <- Ref.make(1)
+          (client, stateRef, _, _) <- makeClient(
+            handler = { _ =>
+              phase.get.map {
+                case 1 => Response(status = Status.TooManyRequests)
+                case 2 => Response.json(jsonBody)
+                case _ => Response(status = Status.TooManyRequests)
+              }
+            },
+            permits = 8,
+            cooldown = 500.millis,
+            failureThreshold = 0.2,
+            recoveryTiers = Some(Vector(2, 4, 8))
+          )
+          // Phase 1: trigger throttle-down
+          _ <- ZIO.foreachParDiscard(1 to 5)(i =>
+            client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get).exit
+          )
+          s1 <- stateRef.get
+          // Phase 2: successes at tier 1
+          _ <- phase.set(2)
+          _ <- ZIO.foreachDiscard(6 to 25)(i =>
+            client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get)
+          )
+          // Wait for step-up to tier 2
+          _ <- stateRef.get.repeatUntil(_.currentMax >= 2L)
+          // Phase 3: 429s at tier 2 — since outcomes are cleared on step-up, only tier-2
+          // failures are visible to the recovery check, causing a drop-back to 1
+          _ <- phase.set(3)
+          fiber <- ZIO.foreachParDiscard(26 to 45)(i =>
+            client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get).exit
+          ).fork
+          _ <- stateRef.get.repeatUntil(_.currentMax <= 1L)
+          _ <- fiber.interrupt
+        } yield assertTrue(
+          s1.currentMax == 1L
+        )
+      }
+    },
     test("mid-recovery failures do not re-trigger throttle-down") {
       ZIO.scoped {
         for {
