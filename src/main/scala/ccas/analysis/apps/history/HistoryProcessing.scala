@@ -2,7 +2,7 @@ package ccas.analysis.apps.history
 
 import java.time.Instant
 
-import zio.{Promise, RIO, Ref, Task, UIO, ZIO}
+import zio.{Duration, Promise, RIO, Ref, Task, UIO, ZIO}
 import zio.http.URL
 import HistoryUtils.*
 
@@ -21,7 +21,8 @@ import ccas.utils.sql.PostgresClient.withTransaction
 
 private[history] object HistoryProcessing {
 
-  private val BatchSize = 500
+  private val BatchSize          = 500
+  private val SlowMatchThreshold = Duration.fromSeconds(30)
 
   // === BFS Wave Processing ===
 
@@ -112,7 +113,14 @@ private[history] object HistoryProcessing {
     shared: Option[SharedContext]
   ): RIO[CcasLogger & PostgresClient, Unit] =
     ZIO.foreachParDiscard(pending) { pm =>
-      processMatch(ctx, pm.matchId, pm.isLive, shared)
+      processMatch(ctx, pm.matchId, pm.isLive, shared).timed
+        .tap { (elapsed, _) =>
+          ZIO.whenDiscard(elapsed.compareTo(SlowMatchThreshold) > 0) {
+            val url = if (pm.isLive) ApiLiveMatch.getUrl(pm.matchId) else ApiDailyMatch.getUrl(pm.matchId)
+            CcasLogger.warn(s"    Match ${pm.matchId} took ${elapsed.toSeconds}s — $url")
+          }
+        }
+        .map(_._2)
         .catchAll { error =>
           ctx.matchesFailed.update(_ + 1) *>
             ctx.failedMatches.update(_ :+ (MatchKey(pm.matchId, pm.isLive), error.getMessage)) *>
