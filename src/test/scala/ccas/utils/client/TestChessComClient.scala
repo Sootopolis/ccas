@@ -35,7 +35,9 @@ object TestChessComClient extends ZIOSpecDefault {
     recoveryTiers: Option[Vector[Int]] = None,
     max429Retries: Int = 5,
     maxCfRetries: Int = 2,
-    maxConnectionRetries: Int = 3
+    maxConnectionRetries: Int = 3,
+    minRequestDelayMs: Long = 0,
+    minTierObservation: Duration = Duration.Zero
   ): ZIO[Scope & PostgresClient, Nothing, (ChessComClient, Ref[ChessComClient.ThrottleState], Ref[ChessComClient.StatsAccumulator], Ref[Double])] =
     for {
       testScope     <- ZIO.service[Scope]
@@ -59,7 +61,9 @@ object TestChessComClient extends ZIOSpecDefault {
         maxConnectionRetries,
         failureWindowSize,
         failureThreshold,
-        10
+        10,
+        minRequestDelayMs,
+        minTierObservation
       )
       refs = ChessComClient.ThrottleRefs(
         stateRef,
@@ -237,12 +241,11 @@ object TestChessComClient extends ZIOSpecDefault {
           _ <- ZIO.foreachDiscard(6 to 35)(i =>
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get)
           )
-          // Wait 1 cooldown + buffer: exactly one recovery step fires
-          _              <- ZIO.sleep(1200.millis)
-          afterFirstStep <- stateRef.get
+          // Poll until first recovery step fires
+          _ <- stateRef.get.repeatUntil(_.currentMax == 3L)
+            .timeoutFail(new RuntimeException("recovery did not reach tier 3"))(5.seconds)
         } yield assertTrue(
-          throttled.currentMax == 1L,
-          afterFirstStep.currentMax == 3L  // tier value, NOT 2 that doubling would give
+          throttled.currentMax == 1L
         )
       }
     },
@@ -272,12 +275,11 @@ object TestChessComClient extends ZIOSpecDefault {
           _ <- ZIO.foreachDiscard(6 to 30)(i =>
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get)
           )
-          // Phase 3: Wait for recovery fibers to fire
-          _              <- ZIO.sleep(1.second)
-          recoveredState <- stateRef.get
+          // Phase 3: Poll until recovery advances past the throttled level
+          _ <- stateRef.get.repeatUntil(_.currentMax > throttledMax)
+            .timeoutFail(new RuntimeException("recovery did not advance"))(5.seconds)
         } yield assertTrue(
-          throttledMax < 20L,
-          recoveredState.currentMax > throttledMax
+          throttledMax < 20L
         )
       }
     },
@@ -574,17 +576,15 @@ object TestChessComClient extends ZIOSpecDefault {
           _ <- ZIO.foreachDiscard(6 to 35)(i =>
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get)
           )
-          // After one recovery step (drain + 1s cooldown): should be at tier 2, still cooling down
-          _ <- ZIO.sleep(1200.millis)
-          midState <- stateRef.get
-          // After two more steps: should reach maxPermits (8), coolingDown clears
-          _ <- ZIO.sleep(2400.millis)
-          finalState <- stateRef.get
+          // Poll until first recovery step: tier 2, still cooling down
+          midState <- stateRef.get.repeatUntil(_.currentMax >= 2L)
+            .timeoutFail(new RuntimeException("recovery did not reach tier 2"))(5.seconds)
+          // Poll until full recovery: tier 8, coolingDown clears
+          _ <- stateRef.get.repeatUntil(s => s.currentMax == 8L && !s.coolingDown)
+            .timeoutFail(new RuntimeException("recovery did not complete"))(10.seconds)
         } yield assertTrue(
           midState.currentMax == 2L,
-          midState.coolingDown,
-          finalState.currentMax == 8L,
-          !finalState.coolingDown
+          midState.coolingDown
         )
       }
     },
@@ -614,13 +614,13 @@ object TestChessComClient extends ZIOSpecDefault {
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get)
           )
           emaBefore <- emaRef.get
-          // Wait for full recovery (2 → 4 = maxPermits, one step)
-          _ <- stateRef.get.repeatUntil(s => s.currentMax == 4L && !s.coolingDown)
-            .timeoutFail(new RuntimeException("recovery did not complete"))(5.seconds)
-          emaAfter <- emaRef.get
+          // Wait for full recovery and EMA reset together — polling both refs avoids the
+          // race between stateRef clearing coolingDown and responseTimeEma being zeroed.
+          _ <- (stateRef.get zip emaRef.get).repeatUntil { case (s, ema) =>
+            s.currentMax == 4L && !s.coolingDown && ema == 0.0
+          }.timeoutFail(new RuntimeException("recovery did not complete with EMA reset"))(5.seconds)
         } yield assertTrue(
-          emaBefore > 0.0,
-          emaAfter == 0.0
+          emaBefore > 0.0
         )
       }
     },
@@ -670,7 +670,7 @@ object TestChessComClient extends ZIOSpecDefault {
       ZIO.scoped {
         for {
           counter <- Ref.make(0)
-          (client, _, statsRef, _) <- makeClient(
+          (client, stateRef, statsRef, _) <- makeClient(
             handler = { _ =>
               counter.getAndUpdate(_ + 1).map { n =>
                 // First batch: 429s to trigger throttle
@@ -694,11 +694,125 @@ object TestChessComClient extends ZIOSpecDefault {
           _ <- ZIO.foreachDiscard(16 to 40)(i =>
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get).catchAll(_ => ZIO.unit)
           )
-          _ <- ZIO.sleep(1.second)
+          // Poll until recovery completes, then check no additional throttle-downs
+          _ <- stateRef.get.repeatUntil(s => !s.coolingDown)
+            .timeoutFail(new RuntimeException("recovery did not complete"))(5.seconds)
           s2 <- statsRef.get
         } yield assertTrue(
           s1.throttleDowns == 1L,
           s2.throttleDowns == 1L
+        )
+      }
+    },
+    test("min delay floor enforces minimum inter-request spacing") {
+      ZIO.scoped {
+        for {
+          (client, _, statsRef, _) <- makeClient(
+            handler = _ => ZIO.sleep(2.millis).as(Response.json(jsonBody)),
+            permits = 2,
+            minRequestDelayMs = 50
+          )
+          // Send requests sequentially so every request after the first hits the EMA floor
+          _ <- ZIO.foreachDiscard(1 to 10)(i =>
+            client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get)
+          )
+          s <- statsRef.get
+        } yield assertTrue(
+          s.successes == 10L,
+          s.emaDelayMs >= 200L // ~9 gaps at 50ms floor, conservatively at least 200ms total
+        )
+      }
+    },
+    test("min delay floor is inactive when maxPermits is 1") {
+      ZIO.scoped {
+        for {
+          (client, _, _, _) <- makeClient(
+            handler = _ => ZIO.succeed(Response.json(jsonBody)),
+            permits = 1,
+            minRequestDelayMs = 500
+          )
+          urls = (1 to 3).map(i => URL.decode(s"http://test.example.com/api/$i").toOption.get)
+          (duration, _) <- client.getAll[Payload](urls).timed
+        } yield assertTrue(
+          duration.toMillis < 1000 // floor not applied since maxPermits=1
+        )
+      }
+    },
+    test("min tier observation prevents premature recovery step-up") {
+      ZIO.scoped {
+        for {
+          shouldFail <- Ref.make(true)
+          (client, stateRef, _, _) <- makeClient(
+            handler = { _ =>
+              shouldFail.get.map { fail =>
+                if (fail) Response(status = Status.TooManyRequests)
+                else Response.json(jsonBody)
+              }
+            },
+            permits = 8,
+            cooldown = 50.millis,
+            failureThreshold = 0.2,
+            recoveryTiers = Some(Vector(2, 4, 8)),
+            minTierObservation = 2.seconds
+          )
+          // Phase 1: trigger throttle-down
+          _ <- ZIO.foreachParDiscard(1 to 5)(i =>
+            client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get).exit
+          )
+          // Phase 2: switch to success, fill outcome window so recovery has enough data
+          _ <- shouldFail.set(false)
+          _ <- ZIO.foreachDiscard(6 to 30)(i =>
+            client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get)
+          )
+          // Cooldown is 50ms but observation is 2s — well before observation expires, should still be at tier 1
+          _ <- ZIO.sleep(500.millis)
+          earlyState <- stateRef.get
+          // After observation period: should have stepped up
+          _ <- ZIO.sleep(2.seconds)
+          lateState <- stateRef.get
+        } yield assertTrue(
+          earlyState.currentMax == 1L,
+          lateState.currentMax >= 2L
+        )
+      }
+    },
+    test("tier observation resets on each recovery step") {
+      ZIO.scoped {
+        for {
+          shouldFail <- Ref.make(true)
+          (client, stateRef, _, _) <- makeClient(
+            handler = { _ =>
+              shouldFail.get.map { fail =>
+                if (fail) Response(status = Status.TooManyRequests)
+                else Response.json(jsonBody)
+              }
+            },
+            permits = 4,
+            cooldown = 50.millis,
+            failureThreshold = 0.2,
+            recoveryTiers = Some(Vector(2, 4)),
+            minTierObservation = 300.millis
+          )
+          // Trigger throttle-down
+          _ <- ZIO.foreachParDiscard(1 to 5)(i =>
+            client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get).exit
+          )
+          _ <- shouldFail.set(false)
+          _ <- ZIO.foreachDiscard(6 to 30)(i =>
+            client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get)
+          )
+          // Wait for first step-up to tier 2 (cooldown 50ms + observation 300ms)
+          _ <- stateRef.get.repeatUntil(_.currentMax >= 2L)
+            .timeoutFail(new RuntimeException("did not reach tier 2"))(2.seconds)
+          // Record time at tier 2
+          atTier2 <- Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS)
+          // Wait for step-up to tier 4 (another observation period required)
+          _ <- stateRef.get.repeatUntil(s => s.currentMax >= 4L && !s.coolingDown)
+            .timeoutFail(new RuntimeException("did not reach tier 4"))(2.seconds)
+          atTier4 <- Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS)
+          // The gap between reaching tier 2 and tier 4 must be at least minTierObservation
+        } yield assertTrue(
+          (atTier4 - atTier2) >= 250L // 300ms observation minus scheduling tolerance
         )
       }
     },
@@ -737,7 +851,7 @@ object TestChessComClient extends ZIOSpecDefault {
       ZIO.scoped {
         for {
           shouldFail <- Ref.make(true)
-          (client, _, statsRef, _) <- makeClient(
+          (client, stateRef, statsRef, _) <- makeClient(
             handler = { _ =>
               shouldFail.get.map { fail =>
                 if (fail) Response(status = Status.TooManyRequests)
@@ -757,7 +871,9 @@ object TestChessComClient extends ZIOSpecDefault {
           _ <- ZIO.foreachDiscard(6 to 30)(i =>
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get)
           )
-          _ <- ZIO.sleep(1.second)
+          // Poll until full recovery, which flushes throttledMs
+          _ <- stateRef.get.repeatUntil(s => !s.coolingDown)
+            .timeoutFail(new RuntimeException("recovery did not complete"))(5.seconds)
           s <- statsRef.get
         } yield assertTrue(
           s.throttleDowns >= 1L,
@@ -776,9 +892,17 @@ object TestChessComClient extends ZIOSpecDefault {
       val s = ChessComClient.StatsAccumulator().incErrorOther.incErrorOther
       assertTrue(s.errorsOther == 2L, s.errorsCf403 == 0L, s.errors429 == 0L)
     },
-    test("incCf403 routes to errorsCf403 only") {
-      val s = ChessComClient.StatsAccumulator().incCf403
-      assertTrue(s.errorsCf403 == 1L, s.errors429 == 0L, s.errorsOther == 0L)
+    test("incCf403AtTier increments both errorsCf403 and per-tier map") {
+      val s = ChessComClient.StatsAccumulator()
+        .incCf403AtTier(8)
+        .incCf403AtTier(8)
+        .incCf403AtTier(4)
+      assertTrue(
+        s.errorsCf403 == 3L,
+        s.errorsCf403ByTier == Map(8 -> 2L, 4 -> 1L),
+        s.errors429 == 0L,
+        s.errorsOther == 0L
+      )
     },
     test("recordLatency tracks min, max, and histogram buckets") {
       val s = ChessComClient.StatsAccumulator()
@@ -832,7 +956,7 @@ object TestChessComClient extends ZIOSpecDefault {
     },
     test("ThrottleConfig.nextTier walks up the recovery ladder") {
       val cfg = ChessComClient.ThrottleConfig(
-        Vector(2, 4, 6, 8), 30.seconds, 5.seconds, 1.second, 10.seconds, 1.second, 5, 2, 3, 20, 0.2, 10
+        Vector(2, 4, 6, 8), 30.seconds, 5.seconds, 1.second, 10.seconds, 1.second, 5, 2, 3, 20, 0.2, 10, 0, Duration.Zero
       )
       assertTrue(
         cfg.maxPermits == 8L,
@@ -846,7 +970,7 @@ object TestChessComClient extends ZIOSpecDefault {
     },
     test("ThrottleConfig.previousTier walks down the recovery ladder") {
       val cfg = ChessComClient.ThrottleConfig(
-        Vector(2, 4, 6, 8), 30.seconds, 5.seconds, 1.second, 10.seconds, 1.second, 5, 2, 3, 20, 0.2, 10
+        Vector(2, 4, 6, 8), 30.seconds, 5.seconds, 1.second, 10.seconds, 1.second, 5, 2, 3, 20, 0.2, 10, 0, Duration.Zero
       )
       assertTrue(
         cfg.previousTier(8) == 6L,
@@ -867,7 +991,7 @@ object TestChessComClient extends ZIOSpecDefault {
       assertTrue(cases.forall { tiers =>
         scala.util.Try(
           ChessComClient.ThrottleConfig(
-            tiers, 30.seconds, 5.seconds, 1.second, 10.seconds, 1.second, 5, 2, 3, 20, 0.2, 10
+            tiers, 30.seconds, 5.seconds, 1.second, 10.seconds, 1.second, 5, 2, 3, 20, 0.2, 10, 0, Duration.Zero
           )
         ).isFailure
       })
@@ -885,11 +1009,14 @@ object TestChessComClient extends ZIOSpecDefault {
         maxConnectionRetries: Int = 3,
         failureWindowSize: Int = 20,
         failureThreshold: Double = 0.2,
-        minSampleSize: Int = 10
+        minSampleSize: Int = 10,
+        minRequestDelayMs: Long = 0,
+        minTierObservation: Duration = Duration.Zero
       ) = scala.util.Try(ChessComClient.ThrottleConfig(
         tiers, cooldown, cfCooldown, retryBase, cfRetryDelay, connectionRetryBase,
         max429Retries, maxCfRetries, maxConnectionRetries,
-        failureWindowSize, failureThreshold, minSampleSize
+        failureWindowSize, failureThreshold, minSampleSize,
+        minRequestDelayMs, minTierObservation
       ))
       assertTrue(
         cfg(cooldown = (-1).seconds).isFailure,
@@ -908,11 +1035,15 @@ object TestChessComClient extends ZIOSpecDefault {
         cfg(minSampleSize = 25).isFailure,            // > windowSize (20)
         cfg(failureThreshold = -0.01).isFailure,
         cfg(failureThreshold = 1.01).isFailure,
+        cfg(minRequestDelayMs = -1).isFailure,
+        cfg(minTierObservation = (-1).seconds).isFailure,
         // Edge cases that SHOULD be accepted
         cfg(cooldown = 0.seconds).isSuccess,          // 0 cooldown = immediate recovery
         cfg(failureThreshold = 0.0).isSuccess,
         cfg(failureThreshold = 1.0).isSuccess,
-        cfg(minSampleSize = 20).isSuccess             // equal to windowSize
+        cfg(minSampleSize = 20).isSuccess,            // equal to windowSize
+        cfg(minRequestDelayMs = 0).isSuccess,
+        cfg(minTierObservation = Duration.Zero).isSuccess
       )
     },
     test("incAttemptAtTier increments both total and per-tier counters") {
@@ -957,7 +1088,7 @@ object TestChessComClient extends ZIOSpecDefault {
       configIdRef <- Ref.make(Option.empty[Long])
       stateRef    <- Ref.make(ChessComClient.ThrottleState(8, 0, Vector.empty))
       startedAt   <- ZIO.succeed(Instant.now())
-      config = ChessComClient.ThrottleConfig(Vector(2, 4, 8), 30.seconds, 5.seconds, 1.second, 10.seconds, 1.second, 5, 2, 3, 20, 0.2, 10)
+      config = ChessComClient.ThrottleConfig(Vector(2, 4, 8), 30.seconds, 5.seconds, 1.second, 10.seconds, 1.second, 5, 2, 3, 20, 0.2, 10, 0, Duration.Zero)
     } yield ChessComClient.FlushContext(
       s"test-$appLabel", appLabel, startedAt, statsRef, configIdRef, config, stateRef, pgClient
     )
@@ -1019,7 +1150,7 @@ object TestChessComClient extends ZIOSpecDefault {
     },
     test("ensureConfig deduplicates identical configs") {
       val cc = {
-        val c = ClientConfig(0L, "", List(2, 4, 99), 88, 77, 66, 55, 44, 5, 2, 3, 33, 0.5, 22)
+        val c = ClientConfig(0L, "", List(2, 4, 99), 0, 88, 77, 0, 33, 0.5, 22, 66, 55, 44, 5, 2, 3)
         c.copy(configHash = c.computeHash)
       }
       for {

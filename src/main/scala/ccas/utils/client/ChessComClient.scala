@@ -26,20 +26,22 @@ import ccas.utils.json.JsonDecodingException
   *     be cancelled promptly on shutdown; only the fast `activeRef` increment is uninterruptible.
   *   - '''EMA-based rate delay''' — tracks an exponential moving average of response times and staggers outgoing
   *     requests so that the full permit budget is utilised without bursting. When permits are reduced the per-request
-  *     delay grows proportionally.
-  *   - '''Failure-window throttle-down''' — maintains a rolling window of success/failure outcomes. HTTP 429 and
-  *     transient connection errors count as failures; non-rate-limit responses (403 non-CF, 404, 500, etc.) count
-  *     as non-failures. Cloudflare challenge 403s bypass the window and trigger an immediate hard throttle.
-  *     Connection errors are retried but do not feed the window (reducing permits doesn't fix a broken network).
-  *     When the failure rate in the window exceeds a configurable threshold, `currentMax` drops to 1 and the gate
-  *     immediately enforces it.
+  *     delay grows proportionally. A configurable floor (`min-request-delay-ms`) prevents burst behaviour when
+  *     response times are unusually low.
+  *   - '''Failure-window throttle-down''' — maintains a rolling window of success/failure outcomes. HTTP 429 counts as a
+  *     failure; non-rate-limit responses (403 non-CF, 404, 500, etc.) count as successes. Cloudflare challenge 403s
+  *     bypass the window and trigger an immediate hard throttle. Connection errors are retried but do not feed the
+  *     window (reducing permits doesn't fix a broken network). When the failure rate in the window exceeds a
+  *     configurable threshold, `currentMax` drops to 1 and the gate immediately enforces it.
   *   - '''Generation-gated recovery''' — after a cooldown period, a background fiber walks `currentMax` up through the
-  *     configured `recoveryTiers` (one step per cooldown cycle), or holds if failures persist. `coolingDown` stays
-  *     true throughout the recovery ladder to prevent `recordOutcome` from triggering additional throttle-downs
-  *     mid-recovery; it is only cleared when permits reach `maxPermits`. A generation counter ensures that only the
-  *     most recent throttle-down triggers recovery, preventing stale fibers from interfering. The response-time EMA
-  *     is reset to zero on full recovery so that stale inflated values do not gate post-recovery request pacing.
-  *     Recovery fibers are scoped to the client's lifetime and interrupted when the layer is torn down.
+  *     configured `recoveryTiers` (one step per cooldown cycle), or holds if failures persist. Each tier must be
+  *     observed for at least `min-tier-observation-seconds` before being evaluated for promotion, preventing premature
+  *     step-ups when high concurrency fills the outcome window quickly. `coolingDown` stays true throughout the
+  *     recovery ladder to prevent `recordOutcome` from triggering additional throttle-downs mid-recovery; it is only
+  *     cleared when permits reach `maxPermits`. A generation counter ensures that only the most recent throttle-down
+  *     triggers recovery, preventing stale fibers from interfering. The response-time EMA is reset to zero on full
+  *     recovery so that stale inflated values do not gate post-recovery request pacing. Recovery fibers are scoped to
+  *     the client's lifetime and interrupted when the layer is torn down.
   *   - '''Retry schedules''' — separate schedules handle HTTP 429 (exponential backoff), Cloudflare challenge 403s
   *     (fixed delay), and transient connection errors (exponential backoff); each has an independent retry-count
   *     budget configured via `max-429-retries`, `max-cf-retries`, and `max-connection-retries`. Non-Cloudflare 403
@@ -86,7 +88,7 @@ final class ChessComClient(
     errorBody = if (cfChallenge) ApiResponseBody.CfCanonicalBody else string
     _ <- ZIO.whenDiscard(!response.status.isSuccess) {
       val errorUpdate =
-        if (cfChallenge) statsRef.update(_.incCf403)
+        if (cfChallenge) statsRef.update(_.incCf403AtTier(tier))
         else if (response.status.code == 429) statsRef.update(_.incError429AtTier(tier))
         else statsRef.update(_.incErrorOther)
       errorUpdate *> ZIO.fail(HttpStatusException(response.status.code, url, errorBody))
@@ -167,7 +169,7 @@ final class ChessComClient(
     else responseTimeEma.get.flatMap { ema =>
       ZIO.unlessDiscard(ema <= 0) {
         stateRef.get.flatMap { state =>
-          val targetDelay = (ema / state.currentMax).toLong
+          val targetDelay = math.max((ema / state.currentMax).toLong, config.minRequestDelayMs)
           for {
             now  <- Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS)
             last <- lastRequestRef.get
@@ -220,7 +222,8 @@ final class ChessComClient(
             generation = newGen,
             outcomes = Vector.empty,
             coolingDown = true,
-            throttledSince = Some(now)
+            throttledSince = Some(now),
+            tierEnteredAt = Some(now)
           )
           (Some((state.currentMax, newGen)), newState)
         }
@@ -234,22 +237,35 @@ final class ChessComClient(
             .flatMap(f => scope.addFinalizerExit(_ => f.interrupt)).unit
     }
 
-  /** Wait for in-flight requests to drain, sleep for cooldown, then recover permits if failure rate has dropped. If the
-    * failure rate is still above threshold, drops back one tier (via `previousTier`) to find a sustainable level rather
-    * than holding at a tier that's too aggressive. Clears the outcome window on each step so every tier is evaluated on
-    * its own merits. Keeps coolingDown true throughout the recovery ladder to prevent mid-recovery re-throttling; clears
-    * it only when permits reach maxPermits. Resets the response-time EMA on full recovery.
+  /** Wait for in-flight requests to drain, sleep for cooldown, then recover permits if failure rate has dropped. After
+    * the cooldown, enforces `minTierObservation` — if not enough wall-clock time has elapsed since the current tier was
+    * entered, the fiber sleeps the remainder so that each tier is observed under real load before being evaluated. If
+    * the failure rate is still above threshold, drops back one tier (via `previousTier`) to find a sustainable level
+    * rather than holding at a tier that's too aggressive. Clears the outcome window and resets `tierEnteredAt` on each
+    * step so every tier is evaluated on its own merits. Keeps coolingDown true throughout the recovery ladder to prevent
+    * mid-recovery re-throttling; clears it only when permits reach maxPermits. Resets the response-time EMA on full
+    * recovery.
     */
   private def scheduleRecovery(generation: Long, cooldown: Duration): Task[Unit] =
     for {
       _ <- activeRef.get.repeat(Schedule.spaced(200.millis) && Schedule.recurWhile(_ > 1)).unit
       _ <- ZIO.sleep(cooldown)
+      _ <- stateRef.get.flatMap { state =>
+        state.tierEnteredAt match {
+          case Some(enteredAt) =>
+            Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS).flatMap { now =>
+              val remaining = config.minTierObservation.toMillis - (now - enteredAt)
+              ZIO.whenDiscard(remaining > 0)(ZIO.sleep(remaining.millis))
+            }
+          case None => ZIO.unit
+        }
+      }
       now <- Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS)
       option <- stateRef.modify { state =>
         if (state.generation != generation) (None, state)
         else if (failureRate(state.outcomes) > config.failureThreshold) {
           val dropTo = config.previousTier(state.currentMax)
-          val newState = state.copy(currentMax = dropTo, outcomes = Vector.empty)
+          val newState = state.copy(currentMax = dropTo, outcomes = Vector.empty, tierEnteredAt = Some(now))
           (Some((state.currentMax, dropTo, generation, 0L)), newState)
         } else {
           val newMax         = config.nextTier(state.currentMax)
@@ -261,14 +277,15 @@ final class ChessComClient(
             currentMax = newMax,
             coolingDown = !fullyRecovered,
             outcomes = Vector.empty,
-            throttledSince = if (fullyRecovered) None else state.throttledSince
+            throttledSince = if (fullyRecovered) None else state.throttledSince,
+            tierEnteredAt = if (fullyRecovered) None else Some(now)
           )
           (Some((state.currentMax, newMax, generation, throttleDuration)), newState)
         }
       }
       _ <- ZIO.foreachDiscard(option) { case (oldMax, newMax, gen, throttleDuration) =>
-        ZIO.whenDiscard(throttleDuration > 0)(statsRef.update(_.addThrottled(throttleDuration))) *>
-          ZIO.whenDiscard(newMax == config.maxPermits)(responseTimeEma.set(0.0)) *> {
+        ZIO.whenDiscard(newMax == config.maxPermits)(responseTimeEma.set(0.0)) *>
+          ZIO.whenDiscard(throttleDuration > 0)(statsRef.update(_.addThrottled(throttleDuration))) *> {
             if (newMax == oldMax) {
               scheduleRecovery(gen, cooldown)
             } else if (newMax < oldMax) {
@@ -332,7 +349,8 @@ object ChessComClient {
     generation: Long,
     outcomes: Vector[Boolean],
     coolingDown: Boolean = false,
-    throttledSince: Option[Long] = None
+    throttledSince: Option[Long] = None,
+    tierEnteredAt: Option[Long] = None
   )
 
   /** @param recoveryTiers
@@ -360,6 +378,12 @@ object ChessComClient {
     *   Fraction of failures in the window (0.0–1.0) that triggers a throttle-down.
     * @param minSampleSize
     *   Minimum outcomes in the window before the failure rate is evaluated.
+    * @param minRequestDelayMs
+    *   Hard floor on inter-request spacing in milliseconds, applied inside `emaDelay`. Prevents burst behaviour at high
+    *   permit counts when response times are unusually low. Set to 0 to disable.
+    * @param minTierObservation
+    *   Minimum wall-clock time that must elapse at a recovery tier before the tier is evaluated for promotion. Prevents
+    *   premature step-ups when high concurrency fills the outcome window quickly.
     */
   private[ccas] case class ThrottleConfig(
     recoveryTiers: Vector[Int],
@@ -373,7 +397,9 @@ object ChessComClient {
     maxConnectionRetries: Int,
     failureWindowSize: Int,
     failureThreshold: Double,
-    minSampleSize: Int
+    minSampleSize: Int,
+    minRequestDelayMs: Long,
+    minTierObservation: Duration
   ) {
     require(
       recoveryTiers.nonEmpty && recoveryTiers.forall(_ >= 1) && recoveryTiers == recoveryTiers.sorted.distinct,
@@ -400,6 +426,8 @@ object ChessComClient {
       failureThreshold >= 0.0 && failureThreshold <= 1.0,
       s"failureThreshold must be in [0.0, 1.0], got: $failureThreshold"
     )
+    require(minRequestDelayMs >= 0, s"minRequestDelayMs must be >= 0, got: $minRequestDelayMs")
+    require(!minTierObservation.isNegative, s"minTierObservation must be non-negative, got: $minTierObservation")
 
     val maxPermits: Long = recoveryTiers.last.toLong
 
@@ -447,14 +475,20 @@ object ChessComClient {
     activeMs: Long = 0,
     throttledMs: Long = 0,
     attemptsByTier: Map[Int, Long] = Map.empty,
-    errors429ByTier: Map[Int, Long] = Map.empty
+    errors429ByTier: Map[Int, Long] = Map.empty,
+    errorsCf403ByTier: Map[Int, Long] = Map.empty
   ) {
     def incRequests: StatsAccumulator         = copy(requests = requests + 1)
     def incSuccesses: StatsAccumulator        = copy(successes = successes + 1)
     def incFailures: StatsAccumulator         = copy(failures = failures + 1)
     def incConnectionErrors: StatsAccumulator = copy(connectionErrors = connectionErrors + 1)
     def incThrottleDowns: StatsAccumulator    = copy(throttleDowns = throttleDowns + 1)
-    def incCf403: StatsAccumulator            = copy(errorsCf403 = errorsCf403 + 1)
+    /** Record a Cloudflare challenge 403 at the given permit tier, incrementing both the total and per-tier counters. */
+    def incCf403AtTier(tier: Int): StatsAccumulator =
+      copy(
+        errorsCf403 = errorsCf403 + 1,
+        errorsCf403ByTier = errorsCf403ByTier.updated(tier, errorsCf403ByTier.getOrElse(tier, 0L) + 1)
+      )
     def updatePeak(n: Int): StatsAccumulator  = copy(peakConcurrent = peakConcurrent.max(n))
     def addGateWait(ms: Long): StatsAccumulator = copy(gateWaitMs = gateWaitMs + ms)
     def addEmaDelay(ms: Long): StatsAccumulator = copy(emaDelayMs = emaDelayMs + ms)
@@ -519,6 +553,7 @@ object ChessComClient {
         errors429 = errors429,
         errors429ByTier = StatsAccumulator.serializeTierMap(errors429ByTier),
         errorsCf403 = errorsCf403,
+        errorsCf403ByTier = StatsAccumulator.serializeTierMap(errorsCf403ByTier),
         errorsOther = errorsOther,
         connectionErrors = connectionErrors,
         throttleDowns = throttleDowns,
@@ -601,17 +636,19 @@ object ChessComClient {
       configId = 0,
       configHash = "",
       recoveryTiers = config.recoveryTiers.toList,
+      minRequestDelayMs = config.minRequestDelayMs,
       cooldownSecs = config.cooldown.getSeconds.toInt,
       cfCooldownSecs = config.cfCooldown.getSeconds.toInt,
+      minTierObservationSecs = config.minTierObservation.getSeconds.toInt,
+      failureWindowSize = config.failureWindowSize,
+      failureThreshold = config.failureThreshold,
+      minSampleSize = config.minSampleSize,
       retryBaseSecs = config.retryBase.getSeconds.toInt,
       cfRetrySecs = config.cfRetryDelay.getSeconds.toInt,
       connectionRetryBaseSecs = config.connectionRetryBase.getSeconds.toInt,
       max429Retries = config.max429Retries,
       maxCfRetries = config.maxCfRetries,
-      maxConnectionRetries = config.maxConnectionRetries,
-      failureWindowSize = config.failureWindowSize,
-      failureThreshold = config.failureThreshold,
-      minSampleSize = config.minSampleSize
+      maxConnectionRetries = config.maxConnectionRetries
     )
     cc.copy(configHash = cc.computeHash)
   }
@@ -651,6 +688,8 @@ object ChessComClient {
       val max429         = typesafeConfig.getInt("max-429-retries")
       val maxCf          = typesafeConfig.getInt("max-cf-retries")
       val maxConn        = typesafeConfig.getInt("max-connection-retries")
+      val minReqDelayMs  = typesafeConfig.getLong("min-request-delay-ms")
+      val minTierObsSecs = typesafeConfig.getLong("min-tier-observation-seconds")
       val statsFlushInterval = typesafeConfig.getLong("stats-flush-interval-seconds").seconds
       require(
         !statsFlushInterval.isNegative && !statsFlushInterval.isZero,
@@ -658,7 +697,8 @@ object ChessComClient {
       )
       val throttleConfig = ThrottleConfig(
         tiers, cooldown, cfCooldown, retryBase, cfDelay, connRetryBase,
-        max429, maxCf, maxConn, windowSize, threshold, minSample
+        max429, maxCf, maxConn, windowSize, threshold, minSample,
+        minReqDelayMs, minTierObsSecs.seconds
       )
       for {
         contactEmail  <- ZIO.attempt(typesafeConfig.getString("contact-email"))

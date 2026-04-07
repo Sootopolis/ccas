@@ -1,7 +1,7 @@
 package ccas.utils.client
 
 import ccas.utils.sql.PostgresClient
-import zio.{durationInt, RIO, Ref, Scope, Semaphore, ZIO}
+import zio.{durationInt, Duration, RIO, Ref, Scope, Semaphore, ZIO}
 import zio.http.*
 
 import ccas.utils.TestCcasLogger
@@ -69,7 +69,7 @@ object TestChessComClientSupport {
         refs,
         stats,
         bar,
-        ChessComClient.ThrottleConfig(Vector(2, permits.toInt.max(2)).distinct, 30.seconds, 5.seconds, 1.second, 10.seconds, 1.second, 5, 2, 3, 20, 0.2, 10),
+        ChessComClient.ThrottleConfig(Vector(2, permits.toInt.max(2)).distinct, 30.seconds, 5.seconds, 1.second, 10.seconds, 1.second, 5, 2, 3, 20, 0.2, 10, 0, Duration.Zero),
         Scope.global
       )
     }

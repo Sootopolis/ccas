@@ -53,9 +53,10 @@ The codebase has four main packages:
 
 `ChessComClient` wraps `zio-http` `Client` for making GET requests with automatic JSON decoding. Features include:
 - Gate-based admission control with configurable concurrency limit (default 8 permits)
-- Adaptive rate limiting: EMA-based request spacing, failure-window throttle-down on 429/403 responses, immediate hard throttle on Cloudflare challenges
+- Adaptive rate limiting: EMA-based request spacing with configurable minimum delay floor, failure-window throttle-down on 429 responses, time-gated recovery tiers
+- Cloudflare challenge detection: immediate hard throttle to 1 permit on CF 403, independent of the failure window
 - Per-attempt failure recording in `api_fetch_failure` with deduplicated response bodies in `api_response_body`
-- Separate retry schedules for 429 (exponential backoff), Cloudflare 403 (fixed delay), normal 403 (single retry), and connection errors (exponential backoff)
+- Separate retry schedules for 429 (exponential backoff), Cloudflare 403 (fixed delay), and connection errors (exponential backoff); non-Cloudflare 403 and 404 are never retried
 - Requires `CCAS_CONTACT_EMAIL` environment variable for the `User-Agent` header
 - Batch fetching via `getAll[T](urls)` using `ZIO.foreachPar`
 
