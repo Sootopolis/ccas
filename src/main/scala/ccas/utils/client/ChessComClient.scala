@@ -166,27 +166,26 @@ final class ChessComClient(
 
   private def emaDelay: Task[Unit] =
     if (config.maxPermits <= 1) ZIO.unit
-    else responseTimeEma.get.flatMap { ema =>
-      ZIO.unlessDiscard(ema <= 0) {
-        stateRef.get.flatMap { state =>
-          val targetDelay = math.max((ema / state.currentMax).toLong, config.minRequestDelayMs)
-          for {
-            now  <- Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS)
-            last <- lastRequestRef.get
-            gap = now - last
-            _ <- ZIO.whenDiscard(gap < targetDelay)(ZIO.sleep((targetDelay - gap).millis))
-            _ <- Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS).flatMap(lastRequestRef.set)
-          } yield ()
-        }
+    else stateRef.get.flatMap { state =>
+      ZIO.unlessDiscard(state.responseTimeEma <= 0) {
+        val targetDelay = math.max((state.responseTimeEma / state.currentMax).toLong, config.minRequestDelayMs)
+        for {
+          now  <- Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS)
+          last <- lastRequestRef.get
+          gap = now - last
+          _ <- ZIO.whenDiscard(gap < targetDelay)(ZIO.sleep((targetDelay - gap).millis))
+          _ <- Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS).flatMap(lastRequestRef.set)
+        } yield ()
       }
     }
 
   private val emaAlpha = 0.1
 
   private def updateResponseTimeEma(responseMs: Long): UIO[Unit] =
-    responseTimeEma.update { ema =>
-      if (ema <= 0) responseMs.toDouble
-      else emaAlpha * responseMs + (1 - emaAlpha) * ema
+    stateRef.update { state =>
+      val ema = state.responseTimeEma
+      val newEma = if (ema <= 0) responseMs.toDouble else emaAlpha * responseMs + (1 - emaAlpha) * ema
+      state.copy(responseTimeEma = newEma)
     }
 
   /** Record a rate-limit outcome (429 vs non-429) and trigger throttle-down if failure rate exceeds threshold. Only
@@ -278,14 +277,14 @@ final class ChessComClient(
             coolingDown = !fullyRecovered,
             outcomes = Vector.empty,
             throttledSince = if (fullyRecovered) None else state.throttledSince,
-            tierEnteredAt = if (fullyRecovered) None else Some(now)
+            tierEnteredAt = if (fullyRecovered) None else Some(now),
+            responseTimeEma = if (fullyRecovered) 0.0 else state.responseTimeEma
           )
           (Some((state.currentMax, newMax, generation, throttleDuration)), newState)
         }
       }
       _ <- ZIO.foreachDiscard(option) { case (oldMax, newMax, gen, throttleDuration) =>
-        ZIO.whenDiscard(newMax == config.maxPermits)(responseTimeEma.set(0.0)) *>
-          ZIO.whenDiscard(throttleDuration > 0)(statsRef.update(_.addThrottled(throttleDuration))) *> {
+        ZIO.whenDiscard(throttleDuration > 0)(statsRef.update(_.addThrottled(throttleDuration))) *> {
             if (newMax == oldMax) {
               scheduleRecovery(gen, cooldown)
             } else if (newMax < oldMax) {
@@ -340,8 +339,7 @@ object ChessComClient {
     stateRef: Ref[ThrottleState],
     activeRef: Ref[Int],
     rateLimitGate: Semaphore,
-    lastRequestRef: Ref[Long],
-    responseTimeEma: Ref[Double]
+    lastRequestRef: Ref[Long]
   )
 
   private[ccas] case class ThrottleState(
@@ -350,7 +348,8 @@ object ChessComClient {
     outcomes: Vector[Boolean],
     coolingDown: Boolean = false,
     throttledSince: Option[Long] = None,
-    tierEnteredAt: Option[Long] = None
+    tierEnteredAt: Option[Long] = None,
+    responseTimeEma: Double = 0.0
   )
 
   /** @param recoveryTiers
@@ -710,13 +709,12 @@ object ChessComClient {
         activeRef     <- Ref.make(0)
         rateLimitGate <- Semaphore.make(1)
         lastReqRef    <- Ref.make(0L)
-        ema           <- Ref.make(0.0)
         startedAt     <- Clock.instant
         sessionId      = startedAt.toString.replace(":", "").replace("-", "")
         stats         <- Ref.make(StatsAccumulator())
         configIdRef   <- Ref.make(Option.empty[Long])
         bar           <- logger.progressBar
-        refs = ThrottleRefs(stateRef, activeRef, rateLimitGate, lastReqRef, ema)
+        refs = ThrottleRefs(stateRef, activeRef, rateLimitGate, lastReqRef)
         flushCtx = FlushContext(sessionId, appLabel, startedAt, stats, configIdRef, throttleConfig, stateRef, pgClient)
         flushFiber <- persistStats(flushCtx).repeat(Schedule.fixed(statsFlushInterval)).forkDaemon
         _ <- ZIO.addFinalizer(flushFiber.interrupt *> finalFlush(flushCtx, logger))

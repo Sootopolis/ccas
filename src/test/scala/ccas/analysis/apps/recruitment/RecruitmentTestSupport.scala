@@ -310,7 +310,6 @@ object RecruitmentTestSupport {
       activeRef     <- Ref.make(0)
       rateLimitGate <- Semaphore.make(1)
       lastReqRef    <- Ref.make(0L)
-      ema           <- Ref.make(0.0)
       bar           <- TestCcasLogger.noopBar
       stats         <- Ref.make(ChessComClient.StatsAccumulator())
       playerCount   <- Ref.make(0)
@@ -379,8 +378,7 @@ object RecruitmentTestSupport {
         stateRef,
         activeRef,
         rateLimitGate,
-        lastReqRef,
-        ema
+        lastReqRef
       )
       ChessComClient(
         ZClient.fromDriver(driver),
