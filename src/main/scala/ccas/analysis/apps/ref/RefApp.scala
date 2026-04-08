@@ -17,7 +17,8 @@ import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.connectZIO
 
 object RefApp extends ZIOAppDefault {
-  private val help = "Usage: RefApp [--force-skipped] [--upgrade-refs]"
+  private val ApiParallelism = 16
+  private val help           = "Usage: RefApp [--force-skipped] [--upgrade-refs]"
 
   case class ReportData(
     clubsTotal: Int,
@@ -103,7 +104,7 @@ object RefApp extends ZIOAppDefault {
       clubs <- selectUnresolvedClubs(forceSkipped)
       _     <- CcasLogger.info(s"Clubs without match ref: ${clubs.size}")
       _ <- ZIO.scoped {
-        CcasLogger.foreachParProgress(clubs)((n, total) => s"  Resolving clubs: $n/$total") { club =>
+        CcasLogger.foreachParProgress(clubs, ApiParallelism)((n, total) => s"  Resolving clubs: $n/$total") { club =>
           RefResolution.resolveClub(ctx, club)
         }
       }
@@ -123,7 +124,7 @@ object RefApp extends ZIOAppDefault {
       players <- selectUnresolvedPlayers(forceSkipped)
       _       <- CcasLogger.info(s"Players without match ref: ${players.size}")
       _ <- ZIO.scoped {
-        CcasLogger.foreachParProgress(players)((n, total) => s"  Resolving players: $n/$total") { player =>
+        CcasLogger.foreachParProgress(players, ApiParallelism)((n, total) => s"  Resolving players: $n/$total") { player =>
           RefResolution.resolvePlayer(ctx, player)
         }
       }
@@ -206,7 +207,7 @@ object RefApp extends ZIOAppDefault {
         _         <- CcasLogger.info(s"Tournament-only players eligible for upgrade: ${players.size}")
         upgraded <- Ref.make(0)
         _ <- ZIO.scoped {
-          CcasLogger.foreachParProgress(players)((n, total) => s"  Upgrading refs: $n/$total") { player =>
+          CcasLogger.foreachParProgress(players, ApiParallelism)((n, total) => s"  Upgrading refs: $n/$total") { player =>
             RefResolution.tryUpgradeToMatchRef(ctx, player).flatMap { success =>
               ZIO.whenDiscard(success)(PlayerTournamentRef.deleteId(player.playerId) *> upgraded.update(_ + 1))
             }

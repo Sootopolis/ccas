@@ -17,6 +17,8 @@ import ccas.utils.CcasLogger
 
 private[membership] object MembershipClassify {
 
+  private val ApiParallelism = 16
+
   // --- Phase B: Classify API members ---
 
   final case class PhaseBResult(
@@ -55,7 +57,7 @@ private[membership] object MembershipClassify {
         results <- ZIO.foreachPar(Chunk.from(apiMap)) { case (username, joinedEpoch) =>
           classifyOneMember(client, clubId, username, joinedEpoch, dbState, now, trustUsernames)
             <* counter.updateAndGet(_ + 1).flatMap(n => bar.print(n, total, s"  Classifying API members: $n/$total"))
-        }
+        }.withParallelism(ApiParallelism)
       } yield PhaseBResult(
         resolvedIds = results.map(_.resolvedId).toSet,
         changes = results.flatMap(_.changes),
@@ -275,7 +277,7 @@ private[membership] object MembershipClassify {
           classifyOneDisappeared(client, state, apiMap, clubSlug, now) <* counter.updateAndGet(_ + 1).flatMap { n =>
             bar.print(n, total, s"  Classifying disappeared members: $n/$total")
           }
-        }
+        }.withParallelism(ApiParallelism)
       } yield PhaseCResult(
         changes = results.flatMap(_.changes),
         updatedPlayers = results.flatMap(_.updatedPlayers),

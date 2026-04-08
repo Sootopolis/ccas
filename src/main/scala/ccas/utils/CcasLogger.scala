@@ -22,7 +22,7 @@ object CcasLogger {
   /** Run `action` on each item in parallel, showing a progress bar. The `label` function receives the current count
     * and total to produce the bar text (e.g. `(n, total) => s"  Processing: $n/$total"`).
     */
-  def foreachParProgress[R, E, A](items: Iterable[A])(label: (Int, Int) => String)(
+  def foreachParProgress[R, E, A](items: Iterable[A], parallelism: Int)(label: (Int, Int) => String)(
     action: A => ZIO[R, E, Any]
   ): ZIO[R & CcasLogger & Scope, E, Unit] = {
     val total = items.size
@@ -31,7 +31,7 @@ object CcasLogger {
       counter <- Ref.make(0)
       _ <- ZIO.foreachParDiscard(items) { item =>
         action(item) *> counter.updateAndGet(_ + 1).flatMap(n => bar.print(n, total, label(n, total)))
-      }
+      }.withParallelism(parallelism)
     } yield ()
   }
 

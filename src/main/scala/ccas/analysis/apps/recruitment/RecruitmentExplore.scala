@@ -16,6 +16,8 @@ import ccas.utils.CcasLogger
 
 private[recruitment] object RecruitmentExplore {
 
+  private val ApiParallelism = 16
+
   // --- Explore loop ---
 
   def exploreLoop(
@@ -147,7 +149,7 @@ private[recruitment] object RecruitmentExplore {
           _       <- ZIO.whenDiscard(outcome == CandidateOutcome.Invited)(ctx.invitedRef.update(u :: _))
           _       <- ZIO.whenDiscard(count % 4 == 0)(printProgress(ctx, sourceId))
         } yield (u, outcome)
-      }
+      }.withParallelism(ApiParallelism)
       _ <- printProgress(ctx, sourceId) // ensure final state is rendered
 
       // Batch-level cleanup

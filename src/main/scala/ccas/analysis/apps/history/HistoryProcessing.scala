@@ -2,7 +2,7 @@ package ccas.analysis.apps.history
 
 import java.time.Instant
 
-import zio.{Duration, Promise, RIO, Ref, Task, UIO, ZIO}
+import zio.{Promise, RIO, Ref, Task, UIO, ZIO}
 import zio.http.URL
 import HistoryUtils.*
 
@@ -21,8 +21,8 @@ import ccas.utils.sql.PostgresClient.withTransaction
 
 private[history] object HistoryProcessing {
 
-  private val BatchSize          = 500
-  private val SlowMatchThreshold = Duration.fromSeconds(30)
+  private val BatchSize        = 500
+  private val MatchParallelism = 16
 
   // === BFS Wave Processing ===
 
@@ -69,7 +69,7 @@ private[history] object HistoryProcessing {
                       )
                       .zipLeft(ZIO.foreachDiscard(shared)(_.queriedPlayers.update(_ + dp.playerId)))
                       .catchAll(error => CcasLogger.warn(s"  ${dp.username}: failed to seed — ${error.getMessage}"))
-                  }
+                  }.withParallelism(MatchParallelism)
               }
 
               newPendingNew <- HistoryPendingMatch.countNew(ctx.clubId)
@@ -113,14 +113,7 @@ private[history] object HistoryProcessing {
     shared: Option[SharedContext]
   ): RIO[CcasLogger & PostgresClient, Unit] =
     ZIO.foreachParDiscard(pending) { pm =>
-      processMatch(ctx, pm.matchId, pm.isLive, shared).timed
-        .tap { (elapsed, _) =>
-          ZIO.whenDiscard(elapsed.compareTo(SlowMatchThreshold) > 0) {
-            val url = if (pm.isLive) ApiLiveMatch.getUrl(pm.matchId) else ApiDailyMatch.getUrl(pm.matchId)
-            CcasLogger.warn(s"    Match ${pm.matchId} took ${elapsed.toSeconds}s — $url")
-          }
-        }
-        .map(_._2)
+      processMatch(ctx, pm.matchId, pm.isLive, shared)
         .catchAll { error =>
           ctx.matchesFailed.update(_ + 1) *>
             ctx.failedMatches.update(_ :+ (MatchKey(pm.matchId, pm.isLive), error.getMessage)) *>
@@ -129,7 +122,7 @@ private[history] object HistoryProcessing {
         } *> counter.updateAndGet(_ + 1).flatMap { n =>
         bar.print(n, waveTotal.toInt, s"    Processing matches: $n/$waveTotal")
       }
-    }
+    }.withParallelism(MatchParallelism)
 
   private def processMatch(
     ctx: ProcessingContext,

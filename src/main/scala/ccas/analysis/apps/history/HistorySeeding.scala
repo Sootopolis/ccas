@@ -15,6 +15,8 @@ import ccas.utils.CcasLogger
 
 private[history] object HistorySeeding {
 
+  private val ApiParallelism = 16
+
   /** Retries resolution for clubs previously recorded in `unresolved_match_club`. Groups entries by slug so each unique
     * club is resolved at most once. On success, patches all matching `club_match` rows and removes the unresolved
     * entries. Returns total count of resolved entries.
@@ -91,7 +93,7 @@ private[history] object HistorySeeding {
                   } yield ()).ignore *>
                     counterRef.updateAndGet(_ + 1)
                       .flatMap(n => bar.print(n, total, s"  Retrying unresolved players: $n/$total"))
-                }
+                }.withParallelism(ApiParallelism)
                 resolved <- resolvedRef.get
               } yield resolved
             }
@@ -165,7 +167,7 @@ private[history] object HistorySeeding {
                     bar.print(n, total, s"  Querying member matches: $n/$total")
                   }
               )
-          }
+          }.withParallelism(ApiParallelism)
         } yield ()
       }
       seeded        <- seedRef.get
