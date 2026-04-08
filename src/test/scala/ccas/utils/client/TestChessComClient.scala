@@ -598,21 +598,22 @@ object TestChessComClient extends ZIOSpecDefault {
               }
             },
             permits = 4,
-            cooldown = 100.millis,
+            cooldown = 300.millis,
             failureThreshold = 0.2,
-            recoveryTiers = Some(Vector(2, 4))
+            recoveryTiers = Some(Vector(2, 4)),
+            max429Retries = 0
           )
-          // Trigger throttle-down
-          _ <- ZIO.foreachParDiscard(1 to 5)(i =>
+          // Trigger throttle-down (>= minSampleSize=10 outcomes needed, no retries)
+          _ <- ZIO.foreachParDiscard(1 to 12)(i =>
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get).exit
           )
-          // Switch to success, build up EMA
+          // Switch to success, build up EMA — requests finish well before recovery (2 x 300ms)
           _ <- shouldFail.set(false)
-          _ <- ZIO.foreachDiscard(6 to 30)(i =>
+          _ <- ZIO.foreachDiscard(13 to 30)(i =>
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get)
           )
           emaBefore <- stateRef.get.map(_.responseTimeEma)
-          // EMA reset is now atomic with recovery completion (both in a single stateRef.modify)
+          // No concurrent requests when recovery completes, so EMA=0 is observable
           _ <- stateRef.get.repeatUntil(s => s.currentMax == 4L && !s.coolingDown && s.responseTimeEma == 0.0)
             .timeoutFail(new RuntimeException("recovery did not complete with EMA reset"))(5.seconds)
         } yield assertTrue(
