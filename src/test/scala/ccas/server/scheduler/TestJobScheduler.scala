@@ -4,7 +4,7 @@ import java.time.Instant
 import java.time.temporal.ChronoUnit
 
 import zio.{durationInt, Ref, RIO, ZIO}
-import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
+import zio.test.{assertCompletes, assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.analysis.tables.{Club, RunTrigger}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId}
@@ -72,9 +72,11 @@ object TestJobScheduler extends ZIOSpecDefault {
         JobSchedule(0L, JobKind.Membership, Some(clubId), None, intervalHours = 0, enabled = true, lastRunAt = None)
       )
 
-      // Start the scheduler in a scope, let it poll several times, then close the scope
+      // Start the scheduler in a scope, wait for it to poll several times, then close the scope
       _ <- ZIO.scoped {
-        scheduler.start *> ZIO.sleep(400.millis)
+        scheduler.start *>
+          submissions.get.repeatUntil(_ >= 2)
+            .timeoutFail(new RuntimeException("scheduler did not submit enough jobs"))(5.seconds)
       }
 
       // The scope has closed — the poll fiber should have been interrupted
@@ -101,11 +103,11 @@ object TestJobScheduler extends ZIOSpecDefault {
         JobSchedule(0L, JobKind.Membership, Some(dueClubId), None, intervalHours = 1, enabled = true, lastRunAt = Some(twoHoursAgo))
       )
       _ <- ZIO.scoped {
-        scheduler.start *> ZIO.sleep(200.millis)
+        scheduler.start *>
+          submitted.get.repeatUntil(_.exists(_.contains(dueClubId)))
+            .timeoutFail(new RuntimeException("due schedule was not submitted"))(5.seconds)
       }
-      clubs <- submitted.get
-      dueCount = clubs.count(_.contains(dueClubId))
-    } yield assertTrue(dueCount >= 1)
+    } yield assertCompletes
   }
 
   private def testNotYetDueScheduleSkipped = test("skips schedule that is not yet due") {
@@ -174,9 +176,10 @@ object TestJobScheduler extends ZIOSpecDefault {
         JobSchedule(0L, JobKind.Membership, Some(errorClubId), None, intervalHours = 0, enabled = true, lastRunAt = None)
       )
       _ <- ZIO.scoped {
-        scheduler.start *> ZIO.sleep(400.millis)
+        scheduler.start *>
+          callCount.get.repeatUntil(_ >= 2)
+            .timeoutFail(new RuntimeException("scheduler did not retry after error"))(5.seconds)
       }
-      count <- callCount.get
-    } yield assertTrue(count >= 2) // scheduler survived the error and polled again
+    } yield assertCompletes // scheduler survived the error and polled again
   }
 }
