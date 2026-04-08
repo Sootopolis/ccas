@@ -39,7 +39,7 @@ object TestRecruitmentBlacklist extends ZIOSpecDefault {
         _ <- RecruitmentBlacklist.insert(
           RecruitmentBlacklist(clubId, pid0, Times.t0, expiresAt = None, reason = Some("banned"))
         )
-        runId  <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Instant.now())
+        runId  <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0)
         client <- fakeChessComClient(responses)
         _      <- evalCandidates(client, runId, List(Username("alice")), criteria)
         cands  <- RecruitmentCandidate.selectByRun(runId)

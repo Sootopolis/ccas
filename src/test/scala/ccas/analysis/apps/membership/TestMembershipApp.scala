@@ -11,6 +11,7 @@ import ccas.analysis.apps.membership.MembershipChange.*
 import ccas.analysis.apps.membership.MembershipChange.MemberChange.*
 import ccas.analysis.apps.membership.MembershipClassify.{PhaseBResult, PhaseCResult}
 import ccas.analysis.apps.recruitment.CandidateOutcome
+import ccas.analysis.apps.recruitment.RecruitmentTestSupport.apiPlayerJson
 import ccas.analysis.tables.{Club, ClubMember, MembershipRun, Player, PlayerSnapshot, RecruitmentCandidate, RunTrigger, Tables}
 import ccas.api.misc.enums.PlayerStatusCategory.{Active, Closed}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
@@ -43,29 +44,24 @@ object TestMembershipApp extends ZIOSpecDefault {
   private val clubId = ClubId(500)
   private val club   = Club(clubId, Times.t0, ClubSlug("test-club"), "Test Club")
 
-  // --- Helpers ---
+  // --- Spec ---
 
-  private def apiPlayerJson(
-    playerId: Long,
-    username: String,
-    status: String = "basic",
-    joined: Long = Times.t0.getEpochSecond,
-    lastOnline: Long = Times.t0.getEpochSecond
-  ): String = {
-    val fields = List(
-      s""""player_id": $playerId""",
-      s""""username": "$username"""",
-      s""""country": "https://api.chess.com/pub/country/US"""",
-      s""""status": "$status"""",
-      s""""joined": $joined""",
-      s""""last_online": $lastOnline""",
-      s""""followers": 0""",
-      s""""is_streamer": false""",
-      s""""verified": false""",
-      s""""league": "wood""""
-    )
-    fields.mkString("{\n", ",\n", "\n}")
-  }
+  override def spec: Spec[Any, Throwable] = suite("TestMembershipApp")(
+    suiteClassifyFromDb,
+    suiteMergeResults,
+    suiteFormatReport,
+    suiteLookupJoinInvitations,
+    suiteBuildDbState,
+    suiteExternalMemberDetection,
+    suiteClassifyApiMembers,
+    suiteClassifyDisappeared
+  ).provideShared(
+    FreshSchemaLayer("test_membership_app", onInit = Tables.ensureTables),
+    Scope.default,
+    ZLayer.succeed(TestCcasLogger.noop)
+  ) @@ TestAspect.sequential @@ TestAspect.withLiveClock
+
+  // --- Helpers ---
 
   private def fakeChessComClient(
     responses: Map[String, String],
@@ -100,22 +96,31 @@ object TestMembershipApp extends ZIOSpecDefault {
       _ <- ZIO.whenDiscard(members.nonEmpty)(ClubMember.insertBatch(members))
     } yield ()
 
-  // --- Spec ---
+  private val otherClubId = ClubId(501)
+  private val otherClub   = Club(otherClubId, Times.t0, ClubSlug("other-club"), "Other Club")
 
-  override def spec: Spec[Any, Throwable] = suite("TestMembershipApp")(
-    suiteClassifyFromDb,
-    suiteMergeResults,
-    suiteFormatReport,
-    suiteLookupJoinInvitations,
-    suiteBuildDbState,
-    suiteExternalMemberDetection,
-    suiteClassifyApiMembers,
-    suiteClassifyDisappeared
-  ).provideShared(
-    FreshSchemaLayer("test_membership_app", onInit = Tables.ensureTables),
-    Scope.default,
-    ZLayer.succeed(TestCcasLogger.noop)
-  ) @@ TestAspect.sequential @@ TestAspect.withLiveClock
+  private def seedRecruitmentInvitation(
+    forClubId: ClubId,
+    playerId: PlayerId,
+    evaluatedAt: Instant
+  ): ZIO[PostgresClient, java.sql.SQLException, Unit] =
+    for {
+      criteriaId <- connectZIO {
+        sql"""INSERT INTO recruitment_criteria (
+                nationality_exclude, nationality_countries, exclude_clubs,
+                exclude_source_admins, exclude_former_members
+              ) VALUES (false, '{}', '{}', false, false)
+              RETURNING criteria_id""".query[Long].run().head
+      }
+      runId <- connectZIO {
+        sql"""INSERT INTO recruitment_run (club_id, criteria_id, trigger, started_at, candidates_found)
+              VALUES ($forClubId, $criteriaId, 'Cli', $evaluatedAt, 1)
+              RETURNING run_id""".query[Long].run().head
+      }
+      _ <- RecruitmentCandidate.insert(
+        RecruitmentCandidate(runId, playerId, evaluatedAt, CandidateOutcome.Invited, None)
+      )
+    } yield ()
 
   // ==========================================================================
   // Suite A: classifyFromDb (pure)
@@ -344,32 +349,6 @@ object TestMembershipApp extends ZIOSpecDefault {
   // ==========================================================================
   // Suite D: lookupJoinInvitations (DB)
   // ==========================================================================
-
-  private val otherClubId = ClubId(501)
-  private val otherClub   = Club(otherClubId, Times.t0, ClubSlug("other-club"), "Other Club")
-
-  private def seedRecruitmentInvitation(
-    forClubId: ClubId,
-    playerId: PlayerId,
-    evaluatedAt: Instant
-  ): ZIO[PostgresClient, java.sql.SQLException, Unit] =
-    for {
-      criteriaId <- connectZIO {
-        sql"""INSERT INTO recruitment_criteria (
-                nationality_exclude, nationality_countries, exclude_clubs,
-                exclude_source_admins, exclude_former_members
-              ) VALUES (false, '{}', '{}', false, false)
-              RETURNING criteria_id""".query[Long].run().head
-      }
-      runId <- connectZIO {
-        sql"""INSERT INTO recruitment_run (club_id, criteria_id, trigger, started_at, candidates_found)
-              VALUES ($forClubId, $criteriaId, 'Cli', $evaluatedAt, 1)
-              RETURNING run_id""".query[Long].run().head
-      }
-      _ <- RecruitmentCandidate.insert(
-        RecruitmentCandidate(runId, playerId, evaluatedAt, CandidateOutcome.Invited, None)
-      )
-    } yield ()
 
   private def suiteLookupJoinInvitations = suite("lookupJoinInvitations")(
     test("returns invitation for player invited by our club") {
@@ -796,7 +775,7 @@ object TestMembershipApp extends ZIOSpecDefault {
         membersByPlayerId = Map(pid1 -> MemberState(player, mem)),
         membersByUsername = Map(Username("bob") -> MemberState(player, mem))
       )
-      val responses = Map("bob" -> apiPlayerJson(101, "bob", status = "closed", lastOnline = Times.t1.getEpochSecond))
+      val responses = Map("bob" -> apiPlayerJson(101, "bob", status = "closed", lastOnline = Some(Times.t1.getEpochSecond)))
 
       for {
         client <- fakeChessComClient(responses)

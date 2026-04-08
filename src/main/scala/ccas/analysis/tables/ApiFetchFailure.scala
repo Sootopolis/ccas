@@ -63,13 +63,4 @@ object ApiFetchFailure {
         ApiResponseBody.deleteOrphans.as(count)
       }
     }
-
-  def deleteAll: ZIO[PostgresClient, SQLException, Int] =
-    withTransaction {
-      connectZIO {
-        sql"DELETE FROM api_fetch_failure".update.run()
-      }.flatMap { count =>
-        ApiResponseBody.deleteAll.as(count)
-      }
-    }
 }

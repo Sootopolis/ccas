@@ -48,15 +48,17 @@ object RecruitmentTestSupport {
     username: String,
     status: String = "basic",
     joined: Long = Times.t0.getEpochSecond,
-    country: String = "US"
+    country: String = "US",
+    lastOnline: Option[Long] = None
   ): String = {
+    val effectiveLastOnline = lastOnline.getOrElse(joined)
     val fields = List(
       s""""player_id": $playerId""",
       s""""username": "$username"""",
       s""""country": "https://api.chess.com/pub/country/$country"""",
       s""""status": "$status"""",
       s""""joined": $joined""",
-      s""""last_online": $joined""",
+      s""""last_online": $effectiveLastOnline""",
       s""""followers": 0""",
       s""""is_streamer": false""",
       s""""verified": false""",
@@ -173,7 +175,7 @@ object RecruitmentTestSupport {
        |  "end_time": $endTime,
        |  "rated": true,
        |  "tcn": "",
-       |  "uuid": "${java.util.UUID.randomUUID()}",
+       |  "uuid": "00000000-0000-0000-0000-000000000001",
        |  "initial_setup": "",
        |  "fen": "",
        |  "start_time": ${endTime - 86400},
@@ -184,14 +186,14 @@ object RecruitmentTestSupport {
        |    "result": "$whiteResult",
        |    "@id": "https://api.chess.com/pub/player/$white",
        |    "username": "$white",
-       |    "uuid": "${java.util.UUID.randomUUID()}"
+       |    "uuid": "00000000-0000-0000-0000-000000000002"
        |  },
        |  "black": {
        |    "rating": 1500,
        |    "result": "$blackResult",
        |    "@id": "https://api.chess.com/pub/player/$black",
        |    "username": "$black",
-       |    "uuid": "${java.util.UUID.randomUUID()}"
+       |    "uuid": "00000000-0000-0000-0000-000000000003"
        |  }$matchField
        |}""".stripMargin
   }
@@ -241,57 +243,55 @@ object RecruitmentTestSupport {
 
   // --- Fake HTTP clients ---
 
-  def fakeChessComClient(
+  private def buildRoutes(
     responses: Map[String, String],
-    failures: Set[String] = Set.empty
-  ): RIO[PostgresClient, ChessComClient] = {
-    val routes: Routes[Any, Response] = Routes(
-      // Player stats endpoint
+    failures: Set[String] = Set.empty,
+    playerProfileOverride: Option[Route[Any, Response]] = None
+  ): Routes[Any, Response] = {
+    val defaultPlayerRoute =
+      Method.GET / "pub" / "player" / string("username") -> handler { (username: String, _: Request) =>
+        if (failures.contains(username)) { Response(status = Status.NotFound) }
+        else { responses.get(s"player/$username").fold(Response(status = Status.NotFound))(Response.json(_)) }
+      }
+    Routes(
       Method.GET / "pub" / "player" / string("username") / "stats" -> handler { (username: String, _: Request) =>
         responses.get(s"player/$username/stats").fold(Response.json(apiPlayerStatsJson()))(Response.json(_))
       },
-      // Player clubs endpoint
       Method.GET / "pub" / "player" / string("username") / "clubs" -> handler { (username: String, _: Request) =>
         responses.get(s"player/$username/clubs").fold(Response.json(apiPlayerClubsJson()))(Response.json(_))
       },
-      // Player matches endpoint
       Method.GET / "pub" / "player" / string("username") / "matches" -> handler { (username: String, _: Request) =>
         responses.get(s"player/$username/matches").fold(Response.json(emptyPlayerMatchesJson))(Response.json(_))
       },
-      // Player current games endpoint
       Method.GET / "pub" / "player" / string("username") / "games" -> handler { (username: String, _: Request) =>
         responses.get(s"player/$username/games").fold(Response.json(emptyCurrentGamesJson))(Response.json(_))
       },
-      // Player archive endpoint (year/month)
       Method.GET / "pub" / "player" / string("username") / "games" / string("year") / string("month") -> handler {
         (username: String, year: String, month: String, _: Request) =>
           responses.get(s"player/$username/games/$year/$month")
             .fold(Response.json(emptyArchiveJson))(Response.json(_))
       },
-      // Player endpoint
-      Method.GET / "pub" / "player" / string("username") -> handler { (username: String, _: Request) =>
-        if (failures.contains(username)) { Response(status = Status.NotFound) }
-        else { responses.get(s"player/$username").fold(Response(status = Status.NotFound))(Response.json(_)) }
-      },
-      // Club matches endpoint
+      playerProfileOverride.getOrElse(defaultPlayerRoute),
       Method.GET / "pub" / "club" / string("club") / "matches" -> handler { (clubName: String, _: Request) =>
         responses.get(s"club/$clubName/matches").fold(Response.json(emptyClubMatchesJson))(Response.json(_))
       },
-      // Club members endpoint
       Method.GET / "pub" / "club" / string("club") / "members" -> handler { (clubName: String, _: Request) =>
         responses.get(s"club/$clubName/members").fold(Response(status = Status.NotFound))(Response.json(_))
       },
-      // Club endpoint
       Method.GET / "pub" / "club" / string("club") -> handler { (clubName: String, _: Request) =>
         responses.get(s"club/$clubName").fold(Response(status = Status.NotFound))(Response.json(_))
       },
-      // Match endpoint (for ref resolution)
       Method.GET / "pub" / "match" / long("matchId") -> handler { (matchId: Long, _: Request) =>
         responses.get(s"match/$matchId").fold(Response(status = Status.NotFound))(Response.json(_))
       }
     )
-    TestChessComClientSupport.fakeClient(routes)
   }
+
+  def fakeChessComClient(
+    responses: Map[String, String],
+    failures: Set[String] = Set.empty
+  ): RIO[PostgresClient, ChessComClient] =
+    TestChessComClientSupport.fakeClient(buildRoutes(responses, failures))
 
   /** A variant of fakeChessComClient where the Nth player profile request blocks. After `blockAfterN` successful player
     * profile fetches, the next fetch completes `reached` and then awaits `gate` before responding. This ensures exactly
@@ -314,24 +314,7 @@ object RecruitmentTestSupport {
       stats         <- Ref.make(ChessComClient.StatsAccumulator())
       playerCount   <- Ref.make(0)
     } yield {
-      val routes: Routes[Any, Response] = Routes(
-        Method.GET / "pub" / "player" / string("username") / "stats" -> handler { (username: String, _: Request) =>
-          responses.get(s"player/$username/stats").fold(Response.json(apiPlayerStatsJson()))(Response.json(_))
-        },
-        Method.GET / "pub" / "player" / string("username") / "clubs" -> handler { (username: String, _: Request) =>
-          responses.get(s"player/$username/clubs").fold(Response.json(apiPlayerClubsJson()))(Response.json(_))
-        },
-        Method.GET / "pub" / "player" / string("username") / "matches" -> handler { (username: String, _: Request) =>
-          responses.get(s"player/$username/matches").fold(Response.json(emptyPlayerMatchesJson))(Response.json(_))
-        },
-        Method.GET / "pub" / "player" / string("username") / "games" -> handler { (username: String, _: Request) =>
-          responses.get(s"player/$username/games").fold(Response.json(emptyCurrentGamesJson))(Response.json(_))
-        },
-        Method.GET / "pub" / "player" / string("username") / "games" / string("year") / string("month") -> handler {
-          (username: String, year: String, month: String, _: Request) =>
-            responses.get(s"player/$username/games/$year/$month")
-              .fold(Response.json(emptyArchiveJson))(Response.json(_))
-        },
+      val blockingPlayerRoute =
         Method.GET / "pub" / "player" / string("username") -> handler { (username: String, _: Request) =>
           val resp = responses.get(s"player/$username").fold(Response(status = Status.NotFound))(Response.json(_))
           playerCount.getAndUpdate(_ + 1).flatMap { count =>
@@ -340,17 +323,8 @@ object RecruitmentTestSupport {
             else
               ZIO.succeed(resp)
           }
-        }.sandbox,
-        Method.GET / "pub" / "club" / string("club") / "matches" -> handler { (clubName: String, _: Request) =>
-          responses.get(s"club/$clubName/matches").fold(Response.json(emptyClubMatchesJson))(Response.json(_))
-        },
-        Method.GET / "pub" / "club" / string("club") / "members" -> handler { (clubName: String, _: Request) =>
-          responses.get(s"club/$clubName/members").fold(Response(status = Status.NotFound))(Response.json(_))
-        },
-        Method.GET / "pub" / "club" / string("club") -> handler { (clubName: String, _: Request) =>
-          responses.get(s"club/$clubName").fold(Response(status = Status.NotFound))(Response.json(_))
-        }
-      )
+        }.sandbox
+      val routes = buildRoutes(responses, playerProfileOverride = Some(blockingPlayerRoute))
       val driver = new ZClient.Driver[Any, Scope, Throwable] {
         override def request(
           version: Version,
@@ -404,13 +378,14 @@ object RecruitmentTestSupport {
   def seedDb: RIO[PostgresClient, Unit] =
     for {
       // Clean up test data
-      _ <- RecruitmentCandidate.deleteAll
-      _ <- RecruitmentRun.deleteAll
-      _ <- RecruitmentBlacklist.deleteAll
-      _ <- RecruitmentAlias.deleteAll
-      _ <- RecruitmentCriteria.deleteAll
-      _ <- PlayerRecruitmentCache.deleteAll
-      _ <- ApiFetchFailure.deleteAll
+      _ <- PostgresClient.connectZIO(sql"DELETE FROM recruitment_candidate".update.run())
+      _ <- PostgresClient.connectZIO(sql"DELETE FROM recruitment_run".update.run())
+      _ <- PostgresClient.connectZIO(sql"DELETE FROM recruitment_blacklist".update.run())
+      _ <- PostgresClient.connectZIO(sql"DELETE FROM recruitment_alias".update.run())
+      _ <- PostgresClient.connectZIO(sql"DELETE FROM recruitment_criteria".update.run())
+      _ <- PostgresClient.connectZIO(sql"DELETE FROM player_recruitment_cache".update.run())
+      _ <- PostgresClient.connectZIO(sql"DELETE FROM api_fetch_failure".update.run())
+      _ <- PostgresClient.connectZIO(sql"DELETE FROM api_response_body".update.run())
       _ <- PostgresClient.connectZIO(sql"DELETE FROM club_member WHERE club_id = $clubId".update.run())
       _ <- PostgresClient.connectZIO(sql"DELETE FROM club_member WHERE club_id = $sourceClubId".update.run())
       _ <- PostgresClient.connectZIO(sql"DELETE FROM club_member WHERE club_id = $intSourceClubId".update.run())

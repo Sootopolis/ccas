@@ -120,7 +120,4 @@ object Player {
 
   def deleteId(playerId: PlayerId): ZIO[PostgresClient, SQLException, Unit] =
     connectZIO(repo.deleteById(playerId))
-
-  def deleteAll: ZIO[PostgresClient, SQLException, Int] =
-    connectZIO(sql"DELETE FROM player".update.run())
 }

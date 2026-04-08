@@ -95,9 +95,4 @@ object ClientConfig {
       }
     }
   }
-
-  def deleteAll: ZIO[PostgresClient, SQLException, Int] =
-    connectZIO {
-      sql"DELETE FROM client_config".update.run()
-    }
 }

@@ -64,15 +64,15 @@ object TestSeedFromClubMatches extends ZIOSpecDefault {
     TestChessComClientSupport.fakeClient(routes)
   }
 
-  private val layer = FreshSchemaLayer("test_seed_club", Tables.ensureTables)
-
   override def spec: Spec[Any, Throwable] = suite("seedFromClubMatches")(
     testSkipsKnownMatches,
     testSeedsAllWhenNoneKnown,
     testSeedsNewAlongsideKnown,
     testEmptyMatchesListSeedsNothing,
     testApiFetchErrorReturnsZero
-  ).provideLayerShared(layer) @@ TestAspect.sequential
+  ).provideShared(
+    FreshSchemaLayer("test_seed_club", Tables.ensureTables)
+  ) @@ TestAspect.sequential
 
   private def testSkipsKnownMatches = test("returns 0 and seeds nothing when all matches are already known") {
     val json = apiClubMatchesJson(List(1001, 1002))

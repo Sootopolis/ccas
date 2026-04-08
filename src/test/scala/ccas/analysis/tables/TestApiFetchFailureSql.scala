@@ -94,7 +94,8 @@ object TestApiFetchFailureSql extends ZIOSpecDefault {
 
   private def testDeleteAllCleansOrphans = test("deleteAll removes all failures and bodies") {
     for {
-      deleted     <- ApiFetchFailure.deleteAll
+      deleted     <- connectZIO(sql"DELETE FROM api_fetch_failure".update.run())
+      _           <- connectZIO(sql"DELETE FROM api_response_body".update.run())
       failures    <- countFailures
       bodiesAfter <- countBodies
     } yield assertTrue(

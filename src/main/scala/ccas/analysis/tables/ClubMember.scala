@@ -123,9 +123,4 @@ object ClubMember {
             WHERE club_id = $clubId AND player_id = $playerId AND since = $oldSince
               AND since_approximate = true""".update.run()
     }
-
-  def deleteAll: ZIO[PostgresClient, SQLException, Int] =
-    connectZIO {
-      sql"DELETE FROM club_member".update.run()
-    }
 }

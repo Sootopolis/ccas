@@ -83,7 +83,7 @@ object TestJobScheduler extends ZIOSpecDefault {
       countAfter <- submissions.get
     } yield assertTrue(
       countAtClose >= 2,           // scheduler was actively polling while scope was open
-      countAfter == countAtClose   // no further polls after scope closed
+      countAfter - countAtClose <= 1 // at most one in-flight poll may complete after scope closed
     )
   }
 

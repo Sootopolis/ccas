@@ -87,9 +87,4 @@ object RecruitmentRun {
       sql"""UPDATE recruitment_run SET completed_at = ${item.completedAt}, candidates_found = ${item.candidatesFound}
             WHERE run_id = ${item.runId}""".update.run()
     }
-
-  def deleteAll: ZIO[PostgresClient, SQLException, Int] =
-    connectZIO {
-      sql"DELETE FROM recruitment_run".update.run()
-    }
 }

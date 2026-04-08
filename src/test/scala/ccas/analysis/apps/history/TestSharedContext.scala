@@ -49,13 +49,13 @@ object TestSharedContext extends ZIOSpecDefault {
       fetchedAt = Times.t1
     )
 
-  private val layer = FreshSchemaLayer("test_shared_ctx", Tables.ensureTables)
-
   override def spec: Spec[Any, Throwable] = suite("SharedContext")(
     testSeedStaleFiltersProcessedMatches,
     testSeedFromMembersSkipsSharedQueried,
     testSeedFromMembersWritesHistoryMemberQueryForSkipped
-  ).provideLayerShared(layer) @@ TestAspect.sequential
+  ).provideShared(
+    FreshSchemaLayer("test_shared_ctx", Tables.ensureTables)
+  ) @@ TestAspect.sequential
 
   // --- seedStaleMatches ---
 

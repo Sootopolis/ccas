@@ -110,9 +110,4 @@ object PlayerRecruitmentCache {
               last_daily_timeout_at = EXCLUDED.last_daily_timeout_at,
               last_tm_timeout_at = EXCLUDED.last_tm_timeout_at""".update.run()
     }
-
-  def deleteAll: ZIO[PostgresClient, SQLException, Int] =
-    connectZIO {
-      sql"DELETE FROM player_recruitment_cache".update.run()
-    }
 }

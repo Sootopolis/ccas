@@ -136,9 +136,4 @@ object RecruitmentCriteria {
       dailyMaxOngoingGames = Some(60),
       dailyMinOngoingTeamMatches = None
     )
-
-  def deleteAll: ZIO[PostgresClient, SQLException, Int] =
-    connectZIO {
-      sql"DELETE FROM recruitment_criteria".update.run()
-    }
 }

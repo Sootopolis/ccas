@@ -54,11 +54,6 @@ object ApiResponseBody {
             )""".update.run()
     }
 
-  def deleteAll: ZIO[PostgresClient, SQLException, Int] =
-    connectZIO {
-      sql"DELETE FROM api_response_body".update.run()
-    }
-
   /** Normalize all Cloudflare challenge bodies to a single canonical row. Idempotent — safe on every startup. */
   def normalizeCfBodies: ZIO[PostgresClient, SQLException, Int] = {
     val canonicalHash = sha256(CfCanonicalBody)

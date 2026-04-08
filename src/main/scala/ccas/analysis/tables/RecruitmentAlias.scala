@@ -57,9 +57,4 @@ object RecruitmentAlias {
             VALUES (${item.clubId}, ${item.alias}, ${item.since}, ${item.criteriaId})"""
         .update.run()
     }
-
-  def deleteAll: ZIO[PostgresClient, SQLException, Int] =
-    connectZIO {
-      sql"DELETE FROM recruitment_alias".update.run()
-    }
 }

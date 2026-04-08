@@ -8,6 +8,7 @@ import zio.{RIO, Scope, ZIO, ZLayer}
 import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
+import ccas.analysis.apps.recruitment.RecruitmentTestSupport.apiDailyMatchJson
 import ccas.analysis.tables.*
 import ccas.api.misc.enums.PlayerStatusCategory.Active
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, TournamentSlug, Username}
@@ -17,6 +18,21 @@ import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
 import ccas.utils.sql.PostgresClient.connectZIO
 
 object TestRefApp extends ZIOSpecDefault {
+
+  override def spec: Spec[Any, Throwable] = suite("TestRefApp")(
+    suitePlayerResolution,
+    suiteClubResolution,
+    suiteTournamentResolution,
+    suiteIteration,
+    suiteFullPopulate,
+    suiteSkipTracking,
+    suiteForceSkipped,
+    suiteTournamentSorting,
+    suiteUpgrade
+  ).provideShared(
+    FreshSchemaLayer("test_match_ref_app", onInit = Tables.ensureTables),
+    Scope.default
+  ) @@ TestAspect.sequential @@ TestAspect.withLiveClock
 
   // --- Timestamps ---
 
@@ -63,57 +79,6 @@ object TestRefApp extends ZIOSpecDefault {
       }"""
     }
     s"""{"finished": [${items.mkString(",")}], "in_progress": [], "registered": []}"""
-  }
-
-  private def apiDailyMatchJson(
-    matchId: Long,
-    team1Club: String,
-    team2Club: String,
-    team1Players: List[(String, Int)],
-    team2Players: List[(String, Int)]
-  ): String = {
-    def playerJson(username: String, boardIdx: Int): String =
-      s"""{
-        "username": "$username",
-        "stats": "https://api.chess.com/pub/player/$username/stats",
-        "status": "basic",
-        "played_as_white": "win",
-        "played_as_black": "win",
-        "board": "https://api.chess.com/pub/match/$matchId/$boardIdx"
-      }"""
-
-    def teamJson(club: String, players: List[(String, Int)], result: String): String = {
-      val playersStr = players.map((u, b) => playerJson(u, b)).mkString(",")
-      s"""{
-        "@id": "https://api.chess.com/pub/club/$club",
-        "name": "${club.capitalize}",
-        "url": "https://www.chess.com/club/$club",
-        "score": 10.0,
-        "result": "$result",
-        "players": [$playersStr],
-        "fair_play_removals": []
-      }"""
-    }
-
-    s"""{
-      "@id": "https://api.chess.com/pub/match/$matchId",
-      "name": "Match $matchId",
-      "url": "https://www.chess.com/club/matches/$matchId",
-      "status": "finished",
-      "start_time": ${t0.getEpochSecond},
-      "end_time": ${t0.plusSeconds(86400).getEpochSecond},
-      "boards": ${(team1Players ++ team2Players).size},
-      "settings": {
-        "rules": "chess",
-        "time_class": "daily",
-        "time_control": "1/259200",
-        "min_required_games": 0
-      },
-      "teams": {
-        "team1": ${teamJson(team1Club, team1Players, "win")},
-        "team2": ${teamJson(team2Club, team2Players, "lose")}
-      }
-    }"""
   }
 
   private def apiPlayerTournamentsJson(finished: List[(String, Int)]): String = {
@@ -194,11 +159,11 @@ object TestRefApp extends ZIOSpecDefault {
   private def seedDb: RIO[PostgresClient, Unit] =
     for {
       // Clean in FK-safe order
-      _ <- PlayerRefSkip.deleteAll
-      _ <- ClubRefSkip.deleteAll
-      _ <- PlayerMatchRef.deleteAll
-      _ <- PlayerTournamentRef.deleteAll
-      _ <- ClubMatchRef.deleteAll
+      _ <- connectZIO(sql"DELETE FROM player_ref_skip".update.run())
+      _ <- connectZIO(sql"DELETE FROM club_ref_skip".update.run())
+      _ <- connectZIO(sql"DELETE FROM player_match_ref".update.run())
+      _ <- connectZIO(sql"DELETE FROM player_tournament_ref".update.run())
+      _ <- connectZIO(sql"DELETE FROM club_match_ref".update.run())
       _ <- ZIO.foreachDiscard(testPlayerIds) { pid =>
         connectZIO(sql"DELETE FROM player_snapshot WHERE player_id = $pid".update.run())
       }
@@ -225,23 +190,6 @@ object TestRefApp extends ZIOSpecDefault {
       .populate(forceSkipped = forceSkipped, upgradeRefs = upgradeRefs)
       .unit
       .provideSomeLayer(ZLayer.succeed(client) ++ ZLayer.succeed(TestCcasLogger.noop))
-
-  // --- Spec ---
-
-  override def spec: Spec[Any, Throwable] = suite("TestRefApp")(
-    suitePlayerResolution,
-    suiteClubResolution,
-    suiteTournamentResolution,
-    suiteIteration,
-    suiteFullPopulate,
-    suiteSkipTracking,
-    suiteForceSkipped,
-    suiteTournamentSorting,
-    suiteUpgrade
-  ).provideShared(
-    FreshSchemaLayer("test_match_ref_app", onInit = Tables.ensureTables),
-    Scope.default
-  ) @@ TestAspect.sequential @@ TestAspect.withLiveClock
 
   // ==========================================================================
   // Suite: player resolution

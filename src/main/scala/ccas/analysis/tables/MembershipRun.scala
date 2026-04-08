@@ -70,9 +70,4 @@ object MembershipRun {
       sql"""UPDATE membership_run SET completed_at = $completedAt
             WHERE run_id = $runId""".update.run()
     }
-
-  def deleteAll: ZIO[PostgresClient, SQLException, Int] =
-    connectZIO {
-      sql"DELETE FROM membership_run".update.run()
-    }
 }

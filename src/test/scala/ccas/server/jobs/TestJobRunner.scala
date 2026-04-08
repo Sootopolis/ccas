@@ -149,8 +149,9 @@ object TestJobRunner extends ZIOSpecDefault {
       _      <- awaitStatus(runner, id1)
       id2    <- runner.submit(JobKind.MatchRef, None, None, RunTrigger.Cli, _ => ZIO.unit)
       _      <- awaitStatus(runner, id2)
-      // Wait briefly for any auto-follow-up MatchRef jobs to settle
-      _      <- ZIO.sleep(500.millis)
+      // Poll until all follow-up jobs settle (no Running jobs remain)
+      _ <- runner.recentJobs(50).repeatUntil(_.forall(_.status != JobRunStatus.Running))
+        .timeoutFail(new Exception("Follow-up jobs did not settle"))(10.seconds)
       recent <- runner.recentJobs(50)
     } yield assertTrue(
       recent.size >= 2,

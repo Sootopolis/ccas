@@ -2,17 +2,18 @@ package ccas.analysis.tables
 
 import java.time.{Duration, Instant, LocalDateTime, ZoneOffset}
 
-import zio.test.{assertCompletes, assertTrue, Spec, TestAspect, ZIOSpecDefault}
+import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 import zio.Chunk
+
+import com.augustnagro.magnum.sql
 
 import ccas.api.misc.enums.PlayerStatusCategory.{Active, Closed}
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username}
 import ccas.utils.sql.FreshSchemaLayer
+import ccas.utils.sql.PostgresClient.connectZIO
 
 object TestClubSql extends ZIOSpecDefault {
   override def spec: Spec[Any, Throwable] = suite("TestClubSql")(
-    testCreateTables,
-    testDeleteAll,
     testClubUpsert,
     testClubUpsertUpdate,
     testClubUpsertBatch,
@@ -24,46 +25,34 @@ object TestClubSql extends ZIOSpecDefault {
     testClubMatchRefInsert,
     testClubMatchRefDelete,
     testClubMatchRefDeleteAll,
-    testReplaceSince
+    testReplaceSinceApproximate,
+    testReplaceSinceNonApproximate
   ).provideShared(
     FreshSchemaLayer("test_club_sql", onInit = Tables.ensureTables)
   ) @@ TestAspect.sequential
 
-  private object Timestamps {
+  private object Times {
     val t0: Instant = LocalDateTime.of(2025, 6, 1, 0, 0).toInstant(ZoneOffset.UTC)
     val t1: Instant = t0.plus(Duration.ofDays(1))
     val t2: Instant = t0.plus(Duration.ofDays(2))
     val t3: Instant = t0.plus(Duration.ofDays(3))
   }
 
-  private val clubA = Club(ClubId(200), Timestamps.t0, ClubSlug("club-a"), "Club A")
-  private val clubB = Club(ClubId(201), Timestamps.t0, ClubSlug("club-b"), "Club B")
+  private val clubA = Club(ClubId(200), Times.t0, ClubSlug("club-a"), "Club A")
+  private val clubB = Club(ClubId(201), Times.t0, ClubSlug("club-b"), "Club B")
 
-  private val player0 = Player(PlayerId(10), Timestamps.t0, Username("p0"), Active, None, Timestamps.t1)
-  private val player1 = Player(PlayerId(11), Timestamps.t0, Username("p1"), Active, None, Timestamps.t1)
-  private val player2 = Player(PlayerId(12), Timestamps.t0, Username("p2"), Closed, None, Timestamps.t1)
+  private val player0 = Player(PlayerId(10), Times.t0, Username("p0"), Active, None, Times.t1)
+  private val player1 = Player(PlayerId(11), Times.t0, Username("p1"), Active, None, Times.t1)
+  private val player2 = Player(PlayerId(12), Times.t0, Username("p2"), Closed, None, Times.t1)
 
   // Club A: player0 (current), player1 (current), player2 (former)
   // Club B: player0 (current)
-  private val memA0 = ClubMember(clubA.clubId, player0.playerId, Timestamps.t1, None)
-  private val memA1 = ClubMember(clubA.clubId, player1.playerId, Timestamps.t1, None)
-  private val memA2 = ClubMember(clubA.clubId, player2.playerId, Timestamps.t1, Some(Timestamps.t2))
-  private val memB0 = ClubMember(clubB.clubId, player0.playerId, Timestamps.t1, None)
+  private val memA0 = ClubMember(clubA.clubId, player0.playerId, Times.t1, None)
+  private val memA1 = ClubMember(clubA.clubId, player1.playerId, Times.t1, None)
+  private val memA2 = ClubMember(clubA.clubId, player2.playerId, Times.t1, Some(Times.t2))
+  private val memB0 = ClubMember(clubB.clubId, player0.playerId, Times.t1, None)
 
   // --- Club tests ---
-
-  private def testCreateTables = test("testCreateTables") {
-    assertCompletes
-  }
-
-  private def testDeleteAll = test("testDeleteAll") {
-    for {
-      _ <- ClubMatchRef.deleteAll
-      _ <- ClubMember.deleteAll
-      _ <- PlayerSnapshot.deleteAll
-      _ <- Player.deleteAll
-    } yield assertCompletes
-  }
 
   private def testClubUpsert = test("testClubUpsert") {
     for {
@@ -138,8 +127,8 @@ object TestClubSql extends ZIOSpecDefault {
   }
 
   private def testMemberUpdate = test("testMemberUpdate") {
-    val memA0Former = memA0.copy(until = Some(Timestamps.t3))
-    val memB0Former = memB0.copy(until = Some(Timestamps.t3))
+    val memA0Former = memA0.copy(until = Some(Times.t3))
+    val memB0Former = memB0.copy(until = Some(Times.t3))
     for {
       _         <- ClubMember.update(memA0Former)
       _         <- ClubMember.updateBatch(List(memB0Former))
@@ -174,7 +163,7 @@ object TestClubSql extends ZIOSpecDefault {
   private def testClubMatchRefDeleteAll = test("testClubMatchRefDeleteAll") {
     for {
       _       <- ClubMatchRef.insert(refB)
-      _       <- ClubMatchRef.deleteAll
+      _       <- connectZIO(sql"DELETE FROM club_match_ref".update.run())
       resultA <- ClubMatchRef.selectId(refA.clubId)
       resultB <- ClubMatchRef.selectId(refB.clubId)
     } yield assertTrue(resultA.isEmpty, resultB.isEmpty)
@@ -182,24 +171,29 @@ object TestClubSql extends ZIOSpecDefault {
 
   // --- ClubMember.replaceSince tests ---
 
-  private def testReplaceSince = test("ClubMember.replaceSince replaces approximate since with authoritative") {
-    val approxMember = ClubMember(clubA.clubId, player0.playerId, Timestamps.t0, None, sinceApproximate = true)
-    val newSince     = Timestamps.t1
-    for {
-      _       <- ClubMember.deleteAll
-      _       <- ClubMember.insert(approxMember)
-      updated <- ClubMember.replaceSince(clubA.clubId, player0.playerId, Timestamps.t0, newSince)
-      result  <- ClubMember.selectClub(clubA.clubId)
-      // Verify it does not replace a non-approximate member
-      _ <- ClubMember.deleteAll
-      _ <- ClubMember.insert(ClubMember(clubA.clubId, player0.playerId, Timestamps.t0, None, sinceApproximate = false))
-      notUpdated <- ClubMember.replaceSince(clubA.clubId, player0.playerId, Timestamps.t0, newSince)
-    } yield assertTrue(
-      updated == 1,
-      result.size == 1,
-      result.head.since == newSince,
-      !result.head.sinceApproximate,
-      notUpdated == 0
-    )
-  }
+  private def testReplaceSinceApproximate =
+    test("ClubMember.replaceSince replaces approximate since with authoritative") {
+      val approxMember = ClubMember(clubA.clubId, player0.playerId, Times.t0, None, sinceApproximate = true)
+      val newSince     = Times.t1
+      for {
+        _       <- connectZIO(sql"DELETE FROM club_member".update.run())
+        _       <- ClubMember.insert(approxMember)
+        updated <- ClubMember.replaceSince(clubA.clubId, player0.playerId, Times.t0, newSince)
+        result  <- ClubMember.selectClub(clubA.clubId)
+      } yield assertTrue(
+        updated == 1,
+        result.size == 1,
+        result.head.since == newSince,
+        !result.head.sinceApproximate
+      )
+    }
+
+  private def testReplaceSinceNonApproximate =
+    test("ClubMember.replaceSince does not replace non-approximate") {
+      for {
+        _ <- connectZIO(sql"DELETE FROM club_member".update.run())
+        _ <- ClubMember.insert(ClubMember(clubA.clubId, player0.playerId, Times.t0, None, sinceApproximate = false))
+        notUpdated <- ClubMember.replaceSince(clubA.clubId, player0.playerId, Times.t0, Times.t1)
+      } yield assertTrue(notUpdated == 0)
+    }
 }

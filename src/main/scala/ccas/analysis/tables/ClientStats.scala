@@ -164,9 +164,4 @@ object ClientStats {
     connectZIO {
       sql"DELETE FROM client_stats WHERE started_at < $cutoff".update.run()
     }
-
-  def deleteAll: ZIO[PostgresClient, SQLException, Int] =
-    connectZIO {
-      sql"DELETE FROM client_stats".update.run()
-    }
 }

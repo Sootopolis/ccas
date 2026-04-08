@@ -2,6 +2,7 @@ package ccas.analysis.tables
 
 import java.time.{Duration, Instant, LocalDateTime, ZoneOffset}
 
+import com.augustnagro.magnum.sql
 import zio.test.{assertCompletes, assertTrue, Spec, TestAspect, ZIOSpecDefault}
 import zio.Chunk
 
@@ -9,11 +10,10 @@ import ccas.api.misc.enums.PlayerStatusCategory.{Active, Fairplay}
 import ccas.api.misc.enums.Title.{CM, GM, IM}
 import ccas.api.misc.subtypes.{PlayerId, Username}
 import ccas.utils.sql.FreshSchemaLayer
+import ccas.utils.sql.PostgresClient.connectZIO
 
 object TestPlayerSql extends ZIOSpecDefault {
   override def spec: Spec[Any, Throwable] = suite("TestPlayerSql")(
-    testCreateTables,
-    testDeleteAll,
     testInsert,
     testInsertBatch,
     testSelect,
@@ -26,31 +26,20 @@ object TestPlayerSql extends ZIOSpecDefault {
     FreshSchemaLayer("test_player_sql", onInit = Tables.ensureTables)
   ) @@ TestAspect.sequential
 
-  private object Timestamps {
+  private object Times {
     val t0: Instant = LocalDateTime.of(2025, 1, 1, 0, 0).toInstant(ZoneOffset.UTC)
     val t1: Instant = t0.plus(Duration.ofDays(1))
     val t2: Instant = t0.plus(Duration.ofDays(2))
     val t3: Instant = t0.plus(Duration.ofDays(3))
   }
 
-  private val player0 = Player(PlayerId(0), Timestamps.t0, Username("player0_0"), Active, None, Timestamps.t2)
-  private val player1 = Player(PlayerId(1), Timestamps.t1, Username("player1"), Active, Some(CM), Timestamps.t1)
+  private val player0 = Player(PlayerId(0), Times.t0, Username("player0_0"), Active, None, Times.t2)
+  private val player1 = Player(PlayerId(1), Times.t1, Username("player1"), Active, Some(CM), Times.t1)
 
   // Historical snapshots — represent past states that were archived
-  private val player0Snapshot0 = PlayerSnapshot(player0.playerId, Timestamps.t0, Username("player0_old"), Active, None)
+  private val player0Snapshot0 = PlayerSnapshot(player0.playerId, Times.t0, Username("player0_old"), Active, None)
   private val player0Snapshot1 =
-    PlayerSnapshot(player0.playerId, Timestamps.t1, Username("player0_mid"), Fairplay, None)
-
-  private def testCreateTables = test("testCreateTables") {
-    assertCompletes
-  }
-
-  private def testDeleteAll = test("testDeleteAll") {
-    for {
-      _ <- PlayerSnapshot.deleteAll
-      _ <- Player.deleteAll
-    } yield assertCompletes
-  }
+    PlayerSnapshot(player0.playerId, Times.t1, Username("player0_mid"), Fairplay, None)
 
   private def testInsert = test("testInsert") {
     for {
@@ -93,7 +82,7 @@ object TestPlayerSql extends ZIOSpecDefault {
       existing <- Player.selectId(player0.playerId).map(_.get)
       archive = PlayerSnapshot(existing.playerId, existing.since, existing.username, existing.status, existing.title)
       _ <- PlayerSnapshot.insert(archive)
-      updated = existing.copy(username = Username("player0_new"), since = Timestamps.t3)
+      updated = existing.copy(username = Username("player0_new"), since = Times.t3)
       rows <- Player.updateCurrentState(updated)
       // Verify
       current <- Player.selectId(player0.playerId)
@@ -101,7 +90,7 @@ object TestPlayerSql extends ZIOSpecDefault {
     } yield assertTrue(
       rows == 1,
       current.exists(_.username == Username("player0_new")),
-      current.exists(_.since == Timestamps.t3),
+      current.exists(_.since == Times.t3),
       history.size == 3 // player0Snapshot0 + player0Snapshot1 + the archive we just created
     )
   }

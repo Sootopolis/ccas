@@ -10,6 +10,7 @@ import ccas.analysis.apps.recruitment.RecruitmentTestSupport.*
 import ccas.analysis.tables.*
 import ccas.api.misc.enums.PlayerStatusCategory.Active
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, Elo, PlayerId, Username}
+import ccas.utils.client.ChessComClient
 import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
 import ccas.utils.sql.PostgresClient.connectZIO
 import ccas.utils.{CcasLogger, TestCcasLogger}
@@ -32,6 +33,44 @@ object TestRecruitmentApp extends ZIOSpecDefault {
     Scope.default,
     ZLayer.succeed(TestCcasLogger.noop)
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock
+
+  // --- Helpers ---
+
+  private def seedMatchWithBoard(
+    matchId: ClubMatchId,
+    team1ClubId: Option[ClubId],
+    team1PlayerId: PlayerId,
+    team2PlayerId: PlayerId
+  ): ZIO[PostgresClient, Throwable, Unit] =
+    for {
+      _ <- ClubMatch.upsert(
+        ClubMatch(
+          matchId, s"Match ${ClubMatchId.unwrap(matchId)}",
+          ccas.api.misc.enums.ClubMatchStatus.Finished, ccas.api.misc.enums.TimeClass.Daily,
+          Some(Times.t0), Some(Times.t1), 1,
+          team1ClubId, 20, None, 10, Times.t0
+        )
+      )
+      _ <- ClubMatchBoard.insertBatch(
+        List(ClubMatchBoard(matchId, 1, Some(team1PlayerId), false, Some(team2PlayerId), false, 2, 0))
+      )
+    } yield ()
+
+  private def runRecruit(
+    client: ChessComClient,
+    sourceClubs: List[ClubSlug] = Nil,
+    target: Option[Int] = None,
+    explore: Boolean = false,
+    alias: String = "default",
+    trigger: RunTrigger = RunTrigger.Api
+  ): ZIO[PostgresClient & CcasLogger, Throwable, RecruitmentRun] =
+    for {
+      xa     <- ZIO.service[PostgresClient]
+      logger <- ZIO.service[CcasLogger]
+      result <- RecruitmentApp
+        .recruit(clubSlug, alias, target = target, sourceClubs = sourceClubs, explore = explore, trigger = trigger)
+        .provideEnvironment(zio.ZEnvironment(client, xa, logger))
+    } yield result
 
   // ==========================================================================
   // Suite: DB CRUD
@@ -291,17 +330,8 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         _      <- seedDb
         _      <- seedCriteria(criteria)
         client <- fakeChessComClient(responses)
-        xa     <- ZIO.service[PostgresClient]
-        logger <- ZIO.service[CcasLogger]
-        result <- RecruitmentApp.recruit(
-          clubSlug,
-          "default",
-          sourceClubs = List(ClubSlug("source-club")),
-          trigger = RunTrigger.Api
-        )
-          .provideEnvironment(zio.ZEnvironment(client, xa, logger))
-        // Verify run record
-        run <- RecruitmentRun.selectId(result.runId)
+        result <- runRecruit(client, sourceClubs = List(ClubSlug("source-club")))
+        run    <- RecruitmentRun.selectId(result.runId)
         // Verify candidates
         invited <- RecruitmentCandidate.selectInvitedByRun(result.runId)
         // Verify Player/PlayerSnapshot persistence
@@ -349,16 +379,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         _      <- Club.upsert(Club(discoverableClubId, Times.t0, discoverableClubSlug, "Discoverable Club"))
         _      <- seedCriteria(criteria)
         client <- fakeChessComClient(responses)
-        xa     <- ZIO.service[PostgresClient]
-        logger <- ZIO.service[CcasLogger]
-        result <- RecruitmentApp.recruit(
-          clubSlug,
-          "default",
-          sourceClubs = Nil,
-          explore = false,
-          trigger = RunTrigger.Api
-        )
-          .provideEnvironment(zio.ZEnvironment(client, xa, logger))
+        result <- runRecruit(client, explore = false)
         candidates <- RecruitmentCandidate.selectByRun(result.runId)
       } yield assertTrue(
         candidates.isEmpty
@@ -373,56 +394,14 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         s"club/$clubSlug/matches" -> apiClubMatchesJson(),
         "player/opp-player"       -> apiPlayerJson(oppPlayerId.value, "opp-player")
       )
-      val criteria = makeCriteria()
-
       for {
-        _ <- seedDb
-        _ <- seedCriteria(criteria)
-        // Seed opponent player so discoverMatchBoardOpponents can resolve the username
-        _ <- Player.insert(Player(oppPlayerId, Times.t0, Username("opp-player"), Active, None, Times.t0))
-        // Seed a finished match where our club is team1 and the opponent is on team2
-        _ <- ClubMatch.upsert(
-          ClubMatch(
-            matchId,
-            "Explore Match",
-            ccas.api.misc.enums.ClubMatchStatus.Finished,
-            ccas.api.misc.enums.TimeClass.Daily,
-            Some(Times.t0),
-            Some(Times.t1),
-            1,
-            Some(clubId),
-            20,
-            None,
-            10,
-            Times.t0
-          )
-        )
-        _ <- seedPlayer(PlayerId(999)) // team1 player FK
-        _ <- ClubMatchBoard.insertBatch(
-          List(
-            ClubMatchBoard(
-              matchId,
-              1,
-              Some(PlayerId(999)),
-              false,
-              Some(oppPlayerId),
-              false,
-              2,
-              0
-            )
-          )
-        )
+        _      <- seedDb
+        _      <- seedCriteria(makeCriteria())
+        _      <- Player.insert(Player(oppPlayerId, Times.t0, Username("opp-player"), Active, None, Times.t0))
+        _      <- seedPlayer(PlayerId(999))
+        _      <- seedMatchWithBoard(matchId, Some(clubId), PlayerId(999), oppPlayerId)
         client <- fakeChessComClient(responses)
-        xa     <- ZIO.service[PostgresClient]
-        logger <- ZIO.service[CcasLogger]
-        result <- RecruitmentApp.recruit(
-          clubSlug,
-          "default",
-          sourceClubs = Nil,
-          explore = true,
-          trigger = RunTrigger.Api
-        )
-          .provideEnvironment(zio.ZEnvironment(client, xa, logger))
+        result <- runRecruit(client, explore = true)
         candidates <- RecruitmentCandidate.selectByRun(result.runId)
       } yield assertTrue(
         candidates.size == 1,
@@ -455,16 +434,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         _      <- seedDb
         _      <- seedCriteria(criteria)
         client <- fakeChessComClient(responses)
-        xa     <- ZIO.service[PostgresClient]
-        logger <- ZIO.service[CcasLogger]
-        result <- RecruitmentApp.recruit(
-          clubSlug,
-          "default",
-          target = Some(3),
-          sourceClubs = List(source1, source2),
-          trigger = RunTrigger.Api
-        )
-          .provideEnvironment(zio.ZEnvironment(client, xa, logger))
+        result <- runRecruit(client, target = Some(3), sourceClubs = List(source1, source2))
         candidates <- RecruitmentCandidate.selectByRun(result.runId)
         invited  = candidates.filter(_.outcome == CandidateOutcome.Invited)
         deferred = candidates.filter(_.outcome == CandidateOutcome.Deferred)
@@ -496,13 +466,9 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         reached <- Promise.make[Nothing, Unit]
         gate    <- Promise.make[Nothing, Unit]
         client  <- fakeChessComClientWithBlock(responses, blockAfterN = 4, reached, gate)
-        xa      <- ZIO.service[PostgresClient]
-        logger  <- ZIO.service[CcasLogger]
-        fiber <- RecruitmentApp.recruit(clubSlug, "default", sourceClubs = List(intSource))
-          .provideEnvironment(zio.ZEnvironment(client, xa, logger))
-          .fork
+        fiber <- runRecruit(client, sourceClubs = List(intSource)).fork
         _      <- reached.await
-        _      <- ZIO.sleep(200.millis)
+        _      <- ZIO.sleep(100.millis)
         _      <- fiber.interrupt
         latest <- RecruitmentRun.selectLatest(clubId)
         runId = latest.get.runId
@@ -535,23 +501,13 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         _      <- seedDb
         _      <- seedCriteria(criteria)
         client <- fakeChessComClient(responses)
-        xa     <- ZIO.service[PostgresClient]
-        logger <- ZIO.service[CcasLogger]
-        result <- RecruitmentApp.recruit(
-          clubSlug,
-          "default",
-          target = Some(2),
-          sourceClubs = List(source),
-          trigger = RunTrigger.Api
-        )
-          .provideEnvironment(zio.ZEnvironment(client, xa, logger))
+        result <- runRecruit(client, target = Some(2), sourceClubs = List(source))
         candidates <- RecruitmentCandidate.selectByRun(result.runId)
         invited  = candidates.filter(_.outcome == CandidateOutcome.Invited)
         deferred = candidates.filter(_.outcome == CandidateOutcome.Deferred)
       } yield assertTrue(
         invited.size == 2,
         result.candidatesFound == 2,
-        // Some candidates may be deferred (those that passed filters but exceeded target)
         invited.size + deferred.size >= 2
       )
     },
@@ -574,8 +530,6 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         _          <- seedDb
         criteriaId <- seedCriteria(criteria)
         client     <- fakeChessComClient(responses)
-        xa         <- ZIO.service[PostgresClient]
-
         // Seed prior run with a Deferred candidate (need Player row)
         _          <- Player.insert(Player(PlayerId(500), Times.t0, Username("prio-deferred"), Active, None, Times.t0))
         priorRunId <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0)
@@ -590,15 +544,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         deferredBefore <- RecruitmentCandidate.selectDeferredByClub(clubId)
 
         // Run recruitment — deferred candidate should be picked up as priority
-        logger <- ZIO.service[CcasLogger]
-        result <- RecruitmentApp.recruit(
-          clubSlug,
-          "default",
-          target = Some(10),
-          sourceClubs = List(source),
-          trigger = RunTrigger.Api
-        )
-          .provideEnvironment(zio.ZEnvironment(client, xa, logger))
+        result <- runRecruit(client, target = Some(10), sourceClubs = List(source))
 
         // The deferred candidate should now have an Invited outcome in the new run
         newCandidates <- RecruitmentCandidate.selectByRun(result.runId)
@@ -713,40 +659,9 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       for {
         _          <- seedDb
         criteriaId <- seedCriteria(criteria)
-        // Seed player rows (FK targets for club_match_board)
         _ <- seedPlayer(candidatePid)
         _ <- seedPlayer(PlayerId(999))
-        // Seed club_match and club_match_board for the candidate
-        _ <- ClubMatch.upsert(
-          ClubMatch(
-            refMatchId,
-            "Test Match",
-            ccas.api.misc.enums.ClubMatchStatus.Finished,
-            ccas.api.misc.enums.TimeClass.Daily,
-            Some(Times.t0),
-            Some(Times.t1),
-            1,
-            Some(clubId),
-            20,
-            None,
-            10,
-            Times.t0
-          )
-        )
-        _ <- ClubMatchBoard.insertBatch(
-          List(
-            ClubMatchBoard(
-              refMatchId,
-              1,
-              Some(candidatePid),
-              false,
-              Some(PlayerId(999)),
-              false,
-              2,
-              0
-            )
-          )
-        )
+        _ <- seedMatchWithBoard(refMatchId, Some(clubId), candidatePid, PlayerId(999))
         client <- fakeChessComClient(responses)
         runId  <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Instant.now())
         _      <- evalCandidates(client, runId, List(Username("ref-db-player")), criteria)
@@ -812,17 +727,8 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         _      <- seedDb
         _      <- seedCriteria(criteria)
         client <- fakeChessComClient(responses)
-        xa     <- ZIO.service[PostgresClient]
-        logger <- ZIO.service[CcasLogger]
-        _ <- RecruitmentApp.recruit(
-          clubSlug,
-          "default",
-          sourceClubs = List(ClubSlug("source-club")),
-          explore = false,
-          trigger = RunTrigger.Api
-        )
-          .provideEnvironment(zio.ZEnvironment(client, xa, logger))
-        ref <- ClubMatchRef.selectId(clubId)
+        _      <- runRecruit(client, sourceClubs = List(ClubSlug("source-club")))
+        ref    <- ClubMatchRef.selectId(clubId)
       } yield assertTrue(
         ref.isDefined,
         ref.get.matchId == ClubMatchId(matchId),

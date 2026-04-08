@@ -37,7 +37,4 @@ object ClubMatchRef {
 
   def deleteId(clubId: ClubId): ZIO[PostgresClient, SQLException, Int] =
     connectZIO(sql"DELETE FROM club_match_ref WHERE club_id = $clubId".update.run())
-
-  def deleteAll: ZIO[PostgresClient, SQLException, Int] =
-    connectZIO(sql"DELETE FROM club_match_ref".update.run())
 }

@@ -55,7 +55,4 @@ object PlayerRefSkip {
 
   def deleteId(playerId: PlayerId): ZIO[PostgresClient, SQLException, Int] =
     connectZIO(sql"DELETE FROM player_ref_skip WHERE player_id = $playerId".update.run())
-
-  def deleteAll: ZIO[PostgresClient, SQLException, Int] =
-    connectZIO(sql"DELETE FROM player_ref_skip".update.run())
 }

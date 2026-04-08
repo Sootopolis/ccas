@@ -90,9 +90,4 @@ object RecruitmentBlacklist {
     connectZIO {
       sql"DELETE FROM recruitment_blacklist WHERE club_id = $clubId AND player_id = $playerId".update.run()
     }
-
-  def deleteAll: ZIO[PostgresClient, SQLException, Int] =
-    connectZIO {
-      sql"DELETE FROM recruitment_blacklist".update.run()
-    }
 }

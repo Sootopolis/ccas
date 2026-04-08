@@ -95,9 +95,4 @@ object PlayerSnapshot {
               WHERE player_id = ${item.playerId} AND since = ${item.since}""".update
       }
     }
-
-  def deleteAll: ZIO[PostgresClient, SQLException, Int] =
-    connectZIO {
-      sql"DELETE FROM player_snapshot".update.run()
-    }
 }

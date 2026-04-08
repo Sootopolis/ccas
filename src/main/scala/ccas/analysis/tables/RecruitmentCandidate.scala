@@ -168,9 +168,4 @@ object RecruitmentCandidate {
       sql"""UPDATE recruitment_candidate SET outcome = ${outcome}
             WHERE run_id = $runId AND player_id = $playerId""".update.run()
     }
-
-  def deleteAll: ZIO[PostgresClient, SQLException, Int] =
-    connectZIO {
-      sql"DELETE FROM recruitment_candidate".update.run()
-    }
 }
