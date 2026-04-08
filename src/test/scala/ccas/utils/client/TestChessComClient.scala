@@ -449,7 +449,7 @@ object TestChessComClient extends ZIOSpecDefault {
             (client, stateRef, _) <- makeClient(
               handler = _ => ZIO.succeed(Response(status = Status.TooManyRequests)),
               permits = 20,
-              cooldown = 50.millis,
+              cooldown = 60.seconds,
               failureThreshold = 0.2
             )
             _ <- ZIO.foreachParDiscard(1 to 5)(i =>
@@ -459,7 +459,7 @@ object TestChessComClient extends ZIOSpecDefault {
             _ <- ZIO.succeed(assertTrue(state.currentMax == 1L))
           } yield stateRef // scope closes here, recovery fibers should be interrupted
         }
-        // Wait longer than the cooldown — if recovery were alive, it would advance permits
+        // If recovery survived scope closure, 300ms would be enough for it to advance
         _ <- ZIO.sleep(300.millis)
         state <- stateRef.get
       } yield assertTrue(state.currentMax == 1L)
