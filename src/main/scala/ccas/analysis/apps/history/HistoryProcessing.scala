@@ -171,22 +171,43 @@ private[history] object HistoryProcessing {
         else if (team2ClubId.contains(ctx.clubId)) { Some(false) }
         else { None }
 
-      boardAndGames <- buildBoardAndGameRows(ctx, matchId, dailyMatch, weAreTeam1, clubMatch.startTime)
-      (boardRows, gameRowLists) = boardAndGames.unzip
-      gameRows = gameRowLists.flatten
+      // Check if board scores are unchanged — if so, skip board API calls and row rebuild
+      expectedScores = computeExpectedScores(dailyMatch)
+      existingBoards <- ClubMatchBoard.selectMatch(matchId)
+      boardSkip = scoresMatch(expectedScores, existingBoards)
 
-      _ <- withTransaction {
+      _ <- if (boardSkip) {
+        withTransaction {
+          for {
+            _ <- ClubMatch.upsert(clubMatch)
+            _ <-
+              if (weAreTeam1.isDefined) {
+                HistoryPendingMatch.delete(ctx.clubId, matchId, isLive = false)
+              } else {
+                HistoryPendingMatch.updateStatus(ctx.clubId, matchId, false, PendingMatchStatus.Unidentified)
+              }
+          } yield ()
+        }
+      } else {
         for {
-          _ <- ClubMatch.upsert(clubMatch)
-          _ <- ClubMatchBoard.deleteMatch(matchId)
-          _ <- ClubMatchBoard.insertBatch(boardRows)
-          _ <- ClubMatchGame.insertBatch(gameRows)
-          _ <-
-            if (weAreTeam1.isDefined) {
-              HistoryPendingMatch.delete(ctx.clubId, matchId, isLive = false)
-            } else {
-              HistoryPendingMatch.updateStatus(ctx.clubId, matchId, false, PendingMatchStatus.Unidentified)
-            }
+          boardAndGames <- buildBoardAndGameRows(ctx, matchId, dailyMatch, weAreTeam1, clubMatch.startTime)
+          (boardRows, gameRowLists) = boardAndGames.unzip
+          gameRows = gameRowLists.flatten
+          _ <- withTransaction {
+            for {
+              _ <- ClubMatch.upsert(clubMatch)
+              _ <- ClubMatchBoard.deleteMatch(matchId)
+              _ <- ClubMatchBoard.insertBatch(boardRows)
+              _ <- ClubMatchGame.insertBatch(gameRows)
+              _ <-
+                if (weAreTeam1.isDefined) {
+                  HistoryPendingMatch.delete(ctx.clubId, matchId, isLive = false)
+                } else {
+                  HistoryPendingMatch.updateStatus(ctx.clubId, matchId, false, PendingMatchStatus.Unidentified)
+                }
+            } yield ()
+          }
+          _ <- ctx.matchesBoardsUpdated.update(_ + 1)
         } yield ()
       }
       _ <- ZIO.whenDiscard(weAreTeam1.isEmpty) {
@@ -388,6 +409,48 @@ private[history] object HistoryProcessing {
     val (g2t1, g2t2) = gameScore(game2Winner)
     ((g1t1 + g2t1).toShort, (g1t2 + g2t2).toShort)
   }
+
+  /** Computes expected board scores from match-level data alone (no board endpoint needed).
+    * Returns a map of boardNum → (team1ScoreX2, team2ScoreX2).
+    */
+  private[history] def computeExpectedScores(dailyMatch: ApiDailyMatch): Map[Short, (Short, Short)] =
+    dailyMatch match {
+      case _: ApiDailyMatchRegistered => Map.empty
+      case _ =>
+        val teams   = dailyMatch.teams
+        val team1Fp = teams.team1.fairPlayRemovals.map(_.value)
+        val team2Fp = teams.team2.fairPlayRemovals.map(_.value)
+
+        val team1ByBoard: Map[Short, MatchPlayerStarted] = teams.team1.players.collect { case p: MatchPlayerStarted =>
+          p.board.path.segments.last.toShort -> p
+        }.toMap
+        val team2ByBoard: Map[Short, MatchPlayerStarted] = teams.team2.players.collect { case p: MatchPlayerStarted =>
+          p.board.path.segments.last.toShort -> p
+        }.toMap
+
+        val allBoards = team1ByBoard.keySet ++ team2ByBoard.keySet
+        allBoards.flatMap { boardNum =>
+          for {
+            t1 <- team1ByBoard.get(boardNum)
+            t2 <- team2ByBoard.get(boardNum)
+          } yield {
+            val t1FairPlay = team1Fp.contains(t1.username.value)
+            val t2FairPlay = team2Fp.contains(t2.username.value)
+            val (g1Winner, _) = normalizeGameOutcome(t1.playedAsWhite, t2.playedAsBlack, whiteTeamIsTeam1 = true)
+            val (g2Winner, _) = normalizeGameOutcome(t2.playedAsWhite, t1.playedAsBlack, whiteTeamIsTeam1 = false)
+            boardNum -> computeScoreX2(g1Winner, g2Winner, t1FairPlay, t2FairPlay)
+          }
+        }.toMap
+    }
+
+  /** Returns true if the expected board scores match the existing DB rows exactly. */
+  private[history] def scoresMatch(
+    expected: Map[Short, (Short, Short)],
+    existing: List[ClubMatchBoard]
+  ): Boolean =
+    expected.size == existing.size && existing.forall { b =>
+      expected.get(b.board).contains((b.team1ScoreX2, b.team2ScoreX2))
+    }
 
   // === Player Resolution ===
 
@@ -625,6 +688,7 @@ private[history] object HistoryProcessing {
       matchesProcessed    <- ctx.matchesProcessed.get
       matchesFailed       <- ctx.matchesFailed.get
       matchesUnidentified <- ctx.matchesUnidentified.get
+      matchesBoardsUpdated    <- ctx.matchesBoardsUpdated.get
       matchesSharedSkip   <- ctx.matchesSharedSkip.get
       playersDiscovered   <- ctx.playersDiscovered.get
       playersKnown        <- ctx.playersKnown.get
@@ -634,6 +698,7 @@ private[history] object HistoryProcessing {
       matchesProcessed = matchesProcessed,
       matchesFailed = matchesFailed,
       matchesUnidentified = matchesUnidentified,
+      matchesBoardsUpdated = matchesBoardsUpdated,
       matchesSharedSkip = matchesSharedSkip,
       playersDiscovered = playersDiscovered,
       playersKnown = playersKnown,

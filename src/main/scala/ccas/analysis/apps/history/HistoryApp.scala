@@ -308,7 +308,7 @@ object HistoryApp extends ZIOAppDefault {
       )
       _ <- CcasLogger.info(s"Matches seeded: ${stats.matchesSeeded}")
       _ <- CcasLogger.info(
-        s"Matches processed: ${stats.matchesProcessed} | failed: ${stats.matchesFailed} | unidentified: ${stats.matchesUnidentified} | shared skip: ${stats.matchesSharedSkip}"
+        s"Matches processed: ${stats.matchesProcessed} | boards updated: ${stats.matchesBoardsUpdated} | failed: ${stats.matchesFailed} | unidentified: ${stats.matchesUnidentified} | shared skip: ${stats.matchesSharedSkip}"
       )
       _ <- CcasLogger.info(
         s"Players discovered: ${stats.playersDiscovered} | known: ${stats.playersKnown} | failed: ${stats.playersFailed}"
@@ -340,6 +340,7 @@ object HistoryApp extends ZIOAppDefault {
     sb.append("--- Matches ---\n")
     sb.append(s"Seeded:       ${stats.matchesSeeded}\n")
     sb.append(s"Processed:    ${stats.matchesProcessed}\n")
+    sb.append(s"Boards updated: ${stats.matchesBoardsUpdated}\n")
     sb.append(s"Failed:       ${stats.matchesFailed}\n")
     sb.append(s"Unidentified: ${stats.matchesUnidentified}\n")
     sb.append(s"Shared skip:  ${stats.matchesSharedSkip}\n")

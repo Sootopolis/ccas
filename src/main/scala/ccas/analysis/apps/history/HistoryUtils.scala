@@ -27,6 +27,7 @@ private[history] object HistoryUtils {
     matchesProcessed: Int = 0,
     matchesFailed: Int = 0,
     matchesUnidentified: Int = 0,
+    matchesBoardsUpdated: Int = 0,
     matchesSharedSkip: Int = 0,
     playersDiscovered: Int = 0,
     playersKnown: Int = 0,
@@ -76,6 +77,7 @@ private[history] object HistoryUtils {
     val playersKnown: Ref[Int],
     val playersFailed: Ref[Int],
     val failedMatches: Ref[List[(MatchKey, String)]],
+    val matchesBoardsUpdated: Ref[Int],
     val matchesSharedSkip: Ref[Int]
   )
 
@@ -100,6 +102,7 @@ private[history] object HistoryUtils {
         playersKnown        <- Ref.make(0)
         playersFailed       <- Ref.make(0)
         failedMatches       <- Ref.make(List.empty[(MatchKey, String)])
+        matchesBoardsUpdated    <- Ref.make(0)
         matchesSharedSkip   <- Ref.make(0)
       } yield new ProcessingContext(
         client,
@@ -118,6 +121,7 @@ private[history] object HistoryUtils {
         playersKnown,
         playersFailed,
         failedMatches,
+        matchesBoardsUpdated,
         matchesSharedSkip
       )
   }
