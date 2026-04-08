@@ -127,750 +127,836 @@ object TestMembershipApp extends ZIOSpecDefault {
   // ==========================================================================
 
   private def suiteClassifyFromDb = suite("classifyFromDb")(
-    test("empty inputs") {
-      val result = MembershipReport.classifyFromDb(clubId, Nil, Nil, Times.t0, Times.t2)
-      assertTrue(result.isEmpty)
-    },
-    test("member since in range, no prior snaps → NewMember") {
-      val member = ClubMember(clubId, pid0, Times.t1, None)
-      val result = MembershipReport.classifyFromDb(clubId, List(member), Nil, Times.t0, Times.t2)
-      assertTrue(
-        result.size == 1,
-        result.head.playerId == pid0,
-        result.head.changes.exists(_.isInstanceOf[NewMember])
-      )
-    },
-    test("member since in range, prior snaps exist → JoinedClub") {
-      val member = ClubMember(clubId, pid0, Times.t1, None)
-      val snap   = PlayerSnapshot(pid0, Times.t0, Username("alice"), Active, None)
-      val result = MembershipReport.classifyFromDb(clubId, List(member), List(snap), Times.t0, Times.t2)
-      assertTrue(
-        result.size == 1,
-        result.head.changes.exists(_.isInstanceOf[JoinedClub])
-      )
-    },
-    test("member since in range, prior closed membership → Rejoined") {
-      val oldMember = ClubMember(clubId, pid0, Times.t0, Some(Times.t1))
-      val newMember = ClubMember(clubId, pid0, Times.t2, None)
-      val result    = MembershipReport.classifyFromDb(clubId, List(oldMember, newMember), Nil, Times.t1, Times.t3)
-      assertTrue(
-        result.size == 1,
-        result.head.changes.exists(_.isInstanceOf[Rejoined])
-      )
-    },
-    test("member until in range, latest snap Active → LeftClub") {
-      val member = ClubMember(clubId, pid0, Times.t0, Some(Times.t1))
-      val snap   = PlayerSnapshot(pid0, Times.t0, Username("alice"), Active, None)
-      val result = MembershipReport.classifyFromDb(clubId, List(member), List(snap), Times.t0, Times.t2)
-      assertTrue(
-        result.size == 1,
-        result.head.changes.exists(_.isInstanceOf[LeftClub])
-      )
-    },
-    test("member until in range, latest snap Closed → AccountClosed") {
-      val member = ClubMember(clubId, pid0, Times.t0, Some(Times.t1))
-      val snap   = PlayerSnapshot(pid0, Times.t0, Username("alice"), Closed, None)
-      val result = MembershipReport.classifyFromDb(clubId, List(member), List(snap), Times.t0, Times.t2)
-      assertTrue(
-        result.size == 1,
-        result.head.changes.exists(_.isInstanceOf[AccountClosed])
-      )
-    },
-    test("member until in range, no snapshot → Unresolvable") {
-      val member = ClubMember(clubId, pid0, Times.t0, Some(Times.t1))
-      val result = MembershipReport.classifyFromDb(clubId, List(member), Nil, Times.t0, Times.t2)
-      assertTrue(
-        result.size == 1,
-        result.head.changes.exists(_.isInstanceOf[Unresolvable])
-      )
-    },
-    test("two snaps in range, different usernames → UsernameChange") {
-      val member = ClubMember(clubId, pid0, Times.t0, None)
-      val snap1  = PlayerSnapshot(pid0, Times.t0, Username("alice-old"), Active, None)
-      val snap2  = PlayerSnapshot(pid0, Times.t1, Username("alice-new"), Active, None)
-      val result = MembershipReport.classifyFromDb(clubId, List(member), List(snap1, snap2), Times.t0, Times.t2)
-      assertTrue(
-        result.size == 1,
-        result.head.changes.exists(_.isInstanceOf[UsernameChange])
-      )
-    },
-    test("two snaps in range, different statuses → StatusChange") {
-      val member = ClubMember(clubId, pid0, Times.t0, None)
-      val snap1  = PlayerSnapshot(pid0, Times.t0, Username("alice"), Active, None)
-      val snap2  = PlayerSnapshot(pid0, Times.t1, Username("alice"), Closed, None)
-      val result = MembershipReport.classifyFromDb(clubId, List(member), List(snap1, snap2), Times.t0, Times.t2)
-      assertTrue(
-        result.size == 1,
-        result.head.changes.exists(_.isInstanceOf[StatusChange])
-      )
-    },
-    test("all dates outside range → empty list") {
-      val member = ClubMember(clubId, pid0, Times.t0, None)
-      val snap   = PlayerSnapshot(pid0, Times.t0, Username("alice"), Active, None)
-      val result = MembershipReport.classifyFromDb(clubId, List(member), List(snap), Times.t2, Times.t3)
-      assertTrue(result.isEmpty)
-    }
+    testEmptyInputs,
+    testMemberSinceInRangeNoSnapshots,
+    testMemberSinceInRangeWithSnapshots,
+    testMemberSinceInRangeWithClosedMembership,
+    testMemberUntilInRangeActiveSnap,
+    testMemberUntilInRangeClosedSnap,
+    testMemberUntilInRangeNoSnapshot,
+    testTwoSnapsWithDifferentUsernames,
+    testTwoSnapsWithDifferentStatuses,
+    testAllDatesOutsideRange
   )
+
+  private def testEmptyInputs = test("empty inputs") {
+    val result = MembershipReport.classifyFromDb(clubId, Nil, Nil, Times.t0, Times.t2)
+    assertTrue(result.isEmpty)
+  }
+
+  private def testMemberSinceInRangeNoSnapshots = test("member since in range, no prior snaps → NewMember") {
+    val member = ClubMember(clubId, pid0, Times.t1, None)
+    val result = MembershipReport.classifyFromDb(clubId, List(member), Nil, Times.t0, Times.t2)
+    assertTrue(
+      result.size == 1,
+      result.head.playerId == pid0,
+      result.head.changes.exists(_.isInstanceOf[NewMember])
+    )
+  }
+
+  private def testMemberSinceInRangeWithSnapshots = test("member since in range, prior snaps exist → JoinedClub") {
+    val member = ClubMember(clubId, pid0, Times.t1, None)
+    val snap   = PlayerSnapshot(pid0, Times.t0, Username("alice"), Active, None)
+    val result = MembershipReport.classifyFromDb(clubId, List(member), List(snap), Times.t0, Times.t2)
+    assertTrue(
+      result.size == 1,
+      result.head.changes.exists(_.isInstanceOf[JoinedClub])
+    )
+  }
+
+  private def testMemberSinceInRangeWithClosedMembership = test("member since in range, prior closed membership → Rejoined") {
+    val oldMember = ClubMember(clubId, pid0, Times.t0, Some(Times.t1))
+    val newMember = ClubMember(clubId, pid0, Times.t2, None)
+    val result    = MembershipReport.classifyFromDb(clubId, List(oldMember, newMember), Nil, Times.t1, Times.t3)
+    assertTrue(
+      result.size == 1,
+      result.head.changes.exists(_.isInstanceOf[Rejoined])
+    )
+  }
+
+  private def testMemberUntilInRangeActiveSnap = test("member until in range, latest snap Active → LeftClub") {
+    val member = ClubMember(clubId, pid0, Times.t0, Some(Times.t1))
+    val snap   = PlayerSnapshot(pid0, Times.t0, Username("alice"), Active, None)
+    val result = MembershipReport.classifyFromDb(clubId, List(member), List(snap), Times.t0, Times.t2)
+    assertTrue(
+      result.size == 1,
+      result.head.changes.exists(_.isInstanceOf[LeftClub])
+    )
+  }
+
+  private def testMemberUntilInRangeClosedSnap = test("member until in range, latest snap Closed → AccountClosed") {
+    val member = ClubMember(clubId, pid0, Times.t0, Some(Times.t1))
+    val snap   = PlayerSnapshot(pid0, Times.t0, Username("alice"), Closed, None)
+    val result = MembershipReport.classifyFromDb(clubId, List(member), List(snap), Times.t0, Times.t2)
+    assertTrue(
+      result.size == 1,
+      result.head.changes.exists(_.isInstanceOf[AccountClosed])
+    )
+  }
+
+  private def testMemberUntilInRangeNoSnapshot = test("member until in range, no snapshot → Unresolvable") {
+    val member = ClubMember(clubId, pid0, Times.t0, Some(Times.t1))
+    val result = MembershipReport.classifyFromDb(clubId, List(member), Nil, Times.t0, Times.t2)
+    assertTrue(
+      result.size == 1,
+      result.head.changes.exists(_.isInstanceOf[Unresolvable])
+    )
+  }
+
+  private def testTwoSnapsWithDifferentUsernames = test("two snaps in range, different usernames → UsernameChange") {
+    val member = ClubMember(clubId, pid0, Times.t0, None)
+    val snap1  = PlayerSnapshot(pid0, Times.t0, Username("alice-old"), Active, None)
+    val snap2  = PlayerSnapshot(pid0, Times.t1, Username("alice-new"), Active, None)
+    val result = MembershipReport.classifyFromDb(clubId, List(member), List(snap1, snap2), Times.t0, Times.t2)
+    assertTrue(
+      result.size == 1,
+      result.head.changes.exists(_.isInstanceOf[UsernameChange])
+    )
+  }
+
+  private def testTwoSnapsWithDifferentStatuses = test("two snaps in range, different statuses → StatusChange") {
+    val member = ClubMember(clubId, pid0, Times.t0, None)
+    val snap1  = PlayerSnapshot(pid0, Times.t0, Username("alice"), Active, None)
+    val snap2  = PlayerSnapshot(pid0, Times.t1, Username("alice"), Closed, None)
+    val result = MembershipReport.classifyFromDb(clubId, List(member), List(snap1, snap2), Times.t0, Times.t2)
+    assertTrue(
+      result.size == 1,
+      result.head.changes.exists(_.isInstanceOf[StatusChange])
+    )
+  }
+
+  private def testAllDatesOutsideRange = test("all dates outside range → empty list") {
+    val member = ClubMember(clubId, pid0, Times.t0, None)
+    val snap   = PlayerSnapshot(pid0, Times.t0, Username("alice"), Active, None)
+    val result = MembershipReport.classifyFromDb(clubId, List(member), List(snap), Times.t2, Times.t3)
+    assertTrue(result.isEmpty)
+  }
 
   // ==========================================================================
   // Suite B: mergeResults (pure)
   // ==========================================================================
 
   private def suiteMergeResults = suite("mergeResults")(
-    test("concatenates PhaseBResult and PhaseCResult fields") {
-      val bChange   = MemberChangeSummary(pid0, Username("alice"), Chunk(NewMember(Times.t1)))
-      val cChange   = MemberChangeSummary(pid1, Username("bob"), Chunk(LeftClub(Times.t1)))
-      val bPlayer   = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0)
-      val bUpdated  = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t1)
-      val bArchived = PlayerSnapshot(pid0, Times.t0, Username("alice"), Active, None)
-      val cUpdated  = Player(pid1, Times.t0, Username("bob"), Closed, None, Times.t1)
-      val cArchived = PlayerSnapshot(pid1, Times.t0, Username("bob"), Active, None)
-      val bMember   = ClubMember(clubId, pid0, Times.t1, None)
-      val bClosed   = ClubMember(clubId, pid2, Times.t0, Some(Times.t1))
-      val cClosed   = ClubMember(clubId, pid1, Times.t0, Some(Times.t1))
-
-      val phaseB = PhaseBResult(
-        Set(pid0),
-        Chunk(bChange),
-        Chunk(bPlayer),
-        Chunk(bUpdated),
-        Chunk(bArchived),
-        Chunk(bMember),
-        Chunk(bClosed)
-      )
-      val phaseC = PhaseCResult(Chunk(cChange), Chunk(cUpdated), Chunk(cArchived), Chunk(cClosed))
-      val result = MembershipApp.mergeResults(phaseB, phaseC, 10, 8, Times.t0, Times.t1)
-
-      assertTrue(
-        result.changes == Chunk(bChange, cChange),
-        result.newPlayers == Chunk(bPlayer),
-        result.updatedPlayers == Chunk(bUpdated, cUpdated),
-        result.archivedSnapshots == Chunk(bArchived, cArchived),
-        result.newMemberships == Chunk(bMember),
-        result.closedMemberships == Chunk(bClosed, cClosed)
-      )
-    }
+    testConcatenatesPhaseBAndPhaseCFields
   )
+
+  private def testConcatenatesPhaseBAndPhaseCFields = test("concatenates PhaseBResult and PhaseCResult fields") {
+    val bChange   = MemberChangeSummary(pid0, Username("alice"), Chunk(NewMember(Times.t1)))
+    val cChange   = MemberChangeSummary(pid1, Username("bob"), Chunk(LeftClub(Times.t1)))
+    val bPlayer   = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0)
+    val bUpdated  = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t1)
+    val bArchived = PlayerSnapshot(pid0, Times.t0, Username("alice"), Active, None)
+    val cUpdated  = Player(pid1, Times.t0, Username("bob"), Closed, None, Times.t1)
+    val cArchived = PlayerSnapshot(pid1, Times.t0, Username("bob"), Active, None)
+    val bMember   = ClubMember(clubId, pid0, Times.t1, None)
+    val bClosed   = ClubMember(clubId, pid2, Times.t0, Some(Times.t1))
+    val cClosed   = ClubMember(clubId, pid1, Times.t0, Some(Times.t1))
+
+    val phaseB = PhaseBResult(
+      Set(pid0),
+      Chunk(bChange),
+      Chunk(bPlayer),
+      Chunk(bUpdated),
+      Chunk(bArchived),
+      Chunk(bMember),
+      Chunk(bClosed)
+    )
+    val phaseC = PhaseCResult(Chunk(cChange), Chunk(cUpdated), Chunk(cArchived), Chunk(cClosed))
+    val result = MembershipApp.mergeResults(phaseB, phaseC, 10, 8, Times.t0, Times.t1)
+
+    assertTrue(
+      result.changes == Chunk(bChange, cChange),
+      result.newPlayers == Chunk(bPlayer),
+      result.updatedPlayers == Chunk(bUpdated, cUpdated),
+      result.archivedSnapshots == Chunk(bArchived, cArchived),
+      result.newMemberships == Chunk(bMember),
+      result.closedMemberships == Chunk(bClosed, cClosed)
+    )
+  }
 
   // ==========================================================================
   // Suite C: formatReport (pure)
   // ==========================================================================
 
   private def suiteFormatReport = suite("formatReport")(
-    test("empty summaries → 'No changes'") {
-      val rr     = MembershipReport.ReportResult(Nil, 10, 10, Map.empty)
-      val output = MembershipReport.formatReport(rr)
-      assertTrue(
-        output.contains("Total members: 10 (+0)"),
-        output.contains("No changes")
-      )
-    },
-    test("groups changes by category, not by player") {
-      val summaries = List(
-        MemberChangeSummary(
-          pid0,
-          Username("alice"),
-          Chunk(NewMember(Times.t1), UsernameChange(Times.t2, Username("alice-old")))
-        ),
-        MemberChangeSummary(pid1, Username("bob"), Chunk(NewMember(Times.t1)))
-      )
-      val rr     = MembershipReport.ReportResult(summaries, 8, 10, Map.empty)
-      val output = MembershipReport.formatReport(rr)
-      assertTrue(
-        output.contains("[JOINED]\n  alice"),
-        output.contains("[JOINED]\n  alice") && output.contains("  bob"),
-        output.contains("[USERNAME CHANGE]\n  alice")
-      )
-    },
-    test("categories appear in enum ordinal order") {
-      val summaries = List(
-        MemberChangeSummary(pid0, Username("alice"), Chunk(UsernameChange(Times.t2, Username("old")))),
-        MemberChangeSummary(pid1, Username("bob"), Chunk(NewMember(Times.t1)))
-      )
-      val rr     = MembershipReport.ReportResult(summaries, 8, 9, Map.empty)
-      val output = MembershipReport.formatReport(rr)
-      val newIdx = output.indexOf("[JOINED]")
-      val usrIdx = output.indexOf("[USERNAME CHANGE]")
-      assertTrue(
-        newIdx >= 0,
-        usrIdx >= 0,
-        newIdx < usrIdx
-      )
-    },
-    test("entries within a category are sorted by timestamp") {
-      val summaries = List(
-        MemberChangeSummary(pid0, Username("bob"), Chunk(NewMember(Times.t2))),
-        MemberChangeSummary(pid1, Username("alice"), Chunk(NewMember(Times.t1)))
-      )
-      val rr       = MembershipReport.ReportResult(summaries, 8, 10, Map.empty)
-      val output   = MembershipReport.formatReport(rr)
-      val aliceIdx = output.indexOf("alice")
-      val bobIdx   = output.indexOf("bob")
-      assertTrue(aliceIdx < bobIdx)
-    },
-    test("shows member count delta") {
-      val rr     = MembershipReport.ReportResult(Nil, 12, 10, Map.empty)
-      val output = MembershipReport.formatReport(rr)
-      assertTrue(output.contains("Total members: 10 (-2)"))
-    },
-    test("shows invitation date on join changes but not on other changes") {
-      val invitedAt = Times.t0
-      val summaries = List(
-        MemberChangeSummary(
-          pid0,
-          Username("alice"),
-          Chunk(NewMember(Times.t1), UsernameChange(Times.t2, Username("alice-old")))
-        ),
-        MemberChangeSummary(pid1, Username("bob"), Chunk(JoinedClub(Times.t1)))
-      )
-      val invitations = Map(pid0 -> invitedAt)
-      val rr          = MembershipReport.ReportResult(summaries, 8, 10, invitations)
-      val output      = MembershipReport.formatReport(rr)
-      val joinedSection = output.substring(output.indexOf("[JOINED]"), output.indexOf("[USERNAME CHANGE]"))
-      val usernameSection = output.substring(output.indexOf("[USERNAME CHANGE]"))
-      assertTrue(
-        joinedSection.contains(s"alice — at ${Times.t1} — invited at $invitedAt"),
-        !joinedSection.contains("bob — at ${Times.t1} — invited"),
-        !usernameSection.contains("invited")
-      )
-    },
-    test("shows invitation date on rejoined changes") {
-      val invitedAt = Times.t1
-      val summaries = List(
-        MemberChangeSummary(pid0, Username("alice"), Chunk(Rejoined(Times.t2, Times.t0)))
-      )
-      val invitations = Map(pid0 -> invitedAt)
-      val rr          = MembershipReport.ReportResult(summaries, 10, 10, invitations)
-      val output      = MembershipReport.formatReport(rr)
-      assertTrue(output.contains(s"at ${Times.t2} — previously left at ${Times.t0} — invited at $invitedAt"))
-    }
+    testEmptySummariesNoChanges,
+    testGroupsChangesByCategory,
+    testCategoriesInEnumOrdinalOrder,
+    testEntriesSortedByTimestamp,
+    testShowsMemberCountDelta,
+    testShowsInvitationDateOnJoinChanges,
+    testShowsInvitationDateOnRejoinedChanges
   )
+
+  private def testEmptySummariesNoChanges = test("empty summaries → 'No changes'") {
+    val rr     = MembershipReport.ReportResult(Nil, 10, 10, Map.empty)
+    val output = MembershipReport.formatReport(rr)
+    assertTrue(
+      output.contains("Total members: 10 (+0)"),
+      output.contains("No changes")
+    )
+  }
+
+  private def testGroupsChangesByCategory = test("groups changes by category, not by player") {
+    val summaries = List(
+      MemberChangeSummary(
+        pid0,
+        Username("alice"),
+        Chunk(NewMember(Times.t1), UsernameChange(Times.t2, Username("alice-old")))
+      ),
+      MemberChangeSummary(pid1, Username("bob"), Chunk(NewMember(Times.t1)))
+    )
+    val rr     = MembershipReport.ReportResult(summaries, 8, 10, Map.empty)
+    val output = MembershipReport.formatReport(rr)
+    assertTrue(
+      output.contains("[JOINED]\n  alice"),
+      output.contains("[JOINED]\n  alice") && output.contains("  bob"),
+      output.contains("[USERNAME CHANGE]\n  alice")
+    )
+  }
+
+  private def testCategoriesInEnumOrdinalOrder = test("categories appear in enum ordinal order") {
+    val summaries = List(
+      MemberChangeSummary(pid0, Username("alice"), Chunk(UsernameChange(Times.t2, Username("old")))),
+      MemberChangeSummary(pid1, Username("bob"), Chunk(NewMember(Times.t1)))
+    )
+    val rr     = MembershipReport.ReportResult(summaries, 8, 9, Map.empty)
+    val output = MembershipReport.formatReport(rr)
+    val newIdx = output.indexOf("[JOINED]")
+    val usrIdx = output.indexOf("[USERNAME CHANGE]")
+    assertTrue(
+      newIdx >= 0,
+      usrIdx >= 0,
+      newIdx < usrIdx
+    )
+  }
+
+  private def testEntriesSortedByTimestamp = test("entries within a category are sorted by timestamp") {
+    val summaries = List(
+      MemberChangeSummary(pid0, Username("bob"), Chunk(NewMember(Times.t2))),
+      MemberChangeSummary(pid1, Username("alice"), Chunk(NewMember(Times.t1)))
+    )
+    val rr       = MembershipReport.ReportResult(summaries, 8, 10, Map.empty)
+    val output   = MembershipReport.formatReport(rr)
+    val aliceIdx = output.indexOf("alice")
+    val bobIdx   = output.indexOf("bob")
+    assertTrue(aliceIdx < bobIdx)
+  }
+
+  private def testShowsMemberCountDelta = test("shows member count delta") {
+    val rr     = MembershipReport.ReportResult(Nil, 12, 10, Map.empty)
+    val output = MembershipReport.formatReport(rr)
+    assertTrue(output.contains("Total members: 10 (-2)"))
+  }
+
+  private def testShowsInvitationDateOnJoinChanges = test("shows invitation date on join changes but not on other changes") {
+    val invitedAt = Times.t0
+    val summaries = List(
+      MemberChangeSummary(
+        pid0,
+        Username("alice"),
+        Chunk(NewMember(Times.t1), UsernameChange(Times.t2, Username("alice-old")))
+      ),
+      MemberChangeSummary(pid1, Username("bob"), Chunk(JoinedClub(Times.t1)))
+    )
+    val invitations = Map(pid0 -> invitedAt)
+    val rr          = MembershipReport.ReportResult(summaries, 8, 10, invitations)
+    val output      = MembershipReport.formatReport(rr)
+    val joinedSection = output.substring(output.indexOf("[JOINED]"), output.indexOf("[USERNAME CHANGE]"))
+    val usernameSection = output.substring(output.indexOf("[USERNAME CHANGE]"))
+    assertTrue(
+      joinedSection.contains(s"alice — at ${Times.t1} — invited at $invitedAt"),
+      !joinedSection.contains("bob — at ${Times.t1} — invited"),
+      !usernameSection.contains("invited")
+    )
+  }
+
+  private def testShowsInvitationDateOnRejoinedChanges = test("shows invitation date on rejoined changes") {
+    val invitedAt = Times.t1
+    val summaries = List(
+      MemberChangeSummary(pid0, Username("alice"), Chunk(Rejoined(Times.t2, Times.t0)))
+    )
+    val invitations = Map(pid0 -> invitedAt)
+    val rr          = MembershipReport.ReportResult(summaries, 10, 10, invitations)
+    val output      = MembershipReport.formatReport(rr)
+    assertTrue(output.contains(s"at ${Times.t2} — previously left at ${Times.t0} — invited at $invitedAt"))
+  }
 
   // ==========================================================================
   // Suite D: lookupJoinInvitations (DB)
   // ==========================================================================
 
   private def suiteLookupJoinInvitations = suite("lookupJoinInvitations")(
-    test("returns invitation for player invited by our club") {
-      val player = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0)
-      val summaries = List(MemberChangeSummary(pid0, Username("alice"), Chunk(NewMember(Times.t2))))
-      for {
-        _ <- seedDb(players = List(player))
-        _ <- seedRecruitmentInvitation(clubId, pid0, Times.t1)
-        result <- MembershipReport.lookupJoinInvitations(clubId, summaries)
-      } yield assertTrue(
-        result.size == 1,
-        result(pid0) == Times.t1
-      )
-    },
-    test("does NOT return invitation from a different club") {
-      val player = Player(pid1, Times.t0, Username("bob"), Active, None, Times.t0)
-      val summaries = List(MemberChangeSummary(pid1, Username("bob"), Chunk(NewMember(Times.t2))))
-      for {
-        _ <- seedDb(players = List(player))
-        _ <- Club.upsert(otherClub)
-        _ <- seedRecruitmentInvitation(otherClubId, pid1, Times.t1)
-        result <- MembershipReport.lookupJoinInvitations(clubId, summaries)
-      } yield assertTrue(result.isEmpty)
-    },
-    test("skips lookup for non-join changes") {
-      val summaries = List(
-        MemberChangeSummary(pid0, Username("alice"), Chunk(UsernameChange(Times.t1, Username("old"))))
-      )
-      for {
-        result <- MembershipReport.lookupJoinInvitations(clubId, summaries)
-      } yield assertTrue(result.isEmpty)
-    }
+    testReturnsInvitationForOurClub,
+    testDoesNotReturnInvitationFromDifferentClub,
+    testSkipsLookupForNonJoinChanges
   )
+
+  private def testReturnsInvitationForOurClub = test("returns invitation for player invited by our club") {
+    val player = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0)
+    val summaries = List(MemberChangeSummary(pid0, Username("alice"), Chunk(NewMember(Times.t2))))
+    for {
+      _ <- seedDb(players = List(player))
+      _ <- seedRecruitmentInvitation(clubId, pid0, Times.t1)
+      result <- MembershipReport.lookupJoinInvitations(clubId, summaries)
+    } yield assertTrue(
+      result.size == 1,
+      result(pid0) == Times.t1
+    )
+  }
+
+  private def testDoesNotReturnInvitationFromDifferentClub = test("does NOT return invitation from a different club") {
+    val player = Player(pid1, Times.t0, Username("bob"), Active, None, Times.t0)
+    val summaries = List(MemberChangeSummary(pid1, Username("bob"), Chunk(NewMember(Times.t2))))
+    for {
+      _ <- seedDb(players = List(player))
+      _ <- Club.upsert(otherClub)
+      _ <- seedRecruitmentInvitation(otherClubId, pid1, Times.t1)
+      result <- MembershipReport.lookupJoinInvitations(clubId, summaries)
+    } yield assertTrue(result.isEmpty)
+  }
+
+  private def testSkipsLookupForNonJoinChanges = test("skips lookup for non-join changes") {
+    val summaries = List(
+      MemberChangeSummary(pid0, Username("alice"), Chunk(UsernameChange(Times.t1, Username("old"))))
+    )
+    for {
+      result <- MembershipReport.lookupJoinInvitations(clubId, summaries)
+    } yield assertTrue(result.isEmpty)
+  }
 
   // ==========================================================================
   // Suite E: buildDbState (DB)
   // ==========================================================================
 
   private def suiteBuildDbState = suite("buildDbState")(
-    test("builds correct DbState maps") {
-      val player0 = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t1)
-      val player1 = Player(pid1, Times.t0, Username("bob"), Active, None, Times.t1)
-      val mem0    = ClubMember(clubId, pid0, Times.t1, None)
-      val mem1    = ClubMember(clubId, pid1, Times.t1, None)
-
-      for {
-        _ <- seedDb(
-          players = List(player0, player1),
-          members = List(mem0, mem1)
-        )
-        dbState <- MembershipApp.buildDbState(clubId)
-      } yield assertTrue(
-        dbState.membersByPlayerId.size == 2,
-        dbState.membersByPlayerId.contains(pid0),
-        dbState.membersByPlayerId.contains(pid1),
-        dbState.membersByPlayerId(pid0).player == player0,
-        dbState.membersByPlayerId(pid0).member == mem0,
-        dbState.membersByUsername.size == 2,
-        dbState.membersByUsername.contains(Username("alice")),
-        dbState.membersByUsername.contains(Username("bob")),
-        dbState.knownPlayersByUsername.contains(Username("alice")),
-        dbState.knownPlayersByUsername.contains(Username("bob")),
-        dbState.knownPlayersByUsername(Username("alice")) == player0,
-        dbState.knownPlayersByUsername(Username("bob")) == player1
-      )
-    },
-    test("excludes former members from DbState") {
-      val player0   = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t1)
-      val formerMem = ClubMember(clubId, pid0, Times.t0, Some(Times.t1))
-
-      for {
-        _ <- seedDb(
-          players = List(player0),
-          members = List(formerMem)
-        )
-        dbState <- MembershipApp.buildDbState(clubId)
-      } yield assertTrue(
-        dbState.membersByPlayerId.isEmpty,
-        dbState.knownPlayersByUsername.contains(Username("alice"))
-      )
-    }
+    testBuildsCorrectDbStateMaps,
+    testExcludesFormerMembers
   )
+
+  private def testBuildsCorrectDbStateMaps = test("builds correct DbState maps") {
+    val player0 = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t1)
+    val player1 = Player(pid1, Times.t0, Username("bob"), Active, None, Times.t1)
+    val mem0    = ClubMember(clubId, pid0, Times.t1, None)
+    val mem1    = ClubMember(clubId, pid1, Times.t1, None)
+
+    for {
+      _ <- seedDb(
+        players = List(player0, player1),
+        members = List(mem0, mem1)
+      )
+      dbState <- MembershipApp.buildDbState(clubId)
+    } yield assertTrue(
+      dbState.membersByPlayerId.size == 2,
+      dbState.membersByPlayerId.contains(pid0),
+      dbState.membersByPlayerId.contains(pid1),
+      dbState.membersByPlayerId(pid0).player == player0,
+      dbState.membersByPlayerId(pid0).member == mem0,
+      dbState.membersByUsername.size == 2,
+      dbState.membersByUsername.contains(Username("alice")),
+      dbState.membersByUsername.contains(Username("bob")),
+      dbState.knownPlayersByUsername.contains(Username("alice")),
+      dbState.knownPlayersByUsername.contains(Username("bob")),
+      dbState.knownPlayersByUsername(Username("alice")) == player0,
+      dbState.knownPlayersByUsername(Username("bob")) == player1
+    )
+  }
+
+  private def testExcludesFormerMembers = test("excludes former members from DbState") {
+    val player0   = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t1)
+    val formerMem = ClubMember(clubId, pid0, Times.t0, Some(Times.t1))
+
+    for {
+      _ <- seedDb(
+        players = List(player0),
+        members = List(formerMem)
+      )
+      dbState <- MembershipApp.buildDbState(clubId)
+    } yield assertTrue(
+      dbState.membersByPlayerId.isEmpty,
+      dbState.knownPlayersByUsername.contains(Username("alice"))
+    )
+  }
 
   // ==========================================================================
   // Suite F: external member detection (DB)
   // ==========================================================================
 
   private def suiteExternalMemberDetection = suite("external member detection")(
-    test("mergeResults includes external changes and memberships") {
-      val phaseB = PhaseBResult(Set(pid0), Chunk.empty, Chunk.empty, Chunk.empty, Chunk.empty, Chunk.empty, Chunk.empty)
-      val phaseC = PhaseCResult(Chunk.empty, Chunk.empty, Chunk.empty, Chunk.empty)
-      val extChange = MemberChangeSummary(pid1, Username("bob"), Chunk(JoinedClub(Times.t1)))
-      val extMember = ClubMember(clubId, pid1, Times.t1, None)
-      val result = MembershipApp.mergeResults(
-        phaseB, phaseC, 10, 8, Times.t0, Times.t1,
-        externalChanges = Chunk(extChange),
-        externalMemberships = Chunk(extMember)
-      )
-      assertTrue(
-        result.changes == Chunk(extChange),
-        result.newMemberships == Chunk(extMember),
-        result.currentMemberCount == 10,
-        result.previousMemberCount == 8
-      )
-    },
-    test("selectPlayerIdsCurrentAt returns members current at given time") {
-      val player0 = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0)
-      val player1 = Player(pid1, Times.t0, Username("bob"), Active, None, Times.t0)
-      // alice: current member since t0
-      val mem0 = ClubMember(clubId, pid0, Times.t0, None)
-      // bob: joined at t2, so not current at t1
-      val mem1 = ClubMember(clubId, pid1, Times.t2, None)
-
-      for {
-        _ <- seedDb(players = List(player0, player1), members = List(mem0, mem1))
-        atT1 <- ClubMember.selectPlayerIdsCurrentAt(clubId, Times.t1)
-        atT3 <- ClubMember.selectPlayerIdsCurrentAt(clubId, Times.t3)
-      } yield assertTrue(
-        atT1 == Set(pid0),
-        atT3 == Set(pid0, pid1)
-      )
-    },
-    test("selectPlayerIdsCurrentAt excludes members who left before the given time") {
-      val player0 = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0)
-      // alice: was member from t0 to t1
-      val mem0 = ClubMember(clubId, pid0, Times.t0, Some(Times.t1))
-
-      for {
-        _ <- seedDb(players = List(player0), members = List(mem0))
-        atT0 <- ClubMember.selectPlayerIdsCurrentAt(clubId, Times.t0)
-        atT2 <- ClubMember.selectPlayerIdsCurrentAt(clubId, Times.t2)
-      } yield assertTrue(
-        atT0 == Set(pid0),
-        atT2.isEmpty
-      )
-    },
-    test("selectLatestCompleted returns only completed runs") {
-      for {
-        _ <- seedDb()
-        // Insert a completed run
-        runId1 <- MembershipRun.insert(clubId, RunTrigger.Cli, Times.t0)
-        _      <- MembershipRun.complete(runId1, Times.t1)
-        // Insert an incomplete run (no completedAt)
-        _ <- MembershipRun.insert(clubId, RunTrigger.Cli, Times.t2)
-        result <- MembershipRun.selectLatestCompleted(clubId)
-      } yield assertTrue(
-        result.isDefined,
-        result.get.startedAt == Times.t0,
-        result.get.completedAt.contains(Times.t1)
-      )
-    },
-    test("selectLatestCompleted returns None when no completed runs exist") {
-      for {
-        _ <- seedDb()
-        _ <- connectZIO(sql"DELETE FROM membership_run WHERE club_id = $clubId".update.run())
-        _ <- MembershipRun.insert(clubId, RunTrigger.Cli, Times.t0)
-        result <- MembershipRun.selectLatestCompleted(clubId)
-      } yield assertTrue(result.isEmpty)
-    }
+    testMergeResultsIncludesExternalChanges,
+    testSelectPlayerIdsCurrentAtReturnsCurrentMembers,
+    testSelectPlayerIdsCurrentAtExcludesLeftMembers,
+    testSelectLatestCompletedReturnsCompletedRuns,
+    testSelectLatestCompletedReturnsNoneWhenNoCompletedRuns
   )
+
+  private def testMergeResultsIncludesExternalChanges = test("mergeResults includes external changes and memberships") {
+    val phaseB = PhaseBResult(Set(pid0), Chunk.empty, Chunk.empty, Chunk.empty, Chunk.empty, Chunk.empty, Chunk.empty)
+    val phaseC = PhaseCResult(Chunk.empty, Chunk.empty, Chunk.empty, Chunk.empty)
+    val extChange = MemberChangeSummary(pid1, Username("bob"), Chunk(JoinedClub(Times.t1)))
+    val extMember = ClubMember(clubId, pid1, Times.t1, None)
+    val result = MembershipApp.mergeResults(
+      phaseB, phaseC, 10, 8, Times.t0, Times.t1,
+      externalChanges = Chunk(extChange),
+      externalMemberships = Chunk(extMember)
+    )
+    assertTrue(
+      result.changes == Chunk(extChange),
+      result.newMemberships == Chunk(extMember),
+      result.currentMemberCount == 10,
+      result.previousMemberCount == 8
+    )
+  }
+
+  private def testSelectPlayerIdsCurrentAtReturnsCurrentMembers = test("selectPlayerIdsCurrentAt returns members current at given time") {
+    val player0 = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0)
+    val player1 = Player(pid1, Times.t0, Username("bob"), Active, None, Times.t0)
+    // alice: current member since t0
+    val mem0 = ClubMember(clubId, pid0, Times.t0, None)
+    // bob: joined at t2, so not current at t1
+    val mem1 = ClubMember(clubId, pid1, Times.t2, None)
+
+    for {
+      _ <- seedDb(players = List(player0, player1), members = List(mem0, mem1))
+      atT1 <- ClubMember.selectPlayerIdsCurrentAt(clubId, Times.t1)
+      atT3 <- ClubMember.selectPlayerIdsCurrentAt(clubId, Times.t3)
+    } yield assertTrue(
+      atT1 == Set(pid0),
+      atT3 == Set(pid0, pid1)
+    )
+  }
+
+  private def testSelectPlayerIdsCurrentAtExcludesLeftMembers = test("selectPlayerIdsCurrentAt excludes members who left before the given time") {
+    val player0 = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0)
+    // alice: was member from t0 to t1
+    val mem0 = ClubMember(clubId, pid0, Times.t0, Some(Times.t1))
+
+    for {
+      _ <- seedDb(players = List(player0), members = List(mem0))
+      atT0 <- ClubMember.selectPlayerIdsCurrentAt(clubId, Times.t0)
+      atT2 <- ClubMember.selectPlayerIdsCurrentAt(clubId, Times.t2)
+    } yield assertTrue(
+      atT0 == Set(pid0),
+      atT2.isEmpty
+    )
+  }
+
+  private def testSelectLatestCompletedReturnsCompletedRuns = test("selectLatestCompleted returns only completed runs") {
+    for {
+      _ <- seedDb()
+      // Insert a completed run
+      runId1 <- MembershipRun.insert(clubId, RunTrigger.Cli, Times.t0)
+      _      <- MembershipRun.complete(runId1, Times.t1)
+      // Insert an incomplete run (no completedAt)
+      _ <- MembershipRun.insert(clubId, RunTrigger.Cli, Times.t2)
+      result <- MembershipRun.selectLatestCompleted(clubId)
+    } yield assertTrue(
+      result.isDefined,
+      result.get.startedAt == Times.t0,
+      result.get.completedAt.contains(Times.t1)
+    )
+  }
+
+  private def testSelectLatestCompletedReturnsNoneWhenNoCompletedRuns = test("selectLatestCompleted returns None when no completed runs exist") {
+    for {
+      _ <- seedDb()
+      _ <- connectZIO(sql"DELETE FROM membership_run WHERE club_id = $clubId".update.run())
+      _ <- MembershipRun.insert(clubId, RunTrigger.Cli, Times.t0)
+      result <- MembershipRun.selectLatestCompleted(clubId)
+    } yield assertTrue(result.isEmpty)
+  }
 
   // ==========================================================================
   // Suite G: classifyApiMembers (DB + fake HTTP)
   // ==========================================================================
 
   private def suiteClassifyApiMembers = suite("classifyApiMembers")(
-    test("unchanged member — matching since") {
-      val player = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t1)
-      val mem    = ClubMember(clubId, pid0, Times.t1, None)
-      val dbState = DbState(
-        membersByPlayerId = Map(pid0 -> MemberState(player, mem)),
-        membersByUsername = Map(Username("alice") -> MemberState(player, mem))
-      )
-      val apiMap = Map(Username("alice") -> Times.t1.getEpochSecond)
-
-      for {
-        client <- fakeChessComClient(Map.empty)
-        result <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, dbState, Times.t2)
-      } yield assertTrue(
-        result.resolvedIds.contains(pid0),
-        result.changes.isEmpty
-      )
-    },
-    test("different since → Rejoined") {
-      val player = Player(pid1, Times.t0, Username("bob"), Active, None, Times.t0)
-      val mem    = ClubMember(clubId, pid1, Times.t0, None)
-      val dbState = DbState(
-        membersByPlayerId = Map(pid1 -> MemberState(player, mem)),
-        membersByUsername = Map(Username("bob") -> MemberState(player, mem))
-      )
-      val apiMap = Map(Username("bob") -> Times.t1.getEpochSecond)
-
-      for {
-        client <- fakeChessComClient(Map.empty)
-        result <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, dbState, Times.t2)
-      } yield {
-        val change = result.changes.head.changes.head
-        assertTrue(
-          result.resolvedIds.contains(pid1),
-          result.changes.size == 1,
-          change.isInstanceOf[Rejoined],
-          change.timestamp == Times.t1, // API join time, not reconciliation time
-          result.closedMemberships.nonEmpty,
-          result.newMemberships.nonEmpty
-        )
-      }
-    },
-    test("username change — same player ID, different username") {
-      val player = Player(pid2, Times.t0, Username("charlie-old"), Active, None, Times.t0)
-      val mem    = ClubMember(clubId, pid2, Times.t0, None)
-      val dbState = DbState(
-        membersByPlayerId = Map(pid2 -> MemberState(player, mem)),
-        membersByUsername = Map(Username("charlie-old") -> MemberState(player, mem))
-      )
-      val apiMap    = Map(Username("charlie-new") -> Times.t0.getEpochSecond)
-      val responses = Map("charlie-new" -> apiPlayerJson(102, "charlie-new"))
-
-      for {
-        client <- fakeChessComClient(responses)
-        result <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, dbState, Times.t2)
-      } yield assertTrue(
-        result.resolvedIds.contains(pid2),
-        result.changes.size == 1,
-        result.changes.head.changes.exists(_.isInstanceOf[UsernameChange]),
-        result.updatedPlayers.nonEmpty
-      )
-    },
-    test("new player — not in DB") {
-      val dbState   = DbState(Map.empty, Map.empty)
-      val apiMap    = Map(Username("diana") -> Times.t0.getEpochSecond)
-      val responses = Map("diana" -> apiPlayerJson(103, "diana"))
-
-      for {
-        _      <- seedDb()
-        client <- fakeChessComClient(responses)
-        result <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, dbState, Times.t2)
-      } yield {
-        val change = result.changes.head.changes.head
-        assertTrue(
-          result.resolvedIds.contains(pid3),
-          result.changes.size == 1,
-          change.isInstanceOf[NewMember],
-          change.timestamp == Times.t0, // API join time, not reconciliation time
-          result.newPlayers.nonEmpty,
-          result.newMemberships.nonEmpty
-        )
-      }
-    },
-    test("existing player joins club") {
-      val player4   = Player(pid4, Times.t0, Username("eve"), Active, None, Times.t0)
-      val dbState   = DbState(Map.empty, Map.empty)
-      val apiMap    = Map(Username("eve") -> Times.t1.getEpochSecond)
-      val responses = Map("eve" -> apiPlayerJson(104, "eve"))
-
-      for {
-        _      <- seedDb(players = List(player4))
-        client <- fakeChessComClient(responses)
-        result <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, dbState, Times.t2)
-      } yield {
-        val change = result.changes.head.changes.head
-        assertTrue(
-          result.resolvedIds.contains(pid4),
-          result.changes.size == 1,
-          change.isInstanceOf[JoinedClub],
-          change.timestamp == Times.t1, // API join time, not reconciliation time
-          result.newMemberships.nonEmpty
-        )
-      }
-    },
-    test("username change + status change") {
-      val player = Player(pid5, Times.t0, Username("frank-old"), Active, None, Times.t0)
-      val mem    = ClubMember(clubId, pid5, Times.t0, None)
-      val dbState = DbState(
-        membersByPlayerId = Map(pid5 -> MemberState(player, mem)),
-        membersByUsername = Map(Username("frank-old") -> MemberState(player, mem))
-      )
-      val apiMap    = Map(Username("frank-new") -> Times.t0.getEpochSecond)
-      val responses = Map("frank-new" -> apiPlayerJson(105, "frank-new", status = "closed"))
-
-      for {
-        client <- fakeChessComClient(responses)
-        result <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, dbState, Times.t2)
-      } yield assertTrue(
-        result.resolvedIds.contains(pid5),
-        result.changes.size == 1,
-        result.changes.head.changes.exists(_.isInstanceOf[UsernameChange]),
-        result.changes.head.changes.exists(_.isInstanceOf[StatusChange])
-      )
-    },
-    test("trust-mode: known player joins club without API call") {
-      val player = Player(pid3, Times.t0, Username("diana"), Active, None, Times.t0)
-      val dbState = DbState(
-        membersByPlayerId = Map.empty,
-        membersByUsername = Map.empty,
-        knownPlayersByUsername = Map(Username("diana") -> player)
-      )
-      val apiMap = Map(Username("diana") -> Times.t1.getEpochSecond)
-
-      for {
-        client <- fakeChessComClient(Map.empty)
-        result <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, dbState, Times.t2)
-      } yield {
-        val change = result.changes.head.changes.head
-        assertTrue(
-          result.resolvedIds.contains(pid3),
-          result.changes.size == 1,
-          change.isInstanceOf[JoinedClub],
-          change.timestamp == Times.t1, // API join time, not reconciliation time
-          result.newMemberships.nonEmpty,
-          result.updatedPlayers.isEmpty
-        )
-      }
-    },
-    test("trust-mode: username change detected without API call") {
-      val oldPlayer = Player(pid2, Times.t0, Username("charlie-old"), Active, None, Times.t0)
-      val mem       = ClubMember(clubId, pid2, Times.t0, None)
-      val newPlayer = Player(pid2, Times.t0, Username("charlie-new"), Active, None, Times.t1)
-      val dbState = DbState(
-        membersByPlayerId = Map(pid2 -> MemberState(oldPlayer, mem)),
-        membersByUsername = Map(Username("charlie-old") -> MemberState(oldPlayer, mem)),
-        knownPlayersByUsername = Map(Username("charlie-new") -> newPlayer)
-      )
-      val apiMap = Map(Username("charlie-new") -> Times.t0.getEpochSecond)
-
-      for {
-        client <- fakeChessComClient(Map.empty)
-        result <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, dbState, Times.t2)
-      } yield assertTrue(
-        result.resolvedIds.contains(pid2),
-        result.changes.size == 1,
-        result.changes.head.changes.exists(_.isInstanceOf[UsernameChange]),
-        result.updatedPlayers.nonEmpty
-      )
-    },
-    test("sinceApproximate member → replaceSince, not Rejoined") {
-      val player = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0)
-      val mem    = ClubMember(clubId, pid0, Times.t0, None, sinceApproximate = true)
-      val dbState = DbState(
-        membersByPlayerId = Map(pid0 -> MemberState(player, mem)),
-        membersByUsername = Map(Username("alice") -> MemberState(player, mem))
-      )
-      val apiMap = Map(Username("alice") -> Times.t1.getEpochSecond)
-
-      for {
-        _ <- seedDb(
-          players = List(player),
-          members = List(mem)
-        )
-        client  <- fakeChessComClient(Map.empty)
-        result  <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, dbState, Times.t2)
-        members <- ClubMember.selectClub(clubId)
-      } yield assertTrue(
-        result.resolvedIds.contains(pid0),
-        result.changes.isEmpty,
-        result.newMemberships.isEmpty,
-        result.closedMemberships.isEmpty,
-        members.size == 1,
-        members.head.since == Times.t1,
-        !members.head.sinceApproximate
-      )
-    },
-    test("trustUsernames=false bypasses known player lookup") {
-      val player = Player(pid3, Times.t0, Username("diana"), Active, None, Times.t0)
-      val dbState = DbState(
-        membersByPlayerId = Map.empty,
-        membersByUsername = Map.empty,
-        knownPlayersByUsername = Map(Username("diana") -> player)
-      )
-      val apiMap = Map(Username("diana") -> Times.t0.getEpochSecond)
-
-      for {
-        client <- fakeChessComClient(Map.empty)
-        result <- MembershipClassify.classifyApiMembers(
-          client,
-          clubId,
-          apiMap,
-          dbState,
-          Times.t2,
-          trustUsernames = false
-        ).exit
-      } yield assertTrue(result.isFailure)
-    }
+    testUnchangedMemberMatchingSince,
+    testDifferentSinceRejoined,
+    testUsernameChangeSamePlayerId,
+    testNewPlayerNotInDb,
+    testExistingPlayerJoinsClub,
+    testUsernameChangeAndStatusChange,
+    testTrustModeKnownPlayerJoins,
+    testTrustModeUsernameChangeDetected,
+    testSinceApproximateReplaceSince,
+    testTrustUsernamesFalseBypassesLookup
   )
+
+  private def testUnchangedMemberMatchingSince = test("unchanged member — matching since") {
+    val player = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t1)
+    val mem    = ClubMember(clubId, pid0, Times.t1, None)
+    val dbState = DbState(
+      membersByPlayerId = Map(pid0 -> MemberState(player, mem)),
+      membersByUsername = Map(Username("alice") -> MemberState(player, mem))
+    )
+    val apiMap = Map(Username("alice") -> Times.t1.getEpochSecond)
+
+    for {
+      client <- fakeChessComClient(Map.empty)
+      result <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, dbState, Times.t2)
+    } yield assertTrue(
+      result.resolvedIds.contains(pid0),
+      result.changes.isEmpty
+    )
+  }
+
+  private def testDifferentSinceRejoined = test("different since → Rejoined") {
+    val player = Player(pid1, Times.t0, Username("bob"), Active, None, Times.t0)
+    val mem    = ClubMember(clubId, pid1, Times.t0, None)
+    val dbState = DbState(
+      membersByPlayerId = Map(pid1 -> MemberState(player, mem)),
+      membersByUsername = Map(Username("bob") -> MemberState(player, mem))
+    )
+    val apiMap = Map(Username("bob") -> Times.t1.getEpochSecond)
+
+    for {
+      client <- fakeChessComClient(Map.empty)
+      result <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, dbState, Times.t2)
+    } yield {
+      val change = result.changes.head.changes.head
+      assertTrue(
+        result.resolvedIds.contains(pid1),
+        result.changes.size == 1,
+        change.isInstanceOf[Rejoined],
+        change.timestamp == Times.t1, // API join time, not reconciliation time
+        result.closedMemberships.nonEmpty,
+        result.newMemberships.nonEmpty
+      )
+    }
+  }
+
+  private def testUsernameChangeSamePlayerId = test("username change — same player ID, different username") {
+    val player = Player(pid2, Times.t0, Username("charlie-old"), Active, None, Times.t0)
+    val mem    = ClubMember(clubId, pid2, Times.t0, None)
+    val dbState = DbState(
+      membersByPlayerId = Map(pid2 -> MemberState(player, mem)),
+      membersByUsername = Map(Username("charlie-old") -> MemberState(player, mem))
+    )
+    val apiMap    = Map(Username("charlie-new") -> Times.t0.getEpochSecond)
+    val responses = Map("charlie-new" -> apiPlayerJson(102, "charlie-new"))
+
+    for {
+      client <- fakeChessComClient(responses)
+      result <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, dbState, Times.t2)
+    } yield assertTrue(
+      result.resolvedIds.contains(pid2),
+      result.changes.size == 1,
+      result.changes.head.changes.exists(_.isInstanceOf[UsernameChange]),
+      result.updatedPlayers.nonEmpty
+    )
+  }
+
+  private def testNewPlayerNotInDb = test("new player — not in DB") {
+    val dbState   = DbState(Map.empty, Map.empty)
+    val apiMap    = Map(Username("diana") -> Times.t0.getEpochSecond)
+    val responses = Map("diana" -> apiPlayerJson(103, "diana"))
+
+    for {
+      _      <- seedDb()
+      client <- fakeChessComClient(responses)
+      result <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, dbState, Times.t2)
+    } yield {
+      val change = result.changes.head.changes.head
+      assertTrue(
+        result.resolvedIds.contains(pid3),
+        result.changes.size == 1,
+        change.isInstanceOf[NewMember],
+        change.timestamp == Times.t0, // API join time, not reconciliation time
+        result.newPlayers.nonEmpty,
+        result.newMemberships.nonEmpty
+      )
+    }
+  }
+
+  private def testExistingPlayerJoinsClub = test("existing player joins club") {
+    val player4   = Player(pid4, Times.t0, Username("eve"), Active, None, Times.t0)
+    val dbState   = DbState(Map.empty, Map.empty)
+    val apiMap    = Map(Username("eve") -> Times.t1.getEpochSecond)
+    val responses = Map("eve" -> apiPlayerJson(104, "eve"))
+
+    for {
+      _      <- seedDb(players = List(player4))
+      client <- fakeChessComClient(responses)
+      result <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, dbState, Times.t2)
+    } yield {
+      val change = result.changes.head.changes.head
+      assertTrue(
+        result.resolvedIds.contains(pid4),
+        result.changes.size == 1,
+        change.isInstanceOf[JoinedClub],
+        change.timestamp == Times.t1, // API join time, not reconciliation time
+        result.newMemberships.nonEmpty
+      )
+    }
+  }
+
+  private def testUsernameChangeAndStatusChange = test("username change + status change") {
+    val player = Player(pid5, Times.t0, Username("frank-old"), Active, None, Times.t0)
+    val mem    = ClubMember(clubId, pid5, Times.t0, None)
+    val dbState = DbState(
+      membersByPlayerId = Map(pid5 -> MemberState(player, mem)),
+      membersByUsername = Map(Username("frank-old") -> MemberState(player, mem))
+    )
+    val apiMap    = Map(Username("frank-new") -> Times.t0.getEpochSecond)
+    val responses = Map("frank-new" -> apiPlayerJson(105, "frank-new", status = "closed"))
+
+    for {
+      client <- fakeChessComClient(responses)
+      result <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, dbState, Times.t2)
+    } yield assertTrue(
+      result.resolvedIds.contains(pid5),
+      result.changes.size == 1,
+      result.changes.head.changes.exists(_.isInstanceOf[UsernameChange]),
+      result.changes.head.changes.exists(_.isInstanceOf[StatusChange])
+    )
+  }
+
+  private def testTrustModeKnownPlayerJoins = test("trust-mode: known player joins club without API call") {
+    val player = Player(pid3, Times.t0, Username("diana"), Active, None, Times.t0)
+    val dbState = DbState(
+      membersByPlayerId = Map.empty,
+      membersByUsername = Map.empty,
+      knownPlayersByUsername = Map(Username("diana") -> player)
+    )
+    val apiMap = Map(Username("diana") -> Times.t1.getEpochSecond)
+
+    for {
+      client <- fakeChessComClient(Map.empty)
+      result <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, dbState, Times.t2)
+    } yield {
+      val change = result.changes.head.changes.head
+      assertTrue(
+        result.resolvedIds.contains(pid3),
+        result.changes.size == 1,
+        change.isInstanceOf[JoinedClub],
+        change.timestamp == Times.t1, // API join time, not reconciliation time
+        result.newMemberships.nonEmpty,
+        result.updatedPlayers.isEmpty
+      )
+    }
+  }
+
+  private def testTrustModeUsernameChangeDetected = test("trust-mode: username change detected without API call") {
+    val oldPlayer = Player(pid2, Times.t0, Username("charlie-old"), Active, None, Times.t0)
+    val mem       = ClubMember(clubId, pid2, Times.t0, None)
+    val newPlayer = Player(pid2, Times.t0, Username("charlie-new"), Active, None, Times.t1)
+    val dbState = DbState(
+      membersByPlayerId = Map(pid2 -> MemberState(oldPlayer, mem)),
+      membersByUsername = Map(Username("charlie-old") -> MemberState(oldPlayer, mem)),
+      knownPlayersByUsername = Map(Username("charlie-new") -> newPlayer)
+    )
+    val apiMap = Map(Username("charlie-new") -> Times.t0.getEpochSecond)
+
+    for {
+      client <- fakeChessComClient(Map.empty)
+      result <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, dbState, Times.t2)
+    } yield assertTrue(
+      result.resolvedIds.contains(pid2),
+      result.changes.size == 1,
+      result.changes.head.changes.exists(_.isInstanceOf[UsernameChange]),
+      result.updatedPlayers.nonEmpty
+    )
+  }
+
+  private def testSinceApproximateReplaceSince = test("sinceApproximate member → replaceSince, not Rejoined") {
+    val player = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0)
+    val mem    = ClubMember(clubId, pid0, Times.t0, None, sinceApproximate = true)
+    val dbState = DbState(
+      membersByPlayerId = Map(pid0 -> MemberState(player, mem)),
+      membersByUsername = Map(Username("alice") -> MemberState(player, mem))
+    )
+    val apiMap = Map(Username("alice") -> Times.t1.getEpochSecond)
+
+    for {
+      _ <- seedDb(
+        players = List(player),
+        members = List(mem)
+      )
+      client  <- fakeChessComClient(Map.empty)
+      result  <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, dbState, Times.t2)
+      members <- ClubMember.selectClub(clubId)
+    } yield assertTrue(
+      result.resolvedIds.contains(pid0),
+      result.changes.isEmpty,
+      result.newMemberships.isEmpty,
+      result.closedMemberships.isEmpty,
+      members.size == 1,
+      members.head.since == Times.t1,
+      !members.head.sinceApproximate
+    )
+  }
+
+  private def testTrustUsernamesFalseBypassesLookup = test("trustUsernames=false bypasses known player lookup") {
+    val player = Player(pid3, Times.t0, Username("diana"), Active, None, Times.t0)
+    val dbState = DbState(
+      membersByPlayerId = Map.empty,
+      membersByUsername = Map.empty,
+      knownPlayersByUsername = Map(Username("diana") -> player)
+    )
+    val apiMap = Map(Username("diana") -> Times.t0.getEpochSecond)
+
+    for {
+      client <- fakeChessComClient(Map.empty)
+      result <- MembershipClassify.classifyApiMembers(
+        client,
+        clubId,
+        apiMap,
+        dbState,
+        Times.t2,
+        trustUsernames = false
+      ).exit
+    } yield assertTrue(result.isFailure)
+  }
 
   // ==========================================================================
   // Suite H: classifyDisappeared (fake HTTP)
   // ==========================================================================
 
   private def suiteClassifyDisappeared = suite("classifyDisappeared")(
-    test("active player left club → LeftClub with now timestamp") {
-      val player = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0)
-      val mem    = ClubMember(clubId, pid0, Times.t0, None)
-      val dbState = DbState(
-        membersByPlayerId = Map(pid0 -> MemberState(player, mem)),
-        membersByUsername = Map(Username("alice") -> MemberState(player, mem))
-      )
-      val responses = Map("alice" -> apiPlayerJson(100, "alice"))
+    testActivePlayerLeftClub,
+    testClosedPlayerAccountClosed,
+    testApi404Unresolvable,
+    testDifferentPlayerIdUnresolvable,
+    testAllResolvedEmptyResults
+  )
 
-      for {
-        client <- fakeChessComClient(responses)
-        result <- MembershipClassify.classifyDisappeared(
-          client,
-          dbState,
-          Set.empty,
-          Map.empty,
-          ClubSlug("test-club"),
-          Times.t2
-        )
-      } yield {
-        val change = result.changes.head.changes.head
-        assertTrue(
-          result.changes.size == 1,
-          change.isInstanceOf[LeftClub],
-          change.timestamp == Times.t2, // detection time — no authoritative departure time
-          result.closedMemberships.nonEmpty,
-          result.closedMemberships.head.until.contains(Times.t2)
-        )
-      }
-    },
-    test("closed player → AccountClosed with lastOnline timestamp") {
-      val player = Player(pid1, Times.t0, Username("bob"), Active, None, Times.t0)
-      val mem    = ClubMember(clubId, pid1, Times.t0, None)
-      val dbState = DbState(
-        membersByPlayerId = Map(pid1 -> MemberState(player, mem)),
-        membersByUsername = Map(Username("bob") -> MemberState(player, mem))
-      )
-      val responses = Map("bob" -> apiPlayerJson(101, "bob", status = "closed", lastOnline = Some(Times.t1.getEpochSecond)))
+  private def testActivePlayerLeftClub = test("active player left club → LeftClub with now timestamp") {
+    val player = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0)
+    val mem    = ClubMember(clubId, pid0, Times.t0, None)
+    val dbState = DbState(
+      membersByPlayerId = Map(pid0 -> MemberState(player, mem)),
+      membersByUsername = Map(Username("alice") -> MemberState(player, mem))
+    )
+    val responses = Map("alice" -> apiPlayerJson(100, "alice"))
 
-      for {
-        client <- fakeChessComClient(responses)
-        result <- MembershipClassify.classifyDisappeared(
-          client,
-          dbState,
-          Set.empty,
-          Map.empty,
-          ClubSlug("test-club"),
-          Times.t2
-        )
-      } yield {
-        val change = result.changes.head.changes.head
-        assertTrue(
-          result.changes.size == 1,
-          change.isInstanceOf[AccountClosed],
-          change.timestamp == Times.t1, // lastOnline, not reconciliation time
-          result.updatedPlayers.nonEmpty,
-          result.closedMemberships.nonEmpty,
-          result.closedMemberships.head.until.contains(Times.t1) // until matches lastOnline
-        )
-      }
-    },
-    test("API 404 → Unresolvable") {
-      val player = Player(pid2, Times.t0, Username("charlie"), Active, None, Times.t0)
-      val mem    = ClubMember(clubId, pid2, Times.t0, None)
-      val dbState = DbState(
-        membersByPlayerId = Map(pid2 -> MemberState(player, mem)),
-        membersByUsername = Map(Username("charlie") -> MemberState(player, mem))
+    for {
+      client <- fakeChessComClient(responses)
+      result <- MembershipClassify.classifyDisappeared(
+        client,
+        dbState,
+        Set.empty,
+        Map.empty,
+        ClubSlug("test-club"),
+        Times.t2
       )
-
-      for {
-        client <- fakeChessComClient(Map.empty, failures = Set("charlie"))
-        result <- MembershipClassify.classifyDisappeared(
-          client,
-          dbState,
-          Set.empty,
-          Map.empty,
-          ClubSlug("test-club"),
-          Times.t2
-        )
-      } yield assertTrue(
+    } yield {
+      val change = result.changes.head.changes.head
+      assertTrue(
         result.changes.size == 1,
-        result.changes.head.changes.exists(_.isInstanceOf[Unresolvable]),
-        result.closedMemberships.nonEmpty
-      )
-    },
-    test("different player ID at same username → Unresolvable") {
-      val player = Player(pid3, Times.t0, Username("diana"), Active, None, Times.t0)
-      val mem    = ClubMember(clubId, pid3, Times.t0, None)
-      val dbState = DbState(
-        membersByPlayerId = Map(pid3 -> MemberState(player, mem)),
-        membersByUsername = Map(Username("diana") -> MemberState(player, mem))
-      )
-      val responses = Map("diana" -> apiPlayerJson(999, "diana"))
-
-      for {
-        client <- fakeChessComClient(responses)
-        result <- MembershipClassify.classifyDisappeared(
-          client,
-          dbState,
-          Set.empty,
-          Map.empty,
-          ClubSlug("test-club"),
-          Times.t2
-        )
-      } yield assertTrue(
-        result.changes.size == 1,
-        result.changes.head.changes.exists(_.isInstanceOf[Unresolvable]),
-        result.closedMemberships.nonEmpty
-      )
-    },
-    test("all resolved → empty results") {
-      val player = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0)
-      val mem    = ClubMember(clubId, pid0, Times.t0, None)
-      val dbState = DbState(
-        membersByPlayerId = Map(pid0 -> MemberState(player, mem)),
-        membersByUsername = Map(Username("alice") -> MemberState(player, mem))
-      )
-
-      for {
-        client <- fakeChessComClient(Map.empty)
-        result <- MembershipClassify.classifyDisappeared(
-          client,
-          dbState,
-          Set(pid0),
-          Map.empty,
-          ClubSlug("test-club"),
-          Times.t2
-        )
-      } yield assertTrue(
-        result.changes.isEmpty,
-        result.updatedPlayers.isEmpty,
-        result.closedMemberships.isEmpty
+        change.isInstanceOf[LeftClub],
+        change.timestamp == Times.t2, // detection time — no authoritative departure time
+        result.closedMemberships.nonEmpty,
+        result.closedMemberships.head.until.contains(Times.t2)
       )
     }
-  )
+  }
+
+  private def testClosedPlayerAccountClosed = test("closed player → AccountClosed with lastOnline timestamp") {
+    val player = Player(pid1, Times.t0, Username("bob"), Active, None, Times.t0)
+    val mem    = ClubMember(clubId, pid1, Times.t0, None)
+    val dbState = DbState(
+      membersByPlayerId = Map(pid1 -> MemberState(player, mem)),
+      membersByUsername = Map(Username("bob") -> MemberState(player, mem))
+    )
+    val responses = Map("bob" -> apiPlayerJson(101, "bob", status = "closed", lastOnline = Some(Times.t1.getEpochSecond)))
+
+    for {
+      client <- fakeChessComClient(responses)
+      result <- MembershipClassify.classifyDisappeared(
+        client,
+        dbState,
+        Set.empty,
+        Map.empty,
+        ClubSlug("test-club"),
+        Times.t2
+      )
+    } yield {
+      val change = result.changes.head.changes.head
+      assertTrue(
+        result.changes.size == 1,
+        change.isInstanceOf[AccountClosed],
+        change.timestamp == Times.t1, // lastOnline, not reconciliation time
+        result.updatedPlayers.nonEmpty,
+        result.closedMemberships.nonEmpty,
+        result.closedMemberships.head.until.contains(Times.t1) // until matches lastOnline
+      )
+    }
+  }
+
+  private def testApi404Unresolvable = test("API 404 → Unresolvable") {
+    val player = Player(pid2, Times.t0, Username("charlie"), Active, None, Times.t0)
+    val mem    = ClubMember(clubId, pid2, Times.t0, None)
+    val dbState = DbState(
+      membersByPlayerId = Map(pid2 -> MemberState(player, mem)),
+      membersByUsername = Map(Username("charlie") -> MemberState(player, mem))
+    )
+
+    for {
+      client <- fakeChessComClient(Map.empty, failures = Set("charlie"))
+      result <- MembershipClassify.classifyDisappeared(
+        client,
+        dbState,
+        Set.empty,
+        Map.empty,
+        ClubSlug("test-club"),
+        Times.t2
+      )
+    } yield assertTrue(
+      result.changes.size == 1,
+      result.changes.head.changes.exists(_.isInstanceOf[Unresolvable]),
+      result.closedMemberships.nonEmpty
+    )
+  }
+
+  private def testDifferentPlayerIdUnresolvable = test("different player ID at same username → Unresolvable") {
+    val player = Player(pid3, Times.t0, Username("diana"), Active, None, Times.t0)
+    val mem    = ClubMember(clubId, pid3, Times.t0, None)
+    val dbState = DbState(
+      membersByPlayerId = Map(pid3 -> MemberState(player, mem)),
+      membersByUsername = Map(Username("diana") -> MemberState(player, mem))
+    )
+    val responses = Map("diana" -> apiPlayerJson(999, "diana"))
+
+    for {
+      client <- fakeChessComClient(responses)
+      result <- MembershipClassify.classifyDisappeared(
+        client,
+        dbState,
+        Set.empty,
+        Map.empty,
+        ClubSlug("test-club"),
+        Times.t2
+      )
+    } yield assertTrue(
+      result.changes.size == 1,
+      result.changes.head.changes.exists(_.isInstanceOf[Unresolvable]),
+      result.closedMemberships.nonEmpty
+    )
+  }
+
+  private def testAllResolvedEmptyResults = test("all resolved → empty results") {
+    val player = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0)
+    val mem    = ClubMember(clubId, pid0, Times.t0, None)
+    val dbState = DbState(
+      membersByPlayerId = Map(pid0 -> MemberState(player, mem)),
+      membersByUsername = Map(Username("alice") -> MemberState(player, mem))
+    )
+
+    for {
+      client <- fakeChessComClient(Map.empty)
+      result <- MembershipClassify.classifyDisappeared(
+        client,
+        dbState,
+        Set(pid0),
+        Map.empty,
+        ClubSlug("test-club"),
+        Times.t2
+      )
+    } yield assertTrue(
+      result.changes.isEmpty,
+      result.updatedPlayers.isEmpty,
+      result.closedMemberships.isEmpty
+    )
+  }
 }

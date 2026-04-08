@@ -101,17 +101,21 @@ object TestRoutes extends ZIOSpecDefault {
   // ==========================================================================
 
   private def suiteHealth = suite("HealthRoutes")(
-    test("GET /health returns 200") {
-      for {
-        response <- HealthRoutes.routes.runZIO(jsonRequest(Method.GET, "/health"))
-      } yield assertTrue(response.status == Status.Ok)
-    },
-    test("GET /health/ready returns 200 when DB is up") {
-      for {
-        response <- HealthRoutes.routes.runZIO(jsonRequest(Method.GET, "/health/ready"))
-      } yield assertTrue(response.status == Status.Ok)
-    }
+    testHealthReturns200,
+    testHealthReadyReturns200
   )
+
+  private def testHealthReturns200 = test("GET /health returns 200") {
+    for {
+      response <- HealthRoutes.routes.runZIO(jsonRequest(Method.GET, "/health"))
+    } yield assertTrue(response.status == Status.Ok)
+  }
+
+  private def testHealthReadyReturns200 = test("GET /health/ready returns 200 when DB is up") {
+    for {
+      response <- HealthRoutes.routes.runZIO(jsonRequest(Method.GET, "/health/ready"))
+    } yield assertTrue(response.status == Status.Ok)
+  }
 
   // ==========================================================================
   // Suite: JobRoutes
@@ -120,219 +124,245 @@ object TestRoutes extends ZIOSpecDefault {
   import JobRoutes.{ClubJobResult, JobResult}
 
   private def suiteJobRoutes = suite("JobRoutes")(
-    test("POST /api/jobs/recruitment success") {
-      for {
-        _    <- ensureClubs
-        fake <- getFakeRunner
-        _    <- fake.setNextAction(Action.Succeed)
-        response <- JobRoutes.routes.runZIO(
-          jsonRequest(Method.POST, "/api/jobs/recruitment", """{"clubSlug":"test-club"}""")
-        )
-        body   <- response.body.asString
-        parsed = body.fromJson[JobResult]
-      } yield assertTrue(
-        response.status == Status.Ok,
-        parsed.isRight,
-        parsed.toOption.get.jobId.isDefined,
-        parsed.toOption.get.error.isEmpty
-      )
-    },
-    test("POST /api/jobs/recruitment conflict") {
-      for {
-        _    <- ensureClubs
-        fake <- getFakeRunner
-        _    <- fake.setNextAction(Action.Conflict)
-        response <- JobRoutes.routes.runZIO(
-          jsonRequest(Method.POST, "/api/jobs/recruitment", """{"clubSlug":"test-club"}""")
-        )
-        body   <- response.body.asString
-        parsed = body.fromJson[JobResult]
-      } yield assertTrue(
-        response.status == Status.Ok,
-        parsed.isRight,
-        parsed.toOption.get.jobId.isEmpty,
-        parsed.toOption.get.error.exists(_.contains("already running"))
-      )
-    },
-    test("POST /api/jobs/recruitment bad JSON") {
-      for {
-        response <- JobRoutes.routes.runZIO(jsonRequest(Method.POST, "/api/jobs/recruitment", "not json"))
-      } yield assertTrue(response.status == Status.BadRequest)
-    },
-    test("POST /api/jobs/membership single club") {
-      for {
-        _    <- ensureClubs
-        fake <- getFakeRunner
-        _    <- fake.setNextAction(Action.Succeed)
-        response <- JobRoutes.routes.runZIO(
-          jsonRequest(Method.POST, "/api/jobs/membership", """{"clubSlugs":["test-club"]}""")
-        )
-        body   <- response.body.asString
-        parsed = body.fromJson[List[ClubJobResult]]
-      } yield {
-        val results = parsed.toOption.get
-        assertTrue(
-          response.status == Status.Ok,
-          parsed.isRight,
-          results.size == 1,
-          results.head.clubSlug == "test-club",
-          results.head.jobId.isDefined,
-          results.head.error.isEmpty
-        )
-      }
-    },
-    test("POST /api/jobs/membership empty clubSlugs") {
-      for {
-        response <- JobRoutes.routes.runZIO(
-          jsonRequest(Method.POST, "/api/jobs/membership", """{"clubSlugs":[]}""")
-        )
-      } yield assertTrue(response.status == Status.BadRequest)
-    },
-    test("POST /api/jobs/membership multiple clubs") {
-      for {
-        _    <- ensureClubs
-        fake <- getFakeRunner
-        _    <- fake.setNextAction(Action.Succeed)
-        response <- JobRoutes.routes.runZIO(
-          jsonRequest(Method.POST, "/api/jobs/membership", """{"clubSlugs":["test-club","other-club"]}""")
-        )
-        body   <- response.body.asString
-        parsed = body.fromJson[List[ClubJobResult]]
-      } yield {
-        val results = parsed.toOption.get
-        assertTrue(
-          response.status == Status.Ok,
-          parsed.isRight,
-          results.size == 2,
-          results.map(_.clubSlug).toSet == Set("test-club", "other-club"),
-          results.forall(r => r.jobId.isDefined && r.error.isEmpty)
-        )
-      }
-    },
-    test("POST /api/jobs/membership with unknown club") {
-      for {
-        _    <- ensureClubs
-        fake <- getFakeRunner
-        _    <- fake.setNextAction(Action.Succeed)
-        response <- JobRoutes.routes.runZIO(
-          jsonRequest(Method.POST, "/api/jobs/membership", """{"clubSlugs":["test-club","no-such-club"]}""")
-        )
-        body   <- response.body.asString
-        parsed = body.fromJson[List[ClubJobResult]]
-      } yield {
-        val results  = parsed.toOption.get
-        val found    = results.find(_.clubSlug == "test-club").get
-        val notFound = results.find(_.clubSlug == "no-such-club").get
-        assertTrue(
-          response.status == Status.Ok,
-          parsed.isRight,
-          results.size == 2,
-          found.jobId.isDefined,
-          found.error.isEmpty,
-          notFound.jobId.isEmpty,
-          notFound.error.contains("Club not found")
-        )
-      }
-    },
-    test("POST /api/jobs/history single club") {
-      for {
-        _    <- ensureClubs
-        fake <- getFakeRunner
-        _    <- fake.setNextAction(Action.Succeed)
-        response <- JobRoutes.routes.runZIO(
-          jsonRequest(Method.POST, "/api/jobs/history", """{"clubSlugs":["test-club"]}""")
-        )
-        body   <- response.body.asString
-        parsed = body.fromJson[List[ClubJobResult]]
-      } yield {
-        val results = parsed.toOption.get
-        assertTrue(
-          response.status == Status.Ok,
-          parsed.isRight,
-          results.size == 1,
-          results.head.clubSlug == "test-club",
-          results.head.jobId.isDefined,
-          results.head.error.isEmpty
-        )
-      }
-    },
-    test("POST /api/jobs/matchref success") {
-      for {
-        fake     <- getFakeRunner
-        _        <- fake.setNextAction(Action.Succeed)
-        response <- JobRoutes.routes.runZIO(jsonRequest(Method.POST, "/api/jobs/matchref"))
-        body     <- response.body.asString
-        parsed = body.fromJson[JobResult]
-      } yield assertTrue(
-        response.status == Status.Ok,
-        parsed.isRight,
-        parsed.toOption.get.jobId.isDefined,
-        parsed.toOption.get.error.isEmpty
-      )
-    },
-    test("GET /api/jobs returns list") {
-      val t0 = LocalDateTime.of(2025, 6, 1, 0, 0).toInstant(ZoneOffset.UTC)
-      val job = JobRun(
-        JobRunId.wrap("list-id"),
-        JobKind.Recruitment,
-        Some(ClubId(200)),
-        RunTrigger.Cli,
-        JobRunStatus.Completed,
-        None,
-        t0,
-        Some(t0),
-        None
-      )
-      for {
-        fake     <- getFakeRunner
-        _        <- fake.prePopulate(job)
-        response <- JobRoutes.routes.runZIO(jsonRequest(Method.GET, "/api/jobs"))
-        body     <- response.body.asString
-      } yield assertTrue(
-        response.status == Status.Ok,
-        body.contains("list-id")
-      )
-    },
-    test("GET /api/jobs/:id returns 200 for existing") {
-      val t0 = LocalDateTime.of(2025, 6, 1, 0, 0).toInstant(ZoneOffset.UTC)
-      val job = JobRun(
-        JobRunId.wrap("detail-id"),
-        JobKind.Membership,
-        None,
-        RunTrigger.Cli,
-        JobRunStatus.Running,
-        None,
-        t0,
-        None,
-        None
-      )
-      for {
-        fake     <- getFakeRunner
-        _        <- fake.prePopulate(job)
-        response <- JobRoutes.routes.runZIO(jsonRequest(Method.GET, "/api/jobs/detail-id"))
-        body     <- response.body.asString
-      } yield assertTrue(
-        response.status == Status.Ok,
-        body.contains("detail-id"),
-        body.contains("Membership")
-      )
-    },
-    test("GET /api/jobs/:id returns 404 for unknown") {
-      for {
-        response <- JobRoutes.routes.runZIO(jsonRequest(Method.GET, "/api/jobs/nonexistent"))
-      } yield assertTrue(response.status == Status.NotFound)
-    },
-    test("POST /api/jobs/stats with invalid date returns 400") {
-      for {
-        _    <- ensureClubs
-        fake <- getFakeRunner
-        _    <- fake.setNextAction(Action.Succeed)
-        response <- JobRoutes.routes.runZIO(
-          jsonRequest(Method.POST, "/api/jobs/stats", """{"clubSlug":"test-club","since":"not-a-date","until":"also-bad"}""")
-        )
-      } yield assertTrue(response.status == Status.BadRequest)
-    }
+    testRecruitmentSuccess,
+    testRecruitmentConflict,
+    testRecruitmentBadJson,
+    testMembershipSingleClub,
+    testMembershipEmptyClubSlugs,
+    testMembershipMultipleClubs,
+    testMembershipWithUnknownClub,
+    testHistorySingleClub,
+    testMatchrefSuccess,
+    testGetJobsReturnsList,
+    testGetJobByIdReturns200,
+    testGetJobByIdReturns404,
+    testStatsWithInvalidDateReturns400
   )
+
+  private def testRecruitmentSuccess = test("POST /api/jobs/recruitment success") {
+    for {
+      _    <- ensureClubs
+      fake <- getFakeRunner
+      _    <- fake.setNextAction(Action.Succeed)
+      response <- JobRoutes.routes.runZIO(
+        jsonRequest(Method.POST, "/api/jobs/recruitment", """{"clubSlug":"test-club"}""")
+      )
+      body   <- response.body.asString
+      parsed = body.fromJson[JobResult]
+    } yield assertTrue(
+      response.status == Status.Ok,
+      parsed.isRight,
+      parsed.toOption.get.jobId.isDefined,
+      parsed.toOption.get.error.isEmpty
+    )
+  }
+
+  private def testRecruitmentConflict = test("POST /api/jobs/recruitment conflict") {
+    for {
+      _    <- ensureClubs
+      fake <- getFakeRunner
+      _    <- fake.setNextAction(Action.Conflict)
+      response <- JobRoutes.routes.runZIO(
+        jsonRequest(Method.POST, "/api/jobs/recruitment", """{"clubSlug":"test-club"}""")
+      )
+      body   <- response.body.asString
+      parsed = body.fromJson[JobResult]
+    } yield assertTrue(
+      response.status == Status.Ok,
+      parsed.isRight,
+      parsed.toOption.get.jobId.isEmpty,
+      parsed.toOption.get.error.exists(_.contains("already running"))
+    )
+  }
+
+  private def testRecruitmentBadJson = test("POST /api/jobs/recruitment bad JSON") {
+    for {
+      response <- JobRoutes.routes.runZIO(jsonRequest(Method.POST, "/api/jobs/recruitment", "not json"))
+    } yield assertTrue(response.status == Status.BadRequest)
+  }
+
+  private def testMembershipSingleClub = test("POST /api/jobs/membership single club") {
+    for {
+      _    <- ensureClubs
+      fake <- getFakeRunner
+      _    <- fake.setNextAction(Action.Succeed)
+      response <- JobRoutes.routes.runZIO(
+        jsonRequest(Method.POST, "/api/jobs/membership", """{"clubSlugs":["test-club"]}""")
+      )
+      body   <- response.body.asString
+      parsed = body.fromJson[List[ClubJobResult]]
+    } yield {
+      val results = parsed.toOption.get
+      assertTrue(
+        response.status == Status.Ok,
+        parsed.isRight,
+        results.size == 1,
+        results.head.clubSlug == "test-club",
+        results.head.jobId.isDefined,
+        results.head.error.isEmpty
+      )
+    }
+  }
+
+  private def testMembershipEmptyClubSlugs = test("POST /api/jobs/membership empty clubSlugs") {
+    for {
+      response <- JobRoutes.routes.runZIO(
+        jsonRequest(Method.POST, "/api/jobs/membership", """{"clubSlugs":[]}""")
+      )
+    } yield assertTrue(response.status == Status.BadRequest)
+  }
+
+  private def testMembershipMultipleClubs = test("POST /api/jobs/membership multiple clubs") {
+    for {
+      _    <- ensureClubs
+      fake <- getFakeRunner
+      _    <- fake.setNextAction(Action.Succeed)
+      response <- JobRoutes.routes.runZIO(
+        jsonRequest(Method.POST, "/api/jobs/membership", """{"clubSlugs":["test-club","other-club"]}""")
+      )
+      body   <- response.body.asString
+      parsed = body.fromJson[List[ClubJobResult]]
+    } yield {
+      val results = parsed.toOption.get
+      assertTrue(
+        response.status == Status.Ok,
+        parsed.isRight,
+        results.size == 2,
+        results.map(_.clubSlug).toSet == Set("test-club", "other-club"),
+        results.forall(r => r.jobId.isDefined && r.error.isEmpty)
+      )
+    }
+  }
+
+  private def testMembershipWithUnknownClub = test("POST /api/jobs/membership with unknown club") {
+    for {
+      _    <- ensureClubs
+      fake <- getFakeRunner
+      _    <- fake.setNextAction(Action.Succeed)
+      response <- JobRoutes.routes.runZIO(
+        jsonRequest(Method.POST, "/api/jobs/membership", """{"clubSlugs":["test-club","no-such-club"]}""")
+      )
+      body   <- response.body.asString
+      parsed = body.fromJson[List[ClubJobResult]]
+    } yield {
+      val results  = parsed.toOption.get
+      val found    = results.find(_.clubSlug == "test-club").get
+      val notFound = results.find(_.clubSlug == "no-such-club").get
+      assertTrue(
+        response.status == Status.Ok,
+        parsed.isRight,
+        results.size == 2,
+        found.jobId.isDefined,
+        found.error.isEmpty,
+        notFound.jobId.isEmpty,
+        notFound.error.contains("Club not found")
+      )
+    }
+  }
+
+  private def testHistorySingleClub = test("POST /api/jobs/history single club") {
+    for {
+      _    <- ensureClubs
+      fake <- getFakeRunner
+      _    <- fake.setNextAction(Action.Succeed)
+      response <- JobRoutes.routes.runZIO(
+        jsonRequest(Method.POST, "/api/jobs/history", """{"clubSlugs":["test-club"]}""")
+      )
+      body   <- response.body.asString
+      parsed = body.fromJson[List[ClubJobResult]]
+    } yield {
+      val results = parsed.toOption.get
+      assertTrue(
+        response.status == Status.Ok,
+        parsed.isRight,
+        results.size == 1,
+        results.head.clubSlug == "test-club",
+        results.head.jobId.isDefined,
+        results.head.error.isEmpty
+      )
+    }
+  }
+
+  private def testMatchrefSuccess = test("POST /api/jobs/matchref success") {
+    for {
+      fake     <- getFakeRunner
+      _        <- fake.setNextAction(Action.Succeed)
+      response <- JobRoutes.routes.runZIO(jsonRequest(Method.POST, "/api/jobs/matchref"))
+      body     <- response.body.asString
+      parsed = body.fromJson[JobResult]
+    } yield assertTrue(
+      response.status == Status.Ok,
+      parsed.isRight,
+      parsed.toOption.get.jobId.isDefined,
+      parsed.toOption.get.error.isEmpty
+    )
+  }
+
+  private def testGetJobsReturnsList = test("GET /api/jobs returns list") {
+    val t0 = LocalDateTime.of(2025, 6, 1, 0, 0).toInstant(ZoneOffset.UTC)
+    val job = JobRun(
+      JobRunId.wrap("list-id"),
+      JobKind.Recruitment,
+      Some(ClubId(200)),
+      RunTrigger.Cli,
+      JobRunStatus.Completed,
+      None,
+      t0,
+      Some(t0),
+      None
+    )
+    for {
+      fake     <- getFakeRunner
+      _        <- fake.prePopulate(job)
+      response <- JobRoutes.routes.runZIO(jsonRequest(Method.GET, "/api/jobs"))
+      body     <- response.body.asString
+    } yield assertTrue(
+      response.status == Status.Ok,
+      body.contains("list-id")
+    )
+  }
+
+  private def testGetJobByIdReturns200 = test("GET /api/jobs/:id returns 200 for existing") {
+    val t0 = LocalDateTime.of(2025, 6, 1, 0, 0).toInstant(ZoneOffset.UTC)
+    val job = JobRun(
+      JobRunId.wrap("detail-id"),
+      JobKind.Membership,
+      None,
+      RunTrigger.Cli,
+      JobRunStatus.Running,
+      None,
+      t0,
+      None,
+      None
+    )
+    for {
+      fake     <- getFakeRunner
+      _        <- fake.prePopulate(job)
+      response <- JobRoutes.routes.runZIO(jsonRequest(Method.GET, "/api/jobs/detail-id"))
+      body     <- response.body.asString
+    } yield assertTrue(
+      response.status == Status.Ok,
+      body.contains("detail-id"),
+      body.contains("Membership")
+    )
+  }
+
+  private def testGetJobByIdReturns404 = test("GET /api/jobs/:id returns 404 for unknown") {
+    for {
+      response <- JobRoutes.routes.runZIO(jsonRequest(Method.GET, "/api/jobs/nonexistent"))
+    } yield assertTrue(response.status == Status.NotFound)
+  }
+
+  private def testStatsWithInvalidDateReturns400 = test("POST /api/jobs/stats with invalid date returns 400") {
+    for {
+      _    <- ensureClubs
+      fake <- getFakeRunner
+      _    <- fake.setNextAction(Action.Succeed)
+      response <- JobRoutes.routes.runZIO(
+        jsonRequest(Method.POST, "/api/jobs/stats", """{"clubSlug":"test-club","since":"not-a-date","until":"also-bad"}""")
+      )
+    } yield assertTrue(response.status == Status.BadRequest)
+  }
 
   // ==========================================================================
   // Suite: ScheduleRoutes
@@ -351,102 +381,122 @@ object TestRoutes extends ZIOSpecDefault {
   } yield ()
 
   private def suiteScheduleRoutes = suite("ScheduleRoutes")(
-    test("GET /api/schedules returns empty list") {
-      for {
-        _        <- deleteAllSchedules
-        response <- ScheduleRoutes.routes.runZIO(jsonRequest(Method.GET, "/api/schedules"))
-        body     <- response.body.asString
-      } yield assertTrue(
-        response.status == Status.Ok,
-        body == "[]"
-      )
-    },
-    test("POST /api/schedules creates schedule") {
-      for {
-        _ <- deleteAllSchedules
-        response <- ScheduleRoutes.routes.runZIO(
-          jsonRequest(
-            Method.POST,
-            "/api/schedules",
-            """{"kind":"Recruitment","clubSlug":"test-club","intervalHours":24}"""
-          )
-        )
-        body <- response.body.asString
-      } yield assertTrue(
-        response.status == Status.Created,
-        body.contains("Recruitment"),
-        body.contains("200") // clubId
-      )
-    },
-    test("GET /api/schedules returns created schedule") {
-      for {
-        response <- ScheduleRoutes.routes.runZIO(jsonRequest(Method.GET, "/api/schedules"))
-        body     <- response.body.asString
-      } yield assertTrue(
-        response.status == Status.Ok,
-        body.contains("Recruitment")
-      )
-    },
-    test("PUT /api/schedules/:id updates") {
-      for {
-        // Get existing schedule id
-        listResp <- ScheduleRoutes.routes.runZIO(jsonRequest(Method.GET, "/api/schedules"))
-        listBody <- listResp.body.asString
-        id = extractFirstId(listBody)
-        response <- ScheduleRoutes.routes.runZIO(
-          jsonRequest(Method.PUT, s"/api/schedules/$id", """{"intervalHours":48,"enabled":false}""")
-        )
-        body <- response.body.asString
-      } yield assertTrue(
-        response.status == Status.Ok,
-        body.contains("48"),
-        body.contains("false")
-      )
-    },
-    test("DELETE /api/schedules/:id removes") {
-      for {
-        listResp <- ScheduleRoutes.routes.runZIO(jsonRequest(Method.GET, "/api/schedules"))
-        listBody <- listResp.body.asString
-        id = extractFirstId(listBody)
-        response <- ScheduleRoutes.routes.runZIO(jsonRequest(Method.DELETE, s"/api/schedules/$id"))
-      } yield assertTrue(response.status == Status.NoContent)
-    },
-    test("POST /api/schedules with invalid kind returns 400") {
-      for {
-        response <- ScheduleRoutes.routes.runZIO(
-          jsonRequest(Method.POST, "/api/schedules", """{"kind":"InvalidKind","intervalHours":24}""")
-        )
-      } yield assertTrue(response.status == Status.BadRequest)
-    },
-    test("POST /api/schedules with non-positive intervalHours returns 400") {
-      for {
-        response <- ScheduleRoutes.routes.runZIO(
-          jsonRequest(Method.POST, "/api/schedules", """{"kind":"Recruitment","clubSlug":"test-club","intervalHours":0}""")
-        )
-      } yield assertTrue(response.status == Status.BadRequest)
-    },
-    test("POST /api/schedules with unknown club returns 404") {
-      for {
-        response <- ScheduleRoutes.routes.runZIO(
-          jsonRequest(Method.POST, "/api/schedules", """{"kind":"Recruitment","clubSlug":"no-such-club","intervalHours":24}""")
-        )
-      } yield assertTrue(response.status == Status.NotFound)
-    },
-    test("PUT /api/schedules/:id with non-positive intervalHours returns 400") {
-      for {
-        response <- ScheduleRoutes.routes.runZIO(
-          jsonRequest(Method.PUT, "/api/schedules/1", """{"intervalHours":-1}""")
-        )
-      } yield assertTrue(response.status == Status.BadRequest)
-    },
-    test("PUT /api/schedules with unknown id returns 404") {
-      for {
-        response <- ScheduleRoutes.routes.runZIO(
-          jsonRequest(Method.PUT, "/api/schedules/999999", """{"enabled":false}""")
-        )
-      } yield assertTrue(response.status == Status.NotFound)
-    }
+    testGetSchedulesReturnsEmptyList,
+    testPostSchedulesCreatesSchedule,
+    testGetSchedulesReturnsCreatedSchedule,
+    testPutScheduleUpdates,
+    testDeleteScheduleRemoves,
+    testPostSchedulesInvalidKindReturns400,
+    testPostSchedulesNonPositiveIntervalReturns400,
+    testPostSchedulesUnknownClubReturns404,
+    testPutScheduleNonPositiveIntervalReturns400,
+    testPutScheduleUnknownIdReturns404
   )
+
+  private def testGetSchedulesReturnsEmptyList = test("GET /api/schedules returns empty list") {
+    for {
+      _        <- deleteAllSchedules
+      response <- ScheduleRoutes.routes.runZIO(jsonRequest(Method.GET, "/api/schedules"))
+      body     <- response.body.asString
+    } yield assertTrue(
+      response.status == Status.Ok,
+      body == "[]"
+    )
+  }
+
+  private def testPostSchedulesCreatesSchedule = test("POST /api/schedules creates schedule") {
+    for {
+      _ <- deleteAllSchedules
+      response <- ScheduleRoutes.routes.runZIO(
+        jsonRequest(
+          Method.POST,
+          "/api/schedules",
+          """{"kind":"Recruitment","clubSlug":"test-club","intervalHours":24}"""
+        )
+      )
+      body <- response.body.asString
+    } yield assertTrue(
+      response.status == Status.Created,
+      body.contains("Recruitment"),
+      body.contains("200") // clubId
+    )
+  }
+
+  private def testGetSchedulesReturnsCreatedSchedule = test("GET /api/schedules returns created schedule") {
+    for {
+      response <- ScheduleRoutes.routes.runZIO(jsonRequest(Method.GET, "/api/schedules"))
+      body     <- response.body.asString
+    } yield assertTrue(
+      response.status == Status.Ok,
+      body.contains("Recruitment")
+    )
+  }
+
+  private def testPutScheduleUpdates = test("PUT /api/schedules/:id updates") {
+    for {
+      // Get existing schedule id
+      listResp <- ScheduleRoutes.routes.runZIO(jsonRequest(Method.GET, "/api/schedules"))
+      listBody <- listResp.body.asString
+      id = extractFirstId(listBody)
+      response <- ScheduleRoutes.routes.runZIO(
+        jsonRequest(Method.PUT, s"/api/schedules/$id", """{"intervalHours":48,"enabled":false}""")
+      )
+      body <- response.body.asString
+    } yield assertTrue(
+      response.status == Status.Ok,
+      body.contains("48"),
+      body.contains("false")
+    )
+  }
+
+  private def testDeleteScheduleRemoves = test("DELETE /api/schedules/:id removes") {
+    for {
+      listResp <- ScheduleRoutes.routes.runZIO(jsonRequest(Method.GET, "/api/schedules"))
+      listBody <- listResp.body.asString
+      id = extractFirstId(listBody)
+      response <- ScheduleRoutes.routes.runZIO(jsonRequest(Method.DELETE, s"/api/schedules/$id"))
+    } yield assertTrue(response.status == Status.NoContent)
+  }
+
+  private def testPostSchedulesInvalidKindReturns400 = test("POST /api/schedules with invalid kind returns 400") {
+    for {
+      response <- ScheduleRoutes.routes.runZIO(
+        jsonRequest(Method.POST, "/api/schedules", """{"kind":"InvalidKind","intervalHours":24}""")
+      )
+    } yield assertTrue(response.status == Status.BadRequest)
+  }
+
+  private def testPostSchedulesNonPositiveIntervalReturns400 = test("POST /api/schedules with non-positive intervalHours returns 400") {
+    for {
+      response <- ScheduleRoutes.routes.runZIO(
+        jsonRequest(Method.POST, "/api/schedules", """{"kind":"Recruitment","clubSlug":"test-club","intervalHours":0}""")
+      )
+    } yield assertTrue(response.status == Status.BadRequest)
+  }
+
+  private def testPostSchedulesUnknownClubReturns404 = test("POST /api/schedules with unknown club returns 404") {
+    for {
+      response <- ScheduleRoutes.routes.runZIO(
+        jsonRequest(Method.POST, "/api/schedules", """{"kind":"Recruitment","clubSlug":"no-such-club","intervalHours":24}""")
+      )
+    } yield assertTrue(response.status == Status.NotFound)
+  }
+
+  private def testPutScheduleNonPositiveIntervalReturns400 = test("PUT /api/schedules/:id with non-positive intervalHours returns 400") {
+    for {
+      response <- ScheduleRoutes.routes.runZIO(
+        jsonRequest(Method.PUT, "/api/schedules/1", """{"intervalHours":-1}""")
+      )
+    } yield assertTrue(response.status == Status.BadRequest)
+  }
+
+  private def testPutScheduleUnknownIdReturns404 = test("PUT /api/schedules with unknown id returns 404") {
+    for {
+      response <- ScheduleRoutes.routes.runZIO(
+        jsonRequest(Method.PUT, "/api/schedules/999999", """{"enabled":false}""")
+      )
+    } yield assertTrue(response.status == Status.NotFound)
+  }
 
   /** Extract the first `"id"` value from a JSON array response. */
   private def extractFirstId(json: String): Long = {
