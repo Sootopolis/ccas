@@ -359,4 +359,62 @@ private[ref] object RefResolution {
           }
       }
     } yield resolved).catchAll(_ => ZIO.succeed(false))
+
+  // --- Upgrade: tournament ref → smaller tournament ref ---
+
+  /** Attempt to replace a tournament ref with one from a smaller tournament. Returns true if a better ref was found and
+    * stored. Does not create skip records or bump resolution counters.
+    */
+  private[ref] def tryUpgradeTournamentRef(
+    ctx: RefContext,
+    trp: TournamentRefPlayer
+  ): RIO[CcasLogger & PostgresClient, Boolean] =
+    (for {
+      playerTournaments <- ctx.client.get[ApiPlayerTournaments](ApiPlayerTournaments.getUrl(trp.username))
+      eligible = (playerTournaments.finished ++ playerTournaments.inProgress)
+        .sortBy(_.totalPlayers.getOrElse(Int.MaxValue))
+      result <-
+        if (eligible.isEmpty) ZIO.succeed(false)
+        else tryBetterTournaments(ctx, trp, eligible.toList)
+    } yield result).catchAll(_ => ZIO.succeed(false))
+
+  private def tryBetterTournaments(
+    ctx: RefContext,
+    trp: TournamentRefPlayer,
+    candidates: List[ApiPlayerTournaments.ApiPlayerTournament]
+  ): RIO[CcasLogger & PostgresClient, Boolean] =
+    ZIO.foldLeft(candidates)(Option.empty[Boolean]) { (done, t) =>
+      done match {
+        case Some(_) => ZIO.succeed(done)
+        case None    => tryOneTournamentUpgrade(ctx, trp, t)
+      }
+    }.map(_.getOrElse(false))
+
+  private def tryOneTournamentUpgrade(
+    ctx: RefContext,
+    trp: TournamentRefPlayer,
+    t: ApiPlayerTournaments.ApiPlayerTournament
+  ): RIO[CcasLogger & PostgresClient, Option[Boolean]] = {
+    val slug = TournamentSlug.fromUrl(t.`@id`)
+    if (slug == trp.tournamentSlug) { ZIO.succeed(Some(false)) }
+    else {
+      val roundUrl = ApiTournamentRound.getUrl(slug, 1)
+      isFailedUrl(ctx, roundUrl).flatMap {
+        case true => ZIO.succeed(None)
+        case false =>
+          ctx.client.get[ApiTournamentRound](roundUrl).foldZIO(
+            error => recordFailedUrl(ctx, roundUrl, error, "player").as(None),
+            round => {
+              val playerIdx = round.players.indexWhere(rp => rp.username == trp.username)
+              if (playerIdx < 0) { ZIO.succeed(None) }
+              else {
+                val ref = PlayerTournamentRef(trp.playerId, slug, playerIdx)
+                PlayerTournamentRef.upsert(ref) *>
+                  CcasLogger.debug(s"  ${trp.username}: tournament ref upgraded to $slug").as(Some(true))
+              }
+            }
+          )
+      }
+    }
+  }
 }

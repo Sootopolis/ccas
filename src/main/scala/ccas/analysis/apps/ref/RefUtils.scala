@@ -7,13 +7,14 @@ import zio.{Promise, Ref, UIO}
 
 import ccas.analysis.tables.{MatchKey, RefSkipReason}
 import ccas.api.clubmatch.TeamMatchTeams
-import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
+import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, TournamentSlug, Username}
 import ccas.utils.client.ChessComClient
 
 private[ref] object RefUtils {
 
   final case class UnresolvedPlayer(playerId: PlayerId, username: Username)
   final case class UnresolvedClub(clubId: ClubId, slug: ClubSlug)
+  final case class TournamentRefPlayer(playerId: PlayerId, username: Username, tournamentSlug: TournamentSlug)
 
   enum ResolveResult {
     case Resolved

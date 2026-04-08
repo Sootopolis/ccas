@@ -1014,6 +1014,78 @@ object TestRefApp extends ZIOSpecDefault {
         tournRef.get.tournamentSlug == TournamentSlug("tourney-1")
       )
     },
+    test("upgrades tournament ref to smaller tournament when match upgrade fails") {
+      for {
+        _ <- seedDb
+        _ <- PlayerTournamentRef.insert(PlayerTournamentRef(pid0, TournamentSlug("tourney-big"), 0))
+        client <- fakeChessComClient(
+          Map(
+            s"player/alice/matches"       -> emptyPlayerMatchesJson,
+            s"player/alice/tournaments"   -> apiPlayerTournamentsJson(List(("tourney-small", 4), ("tourney-big", 50))),
+            s"player/bob/matches"         -> emptyPlayerMatchesJson,
+            s"player/charlie/matches"     -> emptyPlayerMatchesJson,
+            s"club/our-club/matches"      -> emptyClubMatchesJson,
+            s"club/other-club/matches"    -> emptyClubMatchesJson,
+            s"tournament/tourney-small/1" -> apiTournamentRoundJson(List("someone", "alice", "other"))
+          )
+        )
+        _        <- runPopulate(client, forceSkipped = false, upgradeRefs = true)
+        matchRef <- PlayerMatchRef.selectId(pid0)
+        tournRef <- PlayerTournamentRef.selectId(pid0)
+      } yield assertTrue(
+        matchRef.isEmpty,
+        tournRef.isDefined,
+        tournRef.get.tournamentSlug == TournamentSlug("tourney-small"),
+        tournRef.get.playerIdx == 1 // index of "alice" in round players
+      )
+    },
+    test("leaves tournament ref unchanged when already the smallest") {
+      for {
+        _ <- seedDb
+        _ <- PlayerTournamentRef.insert(PlayerTournamentRef(pid0, TournamentSlug("tourney-small"), 1))
+        client <- fakeChessComClient(
+          Map(
+            s"player/alice/matches"       -> emptyPlayerMatchesJson,
+            s"player/alice/tournaments"   -> apiPlayerTournamentsJson(List(("tourney-small", 4), ("tourney-big", 50))),
+            s"player/bob/matches"         -> emptyPlayerMatchesJson,
+            s"player/charlie/matches"     -> emptyPlayerMatchesJson,
+            s"club/our-club/matches"      -> emptyClubMatchesJson,
+            s"club/other-club/matches"    -> emptyClubMatchesJson,
+            s"tournament/tourney-small/1" -> apiTournamentRoundJson(List("someone", "alice"))
+          )
+        )
+        _        <- runPopulate(client, forceSkipped = false, upgradeRefs = true)
+        tournRef <- PlayerTournamentRef.selectId(pid0)
+      } yield assertTrue(
+        tournRef.isDefined,
+        tournRef.get.tournamentSlug == TournamentSlug("tourney-small"),
+        tournRef.get.playerIdx == 1 // unchanged
+      )
+    },
+    test("skips failed smaller tournament and keeps current ref") {
+      for {
+        _ <- seedDb
+        _ <- PlayerTournamentRef.insert(PlayerTournamentRef(pid0, TournamentSlug("tourney-medium"), 2))
+        client <- fakeChessComClient(
+          Map(
+            s"player/alice/matches"        -> emptyPlayerMatchesJson,
+            s"player/alice/tournaments"    -> apiPlayerTournamentsJson(List(("tourney-tiny", 2), ("tourney-medium", 20))),
+            s"player/bob/matches"          -> emptyPlayerMatchesJson,
+            s"player/charlie/matches"      -> emptyPlayerMatchesJson,
+            s"club/our-club/matches"       -> emptyClubMatchesJson,
+            s"club/other-club/matches"     -> emptyClubMatchesJson,
+            s"tournament/tourney-medium/1" -> apiTournamentRoundJson(List("x", "y", "alice"))
+            // tourney-tiny/1 not provided → 404
+          )
+        )
+        _        <- runPopulate(client, forceSkipped = false, upgradeRefs = true)
+        tournRef <- PlayerTournamentRef.selectId(pid0)
+      } yield assertTrue(
+        tournRef.isDefined,
+        tournRef.get.tournamentSlug == TournamentSlug("tourney-medium"),
+        tournRef.get.playerIdx == 2 // unchanged
+      )
+    },
     test("upgrade phase does not run when upgradeRefs is false") {
       for {
         _ <- seedDb

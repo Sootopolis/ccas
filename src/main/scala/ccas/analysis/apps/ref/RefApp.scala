@@ -34,6 +34,8 @@ object RefApp extends ZIOAppDefault {
     clubSkipsByReason: List[(RefSkipReason, Long)],
     upgradeEligible: Int,
     upgradeSucceeded: Int,
+    tournamentUpgradeEligible: Int,
+    tournamentUpgradeSucceeded: Int,
     startedAt: Instant,
     completedAt: Instant,
     failedQueries: Map[String, String],
@@ -67,7 +69,8 @@ object RefApp extends ZIOAppDefault {
       ctx                                                                      <- RefContext.make(client)
       (clubsTotal, clubsResolvedDb, clubsResolvedApi, clubsSkippedNew)         <- resolveClubs(ctx, forceSkipped)
       (playersTotal, playersResolvedDb, playersResolvedApi, playersSkippedNew) <- resolvePlayers(ctx, forceSkipped)
-      (upgradeEligible, upgradeSucceeded) <- upgradeTournamentPlayers(ctx, upgradeRefs)
+      (upgradeEligible, upgradeSucceeded, tournamentUpgradeEligible, tournamentUpgradeSucceeded) <-
+        upgradeTournamentPlayers(ctx, upgradeRefs)
       skipped                             <- ctx.skippedPlayers.get
       completedAt = Instant.now()
       duration    = JDuration.between(startedAt, completedAt)
@@ -90,6 +93,8 @@ object RefApp extends ZIOAppDefault {
       clubSkipsByReason = clubSkipsByReason,
       upgradeEligible = upgradeEligible,
       upgradeSucceeded = upgradeSucceeded,
+      tournamentUpgradeEligible = tournamentUpgradeEligible,
+      tournamentUpgradeSucceeded = tournamentUpgradeSucceeded,
       startedAt = startedAt,
       completedAt = completedAt,
       failedQueries = failed,
@@ -199,32 +204,42 @@ object RefApp extends ZIOAppDefault {
   private def upgradeTournamentPlayers(
     ctx: RefContext,
     upgradeRefs: Boolean
-  ): RIO[CcasLogger & PostgresClient, (Int, Int)] =
-    if (!upgradeRefs) { ZIO.succeed((0, 0)) }
+  ): RIO[CcasLogger & PostgresClient, (Int, Int, Int, Int)] =
+    if (!upgradeRefs) { ZIO.succeed((0, 0, 0, 0)) }
     else {
       for {
-        players   <- selectTournamentOnlyPlayers
-        _         <- CcasLogger.info(s"Tournament-only players eligible for upgrade: ${players.size}")
-        upgraded <- Ref.make(0)
+        players       <- selectTournamentOnlyPlayersWithSlug
+        _             <- CcasLogger.info(s"Tournament-only players eligible for upgrade: ${players.size}")
+        matchUpgraded <- Ref.make(0)
+        tournUpgraded <- Ref.make(0)
         _ <- ZIO.scoped {
-          CcasLogger.foreachParProgress(players, ApiParallelism)((n, total) => s"  Upgrading refs: $n/$total") { player =>
-            RefResolution.tryUpgradeToMatchRef(ctx, player).flatMap { success =>
-              ZIO.whenDiscard(success)(PlayerTournamentRef.deleteId(player.playerId) *> upgraded.update(_ + 1))
+          CcasLogger.foreachParProgress(players, ApiParallelism)((n, total) => s"  Upgrading refs: $n/$total") { trp =>
+            val player = UnresolvedPlayer(trp.playerId, trp.username)
+            RefResolution.tryUpgradeToMatchRef(ctx, player).flatMap {
+              case true =>
+                PlayerTournamentRef.deleteId(trp.playerId) *> matchUpgraded.update(_ + 1)
+              case false =>
+                RefResolution.tryUpgradeTournamentRef(ctx, trp).flatMap { success =>
+                  ZIO.whenDiscard(success)(tournUpgraded.update(_ + 1))
+                }
             }
           }
         }
-        upgradedCount <- upgraded.get
-        _             <- CcasLogger.info(s"Tournament refs upgraded to match refs: $upgradedCount / ${players.size}")
-      } yield (players.size, upgradedCount)
+        matchCount <- matchUpgraded.get
+        tournCount <- tournUpgraded.get
+        _ <- CcasLogger.info(
+          s"Upgraded: $matchCount to match refs, $tournCount to smaller tournaments / ${players.size}"
+        )
+      } yield (players.size, matchCount, players.size - matchCount, tournCount)
     }
 
-  private def selectTournamentOnlyPlayers: RIO[PostgresClient, List[UnresolvedPlayer]] =
+  private def selectTournamentOnlyPlayersWithSlug: RIO[PostgresClient, List[TournamentRefPlayer]] =
     connectZIO {
-      sql"""SELECT p.player_id, p.username
+      sql"""SELECT p.player_id, p.username, ptr.tournament_slug
             FROM player p
             INNER JOIN player_tournament_ref ptr ON p.player_id = ptr.player_id
             LEFT JOIN player_match_ref pmr ON p.player_id = pmr.player_id
-            WHERE pmr.player_id IS NULL""".query[UnresolvedPlayer].run().toList
+            WHERE pmr.player_id IS NULL""".query[TournamentRefPlayer].run().toList
     }
 
   // --- Report ---
@@ -258,6 +273,12 @@ object RefApp extends ZIOAppDefault {
       sb.append("--- Tournament → Match Upgrades ---\n")
       sb.append(s"Eligible:  ${d.upgradeEligible}\n")
       sb.append(s"Upgraded:  ${d.upgradeSucceeded}\n\n")
+    }
+
+    if (d.tournamentUpgradeEligible > 0) {
+      sb.append("--- Tournament → Smaller Tournament Upgrades ---\n")
+      sb.append(s"Eligible:  ${d.tournamentUpgradeEligible}\n")
+      sb.append(s"Upgraded:  ${d.tournamentUpgradeSucceeded}\n\n")
     }
 
     if (d.skippedPlayers.nonEmpty) {
