@@ -1070,6 +1070,39 @@ object TestChessComClient extends ZIOSpecDefault {
         ChessComClient.StatsAccumulator.serializeTierMap(Map.empty) == ""
       )
     },
+    test("ChessComClientConfig loads from test application.conf") {
+      import ChessComClient.ChessComClientConfig
+      import ChessComClient.ChessComClientConfig.*
+      import zio.config.magnolia.DeriveConfig
+      import zio.config.typesafe.TypesafeConfigProvider
+      val provider = TypesafeConfigProvider.fromTypesafeConfig(
+        com.typesafe.config.ConfigFactory.load(), enableCommaSeparatedValueAsList = true
+      )
+      for {
+        cfg <- provider.load(summon[DeriveConfig[ChessComClientConfig]].desc.nested("chess-com-client"))
+        tc  <- ZIO.attempt(cfg.toThrottleConfig)
+      } yield assertTrue(
+        cfg.contactEmail == "test@test.com",
+        cfg.recoveryTiers == Vector(2, 4),
+        cfg.cooldownSeconds == 1L,
+        cfg.cfCooldownSeconds == 1L,
+        cfg.failureWindowSize == 20,
+        cfg.failureThreshold == 0.2,
+        cfg.minSampleSize == 10,
+        cfg.minRequestDelayMs == 0L,
+        cfg.minTierObservationSeconds == 0L,
+        cfg.retryBaseSeconds == 1L,
+        cfg.cfRetryDelaySeconds == 1L,
+        cfg.connectionRetryBaseSeconds == 1L,
+        cfg.max429Retries == 2,
+        cfg.maxCfRetries == 1,
+        cfg.maxConnectionRetries == 2,
+        cfg.statsFlushIntervalSeconds == 30L,
+        tc.maxPermits == 4L,
+        tc.cooldown == 1.second,
+        tc.retryBase == 1.second
+      )
+    },
   )
 
   // ==========================================================================

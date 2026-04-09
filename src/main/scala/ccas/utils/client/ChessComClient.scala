@@ -6,6 +6,9 @@ import ccas.utils.sql.PostgresClient
 import com.typesafe.config.ConfigFactory
 import io.netty.handler.codec.PrematureChannelClosureException
 import zio.*
+import zio.config.derivation.{kebabCase, name}
+import zio.config.magnolia.DeriveConfig
+import zio.config.typesafe.TypesafeConfigProvider
 import zio.http.*
 import zio.http.Method.GET
 import zio.json.JsonDecoder
@@ -439,6 +442,55 @@ object ChessComClient {
       recoveryTiers.findLast(_.toLong < currentMax).fold(1L)(_.toLong)
   }
 
+  /** Raw config case class mapping 1:1 to HOCON keys under `chess-com-client`. Seconds fields are kept as Long to match
+    * the plain-integer HOCON values (env var overrides are plain numbers); conversion to `Duration` happens in
+    * `toThrottleConfig`.
+    */
+  @kebabCase
+  private[ccas] case class ChessComClientConfig(
+    contactEmail: String,
+    recoveryTiers: Vector[Int],
+    cooldownSeconds: Long,
+    cfCooldownSeconds: Long,
+    failureWindowSize: Int,
+    failureThreshold: Double,
+    minSampleSize: Int,
+    minRequestDelayMs: Long,
+    minTierObservationSeconds: Long,
+    retryBaseSeconds: Long,
+    cfRetryDelaySeconds: Long,
+    connectionRetryBaseSeconds: Long,
+    @name("max-429-retries") max429Retries: Int,
+    maxCfRetries: Int,
+    maxConnectionRetries: Int,
+    statsFlushIntervalSeconds: Long
+  )
+
+  private[ccas] object ChessComClientConfig {
+    given DeriveConfig[ChessComClientConfig] = DeriveConfig.derived
+
+    extension (c: ChessComClientConfig) {
+      def toThrottleConfig: ThrottleConfig = ThrottleConfig(
+        recoveryTiers = c.recoveryTiers,
+        cooldown = c.cooldownSeconds.seconds,
+        cfCooldown = c.cfCooldownSeconds.seconds,
+        retryBase = c.retryBaseSeconds.seconds,
+        cfRetryDelay = c.cfRetryDelaySeconds.seconds,
+        connectionRetryBase = c.connectionRetryBaseSeconds.seconds,
+        max429Retries = c.max429Retries,
+        maxCfRetries = c.maxCfRetries,
+        maxConnectionRetries = c.maxConnectionRetries,
+        failureWindowSize = c.failureWindowSize,
+        failureThreshold = c.failureThreshold,
+        minSampleSize = c.minSampleSize,
+        minRequestDelayMs = c.minRequestDelayMs,
+        minTierObservation = c.minTierObservationSeconds.seconds
+      )
+
+      def statsFlushInterval: Duration = c.statsFlushIntervalSeconds.seconds
+    }
+  }
+
   /** Upper-exclusive boundaries for latency histogram buckets, in milliseconds. A latency < 50 lands in bucket 0, a
     * latency in [50, 100) lands in bucket 1, etc. Values >= 1000 land in the final overflow bucket.
     */
@@ -672,35 +724,18 @@ object ChessComClient {
 
   def live(appLabel: String): RLayer[Client & PostgresClient & CcasLogger, ChessComClient] =
     ZLayer.scoped {
-      val typesafeConfig = ConfigFactory.load().getConfig("chess-com-client")
-      import scala.jdk.CollectionConverters.*
-      val tiers = scala.util.Try(typesafeConfig.getIntList("recovery-tiers").asScala.map(_.intValue).toVector)
-        .getOrElse(typesafeConfig.getString("recovery-tiers").split("[,\\s]+").filter(_.nonEmpty).map(_.toInt).toVector)
-      val cooldown       = typesafeConfig.getLong("cooldown-seconds").seconds
-      val cfCooldown     = typesafeConfig.getLong("cf-cooldown-seconds").seconds
-      val windowSize     = typesafeConfig.getInt("failure-window-size")
-      val threshold      = typesafeConfig.getDouble("failure-threshold")
-      val minSample      = typesafeConfig.getInt("min-sample-size")
-      val retryBase      = typesafeConfig.getLong("retry-base-seconds").seconds
-      val cfDelay        = typesafeConfig.getLong("cf-retry-delay-seconds").seconds
-      val connRetryBase  = typesafeConfig.getLong("connection-retry-base-seconds").seconds
-      val max429         = typesafeConfig.getInt("max-429-retries")
-      val maxCf          = typesafeConfig.getInt("max-cf-retries")
-      val maxConn        = typesafeConfig.getInt("max-connection-retries")
-      val minReqDelayMs  = typesafeConfig.getLong("min-request-delay-ms")
-      val minTierObsSecs = typesafeConfig.getLong("min-tier-observation-seconds")
-      val statsFlushInterval = typesafeConfig.getLong("stats-flush-interval-seconds").seconds
-      require(
-        !statsFlushInterval.isNegative && !statsFlushInterval.isZero,
-        s"stats-flush-interval-seconds must be positive, got: $statsFlushInterval"
-      )
-      val throttleConfig = ThrottleConfig(
-        tiers, cooldown, cfCooldown, retryBase, cfDelay, connRetryBase,
-        max429, maxCf, maxConn, windowSize, threshold, minSample,
-        minReqDelayMs, minTierObsSecs.seconds
+      import ChessComClientConfig.*
+      val provider = TypesafeConfigProvider.fromTypesafeConfig(
+        ConfigFactory.load(), enableCommaSeparatedValueAsList = true
       )
       for {
-        contactEmail  <- ZIO.attempt(typesafeConfig.getString("contact-email"))
+        rawConfig      <- provider.load(summon[DeriveConfig[ChessComClientConfig]].desc.nested("chess-com-client"))
+        throttleConfig <- ZIO.attempt(rawConfig.toThrottleConfig)
+        statsFlushInterval = rawConfig.statsFlushInterval
+        _ <- ZIO.attempt(require(
+          !statsFlushInterval.isNegative && !statsFlushInterval.isZero,
+          s"stats-flush-interval-seconds must be positive, got: $statsFlushInterval"
+        ))
         clientScope   <- ZIO.service[Scope]
         client        <- ZIO.service[Client]
         pgClient      <- ZIO.service[PostgresClient]
@@ -721,7 +756,7 @@ object ChessComClient {
       } yield ChessComClient(
         client,
         pgClient,
-        userAgentHeaders(contactEmail),
+        userAgentHeaders(rawConfig.contactEmail),
         logger,
         refs,
         stats,
