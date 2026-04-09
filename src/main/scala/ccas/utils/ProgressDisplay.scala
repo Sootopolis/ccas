@@ -43,15 +43,10 @@ class ProgressDisplay private[utils] (
   /** Update one bar's output and re-render the whole display. */
   private[utils] def render(barId: Int, output: String, lineCount: Int): UIO[Unit] =
     ZIO.whenDiscard(enabled)(mutex.withPermit {
-      for {
-        bars <- state.get
-        updated = bars.map { b =>
-          if (b.id == barId) ProgressDisplay.BarState(barId, lineCount, output)
-          else b
-        }
-        _ <- state.set(updated)
-        _ <- drawAll(updated)
-      } yield ()
+      state.updateAndGet(_.map { b =>
+        if (b.id == barId) ProgressDisplay.BarState(barId, lineCount, output)
+        else b
+      }).flatMap(drawAll)
     })
 
   /** Remove a bar from the display. */
@@ -60,8 +55,7 @@ class ProgressDisplay private[utils] (
       for {
         bars <- state.get
         _    <- clearLine(bars)
-        updated = bars.filterNot(_.id == barId)
-        _ <- state.set(updated)
+        updated <- state.updateAndGet(_.filterNot(_.id == barId))
         _ <- drawAll(updated)
       } yield ()
     })
@@ -69,11 +63,7 @@ class ProgressDisplay private[utils] (
   /** Finish all bars — erase without redraw. Called from scope finalizer. */
   private[utils] def finishAll: UIO[Unit] =
     ZIO.whenDiscard(enabled)(mutex.withPermit {
-      for {
-        bars <- state.get
-        _    <- clearLine(bars)
-        _    <- state.set(Nil)
-      } yield ()
+      state.getAndSet(Nil).flatMap(clearLine)
     })
 
   // ---------------------------------------------------------------------------

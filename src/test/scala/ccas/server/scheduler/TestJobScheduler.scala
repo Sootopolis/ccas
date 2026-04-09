@@ -22,7 +22,8 @@ object TestJobScheduler extends ZIOSpecDefault {
     testDueScheduleSubmitted,
     testNotYetDueScheduleSkipped,
     testDisabledScheduleSkipped,
-    testErrorDoesNotCrashScheduler
+    testErrorDoesNotCrashScheduler,
+    testErrorInOneScheduleDoesNotBlockOthers
   ).provideShared(
     FreshSchemaLayer("test_scheduler", onInit = ServerTables.ensureTables)
   ) @@ TestAspect.withLiveClock @@ TestAspect.timeout(15.seconds)
@@ -182,4 +183,43 @@ object TestJobScheduler extends ZIOSpecDefault {
       }
     } yield assertCompletes // scheduler survived the error and polled again
   }
+
+  private def testErrorInOneScheduleDoesNotBlockOthers =
+    test("error in one schedule does not block other schedules") {
+      val failClubId = ClubId(305)
+      val goodClubId = ClubId(306)
+      for {
+        pgClient  <- ZIO.service[PostgresClient]
+        submitted <- Ref.make(List.empty[Option[ClubId]])
+        runner = new JobRunner {
+          override def submit(
+            kind: JobKind,
+            clubId: Option[ClubId],
+            params: Option[String],
+            trigger: RunTrigger,
+            effect: Option[JobRunId] => RIO[CcasLogger & ChessComClient & PostgresClient, Any]
+          ): RIO[PostgresClient, JobRunId] =
+            submitted.update(clubId :: _) *>
+              ZIO.when(clubId.contains(failClubId))(ZIO.fail(new RuntimeException("boom"))).as(JobRunId.generate())
+
+          override def status(id: JobRunId): RIO[PostgresClient, Option[JobRun]] = ZIO.none
+          override def recentJobs(limit: Int): RIO[PostgresClient, List[JobRun]] = ZIO.succeed(Nil)
+        }
+        scheduler = new JobScheduler.JobSchedulerLive(TestCcasLogger.noop, runner, pgClient, 50.millis)
+
+        _ <- Club.upsert(Club(failClubId, Instant.now(), ClubSlug("fail-sched"), "Fail"))
+        _ <- Club.upsert(Club(goodClubId, Instant.now(), ClubSlug("good-sched"), "Good"))
+        _ <- JobSchedule.insert(
+          JobSchedule(0L, JobKind.Membership, Some(failClubId), None, intervalHours = 0, enabled = true, lastRunAt = None)
+        )
+        _ <- JobSchedule.insert(
+          JobSchedule(0L, JobKind.History, Some(goodClubId), None, intervalHours = 0, enabled = true, lastRunAt = None)
+        )
+        _ <- ZIO.scoped {
+          scheduler.start *>
+            submitted.get.repeatUntil(_.exists(_.contains(goodClubId)))
+              .timeoutFail(new RuntimeException("good schedule was never submitted"))(5.seconds)
+        }
+      } yield assertCompletes
+    }
 }

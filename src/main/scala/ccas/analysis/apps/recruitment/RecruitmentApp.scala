@@ -15,6 +15,7 @@ import ccas.utils.{display, CcasLogger, OutputFile}
 import ccas.utils.client.ChessComClient
 import ccas.utils.errors.{BadRequestException, NotFoundException}
 import ccas.utils.sql.PostgresClient
+import ccas.utils.sql.PostgresClient.withTransaction
 
 object RecruitmentApp extends ZIOAppDefault {
 
@@ -336,29 +337,32 @@ object RecruitmentApp extends ZIOAppDefault {
         else if (trigger == RunTrigger.Cli) promptConfirmation(found)
         else ZIO.succeed(found) // Api, Scheduled, FollowUp: auto-confirm
 
-      _ <- ZIO.foreachDiscard(confirmed) { u =>
-        Player.selectByUsername(u)
-          .someOrFail(new java.sql.SQLException(s"No player found for confirmed candidate $u"))
-          .flatMap(p => RecruitmentCandidate.updateOutcome(ctx.runId, p.playerId, CandidateOutcome.Invited))
+      evalCount <- ctx.evalCountRef.get
+      clubId    = ctx.runCtx.clubId
+      alias     = ctx.runCtx.alias
+      (finalRun, deferredCount) <- withTransaction {
+        for {
+          _ <- ZIO.foreachDiscard(confirmed) { u =>
+            Player.selectByUsername(u)
+              .someOrFail(new java.sql.SQLException(s"No player found for confirmed candidate $u"))
+              .flatMap(p => RecruitmentCandidate.updateOutcome(ctx.runId, p.playerId, CandidateOutcome.Invited))
+          }
+          deferredCount <- RecruitmentCandidate.selectDeferredCountByRun(ctx.runId)
+          completedAt = Instant.now()
+          finalRun = RecruitmentRun(
+            ctx.runId,
+            clubId,
+            ctx.runCtx.criteria.criteriaId,
+            trigger,
+            startedAt,
+            Some(completedAt),
+            confirmed.size,
+            jobRunId
+          )
+          _ <- RecruitmentRun.update(finalRun)
+        } yield (finalRun, deferredCount)
       }
-
-      evalCount     <- ctx.evalCountRef.get
-      deferredCount <- RecruitmentCandidate.selectDeferredCountByRun(ctx.runId)
-      completedAt = Instant.now()
-      duration    = JDuration.between(startedAt, completedAt)
-      clubId      = ctx.runCtx.clubId
-      alias       = ctx.runCtx.alias
-      finalRun = RecruitmentRun(
-        ctx.runId,
-        clubId,
-        ctx.runCtx.criteria.criteriaId,
-        trigger,
-        startedAt,
-        Some(completedAt),
-        confirmed.size,
-        jobRunId
-      )
-      _ <- RecruitmentRun.update(finalRun)
+      duration = JDuration.between(startedAt, finalRun.completedAt.get)
       _ <- CcasLogger.info(s"=== $label ===")
       _ <- CcasLogger.info(s"Duration: ${duration.display}")
       _ <- CcasLogger.info(s"Candidates evaluated: $evalCount")

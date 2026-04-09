@@ -52,10 +52,15 @@ object JobScheduler {
         now = Instant.now()
         _ <- ZIO.foreachDiscard(schedules) { schedule =>
           val isDue = schedule.lastRunAt.forall(ts => ChronoUnit.HOURS.between(ts, now) >= schedule.intervalHours)
-          ZIO.whenDiscard(isDue)(runSchedule(schedule, now))
+          ZIO.whenDiscard(isDue) {
+            runSchedule(schedule, now).catchAll { e =>
+              CcasLogger.error(s"[Scheduler] ${schedule.kind} (club ${schedule.clubId}): ${e.getMessage}")
+                .provideEnvironment(loggerEnv)
+            }
+          }
         }
       } yield ())
-        .catchAll(e => CcasLogger.error(s"[Scheduler] Error: ${e.getMessage}").provideEnvironment(loggerEnv))
+        .catchAll(e => CcasLogger.error(s"[Scheduler] Poll error: ${e.getMessage}").provideEnvironment(loggerEnv))
 
     private def runSchedule(schedule: JobSchedule, now: Instant): Task[Unit] = {
       def requireClubSlug: Task[ClubSlug] =

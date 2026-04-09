@@ -197,12 +197,11 @@ private[recruitment] object RecruitmentExplore {
     * in the DB; no status flip needed here.
     */
   def reclassifyExcessInvited(ctx: ExploreContext): RIO[PostgresClient, Unit] =
-    for {
-      invited <- ctx.invitedRef.get
-      excess = invited.size - ctx.target
-      // invitedRef is prepend-ordered (newest first), so drop excess from the head
-      _ <- ZIO.whenDiscard(excess > 0)(ctx.invitedRef.set(invited.drop(excess)))
-    } yield ()
+    // invitedRef is prepend-ordered (newest first), so drop excess from the head
+    ctx.invitedRef.update { invited =>
+      val excess = invited.size - ctx.target
+      if (excess > 0) invited.drop(excess) else invited
+    }
 
   // --- Source activation ---
 

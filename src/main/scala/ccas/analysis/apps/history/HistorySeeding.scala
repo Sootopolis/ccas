@@ -3,6 +3,7 @@ package ccas.analysis.apps.history
 import java.time.Instant
 
 import ccas.utils.sql.PostgresClient
+import ccas.utils.sql.PostgresClient.withTransaction
 import zio.{Chunk, RIO, Ref, ZIO}
 import HistoryUtils.*
 
@@ -38,9 +39,11 @@ private[history] object HistorySeeding {
                 _ <- ZIO.foreachDiscard(grouped.toList) { case (slug, entries) =>
                   Club.resolveOrFetch(client, slug).flatMap {
                     case Some(clubId) =>
-                      ZIO.foreachDiscard(entries) { entry =>
-                        ClubMatch.updateTeamClubId(entry.matchId, entry.isTeam1, clubId) *>
-                          UnresolvedMatchClub.delete(entry.matchId, entry.isTeam1)
+                      withTransaction {
+                        ZIO.foreachDiscard(entries) { entry =>
+                          ClubMatch.updateTeamClubId(entry.matchId, entry.isTeam1, clubId) *>
+                            UnresolvedMatchClub.delete(entry.matchId, entry.isTeam1)
+                        }
                       } *> resolvedRef.update(_ + entries.size)
                     case None => ZIO.unit
                   }.ignore *>
@@ -75,19 +78,23 @@ private[history] object HistorySeeding {
                   (for {
                     apiPlayer <- client.get[ApiPlayer](ApiPlayer.getUrl(username))
                     playerId = apiPlayer.playerId
-                    _ <- Player.insertIfNew(
-                      Player(
-                        playerId,
-                        apiPlayer.joinedAt,
-                        username,
-                        apiPlayer.status.category,
-                        apiPlayer.title,
-                        Instant.now()
-                      )
-                    )
-                    _ <- ZIO.foreachDiscard(entries) { entry =>
-                      ClubMatchBoard.updatePlayerId(entry.matchId, entry.board, entry.isTeam1, playerId) *>
-                        UnresolvedBoardPlayer.delete(entry.matchId, entry.board, entry.isTeam1)
+                    _ <- withTransaction {
+                      for {
+                        _ <- Player.insertIfNew(
+                          Player(
+                            playerId,
+                            apiPlayer.joinedAt,
+                            username,
+                            apiPlayer.status.category,
+                            apiPlayer.title,
+                            Instant.now()
+                          )
+                        )
+                        _ <- ZIO.foreachDiscard(entries) { entry =>
+                          ClubMatchBoard.updatePlayerId(entry.matchId, entry.board, entry.isTeam1, playerId) *>
+                            UnresolvedBoardPlayer.delete(entry.matchId, entry.board, entry.isTeam1)
+                        }
+                      } yield ()
                     }
                     _ <- resolvedRef.update(_ + entries.size)
                   } yield ()).ignore *>
