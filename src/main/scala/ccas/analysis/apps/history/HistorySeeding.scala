@@ -256,17 +256,15 @@ private[history] object HistorySeeding {
   private def insertPendingMatches(items: Iterable[HistoryPendingMatch]): RIO[PostgresClient, Unit] =
     ZIO.foreachDiscard(items.grouped(1000).toList)(HistoryPendingMatch.insertBatch)
 
-  /** If --refresh, re-queues all known matches; otherwise only stale ones (unfinished or recently completed). When
-    * `shared` is present, filters out matches already processed by a prior club in this batch.
+  /** Re-queues stale matches (unfinished or recently completed) as pending for reprocessing. When `shared` is present,
+    * filters out matches already processed by a prior club in this batch.
     */
   def seedStaleMatches(
     clubId: ClubId,
-    refresh: Boolean,
     shared: Option[SharedContext]
   ): RIO[PostgresClient, Int] =
     for {
-      ids <- if (refresh) { ClubMatch.selectMatchIdsForClub(clubId) }
-      else { ClubMatch.selectStaleForClub(clubId) }
+      ids <- ClubMatch.selectStaleForClub(clubId)
       alreadyProcessed <- shared.fold(ZIO.succeed(Set.empty[ClubMatchId]))(_.processedMatches.get)
       filtered = ids.filterNot(alreadyProcessed.contains)
       _ <- insertPendingMatches(filtered.map(id => HistoryPendingMatch(clubId, id, isLive = false)))

@@ -2,7 +2,7 @@ package ccas.analysis.apps.history
 
 import java.time.{Duration as JDuration, Instant}
 
-import zio.{NonEmptyChunk, RIO, Ref, Scope, URIO, ZEnvironment, ZIO, ZIOAppArgs, ZIOAppDefault}
+import zio.{Chunk, NonEmptyChunk, RIO, Ref, Scope, URIO, ZEnvironment, ZIO, ZIOAppArgs, ZIOAppDefault}
 import zio.http.Client
 import HistoryUtils.*
 
@@ -25,17 +25,21 @@ import ccas.utils.sql.PostgresClient
   *     stored by another club's run. Only re-queues stale matches. This is the cheapest mode for regular updates.
   *   - '''`--full`:''' Clears member query history so every member's match list is re-fetched from the API. Use when
   *     you want a complete rebuild of the match graph (e.g., after a long gap or to pick up retroactive API changes).
-  *   - '''`--refresh`:''' Re-queues ALL known matches for reprocessing, not just stale ones. Use to update match data
-  *     across the board (e.g., to pick up score corrections or newly resolved fair-play removals).
+  *   - '''`--refresh [hours]`:''' After BFS processing, re-fetches settled matches (finished + past the stale window)
+  *     directly from `club_match`, bypassing the pending table. If `hours` is specified, only refreshes settled matches
+  *     whose `fetchedAt` is older than that many hours — enabling resumable partial refreshes (already-refreshed matches
+  *     have updated `fetchedAt` and are naturally skipped). Without `hours`, refreshes all settled matches.
   *
   * ==Workflow (4 Phases)==
   *   1. '''Initialize''' — Reconcile club membership, load current state (members, snapshots, processed counts), reset
   *      pending match statuses, and create a `HistoryRun` record.
   *   2. '''Seed''' — Collect match IDs into `history_pending_match` from three sources: the club matches endpoint, each
-  *      member's match list, and stale/all existing matches. Also retries previously unresolved clubs and board players
+  *      member's match list, and stale existing matches. Also retries previously unresolved clubs and board players
   *      from prior runs.
   *   3. '''Process''' — BFS wave loop: fetch and persist match data in parallel batches, discover unknown players, seed
   *      their match lists, and repeat until no new pending matches remain.
+  *   3.5. '''Refresh''' (if `--refresh`) — Re-fetch settled matches directly from `club_match` in batches, bypassing the
+  *      pending table. Failed matches keep their old `fetchedAt` and are retried on the next refresh.
   *   4. '''Finalize''' — Mark the `HistoryRun` complete, log summary stats, and write a report file.
   *
   * ==Unresolved Entities==
@@ -59,34 +63,47 @@ import ccas.utils.sql.PostgresClient
   *   - '''Match processing:''' Matches fully processed by a prior club are skipped — the pending entry is deleted
   *     without re-fetching from the API. The `history_run.matches_processed` column counts total matches handled
   *     (processed + shared-skipped) to preserve consistent run-level totals.
-  *   - '''Stale/refresh seeding:''' Matches already processed by a prior club in the batch are filtered out before
-  *     being re-queued as pending.
+  *   - '''Stale seeding:''' Matches already processed by a prior club in the batch are filtered out before being
+  *     re-queued as pending.
   *
   * This deduplication only applies to the CLI multi-club path. API-submitted jobs run independently per club.
   *
   * ==Invocation==
-  *   - '''CLI:''' `HistoryApp <club-slug> [club-slug ...] [--full] [--refresh]`
-  *   - '''API:''' `POST /api/jobs/history` with `{"clubSlugs": ["..."], "full": true/false, "refresh": true/false}`
+  *   - '''CLI:''' `HistoryApp <club-slug> [club-slug ...] [--full] [--refresh [hours]]`
+  *   - '''API:''' `POST /api/jobs/history` with `{"clubSlugs": ["..."], "full": true/false, "refreshMinHours": 24}`
   */
 object HistoryApp extends ZIOAppDefault {
-  private val help = "Usage: HistoryApp <club-slug> [club-slug ...] [--full] [--refresh]"
+  private val help = "Usage: HistoryApp <club-slug> [club-slug ...] [--full] [--refresh [hours]]"
 
   // --- CLI entry point ---
 
   override def run: RIO[ZIOAppArgs & Scope, Unit] =
     (for {
-      args <- ZIOAppArgs.getArgs
-      full    = args.contains("--full")
-      refresh = args.contains("--refresh")
+      rawArgs <- ZIOAppArgs.getArgs
+      full = rawArgs.contains("--full")
+      (refreshMinHours, args) = parseRefreshArg(rawArgs)
       slugs <- ZIO.fromOption(NonEmptyChunk.fromChunk(args.filterNot(_.startsWith("--")).map(ClubSlug.wrap)))
         .orElseFail(BadRequestException(help))
-      _ <- discoverBatch(slugs, full, refresh)
+      _ <- discoverBatch(slugs, full, refreshMinHours)
     } yield ()).provideSomeAuto(
       CcasLogger.live(showProgress = true),
       ChessComClient.live("history"),
       Client.default,
       PostgresClient.live(onInit = Tables.ensureTables)
     )
+
+  /** Parses `--refresh [hours]` from CLI args. Returns the parsed value and the remaining args with `--refresh` (and its
+    * optional integer argument) stripped so they aren't treated as club slugs.
+    */
+  private[history] def parseRefreshArg(args: Chunk[String]): (Option[Int], Chunk[String]) = {
+    val idx = args.indexOf("--refresh")
+    if (idx < 0) { (None, args) }
+    else {
+      val nextOpt = args.lift(idx + 1).flatMap(_.toIntOption)
+      if (nextOpt.isDefined) { (nextOpt, args.patch(idx, Chunk.empty, 2)) }
+      else { (Some(0), args.patch(idx, Chunk.empty, 1)) }
+    }
+  }
 
   private case class InitResult(
     allMembers: List[ClubMember],
@@ -100,9 +117,9 @@ object HistoryApp extends ZIOAppDefault {
   private def discoverBatch(
     slugs: NonEmptyChunk[ClubSlug],
     full: Boolean,
-    refresh: Boolean
+    refreshMinHours: Option[Int]
   ): RIO[CcasLogger & ChessComClient & PostgresClient, Unit] =
-    if (slugs.size == 1) { discover(slugs.head, full, refresh).flatMap(outputResult) }
+    if (slugs.size == 1) { discover(slugs.head, full, refreshMinHours).flatMap(outputResult) }
     else {
       for {
         client <- ZIO.service[ChessComClient]
@@ -113,7 +130,7 @@ object HistoryApp extends ZIOAppDefault {
         }
         shared <- SharedContext.make
         _ <- ZIO.foreachDiscard(slugs) { slug =>
-          discoverClub(slug, full, refresh, RunTrigger.Cli, None, Some(shared)).flatMap(outputResult)
+          discoverClub(slug, full, refreshMinHours, RunTrigger.Cli, None, Some(shared)).flatMap(outputResult)
         }
       } yield ()
     }
@@ -161,16 +178,16 @@ object HistoryApp extends ZIOAppDefault {
   def discover(
     clubSlug: ClubSlug,
     full: Boolean = false,
-    refresh: Boolean = false,
+    refreshMinHours: Option[Int] = None,
     trigger: RunTrigger = RunTrigger.Cli,
     jobRunId: Option[JobRunId] = None
   ): RIO[CcasLogger & ChessComClient & PostgresClient, HistoryResult] =
-    discoverClub(clubSlug, full, refresh, trigger, jobRunId, shared = None)
+    discoverClub(clubSlug, full, refreshMinHours, trigger, jobRunId, shared = None)
 
   private def discoverClub(
     clubSlug: ClubSlug,
     full: Boolean,
-    refresh: Boolean,
+    refreshMinHours: Option[Int],
     trigger: RunTrigger,
     jobRunId: Option[JobRunId],
     shared: Option[SharedContext]
@@ -188,6 +205,7 @@ object HistoryApp extends ZIOAppDefault {
       seedClubRef   <- Ref.make(0)
       memberSeedRef <- Ref.make(MemberSeedResult(0, 0, Nil))
       seedStaleRef  <- Ref.make(0)
+      refreshedRef  <- Ref.make(0)
 
       // === Phases 2-3: Seed + Process (interrupt-safe) ===
       waveStats <- {
@@ -229,21 +247,31 @@ object HistoryApp extends ZIOAppDefault {
             s"  Member match lists: ${memberSeed.seeded} new IDs (queried: ${memberSeed.queried}, skipped: $membersSkipped, failed: ${memberSeed.failed})"
           )
 
-          seedStale <- HistorySeeding.seedStaleMatches(ctx.clubId, refresh, shared)
+          seedStale <- HistorySeeding.seedStaleMatches(ctx.clubId, shared)
           _         <- seedStaleRef.set(seedStale)
-          _         <- CcasLogger.info(s"  Stale match refresh: $seedStale matches queued")
+          _         <- CcasLogger.info(s"  Stale match re-queue: $seedStale matches queued")
 
           // Phase 3: Process matches (BFS waves)
           _  <- CcasLogger.info("Phase 3: Processing matches...")
           ws <- HistoryProcessing.processWaves(ctx, settledMatchIds, shared)
-        } yield ws
+
+          // Phase 3.5: Refresh settled matches (if --refresh)
+          refreshed <- refreshMinHours match {
+            case Some(hours) =>
+              CcasLogger.info("Phase 3.5: Refreshing settled matches...") *>
+                HistoryProcessing.refreshSettledMatches(ctx, hours)
+            case None => ZIO.succeed(0)
+          }
+          _ <- refreshedRef.set(refreshed)
+        } yield ws.copy(matchesRefreshed = refreshed)
       }.onInterrupt {
         for {
           sc <- seedClubRef.get
           ms <- memberSeedRef.get
           ss <- seedStaleRef.get
+          rf <- refreshedRef.get
           skip = allMembers.size - ms.queried - ms.failed
-          _ <- finalizeInterrupted(ctx, runId, startedAt, clubSlug, ms, skip, sc, ss)
+          _ <- finalizeInterrupted(ctx, runId, startedAt, clubSlug, ms, skip, sc, ss, rf)
             .provideEnvironment(ZEnvironment(logger, pgClient)).orDie
         } yield ()
       }
@@ -277,7 +305,8 @@ object HistoryApp extends ZIOAppDefault {
     memberSeed: MemberSeedResult,
     membersSkipped: Int,
     seedClub: Int,
-    seedStale: Int
+    seedStale: Int,
+    refreshed: Int
   ): RIO[CcasLogger & PostgresClient, Unit] =
     for {
       partialStats     <- HistoryProcessing.readStats(ctx, waveCount = 0, waveDetails = Nil)
@@ -288,6 +317,7 @@ object HistoryApp extends ZIOAppDefault {
         membersSkipped = membersSkipped,
         membersFailed = memberSeed.failed,
         matchesSeeded = seedClub + memberSeed.seeded + seedStale,
+        matchesRefreshed = refreshed,
         failedMembers = memberSeed.failedMembers,
         pendingRemaining = pendingRemaining.toInt
       )
@@ -308,7 +338,8 @@ object HistoryApp extends ZIOAppDefault {
       )
       _ <- CcasLogger.info(s"Matches seeded: ${stats.matchesSeeded}")
       _ <- CcasLogger.info(
-        s"Matches processed: ${stats.matchesProcessed} | boards updated: ${stats.matchesBoardsUpdated} | failed: ${stats.matchesFailed} | unidentified: ${stats.matchesUnidentified} | shared skip: ${stats.matchesSharedSkip}"
+        s"Matches processed: ${stats.matchesProcessed} | boards updated: ${stats.matchesBoardsUpdated} | failed: ${stats.matchesFailed} | unidentified: ${stats.matchesUnidentified} | shared skip: ${stats.matchesSharedSkip}" +
+          (if (stats.matchesRefreshed > 0) { s" | refreshed: ${stats.matchesRefreshed}" } else { "" })
       )
       _ <- CcasLogger.info(
         s"Players discovered: ${stats.playersDiscovered} | known: ${stats.playersKnown} | failed: ${stats.playersFailed}"
@@ -344,6 +375,7 @@ object HistoryApp extends ZIOAppDefault {
     sb.append(s"Failed:       ${stats.matchesFailed}\n")
     sb.append(s"Unidentified: ${stats.matchesUnidentified}\n")
     sb.append(s"Shared skip:  ${stats.matchesSharedSkip}\n")
+    if (stats.matchesRefreshed > 0) { sb.append(s"Refreshed:    ${stats.matchesRefreshed}\n") }
     stats.waveDetails.foreach { case (wave, count) =>
       sb.append(s"  Wave $wave: $count matches\n")
     }

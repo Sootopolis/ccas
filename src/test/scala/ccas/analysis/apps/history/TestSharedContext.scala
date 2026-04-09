@@ -71,8 +71,8 @@ object TestSharedContext extends ZIOSpecDefault {
         shared <- SharedContext.make
         _      <- shared.processedMatches.set(Set(ClubMatchId(5001), ClubMatchId(5003)))
 
-        // --refresh re-queues all matches for club A; shared should filter out 5001 and 5003
-        count <- HistorySeeding.seedStaleMatches(clubAId, refresh = true, Some(shared))
+        // Stale seeding re-queues stale matches for club A; shared should filter out 5001 and 5003
+        count <- HistorySeeding.seedStaleMatches(clubAId, Some(shared))
         pending <- HistoryPendingMatch.selectClub(clubAId)
         _ <- ZIO.foreachDiscard(pending)(p => HistoryPendingMatch.delete(clubAId, p.matchId, p.isLive))
       } yield assertTrue(

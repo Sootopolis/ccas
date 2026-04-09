@@ -2,6 +2,7 @@ package ccas.analysis.apps.history
 
 import java.time.Instant
 
+import zio.Chunk
 import zio.http.URL
 import zio.json.readJsonLinesAs
 import zio.test.{assertTrue, Spec, ZIOSpecDefault}
@@ -23,7 +24,8 @@ object TestHistoryApp extends ZIOSpecDefault {
     testIsClubDailyMatchRejectsLiveMatch,
     testIsClubDailyMatchCaseInsensitive,
     suiteNormalizeGameOutcome,
-    suiteComputeScoreX2
+    suiteComputeScoreX2,
+    suiteParseRefreshArg
   )
 
   private def url(s: String): URL = URL.decode(s).toOption.get
@@ -325,4 +327,30 @@ object TestHistoryApp extends ZIOSpecDefault {
     )
     assertTrue(t1 == 2.toShort, t2 == 0.toShort)
   }
+
+  // --- parseRefreshArg ---
+
+  private def suiteParseRefreshArg = suite("parseRefreshArg")(
+    test("no --refresh flag returns None and unchanged args") {
+      val args                 = Chunk("club-a", "--full")
+      val (refresh, remaining) = HistoryApp.parseRefreshArg(args)
+      assertTrue(refresh.isEmpty, remaining == args)
+    },
+    test("--refresh without hours returns Some(0) and strips flag") {
+      val (refresh, remaining) = HistoryApp.parseRefreshArg(Chunk("club-a", "--refresh", "--full"))
+      assertTrue(refresh.contains(0), remaining == Chunk("club-a", "--full"))
+    },
+    test("--refresh with hours returns Some(hours) and strips both") {
+      val (refresh, remaining) = HistoryApp.parseRefreshArg(Chunk("club-a", "--refresh", "24"))
+      assertTrue(refresh.contains(24), remaining == Chunk("club-a"))
+    },
+    test("--refresh at end of args returns Some(0)") {
+      val (refresh, remaining) = HistoryApp.parseRefreshArg(Chunk("club-a", "--refresh"))
+      assertTrue(refresh.contains(0), remaining == Chunk("club-a"))
+    },
+    test("--refresh followed by non-integer keeps next arg as positional") {
+      val (refresh, remaining) = HistoryApp.parseRefreshArg(Chunk("--refresh", "club-a"))
+      assertTrue(refresh.contains(0), remaining == Chunk("club-a"))
+    }
+  )
 }

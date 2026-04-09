@@ -1,6 +1,6 @@
 package ccas.analysis.apps.history
 
-import java.time.Instant
+import java.time.{Duration as JDuration, Instant}
 
 import zio.{Promise, RIO, Ref, Task, UIO, ZIO}
 import zio.http.URL
@@ -238,6 +238,110 @@ private[history] object HistoryProcessing {
 
       _ <- HistoryPendingMatch.delete(ctx.clubId, matchId, isLive = true)
       _ <- ZIO.foreachDiscard(shared)(_.processedMatches.update(_ + matchId))
+    } yield ()
+
+  // === Settled Match Refresh ===
+
+  /** Refreshes settled matches by re-fetching from the API — no pending table involvement. A match is settled when it is
+    * finished and its `fetchedAt` is at least `StaleWindowDays` (90) past `endTime`; non-finished and recently finished
+    * matches are always handled by stale seeding in Phase 2 instead. Uses cursor-based pagination (`ORDER BY match_id`)
+    * so each match is attempted at most once per run; failed matches keep their old `fetchedAt` and are retried on the
+    * next `--refresh` invocation.
+    */
+  def refreshSettledMatches(
+    ctx: ProcessingContext,
+    minAgeHours: Int
+  ): RIO[CcasLogger & PostgresClient, Int] = {
+    val cutoffTime =
+      if (minAgeHours <= 0) { Instant.now() }
+      else { Instant.now().minus(JDuration.ofHours(minAgeHours.toLong)) }
+    for {
+      total <- ClubMatch.countSettledForRefresh(ctx.clubId, cutoffTime)
+      refreshed <-
+        if (total == 0) { CcasLogger.info("  No settled matches to refresh").as(0) }
+        else {
+          CcasLogger.info(s"  $total settled matches to refresh") *>
+            ZIO.scoped {
+              for {
+                bar     <- CcasLogger.progressBar
+                counter <- Ref.make(0)
+                failed  <- Ref.make(0)
+                _       <- refreshLoop(ctx, cutoffTime, bar, counter, failed, total.toInt, ClubMatchId(0))
+                f       <- failed.get
+                _       <- ZIO.whenDiscard(f > 0)(CcasLogger.info(s"  Refresh: $f failed (will retry next run)"))
+              } yield total.toInt - f
+            }
+        }
+    } yield refreshed
+  }
+
+  private def refreshLoop(
+    ctx: ProcessingContext,
+    cutoffTime: Instant,
+    bar: ProgressBar,
+    counter: Ref[Int],
+    failed: Ref[Int],
+    total: Int,
+    cursor: ClubMatchId
+  ): RIO[CcasLogger & PostgresClient, Unit] =
+    for {
+      batch <- ClubMatch.selectSettledForRefreshBatch(ctx.clubId, cutoffTime, BatchSize, cursor)
+      _ <- ZIO.whenDiscard(batch.nonEmpty) {
+        ZIO.foreachParDiscard(batch) { matchId =>
+          refreshSingleMatch(ctx, matchId)
+            .catchAll { error =>
+              failed.update(_ + 1) *>
+                CcasLogger.warn(s"    Refresh $matchId: ${error.getMessage}")
+            } *> counter.updateAndGet(_ + 1).flatMap { n =>
+            bar.print(n, total, s"    Refreshing: $n/$total")
+          }
+        }.withParallelism(MatchParallelism) *>
+          refreshLoop(ctx, cutoffTime, bar, counter, failed, total, batch.last)
+      }
+    } yield ()
+
+  private def refreshSingleMatch(
+    ctx: ProcessingContext,
+    matchId: ClubMatchId
+  ): RIO[CcasLogger & PostgresClient, Unit] =
+    for {
+      dailyMatch <- fetchMatch(ctx, matchId)
+
+      (team1ClubId, team2ClubId) <-
+        resolveClubIdFromTeamUrl(ctx, dailyMatch.teams.team1.`@id`) <&>
+          resolveClubIdFromTeamUrl(ctx, dailyMatch.teams.team2.`@id`)
+
+      _ <- trackUnresolvedClub(matchId, isTeam1 = true, dailyMatch.teams.team1.`@id`, team1ClubId) <&>
+        trackUnresolvedClub(matchId, isTeam1 = false, dailyMatch.teams.team2.`@id`, team2ClubId)
+
+      clubMatch = buildClubMatchRow(matchId, dailyMatch, team1ClubId, team2ClubId)
+
+      weAreTeam1: Option[Boolean] =
+        if (team1ClubId.contains(ctx.clubId)) { Some(true) }
+        else if (team2ClubId.contains(ctx.clubId)) { Some(false) }
+        else { None }
+
+      expectedScores = computeExpectedScores(dailyMatch)
+      existingBoards <- ClubMatchBoard.selectMatch(matchId)
+      boardSkip = scoresMatch(expectedScores, existingBoards)
+
+      _ <- if (boardSkip) {
+        ClubMatch.upsert(clubMatch)
+      } else {
+        for {
+          boardAndGames <- buildBoardAndGameRows(ctx, matchId, dailyMatch, weAreTeam1, clubMatch.startTime)
+          (boardRows, gameRowLists) = boardAndGames.unzip
+          _ <- withTransaction {
+            for {
+              _ <- ClubMatch.upsert(clubMatch)
+              _ <- ClubMatchBoard.deleteMatch(matchId)
+              _ <- ClubMatchBoard.insertBatch(boardRows)
+              _ <- ClubMatchGame.insertBatch(gameRowLists.flatten)
+            } yield ()
+          }
+          _ <- ctx.matchesBoardsUpdated.update(_ + 1)
+        } yield ()
+      }
     } yield ()
 
   // === Board Row Construction ===

@@ -50,7 +50,8 @@ object JobRoutes {
   private[server] case class HistoryRequest(
     clubSlugs: NonEmptyChunk[ClubSlug],
     full: Option[Boolean],
-    refresh: Option[Boolean]
+    refresh: Option[Boolean],
+    refreshMinHours: Option[Int]
   )
   object HistoryRequest {
     given JsonCodec[HistoryRequest] = DeriveJsonCodec.gen
@@ -182,6 +183,7 @@ object JobRoutes {
       (for {
         body   <- parseJsonBody[HistoryRequest](req)
         runner <- ZIO.service[JobRunner]
+        effectiveRefresh = body.refreshMinHours.orElse(body.refresh.filter(identity).map(_ => 0))
         results <- ZIO.foreach(body.clubSlugs.toChunk.toList)(slug =>
           submitClubJob(
             runner,
@@ -192,7 +194,7 @@ object JobRoutes {
               HistoryApp.discover(
                 slug,
                 body.full.getOrElse(false),
-                body.refresh.getOrElse(false),
+                effectiveRefresh,
                 RunTrigger.Api,
                 jobRunId = jobRunId
               ).unit

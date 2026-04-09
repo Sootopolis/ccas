@@ -16,6 +16,7 @@ object TestClubMatchSql extends ZIOSpecDefault {
     testClubMatchSelectMatchIdsForClub,
     testClubMatchSelectStaleForClub,
     testClubMatchSelectSettledForClub,
+    testClubMatchSelectSettledForRefresh,
     testClubMatchBoardInsertAndSelect,
     testClubMatchBoardNullableGameFields,
     testClubMatchBoardDeleteMatch,
@@ -162,6 +163,32 @@ object TestClubMatchSql extends ZIOSpecDefault {
         settledB == Set(ClubMatchId(1001)),
         settledNone.isEmpty,
         staleA.toSet == Set(ClubMatchId(1002)) // only matchInProgress is stale now
+      )
+    }
+
+  private def testClubMatchSelectSettledForRefresh =
+    test("selectSettledForRefreshBatch and countSettledForRefresh filter by cutoffTime") {
+      // Make matchFinished settled: fetchedAt=t4 (day 120) >= endTime(day 1) + 90 days
+      val settled = matchFinished.copy(fetchedAt = Times.t4)
+      val cutoffAfter = Times.t4.plus(Duration.ofSeconds(1))
+      for {
+        _ <- ClubMatch.upsert(settled)
+        // cutoffTime after fetchedAt → match is included
+        count    <- ClubMatch.countSettledForRefresh(clubA.clubId, cutoffAfter)
+        batch    <- ClubMatch.selectSettledForRefreshBatch(clubA.clubId, cutoffAfter, 100, ClubMatchId(0))
+        // cutoffTime equal to fetchedAt → match is NOT included (fetchedAt < cutoffTime is false)
+        countExact <- ClubMatch.countSettledForRefresh(clubA.clubId, Times.t4)
+        batchExact <- ClubMatch.selectSettledForRefreshBatch(clubA.clubId, Times.t4, 100, ClubMatchId(0))
+        // matchInProgress is not settled → never included
+        // Cursor advancement: afterMatchId = 1001 should exclude match 1001
+        batchCursor <- ClubMatch.selectSettledForRefreshBatch(clubA.clubId, cutoffAfter, 100, ClubMatchId(1001))
+        _ <- ClubMatch.upsert(matchFinished) // restore
+      } yield assertTrue(
+        count == 1L,
+        batch == List(ClubMatchId(1001)),
+        countExact == 0L,
+        batchExact.isEmpty,
+        batchCursor.isEmpty // cursor past 1001 excludes the only settled match
       )
     }
 

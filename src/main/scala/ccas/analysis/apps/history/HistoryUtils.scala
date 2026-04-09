@@ -28,6 +28,7 @@ private[history] object HistoryUtils {
     matchesFailed: Int = 0,
     matchesUnidentified: Int = 0,
     matchesBoardsUpdated: Int = 0,
+    matchesRefreshed: Int = 0,
     matchesSharedSkip: Int = 0,
     playersDiscovered: Int = 0,
     playersKnown: Int = 0,

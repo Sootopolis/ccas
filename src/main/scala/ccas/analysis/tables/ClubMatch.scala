@@ -118,6 +118,38 @@ object ClubMatch {
               fetched_at = EXCLUDED.fetched_at""".update.run()
     }
 
+  /** Counts settled matches (finished + past stale window) with `fetchedAt` before the given cutoff. */
+  def countSettledForRefresh(clubId: ClubId, cutoffTime: Instant): ZIO[PostgresClient, SQLException, Long] =
+    connectZIO {
+      sql"""SELECT COUNT(*) FROM club_match
+            WHERE (team1_club_id = $clubId OR team2_club_id = $clubId)
+            AND status = 'Finished'
+            AND fetched_at >= end_time + $StaleWindowDays * INTERVAL '1 day'
+            AND fetched_at < $cutoffTime"""
+        .query[Long].run().head
+    }
+
+  /** Returns up to `limit` settled match IDs with `fetchedAt` before the given cutoff, ordered by `match_id` for
+    * cursor-based pagination. Pass `afterMatchId` from the previous batch's last element to advance the cursor.
+    */
+  def selectSettledForRefreshBatch(
+    clubId: ClubId,
+    cutoffTime: Instant,
+    limit: Int,
+    afterMatchId: ClubMatchId
+  ): ZIO[PostgresClient, SQLException, List[ClubMatchId]] =
+    connectZIO {
+      sql"""SELECT match_id FROM club_match
+            WHERE (team1_club_id = $clubId OR team2_club_id = $clubId)
+            AND status = 'Finished'
+            AND fetched_at >= end_time + $StaleWindowDays * INTERVAL '1 day'
+            AND fetched_at < $cutoffTime
+            AND match_id > $afterMatchId
+            ORDER BY match_id
+            LIMIT $limit"""
+        .query[ClubMatchId].run().toList
+    }
+
   def updateTeamClubId(matchId: ClubMatchId, isTeam1: Boolean, clubId: ClubId): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       if (isTeam1) {
