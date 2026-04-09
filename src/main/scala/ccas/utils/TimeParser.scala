@@ -2,6 +2,8 @@ package ccas.utils
 
 import java.time.{Instant, LocalDate, ZoneOffset}
 
+import zio.{IO, ZIO}
+
 object TimeParser {
 
   /** Parse a date or instant string into an [[Instant]].
@@ -18,4 +20,8 @@ object TimeParser {
       try Right(LocalDate.parse(s).atStartOfDay().toInstant(ZoneOffset.UTC))
       catch { case e: Exception => Left(s"Invalid date: $s (${e.getMessage})") }
     }
+
+  /** ZIO variant of [[parseInstant]], failing with the error string. */
+  def parseInstantZIO(s: String): IO[String, Instant] =
+    ZIO.fromEither(parseInstant(s))
 }

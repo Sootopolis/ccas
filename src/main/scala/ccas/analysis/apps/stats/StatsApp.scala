@@ -8,7 +8,7 @@ import ccas.utils.sql.PostgresClient
 import ccas.utils.{CcasLogger, OutputFile, TimeParser}
 import zio.{RIO, Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
 
-import java.time.Instant
+import java.time.{Duration, Instant}
 
 /** Generates club member contribution stats from stored match history.
   *
@@ -23,7 +23,7 @@ import java.time.Instant
   * }}}
   *
   * ==API==
-  * `POST /api/jobs/stats` with `{"clubSlug": "...", "since": "...", "until": "...", "minGames": N}`
+  * `POST /api/jobs/stats` with `{"clubSlug": "...", "since": "...", "until": "..."}`
   */
 object StatsApp extends ZIOAppDefault {
   private val help = "Usage: StatsApp <club-slug> [--since <date-or-instant>] [--until <date-or-instant>] [--min-games N]"
@@ -42,14 +42,14 @@ object StatsApp extends ZIOAppDefault {
         case Some(s) => ZIO.succeed(ClubSlug.wrap(s))
         case None    => ZIO.fail(BadRequestException(help))
       }
-      since <- ZIO.foreach(flagValue(args, "--since"))(s => ZIO.fromEither(TimeParser.parseInstant(s)).mapError(BadRequestException(_)))
-      until <- ZIO.foreach(flagValue(args, "--until"))(s => ZIO.fromEither(TimeParser.parseInstant(s)).mapError(BadRequestException(_)))
+      since <- ZIO.foreach(flagValue(args, "--since"))(s => TimeParser.parseInstantZIO(s).mapError(BadRequestException(_)))
+      until <- ZIO.foreach(flagValue(args, "--until"))(s => TimeParser.parseInstantZIO(s).mapError(BadRequestException(_)))
       minGames <- ZIO.foreach(flagValue(args, "--min-games"))(s => ZIO.attempt(s.toInt))
       _ <- (since, until) match {
         case (Some(s), Some(u)) =>
           for {
             result  <- playerOfPeriod(slug, s, u)
-            mg       = minGames.getOrElse(4)
+            mg       = minGames.getOrElse(1)
             content  = StatsReport.formatPlayerOfPeriod(result.contributions, mg)
             eligible = result.contributions.count(_.raw.games >= mg)
             _ <- CcasLogger.info(s"Players: ${result.contributions.size}, Eligible (>=$mg games): $eligible")
@@ -87,13 +87,20 @@ object StatsApp extends ZIOAppDefault {
     until: Instant
   ): RIO[PostgresClient, StatsResult] =
     for {
+      now = Instant.now()
+      _ <- ZIO.whenDiscard(!since.isBefore(until))(
+        ZIO.fail(BadRequestException(s"--since must be before --until (got $since .. $until)"))
+      )
+      _ <- ZIO.whenDiscard(until.isAfter(now.minus(Duration.ofHours(12))))(
+        ZIO.fail(BadRequestException(s"--until must be at least 12 hours before now to account for API data lag (earliest allowed: ${now.minus(Duration.ofHours(12))})"))
+      )
       club <- Club.selectBySlug(clubSlug).someOrFail(NotFoundException(s"Club '$clubSlug' not found"))
       clubId = club.clubId
-      rows <- ClubBoard.selectClubBoardsInPeriod(clubId, since, until)
+      (rows, matchCount) <- ClubBoard.selectClubBoardsInPeriod(clubId, since, until) <&> ClubMatch.countForClubInPeriod(clubId, since, until)
       playerIds = rows.map(_.playerId).distinct
       usernameMap <- Player.resolveUsernames(playerIds)
       contributions = aggregate(rows, usernameMap)
-    } yield StatsResult(contributions, rows.size, 0L)
+    } yield StatsResult(contributions, rows.size, matchCount)
 
   private def flagValue(args: zio.Chunk[String], flag: String): Option[String] = {
     val idx = args.indexOf(flag)

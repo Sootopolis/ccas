@@ -136,7 +136,8 @@ object TestRoutes extends ZIOSpecDefault {
     testGetJobsReturnsList,
     testGetJobByIdReturns200,
     testGetJobByIdReturns404,
-    testStatsWithInvalidDateReturns400
+    testStatsWithInvalidDateReturns400,
+    testStatsWithPartialDatesReturns400
   )
 
   private def testRecruitmentSuccess = test("POST /api/jobs/recruitment success") {
@@ -360,6 +361,17 @@ object TestRoutes extends ZIOSpecDefault {
       _    <- fake.setNextAction(Action.Succeed)
       response <- JobRoutes.routes.runZIO(
         jsonRequest(Method.POST, "/api/jobs/stats", """{"clubSlug":"test-club","since":"not-a-date","until":"also-bad"}""")
+      )
+    } yield assertTrue(response.status == Status.BadRequest)
+  }
+
+  private def testStatsWithPartialDatesReturns400 = test("POST /api/jobs/stats with only 'since' returns 400") {
+    for {
+      _    <- ensureClubs
+      fake <- getFakeRunner
+      _    <- fake.setNextAction(Action.Succeed)
+      response <- JobRoutes.routes.runZIO(
+        jsonRequest(Method.POST, "/api/jobs/stats", """{"clubSlug":"test-club","since":"2026-01-01T00:00:00Z"}""")
       )
     } yield assertTrue(response.status == Status.BadRequest)
   }

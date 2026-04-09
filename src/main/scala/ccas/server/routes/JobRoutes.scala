@@ -1,7 +1,5 @@
 package ccas.server.routes
 
-import java.time.Instant
-
 import scala.util.chaining.*
 
 import ccas.utils.sql.PostgresClient
@@ -18,9 +16,9 @@ import ccas.analysis.tables.{Club, RunTrigger}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId}
 import ccas.server.jobs.*
 import ccas.server.routes.RouteHelpers.*
+import ccas.utils.{CcasLogger, TimeParser}
 import ccas.utils.client.ChessComClient
 import ccas.utils.errors.BadRequestException
-import ccas.utils.CcasLogger
 
 object JobRoutes {
 
@@ -60,8 +58,7 @@ object JobRoutes {
   private[server] case class StatsRequest(
     clubSlug: ClubSlug,
     since: Option[String],
-    until: Option[String],
-    minGames: Option[Int]
+    until: Option[String]
   )
   object StatsRequest {
     given JsonCodec[StatsRequest] = DeriveJsonCodec.gen
@@ -209,12 +206,13 @@ object JobRoutes {
         parsed <- (body.since, body.until) match {
           case (Some(sinceStr), Some(untilStr)) =>
             for {
-              since <- ZIO.attempt(Instant.parse(sinceStr))
-                .mapError(e => BadRequestException(s"Invalid 'since': ${e.getMessage}"))
-              until <- ZIO.attempt(Instant.parse(untilStr))
-                .mapError(e => BadRequestException(s"Invalid 'until': ${e.getMessage}"))
+              since <- TimeParser.parseInstantZIO(sinceStr)
+                .mapError(e => BadRequestException(s"Invalid 'since': $e"))
+              until <- TimeParser.parseInstantZIO(untilStr)
+                .mapError(e => BadRequestException(s"Invalid 'until': $e"))
             } yield Some((since, until))
-          case _ => ZIO.none
+          case (None, None) => ZIO.none
+          case _ => ZIO.fail(BadRequestException("Both 'since' and 'until' are required for period stats"))
         }
         result <- submitClubJob(
           runner,

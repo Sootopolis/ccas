@@ -99,6 +99,14 @@ object ClubMatch {
         .query[Long].run().head
     }
 
+  def countForClubInPeriod(clubId: ClubId, since: Instant, until: Instant): ZIO[PostgresClient, SQLException, Long] =
+    connectZIO {
+      sql"""SELECT COUNT(*) FROM club_match
+            WHERE (team1_club_id = $clubId OR team2_club_id = $clubId)
+              AND end_time >= $since AND end_time < $until"""
+        .query[Long].run().head
+    }
+
   def upsert(item: ClubMatch): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""INSERT INTO club_match (match_id, name, status, time_class, start_time, end_time, boards,

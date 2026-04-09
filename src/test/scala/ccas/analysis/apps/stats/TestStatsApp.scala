@@ -18,7 +18,7 @@ object TestStatsApp extends ZIOSpecDefault {
     testMemberStatsTeam2Perspective,
     testMemberStatsMatchesButNoBoards,
     testPlayerOfPeriodFilters,
-    testPlayerOfPeriodNoMatchCount,
+    testPlayerOfPeriodMatchCount,
     testPlayerOfPeriodInvertedRange
   ).provideShared(
     FreshSchemaLayer("test_stats_app", onInit = Tables.ensureTables)
@@ -153,18 +153,15 @@ object TestStatsApp extends ZIOSpecDefault {
     )
   }
 
-  private def testPlayerOfPeriodNoMatchCount = test("playerOfPeriod returns matchCount=0") {
+  private def testPlayerOfPeriodMatchCount = test("playerOfPeriod returns real matchCount") {
     for {
       result <- StatsApp.playerOfPeriod(clubSlug, Times.t0, Times.t2)
-    } yield assertTrue(result.matchCount == 0L)
+    } yield assertTrue(result.matchCount == 2L) // matchId1 + matchId3 (from team2 test) both end in [t0, t2)
   }
 
-  private def testPlayerOfPeriodInvertedRange = test("playerOfPeriod returns empty for inverted date range") {
+  private def testPlayerOfPeriodInvertedRange = test("playerOfPeriod fails for inverted date range") {
     for {
-      result <- StatsApp.playerOfPeriod(clubSlug, Times.t2, Times.t0)
-    } yield assertTrue(
-      result.contributions.isEmpty,
-      result.boardCount == 0
-    )
+      exit <- StatsApp.playerOfPeriod(clubSlug, Times.t2, Times.t0).exit
+    } yield assertTrue(exit.isFailure)
   }
 }

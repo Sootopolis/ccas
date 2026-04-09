@@ -80,7 +80,7 @@ object ScheduleRoutes {
       (for {
         body <- parseJsonBody[CreateScheduleRequest](req)
         kind <- ZIO.fromEither(parseJobKind(body.kind)).mapError(BadRequestException(_))
-        _ <- ZIO.when(body.intervalHours <= 0)(ZIO.fail(BadRequestException("intervalHours must be positive")))
+        _ <- ZIO.whenDiscard(body.intervalHours <= 0)(ZIO.fail(BadRequestException("intervalHours must be positive")))
         clubId <- ZIO.foreach(body.clubSlug) { slug =>
           Club.selectBySlug(ClubSlug.wrap(slug))
             .someOrFail(NotFoundException(s"Club not found: $slug"))

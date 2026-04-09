@@ -94,7 +94,7 @@ object MembershipApp extends ZIOAppDefault {
     }
 
   private def parseDateArg(string: String): IO[BadRequestException, Instant] =
-    ZIO.fromEither(TimeParser.parseInstant(string)).mapError(BadRequestException(_))
+    TimeParser.parseInstantZIO(string).mapError(BadRequestException(_))
 
   private def reconcileIfStale(
     clubSlug: ClubSlug,
