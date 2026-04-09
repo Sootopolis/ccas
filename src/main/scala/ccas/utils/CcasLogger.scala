@@ -1,6 +1,8 @@
 package ccas.utils
 
-import zio.{LogLevel, Ref, Scope, UIO, URIO, URLayer, ZIO, ZLayer}
+import java.time.{Instant, ZoneId}
+import java.time.format.DateTimeFormatter
+import zio.{Clock, LogLevel, Ref, Scope, UIO, URIO, URLayer, ZIO, ZLayer}
 
 trait CcasLogger {
   def info(msg: String): UIO[Unit]
@@ -62,13 +64,20 @@ object CcasLogger {
     case _                => Reset
   }
 
-  private def format(level: LogLevel, msg: String): String = s"${colorFor(level)}[${level.label}]$Reset $msg"
+  private val TimeFormat = DateTimeFormatter.ofPattern("HH:mm:ss")
+
+  private def formatTime(when: Instant): String =
+    when.atZone(ZoneId.systemDefault()).toLocalTime.format(TimeFormat)
+
+  private def format(level: LogLevel, msg: String, when: Instant): String =
+    s"${colorFor(level)}[${level.label} ${formatTime(when)}]$Reset $msg"
 
   private case class CcasLoggerLive(display: ProgressDisplay, minLevel: LogLevel) extends CcasLogger {
 
     private def log(level: LogLevel, msg: String): UIO[Unit] =
-      if (level.ordinal >= minLevel.ordinal) display.logAboveBars(format(level, msg))
-      else ZIO.unit
+      ZIO.whenDiscard(level.ordinal >= minLevel.ordinal) {
+        Clock.instant.flatMap(now => display.logAboveBars(format(level, msg, now)))
+      }
 
     override def info(msg: String): UIO[Unit]  = log(LogLevel.Info, msg)
     override def warn(msg: String): UIO[Unit]  = log(LogLevel.Warning, msg)

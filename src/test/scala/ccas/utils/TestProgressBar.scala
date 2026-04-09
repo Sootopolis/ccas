@@ -1,5 +1,7 @@
 package ccas.utils
 
+import java.time.{Instant, ZoneId}
+import java.time.format.DateTimeFormatter
 import zio.{Promise, Ref, Scope, ZIO}
 import zio.test.{assertTrue, Spec, TestConsole, ZIOSpecDefault}
 
@@ -14,6 +16,11 @@ object TestProgressBar extends ZIOSpecDefault {
     testDisabledBarIsNoOp,
     testLogAboveBarsRoutesThroughDisplay
   ).provide(Scope.default, CcasLogger.live())
+
+  private val epochTime: String =
+    Instant.EPOCH.atZone(ZoneId.systemDefault()).toLocalTime.format(DateTimeFormatter.ofPattern("HH:mm:ss"))
+
+  private def stripAnsi(s: String): String = s.replaceAll("\u001b\\[[0-9;]*[a-zA-Z]", "").replaceAll("\r", "")
 
   private def testPrintOutputsBarWithPercentage = test("print renders text, bar, and percentage") {
     ZIO.scoped {
@@ -118,12 +125,9 @@ object TestProgressBar extends ZIOSpecDefault {
         _      <- CcasLogger.info("Hello from logger")
         output <- TestConsole.output
       } yield {
-        val all = output.mkString
-        assertTrue(
-          all.contains("[INFO]"),
-          all.contains("Hello from logger"),
-          all.contains("Progress")
-        )
+        val expectedBar = "Progress " + "\u2588" * 2 + "\u2591" * 18 + " 10.0%"
+        val clean       = stripAnsi(output.mkString)
+        assertTrue(clean == s"$expectedBar[INFO $epochTime] Hello from logger\n$expectedBar")
       }
     }
   }
