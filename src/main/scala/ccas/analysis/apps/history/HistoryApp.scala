@@ -376,7 +376,7 @@ object HistoryApp extends ZIOAppDefault {
     sb.append(s"Unidentified: ${stats.matchesUnidentified}\n")
     sb.append(s"Shared skip:  ${stats.matchesSharedSkip}\n")
     if (stats.matchesRefreshed > 0) { sb.append(s"Refreshed:    ${stats.matchesRefreshed}\n") }
-    stats.waveDetails.foreach { case (wave, count) =>
+    stats.waveDetails.foreach { case WaveDetail(wave, count) =>
       sb.append(s"  Wave $wave: $count matches\n")
     }
     sb.append(s"Pending:   ${stats.pendingRemaining}\n\n")
@@ -388,7 +388,7 @@ object HistoryApp extends ZIOAppDefault {
 
     if (stats.failedMatches.nonEmpty) {
       sb.append("--- Failed Matches ---\n")
-      stats.failedMatches.foreach { case (MatchKey(matchId, isLive), error) =>
+      stats.failedMatches.foreach { case FailedMatch(MatchKey(matchId, isLive), error) =>
         val kind = if (isLive) { " (live)" }
         else { "" }
         sb.append(s"  Match $matchId$kind: $error\n")
@@ -398,7 +398,7 @@ object HistoryApp extends ZIOAppDefault {
 
     if (stats.failedMembers.nonEmpty) {
       sb.append("--- Failed Member Queries ---\n")
-      stats.failedMembers.foreach { case (username, error) =>
+      stats.failedMembers.foreach { case FailedMember(username, error) =>
         sb.append(s"  $username: $error\n")
       }
       sb.append("\n")

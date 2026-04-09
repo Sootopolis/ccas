@@ -7,8 +7,7 @@ import zio.{Clock, RIO, Ref, Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
 import zio.http.Client
 import RefUtils.*
 
-import ccas.analysis.tables.{ClubRefSkip, PlayerRefSkip, PlayerTournamentRef, RefSkipReason, Tables}
-import ccas.api.misc.subtypes.{PlayerId, Username}
+import ccas.analysis.tables.{ClubRefSkip, PlayerRefSkip, PlayerTournamentRef, SkipCount, Tables}
 import ccas.utils.{display, CcasLogger, OutputFile}
 import ccas.utils.client.ChessComClient
 import ccas.utils.errors.BadRequestException
@@ -29,9 +28,9 @@ object RefApp extends ZIOAppDefault {
     playersResolvedDb: Int,
     playersResolvedApi: Int,
     playersSkippedNew: Int,
-    skippedPlayers: List[(PlayerId, Username)],
-    playerSkipsByReason: List[(RefSkipReason, Long)],
-    clubSkipsByReason: List[(RefSkipReason, Long)],
+    skippedPlayers: List[SkippedPlayer],
+    playerSkipsByReason: List[SkipCount],
+    clubSkipsByReason: List[SkipCount],
     upgradeEligible: Int,
     upgradeSucceeded: Int,
     tournamentUpgradeEligible: Int,
@@ -283,7 +282,7 @@ object RefApp extends ZIOAppDefault {
 
     if (d.skippedPlayers.nonEmpty) {
       sb.append(s"--- Skipped Players — ID Mismatch (${d.skippedPlayers.size}) ---\n")
-      d.skippedPlayers.sortBy(_._2.toString).foreach { case (pid, username) =>
+      d.skippedPlayers.sortBy(_.username.toString).foreach { case SkippedPlayer(pid, username) =>
         sb.append(s"  $username (player_id=$pid)\n")
       }
       sb.append("\n")
@@ -293,13 +292,13 @@ object RefApp extends ZIOAppDefault {
       sb.append("--- Skip Totals ---\n")
       if (d.playerSkipsByReason.nonEmpty) {
         sb.append("  Players:\n")
-        d.playerSkipsByReason.sortBy(_._1.toString).foreach { case (reason, count) =>
+        d.playerSkipsByReason.sortBy(_.reason.toString).foreach { case SkipCount(reason, count) =>
           sb.append(s"    $reason: $count\n")
         }
       }
       if (d.clubSkipsByReason.nonEmpty) {
         sb.append("  Clubs:\n")
-        d.clubSkipsByReason.sortBy(_._1.toString).foreach { case (reason, count) =>
+        d.clubSkipsByReason.sortBy(_.reason.toString).foreach { case SkipCount(reason, count) =>
           sb.append(s"    $reason: $count\n")
         }
       }

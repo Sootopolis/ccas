@@ -15,6 +15,7 @@ private[ref] object RefUtils {
   final case class UnresolvedPlayer(playerId: PlayerId, username: Username)
   final case class UnresolvedClub(clubId: ClubId, slug: ClubSlug)
   final case class TournamentRefPlayer(playerId: PlayerId, username: Username, tournamentSlug: TournamentSlug)
+  case class SkippedPlayer(playerId: PlayerId, username: Username)
 
   enum ResolveResult {
     case Resolved
@@ -67,7 +68,7 @@ private[ref] object RefUtils {
     val clubsResolvedApi: Ref[Int],
     val playersResolvedDb: Ref[Int],
     val playersResolvedApi: Ref[Int],
-    val skippedPlayers: Ref[List[(PlayerId, Username)]],
+    val skippedPlayers: Ref[List[SkippedPlayer]],
     val playersSkippedNew: Ref[Int],
     val clubsSkippedNew: Ref[Int]
   )
@@ -82,7 +83,7 @@ private[ref] object RefUtils {
         clubsResolvedApi   <- Ref.make(0)
         playersResolvedDb  <- Ref.make(0)
         playersResolvedApi <- Ref.make(0)
-        skippedPlayers     <- Ref.make(List.empty[(PlayerId, Username)])
+        skippedPlayers     <- Ref.make(List.empty[SkippedPlayer])
         playersSkippedNew  <- Ref.make(0)
         clubsSkippedNew    <- Ref.make(0)
       } yield new RefContext(

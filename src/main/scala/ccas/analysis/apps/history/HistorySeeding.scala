@@ -151,7 +151,7 @@ private[history] object HistorySeeding {
 
       counterRef       <- Ref.make(0)
       seedRef          <- Ref.make(0)
-      failedMembersRef <- Ref.make(List.empty[(Username, String)])
+      failedMembersRef <- Ref.make(List.empty[FailedMember])
       total = toQuery.size
       _ <- ZIO.scoped {
         for {
@@ -160,7 +160,7 @@ private[history] object HistorySeeding {
             seedMatchesForPlayerAllClubs(client, clubId, clubSlug, playerId, username, settledMatchIds, shared)
               .foldZIO(
                 error =>
-                  failedMembersRef.update(_ :+ (username, error.getMessage))
+                  failedMembersRef.update(_ :+ FailedMember(username, error.getMessage))
                     *> CcasLogger.warn(s"  $username: failed — ${error.getMessage}"),
                 count =>
                   seedRef.update(_ + count) *> counterRef.updateAndGet(_ + 1).flatMap { n =>

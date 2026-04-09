@@ -11,3 +11,5 @@ enum RefSkipReason {
 }
 
 object RefSkipReason extends EnumSql[RefSkipReason]
+
+case class SkipCount(reason: RefSkipReason, count: Long)

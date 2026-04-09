@@ -306,7 +306,7 @@ private[ref] object RefResolution {
         case Left(actualId) =>
           CcasLogger.warn(
             s"  ${player.username}: player_id mismatch (expected ${player.playerId}, actual $actualId), skipping"
-          ) *> ctx.skippedPlayers.update(_ :+ (player.playerId, player.username)).as(ResolveResult.SkipPlayer)
+          ) *> ctx.skippedPlayers.update(_ :+ SkippedPlayer(player.playerId, player.username)).as(ResolveResult.SkipPlayer)
         case Right(()) => onVerified
       }
     )

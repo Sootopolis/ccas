@@ -37,10 +37,10 @@ object PlayerRefSkip {
         .query[PlayerRefSkip].run().headOption
     }
 
-  def countByReason: ZIO[PostgresClient, SQLException, List[(RefSkipReason, Long)]] =
+  def countByReason: ZIO[PostgresClient, SQLException, List[SkipCount]] =
     connectZIO {
       sql"SELECT reason, COUNT(*) FROM player_ref_skip GROUP BY reason"
-        .query[(RefSkipReason, Long)].run().toList
+        .query[(RefSkipReason, Long)].run().map((r, c) => SkipCount(r, c)).toList
     }
 
   def upsert(item: PlayerRefSkip): ZIO[PostgresClient, SQLException, Int] =

@@ -34,7 +34,7 @@ private[history] object HistoryProcessing {
     settledMatchIds: Set[ClubMatchId],
     shared: Option[SharedContext] = None
   ): RIO[CcasLogger & PostgresClient, RunStats] = {
-    def waveLoop(waveCount: Int, waveDetails: List[(Int, Int)]): RIO[CcasLogger & PostgresClient, RunStats] =
+    def waveLoop(waveCount: Int, waveDetails: List[WaveDetail]): RIO[CcasLogger & PostgresClient, RunStats] =
       for {
         pendingCount <- HistoryPendingMatch.countNew(ctx.clubId)
         result <-
@@ -73,7 +73,7 @@ private[history] object HistoryProcessing {
               }
 
               newPendingNew <- HistoryPendingMatch.countNew(ctx.clubId)
-              updatedDetails = waveDetails :+ (wave, waveProcessed)
+              updatedDetails = waveDetails :+ WaveDetail(wave, waveProcessed)
               r <-
                 if (newPendingNew > 0 && newPlayers.nonEmpty) { waveLoop(wave, updatedDetails) }
                 else {
@@ -116,7 +116,7 @@ private[history] object HistoryProcessing {
       processMatch(ctx, pm.matchId, pm.isLive, shared)
         .catchAll { error =>
           ctx.matchesFailed.update(_ + 1) *>
-            ctx.failedMatches.update(_ :+ (MatchKey(pm.matchId, pm.isLive), error.getMessage)) *>
+            ctx.failedMatches.update(_ :+ FailedMatch(MatchKey(pm.matchId, pm.isLive), error.getMessage)) *>
             HistoryPendingMatch.updateStatus(ctx.clubId, pm.matchId, pm.isLive, PendingMatchStatus.ApiError) *>
             CcasLogger.warn(s"    Match ${pm.matchId}${if (pm.isLive) " (live)" else ""}: ${error.getMessage}")
         } *> counter.updateAndGet(_ + 1).flatMap { n =>
@@ -787,7 +787,7 @@ private[history] object HistoryProcessing {
 
   // === Stats ===
 
-  def readStats(ctx: ProcessingContext, waveCount: Int, waveDetails: List[(Int, Int)]): UIO[RunStats] =
+  def readStats(ctx: ProcessingContext, waveCount: Int, waveDetails: List[WaveDetail]): UIO[RunStats] =
     for {
       matchesProcessed    <- ctx.matchesProcessed.get
       matchesFailed       <- ctx.matchesFailed.get

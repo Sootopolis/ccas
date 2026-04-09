@@ -10,11 +10,14 @@ import ccas.utils.client.ChessComClient
 private[history] object HistoryUtils {
 
   case class DiscoveredPlayer(playerId: PlayerId, username: Username)
+  case class WaveDetail(wave: Int, matchesProcessed: Int)
+  case class FailedMatch(matchKey: MatchKey, error: String)
+  case class FailedMember(username: Username, error: String)
 
   case class MemberSeedResult(
     seeded: Int,
     queried: Int,
-    failedMembers: List[(Username, String)]
+    failedMembers: List[FailedMember]
   ) {
     def failed: Int = failedMembers.size
   }
@@ -35,9 +38,9 @@ private[history] object HistoryUtils {
     playersFailed: Int = 0,
     waveCount: Int = 0,
     pendingRemaining: Int = 0,
-    waveDetails: List[(Int, Int)] = Nil,
-    failedMatches: List[(MatchKey, String)] = Nil,
-    failedMembers: List[(Username, String)] = Nil
+    waveDetails: List[WaveDetail] = Nil,
+    failedMatches: List[FailedMatch] = Nil,
+    failedMembers: List[FailedMember] = Nil
   )
 
   /** Cross-club shared state for multi-club invocations. Tracks which players have been queried and which matches have
@@ -77,7 +80,7 @@ private[history] object HistoryUtils {
     val playersDiscovered: Ref[Int],
     val playersKnown: Ref[Int],
     val playersFailed: Ref[Int],
-    val failedMatches: Ref[List[(MatchKey, String)]],
+    val failedMatches: Ref[List[FailedMatch]],
     val matchesBoardsUpdated: Ref[Int],
     val matchesSharedSkip: Ref[Int]
   )
@@ -102,7 +105,7 @@ private[history] object HistoryUtils {
         playersDiscovered   <- Ref.make(0)
         playersKnown        <- Ref.make(0)
         playersFailed       <- Ref.make(0)
-        failedMatches       <- Ref.make(List.empty[(MatchKey, String)])
+        failedMatches       <- Ref.make(List.empty[FailedMatch])
         matchesBoardsUpdated    <- Ref.make(0)
         matchesSharedSkip   <- Ref.make(0)
       } yield new ProcessingContext(
