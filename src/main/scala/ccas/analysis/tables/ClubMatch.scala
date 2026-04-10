@@ -82,6 +82,18 @@ object ClubMatch {
         .query[ClubMatchId].run().toSet
     }
 
+  /** Returns the most recent activity timestamp for the club across all its known matches. Registered matches count as
+    * "active now" because both clubs have signed up but the match hasn't started; in-progress and finished matches use
+    * their `start_time`. Returns `None` if there are no matches in our DB for this club.
+    */
+  def selectLatestActivityForClub(clubId: ClubId): ZIO[PostgresClient, SQLException, Option[Instant]] =
+    connectZIO {
+      sql"""SELECT MAX(CASE WHEN status = 'Registration' THEN NOW() ELSE start_time END)
+            FROM club_match
+            WHERE team1_club_id = $clubId OR team2_club_id = $clubId"""
+        .query[Option[Instant]].run().headOption.flatten
+    }
+
   def selectClubMatchRef(clubId: ClubId): ZIO[PostgresClient, SQLException, Option[ClubMatchRef]] =
     connectZIO {
       sql"""SELECT match_id, (team1_club_id = $clubId) AS is_team1

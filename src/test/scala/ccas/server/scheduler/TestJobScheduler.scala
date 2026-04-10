@@ -68,7 +68,7 @@ object TestJobScheduler extends ZIOSpecDefault {
       scheduler = new JobScheduler.JobSchedulerLive(TestCcasLogger.noop, runner, pgClient, 50.millis)
 
       // Seed: a club and a schedule that is always due (intervalHours = 0, so every poll triggers)
-      _ <- Club.upsert(Club(clubId, java.time.Instant.parse("2025-01-01T00:00:00Z"), ClubSlug("sched-test"), "Sched Test", None))
+      _ <- Club.upsert(Club(clubId, java.time.Instant.parse("2025-01-01T00:00:00Z"), ClubSlug("sched-test"), "Sched Test", None, None))
       _ <- JobSchedule.insert(
         JobSchedule(0L, JobKind.Membership, Some(clubId), None, intervalHours = 0, enabled = true, lastRunAt = None)
       )
@@ -99,7 +99,7 @@ object TestJobScheduler extends ZIOSpecDefault {
       scheduler = new JobScheduler.JobSchedulerLive(TestCcasLogger.noop, runner, pgClient, 50.millis)
 
       twoHoursAgo = Instant.now().minus(2, ChronoUnit.HOURS)
-      _ <- Club.upsert(Club(dueClubId, twoHoursAgo, ClubSlug("due-test"), "Due Test", None))
+      _ <- Club.upsert(Club(dueClubId, twoHoursAgo, ClubSlug("due-test"), "Due Test", None, None))
       _ <- JobSchedule.insert(
         JobSchedule(0L, JobKind.Membership, Some(dueClubId), None, intervalHours = 1, enabled = true, lastRunAt = Some(twoHoursAgo))
       )
@@ -120,7 +120,7 @@ object TestJobScheduler extends ZIOSpecDefault {
       scheduler = new JobScheduler.JobSchedulerLive(TestCcasLogger.noop, runner, pgClient, 50.millis)
 
       justNow = Instant.now()
-      _ <- Club.upsert(Club(notDueClubId, justNow, ClubSlug("notdue-test"), "Not Due Test", None))
+      _ <- Club.upsert(Club(notDueClubId, justNow, ClubSlug("notdue-test"), "Not Due Test", None, None))
       _ <- JobSchedule.insert(
         JobSchedule(0L, JobKind.Membership, Some(notDueClubId), None, intervalHours = 24, enabled = true, lastRunAt = Some(justNow))
       )
@@ -140,7 +140,7 @@ object TestJobScheduler extends ZIOSpecDefault {
       runner = trackingRunner(submitted)
       scheduler = new JobScheduler.JobSchedulerLive(TestCcasLogger.noop, runner, pgClient, 50.millis)
 
-      _ <- Club.upsert(Club(disabledClubId, Instant.now(), ClubSlug("disabled-test"), "Disabled Test", None))
+      _ <- Club.upsert(Club(disabledClubId, Instant.now(), ClubSlug("disabled-test"), "Disabled Test", None, None))
       _ <- JobSchedule.insert(
         JobSchedule(0L, JobKind.Membership, Some(disabledClubId), None, intervalHours = 0, enabled = false, lastRunAt = None)
       )
@@ -172,7 +172,7 @@ object TestJobScheduler extends ZIOSpecDefault {
       }
       scheduler = new JobScheduler.JobSchedulerLive(TestCcasLogger.noop, failingRunner, pgClient, 50.millis)
 
-      _ <- Club.upsert(Club(errorClubId, Instant.now(), ClubSlug("error-test"), "Error Test", None))
+      _ <- Club.upsert(Club(errorClubId, Instant.now(), ClubSlug("error-test"), "Error Test", None, None))
       _ <- JobSchedule.insert(
         JobSchedule(0L, JobKind.Membership, Some(errorClubId), None, intervalHours = 0, enabled = true, lastRunAt = None)
       )
@@ -207,8 +207,8 @@ object TestJobScheduler extends ZIOSpecDefault {
         }
         scheduler = new JobScheduler.JobSchedulerLive(TestCcasLogger.noop, runner, pgClient, 50.millis)
 
-        _ <- Club.upsert(Club(failClubId, Instant.now(), ClubSlug("fail-sched"), "Fail", None))
-        _ <- Club.upsert(Club(goodClubId, Instant.now(), ClubSlug("good-sched"), "Good", None))
+        _ <- Club.upsert(Club(failClubId, Instant.now(), ClubSlug("fail-sched"), "Fail", None, None))
+        _ <- Club.upsert(Club(goodClubId, Instant.now(), ClubSlug("good-sched"), "Good", None, None))
         _ <- JobSchedule.insert(
           JobSchedule(0L, JobKind.Membership, Some(failClubId), None, intervalHours = 0, enabled = true, lastRunAt = None)
         )

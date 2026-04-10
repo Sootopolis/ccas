@@ -29,7 +29,7 @@ object RecruitmentTestSupport {
 
   val clubId   = ClubId(500)
   val clubSlug = ClubSlug("test-club")
-  val club     = Club(clubId, Times.t0, clubSlug, "Test Club", None)
+  val club     = Club(clubId, Times.t0, clubSlug, "Test Club", None, None)
 
   val sourceClubId    = ClubId(600)
   val intSourceClubId = ClubId(901)

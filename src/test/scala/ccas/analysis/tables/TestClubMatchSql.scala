@@ -4,9 +4,12 @@ import java.time.{Duration, Instant, LocalDateTime, ZoneOffset}
 
 import zio.test.{assertCompletes, assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
+import com.augustnagro.magnum.sql
+
 import ccas.api.misc.enums.{ClubMatchStatus, TimeClass}
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username}
 import ccas.utils.sql.FreshSchemaLayer
+import ccas.utils.sql.PostgresClient.connectZIO
 
 object TestClubMatchSql extends ZIOSpecDefault {
   override def spec: Spec[Any, Throwable] = suite("TestClubMatchSql")(
@@ -14,6 +17,7 @@ object TestClubMatchSql extends ZIOSpecDefault {
     testClubMatchUpsert,
     testClubMatchUpsertUpdate,
     testClubMatchSelectMatchIdsForClub,
+    testClubMatchSelectLatestActivity,
     testClubMatchSelectStaleForClub,
     testClubMatchSelectSettledForClub,
     testClubMatchSelectSettledForRefresh,
@@ -52,8 +56,8 @@ object TestClubMatchSql extends ZIOSpecDefault {
     val t4: Instant = t0.plus(Duration.ofDays(120))
   }
 
-  private val clubA = Club(ClubId(300), Times.t0, ClubSlug("club-a"), "Club A", None)
-  private val clubB = Club(ClubId(301), Times.t0, ClubSlug("club-b"), "Club B", None)
+  private val clubA = Club(ClubId(300), Times.t0, ClubSlug("club-a"), "Club A", None, None)
+  private val clubB = Club(ClubId(301), Times.t0, ClubSlug("club-b"), "Club B", None, None)
 
   private val player0 =
     Player(PlayerId(50), Times.t0, Username("p0"), ccas.api.misc.enums.PlayerStatusCategory.Active, None, Times.t0)
@@ -131,6 +135,39 @@ object TestClubMatchSql extends ZIOSpecDefault {
       idsNone.isEmpty
     )
   }
+
+  private def testClubMatchSelectLatestActivity =
+    test("selectLatestActivityForClub returns max start_time across all matches; Registration counts as now") {
+      // Club A has matchFinished (Times.t0) and matchInProgress (Times.t1). Latest = t1.
+      // Club B has only matchFinished (t0). Latest = t0.
+      // Add a Registration match for clubB to verify it's treated as "now".
+      val matchRegistered = matchFinished.copy(
+        matchId = ClubMatchId(1003),
+        status = ClubMatchStatus.Registration,
+        startTime = None,
+        endTime = None,
+        team1ClubId = Some(clubB.clubId),
+        team2ClubId = None
+      )
+      val before = Instant.now()
+      for {
+        // Without a registration match: max start_time
+        latestANoReg <- ClubMatch.selectLatestActivityForClub(clubA.clubId)
+        latestBNoReg <- ClubMatch.selectLatestActivityForClub(clubB.clubId)
+        // With a registration match for clubB: should jump to ~now
+        _            <- ClubMatch.upsert(matchRegistered)
+        latestBReg   <- ClubMatch.selectLatestActivityForClub(clubB.clubId)
+        // Unknown club returns None
+        latestNone   <- ClubMatch.selectLatestActivityForClub(ClubId(999))
+        // Cleanup
+        _ <- connectZIO(sql"DELETE FROM club_match WHERE match_id = 1003".update.run())
+      } yield assertTrue(
+        latestANoReg.contains(Times.t1),
+        latestBNoReg.contains(Times.t0),
+        latestBReg.exists(_.isAfter(before.minusSeconds(1))),
+        latestNone.isEmpty
+      )
+    }
 
   private def testClubMatchSelectStaleForClub = test("selectStaleForClub returns non-finished and stale finished") {
     // matchFinished: end_time=Times.t1, fetched_at=Times.t2. Stale if fetched_at < end_time + 90 days.

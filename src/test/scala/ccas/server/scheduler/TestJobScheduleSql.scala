@@ -39,8 +39,8 @@ object TestJobScheduleSql extends ZIOSpecDefault {
 
   private val deleteAll = for {
     _ <- connectZIO { val _ = sql"DELETE FROM job_schedule".update.run() }
-    _ <- Club.upsert(Club(clubIdA, Times.t0, ClubSlug("club-a"), "Club A", None))
-    _ <- Club.upsert(Club(clubIdB, Times.t0, ClubSlug("club-b"), "Club B", None))
+    _ <- Club.upsert(Club(clubIdA, Times.t0, ClubSlug("club-a"), "Club A", None, None))
+    _ <- Club.upsert(Club(clubIdB, Times.t0, ClubSlug("club-b"), "Club B", None, None))
   } yield ()
 
   // --- Tests ---

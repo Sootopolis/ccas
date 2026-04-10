@@ -1,18 +1,37 @@
 package ccas.analysis.tables
 
 import java.sql.SQLException
+import java.time.{Duration, Instant}
 
 import com.augustnagro.magnum.*
 import zio.ZIO
 
 import ccas.api.club.ApiClub
 import ccas.api.misc.subtypes.{ClubId, PlayerId, Username}
+import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.{connectZIO, transactZIO, withTransaction}
 
 final case class ClubAdmin(clubId: ClubId, playerId: PlayerId) derives DbCodec
 
 object ClubAdmin {
+
+  /** A club is considered inactive if its `latest_match_at` is older than this. Admins of inactive clubs are not
+    * excluded from recruitment because they don't reflect meaningful ownership. NULL `latest_match_at` is treated as
+    * active (we have no signal yet).
+    */
+  val MaxInactivity: Duration = Duration.ofDays(365)
+
+  /** Single-run / cross-run optimisation in [[ccas.analysis.apps.clubdata.ClubDataApp]]: if a club's cached
+    * `latest_match_at` (or fresh DB scan) is more recent than this, we trust it and skip the API fallback fetch.
+    * Smaller than [[MaxInactivity]] so we still re-check before the cache value crosses the inactivity threshold.
+    */
+  val ApiSkipThreshold: Duration = Duration.ofDays(180)
+
+  /** A club is considered over-administered if more than this fraction of its members are admins. Admins of such clubs
+    * are not excluded from recruitment — the admin role there carries little ownership.
+    */
+  val MaxAdminRatio: Double = 0.20
 
   def createTable: ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
@@ -60,14 +79,22 @@ object ClubAdmin {
         }
     }
 
-  def selectPlayerIdsForSizableClubs(minMembersCount: Int): ZIO[PostgresClient, SQLException, Set[PlayerId]] =
+  def selectPlayerIdsForSizableClubs(minMembersCount: Int): ZIO[PostgresClient, SQLException, Set[PlayerId]] = {
+    val cutoff = Instant.now().minus(MaxInactivity)
     connectZIO {
-      sql"""SELECT DISTINCT ca.player_id
+      sql"""WITH admin_counts AS (
+              SELECT club_id, COUNT(*) AS n FROM club_admin GROUP BY club_id
+            )
+            SELECT DISTINCT ca.player_id
             FROM club_admin ca
             JOIN club c ON ca.club_id = c.club_id
-            WHERE c.members_count >= $minMembersCount"""
+            JOIN admin_counts ac ON ac.club_id = c.club_id
+            WHERE c.members_count >= $minMembersCount
+              AND (c.latest_match_at IS NULL OR c.latest_match_at > $cutoff)
+              AND ac.n::float / c.members_count < $MaxAdminRatio"""
         .query[PlayerId].run().toSet
     }
+  }
 
   /** Extracts admin usernames from the admin profile URLs in an [[ApiClub]] response. */
   def extractAdminUsernames(apiClub: ApiClub): Set[Username] =

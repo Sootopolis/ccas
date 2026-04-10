@@ -428,7 +428,7 @@ object TestRecruitmentFilters extends ZIOSpecDefault {
     val criteria = makeCriteria(excludeClubs = List(bannedClubId))
     for {
       _          <- seedDb
-      _          <- Club.upsert(Club(bannedClubId, Times.t0, ClubSlug("banned-club"), "Banned Club", None))
+      _          <- Club.upsert(Club(bannedClubId, Times.t0, ClubSlug("banned-club"), "Banned Club", None, None))
       criteriaId <- seedCriteria(criteria)
       runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0)
       client     <- fakeChessComClient(responses)
@@ -612,7 +612,7 @@ object TestRecruitmentFilters extends ZIOSpecDefault {
     for {
       _ <- seedDb
       // Seed a sizable club and make alice an admin of it
-      _ <- Club.upsert(Club(sizableClubId, Times.t0, ClubSlug("sizable-club"), "Sizable Club", Some(500)))
+      _ <- Club.upsert(Club(sizableClubId, Times.t0, ClubSlug("sizable-club"), "Sizable Club", Some(500), None))
       _ <- seedPlayer(pid0)
       _ <- ClubAdmin.insertBatch(List(ClubAdmin(sizableClubId, pid0)))
       criteriaId <- seedCriteria(criteria)
@@ -629,7 +629,7 @@ object TestRecruitmentFilters extends ZIOSpecDefault {
     for {
       _ <- seedDb
       // Seed a small club and make alice an admin of it
-      _ <- Club.upsert(Club(sizableClubId, Times.t0, ClubSlug("small-club"), "Small Club", Some(50)))
+      _ <- Club.upsert(Club(sizableClubId, Times.t0, ClubSlug("small-club"), "Small Club", Some(50), None))
       _ <- seedPlayer(pid0)
       _ <- ClubAdmin.insertBatch(List(ClubAdmin(sizableClubId, pid0)))
       criteriaId <- seedCriteria(criteria)

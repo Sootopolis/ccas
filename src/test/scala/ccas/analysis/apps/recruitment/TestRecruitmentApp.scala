@@ -376,7 +376,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
 
       for {
         _      <- seedDb
-        _      <- Club.upsert(Club(discoverableClubId, Times.t0, discoverableClubSlug, "Discoverable Club", None))
+        _      <- Club.upsert(Club(discoverableClubId, Times.t0, discoverableClubSlug, "Discoverable Club", None, None))
         _      <- seedCriteria(criteria)
         client <- fakeChessComClient(responses)
         result <- runRecruit(client, explore = false)

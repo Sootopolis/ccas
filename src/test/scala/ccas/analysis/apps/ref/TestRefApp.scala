@@ -177,8 +177,8 @@ object TestRefApp extends ZIOSpecDefault {
       _ <- Player.insert(Player(pid0, t0, Username("alice"), Active, None, t0))
       _ <- Player.insert(Player(pid1, t0, Username("bob"), Active, None, t0))
       _ <- Player.insert(Player(pid2, t0, Username("charlie"), Active, None, t0))
-      _ <- Club.upsert(Club(clubId0, t0, clubSlug0, "Club 0", None))
-      _ <- Club.upsert(Club(clubId1, t0, clubSlug1, "Club 1", None))
+      _ <- Club.upsert(Club(clubId0, t0, clubSlug0, "Club 0", None, None))
+      _ <- Club.upsert(Club(clubId1, t0, clubSlug1, "Club 1", None, None))
     } yield ()
 
   private def runPopulate(

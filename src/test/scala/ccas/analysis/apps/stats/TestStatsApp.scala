@@ -42,8 +42,8 @@ object TestStatsApp extends ZIOSpecDefault {
 
   private def testMemberStatsReturnsResult = test("memberStats returns StatsResult with correct counts") {
     for {
-      _ <- Club.upsert(Club(clubId, Times.t0, clubSlug, "Test Club", None))
-      _ <- Club.upsert(Club(oppId, Times.t0, ClubSlug("opp"), "Opponent", None))
+      _ <- Club.upsert(Club(clubId, Times.t0, clubSlug, "Test Club", None, None))
+      _ <- Club.upsert(Club(oppId, Times.t0, ClubSlug("opp"), "Opponent", None, None))
       _ <- Player.insertIfNew(
         Player(pid1, Times.t0, Username.wrap("alice"), PlayerStatusCategory.Active, None, Times.t0)
       )
@@ -70,7 +70,7 @@ object TestStatsApp extends ZIOSpecDefault {
   private def testMemberStatsEmptyClub = test("memberStats returns empty result for club with no matches") {
     val emptySlug = ClubSlug("empty-club")
     for {
-      _ <- Club.upsert(Club(ClubId(300), Times.t0, emptySlug, "Empty Club", None))
+      _ <- Club.upsert(Club(ClubId(300), Times.t0, emptySlug, "Empty Club", None, None))
       result <- StatsApp.memberStats(emptySlug)
     } yield assertTrue(
       result.contributions.isEmpty,
@@ -89,7 +89,7 @@ object TestStatsApp extends ZIOSpecDefault {
     val team2Slug = ClubSlug("team2-club")
     val team2Id   = ClubId(400)
     for {
-      _ <- Club.upsert(Club(team2Id, Times.t0, team2Slug, "Team2 Club", None))
+      _ <- Club.upsert(Club(team2Id, Times.t0, team2Slug, "Team2 Club", None, None))
       _ <- Player.insertIfNew(
         Player(pid2, Times.t0, Username.wrap("dave"), PlayerStatusCategory.Active, None, Times.t0)
       )
@@ -119,7 +119,7 @@ object TestStatsApp extends ZIOSpecDefault {
     val noBoardSlug = ClubSlug("noboard-club")
     val noBoardId   = ClubId(500)
     for {
-      _ <- Club.upsert(Club(noBoardId, Times.t0, noBoardSlug, "No Board Club", None))
+      _ <- Club.upsert(Club(noBoardId, Times.t0, noBoardSlug, "No Board Club", None, None))
       _ <- ClubMatch.upsert(
         ClubMatch(ClubMatchId(2001L), "Match NB", ClubMatchStatus.Finished, TimeClass.Daily,
           Some(Times.t0), Some(Times.t1), 10, Some(noBoardId), 10, Some(oppId), 10, Times.t1)

@@ -43,8 +43,8 @@ object TestClubSql extends ZIOSpecDefault {
     val t3: Instant = t0.plus(Duration.ofDays(3))
   }
 
-  private val clubA = Club(ClubId(200), Times.t0, ClubSlug("club-a"), "Club A", None)
-  private val clubB = Club(ClubId(201), Times.t0, ClubSlug("club-b"), "Club B", None)
+  private val clubA = Club(ClubId(200), Times.t0, ClubSlug("club-a"), "Club A", None, None)
+  private val clubB = Club(ClubId(201), Times.t0, ClubSlug("club-b"), "Club B", None, None)
 
   private val player0 = Player(PlayerId(10), Times.t0, Username("p0"), Active, None, Times.t1)
   private val player1 = Player(PlayerId(11), Times.t0, Username("p1"), Active, None, Times.t1)
@@ -202,17 +202,25 @@ object TestClubSql extends ZIOSpecDefault {
       } yield assertTrue(notUpdated == 0)
     }
 
-  // --- Club.membersCount tests ---
+  // --- Club.membersCount / latestMatchAt tests ---
 
-  private def testClubMembersCount = test("upsert stores and returns membersCount") {
+  private def testClubMembersCount = test("upsert stores membersCount; updateLatestMatchAt stores latestMatchAt") {
     val withCount = clubA.copy(membersCount = Some(1234))
     for {
-      _      <- Club.upsert(withCount)
-      result <- Club.selectId(clubA.clubId)
-      bySlug <- Club.selectBySlug(clubA.slug)
+      _              <- Club.upsert(withCount)
+      _              <- Club.updateLatestMatchAt(clubA.clubId, Some(Times.t1))
+      result         <- Club.selectId(clubA.clubId)
+      bySlug         <- Club.selectBySlug(clubA.slug)
+      // upsert must NOT clobber latest_match_at on subsequent calls
+      _              <- Club.upsert(withCount.copy(name = "Renamed"))
+      preserved      <- Club.selectId(clubA.clubId)
     } yield assertTrue(
       result.get.membersCount.contains(1234),
-      bySlug.get.membersCount.contains(1234)
+      result.get.latestMatchAt.contains(Times.t1),
+      bySlug.get.membersCount.contains(1234),
+      bySlug.get.latestMatchAt.contains(Times.t1),
+      preserved.get.name == "Renamed",
+      preserved.get.latestMatchAt.contains(Times.t1)
     )
   }
 
@@ -240,22 +248,36 @@ object TestClubSql extends ZIOSpecDefault {
     } yield assertTrue(deleted == 2, after.isEmpty)
   }
 
-  private def testClubAdminSelectPlayerIdsForSizableClubs = test("selectPlayerIdsForSizableClubs filters by member count") {
-    // clubA has membersCount=1234 (from earlier test), clubB has None
+  private def testClubAdminSelectPlayerIdsForSizableClubs = test("selectPlayerIdsForSizableClubs filters by size, inactivity, and admin ratio") {
     val adminA = ClubAdmin(clubA.clubId, player0.playerId)
     val adminB = ClubAdmin(clubB.clubId, player1.playerId)
+    val now    = Instant.now()
+    val stale  = now.minus(java.time.Duration.ofDays(400)) // > 1 year
     for {
-      _ <- ClubAdmin.insertBatch(List(adminA, adminB))
-      // Threshold 1000: only clubA qualifies (1234 members)
-      sizable    <- ClubAdmin.selectPlayerIdsForSizableClubs(1000)
-      // Threshold 2000: neither qualifies
+      // --- Baseline: active sizable club includes its admin ---
+      _           <- Club.upsert(clubA.copy(membersCount = Some(1234)))
+      _           <- Club.updateLatestMatchAt(clubA.clubId, Some(now))
+      _           <- ClubAdmin.insertBatch(List(adminA, adminB))
+      sizable     <- ClubAdmin.selectPlayerIdsForSizableClubs(1000)
       noneSizable <- ClubAdmin.selectPlayerIdsForSizableClubs(2000)
+
+      // --- Inactive club is ignored ---
+      _        <- Club.updateLatestMatchAt(clubA.clubId, Some(stale))
+      inactive <- ClubAdmin.selectPlayerIdsForSizableClubs(1000)
+
+      // --- Over-administered club is ignored: 1 admin out of 4 members = 25% ratio ---
+      _      <- Club.upsert(clubA.copy(membersCount = Some(4)))
+      _      <- Club.updateLatestMatchAt(clubA.clubId, Some(now))
+      gimmic <- ClubAdmin.selectPlayerIdsForSizableClubs(1)
+
       // Cleanup
       _ <- ClubAdmin.deleteByClub(clubA.clubId)
       _ <- ClubAdmin.deleteByClub(clubB.clubId)
     } yield assertTrue(
       sizable == Set(player0.playerId),
-      noneSizable.isEmpty
+      noneSizable.isEmpty,
+      inactive.isEmpty,
+      gimmic.isEmpty
     )
   }
 
