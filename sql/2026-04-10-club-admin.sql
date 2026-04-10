@@ -65,8 +65,10 @@ SELECT
   daily_min_ongoing_games, daily_max_ongoing_games, daily_min_ongoing_team_matches
 FROM recruitment_criteria_old;
 
-SELECT setval('recruitment_criteria_criteria_id_seq',
-  (SELECT COALESCE(MAX(criteria_id), 0) FROM recruitment_criteria));
+SELECT setval(
+  pg_get_serial_sequence('recruitment_criteria', 'criteria_id'),
+  (SELECT COALESCE(MAX(criteria_id), 0) FROM recruitment_criteria)
+);
 
 DROP TABLE recruitment_criteria_old;
 
