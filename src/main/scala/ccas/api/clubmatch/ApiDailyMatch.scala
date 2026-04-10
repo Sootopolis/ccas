@@ -103,8 +103,8 @@ object ApiDailyMatch {
     minTeamPlayers: Option[Int],
     maxTeamPlayers: Option[Int],
     minRequiredGames: Int,
-    minRating: Option[Elo],
-    maxRating: Option[Elo],
+    minRating: Option[Int],
+    maxRating: Option[Int],
     autoStart: Option[Boolean]
   ) derives JsonDecoder
 
