@@ -2,7 +2,7 @@ package ccas.analysis.apps.clubdata
 
 import java.time.Instant
 
-import zio.{RIO, Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
+import zio.{RIO, Ref, Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
 import zio.http.Client
 
 import ccas.analysis.tables.{Club, ClubAdmin, Player, Tables}
@@ -32,28 +32,45 @@ object ClubDataApp extends ZIOAppDefault {
   private val ClubFailed = ClubResult(0, failed = true, adminChanged = false)
 
   /** Refreshes club profile data (admins, member count, slug) for all known clubs. */
-  def refresh: RIO[CcasLogger & ChessComClient & PostgresClient, RefreshResult] =
+  def refresh: RIO[CcasLogger & ChessComClient & PostgresClient, RefreshResult] = ZIO.scoped {
     for {
-      client <- ZIO.service[ChessComClient]
-      clubs  <- Club.selectAll
-      _      <- CcasLogger.info(s"[ClubData] Refreshing ${clubs.size} clubs")
-      results <- ZIO.foreachPar(clubs) { club =>
-        refreshClub(client, club).catchAll { error =>
-          CcasLogger.info(s"[ClubData] Failed to refresh ${club.slug}: ${error.getMessage}").as(ClubFailed)
-        }
-      }.withParallelism(8)
-      result = results.foldLeft(RefreshResult(clubs.size, 0, 0, 0)) { (acc, r) =>
-        acc.copy(
-          clubsFailed = acc.clubsFailed + (if (r.failed) 1 else 0),
-          clubsAdminChanged = acc.clubsAdminChanged + (if (r.adminChanged) 1 else 0),
-          totalAdmins = acc.totalAdmins + r.adminCount
-        )
+      client    <- ZIO.service[ChessComClient]
+      clubs     <- Club.selectAll
+      total     = clubs.size
+      _         <- CcasLogger.info(s"[ClubData] Refreshing $total clubs")
+      bar       <- CcasLogger.progressBar
+      resultRef <- Ref.make(RefreshResult(0, 0, 0, 0))
+      _ <- ZIO.foreachPar(clubs) { club =>
+        for {
+          r <- refreshClub(client, club).catchAll { error =>
+            CcasLogger.info(s"[ClubData] Failed to refresh ${club.slug}: ${error.getMessage}").as(ClubFailed)
+          }
+          updated <- resultRef.updateAndGet(acc =>
+            acc.copy(
+              clubsProcessed = acc.clubsProcessed + 1,
+              clubsFailed = acc.clubsFailed + (if (r.failed) 1 else 0),
+              clubsAdminChanged = acc.clubsAdminChanged + (if (r.adminChanged) 1 else 0),
+              totalAdmins = acc.totalAdmins + r.adminCount
+            )
+          )
+          _ <- bar.print(updated.clubsProcessed, total, s"Refreshing clubs: ${updated.clubsProcessed}/$total")
+        } yield ()
+      }.withParallelism(8).onInterrupt {
+        (for {
+          partial <- resultRef.get
+          _       <- logSummary("Interrupted", partial, total)
+        } yield ()).orDie
       }
-      _ <- CcasLogger.info(
-        s"[ClubData] Done: ${result.clubsProcessed} clubs, ${result.clubsFailed} failed, " +
-          s"${result.clubsAdminChanged} admin changes, ${result.totalAdmins} total admins"
-      )
+      result <- resultRef.get
+      _      <- logSummary("Done", result, total)
     } yield result
+  }
+
+  private def logSummary(label: String, r: RefreshResult, total: Int): RIO[CcasLogger, Unit] =
+    CcasLogger.info(
+      s"[ClubData] $label: ${r.clubsProcessed}/$total clubs, ${r.clubsFailed} failed, " +
+        s"${r.clubsAdminChanged} admin changes, ${r.totalAdmins} total admins"
+    )
 
   private def refreshClub(client: ChessComClient, club: Club): RIO[CcasLogger & PostgresClient, ClubResult] =
     for {
