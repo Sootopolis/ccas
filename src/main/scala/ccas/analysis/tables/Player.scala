@@ -78,6 +78,13 @@ object Player {
       sql"SELECT $selectCols FROM player WHERE username = $username".query[Player].run().headOption
     )
 
+  def selectByUsernames(usernames: Iterable[Username]): ZIO[PostgresClient, SQLException, List[Player]] =
+    if (usernames.isEmpty) ZIO.succeed(Nil)
+    else connectZIO {
+      val names = usernames.toList
+      sql"SELECT $selectCols FROM player WHERE username = ANY($names)".query[Player].run().toList
+    }
+
   def selectIdForUpdate(playerId: PlayerId): ZIO[PostgresClient, SQLException, Option[Player]] =
     connectZIO(
       sql"SELECT $selectCols FROM player WHERE player_id = $playerId FOR UPDATE".query[Player].run().headOption

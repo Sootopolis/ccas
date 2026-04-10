@@ -127,7 +127,7 @@ object MembershipApp extends ZIOAppDefault {
         resolveClubSlug(client, _)
       )
       clubId = apiClub.clubId
-      club   = Club(clubId, Instant.ofEpochSecond(apiClub.created), resolvedUrlName, apiClub.name)
+      club   = Club.fromApi(apiClub, resolvedUrlName)
       _                     <- Club.upsertResolvingSlugConflict(club, client)
       runId <- ZIO.when(trackRun)(MembershipRun.insert(clubId, trigger, startedAt, jobRunId))
       (apiMembers, dbState) <- ApiClubMembers.get(client, resolvedUrlName).zipPar(buildDbState(clubId))

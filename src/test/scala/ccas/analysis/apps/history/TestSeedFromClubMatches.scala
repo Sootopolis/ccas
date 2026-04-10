@@ -23,9 +23,9 @@ object TestSeedFromClubMatches extends ZIOSpecDefault {
 
   private val clubId       = ClubId(500)
   private val clubSlug     = ClubSlug("test-club")
-  private val club         = Club(clubId, Times.t0, clubSlug, "Test Club")
+  private val club         = Club(clubId, Times.t0, clubSlug, "Test Club", None)
   private val opponentId   = ClubId(999)
-  private val opponentClub = Club(opponentId, Times.t0, ClubSlug("other"), "Other Club")
+  private val opponentClub = Club(opponentId, Times.t0, ClubSlug("other"), "Other Club", None)
 
   private def clubMatchRow(matchId: Long, status: ClubMatchStatus = ClubMatchStatus.Finished): ClubMatch =
     ClubMatch(

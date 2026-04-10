@@ -83,6 +83,13 @@ private[recruitment] object RecruitmentFilterDefs {
       } yield FilterResult(blacklisted, env.candidate)
   }
 
+  object CheckAdminOfSizableClub extends RecruitmentFilter {
+    def apply(env: FilterEnv): RIO[PostgresClient, FilterResult] =
+      requireApiPlayer(env).map { apiPlayer =>
+        FilterResult(env.run.adminExcludedPlayerIds.contains(apiPlayer.playerId), env.candidate)
+      }
+  }
+
   object CheckFormerMember extends RecruitmentFilter {
     def apply(env: FilterEnv): RIO[PostgresClient, FilterResult] =
       requireApiPlayer(env).map { apiPlayer =>

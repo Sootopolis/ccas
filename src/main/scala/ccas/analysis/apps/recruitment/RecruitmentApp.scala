@@ -133,7 +133,7 @@ object RecruitmentApp extends ZIOAppDefault {
       logger  <- ZIO.service[CcasLogger]
       apiClub <- ApiClub.get(client, clubSlug)
       clubId = apiClub.clubId
-      club   = Club(clubId, Instant.ofEpochSecond(apiClub.created), clubSlug, apiClub.name)
+      club   = Club.fromApi(apiClub, clubSlug)
       _ <- Club.upsertResolvingSlugConflict(club, client)
       aliasRow <- RecruitmentAlias.selectLatest(clubId, alias)
         .someOrFail(NotFoundException(s"No recruitment alias '$alias' found for club '$clubSlug'"))
@@ -160,6 +160,11 @@ object RecruitmentApp extends ZIOAppDefault {
           ClubMember.selectClubFormer(clubId).map(_.map(_.playerId).toSet)
         else ZIO.succeed(Set.empty[PlayerId])
 
+      adminExcludedPlayerIds <-
+        criteria.avoidAdminMinClubSize.fold(ZIO.succeed(Set.empty[PlayerId]))(
+          ClubAdmin.selectPlayerIdsForSizableClubs
+        )
+
       excludedSlugs       <- ZIO.foreach(criteria.excludeClubs)(Club.selectId).map(_.flatten.map(_.slug).toSet)
       discoveredClubs     <- Ref.make(Set.empty[ClubSlug])
       discoveredOpponents <- Ref.make(Set.empty[Username])
@@ -174,6 +179,7 @@ object RecruitmentApp extends ZIOAppDefault {
         alias,
         targetMatchIds,
         formerMemberIds,
+        adminExcludedPlayerIds,
         excludedSlugs,
         Instant.now(),
         discoveredClubs,

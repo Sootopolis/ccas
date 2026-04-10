@@ -45,6 +45,7 @@ private[recruitment] object RecruitmentFilters {
       CheckInvitedTooRecently,
       CheckBlacklist
     )
+    val adminFilter  = Option.when(criteria.avoidAdminMinClubSize.isDefined)(CheckAdminOfSizableClub)
     val formerMember = Option.when(criteria.excludeFormerMembers)(CheckFormerMember)
     val rest = List(
       CheckCacheCriteria,
@@ -56,7 +57,7 @@ private[recruitment] object RecruitmentFilters {
     val teamMatch = Option.when(
       criteria.dailyMinTmGamesFinished.isDefined || criteria.dailyMaxTmTimeoutPercent.isDefined
     )(CheckTmStats)
-    base ++ formerMember ++ rest ++ teamMatch
+    base ++ adminFilter ++ formerMember ++ rest ++ teamMatch
   }
 
   // --- Pipeline runner ---

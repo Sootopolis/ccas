@@ -29,12 +29,13 @@ object RecruitmentTestSupport {
 
   val clubId   = ClubId(500)
   val clubSlug = ClubSlug("test-club")
-  val club     = Club(clubId, Times.t0, clubSlug, "Test Club")
+  val club     = Club(clubId, Times.t0, clubSlug, "Test Club", None)
 
   val sourceClubId    = ClubId(600)
   val intSourceClubId = ClubId(901)
 
-  val blacklistClubId = ClubId(700)
+  val blacklistClubId  = ClubId(700)
+  val sizableClubId    = ClubId(800)
 
   val pid0 = PlayerId(200)
   val pid1 = PlayerId(201)
@@ -386,11 +387,12 @@ object RecruitmentTestSupport {
       _ <- PostgresClient.connectZIO(sql"DELETE FROM player_recruitment_cache".update.run())
       _ <- PostgresClient.connectZIO(sql"DELETE FROM api_fetch_failure".update.run())
       _ <- PostgresClient.connectZIO(sql"DELETE FROM api_response_body".update.run())
+      _ <- PostgresClient.connectZIO(sql"DELETE FROM club_admin WHERE club_id = $sizableClubId".update.run())
       _ <- PostgresClient.connectZIO(sql"DELETE FROM club_member WHERE club_id = $clubId".update.run())
       _ <- PostgresClient.connectZIO(sql"DELETE FROM club_member WHERE club_id = $sourceClubId".update.run())
       _ <- PostgresClient.connectZIO(sql"DELETE FROM club_member WHERE club_id = $intSourceClubId".update.run())
       _ <- ZIO.foreachDiscard(
-        List(blacklistClubId, ClubId(701), ClubId(702), ClubId(777), ClubId(801), ClubId(802), intSourceClubId)
+        List(blacklistClubId, sizableClubId, ClubId(701), ClubId(702), ClubId(777), ClubId(801), ClubId(802), intSourceClubId)
       ) { cid =>
         PostgresClient.connectZIO(sql"DELETE FROM club WHERE club_id = $cid".update.run())
       }
@@ -458,6 +460,10 @@ object RecruitmentTestSupport {
         if (criteria.excludeFormerMembers)
           ClubMember.selectClubFormer(clubId).map(_.map(_.playerId).toSet)
         else ZIO.succeed(Set.empty[PlayerId])
+      adminExcludedPlayerIds <-
+        criteria.avoidAdminMinClubSize.fold(ZIO.succeed(Set.empty[PlayerId]))(
+          ClubAdmin.selectPlayerIdsForSizableClubs
+        )
       discoveredClubs     <- Ref.make(Set.empty[ClubSlug])
       discoveredOpponents <- Ref.make(Set.empty[Username])
       excludedSlugs <- ZIO.foreach(criteria.excludeClubs)(Club.selectId(_))
@@ -469,6 +475,7 @@ object RecruitmentTestSupport {
         "default",
         targetMatchIds,
         formerMemberIds,
+        adminExcludedPlayerIds,
         excludedSlugs,
         Instant.now(),
         discoveredClubs,
@@ -499,6 +506,7 @@ object RecruitmentTestSupport {
       excludeClubs = excludeClubs,
       maxClubs = None,
       excludeSourceAdmins = true,
+      avoidAdminMinClubSize = None,
       excludeFormerMembers = excludeFormerMembers,
       dailyMinElo = None,
       dailyMaxElo = None,

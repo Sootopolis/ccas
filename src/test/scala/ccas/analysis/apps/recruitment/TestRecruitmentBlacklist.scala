@@ -169,7 +169,7 @@ object TestRecruitmentBlacklist extends ZIOSpecDefault {
   private def testListShowsActiveEntries = test("listBlacklist shows active entries") {
     for {
       _ <- seedDb
-      _ <- Club.upsert(Club(blacklistClubId, Times.t0, blacklistClubSlug, "Blacklist Club"))
+      _ <- Club.upsert(Club(blacklistClubId, Times.t0, blacklistClubSlug, "Blacklist Club", None))
       _ <- Player.insert(Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0))
       _ <- RecruitmentBlacklist.insert(
         RecruitmentBlacklist(blacklistClubId, pid0, Times.t0, None, Some("indefinite"))
@@ -197,7 +197,7 @@ object TestRecruitmentBlacklist extends ZIOSpecDefault {
   private def testRemoveDeletesByUsername = test("removeFromBlacklist deletes entry by username") {
     for {
       _ <- seedDb
-      _ <- Club.upsert(Club(blacklistClubId, Times.t0, blacklistClubSlug, "Blacklist Club"))
+      _ <- Club.upsert(Club(blacklistClubId, Times.t0, blacklistClubSlug, "Blacklist Club", None))
       _ <- Player.insert(Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0))
       _ <- RecruitmentBlacklist.insert(
         RecruitmentBlacklist(blacklistClubId, pid0, Times.t0, None, Some("banned"))

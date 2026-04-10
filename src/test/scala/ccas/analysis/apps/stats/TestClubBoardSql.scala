@@ -43,8 +43,8 @@ object TestClubBoardSql extends ZIOSpecDefault {
   private val matchId3   = ClubMatchId(1003L)
 
   private val seedClubs = for {
-    _ <- Club.upsert(Club(ourClubId, Times.t0, ClubSlug("our-club"), "Our Club"))
-    _ <- Club.upsert(Club(oppClubId, Times.t0, ClubSlug("opp-club"), "Opponent Club"))
+    _ <- Club.upsert(Club(ourClubId, Times.t0, ClubSlug("our-club"), "Our Club", None))
+    _ <- Club.upsert(Club(oppClubId, Times.t0, ClubSlug("opp-club"), "Opponent Club", None))
   } yield ()
 
   private val seedPlayers = for {

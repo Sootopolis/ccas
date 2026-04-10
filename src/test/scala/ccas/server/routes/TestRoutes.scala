@@ -383,8 +383,8 @@ object TestRoutes extends ZIOSpecDefault {
   private val t0 = LocalDateTime.of(2025, 6, 1, 0, 0).toInstant(ZoneOffset.UTC)
 
   private val ensureClubs = for {
-    _ <- Club.upsert(Club(ClubId(200), t0, ClubSlug("test-club"), "Test Club"))
-    _ <- Club.upsert(Club(ClubId(201), t0, ClubSlug("other-club"), "Other Club"))
+    _ <- Club.upsert(Club(ClubId(200), t0, ClubSlug("test-club"), "Test Club", None))
+    _ <- Club.upsert(Club(ClubId(201), t0, ClubSlug("other-club"), "Other Club", None))
   } yield ()
 
   private val deleteAllSchedules = for {

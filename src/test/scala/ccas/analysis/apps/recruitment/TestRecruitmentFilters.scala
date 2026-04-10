@@ -185,7 +185,9 @@ object TestRecruitmentFilters extends ZIOSpecDefault {
     testGatherClubCandidatesKeepsAdminsWhenDisabled,
     testCacheIsPopulatedAfterEvaluation,
     testFormerMemberRejectedWhenExcludeFormerMembersTrue,
-    testFormerMemberAcceptedWhenExcludeFormerMembersFalse
+    testFormerMemberAcceptedWhenExcludeFormerMembersFalse,
+    testAdminOfSizableClubRejected,
+    testAdminOfSmallClubAccepted
   )
 
   private def testRejectsClosedAccount = test("rejects closed account") {
@@ -426,7 +428,7 @@ object TestRecruitmentFilters extends ZIOSpecDefault {
     val criteria = makeCriteria(excludeClubs = List(bannedClubId))
     for {
       _          <- seedDb
-      _          <- Club.upsert(Club(bannedClubId, Times.t0, ClubSlug("banned-club"), "Banned Club"))
+      _          <- Club.upsert(Club(bannedClubId, Times.t0, ClubSlug("banned-club"), "Banned Club", None))
       criteriaId <- seedCriteria(criteria)
       runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0)
       client     <- fakeChessComClient(responses)
@@ -601,6 +603,40 @@ object TestRecruitmentFilters extends ZIOSpecDefault {
       client <- fakeChessComClient(responses)
       _      <- evalCandidates(client, runId, List(Username("alice")), criteria)
       cands  <- RecruitmentCandidate.selectByRun(runId)
+    } yield assertTrue(cands.head.outcome == CandidateOutcome.Deferred)
+  }
+
+  private def testAdminOfSizableClubRejected = test("admin of sizable club rejected when avoidAdminMinClubSize is set") {
+    val responses = Map("player/alice" -> apiPlayerJson(200, "alice"))
+    val criteria  = makeCriteria().copy(avoidAdminMinClubSize = Some(100))
+    for {
+      _ <- seedDb
+      // Seed a sizable club and make alice an admin of it
+      _ <- Club.upsert(Club(sizableClubId, Times.t0, ClubSlug("sizable-club"), "Sizable Club", Some(500)))
+      _ <- seedPlayer(pid0)
+      _ <- ClubAdmin.insertBatch(List(ClubAdmin(sizableClubId, pid0)))
+      criteriaId <- seedCriteria(criteria)
+      runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0)
+      client     <- fakeChessComClient(responses)
+      _          <- evalCandidates(client, runId, List(Username("alice")), criteria)
+      cands      <- RecruitmentCandidate.selectByRun(runId)
+    } yield assertTrue(cands.head.outcome == CandidateOutcome.Rejected)
+  }
+
+  private def testAdminOfSmallClubAccepted = test("admin of small club accepted when avoidAdminMinClubSize is set") {
+    val responses = Map("player/alice" -> apiPlayerJson(200, "alice"))
+    val criteria  = makeCriteria().copy(avoidAdminMinClubSize = Some(100))
+    for {
+      _ <- seedDb
+      // Seed a small club and make alice an admin of it
+      _ <- Club.upsert(Club(sizableClubId, Times.t0, ClubSlug("small-club"), "Small Club", Some(50)))
+      _ <- seedPlayer(pid0)
+      _ <- ClubAdmin.insertBatch(List(ClubAdmin(sizableClubId, pid0)))
+      criteriaId <- seedCriteria(criteria)
+      runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0)
+      client     <- fakeChessComClient(responses)
+      _          <- evalCandidates(client, runId, List(Username("alice")), criteria)
+      cands      <- RecruitmentCandidate.selectByRun(runId)
     } yield assertTrue(cands.head.outcome == CandidateOutcome.Deferred)
   }
 

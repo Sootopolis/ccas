@@ -243,7 +243,7 @@ private[recruitment] object RecruitmentExplore {
   ): Task[List[Username]] = {
     val getMembersAndAdmins = if (excludeSourceAdmins) {
       ApiClubMembers.get(client, clubSlug).map(_.all.map(_.username).toList)
-        .zipPar(ApiClub.get(client, clubSlug).map(extractAdminUsernames))
+        .zipPar(ApiClub.get(client, clubSlug).map(ClubAdmin.extractAdminUsernames))
     } else ApiClubMembers.get(client, clubSlug).map(m => (m.all.map(_.username).toList, Set.empty[Username]))
     getMembersAndAdmins.map { (orderedMembers, adminUsernames) =>
       val exclude = existingUsernames ++ evaluatedUsernames ++ adminUsernames
@@ -355,6 +355,4 @@ private[recruitment] object RecruitmentExplore {
       if (usernames.isEmpty) Nil
       else List(UsernameSource("match-board-opponents", usernames))
 
-  private def extractAdminUsernames(apiClub: ApiClub): Set[Username] =
-    apiClub.admin.map(url => Username.wrap(url.path.segments.last)).toSet
 }

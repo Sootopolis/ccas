@@ -43,11 +43,11 @@ object TestJobRunner extends ZIOSpecDefault {
 
   private val deleteAllJobRuns = for {
     _ <- connectZIO { val _ = sql"DELETE FROM job_run".update.run() }
-    _ <- Club.upsert(Club(clubIdA, Times.t0, ClubSlug("club-a"), "Club A"))
-    _ <- Club.upsert(Club(clubIdB, Times.t0, ClubSlug("club-b"), "Club B"))
-    _ <- Club.upsert(Club(clubIdC, Times.t0, ClubSlug("club-c"), "Club C"))
-    _ <- Club.upsert(Club(ClubId(203), Times.t0, ClubSlug("test-club"), "Test Club"))
-    _ <- Club.upsert(Club(ClubId(204), Times.t0, ClubSlug("dup-club"), "Dup Club"))
+    _ <- Club.upsert(Club(clubIdA, Times.t0, ClubSlug("club-a"), "Club A", None))
+    _ <- Club.upsert(Club(clubIdB, Times.t0, ClubSlug("club-b"), "Club B", None))
+    _ <- Club.upsert(Club(clubIdC, Times.t0, ClubSlug("club-c"), "Club C", None))
+    _ <- Club.upsert(Club(ClubId(203), Times.t0, ClubSlug("test-club"), "Test Club", None))
+    _ <- Club.upsert(Club(ClubId(204), Times.t0, ClubSlug("dup-club"), "Dup Club", None))
   } yield ()
 
   private def awaitStatus(

@@ -6,6 +6,7 @@ import java.time.Instant
 import com.typesafe.config.ConfigFactory
 import zio.{durationLong, Duration, Scope, Task, UIO, URIO, URLayer, ZIO, ZLayer}
 
+import ccas.analysis.apps.clubdata.ClubDataApp
 import ccas.analysis.apps.history.HistoryApp
 import ccas.analysis.apps.membership.MembershipApp
 import ccas.analysis.apps.recruitment.RecruitmentApp
@@ -99,6 +100,8 @@ object JobScheduler {
         case JobKind.Stats =>
           (_: Option[JobRunId]) =>
             requireClubSlug.flatMap(name => StatsApp.memberStats(name).unit)
+        case JobKind.ClubData =>
+          (_: Option[JobRunId]) => ClubDataApp.refresh.unit
       }
 
       runner.submit(schedule.kind, schedule.clubId, schedule.params, RunTrigger.Scheduled, effect)

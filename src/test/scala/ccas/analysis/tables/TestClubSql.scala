@@ -18,6 +18,7 @@ object TestClubSql extends ZIOSpecDefault {
     testClubUpsertUpdate,
     testClubUpsertBatch,
     testClubSelect,
+    testClubMembersCount,
     testMemberInsert,
     testMemberInsertBatch,
     testMemberSelect,
@@ -26,7 +27,11 @@ object TestClubSql extends ZIOSpecDefault {
     testClubMatchRefDelete,
     testClubMatchRefDeleteAll,
     testReplaceSinceApproximate,
-    testReplaceSinceNonApproximate
+    testReplaceSinceNonApproximate,
+    testClubAdminInsertAndSelect,
+    testClubAdminDeleteByClub,
+    testClubAdminSelectPlayerIdsForSizableClubs,
+    testClubAdminReplaceForClub
   ).provideShared(
     FreshSchemaLayer("test_club_sql", onInit = Tables.ensureTables)
   ) @@ TestAspect.sequential
@@ -38,8 +43,8 @@ object TestClubSql extends ZIOSpecDefault {
     val t3: Instant = t0.plus(Duration.ofDays(3))
   }
 
-  private val clubA = Club(ClubId(200), Times.t0, ClubSlug("club-a"), "Club A")
-  private val clubB = Club(ClubId(201), Times.t0, ClubSlug("club-b"), "Club B")
+  private val clubA = Club(ClubId(200), Times.t0, ClubSlug("club-a"), "Club A", None)
+  private val clubB = Club(ClubId(201), Times.t0, ClubSlug("club-b"), "Club B", None)
 
   private val player0 = Player(PlayerId(10), Times.t0, Username("p0"), Active, None, Times.t1)
   private val player1 = Player(PlayerId(11), Times.t0, Username("p1"), Active, None, Times.t1)
@@ -196,4 +201,79 @@ object TestClubSql extends ZIOSpecDefault {
         notUpdated <- ClubMember.replaceSince(clubA.clubId, player0.playerId, Times.t0, Times.t1)
       } yield assertTrue(notUpdated == 0)
     }
+
+  // --- Club.membersCount tests ---
+
+  private def testClubMembersCount = test("upsert stores and returns membersCount") {
+    val withCount = clubA.copy(membersCount = Some(1234))
+    for {
+      _      <- Club.upsert(withCount)
+      result <- Club.selectId(clubA.clubId)
+      bySlug <- Club.selectBySlug(clubA.slug)
+    } yield assertTrue(
+      result.get.membersCount.contains(1234),
+      bySlug.get.membersCount.contains(1234)
+    )
+  }
+
+  // --- ClubAdmin tests ---
+
+  private def testClubAdminInsertAndSelect = test("ClubAdmin insert and select") {
+    val admin0 = ClubAdmin(clubA.clubId, player0.playerId)
+    val admin1 = ClubAdmin(clubA.clubId, player1.playerId)
+    for {
+      _       <- ClubAdmin.insertBatch(List(admin0, admin1))
+      byClub  <- ClubAdmin.selectByClub(clubA.clubId)
+      ids     <- ClubAdmin.selectPlayerIdsByClub(clubA.clubId)
+      emptyB  <- ClubAdmin.selectByClub(clubB.clubId)
+    } yield assertTrue(
+      byClub.toSet == Set(admin0, admin1),
+      ids == Set(player0.playerId, player1.playerId),
+      emptyB.isEmpty
+    )
+  }
+
+  private def testClubAdminDeleteByClub = test("ClubAdmin deleteByClub removes all admins for club") {
+    for {
+      deleted <- ClubAdmin.deleteByClub(clubA.clubId)
+      after   <- ClubAdmin.selectByClub(clubA.clubId)
+    } yield assertTrue(deleted == 2, after.isEmpty)
+  }
+
+  private def testClubAdminSelectPlayerIdsForSizableClubs = test("selectPlayerIdsForSizableClubs filters by member count") {
+    // clubA has membersCount=1234 (from earlier test), clubB has None
+    val adminA = ClubAdmin(clubA.clubId, player0.playerId)
+    val adminB = ClubAdmin(clubB.clubId, player1.playerId)
+    for {
+      _ <- ClubAdmin.insertBatch(List(adminA, adminB))
+      // Threshold 1000: only clubA qualifies (1234 members)
+      sizable    <- ClubAdmin.selectPlayerIdsForSizableClubs(1000)
+      // Threshold 2000: neither qualifies
+      noneSizable <- ClubAdmin.selectPlayerIdsForSizableClubs(2000)
+      // Cleanup
+      _ <- ClubAdmin.deleteByClub(clubA.clubId)
+      _ <- ClubAdmin.deleteByClub(clubB.clubId)
+    } yield assertTrue(
+      sizable == Set(player0.playerId),
+      noneSizable.isEmpty
+    )
+  }
+
+  private def testClubAdminReplaceForClub = test("replaceForClub atomically replaces admin set") {
+    for {
+      // Seed initial admins
+      _      <- ClubAdmin.insertBatch(List(ClubAdmin(clubA.clubId, player0.playerId)))
+      before <- ClubAdmin.selectPlayerIdsByClub(clubA.clubId)
+      // Replace with a different set
+      _      <- ClubAdmin.replaceForClub(clubA.clubId, Set(player1.playerId, player2.playerId))
+      after  <- ClubAdmin.selectPlayerIdsByClub(clubA.clubId)
+      // Replace with empty set should clear all rows
+      _      <- ClubAdmin.replaceForClub(clubA.clubId, Set.empty)
+      empty  <- ClubAdmin.selectPlayerIdsByClub(clubA.clubId)
+    } yield assertTrue(
+      before == Set(player0.playerId),
+      after == Set(player1.playerId, player2.playerId),
+      empty.isEmpty
+    )
+  }
 }

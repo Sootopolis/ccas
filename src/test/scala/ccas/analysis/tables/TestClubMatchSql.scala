@@ -52,8 +52,8 @@ object TestClubMatchSql extends ZIOSpecDefault {
     val t4: Instant = t0.plus(Duration.ofDays(120))
   }
 
-  private val clubA = Club(ClubId(300), Times.t0, ClubSlug("club-a"), "Club A")
-  private val clubB = Club(ClubId(301), Times.t0, ClubSlug("club-b"), "Club B")
+  private val clubA = Club(ClubId(300), Times.t0, ClubSlug("club-a"), "Club A", None)
+  private val clubB = Club(ClubId(301), Times.t0, ClubSlug("club-b"), "Club B", None)
 
   private val player0 =
     Player(PlayerId(50), Times.t0, Username("p0"), ccas.api.misc.enums.PlayerStatusCategory.Active, None, Times.t0)

@@ -55,7 +55,7 @@ object BlacklistApp extends ZIOAppDefault {
     for {
       client  <- ZIO.service[ChessComClient]
       apiClub <- ApiClub.get(client, clubSlug)
-      club = Club(apiClub.clubId, Instant.ofEpochSecond(apiClub.created), clubSlug, apiClub.name)
+      club = Club.fromApi(apiClub, clubSlug)
       _ <- Club.upsertResolvingSlugConflict(club, client)
       _ <- ZIO.foreachDiscard(usernames) { username =>
         for {
