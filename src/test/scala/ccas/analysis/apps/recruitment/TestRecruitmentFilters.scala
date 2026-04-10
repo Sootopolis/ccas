@@ -4,11 +4,12 @@ import java.time.{Duration, Instant}
 
 import ccas.utils.sql.PostgresClient
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
-import zio.RIO
+import zio.{RIO, ZLayer}
 
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.*
 import ccas.analysis.tables.*
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, Elo, Username}
+import ccas.utils.{CcasLogger, TestCcasLogger}
 import ccas.utils.sql.FreshSchemaLayer
 
 object TestRecruitmentFilters extends ZIOSpecDefault {
@@ -18,7 +19,8 @@ object TestRecruitmentFilters extends ZIOSpecDefault {
     suiteFilterChain,
     suiteCacheFilters
   ).provideShared(
-    FreshSchemaLayer("test_recruitment_filters", onInit = Tables.ensureTables)
+    FreshSchemaLayer("test_recruitment_filters", onInit = Tables.ensureTables),
+    ZLayer.succeed(TestCcasLogger.noop)
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock
 
   // ==========================================================================
@@ -145,7 +147,7 @@ object TestRecruitmentFilters extends ZIOSpecDefault {
     responses: Map[String, String],
     criteria: RecruitmentCriteria,
     username: String = "alice"
-  ): RIO[PostgresClient, CandidateOutcome] =
+  ): RIO[CcasLogger & PostgresClient, CandidateOutcome] =
     for {
       _          <- seedDb
       criteriaId <- seedCriteria(criteria)
@@ -187,7 +189,9 @@ object TestRecruitmentFilters extends ZIOSpecDefault {
     testFormerMemberRejectedWhenExcludeFormerMembersTrue,
     testFormerMemberAcceptedWhenExcludeFormerMembersFalse,
     testAdminOfSizableClubRejected,
-    testAdminOfSmallClubAccepted
+    testAdminOfSmallClubAccepted,
+    testAdminOfNewlyDiscoveredSizableClubRejected,
+    testAdminOfNewlyDiscoveredSmallClubAccepted
   )
 
   private def testRejectsClosedAccount = test("rejects closed account") {
@@ -640,6 +644,66 @@ object TestRecruitmentFilters extends ZIOSpecDefault {
     } yield assertTrue(cands.head.outcome == CandidateOutcome.Deferred)
   }
 
+  /** Late-confirm path: the candidate is admin of a sizable club we have NOT crawled into our DB. The early prune misses
+    * it (no club_admin rows exist), but [[CheckAdminOfDiscoveredClub]] fetches the club via ApiPlayerClubs → ApiClub,
+    * persists club + club_admin rows, and rejects the candidate.
+    */
+  private def testAdminOfNewlyDiscoveredSizableClubRejected = test(
+    "admin of newly discovered sizable club rejected by late-confirm filter"
+  ) {
+    val mysterySlug = "mystery-club"
+    val responses = Map(
+      "player/alice"       -> apiPlayerJson(200, "alice"),
+      "player/alice/clubs" -> apiPlayerClubsJson(List(mysterySlug)),
+      s"club/$mysterySlug" -> apiClubJson(sizableClubId.value, mysterySlug, admins = List("alice"), membersCount = 500)
+    )
+    val criteria = makeCriteria().copy(avoidAdminMinClubSize = Some(100))
+    for {
+      _               <- seedDb
+      criteriaId      <- seedCriteria(criteria)
+      runId           <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0)
+      client          <- fakeChessComClient(responses)
+      _               <- evalCandidates(client, runId, List(Username("alice")), criteria)
+      cands           <- RecruitmentCandidate.selectByRun(runId)
+      persistedClub   <- Club.selectBySlug(ClubSlug(mysterySlug))
+      persistedAdmins <- ClubAdmin.selectPlayerIdsByClub(sizableClubId)
+    } yield assertTrue(
+      cands.head.outcome == CandidateOutcome.Rejected,
+      persistedClub.exists(_.membersCount.contains(500)),
+      persistedAdmins.contains(pid0)
+    )
+  }
+
+  /** Late-confirm path: the candidate is admin of a small (sub-threshold) unknown club. The filter fetches the club but
+    * the gate rejects it as not sizable, so the candidate is NOT rejected. The Club row is still persisted as a side
+    * effect, but no club_admin rows are written (we don't pay the admin-resolution cost for non-qualifying clubs).
+    */
+  private def testAdminOfNewlyDiscoveredSmallClubAccepted = test(
+    "admin of newly discovered small club not rejected by late-confirm filter"
+  ) {
+    val tinySlug = "tiny-club"
+    val responses = Map(
+      "player/alice"       -> apiPlayerJson(200, "alice"),
+      "player/alice/clubs" -> apiPlayerClubsJson(List(tinySlug)),
+      s"club/$tinySlug"    -> apiClubJson(sizableClubId.value, tinySlug, admins = List("alice"), membersCount = 50)
+    )
+    val criteria = makeCriteria().copy(avoidAdminMinClubSize = Some(100))
+    for {
+      _               <- seedDb
+      criteriaId      <- seedCriteria(criteria)
+      runId           <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0)
+      client          <- fakeChessComClient(responses)
+      _               <- evalCandidates(client, runId, List(Username("alice")), criteria)
+      cands           <- RecruitmentCandidate.selectByRun(runId)
+      persistedClub   <- Club.selectBySlug(ClubSlug(tinySlug))
+      persistedAdmins <- ClubAdmin.selectPlayerIdsByClub(sizableClubId)
+    } yield assertTrue(
+      cands.head.outcome == CandidateOutcome.Deferred,
+      persistedClub.exists(_.membersCount.contains(50)),
+      persistedAdmins.isEmpty
+    )
+  }
+
   // ==========================================================================
   // Suite: Cache-aware filters
   // ==========================================================================
@@ -650,7 +714,7 @@ object TestRecruitmentFilters extends ZIOSpecDefault {
     criteria: RecruitmentCriteria,
     cache: PlayerRecruitmentCache,
     username: String = "alice"
-  ): RIO[PostgresClient, Option[CandidateOutcome]] =
+  ): RIO[CcasLogger & PostgresClient, Option[CandidateOutcome]] =
     for {
       _ <- seedDb
       // Seed player row for FK constraint, then seed cache

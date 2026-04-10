@@ -12,7 +12,7 @@ import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
 import ccas.utils.client.{ChessComClient, TestChessComClientSupport}
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient
-import ccas.utils.TestCcasLogger
+import ccas.utils.{CcasLogger, TestCcasLogger}
 
 object RecruitmentTestSupport {
 
@@ -68,7 +68,7 @@ object RecruitmentTestSupport {
     fields.mkString("{\n", ",\n", "\n}")
   }
 
-  def apiClubJson(clubId: Long, slug: String, admins: List[String] = Nil): String = {
+  def apiClubJson(clubId: Long, slug: String, admins: List[String] = Nil, membersCount: Int = 10): String = {
     val adminJson = admins.map(u => s""""https://api.chess.com/pub/player/$u"""").mkString("[", ",", "]")
     s"""{
        |  "@id": "https://api.chess.com/pub/club/$slug",
@@ -76,7 +76,7 @@ object RecruitmentTestSupport {
        |  "club_id": $clubId,
        |  "country": "https://api.chess.com/pub/country/US",
        |  "average_daily_rating": 1200,
-       |  "members_count": 10,
+       |  "members_count": $membersCount,
        |  "created": ${Times.t0.getEpochSecond},
        |  "last_activity": ${Times.t1.getEpochSecond},
        |  "visibility": "public",
@@ -452,7 +452,7 @@ object RecruitmentTestSupport {
     candidates: List[Username],
     criteria: RecruitmentCriteria,
     target: Int = 30
-  ): RIO[PostgresClient, List[Username]] =
+  ): RIO[CcasLogger & PostgresClient, List[Username]] =
     for {
       clubMatches <- client.get[ApiClubMatches](ApiClubMatches.getUrl(clubSlug))
       targetMatchIds = (clubMatches.registered.map(_.`@id`) ++ clubMatches.inProgress.map(_.`@id`)).toSet

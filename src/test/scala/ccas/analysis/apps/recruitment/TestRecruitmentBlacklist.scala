@@ -4,12 +4,13 @@ import java.time.{Duration, Instant}
 
 import ccas.utils.sql.PostgresClient
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
-import zio.ZIO
+import zio.{ZIO, ZLayer}
 
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.*
 import ccas.analysis.tables.*
 import ccas.api.misc.enums.PlayerStatusCategory.Active
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, Username}
+import ccas.utils.TestCcasLogger
 import ccas.utils.sql.FreshSchemaLayer
 
 object TestRecruitmentBlacklist extends ZIOSpecDefault {
@@ -20,7 +21,8 @@ object TestRecruitmentBlacklist extends ZIOSpecDefault {
     suiteBlacklist,
     suiteBlacklistApp
   ).provideShared(
-    FreshSchemaLayer("test_recruitment_blacklist", onInit = Tables.ensureTables)
+    FreshSchemaLayer("test_recruitment_blacklist", onInit = Tables.ensureTables),
+    ZLayer.succeed(TestCcasLogger.noop)
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock
 
   // ==========================================================================

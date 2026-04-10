@@ -29,7 +29,9 @@ private[recruitment] object RecruitmentPersistence {
         for {
           _ <-
             if (candidate.isNewPlayer) {
-              Player.insert(
+              // `insertIfNew`, not `insert`: a filter (e.g. CheckAdminOfDiscoveredClub via ClubAdminResolver) may have
+              // already inserted this player into the table during evaluation, in which case the row is already current.
+              Player.insertIfNew(
                 Player(
                   ap.playerId,
                   ap.joinedAt,

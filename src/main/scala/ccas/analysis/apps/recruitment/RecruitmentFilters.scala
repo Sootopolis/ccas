@@ -2,6 +2,7 @@ package ccas.analysis.apps.recruitment
 
 import java.time.Instant
 
+import ccas.utils.CcasLogger
 import ccas.utils.sql.PostgresClient
 import zio.{RIO, Ref, ZIO}
 import RecruitmentFilterDefs.*
@@ -20,7 +21,7 @@ private[recruitment] object RecruitmentFilters {
     username: Username,
     runCtx: RunContext,
     filters: List[RecruitmentFilter]
-  ): RIO[PostgresClient, CandidateOutcome] = {
+  ): RIO[CcasLogger & PostgresClient, CandidateOutcome] = {
     val now          = Instant.now()
     val candidateCtx = CandidateContext.initial(username)
     val env          = FilterEnv(runCtx.copy(now = now), candidateCtx)
@@ -45,12 +46,14 @@ private[recruitment] object RecruitmentFilters {
       CheckInvitedTooRecently,
       CheckBlacklist
     )
-    val adminFilter  = Option.when(criteria.avoidAdminMinClubSize.isDefined)(CheckAdminOfSizableClub)
-    val formerMember = Option.when(criteria.excludeFormerMembers)(CheckFormerMember)
+    val adminFilter     = Option.when(criteria.avoidAdminMinClubSize.isDefined)(CheckAdminOfSizableClub)
+    val lateAdminFilter = Option.when(criteria.avoidAdminMinClubSize.isDefined)(CheckAdminOfDiscoveredClub)
+    val formerMember    = Option.when(criteria.excludeFormerMembers)(CheckFormerMember)
     val rest = List(
       CheckCacheCriteria,
       CheckOpponentMatch,
-      CheckClubs,
+      CheckClubs
+    ) ++ lateAdminFilter ++ List(
       CheckDailyStats,
       CheckOngoingGames
     )
@@ -66,7 +69,7 @@ private[recruitment] object RecruitmentFilters {
     env: FilterEnv,
     filters: List[RecruitmentFilter],
     ctxRef: Ref[CandidateContext]
-  ): RIO[PostgresClient, (CandidateOutcome, CandidateContext)] =
+  ): RIO[CcasLogger & PostgresClient, (CandidateOutcome, CandidateContext)] =
     ZIO.foldLeft(filters)(FilterResult(false, env.candidate)) {
       case (r @ FilterResult(true, _), _)     => ZIO.succeed(r)
       case (FilterResult(false, ctx), filter) => ctxRef.set(ctx) *> filter(env.copy(candidate = ctx))

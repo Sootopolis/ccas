@@ -5,10 +5,9 @@ import java.time.Instant
 import zio.{RIO, Ref, Scope, Task, ZIO, ZIOAppArgs, ZIOAppDefault}
 import zio.http.Client
 
-import ccas.analysis.tables.{Club, ClubAdmin, ClubMatch, Player, Tables}
+import ccas.analysis.tables.{Club, ClubAdmin, ClubMatch, Tables}
 import ccas.api.club.{ApiClub, ApiClubMatches}
-import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
-import ccas.api.player.ApiPlayer
+import ccas.api.misc.subtypes.ClubSlug
 import ccas.utils.{CcasLogger, OutputFile}
 import ccas.utils.client.ChessComClient
 import ccas.utils.sql.PostgresClient
@@ -105,8 +104,8 @@ object ClubDataApp extends ZIOAppDefault {
 
       adminUsernames   = ClubAdmin.extractAdminUsernames(apiClub)
       existingAdminIds <- ClubAdmin.selectPlayerIdsByClub(club.clubId)
-      result           <- resolveAndUpdateAdmins(client, club.clubId, adminUsernames, existingAdminIds)
-    } yield result
+      allAdminIds      <- ClubAdminResolver.resolveAndPersistAdmins(client, club.clubId, adminUsernames, existingAdminIds)
+    } yield ClubResult(allAdminIds.size, failed = false, adminChanged = allAdminIds != existingAdminIds)
 
   /** Refreshes `club.latest_match_at` using a tiered strategy to minimise API calls:
     *   1. If the cached value on `club` is fresher than [[ClubAdmin.ApiSkipThreshold]], trust it and do nothing.
@@ -143,46 +142,6 @@ object ClubDataApp extends ZIOAppDefault {
       if (matches.registered.nonEmpty) Some(now)
       else (matches.inProgress.map(_.startTime) ++ matches.finished.map(_.startTime))
         .map(Instant.ofEpochSecond).maxOption
-    }
-
-  /** Resolves admin usernames to player IDs and updates club_admin if changed. */
-  private def resolveAndUpdateAdmins(
-    client: ChessComClient,
-    clubId: ClubId,
-    adminUsernames: Set[Username],
-    existingAdminIds: Set[PlayerId]
-  ): RIO[CcasLogger & PostgresClient, ClubResult] =
-    if (adminUsernames.isEmpty) {
-      ZIO.whenDiscard(existingAdminIds.nonEmpty)(ClubAdmin.deleteByClub(clubId))
-        .as(ClubResult(0, failed = false, adminChanged = existingAdminIds.nonEmpty))
-    } else {
-      for {
-        knownPlayers <- Player.selectByUsernames(adminUsernames)
-        knownByUsername = knownPlayers.map(p => p.username -> p.playerId).toMap
-        unknownUsernames = adminUsernames -- knownByUsername.keySet
-
-        resolvedUnknowns <- ZIO.foreach(unknownUsernames.toList) { username =>
-          (for {
-            apiPlayer <- client.get[ApiPlayer](ApiPlayer.getUrl(username))
-            player = Player(
-              apiPlayer.playerId,
-              apiPlayer.joinedAt,
-              apiPlayer.username,
-              apiPlayer.status.category,
-              apiPlayer.title,
-              Instant.now()
-            )
-            _ <- Player.insertIfNew(player)
-          } yield Some(apiPlayer.username -> apiPlayer.playerId)).catchAll { error =>
-            CcasLogger.info(s"[ClubData] Could not resolve admin '$username': ${error.getMessage}")
-              .as(None)
-          }
-        }.map(_.flatten.toMap)
-
-        allAdminIds = (knownByUsername ++ resolvedUnknowns).values.toSet
-        changed     = allAdminIds != existingAdminIds
-        _ <- ZIO.whenDiscard(changed)(ClubAdmin.replaceForClub(clubId, allAdminIds))
-      } yield ClubResult(allAdminIds.size, failed = false, adminChanged = changed)
     }
 
   private def formatReport(data: RefreshResult): String =

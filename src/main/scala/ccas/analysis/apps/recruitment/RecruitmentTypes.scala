@@ -9,15 +9,16 @@ import zio.http.URL
 import ccas.analysis.tables.{PlayerRecruitmentCache, RecruitmentCriteria}
 import ccas.api.misc.enums.GameResultDetail
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
-import ccas.api.player.{ApiPlayer, ApiPlayerMatches}
+import ccas.api.player.{ApiPlayer, ApiPlayerClubs, ApiPlayerMatches}
 import ccas.api.player.ApiPlayerArchive.ApiPlayerArchiveGame
+import ccas.utils.CcasLogger
 import ccas.utils.client.ChessComClient
 import ccas.utils.ProgressBar
 
 // --- Filter pipeline types ---
 
 private[recruitment] trait RecruitmentFilter {
-  def apply(env: FilterEnv): RIO[PostgresClient, FilterResult]
+  def apply(env: FilterEnv): RIO[CcasLogger & PostgresClient, FilterResult]
 }
 
 /** Shared across all candidates in a run. */
@@ -50,7 +51,8 @@ private[recruitment] case class CandidateContext(
   cache: Option[PlayerRecruitmentCache],
   recentArchives: Option[List[ccas.api.player.ApiPlayerArchive]] = None,
   cacheRejected: Boolean = false,
-  playerMatches: Option[ApiPlayerMatches] = None
+  playerMatches: Option[ApiPlayerMatches] = None,
+  playerClubs: Option[ApiPlayerClubs] = None
 )
 private[recruitment] object CandidateContext {
   def initial(username: Username): CandidateContext =
