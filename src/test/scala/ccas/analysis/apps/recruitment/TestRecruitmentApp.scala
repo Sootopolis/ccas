@@ -3,7 +3,7 @@ package ccas.analysis.apps.recruitment
 import java.time.{Duration, Instant}
 
 import com.augustnagro.magnum.sql
-import zio.{durationInt, Promise, Scope, ZIO, ZLayer}
+import zio.{durationInt, Promise, ZIO, ZLayer}
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.*
@@ -30,7 +30,6 @@ object TestRecruitmentApp extends ZIOSpecDefault {
     suiteMatchRefWriting
   ).provideShared(
     FreshSchemaLayer("test_recruitment_app", onInit = Tables.ensureTables),
-    Scope.default,
     ZLayer.succeed(TestCcasLogger.noop)
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock
 

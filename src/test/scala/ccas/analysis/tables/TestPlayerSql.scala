@@ -2,15 +2,13 @@ package ccas.analysis.tables
 
 import java.time.{Duration, Instant, LocalDateTime, ZoneOffset}
 
-import com.augustnagro.magnum.sql
 import zio.test.{assertCompletes, assertTrue, Spec, TestAspect, ZIOSpecDefault}
 import zio.Chunk
 
 import ccas.api.misc.enums.PlayerStatusCategory.{Active, Fairplay}
-import ccas.api.misc.enums.Title.{CM, GM, IM}
+import ccas.api.misc.enums.Title.{CM, IM}
 import ccas.api.misc.subtypes.{PlayerId, Username}
 import ccas.utils.sql.FreshSchemaLayer
-import ccas.utils.sql.PostgresClient.connectZIO
 
 object TestPlayerSql extends ZIOSpecDefault {
   override def spec: Spec[Any, Throwable] = suite("TestPlayerSql")(

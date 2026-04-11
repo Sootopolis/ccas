@@ -3,7 +3,7 @@ package ccas.analysis.apps.membership
 import java.time.{Duration, Instant, LocalDateTime, ZoneOffset}
 
 import com.augustnagro.magnum.sql
-import zio.{Chunk, RIO, Scope, ZIO, ZLayer}
+import zio.{Chunk, RIO, ZIO, ZLayer}
 import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
@@ -57,7 +57,6 @@ object TestMembershipApp extends ZIOSpecDefault {
     suiteClassifyDisappeared
   ).provideShared(
     FreshSchemaLayer("test_membership_app", onInit = Tables.ensureTables),
-    Scope.default,
     ZLayer.succeed(TestCcasLogger.noop)
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock
 
