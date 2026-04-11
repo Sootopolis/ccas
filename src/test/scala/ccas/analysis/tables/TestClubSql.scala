@@ -24,6 +24,7 @@ object TestClubSql extends ZIOSpecDefault {
     testMemberSelect,
     testMemberUpdate,
     testClubMatchRefInsert,
+    testClubMatchRefUpsert,
     testClubMatchRefDelete,
     testClubMatchRefDeleteAll,
     testReplaceSinceApproximate,
@@ -155,6 +156,17 @@ object TestClubSql extends ZIOSpecDefault {
       _      <- ClubMatchRef.insert(refA)
       result <- ClubMatchRef.selectId(refA.clubId)
     } yield assertTrue(result.contains(refA))
+  }
+
+  // upsert refreshes all non-PK columns. This protects against races between RefApp resolving
+  // a club and RecruitmentApp writing a match ref for the same club — both fibers can write without
+  // hitting a duplicate-key crash.
+  private def testClubMatchRefUpsert = test("testClubMatchRefUpsert") {
+    val refreshed = refA.copy(matchId = ClubMatchId(9999), isLive = true, isTeam1 = false)
+    for {
+      _      <- ClubMatchRef.upsert(refreshed)
+      result <- ClubMatchRef.selectId(refA.clubId)
+    } yield assertTrue(result.contains(refreshed))
   }
 
   private def testClubMatchRefDelete = test("testClubMatchRefDelete") {

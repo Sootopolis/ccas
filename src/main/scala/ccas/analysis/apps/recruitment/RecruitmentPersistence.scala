@@ -78,7 +78,7 @@ private[recruitment] object RecruitmentPersistence {
         case Some(_) => ZIO.unit
         case None =>
           ClubMatchBoard.selectPlayerMatchRef(playerId).flatMap {
-            case Some(ref) => PlayerMatchRef.insert(ref).unit
+            case Some(ref) => PlayerMatchRef.upsert(ref).unit
             case None =>
               ZIO.foreachDiscard(candidate.playerMatches) { playerMatches =>
                 resolvePlayerRefViaApi(client, playerId, candidate.username, playerMatches)
@@ -100,7 +100,7 @@ private[recruitment] object RecruitmentPersistence {
       ZIO.foreachDiscard(boardIdx) { idx =>
         RefHelpers.fetchTeamMatchTeams(client, parsed.matchId, parsed.isLive).flatMap { teams =>
           ZIO.foreachDiscard(RefHelpers.findPlayerIsTeam1(teams, username)) { t1 =>
-            PlayerMatchRef.insert(PlayerMatchRef(playerId, parsed.matchId, parsed.isLive, t1, idx)).unit
+            PlayerMatchRef.upsert(PlayerMatchRef(playerId, parsed.matchId, parsed.isLive, t1, idx)).unit
           }
         }
       }

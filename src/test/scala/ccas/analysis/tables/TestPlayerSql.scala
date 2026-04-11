@@ -21,7 +21,10 @@ object TestPlayerSql extends ZIOSpecDefault {
     testArchiveAndUpdate,
     testSelectByUsername,
     testSelectByIds,
-    testResolveUsernames
+    testInsertBatchIdempotent,
+    testPlayerSnapshotInsertIdempotent,
+    testResolveUsernames,
+    testUpdateCurrentStateOptimistic
   ).provideShared(
     FreshSchemaLayer("test_player_sql", onInit = Tables.ensureTables)
   ) @@ TestAspect.sequential
@@ -120,6 +123,71 @@ object TestPlayerSql extends ZIOSpecDefault {
       nonExistent.isEmpty,
       mixed.size == 1,
       mixed.head.playerId == player0.playerId
+    )
+  }
+
+  // Re-inserting a player with the same player_id must silently no-op (ON CONFLICT DO NOTHING),
+  // not raise a unique-key violation. Otherwise two concurrent MembershipApp runs against different
+  // clubs that share a member would abort their persist transactions.
+  private def testInsertBatchIdempotent = test("testInsertBatchIdempotent") {
+    val altered = player1.copy(username = Username("player1_altered"))
+    for {
+      _       <- Player.insertBatch(Chunk(altered))
+      current <- Player.selectId(player1.playerId)
+    } yield assertTrue(
+      // First insert wins: the altered row is ignored.
+      current.exists(_.username == player1.username)
+    )
+  }
+
+  // PK is (player_id, since). Duplicate snapshots must silently no-op so that two concurrent jobs
+  // that both observe the same stale (player_id, since) can't crash each other's transaction.
+  private def testPlayerSnapshotInsertIdempotent = test("testPlayerSnapshotInsertIdempotent") {
+    val altered = player0Snapshot0.copy(username = Username("player0_altered"))
+    for {
+      r      <- PlayerSnapshot.insert(altered)
+      stored <- PlayerSnapshot.selectId(player0.playerId).map(_.find(_.since == player0Snapshot0.since))
+      // insertBatch with one duplicate + one fresh row
+      freshSince = Times.t3.plusSeconds(1)
+      fresh      = PlayerSnapshot(player0.playerId, freshSince, Username("player0_future"), Active, None)
+      _     <- PlayerSnapshot.insertBatch(Chunk(altered, fresh))
+      later <- PlayerSnapshot.selectId(player0.playerId)
+    } yield assertTrue(
+      r == 0, // ON CONFLICT DO NOTHING: 0 rows affected
+      // Existing row retained (earlier test already updated title to IM via PlayerSnapshot.update)
+      stored.exists(_.title.contains(IM)),
+      stored.exists(_.username == Username("player0_old")), // original username, not "altered"
+      later.exists(_.since == freshSince)                   // fresh row was inserted
+    )
+  }
+
+  // Simulates the cross-club MembershipApp race: two classifications from the same stale state
+  // both try to update the same player. The later-committing one must no-op rather than overwrite
+  // the winner's fresher data. With optimistic `AND since < newSince`, a second call with the
+  // same newSince (or older) returns 0 rows affected.
+  private def testUpdateCurrentStateOptimistic = test("testUpdateCurrentStateOptimistic") {
+    // player1 was inserted with since = Times.t1 and untouched by earlier tests.
+    val t4 = Times.t3.plusSeconds(1)
+    val t5 = Times.t3.plusSeconds(2)
+    val firstWriter  = player1.copy(username = Username("player1_A"), since = t4)
+    val staleWriter  = player1.copy(username = Username("player1_B"), since = t4) // same since as firstWriter
+    val olderWriter  = player1.copy(username = Username("player1_C"), since = Times.t1) // same as DB start
+    val newerWriter  = player1.copy(username = Username("player1_D"), since = t5)
+    for {
+      r1      <- Player.updateCurrentState(firstWriter)  // applies: t1 < t4
+      r2      <- Player.updateCurrentState(staleWriter)  // no-op: t4 < t4 is false
+      r3      <- Player.updateCurrentState(olderWriter)  // no-op: t4 < t1 is false
+      current <- Player.selectId(player1.playerId)
+      r4      <- Player.updateCurrentState(newerWriter)  // applies: t4 < t5
+      after   <- Player.selectId(player1.playerId)
+    } yield assertTrue(
+      r1 == 1,
+      r2 == 0,
+      r3 == 0,
+      current.exists(_.username == Username("player1_A")),
+      r4 == 1,
+      after.exists(_.username == Username("player1_D")),
+      after.exists(_.since == t5)
     )
   }
 

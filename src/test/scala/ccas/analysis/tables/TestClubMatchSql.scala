@@ -43,7 +43,8 @@ object TestClubMatchSql extends ZIOSpecDefault {
     testUnresolvedMatchClubDoNothing,
     testUnresolvedMatchClubDelete,
     testClubMatchUpdateTeamClubId,
-    testClubMatchBoardUpdatePlayerId
+    testClubMatchBoardUpdatePlayerId,
+    testPlayerMatchRefUpsert
   ).provideShared(
     FreshSchemaLayer("test_club_match_sql", onInit = Tables.ensureTables)
   ) @@ TestAspect.sequential
@@ -517,6 +518,23 @@ object TestClubMatchSql extends ZIOSpecDefault {
       after.get.team2ClubId.contains(clubB.clubId),
       after.get.team1ClubId == before.get.team1ClubId,
       noOp == 0
+    )
+  }
+
+  // PlayerMatchRef has a single row per player_id. upsert refreshes all non-PK columns so that
+  // parallel resolution/recruitment fibers writing a ref for the same player don't crash with a
+  // duplicate-key error, and the most recent successful resolution wins.
+  private def testPlayerMatchRefUpsert = test("PlayerMatchRef upsert refreshes on conflict") {
+    val initial   = PlayerMatchRef(player0.playerId, ClubMatchId(1001), isLive = false, isTeam1 = true, 1)
+    val refreshed = initial.copy(matchId = ClubMatchId(1002), isLive = true, isTeam1 = false, boardIdx = 3)
+    for {
+      _     <- PlayerMatchRef.upsert(initial)
+      first <- PlayerMatchRef.selectId(player0.playerId)
+      _     <- PlayerMatchRef.upsert(refreshed)
+      after <- PlayerMatchRef.selectId(player0.playerId)
+    } yield assertTrue(
+      first.contains(initial),
+      after.contains(refreshed)
     )
   }
 

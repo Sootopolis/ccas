@@ -470,13 +470,13 @@ object RecruitmentApp extends ZIOAppDefault {
       case Some(_) => ZIO.unit
       case None =>
         ClubMatch.selectClubMatchRef(clubId).flatMap {
-          case Some(ref) => ClubMatchRef.insert(ref).unit
+          case Some(ref) => ClubMatchRef.upsert(ref).unit
           case None =>
             ZIO.foreachDiscard(clubMatches.finished.headOption) { m =>
               val parsed = RefHelpers.parseMatchUrl(m.`@id`)
               RefHelpers.fetchTeamMatchTeams(client, parsed.matchId, parsed.isLive).flatMap { teams =>
                 ZIO.foreachDiscard(RefHelpers.findClubIsTeam1(teams, clubSlug)) { t1 =>
-                  ClubMatchRef.insert(ClubMatchRef(clubId, parsed.matchId, parsed.isLive, t1)).unit
+                  ClubMatchRef.upsert(ClubMatchRef(clubId, parsed.matchId, parsed.isLive, t1)).unit
                 }
               }
             }

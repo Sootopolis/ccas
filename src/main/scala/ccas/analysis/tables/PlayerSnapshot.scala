@@ -71,14 +71,16 @@ object PlayerSnapshot {
   def insert(item: PlayerSnapshot): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""INSERT INTO player_snapshot (player_id, since, username, status, title)
-            VALUES (${item.playerId}, ${item.since}, ${item.username}, ${item.status}, ${item.title})""".update.run()
+            VALUES (${item.playerId}, ${item.since}, ${item.username}, ${item.status}, ${item.title})
+            ON CONFLICT (player_id, since) DO NOTHING""".update.run()
     }
 
   def insertBatch(items: Iterable[PlayerSnapshot]): ZIO[PostgresClient, SQLException, BatchUpdateResult] =
     transactZIO {
       batchUpdate(items) { item =>
         sql"""INSERT INTO player_snapshot (player_id, since, username, status, title)
-              VALUES (${item.playerId}, ${item.since}, ${item.username}, ${item.status}, ${item.title})""".update
+              VALUES (${item.playerId}, ${item.since}, ${item.username}, ${item.status}, ${item.title})
+              ON CONFLICT (player_id, since) DO NOTHING""".update
       }
     }
 

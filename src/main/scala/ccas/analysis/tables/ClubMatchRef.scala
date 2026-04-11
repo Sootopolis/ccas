@@ -35,6 +35,16 @@ object ClubMatchRef {
             VALUES (${ref.clubId}, ${ref.matchId}, ${ref.isLive}, ${ref.isTeam1})""".update.run()
     }
 
+  def upsert(ref: ClubMatchRef): ZIO[PostgresClient, SQLException, Int] =
+    connectZIO {
+      sql"""INSERT INTO club_match_ref (club_id, match_id, is_live, is_team1)
+            VALUES (${ref.clubId}, ${ref.matchId}, ${ref.isLive}, ${ref.isTeam1})
+            ON CONFLICT (club_id) DO UPDATE SET
+              match_id = EXCLUDED.match_id,
+              is_live  = EXCLUDED.is_live,
+              is_team1 = EXCLUDED.is_team1""".update.run()
+    }
+
   def deleteId(clubId: ClubId): ZIO[PostgresClient, SQLException, Int] =
     connectZIO(sql"DELETE FROM club_match_ref WHERE club_id = $clubId".update.run())
 }

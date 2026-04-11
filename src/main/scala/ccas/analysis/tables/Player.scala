@@ -98,8 +98,15 @@ object Player {
   def insert(player: Player): ZIO[PostgresClient, SQLException, Unit] =
     connectZIO(repo.insert(player))
 
-  def insertBatch(players: Iterable[Player]): ZIO[PostgresClient, SQLException, Unit] =
-    transactZIO(repo.insertAll(players))
+  def insertBatch(players: Iterable[Player]): ZIO[PostgresClient, SQLException, BatchUpdateResult] =
+    transactZIO {
+      batchUpdate(players) { player =>
+        sql"""INSERT INTO player (player_id, joined, username, status, title, since)
+              VALUES (${player.playerId}, ${player.joined}, ${player.username},
+                ${player.status}, ${player.title}, ${player.since})
+              ON CONFLICT (player_id) DO NOTHING""".update
+      }
+    }
 
   def insertIfNew(player: Player): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
@@ -109,11 +116,15 @@ object Player {
             ON CONFLICT (player_id) DO NOTHING""".update.run()
     }
 
+  // Optimistic update: `AND since < newSince` makes concurrent updates monotonic. If another
+  // writer has already advanced `since` past ours, our UPDATE no-ops instead of overwriting their
+  // fresher data. Protects against lost updates when two MembershipApp runs for different clubs
+  // both classify a shared player from the same stale state.
   def updateCurrentState(player: Player): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""UPDATE player SET username = ${player.username}, status = ${player.status},
               title = ${player.title}, since = ${player.since}
-            WHERE player_id = ${player.playerId}""".update.run()
+            WHERE player_id = ${player.playerId} AND since < ${player.since}""".update.run()
     }
 
   def updateCurrentStateBatch(players: Iterable[Player]): ZIO[PostgresClient, SQLException, BatchUpdateResult] =
@@ -121,7 +132,7 @@ object Player {
       batchUpdate(players) { player =>
         sql"""UPDATE player SET username = ${player.username}, status = ${player.status},
                 title = ${player.title}, since = ${player.since}
-              WHERE player_id = ${player.playerId}""".update
+              WHERE player_id = ${player.playerId} AND since < ${player.since}""".update
       }
     }
 

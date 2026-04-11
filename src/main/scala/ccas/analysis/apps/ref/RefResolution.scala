@@ -43,7 +43,7 @@ private[ref] object RefResolution {
       resolved <- dbRef match {
         case Some(ref) =>
           withTransaction {
-            PlayerMatchRef.insert(ref) *> PlayerRefSkip.deleteId(player.playerId)
+            PlayerMatchRef.upsert(ref) *> PlayerRefSkip.deleteId(player.playerId)
           } *> ctx.playersResolvedDb.update(_ + 1) *>
             CcasLogger.debug(s"  ${player.username}: resolved via DB").as(true)
         case None =>
@@ -125,7 +125,7 @@ private[ref] object RefResolution {
                     handleVerification(ctx, player) {
                       val ref = PlayerMatchRef(player.playerId, parsed.matchId, parsed.isLive, isTeam1, boardIdx)
                       withTransaction {
-                        PlayerMatchRef.insert(ref) *> PlayerRefSkip.deleteId(player.playerId)
+                        PlayerMatchRef.upsert(ref) *> PlayerRefSkip.deleteId(player.playerId)
                       } *> ZIO.whenDiscard(countResolved)(ctx.playersResolvedApi.update(_ + 1)).as(ResolveResult.Resolved)
                     }
                 }
@@ -181,8 +181,9 @@ private[ref] object RefResolution {
             } else {
               handleVerification(ctx, player) {
                 val ref = PlayerTournamentRef(player.playerId, slug, playerIdx)
-                PlayerTournamentRef.insert(ref) *> PlayerRefSkip.deleteId(player.playerId) *>
-                  ctx.playersResolvedApi.update(_ + 1).as(ResolveResult.Resolved)
+                withTransaction {
+                  PlayerTournamentRef.upsert(ref) *> PlayerRefSkip.deleteId(player.playerId)
+                } *> ctx.playersResolvedApi.update(_ + 1).as(ResolveResult.Resolved)
               }
             }
           }
@@ -201,7 +202,7 @@ private[ref] object RefResolution {
       resolved <- dbRef match {
         case Some(ref) =>
           withTransaction {
-            ClubMatchRef.insert(ref) *> ClubRefSkip.deleteId(club.clubId)
+            ClubMatchRef.upsert(ref) *> ClubRefSkip.deleteId(club.clubId)
           } *> ctx.clubsResolvedDb.update(_ + 1) *>
             CcasLogger.debug(s"  ${club.slug}: resolved via DB").as(true)
         case None =>
@@ -254,7 +255,7 @@ private[ref] object RefResolution {
               case Some(isTeam1) =>
                 val ref = ClubMatchRef(club.clubId, parsed.matchId, parsed.isLive, isTeam1)
                 withTransaction {
-                  ClubMatchRef.insert(ref) *> ClubRefSkip.deleteId(club.clubId)
+                  ClubMatchRef.upsert(ref) *> ClubRefSkip.deleteId(club.clubId)
                 } *> ctx.clubsResolvedApi.update(_ + 1).as(true)
             }
         )
@@ -355,7 +356,7 @@ private[ref] object RefResolution {
       dbRef <- ClubMatchBoard.selectPlayerMatchRef(player.playerId)
       resolved <- dbRef match {
         case Some(ref) =>
-          PlayerMatchRef.insert(ref) *>
+          PlayerMatchRef.upsert(ref) *>
             CcasLogger.debug(s"  ${player.username}: upgraded via DB").as(true)
         case None =>
           resolvePlayerViaMatch(ctx, player, countResolved = false).map {

@@ -64,7 +64,7 @@ object HistoryPendingMatch {
     connectZIO {
       sql"""INSERT INTO history_pending_match (club_id, match_id, is_live, status)
             VALUES (${item.clubId}, ${item.matchId}, ${item.isLive}, ${item.status})
-            ON CONFLICT DO NOTHING""".update.run()
+            ON CONFLICT (club_id, match_id, is_live) DO NOTHING""".update.run()
     }
 
   def insertBatch(items: Iterable[HistoryPendingMatch]): ZIO[PostgresClient, SQLException, BatchUpdateResult] =
@@ -72,7 +72,7 @@ object HistoryPendingMatch {
       batchUpdate(items) { item =>
         sql"""INSERT INTO history_pending_match (club_id, match_id, is_live, status)
               VALUES (${item.clubId}, ${item.matchId}, ${item.isLive}, ${item.status})
-              ON CONFLICT DO NOTHING""".update
+              ON CONFLICT (club_id, match_id, is_live) DO NOTHING""".update
       }
     }
 

@@ -41,6 +41,17 @@ object PlayerMatchRef {
             VALUES (${ref.playerId}, ${ref.matchId}, ${ref.isLive}, ${ref.isTeam1}, ${ref.boardIdx})""".update.run()
     }
 
+  def upsert(ref: PlayerMatchRef): ZIO[PostgresClient, SQLException, Int] =
+    connectZIO {
+      sql"""INSERT INTO player_match_ref (player_id, match_id, is_live, is_team1, board_idx)
+            VALUES (${ref.playerId}, ${ref.matchId}, ${ref.isLive}, ${ref.isTeam1}, ${ref.boardIdx})
+            ON CONFLICT (player_id) DO UPDATE SET
+              match_id  = EXCLUDED.match_id,
+              is_live   = EXCLUDED.is_live,
+              is_team1  = EXCLUDED.is_team1,
+              board_idx = EXCLUDED.board_idx""".update.run()
+    }
+
   def insertBatch(refs: Iterable[PlayerMatchRef]): ZIO[PostgresClient, SQLException, BatchUpdateResult] =
     transactZIO {
       batchUpdate(refs) { ref =>
