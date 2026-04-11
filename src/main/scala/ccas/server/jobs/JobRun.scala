@@ -57,19 +57,6 @@ object JobRun {
         .query[JobRun].run().headOption
     }
 
-  def selectRunning(kind: JobKind, clubId: Option[ClubId]): ZIO[PostgresClient, SQLException, Option[JobRun]] =
-    connectZIO {
-      val running = JobRunStatus.Running
-      clubId match {
-        case Some(cid) =>
-          sql"SELECT $selectCols FROM job_run WHERE kind = $kind AND club_id = $cid AND status = $running"
-            .query[JobRun].run().headOption
-        case None =>
-          sql"SELECT $selectCols FROM job_run WHERE kind = $kind AND club_id IS NULL AND status = $running"
-            .query[JobRun].run().headOption
-      }
-    }
-
   def selectRunningForUpdate(kind: JobKind, clubId: Option[ClubId]): ZIO[PostgresClient, SQLException, Option[JobRun]] =
     connectZIO {
       val running = JobRunStatus.Running
@@ -97,14 +84,6 @@ object JobRun {
           """.update.run()
     }
 
-  def update(jobRun: JobRun): ZIO[PostgresClient, SQLException, Int] =
-    connectZIO {
-      sql"""UPDATE job_run
-             SET status = ${jobRun.status}, completed_at = ${jobRun.completedAt}, error = ${jobRun.error}
-             WHERE id = ${jobRun.id}
-          """.update.run()
-    }
-
   def updateStatus(
     id: JobRunId,
     status: JobRunStatus,
@@ -122,13 +101,5 @@ object JobRun {
       val running = JobRunStatus.Running
       sql"""UPDATE job_run SET status = $failed, completed_at = NOW(), error = 'Service restarted'
             WHERE status = $running""".update.run()
-    }
-
-  def deleteBefore(cutoff: Instant): ZIO[PostgresClient, SQLException, Int] =
-    connectZIO {
-      val completed = JobRunStatus.Completed
-      val failed    = JobRunStatus.Failed
-      sql"""DELETE FROM job_run WHERE started_at < $cutoff
-            AND status IN ($completed, $failed)""".update.run()
     }
 }

@@ -45,12 +45,6 @@ object PlayerSnapshot {
       sql"SELECT $selectCols FROM player_snapshot WHERE player_id = $playerId".query[PlayerSnapshot].run().toList
     )
 
-  /** All historical snapshots for a username. */
-  def selectName(username: Username): ZIO[PostgresClient, SQLException, List[PlayerSnapshot]] =
-    connectZIO(
-      sql"SELECT $selectCols FROM player_snapshot WHERE username = $username".query[PlayerSnapshot].run().toList
-    )
-
   /** Historical snapshots plus current player state, for time-range reporting. Returns all snapshots whose `since` is
     * after the given instant, plus the current state from `player` if its `since` falls after the cutoff.
     */
@@ -88,13 +82,5 @@ object PlayerSnapshot {
     connectZIO {
       sql"""UPDATE player_snapshot SET username = ${item.username}, status = ${item.status}, title = ${item.title}
             WHERE player_id = ${item.playerId} AND since = ${item.since}""".update.run()
-    }
-
-  def updateBatch(items: Iterable[PlayerSnapshot]): ZIO[PostgresClient, SQLException, BatchUpdateResult] =
-    transactZIO {
-      batchUpdate(items) { item =>
-        sql"""UPDATE player_snapshot SET username = ${item.username}, status = ${item.status}, title = ${item.title}
-              WHERE player_id = ${item.playerId} AND since = ${item.since}""".update
-      }
     }
 }

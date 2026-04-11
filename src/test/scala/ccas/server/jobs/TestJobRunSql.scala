@@ -16,11 +16,10 @@ object TestJobRunSql extends ZIOSpecDefault {
   override def spec: Spec[Any, Throwable] = suite("TestJobRunSql")(
     testInsertAndSelectId,
     testSelectIdMissing,
-    testUpdateChangesFields,
     testUpdateStatusChangesFields,
-    testSelectRunningByKindAndClub,
-    testSelectRunningNullClub,
-    testSelectRunningIgnoresNonRunning,
+    testSelectRunningForUpdateByKindAndClub,
+    testSelectRunningForUpdateNullClub,
+    testSelectRunningForUpdateIgnoresNonRunning,
     testSelectRecentOrdering,
     testMarkOrphansAsFailed
   ).provideShared(
@@ -78,18 +77,6 @@ object TestJobRunSql extends ZIOSpecDefault {
     } yield assertTrue(result.isEmpty)
   }
 
-  private def testUpdateChangesFields = test("update changes status, completedAt, error") {
-    for {
-      _      <- deleteAll
-      _      <- JobRun.insert(run0)
-      _      <- JobRun.update(run0.copy(status = JobRunStatus.Completed, completedAt = Some(Times.t1), error = None))
-      result <- JobRun.selectId(id0)
-    } yield assertTrue(
-      result.get.status == JobRunStatus.Completed,
-      result.get.completedAt.contains(Times.t1)
-    )
-  }
-
   private def testUpdateStatusChangesFields =
     test("updateStatus changes status, completedAt, error without touching other fields") {
       for {
@@ -106,61 +93,64 @@ object TestJobRunSql extends ZIOSpecDefault {
       )
     }
 
-  private def testSelectRunningByKindAndClub = test("selectRunning finds by kind + clubId (Some)") {
-    for {
-      _           <- deleteAll
-      _           <- JobRun.insert(run0) // Recruitment, club-a
-      _           <- JobRun.insert(run1) // Membership, club-a
-      recruitment <- JobRun.selectRunning(JobKind.Recruitment, Some(clubIdA))
-      membership  <- JobRun.selectRunning(JobKind.Membership, Some(clubIdA))
-    } yield assertTrue(
-      recruitment.get.id == id0,
-      membership.get.id == id1
-    )
-  }
+  private def testSelectRunningForUpdateByKindAndClub =
+    test("selectRunningForUpdate finds by kind + clubId (Some)") {
+      for {
+        _           <- deleteAll
+        _           <- JobRun.insert(run0) // Recruitment, club-a
+        _           <- JobRun.insert(run1) // Membership, club-a
+        recruitment <- JobRun.selectRunningForUpdate(JobKind.Recruitment, Some(clubIdA))
+        membership  <- JobRun.selectRunningForUpdate(JobKind.Membership, Some(clubIdA))
+      } yield assertTrue(
+        recruitment.get.id == id0,
+        membership.get.id == id1
+      )
+    }
 
-  private def testSelectRunningNullClub = test("selectRunning finds by kind when clubId is None") {
-    for {
-      _        <- deleteAll
-      _        <- JobRun.insert(run2) // MatchRef, None
-      found    <- JobRun.selectRunning(JobKind.MatchRef, None)
-      notFound <- JobRun.selectRunning(JobKind.MatchRef, Some(clubIdB))
-    } yield assertTrue(
-      found.get.id == id2,
-      notFound.isEmpty
-    )
-  }
+  private def testSelectRunningForUpdateNullClub =
+    test("selectRunningForUpdate finds by kind when clubId is None") {
+      for {
+        _        <- deleteAll
+        _        <- JobRun.insert(run2) // MatchRef, None
+        found    <- JobRun.selectRunningForUpdate(JobKind.MatchRef, None)
+        notFound <- JobRun.selectRunningForUpdate(JobKind.MatchRef, Some(clubIdB))
+      } yield assertTrue(
+        found.get.id == id2,
+        notFound.isEmpty
+      )
+    }
 
-  private def testSelectRunningIgnoresNonRunning = test("selectRunning ignores non-Running rows") {
-    val completed = JobRun(
-      id0,
-      JobKind.Recruitment,
-      Some(clubIdA),
-      RunTrigger.Cli,
-      JobRunStatus.Completed,
-      None,
-      Times.t0,
-      Some(Times.t1),
-      None
-    )
-    val failed = JobRun(
-      id1,
-      JobKind.Recruitment,
-      Some(clubIdA),
-      RunTrigger.Cli,
-      JobRunStatus.Failed,
-      None,
-      Times.t0,
-      Some(Times.t1),
-      Some("err")
-    )
-    for {
-      _      <- deleteAll
-      _      <- JobRun.insert(completed)
-      _      <- JobRun.insert(failed)
-      result <- JobRun.selectRunning(JobKind.Recruitment, Some(clubIdA))
-    } yield assertTrue(result.isEmpty)
-  }
+  private def testSelectRunningForUpdateIgnoresNonRunning =
+    test("selectRunningForUpdate ignores non-Running rows") {
+      val completed = JobRun(
+        id0,
+        JobKind.Recruitment,
+        Some(clubIdA),
+        RunTrigger.Cli,
+        JobRunStatus.Completed,
+        None,
+        Times.t0,
+        Some(Times.t1),
+        None
+      )
+      val failed = JobRun(
+        id1,
+        JobKind.Recruitment,
+        Some(clubIdA),
+        RunTrigger.Cli,
+        JobRunStatus.Failed,
+        None,
+        Times.t0,
+        Some(Times.t1),
+        Some("err")
+      )
+      for {
+        _      <- deleteAll
+        _      <- JobRun.insert(completed)
+        _      <- JobRun.insert(failed)
+        result <- JobRun.selectRunningForUpdate(JobKind.Recruitment, Some(clubIdA))
+      } yield assertTrue(result.isEmpty)
+    }
 
   private def testSelectRecentOrdering = test("selectRecent orders by startedAt DESC with limit") {
     for {

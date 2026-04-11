@@ -3,7 +3,7 @@
 -- composite indexes to avoid sorts on ORDER BY ... DESC patterns;
 -- simple indexes for unindexed FK columns and append-only tables.
 
--- Partial: selectRunning filters kind+club_id within running jobs only (0-3 rows at any time)
+-- Partial: the running-job lookup filters kind+club_id within running jobs only (0-3 rows at any time)
 CREATE INDEX IF NOT EXISTS idx_job_run_running
   ON job_run (kind, club_id) WHERE status = 'Running';
 

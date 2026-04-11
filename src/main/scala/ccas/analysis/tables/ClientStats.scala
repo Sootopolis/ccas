@@ -159,9 +159,4 @@ object ClientStats {
             ORDER BY started_at DESC"""
         .query[ClientStats].run().toList
     }
-
-  def deleteBefore(cutoff: Instant): ZIO[PostgresClient, SQLException, Int] =
-    connectZIO {
-      sql"DELETE FROM client_stats WHERE started_at < $cutoff".update.run()
-    }
 }
