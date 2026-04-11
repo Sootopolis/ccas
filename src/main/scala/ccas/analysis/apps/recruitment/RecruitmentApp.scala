@@ -168,6 +168,7 @@ object RecruitmentApp extends ZIOAppDefault {
       excludedSlugs       <- ZIO.foreach(criteria.excludeClubs)(Club.selectId).map(_.flatten.map(_.slug).toSet)
       discoveredClubs     <- Ref.make(Set.empty[ClubSlug])
       discoveredOpponents <- Ref.make(Set.empty[Username])
+      failedAdminSlugs    <- Ref.make(Set.empty[ClubSlug])
       invitedRef          <- Ref.make(List.empty[Username])
       evaluatedRef        <- Ref.make(Set.empty[Username])
       evalCountRef        <- Ref.make(0)
@@ -183,7 +184,8 @@ object RecruitmentApp extends ZIOAppDefault {
         excludedSlugs,
         Instant.now(),
         discoveredClubs,
-        discoveredOpponents
+        discoveredOpponents,
+        failedAdminSlugs
       )
       filters              = RecruitmentFilters.buildFilterChain(criteria)
       effectiveConcurrency = DefaultExploreConcurrency

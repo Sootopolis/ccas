@@ -466,6 +466,7 @@ object RecruitmentTestSupport {
         )
       discoveredClubs     <- Ref.make(Set.empty[ClubSlug])
       discoveredOpponents <- Ref.make(Set.empty[Username])
+      failedAdminSlugs    <- Ref.make(Set.empty[ClubSlug])
       excludedSlugs <- ZIO.foreach(criteria.excludeClubs)(Club.selectId(_))
         .map(_.flatten.map(_.slug).toSet)
       runCtx = RunContext(
@@ -479,7 +480,8 @@ object RecruitmentTestSupport {
         excludedSlugs,
         Instant.now(),
         discoveredClubs,
-        discoveredOpponents
+        discoveredOpponents,
+        failedAdminSlugs
       )
       filters = RecruitmentFilters.buildFilterChain(criteria)
       revInvited <- ZIO.foldLeft(candidates)(List.empty[Username]) { case (invited, username) =>

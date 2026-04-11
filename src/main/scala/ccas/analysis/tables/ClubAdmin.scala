@@ -66,14 +66,23 @@ object ClubAdmin {
       }
     }
 
-  /** Atomically replaces all admins for a club: deletes existing rows and inserts the new set. */
+  /** Atomically replaces all admins for a club: deletes existing rows and inserts the new set.
+    *
+    * The INSERT uses `ON CONFLICT DO NOTHING` to tolerate concurrent writers (e.g. two recruitment fibers late-checking
+    * the same unknown club): under READ COMMITTED, two transactions can both see an empty admin set, both DELETE 0
+    * rows, and then race on the INSERT — without the conflict guard, the second writer hits a duplicate-key violation.
+    * In our use case all racing writers derive their admin set from the same `ApiClub` fetch, so silently merging is
+    * safe; in pathological cases (different sets) the result is the union of both, which is acceptable since
+    * `ClubDataApp` will reconcile on its next refresh.
+    */
   def replaceForClub(clubId: ClubId, playerIds: Set[PlayerId]): ZIO[PostgresClient, Throwable, Unit] =
     withTransaction {
       deleteByClub(clubId) *>
         ZIO.whenDiscard(playerIds.nonEmpty) {
           connectZIO {
             batchUpdate(playerIds.map(pid => ClubAdmin(clubId, pid))) { item =>
-              sql"INSERT INTO club_admin (club_id, player_id) VALUES (${item.clubId}, ${item.playerId})".update
+              sql"""INSERT INTO club_admin (club_id, player_id) VALUES (${item.clubId}, ${item.playerId})
+                    ON CONFLICT (club_id, player_id) DO NOTHING""".update
             }
           }
         }

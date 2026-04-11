@@ -4,7 +4,6 @@ import java.time.temporal.ChronoUnit
 import java.time.Instant
 
 import ccas.utils.CcasLogger
-import ccas.utils.client.ChessComClient
 import ccas.utils.sql.PostgresClient
 import zio.{RIO, ZIO}
 import RecruitmentStatsHelpers.*
@@ -225,6 +224,9 @@ private[recruitment] object RecruitmentFilterDefs {
     * for any club we lack admin data on, fetches `ApiClub` on demand, persists `club` + `club_admin` rows via
     * [[ClubAdminResolver.resolveAndPersistAdmins]], and rejects the candidate if they're an admin of a sizable, active,
     * non-over-administered club.
+    *
+    * Slugs whose `ApiClub.get` fails (typically restricted mega-clubs that return 404 on the public API) are recorded
+    * in `runCtx.failedAdminSlugs` and skipped for the rest of the run.
     */
   object CheckAdminOfDiscoveredClub extends RecruitmentFilter {
     def apply(env: FilterEnv): RIO[CcasLogger & PostgresClient, FilterResult] =
@@ -238,64 +240,90 @@ private[recruitment] object RecruitmentFilterDefs {
         // foldLeft short-circuits via the boolean accumulator: once rejected, no further API work.
         rejected <- ZIO.foldLeft(playerClubs.clubs)(false) { (rejected, playerClub) =>
           if (rejected) ZIO.succeed(true)
-          else evaluateClub(env.run.client, playerClub.clubName, apiPlayer.playerId, min, cutoff)
+          else evaluateClub(env.run, playerClub.clubName, apiPlayer.playerId, min, cutoff)
         }
       } yield FilterResult(rejected, env.candidate)
 
     private def evaluateClub(
-      client: ChessComClient,
+      run: RunContext,
       slug: ClubSlug,
       candidatePlayerId: PlayerId,
       min: Int,
       cutoff: Instant
     ): RIO[CcasLogger & PostgresClient, Boolean] =
-      for {
-        existingClub <- Club.selectBySlug(slug)
-        existingAdmins <- existingClub.fold(ZIO.succeed(Set.empty[PlayerId]))(c =>
-          ClubAdmin.selectPlayerIdsByClub(c.clubId)
-        )
-        rejected <-
-          if (existingClub.isDefined && existingAdmins.nonEmpty) {
-            // Already known and populated. The early prune at run start evaluated it; nothing to do here.
-            ZIO.succeed(false)
-          } else {
-            fetchEvaluatePersist(client, slug, existingClub, candidatePlayerId, min, cutoff)
-          }
-      } yield rejected
+      run.failedAdminSlugs.get.flatMap { failed =>
+        if (failed.contains(slug)) ZIO.succeed(false)
+        else
+          for {
+            existingClub <- Club.selectBySlug(slug)
+            existingAdmins <- existingClub.fold(ZIO.succeed(Set.empty[PlayerId]))(c =>
+              ClubAdmin.selectPlayerIdsByClub(c.clubId)
+            )
+            rejected <- (existingClub, existingAdmins.nonEmpty) match {
+              case (Some(club), true) =>
+                // Have everything locally — the early prune at run start either evaluated this club already, OR an
+                // earlier candidate's late-confirm pass in this run persisted these rows. In the second case the
+                // early prune missed them, so re-apply the gate predicate against current local data and check the
+                // candidate's membership directly. Skips the API call.
+                val membersCount = club.membersCount.getOrElse(0)
+                val gateOk = passesGate(membersCount, existingAdmins.size, club.latestMatchAt, min, cutoff)
+                ZIO.succeed(gateOk && existingAdmins.contains(candidatePlayerId))
+              case _ =>
+                fetchEvaluatePersist(run, slug, existingClub, candidatePlayerId, min, cutoff)
+            }
+          } yield rejected
+      }
 
     private def fetchEvaluatePersist(
-      client: ChessComClient,
+      run: RunContext,
       slug: ClubSlug,
       existingClub: Option[Club],
       candidatePlayerId: PlayerId,
       min: Int,
       cutoff: Instant
     ): RIO[CcasLogger & PostgresClient, Boolean] =
-      ApiClub.get(client, slug).flatMap { apiClub =>
+      ApiClub.get(run.client, slug).flatMap { apiClub =>
         // Persist the Club row regardless — value for future runs and for ClubDataApp's slug index.
         // `Club.upsert` deliberately preserves an existing latest_match_at, so this doesn't clobber DB state.
-        Club.upsertResolvingSlugConflict(Club.fromApi(apiClub, slug), client) *> {
+        Club.upsertResolvingSlugConflict(Club.fromApi(apiClub, slug), run.client) *> {
           // Activity check uses local latest_match_at, NOT apiClub.lastActivity (the API field is unreliable —
           // active clubs sometimes report 12-year-old timestamps). For freshly-fetched clubs the DB value is None,
-          // which the SQL early-prune treats as active by convention. ClubDataApp will fill it in later.
+          // which passesGate treats as active by convention (matching the SQL early-prune). ClubDataApp will fill
+          // it in later.
           val latestMatchAt = existingClub.flatMap(_.latestMatchAt)
-          val sizable       = apiClub.membersCount >= min
-          val active        = latestMatchAt.forall(_.isAfter(cutoff))
-          val adminRatioOk  = apiClub.admin.size.toDouble / apiClub.membersCount < ClubAdmin.MaxAdminRatio
-          if (!(sizable && active && adminRatioOk)) ZIO.succeed(false)
+          if (!passesGate(apiClub.membersCount, apiClub.admin.size, latestMatchAt, min, cutoff)) ZIO.succeed(false)
           else {
             // Resolve + persist admin rows. The returned set is the canonical admin set for this club —
             // we both store it (for future early-prune runs) and consume it for the rejection check.
             // We only reach here from the empty-admin-rows branch, so existingAdminIds is always empty.
             val adminUsernames = ClubAdmin.extractAdminUsernames(apiClub)
             ClubAdminResolver
-              .resolveAndPersistAdmins(client, apiClub.clubId, adminUsernames, existingAdminIds = Set.empty)
+              .resolveAndPersistAdmins(run.client, apiClub.clubId, adminUsernames, existingAdminIds = Set.empty)
               .map(_.contains(candidatePlayerId))
           }
         }
       }.catchAll { error =>
-        CcasLogger.info(s"[Recruitment] Admin late-check failed for $slug: ${error.getMessage}").as(false)
+        run.failedAdminSlugs.update(_ + slug) *>
+          CcasLogger.info(s"[Recruitment] Admin late-check failed for $slug: ${error.getMessage}").as(false)
       }
+
+    /** Mirrors the SQL gate from `ClubAdmin.selectPlayerIdsForSizableClubs` so the in-filter check stays consistent
+      * with the run-start early prune: a club qualifies when it has at least `min` members, was active within
+      * `MaxInactivity` (NULL `latestMatchAt` is treated as active — benefit of the doubt for unrefreshed clubs), and
+      * isn't over-administered.
+      */
+    private def passesGate(
+      membersCount: Int,
+      adminCount: Int,
+      latestMatchAt: Option[Instant],
+      min: Int,
+      cutoff: Instant
+    ): Boolean = {
+      val sizable      = membersCount >= min
+      val active       = latestMatchAt.forall(_.isAfter(cutoff))
+      val adminRatioOk = membersCount > 0 && adminCount.toDouble / membersCount < ClubAdmin.MaxAdminRatio
+      sizable && active && adminRatioOk
+    }
   }
 
   object CheckDailyStats extends RecruitmentFilter {

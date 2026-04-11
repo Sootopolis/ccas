@@ -33,7 +33,12 @@ private[recruitment] case class RunContext(
   excludedSlugs: Set[ClubSlug],
   now: Instant,
   discoveredClubs: Ref[Set[ClubSlug]],
-  discoveredOpponents: Ref[Set[Username]]
+  discoveredOpponents: Ref[Set[Username]],
+  /** Slugs whose `ApiClub.get` failed during this run (e.g. persistent 404s on restricted mega-clubs). The
+    * [[ccas.analysis.apps.recruitment.RecruitmentFilterDefs.CheckAdminOfDiscoveredClub]] filter consults this set to
+    * avoid re-fetching slugs we've already given up on for this run.
+    */
+  failedAdminSlugs: Ref[Set[ClubSlug]]
 )
 
 /** Accumulated per-candidate state — populated as filters run.

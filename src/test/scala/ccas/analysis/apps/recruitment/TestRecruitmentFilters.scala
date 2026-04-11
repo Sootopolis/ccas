@@ -191,7 +191,8 @@ object TestRecruitmentFilters extends ZIOSpecDefault {
     testAdminOfSizableClubRejected,
     testAdminOfSmallClubAccepted,
     testAdminOfNewlyDiscoveredSizableClubRejected,
-    testAdminOfNewlyDiscoveredSmallClubAccepted
+    testAdminOfNewlyDiscoveredSmallClubAccepted,
+    testTwoCandidatesAdminsOfSameNewlyDiscoveredClub
   )
 
   private def testRejectsClosedAccount = test("rejects closed account") {
@@ -671,6 +672,37 @@ object TestRecruitmentFilters extends ZIOSpecDefault {
       cands.head.outcome == CandidateOutcome.Rejected,
       persistedClub.exists(_.membersCount.contains(500)),
       persistedAdmins.contains(pid0)
+    )
+  }
+
+  /** Regression test for the mid-run skip bug: when the late-confirm filter persists club_admin rows during a run,
+    * subsequent candidates with the same club must NOT be silently accepted just because the rows now exist (the
+    * run-start early prune didn't see them). Two candidates, both admins of the same freshly-discovered sizable club —
+    * both must be rejected.
+    */
+  private def testTwoCandidatesAdminsOfSameNewlyDiscoveredClub = test(
+    "both admins of newly discovered sizable club rejected when processed sequentially"
+  ) {
+    val mysterySlug = "shared-mystery-club"
+    val responses = Map(
+      "player/alice"       -> apiPlayerJson(200, "alice"),
+      "player/bob"         -> apiPlayerJson(201, "bob"),
+      "player/alice/clubs" -> apiPlayerClubsJson(List(mysterySlug)),
+      "player/bob/clubs"   -> apiPlayerClubsJson(List(mysterySlug)),
+      s"club/$mysterySlug" ->
+        apiClubJson(sizableClubId.value, mysterySlug, admins = List("alice", "bob"), membersCount = 500)
+    )
+    val criteria = makeCriteria().copy(avoidAdminMinClubSize = Some(100))
+    for {
+      _          <- seedDb
+      criteriaId <- seedCriteria(criteria)
+      runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0)
+      client     <- fakeChessComClient(responses)
+      _          <- evalCandidates(client, runId, List(Username("alice"), Username("bob")), criteria)
+      cands      <- RecruitmentCandidate.selectByRun(runId)
+    } yield assertTrue(
+      cands.size == 2,
+      cands.forall(_.outcome == CandidateOutcome.Rejected)
     )
   }
 
