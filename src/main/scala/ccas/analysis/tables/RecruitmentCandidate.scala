@@ -52,14 +52,6 @@ object RecruitmentCandidate {
         .query[RecruitmentCandidate].run().toList
     }
 
-  def selectLatestInvited(playerId: PlayerId): ZIO[PostgresClient, SQLException, Option[RecruitmentCandidate]] =
-    connectZIO {
-      val invited = CandidateOutcome.Invited.toString
-      sql"""SELECT $selectCols FROM recruitment_candidate
-            WHERE player_id = $playerId AND outcome = $invited
-            ORDER BY evaluated_at DESC LIMIT 1""".query[RecruitmentCandidate].run().headOption
-    }
-
   def selectLatestInvitedByClub(
     playerId: PlayerId,
     clubId: ClubId

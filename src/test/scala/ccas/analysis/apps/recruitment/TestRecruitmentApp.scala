@@ -225,7 +225,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
         loadedOutcomes == outcomes.toSet
       )
     },
-    test("RecruitmentCandidate selectLatestInvited") {
+    test("RecruitmentCandidate selectLatestInvitedByClub returns latest for matching club") {
       for {
         _          <- seedDb
         _          <- seedPlayer(pid0)
@@ -240,10 +240,28 @@ object TestRecruitmentApp extends ZIOSpecDefault {
           .insert(
             RecruitmentCandidate(runId2, pid0, Times.t1, CandidateOutcome.Invited, None)
           )
-        latest <- RecruitmentCandidate.selectLatestInvited(pid0)
+        latest <- RecruitmentCandidate.selectLatestInvitedByClub(pid0, clubId)
       } yield assertTrue(
         latest.isDefined,
         latest.get.runId == runId2
+      )
+    },
+    test("RecruitmentCandidate selectLatestInvitedByClub ignores other clubs") {
+      val otherClub = Club(sourceClubId, Times.t0, ClubSlug("source-club"), "Source Club", None, None)
+      for {
+        _          <- seedDb
+        _          <- Club.upsert(otherClub)
+        _          <- seedPlayer(pid0)
+        criteriaId <- seedCriteria(makeCriteria())
+        otherRunId <- RecruitmentRun.insert(sourceClubId, criteriaId, RunTrigger.Cli, Times.t0)
+        _ <- RecruitmentCandidate.insert(
+          RecruitmentCandidate(otherRunId, pid0, Times.t0, CandidateOutcome.Invited, None)
+        )
+        forOtherClub <- RecruitmentCandidate.selectLatestInvitedByClub(pid0, sourceClubId)
+        forOurClub   <- RecruitmentCandidate.selectLatestInvitedByClub(pid0, clubId)
+      } yield assertTrue(
+        forOtherClub.isDefined,
+        forOurClub.isEmpty
       )
     },
     test("defaultDaily round-trips through DB via insert/selectId") {

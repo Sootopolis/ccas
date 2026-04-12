@@ -70,7 +70,7 @@ private[recruitment] object RecruitmentFilterDefs {
     def apply(env: FilterEnv): RIO[PostgresClient, FilterResult] =
       for {
         apiPlayer    <- requireApiPlayer(env)
-        recentInvite <- RecruitmentCandidate.selectLatestInvited(apiPlayer.playerId)
+        recentInvite <- RecruitmentCandidate.selectLatestInvitedByClub(apiPlayer.playerId, env.run.clubId)
       } yield {
         val rejected = env.run.criteria.daysSinceLastInvited.exists { days =>
           recentInvite.exists(c => ChronoUnit.DAYS.between(c.evaluatedAt, env.run.now) < days)
