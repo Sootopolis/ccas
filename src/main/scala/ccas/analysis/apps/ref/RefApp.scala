@@ -111,6 +111,13 @@ object RefApp extends ZIOAppDefault {
         CcasLogger.foreachParProgress(clubs, ApiParallelism)((n, total) => s"  Resolving clubs: $n/$total") { club =>
           RefResolution.resolveClub(ctx, club)
         }
+      }.onInterrupt {
+        (for {
+          db  <- ctx.clubsResolvedDb.get
+          api <- ctx.clubsResolvedApi.get
+          sk  <- ctx.clubsSkippedNew.get
+          _   <- CcasLogger.info(s"Interrupted resolveClubs: $db (DB) + $api (API) resolved, $sk skipped / ${clubs.size}")
+        } yield ())
       }
       db         <- ctx.clubsResolvedDb.get
       api        <- ctx.clubsResolvedApi.get
@@ -131,6 +138,13 @@ object RefApp extends ZIOAppDefault {
         CcasLogger.foreachParProgress(players, ApiParallelism)((n, total) => s"  Resolving players: $n/$total") { player =>
           RefResolution.resolvePlayer(ctx, player)
         }
+      }.onInterrupt {
+        (for {
+          db  <- ctx.playersResolvedDb.get
+          api <- ctx.playersResolvedApi.get
+          sk  <- ctx.playersSkippedNew.get
+          _   <- CcasLogger.info(s"Interrupted resolvePlayers: $db (DB) + $api (API) resolved, $sk skipped / ${players.size}")
+        } yield ())
       }
       db         <- ctx.playersResolvedDb.get
       api        <- ctx.playersResolvedApi.get
@@ -207,8 +221,14 @@ object RefApp extends ZIOAppDefault {
     if (!upgradeRefs) { ZIO.succeed((0, 0, 0, 0)) }
     else {
       for {
-        players       <- selectTournamentOnlyPlayersWithSlug
-        _             <- CcasLogger.info(s"Tournament-only players eligible for upgrade: ${players.size}")
+        allPlayers   <- selectTournamentOnlyPlayersWithSlug
+        newTournRefs <- ctx.newTournamentRefPlayerIds.get
+        players       = allPlayers.filterNot(trp => newTournRefs.contains(trp.playerId))
+        skipped       = allPlayers.size - players.size
+        _ <- CcasLogger.info(
+          s"Tournament-only players eligible for upgrade: ${players.size}" +
+            (if (skipped > 0) s" ($skipped skipped, created this run)" else "")
+        )
         matchUpgraded <- Ref.make(0)
         tournUpgraded <- Ref.make(0)
         _ <- ZIO.scoped {
@@ -223,6 +243,12 @@ object RefApp extends ZIOAppDefault {
                 }
             }
           }
+        }.onInterrupt {
+          (for {
+            mc <- matchUpgraded.get
+            tc <- tournUpgraded.get
+            _  <- CcasLogger.info(s"Interrupted upgradeTournamentPlayers: $mc match, $tc tournament upgrades / ${players.size}")
+          } yield ())
         }
         matchCount <- matchUpgraded.get
         tournCount <- tournUpgraded.get

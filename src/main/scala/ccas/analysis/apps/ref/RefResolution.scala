@@ -183,7 +183,8 @@ private[ref] object RefResolution {
                 val ref = PlayerTournamentRef(player.playerId, slug, playerIdx)
                 withTransaction {
                   PlayerTournamentRef.upsert(ref) *> PlayerRefSkip.deleteId(player.playerId)
-                } *> ctx.playersResolvedApi.update(_ + 1).as(ResolveResult.Resolved)
+                } *> ctx.newTournamentRefPlayerIds.update(_ + player.playerId) *>
+                  ctx.playersResolvedApi.update(_ + 1).as(ResolveResult.Resolved)
               }
             }
           }

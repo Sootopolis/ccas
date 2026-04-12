@@ -5,9 +5,10 @@ import java.time.Instant
 import zio.{RIO, Ref, Scope, Task, ZIO, ZIOAppArgs, ZIOAppDefault}
 import zio.http.Client
 
-import ccas.analysis.tables.{Club, ClubAdmin, ClubMatch, Tables}
+import ccas.analysis.apps.ref.RefHelpers
+import ccas.analysis.tables.{Club, ClubAdmin, ClubMatch, ClubMatchRef, Tables}
 import ccas.api.club.{ApiClub, ApiClubMatches}
-import ccas.api.misc.subtypes.ClubSlug
+import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 import ccas.utils.{CcasLogger, OutputFile}
 import ccas.utils.client.ChessComClient
 import ccas.utils.sql.PostgresClient
@@ -39,7 +40,7 @@ object ClubDataApp extends ZIOAppDefault {
     Club.selectAll.flatMap(refreshClubs)
 
   /** Refreshes only the clubs whose slugs match. Unknown slugs are logged and skipped. */
-  def refreshSlugs(slugs: List[ClubSlug]): RIO[CcasLogger & ChessComClient & PostgresClient, RefreshResult] =
+  private def refreshSlugs(slugs: List[ClubSlug]): RIO[CcasLogger & ChessComClient & PostgresClient, RefreshResult] =
     for {
       resolved <- ZIO.foreach(slugs)(slug => Club.selectBySlug(slug).map(slug -> _))
       (missing, found) = resolved.partitionMap {
@@ -120,28 +121,59 @@ object ClubDataApp extends ZIOAppDefault {
     val now             = Instant.now()
     val skipCutoff      = now.minus(ClubAdmin.ApiSkipThreshold)
     val cachedFreshEnough = club.latestMatchAt.exists(_.isAfter(skipCutoff))
-    if (cachedFreshEnough) ZIO.unit
-    else
+    ZIO.unlessDiscard(cachedFreshEnough) {
       ClubMatch.selectLatestActivityForClub(club.clubId).flatMap { dbLatest =>
         val dbFreshEnough = dbLatest.exists(_.isAfter(skipCutoff))
         if (dbFreshEnough) Club.updateLatestMatchAt(club.clubId, dbLatest).unit
-        else apiLatestActivity(client, club.slug, now).catchAll { error =>
-          CcasLogger.info(s"[ClubData] Match fetch failed for ${club.slug}: ${error.getMessage}").as(None)
-        }.flatMap { apiLatest =>
-          val combined = List(club.latestMatchAt, dbLatest, apiLatest).flatten.maxOption
-          ZIO.whenDiscard(combined != club.latestMatchAt)(Club.updateLatestMatchAt(club.clubId, combined))
+        else {
+          fetchClubMatches(client, club.slug).asSome
+            .catchAll { error =>
+              CcasLogger.info(s"[ClubData] Match fetch failed for ${club.slug}: ${error.getMessage}").as(None)
+            }
+            .flatMap { matchesOpt =>
+              val apiLatest = matchesOpt.flatMap(latestTimestamp(_, now))
+              val combined  = List(club.latestMatchAt, dbLatest, apiLatest).flatten.maxOption
+              ZIO.whenDiscard(combined != club.latestMatchAt)(Club.updateLatestMatchAt(club.clubId, combined)) *>
+                ZIO.foreachDiscard(matchesOpt)(tryPopulateClubMatchRef(client, club.clubId, club.slug, _))
+            }
         }
       }
+    }
   }
 
-  /** Fetches `ApiClubMatches` and returns the most recent activity timestamp: `now` if any registered match exists
-    * (signalling current activity), otherwise the max `start_time` across in-progress and finished matches.
+  private def fetchClubMatches(client: ChessComClient, clubSlug: ClubSlug): Task[ApiClubMatches] =
+    client.get[ApiClubMatches](ApiClubMatches.getUrl(clubSlug))
+
+  /** Returns the most recent activity timestamp: `now` if any registered match exists (signalling current activity),
+    * otherwise the max `start_time` across in-progress and finished matches.
     */
-  private def apiLatestActivity(client: ChessComClient, clubSlug: ClubSlug, now: Instant): Task[Option[Instant]] =
-    client.get[ApiClubMatches](ApiClubMatches.getUrl(clubSlug)).map { matches =>
-      if (matches.registered.nonEmpty) Some(now)
-      else (matches.inProgress.map(_.startTime) ++ matches.finished.map(_.startTime))
-        .map(Instant.ofEpochSecond).maxOption
+  private def latestTimestamp(matches: ApiClubMatches, now: Instant): Option[Instant] =
+    if (matches.registered.nonEmpty) Some(now)
+    else (matches.inProgress.map(_.startTime) ++ matches.finished.map(_.startTime))
+      .map(Instant.ofEpochSecond).maxOption
+
+  /** Opportunistically populates a `ClubMatchRef` for a club that doesn't have one yet, using already-fetched
+    * `ApiClubMatches` data. Failures are silently caught — RefApp will pick up any missed clubs on its next run.
+    */
+  private def tryPopulateClubMatchRef(
+    client: ChessComClient,
+    clubId: ClubId,
+    slug: ClubSlug,
+    matches: ApiClubMatches
+  ): RIO[CcasLogger & PostgresClient, Unit] =
+    ZIO.unlessDiscard(matches.finished.isEmpty) {
+      ClubMatchRef.selectId(clubId).flatMap {
+        case Some(_) => ZIO.unit
+        case None =>
+          val parsed = RefHelpers.parseMatchUrl(matches.finished.head.`@id`)
+          RefHelpers.fetchTeamMatchTeams(client, parsed.matchId, parsed.isLive).flatMap { teams =>
+            ZIO.foreachDiscard(RefHelpers.findClubIsTeam1(teams, slug)) { isTeam1 =>
+              ClubMatchRef.upsert(ClubMatchRef(clubId, parsed.matchId, parsed.isLive, isTeam1)).unit
+            }
+          }
+      }
+    }.catchAll { error =>
+      CcasLogger.debug(s"[ClubData] Opportunistic ref failed for $slug: ${error.getMessage}")
     }
 
   private def formatReport(data: RefreshResult): String =
