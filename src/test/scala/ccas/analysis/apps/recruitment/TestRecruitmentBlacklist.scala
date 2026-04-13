@@ -113,7 +113,7 @@ object TestRecruitmentBlacklist extends ZIOSpecDefault {
         Some("toxic"),
         Some(futureInstant)
       )
-        .provideEnvironment(zio.ZEnvironment(client, pgClient))
+        .provideEnvironment(zio.ZEnvironment(client, pgClient, TestCcasLogger.noop))
       entries <- RecruitmentBlacklist.selectByClub(blacklistClubId)
     } yield assertTrue(
       entries.size == 1,
@@ -133,7 +133,7 @@ object TestRecruitmentBlacklist extends ZIOSpecDefault {
       client <- fakeChessComClient(responses)
       pgClient <- ZIO.service[PostgresClient]
       _ <- BlacklistApp.addToBlacklist(blacklistClubSlug, List(Username("target-player")), None, None)
-        .provideEnvironment(zio.ZEnvironment(client, pgClient))
+        .provideEnvironment(zio.ZEnvironment(client, pgClient, TestCcasLogger.noop))
       entries <- RecruitmentBlacklist.selectByClub(blacklistClubId)
     } yield assertTrue(
       entries.size == 1,
@@ -152,14 +152,14 @@ object TestRecruitmentBlacklist extends ZIOSpecDefault {
       client <- fakeChessComClient(responses)
       pgClient <- ZIO.service[PostgresClient]
       _ <- BlacklistApp.addToBlacklist(blacklistClubSlug, List(Username("target-player")), Some("first"), None)
-        .provideEnvironment(zio.ZEnvironment(client, pgClient))
+        .provideEnvironment(zio.ZEnvironment(client, pgClient, TestCcasLogger.noop))
       _ <- BlacklistApp.addToBlacklist(
         blacklistClubSlug,
         List(Username("target-player")),
         Some("updated"),
         Some(Times.t3)
       )
-        .provideEnvironment(zio.ZEnvironment(client, pgClient))
+        .provideEnvironment(zio.ZEnvironment(client, pgClient, TestCcasLogger.noop))
       entries <- RecruitmentBlacklist.selectByClub(blacklistClubId)
     } yield assertTrue(
       entries.size == 1,
@@ -229,7 +229,7 @@ object TestRecruitmentBlacklist extends ZIOSpecDefault {
         List(Username("alice"), Username("bob"), Username("charlie")),
         Some("batch ban"),
         None
-      ).provideEnvironment(zio.ZEnvironment(client, pgClient))
+      ).provideEnvironment(zio.ZEnvironment(client, pgClient, TestCcasLogger.noop))
       entries <- RecruitmentBlacklist.selectByClub(blacklistClubId)
     } yield assertTrue(
       entries.size == 3,
@@ -252,7 +252,7 @@ object TestRecruitmentBlacklist extends ZIOSpecDefault {
       pgClient <- ZIO.service[PostgresClient]
       before <- Club.selectId(freshClubId)
       _ <- BlacklistApp.addToBlacklist(freshClubSlug, List(Username("target-player")), None, None)
-        .provideEnvironment(zio.ZEnvironment(client, pgClient))
+        .provideEnvironment(zio.ZEnvironment(client, pgClient, TestCcasLogger.noop))
       after <- Club.selectId(freshClubId)
     } yield assertTrue(
       before.isEmpty,

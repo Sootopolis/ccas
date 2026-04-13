@@ -11,6 +11,7 @@ import ccas.analysis.apps.recruitment.BlacklistApp
 import ccas.analysis.tables.*
 import ccas.api.misc.subtypes.{ClubSlug, PlayerId, Username}
 import ccas.server.routes.RouteHelpers.*
+import ccas.utils.CcasLogger
 import ccas.utils.client.ChessComClient
 import ccas.utils.errors.NotFoundException
 
@@ -52,7 +53,7 @@ object BlacklistRoutes {
 
   // --- Routes ---
 
-  val routes: Routes[ChessComClient & PostgresClient, Nothing] = Routes(
+  val routes: Routes[CcasLogger & ChessComClient & PostgresClient, Nothing] = Routes(
     Method.GET / "api" / "blacklist" / string("clubSlug") -> handler { (clubSlugStr: String, _: Request) =>
       val clubSlug = ClubSlug.wrap(clubSlugStr)
       (for {
