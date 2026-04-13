@@ -42,7 +42,7 @@ object TestMembershipApp extends ZIOSpecDefault {
   private val pid5 = PlayerId(105)
 
   private val clubId = ClubId(500)
-  private val club   = Club(clubId, Times.t0, ClubSlug("test-club"), "Test Club", None, None)
+  private val club   = Club(clubId, Times.t0, ClubSlug("test-club"), "Test Club", None, None, None)
 
   // --- Spec ---
 
@@ -96,7 +96,7 @@ object TestMembershipApp extends ZIOSpecDefault {
     } yield ()
 
   private val otherClubId = ClubId(501)
-  private val otherClub   = Club(otherClubId, Times.t0, ClubSlug("other-club"), "Other Club", None, None)
+  private val otherClub   = Club(otherClubId, Times.t0, ClubSlug("other-club"), "Other Club", None, None, None)
 
   private def seedRecruitmentInvitation(
     forClubId: ClubId,

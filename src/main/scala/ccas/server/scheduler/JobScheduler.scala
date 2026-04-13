@@ -101,7 +101,7 @@ object JobScheduler {
           (_: Option[JobRunId]) =>
             requireClubSlug.flatMap(name => StatsApp.memberStats(name).unit)
         case JobKind.ClubData =>
-          (_: Option[JobRunId]) => ClubDataApp.refresh.unit
+          (_: Option[JobRunId]) => ClubDataApp.refresh(minAgeHours = None).unit
       }
 
       runner.submit(schedule.kind, schedule.clubId, schedule.params, RunTrigger.Scheduled, effect)

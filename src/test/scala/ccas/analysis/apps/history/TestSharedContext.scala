@@ -25,8 +25,8 @@ object TestSharedContext extends ZIOSpecDefault {
   private val clubASlug = ClubSlug("club-a")
   private val clubBId   = ClubId(200)
   private val clubBSlug = ClubSlug("club-b")
-  private val clubA     = Club(clubAId, Times.t0, clubASlug, "Club A", None, None)
-  private val clubB     = Club(clubBId, Times.t0, clubBSlug, "Club B", None, None)
+  private val clubA     = Club(clubAId, Times.t0, clubASlug, "Club A", None, None, None)
+  private val clubB     = Club(clubBId, Times.t0, clubBSlug, "Club B", None, None, None)
 
   private val player1Id = PlayerId(1001)
   private val player1   = Player(player1Id, Times.t0, Username("alice"), PlayerStatusCategory.Active, None, Times.t0)

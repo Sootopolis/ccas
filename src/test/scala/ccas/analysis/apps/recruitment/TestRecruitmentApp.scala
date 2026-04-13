@@ -247,7 +247,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
       )
     },
     test("RecruitmentCandidate selectLatestInvitedByClub ignores other clubs") {
-      val otherClub = Club(sourceClubId, Times.t0, ClubSlug("source-club"), "Source Club", None, None)
+      val otherClub = Club(sourceClubId, Times.t0, ClubSlug("source-club"), "Source Club", None, None, None)
       for {
         _          <- seedDb
         _          <- Club.upsert(otherClub)
@@ -393,7 +393,7 @@ object TestRecruitmentApp extends ZIOSpecDefault {
 
       for {
         _      <- seedDb
-        _      <- Club.upsert(Club(discoverableClubId, Times.t0, discoverableClubSlug, "Discoverable Club", None, None))
+        _      <- Club.upsert(Club(discoverableClubId, Times.t0, discoverableClubSlug, "Discoverable Club", None, None, None))
         _      <- seedCriteria(criteria)
         client <- fakeChessComClient(responses)
         result <- runRecruit(client, explore = false)

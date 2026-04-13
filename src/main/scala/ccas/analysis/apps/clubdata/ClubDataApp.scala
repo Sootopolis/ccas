@@ -1,8 +1,8 @@
 package ccas.analysis.apps.clubdata
 
-import java.time.Instant
+import java.time.{Duration, Instant}
 
-import zio.{RIO, Ref, Scope, Task, ZIO, ZIOAppArgs, ZIOAppDefault}
+import zio.{Chunk, RIO, Ref, Scope, Task, ZIO, ZIOAppArgs, ZIOAppDefault}
 import zio.http.Client
 
 import ccas.analysis.apps.ref.RefHelpers
@@ -17,10 +17,13 @@ object ClubDataApp extends ZIOAppDefault {
 
   override def run: RIO[ZIOAppArgs & Scope, Unit] =
     (for {
-      args <- ZIOAppArgs.getArgs
-      data <- args.toList match {
-        case Nil   => refresh
-        case slugs => refreshSlugs(slugs.map(ClubSlug.wrap))
+      rawArgs <- ZIOAppArgs.getArgs
+      parsed  <- ZIO.fromEither(parseMinAgeArg(rawArgs)).mapError(new IllegalArgumentException(_))
+      (minAgeHours, rest) = parsed
+      slugArgs            = rest.filterNot(_.startsWith("--")).toList
+      data <- slugArgs match {
+        case Nil   => refresh(minAgeHours)
+        case slugs => refreshSlugs(slugs.map(ClubSlug.wrap), minAgeHours)
       }
       _ <- OutputFile.writeAndLogGlobal("clubdata", formatReport(data), "_ccas")
     } yield ()).provideSome[ZIOAppArgs & Scope](
@@ -30,17 +33,40 @@ object ClubDataApp extends ZIOAppDefault {
       PostgresClient.live(onInit = Tables.ensureTables)
     )
 
+  /** Parses `--min-age <hours>` from CLI args. `--min-age 24` → `Right((Some(24), argsWithoutFlag))`; missing flag →
+    * `Right((None, args))`. Bare `--min-age` (no integer follows) is an error because unlike HistoryApp's `--refresh`,
+    * ClubDataApp's default behaviour already refreshes everything, so bare `--min-age` would silently do nothing.
+    */
+  private[clubdata] def parseMinAgeArg(args: Chunk[String]): Either[String, (Option[Int], Chunk[String])] = {
+    val idx = args.indexOf("--min-age")
+    if (idx < 0) { Right((None, args)) }
+    else {
+      args.lift(idx + 1).flatMap(_.toIntOption) match {
+        case Some(hours) => Right((Some(hours), args.patch(idx, Chunk.empty, 2)))
+        case None        => Left("--min-age requires an integer hours argument, e.g. --min-age 24")
+      }
+    }
+  }
+
   case class RefreshResult(clubsProcessed: Int, clubsFailed: Int, clubsAdminChanged: Int, totalAdmins: Int)
 
   private case class ClubResult(adminCount: Int, failed: Boolean, adminChanged: Boolean)
   private val ClubFailed = ClubResult(0, failed = true, adminChanged = false)
 
-  /** Refreshes club profile data (admins, member count, slug, latest_match_at) for all known clubs. */
-  def refresh: RIO[CcasLogger & ChessComClient & PostgresClient, RefreshResult] =
-    Club.selectAll.flatMap(refreshClubs)
+  /** Refreshes club profile data (admins, member count, slug, latest_match_at, fetched_at) for all known clubs. When
+    * `minAgeHours` is set, clubs refreshed within the last N hours are skipped; clubs with a null `fetched_at` (never
+    * refreshed by ClubDataApp) are always eligible.
+    */
+  def refresh(minAgeHours: Option[Int]): RIO[CcasLogger & ChessComClient & PostgresClient, RefreshResult] =
+    Club.selectAll.flatMap(refreshEligible(_, minAgeHours))
 
-  /** Refreshes only the clubs whose slugs match. Unknown slugs are logged and skipped. */
-  private def refreshSlugs(slugs: List[ClubSlug]): RIO[CcasLogger & ChessComClient & PostgresClient, RefreshResult] =
+  /** Refreshes only the clubs whose slugs match. Unknown slugs are logged and skipped. When `minAgeHours` is set, the
+    * age filter is applied to the resolved clubs (skipped entries logged separately from unknown slugs).
+    */
+  private def refreshSlugs(
+    slugs: List[ClubSlug],
+    minAgeHours: Option[Int]
+  ): RIO[CcasLogger & ChessComClient & PostgresClient, RefreshResult] =
     for {
       resolved <- ZIO.foreach(slugs)(slug => Club.selectBySlug(slug).map(slug -> _))
       (missing, found) = resolved.partitionMap {
@@ -50,8 +76,24 @@ object ClubDataApp extends ZIOAppDefault {
       _ <- ZIO.whenDiscard(missing.nonEmpty)(
         CcasLogger.info(s"[ClubData] Unknown slugs (skipped): ${missing.mkString(", ")}")
       )
-      result <- refreshClubs(found)
+      result <- refreshEligible(found, minAgeHours)
     } yield result
+
+  private def refreshEligible(
+    clubs: List[Club],
+    minAgeHours: Option[Int]
+  ): RIO[CcasLogger & ChessComClient & PostgresClient, RefreshResult] = {
+    val eligible = minAgeHours match {
+      case None => clubs
+      case Some(hours) =>
+        val cutoff = Instant.now().minus(Duration.ofHours(hours.toLong))
+        clubs.filter(_.fetchedAt.forall(_.isBefore(cutoff)))
+    }
+    val skipped = clubs.size - eligible.size
+    ZIO.whenDiscard(skipped > 0)(
+      CcasLogger.info(s"[ClubData] --min-age filter: skipping $skipped recently-refreshed clubs")
+    ) *> refreshClubs(eligible)
+  }
 
   private def refreshClubs(clubs: List[Club]): RIO[CcasLogger & ChessComClient & PostgresClient, RefreshResult] =
     ZIO.scoped {
@@ -106,6 +148,8 @@ object ClubDataApp extends ZIOAppDefault {
       adminUsernames   = ClubAdmin.extractAdminUsernames(apiClub)
       existingAdminIds <- ClubAdmin.selectPlayerIdsByClub(club.clubId)
       allAdminIds      <- ClubAdminResolver.resolveAndPersistAdmins(client, club.clubId, adminUsernames, existingAdminIds)
+      // Must remain the last step: --min-age relies on fetched_at being stamped only on full success.
+      _ <- Club.updateFetchedAt(club.clubId, Instant.now())
     } yield ClubResult(allAdminIds.size, failed = false, adminChanged = allAdminIds != existingAdminIds)
 
   /** Refreshes `club.latest_match_at` using a tiered strategy to minimise API calls:
