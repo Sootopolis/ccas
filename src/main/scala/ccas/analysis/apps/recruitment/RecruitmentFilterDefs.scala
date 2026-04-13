@@ -207,7 +207,6 @@ private[recruitment] object RecruitmentFilterDefs {
         playerClubs <- env.run.client.get[ApiPlayerClubs](ApiPlayerClubs.getUrl(env.candidate.username))
         clubNames = playerClubs.clubs.map(_.clubName).toSet
         _ <- requireApiPlayer(env)
-        _ <- env.run.discoveredClubs.update(_ ++ clubNames)
       } yield {
         val clubCount = playerClubs.clubs.size
         val criteria  = env.run.criteria

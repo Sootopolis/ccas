@@ -464,7 +464,6 @@ object RecruitmentTestSupport {
         criteria.avoidAdminMinClubSize.fold(ZIO.succeed(Set.empty[PlayerId]))(
           ClubAdmin.selectPlayerIdsForSizableClubs
         )
-      discoveredClubs     <- Ref.make(Set.empty[ClubSlug])
       discoveredOpponents <- Ref.make(Set.empty[Username])
       failedAdminSlugs    <- Ref.make(Set.empty[ClubSlug])
       excludedSlugs <- ZIO.foreach(criteria.excludeClubs)(Club.selectId(_))
@@ -479,7 +478,6 @@ object RecruitmentTestSupport {
         adminExcludedPlayerIds,
         excludedSlugs,
         Instant.now(),
-        discoveredClubs,
         discoveredOpponents,
         failedAdminSlugs
       )
