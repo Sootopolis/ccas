@@ -6,6 +6,8 @@ import zio.json.{JsonCodec, JsonDecoder, JsonEncoder}
 import zio.Chunk
 import zio.Config.Error.InvalidData
 
+import ccas.utils.opaque.OpaqueHelpers.orThrowDbRead
+
 trait ShortCompanion {
   opaque type Type = Short
 
@@ -26,7 +28,7 @@ trait ShortCompanion {
   )
   given JsonDecoder[Type]  = summon[JsonCodec[Type]].decoder
   given JsonEncoder[Type]  = summon[JsonCodec[Type]].encoder
-  given DbCodec[Type]      = DbCodec[Short].biMap(wrap, unwrap)
+  given DbCodec[Type] = DbCodec[Short].biMap(raw => validated(raw).orThrowDbRead(name), unwrap)
   given DeriveConfig[Type] = DeriveConfig[Int].mapOrFail { i =>
     if (i < Short.MinValue || i > Short.MaxValue) Left(InvalidData(Chunk.empty, s"$name value $i out of Short range"))
     else validated(i.toShort).left.map(InvalidData(Chunk.empty, _))

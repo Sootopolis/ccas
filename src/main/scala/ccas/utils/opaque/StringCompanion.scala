@@ -6,6 +6,8 @@ import zio.json.{JsonCodec, JsonDecoder, JsonEncoder}
 import zio.Chunk
 import zio.Config.Error.InvalidData
 
+import ccas.utils.opaque.OpaqueHelpers.orThrowDbRead
+
 trait StringCompanion {
   opaque type Type = String
 
@@ -27,7 +29,12 @@ trait StringCompanion {
   given JsonCodec[Type]    = JsonCodec.string.transformOrFail(validated, unwrap)
   given JsonDecoder[Type]  = summon[JsonCodec[Type]].decoder
   given JsonEncoder[Type]  = summon[JsonCodec[Type]].encoder
-  given DbCodec[Type]      = DbCodec[String].biMap(wrap, unwrap)
+  // Null passthrough is required: Magnum's OptionCodec calls the inner readSingle
+  // *before* checking rs.wasNull, so returning null here lets Option[Type] columns work.
+  given DbCodec[Type] = DbCodec[String].biMap(
+    raw => if (raw == null) raw else validated(raw).orThrowDbRead(name),
+    unwrap
+  )
   given DeriveConfig[Type] = DeriveConfig[String].mapOrFail(validated(_).left.map(InvalidData(Chunk.empty, _)))
   given Ordering[Type]     = Ordering.by(unwrap)
 

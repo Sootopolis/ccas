@@ -48,7 +48,10 @@ object ClubMatchId extends LongCompanion {
   override protected def validateRaw(raw: Long): Either[String, Long] =
     Either.cond(raw >= 0L, raw, s"$name must be >= 0")
 
-  def fromUrl(url: URL): ClubMatchId = wrap(url.path.segments.last.toLong)
+  def fromUrl(url: URL): ClubMatchId = validated(url.path.segments.last.toLong).fold(
+    msg => throw new IllegalArgumentException(s"$name.fromUrl($url): $msg"),
+    identity
+  )
 }
 
 type ClubAlias = ClubAlias.Type
@@ -65,7 +68,10 @@ object TournamentSlug extends StringCompanion {
   override protected def validateRaw(raw: String): Either[String, String] =
     Either.cond(raw.nonEmpty, raw, s"$name must not be empty")
 
-  def fromUrl(url: URL): TournamentSlug = wrap(url.path.segments.last)
+  def fromUrl(url: URL): TournamentSlug = validated(url.path.segments.last).fold(
+    msg => throw new IllegalArgumentException(s"$name.fromUrl($url): $msg"),
+    identity
+  )
 }
 
 type JobRunId = JobRunId.Type

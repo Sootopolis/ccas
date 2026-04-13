@@ -6,6 +6,8 @@ import zio.json.{JsonCodec, JsonDecoder, JsonEncoder}
 import zio.Chunk
 import zio.Config.Error.InvalidData
 
+import ccas.utils.opaque.OpaqueHelpers.orThrowDbRead
+
 trait DoubleCompanion {
   opaque type Type = Double
 
@@ -21,7 +23,7 @@ trait DoubleCompanion {
   given JsonCodec[Type]    = JsonCodec.double.transformOrFail(validated, unwrap)
   given JsonDecoder[Type]  = summon[JsonCodec[Type]].decoder
   given JsonEncoder[Type]  = summon[JsonCodec[Type]].encoder
-  given DbCodec[Type]      = DbCodec[Double].biMap(wrap, unwrap)
+  given DbCodec[Type] = DbCodec[Double].biMap(raw => validated(raw).orThrowDbRead(name), unwrap)
   given DeriveConfig[Type] = DeriveConfig[Double].mapOrFail(validated(_).left.map(InvalidData(Chunk.empty, _)))
   given Ordering[Type]     = Ordering.by(unwrap)
 
