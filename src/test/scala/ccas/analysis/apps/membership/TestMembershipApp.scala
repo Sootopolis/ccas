@@ -497,6 +497,7 @@ object TestMembershipApp extends ZIOSpecDefault {
     testMergeResultsIncludesExternalChanges,
     testSelectPlayerIdsCurrentAtReturnsCurrentMembers,
     testSelectPlayerIdsCurrentAtExcludesLeftMembers,
+    testCountActiveCurrentAtExcludesNonActive,
     testSelectLatestCompletedReturnsCompletedRuns,
     testSelectLatestCompletedReturnsNoneWhenNoCompletedRuns
   )
@@ -551,6 +552,28 @@ object TestMembershipApp extends ZIOSpecDefault {
       atT2.isEmpty
     )
   }
+
+  private def testCountActiveCurrentAtExcludesNonActive =
+    test("countActiveCurrentAt excludes non-Active players and players outside the window") {
+      val alice = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0)
+      val bob   = Player(pid1, Times.t0, Username("bob"), Closed, None, Times.t0)
+      val carol = Player(pid2, Times.t0, Username("carol"), Active, None, Times.t0)
+      // alice: active, current → counted
+      val memAlice = ClubMember(clubId, pid0, Times.t0, None)
+      // bob: closed but still current → excluded by status filter
+      val memBob = ClubMember(clubId, pid1, Times.t0, None)
+      // carol: active but left at t1 → excluded by window at t2
+      val memCarol = ClubMember(clubId, pid2, Times.t0, Some(Times.t1))
+
+      for {
+        _      <- seedDb(players = List(alice, bob, carol), members = List(memAlice, memBob, memCarol))
+        atT0p5 <- ClubMember.countActiveCurrentAt(clubId, Times.t0.plusSeconds(30))
+        atT2   <- ClubMember.countActiveCurrentAt(clubId, Times.t2)
+      } yield assertTrue(
+        atT0p5 == 2, // alice + carol (both active, both current at t0+30s)
+        atT2 == 1    // alice only (carol has left, bob is Closed)
+      )
+    }
 
   private def testSelectLatestCompletedReturnsCompletedRuns = test("selectLatestCompleted returns only completed runs") {
     for {

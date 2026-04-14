@@ -106,6 +106,14 @@ object ClubMember {
         .query[PlayerId].run().toSet
     }
 
+  def countActiveCurrentAt(clubId: ClubId, at: Instant): ZIO[PostgresClient, SQLException, Int] =
+    connectZIO {
+      sql"""SELECT COUNT(*)::INT FROM club_member cm
+            JOIN player p ON p.player_id = cm.player_id AND p.status = ${Active: PlayerStatusCategory}
+            WHERE cm.club_id = $clubId AND cm.since <= $at AND (cm.until IS NULL OR cm.until > $at)"""
+        .query[Int].run().head
+    }
+
   def exists(clubId: ClubId, playerId: PlayerId): ZIO[PostgresClient, SQLException, Boolean] =
     connectZIO {
       sql"SELECT 1 FROM club_member WHERE club_id = $clubId AND player_id = $playerId LIMIT 1"
