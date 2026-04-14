@@ -11,7 +11,7 @@ import ccas.analysis.apps.membership.MembershipChange.*
 import ccas.analysis.apps.membership.MembershipChange.MemberChange.*
 import ccas.analysis.apps.membership.MembershipClassify.{PhaseBResult, PhaseCResult}
 import ccas.analysis.apps.recruitment.CandidateOutcome
-import ccas.analysis.apps.recruitment.RecruitmentTestSupport.apiPlayerJson
+import ccas.analysis.apps.recruitment.RecruitmentTestSupport.{apiPlayerClubsJson, apiPlayerJson}
 import ccas.analysis.tables.{Club, ClubMember, MembershipRun, Player, PlayerSnapshot, RecruitmentCandidate, RunTrigger, Tables}
 import ccas.api.misc.enums.PlayerStatusCategory.{Active, Closed}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
@@ -64,12 +64,17 @@ object TestMembershipApp extends ZIOSpecDefault {
 
   private def fakeChessComClient(
     responses: Map[String, String],
-    failures: Set[String] = Set.empty
+    failures: Set[String] = Set.empty,
+    clubsResponses: Map[String, String] = Map.empty
   ): RIO[PostgresClient, ChessComClient] = {
     val routes: Routes[Any, Response] = Routes(
       Method.GET / "pub" / "player" / string("username") -> handler { (username: String, _: Request) =>
         if (failures.contains(username)) { Response(status = Status.NotFound) }
         else { responses.get(username).fold(Response(status = Status.NotFound))(Response.json(_)) }
+      },
+      Method.GET / "pub" / "player" / string("username") / "clubs" -> handler {
+        (username: String, _: Request) =>
+          clubsResponses.get(username).fold(Response(status = Status.NotFound))(Response.json(_))
       }
     )
     TestChessComClientSupport.fakeClient(routes)
@@ -815,6 +820,8 @@ object TestMembershipApp extends ZIOSpecDefault {
   private def suiteClassifyDisappeared = suite("classifyDisappeared")(
     testActivePlayerLeftClub,
     testClosedPlayerAccountClosed,
+    testClosedPlayerStillInClub,
+    testAlreadyClosedPlayerSilent,
     testApi404Unresolvable,
     testDifferentPlayerIdUnresolvable,
     testAllResolvedEmptyResults
@@ -851,37 +858,109 @@ object TestMembershipApp extends ZIOSpecDefault {
     }
   }
 
-  private def testClosedPlayerAccountClosed = test("closed player → AccountClosed with lastOnline timestamp") {
-    val player = Player(pid1, Times.t0, Username("bob"), Active, None, Times.t0)
-    val mem    = ClubMember(clubId, pid1, Times.t0, None)
-    val dbState = DbState(
-      membersByPlayerId = Map(pid1 -> MemberState(player, mem)),
-      membersByUsername = Map(Username("bob") -> MemberState(player, mem))
-    )
-    val responses = Map("bob" -> apiPlayerJson(101, "bob", status = "closed", lastOnline = Some(Times.t1.getEpochSecond)))
-
-    for {
-      client <- fakeChessComClient(responses)
-      result <- MembershipClassify.classifyDisappeared(
-        client,
-        dbState,
-        Set.empty,
-        Map.empty,
-        ClubSlug("test-club"),
-        Times.t2
+  private def testClosedPlayerAccountClosed =
+    test("closed player not in own clubs list → AccountClosed, membership closed at lastOnline") {
+      val player = Player(pid1, Times.t0, Username("bob"), Active, None, Times.t0)
+      val mem    = ClubMember(clubId, pid1, Times.t0, None)
+      val dbState = DbState(
+        membersByPlayerId = Map(pid1 -> MemberState(player, mem)),
+        membersByUsername = Map(Username("bob") -> MemberState(player, mem))
       )
-    } yield {
-      val change = result.changes.head.changes.head
-      assertTrue(
-        result.changes.size == 1,
-        change.isInstanceOf[AccountClosed],
-        change.timestamp == Times.t1, // lastOnline, not reconciliation time
-        result.updatedPlayers.nonEmpty,
-        result.closedMemberships.nonEmpty,
-        result.closedMemberships.head.until.contains(Times.t1) // until matches lastOnline
+      val responses =
+        Map("bob" -> apiPlayerJson(101, "bob", status = "closed", lastOnline = Some(Times.t1.getEpochSecond)))
+
+      for {
+        client <- fakeChessComClient(responses)
+        result <- MembershipClassify.classifyDisappeared(
+          client,
+          dbState,
+          Set.empty,
+          Map.empty,
+          ClubSlug("test-club"),
+          Times.t2
+        )
+      } yield {
+        val changes = result.changes.head.changes
+        assertTrue(
+          result.changes.size == 1,
+          changes.size == 1,
+          changes.head.isInstanceOf[AccountClosed],
+          changes.head.timestamp == Times.t1, // lastOnline, not reconciliation time
+          !changes.exists(_.isInstanceOf[StatusChange]),
+          result.updatedPlayers.nonEmpty,
+          result.closedMemberships.nonEmpty,
+          result.closedMemberships.head.until.contains(Times.t1) // until matches lastOnline
+        )
+      }
+    }
+
+  private def testClosedPlayerStillInClub =
+    test("closed player still in own clubs list → AccountClosed only, membership not closed") {
+      val player = Player(pid1, Times.t0, Username("bob"), Active, None, Times.t0)
+      val mem    = ClubMember(clubId, pid1, Times.t0, None)
+      val dbState = DbState(
+        membersByPlayerId = Map(pid1 -> MemberState(player, mem)),
+        membersByUsername = Map(Username("bob") -> MemberState(player, mem))
+      )
+      val responses =
+        Map("bob" -> apiPlayerJson(101, "bob", status = "closed", lastOnline = Some(Times.t1.getEpochSecond)))
+      val clubsResponses = Map("bob" -> apiPlayerClubsJson(List("test-club")))
+
+      for {
+        client <- fakeChessComClient(responses, clubsResponses = clubsResponses)
+        result <- MembershipClassify.classifyDisappeared(
+          client,
+          dbState,
+          Set.empty,
+          Map.empty,
+          ClubSlug("test-club"),
+          Times.t2
+        )
+      } yield {
+        val changes = result.changes.head.changes
+        assertTrue(
+          result.changes.size == 1,
+          changes.size == 1,
+          changes.head.isInstanceOf[AccountClosed],
+          changes.head.timestamp == Times.t1,
+          !changes.exists(_.isInstanceOf[StatusChange]),
+          result.updatedPlayers.nonEmpty,
+          result.updatedPlayers.head.status == Closed,
+          result.archivedSnapshots.nonEmpty,
+          result.closedMemberships.isEmpty
+        )
+      }
+    }
+
+  private def testAlreadyClosedPlayerSilent =
+    test("already-closed player, still in own clubs list → no changes emitted") {
+      val player = Player(pid1, Times.t0, Username("bob"), Closed, None, Times.t0)
+      val mem    = ClubMember(clubId, pid1, Times.t0, None)
+      val dbState = DbState(
+        membersByPlayerId = Map(pid1 -> MemberState(player, mem)),
+        membersByUsername = Map(Username("bob") -> MemberState(player, mem))
+      )
+      val responses =
+        Map("bob" -> apiPlayerJson(101, "bob", status = "closed", lastOnline = Some(Times.t1.getEpochSecond)))
+      val clubsResponses = Map("bob" -> apiPlayerClubsJson(List("test-club")))
+
+      for {
+        client <- fakeChessComClient(responses, clubsResponses = clubsResponses)
+        result <- MembershipClassify.classifyDisappeared(
+          client,
+          dbState,
+          Set.empty,
+          Map.empty,
+          ClubSlug("test-club"),
+          Times.t2
+        )
+      } yield assertTrue(
+        result.changes.isEmpty,
+        result.updatedPlayers.isEmpty,
+        result.archivedSnapshots.isEmpty,
+        result.closedMemberships.isEmpty
       )
     }
-  }
 
   private def testApi404Unresolvable = test("API 404 → Unresolvable") {
     val player = Player(pid2, Times.t0, Username("charlie"), Active, None, Times.t0)
