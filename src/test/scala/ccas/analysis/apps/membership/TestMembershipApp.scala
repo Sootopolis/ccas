@@ -11,10 +11,10 @@ import ccas.analysis.apps.membership.MembershipChange.*
 import ccas.analysis.apps.membership.MembershipChange.MemberChange.*
 import ccas.analysis.apps.membership.MembershipClassify.{PhaseBResult, PhaseCResult}
 import ccas.analysis.apps.recruitment.CandidateOutcome
-import ccas.analysis.apps.recruitment.RecruitmentTestSupport.{apiPlayerClubsJson, apiPlayerJson}
-import ccas.analysis.tables.{Club, ClubMember, MembershipRun, Player, PlayerSnapshot, RecruitmentCandidate, RunTrigger, Tables}
+import ccas.analysis.apps.recruitment.RecruitmentTestSupport.{apiDailyMatchJson, apiPlayerClubsJson, apiPlayerJson}
+import ccas.analysis.tables.{Club, ClubMember, MembershipRun, Player, PlayerMatchRef, PlayerSnapshot, RecruitmentCandidate, RunTrigger, Tables}
 import ccas.api.misc.enums.PlayerStatusCategory.{Active, Closed}
-import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
+import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username}
 import ccas.utils.{CcasLogger, TestCcasLogger}
 import ccas.utils.client.{ChessComClient, TestChessComClientSupport}
 import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
@@ -65,7 +65,8 @@ object TestMembershipApp extends ZIOSpecDefault {
   private def fakeChessComClient(
     responses: Map[String, String],
     failures: Set[String] = Set.empty,
-    clubsResponses: Map[String, String] = Map.empty
+    clubsResponses: Map[String, String] = Map.empty,
+    matchResponses: Map[String, String] = Map.empty
   ): RIO[PostgresClient, ChessComClient] = {
     val routes: Routes[Any, Response] = Routes(
       Method.GET / "pub" / "player" / string("username") -> handler { (username: String, _: Request) =>
@@ -75,6 +76,9 @@ object TestMembershipApp extends ZIOSpecDefault {
       Method.GET / "pub" / "player" / string("username") / "clubs" -> handler {
         (username: String, _: Request) =>
           clubsResponses.get(username).fold(Response(status = Status.NotFound))(Response.json(_))
+      },
+      Method.GET / "pub" / "match" / string("matchId") -> handler { (matchId: String, _: Request) =>
+        matchResponses.get(matchId).fold(Response(status = Status.NotFound))(Response.json(_))
       }
     )
     TestChessComClientSupport.fakeClient(routes)
@@ -85,12 +89,14 @@ object TestMembershipApp extends ZIOSpecDefault {
   private def seedDb(
     players: List[Player] = Nil,
     snapshots: List[PlayerSnapshot] = Nil,
-    members: List[ClubMember] = Nil
+    members: List[ClubMember] = Nil,
+    matchRefs: List[PlayerMatchRef] = Nil
   ): RIO[PostgresClient, Unit] =
     for {
       _ <- connectZIO(sql"DELETE FROM club_member WHERE club_id = $clubId".update.run())
       _ <- ZIO.foreachDiscard(testPlayerIds) { pid =>
         connectZIO(sql"DELETE FROM recruitment_candidate WHERE player_id = $pid".update.run()) *>
+          connectZIO(sql"DELETE FROM player_match_ref WHERE player_id = $pid".update.run()) *>
           connectZIO(sql"DELETE FROM player_snapshot WHERE player_id = $pid".update.run()) *>
           connectZIO(sql"DELETE FROM player WHERE player_id = $pid".update.run())
       }
@@ -98,6 +104,7 @@ object TestMembershipApp extends ZIOSpecDefault {
       _ <- ZIO.whenDiscard(players.nonEmpty)(Player.insertBatch(players))
       _ <- ZIO.whenDiscard(snapshots.nonEmpty)(PlayerSnapshot.insertBatch(snapshots))
       _ <- ZIO.whenDiscard(members.nonEmpty)(ClubMember.insertBatch(members))
+      _ <- ZIO.whenDiscard(matchRefs.nonEmpty)(PlayerMatchRef.insertBatch(matchRefs))
     } yield ()
 
   private val otherClubId = ClubId(501)
@@ -822,6 +829,8 @@ object TestMembershipApp extends ZIOSpecDefault {
     testClosedPlayerAccountClosed,
     testClosedPlayerStillInClub,
     testAlreadyClosedPlayerSilent,
+    testMatchRefFallbackRenamedStillInClub,
+    testMatchRefFallbackRenamedLeftClub,
     testApi404Unresolvable,
     testDifferentPlayerIdUnresolvable,
     testAllResolvedEmptyResults
@@ -960,6 +969,98 @@ object TestMembershipApp extends ZIOSpecDefault {
         result.archivedSnapshots.isEmpty,
         result.closedMemberships.isEmpty
       )
+    }
+
+  private val matchRefId = ClubMatchId(999000)
+
+  private def testMatchRefFallbackRenamedStillInClub =
+    test("matchRefFallback: renamed player still in club → no LeftClub, membership not closed") {
+      val player = Player(pid5, Times.t0, Username("ed-old"), Active, None, Times.t0)
+      val mem    = ClubMember(clubId, pid5, Times.t0, None)
+      val matchRef = PlayerMatchRef(pid5, matchRefId, isLive = false, isTeam1 = true, boardIdx = 1)
+      val dbState = DbState(
+        membersByPlayerId = Map(pid5 -> MemberState(player, mem)),
+        membersByUsername = Map(Username("ed-old") -> MemberState(player, mem))
+      )
+      val responses = Map("ed-new" -> apiPlayerJson(105, "ed-new"))
+      val matchResponses = Map(
+        matchRefId.toString -> apiDailyMatchJson(
+          matchId = matchRefId.toString.toLong,
+          team1Club = "test-club",
+          team2Club = "other-club",
+          team1Players = List("ed-new" -> 1),
+          team2Players = List("opponent" -> 1)
+        )
+      )
+      val apiMap = Map(Username("ed-new") -> Times.t0.getEpochSecond)
+
+      for {
+        _      <- seedDb(players = List(player), members = List(mem), matchRefs = List(matchRef))
+        client <- fakeChessComClient(responses, failures = Set("ed-old"), matchResponses = matchResponses)
+        result <- MembershipClassify.classifyDisappeared(
+          client,
+          dbState,
+          Set.empty,
+          apiMap,
+          ClubSlug("test-club"),
+          Times.t2
+        )
+      } yield {
+        val changes = result.changes.head.changes
+        assertTrue(
+          result.changes.size == 1,
+          changes.exists(_.isInstanceOf[UsernameChange]),
+          !changes.exists(_.isInstanceOf[LeftClub]),
+          result.updatedPlayers.nonEmpty,
+          result.updatedPlayers.head.username == Username("ed-new"),
+          result.closedMemberships.isEmpty
+        )
+      }
+    }
+
+  private def testMatchRefFallbackRenamedLeftClub =
+    test("matchRefFallback: renamed player no longer in club → LeftClub and membership closed") {
+      val player = Player(pid5, Times.t0, Username("ed-old"), Active, None, Times.t0)
+      val mem    = ClubMember(clubId, pid5, Times.t0, None)
+      val matchRef = PlayerMatchRef(pid5, matchRefId, isLive = false, isTeam1 = true, boardIdx = 1)
+      val dbState = DbState(
+        membersByPlayerId = Map(pid5 -> MemberState(player, mem)),
+        membersByUsername = Map(Username("ed-old") -> MemberState(player, mem))
+      )
+      val responses = Map("ed-new" -> apiPlayerJson(105, "ed-new"))
+      val matchResponses = Map(
+        matchRefId.toString -> apiDailyMatchJson(
+          matchId = matchRefId.toString.toLong,
+          team1Club = "test-club",
+          team2Club = "other-club",
+          team1Players = List("ed-new" -> 1),
+          team2Players = List("opponent" -> 1)
+        )
+      )
+
+      for {
+        _      <- seedDb(players = List(player), members = List(mem), matchRefs = List(matchRef))
+        client <- fakeChessComClient(responses, failures = Set("ed-old"), matchResponses = matchResponses)
+        result <- MembershipClassify.classifyDisappeared(
+          client,
+          dbState,
+          Set.empty,
+          Map.empty, // resolved username NOT in apiMap → actually left
+          ClubSlug("test-club"),
+          Times.t2
+        )
+      } yield {
+        val changes = result.changes.head.changes
+        assertTrue(
+          result.changes.size == 1,
+          changes.exists(_.isInstanceOf[UsernameChange]),
+          changes.exists(_.isInstanceOf[LeftClub]),
+          result.updatedPlayers.nonEmpty,
+          result.updatedPlayers.head.username == Username("ed-new"),
+          result.closedMemberships.nonEmpty,
+          result.closedMemberships.head.until.contains(Times.t2)
+        )
+      }
     }
 
   private def testApi404Unresolvable = test("API 404 → Unresolvable") {

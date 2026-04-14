@@ -435,14 +435,14 @@ private[membership] object MembershipClassify {
           val changes = Chunk(UsernameChange(now, oldUsername)) ++ statusChangeOpt
 
           if (statusCategory == PlayerStatusCategory.Active) {
-            val hasLeft = apiMap.contains(resolvedUsername)
-            val leftOpt = Option.unless(hasLeft)(LeftClub(now))
+            val stillMember = apiMap.contains(resolvedUsername)
+            val leftOpt     = Option.unless(stillMember)(LeftClub(now))
             ZIO.succeed(
               PhaseCMemberResult(
                 changes = Chunk(MemberChangeSummary(playerId, resolvedUsername, changes ++ leftOpt)),
                 updatedPlayers = Chunk(updated),
                 archivedSnapshots = Chunk(archive),
-                closedMemberships = Chunk.fromIterable(Option.when(hasLeft)(closedMember))
+                closedMemberships = Chunk.fromIterable(Option.unless(stillMember)(closedMember))
               )
             )
           } else {
