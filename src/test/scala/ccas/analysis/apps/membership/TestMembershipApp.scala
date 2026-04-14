@@ -971,47 +971,45 @@ object TestMembershipApp extends ZIOSpecDefault {
       )
     }
 
-  private val matchRefId = ClubMatchId(999000)
+  private val matchRefId = ClubMatchId(999000L)
+
+  // Runs classifyDisappeared for a player whose old username 404s and resolves via match-ref to "ed-new".
+  // Caller controls apiMap to simulate "still in club under new name" vs "actually left".
+  private def runMatchRefFallbackRenamed(apiMap: Map[Username, Long]) = {
+    val player = Player(pid5, Times.t0, Username("ed-old"), Active, None, Times.t0)
+    val mem    = ClubMember(clubId, pid5, Times.t0, None)
+    val ref    = PlayerMatchRef(pid5, matchRefId, isLive = false, isTeam1 = true, boardIdx = 1)
+    val dbState = DbState(
+      membersByPlayerId = Map(pid5 -> MemberState(player, mem)),
+      membersByUsername = Map(Username("ed-old") -> MemberState(player, mem))
+    )
+    val responses = Map("ed-new" -> apiPlayerJson(105, "ed-new"))
+    val matchJson = apiDailyMatchJson(
+      matchId = matchRefId.value,
+      team1Club = "test-club",
+      team2Club = "other-club",
+      team1Players = List("ed-new" -> 1),
+      team2Players = List("opponent" -> 1)
+    )
+    val matchResponses = Map(matchRefId.value.toString -> matchJson)
+
+    for {
+      _      <- seedDb(players = List(player), members = List(mem), matchRefs = List(ref))
+      client <- fakeChessComClient(responses, failures = Set("ed-old"), matchResponses = matchResponses)
+      result <- MembershipClassify.classifyDisappeared(
+        client, dbState, Set.empty, apiMap, ClubSlug("test-club"), Times.t2
+      )
+    } yield result
+  }
 
   private def testMatchRefFallbackRenamedStillInClub =
     test("matchRefFallback: renamed player still in club → no LeftClub, membership not closed") {
-      val player = Player(pid5, Times.t0, Username("ed-old"), Active, None, Times.t0)
-      val mem    = ClubMember(clubId, pid5, Times.t0, None)
-      val matchRef = PlayerMatchRef(pid5, matchRefId, isLive = false, isTeam1 = true, boardIdx = 1)
-      val dbState = DbState(
-        membersByPlayerId = Map(pid5 -> MemberState(player, mem)),
-        membersByUsername = Map(Username("ed-old") -> MemberState(player, mem))
-      )
-      val responses = Map("ed-new" -> apiPlayerJson(105, "ed-new"))
-      val matchResponses = Map(
-        matchRefId.toString -> apiDailyMatchJson(
-          matchId = matchRefId.toString.toLong,
-          team1Club = "test-club",
-          team2Club = "other-club",
-          team1Players = List("ed-new" -> 1),
-          team2Players = List("opponent" -> 1)
-        )
-      )
-      val apiMap = Map(Username("ed-new") -> Times.t0.getEpochSecond)
-
-      for {
-        _      <- seedDb(players = List(player), members = List(mem), matchRefs = List(matchRef))
-        client <- fakeChessComClient(responses, failures = Set("ed-old"), matchResponses = matchResponses)
-        result <- MembershipClassify.classifyDisappeared(
-          client,
-          dbState,
-          Set.empty,
-          apiMap,
-          ClubSlug("test-club"),
-          Times.t2
-        )
-      } yield {
+      runMatchRefFallbackRenamed(Map(Username("ed-new") -> Times.t0.getEpochSecond)).map { result =>
         val changes = result.changes.head.changes
         assertTrue(
           result.changes.size == 1,
           changes.exists(_.isInstanceOf[UsernameChange]),
           !changes.exists(_.isInstanceOf[LeftClub]),
-          result.updatedPlayers.nonEmpty,
           result.updatedPlayers.head.username == Username("ed-new"),
           result.closedMemberships.isEmpty
         )
@@ -1020,42 +1018,12 @@ object TestMembershipApp extends ZIOSpecDefault {
 
   private def testMatchRefFallbackRenamedLeftClub =
     test("matchRefFallback: renamed player no longer in club → LeftClub and membership closed") {
-      val player = Player(pid5, Times.t0, Username("ed-old"), Active, None, Times.t0)
-      val mem    = ClubMember(clubId, pid5, Times.t0, None)
-      val matchRef = PlayerMatchRef(pid5, matchRefId, isLive = false, isTeam1 = true, boardIdx = 1)
-      val dbState = DbState(
-        membersByPlayerId = Map(pid5 -> MemberState(player, mem)),
-        membersByUsername = Map(Username("ed-old") -> MemberState(player, mem))
-      )
-      val responses = Map("ed-new" -> apiPlayerJson(105, "ed-new"))
-      val matchResponses = Map(
-        matchRefId.toString -> apiDailyMatchJson(
-          matchId = matchRefId.toString.toLong,
-          team1Club = "test-club",
-          team2Club = "other-club",
-          team1Players = List("ed-new" -> 1),
-          team2Players = List("opponent" -> 1)
-        )
-      )
-
-      for {
-        _      <- seedDb(players = List(player), members = List(mem), matchRefs = List(matchRef))
-        client <- fakeChessComClient(responses, failures = Set("ed-old"), matchResponses = matchResponses)
-        result <- MembershipClassify.classifyDisappeared(
-          client,
-          dbState,
-          Set.empty,
-          Map.empty, // resolved username NOT in apiMap → actually left
-          ClubSlug("test-club"),
-          Times.t2
-        )
-      } yield {
+      runMatchRefFallbackRenamed(Map.empty).map { result =>
         val changes = result.changes.head.changes
         assertTrue(
           result.changes.size == 1,
           changes.exists(_.isInstanceOf[UsernameChange]),
           changes.exists(_.isInstanceOf[LeftClub]),
-          result.updatedPlayers.nonEmpty,
           result.updatedPlayers.head.username == Username("ed-new"),
           result.closedMemberships.nonEmpty,
           result.closedMemberships.head.until.contains(Times.t2)
