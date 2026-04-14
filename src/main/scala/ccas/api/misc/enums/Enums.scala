@@ -154,6 +154,7 @@ enum Title {
   case WFM
   case WCM
   case WNM
+  case M
 }
 
 object Title extends EnumJson[Title] with EnumSql[Title]
