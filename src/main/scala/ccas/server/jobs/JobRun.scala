@@ -16,7 +16,7 @@ import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.connectZIO
 
 @Table(PostgresDbType, SqlNameMapper.CamelToSnakeCase)
-case class JobRun(
+final case class JobRun(
   @Id id: JobRunId,
   kind: JobKind,
   clubId: Option[ClubId],

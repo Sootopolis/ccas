@@ -10,7 +10,8 @@ import ccas.utils.errors.{BadRequestException, NotFoundException, UserFacingExce
 
 object RouteHelpers {
 
-  case class ErrorResponse(error: String)
+  final case class ErrorResponse(error: String)
+
   object ErrorResponse {
     given JsonCodec[ErrorResponse] = DeriveJsonCodec.gen
   }

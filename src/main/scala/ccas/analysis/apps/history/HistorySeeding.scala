@@ -266,10 +266,7 @@ private[history] object HistorySeeding {
   /** Re-queues stale matches (unfinished or recently completed) as pending for reprocessing. When `shared` is present,
     * filters out matches already processed by a prior club in this batch.
     */
-  def seedStaleMatches(
-    clubId: ClubId,
-    shared: Option[SharedContext]
-  ): RIO[PostgresClient, Int] =
+  def seedStaleMatches(clubId: ClubId, shared: Option[SharedContext]): RIO[PostgresClient, Int] =
     for {
       ids <- ClubMatch.selectStaleForClub(clubId)
       alreadyProcessed <- shared.fold(ZIO.succeed(Set.empty[ClubMatchId]))(_.processedMatches.get)

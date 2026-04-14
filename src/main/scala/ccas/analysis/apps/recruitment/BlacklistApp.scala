@@ -63,14 +63,7 @@ object BlacklistApp extends ZIOAppDefault {
           now = Instant.now()
           _ <- withTransaction {
             Player.insertIfNew(
-              Player(
-                apiPlayer.playerId,
-                apiPlayer.joinedAt,
-                username,
-                apiPlayer.status.category,
-                apiPlayer.title,
-                now
-              )
+              Player(apiPlayer.playerId, apiPlayer.joinedAt, username, apiPlayer.status.category, apiPlayer.title, now)
             ) *> RecruitmentBlacklist.upsert(
               RecruitmentBlacklist(apiClub.clubId, apiPlayer.playerId, now, expiresAt, reason)
             )
@@ -82,7 +75,7 @@ object BlacklistApp extends ZIOAppDefault {
       }
     } yield ()
 
-  def listBlacklist(clubSlug: ClubSlug): RIO[PostgresClient & CcasLogger, Unit] =
+  private def listBlacklist(clubSlug: ClubSlug): RIO[PostgresClient & CcasLogger, Unit] =
     for {
       club <- Club.selectBySlug(clubSlug).someOrFail(NotFoundException(s"Club not found: $clubSlug"))
       now = Instant.now()

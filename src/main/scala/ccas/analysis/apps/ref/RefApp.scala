@@ -19,7 +19,7 @@ object RefApp extends ZIOAppDefault {
   private val ApiParallelism = 16
   private val help           = "Usage: RefApp [--force-skipped] [--upgrade-refs]"
 
-  case class ReportData(
+  final case class ReportData(
     clubsTotal: Int,
     clubsResolvedDb: Int,
     clubsResolvedApi: Int,
@@ -112,12 +112,12 @@ object RefApp extends ZIOAppDefault {
           RefResolution.resolveClub(ctx, club)
         }
       }.onInterrupt {
-        (for {
+        for {
           db  <- ctx.clubsResolvedDb.get
           api <- ctx.clubsResolvedApi.get
           sk  <- ctx.clubsSkippedNew.get
           _   <- CcasLogger.info(s"Interrupted resolveClubs: $db (DB) + $api (API) resolved, $sk skipped / ${clubs.size}")
-        } yield ())
+        } yield ()
       }
       db         <- ctx.clubsResolvedDb.get
       api        <- ctx.clubsResolvedApi.get
@@ -139,12 +139,12 @@ object RefApp extends ZIOAppDefault {
           RefResolution.resolvePlayer(ctx, player)
         }
       }.onInterrupt {
-        (for {
+        for {
           db  <- ctx.playersResolvedDb.get
           api <- ctx.playersResolvedApi.get
           sk  <- ctx.playersSkippedNew.get
           _   <- CcasLogger.info(s"Interrupted resolvePlayers: $db (DB) + $api (API) resolved, $sk skipped / ${players.size}")
-        } yield ())
+        } yield ()
       }
       db         <- ctx.playersResolvedDb.get
       api        <- ctx.playersResolvedApi.get
@@ -244,11 +244,11 @@ object RefApp extends ZIOAppDefault {
             }
           }
         }.onInterrupt {
-          (for {
+          for {
             mc <- matchUpgraded.get
             tc <- tournUpgraded.get
             _  <- CcasLogger.info(s"Interrupted upgradeTournamentPlayers: $mc match, $tc tournament upgrades / ${players.size}")
-          } yield ())
+          } yield ()
         }
         matchCount <- matchUpgraded.get
         tournCount <- tournUpgraded.get

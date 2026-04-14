@@ -173,17 +173,17 @@ object RecruitmentApp extends ZIOAppDefault {
       evalCountRef        <- Ref.make(0)
 
       runCtx = RunContext(
-        client,
-        criteria,
-        clubId,
-        alias,
-        targetMatchIds,
-        formerMemberIds,
-        adminExcludedPlayerIds,
-        excludedSlugs,
-        Instant.now(),
-        discoveredOpponents,
-        failedAdminSlugs
+        client = client,
+        criteria = criteria,
+        clubId = clubId,
+        alias = alias,
+        clubMatchIds = targetMatchIds,
+        formerMemberIds = formerMemberIds,
+        adminExcludedPlayerIds = adminExcludedPlayerIds,
+        excludedSlugs = excludedSlugs,
+        now = Instant.now(),
+        discoveredOpponents = discoveredOpponents,
+        failedAdminSlugs = failedAdminSlugs
       )
       filters              = RecruitmentFilters.buildFilterChain(criteria)
       effectiveConcurrency = DefaultExploreConcurrency

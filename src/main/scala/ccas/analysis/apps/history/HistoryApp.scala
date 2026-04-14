@@ -172,7 +172,7 @@ object HistoryApp extends ZIOAppDefault {
         else { queriedIds }
     } yield InitResult(allMembers, playerById, effectiveQueriedIds, ctx, startedAt, runId)
 
-  case class HistoryResult(stats: RunStats, clubSlug: ClubSlug, startedAt: Instant, completedAt: Instant)
+  final case class HistoryResult(stats: RunStats, clubSlug: ClubSlug, startedAt: Instant, completedAt: Instant)
 
   /** Main entry point: orchestrates the 4-phase discover workflow for a club's match history. */
   def discover(

@@ -9,12 +9,12 @@ import ccas.utils.client.ChessComClient
 
 private[history] object HistoryUtils {
 
-  case class DiscoveredPlayer(playerId: PlayerId, username: Username)
-  case class WaveDetail(wave: Int, matchesProcessed: Int)
-  case class FailedMatch(matchKey: MatchKey, error: String)
-  case class FailedMember(username: Username, error: String)
+  final case class DiscoveredPlayer(playerId: PlayerId, username: Username)
+  final case class WaveDetail(wave: Int, matchesProcessed: Int)
+  final case class FailedMatch(matchKey: MatchKey, error: String)
+  final case class FailedMember(username: Username, error: String)
 
-  case class MemberSeedResult(
+  final case class MemberSeedResult(
     seeded: Int,
     queried: Int,
     failedMembers: List[FailedMember]
@@ -22,7 +22,7 @@ private[history] object HistoryUtils {
     def failed: Int = failedMembers.size
   }
 
-  case class RunStats(
+  final case class RunStats(
     membersQueried: Int = 0,
     membersSkipped: Int = 0,
     membersFailed: Int = 0,
