@@ -121,28 +121,21 @@ object MembershipApp extends ZIOAppDefault {
     for {
       startedAt <- Clock.instant
       client    <- ZIO.service[ChessComClient]
-      (apiClub, resolvedUrlName) <- withNameFallback(
+      (apiClub, resolvedSlug) <- withNameFallback(
         clubSlug,
         name => ApiClub.get(client, name),
         resolveClubSlug(client, _)
       )
       clubId = apiClub.clubId
-      club   = Club.fromApi(apiClub, resolvedUrlName)
+      club   = Club.fromApi(apiClub, resolvedSlug)
       _                     <- Club.upsertResolvingSlugConflict(club, client)
       runId <- ZIO.when(trackRun)(MembershipRun.insert(clubId, trigger, startedAt, jobRunId))
-      (apiMembers, dbState) <- ApiClubMembers.get(client, resolvedUrlName).zipPar(buildDbState(clubId))
+      (apiMembers, dbState) <- ApiClubMembers.get(client, resolvedSlug).zipPar(buildDbState(clubId))
       prevMemberIds <- loadPreviousMemberIds(clubId)
       apiMap = apiMembers.toMap
       now    = Instant.now()
       phaseB <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, dbState, now, trustUsernames)
-      phaseC <- MembershipClassify.classifyDisappeared(
-        client,
-        dbState,
-        phaseB.resolvedIds,
-        apiMap,
-        resolvedUrlName,
-        now
-      )
+      phaseC <- MembershipClassify.classifyDisappeared(client, dbState, phaseB.resolvedIds, apiMap, resolvedSlug, now)
       _ <- persist(phaseB, phaseC)
       completedAt = Instant.now()
       _ <- ZIO.foreachDiscard(runId)(id => MembershipRun.complete(id, completedAt))
@@ -158,8 +151,12 @@ object MembershipApp extends ZIOAppDefault {
       externalMemberships = Chunk.from(externallyAdded.flatMap { pid =>
         dbState.membersByPlayerId.get(pid).map(_.member)
       })
+      // DB-derived so closed-but-still-member accounts match prevMemberIds (ApiClubMembers excludes them).
+      currentMemberCount = dbState.membersByPlayerId.size +
+        phaseB.newMemberships.size - phaseB.closedMemberships.size -
+        phaseC.closedMemberships.size
     } yield mergeResults(
-      phaseB, phaseC, apiMap.size, prevMemberIds.size, startedAt, completedAt,
+      phaseB, phaseC, currentMemberCount, prevMemberIds.size, startedAt, completedAt,
       externalChanges, externalMemberships
     )
 
