@@ -100,17 +100,30 @@ object Club {
       } yield result
     }
 
-  private def resolveStaleSlug(stale: Club, client: ChessComClient): ZIO[PostgresClient, Throwable, Unit] =
-    ClubMatch.selectClubMatchRef(stale.clubId).flatMap {
+  /** Looks up a [[ClubMatchRef]] for the given club and reads the club's current slug from the corresponding team URL
+    * on the Chess.com match endpoint. Used both to resolve slug collisions ([[resolveStaleSlug]]) and to recover from
+    * rename-404s in ClubDataApp. Returns `None` if the club has no match ref.
+    */
+  def slugFromMatchRef(
+    clubId: ClubId,
+    client: ChessComClient
+  ): ZIO[PostgresClient, Throwable, Option[ClubSlug]] =
+    ClubMatch.selectClubMatchRef(clubId).flatMap {
+      case None => ZIO.none
       case Some(ref) =>
-        RefHelpers.fetchTeamMatchTeams(client, ref.matchId, ref.isLive).flatMap { teams =>
+        RefHelpers.fetchTeamMatchTeams(client, ref.matchId, ref.isLive).map { teams =>
           val team = if (ref.isTeam1) { teams.team1 }
           else { teams.team2 }
-          val newSlug = ClubSlug.wrap(team.`@id`.path.segments.last)
-          connectZIO {
-            sql"UPDATE club SET slug = $newSlug WHERE club_id = ${stale.clubId}".update.run()
-          }.unit
+          team.`@id`.path.segments.lastOption.map(ClubSlug.wrap)
         }
+    }
+
+  private def resolveStaleSlug(stale: Club, client: ChessComClient): ZIO[PostgresClient, Throwable, Unit] =
+    slugFromMatchRef(stale.clubId, client).flatMap {
+      case Some(newSlug) =>
+        connectZIO {
+          sql"UPDATE club SET slug = $newSlug WHERE club_id = ${stale.clubId}".update.run()
+        }.unit
       case None =>
         val placeholder = ClubSlug.wrap(s"_stale_${ClubId.unwrap(stale.clubId)}")
         connectZIO {

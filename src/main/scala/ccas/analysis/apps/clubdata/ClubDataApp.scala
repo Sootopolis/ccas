@@ -10,7 +10,7 @@ import ccas.analysis.tables.{Club, ClubAdmin, ClubMatch, ClubMatchRef, Tables}
 import ccas.api.club.{ApiClub, ApiClubMatches}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 import ccas.utils.{CcasLogger, OutputFile}
-import ccas.utils.client.ChessComClient
+import ccas.utils.client.{ChessComClient, HttpStatusException}
 import ccas.utils.sql.PostgresClient
 
 object ClubDataApp extends ZIOAppDefault {
@@ -142,8 +142,9 @@ object ClubDataApp extends ZIOAppDefault {
       // failure below to prevent us from updating latest_match_at.
       _ <- refreshLatestMatchAt(client, club)
 
-      apiClub <- ApiClub.get(client, club.slug)
-      _       <- Club.upsertResolvingSlugConflict(Club.fromApi(apiClub, club.slug), client)
+      fetched <- fetchApiClubWithRenameRecovery(client, club)
+      (apiClub, resolvedSlug) = fetched
+      _ <- Club.upsertResolvingSlugConflict(Club.fromApi(apiClub, resolvedSlug), client)
 
       adminUsernames   = ClubAdmin.extractAdminUsernames(apiClub)
       existingAdminIds <- ClubAdmin.selectPlayerIdsByClub(club.clubId)
@@ -151,6 +152,26 @@ object ClubDataApp extends ZIOAppDefault {
       // Must remain the last step: --min-age relies on fetched_at being stamped only on full success.
       _ <- Club.updateFetchedAt(club.clubId, Instant.now())
     } yield ClubResult(allAdminIds.size, failed = false, adminChanged = allAdminIds != existingAdminIds)
+
+  /** Fetches `ApiClub` for the given club, recovering from rename-404s by rediscovering the current slug via a
+    * `ClubMatchRef`. If the old slug 404s and the club has a match ref pointing to a team URL with a different slug,
+    * retries the fetch once with the new slug and returns it alongside the `ApiClub` so the caller can persist it.
+    * All non-404 errors, missing refs, and same-slug ref results fall through to the original failure.
+    */
+  private def fetchApiClubWithRenameRecovery(
+    client: ChessComClient,
+    club: Club
+  ): RIO[CcasLogger & PostgresClient, (ApiClub, ClubSlug)] =
+    ApiClub.get(client, club.slug).map(_ -> club.slug).catchSome {
+      case e: HttpStatusException if e.statusCode == 404 =>
+        Club.slugFromMatchRef(club.clubId, client).flatMap {
+          case Some(newSlug) if newSlug != club.slug =>
+            CcasLogger.info(
+              s"[ClubData] ${club.slug} returned 404; retrying with rediscovered slug $newSlug"
+            ) *> ApiClub.get(client, newSlug).map(_ -> newSlug)
+          case _ => ZIO.fail(e)
+        }
+    }
 
   /** Refreshes `club.latest_match_at` using a tiered strategy to minimise API calls:
     *   1. If the cached value on `club` is fresher than [[ClubAdmin.ApiSkipThreshold]], trust it and do nothing.
