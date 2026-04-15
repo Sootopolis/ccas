@@ -235,6 +235,56 @@ object RecruitmentTestSupport {
       )}, "team2": ${teamJson(team2Club, team2Players, "lose")}}}"""
   }
 
+  /** Builds an `ApiMatchBoard` JSON response with exactly two games (white/black swapped), where team1's player is white
+    * in game 1 and black in game 2. Each side may be rendered as a full `ApiBoardPlayer` object (the default) or as a
+    * bare URL string (the closed-account shape that decodes as `Left(URL)`).
+    */
+  def apiMatchBoardJson(
+    matchId: Long,
+    board: Int,
+    team1Username: String,
+    team2Username: String,
+    team1AsUrl: Boolean = false,
+    team2AsUrl: Boolean = false
+  ): String = {
+    def side(username: String, asUrl: Boolean, result: String): String =
+      if (asUrl) { s""""https://api.chess.com/pub/player/$username"""" }
+      else {
+        s"""{"username": "$username", "rating": 1500, "result": "$result", "@id": "https://api.chess.com/pub/player/$username"}"""
+      }
+    val gameUrl   = s"https://www.chess.com/game/daily/${matchId}00$board"
+    val endTime   = Times.t1.getEpochSecond
+    val startTime = Times.t0.getEpochSecond
+    def gameJson(whiteSide: String, blackSide: String, gameIdSuffix: Int): String =
+      s"""{
+         |  "white": $whiteSide,
+         |  "black": $blackSide,
+         |  "url": "$gameUrl$gameIdSuffix",
+         |  "fen": "",
+         |  "pgn": "",
+         |  "start_time": $startTime,
+         |  "end_time": $endTime,
+         |  "time_control": "1/259200",
+         |  "time_class": "daily",
+         |  "rules": "chess",
+         |  "rated": true
+         |}""".stripMargin
+    val game1 = gameJson(
+      whiteSide = side(team1Username, team1AsUrl, "win"),
+      blackSide = side(team2Username, team2AsUrl, "checkmated"),
+      gameIdSuffix = 1
+    )
+    val game2 = gameJson(
+      whiteSide = side(team2Username, team2AsUrl, "win"),
+      blackSide = side(team1Username, team1AsUrl, "checkmated"),
+      gameIdSuffix = 2
+    )
+    s"""{
+       |  "board_scores": {"$team1Username": 1, "$team2Username": 1},
+       |  "games": [$game1, $game2]
+       |}""".stripMargin
+  }
+
   def apiClubMembersJson(members: List[(String, Long)]): String = {
     val memberJsons = members.map { (username, joined) =>
       s"""{"username": "$username", "joined": $joined}"""
