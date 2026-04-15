@@ -21,6 +21,7 @@ object TestClubMatchSql extends ZIOSpecDefault {
     testClubMatchSelectStaleForClub,
     testClubMatchSelectSettledForClub,
     testClubMatchSelectSettledForRefresh,
+    testClubMatchSelectClubMatchRefIsLive,
     testClubMatchBoardInsertAndSelect,
     testClubMatchBoardNullableGameFields,
     testClubMatchBoardDeleteMatch,
@@ -227,6 +228,37 @@ object TestClubMatchSql extends ZIOSpecDefault {
         countExact == 0L,
         batchExact.isEmpty,
         batchCursor.isEmpty // cursor past 1001 excludes the only settled match
+      )
+    }
+
+  private def testClubMatchSelectClubMatchRefIsLive =
+    test("selectClubMatchRef derives isLive from time_class") {
+      val clubRefId   = ClubId(310)
+      val clubRef     = Club(clubRefId, Times.t0, ClubSlug("club-ref-test"), "Club Ref Test", None, None, None)
+      val dailyMatch = matchFinished.copy(
+        matchId = ClubMatchId(2001),
+        timeClass = TimeClass.Daily,
+        team1ClubId = Some(clubRefId),
+        team2ClubId = None
+      )
+      val liveMatch = matchFinished.copy(
+        matchId = ClubMatchId(2002),
+        timeClass = TimeClass.Blitz,
+        team1ClubId = None,
+        team2ClubId = Some(clubRefId)
+      )
+      for {
+        _        <- Club.upsert(clubRef)
+        _        <- ClubMatch.upsert(dailyMatch)
+        dailyRef <- ClubMatch.selectClubMatchRef(clubRefId)
+        _        <- connectZIO(sql"DELETE FROM club_match WHERE match_id = 2001".update.run())
+        _        <- ClubMatch.upsert(liveMatch)
+        liveRef  <- ClubMatch.selectClubMatchRef(clubRefId)
+        _        <- connectZIO(sql"DELETE FROM club_match WHERE match_id = 2002".update.run())
+        _        <- connectZIO(sql"DELETE FROM club WHERE club_id = ${clubRefId}".update.run())
+      } yield assertTrue(
+        dailyRef.exists(r => !r.isLive && r.isTeam1 && r.matchId == ClubMatchId(2001)),
+        liveRef.exists(r => r.isLive && !r.isTeam1 && r.matchId == ClubMatchId(2002))
       )
     }
 
