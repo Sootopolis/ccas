@@ -523,19 +523,22 @@ object TestChessComClient extends ZIOSpecDefault {
             permits = 8,
             cooldown = 1.second,
             failureThreshold = 0.2,
-            recoveryTiers = Some(Vector(3, 5, 8))
+            recoveryTiers = Some(Vector(3, 5, 8)),
+            // Pins tier 3 long enough that polling can observe it before step 2 fires.
+            minTierObservation = 3.seconds
           )
           // Phase 1: trigger failure-rate throttle → 1
           _ <- ZIO.foreachParDiscard(1 to 5)(i =>
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get).exit
           )
-          // Phase 2: switch to success, flush window, let recovery advance to tier 3
+          // Phase 2: switch to success, flush window so recovery can advance
           _ <- mode.set("ok")
           _ <- ZIO.foreachDiscard(6 to 35)(i =>
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get)
           )
-          _ <- ZIO.sleep(1200.millis)
-          midState <- stateRef.get
+          // Poll until first recovery step: tier 3, still cooling down
+          midState <- stateRef.get.repeatUntil(_.currentMax >= 3L)
+            .timeoutFail(new RuntimeException("recovery did not reach tier 3"))(10.seconds)
           gen1 = midState.generation
           // Phase 3: CF challenge overrides recovery (coolingDown is still true)
           _ <- mode.set("cf")
