@@ -24,9 +24,9 @@ import ccas.utils.json.JsonDecodingException
   *
   *   - '''Gate-based admission control''' — a single-permit gate serializes request admission. Before each request, the
   *     gate checks that the number of in-flight requests (`activeRef`) is below `currentMax`. If not, it polls until a
-  *     slot opens. This enforces the concurrency limit without a semaphore, so throttle-down takes effect immediately
-  *     for all requests that haven't yet entered the gate. The gate wait is interruptible so that pending requests can
-  *     be cancelled promptly on shutdown; only the fast `activeRef` increment is uninterruptible.
+  *     slot opens, then atomically increments the slot count before releasing the gate. This enforces the concurrency
+  *     limit without a semaphore, so throttle-down takes effect immediately for all requests that haven't yet entered
+  *     the gate. The gate wait is interruptible so that pending requests can be cancelled promptly on shutdown.
   *   - '''EMA-based rate delay''' — tracks an exponential moving average of response times and staggers outgoing
   *     requests so that the full permit budget is utilised without bursting. When permits are reduced the per-request
   *     delay grows proportionally. A configurable floor (`min-request-delay-ms`) prevents burst behaviour when
@@ -110,20 +110,22 @@ final class ChessComClient(
 
   def get[T](url: URL)(using jsonDecoder: JsonDecoder[T]): Task[T] =
     statsRef.update(_.incRequests) *> withRetries {
-      for {
-        _ <- rateLimitGate.withPermit {
-          for {
-            (gateWait, _) <- awaitCapacity.timed
-            (emaWait, _)  <- emaDelay.timed
-            _             <- statsRef.update(_.addGateWait(gateWait.toMillis).addEmaDelay(emaWait.toMillis))
-          } yield ()
-        }
-        (duration, result) <- ZIO.acquireReleaseWith(activeRef.updateAndGet(_ + 1).tap(updateBar))(_ => releaseSlot()) {
-          active => statsRef.update(_.updatePeak(active)) *> rawGet(url).timed
-        }
-        ms = duration.toMillis
-        _ <- updateResponseTimeEma(ms) *> statsRef.update(_.recordLatency(ms).addActiveMs(ms))
-      } yield result
+      ZIO.scoped {
+        for {
+          _ <- rateLimitGate.withPermit {
+            for {
+              (gateWait, _) <- awaitCapacity.timed
+              (emaWait, _)  <- emaDelay.timed
+              active        <- ZIO.acquireRelease(activeRef.updateAndGet(_ + 1).tap(updateBar))(_ => releaseSlot())
+              _ <- statsRef.update(_.addGateWait(gateWait.toMillis).addEmaDelay(emaWait.toMillis).updatePeak(active))
+            } yield ()
+          }
+          (duration, result) <- rawGet(url).timed
+          ms = duration.toMillis
+          _ <- updateResponseTimeEma(ms)
+          _ <- statsRef.update(_.recordLatency(ms).addActiveMs(ms))
+        } yield result
+      }
     }
 
   private def withRetries[T](effect: Task[T]): Task[T] =
@@ -156,9 +158,10 @@ final class ChessComClient(
   private def releaseSlot(): UIO[Unit] =
     activeRef.updateAndGet(_ - 1).flatMap(updateBar).ignore
 
-  /** Poll until an active slot is available. Runs inside the serializing admission gate; the gate is released before
-    * the request starts so that admission is interruptible — only the fast `activeRef` increment that follows is
-    * uninterruptible (via `acquireReleaseWith` in `get`).
+  /** Poll until an active slot is available. Runs inside the serializing admission gate; the slot increment happens
+    * inside the same gate-protected region (via `ZIO.acquireRelease` in `get`) so that the capacity check and
+    * increment are atomic with respect to other admitting fibers. The polling itself is interruptible so that
+    * pending requests can be cancelled promptly on shutdown.
     */
   private def awaitCapacity: Task[Unit] =
     (for {
