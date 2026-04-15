@@ -96,7 +96,8 @@ object ClubMatch {
 
   def selectClubMatchRef(clubId: ClubId): ZIO[PostgresClient, SQLException, Option[ClubMatchRef]] =
     connectZIO {
-      sql"""SELECT match_id, (time_class != 'Daily') AS is_live, (team1_club_id = $clubId) AS is_team1
+      val daily: TimeClass = TimeClass.Daily
+      sql"""SELECT match_id, (time_class != $daily) AS is_live, (team1_club_id = $clubId) AS is_team1
             FROM club_match
             WHERE team1_club_id = $clubId OR team2_club_id = $clubId
             LIMIT 1""".query[(ClubMatchId, Boolean, Boolean)].run().headOption.map {
