@@ -5,6 +5,7 @@ import java.time.{Instant, ZoneOffset}
 import zio.{RIO, Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
 import zio.http.Client
 
+import ccas.analysis.apps.PlayerUpdater
 import ccas.analysis.tables.*
 import ccas.api.club.ApiClub
 import ccas.api.misc.subtypes.{ClubSlug, Username}
@@ -62,9 +63,7 @@ object BlacklistApp extends ZIOAppDefault {
           apiPlayer <- client.get[ApiPlayer](ApiPlayer.getUrl(username))
           now = Instant.now()
           _ <- withTransaction {
-            Player.insertIfNew(
-              Player(apiPlayer.playerId, apiPlayer.joinedAt, username, apiPlayer.status.category, apiPlayer.title, now)
-            ) *> RecruitmentBlacklist.upsert(
+            PlayerUpdater.reconcile(apiPlayer, client) *> RecruitmentBlacklist.upsert(
               RecruitmentBlacklist(apiClub.clubId, apiPlayer.playerId, now, expiresAt, reason)
             )
           }

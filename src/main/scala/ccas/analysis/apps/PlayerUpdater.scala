@@ -49,4 +49,30 @@ object PlayerUpdater {
     val updated = existing.copy(username = newUsername, status = newStatus, title = newTitle, since = since)
     resolveConflict *> PlayerSnapshot.insert(existing.toSnapshot) *> Player.updateCurrentState(updated)
   }
+
+  /** Reconciles a freshly-fetched `ApiPlayer` against the `player` table by `player_id`. If an existing row is present
+    * and has drifted (username/status/title), archives the prior state to `player_snapshot` and updates via
+    * [[archiveAndUpdate]]. Otherwise inserts a new row with `since = now` for active accounts or `since = lastOnline`
+    * for non-active ones. Must be called within `withTransaction`. Returns `true` only when a brand-new row was
+    * inserted (never on update, no-op, or insert-on-conflict no-op).
+    */
+  def reconcile(
+    apiPlayer: ApiPlayer,
+    client: ChessComClient
+  ): RIO[PostgresClient, Boolean] = {
+    val now            = Instant.now()
+    val statusCategory = apiPlayer.status.category
+    Player.selectIdForUpdate(apiPlayer.playerId).flatMap {
+      case Some(existing) =>
+        ZIO.whenDiscard(!existing.stateMatches(apiPlayer.username, statusCategory, apiPlayer.title)) {
+          archiveAndUpdate(existing, apiPlayer.username, statusCategory, apiPlayer.title, now, client)
+        }.as(false)
+
+      case None =>
+        val since = if (statusCategory == PlayerStatusCategory.Active) { now } else { apiPlayer.lastOnlineAt }
+        Player.insertIfNew(
+          Player(apiPlayer.playerId, apiPlayer.joinedAt, apiPlayer.username, statusCategory, apiPlayer.title, since)
+        ).map(_ > 0)
+    }
+  }
 }

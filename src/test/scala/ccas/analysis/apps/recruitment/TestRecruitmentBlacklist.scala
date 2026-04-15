@@ -94,7 +94,8 @@ object TestRecruitmentBlacklist extends ZIOSpecDefault {
     testListShowsActiveEntries,
     testRemoveDeletesByUsername,
     testHandlesMultipleUsernames,
-    testUpsertsClubBeforeInsert
+    testUpsertsClubBeforeInsert,
+    testReconcilesRenamedPlayer
   )
 
   private def testInsertWithReasonAndExpiresAt = test("inserts blacklist entry with reason and expiresAt") {
@@ -260,4 +261,31 @@ object TestRecruitmentBlacklist extends ZIOSpecDefault {
       after.get.slug == freshClubSlug
     )
   }
+
+  private def testReconcilesRenamedPlayer =
+    test("addToBlacklist reconciles a renamed player — archives prior state and updates Player row") {
+      val oldUsername = Username("blist-old")
+      val newUsername = Username("blist-new")
+      val responses = Map(
+        s"club/$blacklistClubSlug"     -> apiClubJson(700, blacklistClubSlug.value, Nil),
+        s"player/${newUsername.value}" -> apiPlayerJson(203, newUsername.value)
+      )
+      for {
+        _        <- seedDb
+        _        <- Player.insert(Player(pid3, Times.t0, oldUsername, Active, None, Times.t0))
+        client   <- fakeChessComClient(responses)
+        pgClient <- ZIO.service[PostgresClient]
+        _ <- BlacklistApp.addToBlacklist(blacklistClubSlug, List(newUsername), None, None)
+          .provideEnvironment(zio.ZEnvironment(client, pgClient, TestCcasLogger.noop))
+        row     <- Player.selectId(pid3)
+        snaps   <- PlayerSnapshot.selectId(pid3)
+        entries <- RecruitmentBlacklist.selectByClub(blacklistClubId)
+      } yield assertTrue(
+        row.exists(_.username == newUsername),
+        snaps.size == 1,
+        snaps.exists(_.username == oldUsername),
+        entries.size == 1,
+        entries.head.playerId == pid3
+      )
+    }
 }

@@ -605,27 +605,10 @@ private[history] object HistoryProcessing {
   ): RIO[CcasLogger & PostgresClient, Option[PlayerId]] = {
     val work = for {
       apiPlayer <- ctx.client.get[ApiPlayer](ApiPlayer.getUrl(username))
-      playerId       = apiPlayer.playerId
-      statusCategory = apiPlayer.status.category
-      now            = Instant.now()
-
+      playerId = apiPlayer.playerId
       isNew <- withTransaction {
-        Player.selectIdForUpdate(playerId).flatMap {
-          case Some(existing) =>
-            val changed = !existing.stateMatches(username, statusCategory, apiPlayer.title)
-            ZIO.whenDiscard(changed) {
-              PlayerUpdater.archiveAndUpdate(existing, username, statusCategory, apiPlayer.title, now, ctx.client)
-            }.as(false)
-
-          case None =>
-            val since = if (statusCategory == PlayerStatusCategory.Active) now else apiPlayer.lastOnlineAt
-            Player.insertIfNew(Player(playerId, apiPlayer.joinedAt, username, statusCategory, apiPlayer.title, since))
-              .flatMap { inserted =>
-                if (inserted == 0) ZIO.succeed(false)
-                else {
-                  ZIO.whenDiscard(isOurTeam)(createClubMemberForDiscovered(ctx, apiPlayer, matchStartTime)).as(true)
-                }
-              }
+        PlayerUpdater.reconcile(apiPlayer, ctx.client).tap { fresh =>
+          ZIO.whenDiscard(fresh && isOurTeam)(createClubMemberForDiscovered(ctx, apiPlayer, matchStartTime))
         }
       }
       result <- {

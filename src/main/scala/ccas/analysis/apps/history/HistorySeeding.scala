@@ -14,7 +14,6 @@ import ccas.api.club.ApiClubMatches
 import ccas.api.clubmatch.{ApiDailyMatch, ApiMatchBoard}
 import ccas.api.clubmatch.ApiDailyMatch.{ApiDailyMatchRegistered, MatchPlayerStarted}
 import ccas.api.clubmatch.ApiMatchBoard.ApiBoardPlayer
-import ccas.api.misc.enums.PlayerStatusCategory
 import ccas.api.misc.subtypes.*
 import ccas.api.player.{ApiPlayer, ApiPlayerMatches}
 import ccas.utils.client.{ChessComClient, HttpStatusException}
@@ -102,11 +101,10 @@ private[history] object HistorySeeding {
         }
     } yield result
 
-  /** Fetches a player by `username` and reconciles the result against our `player` table: archives prior state to
-    * `player_snapshot` when the existing row differs (via [[PlayerUpdater.archiveAndUpdate]]), inserts a fresh row when
-    * absent, and links every passed `entries` row via [[ClubMatchBoard.updatePlayerId]] before deleting from
-    * `unresolved_board_player`. Errors from the HTTP fetch propagate so callers can catch 404s for rename recovery.
-    * Returns the number of entries fully resolved.
+  /** Fetches a player by `username` and reconciles the result against our `player` table via
+    * [[PlayerUpdater.reconcile]] (archive-to-snapshot on drift, insert on absence), then links every passed `entries`
+    * row via [[ClubMatchBoard.updatePlayerId]] before deleting from `unresolved_board_player`. Errors from the HTTP
+    * fetch propagate so callers can catch 404s for rename recovery. Returns the number of entries fully resolved.
     */
   private def resolveByUsername(
     client: ChessComClient,
@@ -115,28 +113,13 @@ private[history] object HistorySeeding {
   ): RIO[CcasLogger & PostgresClient, Int] =
     for {
       apiPlayer <- client.get[ApiPlayer](ApiPlayer.getUrl(username))
-      playerId       = apiPlayer.playerId
-      statusCategory = apiPlayer.status.category
-      now            = Instant.now()
+      playerId = apiPlayer.playerId
       _ <- withTransaction {
-        for {
-          _ <- Player.selectIdForUpdate(playerId).flatMap {
-            case Some(existing) =>
-              ZIO.whenDiscard(!existing.stateMatches(username, statusCategory, apiPlayer.title)) {
-                PlayerUpdater.archiveAndUpdate(existing, username, statusCategory, apiPlayer.title, now, client)
-              }
-            case None =>
-              val since = if (statusCategory == PlayerStatusCategory.Active) { now }
-              else { apiPlayer.lastOnlineAt }
-              Player.insertIfNew(
-                Player(playerId, apiPlayer.joinedAt, username, statusCategory, apiPlayer.title, since)
-              ).unit
-          }
-          _ <- ZIO.foreachDiscard(entries) { entry =>
+        PlayerUpdater.reconcile(apiPlayer, client) *>
+          ZIO.foreachDiscard(entries) { entry =>
             ClubMatchBoard.updatePlayerId(entry.matchId, entry.board, entry.isTeam1, playerId) *>
               UnresolvedBoardPlayer.delete(entry.matchId, entry.board, entry.isTeam1)
           }
-        } yield ()
       }
     } yield entries.size
 

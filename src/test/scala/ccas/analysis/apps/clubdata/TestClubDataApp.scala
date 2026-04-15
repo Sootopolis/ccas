@@ -7,10 +7,10 @@ import zio.{Chunk, RIO, ZIO, ZLayer}
 import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
-import ccas.analysis.apps.recruitment.RecruitmentTestSupport.{apiClubJson, apiDailyMatchJson}
-import ccas.analysis.tables.{Club, ClubMatch, Tables}
-import ccas.api.misc.enums.{ClubMatchStatus, TimeClass}
-import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug}
+import ccas.analysis.apps.recruitment.RecruitmentTestSupport.{apiClubJson, apiDailyMatchJson, apiPlayerJson}
+import ccas.analysis.tables.{Club, ClubAdmin, ClubMatch, Player, PlayerSnapshot, Tables}
+import ccas.api.misc.enums.{ClubMatchStatus, PlayerStatusCategory, TimeClass}
+import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username}
 import ccas.utils.{CcasLogger, TestCcasLogger}
 import ccas.utils.client.{ChessComClient, TestChessComClientSupport}
 import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
@@ -20,7 +20,8 @@ object TestClubDataApp extends ZIOSpecDefault {
 
   override def spec: Spec[Any, Throwable] = suite("TestClubDataApp")(
     suiteParseMinAgeArg,
-    suiteRefreshClub
+    suiteRefreshClub,
+    suiteResolveAndPersistAdmins
   ).provideShared(
     FreshSchemaLayer("test_club_data_app", onInit = Tables.ensureTables),
     ZLayer.succeed(TestCcasLogger.noop)
@@ -67,12 +68,16 @@ object TestClubDataApp extends ZIOSpecDefault {
   private val newSlug     = ClubSlug("new-slug")
   private val refMatchId  = ClubMatchId(9_999_001)
 
-  /** Wipes the tables touched by the refreshClub tests so each case starts from a clean slate. */
+  /** Wipes the tables touched by the refreshClub and resolveAndPersistAdmins tests so each case starts from a clean
+    * slate.
+    */
   private val clearTables: ZIO[PostgresClient, Throwable, Unit] =
     for {
       _ <- connectZIO(sql"DELETE FROM club_admin".update.run())
       _ <- connectZIO(sql"DELETE FROM club_match".update.run())
       _ <- connectZIO(sql"DELETE FROM club".update.run())
+      _ <- connectZIO(sql"DELETE FROM player_snapshot".update.run())
+      _ <- connectZIO(sql"DELETE FROM player".update.run())
     } yield ()
 
   private val seedCreated  = Instant.parse("2024-01-01T00:00:00Z")
@@ -124,6 +129,12 @@ object TestClubDataApp extends ZIOSpecDefault {
       },
       Method.GET / "pub" / "match" / long("matchId") -> handler { (matchId: Long, _: Request) =>
         responses.get(s"match/$matchId") match {
+          case Some(json) => Response.json(json)
+          case None       => Response(status = Status.NotFound)
+        }
+      },
+      Method.GET / "pub" / "player" / string("username") -> handler { (username: String, _: Request) =>
+        responses.get(s"player/$username") match {
           case Some(json) => Response.json(json)
           case None       => Response(status = Status.NotFound)
         }
@@ -228,6 +239,116 @@ object TestClubDataApp extends ZIOSpecDefault {
         result.clubsFailed == 1,
         unchanged.exists(_.slug == oldSlug),
         unchanged.exists(_.fetchedAt.isEmpty)
+      )
+    }
+  )
+
+  // ==========================================================================
+  // Suite: ClubAdminResolver.resolveAndPersistAdmins
+  // ==========================================================================
+
+  private val adminClubId = ClubId(9500)
+  private val adminClubSlug = ClubSlug("admin-club")
+
+  private def seedAdminClub: RIO[PostgresClient, Unit] =
+    Club.upsert(Club(adminClubId, seedCreated, adminClubSlug, "Admin Club", None, None, None)).unit
+
+  private def seedPlayer(
+    playerId: PlayerId,
+    username: Username,
+    status: PlayerStatusCategory = PlayerStatusCategory.Active
+  ): RIO[PostgresClient, Unit] =
+    Player.insert(Player(playerId, seedCreated, username, status, None, seedCreated))
+
+  private def snapshotCount(playerId: PlayerId): RIO[PostgresClient, Int] =
+    PlayerSnapshot.selectId(playerId).map(_.size)
+
+  private def suiteResolveAndPersistAdmins = suite("resolveAndPersistAdmins")(
+    test("fresh admin not in DB → Player inserted, no snapshot, club_admin row written") {
+      val adminUsername = Username.wrap("fresh-admin")
+      val adminPlayerId = PlayerId(9100)
+      val responses = Map(
+        s"player/${adminUsername.value}" -> apiPlayerJson(PlayerId.unwrap(adminPlayerId), adminUsername.value)
+      )
+      for {
+        _      <- clearTables
+        _      <- seedAdminClub
+        client <- fakeClient(responses)
+        result <- ClubAdminResolver.resolveAndPersistAdmins(client, adminClubId, Set(adminUsername), Set.empty)
+        row    <- Player.selectId(adminPlayerId)
+        snaps  <- snapshotCount(adminPlayerId)
+        admins <- ClubAdmin.selectPlayerIdsByClub(adminClubId)
+      } yield assertTrue(
+        result == Set(adminPlayerId),
+        row.exists(_.username == adminUsername),
+        snaps == 0,
+        admins == Set(adminPlayerId)
+      )
+    },
+    test("admin already in DB under current username → no fetch needed, no snapshot, club_admin row points to existing player") {
+      val adminUsername = Username.wrap("current-admin")
+      val adminPlayerId = PlayerId(9150)
+      // Intentionally provide NO player/ response: if the resolver tries to fetch the player endpoint for an
+      // already-current username, the fake client will 404 and the test will fail.
+      for {
+        _      <- clearTables
+        _      <- seedAdminClub
+        _      <- seedPlayer(adminPlayerId, adminUsername)
+        client <- fakeClient(Map.empty)
+        result <- ClubAdminResolver.resolveAndPersistAdmins(client, adminClubId, Set(adminUsername), Set.empty)
+        row    <- Player.selectId(adminPlayerId)
+        snaps  <- snapshotCount(adminPlayerId)
+        admins <- ClubAdmin.selectPlayerIdsByClub(adminClubId)
+      } yield assertTrue(
+        result == Set(adminPlayerId),
+        row.exists(_.username == adminUsername),
+        snaps == 0,
+        admins == Set(adminPlayerId)
+      )
+    },
+    test("renamed admin — existing Player row under old username → snapshot archives prior state, Player updated") {
+      val oldUsername = Username.wrap("old-admin")
+      val newUsername = Username.wrap("new-admin")
+      val adminPlayerId = PlayerId(9200)
+      val responses = Map(
+        s"player/${newUsername.value}" -> apiPlayerJson(PlayerId.unwrap(adminPlayerId), newUsername.value)
+      )
+      for {
+        _      <- clearTables
+        _      <- seedAdminClub
+        _      <- seedPlayer(adminPlayerId, oldUsername)
+        client <- fakeClient(responses)
+        result <- ClubAdminResolver.resolveAndPersistAdmins(client, adminClubId, Set(newUsername), Set.empty)
+        row    <- Player.selectId(adminPlayerId)
+        snaps  <- PlayerSnapshot.selectId(adminPlayerId)
+        admins <- ClubAdmin.selectPlayerIdsByClub(adminClubId)
+      } yield assertTrue(
+        result == Set(adminPlayerId),
+        row.exists(_.username == newUsername),
+        snaps.size == 1,
+        snaps.exists(_.username == oldUsername),
+        admins == Set(adminPlayerId)
+      )
+    },
+    test("renamed admin — re-running does not write duplicate snapshot") {
+      val oldUsername = Username.wrap("rerun-old")
+      val newUsername = Username.wrap("rerun-new")
+      val adminPlayerId = PlayerId(9250)
+      val responses = Map(
+        s"player/${newUsername.value}" -> apiPlayerJson(PlayerId.unwrap(adminPlayerId), newUsername.value)
+      )
+      for {
+        _       <- clearTables
+        _       <- seedAdminClub
+        _       <- seedPlayer(adminPlayerId, oldUsername)
+        client  <- fakeClient(responses)
+        _       <- ClubAdminResolver.resolveAndPersistAdmins(client, adminClubId, Set(newUsername), Set.empty)
+        _       <- ClubAdminResolver.resolveAndPersistAdmins(client, adminClubId, Set(newUsername), Set(adminPlayerId))
+        row     <- Player.selectId(adminPlayerId)
+        snaps   <- snapshotCount(adminPlayerId)
+      } yield assertTrue(
+        row.exists(_.username == newUsername),
+        snaps == 1
       )
     }
   )
