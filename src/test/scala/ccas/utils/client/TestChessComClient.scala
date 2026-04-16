@@ -1,5 +1,6 @@
 package ccas.utils.client
 
+import com.augustnagro.magnum.sql
 import ccas.utils.sql.PostgresClient
 import io.netty.handler.codec.PrematureChannelClosureException
 import zio.*
@@ -7,9 +8,11 @@ import zio.http.*
 import zio.json.*
 import zio.test.*
 
-import ccas.analysis.tables.{ApiResponseCache, ClientConfig, ClientStats, Tables}
+import ccas.analysis.tables.{ApiResponseBody, ApiResponseCache, ClientConfig, ClientStats, Tables}
+import ccas.analysis.tables.subtypes.ApiResponseBodyId
 import ccas.utils.TestCcasLogger
 import ccas.utils.sql.FreshSchemaLayer
+import ccas.utils.sql.PostgresClient.connectZIO
 
 import java.time.Instant
 
@@ -1481,6 +1484,70 @@ object TestChessComClient extends ZIOSpecDefault {
         } yield assertTrue(
           // Chess.com expects quoted etag on the wire (RFC 7232). Bare "abc" would be rejected.
           inm.contains("\"abc\"")
+        )
+      }
+    },
+    test("Fresh whose body was pruned mid-flight falls through to a network refetch") {
+      // Simulates a retention race: a caller receives CacheableResult.Fresh, holds the lazy load, and between
+      // `lookupMeta` and `getValue` the body row gets deleted (e.g. by ApiResponseCache.deleteBefore on another
+      // app's startup). loadAndDecode should treat the missing body as a cache miss and fetch fresh data.
+      // Use a body that's unique to this test so api_response_body.deleteOrphans can actually remove it —
+      // the shared jsonBody is referenced by cache rows from sibling tests and would be preserved.
+      val url        = URL.decode("http://test.example.com/api/cacheable/race-delete").toOption.get
+      val uniqueBody = """{"value":"race-delete-unique"}"""
+      ZIO.scoped {
+        for {
+          netCalls <- Ref.make(0)
+          (client, _, _) <- makeClient { _ =>
+            netCalls.update(_ + 1).as(cacheable200(uniqueBody, maxAge = Some(3600)))
+          }
+          _     <- client.getCacheable[Payload](url)               // populates cache (network call #1)
+          fresh <- client.getCacheable[Payload](url)               // Fresh hit; body not loaded yet
+          // Simulate the race: cascade-delete the cache row and its body row.
+          _     <- ApiResponseCache.invalidate(url.encode)
+          _     <- ApiResponseBody.deleteOrphans
+          value <- fresh.getValue                                  // must recover via recursive get[T] (network #2)
+          calls <- netCalls.get
+        } yield assertTrue(
+          fresh.isInstanceOf[CacheableResult.Fresh[?]],
+          value.value == "race-delete-unique",
+          calls == 2
+        )
+      }
+    },
+    test("cached body that no longer parses (schema drift) triggers invalidate + refetch") {
+      val url         = URL.decode("http://test.example.com/api/cacheable/schema-drift").toOption.get
+      val beforeBody  = """{"value":"schema-drift-before"}"""
+      val refetchBody = """{"value":"schema-drift-after"}"""
+      ZIO.scoped {
+        for {
+          netCalls  <- Ref.make(0)
+          stage     <- Ref.make(0)
+          (client, _, _) <- makeClient { _ =>
+            stage.getAndUpdate(_ + 1).flatMap { s =>
+              netCalls.update(_ + 1).as(
+                // First call populates the cache with the original body; after the UPDATE-in-place below corrupts
+                // that row, the recovery refetch should see a new body and replace the cache row.
+                if (s == 0) cacheable200(beforeBody, maxAge = Some(3600))
+                else cacheable200(refetchBody, maxAge = Some(3600))
+              )
+            }
+          }
+          _     <- client.getCacheable[Payload](url)
+          fresh <- client.getCacheable[Payload](url)             // Fresh hit; body not loaded yet
+          bodyId = fresh.asInstanceOf[CacheableResult.Fresh[Payload]].bodyId
+          // Corrupt the cached body so the next decode throws JsonDecodingException. Unique body content means
+          // this UPDATE only affects the row we created for this URL — no other test shares it.
+          _     <- connectZIO(
+            sql"UPDATE api_response_body SET body = '{\"oops\":true}' WHERE body_id = ${ApiResponseBodyId.unwrap(bodyId)}".update.run()
+          )
+          value <- fresh.getValue                                // decode fails → invalidate + refetch from network
+          calls <- netCalls.get
+          meta  <- ApiResponseCache.lookupMeta(url.encode)
+        } yield assertTrue(
+          value.value == "schema-drift-after",
+          calls == 2,                                            // first populate + recovery refetch
+          meta.isDefined                                         // refetch re-populated the cache
         )
       }
     }

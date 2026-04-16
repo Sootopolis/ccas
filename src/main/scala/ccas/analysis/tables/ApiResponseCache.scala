@@ -97,4 +97,23 @@ object ApiResponseCache {
     connectZIO {
       sql"DELETE FROM api_response_cache WHERE url = $url".update.run()
     }
+
+  /** Retention cleanup: delete cache rows older than `cutoff`, then drop any `api_response_body` rows no longer
+    * referenced by the cache or by `api_fetch_failure`. Wrapped in a single transaction so an unreferenced body
+    * can't be observed between the two steps. Returns the number of cache rows deleted. Safe to call from app
+    * startup; concurrent invocations are idempotent — PG MVCC lets each one see its own snapshot and later runs
+    * either find no rows to delete or see overlapping sets, so the end state is identical.
+    *
+    * Readers mid-way through `loadAndDecode` when a prune runs are tolerated: `ApiResponseBody.loadById` returning
+    * `None` (the body was pruned out from under a `Fresh` / `Revalidated` result) falls through to a fresh network
+    * fetch via `ChessComClient.loadAndDecode`'s recovery path.
+    */
+  def deleteBefore(cutoff: Instant): ZIO[PostgresClient, SQLException, Int] =
+    withTransaction {
+      connectZIO {
+        sql"DELETE FROM api_response_cache WHERE fetched_at < $cutoff".update.run()
+      }.flatMap { count =>
+        ApiResponseBody.deleteOrphans.as(count)
+      }
+    }
 }

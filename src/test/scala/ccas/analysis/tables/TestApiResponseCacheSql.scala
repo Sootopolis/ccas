@@ -23,7 +23,8 @@ object TestApiResponseCacheSql extends ZIOSpecDefault {
     testInvalidateDeletes,
     testFkRestrictBlocksBodyDelete,
     testOrphanCleanupPreservesCacheReferencedBody,
-    testNoStoreHeaderUpsertStillWorksWhenCallerPassesItExplicitly
+    testNoStoreHeaderUpsertStillWorksWhenCallerPassesItExplicitly,
+    testDeleteBeforeRetainsFreshAndCleansOrphans
   ).provideShared(
     FreshSchemaLayer("test_api_response_cache", onInit = Tables.ensureTables)
   ) @@ TestAspect.sequential
@@ -214,6 +215,43 @@ object TestApiResponseCacheSql extends ZIOSpecDefault {
         meta.exists(_.maxAgeSeconds.isEmpty),
         meta.exists(_.contentType.isEmpty),
         meta.exists(_.bodyId == bodyId)
+      )
+    }
+
+  private def testDeleteBeforeRetainsFreshAndCleansOrphans =
+    test("deleteBefore removes old cache rows and orphaned bodies, preserves fresh ones") {
+      val urlOld    = "https://api.chess.com/pub/club/old-test"
+      val urlFresh  = "https://api.chess.com/pub/club/fresh-test"
+      val bodyOld   = """{"name":"old-only-body"}"""
+      val bodyFresh = """{"name":"fresh-only-body"}"""
+      // Cutoff sits between Times.t1 (5 min after t0) and a later fresh timestamp.
+      val freshAt = Times.t0.plus(Duration.ofDays(2))
+      val cutoff  = Times.t0.plus(Duration.ofDays(1))
+      for {
+        _           <- wipeCache
+        _           <- ApiResponseCache.upsertWithBody(
+          url = urlOld, body = bodyOld, etag = None, lastModified = None,
+          maxAgeSeconds = None, contentType = None, fetchedAt = Times.t0
+        )
+        freshBodyId <- ApiResponseCache.upsertWithBody(
+          url = urlFresh, body = bodyFresh, etag = None, lastModified = None,
+          maxAgeSeconds = None, contentType = None, fetchedAt = freshAt
+        )
+        bodiesBefore <- countBodies
+        cacheBefore  <- countCache
+        deleted      <- ApiResponseCache.deleteBefore(cutoff)
+        cacheAfter   <- countCache
+        bodiesAfter  <- countBodies
+        freshStill   <- ApiResponseCache.lookupMeta(urlFresh)
+        oldGone      <- ApiResponseCache.lookupMeta(urlOld)
+      } yield assertTrue(
+        deleted == 1,              // only the old row deleted
+        cacheBefore == 2,
+        cacheAfter == 1,
+        bodiesBefore == 2,         // bodyOld + bodyFresh
+        bodiesAfter == 1,          // bodyOld was orphaned and swept; bodyFresh is still referenced
+        freshStill.exists(_.bodyId == freshBodyId),
+        oldGone.isEmpty
       )
     }
 }
