@@ -51,7 +51,6 @@ object TestChessComClient extends ZIOSpecDefault {
       lastReqRef    <- Ref.make(0L)
       bar                 <- TestCcasLogger.noopBar
       stats               <- Ref.make(ChessComClient.StatsAccumulator())
-      firstResponseLogged <- Ref.make(false)
       config = ChessComClient.ThrottleConfig(
         recoveryTiers.getOrElse(doublingTiers(permits.toInt)),
         cooldown,
@@ -105,7 +104,6 @@ object TestChessComClient extends ZIOSpecDefault {
         TestCcasLogger.noop,
         refs,
         stats,
-        firstResponseLogged,
         bar,
         config,
         testScope

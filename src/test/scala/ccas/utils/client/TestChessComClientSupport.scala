@@ -29,7 +29,6 @@ object TestChessComClientSupport {
       lastReqRef    <- Ref.make(0L)
       bar                 <- TestCcasLogger.noopBar
       stats               <- Ref.make(ChessComClient.StatsAccumulator())
-      firstResponseLogged <- Ref.make(false)
     } yield {
       val driver = new ZClient.Driver[Any, Scope, Throwable] {
         override def request(
@@ -67,7 +66,6 @@ object TestChessComClientSupport {
         TestCcasLogger.noop,
         refs,
         stats,
-        firstResponseLogged,
         bar,
         ChessComClient.ThrottleConfig(Vector(2, permits.toInt.max(2)).distinct, 30.seconds, 5.seconds, 1.second, 10.seconds, 1.second, 5, 2, 3, 20, 0.2, 10, 0, Duration.Zero),
         Scope.global
