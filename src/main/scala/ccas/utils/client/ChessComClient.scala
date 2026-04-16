@@ -55,6 +55,16 @@ import ccas.utils.json.JsonDecodingException
   *     configuration is inserted once into `client_config` on first flush and referenced by FK. A final flush runs
   *     in the scope finalizer to ensure stats survive non-graceful shutdowns with at most one interval's worth of
   *     data loss.
+  *   - '''Response caching''' — every successful fetch is persisted to `api_response_cache`, keyed by URL, with the
+  *     ETag / Last-Modified / `Cache-Control: max-age` / Content-Type metadata and a FK into `api_response_body`
+  *     (whose SHA-256 dedupe means byte-identical bodies share one row even across URLs). The public [[getCacheable]]
+  *     entry point short-circuits to a `Fresh` result when the cache entry is still within `max-age`, never entering
+  *     the gate or sending a request. Stale entries are sent as conditional GETs (`If-None-Match` +
+  *     `If-Modified-Since`); a 304 response returns `Revalidated` and bumps `fetched_at` without re-downloading.
+  *     A 200 that dedupes to the same `body_id` returns `IdenticalBody`; otherwise `Changed`. `Cache-Control:
+  *     no-store` is honoured (response is not cached). Cache hits and revalidations are tracked as separate counters
+  *     on `StatsAccumulator` so the `requests` / `successes` / `failures` numbers continue to reflect only real
+  *     Chess.com API load.
   *
   * Constructed via the `ChessComClient.live` ZLayer which reads configuration from `application.conf` under the
   * `chess-com-client` prefix.
@@ -139,6 +149,10 @@ final class ChessComClient(
     if (response.status == Status.NotModified) {
       conditional match {
         case Some(meta) =>
+          // 304 counts as a success for the failure window: the origin is reachable and willing to serve us.
+          // The `true` argument keeps `recordOutcome`'s non-429 branch (same as any other non-rate-limit response).
+          // We deliberately don't call `logFirstResponseEncoding` here — 304 has no body, so there's no encoding
+          // to verify; the log will fire on the next 2xx response in this client's lifetime.
           recordOutcome(true) *>
             statsRef.update(_.incCacheRevalidation) *>
             ApiResponseCache.touch(url.encode, Instant.now())

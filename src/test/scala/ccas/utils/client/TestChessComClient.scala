@@ -7,7 +7,7 @@ import zio.http.*
 import zio.json.*
 import zio.test.*
 
-import ccas.analysis.tables.{ClientConfig, ClientStats, Tables}
+import ccas.analysis.tables.{ApiResponseCache, ClientConfig, ClientStats, Tables}
 import ccas.utils.TestCcasLogger
 import ccas.utils.sql.FreshSchemaLayer
 
@@ -820,7 +820,8 @@ object TestChessComClient extends ZIOSpecDefault {
     },
     suiteTimingStats,
     suiteStatsAccumulator,
-    suitePersistStats
+    suitePersistStats,
+    suiteCacheable
   ).provideShared(
     FreshSchemaLayer("test_client", Tables.ensureTables)
   ) @@ TestAspect.withLiveClock @@ TestAspect.timeout(15.seconds)
@@ -1239,6 +1240,216 @@ object TestChessComClient extends ZIOSpecDefault {
       } yield assertTrue(
         recent.count(_.appLabel == "test-noop") == 0
       )
+    },
+    test("persists when cache-only activity (requests = 0, cacheHits > 0)") {
+      for {
+        pgClient <- ZIO.service[PostgresClient]
+        statsRef <- Ref.make(ChessComClient.StatsAccumulator().copy(cacheHits = 3))
+        ctx      <- makeFlushContext("test-cache-only", statsRef, pgClient)
+        _      <- ChessComClient.persistStats(ctx)
+        recent <- ClientStats.selectRecent(ctx.startedAt.minusSeconds(60))
+        row     = recent.find(_.appLabel == "test-cache-only")
+      } yield assertTrue(
+        row.exists(_.requests == 0L),
+        row.exists(_.cacheHits == 3L)
+      )
+    }
+  )
+
+  // ==========================================================================
+  // Cache-aware dispatch via getCacheable — Fresh / Revalidated / IdenticalBody / Changed
+  // ==========================================================================
+
+  /** Build a `Response` with typed Cache-Control / ETag / Content-Type headers so the cache-parsing path is
+    * exercised end-to-end. `maxAge = None` means no Cache-Control header at all (so entries are never fresh).
+    */
+  private def cacheable200(
+    body: String,
+    maxAge: Option[Int] = Some(300),
+    etag: Option[String] = Some("v1"),
+    noStore: Boolean = false
+  ): Response = {
+    val ccHeader: Option[Header.CacheControl] =
+      if (noStore) Some(Header.CacheControl.NoStore)
+      else maxAge.map(n => Header.CacheControl.MaxAge(n))
+    val etagHeader: Option[Header.ETag] = etag.map(Header.ETag.Strong(_))
+    val allHeaders = Headers(Header.ContentType(MediaType.application.json)) ++
+      ccHeader.fold(Headers.empty)(h => Headers(h)) ++
+      etagHeader.fold(Headers.empty)(h => Headers(h))
+    Response(status = Status.Ok, headers = allHeaders, body = Body.fromString(body))
+  }
+
+  private def suiteCacheable = suite("cacheable dispatch")(
+    test("first call returns Changed and populates cache") {
+      val url = URL.decode("http://test.example.com/api/cacheable/changed-first").toOption.get
+      ZIO.scoped {
+        for {
+          (client, _, stats) <- makeClient(_ => ZIO.succeed(cacheable200(jsonBody)))
+          result <- client.getCacheable[Payload](url)
+          value  <- result.getValue
+          meta   <- ApiResponseCache.lookupMeta(url.encode)
+          s      <- stats.get
+        } yield assertTrue(
+          result.isInstanceOf[CacheableResult.Changed[?]],
+          !result.isUnchanged,
+          value.value == "ok",
+          meta.exists(_.etag.contains("\"v1\"")),
+          meta.exists(_.maxAgeSeconds.contains(300L)),
+          s.requests == 1L,
+          s.cacheMisses == 1L,
+          s.cacheHits == 0L,
+          s.cacheRevalidations == 0L
+        )
+      }
+    },
+    test("second call within max-age returns Fresh without a network call") {
+      val url = URL.decode("http://test.example.com/api/cacheable/fresh-hit").toOption.get
+      ZIO.scoped {
+        for {
+          netCalls <- Ref.make(0)
+          (client, _, stats) <- makeClient { _ =>
+            netCalls.update(_ + 1).as(cacheable200(jsonBody, maxAge = Some(3600)))
+          }
+          _      <- client.getCacheable[Payload](url) // populate cache
+          result <- client.getCacheable[Payload](url) // should Fresh
+          value  <- result.getValue
+          calls  <- netCalls.get
+          s      <- stats.get
+        } yield assertTrue(
+          result.isInstanceOf[CacheableResult.Fresh[?]],
+          result.isUnchanged,
+          value.value == "ok",
+          calls == 1, // only the first populate call hit the network
+          s.requests == 1L,
+          s.cacheHits == 1L
+        )
+      }
+    },
+    test("stale entry with 304 response returns Revalidated and touches fetched_at") {
+      val url = URL.decode("http://test.example.com/api/cacheable/revalidated").toOption.get
+      ZIO.scoped {
+        for {
+          callCount <- Ref.make(0)
+          (client, _, stats) <- makeClient { _ =>
+            callCount.getAndUpdate(_ + 1).map { n =>
+              if (n == 0) cacheable200(jsonBody, maxAge = Some(0)) // immediately stale on read
+              else Response(status = Status.NotModified)
+            }
+          }
+          _         <- client.getCacheable[Payload](url)
+          before    <- ApiResponseCache.lookupMeta(url.encode)
+          _         <- ZIO.sleep(20.millis) // ensure touched fetched_at differs
+          result    <- client.getCacheable[Payload](url)
+          value     <- result.getValue
+          after     <- ApiResponseCache.lookupMeta(url.encode)
+          s         <- stats.get
+        } yield assertTrue(
+          result.isInstanceOf[CacheableResult.Revalidated[?]],
+          result.isUnchanged,
+          value.value == "ok",
+          before.exists(b => after.exists(_.fetchedAt.isAfter(b.fetchedAt))),
+          s.cacheRevalidations == 1L,
+          s.cacheHits == 0L
+        )
+      }
+    },
+    test("stale entry with 200 identical body returns IdenticalBody") {
+      val url = URL.decode("http://test.example.com/api/cacheable/identical").toOption.get
+      ZIO.scoped {
+        for {
+          // Always return the same body with a zero max-age so the cache row is always stale
+          (client, _, stats) <- makeClient(_ => ZIO.succeed(cacheable200(jsonBody, maxAge = Some(0))))
+          _      <- client.getCacheable[Payload](url) // populate cache
+          result <- client.getCacheable[Payload](url) // server returns identical body
+          value  <- result.getValue
+          s      <- stats.get
+        } yield assertTrue(
+          result.isInstanceOf[CacheableResult.IdenticalBody[?]],
+          result.isUnchanged,
+          value.value == "ok",
+          s.requests == 2L,      // both calls hit the network
+          s.cacheMisses == 1L,   // first call
+          s.cacheHits == 1L      // second call — IdenticalBody increments cacheHits
+        )
+      }
+    },
+    test("stale entry with 200 different body returns Changed and replaces the cache row") {
+      val url = URL.decode("http://test.example.com/api/cacheable/changed-on-revalidate").toOption.get
+      val body1 = """{"value":"first"}"""
+      val body2 = """{"value":"second"}"""
+      ZIO.scoped {
+        for {
+          callCount <- Ref.make(0)
+          (client, _, stats) <- makeClient { _ =>
+            callCount.getAndUpdate(_ + 1).map { n =>
+              if (n == 0) cacheable200(body1, maxAge = Some(0), etag = Some("v1"))
+              else cacheable200(body2, maxAge = Some(0), etag = Some("v2"))
+            }
+          }
+          _            <- client.getCacheable[Payload](url)
+          firstBodyId  <- ApiResponseCache.lookupMeta(url.encode).map(_.get.bodyId)
+          result       <- client.getCacheable[Payload](url)
+          value        <- result.getValue
+          secondBodyId <- ApiResponseCache.lookupMeta(url.encode).map(_.get.bodyId)
+          s            <- stats.get
+        } yield assertTrue(
+          result.isInstanceOf[CacheableResult.Changed[?]],
+          !result.isUnchanged,
+          value.value == "second",
+          firstBodyId != secondBodyId,
+          s.cacheMisses == 2L
+        )
+      }
+    },
+    test("Cache-Control: no-store response is not cached") {
+      val url = URL.decode("http://test.example.com/api/cacheable/no-store").toOption.get
+      ZIO.scoped {
+        for {
+          (client, _, _) <- makeClient(_ => ZIO.succeed(cacheable200(jsonBody, noStore = true)))
+          result <- client.getCacheable[Payload](url)
+          _      <- result.getValue
+          meta   <- ApiResponseCache.lookupMeta(url.encode)
+        } yield assertTrue(
+          result.isInstanceOf[CacheableResult.Changed[?]],
+          meta.isEmpty
+        )
+      }
+    },
+    test("response without Cache-Control is never fresh (always revalidates or misses)") {
+      val url = URL.decode("http://test.example.com/api/cacheable/no-cache-control").toOption.get
+      ZIO.scoped {
+        for {
+          netCalls <- Ref.make(0)
+          (client, _, _) <- makeClient { _ =>
+            netCalls.update(_ + 1).as(cacheable200(jsonBody, maxAge = None, etag = Some("only-etag")))
+          }
+          _      <- client.getCacheable[Payload](url) // populates cache without max-age
+          result <- client.getCacheable[Payload](url) // should NOT be Fresh
+          _      <- result.getValue
+          calls  <- netCalls.get
+        } yield assertTrue(
+          !result.isInstanceOf[CacheableResult.Fresh[?]],
+          calls == 2 // both calls hit the network
+        )
+      }
+    },
+    test("conditional request attaches If-None-Match in wire format (quotes preserved)") {
+      val url = URL.decode("http://test.example.com/api/cacheable/if-none-match").toOption.get
+      ZIO.scoped {
+        for {
+          lastHeaders <- Ref.make(Headers.empty)
+          (client, _, _) <- makeClient { req =>
+            lastHeaders.set(req.headers).as(cacheable200(jsonBody, maxAge = Some(0), etag = Some("abc")))
+          }
+          _   <- client.getCacheable[Payload](url) // populate cache with etag
+          _   <- client.getCacheable[Payload](url) // second call sends If-None-Match
+          hs  <- lastHeaders.get
+          inm = hs.rawHeader("If-None-Match")
+        } yield assertTrue(
+          // Chess.com expects quoted etag on the wire (RFC 7232). Bare "abc" would be rejected.
+          inm.contains("\"abc\"")
+        )
+      }
     }
   )
 }
