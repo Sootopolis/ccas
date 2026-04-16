@@ -741,6 +741,12 @@ object ChessComClient {
     def incCacheHit: StatsAccumulator           = copy(cacheHits = cacheHits + 1)
     def incCacheRevalidation: StatsAccumulator  = copy(cacheRevalidations = cacheRevalidations + 1)
     def incCacheMiss: StatsAccumulator          = copy(cacheMisses = cacheMisses + 1)
+
+    /** True if this session did anything worth persisting. `requests` covers every network request
+      * (cacheMisses and cacheRevalidations both ride along with `incRequests`); `cacheHits` catches the one case
+      * where a session did only Fresh max-age hits and never touched the network.
+      */
+    def hasActivity: Boolean = requests > 0 || cacheHits > 0
     /** Record a Cloudflare challenge 403 at the given permit tier, incrementing both the total and per-tier counters. */
     def incCf403AtTier(tier: Int): StatsAccumulator =
       copy(
@@ -879,7 +885,7 @@ object ChessComClient {
   private[ccas] def persistStats(ctx: FlushContext): UIO[Unit] =
     (for {
       current <- ctx.statsRef.get
-      _ <- ZIO.whenDiscard(current.requests > 0) {
+      _ <- ZIO.whenDiscard(current.hasActivity) {
         for {
           now            <- Clock.instant
           inProgress <- inProgressThrottleMs(ctx.stateRef)
@@ -927,7 +933,7 @@ object ChessComClient {
   private def finalFlush(ctx: FlushContext, logger: CcasLogger): UIO[Unit] =
     ctx.statsRef.get.flatMap { cumulative =>
       persistStats(ctx) *>
-        ZIO.whenDiscard(cumulative.requests > 0)(logger.info(cumulative.summary))
+        ZIO.whenDiscard(cumulative.hasActivity)(logger.info(cumulative.summary))
     }
 
   private def userAgentHeaders(contactEmail: String): Headers =
