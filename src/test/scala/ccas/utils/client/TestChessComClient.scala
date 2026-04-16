@@ -1361,7 +1361,10 @@ object TestChessComClient extends ZIOSpecDefault {
           value.value == "ok",
           before.exists(b => after.exists(_.fetchedAt.isAfter(b.fetchedAt))),
           s.cacheRevalidations == 1L,
-          s.cacheHits == 0L
+          s.cacheHits == 0L,
+          // 304 responses are attributed to the current permit tier in attemptsByTier, same as any other request —
+          // the tier counter increments inside rawGet before the network call, so the 304 branch inherits it.
+          s.attemptsByTier.values.sum == 2L // one populate attempt + one revalidation attempt
         )
       }
     },
