@@ -201,6 +201,10 @@ final class ChessComClient(
     val etagOpt        = response.header(Header.ETag).map(Header.ETag.render)
     val lastModOpt     = response.header(Header.LastModified).map(_.value.toInstant)
     val contentTypeOpt = response.header(Header.ContentType).map(_.mediaType.fullType)
+    // RFC 7234 §5.2.2.2: `Cache-Control: no-cache` means "cache but always revalidate before reuse". We honour it
+    // by dropping any `max-age` so `isFresh` never returns true — subsequent requests go out as conditional GETs
+    // (validated via etag / last-modified) rather than being served locally.
+    val effectiveMaxAge = if (directives.noCache) None else directives.maxAgeSeconds
     val upsertEffect: Task[Option[ApiResponseBodyId]] =
       if (directives.noStore) ZIO.succeed(None)
       else
@@ -210,7 +214,7 @@ final class ChessComClient(
             body = string,
             etag = etagOpt,
             lastModified = lastModOpt,
-            maxAgeSeconds = directives.maxAgeSeconds,
+            maxAgeSeconds = effectiveMaxAge,
             contentType = contentTypeOpt,
             fetchedAt = Instant.now()
           )

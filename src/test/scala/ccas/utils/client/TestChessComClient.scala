@@ -1261,17 +1261,26 @@ object TestChessComClient extends ZIOSpecDefault {
   // ==========================================================================
 
   /** Build a `Response` with typed Cache-Control / ETag / Content-Type headers so the cache-parsing path is
-    * exercised end-to-end. `maxAge = None` means no Cache-Control header at all (so entries are never fresh).
+    * exercised end-to-end. `maxAge = None` + `noStore = false` + `noCache = false` produces no Cache-Control header
+    * at all. `noStore` or `noCache` combine with `maxAge` via `Header.CacheControl.Multiple` so the parser's
+    * directive-walking path is also covered.
     */
   private def cacheable200(
     body: String,
     maxAge: Option[Int] = Some(300),
     etag: Option[String] = Some("v1"),
-    noStore: Boolean = false
+    noStore: Boolean = false,
+    noCache: Boolean = false
   ): Response = {
-    val ccHeader: Option[Header.CacheControl] =
-      if (noStore) Some(Header.CacheControl.NoStore)
-      else maxAge.map(n => Header.CacheControl.MaxAge(n))
+    val directives: Vector[Header.CacheControl] =
+      maxAge.map(n => Header.CacheControl.MaxAge(n)).toVector ++
+        (if (noStore) Vector(Header.CacheControl.NoStore) else Vector.empty) ++
+        (if (noCache) Vector(Header.CacheControl.NoCache) else Vector.empty)
+    val ccHeader: Option[Header.CacheControl] = directives match {
+      case Vector()  => None
+      case Vector(d) => Some(d)
+      case ds        => Some(Header.CacheControl.Multiple(NonEmptyChunk.fromIterable(ds.head, ds.tail)))
+    }
     val etagHeader: Option[Header.ETag] = etag.map(Header.ETag.Strong(_))
     val allHeaders = Headers(Header.ContentType(MediaType.application.json)) ++
       ccHeader.fold(Headers.empty)(h => Headers(h)) ++
@@ -1424,12 +1433,36 @@ object TestChessComClient extends ZIOSpecDefault {
             netCalls.update(_ + 1).as(cacheable200(jsonBody, maxAge = None, etag = Some("only-etag")))
           }
           _      <- client.getCacheable[Payload](url) // populates cache without max-age
-          result <- client.getCacheable[Payload](url) // should NOT be Fresh
+          result <- client.getCacheable[Payload](url) // should NOT be Fresh — server returned 200 with same body
           _      <- result.getValue
           calls  <- netCalls.get
         } yield assertTrue(
+          // Without max-age the entry is never fresh; second call hits the network. With the same body returned,
+          // ApiResponseBody dedupes by SHA-256 and we get IdenticalBody.
+          result.isInstanceOf[CacheableResult.IdenticalBody[?]],
+          calls == 2
+        )
+      }
+    },
+    test("Cache-Control: no-cache strips max-age so entries are always revalidated") {
+      val url = URL.decode("http://test.example.com/api/cacheable/no-cache").toOption.get
+      ZIO.scoped {
+        for {
+          netCalls <- Ref.make(0)
+          (client, _, _) <- makeClient { _ =>
+            // Server sends no-cache alongside an hour-long max-age. Per RFC 7234 §5.2.2.2, the no-cache directive
+            // wins: we must revalidate before reuse regardless of the max-age value.
+            netCalls.update(_ + 1).as(cacheable200(jsonBody, maxAge = Some(3600), noCache = true))
+          }
+          _      <- client.getCacheable[Payload](url) // populates cache
+          meta   <- ApiResponseCache.lookupMeta(url.encode)
+          result <- client.getCacheable[Payload](url) // must hit the network despite max-age=3600
+          _      <- result.getValue
+          calls  <- netCalls.get
+        } yield assertTrue(
+          meta.exists(_.maxAgeSeconds.isEmpty), // no-cache stripped the max-age at persist time
           !result.isInstanceOf[CacheableResult.Fresh[?]],
-          calls == 2 // both calls hit the network
+          calls == 2
         )
       }
     },
