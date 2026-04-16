@@ -107,15 +107,19 @@ final class ChessComClient(
   /** Build the outgoing request, attaching `If-None-Match` and/or `If-Modified-Since` validators when a prior cache
     * entry is present. Sending both when both are available is safe and maximizes the chance of a 304 regardless of
     * which validator the origin prefers (RFC 7232 §6).
+    *
+    * Note: `If-None-Match` is attached via `Header.Custom` with the raw wire-format etag (quotes included). zio-http
+    * 3.10.1's typed `Header.IfNoneMatch.ETags` strips quotes during render (see `IfNoneMatch.render` in zio-http
+    * sources), which is RFC 7232–incorrect and produces a header the origin won't match. We read the etag the same
+    * way, via `rawHeader`, so what's stored in `api_response_cache.etag` is already in wire format and can be echoed
+    * back verbatim.
     */
   private def buildRequest(url: URL, conditional: Option[ApiResponseCache]): Request = {
     val base = Request(method = GET, url = url).addHeaders(headers)
     conditional match {
       case None => base
       case Some(meta) =>
-        val withEtag = meta.etag.fold(base) { et =>
-          base.addHeader(Header.IfNoneMatch.ETags(NonEmptyChunk(et)))
-        }
+        val withEtag = meta.etag.fold(base)(et => base.addHeader(Header.Custom("If-None-Match", et)))
         meta.lastModified.fold(withEtag) { lm =>
           withEtag.addHeader(Header.IfModifiedSince(lm.atZone(ZoneOffset.UTC)))
         }
@@ -177,10 +181,10 @@ final class ChessComClient(
     string: String
   )(using jsonDecoder: JsonDecoder[T]): Task[CacheableResult[T]] = {
     val directives     = parseCacheDirectives(response)
-    val etagOpt        = response.header(Header.ETag).map {
-      case Header.ETag.Strong(v) => v
-      case Header.ETag.Weak(v)   => v
-    }
+    // Parse through the typed ETag header (validates wire format, preserves strong/weak), then re-render to wire
+    // format for storage. The rendered form (`"abc"` or `W/"abc"`) is what we echo back on conditional requests —
+    // see note on `buildRequest` above for why we can't use the typed `IfNoneMatch.ETags` for the echo path.
+    val etagOpt        = response.header(Header.ETag).map(Header.ETag.render)
     val lastModOpt     = response.header(Header.LastModified).map(_.value.toInstant)
     val contentTypeOpt = response.header(Header.ContentType).map(_.mediaType.fullType)
     val upsertEffect: Task[Option[ApiResponseBodyId]] =
