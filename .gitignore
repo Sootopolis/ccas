@@ -43,6 +43,9 @@ build/
 .bloop
 .metals
 
+### Claude Code ###
+.claude/
+
 ### Environment ###
 .env
 .mcp.json
