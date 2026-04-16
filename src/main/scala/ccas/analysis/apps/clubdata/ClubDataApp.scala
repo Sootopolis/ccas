@@ -3,14 +3,13 @@ package ccas.analysis.apps.clubdata
 import java.time.{Duration, Instant}
 
 import zio.{Chunk, RIO, Ref, Scope, Task, ZIO, ZIOAppArgs, ZIOAppDefault}
-import zio.http.Client
 
 import ccas.analysis.apps.ref.RefHelpers
 import ccas.analysis.tables.{Club, ClubAdmin, ClubMatch, ClubMatchRef, Tables}
 import ccas.api.club.{ApiClub, ApiClubMatches}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 import ccas.utils.{CcasLogger, OutputFile}
-import ccas.utils.client.{ChessComClient, HttpStatusException}
+import ccas.utils.client.{ChessComClient, HttpClientLayer, HttpStatusException}
 import ccas.utils.sql.PostgresClient
 
 object ClubDataApp extends ZIOAppDefault {
@@ -29,7 +28,7 @@ object ClubDataApp extends ZIOAppDefault {
     } yield ()).provideSome[ZIOAppArgs & Scope](
       CcasLogger.live(showProgress = true),
       ChessComClient.live("clubdata"),
-      Client.default,
+      HttpClientLayer.live,
       PostgresClient.live(onInit = Tables.ensureTables)
     )
 

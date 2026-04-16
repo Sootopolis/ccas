@@ -48,7 +48,11 @@ final case class ClientStats(
   latencyBucket100To200: Long,
   latencyBucket200To500: Long,
   latencyBucket500To1000: Long,
-  latencyBucket1000Plus: Long
+  latencyBucket1000Plus: Long,
+  // cache
+  cacheHits: Long,
+  cacheRevalidations: Long,
+  cacheMisses: Long
 ) derives DbCodec
 
 object ClientStats {
@@ -61,7 +65,8 @@ object ClientStats {
        active_ms, gate_wait_ms, ema_delay_ms,
        latency_min_ms, latency_max_ms, latency_mean_ms,
        latency_bucket0_to50, latency_bucket50_to100, latency_bucket100_to200,
-       latency_bucket200_to500, latency_bucket500_to1000, latency_bucket1000_plus"""
+       latency_bucket200_to500, latency_bucket500_to1000, latency_bucket1000_plus,
+       cache_hits, cache_revalidations, cache_misses"""
   )
 
   def createTable: ZIO[PostgresClient, SQLException, Int] =
@@ -98,6 +103,9 @@ object ClientStats {
               latency_bucket200_to500  BIGINT NOT NULL,
               latency_bucket500_to1000 BIGINT NOT NULL,
               latency_bucket1000_plus  BIGINT NOT NULL,
+              cache_hits               BIGINT NOT NULL DEFAULT 0,
+              cache_revalidations      BIGINT NOT NULL DEFAULT 0,
+              cache_misses             BIGINT NOT NULL DEFAULT 0,
               FOREIGN KEY (config_id) REFERENCES client_config (config_id) ON DELETE RESTRICT
             )""".update.run()
       sql"""CREATE INDEX IF NOT EXISTS idx_client_stats_started_at
@@ -120,7 +128,8 @@ object ClientStats {
               ${item.activeMs}, ${item.gateWaitMs}, ${item.emaDelayMs},
               ${item.latencyMinMs}, ${item.latencyMaxMs}, ${item.latencyMeanMs},
               ${item.latencyBucket0To50}, ${item.latencyBucket50To100}, ${item.latencyBucket100To200},
-              ${item.latencyBucket200To500}, ${item.latencyBucket500To1000}, ${item.latencyBucket1000Plus}
+              ${item.latencyBucket200To500}, ${item.latencyBucket500To1000}, ${item.latencyBucket1000Plus},
+              ${item.cacheHits}, ${item.cacheRevalidations}, ${item.cacheMisses}
             ) ON CONFLICT (session_id) DO UPDATE SET
               completed_at = EXCLUDED.completed_at,
               requests = EXCLUDED.requests,
@@ -148,7 +157,10 @@ object ClientStats {
               latency_bucket100_to200 = EXCLUDED.latency_bucket100_to200,
               latency_bucket200_to500 = EXCLUDED.latency_bucket200_to500,
               latency_bucket500_to1000 = EXCLUDED.latency_bucket500_to1000,
-              latency_bucket1000_plus = EXCLUDED.latency_bucket1000_plus
+              latency_bucket1000_plus = EXCLUDED.latency_bucket1000_plus,
+              cache_hits = EXCLUDED.cache_hits,
+              cache_revalidations = EXCLUDED.cache_revalidations,
+              cache_misses = EXCLUDED.cache_misses
             """.update.run()
     }
 

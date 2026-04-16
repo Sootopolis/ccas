@@ -4,7 +4,6 @@ import java.time.Instant
 import scala.annotation.tailrec
 
 import zio.{Chunk, Clock, IO, NonEmptyChunk, RIO, Scope, Task, ZIO, ZIOAppArgs, ZIOAppDefault}
-import zio.http.Client
 
 import ccas.analysis.apps.membership.MembershipChange.*
 import ccas.analysis.apps.membership.MembershipChange.MemberChange.JoinedClub
@@ -12,7 +11,7 @@ import ccas.analysis.tables.*
 import ccas.api.club.{ApiClub, ApiClubMembers}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId, PlayerId}
 import ccas.utils.{CcasLogger, OutputFile, TimeParser}
-import ccas.utils.client.ChessComClient
+import ccas.utils.client.{ChessComClient, HttpClientLayer}
 import ccas.utils.errors.BadRequestException
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.withTransaction
@@ -53,7 +52,7 @@ object MembershipApp extends ZIOAppDefault {
     } yield ()).provideSomeAuto(
       CcasLogger.live(showProgress = true),
       ChessComClient.live(MEMBERSHIP),
-      Client.default,
+      HttpClientLayer.live,
       PostgresClient.live(onInit = Tables.ensureTables)
     )
 

@@ -2,12 +2,12 @@ package ccas.server
 
 import com.typesafe.config.ConfigFactory
 import zio.{Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
-import zio.http.{Client, Server}
+import zio.http.Server
 
 import ccas.server.jobs.JobRunner
 import ccas.server.routes.{BlacklistRoutes, HealthRoutes, JobRoutes, ScheduleRoutes}
 import ccas.server.scheduler.JobScheduler
-import ccas.utils.client.ChessComClient
+import ccas.utils.client.{ChessComClient, HttpClientLayer}
 import ccas.utils.sql.PostgresClient
 import ccas.utils.CcasLogger
 
@@ -24,7 +24,7 @@ object CcasServer extends ZIOAppDefault {
     } yield ()).provideSome[Scope](
       CcasLogger.live(showProgress = false),
       ChessComClient.live("server"),
-      Client.default,
+      HttpClientLayer.live,
       PostgresClient.live(onInit = ServerTables.ensureTables),
       JobRunner.live,
       JobScheduler.live,

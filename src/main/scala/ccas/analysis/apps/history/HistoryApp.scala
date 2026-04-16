@@ -3,14 +3,13 @@ package ccas.analysis.apps.history
 import java.time.{Duration as JDuration, Instant}
 
 import zio.{Chunk, NonEmptyChunk, RIO, Ref, Scope, URIO, ZEnvironment, ZIO, ZIOAppArgs, ZIOAppDefault}
-import zio.http.Client
 import HistoryUtils.*
 
 import ccas.analysis.apps.membership.MembershipApp
 import ccas.analysis.tables.*
 import ccas.api.misc.subtypes.*
 import ccas.utils.{display, CcasLogger, OutputFile}
-import ccas.utils.client.ChessComClient
+import ccas.utils.client.{ChessComClient, HttpClientLayer}
 import ccas.utils.errors.BadRequestException
 import ccas.utils.sql.PostgresClient
 
@@ -88,7 +87,7 @@ object HistoryApp extends ZIOAppDefault {
     } yield ()).provideSomeAuto(
       CcasLogger.live(showProgress = true),
       ChessComClient.live("history"),
-      Client.default,
+      HttpClientLayer.live,
       PostgresClient.live(onInit = Tables.ensureTables)
     )
 

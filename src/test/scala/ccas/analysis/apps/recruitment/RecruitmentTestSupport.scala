@@ -361,9 +361,10 @@ object RecruitmentTestSupport {
       activeRef     <- Ref.make(0)
       rateLimitGate <- Semaphore.make(1)
       lastReqRef    <- Ref.make(0L)
-      bar           <- TestCcasLogger.noopBar
-      stats         <- Ref.make(ChessComClient.StatsAccumulator())
-      playerCount   <- Ref.make(0)
+      bar                 <- TestCcasLogger.noopBar
+      stats               <- Ref.make(ChessComClient.StatsAccumulator())
+      firstResponseLogged <- Ref.make(false)
+      playerCount         <- Ref.make(0)
     } yield {
       val blockingPlayerRoute =
         Method.GET / "pub" / "player" / string("username") -> handler { (username: String, _: Request) =>
@@ -412,6 +413,7 @@ object RecruitmentTestSupport {
         TestCcasLogger.noop,
         refs,
         stats,
+        firstResponseLogged,
         bar,
         ChessComClient.ThrottleConfig(Vector(2, 5), 30.seconds, 5.seconds, 1.second, 10.seconds, 1.second, 5, 2, 3, 20, 0.2, 10, 0, java.time.Duration.ZERO),
         Scope.global
@@ -436,6 +438,7 @@ object RecruitmentTestSupport {
       _ <- PostgresClient.connectZIO(sql"DELETE FROM recruitment_criteria".update.run())
       _ <- PostgresClient.connectZIO(sql"DELETE FROM player_recruitment_cache".update.run())
       _ <- PostgresClient.connectZIO(sql"DELETE FROM api_fetch_failure".update.run())
+      _ <- PostgresClient.connectZIO(sql"DELETE FROM api_response_cache".update.run())
       _ <- PostgresClient.connectZIO(sql"DELETE FROM api_response_body".update.run())
       _ <- PostgresClient.connectZIO(sql"DELETE FROM club_admin WHERE club_id = $sizableClubId".update.run())
       _ <- PostgresClient.connectZIO(sql"DELETE FROM club_member WHERE club_id = $clubId".update.run())

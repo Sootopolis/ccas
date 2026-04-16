@@ -96,6 +96,7 @@ Optional overrides with defaults:
 | `SCHEDULER_POLL_MINUTES` | 5 | How often the scheduler checks for due jobs |
 | `CHESS_COM_API_PERMITS` | 16 | Max parallel Chess.com API requests |
 | `CHESS_COM_API_COOLDOWN_SECONDS` | 30 | Backoff cooldown after rate limiting |
+| `CHESS_COM_API_CACHE_RETENTION_DAYS` | 30 | How long cached Chess.com responses are kept before startup pruning |
 
 See [`application.conf`](src/main/resources/application.conf) for the full set of tunable parameters.
 

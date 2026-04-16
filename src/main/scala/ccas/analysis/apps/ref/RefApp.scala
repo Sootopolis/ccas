@@ -4,12 +4,11 @@ import java.time.{Duration as JDuration, Instant}
 
 import com.augustnagro.magnum.sql
 import zio.{Clock, RIO, Ref, Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
-import zio.http.Client
 import RefUtils.*
 
 import ccas.analysis.tables.{ClubRefSkip, PlayerRefSkip, PlayerTournamentRef, SkipCount, Tables}
 import ccas.utils.{display, CcasLogger, OutputFile}
-import ccas.utils.client.ChessComClient
+import ccas.utils.client.{ChessComClient, HttpClientLayer}
 import ccas.utils.errors.BadRequestException
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient
@@ -52,7 +51,7 @@ object RefApp extends ZIOAppDefault {
     } yield ()).provideSome[ZIOAppArgs & Scope](
       CcasLogger.live(showProgress = true),
       ChessComClient.live("ref"),
-      Client.default,
+      HttpClientLayer.live,
       PostgresClient.live(onInit = Tables.ensureTables)
     )
 

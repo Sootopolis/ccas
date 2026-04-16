@@ -3,14 +3,13 @@ package ccas.analysis.apps.recruitment
 import java.time.{Instant, ZoneOffset}
 
 import zio.{RIO, Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
-import zio.http.Client
 
 import ccas.analysis.apps.PlayerUpdater
 import ccas.analysis.tables.*
 import ccas.api.club.ApiClub
 import ccas.api.misc.subtypes.{ClubSlug, Username}
 import ccas.api.player.ApiPlayer
-import ccas.utils.client.ChessComClient
+import ccas.utils.client.{ChessComClient, HttpClientLayer}
 import ccas.utils.errors.{BadRequestException, NotFoundException}
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.withTransaction
@@ -43,7 +42,7 @@ object BlacklistApp extends ZIOAppDefault {
     } yield ()).provideSomeAuto(
       CcasLogger.live(showProgress = true),
       ChessComClient.live("blacklist"),
-      Client.default,
+      HttpClientLayer.live,
       PostgresClient.live(onInit = Tables.ensureTables)
     )
 
