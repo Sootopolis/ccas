@@ -65,14 +65,19 @@ final class ChessComClient(
   logger: CcasLogger,
   throttle: ChessComClient.ThrottleRefs,
   statsRef: Ref[ChessComClient.StatsAccumulator],
+  firstResponseLogged: Ref[Boolean],
   progressBar: ProgressBar,
   config: ChessComClient.ThrottleConfig,
   scope: Scope
 ) {
   import throttle.*
 
-  private val batchedClient = client.batched @@ ZClientAspect.followRedirects(3) { (_, message) =>
-    ZIO.fail(Exception(s"Redirect failed: $message"))
+  // `ZClientAspect.followRedirects` treats every 3xx as a redirect, including 304 Not Modified, and fails on the
+  // missing Location header. Return the 304 response as-is so conditional-GET revalidation works; other redirect
+  // failures still propagate as errors.
+  private val batchedClient = client.batched @@ ZClientAspect.followRedirects(3) { (resp, message) =>
+    if (resp.status == Status.NotModified) ZIO.succeed(resp)
+    else ZIO.fail(Exception(s"Redirect failed: $message"))
   }
 
   private def rawGet[T](url: URL)(using jsonDecoder: JsonDecoder[T]): Task[T] = (for {
@@ -84,6 +89,7 @@ final class ChessComClient(
       )
     }
     string <- response.body.asString
+    _      <- logFirstResponseEncoding(response, string)
     cfChallenge = isCloudflareChallenge(response, string)
     _ <-
       if (cfChallenge) throttleDown(config.cfCooldown)
@@ -311,6 +317,18 @@ final class ChessComClient(
 
   private def isCloudflareChallenge(response: Response, body: String): Boolean =
     response.status == Status.Forbidden && body.contains(CfChallengeMarker)
+
+  /** One-shot debug log: on the first successful response of this client's lifetime, report whether the server used
+    * gzip encoding and the decoded body size. Confirms that `Accept-Encoding: gzip` is being honored by Chess.com and
+    * that zio-http's `Decompression.NonStrict` pipeline is decoding transparently. Subsequent responses are silent.
+    */
+  private def logFirstResponseEncoding(response: Response, body: String): UIO[Unit] =
+    firstResponseLogged.getAndSet(true).flatMap { alreadyLogged =>
+      ZIO.unlessDiscard(alreadyLogged) {
+        val encoding = response.header(Header.ContentEncoding).map(_.encoding).getOrElse("none")
+        logger.info(s"First API response: Content-Encoding=$encoding, decoded body size=${body.length} chars")
+      }
+    }
 
   private def failureRate(outcomes: Vector[Boolean]): Double =
     if (outcomes.isEmpty) 0.0 else outcomes.count(!_).toDouble / outcomes.size
@@ -722,7 +740,8 @@ object ChessComClient {
   private def userAgentHeaders(contactEmail: String): Headers =
     Headers(
       Header.Custom("User-Agent", s"${BuildInfo.name.toUpperCase}/${BuildInfo.version} (contact: $contactEmail)"),
-      Header.Accept(MediaType.application.json)
+      Header.Accept(MediaType.application.json),
+      Header.AcceptEncoding.GZip()
     )
 
   def live(appLabel: String): RLayer[Client & PostgresClient & CcasLogger, ChessComClient] =
@@ -749,9 +768,10 @@ object ChessComClient {
         lastReqRef    <- Ref.make(0L)
         startedAt     <- Clock.instant
         sessionId      = startedAt.toString.replace(":", "").replace("-", "")
-        stats         <- Ref.make(StatsAccumulator())
-        configIdRef   <- Ref.make(Option.empty[Long])
-        bar           <- logger.progressBar
+        stats               <- Ref.make(StatsAccumulator())
+        firstResponseLogged <- Ref.make(false)
+        configIdRef         <- Ref.make(Option.empty[Long])
+        bar                 <- logger.progressBar
         refs = ThrottleRefs(stateRef, activeRef, rateLimitGate, lastReqRef)
         flushCtx = FlushContext(sessionId, appLabel, startedAt, stats, configIdRef, throttleConfig, stateRef, pgClient)
         flushFiber <- persistStats(flushCtx).repeat(Schedule.fixed(statsFlushInterval)).forkDaemon
@@ -763,6 +783,7 @@ object ChessComClient {
         logger,
         refs,
         stats,
+        firstResponseLogged,
         bar,
         throttleConfig,
         clientScope

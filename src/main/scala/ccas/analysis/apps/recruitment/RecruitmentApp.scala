@@ -3,7 +3,6 @@ package ccas.analysis.apps.recruitment
 import java.time.{Duration as JDuration, Instant}
 
 import zio.{RIO, Ref, Scope, ZEnvironment, ZIO, ZIOAppArgs, ZIOAppDefault}
-import zio.http.Client
 
 import ccas.analysis.apps.membership.MembershipApp
 import ccas.analysis.apps.ref.RefHelpers
@@ -12,7 +11,7 @@ import ccas.api.club.{ApiClub, ApiClubMatches, ApiClubMembers}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId, PlayerId, Username}
 import ccas.api.player.ApiPlayer
 import ccas.utils.{display, CcasLogger, OutputFile}
-import ccas.utils.client.ChessComClient
+import ccas.utils.client.{ChessComClient, HttpClientLayer}
 import ccas.utils.errors.{BadRequestException, NotFoundException}
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.withTransaction
@@ -108,7 +107,7 @@ object RecruitmentApp extends ZIOAppDefault {
       }).provideSome[Scope](
         CcasLogger.live(showProgress = true),
         ChessComClient.live("recruitment"),
-        Client.default,
+        HttpClientLayer.live,
         PostgresClient.live(onInit = Tables.ensureTables)
       )
     } yield ()
