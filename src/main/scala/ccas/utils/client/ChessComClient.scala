@@ -324,8 +324,15 @@ final class ChessComClient(
         _ => statsRef.update(_.incSuccesses)
       )
 
+  /** Parallel fetch across many URLs, capped at `maxPermits` in-flight fibers. Network-bound fibers are already
+    * serialised to `maxPermits` by the rate-limit gate inside `gatedRawGet`, so capping the outer `foreachPar` at
+    * the same number is free for that path — extra fibers would just queue at the gate. For cache-warm workloads
+    * (where fibers never enter the gate), the cap bounds concurrent `lookupMeta` / `loadById` against the Hikari
+    * connection pool at a predictable level. `lookupMeta` is a sub-millisecond indexed point-lookup, so even at
+    * `maxPermits` parallelism throughput is high enough that the cap is not the bottleneck in practice.
+    */
   def getAll[T](urls: Iterable[URL])(using jsonDecoder: JsonDecoder[T]): Task[Chunk[T]] =
-    ZIO.foreachPar(Chunk.from(urls))(get)
+    ZIO.foreachPar(Chunk.from(urls))(get).withParallelism(config.maxPermits.toInt)
 
   // ---------------------------------------------------------------------------
   // Progress bar
