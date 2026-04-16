@@ -1,6 +1,6 @@
 package ccas.utils.client
 
-import java.time.Instant
+import java.time.{Instant, ZoneOffset}
 
 import ccas.utils.sql.PostgresClient
 import com.typesafe.config.ConfigFactory
@@ -13,7 +13,8 @@ import zio.http.*
 import zio.http.Method.GET
 import zio.json.JsonDecoder
 
-import ccas.analysis.tables.{ApiFetchFailure, ApiResponseBody, ClientConfig, ClientStats}
+import ccas.analysis.tables.{ApiFetchFailure, ApiResponseBody, ApiResponseCache, ClientConfig, ClientStats}
+import ccas.analysis.tables.subtypes.ApiResponseBodyId
 import ccas.info.BuildInfo
 import ccas.utils.{CcasLogger, ProgressBar}
 import ccas.utils.json.JsonDecodingException
@@ -80,59 +81,220 @@ final class ChessComClient(
     else ZIO.fail(Exception(s"Redirect failed: $message"))
   }
 
-  private def rawGet[T](url: URL)(using jsonDecoder: JsonDecoder[T]): Task[T] = (for {
-    tier <- stateRef.get.map(_.currentMax.toInt)
-    _ <- statsRef.update(_.incAttemptAtTier(tier))
-    response <- batchedClient(Request(method = GET, url = url).addHeaders(headers)).tapError { e =>
-      ZIO.whenDiscard(isConnectionError(e))(
-        statsRef.update(_.incConnectionErrors)
-      )
+  private def rawGet[T](url: URL, conditional: Option[ApiResponseCache])(
+    using jsonDecoder: JsonDecoder[T]
+  ): Task[CacheableResult[T]] = {
+    val request = buildRequest(url, conditional)
+    (for {
+      tier <- stateRef.get.map(_.currentMax.toInt)
+      _    <- statsRef.update(_.incAttemptAtTier(tier))
+      response <- batchedClient(request).tapError { e =>
+        ZIO.whenDiscard(isConnectionError(e))(statsRef.update(_.incConnectionErrors))
+      }
+      result <- handleResponse[T](url, conditional, response, tier)
+    } yield result).tapError { e =>
+      val (errorType, msg, body) = e match {
+        case e: HttpStatusException => (e.getClass.getSimpleName, Some(e.statusCode.toString), Some(e.responseBody))
+        case other                  => (other.getClass.getSimpleName, Option(other.getMessage), None)
+      }
+      ApiFetchFailure
+        .insert(ApiFetchFailure(Instant.now(), url.encode, errorType, msg, body))
+        .provideEnvironment(ZEnvironment(pgClient))
+        .ignore
     }
-    string <- response.body.asString
-    _      <- logFirstResponseEncoding(response, string)
-    cfChallenge = isCloudflareChallenge(response, string)
-    _ <-
-      if (cfChallenge) throttleDown(config.cfCooldown)
-      else recordOutcome(response.status != Status.TooManyRequests)
-    errorBody = if (cfChallenge) ApiResponseBody.CfCanonicalBody else string
-    _ <- ZIO.whenDiscard(!response.status.isSuccess) {
-      val errorUpdate =
-        if (cfChallenge) statsRef.update(_.incCf403AtTier(tier))
-        else if (response.status.code == 429) statsRef.update(_.incError429AtTier(tier))
-        else statsRef.update(_.incErrorOther)
-      errorUpdate *> ZIO.fail(HttpStatusException(response.status.code, url, errorBody))
-    }
-    value <- ZIO.fromEither(jsonDecoder.decodeJson(string)).mapError(JsonDecodingException(_))
-  } yield value).tapError { e =>
-    val (errorType, msg, body) = e match {
-      case e: HttpStatusException => (e.getClass.getSimpleName, Some(e.statusCode.toString), Some(e.responseBody))
-      case other                  => (other.getClass.getSimpleName, Option(other.getMessage), None)
-    }
-    ApiFetchFailure
-      .insert(ApiFetchFailure(Instant.now(), url.encode, errorType, msg, body))
-      .provideEnvironment(ZEnvironment(pgClient))
-      .ignore
   }
 
-  def get[T](url: URL)(using jsonDecoder: JsonDecoder[T]): Task[T] =
-    statsRef.update(_.incRequests) *> withRetries {
-      ZIO.scoped {
-        for {
-          _ <- rateLimitGate.withPermit {
-            for {
-              (gateWait, _) <- awaitCapacity.timed
-              (emaWait, _)  <- emaDelay.timed
-              active        <- ZIO.acquireRelease(activeRef.updateAndGet(_ + 1).tap(updateBar))(_ => releaseSlot())
-              _ <- statsRef.update(_.addGateWait(gateWait.toMillis).addEmaDelay(emaWait.toMillis).updatePeak(active))
-            } yield ()
+  /** Build the outgoing request, attaching `If-None-Match` and/or `If-Modified-Since` validators when a prior cache
+    * entry is present. Sending both when both are available is safe and maximizes the chance of a 304 regardless of
+    * which validator the origin prefers (RFC 7232 §6).
+    */
+  private def buildRequest(url: URL, conditional: Option[ApiResponseCache]): Request = {
+    val base = Request(method = GET, url = url).addHeaders(headers)
+    conditional match {
+      case None => base
+      case Some(meta) =>
+        val withEtag = meta.etag.fold(base) { et =>
+          base.addHeader(Header.IfNoneMatch.ETags(NonEmptyChunk(et)))
+        }
+        meta.lastModified.fold(withEtag) { lm =>
+          withEtag.addHeader(Header.IfModifiedSince(lm.atZone(ZoneOffset.UTC)))
+        }
+    }
+  }
+
+  /** Dispatch on response status. 304 is handled before the generic error path so conditional revalidation bypasses
+    * `HttpStatusException`. 2xx is routed to `handleSuccessBody` for cache upsert and decode. Everything else flows
+    * through the existing error-recording machinery unchanged.
+    */
+  private def handleResponse[T](
+    url: URL,
+    conditional: Option[ApiResponseCache],
+    response: Response,
+    tier: Int
+  )(using jsonDecoder: JsonDecoder[T]): Task[CacheableResult[T]] = {
+    if (response.status == Status.NotModified) {
+      conditional match {
+        case Some(meta) =>
+          recordOutcome(true) *>
+            statsRef.update(_.incCacheRevalidation) *>
+            ApiResponseCache.touch(url.encode, Instant.now())
+              .provideEnvironment(ZEnvironment(pgClient))
+              .as(CacheableResult.Revalidated(meta.bodyId, loadAndDecode[T](url, meta.bodyId)))
+        case None =>
+          ZIO.fail(Exception(s"Unexpected 304 Not Modified for non-conditional request: $url"))
+      }
+    } else {
+      response.body.asString.flatMap { string =>
+        val cfChallenge = isCloudflareChallenge(response, string)
+        val errorBody   = if (cfChallenge) ApiResponseBody.CfCanonicalBody else string
+        val outcomeEffect =
+          if (cfChallenge) throttleDown(config.cfCooldown)
+          else recordOutcome(response.status != Status.TooManyRequests)
+        val errorPath =
+          if (response.status.isSuccess) {
+            logFirstResponseEncoding(response, string) *>
+              handleSuccessBody[T](url, conditional, response, string)
+          } else {
+            val errorUpdate =
+              if (cfChallenge) statsRef.update(_.incCf403AtTier(tier))
+              else if (response.status.code == 429) statsRef.update(_.incError429AtTier(tier))
+              else statsRef.update(_.incErrorOther)
+            errorUpdate *> ZIO.fail(HttpStatusException(response.status.code, url, errorBody))
           }
-          (duration, result) <- rawGet(url).timed
-          ms = duration.toMillis
-          _ <- updateResponseTimeEma(ms)
-          _ <- statsRef.update(_.recordLatency(ms).addActiveMs(ms))
-        } yield result
+        outcomeEffect *> errorPath
       }
     }
+  }
+
+  /** Success path: extract cache-control headers, upsert the response body into the cache (unless `no-store`), and
+    * return `IdenticalBody` when the new body deduped to the same `body_id` as the prior cache entry, otherwise
+    * `Changed` with the eagerly-decoded value.
+    */
+  private def handleSuccessBody[T](
+    url: URL,
+    conditional: Option[ApiResponseCache],
+    response: Response,
+    string: String
+  )(using jsonDecoder: JsonDecoder[T]): Task[CacheableResult[T]] = {
+    val directives     = parseCacheDirectives(response)
+    val etagOpt        = response.header(Header.ETag).map {
+      case Header.ETag.Strong(v) => v
+      case Header.ETag.Weak(v)   => v
+    }
+    val lastModOpt     = response.header(Header.LastModified).map(_.value.toInstant)
+    val contentTypeOpt = response.header(Header.ContentType).map(_.mediaType.fullType)
+    val upsertEffect: Task[Option[ApiResponseBodyId]] =
+      if (directives.noStore) ZIO.succeed(None)
+      else
+        ApiResponseCache
+          .upsertWithBody(
+            url = url.encode,
+            body = string,
+            etag = etagOpt,
+            lastModified = lastModOpt,
+            maxAgeSeconds = directives.maxAgeSeconds,
+            contentType = contentTypeOpt,
+            fetchedAt = Instant.now()
+          )
+          .provideEnvironment(ZEnvironment(pgClient))
+          .asSome
+    upsertEffect.flatMap { newBodyIdOpt =>
+      val decodeLazy = ZIO.fromEither(jsonDecoder.decodeJson(string)).mapError(JsonDecodingException(_))
+      (newBodyIdOpt, conditional.map(_.bodyId)) match {
+        case (Some(newBodyId), Some(oldBodyId)) if newBodyId == oldBodyId =>
+          statsRef.update(_.incCacheHit).as(CacheableResult.IdenticalBody(newBodyId, decodeLazy))
+        case _ =>
+          statsRef.update(_.incCacheMiss) *> decodeLazy.map(CacheableResult.Changed(_))
+      }
+    }
+  }
+
+  private def parseCacheDirectives(response: Response): ChessComClient.CacheDirectives = {
+    def walk(cc: Header.CacheControl, acc: ChessComClient.CacheDirectives): ChessComClient.CacheDirectives = cc match {
+      case Header.CacheControl.MaxAge(n)     => acc.copy(maxAgeSeconds = Some(n.toLong))
+      case Header.CacheControl.NoStore       => acc.copy(noStore = true)
+      case Header.CacheControl.NoCache       => acc.copy(noCache = true)
+      case Header.CacheControl.Multiple(nec) => nec.foldLeft(acc)((a, d) => walk(d, a))
+      case _                                 => acc
+    }
+    response
+      .header(Header.CacheControl)
+      .fold(ChessComClient.CacheDirectives.empty)(walk(_, ChessComClient.CacheDirectives.empty))
+  }
+
+  /** Lazy body-load + decode for `Fresh` and `Revalidated` results. On JSON decode failure (schema drift where an
+    * old cached body no longer parses against a newer case class), invalidate the cache entry and refetch over the
+    * wire via a recursive `get[T]` call. The recursive call sees no cache row and flows through the miss path to
+    * produce a `Changed` value, so there is no infinite recursion.
+    */
+  private def loadAndDecode[T](url: URL, bodyId: ApiResponseBodyId)(using jsonDecoder: JsonDecoder[T]): Task[T] =
+    ApiResponseBody
+      .loadById(bodyId)
+      .provideEnvironment(ZEnvironment(pgClient))
+      .flatMap {
+        case Some(body) => ZIO.fromEither(jsonDecoder.decodeJson(body)).mapError(JsonDecodingException(_))
+        case None =>
+          ApiResponseCache
+            .invalidate(url.encode)
+            .provideEnvironment(ZEnvironment(pgClient))
+            .ignore *> get[T](url)
+      }
+      .catchSome { case _: JsonDecodingException =>
+        ApiResponseCache
+          .invalidate(url.encode)
+          .provideEnvironment(ZEnvironment(pgClient))
+          .ignore *> get[T](url)
+      }
+
+  /** True if a cached entry is still within its `Cache-Control: max-age` window. Entries without a `max-age` are
+    * never fresh — we always revalidate (via conditional headers, or a full fetch if no validators are available).
+    */
+  private def isFresh(meta: ApiResponseCache, now: Instant): Boolean =
+    meta.maxAgeSeconds.exists(maxAge => now.isBefore(meta.fetchedAt.plusSeconds(maxAge)))
+
+  /** Wrap the existing gate / permit / latency-timing block around `rawGet`, parameterised by the optional
+    * conditional cache entry. All throttle, retry, and error-recording machinery lives inside here.
+    */
+  private def gatedRawGet[T](url: URL, conditional: Option[ApiResponseCache])(
+    using jsonDecoder: JsonDecoder[T]
+  ): Task[CacheableResult[T]] =
+    ZIO.scoped {
+      for {
+        _ <- rateLimitGate.withPermit {
+          for {
+            (gateWait, _) <- awaitCapacity.timed
+            (emaWait, _)  <- emaDelay.timed
+            active        <- ZIO.acquireRelease(activeRef.updateAndGet(_ + 1).tap(updateBar))(_ => releaseSlot())
+            _ <- statsRef.update(_.addGateWait(gateWait.toMillis).addEmaDelay(emaWait.toMillis).updatePeak(active))
+          } yield ()
+        }
+        (duration, result) <- rawGet(url, conditional).timed
+        ms = duration.toMillis
+        _ <- updateResponseTimeEma(ms)
+        _ <- statsRef.update(_.recordLatency(ms).addActiveMs(ms))
+      } yield result
+    }
+
+  /** Cache-aware entry point. Checks `api_response_cache` first; on a fresh hit (within `max-age`) returns a
+    * `Fresh` result without a network call. Otherwise dispatches to the gated + retried `rawGet`, passing any prior
+    * cache row so `If-None-Match` / `If-Modified-Since` validators can be attached. Callers that want to skip
+    * downstream processing on unchanged data should use this directly; callers that just want `T` should use `get`.
+    */
+  def getCacheable[T](url: URL)(using jsonDecoder: JsonDecoder[T]): Task[CacheableResult[T]] =
+    ApiResponseCache
+      .lookupMeta(url.encode)
+      .provideEnvironment(ZEnvironment(pgClient))
+      .flatMap {
+        case Some(meta) if isFresh(meta, Instant.now()) =>
+          statsRef
+            .update(_.incCacheHit)
+            .as(CacheableResult.Fresh(meta.bodyId, loadAndDecode[T](url, meta.bodyId)))
+        case cachedOpt =>
+          statsRef.update(_.incRequests) *> withRetries(gatedRawGet[T](url, cachedOpt))
+      }
+
+  def get[T](url: URL)(using jsonDecoder: JsonDecoder[T]): Task[T] =
+    getCacheable[T](url).flatMap(_.getValue)
 
   private def withRetries[T](effect: Task[T]): Task[T] =
     effect
@@ -359,6 +521,20 @@ final class ChessComClient(
 }
 
 object ChessComClient {
+
+  /** Parsed subset of `Cache-Control` directives that influence our caching decisions. Anything outside these three
+    * (e.g. `must-revalidate`, `immutable`, `public`, `private`) is ignored.
+    */
+  private[ccas] final case class CacheDirectives(
+    maxAgeSeconds: Option[Long],
+    noStore: Boolean,
+    noCache: Boolean
+  )
+
+  private[ccas] object CacheDirectives {
+    val empty: CacheDirectives = CacheDirectives(None, false, false)
+  }
+
   private[ccas] case class ThrottleRefs(
     stateRef: Ref[ThrottleState],
     activeRef: Ref[Int],
@@ -548,13 +724,19 @@ object ChessComClient {
     throttledMs: Long = 0,
     attemptsByTier: Map[Int, Long] = Map.empty,
     errors429ByTier: Map[Int, Long] = Map.empty,
-    errorsCf403ByTier: Map[Int, Long] = Map.empty
+    errorsCf403ByTier: Map[Int, Long] = Map.empty,
+    cacheHits: Long = 0,
+    cacheRevalidations: Long = 0,
+    cacheMisses: Long = 0
   ) {
-    def incRequests: StatsAccumulator         = copy(requests = requests + 1)
-    def incSuccesses: StatsAccumulator        = copy(successes = successes + 1)
-    def incFailures: StatsAccumulator         = copy(failures = failures + 1)
-    def incConnectionErrors: StatsAccumulator = copy(connectionErrors = connectionErrors + 1)
-    def incThrottleDowns: StatsAccumulator    = copy(throttleDowns = throttleDowns + 1)
+    def incRequests: StatsAccumulator           = copy(requests = requests + 1)
+    def incSuccesses: StatsAccumulator          = copy(successes = successes + 1)
+    def incFailures: StatsAccumulator           = copy(failures = failures + 1)
+    def incConnectionErrors: StatsAccumulator   = copy(connectionErrors = connectionErrors + 1)
+    def incThrottleDowns: StatsAccumulator      = copy(throttleDowns = throttleDowns + 1)
+    def incCacheHit: StatsAccumulator           = copy(cacheHits = cacheHits + 1)
+    def incCacheRevalidation: StatsAccumulator  = copy(cacheRevalidations = cacheRevalidations + 1)
+    def incCacheMiss: StatsAccumulator          = copy(cacheMisses = cacheMisses + 1)
     /** Record a Cloudflare challenge 403 at the given permit tier, incrementing both the total and per-tier counters. */
     def incCf403AtTier(tier: Int): StatsAccumulator =
       copy(
@@ -642,7 +824,10 @@ object ChessComClient {
         latencyBucket100To200 = latencyBuckets(2),
         latencyBucket200To500 = latencyBuckets(3),
         latencyBucket500To1000 = latencyBuckets(4),
-        latencyBucket1000Plus = latencyBuckets(5)
+        latencyBucket1000Plus = latencyBuckets(5),
+        cacheHits = cacheHits,
+        cacheRevalidations = cacheRevalidations,
+        cacheMisses = cacheMisses
       )
     }
 
@@ -661,7 +846,11 @@ object ChessComClient {
         if (throttledMs > 0) Some(s"throttled=${throttledMs}ms") else None
       ).flatten
       val overheadSuffix = if (overheadParts.nonEmpty) s", overhead ${overheadParts.mkString(", ")}" else ""
-      s"API stats: $requests requests$failedSuffix$retrySuffix$throttleSuffix$latencySuffix$overheadSuffix"
+      val cacheSuffix =
+        if (cacheHits > 0 || cacheRevalidations > 0 || cacheMisses > 0)
+          s", cache: $cacheHits hits / $cacheRevalidations revalidated / $cacheMisses misses"
+        else ""
+      s"API stats: $requests requests$failedSuffix$retrySuffix$throttleSuffix$latencySuffix$overheadSuffix$cacheSuffix"
     }
   }
 

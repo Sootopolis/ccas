@@ -7,6 +7,7 @@ import java.sql.SQLException
 import com.augustnagro.magnum.*
 import zio.ZIO
 
+import ccas.analysis.tables.subtypes.ApiResponseBodyId
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.{connectZIO, transactZIO}
 
@@ -31,26 +32,41 @@ object ApiResponseBody {
             )""".update.run()
     }
 
-  def ensureBody(body: String): ZIO[PostgresClient, SQLException, Long] = {
+  def ensureBody(body: String): ZIO[PostgresClient, SQLException, ApiResponseBodyId] = {
     val hash = sha256(body)
     connectZIO {
       sql"SELECT body_id FROM api_response_body WHERE body_hash = $hash"
         .query[Long].run().headOption
     }.flatMap {
-      case Some(id) => ZIO.succeed(id)
+      case Some(id) => ZIO.succeed(ApiResponseBodyId.wrap(id))
       case None => connectZIO {
         sql"""INSERT INTO api_response_body (body_hash, body) VALUES ($hash, $body)
               ON CONFLICT (body_hash) DO NOTHING""".update.run()
-        sql"SELECT body_id FROM api_response_body WHERE body_hash = $hash".query[Long].run().head
+        ApiResponseBodyId.wrap(
+          sql"SELECT body_id FROM api_response_body WHERE body_hash = $hash".query[Long].run().head
+        )
       }
     }
   }
+
+  /** Read a cached body by id. Used by `CacheableResult.Fresh` / `Revalidated` lazy-loading to fetch the body only
+    * when the caller actually invokes `getValue`. Returns `None` if the row was deleted (e.g. by orphan cleanup),
+    * which the caller should treat as a cache miss and fall through to a network refetch.
+    */
+  def loadById(bodyId: ApiResponseBodyId): ZIO[PostgresClient, SQLException, Option[String]] =
+    connectZIO {
+      val raw = ApiResponseBodyId.unwrap(bodyId)
+      sql"SELECT body FROM api_response_body WHERE body_id = $raw".query[String].run().headOption
+    }
 
   def deleteOrphans: ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""DELETE FROM api_response_body b
             WHERE NOT EXISTS (
               SELECT 1 FROM api_fetch_failure f WHERE f.response_body_id = b.body_id
+            )
+              AND NOT EXISTS (
+              SELECT 1 FROM api_response_cache c WHERE c.body_id = b.body_id
             )""".update.run()
     }
 
@@ -69,7 +85,8 @@ object ApiResponseBody {
             )""".update.run()
       sql"""DELETE FROM api_response_body
             WHERE body LIKE '%/cdn-cgi/challenge-platform/%'
-              AND NOT EXISTS (SELECT 1 FROM api_fetch_failure f WHERE f.response_body_id = body_id)"""
+              AND NOT EXISTS (SELECT 1 FROM api_fetch_failure f WHERE f.response_body_id = body_id)
+              AND NOT EXISTS (SELECT 1 FROM api_response_cache c WHERE c.body_id = body_id)"""
         .update.run()
       updated
     }

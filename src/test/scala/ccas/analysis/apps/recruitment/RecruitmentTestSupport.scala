@@ -438,6 +438,7 @@ object RecruitmentTestSupport {
       _ <- PostgresClient.connectZIO(sql"DELETE FROM recruitment_criteria".update.run())
       _ <- PostgresClient.connectZIO(sql"DELETE FROM player_recruitment_cache".update.run())
       _ <- PostgresClient.connectZIO(sql"DELETE FROM api_fetch_failure".update.run())
+      _ <- PostgresClient.connectZIO(sql"DELETE FROM api_response_cache".update.run())
       _ <- PostgresClient.connectZIO(sql"DELETE FROM api_response_body".update.run())
       _ <- PostgresClient.connectZIO(sql"DELETE FROM club_admin WHERE club_id = $sizableClubId".update.run())
       _ <- PostgresClient.connectZIO(sql"DELETE FROM club_member WHERE club_id = $clubId".update.run())
