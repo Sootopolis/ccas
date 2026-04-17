@@ -74,16 +74,10 @@ private[recruitment] object RecruitmentPersistence {
   ): RIO[PostgresClient, Unit] =
     ZIO.foreachDiscard(candidate.apiPlayer) { ap =>
       val playerId = ap.playerId
-      PlayerMatchRef.selectId(playerId).flatMap {
-        case Some(_) => ZIO.unit
-        case None =>
-          ClubMatchBoard.selectPlayerMatchRef(playerId).flatMap {
-            case Some(ref) => PlayerMatchRef.upsert(ref).unit
-            case None =>
-              ZIO.foreachDiscard(candidate.playerMatches) { playerMatches =>
-                resolvePlayerRefViaApi(client, playerId, candidate.username, playerMatches)
-              }
-          }
+      ZIO.whenZIODiscard(PlayerMatchRef.findOrInfer(playerId).map(_.isEmpty)) {
+        ZIO.foreachDiscard(candidate.playerMatches) { playerMatches =>
+          resolvePlayerRefViaApi(client, playerId, candidate.username, playerMatches)
+        }
       }
     }
 

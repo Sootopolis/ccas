@@ -21,7 +21,8 @@ object TestClubMatchSql extends ZIOSpecDefault {
     testClubMatchSelectStaleForClub,
     testClubMatchSelectSettledForClub,
     testClubMatchSelectSettledForRefresh,
-    testClubMatchSelectClubMatchRefIsLive,
+    testClubMatchInferClubMatchRefIsLive,
+    testClubMatchRefFindOrInfer,
     testClubMatchBoardInsertAndSelect,
     testClubMatchBoardNullableGameFields,
     testClubMatchBoardDeleteMatch,
@@ -45,7 +46,8 @@ object TestClubMatchSql extends ZIOSpecDefault {
     testUnresolvedMatchClubDelete,
     testClubMatchUpdateTeamClubId,
     testClubMatchBoardUpdatePlayerId,
-    testPlayerMatchRefUpsert
+    testPlayerMatchRefUpsert,
+    testPlayerMatchRefFindOrInfer
   ).provideShared(
     FreshSchemaLayer("test_club_match_sql", onInit = Tables.ensureTables)
   ) @@ TestAspect.sequential
@@ -231,8 +233,8 @@ object TestClubMatchSql extends ZIOSpecDefault {
       )
     }
 
-  private def testClubMatchSelectClubMatchRefIsLive =
-    test("selectClubMatchRef derives isLive from time_class") {
+  private def testClubMatchInferClubMatchRefIsLive =
+    test("inferClubMatchRef derives isLive from time_class") {
       val clubRefId   = ClubId(310)
       val clubRef     = Club(clubRefId, Times.t0, ClubSlug("club-ref-test"), "Club Ref Test", None, None, None)
       val dailyMatch = matchFinished.copy(
@@ -250,15 +252,51 @@ object TestClubMatchSql extends ZIOSpecDefault {
       for {
         _        <- Club.upsert(clubRef)
         _        <- ClubMatch.upsert(dailyMatch)
-        dailyRef <- ClubMatch.selectClubMatchRef(clubRefId)
+        dailyRef <- ClubMatch.inferClubMatchRef(clubRefId)
         _        <- connectZIO(sql"DELETE FROM club_match WHERE match_id = 2001".update.run())
         _        <- ClubMatch.upsert(liveMatch)
-        liveRef  <- ClubMatch.selectClubMatchRef(clubRefId)
+        liveRef  <- ClubMatch.inferClubMatchRef(clubRefId)
         _        <- connectZIO(sql"DELETE FROM club_match WHERE match_id = 2002".update.run())
         _        <- connectZIO(sql"DELETE FROM club WHERE club_id = ${clubRefId}".update.run())
       } yield assertTrue(
         dailyRef.exists(r => !r.isLive && r.isTeam1 && r.matchId == ClubMatchId(2001)),
         liveRef.exists(r => r.isLive && !r.isTeam1 && r.matchId == ClubMatchId(2002))
+      )
+    }
+
+  private def testClubMatchRefFindOrInfer =
+    test("ClubMatchRef.findOrInfer prefers explicit, infers and promotes otherwise, returns None when neither") {
+      val c             = ClubId(311)
+      val explicitRef   = ClubMatchRef(c, ClubMatchId(2100), isLive = true, isTeam1 = false)
+      val inferableMatch = matchFinished.copy(
+        matchId = ClubMatchId(2101),
+        timeClass = TimeClass.Blitz,
+        team1ClubId = Some(c),
+        team2ClubId = None
+      )
+      for {
+        _ <- Club.upsert(Club(c, Times.t0, ClubSlug("foi-club"), "FoI Club", None, None, None))
+
+        _      <- ClubMatchRef.upsert(explicitRef)
+        tier1  <- ClubMatchRef.findOrInfer(c)
+        _      <- connectZIO(sql"DELETE FROM club_match_ref WHERE club_id = $c".update.run())
+
+        _        <- ClubMatch.upsert(inferableMatch)
+        tier2    <- ClubMatchRef.findOrInfer(c)
+        promoted <- ClubMatchRef.selectId(c)
+        _        <- connectZIO(sql"DELETE FROM club_match_ref WHERE club_id = $c".update.run())
+        _        <- connectZIO(sql"DELETE FROM club_match WHERE match_id = ${inferableMatch.matchId}".update.run())
+
+        miss       <- ClubMatchRef.findOrInfer(c)
+        stillEmpty <- ClubMatchRef.selectId(c)
+
+        _ <- connectZIO(sql"DELETE FROM club WHERE club_id = $c".update.run())
+      } yield assertTrue(
+        tier1.contains(explicitRef),
+        tier2.exists(r => r.matchId == inferableMatch.matchId && r.isLive && r.isTeam1),
+        promoted.exists(_.matchId == inferableMatch.matchId),
+        miss.isEmpty,
+        stillEmpty.isEmpty
       )
     }
 
@@ -569,6 +607,63 @@ object TestClubMatchSql extends ZIOSpecDefault {
       after.contains(refreshed)
     )
   }
+
+  private def testPlayerMatchRefFindOrInfer =
+    test("PlayerMatchRef.findOrInfer prefers explicit, infers and promotes otherwise, returns None when neither") {
+      // Fresh player so shared `club_match_board` fixtures for player0/player1 don't leak into the tier-2/miss steps.
+      val player = Player(
+        PlayerId(60),
+        Times.t0,
+        Username("foi-player"),
+        ccas.api.misc.enums.PlayerStatusCategory.Active,
+        None,
+        Times.t0
+      )
+      val p           = player.playerId
+      val explicitRef = PlayerMatchRef(p, ClubMatchId(2200), isLive = true, isTeam1 = true, boardIdx = 4)
+      val parentMatch = matchFinished.copy(
+        matchId = ClubMatchId(2201),
+        team1ClubId = Some(clubA.clubId),
+        team2ClubId = None
+      )
+      val boardRow = ClubMatchBoard(
+        matchId = parentMatch.matchId,
+        board = 2,
+        team1PlayerId = Some(p),
+        team1FairPlay = false,
+        team2PlayerId = None,
+        team2FairPlay = false,
+        team1ScoreX2 = 0,
+        team2ScoreX2 = 0
+      )
+      for {
+        _ <- Player.insert(player)
+
+        _     <- PlayerMatchRef.upsert(explicitRef)
+        tier1 <- PlayerMatchRef.findOrInfer(p)
+        _     <- connectZIO(sql"DELETE FROM player_match_ref WHERE player_id = $p".update.run())
+
+        _        <- ClubMatch.upsert(parentMatch)
+        _        <- ClubMatchBoard.insert(boardRow)
+        tier2    <- PlayerMatchRef.findOrInfer(p)
+        promoted <- PlayerMatchRef.selectId(p)
+        _        <- connectZIO(sql"DELETE FROM player_match_ref WHERE player_id = $p".update.run())
+        // ON DELETE CASCADE on club_match_board → parent delete also removes the board row.
+        _ <- connectZIO(sql"DELETE FROM club_match WHERE match_id = ${parentMatch.matchId}".update.run())
+
+        miss       <- PlayerMatchRef.findOrInfer(p)
+        stillEmpty <- PlayerMatchRef.selectId(p)
+
+        _ <- connectZIO(sql"DELETE FROM player WHERE player_id = $p".update.run())
+      } yield assertTrue(
+        tier1.contains(explicitRef),
+        // inferPlayerMatchRef hardcodes isLive = false — see ClubMatchBoard.inferPlayerMatchRef scaladoc.
+        tier2.exists(r => r.matchId == parentMatch.matchId && r.boardIdx == 2 && !r.isLive && r.isTeam1),
+        promoted.exists(_.matchId == parentMatch.matchId),
+        miss.isEmpty,
+        stillEmpty.isEmpty
+      )
+    }
 
   private def testClubMatchBoardUpdatePlayerId = test("ClubMatchBoard updatePlayerId patches correct team column") {
     // Re-insert boards since testClubMatchBoardDeleteMatch removed them

@@ -29,6 +29,15 @@ object ClubMatchRef {
   def selectId(clubId: ClubId): ZIO[PostgresClient, SQLException, Option[ClubMatchRef]] =
     connectZIO(repo.findById(clubId))
 
+  /** Explicit ref if one exists, otherwise an inferred ref (from `club_match`) promoted to `club_match_ref` so
+    * subsequent callers skip the synthesis tier. Returns `None` only when neither table carries the club.
+    */
+  def findOrInfer(clubId: ClubId): ZIO[PostgresClient, SQLException, Option[ClubMatchRef]] =
+    selectId(clubId).flatMap {
+      case some @ Some(_) => ZIO.succeed(some)
+      case None           => ClubMatch.inferClubMatchRef(clubId).tap(ZIO.foreachDiscard(_)(upsert))
+    }
+
   def insert(ref: ClubMatchRef): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""INSERT INTO club_match_ref (club_id, match_id, is_live, is_team1)

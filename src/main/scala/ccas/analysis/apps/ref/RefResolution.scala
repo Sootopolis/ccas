@@ -39,7 +39,7 @@ private[ref] object RefResolution {
     player: UnresolvedPlayer
   ): RIO[CcasLogger & PostgresClient, Boolean] =
     (for {
-      dbRef <- ClubMatchBoard.selectPlayerMatchRef(player.playerId)
+      dbRef <- ClubMatchBoard.inferPlayerMatchRef(player.playerId)
       resolved <- dbRef match {
         case Some(ref) =>
           withTransaction {
@@ -199,7 +199,7 @@ private[ref] object RefResolution {
     club: UnresolvedClub
   ): RIO[CcasLogger & PostgresClient, Boolean] =
     (for {
-      dbRef <- ClubMatch.selectClubMatchRef(club.clubId)
+      dbRef <- ClubMatch.inferClubMatchRef(club.clubId)
       resolved <- dbRef match {
         case Some(ref) =>
           withTransaction {
@@ -354,7 +354,7 @@ private[ref] object RefResolution {
     player: UnresolvedPlayer
   ): RIO[CcasLogger & PostgresClient, Boolean] =
     (for {
-      dbRef <- ClubMatchBoard.selectPlayerMatchRef(player.playerId)
+      dbRef <- ClubMatchBoard.inferPlayerMatchRef(player.playerId)
       resolved <- dbRef match {
         case Some(ref) =>
           PlayerMatchRef.upsert(ref) *>

@@ -49,7 +49,15 @@ object ClubMatchBoard {
         .query[ClubMatchBoard].run().toList
     }
 
-  def selectPlayerMatchRef(playerId: PlayerId): ZIO[PostgresClient, SQLException, Option[PlayerMatchRef]] =
+  /** Infers a [[PlayerMatchRef]] value by reading the `club_match_board` table — does **not** query the
+    * `player_match_ref` table. Used as the synthesis tier beneath `PlayerMatchRef.findOrInfer`; prefer that helper
+    * unless you explicitly need to skip the explicit ref table (e.g., when operating on `UnresolvedPlayer` inputs where
+    * tier 1 is empty by definition).
+    *
+    * Caveat: `isLive` is hardcoded to `false` because `club_match_board` doesn't carry the match's time class. All
+    * existing callers rely on this assumption; fixing it is tracked separately.
+    */
+  def inferPlayerMatchRef(playerId: PlayerId): ZIO[PostgresClient, SQLException, Option[PlayerMatchRef]] =
     connectZIO {
       sql"""SELECT match_id, board AS board_idx, (team1_player_id = $playerId) AS is_team1
             FROM club_match_board
