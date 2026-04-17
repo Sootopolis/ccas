@@ -5,6 +5,7 @@ import java.sql.SQLException
 import com.augustnagro.magnum.*
 import zio.ZIO
 
+import ccas.api.misc.enums.TimeClass
 import ccas.api.misc.subtypes.{ClubMatchId, PlayerId}
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.{connectZIO, transactZIO}
@@ -49,21 +50,22 @@ object ClubMatchBoard {
         .query[ClubMatchBoard].run().toList
     }
 
-  /** Infers a [[PlayerMatchRef]] value by reading the `club_match_board` table — does **not** query the
-    * `player_match_ref` table. Used as the synthesis tier beneath `PlayerMatchRef.findOrInfer`; prefer that helper
-    * unless you explicitly need to skip the explicit ref table (e.g., when operating on `UnresolvedPlayer` inputs where
-    * tier 1 is empty by definition).
-    *
-    * Caveat: `isLive` is hardcoded to `false` because `club_match_board` doesn't carry the match's time class. All
-    * existing callers rely on this assumption; fixing it is tracked separately.
+  /** Infers a [[PlayerMatchRef]] value by joining `club_match_board` with `club_match` (to read the match's
+    * `time_class` for the `isLive` field). Does **not** query the `player_match_ref` table. Used as the synthesis tier
+    * beneath `PlayerMatchRef.findOrInfer`; prefer that helper unless you explicitly need to skip the explicit ref table
+    * (e.g., when operating on `UnresolvedPlayer` inputs where tier 1 is empty by definition).
     */
   def inferPlayerMatchRef(playerId: PlayerId): ZIO[PostgresClient, SQLException, Option[PlayerMatchRef]] =
     connectZIO {
-      sql"""SELECT match_id, board AS board_idx, (team1_player_id = $playerId) AS is_team1
-            FROM club_match_board
-            WHERE team1_player_id = $playerId OR team2_player_id = $playerId
-            LIMIT 1""".query[(ClubMatchId, Short, Boolean)].run().headOption.map { case (matchId, boardIdx, isTeam1) =>
-        PlayerMatchRef(playerId, matchId, isLive = false, isTeam1, boardIdx)
+      val daily: TimeClass = TimeClass.Daily
+      sql"""SELECT cmb.match_id, cmb.board AS board_idx, (cmb.team1_player_id = $playerId) AS is_team1,
+                   (cm.time_class != $daily) AS is_live
+            FROM club_match_board cmb
+            JOIN club_match cm ON cm.match_id = cmb.match_id
+            WHERE cmb.team1_player_id = $playerId OR cmb.team2_player_id = $playerId
+            LIMIT 1""".query[(ClubMatchId, Short, Boolean, Boolean)].run().headOption.map {
+        case (matchId, boardIdx, isTeam1, isLive) =>
+          PlayerMatchRef(playerId, matchId, isLive, isTeam1, boardIdx)
       }
     }
 

@@ -46,6 +46,7 @@ object TestClubMatchSql extends ZIOSpecDefault {
     testUnresolvedMatchClubDelete,
     testClubMatchUpdateTeamClubId,
     testClubMatchBoardUpdatePlayerId,
+    testClubMatchBoardInferPlayerMatchRefIsLive,
     testPlayerMatchRefUpsert,
     testPlayerMatchRefFindOrInfer
   ).provideShared(
@@ -657,7 +658,7 @@ object TestClubMatchSql extends ZIOSpecDefault {
         _ <- connectZIO(sql"DELETE FROM player WHERE player_id = $p".update.run())
       } yield assertTrue(
         tier1.contains(explicitRef),
-        // inferPlayerMatchRef hardcodes isLive = false — see ClubMatchBoard.inferPlayerMatchRef scaladoc.
+        // parentMatch inherits TimeClass.Daily from matchFinished → isLive must be derived as false.
         tier2.exists(r => r.matchId == parentMatch.matchId && r.boardIdx == 2 && !r.isLive && r.isTeam1),
         promoted.exists(_.matchId == parentMatch.matchId),
         miss.isEmpty,
@@ -684,4 +685,65 @@ object TestClubMatchSql extends ZIOSpecDefault {
       noOp == 0
     )
   }
+
+  private def testClubMatchBoardInferPlayerMatchRefIsLive =
+    test("inferPlayerMatchRef derives isLive from the parent club_match's time_class") {
+      val player = Player(
+        PlayerId(61),
+        Times.t0,
+        Username("infer-live"),
+        ccas.api.misc.enums.PlayerStatusCategory.Active,
+        None,
+        Times.t0
+      )
+      val p = player.playerId
+      val dailyMatch = matchFinished.copy(
+        matchId = ClubMatchId(2300),
+        timeClass = TimeClass.Daily,
+        team1ClubId = Some(clubA.clubId),
+        team2ClubId = None
+      )
+      val liveMatch = matchFinished.copy(
+        matchId = ClubMatchId(2301),
+        timeClass = TimeClass.Blitz,
+        team1ClubId = Some(clubA.clubId),
+        team2ClubId = None
+      )
+      val dailyBoard = ClubMatchBoard(
+        matchId = dailyMatch.matchId,
+        board = 1,
+        team1PlayerId = Some(p),
+        team1FairPlay = false,
+        team2PlayerId = None,
+        team2FairPlay = false,
+        team1ScoreX2 = 0,
+        team2ScoreX2 = 0
+      )
+      val liveBoard = ClubMatchBoard(
+        matchId = liveMatch.matchId,
+        board = 2,
+        team1PlayerId = None,
+        team1FairPlay = false,
+        team2PlayerId = Some(p),
+        team2FairPlay = false,
+        team1ScoreX2 = 0,
+        team2ScoreX2 = 0
+      )
+      for {
+        _        <- Player.insert(player)
+        _        <- ClubMatch.upsert(dailyMatch)
+        _        <- ClubMatchBoard.insert(dailyBoard)
+        dailyRef <- ClubMatchBoard.inferPlayerMatchRef(p)
+        // ON DELETE CASCADE from club_match → club_match_board removes the board row with the parent.
+        _       <- connectZIO(sql"DELETE FROM club_match WHERE match_id = ${dailyMatch.matchId}".update.run())
+        _       <- ClubMatch.upsert(liveMatch)
+        _       <- ClubMatchBoard.insert(liveBoard)
+        liveRef <- ClubMatchBoard.inferPlayerMatchRef(p)
+        _       <- connectZIO(sql"DELETE FROM club_match WHERE match_id = ${liveMatch.matchId}".update.run())
+        _       <- connectZIO(sql"DELETE FROM player WHERE player_id = $p".update.run())
+      } yield assertTrue(
+        dailyRef.exists(r => !r.isLive && r.isTeam1 && r.matchId == dailyMatch.matchId && r.boardIdx == 1),
+        liveRef.exists(r => r.isLive && !r.isTeam1 && r.matchId == liveMatch.matchId && r.boardIdx == 2)
+      )
+    }
 }
