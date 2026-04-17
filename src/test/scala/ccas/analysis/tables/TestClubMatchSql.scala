@@ -507,7 +507,11 @@ object TestClubMatchSql extends ZIOSpecDefault {
   private def testHistoryRunInsertAndComplete = test("HistoryRun insert and complete") {
     for {
       runId <- HistoryRun.insert(clubA.clubId, RunTrigger.Cli, Times.t0)
-      _     <- HistoryRun.complete(runId, Times.t1, matchesProcessed = 42, playersDiscovered = 7)
+      _ <- HistoryRun.complete(
+        runId, Times.t1,
+        matchesProcessed = 42, playersDiscovered = 7,
+        refreshMatchUnchanged = 3, seedClubMatchesUnchanged = 1, seedPlayerMatchesUnchanged = 5
+      )
     } yield assertTrue(runId > 0L)
   }
 

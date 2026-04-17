@@ -225,9 +225,11 @@ object HistoryApp extends ZIOAppDefault {
           }
           settledMatchIds <- ClubMatch.selectSettledMatchIdsForClub(ctx.clubId)
 
-          seedClub <- HistorySeeding.seedFromClubMatches(ctx.client, ctx.clubId, clubSlug)
-          _        <- seedClubRef.set(seedClub)
-          _        <- CcasLogger.info(s"  Club matches endpoint: $seedClub new match IDs")
+          seedClub <- HistorySeeding.seedFromClubMatches(
+            ctx.client, ctx.clubId, clubSlug, ctx.seedClubMatchesUnchanged
+          )
+          _ <- seedClubRef.set(seedClub)
+          _ <- CcasLogger.info(s"  Club matches endpoint: $seedClub new match IDs")
 
           memberSeed <-
             HistorySeeding.seedFromMemberMatches(
@@ -238,7 +240,8 @@ object HistoryApp extends ZIOAppDefault {
               queriedIds,
               playerById,
               settledMatchIds,
-              shared
+              shared,
+              ctx.seedPlayerMatchesUnchanged
             )
           _ <- memberSeedRef.set(memberSeed)
           membersSkipped = allMembers.size - memberSeed.queried - memberSeed.failed
@@ -289,7 +292,8 @@ object HistoryApp extends ZIOAppDefault {
         failedMembers = memberSeed.failedMembers
       )
       _ <- HistoryRun.complete(
-        runId, completedAt, totalStats.matchesProcessed + totalStats.matchesSharedSkip, totalStats.playersDiscovered
+        runId, completedAt, totalStats.matchesProcessed + totalStats.matchesSharedSkip, totalStats.playersDiscovered,
+        totalStats.refreshMatchUnchanged, totalStats.seedClubMatchesUnchanged, totalStats.seedPlayerMatchesUnchanged
       )
     } yield HistoryResult(totalStats, clubSlug, startedAt, completedAt)
   }
@@ -321,7 +325,8 @@ object HistoryApp extends ZIOAppDefault {
         pendingRemaining = pendingRemaining.toInt
       )
       _ <- HistoryRun.complete(
-        runId, completedAt, totalStats.matchesProcessed + totalStats.matchesSharedSkip, totalStats.playersDiscovered
+        runId, completedAt, totalStats.matchesProcessed + totalStats.matchesSharedSkip, totalStats.playersDiscovered,
+        totalStats.refreshMatchUnchanged, totalStats.seedClubMatchesUnchanged, totalStats.seedPlayerMatchesUnchanged
       )
       _ <- logSummary(totalStats, startedAt, completedAt)
       _ <- OutputFile.writeAndLog("history", clubSlug, formatReport(totalStats, clubSlug, startedAt, completedAt))
@@ -345,6 +350,9 @@ object HistoryApp extends ZIOAppDefault {
       )
       _ <- CcasLogger.info(s"Waves: ${stats.waveCount}")
       _ <- CcasLogger.info(s"Pending remaining: ${stats.pendingRemaining}")
+      _ <- CcasLogger.info(
+        s"Unchanged skips: refresh=${stats.refreshMatchUnchanged} | seedClub=${stats.seedClubMatchesUnchanged} | seedPlayer=${stats.seedPlayerMatchesUnchanged}"
+      )
     } yield ()
   }
 
@@ -384,6 +392,11 @@ object HistoryApp extends ZIOAppDefault {
     sb.append(s"Discovered: ${stats.playersDiscovered}\n")
     sb.append(s"Known:      ${stats.playersKnown}\n")
     sb.append(s"Failed:     ${stats.playersFailed}\n\n")
+
+    sb.append("--- Unchanged skips ---\n")
+    sb.append(s"Refresh match:       ${stats.refreshMatchUnchanged}\n")
+    sb.append(s"Seed club matches:   ${stats.seedClubMatchesUnchanged}\n")
+    sb.append(s"Seed player matches: ${stats.seedPlayerMatchesUnchanged}\n\n")
 
     if (stats.failedMatches.nonEmpty) {
       sb.append("--- Failed Matches ---\n")

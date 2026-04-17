@@ -237,10 +237,11 @@ private[history] object HistorySeeding {
   private[history] def seedFromClubMatches(
     client: ChessComClient,
     clubId: ClubId,
-    clubSlug: ClubSlug
+    clubSlug: ClubSlug,
+    unchangedCounter: Ref[Int]
   ): RIO[CcasLogger & PostgresClient, Int] =
     client.getCacheable[ApiClubMatches](ApiClubMatches.getUrl(clubSlug))
-      .flatMap(_.foldZIO(_ => ZIO.succeed(0))(insertPendingFromClubMatches(clubId, _)))
+      .flatMap(_.foldZIO(_ => unchangedCounter.update(_ + 1).as(0))(insertPendingFromClubMatches(clubId, _)))
       .catchAll { error =>
         CcasLogger.warn(s"  Failed to fetch club matches: ${error.getMessage}").as(0)
       }
@@ -275,7 +276,8 @@ private[history] object HistorySeeding {
     queriedIds: Set[PlayerId],
     playerById: Map[PlayerId, Player],
     settledMatchIds: Set[ClubMatchId],
-    shared: Option[SharedContext]
+    shared: Option[SharedContext],
+    unchangedPlayerCounter: Ref[Int]
   ): RIO[CcasLogger & PostgresClient, MemberSeedResult] =
     for {
       sharedQueried <- shared.fold(ZIO.succeed(Set.empty[PlayerId]))(_.queriedPlayers.get)
@@ -298,7 +300,9 @@ private[history] object HistorySeeding {
         for {
           bar <- CcasLogger.progressBar
           _ <- ZIO.foreachParDiscard(toQuery) { case (playerId, username) =>
-            seedMatchesForPlayerAllClubs(client, clubId, clubSlug, playerId, username, settledMatchIds, shared)
+            seedMatchesForPlayerAllClubs(
+              client, clubId, clubSlug, playerId, username, settledMatchIds, shared, unchangedPlayerCounter
+            )
               .foldZIO(
                 error =>
                   failedMembersRef.update(_ :+ FailedMember(username, error.getMessage))
@@ -339,17 +343,18 @@ private[history] object HistorySeeding {
     playerId: PlayerId,
     username: Username,
     settledMatchIds: Set[ClubMatchId],
-    shared: Option[SharedContext]
+    shared: Option[SharedContext],
+    unchangedCounter: Ref[Int]
   ): RIO[PostgresClient, Int] =
     shared match {
-      case None => seedMatchesForPlayer(client, clubId, clubSlug, playerId, username, settledMatchIds)
+      case None => seedMatchesForPlayer(client, clubId, clubSlug, playerId, username, settledMatchIds, unchangedCounter)
       case Some(sc) =>
         for {
           result     <- client.getCacheable[ApiPlayerMatches](ApiPlayerMatches.getUrl(username))
           otherClubs <- sc.resolvedClubs.get.map(_.removed(clubSlug).toList)
-          primaryCount <- result.foldZIO(_ => stampQueriedAllClubs(clubId, otherClubs, playerId).as(0))(
-            seedAndStampAllClubs(clubId, clubSlug, settledMatchIds, otherClubs, playerId, _)
-          )
+          primaryCount <- result.foldZIO(_ =>
+            unchangedCounter.update(_ + 1) *> stampQueriedAllClubs(clubId, otherClubs, playerId).as(0)
+          )(seedAndStampAllClubs(clubId, clubSlug, settledMatchIds, otherClubs, playerId, _))
           _ <- sc.queriedPlayers.update(_ + playerId)
         } yield primaryCount
     }
@@ -410,13 +415,14 @@ private[history] object HistorySeeding {
     clubSlug: ClubSlug,
     playerId: PlayerId,
     username: Username,
-    settledMatchIds: Set[ClubMatchId]
+    settledMatchIds: Set[ClubMatchId],
+    unchangedCounter: Ref[Int]
   ): RIO[PostgresClient, Int] = {
     // `def` not `val` so `Instant.now()` is captured when the stamp actually runs (post-fetch / post-seed),
     // matching the original `HistoryMemberQuery.upsert(... Instant.now())` call inside the for-comprehension.
     def stamp = HistoryMemberQuery.upsert(HistoryMemberQuery(clubId, playerId, Instant.now()))
     client.getCacheable[ApiPlayerMatches](ApiPlayerMatches.getUrl(username)).flatMap {
-      _.foldZIO(_ => stamp.as(0))(
+      _.foldZIO(_ => unchangedCounter.update(_ + 1) *> stamp.as(0))(
         seedMatchesFromPlayerMatches(clubId, clubSlug, settledMatchIds, _).zipLeft(stamp)
       )
     }

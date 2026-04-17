@@ -38,6 +38,9 @@ private[history] object HistoryUtils {
     playersFailed: Int = 0,
     waveCount: Int = 0,
     pendingRemaining: Int = 0,
+    refreshMatchUnchanged: Int = 0,
+    seedClubMatchesUnchanged: Int = 0,
+    seedPlayerMatchesUnchanged: Int = 0,
     waveDetails: List[WaveDetail] = Nil,
     failedMatches: List[FailedMatch] = Nil,
     failedMembers: List[FailedMember] = Nil
@@ -82,7 +85,10 @@ private[history] object HistoryUtils {
     val playersFailed: Ref[Int],
     val failedMatches: Ref[List[FailedMatch]],
     val matchesBoardsUpdated: Ref[Int],
-    val matchesSharedSkip: Ref[Int]
+    val matchesSharedSkip: Ref[Int],
+    val refreshMatchUnchanged: Ref[Int],
+    val seedClubMatchesUnchanged: Ref[Int],
+    val seedPlayerMatchesUnchanged: Ref[Int]
   )
 
   object ProcessingContext {
@@ -108,6 +114,9 @@ private[history] object HistoryUtils {
         failedMatches       <- Ref.make(List.empty[FailedMatch])
         matchesBoardsUpdated    <- Ref.make(0)
         matchesSharedSkip   <- Ref.make(0)
+        refreshMatchUnchanged      <- Ref.make(0)
+        seedClubMatchesUnchanged   <- Ref.make(0)
+        seedPlayerMatchesUnchanged <- Ref.make(0)
       } yield new ProcessingContext(
         client,
         clubId,
@@ -126,7 +135,10 @@ private[history] object HistoryUtils {
         playersFailed,
         failedMatches,
         matchesBoardsUpdated,
-        matchesSharedSkip
+        matchesSharedSkip,
+        refreshMatchUnchanged,
+        seedClubMatchesUnchanged,
+        seedPlayerMatchesUnchanged
       )
   }
 }
