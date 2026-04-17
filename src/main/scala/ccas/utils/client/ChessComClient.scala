@@ -114,14 +114,16 @@ final class ChessComClient(
   }
 
   /** Build the outgoing request, attaching `If-None-Match` and/or `If-Modified-Since` validators when a prior cache
-    * entry is present. Sending both when both are available is safe and maximizes the chance of a 304 regardless of
-    * which validator the origin prefers (RFC 7232 §6).
+    * entry is present. Both headers are sent when available for standards correctness, but empirically the current
+    * Chess.com API honours only `If-None-Match` — `If-Modified-Since` is silently ignored regardless of value
+    * (verified 2026-04-17; Chess.com have confirmed the current API is in maintenance mode, with a future rewrite
+    * that may or may not change this). The echo path stays wired so we're ready if the next API starts honouring it.
     *
     * Note: `If-None-Match` is attached via `Header.Custom` with the raw wire-format etag (quotes included). zio-http
     * 3.10.1's typed `Header.IfNoneMatch.ETags` strips quotes during render (see `IfNoneMatch.render` in zio-http
-    * sources), which is RFC 7232–incorrect and produces a header the origin won't match. We read the etag the same
-    * way, via `rawHeader`, so what's stored in `api_response_cache.etag` is already in wire format and can be echoed
-    * back verbatim.
+    * sources), which is RFC 7232–incorrect and produces a header the origin won't match. The stored etag in
+    * `api_response_cache.etag` is already in wire format — `extractValidators` reads via the typed `Header.ETag`
+    * and re-renders through `Header.ETag.render` on the persist path — so it can be echoed back verbatim here.
     */
   private def buildRequest(url: URL, conditional: Option[ApiResponseCache]): Request = {
     val base = Request(method = GET, url = url).addHeaders(headers)
