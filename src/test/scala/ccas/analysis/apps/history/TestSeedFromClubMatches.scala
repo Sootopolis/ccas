@@ -3,7 +3,7 @@ package ccas.analysis.apps.history
 import java.time.{Duration, Instant, LocalDateTime, ZoneOffset}
 
 import ccas.utils.sql.PostgresClient
-import zio.{RIO, ZIO}
+import zio.{Ref, RIO, ZIO}
 import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
@@ -64,12 +64,32 @@ object TestSeedFromClubMatches extends ZIOSpecDefault {
     TestChessComClientSupport.fakeClient(routes)
   }
 
+  /** Variant that adds `Cache-Control: max-age=3600` + an ETag and increments `counter` on every route hit. Lets
+    * tests prove the cache layer served a second call from cache without touching the fake.
+    */
+  private def fakeChessComClientCounting(
+    clubMatchesJson: String,
+    counter: Ref[Int]
+  ): RIO[PostgresClient, ChessComClient] = {
+    val routes: Routes[Any, Response] = Routes(
+      Method.GET / "pub" / "club" / string("club") / "matches" -> handler { (_: String, _: Request) =>
+        counter.update(_ + 1).as(
+          Response.json(clubMatchesJson)
+            .addHeader(Header.CacheControl.MaxAge(3600))
+            .addHeader(Header.ETag.Strong("v1"))
+        )
+      }
+    )
+    TestChessComClientSupport.fakeClient(routes)
+  }
+
   override def spec: Spec[Any, Throwable] = suite("seedFromClubMatches")(
     testSkipsKnownMatches,
     testSeedsAllWhenNoneKnown,
     testSeedsNewAlongsideKnown,
     testEmptyMatchesListSeedsNothing,
-    testApiFetchErrorReturnsZero
+    testApiFetchErrorReturnsZero,
+    testUnchangedResponseSkipsPipeline
   ).provideShared(
     FreshSchemaLayer("test_seed_club", Tables.ensureTables)
   ) @@ TestAspect.sequential
@@ -149,4 +169,29 @@ object TestSeedFromClubMatches extends ZIOSpecDefault {
         .provideSomeEnvironment[PostgresClient](_.add[CcasLogger](TestCcasLogger.noop))
     } yield assertTrue(count == 0)
   }
+
+  private def testUnchangedResponseSkipsPipeline =
+    test("second call with unchanged response skips the insert pipeline entirely") {
+      val json = apiClubMatchesJson(List(4001, 4002))
+      for {
+        _       <- Club.upsert(club)
+        _       <- Club.upsert(opponentClub)
+        counter <- Ref.make(0)
+        client  <- fakeChessComClientCounting(json, counter)
+        first <- HistorySeeding.seedFromClubMatches(client, clubId, clubSlug)
+          .provideSomeEnvironment[PostgresClient](_.add[CcasLogger](TestCcasLogger.noop))
+        pendingAfterFirst <- HistoryPendingMatch.selectClub(clubId)
+        // Clear the pending rows so the second call's skip shows up as "stayed empty" rather than "didn't add new".
+        _ <- ZIO.foreachDiscard(pendingAfterFirst)(p => HistoryPendingMatch.delete(clubId, p.matchId, p.isLive))
+        second <- HistorySeeding.seedFromClubMatches(client, clubId, clubSlug)
+          .provideSomeEnvironment[PostgresClient](_.add[CcasLogger](TestCcasLogger.noop))
+        pendingAfterSecond <- HistoryPendingMatch.selectClub(clubId)
+        netCalls           <- counter.get
+      } yield assertTrue(
+        first == 2,
+        second == 0,
+        pendingAfterSecond.isEmpty, // unchanged branch took `ZIO.succeed(0)` — no re-insert
+        netCalls == 1               // within max-age → Fresh; second call never hit the route
+      )
+    }
 }

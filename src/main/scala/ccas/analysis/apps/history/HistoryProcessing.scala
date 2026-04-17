@@ -300,13 +300,26 @@ private[history] object HistoryProcessing {
       }
     } yield ()
 
+  /** Settled matches by definition can't change, so an `isUnchanged` response from the cache layer means every
+    * downstream step would be a no-op — just bump `fetched_at` so the cursor-paginated refresh loop advances.
+    * Bypasses the in-memory `matchCache` dedup because the cursor scan visits each match exactly once per run.
+    */
   private def refreshSingleMatch(
     ctx: ProcessingContext,
     matchId: ClubMatchId
   ): RIO[CcasLogger & PostgresClient, Unit] =
-    for {
-      dailyMatch <- fetchMatch(ctx, matchId)
+    ctx.client.getCacheable[ApiDailyMatch](ApiDailyMatch.getUrl(matchId)).flatMap {
+      _.foldZIO(_ => ClubMatch.updateFetchedAt(matchId, Instant.now()).unit)(
+        refreshSingleMatchWithBody(ctx, matchId, _)
+      )
+    }
 
+  private def refreshSingleMatchWithBody(
+    ctx: ProcessingContext,
+    matchId: ClubMatchId,
+    dailyMatch: ApiDailyMatch
+  ): RIO[CcasLogger & PostgresClient, Unit] =
+    for {
       (team1ClubId, team2ClubId) <-
         resolveClubIdFromTeamUrl(ctx, dailyMatch.teams.team1.`@id`) <&>
           resolveClubIdFromTeamUrl(ctx, dailyMatch.teams.team2.`@id`)

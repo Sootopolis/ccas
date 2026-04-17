@@ -230,27 +230,38 @@ private[history] object HistorySeeding {
         }
     }
 
-  /** Fetches the club's match listing endpoint and inserts any not-yet-known match IDs as pending. */
+  /** Fetches the club's match listing endpoint and inserts any not-yet-known match IDs as pending. Unchanged
+    * responses skip the select-known-ids + filter + insert pipeline entirely — the listing can only grow, so an
+    * unchanged response means no new matches.
+    */
   private[history] def seedFromClubMatches(
     client: ChessComClient,
     clubId: ClubId,
     clubSlug: ClubSlug
   ): RIO[CcasLogger & PostgresClient, Int] =
-    (for {
-      clubMatches <- client.get[ApiClubMatches](ApiClubMatches.getUrl(clubSlug))
-      allDaily     = clubMatches.dailyFinished ++ clubMatches.dailyInProgress ++ clubMatches.dailyRegistered
-      dailyPending = allDaily.map(m => HistoryPendingMatch(clubId, ClubMatchId.fromUrl(m.`@id`), isLive = false))
-      nonDaily = clubMatches.finished.filterNot(_.timeClass.isDaily) ++
-        clubMatches.inProgress.filterNot(_.timeClass.isDaily) ++
-        clubMatches.registered.filterNot(_.timeClass.isDaily)
-      livePending = nonDaily.map(m => HistoryPendingMatch(clubId, ClubMatchId.fromUrl(m.`@id`), isLive = true))
-      all         = dailyPending ++ livePending
+    client.getCacheable[ApiClubMatches](ApiClubMatches.getUrl(clubSlug))
+      .flatMap(_.foldZIO(_ => ZIO.succeed(0))(insertPendingFromClubMatches(clubId, _)))
+      .catchAll { error =>
+        CcasLogger.warn(s"  Failed to fetch club matches: ${error.getMessage}").as(0)
+      }
+
+  private def insertPendingFromClubMatches(
+    clubId: ClubId,
+    clubMatches: ApiClubMatches
+  ): RIO[PostgresClient, Int] = {
+    val allDaily     = clubMatches.dailyFinished ++ clubMatches.dailyInProgress ++ clubMatches.dailyRegistered
+    val dailyPending = allDaily.map(m => HistoryPendingMatch(clubId, ClubMatchId.fromUrl(m.`@id`), isLive = false))
+    val nonDaily = clubMatches.finished.filterNot(_.timeClass.isDaily) ++
+      clubMatches.inProgress.filterNot(_.timeClass.isDaily) ++
+      clubMatches.registered.filterNot(_.timeClass.isDaily)
+    val livePending = nonDaily.map(m => HistoryPendingMatch(clubId, ClubMatchId.fromUrl(m.`@id`), isLive = true))
+    val all         = dailyPending ++ livePending
+    for {
       knownIds <- ClubMatch.selectMatchIdsForClub(clubId)
       newOnly = all.filterNot(p => knownIds.contains(p.matchId))
       _ <- insertPendingMatches(newOnly)
-    } yield newOnly.size).catchAll { error =>
-      CcasLogger.warn(s"  Failed to fetch club matches: ${error.getMessage}").as(0)
-    }
+    } yield newOnly.size
+  }
 
   /** Queries each un-queried member's match list to find club match IDs. Skips already-queried members unless --full.
     * When `shared` is present, also skips members already queried by a prior club in the same batch, writing
@@ -317,6 +328,9 @@ private[history] object HistorySeeding {
     * once, seeds matches for the primary club (with settled filtering), then seeds for all other resolved clubs in the
     * batch (without settled filtering). Records `HistoryMemberQuery` for all clubs and adds the player to the shared
     * queried set. Returns the primary club's seeded count.
+    *
+    * On an unchanged response, skips the seed pipeline for every club but still stamps `HistoryMemberQuery` for all
+    * of them so the wave loop doesn't re-query the player on the next iteration.
     */
   private def seedMatchesForPlayerAllClubs(
     client: ChessComClient,
@@ -331,23 +345,45 @@ private[history] object HistorySeeding {
       case None => seedMatchesForPlayer(client, clubId, clubSlug, playerId, username, settledMatchIds)
       case Some(sc) =>
         for {
-          playerMatches <- client.get[ApiPlayerMatches](ApiPlayerMatches.getUrl(username))
-          allMatches = playerMatches.finished ++ playerMatches.inProgress ++ playerMatches.registered
-
-          // Seed for primary club (with settled filtering)
-          primaryCount <- seedMatchesFromList(clubId, clubSlug, allMatches, settledMatchIds)
-          _ <- HistoryMemberQuery.upsert(HistoryMemberQuery(clubId, playerId, Instant.now()))
-
-          // Seed for other resolved clubs (without settled filtering)
+          result     <- client.getCacheable[ApiPlayerMatches](ApiPlayerMatches.getUrl(username))
           otherClubs <- sc.resolvedClubs.get.map(_.removed(clubSlug).toList)
-          _ <- ZIO.foreachDiscard(otherClubs) { case (otherSlug, otherClubId) =>
-            seedMatchesFromList(otherClubId, otherSlug, allMatches, Set.empty) *>
-              HistoryMemberQuery.upsert(HistoryMemberQuery(otherClubId, playerId, Instant.now()))
-          }
-
+          primaryCount <- result.foldZIO(_ => stampQueriedAllClubs(clubId, otherClubs, playerId).as(0))(
+            seedAndStampAllClubs(clubId, clubSlug, settledMatchIds, otherClubs, playerId, _)
+          )
           _ <- sc.queriedPlayers.update(_ + playerId)
         } yield primaryCount
     }
+
+  private def stampQueriedAllClubs(
+    primaryClubId: ClubId,
+    otherClubs: List[(ClubSlug, ClubId)],
+    playerId: PlayerId
+  ): RIO[PostgresClient, Unit] = {
+    val now = Instant.now()
+    HistoryMemberQuery.upsert(HistoryMemberQuery(primaryClubId, playerId, now)) *>
+      ZIO.foreachDiscard(otherClubs) { case (_, otherClubId) =>
+        HistoryMemberQuery.upsert(HistoryMemberQuery(otherClubId, playerId, now))
+      }
+  }
+
+  private def seedAndStampAllClubs(
+    primaryClubId: ClubId,
+    primarySlug: ClubSlug,
+    settledMatchIds: Set[ClubMatchId],
+    otherClubs: List[(ClubSlug, ClubId)],
+    playerId: PlayerId,
+    playerMatches: ApiPlayerMatches
+  ): RIO[PostgresClient, Int] = {
+    val allMatches = playerMatches.finished ++ playerMatches.inProgress ++ playerMatches.registered
+    for {
+      primary <- seedMatchesFromList(primaryClubId, primarySlug, allMatches, settledMatchIds)
+      _       <- HistoryMemberQuery.upsert(HistoryMemberQuery(primaryClubId, playerId, Instant.now()))
+      _ <- ZIO.foreachDiscard(otherClubs) { case (otherSlug, otherClubId) =>
+        seedMatchesFromList(otherClubId, otherSlug, allMatches, Set.empty) *>
+          HistoryMemberQuery.upsert(HistoryMemberQuery(otherClubId, playerId, Instant.now()))
+      }
+    } yield primary
+  }
 
   /** Filters a player's match list for a specific club and inserts matching entries as pending. */
   private def seedMatchesFromList(
@@ -375,13 +411,26 @@ private[history] object HistorySeeding {
     playerId: PlayerId,
     username: Username,
     settledMatchIds: Set[ClubMatchId]
-  ): RIO[PostgresClient, Int] =
-    for {
-      playerMatches <- client.get[ApiPlayerMatches](ApiPlayerMatches.getUrl(username))
-      allMatches = playerMatches.finished ++ playerMatches.inProgress ++ playerMatches.registered
-      count <- seedMatchesFromList(clubId, clubSlug, allMatches, settledMatchIds)
-      _     <- HistoryMemberQuery.upsert(HistoryMemberQuery(clubId, playerId, Instant.now()))
-    } yield count
+  ): RIO[PostgresClient, Int] = {
+    // `def` not `val` so `Instant.now()` is captured when the stamp actually runs (post-fetch / post-seed),
+    // matching the original `HistoryMemberQuery.upsert(... Instant.now())` call inside the for-comprehension.
+    def stamp = HistoryMemberQuery.upsert(HistoryMemberQuery(clubId, playerId, Instant.now()))
+    client.getCacheable[ApiPlayerMatches](ApiPlayerMatches.getUrl(username)).flatMap {
+      _.foldZIO(_ => stamp.as(0))(
+        seedMatchesFromPlayerMatches(clubId, clubSlug, settledMatchIds, _).zipLeft(stamp)
+      )
+    }
+  }
+
+  private def seedMatchesFromPlayerMatches(
+    clubId: ClubId,
+    clubSlug: ClubSlug,
+    settledMatchIds: Set[ClubMatchId],
+    playerMatches: ApiPlayerMatches
+  ): RIO[PostgresClient, Int] = {
+    val allMatches = playerMatches.finished ++ playerMatches.inProgress ++ playerMatches.registered
+    seedMatchesFromList(clubId, clubSlug, allMatches, settledMatchIds)
+  }
 
   private def insertPendingMatches(items: Iterable[HistoryPendingMatch]): RIO[PostgresClient, Unit] =
     ZIO.foreachDiscard(items.grouped(1000).toList)(HistoryPendingMatch.insertBatch)
