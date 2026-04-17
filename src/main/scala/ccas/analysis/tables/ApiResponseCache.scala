@@ -86,10 +86,41 @@ object ApiResponseCache {
       }
     }
 
-  /** 304 Not Modified refresh: bumps `fetched_at` without touching the body or validators. */
-  def touch(url: String, fetchedAt: Instant): ZIO[PostgresClient, SQLException, Int] =
-    connectZIO {
-      sql"UPDATE api_response_cache SET fetched_at = $fetchedAt WHERE url = $url".update.run()
+  /** 304 Not Modified refresh: bumps `fetched_at` and merges any fresh validators / cache-control values from the
+    * 304 response. `etag`, `lastModified`, and `contentType` use COALESCE semantics — a `Some` overwrites, a `None`
+    * preserves the stored value — so a 304 that omits those headers (RFC 7232 §4.1 only requires ETag among them)
+    * leaves the entry untouched. `maxAgeUpdate` uses a nested `Option` to distinguish three cases: outer `None`
+    * preserves the stored value (no `Cache-Control` header at all), `Some(None)` clears it to NULL (`Cache-Control:
+    * no-cache` is honoured the same way as on 200 responses), and `Some(Some(n))` overwrites with a fresh `max-age`.
+    */
+  def touch(
+    url: String,
+    fetchedAt: Instant,
+    etag: Option[String],
+    lastModified: Option[Instant],
+    maxAgeUpdate: Option[Option[Long]],
+    contentType: Option[String]
+  ): ZIO[PostgresClient, SQLException, Int] =
+    maxAgeUpdate match {
+      case None =>
+        connectZIO {
+          sql"""UPDATE api_response_cache SET
+                  fetched_at    = $fetchedAt,
+                  etag          = COALESCE($etag, etag),
+                  last_modified = COALESCE($lastModified, last_modified),
+                  content_type  = COALESCE($contentType, content_type)
+                WHERE url = $url""".update.run()
+        }
+      case Some(newMaxAge) =>
+        connectZIO {
+          sql"""UPDATE api_response_cache SET
+                  fetched_at      = $fetchedAt,
+                  etag            = COALESCE($etag, etag),
+                  last_modified   = COALESCE($lastModified, last_modified),
+                  max_age_seconds = $newMaxAge,
+                  content_type    = COALESCE($contentType, content_type)
+                WHERE url = $url""".update.run()
+        }
     }
 
   /** Drop a cache entry. Used on JSON decode failures (schema drift) so the next request refetches over the wire. */

@@ -20,6 +20,8 @@ object TestApiResponseCacheSql extends ZIOSpecDefault {
     testUpsertUpdatesExistingRow,
     testUpsertDedupedSameBodyReturnsSameBodyId,
     testTouchUpdatesFetchedAtOnly,
+    testTouchOverwritesMaxAgeWhenUpdateProvided,
+    testTouchClearsMaxAgeOnNoCache,
     testInvalidateDeletes,
     testFkRestrictBlocksBodyDelete,
     testOrphanCleanupPreservesCacheReferencedBody,
@@ -140,19 +142,46 @@ object TestApiResponseCacheSql extends ZIOSpecDefault {
       )
     }
 
-  private def testTouchUpdatesFetchedAtOnly = test("touch refreshes fetched_at but leaves validators alone") {
+  private def testTouchUpdatesFetchedAtOnly = test("touch with all Nones bumps fetched_at and preserves validators") {
     for {
       before  <- ApiResponseCache.lookupMeta(urlA)
-      touched <- ApiResponseCache.touch(urlA, Times.t2)
+      // Passing None for each optional field exercises the COALESCE path in `touch`: stored validators and
+      // max_age_seconds must survive unchanged when the 304 response carried none of those headers.
+      touched <- ApiResponseCache.touch(urlA, Times.t2, None, None, None, None)
       after   <- ApiResponseCache.lookupMeta(urlA)
     } yield assertTrue(
       touched == 1,
       before.exists(_.fetchedAt == Times.t1),
       after.exists(_.fetchedAt == Times.t2),
       before.flatMap(_.etag) == after.flatMap(_.etag),
+      before.flatMap(_.maxAgeSeconds) == after.flatMap(_.maxAgeSeconds),
+      before.flatMap(_.lastModified) == after.flatMap(_.lastModified),
+      before.flatMap(_.contentType) == after.flatMap(_.contentType),
       before.map(_.bodyId) == after.map(_.bodyId)
     )
   }
+
+  private def testTouchOverwritesMaxAgeWhenUpdateProvided =
+    test("touch with maxAgeUpdate=Some(Some(n)) overwrites stored max_age_seconds") {
+      for {
+        touched <- ApiResponseCache.touch(urlA, Times.t2, None, None, Some(Some(9999L)), None)
+        after   <- ApiResponseCache.lookupMeta(urlA)
+      } yield assertTrue(
+        touched == 1,
+        after.exists(_.maxAgeSeconds.contains(9999L))
+      )
+    }
+
+  private def testTouchClearsMaxAgeOnNoCache =
+    test("touch with maxAgeUpdate=Some(None) clears max_age_seconds to NULL (no-cache semantics)") {
+      for {
+        touched <- ApiResponseCache.touch(urlA, Times.t2, None, None, Some(None), None)
+        after   <- ApiResponseCache.lookupMeta(urlA)
+      } yield assertTrue(
+        touched == 1,
+        after.exists(_.maxAgeSeconds.isEmpty)
+      )
+    }
 
   private def testInvalidateDeletes = test("invalidate removes the cache row") {
     for {

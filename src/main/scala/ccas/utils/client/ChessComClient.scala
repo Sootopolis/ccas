@@ -16,7 +16,7 @@ import zio.json.JsonDecoder
 import ccas.analysis.tables.{ApiFetchFailure, ApiResponseBody, ApiResponseCache, ClientConfig, ClientStats}
 import ccas.analysis.tables.subtypes.ApiResponseBodyId
 import ccas.info.BuildInfo
-import ccas.utils.{CcasLogger, ProgressBar}
+import ccas.utils.{CcasLogger, HttpDate, ProgressBar}
 import ccas.utils.json.JsonDecodingException
 
 /** HTTP client for the Chess.com public API with adaptive rate limiting.
@@ -147,16 +147,8 @@ final class ChessComClient(
   )(using jsonDecoder: JsonDecoder[T]): Task[CacheableResult[T]] = {
     if (response.status == Status.NotModified) {
       conditional match {
-        case Some(meta) =>
-          // 304 counts as a success for the failure window: the origin is reachable and willing to serve us.
-          // The `true` argument keeps `recordOutcome`'s non-429 branch (same as any other non-rate-limit response).
-          recordOutcome(true) *>
-            statsRef.update(_.incCacheRevalidation) *>
-            ApiResponseCache.touch(url.encode, Instant.now())
-              .provideEnvironment(ZEnvironment(pgClient))
-              .as(CacheableResult.Revalidated(meta.bodyId, loadAndDecode[T](url, meta.bodyId)))
-        case None =>
-          ZIO.fail(Exception(s"Unexpected 304 Not Modified for non-conditional request: $url"))
+        case Some(meta) => handleNotModified[T](url, meta, response)
+        case None       => ZIO.fail(Exception(s"Unexpected 304 Not Modified for non-conditional request: $url"))
       }
     } else {
       response.body.asString.flatMap { string =>
@@ -180,6 +172,46 @@ final class ChessComClient(
     }
   }
 
+  /** Read the cache-relevant validators from a response in a single place so the 200 and 304 paths can't drift
+    * apart. Notably, `Last-Modified` must go through [[HttpDate.parse]] because Chess.com's wire format is not
+    * RFC 7231 HTTP-date (see [[HttpDate]]); ETag goes through the typed parser and is re-rendered so the stored
+    * value is in wire format (`"..."` / `W/"..."`), matching what we echo back via `Header.Custom("If-None-Match", …)`.
+    */
+  private def extractValidators(response: Response): ChessComClient.ResponseValidators =
+    ChessComClient.ResponseValidators(
+      etag = response.header(Header.ETag).map(Header.ETag.render),
+      lastModified = response.rawHeader("Last-Modified").flatMap(HttpDate.parse),
+      contentType = response.header(Header.ContentType).map(_.mediaType.fullType)
+    )
+
+  /** 304 path: bump `fetched_at` and merge any fresh validators or cache-control value from the response. 304s
+    * count as a success for the failure window (the origin is reachable and willing to serve us) — the `true`
+    * argument to `recordOutcome` keeps the non-429 branch, same as any other non-rate-limit response.
+    *
+    * `maxAgeUpdate` is `None` when the 304 carries no `Cache-Control` header at all (preserve the stored value),
+    * or `Some(effectiveMaxAge)` when one is present — `noCache` collapses to `None` inner so the stored `max-age`
+    * is cleared, matching the 200 path at [[handleSuccessBody]]. ETag / Last-Modified / Content-Type use COALESCE
+    * semantics inside [[ApiResponseCache.touch]], so a 304 that omits any of them preserves the stored value.
+    */
+  private def handleNotModified[T](
+    url: URL,
+    meta: ApiResponseCache,
+    response: Response
+  )(using jsonDecoder: JsonDecoder[T]): Task[CacheableResult[T]] = {
+    val directives = parseCacheDirectives(response)
+    val maxAgeUpdate: Option[Option[Long]] =
+      if (response.header(Header.CacheControl).isDefined)
+        Some(if (directives.noCache) None else directives.maxAgeSeconds)
+      else None
+    val validators = extractValidators(response)
+    recordOutcome(true) *>
+      statsRef.update(_.incCacheRevalidation) *>
+      ApiResponseCache
+        .touch(url.encode, Instant.now(), validators.etag, validators.lastModified, maxAgeUpdate, validators.contentType)
+        .provideEnvironment(ZEnvironment(pgClient))
+        .as(CacheableResult.Revalidated(meta.bodyId, loadAndDecode[T](url, meta.bodyId)))
+  }
+
   /** Success path: extract cache-control headers, upsert the response body into the cache (unless `no-store`), and
     * return `IdenticalBody` when the new body deduped to the same `body_id` as the prior cache entry, otherwise
     * `Changed` with the eagerly-decoded value.
@@ -190,13 +222,8 @@ final class ChessComClient(
     response: Response,
     string: String
   )(using jsonDecoder: JsonDecoder[T]): Task[CacheableResult[T]] = {
-    val directives     = parseCacheDirectives(response)
-    // Parse through the typed ETag header (validates wire format, preserves strong/weak), then re-render to wire
-    // format for storage. The rendered form (`"abc"` or `W/"abc"`) is what we echo back on conditional requests —
-    // see note on `buildRequest` above for why we can't use the typed `IfNoneMatch.ETags` for the echo path.
-    val etagOpt        = response.header(Header.ETag).map(Header.ETag.render)
-    val lastModOpt     = response.header(Header.LastModified).map(_.value.toInstant)
-    val contentTypeOpt = response.header(Header.ContentType).map(_.mediaType.fullType)
+    val directives = parseCacheDirectives(response)
+    val validators = extractValidators(response)
     // RFC 7234 §5.2.2.2: `Cache-Control: no-cache` means "cache but always revalidate before reuse". We honour it
     // by dropping any `max-age` so `isFresh` never returns true — subsequent requests go out as conditional GETs
     // (validated via etag / last-modified) rather than being served locally.
@@ -208,10 +235,10 @@ final class ChessComClient(
           .upsertWithBody(
             url = url.encode,
             body = string,
-            etag = etagOpt,
-            lastModified = lastModOpt,
+            etag = validators.etag,
+            lastModified = validators.lastModified,
             maxAgeSeconds = effectiveMaxAge,
-            contentType = contentTypeOpt,
+            contentType = validators.contentType,
             fetchedAt = Instant.now()
           )
           .provideEnvironment(ZEnvironment(pgClient))
@@ -547,6 +574,15 @@ object ChessComClient {
   private[ccas] object CacheDirectives {
     val empty: CacheDirectives = CacheDirectives(None, false, false)
   }
+
+  /** Validators and content-type extracted from a response and persisted alongside the cached body. Shared by the
+    * 200 (`handleSuccessBody`) and 304 (`handleNotModified`) paths so the header-parsing rules live in one place.
+    */
+  private[ccas] final case class ResponseValidators(
+    etag: Option[String],
+    lastModified: Option[Instant],
+    contentType: Option[String]
+  )
 
   private[ccas] case class ThrottleRefs(
     stateRef: Ref[ThrottleState],
