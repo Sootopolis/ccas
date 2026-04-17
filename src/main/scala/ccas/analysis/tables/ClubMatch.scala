@@ -180,4 +180,9 @@ object ClubMatch {
         sql"UPDATE club_match SET team2_club_id = $clubId WHERE match_id = $matchId".update.run()
       }
     }
+
+  def updateFetchedAt(matchId: ClubMatchId, at: Instant): ZIO[PostgresClient, SQLException, Int] =
+    connectZIO {
+      sql"UPDATE club_match SET fetched_at = $at WHERE match_id = $matchId".update.run()
+    }
 }
