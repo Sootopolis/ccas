@@ -4,7 +4,7 @@ import java.sql.SQLException
 import java.time.Instant
 
 import com.augustnagro.magnum.*
-import zio.ZIO
+import zio.{Task, ZIO}
 
 import ccas.analysis.apps.ref.RefHelpers
 import ccas.api.club.ApiClub
@@ -100,22 +100,24 @@ object Club {
       } yield result
     }
 
-  /** Looks up a [[ClubMatchRef]] for the given club and reads the club's current slug from the corresponding team URL
-    * on the Chess.com match endpoint. Used both to resolve slug collisions ([[resolveStaleSlug]]) and to recover from
-    * rename-404s in ClubDataApp. Returns `None` if the club has no match ref.
+  /** Looks up a [[ClubMatchRef]] for the given club — explicit row first, otherwise inferred from `club_match` and
+    * promoted via [[ClubMatchRef.findOrInfer]] — and reads the club's current slug from the corresponding team URL on
+    * the Chess.com match endpoint. Used both to resolve slug collisions ([[resolveStaleSlug]]) and to recover from
+    * rename-404s in ClubDataApp. Returns `None` if neither `club_match_ref` nor `club_match` carries the club.
     */
   def slugFromMatchRef(
     clubId: ClubId,
     client: ChessComClient
   ): ZIO[PostgresClient, Throwable, Option[ClubSlug]] =
-    ClubMatch.selectClubMatchRef(clubId).flatMap {
-      case None => ZIO.none
-      case Some(ref) =>
-        RefHelpers.fetchTeamMatchTeams(client, ref.matchId, ref.isLive).map { teams =>
-          val team = if (ref.isTeam1) { teams.team1 }
-          else { teams.team2 }
-          team.`@id`.path.segments.lastOption.map(ClubSlug.wrap)
-        }
+    ClubMatchRef.findOrInfer(clubId).flatMap {
+      case Some(ref) => fetchCurrentSlug(ref, client)
+      case None      => ZIO.none
+    }
+
+  private def fetchCurrentSlug(ref: ClubMatchRef, client: ChessComClient): Task[Option[ClubSlug]] =
+    RefHelpers.fetchTeamMatchTeams(client, ref.matchId, ref.isLive).map { teams =>
+      val team = if (ref.isTeam1) { teams.team1 } else { teams.team2 }
+      team.`@id`.path.segments.lastOption.map(ClubSlug.wrap)
     }
 
   private def resolveStaleSlug(stale: Club, client: ChessComClient): ZIO[PostgresClient, Throwable, Unit] =

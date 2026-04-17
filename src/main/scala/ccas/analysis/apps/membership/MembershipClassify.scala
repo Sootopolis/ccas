@@ -388,7 +388,7 @@ private[membership] object MembershipClassify {
       closedMemberships = Chunk(closedMember)
     )
 
-    PlayerMatchRef.selectId(playerId).flatMap {
+    PlayerMatchRef.findOrInfer(playerId).flatMap {
       case Some(ref) => resolveUsernameFromMatchRef(client, ref, oldUsername)
       case None =>
         PlayerTournamentRef.selectId(playerId).flatMap {

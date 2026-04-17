@@ -94,7 +94,11 @@ object ClubMatch {
         .query[Option[Instant]].run().headOption.flatten
     }
 
-  def selectClubMatchRef(clubId: ClubId): ZIO[PostgresClient, SQLException, Option[ClubMatchRef]] =
+  /** Infers a [[ClubMatchRef]] value by reading the `club_match` table — does **not** query the `club_match_ref` table.
+    * Used as the synthesis tier beneath `ClubMatchRef.findOrInfer`; prefer that helper unless you explicitly need to
+    * skip the explicit ref table (e.g., when operating on `UnresolvedClub` inputs where tier 1 is empty by definition).
+    */
+  def inferClubMatchRef(clubId: ClubId): ZIO[PostgresClient, SQLException, Option[ClubMatchRef]] =
     connectZIO {
       val daily: TimeClass = TimeClass.Daily
       sql"""SELECT match_id, (time_class != $daily) AS is_live, (team1_club_id = $clubId) AS is_team1

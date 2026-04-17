@@ -8,7 +8,7 @@ import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.{apiClubJson, apiDailyMatchJson, apiPlayerJson}
-import ccas.analysis.tables.{Club, ClubAdmin, ClubMatch, Player, PlayerSnapshot, Tables}
+import ccas.analysis.tables.{Club, ClubAdmin, ClubMatch, ClubMatchRef, Player, PlayerSnapshot, Tables}
 import ccas.api.misc.enums.{ClubMatchStatus, PlayerStatusCategory, TimeClass}
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username}
 import ccas.utils.{CcasLogger, TestCcasLogger}
@@ -74,6 +74,7 @@ object TestClubDataApp extends ZIOSpecDefault {
   private val clearTables: ZIO[PostgresClient, Throwable, Unit] =
     for {
       _ <- connectZIO(sql"DELETE FROM club_admin".update.run())
+      _ <- connectZIO(sql"DELETE FROM club_match_ref".update.run())
       _ <- connectZIO(sql"DELETE FROM club_match".update.run())
       _ <- connectZIO(sql"DELETE FROM club".update.run())
       _ <- connectZIO(sql"DELETE FROM player_snapshot".update.run())
@@ -85,14 +86,19 @@ object TestClubDataApp extends ZIOSpecDefault {
   private val seedMatchEnd   = Instant.parse("2024-06-30T00:00:00Z")
   private val seedMatchFetched = Instant.parse("2024-07-01T00:00:00Z")
 
+  /** Seeds a stale club. `withInferredRef` seeds a `club_match` row (tier-2 synthesis source for `findOrInfer`);
+    * `withExplicitRef` seeds a `club_match_ref` row directly (tier-1 source). Independent flags — either, both, or
+    * neither can be set.
+    */
   private def seedStaleClub(
     clubId: ClubId,
     slug: ClubSlug,
-    withMatchRef: Boolean
+    withInferredRef: Boolean,
+    withExplicitRef: Boolean
   ): ZIO[PostgresClient, Throwable, Unit] =
     for {
       _ <- Club.upsert(Club(clubId, seedCreated, slug, "Stale Club", None, None, None))
-      _ <- ZIO.whenDiscard(withMatchRef) {
+      _ <- ZIO.whenDiscard(withInferredRef) {
         ClubMatch.upsert(
           ClubMatch(
             refMatchId,
@@ -109,6 +115,9 @@ object TestClubDataApp extends ZIOSpecDefault {
             seedMatchFetched
           )
         )
+      }
+      _ <- ZIO.whenDiscard(withExplicitRef) {
+        ClubMatchRef.upsert(ClubMatchRef(clubId, refMatchId, isLive = false, isTeam1 = true))
       }
     } yield ()
 
@@ -165,7 +174,38 @@ object TestClubDataApp extends ZIOSpecDefault {
       )
       for {
         _       <- clearTables
-        _       <- seedStaleClub(stuckClubId, oldSlug, withMatchRef = true)
+        _       <- seedStaleClub(stuckClubId, oldSlug, withInferredRef = true, withExplicitRef = false)
+        client  <- fakeClient(responses)
+        result  <- runRefresh(client)
+        updated <- Club.selectId(stuckClubId)
+        // Verify the tier-2 synthesis was promoted to an explicit `club_match_ref` row by `findOrInfer`.
+        promoted <- ClubMatchRef.selectId(stuckClubId)
+      } yield assertTrue(
+        result.clubsProcessed == 1,
+        result.clubsFailed == 0,
+        updated.exists(_.slug == newSlug),
+        updated.exists(_.fetchedAt.isDefined),
+        promoted.exists(_.matchId == refMatchId)
+      )
+    },
+    // Regression: production `mkr-community` had a `club_match_ref` row but no `club_match` row; before the
+    // `ClubMatchRef.findOrInfer` fix, `Club.slugFromMatchRef` consulted only `club_match` (via
+    // `ClubMatch.inferClubMatchRef`) and the rename recovery never fired.
+    test("404 + explicit club_match_ref only (no club_match row) → rediscovers via tier 1, retries, persists new slug") {
+      val matchJson = apiDailyMatchJson(
+        matchId = ClubMatchId.unwrap(refMatchId),
+        team1Club = newSlug.value,
+        team2Club = "opponent-club",
+        team1Players = List(("alice", 1)),
+        team2Players = List(("bob", 1))
+      )
+      val responses = Map(
+        s"club/${newSlug.value}"                   -> apiClubJson(ClubId.unwrap(stuckClubId), newSlug.value),
+        s"match/${ClubMatchId.unwrap(refMatchId)}" -> matchJson
+      )
+      for {
+        _       <- clearTables
+        _       <- seedStaleClub(stuckClubId, oldSlug, withInferredRef = false, withExplicitRef = true)
         client  <- fakeClient(responses)
         result  <- runRefresh(client)
         updated <- Club.selectId(stuckClubId)
@@ -179,7 +219,7 @@ object TestClubDataApp extends ZIOSpecDefault {
     test("404 + no match ref → still fails, fetched_at untouched") {
       for {
         _       <- clearTables
-        _       <- seedStaleClub(stuckClubId, oldSlug, withMatchRef = false)
+        _       <- seedStaleClub(stuckClubId, oldSlug, withInferredRef = false, withExplicitRef = false)
         client  <- fakeClient(Map.empty) // old-slug 404s, no match ref to recover
         result  <- runRefresh(client)
         unchanged <- Club.selectId(stuckClubId)
@@ -203,7 +243,7 @@ object TestClubDataApp extends ZIOSpecDefault {
       )
       for {
         _         <- clearTables
-        _         <- seedStaleClub(stuckClubId, oldSlug, withMatchRef = true)
+        _         <- seedStaleClub(stuckClubId, oldSlug, withInferredRef = true, withExplicitRef = false)
         client    <- fakeClient(responses)
         result    <- runRefresh(client)
         unchanged <- Club.selectId(stuckClubId)
@@ -230,7 +270,7 @@ object TestClubDataApp extends ZIOSpecDefault {
       )
       for {
         _         <- clearTables
-        _         <- seedStaleClub(stuckClubId, oldSlug, withMatchRef = true)
+        _         <- seedStaleClub(stuckClubId, oldSlug, withInferredRef = true, withExplicitRef = false)
         client    <- fakeClient(responses, profileFailureStatus = Status.InternalServerError)
         result    <- runRefresh(client)
         unchanged <- Club.selectId(stuckClubId)
