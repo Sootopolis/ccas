@@ -68,22 +68,29 @@ object TestSeedMatchesForPlayer extends ZIOSpecDefault {
         _       <- Club.upsert(club)
         _       <- Player.insertIfNew(player)
         counter <- Ref.make(0)
+        skipCtr <- Ref.make(0)
         client  <- fakeChessComClientCounting(json, counter)
-        first   <- HistorySeeding.seedMatchesForPlayer(client, clubId, clubSlug, playerId, username, Set.empty)
+        first <- HistorySeeding.seedMatchesForPlayer(
+          client, clubId, clubSlug, playerId, username, Set.empty, skipCtr
+        )
         pendingAfterFirst <- HistoryPendingMatch.selectClub(clubId)
         // Clear both side effects so the second call has to re-materialise anything it does.
         _ <- ZIO.foreachDiscard(pendingAfterFirst)(p => HistoryPendingMatch.delete(clubId, p.matchId, p.isLive))
         _ <- HistoryMemberQuery.deleteClub(clubId)
-        second             <- HistorySeeding.seedMatchesForPlayer(client, clubId, clubSlug, playerId, username, Set.empty)
+        second <- HistorySeeding.seedMatchesForPlayer(
+          client, clubId, clubSlug, playerId, username, Set.empty, skipCtr
+        )
         pendingAfterSecond <- HistoryPendingMatch.selectClub(clubId)
         queriedAfterSecond <- HistoryMemberQuery.selectClubPlayerIds(clubId)
         netCalls           <- counter.get
+        skipCount          <- skipCtr.get
       } yield assertTrue(
         first == 3,
         second == 0,
         pendingAfterSecond.isEmpty,            // unchanged branch took the skip — no re-insert
         queriedAfterSecond.contains(playerId), // stamp still fired — bookkeeping preserved
-        netCalls == 1                          // within max-age → Fresh; second call never hit the route
+        netCalls == 1,                         // within max-age → Fresh; second call never hit the route
+        skipCount == 1                         // exactly the second (Fresh) call recorded a skip
       )
     }
 }

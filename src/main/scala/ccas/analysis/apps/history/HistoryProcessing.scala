@@ -65,7 +65,8 @@ private[history] object HistoryProcessing {
                   ZIO.foreachParDiscard(newPlayers) { dp =>
                     HistorySeeding
                       .seedMatchesForPlayer(
-                        ctx.client, ctx.clubId, ctx.clubSlug, dp.playerId, dp.username, settledMatchIds
+                        ctx.client, ctx.clubId, ctx.clubSlug, dp.playerId, dp.username, settledMatchIds,
+                        ctx.seedPlayerMatchesUnchanged
                       )
                       .zipLeft(ZIO.foreachDiscard(shared)(_.queriedPlayers.update(_ + dp.playerId)))
                       .catchAll(error => CcasLogger.warn(s"  ${dp.username}: failed to seed — ${error.getMessage}"))
@@ -309,9 +310,10 @@ private[history] object HistoryProcessing {
     matchId: ClubMatchId
   ): RIO[CcasLogger & PostgresClient, Unit] =
     ctx.client.getCacheable[ApiDailyMatch](ApiDailyMatch.getUrl(matchId)).flatMap {
-      _.foldZIO(_ => ClubMatch.updateFetchedAt(matchId, Instant.now()).unit)(
-        refreshSingleMatchWithBody(ctx, matchId, _)
-      )
+      _.foldZIO(_ =>
+        ctx.refreshMatchUnchanged.update(_ + 1) *>
+          ClubMatch.updateFetchedAt(matchId, Instant.now()).unit
+      )(refreshSingleMatchWithBody(ctx, matchId, _))
     }
 
   private def refreshSingleMatchWithBody(
@@ -785,15 +787,18 @@ private[history] object HistoryProcessing {
 
   def readStats(ctx: ProcessingContext, waveCount: Int, waveDetails: List[WaveDetail]): UIO[RunStats] =
     for {
-      matchesProcessed    <- ctx.matchesProcessed.get
-      matchesFailed       <- ctx.matchesFailed.get
-      matchesUnidentified <- ctx.matchesUnidentified.get
-      matchesBoardsUpdated    <- ctx.matchesBoardsUpdated.get
-      matchesSharedSkip   <- ctx.matchesSharedSkip.get
-      playersDiscovered   <- ctx.playersDiscovered.get
-      playersKnown        <- ctx.playersKnown.get
-      playersFailed       <- ctx.playersFailed.get
-      failedMatches       <- ctx.failedMatches.get
+      matchesProcessed           <- ctx.matchesProcessed.get
+      matchesFailed              <- ctx.matchesFailed.get
+      matchesUnidentified        <- ctx.matchesUnidentified.get
+      matchesBoardsUpdated       <- ctx.matchesBoardsUpdated.get
+      matchesSharedSkip          <- ctx.matchesSharedSkip.get
+      playersDiscovered          <- ctx.playersDiscovered.get
+      playersKnown               <- ctx.playersKnown.get
+      playersFailed              <- ctx.playersFailed.get
+      failedMatches              <- ctx.failedMatches.get
+      refreshMatchUnchanged      <- ctx.refreshMatchUnchanged.get
+      seedClubMatchesUnchanged   <- ctx.seedClubMatchesUnchanged.get
+      seedPlayerMatchesUnchanged <- ctx.seedPlayerMatchesUnchanged.get
     } yield RunStats(
       matchesProcessed = matchesProcessed,
       matchesFailed = matchesFailed,
@@ -804,6 +809,9 @@ private[history] object HistoryProcessing {
       playersKnown = playersKnown,
       playersFailed = playersFailed,
       waveCount = waveCount,
+      refreshMatchUnchanged = refreshMatchUnchanged,
+      seedClubMatchesUnchanged = seedClubMatchesUnchanged,
+      seedPlayerMatchesUnchanged = seedPlayerMatchesUnchanged,
       waveDetails = waveDetails,
       failedMatches = failedMatches
     )

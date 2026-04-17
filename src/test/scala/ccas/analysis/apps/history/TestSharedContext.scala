@@ -2,7 +2,7 @@ package ccas.analysis.apps.history
 
 import java.time.{Duration, Instant, LocalDateTime, ZoneOffset}
 
-import zio.{RIO, ZIO}
+import zio.{Ref, RIO, ZIO}
 import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
@@ -123,9 +123,12 @@ object TestSharedContext extends ZIOSpecDefault {
         _      <- shared.queriedPlayers.set(Set(player1Id))
 
         // Only bob's match list should be fetched
-        client <- fakeChessComClient(Map("bob" -> playerMatchesJson("club-a", List(6001))))
+        client  <- fakeChessComClient(Map("bob" -> playerMatchesJson("club-a", List(6001))))
+        skipCtr <- Ref.make(0)
         result <- HistorySeeding
-          .seedFromMemberMatches(client, clubAId, clubASlug, allMembers, Set.empty, playerById, Set.empty, Some(shared))
+          .seedFromMemberMatches(
+            client, clubAId, clubASlug, allMembers, Set.empty, playerById, Set.empty, Some(shared), skipCtr
+          )
           .provideSomeEnvironment[PostgresClient](_.add[CcasLogger](TestCcasLogger.noop))
         _ <- ZIO.foreachDiscard(List(ClubMatchId(6001)))(id =>
           HistoryPendingMatch.delete(clubAId, id, isLive = false)
@@ -152,9 +155,12 @@ object TestSharedContext extends ZIOSpecDefault {
         shared <- SharedContext.make
         _      <- shared.queriedPlayers.set(Set(player1Id))
 
-        client <- fakeChessComClient(Map.empty) // no API calls expected
+        client  <- fakeChessComClient(Map.empty) // no API calls expected
+        skipCtr <- Ref.make(0)
         _ <- HistorySeeding
-          .seedFromMemberMatches(client, clubBId, clubBSlug, allMembers, Set.empty, playerById, Set.empty, Some(shared))
+          .seedFromMemberMatches(
+            client, clubBId, clubBSlug, allMembers, Set.empty, playerById, Set.empty, Some(shared), skipCtr
+          )
           .provideSomeEnvironment[PostgresClient](_.add[CcasLogger](TestCcasLogger.noop))
 
         // HistoryMemberQuery should be recorded for club B even though alice was skipped

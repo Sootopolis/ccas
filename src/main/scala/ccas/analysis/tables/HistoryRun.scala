@@ -20,7 +20,10 @@ final case class HistoryRun(
   completedAt: Option[Instant],
   matchesProcessed: Option[Int],
   playersDiscovered: Option[Int],
-  jobRunId: Option[JobRunId]
+  jobRunId: Option[JobRunId],
+  refreshMatchUnchanged: Int,
+  seedClubMatchesUnchanged: Int,
+  seedPlayerMatchesUnchanged: Int
 ) derives DbCodec
 
 object HistoryRun {
@@ -35,7 +38,10 @@ object HistoryRun {
               completed_at TIMESTAMPTZ,
               matches_processed  INT,
               players_discovered INT,
-              job_run_id   TEXT
+              job_run_id   TEXT,
+              refresh_match_unchanged        INT NOT NULL DEFAULT 0,
+              seed_club_matches_unchanged    INT NOT NULL DEFAULT 0,
+              seed_player_matches_unchanged  INT NOT NULL DEFAULT 0
             )""".update.run()
       sql"""CREATE INDEX IF NOT EXISTS idx_history_run_club_started
             ON history_run (club_id, started_at DESC)""".update.run()
@@ -57,11 +63,19 @@ object HistoryRun {
     runId: Long,
     completedAt: Instant,
     matchesProcessed: Int,
-    playersDiscovered: Int
+    playersDiscovered: Int,
+    refreshMatchUnchanged: Int,
+    seedClubMatchesUnchanged: Int,
+    seedPlayerMatchesUnchanged: Int
   ): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""UPDATE history_run
-            SET completed_at = $completedAt, matches_processed = $matchesProcessed, players_discovered = $playersDiscovered
+            SET completed_at = $completedAt,
+                matches_processed = $matchesProcessed,
+                players_discovered = $playersDiscovered,
+                refresh_match_unchanged = $refreshMatchUnchanged,
+                seed_club_matches_unchanged = $seedClubMatchesUnchanged,
+                seed_player_matches_unchanged = $seedPlayerMatchesUnchanged
             WHERE run_id = $runId""".update.run()
     }
 }
