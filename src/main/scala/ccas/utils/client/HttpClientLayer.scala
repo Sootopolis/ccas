@@ -13,6 +13,13 @@ import zio.http.{Client, Decompression, DnsResolver, ZClient}
   * installed in the pipeline and responses with `Content-Encoding: gzip` are decoded automatically. Responses that
   * are not compressed pass through unchanged, so the header-driven branching is entirely handled inside Netty.
   *
+  * Note: `HttpContentDecompressor` strips `Content-Encoding` from the response after a successful decode, so no
+  * runtime check in `ChessComClient` can tell a decompressed gzip response apart from an un-encoded one. Verify
+  * manually when needed with `curl --compressed -v https://api.chess.com/pub/player/erik` and look for
+  * `Content-Encoding: gzip` in the raw response headers. A silent regression in `Decompression.NonStrict` would
+  * surface immediately as `JsonDecodingException` on every response (gzip bytes don't parse as JSON), and those
+  * failures are already persisted to `api_fetch_failure` with dedup of the raw body into `api_response_body`.
+  *
   * '''HTTP/2 (future)''' — zio-http 3.10.1 does not yet support HTTP/2; its `Version` sealed trait only defines
   * `Http_1_0` and `Http_1_1`, and the Netty client driver only negotiates HTTP/1.1 regardless of what ALPN offers.
   * HTTP/2 support is tracked upstream at https://github.com/zio/zio-http/issues/3473. When that lands in a zio-http
