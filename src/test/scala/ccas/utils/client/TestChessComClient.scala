@@ -446,26 +446,33 @@ object TestChessComClient extends ZIOSpecDefault {
     },
     test("recovery fibers are interrupted when scope closes") {
       for {
-        // Create client and trigger throttle-down inside a scope, then let the scope close
-        stateRef <- ZIO.scoped {
+        // Create client and trigger throttle-down inside a scope, then let the scope close.
+        // Short cooldown is deliberate: once Phase 1 stops feeding failures, an uninterrupted
+        // fiber needs ~2 cycles to advance (cycle 1 clears stale Phase-1 outcomes, cycle 2 sees
+        // an empty window and steps up). The earlier cooldown=60s made this test vacuous — the
+        // fiber was still in cooldown sleep for the full post-scope wait whether interrupted or not.
+        (stateRef, insideState) <- ZIO.scoped {
           for {
             (client, stateRef, _) <- makeClient(
               handler = _ => ZIO.succeed(Response(status = Status.TooManyRequests)),
               permits = 20,
-              cooldown = 60.seconds,
+              cooldown = 100.millis,
               failureThreshold = 0.2
             )
             _ <- ZIO.foreachParDiscard(1 to 5)(i =>
               client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get).exit
             )
-            state <- stateRef.get
-            _ <- ZIO.succeed(assertTrue(state.currentMax == 1L))
-          } yield stateRef // scope closes here, recovery fibers should be interrupted
+            insideState <- stateRef.get
+          } yield (stateRef, insideState) // scope closes here, recovery fibers should be interrupted
         }
-        // If recovery survived scope closure, 300ms would be enough for it to advance
-        _ <- ZIO.sleep(300.millis)
-        state <- stateRef.get
-      } yield assertTrue(state.currentMax == 1L)
+        // 1s >> drain-poll (200ms) + 2 × cooldown (200ms), so an uninterrupted fiber would have
+        // stepped up through several tiers by now.
+        _ <- ZIO.sleep(1.second)
+        afterState <- stateRef.get
+      } yield assertTrue(
+        insideState.currentMax == 1L, // Phase 1 actually triggered throttle-down
+        afterState.currentMax == 1L   // no post-scope step-up → fiber was interrupted
+      )
     },
     test("sequential ordering when throttled to 1 permit") {
       ZIO.scoped {
@@ -569,7 +576,10 @@ object TestChessComClient extends ZIOSpecDefault {
             permits = 8,
             cooldown = 1.second,
             failureThreshold = 0.2,
-            recoveryTiers = Some(Vector(2, 4, 8))
+            recoveryTiers = Some(Vector(2, 4, 8)),
+            // Pins tier 2 long enough that polling can reliably observe it before step 2 fires
+            // (same recipe as the "Cloudflare throttle during recovery drops to 1" test above).
+            minTierObservation = 500.millis
           )
           // Trigger throttle-down → 1
           _ <- ZIO.foreachParDiscard(1 to 5)(i =>
@@ -656,6 +666,7 @@ object TestChessComClient extends ZIOSpecDefault {
           )
           // Wait for step-up to tier 2
           _ <- stateRef.get.repeatUntil(_.currentMax >= 2L)
+            .timeoutFail(new RuntimeException("recovery did not reach tier 2"))(5.seconds)
           // Phase 3: 429s at tier 2 — since outcomes are cleared on step-up, only tier-2
           // failures are visible to the recovery check, causing a drop-back to 1
           _ <- phase.set(3)
@@ -663,6 +674,7 @@ object TestChessComClient extends ZIOSpecDefault {
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get).exit
           ).fork
           _ <- stateRef.get.repeatUntil(_.currentMax <= 1L)
+            .timeoutFail(new RuntimeException("recovery did not drop back to tier 1"))(5.seconds)
           _ <- fiber.interrupt
         } yield assertTrue(
           s1.currentMax == 1L
@@ -762,20 +774,23 @@ object TestChessComClient extends ZIOSpecDefault {
           _ <- ZIO.foreachParDiscard(1 to 5)(i =>
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get).exit
           )
+          // Anchor the observation window to the scheduler's own tierEnteredAt rather than wall-clock
+          // sleeps, so Phase 2 timing (which varies wildly under CI load) cannot push the observed
+          // state past the step-up point before we assert on it.
+          throttled <- stateRef.get
+          throttleDownAt = throttled.tierEnteredAt.getOrElse(0L)
           // Phase 2: switch to success, fill outcome window so recovery has enough data
           _ <- shouldFail.set(false)
           _ <- ZIO.foreachDiscard(6 to 30)(i =>
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get)
           )
-          // Cooldown is 50ms but observation is 2s — well before observation expires, should still be at tier 1
-          _ <- ZIO.sleep(500.millis)
-          earlyState <- stateRef.get
-          // After observation period: should have stepped up
-          _ <- ZIO.sleep(2.seconds)
-          lateState <- stateRef.get
+          // Poll until step-up fires; elapsed from throttle-down must be at least minTierObservation
+          _ <- stateRef.get.repeatUntil(_.currentMax >= 2L)
+            .timeoutFail(new RuntimeException("step-up did not fire"))(5.seconds)
+          stepUpAt <- Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS)
         } yield assertTrue(
-          earlyState.currentMax == 1L,
-          lateState.currentMax >= 2L
+          throttled.currentMax == 1L,
+          (stepUpAt - throttleDownAt) >= 1800L // 2s observation - 200ms scheduling tolerance
         )
       }
     },
@@ -794,7 +809,7 @@ object TestChessComClient extends ZIOSpecDefault {
             cooldown = 50.millis,
             failureThreshold = 0.2,
             recoveryTiers = Some(Vector(2, 4)),
-            minTierObservation = 300.millis
+            minTierObservation = 1.second
           )
           // Trigger throttle-down
           _ <- ZIO.foreachParDiscard(1 to 5)(i =>
@@ -804,18 +819,18 @@ object TestChessComClient extends ZIOSpecDefault {
           _ <- ZIO.foreachDiscard(6 to 30)(i =>
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get)
           )
-          // Wait for first step-up to tier 2 (cooldown 50ms + observation 300ms)
-          _ <- stateRef.get.repeatUntil(_.currentMax >= 2L)
-            .timeoutFail(new RuntimeException("did not reach tier 2"))(2.seconds)
-          // Record time at tier 2
-          atTier2 <- Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS)
-          // Wait for step-up to tier 4 (another observation period required)
+          // Poll until step-up to tier 2. Capture the scheduler's own tierEnteredAt so polling drift
+          // on the tier 2 side does not shrink the observed gap below the real observation window.
+          tier2State <- stateRef.get.repeatUntil(_.currentMax >= 2L)
+            .timeoutFail(new RuntimeException("did not reach tier 2"))(5.seconds)
+          tier2EnteredAt = tier2State.tierEnteredAt.getOrElse(0L)
+          // Poll until full recovery at tier 4 (top tier → coolingDown clears, tierEnteredAt is None).
           _ <- stateRef.get.repeatUntil(s => s.currentMax >= 4L && !s.coolingDown)
-            .timeoutFail(new RuntimeException("did not reach tier 4"))(2.seconds)
+            .timeoutFail(new RuntimeException("did not reach tier 4"))(5.seconds)
           atTier4 <- Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS)
-          // The gap between reaching tier 2 and tier 4 must be at least minTierObservation
         } yield assertTrue(
-          (atTier4 - atTier2) >= 250L // 300ms observation minus scheduling tolerance
+          tier2State.currentMax == 2L, // sanity check: polling did not race past tier 2
+          (atTier4 - tier2EnteredAt) >= 800L // 1s observation minus 200ms scheduling tolerance
         )
       }
     },
