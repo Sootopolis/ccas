@@ -11,9 +11,10 @@ object ErrorResponse {
 
 /** Marker for errors whose `getMessage` and response body are intentionally safe to surface to users.
   *
-  * HTTP routes render instances via `RouteHelpers.handleError` using `status` and `renderBody`; anything outside this
-  * sealed hierarchy (plus `HttpStatusException`) collapses to a generic 500. CLI apps use the inherited `getMessage`
-  * only — the JSON body is never computed on that path thanks to the `lazy val` in each variant.
+  * HTTP routes render instances via `RouteHelpers.withErrorHandling` using `status` and `renderBody`. Escaping
+  * `HttpStatusException`s render as 502 alongside this hierarchy; anything else collapses to a generic 500 with the
+  * cause logged. CLI apps use the inherited `getMessage` only — the JSON body is never computed on that path thanks
+  * to the `lazy val` in each variant.
   */
 sealed trait UserFacingError extends Throwable {
   def status: Status
