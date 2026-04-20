@@ -5,10 +5,10 @@ import java.time.{Instant, LocalDateTime, ZoneOffset}
 import com.augustnagro.magnum.sql
 
 import ccas.utils.sql.PostgresClient
-import zio.{RIO, Ref, Scope, UIO, ULayer, URIO, ZIO, ZLayer}
+import zio.{LogLevel, RIO, Ref, Scope, UIO, ULayer, URIO, ZIO, ZLayer}
 import zio.http.*
 import zio.json.DecoderOps
-import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
+import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault, ZTestLogger}
 
 import ccas.analysis.tables.{Club, RunTrigger}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId}
@@ -30,6 +30,7 @@ object TestRoutes extends ZIOSpecDefault {
     FreshSchemaLayer("test_routes", onInit = ServerTables.ensureTables),
     fakeJobRunnerLayer,
     TestChessComClient.dummyLayer,
+    ZTestLogger.default,
     Scope.default
   ) @@ TestAspect.sequential
 
@@ -138,7 +139,9 @@ object TestRoutes extends ZIOSpecDefault {
     testGetJobByIdReturns200,
     testGetJobByIdReturns404,
     testStatsWithInvalidDateReturns400,
-    testStatsWithPartialDatesReturns400
+    testStatsWithPartialDatesReturns400,
+    testUnhandledErrorReturns500AndLogsCause,
+    testInterruptPropagatesWithoutLogging
   )
 
   private def testRecruitmentSuccess = test("POST /api/jobs/recruitment success") {
@@ -376,6 +379,41 @@ object TestRoutes extends ZIOSpecDefault {
       )
     } yield assertTrue(response.status == Status.BadRequest)
   }
+
+  private def testInterruptPropagatesWithoutLogging =
+    test("interrupted effect propagates and is not logged as a 500") {
+      val interrupted: zio.Task[Response] = ZIO.interrupt
+      for {
+        logsBefore <- ZTestLogger.logOutput.map(_.size)
+        exit       <- RouteHelpers.withErrorHandling(interrupted).exit
+        logsAfter  <- ZTestLogger.logOutput.map(_.size)
+      } yield assertTrue(exit.isInterrupted, logsAfter == logsBefore)
+    }
+
+  private def testUnhandledErrorReturns500AndLogsCause =
+    test("unhandled non-user-facing error returns generic 500 and logs cause") {
+      val msg = "simulated downstream failure for test"
+      for {
+        _    <- ensureClubs
+        fake <- getFakeRunner
+        _    <- fake.setNextAction(Action.Fail(msg))
+        response <- JobRoutes.routes.runZIO(
+          jsonRequest(Method.POST, "/api/jobs/recruitment", """{"clubSlug":"test-club"}""")
+        )
+        body <- response.body.asString
+        logs <- ZTestLogger.logOutput
+      } yield assertTrue(
+        response.status == Status.InternalServerError,
+        body == """{"error":"Internal server error"}""",
+        logs.exists(entry =>
+          entry.logLevel == LogLevel.Error &&
+            entry.cause.failures.exists {
+              case t: Throwable => Option(t.getMessage).contains(msg)
+              case _            => false
+            }
+        )
+      )
+    }
 
   // ==========================================================================
   // Suite: ScheduleRoutes
