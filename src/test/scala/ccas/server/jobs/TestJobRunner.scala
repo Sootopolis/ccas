@@ -10,6 +10,7 @@ import ccas.analysis.tables.{Club, RunTrigger}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId}
 import ccas.server.ServerTables
 import ccas.utils.client.TestChessComClient
+import ccas.utils.errors.ConflictException
 import ccas.utils.sql.FreshSchemaLayer
 import ccas.utils.sql.PostgresClient.connectZIO
 import ccas.utils.TestCcasLogger
@@ -93,7 +94,7 @@ object TestJobRunner extends ZIOSpecDefault {
       result <- runner.submit(JobKind.Recruitment, Some(ClubId(204)), None, RunTrigger.Cli, _ => ZIO.unit).either
     } yield assertTrue(
       result.isLeft,
-      result.left.exists(_.isInstanceOf[JobConflictException])
+      result.left.exists(_.isInstanceOf[ConflictException])
     )
   }
 
@@ -108,7 +109,7 @@ object TestJobRunner extends ZIOSpecDefault {
       _       <- gate.succeed(())
       results <- ZIO.foreach(fibers)(_.join)
       successes = results.count(_.isRight)
-      conflicts = results.count(_.left.exists(_.isInstanceOf[JobConflictException]))
+      conflicts = results.count(_.left.exists(_.isInstanceOf[ConflictException]))
     } yield assertTrue(
       successes == 1,
       conflicts == results.size - 1
