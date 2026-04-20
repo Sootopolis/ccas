@@ -10,17 +10,17 @@ import zio.{Fiber, RIO, RLayer, Ref, UIO, ZIO, ZLayer}
 import ccas.analysis.tables.RunTrigger
 import ccas.api.misc.subtypes.{ClubId, JobRunId}
 import ccas.utils.client.ChessComClient
-import ccas.utils.errors.safeMessage
+import ccas.utils.errors.{ConflictException, safeMessage}
 import ccas.utils.CcasLogger
 
 /** Asynchronous job executor that runs analysis tasks as forked fibers.
   *
   * Each submitted job is tracked in the `job_run` database table with a ULID identifier. Only one job of a given kind
-  * (optionally scoped to a club) may run at a time; duplicate submissions are rejected with a [[JobConflictException]].
+  * (optionally scoped to a club) may run at a time; duplicate submissions are rejected with a [[ccas.utils.errors.ConflictException]].
   */
 trait JobRunner {
 
-  /** Fork a new job and return its ID. Fails with [[JobConflictException]] if a matching job is already running.
+  /** Fork a new job and return its ID. Fails with [[ccas.utils.errors.ConflictException]] if a matching job is already running.
     *
     * The effect receives the job run ID (as a string) so that analysis apps can link their own run records back to the
     * server-level job.
@@ -71,7 +71,7 @@ object JobRunner {
       trigger: RunTrigger,
       effect: Option[JobRunId] => RIO[CcasLogger & ChessComClient & PostgresClient, Any]
     ): RIO[PostgresClient, JobRunId] = {
-      def conflictError = new JobConflictException(
+      def conflictError = ConflictException(
         s"A ${kind} job is already running" + clubId.fold("")(c => s" for club $c")
       )
       (for {

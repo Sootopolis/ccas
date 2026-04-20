@@ -18,7 +18,7 @@ import ccas.server.jobs.*
 import ccas.server.routes.RouteHelpers.*
 import ccas.utils.{CcasLogger, TimeParser}
 import ccas.utils.client.ChessComClient
-import ccas.utils.errors.BadRequestException
+import ccas.utils.errors.{BadRequestException, ConflictException, ErrorResponse}
 
 object JobRoutes {
 
@@ -132,7 +132,7 @@ object JobRoutes {
             val params    = if (paramsStr.length > 1024) paramsStr.take(1024) + "..." else paramsStr
             runner.submit(JobKind.Recruitment, Some(club.clubId), Some(params), RunTrigger.Api, effect)
               .map(id => JobResult(Some(JobRunId.unwrap(id)), None))
-              .catchSome { case e: JobConflictException =>
+              .catchSome { case e: ConflictException =>
                 ZIO.succeed(JobResult(None, Some(e.getMessage)))
               }
         }
@@ -171,7 +171,7 @@ object JobRoutes {
             _ => RefApp.populate(forceSkipped = false, upgradeRefs = false).unit
           )
           .map(id => JobResult(Some(JobRunId.unwrap(id)), None))
-          .catchSome { case e: JobConflictException =>
+          .catchSome { case e: ConflictException =>
             ZIO.succeed(JobResult(None, Some(e.getMessage)))
           }
       } yield jsonResponse(Status.Ok, result)).pipe(withErrorHandling)
@@ -262,7 +262,7 @@ object JobRoutes {
       case Some(club) =>
         runner.submit(kind, Some(club.clubId), params, RunTrigger.Api, effect)
           .map(id => ClubJobResult(ClubSlug.unwrap(slug), Some(JobRunId.unwrap(id)), None))
-          .catchSome { case e: JobConflictException =>
+          .catchSome { case e: ConflictException =>
             ZIO.succeed(ClubJobResult(ClubSlug.unwrap(slug), None, Some(e.getMessage)))
           }
     }

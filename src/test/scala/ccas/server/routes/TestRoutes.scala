@@ -15,6 +15,7 @@ import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId}
 import ccas.server.jobs.*
 import ccas.server.ServerTables
 import ccas.utils.client.{ChessComClient, TestChessComClient}
+import ccas.utils.errors.ConflictException
 import ccas.utils.sql.FreshSchemaLayer
 import ccas.utils.sql.PostgresClient.connectZIO
 import ccas.utils.CcasLogger
@@ -56,7 +57,7 @@ object TestRoutes extends ZIOSpecDefault {
           val job = JobRun(id, kind, clubId, trigger, JobRunStatus.Running, params, now, None, None)
           jobs.update(_ + (id -> job)).as(id)
         case Action.Conflict =>
-          ZIO.fail(new JobConflictException(s"A $kind job is already running"))
+          ZIO.fail(ConflictException(s"A $kind job is already running"))
         case Action.Fail(msg) =>
           ZIO.fail(new Exception(msg))
       }
