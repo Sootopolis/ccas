@@ -149,8 +149,12 @@ object RefApp extends ZIOAppDefault {
       api        <- ctx.playersResolvedApi.get
       skippedNew <- ctx.playersSkippedNew.get
       skipped    <- ctx.skippedPlayers.get
+      unchanged <- ctx.playerMatchesUnchanged.get
       _ <- CcasLogger.info(
         s"Players resolved: $db (DB) + $api (API) = ${db + api} / ${players.size}, skipped: $skippedNew new"
+      )
+      _ <- ZIO.whenDiscard(unchanged > 0)(
+        CcasLogger.info(s"Player-matches listings unchanged (skipped candidate iteration): $unchanged")
       )
       _ <- ZIO.whenDiscard(skipped.nonEmpty)(
         CcasLogger.warn(s"Players skipped (ID mismatch): ${skipped.size}")

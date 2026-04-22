@@ -77,16 +77,23 @@ private[ref] object RefResolution {
     player: UnresolvedPlayer,
     countResolved: Boolean
   ): RIO[CcasLogger & PostgresClient, ResolveResult] =
-    for {
-      playerMatches <- ctx.client.get[ApiPlayerMatches](ApiPlayerMatches.getUrl(player.username))
-      candidates = (playerMatches.finished ++ playerMatches.inProgress).filter(_.board.isDefined)
-      result <-
+    ctx.client.getCacheable[ApiPlayerMatches](ApiPlayerMatches.getUrl(player.username)).flatMap {
+      // Unchanged listing + still in the unresolved pool ⇒ previous per-candidate match
+      // fetches all failed and would fail identically. Skip the iteration; caller falls
+      // through to the tournament path.
+      _.foldZIO(_ =>
+        ctx.playerMatchesUnchanged.update(_ + 1) *>
+          CcasLogger.debug(s"  ${player.username}: player-matches unchanged, skipping candidate iteration")
+            .as(ResolveResult.NotFound)
+      ) { playerMatches =>
+        val candidates = (playerMatches.finished ++ playerMatches.inProgress).filter(_.board.isDefined)
         if (candidates.isEmpty) {
           CcasLogger.debug(s"  ${player.username}: no match with board").as(ResolveResult.NoData)
         } else {
           tryMatches(ctx, player, candidates.toList, countResolved)
         }
-    } yield result
+      }
+    }
 
   private def tryMatches(
     ctx: RefContext,
