@@ -16,7 +16,7 @@ import ccas.api.clubmatch.ApiDailyMatch.{ApiDailyMatchRegistered, MatchPlayerSta
 import ccas.api.clubmatch.ApiMatchBoard.ApiBoardPlayer
 import ccas.api.misc.subtypes.*
 import ccas.api.player.{ApiPlayer, ApiPlayerMatches}
-import ccas.utils.client.{ChessComClient, HttpStatusException}
+import ccas.utils.client.{ChessComClient, onNotFound}
 import ccas.utils.CcasLogger
 
 private[history] object HistorySeeding {
@@ -84,9 +84,8 @@ private[history] object HistorySeeding {
                 resolvedRef <- Ref.make(0)
                 _ <- ZIO.foreachParDiscard(grouped.toList) { case (username, entries) =>
                   resolveByUsername(client, username, entries)
-                    .catchSome {
-                      case e: HttpStatusException if e.statusCode == 404 =>
-                        recoverEntriesAfter404(client, username, entries)
+                    .onNotFound { _ =>
+                      recoverEntriesAfter404(client, username, entries)
                     }
                     .catchAll { error =>
                       CcasLogger.warn(s"  Retry $username: ${error.getMessage}").as(0)

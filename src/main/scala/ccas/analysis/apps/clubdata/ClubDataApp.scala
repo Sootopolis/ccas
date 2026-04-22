@@ -9,7 +9,7 @@ import ccas.analysis.tables.{Club, ClubAdmin, ClubMatch, ClubMatchRef, Tables}
 import ccas.api.club.{ApiClub, ApiClubMatches}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 import ccas.utils.{CcasLogger, OutputFile}
-import ccas.utils.client.{ChessComClient, HttpClientLayer, HttpStatusException}
+import ccas.utils.client.{ChessComClient, HttpClientLayer, onNotFound}
 import ccas.utils.sql.PostgresClient
 
 object ClubDataApp extends ZIOAppDefault {
@@ -161,15 +161,14 @@ object ClubDataApp extends ZIOAppDefault {
     client: ChessComClient,
     club: Club
   ): RIO[CcasLogger & PostgresClient, (ApiClub, ClubSlug)] =
-    ApiClub.get(client, club.slug).map(_ -> club.slug).catchSome {
-      case e: HttpStatusException if e.statusCode == 404 =>
-        Club.slugFromMatchRef(club.clubId, client).flatMap {
-          case Some(newSlug) if newSlug != club.slug =>
-            CcasLogger.info(
-              s"[ClubData] ${club.slug} returned 404; retrying with rediscovered slug $newSlug"
-            ) *> ApiClub.get(client, newSlug).map(_ -> newSlug)
-          case _ => ZIO.fail(e)
-        }
+    ApiClub.get(client, club.slug).map(_ -> club.slug).onNotFound { e =>
+      Club.slugFromMatchRef(club.clubId, client).flatMap {
+        case Some(newSlug) if newSlug != club.slug =>
+          CcasLogger.info(
+            s"[ClubData] ${club.slug} returned 404; retrying with rediscovered slug $newSlug"
+          ) *> ApiClub.get(client, newSlug).map(_ -> newSlug)
+        case _ => ZIO.fail(e)
+      }
     }
 
   /** Refreshes `club.latest_match_at` using a tiered strategy to minimise API calls:
