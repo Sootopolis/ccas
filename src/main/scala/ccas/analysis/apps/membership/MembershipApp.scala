@@ -131,6 +131,9 @@ object MembershipApp extends ZIOAppDefault {
       runId <- ZIO.when(trackRun)(MembershipRun.insert(clubId, trigger, startedAt, jobRunId))
       (apiMembers, dbState) <- ApiClubMembers.get(client, resolvedSlug).zipPar(buildDbState(clubId))
       prevMemberIds <- loadPreviousMemberIds(clubId)
+      // Both counts filter on player.status=Active to exclude Closed-but-still-member phantoms.
+      // previousMemberCount MUST be sampled before persist/complete, or selectLatestCompleted returns THIS run.
+      previousMemberCount <- loadPreviousActiveMemberCount(clubId)
       apiMap = apiMembers.toMap
       now    = Instant.now()
       phaseB <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, dbState, now, trustUsernames)
@@ -138,11 +141,7 @@ object MembershipApp extends ZIOAppDefault {
       _ <- persist(phaseB, phaseC)
       completedAt = Instant.now()
       _ <- ZIO.foreachDiscard(runId)(id => MembershipRun.complete(id, completedAt))
-      // "Effective" counts: active players currently in the club. Closed-but-still-member accounts
-      // (closed Chess.com accounts that ApiPlayerClubs still lists as members) are excluded from both
-      // sides of the delta so they don't show up as phantom members.
       currentMemberCount <- ClubMember.selectClubActive(clubId).map(_.size)
-      previousMemberCount <- loadPreviousActiveMemberCount(clubId)
       // Members present in the DB but absent from the previous membership run were added externally
       // (e.g. by HistoryApp). Report them so joins aren't silently absorbed.
       phaseBJoinIds = phaseB.newMemberships.map(_.playerId).toSet
