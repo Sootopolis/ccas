@@ -2,17 +2,25 @@ package ccas.analysis.apps.membership
 
 import com.augustnagro.magnum.sql
 import zio.{Chunk, ZLayer}
+import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.analysis.apps.membership.MembershipChange.*
 import ccas.analysis.apps.membership.MembershipChange.MemberChange.*
 import ccas.analysis.apps.membership.MembershipClassify.{PhaseBResult, PhaseCResult}
-import ccas.analysis.apps.recruitment.RecruitmentTestSupport.{apiDailyMatchJson, apiPlayerClubsJson, apiPlayerJson}
+import ccas.analysis.apps.recruitment.RecruitmentTestSupport.{
+  apiClubJson,
+  apiClubMembersJson,
+  apiDailyMatchJson,
+  apiPlayerClubsJson,
+  apiPlayerJson
+}
 import ccas.analysis.tables.{Club, ClubMember, MembershipRun, Player, PlayerMatchRef, RunTrigger, Tables}
 import ccas.api.misc.enums.PlayerStatusCategory.{Active, Closed}
-import ccas.api.misc.subtypes.{ClubMatchId, ClubSlug, Username}
-import ccas.utils.TestCcasLogger
-import ccas.utils.sql.FreshSchemaLayer
+import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username}
+import ccas.utils.{CcasLogger, TestCcasLogger}
+import ccas.utils.client.TestChessComClientSupport
+import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
 import ccas.utils.sql.PostgresClient.connectZIO
 
 import TestMembershipAppSupport.*
@@ -24,7 +32,8 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
     suiteBuildDbState,
     suiteExternalMemberDetection,
     suiteClassifyApiMembers,
-    suiteClassifyDisappeared
+    suiteClassifyDisappeared,
+    suiteReconcile
   ).provideShared(
     FreshSchemaLayer("test_membership_app_integration", onInit = Tables.ensureTables),
     ZLayer.succeed(TestCcasLogger.noop)
@@ -766,4 +775,62 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
       result.closedMemberships.isEmpty
     )
   }
+
+  // ==========================================================================
+  // Suite I: reconcile (end-to-end)
+  // ==========================================================================
+
+  private def suiteReconcile = suite("reconcile (end-to-end)")(
+    testDeltaReflectsNewJoinAcrossRuns
+  )
+
+  private def testDeltaReflectsNewJoinAcrossRuns =
+    test("previousMemberCount ignores rows this run inserts (regression)") {
+      // Regression: previousMemberCount used to be sampled after this run completed itself,
+      // so selectLatestCompleted returned THIS run and the delta always collapsed to 0.
+      val priorCompletedAt = Times.t1
+      val bobJoined        = Times.t1.minusSeconds(600) // before the prior run completed
+      val alice            = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0)
+      val aliceMembership  = ClubMember(clubId, pid0, Times.t0, None)
+      val routes: Routes[Any, Response] = Routes(
+        Method.GET / "pub" / "club" / string("slug") / "members" -> handler {
+          (_: String, _: Request) =>
+            Response.json(
+              apiClubMembersJson(
+                List(
+                  ("alice", Times.t0.getEpochSecond),
+                  ("bob", bobJoined.getEpochSecond)
+                )
+              )
+            )
+        },
+        Method.GET / "pub" / "club" / string("slug") -> handler { (slug: String, _: Request) =>
+          Response.json(apiClubJson(ClubId.unwrap(clubId), slug))
+        },
+        Method.GET / "pub" / "player" / string("username") -> handler {
+          (username: String, _: Request) =>
+            username match {
+              case "alice" => Response.json(apiPlayerJson(PlayerId.unwrap(pid0), "alice"))
+              case "bob" =>
+                Response.json(
+                  apiPlayerJson(PlayerId.unwrap(pid1), "bob", joined = bobJoined.getEpochSecond)
+                )
+              case _ => Response(status = Status.NotFound)
+            }
+        }
+      )
+      for {
+        _          <- connectZIO(sql"DELETE FROM membership_run WHERE club_id = $clubId".update.run())
+        _          <- seedDb(players = List(alice), members = List(aliceMembership))
+        priorRunId <- MembershipRun.insert(clubId, RunTrigger.Cli, Times.t0)
+        _          <- MembershipRun.complete(priorRunId, priorCompletedAt)
+        client     <- TestChessComClientSupport.fakeClient(routes)
+        result <- MembershipApp.reconcile(ClubSlug("test-club"))
+                    .provideSomeLayer[PostgresClient & CcasLogger](ZLayer.succeed(client))
+      } yield assertTrue(
+        result.newMemberships.size == 1,
+        result.previousMemberCount == 1,
+        result.currentMemberCount == 2
+      )
+    }
 }
