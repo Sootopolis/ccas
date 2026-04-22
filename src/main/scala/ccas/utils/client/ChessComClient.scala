@@ -13,7 +13,7 @@ import zio.http.*
 import zio.http.Method.GET
 import zio.json.JsonDecoder
 
-import ccas.analysis.tables.{ApiFetchFailure, ApiResponseBody, ApiResponseCache, ClientConfig, ClientStats}
+import ccas.analysis.tables.{ApiFetchFailure, ApiResponseBody, ApiResponseCache}
 import ccas.analysis.tables.subtypes.ApiResponseBodyId
 import ccas.info.BuildInfo
 import ccas.utils.{CcasLogger, HttpDate, ProgressBar}
@@ -63,7 +63,7 @@ import ccas.utils.json.JsonDecodingException
   *     `If-Modified-Since`); a 304 response returns `Revalidated` and bumps `fetched_at` without re-downloading.
   *     A 200 that dedupes to the same `body_id` returns `IdenticalBody`; otherwise `Changed`. `Cache-Control:
   *     no-store` is honoured (response is not cached). Cache hits and revalidations are tracked as separate counters
-  *     on `StatsAccumulator` so the `requests` / `successes` / `failures` numbers continue to reflect only real
+  *     on `ClientStatsAccumulator` so the `requests` / `successes` / `failures` numbers continue to reflect only real
   *     Chess.com API load.
   *
   * Constructed via the `ChessComClient.live` ZLayer which reads configuration from `application.conf` under the
@@ -75,7 +75,7 @@ final class ChessComClient(
   headers: Headers,
   logger: CcasLogger,
   throttle: ChessComClient.ThrottleRefs,
-  statsRef: Ref[ChessComClient.StatsAccumulator],
+  statsRef: Ref[ClientStatsAccumulator],
   progressBar: ProgressBar,
   config: ChessComClient.ThrottleConfig,
   scope: Scope
@@ -739,250 +739,6 @@ object ChessComClient {
     }
   }
 
-  /** Upper-exclusive boundaries for latency histogram buckets, in milliseconds. A latency < 50 lands in bucket 0, a
-    * latency in [50, 100) lands in bucket 1, etc. Values >= 1000 land in the final overflow bucket.
-    */
-  private val LatencyBuckets: Array[Long] = Array(50, 100, 200, 500, 1000)
-
-  /** Bucket count: one per boundary plus an overflow bucket for values >= the largest boundary. */
-  private val LatencyBucketCount: Int = LatencyBuckets.length + 1
-
-  private[ccas] object StatsAccumulator {
-    /** Serialize a tier-keyed counter map as a sorted pipe-delimited string: `"tier:count|tier:count|..."`. */
-    def serializeTierMap(m: Map[Int, Long]): String =
-      m.toVector.sortBy(_._1).map((k, v) => s"$k:$v").mkString("|")
-  }
-
-  private[ccas] case class StatsAccumulator(
-    requests: Long = 0,
-    successes: Long = 0,
-    failures: Long = 0,
-    attempts: Long = 0,
-    errors429: Long = 0,
-    errorsCf403: Long = 0,
-    errorsOther: Long = 0,
-    connectionErrors: Long = 0,
-    throttleDowns: Long = 0,
-    peakConcurrent: Int = 0,
-    latencyMinMs: Long = Long.MaxValue,
-    latencyMaxMs: Long = 0,
-    latencySumMs: Long = 0,
-    latencyCount: Long = 0,
-    latencyBuckets: Vector[Long] = Vector.fill(LatencyBucketCount)(0L),
-    gateWaitMs: Long = 0,
-    emaDelayMs: Long = 0,
-    activeMs: Long = 0,
-    throttledMs: Long = 0,
-    attemptsByTier: Map[Int, Long] = Map.empty,
-    errors429ByTier: Map[Int, Long] = Map.empty,
-    errorsCf403ByTier: Map[Int, Long] = Map.empty,
-    cacheHits: Long = 0,
-    cacheRevalidations: Long = 0,
-    cacheMisses: Long = 0
-  ) {
-    def incRequests: StatsAccumulator           = copy(requests = requests + 1)
-    def incSuccesses: StatsAccumulator          = copy(successes = successes + 1)
-    def incFailures: StatsAccumulator           = copy(failures = failures + 1)
-    def incConnectionErrors: StatsAccumulator   = copy(connectionErrors = connectionErrors + 1)
-    def incThrottleDowns: StatsAccumulator      = copy(throttleDowns = throttleDowns + 1)
-    def incCacheHit: StatsAccumulator           = copy(cacheHits = cacheHits + 1)
-    def incCacheRevalidation: StatsAccumulator  = copy(cacheRevalidations = cacheRevalidations + 1)
-    def incCacheMiss: StatsAccumulator          = copy(cacheMisses = cacheMisses + 1)
-
-    /** True if this session did anything worth persisting. `requests` covers every network request
-      * (cacheMisses and cacheRevalidations both ride along with `incRequests`); `cacheHits` catches the one case
-      * where a session did only Fresh max-age hits and never touched the network.
-      */
-    def hasActivity: Boolean = requests > 0 || cacheHits > 0
-    /** Record a Cloudflare challenge 403 at the given permit tier, incrementing both the total and per-tier counters. */
-    def incCf403AtTier(tier: Int): StatsAccumulator =
-      copy(
-        errorsCf403 = errorsCf403 + 1,
-        errorsCf403ByTier = errorsCf403ByTier.updated(tier, errorsCf403ByTier.getOrElse(tier, 0L) + 1)
-      )
-    def updatePeak(n: Int): StatsAccumulator  = copy(peakConcurrent = peakConcurrent.max(n))
-    def addGateWait(ms: Long): StatsAccumulator = copy(gateWaitMs = gateWaitMs + ms)
-    def addEmaDelay(ms: Long): StatsAccumulator = copy(emaDelayMs = emaDelayMs + ms)
-    def addActiveMs(ms: Long): StatsAccumulator = copy(activeMs = activeMs + ms)
-    def addThrottled(ms: Long): StatsAccumulator = copy(throttledMs = throttledMs + ms)
-
-    /** Increment the attempts counter AND the per-tier attempts counter for the current permit level. */
-    def incAttemptAtTier(tier: Int): StatsAccumulator =
-      copy(
-        attempts = attempts + 1,
-        attemptsByTier = attemptsByTier.updated(tier, attemptsByTier.getOrElse(tier, 0L) + 1)
-      )
-
-    /** Record a 429 error at the given permit tier, incrementing both the total and per-tier counters. */
-    def incError429AtTier(tier: Int): StatsAccumulator =
-      copy(
-        errors429 = errors429 + 1,
-        errors429ByTier = errors429ByTier.updated(tier, errors429ByTier.getOrElse(tier, 0L) + 1)
-      )
-
-    /** Record a non-rate-limit error. 429s go through `incError429AtTier` and Cloudflare 403s through `incCf403`;
-      * everything else (404, plain 403, 5xx, etc.) is counted here.
-      */
-    def incErrorOther: StatsAccumulator =
-      copy(errorsOther = errorsOther + 1)
-
-    def recordLatency(ms: Long): StatsAccumulator = {
-      val idx = LatencyBuckets.indexWhere(ms < _) match {
-        case -1 => LatencyBuckets.length
-        case i  => i
-      }
-      copy(
-        latencyMinMs = latencyMinMs.min(ms),
-        latencyMaxMs = latencyMaxMs.max(ms),
-        latencySumMs = latencySumMs + ms,
-        latencyCount = latencyCount + 1,
-        latencyBuckets = latencyBuckets.updated(idx, latencyBuckets(idx) + 1)
-      )
-    }
-
-    def toClientStats(
-      sessionId: String,
-      appLabel: String,
-      startedAt: Instant,
-      completedAt: Instant,
-      configId: Long,
-      inProgressThrottleMs: Long
-    ): ClientStats = {
-      val minDisplay  = if (latencyMinMs == Long.MaxValue) 0L else latencyMinMs
-      val meanLatency = if (latencyCount > 0) latencySumMs / latencyCount else 0L
-      ClientStats(
-        sessionId = sessionId,
-        appLabel = appLabel,
-        configId = configId,
-        startedAt = startedAt,
-        completedAt = completedAt,
-        requests = requests,
-        successes = successes,
-        failures = failures,
-        attempts = attempts,
-        attemptsByTier = StatsAccumulator.serializeTierMap(attemptsByTier),
-        errors429 = errors429,
-        errors429ByTier = StatsAccumulator.serializeTierMap(errors429ByTier),
-        errorsCf403 = errorsCf403,
-        errorsCf403ByTier = StatsAccumulator.serializeTierMap(errorsCf403ByTier),
-        errorsOther = errorsOther,
-        connectionErrors = connectionErrors,
-        throttleDowns = throttleDowns,
-        throttledMs = throttledMs + inProgressThrottleMs,
-        peakConcurrent = peakConcurrent,
-        activeMs = activeMs,
-        gateWaitMs = gateWaitMs,
-        emaDelayMs = emaDelayMs,
-        latencyMinMs = minDisplay,
-        latencyMaxMs = latencyMaxMs,
-        latencyMeanMs = meanLatency,
-        latencyBucket0To50 = latencyBuckets(0),
-        latencyBucket50To100 = latencyBuckets(1),
-        latencyBucket100To200 = latencyBuckets(2),
-        latencyBucket200To500 = latencyBuckets(3),
-        latencyBucket500To1000 = latencyBuckets(4),
-        latencyBucket1000Plus = latencyBuckets(5),
-        cacheHits = cacheHits,
-        cacheRevalidations = cacheRevalidations,
-        cacheMisses = cacheMisses
-      )
-    }
-
-    def summary: String = {
-      val retries        = attempts - requests
-      val meanLatency    = if (latencyCount > 0) latencySumMs / latencyCount else 0L
-      val minDisplay     = if (latencyMinMs == Long.MaxValue) 0L else latencyMinMs
-      val failedSuffix   = if (failures > 0) s" ($failures failed)" else ""
-      val retrySuffix    = if (retries > 0) s", $retries retries" else ""
-      val throttleSuffix = if (throttleDowns > 0) s", $throttleDowns throttle-downs" else ""
-      val latencySuffix =
-        if (latencyCount > 0) s", latency min/mean/max = $minDisplay/$meanLatency/${latencyMaxMs}ms" else ""
-      val overheadParts = List(
-        if (gateWaitMs > 0) Some(s"gate=${gateWaitMs}ms") else None,
-        if (emaDelayMs > 0) Some(s"ema=${emaDelayMs}ms") else None,
-        if (throttledMs > 0) Some(s"throttled=${throttledMs}ms") else None
-      ).flatten
-      val overheadSuffix = if (overheadParts.nonEmpty) s", overhead ${overheadParts.mkString(", ")}" else ""
-      val cacheSuffix =
-        if (cacheHits > 0 || cacheRevalidations > 0 || cacheMisses > 0)
-          s", cache: $cacheHits hits / $cacheRevalidations revalidated / $cacheMisses misses"
-        else ""
-      s"API stats: $requests requests$failedSuffix$retrySuffix$throttleSuffix$latencySuffix$overheadSuffix$cacheSuffix"
-    }
-  }
-
-  /** Bundles the refs and config needed by periodic and final stats flushes. Created once in `live` and passed to
-    * `persistStats` / `finalFlush`.
-    */
-  private[ccas] case class FlushContext(
-    sessionId: String,
-    appLabel: String,
-    startedAt: Instant,
-    statsRef: Ref[StatsAccumulator],
-    configIdRef: Ref[Option[Long]],
-    config: ThrottleConfig,
-    stateRef: Ref[ThrottleState],
-    pgClient: PostgresClient
-  )
-
-  /** Upsert the cumulative stats snapshot for this session. Each call overwrites the single row for this session,
-    * creating it on first flush. On first insert, also inserts the `ClientConfig` row. Silently swallows DB errors
-    * so it is safe to call from finalizers and background fibers.
-    */
-  private[ccas] def persistStats(ctx: FlushContext): UIO[Unit] =
-    (for {
-      current <- ctx.statsRef.get
-      _ <- ZIO.whenDiscard(current.hasActivity) {
-        for {
-          now            <- Clock.instant
-          inProgress <- inProgressThrottleMs(ctx.stateRef)
-          configId <- ctx.configIdRef.get.flatMap {
-            case Some(id) => ZIO.succeed(id)
-            case None =>
-              ClientConfig.ensureConfig(toClientConfig(ctx.config))
-                .provideEnvironment(ZEnvironment(ctx.pgClient))
-                .tap(id => ctx.configIdRef.set(Some(id)))
-          }
-          row = current.toClientStats(ctx.sessionId, ctx.appLabel, ctx.startedAt, now, configId, inProgress)
-          _ <- ClientStats.upsert(row).provideEnvironment(ZEnvironment(ctx.pgClient))
-        } yield ()
-      }
-    } yield ()).ignore
-
-  private def toClientConfig(config: ThrottleConfig): ClientConfig = {
-    val cc = ClientConfig(
-      configId = 0,
-      configHash = "",
-      recoveryTiers = config.recoveryTiers.toList,
-      minRequestDelayMs = config.minRequestDelayMs,
-      cooldownSecs = config.cooldown.getSeconds.toInt,
-      cfCooldownSecs = config.cfCooldown.getSeconds.toInt,
-      minTierObservationSecs = config.minTierObservation.getSeconds.toInt,
-      failureWindowSize = config.failureWindowSize,
-      failureThreshold = config.failureThreshold,
-      minSampleSize = config.minSampleSize,
-      retryBaseSecs = config.retryBase.getSeconds.toInt,
-      cfRetrySecs = config.cfRetryDelay.getSeconds.toInt,
-      connectionRetryBaseSecs = config.connectionRetryBase.getSeconds.toInt,
-      max429Retries = config.max429Retries,
-      maxCfRetries = config.maxCfRetries,
-      maxConnectionRetries = config.maxConnectionRetries
-    )
-    cc.copy(configHash = cc.computeHash)
-  }
-
-  private def inProgressThrottleMs(stateRef: Ref[ThrottleState]): UIO[Long] =
-    Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS).flatMap { now =>
-      stateRef.get.map(_.throttledSince.fold(0L)(now - _))
-    }
-
-  /** Final stats flush: upserts the cumulative snapshot, then logs a summary. Called by the scope finalizer. */
-  private def finalFlush(ctx: FlushContext, logger: CcasLogger): UIO[Unit] =
-    ctx.statsRef.get.flatMap { cumulative =>
-      persistStats(ctx) *>
-        ZIO.whenDiscard(cumulative.hasActivity)(logger.info(cumulative.summary))
-    }
-
   private def userAgentHeaders(contactEmail: String): Headers =
     Headers(
       Header.Custom("User-Agent", s"${BuildInfo.name.toUpperCase}/${BuildInfo.version} (contact: $contactEmail)"),
@@ -1014,13 +770,13 @@ object ChessComClient {
         lastReqRef    <- Ref.make(0L)
         startedAt     <- Clock.instant
         sessionId      = startedAt.toString.replace(":", "").replace("-", "")
-        stats               <- Ref.make(StatsAccumulator())
+        stats               <- Ref.make(ClientStatsAccumulator())
         configIdRef         <- Ref.make(Option.empty[Long])
         bar                 <- logger.progressBar
         refs = ThrottleRefs(stateRef, activeRef, rateLimitGate, lastReqRef)
-        flushCtx = FlushContext(sessionId, appLabel, startedAt, stats, configIdRef, throttleConfig, stateRef, pgClient)
-        flushFiber <- persistStats(flushCtx).repeat(Schedule.fixed(statsFlushInterval)).forkDaemon
-        _ <- ZIO.addFinalizer(flushFiber.interrupt *> finalFlush(flushCtx, logger))
+        flushCtx = ClientStatsFlushContext(sessionId, appLabel, startedAt, stats, configIdRef, throttleConfig, stateRef, pgClient)
+        flushFiber <- ClientStatsPersistence.persistStats(flushCtx).repeat(Schedule.fixed(statsFlushInterval)).forkDaemon
+        _ <- ZIO.addFinalizer(flushFiber.interrupt *> ClientStatsPersistence.finalFlush(flushCtx, logger))
       } yield ChessComClient(
         client,
         pgClient,
