@@ -72,7 +72,9 @@ private[ref] object RefUtils {
     val playersSkippedNew: Ref[Int],
     val clubsSkippedNew: Ref[Int],
     val newTournamentRefPlayerIds: Ref[Set[PlayerId]],
-    val playerMatchesUnchanged: Ref[Int]
+    val playerMatchesUnchanged: Ref[Int],
+    val playerTournamentsUnchanged: Ref[Int],
+    val clubMatchesUnchanged: Ref[Int]
   )
 
   object RefContext {
@@ -90,6 +92,8 @@ private[ref] object RefUtils {
         clubsSkippedNew    <- Ref.make(0)
         newTournamentRefPlayerIds <- Ref.make(Set.empty[PlayerId])
         playerMatchesUnchanged    <- Ref.make(0)
+        playerTournamentsUnchanged <- Ref.make(0)
+        clubMatchesUnchanged      <- Ref.make(0)
       } yield new RefContext(
         client,
         cache,
@@ -103,7 +107,9 @@ private[ref] object RefUtils {
         playersSkippedNew,
         clubsSkippedNew,
         newTournamentRefPlayerIds,
-        playerMatchesUnchanged
+        playerMatchesUnchanged,
+        playerTournamentsUnchanged,
+        clubMatchesUnchanged
       )
   }
 

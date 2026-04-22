@@ -77,15 +77,8 @@ private[ref] object RefResolution {
     player: UnresolvedPlayer,
     countResolved: Boolean
   ): RIO[CcasLogger & PostgresClient, ResolveResult] =
-    ctx.client.getCacheable[ApiPlayerMatches](ApiPlayerMatches.getUrl(player.username)).flatMap {
-      // Unchanged listing + still in the unresolved pool ⇒ previous per-candidate match
-      // fetches all failed and would fail identically. Skip the iteration; caller falls
-      // through to the tournament path.
-      _.foldZIO(_ =>
-        ctx.playerMatchesUnchanged.update(_ + 1) *>
-          CcasLogger.debug(s"  ${player.username}: player-matches unchanged, skipping candidate iteration")
-            .as(ResolveResult.NotFound)
-      ) { playerMatches =>
+    ctx.client.getCacheable[ApiPlayerMatches](ApiPlayerMatches.getUrl(player.username)).flatMap { result =>
+      def iterate(playerMatches: ApiPlayerMatches): RIO[CcasLogger & PostgresClient, ResolveResult] = {
         val candidates = (playerMatches.finished ++ playerMatches.inProgress).filter(_.board.isDefined)
         if (candidates.isEmpty) {
           CcasLogger.debug(s"  ${player.username}: no match with board").as(ResolveResult.NoData)
@@ -93,6 +86,11 @@ private[ref] object RefResolution {
           tryMatches(ctx, player, candidates.toList, countResolved)
         }
       }
+      unchangedGate(result, PlayerRefSkip.selectId(player.playerId))(
+        ctx.playerMatchesUnchanged.update(_ + 1) *>
+          CcasLogger.debug(s"  ${player.username}: player-matches unchanged, skipping candidate iteration")
+            .as(ResolveResult.NotFound)
+      )(iterate)
     }
 
   private def tryMatches(
@@ -145,17 +143,22 @@ private[ref] object RefResolution {
     ctx: RefContext,
     player: UnresolvedPlayer
   ): RIO[CcasLogger & PostgresClient, ResolveResult] =
-    for {
-      playerTournaments <- ctx.client.get[ApiPlayerTournaments](ApiPlayerTournaments.getUrl(player.username))
-      eligible = (playerTournaments.finished ++ playerTournaments.inProgress)
-        .sortBy(_.totalPlayers.getOrElse(Int.MaxValue))
-      result <-
+    ctx.client.getCacheable[ApiPlayerTournaments](ApiPlayerTournaments.getUrl(player.username)).flatMap { result =>
+      def iterate(playerTournaments: ApiPlayerTournaments): RIO[CcasLogger & PostgresClient, ResolveResult] = {
+        val eligible = (playerTournaments.finished ++ playerTournaments.inProgress)
+          .sortBy(_.totalPlayers.getOrElse(Int.MaxValue))
         if (eligible.isEmpty) {
           CcasLogger.debug(s"  ${player.username}: no eligible tournaments").as(ResolveResult.NoData)
         } else {
           tryTournaments(ctx, player, eligible.toList)
         }
-    } yield result
+      }
+      unchangedGate(result, PlayerRefSkip.selectId(player.playerId))(
+        ctx.playerTournamentsUnchanged.update(_ + 1) *>
+          CcasLogger.debug(s"  ${player.username}: player-tournaments unchanged, skipping candidate iteration")
+            .as(ResolveResult.NotFound)
+      )(iterate)
+    }
 
   private def tryTournaments(
     ctx: RefContext,
@@ -214,9 +217,8 @@ private[ref] object RefResolution {
           } *> ctx.clubsResolvedDb.update(_ + 1) *>
             CcasLogger.debug(s"  ${club.slug}: resolved via DB").as(true)
         case None =>
-          for {
-            clubMatches <- ctx.client.get[ApiClubMatches](ApiClubMatches.getUrl(club.slug))
-            result <-
+          ctx.client.getCacheable[ApiClubMatches](ApiClubMatches.getUrl(club.slug)).flatMap { result =>
+            def iterate(clubMatches: ApiClubMatches): RIO[CcasLogger & PostgresClient, Boolean] =
               if (clubMatches.finished.isEmpty) {
                 skipClub(ctx, club, RefSkipReason.NoData).as(false)
               } else {
@@ -225,7 +227,12 @@ private[ref] object RefResolution {
                   case false => skipClub(ctx, club, RefSkipReason.ResolutionFailed).as(false)
                 }
               }
-          } yield result
+            unchangedGate(result, ClubRefSkip.selectId(club.clubId))(
+              ctx.clubMatchesUnchanged.update(_ + 1) *>
+                CcasLogger.debug(s"  ${club.slug}: club-matches unchanged, skipping candidate iteration") *>
+                skipClub(ctx, club, RefSkipReason.ResolutionFailed).as(false)
+            )(iterate)
+          }
       }
     } yield resolved).catchAll {
       case e: HttpStatusException if e.statusCode == 404 =>
@@ -269,6 +276,32 @@ private[ref] object RefResolution {
         )
     }
   }
+
+  // --- Unchanged-listing short-circuit helper ---
+
+  /** Branch on [[CacheableResult]]: when the listing body is unchanged *and* there is evidence of a prior failed
+    * resolution attempt for this subject (an expired skip row present in the unresolved pool), run `ifSkipped`
+    * without decoding the body. Otherwise decode and run the full `onBody` pipeline.
+    *
+    * The skip-row existence check guards against a subtle false-positive: a cache entry may have been warmed by an
+    * unrelated app (HistoryApp seeding player matches, say), so `isUnchanged` alone is not sufficient evidence
+    * that *we* have tried and failed before. Only pool members carrying an expired skip row are safe to
+    * short-circuit.
+    */
+  private def unchangedGate[T, A](
+    result: ccas.utils.client.CacheableResult[T],
+    priorSkip: RIO[PostgresClient, Option[?]]
+  )(ifSkipped: RIO[CcasLogger & PostgresClient, A])(
+    onBody: T => RIO[CcasLogger & PostgresClient, A]
+  ): RIO[CcasLogger & PostgresClient, A] =
+    if (result.isUnchanged) {
+      priorSkip.flatMap {
+        case Some(_) => ifSkipped
+        case None    => result.getValue.flatMap(onBody)
+      }
+    } else {
+      result.getValue.flatMap(onBody)
+    }
 
   // --- Match fetching ---
 
