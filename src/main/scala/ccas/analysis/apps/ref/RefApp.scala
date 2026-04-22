@@ -121,8 +121,12 @@ object RefApp extends ZIOAppDefault {
       db         <- ctx.clubsResolvedDb.get
       api        <- ctx.clubsResolvedApi.get
       skippedNew <- ctx.clubsSkippedNew.get
+      unchanged <- ctx.clubMatchesUnchanged.get
       _ <- CcasLogger.info(
         s"Clubs resolved: $db (DB) + $api (API) = ${db + api} / ${clubs.size}, skipped: $skippedNew new"
+      )
+      _ <- ZIO.whenDiscard(unchanged > 0)(
+        CcasLogger.info(s"Club-matches listings unchanged (skipped candidate iteration): $unchanged")
       )
     } yield (clubs.size, db, api, skippedNew)
 
@@ -149,8 +153,15 @@ object RefApp extends ZIOAppDefault {
       api        <- ctx.playersResolvedApi.get
       skippedNew <- ctx.playersSkippedNew.get
       skipped    <- ctx.skippedPlayers.get
+      matchesUnchanged     <- ctx.playerMatchesUnchanged.get
+      tournamentsUnchanged <- ctx.playerTournamentsUnchanged.get
       _ <- CcasLogger.info(
         s"Players resolved: $db (DB) + $api (API) = ${db + api} / ${players.size}, skipped: $skippedNew new"
+      )
+      _ <- ZIO.whenDiscard(matchesUnchanged > 0 || tournamentsUnchanged > 0)(
+        CcasLogger.info(
+          s"Player listings unchanged (skipped candidate iteration): matches=$matchesUnchanged, tournaments=$tournamentsUnchanged"
+        )
       )
       _ <- ZIO.whenDiscard(skipped.nonEmpty)(
         CcasLogger.warn(s"Players skipped (ID mismatch): ${skipped.size}")

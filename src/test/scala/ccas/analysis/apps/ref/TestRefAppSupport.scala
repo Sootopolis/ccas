@@ -141,6 +141,9 @@ object TestRefAppSupport {
   def seedDb: RIO[PostgresClient, Unit] =
     for {
       // Clean in FK-safe order
+      _ <- connectZIO(sql"DELETE FROM api_fetch_failure".update.run())
+      _ <- connectZIO(sql"DELETE FROM api_response_cache".update.run())
+      _ <- connectZIO(sql"DELETE FROM api_response_body".update.run())
       _ <- connectZIO(sql"DELETE FROM player_ref_skip".update.run())
       _ <- connectZIO(sql"DELETE FROM club_ref_skip".update.run())
       _ <- connectZIO(sql"DELETE FROM player_match_ref".update.run())
