@@ -9,7 +9,7 @@ import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 import ccas.analysis.tables.{Club, RunTrigger}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId}
 import ccas.server.ServerTables
-import ccas.utils.client.TestChessComClient
+import ccas.utils.client.TestChessComClientSupport
 import ccas.utils.errors.ConflictException
 import ccas.utils.sql.FreshSchemaLayer
 import ccas.utils.sql.PostgresClient.connectZIO
@@ -28,7 +28,7 @@ object TestJobRunner extends ZIOSpecDefault {
     testRecentJobsOrdered
   ).provideShared(
     FreshSchemaLayer("test_job_runner", onInit = ServerTables.ensureTables),
-    TestChessComClient.dummyLayer,
+    TestChessComClientSupport.dummyLayer,
     JobRunner.live,
     ZLayer.succeed(TestCcasLogger.noop)
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock @@ TestAspect.timeout(30.seconds)
