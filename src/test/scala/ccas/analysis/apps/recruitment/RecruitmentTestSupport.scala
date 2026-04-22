@@ -8,8 +8,8 @@ import zio.http.*
 
 import ccas.analysis.tables.*
 import ccas.api.club.ApiClubMatches
-import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
-import ccas.utils.client.{ChessComClient, TestChessComClientSupport}
+import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username}
+import ccas.utils.client.{ChessComClient, ClientStatsAccumulator, TestChessComClientSupport}
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient
 import ccas.utils.{CcasLogger, TestCcasLogger}
@@ -362,7 +362,7 @@ object RecruitmentTestSupport {
       rateLimitGate <- Semaphore.make(1)
       lastReqRef    <- Ref.make(0L)
       bar                 <- TestCcasLogger.noopBar
-      stats               <- Ref.make(ChessComClient.StatsAccumulator())
+      stats               <- Ref.make(ClientStatsAccumulator())
       playerCount         <- Ref.make(0)
     } yield {
       val blockingPlayerRoute =
@@ -572,4 +572,42 @@ object RecruitmentTestSupport {
       dailyMaxOngoingGames = None,
       dailyMinOngoingTeamMatches = None
     )
+
+  // --- App entrypoint helpers ---
+
+  def seedMatchWithBoard(
+    matchId: ClubMatchId,
+    team1ClubId: Option[ClubId],
+    team1PlayerId: PlayerId,
+    team2PlayerId: PlayerId
+  ): ZIO[PostgresClient, Throwable, Unit] =
+    for {
+      _ <- ClubMatch.upsert(
+        ClubMatch(
+          matchId, s"Match ${ClubMatchId.unwrap(matchId)}",
+          ccas.api.misc.enums.ClubMatchStatus.Finished, ccas.api.misc.enums.TimeClass.Daily,
+          Some(Times.t0), Some(Times.t1), 1,
+          team1ClubId, 20, None, 10, Times.t0
+        )
+      )
+      _ <- ClubMatchBoard.insertBatch(
+        List(ClubMatchBoard(matchId, 1, Some(team1PlayerId), false, Some(team2PlayerId), false, 2, 0))
+      )
+    } yield ()
+
+  def runRecruit(
+    client: ChessComClient,
+    sourceClubs: List[ClubSlug] = Nil,
+    target: Option[Int] = None,
+    explore: Boolean = false,
+    alias: String = "default",
+    trigger: RunTrigger = RunTrigger.Api
+  ): ZIO[PostgresClient & CcasLogger, Throwable, RecruitmentRun] =
+    for {
+      xa     <- ZIO.service[PostgresClient]
+      logger <- ZIO.service[CcasLogger]
+      result <- RecruitmentApp
+        .recruit(clubSlug, alias, target = target, sourceClubs = sourceClubs, explore = explore, trigger = trigger)
+        .provideEnvironment(zio.ZEnvironment(client, xa, logger))
+    } yield result
 }

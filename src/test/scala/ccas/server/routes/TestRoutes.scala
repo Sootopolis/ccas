@@ -13,8 +13,9 @@ import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault, ZTestLogger}
 import ccas.analysis.tables.{Club, RunTrigger}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId}
 import ccas.server.jobs.*
+import ccas.server.routes.JobRoutes.{ClubJobResult, JobResult}
 import ccas.server.ServerTables
-import ccas.utils.client.{ChessComClient, TestChessComClient}
+import ccas.utils.client.{ChessComClient, TestChessComClientSupport}
 import ccas.utils.errors.ConflictException
 import ccas.utils.sql.FreshSchemaLayer
 import ccas.utils.sql.PostgresClient.connectZIO
@@ -29,7 +30,7 @@ object TestRoutes extends ZIOSpecDefault {
   ).provideShared(
     FreshSchemaLayer("test_routes", onInit = ServerTables.ensureTables),
     fakeJobRunnerLayer,
-    TestChessComClient.dummyLayer,
+    TestChessComClientSupport.dummyLayer,
     ZTestLogger.default,
     Scope.default
   ) @@ TestAspect.sequential
@@ -122,8 +123,6 @@ object TestRoutes extends ZIOSpecDefault {
   // ==========================================================================
   // Suite: JobRoutes
   // ==========================================================================
-
-  import JobRoutes.{ClubJobResult, JobResult}
 
   private def suiteJobRoutes = suite("JobRoutes")(
     testRecruitmentSuccess,
