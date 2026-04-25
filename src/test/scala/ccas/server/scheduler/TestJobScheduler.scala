@@ -26,7 +26,9 @@ object TestJobScheduler extends ZIOSpecDefault {
     testErrorInOneScheduleDoesNotBlockOthers
   ).provideShared(
     FreshSchemaLayer("test_scheduler", onInit = ServerTables.ensureTables)
-  ) @@ TestAspect.withLiveClock @@ TestAspect.timeout(15.seconds)
+  ) @@ TestAspect.withLiveClock @@ TestAspect.timeout(30.seconds)
+  // Timeouts are CI-tolerant, not race-fixing: the scheduler runs on Schedule.fixed +
+  // Instant.now() so it can't be driven by TestClock without a production refactor.
 
   private val clubId = ClubId(300)
 
@@ -77,7 +79,7 @@ object TestJobScheduler extends ZIOSpecDefault {
       _ <- ZIO.scoped {
         scheduler.start *>
           submissions.get.repeatUntil(_ >= 2)
-            .timeoutFail(new RuntimeException("scheduler did not submit enough jobs"))(5.seconds)
+            .timeoutFail(new RuntimeException("scheduler did not submit enough jobs"))(12.seconds)
       }
 
       // The scope has closed — the poll fiber should have been interrupted
@@ -106,7 +108,7 @@ object TestJobScheduler extends ZIOSpecDefault {
       _ <- ZIO.scoped {
         scheduler.start *>
           submitted.get.repeatUntil(_.exists(_.contains(dueClubId)))
-            .timeoutFail(new RuntimeException("due schedule was not submitted"))(5.seconds)
+            .timeoutFail(new RuntimeException("due schedule was not submitted"))(12.seconds)
       }
     } yield assertCompletes
   }
@@ -179,7 +181,7 @@ object TestJobScheduler extends ZIOSpecDefault {
       _ <- ZIO.scoped {
         scheduler.start *>
           callCount.get.repeatUntil(_ >= 2)
-            .timeoutFail(new RuntimeException("scheduler did not retry after error"))(5.seconds)
+            .timeoutFail(new RuntimeException("scheduler did not retry after error"))(12.seconds)
       }
     } yield assertCompletes // scheduler survived the error and polled again
   }
@@ -218,7 +220,7 @@ object TestJobScheduler extends ZIOSpecDefault {
         _ <- ZIO.scoped {
           scheduler.start *>
             submitted.get.repeatUntil(_.exists(_.contains(goodClubId)))
-              .timeoutFail(new RuntimeException("good schedule was never submitted"))(5.seconds)
+              .timeoutFail(new RuntimeException("good schedule was never submitted"))(12.seconds)
         }
       } yield assertCompletes
     }

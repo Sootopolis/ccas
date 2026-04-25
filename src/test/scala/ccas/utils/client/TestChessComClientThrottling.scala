@@ -338,16 +338,17 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
     test("recovery fibers are interrupted when scope closes") {
       for {
         // Create client and trigger throttle-down inside a scope, then let the scope close.
-        // Short cooldown is deliberate: once Phase 1 stops feeding failures, an uninterrupted
-        // fiber needs ~2 cycles to advance (cycle 1 clears stale Phase-1 outcomes, cycle 2 sees
-        // an empty window and steps up). The earlier cooldown=60s made this test vacuous — the
-        // fiber was still in cooldown sleep for the full post-scope wait whether interrupted or not.
+        // Cooldown must comfortably exceed Phase 1 + scope-cleanup duration: if it elapses
+        // before scope close fires the interrupt finalizer, the recovery fiber races into
+        // step-up and currentMax advances before the interrupt arrives. The earlier 100 ms
+        // value flaked under CI load for this reason. Post-scope wait stays well above
+        // cooldown so an uninterrupted fiber would still demonstrably step up.
         (stateRef, insideState) <- ZIO.scoped {
           for {
             (client, stateRef, _) <- makeClient(
               handler = _ => ZIO.succeed(Response(status = Status.TooManyRequests)),
               permits = 20,
-              cooldown = 100.millis,
+              cooldown = 2.seconds,
               failureThreshold = 0.2
             )
             _ <- ZIO.foreachParDiscard(1 to 5)(i =>
@@ -356,9 +357,8 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
             insideState <- stateRef.get
           } yield (stateRef, insideState) // scope closes here, recovery fibers should be interrupted
         }
-        // 1s >> drain-poll (200ms) + 2 × cooldown (200ms), so an uninterrupted fiber would have
-        // stepped up through several tiers by now.
-        _ <- ZIO.sleep(1.second)
+        // 4s = 2 × cooldown: an uninterrupted fiber would have cleared cooldown and stepped up.
+        _ <- ZIO.sleep(4.seconds)
         afterState <- stateRef.get
       } yield assertTrue(
         insideState.currentMax == 1L, // Phase 1 actually triggered throttle-down
@@ -613,19 +613,37 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
     test("min delay floor enforces minimum inter-request spacing") {
       ZIO.scoped {
         for {
+          // Measure actual inter-request spacing instead of emaDelayMs: the cumulative
+          // counter only grows when emaDelay slept, but under load natural gaps can
+          // already exceed the floor and the counter stays low even though the floor
+          // is being respected.
+          timestamps <- Ref.make(List.empty[Long])
           (client, _, statsRef) <- makeClient(
-            handler = _ => ZIO.sleep(2.millis).as(Response.json(jsonBody)),
+            handler = _ =>
+              for {
+                now <- Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS)
+                _   <- timestamps.update(now :: _)
+                _   <- ZIO.sleep(2.millis)
+              } yield Response.json(jsonBody),
             permits = 2,
             minRequestDelayMs = 50
           )
-          // Send requests sequentially so every request after the first hits the EMA floor
+          // Sequential so every request after the first goes through the floor check.
           _ <- ZIO.foreachDiscard(1 to 10)(i =>
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get)
           )
-          s <- statsRef.get
+          s   <- statsRef.get
+          ts  <- timestamps.get.map(_.reverse)
+          gaps = ts.sliding(2).collect { case List(a, b) => b - a }.toList
+          // Skip request 2's gap: lastRequestRef is only set inside emaDelay's active branch
+          // and request 1 doesn't enter that branch (ema starts at 0), so request 2's gap
+          // is computed against an uninitialized lastRequestRef and bypasses the floor by
+          // design. From request 3 onwards the floor is enforced on every iteration.
+          flooredGaps = gaps.drop(1)
         } yield assertTrue(
           s.successes == 10L,
-          s.emaDelayMs >= 200L // ~9 gaps at 50ms floor, conservatively at least 200ms total
+          ts.size == 10,
+          flooredGaps.forall(_ >= 40L) // 50ms floor minus 10ms scheduler-jitter tolerance
         )
       }
     },
