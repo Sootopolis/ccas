@@ -2,7 +2,7 @@ package ccas.analysis.apps.recruitment
 
 import java.time.{Duration as JDuration, Instant}
 
-import zio.{RIO, Ref, Scope, ZEnvironment, ZIO, ZIOAppArgs, ZIOAppDefault}
+import zio.{Clock, RIO, Ref, Scope, ZEnvironment, ZIO, ZIOAppArgs, ZIOAppDefault}
 
 import ccas.analysis.apps.membership.MembershipApp
 import ccas.analysis.apps.ref.RefHelpers
@@ -66,15 +66,16 @@ object RecruitmentApp extends ZIOAppDefault {
       _ <- (args.toList match {
         case "report" :: clubStr :: rest =>
           val clubSlug = ClubSlug.wrap(clubStr)
-          showReport(clubSlug, rest.headOption).flatMap { case (usernames, evaluatedCount, reportRun) =>
-            val startedAt   = reportRun.startedAt
-            val completedAt = reportRun.completedAt.getOrElse(Instant.now())
-            OutputFile.writeAndLog(
+          for {
+            (usernames, evaluatedCount, reportRun) <- showReport(clubSlug, rest.headOption)
+            now <- Clock.instant
+            completedAt = reportRun.completedAt.getOrElse(now)
+            _ <- OutputFile.writeAndLog(
               "recruitment",
               clubSlug,
-              formatRecruitmentOutput(usernames, evaluatedCount, startedAt, completedAt)
+              formatRecruitmentOutput(usernames, evaluatedCount, reportRun.startedAt, completedAt)
             )
-          }
+          } yield ()
         case clubStr :: rest =>
           val parsed   = parseRecruitArgs(rest)
           val clubSlug = ClubSlug.wrap(clubStr)
@@ -94,11 +95,12 @@ object RecruitmentApp extends ZIOAppDefault {
               resolvedMap <- Player.resolveUsernames(candidates.map(_.playerId))
               usernames = candidates.map(c => resolvedMap.getOrElse(c.playerId, Username.wrap(s"[pid=${c.playerId}]")))
               evaluatedCount <- RecruitmentCandidate.selectCountByRun(run.runId)
+              now            <- Clock.instant
               output = formatRecruitmentOutput(
                 usernames,
                 evaluatedCount,
                 run.startedAt,
-                run.completedAt.getOrElse(Instant.now())
+                run.completedAt.getOrElse(now)
               )
               _ <- OutputFile.writeAndLog("recruitment", clubSlug, output)
             } yield ()
@@ -143,7 +145,7 @@ object RecruitmentApp extends ZIOAppDefault {
         if (cumulative) RecruitmentRun.sumCandidatesFoundToday(clubId, alias)
         else ZIO.succeed(0)
       effectiveTarget = (resolvedTarget - alreadyFound) max 0
-      now             = Instant.now()
+      now <- Clock.instant
       runId <- RecruitmentRun.insert(clubId, criteria.criteriaId, trigger, now, jobRunId)
 
       // --- Shared setup ---
@@ -180,7 +182,7 @@ object RecruitmentApp extends ZIOAppDefault {
         formerMemberIds = formerMemberIds,
         adminExcludedPlayerIds = adminExcludedPlayerIds,
         excludedSlugs = excludedSlugs,
-        now = Instant.now(),
+        now = now,
         discoveredOpponents = discoveredOpponents,
         failedAdminSlugs = failedAdminSlugs
       )
@@ -353,7 +355,7 @@ object RecruitmentApp extends ZIOAppDefault {
               .flatMap(p => RecruitmentCandidate.updateOutcome(ctx.runId, p.playerId, CandidateOutcome.Invited))
           }
           deferredCount <- RecruitmentCandidate.selectDeferredCountByRun(ctx.runId)
-          completedAt = Instant.now()
+          completedAt <- Clock.instant
           finalRun = RecruitmentRun(
             ctx.runId,
             clubId,

@@ -1,10 +1,9 @@
 package ccas.server.scheduler
 
-import java.time.Instant
 import java.time.temporal.ChronoUnit
 
-import zio.{durationInt, Ref, RIO, ZIO}
-import zio.test.{assertCompletes, assertTrue, Spec, TestAspect, ZIOSpecDefault}
+import zio.{durationInt, Clock, Duration, Ref, RIO, ZIO}
+import zio.test.{assertCompletes, assertTrue, Spec, TestAspect, TestClock, ZIOSpecDefault}
 
 import ccas.analysis.tables.{Club, RunTrigger}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId}
@@ -26,11 +25,13 @@ object TestJobScheduler extends ZIOSpecDefault {
     testErrorInOneScheduleDoesNotBlockOthers
   ).provideShared(
     FreshSchemaLayer("test_scheduler", onInit = ServerTables.ensureTables)
-  ) @@ TestAspect.withLiveClock @@ TestAspect.timeout(30.seconds)
-  // Timeouts are CI-tolerant, not race-fixing: the scheduler runs on Schedule.fixed +
-  // Instant.now() so it can't be driven by TestClock without a production refactor.
+  ) @@ TestAspect.timeout(30.seconds)
 
-  private val clubId = ClubId(300)
+  // Virtual poll interval driven by TestClock; no wall-clock dependency. Each test advances by
+  // `advanceWindow` in one go, relying on `Schedule.fixed`'s catch-up behavior to fire all overdue
+  // iterations back-to-back — so `advanceWindow` must span several `pollInterval`s.
+  private val pollInterval: Duration  = 1.minute
+  private val advanceWindow: Duration = pollInterval.multipliedBy(5)
 
   /** JobRunner stub that counts submissions without running effects. */
   private def stubRunner(submissions: Ref[Int]): JobRunner = new JobRunner {
@@ -63,32 +64,35 @@ object TestJobScheduler extends ZIOSpecDefault {
   }
 
   private def testPollFiberStopsOnScopeClose = test("poll fiber stops when enclosing scope closes") {
+    val schedClubId = ClubId(300)
     for {
       pgClient    <- ZIO.service[PostgresClient]
       submissions <- Ref.make(0)
       runner = stubRunner(submissions)
-      scheduler = new JobScheduler.JobSchedulerLive(TestCcasLogger.noop, runner, pgClient, 50.millis)
+      scheduler = new JobScheduler.JobSchedulerLive(TestCcasLogger.noop, runner, pgClient, pollInterval)
 
-      // Seed: a club and a schedule that is always due (intervalHours = 0, so every poll triggers)
-      _ <- Club.upsert(Club(clubId, java.time.Instant.parse("2025-01-01T00:00:00Z"), ClubSlug("sched-test"), "Sched Test", None, None, None))
+      // Always-due schedule: every poll triggers a submission.
+      now <- Clock.instant
+      _ <- Club.upsert(Club(schedClubId, now, ClubSlug("sched-test"), "Sched Test", None, None, None))
       _ <- JobSchedule.insert(
-        JobSchedule(0L, JobKind.Membership, Some(clubId), None, intervalHours = 0, enabled = true, lastRunAt = None)
+        JobSchedule(0L, JobKind.Membership, Some(schedClubId), None, intervalHours = 0, enabled = true, lastRunAt = None)
       )
 
-      // Start the scheduler in a scope, wait for it to poll several times, then close the scope
       _ <- ZIO.scoped {
-        scheduler.start *>
-          submissions.get.repeatUntil(_ >= 2)
-            .timeoutFail(new RuntimeException("scheduler did not submit enough jobs"))(12.seconds)
+        for {
+          _ <- scheduler.start
+          _ <- TestClock.adjust(advanceWindow)
+          _ <- submissions.get.repeatUntil(_ >= 2)
+        } yield ()
       }
 
-      // The scope has closed — the poll fiber should have been interrupted
+      // Scope closed → daemon interrupted. Further clock advancement must not produce polls.
       countAtClose <- submissions.get
-      _ <- ZIO.sleep(400.millis)
+      _ <- TestClock.adjust(advanceWindow)
       countAfter <- submissions.get
     } yield assertTrue(
-      countAtClose >= 2,           // scheduler was actively polling while scope was open
-      countAfter - countAtClose <= 1 // at most one in-flight poll may complete after scope closed
+      countAtClose >= 2,
+      countAfter == countAtClose
     )
   }
 
@@ -98,36 +102,50 @@ object TestJobScheduler extends ZIOSpecDefault {
       pgClient  <- ZIO.service[PostgresClient]
       submitted <- Ref.make(List.empty[Option[ClubId]])
       runner = trackingRunner(submitted)
-      scheduler = new JobScheduler.JobSchedulerLive(TestCcasLogger.noop, runner, pgClient, 50.millis)
+      scheduler = new JobScheduler.JobSchedulerLive(TestCcasLogger.noop, runner, pgClient, pollInterval)
 
-      twoHoursAgo = Instant.now().minus(2, ChronoUnit.HOURS)
+      now <- Clock.instant
+      twoHoursAgo = now.minus(2, ChronoUnit.HOURS)
       _ <- Club.upsert(Club(dueClubId, twoHoursAgo, ClubSlug("due-test"), "Due Test", None, None, None))
       _ <- JobSchedule.insert(
         JobSchedule(0L, JobKind.Membership, Some(dueClubId), None, intervalHours = 1, enabled = true, lastRunAt = Some(twoHoursAgo))
       )
       _ <- ZIO.scoped {
-        scheduler.start *>
-          submitted.get.repeatUntil(_.exists(_.contains(dueClubId)))
-            .timeoutFail(new RuntimeException("due schedule was not submitted"))(12.seconds)
+        for {
+          _ <- scheduler.start
+          _ <- TestClock.adjust(advanceWindow)
+          _ <- submitted.get.repeatUntil(_.exists(_.contains(dueClubId)))
+        } yield ()
       }
     } yield assertCompletes
   }
 
   private def testNotYetDueScheduleSkipped = test("skips schedule that is not yet due") {
     val notDueClubId = ClubId(302)
+    val ctrlClubId   = ClubId(312)
     for {
       pgClient  <- ZIO.service[PostgresClient]
       submitted <- Ref.make(List.empty[Option[ClubId]])
       runner = trackingRunner(submitted)
-      scheduler = new JobScheduler.JobSchedulerLive(TestCcasLogger.noop, runner, pgClient, 50.millis)
+      scheduler = new JobScheduler.JobSchedulerLive(TestCcasLogger.noop, runner, pgClient, pollInterval)
 
-      justNow = Instant.now()
-      _ <- Club.upsert(Club(notDueClubId, justNow, ClubSlug("notdue-test"), "Not Due Test", None, None, None))
+      now <- Clock.instant
+      _ <- Club.upsert(Club(notDueClubId, now, ClubSlug("notdue-test"), "Not Due Test", None, None, None))
+      _ <- Club.upsert(Club(ctrlClubId, now, ClubSlug("notdue-ctrl"), "Ctrl Always-Due", None, None, None))
       _ <- JobSchedule.insert(
-        JobSchedule(0L, JobKind.Membership, Some(notDueClubId), None, intervalHours = 24, enabled = true, lastRunAt = Some(justNow))
+        JobSchedule(0L, JobKind.Membership, Some(notDueClubId), None, intervalHours = 24, enabled = true, lastRunAt = Some(now))
+      )
+      // Always-due control: its submission proves a full pollLoop iteration ran (and thus the
+      // not-due schedule was evaluated and rejected) — replaces the original `ZIO.sleep(200.millis)` race.
+      _ <- JobSchedule.insert(
+        JobSchedule(0L, JobKind.Membership, Some(ctrlClubId), None, intervalHours = 0, enabled = true, lastRunAt = None)
       )
       _ <- ZIO.scoped {
-        scheduler.start *> ZIO.sleep(200.millis)
+        for {
+          _ <- scheduler.start
+          _ <- TestClock.adjust(advanceWindow)
+          _ <- submitted.get.repeatUntil(_.exists(_.contains(ctrlClubId)))
+        } yield ()
       }
       clubs <- submitted.get
       notDueCount = clubs.count(_.contains(notDueClubId))
@@ -136,18 +154,29 @@ object TestJobScheduler extends ZIOSpecDefault {
 
   private def testDisabledScheduleSkipped = test("skips disabled schedule") {
     val disabledClubId = ClubId(303)
+    val ctrlClubId     = ClubId(313)
     for {
       pgClient  <- ZIO.service[PostgresClient]
       submitted <- Ref.make(List.empty[Option[ClubId]])
       runner = trackingRunner(submitted)
-      scheduler = new JobScheduler.JobSchedulerLive(TestCcasLogger.noop, runner, pgClient, 50.millis)
+      scheduler = new JobScheduler.JobSchedulerLive(TestCcasLogger.noop, runner, pgClient, pollInterval)
 
-      _ <- Club.upsert(Club(disabledClubId, Instant.now(), ClubSlug("disabled-test"), "Disabled Test", None, None, None))
+      now <- Clock.instant
+      _ <- Club.upsert(Club(disabledClubId, now, ClubSlug("disabled-test"), "Disabled Test", None, None, None))
+      _ <- Club.upsert(Club(ctrlClubId, now, ClubSlug("disabled-ctrl"), "Ctrl Always-Due", None, None, None))
       _ <- JobSchedule.insert(
         JobSchedule(0L, JobKind.Membership, Some(disabledClubId), None, intervalHours = 0, enabled = false, lastRunAt = None)
       )
+      // Always-due control to anchor the assertion on a full pollLoop iteration completing.
+      _ <- JobSchedule.insert(
+        JobSchedule(0L, JobKind.Membership, Some(ctrlClubId), None, intervalHours = 0, enabled = true, lastRunAt = None)
+      )
       _ <- ZIO.scoped {
-        scheduler.start *> ZIO.sleep(200.millis)
+        for {
+          _ <- scheduler.start
+          _ <- TestClock.adjust(advanceWindow)
+          _ <- submitted.get.repeatUntil(_.exists(_.contains(ctrlClubId)))
+        } yield ()
       }
       clubs <- submitted.get
       disabledCount = clubs.count(_.contains(disabledClubId))
@@ -172,16 +201,19 @@ object TestJobScheduler extends ZIOSpecDefault {
         override def status(id: JobRunId): RIO[PostgresClient, Option[JobRun]] = ZIO.none
         override def recentJobs(limit: Int): RIO[PostgresClient, List[JobRun]] = ZIO.succeed(Nil)
       }
-      scheduler = new JobScheduler.JobSchedulerLive(TestCcasLogger.noop, failingRunner, pgClient, 50.millis)
+      scheduler = new JobScheduler.JobSchedulerLive(TestCcasLogger.noop, failingRunner, pgClient, pollInterval)
 
-      _ <- Club.upsert(Club(errorClubId, Instant.now(), ClubSlug("error-test"), "Error Test", None, None, None))
+      now <- Clock.instant
+      _ <- Club.upsert(Club(errorClubId, now, ClubSlug("error-test"), "Error Test", None, None, None))
       _ <- JobSchedule.insert(
         JobSchedule(0L, JobKind.Membership, Some(errorClubId), None, intervalHours = 0, enabled = true, lastRunAt = None)
       )
       _ <- ZIO.scoped {
-        scheduler.start *>
-          callCount.get.repeatUntil(_ >= 2)
-            .timeoutFail(new RuntimeException("scheduler did not retry after error"))(12.seconds)
+        for {
+          _ <- scheduler.start
+          _ <- TestClock.adjust(advanceWindow)
+          _ <- callCount.get.repeatUntil(_ >= 2)
+        } yield ()
       }
     } yield assertCompletes // scheduler survived the error and polled again
   }
@@ -207,10 +239,11 @@ object TestJobScheduler extends ZIOSpecDefault {
           override def status(id: JobRunId): RIO[PostgresClient, Option[JobRun]] = ZIO.none
           override def recentJobs(limit: Int): RIO[PostgresClient, List[JobRun]] = ZIO.succeed(Nil)
         }
-        scheduler = new JobScheduler.JobSchedulerLive(TestCcasLogger.noop, runner, pgClient, 50.millis)
+        scheduler = new JobScheduler.JobSchedulerLive(TestCcasLogger.noop, runner, pgClient, pollInterval)
 
-        _ <- Club.upsert(Club(failClubId, Instant.now(), ClubSlug("fail-sched"), "Fail", None, None, None))
-        _ <- Club.upsert(Club(goodClubId, Instant.now(), ClubSlug("good-sched"), "Good", None, None, None))
+        now <- Clock.instant
+        _ <- Club.upsert(Club(failClubId, now, ClubSlug("fail-sched"), "Fail", None, None, None))
+        _ <- Club.upsert(Club(goodClubId, now, ClubSlug("good-sched"), "Good", None, None, None))
         _ <- JobSchedule.insert(
           JobSchedule(0L, JobKind.Membership, Some(failClubId), None, intervalHours = 0, enabled = true, lastRunAt = None)
         )
@@ -218,9 +251,11 @@ object TestJobScheduler extends ZIOSpecDefault {
           JobSchedule(0L, JobKind.History, Some(goodClubId), None, intervalHours = 0, enabled = true, lastRunAt = None)
         )
         _ <- ZIO.scoped {
-          scheduler.start *>
-            submitted.get.repeatUntil(_.exists(_.contains(goodClubId)))
-              .timeoutFail(new RuntimeException("good schedule was never submitted"))(12.seconds)
+          for {
+            _ <- scheduler.start
+            _ <- TestClock.adjust(advanceWindow)
+            _ <- submitted.get.repeatUntil(_.exists(_.contains(goodClubId)))
+          } yield ()
         }
       } yield assertCompletes
     }

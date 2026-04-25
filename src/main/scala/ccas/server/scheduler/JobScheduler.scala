@@ -4,7 +4,7 @@ import java.time.temporal.ChronoUnit
 import java.time.Instant
 
 import com.typesafe.config.ConfigFactory
-import zio.{durationLong, Duration, Scope, Task, UIO, URIO, URLayer, ZIO, ZLayer}
+import zio.{durationLong, Clock, Duration, Scope, Task, UIO, URIO, URLayer, ZIO, ZLayer}
 
 import ccas.analysis.apps.clubdata.ClubDataApp
 import ccas.analysis.apps.history.HistoryApp
@@ -50,7 +50,7 @@ object JobScheduler {
     private def pollLoop: UIO[Unit] =
       (for {
         schedules <- JobSchedule.selectEnabled.provideEnvironment(pgClientEnv)
-        now = Instant.now()
+        now       <- Clock.instant
         _ <- ZIO.foreachDiscard(schedules) { schedule =>
           val isDue = schedule.lastRunAt.forall(ts => ChronoUnit.HOURS.between(ts, now) >= schedule.intervalHours)
           ZIO.whenDiscard(isDue) {
