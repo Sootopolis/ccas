@@ -53,10 +53,10 @@ object TestClubSql extends ZIOSpecDefault {
 
   // Club A: player0 (current), player1 (current), player2 (former)
   // Club B: player0 (current)
-  private val memA0 = ClubMember(clubA.clubId, player0.playerId, Times.t1, None)
-  private val memA1 = ClubMember(clubA.clubId, player1.playerId, Times.t1, None)
-  private val memA2 = ClubMember(clubA.clubId, player2.playerId, Times.t1, Some(Times.t2))
-  private val memB0 = ClubMember(clubB.clubId, player0.playerId, Times.t1, None)
+  private val memA0 = ClubMember(clubA.clubId, player0.playerId, Times.t1, None, sinceApproximate = false)
+  private val memA1 = ClubMember(clubA.clubId, player1.playerId, Times.t1, None, sinceApproximate = false)
+  private val memA2 = ClubMember(clubA.clubId, player2.playerId, Times.t1, Some(Times.t2), sinceApproximate = false)
+  private val memB0 = ClubMember(clubB.clubId, player0.playerId, Times.t1, None, sinceApproximate = false)
 
   // --- Club tests ---
 

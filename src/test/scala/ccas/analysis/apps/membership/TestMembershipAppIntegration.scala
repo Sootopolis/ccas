@@ -94,8 +94,8 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
   private def testBuildsCorrectDbStateMaps = test("builds correct DbState maps") {
     val player0 = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t1)
     val player1 = Player(pid1, Times.t0, Username("bob"), Active, None, Times.t1)
-    val mem0    = ClubMember(clubId, pid0, Times.t1, None)
-    val mem1    = ClubMember(clubId, pid1, Times.t1, None)
+    val mem0    = ClubMember(clubId, pid0, Times.t1, None, sinceApproximate = false)
+    val mem1    = ClubMember(clubId, pid1, Times.t1, None, sinceApproximate = false)
 
     for {
       _ <- seedDb(
@@ -121,7 +121,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
 
   private def testExcludesFormerMembers = test("excludes former members from DbState") {
     val player0   = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t1)
-    val formerMem = ClubMember(clubId, pid0, Times.t0, Some(Times.t1))
+    val formerMem = ClubMember(clubId, pid0, Times.t0, Some(Times.t1), sinceApproximate = false)
 
     for {
       _ <- seedDb(
@@ -152,7 +152,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
     val phaseB = PhaseBResult(Set(pid0), Chunk.empty, Chunk.empty, Chunk.empty, Chunk.empty, Chunk.empty, Chunk.empty)
     val phaseC = PhaseCResult(Chunk.empty, Chunk.empty, Chunk.empty, Chunk.empty)
     val extChange = MemberChangeSummary(pid1, Username("bob"), Chunk(JoinedClub(Times.t1)))
-    val extMember = ClubMember(clubId, pid1, Times.t1, None)
+    val extMember = ClubMember(clubId, pid1, Times.t1, None, sinceApproximate = false)
     val result = MembershipApp.mergeResults(
       phaseB, phaseC, 10, 8, Times.t0, Times.t1,
       externalChanges = Chunk(extChange),
@@ -170,9 +170,9 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
     val player0 = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0)
     val player1 = Player(pid1, Times.t0, Username("bob"), Active, None, Times.t0)
     // alice: current member since t0
-    val mem0 = ClubMember(clubId, pid0, Times.t0, None)
+    val mem0 = ClubMember(clubId, pid0, Times.t0, None, sinceApproximate = false)
     // bob: joined at t2, so not current at t1
-    val mem1 = ClubMember(clubId, pid1, Times.t2, None)
+    val mem1 = ClubMember(clubId, pid1, Times.t2, None, sinceApproximate = false)
 
     for {
       _ <- seedDb(players = List(player0, player1), members = List(mem0, mem1))
@@ -187,7 +187,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
   private def testSelectPlayerIdsCurrentAtExcludesLeftMembers = test("selectPlayerIdsCurrentAt excludes members who left before the given time") {
     val player0 = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0)
     // alice: was member from t0 to t1
-    val mem0 = ClubMember(clubId, pid0, Times.t0, Some(Times.t1))
+    val mem0 = ClubMember(clubId, pid0, Times.t0, Some(Times.t1), sinceApproximate = false)
 
     for {
       _ <- seedDb(players = List(player0), members = List(mem0))
@@ -205,11 +205,11 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
       val bob   = Player(pid1, Times.t0, Username("bob"), Closed, None, Times.t0)
       val carol = Player(pid2, Times.t0, Username("carol"), Active, None, Times.t0)
       // alice: active, current → counted
-      val memAlice = ClubMember(clubId, pid0, Times.t0, None)
+      val memAlice = ClubMember(clubId, pid0, Times.t0, None, sinceApproximate = false)
       // bob: closed but still current → excluded by status filter
-      val memBob = ClubMember(clubId, pid1, Times.t0, None)
+      val memBob = ClubMember(clubId, pid1, Times.t0, None, sinceApproximate = false)
       // carol: active but left at t1 → excluded by window at t2
-      val memCarol = ClubMember(clubId, pid2, Times.t0, Some(Times.t1))
+      val memCarol = ClubMember(clubId, pid2, Times.t0, Some(Times.t1), sinceApproximate = false)
 
       for {
         _      <- seedDb(players = List(alice, bob, carol), members = List(memAlice, memBob, memCarol))
@@ -225,10 +225,10 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
     for {
       _ <- seedDb()
       // Insert a completed run
-      runId1 <- MembershipRun.insert(clubId, RunTrigger.Cli, Times.t0)
+      runId1 <- MembershipRun.insert(clubId, RunTrigger.Cli, Times.t0, None)
       _      <- MembershipRun.complete(runId1, Times.t1)
       // Insert an incomplete run (no completedAt)
-      _ <- MembershipRun.insert(clubId, RunTrigger.Cli, Times.t2)
+      _ <- MembershipRun.insert(clubId, RunTrigger.Cli, Times.t2, None)
       result <- MembershipRun.selectLatestCompleted(clubId)
     } yield assertTrue(
       result.isDefined,
@@ -241,7 +241,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
     for {
       _ <- seedDb()
       _ <- connectZIO(sql"DELETE FROM membership_run WHERE club_id = $clubId".update.run())
-      _ <- MembershipRun.insert(clubId, RunTrigger.Cli, Times.t0)
+      _ <- MembershipRun.insert(clubId, RunTrigger.Cli, Times.t0, None)
       result <- MembershipRun.selectLatestCompleted(clubId)
     } yield assertTrue(result.isEmpty)
   }
@@ -265,7 +265,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
 
   private def testUnchangedMemberMatchingSince = test("unchanged member — matching since") {
     val player = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t1)
-    val mem    = ClubMember(clubId, pid0, Times.t1, None)
+    val mem    = ClubMember(clubId, pid0, Times.t1, None, sinceApproximate = false)
     val dbState = DbState(
       membersByPlayerId = Map(pid0 -> MemberState(player, mem)),
       membersByUsername = Map(Username("alice") -> MemberState(player, mem))
@@ -283,7 +283,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
 
   private def testDifferentSinceRejoined = test("different since → Rejoined") {
     val player = Player(pid1, Times.t0, Username("bob"), Active, None, Times.t0)
-    val mem    = ClubMember(clubId, pid1, Times.t0, None)
+    val mem    = ClubMember(clubId, pid1, Times.t0, None, sinceApproximate = false)
     val dbState = DbState(
       membersByPlayerId = Map(pid1 -> MemberState(player, mem)),
       membersByUsername = Map(Username("bob") -> MemberState(player, mem))
@@ -308,7 +308,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
 
   private def testUsernameChangeSamePlayerId = test("username change — same player ID, different username") {
     val player = Player(pid2, Times.t0, Username("charlie-old"), Active, None, Times.t0)
-    val mem    = ClubMember(clubId, pid2, Times.t0, None)
+    val mem    = ClubMember(clubId, pid2, Times.t0, None, sinceApproximate = false)
     val dbState = DbState(
       membersByPlayerId = Map(pid2 -> MemberState(player, mem)),
       membersByUsername = Map(Username("charlie-old") -> MemberState(player, mem))
@@ -373,7 +373,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
 
   private def testUsernameChangeAndStatusChange = test("username change + status change") {
     val player = Player(pid5, Times.t0, Username("frank-old"), Active, None, Times.t0)
-    val mem    = ClubMember(clubId, pid5, Times.t0, None)
+    val mem    = ClubMember(clubId, pid5, Times.t0, None, sinceApproximate = false)
     val dbState = DbState(
       membersByPlayerId = Map(pid5 -> MemberState(player, mem)),
       membersByUsername = Map(Username("frank-old") -> MemberState(player, mem))
@@ -419,7 +419,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
 
   private def testTrustModeUsernameChangeDetected = test("trust-mode: username change detected without API call") {
     val oldPlayer = Player(pid2, Times.t0, Username("charlie-old"), Active, None, Times.t0)
-    val mem       = ClubMember(clubId, pid2, Times.t0, None)
+    val mem       = ClubMember(clubId, pid2, Times.t0, None, sinceApproximate = false)
     val newPlayer = Player(pid2, Times.t0, Username("charlie-new"), Active, None, Times.t1)
     val dbState = DbState(
       membersByPlayerId = Map(pid2 -> MemberState(oldPlayer, mem)),
@@ -507,7 +507,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
 
   private def testActivePlayerLeftClub = test("active player left club → LeftClub with now timestamp") {
     val player = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0)
-    val mem    = ClubMember(clubId, pid0, Times.t0, None)
+    val mem    = ClubMember(clubId, pid0, Times.t0, None, sinceApproximate = false)
     val dbState = DbState(
       membersByPlayerId = Map(pid0 -> MemberState(player, mem)),
       membersByUsername = Map(Username("alice") -> MemberState(player, mem))
@@ -539,7 +539,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
   private def testClosedPlayerAccountClosed =
     test("closed player not in own clubs list → AccountClosed, membership closed at lastOnline") {
       val player = Player(pid1, Times.t0, Username("bob"), Active, None, Times.t0)
-      val mem    = ClubMember(clubId, pid1, Times.t0, None)
+      val mem    = ClubMember(clubId, pid1, Times.t0, None, sinceApproximate = false)
       val dbState = DbState(
         membersByPlayerId = Map(pid1 -> MemberState(player, mem)),
         membersByUsername = Map(Username("bob") -> MemberState(player, mem))
@@ -575,7 +575,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
   private def testClosedPlayerStillInClub =
     test("closed player still in own clubs list → AccountClosed only, membership not closed") {
       val player = Player(pid1, Times.t0, Username("bob"), Active, None, Times.t0)
-      val mem    = ClubMember(clubId, pid1, Times.t0, None)
+      val mem    = ClubMember(clubId, pid1, Times.t0, None, sinceApproximate = false)
       val dbState = DbState(
         membersByPlayerId = Map(pid1 -> MemberState(player, mem)),
         membersByUsername = Map(Username("bob") -> MemberState(player, mem))
@@ -613,7 +613,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
   private def testAlreadyClosedPlayerSilent =
     test("already-closed player, still in own clubs list → no changes emitted") {
       val player = Player(pid1, Times.t0, Username("bob"), Closed, None, Times.t0)
-      val mem    = ClubMember(clubId, pid1, Times.t0, None)
+      val mem    = ClubMember(clubId, pid1, Times.t0, None, sinceApproximate = false)
       val dbState = DbState(
         membersByPlayerId = Map(pid1 -> MemberState(player, mem)),
         membersByUsername = Map(Username("bob") -> MemberState(player, mem))
@@ -646,7 +646,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
   // Caller controls apiMap to simulate "still in club under new name" vs "actually left".
   private def runMatchRefFallbackRenamed(apiMap: Map[Username, Long]) = {
     val player = Player(pid5, Times.t0, Username("ed-old"), Active, None, Times.t0)
-    val mem    = ClubMember(clubId, pid5, Times.t0, None)
+    val mem    = ClubMember(clubId, pid5, Times.t0, None, sinceApproximate = false)
     val ref    = PlayerMatchRef(pid5, matchRefId, isLive = false, isTeam1 = true, boardIdx = 1)
     val dbState = DbState(
       membersByPlayerId = Map(pid5 -> MemberState(player, mem)),
@@ -702,7 +702,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
 
   private def testApi404Unresolvable = test("API 404 → Unresolvable") {
     val player = Player(pid2, Times.t0, Username("charlie"), Active, None, Times.t0)
-    val mem    = ClubMember(clubId, pid2, Times.t0, None)
+    val mem    = ClubMember(clubId, pid2, Times.t0, None, sinceApproximate = false)
     val dbState = DbState(
       membersByPlayerId = Map(pid2 -> MemberState(player, mem)),
       membersByUsername = Map(Username("charlie") -> MemberState(player, mem))
@@ -727,7 +727,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
 
   private def testDifferentPlayerIdUnresolvable = test("different player ID at same username → Unresolvable") {
     val player = Player(pid3, Times.t0, Username("diana"), Active, None, Times.t0)
-    val mem    = ClubMember(clubId, pid3, Times.t0, None)
+    val mem    = ClubMember(clubId, pid3, Times.t0, None, sinceApproximate = false)
     val dbState = DbState(
       membersByPlayerId = Map(pid3 -> MemberState(player, mem)),
       membersByUsername = Map(Username("diana") -> MemberState(player, mem))
@@ -753,7 +753,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
 
   private def testAllResolvedEmptyResults = test("all resolved → empty results") {
     val player = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0)
-    val mem    = ClubMember(clubId, pid0, Times.t0, None)
+    val mem    = ClubMember(clubId, pid0, Times.t0, None, sinceApproximate = false)
     val dbState = DbState(
       membersByPlayerId = Map(pid0 -> MemberState(player, mem)),
       membersByUsername = Map(Username("alice") -> MemberState(player, mem))
@@ -791,7 +791,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
       val priorCompletedAt = Times.t1
       val bobJoined        = Times.t1.minusSeconds(600) // before the prior run completed
       val alice            = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0)
-      val aliceMembership  = ClubMember(clubId, pid0, Times.t0, None)
+      val aliceMembership  = ClubMember(clubId, pid0, Times.t0, None, sinceApproximate = false)
       val routes: Routes[Any, Response] = Routes(
         Method.GET / "pub" / "club" / string("slug") / "members" -> handler {
           (_: String, _: Request) =>
@@ -822,7 +822,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
       for {
         _          <- connectZIO(sql"DELETE FROM membership_run WHERE club_id = $clubId".update.run())
         _          <- seedDb(players = List(alice), members = List(aliceMembership))
-        priorRunId <- MembershipRun.insert(clubId, RunTrigger.Cli, Times.t0)
+        priorRunId <- MembershipRun.insert(clubId, RunTrigger.Cli, Times.t0, None)
         _          <- MembershipRun.complete(priorRunId, priorCompletedAt)
         client     <- TestChessComClientSupport.fakeClient(routes)
         result <- MembershipApp.reconcile(ClubSlug("test-club"))

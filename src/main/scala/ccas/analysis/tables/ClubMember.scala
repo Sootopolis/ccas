@@ -18,7 +18,7 @@ final case class ClubMember(
   playerId: PlayerId,
   since: Instant,
   until: Option[Instant],
-  sinceApproximate: Boolean = false
+  sinceApproximate: Boolean
 ) derives DbCodec {
   def isCurrent: Boolean = until.isEmpty
 }
