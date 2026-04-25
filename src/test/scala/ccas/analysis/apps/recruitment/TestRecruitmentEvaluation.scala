@@ -43,7 +43,7 @@ object TestRecruitmentEvaluation extends ZIOSpecDefault {
     for {
       _          <- seedDb
       criteriaId <- seedCriteria(criteria)
-      runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0)
+      runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None)
       client     <- fakeChessComClient(responses)
       invited    <- evalCandidates(client, runId, List(Username("alice"), Username("bob")), criteria)
       // Check invited list
@@ -74,7 +74,7 @@ object TestRecruitmentEvaluation extends ZIOSpecDefault {
     for {
       _          <- seedDb
       criteriaId <- seedCriteria(criteria)
-      runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0)
+      runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None)
       client     <- fakeChessComClient(responses)
       invited <- evalCandidates(
         client,
@@ -99,7 +99,7 @@ object TestRecruitmentEvaluation extends ZIOSpecDefault {
     for {
       _          <- seedDb
       criteriaId <- seedCriteria(criteria)
-      runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0)
+      runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None)
       client     <- fakeChessComClient(responses, failures = Set("bob"))
       invited    <- evalCandidates(client, runId, List(Username("alice"), Username("bob")), criteria)
       candidates <- RecruitmentCandidate.selectByRun(runId)
@@ -122,7 +122,7 @@ object TestRecruitmentEvaluation extends ZIOSpecDefault {
     for {
       _          <- seedDb
       criteriaId <- seedCriteria(criteria)
-      runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0)
+      runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None)
       client     <- fakeChessComClient(responses)
       _          <- evalCandidates(client, runId, List(Username("alice")), criteria)
       candidates <- RecruitmentCandidate.selectByRun(runId)
@@ -152,7 +152,7 @@ object TestRecruitmentEvaluation extends ZIOSpecDefault {
       _          <- seedPlayer(cache.playerId)
       _          <- PlayerRecruitmentCache.upsert(cache)
       criteriaId <- seedCriteria(criteria)
-      runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0)
+      runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None)
       client     <- fakeChessComClient(responses)
       _          <- evalCandidates(client, runId, List(Username.wrap(username)), criteria)
       cands      <- RecruitmentCandidate.selectByRun(runId)

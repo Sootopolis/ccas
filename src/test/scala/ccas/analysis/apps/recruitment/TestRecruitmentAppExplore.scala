@@ -205,7 +205,7 @@ object TestRecruitmentAppExplore extends ZIOSpecDefault {
         client     <- fakeChessComClient(responses)
         // Seed prior run with a Deferred candidate (need Player row)
         _          <- Player.insert(Player(PlayerId(500), Times.t0, Username("prio-deferred"), Active, None, Times.t0))
-        priorRunId <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0)
+        priorRunId <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None)
         _ <- RecruitmentRun.update(
           RecruitmentRun(priorRunId, clubId, criteriaId, RunTrigger.Cli, Times.t0, Some(Times.t1), 0, None)
         )
@@ -242,7 +242,7 @@ object TestRecruitmentAppExplore extends ZIOSpecDefault {
         _ <- Player.insert(Player(PlayerId(600), Times.t0, Username("resolved-player"), Active, None, Times.t0))
 
         // Run 1: candidate is Deferred
-        runId1 <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0)
+        runId1 <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None)
         _ <- RecruitmentRun.update(
           RecruitmentRun(runId1, clubId, criteriaId, RunTrigger.Cli, Times.t0, Some(Times.t1), 0, None)
         )
@@ -254,7 +254,7 @@ object TestRecruitmentAppExplore extends ZIOSpecDefault {
         deferredBefore <- RecruitmentCandidate.selectDeferredByClub(clubId)
 
         // Run 2: same candidate is Invited (later timestamp)
-        runId2 <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t2)
+        runId2 <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t2, None)
         _ <- RecruitmentRun.update(
           RecruitmentRun(runId2, clubId, criteriaId, RunTrigger.Cli, Times.t2, Some(Times.t3), 1, None)
         )

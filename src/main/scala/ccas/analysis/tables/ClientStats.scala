@@ -103,9 +103,9 @@ object ClientStats {
               latency_bucket200_to500  BIGINT NOT NULL,
               latency_bucket500_to1000 BIGINT NOT NULL,
               latency_bucket1000_plus  BIGINT NOT NULL,
-              cache_hits               BIGINT NOT NULL DEFAULT 0,
-              cache_revalidations      BIGINT NOT NULL DEFAULT 0,
-              cache_misses             BIGINT NOT NULL DEFAULT 0,
+              cache_hits               BIGINT NOT NULL,
+              cache_revalidations      BIGINT NOT NULL,
+              cache_misses             BIGINT NOT NULL,
               FOREIGN KEY (config_id) REFERENCES client_config (config_id) ON DELETE RESTRICT
             )""".update.run()
       sql"""CREATE INDEX IF NOT EXISTS idx_client_stats_started_at

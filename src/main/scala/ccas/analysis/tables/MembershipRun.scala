@@ -57,7 +57,7 @@ object MembershipRun {
     clubId: ClubId,
     trigger: RunTrigger,
     startedAt: Instant,
-    jobRunId: Option[JobRunId] = None
+    jobRunId: Option[JobRunId]
   ): ZIO[PostgresClient, SQLException, Long] =
     connectZIO {
       sql"""INSERT INTO membership_run (club_id, trigger, started_at, job_run_id)

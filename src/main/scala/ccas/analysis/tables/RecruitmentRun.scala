@@ -74,7 +74,7 @@ object RecruitmentRun {
     criteriaId: Long,
     trigger: RunTrigger,
     startedAt: Instant,
-    jobRunId: Option[JobRunId] = None
+    jobRunId: Option[JobRunId]
   ): ZIO[PostgresClient, SQLException, Long] =
     connectZIO {
       sql"""INSERT INTO recruitment_run (club_id, criteria_id, trigger, started_at, candidates_found, job_run_id)
