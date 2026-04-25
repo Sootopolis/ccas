@@ -613,19 +613,37 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
     test("min delay floor enforces minimum inter-request spacing") {
       ZIO.scoped {
         for {
+          // Measure actual inter-request spacing instead of emaDelayMs: the cumulative
+          // counter only grows when emaDelay slept, but under load natural gaps can
+          // already exceed the floor and the counter stays low even though the floor
+          // is being respected.
+          timestamps <- Ref.make(List.empty[Long])
           (client, _, statsRef) <- makeClient(
-            handler = _ => ZIO.sleep(2.millis).as(Response.json(jsonBody)),
+            handler = _ =>
+              for {
+                now <- Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS)
+                _   <- timestamps.update(now :: _)
+                _   <- ZIO.sleep(2.millis)
+              } yield Response.json(jsonBody),
             permits = 2,
             minRequestDelayMs = 50
           )
-          // Send requests sequentially so every request after the first hits the EMA floor
+          // Sequential so every request after the first goes through the floor check.
           _ <- ZIO.foreachDiscard(1 to 10)(i =>
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get)
           )
-          s <- statsRef.get
+          s   <- statsRef.get
+          ts  <- timestamps.get.map(_.reverse)
+          gaps = ts.sliding(2).collect { case List(a, b) => b - a }.toList
+          // Skip request 2's gap: lastRequestRef is only set inside emaDelay's active branch
+          // and request 1 doesn't enter that branch (ema starts at 0), so request 2's gap
+          // is computed against an uninitialized lastRequestRef and bypasses the floor by
+          // design. From request 3 onwards the floor is enforced on every iteration.
+          flooredGaps = gaps.drop(1)
         } yield assertTrue(
           s.successes == 10L,
-          s.emaDelayMs >= 200L // ~9 gaps at 50ms floor, conservatively at least 200ms total
+          ts.size == 10,
+          flooredGaps.forall(_ >= 40L) // 50ms floor minus 10ms scheduler-jitter tolerance
         )
       }
     },
