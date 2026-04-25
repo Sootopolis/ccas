@@ -338,16 +338,17 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
     test("recovery fibers are interrupted when scope closes") {
       for {
         // Create client and trigger throttle-down inside a scope, then let the scope close.
-        // Short cooldown is deliberate: once Phase 1 stops feeding failures, an uninterrupted
-        // fiber needs ~2 cycles to advance (cycle 1 clears stale Phase-1 outcomes, cycle 2 sees
-        // an empty window and steps up). The earlier cooldown=60s made this test vacuous — the
-        // fiber was still in cooldown sleep for the full post-scope wait whether interrupted or not.
+        // Cooldown must comfortably exceed Phase 1 + scope-cleanup duration: if it elapses
+        // before scope close fires the interrupt finalizer, the recovery fiber races into
+        // step-up and currentMax advances before the interrupt arrives. The earlier 100 ms
+        // value flaked under CI load for this reason. Post-scope wait stays well above
+        // cooldown so an uninterrupted fiber would still demonstrably step up.
         (stateRef, insideState) <- ZIO.scoped {
           for {
             (client, stateRef, _) <- makeClient(
               handler = _ => ZIO.succeed(Response(status = Status.TooManyRequests)),
               permits = 20,
-              cooldown = 100.millis,
+              cooldown = 2.seconds,
               failureThreshold = 0.2
             )
             _ <- ZIO.foreachParDiscard(1 to 5)(i =>
@@ -356,9 +357,8 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
             insideState <- stateRef.get
           } yield (stateRef, insideState) // scope closes here, recovery fibers should be interrupted
         }
-        // 1s >> drain-poll (200ms) + 2 × cooldown (200ms), so an uninterrupted fiber would have
-        // stepped up through several tiers by now.
-        _ <- ZIO.sleep(1.second)
+        // 4s = 2 × cooldown: an uninterrupted fiber would have cleared cooldown and stepped up.
+        _ <- ZIO.sleep(4.seconds)
         afterState <- stateRef.get
       } yield assertTrue(
         insideState.currentMax == 1L, // Phase 1 actually triggered throttle-down
