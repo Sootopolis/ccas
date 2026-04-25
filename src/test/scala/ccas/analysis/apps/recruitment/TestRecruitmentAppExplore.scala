@@ -1,6 +1,6 @@
 package ccas.analysis.apps.recruitment
 
-import zio.{durationInt, Promise, ZIO, ZLayer}
+import zio.{durationInt, Promise, Schedule, ZLayer}
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.*
@@ -141,11 +141,18 @@ object TestRecruitmentAppExplore extends ZIOSpecDefault {
         client  <- fakeChessComClientWithBlock(responses, blockAfterN = 4, reached, gate)
         fiber <- runRecruit(client, sourceClubs = List(intSource)).fork
         _      <- reached.await
-        _      <- ZIO.sleep(100.millis)
+        // Anchor the interrupt on a persisted candidate row, not a fixed sleep. The 5th-profile
+        // block pins how many profiles have been fetched, but a candidate is only written by
+        // persistCandidateResults once its full filter chain (stats / clubs / etc.) completes,
+        // and that finishing time is what flakes under load. The run row is inserted before any
+        // API call, so selectLatest is Some by the time reached.await returns.
+        runId  <- RecruitmentRun.selectLatest(clubId).map(_.get.runId)
+        _ <- RecruitmentCandidate.selectByRun(runId)
+          .repeat(Schedule.spaced(20.millis) && Schedule.recurUntil[List[RecruitmentCandidate]](_.nonEmpty))
+          .timeoutFail(new RuntimeException("no candidate persisted before interrupt"))(5.seconds)
         _      <- fiber.interrupt
         latest <- RecruitmentRun.selectLatest(clubId)
-        runId = latest.get.runId
-        cands <- RecruitmentCandidate.selectByRun(runId)
+        cands  <- RecruitmentCandidate.selectByRun(runId)
         deferred = cands.filter(_.outcome == CandidateOutcome.Deferred)
       } yield assertTrue(
         latest.isDefined,
