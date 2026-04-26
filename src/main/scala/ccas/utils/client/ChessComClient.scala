@@ -218,13 +218,14 @@ final class ChessComClient(
         Some(if (directives.noCache) None else directives.maxAgeSeconds)
       else None
     val validators = extractValidators(response)
-    logEtagParseMiss(response) *>
-      recordOutcome(true) *>
-      statsRef.update(_.incCacheRevalidation) *>
-      ApiResponseCache
+    for {
+      _ <- logEtagParseMiss(response)
+      _ <- recordOutcome(true)
+      _ <- statsRef.update(_.incCacheRevalidation)
+      _ <- ApiResponseCache
         .touch(url.encode, Instant.now(), validators.etag, validators.lastModified, maxAgeUpdate, validators.contentType)
         .provideEnvironment(ZEnvironment(pgClient))
-        .as(CacheableResult.Revalidated(meta.bodyId, loadAndDecode[T](url, meta.bodyId)))
+    } yield CacheableResult.Revalidated(meta.bodyId, loadAndDecode[T](url, meta.bodyId))
   }
 
   /** Success path: extract cache-control headers, upsert the response body into the cache (unless `no-store`), and
