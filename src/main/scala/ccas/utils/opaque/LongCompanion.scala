@@ -31,3 +31,11 @@ trait LongCompanion {
     def value: Long = unwrap(l)
   }
 }
+
+/** `LongCompanion` with a `> 0L` validator. Use for surrogate keys backed by `BIGSERIAL`,
+  * which always start at 1 — zero or negative values indicate corruption.
+  */
+trait PositiveLongCompanion extends LongCompanion {
+  override protected def validateRaw(raw: Long): Either[String, Long] =
+    Either.cond(raw > 0L, raw, s"$name must be > 0")
+}

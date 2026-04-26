@@ -1,5 +1,7 @@
 package ccas.analysis.apps.recruitment
 
+import java.time.Instant
+
 import ccas.utils.CcasLogger
 import ccas.utils.sql.PostgresClient
 import zio.{Clock, RIO, Ref, ZIO}
@@ -22,23 +24,27 @@ private[recruitment] object RecruitmentFilters {
     filters: List[RecruitmentFilter]
   ): RIO[CcasLogger & PostgresClient, CandidateOutcome] = {
     val candidateCtx = CandidateContext.initial(username)
-    Clock.instant.flatMap { now =>
-      val env = FilterEnv(runCtx.copy(now = now), candidateCtx)
-      def onEvaluationError(ctxRef: Ref[CandidateContext])(error: Throwable): RIO[PostgresClient, CandidateOutcome] =
-        ctxRef.get.flatMap { latestCtx =>
-          persistCandidateResults(runId, now, latestCtx, CandidateOutcome.Error, env.run.client, Some(error.safeMessage))
-        }.as(CandidateOutcome.Error)
-
-      for {
-        ctxRef <- Ref.make(candidateCtx)
-        result <- (for {
-          (outcome, finalCandidate) <- runFilters(env, filters, ctxRef)
-          _                         <- persistCandidateResults(runId, now, finalCandidate, outcome, env.run.client)
-          _                         <- writePlayerMatchRef(env.run.client, finalCandidate).ignore
-        } yield outcome).catchAll(onEvaluationError(ctxRef))
-      } yield result
-    }
+    for {
+      now <- Clock.instant
+      env    = FilterEnv(runCtx.copy(now = now), candidateCtx)
+      ctxRef <- Ref.make(candidateCtx)
+      result <- (for {
+        (outcome, finalCandidate) <- runFilters(env, filters, ctxRef)
+        _                         <- persistCandidateResults(runId, now, finalCandidate, outcome, env.run.client)
+        _                         <- writePlayerMatchRef(env.run.client, finalCandidate).ignore
+      } yield outcome).catchAll(onEvaluationError(runId, now, ctxRef, env))
+    } yield result
   }
+
+  private def onEvaluationError(
+    runId: RecruitmentRunId,
+    now: Instant,
+    ctxRef: Ref[CandidateContext],
+    env: FilterEnv
+  )(error: Throwable): RIO[PostgresClient, CandidateOutcome] =
+    ctxRef.get.flatMap { latestCtx =>
+      persistCandidateResults(runId, now, latestCtx, CandidateOutcome.Error, env.run.client, Some(error.safeMessage))
+    }.as(CandidateOutcome.Error)
 
   def buildFilterChain(criteria: RecruitmentCriteria): List[RecruitmentFilter] = {
     val base = List(
