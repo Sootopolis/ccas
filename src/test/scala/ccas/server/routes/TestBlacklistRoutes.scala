@@ -89,16 +89,23 @@ object TestBlacklistRoutes extends ZIOSpecDefault {
     }
 
   /** Convenience for GET / DELETE routes that take no body and don't trigger any HTTP fetch. */
-  private def runReadOnly(method: Method, path: String): RIO[Scope & CcasLogger & PostgresClient, Response] =
+  private def runNoBody(method: Method, path: String): RIO[Scope & CcasLogger & PostgresClient, Response] =
     runReq(method, path, body = "", responses = Map.empty)
 
+  /** Decode the response body as a JSON list of [[BlacklistEntryResponse]]. Fails loudly on a non-OK status
+    * so a 5xx with a JSON error envelope surfaces the status rather than a cryptic decode error.
+    */
   private def parseEntries(response: Response): Task[List[BlacklistEntryResponse]] =
-    for {
-      body <- response.body.asString
-      list <- zio.ZIO
-        .fromEither(body.fromJson[List[BlacklistEntryResponse]])
-        .mapError(msg => new IllegalStateException(s"JSON decode failed: $msg"))
-    } yield list
+    if (response.status != Status.Ok) {
+      zio.ZIO.fail(new IllegalStateException(s"unexpected status ${response.status}"))
+    } else {
+      for {
+        body <- response.body.asString
+        list <- zio.ZIO
+          .fromEither(body.fromJson[List[BlacklistEntryResponse]])
+          .mapError(msg => new IllegalStateException(s"JSON decode failed: $msg"))
+      } yield list
+    }
 
   // ==========================================================================
   // Suite: GET /api/blacklist/:clubSlug
@@ -112,14 +119,14 @@ object TestBlacklistRoutes extends ZIOSpecDefault {
 
   private def testGetUnknownClub = test("GET unknown club returns 404") {
     for {
-      response <- runReadOnly(Method.GET, s"/api/blacklist/$otherClubSlug")
+      response <- runNoBody(Method.GET, s"/api/blacklist/$otherClubSlug")
     } yield assertTrue(response.status == Status.NotFound)
   }
 
   private def testGetEmpty = test("GET known club with no entries returns []") {
     for {
       _        <- ensureClub
-      response <- runReadOnly(Method.GET, s"/api/blacklist/$testClubSlug")
+      response <- runNoBody(Method.GET, s"/api/blacklist/$testClubSlug")
       entries  <- parseEntries(response)
     } yield assertTrue(
       response.status == Status.Ok,
@@ -135,7 +142,7 @@ object TestBlacklistRoutes extends ZIOSpecDefault {
       _ <- RecruitmentBlacklist.upsert(
         RecruitmentBlacklist(testClubId, pidA, addedAt, expiresAt = None, reason = Some("spam"))
       )
-      response <- runReadOnly(Method.GET, s"/api/blacklist/$testClubSlug")
+      response <- runNoBody(Method.GET, s"/api/blacklist/$testClubSlug")
       entries  <- parseEntries(response)
     } yield assertTrue(
       response.status == Status.Ok,
@@ -234,14 +241,14 @@ object TestBlacklistRoutes extends ZIOSpecDefault {
 
   private def testDeleteUnknownClub = test("DELETE on unknown club returns 404") {
     for {
-      response <- runReadOnly(Method.DELETE, s"/api/blacklist/$otherClubSlug/anyone")
+      response <- runNoBody(Method.DELETE, s"/api/blacklist/$otherClubSlug/anyone")
     } yield assertTrue(response.status == Status.NotFound)
   }
 
   private def testDeleteUnknownPlayer = test("DELETE on unknown username returns 404") {
     for {
       _        <- ensureClub
-      response <- runReadOnly(Method.DELETE, s"/api/blacklist/$testClubSlug/this-user-does-not-exist")
+      response <- runNoBody(Method.DELETE, s"/api/blacklist/$testClubSlug/this-user-does-not-exist")
     } yield assertTrue(response.status == Status.NotFound)
   }
 
@@ -254,7 +261,7 @@ object TestBlacklistRoutes extends ZIOSpecDefault {
         RecruitmentBlacklist(testClubId, pidB, addedAt, expiresAt = None, reason = None)
       )
       before   <- RecruitmentBlacklist.selectByClub(testClubId)
-      response <- runReadOnly(Method.DELETE, s"/api/blacklist/$testClubSlug/removable-user")
+      response <- runNoBody(Method.DELETE, s"/api/blacklist/$testClubSlug/removable-user")
       after    <- RecruitmentBlacklist.selectByClub(testClubId)
     } yield assertTrue(
       before.exists(_.playerId == pidB),
