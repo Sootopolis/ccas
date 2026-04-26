@@ -128,9 +128,7 @@ object JobRoutes {
                 trigger = RunTrigger.Api,
                 jobRunId = jobRunId
               )
-            val paramsStr = body.toJson
-            val params    = if (paramsStr.length > 1024) paramsStr.take(1024) + "..." else paramsStr
-            runner.submit(JobKind.Recruitment, Some(club.clubId), Some(params), RunTrigger.Api, effect)
+            runner.submit(JobKind.Recruitment, Some(club.clubId), Some(body.toJson), RunTrigger.Api, effect)
               .map(id => JobResult(Some(JobRunId.unwrap(id)), None))
               .catchSome { case e: ConflictException =>
                 ZIO.succeed(JobResult(None, Some(e.getMessage)))
