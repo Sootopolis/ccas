@@ -188,6 +188,16 @@ final class ChessComClient(
       contentType = response.header(Header.ContentType).map(_.mediaType.fullType)
     )
 
+  // If the origin sends an ETag we couldn't parse, the next request goes out without `If-None-Match`
+  // and a 200 comes back instead of a 304. Surfacing a debug log makes the regression visible.
+  private def logEtagParseMiss(response: Response): zio.UIO[Unit] = {
+    val raw   = response.rawHeader("ETag")
+    val typed = response.header(Header.ETag)
+    ZIO.whenDiscard(raw.isDefined && typed.isEmpty)(
+      ZIO.logDebug(s"ETag header present but unparseable by zio-http: ${raw.getOrElse("")}")
+    )
+  }
+
   /** 304 path: bump `fetched_at` and merge any fresh validators or cache-control value from the response. 304s
     * count as a success for the failure window (the origin is reachable and willing to serve us) — the `true`
     * argument to `recordOutcome` keeps the non-429 branch, same as any other non-rate-limit response.
@@ -208,7 +218,8 @@ final class ChessComClient(
         Some(if (directives.noCache) None else directives.maxAgeSeconds)
       else None
     val validators = extractValidators(response)
-    recordOutcome(true) *>
+    logEtagParseMiss(response) *>
+      recordOutcome(true) *>
       statsRef.update(_.incCacheRevalidation) *>
       ApiResponseCache
         .touch(url.encode, Instant.now(), validators.etag, validators.lastModified, maxAgeUpdate, validators.contentType)
@@ -247,7 +258,7 @@ final class ChessComClient(
           )
           .provideEnvironment(ZEnvironment(pgClient))
           .asSome
-    upsertEffect.flatMap { newBodyIdOpt =>
+    logEtagParseMiss(response) *> upsertEffect.flatMap { newBodyIdOpt =>
       val decodeLazy = ZIO.fromEither(jsonDecoder.decodeJson(string)).mapError(JsonDecodingException(_))
       (newBodyIdOpt, conditional.map(_.bodyId)) match {
         case (Some(newBodyId), Some(oldBodyId)) if newBodyId == oldBodyId =>
