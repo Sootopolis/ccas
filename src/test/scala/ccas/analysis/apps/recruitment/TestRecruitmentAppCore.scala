@@ -87,7 +87,7 @@ object TestRecruitmentAppCore extends ZIOSpecDefault {
         runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None)
         loaded     <- RecruitmentRun.selectId(runId)
       } yield assertTrue(
-        runId > 0,
+        runId.value > 0L,
         loaded.isDefined,
         loaded.get.clubId == clubId,
         loaded.get.criteriaId == criteriaId,

@@ -170,6 +170,11 @@ object RefApp extends ZIOAppDefault {
 
   // --- Queries ---
 
+  // selectUnresolvedPlayers and selectUnresolvedClubs share identical retry-window OR-chains
+  // (5 reasons × Cutoffs fields) inside their LEFT JOIN-on clauses. They cannot be DRYed via
+  // a shared Frag because Magnum's sql interpolator only splices DbCodec values, not Frags.
+  // Keep both queries' OR-chains in lockstep when adding/removing reasons or windows.
+
   private def selectUnresolvedPlayers(forceSkipped: Boolean): RIO[PostgresClient, List[UnresolvedPlayer]] =
     if (forceSkipped) {
       connectZIO {

@@ -7,13 +7,14 @@ import com.augustnagro.magnum.*
 import zio.ZIO
 
 import ccas.analysis.tables.RunTrigger.given
+import ccas.analysis.tables.subtypes.HistoryRunId
 import ccas.api.misc.subtypes.{ClubId, JobRunId}
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.connectZIO
 
 final case class HistoryRun(
-  runId: Long,
+  runId: HistoryRunId,
   clubId: ClubId,
   trigger: RunTrigger,
   startedAt: Instant,
@@ -52,15 +53,15 @@ object HistoryRun {
     trigger: RunTrigger,
     startedAt: Instant,
     jobRunId: Option[JobRunId]
-  ): ZIO[PostgresClient, SQLException, Long] =
+  ): ZIO[PostgresClient, SQLException, HistoryRunId] =
     connectZIO {
       sql"""INSERT INTO history_run (club_id, trigger, started_at, job_run_id)
             VALUES ($clubId, $trigger, $startedAt, $jobRunId)
-            RETURNING run_id""".query[Long].run().headOption
+            RETURNING run_id""".query[HistoryRunId].run().headOption
     }.someOrFail(new SQLException("INSERT RETURNING produced no rows"))
 
   def complete(
-    runId: Long,
+    runId: HistoryRunId,
     completedAt: Instant,
     matchesProcessed: Int,
     playersDiscovered: Int,

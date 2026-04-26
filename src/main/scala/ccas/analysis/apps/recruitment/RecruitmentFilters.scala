@@ -1,14 +1,13 @@
 package ccas.analysis.apps.recruitment
 
-import java.time.Instant
-
 import ccas.utils.CcasLogger
 import ccas.utils.sql.PostgresClient
-import zio.{RIO, Ref, ZIO}
+import zio.{Clock, RIO, Ref, ZIO}
 import RecruitmentFilterDefs.*
 import RecruitmentPersistence.*
 
 import ccas.analysis.tables.RecruitmentCriteria
+import ccas.analysis.tables.subtypes.RecruitmentRunId
 import ccas.api.misc.subtypes.Username
 import ccas.utils.errors.safeMessage
 
@@ -17,26 +16,26 @@ private[recruitment] object RecruitmentFilters {
   // --- Public API ---
 
   def evaluateCandidate(
-    runId: Long,
+    runId: RecruitmentRunId,
     username: Username,
     runCtx: RunContext,
     filters: List[RecruitmentFilter]
   ): RIO[CcasLogger & PostgresClient, CandidateOutcome] = {
-    val now          = Instant.now()
     val candidateCtx = CandidateContext.initial(username)
-    val env          = FilterEnv(runCtx.copy(now = now), candidateCtx)
-    def onEvaluationError(ctxRef: Ref[CandidateContext])(error: Throwable): RIO[PostgresClient, CandidateOutcome] =
-      ctxRef.get.flatMap { latestCtx =>
-        persistCandidateResults(runId, now, latestCtx, CandidateOutcome.Error, env.run.client, Some(error.safeMessage))
-      }.as(CandidateOutcome.Error)
-
     for {
+      now <- Clock.instant
+      env    = FilterEnv(runCtx.copy(now = now), candidateCtx)
       ctxRef <- Ref.make(candidateCtx)
       result <- (for {
         (outcome, finalCandidate) <- runFilters(env, filters, ctxRef)
         _                         <- persistCandidateResults(runId, now, finalCandidate, outcome, env.run.client)
         _                         <- writePlayerMatchRef(env.run.client, finalCandidate).ignore
-      } yield outcome).catchAll(onEvaluationError(ctxRef))
+      } yield outcome).catchAll { error =>
+        for {
+          latestCtx <- ctxRef.get
+          _         <- persistCandidateResults(runId, now, latestCtx, CandidateOutcome.Error, env.run.client, Some(error.safeMessage))
+        } yield CandidateOutcome.Error
+      }
     } yield result
   }
 

@@ -7,6 +7,7 @@ import zio.{RIO, ZIO}
 import ccas.analysis.apps.ref.RefHelpers
 import ccas.analysis.apps.PlayerUpdater
 import ccas.analysis.tables.*
+import ccas.analysis.tables.subtypes.RecruitmentRunId
 import ccas.api.misc.subtypes.{PlayerId, Username}
 import ccas.api.player.ApiPlayerMatches
 import ccas.utils.client.ChessComClient
@@ -16,7 +17,7 @@ import ccas.utils.sql.PostgresClient.withTransaction
 private[recruitment] object RecruitmentPersistence {
 
   def persistCandidateResults(
-    runId: Long,
+    runId: RecruitmentRunId,
     now: Instant,
     candidate: CandidateContext,
     outcome: CandidateOutcome,

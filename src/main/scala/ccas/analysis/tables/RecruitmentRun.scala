@@ -7,13 +7,14 @@ import com.augustnagro.magnum.*
 import zio.ZIO
 
 import ccas.analysis.tables.RunTrigger.given
+import ccas.analysis.tables.subtypes.RecruitmentRunId
 import ccas.api.misc.subtypes.{ClubId, JobRunId}
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.connectZIO
 
 final case class RecruitmentRun(
-  runId: Long,
+  runId: RecruitmentRunId,
   clubId: ClubId,
   criteriaId: Long,
   trigger: RunTrigger,
@@ -46,7 +47,7 @@ object RecruitmentRun {
             ON recruitment_run (club_id, started_at DESC)""".update.run()
     }
 
-  def selectId(runId: Long): ZIO[PostgresClient, SQLException, Option[RecruitmentRun]] =
+  def selectId(runId: RecruitmentRunId): ZIO[PostgresClient, SQLException, Option[RecruitmentRun]] =
     connectZIO {
       sql"SELECT $selectCols FROM recruitment_run WHERE run_id = $runId".query[RecruitmentRun].run().headOption
     }
@@ -75,11 +76,11 @@ object RecruitmentRun {
     trigger: RunTrigger,
     startedAt: Instant,
     jobRunId: Option[JobRunId]
-  ): ZIO[PostgresClient, SQLException, Long] =
+  ): ZIO[PostgresClient, SQLException, RecruitmentRunId] =
     connectZIO {
       sql"""INSERT INTO recruitment_run (club_id, criteria_id, trigger, started_at, candidates_found, job_run_id)
             VALUES ($clubId, $criteriaId, $trigger, $startedAt, 0, $jobRunId)
-            RETURNING run_id""".query[Long].run().headOption
+            RETURNING run_id""".query[RecruitmentRunId].run().headOption
     }.someOrFail(new SQLException("INSERT RETURNING produced no rows"))
 
   def update(item: RecruitmentRun): ZIO[PostgresClient, SQLException, Int] =
