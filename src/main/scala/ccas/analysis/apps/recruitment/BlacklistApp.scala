@@ -2,7 +2,7 @@ package ccas.analysis.apps.recruitment
 
 import java.time.{Instant, ZoneOffset}
 
-import zio.{RIO, Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
+import zio.{Clock, RIO, Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
 
 import ccas.analysis.apps.PlayerUpdater
 import ccas.analysis.tables.*
@@ -31,8 +31,11 @@ object BlacklistApp extends ZIOAppDefault {
         case "add" :: clubStr :: usernamesStr :: rest =>
           val usernames = usernamesStr.split(',').map(s => Username.wrap(s.trim)).toList
           val months    = rest.lift(1).map(_.toInt)
-          val expiresAt = months.map(m => Instant.now().atZone(ZoneOffset.UTC).plusMonths(m.toLong).toInstant)
-          addToBlacklist(ClubSlug.wrap(clubStr), usernames, reason = rest.headOption, expiresAt)
+          for {
+            now <- Clock.instant
+            expiresAt = months.map(m => now.atZone(ZoneOffset.UTC).plusMonths(m.toLong).toInstant)
+            _ <- addToBlacklist(ClubSlug.wrap(clubStr), usernames, reason = rest.headOption, expiresAt)
+          } yield ()
         case "list" :: clubStr :: _ =>
           listBlacklist(ClubSlug.wrap(clubStr))
         case "remove" :: clubStr :: usernameStr :: _ =>
@@ -60,7 +63,7 @@ object BlacklistApp extends ZIOAppDefault {
       _ <- ZIO.foreachDiscard(usernames) { username =>
         for {
           apiPlayer <- client.get[ApiPlayer](ApiPlayer.getUrl(username))
-          now = Instant.now()
+          now       <- Clock.instant
           _ <- withTransaction {
             PlayerUpdater.reconcile(apiPlayer, client) *> RecruitmentBlacklist.upsert(
               RecruitmentBlacklist(apiClub.clubId, apiPlayer.playerId, now, expiresAt, reason)
@@ -75,8 +78,8 @@ object BlacklistApp extends ZIOAppDefault {
 
   private def listBlacklist(clubSlug: ClubSlug): RIO[PostgresClient & CcasLogger, Unit] =
     for {
-      club <- Club.selectBySlug(clubSlug).someOrFail(NotFoundException(s"Club not found: $clubSlug"))
-      now = Instant.now()
+      club    <- Club.selectBySlug(clubSlug).someOrFail(NotFoundException(s"Club not found: $clubSlug"))
+      now     <- Clock.instant
       entries <- RecruitmentBlacklist.selectActiveByClub(club.clubId, now)
       _ <-
         if (entries.isEmpty) {
