@@ -32,21 +32,17 @@ object ApiResponseBody {
             )""".update.run()
     }
 
+  // Single-statement upsert: `DO UPDATE` (no-op write of body_hash to itself) is required because
+  // `ON CONFLICT DO NOTHING ... RETURNING` returns no row on conflict — we need a row in every case.
+  // This eliminates the SELECT/INSERT/SELECT race where `deleteOrphans` could prune the row in the gap.
   def ensureBody(body: String): ZIO[PostgresClient, SQLException, ApiResponseBodyId] = {
     val hash = sha256(body)
     connectZIO {
-      sql"SELECT body_id FROM api_response_body WHERE body_hash = $hash"
-        .query[Long].run().headOption
-    }.flatMap {
-      case Some(id) => ZIO.succeed(ApiResponseBodyId.wrap(id))
-      case None => connectZIO {
-        sql"""INSERT INTO api_response_body (body_hash, body) VALUES ($hash, $body)
-              ON CONFLICT (body_hash) DO NOTHING""".update.run()
-        ApiResponseBodyId.wrap(
-          sql"SELECT body_id FROM api_response_body WHERE body_hash = $hash".query[Long].run().head
-        )
-      }
-    }
+      sql"""INSERT INTO api_response_body (body_hash, body) VALUES ($hash, $body)
+            ON CONFLICT (body_hash) DO UPDATE SET body_hash = EXCLUDED.body_hash
+            RETURNING body_id""".query[Long].run().headOption
+    }.someOrFail(new SQLException("INSERT RETURNING produced no rows"))
+      .map(ApiResponseBodyId.wrap)
   }
 
   /** Read a cached body by id. Used by `CacheableResult.Fresh` / `Revalidated` lazy-loading to fetch the body only

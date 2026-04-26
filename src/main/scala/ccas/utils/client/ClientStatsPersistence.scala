@@ -4,6 +4,7 @@ import java.time.Instant
 
 import ccas.analysis.tables.{ClientConfig, ClientStats}
 import ccas.utils.CcasLogger
+import ccas.utils.errors.safeMessage
 import ccas.utils.sql.PostgresClient
 import zio.{Clock, Ref, UIO, ZEnvironment, ZIO}
 
@@ -45,7 +46,9 @@ private[ccas] object ClientStatsPersistence {
           _ <- ClientStats.upsert(row).provideEnvironment(ZEnvironment(ctx.pgClient))
         } yield ()
       }
-    } yield ()).ignore
+    } yield ())
+      .tapError(e => ZIO.logWarning(s"Failed to persist client_stats for session ${ctx.sessionId}: ${e.safeMessage}"))
+      .ignore
 
   /** Final stats flush: upserts the cumulative snapshot, then logs a summary. Called by the scope finalizer. */
   def finalFlush(ctx: ClientStatsFlushContext, logger: CcasLogger): UIO[Unit] =

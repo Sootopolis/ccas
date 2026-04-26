@@ -30,6 +30,8 @@ object PlayerUpdater {
         case Some(conflicting) =>
           client.get[ApiPlayer](ApiPlayer.getUrl(conflicting.username)).flatMap { apiPlayer =>
             if (!conflicting.stateMatches(apiPlayer.username, apiPlayer.status.category, apiPlayer.title)) {
+              // The recursive `since` is a fresh now(), not the caller's `since`: the conflicting player's
+              // state-change is a different event than the caller's, observed at the moment we discover it.
               archiveAndUpdate(
                 conflicting,
                 apiPlayer.username,

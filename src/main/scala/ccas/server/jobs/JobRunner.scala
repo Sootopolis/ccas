@@ -1,11 +1,10 @@
 package ccas.server.jobs
 
 import java.sql.SQLException
-import java.time.Instant
 
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.withTransaction
-import zio.{Fiber, RIO, RLayer, Ref, UIO, ZIO, ZLayer}
+import zio.{Clock, Fiber, RIO, RLayer, Ref, UIO, ZIO, ZLayer}
 
 import ccas.analysis.tables.RunTrigger
 import ccas.api.misc.subtypes.{ClubId, JobRunId}
@@ -79,10 +78,10 @@ object JobRunner {
           for {
             existing <- JobRun.selectRunningForUpdate(kind, clubId)
             _ <- ZIO.whenDiscard(existing.isDefined)(ZIO.fail(conflictError))
-            id     = JobRunId.generate()
-            now    = Instant.now()
+            id   = JobRunId.generate()
+            now <- Clock.instant
             jobRun = JobRun(id, kind, clubId, trigger, JobRunStatus.Running, params, now, None, None)
-            _     <- JobRun.insert(jobRun)
+            _   <- JobRun.insert(jobRun)
           } yield id
         }
         fiber <- runJob(id, effect(Some(id))).fork
@@ -100,15 +99,19 @@ object JobRunner {
     ): UIO[Unit] =
       def onFailure(error: Throwable): UIO[Unit] = {
         val msg = error.safeMessage
-        JobRun.updateStatus(id, JobRunStatus.Failed, Some(Instant.now()), Some(msg))
-          .provideEnvironment(env)
-          .unit.catchAll(e => ZIO.logError(s"Failed to record job failure: ${e.safeMessage}"))
+        Clock.instant.flatMap(now =>
+          JobRun.updateStatus(id, JobRunStatus.Failed, Some(now), Some(msg))
+            .provideEnvironment(env)
+            .unit.catchAll(e => ZIO.logError(s"Failed to record job failure: ${e.safeMessage}"))
+        )
       }
 
       def onSuccess: UIO[Unit] =
-        JobRun.updateStatus(id, JobRunStatus.Completed, Some(Instant.now()), None)
-          .provideEnvironment(env)
-          .unit.catchAll(e => ZIO.logError(s"Failed to record job completion: ${e.safeMessage}"))
+        Clock.instant.flatMap(now =>
+          JobRun.updateStatus(id, JobRunStatus.Completed, Some(now), None)
+            .provideEnvironment(env)
+            .unit.catchAll(e => ZIO.logError(s"Failed to record job completion: ${e.safeMessage}"))
+        )
 
       effect.provideEnvironment(env).foldZIO(onFailure, _ => onSuccess)
 

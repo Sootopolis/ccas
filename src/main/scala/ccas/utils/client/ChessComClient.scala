@@ -17,6 +17,7 @@ import ccas.analysis.tables.{ApiFetchFailure, ApiResponseBody, ApiResponseCache}
 import ccas.analysis.tables.subtypes.ApiResponseBodyId
 import ccas.info.BuildInfo
 import ccas.utils.{CcasLogger, HttpDate, ProgressBar}
+import ccas.utils.errors.safeMessage
 import ccas.utils.json.JsonDecodingException
 
 /** HTTP client for the Chess.com public API with adaptive rate limiting.
@@ -109,6 +110,7 @@ final class ChessComClient(
       ApiFetchFailure
         .insert(ApiFetchFailure(Instant.now(), url.encode, errorType, msg, body))
         .provideEnvironment(ZEnvironment(pgClient))
+        .tapError(dbErr => ZIO.logWarning(s"Failed to record api_fetch_failure for ${url.encode}: ${dbErr.safeMessage}"))
         .ignore
     }
   }
@@ -186,14 +188,24 @@ final class ChessComClient(
       contentType = response.header(Header.ContentType).map(_.mediaType.fullType)
     )
 
+  // If the origin sends an ETag we couldn't parse, the next request goes out without `If-None-Match`
+  // and a 200 comes back instead of a 304. Surfacing a debug log makes the regression visible.
+  private def logEtagParseMiss(response: Response): zio.UIO[Unit] = {
+    val raw   = response.rawHeader("ETag")
+    val typed = response.header(Header.ETag)
+    ZIO.whenDiscard(raw.isDefined && typed.isEmpty)(
+      ZIO.logDebug(s"ETag header present but unparseable by zio-http: ${raw.getOrElse("")}")
+    )
+  }
+
   /** 304 path: bump `fetched_at` and merge any fresh validators or cache-control value from the response. 304s
     * count as a success for the failure window (the origin is reachable and willing to serve us) — the `true`
     * argument to `recordOutcome` keeps the non-429 branch, same as any other non-rate-limit response.
     *
-    * `maxAgeUpdate` is `None` when the 304 carries no `Cache-Control` header at all (preserve the stored value),
-    * or `Some(effectiveMaxAge)` when one is present — `noCache` collapses to `None` inner so the stored `max-age`
-    * is cleared, matching the 200 path at [[handleSuccessBody]]. ETag / Last-Modified / Content-Type use COALESCE
-    * semantics inside [[ApiResponseCache.touch]], so a 304 that omits any of them preserves the stored value.
+    * `maxAgeUpdate` carries the wire-level intent — `Preserve` when no `Cache-Control` header is present,
+    * `Clear` for `no-cache` (matching the 200 path at [[handleSuccessBody]]), and `Overwrite(n)` for
+    * `max-age=n`. ETag / Last-Modified / Content-Type use COALESCE semantics inside [[ApiResponseCache.touch]],
+    * so a 304 that omits any of them preserves the stored value.
     */
   private def handleNotModified[T](
     url: URL,
@@ -201,17 +213,21 @@ final class ChessComClient(
     response: Response
   )(using jsonDecoder: JsonDecoder[T]): Task[CacheableResult[T]] = {
     val directives = parseCacheDirectives(response)
-    val maxAgeUpdate: Option[Option[Long]] =
-      if (response.header(Header.CacheControl).isDefined)
-        Some(if (directives.noCache) None else directives.maxAgeSeconds)
-      else None
+    val maxAgeUpdate: ApiResponseCache.MaxAgeUpdate =
+      if (response.header(Header.CacheControl).isEmpty) ApiResponseCache.MaxAgeUpdate.Preserve
+      else if (directives.noCache) ApiResponseCache.MaxAgeUpdate.Clear
+      else directives.maxAgeSeconds.fold[ApiResponseCache.MaxAgeUpdate](ApiResponseCache.MaxAgeUpdate.Clear)(
+        ApiResponseCache.MaxAgeUpdate.Overwrite(_)
+      )
     val validators = extractValidators(response)
-    recordOutcome(true) *>
-      statsRef.update(_.incCacheRevalidation) *>
-      ApiResponseCache
+    for {
+      _ <- logEtagParseMiss(response)
+      _ <- recordOutcome(true)
+      _ <- statsRef.update(_.incCacheRevalidation)
+      _ <- ApiResponseCache
         .touch(url.encode, Instant.now(), validators.etag, validators.lastModified, maxAgeUpdate, validators.contentType)
         .provideEnvironment(ZEnvironment(pgClient))
-        .as(CacheableResult.Revalidated(meta.bodyId, loadAndDecode[T](url, meta.bodyId)))
+    } yield CacheableResult.Revalidated(meta.bodyId, loadAndDecode[T](url, meta.bodyId))
   }
 
   /** Success path: extract cache-control headers, upsert the response body into the cache (unless `no-store`), and
@@ -245,15 +261,17 @@ final class ChessComClient(
           )
           .provideEnvironment(ZEnvironment(pgClient))
           .asSome
-    upsertEffect.flatMap { newBodyIdOpt =>
-      val decodeLazy = ZIO.fromEither(jsonDecoder.decodeJson(string)).mapError(JsonDecodingException(_))
-      (newBodyIdOpt, conditional.map(_.bodyId)) match {
+    val decodeLazy = ZIO.fromEither(jsonDecoder.decodeJson(string)).mapError(JsonDecodingException(_))
+    for {
+      _            <- logEtagParseMiss(response)
+      newBodyIdOpt <- upsertEffect
+      result <- (newBodyIdOpt, conditional.map(_.bodyId)) match {
         case (Some(newBodyId), Some(oldBodyId)) if newBodyId == oldBodyId =>
           statsRef.update(_.incCacheHit).as(CacheableResult.IdenticalBody(newBodyId, decodeLazy))
         case _ =>
           statsRef.update(_.incCacheMiss) *> decodeLazy.map(CacheableResult.Changed(_))
       }
-    }
+    } yield result
   }
 
   private def parseCacheDirectives(response: Response): ChessComClient.CacheDirectives = {
