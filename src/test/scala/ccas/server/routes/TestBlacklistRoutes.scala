@@ -1,31 +1,43 @@
 package ccas.server.routes
 
+import java.time.Duration
 import java.time.Instant
 import java.time.temporal.ChronoUnit
 
 import com.augustnagro.magnum.sql
-import zio.{RIO, Scope, ZLayer}
+import zio.{Clock, RIO, Scope, ZLayer}
 import zio.http.*
 import zio.json.DecoderOps
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport
+import ccas.analysis.apps.recruitment.RecruitmentTestSupport.{apiClubJson, apiPlayerJson}
 import ccas.analysis.tables.{Club, Player, RecruitmentBlacklist, Tables}
 import ccas.api.misc.enums.PlayerStatusCategory
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
 import ccas.server.routes.BlacklistRoutes.BlacklistEntryResponse
 import ccas.utils.client.ChessComClient
 import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
-import ccas.utils.sql.PostgresClient.connectZIO
+import ccas.utils.sql.PostgresClient.transactZIO
 import ccas.utils.{CcasLogger, TestCcasLogger}
 
 object TestBlacklistRoutes extends ZIOSpecDefault {
 
-  override def spec: Spec[Any, Throwable] = suite("TestBlacklistRoutes")(
+  // FK-aware cleanup: blacklist → player_snapshot → player → club. Run before each test
+  // because the suite shares one schema (FreshSchemaLayer.provideShared). One transaction =
+  // one round-trip and the right shape for batched mutations.
+  private val resetTables = transactZIO {
+    val _ = sql"DELETE FROM recruitment_blacklist".update.run()
+    val _ = sql"DELETE FROM player_snapshot".update.run()
+    val _ = sql"DELETE FROM player".update.run()
+    sql"DELETE FROM club".update.run()
+  }
+
+  override def spec: Spec[Any, Throwable] = (suite("TestBlacklistRoutes")(
     suiteGet,
     suitePost,
     suiteDelete
-  ).provideShared(
+  ) @@ TestAspect.before(resetTables)).provideShared(
     FreshSchemaLayer("test_blacklist_routes", onInit = Tables.ensureTables),
     ZLayer.succeed[CcasLogger](TestCcasLogger.noop),
     Scope.default
@@ -40,16 +52,8 @@ object TestBlacklistRoutes extends ZIOSpecDefault {
   private val pidB          = PlayerId(8102)
   private val pidC          = PlayerId(8103)
   private val pidD          = PlayerId(8104)
+  private val pidE          = PlayerId(8105)
   private val seedAt        = Instant.parse("2026-04-01T00:00:00Z")
-
-  // FK-aware cleanup: blacklist → player_snapshot → player → club. Run before each test
-  // because the suite shares one schema (FreshSchemaLayer.provideShared).
-  private val resetTables = for {
-    _ <- connectZIO { val _ = sql"DELETE FROM recruitment_blacklist".update.run() }
-    _ <- connectZIO { val _ = sql"DELETE FROM player_snapshot".update.run() }
-    _ <- connectZIO { val _ = sql"DELETE FROM player".update.run() }
-    _ <- connectZIO { val _ = sql"DELETE FROM club".update.run() }
-  } yield ()
 
   private val ensureClub = Club.upsert(
     Club(testClubId, seedAt, testClubSlug, "Blacklist Test Club", None, None, None)
@@ -69,20 +73,28 @@ object TestBlacklistRoutes extends ZIOSpecDefault {
     ).addHeader(Header.ContentType(MediaType.application.json))
   }
 
-  /** Run a route request with a fake ChessComClient backed by the given response map. Empty map = 404 for any
-    * fetch (matches the prior `dummyLayer` behaviour for routes that don't make HTTP calls).
+  /** Run a route request with a fake ChessComClient backed by the given response map. An empty map yields 404
+    * for any unmocked URL.
     */
   private def runReq(
     method: Method,
     path: String,
-    body: String = "",
-    responses: Map[String, String] = Map.empty
+    body: String,
+    responses: Map[String, String]
   ): RIO[Scope & CcasLogger & PostgresClient, Response] =
     RecruitmentTestSupport.fakeChessComClient(responses).flatMap { client =>
       BlacklistRoutes.routes
         .runZIO(jsonRequest(method, path, body))
         .provideSomeLayer[Scope & CcasLogger & PostgresClient](ZLayer.succeed[ChessComClient](client))
     }
+
+  private def parseEntries(response: Response): RIO[Any, List[BlacklistEntryResponse]] =
+    for {
+      body <- response.body.asString
+      list <- zio.ZIO
+        .fromEither(body.fromJson[List[BlacklistEntryResponse]])
+        .mapError(msg => new IllegalStateException(s"JSON decode failed: $msg"))
+    } yield list
 
   // ==========================================================================
   // Suite: GET /api/blacklist/:clubSlug
@@ -96,38 +108,31 @@ object TestBlacklistRoutes extends ZIOSpecDefault {
 
   private def testGetUnknownClub = test("GET unknown club returns 404") {
     for {
-      _        <- resetTables
-      response <- runReq(Method.GET, s"/api/blacklist/$otherClubSlug")
+      response <- runReq(Method.GET, s"/api/blacklist/$otherClubSlug", body = "", responses = Map.empty)
     } yield assertTrue(response.status == Status.NotFound)
   }
 
   private def testGetEmpty = test("GET known club with no entries returns []") {
     for {
-      _        <- resetTables
       _        <- ensureClub
-      response <- runReq(Method.GET, s"/api/blacklist/$testClubSlug")
-      body   <- response.body.asString
-      parsed = body.fromJson[List[BlacklistEntryResponse]]
+      response <- runReq(Method.GET, s"/api/blacklist/$testClubSlug", body = "", responses = Map.empty)
+      entries  <- parseEntries(response)
     } yield assertTrue(
       response.status == Status.Ok,
-      parsed == Right(List.empty)
+      entries.isEmpty
     )
   }
 
   private def testGetReturnsEntries = test("GET returns active blacklist entries with username") {
     val addedAt = Instant.parse("2026-04-10T00:00:00Z").truncatedTo(ChronoUnit.MICROS)
     for {
-      _ <- resetTables
       _ <- ensureClub
       _ <- ensurePlayer(pidA, "blacklisted-user")
       _ <- RecruitmentBlacklist.upsert(
         RecruitmentBlacklist(testClubId, pidA, addedAt, expiresAt = None, reason = Some("spam"))
       )
-      response <- runReq(Method.GET, s"/api/blacklist/$testClubSlug")
-      body <- response.body.asString
-      entries <- zio.ZIO
-        .fromEither(body.fromJson[List[BlacklistEntryResponse]])
-        .mapError(msg => new IllegalStateException(s"JSON decode failed: $msg"))
+      response <- runReq(Method.GET, s"/api/blacklist/$testClubSlug", body = "", responses = Map.empty)
+      entries  <- parseEntries(response)
     } yield assertTrue(
       response.status == Status.Ok,
       entries.size == 1,
@@ -150,21 +155,17 @@ object TestBlacklistRoutes extends ZIOSpecDefault {
 
   private def testPostBadJson = test("POST with malformed JSON returns 400") {
     for {
-      _        <- resetTables
-      response <- runReq(Method.POST, "/api/blacklist", "not json")
+      response <- runReq(Method.POST, "/api/blacklist", "not json", Map.empty)
     } yield assertTrue(response.status == Status.BadRequest)
   }
 
   private def testPostAddPersistsEntry = test("POST adds a single player to the blacklist") {
-    import RecruitmentTestSupport.{apiClubJson, apiPlayerJson}
     val responses = Map(
-      s"club/$testClubSlug" -> apiClubJson(testClubId.value, testClubSlug.value),
+      s"club/$testClubSlug"  -> apiClubJson(testClubId.value, testClubSlug.value),
       "player/new-blacklist" -> apiPlayerJson(pidB.value, "new-blacklist")
     )
-    val body =
-      s"""{"clubSlug":"$testClubSlug","usernames":["new-blacklist"],"reason":"test reason"}"""
+    val body = s"""{"clubSlug":"$testClubSlug","usernames":["new-blacklist"],"reason":"test reason"}"""
     for {
-      _        <- resetTables
       response <- runReq(Method.POST, "/api/blacklist", body, responses)
       entries  <- RecruitmentBlacklist.selectByClub(testClubId)
     } yield assertTrue(
@@ -176,16 +177,13 @@ object TestBlacklistRoutes extends ZIOSpecDefault {
   }
 
   private def testPostAddMultipleUsernames = test("POST adds multiple players in one request") {
-    import RecruitmentTestSupport.{apiClubJson, apiPlayerJson}
     val responses = Map(
       s"club/$testClubSlug" -> apiClubJson(testClubId.value, testClubSlug.value),
       "player/multi-a"      -> apiPlayerJson(pidC.value, "multi-a"),
       "player/multi-b"      -> apiPlayerJson(pidD.value, "multi-b")
     )
-    val body =
-      s"""{"clubSlug":"$testClubSlug","usernames":["multi-a","multi-b"]}"""
+    val body = s"""{"clubSlug":"$testClubSlug","usernames":["multi-a","multi-b"]}"""
     for {
-      _        <- resetTables
       response <- runReq(Method.POST, "/api/blacklist", body, responses)
       entries  <- RecruitmentBlacklist.selectByClub(testClubId)
     } yield assertTrue(
@@ -195,23 +193,24 @@ object TestBlacklistRoutes extends ZIOSpecDefault {
     )
   }
 
-  private def testPostAddWithMonthsSetsExpiresAt = test("POST with months sets expiresAt on the entry") {
-    import RecruitmentTestSupport.{apiClubJson, apiPlayerJson}
-    val pidE = PlayerId(8105)
+  private def testPostAddWithMonthsSetsExpiresAt = test("POST with months sets expiresAt ~3 months out") {
     val responses = Map(
       s"club/$testClubSlug" -> apiClubJson(testClubId.value, testClubSlug.value),
       "player/temp-ban"     -> apiPlayerJson(pidE.value, "temp-ban")
     )
-    val body =
-      s"""{"clubSlug":"$testClubSlug","usernames":["temp-ban"],"months":3}"""
+    val body = s"""{"clubSlug":"$testClubSlug","usernames":["temp-ban"],"months":3}"""
     for {
-      _        <- resetTables
+      now      <- Clock.instant
       response <- runReq(Method.POST, "/api/blacklist", body, responses)
       entries  <- RecruitmentBlacklist.selectByClub(testClubId)
       entry = entries.find(_.playerId == pidE)
+      // Catch a regression that sets expiresAt = now (zero-duration ban) by requiring
+      // the stamp to land in a window that brackets ~3 months (lower 85d, upper 95d).
+      lower = now.plus(Duration.ofDays(85))
+      upper = now.plus(Duration.ofDays(95))
     } yield assertTrue(
       response.status == Status.Ok,
-      entry.exists(_.expiresAt.isDefined)
+      entry.flatMap(_.expiresAt).exists(t => t.isAfter(lower) && t.isBefore(upper))
     )
   }
 
@@ -227,30 +226,27 @@ object TestBlacklistRoutes extends ZIOSpecDefault {
 
   private def testDeleteUnknownClub = test("DELETE on unknown club returns 404") {
     for {
-      _        <- resetTables
-      response <- runReq(Method.DELETE, s"/api/blacklist/$otherClubSlug/anyone")
+      response <- runReq(Method.DELETE, s"/api/blacklist/$otherClubSlug/anyone", body = "", responses = Map.empty)
     } yield assertTrue(response.status == Status.NotFound)
   }
 
   private def testDeleteUnknownPlayer = test("DELETE on unknown username returns 404") {
     for {
-      _        <- resetTables
       _        <- ensureClub
-      response <- runReq(Method.DELETE, s"/api/blacklist/$testClubSlug/this-user-does-not-exist")
+      response <- runReq(Method.DELETE, s"/api/blacklist/$testClubSlug/this-user-does-not-exist", body = "", responses = Map.empty)
     } yield assertTrue(response.status == Status.NotFound)
   }
 
   private def testDeleteRemovesEntry = test("DELETE removes blacklist row and returns 204") {
     val addedAt = Instant.parse("2026-04-12T00:00:00Z").truncatedTo(ChronoUnit.MICROS)
     for {
-      _ <- resetTables
       _ <- ensureClub
       _ <- ensurePlayer(pidB, "removable-user")
       _ <- RecruitmentBlacklist.upsert(
         RecruitmentBlacklist(testClubId, pidB, addedAt, expiresAt = None, reason = None)
       )
       before   <- RecruitmentBlacklist.selectByClub(testClubId)
-      response <- runReq(Method.DELETE, s"/api/blacklist/$testClubSlug/removable-user")
+      response <- runReq(Method.DELETE, s"/api/blacklist/$testClubSlug/removable-user", body = "", responses = Map.empty)
       after    <- RecruitmentBlacklist.selectByClub(testClubId)
     } yield assertTrue(
       before.exists(_.playerId == pidB),

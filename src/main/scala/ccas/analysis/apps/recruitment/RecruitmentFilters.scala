@@ -1,7 +1,5 @@
 package ccas.analysis.apps.recruitment
 
-import java.time.Instant
-
 import ccas.utils.CcasLogger
 import ccas.utils.sql.PostgresClient
 import zio.{Clock, RIO, Ref, ZIO}
@@ -32,19 +30,15 @@ private[recruitment] object RecruitmentFilters {
         (outcome, finalCandidate) <- runFilters(env, filters, ctxRef)
         _                         <- persistCandidateResults(runId, now, finalCandidate, outcome, env.run.client)
         _                         <- writePlayerMatchRef(env.run.client, finalCandidate).ignore
-      } yield outcome).catchAll(onEvaluationError(runId, now, ctxRef, env))
+      } yield outcome).catchAll { error =>
+        ctxRef.get
+          .flatMap(latestCtx =>
+            persistCandidateResults(runId, now, latestCtx, CandidateOutcome.Error, env.run.client, Some(error.safeMessage))
+          )
+          .as(CandidateOutcome.Error)
+      }
     } yield result
   }
-
-  private def onEvaluationError(
-    runId: RecruitmentRunId,
-    now: Instant,
-    ctxRef: Ref[CandidateContext],
-    env: FilterEnv
-  )(error: Throwable): RIO[PostgresClient, CandidateOutcome] =
-    ctxRef.get.flatMap { latestCtx =>
-      persistCandidateResults(runId, now, latestCtx, CandidateOutcome.Error, env.run.client, Some(error.safeMessage))
-    }.as(CandidateOutcome.Error)
 
   def buildFilterChain(criteria: RecruitmentCriteria): List[RecruitmentFilter] = {
     val base = List(
