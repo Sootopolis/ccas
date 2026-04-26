@@ -21,10 +21,12 @@ object TestHistoryBoardBuilder extends ZIOSpecDefault {
 
   private def url(s: String): URL = URL.decode(s).toOption.get
 
-  private def boardPlayer(username: String, rating: Short, result: Option[GameResultDetail]): ApiBoardPlayer =
+  private def elo(n: Int): Elo = Elo(n.toShort)
+
+  private def boardPlayer(username: String, rating: Int, result: Option[GameResultDetail]): ApiBoardPlayer =
     ApiBoardPlayer(
       Username(username),
-      Elo(rating),
+      elo(rating),
       result,
       url(s"https://api.chess.com/pub/player/$username")
     )
@@ -57,11 +59,11 @@ object TestHistoryBoardBuilder extends ZIOSpecDefault {
 
   private def suiteFinishedRating = suite("finishedRating")(
     test("returns Some(rating) for a finished player with a result") {
-      val player = boardPlayer("alice", 1500.toShort, Some(GameResultDetail.Win))
-      assertTrue(HistoryBoardBuilder.finishedRating(Right(player)).contains(Elo(1500.toShort)))
+      val player = boardPlayer("alice", 1500, Some(GameResultDetail.Win))
+      assertTrue(HistoryBoardBuilder.finishedRating(Right(player)).contains(elo(1500)))
     },
     test("returns None when player has no result (game not finished)") {
-      val player = boardPlayer("alice", 1500.toShort, None)
+      val player = boardPlayer("alice", 1500, None)
       assertTrue(HistoryBoardBuilder.finishedRating(Right(player)).isEmpty)
     },
     test("returns None for a closed account (URL-only side)") {
@@ -106,8 +108,8 @@ object TestHistoryBoardBuilder extends ZIOSpecDefault {
     },
     test("when team1IsWhite=true ratings come from white→team1, black→team2") {
       val game = boardGame(
-        white = Right(boardPlayer("alice", 1500.toShort, Some(GameResultDetail.Win))),
-        black = Right(boardPlayer("bob", 1300.toShort, Some(GameResultDetail.Checkmated)))
+        white = Right(boardPlayer("alice", 1500, Some(GameResultDetail.Win))),
+        black = Right(boardPlayer("bob", 1300, Some(GameResultDetail.Checkmated)))
       )
       val row = HistoryBoardBuilder.buildGameRow(
         matchId,
@@ -118,8 +120,8 @@ object TestHistoryBoardBuilder extends ZIOSpecDefault {
         boardGame = Some(game)
       ).get
       assertTrue(
-        row.team1Rating.contains(Elo(1500.toShort)),
-        row.team2Rating.contains(Elo(1300.toShort)),
+        row.team1Rating.contains(elo(1500)),
+        row.team2Rating.contains(elo(1300)),
         row.gameId.contains(100L),
         row.startTime.contains(1000L),
         row.endTime.contains(2000L)
@@ -127,8 +129,8 @@ object TestHistoryBoardBuilder extends ZIOSpecDefault {
     },
     test("when team1IsWhite=false ratings flip: white→team2, black→team1") {
       val game = boardGame(
-        white = Right(boardPlayer("carol", 1700.toShort, Some(GameResultDetail.Win))),
-        black = Right(boardPlayer("dave", 1400.toShort, Some(GameResultDetail.Resigned)))
+        white = Right(boardPlayer("carol", 1700, Some(GameResultDetail.Win))),
+        black = Right(boardPlayer("dave", 1400, Some(GameResultDetail.Resigned)))
       )
       val row = HistoryBoardBuilder.buildGameRow(
         matchId,
@@ -139,8 +141,8 @@ object TestHistoryBoardBuilder extends ZIOSpecDefault {
         boardGame = Some(game)
       ).get
       assertTrue(
-        row.team1Rating.contains(Elo(1400.toShort)),
-        row.team2Rating.contains(Elo(1700.toShort))
+        row.team1Rating.contains(elo(1400)),
+        row.team2Rating.contains(elo(1700))
       )
     }
   )

@@ -99,8 +99,10 @@ object TestBlacklistRoutes extends ZIOSpecDefault {
       response <- BlacklistRoutes.routes.runZIO(
         jsonRequest(Method.GET, s"/api/blacklist/$testClubSlug")
       )
-      body    <- response.body.asString
-      entries <- zioFromEither(body.fromJson[List[BlacklistEntryResponse]])
+      body <- response.body.asString
+      entries <- zio.ZIO
+        .fromEither(body.fromJson[List[BlacklistEntryResponse]])
+        .mapError(msg => new IllegalStateException(s"JSON decode failed: $msg"))
     } yield assertTrue(
       response.status == Status.Ok,
       entries.size == 1,
@@ -173,8 +175,4 @@ object TestBlacklistRoutes extends ZIOSpecDefault {
     )
   }
 
-  // --- Helpers ---
-
-  private def zioFromEither[A](e: Either[String, A]): zio.Task[A] =
-    zio.ZIO.fromEither(e).mapError(msg => new RuntimeException(s"JSON decode failed: $msg"))
 }
