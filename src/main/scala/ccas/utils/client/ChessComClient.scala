@@ -17,6 +17,7 @@ import ccas.analysis.tables.{ApiFetchFailure, ApiResponseBody, ApiResponseCache}
 import ccas.analysis.tables.subtypes.ApiResponseBodyId
 import ccas.info.BuildInfo
 import ccas.utils.{CcasLogger, HttpDate, ProgressBar}
+import ccas.utils.errors.safeMessage
 import ccas.utils.json.JsonDecodingException
 
 /** HTTP client for the Chess.com public API with adaptive rate limiting.
@@ -109,6 +110,7 @@ final class ChessComClient(
       ApiFetchFailure
         .insert(ApiFetchFailure(Instant.now(), url.encode, errorType, msg, body))
         .provideEnvironment(ZEnvironment(pgClient))
+        .tapError(dbErr => ZIO.logWarning(s"Failed to record api_fetch_failure for ${url.encode}: ${dbErr.safeMessage}"))
         .ignore
     }
   }
