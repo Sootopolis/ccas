@@ -259,15 +259,17 @@ final class ChessComClient(
           )
           .provideEnvironment(ZEnvironment(pgClient))
           .asSome
-    logEtagParseMiss(response) *> upsertEffect.flatMap { newBodyIdOpt =>
-      val decodeLazy = ZIO.fromEither(jsonDecoder.decodeJson(string)).mapError(JsonDecodingException(_))
-      (newBodyIdOpt, conditional.map(_.bodyId)) match {
+    val decodeLazy = ZIO.fromEither(jsonDecoder.decodeJson(string)).mapError(JsonDecodingException(_))
+    for {
+      _            <- logEtagParseMiss(response)
+      newBodyIdOpt <- upsertEffect
+      result <- (newBodyIdOpt, conditional.map(_.bodyId)) match {
         case (Some(newBodyId), Some(oldBodyId)) if newBodyId == oldBodyId =>
           statsRef.update(_.incCacheHit).as(CacheableResult.IdenticalBody(newBodyId, decodeLazy))
         case _ =>
           statsRef.update(_.incCacheMiss) *> decodeLazy.map(CacheableResult.Changed(_))
       }
-    }
+    } yield result
   }
 
   private def parseCacheDirectives(response: Response): ChessComClient.CacheDirectives = {
