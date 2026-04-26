@@ -5,7 +5,7 @@ import java.time.Instant
 import java.time.temporal.ChronoUnit
 
 import com.augustnagro.magnum.sql
-import zio.{Clock, RIO, Scope, ZLayer}
+import zio.{Clock, RIO, Scope, Task, ZLayer}
 import zio.http.*
 import zio.json.DecoderOps
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
@@ -88,7 +88,11 @@ object TestBlacklistRoutes extends ZIOSpecDefault {
         .provideSomeLayer[Scope & CcasLogger & PostgresClient](ZLayer.succeed[ChessComClient](client))
     }
 
-  private def parseEntries(response: Response): RIO[Any, List[BlacklistEntryResponse]] =
+  /** Convenience for GET / DELETE routes that take no body and don't trigger any HTTP fetch. */
+  private def runReadOnly(method: Method, path: String): RIO[Scope & CcasLogger & PostgresClient, Response] =
+    runReq(method, path, body = "", responses = Map.empty)
+
+  private def parseEntries(response: Response): Task[List[BlacklistEntryResponse]] =
     for {
       body <- response.body.asString
       list <- zio.ZIO
@@ -108,14 +112,14 @@ object TestBlacklistRoutes extends ZIOSpecDefault {
 
   private def testGetUnknownClub = test("GET unknown club returns 404") {
     for {
-      response <- runReq(Method.GET, s"/api/blacklist/$otherClubSlug", body = "", responses = Map.empty)
+      response <- runReadOnly(Method.GET, s"/api/blacklist/$otherClubSlug")
     } yield assertTrue(response.status == Status.NotFound)
   }
 
   private def testGetEmpty = test("GET known club with no entries returns []") {
     for {
       _        <- ensureClub
-      response <- runReq(Method.GET, s"/api/blacklist/$testClubSlug", body = "", responses = Map.empty)
+      response <- runReadOnly(Method.GET, s"/api/blacklist/$testClubSlug")
       entries  <- parseEntries(response)
     } yield assertTrue(
       response.status == Status.Ok,
@@ -131,7 +135,7 @@ object TestBlacklistRoutes extends ZIOSpecDefault {
       _ <- RecruitmentBlacklist.upsert(
         RecruitmentBlacklist(testClubId, pidA, addedAt, expiresAt = None, reason = Some("spam"))
       )
-      response <- runReq(Method.GET, s"/api/blacklist/$testClubSlug", body = "", responses = Map.empty)
+      response <- runReadOnly(Method.GET, s"/api/blacklist/$testClubSlug")
       entries  <- parseEntries(response)
     } yield assertTrue(
       response.status == Status.Ok,
@@ -186,10 +190,12 @@ object TestBlacklistRoutes extends ZIOSpecDefault {
     for {
       response <- runReq(Method.POST, "/api/blacklist", body, responses)
       entries  <- RecruitmentBlacklist.selectByClub(testClubId)
+      entryC = entries.find(_.playerId == pidC)
+      entryD = entries.find(_.playerId == pidD)
     } yield assertTrue(
       response.status == Status.Ok,
-      entries.exists(_.playerId == pidC),
-      entries.exists(_.playerId == pidD)
+      entryC.exists(e => e.reason.isEmpty && e.expiresAt.isEmpty),
+      entryD.exists(e => e.reason.isEmpty && e.expiresAt.isEmpty)
     )
   }
 
@@ -204,8 +210,10 @@ object TestBlacklistRoutes extends ZIOSpecDefault {
       response <- runReq(Method.POST, "/api/blacklist", body, responses)
       entries  <- RecruitmentBlacklist.selectByClub(testClubId)
       entry = entries.find(_.playerId == pidE)
-      // Catch a regression that sets expiresAt = now (zero-duration ban) by requiring
-      // the stamp to land in a window that brackets ~3 months (lower 85d, upper 95d).
+      // Window brackets ~3 months. Wide because (a) the SUT's `Clock.instant` runs a few
+      // millis after the test's `now`, and (b) `plusMonths(3)` yields a calendar-arithmetic
+      // value (~90-92 days depending on the month). 85d / 95d absorbs both. Don't tighten
+      // without addressing both sources of skew first.
       lower = now.plus(Duration.ofDays(85))
       upper = now.plus(Duration.ofDays(95))
     } yield assertTrue(
@@ -226,14 +234,14 @@ object TestBlacklistRoutes extends ZIOSpecDefault {
 
   private def testDeleteUnknownClub = test("DELETE on unknown club returns 404") {
     for {
-      response <- runReq(Method.DELETE, s"/api/blacklist/$otherClubSlug/anyone", body = "", responses = Map.empty)
+      response <- runReadOnly(Method.DELETE, s"/api/blacklist/$otherClubSlug/anyone")
     } yield assertTrue(response.status == Status.NotFound)
   }
 
   private def testDeleteUnknownPlayer = test("DELETE on unknown username returns 404") {
     for {
       _        <- ensureClub
-      response <- runReq(Method.DELETE, s"/api/blacklist/$testClubSlug/this-user-does-not-exist", body = "", responses = Map.empty)
+      response <- runReadOnly(Method.DELETE, s"/api/blacklist/$testClubSlug/this-user-does-not-exist")
     } yield assertTrue(response.status == Status.NotFound)
   }
 
@@ -246,7 +254,7 @@ object TestBlacklistRoutes extends ZIOSpecDefault {
         RecruitmentBlacklist(testClubId, pidB, addedAt, expiresAt = None, reason = None)
       )
       before   <- RecruitmentBlacklist.selectByClub(testClubId)
-      response <- runReq(Method.DELETE, s"/api/blacklist/$testClubSlug/removable-user", body = "", responses = Map.empty)
+      response <- runReadOnly(Method.DELETE, s"/api/blacklist/$testClubSlug/removable-user")
       after    <- RecruitmentBlacklist.selectByClub(testClubId)
     } yield assertTrue(
       before.exists(_.playerId == pidB),

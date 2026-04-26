@@ -31,11 +31,10 @@ private[recruitment] object RecruitmentFilters {
         _                         <- persistCandidateResults(runId, now, finalCandidate, outcome, env.run.client)
         _                         <- writePlayerMatchRef(env.run.client, finalCandidate).ignore
       } yield outcome).catchAll { error =>
-        ctxRef.get
-          .flatMap(latestCtx =>
-            persistCandidateResults(runId, now, latestCtx, CandidateOutcome.Error, env.run.client, Some(error.safeMessage))
-          )
-          .as(CandidateOutcome.Error)
+        for {
+          latestCtx <- ctxRef.get
+          _         <- persistCandidateResults(runId, now, latestCtx, CandidateOutcome.Error, env.run.client, Some(error.safeMessage))
+        } yield CandidateOutcome.Error
       }
     } yield result
   }
