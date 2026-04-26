@@ -512,7 +512,7 @@ object TestClubMatchSql extends ZIOSpecDefault {
         matchesProcessed = 42, playersDiscovered = 7,
         refreshMatchUnchanged = 3, seedClubMatchesUnchanged = 1, seedPlayerMatchesUnchanged = 5
       )
-    } yield assertTrue(runId > 0L)
+    } yield assertTrue(runId.value > 0L)
   }
 
   // --- UnresolvedBoardPlayer tests ---

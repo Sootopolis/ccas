@@ -7,6 +7,7 @@ import zio.{Clock, RIO, Ref, Scope, ZEnvironment, ZIO, ZIOAppArgs, ZIOAppDefault
 import ccas.analysis.apps.membership.MembershipApp
 import ccas.analysis.apps.ref.RefHelpers
 import ccas.analysis.tables.*
+import ccas.analysis.tables.subtypes.RecruitmentRunId
 import ccas.api.club.{ApiClub, ApiClubMatches, ApiClubMembers}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId, PlayerId, Username}
 import ccas.api.player.ApiPlayer
@@ -436,6 +437,7 @@ object RecruitmentApp extends ZIOAppDefault {
         case Some(id) =>
           ZIO.attempt(id.toLong)
             .orElseFail(BadRequestException(s"Invalid run ID: '$id' (expected a number)"))
+            .map(RecruitmentRunId.wrap)
             .flatMap(RecruitmentRun.selectId)
             .someOrFail(NotFoundException(s"Run $id not found"))
         case None =>

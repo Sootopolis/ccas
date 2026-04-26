@@ -7,6 +7,7 @@ import zio.{durationInt, Promise, RIO, Ref, Scope, Semaphore, ZIO}
 import zio.http.*
 
 import ccas.analysis.tables.*
+import ccas.analysis.tables.subtypes.RecruitmentRunId
 import ccas.api.club.ApiClubMatches
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username}
 import ccas.utils.client.{ChessComClient, ClientStatsAccumulator, TestChessComClientSupport}
@@ -499,7 +500,7 @@ object RecruitmentTestSupport {
     */
   def evalCandidates(
     client: ChessComClient,
-    runId: Long,
+    runId: RecruitmentRunId,
     candidates: List[Username],
     criteria: RecruitmentCriteria,
     target: Int = 30

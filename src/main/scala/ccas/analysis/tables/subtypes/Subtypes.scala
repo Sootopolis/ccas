@@ -23,3 +23,24 @@ object ApiResponseCacheId extends LongCompanion {
   override protected def validateRaw(raw: Long): Either[String, Long] =
     Either.cond(raw > 0L, raw, s"$name must be > 0")
 }
+
+type RecruitmentRunId = RecruitmentRunId.Type
+
+object RecruitmentRunId extends LongCompanion {
+  override protected def validateRaw(raw: Long): Either[String, Long] =
+    Either.cond(raw > 0L, raw, s"$name must be > 0")
+}
+
+type HistoryRunId = HistoryRunId.Type
+
+object HistoryRunId extends LongCompanion {
+  override protected def validateRaw(raw: Long): Either[String, Long] =
+    Either.cond(raw > 0L, raw, s"$name must be > 0")
+}
+
+type MembershipRunId = MembershipRunId.Type
+
+object MembershipRunId extends LongCompanion {
+  override protected def validateRaw(raw: Long): Either[String, Long] =
+    Either.cond(raw > 0L, raw, s"$name must be > 0")
+}

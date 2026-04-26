@@ -8,6 +8,7 @@ import zio.http.*
 
 import ccas.analysis.apps.recruitment.CandidateOutcome
 import ccas.analysis.tables.{Club, ClubMember, Player, PlayerMatchRef, PlayerSnapshot, RecruitmentCandidate}
+import ccas.analysis.tables.subtypes.RecruitmentRunId
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId}
 import ccas.utils.client.{ChessComClient, TestChessComClientSupport}
 import ccas.utils.sql.PostgresClient
@@ -103,7 +104,7 @@ object TestMembershipAppSupport {
       runId <- connectZIO {
         sql"""INSERT INTO recruitment_run (club_id, criteria_id, trigger, started_at, candidates_found)
               VALUES ($forClubId, $criteriaId, 'Cli', $evaluatedAt, 1)
-              RETURNING run_id""".query[Long].run().head
+              RETURNING run_id""".query[RecruitmentRunId].run().head
       }
       _ <- RecruitmentCandidate.insert(
         RecruitmentCandidate(runId, playerId, evaluatedAt, CandidateOutcome.Invited, None)

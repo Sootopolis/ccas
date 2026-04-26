@@ -7,6 +7,7 @@ import HistoryUtils.*
 
 import ccas.analysis.apps.membership.MembershipApp
 import ccas.analysis.tables.*
+import ccas.analysis.tables.subtypes.HistoryRunId
 import ccas.api.misc.subtypes.*
 import ccas.utils.{display, CcasLogger, OutputFile}
 import ccas.utils.client.{ChessComClient, HttpClientLayer}
@@ -110,7 +111,7 @@ object HistoryApp extends ZIOAppDefault {
     queriedIds: Set[PlayerId],
     ctx: ProcessingContext,
     startedAt: Instant,
-    runId: Long
+    runId: HistoryRunId
   )
 
   private def discoverBatch(
@@ -302,7 +303,7 @@ object HistoryApp extends ZIOAppDefault {
 
   private def finalizeInterrupted(
     ctx: ProcessingContext,
-    runId: Long,
+    runId: HistoryRunId,
     startedAt: Instant,
     clubSlug: ClubSlug,
     memberSeed: MemberSeedResult,

@@ -8,13 +8,14 @@ import zio.ZIO
 
 import ccas.analysis.apps.recruitment.CandidateOutcome
 import ccas.analysis.apps.recruitment.CandidateOutcome.given
+import ccas.analysis.tables.subtypes.RecruitmentRunId
 import ccas.api.misc.subtypes.{ClubId, PlayerId}
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.{connectZIO, transactZIO}
 
 final case class RecruitmentCandidate(
-  runId: Long,
+  runId: RecruitmentRunId,
   playerId: PlayerId,
   evaluatedAt: Instant,
   outcome: CandidateOutcome,
@@ -44,12 +45,12 @@ object RecruitmentCandidate {
             ON recruitment_candidate (player_id, outcome, evaluated_at DESC)""".update.run()
     }
 
-  def selectByRun(runId: Long): ZIO[PostgresClient, SQLException, List[RecruitmentCandidate]] =
+  def selectByRun(runId: RecruitmentRunId): ZIO[PostgresClient, SQLException, List[RecruitmentCandidate]] =
     connectZIO {
       sql"SELECT $selectCols FROM recruitment_candidate WHERE run_id = $runId".query[RecruitmentCandidate].run().toList
     }
 
-  def selectInvitedByRun(runId: Long): ZIO[PostgresClient, SQLException, List[RecruitmentCandidate]] =
+  def selectInvitedByRun(runId: RecruitmentRunId): ZIO[PostgresClient, SQLException, List[RecruitmentCandidate]] =
     connectZIO {
       val invited = CandidateOutcome.Invited.toString
       sql"SELECT $selectCols FROM recruitment_candidate WHERE run_id = $runId AND outcome = $invited"
@@ -100,13 +101,13 @@ object RecruitmentCandidate {
         .query[RecruitmentCandidate].run().toList
     }
 
-  def selectCountByRun(runId: Long): ZIO[PostgresClient, SQLException, Int] =
+  def selectCountByRun(runId: RecruitmentRunId): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"SELECT COUNT(*) FROM recruitment_candidate WHERE run_id = $runId"
         .query[Int].run().headOption
     }.someOrFail(new SQLException("COUNT query produced no rows"))
 
-  def selectDeferredCountByRun(runId: Long): ZIO[PostgresClient, SQLException, Int] =
+  def selectDeferredCountByRun(runId: RecruitmentRunId): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       val deferred = CandidateOutcome.Deferred.toString
       sql"SELECT COUNT(*) FROM recruitment_candidate WHERE run_id = $runId AND outcome = $deferred"
@@ -149,7 +150,7 @@ object RecruitmentCandidate {
       }
     }
 
-  def updateOutcome(runId: Long, playerId: PlayerId, outcome: CandidateOutcome): ZIO[PostgresClient, SQLException, Int] =
+  def updateOutcome(runId: RecruitmentRunId, playerId: PlayerId, outcome: CandidateOutcome): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""UPDATE recruitment_candidate SET outcome = ${outcome}
             WHERE run_id = $runId AND player_id = $playerId""".update.run()

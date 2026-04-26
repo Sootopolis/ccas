@@ -7,13 +7,14 @@ import com.augustnagro.magnum.*
 import zio.ZIO
 
 import ccas.analysis.tables.RunTrigger.given
+import ccas.analysis.tables.subtypes.MembershipRunId
 import ccas.api.misc.subtypes.{ClubId, JobRunId}
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.connectZIO
 
 final case class MembershipRun(
-  runId: Long,
+  runId: MembershipRunId,
   clubId: ClubId,
   trigger: RunTrigger,
   startedAt: Instant,
@@ -58,14 +59,14 @@ object MembershipRun {
     trigger: RunTrigger,
     startedAt: Instant,
     jobRunId: Option[JobRunId]
-  ): ZIO[PostgresClient, SQLException, Long] =
+  ): ZIO[PostgresClient, SQLException, MembershipRunId] =
     connectZIO {
       sql"""INSERT INTO membership_run (club_id, trigger, started_at, job_run_id)
             VALUES ($clubId, $trigger, $startedAt, $jobRunId)
-            RETURNING run_id""".query[Long].run().headOption
+            RETURNING run_id""".query[MembershipRunId].run().headOption
     }.someOrFail(new SQLException("INSERT RETURNING produced no rows"))
 
-  def complete(runId: Long, completedAt: Instant): ZIO[PostgresClient, SQLException, Int] =
+  def complete(runId: MembershipRunId, completedAt: Instant): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""UPDATE membership_run SET completed_at = $completedAt
             WHERE run_id = $runId""".update.run()

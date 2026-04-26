@@ -7,6 +7,7 @@ import RecruitmentFilterDefs.*
 import RecruitmentPersistence.*
 
 import ccas.analysis.tables.RecruitmentCriteria
+import ccas.analysis.tables.subtypes.RecruitmentRunId
 import ccas.api.misc.subtypes.Username
 import ccas.utils.errors.safeMessage
 
@@ -15,7 +16,7 @@ private[recruitment] object RecruitmentFilters {
   // --- Public API ---
 
   def evaluateCandidate(
-    runId: Long,
+    runId: RecruitmentRunId,
     username: Username,
     runCtx: RunContext,
     filters: List[RecruitmentFilter]

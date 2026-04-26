@@ -7,6 +7,7 @@ import zio.{RIO, Ref}
 import zio.http.URL
 
 import ccas.analysis.tables.{PlayerRecruitmentCache, RecruitmentCriteria}
+import ccas.analysis.tables.subtypes.RecruitmentRunId
 import ccas.api.misc.enums.GameResultDetail
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
 import ccas.api.player.{ApiPlayer, ApiPlayerClubs, ApiPlayerMatches}
@@ -108,7 +109,7 @@ private[recruitment] def isGrim(s: SourceState): Boolean = s.consecutiveRejects 
 // --- ExploreContext: bundles constant parameters across explore loop recursion ---
 
 private[recruitment] case class ExploreContext(
-  runId: Long,
+  runId: RecruitmentRunId,
   clubSlug: ClubSlug,
   filters: List[RecruitmentFilter],
   runCtx: RunContext,
