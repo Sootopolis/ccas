@@ -24,6 +24,10 @@ final case class RecruitmentCandidate(
 object RecruitmentCandidate {
   private val selectCols = SqlLiteral("run_id, player_id, evaluated_at, outcome, rejection_reason")
 
+  private val selectColsRc = SqlLiteral(
+    "rc.run_id, rc.player_id, rc.evaluated_at, rc.outcome, rc.rejection_reason"
+  )
+
   def createTable: ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""CREATE TABLE IF NOT EXISTS recruitment_candidate (
@@ -58,10 +62,7 @@ object RecruitmentCandidate {
   ): ZIO[PostgresClient, SQLException, Option[RecruitmentCandidate]] =
     connectZIO {
       val invited = CandidateOutcome.Invited.toString
-      val selectColsQualified = SqlLiteral(
-        "rc.run_id, rc.player_id, rc.evaluated_at, rc.outcome, rc.rejection_reason"
-      )
-      sql"""SELECT $selectColsQualified FROM recruitment_candidate rc
+      sql"""SELECT $selectColsRc FROM recruitment_candidate rc
             JOIN recruitment_run rr ON rc.run_id = rr.run_id
             WHERE rc.player_id = $playerId AND rr.club_id = $clubId AND rc.outcome = $invited
             ORDER BY rc.evaluated_at DESC LIMIT 1""".query[RecruitmentCandidate].run().headOption
@@ -74,10 +75,7 @@ object RecruitmentCandidate {
   ): ZIO[PostgresClient, SQLException, Option[RecruitmentCandidate]] =
     connectZIO {
       val rejected = CandidateOutcome.Rejected.toString
-      val selectColsQualified = SqlLiteral(
-        "rc.run_id, rc.player_id, rc.evaluated_at, rc.outcome, rc.rejection_reason"
-      )
-      sql"""SELECT $selectColsQualified FROM recruitment_candidate rc
+      sql"""SELECT $selectColsRc FROM recruitment_candidate rc
             JOIN recruitment_run rr ON rc.run_id = rr.run_id
             WHERE rc.player_id = $playerId AND rr.club_id = $clubId
               AND rr.criteria_id IN (
@@ -90,8 +88,7 @@ object RecruitmentCandidate {
   def selectInvitedToday(clubId: ClubId, alias: String): ZIO[PostgresClient, SQLException, List[RecruitmentCandidate]] =
     connectZIO {
       val invited = CandidateOutcome.Invited.toString
-      sql"""SELECT rc.run_id, rc.player_id, rc.evaluated_at, rc.outcome, rc.rejection_reason
-            FROM recruitment_candidate rc
+      sql"""SELECT $selectColsRc FROM recruitment_candidate rc
             JOIN recruitment_run rr ON rc.run_id = rr.run_id
             WHERE rr.club_id = $clubId AND rr.criteria_id IN (
               SELECT criteria_id FROM recruitment_alias WHERE club_id = $clubId AND alias = $alias
@@ -122,10 +119,7 @@ object RecruitmentCandidate {
       val deferred = CandidateOutcome.Deferred.toString
       val invited  = CandidateOutcome.Invited.toString
       val rejected = CandidateOutcome.Rejected.toString
-      val selectColsQualified = SqlLiteral(
-        "rc.run_id, rc.player_id, rc.evaluated_at, rc.outcome, rc.rejection_reason"
-      )
-      sql"""SELECT $selectColsQualified FROM recruitment_candidate rc
+      sql"""SELECT $selectColsRc FROM recruitment_candidate rc
             JOIN recruitment_run rr ON rc.run_id = rr.run_id
             WHERE rr.club_id = $clubId AND rc.outcome = $deferred
               AND NOT EXISTS (
