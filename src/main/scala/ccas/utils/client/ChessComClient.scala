@@ -202,10 +202,10 @@ final class ChessComClient(
     * count as a success for the failure window (the origin is reachable and willing to serve us) — the `true`
     * argument to `recordOutcome` keeps the non-429 branch, same as any other non-rate-limit response.
     *
-    * `maxAgeUpdate` is `None` when the 304 carries no `Cache-Control` header at all (preserve the stored value),
-    * or `Some(effectiveMaxAge)` when one is present — `noCache` collapses to `None` inner so the stored `max-age`
-    * is cleared, matching the 200 path at [[handleSuccessBody]]. ETag / Last-Modified / Content-Type use COALESCE
-    * semantics inside [[ApiResponseCache.touch]], so a 304 that omits any of them preserves the stored value.
+    * `maxAgeUpdate` carries the wire-level intent — `Preserve` when no `Cache-Control` header is present,
+    * `Clear` for `no-cache` (matching the 200 path at [[handleSuccessBody]]), and `Overwrite(n)` for
+    * `max-age=n`. ETag / Last-Modified / Content-Type use COALESCE semantics inside [[ApiResponseCache.touch]],
+    * so a 304 that omits any of them preserves the stored value.
     */
   private def handleNotModified[T](
     url: URL,
@@ -213,10 +213,12 @@ final class ChessComClient(
     response: Response
   )(using jsonDecoder: JsonDecoder[T]): Task[CacheableResult[T]] = {
     val directives = parseCacheDirectives(response)
-    val maxAgeUpdate: Option[Option[Long]] =
-      if (response.header(Header.CacheControl).isDefined)
-        Some(if (directives.noCache) None else directives.maxAgeSeconds)
-      else None
+    val maxAgeUpdate: ApiResponseCache.MaxAgeUpdate =
+      if (response.header(Header.CacheControl).isEmpty) ApiResponseCache.MaxAgeUpdate.Preserve
+      else if (directives.noCache) ApiResponseCache.MaxAgeUpdate.Clear
+      else directives.maxAgeSeconds.fold[ApiResponseCache.MaxAgeUpdate](ApiResponseCache.MaxAgeUpdate.Clear)(
+        ApiResponseCache.MaxAgeUpdate.Overwrite(_)
+      )
     val validators = extractValidators(response)
     for {
       _ <- logEtagParseMiss(response)

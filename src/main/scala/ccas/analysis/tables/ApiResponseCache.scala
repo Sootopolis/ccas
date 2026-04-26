@@ -89,20 +89,28 @@ object ApiResponseCache {
   /** 304 Not Modified refresh: bumps `fetched_at` and merges any fresh validators / cache-control values from the
     * 304 response. `etag`, `lastModified`, and `contentType` use COALESCE semantics — a `Some` overwrites, a `None`
     * preserves the stored value — so a 304 that omits those headers (RFC 7232 §4.1 only requires ETag among them)
-    * leaves the entry untouched. `maxAgeUpdate` uses a nested `Option` to distinguish three cases: outer `None`
-    * preserves the stored value (no `Cache-Control` header at all), `Some(None)` clears it to NULL (`Cache-Control:
-    * no-cache` is honoured the same way as on 200 responses), and `Some(Some(n))` overwrites with a fresh `max-age`.
+    * leaves the entry untouched. `maxAgeUpdate` is a [[MaxAgeUpdate]] tri-state covering the three wire-level
+    * distinctions (no `Cache-Control` header / `no-cache` / `max-age=n`).
     */
   def touch(
     url: String,
     fetchedAt: Instant,
     etag: Option[String],
     lastModified: Option[Instant],
-    maxAgeUpdate: Option[Option[Long]],
+    maxAgeUpdate: MaxAgeUpdate,
     contentType: Option[String]
-  ): ZIO[PostgresClient, SQLException, Int] =
+  ): ZIO[PostgresClient, SQLException, Int] = {
+    def writeMaxAge(newMaxAge: Option[Long]) = connectZIO {
+      sql"""UPDATE api_response_cache SET
+              fetched_at      = $fetchedAt,
+              etag            = COALESCE($etag, etag),
+              last_modified   = COALESCE($lastModified, last_modified),
+              max_age_seconds = $newMaxAge,
+              content_type    = COALESCE($contentType, content_type)
+            WHERE url = $url""".update.run()
+    }
     maxAgeUpdate match {
-      case None =>
+      case MaxAgeUpdate.Preserve =>
         connectZIO {
           sql"""UPDATE api_response_cache SET
                   fetched_at    = $fetchedAt,
@@ -111,17 +119,19 @@ object ApiResponseCache {
                   content_type  = COALESCE($contentType, content_type)
                 WHERE url = $url""".update.run()
         }
-      case Some(newMaxAge) =>
-        connectZIO {
-          sql"""UPDATE api_response_cache SET
-                  fetched_at      = $fetchedAt,
-                  etag            = COALESCE($etag, etag),
-                  last_modified   = COALESCE($lastModified, last_modified),
-                  max_age_seconds = $newMaxAge,
-                  content_type    = COALESCE($contentType, content_type)
-                WHERE url = $url""".update.run()
-        }
+      case MaxAgeUpdate.Clear           => writeMaxAge(None)
+      case MaxAgeUpdate.Overwrite(secs) => writeMaxAge(Some(secs))
     }
+  }
+
+  /** Three-state directive for `max_age_seconds` on a 304 touch. Encodes the wire-level distinction between
+    * (1) no `Cache-Control` header at all, (2) `Cache-Control: no-cache`, and (3) `Cache-Control: max-age=n`.
+    */
+  enum MaxAgeUpdate {
+    case Preserve
+    case Clear
+    case Overwrite(seconds: Long)
+  }
 
   /** Drop a cache entry. Used on JSON decode failures (schema drift) so the next request refetches over the wire. */
   def invalidate(url: String): ZIO[PostgresClient, SQLException, Int] =

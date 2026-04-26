@@ -142,12 +142,12 @@ object TestApiResponseCacheSql extends ZIOSpecDefault {
       )
     }
 
-  private def testTouchUpdatesFetchedAtOnly = test("touch with all Nones bumps fetched_at and preserves validators") {
+  private def testTouchUpdatesFetchedAtOnly = test("touch with MaxAgeUpdate.Preserve bumps fetched_at and preserves validators") {
     for {
       before  <- ApiResponseCache.lookupMeta(urlA)
       // Passing None for each optional field exercises the COALESCE path in `touch`: stored validators and
       // max_age_seconds must survive unchanged when the 304 response carried none of those headers.
-      touched <- ApiResponseCache.touch(urlA, Times.t2, None, None, None, None)
+      touched <- ApiResponseCache.touch(urlA, Times.t2, None, None, ApiResponseCache.MaxAgeUpdate.Preserve, None)
       after   <- ApiResponseCache.lookupMeta(urlA)
     } yield assertTrue(
       touched == 1,
@@ -162,9 +162,9 @@ object TestApiResponseCacheSql extends ZIOSpecDefault {
   }
 
   private def testTouchOverwritesMaxAgeWhenUpdateProvided =
-    test("touch with maxAgeUpdate=Some(Some(n)) overwrites stored max_age_seconds") {
+    test("touch with MaxAgeUpdate.Overwrite overwrites stored max_age_seconds") {
       for {
-        touched <- ApiResponseCache.touch(urlA, Times.t2, None, None, Some(Some(9999L)), None)
+        touched <- ApiResponseCache.touch(urlA, Times.t2, None, None, ApiResponseCache.MaxAgeUpdate.Overwrite(9999L), None)
         after   <- ApiResponseCache.lookupMeta(urlA)
       } yield assertTrue(
         touched == 1,
@@ -173,9 +173,9 @@ object TestApiResponseCacheSql extends ZIOSpecDefault {
     }
 
   private def testTouchClearsMaxAgeOnNoCache =
-    test("touch with maxAgeUpdate=Some(None) clears max_age_seconds to NULL (no-cache semantics)") {
+    test("touch with MaxAgeUpdate.Clear clears max_age_seconds to NULL (no-cache semantics)") {
       for {
-        touched <- ApiResponseCache.touch(urlA, Times.t2, None, None, Some(None), None)
+        touched <- ApiResponseCache.touch(urlA, Times.t2, None, None, ApiResponseCache.MaxAgeUpdate.Clear, None)
         after   <- ApiResponseCache.lookupMeta(urlA)
       } yield assertTrue(
         touched == 1,
