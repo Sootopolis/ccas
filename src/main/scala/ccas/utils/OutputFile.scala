@@ -1,6 +1,6 @@
 package ccas.utils
 
-import java.nio.file.{Files, Path, Paths}
+import java.nio.file.{Files, NoSuchFileException, Path, Paths}
 import java.time.format.DateTimeFormatter
 import java.time.LocalDateTime
 import scala.util.Using
@@ -42,7 +42,9 @@ object OutputFile {
           .filter(p => Files.isRegularFile(p) && p.getFileName.toString.endsWith(suffix))
           .forEach { p =>
             Files.createDirectories(archiveDir)
-            Files.move(p, archiveDir.resolve(p.getFileName)): Unit
+            // A concurrent write to the same dir may have already moved this file; tolerate the race.
+            try { Files.move(p, archiveDir.resolve(p.getFileName)): Unit }
+            catch { case _: NoSuchFileException => () }
           }
       }: Unit
     }
