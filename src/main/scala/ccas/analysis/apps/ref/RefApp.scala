@@ -7,7 +7,7 @@ import zio.{Clock, RIO, Ref, Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
 import RefUtils.*
 
 import ccas.analysis.tables.{ClubRefSkip, PlayerRefSkip, PlayerTournamentRef, SkipCount, Tables}
-import ccas.utils.{display, CcasLogger, OutputFile}
+import ccas.utils.{display, ApiConcurrency, CcasLogger, OutputFile}
 import ccas.utils.client.{ChessComClient, HttpClientLayer}
 import ccas.utils.errors.BadRequestException
 import ccas.utils.sql.DbCodecs.given
@@ -15,8 +15,7 @@ import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.connectZIO
 
 object RefApp extends ZIOAppDefault {
-  private val ApiParallelism = 16
-  private val help           = "Usage: RefApp [--force-skipped] [--upgrade-refs]"
+  private val help = "Usage: RefApp [--force-skipped] [--upgrade-refs]"
 
   final case class ReportData(
     clubsTotal: Int,
@@ -102,12 +101,13 @@ object RefApp extends ZIOAppDefault {
   private def resolveClubs(
     ctx: RefContext,
     forceSkipped: Boolean
-  ): RIO[CcasLogger & ChessComClient & PostgresClient, (Int, Int, Int, Int)] =
+  ): RIO[CcasLogger & ChessComClient & PostgresClient, (Int, Int, Int, Int)] = {
+    val parallelism = ApiConcurrency.fiberCap(ctx.client)
     for {
       clubs <- selectUnresolvedClubs(forceSkipped)
       _     <- CcasLogger.info(s"Clubs without match ref: ${clubs.size}")
       _ <- ZIO.scoped {
-        CcasLogger.foreachParProgress(clubs, ApiParallelism)((n, total) => s"  Resolving clubs: $n/$total") { club =>
+        CcasLogger.foreachParProgress(clubs, parallelism)((n, total) => s"  Resolving clubs: $n/$total") { club =>
           RefResolution.resolveClub(ctx, club)
         }
       }.onInterrupt {
@@ -129,16 +129,18 @@ object RefApp extends ZIOAppDefault {
         CcasLogger.info(s"Club-matches listings unchanged (skipped candidate iteration): $unchanged")
       )
     } yield (clubs.size, db, api, skippedNew)
+  }
 
   private def resolvePlayers(
     ctx: RefContext,
     forceSkipped: Boolean
-  ): RIO[CcasLogger & ChessComClient & PostgresClient, (Int, Int, Int, Int)] =
+  ): RIO[CcasLogger & ChessComClient & PostgresClient, (Int, Int, Int, Int)] = {
+    val parallelism = ApiConcurrency.fiberCap(ctx.client)
     for {
       players <- selectUnresolvedPlayers(forceSkipped)
       _       <- CcasLogger.info(s"Players without match ref: ${players.size}")
       _ <- ZIO.scoped {
-        CcasLogger.foreachParProgress(players, ApiParallelism)((n, total) => s"  Resolving players: $n/$total") { player =>
+        CcasLogger.foreachParProgress(players, parallelism)((n, total) => s"  Resolving players: $n/$total") { player =>
           RefResolution.resolvePlayer(ctx, player)
         }
       }.onInterrupt {
@@ -167,6 +169,7 @@ object RefApp extends ZIOAppDefault {
         CcasLogger.warn(s"Players skipped (ID mismatch): ${skipped.size}")
       )
     } yield (players.size, db, api, skippedNew)
+  }
 
   // --- Queries ---
 
@@ -235,6 +238,7 @@ object RefApp extends ZIOAppDefault {
   ): RIO[CcasLogger & PostgresClient, (Int, Int, Int, Int)] =
     if (!upgradeRefs) { ZIO.succeed((0, 0, 0, 0)) }
     else {
+      val parallelism = ApiConcurrency.fiberCap(ctx.client)
       for {
         allPlayers   <- selectTournamentOnlyPlayersWithSlug
         newTournRefs <- ctx.newTournamentRefPlayerIds.get
@@ -247,7 +251,7 @@ object RefApp extends ZIOAppDefault {
         matchUpgraded <- Ref.make(0)
         tournUpgraded <- Ref.make(0)
         _ <- ZIO.scoped {
-          CcasLogger.foreachParProgress(players, ApiParallelism)((n, total) => s"  Upgrading refs: $n/$total") { trp =>
+          CcasLogger.foreachParProgress(players, parallelism)((n, total) => s"  Upgrading refs: $n/$total") { trp =>
             val player = UnresolvedPlayer(trp.playerId, trp.username)
             RefResolution.tryUpgradeToMatchRef(ctx, player).flatMap {
               case true =>

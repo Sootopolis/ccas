@@ -1,11 +1,12 @@
 package ccas.analysis.apps.membership
 
-import java.time.{Duration, Instant, LocalDateTime, ZoneOffset}
+import java.time.Instant
 
 import com.augustnagro.magnum.sql
 import zio.{RIO, ZIO}
 import zio.http.*
 
+import ccas.analysis.apps.TestTimes
 import ccas.analysis.apps.recruitment.CandidateOutcome
 import ccas.analysis.tables.{Club, ClubMember, Player, PlayerMatchRef, PlayerSnapshot, RecruitmentCandidate}
 import ccas.analysis.tables.subtypes.RecruitmentRunId
@@ -17,14 +18,9 @@ import ccas.utils.sql.PostgresClient.connectZIO
 
 object TestMembershipAppSupport {
 
-  // --- Timestamps ---
-
-  object Times {
-    val t0: Instant = LocalDateTime.of(2025, 6, 1, 0, 0).toInstant(ZoneOffset.UTC)
-    val t1: Instant = t0.plus(Duration.ofDays(1))
-    val t2: Instant = t0.plus(Duration.ofDays(30))
-    val t3: Instant = t0.plus(Duration.ofDays(60))
-  }
+  // Back-compat alias so test files that wildcard-import this object still resolve `Times.t0`. New tests should
+  // reference `TestTimes` directly.
+  val Times = TestTimes
 
   // --- IDs ---
 
@@ -36,10 +32,10 @@ object TestMembershipAppSupport {
   val pid5 = PlayerId(105)
 
   val clubId = ClubId(500)
-  val club   = Club(clubId, Times.t0, ClubSlug("test-club"), "Test Club", None, None, None)
+  val club   = Club(clubId, TestTimes.t0, ClubSlug("test-club"), "Test Club", None, None, None)
 
   val otherClubId = ClubId(501)
-  val otherClub   = Club(otherClubId, Times.t0, ClubSlug("other-club"), "Other Club", None, None, None)
+  val otherClub   = Club(otherClubId, TestTimes.t0, ClubSlug("other-club"), "Other Club", None, None, None)
 
   // --- Helpers ---
 

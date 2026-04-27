@@ -13,14 +13,13 @@ import ccas.api.clubmatch.ApiDailyMatch.*
 import ccas.api.misc.enums.*
 import ccas.api.misc.subtypes.*
 import ccas.api.player.{ApiPlayer, ApiPlayerClubs}
-import ccas.utils.{CcasLogger, ProgressBar}
+import ccas.utils.{ApiConcurrency, CcasLogger, ProgressBar}
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.withTransaction
 
 private[history] object HistoryProcessing {
 
-  private val BatchSize        = 500
-  private val MatchParallelism = 16
+  private val BatchSize = 500
 
   // === BFS Wave Processing ===
 
@@ -68,7 +67,7 @@ private[history] object HistoryProcessing {
                       )
                       .zipLeft(ZIO.foreachDiscard(shared)(_.queriedPlayers.update(_ + dp.playerId)))
                       .catchAll(error => CcasLogger.warn(s"  ${dp.username}: failed to seed — ${error.getMessage}"))
-                  }.withParallelism(MatchParallelism)
+                  }.withParallelism(ApiConcurrency.fiberCap(ctx.client))
               }
 
               newPendingNew <- HistoryPendingMatch.countNew(ctx.clubId)
@@ -121,7 +120,7 @@ private[history] object HistoryProcessing {
         } *> counter.updateAndGet(_ + 1).flatMap { n =>
         bar.print(n, waveTotal.toInt, s"    Processing matches: $n/$waveTotal")
       }
-    }.withParallelism(MatchParallelism)
+    }.withParallelism(ApiConcurrency.fiberCap(ctx.client))
 
   private def processMatch(
     ctx: ProcessingContext,
@@ -294,7 +293,7 @@ private[history] object HistoryProcessing {
             } *> counter.updateAndGet(_ + 1).flatMap { n =>
             bar.print(n, total, s"    Refreshing: $n/$total")
           }
-        }.withParallelism(MatchParallelism) *>
+        }.withParallelism(ApiConcurrency.fiberCap(ctx.client)) *>
           refreshLoop(ctx, cutoffTime, bar, counter, failed, total, batch.last)
       }
     } yield ()

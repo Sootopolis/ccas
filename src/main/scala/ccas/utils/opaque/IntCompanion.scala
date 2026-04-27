@@ -2,32 +2,19 @@ package ccas.utils.opaque
 
 import com.augustnagro.magnum.DbCodec
 import zio.config.magnolia.DeriveConfig
-import zio.json.{JsonCodec, JsonDecoder, JsonEncoder}
-import zio.Chunk
-import zio.Config.Error.InvalidData
+import zio.json.JsonCodec
 
-import ccas.utils.opaque.OpaqueHelpers.orThrowDbRead
-
-trait IntCompanion {
+trait IntCompanion extends BaseNumericCompanion[Int] {
   opaque type Type = Int
 
   def apply(value: Int): Type  = value
   def wrap(value: Int): Type   = value
   def unwrap(value: Type): Int = value
 
-  protected val name: String = getClass.getSimpleName.stripSuffix("$")
-
-  protected def validateRaw(raw: Int): Either[String, Int] = Right(raw)
-  protected def validated(raw: Int): Either[String, Type]  = validateRaw(raw).map(wrap)
-
-  given JsonCodec[Type]    = JsonCodec.int.transformOrFail(validated, unwrap)
-  given JsonDecoder[Type]  = summon[JsonCodec[Type]].decoder
-  given JsonEncoder[Type]  = summon[JsonCodec[Type]].encoder
-  given DbCodec[Type] = DbCodec[Int].biMap(raw => validated(raw).orThrowDbRead(name), unwrap)
-  given DeriveConfig[Type] = DeriveConfig[Int].mapOrFail(validated(_).left.map(InvalidData(Chunk.empty, _)))
-  given Ordering[Type]     = Ordering.by(unwrap)
-
-  extension (i: Type) {
-    def value: Int = unwrap(i)
-  }
+  // Named refs (not summon/apply) so implicit search doesn't find the inherited `given DbCodec[Type]`
+  // which erases to `DbCodec[Int]` opaquely — that would deadlock the lazy val at class init.
+  protected def baseJsonCodec: JsonCodec[Int]       = JsonCodec.int
+  protected def baseDbCodec: DbCodec[Int]           = DbCodec.IntCodec
+  protected def baseDeriveConfig: DeriveConfig[Int] = DeriveConfig(zio.Config.int)
+  protected def baseOrdering: Ordering[Int]         = Ordering.Int
 }

@@ -2,34 +2,22 @@ package ccas.utils.opaque
 
 import com.augustnagro.magnum.DbCodec
 import zio.config.magnolia.DeriveConfig
-import zio.json.{JsonCodec, JsonDecoder, JsonEncoder}
-import zio.Chunk
-import zio.Config.Error.InvalidData
+import zio.json.JsonCodec
 
-import ccas.utils.opaque.OpaqueHelpers.orThrowDbRead
-
-trait LongCompanion {
+trait LongCompanion extends BaseNumericCompanion[Long] {
   opaque type Type = Long
 
   def apply(value: Long): Type  = value
   def wrap(value: Long): Type   = value
   def unwrap(value: Type): Long = value
 
-  protected val name: String = getClass.getSimpleName.stripSuffix("$")
-
-  protected def validateRaw(raw: Long): Either[String, Long] = Right(raw)
-  protected def validated(raw: Long): Either[String, Type]   = validateRaw(raw).map(wrap)
-
-  given JsonCodec[Type]    = JsonCodec.long.transformOrFail(validated, unwrap)
-  given JsonDecoder[Type]  = summon[JsonCodec[Type]].decoder
-  given JsonEncoder[Type]  = summon[JsonCodec[Type]].encoder
-  given DbCodec[Type] = DbCodec[Long].biMap(raw => validated(raw).orThrowDbRead(name), unwrap)
-  given DeriveConfig[Type] = DeriveConfig[Long].mapOrFail(validated(_).left.map(InvalidData(Chunk.empty, _)))
-  given Ordering[Type]     = Ordering.by(unwrap)
-
-  extension (l: Type) {
-    def value: Long = unwrap(l)
-  }
+  // Named codec refs (not `summon` / `DbCodec[Long]` apply) avoid an opaque-leak class-init deadlock: implicit
+  // search would resolve `DbCodec[Long]` back to the inherited `given DbCodec[Type]` since `Type = Long`
+  // opaquely, recursing into the lazy val being initialized. See IntCompanion for full context.
+  protected def baseJsonCodec: JsonCodec[Long]       = JsonCodec.long
+  protected def baseDbCodec: DbCodec[Long]           = DbCodec.LongCodec
+  protected def baseDeriveConfig: DeriveConfig[Long] = DeriveConfig(zio.Config.long)
+  protected def baseOrdering: Ordering[Long]         = Ordering.Long
 }
 
 /** `LongCompanion` with a `> 0L` validator. Use for surrogate keys backed by `BIGSERIAL`,

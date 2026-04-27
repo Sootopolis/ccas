@@ -2,40 +2,32 @@ package ccas.utils.opaque
 
 import com.augustnagro.magnum.DbCodec
 import zio.config.magnolia.DeriveConfig
-import zio.json.{JsonCodec, JsonDecoder, JsonEncoder}
+import zio.json.JsonCodec
 import zio.Chunk
 import zio.Config.Error.InvalidData
 
-import ccas.utils.opaque.OpaqueHelpers.orThrowDbRead
-
-trait ShortCompanion {
+trait ShortCompanion extends BaseNumericCompanion[Short] {
   opaque type Type = Short
 
   def apply(value: Short): Type  = value
   def wrap(value: Short): Type   = value
   def unwrap(value: Type): Short = value
 
-  protected val name: String = getClass.getSimpleName.stripSuffix("$")
-
-  protected def validateRaw(raw: Short): Either[String, Short] = Right(raw)
-  protected def validated(raw: Short): Either[String, Type]    = validateRaw(raw).map(wrap)
-
-  given JsonCodec[Type] = JsonCodec.int.transformOrFail(
+  // Short has no native JSON / Config wire — bridge through Int with a range check.
+  // The base trait then composes `validateRaw` on top of these.
+  protected def baseJsonCodec: JsonCodec[Short] = JsonCodec.int.transformOrFail(
     i =>
       if (i < Short.MinValue || i > Short.MaxValue) Left(s"$name value $i out of Short range")
-      else validated(i.toShort),
-    s => unwrap(s).toInt
+      else Right(i.toShort),
+    _.toInt
   )
-  given JsonDecoder[Type]  = summon[JsonCodec[Type]].decoder
-  given JsonEncoder[Type]  = summon[JsonCodec[Type]].encoder
-  given DbCodec[Type] = DbCodec[Short].biMap(raw => validated(raw).orThrowDbRead(name), unwrap)
-  given DeriveConfig[Type] = DeriveConfig[Int].mapOrFail { i =>
+  // Named codec refs (not `summon` / `DbCodec[Short]` apply) avoid an opaque-leak class-init deadlock: implicit
+  // search would resolve `DbCodec[Short]` back to the inherited `given DbCodec[Type]` since `Type = Short`
+  // opaquely, recursing into the lazy val being initialized. See IntCompanion for full context.
+  protected def baseDbCodec: DbCodec[Short] = DbCodec.ShortCodec
+  protected def baseDeriveConfig: DeriveConfig[Short] = DeriveConfig(zio.Config.int).mapOrFail { i =>
     if (i < Short.MinValue || i > Short.MaxValue) Left(InvalidData(Chunk.empty, s"$name value $i out of Short range"))
-    else validated(i.toShort).left.map(InvalidData(Chunk.empty, _))
+    else Right(i.toShort)
   }
-  given Ordering[Type] = Ordering.by(unwrap)
-
-  extension (s: Type) {
-    def value: Short = unwrap(s)
-  }
+  protected def baseOrdering: Ordering[Short] = Ordering.Short
 }

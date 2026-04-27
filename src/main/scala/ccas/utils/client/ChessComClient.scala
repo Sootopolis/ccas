@@ -83,6 +83,11 @@ final class ChessComClient(
 ) {
   import throttle.*
 
+  /** Top of the gate's recovery ladder — the maximum number of in-flight requests this instance will permit at
+    * steady state. Exposed for callers that size their fiber pools relative to the gate (e.g. `ApiConcurrency`).
+    */
+  def maxPermits: Int = config.maxPermits.toInt
+
   // `ZClientAspect.followRedirects` treats every 3xx as a redirect, including 304 Not Modified, and fails on the
   // missing Location header. Return the 304 response as-is so conditional-GET revalidation works; other redirect
   // failures still propagate as errors.

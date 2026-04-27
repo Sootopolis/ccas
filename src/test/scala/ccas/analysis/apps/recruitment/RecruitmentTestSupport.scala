@@ -1,11 +1,12 @@
 package ccas.analysis.apps.recruitment
 
-import java.time.{Duration, Instant, LocalDateTime, ZoneOffset}
+import java.time.Instant
 
 import com.augustnagro.magnum.sql
 import zio.{durationInt, Promise, RIO, Ref, Scope, Semaphore, ZIO}
 import zio.http.*
 
+import ccas.analysis.apps.TestTimes
 import ccas.analysis.tables.*
 import ccas.analysis.tables.subtypes.RecruitmentRunId
 import ccas.api.club.ApiClubMatches
@@ -17,20 +18,15 @@ import ccas.utils.{CcasLogger, TestCcasLogger}
 
 object RecruitmentTestSupport {
 
-  // --- Timestamps ---
-
-  object Times {
-    val t0: Instant = LocalDateTime.of(2025, 6, 1, 0, 0).toInstant(ZoneOffset.UTC)
-    val t1: Instant = t0.plus(Duration.ofDays(1))
-    val t2: Instant = t0.plus(Duration.ofDays(30))
-    val t3: Instant = t0.plus(Duration.ofDays(60))
-  }
+  // Back-compat alias so test files that wildcard-import this object still resolve `Times.t0`. New tests should
+  // reference `TestTimes` directly.
+  val Times = TestTimes
 
   // --- IDs ---
 
   val clubId   = ClubId(500)
   val clubSlug = ClubSlug("test-club")
-  val club     = Club(clubId, Times.t0, clubSlug, "Test Club", None, None, None)
+  val club     = Club(clubId, TestTimes.t0, clubSlug, "Test Club", None, None, None)
 
   val sourceClubId    = ClubId(600)
   val intSourceClubId = ClubId(901)
@@ -49,7 +45,7 @@ object RecruitmentTestSupport {
     playerId: Long,
     username: String,
     status: String = "basic",
-    joined: Long = Times.t0.getEpochSecond,
+    joined: Long = TestTimes.t0.getEpochSecond,
     country: String = "US",
     lastOnline: Option[Long] = None
   ): String = {
@@ -78,8 +74,8 @@ object RecruitmentTestSupport {
        |  "country": "https://api.chess.com/pub/country/US",
        |  "average_daily_rating": 1200,
        |  "members_count": $membersCount,
-       |  "created": ${Times.t0.getEpochSecond},
-       |  "last_activity": ${Times.t1.getEpochSecond},
+       |  "created": ${TestTimes.t0.getEpochSecond},
+       |  "last_activity": ${TestTimes.t1.getEpochSecond},
        |  "visibility": "public",
        |  "join_request": "https://api.chess.com/pub/club/$slug/join",
        |  "admin": $adminJson,
@@ -95,7 +91,7 @@ object RecruitmentTestSupport {
       s"""{"name": "match", "@id": "$id", "opponent": "https://api.chess.com/pub/club/other", "time_class": "daily"}"""
     }
     val finished = finishedIds.map { matchId =>
-      s"""{"name": "Match $matchId", "@id": "https://api.chess.com/pub/match/$matchId", "opponent": "https://api.chess.com/pub/club/other", "time_class": "daily", "start_time": ${Times.t0.getEpochSecond}, "result": "win"}"""
+      s"""{"name": "Match $matchId", "@id": "https://api.chess.com/pub/match/$matchId", "opponent": "https://api.chess.com/pub/club/other", "time_class": "daily", "start_time": ${TestTimes.t0.getEpochSecond}, "result": "win"}"""
     }
     s"""{"finished": [${finished.mkString(",")}], "in_progress": [], "registered": [${regs.mkString(",")}]}"""
   }
@@ -165,7 +161,7 @@ object RecruitmentTestSupport {
     black: String,
     whiteResult: String = "win",
     blackResult: String = "checkmated",
-    endTime: Long = Times.t2.getEpochSecond,
+    endTime: Long = TestTimes.t2.getEpochSecond,
     matchUrl: Option[String] = None,
     timeClass: String = "daily"
   ): String = {
@@ -229,7 +225,7 @@ object RecruitmentTestSupport {
       val playersStr = players.map((u, b) => playerJson(u, b)).mkString(",")
       s"""{"@id": "https://api.chess.com/pub/club/$club", "name": "${club.capitalize}", "url": "https://www.chess.com/club/$club", "score": 10.0, "result": "$result", "players": [$playersStr], "fair_play_removals": []}"""
     }
-    s"""{"@id": "https://api.chess.com/pub/match/$matchId", "name": "Match $matchId", "url": "https://www.chess.com/club/matches/$matchId", "status": "finished", "start_time": ${Times.t0.getEpochSecond}, "end_time": ${Times.t1.getEpochSecond}, "boards": ${(team1Players ++ team2Players).size}, "settings": {"rules": "chess", "time_class": "daily", "time_control": "1/259200", "min_required_games": 0}, "teams": {"team1": ${teamJson(
+    s"""{"@id": "https://api.chess.com/pub/match/$matchId", "name": "Match $matchId", "url": "https://www.chess.com/club/matches/$matchId", "status": "finished", "start_time": ${TestTimes.t0.getEpochSecond}, "end_time": ${TestTimes.t1.getEpochSecond}, "boards": ${(team1Players ++ team2Players).size}, "settings": {"rules": "chess", "time_class": "daily", "time_control": "1/259200", "min_required_games": 0}, "teams": {"team1": ${teamJson(
         team1Club,
         team1Players,
         "win"
@@ -254,8 +250,8 @@ object RecruitmentTestSupport {
         s"""{"username": "$username", "rating": 1500, "result": "$result", "@id": "https://api.chess.com/pub/player/$username"}"""
       }
     val gameUrl   = s"https://www.chess.com/game/daily/${matchId}00$board"
-    val endTime   = Times.t1.getEpochSecond
-    val startTime = Times.t0.getEpochSecond
+    val endTime   = TestTimes.t1.getEpochSecond
+    val startTime = TestTimes.t0.getEpochSecond
     def gameJson(whiteSide: String, blackSide: String, gameIdSuffix: Int): String =
       s"""{
          |  "white": $whiteSide,
@@ -490,7 +486,7 @@ object RecruitmentTestSupport {
     val username = Username.wrap(s"player_${PlayerId.unwrap(playerId)}")
     PostgresClient.connectZIO {
       sql"""INSERT INTO player (player_id, joined, username, status, title, since)
-            VALUES ($playerId, ${Times.t0}, $username, 'Active', NULL, ${Times.t0})
+            VALUES ($playerId, ${TestTimes.t0}, $username, 'Active', NULL, ${TestTimes.t0})
             ON CONFLICT (player_id) DO NOTHING""".update.run()
     }.unit
   }
@@ -587,8 +583,8 @@ object RecruitmentTestSupport {
         ClubMatch(
           matchId, s"Match ${ClubMatchId.unwrap(matchId)}",
           ccas.api.misc.enums.ClubMatchStatus.Finished, ccas.api.misc.enums.TimeClass.Daily,
-          Some(Times.t0), Some(Times.t1), 1,
-          team1ClubId, 20, None, 10, Times.t0
+          Some(TestTimes.t0), Some(TestTimes.t1), 1,
+          team1ClubId, 20, None, 10, TestTimes.t0
         )
       )
       _ <- ClubMatchBoard.insertBatch(
