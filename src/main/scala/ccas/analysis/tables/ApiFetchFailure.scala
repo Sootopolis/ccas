@@ -32,6 +32,8 @@ object ApiFetchFailure {
             )""".update.run()
       sql"""CREATE INDEX IF NOT EXISTS idx_api_fetch_failure_occurred_at
             ON api_fetch_failure (occurred_at)""".update.run()
+      sql"""CREATE INDEX IF NOT EXISTS idx_api_fetch_failure_response_body_id
+            ON api_fetch_failure (response_body_id)""".update.run()
     }
 
   def selectRecent(since: Instant): ZIO[PostgresClient, SQLException, List[ApiFetchFailure]] =

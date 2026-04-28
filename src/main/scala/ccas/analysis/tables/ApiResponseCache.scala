@@ -47,6 +47,8 @@ object ApiResponseCache {
             )""".update.run()
       sql"""CREATE INDEX IF NOT EXISTS idx_api_response_cache_fetched_at
             ON api_response_cache (fetched_at)""".update.run()
+      sql"""CREATE INDEX IF NOT EXISTS idx_api_response_cache_body_id
+            ON api_response_cache (body_id)""".update.run()
     }
 
   /** Read cache metadata for a URL. Does not join to `api_response_body`; callers load the body only on demand. */
