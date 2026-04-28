@@ -12,11 +12,11 @@
             <option value="$PROJECT_DIR$/project" />
           </set>
         </option>
-        <option name="resolveSbtClassifiers" value="true" />
-        <option name="sbtVersion" value="1.12.8" />
+        <option name="useSbtShellForBuild" value="true" />
+        <option name="useSbtShellForImport" value="true" />
       </SbtProjectSettings>
     </option>
     <option name="sbtOptions" value="-warn" />
-    <option name="vmParameters" value="-Xmx16G -Xss16M" />
+    <option name="vmParameters" value="-Xmx4g -Xss4m" />
   </component>
 </project>
