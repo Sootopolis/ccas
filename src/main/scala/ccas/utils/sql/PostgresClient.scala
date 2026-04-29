@@ -57,7 +57,7 @@ final class PostgresClient private (
     * `PostgresClient` so that individual statements do not retry independently (which would break atomicity). On
     * transient failure the *entire* transaction is retried from scratch.
     *
-    * The `R` type parameter passes through any additional service requirements (e.g. `CcasLogger`) — only
+    * The `R` type parameter passes through any additional service requirements (e.g. `ProgressDisplay`) — only
     * `PostgresClient` is provided/eliminated by this method.
     */
   def withTransaction[R, E >: SQLException <: Throwable, A](f: ZIO[R & PostgresClient, E, A]): ZIO[R, E, A] =

@@ -13,7 +13,7 @@ import ccas.utils.client.TestChessComClientSupport
 import ccas.utils.errors.ConflictException
 import ccas.utils.sql.FreshSchemaLayer
 import ccas.utils.sql.PostgresClient.connectZIO
-import ccas.utils.TestCcasLogger
+import ccas.utils.ProgressDisplay
 
 object TestJobRunner extends ZIOSpecDefault {
 
@@ -30,7 +30,7 @@ object TestJobRunner extends ZIOSpecDefault {
     FreshSchemaLayer("test_job_runner", onInit = ServerTables.ensureTables),
     TestChessComClientSupport.dummyLayer,
     JobRunner.live,
-    ZLayer.succeed(TestCcasLogger.noop)
+    ZLayer.succeed(ProgressDisplay.make(enabled = false))
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock @@ TestAspect.timeout(30.seconds)
 
   private object Times {

@@ -11,7 +11,7 @@ import ccas.analysis.apps.recruitment.RecruitmentTestSupport.{apiClubJson, apiDa
 import ccas.analysis.tables.{Club, ClubAdmin, ClubMatch, ClubMatchRef, Player, PlayerSnapshot, Tables}
 import ccas.api.misc.enums.{ClubMatchStatus, PlayerStatusCategory, TimeClass}
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username}
-import ccas.utils.{CcasLogger, TestCcasLogger}
+import ccas.utils.ProgressDisplay
 import ccas.utils.client.{ChessComClient, TestChessComClientSupport}
 import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
 import ccas.utils.sql.PostgresClient.connectZIO
@@ -24,7 +24,7 @@ object TestClubDataApp extends ZIOSpecDefault {
     suiteResolveAndPersistAdmins
   ).provideShared(
     FreshSchemaLayer("test_club_data_app", onInit = Tables.ensureTables),
-    ZLayer.succeed(TestCcasLogger.noop)
+    ZLayer.succeed(ProgressDisplay.make(enabled = false))
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock
 
   // ==========================================================================
@@ -155,10 +155,10 @@ object TestClubDataApp extends ZIOSpecDefault {
     TestChessComClientSupport.fakeClient(routes)
   }
 
-  private def runRefresh(client: ChessComClient): RIO[PostgresClient & CcasLogger, ClubDataApp.RefreshResult] =
+  private def runRefresh(client: ChessComClient): RIO[ProgressDisplay & PostgresClient, ClubDataApp.RefreshResult] =
     for {
       xa     <- ZIO.service[PostgresClient]
-      logger <- ZIO.service[CcasLogger]
+      logger <- ZIO.service[ProgressDisplay]
       result <- ClubDataApp.refresh(None).provideEnvironment(zio.ZEnvironment(client, xa, logger))
     } yield result
 

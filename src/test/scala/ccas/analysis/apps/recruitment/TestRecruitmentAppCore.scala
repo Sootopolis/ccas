@@ -11,7 +11,7 @@ import ccas.analysis.tables.*
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, Elo, PlayerId, Username}
 import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
 import ccas.utils.sql.PostgresClient.connectZIO
-import ccas.utils.TestCcasLogger
+import ccas.utils.ProgressDisplay
 
 object TestRecruitmentAppCore extends ZIOSpecDefault {
 
@@ -24,7 +24,7 @@ object TestRecruitmentAppCore extends ZIOSpecDefault {
     suiteMatchRefWriting
   ).provideShared(
     FreshSchemaLayer("test_recruitment_app_core", onInit = Tables.ensureTables),
-    ZLayer.succeed(TestCcasLogger.noop)
+    ZLayer.succeed(ProgressDisplay.make(enabled = false))
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock
 
   // ==========================================================================

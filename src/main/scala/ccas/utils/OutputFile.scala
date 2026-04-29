@@ -5,7 +5,7 @@ import java.time.format.DateTimeFormatter
 import java.time.LocalDateTime
 import scala.util.Using
 
-import zio.{RIO, Task, ZIO}
+import zio.{Task, ZIO}
 
 import ccas.api.misc.subtypes.ClubSlug
 
@@ -16,8 +16,8 @@ object OutputFile {
   def write(appName: String, clubSlug: ClubSlug, content: String, ext: String = "txt"): Task[Path] =
     writeInternal(Paths.get("out", ClubSlug.unwrap(clubSlug)), appName, content, ext)
 
-  def writeAndLog(appName: String, clubSlug: ClubSlug, content: String, ext: String = "txt"): RIO[CcasLogger, Unit] =
-    write(appName, clubSlug, content, ext).flatMap(path => CcasLogger.info(s"Output written to $path"))
+  def writeAndLog(appName: String, clubSlug: ClubSlug, content: String, ext: String = "txt"): Task[Unit] =
+    write(appName, clubSlug, content, ext).flatMap(path => ZIO.logInfo(s"Output written to $path"))
 
   def writeGlobal(appName: String, content: String, subDir: String, ext: String = "txt"): Task[Path] =
     writeInternal(Paths.get("out", subDir), appName, content, ext)
@@ -30,8 +30,8 @@ object OutputFile {
       ZIO.writeFile(path.toString, content).as(path)
   }
 
-  def writeAndLogGlobal(appName: String, content: String, subDir: String, ext: String = "txt"): RIO[CcasLogger, Unit] =
-    writeGlobal(appName, content, subDir, ext).flatMap(path => CcasLogger.info(s"Output written to $path"))
+  def writeAndLogGlobal(appName: String, content: String, subDir: String, ext: String = "txt"): Task[Unit] =
+    writeGlobal(appName, content, subDir, ext).flatMap(path => ZIO.logInfo(s"Output written to $path"))
 
   private def archiveExisting(clubDir: Path, appName: String, ext: String): Unit =
     if (Files.exists(clubDir)) {

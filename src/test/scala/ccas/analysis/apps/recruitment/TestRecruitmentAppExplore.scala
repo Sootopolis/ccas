@@ -8,7 +8,7 @@ import ccas.analysis.tables.*
 import ccas.api.misc.enums.PlayerStatusCategory.Active
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username}
 import ccas.utils.sql.FreshSchemaLayer
-import ccas.utils.TestCcasLogger
+import ccas.utils.ProgressDisplay
 
 object TestRecruitmentAppExplore extends ZIOSpecDefault {
 
@@ -19,7 +19,7 @@ object TestRecruitmentAppExplore extends ZIOSpecDefault {
     suiteExploreMode
   ).provideShared(
     FreshSchemaLayer("test_recruitment_app_explore", onInit = Tables.ensureTables),
-    ZLayer.succeed(TestCcasLogger.noop)
+    ZLayer.succeed(ProgressDisplay.make(enabled = false))
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock
 
   // ==========================================================================

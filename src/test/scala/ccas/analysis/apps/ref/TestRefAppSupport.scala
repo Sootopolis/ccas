@@ -9,7 +9,7 @@ import zio.http.*
 import ccas.analysis.tables.*
 import ccas.api.misc.enums.PlayerStatusCategory.Active
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
-import ccas.utils.TestCcasLogger
+import ccas.utils.ProgressDisplay
 import ccas.utils.client.{ChessComClient, TestChessComClientSupport}
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.connectZIO
@@ -174,5 +174,5 @@ object TestRefAppSupport {
     RefApp
       .populate(forceSkipped = forceSkipped, upgradeRefs = upgradeRefs)
       .unit
-      .provideSomeLayer(ZLayer.succeed(client) ++ ZLayer.succeed(TestCcasLogger.noop))
+      .provideSomeLayer(ZLayer.succeed(client) ++ ZLayer.succeed(ProgressDisplay.make(enabled = false)))
 }

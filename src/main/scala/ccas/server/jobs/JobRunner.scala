@@ -10,7 +10,7 @@ import ccas.analysis.tables.RunTrigger
 import ccas.api.misc.subtypes.{ClubId, JobRunId}
 import ccas.utils.client.ChessComClient
 import ccas.utils.errors.{ConflictException, safeMessage}
-import ccas.utils.CcasLogger
+import ccas.utils.ProgressDisplay
 
 /** Asynchronous job executor that runs analysis tasks as forked fibers.
   *
@@ -29,7 +29,7 @@ trait JobRunner {
     clubId: Option[ClubId],
     params: Option[String],
     trigger: RunTrigger,
-    effect: Option[JobRunId] => RIO[CcasLogger & ChessComClient & PostgresClient, Any]
+    effect: Option[JobRunId] => RIO[ProgressDisplay & ChessComClient & PostgresClient, Any]
   ): RIO[PostgresClient, JobRunId]
 
   /** Look up a job by ID, returning `None` if no such job exists. */
@@ -41,34 +41,34 @@ trait JobRunner {
 
 object JobRunner {
 
-  val live: RLayer[CcasLogger & ChessComClient & PostgresClient, JobRunner] =
+  val live: RLayer[ProgressDisplay & ChessComClient & PostgresClient, JobRunner] =
     ZLayer.scoped {
       for {
-        logger <- ZIO.service[CcasLogger]
-        client <- ZIO.service[ChessComClient]
+        display  <- ZIO.service[ProgressDisplay]
+        client   <- ZIO.service[ChessComClient]
         pgClient <- ZIO.service[PostgresClient]
         fibers   <- Ref.make(Set.empty[Fiber.Runtime[Nothing, Unit]])
         _        <- JobRun.markOrphansAsFailed.provideEnvironment(zio.ZEnvironment(pgClient))
-        runner = new JobRunnerLive(logger, client, pgClient, fibers)
+        runner = new JobRunnerLive(display, client, pgClient, fibers)
         _ <- ZIO.addFinalizer(runner.awaitAll)
       } yield runner
     }
 
   private class JobRunnerLive(
-    logger: CcasLogger,
+    display: ProgressDisplay,
     client: ChessComClient,
     pgClient: PostgresClient,
     fibers: Ref[Set[Fiber.Runtime[Nothing, Unit]]]
   ) extends JobRunner {
 
-    private val env = zio.ZEnvironment(logger, client, pgClient)
+    private val env = zio.ZEnvironment(display, client, pgClient)
 
     override def submit(
       kind: JobKind,
       clubId: Option[ClubId],
       params: Option[String],
       trigger: RunTrigger,
-      effect: Option[JobRunId] => RIO[CcasLogger & ChessComClient & PostgresClient, Any]
+      effect: Option[JobRunId] => RIO[ProgressDisplay & ChessComClient & PostgresClient, Any]
     ): RIO[PostgresClient, JobRunId] = {
       def conflictError = ConflictException(
         s"A ${kind} job is already running" + clubId.fold("")(c => s" for club $c")
@@ -95,7 +95,7 @@ object JobRunner {
 
     private def runJob(
       id: JobRunId,
-      effect: RIO[CcasLogger & ChessComClient & PostgresClient, Any]
+      effect: RIO[ProgressDisplay & ChessComClient & PostgresClient, Any]
     ): UIO[Unit] =
       def onFailure(error: Throwable): UIO[Unit] = {
         val msg = error.safeMessage

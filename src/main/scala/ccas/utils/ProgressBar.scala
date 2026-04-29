@@ -2,14 +2,15 @@ package ccas.utils
 
 import zio.UIO
 
-/** Handle for a single progress bar managed by `CcasLogger`.
+/** Handle for a single progress bar managed by `ProgressDisplay`.
   *
   * Each call to `print` erases the entire display, updates this bar's output, and redraws all bars. Log messages
-  * (`CcasLogger.info`, etc.) automatically route above the bars.
+  * routed through ZIO's logging (`ZIO.logInfo`, etc.) automatically interleave above the bars via the
+  * `asZLogger` accessor that `ProgressDisplay.live` installs.
   *
   * `finish` removes this bar from the display. It is idempotent.
   *
-  * Created via `CcasLogger.progressBar`.
+  * Created via `ProgressDisplay.progressBar` or `ProgressDisplay.addBarScoped`.
   */
 class ProgressBar private[utils] (id: Int, display: ProgressDisplay) {
 

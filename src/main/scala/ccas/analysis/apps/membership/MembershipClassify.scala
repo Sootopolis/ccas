@@ -13,8 +13,8 @@ import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
 import ccas.api.player.{ApiPlayer, ApiPlayerClubs}
 import ccas.api.tournament.ApiTournament
 import ccas.utils.client.ChessComClient
-import ccas.utils.ApiConcurrency
-import ccas.utils.CcasLogger
+import ccas.utils.{ApiConcurrency, ProgressDisplay}
+
 
 private[membership] object MembershipClassify {
 
@@ -47,11 +47,11 @@ private[membership] object MembershipClassify {
     dbState: DbState,
     now: java.time.Instant,
     trustUsernames: Boolean = true
-  ): RIO[CcasLogger & PostgresClient, PhaseBResult] = {
+  ): RIO[ProgressDisplay & PostgresClient, PhaseBResult] = {
     val total = apiMap.size
     ZIO.scoped {
       for {
-        bar     <- CcasLogger.progressBar
+        bar     <- ProgressDisplay.progressBar
         counter <- Ref.make(0)
         results <- ZIO.foreachPar(Chunk.from(apiMap)) { case (username, joinedEpoch) =>
           classifyOneMember(client, clubId, username, joinedEpoch, dbState, now, trustUsernames)
@@ -256,14 +256,14 @@ private[membership] object MembershipClassify {
     apiMap: Map[Username, Long],
     clubSlug: ClubSlug,
     now: java.time.Instant
-  ): RIO[CcasLogger & PostgresClient, PhaseCResult] = {
+  ): RIO[ProgressDisplay & PostgresClient, PhaseCResult] = {
     val disappearedList =
       dbState.membersByPlayerId.values.filterNot(s => resolvedIds.contains(s.player.playerId)).toList
     val total = disappearedList.size
 
     ZIO.scoped {
       for {
-        bar     <- CcasLogger.progressBar
+        bar     <- ProgressDisplay.progressBar
         counter <- Ref.make(0)
         results <- ZIO.foreachPar(Chunk.from(disappearedList)) { state =>
           classifyOneDisappeared(client, state, apiMap, clubSlug, now) <* counter.updateAndGet(_ + 1).flatMap { n =>

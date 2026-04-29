@@ -10,7 +10,7 @@ import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 import ccas.analysis.tables.{Club, ClubMatch, HistoryPendingMatch, Tables}
 import ccas.api.misc.enums.{ClubMatchStatus, TimeClass}
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug}
-import ccas.utils.{CcasLogger, TestCcasLogger}
+import ccas.utils.ProgressDisplay
 import ccas.utils.client.{ChessComClient, TestChessComClientSupport}
 import ccas.utils.sql.FreshSchemaLayer
 
@@ -104,7 +104,7 @@ object TestSeedFromClubMatches extends ZIOSpecDefault {
       client   <- fakeChessComClient(json)
       skipCtr  <- Ref.make(0)
       count <- HistorySeeding.seedFromClubMatches(client, clubId, clubSlug, skipCtr)
-        .provideSomeEnvironment[PostgresClient](_.add[CcasLogger](TestCcasLogger.noop))
+        .provideSomeEnvironment[PostgresClient](_.add[ProgressDisplay](ProgressDisplay.make(enabled = false)))
       pending <- HistoryPendingMatch.selectClub(clubId)
     } yield assertTrue(count == 0, pending.isEmpty)
   }
@@ -117,7 +117,7 @@ object TestSeedFromClubMatches extends ZIOSpecDefault {
       client  <- fakeChessComClient(json)
       skipCtr <- Ref.make(0)
       count <- HistorySeeding.seedFromClubMatches(client, clubId, clubSlug, skipCtr)
-        .provideSomeEnvironment[PostgresClient](_.add[CcasLogger](TestCcasLogger.noop))
+        .provideSomeEnvironment[PostgresClient](_.add[ProgressDisplay](ProgressDisplay.make(enabled = false)))
       pending <- HistoryPendingMatch.selectClub(clubId)
       _       <- ZIO.foreachDiscard(pending)(p => HistoryPendingMatch.delete(clubId, p.matchId, p.isLive))
     } yield assertTrue(
@@ -135,7 +135,7 @@ object TestSeedFromClubMatches extends ZIOSpecDefault {
       client  <- fakeChessComClient(json)
       skipCtr <- Ref.make(0)
       count <- HistorySeeding.seedFromClubMatches(client, clubId, clubSlug, skipCtr)
-        .provideSomeEnvironment[PostgresClient](_.add[CcasLogger](TestCcasLogger.noop))
+        .provideSomeEnvironment[PostgresClient](_.add[ProgressDisplay](ProgressDisplay.make(enabled = false)))
       pending <- HistoryPendingMatch.selectClub(clubId)
       _       <- ZIO.foreachDiscard(pending)(p => HistoryPendingMatch.delete(clubId, p.matchId, p.isLive))
     } yield assertTrue(
@@ -151,7 +151,7 @@ object TestSeedFromClubMatches extends ZIOSpecDefault {
       client  <- fakeChessComClient(json)
       skipCtr <- Ref.make(0)
       count <- HistorySeeding.seedFromClubMatches(client, clubId, clubSlug, skipCtr)
-        .provideSomeEnvironment[PostgresClient](_.add[CcasLogger](TestCcasLogger.noop))
+        .provideSomeEnvironment[PostgresClient](_.add[ProgressDisplay](ProgressDisplay.make(enabled = false)))
       pending <- HistoryPendingMatch.selectClub(clubId)
     } yield assertTrue(count == 0, pending.isEmpty)
   }
@@ -171,7 +171,7 @@ object TestSeedFromClubMatches extends ZIOSpecDefault {
       client  <- fakeChessComClientError
       skipCtr <- Ref.make(0)
       count <- HistorySeeding.seedFromClubMatches(client, clubId, clubSlug, skipCtr)
-        .provideSomeEnvironment[PostgresClient](_.add[CcasLogger](TestCcasLogger.noop))
+        .provideSomeEnvironment[PostgresClient](_.add[ProgressDisplay](ProgressDisplay.make(enabled = false)))
     } yield assertTrue(count == 0)
   }
 
@@ -185,12 +185,12 @@ object TestSeedFromClubMatches extends ZIOSpecDefault {
         skipCtr <- Ref.make(0)
         client  <- fakeChessComClientCounting(json, counter)
         first <- HistorySeeding.seedFromClubMatches(client, clubId, clubSlug, skipCtr)
-          .provideSomeEnvironment[PostgresClient](_.add[CcasLogger](TestCcasLogger.noop))
+          .provideSomeEnvironment[PostgresClient](_.add[ProgressDisplay](ProgressDisplay.make(enabled = false)))
         pendingAfterFirst <- HistoryPendingMatch.selectClub(clubId)
         // Clear the pending rows so the second call's skip shows up as "stayed empty" rather than "didn't add new".
         _ <- ZIO.foreachDiscard(pendingAfterFirst)(p => HistoryPendingMatch.delete(clubId, p.matchId, p.isLive))
         second <- HistorySeeding.seedFromClubMatches(client, clubId, clubSlug, skipCtr)
-          .provideSomeEnvironment[PostgresClient](_.add[CcasLogger](TestCcasLogger.noop))
+          .provideSomeEnvironment[PostgresClient](_.add[ProgressDisplay](ProgressDisplay.make(enabled = false)))
         pendingAfterSecond <- HistoryPendingMatch.selectClub(clubId)
         netCalls           <- counter.get
         skipCount          <- skipCtr.get

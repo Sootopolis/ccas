@@ -6,7 +6,7 @@ import ccas.analysis.apps.PlayerUpdater
 import ccas.analysis.tables.{ClubAdmin, Player}
 import ccas.api.misc.subtypes.{ClubId, PlayerId, Username}
 import ccas.api.player.ApiPlayer
-import ccas.utils.CcasLogger
+
 import ccas.utils.client.ChessComClient
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.withTransaction
@@ -25,7 +25,7 @@ object ClubAdminResolver {
     clubId: ClubId,
     adminUsernames: Set[Username],
     existingAdminIds: Set[PlayerId]
-  ): RIO[CcasLogger & PostgresClient, Set[PlayerId]] =
+  ): RIO[PostgresClient, Set[PlayerId]] =
     if (adminUsernames.isEmpty) {
       ZIO.whenDiscard(existingAdminIds.nonEmpty)(ClubAdmin.deleteByClub(clubId))
         .as(Set.empty[PlayerId])
@@ -40,7 +40,7 @@ object ClubAdminResolver {
             apiPlayer <- client.get[ApiPlayer](ApiPlayer.getUrl(username))
             _         <- withTransaction(PlayerUpdater.reconcile(apiPlayer, client))
           } yield Some(apiPlayer.username -> apiPlayer.playerId)).catchAll { error =>
-            CcasLogger.info(s"[ClubAdminResolver] Could not resolve admin '$username': ${error.getMessage}")
+            ZIO.logInfo(s"[ClubAdminResolver] Could not resolve admin '$username': ${error.getMessage}")
               .as(None)
           }
         }.map(_.flatten.toMap)

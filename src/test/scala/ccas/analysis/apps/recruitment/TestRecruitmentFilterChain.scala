@@ -9,7 +9,7 @@ import zio.{RIO, ZLayer}
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.*
 import ccas.analysis.tables.*
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, Elo, Username}
-import ccas.utils.{CcasLogger, TestCcasLogger}
+import ccas.utils.ProgressDisplay
 import ccas.utils.sql.FreshSchemaLayer
 
 object TestRecruitmentFilterChain extends ZIOSpecDefault {
@@ -18,7 +18,7 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
     suiteFilterChain
   ).provideShared(
     FreshSchemaLayer("test_recruitment_filter_chain", onInit = Tables.ensureTables),
-    ZLayer.succeed(TestCcasLogger.noop)
+    ZLayer.succeed(ProgressDisplay.make(enabled = false))
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock
 
   // ==========================================================================
@@ -33,7 +33,7 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
     responses: Map[String, String],
     criteria: RecruitmentCriteria,
     username: String = "alice"
-  ): RIO[CcasLogger & PostgresClient, CandidateOutcome] =
+  ): RIO[ProgressDisplay & PostgresClient, CandidateOutcome] =
     for {
       _          <- seedDb
       criteriaId <- seedCriteria(criteria)

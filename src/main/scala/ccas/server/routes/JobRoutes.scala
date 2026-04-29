@@ -16,7 +16,7 @@ import ccas.analysis.tables.{Club, RunTrigger}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId}
 import ccas.server.jobs.*
 import ccas.server.routes.RouteHelpers.*
-import ccas.utils.{CcasLogger, TimeParser}
+import ccas.utils.{ProgressDisplay, TimeParser}
 import ccas.utils.client.ChessComClient
 import ccas.utils.errors.{BadRequestException, ConflictException, ErrorResponse}
 
@@ -253,7 +253,7 @@ object JobRoutes {
     kind: JobKind,
     slug: ClubSlug,
     params: Option[String],
-    effect: Option[JobRunId] => RIO[CcasLogger & ChessComClient & PostgresClient, Any]
+    effect: Option[JobRunId] => RIO[ProgressDisplay & ChessComClient & PostgresClient, Any]
   ): RIO[PostgresClient, ClubJobResult] =
     Club.selectBySlug(slug).flatMap {
       case None => ZIO.succeed(ClubJobResult(ClubSlug.unwrap(slug), None, Some("Club not found")))

@@ -18,7 +18,7 @@ import ccas.api.misc.subtypes.*
 import ccas.api.player.{ApiPlayer, ApiPlayerMatches}
 import ccas.utils.client.{ChessComClient, onNotFound}
 import ccas.utils.ApiConcurrency
-import ccas.utils.CcasLogger
+import ccas.utils.ProgressDisplay
 
 private[history] object HistorySeeding {
 
@@ -26,7 +26,7 @@ private[history] object HistorySeeding {
     * club is resolved at most once. On success, patches all matching `club_match` rows and removes the unresolved
     * entries. Returns total count of resolved entries.
     */
-  def retryUnresolvedClubs(client: ChessComClient): RIO[CcasLogger & PostgresClient, Int] =
+  def retryUnresolvedClubs(client: ChessComClient): RIO[ProgressDisplay & PostgresClient, Int] =
     for {
       unresolved <- UnresolvedMatchClub.selectAll
       result <-
@@ -34,10 +34,10 @@ private[history] object HistorySeeding {
         else {
           val grouped = unresolved.groupBy(_.slug)
           val total   = grouped.size
-          CcasLogger.info(s"  Retrying ${unresolved.size} unresolved clubs ($total unique)...") *>
+          ZIO.logInfo(s"  Retrying ${unresolved.size} unresolved clubs ($total unique)...") *>
             ZIO.scoped {
               for {
-                bar         <- CcasLogger.progressBar
+                bar         <- ProgressDisplay.progressBar
                 counterRef  <- Ref.make(0)
                 resolvedRef <- Ref.make(0)
                 _ <- ZIO.foreachDiscard(grouped.toList) { case (slug, entries) =>
@@ -67,7 +67,7 @@ private[history] object HistorySeeding {
     * prior state to `player_snapshot` when a rename is detected), patches `club_match_board`, and deletes the entry.
     * Returns total count of resolved entries.
     */
-  def retryUnresolvedPlayers(client: ChessComClient): RIO[CcasLogger & PostgresClient, Int] =
+  def retryUnresolvedPlayers(client: ChessComClient): RIO[ProgressDisplay & PostgresClient, Int] =
     for {
       unresolved <- UnresolvedBoardPlayer.selectAll
       result <-
@@ -75,10 +75,10 @@ private[history] object HistorySeeding {
         else {
           val grouped = unresolved.groupBy(_.username)
           val total   = grouped.size
-          CcasLogger.info(s"  Retrying ${unresolved.size} unresolved players ($total unique)...") *>
+          ZIO.logInfo(s"  Retrying ${unresolved.size} unresolved players ($total unique)...") *>
             ZIO.scoped {
               for {
-                bar         <- CcasLogger.progressBar
+                bar         <- ProgressDisplay.progressBar
                 counterRef  <- Ref.make(0)
                 resolvedRef <- Ref.make(0)
                 _ <- ZIO.foreachParDiscard(grouped.toList) { case (username, entries) =>
@@ -87,7 +87,7 @@ private[history] object HistorySeeding {
                       recoverEntriesAfter404(client, username, entries)
                     }
                     .catchAll { error =>
-                      CcasLogger.warn(s"  Retry $username: ${error.getMessage}").as(0)
+                      ZIO.logWarning(s"  Retry $username: ${error.getMessage}").as(0)
                     }
                     .flatMap(n => resolvedRef.update(_ + n)) *>
                     counterRef.updateAndGet(_ + 1)
@@ -108,7 +108,7 @@ private[history] object HistorySeeding {
     client: ChessComClient,
     username: Username,
     entries: Iterable[UnresolvedBoardPlayer]
-  ): RIO[CcasLogger & PostgresClient, Int] =
+  ): RIO[ProgressDisplay & PostgresClient, Int] =
     for {
       apiPlayer <- client.get[ApiPlayer](ApiPlayer.getUrl(username))
       playerId = apiPlayer.playerId
@@ -129,19 +129,19 @@ private[history] object HistorySeeding {
     client: ChessComClient,
     staleUsername: Username,
     entries: Iterable[UnresolvedBoardPlayer]
-  ): RIO[CcasLogger & PostgresClient, Int] =
+  ): RIO[ProgressDisplay & PostgresClient, Int] =
     ZIO.foldLeft(entries)(0) { (acc, entry) =>
       recoverRenamedUsername(client, entry).flatMap {
         case Some(newUsername) =>
-          CcasLogger.info(
+          ZIO.logInfo(
             s"  Renamed $staleUsername → $newUsername (match ${entry.matchId} board ${entry.board})"
           ) *> resolveByUsername(client, newUsername, Chunk(entry))
         case None =>
-          CcasLogger.warn(
+          ZIO.logWarning(
             s"  Rename recovery failed for $staleUsername (match ${entry.matchId} board ${entry.board}); leaving row"
           ).as(0)
       }.catchAll { error =>
-        CcasLogger.warn(
+        ZIO.logWarning(
           s"  Rename recovery errored for $staleUsername (match ${entry.matchId} board ${entry.board}): ${error.getMessage}"
         ).as(0)
       }.map(acc + _)
@@ -157,7 +157,7 @@ private[history] object HistorySeeding {
   private def recoverRenamedUsername(
     client: ChessComClient,
     entry: UnresolvedBoardPlayer
-  ): RIO[CcasLogger & PostgresClient, Option[Username]] =
+  ): RIO[ProgressDisplay & PostgresClient, Option[Username]] =
     for {
       boardData <- client.get[ApiMatchBoard](ApiMatchBoard.dailyUrl(entry.matchId, entry.board.toInt))
       boardUsernames = extractBoardUsernames(boardData)
@@ -197,7 +197,7 @@ private[history] object HistorySeeding {
   private def opposingCurrentUsername(
     client: ChessComClient,
     entry: UnresolvedBoardPlayer
-  ): RIO[CcasLogger & PostgresClient, Option[Username]] =
+  ): RIO[ProgressDisplay & PostgresClient, Option[Username]] =
     for {
       rows <- ClubMatchBoard.selectMatch(entry.matchId)
       opposingPidOpt = rows.find(_.board == entry.board).flatMap { row =>
@@ -237,11 +237,11 @@ private[history] object HistorySeeding {
     clubId: ClubId,
     clubSlug: ClubSlug,
     unchangedCounter: Ref[Int]
-  ): RIO[CcasLogger & PostgresClient, Int] =
+  ): RIO[ProgressDisplay & PostgresClient, Int] =
     client.getCacheable[ApiClubMatches](ApiClubMatches.getUrl(clubSlug))
       .flatMap(_.foldZIO(_ => unchangedCounter.update(_ + 1).as(0))(insertPendingFromClubMatches(clubId, _)))
       .catchAll { error =>
-        CcasLogger.warn(s"  Failed to fetch club matches: ${error.getMessage}").as(0)
+        ZIO.logWarning(s"  Failed to fetch club matches: ${error.getMessage}").as(0)
       }
 
   private def insertPendingFromClubMatches(
@@ -276,7 +276,7 @@ private[history] object HistorySeeding {
     settledMatchIds: Set[ClubMatchId],
     shared: Option[SharedContext],
     unchangedPlayerCounter: Ref[Int]
-  ): RIO[CcasLogger & PostgresClient, MemberSeedResult] =
+  ): RIO[ProgressDisplay & PostgresClient, MemberSeedResult] =
     for {
       sharedQueried <- shared.fold(ZIO.succeed(Set.empty[PlayerId]))(_.queriedPlayers.get)
       candidates = allMembers
@@ -296,7 +296,7 @@ private[history] object HistorySeeding {
       total = toQuery.size
       _ <- ZIO.scoped {
         for {
-          bar <- CcasLogger.progressBar
+          bar <- ProgressDisplay.progressBar
           _ <- ZIO.foreachParDiscard(toQuery) { case (playerId, username) =>
             seedMatchesForPlayerAllClubs(
               client, clubId, clubSlug, playerId, username, settledMatchIds, shared, unchangedPlayerCounter
@@ -304,7 +304,7 @@ private[history] object HistorySeeding {
               .foldZIO(
                 error =>
                   failedMembersRef.update(_ :+ FailedMember(username, error.getMessage))
-                    *> CcasLogger.warn(s"  $username: failed — ${error.getMessage}"),
+                    *> ZIO.logWarning(s"  $username: failed — ${error.getMessage}"),
                 count =>
                   seedRef.update(_ + count) *> counterRef.updateAndGet(_ + 1).flatMap { n =>
                     bar.print(n, total, s"  Querying member matches: $n/$total")

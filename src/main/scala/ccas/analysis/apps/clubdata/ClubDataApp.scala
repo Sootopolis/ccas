@@ -8,7 +8,7 @@ import ccas.analysis.apps.ref.RefHelpers
 import ccas.analysis.tables.{Club, ClubAdmin, ClubMatch, ClubMatchRef, Tables}
 import ccas.api.club.{ApiClub, ApiClubMatches}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
-import ccas.utils.{CcasLogger, OutputFile}
+import ccas.utils.{OutputFile, ProgressDisplay}
 import ccas.utils.client.{ChessComClient, HttpClientLayer, onNotFound}
 import ccas.utils.sql.PostgresClient
 
@@ -24,7 +24,7 @@ object ClubDataApp extends ZIOAppDefault {
       }
       _ <- OutputFile.writeAndLogGlobal("clubdata", formatReport(data), "_ccas")
     } yield ()).provideSome[ZIOAppArgs & Scope](
-      CcasLogger.live(showProgress = true),
+      ProgressDisplay.live(showProgress = true),
       ChessComClient.live("clubdata"),
       HttpClientLayer.live,
       PostgresClient.live(onInit = Tables.ensureTables)
@@ -60,7 +60,7 @@ object ClubDataApp extends ZIOAppDefault {
     * `minAgeHours` is set, clubs refreshed within the last N hours are skipped; clubs with a null `fetched_at` (never
     * refreshed by ClubDataApp) are always eligible.
     */
-  def refresh(minAgeHours: Option[Int]): RIO[CcasLogger & ChessComClient & PostgresClient, RefreshResult] =
+  def refresh(minAgeHours: Option[Int]): RIO[ProgressDisplay & ChessComClient & PostgresClient, RefreshResult] =
     Club.selectAll.flatMap(refreshEligible(_, minAgeHours))
 
   /** Refreshes only the clubs whose slugs match. Unknown slugs are logged and skipped. When `minAgeHours` is set, the
@@ -69,7 +69,7 @@ object ClubDataApp extends ZIOAppDefault {
   private def refreshSlugs(
     slugs: List[ClubSlug],
     minAgeHours: Option[Int]
-  ): RIO[CcasLogger & ChessComClient & PostgresClient, RefreshResult] =
+  ): RIO[ProgressDisplay & ChessComClient & PostgresClient, RefreshResult] =
     for {
       resolved <- ZIO.foreach(slugs)(slug => Club.selectBySlug(slug).map(slug -> _))
       (missing, found) = resolved.partitionMap {
@@ -77,7 +77,7 @@ object ClubDataApp extends ZIOAppDefault {
         case (_, Some(club)) => Right(club)
       }
       _ <- ZIO.whenDiscard(missing.nonEmpty)(
-        CcasLogger.info(s"[ClubData] Unknown slugs (skipped): ${missing.mkString(", ")}")
+        ZIO.logInfo(s"[ClubData] Unknown slugs (skipped): ${missing.mkString(", ")}")
       )
       result <- refreshEligible(found, minAgeHours)
     } yield result
@@ -85,7 +85,7 @@ object ClubDataApp extends ZIOAppDefault {
   private def refreshEligible(
     clubs: List[Club],
     minAgeHours: Option[Int]
-  ): RIO[CcasLogger & ChessComClient & PostgresClient, RefreshResult] = {
+  ): RIO[ProgressDisplay & ChessComClient & PostgresClient, RefreshResult] = {
     val eligible = minAgeHours match {
       case None => clubs
       case Some(hours) =>
@@ -94,22 +94,22 @@ object ClubDataApp extends ZIOAppDefault {
     }
     val skipped = clubs.size - eligible.size
     ZIO.whenDiscard(skipped > 0)(
-      CcasLogger.info(s"[ClubData] --min-age filter: skipping $skipped recently-refreshed clubs")
+      ZIO.logInfo(s"[ClubData] --min-age filter: skipping $skipped recently-refreshed clubs")
     ) *> refreshClubs(eligible)
   }
 
-  private def refreshClubs(clubs: List[Club]): RIO[CcasLogger & ChessComClient & PostgresClient, RefreshResult] =
+  private def refreshClubs(clubs: List[Club]): RIO[ProgressDisplay & ChessComClient & PostgresClient, RefreshResult] =
     ZIO.scoped {
       for {
         client    <- ZIO.service[ChessComClient]
         total     = clubs.size
-        _         <- CcasLogger.info(s"[ClubData] Refreshing $total clubs")
-        bar       <- CcasLogger.progressBar
+        _         <- ZIO.logInfo(s"[ClubData] Refreshing $total clubs")
+        bar       <- ProgressDisplay.progressBar
         resultRef <- Ref.make(RefreshResult(0, 0, 0, 0))
         _ <- ZIO.foreachPar(clubs) { club =>
           for {
             r <- refreshClub(client, club).catchAll { error =>
-              CcasLogger.info(s"[ClubData] Failed to refresh ${club.slug}: ${error.getMessage}").as(ClubFailed)
+              ZIO.logInfo(s"[ClubData] Failed to refresh ${club.slug}: ${error.getMessage}").as(ClubFailed)
             }
             updated <- resultRef.updateAndGet(acc =>
               acc.copy(
@@ -132,13 +132,13 @@ object ClubDataApp extends ZIOAppDefault {
       } yield result
     }
 
-  private def logSummary(label: String, r: RefreshResult, total: Int): RIO[CcasLogger, Unit] =
-    CcasLogger.info(
+  private def logSummary(label: String, r: RefreshResult, total: Int): RIO[ProgressDisplay, Unit] =
+    ZIO.logInfo(
       s"[ClubData] $label: ${r.clubsProcessed}/$total clubs, ${r.clubsFailed} failed, " +
         s"${r.clubsAdminChanged} admin changes, ${r.totalAdmins} total admins"
     )
 
-  private def refreshClub(client: ChessComClient, club: Club): RIO[CcasLogger & PostgresClient, ClubResult] =
+  private def refreshClub(client: ChessComClient, club: Club): RIO[ProgressDisplay & PostgresClient, ClubResult] =
     for {
       // Refresh the activity signal first. The matches endpoint sometimes succeeds even when the profile endpoint
       // returns an error (some clubs have erroneous profile pages but working match pages), so we don't want a profile
@@ -164,11 +164,11 @@ object ClubDataApp extends ZIOAppDefault {
   private def fetchApiClubWithRenameRecovery(
     client: ChessComClient,
     club: Club
-  ): RIO[CcasLogger & PostgresClient, (ApiClub, ClubSlug)] =
+  ): RIO[ProgressDisplay & PostgresClient, (ApiClub, ClubSlug)] =
     ApiClub.get(client, club.slug).map(_ -> club.slug).onNotFound { e =>
       Club.slugFromMatchRef(club.clubId, client).flatMap {
         case Some(newSlug) if newSlug != club.slug =>
-          CcasLogger.info(
+          ZIO.logInfo(
             s"[ClubData] ${club.slug} returned 404; retrying with rediscovered slug $newSlug"
           ) *> ApiClub.get(client, newSlug).map(_ -> newSlug)
         case _ => ZIO.fail(e)
@@ -184,7 +184,7 @@ object ClubDataApp extends ZIOAppDefault {
     *
     * On API failure we keep whatever the cached/DB value was (possibly None) — the next refresh will try again.
     */
-  private def refreshLatestMatchAt(client: ChessComClient, club: Club): RIO[CcasLogger & PostgresClient, Unit] = {
+  private def refreshLatestMatchAt(client: ChessComClient, club: Club): RIO[ProgressDisplay & PostgresClient, Unit] = {
     val now             = Instant.now()
     val skipCutoff      = now.minus(ClubAdmin.ApiSkipThreshold)
     val cachedFreshEnough = club.latestMatchAt.exists(_.isAfter(skipCutoff))
@@ -195,7 +195,7 @@ object ClubDataApp extends ZIOAppDefault {
         else {
           fetchClubMatches(client, club.slug).asSome
             .catchAll { error =>
-              CcasLogger.info(s"[ClubData] Match fetch failed for ${club.slug}: ${error.getMessage}").as(None)
+              ZIO.logInfo(s"[ClubData] Match fetch failed for ${club.slug}: ${error.getMessage}").as(None)
             }
             .flatMap { matchesOpt =>
               val apiLatest = matchesOpt.flatMap(latestTimestamp(_, now))
@@ -227,7 +227,7 @@ object ClubDataApp extends ZIOAppDefault {
     clubId: ClubId,
     slug: ClubSlug,
     matches: ApiClubMatches
-  ): RIO[CcasLogger & PostgresClient, Unit] =
+  ): RIO[ProgressDisplay & PostgresClient, Unit] =
     ZIO.unlessDiscard(matches.finished.isEmpty) {
       ClubMatchRef.selectId(clubId).flatMap {
         case Some(_) => ZIO.unit
@@ -240,7 +240,7 @@ object ClubDataApp extends ZIOAppDefault {
           }
       }
     }.catchAll { error =>
-      CcasLogger.debug(s"[ClubData] Opportunistic ref failed for $slug: ${error.getMessage}")
+      ZIO.logDebug(s"[ClubData] Opportunistic ref failed for $slug: ${error.getMessage}")
     }
 
   private def formatReport(data: RefreshResult): String =

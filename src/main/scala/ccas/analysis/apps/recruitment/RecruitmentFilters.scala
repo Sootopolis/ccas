@@ -1,6 +1,6 @@
 package ccas.analysis.apps.recruitment
 
-import ccas.utils.CcasLogger
+
 import ccas.utils.sql.PostgresClient
 import zio.{Clock, RIO, Ref, ZIO}
 import RecruitmentFilterDefs.*
@@ -20,7 +20,7 @@ private[recruitment] object RecruitmentFilters {
     username: Username,
     runCtx: RunContext,
     filters: List[RecruitmentFilter]
-  ): RIO[CcasLogger & PostgresClient, CandidateOutcome] = {
+  ): RIO[PostgresClient, CandidateOutcome] = {
     val candidateCtx = CandidateContext.initial(username)
     for {
       now <- Clock.instant
@@ -68,7 +68,7 @@ private[recruitment] object RecruitmentFilters {
     env: FilterEnv,
     filters: List[RecruitmentFilter],
     ctxRef: Ref[CandidateContext]
-  ): RIO[CcasLogger & PostgresClient, (CandidateOutcome, CandidateContext)] =
+  ): RIO[PostgresClient, (CandidateOutcome, CandidateContext)] =
     ZIO.foldLeft(filters)(FilterResult(false, env.candidate)) {
       case (r @ FilterResult(true, _), _)     => ZIO.succeed(r)
       case (FilterResult(false, ctx), filter) => ctxRef.set(ctx) *> filter(env.copy(candidate = ctx))

@@ -28,7 +28,7 @@ import ccas.api.player.ApiPlayerMatches.ApiPlayerMatch
 import ccas.api.tournament.ApiTournamentRound
 import ccas.utils.client.{ChessComClient, HttpStatusException}
 import ccas.utils.errors.safeMessage
-import ccas.utils.CcasLogger
+import ccas.utils.ProgressDisplay
 
 private[ref] object RefResolution {
 
@@ -37,7 +37,7 @@ private[ref] object RefResolution {
   def resolvePlayer(
     ctx: RefContext,
     player: UnresolvedPlayer
-  ): RIO[CcasLogger & PostgresClient, Boolean] =
+  ): RIO[ProgressDisplay & PostgresClient, Boolean] =
     (for {
       dbRef <- ClubMatchBoard.inferPlayerMatchRef(player.playerId)
       resolved <- dbRef match {
@@ -45,7 +45,7 @@ private[ref] object RefResolution {
           withTransaction {
             PlayerMatchRef.upsert(ref) *> PlayerRefSkip.deleteId(player.playerId)
           } *> ctx.playersResolvedDb.update(_ + 1) *>
-            CcasLogger.debug(s"  ${player.username}: resolved via DB").as(true)
+            ZIO.logDebug(s"  ${player.username}: resolved via DB").as(true)
         case None =>
           resolvePlayerViaMatch(ctx, player, countResolved = true).flatMap {
             case ResolveResult.Resolved   => ZIO.succeed(true)
@@ -65,10 +65,10 @@ private[ref] object RefResolution {
       }
     } yield resolved).catchAll {
       case e: HttpStatusException if e.statusCode == 404 =>
-        CcasLogger.warn(s"  ${player.username}: 404 — ${e.safeMessage}") *>
+        ZIO.logWarning(s"  ${player.username}: 404 — ${e.safeMessage}") *>
           skipPlayer(ctx, player, RefSkipReason.NotFound, Some(e.safeMessage)).as(false)
       case error =>
-        CcasLogger.warn(s"  ${player.username}: error — ${error.safeMessage}") *>
+        ZIO.logWarning(s"  ${player.username}: error — ${error.safeMessage}") *>
           skipPlayer(ctx, player, RefSkipReason.ApiError, Some(error.safeMessage)).as(false)
     }
 
@@ -76,19 +76,19 @@ private[ref] object RefResolution {
     ctx: RefContext,
     player: UnresolvedPlayer,
     countResolved: Boolean
-  ): RIO[CcasLogger & PostgresClient, ResolveResult] =
+  ): RIO[ProgressDisplay & PostgresClient, ResolveResult] =
     ctx.client.getCacheable[ApiPlayerMatches](ApiPlayerMatches.getUrl(player.username)).flatMap { result =>
-      def iterate(playerMatches: ApiPlayerMatches): RIO[CcasLogger & PostgresClient, ResolveResult] = {
+      def iterate(playerMatches: ApiPlayerMatches): RIO[ProgressDisplay & PostgresClient, ResolveResult] = {
         val candidates = (playerMatches.finished ++ playerMatches.inProgress).filter(_.board.isDefined)
         if (candidates.isEmpty) {
-          CcasLogger.debug(s"  ${player.username}: no match with board").as(ResolveResult.NoData)
+          ZIO.logDebug(s"  ${player.username}: no match with board").as(ResolveResult.NoData)
         } else {
           tryMatches(ctx, player, candidates.toList, countResolved)
         }
       }
       unchangedGate(result, PlayerRefSkip.selectId(player.playerId))(
         ctx.playerMatchesUnchanged.update(_ + 1) *>
-          CcasLogger.debug(s"  ${player.username}: player-matches unchanged, skipping candidate iteration")
+          ZIO.logDebug(s"  ${player.username}: player-matches unchanged, skipping candidate iteration")
             .as(ResolveResult.NotFound)
       )(iterate)
     }
@@ -98,7 +98,7 @@ private[ref] object RefResolution {
     player: UnresolvedPlayer,
     candidates: List[ApiPlayerMatch],
     countResolved: Boolean
-  ): RIO[CcasLogger & PostgresClient, ResolveResult] =
+  ): RIO[ProgressDisplay & PostgresClient, ResolveResult] =
     ZIO.foldLeft(candidates)(ResolveResult.NotFound: ResolveResult) { (status, m) =>
       status match {
         case ResolveResult.NotFound => tryOneMatch(ctx, player, m, countResolved)
@@ -111,12 +111,12 @@ private[ref] object RefResolution {
     player: UnresolvedPlayer,
     m: ApiPlayerMatch,
     countResolved: Boolean
-  ): RIO[CcasLogger & PostgresClient, ResolveResult] = {
+  ): RIO[ProgressDisplay & PostgresClient, ResolveResult] = {
     val parsed      = parseMatchUrl(m.`@id`)
     val boardIdxOpt = m.board.get.path.segments.lastOption.flatMap(_.toIntOption).map(_.toShort)
     boardIdxOpt match {
       case None =>
-        CcasLogger.debug(s"  ${player.username}: malformed board URL ${m.board.get}").as(ResolveResult.NotFound)
+        ZIO.logDebug(s"  ${player.username}: malformed board URL ${m.board.get}").as(ResolveResult.NotFound)
       case Some(boardIdx) =>
         isFailedUrl(ctx, parsed.matchUrl).flatMap {
           case true => ZIO.succeed(ResolveResult.NotFound)
@@ -142,20 +142,20 @@ private[ref] object RefResolution {
   private def resolvePlayerViaTournament(
     ctx: RefContext,
     player: UnresolvedPlayer
-  ): RIO[CcasLogger & PostgresClient, ResolveResult] =
+  ): RIO[ProgressDisplay & PostgresClient, ResolveResult] =
     ctx.client.getCacheable[ApiPlayerTournaments](ApiPlayerTournaments.getUrl(player.username)).flatMap { result =>
-      def iterate(playerTournaments: ApiPlayerTournaments): RIO[CcasLogger & PostgresClient, ResolveResult] = {
+      def iterate(playerTournaments: ApiPlayerTournaments): RIO[ProgressDisplay & PostgresClient, ResolveResult] = {
         val eligible = (playerTournaments.finished ++ playerTournaments.inProgress)
           .sortBy(_.totalPlayers.getOrElse(Int.MaxValue))
         if (eligible.isEmpty) {
-          CcasLogger.debug(s"  ${player.username}: no eligible tournaments").as(ResolveResult.NoData)
+          ZIO.logDebug(s"  ${player.username}: no eligible tournaments").as(ResolveResult.NoData)
         } else {
           tryTournaments(ctx, player, eligible.toList)
         }
       }
       unchangedGate(result, PlayerRefSkip.selectId(player.playerId))(
         ctx.playerTournamentsUnchanged.update(_ + 1) *>
-          CcasLogger.debug(s"  ${player.username}: player-tournaments unchanged, skipping candidate iteration")
+          ZIO.logDebug(s"  ${player.username}: player-tournaments unchanged, skipping candidate iteration")
             .as(ResolveResult.NotFound)
       )(iterate)
     }
@@ -164,7 +164,7 @@ private[ref] object RefResolution {
     ctx: RefContext,
     player: UnresolvedPlayer,
     candidates: List[ApiPlayerTournaments.ApiPlayerTournament]
-  ): RIO[CcasLogger & PostgresClient, ResolveResult] =
+  ): RIO[ProgressDisplay & PostgresClient, ResolveResult] =
     ZIO.foldLeft(candidates)(ResolveResult.NotFound: ResolveResult) { (status, t) =>
       status match {
         case ResolveResult.NotFound => tryOneTournament(ctx, player, t)
@@ -176,7 +176,7 @@ private[ref] object RefResolution {
     ctx: RefContext,
     player: UnresolvedPlayer,
     t: ApiPlayerTournaments.ApiPlayerTournament
-  ): RIO[CcasLogger & PostgresClient, ResolveResult] = {
+  ): RIO[ProgressDisplay & PostgresClient, ResolveResult] = {
     val slug     = TournamentSlug.fromUrl(t.`@id`)
     val roundUrl = ApiTournamentRound.getUrl(slug, 1)
     isFailedUrl(ctx, roundUrl).flatMap {
@@ -207,7 +207,7 @@ private[ref] object RefResolution {
   def resolveClub(
     ctx: RefContext,
     club: UnresolvedClub
-  ): RIO[CcasLogger & PostgresClient, Boolean] =
+  ): RIO[ProgressDisplay & PostgresClient, Boolean] =
     (for {
       dbRef <- ClubMatch.inferClubMatchRef(club.clubId)
       resolved <- dbRef match {
@@ -215,10 +215,10 @@ private[ref] object RefResolution {
           withTransaction {
             ClubMatchRef.upsert(ref) *> ClubRefSkip.deleteId(club.clubId)
           } *> ctx.clubsResolvedDb.update(_ + 1) *>
-            CcasLogger.debug(s"  ${club.slug}: resolved via DB").as(true)
+            ZIO.logDebug(s"  ${club.slug}: resolved via DB").as(true)
         case None =>
           ctx.client.getCacheable[ApiClubMatches](ApiClubMatches.getUrl(club.slug)).flatMap { result =>
-            def iterate(clubMatches: ApiClubMatches): RIO[CcasLogger & PostgresClient, Boolean] =
+            def iterate(clubMatches: ApiClubMatches): RIO[ProgressDisplay & PostgresClient, Boolean] =
               if (clubMatches.finished.isEmpty) {
                 skipClub(ctx, club, RefSkipReason.NoData).as(false)
               } else {
@@ -229,17 +229,17 @@ private[ref] object RefResolution {
               }
             unchangedGate(result, ClubRefSkip.selectId(club.clubId))(
               ctx.clubMatchesUnchanged.update(_ + 1) *>
-                CcasLogger.debug(s"  ${club.slug}: club-matches unchanged, skipping candidate iteration") *>
+                ZIO.logDebug(s"  ${club.slug}: club-matches unchanged, skipping candidate iteration") *>
                 skipClub(ctx, club, RefSkipReason.ResolutionFailed).as(false)
             )(iterate)
           }
       }
     } yield resolved).catchAll {
       case e: HttpStatusException if e.statusCode == 404 =>
-        CcasLogger.warn(s"  ${club.slug}: 404 — ${e.safeMessage}") *>
+        ZIO.logWarning(s"  ${club.slug}: 404 — ${e.safeMessage}") *>
           skipClub(ctx, club, RefSkipReason.NotFound, Some(e.safeMessage)).as(false)
       case error =>
-        CcasLogger.warn(s"  ${club.slug}: error — ${error.safeMessage}") *>
+        ZIO.logWarning(s"  ${club.slug}: error — ${error.safeMessage}") *>
           skipClub(ctx, club, RefSkipReason.ApiError, Some(error.safeMessage)).as(false)
     }
 
@@ -247,7 +247,7 @@ private[ref] object RefResolution {
     ctx: RefContext,
     club: UnresolvedClub,
     candidates: List[ApiClubMatches.ApiClubMatchFinished]
-  ): RIO[CcasLogger & PostgresClient, Boolean] =
+  ): RIO[ProgressDisplay & PostgresClient, Boolean] =
     ZIO.foldLeft(candidates)(false) { (resolved, m) =>
       if (resolved) { ZIO.succeed(true) }
       else { tryOneClubMatch(ctx, club, m) }
@@ -291,9 +291,9 @@ private[ref] object RefResolution {
   private def unchangedGate[T, A](
     result: ccas.utils.client.CacheableResult[T],
     priorSkip: RIO[PostgresClient, Option[?]]
-  )(ifSkipped: RIO[CcasLogger & PostgresClient, A])(
-    onBody: T => RIO[CcasLogger & PostgresClient, A]
-  ): RIO[CcasLogger & PostgresClient, A] =
+  )(ifSkipped: RIO[ProgressDisplay & PostgresClient, A])(
+    onBody: T => RIO[ProgressDisplay & PostgresClient, A]
+  ): RIO[ProgressDisplay & PostgresClient, A] =
     if (result.isUnchanged) {
       priorSkip.flatMap {
         case Some(_) => ifSkipped
@@ -345,13 +345,13 @@ private[ref] object RefResolution {
   private def handleVerification(
     ctx: RefContext,
     player: UnresolvedPlayer
-  )(onVerified: => RIO[PostgresClient, ResolveResult]): RIO[CcasLogger & PostgresClient, ResolveResult] =
+  )(onVerified: => RIO[PostgresClient, ResolveResult]): RIO[ProgressDisplay & PostgresClient, ResolveResult] =
     verifyPlayerId(ctx.client, player.username, player.playerId).foldZIO(
       error =>
-        CcasLogger.warn(s"  ${player.username}: verification error — ${error.safeMessage}").as(ResolveResult.NotFound),
+        ZIO.logWarning(s"  ${player.username}: verification error — ${error.safeMessage}").as(ResolveResult.NotFound),
       {
         case Left(actualId) =>
-          CcasLogger.warn(
+          ZIO.logWarning(
             s"  ${player.username}: player_id mismatch (expected ${player.playerId}, actual $actualId), skipping"
           ) *> ctx.skippedPlayers.update(_ :+ SkippedPlayer(player.playerId, player.username)).as(ResolveResult.SkipPlayer)
         case Right(()) => onVerified
@@ -392,13 +392,13 @@ private[ref] object RefResolution {
   private[ref] def tryUpgradeToMatchRef(
     ctx: RefContext,
     player: UnresolvedPlayer
-  ): RIO[CcasLogger & PostgresClient, Boolean] =
+  ): RIO[ProgressDisplay & PostgresClient, Boolean] =
     (for {
       dbRef <- ClubMatchBoard.inferPlayerMatchRef(player.playerId)
       resolved <- dbRef match {
         case Some(ref) =>
           PlayerMatchRef.upsert(ref) *>
-            CcasLogger.debug(s"  ${player.username}: upgraded via DB").as(true)
+            ZIO.logDebug(s"  ${player.username}: upgraded via DB").as(true)
         case None =>
           resolvePlayerViaMatch(ctx, player, countResolved = false).map {
             case ResolveResult.Resolved => true
@@ -415,7 +415,7 @@ private[ref] object RefResolution {
   private[ref] def tryUpgradeTournamentRef(
     ctx: RefContext,
     trp: TournamentRefPlayer
-  ): RIO[CcasLogger & PostgresClient, Boolean] =
+  ): RIO[ProgressDisplay & PostgresClient, Boolean] =
     (for {
       playerTournaments <- ctx.client.get[ApiPlayerTournaments](ApiPlayerTournaments.getUrl(trp.username))
       eligible = (playerTournaments.finished ++ playerTournaments.inProgress)
@@ -429,7 +429,7 @@ private[ref] object RefResolution {
     ctx: RefContext,
     trp: TournamentRefPlayer,
     candidates: List[ApiPlayerTournaments.ApiPlayerTournament]
-  ): RIO[CcasLogger & PostgresClient, Boolean] =
+  ): RIO[ProgressDisplay & PostgresClient, Boolean] =
     ZIO.foldLeft(candidates)(Option.empty[Boolean]) { (done, t) =>
       done match {
         case Some(_) => ZIO.succeed(done)
@@ -441,7 +441,7 @@ private[ref] object RefResolution {
     ctx: RefContext,
     trp: TournamentRefPlayer,
     t: ApiPlayerTournaments.ApiPlayerTournament
-  ): RIO[CcasLogger & PostgresClient, Option[Boolean]] = {
+  ): RIO[ProgressDisplay & PostgresClient, Option[Boolean]] = {
     val slug = TournamentSlug.fromUrl(t.`@id`)
     if (slug == trp.tournamentSlug) { ZIO.succeed(Some(false)) }
     else {
@@ -457,7 +457,7 @@ private[ref] object RefResolution {
               else {
                 val ref = PlayerTournamentRef(trp.playerId, slug, playerIdx)
                 PlayerTournamentRef.upsert(ref) *>
-                  CcasLogger.debug(s"  ${trp.username}: tournament ref upgraded to $slug").as(Some(true))
+                  ZIO.logDebug(s"  ${trp.username}: tournament ref upgraded to $slug").as(Some(true))
               }
             }
           )

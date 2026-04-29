@@ -5,7 +5,7 @@ import zio.{durationInt, Duration, RIO, Ref, Scope, Semaphore, Task, URLayer, ZI
 import zio.http.*
 import zio.json.*
 
-import ccas.utils.TestCcasLogger
+import ccas.utils.ProgressDisplay
 
 object TestChessComClientSupport {
 
@@ -45,7 +45,7 @@ object TestChessComClientSupport {
       activeRef     <- Ref.make(0)
       rateLimitGate <- Semaphore.make(1)
       lastReqRef    <- Ref.make(0L)
-      bar                 <- TestCcasLogger.noopBar
+      bar                 <- ProgressDisplay.make(enabled = false).addBar
       stats               <- Ref.make(ClientStatsAccumulator())
       config = ChessComClient.ThrottleConfig(
         recoveryTiers.getOrElse(doublingTiers(permits.toInt)),
@@ -97,7 +97,6 @@ object TestChessComClientSupport {
         ZClient.fromDriver(driver),
         pgClient,
         Headers.empty,
-        TestCcasLogger.noop,
         refs,
         stats,
         bar,
@@ -134,7 +133,7 @@ object TestChessComClientSupport {
       activeRef     <- Ref.make(0)
       rateLimitGate <- Semaphore.make(1)
       lastReqRef    <- Ref.make(0L)
-      bar                 <- TestCcasLogger.noopBar
+      bar                 <- ProgressDisplay.make(enabled = false).addBar
       stats               <- Ref.make(ClientStatsAccumulator())
     } yield {
       val driver = new ZClient.Driver[Any, Scope, Throwable] {
@@ -170,7 +169,6 @@ object TestChessComClientSupport {
         ZClient.fromDriver(driver),
         pgClient,
         Headers.empty,
-        TestCcasLogger.noop,
         refs,
         stats,
         bar,

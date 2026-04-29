@@ -19,7 +19,7 @@ import ccas.utils.client.{ChessComClient, TestChessComClientSupport}
 import ccas.utils.errors.ConflictException
 import ccas.utils.sql.FreshSchemaLayer
 import ccas.utils.sql.PostgresClient.connectZIO
-import ccas.utils.CcasLogger
+import ccas.utils.ProgressDisplay
 
 object TestRoutes extends ZIOSpecDefault {
 
@@ -50,7 +50,7 @@ object TestRoutes extends ZIOSpecDefault {
       clubId: Option[ClubId],
       params: Option[String],
       trigger: RunTrigger,
-      effect: Option[JobRunId] => RIO[CcasLogger & ChessComClient & PostgresClient, Any]
+      effect: Option[JobRunId] => RIO[ProgressDisplay & ChessComClient & PostgresClient, Any]
     ): RIO[PostgresClient, JobRunId] =
       nextAction.get.flatMap {
         case Action.Succeed =>

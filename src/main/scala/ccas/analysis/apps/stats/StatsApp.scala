@@ -5,7 +5,7 @@ import ccas.analysis.tables.*
 import ccas.api.misc.subtypes.ClubSlug
 import ccas.utils.errors.{BadRequestException, NotFoundException}
 import ccas.utils.sql.PostgresClient
-import ccas.utils.{CcasLogger, OutputFile, TimeParser}
+import ccas.utils.{OutputFile, ProgressDisplay, TimeParser}
 import zio.{RIO, Scope, Task, ZIO, ZIOAppArgs, ZIOAppDefault}
 
 import java.time.{Duration, Instant}
@@ -55,32 +55,32 @@ object StatsApp extends ZIOAppDefault {
   }
 
   override def run: RIO[ZIOAppArgs & Scope, Unit] =
-    (for {
-      args   <- ZIOAppArgs.getArgs
-      parsed <- parseArgs(args)
-      _ <- (parsed.since, parsed.until) match {
-        case (Some(s), Some(u)) =>
-          for {
-            result  <- playerOfPeriod(parsed.slug, s, u)
-            mg       = parsed.minGames.getOrElse(1)
-            content  = StatsReport.formatPlayerOfPeriod(result.contributions, mg)
-            eligible = result.contributions.count(_.raw.games >= mg)
-            _ <- CcasLogger.info(s"Players: ${result.contributions.size}, Eligible (>=$mg games): $eligible")
-            _ <- OutputFile.writeAndLog("stats", parsed.slug, content, ext = "csv")
-          } yield ()
-        case (None, None) =>
-          for {
-            result  <- memberStats(parsed.slug)
-            content  = StatsReport.formatContribution(result.contributions)
-            _ <- CcasLogger.info(s"Players: ${result.contributions.size}, Boards: ${result.boardCount}, Matches: ${result.matchCount}")
-            _ <- OutputFile.writeAndLog("stats", parsed.slug, content, ext = "csv")
-          } yield ()
-        case _ => ZIO.fail(BadRequestException("Both --since and --until are required for period stats"))
-      }
-    } yield ()).provideSomeAuto(
-      CcasLogger.live(showProgress = false),
-      PostgresClient.live(onInit = Tables.ensureTables)
-    )
+    for {
+      _ <- ProgressDisplay.live(showProgress = false).build
+      _ <- (for {
+        args   <- ZIOAppArgs.getArgs
+        parsed <- parseArgs(args)
+        _ <- (parsed.since, parsed.until) match {
+          case (Some(s), Some(u)) =>
+            for {
+              result  <- playerOfPeriod(parsed.slug, s, u)
+              mg       = parsed.minGames.getOrElse(1)
+              content  = StatsReport.formatPlayerOfPeriod(result.contributions, mg)
+              eligible = result.contributions.count(_.raw.games >= mg)
+              _ <- ZIO.logInfo(s"Players: ${result.contributions.size}, Eligible (>=$mg games): $eligible")
+              _ <- OutputFile.writeAndLog("stats", parsed.slug, content, ext = "csv")
+            } yield ()
+          case (None, None) =>
+            for {
+              result  <- memberStats(parsed.slug)
+              content  = StatsReport.formatContribution(result.contributions)
+              _ <- ZIO.logInfo(s"Players: ${result.contributions.size}, Boards: ${result.boardCount}, Matches: ${result.matchCount}")
+              _ <- OutputFile.writeAndLog("stats", parsed.slug, content, ext = "csv")
+            } yield ()
+          case _ => ZIO.fail(BadRequestException("Both --since and --until are required for period stats"))
+        }
+      } yield ()).provideSomeAuto(PostgresClient.live(onInit = Tables.ensureTables))
+    } yield ()
 
   /** All-time member contribution summary for a club. */
   def memberStats(clubSlug: ClubSlug): RIO[PostgresClient, StatsResult] =

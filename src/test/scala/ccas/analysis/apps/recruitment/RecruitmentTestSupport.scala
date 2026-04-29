@@ -14,7 +14,7 @@ import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username
 import ccas.utils.client.{ChessComClient, ClientStatsAccumulator, TestChessComClientSupport}
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient
-import ccas.utils.{CcasLogger, TestCcasLogger}
+import ccas.utils.ProgressDisplay
 
 object RecruitmentTestSupport {
 
@@ -358,7 +358,7 @@ object RecruitmentTestSupport {
       activeRef     <- Ref.make(0)
       rateLimitGate <- Semaphore.make(1)
       lastReqRef    <- Ref.make(0L)
-      bar                 <- TestCcasLogger.noopBar
+      bar                 <- ProgressDisplay.make(enabled = false).addBar
       stats               <- Ref.make(ClientStatsAccumulator())
       playerCount         <- Ref.make(0)
     } yield {
@@ -406,7 +406,6 @@ object RecruitmentTestSupport {
         ZClient.fromDriver(driver),
         pgClient,
         Headers.empty,
-        TestCcasLogger.noop,
         refs,
         stats,
         bar,
@@ -500,7 +499,7 @@ object RecruitmentTestSupport {
     candidates: List[Username],
     criteria: RecruitmentCriteria,
     target: Int = 30
-  ): RIO[CcasLogger & PostgresClient, List[Username]] =
+  ): RIO[ProgressDisplay & PostgresClient, List[Username]] =
     for {
       clubMatches <- client.get[ApiClubMatches](ApiClubMatches.getUrl(clubSlug))
       targetMatchIds = (clubMatches.registered.map(_.`@id`) ++ clubMatches.inProgress.map(_.`@id`)).toSet
@@ -599,12 +598,12 @@ object RecruitmentTestSupport {
     explore: Boolean = false,
     alias: String = "default",
     trigger: RunTrigger = RunTrigger.Api
-  ): ZIO[PostgresClient & CcasLogger, Throwable, RecruitmentRun] =
+  ): ZIO[ProgressDisplay & PostgresClient, Throwable, RecruitmentRun] =
     for {
-      xa     <- ZIO.service[PostgresClient]
-      logger <- ZIO.service[CcasLogger]
+      xa      <- ZIO.service[PostgresClient]
+      display <- ZIO.service[ProgressDisplay]
       result <- RecruitmentApp
         .recruit(clubSlug, alias, target = target, sourceClubs = sourceClubs, explore = explore, trigger = trigger)
-        .provideEnvironment(zio.ZEnvironment(client, xa, logger))
+        .provideEnvironment(zio.ZEnvironment(client, xa, display))
     } yield result
 }
