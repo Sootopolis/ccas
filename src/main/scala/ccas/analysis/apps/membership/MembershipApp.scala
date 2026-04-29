@@ -24,10 +24,10 @@ object MembershipApp extends ZIOAppDefault {
 
   override def run: RIO[ZIOAppArgs & Scope, Unit] =
     (for {
-      args           <- ZIOAppArgs.getArgs
-      (slugs, flags) <- parseArgs(args)
-      mode           <- parseRunMode(flags)
-      _ <- ZIO.foreachDiscard(slugs) { clubName =>
+      args   <- ZIOAppArgs.getArgs
+      parsed <- parseArgs(args)
+      mode   <- parseRunMode(parsed.flags)
+      _ <- ZIO.foreachDiscard(parsed.slugs) { clubName =>
         mode match {
           case ReconcileOnly =>
             reconcile(clubName).flatMap { result =>
@@ -61,7 +61,9 @@ object MembershipApp extends ZIOAppDefault {
   private case class SinceNow(since: Instant)                   extends RunMode
   private case class SinceUntil(since: Instant, until: Instant) extends RunMode
 
-  private def parseArgs(args: Chunk[String]): Task[(NonEmptyChunk[ClubSlug], Map[String, String])] = {
+  private case class MembershipAppArgs(slugs: NonEmptyChunk[ClubSlug], flags: Map[String, String])
+
+  private def parseArgs(args: Chunk[String]): Task[MembershipAppArgs] = {
     @tailrec
     def loop(
       remaining: List[String],
@@ -79,7 +81,7 @@ object MembershipApp extends ZIOAppDefault {
       .flatMap { case (slugs, flags) =>
         NonEmptyChunk.fromChunk(Chunk.from(slugs)) match {
           case None      => ZIO.fail(BadRequestException(help))
-          case Some(nec) => ZIO.succeed((nec, flags))
+          case Some(nec) => ZIO.succeed(MembershipAppArgs(nec, flags))
         }
       }
   }

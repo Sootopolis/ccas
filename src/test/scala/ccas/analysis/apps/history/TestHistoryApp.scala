@@ -169,67 +169,67 @@ object TestHistoryApp extends ZIOSpecDefault {
   )
 
   private def testWhiteWinsWinnerIsWhitesTeam = test("white wins → winner is white's team, detail is loss reason") {
-    val (winner, detail) = HistoryBoardBuilder.normalizeGameOutcome(
+    val outcome = HistoryBoardBuilder.normalizeGameOutcome(
       Some(GameResultDetail.Win),
       Some(GameResultDetail.Checkmated),
       whiteTeamIsTeam1 = true
     )
     assertTrue(
-      winner.contains(BoardGameWinner.Team1),
-      detail.contains(GameResultDetail.Checkmated)
+      outcome.winner.contains(BoardGameWinner.Team1),
+      outcome.detail.contains(GameResultDetail.Checkmated)
     )
   }
 
   private def testBlackWinsWinnerIsBlacksTeam = test("black wins → winner is black's team, detail is loss reason") {
-    val (winner, detail) = HistoryBoardBuilder.normalizeGameOutcome(
+    val outcome = HistoryBoardBuilder.normalizeGameOutcome(
       Some(GameResultDetail.Resigned),
       Some(GameResultDetail.Win),
       whiteTeamIsTeam1 = true
     )
     assertTrue(
-      winner.contains(BoardGameWinner.Team2),
-      detail.contains(GameResultDetail.Resigned)
+      outcome.winner.contains(BoardGameWinner.Team2),
+      outcome.detail.contains(GameResultDetail.Resigned)
     )
   }
 
   private def testDrawWinnerIsDraw = test("draw → winner is Draw, detail is draw reason") {
-    val (winner, detail) = HistoryBoardBuilder.normalizeGameOutcome(
+    val outcome = HistoryBoardBuilder.normalizeGameOutcome(
       Some(GameResultDetail.Stalemate),
       Some(GameResultDetail.Stalemate),
       whiteTeamIsTeam1 = true
     )
     assertTrue(
-      winner.contains(BoardGameWinner.Draw),
-      detail.contains(GameResultDetail.Stalemate)
+      outcome.winner.contains(BoardGameWinner.Draw),
+      outcome.detail.contains(GameResultDetail.Stalemate)
     )
   }
 
   private def testNotPlayedBothNone = test("not played → both None") {
-    val (winner, detail) = HistoryBoardBuilder.normalizeGameOutcome(None, None, whiteTeamIsTeam1 = true)
-    assertTrue(winner.isEmpty, detail.isEmpty)
+    val outcome = HistoryBoardBuilder.normalizeGameOutcome(None, None, whiteTeamIsTeam1 = true)
+    assertTrue(outcome.winner.isEmpty, outcome.detail.isEmpty)
   }
 
   private def testFalseFlipsWinnerMapping = test("whiteTeamIsTeam1=false flips winner mapping") {
-    val (winner, detail) = HistoryBoardBuilder.normalizeGameOutcome(
+    val outcome = HistoryBoardBuilder.normalizeGameOutcome(
       Some(GameResultDetail.Win),
       Some(GameResultDetail.Timeout),
       whiteTeamIsTeam1 = false
     )
     assertTrue(
-      winner.contains(BoardGameWinner.Team2),
-      detail.contains(GameResultDetail.Timeout)
+      outcome.winner.contains(BoardGameWinner.Team2),
+      outcome.detail.contains(GameResultDetail.Timeout)
     )
   }
 
   private def testFalseBlackWinsTeam1 = test("whiteTeamIsTeam1=false black wins → Team1") {
-    val (winner, detail) = HistoryBoardBuilder.normalizeGameOutcome(
+    val outcome = HistoryBoardBuilder.normalizeGameOutcome(
       Some(GameResultDetail.Resigned),
       Some(GameResultDetail.Win),
       whiteTeamIsTeam1 = false
     )
     assertTrue(
-      winner.contains(BoardGameWinner.Team1),
-      detail.contains(GameResultDetail.Resigned)
+      outcome.winner.contains(BoardGameWinner.Team1),
+      outcome.detail.contains(GameResultDetail.Resigned)
     )
   }
 
@@ -332,25 +332,25 @@ object TestHistoryApp extends ZIOSpecDefault {
 
   private def suiteParseRefreshArg = suite("parseRefreshArg")(
     test("no --refresh flag returns None and unchanged args") {
-      val args                 = Chunk("club-a", "--full")
-      val (refresh, remaining) = HistoryApp.parseRefreshArg(args)
-      assertTrue(refresh.isEmpty, remaining == args)
+      val args   = Chunk("club-a", "--full")
+      val parsed = HistoryApp.parseRefreshArg(args)
+      assertTrue(parsed.refreshMinHours.isEmpty, parsed.remainingArgs == args)
     },
     test("--refresh without hours returns Some(0) and strips flag") {
-      val (refresh, remaining) = HistoryApp.parseRefreshArg(Chunk("club-a", "--refresh", "--full"))
-      assertTrue(refresh.contains(0), remaining == Chunk("club-a", "--full"))
+      val parsed = HistoryApp.parseRefreshArg(Chunk("club-a", "--refresh", "--full"))
+      assertTrue(parsed.refreshMinHours.contains(0), parsed.remainingArgs == Chunk("club-a", "--full"))
     },
     test("--refresh with hours returns Some(hours) and strips both") {
-      val (refresh, remaining) = HistoryApp.parseRefreshArg(Chunk("club-a", "--refresh", "24"))
-      assertTrue(refresh.contains(24), remaining == Chunk("club-a"))
+      val parsed = HistoryApp.parseRefreshArg(Chunk("club-a", "--refresh", "24"))
+      assertTrue(parsed.refreshMinHours.contains(24), parsed.remainingArgs == Chunk("club-a"))
     },
     test("--refresh at end of args returns Some(0)") {
-      val (refresh, remaining) = HistoryApp.parseRefreshArg(Chunk("club-a", "--refresh"))
-      assertTrue(refresh.contains(0), remaining == Chunk("club-a"))
+      val parsed = HistoryApp.parseRefreshArg(Chunk("club-a", "--refresh"))
+      assertTrue(parsed.refreshMinHours.contains(0), parsed.remainingArgs == Chunk("club-a"))
     },
     test("--refresh followed by non-integer keeps next arg as positional") {
-      val (refresh, remaining) = HistoryApp.parseRefreshArg(Chunk("--refresh", "club-a"))
-      assertTrue(refresh.contains(0), remaining == Chunk("club-a"))
+      val parsed = HistoryApp.parseRefreshArg(Chunk("--refresh", "club-a"))
+      assertTrue(parsed.refreshMinHours.contains(0), parsed.remainingArgs == Chunk("club-a"))
     }
   )
 }

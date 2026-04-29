@@ -17,6 +17,13 @@ import ccas.utils.CcasLogger
 
 private[recruitment] object RecruitmentExplore {
 
+  private case class EvaluatedCandidate(username: Username, outcome: CandidateOutcome)
+
+  private case class ReplenishResult(
+    newSources: List[SourceDescriptor],
+    remainingStrategies: List[RIO[CcasLogger & PostgresClient, List[SourceDescriptor]]]
+  )
+
   // --- Explore loop ---
 
   def exploreLoop(
@@ -47,10 +54,16 @@ private[recruitment] object RecruitmentExplore {
     for {
       evaluated   <- ctx.evaluatedRef.get
       replenished <- replenish(ctx, evaluated, staticStrategies)
-      (newSources, remainingStrategies) = replenished
-      _ <- ZIO.unlessDiscard(newSources.isEmpty && remainingStrategies.isEmpty)(
-        exploreLoop(ctx, activePool, newSources, remainingStrategies, visitedClubs, roundRobinKeys)
-      )
+      _ <- ZIO.unlessDiscard(replenished.newSources.isEmpty && replenished.remainingStrategies.isEmpty) {
+        exploreLoop(
+          ctx,
+          activePool,
+          replenished.newSources,
+          replenished.remainingStrategies,
+          visitedClubs,
+          roundRobinKeys
+        )
+      }
     } yield ()
 
   private def activateAndPickCandidate(
@@ -147,18 +160,19 @@ private[recruitment] object RecruitmentExplore {
           _       <- ctx.evaluatedRef.update(_ + u)
           _       <- ZIO.whenDiscard(outcome == CandidateOutcome.Invited)(ctx.invitedRef.update(u :: _))
           _       <- ZIO.whenDiscard(count % 4 == 0)(printProgress(ctx, sourceId))
-        } yield (u, outcome)
+        } yield EvaluatedCandidate(u, outcome)
       }.withParallelism(ApiConcurrency.fiberCap(ctx.runCtx.client))
       _ <- printProgress(ctx, sourceId) // ensure final state is rendered
 
       // Batch-level cleanup
-      rejectedInBatch = results.count { case (_, o) => o == CandidateOutcome.Rejected || o == CandidateOutcome.Error }
-      hadInvite       = results.exists(_._2 == CandidateOutcome.Invited)
+      rejectedInBatch =
+        results.count(r => r.outcome == CandidateOutcome.Rejected || r.outcome == CandidateOutcome.Error)
+      hadInvite = results.exists(_.outcome == CandidateOutcome.Invited)
       _ <- reclassifyExcessInvited(ctx)
 
       // Compute consecutive rejects: trailing rejects after last invite in chunk
       chunkConsecutiveRejects = {
-        val orderedResults = results.map(_._2)
+        val orderedResults = results.map(_.outcome)
         val lastInviteIdx  = orderedResults.lastIndexWhere(_ == CandidateOutcome.Invited)
         if (lastInviteIdx >= 0) orderedResults.drop(lastInviteIdx + 1).size
         else sourceState.consecutiveRejects + orderedResults.size
@@ -281,11 +295,8 @@ private[recruitment] object RecruitmentExplore {
     ctx: ExploreContext,
     evaluatedUsernames: Set[Username],
     staticStrategies: List[RIO[CcasLogger & PostgresClient, List[SourceDescriptor]]]
-  ): RIO[
-    CcasLogger & PostgresClient,
-    (List[SourceDescriptor], List[RIO[CcasLogger & PostgresClient, List[SourceDescriptor]]])
-  ] =
-    if (!ctx.explore) ZIO.succeed((Nil, staticStrategies))
+  ): RIO[CcasLogger & PostgresClient, ReplenishResult] =
+    if (!ctx.explore) ZIO.succeed(ReplenishResult(Nil, staticStrategies))
     else
       for {
         // Dynamic: candidate opponents discovered during evaluation
@@ -293,17 +304,18 @@ private[recruitment] object RecruitmentExplore {
         newOpponents = opponents -- evaluatedUsernames
         result <-
           if (newOpponents.nonEmpty) {
-            CcasLogger.info(s"[Explore] Discovered ${newOpponents.size} candidate opponents")
-              .as((List(UsernameSource("candidate-opponents", newOpponents.toList)), staticStrategies))
+            CcasLogger.info(s"[Explore] Discovered ${newOpponents.size} candidate opponents").as(
+              ReplenishResult(List(UsernameSource("candidate-opponents", newOpponents.toList)), staticStrategies)
+            )
           } else {
             // Static strategies: try next one
             staticStrategies match {
-              case Nil => ZIO.succeed((Nil, Nil))
+              case Nil => ZIO.succeed(ReplenishResult(Nil, Nil))
               case head :: tail =>
                 for {
                   sources <- head
                   _       <- CcasLogger.info(s"[Explore] Static strategy yielded ${sources.size} sources")
-                } yield (sources, tail)
+                } yield ReplenishResult(sources, tail)
             }
           }
       } yield result

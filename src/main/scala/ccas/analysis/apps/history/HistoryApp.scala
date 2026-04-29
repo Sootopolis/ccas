@@ -81,10 +81,10 @@ object HistoryApp extends ZIOAppDefault {
     (for {
       rawArgs <- ZIOAppArgs.getArgs
       full = rawArgs.contains("--full")
-      (refreshMinHours, args) = parseRefreshArg(rawArgs)
-      slugs <- ZIO.fromOption(NonEmptyChunk.fromChunk(args.filterNot(_.startsWith("--")).map(ClubSlug.wrap)))
-        .orElseFail(BadRequestException(help))
-      _ <- discoverBatch(slugs, full, refreshMinHours)
+      parsed = parseRefreshArg(rawArgs)
+      slugChunk = parsed.remainingArgs.filterNot(_.startsWith("--")).map(ClubSlug.wrap)
+      slugs <- ZIO.fromOption(NonEmptyChunk.fromChunk(slugChunk)).orElseFail(BadRequestException(help))
+      _ <- discoverBatch(slugs, full, parsed.refreshMinHours)
     } yield ()).provideSomeAuto(
       CcasLogger.live(showProgress = true),
       ChessComClient.live("history"),
@@ -92,16 +92,18 @@ object HistoryApp extends ZIOAppDefault {
       PostgresClient.live(onInit = Tables.ensureTables)
     )
 
+  private[history] case class HistoryAppArgs(refreshMinHours: Option[Int], remainingArgs: Chunk[String])
+
   /** Parses `--refresh [hours]` from CLI args. Returns the parsed value and the remaining args with `--refresh` (and its
     * optional integer argument) stripped so they aren't treated as club slugs.
     */
-  private[history] def parseRefreshArg(args: Chunk[String]): (Option[Int], Chunk[String]) = {
+  private[history] def parseRefreshArg(args: Chunk[String]): HistoryAppArgs = {
     val idx = args.indexOf("--refresh")
-    if (idx < 0) { (None, args) }
+    if (idx < 0) { HistoryAppArgs(None, args) }
     else {
       val nextOpt = args.lift(idx + 1).flatMap(_.toIntOption)
-      if (nextOpt.isDefined) { (nextOpt, args.patch(idx, Chunk.empty, 2)) }
-      else { (Some(0), args.patch(idx, Chunk.empty, 1)) }
+      if (nextOpt.isDefined) { HistoryAppArgs(nextOpt, args.patch(idx, Chunk.empty, 2)) }
+      else { HistoryAppArgs(Some(0), args.patch(idx, Chunk.empty, 1)) }
     }
   }
 

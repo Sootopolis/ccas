@@ -18,11 +18,10 @@ object ClubDataApp extends ZIOAppDefault {
     (for {
       rawArgs <- ZIOAppArgs.getArgs
       parsed  <- ZIO.fromEither(parseMinAgeArg(rawArgs)).mapError(new IllegalArgumentException(_))
-      (minAgeHours, rest) = parsed
-      slugArgs            = rest.filterNot(_.startsWith("--")).toList
+      slugArgs = parsed.remainingArgs.filterNot(_.startsWith("--")).toList
       data <- slugArgs match {
-        case Nil   => refresh(minAgeHours)
-        case slugs => refreshSlugs(slugs.map(ClubSlug.wrap), minAgeHours)
+        case Nil   => refresh(parsed.minAgeHours)
+        case slugs => refreshSlugs(slugs.map(ClubSlug.wrap), parsed.minAgeHours)
       }
       _ <- OutputFile.writeAndLogGlobal("clubdata", formatReport(data), "_ccas")
     } yield ()).provideSome[ZIOAppArgs & Scope](
@@ -32,16 +31,19 @@ object ClubDataApp extends ZIOAppDefault {
       PostgresClient.live(onInit = Tables.ensureTables)
     )
 
-  /** Parses `--min-age <hours>` from CLI args. `--min-age 24` → `Right((Some(24), argsWithoutFlag))`; missing flag →
-    * `Right((None, args))`. Bare `--min-age` (no integer follows) is an error because unlike HistoryApp's `--refresh`,
-    * ClubDataApp's default behaviour already refreshes everything, so bare `--min-age` would silently do nothing.
+  private[clubdata] case class ClubDataAppArgs(minAgeHours: Option[Int], remainingArgs: Chunk[String])
+
+  /** Parses `--min-age <hours>` from CLI args. `--min-age 24` → `Right(ClubDataAppArgs(Some(24), argsWithoutFlag))`;
+    * missing flag → `Right(ClubDataAppArgs(None, args))`. Bare `--min-age` (no integer follows) is an error because
+    * unlike HistoryApp's `--refresh`, ClubDataApp's default behaviour already refreshes everything, so bare `--min-age`
+    * would silently do nothing.
     */
-  private[clubdata] def parseMinAgeArg(args: Chunk[String]): Either[String, (Option[Int], Chunk[String])] = {
+  private[clubdata] def parseMinAgeArg(args: Chunk[String]): Either[String, ClubDataAppArgs] = {
     val idx = args.indexOf("--min-age")
-    if (idx < 0) { Right((None, args)) }
+    if (idx < 0) { Right(ClubDataAppArgs(None, args)) }
     else {
       args.lift(idx + 1).flatMap(_.toIntOption) match {
-        case Some(hours) => Right((Some(hours), args.patch(idx, Chunk.empty, 2)))
+        case Some(hours) => Right(ClubDataAppArgs(Some(hours), args.patch(idx, Chunk.empty, 2)))
         case None        => Left("--min-age requires an integer hours argument, e.g. --min-age 24")
       }
     }

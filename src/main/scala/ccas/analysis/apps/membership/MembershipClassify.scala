@@ -171,15 +171,15 @@ private[membership] object MembershipClassify {
       dbState.membersByPlayerId.get(playerId) match {
         case Some(state) =>
           // Username change: same player ID, different username
-          val (updated, archive, changes) = playerChanges(state, username, statusCategory, apiPlayer.title, now)
-          val summary                     = MemberChangeSummary(playerId, username, changes)
+          val change  = playerChanges(state, username, statusCategory, apiPlayer.title, now)
+          val summary = MemberChangeSummary(playerId, username, change.changes)
           ZIO.succeed(
             PhaseBMemberResult(
               resolvedId = playerId,
               changes = Chunk(summary),
               newPlayers = Chunk.empty,
-              updatedPlayers = Chunk.fromIterable(updated),
-              archivedSnapshots = Chunk.fromIterable(archive),
+              updatedPlayers = Chunk.fromIterable(change.updated),
+              archivedSnapshots = Chunk.fromIterable(change.archived),
               newMemberships = Chunk.empty,
               closedMemberships = Chunk.empty
             )
@@ -298,8 +298,7 @@ private[membership] object MembershipClassify {
         } else {
           val statusCategory    = apiPlayer.status.category
           val lastOnlineInstant = java.time.Instant.ofEpochSecond(apiPlayer.lastOnline)
-          val (updated, archive, extraChanges) =
-            playerChanges(state, apiPlayer.username, statusCategory, apiPlayer.title, now)
+          val change            = playerChanges(state, apiPlayer.username, statusCategory, apiPlayer.title, now)
 
           val isFreshClosure =
             statusCategory != PlayerStatusCategory.Active &&
@@ -313,8 +312,8 @@ private[membership] object MembershipClassify {
           // AccountClosed already conveys the Active → non-Active transition;
           // drop the redundant StatusChange that playerChanges also emits.
           val filteredExtra =
-            if (isFreshClosure) { extraChanges.filterNot(_.isInstanceOf[StatusChange]) }
-            else { extraChanges }
+            if (isFreshClosure) { change.changes.filterNot(_.isInstanceOf[StatusChange]) }
+            else { change.changes }
 
           val allChanges = filteredExtra ++ primaryChange
           val summaries =
@@ -325,8 +324,8 @@ private[membership] object MembershipClassify {
             ZIO.succeed(
               PhaseCMemberResult(
                 changes = summaries,
-                updatedPlayers = Chunk.fromIterable(updated),
-                archivedSnapshots = Chunk.fromIterable(archive),
+                updatedPlayers = Chunk.fromIterable(change.updated),
+                archivedSnapshots = Chunk.fromIterable(change.archived),
                 closedMemberships = Chunk(closedMember)
               )
             )
@@ -335,8 +334,8 @@ private[membership] object MembershipClassify {
             checkClubMembership(client, clubSlug, apiPlayer.username).map { stillMember =>
               PhaseCMemberResult(
                 changes = summaries,
-                updatedPlayers = Chunk.fromIterable(updated),
-                archivedSnapshots = Chunk.fromIterable(archive),
+                updatedPlayers = Chunk.fromIterable(change.updated),
+                archivedSnapshots = Chunk.fromIterable(change.archived),
                 closedMemberships = if (stillMember) Chunk.empty else Chunk(closedAtLastOnline)
               )
             }
@@ -344,6 +343,12 @@ private[membership] object MembershipClassify {
         }
     )
   }
+
+  private case class PlayerChangeResult(
+    updated: Option[Player],
+    archived: Option[PlayerSnapshot],
+    changes: Chunk[MemberChange]
+  )
 
   /** Compares new API data against the existing player state. If anything changed, returns the updated Player, an
     * archive snapshot of the old state, and the changes.
@@ -354,15 +359,15 @@ private[membership] object MembershipClassify {
     statusCategory: PlayerStatusCategory,
     title: Option[ccas.api.misc.enums.Title],
     now: java.time.Instant
-  ): (Option[Player], Option[PlayerSnapshot], Chunk[MemberChange]) =
+  ): PlayerChangeResult =
     if (!state.player.stateMatches(username, statusCategory, title)) {
       val archive = state.player.toSnapshot
       val updated = state.player.copy(username = username, status = statusCategory, title = title, since = now)
       val changes = Chunk.newBuilder[MemberChange]
       if (state.player.status != statusCategory) { changes += StatusChange(now, state.player.status) }
       if (state.player.username != username) { changes += UsernameChange(now, state.player.username) }
-      (Some(updated), Some(archive), changes.result())
-    } else { (None, None, Chunk.empty) }
+      PlayerChangeResult(Some(updated), Some(archive), changes.result())
+    } else { PlayerChangeResult(None, None, Chunk.empty) }
 
   private def checkClubMembership(client: ChessComClient, clubSlug: ClubSlug, username: Username): Task[Boolean] =
     client.get[ApiPlayerClubs](ApiPlayerClubs.getUrl(username)).map { playerClubs =>

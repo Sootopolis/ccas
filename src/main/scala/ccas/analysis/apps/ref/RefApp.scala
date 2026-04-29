@@ -54,6 +54,14 @@ object RefApp extends ZIOAppDefault {
       PostgresClient.live(onInit = Tables.ensureTables)
     )
 
+  private case class RefAppResolutionStats(total: Int, resolvedDb: Int, resolvedApi: Int, skippedNew: Int)
+  private case class RefAppUpgradeStats(
+    upgradeEligible: Int,
+    upgradeSucceeded: Int,
+    tournamentUpgradeEligible: Int,
+    tournamentUpgradeSucceeded: Int
+  )
+
   // --- Entry point ---
 
   def populate(
@@ -61,14 +69,13 @@ object RefApp extends ZIOAppDefault {
     upgradeRefs: Boolean
   ): RIO[CcasLogger & ChessComClient & PostgresClient, ReportData] =
     for {
-      startedAt                                                                <- Clock.instant
-      client                                                                   <- ZIO.service[ChessComClient]
-      ctx                                                                      <- RefContext.make(client)
-      (clubsTotal, clubsResolvedDb, clubsResolvedApi, clubsSkippedNew)         <- resolveClubs(ctx, forceSkipped)
-      (playersTotal, playersResolvedDb, playersResolvedApi, playersSkippedNew) <- resolvePlayers(ctx, forceSkipped)
-      (upgradeEligible, upgradeSucceeded, tournamentUpgradeEligible, tournamentUpgradeSucceeded) <-
-        upgradeTournamentPlayers(ctx, upgradeRefs)
-      skipped                             <- ctx.skippedPlayers.get
+      startedAt   <- Clock.instant
+      client      <- ZIO.service[ChessComClient]
+      ctx         <- RefContext.make(client)
+      clubStats   <- resolveClubs(ctx, forceSkipped)
+      playerStats <- resolvePlayers(ctx, forceSkipped)
+      upgrade     <- upgradeTournamentPlayers(ctx, upgradeRefs)
+      skipped     <- ctx.skippedPlayers.get
       completedAt = Instant.now()
       duration    = JDuration.between(startedAt, completedAt)
       _ <- CcasLogger.info(s"Duration: ${duration.display}")
@@ -77,21 +84,21 @@ object RefApp extends ZIOAppDefault {
       playerSkipsByReason <- PlayerRefSkip.countByReason
       clubSkipsByReason   <- ClubRefSkip.countByReason
     } yield ReportData(
-      clubsTotal = clubsTotal,
-      clubsResolvedDb = clubsResolvedDb,
-      clubsResolvedApi = clubsResolvedApi,
-      clubsSkippedNew = clubsSkippedNew,
-      playersTotal = playersTotal,
-      playersResolvedDb = playersResolvedDb,
-      playersResolvedApi = playersResolvedApi,
-      playersSkippedNew = playersSkippedNew,
+      clubsTotal = clubStats.total,
+      clubsResolvedDb = clubStats.resolvedDb,
+      clubsResolvedApi = clubStats.resolvedApi,
+      clubsSkippedNew = clubStats.skippedNew,
+      playersTotal = playerStats.total,
+      playersResolvedDb = playerStats.resolvedDb,
+      playersResolvedApi = playerStats.resolvedApi,
+      playersSkippedNew = playerStats.skippedNew,
       skippedPlayers = skipped,
       playerSkipsByReason = playerSkipsByReason,
       clubSkipsByReason = clubSkipsByReason,
-      upgradeEligible = upgradeEligible,
-      upgradeSucceeded = upgradeSucceeded,
-      tournamentUpgradeEligible = tournamentUpgradeEligible,
-      tournamentUpgradeSucceeded = tournamentUpgradeSucceeded,
+      upgradeEligible = upgrade.upgradeEligible,
+      upgradeSucceeded = upgrade.upgradeSucceeded,
+      tournamentUpgradeEligible = upgrade.tournamentUpgradeEligible,
+      tournamentUpgradeSucceeded = upgrade.tournamentUpgradeSucceeded,
       startedAt = startedAt,
       completedAt = completedAt,
       failedQueries = failed,
@@ -101,7 +108,7 @@ object RefApp extends ZIOAppDefault {
   private def resolveClubs(
     ctx: RefContext,
     forceSkipped: Boolean
-  ): RIO[CcasLogger & ChessComClient & PostgresClient, (Int, Int, Int, Int)] = {
+  ): RIO[CcasLogger & ChessComClient & PostgresClient, RefAppResolutionStats] = {
     val parallelism = ApiConcurrency.fiberCap(ctx.client)
     for {
       clubs <- selectUnresolvedClubs(forceSkipped)
@@ -128,13 +135,13 @@ object RefApp extends ZIOAppDefault {
       _ <- ZIO.whenDiscard(unchanged > 0)(
         CcasLogger.info(s"Club-matches listings unchanged (skipped candidate iteration): $unchanged")
       )
-    } yield (clubs.size, db, api, skippedNew)
+    } yield RefAppResolutionStats(clubs.size, db, api, skippedNew)
   }
 
   private def resolvePlayers(
     ctx: RefContext,
     forceSkipped: Boolean
-  ): RIO[CcasLogger & ChessComClient & PostgresClient, (Int, Int, Int, Int)] = {
+  ): RIO[CcasLogger & ChessComClient & PostgresClient, RefAppResolutionStats] = {
     val parallelism = ApiConcurrency.fiberCap(ctx.client)
     for {
       players <- selectUnresolvedPlayers(forceSkipped)
@@ -168,7 +175,7 @@ object RefApp extends ZIOAppDefault {
       _ <- ZIO.whenDiscard(skipped.nonEmpty)(
         CcasLogger.warn(s"Players skipped (ID mismatch): ${skipped.size}")
       )
-    } yield (players.size, db, api, skippedNew)
+    } yield RefAppResolutionStats(players.size, db, api, skippedNew)
   }
 
   // --- Queries ---
@@ -235,8 +242,8 @@ object RefApp extends ZIOAppDefault {
   private def upgradeTournamentPlayers(
     ctx: RefContext,
     upgradeRefs: Boolean
-  ): RIO[CcasLogger & PostgresClient, (Int, Int, Int, Int)] =
-    if (!upgradeRefs) { ZIO.succeed((0, 0, 0, 0)) }
+  ): RIO[CcasLogger & PostgresClient, RefAppUpgradeStats] =
+    if (!upgradeRefs) { ZIO.succeed(RefAppUpgradeStats(0, 0, 0, 0)) }
     else {
       val parallelism = ApiConcurrency.fiberCap(ctx.client)
       for {
@@ -274,7 +281,7 @@ object RefApp extends ZIOAppDefault {
         _ <- CcasLogger.info(
           s"Upgraded: $matchCount to match refs, $tournCount to smaller tournaments / ${players.size}"
         )
-      } yield (players.size, matchCount, players.size - matchCount, tournCount)
+      } yield RefAppUpgradeStats(players.size, matchCount, players.size - matchCount, tournCount)
     }
 
   private def selectTournamentOnlyPlayersWithSlug: RIO[PostgresClient, List[TournamentRefPlayer]] =

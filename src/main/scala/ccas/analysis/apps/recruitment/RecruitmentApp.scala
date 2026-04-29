@@ -68,13 +68,13 @@ object RecruitmentApp extends ZIOAppDefault {
         case "report" :: clubStr :: rest =>
           val clubSlug = ClubSlug.wrap(clubStr)
           for {
-            (usernames, evaluatedCount, reportRun) <- showReport(clubSlug, rest.headOption)
-            now <- Clock.instant
-            completedAt = reportRun.completedAt.getOrElse(now)
+            report <- showReport(clubSlug, rest.headOption)
+            now    <- Clock.instant
+            completedAt = report.run.completedAt.getOrElse(now)
             _ <- OutputFile.writeAndLog(
               "recruitment",
               clubSlug,
-              formatRecruitmentOutput(usernames, evaluatedCount, reportRun.startedAt, completedAt)
+              formatRecruitmentOutput(report.usernames, report.evaluatedCount, report.run.startedAt, completedAt)
             )
           } yield ()
         case clubStr :: rest =>
@@ -425,10 +425,12 @@ object RecruitmentApp extends ZIOAppDefault {
     s"$timing$stats\n\n$header\n\n$detail\n"
   }
 
+  final case class RecruitmentReportResult(usernames: List[Username], evaluatedCount: Int, run: RecruitmentRun)
+
   def showReport(
     clubSlug: ClubSlug,
     runIdOpt: Option[String]
-  ): RIO[CcasLogger & PostgresClient, (List[Username], Int, RecruitmentRun)] =
+  ): RIO[CcasLogger & PostgresClient, RecruitmentReportResult] =
     for {
       club <- Club.selectBySlug(clubSlug)
         .someOrFail(NotFoundException(s"Club '$clubSlug' not found in database"))
@@ -457,7 +459,7 @@ object RecruitmentApp extends ZIOAppDefault {
       _ <- ZIO.foreachDiscard(usernames) { name =>
         CcasLogger.info(ApiPlayer.getProfileUrl(name).toString)
       }
-    } yield (usernames, evaluatedCount, run)
+    } yield RecruitmentReportResult(usernames, evaluatedCount, run)
 
   // --- Match ref writing ---
 
