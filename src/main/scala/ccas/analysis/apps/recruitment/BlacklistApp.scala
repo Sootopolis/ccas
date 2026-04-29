@@ -9,11 +9,11 @@ import ccas.analysis.tables.*
 import ccas.api.club.ApiClub
 import ccas.api.misc.subtypes.{ClubSlug, Username}
 import ccas.api.player.ApiPlayer
+import ccas.utils.ProgressDisplay
 import ccas.utils.client.{ChessComClient, HttpClientLayer}
 import ccas.utils.errors.{BadRequestException, NotFoundException}
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.withTransaction
-import ccas.utils.CcasLogger
 
 object BlacklistApp extends ZIOAppDefault {
   private val help =
@@ -43,7 +43,7 @@ object BlacklistApp extends ZIOAppDefault {
         case _ => ZIO.fail(BadRequestException(help))
       }
     } yield ()).provideSomeAuto(
-      CcasLogger.live(showProgress = true),
+      ProgressDisplay.live(showProgress = true),
       ChessComClient.live("blacklist"),
       HttpClientLayer.live,
       PostgresClient.live(onInit = Tables.ensureTables)
@@ -54,7 +54,7 @@ object BlacklistApp extends ZIOAppDefault {
     usernames: List[Username],
     reason: Option[String],
     expiresAt: Option[Instant]
-  ): RIO[ChessComClient & PostgresClient & CcasLogger, Unit] =
+  ): RIO[ChessComClient & PostgresClient, Unit] =
     for {
       client  <- ZIO.service[ChessComClient]
       apiClub <- ApiClub.get(client, clubSlug)
@@ -69,37 +69,37 @@ object BlacklistApp extends ZIOAppDefault {
               RecruitmentBlacklist(apiClub.clubId, apiPlayer.playerId, now, expiresAt, reason)
             )
           }
-          _ <- CcasLogger.info(
+          _ <- ZIO.logInfo(
             s"Blacklisted $username (player_id=${apiPlayer.playerId}) for club $clubSlug"
           )
         } yield ()
       }
     } yield ()
 
-  private def listBlacklist(clubSlug: ClubSlug): RIO[PostgresClient & CcasLogger, Unit] =
+  private def listBlacklist(clubSlug: ClubSlug): RIO[PostgresClient, Unit] =
     for {
       club    <- Club.selectBySlug(clubSlug).someOrFail(NotFoundException(s"Club not found: $clubSlug"))
       now     <- Clock.instant
       entries <- RecruitmentBlacklist.selectActiveByClub(club.clubId, now)
       _ <-
         if (entries.isEmpty) {
-          CcasLogger.info(s"No active blacklist entries for $clubSlug")
+          ZIO.logInfo(s"No active blacklist entries for $clubSlug")
         } else {
           ZIO.foreachDiscard(entries) { e =>
             val name    = e.username.fold(s"player_id=${e.playerId}")(_.toString)
             val expires = e.expiresAt.fold("indefinite")(t => s"expires $t")
             val reason  = e.reason.fold("")(r => s" reason=$r")
-            CcasLogger.info(s"  $name  $expires$reason")
+            ZIO.logInfo(s"  $name  $expires$reason")
           }
         }
     } yield ()
 
-  def removeFromBlacklist(clubSlug: ClubSlug, username: Username): RIO[PostgresClient & CcasLogger, Unit] =
+  def removeFromBlacklist(clubSlug: ClubSlug, username: Username): RIO[PostgresClient, Unit] =
     for {
       club <- Club.selectBySlug(clubSlug).someOrFail(NotFoundException(s"Club not found: $clubSlug"))
       ps   <- Player.selectByUsername(username).someOrFail(NotFoundException(s"Player not found: $username"))
       rows <- RecruitmentBlacklist.delete(club.clubId, ps.playerId)
-      _ <- CcasLogger.info(
+      _ <- ZIO.logInfo(
         if (rows > 0) s"Removed $username from blacklist for $clubSlug"
         else s"$username was not blacklisted for $clubSlug"
       )

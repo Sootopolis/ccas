@@ -16,7 +16,7 @@ import zio.json.JsonDecoder
 import ccas.analysis.tables.{ApiFetchFailure, ApiResponseBody, ApiResponseCache}
 import ccas.analysis.tables.subtypes.ApiResponseBodyId
 import ccas.info.BuildInfo
-import ccas.utils.{CcasLogger, HttpDate, ProgressBar}
+import ccas.utils.{HttpDate, ProgressBar, ProgressDisplay}
 import ccas.utils.errors.safeMessage
 import ccas.utils.json.JsonDecodingException
 
@@ -74,7 +74,6 @@ final class ChessComClient(
   client: Client,
   pgClient: PostgresClient,
   headers: Headers,
-  logger: CcasLogger,
   throttle: ChessComClient.ThrottleRefs,
   statsRef: Ref[ClientStatsAccumulator],
   progressBar: ProgressBar,
@@ -515,7 +514,7 @@ final class ChessComClient(
       case None => ZIO.unit
       case Some((oldMax, gen)) =>
         statsRef.update(_.incThrottleDowns) *>
-          logger.warn(s"Rate limit throttle: $oldMax \u2192 1 permit") *>
+          ZIO.logWarning(s"Rate limit throttle: $oldMax \u2192 1 permit") *>
           scheduleRecovery(gen, cooldown).forkDaemon
             .flatMap(f => scope.addFinalizerExit(_ => f.interrupt)).unit
     }
@@ -572,13 +571,13 @@ final class ChessComClient(
             if (newMax == oldMax) {
               scheduleRecovery(gen, cooldown)
             } else if (newMax < oldMax) {
-              logger.warn(s"Rate limit dropping back: $oldMax \u2192 $newMax permit(s)") *>
+              ZIO.logWarning(s"Rate limit dropping back: $oldMax \u2192 $newMax permit(s)") *>
                 scheduleRecovery(gen, cooldown)
             } else {
               val msg =
                 if (newMax == config.maxPermits) "Rate limit throttle lifted"
                 else s"Rate limit easing: $oldMax \u2192 $newMax permits"
-              logger.info(msg) *>
+              ZIO.logInfo(msg) *>
                 ZIO.unlessDiscard(newMax == config.maxPermits)(scheduleRecovery(gen, cooldown))
             }
           }
@@ -802,7 +801,7 @@ object ChessComClient {
       Header.AcceptEncoding.GZip()
     )
 
-  def live(appLabel: String): RLayer[Client & PostgresClient & CcasLogger, ChessComClient] =
+  def live(appLabel: String): RLayer[Client & PostgresClient & ProgressDisplay, ChessComClient] =
     ZLayer.scoped {
       import ChessComClientConfig.*
       val provider = TypesafeConfigProvider.fromTypesafeConfig(
@@ -819,7 +818,7 @@ object ChessComClient {
         clientScope   <- ZIO.service[Scope]
         client        <- ZIO.service[Client]
         pgClient      <- ZIO.service[PostgresClient]
-        logger        <- ZIO.service[CcasLogger]
+        display       <- ZIO.service[ProgressDisplay]
         stateRef      <- Ref.make(ThrottleState(throttleConfig.maxPermits, 0, Vector.empty))
         activeRef     <- Ref.make(0)
         rateLimitGate <- Semaphore.make(1)
@@ -828,16 +827,15 @@ object ChessComClient {
         sessionId      = startedAt.toString.replace(":", "").replace("-", "")
         stats               <- Ref.make(ClientStatsAccumulator())
         configIdRef         <- Ref.make(Option.empty[Long])
-        bar                 <- logger.progressBar
+        bar                 <- display.addBarScoped
         refs = ThrottleRefs(stateRef, activeRef, rateLimitGate, lastReqRef)
         flushCtx = ClientStatsFlushContext(sessionId, appLabel, startedAt, stats, configIdRef, throttleConfig, stateRef, pgClient)
         flushFiber <- ClientStatsPersistence.persistStats(flushCtx).repeat(Schedule.fixed(statsFlushInterval)).forkDaemon
-        _ <- ZIO.addFinalizer(flushFiber.interrupt *> ClientStatsPersistence.finalFlush(flushCtx, logger))
+        _ <- ZIO.addFinalizer(flushFiber.interrupt *> ClientStatsPersistence.finalFlush(flushCtx))
       } yield ChessComClient(
         client,
         pgClient,
         userAgentHeaders(rawConfig.contactEmail),
-        logger,
         refs,
         stats,
         bar,

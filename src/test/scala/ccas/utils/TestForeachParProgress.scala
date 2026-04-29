@@ -10,14 +10,14 @@ object TestForeachParProgress extends ZIOSpecDefault {
     testEmptyIterable,
     testActionFailurePropagated,
     testCounterReachesTotal
-  ).provideShared(ZLayer.succeed(TestCcasLogger.noop))
+  ).provideShared(ZLayer.succeed(ProgressDisplay.make(enabled = false)))
 
   private def testAllItemsProcessed = test("processes all items") {
     ZIO.scoped {
       for {
         visited <- Ref.make(Set.empty[Int])
         items = (1 to 10).toList
-        _ <- CcasLogger.foreachParProgress(items, 4)((n, total) => s"$n/$total") { i =>
+        _ <- ProgressDisplay.foreachParProgress(items, 4)((n, total) => s"$n/$total") { i =>
           visited.update(_ + i)
         }
         result <- visited.get
@@ -28,7 +28,7 @@ object TestForeachParProgress extends ZIOSpecDefault {
   private def testEmptyIterable = test("handles empty iterable") {
     ZIO.scoped {
       for {
-        _ <- CcasLogger.foreachParProgress(List.empty[Int], 4)((n, total) => s"$n/$total") { _ =>
+        _ <- ProgressDisplay.foreachParProgress(List.empty[Int], 4)((n, total) => s"$n/$total") { _ =>
           ZIO.fail(new RuntimeException("should not be called"))
         }
       } yield assertTrue(true)
@@ -37,7 +37,7 @@ object TestForeachParProgress extends ZIOSpecDefault {
 
   private def testActionFailurePropagated = test("propagates action failure") {
     val effect = ZIO.scoped {
-      CcasLogger.foreachParProgress(List(1, 2, 3), 4)((n, total) => s"$n/$total") { i =>
+      ProgressDisplay.foreachParProgress(List(1, 2, 3), 4)((n, total) => s"$n/$total") { i =>
         ZIO.when(i == 2)(ZIO.fail(new RuntimeException("boom")))
       }
     }
@@ -49,7 +49,7 @@ object TestForeachParProgress extends ZIOSpecDefault {
       for {
         counter <- Ref.make(0)
         items = (1 to 5).toList
-        _ <- CcasLogger.foreachParProgress(items, 4)((n, _) => s"$n") { _ =>
+        _ <- ProgressDisplay.foreachParProgress(items, 4)((n, _) => s"$n") { _ =>
           counter.update(_ + 1)
         }
         finalCount <- counter.get

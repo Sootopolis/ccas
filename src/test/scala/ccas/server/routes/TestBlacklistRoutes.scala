@@ -19,7 +19,7 @@ import ccas.server.routes.BlacklistRoutes.BlacklistEntryResponse
 import ccas.utils.client.ChessComClient
 import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
 import ccas.utils.sql.PostgresClient.transactZIO
-import ccas.utils.{CcasLogger, TestCcasLogger}
+import ccas.utils.ProgressDisplay
 
 object TestBlacklistRoutes extends ZIOSpecDefault {
 
@@ -39,7 +39,7 @@ object TestBlacklistRoutes extends ZIOSpecDefault {
     suiteDelete
   ) @@ TestAspect.before(resetTables)).provideShared(
     FreshSchemaLayer("test_blacklist_routes", onInit = Tables.ensureTables),
-    ZLayer.succeed[CcasLogger](TestCcasLogger.noop),
+    ZLayer.succeed[ProgressDisplay](ProgressDisplay.make(enabled = false)),
     Scope.default
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock
 
@@ -81,15 +81,15 @@ object TestBlacklistRoutes extends ZIOSpecDefault {
     path: String,
     body: String,
     responses: Map[String, String]
-  ): RIO[Scope & CcasLogger & PostgresClient, Response] =
+  ): RIO[Scope & ProgressDisplay & PostgresClient, Response] =
     RecruitmentTestSupport.fakeChessComClient(responses).flatMap { client =>
       BlacklistRoutes.routes
         .runZIO(jsonRequest(method, path, body))
-        .provideSomeLayer[Scope & CcasLogger & PostgresClient](ZLayer.succeed[ChessComClient](client))
+        .provideSomeLayer[Scope & ProgressDisplay & PostgresClient](ZLayer.succeed[ChessComClient](client))
     }
 
   /** Convenience for GET / DELETE routes that take no body and don't trigger any HTTP fetch. */
-  private def runNoBody(method: Method, path: String): RIO[Scope & CcasLogger & PostgresClient, Response] =
+  private def runNoBody(method: Method, path: String): RIO[Scope & ProgressDisplay & PostgresClient, Response] =
     runReq(method, path, body = "", responses = Map.empty)
 
   /** Decode the response body as a JSON list of [[BlacklistEntryResponse]]. Fails loudly on a non-OK status

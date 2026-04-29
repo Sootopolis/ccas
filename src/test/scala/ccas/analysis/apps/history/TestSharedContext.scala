@@ -10,7 +10,7 @@ import ccas.analysis.apps.history.HistoryUtils.*
 import ccas.analysis.tables.*
 import ccas.api.misc.enums.{ClubMatchStatus, PlayerStatusCategory, TimeClass}
 import ccas.api.misc.subtypes.*
-import ccas.utils.{CcasLogger, TestCcasLogger}
+import ccas.utils.ProgressDisplay
 import ccas.utils.client.{ChessComClient, TestChessComClientSupport}
 import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
 
@@ -129,7 +129,7 @@ object TestSharedContext extends ZIOSpecDefault {
           .seedFromMemberMatches(
             client, clubAId, clubASlug, allMembers, Set.empty, playerById, Set.empty, Some(shared), skipCtr
           )
-          .provideSomeEnvironment[PostgresClient](_.add[CcasLogger](TestCcasLogger.noop))
+          .provideSomeEnvironment[PostgresClient](_.add[ProgressDisplay](ProgressDisplay.make(enabled = false)))
         _ <- ZIO.foreachDiscard(List(ClubMatchId(6001)))(id =>
           HistoryPendingMatch.delete(clubAId, id, isLive = false)
         )
@@ -161,7 +161,7 @@ object TestSharedContext extends ZIOSpecDefault {
           .seedFromMemberMatches(
             client, clubBId, clubBSlug, allMembers, Set.empty, playerById, Set.empty, Some(shared), skipCtr
           )
-          .provideSomeEnvironment[PostgresClient](_.add[CcasLogger](TestCcasLogger.noop))
+          .provideSomeEnvironment[PostgresClient](_.add[ProgressDisplay](ProgressDisplay.make(enabled = false)))
 
         // HistoryMemberQuery should be recorded for club B even though alice was skipped
         queriedForB <- HistoryMemberQuery.selectClubPlayerIds(clubBId)

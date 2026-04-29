@@ -1,36 +1,39 @@
 package ccas.utils
 
+import java.time.format.DateTimeFormatter
+import java.time.{Instant, ZoneId}
 import java.util.concurrent.atomic.AtomicInteger
 
-import zio.{Console, Ref, Scope, Semaphore, UIO, ZIO}
+import zio.{Cause, FiberRef, LogLevel, LogSpan, Ref, Runtime, Scope, UIO, URIO, URLayer, ZIO, ZLayer, ZLogger}
 
 /** Manages progress bars rendered as a single line on stdout, overwritten in-place via `\r`.
   *
-  * All stdout operations (`render`, `logAboveBars`, `removeBar`) are serialized via a `Semaphore(1)` to ensure atomic
-  * erase-print-redraw sequences.
+  * State (`bars`) is guarded by a Java intrinsic monitor (`lock`) so the synchronous `ZLogger` callback installed by
+  * `ProgressDisplay.live` and the ZIO-effect entry points (`render`, `removeBar`, `finishAllSync`) all serialise their
+  * stdout writes through the same mutex. JVM monitors are reentrant, so a logger callback fired from a thread that
+  * already holds the lock proceeds without deadlock. Output goes directly to `System.out`, not through `zio.Console`,
+  * because `ZLogger.apply` is synchronous and cannot run a ZIO effect.
   *
-  * When `enabled` is false all methods are no-ops — suitable for server/non-interactive mode.
-  *
-  * Created via `CcasLogger.progressBar` or `CcasLogger.progressDisplay`.
+  * When `enabled` is `false` the bar list is still tracked (so `addBarScoped` finalisers behave consistently across
+  * modes) but every stdout side-effect is suppressed. `logAboveBarsSync` falls back to a plain `System.out.println` —
+  * suitable for server / non-interactive mode.
   */
-class ProgressDisplay private[utils] (
-  state: Ref[List[ProgressDisplay.BarState]],
-  mutex: Semaphore,
-  private val enabled: Boolean
-) {
+final class ProgressDisplay private[utils] (private val enabled: Boolean) {
 
-  private val idGen = new AtomicInteger(0)
+  private val lock                                  = new Object
+  private var bars: List[ProgressDisplay.BarState]  = Nil
+  private val idGen                                 = new AtomicInteger(0)
 
   // ---------------------------------------------------------------------------
   // Bar lifecycle
   // ---------------------------------------------------------------------------
 
   /** Create a new progress bar appended to the bottom of the display. */
-  def addBar: UIO[ProgressBar] =
-    for {
-      id <- ZIO.succeed(idGen.getAndIncrement())
-      _  <- state.update(_ :+ ProgressDisplay.BarState(id, 0, ""))
-    } yield new ProgressBar(id, this)
+  def addBar: UIO[ProgressBar] = ZIO.succeed {
+    val id = idGen.getAndIncrement()
+    lock.synchronized { bars = bars :+ ProgressDisplay.BarState(id, 0, "") }
+    new ProgressBar(id, this)
+  }
 
   /** Create a scoped progress bar — automatically removed when the scope closes. */
   def addBarScoped: ZIO[Scope, Nothing, ProgressBar] =
@@ -38,77 +41,201 @@ class ProgressDisplay private[utils] (
 
   // ---------------------------------------------------------------------------
   // Rendering (called by ProgressBar)
+  //
+  // The `enabled` check guards stdout writes only — the `bars` list is mutated unconditionally so
+  // `addBarScoped` finalisers stay consistent (otherwise disabled-mode bars would leak in `bars`).
   // ---------------------------------------------------------------------------
 
   /** Update one bar's output and re-render the whole display. */
-  private[utils] def render(barId: Int, output: String, lineCount: Int): UIO[Unit] =
-    ZIO.whenDiscard(enabled)(mutex.withPermit {
-      state.updateAndGet(_.map { b =>
-        if (b.id == barId) ProgressDisplay.BarState(barId, lineCount, output)
-        else b
-      }).flatMap(drawAll)
-    })
+  private[utils] def render(barId: Int, output: String, lineCount: Int): UIO[Unit] = ZIO.succeed {
+    lock.synchronized {
+      bars = bars.map(b =>
+        if (b.id == barId) ProgressDisplay.BarState(barId, lineCount, output) else b
+      )
+      drawAllSync()
+    }
+  }
 
   /** Remove a bar from the display. */
-  private[utils] def removeBar(barId: Int): UIO[Unit] =
-    ZIO.whenDiscard(enabled)(mutex.withPermit {
-      for {
-        bars <- state.get
-        _    <- clearLine(bars)
-        updated <- state.updateAndGet(_.filterNot(_.id == barId))
-        _ <- drawAll(updated)
-      } yield ()
-    })
+  private[utils] def removeBar(barId: Int): UIO[Unit] = ZIO.succeed {
+    lock.synchronized {
+      clearLineSync()
+      bars = bars.filterNot(_.id == barId)
+      drawAllSync()
+    }
+  }
 
-  /** Finish all bars — erase without redraw. Called from scope finalizer. */
-  private[utils] def finishAll: UIO[Unit] =
-    ZIO.whenDiscard(enabled)(mutex.withPermit {
-      state.getAndSet(Nil).flatMap(clearLine)
-    })
+  /** Finish all bars — erase without redraw. Called from the live layer's release block. */
+  private[utils] def finishAllSync(): Unit =
+    lock.synchronized {
+      clearLineSync()
+      bars = Nil
+    }
+
+  /** VisibleForTesting — number of bars currently tracked. Disabled-mode tests use this to verify the list doesn't
+    * leak. Not intended for production callers; production code should treat the bar collection as opaque.
+    */
+  private[utils] def barCount: Int = lock.synchronized(bars.size)
 
   // ---------------------------------------------------------------------------
-  // Logging (called by CcasLogger)
+  // Logging — called synchronously by the custom ZLogger
   // ---------------------------------------------------------------------------
 
   /** Print a log message above the progress bars without disrupting them. */
-  private[utils] def logAboveBars(msg: String): UIO[Unit] =
-    if (!enabled) {
-      Console.printLine(msg).ignore
-    } else {
-      mutex.withPermit {
-        for {
-          bars <- state.get
-          hasRendered = bars.exists(_.lineCount > 0)
-          _ <- ZIO.whenDiscard(hasRendered)(clearLine(bars))
-          _ <- Console.printLine(msg).ignore
-          _ <- ZIO.whenDiscard(hasRendered)(drawAll(bars))
-        } yield ()
+  private[utils] def logAboveBarsSync(msg: String): Unit =
+    lock.synchronized {
+      clearLineSync()
+      System.out.println(msg)
+      drawAllSync()
+    }
+
+  // ---------------------------------------------------------------------------
+  // ZLogger — installed by `live` via `Runtime.removeDefaultLoggers ++ ZIO.withLoggerScoped`. Companion-visible
+  // (`private[ProgressDisplay]`) so the layer's `withLoggerScoped` call can reach it without exposing the logger
+  // to the rest of the package — production callers should only install it via `live`.
+  //
+  // Note: `Instant.now()` reads the wall clock, not `Clock.instant`, so timestamps in tests under `TestClock` won't
+  // advance with `TestClock.adjust`. Acceptable for an interactive CLI formatter.
+  // ---------------------------------------------------------------------------
+
+  private[ProgressDisplay] val asZLogger: ZLogger[String, Any] =
+    (_, _, level, message, cause, context, spans, annotations) => {
+      val threshold = context.getOrDefault(FiberRef.currentLogLevel)
+      if (level >= threshold) {
+        try logAboveBarsSync(ProgressDisplay.format(level, message(), Instant.now(), cause, spans, annotations))
+        catch { case t: Throwable => t.printStackTrace(System.err) }
       }
     }
 
   // ---------------------------------------------------------------------------
-  // Internal rendering — single-line, \r-based (no cursor-up needed)
+  // Internal rendering — single-line, \r-based (no cursor-up needed). The `enabled` check lives in these
+  // helpers so callers don't repeat it; both also short-circuit on empty bar lists. Always called from inside
+  // a `lock.synchronized` block so the read of `bars` is consistent.
   // ---------------------------------------------------------------------------
 
-  /** Clear the current bar line. */
-  private def clearLine(bars: List[ProgressDisplay.BarState]): UIO[Unit] = {
-    val hasOutput = bars.exists(_.lineCount > 0)
-    ZIO.whenDiscard(hasOutput)(Console.print("\r\u001b[K").ignore)
-  }
+  private def clearLineSync(): Unit =
+    if (enabled && bars.exists(_.lineCount > 0)) System.out.print("\r\u001b[K")
 
-  /** Render all active bars as a single \r-overwritten line. */
-  private def drawAll(bars: List[ProgressDisplay.BarState]): UIO[Unit] = {
-    val parts = bars.filter(_.lineCount > 0).map(_.lastOutput.trim)
-    ZIO.whenDiscard(parts.nonEmpty)(Console.print("\r" + parts.mkString("  ") + "\u001b[K").ignore)
-  }
+  private def drawAllSync(): Unit =
+    if (enabled) {
+      val parts = bars.filter(_.lineCount > 0).map(_.lastOutput.trim)
+      if (parts.nonEmpty) System.out.print("\r" + parts.mkString("  ") + "\u001b[K")
+    }
 }
 
 object ProgressDisplay {
-  private[utils] case class BarState(id: Int, lineCount: Int, lastOutput: String)
 
-  private[utils] def make(enabled: Boolean): UIO[ProgressDisplay] =
+  private case class BarState(id: Int, lineCount: Int, lastOutput: String)
+
+  /** Synchronous factory — no IO, just allocates the lock + state. Use `live` instead in production code; `make` is
+    * intended for tests that need a noop / quiet display without spinning up the layer machinery.
+    *
+    * @param enabled
+    *   `true` for stdout rendering. `false` suppresses every stdout side-effect — bar lifecycle (`addBar`/`removeBar`)
+    *   still tracks state correctly so that `addBarScoped` finalisers behave the same in both modes.
+    */
+  def make(enabled: Boolean): ProgressDisplay = new ProgressDisplay(enabled)
+
+  /** Provides a `ProgressDisplay` service AND replaces ZIO's default console logger with the progress-display
+    * `ZLogger` for the layer's scope. ZIO's default console logger is therefore inactive while this layer is alive —
+    * no double output, no need for a separate `bootstrap = Runtime.removeDefaultLoggers` override.
+    *
+    * On scope close, the default-logger removal and the custom-logger registration are both reverted (both helpers
+    * are scope-bound under the hood) and `acquireRelease` runs `finishAllSync()` to wipe any remaining bars.
+    *
+    * @param showProgress
+    *   `true` for interactive CLI use (renders bars + log lines on stdout). `false` for server / non-interactive mode
+    *   (suppresses bar rendering; `ZIO.log*` still fires through the custom formatter, just without bar dance).
+    */
+  def live(showProgress: Boolean = true): URLayer[Scope, ProgressDisplay] =
+    Runtime.removeDefaultLoggers ++ ZLayer.scoped {
+      for {
+        d <- ZIO.acquireRelease(
+          ZIO.succeed(make(showProgress))
+        )(d => ZIO.succeed(d.finishAllSync()))
+        _ <- ZIO.withLoggerScoped(d.asZLogger)
+      } yield d
+    }
+
+  // ---------------------------------------------------------------------------
+  // Companion accessors
+  // ---------------------------------------------------------------------------
+
+  def progressBar: URIO[ProgressDisplay & Scope, ProgressBar] =
+    ZIO.serviceWithZIO[ProgressDisplay](_.addBarScoped)
+
+  /** Run `action` on each item in parallel, showing a progress bar. The `label` function receives the current count
+    * and total to produce the bar text (e.g. `(n, total) => s"  Processing: $n/$total"`).
+    */
+  def foreachParProgress[R, E, A](items: Iterable[A], parallelism: Int)(label: (Int, Int) => String)(
+    action: A => ZIO[R, E, Any]
+  ): ZIO[R & ProgressDisplay & Scope, E, Unit] = {
+    val total = items.size
     for {
-      ref <- Ref.make(List.empty[BarState])
-      sem <- Semaphore.make(1)
-    } yield new ProgressDisplay(ref, sem, enabled)
+      bar     <- progressBar
+      counter <- Ref.make(0)
+      _ <- ZIO.foreachParDiscard(items) { item =>
+        action(item) *> counter.updateAndGet(_ + 1).flatMap(n => bar.print(n, total, label(n, total)))
+      }.withParallelism(parallelism)
+    } yield ()
+  }
+
+  // ---------------------------------------------------------------------------
+  // Private formatter — ANSI colours, [LEVEL HH:mm:ss] msg, optional cause / spans / annotations
+  // ---------------------------------------------------------------------------
+
+  private val Reset  = "\u001b[0m"
+  private val Cyan   = "\u001b[36m"
+  private val Green  = "\u001b[32m"
+  private val Yellow = "\u001b[33m"
+  private val Red    = "\u001b[31m"
+
+  private def colorFor(level: LogLevel): String = level match {
+    case LogLevel.Debug   => Cyan
+    case LogLevel.Info    => Green
+    case LogLevel.Warning => Yellow
+    case LogLevel.Error   => Red
+    case LogLevel.Fatal   => Red
+    case _                => Reset
+  }
+
+  private val TimeFormat = DateTimeFormatter.ofPattern("HH:mm:ss")
+  private val Zone       = ZoneId.systemDefault()
+
+  /** Upper bound for `cause.prettyPrint` — a multi-MB Cause tree would otherwise corrupt bar redraw and flood
+    * stdout. Sized for interactive CLI; full causes still reach any structured sink that consumes `Cause` directly
+    * (none today, but worth preserving for future log aggregators).
+    */
+  private val MaxCauseChars = 2048
+
+  private def formatTime(when: Instant): String =
+    when.atZone(Zone).toLocalTime.format(TimeFormat)
+
+  private def format(
+    level: LogLevel,
+    msg: String,
+    when: Instant,
+    cause: Cause[Any],
+    spans: List[LogSpan],
+    annotations: Map[String, String]
+  ): String = {
+    val base = s"${colorFor(level)}[${level.label} ${formatTime(when)}]$Reset $msg"
+    val sb   = new StringBuilder(base)
+    if (!cause.isEmpty) {
+      sb.append('\n')
+      val rendered = cause.prettyPrint
+      sb.append(rendered.take(MaxCauseChars))
+      if (rendered.length > MaxCauseChars) sb.append("\n... [cause truncated]")
+    }
+    if (spans.nonEmpty) {
+      val now = when.toEpochMilli
+      sb.append("  spans=")
+      sb.append(spans.map(s => s"${s.label}=${now - s.startTime}ms").mkString(" "))
+    }
+    if (annotations.nonEmpty) {
+      sb.append("  ")
+      sb.append(annotations.map { case (k, v) => s"$k=$v" }.mkString(" "))
+    }
+    sb.toString
+  }
 }

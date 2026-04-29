@@ -7,9 +7,9 @@ import zio.http.Server
 import ccas.server.jobs.JobRunner
 import ccas.server.routes.{BlacklistRoutes, HealthRoutes, JobRoutes, ScheduleRoutes}
 import ccas.server.scheduler.JobScheduler
+import ccas.utils.ProgressDisplay
 import ccas.utils.client.{ChessComClient, HttpClientLayer}
 import ccas.utils.sql.PostgresClient
-import ccas.utils.CcasLogger
 
 object CcasServer extends ZIOAppDefault {
 
@@ -22,7 +22,7 @@ object CcasServer extends ZIOAppDefault {
       _         <- scheduler.start
       _ <- Server.serve(HealthRoutes.routes ++ JobRoutes.routes ++ ScheduleRoutes.routes ++ BlacklistRoutes.routes)
     } yield ()).provideSome[Scope](
-      CcasLogger.live(showProgress = false),
+      ProgressDisplay.live(showProgress = false),
       ChessComClient.live("server"),
       HttpClientLayer.live,
       PostgresClient.live(onInit = ServerTables.ensureTables),

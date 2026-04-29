@@ -3,7 +3,7 @@ package ccas.analysis.apps.recruitment
 import java.time.temporal.ChronoUnit
 import java.time.Instant
 
-import ccas.utils.CcasLogger
+
 import ccas.utils.sql.PostgresClient
 import zio.{RIO, ZIO}
 import RecruitmentStatsHelpers.*
@@ -228,7 +228,7 @@ private[recruitment] object RecruitmentFilterDefs {
     * in `runCtx.failedAdminSlugs` and skipped for the rest of the run.
     */
   object CheckAdminOfDiscoveredClub extends RecruitmentFilter {
-    def apply(env: FilterEnv): RIO[CcasLogger & PostgresClient, FilterResult] =
+    def apply(env: FilterEnv): RIO[PostgresClient, FilterResult] =
       for {
         apiPlayer <- requireApiPlayer(env)
         playerClubs <- ZIO.fromOption(env.candidate.playerClubs)
@@ -249,7 +249,7 @@ private[recruitment] object RecruitmentFilterDefs {
       candidatePlayerId: PlayerId,
       min: Int,
       cutoff: Instant
-    ): RIO[CcasLogger & PostgresClient, Boolean] =
+    ): RIO[PostgresClient, Boolean] =
       run.failedAdminSlugs.get.flatMap { failed =>
         if (failed.contains(slug)) ZIO.succeed(false)
         else
@@ -280,7 +280,7 @@ private[recruitment] object RecruitmentFilterDefs {
       candidatePlayerId: PlayerId,
       min: Int,
       cutoff: Instant
-    ): RIO[CcasLogger & PostgresClient, Boolean] =
+    ): RIO[PostgresClient, Boolean] =
       ApiClub.get(run.client, slug).flatMap { apiClub =>
         // Persist the Club row regardless — value for future runs and for ClubDataApp's slug index.
         // `Club.upsert` deliberately preserves an existing latest_match_at, so this doesn't clobber DB state.
@@ -303,7 +303,7 @@ private[recruitment] object RecruitmentFilterDefs {
         }
       }.catchAll { error =>
         run.failedAdminSlugs.update(_ + slug) *>
-          CcasLogger.info(s"[Recruitment] Admin late-check failed for $slug: ${error.getMessage}").as(false)
+          ZIO.logInfo(s"[Recruitment] Admin late-check failed for $slug: ${error.getMessage}").as(false)
       }
 
     /** Mirrors the SQL gate from `ClubAdmin.selectPlayerIdsForSizableClubs` so the in-filter check stays consistent

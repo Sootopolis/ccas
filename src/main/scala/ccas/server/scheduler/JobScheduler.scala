@@ -15,7 +15,6 @@ import ccas.analysis.apps.stats.StatsApp
 import ccas.analysis.tables.{Club, RunTrigger}
 import ccas.api.misc.subtypes.{ClubSlug, JobRunId}
 import ccas.server.jobs.{JobKind, JobRunner}
-import ccas.utils.CcasLogger
 import ccas.utils.sql.PostgresClient
 
 trait JobScheduler {
@@ -24,22 +23,21 @@ trait JobScheduler {
 
 object JobScheduler {
 
-  val live: URLayer[CcasLogger & JobRunner & PostgresClient, JobScheduler] =
-    ZLayer.fromFunction { (logger: CcasLogger, runner: JobRunner, pgClient: PostgresClient) =>
+  val live: URLayer[JobRunner & PostgresClient, JobScheduler] =
+    ZLayer.fromFunction { (runner: JobRunner, pgClient: PostgresClient) =>
       val config = ConfigFactory.load()
       val pollMinutes =
         if config.hasPath("scheduler.pollIntervalMinutes")
         then config.getInt("scheduler.pollIntervalMinutes")
         else 5 // default poll interval in minutes
       val pollInterval = pollMinutes.toLong.minutes
-      new JobSchedulerLive(logger, runner, pgClient, pollInterval)
+      new JobSchedulerLive(runner, pgClient, pollInterval)
     }
 
-  private[scheduler] class JobSchedulerLive(logger: CcasLogger, runner: JobRunner, pgClient: PostgresClient, pollInterval: Duration)
+  private[scheduler] class JobSchedulerLive(runner: JobRunner, pgClient: PostgresClient, pollInterval: Duration)
       extends JobScheduler {
 
     private val pgClientEnv = zio.ZEnvironment(pgClient)
-    private val loggerEnv     = zio.ZEnvironment(logger)
 
     override def start: URIO[Scope, Unit] =
       pollLoop
@@ -55,13 +53,12 @@ object JobScheduler {
           val isDue = schedule.lastRunAt.forall(ts => ChronoUnit.HOURS.between(ts, now) >= schedule.intervalHours)
           ZIO.whenDiscard(isDue) {
             runSchedule(schedule, now).catchAll { e =>
-              CcasLogger.error(s"[Scheduler] ${schedule.kind} (club ${schedule.clubId}): ${e.getMessage}")
-                .provideEnvironment(loggerEnv)
+              ZIO.logError(s"[Scheduler] ${schedule.kind} (club ${schedule.clubId}): ${e.getMessage}")
             }
           }
         }
       } yield ())
-        .catchAll(e => CcasLogger.error(s"[Scheduler] Poll error: ${e.getMessage}").provideEnvironment(loggerEnv))
+        .catchAll(e => ZIO.logError(s"[Scheduler] Poll error: ${e.getMessage}"))
 
     private def runSchedule(schedule: JobSchedule, now: Instant): Task[Unit] = {
       def requireClubSlug: Task[ClubSlug] =

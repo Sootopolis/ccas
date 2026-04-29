@@ -6,14 +6,17 @@ import java.time.temporal.ChronoUnit
 import com.typesafe.config.ConfigFactory
 import zio.{RIO, Scope, ZIO, ZIOAppDefault}
 
+import ccas.utils.ProgressDisplay
 import ccas.utils.sql.PostgresClient
-import ccas.utils.CcasLogger
 
 object Tables extends ZIOAppDefault {
 
   override def run: RIO[Scope, Unit] =
-    (ensureTables.provide(PostgresClient.live()) <* CcasLogger.info("All tables ensured"))
-      .provideSome[Scope](CcasLogger.live())
+    for {
+      _ <- ProgressDisplay.live(showProgress = false).build
+      _ <- ensureTables.provide(PostgresClient.live())
+      _ <- ZIO.logInfo("All tables ensured")
+    } yield ()
 
   def ensureTables: RIO[PostgresClient, Unit] =
     for {

@@ -10,7 +10,7 @@ import ccas.analysis.apps.membership.MembershipChange.MemberChange.*
 import ccas.analysis.tables.*
 import ccas.api.misc.enums.PlayerStatusCategory
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
-import ccas.utils.{display, CcasLogger}
+import ccas.utils.{display, ProgressDisplay}
 import ccas.utils.errors.NotFoundException
 import ccas.utils.sql.PostgresClient
 
@@ -23,7 +23,7 @@ private[membership] object MembershipReport {
     invitations: Map[PlayerId, Instant]
   )
 
-  def report(clubSlug: ClubSlug, since: Instant, until: Instant): RIO[CcasLogger & PostgresClient, ReportResult] =
+  def report(clubSlug: ClubSlug, since: Instant, until: Instant): RIO[ProgressDisplay & PostgresClient, ReportResult] =
     for {
       club <- Club.selectBySlug(clubSlug)
         .someOrFail(NotFoundException(s"Club '$clubSlug' not found in database"))
@@ -34,27 +34,27 @@ private[membership] object MembershipReport {
       invitations <- lookupJoinInvitations(clubId, summaries)
       countAtStart <- ClubMember.countActiveCurrentAt(clubId, since)
       countAtEnd   <- ClubMember.countActiveCurrentAt(clubId, until)
-      _ <- CcasLogger.info(s"=== Report for $clubSlug from $since to $until ===")
-      _ <- CcasLogger.info(s"Members: $countAtStart -> $countAtEnd")
+      _ <- ZIO.logInfo(s"=== Report for $clubSlug from $since to $until ===")
+      _ <- ZIO.logInfo(s"Members: $countAtStart -> $countAtEnd")
       _ <- printChangeSummaries(summaries, invitations)
     } yield ReportResult(summaries, countAtStart, countAtEnd, invitations)
 
   def reportReconciliation(
     result: ReconciliationResult,
     invitations: Map[PlayerId, Instant]
-  ): URIO[CcasLogger, Unit] = {
+  ): URIO[ProgressDisplay, Unit] = {
     val delta    = result.currentMemberCount - result.previousMemberCount
     val sign     = if (delta >= 0) "+" else ""
     val duration = JDuration.between(result.startedAt, result.completedAt)
     for {
-      _ <- CcasLogger.info(s"=== Reconciliation Complete ===")
-      _ <- CcasLogger.info(s"Duration:           ${duration.display}")
-      _ <- CcasLogger.info(s"Total members:      ${result.currentMemberCount} ($sign$delta)")
-      _ <- CcasLogger.info(s"New players:        ${result.newPlayers.size}")
-      _ <- CcasLogger.info(s"Updated players:    ${result.updatedPlayers.size}")
-      _ <- CcasLogger.info(s"New memberships:    ${result.newMemberships.size}")
-      _ <- CcasLogger.info(s"Closed memberships: ${result.closedMemberships.size}")
-      _ <- CcasLogger.info("")
+      _ <- ZIO.logInfo(s"=== Reconciliation Complete ===")
+      _ <- ZIO.logInfo(s"Duration:           ${duration.display}")
+      _ <- ZIO.logInfo(s"Total members:      ${result.currentMemberCount} ($sign$delta)")
+      _ <- ZIO.logInfo(s"New players:        ${result.newPlayers.size}")
+      _ <- ZIO.logInfo(s"Updated players:    ${result.updatedPlayers.size}")
+      _ <- ZIO.logInfo(s"New memberships:    ${result.newMemberships.size}")
+      _ <- ZIO.logInfo(s"Closed memberships: ${result.closedMemberships.size}")
+      _ <- ZIO.logInfo("")
       _ <- printChangeSummaries(result.changes.toList, invitations)
     } yield ()
   }
@@ -62,12 +62,12 @@ private[membership] object MembershipReport {
   private def printChangeSummaries(
     summaries: List[MemberChangeSummary],
     invitations: Map[PlayerId, Instant]
-  ): URIO[CcasLogger, Unit] = {
+  ): URIO[ProgressDisplay, Unit] = {
     val grouped = groupByCategory(summaries, invitations)
     ZIO.foreachDiscard(grouped) { case (label, entries) =>
-      CcasLogger.info(label) *>
+      ZIO.logInfo(label) *>
         ZIO.foreachDiscard(entries) { case (username, detail) =>
-          CcasLogger.info(s"  $username — $detail")
+          ZIO.logInfo(s"  $username — $detail")
         }
     }
   }

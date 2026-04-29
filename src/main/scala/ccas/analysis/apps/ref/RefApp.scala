@@ -7,7 +7,7 @@ import zio.{Clock, RIO, Ref, Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
 import RefUtils.*
 
 import ccas.analysis.tables.{ClubRefSkip, PlayerRefSkip, PlayerTournamentRef, SkipCount, Tables}
-import ccas.utils.{display, ApiConcurrency, CcasLogger, OutputFile}
+import ccas.utils.{display, ApiConcurrency, OutputFile, ProgressDisplay}
 import ccas.utils.client.{ChessComClient, HttpClientLayer}
 import ccas.utils.errors.BadRequestException
 import ccas.utils.sql.DbCodecs.given
@@ -48,7 +48,7 @@ object RefApp extends ZIOAppDefault {
       data <- populate(forceSkipped = forceSkipped, upgradeRefs = upgradeRefs)
       _    <- OutputFile.writeAndLogGlobal("ref", formatReport(data), "_ccas")
     } yield ()).provideSome[ZIOAppArgs & Scope](
-      CcasLogger.live(showProgress = true),
+      ProgressDisplay.live(showProgress = true),
       ChessComClient.live("ref"),
       HttpClientLayer.live,
       PostgresClient.live(onInit = Tables.ensureTables)
@@ -67,7 +67,7 @@ object RefApp extends ZIOAppDefault {
   def populate(
     forceSkipped: Boolean,
     upgradeRefs: Boolean
-  ): RIO[CcasLogger & ChessComClient & PostgresClient, ReportData] =
+  ): RIO[ProgressDisplay & ChessComClient & PostgresClient, ReportData] =
     for {
       startedAt   <- Clock.instant
       client      <- ZIO.service[ChessComClient]
@@ -78,7 +78,7 @@ object RefApp extends ZIOAppDefault {
       skipped     <- ctx.skippedPlayers.get
       completedAt = Instant.now()
       duration    = JDuration.between(startedAt, completedAt)
-      _ <- CcasLogger.info(s"Duration: ${duration.display}")
+      _ <- ZIO.logInfo(s"Duration: ${duration.display}")
       failed              <- ctx.failedUrls.get
       failedSrc           <- ctx.failedUrlSource.get
       playerSkipsByReason <- PlayerRefSkip.countByReason
@@ -108,13 +108,13 @@ object RefApp extends ZIOAppDefault {
   private def resolveClubs(
     ctx: RefContext,
     forceSkipped: Boolean
-  ): RIO[CcasLogger & ChessComClient & PostgresClient, RefAppResolutionStats] = {
+  ): RIO[ProgressDisplay & ChessComClient & PostgresClient, RefAppResolutionStats] = {
     val parallelism = ApiConcurrency.fiberCap(ctx.client)
     for {
       clubs <- selectUnresolvedClubs(forceSkipped)
-      _     <- CcasLogger.info(s"Clubs without match ref: ${clubs.size}")
+      _     <- ZIO.logInfo(s"Clubs without match ref: ${clubs.size}")
       _ <- ZIO.scoped {
-        CcasLogger.foreachParProgress(clubs, parallelism)((n, total) => s"  Resolving clubs: $n/$total") { club =>
+        ProgressDisplay.foreachParProgress(clubs, parallelism)((n, total) => s"  Resolving clubs: $n/$total") { club =>
           RefResolution.resolveClub(ctx, club)
         }
       }.onInterrupt {
@@ -122,18 +122,18 @@ object RefApp extends ZIOAppDefault {
           db  <- ctx.clubsResolvedDb.get
           api <- ctx.clubsResolvedApi.get
           sk  <- ctx.clubsSkippedNew.get
-          _   <- CcasLogger.info(s"Interrupted resolveClubs: $db (DB) + $api (API) resolved, $sk skipped / ${clubs.size}")
+          _   <- ZIO.logInfo(s"Interrupted resolveClubs: $db (DB) + $api (API) resolved, $sk skipped / ${clubs.size}")
         } yield ()
       }
       db         <- ctx.clubsResolvedDb.get
       api        <- ctx.clubsResolvedApi.get
       skippedNew <- ctx.clubsSkippedNew.get
       unchanged <- ctx.clubMatchesUnchanged.get
-      _ <- CcasLogger.info(
+      _ <- ZIO.logInfo(
         s"Clubs resolved: $db (DB) + $api (API) = ${db + api} / ${clubs.size}, skipped: $skippedNew new"
       )
       _ <- ZIO.whenDiscard(unchanged > 0)(
-        CcasLogger.info(s"Club-matches listings unchanged (skipped candidate iteration): $unchanged")
+        ZIO.logInfo(s"Club-matches listings unchanged (skipped candidate iteration): $unchanged")
       )
     } yield RefAppResolutionStats(clubs.size, db, api, skippedNew)
   }
@@ -141,13 +141,13 @@ object RefApp extends ZIOAppDefault {
   private def resolvePlayers(
     ctx: RefContext,
     forceSkipped: Boolean
-  ): RIO[CcasLogger & ChessComClient & PostgresClient, RefAppResolutionStats] = {
+  ): RIO[ProgressDisplay & ChessComClient & PostgresClient, RefAppResolutionStats] = {
     val parallelism = ApiConcurrency.fiberCap(ctx.client)
     for {
       players <- selectUnresolvedPlayers(forceSkipped)
-      _       <- CcasLogger.info(s"Players without match ref: ${players.size}")
+      _       <- ZIO.logInfo(s"Players without match ref: ${players.size}")
       _ <- ZIO.scoped {
-        CcasLogger.foreachParProgress(players, parallelism)((n, total) => s"  Resolving players: $n/$total") { player =>
+        ProgressDisplay.foreachParProgress(players, parallelism)((n, total) => s"  Resolving players: $n/$total") { player =>
           RefResolution.resolvePlayer(ctx, player)
         }
       }.onInterrupt {
@@ -155,7 +155,7 @@ object RefApp extends ZIOAppDefault {
           db  <- ctx.playersResolvedDb.get
           api <- ctx.playersResolvedApi.get
           sk  <- ctx.playersSkippedNew.get
-          _   <- CcasLogger.info(s"Interrupted resolvePlayers: $db (DB) + $api (API) resolved, $sk skipped / ${players.size}")
+          _   <- ZIO.logInfo(s"Interrupted resolvePlayers: $db (DB) + $api (API) resolved, $sk skipped / ${players.size}")
         } yield ()
       }
       db         <- ctx.playersResolvedDb.get
@@ -164,16 +164,16 @@ object RefApp extends ZIOAppDefault {
       skipped    <- ctx.skippedPlayers.get
       matchesUnchanged     <- ctx.playerMatchesUnchanged.get
       tournamentsUnchanged <- ctx.playerTournamentsUnchanged.get
-      _ <- CcasLogger.info(
+      _ <- ZIO.logInfo(
         s"Players resolved: $db (DB) + $api (API) = ${db + api} / ${players.size}, skipped: $skippedNew new"
       )
       _ <- ZIO.whenDiscard(matchesUnchanged > 0 || tournamentsUnchanged > 0)(
-        CcasLogger.info(
+        ZIO.logInfo(
           s"Player listings unchanged (skipped candidate iteration): matches=$matchesUnchanged, tournaments=$tournamentsUnchanged"
         )
       )
       _ <- ZIO.whenDiscard(skipped.nonEmpty)(
-        CcasLogger.warn(s"Players skipped (ID mismatch): ${skipped.size}")
+        ZIO.logWarning(s"Players skipped (ID mismatch): ${skipped.size}")
       )
     } yield RefAppResolutionStats(players.size, db, api, skippedNew)
   }
@@ -242,7 +242,7 @@ object RefApp extends ZIOAppDefault {
   private def upgradeTournamentPlayers(
     ctx: RefContext,
     upgradeRefs: Boolean
-  ): RIO[CcasLogger & PostgresClient, RefAppUpgradeStats] =
+  ): RIO[ProgressDisplay & PostgresClient, RefAppUpgradeStats] =
     if (!upgradeRefs) { ZIO.succeed(RefAppUpgradeStats(0, 0, 0, 0)) }
     else {
       val parallelism = ApiConcurrency.fiberCap(ctx.client)
@@ -251,14 +251,14 @@ object RefApp extends ZIOAppDefault {
         newTournRefs <- ctx.newTournamentRefPlayerIds.get
         players       = allPlayers.filterNot(trp => newTournRefs.contains(trp.playerId))
         skipped       = allPlayers.size - players.size
-        _ <- CcasLogger.info(
+        _ <- ZIO.logInfo(
           s"Tournament-only players eligible for upgrade: ${players.size}" +
             (if (skipped > 0) s" ($skipped skipped, created this run)" else "")
         )
         matchUpgraded <- Ref.make(0)
         tournUpgraded <- Ref.make(0)
         _ <- ZIO.scoped {
-          CcasLogger.foreachParProgress(players, parallelism)((n, total) => s"  Upgrading refs: $n/$total") { trp =>
+          ProgressDisplay.foreachParProgress(players, parallelism)((n, total) => s"  Upgrading refs: $n/$total") { trp =>
             val player = UnresolvedPlayer(trp.playerId, trp.username)
             RefResolution.tryUpgradeToMatchRef(ctx, player).flatMap {
               case true =>
@@ -273,12 +273,12 @@ object RefApp extends ZIOAppDefault {
           for {
             mc <- matchUpgraded.get
             tc <- tournUpgraded.get
-            _  <- CcasLogger.info(s"Interrupted upgradeTournamentPlayers: $mc match, $tc tournament upgrades / ${players.size}")
+            _  <- ZIO.logInfo(s"Interrupted upgradeTournamentPlayers: $mc match, $tc tournament upgrades / ${players.size}")
           } yield ()
         }
         matchCount <- matchUpgraded.get
         tournCount <- tournUpgraded.get
-        _ <- CcasLogger.info(
+        _ <- ZIO.logInfo(
           s"Upgraded: $matchCount to match refs, $tournCount to smaller tournaments / ${players.size}"
         )
       } yield RefAppUpgradeStats(players.size, matchCount, players.size - matchCount, tournCount)

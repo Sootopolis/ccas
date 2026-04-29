@@ -18,7 +18,7 @@ import ccas.analysis.apps.recruitment.RecruitmentTestSupport.{
 import ccas.analysis.tables.{Club, ClubMember, MembershipRun, Player, PlayerMatchRef, RunTrigger, Tables}
 import ccas.api.misc.enums.PlayerStatusCategory.{Active, Closed}
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username}
-import ccas.utils.{CcasLogger, TestCcasLogger}
+import ccas.utils.ProgressDisplay
 import ccas.utils.client.TestChessComClientSupport
 import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
 import ccas.utils.sql.PostgresClient.connectZIO
@@ -36,7 +36,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
     suiteReconcile
   ).provideShared(
     FreshSchemaLayer("test_membership_app_integration", onInit = Tables.ensureTables),
-    ZLayer.succeed(TestCcasLogger.noop)
+    ZLayer.succeed(ProgressDisplay.make(enabled = false))
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock
 
   // ==========================================================================
@@ -826,7 +826,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
         _          <- MembershipRun.complete(priorRunId, priorCompletedAt)
         client     <- TestChessComClientSupport.fakeClient(routes)
         result <- MembershipApp.reconcile(ClubSlug("test-club"))
-                    .provideSomeLayer[PostgresClient & CcasLogger](ZLayer.succeed(client))
+                    .provideSomeLayer[ProgressDisplay & PostgresClient](ZLayer.succeed(client))
       } yield assertTrue(
         result.newMemberships.size == 1,
         result.previousMemberCount == 1,

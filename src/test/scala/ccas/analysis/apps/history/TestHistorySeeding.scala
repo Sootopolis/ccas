@@ -15,7 +15,7 @@ import ccas.analysis.apps.recruitment.RecruitmentTestSupport.{
 import ccas.analysis.tables.*
 import ccas.api.misc.enums.{ClubMatchStatus, PlayerStatusCategory, TimeClass, Title}
 import ccas.api.misc.subtypes.{ClubMatchId, PlayerId, Username}
-import ccas.utils.{CcasLogger, TestCcasLogger}
+import ccas.utils.ProgressDisplay
 import ccas.utils.client.{ChessComClient, TestChessComClientSupport}
 import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
 import ccas.utils.sql.PostgresClient.connectZIO
@@ -26,7 +26,7 @@ object TestHistorySeeding extends ZIOSpecDefault {
     suiteRetryUnresolvedPlayers
   ).provideShared(
     FreshSchemaLayer("test_history_seeding", onInit = Tables.ensureTables),
-    ZLayer.succeed(TestCcasLogger.noop)
+    ZLayer.succeed(ProgressDisplay.make(enabled = false))
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock
 
   // ==========================================================================
@@ -150,7 +150,7 @@ object TestHistorySeeding extends ZIOSpecDefault {
 
   private def runRetry(
     client: ChessComClient
-  ): RIO[PostgresClient & CcasLogger, Int] =
+  ): RIO[ProgressDisplay & PostgresClient, Int] =
     HistorySeeding.retryUnresolvedPlayers(client)
 
   private val matchIdL = ClubMatchId.unwrap(matchId)

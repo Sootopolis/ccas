@@ -13,7 +13,7 @@ import ccas.api.clubmatch.ApiDailyMatch.*
 import ccas.api.misc.enums.*
 import ccas.api.misc.subtypes.*
 import ccas.api.player.{ApiPlayer, ApiPlayerClubs}
-import ccas.utils.{ApiConcurrency, CcasLogger, ProgressBar}
+import ccas.utils.{ApiConcurrency, ProgressBar, ProgressDisplay}
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.withTransaction
 
@@ -30,8 +30,8 @@ private[history] object HistoryProcessing {
     ctx: ProcessingContext,
     settledMatchIds: Set[ClubMatchId],
     shared: Option[SharedContext] = None
-  ): RIO[CcasLogger & PostgresClient, RunStats] = {
-    def waveLoop(waveCount: Int, waveDetails: List[WaveDetail]): RIO[CcasLogger & PostgresClient, RunStats] =
+  ): RIO[ProgressDisplay & PostgresClient, RunStats] = {
+    def waveLoop(waveCount: Int, waveDetails: List[WaveDetail]): RIO[ProgressDisplay & PostgresClient, RunStats] =
       for {
         pendingCount <- HistoryPendingMatch.countNew(ctx.clubId)
         result <-
@@ -39,13 +39,13 @@ private[history] object HistoryProcessing {
           else {
             val wave = waveCount + 1
             for {
-              _           <- CcasLogger.info(s"  Wave $wave: $pendingCount matches to process")
+              _           <- ZIO.logInfo(s"  Wave $wave: $pendingCount matches to process")
               _           <- ctx.newPlayers.set(Set.empty)
               beforeCount <- ctx.matchesProcessed.get
 
               waveCounter <- Ref.make(0)
               _ <- ZIO.scoped {
-                CcasLogger.progressBar.flatMap(waveBar =>
+                ProgressDisplay.progressBar.flatMap(waveBar =>
                   processAllPending(ctx, waveBar, waveCounter, pendingCount, shared)
                 )
               }
@@ -53,12 +53,12 @@ private[history] object HistoryProcessing {
               afterCount  <- ctx.matchesProcessed.get
               failedCount <- ctx.matchesFailed.get
               waveProcessed = afterCount - beforeCount
-              _ <- CcasLogger.info(s"  Wave $wave complete: $waveProcessed processed, $failedCount failed total")
+              _ <- ZIO.logInfo(s"  Wave $wave complete: $waveProcessed processed, $failedCount failed total")
 
               // Seed matches for newly discovered players (track in shared context so later clubs don't re-query)
               newPlayers <- ctx.newPlayers.get
               _ <- ZIO.whenDiscard(newPlayers.nonEmpty) {
-                CcasLogger.info(s"  Querying match lists for ${newPlayers.size} discovered players...") *>
+                ZIO.logInfo(s"  Querying match lists for ${newPlayers.size} discovered players...") *>
                   ZIO.foreachParDiscard(newPlayers) { dp =>
                     HistorySeeding
                       .seedMatchesForPlayer(
@@ -66,7 +66,7 @@ private[history] object HistoryProcessing {
                         ctx.seedPlayerMatchesUnchanged
                       )
                       .zipLeft(ZIO.foreachDiscard(shared)(_.queriedPlayers.update(_ + dp.playerId)))
-                      .catchAll(error => CcasLogger.warn(s"  ${dp.username}: failed to seed — ${error.getMessage}"))
+                      .catchAll(error => ZIO.logWarning(s"  ${dp.username}: failed to seed — ${error.getMessage}"))
                   }.withParallelism(ApiConcurrency.fiberCap(ctx.client))
               }
 
@@ -93,7 +93,7 @@ private[history] object HistoryProcessing {
     counter: Ref[Int],
     waveTotal: Long,
     shared: Option[SharedContext]
-  ): RIO[CcasLogger & PostgresClient, Unit] =
+  ): RIO[ProgressDisplay & PostgresClient, Unit] =
     for {
       batch <- HistoryPendingMatch.selectClubBatch(ctx.clubId, BatchSize)
       _ <- ZIO.whenDiscard(batch.nonEmpty) {
@@ -109,14 +109,14 @@ private[history] object HistoryProcessing {
     counter: Ref[Int],
     waveTotal: Long,
     shared: Option[SharedContext]
-  ): RIO[CcasLogger & PostgresClient, Unit] =
+  ): RIO[ProgressDisplay & PostgresClient, Unit] =
     ZIO.foreachParDiscard(pending) { pm =>
       processMatch(ctx, pm.matchId, pm.isLive, shared)
         .catchAll { error =>
           ctx.matchesFailed.update(_ + 1) *>
             ctx.failedMatches.update(_ :+ FailedMatch(MatchKey(pm.matchId, pm.isLive), error.getMessage)) *>
             HistoryPendingMatch.updateStatus(ctx.clubId, pm.matchId, pm.isLive, PendingMatchStatus.ApiError) *>
-            CcasLogger.warn(s"    Match ${pm.matchId}${if (pm.isLive) " (live)" else ""}: ${error.getMessage}")
+            ZIO.logWarning(s"    Match ${pm.matchId}${if (pm.isLive) " (live)" else ""}: ${error.getMessage}")
         } *> counter.updateAndGet(_ + 1).flatMap { n =>
         bar.print(n, waveTotal.toInt, s"    Processing matches: $n/$waveTotal")
       }
@@ -127,7 +127,7 @@ private[history] object HistoryProcessing {
     matchId: ClubMatchId,
     isLive: Boolean,
     shared: Option[SharedContext]
-  ): RIO[CcasLogger & PostgresClient, Unit] =
+  ): RIO[ProgressDisplay & PostgresClient, Unit] =
     for {
       alreadyProcessed <- shared.fold(ZIO.succeed(false))(_.processedMatches.get.map(_.contains(matchId)))
       _ <-
@@ -149,7 +149,7 @@ private[history] object HistoryProcessing {
     ctx: ProcessingContext,
     matchId: ClubMatchId,
     shared: Option[SharedContext]
-  ): RIO[CcasLogger & PostgresClient, Unit] =
+  ): RIO[ProgressDisplay & PostgresClient, Unit] =
     for {
       dailyMatch <- fetchMatch(ctx, matchId)
 
@@ -210,7 +210,7 @@ private[history] object HistoryProcessing {
       }
       _ <- ZIO.whenDiscard(weAreTeam1.isEmpty) {
         ctx.matchesUnidentified.update(_ + 1) *>
-          CcasLogger.warn(s"    Match $matchId: club ${ctx.clubId} not found in either team (data saved, BFS skipped)")
+          ZIO.logWarning(s"    Match $matchId: club ${ctx.clubId} not found in either team (data saved, BFS skipped)")
       }
       _ <- ZIO.foreachDiscard(shared)(_.processedMatches.update(_ + matchId))
     } yield ()
@@ -220,7 +220,7 @@ private[history] object HistoryProcessing {
     ctx: ProcessingContext,
     matchId: ClubMatchId,
     shared: Option[SharedContext]
-  ): RIO[CcasLogger & PostgresClient, Unit] =
+  ): RIO[ProgressDisplay & PostgresClient, Unit] =
     for {
       liveMatch <- fetchLiveMatch(ctx, matchId)
 
@@ -249,24 +249,24 @@ private[history] object HistoryProcessing {
   def refreshSettledMatches(
     ctx: ProcessingContext,
     minAgeHours: Int
-  ): RIO[CcasLogger & PostgresClient, Int] = {
+  ): RIO[ProgressDisplay & PostgresClient, Int] = {
     val cutoffTime =
       if (minAgeHours <= 0) { Instant.now() }
       else { Instant.now().minus(JDuration.ofHours(minAgeHours.toLong)) }
     for {
       total <- ClubMatch.countSettledForRefresh(ctx.clubId, cutoffTime)
       refreshed <-
-        if (total == 0) { CcasLogger.info("  No settled matches to refresh").as(0) }
+        if (total == 0) { ZIO.logInfo("  No settled matches to refresh").as(0) }
         else {
-          CcasLogger.info(s"  $total settled matches to refresh") *>
+          ZIO.logInfo(s"  $total settled matches to refresh") *>
             ZIO.scoped {
               for {
-                bar     <- CcasLogger.progressBar
+                bar     <- ProgressDisplay.progressBar
                 counter <- Ref.make(0)
                 failed  <- Ref.make(0)
                 _       <- refreshLoop(ctx, cutoffTime, bar, counter, failed, total.toInt, ClubMatchId(0))
                 f       <- failed.get
-                _       <- ZIO.whenDiscard(f > 0)(CcasLogger.info(s"  Refresh: $f failed (will retry next run)"))
+                _       <- ZIO.whenDiscard(f > 0)(ZIO.logInfo(s"  Refresh: $f failed (will retry next run)"))
               } yield total.toInt - f
             }
         }
@@ -281,7 +281,7 @@ private[history] object HistoryProcessing {
     failed: Ref[Int],
     total: Int,
     cursor: ClubMatchId
-  ): RIO[CcasLogger & PostgresClient, Unit] =
+  ): RIO[ProgressDisplay & PostgresClient, Unit] =
     for {
       batch <- ClubMatch.selectSettledForRefreshBatch(ctx.clubId, cutoffTime, BatchSize, cursor)
       _ <- ZIO.whenDiscard(batch.nonEmpty) {
@@ -289,7 +289,7 @@ private[history] object HistoryProcessing {
           refreshSingleMatch(ctx, matchId)
             .catchAll { error =>
               failed.update(_ + 1) *>
-                CcasLogger.warn(s"    Refresh $matchId: ${error.getMessage}")
+                ZIO.logWarning(s"    Refresh $matchId: ${error.getMessage}")
             } *> counter.updateAndGet(_ + 1).flatMap { n =>
             bar.print(n, total, s"    Refreshing: $n/$total")
           }
@@ -305,7 +305,7 @@ private[history] object HistoryProcessing {
   private def refreshSingleMatch(
     ctx: ProcessingContext,
     matchId: ClubMatchId
-  ): RIO[CcasLogger & PostgresClient, Unit] =
+  ): RIO[ProgressDisplay & PostgresClient, Unit] =
     ctx.client.getCacheable[ApiDailyMatch](ApiDailyMatch.getUrl(matchId)).flatMap {
       _.foldZIO(_ =>
         ctx.refreshMatchUnchanged.update(_ + 1) *>
@@ -317,7 +317,7 @@ private[history] object HistoryProcessing {
     ctx: ProcessingContext,
     matchId: ClubMatchId,
     dailyMatch: ApiDailyMatch
-  ): RIO[CcasLogger & PostgresClient, Unit] =
+  ): RIO[ProgressDisplay & PostgresClient, Unit] =
     for {
       (team1ClubId, team2ClubId) <-
         resolveClubIdFromTeamUrl(ctx, dailyMatch.teams.team1.`@id`) <&>
@@ -368,7 +368,7 @@ private[history] object HistoryProcessing {
     dailyMatch: ApiDailyMatch,
     weAreTeam1: Option[Boolean],
     matchStartTime: Option[Instant]
-  ): RIO[CcasLogger & PostgresClient, List[(ClubMatchBoard, List[ClubMatchGame])]] =
+  ): RIO[ProgressDisplay & PostgresClient, List[(ClubMatchBoard, List[ClubMatchGame])]] =
     dailyMatch match {
       case _: ApiDailyMatchRegistered => ZIO.succeed(Nil)
       case _ =>
@@ -460,7 +460,7 @@ private[history] object HistoryProcessing {
     username: Username,
     isOurTeam: Boolean,
     matchStartTime: Option[Instant]
-  ): RIO[CcasLogger & PostgresClient, Option[PlayerId]] = {
+  ): RIO[ProgressDisplay & PostgresClient, Option[PlayerId]] = {
     val key = username.value
     ctx.knownPlayers.get.map(_.get(key)).flatMap {
       case Some(playerId) => ctx.playersKnown.update(_ + 1).as(Some(playerId))
@@ -477,7 +477,7 @@ private[history] object HistoryProcessing {
     key: String,
     isOurTeam: Boolean,
     matchStartTime: Option[Instant]
-  ): RIO[CcasLogger & PostgresClient, Option[PlayerId]] =
+  ): RIO[ProgressDisplay & PostgresClient, Option[PlayerId]] =
     for {
       promise <- Promise.make[Throwable, Option[PlayerId]]
       action <- ctx.discoveryCache.modify { m =>
@@ -496,7 +496,7 @@ private[history] object HistoryProcessing {
     promise: Promise[Throwable, Option[PlayerId]],
     isOurTeam: Boolean,
     matchStartTime: Option[Instant]
-  ): RIO[CcasLogger & PostgresClient, Option[PlayerId]] = {
+  ): RIO[ProgressDisplay & PostgresClient, Option[PlayerId]] = {
     val work = for {
       apiPlayer <- ctx.client.get[ApiPlayer](ApiPlayer.getUrl(username))
       playerId = apiPlayer.playerId
@@ -517,7 +517,7 @@ private[history] object HistoryProcessing {
     work.foldZIO(
       error =>
         ctx.playersFailed.update(_ + 1)
-          *> CcasLogger.warn(s"    Cannot resolve player $username: ${error.getMessage}")
+          *> ZIO.logWarning(s"    Cannot resolve player $username: ${error.getMessage}")
           *> promise.succeed(None).as(None),
       result => promise.succeed(result).as(result)
     )

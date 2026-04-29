@@ -10,7 +10,7 @@ import ccas.analysis.apps.membership.MembershipChange.MemberChange.JoinedClub
 import ccas.analysis.tables.*
 import ccas.api.club.{ApiClub, ApiClubMembers}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId, PlayerId}
-import ccas.utils.{CcasLogger, OutputFile, TimeParser}
+import ccas.utils.{OutputFile, ProgressDisplay, TimeParser}
 import ccas.utils.client.{ChessComClient, HttpClientLayer}
 import ccas.utils.errors.BadRequestException
 import ccas.utils.sql.PostgresClient
@@ -50,7 +50,7 @@ object MembershipApp extends ZIOAppDefault {
         }
       }
     } yield ()).provideSomeAuto(
-      CcasLogger.live(showProgress = true),
+      ProgressDisplay.live(showProgress = true),
       ChessComClient.live(MEMBERSHIP),
       HttpClientLayer.live,
       PostgresClient.live(onInit = Tables.ensureTables)
@@ -100,7 +100,7 @@ object MembershipApp extends ZIOAppDefault {
   private def reconcileIfStale(
     clubSlug: ClubSlug,
     until: Instant
-  ): RIO[CcasLogger & ChessComClient & PostgresClient, Unit] =
+  ): RIO[ProgressDisplay & ChessComClient & PostgresClient, Unit] =
     Club.selectBySlug(clubSlug).flatMap {
       case Some(club) =>
         MembershipRun.selectLatest(club.clubId).flatMap {
@@ -118,7 +118,7 @@ object MembershipApp extends ZIOAppDefault {
     trackRun: Boolean = true,
     trigger: RunTrigger = RunTrigger.Cli,
     jobRunId: Option[JobRunId] = None
-  ): RIO[CcasLogger & ChessComClient & PostgresClient, ReconciliationResult] =
+  ): RIO[ProgressDisplay & ChessComClient & PostgresClient, ReconciliationResult] =
     for {
       startedAt <- Clock.instant
       client    <- ZIO.service[ChessComClient]

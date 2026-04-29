@@ -12,14 +12,14 @@ import ccas.api.misc.enums.GameResultDetail
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
 import ccas.api.player.{ApiPlayer, ApiPlayerClubs, ApiPlayerMatches}
 import ccas.api.player.ApiPlayerArchive.ApiPlayerArchiveGame
-import ccas.utils.CcasLogger
+
 import ccas.utils.client.ChessComClient
 import ccas.utils.ProgressBar
 
 // --- Filter pipeline types ---
 
 private[recruitment] trait RecruitmentFilter {
-  def apply(env: FilterEnv): RIO[CcasLogger & PostgresClient, FilterResult]
+  def apply(env: FilterEnv): RIO[PostgresClient, FilterResult]
 }
 
 /** Shared across all candidates in a run. */

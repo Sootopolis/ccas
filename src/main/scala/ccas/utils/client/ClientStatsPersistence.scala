@@ -3,7 +3,6 @@ package ccas.utils.client
 import java.time.Instant
 
 import ccas.analysis.tables.{ClientConfig, ClientStats}
-import ccas.utils.CcasLogger
 import ccas.utils.errors.safeMessage
 import ccas.utils.sql.PostgresClient
 import zio.{Clock, Ref, UIO, ZEnvironment, ZIO}
@@ -51,10 +50,10 @@ private[ccas] object ClientStatsPersistence {
       .ignore
 
   /** Final stats flush: upserts the cumulative snapshot, then logs a summary. Called by the scope finalizer. */
-  def finalFlush(ctx: ClientStatsFlushContext, logger: CcasLogger): UIO[Unit] =
+  def finalFlush(ctx: ClientStatsFlushContext): UIO[Unit] =
     ctx.statsRef.get.flatMap { cumulative =>
       persistStats(ctx) *>
-        ZIO.whenDiscard(cumulative.hasActivity)(logger.info(cumulative.summary))
+        ZIO.whenDiscard(cumulative.hasActivity)(ZIO.logInfo(cumulative.summary))
     }
 
   private def toClientConfig(config: ChessComClient.ThrottleConfig): ClientConfig = {

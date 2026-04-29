@@ -12,7 +12,7 @@ import ccas.server.jobs.{JobKind, JobRun, JobRunner}
 import ccas.utils.client.ChessComClient
 import ccas.utils.sql.FreshSchemaLayer
 import ccas.utils.sql.PostgresClient
-import ccas.utils.{CcasLogger, TestCcasLogger}
+import ccas.utils.ProgressDisplay
 
 object TestJobScheduler extends ZIOSpecDefault {
 
@@ -40,7 +40,7 @@ object TestJobScheduler extends ZIOSpecDefault {
       clubId: Option[ClubId],
       params: Option[String],
       trigger: RunTrigger,
-      effect: Option[JobRunId] => RIO[CcasLogger & ChessComClient & PostgresClient, Any]
+      effect: Option[JobRunId] => RIO[ProgressDisplay & ChessComClient & PostgresClient, Any]
     ): RIO[PostgresClient, JobRunId] =
       submissions.update(_ + 1).as(JobRunId.generate())
 
@@ -55,7 +55,7 @@ object TestJobScheduler extends ZIOSpecDefault {
       clubId: Option[ClubId],
       params: Option[String],
       trigger: RunTrigger,
-      effect: Option[JobRunId] => RIO[CcasLogger & ChessComClient & PostgresClient, Any]
+      effect: Option[JobRunId] => RIO[ProgressDisplay & ChessComClient & PostgresClient, Any]
     ): RIO[PostgresClient, JobRunId] =
       submitted.update(clubId :: _).as(JobRunId.generate())
 
@@ -69,7 +69,7 @@ object TestJobScheduler extends ZIOSpecDefault {
       pgClient    <- ZIO.service[PostgresClient]
       submissions <- Ref.make(0)
       runner = stubRunner(submissions)
-      scheduler = new JobScheduler.JobSchedulerLive(TestCcasLogger.noop, runner, pgClient, pollInterval)
+      scheduler = new JobScheduler.JobSchedulerLive(runner, pgClient, pollInterval)
 
       // Always-due schedule: every poll triggers a submission.
       now <- Clock.instant
@@ -102,7 +102,7 @@ object TestJobScheduler extends ZIOSpecDefault {
       pgClient  <- ZIO.service[PostgresClient]
       submitted <- Ref.make(List.empty[Option[ClubId]])
       runner = trackingRunner(submitted)
-      scheduler = new JobScheduler.JobSchedulerLive(TestCcasLogger.noop, runner, pgClient, pollInterval)
+      scheduler = new JobScheduler.JobSchedulerLive(runner, pgClient, pollInterval)
 
       now <- Clock.instant
       twoHoursAgo = now.minus(2, ChronoUnit.HOURS)
@@ -127,7 +127,7 @@ object TestJobScheduler extends ZIOSpecDefault {
       pgClient  <- ZIO.service[PostgresClient]
       submitted <- Ref.make(List.empty[Option[ClubId]])
       runner = trackingRunner(submitted)
-      scheduler = new JobScheduler.JobSchedulerLive(TestCcasLogger.noop, runner, pgClient, pollInterval)
+      scheduler = new JobScheduler.JobSchedulerLive(runner, pgClient, pollInterval)
 
       now <- Clock.instant
       _ <- Club.upsert(Club(notDueClubId, now, ClubSlug("notdue-test"), "Not Due Test", None, None, None))
@@ -159,7 +159,7 @@ object TestJobScheduler extends ZIOSpecDefault {
       pgClient  <- ZIO.service[PostgresClient]
       submitted <- Ref.make(List.empty[Option[ClubId]])
       runner = trackingRunner(submitted)
-      scheduler = new JobScheduler.JobSchedulerLive(TestCcasLogger.noop, runner, pgClient, pollInterval)
+      scheduler = new JobScheduler.JobSchedulerLive(runner, pgClient, pollInterval)
 
       now <- Clock.instant
       _ <- Club.upsert(Club(disabledClubId, now, ClubSlug("disabled-test"), "Disabled Test", None, None, None))
@@ -194,14 +194,14 @@ object TestJobScheduler extends ZIOSpecDefault {
           clubId: Option[ClubId],
           params: Option[String],
           trigger: RunTrigger,
-          effect: Option[JobRunId] => RIO[CcasLogger & ChessComClient & PostgresClient, Any]
+          effect: Option[JobRunId] => RIO[ProgressDisplay & ChessComClient & PostgresClient, Any]
         ): RIO[PostgresClient, JobRunId] =
           callCount.update(_ + 1) *> ZIO.fail(new RuntimeException("boom"))
 
         override def status(id: JobRunId): RIO[PostgresClient, Option[JobRun]] = ZIO.none
         override def recentJobs(limit: Int): RIO[PostgresClient, List[JobRun]] = ZIO.succeed(Nil)
       }
-      scheduler = new JobScheduler.JobSchedulerLive(TestCcasLogger.noop, failingRunner, pgClient, pollInterval)
+      scheduler = new JobScheduler.JobSchedulerLive(failingRunner, pgClient, pollInterval)
 
       now <- Clock.instant
       _ <- Club.upsert(Club(errorClubId, now, ClubSlug("error-test"), "Error Test", None, None, None))
@@ -231,7 +231,7 @@ object TestJobScheduler extends ZIOSpecDefault {
             clubId: Option[ClubId],
             params: Option[String],
             trigger: RunTrigger,
-            effect: Option[JobRunId] => RIO[CcasLogger & ChessComClient & PostgresClient, Any]
+            effect: Option[JobRunId] => RIO[ProgressDisplay & ChessComClient & PostgresClient, Any]
           ): RIO[PostgresClient, JobRunId] =
             submitted.update(clubId :: _) *>
               ZIO.when(clubId.contains(failClubId))(ZIO.fail(new RuntimeException("boom"))).as(JobRunId.generate())
@@ -239,7 +239,7 @@ object TestJobScheduler extends ZIOSpecDefault {
           override def status(id: JobRunId): RIO[PostgresClient, Option[JobRun]] = ZIO.none
           override def recentJobs(limit: Int): RIO[PostgresClient, List[JobRun]] = ZIO.succeed(Nil)
         }
-        scheduler = new JobScheduler.JobSchedulerLive(TestCcasLogger.noop, runner, pgClient, pollInterval)
+        scheduler = new JobScheduler.JobSchedulerLive(runner, pgClient, pollInterval)
 
         now <- Clock.instant
         _ <- Club.upsert(Club(failClubId, now, ClubSlug("fail-sched"), "Fail", None, None, None))
