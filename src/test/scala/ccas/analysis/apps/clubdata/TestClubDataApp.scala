@@ -19,7 +19,7 @@ import ccas.utils.sql.PostgresClient.connectZIO
 object TestClubDataApp extends ZIOSpecDefault {
 
   override def spec: Spec[Any, Throwable] = suite("TestClubDataApp")(
-    suiteParseMinAgeArg,
+    suiteParseArgs,
     suiteRefreshClub,
     suiteResolveAndPersistAdmins
   ).provideShared(
@@ -28,34 +28,37 @@ object TestClubDataApp extends ZIOSpecDefault {
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock
 
   // ==========================================================================
-  // Suite: parseMinAgeArg (pure)
+  // Suite: parseArgs (pure)
   // ==========================================================================
 
-  private def suiteParseMinAgeArg = suite("parseMinAgeArg")(
-    test("no --min-age flag returns None and unchanged args") {
-      val args   = Chunk("club-a", "club-b")
-      val result = ClubDataApp.parseMinAgeArg(args)
-      assertTrue(result == Right(ClubDataApp.ClubDataAppArgs(None, args)))
+  private def suiteParseArgs = suite("parseArgs")(
+    test("no --min-age flag returns None and parsed slugs") {
+      val result = ClubDataApp.parseArgs(Chunk("club-a", "club-b"))
+      assertTrue(result == Right(ClubDataApp.ClubDataAppArgs(None, List(ClubSlug("club-a"), ClubSlug("club-b")))))
     },
     test("--min-age with hours returns Some(hours) and strips both") {
-      val result = ClubDataApp.parseMinAgeArg(Chunk("club-a", "--min-age", "24"))
-      assertTrue(result == Right(ClubDataApp.ClubDataAppArgs(Some(24), Chunk("club-a"))))
+      val result = ClubDataApp.parseArgs(Chunk("club-a", "--min-age", "24"))
+      assertTrue(result == Right(ClubDataApp.ClubDataAppArgs(Some(24), List(ClubSlug("club-a")))))
     },
     test("--min-age at end of args is an error") {
-      val result = ClubDataApp.parseMinAgeArg(Chunk("club-a", "--min-age"))
+      val result = ClubDataApp.parseArgs(Chunk("club-a", "--min-age"))
       assertTrue(result.isLeft, result.left.exists(_.contains("--min-age requires")))
     },
     test("--min-age followed by non-integer is an error") {
-      val result = ClubDataApp.parseMinAgeArg(Chunk("--min-age", "club-a"))
+      val result = ClubDataApp.parseArgs(Chunk("--min-age", "club-a"))
       assertTrue(result.isLeft, result.left.exists(_.contains("--min-age requires")))
     },
     test("--min-age with zero hours is allowed") {
-      val result = ClubDataApp.parseMinAgeArg(Chunk("--min-age", "0"))
-      assertTrue(result == Right(ClubDataApp.ClubDataAppArgs(Some(0), Chunk.empty)))
+      val result = ClubDataApp.parseArgs(Chunk("--min-age", "0"))
+      assertTrue(result == Right(ClubDataApp.ClubDataAppArgs(Some(0), Nil)))
     },
     test("--min-age in middle of slug list strips cleanly") {
-      val result = ClubDataApp.parseMinAgeArg(Chunk("club-a", "--min-age", "12", "club-b"))
-      assertTrue(result == Right(ClubDataApp.ClubDataAppArgs(Some(12), Chunk("club-a", "club-b"))))
+      val result = ClubDataApp.parseArgs(Chunk("club-a", "--min-age", "12", "club-b"))
+      assertTrue(result == Right(ClubDataApp.ClubDataAppArgs(Some(12), List(ClubSlug("club-a"), ClubSlug("club-b")))))
+    },
+    test("unknown -- flags are dropped") {
+      val result = ClubDataApp.parseArgs(Chunk("club-a", "--unknown", "club-b"))
+      assertTrue(result == Right(ClubDataApp.ClubDataAppArgs(None, List(ClubSlug("club-a"), ClubSlug("club-b")))))
     }
   )
 

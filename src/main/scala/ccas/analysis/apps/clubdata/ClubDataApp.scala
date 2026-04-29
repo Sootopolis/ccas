@@ -17,11 +17,10 @@ object ClubDataApp extends ZIOAppDefault {
   override def run: RIO[ZIOAppArgs & Scope, Unit] =
     (for {
       rawArgs <- ZIOAppArgs.getArgs
-      parsed  <- ZIO.fromEither(parseMinAgeArg(rawArgs)).mapError(new IllegalArgumentException(_))
-      slugArgs = parsed.remainingArgs.filterNot(_.startsWith("--")).toList
-      data <- slugArgs match {
+      parsed  <- ZIO.fromEither(parseArgs(rawArgs)).mapError(new IllegalArgumentException(_))
+      data <- parsed.slugs match {
         case Nil   => refresh(parsed.minAgeHours)
-        case slugs => refreshSlugs(slugs.map(ClubSlug.wrap), parsed.minAgeHours)
+        case slugs => refreshSlugs(slugs, parsed.minAgeHours)
       }
       _ <- OutputFile.writeAndLogGlobal("clubdata", formatReport(data), "_ccas")
     } yield ()).provideSome[ZIOAppArgs & Scope](
@@ -31,19 +30,21 @@ object ClubDataApp extends ZIOAppDefault {
       PostgresClient.live(onInit = Tables.ensureTables)
     )
 
-  private[clubdata] case class ClubDataAppArgs(minAgeHours: Option[Int], remainingArgs: Chunk[String])
+  private[clubdata] case class ClubDataAppArgs(minAgeHours: Option[Int], slugs: List[ClubSlug])
 
-  /** Parses `--min-age <hours>` from CLI args. `--min-age 24` → `Right(ClubDataAppArgs(Some(24), argsWithoutFlag))`;
-    * missing flag → `Right(ClubDataAppArgs(None, args))`. Bare `--min-age` (no integer follows) is an error because
-    * unlike HistoryApp's `--refresh`, ClubDataApp's default behaviour already refreshes everything, so bare `--min-age`
-    * would silently do nothing.
+  /** Parses CLI args into `ClubDataAppArgs`. Strips `--min-age <hours>` (bare `--min-age` is an error because, unlike
+    * HistoryApp's `--refresh`, ClubDataApp's default behaviour already refreshes everything, so bare `--min-age` would
+    * silently do nothing); drops any other `--`-prefixed tokens (unknown flags); wraps remaining positional tokens as
+    * `ClubSlug`s.
     */
-  private[clubdata] def parseMinAgeArg(args: Chunk[String]): Either[String, ClubDataAppArgs] = {
+  private[clubdata] def parseArgs(args: Chunk[String]): Either[String, ClubDataAppArgs] = {
+    def slugsFrom(rest: Chunk[String]): List[ClubSlug] =
+      rest.iterator.filterNot(_.startsWith("--")).map(ClubSlug.wrap).toList
     val idx = args.indexOf("--min-age")
-    if (idx < 0) { Right(ClubDataAppArgs(None, args)) }
+    if (idx < 0) { Right(ClubDataAppArgs(None, slugsFrom(args))) }
     else {
       args.lift(idx + 1).flatMap(_.toIntOption) match {
-        case Some(hours) => Right(ClubDataAppArgs(Some(hours), args.patch(idx, Chunk.empty, 2)))
+        case Some(hours) => Right(ClubDataAppArgs(Some(hours), slugsFrom(args.patch(idx, Chunk.empty, 2))))
         case None        => Left("--min-age requires an integer hours argument, e.g. --min-age 24")
       }
     }
