@@ -59,27 +59,29 @@ private[history] object HistoryBoardBuilder {
   private[history] def finishedRating(p: Either[URL, ApiBoardPlayer]): Option[Elo] =
     p.toOption.filter(_.result.isDefined).map(_.rating)
 
+  private[history] case class GameOutcome(winner: Option[BoardGameWinner], detail: Option[GameResultDetail])
+
   private[history] def normalizeGameOutcome(
     whiteResult: Option[GameResultDetail],
     blackResult: Option[GameResultDetail],
     whiteTeamIsTeam1: Boolean
-  ): (Option[BoardGameWinner], Option[GameResultDetail]) =
+  ): GameOutcome =
     (whiteResult, blackResult) match {
       case (Some(GameResultDetail.Win), Some(loss)) =>
         val winner = if (whiteTeamIsTeam1) { BoardGameWinner.Team1 }
         else { BoardGameWinner.Team2 }
-        (Some(winner), Some(loss))
+        GameOutcome(Some(winner), Some(loss))
       case (Some(loss), Some(GameResultDetail.Win)) =>
         val winner = if (whiteTeamIsTeam1) { BoardGameWinner.Team2 }
         else { BoardGameWinner.Team1 }
-        (Some(winner), Some(loss))
+        GameOutcome(Some(winner), Some(loss))
       case (Some(draw), Some(_)) if draw.category == GameResult.Draw =>
-        (Some(BoardGameWinner.Draw), Some(draw))
+        GameOutcome(Some(BoardGameWinner.Draw), Some(draw))
       case (None, None) =>
-        (None, None)
+        GameOutcome(None, None)
       case _ =>
         // Mismatched state (e.g., one side played, other didn't) — treat as not played
-        (None, None)
+        GameOutcome(None, None)
     }
 
   private[history] def computeScoreX2(
@@ -125,9 +127,9 @@ private[history] object HistoryBoardBuilder {
           } yield {
             val t1FairPlay = team1Fp.contains(t1.username.value)
             val t2FairPlay = team2Fp.contains(t2.username.value)
-            val (g1Winner, _) = normalizeGameOutcome(t1.playedAsWhite, t2.playedAsBlack, whiteTeamIsTeam1 = true)
-            val (g2Winner, _) = normalizeGameOutcome(t2.playedAsWhite, t1.playedAsBlack, whiteTeamIsTeam1 = false)
-            boardNum -> computeScoreX2(g1Winner, g2Winner, t1FairPlay, t2FairPlay)
+            val g1 = normalizeGameOutcome(t1.playedAsWhite, t2.playedAsBlack, whiteTeamIsTeam1 = true)
+            val g2 = normalizeGameOutcome(t2.playedAsWhite, t1.playedAsBlack, whiteTeamIsTeam1 = false)
+            boardNum -> computeScoreX2(g1.winner, g2.winner, t1FairPlay, t2FairPlay)
           }
         }.toMap
     }

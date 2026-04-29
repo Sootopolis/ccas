@@ -408,11 +408,17 @@ private[history] object HistoryProcessing {
 
             boardData <- ctx.client.get[ApiMatchBoard](ApiMatchBoard.dailyUrl(matchId, boardNum)).option
           } yield {
-            val (g1Winner, g1Detail) =
-              HistoryBoardBuilder.normalizeGameOutcome(t1Player.playedAsWhite, t2Player.playedAsBlack, whiteTeamIsTeam1 = true)
-            val (g2Winner, g2Detail) =
-              HistoryBoardBuilder.normalizeGameOutcome(t2Player.playedAsWhite, t1Player.playedAsBlack, whiteTeamIsTeam1 = false)
-            val (t1Score, t2Score) = HistoryBoardBuilder.computeScoreX2(g1Winner, g2Winner, t1FairPlay, t2FairPlay)
+            val g1 = HistoryBoardBuilder.normalizeGameOutcome(
+              t1Player.playedAsWhite,
+              t2Player.playedAsBlack,
+              whiteTeamIsTeam1 = true
+            )
+            val g2 = HistoryBoardBuilder.normalizeGameOutcome(
+              t2Player.playedAsWhite,
+              t1Player.playedAsBlack,
+              whiteTeamIsTeam1 = false
+            )
+            val (t1Score, t2Score) = HistoryBoardBuilder.computeScoreX2(g1.winner, g2.winner, t1FairPlay, t2FairPlay)
 
             val board = ClubMatchBoard(
               matchId = matchId,
@@ -434,8 +440,8 @@ private[history] object HistoryProcessing {
             }
 
             val games = List(
-              HistoryBoardBuilder.buildGameRow(matchId, boardNum, team1IsWhite = true, g1Winner, g1Detail, game1Data),
-              HistoryBoardBuilder.buildGameRow(matchId, boardNum, team1IsWhite = false, g2Winner, g2Detail, game2Data)
+              HistoryBoardBuilder.buildGameRow(matchId, boardNum, team1IsWhite = true, g1.winner, g1.detail, game1Data),
+              HistoryBoardBuilder.buildGameRow(matchId, boardNum, team1IsWhite = false, g2.winner, g2.detail, game2Data)
             ).flatten
 
             (board, games)
