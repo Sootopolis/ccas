@@ -30,6 +30,7 @@ object ClubDataApp extends ZIOAppDefault {
       PostgresClient.live(onInit = Tables.ensureTables)
     )
 
+  /** @param slugs empty list means "refresh all known clubs" — see `run`'s `Nil` branch. */
   private[clubdata] case class ClubDataAppArgs(minAgeHours: Option[Int], slugs: List[ClubSlug])
 
   /** Parses CLI args into `ClubDataAppArgs`. Strips `--min-age <hours>` (bare `--min-age` is an error because, unlike
