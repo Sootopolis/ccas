@@ -28,13 +28,13 @@ import java.time.{Duration, Instant}
 object StatsApp extends ZIOAppDefault {
   private val help = "Usage: StatsApp <club-slug> [--since <date-or-instant>] [--until <date-or-instant>] [--min-games N]"
 
-  case class StatsResult(
+  final case class StatsResult(
     contributions: List[MemberContribution],
     boardCount: Int,
     matchCount: Long
   )
 
-  case class StatsAppArgs(
+  private[stats] final case class StatsAppArgs(
     slug: ClubSlug,
     since: Option[Instant],
     until: Option[Instant],
@@ -47,7 +47,10 @@ object StatsApp extends ZIOAppDefault {
       slug <- ZIO.fromOption(positional.headOption.map(ClubSlug.wrap)).orElseFail(BadRequestException(help))
       since <- ZIO.foreach(flagValue(args, "--since"))(s => TimeParser.parseInstantZIO(s).mapError(BadRequestException(_)))
       until <- ZIO.foreach(flagValue(args, "--until"))(s => TimeParser.parseInstantZIO(s).mapError(BadRequestException(_)))
-      minGames <- ZIO.foreach(flagValue(args, "--min-games"))(s => ZIO.attempt(s.toInt))
+      minGames <- ZIO.foreach(flagValue(args, "--min-games")) { s =>
+        ZIO.fromOption(s.toIntOption)
+          .orElseFail(BadRequestException(s"--min-games requires an integer (got '$s')"))
+      }
     } yield StatsAppArgs(slug, since, until, minGames)
   }
 

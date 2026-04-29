@@ -81,7 +81,7 @@ object HistoryApp extends ZIOAppDefault {
     (for {
       rawArgs <- ZIOAppArgs.getArgs
       parsed  <- ZIO.fromEither(parseArgs(rawArgs)).mapError(BadRequestException(_))
-      _       <- discoverBatch(parsed.slugs, parsed.full, parsed.refreshMinHours)
+      _       <- discoverBatch(parsed.slugs, full = parsed.full, refreshMinHours = parsed.refreshMinHours)
     } yield ()).provideSomeAuto(
       CcasLogger.live(showProgress = true),
       ChessComClient.live("history"),
@@ -100,16 +100,17 @@ object HistoryApp extends ZIOAppDefault {
     * a full re-scan; remaining positional tokens become slugs. Empty slug list is an error.
     */
   private[history] def parseArgs(args: Chunk[String]): Either[String, HistoryAppArgs] = {
-    val full = args.contains("--full")
-    val (refreshMinHours, refreshStripped) = {
-      val idx = args.indexOf("--refresh")
-      if (idx < 0) { (Option.empty[Int], args) }
-      else {
-        val nextOpt = args.lift(idx + 1).flatMap(_.toIntOption)
-        if (nextOpt.isDefined) { (nextOpt, args.patch(idx, Chunk.empty, 2)) }
-        else { (Some(0), args.patch(idx, Chunk.empty, 1)) }
-      }
-    }
+    val full       = args.contains("--full")
+    val refreshIdx = args.indexOf("--refresh")
+    val nextInt    = args.lift(refreshIdx + 1).flatMap(_.toIntOption)
+    val refreshMinHours =
+      if (refreshIdx < 0) { None }
+      else if (nextInt.isDefined) { nextInt }
+      else { Some(0) }
+    val refreshStripped =
+      if (refreshIdx < 0) { args }
+      else if (nextInt.isDefined) { args.patch(refreshIdx, Chunk.empty, 2) }
+      else { args.patch(refreshIdx, Chunk.empty, 1) }
     val slugChunk = refreshStripped.filterNot(_.startsWith("--")).map(ClubSlug.wrap)
     NonEmptyChunk.fromChunk(slugChunk) match {
       case Some(slugs) => Right(HistoryAppArgs(slugs, full, refreshMinHours))
