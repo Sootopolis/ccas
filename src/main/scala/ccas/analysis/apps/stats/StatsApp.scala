@@ -6,7 +6,7 @@ import ccas.api.misc.subtypes.ClubSlug
 import ccas.utils.errors.{BadRequestException, NotFoundException}
 import ccas.utils.sql.PostgresClient
 import ccas.utils.{CcasLogger, OutputFile, TimeParser}
-import zio.{RIO, Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
+import zio.{RIO, Scope, Task, ZIO, ZIOAppArgs, ZIOAppDefault}
 
 import java.time.{Duration, Instant}
 
@@ -34,33 +34,43 @@ object StatsApp extends ZIOAppDefault {
     matchCount: Long
   )
 
-  override def run: RIO[ZIOAppArgs & Scope, Unit] =
-    (for {
-      args <- ZIOAppArgs.getArgs
-      positional = args.filterNot(_.startsWith("--"))
-      slug <- positional.headOption match {
-        case Some(s) => ZIO.succeed(ClubSlug.wrap(s))
-        case None    => ZIO.fail(BadRequestException(help))
-      }
+  case class StatsAppArgs(
+    slug: ClubSlug,
+    since: Option[Instant],
+    until: Option[Instant],
+    minGames: Option[Int]
+  )
+
+  private[stats] def parseArgs(args: zio.Chunk[String]): Task[StatsAppArgs] = {
+    val positional = args.filterNot(_.startsWith("--"))
+    for {
+      slug <- ZIO.fromOption(positional.headOption.map(ClubSlug.wrap)).orElseFail(BadRequestException(help))
       since <- ZIO.foreach(flagValue(args, "--since"))(s => TimeParser.parseInstantZIO(s).mapError(BadRequestException(_)))
       until <- ZIO.foreach(flagValue(args, "--until"))(s => TimeParser.parseInstantZIO(s).mapError(BadRequestException(_)))
       minGames <- ZIO.foreach(flagValue(args, "--min-games"))(s => ZIO.attempt(s.toInt))
-      _ <- (since, until) match {
+    } yield StatsAppArgs(slug, since, until, minGames)
+  }
+
+  override def run: RIO[ZIOAppArgs & Scope, Unit] =
+    (for {
+      args   <- ZIOAppArgs.getArgs
+      parsed <- parseArgs(args)
+      _ <- (parsed.since, parsed.until) match {
         case (Some(s), Some(u)) =>
           for {
-            result  <- playerOfPeriod(slug, s, u)
-            mg       = minGames.getOrElse(1)
+            result  <- playerOfPeriod(parsed.slug, s, u)
+            mg       = parsed.minGames.getOrElse(1)
             content  = StatsReport.formatPlayerOfPeriod(result.contributions, mg)
             eligible = result.contributions.count(_.raw.games >= mg)
             _ <- CcasLogger.info(s"Players: ${result.contributions.size}, Eligible (>=$mg games): $eligible")
-            _ <- OutputFile.writeAndLog("stats", slug, content, ext = "csv")
+            _ <- OutputFile.writeAndLog("stats", parsed.slug, content, ext = "csv")
           } yield ()
         case (None, None) =>
           for {
-            result  <- memberStats(slug)
+            result  <- memberStats(parsed.slug)
             content  = StatsReport.formatContribution(result.contributions)
             _ <- CcasLogger.info(s"Players: ${result.contributions.size}, Boards: ${result.boardCount}, Matches: ${result.matchCount}")
-            _ <- OutputFile.writeAndLog("stats", slug, content, ext = "csv")
+            _ <- OutputFile.writeAndLog("stats", parsed.slug, content, ext = "csv")
           } yield ()
         case _ => ZIO.fail(BadRequestException("Both --since and --until are required for period stats"))
       }

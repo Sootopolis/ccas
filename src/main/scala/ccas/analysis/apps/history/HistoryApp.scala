@@ -80,11 +80,8 @@ object HistoryApp extends ZIOAppDefault {
   override def run: RIO[ZIOAppArgs & Scope, Unit] =
     (for {
       rawArgs <- ZIOAppArgs.getArgs
-      full = rawArgs.contains("--full")
-      parsed = parseRefreshArg(rawArgs)
-      slugChunk = parsed.remainingArgs.filterNot(_.startsWith("--")).map(ClubSlug.wrap)
-      slugs <- ZIO.fromOption(NonEmptyChunk.fromChunk(slugChunk)).orElseFail(BadRequestException(help))
-      _ <- discoverBatch(slugs, full, parsed.refreshMinHours)
+      parsed  <- ZIO.fromEither(parseArgs(rawArgs)).mapError(BadRequestException(_))
+      _       <- discoverBatch(parsed.slugs, parsed.full, parsed.refreshMinHours)
     } yield ()).provideSomeAuto(
       CcasLogger.live(showProgress = true),
       ChessComClient.live("history"),
@@ -92,18 +89,31 @@ object HistoryApp extends ZIOAppDefault {
       PostgresClient.live(onInit = Tables.ensureTables)
     )
 
-  private[history] case class HistoryAppArgs(refreshMinHours: Option[Int], remainingArgs: Chunk[String])
+  private[history] case class HistoryAppArgs(
+    slugs: NonEmptyChunk[ClubSlug],
+    full: Boolean,
+    refreshMinHours: Option[Int]
+  )
 
-  /** Parses `--refresh [hours]` from CLI args. Returns the parsed value and the remaining args with `--refresh` (and its
-    * optional integer argument) stripped so they aren't treated as club slugs.
+  /** Parses CLI args into `HistoryAppArgs`. Strips `--refresh [hours]` (bare `--refresh` defaults to 0 hours, meaning
+    * "always refresh"; `--refresh N` only refreshes matches whose `fetched_at` is older than N hours); `--full` forces
+    * a full re-scan; remaining positional tokens become slugs. Empty slug list is an error.
     */
-  private[history] def parseRefreshArg(args: Chunk[String]): HistoryAppArgs = {
-    val idx = args.indexOf("--refresh")
-    if (idx < 0) { HistoryAppArgs(None, args) }
-    else {
-      val nextOpt = args.lift(idx + 1).flatMap(_.toIntOption)
-      if (nextOpt.isDefined) { HistoryAppArgs(nextOpt, args.patch(idx, Chunk.empty, 2)) }
-      else { HistoryAppArgs(Some(0), args.patch(idx, Chunk.empty, 1)) }
+  private[history] def parseArgs(args: Chunk[String]): Either[String, HistoryAppArgs] = {
+    val full = args.contains("--full")
+    val (refreshMinHours, refreshStripped) = {
+      val idx = args.indexOf("--refresh")
+      if (idx < 0) { (Option.empty[Int], args) }
+      else {
+        val nextOpt = args.lift(idx + 1).flatMap(_.toIntOption)
+        if (nextOpt.isDefined) { (nextOpt, args.patch(idx, Chunk.empty, 2)) }
+        else { (Some(0), args.patch(idx, Chunk.empty, 1)) }
+      }
+    }
+    val slugChunk = refreshStripped.filterNot(_.startsWith("--")).map(ClubSlug.wrap)
+    NonEmptyChunk.fromChunk(slugChunk) match {
+      case Some(slugs) => Right(HistoryAppArgs(slugs, full, refreshMinHours))
+      case None        => Left(help)
     }
   }
 

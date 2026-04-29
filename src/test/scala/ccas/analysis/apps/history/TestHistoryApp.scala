@@ -25,7 +25,7 @@ object TestHistoryApp extends ZIOSpecDefault {
     testIsClubDailyMatchCaseInsensitive,
     suiteNormalizeGameOutcome,
     suiteComputeScoreX2,
-    suiteParseRefreshArg
+    suiteParseArgs
   )
 
   private def url(s: String): URL = URL.decode(s).toOption.get
@@ -328,29 +328,49 @@ object TestHistoryApp extends ZIOSpecDefault {
     assertTrue(t1 == 2.toShort, t2 == 0.toShort)
   }
 
-  // --- parseRefreshArg ---
+  // --- parseArgs ---
 
-  private def suiteParseRefreshArg = suite("parseRefreshArg")(
-    test("no --refresh flag returns None and unchanged args") {
-      val args   = Chunk("club-a", "--full")
-      val parsed = HistoryApp.parseRefreshArg(args)
-      assertTrue(parsed.refreshMinHours.isEmpty, parsed.remainingArgs == args)
+  private def suiteParseArgs = suite("parseArgs")(
+    test("no flags returns slugs with full=false and no refresh") {
+      val parsed = HistoryApp.parseArgs(Chunk("club-a", "club-b"))
+      assertTrue(parsed.exists { p =>
+        p.slugs.toList == List(ClubSlug("club-a"), ClubSlug("club-b")) &&
+          !p.full && p.refreshMinHours.isEmpty
+      })
+    },
+    test("--full sets full and is stripped from slugs") {
+      val parsed = HistoryApp.parseArgs(Chunk("club-a", "--full"))
+      assertTrue(parsed.exists { p =>
+        p.slugs.toList == List(ClubSlug("club-a")) && p.full && p.refreshMinHours.isEmpty
+      })
     },
     test("--refresh without hours returns Some(0) and strips flag") {
-      val parsed = HistoryApp.parseRefreshArg(Chunk("club-a", "--refresh", "--full"))
-      assertTrue(parsed.refreshMinHours.contains(0), parsed.remainingArgs == Chunk("club-a", "--full"))
+      val parsed = HistoryApp.parseArgs(Chunk("club-a", "--refresh", "--full"))
+      assertTrue(parsed.exists { p =>
+        p.slugs.toList == List(ClubSlug("club-a")) && p.full && p.refreshMinHours.contains(0)
+      })
     },
     test("--refresh with hours returns Some(hours) and strips both") {
-      val parsed = HistoryApp.parseRefreshArg(Chunk("club-a", "--refresh", "24"))
-      assertTrue(parsed.refreshMinHours.contains(24), parsed.remainingArgs == Chunk("club-a"))
+      val parsed = HistoryApp.parseArgs(Chunk("club-a", "--refresh", "24"))
+      assertTrue(parsed.exists { p =>
+        p.slugs.toList == List(ClubSlug("club-a")) && p.refreshMinHours.contains(24)
+      })
     },
     test("--refresh at end of args returns Some(0)") {
-      val parsed = HistoryApp.parseRefreshArg(Chunk("club-a", "--refresh"))
-      assertTrue(parsed.refreshMinHours.contains(0), parsed.remainingArgs == Chunk("club-a"))
+      val parsed = HistoryApp.parseArgs(Chunk("club-a", "--refresh"))
+      assertTrue(parsed.exists { p =>
+        p.slugs.toList == List(ClubSlug("club-a")) && p.refreshMinHours.contains(0)
+      })
     },
     test("--refresh followed by non-integer keeps next arg as positional") {
-      val parsed = HistoryApp.parseRefreshArg(Chunk("--refresh", "club-a"))
-      assertTrue(parsed.refreshMinHours.contains(0), parsed.remainingArgs == Chunk("club-a"))
+      val parsed = HistoryApp.parseArgs(Chunk("--refresh", "club-a"))
+      assertTrue(parsed.exists { p =>
+        p.slugs.toList == List(ClubSlug("club-a")) && p.refreshMinHours.contains(0)
+      })
+    },
+    test("no positional slugs is an error") {
+      val parsed = HistoryApp.parseArgs(Chunk("--full"))
+      assertTrue(parsed.isLeft)
     }
   )
 }
