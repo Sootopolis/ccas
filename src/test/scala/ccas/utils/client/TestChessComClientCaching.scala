@@ -9,6 +9,7 @@ import zio.test.*
 
 import ccas.analysis.tables.{ApiResponseBody, ApiResponseCache, Tables}
 import ccas.analysis.tables.subtypes.ApiResponseBodyId
+import ccas.utils.json.JsonDecodingException
 import ccas.utils.sql.FreshSchemaLayer
 import ccas.utils.client.TestChessComClientSupport.*
 import ccas.utils.sql.PostgresClient.connectZIO
@@ -418,6 +419,128 @@ object TestChessComClientCaching extends ZIOSpecDefault {
           after.get.lastModified.contains(expectedInstant),
           after.get.maxAgeSeconds == before.get.maxAgeSeconds,
           after.get.contentType == before.get.contentType
+        )
+      }
+    },
+    test("getUncached on a 200 response leaves api_response_cache untouched") {
+      val url = URL.decode("http://test.example.com/api/cacheable/uncached-no-write").toOption.get
+      ZIO.scoped {
+        for {
+          (client, _, stats) <- makeClient(_ => ZIO.succeed(cacheable200(jsonBody)))
+          value <- client.getUncached[Payload](url)
+          meta  <- ApiResponseCache.lookupMeta(url.encode)
+          s     <- stats.get
+        } yield assertTrue(
+          value.value == "ok",
+          meta.isEmpty,            // no cache row written
+          s.requests == 1L,        // network call still tracked
+          s.cacheMisses == 1L      // still counted as a miss for the body-download stat
+        )
+      }
+    },
+    test("getUncached returns Fresh from a pre-existing cache row without a network call") {
+      // A previously-cached entry from another caller must still be served. The opt-out only suppresses *writes*;
+      // reads remain free.
+      val url = URL.decode("http://test.example.com/api/cacheable/uncached-fresh-read").toOption.get
+      ZIO.scoped {
+        for {
+          netCalls <- Ref.make(0)
+          (client, _, _) <- makeClient { _ =>
+            netCalls.update(_ + 1).as(cacheable200(jsonBody, maxAge = Some(3600)))
+          }
+          _      <- client.getCacheable[Payload](url) // populate
+          value  <- client.getUncached[Payload](url)  // should serve from Fresh cache
+          calls  <- netCalls.get
+        } yield assertTrue(
+          value.value == "ok",
+          calls == 1 // only the populate call hit the network
+        )
+      }
+    },
+    test("getUncached on a 304 path does not bump fetched_at but still counts as revalidation") {
+      val url = URL.decode("http://test.example.com/api/cacheable/uncached-304-no-touch").toOption.get
+      ZIO.scoped {
+        for {
+          callCount <- Ref.make(0)
+          (client, _, stats) <- makeClient { _ =>
+            callCount.getAndUpdate(_ + 1).map { n =>
+              if (n == 0) cacheable200(jsonBody, maxAge = Some(0)) // immediately stale on read
+              else Response(status = Status.NotModified)
+            }
+          }
+          _       <- client.getCacheable[Payload](url) // populate
+          before  <- ApiResponseCache.lookupMeta(url.encode)
+          _       <- ZIO.sleep(20.millis)              // would surface a touch if it happened
+          value   <- client.getUncached[Payload](url)  // 304 path, must NOT touch
+          after   <- ApiResponseCache.lookupMeta(url.encode)
+          s       <- stats.get
+        } yield assertTrue(
+          value.value == "ok",
+          before.exists(b => after.exists(_.fetchedAt == b.fetchedAt)),
+          // 304 transport event is still recorded — stat is Chess.com API load attribution, not DB-write success.
+          s.cacheRevalidations == 1L
+        )
+      }
+    },
+    test("getUncached recovers from a corrupt cached body without repopulating the cache") {
+      // Exercises loadAndDecode's catchSome path under cacheWrites=false: a Fresh hit whose body fails to decode
+      // must trigger a refetch that DOES NOT write a new cache row. If `cacheWrites` plumbing through loadAndDecode
+      // is broken, the recovery refetch would silently re-cache via the recursive `getCacheableImpl` call.
+      val url         = URL.decode("http://test.example.com/api/cacheable/uncached-schema-drift").toOption.get
+      val refetchBody = """{"value":"uncached-recovered"}"""
+      ZIO.scoped {
+        for {
+          netCalls <- Ref.make(0)
+          (client, _, _) <- makeClient { _ =>
+            netCalls.update(_ + 1).as(cacheable200(refetchBody, maxAge = Some(3600)))
+          }
+          _      <- client.getCacheable[Payload](url) // populate (network #1)
+          before <- ApiResponseCache.lookupMeta(url.encode)
+          bodyId  = before.get.bodyId
+          // Corrupt the cached body so loadAndDecode's decode fails on the next read.
+          _      <- connectZIO(
+            sql"UPDATE api_response_body SET body = '{\"oops\":true}' WHERE body_id = ${ApiResponseBodyId.unwrap(bodyId)}".update.run()
+          )
+          value  <- client.getUncached[Payload](url)  // Fresh hit → decode fails → refetch (network #2)
+          calls  <- netCalls.get
+          meta   <- ApiResponseCache.lookupMeta(url.encode)
+        } yield assertTrue(
+          value.value == "uncached-recovered",
+          calls == 2,
+          // Refetch under cacheWrites=false invalidated the row and did NOT repopulate it.
+          meta.isEmpty
+        )
+      }
+    },
+    test("loadAndDecode bounds recovery to one refetch — persistently bad JSON propagates without looping") {
+      // Regression guard for an unbounded retry loop: previously `catchSome` was scoped to the whole chain so a
+      // refetch whose body ALSO failed to decode would trigger another refetch, ad infinitum. Now `catchSome` only
+      // wraps the cached-body decode; the refetch's own decode failure must propagate as JsonDecodingException
+      // after exactly one refetch attempt (network call #2).
+      val url = URL.decode("http://test.example.com/api/cacheable/bounded-recovery").toOption.get
+      ZIO.scoped {
+        for {
+          netCalls <- Ref.make(0)
+          (client, _, _) <- makeClient { _ =>
+            netCalls.updateAndGet(_ + 1).map { n =>
+              if (n == 1) cacheable200("""{"value":"valid"}""", maxAge = Some(3600))
+              else cacheable200("""{"oops":true}""", maxAge = Some(3600)) // refetch returns un-decodable JSON
+            }
+          }
+          _      <- client.getCacheable[Payload](url) // populate (network #1)
+          meta   <- ApiResponseCache.lookupMeta(url.encode)
+          bodyId  = meta.get.bodyId
+          // Corrupt cached body so the next read triggers loadAndDecode → catchSome → refetch.
+          _      <- connectZIO(
+            sql"UPDATE api_response_body SET body = '{\"oops\":true}' WHERE body_id = ${ApiResponseBodyId.unwrap(bodyId)}".update.run()
+          )
+          // `get` forces full decode. Refetch returns bad JSON too; without the bounded-catchSome fix this would
+          // loop forever and hit the suite-level timeout. With the fix, fails after exactly one refetch.
+          err   <- client.get[Payload](url).flip
+          calls <- netCalls.get
+        } yield assertTrue(
+          err.isInstanceOf[JsonDecodingException],
+          calls == 2 // populate + one refetch attempt; no further retries
         )
       }
     },

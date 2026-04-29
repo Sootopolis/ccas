@@ -191,7 +191,7 @@ private[recruitment] object RecruitmentFilterDefs {
 
   object CheckOpponentMatch extends RecruitmentFilter {
     def apply(env: FilterEnv): RIO[PostgresClient, FilterResult] =
-      env.run.client.get[ApiPlayerMatches](ApiPlayerMatches.getUrl(env.candidate.username)).map { playerMatches =>
+      env.run.client.getUncached[ApiPlayerMatches](ApiPlayerMatches.getUrl(env.candidate.username)).map { playerMatches =>
         val registeredIds = playerMatches.registered.map(_.`@id`).toSet ++
           playerMatches.inProgress.map(_.`@id`).toSet
         FilterResult(
@@ -327,7 +327,7 @@ private[recruitment] object RecruitmentFilterDefs {
 
   object CheckDailyStats extends RecruitmentFilter {
     def apply(env: FilterEnv): RIO[PostgresClient, FilterResult] =
-      env.run.client.get[ApiPlayerStats](ApiPlayerStats.getUrl(env.candidate.username)).flatMap { playerStats =>
+      env.run.client.getUncached[ApiPlayerStats](ApiPlayerStats.getUrl(env.candidate.username)).flatMap { playerStats =>
         playerStats.chessDaily match {
           case None             => ZIO.succeed(FilterResult(true, env.candidate))
           case Some(dailyStats) => applyDailyStats(env, dailyStats)
@@ -348,7 +348,7 @@ private[recruitment] object RecruitmentFilterDefs {
             val months = recentArchiveMonths(env.run.now, 90)
             ZIO.foreachPar(months) { ym =>
               val url = ApiPlayerArchive.getUrl(env.candidate.username, ym.getYear, ym.getMonthValue)
-              env.run.client.get[ApiPlayerArchive](url)
+              env.run.client.getUncached[ApiPlayerArchive](url)
             }
           }
         _ <- requireApiPlayer(env)
@@ -390,7 +390,7 @@ private[recruitment] object RecruitmentFilterDefs {
   object CheckOngoingGames extends RecruitmentFilter {
     def apply(env: FilterEnv): RIO[PostgresClient, FilterResult] =
       for {
-        currentGames <- env.run.client.get[ApiPlayerGamesCurrent](ApiPlayerGamesCurrent.getUrl(env.candidate.username))
+        currentGames <- env.run.client.getUncached[ApiPlayerGamesCurrent](ApiPlayerGamesCurrent.getUrl(env.candidate.username))
         _            <- requireApiPlayer(env)
       } yield {
         val ongoingGames       = currentGames.games.size
