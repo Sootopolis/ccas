@@ -52,7 +52,7 @@ object RecruitmentCandidate {
 
   def selectInvitedByRun(runId: RecruitmentRunId): ZIO[PostgresClient, SQLException, List[RecruitmentCandidate]] =
     connectZIO {
-      val invited = CandidateOutcome.Invited.toString
+      val invited: CandidateOutcome = CandidateOutcome.Invited
       sql"SELECT $selectCols FROM recruitment_candidate WHERE run_id = $runId AND outcome = $invited"
         .query[RecruitmentCandidate].run().toList
     }
@@ -62,7 +62,7 @@ object RecruitmentCandidate {
     clubId: ClubId
   ): ZIO[PostgresClient, SQLException, Option[RecruitmentCandidate]] =
     connectZIO {
-      val invited = CandidateOutcome.Invited.toString
+      val invited: CandidateOutcome = CandidateOutcome.Invited
       sql"""SELECT $selectColsRc FROM recruitment_candidate rc
             JOIN recruitment_run rr ON rc.run_id = rr.run_id
             WHERE rc.player_id = $playerId AND rr.club_id = $clubId AND rc.outcome = $invited
@@ -75,7 +75,7 @@ object RecruitmentCandidate {
     alias: String
   ): ZIO[PostgresClient, SQLException, Option[RecruitmentCandidate]] =
     connectZIO {
-      val rejected = CandidateOutcome.Rejected.toString
+      val rejected: CandidateOutcome = CandidateOutcome.Rejected
       sql"""SELECT $selectColsRc FROM recruitment_candidate rc
             JOIN recruitment_run rr ON rc.run_id = rr.run_id
             WHERE rc.player_id = $playerId AND rr.club_id = $clubId
@@ -88,7 +88,7 @@ object RecruitmentCandidate {
 
   def selectInvitedToday(clubId: ClubId, alias: String): ZIO[PostgresClient, SQLException, List[RecruitmentCandidate]] =
     connectZIO {
-      val invited = CandidateOutcome.Invited.toString
+      val invited: CandidateOutcome = CandidateOutcome.Invited
       sql"""SELECT $selectColsRc FROM recruitment_candidate rc
             JOIN recruitment_run rr ON rc.run_id = rr.run_id
             WHERE rr.club_id = $clubId AND rr.criteria_id IN (
@@ -109,7 +109,7 @@ object RecruitmentCandidate {
 
   def selectDeferredCountByRun(runId: RecruitmentRunId): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
-      val deferred = CandidateOutcome.Deferred.toString
+      val deferred: CandidateOutcome = CandidateOutcome.Deferred
       sql"SELECT COUNT(*) FROM recruitment_candidate WHERE run_id = $runId AND outcome = $deferred"
         .query[Int].run().headOption
     }.someOrFail(new SQLException("COUNT query produced no rows"))
@@ -117,9 +117,9 @@ object RecruitmentCandidate {
   /** Returns deferred candidates for a club that have not been resolved (Invited/Rejected) in a later run. */
   def selectDeferredByClub(clubId: ClubId): ZIO[PostgresClient, SQLException, List[RecruitmentCandidate]] =
     connectZIO {
-      val deferred = CandidateOutcome.Deferred.toString
-      val invited  = CandidateOutcome.Invited.toString
-      val rejected = CandidateOutcome.Rejected.toString
+      val deferred: CandidateOutcome = CandidateOutcome.Deferred
+      val invited: CandidateOutcome  = CandidateOutcome.Invited
+      val rejected: CandidateOutcome = CandidateOutcome.Rejected
       sql"""SELECT $selectColsRc FROM recruitment_candidate rc
             JOIN recruitment_run rr ON rc.run_id = rr.run_id
             WHERE rr.club_id = $clubId AND rc.outcome = $deferred
