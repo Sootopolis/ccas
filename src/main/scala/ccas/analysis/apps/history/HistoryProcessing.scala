@@ -302,7 +302,7 @@ private[history] object HistoryProcessing {
     * downstream step would be a no-op — just bump `fetched_at` so the cursor-paginated refresh loop advances.
     * Bypasses the in-memory `matchCache` dedup because the cursor scan visits each match exactly once per run.
     */
-  private def refreshSingleMatch(
+  private[history] def refreshSingleMatch(
     ctx: ProcessingContext,
     matchId: ClubMatchId
   ): RIO[ProgressDisplay & PostgresClient, Unit] =
