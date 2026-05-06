@@ -5,13 +5,14 @@ import scala.annotation.tailrec
 
 import zio.{Chunk, Clock, IO, NonEmptyChunk, RIO, Scope, Task, ZIO, ZIOAppArgs, ZIOAppDefault}
 
+import ccas.analysis.apps.ClubSlugRenameResolver
 import ccas.analysis.apps.membership.MembershipChange.*
 import ccas.analysis.apps.membership.MembershipChange.MemberChange.JoinedClub
 import ccas.analysis.tables.*
 import ccas.api.club.{ApiClub, ApiClubMembers}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId, PlayerId}
 import ccas.utils.{OutputFile, ProgressDisplay, TimeParser}
-import ccas.utils.client.{ChessComClient, HttpClientLayer}
+import ccas.utils.client.{ChessComClient, HttpClientLayer, onNotFound}
 import ccas.utils.errors.BadRequestException
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.withTransaction
@@ -122,11 +123,17 @@ object MembershipApp extends ZIOAppDefault {
     for {
       startedAt <- Clock.instant
       client    <- ZIO.service[ChessComClient]
-      (apiClub, resolvedSlug) <- withNameFallback(
-        clubSlug,
-        name => ApiClub.get(client, name),
-        resolveClubSlug(client, _)
-      )
+      // Behavior change vs the prior `withNameFallback` helper: only 404s trigger rename resolution. Non-404
+      // failures (timeouts, 5xx, decode errors) propagate immediately rather than attempting slug rediscovery —
+      // those errors don't signal a rename and resolution would just waste a board-endpoint fetch.
+      (apiClub, resolvedSlug) <- ApiClub.get(client, clubSlug).map(_ -> clubSlug).onNotFound { e =>
+        ClubSlugRenameResolver.resolveAndPersist(client, clubSlug, clubIdHint = None).flatMap {
+          case Some((newSlug, fresh)) =>
+            ZIO.logInfo(s"[Membership] $clubSlug returned 404; retrying with rediscovered slug $newSlug")
+              .as(fresh -> newSlug)
+          case None => ZIO.fail(e)
+        }
+      }
       clubId = apiClub.clubId
       club   = Club.fromApi(apiClub, resolvedSlug)
       _                     <- Club.upsertResolvingSlugConflict(club, client)
@@ -235,29 +242,4 @@ object MembershipApp extends ZIOAppDefault {
     }
   }
 
-  // --- Helpers ---
-
-  private def withNameFallback[Name, T](
-    name: Name,
-    effect: Name => Task[T],
-    resolve: Name => RIO[PostgresClient, Option[Name]]
-  ): RIO[PostgresClient, (T, Name)] = effect(name).map(_ -> name).catchAll { originalError =>
-    resolve(name).flatMap {
-      case None          => ZIO.fail(originalError)
-      case Some(newName) => effect(newName).map(_ -> newName)
-    }
-  }
-
-  private def resolveClubSlug(client: ChessComClient, oldUrlName: ClubSlug): RIO[PostgresClient, Option[ClubSlug]] =
-    (for {
-      clubOpt <- Club.selectBySlug(oldUrlName)
-      refOpt  <- ZIO.foreach(clubOpt)(club => ClubMatchRef.selectId(club.clubId)).map(_.flatten)
-      result <- ZIO.foreach(refOpt) { ref =>
-        ccas.analysis.apps.ref.RefHelpers.fetchTeamMatchTeams(client, ref.matchId, ref.isLive).map { teams =>
-          val team = if (ref.isTeam1) { teams.team1 }
-          else { teams.team2 }
-          team.`@id`.path.segments.lastOption.map(ClubSlug.wrap).filter(_ != oldUrlName)
-        }
-      }.map(_.flatten)
-    } yield result).catchAll(_ => ZIO.none)
 }

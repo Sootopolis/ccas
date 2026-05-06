@@ -5,15 +5,13 @@ import java.time.Instant
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.withTransaction
 import zio.{Chunk, RIO, Ref, ZIO}
-import zio.http.URL
 import HistoryUtils.*
 
-import ccas.analysis.apps.PlayerUpdater
+import ccas.analysis.apps.{
+  PlayerUpdater, UsernameRenameResolver, withClubSlugRenameRecovery, withPlayerRenameRecovery
+}
 import ccas.analysis.tables.*
 import ccas.api.club.ApiClubMatches
-import ccas.api.clubmatch.{ApiDailyMatch, ApiMatchBoard}
-import ccas.api.clubmatch.ApiDailyMatch.{ApiDailyMatchRegistered, MatchPlayerStarted}
-import ccas.api.clubmatch.ApiMatchBoard.ApiBoardPlayer
 import ccas.api.misc.subtypes.*
 import ccas.api.player.{ApiPlayer, ApiPlayerMatches}
 import ccas.utils.client.{ChessComClient, onNotFound}
@@ -147,86 +145,16 @@ private[history] object HistorySeeding {
       }.map(acc + _)
     }
 
-  /** Rediscovers the current username for a renamed player on a specific board. Fetches the board endpoint to see
-    * both sides' current usernames, then identifies which of the two is ours by eliminating the opposing side: prefers
-    * the DB-first path (the opposing player is already resolved in `club_match_board` → look up their current username
-    * in `player`), falling back to the match endpoint if the opposing side is also unresolved. Returns `None` when the
-    * recovery can't disambiguate, when the board endpoint is still serving cached stale data, or when the opposing
-    * identity isn't present on the board.
+  /** Delegates to [[UsernameRenameResolver.resolveFromBoard]]. The resolver owns the board-endpoint primitive used
+    * for both this unresolved-player retry path and HistoryApp Phase 2 / other rename-recovery sites.
     */
   private def recoverRenamedUsername(
     client: ChessComClient,
     entry: UnresolvedBoardPlayer
-  ): RIO[ProgressDisplay & PostgresClient, Option[Username]] =
-    for {
-      boardData <- client.get[ApiMatchBoard](ApiMatchBoard.dailyUrl(entry.matchId, entry.board.toInt))
-      boardUsernames = extractBoardUsernames(boardData)
-      recovered <- ZIO.when(boardUsernames.size == 2) {
-        opposingCurrentUsername(client, entry).map(_.flatMap { otherCurrent =>
-          boardUsernames.filterNot(_ == otherCurrent) match {
-            case ours :: Nil if ours != entry.username => Some(ours)
-            case _                                     => None
-          }
-        })
-      }
-    } yield recovered.flatten
-
-  /** Extracts the distinct usernames that appear on either side of any game on a board. For closed/deleted accounts
-    * Chess.com returns a bare URL (`Left(URL)`) in place of the `ApiBoardPlayer` object; we still recover the username
-    * from the URL's last path segment.
-    */
-  private def extractBoardUsernames(boardData: ApiMatchBoard): List[Username] =
-    boardData.games.toList.flatMap { game =>
-      List(
-        extractSideUsername(game.white),
-        extractSideUsername(game.black)
-      )
-    }.distinct
-
-  private def extractSideUsername(side: Either[URL, ApiBoardPlayer]): Username =
-    side match {
-      case Right(player) => player.username
-      case Left(url)     => Username.wrap(url.path.segments.last)
-    }
-
-  /** Finds the opposing player's current username on this board, preferring the DB-first path. If the opposing side
-    * is already linked on `club_match_board`, reads their current username from `player`. Otherwise falls back to the
-    * match endpoint's match-time username (which is possibly stale, but still authoritative for the common case where
-    * only one side was renamed).
-    */
-  private def opposingCurrentUsername(
-    client: ChessComClient,
-    entry: UnresolvedBoardPlayer
-  ): RIO[ProgressDisplay & PostgresClient, Option[Username]] =
-    for {
-      rows <- ClubMatchBoard.selectMatch(entry.matchId)
-      opposingPidOpt = rows.find(_.board == entry.board).flatMap { row =>
-        if (entry.isTeam1) { row.team2PlayerId } else { row.team1PlayerId }
-      }
-      result <- opposingPidOpt match {
-        case Some(pid) => Player.selectId(pid).map(_.map(_.username))
-        case None      => opposingUsernameFromMatchEndpoint(client, entry)
-      }
-    } yield result
-
-  /** Fallback used when the opposing side is also unresolved in `club_match_board`: fetches the match endpoint and
-    * reads the opposing player's match-time username for the given board. Registered matches have no boards assigned
-    * yet, and cancelled matches only expose players without a `board` field, so both return `None` naturally.
-    */
-  private def opposingUsernameFromMatchEndpoint(
-    client: ChessComClient,
-    entry: UnresolvedBoardPlayer
   ): RIO[PostgresClient, Option[Username]] =
-    client.get[ApiDailyMatch](ApiDailyMatch.getUrl(entry.matchId)).map {
-      case _: ApiDailyMatchRegistered => None
-      case dailyMatch =>
-        val opposingTeam = if (entry.isTeam1) { dailyMatch.teams.team2 }
-        else { dailyMatch.teams.team1 }
-        opposingTeam.players.collectFirst {
-          case p: MatchPlayerStarted if p.board.path.segments.lastOption.exists(_.toShort == entry.board) =>
-            p.username
-        }
-    }
+    UsernameRenameResolver.resolveFromBoard(
+      client, entry.username, entry.matchId, entry.board, entry.isTeam1, isLive = false
+    )
 
   /** Fetches the club's match listing endpoint and inserts any not-yet-known match IDs as pending. Unchanged
     * responses skip the select-known-ids + filter + insert pipeline entirely — the listing can only grow, so an
@@ -237,12 +165,16 @@ private[history] object HistorySeeding {
     clubId: ClubId,
     clubSlug: ClubSlug,
     unchangedCounter: Ref[Int]
-  ): RIO[ProgressDisplay & PostgresClient, Int] =
-    client.getCacheable[ApiClubMatches](ApiClubMatches.getUrl(clubSlug))
-      .flatMap(_.foldZIO(_ => unchangedCounter.update(_ + 1).as(0))(insertPendingFromClubMatches(clubId, _)))
+  ): RIO[ProgressDisplay & PostgresClient, Int] = {
+    def fetch(slug: ClubSlug): RIO[PostgresClient, Int] =
+      client.getCacheable[ApiClubMatches](ApiClubMatches.getUrl(slug))
+        .flatMap(_.foldZIO(_ => unchangedCounter.update(_ + 1).as(0))(insertPendingFromClubMatches(clubId, _)))
+    fetch(clubSlug)
+      .withClubSlugRenameRecovery(client, clubSlug, Some(clubId))(fetch)
       .catchAll { error =>
         ZIO.logWarning(s"  Failed to fetch club matches: ${error.getMessage}").as(0)
       }
+  }
 
   private def insertPendingFromClubMatches(
     clubId: ClubId,
@@ -279,9 +211,14 @@ private[history] object HistorySeeding {
   ): RIO[ProgressDisplay & PostgresClient, MemberSeedResult] =
     for {
       sharedQueried <- shared.fold(ZIO.succeed(Set.empty[PlayerId]))(_.queriedPlayers.get)
+      // Tombstoned Player rows have a sentinel `_stale_<playerId>` username — emitting them here would 404 against
+      // Chess.com on every wave with no possible recovery (we have nothing better to query with). Filtering pre-
+      // partition is cheap (in-memory predicate over the playerById map). The renamed player will rejoin the queue
+      // automatically on the next run after some other path (board appearance, club roster refresh) rediscovers the
+      // current handle and replaces the tombstone via PlayerUpdater.reconcile.
       candidates = allMembers
         .filterNot(m => queriedIds.contains(m.playerId))
-        .flatMap(m => playerById.get(m.playerId).map(s => (m.playerId, s.username)))
+        .flatMap(m => playerById.get(m.playerId).filterNot(_.isTombstoned).map(s => (m.playerId, s.username)))
         .distinctBy(_._1)
       (toQuery, sharedSkipped) = candidates.partition { case (pid, _) => !sharedQueried.contains(pid) }
 
@@ -347,14 +284,16 @@ private[history] object HistorySeeding {
     shared match {
       case None => seedMatchesForPlayer(client, clubId, clubSlug, playerId, username, settledMatchIds, unchangedCounter)
       case Some(sc) =>
-        for {
-          result     <- client.getCacheable[ApiPlayerMatches](ApiPlayerMatches.getUrl(username))
-          otherClubs <- sc.resolvedClubs.get.map(_.removed(clubSlug).toList)
-          primaryCount <- result.foldZIO(_ =>
-            unchangedCounter.update(_ + 1) *> stampQueriedAllClubs(clubId, otherClubs, playerId).as(0)
-          )(seedAndStampAllClubs(clubId, clubSlug, settledMatchIds, otherClubs, playerId, _))
-          _ <- sc.queriedPlayers.update(_ + playerId)
-        } yield primaryCount
+        def go(uname: Username): RIO[PostgresClient, Int] =
+          for {
+            result     <- client.getCacheable[ApiPlayerMatches](ApiPlayerMatches.getUrl(uname))
+            otherClubs <- sc.resolvedClubs.get.map(_.removed(clubSlug).toList)
+            primaryCount <- result.foldZIO(_ =>
+              unchangedCounter.update(_ + 1) *> stampQueriedAllClubs(clubId, otherClubs, playerId).as(0)
+            )(seedAndStampAllClubs(clubId, clubSlug, settledMatchIds, otherClubs, playerId, _))
+            _ <- sc.queriedPlayers.update(_ + playerId)
+          } yield primaryCount
+        go(username).withPlayerRenameRecovery(client, username, Some(playerId))(go)
     }
 
   private def stampQueriedAllClubs(
@@ -419,11 +358,13 @@ private[history] object HistorySeeding {
     // `def` not `val` so `Instant.now()` is captured when the stamp actually runs (post-fetch / post-seed),
     // matching the original `HistoryMemberQuery.upsert(... Instant.now())` call inside the for-comprehension.
     def stamp = HistoryMemberQuery.upsert(HistoryMemberQuery(clubId, playerId, Instant.now()))
-    client.getCacheable[ApiPlayerMatches](ApiPlayerMatches.getUrl(username)).flatMap {
-      _.foldZIO(_ => unchangedCounter.update(_ + 1) *> stamp.as(0))(
-        seedMatchesFromPlayerMatches(clubId, clubSlug, settledMatchIds, _).zipLeft(stamp)
-      )
-    }
+    def fetch(uname: Username): RIO[PostgresClient, Int] =
+      client.getCacheable[ApiPlayerMatches](ApiPlayerMatches.getUrl(uname)).flatMap {
+        _.foldZIO(_ => unchangedCounter.update(_ + 1) *> stamp.as(0))(
+          seedMatchesFromPlayerMatches(clubId, clubSlug, settledMatchIds, _).zipLeft(stamp)
+        )
+      }
+    fetch(username).withPlayerRenameRecovery(client, username, Some(playerId))(fetch)
   }
 
   private def seedMatchesFromPlayerMatches(

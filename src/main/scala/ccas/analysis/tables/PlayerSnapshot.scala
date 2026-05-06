@@ -45,6 +45,18 @@ object PlayerSnapshot {
       sql"SELECT $selectCols FROM player_snapshot WHERE player_id = $playerId".query[PlayerSnapshot].run().toList
     )
 
+  /** Reverse-lookup: distinct player_ids that ever held the given username, ordered by each player's most recent
+    * `since` for that username, descending. Returns up to 5 candidates so callers can detect ambiguity (real renames
+    * yield exactly one). Used by the username rename resolver's Tier A snapshot path when the current
+    * `Player.username` row no longer matches.
+    */
+  def selectLatestPlayerIdByUsername(username: Username): ZIO[PostgresClient, SQLException, List[PlayerId]] =
+    connectZIO(
+      sql"""SELECT player_id FROM player_snapshot WHERE username = $username
+            GROUP BY player_id ORDER BY MAX(since) DESC LIMIT 5"""
+        .query[PlayerId].run().toList
+    )
+
   /** Historical snapshots plus current player state, for time-range reporting. Returns all snapshots whose `since` is
     * after the given instant, plus the current state from `player` if its `since` falls after the cutoff.
     */

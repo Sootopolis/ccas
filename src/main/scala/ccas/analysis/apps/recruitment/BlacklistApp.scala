@@ -4,11 +4,10 @@ import java.time.{Instant, ZoneOffset}
 
 import zio.{Clock, RIO, Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
 
-import ccas.analysis.apps.PlayerUpdater
+import ccas.analysis.apps.{PlayerUpdater, UsernameRenameResolver}
 import ccas.analysis.tables.*
 import ccas.api.club.ApiClub
 import ccas.api.misc.subtypes.{ClubSlug, Username}
-import ccas.api.player.ApiPlayer
 import ccas.utils.ProgressDisplay
 import ccas.utils.client.{ChessComClient, HttpClientLayer}
 import ccas.utils.errors.{BadRequestException, NotFoundException}
@@ -61,18 +60,24 @@ object BlacklistApp extends ZIOAppDefault {
       club = Club.fromApi(apiClub, clubSlug)
       _ <- Club.upsertResolvingSlugConflict(club, client)
       _ <- ZIO.foreachDiscard(usernames) { username =>
-        for {
-          apiPlayer <- client.get[ApiPlayer](ApiPlayer.getUrl(username))
-          now       <- Clock.instant
-          _ <- withTransaction {
-            PlayerUpdater.reconcile(apiPlayer, client) *> RecruitmentBlacklist.upsert(
-              RecruitmentBlacklist(apiClub.clubId, apiPlayer.playerId, now, expiresAt, reason)
+        UsernameRenameResolver.fetchOrRecover(client, username).flatMap { apiPlayer =>
+          for {
+            now <- Clock.instant
+            // Single transaction: reconcile (handles rename archival or fresh insert) + blacklist upsert. Resolver's
+            // verification fetch already authenticated apiPlayer; we don't double-reconcile.
+            _ <- withTransaction {
+              PlayerUpdater.reconcile(apiPlayer, client) *> RecruitmentBlacklist.upsert(
+                RecruitmentBlacklist(apiClub.clubId, apiPlayer.playerId, now, expiresAt, reason)
+              )
+            }
+            _ <- ZIO.when(apiPlayer.username != username) {
+              ZIO.logInfo(s"  Renamed: input '$username' resolved to '${apiPlayer.username}'")
+            }
+            _ <- ZIO.logInfo(
+              s"Blacklisted ${apiPlayer.username} (player_id=${apiPlayer.playerId}) for club $clubSlug"
             )
-          }
-          _ <- ZIO.logInfo(
-            s"Blacklisted $username (player_id=${apiPlayer.playerId}) for club $clubSlug"
-          )
-        } yield ()
+          } yield ()
+        }
       }
     } yield ()
 

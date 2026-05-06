@@ -23,10 +23,27 @@ final case class Club(
   membersCount: Option[Int],
   latestMatchAt: Option[Instant],
   fetchedAt: Option[Instant]
-) derives DbCodec
+) derives DbCodec {
+
+  /** True when the slug is a tombstone placeholder set by `Club.resolveStaleSlug` (for clubs whose fresh slug couldn't
+    * be discovered via match refs). Callers iterating clubs for URL emission or display should filter these out.
+    */
+  def isTombstoned: Boolean = Club.isTombstoneSlug(slug)
+
+  /** Display variant for tombstoned clubs so user-facing output doesn't leak the placeholder. */
+  def displayName: String =
+    if (isTombstoned) { s"<unknown club #${ClubId.unwrap(clubId)}>" } else { name }
+}
 
 object Club {
   private val repo = ImmutableRepo[Club, ClubId]
+
+  private val stalePattern = "^_stale_\\d+$".r
+
+  /** True when the given slug matches the tombstone format set by `Club.resolveStaleSlug`. Useful at display sites
+    * that hold a `ClubSlug` value but no full `Club` row.
+    */
+  def isTombstoneSlug(s: ClubSlug): Boolean = stalePattern.matches(s.value)
 
   def createTable: ZIO[PostgresClient, SQLException, Int] =
     connectZIO {

@@ -6,7 +6,7 @@ import zio.{Promise, RIO, Ref, Task, UIO, ZIO}
 import zio.http.URL
 import HistoryUtils.*
 
-import ccas.analysis.apps.PlayerUpdater
+import ccas.analysis.apps.{PlayerUpdater, UsernameRenameResolver}
 import ccas.analysis.tables.*
 import ccas.api.clubmatch.{ApiDailyMatch, ApiLiveMatch, ApiMatchBoard}
 import ccas.api.clubmatch.ApiDailyMatch.*
@@ -498,8 +498,10 @@ private[history] object HistoryProcessing {
     matchStartTime: Option[Instant]
   ): RIO[ProgressDisplay & PostgresClient, Option[PlayerId]] = {
     val work = for {
-      apiPlayer <- ctx.client.get[ApiPlayer](ApiPlayer.getUrl(username))
+      apiPlayer <- UsernameRenameResolver.fetchOrRecover(ctx.client, username)
       playerId = apiPlayer.playerId
+      // Single transaction: reconcile (writes Player table — handles fresh insert OR rename archival) + optional
+      // ClubMember creation. Resolver's verification fetch authenticated apiPlayer; no double-reconcile.
       isNew <- withTransaction {
         PlayerUpdater.reconcile(apiPlayer, ctx.client).tap { fresh =>
           ZIO.whenDiscard(fresh && isOurTeam)(createClubMemberForDiscovered(ctx, apiPlayer, matchStartTime))
@@ -507,13 +509,14 @@ private[history] object HistoryProcessing {
       }
       result <- {
         ctx.knownPlayers.update(_ + (key -> playerId)) *>
-          ZIO.whenDiscard(isNew && isOurTeam)(ctx.newPlayers.update(_ + DiscoveredPlayer(playerId, username))) *>
+          ZIO.whenDiscard(isNew && isOurTeam)(ctx.newPlayers.update(_ + DiscoveredPlayer(playerId, apiPlayer.username))) *>
           ZIO.whenDiscard(isNew)(ctx.playersDiscovered.update(_ + 1))
       }.as(Some(playerId))
     } yield result
 
     // The doer handles success/failure and completes the promise.
     // On failure: log once, count once, resolve promise to None so awaiting fibers get None (not an exception).
+    // Log uses the input `username` since failures here mean we couldn't even authenticate it.
     work.foldZIO(
       error =>
         ctx.playersFailed.update(_ + 1)

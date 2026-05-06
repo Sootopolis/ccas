@@ -37,7 +37,8 @@ object TestPlayerUpdater extends ZIOSpecDefault {
   override def spec: Spec[Any, Throwable] = (suite("TestPlayerUpdater")(
     testNoUsernameChange,
     testUsernameRenameNoConflict,
-    testUsernameRenameRecursesIntoConflictingPlayer
+    testUsernameRenameRecursesIntoConflictingPlayer,
+    testRecycledHandleTombstonesConflicting
   ) @@ TestAspect.before(resetPlayerTables)).provideShared(
     FreshSchemaLayer("test_player_updater", onInit = Tables.ensureTables)
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock
@@ -132,6 +133,46 @@ object TestPlayerUpdater extends ZIOSpecDefault {
       aliceSnapshots.head.username == Username("alice"),
       bobSnapshots.size == 1,
       bobSnapshots.head.username == Username("bob")
+    )
+  }
+
+  private def testRecycledHandleTombstonesConflicting = test(
+    "recycled handle: API serves conflicting username for a different player → tombstone the stale row"
+  ) {
+    // Bob is in DB with username "bob". Bob renamed away to something we don't yet know. Some new account
+    // (different playerId) has registered "bob" since. Alice now wants to rename to "bob".
+    // The API for "bob" returns playerId != Bob's. Resolver tombstones Bob's row to free the slot, Alice's
+    // update lands in the same transaction (UNIQUE constraint deferred to commit).
+    val recycledPlayerId = pidB.value + 1000
+    val responses = Map("player/bob" -> apiPlayerJson(recycledPlayerId, "bob"))
+    val now       = nowMicros
+    for {
+      client <- fakeChessComClient(responses)
+      _ <- Player.insert(Player(pidA, Times.t0, Username("alice"), PlayerStatusCategory.Active, None, Times.t0))
+      _ <- Player.insert(Player(pidB, Times.t0, Username("bob"), PlayerStatusCategory.Active, None, Times.t0))
+      existingAlice <- Player.selectId(pidA).someOrFailException
+      _ <- withTransaction {
+        PlayerUpdater.archiveAndUpdate(
+          existingAlice,
+          Username("bob"),
+          PlayerStatusCategory.Active,
+          None,
+          now,
+          client
+        )
+      }
+      aliceUpdated   <- Player.selectId(pidA).someOrFailException
+      bobUpdated     <- Player.selectId(pidB).someOrFailException
+      bobSnapshots   <- PlayerSnapshot.selectId(pidB)
+      aliceSnapshots <- PlayerSnapshot.selectId(pidA)
+    } yield assertTrue(
+      aliceUpdated.username == Username("bob"),
+      bobUpdated.username == Username(s"_stale_${pidB.value}"),
+      bobUpdated.isTombstoned,
+      bobSnapshots.size == 1,
+      bobSnapshots.head.username == Username("bob"),
+      aliceSnapshots.size == 1,
+      aliceSnapshots.head.username == Username("alice")
     )
   }
 }

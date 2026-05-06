@@ -28,10 +28,33 @@ final case class Player(
 
   def stateMatches(username: Username, status: PlayerStatusCategory, title: Option[Title]): Boolean =
     this.username == username && this.status == status && this.title == title
+
+  /** True when this row's username is a tombstone placeholder set by `PlayerUpdater.archiveAndUpdate` to free a
+    * UNIQUE-constrained handle. Callers iterating `Player` rows for URL emission or display should filter these out;
+    * the renamed player will be rediscovered organically through any normal-path callsite (HistoryApp, MembershipApp,
+    * RefApp, etc.) once they surface under their new handle.
+    */
+  def isTombstoned: Boolean = Player.isTombstoneUsername(username)
+
+  /** Display variant for tombstoned rows so user-facing output doesn't leak the placeholder. */
+  def displayName: String =
+    if (isTombstoned) { s"<unknown player #${PlayerId.unwrap(playerId)}>" } else { username.value }
 }
 
 object Player {
   private val repo = Repo[Player, Player, PlayerId]
+
+  private val stalePattern = "^_stale_\\d+$".r
+
+  /** True when the given username matches the tombstone format set by `PlayerUpdater.archiveAndUpdate`. Useful at
+    * display sites that hold a `Username` value but no full `Player` row.
+    */
+  def isTombstoneUsername(u: Username): Boolean = stalePattern.matches(u.value)
+
+  /** Renders a username for user-facing output, replacing tombstone placeholders with `<unknown player #<id>>`. */
+  def displayUsername(username: Username, playerId: PlayerId): String =
+    if (isTombstoneUsername(username)) { s"<unknown player #${PlayerId.unwrap(playerId)}>" }
+    else { username.value }
 
   private val selectCols = SqlLiteral("player_id, joined, username, status, title, since")
 

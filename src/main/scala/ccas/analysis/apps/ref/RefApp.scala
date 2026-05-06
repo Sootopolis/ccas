@@ -335,7 +335,7 @@ object RefApp extends ZIOAppDefault {
     if (d.skippedPlayers.nonEmpty) {
       sb.append(s"--- Skipped Players — ID Mismatch (${d.skippedPlayers.size}) ---\n")
       d.skippedPlayers.sortBy(_.username.toString).foreach { case SkippedPlayer(pid, username) =>
-        sb.append(s"  $username (player_id=$pid)\n")
+        sb.append(s"  ${ccas.analysis.tables.Player.displayUsername(username, pid)} (player_id=$pid)\n")
       }
       sb.append("\n")
     }
