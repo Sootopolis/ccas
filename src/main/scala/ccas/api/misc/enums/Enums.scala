@@ -94,6 +94,7 @@ enum ClubMatchStatus {
   case Finished
   case InProgress
   case Registration
+  case Aborted
 }
 
 object ClubMatchStatus extends EnumJson[ClubMatchStatus] with EnumSql[ClubMatchStatus]

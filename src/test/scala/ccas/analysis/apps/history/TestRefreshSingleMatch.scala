@@ -138,7 +138,8 @@ object TestRefreshSingleMatch extends ZIOSpecDefault {
   override def spec: Spec[Any, Throwable] = suite("refreshSingleMatch unchanged path")(
     testFreshSkipsNetworkAndPipeline,
     testRevalidatedSkipsPipeline,
-    testIdenticalBodySkipsPipeline
+    testIdenticalBodySkipsPipeline,
+    testPermanent404FlipsToAborted
   ).provideShared(
     FreshSchemaLayer("test_refresh_single_match", Tables.ensureTables)
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock
@@ -185,5 +186,52 @@ object TestRefreshSingleMatch extends ZIOSpecDefault {
           .addHeader(Header.CacheControl.MaxAge(3600))
           .addHeader(Header.ETag.Strong("v2"))
       }
+    }
+
+  // Settled-refresh path: a match that 404s with Chess.com's permanent body shape should flip to status=Aborted
+  // (not be left as a permanent failure that retries every run). Wired through `refreshSettledMatches` ->
+  // `refreshLoop` -> `refreshSingleMatch.catchAll`. Uses an isolated clubId so prior tests' rows / cache entries
+  // don't pollute the settled-batch selection.
+  private def testPermanent404FlipsToAborted =
+    test("permanent 404 in refresh path flips club_match.status to Aborted and increments matchesAborted") {
+      // ClubId/ClubMatchId outside the 700-range / 8001..8003-range used by sibling tests in this file so
+      // the settled-batch select for this club only sees the row this test seeds.
+      val isolatedClubId   = ClubId(710)
+      val isolatedClubSlug = ClubSlug("aborted-test-club")
+      val isolatedClub     = Club(isolatedClubId, t0, isolatedClubSlug, "Aborted Test Club", None, None, None)
+      val matchId          = ClubMatchId(8500)
+      // Settled = Finished + fetched_at >= end_time + 90d, and fetched_at < cutoffTime (Instant.now()).
+      // Use t0-based offsets (t0 = 2025-06-01) for deterministic dates regardless of suite run-time.
+      val endTime    = t0.plus(Duration.ofDays(7))   // 2025-06-08
+      val fetchedAt  = endTime.plus(Duration.ofDays(95)) // 2025-09-11; past stale window, before "now"
+      val settledRow = clubMatchRow(matchId.value).copy(
+        endTime     = Some(endTime),
+        fetchedAt   = fetchedAt,
+        team1ClubId = Some(isolatedClubId),
+        team2ClubId = Some(opponentId)
+      )
+      val permanentBody = """{"code": 0, "message": "Match \"8500\" not found."}"""
+      for {
+        _ <- Club.upsert(isolatedClub)
+        _ <- Club.upsert(opponentClub)
+        _ <- ClubMatch.upsert(settledRow)
+        routes = Routes(
+          Method.GET / "pub" / "match" / long("matchId") -> handler { (_: Long, _: Request) =>
+            Response.json(permanentBody).status(Status.NotFound)
+          }
+        )
+        client    <- TestChessComClientSupport.fakeClient(routes)
+        ctx       <- ProcessingContext.make(client, isolatedClubId, isolatedClubSlug, Map.empty)
+        refreshed <- HistoryProcessing.refreshSettledMatches(ctx, minAgeHours = 0)
+                       .provideSomeEnvironment[PostgresClient](_.add[ProgressDisplay](ProgressDisplay.make(enabled = false)))
+        rowAfter  <- ClubMatch.selectId(matchId)
+        aborted   <- ctx.matchesAborted.get
+      } yield assertTrue(
+        rowAfter.exists(_.status == ClubMatchStatus.Aborted),
+        rowAfter.exists(_.fetchedAt.isAfter(fetchedAt)),
+        aborted == 1,
+        // Aborted is treated as a successful terminal transition, not a failure: refreshed counter = 1.
+        refreshed == 1
+      )
     }
 }

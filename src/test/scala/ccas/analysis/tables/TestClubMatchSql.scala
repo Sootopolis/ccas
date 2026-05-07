@@ -21,6 +21,8 @@ object TestClubMatchSql extends ZIOSpecDefault {
     testClubMatchSelectStaleForClub,
     testClubMatchSelectSettledForClub,
     testClubMatchSelectSettledForRefresh,
+    testClubMatchMarkAborted,
+    testClubMatchSelectStaleExcludesAborted,
     testClubMatchInferClubMatchRefIsLive,
     testClubMatchRefFindOrInfer,
     testClubMatchBoardInsertAndSelect,
@@ -232,6 +234,39 @@ object TestClubMatchSql extends ZIOSpecDefault {
         batchExact.isEmpty,
         batchCursor.isEmpty // cursor past 1001 excludes the only settled match
       )
+    }
+
+  private def testClubMatchMarkAborted = test("markAborted flips status to Aborted; returns 0 for unknown match") {
+    val target = matchInProgress.matchId
+    val now    = Instant.parse("2026-05-07T10:00:00Z")
+    for {
+      hit       <- ClubMatch.markAborted(target, now)
+      after     <- ClubMatch.selectId(target)
+      miss      <- ClubMatch.markAborted(ClubMatchId(99_999), now)
+      _         <- ClubMatch.upsert(matchInProgress) // restore for downstream tests
+    } yield assertTrue(
+      hit == 1,
+      after.exists(_.status == ClubMatchStatus.Aborted),
+      after.exists(_.fetchedAt == now),
+      miss == 0
+    )
+  }
+
+  private def testClubMatchSelectStaleExcludesAborted =
+    test("selectStaleForClub excludes Aborted rows") {
+      val abortedId = ClubMatchId(1009)
+      val aborted = matchFinished.copy(
+        matchId = abortedId,
+        status = ClubMatchStatus.Aborted,
+        endTime = None,
+        team2ClubId = None,
+        fetchedAt = Times.t2
+      )
+      for {
+        _      <- ClubMatch.upsert(aborted)
+        staleA <- ClubMatch.selectStaleForClub(clubA.clubId)
+        _      <- connectZIO(sql"DELETE FROM club_match WHERE match_id = $abortedId".update.run())
+      } yield assertTrue(!staleA.contains(abortedId))
     }
 
   private def testClubMatchInferClubMatchRefIsLive =
@@ -510,7 +545,8 @@ object TestClubMatchSql extends ZIOSpecDefault {
       _ <- HistoryRun.complete(
         runId, Times.t1,
         matchesProcessed = 42, playersDiscovered = 7,
-        refreshMatchUnchanged = 3, seedClubMatchesUnchanged = 1, seedPlayerMatchesUnchanged = 5
+        refreshMatchUnchanged = 3, seedClubMatchesUnchanged = 1, seedPlayerMatchesUnchanged = 5,
+        abortedMatches = 2
       )
     } yield assertTrue(runId.value > 0L)
   }

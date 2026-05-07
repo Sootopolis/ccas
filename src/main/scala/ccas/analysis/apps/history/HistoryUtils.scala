@@ -29,6 +29,7 @@ private[history] object HistoryUtils {
     matchesSeeded: Int = 0,
     matchesProcessed: Int = 0,
     matchesFailed: Int = 0,
+    matchesAborted: Int = 0,
     matchesUnidentified: Int = 0,
     matchesBoardsUpdated: Int = 0,
     matchesRefreshed: Int = 0,
@@ -79,6 +80,7 @@ private[history] object HistoryUtils {
     val newPlayers: Ref[Set[DiscoveredPlayer]],
     val matchesProcessed: Ref[Int],
     val matchesFailed: Ref[Int],
+    val matchesAborted: Ref[Int],
     val matchesUnidentified: Ref[Int],
     val playersDiscovered: Ref[Int],
     val playersKnown: Ref[Int],
@@ -107,6 +109,7 @@ private[history] object HistoryUtils {
         newPlayers          <- Ref.make(Set.empty[DiscoveredPlayer])
         matchesProcessed    <- Ref.make(0)
         matchesFailed       <- Ref.make(0)
+        matchesAborted      <- Ref.make(0)
         matchesUnidentified <- Ref.make(0)
         playersDiscovered   <- Ref.make(0)
         playersKnown        <- Ref.make(0)
@@ -129,6 +132,7 @@ private[history] object HistoryUtils {
         newPlayers,
         matchesProcessed,
         matchesFailed,
+        matchesAborted,
         matchesUnidentified,
         playersDiscovered,
         playersKnown,

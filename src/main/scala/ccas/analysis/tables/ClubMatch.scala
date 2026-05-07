@@ -66,6 +66,7 @@ object ClubMatch {
     connectZIO {
       sql"""SELECT match_id FROM club_match
             WHERE (team1_club_id = $clubId OR team2_club_id = $clubId)
+            AND status != 'Aborted'
             AND (status != 'Finished' OR fetched_at < end_time + $StaleWindowDays * INTERVAL '1 day')"""
         .query[ClubMatchId].run().toList
     }
@@ -188,5 +189,12 @@ object ClubMatch {
   def updateFetchedAt(matchId: ClubMatchId, at: Instant): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"UPDATE club_match SET fetched_at = $at WHERE match_id = $matchId".update.run()
+    }
+
+  // Terminal state for matches that 404 with Chess.com's permanent "not found" body. Returns rows affected so
+  // callers can detect orphan match IDs not in club_match (rowsAffected = 0).
+  def markAborted(matchId: ClubMatchId, at: Instant): ZIO[PostgresClient, SQLException, Int] =
+    connectZIO {
+      sql"UPDATE club_match SET status = 'Aborted', fetched_at = $at WHERE match_id = $matchId".update.run()
     }
 }

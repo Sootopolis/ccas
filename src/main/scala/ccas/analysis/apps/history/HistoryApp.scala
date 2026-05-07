@@ -307,7 +307,8 @@ object HistoryApp extends ZIOAppDefault {
       )
       _ <- HistoryRun.complete(
         runId, completedAt, totalStats.matchesProcessed + totalStats.matchesSharedSkip, totalStats.playersDiscovered,
-        totalStats.refreshMatchUnchanged, totalStats.seedClubMatchesUnchanged, totalStats.seedPlayerMatchesUnchanged
+        totalStats.refreshMatchUnchanged, totalStats.seedClubMatchesUnchanged, totalStats.seedPlayerMatchesUnchanged,
+        totalStats.matchesAborted
       )
     } yield HistoryResult(totalStats, clubSlug, startedAt, completedAt)
   }
@@ -340,7 +341,8 @@ object HistoryApp extends ZIOAppDefault {
       )
       _ <- HistoryRun.complete(
         runId, completedAt, totalStats.matchesProcessed + totalStats.matchesSharedSkip, totalStats.playersDiscovered,
-        totalStats.refreshMatchUnchanged, totalStats.seedClubMatchesUnchanged, totalStats.seedPlayerMatchesUnchanged
+        totalStats.refreshMatchUnchanged, totalStats.seedClubMatchesUnchanged, totalStats.seedPlayerMatchesUnchanged,
+        totalStats.matchesAborted
       )
       _ <- logSummary(totalStats, startedAt, completedAt)
       _ <- OutputFile.writeAndLog("history", clubSlug, formatReport(totalStats, clubSlug, startedAt, completedAt))
@@ -356,7 +358,7 @@ object HistoryApp extends ZIOAppDefault {
       )
       _ <- ZIO.logInfo(s"Matches seeded: ${stats.matchesSeeded}")
       _ <- ZIO.logInfo(
-        s"Matches processed: ${stats.matchesProcessed} | boards updated: ${stats.matchesBoardsUpdated} | failed: ${stats.matchesFailed} | unidentified: ${stats.matchesUnidentified} | shared skip: ${stats.matchesSharedSkip}" +
+        s"Matches processed: ${stats.matchesProcessed} | boards updated: ${stats.matchesBoardsUpdated} | failed: ${stats.matchesFailed} | aborted: ${stats.matchesAborted} | unidentified: ${stats.matchesUnidentified} | shared skip: ${stats.matchesSharedSkip}" +
           (if (stats.matchesRefreshed > 0) { s" | refreshed: ${stats.matchesRefreshed}" } else { "" })
       )
       _ <- ZIO.logInfo(
@@ -394,6 +396,7 @@ object HistoryApp extends ZIOAppDefault {
     sb.append(s"Processed:    ${stats.matchesProcessed}\n")
     sb.append(s"Boards updated: ${stats.matchesBoardsUpdated}\n")
     sb.append(s"Failed:       ${stats.matchesFailed}\n")
+    sb.append(s"Aborted:      ${stats.matchesAborted}\n")
     sb.append(s"Unidentified: ${stats.matchesUnidentified}\n")
     sb.append(s"Shared skip:  ${stats.matchesSharedSkip}\n")
     if (stats.matchesRefreshed > 0) { sb.append(s"Refreshed:    ${stats.matchesRefreshed}\n") }
