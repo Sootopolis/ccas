@@ -29,7 +29,14 @@ object PlayerUpdater {
       Player.selectByUsernameForUpdate(newUsername).flatMap {
         case Some(conflicting) =>
           client.get[ApiPlayer](ApiPlayer.getUrl(conflicting.username)).flatMap { apiPlayer =>
-            if (!conflicting.stateMatches(apiPlayer.username, apiPlayer.status.category, apiPlayer.title)) {
+            if (apiPlayer.playerId != conflicting.playerId) {
+              // Recycled handle: the API now serves the conflicting username for a different player. Our
+              // `conflicting` row is stale — the rightful holder renamed away. Tombstone the row to free the
+              // UNIQUE(username) slot. The deferred constraint allows this update plus the caller's update to
+              // satisfy the constraint at commit time. The renamed player will be rediscovered organically when
+              // their new name surfaces on a board / club roster / direct fetch.
+              tombstoneConflicting(conflicting, Instant.now())
+            } else if (!conflicting.stateMatches(apiPlayer.username, apiPlayer.status.category, apiPlayer.title)) {
               // The recursive `since` is a fresh now(), not the caller's `since`: the conflicting player's
               // state-change is a different event than the caller's, observed at the moment we discover it.
               archiveAndUpdate(
@@ -50,6 +57,34 @@ object PlayerUpdater {
 
     val updated = existing.copy(username = newUsername, status = newStatus, title = newTitle, since = since)
     resolveConflict *> PlayerSnapshot.insert(existing.toSnapshot) *> Player.updateCurrentState(updated)
+  }
+
+  /** Archives the conflicting Player's prior state and rewrites its `username` to a sentinel (`_stale_<playerId>`)
+    * so the UNIQUE(username) slot is freed. Used when the conflicting username's API-served playerId no longer
+    * matches our row — the rightful holder has been renamed away. The tombstone is replaced when the renamed
+    * player is rediscovered under their new handle through any normal-path callsite (HistoryApp, MembershipApp,
+    * RefApp, etc.).
+    *
+    * Defensive `since`: `Player.updateCurrentState` has an optimistic `AND since < newSince` guard. If `since`
+    * coincides with `conflicting.since` (sub-microsecond clock under tests, very fast retry), the UPDATE no-ops and
+    * the tombstone never lands — the caller's UPDATE then violates UNIQUE at commit. Bump by 1µs (Postgres
+    * TIMESTAMPTZ resolution) when the proposed `since` isn't strictly later than the existing row.
+    */
+  private def tombstoneConflicting(conflicting: Player, since: Instant): RIO[PostgresClient, Int] = {
+    val tombstone = UsernameRenameResolver.stalePlaceholder(conflicting.playerId)
+    val effectiveSince =
+      if (since.isAfter(conflicting.since)) { since }
+      else { conflicting.since.plus(1L, java.time.temporal.ChronoUnit.MICROS) }
+    PlayerSnapshot.insert(conflicting.toSnapshot) *>
+      Player.updateCurrentState(conflicting.copy(username = tombstone, since = effectiveSince)).flatMap { rows =>
+        if (rows == 1) { ZIO.succeed(rows) }
+        else {
+          ZIO.fail(new IllegalStateException(
+            s"Tombstone update for player_id=${conflicting.playerId} affected $rows rows; expected 1. " +
+              s"conflicting.since=${conflicting.since} since=$since effectiveSince=$effectiveSince"
+          ))
+        }
+      }
   }
 
   /** Reconciles a freshly-fetched `ApiPlayer` against the `player` table by `player_id`. If an existing row is present

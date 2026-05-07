@@ -8,6 +8,7 @@ import ccas.utils.sql.PostgresClient
 import zio.{RIO, ZIO}
 import RecruitmentStatsHelpers.*
 
+import ccas.analysis.apps.UsernameRenameResolver
 import ccas.analysis.apps.clubdata.ClubAdminResolver
 import ccas.analysis.tables.*
 import ccas.api.club.ApiClub
@@ -38,7 +39,10 @@ private[recruitment] object RecruitmentFilterDefs {
   object FetchAndCheckPlayer extends RecruitmentFilter {
     def apply(env: FilterEnv): RIO[PostgresClient, FilterResult] =
       for {
-        apiPlayer      <- env.run.client.get[ApiPlayer](ApiPlayer.getUrl(env.candidate.username))
+        // Use fetchOrRecover (no resolver-side reconcile). RecruitmentPersistence.writeCandidate handles the actual
+        // Player table writes based on `isNewPlayer`, so a single transactional write covers both rename archival
+        // (existingPlayer.isDefined) and fresh insert.
+        apiPlayer      <- UsernameRenameResolver.fetchOrRecover(env.run.client, env.candidate.username)
         existingPlayer <- Player.selectId(apiPlayer.playerId)
 
         // Load existing cache
@@ -47,7 +51,12 @@ private[recruitment] object RecruitmentFilterDefs {
         val statusCat = apiPlayer.status.category
         val criteria  = env.run.criteria
         val now       = env.run.now
+        // After possible rename recovery, downstream filters that read `env.candidate.username` for URL construction
+        // must use the verified canonical handle, not the stale CLI/listing-supplied input. Note that the post-
+        // recovery `username` differs from the CandidateContext.initial value passed in by callers — readers should
+        // treat the returned candidate's username as authoritative.
         val updatedCtx = env.candidate.copy(
+          username = apiPlayer.username,
           apiPlayer = Some(apiPlayer),
           isNewPlayer = existingPlayer.isEmpty,
           cache = cached

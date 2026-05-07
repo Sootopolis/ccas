@@ -330,7 +330,7 @@ private[recruitment] object RecruitmentExplore {
     for {
       tmPlayers <- PlayerRecruitmentCache.selectTmActive(20)
       players   <- Player.selectByIds(tmPlayers.map(_.playerId))
-      usernames = players.map(_.username)
+      usernames = players.filterNot(_.isTombstoned).map(_.username)
       opponentSets <- ZIO.foreachPar(usernames) { username =>
         ZIO.foreachPar(months) { ym =>
           client.get[ApiPlayerArchive](ApiPlayerArchive.getUrl(username, ym.getYear, ym.getMonthValue))
@@ -359,7 +359,7 @@ private[recruitment] object RecruitmentExplore {
         bs.flatMap(b => if (isTeam1) b.team2PlayerId else b.team1PlayerId)
       }.toSet
       players <- Player.selectByIds(opponentIds)
-      usernames = players.map(_.username)
+      usernames = players.filterNot(_.isTombstoned).map(_.username)
       _ <- ZIO.logInfo(s"[Explore] Match board opponents strategy found ${usernames.size} players")
     } yield
       if (usernames.isEmpty) Nil

@@ -9,6 +9,7 @@ import ccas.analysis.tables.{Club, ClubAdmin, ClubMatch, ClubMatchRef, Tables}
 import ccas.api.club.{ApiClub, ApiClubMatches}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 import ccas.utils.{OutputFile, ProgressDisplay}
+import ccas.analysis.apps.ClubSlugRenameResolver
 import ccas.utils.client.{ChessComClient, HttpClientLayer, onNotFound}
 import ccas.utils.sql.PostgresClient
 
@@ -156,22 +157,20 @@ object ClubDataApp extends ZIOAppDefault {
       _ <- Club.updateFetchedAt(club.clubId, Instant.now())
     } yield ClubResult(allAdminIds.size, failed = false, adminChanged = allAdminIds != existingAdminIds)
 
-  /** Fetches `ApiClub` for the given club, recovering from rename-404s by rediscovering the current slug via a
-    * `ClubMatchRef`. If the old slug 404s and the club has a match ref pointing to a team URL with a different slug,
-    * retries the fetch once with the new slug and returns it alongside the `ApiClub` so the caller can persist it.
-    * All non-404 errors, missing refs, and same-slug ref results fall through to the original failure.
+  /** Fetches `ApiClub` for the given club, delegating rename-404 recovery to [[ClubSlugRenameResolver]]. The resolver
+    * tries the DB first (if some other path already learned the new slug), then falls back to discovering the slug
+    * via a `ClubMatchRef` board's team URL.
     */
   private def fetchApiClubWithRenameRecovery(
     client: ChessComClient,
     club: Club
   ): RIO[ProgressDisplay & PostgresClient, (ApiClub, ClubSlug)] =
     ApiClub.get(client, club.slug).map(_ -> club.slug).onNotFound { e =>
-      Club.slugFromMatchRef(club.clubId, client).flatMap {
-        case Some(newSlug) if newSlug != club.slug =>
-          ZIO.logInfo(
-            s"[ClubData] ${club.slug} returned 404; retrying with rediscovered slug $newSlug"
-          ) *> ApiClub.get(client, newSlug).map(_ -> newSlug)
-        case _ => ZIO.fail(e)
+      ClubSlugRenameResolver.resolveAndPersist(client, club.slug, Some(club.clubId)).flatMap {
+        case Some((newSlug, apiClub)) =>
+          ZIO.logInfo(s"[ClubData] ${club.slug} returned 404; retrying with rediscovered slug $newSlug")
+            .as(apiClub -> newSlug)
+        case None => ZIO.fail(e)
       }
     }
 

@@ -22,7 +22,8 @@ object TestPlayerSql extends ZIOSpecDefault {
     testInsertBatchIdempotent,
     testPlayerSnapshotInsertIdempotent,
     testResolveUsernames,
-    testUpdateCurrentStateOptimistic
+    testUpdateCurrentStateOptimistic,
+    testSelectLatestPlayerIdByUsername
   ).provideShared(
     FreshSchemaLayer("test_player_sql", onInit = Tables.ensureTables)
   ) @@ TestAspect.sequential
@@ -186,6 +187,30 @@ object TestPlayerSql extends ZIOSpecDefault {
       r4 == 1,
       after.exists(_.username == Username("player1_D")),
       after.exists(_.since == t5)
+    )
+  }
+
+  private def testSelectLatestPlayerIdByUsername = test("testSelectLatestPlayerIdByUsername") {
+    // After earlier tests:
+    //   player0 (id=0) snapshots: player0_old @ t0, player0_mid @ t1, player0_0 @ Times.t2 (archived in testArchiveAndUpdate)
+    //   player0 current username: player0_new
+    //   player1 (id=1) current username: player1_D, no snapshots in this test data
+    for {
+      // Single match — the snapshot for player0_old maps to player_id = 0
+      old <- PlayerSnapshot.selectLatestPlayerIdByUsername(Username("player0_old"))
+      // No snapshot ever held this username
+      missing <- PlayerSnapshot.selectLatestPlayerIdByUsername(Username("never_existed"))
+      // Synthesize an ambiguous case: insert a snapshot for player1 holding username player0_old
+      _ <- PlayerSnapshot.insert(
+        PlayerSnapshot(player1.playerId, Times.t3.plusSeconds(10), Username("player0_old"), Active, None)
+      )
+      ambiguous <- PlayerSnapshot.selectLatestPlayerIdByUsername(Username("player0_old"))
+    } yield assertTrue(
+      old == List(player0.playerId),
+      missing.isEmpty,
+      ambiguous.size == 2,
+      // Ordered by MAX(since) DESC — player1's snapshot at Times.t3+10s is the most recent
+      ambiguous.head == player1.playerId
     )
   }
 

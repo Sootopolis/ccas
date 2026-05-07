@@ -1,6 +1,7 @@
 package ccas.analysis.apps.stats
 
 import ccas.analysis.apps.stats.StatsUtils.{MemberContribution, PlayerBoardStats}
+import ccas.analysis.tables.Player
 
 /** Formats stats results as CSV for output files. */
 object StatsReport {
@@ -15,7 +16,7 @@ object StatsReport {
       val r  = mc.raw
       val fp = mc.fairPlay
       sb.append(csvRow(
-        (idx + 1).toString, mc.username.value, r.boards.toString, r.games.toString,
+        (idx + 1).toString, Player.displayUsername(mc.username, mc.playerId), r.boards.toString, r.games.toString,
         r.wins.toString, r.draws.toString, r.losses.toString,
         formatPoints(r.points), formatPercent(r.scoreRate),
         fp.wins.toString, fp.draws.toString, fp.losses.toString,
@@ -49,7 +50,7 @@ object StatsReport {
     eligible.zipWithIndex.foreach { case (mc, idx) =>
       val s = mc.raw
       sb.append(csvRow(
-        (idx + 1).toString, mc.username.value, s.games.toString,
+        (idx + 1).toString, Player.displayUsername(mc.username, mc.playerId), s.games.toString,
         s.wins.toString, s.draws.toString, s.losses.toString,
         formatPoints(s.points), formatPercent(s.scoreRate)
       ))

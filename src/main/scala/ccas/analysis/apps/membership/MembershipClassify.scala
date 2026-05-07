@@ -3,6 +3,7 @@ package ccas.analysis.apps.membership
 import ccas.utils.sql.PostgresClient
 import zio.{Chunk, RIO, Ref, Task, UIO, ZIO}
 
+import ccas.analysis.apps.UsernameRenameResolver
 import ccas.analysis.apps.membership.MembershipChange.*
 import ccas.analysis.apps.membership.MembershipChange.MemberChange.*
 import ccas.analysis.apps.ref.RefHelpers
@@ -164,7 +165,7 @@ private[membership] object MembershipClassify {
     dbState: DbState,
     now: java.time.Instant
   ): RIO[PostgresClient, PhaseBMemberResult] =
-    client.get[ApiPlayer](ApiPlayer.getUrl(username)).flatMap { apiPlayer =>
+    UsernameRenameResolver.fetchOrRecover(client, username).flatMap { apiPlayer =>
       val playerId       = apiPlayer.playerId
       val statusCategory = apiPlayer.status.category
 
