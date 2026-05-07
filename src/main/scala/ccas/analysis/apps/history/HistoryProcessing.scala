@@ -14,6 +14,7 @@ import ccas.api.misc.enums.*
 import ccas.api.misc.subtypes.*
 import ccas.api.player.{ApiPlayer, ApiPlayerClubs}
 import ccas.utils.{ApiConcurrency, ProgressBar, ProgressDisplay}
+import ccas.utils.client.{HttpStatusException, isPermanentNotFound}
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.withTransaction
 
@@ -112,11 +113,25 @@ private[history] object HistoryProcessing {
   ): RIO[ProgressDisplay & PostgresClient, Unit] =
     ZIO.foreachParDiscard(pending) { pm =>
       processMatch(ctx, pm.matchId, pm.isLive, shared)
-        .catchAll { error =>
-          ctx.matchesFailed.update(_ + 1) *>
-            ctx.failedMatches.update(_ :+ FailedMatch(MatchKey(pm.matchId, pm.isLive), error.getMessage)) *>
-            HistoryPendingMatch.updateStatus(ctx.clubId, pm.matchId, pm.isLive, PendingMatchStatus.ApiError) *>
-            ZIO.logWarning(s"    Match ${pm.matchId}${if (pm.isLive) " (live)" else ""}: ${error.getMessage}")
+        .catchAll {
+          case e: HttpStatusException if e.isPermanentNotFound =>
+            for {
+              _ <- ctx.matchesAborted.update(_ + 1)
+              // markAborted=0 → no club_match row (orphan ref from a /matches list); just drop the pending entry
+              // so we stop re-attempting. Orphan-skip-table handling is out of scope (covered by #3 option 2).
+              _ <- withTransaction {
+                ClubMatch.markAborted(pm.matchId, Instant.now()) *>
+                  HistoryPendingMatch.delete(ctx.clubId, pm.matchId, pm.isLive)
+              }
+              _ <- ZIO.logWarning(s"    Match ${pm.matchId}${if (pm.isLive) " (live)" else ""}: aborted (permanent 404)")
+            } yield ()
+          case error =>
+            for {
+              _ <- ctx.matchesFailed.update(_ + 1)
+              _ <- ctx.failedMatches.update(_ :+ FailedMatch(MatchKey(pm.matchId, pm.isLive), error.getMessage))
+              _ <- HistoryPendingMatch.updateStatus(ctx.clubId, pm.matchId, pm.isLive, PendingMatchStatus.ApiError)
+              _ <- ZIO.logWarning(s"    Match ${pm.matchId}${if (pm.isLive) " (live)" else ""}: ${error.getMessage}")
+            } yield ()
         } *> counter.updateAndGet(_ + 1).flatMap { n =>
         bar.print(n, waveTotal.toInt, s"    Processing matches: $n/$waveTotal")
       }
@@ -287,9 +302,23 @@ private[history] object HistoryProcessing {
       _ <- ZIO.whenDiscard(batch.nonEmpty) {
         ZIO.foreachParDiscard(batch) { matchId =>
           refreshSingleMatch(ctx, matchId)
-            .catchAll { error =>
-              failed.update(_ + 1) *>
-                ZIO.logWarning(s"    Refresh $matchId: ${error.getMessage}")
+            .catchAll {
+              // No transaction needed here: the refresh path has no pending-table row to delete, and
+              // `markAborted` is the only write. `selectSettledForRefreshBatch` selected this row so
+              // rows-affected is virtually always 1; rows == 0 indicates a concurrent delete.
+              case e: HttpStatusException if e.isPermanentNotFound =>
+                for {
+                  _    <- ctx.matchesAborted.update(_ + 1)
+                  rows <- ClubMatch.markAborted(matchId, Instant.now())
+                  msg = if (rows == 0) s"    Refresh $matchId: permanent 404 but row vanished (no Aborted write)"
+                        else s"    Refresh $matchId: aborted (permanent 404)"
+                  _ <- ZIO.logWarning(msg)
+                } yield ()
+              case error =>
+                for {
+                  _ <- failed.update(_ + 1)
+                  _ <- ZIO.logWarning(s"    Refresh $matchId: ${error.getMessage}")
+                } yield ()
             } *> counter.updateAndGet(_ + 1).flatMap { n =>
             bar.print(n, total, s"    Refreshing: $n/$total")
           }
@@ -641,6 +670,7 @@ private[history] object HistoryProcessing {
     for {
       matchesProcessed           <- ctx.matchesProcessed.get
       matchesFailed              <- ctx.matchesFailed.get
+      matchesAborted             <- ctx.matchesAborted.get
       matchesUnidentified        <- ctx.matchesUnidentified.get
       matchesBoardsUpdated       <- ctx.matchesBoardsUpdated.get
       matchesSharedSkip          <- ctx.matchesSharedSkip.get
@@ -654,6 +684,7 @@ private[history] object HistoryProcessing {
     } yield RunStats(
       matchesProcessed = matchesProcessed,
       matchesFailed = matchesFailed,
+      matchesAborted = matchesAborted,
       matchesUnidentified = matchesUnidentified,
       matchesBoardsUpdated = matchesBoardsUpdated,
       matchesSharedSkip = matchesSharedSkip,
