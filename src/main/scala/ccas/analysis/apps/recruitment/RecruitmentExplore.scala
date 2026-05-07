@@ -1,17 +1,18 @@
 package ccas.analysis.apps.recruitment
 
 import java.time.temporal.ChronoUnit
-import java.time.Instant
+import java.time.{Instant, YearMonth}
 
 import ccas.utils.sql.PostgresClient
 import zio.{RIO, Task, UIO, ZIO}
 
+import ccas.analysis.apps.{ClubSlugRenameResolver, withPlayerRenameRecovery}
 import ccas.analysis.tables.*
 import ccas.api.club.{ApiClub, ApiClubMembers}
 import ccas.api.misc.enums.ClubMatchStatus
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, Username}
 import ccas.api.player.*
-import ccas.utils.client.ChessComClient
+import ccas.utils.client.{ChessComClient, onNotFound}
 import ccas.utils.ApiConcurrency
 
 private[recruitment] object RecruitmentExplore {
@@ -246,18 +247,48 @@ private[recruitment] object RecruitmentExplore {
     }
   }
 
+  /** Loads the source club's members (and admins, when `excludeSourceAdmins`) and trims the candidate list against
+    * existing memberships and already-evaluated usernames. Resolves any rename ONCE up front via
+    * `ClubSlugRenameResolver.resolveAndPersist`, then runs the two endpoint fetches under the canonical slug. Doing
+    * the resolver call inside the parallel `zipPar` would race: whichever leg's wrap won would update the Club row,
+    * causing the loser's `deriveHint` lookup to miss and leaving its 404 unrecovered.
+    *
+    * On the recovery path the resolver returns a verified `ApiClub` for free; we extract admins from it directly
+    * instead of issuing a redundant `ApiClub.get(fresh)` in the retry.
+    */
   def gatherClubCandidates(
     client: ChessComClient,
     clubSlug: ClubSlug,
     excludeSourceAdmins: Boolean,
     existingUsernames: Set[Username],
     evaluatedUsernames: Set[Username]
-  ): Task[List[Username]] = {
-    val getMembersAndAdmins = if (excludeSourceAdmins) {
-      ApiClubMembers.get(client, clubSlug).map(_.all.map(_.username).toList)
-        .zipPar(ApiClub.get(client, clubSlug).map(ClubAdmin.extractAdminUsernames))
-    } else ApiClubMembers.get(client, clubSlug).map(m => (m.all.map(_.username).toList, Set.empty[Username]))
-    getMembersAndAdmins.map { (orderedMembers, adminUsernames) =>
+  ): RIO[PostgresClient, List[Username]] = {
+    def fetchMembers(slug: ClubSlug): Task[List[Username]] =
+      ApiClubMembers.get(client, slug).map(_.all.map(_.username).toList)
+    def fetchAdmins(slug: ClubSlug): Task[Set[Username]] =
+      ApiClub.get(client, slug).map(ClubAdmin.extractAdminUsernames)
+    def fetchBoth(slug: ClubSlug): Task[(List[Username], Set[Username])] =
+      if (excludeSourceAdmins) { fetchMembers(slug).zipPar(fetchAdmins(slug)) }
+      else { fetchMembers(slug).map(m => (m, Set.empty[Username])) }
+
+    val combined: RIO[PostgresClient, (List[Username], Set[Username])] =
+      fetchBoth(clubSlug).onNotFound { e =>
+        ClubSlugRenameResolver.resolveAndPersist(client, clubSlug, clubIdHint = None).flatMap {
+          case Some((fresh, apiClub)) =>
+            // Reuse the resolver's verified ApiClub to skip a duplicate `ApiClub.get(fresh)` on the admins leg.
+            // Members still need a fresh fetch (different endpoint).
+            val adminsCached = ZIO.succeed(ClubAdmin.extractAdminUsernames(apiClub))
+            val membersFresh = fetchMembers(fresh)
+            val retried =
+              if (excludeSourceAdmins) { membersFresh.zipPar(adminsCached) }
+              else { membersFresh.map(m => (m, Set.empty[Username])) }
+            ZIO.logInfo(s"  Slug rename recovered: $clubSlug → $fresh; retrying gatherClubCandidates") *>
+              retried
+          case None => ZIO.fail(e)
+        }
+      }
+
+    combined.map { (orderedMembers, adminUsernames) =>
       val exclude = existingUsernames ++ evaluatedUsernames ++ adminUsernames
       orderedMembers.filterNot(exclude).distinct
     }
@@ -327,18 +358,30 @@ private[recruitment] object RecruitmentExplore {
   ): RIO[PostgresClient, List[SourceDescriptor]] = {
     val cutoff = now.minus(90, ChronoUnit.DAYS)
     val months = RecruitmentStatsHelpers.recentArchiveMonths(now, 90)
+
+    def fetchMonth(uname: Username, ym: YearMonth): RIO[PostgresClient, ApiPlayerArchive] =
+      client.get[ApiPlayerArchive](ApiPlayerArchive.getUrl(uname, ym.getYear, ym.getMonthValue))
+
     for {
       tmPlayers <- PlayerRecruitmentCache.selectTmActive(20)
       players   <- Player.selectByIds(tmPlayers.map(_.playerId))
-      usernames = players.filterNot(_.isTombstoned).map(_.username)
-      opponentSets <- ZIO.foreachPar(usernames) { username =>
-        ZIO.foreachPar(months) { ym =>
-          client.get[ApiPlayerArchive](ApiPlayerArchive.getUrl(username, ym.getYear, ym.getMonthValue))
-        }.map { archives =>
-          archives.flatMap(
-            _.games.filter(g => g.timeClass == "daily" && g.`match`.isDefined && g.endTime >= cutoff.getEpochSecond)
-          ).flatMap(nonTimeoutOpponent(_, username)).toSet
-        }.catchAll(_ => ZIO.succeed(Set.empty[Username]))
+      activePlayers = players.filterNot(_.isTombstoned).map(p => (p.playerId, p.username))
+      opponentSets <- ZIO.foreachPar(activePlayers) { case (playerId, username) =>
+        val gather = for {
+          archives <- ZIO.foreachPar(months) { ym =>
+            fetchMonth(username, ym)
+              .withPlayerRenameRecovery(client, username, Some(playerId))(uname => fetchMonth(uname, ym))
+          }
+          // Post-recovery the games' username field reflects the canonical handle; using the original `username`
+          // would treat the renamed player AS their own opponent. Re-read off `Player` after the fan-out (rather
+          // than reusing the pre-fetched `players` list) because the wrap may have just reconciled this row with a
+          // fresh name. Tombstoned rows fall back to the input username so a `_stale_<id>` placeholder doesn't
+          // leak into the opponent predicate. N+1 lookup is bounded by `selectTmActive(20)`.
+          effectiveUname <- Player.selectId(playerId).map(_.filterNot(_.isTombstoned).fold(username)(_.username))
+        } yield archives.flatMap(
+          _.games.filter(g => g.timeClass == "daily" && g.`match`.isDefined && g.endTime >= cutoff.getEpochSecond)
+        ).flatMap(nonTimeoutOpponent(_, effectiveUname)).toSet
+        gather.catchAll(_ => ZIO.succeed(Set.empty[Username]))
       }
       allOpponents = opponentSets.foldLeft(Set.empty[Username])(_ ++ _)
       _ <- ZIO.logInfo(s"[Explore] Candidate opponents strategy found ${allOpponents.size} opponents")

@@ -1,5 +1,7 @@
 package ccas.analysis.apps
 
+import java.sql.SQLException
+
 import zio.{RIO, ZIO}
 
 import ccas.analysis.tables.Club
@@ -136,6 +138,32 @@ object ClubSlugRenameResolver {
       // might differ from the canonical one returned in the response).
       Option.when(matches)((ClubSlug.wrap(apiClub.`@id`.path.segments.last), apiClub))
     }.onNotFound(_ => ZIO.none)
+
+  /** Resolves a club slug to its ID: returns `Some(clubId)` if the slug is known locally; otherwise fetches from
+    * Chess.com and persists. Errors (network, decode, SQL) are swallowed → `None`, matching the
+    * `Club.resolveOrFetch` semantics this supersedes. Lives in apps/ rather than tables/ to keep the resolver
+    * primitives co-located, avoiding a cycle with `tables.Club`.
+    *
+    * Slug-rename recovery is intentionally NOT wired here. The wrap would invoke the resolver, which derives its
+    * `clubIdHint` via `Club.selectBySlug(stale)` — the very lookup this helper just performed at L1. With no other
+    * source of clubId for a slug, both Tier A and Tier B no-op and the wrap can't fire. A future recovery primitive
+    * keyed on match-id (e.g. via `unresolved_match_club.match_id`) could plug in here once it lands.
+    */
+  def resolveOrFetch(
+    client: ChessComClient,
+    slug: ClubSlug
+  ): ZIO[PostgresClient, SQLException, Option[ClubId]] =
+    Club.selectBySlug(slug).flatMap {
+      case Some(club) => ZIO.some(club.clubId)
+      case None =>
+        (for {
+          apiClub <- ApiClub.get(client, slug)
+          canonical = ClubSlug.wrap(apiClub.`@id`.path.segments.last)
+          _ <- Club.upsertResolvingSlugConflict(Club.fromApi(apiClub, canonical), client)
+        } yield Option(apiClub.clubId))
+          .tapError(e => ZIO.logDebug(s"  ClubSlugRenameResolver.resolveOrFetch $slug failed: ${e.getMessage}"))
+          .catchAll(_ => ZIO.none)
+    }
 }
 
 /** Combinator: wrap any 404-prone effect targeting `/pub/club/{slug}/...` with rename recovery. On 404, the resolver

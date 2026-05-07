@@ -6,6 +6,7 @@ import zio.{Clock, RIO, Ref, Scope, Task, ZEnvironment, ZIO, ZIOAppArgs, ZIOAppD
 
 import ccas.analysis.apps.membership.MembershipApp
 import ccas.analysis.apps.ref.RefHelpers
+import ccas.analysis.apps.withClubSlugRenameRecovery
 import ccas.analysis.tables.*
 import ccas.analysis.tables.subtypes.RecruitmentRunId
 import ccas.api.club.{ApiClub, ApiClubMatches, ApiClubMembers}
@@ -130,11 +131,19 @@ object RecruitmentApp extends ZIOAppDefault {
     jobRunId: Option[JobRunId] = None
   ): RIO[ProgressDisplay & ChessComClient & PostgresClient, RecruitmentRun] = ZIO.scoped {
     for {
-      _       <- MembershipApp.reconcile(clubSlug, trackRun = false)
-      client  <- ZIO.service[ChessComClient]
+      _      <- MembershipApp.reconcile(clubSlug, trackRun = false)
+      client <- ZIO.service[ChessComClient]
+      // The club fetch is the FIRST 404-prone hit in the run. With no clubIdHint, the resolver derives the hint from
+      // the `club` table (deriveHint) — matching how MembershipApp's earlier reconcile resolves the slug.
       apiClub <- ApiClub.get(client, clubSlug)
+        .withClubSlugRenameRecovery(client, clubSlug, clubIdHint = None)(fresh => ApiClub.get(client, fresh))
       clubId = apiClub.clubId
-      club   = Club.fromApi(apiClub, clubSlug)
+      // Read the canonical slug from the API response — recovery may have rewritten it. On the happy path
+      // (no recovery) this is just the input slug echoed back, and the local upsert below is the source of truth.
+      // On the recovery path the resolver already upserted under the canonical slug, so the local upsert becomes
+      // an idempotent reaffirmation.
+      effectiveSlug = ClubSlug.wrap(apiClub.`@id`.path.segments.last)
+      club          = Club.fromApi(apiClub, effectiveSlug)
       _ <- Club.upsertResolvingSlugConflict(club, client)
       aliasRow <- RecruitmentAlias.selectLatest(clubId, alias)
         .someOrFail(NotFoundException(s"No recruitment alias '$alias' found for club '$clubSlug'"))
@@ -149,12 +158,16 @@ object RecruitmentApp extends ZIOAppDefault {
       runId <- RecruitmentRun.insert(clubId, criteria.criteriaId, trigger, now, jobRunId)
 
       // --- Shared setup ---
-      targetMembers <- ApiClubMembers.get(client, clubSlug)
+      targetMembers <- ApiClubMembers.get(client, effectiveSlug)
+        .withClubSlugRenameRecovery(client, effectiveSlug, Some(clubId))(fresh => ApiClubMembers.get(client, fresh))
       existingUsernames = targetMembers.toMap.keySet
 
-      clubMatches <- client.get[ApiClubMatches](ApiClubMatches.getUrl(clubSlug))
+      clubMatches <- client.get[ApiClubMatches](ApiClubMatches.getUrl(effectiveSlug))
+        .withClubSlugRenameRecovery(client, effectiveSlug, Some(clubId))(fresh =>
+          client.get[ApiClubMatches](ApiClubMatches.getUrl(fresh))
+        )
       targetMatchIds = (clubMatches.registered.map(_.`@id`) ++ clubMatches.inProgress.map(_.`@id`)).toSet
-      _ <- writeClubMatchRef(client, clubId, clubSlug, clubMatches).ignore
+      _ <- writeClubMatchRef(client, clubId, effectiveSlug, clubMatches).ignore
 
       formerMemberIds <-
         if (criteria.excludeFormerMembers)
@@ -192,7 +205,7 @@ object RecruitmentApp extends ZIOAppDefault {
       progressBar <- ProgressDisplay.progressBar
       ctx = ExploreContext(
         runId = runId,
-        clubSlug = clubSlug,
+        clubSlug = effectiveSlug,
         filters = filters,
         runCtx = runCtx,
         invitedRef = invitedRef,

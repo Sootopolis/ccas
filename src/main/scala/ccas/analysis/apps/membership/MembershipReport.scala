@@ -66,8 +66,8 @@ private[membership] object MembershipReport {
     val grouped = groupByCategory(summaries, invitations)
     ZIO.foreachDiscard(grouped) { case (label, entries) =>
       ZIO.logInfo(label) *>
-        ZIO.foreachDiscard(entries) { case (username, detail) =>
-          ZIO.logInfo(s"  $username — $detail")
+        ZIO.foreachDiscard(entries) { case (display, detail) =>
+          ZIO.logInfo(s"  $display — $detail")
         }
     }
   }
@@ -100,24 +100,26 @@ private[membership] object MembershipReport {
   private def groupByCategory(
     summaries: List[MemberChangeSummary],
     invitations: Map[PlayerId, Instant]
-  ): List[(String, List[(Username, String)])] = {
+  ): List[(String, List[(String, String)])] = {
     val entries = summaries.flatMap { summary =>
       val lastInvited = invitations.get(summary.playerId)
-      summary.changes.map(change => (change, summary.username, lastInvited))
+      summary.changes.map(change => (change, summary.playerId, summary.username, lastInvited))
     }
     def categoryOrder(change: MemberChange): Int = change match {
       case _: NewMember | _: JoinedClub => 0
       case other                        => other.ordinal
     }
     entries
-      .groupBy { case (change, _, _) => categoryOrder(change) }
+      .groupBy { case (change, _, _, _) => categoryOrder(change) }
       .toList
       .sortBy(_._1)
       .map { case (_, grouped) =>
         val label = categoryLabel(grouped.head._1)
         val items = grouped
           .sortBy(_._1.timestamp)
-          .map { case (change, username, lastInvited) => (username, formatChangeDetail(change, lastInvited)) }
+          .map { case (change, playerId, username, lastInvited) =>
+            (Player.displayUsername(username, playerId), formatChangeDetail(change, lastInvited))
+          }
         (label, items)
       }
   }
@@ -156,8 +158,8 @@ private[membership] object MembershipReport {
     val grouped = groupByCategory(summaries, invitations)
     grouped.foreach { case (label, entries) =>
       sb.append(s"$label\n")
-      entries.foreach { case (username, detail) =>
-        sb.append(s"  $username — $detail\n")
+      entries.foreach { case (display, detail) =>
+        sb.append(s"  $display — $detail\n")
       }
       sb.append("\n")
     }
@@ -203,8 +205,12 @@ private[membership] object MembershipReport {
     val membersByPlayer = changedMembers.groupBy(_.playerId)
 
     membersByPlayer.toList.map { case (playerId, cms) =>
-      val playerSnaps = snapsByPlayer.getOrElse(playerId, Nil).sortBy(_.since)
-      val changes     = Chunk.newBuilder[MemberChange]
+      // Filter out tombstone snapshots (`_stale_<id>` placeholder) so report renderings never expose the sentinel
+      // username. A tombstoned-only history falls through to the existing "unknown" literal at headOption/lastOption.
+      val playerSnaps = snapsByPlayer.getOrElse(playerId, Nil)
+        .filterNot(s => Player.isTombstoneUsername(s.username))
+        .sortBy(_.since)
+      val changes = Chunk.newBuilder[MemberChange]
 
       cms.foreach { cm =>
         // New membership in range

@@ -8,12 +8,12 @@ import ccas.utils.sql.PostgresClient
 import zio.{RIO, ZIO}
 import RecruitmentStatsHelpers.*
 
-import ccas.analysis.apps.UsernameRenameResolver
+import ccas.analysis.apps.{UsernameRenameResolver, withClubSlugRenameRecovery, withPlayerRenameRecovery}
 import ccas.analysis.apps.clubdata.ClubAdminResolver
 import ccas.analysis.tables.*
 import ccas.api.club.ApiClub
 import ccas.api.misc.enums.PlayerStatusCategory
-import ccas.api.misc.subtypes.{ClubSlug, PlayerId}
+import ccas.api.misc.subtypes.{ClubSlug, PlayerId, Username}
 import ccas.api.player.*
 
 private[recruitment] object RecruitmentFilterDefs {
@@ -199,8 +199,14 @@ private[recruitment] object RecruitmentFilterDefs {
   }
 
   object CheckOpponentMatch extends RecruitmentFilter {
-    def apply(env: FilterEnv): RIO[PostgresClient, FilterResult] =
-      env.run.client.getUncached[ApiPlayerMatches](ApiPlayerMatches.getUrl(env.candidate.username)).map { playerMatches =>
+    def apply(env: FilterEnv): RIO[PostgresClient, FilterResult] = {
+      def fetch(uname: Username): RIO[PostgresClient, ApiPlayerMatches] =
+        env.run.client.getUncached[ApiPlayerMatches](ApiPlayerMatches.getUrl(uname))
+      for {
+        apiPlayer <- requireApiPlayer(env)
+        playerMatches <- fetch(env.candidate.username)
+          .withPlayerRenameRecovery(env.run.client, env.candidate.username, Some(apiPlayer.playerId))(fetch)
+      } yield {
         val registeredIds = playerMatches.registered.map(_.`@id`).toSet ++
           playerMatches.inProgress.map(_.`@id`).toSet
         FilterResult(
@@ -208,14 +214,18 @@ private[recruitment] object RecruitmentFilterDefs {
           env.candidate.copy(playerMatches = Some(playerMatches))
         )
       }
+    }
   }
 
   object CheckClubs extends RecruitmentFilter {
-    def apply(env: FilterEnv): RIO[PostgresClient, FilterResult] =
+    def apply(env: FilterEnv): RIO[PostgresClient, FilterResult] = {
+      def fetch(uname: Username): RIO[PostgresClient, ApiPlayerClubs] =
+        env.run.client.get[ApiPlayerClubs](ApiPlayerClubs.getUrl(uname))
       for {
-        playerClubs <- env.run.client.get[ApiPlayerClubs](ApiPlayerClubs.getUrl(env.candidate.username))
+        apiPlayer <- requireApiPlayer(env)
+        playerClubs <- fetch(env.candidate.username)
+          .withPlayerRenameRecovery(env.run.client, env.candidate.username, Some(apiPlayer.playerId))(fetch)
         clubNames = playerClubs.clubs.map(_.clubName).toSet
-        _ <- requireApiPlayer(env)
       } yield {
         val clubCount = playerClubs.clubs.size
         val criteria  = env.run.criteria
@@ -225,6 +235,7 @@ private[recruitment] object RecruitmentFilterDefs {
         val updatedCache = getOrUpdateCache(env)(_.copy(clubCount = Some(clubCount)))
         FilterResult(rejected, env.candidate.copy(cache = Some(updatedCache), playerClubs = Some(playerClubs)))
       }
+    }
   }
 
   /** Late-confirm pass for the `avoidAdminMinClubSize` criterion. The early [[CheckAdminOfSizableClub]] only sees clubs
@@ -289,11 +300,22 @@ private[recruitment] object RecruitmentFilterDefs {
       candidatePlayerId: PlayerId,
       min: Int,
       cutoff: Instant
-    ): RIO[PostgresClient, Boolean] =
-      ApiClub.get(run.client, slug).flatMap { apiClub =>
+    ): RIO[PostgresClient, Boolean] = {
+      // When `existingClub.isEmpty` the cold-discovery branch can't supply a hint; the resolver's `deriveHint`
+      // SQL lookup also returns None (we just selected by this slug at line ~266 and got nothing), so only Tier B
+      // applies — but Tier B itself needs a hint. The wrap is therefore a no-op on the cold-discovery happy-path
+      // and only fires on subsequent runs once a Club row has been persisted under the stale slug.
+      val fetched = ApiClub.get(run.client, slug)
+        .withClubSlugRenameRecovery(run.client, slug, clubIdHint = existingClub.map(_.clubId))(fresh =>
+          ApiClub.get(run.client, fresh)
+        )
+      fetched.flatMap { apiClub =>
         // Persist the Club row regardless — value for future runs and for ClubDataApp's slug index.
         // `Club.upsert` deliberately preserves an existing latest_match_at, so this doesn't clobber DB state.
-        Club.upsertResolvingSlugConflict(Club.fromApi(apiClub, slug), run.client) *> {
+        // After recovery `apiClub.@id`'s last segment is the canonical slug; the resolver already upserted the row,
+        // so passing the canonical slug here keeps subsequent reads consistent.
+        val canonicalSlug = ClubSlug.wrap(apiClub.`@id`.path.segments.last)
+        Club.upsertResolvingSlugConflict(Club.fromApi(apiClub, canonicalSlug), run.client) *> {
           // Activity check uses local latest_match_at, NOT apiClub.lastActivity (the API field is unreliable —
           // active clubs sometimes report 12-year-old timestamps). For freshly-fetched clubs the DB value is None,
           // which passesGate treats as active by convention (matching the SQL early-prune). ClubDataApp will fill
@@ -314,6 +336,7 @@ private[recruitment] object RecruitmentFilterDefs {
         run.failedAdminSlugs.update(_ + slug) *>
           ZIO.logInfo(s"[Recruitment] Admin late-check failed for $slug: ${error.getMessage}").as(false)
       }
+    }
 
     /** Mirrors the SQL gate from `ClubAdmin.selectPlayerIdsForSizableClubs` so the in-filter check stays consistent
       * with the run-start early prune: a club qualifies when it has at least `min` members, was active within
@@ -335,17 +358,29 @@ private[recruitment] object RecruitmentFilterDefs {
   }
 
   object CheckDailyStats extends RecruitmentFilter {
-    def apply(env: FilterEnv): RIO[PostgresClient, FilterResult] =
-      env.run.client.getUncached[ApiPlayerStats](ApiPlayerStats.getUrl(env.candidate.username)).flatMap { playerStats =>
-        playerStats.chessDaily match {
+    def apply(env: FilterEnv): RIO[PostgresClient, FilterResult] = {
+      def fetch(uname: Username): RIO[PostgresClient, ApiPlayerStats] =
+        env.run.client.getUncached[ApiPlayerStats](ApiPlayerStats.getUrl(uname))
+      for {
+        apiPlayer <- requireApiPlayer(env)
+        playerStats <- fetch(env.candidate.username)
+          .withPlayerRenameRecovery(env.run.client, env.candidate.username, Some(apiPlayer.playerId))(fetch)
+        // After rename recovery the Player row holds the canonical handle; downstream archive fetches and
+        // username-keyed predicates in `applyDailyStats` must use that handle, not the stale `env.candidate.username`.
+        // Filter tombstoned rows so a `_stale_<id>` placeholder never leaks into the archive URL or predicates.
+        effectiveUname <- Player.selectId(apiPlayer.playerId)
+          .map(_.filterNot(_.isTombstoned).fold(env.candidate.username)(_.username))
+        result <- playerStats.chessDaily match {
           case None             => ZIO.succeed(FilterResult(true, env.candidate))
-          case Some(dailyStats) => applyDailyStats(env, dailyStats)
+          case Some(dailyStats) => applyDailyStats(env, dailyStats, effectiveUname)
         }
-      }
+      } yield result
+    }
 
     private def applyDailyStats(
       env: FilterEnv,
-      dailyStats: ApiPlayerStats.ApiPlayerDailyStats
+      dailyStats: ApiPlayerStats.ApiPlayerDailyStats,
+      effectiveUname: Username
     ): RIO[PostgresClient, FilterResult] = {
       val dailyElo           = dailyStats.last.rating
       val dailyTimeoutPct    = dailyStats.record.timeoutPercent
@@ -356,7 +391,7 @@ private[recruitment] object RecruitmentFilterDefs {
           ZIO.when(dailyTimeoutPct > 0 || env.run.criteria.dailyMinGamesFinished.isDefined) {
             val months = recentArchiveMonths(env.run.now, 90)
             ZIO.foreachPar(months) { ym =>
-              val url = ApiPlayerArchive.getUrl(env.candidate.username, ym.getYear, ym.getMonthValue)
+              val url = ApiPlayerArchive.getUrl(effectiveUname, ym.getYear, ym.getMonthValue)
               env.run.client.getUncached[ApiPlayerArchive](url)
             }
           }
@@ -366,7 +401,7 @@ private[recruitment] object RecruitmentFilterDefs {
         val dailyGamesFinished90d = archives.map(
           _.flatMap(_.games.filter(g => g.timeClass == "daily" && g.endTime >= cutoff90d.getEpochSecond)).size
         )
-        val lastDailyTimeoutAt = archives.flatMap(extractLastDailyTimeout(_, env.candidate.username))
+        val lastDailyTimeoutAt = archives.flatMap(extractLastDailyTimeout(_, effectiveUname))
         val mergedDailyTimeout = mergeOptionalInstants(
           lastDailyTimeoutAt,
           env.candidate.cache.flatMap(_.lastDailyTimeoutAt)
@@ -397,10 +432,13 @@ private[recruitment] object RecruitmentFilterDefs {
   }
 
   object CheckOngoingGames extends RecruitmentFilter {
-    def apply(env: FilterEnv): RIO[PostgresClient, FilterResult] =
+    def apply(env: FilterEnv): RIO[PostgresClient, FilterResult] = {
+      def fetch(uname: Username): RIO[PostgresClient, ApiPlayerGamesCurrent] =
+        env.run.client.getUncached[ApiPlayerGamesCurrent](ApiPlayerGamesCurrent.getUrl(uname))
       for {
-        currentGames <- env.run.client.getUncached[ApiPlayerGamesCurrent](ApiPlayerGamesCurrent.getUrl(env.candidate.username))
-        _            <- requireApiPlayer(env)
+        apiPlayer <- requireApiPlayer(env)
+        currentGames <- fetch(env.candidate.username)
+          .withPlayerRenameRecovery(env.run.client, env.candidate.username, Some(apiPlayer.playerId))(fetch)
       } yield {
         val ongoingGames       = currentGames.games.size
         val ongoingTeamMatches = currentGames.games.count(_.`match`.isDefined)
@@ -414,16 +452,19 @@ private[recruitment] object RecruitmentFilterDefs {
         )
         FilterResult(rejected, env.candidate.copy(cache = Some(updatedCache)))
       }
+    }
   }
 
   object CheckTmStats extends RecruitmentFilter {
     def apply(env: FilterEnv): RIO[PostgresClient, FilterResult] =
       for {
+        apiPlayer <- requireApiPlayer(env)
         cache <- ZIO.fromOption(env.candidate.cache)
           .orElseFail(new NoSuchElementException("cache not set — CheckDailyStats must run before CheckTmStats"))
         tmStats <- fetchTmStats(
           env.run.client,
           env.candidate.username,
+          apiPlayer.playerId,
           env.run.criteria,
           cache.dailyTimeoutPct.getOrElse(0.0),
           env.run.now,

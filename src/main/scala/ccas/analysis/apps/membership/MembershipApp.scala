@@ -5,7 +5,7 @@ import scala.annotation.tailrec
 
 import zio.{Chunk, Clock, IO, NonEmptyChunk, RIO, Scope, Task, ZIO, ZIOAppArgs, ZIOAppDefault}
 
-import ccas.analysis.apps.ClubSlugRenameResolver
+import ccas.analysis.apps.{ClubSlugRenameResolver, withClubSlugRenameRecovery}
 import ccas.analysis.apps.membership.MembershipChange.*
 import ccas.analysis.apps.membership.MembershipChange.MemberChange.JoinedClub
 import ccas.analysis.tables.*
@@ -138,7 +138,10 @@ object MembershipApp extends ZIOAppDefault {
       club   = Club.fromApi(apiClub, resolvedSlug)
       _                     <- Club.upsertResolvingSlugConflict(club, client)
       runId <- ZIO.when(trackRun)(MembershipRun.insert(clubId, trigger, startedAt, jobRunId))
-      (apiMembers, dbState) <- ApiClubMembers.get(client, resolvedSlug).zipPar(buildDbState(clubId))
+      // Wrap belt-and-suspenders against a second rename between the `ApiClub.get` recovery above and now.
+      (apiMembers, dbState) <- ApiClubMembers.get(client, resolvedSlug)
+        .withClubSlugRenameRecovery(client, resolvedSlug, Some(clubId))(fresh => ApiClubMembers.get(client, fresh))
+        .zipPar(buildDbState(clubId))
       prevMemberIds <- loadPreviousMemberIds(clubId)
       // Both counts filter on player.status=Active to exclude Closed-but-still-member phantoms.
       // previousMemberCount MUST be sampled before persist/complete, or selectLatestCompleted returns THIS run.
