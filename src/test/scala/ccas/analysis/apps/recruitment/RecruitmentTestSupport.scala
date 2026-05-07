@@ -296,28 +296,44 @@ object RecruitmentTestSupport {
     failures: Set[String] = Set.empty,
     playerProfileOverride: Option[Route[Any, Response]] = None
   ): Routes[Any, Response] = {
+    // Centralised failures gate. Every `/pub/player/$user/*` sub-route 404s when `user ∈ failures`, which keeps the
+    // resolver's onNotFound recovery path live across the whole player namespace.
+    def gateFailures(username: String)(serve: => Response): Response =
+      if (failures.contains(username)) { Response(status = Status.NotFound) } else { serve }
+
     val defaultPlayerRoute =
       Method.GET / "pub" / "player" / string("username") -> handler { (username: String, _: Request) =>
-        if (failures.contains(username)) { Response(status = Status.NotFound) }
-        else { responses.get(s"player/$username").fold(Response(status = Status.NotFound))(Response.json(_)) }
+        gateFailures(username) {
+          responses.get(s"player/$username").fold(Response(status = Status.NotFound))(Response.json(_))
+        }
       }
     Routes(
       Method.GET / "pub" / "player" / string("username") / "stats" -> handler { (username: String, _: Request) =>
-        responses.get(s"player/$username/stats").fold(Response.json(apiPlayerStatsJson()))(Response.json(_))
+        gateFailures(username) {
+          responses.get(s"player/$username/stats").fold(Response.json(apiPlayerStatsJson()))(Response.json(_))
+        }
       },
       Method.GET / "pub" / "player" / string("username") / "clubs" -> handler { (username: String, _: Request) =>
-        responses.get(s"player/$username/clubs").fold(Response.json(apiPlayerClubsJson()))(Response.json(_))
+        gateFailures(username) {
+          responses.get(s"player/$username/clubs").fold(Response.json(apiPlayerClubsJson()))(Response.json(_))
+        }
       },
       Method.GET / "pub" / "player" / string("username") / "matches" -> handler { (username: String, _: Request) =>
-        responses.get(s"player/$username/matches").fold(Response.json(emptyPlayerMatchesJson))(Response.json(_))
+        gateFailures(username) {
+          responses.get(s"player/$username/matches").fold(Response.json(emptyPlayerMatchesJson))(Response.json(_))
+        }
       },
       Method.GET / "pub" / "player" / string("username") / "games" -> handler { (username: String, _: Request) =>
-        responses.get(s"player/$username/games").fold(Response.json(emptyCurrentGamesJson))(Response.json(_))
+        gateFailures(username) {
+          responses.get(s"player/$username/games").fold(Response.json(emptyCurrentGamesJson))(Response.json(_))
+        }
       },
       Method.GET / "pub" / "player" / string("username") / "games" / string("year") / string("month") -> handler {
         (username: String, year: String, month: String, _: Request) =>
-          responses.get(s"player/$username/games/$year/$month")
-            .fold(Response.json(emptyArchiveJson))(Response.json(_))
+          gateFailures(username) {
+            responses.get(s"player/$username/games/$year/$month")
+              .fold(Response.json(emptyArchiveJson))(Response.json(_))
+          }
       },
       playerProfileOverride.getOrElse(defaultPlayerRoute),
       Method.GET / "pub" / "club" / string("club") / "matches" -> handler { (clubName: String, _: Request) =>

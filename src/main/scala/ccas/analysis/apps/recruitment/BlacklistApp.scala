@@ -4,7 +4,7 @@ import java.time.{Instant, ZoneOffset}
 
 import zio.{Clock, RIO, Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
 
-import ccas.analysis.apps.{PlayerUpdater, UsernameRenameResolver}
+import ccas.analysis.apps.{PlayerUpdater, UsernameRenameResolver, withClubSlugRenameRecovery}
 import ccas.analysis.tables.*
 import ccas.api.club.ApiClub
 import ccas.api.misc.subtypes.{ClubSlug, Username}
@@ -55,9 +55,16 @@ object BlacklistApp extends ZIOAppDefault {
     expiresAt: Option[Instant]
   ): RIO[ChessComClient & PostgresClient, Unit] =
     for {
-      client  <- ZIO.service[ChessComClient]
+      client <- ZIO.service[ChessComClient]
+      // Recover the canonical slug if the user typed a stale handle. Tier B works only if a Club row already exists
+      // under the stale slug (resolver derives clubIdHint via DB) — first-time blacklisting against a never-seen
+      // stale slug still 404s, which is the correct behaviour: nothing in our DB knows what they meant.
       apiClub <- ApiClub.get(client, clubSlug)
-      club = Club.fromApi(apiClub, clubSlug)
+        .withClubSlugRenameRecovery(client, clubSlug, clubIdHint = None)(fresh => ApiClub.get(client, fresh))
+      effectiveSlug = ClubSlug.wrap(apiClub.`@id`.path.segments.last)
+      club          = Club.fromApi(apiClub, effectiveSlug)
+      // On the recovery path the resolver already upserted under the canonical slug; this is an idempotent
+      // reaffirmation. On the no-recovery happy path, this is the source-of-truth write.
       _ <- Club.upsertResolvingSlugConflict(club, client)
       _ <- ZIO.foreachDiscard(usernames) { username =>
         UsernameRenameResolver.fetchOrRecover(client, username).flatMap { apiPlayer =>

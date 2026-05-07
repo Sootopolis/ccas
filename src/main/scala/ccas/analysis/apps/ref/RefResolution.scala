@@ -9,6 +9,7 @@ import zio.http.URL
 import RefUtils.*
 
 import ccas.analysis.apps.ref.RefHelpers.parseMatchUrl
+import ccas.analysis.apps.{ClubSlugRenameResolver, UsernameRenameResolver}
 import ccas.analysis.tables.{
   ClubMatch,
   ClubMatchBoard,
@@ -65,8 +66,24 @@ private[ref] object RefResolution {
       }
     } yield resolved).catchAll {
       case e: HttpStatusException if e.statusCode == 404 =>
-        ZIO.logWarning(s"  ${player.username}: 404 — ${e.safeMessage}") *>
-          skipPlayer(ctx, player, RefSkipReason.NotFound, Some(e.safeMessage)).as(false)
+        // Before recording a permanent NotFound skip, try the rename resolver. Per Sootopolis/ccas#3 every
+        // /pub/player/* 404 body is a genuine "not found" — which is exactly the rename-or-deletion signal. The
+        // resolver returns Some only on rename (with the canonical fresh handle reconciled into the Player table);
+        // on deletion or unresolvable cases it returns None and we fall back to today's skip semantics. Recursion
+        // terminates because `resolveAndReconcile` updates Player.username before the recursive call: a second 404
+        // on the same playerId hits Tier A's deletion case (hint matches current holder → None) and falls through
+        // to skipPlayer.
+        for {
+          recovered <- UsernameRenameResolver.resolveAndReconcile(ctx.client, player.username, Some(player.playerId))
+          result <- recovered match {
+            case Some((fresh, _)) =>
+              ZIO.logInfo(s"  ${player.username}: rename recovered → $fresh; retrying resolution") *>
+                resolvePlayer(ctx, player.copy(username = fresh))
+            case None =>
+              ZIO.logWarning(s"  ${player.username}: 404 — ${e.safeMessage}") *>
+                skipPlayer(ctx, player, RefSkipReason.NotFound, Some(e.safeMessage)).as(false)
+          }
+        } yield result
       case error =>
         ZIO.logWarning(s"  ${player.username}: error — ${error.safeMessage}") *>
           skipPlayer(ctx, player, RefSkipReason.ApiError, Some(error.safeMessage)).as(false)
@@ -236,8 +253,20 @@ private[ref] object RefResolution {
       }
     } yield resolved).catchAll {
       case e: HttpStatusException if e.statusCode == 404 =>
-        ZIO.logWarning(s"  ${club.slug}: 404 — ${e.safeMessage}") *>
-          skipClub(ctx, club, RefSkipReason.NotFound, Some(e.safeMessage)).as(false)
+        // Symmetric to `resolvePlayer` above. Recursion terminates because `resolveAndPersist` updates Club.slug
+        // before the recursive call: a second 404 on the same clubId hits Tier A's `current.slug == staleSlug`
+        // case (returns None) and falls through to skipClub.
+        for {
+          recovered <- ClubSlugRenameResolver.resolveAndPersist(ctx.client, club.slug, Some(club.clubId))
+          result <- recovered match {
+            case Some((fresh, _)) =>
+              ZIO.logInfo(s"  ${club.slug}: slug rename recovered → $fresh; retrying resolution") *>
+                resolveClub(ctx, club.copy(slug = fresh))
+            case None =>
+              ZIO.logWarning(s"  ${club.slug}: 404 — ${e.safeMessage}") *>
+                skipClub(ctx, club, RefSkipReason.NotFound, Some(e.safeMessage)).as(false)
+          }
+        } yield result
       case error =>
         ZIO.logWarning(s"  ${club.slug}: error — ${error.safeMessage}") *>
           skipClub(ctx, club, RefSkipReason.ApiError, Some(error.safeMessage)).as(false)

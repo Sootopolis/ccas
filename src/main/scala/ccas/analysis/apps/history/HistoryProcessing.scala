@@ -6,7 +6,7 @@ import zio.{Promise, RIO, Ref, Task, UIO, ZIO}
 import zio.http.URL
 import HistoryUtils.*
 
-import ccas.analysis.apps.{PlayerUpdater, UsernameRenameResolver}
+import ccas.analysis.apps.{ClubSlugRenameResolver, PlayerUpdater, UsernameRenameResolver}
 import ccas.analysis.tables.*
 import ccas.api.clubmatch.{ApiDailyMatch, ApiLiveMatch, ApiMatchBoard}
 import ccas.api.clubmatch.ApiDailyMatch.*
@@ -655,7 +655,8 @@ private[history] object HistoryProcessing {
             m.get(key) match {
               case Some(existing) => (existing.await, m)
               case None =>
-                val work = Club.resolveOrFetch(ctx.client, slug).tapBoth(promise.fail, promise.succeed)
+                val work = ClubSlugRenameResolver.resolveOrFetch(ctx.client, slug)
+                  .tapBoth(promise.fail, promise.succeed)
                 (work, m + (key -> promise))
             }
           }

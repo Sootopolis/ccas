@@ -9,7 +9,7 @@ import ccas.analysis.tables.{Club, ClubAdmin, ClubMatch, ClubMatchRef, Tables}
 import ccas.api.club.{ApiClub, ApiClubMatches}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 import ccas.utils.{OutputFile, ProgressDisplay}
-import ccas.analysis.apps.ClubSlugRenameResolver
+import ccas.analysis.apps.{ClubSlugRenameResolver, withClubSlugRenameRecovery}
 import ccas.utils.client.{ChessComClient, HttpClientLayer, onNotFound}
 import ccas.utils.sql.PostgresClient
 
@@ -143,7 +143,11 @@ object ClubDataApp extends ZIOAppDefault {
     for {
       // Refresh the activity signal first. The matches endpoint sometimes succeeds even when the profile endpoint
       // returns an error (some clubs have erroneous profile pages but working match pages), so we don't want a profile
-      // failure below to prevent us from updating latest_match_at.
+      // failure below to prevent us from updating latest_match_at. NOTE: when `club.slug` has been renamed, both
+      // this step and the `fetchApiClubWithRenameRecovery` below independently invoke the slug resolver — Tier A on
+      // the second invocation hits the row this step's recovery just updated, so cost is bounded (1 extra
+      // `ApiClub.get` on the stale slug + 1 verify on the fresh slug). Hoisting recovery above this step would
+      // lose the error-isolation property and is deferred.
       _ <- refreshLatestMatchAt(client, club)
 
       fetched <- fetchApiClubWithRenameRecovery(client, club)
@@ -192,7 +196,9 @@ object ClubDataApp extends ZIOAppDefault {
         val dbFreshEnough = dbLatest.exists(_.isAfter(skipCutoff))
         if (dbFreshEnough) Club.updateLatestMatchAt(club.clubId, dbLatest).unit
         else {
-          fetchClubMatches(client, club.slug).asSome
+          fetchClubMatches(client, club.slug)
+            .withClubSlugRenameRecovery(client, club.slug, Some(club.clubId))(fresh => fetchClubMatches(client, fresh))
+            .asSome
             .catchAll { error =>
               ZIO.logInfo(s"[ClubData] Match fetch failed for ${club.slug}: ${error.getMessage}").as(None)
             }

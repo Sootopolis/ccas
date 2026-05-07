@@ -12,6 +12,7 @@ import ccas.analysis.apps.recruitment.RecruitmentTestSupport.{
   apiClubJson,
   apiClubMembersJson,
   apiDailyMatchJson,
+  apiMatchBoardJson,
   apiPlayerClubsJson,
   apiPlayerJson
 }
@@ -661,10 +662,26 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
       team2Players = List("opponent" -> 1)
     )
     val matchResponses = Map(matchRefId.value.toString -> matchJson)
+    // The resolver's Tier B board-endpoint trick fetches /pub/match/{id}/{board} and reads the surviving username
+    // after eliminating the opposing side. Provide a fixture where ed-new (the renamed player) appears as team1's
+    // board-1 occupant alongside `opponent`.
+    val boardResponses = Map(
+      (matchRefId.value.toString, "1") -> apiMatchBoardJson(
+        matchId = matchRefId.value,
+        board = 1,
+        team1Username = "ed-new",
+        team2Username = "opponent"
+      )
+    )
 
     for {
-      _      <- seedDb(players = List(player), members = List(mem), matchRefs = List(ref))
-      client <- fakeChessComClient(responses, failures = Set("ed-old"), matchResponses = matchResponses)
+      _ <- seedDb(players = List(player), members = List(mem), matchRefs = List(ref))
+      client <- fakeChessComClient(
+        responses,
+        failures = Set("ed-old"),
+        matchResponses = matchResponses,
+        boardResponses = boardResponses
+      )
       result <- MembershipClassify.classifyDisappeared(
         client, dbState, Set.empty, apiMap, ClubSlug("test-club"), Times.t2
       )

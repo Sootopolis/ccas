@@ -8,7 +8,11 @@ import zio.{Chunk, RIO, Ref, ZIO}
 import HistoryUtils.*
 
 import ccas.analysis.apps.{
-  PlayerUpdater, UsernameRenameResolver, withClubSlugRenameRecovery, withPlayerRenameRecovery
+  ClubSlugRenameResolver,
+  PlayerUpdater,
+  UsernameRenameResolver,
+  withClubSlugRenameRecovery,
+  withPlayerRenameRecovery
 }
 import ccas.analysis.tables.*
 import ccas.api.club.ApiClubMatches
@@ -39,7 +43,9 @@ private[history] object HistorySeeding {
                 counterRef  <- Ref.make(0)
                 resolvedRef <- Ref.make(0)
                 _ <- ZIO.foreachDiscard(grouped.toList) { case (slug, entries) =>
-                  Club.resolveOrFetch(client, slug).flatMap {
+                  // Apps-layer counterpart of the deleted `Club.resolveOrFetch`. Slug-rename recovery is not wired
+                  // through this entry point — see `ClubSlugRenameResolver.resolveOrFetch`'s scaladoc for why.
+                  ClubSlugRenameResolver.resolveOrFetch(client, slug).flatMap {
                     case Some(clubId) =>
                       withTransaction {
                         ZIO.foreachDiscard(entries) { entry =>

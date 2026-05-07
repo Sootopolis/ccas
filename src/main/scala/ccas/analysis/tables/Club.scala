@@ -159,18 +159,6 @@ object Club {
       apiClub.clubId, Instant.ofEpochSecond(apiClub.created), slug, apiClub.name, Some(apiClub.membersCount), None, None
     )
 
-  /** Resolves a club slug to its ID, fetching from the Chess.com API and persisting if not already in the database. */
-  def resolveOrFetch(client: ChessComClient, slug: ClubSlug): ZIO[PostgresClient, SQLException, Option[ClubId]] =
-    selectBySlug(slug).flatMap {
-      case Some(club) => ZIO.some(club.clubId)
-      case None =>
-        (for {
-          apiClub <- client.get[ApiClub](ApiClub.getUrl(slug))
-          club = fromApi(apiClub, slug)
-          _ <- upsertResolvingSlugConflict(club, client)
-        } yield Option(apiClub.clubId)).catchAll(_ => ZIO.none)
-    }
-
   /** Same `latest_match_at` / `fetched_at` semantics as [[upsert]]: not touched on update — managed by ClubDataApp. */
   def upsertBatch(clubs: Iterable[Club]): ZIO[PostgresClient, SQLException, BatchUpdateResult] =
     transactZIO {

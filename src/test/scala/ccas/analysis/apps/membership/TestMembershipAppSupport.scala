@@ -43,7 +43,8 @@ object TestMembershipAppSupport {
     responses: Map[String, String],
     failures: Set[String] = Set.empty,
     clubsResponses: Map[String, String] = Map.empty,
-    matchResponses: Map[String, String] = Map.empty
+    matchResponses: Map[String, String] = Map.empty,
+    boardResponses: Map[(String, String), String] = Map.empty
   ): RIO[PostgresClient, ChessComClient] = {
     val routes: Routes[Any, Response] = Routes(
       Method.GET / "pub" / "player" / string("username") -> handler { (username: String, _: Request) =>
@@ -53,6 +54,11 @@ object TestMembershipAppSupport {
       Method.GET / "pub" / "player" / string("username") / "clubs" -> handler {
         (username: String, _: Request) =>
           clubsResponses.get(username).fold(Response(status = Status.NotFound))(Response.json(_))
+      },
+      // /pub/match/{id}/{board} — the board endpoint used by `UsernameRenameResolver`'s Tier B fallback.
+      Method.GET / "pub" / "match" / string("matchId") / string("board") -> handler {
+        (matchId: String, board: String, _: Request) =>
+          boardResponses.get((matchId, board)).fold(Response(status = Status.NotFound))(Response.json(_))
       },
       Method.GET / "pub" / "match" / string("matchId") -> handler { (matchId: String, _: Request) =>
         matchResponses.get(matchId).fold(Response(status = Status.NotFound))(Response.json(_))
