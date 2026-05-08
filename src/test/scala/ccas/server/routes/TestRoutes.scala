@@ -2,8 +2,6 @@ package ccas.server.routes
 
 import java.time.{Instant, LocalDateTime, ZoneOffset}
 
-import com.augustnagro.magnum.sql
-
 import ccas.utils.sql.PostgresClient
 import zio.{LogLevel, RIO, Ref, Scope, UIO, ULayer, URIO, ZIO, ZLayer}
 import zio.http.*
@@ -17,8 +15,7 @@ import ccas.server.routes.JobRoutes.{ClubJobResult, JobResult}
 import ccas.server.ServerTables
 import ccas.utils.client.{ChessComClient, TestChessComClientSupport}
 import ccas.utils.errors.ConflictException
-import ccas.utils.sql.FreshSchemaLayer
-import ccas.utils.sql.PostgresClient.connectZIO
+import ccas.utils.sql.{FreshSchemaLayer, TestDbCleanup}
 import ccas.utils.ProgressDisplay
 
 object TestRoutes extends ZIOSpecDefault {
@@ -425,10 +422,7 @@ object TestRoutes extends ZIOSpecDefault {
     _ <- Club.upsert(Club(ClubId(201), t0, ClubSlug("other-club"), "Other Club", None, None, None))
   } yield ()
 
-  private val deleteAllSchedules = for {
-    _ <- connectZIO { val _ = sql"DELETE FROM job_schedule".update.run() }
-    _ <- ensureClubs
-  } yield ()
+  private val deleteAllSchedules = TestDbCleanup.clearJobSchedules *> ensureClubs
 
   private def suiteScheduleRoutes = suite("ScheduleRoutes")(
     testGetSchedulesReturnsEmptyList,

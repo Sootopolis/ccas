@@ -3,15 +3,14 @@ package ccas.analysis.apps
 import java.time.Instant
 import java.time.temporal.ChronoUnit
 
-import com.augustnagro.magnum.sql
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.*
 import ccas.analysis.tables.{Player, PlayerSnapshot, Tables}
 import ccas.api.misc.enums.PlayerStatusCategory
 import ccas.api.misc.subtypes.{PlayerId, Username}
-import ccas.utils.sql.FreshSchemaLayer
-import ccas.utils.sql.PostgresClient.{transactZIO, withTransaction}
+import ccas.utils.sql.{FreshSchemaLayer, TestDbCleanup}
+import ccas.utils.sql.PostgresClient.withTransaction
 
 object TestPlayerUpdater extends ZIOSpecDefault {
 
@@ -22,14 +21,6 @@ object TestPlayerUpdater extends ZIOSpecDefault {
   // direct equality with stored values works.
   private def nowMicros: Instant = Instant.now().truncatedTo(ChronoUnit.MICROS)
 
-  // Snapshot rows have an FK to player; delete in dependency order. One transaction = one
-  // round-trip; atomicity isn't strictly required here but is the correct shape for batched
-  // mutations.
-  private val resetPlayerTables = transactZIO {
-    val _ = sql"DELETE FROM player_snapshot".update.run()
-    sql"DELETE FROM player".update.run()
-  }
-
   // `withLiveClock` stays because PlayerUpdater's transitive code path through
   // ApiPlayerArchive.getUrl rejects year=1970 (the TestClock default), and the rate-limiter
   // Clock.sleep would park. Removing it requires either advancing TestClock or excising those
@@ -39,7 +30,7 @@ object TestPlayerUpdater extends ZIOSpecDefault {
     testUsernameRenameNoConflict,
     testUsernameRenameRecursesIntoConflictingPlayer,
     testRecycledHandleTombstonesConflicting
-  ) @@ TestAspect.before(resetPlayerTables)).provideShared(
+  ) @@ TestAspect.before(TestDbCleanup.clearPlayer)).provideShared(
     FreshSchemaLayer("test_player_updater", onInit = Tables.ensureTables)
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock
 

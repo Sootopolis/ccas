@@ -4,13 +4,10 @@ import java.time.{Duration, Instant, LocalDateTime, ZoneOffset}
 
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
-import com.augustnagro.magnum.sql
-
 import ccas.analysis.tables.{Club, ClubMatch, ClubMatchBoard, ClubMatchGame, Player, Tables}
 import ccas.api.misc.enums.*
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username}
-import ccas.utils.sql.FreshSchemaLayer
-import ccas.utils.sql.PostgresClient.connectZIO
+import ccas.utils.sql.{FreshSchemaLayer, TestDbCleanup}
 
 object TestClubBoardSql extends ZIOSpecDefault {
 
@@ -80,13 +77,7 @@ object TestClubBoardSql extends ZIOSpecDefault {
   ): ClubMatchGame =
     ClubMatchGame(matchId, board, team1IsWhite, None, None, None, winner, None, None, None)
 
-  private val clearMatches = connectZIO {
-    sql"DELETE FROM club_match_game".update.run()
-    sql"DELETE FROM club_match_board".update.run()
-    sql"DELETE FROM club_match".update.run()
-  }
-
-  private val seedAll = clearMatches *> seedClubs *> seedPlayers
+  private val seedAll = TestDbCleanup.clearMatches *> seedClubs *> seedPlayers
 
   private def insertBoardWithGames(
     matchId: ClubMatchId,

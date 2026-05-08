@@ -3,7 +3,6 @@ package ccas.utils.sql
 import java.sql.SQLException
 import java.time.{Instant, LocalDateTime, ZoneOffset}
 
-import com.augustnagro.magnum.sql
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 import zio.ZIO
 
@@ -11,7 +10,7 @@ import ccas.analysis.tables.RunTrigger
 import ccas.api.misc.subtypes.JobRunId
 import ccas.server.jobs.{JobKind, JobRun, JobRunStatus}
 import ccas.server.ServerTables
-import ccas.utils.sql.PostgresClient.{connectZIO, withTransaction}
+import ccas.utils.sql.PostgresClient.withTransaction
 
 object TestWithTransaction extends ZIOSpecDefault {
 
@@ -33,7 +32,7 @@ object TestWithTransaction extends ZIOSpecDefault {
   private val runA = JobRun(idA, JobKind.Recruitment, None, RunTrigger.Cli, JobRunStatus.Running, None, t0, None, None)
   private val runB = JobRun(idB, JobKind.Membership, None, RunTrigger.Cli, JobRunStatus.Running, None, t0, None, None)
 
-  private val deleteAll = connectZIO { val _ = sql"DELETE FROM job_run".update.run() }
+  private val deleteAll = TestDbCleanup.clearJobRuns
 
   // --- Tests ---
 
