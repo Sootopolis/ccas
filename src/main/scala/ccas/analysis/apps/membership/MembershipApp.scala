@@ -9,10 +9,10 @@ import ccas.analysis.apps.{ClubSlugRenameResolver, withClubSlugRenameRecovery}
 import ccas.analysis.apps.membership.MembershipChange.*
 import ccas.analysis.apps.membership.MembershipChange.MemberChange.JoinedClub
 import ccas.analysis.tables.*
-import ccas.api.club.{ApiClub, ApiClubMembers}
+import ccas.api.club.ApiClubMembers
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId, PlayerId}
 import ccas.utils.{OutputFile, ProgressDisplay, TimeParser}
-import ccas.utils.client.{ChessComClient, HttpClientLayer, onNotFound}
+import ccas.utils.client.{ChessComClient, HttpClientLayer}
 import ccas.utils.errors.BadRequestException
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.withTransaction
@@ -123,17 +123,7 @@ object MembershipApp extends ZIOAppDefault {
     for {
       startedAt <- Clock.instant
       client    <- ZIO.service[ChessComClient]
-      // Behavior change vs the prior `withNameFallback` helper: only 404s trigger rename resolution. Non-404
-      // failures (timeouts, 5xx, decode errors) propagate immediately rather than attempting slug rediscovery —
-      // those errors don't signal a rename and resolution would just waste a board-endpoint fetch.
-      (apiClub, resolvedSlug) <- ApiClub.get(client, clubSlug).map(_ -> clubSlug).onNotFound { e =>
-        ClubSlugRenameResolver.resolveAndPersist(client, clubSlug, clubIdHint = None).flatMap {
-          case Some((newSlug, fresh)) =>
-            ZIO.logInfo(s"[Membership] $clubSlug returned 404; retrying with rediscovered slug $newSlug")
-              .as(fresh -> newSlug)
-          case None => ZIO.fail(e)
-        }
-      }
+      (apiClub, resolvedSlug) <- ClubSlugRenameResolver.fetchOrRecover(client, clubSlug)
       clubId = apiClub.clubId
       club   = Club.fromApi(apiClub, resolvedSlug)
       _                     <- Club.upsertResolvingSlugConflict(club, client)

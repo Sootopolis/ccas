@@ -65,6 +65,23 @@ object ClubSlugRenameResolver {
         }
     }
 
+  /** Convenience: fetches `/pub/club/{slug}` and falls back to slug-rename recovery on 404. Returns the verified
+    * (post-recovery) `ApiClub` paired with the canonical slug — saves callers a re-fetch when they need both. On 404
+    * with no rename inferred, the original 404 propagates. Mirrors [[UsernameRenameResolver.fetchOrRecover]] for the
+    * club path.
+    */
+  def fetchOrRecover(
+    client: ChessComClient,
+    slug: ClubSlug,
+    clubIdHint: Option[ClubId] = None
+  ): RIO[PostgresClient, (ApiClub, ClubSlug)] =
+    ApiClub.get(client, slug).map(_ -> slug).onNotFound { e =>
+      resolveAndPersist(client, slug, clubIdHint).flatMap {
+        case Some((freshSlug, apiClub)) => ZIO.succeed(apiClub -> freshSlug)
+        case None                       => ZIO.fail(e)
+      }
+    }
+
   private def tierADb(staleSlug: ClubSlug, clubIdHint: Option[ClubId]): RIO[PostgresClient, Option[ClubSlug]] =
     clubIdHint match {
       case None => ZIO.none

@@ -6,11 +6,11 @@ import zio.{Chunk, RIO, Ref, Scope, Task, ZIO, ZIOAppArgs, ZIOAppDefault}
 
 import ccas.analysis.apps.ref.RefHelpers
 import ccas.analysis.tables.{Club, ClubAdmin, ClubMatch, ClubMatchRef, Tables}
-import ccas.api.club.{ApiClub, ApiClubMatches}
+import ccas.api.club.ApiClubMatches
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 import ccas.utils.{OutputFile, ProgressDisplay}
 import ccas.analysis.apps.{ClubSlugRenameResolver, withClubSlugRenameRecovery}
-import ccas.utils.client.{ChessComClient, HttpClientLayer, onNotFound}
+import ccas.utils.client.{ChessComClient, HttpClientLayer}
 import ccas.utils.sql.PostgresClient
 
 object ClubDataApp extends ZIOAppDefault {
@@ -144,13 +144,13 @@ object ClubDataApp extends ZIOAppDefault {
       // Refresh the activity signal first. The matches endpoint sometimes succeeds even when the profile endpoint
       // returns an error (some clubs have erroneous profile pages but working match pages), so we don't want a profile
       // failure below to prevent us from updating latest_match_at. NOTE: when `club.slug` has been renamed, both
-      // this step and the `fetchApiClubWithRenameRecovery` below independently invoke the slug resolver — Tier A on
-      // the second invocation hits the row this step's recovery just updated, so cost is bounded (1 extra
+      // this step and the `ClubSlugRenameResolver.fetchOrRecover` below independently invoke the slug resolver — Tier
+      // A on the second invocation hits the row this step's recovery just updated, so cost is bounded (1 extra
       // `ApiClub.get` on the stale slug + 1 verify on the fresh slug). Hoisting recovery above this step would
       // lose the error-isolation property and is deferred.
       _ <- refreshLatestMatchAt(client, club)
 
-      fetched <- fetchApiClubWithRenameRecovery(client, club)
+      fetched <- ClubSlugRenameResolver.fetchOrRecover(client, club.slug, Some(club.clubId))
       (apiClub, resolvedSlug) = fetched
       _ <- Club.upsertResolvingSlugConflict(Club.fromApi(apiClub, resolvedSlug), client)
 
@@ -160,23 +160,6 @@ object ClubDataApp extends ZIOAppDefault {
       // Must remain the last step: --min-age relies on fetched_at being stamped only on full success.
       _ <- Club.updateFetchedAt(club.clubId, Instant.now())
     } yield ClubResult(allAdminIds.size, failed = false, adminChanged = allAdminIds != existingAdminIds)
-
-  /** Fetches `ApiClub` for the given club, delegating rename-404 recovery to [[ClubSlugRenameResolver]]. The resolver
-    * tries the DB first (if some other path already learned the new slug), then falls back to discovering the slug
-    * via a `ClubMatchRef` board's team URL.
-    */
-  private def fetchApiClubWithRenameRecovery(
-    client: ChessComClient,
-    club: Club
-  ): RIO[ProgressDisplay & PostgresClient, (ApiClub, ClubSlug)] =
-    ApiClub.get(client, club.slug).map(_ -> club.slug).onNotFound { e =>
-      ClubSlugRenameResolver.resolveAndPersist(client, club.slug, Some(club.clubId)).flatMap {
-        case Some((newSlug, apiClub)) =>
-          ZIO.logInfo(s"[ClubData] ${club.slug} returned 404; retrying with rediscovered slug $newSlug")
-            .as(apiClub -> newSlug)
-        case None => ZIO.fail(e)
-      }
-    }
 
   /** Refreshes `club.latest_match_at` using a tiered strategy to minimise API calls:
     *   1. If the cached value on `club` is fresher than [[ClubAdmin.ApiSkipThreshold]], trust it and do nothing.
