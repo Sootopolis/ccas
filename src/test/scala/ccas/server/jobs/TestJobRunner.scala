@@ -1,7 +1,5 @@
 package ccas.server.jobs
 
-import com.augustnagro.magnum.sql
-
 import ccas.utils.sql.PostgresClient
 import zio.{durationInt, ZIO, ZLayer}
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
@@ -11,8 +9,7 @@ import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId}
 import ccas.server.ServerTables
 import ccas.utils.client.TestChessComClientSupport
 import ccas.utils.errors.ConflictException
-import ccas.utils.sql.FreshSchemaLayer
-import ccas.utils.sql.PostgresClient.connectZIO
+import ccas.utils.sql.{FreshSchemaLayer, TestDbCleanup}
 import ccas.utils.ProgressDisplay
 
 object TestJobRunner extends ZIOSpecDefault {
@@ -42,7 +39,7 @@ object TestJobRunner extends ZIOSpecDefault {
   private val clubIdC = ClubId(202)
 
   private val deleteAllJobRuns = for {
-    _ <- connectZIO { val _ = sql"DELETE FROM job_run".update.run() }
+    _ <- TestDbCleanup.clearJobRuns
     _ <- Club.upsert(Club(clubIdA, Times.t0, ClubSlug("club-a"), "Club A", None, None, None))
     _ <- Club.upsert(Club(clubIdB, Times.t0, ClubSlug("club-b"), "Club B", None, None, None))
     _ <- Club.upsert(Club(clubIdC, Times.t0, ClubSlug("club-c"), "Club C", None, None, None))

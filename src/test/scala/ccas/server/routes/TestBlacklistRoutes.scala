@@ -4,7 +4,6 @@ import java.time.Duration
 import java.time.Instant
 import java.time.temporal.ChronoUnit
 
-import com.augustnagro.magnum.sql
 import zio.{Clock, RIO, Scope, Task, ZLayer}
 import zio.http.*
 import zio.json.DecoderOps
@@ -17,21 +16,15 @@ import ccas.api.misc.enums.PlayerStatusCategory
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
 import ccas.server.routes.BlacklistRoutes.BlacklistEntryResponse
 import ccas.utils.client.ChessComClient
-import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
-import ccas.utils.sql.PostgresClient.transactZIO
+import ccas.utils.sql.{FreshSchemaLayer, PostgresClient, TestDbCleanup}
 import ccas.utils.ProgressDisplay
 
 object TestBlacklistRoutes extends ZIOSpecDefault {
 
   // FK-aware cleanup: blacklist → player_snapshot → player → club. Run before each test
-  // because the suite shares one schema (FreshSchemaLayer.provideShared). One transaction =
-  // one round-trip and the right shape for batched mutations.
-  private val resetTables = transactZIO {
-    val _ = sql"DELETE FROM recruitment_blacklist".update.run()
-    val _ = sql"DELETE FROM player_snapshot".update.run()
-    val _ = sql"DELETE FROM player".update.run()
-    sql"DELETE FROM club".update.run()
-  }
+  // because the suite shares one schema (FreshSchemaLayer.provideShared).
+  private val resetTables =
+    TestDbCleanup.clearRecruitmentBlacklist *> TestDbCleanup.clearPlayer *> TestDbCleanup.clearClub
 
   override def spec: Spec[Any, Throwable] = (suite("TestBlacklistRoutes")(
     suiteGet,
