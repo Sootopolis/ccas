@@ -18,6 +18,7 @@ object TestClubSql extends ZIOSpecDefault {
     testClubUpsertUpdate,
     testClubUpsertBatch,
     testClubSelect,
+    testClubSelectExistingSlugs,
     testClubMembersCount,
     testMemberInsert,
     testMemberInsertBatch,
@@ -95,6 +96,21 @@ object TestClubSql extends ZIOSpecDefault {
     for {
       all <- Club.selectAll
     } yield assertTrue(Set(clubA, clubB).subsetOf(all.toSet))
+  }
+
+  private def testClubSelectExistingSlugs = test("selectExistingSlugs returns subset present in DB; empty input short-circuits") {
+    val unknown = ClubSlug("never-inserted")
+    for {
+      empty   <- Club.selectExistingSlugs(Set.empty)
+      partial <- Club.selectExistingSlugs(Set(clubA.slug, unknown))
+      all     <- Club.selectExistingSlugs(Set(clubA.slug, clubB.slug))
+      none    <- Club.selectExistingSlugs(Set(unknown))
+    } yield assertTrue(
+      empty.isEmpty,
+      partial == Set(clubA.slug),
+      all == Set(clubA.slug, clubB.slug),
+      none.isEmpty
+    )
   }
 
   // --- ClubMember tests ---

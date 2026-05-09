@@ -71,6 +71,18 @@ object Club {
             FROM club WHERE slug = $slug""".query[Club].run().headOption
     }
 
+  /** Returns the subset of `slugs` that exist in the `club` table. One round-trip via `WHERE slug = ANY(...)` —
+    * preferred over per-slug `selectBySlug` calls for callers that need bulk membership testing.
+    */
+  def selectExistingSlugs(slugs: Set[ClubSlug]): ZIO[PostgresClient, SQLException, Set[ClubSlug]] =
+    if (slugs.isEmpty) { ZIO.succeed(Set.empty) }
+    else {
+      connectZIO {
+        val slugList = slugs.toList
+        sql"SELECT slug FROM club WHERE slug = ANY($slugList)".query[ClubSlug].run().toSet
+      }
+    }
+
   /** Upserts a club. NB: `latest_match_at` and `fetched_at` are intentionally not updated on conflict — they are
     * managed separately by [[ccas.analysis.apps.clubdata.ClubDataApp]] via [[updateLatestMatchAt]] and
     * [[updateFetchedAt]] so other callers don't accidentally clobber the cached values with `None`.
