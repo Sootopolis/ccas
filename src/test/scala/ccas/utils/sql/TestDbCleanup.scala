@@ -66,6 +66,15 @@ object TestDbCleanup {
     sql"DELETE FROM recruitment_blacklist".update.run()
   }.unit
 
+  /** Clears: `api_fetch_failure`, `api_response_cache`, `api_response_body`. Use when a suite drives the
+    * `ChessComClient` through 404s or cache misses so subsequent runs start from an empty cache.
+    */
+  val clearApiCache: RIO[PostgresClient, Unit] = transactZIO {
+    val _ = sql"DELETE FROM api_fetch_failure".update.run()
+    val _ = sql"DELETE FROM api_response_cache".update.run()
+    sql"DELETE FROM api_response_body".update.run()
+  }.unit
+
   /** `job_run`. */
   val clearJobRuns: RIO[PostgresClient, Unit] = transactZIO {
     sql"DELETE FROM job_run".update.run()

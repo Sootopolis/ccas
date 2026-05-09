@@ -4,9 +4,10 @@ import java.sql.SQLException
 
 import zio.{RIO, ZIO}
 
-import ccas.analysis.tables.Club
+import ccas.analysis.tables.{Club, ClubAdmin, Player}
 import ccas.api.club.ApiClub
-import ccas.api.misc.subtypes.{ClubId, ClubSlug}
+import ccas.api.misc.subtypes.{ClubId, ClubSlug, Username}
+import ccas.api.player.ApiPlayerClubs
 import ccas.utils.client.{ChessComClient, HttpStatusException, onNotFound}
 import ccas.utils.sql.PostgresClient
 
@@ -20,6 +21,11 @@ import ccas.utils.sql.PostgresClient
   *
   *  - **Tier B (match-ref endpoint)** — when Tier A returns `None` AND `clubIdHint` is `Some`, delegates to the
   *    existing `Club.slugFromMatchRef`, which fetches a `ClubMatchRef` board's team URL and extracts the slug.
+  *
+  *  - **Tier C (admin-clubs lookup)** — when Tier B returns `None` AND `clubIdHint` is `Some`, loads stored
+  *    `ClubAdmin` rows for the club, fetches each admin's `/pub/player/{username}/clubs`, and looks for a slug whose
+  *    `ApiClub.clubId` matches the hint. Bounded by the admin count; short-circuits on first verified hit. Closes the
+  *    gap for clubs that have never played a match (Tier B is a no-op there since no `ClubMatchRef` exists).
   *
   * Verification fetches `ApiClub` for the candidate slug; on 404 the resolver returns `None` so the caller's original
   * 404 propagates.
@@ -121,15 +127,89 @@ object ClubSlugRenameResolver {
     clubIdHint: Option[ClubId]
   ): RIO[PostgresClient, Option[ClubSlug]] =
     deriveHint(staleSlug, clubIdHint).flatMap { effectiveHint =>
-      tierADb(staleSlug, effectiveHint).flatMap {
-        case some @ Some(_) => ZIO.succeed(some)
-        case None           => tierBMatchRef(client, effectiveHint, staleSlug)
-      }
+      ZIO.collectFirst(
+        List[RIO[PostgresClient, Option[ClubSlug]]](
+          tierADb(staleSlug, effectiveHint),
+          tierBMatchRef(client, effectiveHint, staleSlug),
+          tierCAdminClubs(client, effectiveHint, staleSlug)
+        )
+      )(identity)
     }.catchAll {
       case _: HttpStatusException => ZIO.none
       case e =>
         ZIO.logDebug(s"  Slug resolver internal error for $staleSlug: ${e.getMessage}").as(None)
     }
+
+  /** Tier C: fans out across stored `ClubAdmin` rows for the hint, querying each admin's `/pub/player/{u}/clubs`
+    * and looking for a slug whose verified `ApiClub.clubId` matches the hint. Slugs already known to our `Club` table
+    * are skipped (they're guaranteed-not-the-rename, else Tier A would have caught it). Errors are swallowed and
+    * debug-logged to preserve the caller's original 404.
+    */
+  private def tierCAdminClubs(
+    client: ChessComClient,
+    clubIdHint: Option[ClubId],
+    staleSlug: ClubSlug
+  ): RIO[PostgresClient, Option[ClubSlug]] = {
+    val effect: RIO[PostgresClient, Option[ClubSlug]] = clubIdHint match {
+      case None => ZIO.none
+      case Some(hint) =>
+        for {
+          adminRows    <- ClubAdmin.selectByClub(hint)
+          adminPlayers <- Player.selectByIds(adminRows.map(_.playerId))
+          // Surface DB drift (admin row references a player_id with no `player` row) so it doesn't masquerade as a
+          // silently-shrunken admin set.
+          _ <- ZIO.logDebug(
+            s"  Tier C: ${adminRows.size - adminPlayers.size} admin row(s) for clubId=$hint had no Player row"
+          ).when(adminPlayers.size != adminRows.size)
+          usernames = adminPlayers.collect { case p if !p.isTombstoned => p.username }
+          result <- ZIO.collectFirst(usernames)(adminLookup(client, _, hint, staleSlug))
+          _ <- ZIO.foreachDiscard(result)(fresh =>
+            ZIO.logInfo(s"  Tier C slug recovery hit via admin lookup: $staleSlug → $fresh")
+          )
+        } yield result
+    }
+    effect.catchAll {
+      case _: HttpStatusException => ZIO.none
+      case e =>
+        ZIO.logDebug(s"  Tier C slug recovery internal error for $staleSlug: ${e.getMessage}").as(None)
+    }
+  }
+
+  /** Per-admin step of Tier C: fetch the admin's clubs list, filter to slugs we don't already know, and verify
+    * candidates against `clubIdHint` via `ApiClub`. Per-admin failures (404, decode) return `None` so the outer
+    * `collectFirst` advances to the next admin instead of aborting the whole tier.
+    */
+  private def adminLookup(
+    client: ChessComClient,
+    username: Username,
+    hint: ClubId,
+    staleSlug: ClubSlug
+  ): RIO[PostgresClient, Option[ClubSlug]] = {
+    val effect = for {
+      apiClubs <- client.get[ApiPlayerClubs](ApiPlayerClubs.getUrl(username))
+      candidates = apiClubs.clubs.map(_.clubName).distinct.filter(s => s != staleSlug && !isTombstone(s))
+      knownSlugs <- Club.selectExistingSlugs(candidates.toSet)
+      unknown = candidates.filterNot(knownSlugs.contains).toList
+      result <- ZIO.collectFirst(unknown)(verifyClubIdMatch(client, _, hint))
+    } yield result
+    effect.catchAll {
+      case _: HttpStatusException => ZIO.none
+      case e =>
+        ZIO.logDebug(s"  Tier C admin lookup error for $username: ${e.getMessage}").as(None)
+    }
+  }
+
+  /** Fetches `ApiClub` for `slug` and returns `Some(slug)` only if its `clubId` matches `hint`. 404s become `None`
+    * so the iterator moves on instead of failing.
+    */
+  private def verifyClubIdMatch(
+    client: ChessComClient,
+    slug: ClubSlug,
+    hint: ClubId
+  ): RIO[Any, Option[ClubSlug]] =
+    ApiClub.get(client, slug)
+      .map(c => Option.when(c.clubId == hint)(slug))
+      .onNotFound(_ => ZIO.none)
 
   /** Derives a `clubIdHint` from the stale slug when the caller didn't supply one. Looks up our `club` table by the
     * stale slug — if we have a row, we know which club_id this rename is about. Eliminates per-callsite boilerplate
