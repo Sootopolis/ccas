@@ -14,7 +14,7 @@ import ccas.api.misc.enums.*
 import ccas.api.misc.subtypes.*
 import ccas.api.player.{ApiPlayer, ApiPlayerClubs}
 import ccas.utils.{ApiConcurrency, ProgressBar, ProgressDisplay}
-import ccas.utils.client.{HttpStatusException, isPermanentNotFound}
+import ccas.utils.client.ReportedNotFound
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.withTransaction
 
@@ -114,7 +114,7 @@ private[history] object HistoryProcessing {
     ZIO.foreachParDiscard(pending) { pm =>
       processMatch(ctx, pm.matchId, pm.isLive, shared)
         .catchAll {
-          case e: HttpStatusException if e.isPermanentNotFound =>
+          case _: ReportedNotFound =>
             for {
               _ <- ctx.matchesAborted.update(_ + 1)
               // markAborted=0 → no club_match row (orphan ref from a /matches list); just drop the pending entry
@@ -123,7 +123,7 @@ private[history] object HistoryProcessing {
                 ClubMatch.markAborted(pm.matchId, Instant.now()) *>
                   HistoryPendingMatch.delete(ctx.clubId, pm.matchId, pm.isLive)
               }
-              _ <- ZIO.logWarning(s"    Match ${pm.matchId}${if (pm.isLive) " (live)" else ""}: aborted (permanent 404)")
+              _ <- ZIO.logWarning(s"    Match ${pm.matchId}${if (pm.isLive) " (live)" else ""}: aborted (reported not found)")
             } yield ()
           case error =>
             for {
@@ -306,12 +306,12 @@ private[history] object HistoryProcessing {
               // No transaction needed here: the refresh path has no pending-table row to delete, and
               // `markAborted` is the only write. `selectSettledForRefreshBatch` selected this row so
               // rows-affected is virtually always 1; rows == 0 indicates a concurrent delete.
-              case e: HttpStatusException if e.isPermanentNotFound =>
+              case _: ReportedNotFound =>
                 for {
                   _    <- ctx.matchesAborted.update(_ + 1)
                   rows <- ClubMatch.markAborted(matchId, Instant.now())
-                  msg = if (rows == 0) s"    Refresh $matchId: permanent 404 but row vanished (no Aborted write)"
-                        else s"    Refresh $matchId: aborted (permanent 404)"
+                  msg = if (rows == 0) s"    Refresh $matchId: reported not found but row vanished (no Aborted write)"
+                        else s"    Refresh $matchId: aborted (reported not found)"
                   _ <- ZIO.logWarning(msg)
                 } yield ()
               case error =>

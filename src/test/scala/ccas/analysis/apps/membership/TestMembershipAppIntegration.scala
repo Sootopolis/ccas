@@ -832,7 +832,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
                 Response.json(
                   apiPlayerJson(PlayerId.unwrap(pid1), "bob", joined = bobJoined.getEpochSecond)
                 )
-              case _ => Response(status = Status.NotFound)
+              case _ => Response.json("""{"code": 0, "message": "Resource \"\" not found."}""").copy(status = Status.NotFound)
             }
         }
       )

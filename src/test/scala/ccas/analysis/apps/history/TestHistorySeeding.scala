@@ -123,6 +123,13 @@ object TestHistorySeeding extends ZIOSpecDefault {
   // Fake HTTP client
   // ==========================================================================
 
+  private val notFoundBody: String = """{"code": 0, "message": "Resource \"\" not found."}"""
+  private val notFoundResponse: Response = Response.json(notFoundBody).copy(status = Status.NotFound)
+  // Only NotFound gets a body — other statuses (e.g. InternalServerError) ride empty since no caller relies on
+  // their body shape today.
+  private def errorResponse(status: Status): Response =
+    if (status == Status.NotFound) notFoundResponse else Response(status = status)
+
   private def fakeClient(
     responses: Map[String, String],
     playerErrors: Map[String, Status] = Map.empty
@@ -130,11 +137,11 @@ object TestHistorySeeding extends ZIOSpecDefault {
     val routes: Routes[Any, Response] = Routes(
       Method.GET / "pub" / "player" / string("username") -> handler { (username: String, _: Request) =>
         playerErrors.get(username) match {
-          case Some(status) => Response(status = status)
+          case Some(status) => errorResponse(status)
           case None =>
             responses.get(s"player/$username") match {
               case Some(json) => Response.json(json)
-              case None       => Response(status = Status.NotFound)
+              case None       => notFoundResponse
             }
         }
       },
@@ -142,13 +149,13 @@ object TestHistorySeeding extends ZIOSpecDefault {
         (id: Long, board: Int, _: Request) =>
           responses.get(s"match/$id/$board") match {
             case Some(json) => Response.json(json)
-            case None       => Response(status = Status.NotFound)
+            case None       => notFoundResponse
           }
       },
       Method.GET / "pub" / "match" / long("id") -> handler { (id: Long, _: Request) =>
         responses.get(s"match/$id") match {
           case Some(json) => Response.json(json)
-          case None       => Response(status = Status.NotFound)
+          case None       => notFoundResponse
         }
       }
     )
@@ -356,7 +363,7 @@ object TestHistorySeeding extends ZIOSpecDefault {
               requested.update(_ :+ username).as(Response.json(emptyPlayerMatchesJson))
           },
           Method.GET / "pub" / "player" / string("username") -> handler { (username: String, _: Request) =>
-            requested.update(_ :+ s"player:$username").as(Response(status = Status.NotFound))
+            requested.update(_ :+ s"player:$username").as(notFoundResponse)
           }
         )
         client <- TestChessComClientSupport.fakeClient(routes)

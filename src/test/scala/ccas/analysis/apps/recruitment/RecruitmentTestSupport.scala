@@ -291,6 +291,12 @@ object RecruitmentTestSupport {
 
   // --- Fake HTTP clients ---
 
+  // Mirrors Chess.com's canonical "X \"id\" not found." 404 body. Tests that rely on rename recovery firing on a
+  // 404 need this body shape so the throw site dispatches to `ReportedNotFound` rather than the base
+  // HttpStatusException. Substring match in HttpStatusException.classify keys on "not found.".
+  val notFoundBody: String = """{"code": 0, "message": "Resource \"\" not found."}"""
+  val notFoundResponse: Response = Response.json(notFoundBody).copy(status = Status.NotFound)
+
   private def buildRoutes(
     responses: Map[String, String],
     failures: Set[String] = Set.empty,
@@ -299,12 +305,12 @@ object RecruitmentTestSupport {
     // Centralised failures gate. Every `/pub/player/$user/*` sub-route 404s when `user ∈ failures`, which keeps the
     // resolver's onNotFound recovery path live across the whole player namespace.
     def gateFailures(username: String)(serve: => Response): Response =
-      if (failures.contains(username)) { Response(status = Status.NotFound) } else { serve }
+      if (failures.contains(username)) { notFoundResponse } else { serve }
 
     val defaultPlayerRoute =
       Method.GET / "pub" / "player" / string("username") -> handler { (username: String, _: Request) =>
         gateFailures(username) {
-          responses.get(s"player/$username").fold(Response(status = Status.NotFound))(Response.json(_))
+          responses.get(s"player/$username").fold(notFoundResponse)(Response.json(_))
         }
       }
     Routes(
@@ -340,13 +346,13 @@ object RecruitmentTestSupport {
         responses.get(s"club/$clubName/matches").fold(Response.json(emptyClubMatchesJson))(Response.json(_))
       },
       Method.GET / "pub" / "club" / string("club") / "members" -> handler { (clubName: String, _: Request) =>
-        responses.get(s"club/$clubName/members").fold(Response(status = Status.NotFound))(Response.json(_))
+        responses.get(s"club/$clubName/members").fold(notFoundResponse)(Response.json(_))
       },
       Method.GET / "pub" / "club" / string("club") -> handler { (clubName: String, _: Request) =>
-        responses.get(s"club/$clubName").fold(Response(status = Status.NotFound))(Response.json(_))
+        responses.get(s"club/$clubName").fold(notFoundResponse)(Response.json(_))
       },
       Method.GET / "pub" / "match" / long("matchId") -> handler { (matchId: Long, _: Request) =>
-        responses.get(s"match/$matchId").fold(Response(status = Status.NotFound))(Response.json(_))
+        responses.get(s"match/$matchId").fold(notFoundResponse)(Response.json(_))
       }
     )
   }
@@ -380,7 +386,7 @@ object RecruitmentTestSupport {
     } yield {
       val blockingPlayerRoute =
         Method.GET / "pub" / "player" / string("username") -> handler { (username: String, _: Request) =>
-          val resp = responses.get(s"player/$username").fold(Response(status = Status.NotFound))(Response.json(_))
+          val resp = responses.get(s"player/$username").fold(notFoundResponse)(Response.json(_))
           playerCount.getAndUpdate(_ + 1).flatMap { count =>
             if (count >= blockAfterN)
               reached.succeed(()) *> gate.await.as(resp)

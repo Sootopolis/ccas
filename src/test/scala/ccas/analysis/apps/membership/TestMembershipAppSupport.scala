@@ -39,6 +39,9 @@ object TestMembershipAppSupport {
 
   // --- Helpers ---
 
+  // Mirrors Chess.com's canonical "not found." 404 body so HttpStatusException.classify dispatches to ReportedNotFound.
+  private val notFoundBody: String = """{"code": 0, "message": "Resource \"\" not found."}"""
+
   def fakeChessComClient(
     responses: Map[String, String],
     failures: Set[String] = Set.empty,
@@ -48,20 +51,20 @@ object TestMembershipAppSupport {
   ): RIO[PostgresClient, ChessComClient] = {
     val routes: Routes[Any, Response] = Routes(
       Method.GET / "pub" / "player" / string("username") -> handler { (username: String, _: Request) =>
-        if (failures.contains(username)) { Response(status = Status.NotFound) }
-        else { responses.get(username).fold(Response(status = Status.NotFound))(Response.json(_)) }
+        if (failures.contains(username)) { Response.json(notFoundBody).copy(status = Status.NotFound) }
+        else { responses.get(username).fold(Response.json(notFoundBody).copy(status = Status.NotFound))(Response.json(_)) }
       },
       Method.GET / "pub" / "player" / string("username") / "clubs" -> handler {
         (username: String, _: Request) =>
-          clubsResponses.get(username).fold(Response(status = Status.NotFound))(Response.json(_))
+          clubsResponses.get(username).fold(Response.json(notFoundBody).copy(status = Status.NotFound))(Response.json(_))
       },
       // /pub/match/{id}/{board} — the board endpoint used by `UsernameRenameResolver`'s Tier B fallback.
       Method.GET / "pub" / "match" / string("matchId") / string("board") -> handler {
         (matchId: String, board: String, _: Request) =>
-          boardResponses.get((matchId, board)).fold(Response(status = Status.NotFound))(Response.json(_))
+          boardResponses.get((matchId, board)).fold(Response.json(notFoundBody).copy(status = Status.NotFound))(Response.json(_))
       },
       Method.GET / "pub" / "match" / string("matchId") -> handler { (matchId: String, _: Request) =>
-        matchResponses.get(matchId).fold(Response(status = Status.NotFound))(Response.json(_))
+        matchResponses.get(matchId).fold(Response.json(notFoundBody).copy(status = Status.NotFound))(Response.json(_))
       }
     )
     TestChessComClientSupport.fakeClient(routes)

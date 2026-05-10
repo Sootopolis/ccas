@@ -91,7 +91,7 @@ object TestSharedContext extends ZIOSpecDefault {
         (username: String, _: Request) =>
           playerMatchJson.get(username) match {
             case Some(json) => Response.json(json)
-            case None       => Response.status(Status.NotFound)
+            case None       => Response.json("""{"code": 0, "message": "Resource \"\" not found."}""").copy(status = Status.NotFound)
           }
       }
     )

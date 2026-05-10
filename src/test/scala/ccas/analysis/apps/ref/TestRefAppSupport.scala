@@ -113,11 +113,11 @@ object TestRefAppSupport {
         responses.get(s"club/$clubName/matches").fold(Response.json(emptyClubMatchesJson))(Response.json(_))
       },
       Method.GET / "pub" / "match" / long("matchId") -> handler { (matchId: Long, _: Request) =>
-        responses.get(s"match/$matchId").fold(Response(status = Status.NotFound))(Response.json(_))
+        responses.get(s"match/$matchId").fold(Response.json("""{"code": 0, "message": "Resource \"\" not found."}""").copy(status = Status.NotFound))(Response.json(_))
       },
       Method.GET / "pub" / "tournament" / string("slug") / int("round") -> handler {
         (slug: String, round: Int, _: Request) =>
-          responses.get(s"tournament/$slug/$round").fold(Response(status = Status.NotFound))(Response.json(_))
+          responses.get(s"tournament/$slug/$round").fold(Response.json("""{"code": 0, "message": "Resource \"\" not found."}""").copy(status = Status.NotFound))(Response.json(_))
       }
     )
     TestChessComClientSupport.fakeClient(routes, permits = 5)

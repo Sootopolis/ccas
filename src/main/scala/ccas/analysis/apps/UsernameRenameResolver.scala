@@ -11,7 +11,7 @@ import ccas.api.clubmatch.TeamMatchPlayerStarted
 import ccas.api.misc.subtypes.{ClubMatchId, PlayerId, Username}
 import ccas.api.player.ApiPlayer
 import ccas.api.tournament.ApiTournament
-import ccas.utils.client.{ChessComClient, HttpStatusException, onNotFound}
+import ccas.utils.client.{ChessComClient, HttpStatusException, ReportedNotFound, onNotFound}
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.withTransaction
 
@@ -43,9 +43,12 @@ import ccas.utils.sql.PostgresClient.withTransaction
   * never returned as a "fresh" name. Format collision risk is tracked in
   * [Sootopolis/ccas#21](https://github.com/Sootopolis/ccas/issues/21).
   *
-  * Coordination with [Sootopolis/ccas#3](https://github.com/Sootopolis/ccas/issues/3): a `pub/player/{username}` 404
-  * body is reliably either a deletion or a rename. Callers should invoke this resolver before recording a permanent
-  * skip.
+  * Coordination with [Sootopolis/ccas#3](https://github.com/Sootopolis/ccas/issues/3): the resolver entry points
+  * (`fetchOrRecover`, `withPlayerRenameRecovery`) gate on [[ccas.utils.client.ReportedNotFound]] — the canonical
+  * Chess.com `X "id" not found.` 404 body — rather than any 404. Transient backend 404s
+  * (`An internal error has occurred`) short-circuit before the resolver runs, so callers always see the original
+  * 404 propagate. Per #3, `/pub/player/{username}` 404s are 100% genuine, so the gate is a no-op there today; it
+  * stays for symmetry with the club-side resolver and resilience to future maintenance-mode behavior.
   */
 object UsernameRenameResolver {
 
@@ -112,7 +115,7 @@ object UsernameRenameResolver {
     playerIdHint: Option[PlayerId] = None
   ): RIO[PostgresClient, ApiPlayer] =
     client.get[ApiPlayer](ApiPlayer.getUrl(username)).catchSome {
-      case e: HttpStatusException if e.statusCode == 404 =>
+      case e: ReportedNotFound =>
         resolveAndVerify(client, username, playerIdHint).flatMap {
           case Some((_, apiPlayer)) => ZIO.succeed(apiPlayer)
           case None                 => ZIO.fail(e)
@@ -328,7 +331,7 @@ extension [R, A](self: ZIO[R, Throwable, A])
     playerIdHint: Option[PlayerId]
   )(retryWith: Username => ZIO[R, Throwable, A])
     : ZIO[R & PostgresClient, Throwable, A] =
-    self.onNotFound { e =>
+    self.catchSome { case e: ReportedNotFound =>
       UsernameRenameResolver.resolveAndReconcile(client, stale, playerIdHint).flatMap {
         case Some((fresh, _)) =>
           ZIO.logInfo(s"  Rename recovered: $stale → $fresh; retrying") *> retryWith(fresh)
