@@ -875,8 +875,26 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
   ) @@ TestAspect.timeout(15.seconds)
 
   // ==========================================================================
-  // Timing stats (integration) — verifies wall-clock latency measurements,
-  // so this sub-suite stays on the live clock.
+  // Timing stats (integration) — these two tests cannot run under TestClock
+  // without significant rewrites:
+  //
+  //   Test 1 ("successful requests populate gate wait…"): client.getAll is
+  //   called synchronously (no fork/adjust). The handler's ZIO.sleep(5.millis)
+  //   would block forever under TestClock; latencyMinMs would also lose its
+  //   real-time semantics (it would reflect virtual sleeps, not actual handler
+  //   cost).
+  //
+  //   Test 2 ("throttle-down and recovery records throttled duration"):
+  //   ZIO.foreachParDiscard (no fork) contains 429-retry loops driven by
+  //   Schedule.exponential sleeps that freeze under TestClock, and
+  //   repeatUntil(!s.coolingDown) polls until the recovery daemon's cooldown
+  //   sleep expires — which never advances without TestClock.adjust driving it.
+  //
+  // To migrate: fork + TestClock.adjust for each foreachPar/foreachDiscard
+  // phase, and replace repeatUntil with a staged adjust (Pattern B). Both
+  // tests also verify throttledMs/latencyMinMs > 0 which depends on real or
+  // virtual elapsed time; the assertion would remain valid under TestClock once
+  // the sleeps are driven, but the test intention is wall-clock integration.
   // ==========================================================================
 
   private def suiteTimingStats = suite("timing stats")(
