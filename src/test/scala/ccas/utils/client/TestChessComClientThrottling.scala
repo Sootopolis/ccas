@@ -933,6 +933,16 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
         )
       }
     }
+  // withLiveClock is required here for two distinct reasons:
+  // (1) "successful requests populate gate wait, EMA delay, and latency" calls ZIO.sleep(5.millis)
+  //     inside the handler without a fork/adjust wrapper. Under TestClock the current fiber suspends
+  //     waiting for a virtual-clock advance that nobody issues, deadlocking the test.
+  // (2) "throttle-down and recovery records throttled duration" drives recovery via
+  //     stateRef.get.repeatUntil(!_.coolingDown).timeoutFail(...)(5.seconds). Under TestClock both
+  //     the poll loop and the recovery daemon stall on virtual-clock sleeps; neither can unblock the
+  //     other, producing a permanent deadlock (confirmed: ZIO emits its "not advancing the test
+  //     clock" warning and the suite times out after 15 s).
+  // Migrating would require restructuring both tests into fork → TestClock.adjust → join.
   ) @@ TestAspect.withLiveClock
 
   // ==========================================================================
