@@ -8,7 +8,7 @@ import ccas.analysis.tables.{Club, ClubAdmin, Player}
 import ccas.api.club.ApiClub
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, Username}
 import ccas.api.player.ApiPlayerClubs
-import ccas.utils.client.{ChessComClient, HttpStatusException, onNotFound}
+import ccas.utils.client.{ChessComClient, HttpStatusException, ReportedNotFound, onNotFound}
 import ccas.utils.sql.PostgresClient
 
 /** Resolves the current canonical slug for a club whose previously-known slug 404s on Chess.com.
@@ -29,6 +29,11 @@ import ccas.utils.sql.PostgresClient
   *
   * Verification fetches `ApiClub` for the candidate slug; on 404 the resolver returns `None` so the caller's original
   * 404 propagates.
+  *
+  * The entry points (`fetchOrRecover`, `withClubSlugRenameRecovery`) only run recovery when the original failure is a
+  * [[ccas.utils.client.ReportedNotFound]] — the canonical Chess.com `X "id" not found.` 404 body. Transient
+  * backend 404s (`An internal error has occurred`, codes 0/3024/403, ~93% of `/club/{slug}` 404s per #3) skip recovery
+  * entirely, avoiding the Tier C admin fan-out's wasted network calls.
   *
   * **Tombstone handling.** Slugs of the form `_stale_<clubId>` (set by `Club.resolveStaleSlug`) are skipped — never
   * returned as a "fresh" slug. Format collision risk is tracked in
@@ -81,7 +86,7 @@ object ClubSlugRenameResolver {
     slug: ClubSlug,
     clubIdHint: Option[ClubId] = None
   ): RIO[PostgresClient, (ApiClub, ClubSlug)] =
-    ApiClub.get(client, slug).map(_ -> slug).onNotFound { e =>
+    ApiClub.get(client, slug).map(_ -> slug).catchSome { case e: ReportedNotFound =>
       resolveAndPersist(client, slug, clubIdHint).flatMap {
         case Some((freshSlug, apiClub)) => ZIO.succeed(apiClub -> freshSlug)
         case None                       => ZIO.fail(e)
@@ -273,7 +278,7 @@ extension [R, A](self: ZIO[R, Throwable, A])
     clubIdHint: Option[ClubId]
   )(retryWith: ClubSlug => ZIO[R, Throwable, A])
     : ZIO[R & PostgresClient, Throwable, A] =
-    self.onNotFound { e =>
+    self.catchSome { case e: ReportedNotFound =>
       ClubSlugRenameResolver.resolveAndPersist(client, stale, clubIdHint).flatMap {
         case Some((fresh, _)) =>
           ZIO.logInfo(s"  Slug rename recovered: $stale → $fresh; retrying") *> retryWith(fresh)

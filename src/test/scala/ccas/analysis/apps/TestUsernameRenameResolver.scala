@@ -52,19 +52,19 @@ object TestUsernameRenameResolver extends ZIOSpecDefault {
       Method.GET / "pub" / "player" / string("username") -> handler { (username: String, _: Request) =>
         responses.get(s"player/$username") match {
           case Some(json) => Response.json(json)
-          case None       => Response(status = Status.NotFound)
+          case None       => notFoundResponse
         }
       },
       Method.GET / "pub" / "match" / long("id") / int("board") -> handler { (id: Long, board: Int, _: Request) =>
         responses.get(s"match/$id/$board") match {
           case Some(json) => Response.json(json)
-          case None       => Response(status = Status.NotFound)
+          case None       => notFoundResponse
         }
       },
       Method.GET / "pub" / "match" / long("id") -> handler { (id: Long, _: Request) =>
         responses.get(s"match/$id") match {
           case Some(json) => Response.json(json)
-          case None       => Response(status = Status.NotFound)
+          case None       => notFoundResponse
         }
       }
     )

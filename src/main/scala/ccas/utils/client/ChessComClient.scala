@@ -174,7 +174,7 @@ final class ChessComClient(
               if (cfChallenge) statsRef.update(_.incCf403AtTier(tier))
               else if (response.status.code == 429) statsRef.update(_.incError429AtTier(tier))
               else statsRef.update(_.incErrorOther)
-            errorUpdate *> ZIO.fail(HttpStatusException(response.status.code, url, errorBody))
+            errorUpdate *> ZIO.fail(HttpStatusException.classify(response.status.code, url, errorBody))
           }
         outcomeEffect *> errorPath
       }

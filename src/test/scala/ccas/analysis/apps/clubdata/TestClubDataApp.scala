@@ -71,6 +71,9 @@ object TestClubDataApp extends ZIOSpecDefault {
   private val newSlug     = ClubSlug("new-slug")
   private val refMatchId  = ClubMatchId(9_999_001)
 
+  private val reportedNotFoundBody  = """{"code": 0, "message": "Club \"old-slug\" not found."}"""
+  private val transientNotFoundBody = """{"code": 3024, "message": "An internal error has occurred. Please contact admin."}"""
+
   /** Wipes the tables touched by the refreshClub and resolveAndPersistAdmins tests so each case starts from a clean
     * slate.
     */
@@ -126,7 +129,8 @@ object TestClubDataApp extends ZIOSpecDefault {
 
   private def fakeClient(
     responses: Map[String, String],
-    profileFailureStatus: Status = Status.NotFound
+    profileFailureStatus: Status = Status.NotFound,
+    profileFailureBody: String = reportedNotFoundBody
   ): RIO[PostgresClient, ChessComClient] = {
     val emptyClubMatches = """{"finished": [], "in_progress": [], "registered": []}"""
     val routes: Routes[Any, Response] = Routes(
@@ -136,19 +140,19 @@ object TestClubDataApp extends ZIOSpecDefault {
       Method.GET / "pub" / "club" / string("slug") -> handler { (slug: String, _: Request) =>
         responses.get(s"club/$slug") match {
           case Some(json) => Response.json(json)
-          case None       => Response(status = profileFailureStatus)
+          case None       => Response.json(profileFailureBody).copy(status = profileFailureStatus)
         }
       },
       Method.GET / "pub" / "match" / long("matchId") -> handler { (matchId: Long, _: Request) =>
         responses.get(s"match/$matchId") match {
           case Some(json) => Response.json(json)
-          case None       => Response(status = Status.NotFound)
+          case None       => Response.json(reportedNotFoundBody).copy(status = Status.NotFound)
         }
       },
       Method.GET / "pub" / "player" / string("username") -> handler { (username: String, _: Request) =>
         responses.get(s"player/$username") match {
           case Some(json) => Response.json(json)
-          case None       => Response(status = Status.NotFound)
+          case None       => Response.json(reportedNotFoundBody).copy(status = Status.NotFound)
         }
       }
     )
@@ -248,6 +252,33 @@ object TestClubDataApp extends ZIOSpecDefault {
         _         <- clearTables
         _         <- seedStaleClub(stuckClubId, oldSlug, withInferredRef = true, withExplicitRef = false)
         client    <- fakeClient(responses)
+        result    <- runRefresh(client)
+        unchanged <- Club.selectId(stuckClubId)
+      } yield assertTrue(
+        result.clubsProcessed == 1,
+        result.clubsFailed == 1,
+        unchanged.exists(_.slug == oldSlug),
+        unchanged.exists(_.fetchedAt.isEmpty)
+      )
+    },
+    test("404 with transient body → no rediscover attempt (gated by ReportedNotFound)") {
+      // Match ref points at newSlug — if recovery were to run, it would find and persist newSlug. With a transient
+      // 404 body the resolver should not run, so the club remains at oldSlug.
+      val matchJson = apiDailyMatchJson(
+        matchId = ClubMatchId.unwrap(refMatchId),
+        team1Club = newSlug.value,
+        team2Club = "opponent-club",
+        team1Players = List(("alice", 1)),
+        team2Players = List(("bob", 1))
+      )
+      val responses = Map(
+        s"club/${newSlug.value}"                   -> apiClubJson(ClubId.unwrap(stuckClubId), newSlug.value),
+        s"match/${ClubMatchId.unwrap(refMatchId)}" -> matchJson
+      )
+      for {
+        _         <- clearTables
+        _         <- seedStaleClub(stuckClubId, oldSlug, withInferredRef = true, withExplicitRef = false)
+        client    <- fakeClient(responses, profileFailureBody = transientNotFoundBody)
         result    <- runRefresh(client)
         unchanged <- Club.selectId(stuckClubId)
       } yield assertTrue(
