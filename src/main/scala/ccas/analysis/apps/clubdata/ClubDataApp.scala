@@ -2,12 +2,12 @@ package ccas.analysis.apps.clubdata
 
 import java.time.{Duration, Instant}
 
-import zio.{Chunk, RIO, Ref, Scope, Task, ZIO, ZIOAppArgs, ZIOAppDefault}
+import zio.{Chunk, RIO, Ref, Scope, Task, URIO, ZIO, ZIOAppArgs, ZIOAppDefault}
 
 import ccas.analysis.apps.ref.RefHelpers
-import ccas.analysis.tables.{Club, ClubAdmin, ClubMatch, ClubMatchRef, Tables}
+import ccas.analysis.tables.{Club, ClubAdmin, ClubMatch, ClubMatchRef, Player, Tables}
 import ccas.api.club.ApiClubMatches
-import ccas.api.misc.subtypes.{ClubId, ClubSlug}
+import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
 import ccas.utils.{OutputFile, ProgressDisplay}
 import ccas.analysis.apps.{ClubSlugRenameResolver, withClubSlugRenameRecovery}
 import ccas.utils.client.{ChessComClient, HttpClientLayer}
@@ -157,9 +157,48 @@ object ClubDataApp extends ZIOAppDefault {
       adminUsernames   = ClubAdmin.extractAdminUsernames(apiClub)
       existingAdminIds <- ClubAdmin.selectPlayerIdsByClub(club.clubId)
       allAdminIds      <- ClubAdminResolver.resolveAndPersistAdmins(client, club.clubId, adminUsernames, existingAdminIds)
+      _                <- logAdminDiff(club, existingAdminIds, allAdminIds)
       // Must remain the last step: --min-age relies on fetched_at being stamped only on full success.
       _ <- Club.updateFetchedAt(club.clubId, Instant.now())
     } yield ClubResult(allAdminIds.size, failed = false, adminChanged = allAdminIds != existingAdminIds)
+
+  /** Per-club admin diff console output. Skips clubs with no prior `club_admin` rows so first-time fetches don't
+    * masquerade as "changes". Emitted as a single multi-line `ZIO.logInfo` so parallel refresh in `refreshClubs`
+    * can't interleave lines from different clubs. Failures (DB read or log emission) are swallowed with a warning
+    * — admin replace has already committed by this point, so a logging hiccup must not mark the club as failed.
+    */
+  private def logAdminDiff(
+    club: Club,
+    existingAdminIds: Set[PlayerId],
+    allAdminIds: Set[PlayerId]
+  ): URIO[PostgresClient, Unit] = {
+    val added   = allAdminIds -- existingAdminIds
+    val removed = existingAdminIds -- allAdminIds
+    ZIO.whenDiscard(existingAdminIds.nonEmpty && (added.nonEmpty || removed.nonEmpty)) {
+      (for {
+        usernames <- Player.resolveUsernames(added | removed)
+        _         <- ZIO.logInfo(formatAdminDiff(club, added, removed, usernames))
+      } yield ()).catchAllCause(ZIO.logWarningCause(s"[ClubData] Admin diff log failed for ${club.slug}", _))
+    }
+  }
+
+  private def formatAdminDiff(
+    club: Club,
+    added: Set[PlayerId],
+    removed: Set[PlayerId],
+    usernames: Map[PlayerId, Username]
+  ): String = {
+    val body = (adminDiffLines(added, "+", usernames) ++ adminDiffLines(removed, "-", usernames)).mkString("\n")
+    s"[ClubData] Admin changes for ${club.slug} (${club.name}):\n$body"
+  }
+
+  private def adminDiffLines(ids: Set[PlayerId], prefix: String, usernames: Map[PlayerId, Username]): List[String] = {
+    val unknown = (id: PlayerId) => s"<unknown player #${PlayerId.unwrap(id)}>"
+    ids.toList
+      .map(id => usernames.get(id).map(Player.displayUsername(_, id)).getOrElse(unknown(id)))
+      .sorted
+      .map(name => s"  $prefix $name")
+  }
 
   /** Refreshes `club.latest_match_at` using a tiered strategy to minimise API calls:
     *   1. If the cached value on `club` is fresher than [[ClubAdmin.ApiSkipThreshold]], trust it and do nothing.
