@@ -25,35 +25,38 @@ object PlayerUpdater {
     since: Instant,
     client: ChessComClient
   ): RIO[PostgresClient, Int] = {
-    val resolveConflict = if (newUsername != existing.username) {
-      Player.selectByUsernameForUpdate(newUsername).flatMap {
-        case Some(conflicting) =>
-          client.get[ApiPlayer](ApiPlayer.getUrl(conflicting.username)).flatMap { apiPlayer =>
-            if (apiPlayer.playerId != conflicting.playerId) {
-              // Recycled handle: the API now serves the conflicting username for a different player. Our
-              // `conflicting` row is stale — the rightful holder renamed away. Tombstone the row to free the
-              // UNIQUE(username) slot. The deferred constraint allows this update plus the caller's update to
-              // satisfy the constraint at commit time. The renamed player will be rediscovered organically when
-              // their new name surfaces on a board / club roster / direct fetch.
-              tombstoneConflicting(conflicting, Instant.now())
-            } else if (!conflicting.stateMatches(apiPlayer.username, apiPlayer.status.category, apiPlayer.title)) {
-              // The recursive `since` is a fresh now(), not the caller's `since`: the conflicting player's
-              // state-change is a different event than the caller's, observed at the moment we discover it.
-              archiveAndUpdate(
-                conflicting,
-                apiPlayer.username,
-                apiPlayer.status.category,
-                apiPlayer.title,
-                Instant.now(),
-                client
-              )
-            } else {
-              ZIO.succeed(0)
-            }
-          }
-        case None => ZIO.succeed(0)
+    val resolveConflict: RIO[PostgresClient, Unit] =
+      ZIO.whenDiscard(newUsername != existing.username) {
+        Player.selectByUsernameForUpdate(newUsername).flatMap {
+          case None => ZIO.unit
+          case Some(conflicting) =>
+            for {
+              apiPlayer <- client.get[ApiPlayer](ApiPlayer.getUrl(conflicting.username))
+              _ <-
+                if (apiPlayer.playerId != conflicting.playerId) {
+                  // Recycled handle: the API now serves the conflicting username for a different player. Our
+                  // `conflicting` row is stale — the rightful holder renamed away. Tombstone the row to free the
+                  // UNIQUE(username) slot. The deferred constraint allows this update plus the caller's update to
+                  // satisfy the constraint at commit time. The renamed player will be rediscovered organically when
+                  // their new name surfaces on a board / club roster / direct fetch.
+                  tombstoneConflicting(conflicting, Instant.now()).unit
+                } else if (!conflicting.stateMatches(apiPlayer.username, apiPlayer.status.category, apiPlayer.title)) {
+                  // The recursive `since` is a fresh now(), not the caller's `since`: the conflicting player's
+                  // state-change is a different event than the caller's, observed at the moment we discover it.
+                  archiveAndUpdate(
+                    conflicting,
+                    apiPlayer.username,
+                    apiPlayer.status.category,
+                    apiPlayer.title,
+                    Instant.now(),
+                    client
+                  ).unit
+                } else {
+                  ZIO.unit
+                }
+            } yield ()
+        }
       }
-    } else { ZIO.succeed(0) }
 
     val updated = existing.copy(username = newUsername, status = newStatus, title = newTitle, since = since)
     resolveConflict *> PlayerSnapshot.insert(existing.toSnapshot) *> Player.updateCurrentState(updated)
