@@ -26,7 +26,7 @@ object TestChessComClientPersistence extends ZIOSpecDefault {
       configIdRef <- Ref.make(Option.empty[Long])
       stateRef    <- Ref.make(ChessComClient.ThrottleState(8, 0, Vector.empty))
       startedAt   <- ZIO.succeed(Instant.now())
-      config = ChessComClient.ThrottleConfig(Vector(2, 4, 8), 30.seconds, 5.seconds, 1.second, 10.seconds, 1.second, 5, 2, 3, 20, 0.2, 10, 0, Duration.Zero)
+      config = ChessComClient.ThrottleConfig(Vector(2, 4, 8), 30.seconds, 5.seconds, 1.second, 10.seconds, 1.second, 5, 2, 3, 20, 0.2, 10, 0, Duration.Zero, 500L)
     } yield ClientStatsFlushContext(
       s"test-$appLabel", appLabel, startedAt, statsRef, configIdRef, config, stateRef, pgClient
     )
@@ -88,7 +88,7 @@ object TestChessComClientPersistence extends ZIOSpecDefault {
     },
     test("ensureConfig deduplicates identical configs") {
       val cc = {
-        val c = ClientConfig(0L, "", List(2, 4, 99), 0, 88, 77, 0, 33, 0.5, 22, 66, 55, 44, 5, 2, 3)
+        val c = ClientConfig(0L, "", List(2, 4, 99), 0, 500, 88, 77, 0, 33, 0.5, 22, 66, 55, 44, 5, 2, 3)
         c.copy(configHash = c.computeHash)
       }
       for {

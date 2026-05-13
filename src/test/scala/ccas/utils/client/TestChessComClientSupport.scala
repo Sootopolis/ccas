@@ -36,7 +36,8 @@ object TestChessComClientSupport {
     maxCfRetries: Int = 2,
     maxConnectionRetries: Int = 3,
     minRequestDelayMs: Long = 0,
-    minTierObservation: Duration = Duration.Zero
+    minTierObservation: Duration = Duration.Zero,
+    emaTauMs: Long = 500
   ): ZIO[Scope & PostgresClient, Nothing, (ChessComClient, Ref[ChessComClient.ThrottleState], Ref[ClientStatsAccumulator])] =
     for {
       testScope     <- ZIO.service[Scope]
@@ -61,7 +62,8 @@ object TestChessComClientSupport {
         failureThreshold,
         10,
         minRequestDelayMs,
-        minTierObservation
+        minTierObservation,
+        emaTauMs
       )
       refs = ChessComClient.ThrottleRefs(
         stateRef,
@@ -172,7 +174,7 @@ object TestChessComClientSupport {
         refs,
         stats,
         bar,
-        ChessComClient.ThrottleConfig(Vector(2, permits.toInt.max(2)).distinct, 30.seconds, 5.seconds, 1.second, 10.seconds, 1.second, 5, 2, 3, 20, 0.2, 10, 0, Duration.Zero),
+        ChessComClient.ThrottleConfig(Vector(2, permits.toInt.max(2)).distinct, 30.seconds, 5.seconds, 1.second, 10.seconds, 1.second, 5, 2, 3, 20, 0.2, 10, 0, Duration.Zero, 500L),
         Scope.global
       )
     }

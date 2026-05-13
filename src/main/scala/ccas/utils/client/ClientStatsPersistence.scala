@@ -62,6 +62,7 @@ private[ccas] object ClientStatsPersistence {
       configHash = "",
       recoveryTiers = config.recoveryTiers.toList,
       minRequestDelayMs = config.minRequestDelayMs,
+      emaTauMs = config.emaTauMs,
       cooldownSecs = config.cooldown.getSeconds.toInt,
       cfCooldownSecs = config.cfCooldown.getSeconds.toInt,
       minTierObservationSecs = config.minTierObservation.getSeconds.toInt,

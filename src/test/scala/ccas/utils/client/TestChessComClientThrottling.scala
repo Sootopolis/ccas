@@ -623,6 +623,133 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
         )
       }
     },
+    test("time-based EMA: outlier sample is decayed by subsequent samples once emaDelay kicks in") {
+      ZIO.scoped {
+        for {
+          counter <- Ref.make(0)
+          (client, stateRef, _) <- makeClient(
+            handler = _ =>
+              counter.getAndUpdate(_ + 1).flatMap { n =>
+                val responseTime = if (n == 0) 30.seconds else 5.millis
+                ZIO.sleep(responseTime).as(Response.json(jsonBody))
+              },
+            permits = 4,
+            emaTauMs = 500L
+          )
+          // Sequential 3-request loop: r0 is the 30 s outlier; r1 records dt = 5 ms (gap not yet
+          // widened by emaDelay because lastRequestRef is still 0); r2 sees emaDelay enforce a
+          // target ~= ema/4 sleep, making dt large enough that alpha ≈ 1 and EMA collapses to
+          // the fast-sample value.
+          fiber <- ZIO.foreachDiscard(1 to 3)(i =>
+            client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get)
+          ).fork
+          _ <- TestClock.adjust(advanceWindow)
+          _ <- fiber.join
+          finalState <- stateRef.get
+        } yield assertTrue(
+          // Computed trace: after r2's emaDelay-widened dt, alpha ≈ 1 collapses EMA to fast-sample value ≈ 5 ms.
+          finalState.responseTimeEma < 50.0,
+          finalState.lastEmaSampleAt > 0L
+        )
+      }
+    },
+    test("time-based EMA: steady-state convergence tracks repeated samples") {
+      ZIO.scoped {
+        for {
+          (client, stateRef, _) <- makeClient(
+            handler = _ => ZIO.sleep(50.millis).as(Response.json(jsonBody)),
+            permits = 4,
+            emaTauMs = 500L
+          )
+          // After many ~50 ms samples, EMA must converge close to 50 ms regardless of starting
+          // value (which is 0 → seeded to first sample = 50).
+          fiber <- ZIO.foreachDiscard(1 to 20)(i =>
+            client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get)
+          ).fork
+          _ <- TestClock.adjust(advanceWindow)
+          _ <- fiber.join
+          finalState <- stateRef.get
+        } yield assertTrue(
+          finalState.responseTimeEma > 40.0,
+          finalState.responseTimeEma < 60.0
+        )
+      }
+    },
+    test("time-based EMA: first sample after full recovery re-seeds (no blend with stale EMA)") {
+      ZIO.scoped {
+        for {
+          shouldFail <- Ref.make(true)
+          (client, stateRef, _) <- makeClient(
+            handler = _ =>
+              shouldFail.get.flatMap { fail =>
+                if (fail) ZIO.succeed(Response(status = Status.TooManyRequests))
+                else ZIO.sleep(5.millis).as(Response.json(jsonBody))
+              },
+            permits = 4,
+            cooldown = 300.millis,
+            failureThreshold = 0.2,
+            recoveryTiers = Some(Vector(2, 4)),
+            max429Retries = 0,
+            emaTauMs = 500L
+          )
+          // Drive throttle-down (12 × 429 → minSampleSize satisfied).
+          fiber1 <- ZIO.foreachParDiscard(1 to 12)(i =>
+            client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get).exit
+          ).fork
+          _ <- TestClock.adjust(200.millis)
+          _ <- fiber1.join
+          // Switch to success + drive past recovery ladder to full.
+          _ <- shouldFail.set(false)
+          fiber2 <- ZIO.foreachDiscard(13 to 30)(i =>
+            client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get)
+          ).fork
+          _ <- TestClock.adjust(advanceWindow)
+          _ <- fiber2.join
+          recovered <- stateRef.get
+          // After full recovery, responseTimeEma was reset to 0.0 and lastEmaSampleAt to 0L.
+          // The next sample should seed EMA to exactly its own latency, not blend with anything.
+          fiber3 <- client.get[Payload](URL.decode("http://test.example.com/api/post").toOption.get).fork
+          _ <- TestClock.adjust(1.second)
+          _ <- fiber3.join
+          afterReseed <- stateRef.get
+        } yield assertTrue(
+          recovered.currentMax == 4L,
+          recovered.responseTimeEma == 0.0,
+          recovered.lastEmaSampleAt == 0L,
+          // First post-recovery sample (5 ms response) seeds the EMA directly.
+          afterReseed.responseTimeEma == 5.0,
+          afterReseed.lastEmaSampleAt > 0L
+        )
+      }
+    },
+    test("time-based EMA: long idle collapses prior EMA on next sample") {
+      ZIO.scoped {
+        for {
+          counter <- Ref.make(0)
+          (client, stateRef, _) <- makeClient(
+            handler = _ =>
+              counter.getAndUpdate(_ + 1).flatMap { n =>
+                val responseTime = if (n == 0) 500.millis else 5.millis
+                ZIO.sleep(responseTime).as(Response.json(jsonBody))
+              },
+            permits = 4,
+            emaTauMs = 500L
+          )
+          fiber1 <- client.get[Payload](URL.decode("http://test.example.com/api/1").toOption.get).fork
+          _ <- TestClock.adjust(1.second)
+          _ <- fiber1.join
+          // 10 × τ idle → alpha = 1 - exp(-10) ≈ 0.99995 → next sample fully replaces prior EMA.
+          _ <- TestClock.adjust(5.seconds)
+          fiber2 <- client.get[Payload](URL.decode("http://test.example.com/api/2").toOption.get).fork
+          _ <- TestClock.adjust(1.second)
+          _ <- fiber2.join
+          finalState <- stateRef.get
+        } yield assertTrue(
+          // Second sample (5 ms) effectively replaces the first (500 ms) after long idle.
+          finalState.responseTimeEma < 10.0
+        )
+      }
+    },
     test("recovery drops back when new tier shows failures instead of advancing on stale outcomes") {
       ZIO.scoped {
         for {
@@ -1026,7 +1153,7 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
     },
     test("ThrottleConfig.nextTier walks up the recovery ladder") {
       val cfg = ChessComClient.ThrottleConfig(
-        Vector(2, 4, 6, 8), 30.seconds, 5.seconds, 1.second, 10.seconds, 1.second, 5, 2, 3, 20, 0.2, 10, 0, Duration.Zero
+        Vector(2, 4, 6, 8), 30.seconds, 5.seconds, 1.second, 10.seconds, 1.second, 5, 2, 3, 20, 0.2, 10, 0, Duration.Zero, 500L
       )
       assertTrue(
         cfg.maxPermits == 8L,
@@ -1040,7 +1167,7 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
     },
     test("ThrottleConfig.previousTier walks down the recovery ladder") {
       val cfg = ChessComClient.ThrottleConfig(
-        Vector(2, 4, 6, 8), 30.seconds, 5.seconds, 1.second, 10.seconds, 1.second, 5, 2, 3, 20, 0.2, 10, 0, Duration.Zero
+        Vector(2, 4, 6, 8), 30.seconds, 5.seconds, 1.second, 10.seconds, 1.second, 5, 2, 3, 20, 0.2, 10, 0, Duration.Zero, 500L
       )
       assertTrue(
         cfg.previousTier(8) == 6L,
@@ -1061,7 +1188,7 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
       assertTrue(cases.forall { tiers =>
         scala.util.Try(
           ChessComClient.ThrottleConfig(
-            tiers, 30.seconds, 5.seconds, 1.second, 10.seconds, 1.second, 5, 2, 3, 20, 0.2, 10, 0, Duration.Zero
+            tiers, 30.seconds, 5.seconds, 1.second, 10.seconds, 1.second, 5, 2, 3, 20, 0.2, 10, 0, Duration.Zero, 500L
           )
         ).isFailure
       })
@@ -1081,12 +1208,13 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
         failureThreshold: Double = 0.2,
         minSampleSize: Int = 10,
         minRequestDelayMs: Long = 0,
-        minTierObservation: Duration = Duration.Zero
+        minTierObservation: Duration = Duration.Zero,
+        emaTauMs: Long = 500
       ) = scala.util.Try(ChessComClient.ThrottleConfig(
         tiers, cooldown, cfCooldown, retryBase, cfRetryDelay, connectionRetryBase,
         max429Retries, maxCfRetries, maxConnectionRetries,
         failureWindowSize, failureThreshold, minSampleSize,
-        minRequestDelayMs, minTierObservation
+        minRequestDelayMs, minTierObservation, emaTauMs
       ))
       assertTrue(
         cfg(cooldown = (-1).seconds).isFailure,
@@ -1107,6 +1235,8 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
         cfg(failureThreshold = 1.01).isFailure,
         cfg(minRequestDelayMs = -1).isFailure,
         cfg(minTierObservation = (-1).seconds).isFailure,
+        cfg(emaTauMs = 0).isFailure,                  // must be strictly positive
+        cfg(emaTauMs = -1).isFailure,
         // Edge cases that SHOULD be accepted
         cfg(cooldown = 0.seconds).isSuccess,          // 0 cooldown = immediate recovery
         cfg(failureThreshold = 0.0).isSuccess,

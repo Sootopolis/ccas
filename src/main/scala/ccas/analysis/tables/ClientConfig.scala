@@ -18,6 +18,7 @@ final case class ClientConfig(
   // concurrency & pacing
   recoveryTiers: List[Int],
   minRequestDelayMs: Long,
+  emaTauMs: Long,
   // recovery timing
   cooldownSecs: Int,
   cfCooldownSecs: Int,
@@ -38,7 +39,7 @@ final case class ClientConfig(
 
   def computeHash: String = {
     val canonical =
-      s"${recoveryTiers.mkString(",")}|$minRequestDelayMs|$cooldownSecs|$cfCooldownSecs|$minTierObservationSecs|$failureWindowSize|$failureThreshold|$minSampleSize|$retryBaseSecs|$cfRetrySecs|$connectionRetryBaseSecs|$max429Retries|$maxCfRetries|$maxConnectionRetries"
+      s"${recoveryTiers.mkString(",")}|$minRequestDelayMs|$cooldownSecs|$cfCooldownSecs|$minTierObservationSecs|$failureWindowSize|$failureThreshold|$minSampleSize|$retryBaseSecs|$cfRetrySecs|$connectionRetryBaseSecs|$max429Retries|$maxCfRetries|$maxConnectionRetries|$emaTauMs"
     val digest = MessageDigest.getInstance("SHA-256")
     val bytes  = digest.digest(canonical.getBytes(StandardCharsets.UTF_8))
     bytes.map(b => String.format("%02x", b)).mkString
@@ -54,6 +55,7 @@ object ClientConfig {
               config_hash                TEXT NOT NULL UNIQUE,
               recovery_tiers             INTEGER[] NOT NULL,
               min_request_delay_ms       BIGINT NOT NULL,
+              ema_tau_ms                 BIGINT NOT NULL,
               cooldown_secs              INT NOT NULL,
               cf_cooldown_secs           INT NOT NULL,
               min_tier_observation_secs  INT NOT NULL,
@@ -79,13 +81,13 @@ object ClientConfig {
       case Some(id) => ZIO.succeed(id)
       case None => connectZIO {
         sql"""INSERT INTO client_config (
-                config_hash, recovery_tiers, min_request_delay_ms,
+                config_hash, recovery_tiers, min_request_delay_ms, ema_tau_ms,
                 cooldown_secs, cf_cooldown_secs, min_tier_observation_secs,
                 failure_window_size, failure_threshold, min_sample_size,
                 retry_base_secs, cf_retry_secs, connection_retry_base_secs,
                 max429_retries, max_cf_retries, max_connection_retries
               ) VALUES (
-                $hash, ${item.recoveryTiers}, ${item.minRequestDelayMs},
+                $hash, ${item.recoveryTiers}, ${item.minRequestDelayMs}, ${item.emaTauMs},
                 ${item.cooldownSecs}, ${item.cfCooldownSecs}, ${item.minTierObservationSecs},
                 ${item.failureWindowSize}, ${item.failureThreshold}, ${item.minSampleSize},
                 ${item.retryBaseSecs}, ${item.cfRetrySecs}, ${item.connectionRetryBaseSecs},
