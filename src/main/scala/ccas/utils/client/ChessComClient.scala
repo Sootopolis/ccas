@@ -493,8 +493,9 @@ final class ChessComClient(
     * requests have drained before attempting recovery.
     */
   private def throttleDown(cooldown: Duration = config.cooldown): Task[Unit] =
-    Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS).flatMap { now =>
-      stateRef.modify { state =>
+    for {
+      now <- Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS)
+      transitionOpt <- stateRef.modify { state =>
         if (state.currentMax <= 1) {
           (None, state)
         } else {
@@ -510,14 +511,16 @@ final class ChessComClient(
           (Some((state.currentMax, newGen)), newState)
         }
       }
-    }.flatMap {
-      case None => ZIO.unit
-      case Some((oldMax, gen)) =>
-        statsRef.update(_.incThrottleDowns) *>
-          ZIO.logWarning(s"Rate limit throttle: $oldMax \u2192 1 permit") *>
-          scheduleRecovery(gen, cooldown).forkDaemon
-            .flatMap(f => scope.addFinalizerExit(_ => f.interrupt)).unit
-    }
+      _ <- ZIO.foreachDiscard(transitionOpt) { case (oldMax, gen) => applyThrottle(oldMax, gen, cooldown) }
+    } yield ()
+
+  private def applyThrottle(oldMax: Long, gen: Long, cooldown: Duration): Task[Unit] =
+    for {
+      _     <- statsRef.update(_.incThrottleDowns)
+      _     <- ZIO.logWarning(s"Rate limit throttle: $oldMax \u2192 1 permit")
+      fiber <- scheduleRecovery(gen, cooldown).forkDaemon
+      _     <- scope.addFinalizerExit(_ => fiber.interrupt)
+    } yield ()
 
   /** Wait for in-flight requests to drain, sleep for cooldown, then recover permits if failure rate has dropped. After
     * the cooldown, enforces `minTierObservation` — if not enough wall-clock time has elapsed since the current tier was

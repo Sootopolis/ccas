@@ -218,18 +218,18 @@ object ClubDataApp extends ZIOAppDefault {
         val dbFreshEnough = dbLatest.exists(_.isAfter(skipCutoff))
         if (dbFreshEnough) Club.updateLatestMatchAt(club.clubId, dbLatest).unit
         else {
-          fetchClubMatches(client, club.slug)
-            .withClubSlugRenameRecovery(client, club.slug, Some(club.clubId))(fresh => fetchClubMatches(client, fresh))
-            .asSome
-            .catchAll { error =>
-              ZIO.logInfo(s"[ClubData] Match fetch failed for ${club.slug}: ${error.getMessage}").as(None)
-            }
-            .flatMap { matchesOpt =>
-              val apiLatest = matchesOpt.flatMap(latestTimestamp(_, now))
-              val combined  = List(club.latestMatchAt, dbLatest, apiLatest).flatten.maxOption
-              ZIO.whenDiscard(combined != club.latestMatchAt)(Club.updateLatestMatchAt(club.clubId, combined)) *>
-                ZIO.foreachDiscard(matchesOpt)(tryPopulateClubMatchRef(client, club.clubId, club.slug, _))
-            }
+          for {
+            matchesOpt <- fetchClubMatches(client, club.slug)
+              .withClubSlugRenameRecovery(client, club.slug, Some(club.clubId))(fresh => fetchClubMatches(client, fresh))
+              .asSome
+              .catchAll { error =>
+                ZIO.logInfo(s"[ClubData] Match fetch failed for ${club.slug}: ${error.getMessage}").as(None)
+              }
+            apiLatest = matchesOpt.flatMap(latestTimestamp(_, now))
+            combined  = List(club.latestMatchAt, dbLatest, apiLatest).flatten.maxOption
+            _ <- ZIO.whenDiscard(combined != club.latestMatchAt)(Club.updateLatestMatchAt(club.clubId, combined))
+            _ <- ZIO.foreachDiscard(matchesOpt)(tryPopulateClubMatchRef(client, club.clubId, club.slug, _))
+          } yield ()
         }
       }
     }

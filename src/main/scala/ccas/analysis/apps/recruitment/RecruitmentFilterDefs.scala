@@ -301,26 +301,27 @@ private[recruitment] object RecruitmentFilterDefs {
       min: Int,
       cutoff: Instant
     ): RIO[PostgresClient, Boolean] = {
+      // Activity check uses local latest_match_at, NOT apiClub.lastActivity (the API field is unreliable —
+      // active clubs sometimes report 12-year-old timestamps). For freshly-fetched clubs the DB value is None,
+      // which passesGate treats as active by convention (matching the SQL early-prune). ClubDataApp will fill
+      // it in later.
+      val latestMatchAt = existingClub.flatMap(_.latestMatchAt)
       // When `existingClub.isEmpty` the cold-discovery branch can't supply a hint; the resolver's `deriveHint`
       // SQL lookup also returns None (we just selected by this slug at line ~266 and got nothing), so only Tier B
       // applies — but Tier B itself needs a hint. The wrap is therefore a no-op on the cold-discovery happy-path
       // and only fires on subsequent runs once a Club row has been persisted under the stale slug.
-      val fetched = ApiClub.get(run.client, slug)
-        .withClubSlugRenameRecovery(run.client, slug, clubIdHint = existingClub.map(_.clubId))(fresh =>
-          ApiClub.get(run.client, fresh)
-        )
-      fetched.flatMap { apiClub =>
+      (for {
+        apiClub <- ApiClub.get(run.client, slug)
+          .withClubSlugRenameRecovery(run.client, slug, clubIdHint = existingClub.map(_.clubId))(fresh =>
+            ApiClub.get(run.client, fresh)
+          )
         // Persist the Club row regardless — value for future runs and for ClubDataApp's slug index.
         // `Club.upsert` deliberately preserves an existing latest_match_at, so this doesn't clobber DB state.
         // After recovery `apiClub.@id`'s last segment is the canonical slug; the resolver already upserted the row,
         // so passing the canonical slug here keeps subsequent reads consistent.
-        val canonicalSlug = ClubSlug.wrap(apiClub.`@id`.path.segments.last)
-        Club.upsertResolvingSlugConflict(Club.fromApi(apiClub, canonicalSlug), run.client) *> {
-          // Activity check uses local latest_match_at, NOT apiClub.lastActivity (the API field is unreliable —
-          // active clubs sometimes report 12-year-old timestamps). For freshly-fetched clubs the DB value is None,
-          // which passesGate treats as active by convention (matching the SQL early-prune). ClubDataApp will fill
-          // it in later.
-          val latestMatchAt = existingClub.flatMap(_.latestMatchAt)
+        canonicalSlug = ClubSlug.wrap(apiClub.`@id`.path.segments.last)
+        _ <- Club.upsertResolvingSlugConflict(Club.fromApi(apiClub, canonicalSlug), run.client)
+        rejected <-
           if (!passesGate(apiClub.membersCount, apiClub.admin.size, latestMatchAt, min, cutoff)) ZIO.succeed(false)
           else {
             // Resolve + persist admin rows. The returned set is the canonical admin set for this club —
@@ -331,8 +332,7 @@ private[recruitment] object RecruitmentFilterDefs {
               .resolveAndPersistAdmins(run.client, apiClub.clubId, adminUsernames, existingAdminIds = Set.empty)
               .map(_.contains(candidatePlayerId))
           }
-        }
-      }.catchAll { error =>
+      } yield rejected).catchAll { error =>
         run.failedAdminSlugs.update(_ + slug) *>
           ZIO.logInfo(s"[Recruitment] Admin late-check failed for $slug: ${error.getMessage}").as(false)
       }

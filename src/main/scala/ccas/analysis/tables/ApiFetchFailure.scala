@@ -48,13 +48,14 @@ object ApiFetchFailure {
 
   def insert(item: ApiFetchFailure): ZIO[PostgresClient, SQLException, Int] =
     withTransaction {
-      ZIO.foreach(item.responseBody)(ApiResponseBody.ensureBody).flatMap { bodyIdOpt =>
-        connectZIO {
+      for {
+        bodyIdOpt <- ZIO.foreach(item.responseBody)(ApiResponseBody.ensureBody)
+        result <- connectZIO {
           sql"""INSERT INTO api_fetch_failure (occurred_at, url, error_type, error_message, response_body_id)
                 VALUES (${item.occurredAt}, ${item.url}, ${item.errorType}, ${item.errorMessage}, $bodyIdOpt)""".update
             .run()
         }
-      }
+      } yield result
     }
 
   def deleteBefore(cutoff: Instant): ZIO[PostgresClient, SQLException, Int] =
