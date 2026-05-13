@@ -636,9 +636,8 @@ private[history] object HistoryProcessing {
     resolvedId: Option[ClubId]
   ): RIO[PostgresClient, Unit] =
     ZIO.whenDiscard(resolvedId.isEmpty) {
-      teamUrl.path.segments.lastOption match {
-        case Some(segment) => UnresolvedMatchClub.insert(matchId, isTeam1, ClubSlug.wrap(segment)).ignore
-        case None          => ZIO.unit
+      ZIO.foreachDiscard(teamUrl.path.segments.lastOption) { segment =>
+        UnresolvedMatchClub.insert(matchId, isTeam1, ClubSlug.wrap(segment)).ignore
       }
     }
 

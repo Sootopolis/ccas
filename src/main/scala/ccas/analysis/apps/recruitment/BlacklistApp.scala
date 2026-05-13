@@ -67,24 +67,23 @@ object BlacklistApp extends ZIOAppDefault {
       // reaffirmation. On the no-recovery happy path, this is the source-of-truth write.
       _ <- Club.upsertResolvingSlugConflict(club, client)
       _ <- ZIO.foreachDiscard(usernames) { username =>
-        UsernameRenameResolver.fetchOrRecover(client, username).flatMap { apiPlayer =>
-          for {
-            now <- Clock.instant
-            // Single transaction: reconcile (handles rename archival or fresh insert) + blacklist upsert. Resolver's
-            // verification fetch already authenticated apiPlayer; we don't double-reconcile.
-            _ <- withTransaction {
-              PlayerUpdater.reconcile(apiPlayer, client) *> RecruitmentBlacklist.upsert(
-                RecruitmentBlacklist(apiClub.clubId, apiPlayer.playerId, now, expiresAt, reason)
-              )
-            }
-            _ <- ZIO.when(apiPlayer.username != username) {
-              ZIO.logInfo(s"  Renamed: input '$username' resolved to '${apiPlayer.username}'")
-            }
-            _ <- ZIO.logInfo(
-              s"Blacklisted ${apiPlayer.username} (player_id=${apiPlayer.playerId}) for club $clubSlug"
+        for {
+          apiPlayer <- UsernameRenameResolver.fetchOrRecover(client, username)
+          now       <- Clock.instant
+          // Single transaction: reconcile (handles rename archival or fresh insert) + blacklist upsert. Resolver's
+          // verification fetch already authenticated apiPlayer; we don't double-reconcile.
+          _ <- withTransaction {
+            PlayerUpdater.reconcile(apiPlayer, client) *> RecruitmentBlacklist.upsert(
+              RecruitmentBlacklist(apiClub.clubId, apiPlayer.playerId, now, expiresAt, reason)
             )
-          } yield ()
-        }
+          }
+          _ <- ZIO.whenDiscard(apiPlayer.username != username) {
+            ZIO.logInfo(s"  Renamed: input '$username' resolved to '${apiPlayer.username}'")
+          }
+          _ <- ZIO.logInfo(
+            s"Blacklisted ${apiPlayer.username} (player_id=${apiPlayer.playerId}) for club $clubSlug"
+          )
+        } yield ()
       }
     } yield ()
 

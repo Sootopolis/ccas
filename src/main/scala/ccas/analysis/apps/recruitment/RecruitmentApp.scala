@@ -81,32 +81,31 @@ object RecruitmentApp extends ZIOAppDefault {
         case clubStr :: rest =>
           val parsed   = parseRecruitArgs(rest)
           val clubSlug = ClubSlug.wrap(clubStr)
-          recruit(
-            clubSlug,
-            parsed.alias,
-            target = parsed.target,
-            cumulative = parsed.cumulative,
-            sourceClubs = parsed.sourceClubs,
-            explore = parsed.sourceClubs.isEmpty || !parsed.focus,
-            showHints = true
-          ).flatMap { run =>
-            for {
-              candidates <-
-                if (parsed.cumulative) RecruitmentCandidate.selectInvitedToday(run.clubId, parsed.alias)
-                else RecruitmentCandidate.selectInvitedByRun(run.runId)
-              resolvedMap <- Player.resolveUsernames(candidates.map(_.playerId))
-              usernames = candidates.map(c => resolvedMap.getOrElse(c.playerId, Username.wrap(s"[pid=${c.playerId}]")))
-              evaluatedCount <- RecruitmentCandidate.selectCountByRun(run.runId)
-              now            <- Clock.instant
-              output = formatRecruitmentOutput(
-                usernames,
-                evaluatedCount,
-                run.startedAt,
-                run.completedAt.getOrElse(now)
-              )
-              _ <- OutputFile.writeAndLog("recruitment", clubSlug, output)
-            } yield ()
-          }
+          for {
+            run <- recruit(
+              clubSlug,
+              parsed.alias,
+              target = parsed.target,
+              cumulative = parsed.cumulative,
+              sourceClubs = parsed.sourceClubs,
+              explore = parsed.sourceClubs.isEmpty || !parsed.focus,
+              showHints = true
+            )
+            candidates <-
+              if (parsed.cumulative) RecruitmentCandidate.selectInvitedToday(run.clubId, parsed.alias)
+              else RecruitmentCandidate.selectInvitedByRun(run.runId)
+            resolvedMap <- Player.resolveUsernames(candidates.map(_.playerId))
+            usernames = candidates.map(c => resolvedMap.getOrElse(c.playerId, Username.wrap(s"[pid=${c.playerId}]")))
+            evaluatedCount <- RecruitmentCandidate.selectCountByRun(run.runId)
+            now            <- Clock.instant
+            output = formatRecruitmentOutput(
+              usernames,
+              evaluatedCount,
+              run.startedAt,
+              run.completedAt.getOrElse(now)
+            )
+            _ <- OutputFile.writeAndLog("recruitment", clubSlug, output)
+          } yield ()
         case _ => ZIO.fail(BadRequestException(help))
       }).provideSome[Scope](
         ProgressDisplay.live(showProgress = true),
