@@ -142,7 +142,7 @@ object MembershipApp extends ZIOAppDefault {
       apiMap = apiMembers.toMap
       now    = Instant.now()
       phaseB <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, dbState, now, trustUsernames)
-      phaseC <- MembershipClassify.classifyDisappeared(client, dbState, phaseB.resolvedIds, apiMap, resolvedSlug, now)
+      phaseC <- MembershipClassify.classifyDisappeared(client, dbState, phaseB.resolvedIds, apiMap, now)
       _ <- persist(phaseB, phaseC)
       completedAt = Instant.now()
       _ <- ZIO.foreachDiscard(runId)(id => MembershipRun.complete(id, completedAt))

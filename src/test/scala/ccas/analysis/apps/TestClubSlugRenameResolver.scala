@@ -30,6 +30,7 @@ object TestClubSlugRenameResolver extends ZIOSpecDefault {
       tierCMissAllAdminsChurned,
       tierCEmptyAdminListReturnsNone,
       tierCSkipsTombstonedAdminUsername,
+      tierCSkipsClosedAdminUsername,
       tierCSkipsSlugsAlreadyKnownToDb,
       tierCAdvancesPastAdminWhose404s,
       tierCNoOpWithoutHint
@@ -45,6 +46,9 @@ object TestClubSlugRenameResolver extends ZIOSpecDefault {
 
   private def insertPlayer(pid: PlayerId, username: String): RIO[PostgresClient, Unit] =
     Player.insert(Player(pid, t0, Username(username), PlayerStatusCategory.Active, None, t0))
+
+  private def insertClosedPlayer(pid: PlayerId, username: String): RIO[PostgresClient, Unit] =
+    Player.insert(Player(pid, t0, Username(username), PlayerStatusCategory.Closed, None, t0))
 
   private def insertAdmin(clubId: ClubId, playerId: PlayerId): RIO[PostgresClient, Unit] =
     ClubAdmin.insertBatch(List(ClubAdmin(clubId, playerId))).unit
@@ -172,6 +176,34 @@ object TestClubSlugRenameResolver extends ZIOSpecDefault {
       } yield assertTrue(
         result.exists((s, _) => s == freshSlug),
         tombstoneFailures == 0L
+      )
+    }
+
+  private def tierCSkipsClosedAdminUsername =
+    test("Tier C: closed admin row is skipped without an HTTP call; another admin still resolves") {
+      val clubId     = ClubId(902_008)
+      val staleSlug  = ClubSlug("tier-c-closed")
+      val freshSlug  = ClubSlug("tier-c-closed-fresh")
+      val closedPid  = PlayerId(902_501)
+      val livePid    = PlayerId(902_502)
+      val closedName = "closed-admin"
+      val liveName   = "live-admin-c"
+      val responses = Map(
+        s"player/$liveName/clubs"  -> apiPlayerClubsJson(List(freshSlug.value)),
+        s"club/${freshSlug.value}" -> apiClubJson(ClubId.unwrap(clubId), freshSlug.value)
+      )
+      for {
+        _              <- Club.upsert(Club(clubId, t0, staleSlug, "Closed Admin Test", None, None, None))
+        _              <- insertClosedPlayer(closedPid, closedName)
+        _              <- insertPlayer(livePid, liveName)
+        _              <- insertAdmin(clubId, closedPid)
+        _              <- insertAdmin(clubId, livePid)
+        client         <- fakeChessComClient(responses)
+        result         <- ClubSlugRenameResolver.resolveAndPersist(client, staleSlug, Some(clubId))
+        closedFailures <- fetchFailureCountFor(s"player/$closedName")
+      } yield assertTrue(
+        result.exists((s, _) => s == freshSlug),
+        closedFailures == 0L
       )
     }
 

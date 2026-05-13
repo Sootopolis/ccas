@@ -13,7 +13,6 @@ import ccas.analysis.apps.recruitment.RecruitmentTestSupport.{
   apiClubMembersJson,
   apiDailyMatchJson,
   apiMatchBoardJson,
-  apiPlayerClubsJson,
   apiPlayerJson
 }
 import ccas.analysis.tables.{Club, ClubMember, MembershipRun, Player, PlayerMatchRef, RunTrigger, Tables}
@@ -498,7 +497,8 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
     testActivePlayerLeftClub,
     testClosedPlayerAccountClosed,
     testClosedPlayerStillInClub,
-    testAlreadyClosedPlayerSilent,
+    testAlreadyClosedPlayerShortCircuit,
+    testAlreadyClosedPlayerSinceClampedToMemberSince,
     testMatchRefFallbackRenamedStillInClub,
     testMatchRefFallbackRenamedLeftClub,
     testApi404Unresolvable,
@@ -522,7 +522,6 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
         dbState,
         Set.empty,
         Map.empty,
-        ClubSlug("test-club"),
         Times.t2
       )
     } yield {
@@ -555,7 +554,6 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
           dbState,
           Set.empty,
           Map.empty,
-          ClubSlug("test-club"),
           Times.t2
         )
       } yield {
@@ -574,7 +572,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
     }
 
   private def testClosedPlayerStillInClub =
-    test("closed player still in own clubs list → AccountClosed only, membership not closed") {
+    test("fresh closure → AccountClosed and membership closed at lastOnline (no /clubs sanity check)") {
       val player = Player(pid1, Times.t0, Username("bob"), Active, None, Times.t0)
       val mem    = ClubMember(clubId, pid1, Times.t0, None, sinceApproximate = false)
       val dbState = DbState(
@@ -583,16 +581,14 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
       )
       val responses =
         Map("bob" -> apiPlayerJson(101, "bob", status = "closed", lastOnline = Some(Times.t1.getEpochSecond)))
-      val clubsResponses = Map("bob" -> apiPlayerClubsJson(List("test-club")))
 
       for {
-        client <- fakeChessComClient(responses, clubsResponses = clubsResponses)
+        client <- fakeChessComClient(responses)
         result <- MembershipClassify.classifyDisappeared(
           client,
           dbState,
           Set.empty,
           Map.empty,
-          ClubSlug("test-club"),
           Times.t2
         )
       } yield {
@@ -606,38 +602,66 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
           result.updatedPlayers.nonEmpty,
           result.updatedPlayers.head.status == Closed,
           result.archivedSnapshots.nonEmpty,
-          result.closedMemberships.isEmpty
+          result.closedMemberships.nonEmpty,
+          result.closedMemberships.head.until.contains(Times.t1)
         )
       }
     }
 
-  private def testAlreadyClosedPlayerSilent =
-    test("already-closed player, still in own clubs list → no changes emitted") {
+  private def testAlreadyClosedPlayerShortCircuit =
+    test("already-closed player → short-circuit, close membership at player.since without API fetch") {
       val player = Player(pid1, Times.t0, Username("bob"), Closed, None, Times.t0)
       val mem    = ClubMember(clubId, pid1, Times.t0, None, sinceApproximate = false)
       val dbState = DbState(
         membersByPlayerId = Map(pid1 -> MemberState(player, mem)),
         membersByUsername = Map(Username("bob") -> MemberState(player, mem))
       )
-      val responses =
-        Map("bob" -> apiPlayerJson(101, "bob", status = "closed", lastOnline = Some(Times.t1.getEpochSecond)))
-      val clubsResponses = Map("bob" -> apiPlayerClubsJson(List("test-club")))
-
+      // Empty responses map: the discriminator is `until == Times.t0` (player.since). If the short-circuit failed
+      // and `classifyOneDisappearedActive` ran, the empty map would 404 → `matchRefFallback` → `unresolvable`
+      // with `until = Times.t2` (now) and a `Unresolvable` change in `changes`. Both assertions below would fail
+      // in that case.
       for {
-        client <- fakeChessComClient(responses, clubsResponses = clubsResponses)
+        client <- fakeChessComClient(Map.empty)
         result <- MembershipClassify.classifyDisappeared(
           client,
           dbState,
           Set.empty,
           Map.empty,
-          ClubSlug("test-club"),
           Times.t2
         )
       } yield assertTrue(
         result.changes.isEmpty,
         result.updatedPlayers.isEmpty,
         result.archivedSnapshots.isEmpty,
-        result.closedMemberships.isEmpty
+        result.closedMemberships.size == 1,
+        result.closedMemberships.head.until.contains(Times.t0)
+      )
+    }
+
+  private def testAlreadyClosedPlayerSinceClampedToMemberSince =
+    test("already-closed player whose closure timestamp predates member.since → until clamped to member.since") {
+      // player.since = t0 (closure observed via another path), member.since = t1 (we joined this club AFTER the
+      // closure was already recorded). Without the guard, until=t0 would precede since=t1 → invalid range.
+      val player = Player(pid1, Times.t0, Username("bob"), Closed, None, Times.t0)
+      val mem    = ClubMember(clubId, pid1, Times.t1, None, sinceApproximate = false)
+      val dbState = DbState(
+        membersByPlayerId = Map(pid1 -> MemberState(player, mem)),
+        membersByUsername = Map(Username("bob") -> MemberState(player, mem))
+      )
+
+      for {
+        client <- fakeChessComClient(Map.empty)
+        result <- MembershipClassify.classifyDisappeared(
+          client,
+          dbState,
+          Set.empty,
+          Map.empty,
+          Times.t2
+        )
+      } yield assertTrue(
+        result.closedMemberships.size == 1,
+        result.closedMemberships.head.until.contains(Times.t1),
+        !result.closedMemberships.head.until.contains(Times.t0)
       )
     }
 
@@ -683,7 +707,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
         boardResponses = boardResponses
       )
       result <- MembershipClassify.classifyDisappeared(
-        client, dbState, Set.empty, apiMap, ClubSlug("test-club"), Times.t2
+        client, dbState, Set.empty, apiMap, Times.t2
       )
     } yield result
   }
@@ -732,7 +756,6 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
         dbState,
         Set.empty,
         Map.empty,
-        ClubSlug("test-club"),
         Times.t2
       )
     } yield assertTrue(
@@ -758,7 +781,6 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
         dbState,
         Set.empty,
         Map.empty,
-        ClubSlug("test-club"),
         Times.t2
       )
     } yield assertTrue(
@@ -783,7 +805,6 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
         dbState,
         Set(pid0),
         Map.empty,
-        ClubSlug("test-club"),
         Times.t2
       )
     } yield assertTrue(

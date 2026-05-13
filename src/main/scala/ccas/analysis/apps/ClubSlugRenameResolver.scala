@@ -6,6 +6,7 @@ import zio.{RIO, ZIO}
 
 import ccas.analysis.tables.{Club, ClubAdmin, Player}
 import ccas.api.club.ApiClub
+import ccas.api.misc.enums.PlayerStatusCategory
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, Username}
 import ccas.api.player.ApiPlayerClubs
 import ccas.utils.client.{ChessComClient, HttpStatusException, ReportedNotFound, onNotFound}
@@ -166,7 +167,11 @@ object ClubSlugRenameResolver {
           _ <- ZIO.logDebug(
             s"  Tier C: ${adminRows.size - adminPlayers.size} admin row(s) for clubId=$hint had no Player row"
           ).when(adminPlayers.size != adminRows.size)
-          usernames = adminPlayers.collect { case p if !p.isTombstoned => p.username }
+          // Skip closed/banned admins: their /clubs can't contain `hint`. Their `club_admin` row persists from a prior
+          // refresh; `Player.status` was updated since via another code path (Membership/Recruitment/History).
+          usernames = adminPlayers.collect {
+            case p if !p.isTombstoned && p.status == PlayerStatusCategory.Active => p.username
+          }
           result <- ZIO.collectFirst(usernames)(adminLookup(client, _, hint, staleSlug))
           _ <- ZIO.foreachDiscard(result)(fresh =>
             ZIO.logInfo(s"  Tier C slug recovery hit via admin lookup: $staleSlug → $fresh")
