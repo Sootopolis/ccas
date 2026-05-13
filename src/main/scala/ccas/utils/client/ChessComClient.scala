@@ -462,13 +462,27 @@ final class ChessComClient(
       }
     }
 
-  private val emaAlpha = 0.1
-
+  /** Wall-clock EMA update. `alpha = 1 - exp(-dt / emaTauMs)` so an outlier sample's influence decays in real time:
+    * a slow response that holds the fiber for tens of seconds is naturally cancelled by the very next sample's large
+    * `dt`. `dt` is intentionally NOT capped — after a long idle the prior EMA is stale, and snapping to the new sample
+    * (alpha → 1) is the correct behaviour. The first sample (or first after `responseTimeEma` was reset on full
+    * recovery) seeds the EMA directly.
+    */
   private def updateResponseTimeEma(responseMs: Long): UIO[Unit] =
-    stateRef.update { state =>
-      val ema = state.responseTimeEma
-      val newEma = if (ema <= 0) responseMs.toDouble else emaAlpha * responseMs + (1 - emaAlpha) * ema
-      state.copy(responseTimeEma = newEma)
+    Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS).flatMap { now =>
+      stateRef.update { state =>
+        val newEma =
+          if (state.responseTimeEma <= 0 || state.lastEmaSampleAt == 0L) {
+            responseMs.toDouble
+          } else {
+            // Floor dt at 1 ms so two concurrent updates landing on the same wall-clock millisecond
+            // still contribute a (tiny) alpha rather than being silently dropped via alpha = 0.
+            val dt    = (now - state.lastEmaSampleAt).max(1L)
+            val alpha = 1.0 - math.exp(-dt.toDouble / config.emaTauMs.toDouble)
+            alpha * responseMs + (1 - alpha) * state.responseTimeEma
+          }
+        state.copy(responseTimeEma = newEma, lastEmaSampleAt = now)
+      }
     }
 
   /** Record a rate-limit outcome (429 vs non-429) and trigger throttle-down if failure rate exceeds threshold. Only
@@ -564,7 +578,8 @@ final class ChessComClient(
             outcomes = Vector.empty,
             throttledSince = if (fullyRecovered) None else state.throttledSince,
             tierEnteredAt = if (fullyRecovered) None else Some(now),
-            responseTimeEma = if (fullyRecovered) 0.0 else state.responseTimeEma
+            responseTimeEma = if (fullyRecovered) 0.0 else state.responseTimeEma,
+            lastEmaSampleAt = if (fullyRecovered) 0L else state.lastEmaSampleAt
           )
           (Some((state.currentMax, newMax, generation, throttleDuration)), newState)
         }
@@ -658,7 +673,8 @@ object ChessComClient {
     coolingDown: Boolean = false,
     throttledSince: Option[Long] = None,
     tierEnteredAt: Option[Long] = None,
-    responseTimeEma: Double = 0.0
+    responseTimeEma: Double = 0.0,
+    lastEmaSampleAt: Long = 0L
   )
 
   /** @param recoveryTiers
@@ -692,6 +708,11 @@ object ChessComClient {
     * @param minTierObservation
     *   Minimum wall-clock time that must elapse at a recovery tier before the tier is evaluated for promotion. Prevents
     *   premature step-ups when high concurrency fills the outcome window quickly.
+    * @param emaTauMs
+    *   Time constant in milliseconds for the response-time EMA's wall-clock exponential decay. Each new sample shifts
+    *   the EMA by `1 - exp(-dt / emaTauMs)`, where `dt` is the elapsed time since the previous sample. A single slow
+    *   outlier therefore decays out in real time rather than over a fixed number of subsequent samples — important
+    *   for small-N sequential workloads where one slow response would otherwise dominate the run.
     */
   private[ccas] case class ThrottleConfig(
     recoveryTiers: Vector[Int],
@@ -707,7 +728,8 @@ object ChessComClient {
     failureThreshold: Double,
     minSampleSize: Int,
     minRequestDelayMs: Long,
-    minTierObservation: Duration
+    minTierObservation: Duration,
+    emaTauMs: Long
   ) {
     require(
       recoveryTiers.nonEmpty && recoveryTiers.forall(_ >= 1) && recoveryTiers == recoveryTiers.sorted.distinct,
@@ -736,6 +758,7 @@ object ChessComClient {
     )
     require(minRequestDelayMs >= 0, s"minRequestDelayMs must be >= 0, got: $minRequestDelayMs")
     require(!minTierObservation.isNegative, s"minTierObservation must be non-negative, got: $minTierObservation")
+    require(emaTauMs > 0, s"emaTauMs must be positive, got: $emaTauMs")
 
     val maxPermits: Long = recoveryTiers.last.toLong
 
@@ -763,6 +786,7 @@ object ChessComClient {
     minSampleSize: Int,
     minRequestDelayMs: Long,
     minTierObservationSeconds: Long,
+    emaTauMs: Long,
     retryBaseSeconds: Long,
     cfRetryDelaySeconds: Long,
     connectionRetryBaseSeconds: Long,
@@ -790,7 +814,8 @@ object ChessComClient {
         failureThreshold = c.failureThreshold,
         minSampleSize = c.minSampleSize,
         minRequestDelayMs = c.minRequestDelayMs,
-        minTierObservation = c.minTierObservationSeconds.seconds
+        minTierObservation = c.minTierObservationSeconds.seconds,
+        emaTauMs = c.emaTauMs
       )
 
       def statsFlushInterval: Duration = c.statsFlushIntervalSeconds.seconds
