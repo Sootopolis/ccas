@@ -10,26 +10,39 @@ import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId}
 import ccas.server.ServerTables
 import ccas.server.jobs.{JobKind, JobRun, JobRunner}
 import ccas.utils.client.ChessComClient
-import ccas.utils.sql.FreshSchemaLayer
-import ccas.utils.sql.PostgresClient
+import ccas.utils.sql.{FreshSchemaLayer, PostgresClient, TestDbCleanup}
 import ccas.utils.ProgressDisplay
 
 object TestJobScheduler extends ZIOSpecDefault {
 
-  override def spec: Spec[Any, Throwable] = suite("TestJobScheduler")(
-    testPollFiberStopsOnScopeClose,
-    testDueScheduleSubmitted,
-    testNotYetDueScheduleSkipped,
-    testDisabledScheduleSkipped,
-    testErrorDoesNotCrashScheduler,
-    testErrorInOneScheduleDoesNotBlockOthers
+  // Shared schema (`provideShared`) means every test's scheduler instance sees every other test's
+  // `job_schedule` rows. `@@ sequential` keeps schedulers from poaching each other's rows mid-poll;
+  // `@@ before(clearJobSchedules)` keeps the leftover-rows count from defeating per-test assertions
+  // (notably `testErrorDoesNotCrashScheduler`, which only proves "scheduler survived the error" if
+  // `callCount` advances across two separate poll iterations — leftover always-due rows would let
+  // a single iteration satisfy the assertion). Production behaviour is unaffected; this is purely
+  // test fixture isolation. See memory `project_flaky_job_scheduler_test.md`.
+  override def spec: Spec[Any, Throwable] = (
+    suite("TestJobScheduler")(
+      testPollFiberStopsOnScopeClose,
+      testDueScheduleSubmitted,
+      testNotYetDueScheduleSkipped,
+      testDisabledScheduleSkipped,
+      testErrorDoesNotCrashScheduler,
+      testErrorInOneScheduleDoesNotBlockOthers
+    )
+      @@ TestAspect.before(TestDbCleanup.clearJobSchedules)
+      @@ TestAspect.sequential
+      @@ TestAspect.timeout(30.seconds)
   ).provideShared(
     FreshSchemaLayer("test_scheduler", onInit = ServerTables.ensureTables)
-  ) @@ TestAspect.timeout(30.seconds)
+  )
 
   // Virtual poll interval driven by TestClock; no wall-clock dependency. Each test advances by
-  // `advanceWindow` in one go, relying on `Schedule.fixed`'s catch-up behavior to fire all overdue
-  // iterations back-to-back — so `advanceWindow` must span several `pollInterval`s.
+  // `advanceWindow` in one go, relying on `Schedule.fixed`'s catch-up behavior to fire overdue
+  // iterations back-to-back. A single `pollInterval` advance would suffice now that tests run
+  // sequentially against a clean `job_schedule`; the 5× window stays as defensive headroom (it lets
+  // `testErrorDoesNotCrashScheduler` watch `callCount` cross 2 across distinct iterations).
   private val pollInterval: Duration  = 1.minute
   private val advanceWindow: Duration = pollInterval.multipliedBy(5)
 
@@ -136,7 +149,8 @@ object TestJobScheduler extends ZIOSpecDefault {
         JobSchedule(0L, JobKind.Membership, Some(notDueClubId), None, intervalHours = 24, enabled = true, lastRunAt = Some(now))
       )
       // Always-due control: its submission proves a full pollLoop iteration ran (and thus the
-      // not-due schedule was evaluated and rejected) — replaces the original `ZIO.sleep(200.millis)` race.
+      // not-due schedule was evaluated and rejected). Originally introduced to replace a
+      // `ZIO.sleep(200.millis)` race; now still useful as a sync signal under sequential execution.
       _ <- JobSchedule.insert(
         JobSchedule(0L, JobKind.Membership, Some(ctrlClubId), None, intervalHours = 0, enabled = true, lastRunAt = None)
       )
