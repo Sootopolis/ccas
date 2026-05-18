@@ -84,33 +84,55 @@ object TestRefAppSupport {
   val emptyPlayerTournamentsJson = """{"finished": [], "in_progress": [], "registered": []}"""
   val emptyClubMatchesJson       = """{"finished": [], "in_progress": [], "registered": []}"""
 
+  /** Canonical Chess.com 404 body: matches `HttpStatusException.classify`'s `not found."` substring,
+    * stamps as `ReportedNotFound` at the throw site. Wire shape mirrors prod, e.g.
+    * `reportedNotFoundBody("Player", "alice")` → `{"code": 0, "message": "Player \"alice\" not found."}`.
+    */
+  def reportedNotFoundBody(kind: String, id: String): String =
+    s"""{"code": 0, "message": "$kind \\"$id\\" not found."}"""
+
+  /** Transient Chess.com 404 body (code 3024 / "internal error"): does NOT trigger `ReportedNotFound`;
+    * stays as base `HttpStatusException`, so callers handling it route the failure to `RefSkipReason.ApiError`
+    * rather than `NotFound` (issue #3).
+    */
+  val transientInternalErrorBody: String =
+    """{"code": 3024, "message": "An internal error has occurred. Please contact admin."}"""
+
   // --- Fake client ---
 
   def fakeChessComClient(
     responses: Map[String, String],
-    failures: Set[String] = Set.empty
+    failures: Set[String] = Set.empty,
+    notFound: Map[String, String] = Map.empty
   ): RIO[PostgresClient, ChessComClient] = {
+    def maybeNotFound(key: String): Option[Response] =
+      notFound.get(key).map(body => Response.json(body).copy(status = Status.NotFound))
     val routes: Routes[Any, Response] = Routes(
       Method.GET / "pub" / "player" / string("username") / "tournaments" -> handler { (username: String, _: Request) =>
         if (failures.contains(username)) Response(status = Status.InternalServerError)
-        else
+        else maybeNotFound(s"player/$username/tournaments").getOrElse(
           responses.get(s"player/$username/tournaments").fold(Response.json(emptyPlayerTournamentsJson))(
             Response.json(_)
           )
+        )
       },
       Method.GET / "pub" / "player" / string("username") / "matches" -> handler { (username: String, _: Request) =>
         if (failures.contains(username)) Response(status = Status.InternalServerError)
-        else responses.get(s"player/$username/matches").fold(Response.json(emptyPlayerMatchesJson))(Response.json(_))
+        else maybeNotFound(s"player/$username/matches").getOrElse(
+          responses.get(s"player/$username/matches").fold(Response.json(emptyPlayerMatchesJson))(Response.json(_))
+        )
       },
       Method.GET / "pub" / "player" / string("username") -> handler { (username: String, _: Request) =>
         if (failures.contains(username)) Response(status = Status.InternalServerError)
-        else {
+        else maybeNotFound(s"player/$username").getOrElse {
           val pid = playerIdByUsername.getOrElse(username.toLowerCase, 0L)
           Response.json(apiPlayerJson(username, pid))
         }
       },
       Method.GET / "pub" / "club" / string("club") / "matches" -> handler { (clubName: String, _: Request) =>
-        responses.get(s"club/$clubName/matches").fold(Response.json(emptyClubMatchesJson))(Response.json(_))
+        maybeNotFound(s"club/$clubName/matches").getOrElse(
+          responses.get(s"club/$clubName/matches").fold(Response.json(emptyClubMatchesJson))(Response.json(_))
+        )
       },
       Method.GET / "pub" / "match" / long("matchId") -> handler { (matchId: Long, _: Request) =>
         responses.get(s"match/$matchId").fold(Response.json("""{"code": 0, "message": "Resource \"\" not found."}""").copy(status = Status.NotFound))(Response.json(_))

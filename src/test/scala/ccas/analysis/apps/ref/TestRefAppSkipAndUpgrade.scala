@@ -35,7 +35,11 @@ object TestRefAppSkipAndUpgrade extends ZIOSpecDefault {
     testWritesApiErrorSkipForPlayerWithApiFailure,
     testWritesResolutionFailedSkipWhenPlayerHasMatchesButNotInRoster,
     testSkippedPlayerIsExcludedFromSubsequentRun,
-    testExpiredSkipAllowsRetryAndSkipRowDeletedOnResolution
+    testExpiredSkipAllowsRetryAndSkipRowDeletedOnResolution,
+    testWritesNotFoundSkipForPlayerWithCanonical404,
+    testWritesApiErrorSkipForPlayerWithTransient404,
+    testWritesNotFoundSkipForClubWithCanonical404,
+    testWritesApiErrorSkipForClubWithTransient404
   )
 
   private def testWritesNoDataSkipForPlayerWithNoMatchesAndNoTournaments = test("writes NoData skip for player with no matches and no tournaments") {
@@ -176,6 +180,86 @@ object TestRefAppSkipAndUpgrade extends ZIOSpecDefault {
       ref.isEmpty, // alice was not resolved -- she was skipped
       skipAfterRun2.isDefined,
       skipAfterRun2.get.lastAttempted == skipAfterRun1.get.lastAttempted // not re-attempted
+    )
+  }
+
+  private def testWritesNotFoundSkipForPlayerWithCanonical404 = test("writes NotFound skip for player with canonical 404 body (#3)") {
+    for {
+      _ <- seedDb
+      client <- fakeChessComClient(
+        responses = Map(
+          s"player/bob/matches"      -> emptyPlayerMatchesJson,
+          s"player/charlie/matches"  -> emptyPlayerMatchesJson,
+          s"club/our-club/matches"   -> emptyClubMatchesJson,
+          s"club/other-club/matches" -> emptyClubMatchesJson
+        ),
+        notFound = Map(s"player/alice/matches" -> reportedNotFoundBody("Player", "alice"))
+      )
+      _    <- runPopulate(client, forceSkipped = false, upgradeRefs = false)
+      skip <- PlayerRefSkip.selectId(pid0)
+    } yield assertTrue(
+      skip.isDefined,
+      skip.get.reason == RefSkipReason.NotFound
+    )
+  }
+
+  private def testWritesApiErrorSkipForPlayerWithTransient404 = test("writes ApiError skip for player with transient 404 body (#3)") {
+    for {
+      _ <- seedDb
+      client <- fakeChessComClient(
+        responses = Map(
+          s"player/bob/matches"      -> emptyPlayerMatchesJson,
+          s"player/charlie/matches"  -> emptyPlayerMatchesJson,
+          s"club/our-club/matches"   -> emptyClubMatchesJson,
+          s"club/other-club/matches" -> emptyClubMatchesJson
+        ),
+        notFound = Map(s"player/alice/matches" -> transientInternalErrorBody)
+      )
+      _    <- runPopulate(client, forceSkipped = false, upgradeRefs = false)
+      skip <- PlayerRefSkip.selectId(pid0)
+    } yield assertTrue(
+      skip.isDefined,
+      skip.get.reason == RefSkipReason.ApiError
+    )
+  }
+
+  private def testWritesNotFoundSkipForClubWithCanonical404 = test("writes NotFound skip for club with canonical 404 body (#3)") {
+    for {
+      _ <- seedDb
+      client <- fakeChessComClient(
+        responses = Map(
+          s"player/alice/matches"    -> emptyPlayerMatchesJson,
+          s"player/bob/matches"      -> emptyPlayerMatchesJson,
+          s"player/charlie/matches"  -> emptyPlayerMatchesJson,
+          s"club/other-club/matches" -> emptyClubMatchesJson
+        ),
+        notFound = Map(s"club/our-club/matches" -> reportedNotFoundBody("Club", "our-club"))
+      )
+      _    <- runPopulate(client, forceSkipped = false, upgradeRefs = false)
+      skip <- ClubRefSkip.selectId(clubId0)
+    } yield assertTrue(
+      skip.isDefined,
+      skip.get.reason == RefSkipReason.NotFound
+    )
+  }
+
+  private def testWritesApiErrorSkipForClubWithTransient404 = test("writes ApiError skip for club with transient 404 body (#3)") {
+    for {
+      _ <- seedDb
+      client <- fakeChessComClient(
+        responses = Map(
+          s"player/alice/matches"    -> emptyPlayerMatchesJson,
+          s"player/bob/matches"      -> emptyPlayerMatchesJson,
+          s"player/charlie/matches"  -> emptyPlayerMatchesJson,
+          s"club/other-club/matches" -> emptyClubMatchesJson
+        ),
+        notFound = Map(s"club/our-club/matches" -> transientInternalErrorBody)
+      )
+      _    <- runPopulate(client, forceSkipped = false, upgradeRefs = false)
+      skip <- ClubRefSkip.selectId(clubId0)
+    } yield assertTrue(
+      skip.isDefined,
+      skip.get.reason == RefSkipReason.ApiError
     )
   }
 
