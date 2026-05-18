@@ -1,6 +1,9 @@
 package ccas.server.jobs
 
+import java.nio.file.{Files, Path, Paths}
 import java.sql.SQLException
+
+import com.typesafe.config.ConfigFactory
 
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.withTransaction
@@ -10,7 +13,7 @@ import ccas.analysis.tables.RunTrigger
 import ccas.api.misc.subtypes.{ClubId, JobRunId}
 import ccas.utils.client.ChessComClient
 import ccas.utils.errors.{ConflictException, safeMessage}
-import ccas.utils.ProgressDisplay
+import ccas.utils.{JobLogSink, ProgressDisplay}
 
 /** Asynchronous job executor that runs analysis tasks as forked fibers.
   *
@@ -48,8 +51,13 @@ object JobRunner {
         client   <- ZIO.service[ChessComClient]
         pgClient <- ZIO.service[PostgresClient]
         fibers   <- Ref.make(Set.empty[Fiber.Runtime[Nothing, Unit]])
+        logDir   <- ZIO.attempt {
+          val dir = Paths.get(ConfigFactory.load().getString("job-logs.directory"))
+          Files.createDirectories(dir)
+          dir
+        }.orDie
         _        <- JobRun.markOrphansAsFailed.provideEnvironment(zio.ZEnvironment(pgClient))
-        runner = new JobRunnerLive(display, client, pgClient, fibers)
+        runner = new JobRunnerLive(display, client, pgClient, fibers, logDir)
         _ <- ZIO.addFinalizer(runner.awaitAll)
       } yield runner
     }
@@ -58,7 +66,8 @@ object JobRunner {
     display: ProgressDisplay,
     client: ChessComClient,
     pgClient: PostgresClient,
-    fibers: Ref[Set[Fiber.Runtime[Nothing, Unit]]]
+    fibers: Ref[Set[Fiber.Runtime[Nothing, Unit]]],
+    logDir: Path
   ) extends JobRunner {
 
     private val env = zio.ZEnvironment(display, client, pgClient)
@@ -84,7 +93,11 @@ object JobRunner {
             _   <- JobRun.insert(jobRun)
           } yield id
         }
-        fiber <- runJob(id, effect(Some(id))).fork
+        sink  <- FileSink.make(logDir, JobRunId.unwrap(id))
+        // `currentSink.locally` wraps the entire `runJob` (not just the user effect) so the success/failure
+        // handlers' own `ZIO.logError` calls also land in the per-job file. FiberRef values are inherited by
+        // forked children, so any parallel work the job spawns sees the same sink.
+        fiber <- JobLogSink.currentSink.locally(sink)(runJob(id, effect(Some(id)))).fork
         _     <- fibers.update(_ + fiber)
       } yield id).catchSome {
         // Phantom-row race: two transactions both saw no running job, the unique partial index

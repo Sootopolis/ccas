@@ -1,7 +1,13 @@
 package ccas.server.jobs
 
+import java.nio.file.{Files, Paths}
+
+import scala.jdk.CollectionConverters.*
+
+import com.typesafe.config.ConfigFactory
+
 import ccas.utils.sql.PostgresClient
-import zio.{durationInt, ZIO, ZLayer}
+import zio.{durationInt, Scope, ZIO, ZLayer}
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.analysis.tables.{Club, RunTrigger}
@@ -22,12 +28,15 @@ object TestJobRunner extends ZIOSpecDefault {
     testSubmitAllowsDifferentClub,
     testSubmitAllowsDifferentKind,
     testStatusUnknown,
-    testRecentJobsOrdered
+    testRecentJobsOrdered,
+    testSubmitWritesJobLog
   ).provideShared(
     FreshSchemaLayer("test_job_runner", onInit = ServerTables.ensureTables),
     TestChessComClientSupport.dummyLayer,
     JobRunner.live,
-    ZLayer.succeed(ProgressDisplay.make(enabled = false))
+    // `Scope.default` is the global, never-closing scope. Fine for a single suite — the ZLogger swap and
+    // `finishAllSync` finalizer would only matter if multiple suites shared this layer. Revisit if that changes.
+    Scope.default >>> ProgressDisplay.live(showProgress = false)
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock @@ TestAspect.timeout(30.seconds)
 
   private object Times {
@@ -136,6 +145,22 @@ object TestJobRunner extends ZIOSpecDefault {
       runner <- ZIO.service[JobRunner]
       result <- runner.status(JobRunId.wrap("nonexistent"))
     } yield assertTrue(result.isEmpty)
+  }
+
+  private def testSubmitWritesJobLog = test("submit routes job log lines into the per-job file") {
+    val logDir = Paths.get(ConfigFactory.load().getString("job-logs.directory"))
+    for {
+      _      <- deleteAllJobRuns
+      runner <- ZIO.service[JobRunner]
+      id     <- runner.submit(JobKind.MatchRef, None, None, RunTrigger.Cli, _ => ZIO.logInfo("hello from job"))
+      _      <- awaitStatus(runner, id)
+      path   =  logDir.resolve(s"${JobRunId.unwrap(id)}.log")
+      lines  <- ZIO.attempt(Files.readAllLines(path).asScala.toList)
+    } yield assertTrue(
+      lines.exists(_.contains("hello from job")),
+      // ANSI stripped — file should be readable. The formatter emits at least one ESC byte; stripped output has none.
+      lines.forall(!_.contains(0x1B.toChar))
+    )
   }
 
   private def testRecentJobsOrdered = test("recentJobs returns ordered list") {
