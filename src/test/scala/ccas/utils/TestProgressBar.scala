@@ -194,7 +194,7 @@ object TestProgressBar extends ZIOSpecDefault {
         for {
           bar <- display.addBarScoped
           _   <- bar.print(1, 10, "Progress")
-          _   <- ZIO.succeed(display.logAboveBarsSync("[INFO 00:00:00] Hello from logger"))
+          _   <- ZIO.succeed(display.logAboveBarsSync(JobLogSink.StdoutSink, "[INFO 00:00:00] Hello from logger"))
           _   <- bar.print(1, 10, "Progress")
         } yield ()
       }

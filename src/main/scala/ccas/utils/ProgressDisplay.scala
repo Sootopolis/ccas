@@ -4,7 +4,7 @@ import java.time.format.DateTimeFormatter
 import java.time.{Instant, ZoneId}
 import java.util.concurrent.atomic.AtomicInteger
 
-import zio.{Cause, FiberRef, LogLevel, LogSpan, Ref, Runtime, Scope, UIO, URIO, URLayer, ZIO, ZLayer, ZLogger}
+import zio.{Cause, FiberId, FiberRef, FiberRefs, LogLevel, LogSpan, Ref, Runtime, Scope, Trace, UIO, URIO, URLayer, ZIO, ZLayer, ZLogger}
 
 /** Manages progress bars rendered as a single line on stdout, overwritten in-place via `\r`.
   *
@@ -13,6 +13,12 @@ import zio.{Cause, FiberRef, LogLevel, LogSpan, Ref, Runtime, Scope, UIO, URIO, 
   * stdout writes through the same mutex. JVM monitors are reentrant, so a logger callback fired from a thread that
   * already holds the lock proceeds without deadlock. Output goes directly to `System.out`, not through `zio.Console`,
   * because `ZLogger.apply` is synchronous and cannot run a ZIO effect.
+  *
+  * `logAboveBarsSync` invokes the active `JobLogSink` inside the lock — required to keep the `clear → print → redraw`
+  * sequence atomic across fibers. The default `StdoutSink` is a single `println` so the critical section stays short.
+  * `FileSink` adds a per-line `Files.write` under the same lock; expected log volume is low (per-app log lines, not
+  * per-request), so the disk cost is tolerable. If profiling shows the file write stalling bar redraws, move it to a
+  * background fiber fed by a per-job queue (see #42 follow-up discussion in the plan file).
   *
   * When `enabled` is `false` the bar list is still tracked (so `addBarScoped` finalisers behave consistently across
   * modes) but every stdout side-effect is suppressed. `logAboveBarsSync` falls back to a plain `System.out.println` —
@@ -81,11 +87,16 @@ final class ProgressDisplay private[utils] (private val enabled: Boolean) {
   // Logging — called synchronously by the custom ZLogger
   // ---------------------------------------------------------------------------
 
-  /** Print a log message above the progress bars without disrupting them. */
-  private[utils] def logAboveBarsSync(msg: String): Unit =
+  /** Print a log message above the progress bars without disrupting them.
+    *
+    * The line is routed through `sink.writeSync` (which the active `JobLogSink` may tee to a per-job file). The
+    * `clear`/`draw` calls remain on `System.out` directly — bar redraws are terminal-only and never written to any
+    * sink. The whole sequence runs under `lock` so the bar list stays consistent with the printed state.
+    */
+  private[utils] def logAboveBarsSync(sink: JobLogSink, msg: String): Unit =
     lock.synchronized {
       clearLineSync()
-      System.out.println(msg)
+      sink.writeSync(msg)
       drawAllSync()
     }
 
@@ -98,14 +109,26 @@ final class ProgressDisplay private[utils] (private val enabled: Boolean) {
   // advance with `TestClock.adjust`. Acceptable for an interactive CLI formatter.
   // ---------------------------------------------------------------------------
 
-  private[ProgressDisplay] val asZLogger: ZLogger[String, Any] =
-    (_, _, level, message, cause, context, spans, annotations) => {
+  private[ProgressDisplay] val asZLogger: ZLogger[String, Any] = new ZLogger[String, Any] {
+    override def apply(
+      trace: Trace,
+      fiberId: FiberId,
+      level: LogLevel,
+      message: () => String,
+      cause: Cause[Any],
+      context: FiberRefs,
+      spans: List[LogSpan],
+      annotations: Map[String, String]
+    ): Any = {
       val threshold = context.getOrDefault(FiberRef.currentLogLevel)
       if (level >= threshold) {
-        try logAboveBarsSync(ProgressDisplay.format(level, message(), Instant.now(), cause, spans, annotations))
-        catch { case t: Throwable => t.printStackTrace(System.err) }
+        try {
+          val sink = context.getOrDefault(JobLogSink.currentSink)
+          logAboveBarsSync(sink, ProgressDisplay.format(level, message(), Instant.now(), cause, spans, annotations))
+        } catch { case t: Throwable => t.printStackTrace(System.err) }
       }
     }
+  }
 
   // ---------------------------------------------------------------------------
   // Internal rendering — single-line, \r-based (no cursor-up needed). The `enabled` check lives in these
