@@ -27,7 +27,7 @@ import ccas.api.misc.subtypes.{ClubMatchId, PlayerId, TournamentSlug, Username}
 import ccas.api.player.{ApiPlayer, ApiPlayerMatches, ApiPlayerTournaments}
 import ccas.api.player.ApiPlayerMatches.ApiPlayerMatch
 import ccas.api.tournament.ApiTournamentRound
-import ccas.utils.client.{ChessComClient, HttpStatusException}
+import ccas.utils.client.{ChessComClient, ReportedNotFound}
 import ccas.utils.errors.safeMessage
 import ccas.utils.ProgressDisplay
 
@@ -65,14 +65,15 @@ private[ref] object RefResolution {
           }
       }
     } yield resolved).catchAll {
-      case e: HttpStatusException if e.statusCode == 404 =>
-        // Before recording a permanent NotFound skip, try the rename resolver. Per Sootopolis/ccas#3 every
-        // /pub/player/* 404 body is a genuine "not found" — which is exactly the rename-or-deletion signal. The
-        // resolver returns Some only on rename (with the canonical fresh handle reconciled into the Player table);
-        // on deletion or unresolvable cases it returns None and we fall back to today's skip semantics. Recursion
-        // terminates because `resolveAndReconcile` updates Player.username before the recursive call: a second 404
-        // on the same playerId hits Tier A's deletion case (hint matches current holder → None) and falls through
-        // to skipPlayer.
+      case e: ReportedNotFound =>
+        // Canonical `"X not found."` 404 body — genuine rename-or-deletion. Try the rename resolver before recording
+        // a permanent NotFound skip. The resolver returns Some only on rename (with the canonical fresh handle
+        // reconciled into the Player table); on deletion or unresolvable cases it returns None and we fall back to
+        // the NotFound skip. Recursion terminates because `resolveAndReconcile` updates Player.username before the
+        // recursive call: a second 404 on the same playerId hits Tier A's deletion case (hint matches current
+        // holder → None) and falls through to skipPlayer. Transient 404s (Chess.com backend hiccup, `error_type`
+        // stays `HttpStatusException` not `ReportedNotFound`) fall through to the generic arm below and skip via
+        // `ApiError`, picked up next run by the short `ApiError` retry window — see issue #3.
         for {
           recovered <- UsernameRenameResolver.resolveAndReconcile(ctx.client, player.username, Some(player.playerId))
           result <- recovered match {
@@ -252,10 +253,11 @@ private[ref] object RefResolution {
           }
       }
     } yield resolved).catchAll {
-      case e: HttpStatusException if e.statusCode == 404 =>
+      case e: ReportedNotFound =>
         // Symmetric to `resolvePlayer` above. Recursion terminates because `resolveAndPersist` updates Club.slug
         // before the recursive call: a second 404 on the same clubId hits Tier A's `current.slug == staleSlug`
-        // case (returns None) and falls through to skipClub.
+        // case (returns None) and falls through to skipClub. Transient 404s fall through to the generic arm below
+        // and skip via `ApiError`.
         for {
           recovered <- ClubSlugRenameResolver.resolveAndPersist(ctx.client, club.slug, Some(club.clubId))
           result <- recovered match {
