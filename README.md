@@ -86,7 +86,7 @@ All environment variables are listed in [`.env.example`](.env.example). Required
 | Variable | Description |
 |----------|-------------|
 | `CCAS_CONTACT_EMAIL` | Used in `User-Agent` header for Chess.com API requests |
-| `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `DB_PORT`, `DB_HOST`, `DB_SCHEMA` | PostgreSQL connection (or set `DATABASE_URL` instead) |
+| `DATABASE_URL` *or* `DB_USER` + `DB_PASSWORD` + `DB_NAME` + `DB_PORT` + `DB_HOST` + `DB_SCHEMA` | PostgreSQL connection. `DATABASE_URL` (JDBC form, single-quoted to escape `&`) takes priority; the `DB_*` fields are only consulted when it's absent |
 
 Optional overrides with defaults:
 
@@ -94,9 +94,11 @@ Optional overrides with defaults:
 |----------|---------|-------------|
 | `SERVER_PORT` | 8080 | HTTP server port |
 | `SCHEDULER_POLL_MINUTES` | 5 | How often the scheduler checks for due jobs |
+| `DB_POOL_MAX` / `DB_POOL_MIN_IDLE` | 20 / 2 | HikariCP pool sizing (set `MIN_IDLE=0` for Neon scale-to-zero) |
+| `DB_POOL_CONNECTION_TIMEOUT` / `DB_POOL_IDLE_TIMEOUT` / `DB_POOL_MAX_LIFETIME` / `DB_POOL_KEEPALIVE_TIME` | 30 000 / 600 000 / 1 800 000 / 120 000 ms | HikariCP timeouts |
 | `CHESS_COM_API_PERMITS` | 16 | Max parallel Chess.com API requests |
 | `CHESS_COM_API_COOLDOWN_SECONDS` | 30 | Backoff cooldown after rate limiting |
-| `CHESS_COM_API_CACHE_RETENTION_DAYS` | 30 | How long cached Chess.com responses are kept before startup pruning |
+| `CHESS_COM_API_CACHE_RETENTION_DAYS` | 7 | How long cached Chess.com responses are kept before startup pruning |
 
 See [`application.conf`](src/main/resources/application.conf) for the full set of tunable parameters.
 
