@@ -29,7 +29,7 @@ object JobScheduler {
       val pollMinutes =
         if config.hasPath("scheduler.pollIntervalMinutes")
         then config.getInt("scheduler.pollIntervalMinutes")
-        else 5 // default poll interval in minutes
+        else 15 // default poll interval in minutes
       val pollInterval = pollMinutes.toLong.minutes
       new JobSchedulerLive(runner, pgClient, pollInterval)
     }
