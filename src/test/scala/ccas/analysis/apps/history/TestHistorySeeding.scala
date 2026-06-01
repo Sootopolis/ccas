@@ -374,7 +374,8 @@ object TestHistorySeeding extends ZIOSpecDefault {
           allMembers = members,
           queriedIds = Set.empty,
           playerById = playerById,
-          settledMatchIds = Set.empty,
+          excludeMatchIds = Set.empty,
+          includeFinished = false,
           shared = None,
           unchangedPlayerCounter = unchangedRef
         )

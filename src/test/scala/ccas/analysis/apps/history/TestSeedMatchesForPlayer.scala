@@ -24,6 +24,12 @@ object TestSeedMatchesForPlayer extends ZIOSpecDefault {
   private val username = Username("alice")
   private val player   = Player(playerId, t0, username, PlayerStatusCategory.Active, None, t0)
 
+  // Distinct player/username for the active-only guard test so its listing URL doesn't collide with `alice`'s
+  // cached response in the shared schema's api_response_cache.
+  private val playerId2 = PlayerId(7002)
+  private val username2 = Username("carol")
+  private val player2   = Player(playerId2, t0, username2, PlayerStatusCategory.Active, None, t0)
+
   private def playerMatchesJson(matchIds: List[Long]): String = {
     val entries = matchIds.map { id =>
       s"""{"name":"M","url":"https://www.chess.com/club/matches/$id","@id":"https://api.chess.com/pub/match/$id","club":"https://api.chess.com/pub/club/${clubSlug.value}","results":null,"board":null}"""
@@ -52,10 +58,38 @@ object TestSeedMatchesForPlayer extends ZIOSpecDefault {
   }
 
   override def spec: Spec[Any, Throwable] = suite("seedMatchesForPlayer")(
-    testUnchangedResponseSkipsInsertsButStillStamps
+    testUnchangedResponseSkipsInsertsButStillStamps,
+    testActiveOnlyExcludesKnownSeedsNew
   ).provideShared(
     FreshSchemaLayer("test_seed_matches_player", Tables.ensureTables)
   ) @@ TestAspect.sequential
+
+  /** The active-only fast-path's correctness crux: passing the club's known-match set as `excludeMatchIds` skips
+    * re-seeding (hence re-fetching) matches we already have — chiefly recently-Finished ones — while a genuinely-new
+    * match in the same listing is still ingested. Both halves are exercised in a single call against a listing that
+    * mixes a known and a new finished match.
+    */
+  private def testActiveOnlyExcludesKnownSeedsNew =
+    test("excludeMatchIds skips already-known matches but still seeds new ones") {
+      val json    = playerMatchesJson(List(8001, 8002)) // both finished; 8001 already known, 8002 new
+      val knownId = ClubMatchId(8001)
+      for {
+        _       <- Club.upsert(club)
+        _       <- Player.insertIfNew(player2)
+        counter <- Ref.make(0)
+        skipCtr <- Ref.make(0)
+        client  <- fakeChessComClientCounting(json, counter)
+        seeded <- HistorySeeding.seedMatchesForPlayer(
+          client, clubId, clubSlug, playerId2, username2, Set(knownId), skipCtr
+        )
+        pending <- HistoryPendingMatch.selectClub(clubId)
+        _       <- ZIO.foreachDiscard(pending)(p => HistoryPendingMatch.delete(clubId, p.matchId, p.isLive))
+        _       <- HistoryMemberQuery.deleteClub(clubId)
+      } yield assertTrue(
+        seeded == 1,                                       // only the new finished match seeded
+        pending.map(_.matchId) == List(ClubMatchId(8002))  // known 8001 excluded; new 8002 ingested
+      )
+    }
 
   /** The `isUnchanged` branch must **skip** the per-player insert pipeline but **still** stamp
     * `HistoryMemberQuery` — otherwise the wave loop would re-query the player every iteration. This test wipes

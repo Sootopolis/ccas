@@ -211,7 +211,8 @@ private[history] object HistorySeeding {
     allMembers: List[ClubMember],
     queriedIds: Set[PlayerId],
     playerById: Map[PlayerId, Player],
-    settledMatchIds: Set[ClubMatchId],
+    excludeMatchIds: Set[ClubMatchId],
+    includeFinished: Boolean,
     shared: Option[SharedContext],
     unchangedPlayerCounter: Ref[Int]
   ): RIO[ProgressDisplay & PostgresClient, MemberSeedResult] =
@@ -242,7 +243,8 @@ private[history] object HistorySeeding {
           bar <- ProgressDisplay.progressBar
           _ <- ZIO.foreachParDiscard(toQuery) { case (playerId, username) =>
             seedMatchesForPlayerAllClubs(
-              client, clubId, clubSlug, playerId, username, settledMatchIds, shared, unchangedPlayerCounter
+              client, clubId, clubSlug, playerId, username, excludeMatchIds, includeFinished, shared,
+              unchangedPlayerCounter
             )
               .foldZIO(
                 error =>
@@ -283,12 +285,13 @@ private[history] object HistorySeeding {
     clubSlug: ClubSlug,
     playerId: PlayerId,
     username: Username,
-    settledMatchIds: Set[ClubMatchId],
+    excludeMatchIds: Set[ClubMatchId],
+    includeFinished: Boolean,
     shared: Option[SharedContext],
     unchangedCounter: Ref[Int]
   ): RIO[PostgresClient, Int] =
     shared match {
-      case None => seedMatchesForPlayer(client, clubId, clubSlug, playerId, username, settledMatchIds, unchangedCounter)
+      case None => seedMatchesForPlayer(client, clubId, clubSlug, playerId, username, excludeMatchIds, unchangedCounter)
       case Some(sc) =>
         def go(uname: Username): RIO[PostgresClient, Int] =
           for {
@@ -296,10 +299,32 @@ private[history] object HistorySeeding {
             otherClubs <- sc.resolvedClubs.get.map(_.removed(clubSlug).toList)
             primaryCount <- result.foldZIO(_ =>
               unchangedCounter.update(_ + 1) *> stampQueriedAllClubs(clubId, otherClubs, playerId).as(0)
-            )(seedAndStampAllClubs(clubId, clubSlug, settledMatchIds, otherClubs, playerId, _))
+            )(seedAndStampAllClubs(clubId, clubSlug, excludeMatchIds, includeFinished, sc, otherClubs, playerId, _))
             _ <- sc.queriedPlayers.update(_ + playerId)
           } yield primaryCount
         go(username).withPlayerRenameRecovery(client, username, Some(playerId))(go)
+    }
+
+  /** Returns the match ids a club should exclude when seeding from a shared player listing. In active-only mode this is
+    * the club's full known-match set (best-effort memoised in `SharedContext`; a benign race between concurrent player
+    * fibers may recompute the same idempotent set) so already-stored matches — crucially recently-Finished ones —
+    * aren't re-queued for the other clubs in the fan-out. In include-finished mode it is empty, preserving the legacy
+    * fan-out behaviour exactly.
+    */
+  private def fanoutExcludeIds(
+    clubId: ClubId,
+    includeFinished: Boolean,
+    sc: SharedContext
+  ): RIO[PostgresClient, Set[ClubMatchId]] =
+    if (includeFinished) { ZIO.succeed(Set.empty) }
+    else {
+      sc.knownMatchIdsByClub.get.map(_.get(clubId)).flatMap {
+        case Some(ids) => ZIO.succeed(ids)
+        case None =>
+          ClubMatch.selectMatchIdsForClub(clubId).flatMap { ids =>
+            sc.knownMatchIdsByClub.update(_.updated(clubId, ids)).as(ids)
+          }
+      }
     }
 
   private def stampQueriedAllClubs(
@@ -317,28 +342,35 @@ private[history] object HistorySeeding {
   private def seedAndStampAllClubs(
     primaryClubId: ClubId,
     primarySlug: ClubSlug,
-    settledMatchIds: Set[ClubMatchId],
+    primaryExcludeMatchIds: Set[ClubMatchId],
+    includeFinished: Boolean,
+    sc: SharedContext,
     otherClubs: List[(ClubSlug, ClubId)],
     playerId: PlayerId,
     playerMatches: ApiPlayerMatches
   ): RIO[PostgresClient, Int] = {
     val allMatches = playerMatches.finished ++ playerMatches.inProgress ++ playerMatches.registered
     for {
-      primary <- seedMatchesFromList(primaryClubId, primarySlug, allMatches, settledMatchIds)
+      primary <- seedMatchesFromList(primaryClubId, primarySlug, allMatches, primaryExcludeMatchIds)
       _       <- HistoryMemberQuery.upsert(HistoryMemberQuery(primaryClubId, playerId, Instant.now()))
       _ <- ZIO.foreachDiscard(otherClubs) { case (otherSlug, otherClubId) =>
-        seedMatchesFromList(otherClubId, otherSlug, allMatches, Set.empty) *>
-          HistoryMemberQuery.upsert(HistoryMemberQuery(otherClubId, playerId, Instant.now()))
+        fanoutExcludeIds(otherClubId, includeFinished, sc).flatMap { otherExclude =>
+          seedMatchesFromList(otherClubId, otherSlug, allMatches, otherExclude)
+        } *> HistoryMemberQuery.upsert(HistoryMemberQuery(otherClubId, playerId, Instant.now()))
       }
     } yield primary
   }
 
-  /** Filters a player's match list for a specific club and inserts matching entries as pending. */
+  /** Filters a player's match list for a specific club and inserts matching entries as pending. `excludeMatchIds` is the
+    * set of match ids to skip: in active-only mode the club's full known-match set (so already-stored matches — chiefly
+    * recently-Finished ones — aren't re-fetched, while genuinely-new matches of any status still seed), and in
+    * include-finished mode the settled (>90-day Finished) set only.
+    */
   private def seedMatchesFromList(
     clubId: ClubId,
     clubSlug: ClubSlug,
     allMatches: Chunk[ApiPlayerMatches.ApiPlayerMatch],
-    settledMatchIds: Set[ClubMatchId]
+    excludeMatchIds: Set[ClubMatchId]
   ): RIO[PostgresClient, Int] = {
     val dailyPending = allMatches.collect {
       case m if isClubDailyMatch(m, clubSlug) =>
@@ -348,7 +380,7 @@ private[history] object HistorySeeding {
       case m if isClubLiveMatch(m, clubSlug) =>
         HistoryPendingMatch(clubId, ClubMatchId.fromUrl(m.`@id`), isLive = true)
     }
-    val all = (dailyPending ++ livePending).filterNot(p => settledMatchIds.contains(p.matchId))
+    val all = (dailyPending ++ livePending).filterNot(p => excludeMatchIds.contains(p.matchId))
     insertPendingMatches(all).as(all.size)
   }
 
@@ -358,7 +390,7 @@ private[history] object HistorySeeding {
     clubSlug: ClubSlug,
     playerId: PlayerId,
     username: Username,
-    settledMatchIds: Set[ClubMatchId],
+    excludeMatchIds: Set[ClubMatchId],
     unchangedCounter: Ref[Int]
   ): RIO[PostgresClient, Int] = {
     // `def` not `val` so `Instant.now()` is captured when the stamp actually runs (post-fetch / post-seed),
@@ -367,7 +399,7 @@ private[history] object HistorySeeding {
     def fetch(uname: Username): RIO[PostgresClient, Int] =
       client.getCacheable[ApiPlayerMatches](ApiPlayerMatches.getUrl(uname)).flatMap {
         _.foldZIO(_ => unchangedCounter.update(_ + 1) *> stamp.as(0))(
-          seedMatchesFromPlayerMatches(clubId, clubSlug, settledMatchIds, _).zipLeft(stamp)
+          seedMatchesFromPlayerMatches(clubId, clubSlug, excludeMatchIds, _).zipLeft(stamp)
         )
       }
     fetch(username).withPlayerRenameRecovery(client, username, Some(playerId))(fetch)
@@ -376,22 +408,31 @@ private[history] object HistorySeeding {
   private def seedMatchesFromPlayerMatches(
     clubId: ClubId,
     clubSlug: ClubSlug,
-    settledMatchIds: Set[ClubMatchId],
+    excludeMatchIds: Set[ClubMatchId],
     playerMatches: ApiPlayerMatches
   ): RIO[PostgresClient, Int] = {
     val allMatches = playerMatches.finished ++ playerMatches.inProgress ++ playerMatches.registered
-    seedMatchesFromList(clubId, clubSlug, allMatches, settledMatchIds)
+    seedMatchesFromList(clubId, clubSlug, allMatches, excludeMatchIds)
   }
 
   private def insertPendingMatches(items: Iterable[HistoryPendingMatch]): RIO[PostgresClient, Unit] =
     ZIO.foreachDiscard(items.grouped(1000).toList)(HistoryPendingMatch.insertBatch)
 
-  /** Re-queues stale matches (unfinished or recently completed) as pending for reprocessing. When `shared` is present,
-    * filters out matches already processed by a prior club in this batch.
+  /** Re-queues stale matches as pending for reprocessing. In include-finished mode this is the full stale set
+    * (unfinished or recently completed, via [[ClubMatch.selectStaleForClub]]); in active-only mode it is the
+    * actively-changing set only (Registration + InProgress, via [[ClubMatch.selectActiveForClub]]) so already-stored
+    * recently-Finished matches aren't re-fetched. When `shared` is present, filters out matches already processed by a
+    * prior club in this batch.
     */
-  def seedStaleMatches(clubId: ClubId, shared: Option[SharedContext]): RIO[PostgresClient, Int] =
+  def seedStaleMatches(
+    clubId: ClubId,
+    includeFinished: Boolean,
+    shared: Option[SharedContext]
+  ): RIO[PostgresClient, Int] =
     for {
-      ids <- ClubMatch.selectStaleForClub(clubId)
+      ids <-
+        if (includeFinished) { ClubMatch.selectStaleForClub(clubId) }
+        else { ClubMatch.selectActiveForClub(clubId) }
       alreadyProcessed <- shared.fold(ZIO.succeed(Set.empty[ClubMatchId]))(_.processedMatches.get)
       filtered = ids.filterNot(alreadyProcessed.contains)
       _ <- insertPendingMatches(filtered.map(id => HistoryPendingMatch(clubId, id, isLive = false)))

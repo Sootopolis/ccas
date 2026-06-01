@@ -331,11 +331,17 @@ object TestHistoryApp extends ZIOSpecDefault {
   // --- parseArgs ---
 
   private def suiteParseArgs = suite("parseArgs")(
-    test("no flags returns slugs with full=false and no refresh") {
+    test("no flags returns slugs with full=false, includeFinished=false and no refresh") {
       val parsed = HistoryApp.parseArgs(Chunk("club-a", "club-b"))
       assertTrue(parsed.exists { p =>
         p.slugs.toList == List(ClubSlug("club-a"), ClubSlug("club-b")) &&
-          !p.full && p.refreshMinHours.isEmpty
+          !p.full && !p.includeFinished && p.refreshMinHours.isEmpty
+      })
+    },
+    test("--include-finished sets includeFinished and is stripped from slugs") {
+      val parsed = HistoryApp.parseArgs(Chunk("club-a", "--include-finished"))
+      assertTrue(parsed.exists { p =>
+        p.slugs.toList == List(ClubSlug("club-a")) && p.includeFinished && !p.full && p.refreshMinHours.isEmpty
       })
     },
     test("--full sets full and is stripped from slugs") {

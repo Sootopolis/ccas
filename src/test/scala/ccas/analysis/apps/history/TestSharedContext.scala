@@ -32,6 +32,8 @@ object TestSharedContext extends ZIOSpecDefault {
   private val player1   = Player(player1Id, Times.t0, Username("alice"), PlayerStatusCategory.Active, None, Times.t0)
   private val player2Id = PlayerId(1002)
   private val player2   = Player(player2Id, Times.t0, Username("bob"), PlayerStatusCategory.Active, None, Times.t0)
+  private val player3Id = PlayerId(1003)
+  private val player3   = Player(player3Id, Times.t0, Username("dave"), PlayerStatusCategory.Active, None, Times.t0)
 
   private def clubMatchRow(matchId: Long): ClubMatch =
     ClubMatch(
@@ -52,7 +54,8 @@ object TestSharedContext extends ZIOSpecDefault {
   override def spec: Spec[Any, Throwable] = suite("SharedContext")(
     testSeedStaleFiltersProcessedMatches,
     testSeedFromMembersSkipsSharedQueried,
-    testSeedFromMembersWritesHistoryMemberQueryForSkipped
+    testSeedFromMembersWritesHistoryMemberQueryForSkipped,
+    testFanoutExcludesKnownForOtherClubsActiveOnly
   ).provideShared(
     FreshSchemaLayer("test_shared_ctx", Tables.ensureTables)
   ) @@ TestAspect.sequential
@@ -71,8 +74,9 @@ object TestSharedContext extends ZIOSpecDefault {
         shared <- SharedContext.make
         _      <- shared.processedMatches.set(Set(ClubMatchId(5001), ClubMatchId(5003)))
 
-        // Stale seeding re-queues stale matches for club A; shared should filter out 5001 and 5003
-        count <- HistorySeeding.seedStaleMatches(clubAId, Some(shared))
+        // Stale seeding re-queues stale matches for club A; shared should filter out 5001 and 5003.
+        // includeFinished = true so the recently-Finished fixture rows are in scope for the processedMatches filter.
+        count <- HistorySeeding.seedStaleMatches(clubAId, includeFinished = true, Some(shared))
         pending <- HistoryPendingMatch.selectClub(clubAId)
         _ <- ZIO.foreachDiscard(pending)(p => HistoryPendingMatch.delete(clubAId, p.matchId, p.isLive))
       } yield assertTrue(
@@ -127,7 +131,7 @@ object TestSharedContext extends ZIOSpecDefault {
         skipCtr <- Ref.make(0)
         result <- HistorySeeding
           .seedFromMemberMatches(
-            client, clubAId, clubASlug, allMembers, Set.empty, playerById, Set.empty, Some(shared), skipCtr
+            client, clubAId, clubASlug, allMembers, Set.empty, playerById, Set.empty, false, Some(shared), skipCtr
           )
           .provideSomeEnvironment[PostgresClient](_.add[ProgressDisplay](ProgressDisplay.make(enabled = false)))
         _ <- ZIO.foreachDiscard(List(ClubMatchId(6001)))(id =>
@@ -159,12 +163,50 @@ object TestSharedContext extends ZIOSpecDefault {
         skipCtr <- Ref.make(0)
         _ <- HistorySeeding
           .seedFromMemberMatches(
-            client, clubBId, clubBSlug, allMembers, Set.empty, playerById, Set.empty, Some(shared), skipCtr
+            client, clubBId, clubBSlug, allMembers, Set.empty, playerById, Set.empty, false, Some(shared), skipCtr
           )
           .provideSomeEnvironment[PostgresClient](_.add[ProgressDisplay](ProgressDisplay.make(enabled = false)))
 
         // HistoryMemberQuery should be recorded for club B even though alice was skipped
         queriedForB <- HistoryMemberQuery.selectClubPlayerIds(clubBId)
       } yield assertTrue(queriedForB.contains(player1Id))
+    }
+
+  // --- active-only multi-club fan-out exclusion ---
+
+  private def testFanoutExcludesKnownForOtherClubsActiveOnly =
+    test("active-only fan-out excludes another club's already-stored matches but still seeds new ones") {
+      // dave (member of club A) has a club-B listing: 8101 already stored as Finished for club B, 8102 brand new.
+      // Club A's run fans the listing out to club B; active-only (includeFinished=false) must exclude B's known 8101
+      // via fanoutExcludeIds while still seeding the genuinely-new 8102 for B.
+      val knownForB = clubMatchRow(8101).copy(team1ClubId = Some(clubBId), team2ClubId = None)
+      // Pass the member directly so this test doesn't read accumulated club_member rows from earlier tests.
+      val members = List(ClubMember(clubAId, player3Id, Times.t0, None, sinceApproximate = false))
+      for {
+        _ <- Club.upsert(clubA)
+        _ <- Club.upsert(clubB)
+        _ <- Player.insertIfNew(player3)
+        _ <- ClubMatch.upsert(knownForB)
+
+        shared <- SharedContext.make
+        _      <- shared.resolvedClubs.set(Map(clubASlug -> clubAId, clubBSlug -> clubBId))
+
+        client  <- fakeChessComClient(Map("dave" -> playerMatchesJson("club-b", List(8101, 8102))))
+        skipCtr <- Ref.make(0)
+        _ <- HistorySeeding
+          .seedFromMemberMatches(
+            client, clubAId, clubASlug, members, Set.empty, Map(player3Id -> player3), Set.empty, false,
+            Some(shared), skipCtr
+          )
+          .provideSomeEnvironment[PostgresClient](_.add[ProgressDisplay](ProgressDisplay.make(enabled = false)))
+
+        pendingB    <- HistoryPendingMatch.selectClub(clubBId)
+        queriedForB <- HistoryMemberQuery.selectClubPlayerIds(clubBId)
+        cached      <- shared.knownMatchIdsByClub.get
+      } yield assertTrue(
+        pendingB.map(_.matchId) == List(ClubMatchId(8102)),     // known 8101 excluded; new 8102 ingested
+        queriedForB.contains(player3Id),                        // fan-out stamped HistoryMemberQuery for club B
+        cached.get(clubBId).exists(_.contains(ClubMatchId(8101))) // memo populated with the other club's known ids
+      )
     }
 }
