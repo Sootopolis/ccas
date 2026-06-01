@@ -48,9 +48,15 @@ scalacOptions ++= Seq(
 Test / parallelExecution := true
 
 lazy val root = (project in file("."))
-  .enablePlugins(BuildInfoPlugin)
+  .enablePlugins(BuildInfoPlugin, JavaAppPackaging)
   .settings(
-    name             := "ccas",
-    buildInfoKeys    := Seq(name, version, scalaVersion, sbtVersion),
-    buildInfoPackage := "ccas.info"
+    name := "ccas",
+    // `sbt stage` emits two launchers: `bin/ccas` (primary, the CLI) and a forwarder
+    // `bin/ccas-server` for the deployable server entry. Pin discoveredMainClasses so
+    // native-packager only forwards CcasServer, not every ZIOAppDefault app.
+    Compile / mainClass             := Some("ccas.cli.Main"),
+    executableScriptName            := "ccas",
+    Compile / discoveredMainClasses := Seq("ccas.cli.Main", "ccas.server.CcasServer"),
+    buildInfoKeys                   := Seq(name, version, scalaVersion, sbtVersion),
+    buildInfoPackage                := "ccas.info"
   )
