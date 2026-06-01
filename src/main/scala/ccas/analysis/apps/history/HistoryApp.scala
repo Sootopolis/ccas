@@ -20,9 +20,14 @@ import ccas.utils.sql.PostgresClient
   * discovered players via breadth-first search (BFS) waves — expanding the match graph until no new matches remain.
   *
   * ==Run Modes==
-  *   - '''Default (incremental):''' Only queries members whose match lists haven't been fetched before. Skips seeding
-  *     settled matches (finished and fetched past the stale window) to avoid redundant API calls for matches already
-  *     stored by another club's run. Only re-queues stale matches. This is the cheapest mode for regular updates.
+  *   - '''Default (active-only, incremental):''' Only queries members whose match lists haven't been fetched before,
+  *     and re-queues only the actively-changing matches (Registration + InProgress). Matches we already have stored as
+  *     Finished are not re-fetched — Finished data is effectively immutable — but genuinely-new matches of any status
+  *     (including newly-Finished ones absent from `club_match`) are still ingested via the listing endpoints. This is
+  *     the cheapest mode for regular / scheduled updates.
+  *   - '''`--include-finished`:''' Also re-queues already-stored recently-Finished matches (Finished within the
+  *     90-day stale window), i.e. the previous default behaviour. Use periodically to pick up rare organiser
+  *     corrections to settled-looking matches; settled (>90-day) matches are still only touched by `--refresh`.
   *   - '''`--full`:''' Clears member query history so every member's match list is re-fetched from the API. Use when
   *     you want a complete rebuild of the match graph (e.g., after a long gap or to pick up retroactive API changes).
   *   - '''`--refresh [hours]`:''' After BFS processing, re-fetches settled matches (finished + past the stale window)
@@ -69,11 +74,13 @@ import ccas.utils.sql.PostgresClient
   * This deduplication only applies to the CLI multi-club path. API-submitted jobs run independently per club.
   *
   * ==Invocation==
-  *   - '''CLI:''' `HistoryApp <club-slug> [club-slug ...] [--full] [--refresh [hours]]`
-  *   - '''API:''' `POST /api/jobs/history` with `{"clubSlugs": ["..."], "full": true/false, "refreshMinHours": 24}`
+  *   - '''CLI:''' `HistoryApp <club-slug> [club-slug ...] [--full] [--include-finished] [--refresh [hours]]`
+  *   - '''API:''' `POST /api/jobs/history` with
+  *     `{"clubSlugs": ["..."], "full": true/false, "includeFinished": true/false, "refreshMinHours": 24}`
   */
 object HistoryApp extends ZIOAppDefault {
-  private val help = "Usage: HistoryApp <club-slug> [club-slug ...] [--full] [--refresh [hours]]"
+  private val help =
+    "Usage: HistoryApp <club-slug> [club-slug ...] [--full] [--include-finished] [--refresh [hours]]"
 
   // --- CLI entry point ---
 
@@ -81,7 +88,12 @@ object HistoryApp extends ZIOAppDefault {
     (for {
       rawArgs <- ZIOAppArgs.getArgs
       parsed  <- ZIO.fromEither(parseArgs(rawArgs)).mapError(BadRequestException(_))
-      _       <- discoverBatch(parsed.slugs, full = parsed.full, refreshMinHours = parsed.refreshMinHours)
+      _ <- discoverBatch(
+        parsed.slugs,
+        full = parsed.full,
+        includeFinished = parsed.includeFinished,
+        refreshMinHours = parsed.refreshMinHours
+      )
     } yield ()).provideSomeAuto(
       ProgressDisplay.live(showProgress = true),
       ChessComClient.live("history"),
@@ -92,17 +104,20 @@ object HistoryApp extends ZIOAppDefault {
   private[history] case class HistoryAppArgs(
     slugs: NonEmptyChunk[ClubSlug],
     full: Boolean,
+    includeFinished: Boolean,
     refreshMinHours: Option[Int]
   )
 
   /** Parses CLI args into `HistoryAppArgs`. Strips `--refresh [hours]` (bare `--refresh` defaults to 0 hours, meaning
     * "always refresh"; `--refresh N` only refreshes matches whose `fetched_at` is older than N hours); `--full` forces
-    * a full re-scan; remaining positional tokens become slugs. Empty slug list is an error.
+    * a full re-scan; `--include-finished` re-queues already-stored recently-Finished matches (default is active-only:
+    * Registration + InProgress); remaining positional tokens become slugs. Empty slug list is an error.
     */
   private[history] def parseArgs(args: Chunk[String]): Either[String, HistoryAppArgs] = {
-    val full       = args.contains("--full")
-    val refreshIdx = args.indexOf("--refresh")
-    val nextInt    = args.lift(refreshIdx + 1).flatMap(_.toIntOption)
+    val full            = args.contains("--full")
+    val includeFinished = args.contains("--include-finished")
+    val refreshIdx      = args.indexOf("--refresh")
+    val nextInt         = args.lift(refreshIdx + 1).flatMap(_.toIntOption)
     val refreshMinHours =
       if (refreshIdx < 0) { None }
       else if (nextInt.isDefined) { nextInt }
@@ -113,7 +128,7 @@ object HistoryApp extends ZIOAppDefault {
       else { args.patch(refreshIdx, Chunk.empty, 1) }
     val slugChunk = refreshStripped.filterNot(_.startsWith("--")).map(ClubSlug.wrap)
     NonEmptyChunk.fromChunk(slugChunk) match {
-      case Some(slugs) => Right(HistoryAppArgs(slugs, full, refreshMinHours))
+      case Some(slugs) => Right(HistoryAppArgs(slugs, full, includeFinished, refreshMinHours))
       case None        => Left(help)
     }
   }
@@ -130,9 +145,10 @@ object HistoryApp extends ZIOAppDefault {
   private def discoverBatch(
     slugs: NonEmptyChunk[ClubSlug],
     full: Boolean,
+    includeFinished: Boolean,
     refreshMinHours: Option[Int]
   ): RIO[ProgressDisplay & ChessComClient & PostgresClient, Unit] =
-    if (slugs.size == 1) { discover(slugs.head, full, refreshMinHours).flatMap(outputResult) }
+    if (slugs.size == 1) { discover(slugs.head, full, includeFinished, refreshMinHours).flatMap(outputResult) }
     else {
       for {
         client <- ZIO.service[ChessComClient]
@@ -143,7 +159,8 @@ object HistoryApp extends ZIOAppDefault {
         }
         shared <- SharedContext.make
         _ <- ZIO.foreachDiscard(slugs) { slug =>
-          discoverClub(slug, full, refreshMinHours, RunTrigger.Cli, None, Some(shared)).flatMap(outputResult)
+          discoverClub(slug, full, includeFinished, refreshMinHours, RunTrigger.Cli, None, Some(shared))
+            .flatMap(outputResult)
         }
       } yield ()
     }
@@ -187,19 +204,24 @@ object HistoryApp extends ZIOAppDefault {
 
   final case class HistoryResult(stats: RunStats, clubSlug: ClubSlug, startedAt: Instant, completedAt: Instant)
 
-  /** Main entry point: orchestrates the 4-phase discover workflow for a club's match history. */
+  /** Main entry point: orchestrates the 4-phase discover workflow for a club's match history. `includeFinished`
+    * defaults to `false` (active-only fast-path: Registration + InProgress) so scheduled and other default callers get
+    * the cheap mode; pass `true` to also re-queue already-stored recently-Finished matches.
+    */
   def discover(
     clubSlug: ClubSlug,
     full: Boolean = false,
+    includeFinished: Boolean = false,
     refreshMinHours: Option[Int] = None,
     trigger: RunTrigger = RunTrigger.Cli,
     jobRunId: Option[JobRunId] = None
   ): RIO[ProgressDisplay & ChessComClient & PostgresClient, HistoryResult] =
-    discoverClub(clubSlug, full, refreshMinHours, trigger, jobRunId, shared = None)
+    discoverClub(clubSlug, full, includeFinished, refreshMinHours, trigger, jobRunId, shared = None)
 
   private def discoverClub(
     clubSlug: ClubSlug,
     full: Boolean,
+    includeFinished: Boolean,
     refreshMinHours: Option[Int],
     trigger: RunTrigger,
     jobRunId: Option[JobRunId],
@@ -224,7 +246,10 @@ object HistoryApp extends ZIOAppDefault {
       waveStats <- {
         for {
           // Phase 2: Seed match IDs
-          _ <- ZIO.logInfo("Phase 2: Seeding match IDs...")
+          _ <- ZIO.logInfo(
+            "Phase 2: Seeding match IDs " +
+              (if (includeFinished) { "(incl. recently-finished)..." } else { "(active-only)..." })
+          )
           _ <- ZIO.whenDiscard(shared.isEmpty) {
             for {
               (resolvedClubs, resolvedPlayers) <-
@@ -237,7 +262,13 @@ object HistoryApp extends ZIOAppDefault {
           _ <- ZIO.whenDiscard(full) {
             ZIO.logInfo("  --full: clearing member query history") *> HistoryMemberQuery.deleteClub(ctx.clubId)
           }
-          settledMatchIds <- ClubMatch.selectSettledMatchIdsForClub(ctx.clubId)
+          // Listing-seed exclusion: active-only excludes everything already stored (so known matches — chiefly
+          // recently-Finished — aren't re-fetched, while genuinely-new matches of any status still seed); legacy
+          // excludes only settled (>90-day Finished) matches. Known actively-changing matches are re-queued below
+          // by seedStaleMatches' active branch regardless.
+          excludeMatchIds <-
+            if (includeFinished) { ClubMatch.selectSettledMatchIdsForClub(ctx.clubId) }
+            else { ClubMatch.selectMatchIdsForClub(ctx.clubId) }
 
           seedClub <- HistorySeeding.seedFromClubMatches(
             ctx.client, ctx.clubId, clubSlug, ctx.seedClubMatchesUnchanged
@@ -253,7 +284,8 @@ object HistoryApp extends ZIOAppDefault {
               allMembers,
               queriedIds,
               playerById,
-              settledMatchIds,
+              excludeMatchIds,
+              includeFinished,
               shared,
               ctx.seedPlayerMatchesUnchanged
             )
@@ -263,13 +295,16 @@ object HistoryApp extends ZIOAppDefault {
             s"  Member match lists: ${memberSeed.seeded} new IDs (queried: ${memberSeed.queried}, skipped: $membersSkipped, failed: ${memberSeed.failed})"
           )
 
-          seedStale <- HistorySeeding.seedStaleMatches(ctx.clubId, shared)
+          seedStale <- HistorySeeding.seedStaleMatches(ctx.clubId, includeFinished, shared)
           _         <- seedStaleRef.set(seedStale)
           _         <- ZIO.logInfo(s"  Stale match re-queue: $seedStale matches queued")
 
-          // Phase 3: Process matches (BFS waves)
+          // Phase 3: Process matches (BFS waves). `excludeMatchIds` is the pre-Phase-2 snapshot — matches stored
+          // mid-run aren't in it, so a later wave's discovered-player listing may re-queue one. That costs only a
+          // pending-table row, not an API call: `ProcessingContext.matchCache` dedupes the fetch within the run. Same
+          // staleness the prior `settledMatchIds` snapshot had, so no behavioural regression.
           _  <- ZIO.logInfo("Phase 3: Processing matches...")
-          ws <- HistoryProcessing.processWaves(ctx, settledMatchIds, shared)
+          ws <- HistoryProcessing.processWaves(ctx, excludeMatchIds, shared)
 
           // Phase 3.5: Refresh settled matches (if --refresh)
           refreshed <- refreshMinHours match {

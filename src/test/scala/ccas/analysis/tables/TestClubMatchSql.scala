@@ -19,6 +19,7 @@ object TestClubMatchSql extends ZIOSpecDefault {
     testClubMatchSelectMatchIdsForClub,
     testClubMatchSelectLatestActivity,
     testClubMatchSelectStaleForClub,
+    testClubMatchSelectActiveForClub,
     testClubMatchSelectSettledForClub,
     testClubMatchSelectSettledForRefresh,
     testClubMatchMarkAborted,
@@ -186,6 +187,19 @@ object TestClubMatchSql extends ZIOSpecDefault {
       staleA.toSet == Set(ClubMatchId(1001), ClubMatchId(1002))
     )
   }
+
+  private def testClubMatchSelectActiveForClub =
+    test("selectActiveForClub returns only Registration + InProgress, excluding Finished") {
+      // Base state: matchFinished (1001, Finished, clubA+clubB) and matchInProgress (1002, InProgress, clubA only).
+      // Active-only must drop the Finished row entirely (regardless of stale window) and keep InProgress.
+      for {
+        activeA <- ClubMatch.selectActiveForClub(clubA.clubId)
+        activeB <- ClubMatch.selectActiveForClub(clubB.clubId)
+      } yield assertTrue(
+        activeA.toSet == Set(ClubMatchId(1002)), // InProgress only; 1001 Finished excluded
+        activeB.isEmpty                          // clubB only has the Finished match
+      )
+    }
 
   private def testClubMatchSelectSettledForClub =
     test("selectSettledMatchIdsForClub returns only finished matches fetched past stale window") {

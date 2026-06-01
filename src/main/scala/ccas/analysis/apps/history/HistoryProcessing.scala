@@ -29,7 +29,7 @@ private[history] object HistoryProcessing {
     */
   def processWaves(
     ctx: ProcessingContext,
-    settledMatchIds: Set[ClubMatchId],
+    excludeMatchIds: Set[ClubMatchId],
     shared: Option[SharedContext] = None
   ): RIO[ProgressDisplay & PostgresClient, RunStats] = {
     def waveLoop(waveCount: Int, waveDetails: List[WaveDetail]): RIO[ProgressDisplay & PostgresClient, RunStats] =
@@ -63,7 +63,7 @@ private[history] object HistoryProcessing {
                   ZIO.foreachParDiscard(newPlayers) { dp =>
                     HistorySeeding
                       .seedMatchesForPlayer(
-                        ctx.client, ctx.clubId, ctx.clubSlug, dp.playerId, dp.username, settledMatchIds,
+                        ctx.client, ctx.clubId, ctx.clubSlug, dp.playerId, dp.username, excludeMatchIds,
                         ctx.seedPlayerMatchesUnchanged
                       )
                       .zipLeft(ZIO.foreachDiscard(shared)(_.queriedPlayers.update(_ + dp.playerId)))

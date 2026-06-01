@@ -53,7 +53,12 @@ private[history] object HistoryUtils {
   class SharedContext(
     val resolvedClubs: Ref[Map[ClubSlug, ClubId]],
     val queriedPlayers: Ref[Set[PlayerId]],
-    val processedMatches: Ref[Set[ClubMatchId]]
+    val processedMatches: Ref[Set[ClubMatchId]],
+    // Best-effort memo of per-club known match ids for the active-only fan-out exclusion: when a shared player listing
+    // pre-seeds other clubs in the batch, each other club must exclude the matches it already has so known-Finished
+    // rows aren't re-queued. Populated lazily by HistorySeeding (a benign race may recompute a club's set, which is
+    // idempotent); stays empty in include-finished mode.
+    val knownMatchIdsByClub: Ref[Map[ClubId, Set[ClubMatchId]]]
   )
 
   object SharedContext {
@@ -62,7 +67,8 @@ private[history] object HistoryUtils {
         rc <- Ref.make(Map.empty[ClubSlug, ClubId])
         qp <- Ref.make(Set.empty[PlayerId])
         pm <- Ref.make(Set.empty[ClubMatchId])
-      } yield new SharedContext(rc, qp, pm)
+        km <- Ref.make(Map.empty[ClubId, Set[ClubMatchId]])
+      } yield new SharedContext(rc, qp, pm, km)
   }
 
   /** Shared mutable state for concurrent Phase 3 processing: API response caches (deduplicated via Promises), a player

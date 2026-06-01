@@ -71,6 +71,20 @@ object ClubMatch {
         .query[ClubMatchId].run().toList
     }
 
+  /** Returns only the actively-changing matches for the club — Registration and InProgress, excluding all Finished
+    * (and Aborted) rows. This is the active-only (fast-path) counterpart to [[selectStaleForClub]]: it never re-queues
+    * a match we already have stored as Finished, since Finished data is effectively immutable. Newly-finished matches
+    * absent from `club_match` are still discovered via the listing-seed paths, and an InProgress row that has since
+    * finished is re-fetched here (it is stored as InProgress) so the terminal state is captured exactly once.
+    */
+  def selectActiveForClub(clubId: ClubId): ZIO[PostgresClient, SQLException, List[ClubMatchId]] =
+    connectZIO {
+      sql"""SELECT match_id FROM club_match
+            WHERE (team1_club_id = $clubId OR team2_club_id = $clubId)
+            AND status NOT IN ('Aborted', 'Finished')"""
+        .query[ClubMatchId].run().toList
+    }
+
   /** Returns match IDs that are finished and were fetched past the stale window (inverse of `selectStaleForClub`).
     * These matches have stable data and don't need re-fetching.
     */

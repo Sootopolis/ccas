@@ -48,6 +48,7 @@ object JobRoutes {
   private[server] case class HistoryRequest(
     clubSlugs: NonEmptyChunk[ClubSlug],
     full: Option[Boolean],
+    includeFinished: Option[Boolean],
     refresh: Option[Boolean],
     refreshMinHours: Option[Int]
   )
@@ -189,6 +190,7 @@ object JobRoutes {
               HistoryApp.discover(
                 slug,
                 body.full.getOrElse(false),
+                body.includeFinished.getOrElse(false),
                 effectiveRefresh,
                 RunTrigger.Api,
                 jobRunId = jobRunId
