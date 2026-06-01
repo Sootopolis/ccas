@@ -27,6 +27,22 @@ sbt run
 sbt test
 ```
 
+## Build
+
+`sbt stage` produces runnable launcher scripts under `target/universal/stage/bin/`:
+
+```bash
+sbt stage
+
+# CLI entry point (subcommand tree lands incrementally; today only `serve` is wired)
+target/universal/stage/bin/ccas serve     # boots CcasServer on 127.0.0.1:8080
+
+# Standalone server entry point (used by hosted deploys)
+target/universal/stage/bin/ccas-server
+```
+
+`bin/ccas <anything-else>` prints a "not implemented yet" placeholder and exits non-zero.
+
 ## Applications
 
 Jobs can be submitted via the REST API or run on a schedule.
