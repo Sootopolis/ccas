@@ -18,7 +18,7 @@ object BlacklistRoutes {
 
   // --- Request/response types ---
 
-  private[server] case class CreateBlacklistRequest(
+  private[ccas] case class CreateBlacklistRequest(
     clubSlug: ClubSlug,
     usernames: List[Username],
     reason: Option[String],
@@ -28,7 +28,7 @@ object BlacklistRoutes {
     given JsonCodec[CreateBlacklistRequest] = DeriveJsonCodec.gen
   }
 
-  private[server] case class BlacklistEntryResponse(
+  private[ccas] case class BlacklistEntryResponse(
     clubSlug: String,
     playerId: Long,
     username: Option[String],

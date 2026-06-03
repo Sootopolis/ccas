@@ -27,7 +27,7 @@ object JobRoutes {
   private val MaxTarget           = 40 // cap to avoid runaway API usage per recruitment run
   private val MaxTimeLimitMinutes = 30 // keep individual jobs within a reasonable wall-clock window
 
-  private[server] case class RecruitmentRequest(
+  private[ccas] case class RecruitmentRequest(
     clubSlug: ClubSlug,
     alias: Option[String],
     target: Option[Int],
@@ -40,12 +40,12 @@ object JobRoutes {
     given JsonCodec[RecruitmentRequest] = DeriveJsonCodec.gen
   }
 
-  private[server] case class MembershipRequest(clubSlugs: NonEmptyChunk[ClubSlug], trustUsernames: Option[Boolean])
+  private[ccas] case class MembershipRequest(clubSlugs: NonEmptyChunk[ClubSlug], trustUsernames: Option[Boolean])
   object MembershipRequest {
     given JsonCodec[MembershipRequest] = DeriveJsonCodec.gen
   }
 
-  private[server] case class HistoryRequest(
+  private[ccas] case class HistoryRequest(
     clubSlugs: NonEmptyChunk[ClubSlug],
     full: Option[Boolean],
     includeFinished: Option[Boolean],
@@ -56,7 +56,7 @@ object JobRoutes {
     given JsonCodec[HistoryRequest] = DeriveJsonCodec.gen
   }
 
-  private[server] case class StatsRequest(
+  private[ccas] case class StatsRequest(
     clubSlug: ClubSlug,
     since: Option[String],
     until: Option[String]
@@ -68,18 +68,18 @@ object JobRoutes {
   // --- Response types ---
 
   /** Result of submitting a single job (recruitment, matchref). */
-  private[server] case class JobResult(jobId: Option[String], error: Option[String])
+  private[ccas] case class JobResult(jobId: Option[String], error: Option[String])
   object JobResult {
     given JsonCodec[JobResult] = DeriveJsonCodec.gen
   }
 
   /** Result of submitting a club-specific job within a batch (membership, history). */
-  private[server] case class ClubJobResult(clubSlug: String, jobId: Option[String], error: Option[String])
+  private[ccas] case class ClubJobResult(clubSlug: String, jobId: Option[String], error: Option[String])
   object ClubJobResult {
     given JsonCodec[ClubJobResult] = DeriveJsonCodec.gen
   }
 
-  private[server] case class JobStatusResponse(
+  private[ccas] case class JobStatusResponse(
     id: String,
     kind: String,
     status: String,

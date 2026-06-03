@@ -18,7 +18,7 @@ object ScheduleRoutes {
 
   // --- Request/response types ---
 
-  private[server] case class CreateScheduleRequest(
+  private[ccas] case class CreateScheduleRequest(
     kind: String,
     clubSlug: Option[String],
     params: Option[String],
@@ -28,7 +28,7 @@ object ScheduleRoutes {
     given JsonCodec[CreateScheduleRequest] = DeriveJsonCodec.gen
   }
 
-  private[server] case class UpdateScheduleRequest(
+  private[ccas] case class UpdateScheduleRequest(
     intervalHours: Option[Int],
     enabled: Option[Boolean],
     params: Option[String]
@@ -37,7 +37,7 @@ object ScheduleRoutes {
     given JsonCodec[UpdateScheduleRequest] = DeriveJsonCodec.gen
   }
 
-  private[server] case class ScheduleResponse(
+  private[ccas] case class ScheduleResponse(
     id: Long,
     kind: String,
     clubId: Option[Long],

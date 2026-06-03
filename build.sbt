@@ -33,7 +33,10 @@ libraryDependencies ++= Seq(
   "com.zaxxer" % "HikariCP" % vHikari,
 
   // ulid
-  "com.github.f4b6a3" % "ulid-creator" % vUlidCreator
+  "com.github.f4b6a3" % "ulid-creator" % vUlidCreator,
+
+  // zio-cli (CLI parsing — ZIO-native, also generates shell completions)
+  "dev.zio" %% "zio-cli" % vZioCli
 )
 
 scalacOptions ++= Seq(
