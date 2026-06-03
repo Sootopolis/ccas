@@ -1,27 +1,43 @@
 package ccas.cli
 
-import zio.{Console, ExitCode, Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
+import zio.cli.{CliApp, CliError, HelpDoc}
+import zio.{ExitCode, Scope, URIO, ZIO, ZIOAppArgs, ZIOAppDefault}
 
+import ccas.info.BuildInfo
 import ccas.server.CcasServer
 
 /** Single entry point for the `ccas` binary.
   *
-  * Dispatches on the first argument: `serve` boots [[CcasServer]]; every other command is a
-  * placeholder until the decline subcommand tree lands (Sootopolis/ccas#46).
+  * `zio-cli` parses argv against the [[CliCommand]] tree, renders `--help`/usage and shell completions, then hands the
+  * parsed model to [[execute]]. `serve` boots [[CcasServer]] in this process; every other subcommand is dispatched as a
+  * thin HTTP client ([[Dispatcher]]). Exit codes: 0 success / help, 1 job failure, 2 usage error.
   */
 object Main extends ZIOAppDefault {
 
+  private val cliApp: CliApp[ZIOAppArgs, Nothing, ExitCode] =
+    CliApp.make(
+      name = "ccas",
+      version = BuildInfo.version,
+      summary = HelpDoc.Span.text("Chess.com club admin system"),
+      command = CliCommand.command
+    )(execute)
+
   override def run: ZIO[ZIOAppArgs & Scope, Any, Any] =
     ZIOAppArgs.getArgs.flatMap { args =>
-      args.headOption match {
-        case Some("serve") => CcasServer.run
-        case other         => notImplemented(other)
-      }
+      cliApp.run(args.toList).foldZIO(
+        {
+          case _: CliError.BuiltIn => exit(ExitCode.success) // --help / --version / completions, already rendered
+          case _                   => exit(ExitCode(2))       // parse/validation error, usage already rendered
+        },
+        {
+          case Some(code) => exit(code)
+          case None       => exit(ExitCode.success)
+        }
+      )
     }
 
-  private def notImplemented(command: Option[String]): ZIO[Any, Nothing, Unit] = {
-    val label = command.getOrElse("<none>")
-    val msg   = s"ccas: command '$label' not implemented yet (known commands: serve)"
-    Console.printLineError(msg).orDie *> exit(ExitCode.failure)
+  private def execute(cmd: CliCommand): URIO[ZIOAppArgs, ExitCode] = cmd match {
+    case _: CliCommand.Serve => ZIO.scoped(CcasServer.run).fold(_ => ExitCode.failure, _ => ExitCode.success)
+    case other               => Dispatcher.dispatch(other)
   }
 }
