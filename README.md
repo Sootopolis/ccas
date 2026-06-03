@@ -4,7 +4,7 @@ Chess Club Admin System -- a Scala 3 / ZIO application that integrates with the 
 
 ## Tech Stack
 
-- Scala 3.8.2, SBT 1.12.8
+- Scala 3.8.3, SBT 1.12.8
 - ZIO 2.x (zio-http, zio-json, zio-config)
 - Magnum ORM + PostgreSQL 17
 - Docker Compose for local dev
@@ -21,27 +21,51 @@ docker compose up -d
 cp .env.example .env   # edit with your values
 
 # Run the server (default port 8080)
-sbt run
+sbt "runMain ccas.cli.Main serve"
 
 # Run tests (requires ccas_test database from docker compose)
 sbt test
 ```
 
-## Build
+## Install the `ccas` CLI
 
-`sbt stage` produces runnable launcher scripts under `target/universal/stage/bin/`:
+`sbt stage` (sbt-native-packager) produces two launcher scripts under `target/universal/stage/bin/`:
+
+- `ccas` — the CLI / primary entry point
+- `ccas-server` — the standalone server entry (used by hosted deploys)
+
+To run `ccas` from anywhere, stage once and symlink the launcher into a directory on your `PATH`:
 
 ```bash
 sbt stage
-
-# CLI entry point (subcommand tree lands incrementally; today only `serve` is wired)
-target/universal/stage/bin/ccas serve     # boots CcasServer on 127.0.0.1:8080
-
-# Standalone server entry point (used by hosted deploys)
-target/universal/stage/bin/ccas-server
+ln -sf "$PWD/target/universal/stage/bin/ccas" ~/.local/bin/ccas   # ensure ~/.local/bin is on your PATH
+ccas --help
 ```
 
-`bin/ccas <anything-else>` prints a "not implemented yet" placeholder and exits non-zero.
+The symlink keeps working across rebuilds — `sbt stage` regenerates the launcher in place. Re-run `sbt stage` after changing code.
+
+## Using the CLI
+
+The CLI is a thin HTTP client to a local `CcasServer`, so start a server first (it is not auto-spawned):
+
+```bash
+# Terminal 1 — the server. Needs DATABASE_URL/DB_* and CCAS_CONTACT_EMAIL.
+# Under sbt these are sourced from .env automatically:
+sbt "runMain ccas.cli.Main serve"     # boots CcasServer on 127.0.0.1:8080
+# Or, with those vars exported into the environment, the staged binary:  ccas serve
+
+# Terminal 2 — commands. No environment needed; they just call the server.
+ccas jobs
+ccas membership <club-slug>
+ccas recruit --target 30 <club-slug>
+ccas blacklist list <club-slug>
+ccas --help              # full command tree
+ccas <command> --help    # per-command flags
+```
+
+Commands: `serve`, `membership`, `history`, `recruit`, `stats`, `jobs`, `logs`, `blacklist {add|list|remove}`, `schedule {list|add|remove}`. A global `--server <url>` overrides the default `http://127.0.0.1:8080`.
+
+> **Two gotchas.** The parser (zio-cli) expects options **before** positional arguments — `ccas membership --no-trust-usernames team-alpha`, not `… team-alpha --no-trust-usernames` (a misplaced flag is silently dropped). And the staged binary reads configuration from the **process environment only** — it does not load `.env` (that is auto-sourced for `sbt run` / `sbt runMain`).
 
 ## Applications
 
