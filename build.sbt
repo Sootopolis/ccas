@@ -61,5 +61,12 @@ lazy val root = (project in file("."))
     executableScriptName            := "ccas",
     Compile / discoveredMainClasses := Seq("ccas.cli.Main", "ccas.server.CcasServer"),
     buildInfoKeys                   := Seq(name, version, scalaVersion, sbtVersion),
-    buildInfoPackage                := "ccas.info"
+    buildInfoPackage                := "ccas.info",
+    // Silence the sun.misc.Unsafe deprecation warning (scala-library's LazyVals) that the JVM
+    // prints on JDK 24+. The `--sun-misc-unsafe-memory-access` flag only exists on JDK 23+, so
+    // probe the runtime version in the launcher and add it conditionally (older JDKs don't warn).
+    bashScriptExtraDefines ++= Seq(
+      """java_major=$("${java_cmd:-java}" -version 2>&1 | head -n1 | sed -E 's/.*version "?([0-9]+).*/\1/')""",
+      """if [ "${java_major:-0}" -ge 23 ] 2>/dev/null; then addJava "--sun-misc-unsafe-memory-access=allow"; fi"""
+    )
   )
