@@ -65,7 +65,24 @@ ccas <command> --help    # per-command flags
 
 Commands: `serve`, `membership`, `history`, `recruit`, `stats`, `jobs`, `logs`, `blacklist {add|list|remove}`, `schedule {list|add|remove}`. A global `--server <url>` overrides the default `http://127.0.0.1:8080`.
 
+`ccas --version` prints the version; `ccas --help` and `ccas <command> --help` show usage.
+
 > **Two gotchas.** The parser (zio-cli) expects options **before** positional arguments — `ccas membership --no-trust-usernames team-alpha`, not `… team-alpha --no-trust-usernames` (a misplaced flag is silently dropped). And the staged binary reads configuration from the **process environment only** — it does not load `.env` (that is auto-sourced for `sbt run` / `sbt runMain`).
+
+### Shell completion (bash)
+
+Install the generated completion script once:
+
+```bash
+mkdir -p ~/.local/share/bash-completion/completions
+ccas --shell-completion-script "$(command -v ccas)" --shell-type bash 2>/dev/null \
+  | sed 's#"${CMDLINE\[@\]}")#"${CMDLINE[@]}" 2>/dev/null)#' \
+  > ~/.local/share/bash-completion/completions/ccas
+```
+
+`bash-completion` auto-loads it on first use (or `source` it from `~/.bashrc`). `zsh` / `fish` are supported via `--shell-type zsh|fish`. The `2>/dev/null` / `sed` keep a JVM deprecation warning out of the completion output.
+
+Caveat: completion calls back into the binary, so each `<TAB>` boots the JVM (~1s latency). A fast, cache-based completion is tracked in #49.
 
 ## Applications
 

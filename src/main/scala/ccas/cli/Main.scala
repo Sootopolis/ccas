@@ -1,7 +1,7 @@
 package ccas.cli
 
 import zio.cli.{CliApp, CliError, HelpDoc}
-import zio.{ExitCode, Scope, URIO, ZIO, ZIOAppArgs, ZIOAppDefault}
+import zio.{Console, ExitCode, Scope, URIO, ZIO, ZIOAppArgs, ZIOAppDefault}
 
 import ccas.info.BuildInfo
 import ccas.server.CcasServer
@@ -24,16 +24,21 @@ object Main extends ZIOAppDefault {
 
   override def run: ZIO[ZIOAppArgs & Scope, Any, Any] =
     ZIOAppArgs.getArgs.flatMap { args =>
-      cliApp.run(args.toList).foldZIO(
-        {
-          case _: CliError.BuiltIn => exit(ExitCode.success) // --help / --version / completions, already rendered
-          case _                   => exit(ExitCode(2))       // parse/validation error, usage already rendered
-        },
-        {
-          case Some(code) => exit(code)
-          case None       => exit(ExitCode.success)
-        }
-      )
+      // zio-cli has no built-in --version (its BuiltInOption is help/wizard/completions only), so handle it here.
+      if (args.headOption.exists(a => a == "--version" || a == "-V")) {
+        Console.printLine(s"ccas ${BuildInfo.version}").orDie *> exit(ExitCode.success)
+      } else {
+        cliApp.run(args.toList).foldZIO(
+          {
+            case _: CliError.BuiltIn => exit(ExitCode.success) // --help / completions, already rendered
+            case _                   => exit(ExitCode(2))       // parse/validation error, usage already rendered
+          },
+          {
+            case Some(code) => exit(code)
+            case None       => exit(ExitCode.success)
+          }
+        )
+      }
     }
 
   private def execute(cmd: CliCommand): URIO[ZIOAppArgs, ExitCode] = cmd match {
