@@ -69,20 +69,24 @@ Commands: `serve`, `membership`, `history`, `recruit`, `stats`, `jobs`, `logs`, 
 
 > **Two gotchas.** The parser (zio-cli) expects options **before** positional arguments — `ccas membership --no-trust-usernames team-alpha`, not `… team-alpha --no-trust-usernames` (a misplaced flag is silently dropped). And the staged binary reads configuration from the **process environment only** — it does not load `.env` (that is auto-sourced for `sbt run` / `sbt runMain`).
 
-### Shell completion (bash)
+### Shell completion
 
-Install the generated completion script once:
+**bash (instant, recommended).** A static script ships in `completions/`; it runs entirely in the shell (no JVM), so `<TAB>` is immediate. Install once:
 
 ```bash
 mkdir -p ~/.local/share/bash-completion/completions
-ccas --shell-completion-script "$(command -v ccas)" --shell-type bash 2>/dev/null \
-  | sed 's#"${CMDLINE\[@\]}")#"${CMDLINE[@]}" 2>/dev/null)#' \
-  > ~/.local/share/bash-completion/completions/ccas
+ln -sf "$PWD/completions/ccas.bash" ~/.local/share/bash-completion/completions/ccas
 ```
 
-`bash-completion` auto-loads it on first use (or `source` it from `~/.bashrc`). `zsh` / `fish` are supported via `--shell-type zsh|fish`. The `2>/dev/null` / `sed` keep a JVM deprecation warning out of the completion output.
+`bash-completion` auto-loads it on first use (or `source completions/ccas.bash` from `~/.bashrc`). The symlink picks up updates automatically; use `cp` instead to pin a copy. It mirrors the command tree (subcommands + flags) and the `TestCcasCompletion` test fails if the two drift apart.
 
-Caveat: completion calls back into the binary, so each `<TAB>` boots the JVM (~1s latency). A fast, cache-based completion is tracked in #49.
+**zsh / fish.** zio-cli generates a dynamic script:
+
+```bash
+ccas --shell-completion-script "$(command -v ccas)" --shell-type zsh 2>/dev/null > <dest>   # or --shell-type fish
+```
+
+Caveat: the dynamic script calls back into the binary, so each `<TAB>` boots the JVM (~1.5s). The static bash script avoids this; a fast cache-based completion for all shells is tracked in #49.
 
 ## Applications
 
