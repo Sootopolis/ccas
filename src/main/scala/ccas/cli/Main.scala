@@ -18,8 +18,9 @@ object Main extends ZIOAppDefault {
     CliApp.make(
       name = "ccas",
       version = BuildInfo.version,
-      summary = HelpDoc.Span.text("Chess.com club admin system"),
-      command = CliCommand.command
+      summary = HelpDoc.Span.text("Chess Club Admin System"),
+      command = CliCommand.command,
+      config = CliCommand.config
     )(execute)
 
   override def run: ZIO[ZIOAppArgs & Scope, Any, Any] =

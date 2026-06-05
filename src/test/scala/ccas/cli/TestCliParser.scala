@@ -1,10 +1,11 @@
 package ccas.cli
 
-import zio.cli.{CliConfig, CommandDirective}
+import zio.cli.{BuiltInOption, CommandDirective}
 import zio.test.{assertTrue, Spec, ZIOSpecDefault}
 
 /** Tests for the `zio-cli` command tree via `Command.parse` — no server, no DB. Asserts argv parses to the expected
-  * [[CliCommand]] (a `UserDefined` directive), errors fail validation, and `--help` yields a `BuiltIn` directive.
+  * [[CliCommand]] (a `UserDefined` directive), errors fail validation, and `--help` routes to the correct command
+  * (a `BuiltIn` `ShowHelp` directive). Parsing uses [[CliCommand.config]] so behaviour matches the real binary.
   */
 object TestCliParser extends ZIOSpecDefault {
 
@@ -12,12 +13,19 @@ object TestCliParser extends ZIOSpecDefault {
 
   // Command.parse expects the top command's own name as the first token (CliApp.run injects it at runtime).
   private def parse(args: String*) =
-    CliCommand.command.parse(("ccas" +: args).toList, CliConfig.default)
+    CliCommand.command.parse(("ccas" +: args).toList, CliCommand.config)
 
   private def parsed(args: String*) =
     parse(args*).map {
       case CommandDirective.UserDefined(_, cmd) => Some(cmd)
       case _                                    => None
+    }
+
+  // Rendered help text when `--help` resolves to a ShowHelp directive (None for any other directive). Plain (no ANSI).
+  private def helpText(args: String*) =
+    parse(args*).map {
+      case CommandDirective.BuiltIn(BuiltInOption.ShowHelp(_, doc)) => Some(doc.toPlaintext(200, color = false))
+      case _                                                        => None
     }
 
   override def spec: Spec[Any, Any] = suite("TestCliParser")(
@@ -72,6 +80,30 @@ object TestCliParser extends ZIOSpecDefault {
     },
     test("--help yields a BuiltIn directive") {
       parse("--help").map(d => assertTrue(d.isInstanceOf[CommandDirective.BuiltIn]))
+    },
+    // Regression: zio-cli 0.8.1 routed every `<sub> --help` to the FIRST subcommand (serve). With
+    // CliCommand.config (finalCheckBuiltIn = false), each --help must render its own command's help.
+    test("membership --help renders membership help, not serve") {
+      helpText("membership", "--help").map(t =>
+        assertTrue(t.exists(_.contains("trust-usernames"))) // membership-only option; absent from serve
+      )
+    },
+    test("recruit --help renders recruit help") {
+      helpText("recruit", "--help").map(t => assertTrue(t.exists(_.contains("source-clubs"))))
+    },
+    // Match child help sentences, not bare names: "blacklist" contains the substring "list", which would
+    // false-positive a `contains("list")` check.
+    test("blacklist --help lists the child subcommands") {
+      helpText("blacklist", "--help").map(t =>
+        assertTrue(t.exists(s => s.contains("List a club's blacklist entries") && s.contains("Remove a username")))
+      )
+    },
+    // `remove` is NOT the first child of `blacklist`, so this catches the routing bug — the bug rendered the
+    // first child (add), whose `--months` help "Auto-expire" must be absent here.
+    test("blacklist remove --help renders remove, not the first child") {
+      helpText("blacklist", "remove", "--help").map(t =>
+        assertTrue(t.exists(s => s.contains("Username to remove") && !s.contains("Auto-expire")))
+      )
     }
   )
 }
