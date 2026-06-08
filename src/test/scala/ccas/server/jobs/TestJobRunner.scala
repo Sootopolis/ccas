@@ -7,7 +7,7 @@ import scala.jdk.CollectionConverters.*
 import com.typesafe.config.ConfigFactory
 
 import ccas.utils.sql.PostgresClient
-import zio.{durationInt, Scope, ZIO, ZLayer}
+import zio.{durationInt, Promise, Scope, ZIO, ZLayer}
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.analysis.tables.{Club, RunTrigger}
@@ -29,7 +29,10 @@ object TestJobRunner extends ZIOSpecDefault {
     testSubmitAllowsDifferentKind,
     testStatusUnknown,
     testRecentJobsOrdered,
-    testSubmitWritesJobLog
+    testSubmitWritesJobLog,
+    testLogStreamReplaysCompletedJob,
+    testLogStreamUnknownReturnsNone,
+    testLogStreamTailsLiveJob
   ).provideShared(
     FreshSchemaLayer("test_job_runner", onInit = ServerTables.ensureTables),
     TestChessComClientSupport.dummyLayer,
@@ -161,6 +164,50 @@ object TestJobRunner extends ZIOSpecDefault {
       // ANSI stripped — file should be readable. The formatter emits at least one ESC byte; stripped output has none.
       lines.forall(!_.contains(0x1B.toChar))
     )
+  }
+
+  private def testLogStreamReplaysCompletedJob = test("logStream replays a completed job's log and ends") {
+    for {
+      _      <- deleteAllJobRuns
+      runner <- ZIO.service[JobRunner]
+      id     <- runner.submit(
+        JobKind.MatchRef,
+        None,
+        None,
+        RunTrigger.Cli,
+        _ => ZIO.logInfo("line one") *> ZIO.logInfo("line two")
+      )
+      _         <- awaitStatus(runner, id)
+      streamOpt <- runner.logStream(id)
+      stream    <- ZIO.fromOption(streamOpt).orElseFail(new Exception("expected a stream for a known job"))
+      lines     <- stream.runCollect.map(_.toList)
+    } yield assertTrue(
+      lines.exists(_.contains("line one")),
+      lines.exists(_.contains("line two"))
+    )
+  }
+
+  private def testLogStreamUnknownReturnsNone = test("logStream returns None for unknown id") {
+    for {
+      runner <- ZIO.service[JobRunner]
+      result <- runner.logStream(JobRunId.wrap("does-not-exist"))
+    } yield assertTrue(result.isEmpty)
+  }
+
+  private def testLogStreamTailsLiveJob = test("logStream tails a running job and closes when it finishes") {
+    for {
+      _      <- deleteAllJobRuns
+      runner <- ZIO.service[JobRunner]
+      gate   <- Promise.make[Nothing, Unit]
+      // The job logs a line, then blocks on the gate so it stays Running while we subscribe.
+      id        <- runner.submit(JobKind.MatchRef, None, None, RunTrigger.Cli, _ => ZIO.logInfo("streaming line") *> gate.await)
+      streamOpt <- runner.logStream(id)
+      stream    <- ZIO.fromOption(streamOpt).orElseFail(new Exception("expected a live stream"))
+      collect   <- stream.runCollect.fork
+      _         <- gate.succeed(())
+      _         <- awaitStatus(runner, id)
+      lines     <- collect.join.map(_.toList)
+    } yield assertTrue(lines.exists(_.contains("streaming line")))
   }
 
   private def testRecentJobsOrdered = test("recentJobs returns ordered list") {

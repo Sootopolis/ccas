@@ -5,6 +5,7 @@ import java.time.{Instant, LocalDateTime, ZoneOffset}
 import ccas.utils.sql.PostgresClient
 import zio.{LogLevel, RIO, Ref, Scope, UIO, ULayer, URIO, ZIO, ZLayer}
 import zio.http.*
+import zio.stream.ZStream
 import zio.json.DecoderOps
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault, ZTestLogger}
 
@@ -66,6 +67,11 @@ object TestRoutes extends ZIOSpecDefault {
 
     override def recentJobs(limit: Int): RIO[PostgresClient, List[JobRun]] =
       jobs.get.map(_.values.toList.sortBy(_.startedAt)(using Ordering[Instant].reverse).take(limit))
+
+    // Canned two-line stream for any known job; None for unknown — enough to pin the route's 200/404 + framing
+    // without the real file-tailing mechanics (those are covered against JobRunner.live in TestJobRunner).
+    override def logStream(id: JobRunId): RIO[PostgresClient, Option[ZStream[Any, Throwable, String]]] =
+      jobs.get.map(_.get(id).map(_ => ZStream.fromIterable(List("alpha", "beta"))))
 
     def setNextAction(action: Action): UIO[Unit] = nextAction.set(action)
 
@@ -134,6 +140,8 @@ object TestRoutes extends ZIOSpecDefault {
     testGetJobsReturnsList,
     testGetJobByIdReturns200,
     testGetJobByIdReturns404,
+    testGetJobLogsReturns200,
+    testGetJobLogsReturns404,
     testStatsWithInvalidDateReturns400,
     testStatsWithPartialDatesReturns400,
     testUnhandledErrorReturns500AndLogsCause,
@@ -352,6 +360,41 @@ object TestRoutes extends ZIOSpecDefault {
     for {
       response <- JobRoutes.routes.runZIO(jsonRequest(Method.GET, "/api/jobs/nonexistent"))
     } yield assertTrue(response.status == Status.NotFound)
+  }
+
+  private def testGetJobLogsReturns200 = test("GET /api/jobs/:id/logs streams chunked text/plain for an existing job") {
+    val t0 = LocalDateTime.of(2025, 6, 1, 0, 0).toInstant(ZoneOffset.UTC)
+    val job = JobRun(
+      JobRunId.wrap("logs-id"),
+      JobKind.Membership,
+      None,
+      RunTrigger.Cli,
+      JobRunStatus.Completed,
+      None,
+      t0,
+      Some(t0),
+      None
+    )
+    for {
+      fake     <- getFakeRunner
+      _        <- fake.prePopulate(job)
+      response <- JobRoutes.routes.runZIO(jsonRequest(Method.GET, "/api/jobs/logs-id/logs"))
+      body     <- response.body.asString
+    } yield assertTrue(
+      response.status == Status.Ok,
+      response.header(Header.ContentType).exists(_.mediaType == MediaType.text.`plain`),
+      body == "alpha\nbeta\n"
+    )
+  }
+
+  private def testGetJobLogsReturns404 = test("GET /api/jobs/:id/logs returns 404 plain text for unknown job") {
+    for {
+      response <- JobRoutes.routes.runZIO(jsonRequest(Method.GET, "/api/jobs/nonexistent/logs"))
+      body     <- response.body.asString
+    } yield assertTrue(
+      response.status == Status.NotFound,
+      body.contains("not found")
+    )
   }
 
   private def testStatsWithInvalidDateReturns400 = test("POST /api/jobs/stats with invalid date returns 400") {

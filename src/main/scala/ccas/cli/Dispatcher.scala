@@ -21,13 +21,12 @@ import ccas.server.routes.ScheduleRoutes.{CreateScheduleRequest, ScheduleRespons
   */
 object Dispatcher {
 
-  private val PollInterval: Duration = 2.seconds
-  private val MaxJobWait: Duration   = 60.minutes
+  private val MaxJobWait: Duration = 60.minutes
 
   def dispatch(cmd: CliCommand): URIO[Any, ExitCode] =
     CcasApiClient
       .live(cmd.server)
-      .flatMap(api => runCommand(api, JobPoller(api, PollInterval, MaxJobWait), cmd))
+      .flatMap(api => runCommand(api, JobFollower(api, MaxJobWait), cmd))
       .provide(Client.default)
       .catchAll {
         case e: CliError  => Console.printLineError(s"error: ${e.message}").orDie.as(e.exitCode)
@@ -41,20 +40,20 @@ object Dispatcher {
   private def rootMessage(e: Throwable): String =
     Option(e.getMessage).getOrElse(e.getClass.getSimpleName)
 
-  private def runCommand(api: CcasApiClient, poller: JobPoller, cmd: CliCommand): Task[Int] = cmd match {
+  private def runCommand(api: CcasApiClient, follower: JobFollower, cmd: CliCommand): Task[Int] = cmd match {
     case _: CliCommand.Serve => ZIO.succeed(0) // handled in Main
 
     case CliCommand.Membership(_, slugs, trust) =>
       api.postJson[MembershipRequest, List[ClubJobResult]](
         "/api/jobs/membership",
         MembershipRequest(toSlugs(slugs), trust)
-      ).flatMap(poller.handleBatch)
+      ).flatMap(follower.handleBatch)
 
     case CliCommand.History(_, slugs, full, includeFinished, refresh, refreshMinHours) =>
       api.postJson[HistoryRequest, List[ClubJobResult]](
         "/api/jobs/history",
         HistoryRequest(toSlugs(slugs), flag(full), flag(includeFinished), flag(refresh), refreshMinHours)
-      ).flatMap(poller.handleBatch)
+      ).flatMap(follower.handleBatch)
 
     case CliCommand.Recruit(_, slug, alias, target, cumulative, sourceClubs, timeLimitMinutes, explore) =>
       api.postJson[RecruitmentRequest, JobResult](
@@ -68,19 +67,19 @@ object Dispatcher {
           timeLimitMinutes,
           explore
         )
-      ).flatMap(poller.handleSingle(slug, _))
+      ).flatMap(follower.handleSingle(slug, _))
 
     case CliCommand.Stats(_, slug, since, until) =>
       api.postJson[StatsRequest, ClubJobResult](
         "/api/jobs/stats",
         StatsRequest(ClubSlug(slug), since, until)
-      ).flatMap(poller.handleClubSingle)
+      ).flatMap(follower.handleClubSingle)
 
     case CliCommand.Jobs(_, limit) =>
       api.getJson[List[JobStatusResponse]]("/api/jobs").flatMap(all => printJobs(limit.fold(all)(all.take)).as(0))
 
     case CliCommand.Logs(_, jobId) =>
-      poller.pollOne(jobId)
+      follower.followJob(jobId)
 
     case CliCommand.BlacklistAdd(_, slug, usernames, reason, months) =>
       api.postUnit[CreateBlacklistRequest](

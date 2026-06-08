@@ -3,6 +3,7 @@ package ccas.server.scheduler
 import java.time.temporal.ChronoUnit
 
 import zio.{durationInt, Clock, Duration, Ref, RIO, ZIO}
+import zio.stream.ZStream
 import zio.test.{assertCompletes, assertTrue, Spec, TestAspect, TestClock, ZIOSpecDefault}
 
 import ccas.analysis.tables.{Club, RunTrigger}
@@ -59,6 +60,7 @@ object TestJobScheduler extends ZIOSpecDefault {
 
     override def status(id: JobRunId): RIO[PostgresClient, Option[JobRun]] = ZIO.none
     override def recentJobs(limit: Int): RIO[PostgresClient, List[JobRun]] = ZIO.succeed(Nil)
+    override def logStream(id: JobRunId): RIO[PostgresClient, Option[ZStream[Any, Throwable, String]]] = ZIO.none
   }
 
   /** JobRunner stub that tracks which clubIds are submitted. */
@@ -74,6 +76,7 @@ object TestJobScheduler extends ZIOSpecDefault {
 
     override def status(id: JobRunId): RIO[PostgresClient, Option[JobRun]] = ZIO.none
     override def recentJobs(limit: Int): RIO[PostgresClient, List[JobRun]] = ZIO.succeed(Nil)
+    override def logStream(id: JobRunId): RIO[PostgresClient, Option[ZStream[Any, Throwable, String]]] = ZIO.none
   }
 
   private def testPollFiberStopsOnScopeClose = test("poll fiber stops when enclosing scope closes") {
@@ -214,6 +217,7 @@ object TestJobScheduler extends ZIOSpecDefault {
 
         override def status(id: JobRunId): RIO[PostgresClient, Option[JobRun]] = ZIO.none
         override def recentJobs(limit: Int): RIO[PostgresClient, List[JobRun]] = ZIO.succeed(Nil)
+        override def logStream(id: JobRunId): RIO[PostgresClient, Option[ZStream[Any, Throwable, String]]] = ZIO.none
       }
       scheduler = new JobScheduler.JobSchedulerLive(failingRunner, pgClient, pollInterval)
 
@@ -252,6 +256,7 @@ object TestJobScheduler extends ZIOSpecDefault {
 
           override def status(id: JobRunId): RIO[PostgresClient, Option[JobRun]] = ZIO.none
           override def recentJobs(limit: Int): RIO[PostgresClient, List[JobRun]] = ZIO.succeed(Nil)
+          override def logStream(id: JobRunId): RIO[PostgresClient, Option[ZStream[Any, Throwable, String]]] = ZIO.none
         }
         scheduler = new JobScheduler.JobSchedulerLive(runner, pgClient, pollInterval)
 

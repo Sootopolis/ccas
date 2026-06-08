@@ -1,0 +1,79 @@
+package ccas.cli
+
+import zio.*
+import zio.json.*
+import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
+
+import ccas.server.routes.JobRoutes.{ClubJobResult, JobResult, JobStatusResponse}
+
+/** Exercises log-stream following and submit-result handling against a scripted stub client — no socket, no DB. */
+object TestJobFollower extends ZIOSpecDefault {
+
+  /** Stub that replays a fixed `JobStatusResponse` body for `getJson` and a fixed list of log lines for `streamLines`
+    * (or hangs forever, to exercise the follow timeout).
+    */
+  private final class StubApi(script: Ref[List[String]], logLines: List[String], streamHangs: Boolean)
+      extends CcasApiClient {
+    override def getJson[Resp: JsonDecoder](path: String): Task[Resp] =
+      script.modify {
+        case head :: tail => (head, tail)
+        case Nil          => ("", Nil)
+      }.flatMap(s => ZIO.fromEither(s.fromJson[Resp]).mapError(m => CliError(s"stub decode failed: $m", 1)))
+
+    override def streamLines(path: String)(onLine: String => UIO[Unit]): Task[Unit] =
+      if (streamHangs) { ZIO.never }
+      else { ZIO.foreachDiscard(logLines)(onLine) }
+
+    override def postJson[Req: JsonEncoder, Resp: JsonDecoder](path: String, body: Req): Task[Resp] =
+      ZIO.die(new UnsupportedOperationException("postJson"))
+    override def postEmpty[Resp: JsonDecoder](path: String): Task[Resp] =
+      ZIO.die(new UnsupportedOperationException("postEmpty"))
+    override def postUnit[Req: JsonEncoder](path: String, body: Req): Task[Unit] = ZIO.unit
+    override def delete(path: String): Task[Unit]                                = ZIO.unit
+  }
+
+  private def statusJson(status: String, error: Option[String]): String =
+    JobStatusResponse("job-1", "Membership", status, None, "2026-01-01T00:00:00Z", None, error, "Cli").toJson
+
+  private def followerWith(status: String, error: Option[String], logLines: List[String]): UIO[JobFollower] =
+    Ref.make(List(statusJson(status, error))).map(ref => JobFollower(new StubApi(ref, logLines, streamHangs = false), 1.minute))
+
+  override def spec: Spec[Any, Throwable] = suite("TestJobFollower")(
+    test("followJob streams the log lines and returns 0 when the job completes") {
+      for {
+        follower <- followerWith("Completed", None, List("hello", "world"))
+        code   <- follower.followJob("job-1")
+      } yield assertTrue(code == 0)
+    },
+    test("followJob returns 1 when the job fails") {
+      for {
+        follower <- followerWith("Failed", Some("boom"), List("partial output"))
+        code   <- follower.followJob("job-1")
+      } yield assertTrue(code == 1)
+    },
+    test("followJob times out when the log stream never ends") {
+      for {
+        ref <- Ref.make(List(statusJson("Running", None)))
+        follower = JobFollower(new StubApi(ref, Nil, streamHangs = true), 30.millis)
+        code <- follower.followJob("job-1")
+      } yield assertTrue(code == 1)
+    },
+    test("handleSingle short-circuits on a submission error") {
+      for {
+        follower <- followerWith("Completed", None, Nil)
+        code   <- follower.handleSingle("recruit", JobResult(None, Some("Club not found")))
+      } yield assertTrue(code == 1)
+    },
+    test("handleBatch fails overall if any job fails to submit") {
+      for {
+        follower <- followerWith("Completed", None, Nil)
+        code <- follower.handleBatch(
+          List(
+            ClubJobResult("a", Some("job-1"), None),
+            ClubJobResult("b", None, Some("Club not found"))
+          )
+        )
+      } yield assertTrue(code == 1)
+    }
+  ) @@ TestAspect.withLiveClock
+}
