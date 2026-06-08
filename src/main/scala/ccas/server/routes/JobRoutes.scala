@@ -1,5 +1,7 @@
 package ccas.server.routes
 
+import java.nio.charset.StandardCharsets
+
 import scala.util.chaining.*
 
 import ccas.utils.sql.PostgresClient
@@ -243,6 +245,22 @@ object JobRoutes {
       } yield jobOpt match {
         case Some(job) => jsonResponse(Status.Ok, JobStatusResponse.fromJobRun(job))
         case None      => jsonResponse(Status.NotFound, ErrorResponse(s"Job $jobId not found"))
+      }).pipe(withErrorHandling)
+    },
+    // Chunked `text/plain` stream of a job's log lines. Stays open while the job runs (lines arrive as emitted) and
+    // closes once the job is terminal and the tail reaches EOF, so a client can treat body-close as "job finished".
+    Method.GET / "api" / "jobs" / string("jobId") / "logs" -> handler { (jobId: String, _: Request) =>
+      (for {
+        runner    <- ZIO.service[JobRunner]
+        streamOpt <- runner.logStream(JobRunId.wrap(jobId))
+      } yield streamOpt match {
+        case None => Response.text(s"Job $jobId not found").status(Status.NotFound)
+        case Some(lines) =>
+          Response(
+            status = Status.Ok,
+            headers = Headers(Header.ContentType(MediaType.text.`plain`, charset = Some(StandardCharsets.UTF_8))),
+            body = Body.fromCharSequenceStreamChunked(lines.map(_ + "\n"), StandardCharsets.UTF_8)
+          )
       }).pipe(withErrorHandling)
     }
   )
