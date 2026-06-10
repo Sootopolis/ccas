@@ -2,6 +2,8 @@ package ccas.server.routes
 
 import java.time.{Instant, LocalDateTime, ZoneOffset}
 
+import com.augustnagro.magnum.sql
+
 import ccas.utils.sql.PostgresClient
 import zio.{LogLevel, RIO, Ref, Scope, UIO, ULayer, URIO, ZIO, ZLayer}
 import zio.http.*
@@ -24,7 +26,8 @@ object TestRoutes extends ZIOSpecDefault {
   override def spec: Spec[Any, Throwable] = suite("TestRoutes")(
     suiteHealth,
     suiteJobRoutes,
-    suiteScheduleRoutes
+    suiteScheduleRoutes,
+    suiteClubRoutes
   ).provideShared(
     FreshSchemaLayer("test_routes", onInit = ServerTables.ensureTables),
     fakeJobRunnerLayer,
@@ -584,6 +587,54 @@ object TestRoutes extends ZIOSpecDefault {
       )
     } yield assertTrue(response.status == Status.NotFound)
   }
+
+  // ==========================================================================
+  // Suite: ClubRoutes
+  // ==========================================================================
+
+  private def suiteClubRoutes = suite("ClubRoutes")(
+    testClubsListsNonTombstonedSorted,
+    testClubsResponseWireShape
+  )
+
+  private def testClubsListsNonTombstonedSorted =
+    test("GET /api/clubs lists non-tombstoned clubs sorted by slug, excluding _stale_ rows") {
+      for {
+        _        <- ensureClubs
+        _        <- Club.upsert(Club(ClubId(202), t0, ClubSlug("_stale_202"), "Stale Club", None, None, None))
+        response <- ClubRoutes.routes.runZIO(jsonRequest(Method.GET, "/api/clubs"))
+        body     <- response.body.asString
+        // Drop the tombstone fixture so it doesn't leak into the shared DB for any later suite.
+        _ <- PostgresClient.connectZIO(sql"DELETE FROM club WHERE club_id = 202".update.run())
+        parsed = body.fromJson[ClubRoutes.ClubsResponse]
+      } yield {
+        val clubs = parsed.toOption.get.clubs
+        val slugs = clubs.map(_.slug.value)
+        assertTrue(
+          response.status == Status.Ok,
+          parsed.isRight,
+          slugs == slugs.sorted,
+          slugs.contains("other-club"),
+          slugs.contains("test-club"),
+          !slugs.contains("_stale_202"),
+          clubs.find(_.slug.value == "test-club").exists(_.name == "Test Club")
+        )
+      }
+    }
+
+  private def testClubsResponseWireShape =
+    test("GET /api/clubs response uses {clubs:[{slug,name}]} wire shape") {
+      for {
+        _        <- ensureClubs
+        response <- ClubRoutes.routes.runZIO(jsonRequest(Method.GET, "/api/clubs"))
+        body     <- response.body.asString
+      } yield assertTrue(
+        response.status == Status.Ok,
+        body.contains("\"clubs\""),
+        body.contains("\"slug\""),
+        body.contains("\"name\"")
+      )
+    }
 
   /** Extract the first `"id"` value from a JSON array response. */
   private def extractFirstId(json: String): Long = {

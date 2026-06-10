@@ -2,10 +2,10 @@ package ccas.server
 
 import com.typesafe.config.ConfigFactory
 import zio.{Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
-import zio.http.Server
+import zio.http.{Routes, Server}
 
 import ccas.server.jobs.JobRunner
-import ccas.server.routes.{BlacklistRoutes, HealthRoutes, JobRoutes, RecruitmentCriteriaRoutes, ScheduleRoutes}
+import ccas.server.routes.{BlacklistRoutes, ClubRoutes, HealthRoutes, JobRoutes, RecruitmentCriteriaRoutes, ScheduleRoutes}
 import ccas.server.scheduler.JobScheduler
 import ccas.utils.ProgressDisplay
 import ccas.utils.client.{ChessComClient, HttpClientLayer}
@@ -17,12 +17,20 @@ object CcasServer extends ZIOAppDefault {
     val config = ConfigFactory.load()
     val port   = config.getInt("server.port")
 
+    val routes: Routes[JobRunner & ChessComClient & PostgresClient, Nothing] =
+      List(
+        HealthRoutes.routes,
+        JobRoutes.routes,
+        ScheduleRoutes.routes,
+        BlacklistRoutes.routes,
+        RecruitmentCriteriaRoutes.routes,
+        ClubRoutes.routes
+      ).reduce(_ ++ _)
+
     (for {
       scheduler <- ZIO.service[JobScheduler]
       _         <- scheduler.start
-      _ <- Server.serve(
-        HealthRoutes.routes ++ JobRoutes.routes ++ ScheduleRoutes.routes ++ BlacklistRoutes.routes ++ RecruitmentCriteriaRoutes.routes
-      )
+      _         <- Server.serve(routes)
     } yield ()).provideSome[Scope](
       ProgressDisplay.live(showProgress = false),
       ChessComClient.live("server"),
