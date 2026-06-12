@@ -71,22 +71,22 @@ Commands: `serve`, `membership`, `history`, `recruit`, `stats`, `jobs`, `logs`, 
 
 ### Shell completion
 
-**bash (instant, recommended).** A static script ships in `completions/`; it runs entirely in the shell (no JVM), so `<TAB>` is immediate. Install once:
+`ccas completion <bash|zsh|fish>` prints a self-contained, **pure-shell** completion script. It boots the JVM once when you install it; afterwards every `<TAB>` runs entirely in the shell (no JVM, no network), so completion is instant. The scripts complete subcommands and flags, plus **club slugs** (at slug positions) and **recent job ids** (for `ccas logs`) read from cache files.
 
 ```bash
-mkdir -p ~/.local/share/bash-completion/completions
-ln -sf "$PWD/completions/ccas.bash" ~/.local/share/bash-completion/completions/ccas
+# bash — install once (bash-completion auto-loads it)
+ccas completion bash > ~/.local/share/bash-completion/completions/ccas
+
+# zsh — add to ~/.zshrc, after `autoload -Uz compinit && compinit`
+eval "$(ccas completion zsh)"
+
+# fish
+ccas completion fish > ~/.config/fish/completions/ccas.fish
 ```
 
-`bash-completion` auto-loads it on first use (or `source completions/ccas.bash` from `~/.bashrc`). The symlink picks up updates automatically; use `cp` instead to pin a copy. It mirrors the command tree (subcommands + flags) and the `TestCcasCompletion` test fails if the two drift apart.
+Dynamic candidates come from `${XDG_CACHE_HOME:-~/.cache}/ccas/clubs.txt` and `recent-jobs.txt`, refreshed automatically as you run normal commands (the club list is fetched from `GET /api/clubs` at most every few hours; each submitted job id is recorded). On a fresh install these are empty, so only subcommands and flags complete until the first command populates them. (A config-based `default_clubs` fallback for the empty-cache case is tracked in #43.)
 
-**zsh / fish.** zio-cli generates a dynamic script:
-
-```bash
-ccas --shell-completion-script "$(command -v ccas)" --shell-type zsh 2>/dev/null > <dest>   # or --shell-type fish
-```
-
-Caveat: the dynamic script calls back into the binary, so each `<TAB>` boots the JVM (~1.5s). The static bash script avoids this; a fast cache-based completion for all shells is tracked in #49.
+The committed `completions/ccas.bash` is the generated output of `ccas completion bash`; `TestCcasCompletion` fails if it drifts from the emitter or if a new subcommand/flag isn't covered. Regenerate it with `ccas completion bash > completions/ccas.bash`.
 
 ## Applications
 

@@ -62,6 +62,8 @@ object CliCommand {
     params: Option[String]
   ) extends CliCommand
   final case class ScheduleRemove(server: String, id: Long) extends CliCommand
+  // No server interaction: `completion` emits a static script. `server` is unused but required by the trait.
+  final case class Completion(shell: String) extends CliCommand { def server: String = "" }
 
   // --- Shared options ---
 
@@ -220,6 +222,11 @@ object CliCommand {
       .withHelp("Manage scheduled jobs")
       .subcommands(scheduleList, scheduleAdd, scheduleRemove)
 
+  private val completion: Command[CliCommand] =
+    Command("completion", Args.text("shell") ?? "Shell to emit completions for: bash, zsh, or fish")
+      .withHelp("Emit a shell completion script (bash, zsh, or fish)")
+      .map(Completion.apply)
+
   /** zio-cli config for the `ccas` command tree. `finalCheckBuiltIn = false` works around a zio-cli 0.8.1 bug: with
     * the default `true`, `ccas <sub> --help` renders the FIRST subcommand's help (`serve`) instead of the named one.
     * `Command.Subcommands.parse` feeds the child `OrElse` a `finalCheckBuiltIn = true` config, so
@@ -230,5 +237,5 @@ object CliCommand {
   val config: CliConfig = CliConfig.default.copy(finalCheckBuiltIn = false)
 
   val command: Command[CliCommand] =
-    Command("ccas").subcommands(serve, membership, history, recruit, stats, jobs, logs, blacklist, schedule)
+    Command("ccas").subcommands(serve, membership, history, recruit, stats, jobs, logs, blacklist, schedule, completion)
 }

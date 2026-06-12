@@ -41,16 +41,18 @@ final class JobFollower(api: CcasApiClient, maxWait: Duration) {
   def handleSingle(label: String, result: JobResult): Task[Int] =
     (result.error, result.jobId) match {
       case (Some(err), _) => Console.printLineError(s"$label: $err").orDie.as(1)
-      case (_, Some(id))  => Console.printLine(s"$label submitted: $id").orDie *> followJob(id)
-      case _              => Console.printLineError(s"$label: server returned no job id").orDie.as(1)
+      case (_, Some(id)) =>
+        CompletionCache.appendJob(id) *> Console.printLine(s"$label submitted: $id").orDie *> followJob(id)
+      case _ => Console.printLineError(s"$label: server returned no job id").orDie.as(1)
     }
 
   /** Club-scoped single-job submit result (stats). */
   def handleClubSingle(result: ClubJobResult): Task[Int] =
     (result.error, result.jobId) match {
       case (Some(err), _) => Console.printLineError(s"${result.clubSlug}: $err").orDie.as(1)
-      case (_, Some(id))  => Console.printLine(s"${result.clubSlug} submitted: $id").orDie *> followJob(id)
-      case _              => Console.printLineError(s"${result.clubSlug}: server returned no job id").orDie.as(1)
+      case (_, Some(id)) =>
+        CompletionCache.appendJob(id) *> Console.printLine(s"${result.clubSlug} submitted: $id").orDie *> followJob(id)
+      case _ => Console.printLineError(s"${result.clubSlug}: server returned no job id").orDie.as(1)
     }
 
   /** Batch submit result (membership, history): follow each club's job in turn, fail overall if any job failed. */

@@ -26,7 +26,7 @@ object Dispatcher {
   def dispatch(cmd: CliCommand): URIO[Any, ExitCode] =
     CcasApiClient
       .live(cmd.server)
-      .flatMap(api => runCommand(api, JobFollower(api, MaxJobWait), cmd))
+      .flatMap(api => runCommand(api, JobFollower(api, MaxJobWait), cmd).tap(_ => refreshClubsCache(api)))
       .provide(Client.default)
       .catchAll {
         case e: CliError  => Console.printLineError(s"error: ${e.message}").orDie.as(e.exitCode)
@@ -40,8 +40,22 @@ object Dispatcher {
   private def rootMessage(e: Throwable): String =
     Option(e.getMessage).getOrElse(e.getClass.getSimpleName)
 
+  // Best-effort, staleness-gated refresh of the completion club-slug cache after a successful command. Fully ignored:
+  // it never blocks the result or alters the exit code (the `.tap` runs only on the success channel).
+  private def refreshClubsCache(api: CcasApiClient): URIO[Any, Unit] =
+    CompletionCache.clubsStale.flatMap { stale =>
+      ZIO.whenDiscard(stale) {
+        api
+          .getJson[CompletionCache.ClubsDto]("/api/clubs")
+          .map(_.clubs.map(_.slug))
+          .flatMap(CompletionCache.writeClubs)
+          .ignore
+      }
+    }
+
   private def runCommand(api: CcasApiClient, follower: JobFollower, cmd: CliCommand): Task[Int] = cmd match {
-    case _: CliCommand.Serve => ZIO.succeed(0) // handled in Main
+    case _: CliCommand.Serve      => ZIO.succeed(0) // handled in Main
+    case _: CliCommand.Completion => ZIO.succeed(0) // handled in Main; unreachable here, present for exhaustiveness
 
     case CliCommand.Membership(_, slugs, trust) =>
       api.postJson[MembershipRequest, List[ClubJobResult]](

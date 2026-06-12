@@ -4,54 +4,100 @@ import java.io.IOException
 import java.nio.file.{Files, Paths}
 
 import zio.ZIO
-import zio.test.{assertCompletes, assertTrue, Spec, ZIOSpecDefault}
+import zio.test.{assertCompletes, assertTrue, Spec, TestAspect, TestResult, ZIOSpecDefault}
 
-/** Drift guard for the static bash completion (`completions/ccas.bash`). That script is hand-maintained for instant,
-  * JVM-free completion (Sootopolis/ccas#49); this test asserts it stays valid bash and still covers every command
-  * and option in the [[CliCommand]] tree, so a newly added subcommand or flag can't silently go uncompleted. The
-  * command tree is read by rendering the root help in-process (no JVM spawn). Paths are relative to the repo root
+import ccas.cli.CompletionSpec.PositionalKind
+
+/** Guards the generated shell completions ([[CompletionEmitter]]). Three concerns:
+  *   1. the committed `completions/ccas.bash` equals the bash emitter output (regenerate with
+  *      `ccas completion bash > completions/ccas.bash`);
+  *   2. every emitted script is valid for its shell (`<shell> -n`, skipped when that shell isn't installed);
+  *   3. [[CompletionSpec]] still covers every command and flag in the [[CliCommand]] tree, so a newly added
+  *      subcommand or flag can't silently go uncompleted.
+  *
+  * The command tree is read by rendering the root help in-process (no JVM spawn). Paths are relative to the repo root
   * (sbt's test cwd).
   */
 object TestCcasCompletion extends ZIOSpecDefault {
 
-  private val ScriptPath = "completions/ccas.bash"
+  private val BashScriptPath = "completions/ccas.bash"
 
-  private val script = Files.readString(Paths.get(ScriptPath))
-
-  // Full tree help: the COMMANDS enumeration lists every command path with its complete option synopsis.
+  // Full-tree help: the COMMANDS enumeration lists every command path with its complete option synopsis.
   private val help = CliCommand.command.helpDoc.toPlaintext(1000, color = false)
 
   // Long-option tokens used anywhere in the tree, e.g. --server, --no-trust-usernames, --refresh-min-hours.
-  private val flags: Set[String] = "--[a-z][a-z0-9-]*".r.findAllIn(help).toSet
+  private val treeFlags: Set[String] = "--[a-z][a-z0-9-]*".r.findAllIn(help).toSet
+
+  // Value-taking flags render in the synopsis with a metavar ("--server <text>", "--target <integer>"); booleans
+  // render bare ("--cumulative"). The completion scripts use this split to offer nothing right after a value flag.
+  private val treeValueFlags: Set[String] =
+    """(--[a-z][a-z0-9-]*) <""".r.findAllMatchIn(help).map(_.group(1)).toSet
 
   // Command words from enumeration lines like "- blacklist add [--server …] <slug> …" (path = words before [ or <).
-  // Assumes every command carries at least one option or positional arg (true today — all have --server); a command
-  // with neither would render a bracketless line and be skipped here.
-  private val commandWords: Set[String] =
+  private val treeCommandWords: Set[String] =
     """(?m)^\s*-\s+([a-z][a-z ]*?) +[\[<]""".r
       .findAllMatchIn(help)
       .flatMap(_.group(1).trim.split(" "))
       .toSet
 
+  // Run `<shell> -n <file>` on the emitted script (parse-only, no execution). Skip (pass) if the shell isn't on PATH.
+  private def syntaxCheck(shell: String, script: String): ZIO[Any, Throwable, TestResult] = {
+    val run =
+      for {
+        tmp    <- ZIO.attempt(Files.createTempFile("ccas-completion-", s".$shell"))
+        _      <- ZIO.attempt(Files.writeString(tmp, script))
+        proc   <- ZIO.attempt(new ProcessBuilder(shell, "-n", tmp.toString).redirectErrorStream(true).start())
+        output <- ZIO.attempt(new String(proc.getInputStream.readAllBytes()))
+        code   <- ZIO.attemptBlocking(proc.waitFor())
+        _      <- ZIO.attempt(Files.deleteIfExists(tmp))
+      } yield assertTrue(code == 0, output.isEmpty)
+    run.catchSome { case _: IOException => ZIO.succeed(assertCompletes) }
+  }
+
+  private def positionalOf(path: String*): PositionalKind =
+    CompletionSpec.leaves.find(_.path == path.toList).map(_.positional).getOrElse(PositionalKind.Other)
+
   override def spec: Spec[Any, Any] = suite("TestCcasCompletion")(
-    // Token-presence guards catch drift but not a broken `case`/syntax error; `bash -n` catches the latter.
-    test(s"$ScriptPath is syntactically valid bash") {
-      val check =
-        for {
-          proc    <- ZIO.attempt(new ProcessBuilder("bash", "-n", ScriptPath).redirectErrorStream(true).start())
-          output  <- ZIO.attempt(new String(proc.getInputStream.readAllBytes()))
-          code    <- ZIO.attemptBlocking(proc.waitFor())
-        } yield assertTrue(code == 0, output.isEmpty)
-      // No bash on PATH (unlikely in CI/dev) -> skip rather than fail.
-      check.catchSome { case _: IOException => ZIO.succeed(assertCompletes) }
+    test(s"$BashScriptPath equals the bash emitter output") {
+      val committed = Files.readString(Paths.get(BashScriptPath))
+      // On failure: regenerate with `ccas completion bash > completions/ccas.bash`.
+      assertTrue(committed == CompletionEmitter.bash)
     },
-    test(s"every command word in the tree appears in $ScriptPath") {
-      val missing = commandWords.filterNot(script.contains)
-      assertTrue(commandWords.nonEmpty, missing.isEmpty)
+    // `@@ flaky`: spawning a shell subprocess can transiently fail under full-suite fork pressure (a real syntax error
+    // surfaces as a non-zero exit on EVERY retry, so this can't mask a genuinely broken script). A missing shell is
+    // skipped inside `syntaxCheck`, so flaky never retries the absent-shell case.
+    test("emitted bash is syntactically valid") {
+      syntaxCheck("bash", CompletionEmitter.bash)
+    } @@ TestAspect.flaky,
+    test("emitted zsh is syntactically valid (skipped if zsh absent)") {
+      syntaxCheck("zsh", CompletionEmitter.zsh)
+    } @@ TestAspect.flaky,
+    test("emitted fish is syntactically valid (skipped if fish absent)") {
+      syntaxCheck("fish", CompletionEmitter.fish)
+    } @@ TestAspect.flaky,
+    test("CompletionSpec covers every flag in the command tree") {
+      val missing = treeFlags -- CompletionSpec.allFlags
+      assertTrue(treeFlags.nonEmpty, missing.isEmpty)
     },
-    test(s"every option in the tree appears in $ScriptPath") {
-      val missing = flags.filterNot(script.contains)
-      assertTrue(flags.nonEmpty, missing.isEmpty)
+    test("CompletionSpec covers every command word in the tree") {
+      val missing = treeCommandWords -- CompletionSpec.allCommandWords
+      assertTrue(treeCommandWords.nonEmpty, missing.isEmpty)
+    },
+    // Guards value-vs-boolean drift: a new value flag (or a flag whose arity changed) that isn't reclassified in
+    // CompletionSpec.valueFlags would otherwise mis-complete (suggest right after a value flag, or suppress after a
+    // boolean) while the presence checks above still pass.
+    test("CompletionSpec.valueFlags matches the tree's value-taking flags") {
+      assertTrue(treeValueFlags.nonEmpty, CompletionSpec.valueFlags.toSet == treeValueFlags)
+    },
+    test("positional kinds are pinned (not recoverable from help text)") {
+      assertTrue(
+        positionalOf("membership") == PositionalKind.Slugs,
+        positionalOf("history") == PositionalKind.Slugs,
+        positionalOf("recruit") == PositionalKind.Slug,
+        positionalOf("logs") == PositionalKind.JobId,
+        positionalOf("completion") == PositionalKind.Shell,
+        positionalOf("blacklist", "add") == PositionalKind.Slug
+      )
     }
   )
 }

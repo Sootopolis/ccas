@@ -75,6 +75,9 @@ object TestCliParser extends ZIOSpecDefault {
     test("schedule remove parses the id") {
       parsed("schedule", "remove", "7").map(c => assertTrue(c.contains(CliCommand.ScheduleRemove(DefaultServer, 7L))))
     },
+    test("completion parses the shell argument (no server)") {
+      parsed("completion", "bash").map(c => assertTrue(c.contains(CliCommand.Completion("bash"))))
+    },
     test("unknown subcommand fails validation") {
       parse("nonsense").exit.map(e => assertTrue(e.isFailure))
     },
