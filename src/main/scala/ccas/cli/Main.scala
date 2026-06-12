@@ -43,7 +43,24 @@ object Main extends ZIOAppDefault {
     }
 
   private def execute(cmd: CliCommand): URIO[ZIOAppArgs, ExitCode] = cmd match {
-    case _: CliCommand.Serve => ZIO.scoped(CcasServer.run).fold(_ => ExitCode.failure, _ => ExitCode.success)
-    case other               => Dispatcher.dispatch(other)
+    // `.fold(_ => failure, _ => success)` here is the body of the deprecated `ZIO#exitCode`, which swallows the cause.
+    // CcasServer.run logs nothing itself (it relies on the app framework's tapErrorCause), so map via foldCauseZIO and
+    // log the cause first — otherwise a boot/crash under `ccas serve` exits 1 with no diagnostic.
+    case _: CliCommand.Serve =>
+      ZIO
+        .scoped(CcasServer.run)
+        .foldCauseZIO(
+          cause => ZIO.logErrorCause("ccas server exited abnormally", cause).as(ExitCode.failure),
+          _ => ZIO.succeed(ExitCode.success)
+        )
+    case CliCommand.Completion(shell) => printCompletion(shell)
+    case other                        => Dispatcher.dispatch(other)
   }
+
+  // Pure, offline: emit the script to stdout (so `eval "$(ccas completion bash)"` works), errors to stderr. No server.
+  private def printCompletion(shell: String): URIO[Any, ExitCode] =
+    CompletionEmitter.render(shell) match {
+      case Right(script)  => Console.print(script).orDie.as(ExitCode.success)
+      case Left(message)  => Console.printLineError(s"error: $message").orDie.as(ExitCode(2))
+    }
 }
