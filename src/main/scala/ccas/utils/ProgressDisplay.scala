@@ -24,8 +24,9 @@ import zio.{Cause, FiberId, FiberRef, FiberRefs, LogLevel, LogSpan, Ref, Runtime
   * background fiber fed by a per-job queue (see #42 follow-up discussion in the plan file).
   *
   * When `enabled` is `false` the bar list is still tracked (so `addBarScoped` finalisers behave consistently across
-  * modes) but every stdout side-effect is suppressed. `logAboveBarsSync` falls back to a plain `System.out.println` —
-  * suitable for server / non-interactive mode.
+  * modes) but the bar-redraw side-effects are suppressed. `logAboveBarsSync` still routes its line through the active
+  * `JobLogSink` (the default `StdoutSink` writes the log line to `out`); only the bar dance is skipped — suitable for
+  * server / non-interactive mode.
   */
 final class ProgressDisplay private[utils] (
   private val enabled: Boolean,
@@ -183,7 +184,7 @@ object ProgressDisplay {
     *   `true` for interactive CLI use (renders bars + log lines on stdout). `false` for server / non-interactive mode
     *   (suppresses bar rendering; `ZIO.log*` still fires through the custom formatter, just without bar dance).
     */
-  def live(showProgress: Boolean = true): URLayer[Scope, ProgressDisplay] =
+  def live(showProgress: Boolean): URLayer[Scope, ProgressDisplay] =
     liveWith(showProgress, System.out, System.err)
 
   /** Test-only variant of [[live]] that injects the bar-redraw (`out`) and defect (`err`) streams, so suites that

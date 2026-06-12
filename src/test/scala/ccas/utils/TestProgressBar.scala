@@ -3,7 +3,7 @@ package ccas.utils
 import java.io.{ByteArrayOutputStream, PrintStream}
 
 import zio.{LogLevel, Promise, Ref, ZIO}
-import zio.test.{assertCompletes, assertTrue, Spec, TestAspect, ZIOSpecDefault}
+import zio.test.{assertCompletes, assertTrue, Spec, ZIOSpecDefault}
 
 object TestProgressBar extends ZIOSpecDefault {
 
@@ -21,7 +21,11 @@ object TestProgressBar extends ZIOSpecDefault {
     testCurrentLogLevelFiltersDebug,
     testCurrentLogLevelEnablesDebug,
     testLoggerSwallowsThrow
-  ) @@ TestAspect.sequential
+  )
+  // No `@@ TestAspect.sequential`: each test owns its capture buffers and installs loggers/sinks via fiber-scoped
+  // FiberRefs (`currentLoggers`, `currentSink`), so the suite holds no process-global state to serialise. (Cross-suite
+  // isolation is still provided by `Test/parallelExecution := false` in build.sbt, for the TestCcasCompletion fork-
+  // pressure case — unrelated to this suite.)
 
   private def stripAnsi(s: String): String = s.replaceAll("\\u001b\\[[0-9;]*[a-zA-Z]", "").replaceAll("\r", "")
 
@@ -211,10 +215,16 @@ object TestProgressBar extends ZIOSpecDefault {
     }
   }
 
-  /** End-to-end test that `ProgressDisplay.live` actually swaps `currentLoggers` so that `ZIO.logInfo` routes
-    * through the custom formatter (level label, ANSI colour) and not ZIO's default console logger. The capture sink
-    * only receives a line if the live `ZLogger` routed it — the default ZIO logger never touches `JobLogSink` — so a
-    * non-empty payload is itself proof the logger was installed.
+  /** End-to-end test that `ProgressDisplay.live` installs the custom `ZLogger` so `ZIO.logInfo` routes through the
+    * formatter (level label, ANSI colour). The capture sink only receives a line if the live `ZLogger` routed it —
+    * ZIO's default console logger never touches `JobLogSink` — so a non-empty, correctly-formatted payload is itself
+    * proof the logger was installed.
+    *
+    * Coverage note: this no longer also asserts ZIO's default console logger was *removed* (the old
+    * `!out.contains("timestamp=")` check). That guard relied on capturing process-global `System.out`, where the
+    * default logger writes; #64 removed that swap, and ZIO's logger set (`FiberRef.currentLoggers`) is `private[zio]`,
+    * so the removal can't be asserted without reintroducing the swap. `live` runs `Runtime.removeDefaultLoggers`
+    * unconditionally; a regression there would surface as visible double console output.
     */
   private def testZioLogInfoRoutesThroughLiveLogger = test("ZIO.logInfo routes through ProgressDisplay.live's ZLogger") {
     withLogCapture(ZIO.logInfo("hello from zio")).map { case (_, out) =>
