@@ -36,7 +36,11 @@ libraryDependencies ++= Seq(
   "com.github.f4b6a3" % "ulid-creator" % vUlidCreator,
 
   // zio-cli (CLI parsing — ZIO-native, also generates shell completions)
-  "dev.zio" %% "zio-cli" % vZioCli
+  "dev.zio" %% "zio-cli" % vZioCli,
+
+  // No-op SLF4J binding: we log via ZIO, not SLF4J. Without a binding, transitive SLF4J users (netty, etc.) print
+  // "No SLF4J providers were found" on every CLI invocation; the NOP binding silences that library noise.
+  "org.slf4j" % "slf4j-nop" % vSlf4j
 )
 
 scalacOptions ++= Seq(
@@ -66,6 +70,9 @@ lazy val root = (project in file("."))
     // prints on JDK 24+. The `--sun-misc-unsafe-memory-access` flag only exists on JDK 23+, so
     // probe the runtime version in the launcher and add it conditionally (older JDKs don't warn).
     bashScriptExtraDefines ++= Seq(
+      // Grant native access to unnamed-module code (netty's loadLibrary) so the JVM doesn't print "restricted method"
+      // warnings on JDK 24+. Valid since JDK 16 and harmless on older JDKs, so add it unconditionally.
+      "addJava \"--enable-native-access=ALL-UNNAMED\"",
       """java_major=$("${java_cmd:-java}" -version 2>&1 | head -n1 | sed -E 's/.*version "?([0-9]+).*/\1/')""",
       """if [ "${java_major:-0}" -ge 23 ] 2>/dev/null; then addJava "--sun-misc-unsafe-memory-access=allow"; fi"""
     )
