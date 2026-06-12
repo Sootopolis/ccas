@@ -63,18 +63,20 @@ object TestCcasCompletion extends ZIOSpecDefault {
       // On failure: regenerate with `ccas completion bash > completions/ccas.bash`.
       assertTrue(committed == CompletionEmitter.bash)
     },
-    // `@@ flaky`: spawning a shell subprocess can transiently fail under full-suite fork pressure (a real syntax error
-    // surfaces as a non-zero exit on EVERY retry, so this can't mask a genuinely broken script). A missing shell is
-    // skipped inside `syntaxCheck`, so flaky never retries the absent-shell case.
+    // These three checks spawn `<shell> -n` subprocesses. They previously carried `@@ TestAspect.flaky` to absorb
+    // transient fork failures under parallel-suite memory pressure; that band-aid is gone now that suites run
+    // one-at-a-time (`Test / parallelExecution := false`, see build.sbt) — on an unloaded machine the fork is
+    // reliable. The suite is `@@ sequential` (below) so the spawns don't overlap each other either. A genuine syntax
+    // error still surfaces as a non-zero exit (no retry masks it); a missing shell is skipped inside `syntaxCheck`.
     test("emitted bash is syntactically valid") {
       syntaxCheck("bash", CompletionEmitter.bash)
-    } @@ TestAspect.flaky,
+    },
     test("emitted zsh is syntactically valid (skipped if zsh absent)") {
       syntaxCheck("zsh", CompletionEmitter.zsh)
-    } @@ TestAspect.flaky,
+    },
     test("emitted fish is syntactically valid (skipped if fish absent)") {
       syntaxCheck("fish", CompletionEmitter.fish)
-    } @@ TestAspect.flaky,
+    },
     test("CompletionSpec covers every flag in the command tree") {
       val missing = treeFlags -- CompletionSpec.allFlags
       assertTrue(treeFlags.nonEmpty, missing.isEmpty)
@@ -99,5 +101,5 @@ object TestCcasCompletion extends ZIOSpecDefault {
         positionalOf("blacklist", "add") == PositionalKind.Slug
       )
     }
-  )
+  ) @@ TestAspect.sequential
 }
