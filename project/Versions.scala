@@ -14,4 +14,5 @@ object Versions {
   val vHikari       = "6.3.3"
   val vUlidCreator  = "5.2.4"
   val vZioCli       = "0.8.1"
+  val vSlf4j        = "2.0.17"
 }

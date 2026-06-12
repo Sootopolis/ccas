@@ -43,18 +43,43 @@ object Main extends ZIOAppDefault {
     }
 
   private def execute(cmd: CliCommand): URIO[ZIOAppArgs, ExitCode] = cmd match {
-    // `.fold(_ => failure, _ => success)` here is the body of the deprecated `ZIO#exitCode`, which swallows the cause.
-    // CcasServer.run logs nothing itself (it relies on the app framework's tapErrorCause), so map via foldCauseZIO and
-    // log the cause first — otherwise a boot/crash under `ccas serve` exits 1 with no diagnostic.
-    case _: CliCommand.Serve =>
-      ZIO
-        .scoped(CcasServer.run)
-        .foldCauseZIO(
-          cause => ZIO.logErrorCause("ccas server exited abnormally", cause).as(ExitCode.failure),
-          _ => ZIO.succeed(ExitCode.success)
-        )
+    case _: CliCommand.Serve          => serve
     case CliCommand.Completion(shell) => printCompletion(shell)
     case other                        => Dispatcher.dispatch(other)
+  }
+
+  private def serve: URIO[ZIOAppArgs, ExitCode] =
+    missingServeEnv match {
+      // Known missing config → a one-line message, not the raw ConfigException stack from ConfigFactory.load.
+      case Some(msg) => Console.printLineError(s"error: $msg").orDie.as(ExitCode(2))
+      // `.fold(_ => failure, _ => success)` would be the deprecated `ZIO#exitCode`, which swallows the cause; CcasServer
+      // logs nothing itself, so map via foldCauseZIO and log the cause — else an unexpected crash exits with no diagnostic.
+      case None =>
+        ZIO
+          .scoped(CcasServer.run)
+          .foldCauseZIO(
+            cause => ZIO.logErrorCause("ccas server exited abnormally", cause).as(ExitCode.failure),
+            _ => ZIO.succeed(ExitCode.success)
+          )
+    }
+
+  // Mandatory server config comes from the process env (the staged binary doesn't load `.env`). Surface the first
+  // missing piece as a clean message instead of letting `ConfigFactory.load` throw an UnresolvedSubstitution stack.
+  private def missingServeEnv: Option[String] = {
+    def unset(name: String): Boolean = sys.env.get(name).forall(_.trim.isEmpty)
+    if (unset("CCAS_CONTACT_EMAIL")) {
+      Some(
+        "CCAS_CONTACT_EMAIL is not set (required for the Chess.com API User-Agent). " +
+          "Export it before 'ccas serve' — see README → Configuration."
+      )
+    } else if (unset("DATABASE_URL") && unset("DB_NAME")) {
+      Some(
+        "no database configured. Set DATABASE_URL, or DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASSWORD. " +
+          "See README → Configuration."
+      )
+    } else {
+      None
+    }
   }
 
   // Pure, offline: emit the script to stdout (so `eval "$(ccas completion bash)"` works), errors to stderr. No server.
