@@ -52,7 +52,13 @@ scalacOptions ++= Seq(
   "-Xmax-inlines:64"
 )
 
-Test / parallelExecution := true
+// Suites run one-at-a-time. The test suite shares three process-global resources that concurrent suites race on:
+// the OS process table / memory (the `<shell> -n` completion checks spawn subprocesses that fail to fork under
+// parallel-suite memory pressure), the JVM's `System.out` (TestProgressBar swaps it process-wide to capture output),
+// and — historically — DB rows (now isolated per-suite via FreshSchemaLayer). Disabling cross-suite parallelism
+// removes the contention at its root rather than masking it with `@@ TestAspect.flaky` retries. Cost is small: the
+// suite is DB-I/O-bound, so serialising adds ~11s to the test phase (~17s -> ~28s), not a multiple. Tracked: #65.
+Test / parallelExecution := false
 
 lazy val root = (project in file("."))
   .enablePlugins(BuildInfoPlugin, JavaAppPackaging)
