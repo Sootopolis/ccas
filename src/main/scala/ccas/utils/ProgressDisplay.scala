@@ -1,5 +1,6 @@
 package ccas.utils
 
+import java.io.PrintStream
 import java.time.format.DateTimeFormatter
 import java.time.{Instant, ZoneId}
 import java.util.concurrent.atomic.AtomicInteger
@@ -11,8 +12,10 @@ import zio.{Cause, FiberId, FiberRef, FiberRefs, LogLevel, LogSpan, Ref, Runtime
   * State (`bars`) is guarded by a Java intrinsic monitor (`lock`) so the synchronous `ZLogger` callback installed by
   * `ProgressDisplay.live` and the ZIO-effect entry points (`render`, `removeBar`, `finishAllSync`) all serialise their
   * stdout writes through the same mutex. JVM monitors are reentrant, so a logger callback fired from a thread that
-  * already holds the lock proceeds without deadlock. Output goes directly to `System.out`, not through `zio.Console`,
-  * because `ZLogger.apply` is synchronous and cannot run a ZIO effect.
+  * already holds the lock proceeds without deadlock. Bar redraws go directly to the injected `out` stream (`System.out`
+  * in production; a capture buffer under test), not through `zio.Console`, because `ZLogger.apply` is synchronous and
+  * cannot run a ZIO effect. The injected `err` stream receives the last-resort stack trace if a log message thunk
+  * throws inside the `ZLogger` callback.
   *
   * `logAboveBarsSync` invokes the active `JobLogSink` inside the lock — required to keep the `clear → print → redraw`
   * sequence atomic across fibers. The default `StdoutSink` is a single `println` so the critical section stays short.
@@ -24,7 +27,11 @@ import zio.{Cause, FiberId, FiberRef, FiberRefs, LogLevel, LogSpan, Ref, Runtime
   * modes) but every stdout side-effect is suppressed. `logAboveBarsSync` falls back to a plain `System.out.println` —
   * suitable for server / non-interactive mode.
   */
-final class ProgressDisplay private[utils] (private val enabled: Boolean) {
+final class ProgressDisplay private[utils] (
+  private val enabled: Boolean,
+  private val out: PrintStream,
+  private val err: PrintStream
+) {
 
   private val lock                                  = new Object
   private var bars: List[ProgressDisplay.BarState]  = Nil
@@ -125,7 +132,7 @@ final class ProgressDisplay private[utils] (private val enabled: Boolean) {
         try {
           val sink = context.getOrDefault(JobLogSink.currentSink)
           logAboveBarsSync(sink, ProgressDisplay.format(level, message(), Instant.now(), cause, spans, annotations))
-        } catch { case t: Throwable => t.printStackTrace(System.err) }
+        } catch { case t: Throwable => t.printStackTrace(err) }
       }
     }
   }
@@ -137,12 +144,12 @@ final class ProgressDisplay private[utils] (private val enabled: Boolean) {
   // ---------------------------------------------------------------------------
 
   private def clearLineSync(): Unit =
-    if (enabled && bars.exists(_.lineCount > 0)) System.out.print("\r\u001b[K")
+    if (enabled && bars.exists(_.lineCount > 0)) out.print("\r\u001b[K")
 
   private def drawAllSync(): Unit =
     if (enabled) {
       val parts = bars.filter(_.lineCount > 0).map(_.lastOutput.trim)
-      if (parts.nonEmpty) System.out.print("\r" + parts.mkString("  ") + "\u001b[K")
+      if (parts.nonEmpty) out.print("\r" + parts.mkString("  ") + "\u001b[K")
     }
 }
 
@@ -157,7 +164,13 @@ object ProgressDisplay {
     *   `true` for stdout rendering. `false` suppresses every stdout side-effect — bar lifecycle (`addBar`/`removeBar`)
     *   still tracks state correctly so that `addBarScoped` finalisers behave the same in both modes.
     */
-  def make(enabled: Boolean): ProgressDisplay = new ProgressDisplay(enabled)
+  def make(enabled: Boolean): ProgressDisplay = makeWith(enabled, System.out, System.err)
+
+  /** Test-only factory that injects the bar-redraw (`out`) and defect (`err`) streams so suites can capture output
+    * without mutating process-global `System.out` / `System.err`. Production code uses [[make]] / [[live]].
+    */
+  private[utils] def makeWith(enabled: Boolean, out: PrintStream, err: PrintStream): ProgressDisplay =
+    new ProgressDisplay(enabled, out, err)
 
   /** Provides a `ProgressDisplay` service AND replaces ZIO's default console logger with the progress-display
     * `ZLogger` for the layer's scope. ZIO's default console logger is therefore inactive while this layer is alive —
@@ -171,10 +184,17 @@ object ProgressDisplay {
     *   (suppresses bar rendering; `ZIO.log*` still fires through the custom formatter, just without bar dance).
     */
   def live(showProgress: Boolean = true): URLayer[Scope, ProgressDisplay] =
+    liveWith(showProgress, System.out, System.err)
+
+  /** Test-only variant of [[live]] that injects the bar-redraw (`out`) and defect (`err`) streams, so suites that
+    * exercise the installed `ZLogger` (e.g. a throwing message thunk routed to `err`) can capture without swapping
+    * process-global streams.
+    */
+  private[utils] def liveWith(showProgress: Boolean, out: PrintStream, err: PrintStream): URLayer[Scope, ProgressDisplay] =
     Runtime.removeDefaultLoggers ++ ZLayer.scoped {
       for {
         d <- ZIO.acquireRelease(
-          ZIO.succeed(make(showProgress))
+          ZIO.succeed(makeWith(showProgress, out, err))
         )(d => ZIO.succeed(d.finishAllSync()))
         _ <- ZIO.withLoggerScoped(d.asZLogger)
       } yield d
