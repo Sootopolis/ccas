@@ -163,6 +163,27 @@ Optional overrides with defaults:
 
 See [`application.conf`](src/main/resources/application.conf) for the full set of tunable parameters.
 
+## Backups
+
+Production data lives on Neon's free plan, which retains only 24h of point-in-time recovery. [`scripts/backup-neon.sh`](scripts/backup-neon.sh) takes a weekly compressed logical dump to local disk as the disaster-recovery floor. It is read-only (`pg_dump` only) and reuses the same connection config as the app — `DATABASE_URL` (JDBC form) takes priority, otherwise the `DB_*` fields. The rebuildable cache / diagnostics tables (`api_response_cache`, `api_response_body`, `api_fetch_failure`) are dumped schema-only (`--exclude-table-data`) to keep dumps small.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CCAS_BACKUP_DIR` | `~/ccas-backups` | Output directory for `.dump` files |
+| `CCAS_BACKUP_RETAIN` | 6 | Number of most-recent dumps to keep (older are pruned) |
+
+Run it once manually (with the DB env loaded), then schedule weekly. Sunday 04:00 UTC, sourcing the repo `.env` so the same connection config is reused:
+
+```cron
+0 4 * * 0 set -a; . /path/to/ccas/.env; set +a; /path/to/ccas/scripts/backup-neon.sh >> ~/ccas-backups/backup.log 2>&1
+```
+
+A weekly cadence is one Neon compute wake per week — negligible against the 192 active-hr/mo free-tier budget. Restore a dump with `pg_restore` (use a version **≥** the `pg_dump` that wrote the file — a custom-format archive can't be read by an older `pg_restore`):
+
+```bash
+pg_restore --no-owner --no-privileges -d <target-conn> ccas-<stamp>.dump
+```
+
 ## Project Structure
 
 ```
