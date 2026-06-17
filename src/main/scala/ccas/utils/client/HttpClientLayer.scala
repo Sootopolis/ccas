@@ -1,6 +1,6 @@
 package ccas.utils.client
 
-import zio.ZLayer
+import zio.{ZLayer, durationInt}
 import zio.http.netty.NettyConfig
 import zio.http.{Client, Decompression, DnsResolver, ZClient}
 
@@ -35,6 +35,15 @@ object HttpClientLayer {
   val live: ZLayer[Any, Throwable, Client] = {
     val config = ZClient.Config.default
       .copy(requestDecompression = Decompression.NonStrict)
+      // Transport-level timeouts so a silently-dropped TCP connection (peer gone, no RST/FIN) can't park a fiber
+      // forever on a network read — the HTTP analogue of the DB `socketTimeout` hardening in `PostgresClient`.
+      // `idleTimeout` (read/write inactivity) is pinned to zio-http 3.10.1's current 50s default rather than left
+      // implicit, so a future zio-http upgrade can't silently remove this guard: it fires on a mid-response stall,
+      // closes the channel, and fails the request, which `ChessComClient`'s connection-error retry then handles.
+      // `connectionTimeout` defaults to `None` (unbounded connect) — set it so a black-holed SYN to the origin can't
+      // hang a fiber on connection setup while waiting on the much longer OS-level TCP timeout.
+      .idleTimeout(50.seconds)
+      .connectionTimeout(10.seconds)
       // When zio-http adds HTTP/2 (issue #3473), enable it here, e.g.:
       //   .copy(protocols = NonEmptyChunk(Version.Http_2, Version.Http_1_1))
     (ZLayer.succeed(config) ++

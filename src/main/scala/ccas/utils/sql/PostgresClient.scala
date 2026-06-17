@@ -134,6 +134,19 @@ object PostgresClient {
               hikariConfig.setConnectionTestQuery(poolConfig.getString("connectionTestQuery"))
             if (poolConfig.hasPath("initializationFailTimeout"))
               hikariConfig.setInitializationFailTimeout(poolConfig.getLong("initializationFailTimeout"))
+            // Driver-level (pgjdbc) socket hardening. No Hikari setter covers these: `connectionTimeout` above bounds
+            // pool *checkout*, never the in-query `socket.read()`. Without `socketTimeout`, a connection silently
+            // dropped mid-query (Neon autosuspend, network blip, LB reset with no RST) parks the JDBC thread in
+            // `socket.read()` forever and the transient-retry below never fires (no exception is ever thrown). Setting
+            // them here applies to every connection regardless of host or whether the `url` / `dataSource` config
+            // branch was taken — both build a jdbcUrl, so Hikari's DriverDataSource forwards these to pgjdbc.
+            // `socketTimeout` / `connectTimeout` are in SECONDS for pgjdbc.
+            if (poolConfig.hasPath("socketTimeoutSeconds"))
+              hikariConfig.addDataSourceProperty("socketTimeout", poolConfig.getInt("socketTimeoutSeconds").toString)
+            if (poolConfig.hasPath("connectTimeoutSeconds"))
+              hikariConfig.addDataSourceProperty("connectTimeout", poolConfig.getInt("connectTimeoutSeconds").toString)
+            if (poolConfig.hasPath("tcpKeepAlive"))
+              hikariConfig.addDataSourceProperty("tcpKeepAlive", poolConfig.getBoolean("tcpKeepAlive").toString)
           }
 
           val baseDelay  = if (config.hasPath("retry.baseDelayMs")) config.getLong("retry.baseDelayMs") else 100L
