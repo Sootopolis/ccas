@@ -11,14 +11,23 @@ object TestCliParser extends ZIOSpecDefault {
 
   private val DefaultServer = "http://127.0.0.1:8080"
 
-  // Command.parse expects the top command's own name as the first token (CliApp.run injects it at runtime).
-  private def parse(args: String*) =
-    CliCommand.command.parse(("ccas" +: args).toList, CliCommand.config)
+  // Command.parse expects the top command's own name as the first token (CliApp.run injects it at runtime). The real
+  // binary passes the config-resolved default into `command`; tests use DefaultServer unless exercising resolution.
+  private def parseWith(default: String)(args: String*) =
+    CliCommand.command(default).parse(("ccas" +: args).toList, CliCommand.config)
+
+  private def parse(args: String*) = parseWith(DefaultServer)(args*)
 
   private def parsed(args: String*) =
     parse(args*).map {
       case CommandDirective.UserDefined(_, cmd) => Some(cmd)
       case _                                    => None
+    }
+
+  private def serverOf(default: String)(args: String*) =
+    parseWith(default)(args*).map {
+      case CommandDirective.UserDefined(_, cmd: CliCommand.ServerCommand) => Some(cmd.server)
+      case _                                                              => None
     }
 
   // Rendered help text when `--help` resolves to a ShowHelp directive (None for any other directive). Plain (no ANSI).
@@ -37,6 +46,14 @@ object TestCliParser extends ZIOSpecDefault {
     test("--server overrides the default") {
       parsed("jobs", "--server", "http://example:9000").map(c =>
         assertTrue(c.contains(CliCommand.Jobs("http://example:9000", None)))
+      )
+    },
+    test("config api_url becomes the default when --server is absent") {
+      serverOf("http://config:1234")("jobs").map(s => assertTrue(s.contains("http://config:1234")))
+    },
+    test("--server overrides the config-resolved default") {
+      serverOf("http://config:1234")("jobs", "--server", "http://flag:9999").map(s =>
+        assertTrue(s.contains("http://flag:9999"))
       )
     },
     test("membership with no slug fails validation") {

@@ -47,7 +47,7 @@ _ccas() {
   local opts="" pos=""
   case "$cmd" in
     "") COMPREPLY=( $(compgen -W "$top $global" -- "$cur") ); return ;;
-    serve) opts="--server" ;;
+    serve)  ;;
     membership) opts="--server --trust-usernames --no-trust-usernames"; pos="slugs" ;;
     history) opts="--server --full --include-finished --refresh --refresh-min-hours"; pos="slugs" ;;
     recruit) opts="--server --alias --target --cumulative --source-clubs --time-limit-minutes --explore --no-explore"; pos="slug" ;;

@@ -1,6 +1,7 @@
 package ccas.cli
 
 import java.nio.file.Files
+import java.nio.file.attribute.FileTime
 import java.time.Instant
 
 import scala.jdk.CollectionConverters.*
@@ -47,6 +48,22 @@ object CompletionCache {
     ZIO.attemptBlocking {
       Files.createDirectories(XdgPaths.cacheDir)
       Files.writeString(XdgPaths.clubsFile, slugs.mkString("", "\n", if (slugs.isEmpty) "" else "\n"))
+    }.ignore
+
+  /** Seed the clubs cache from the config's `default_clubs` so completion has suggestions before any server round-trip.
+    * No-op when the list is empty or the cache already exists (an authoritative `/api/clubs` refresh must win). The
+    * seed file's mtime is stamped to the epoch so [[clubsStale]] still treats it as stale — the next server-touching
+    * command replaces it with real slugs rather than trusting the seed for the full TTL.
+    */
+  def seedClubs(clubs: List[String]): UIO[Unit] =
+    ZIO.attemptBlocking {
+      val f = XdgPaths.clubsFile
+      if (clubs.nonEmpty && !Files.exists(f)) {
+        Files.createDirectories(XdgPaths.cacheDir)
+        Files.writeString(f, clubs.mkString("", "\n", "\n"))
+        Files.setLastModifiedTime(f, FileTime.fromMillis(0L))
+        ()
+      }
     }.ignore
 
   /** Prepend a job id (newest first), dropping any earlier duplicate and capping the list at [[MaxRecentJobs]]. */

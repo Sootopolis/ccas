@@ -23,7 +23,7 @@ object Dispatcher {
 
   private val MaxJobWait: Duration = 60.minutes
 
-  def dispatch(cmd: CliCommand): URIO[Any, ExitCode] =
+  def dispatch(cmd: CliCommand.ServerCommand): URIO[Any, ExitCode] =
     CcasApiClient
       .live(cmd.server)
       .flatMap(api => runCommand(api, JobFollower(api, MaxJobWait), cmd).tap(_ => refreshClubsCache(api)))
@@ -53,10 +53,7 @@ object Dispatcher {
       }
     }
 
-  private def runCommand(api: CcasApiClient, follower: JobFollower, cmd: CliCommand): Task[Int] = cmd match {
-    case _: CliCommand.Serve      => ZIO.succeed(0) // handled in Main
-    case _: CliCommand.Completion => ZIO.succeed(0) // handled in Main; unreachable here, present for exhaustiveness
-
+  private def runCommand(api: CcasApiClient, follower: JobFollower, cmd: CliCommand.ServerCommand): Task[Int] = cmd match {
     case CliCommand.Membership(_, slugs, trust) =>
       api.postJson[MembershipRequest, List[ClubJobResult]](
         "/api/jobs/membership",

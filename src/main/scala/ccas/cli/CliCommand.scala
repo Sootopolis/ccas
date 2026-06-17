@@ -13,16 +13,29 @@ import zio.cli.*
   * positional are NOT errors — they are silently dropped (single positional) or swallowed as positional values
   * (variadic `<slug>...` / `<username>...`). The per-subcommand `--help` shows the required `[options] <args>` order.
   */
-sealed trait CliCommand {
-  def server: String
-}
+sealed trait CliCommand
 
 object CliCommand {
 
-  private val DefaultServer = "http://127.0.0.1:8080"
+  /** Built-in fallback server URL, used when neither `--server` nor config `api_url` is set. `Main` reads it to seed
+    * the resolved default before parsing.
+    */
+  val DefaultServer = "http://127.0.0.1:8080"
 
-  final case class Serve(server: String) extends CliCommand
-  final case class Membership(server: String, slugs: List[String], trustUsernames: Option[Boolean]) extends CliCommand
+  /** Subcommands that reach a running server as an HTTP client; each carries the resolved base URL. Local commands
+    * (`Serve`, `Completion`) are handled in-process by `Main`, don't extend this, and never reach `Dispatcher`.
+    */
+  sealed trait ServerCommand extends CliCommand {
+    def server: String
+  }
+
+  // Local commands — handled in `Main`, no client HTTP, no `--server`.
+  case object Serve extends CliCommand
+  final case class Completion(shell: String) extends CliCommand
+
+  // Server commands — dispatched as HTTP calls by `Dispatcher`.
+  final case class Membership(server: String, slugs: List[String], trustUsernames: Option[Boolean])
+      extends ServerCommand
   final case class History(
     server: String,
     slugs: List[String],
@@ -30,7 +43,7 @@ object CliCommand {
     includeFinished: Boolean,
     refresh: Boolean,
     refreshMinHours: Option[Int]
-  ) extends CliCommand
+  ) extends ServerCommand
   final case class Recruit(
     server: String,
     slug: String,
@@ -40,35 +53,36 @@ object CliCommand {
     sourceClubs: List[String],
     timeLimitMinutes: Option[Int],
     explore: Option[Boolean]
-  ) extends CliCommand
-  final case class Stats(server: String, slug: String, since: Option[String], until: Option[String]) extends CliCommand
-  final case class Jobs(server: String, limit: Option[Int]) extends CliCommand
-  final case class Logs(server: String, jobId: String) extends CliCommand
+  ) extends ServerCommand
+  final case class Stats(server: String, slug: String, since: Option[String], until: Option[String])
+      extends ServerCommand
+  final case class Jobs(server: String, limit: Option[Int]) extends ServerCommand
+  final case class Logs(server: String, jobId: String) extends ServerCommand
   final case class BlacklistAdd(
     server: String,
     slug: String,
     usernames: List[String],
     reason: Option[String],
     months: Option[Int]
-  ) extends CliCommand
-  final case class BlacklistList(server: String, slug: String) extends CliCommand
-  final case class BlacklistRemove(server: String, slug: String, username: String) extends CliCommand
-  final case class ScheduleList(server: String) extends CliCommand
+  ) extends ServerCommand
+  final case class BlacklistList(server: String, slug: String) extends ServerCommand
+  final case class BlacklistRemove(server: String, slug: String, username: String) extends ServerCommand
+  final case class ScheduleList(server: String) extends ServerCommand
   final case class ScheduleAdd(
     server: String,
     kind: String,
     intervalHours: Int,
     club: Option[String],
     params: Option[String]
-  ) extends CliCommand
-  final case class ScheduleRemove(server: String, id: Long) extends CliCommand
-  // No server interaction: `completion` emits a static script. `server` is unused but required by the trait.
-  final case class Completion(shell: String) extends CliCommand { def server: String = "" }
+  ) extends ServerCommand
+  final case class ScheduleRemove(server: String, id: Long) extends ServerCommand
 
   // --- Shared options ---
 
-  private val serverOpt: Options[String] =
-    Options.text("server").withDefault(DefaultServer) ?? s"Base URL of the ccas server (default $DefaultServer)"
+  // Parameterized by the resolved default (config `api_url`, else `DefaultServer`) so an absent `--server` falls back to
+  // it — zio-cli then expresses the issue's resolution order natively: explicit `--server` > config > built-in default.
+  private def serverOpt(default: String): Options[String] =
+    Options.text("server").withDefault(default) ?? s"Base URL of the ccas server (default $default)"
 
   // Two switches reduced to Option[Boolean]: --no-x wins, --x => Some(true), neither => None (server default).
   private val trustOpt: Options[Option[Boolean]] =
@@ -95,21 +109,21 @@ object CliCommand {
   // --- Leaf commands (each typed Command[CliCommand] so subcommands share a uniform type) ---
 
   private val serve: Command[CliCommand] =
-    Command("serve", serverOpt)
+    Command("serve")
       .withHelp("Run the ccas backend HTTP server in this process")
-      .map(Serve.apply)
+      .map(_ => Serve)
 
-  private val membership: Command[CliCommand] =
-    Command("membership", serverOpt ++ trustOpt, slugsArg)
+  private def membership(default: String): Command[CliCommand] =
+    Command("membership", serverOpt(default) ++ trustOpt, slugsArg)
       .withHelp("Submit a membership-sync job for one or more clubs")
       .map { case ((server, trust), slugs) =>
         Membership(server, slugs, trust)
       }
 
-  private val history: Command[CliCommand] =
+  private def history(default: String): Command[CliCommand] =
     Command(
       "history",
-      serverOpt ++
+      serverOpt(default) ++
         (Options.boolean("full") ?? "Clear member-query history and re-crawl all members") ++
         (Options.boolean("include-finished") ?? "Re-queue recently finished matches for refresh") ++
         (Options.boolean("refresh") ?? "Refresh already-stored matches, not just newly seen ones") ++
@@ -124,10 +138,10 @@ object CliCommand {
     (Options.text("source-clubs").optional ?? "Comma-separated club slugs to scout for candidates")
       .map(_.fold(List.empty[String])(_.split(",").toList.filter(_.nonEmpty)))
 
-  private val recruit: Command[CliCommand] =
+  private def recruit(default: String): Command[CliCommand] =
     Command(
       "recruit",
-      serverOpt ++
+      serverOpt(default) ++
         (Options.text("alias").optional ?? "Recruitment-criteria alias to use (default: the club's default)") ++
         (intOpt("target") ?? "Stop once N candidates have been found") ++
         (Options.boolean("cumulative") ?? "Count candidates already found earlier today toward the target") ++
@@ -140,30 +154,30 @@ object CliCommand {
         Recruit(server, slug, alias, target, cumulative, sourceClubs, timeLimitMinutes, explore)
       }
 
-  private val stats: Command[CliCommand] =
+  private def stats(default: String): Command[CliCommand] =
     Command(
       "stats",
-      serverOpt ++
+      serverOpt(default) ++
         (Options.text("since").optional ?? "Start of the date window (ISO-8601 date or instant)") ++
         (Options.text("until").optional ?? "End of the date window (requires --since)"),
       Args.text("slug") ?? "Club slug (URL name)"
     ).withHelp("Submit a club performance-stats job")
       .map { case ((server, since, until), slug) => Stats(server, slug, since, until) }
 
-  private val jobs: Command[CliCommand] =
-    Command("jobs", serverOpt ++ (intOpt("limit") ?? "Maximum number of recent jobs to list"))
+  private def jobs(default: String): Command[CliCommand] =
+    Command("jobs", serverOpt(default) ++ (intOpt("limit") ?? "Maximum number of recent jobs to list"))
       .withHelp("List recent jobs and their status")
       .map { case (server, limit) => Jobs(server, limit) }
 
-  private val logs: Command[CliCommand] =
-    Command("logs", serverOpt, Args.text("jobId") ?? "Job run id to poll")
+  private def logs(default: String): Command[CliCommand] =
+    Command("logs", serverOpt(default), Args.text("jobId") ?? "Job run id to poll")
       .withHelp("Poll a job's status and logs until it finishes")
       .map { case (server, jobId) => Logs(server, jobId) }
 
-  private val blacklistAdd: Command[CliCommand] =
+  private def blacklistAdd(default: String): Command[CliCommand] =
     Command(
       "add",
-      serverOpt ++
+      serverOpt(default) ++
         (Options.text("reason").optional ?? "Reason recorded with the blacklist entry") ++
         (intOpt("months") ?? "Auto-expire the entry after N months"),
       (Args.text("slug") ?? "Club slug (URL name)") ++ (Args.text("username").repeat1 ?? "Username(s) to blacklist")
@@ -172,35 +186,35 @@ object CliCommand {
         BlacklistAdd(server, slug, usernames, reason, months)
       }
 
-  private val blacklistList: Command[CliCommand] =
-    Command("list", serverOpt, Args.text("slug") ?? "Club slug (URL name)")
+  private def blacklistList(default: String): Command[CliCommand] =
+    Command("list", serverOpt(default), Args.text("slug") ?? "Club slug (URL name)")
       .withHelp("List a club's blacklist entries")
       .map { case (server, slug) => BlacklistList(server, slug) }
 
-  private val blacklistRemove: Command[CliCommand] =
+  private def blacklistRemove(default: String): Command[CliCommand] =
     Command(
       "remove",
-      serverOpt,
+      serverOpt(default),
       (Args.text("slug") ?? "Club slug (URL name)") ++ (Args.text("username") ?? "Username to remove")
     ).withHelp("Remove a username from a club's blacklist")
       .map { case (server, (slug, username)) =>
         BlacklistRemove(server, slug, username)
       }
 
-  private val blacklist: Command[CliCommand] =
+  private def blacklist(default: String): Command[CliCommand] =
     Command("blacklist")
       .withHelp("Manage a club's recruitment blacklist")
-      .subcommands(blacklistAdd, blacklistList, blacklistRemove)
+      .subcommands(blacklistAdd(default), blacklistList(default), blacklistRemove(default))
 
-  private val scheduleList: Command[CliCommand] =
-    Command("list", serverOpt)
+  private def scheduleList(default: String): Command[CliCommand] =
+    Command("list", serverOpt(default))
       .withHelp("List scheduled jobs")
       .map(ScheduleList.apply)
 
-  private val scheduleAdd: Command[CliCommand] =
+  private def scheduleAdd(default: String): Command[CliCommand] =
     Command(
       "add",
-      serverOpt ++
+      serverOpt(default) ++
         (Options.text("kind") ?? "Job kind: Recruitment, Membership, MatchRef, History, Stats, or ClubData") ++
         (Options.integer("interval-hours").map(_.toInt) ?? "Run the job every N hours") ++
         (Options.text("club").optional ?? "Club slug the job targets (when the kind needs one)") ++
@@ -210,17 +224,17 @@ object CliCommand {
         ScheduleAdd(server, kind, intervalHours, club, params)
       }
 
-  private val scheduleRemove: Command[CliCommand] =
-    Command("remove", serverOpt, Args.integer("id").map(_.toLong) ?? "Schedule id to delete")
+  private def scheduleRemove(default: String): Command[CliCommand] =
+    Command("remove", serverOpt(default), Args.integer("id").map(_.toLong) ?? "Schedule id to delete")
       .withHelp("Delete a scheduled job by id")
       .map { case (server, id) =>
         ScheduleRemove(server, id)
       }
 
-  private val schedule: Command[CliCommand] =
+  private def schedule(default: String): Command[CliCommand] =
     Command("schedule")
       .withHelp("Manage scheduled jobs")
-      .subcommands(scheduleList, scheduleAdd, scheduleRemove)
+      .subcommands(scheduleList(default), scheduleAdd(default), scheduleRemove(default))
 
   private val completion: Command[CliCommand] =
     Command("completion", Args.text("shell") ?? "Shell to emit completions for: bash, zsh, or fish")
@@ -236,6 +250,20 @@ object CliCommand {
     */
   val config: CliConfig = CliConfig.default.copy(finalCheckBuiltIn = false)
 
-  val command: Command[CliCommand] =
-    Command("ccas").subcommands(serve, membership, history, recruit, stats, jobs, logs, blacklist, schedule, completion)
+  /** Build the `ccas` command tree with `defaultServer` as the `--server` default — `Main` resolves it from config
+    * `api_url` (else [[DefaultServer]]) before parsing, so an absent `--server` inherits it.
+    */
+  def command(defaultServer: String): Command[CliCommand] =
+    Command("ccas").subcommands(
+      serve,
+      membership(defaultServer),
+      history(defaultServer),
+      recruit(defaultServer),
+      stats(defaultServer),
+      jobs(defaultServer),
+      logs(defaultServer),
+      blacklist(defaultServer),
+      schedule(defaultServer),
+      completion
+    )
 }
