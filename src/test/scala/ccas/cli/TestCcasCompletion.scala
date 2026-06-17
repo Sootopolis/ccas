@@ -23,7 +23,7 @@ object TestCcasCompletion extends ZIOSpecDefault {
   private val BashScriptPath = "completions/ccas.bash"
 
   // Full-tree help: the COMMANDS enumeration lists every command path with its complete option synopsis.
-  private val help = CliCommand.command.helpDoc.toPlaintext(1000, color = false)
+  private val help = CliCommand.command(CliCommand.DefaultServer).helpDoc.toPlaintext(1000, color = false)
 
   // Long-option tokens used anywhere in the tree, e.g. --server, --no-trust-usernames, --refresh-min-hours.
   private val treeFlags: Set[String] = "--[a-z][a-z0-9-]*".r.findAllIn(help).toSet

@@ -63,7 +63,7 @@ ccas --help              # full command tree
 ccas <command> --help    # per-command flags
 ```
 
-Commands: `serve`, `membership`, `history`, `recruit`, `stats`, `jobs`, `logs`, `blacklist {add|list|remove}`, `schedule {list|add|remove}`. A global `--server <url>` overrides the default `http://127.0.0.1:8080`.
+Commands: `serve`, `membership`, `history`, `recruit`, `stats`, `jobs`, `logs`, `blacklist {add|list|remove}`, `schedule {list|add|remove}`. The server URL resolves in order: a global `--server <url>` flag, else `api_url` from the [config file](#cli-config-file), else the built-in default `http://127.0.0.1:8080`.
 
 `ccas --version` prints the version; `ccas --help` and `ccas <command> --help` show usage.
 
@@ -84,7 +84,7 @@ eval "$(ccas completion zsh)"
 ccas completion fish > ~/.config/fish/completions/ccas.fish
 ```
 
-Dynamic candidates come from `${XDG_CACHE_HOME:-~/.cache}/ccas/clubs.txt` and `recent-jobs.txt`, refreshed automatically as you run normal commands (the club list is fetched from `GET /api/clubs` at most every few hours; each submitted job id is recorded). On a fresh install these are empty, so only subcommands and flags complete until the first command populates them. (A config-based `default_clubs` fallback for the empty-cache case is tracked in #43.)
+Dynamic candidates come from `${XDG_CACHE_HOME:-~/.cache}/ccas/clubs.txt` and `recent-jobs.txt`, refreshed automatically as you run normal commands (the club list is fetched from `GET /api/clubs` at most every few hours; each submitted job id is recorded). On a fresh install these are empty, so only subcommands and flags complete until the first command populates them — unless `default_clubs` is set in the [config file](#cli-config-file), which seeds the club list so completion works immediately.
 
 The committed `completions/ccas.bash` is the generated output of `ccas completion bash`; `TestCcasCompletion` fails if it drifts from the emitter or if a new subcommand/flag isn't covered. Regenerate it with `ccas completion bash > completions/ccas.bash`.
 
@@ -162,6 +162,22 @@ Optional overrides with defaults:
 | `CHESS_COM_API_CACHE_RETENTION_DAYS` | 7 | How long cached Chess.com responses are kept before startup pruning |
 
 See [`application.conf`](src/main/resources/application.conf) for the full set of tunable parameters.
+
+### CLI config file
+
+The `ccas` CLI (the client, not the server) reads optional settings from `${XDG_CONFIG_HOME:-~/.config}/ccas/config.conf` (HOCON):
+
+```hocon
+api_url       = "http://127.0.0.1:8080"        # default server URL
+default_clubs = ["team-alpha", "team-beta"]    # seed shell-completion suggestions
+log_dir       = "~/.local/state/ccas/logs"     # reserved; parsed but not yet used
+```
+
+- **Server URL** resolves `--server <url>` flag → `api_url` → built-in `http://127.0.0.1:8080`.
+- **`default_clubs`** seeds the completion club list on a fresh install (before any `GET /api/clubs` round-trip); real slugs replace it on the next command.
+- A missing file is fine — the CLI falls back to built-in defaults. A malformed file fails fast with `error: invalid config file <path>: …` (exit 2).
+
+This is separate from the server's `application.conf` / environment configuration above.
 
 ## Backups
 

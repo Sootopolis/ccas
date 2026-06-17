@@ -37,7 +37,7 @@ object CompletionSpec {
 
   /** Leaves in tree order. `valueFlags` always lists `--server` first to match its position in `flags`. */
   val leaves: List[Leaf] = List(
-    Leaf(List("serve"), List(server), List(server), NoArgs),
+    Leaf(List("serve"), Nil, Nil, NoArgs),
     Leaf(List("membership"), List(server, "--trust-usernames", "--no-trust-usernames"), List(server), Slugs),
     Leaf(
       List("history"),
@@ -74,7 +74,7 @@ object CompletionSpec {
     Group("schedule", List("list", "add", "remove"), "Manage scheduled jobs")
   )
 
-  /** Top-level subcommand names, in tree order (matches `CliCommand.command.subcommands`). */
+  /** Top-level subcommand names, in tree order (matches `CliCommand.command(...).subcommands`). */
   val topLevel: List[String] =
     List("serve", "membership", "history", "recruit", "stats", "jobs", "logs", "blacklist", "schedule", "completion")
 

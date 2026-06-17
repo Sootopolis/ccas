@@ -3,6 +3,7 @@ package ccas.cli
 import zio.cli.{CliApp, CliError, HelpDoc}
 import zio.{Console, ExitCode, Scope, URIO, ZIO, ZIOAppArgs, ZIOAppDefault}
 
+import ccas.cli.config.CliConfig
 import ccas.info.BuildInfo
 import ccas.server.CcasServer
 
@@ -14,38 +15,47 @@ import ccas.server.CcasServer
   */
 object Main extends ZIOAppDefault {
 
-  private val cliApp: CliApp[ZIOAppArgs, Nothing, ExitCode] =
-    CliApp.make(
-      name = "ccas",
-      version = BuildInfo.version,
-      summary = HelpDoc.Span.text("Chess Club Admin System"),
-      command = CliCommand.command,
-      config = CliCommand.config
-    )(execute)
-
   override def run: ZIO[ZIOAppArgs & Scope, Any, Any] =
     ZIOAppArgs.getArgs.flatMap { args =>
-      // zio-cli has no built-in --version (its BuiltInOption is help/wizard/completions only), so handle it here.
+      // zio-cli has no built-in --version (its BuiltInOption is help/wizard/completions only), so handle it here,
+      // before reading config — `--version` must work regardless of the config file's state.
       if (args.headOption.exists(a => a == "--version" || a == "-V")) {
         Console.printLine(s"ccas ${BuildInfo.version}").orDie *> exit(ExitCode.success)
       } else {
-        cliApp.run(args.toList).foldZIO(
-          {
-            case _: CliError.BuiltIn => exit(ExitCode.success) // --help / completions, already rendered
-            case _                   => exit(ExitCode(2))       // parse/validation error, usage already rendered
-          },
-          {
-            case Some(code) => exit(code)
-            case None       => exit(ExitCode.success)
-          }
-        )
+        // Resolve the CLI config first: its `api_url` becomes the `--server` default (built-in fallback if absent), and
+        // `default_clubs` seeds completion. A malformed file fails fast with a message pointing at it (exit 2).
+        CliConfig.load(XdgPaths.configFile).foldZIO(configLoadFailed, runResolved(args.toList, _))
       }
     }
 
+  private def configLoadFailed(message: String): URIO[Any, Unit] =
+    Console.printLineError(s"error: $message").orDie *> exit(ExitCode(2))
+
+  private def runResolved(argList: List[String], cfg: CliConfig): URIO[ZIOAppArgs, Unit] = {
+    val cliApp = CliApp.make(
+      name = "ccas",
+      version = BuildInfo.version,
+      summary = HelpDoc.Span.text("Chess Club Admin System"),
+      command = CliCommand.command(cfg.apiUrl.getOrElse(CliCommand.DefaultServer)),
+      config = CliCommand.config
+    )(execute)
+    CompletionCache.seedClubs(cfg.defaultClubs) *>
+      cliApp.run(argList).foldZIO(
+        {
+          case _: CliError.BuiltIn => exit(ExitCode.success) // --help / completions, already rendered
+          case _                   => exit(ExitCode(2))       // parse/validation error, usage already rendered
+        },
+        {
+          case Some(code) => exit(code)
+          case None       => exit(ExitCode.success)
+        }
+      )
+  }
+
   private def execute(cmd: CliCommand): URIO[ZIOAppArgs, ExitCode] = cmd match {
-    case _: CliCommand.Serve          => serve
-    case CliCommand.Completion(shell) => printCompletion(shell)
-    case other                        => Dispatcher.dispatch(other)
+    case CliCommand.Serve                => serve
+    case CliCommand.Completion(shell)    => printCompletion(shell)
+    case other: CliCommand.ServerCommand => Dispatcher.dispatch(other)
   }
 
   private def serve: URIO[ZIOAppArgs, ExitCode] =
