@@ -8,7 +8,7 @@ import ccas.analysis.apps.ref.RefHelpers
 import ccas.analysis.tables.{Club, ClubAdmin, ClubMatch, ClubMatchRef, Player, Tables}
 import ccas.api.club.ApiClubMatches
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
-import ccas.utils.{OutputFile, ProgressDisplay}
+import ccas.utils.{ApiConcurrency, OutputFile, ProgressDisplay}
 import ccas.analysis.apps.{ClubSlugRenameResolver, withClubSlugRenameRecovery}
 import ccas.utils.client.{ChessComClient, HttpClientLayer}
 import ccas.utils.sql.PostgresClient
@@ -122,7 +122,7 @@ object ClubDataApp extends ZIOAppDefault {
             )
             _ <- bar.print(updated.clubsProcessed, total, s"Refreshing clubs: ${updated.clubsProcessed}/$total")
           } yield ()
-        }.withParallelism(8).onInterrupt {
+        }.withParallelism(ApiConcurrency.fiberCap(client)).onInterrupt {
           (for {
             partial <- resultRef.get
             _       <- logSummary("Interrupted", partial, total)
