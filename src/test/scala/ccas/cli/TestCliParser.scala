@@ -95,6 +95,15 @@ object TestCliParser extends ZIOSpecDefault {
     test("completion parses the shell argument (no server)") {
       parsed("completion", "bash").map(c => assertTrue(c.contains(CliCommand.Completion("bash"))))
     },
+    test("serve defaults to foreground (no --detach)") {
+      parsed("serve").map(c => assertTrue(c.contains(CliCommand.Serve(false))))
+    },
+    test("serve --detach parses the flag") {
+      parsed("serve", "--detach").map(c => assertTrue(c.contains(CliCommand.Serve(true))))
+    },
+    test("stop parses (no server)") {
+      parsed("stop").map(c => assertTrue(c.contains(CliCommand.Stop)))
+    },
     test("unknown subcommand fails validation") {
       parse("nonsense").exit.map(e => assertTrue(e.isFailure))
     },

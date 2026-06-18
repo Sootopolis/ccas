@@ -10,6 +10,10 @@
 # Club-slug and job-id completion read caches refreshed by normal ccas commands:
 #   ${XDG_CACHE_HOME:-$HOME/.cache}/ccas/clubs.txt        (one slug per line)
 #   ${XDG_CACHE_HOME:-$HOME/.cache}/ccas/recent-jobs.txt  (one job id per line)
+#
+# COMPREPLY=( $(compgen ...) ) is the standard, bash-3.2/macOS-safe completion idiom; the word-splitting is
+# intentional (compgen yields newline-separated, space-free candidates). mapfile is the SC2207 fix but is bash 4+.
+# shellcheck disable=SC2207
 
 _ccas_cache() {
   local f="${XDG_CACHE_HOME:-$HOME/.cache}/ccas/$1"
@@ -27,7 +31,7 @@ _ccas() {
     words=("${COMP_WORDS[@]}")
   fi
 
-  local top="serve membership history recruit stats jobs logs blacklist schedule completion"
+  local top="serve stop membership history recruit stats jobs logs blacklist schedule completion"
   local global="--help --version"
 
   # First non-flag word after "ccas" is the command; the next is the subcommand (blacklist/schedule).
@@ -47,7 +51,8 @@ _ccas() {
   local opts="" pos=""
   case "$cmd" in
     "") COMPREPLY=( $(compgen -W "$top $global" -- "$cur") ); return ;;
-    serve)  ;;
+    serve) opts="--detach" ;;
+    stop)  ;;
     membership) opts="--server --trust-usernames --no-trust-usernames"; pos="slugs" ;;
     history) opts="--server --full --include-finished --refresh --refresh-min-hours"; pos="slugs" ;;
     recruit) opts="--server --alias --target --cumulative --source-clubs --time-limit-minutes --explore --no-explore"; pos="slug" ;;

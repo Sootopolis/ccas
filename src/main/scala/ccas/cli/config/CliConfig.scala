@@ -13,8 +13,8 @@ import zio.config.typesafe.TypesafeConfigProvider
   *
   * All keys are optional: a missing file (or a file missing a key) yields the corresponding empty value, so the CLI
   * always has working defaults. `default_clubs` feeds shell completions; `api_url` is the resolved server URL's
-  * config-level default (overridden by `--server`, falling back to the built-in default). `log_dir` is parsed and
-  * carried but not yet consumed (client-side log location is a later concern).
+  * config-level default (overridden by `--server`, falling back to the built-in default). `log_dir` sets where a
+  * detached `ccas serve --detach` server writes `server.log` (default `${XDG_STATE_HOME:-~/.local/state}/ccas/logs`).
   */
 final case class CliConfig(apiUrl: Option[String], defaultClubs: List[String], logDir: Option[String])
 

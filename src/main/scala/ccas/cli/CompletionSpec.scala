@@ -37,7 +37,8 @@ object CompletionSpec {
 
   /** Leaves in tree order. `valueFlags` always lists `--server` first to match its position in `flags`. */
   val leaves: List[Leaf] = List(
-    Leaf(List("serve"), Nil, Nil, NoArgs),
+    Leaf(List("serve"), List("--detach"), Nil, NoArgs),
+    Leaf(List("stop"), Nil, Nil, NoArgs),
     Leaf(List("membership"), List(server, "--trust-usernames", "--no-trust-usernames"), List(server), Slugs),
     Leaf(
       List("history"),
@@ -76,7 +77,8 @@ object CompletionSpec {
 
   /** Top-level subcommand names, in tree order (matches `CliCommand.command(...).subcommands`). */
   val topLevel: List[String] =
-    List("serve", "membership", "history", "recruit", "stats", "jobs", "logs", "blacklist", "schedule", "completion")
+    List("serve", "stop", "membership", "history", "recruit", "stats", "jobs", "logs", "blacklist", "schedule",
+      "completion")
 
   /** Flags available on every command. */
   val globalFlags: List[String] = List("--help", "--version")
@@ -99,7 +101,8 @@ object CompletionSpec {
 
   /** One-line help per command path, mirroring the `withHelp(...)` strings in [[CliCommand]]; used as fish `-d` text. */
   private[cli] val summaries: Map[List[String], String] = Map(
-    List("serve")               -> "Run the ccas backend HTTP server in this process",
+    List("serve")               -> "Run the ccas backend HTTP server (foreground by default; --detach to background it)",
+    List("stop")                -> "Stop a detached ccas server (reads the pid file and sends SIGTERM)",
     List("membership")          -> "Submit a membership-sync job for one or more clubs",
     List("history")             -> "Submit a match-history crawl job for one or more clubs",
     List("recruit")             -> "Submit a recruitment scouting job for a club",

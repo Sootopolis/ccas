@@ -30,7 +30,8 @@ object CliCommand {
   }
 
   // Local commands — handled in `Main`, no client HTTP, no `--server`.
-  case object Serve extends CliCommand
+  final case class Serve(detach: Boolean) extends CliCommand
+  case object Stop extends CliCommand
   final case class Completion(shell: String) extends CliCommand
 
   // Server commands — dispatched as HTTP calls by `Dispatcher`.
@@ -109,9 +110,16 @@ object CliCommand {
   // --- Leaf commands (each typed Command[CliCommand] so subcommands share a uniform type) ---
 
   private val serve: Command[CliCommand] =
-    Command("serve")
-      .withHelp("Run the ccas backend HTTP server in this process")
-      .map(_ => Serve)
+    Command(
+      "serve",
+      Options.boolean("detach") ?? "Run the server as a detached background process (writes a pid file; stop with 'ccas stop')"
+    ).withHelp("Run the ccas backend HTTP server (foreground by default; --detach to background it)")
+      .map(detach => Serve(detach))
+
+  private val stop: Command[CliCommand] =
+    Command("stop")
+      .withHelp("Stop a detached ccas server (reads the pid file and sends SIGTERM)")
+      .map(_ => Stop)
 
   private def membership(default: String): Command[CliCommand] =
     Command("membership", serverOpt(default) ++ trustOpt, slugsArg)
@@ -256,6 +264,7 @@ object CliCommand {
   def command(defaultServer: String): Command[CliCommand] =
     Command("ccas").subcommands(
       serve,
+      stop,
       membership(defaultServer),
       history(defaultServer),
       recruit(defaultServer),
