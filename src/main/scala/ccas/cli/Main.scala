@@ -1,9 +1,12 @@
 package ccas.cli
 
+import java.nio.file.Paths
+
 import zio.cli.{CliApp, CliError, HelpDoc}
-import zio.{Console, ExitCode, Scope, URIO, ZIO, ZIOAppArgs, ZIOAppDefault}
+import zio.{Console, ExitCode, Scope, UIO, URIO, ZIO, ZIOAppArgs, ZIOAppDefault}
 
 import ccas.cli.config.CliConfig
+import ccas.cli.serve.{Detach, PidFile, Stop}
 import ccas.info.BuildInfo
 import ccas.server.CcasServer
 
@@ -28,7 +31,7 @@ object Main extends ZIOAppDefault {
       }
     }
 
-  private def configLoadFailed(message: String): URIO[Any, Unit] =
+  private def configLoadFailed(message: String): UIO[Unit] =
     Console.printLineError(s"error: $message").orDie *> exit(ExitCode(2))
 
   private def runResolved(argList: List[String], cfg: CliConfig): URIO[ZIOAppArgs, Unit] = {
@@ -38,7 +41,7 @@ object Main extends ZIOAppDefault {
       summary = HelpDoc.Span.text("Chess Club Admin System"),
       command = CliCommand.command(cfg.apiUrl.getOrElse(CliCommand.DefaultServer)),
       config = CliCommand.config
-    )(execute)
+    )(execute(cfg))
     CompletionCache.seedClubs(cfg.defaultClubs) *>
       cliApp.run(argList).foldZIO(
         {
@@ -52,11 +55,24 @@ object Main extends ZIOAppDefault {
       )
   }
 
-  private def execute(cmd: CliCommand): URIO[ZIOAppArgs, ExitCode] = cmd match {
-    case CliCommand.Serve                => serve
+  private def execute(cfg: CliConfig)(cmd: CliCommand): URIO[ZIOAppArgs, ExitCode] = cmd match {
+    case CliCommand.Serve(false)         => serve
+    case CliCommand.Serve(true)          => detachServe(cfg)
+    case CliCommand.Stop                 => Stop.run(PidFile.path)
     case CliCommand.Completion(shell)    => printCompletion(shell)
     case other: CliCommand.ServerCommand => Dispatcher.dispatch(other)
   }
+
+  // Detached serve: same mandatory-env precheck as foreground (a detached child with missing env would just die in
+  // server.log), then hand off to the spawner. `log_dir` from the CLI config sets the server's log location, defaulting
+  // to `${XDG_STATE_HOME:-~/.local/state}/ccas/logs`.
+  private def detachServe(cfg: CliConfig): URIO[ZIOAppArgs, ExitCode] =
+    missingServeEnv match {
+      case Some(msg) => Console.printLineError(s"error: $msg").orDie.as(ExitCode(2))
+      case None =>
+        val logDir = cfg.logDir.fold(XdgPaths.stateDir.resolve("logs"))(Paths.get(_))
+        Detach.run(logDir, PidFile.path)
+    }
 
   private def serve: URIO[ZIOAppArgs, ExitCode] =
     missingServeEnv match {
@@ -93,7 +109,7 @@ object Main extends ZIOAppDefault {
   }
 
   // Pure, offline: emit the script to stdout (so `eval "$(ccas completion bash)"` works), errors to stderr. No server.
-  private def printCompletion(shell: String): URIO[Any, ExitCode] =
+  private def printCompletion(shell: String): UIO[ExitCode] =
     CompletionEmitter.render(shell) match {
       case Right(script)  => Console.print(script).orDie.as(ExitCode.success)
       case Left(message)  => Console.printLineError(s"error: $message").orDie.as(ExitCode(2))

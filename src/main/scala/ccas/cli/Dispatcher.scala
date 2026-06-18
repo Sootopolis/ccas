@@ -23,7 +23,7 @@ object Dispatcher {
 
   private val MaxJobWait: Duration = 60.minutes
 
-  def dispatch(cmd: CliCommand.ServerCommand): URIO[Any, ExitCode] =
+  def dispatch(cmd: CliCommand.ServerCommand): UIO[ExitCode] =
     CcasApiClient
       .live(cmd.server)
       .flatMap(api => runCommand(api, JobFollower(api, MaxJobWait), cmd).tap(_ => refreshClubsCache(api)))
@@ -42,7 +42,7 @@ object Dispatcher {
 
   // Best-effort, staleness-gated refresh of the completion club-slug cache after a successful command. Fully ignored:
   // it never blocks the result or alters the exit code (the `.tap` runs only on the success channel).
-  private def refreshClubsCache(api: CcasApiClient): URIO[Any, Unit] =
+  private def refreshClubsCache(api: CcasApiClient): UIO[Unit] =
     CompletionCache.clubsStale.flatMap { stale =>
       ZIO.whenDiscard(stale) {
         api

@@ -63,9 +63,20 @@ ccas --help              # full command tree
 ccas <command> --help    # per-command flags
 ```
 
-Commands: `serve`, `membership`, `history`, `recruit`, `stats`, `jobs`, `logs`, `blacklist {add|list|remove}`, `schedule {list|add|remove}`. The server URL resolves in order: a global `--server <url>` flag, else `api_url` from the [config file](#cli-config-file), else the built-in default `http://127.0.0.1:8080`.
+Commands: `serve`, `stop`, `membership`, `history`, `recruit`, `stats`, `jobs`, `logs`, `blacklist {add|list|remove}`, `schedule {list|add|remove}`. The server URL resolves in order: a global `--server <url>` flag, else `api_url` from the [config file](#cli-config-file), else the built-in default `http://127.0.0.1:8080`.
 
 `ccas --version` prints the version; `ccas --help` and `ccas <command> --help` show usage.
+
+### Running the server detached
+
+`ccas serve` runs in the foreground (logs to stdout, Ctrl-C to stop). To background it:
+
+```bash
+ccas serve --detach   # spawns a detached server, waits for /health/ready, prints "started, pid=<n>"
+ccas stop             # reads the pid file, sends SIGTERM, waits for a clean shutdown
+```
+
+The detached server writes its pid to `${XDG_STATE_HOME:-~/.local/state}/ccas/ccas.pid` and its stdout/stderr to `<log_dir>/server.log` (`log_dir` from the [config file](#cli-config-file), default `~/.local/state/ccas/logs`). A second `ccas serve --detach` while one is running exits with `already running, pid=<n>`. For a supervised/long-lived server (systemd, Docker, Render) run the foreground `ccas-server` binary instead.
 
 > **Two gotchas.** The parser (zio-cli) expects options **before** positional arguments — `ccas membership --no-trust-usernames team-alpha`, not `… team-alpha --no-trust-usernames` (a misplaced flag is silently dropped). And the staged binary reads configuration from the **process environment only** — it does not load `.env` (that is auto-sourced for `sbt run` / `sbt runMain`).
 
@@ -92,13 +103,13 @@ The committed `completions/ccas.bash` is the generated output of `ccas completio
 
 Jobs can be submitted via the REST API or run on a schedule.
 
-| Job | Description |
-|-----|-------------|
+| Job             | Description                                                                                                       |
+|-----------------|-------------------------------------------------------------------------------------------------------------------|
 | **Recruitment** | Scouts players from source clubs, filters by rating/activity/experience criteria, produces recruitment candidates |
-| **Membership** | Reconciles the club member list against the Chess.com API, tracks joins and departures |
-| **History** | Crawls match archives for club members, discovering new players wave by wave |
-| **MatchRef** | Resolves player/club references to concrete match boards (runs automatically after other jobs) |
-| **Blacklist** | Adds a player to the recruitment blacklist |
+| **Membership**  | Reconciles the club member list against the Chess.com API, tracks joins and departures                            |
+| **History**     | Crawls match archives for club members, discovering new players wave by wave                                      |
+| **MatchRef**    | Resolves player/club references to concrete match boards (runs automatically after other jobs)                    |
+| **Blacklist**   | Adds a player to the recruitment blacklist                                                                        |
 
 ## API
 
@@ -154,6 +165,7 @@ Optional overrides with defaults:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `SERVER_PORT` | 8080 | HTTP server port |
+| `SERVER_HOST` | 127.0.0.1 | Bind address. Loopback by default (single-user, no-auth local model); set `0.0.0.0` for hosted deploys |
 | `SCHEDULER_POLL_MINUTES` | 15 | How often the scheduler checks for due jobs. Keep ≥ 15 against Neon so polls don't keep the compute always-warm (it auto-suspends after ~5 min idle, budget is 192 active-hr/mo on free tier) |
 | `DB_POOL_MAX` / `DB_POOL_MIN_IDLE` | 20 / 2 | HikariCP pool sizing (set `MIN_IDLE=0` for Neon scale-to-zero) |
 | `DB_POOL_CONNECTION_TIMEOUT` / `DB_POOL_IDLE_TIMEOUT` / `DB_POOL_MAX_LIFETIME` / `DB_POOL_KEEPALIVE_TIME` | 30 000 / 600 000 / 1 800 000 / 120 000 ms | HikariCP timeouts |
@@ -170,7 +182,7 @@ The `ccas` CLI (the client, not the server) reads optional settings from `${XDG_
 ```hocon
 api_url       = "http://127.0.0.1:8080"        # default server URL
 default_clubs = ["team-alpha", "team-beta"]    # seed shell-completion suggestions
-log_dir       = "~/.local/state/ccas/logs"     # reserved; parsed but not yet used
+log_dir       = "~/.local/state/ccas/logs"     # where `ccas serve --detach` writes server.log
 ```
 
 - **Server URL** resolves `--server <url>` flag → `api_url` → built-in `http://127.0.0.1:8080`.
