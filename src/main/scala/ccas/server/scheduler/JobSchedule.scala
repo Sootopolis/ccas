@@ -57,6 +57,21 @@ object JobSchedule {
       sql"SELECT $columns FROM job_schedule WHERE id = $id".query[JobSchedule].run().headOption
     }
 
+  /** Idempotently seeds a global (all-clubs, `club_id IS NULL`) maintenance schedule. Uses a NULL-safe
+    * `WHERE NOT EXISTS` guard rather than `ON CONFLICT (kind, club_id) DO NOTHING`: the table's
+    * `UNIQUE (kind, club_id)` treats NULL `club_id` as distinct, so ON CONFLICT would re-insert a duplicate
+    * global row on every boot. A row already present (incl. one hand-disabled by the operator) is left untouched.
+    * Returns the rows inserted (1 on first seed, 0 thereafter).
+    */
+  def seedGlobalIfAbsent(seed: ScheduleSeed): ZIO[PostgresClient, SQLException, Int] =
+    connectZIO {
+      sql"""INSERT INTO job_schedule (kind, club_id, params, interval_hours, enabled, last_run_at)
+            SELECT ${seed.kind}, NULL, NULL, ${seed.intervalHours}, ${seed.enabled}, NULL
+            WHERE NOT EXISTS (
+              SELECT 1 FROM job_schedule WHERE kind = ${seed.kind} AND club_id IS NULL
+            )""".update.run()
+    }
+
   def insert(schedule: JobSchedule): ZIO[PostgresClient, SQLException, Long] =
     connectZIO {
       sql"""INSERT INTO job_schedule (kind, club_id, params, interval_hours, enabled, last_run_at)

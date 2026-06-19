@@ -167,6 +167,8 @@ Optional overrides with defaults:
 | `SERVER_PORT` | 8080 | HTTP server port |
 | `SERVER_HOST` | 127.0.0.1 | Bind address. Loopback by default (single-user, no-auth local model); set `0.0.0.0` for hosted deploys |
 | `SCHEDULER_POLL_MINUTES` | 15 | How often the scheduler checks for due jobs. Keep ≥ 15 against Neon so polls don't keep the compute always-warm (it auto-suspends after ~5 min idle, budget is 192 active-hr/mo on free tier) |
+| `SCHEDULER_MATCHREF_INTERVAL_HOURS` / `SCHEDULER_MATCHREF_ENABLED` | 24 / true | Boot-seed cadence/enable for the global `MatchRef` (rename-recovery) maintenance schedule. Seed-only: applied on a fresh DB; once the row exists, edit it via `ccas schedule` instead |
+| `SCHEDULER_CLUBDATA_INTERVAL_HOURS` / `SCHEDULER_CLUBDATA_ENABLED` | 6 / true | Boot-seed cadence/enable for the global `ClubData` (club/admin refresh) maintenance schedule. Seed-only, same as above |
 | `DB_POOL_MAX` / `DB_POOL_MIN_IDLE` | 20 / 2 | HikariCP pool sizing (set `MIN_IDLE=0` for Neon scale-to-zero) |
 | `DB_POOL_CONNECTION_TIMEOUT` / `DB_POOL_IDLE_TIMEOUT` / `DB_POOL_MAX_LIFETIME` / `DB_POOL_KEEPALIVE_TIME` | 30 000 / 600 000 / 1 800 000 / 120 000 ms | HikariCP timeouts |
 | `CHESS_COM_API_PERMITS` | 16 | Max parallel Chess.com API requests |

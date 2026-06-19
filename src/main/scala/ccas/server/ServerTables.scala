@@ -4,7 +4,7 @@ import zio.{RIO, Scope, ZIO, ZIOAppDefault}
 
 import ccas.analysis.tables.Tables
 import ccas.server.jobs.JobRun
-import ccas.server.scheduler.JobSchedule
+import ccas.server.scheduler.{JobSchedule, SchedulerDefaults}
 import ccas.utils.ProgressDisplay
 import ccas.utils.sql.PostgresClient
 
@@ -22,5 +22,9 @@ object ServerTables extends ZIOAppDefault {
       _ <- Tables.ensureTables
       _ <- JobRun.createTable
       _ <- JobSchedule.createTable
+      // ZIO.attempt so a malformed scheduler.defaults value (non-int, non-bool, out-of-range) fails boot
+      // as a typed error rather than a ZIO defect.
+      seeds <- ZIO.attempt(SchedulerDefaults.fromConfig)
+      _     <- ZIO.foreachDiscard(seeds)(JobSchedule.seedGlobalIfAbsent)
     } yield ()
 }
