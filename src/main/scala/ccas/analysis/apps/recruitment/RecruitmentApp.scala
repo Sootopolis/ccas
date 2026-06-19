@@ -183,6 +183,7 @@ object RecruitmentApp extends ZIOAppDefault {
       failedAdminSlugs    <- Ref.make(Set.empty[ClubSlug])
       invitedRef          <- Ref.make(List.empty[Username])
       evaluatedRef        <- Ref.make(Set.empty[Username])
+      abandonedOpponents  <- Ref.make(Set.empty[Username])
       evalCountRef        <- Ref.make(0)
 
       runCtx = RunContext(
@@ -212,6 +213,7 @@ object RecruitmentApp extends ZIOAppDefault {
         evalCountRef = evalCountRef,
         target = effectiveTarget,
         existingUsernames = existingUsernames,
+        abandonedOpponents = abandonedOpponents,
         exploreConcurrency = effectiveConcurrency,
         evalChunkSize = DefaultEvalChunkSize,
         explore = explore,
