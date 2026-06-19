@@ -79,7 +79,13 @@ private[recruitment] object RecruitmentExplore {
       activation <- activateSources(ctx, activePool, pendingSources, evaluated, visitedClubs)
       _ <-
         if (activation.pool.isEmpty)
-          tryReplenishAndContinue(ctx, activation.pool, activation.visited, staticStrategies, roundRobinKeys)
+          // Don't drop activation.pending: when every source activated this round yields zero candidates the pool is
+          // empty but un-activated source clubs may still remain (with exploreConcurrency=1, splitAt activates one
+          // source per round). The sibling arms (the empty-`remaining` source branch below and
+          // `evaluateBatchFromSource`) thread pending through; route back via exploreLoop so the remaining sources are
+          // drained. exploreLoop's own (pool empty && pending empty) guard still reaches tryReplenishAndContinue when
+          // pending is genuinely empty, so the no-sources case is unchanged.
+          exploreLoop(ctx, activation.pool, activation.pending, staticStrategies, activation.visited, roundRobinKeys)
         else {
           val keys =
             if (roundRobinKeys.exists(activation.pool.contains)) roundRobinKeys.filter(activation.pool.contains)
@@ -187,9 +193,14 @@ private[recruitment] object RecruitmentExplore {
       )
       pool4 <-
         if (ctx.explore && isGrim(updatedSource)) {
-          ZIO.logInfo(
-            s"[Explore] Abandoning grim source: $sourceId (eval=${updatedSource.evaluated}, rej=${updatedSource.rejected})"
-          ).as(pool3 - sourceId)
+          // Record the un-evaluated tail so replenish won't rediscover and resurrect this abandoned source via
+          // discoveredOpponents (a monotonic accumulator that is never cleared). Without this, a grim
+          // candidate-opponents source is rebuilt every replenish cycle with consecutiveRejects reset to 0,
+          // defeating the abandonment and re-evaluating the whole bad tail in GrimConsecutiveRejects-sized batches.
+          ctx.abandonedOpponents.update(_ ++ updatedSource.remaining) *>
+            ZIO.logInfo(
+              s"[Explore] Abandoning grim source: $sourceId (eval=${updatedSource.evaluated}, rej=${updatedSource.rejected})"
+            ).as(pool3 - sourceId)
         } else ZIO.succeed(pool3.updated(sourceId, updatedSource))
       _ <- exploreLoop(ctx, pool4, pendingSources, staticStrategies, visitedClubs, nextKeys)
     } yield ()
@@ -331,7 +342,12 @@ private[recruitment] object RecruitmentExplore {
       for {
         // Dynamic: candidate opponents discovered during evaluation
         opponents <- ctx.runCtx.discoveredOpponents.get
-        newOpponents = opponents -- evaluatedUsernames
+        abandoned <- ctx.abandonedOpponents.get
+        // Exclude existingUsernames too, matching `activateSource`'s UsernameSource filter. Otherwise a
+        // discovered opponent who is already a club member is re-yielded here every round but filtered to 0 at
+        // activation, so evaluatedRef never grows and the loop spins forever (Discovered N → 0 candidates → repeat).
+        // `abandoned` holds the un-evaluated tails of grim-abandoned sources so they are not rediscovered.
+        newOpponents = opponents -- evaluatedUsernames -- ctx.existingUsernames -- abandoned
         result <-
           if (newOpponents.nonEmpty) {
             ZIO.logInfo(s"[Explore] Discovered ${newOpponents.size} candidate opponents").as(

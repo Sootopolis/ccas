@@ -101,8 +101,10 @@ private[recruitment] case class SourceState(
   consecutiveRejects: Int
 )
 
-// Grim constants (server-side, not user-configurable)
-private[recruitment] val GrimConsecutiveRejects = 50
+// Grim constants (server-side, not user-configurable). Raised 50 → 100 (2026-06-19): the hardened API client
+// (adaptive pacing, response caching, higher fiberCap) makes deeper scans of a source cheap, so we tolerate more
+// consecutive rejects before abandoning — trading a bounded amount of extra evaluation for better source coverage.
+private[recruitment] val GrimConsecutiveRejects = 100
 
 private[recruitment] def isGrim(s: SourceState): Boolean = s.consecutiveRejects >= GrimConsecutiveRejects
 
@@ -118,6 +120,9 @@ private[recruitment] case class ExploreContext(
   evalCountRef: Ref[Int],
   target: Int,
   existingUsernames: Set[Username],
+  /** Un-evaluated usernames from grim-abandoned explore sources. `replenish` subtracts these so an abandoned
+    * candidate-opponents source is not rediscovered from the (never-cleared) `discoveredOpponents` accumulator. */
+  abandonedOpponents: Ref[Set[Username]],
   exploreConcurrency: Int,
   evalChunkSize: Int,
   explore: Boolean,

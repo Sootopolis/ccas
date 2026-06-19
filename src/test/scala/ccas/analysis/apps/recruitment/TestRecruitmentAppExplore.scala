@@ -1,5 +1,7 @@
 package ccas.analysis.apps.recruitment
 
+import java.time.{Instant, YearMonth, ZoneOffset}
+
 import zio.{durationInt, Promise, Schedule, ZLayer}
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
@@ -14,6 +16,8 @@ object TestRecruitmentAppExplore extends ZIOSpecDefault {
 
   private val discoverableClubId   = ClubId(701)
   private val discoverableClubSlug = ClubSlug("discoverable-club")
+  // PlayerId(252) is in seedDb's cleanup list, so the shared-member row is reset between tests.
+  private val sharedMemberPid = PlayerId(252)
 
   override def spec: Spec[Any, Throwable] = suite("TestRecruitmentAppExplore")(
     suiteExploreMode
@@ -29,8 +33,8 @@ object TestRecruitmentAppExplore extends ZIOSpecDefault {
   private def suiteExploreMode = suite("explore mode")(
     test("isGrim pure logic") {
       assertTrue(
-        !isGrim(SourceState(Nil, 49, 49, 49)), // below threshold
-        isGrim(SourceState(Nil, 10, 10, 50)),  // consecutive threshold hit
+        !isGrim(SourceState(Nil, 99, 99, 99)), // below threshold
+        isGrim(SourceState(Nil, 10, 10, 100)), // consecutive threshold hit
         !isGrim(SourceState(Nil, 40, 39, 5)),  // high ratio but low consecutive — not grim
         !isGrim(SourceState(Nil, 0, 0, 0))     // fresh source
       )
@@ -274,6 +278,86 @@ object TestRecruitmentAppExplore extends ZIOSpecDefault {
       } yield assertTrue(
         deferredBefore.size == 1,
         deferredAfter.isEmpty
+      )
+    },
+    test("empty source club does not abandon later source clubs (regression: dropped pending sources)") {
+      val emptySource = ClubSlug("drop-empty-source")
+      val liveSource  = ClubSlug("drop-live-source")
+      val freshPid    = PlayerId(250)
+      val responses = Map(
+        s"club/$clubSlug" -> apiClubJson(clubId.value, clubSlug.value),
+        // "shared-member" is already a member of the target club → it lands in existingUsernames
+        s"club/$clubSlug/members"    -> apiClubMembersJson(List(("shared-member", Times.t0.getEpochSecond))),
+        s"club/$emptySource"         -> apiClubJson(ClubId(801).value, emptySource.value),
+        // emptySource's only member is an existing target member → 0 candidates after exclusion
+        s"club/$emptySource/members" -> apiClubMembersJson(List(("shared-member", Times.t0.getEpochSecond))),
+        s"club/$liveSource"          -> apiClubJson(ClubId(802).value, liveSource.value),
+        s"club/$liveSource/members"  -> apiClubMembersJson(List(("fresh-cand", Times.t0.getEpochSecond))),
+        // membership reconcile fetches each target-club member's profile
+        "player/shared-member"       -> apiPlayerJson(sharedMemberPid.value, "shared-member"),
+        "player/fresh-cand"          -> apiPlayerJson(freshPid.value, "fresh-cand")
+      )
+      for {
+        _      <- seedDb
+        _      <- seedCriteria(makeCriteria())
+        client <- fakeChessComClient(responses)
+        // exploreConcurrency=1 activates emptySource first; it yields 0 candidates so the pool is empty.
+        // Pre-fix the still-pending liveSource was dropped and fresh-cand was never evaluated.
+        result     <- runRecruit(client, target = Some(5), sourceClubs = List(emptySource, liveSource))
+        candidates <- RecruitmentCandidate.selectByRun(result.runId)
+      } yield assertTrue(
+        candidates.exists(c => c.playerId == freshPid && c.outcome == CandidateOutcome.Invited)
+      )
+    },
+    test("discovered opponent who is an existing member does not spin the explore loop (regression)") {
+      val tmSource = ClubSlug("tm-source")
+      val candPid  = PlayerId(251)
+      // Derive the archive month and game time from one instant. recruit's own clock runs slightly later, so guard
+      // the month-boundary race by also seeding the next month — whichever month recruit treats as "current" hits.
+      val nowInst = Instant.now()
+      val gameEnd = nowInst.getEpochSecond - 3600
+      val ym0     = YearMonth.from(nowInst.atOffset(ZoneOffset.UTC))
+      val ym1     = ym0.plusMonths(1)
+      // cand-x played a daily team match against "shared-member", who is already a member of the target club.
+      // That opponent lands in discoveredOpponents but is filtered out at activation (existingUsernames).
+      val archive = archiveJson(
+        List(
+          archiveGameJson(
+            white = "cand-x",
+            black = "shared-member",
+            matchUrl = Some("https://api.chess.com/pub/match/12345"),
+            timeClass = "daily",
+            endTime = gameEnd
+          )
+        )
+      )
+      val responses = Map(
+        s"club/$clubSlug"         -> apiClubJson(clubId.value, clubSlug.value),
+        s"club/$clubSlug/members" -> apiClubMembersJson(List(("shared-member", Times.t0.getEpochSecond))),
+        s"club/$tmSource"         -> apiClubJson(ClubId(801).value, tmSource.value),
+        s"club/$tmSource/members" -> apiClubMembersJson(List(("cand-x", Times.t0.getEpochSecond))),
+        // membership reconcile fetches each target-club member's profile
+        "player/shared-member"    -> apiPlayerJson(sharedMemberPid.value, "shared-member"),
+        "player/cand-x"           -> apiPlayerJson(candPid.value, "cand-x"),
+        s"player/cand-x/games/${ym0.getYear}/${ym0.getMonthValue}" -> archive,
+        s"player/cand-x/games/${ym1.getYear}/${ym1.getMonthValue}" -> archive
+      )
+      // CheckTmStats only joins the chain when a TM criterion is set; that filter populates discoveredOpponents.
+      val criteria = makeCriteria().copy(dailyMinTmGamesFinished = Some(1))
+      for {
+        _      <- seedDb
+        _      <- seedCriteria(criteria)
+        client <- fakeChessComClient(responses)
+        // Pre-fix: replenish re-yields "shared-member" every cycle while activation drops it to 0 → infinite loop.
+        // The timeout turns that hang into a deterministic failure; post-fix the run completes immediately.
+        result <- runRecruit(client, target = Some(5), explore = true, sourceClubs = List(tmSource))
+          .timeout(30.seconds)
+        // cand-x's Player row is upserted by FetchAndCheckPlayer regardless of final candidate outcome, so this
+        // confirms the discovery path ran without depending on candidate-row persistence (cacheRejected can skip it).
+        candPlayer <- Player.selectByUsername(Username("cand-x"))
+      } yield assertTrue(
+        result.isDefined,
+        candPlayer.isDefined
       )
     }
   )
