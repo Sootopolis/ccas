@@ -5,10 +5,15 @@ import java.time.Instant
 import ccas.analysis.tables.{ClientConfig, ClientStats}
 import ccas.utils.errors.safeMessage
 import ccas.utils.sql.PostgresClient
-import zio.{Clock, Ref, UIO, ZEnvironment, ZIO}
+import zio.{Clock, Fiber, Ref, UIO, ZEnvironment, ZIO}
 
 /** Bundles the refs and config needed by periodic and final stats flushes. Created once in `ChessComClient.live` and
   * passed to `persistStats` / `finalFlush`.
+  *
+  * `endedAtRef` pins the session-window end. While `None` (the normal periodic case) each flush stamps `completedAt`
+  * with the live clock; once `endSession` sets it, every subsequent flush — including the scope-close `finalFlush` —
+  * reuses that instant, so a human pause after the last API request (e.g. a CLI confirmation prompt) does not stretch
+  * the persisted window or deflate throughput.
   */
 private[ccas] case class ClientStatsFlushContext(
   sessionId: String,
@@ -18,7 +23,8 @@ private[ccas] case class ClientStatsFlushContext(
   configIdRef: Ref[Option[Long]],
   config: ChessComClient.ThrottleConfig,
   stateRef: Ref[ChessComClient.ThrottleState],
-  pgClient: PostgresClient
+  pgClient: PostgresClient,
+  endedAtRef: Ref[Option[Instant]]
 )
 
 private[ccas] object ClientStatsPersistence {
@@ -32,7 +38,7 @@ private[ccas] object ClientStatsPersistence {
       current <- ctx.statsRef.get
       _ <- ZIO.whenDiscard(current.hasActivity) {
         for {
-          now            <- Clock.instant
+          now        <- ctx.endedAtRef.get.flatMap(_.fold(Clock.instant)(ZIO.succeed(_)))
           inProgress <- inProgressThrottleMs(ctx.stateRef)
           configId <- ctx.configIdRef.get.flatMap {
             case Some(id) => ZIO.succeed(id)
@@ -48,6 +54,28 @@ private[ccas] object ClientStatsPersistence {
     } yield ())
       .tapError(e => ZIO.logWarning(s"Failed to persist client_stats for session ${ctx.sessionId}: ${e.safeMessage}"))
       .ignore
+
+  /** Marks the end of API work for this session: pins the window-end to the current instant, signals the periodic
+    * flush fiber to stop, and performs one final pinned flush. Callers invoke this once the last request has
+    * completed but before any human pause (CLI confirmation prompt), so the persisted session window reflects API
+    * work, not wall-clock-until-exit. Idempotent — pinning only takes on the first call.
+    *
+    * The immediate flush (not just the pin) makes the pinned snapshot durable even if the process is killed during
+    * the human pause that follows — the scope-close `finalFlush` would otherwise be the only writer of the pinned
+    * value, and the last periodic tick before the pin carries the pre-pin (live) window-end.
+    *
+    * Interruption is forked rather than awaited: a periodic flush stuck on a dead DB socket would otherwise block
+    * the caller for up to `socketTimeout` while interruption drains. The final flush below may then briefly overlap
+    * a dying periodic flush, but both target the same session row via an idempotent upsert and swallow errors, so
+    * the overlap is harmless.
+    */
+  def endSession(ctx: ClientStatsFlushContext, flushFiber: Fiber[Any, Any]): UIO[Unit] =
+    for {
+      now <- Clock.instant
+      _   <- ctx.endedAtRef.update(_.orElse(Some(now)))
+      _   <- flushFiber.interruptFork
+      _   <- persistStats(ctx)
+    } yield ()
 
   /** Final stats flush: upserts the cumulative snapshot, then logs a summary. Called by the scope finalizer. */
   def finalFlush(ctx: ClientStatsFlushContext): UIO[Unit] =

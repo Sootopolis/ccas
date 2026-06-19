@@ -350,6 +350,15 @@ object RecruitmentApp extends ZIOAppDefault {
       _     <- RecruitmentExplore.reclassifyExcessInvited(ctx)
       found <- ctx.invitedRef.get.map(_.reverse)
 
+      // --- End-of-API-work boundary ---
+      // Exploration is done: no further requests will be made. Stamp the completion instant and (for the CLI prompt
+      // path) freeze the client-stats session window NOW, before the interactive confirmation pause. Otherwise the
+      // time the operator spends at the Y/n prompt would inflate RecruitmentRun.duration and stretch the
+      // client_stats window, deflating throughput. The prompt fires only when trigger==Cli && !interrupted &&
+      // found.nonEmpty, so endSession is gated on the same condition.
+      completedAt <- Clock.instant
+      _ <- ZIO.whenDiscard(trigger == RunTrigger.Cli && !interrupted && found.nonEmpty)(ctx.runCtx.client.endSession)
+
       // --- Confirmation step: Deferred → Invited ---
       confirmed <-
         if (interrupted || found.isEmpty) ZIO.succeed(List.empty[Username])
@@ -367,7 +376,6 @@ object RecruitmentApp extends ZIOAppDefault {
               .flatMap(p => RecruitmentCandidate.updateOutcome(ctx.runId, p.playerId, CandidateOutcome.Invited))
           }
           deferredCount <- RecruitmentCandidate.selectDeferredCountByRun(ctx.runId)
-          completedAt <- Clock.instant
           finalRun = RecruitmentRun(
             ctx.runId,
             clubId,

@@ -432,7 +432,8 @@ object RecruitmentTestSupport {
         stats,
         bar,
         ChessComClient.ThrottleConfig(Vector(2, 5), 30.seconds, 5.seconds, 1.second, 10.seconds, 1.second, 5, 2, 3, 20, 0.2, 10, 0, java.time.Duration.ZERO, 500L),
-        Scope.global
+        Scope.global,
+        ZIO.unit
       )
     }
 

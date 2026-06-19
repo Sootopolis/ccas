@@ -25,10 +25,11 @@ object TestChessComClientPersistence extends ZIOSpecDefault {
     for {
       configIdRef <- Ref.make(Option.empty[Long])
       stateRef    <- Ref.make(ChessComClient.ThrottleState(8, 0, Vector.empty))
+      endedAtRef  <- Ref.make(Option.empty[Instant])
       startedAt   <- ZIO.succeed(Instant.now())
       config = ChessComClient.ThrottleConfig(Vector(2, 4, 8), 30.seconds, 5.seconds, 1.second, 10.seconds, 1.second, 5, 2, 3, 20, 0.2, 10, 0, Duration.Zero, 500L)
     } yield ClientStatsFlushContext(
-      s"test-$appLabel", appLabel, startedAt, statsRef, configIdRef, config, stateRef, pgClient
+      s"test-$appLabel", appLabel, startedAt, statsRef, configIdRef, config, stateRef, pgClient, endedAtRef
     )
 
   private def suitePersistStats = suite("persistStats")(
@@ -65,6 +66,47 @@ object TestChessComClientPersistence extends ZIOSpecDefault {
         rows(0).configId == configId1.get,
         rows(0).attemptsByTier == "4:5|8:10",
         rows(0).errors429ByTier == "4:1|8:2"
+      )
+    },
+    test("endSession interrupts the periodic fiber and pins the window-end") {
+      for {
+        pgClient <- ZIO.service[PostgresClient]
+        statsRef <- Ref.make(ClientStatsAccumulator().copy(requests = 4, successes = 4, activeMs = 400))
+        ctx      <- makeFlushContext("test-endsession", statsRef, pgClient)
+        // Stand-in for the periodic flush daemon: endSession must interrupt it.
+        fiber  <- ZIO.never.forkDaemon
+        before <- Clock.instant
+        _      <- ClientStatsPersistence.endSession(ctx, fiber)
+        pinned <- ctx.endedAtRef.get
+        exit   <- fiber.await
+        after  <- Clock.instant
+      } yield assertTrue(
+        exit.isInterrupted,
+        pinned.isDefined,
+        !pinned.get.isBefore(before),
+        !pinned.get.isAfter(after)
+      )
+    },
+    test("a pinned window-end is reused by later flushes (frozen completedAt)") {
+      for {
+        pgClient <- ZIO.service[PostgresClient]
+        statsRef <- Ref.make(ClientStatsAccumulator().copy(requests = 5, successes = 5, activeMs = 500))
+        ctx      <- makeFlushContext("test-pinned", statsRef, pgClient)
+        // Pin to startedAt truncated to milliseconds: exact across the TIMESTAMPTZ round-trip (Postgres stores µs, a
+        // raw Clock.instant carries ns that get rounded), differs from the live flush clock so it proves the pin is
+        // used, and stays within the selectRecent cutoff regardless of which column that query filters on.
+        pinnedAt = Instant.ofEpochMilli(ctx.startedAt.toEpochMilli)
+        _        <- ctx.endedAtRef.set(Some(pinnedAt))
+        _        <- ClientStatsPersistence.persistStats(ctx)
+        // New activity after the pin: the window-end must NOT advance to the live clock.
+        _      <- statsRef.update(_.copy(requests = 50))
+        _      <- ClientStatsPersistence.persistStats(ctx)
+        recent <- ClientStats.selectRecent(ctx.startedAt.minusSeconds(60))
+        row     = recent.find(_.appLabel == "test-pinned")
+      } yield assertTrue(
+        row.isDefined,
+        row.get.completedAt == pinnedAt,
+        row.get.requests == 50L
       )
     },
     test("flush does not mutate the stats accumulator") {

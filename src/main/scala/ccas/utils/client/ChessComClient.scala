@@ -78,7 +78,8 @@ final class ChessComClient(
   statsRef: Ref[ClientStatsAccumulator],
   progressBar: ProgressBar,
   config: ChessComClient.ThrottleConfig,
-  scope: Scope
+  scope: Scope,
+  endSessionEffect: UIO[Unit]
 ) {
   import throttle.*
 
@@ -86,6 +87,12 @@ final class ChessComClient(
     * steady state. Exposed for callers that size their fiber pools relative to the gate (e.g. `ApiConcurrency`).
     */
   def maxPermits: Int = config.maxPermits.toInt
+
+  /** Pins the client-stats session window to the current instant and stops the periodic flush fiber. Call once the
+    * last API request has completed but before any human pause (e.g. a CLI confirmation prompt) so the persisted
+    * session window and throughput reflect API work, not wall-clock-until-exit. Idempotent and safe to skip.
+    */
+  def endSession: UIO[Unit] = endSessionEffect
 
   // `ZClientAspect.followRedirects` treats every 3xx as a redirect, including 304 Not Modified, and fails on the
   // missing Location header. Return the 304 response as-is so conditional-GET revalidation works; other redirect
@@ -855,9 +862,11 @@ object ChessComClient {
         sessionId      = startedAt.toString.replace(":", "").replace("-", "")
         stats               <- Ref.make(ClientStatsAccumulator())
         configIdRef         <- Ref.make(Option.empty[Long])
+        endedAtRef          <- Ref.make(Option.empty[Instant])
         bar                 <- display.addBarScoped
         refs = ThrottleRefs(stateRef, activeRef, rateLimitGate, lastReqRef)
-        flushCtx = ClientStatsFlushContext(sessionId, appLabel, startedAt, stats, configIdRef, throttleConfig, stateRef, pgClient)
+        flushCtx =
+          ClientStatsFlushContext(sessionId, appLabel, startedAt, stats, configIdRef, throttleConfig, stateRef, pgClient, endedAtRef)
         flushFiber <- ClientStatsPersistence.persistStats(flushCtx).repeat(Schedule.fixed(statsFlushInterval)).forkDaemon
         _ <- ZIO.addFinalizer(flushFiber.interrupt *> ClientStatsPersistence.finalFlush(flushCtx))
       } yield ChessComClient(
@@ -868,7 +877,8 @@ object ChessComClient {
         stats,
         bar,
         throttleConfig,
-        clientScope
+        clientScope,
+        ClientStatsPersistence.endSession(flushCtx, flushFiber)
       )
     }
 }
