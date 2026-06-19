@@ -44,7 +44,9 @@ build/
 .metals
 
 ### Claude Code ###
-.claude/
+.claude/*
+# Track shared project skills; keep local settings (settings.local.json, locks) ignored.
+!.claude/skills/
 
 ### Environment ###
 .env
