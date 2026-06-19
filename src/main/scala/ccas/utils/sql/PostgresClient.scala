@@ -7,7 +7,7 @@ import java.util.logging.Logger as JLogger
 import javax.sql.DataSource
 
 import com.augustnagro.magnum.{DbCon, DbTx, Transactor}
-import com.typesafe.config.ConfigFactory
+import com.typesafe.config.{Config, ConfigFactory}
 import com.zaxxer.hikari.{HikariConfig, HikariDataSource}
 import zio.{durationLong, Duration, IO, RIO, Schedule, TaskLayer, ZIO, ZLayer}
 
@@ -96,6 +96,19 @@ object PostgresClient {
   ): ZIO[R & PostgresClient, E, A] =
     ZIO.serviceWithZIO[PostgresClient](_.withTransaction(f))
 
+  /** Resolve the JDBC schema to set on the pool. An explicit, non-blank `live(schema = ...)` arg wins; otherwise fall
+    * back to `dataSource.currentSchema` '''only if present'''. Any blank value — from either source (e.g. `.env` ships
+    * `DB_SCHEMA=`, and HOCON's `${?DB_SCHEMA}` treats set-but-empty as present) — is intentionally treated as "no
+    * schema", so the pool uses Postgres' default `search_path` — matching the `database.url` branch, which never sets a
+    * schema. Reading the key with `hasPath` rather than a bare `getString` avoids a `ConfigException$Missing` crash
+    * when `DB_SCHEMA` is unset.
+    */
+  private[sql] def resolveSchema(explicit: Option[String], dsConfig: Config): Option[String] =
+    explicit
+      .orElse(Option.when(dsConfig.hasPath("currentSchema"))(dsConfig.getString("currentSchema")))
+      .map(_.trim)
+      .filter(_.nonEmpty)
+
   def live(
     prefix: String = "database",
     schema: Option[String] = None,
@@ -116,7 +129,7 @@ object PostgresClient {
             )
             hikariConfig.setUsername(dsConfig.getString("user"))
             hikariConfig.setPassword(dsConfig.getString("password"))
-            hikariConfig.setSchema(schema.getOrElse(dsConfig.getString("currentSchema")))
+            resolveSchema(schema, dsConfig).foreach(hikariConfig.setSchema)
           }
 
           if (config.hasPath("pool")) {
