@@ -15,6 +15,7 @@ import ccas.analysis.apps.stats.StatsApp
 import ccas.analysis.tables.{Club, RunTrigger}
 import ccas.api.misc.subtypes.{ClubSlug, JobRunId}
 import ccas.server.jobs.{JobKind, JobRunner}
+import ccas.utils.errors.ConflictException
 import ccas.utils.sql.PostgresClient
 
 trait JobScheduler {
@@ -52,8 +53,14 @@ object JobScheduler {
         _ <- ZIO.foreachDiscard(schedules) { schedule =>
           val isDue = schedule.lastRunAt.forall(ts => ChronoUnit.HOURS.between(ts, now) >= schedule.intervalHours)
           ZIO.whenDiscard(isDue) {
-            runSchedule(schedule, now).catchAll { e =>
-              ZIO.logError(s"[Scheduler] ${schedule.kind} (club ${schedule.clubId}): ${e.getMessage}")
+            runSchedule(schedule, now).catchAll {
+              // A job of this kind/club is already running (e.g. a forked job outliving its own
+              // intervalHours). Expected and benign: last_run_at stays put, so the next tick after
+              // the job ends submits promptly. Debug-log instead of ERROR-spamming for the duration.
+              case _: ConflictException =>
+                ZIO.logDebug(s"[Scheduler] ${schedule.kind} (club ${schedule.clubId}): already running, skipping tick")
+              case e =>
+                ZIO.logError(s"[Scheduler] ${schedule.kind} (club ${schedule.clubId}): ${e.getMessage}")
             }
           }
         }

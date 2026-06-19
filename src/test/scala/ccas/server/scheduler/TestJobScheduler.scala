@@ -11,6 +11,7 @@ import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId}
 import ccas.server.ServerTables
 import ccas.server.jobs.{JobKind, JobRun, JobRunner}
 import ccas.utils.client.ChessComClient
+import ccas.utils.errors.ConflictException
 import ccas.utils.sql.{FreshSchemaLayer, PostgresClient, TestDbCleanup}
 import ccas.utils.ProgressDisplay
 
@@ -30,7 +31,8 @@ object TestJobScheduler extends ZIOSpecDefault {
       testNotYetDueScheduleSkipped,
       testDisabledScheduleSkipped,
       testErrorDoesNotCrashScheduler,
-      testErrorInOneScheduleDoesNotBlockOthers
+      testErrorInOneScheduleDoesNotBlockOthers,
+      testConflictKeepsPollingAndDoesNotAdvanceLastRunAt
     )
       @@ TestAspect.before(TestDbCleanup.clearJobSchedules)
       @@ TestAspect.sequential
@@ -277,5 +279,55 @@ object TestJobScheduler extends ZIOSpecDefault {
           } yield ()
         }
       } yield assertCompletes
+    }
+
+  // Regression for #95: a forked job outliving its own intervalHours makes every subsequent tick
+  // re-select the (still-due) schedule, `submit` conflicts, and the `*>` short-circuit leaves
+  // `last_run_at` un-advanced. Contract: the scheduler keeps polling (does not crash) AND
+  // `last_run_at` stays put — so the next tick after the job ends submits promptly. The conflict
+  // is now logDebug, not logError; that log-level demotion is not asserted here (see plan: the
+  // suite has no ZTestLogger and the daemon-fiber timing makes log capture brittle).
+  private def testConflictKeepsPollingAndDoesNotAdvanceLastRunAt =
+    test("running-job conflict keeps scheduler polling and does not advance last_run_at") {
+      val conflictClubId = ClubId(307)
+      for {
+        pgClient  <- ZIO.service[PostgresClient]
+        callCount <- Ref.make(0)
+        conflictingRunner = new JobRunner {
+          override def submit(
+            kind: JobKind,
+            clubId: Option[ClubId],
+            params: Option[String],
+            trigger: RunTrigger,
+            effect: Option[JobRunId] => RIO[ProgressDisplay & ChessComClient & PostgresClient, Any]
+          ): RIO[PostgresClient, JobRunId] =
+            callCount.update(_ + 1) *> ZIO.fail(ConflictException(s"A $kind job is already running"))
+
+          override def status(id: JobRunId): RIO[PostgresClient, Option[JobRun]] = ZIO.none
+          override def recentJobs(limit: Int): RIO[PostgresClient, List[JobRun]] = ZIO.succeed(Nil)
+          override def logStream(id: JobRunId): RIO[PostgresClient, Option[ZStream[Any, Throwable, String]]] = ZIO.none
+        }
+        scheduler = new JobScheduler.JobSchedulerLive(conflictingRunner, pgClient, pollInterval)
+
+        now <- Clock.instant
+        twoHoursAgo = now.minus(2, ChronoUnit.HOURS)
+        _ <- Club.upsert(Club(conflictClubId, twoHoursAgo, ClubSlug("conflict-test"), "Conflict Test", None, None, None))
+        // Due (last run 2h ago, 1h interval). Each tick re-selects it; submit always conflicts.
+        scheduleId <- JobSchedule.insert(
+          JobSchedule(0L, JobKind.Membership, Some(conflictClubId), None, intervalHours = 1, enabled = true, lastRunAt = Some(twoHoursAgo))
+        )
+        _ <- ZIO.scoped {
+          for {
+            _ <- scheduler.start
+            _ <- TestClock.adjust(advanceWindow)
+            _ <- callCount.get.repeatUntil(_ >= 2)
+          } yield ()
+        }
+        reloaded   <- JobSchedule.selectId(scheduleId)
+        finalCount <- callCount.get
+      } yield assertTrue(
+        finalCount >= 2,                                   // kept polling across ticks despite the conflict
+        reloaded.exists(_.lastRunAt.contains(twoHoursAgo)) // last_run_at NOT advanced by the conflict
+      )
     }
 }
