@@ -24,7 +24,10 @@ object TestJobScheduleSql extends ZIOSpecDefault {
     testUpdateNoFields,
     testUpdateSetParamsToNull,
     testDelete,
-    testUniqueConstraint
+    testUniqueConstraint,
+    testSeedGlobalInsertsRow,
+    testSeedGlobalIdempotent,
+    testSeedGlobalPreservesExisting
   ).provideShared(
     FreshSchemaLayer("test_job_schedule", onInit = ServerTables.ensureTables)
   ) @@ TestAspect.sequential
@@ -176,4 +179,47 @@ object TestJobScheduleSql extends ZIOSpecDefault {
       result <- JobSchedule.insert(s2).exit
     } yield assertTrue(!result.isSuccess)
   }
+
+  private def globalRows(kind: JobKind) =
+    JobSchedule.selectAll.map(_.filter(s => s.kind == kind && s.clubId.isEmpty))
+
+  private def testSeedGlobalInsertsRow = test("seedGlobalIfAbsent inserts a global (club_id NULL) row") {
+    for {
+      _        <- deleteAll
+      inserted <- JobSchedule.seedGlobalIfAbsent(ScheduleSeed(JobKind.MatchRef, 24, enabled = true))
+      rows     <- globalRows(JobKind.MatchRef)
+    } yield assertTrue(
+      inserted == 1,
+      rows.size == 1,
+      rows.head.clubId.isEmpty,
+      rows.head.intervalHours == 24,
+      rows.head.enabled,
+      rows.head.lastRunAt.isEmpty
+    )
+  }
+
+  private def testSeedGlobalIdempotent = test("seedGlobalIfAbsent is a no-op on re-seed") {
+    for {
+      _       <- deleteAll
+      first   <- JobSchedule.seedGlobalIfAbsent(ScheduleSeed(JobKind.ClubData, 6, enabled = true))
+      second  <- JobSchedule.seedGlobalIfAbsent(ScheduleSeed(JobKind.ClubData, 6, enabled = true))
+      rows    <- globalRows(JobKind.ClubData)
+    } yield assertTrue(first == 1, second == 0, rows.size == 1)
+  }
+
+  private def testSeedGlobalPreservesExisting =
+    test("seedGlobalIfAbsent leaves a hand-disabled global row untouched") {
+      val existing = JobSchedule(0L, JobKind.MatchRef, None, None, 99, enabled = false, None)
+      for {
+        _    <- deleteAll
+        _    <- JobSchedule.insert(existing)
+        n    <- JobSchedule.seedGlobalIfAbsent(ScheduleSeed(JobKind.MatchRef, 24, enabled = true))
+        rows <- globalRows(JobKind.MatchRef)
+      } yield assertTrue(
+        n == 0,
+        rows.size == 1,
+        rows.head.intervalHours == 99,
+        !rows.head.enabled
+      )
+    }
 }
