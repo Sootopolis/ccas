@@ -7,7 +7,15 @@ import zio.{Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
 import zio.http.{Routes, Server}
 
 import ccas.server.jobs.JobRunner
-import ccas.server.routes.{BlacklistRoutes, ClubRoutes, HealthRoutes, JobRoutes, RecruitmentCriteriaRoutes, ScheduleRoutes}
+import ccas.server.routes.{
+  BlacklistRoutes,
+  ClubRoutes,
+  HealthRoutes,
+  JobRoutes,
+  ManagedClubRoutes,
+  RecruitmentCriteriaRoutes,
+  ScheduleRoutes
+}
 import ccas.server.scheduler.JobScheduler
 import ccas.utils.ProgressDisplay
 import ccas.utils.client.{ChessComClient, HttpClientLayer}
@@ -27,6 +35,7 @@ object CcasServer extends ZIOAppDefault {
         ScheduleRoutes.routes,
         BlacklistRoutes.routes,
         RecruitmentCriteriaRoutes.routes,
+        ManagedClubRoutes.routes,
         ClubRoutes.routes
       ).reduce(_ ++ _)
 

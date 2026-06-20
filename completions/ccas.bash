@@ -31,10 +31,10 @@ _ccas() {
     words=("${COMP_WORDS[@]}")
   fi
 
-  local top="serve stop membership history recruit stats jobs logs blacklist schedule completion"
+  local top="serve stop membership history recruit stats jobs logs blacklist schedule clubs completion"
   local global="--help --version"
 
-  # First non-flag word after "ccas" is the command; the next is the subcommand (blacklist/schedule).
+  # First non-flag word after "ccas" is the command; the next is the subcommand (blacklist/schedule/clubs).
   local cmd="" sub="" i
   for (( i = 1; i < cword; i++ )); do
     case "${words[i]}" in
@@ -75,6 +75,14 @@ _ccas() {
         remove) opts="--server" ;;
         *) COMPREPLY=(); return ;;
       esac ;;
+    clubs)
+      case "$sub" in
+        "") COMPREPLY=( $(compgen -W "add remove list --help" -- "$cur") ); return ;;
+        add) opts="--server"; pos="slug" ;;
+        remove) opts="--server"; pos="slug" ;;
+        list) opts="--server" ;;
+        *) COMPREPLY=(); return ;;
+      esac ;;
     completion) pos="shell" ;;
     *) COMPREPLY=(); return ;;
   esac
@@ -93,7 +101,7 @@ _ccas() {
       *) (( posn++ )) ;;
     esac
   done
-  [[ $cmd == blacklist || $cmd == schedule ]] && base=2
+  [[ $cmd == blacklist || $cmd == schedule || $cmd == clubs ]] && base=2
   local posIndex=$(( posn - base ))
 
   case "$pos" in
