@@ -27,7 +27,8 @@ object TestRoutes extends ZIOSpecDefault {
     suiteHealth,
     suiteJobRoutes,
     suiteScheduleRoutes,
-    suiteClubRoutes
+    suiteClubRoutes,
+    suiteManagedClubRoutes
   ).provideShared(
     FreshSchemaLayer("test_routes", onInit = ServerTables.ensureTables),
     fakeJobRunnerLayer,
@@ -596,6 +597,68 @@ object TestRoutes extends ZIOSpecDefault {
     testClubsListsNonTombstonedSorted,
     testClubsResponseWireShape
   )
+
+  // ==========================================================================
+  // Suite: ManagedClubRoutes
+  // ==========================================================================
+
+  private val resetManaged =
+    PostgresClient.connectZIO(sql"DELETE FROM managed_club".update.run()) *> ensureClubs
+
+  private def suiteManagedClubRoutes = suite("ManagedClubRoutes")(
+    testMarkAndList,
+    testMarkUnknownClub404,
+    testUnmarkRemoves,
+    testManagedListWireShape
+  )
+
+  private def testMarkAndList = test("POST marks a club; GET lists it") {
+    for {
+      _    <- resetManaged
+      mark <- ManagedClubRoutes.routes.runZIO(jsonRequest(Method.POST, "/api/managed-clubs", """{"clubSlug":"test-club"}"""))
+      list <- ManagedClubRoutes.routes.runZIO(jsonRequest(Method.GET, "/api/managed-clubs"))
+      body <- list.body.asString
+      parsed = body.fromJson[List[ManagedClubRoutes.ManagedClubResponse]]
+    } yield assertTrue(
+      mark.status == Status.Ok,
+      list.status == Status.Ok,
+      parsed.toOption.exists(_.exists(_.slug == "test-club"))
+    )
+  }
+
+  private def testMarkUnknownClub404 = test("POST with unknown club returns 404") {
+    for {
+      _    <- resetManaged
+      resp <- ManagedClubRoutes.routes.runZIO(jsonRequest(Method.POST, "/api/managed-clubs", """{"clubSlug":"no-such-club"}"""))
+    } yield assertTrue(resp.status == Status.NotFound)
+  }
+
+  private def testUnmarkRemoves = test("DELETE clears the marker") {
+    for {
+      _   <- resetManaged
+      _   <- ManagedClubRoutes.routes.runZIO(jsonRequest(Method.POST, "/api/managed-clubs", """{"clubSlug":"test-club"}"""))
+      del <- ManagedClubRoutes.routes.runZIO(jsonRequest(Method.DELETE, "/api/managed-clubs/test-club"))
+      list <- ManagedClubRoutes.routes.runZIO(jsonRequest(Method.GET, "/api/managed-clubs"))
+      body <- list.body.asString
+      parsed = body.fromJson[List[ManagedClubRoutes.ManagedClubResponse]]
+    } yield assertTrue(
+      del.status == Status.NoContent,
+      parsed.toOption.exists(_.isEmpty)
+    )
+  }
+
+  private def testManagedListWireShape = test("GET response uses {slug,name,markedAt} wire shape") {
+    for {
+      _    <- resetManaged
+      _    <- ManagedClubRoutes.routes.runZIO(jsonRequest(Method.POST, "/api/managed-clubs", """{"clubSlug":"test-club"}"""))
+      resp <- ManagedClubRoutes.routes.runZIO(jsonRequest(Method.GET, "/api/managed-clubs"))
+      body <- resp.body.asString
+    } yield assertTrue(
+      body.contains("\"slug\""),
+      body.contains("\"name\""),
+      body.contains("\"markedAt\"")
+    )
+  }
 
   private def testClubsListsNonTombstonedSorted =
     test("GET /api/clubs lists non-tombstoned clubs sorted by slug, excluding _stale_ rows") {

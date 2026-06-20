@@ -46,6 +46,11 @@ object CompletionEmitter {
   private val global: String  = CompletionSpec.globalFlags.mkString(" ")
   private val valueGuard: String = CompletionSpec.valueFlags.mkString("|")
 
+  // Group commands consume two leading words (group + subcommand) before positionals, so their positional `base` is 2.
+  // Derived from the group list so adding a group can't silently leave its subcommands' slug completion off-by-one.
+  private val groupBaseGuard: String = CompletionSpec.groups.map(g => "$cmd == " + g.name).mkString(" || ")
+  private val groupNames: String     = CompletionSpec.groups.map(_.name).mkString("/")
+
   // --- bash ---
 
   private def bashLeafArm(leaf: Leaf): String =
@@ -104,7 +109,7 @@ object CompletionEmitter {
       "  local top=\"" + top + "\"",
       "  local global=\"" + global + "\"",
       "",
-      "  # First non-flag word after \"ccas\" is the command; the next is the subcommand (blacklist/schedule).",
+      "  # First non-flag word after \"ccas\" is the command; the next is the subcommand (" + groupNames + ").",
       "  local cmd=\"\" sub=\"\" i",
       "  for (( i = 1; i < cword; i++ )); do",
       "    case \"${words[i]}\" in",
@@ -139,7 +144,7 @@ object CompletionEmitter {
       "      *) (( posn++ )) ;;",
       "    esac",
       "  done",
-      "  [[ $cmd == blacklist || $cmd == schedule ]] && base=2",
+      "  [[ " + groupBaseGuard + " ]] && base=2",
       "  local posIndex=$(( posn - base ))",
       "",
       "  case \"$pos\" in",
@@ -220,7 +225,7 @@ object CompletionEmitter {
       "      *) (( posn++ )) ;;",
       "    esac",
       "  done",
-      "  [[ $cmd == blacklist || $cmd == schedule ]] && base=2",
+      "  [[ " + groupBaseGuard + " ]] && base=2",
       "  local posIndex=$(( posn - base ))",
       "",
       "  case \"$pos\" in",

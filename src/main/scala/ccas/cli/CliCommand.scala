@@ -77,6 +77,9 @@ object CliCommand {
     params: Option[String]
   ) extends ServerCommand
   final case class ScheduleRemove(server: String, id: Long) extends ServerCommand
+  final case class ClubsAdd(server: String, slug: String) extends ServerCommand
+  final case class ClubsRemove(server: String, slug: String) extends ServerCommand
+  final case class ClubsList(server: String) extends ServerCommand
 
   // --- Shared options ---
 
@@ -244,6 +247,26 @@ object CliCommand {
       .withHelp("Manage scheduled jobs")
       .subcommands(scheduleList(default), scheduleAdd(default), scheduleRemove(default))
 
+  private def clubsAdd(default: String): Command[CliCommand] =
+    Command("add", serverOpt(default), Args.text("slug") ?? "Club slug (URL name) to start managing")
+      .withHelp("Mark a club as one you manage with CCAS")
+      .map { case (server, slug) => ClubsAdd(server, slug) }
+
+  private def clubsRemove(default: String): Command[CliCommand] =
+    Command("remove", serverOpt(default), Args.text("slug") ?? "Club slug (URL name) to stop managing")
+      .withHelp("Remove a club from the ones you manage")
+      .map { case (server, slug) => ClubsRemove(server, slug) }
+
+  private def clubsList(default: String): Command[CliCommand] =
+    Command("list", serverOpt(default))
+      .withHelp("List the clubs you manage with CCAS")
+      .map(ClubsList.apply)
+
+  private def clubs(default: String): Command[CliCommand] =
+    Command("clubs")
+      .withHelp("Manage the set of clubs you run CCAS for")
+      .subcommands(clubsAdd(default), clubsRemove(default), clubsList(default))
+
   private val completion: Command[CliCommand] =
     Command("completion", Args.text("shell") ?? "Shell to emit completions for: bash, zsh, or fish")
       .withHelp("Emit a shell completion script (bash, zsh, or fish)")
@@ -273,6 +296,7 @@ object CliCommand {
       logs(defaultServer),
       blacklist(defaultServer),
       schedule(defaultServer),
+      clubs(defaultServer),
       completion
     )
 }

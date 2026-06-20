@@ -67,18 +67,22 @@ object CompletionSpec {
       Other
     ),
     Leaf(List("schedule", "remove"), List(server), List(server), Other),
+    Leaf(List("clubs", "add"), List(server), List(server), Slug),
+    Leaf(List("clubs", "remove"), List(server), List(server), Slug),
+    Leaf(List("clubs", "list"), List(server), List(server), NoArgs),
     Leaf(List("completion"), List("--help"), Nil, Shell)
   )
 
   val groups: List[Group] = List(
     Group("blacklist", List("add", "list", "remove"), "Manage a club's recruitment blacklist"),
-    Group("schedule", List("list", "add", "remove"), "Manage scheduled jobs")
+    Group("schedule", List("list", "add", "remove"), "Manage scheduled jobs"),
+    Group("clubs", List("add", "remove", "list"), "Manage the set of clubs you run CCAS for")
   )
 
   /** Top-level subcommand names, in tree order (matches `CliCommand.command(...).subcommands`). */
   val topLevel: List[String] =
     List("serve", "stop", "membership", "history", "recruit", "stats", "jobs", "logs", "blacklist", "schedule",
-      "completion")
+      "clubs", "completion")
 
   /** Flags available on every command. */
   val globalFlags: List[String] = List("--help", "--version")
@@ -110,6 +114,9 @@ object CompletionSpec {
     List("jobs")                -> "List recent jobs and their status",
     List("logs")                -> "Poll a job's status and logs until it finishes",
     List("completion")          -> "Emit a shell completion script (bash, zsh, or fish)",
+    List("clubs", "add")        -> "Mark a club as one you manage with CCAS",
+    List("clubs", "remove")     -> "Remove a club from the ones you manage",
+    List("clubs", "list")       -> "List the clubs you manage with CCAS",
     List("blacklist", "add")    -> "Blacklist one or more usernames for a club",
     List("blacklist", "list")   -> "List a club's blacklist entries",
     List("blacklist", "remove") -> "Remove a username from a club's blacklist",

@@ -92,6 +92,22 @@ object TestCliParser extends ZIOSpecDefault {
     test("schedule remove parses the id") {
       parsed("schedule", "remove", "7").map(c => assertTrue(c.contains(CliCommand.ScheduleRemove(DefaultServer, 7L))))
     },
+    test("clubs add parses the slug") {
+      parsed("clubs", "add", "team-alpha").map(c =>
+        assertTrue(c.contains(CliCommand.ClubsAdd(DefaultServer, "team-alpha")))
+      )
+    },
+    test("clubs remove parses the slug") {
+      parsed("clubs", "remove", "team-alpha").map(c =>
+        assertTrue(c.contains(CliCommand.ClubsRemove(DefaultServer, "team-alpha")))
+      )
+    },
+    test("clubs list parses with no slug and defaults the server") {
+      parsed("clubs", "list").map(c => assertTrue(c.contains(CliCommand.ClubsList(DefaultServer))))
+    },
+    test("clubs add with no slug fails validation") {
+      parse("clubs", "add").exit.map(e => assertTrue(e.isFailure))
+    },
     test("completion parses the shell argument (no server)") {
       parsed("completion", "bash").map(c => assertTrue(c.contains(CliCommand.Completion("bash"))))
     },

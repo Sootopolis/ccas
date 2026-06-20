@@ -34,6 +34,7 @@ object Tables extends ZIOAppDefault {
       _ <- RecruitmentCriteria.createTable
       _ <- RecruitmentAlias.createTable
       _ <- RecruitmentBlacklist.createTable
+      _ <- ManagedClub.createTable
       _ <- RecruitmentRun.createTable
       _ <- RecruitmentCandidate.createTable
       _ <- PlayerRecruitmentCache.createTable

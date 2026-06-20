@@ -5,6 +5,7 @@ import zio.http.Client
 
 import ccas.api.misc.subtypes.{ClubSlug, Username}
 import ccas.server.routes.BlacklistRoutes.{BlacklistEntryResponse, CreateBlacklistRequest}
+import ccas.server.routes.ManagedClubRoutes.{ManagedClubResponse, MarkManagedRequest}
 import ccas.server.routes.JobRoutes.{
   ClubJobResult,
   HistoryRequest,
@@ -116,7 +117,24 @@ object Dispatcher {
 
     case CliCommand.ScheduleRemove(_, id) =>
       api.delete(s"/api/schedules/$id") *> Console.printLine(s"deleted schedule $id").orDie.as(0)
+
+    case CliCommand.ClubsAdd(_, slug) =>
+      api.postUnit[MarkManagedRequest]("/api/managed-clubs", MarkManagedRequest(ClubSlug(slug))) *>
+        Console.printLine(s"now managing $slug").orDie.as(0)
+
+    case CliCommand.ClubsRemove(_, slug) =>
+      api.delete(s"/api/managed-clubs/$slug") *>
+        Console.printLine(s"stopped managing $slug").orDie.as(0)
+
+    case CliCommand.ClubsList(_) =>
+      api.getJson[List[ManagedClubResponse]]("/api/managed-clubs").flatMap(clubs => printManagedClubs(clubs).as(0))
   }
+
+  private def printManagedClubs(clubs: List[ManagedClubResponse]): UIO[Unit] =
+    if (clubs.isEmpty) { Console.printLine("no managed clubs").orDie }
+    else {
+      ZIO.foreachDiscard(clubs)(c => Console.printLine(s"${c.slug}  ${c.name}  marked=${c.markedAt}").orDie)
+    }
 
   // zio-cli's `repeat1` guarantees a non-empty list; the empty branch is unreachable (and caught by dispatch's
   // defect net if a future parser change ever violated that).
