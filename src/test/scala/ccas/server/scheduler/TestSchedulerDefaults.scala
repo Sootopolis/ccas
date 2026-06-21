@@ -48,6 +48,45 @@ object TestSchedulerDefaults extends ZIOSpecDefault {
         .parseString("scheduler.defaults.matchRef.intervalHours = 40000")
         .withFallback(ConfigFactory.load())
       assertTrue(Try(SchedulerDefaults.fromConfig(cfg)).isFailure)
+    },
+    test("perClubFromConfig returns built-in defaults when the block is absent") {
+      // The test classpath application.conf has no scheduler.defaults block, so fallbacks apply.
+      val seeds  = SchedulerDefaults.perClubFromConfig(ConfigFactory.load())
+      val byKind = seeds.map(s => s.kind -> s).toMap
+      assertTrue(
+        seeds.size == 2,
+        byKind(JobKind.History).intervalHours == 24,
+        byKind(JobKind.History).enabled,
+        byKind(JobKind.Membership).intervalHours == 24,
+        byKind(JobKind.Membership).enabled
+      )
+    },
+    test("perClubFromConfig honours overridden interval and enabled") {
+      val cfg = ConfigFactory
+        .parseString(
+          """scheduler.defaults.history.intervalHours = 72
+            |scheduler.defaults.membership.enabled = false
+            |""".stripMargin
+        )
+        .withFallback(ConfigFactory.load())
+      val byKind = SchedulerDefaults.perClubFromConfig(cfg).map(s => s.kind -> s).toMap
+      assertTrue(
+        byKind(JobKind.History).intervalHours == 72,
+        !byKind(JobKind.Membership).enabled,
+        byKind(JobKind.Membership).intervalHours == 24
+      )
+    },
+    test("perClubFromConfig rejects a non-positive interval") {
+      val cfg = ConfigFactory
+        .parseString("scheduler.defaults.history.intervalHours = 0")
+        .withFallback(ConfigFactory.load())
+      assertTrue(Try(SchedulerDefaults.perClubFromConfig(cfg)).isFailure)
+    },
+    test("perClubFromConfig rejects an interval above the SMALLINT range") {
+      val cfg = ConfigFactory
+        .parseString("scheduler.defaults.history.intervalHours = 40000")
+        .withFallback(ConfigFactory.load())
+      assertTrue(Try(SchedulerDefaults.perClubFromConfig(cfg)).isFailure)
     }
   )
 }

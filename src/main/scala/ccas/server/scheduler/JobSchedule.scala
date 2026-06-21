@@ -72,6 +72,20 @@ object JobSchedule {
             )""".update.run()
     }
 
+  /** Idempotently seeds a per-club (`club_id` non-NULL) schedule for one managed club (#102). Unlike
+    * [[seedGlobalIfAbsent]], this relies on `ON CONFLICT (kind, club_id) DO NOTHING`: a non-NULL `club_id` is
+    * deduped by the table's `UNIQUE (kind, club_id)`, so a re-seed conflicts on the existing row and inserts
+    * nothing. (The global seeder cannot use ON CONFLICT because SQL treats NULL `club_id` as distinct, so every
+    * boot would re-insert a duplicate global row.) A row already present — including one a user has edited or
+    * disabled — is left untouched. Returns rows inserted (1 on first seed for this club+kind, 0 thereafter).
+    */
+  def seedPerClubIfAbsent(clubId: ClubId, seed: ScheduleSeed): ZIO[PostgresClient, SQLException, Int] =
+    connectZIO {
+      sql"""INSERT INTO job_schedule (kind, club_id, params, interval_hours, enabled, last_run_at)
+            VALUES (${seed.kind}, $clubId, NULL, ${seed.intervalHours}, ${seed.enabled}, NULL)
+            ON CONFLICT (kind, club_id) DO NOTHING""".update.run()
+    }
+
   def insert(schedule: JobSchedule): ZIO[PostgresClient, SQLException, Long] =
     connectZIO {
       sql"""INSERT INTO job_schedule (kind, club_id, params, interval_hours, enabled, last_run_at)
