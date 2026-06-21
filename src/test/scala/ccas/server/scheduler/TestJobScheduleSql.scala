@@ -5,7 +5,7 @@ import java.time.{Duration, Instant, LocalDateTime, ZoneOffset}
 import com.augustnagro.magnum.sql
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
-import ccas.analysis.tables.Club
+import ccas.analysis.tables.{Club, ManagedClub}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 import ccas.server.jobs.JobKind
 import ccas.server.ServerTables
@@ -27,7 +27,13 @@ object TestJobScheduleSql extends ZIOSpecDefault {
     testUniqueConstraint,
     testSeedGlobalInsertsRow,
     testSeedGlobalIdempotent,
-    testSeedGlobalPreservesExisting
+    testSeedGlobalPreservesExisting,
+    testSeedPerClubInsertsRow,
+    testSeedPerClubIdempotent,
+    testSeedPerClubDistinctClubs,
+    testSeedPerClubRespectsEnabled,
+    testSeedPerClubPreservesExisting,
+    testEnsureTablesSeedsManagedOnly
   ).provideShared(
     FreshSchemaLayer("test_job_schedule", onInit = ServerTables.ensureTables)
   ) @@ TestAspect.sequential
@@ -41,6 +47,7 @@ object TestJobScheduleSql extends ZIOSpecDefault {
   private val clubIdB = ClubId(201)
 
   private val deleteAll = for {
+    _ <- connectZIO { val _ = sql"DELETE FROM managed_club".update.run() }
     _ <- connectZIO { val _ = sql"DELETE FROM job_schedule".update.run() }
     _ <- Club.upsert(Club(clubIdA, Times.t0, ClubSlug("club-a"), "Club A", None, None, None))
     _ <- Club.upsert(Club(clubIdB, Times.t0, ClubSlug("club-b"), "Club B", None, None, None))
@@ -221,5 +228,85 @@ object TestJobScheduleSql extends ZIOSpecDefault {
         rows.head.intervalHours == 99,
         !rows.head.enabled
       )
+    }
+
+  private def perClubRows(kind: JobKind, clubId: ClubId) =
+    JobSchedule.selectAll.map(_.filter(s => s.kind == kind && s.clubId.contains(clubId)))
+
+  private def testSeedPerClubInsertsRow = test("seedPerClubIfAbsent inserts a per-club (club_id non-NULL) row") {
+    for {
+      _        <- deleteAll
+      inserted <- JobSchedule.seedPerClubIfAbsent(clubIdA, ScheduleSeed(JobKind.History, 24, enabled = true))
+      rows     <- perClubRows(JobKind.History, clubIdA)
+    } yield assertTrue(
+      inserted == 1,
+      rows.size == 1,
+      rows.head.clubId.contains(clubIdA),
+      rows.head.intervalHours == 24,
+      rows.head.enabled,
+      rows.head.params.isEmpty,
+      rows.head.lastRunAt.isEmpty
+    )
+  }
+
+  private def testSeedPerClubIdempotent = test("seedPerClubIfAbsent is a no-op on re-seed") {
+    for {
+      _      <- deleteAll
+      first  <- JobSchedule.seedPerClubIfAbsent(clubIdA, ScheduleSeed(JobKind.History, 24, enabled = true))
+      second <- JobSchedule.seedPerClubIfAbsent(clubIdA, ScheduleSeed(JobKind.History, 24, enabled = true))
+      rows   <- perClubRows(JobKind.History, clubIdA)
+    } yield assertTrue(first == 1, second == 0, rows.size == 1)
+  }
+
+  private def testSeedPerClubDistinctClubs = test("seedPerClubIfAbsent seeds one row per club, not globally") {
+    for {
+      _  <- deleteAll
+      a  <- JobSchedule.seedPerClubIfAbsent(clubIdA, ScheduleSeed(JobKind.History, 24, enabled = true))
+      b  <- JobSchedule.seedPerClubIfAbsent(clubIdB, ScheduleSeed(JobKind.History, 24, enabled = true))
+      ra <- perClubRows(JobKind.History, clubIdA)
+      rb <- perClubRows(JobKind.History, clubIdB)
+    } yield assertTrue(a == 1, b == 1, ra.size == 1, rb.size == 1)
+  }
+
+  private def testSeedPerClubRespectsEnabled = test("seedPerClubIfAbsent honours the enabled flag") {
+    for {
+      _    <- deleteAll
+      _    <- JobSchedule.seedPerClubIfAbsent(clubIdA, ScheduleSeed(JobKind.History, 24, enabled = false))
+      rows <- perClubRows(JobKind.History, clubIdA)
+      en   <- JobSchedule.selectEnabled
+    } yield assertTrue(
+      rows.size == 1,
+      !rows.head.enabled,
+      !en.exists(s => s.kind == JobKind.History && s.clubId.contains(clubIdA))
+    )
+  }
+
+  private def testSeedPerClubPreservesExisting =
+    test("seedPerClubIfAbsent leaves an existing edited per-club row untouched") {
+      val existing = JobSchedule(0L, JobKind.History, Some(clubIdA), None, 99, enabled = false, None)
+      for {
+        _    <- deleteAll
+        _    <- JobSchedule.insert(existing)
+        n    <- JobSchedule.seedPerClubIfAbsent(clubIdA, ScheduleSeed(JobKind.History, 24, enabled = true))
+        rows <- perClubRows(JobKind.History, clubIdA)
+      } yield assertTrue(
+        n == 0,
+        rows.size == 1,
+        rows.head.intervalHours == 99,
+        !rows.head.enabled
+      )
+    }
+
+  private def testEnsureTablesSeedsManagedOnly =
+    test("ensureTables seeds History+Membership for managed clubs only") {
+      for {
+        _  <- deleteAll
+        _  <- ManagedClub.markManaged(clubIdA, Times.t0)
+        _  <- ServerTables.ensureTables
+        ha <- perClubRows(JobKind.History, clubIdA)
+        ma <- perClubRows(JobKind.Membership, clubIdA)
+        hb <- perClubRows(JobKind.History, clubIdB)
+        mb <- perClubRows(JobKind.Membership, clubIdB)
+      } yield assertTrue(ha.size == 1, ma.size == 1, hb.isEmpty, mb.isEmpty)
     }
 }
