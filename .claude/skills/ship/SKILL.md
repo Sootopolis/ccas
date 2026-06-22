@@ -12,7 +12,7 @@ Take the work on the **current branch** through this repo's full release flow. B
 - Base branch: `gh repo view --json defaultBranchRef -q .defaultBranchRef.name` (here: `main`).
 - If current branch == base → STOP. Nothing to ship from base; tell the user to branch first.
 - `git status --porcelain` — uncommitted changes are part of this ship (step 1). If clean AND `git rev-list --left-right --count origin/<base>...HEAD` shows 0 ahead → STOP (nothing to ship).
-- `git worktree list --porcelain` — note which worktree holds the base branch; you fast-forward it in step 6. NEVER hardcode worktree paths.
+- `git worktree list --porcelain` — note which worktree holds the base branch (fast-forwarded in step 6) and whether any worktree sits **parked** on a persistent branch (e.g. `wip`) that is *not* the branch being shipped — that parked branch is recycled in step 7. NEVER hardcode worktree paths.
 
 ## 1. Commit (only if there are changes)
 - Conventional Commits. Subject ≤ ~70 chars; body explains the *why* per change, not the *what*.
@@ -51,6 +51,11 @@ Squash-merge gives `main` a new SHA, so the feature branch now diverges. Decide 
 - **Throwaway feature branch** — one PR, one purpose: delete it: `git push origin --delete <branch>`, and prune any local branch/worktree.
 - **Ambiguous?** ASK recycle-vs-delete before doing either. Default `wip` → recycle.
 - (If the user later runs several rolling branches, lift the single `wip` default into a small "persistent branches" list — until then, default + ask is enough.)
+
+### Also recycle the parked persistent branch
+When the shipped branch was a **throwaway cut from base** while a worktree sat parked on a persistent branch (`wip`, from step 0), that parked branch is now behind the merge even though it was never shipped. Bring it level with base too — guarded:
+- **Pure-lag only.** `git rev-list --left-right --count origin/<base>...<parked>` must show **0 ahead**. If 0 ahead → clean tree, then `git reset --hard origin/<base>` + `git push --no-verify --force-with-lease origin <parked>`. `--no-verify`: the tree is byte-identical to an already-green base, so the pre-push `sbt test` is pure waste here.
+- **Has commits ahead?** STOP and ASK. Those are unshipped work and `reset --hard` destroys them — never auto-recycle a parked branch that is ahead of base.
 
 ## 8. Watch main CI
 - `gh run list --branch <base> --limit 1` → `gh run watch <id> --interval 20 --exit-status` on the merge commit's run. Report green/red.
