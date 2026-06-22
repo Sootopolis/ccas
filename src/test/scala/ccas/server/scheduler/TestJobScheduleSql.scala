@@ -33,7 +33,10 @@ object TestJobScheduleSql extends ZIOSpecDefault {
     testSeedPerClubDistinctClubs,
     testSeedPerClubRespectsEnabled,
     testSeedPerClubPreservesExisting,
-    testEnsureTablesSeedsManagedOnly
+    testEnsureTablesSeedsManagedOnly,
+    testDeleteByClubRemovesAllKinds,
+    testDeleteByClubLeavesOtherClubs,
+    testDeleteByClubLeavesGlobalRows
   ).provideShared(
     FreshSchemaLayer("test_job_schedule", onInit = ServerTables.ensureTables)
   ) @@ TestAspect.sequential
@@ -295,6 +298,41 @@ object TestJobScheduleSql extends ZIOSpecDefault {
         rows.head.intervalHours == 99,
         !rows.head.enabled
       )
+    }
+
+  private def testDeleteByClubRemovesAllKinds =
+    test("deleteByClub removes all per-club rows for the club (any kind)") {
+      for {
+        _   <- deleteAll
+        _   <- JobSchedule.seedPerClubIfAbsent(clubIdA, ScheduleSeed(JobKind.History, 24, enabled = true))
+        _   <- JobSchedule.seedPerClubIfAbsent(clubIdA, ScheduleSeed(JobKind.Membership, 24, enabled = true))
+        n   <- JobSchedule.deleteByClub(clubIdA)
+        all <- JobSchedule.selectAll
+      } yield assertTrue(n == 2, !all.exists(_.clubId.contains(clubIdA)))
+    }
+
+  private def testDeleteByClubLeavesOtherClubs =
+    test("deleteByClub leaves other clubs' rows untouched") {
+      for {
+        _  <- deleteAll
+        _  <- JobSchedule.seedPerClubIfAbsent(clubIdA, ScheduleSeed(JobKind.History, 24, enabled = true))
+        _  <- JobSchedule.seedPerClubIfAbsent(clubIdB, ScheduleSeed(JobKind.History, 24, enabled = true))
+        n  <- JobSchedule.deleteByClub(clubIdA)
+        ra <- perClubRows(JobKind.History, clubIdA)
+        rb <- perClubRows(JobKind.History, clubIdB)
+      } yield assertTrue(n == 1, ra.isEmpty, rb.size == 1)
+    }
+
+  private def testDeleteByClubLeavesGlobalRows =
+    test("deleteByClub leaves global (club_id NULL) rows untouched") {
+      for {
+        _    <- deleteAll
+        _    <- JobSchedule.seedPerClubIfAbsent(clubIdA, ScheduleSeed(JobKind.History, 24, enabled = true))
+        _    <- JobSchedule.seedGlobalIfAbsent(ScheduleSeed(JobKind.MatchRef, 24, enabled = true))
+        n    <- JobSchedule.deleteByClub(clubIdA)
+        ra   <- perClubRows(JobKind.History, clubIdA)
+        glob <- globalRows(JobKind.MatchRef)
+      } yield assertTrue(n == 1, ra.isEmpty, glob.size == 1)
     }
 
   private def testEnsureTablesSeedsManagedOnly =
