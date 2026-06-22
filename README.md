@@ -173,7 +173,7 @@ Optional overrides with defaults:
 | `DB_POOL_CONNECTION_TIMEOUT` / `DB_POOL_IDLE_TIMEOUT` / `DB_POOL_MAX_LIFETIME` / `DB_POOL_KEEPALIVE_TIME` | 30 000 / 600 000 / 1 800 000 / 120 000 ms | HikariCP timeouts |
 | `CHESS_COM_API_PERMITS` | 16 | Max parallel Chess.com API requests |
 | `CHESS_COM_API_COOLDOWN_SECONDS` | 30 | Backoff cooldown after rate limiting |
-| `CHESS_COM_API_CACHE_RETENTION_DAYS` | 7 | How long cached Chess.com responses are kept before startup pruning |
+| `CHESS_COM_API_CACHE_RETENTION_DAYS` | 7 | How long cached Chess.com responses are kept before startup pruning. Seeds the `app_setting.cache_retention_days` row on a fresh DB only; once seeded, the DB value is authoritative and this env/HOCON value is ignored (so multiple consumers on one DB agree). Change it later via SQL on `app_setting` |
 
 See [`application.conf`](src/main/resources/application.conf) for the full set of tunable parameters.
 
