@@ -3,7 +3,7 @@ package ccas.analysis.apps
 import zio.{Clock, RIO}
 
 import ccas.analysis.tables.{Club, ManagedClub, ManagedClubView}
-import ccas.api.misc.subtypes.ClubSlug
+import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 import ccas.utils.errors.NotFoundException
 import ccas.utils.sql.PostgresClient
 
@@ -24,12 +24,16 @@ object ManagedClubApp {
       _    <- ManagedClub.markManaged(club.clubId, now)
     } yield ()
 
-  /** Clears a club's managed marker. Succeeds whether or not it was managed. */
-  def unmark(clubSlug: ClubSlug): RIO[PostgresClient, Unit] =
+  /** Clears a club's managed marker and returns its `ClubId`. Succeeds whether or not it was managed. Stays
+    * analysis-pure (touches only `managed_club`); the caller (`ManagedClubRoutes`, #106) uses the returned id to
+    * also clear the club's per-club `job_schedule` rows in the same transaction — `job_schedule` is a server-layer
+    * table and `analysis` never imports `server`.
+    */
+  def unmark(clubSlug: ClubSlug): RIO[PostgresClient, ClubId] =
     for {
       club <- Club.selectBySlug(clubSlug).someOrFail(NotFoundException(s"Club not found: $clubSlug"))
       _    <- ManagedClub.delete(club.clubId)
-    } yield ()
+    } yield club.clubId
 
   def list: RIO[PostgresClient, List[ManagedClubView]] =
     ManagedClub.selectAllWithClub

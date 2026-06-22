@@ -122,4 +122,13 @@ object JobSchedule {
     connectZIO {
       sql"DELETE FROM job_schedule WHERE id = $id".update.run()
     }
+
+  /** Deletes all per-club schedule rows for one club (any kind). Used on unmanage (#106) so a club's
+    * History/Membership — and any user-created per-club — schedules stop firing once it is no longer managed.
+    * Global rows (`club_id IS NULL`) are untouched. Returns rows deleted.
+    */
+  def deleteByClub(clubId: ClubId): ZIO[PostgresClient, SQLException, Int] =
+    connectZIO {
+      sql"DELETE FROM job_schedule WHERE club_id = $clubId".update.run()
+    }
 }

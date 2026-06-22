@@ -15,6 +15,7 @@ import ccas.analysis.tables.{Club, RunTrigger}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId}
 import ccas.server.jobs.*
 import ccas.server.routes.JobRoutes.{ClubJobResult, JobResult}
+import ccas.server.scheduler.{JobSchedule, ScheduleSeed}
 import ccas.server.ServerTables
 import ccas.utils.client.{ChessComClient, TestChessComClientSupport}
 import ccas.utils.errors.ConflictException
@@ -609,6 +610,8 @@ object TestRoutes extends ZIOSpecDefault {
     testMarkAndList,
     testMarkUnknownClub404,
     testUnmarkRemoves,
+    testUnmarkUnknownClub404,
+    testUnmarkClearsSchedules,
     testManagedListWireShape
   )
 
@@ -646,6 +649,33 @@ object TestRoutes extends ZIOSpecDefault {
       parsed.toOption.exists(_.isEmpty)
     )
   }
+
+  // Unknown slug must still 404 through the new withTransaction wrapper (NotFoundException survives rollback).
+  private def testUnmarkUnknownClub404 = test("DELETE with unknown club returns 404") {
+    for {
+      _    <- resetManaged
+      resp <- ManagedClubRoutes.routes.runZIO(jsonRequest(Method.DELETE, "/api/managed-clubs/no-such-club"))
+    } yield assertTrue(resp.status == Status.NotFound)
+  }
+
+  private def testUnmarkClearsSchedules =
+    test("DELETE also clears the club's per-club job_schedule rows, leaving other clubs' rows (#106)") {
+      for {
+        _   <- resetManaged
+        _   <- TestDbCleanup.clearJobSchedules
+        _   <- ManagedClubRoutes.routes.runZIO(jsonRequest(Method.POST, "/api/managed-clubs", """{"clubSlug":"test-club"}"""))
+        _   <- JobSchedule.seedPerClubIfAbsent(ClubId(200), ScheduleSeed(JobKind.History, 24, enabled = true))
+        _   <- JobSchedule.seedPerClubIfAbsent(ClubId(200), ScheduleSeed(JobKind.Membership, 24, enabled = true))
+        // club 201 is never managed — proves deleteByClub keys on club_id, not managed status (peer isolation).
+        _   <- JobSchedule.seedPerClubIfAbsent(ClubId(201), ScheduleSeed(JobKind.History, 24, enabled = true))
+        del <- ManagedClubRoutes.routes.runZIO(jsonRequest(Method.DELETE, "/api/managed-clubs/test-club"))
+        all <- JobSchedule.selectAll
+      } yield assertTrue(
+        del.status == Status.NoContent,
+        !all.exists(_.clubId.contains(ClubId(200))),
+        all.exists(_.clubId.contains(ClubId(201)))
+      )
+    }
 
   private def testManagedListWireShape = test("GET response uses {slug,name,markedAt} wire shape") {
     for {

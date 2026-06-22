@@ -9,6 +9,7 @@ import ccas.analysis.apps.ManagedClubApp
 import ccas.analysis.tables.ManagedClubView
 import ccas.api.misc.subtypes.ClubSlug
 import ccas.server.routes.RouteHelpers.*
+import ccas.server.scheduler.JobSchedule
 import ccas.utils.sql.PostgresClient
 
 /** Synchronous CRUD for the managed-club marker (delegates to [[ManagedClubApp]], not `JobRunner`). Mirrors
@@ -47,8 +48,15 @@ object ManagedClubRoutes {
         .pipe(withErrorHandling)
     },
     Method.DELETE / "api" / "managed-clubs" / string("clubSlug") -> handler { (clubSlugStr: String, _: Request) =>
-      ManagedClubApp
-        .unmark(ClubSlug.wrap(clubSlugStr))
+      // Unmanage + stop the club's per-club schedules atomically (#106): one transaction so a failure leaves
+      // neither the managed_club marker nor the job_schedule rows half-removed.
+      PostgresClient
+        .withTransaction(
+          for {
+            clubId <- ManagedClubApp.unmark(ClubSlug.wrap(clubSlugStr))
+            _      <- JobSchedule.deleteByClub(clubId)
+          } yield ()
+        )
         .as(Response(status = Status.NoContent))
         .pipe(withErrorHandling)
     }
