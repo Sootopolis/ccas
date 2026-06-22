@@ -173,9 +173,25 @@ Optional overrides with defaults:
 | `DB_POOL_CONNECTION_TIMEOUT` / `DB_POOL_IDLE_TIMEOUT` / `DB_POOL_MAX_LIFETIME` / `DB_POOL_KEEPALIVE_TIME` | 30 000 / 600 000 / 1 800 000 / 120 000 ms | HikariCP timeouts |
 | `CHESS_COM_API_PERMITS` | 16 | Max parallel Chess.com API requests |
 | `CHESS_COM_API_COOLDOWN_SECONDS` | 30 | Backoff cooldown after rate limiting |
-| `CHESS_COM_API_CACHE_RETENTION_DAYS` | 7 | How long cached Chess.com responses are kept before startup pruning. Seeds the `app_setting.cache_retention_days` row on a fresh DB only; once seeded, the DB value is authoritative and this env/HOCON value is ignored (so multiple consumers on one DB agree). Change it later via SQL on `app_setting` |
 
 See [`application.conf`](src/main/resources/application.conf) for the full set of tunable parameters.
+
+### DB-owned settings
+
+Some app-wide policy lives in the `app_setting` table (`key TEXT PK, value TEXT`) rather than HOCON/env, so it stays consistent across every process on one DB and is tunable without a redeploy. Each setting has a compiled-in default used when its row is absent; the DB row, once set, overrides it. Today the only key is `cache_retention_days` (default 7) — how long cached Chess.com responses are kept before the startup pruning sweep. Change it with SQL:
+
+```sql
+INSERT INTO app_setting (key, value) VALUES ('cache_retention_days', '14')
+ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
+```
+
+It takes effect on each process's next startup (the value is read once in `Tables.ensureTables`).
+
+### Deployment model
+
+**One `CcasServer` per database is the supported model.** Running CLI commands alongside that server against the same DB is fine — the CLI has no `JobRunner`, so it never touches scheduled-job state; it only shares the Chess.com egress.
+
+Running **two or more servers** against one DB is **not supported** and is at your own risk: a starting server marks *all* `Running` jobs as failed with no instance-ownership filter (it would kill another server's live jobs — #110), and the Chess.com rate limiter is per-process (N servers ≈ N× the per-IP request rate — #111). Multi-server hosting is tracked separately under #60 and is gated on fixing both.
 
 ### CLI config file
 
