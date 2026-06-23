@@ -42,7 +42,7 @@ object Tables extends ZIOAppDefault {
       _ <- ApiResponseCache.createTable
       _ <- ApiFetchFailure.createTable
       _ <- ApiResponseBody.normalizeCfBodies
-      days <- AppSetting.get(AppSettings.CacheRetentionDays)
+      days <- AppSetting.get(AppSetting.CacheRetentionDays)
       _ <- ApiResponseCache.deleteBefore(Instant.now().minus(days.toLong, ChronoUnit.DAYS))
       _ <- ClubMatch.createTable
       _ <- ClubMatchBoard.createTable
