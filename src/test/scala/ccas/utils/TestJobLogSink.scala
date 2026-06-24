@@ -16,6 +16,8 @@ object TestJobLogSink extends ZIOSpecDefault {
     testFileSinkAppendsLines,
     testFileSinkStripsAnsiFromFile,
     testFileSinkTeesAnsiToStdout,
+    testFileSinkCloseFlushesAndLatches,
+    testFileSinkOpenFailureDisablesFile,
     testCurrentSinkLocallyOverride
   ) @@ TestAspect.sequential
 
@@ -44,7 +46,7 @@ object TestJobLogSink extends ZIOSpecDefault {
     JobLogSink.currentSink.get.map(sink => assertTrue(sink eq JobLogSink.StdoutSink))
   }
 
-  private def testFileSinkAppendsLines = test("FileSink appends each writeSync as a separate line to its file") {
+  private def testFileSinkAppendsLines = test("FileSink.write appends each line as a separate line to its file") {
     captureStdout(
       for {
         dir  <- tempLogDir
@@ -61,7 +63,7 @@ object TestJobLogSink extends ZIOSpecDefault {
       for {
         dir  <- tempLogDir
         sink <- ccas.server.jobs.FileSink.make(dir, "job-ansi-file")
-        _    <- ZIO.succeed(sink.writeSync(AnsiLine))
+        _    <- ZIO.succeed(sink.writeFileSync(AnsiLine))
         path =  dir.resolve("job-ansi-file.log")
         bytes <- ZIO.attempt(Files.readAllBytes(path))
         text  =  new String(bytes, StandardCharsets.UTF_8)
@@ -77,12 +79,43 @@ object TestJobLogSink extends ZIOSpecDefault {
       for {
         dir  <- tempLogDir
         sink <- ccas.server.jobs.FileSink.make(dir, "job-ansi-stdout")
-        _    <- ZIO.succeed(sink.writeSync(AnsiLine))
+        _    <- ZIO.succeed(sink.writeConsoleSync(AnsiLine))
       } yield ()
     ).map { case (_, out) =>
       assertTrue(out.contains(AnsiLine))
     }
   }
+
+  private def testFileSinkCloseFlushesAndLatches =
+    test("close flushes buffered content and a post-close writeFileSync is a no-op") {
+      captureStdout(
+        for {
+          dir   <- tempLogDir
+          sink  <- ccas.server.jobs.FileSink.make(dir, "job-close")
+          _     <- ZIO.succeed(sink.writeFileSync("before-close"))
+          _     <- sink.close()
+          _     <- ZIO.succeed(sink.writeFileSync("after-close")) // latched → dropped, must not throw
+          path  =  dir.resolve("job-close.log")
+          lines <- ZIO.attempt(Files.readAllLines(path).asScala.toList)
+        } yield assertTrue(lines == List("before-close"))
+      ).map(_._1)
+    }
+
+  private def testFileSinkOpenFailureDisablesFile =
+    test("make tolerates an open failure: file logging disabled, stdout tee still works, no throw") {
+      captureStdout(
+        for {
+          base       <- tempLogDir
+          missing    =  base.resolve("does-not-exist") // parent dir absent → newBufferedWriter(CREATE) fails
+          sink       <- ccas.server.jobs.FileSink.make(missing, "job-nodir")
+          _          <- ZIO.succeed(sink.writeFileSync("dropped"))   // file disabled → no-op, must not throw
+          _          <- ZIO.succeed(sink.writeConsoleSync("teed"))   // tee still works
+          fileAbsent <- ZIO.attempt(!Files.exists(missing.resolve("job-nodir.log")))
+        } yield fileAbsent
+      ).map { case (fileAbsent, out) =>
+        assertTrue(fileAbsent, out.contains("teed"))
+      }
+    }
 
   /** Verifies the wiring path that JobRunner relies on: a `currentSink.locally(capture)` block around an effect that
     * fires `ZIO.logInfo` must route the formatted line through `capture` (because `ProgressDisplay.asZLogger` reads
@@ -95,7 +128,7 @@ object TestJobLogSink extends ZIOSpecDefault {
         capture = new JobLogSink {
           // Test-only pattern: drive a ZIO Ref update from inside a sync callback via Runtime.default. Works in tests
           // because no production code is running under Runtime.default; do not reuse for real sinks.
-          override def writeSync(line: String): Unit =
+          override def writeConsoleSync(line: String): Unit =
             zio.Unsafe.unsafe(implicit u =>
               zio.Runtime.default.unsafe.run(captured.update(_ :+ line)).getOrThrow()
             )

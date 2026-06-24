@@ -42,7 +42,7 @@ object TestProgressBar extends ZIOSpecDefault {
       val baos    = new ByteArrayOutputStream
       val ps      = new PrintStream(baos, true, "UTF-8")
       val display = ProgressDisplay.makeWith(enabled, ps, ps)
-      val sink    = new JobLogSink { override def writeSync(line: String): Unit = ps.println(line) }
+      val sink    = new JobLogSink { override def writeConsoleSync(line: String): Unit = ps.println(line) }
       use(display, sink).map { a =>
         ps.flush()
         (a, baos.toString("UTF-8"))
@@ -58,7 +58,7 @@ object TestProgressBar extends ZIOSpecDefault {
     ZIO.suspendSucceed {
       val baos    = new ByteArrayOutputStream
       val ps      = new PrintStream(baos, true, "UTF-8")
-      val capture = new JobLogSink { override def writeSync(line: String): Unit = ps.println(line) }
+      val capture = new JobLogSink { override def writeConsoleSync(line: String): Unit = ps.println(line) }
       ZIO.scoped {
         ProgressDisplay.live(showProgress = false).build *>
           JobLogSink.currentSink.locally(capture)(effect)
@@ -273,7 +273,7 @@ object TestProgressBar extends ZIOSpecDefault {
       val outPs   = new PrintStream(outBaos, true, "UTF-8")
       val errBaos = new ByteArrayOutputStream
       val errPs   = new PrintStream(errBaos, true, "UTF-8")
-      val capture = new JobLogSink { override def writeSync(line: String): Unit = outPs.println(line) }
+      val capture = new JobLogSink { override def writeConsoleSync(line: String): Unit = outPs.println(line) }
       ZIO.scoped {
         ProgressDisplay.liveWith(showProgress = false, outPs, errPs).build *>
           JobLogSink.currentSink.locally(capture)(

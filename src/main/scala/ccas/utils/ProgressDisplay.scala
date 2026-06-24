@@ -17,11 +17,11 @@ import zio.{Cause, FiberId, FiberRef, FiberRefs, LogLevel, LogSpan, Ref, Runtime
   * cannot run a ZIO effect. The injected `err` stream receives the last-resort stack trace if a log message thunk
   * throws inside the `ZLogger` callback.
   *
-  * `logAboveBarsSync` invokes the active `JobLogSink` inside the lock — required to keep the `clear → print → redraw`
-  * sequence atomic across fibers. The default `StdoutSink` is a single `println` so the critical section stays short.
-  * `FileSink` adds a per-line `Files.write` under the same lock; expected log volume is low (per-app log lines, not
-  * per-request), so the disk cost is tolerable. If profiling shows the file write stalling bar redraws, move it to a
-  * background fiber fed by a per-job queue (see #42 follow-up discussion in the plan file).
+  * `logAboveBarsSync` routes the active `JobLogSink`'s file write (`writeFileSync`) *outside* the lock — a per-job
+  * `FileSink` serialises its own `BufferedWriter`, so file IO never contends here (#53). Only the terminal-visible
+  * sequence stays inside the lock: `clear → writeConsoleSync (stdout tee) → redraw`, kept atomic across fibers so a bar
+  * redraw can't tear across a log line. The default `StdoutSink`'s `writeConsoleSync` is a single `println`, so the
+  * critical section stays short.
   *
   * When `enabled` is `false` the bar list is still tracked (so `addBarScoped` finalisers behave consistently across
   * modes) but the bar-redraw side-effects are suppressed. `logAboveBarsSync` still routes its line through the active
@@ -97,16 +97,20 @@ final class ProgressDisplay private[utils] (
 
   /** Print a log message above the progress bars without disrupting them.
     *
-    * The line is routed through `sink.writeSync` (which the active `JobLogSink` may tee to a per-job file). The
-    * `clear`/`draw` calls remain on `System.out` directly — bar redraws are terminal-only and never written to any
-    * sink. The whole sequence runs under `lock` so the bar list stays consistent with the printed state.
+    * The durable file write (`sink.writeFileSync`) runs first and *outside* `lock` — it touches an independent per-job
+    * file, never the terminal, so it needs no serialisation with the bar dance and a slow disk can't stall redraws.
+    * File-first also means the record survives even if the locked terminal sequence throws. The terminal-visible
+    * sequence — `clear → writeConsoleSync (stdout tee) → redraw` — runs under `lock` so the bar list stays consistent
+    * with the printed state.
     */
-  private[utils] def logAboveBarsSync(sink: JobLogSink, msg: String): Unit =
+  private[utils] def logAboveBarsSync(sink: JobLogSink, msg: String): Unit = {
+    sink.writeFileSync(msg)
     lock.synchronized {
       clearLineSync()
-      sink.writeSync(msg)
+      sink.writeConsoleSync(msg)
       drawAllSync()
     }
+  }
 
   // ---------------------------------------------------------------------------
   // ZLogger — installed by `live` via `Runtime.removeDefaultLoggers ++ ZIO.withLoggerScoped`. Companion-visible
