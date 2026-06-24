@@ -5,11 +5,14 @@ import zio.*
 import zio.http.*
 import zio.test.*
 
+import com.augustnagro.magnum.sql
+
 import ccas.analysis.tables.Tables
 import ccas.utils.client.ChessComClient.ChessComClientConfig
 import ccas.utils.client.ChessComClient.ChessComClientConfig.*
 import ccas.utils.client.TestChessComClientSupport.*
 import ccas.utils.sql.FreshSchemaLayer
+import ccas.utils.sql.PostgresClient.connectZIO
 import zio.config.magnolia.DeriveConfig
 import zio.config.typesafe.TypesafeConfigProvider
 
@@ -992,6 +995,54 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
           tier2State.currentMax == 2L,
           midObservation.currentMax == 2L, // observation reset proven: tier 4 didn't fire mid-window
           finalState.currentMax == 4L      // tier 4 reached eventually
+        )
+      }
+    },
+    test("connection error surviving the retry schedule surfaces as NetworkUnavailableException") {
+      ZIO.scoped {
+        val cause = new java.net.UnknownHostException("api.chess.com: Temporary failure in name resolution")
+        for {
+          (client, _, _) <- makeClient(handler = _ => ZIO.fail(cause))
+          fiber <- client.get[Payload](testUrl).exit.fork
+          _     <- TestClock.adjust(advanceWindow)
+          exit  <- fiber.join
+        } yield assertTrue(
+          exit.causeOption.flatMap(_.failureOption).exists {
+            case e: NetworkUnavailableException => e.getCause eq cause
+            case _                              => false
+          }
+        )
+      }
+    },
+    test("HTTP 500 is not wrapped as NetworkUnavailableException") {
+      ZIO.scoped {
+        for {
+          (client, _, _) <- makeClient(handler = _ => ZIO.succeed(Response(status = Status.InternalServerError)))
+          fiber <- client.get[Payload](testUrl).exit.fork
+          _     <- TestClock.adjust(advanceWindow)
+          exit  <- fiber.join
+        } yield assertTrue(
+          exit.causeOption.flatMap(_.failureOption).exists {
+            case _: NetworkUnavailableException => false
+            case e: HttpStatusException         => e.statusCode == 500
+            case _                              => false
+          }
+        )
+      }
+    },
+    test("network-down request logs the raw UnknownHostException in api_fetch_failure, not the wrapper") {
+      ZIO.scoped {
+        val downUrl = URL.decode("http://test.example.com/dns-down").toOption.get
+        val cause   = new java.net.UnknownHostException("api.chess.com: Temporary failure in name resolution")
+        for {
+          (client, _, _) <- makeClient(handler = _ => ZIO.fail(cause))
+          fiber      <- client.get[Payload](downUrl).exit.fork
+          _          <- TestClock.adjust(advanceWindow)
+          _          <- fiber.join
+          errorTypes <- connectZIO(sql"SELECT error_type FROM api_fetch_failure WHERE url = ${downUrl.encode}".query[String].run())
+        } yield assertTrue(
+          errorTypes.nonEmpty,                          // every attempt recorded a row
+          errorTypes.forall(_ == "UnknownHostException") // root cause, never the NetworkUnavailableException wrapper
         )
       }
     },

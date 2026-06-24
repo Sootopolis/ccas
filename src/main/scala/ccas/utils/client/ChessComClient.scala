@@ -4,7 +4,6 @@ import java.time.{Instant, ZoneOffset}
 
 import ccas.utils.sql.PostgresClient
 import com.typesafe.config.ConfigFactory
-import io.netty.handler.codec.PrematureChannelClosureException
 import zio.*
 import zio.config.derivation.{kebabCase, name}
 import zio.config.magnolia.DeriveConfig
@@ -110,7 +109,7 @@ final class ChessComClient(
       tier <- stateRef.get.map(_.currentMax.toInt)
       _    <- statsRef.update(_.incAttemptAtTier(tier))
       response <- batchedClient(request).tapError { e =>
-        ZIO.whenDiscard(isConnectionError(e))(statsRef.update(_.incConnectionErrors))
+        ZIO.whenDiscard(ConnectionError.isConnectionError(e))(statsRef.update(_.incConnectionErrors))
       }
       result <- handleResponse[T](url, conditional, response, tier, cacheWrites)
     } yield result).tapError { e =>
@@ -374,6 +373,11 @@ final class ChessComClient(
     * cache row so `If-None-Match` / `If-Modified-Since` validators can be attached. Callers that want to skip
     * downstream processing on unchanged data should use this directly; callers that just want `T` should use `get`,
     * or `getUncached` to suppress cache writes for one-shot volatile-body endpoints.
+    *
+    * Error contract: a connection / DNS error that survives the connection-retry schedule (the network was
+    * unreachable across all attempts, not a one-off blip) surfaces as [[NetworkUnavailableException]] (with the
+    * underlying transport exception as its cause). Match that type to react to a systemic outage; HTTP errors still
+    * surface as [[HttpStatusException]] / [[ReportedNotFound]].
     */
   def getCacheable[T](url: URL)(using jsonDecoder: JsonDecoder[T]): Task[CacheableResult[T]] =
     getCacheableImpl[T](url, cacheWrites = true)
@@ -410,6 +414,15 @@ final class ChessComClient(
       .retry(retry429Schedule)
       .retry(retryCfSchedule)
       .retry(retryConnectionSchedule)
+      .mapError {
+        // The connection-retry schedule is exhausted by the time we get here: a connection error that survives means
+        // the network has been unreachable across all attempts. Surface a single typed error so each caller can decide
+        // what's appropriate (abort, flush partial data, log, ignore). The wrap happens outside `rawGet`'s `tapError`,
+        // so `api_fetch_failure` still records the real underlying type per attempt; `isConnectionError` returns false
+        // for an already-wrapped error, so recursive refetch paths never double-wrap.
+        case e if ConnectionError.isConnectionError(e) => new NetworkUnavailableException(e)
+        case e                                         => e
+      }
       .tapBoth(
         _ => statsRef.update(_.incFailures),
         _ => statsRef.update(_.incSuccesses)
@@ -629,17 +642,9 @@ final class ChessComClient(
       case _                      => false
     }
 
-  private def isConnectionError(e: Throwable): Boolean = e match {
-    case _: HttpStatusException              => false
-    case _: JsonDecodingException            => false
-    case _: java.io.IOException              => true
-    case _: PrematureChannelClosureException => true
-    case _                                   => false
-  }
-
   private val retryConnectionSchedule: Schedule[Any, Throwable, Any] =
     Schedule.exponential(config.connectionRetryBase) && Schedule.recurs(config.maxConnectionRetries) &&
-      Schedule.recurWhile[Throwable](isConnectionError)
+      Schedule.recurWhile[Throwable](ConnectionError.isConnectionError)
 }
 
 object ChessComClient {
