@@ -3,7 +3,7 @@ package ccas.analysis.apps.membership
 import java.time.Instant
 import scala.annotation.tailrec
 
-import zio.{Chunk, Clock, IO, NonEmptyChunk, RIO, Scope, Task, ZIO, ZIOAppArgs, ZIOAppDefault}
+import zio.{Chunk, Clock, ExitCode, IO, NonEmptyChunk, RIO, Scope, Task, ZIO, ZIOAppArgs, ZIOAppDefault}
 
 import ccas.analysis.apps.{ClubSlugRenameResolver, withClubSlugRenameRecovery}
 import ccas.analysis.apps.membership.MembershipChange.*
@@ -12,7 +12,7 @@ import ccas.analysis.tables.*
 import ccas.api.club.ApiClubMembers
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId, PlayerId}
 import ccas.utils.{OutputFile, ProgressDisplay, TimeParser}
-import ccas.utils.client.{ChessComClient, HttpClientLayer}
+import ccas.utils.client.{ChessComClient, HttpClientLayer, NetworkUnavailableException}
 import ccas.utils.errors.BadRequestException
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.withTransaction
@@ -53,12 +53,16 @@ object MembershipApp extends ZIOAppDefault {
             } yield ()
         }
       }
-    } yield ()).provideSomeAuto(
-      ProgressDisplay.live(showProgress = true),
-      ChessComClient.live(MEMBERSHIP),
-      HttpClientLayer.live,
-      PostgresClient.live(onInit = Tables.ensureTables)
-    )
+    } yield ())
+      // A systemic outage aborts: an in-flight reconcile persists nothing (its writes are one terminal transaction),
+      // so the only residue is an incomplete `membership_run` row that `selectLatestCompleted` ignores.
+      .catchSome(NetworkUnavailableException.abortRun("MembershipApp", "run left incomplete")(exit(ExitCode.failure)))
+      .provideSomeAuto(
+        ProgressDisplay.live(showProgress = true),
+        ChessComClient.live(MEMBERSHIP),
+        HttpClientLayer.live,
+        PostgresClient.live(onInit = Tables.ensureTables)
+      )
 
   private sealed trait RunMode
   private case object ReconcileOnly                             extends RunMode

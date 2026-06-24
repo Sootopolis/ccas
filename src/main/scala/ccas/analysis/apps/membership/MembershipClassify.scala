@@ -10,7 +10,7 @@ import ccas.analysis.tables.*
 import ccas.api.misc.enums.PlayerStatusCategory
 import ccas.api.misc.subtypes.{ClubId, PlayerId, Username}
 import ccas.api.player.ApiPlayer
-import ccas.utils.client.ChessComClient
+import ccas.utils.client.{ChessComClient, NetworkUnavailableException}
 import ccas.utils.{ApiConcurrency, ProgressDisplay}
 
 
@@ -315,7 +315,9 @@ private[membership] object MembershipClassify {
     val oldUsername = state.player.username
 
     client.get[ApiPlayer](ApiPlayer.getUrl(oldUsername)).foldZIO(
-      _ => matchRefFallback(client, state, closedMember, apiMap, now),
+      // A systemic outage must not be swallowed into the match-ref fallback (which would misclassify the member as
+      // left/closed/unresolvable on incomplete data); re-raise so the run aborts before persist.
+      error => NetworkUnavailableException.recoverUnless(error)(matchRefFallback(client, state, closedMember, apiMap, now)),
       apiPlayer =>
         if (apiPlayer.playerId != playerId) {
           matchRefFallback(client, state, closedMember, apiMap, now)
