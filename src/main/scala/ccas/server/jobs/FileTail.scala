@@ -21,8 +21,9 @@ import ccas.api.misc.subtypes.JobRunId
   * failing, so the worst case is an immediate empty close, never a hang.
   *
   * The tailer re-reads the whole file each tick. CCAS jobs emit at most a few hundred lines, so this is cheap and
-  * sidesteps byte-offset / partial-line bookkeeping. An offset-incremental tail (alongside the held-open `BufferedWriter`
-  * in #53) is the upgrade path when log volumes grow.
+  * sidesteps byte-offset / partial-line bookkeeping. Now that #53 holds the per-job `BufferedWriter` open, an
+  * offset-incremental tail is the remaining upgrade path (deferred follow-up) for when log volumes grow; it reads via
+  * an independent `Files.readString` handle, so the held-open writer doesn't block it.
   */
 final class FileTail(
   logDir: Path,
@@ -40,9 +41,9 @@ final class FileTail(
 
   // `emitted` = number of complete lines already produced. Each step emits new lines if any; otherwise, if the job is
   // terminal, it does ONE final re-read (to catch last-moment lines written between the read above and the terminal
-  // check) and then ends. The promise fires only after `FileSink`'s final synchronous writes, so `done == true`
-  // guarantees the file is fully flushed. While the job is still running, no second read happens — the step just sleeps
-  // and retries.
+  // check) and then ends. The promise fires only after `FileSink.close()` flushes and closes the held-open writer, so
+  // `done == true` guarantees the file is fully flushed. While the job is still running, no second read happens — the
+  // step just sleeps and retries.
   private def tail(path: Path, terminal: UIO[Boolean]): ZStream[Any, Throwable, String] =
     ZStream.unfoldChunkZIO(0) { emitted =>
       def emitFrom(lines: Vector[String]): Option[(Chunk[String], Int)] =

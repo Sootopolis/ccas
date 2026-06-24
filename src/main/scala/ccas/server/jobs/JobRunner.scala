@@ -121,14 +121,18 @@ object JobRunner {
         //
         // `currentSink.locally` wraps the entire `runJob` (not just the user effect) so the success/failure handlers'
         // own `ZIO.logError` calls also land in the per-job file. FiberRef values are inherited by forked children, so
-        // any parallel work the job spawns sees the same sink. The `ensuring` fires the completion promise only after
-        // those final writes have flushed, so the tailer observes a fully written file before it sees the job as done;
-        // it runs on success, failure, and interruption, so a tailing client always gets EOF — including on shutdown.
+        // any parallel work the job spawns sees the same sink. The `ensuring` closes the sink (flushing + closing the
+        // held-open writer) and only then fires the completion promise, so the tailer observes a fully written, closed
+        // file before it sees the job as done; it runs on success, failure, and interruption, so a tailing client
+        // always gets EOF — including on shutdown.
         _ <- ZIO.uninterruptibleMask { restore =>
           completions.update(_ + (id -> promise)) *>
             restore(
               JobLogSink.currentSink
-                .locally(sink)(runJob(id, effect(Some(id))).ensuring(promise.succeed(()) *> completions.update(_ - id)))
+                .locally(sink)(
+                  runJob(id, effect(Some(id)))
+                    .ensuring(sink.close() *> promise.succeed(()) *> completions.update(_ - id))
+                )
             ).forkIn(layerScope)
         }
       } yield id).catchSome {
