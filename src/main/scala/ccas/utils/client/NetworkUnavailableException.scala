@@ -1,6 +1,6 @@
 package ccas.utils.client
 
-import zio.{RIO, ZIO}
+import zio.{RIO, UIO, ZIO}
 
 import ccas.utils.errors.safeMessage
 
@@ -28,4 +28,39 @@ object NetworkUnavailableException {
       case e: NetworkUnavailableException => ZIO.fail(e)
       case _                              => recover
     }
+
+  /** `catchSome` arm for a top-level app `run`: on a systemic outage, log one clean line and exit non-zero. Shared by
+    * every `ZIOApp` that aborts on an outage (RefApp, Membership, History, Recruitment) so the message template and
+    * exit handling live in one place. `detail` is the per-app consequence (e.g. "no skips recorded", "run left
+    * incomplete"); `onAbort` is the app's own `exit(ExitCode.failure)` (kept at the callsite since it resolves against
+    * the `ZIOApp` instance). `ZIO.fail` would double-report through `ZIOAppDefault`'s default handler, hence `exit`.
+    */
+  def abortRun(app: String, detail: String)(onAbort: UIO[Unit]): PartialFunction[Throwable, UIO[Unit]] = {
+    case e: NetworkUnavailableException =>
+      ZIO.logError(s"$app aborted — network unavailable; $detail: ${e.safeMessage}") *> onAbort
+  }
 }
+
+/** Recovery-internal swallow for tiered rename / slug resolution. The tiers (DB lookup, board-endpoint trick,
+  * admin-clubs scan) must never replace the caller's original 404 with a recovery-internal error, so their failures
+  * resolve to `None` and the caller's `onNotFound` block falls through to the original failure. But a systemic
+  * outage is different: it has to re-raise so the run aborts instead of recording a bogus skip (issue #119; the
+  * latent hole #121 left open on RefApp's rename path).
+  *
+  * The single classifier:
+  *   - [[NetworkUnavailableException]] — re-raise (systemic outage, abort the run).
+  *   - [[HttpStatusException]] — `None`, silently (expected: cancelled match, missing tournament, intermittent 5xx).
+  *   - anything else (DB / decode) — debug-log for triage, then `None`.
+  *
+  * Top-level effect-receiver extension matching the file-local convention for effect combinators (`onNotFound` in
+  * `HttpStatusException.scala`, `withPlayerRenameRecovery` / `withClubSlugRenameRecovery` in the resolvers) — the
+  * receiver genuinely is the effect, unlike the `recoverUnless` / `abortRun` companion methods above whose argument
+  * is the caught `Throwable` (cf. #120).
+  */
+extension [R, A](self: RIO[R, Option[A]])
+  def swallowRecoveryErrors(context: String): RIO[R, Option[A]] =
+    self.catchAll {
+      case e: NetworkUnavailableException => ZIO.fail(e)
+      case _: HttpStatusException         => ZIO.none
+      case e => ZIO.logDebug(s"  recovery internal error ($context): ${e.getMessage}").as(None)
+    }

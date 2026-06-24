@@ -11,7 +11,7 @@ import ccas.api.clubmatch.TeamMatchPlayerStarted
 import ccas.api.misc.subtypes.{ClubMatchId, PlayerId, Username}
 import ccas.api.player.ApiPlayer
 import ccas.api.tournament.ApiTournament
-import ccas.utils.client.{ChessComClient, HttpStatusException, ReportedNotFound, onNotFound}
+import ccas.utils.client.{ChessComClient, HttpStatusException, ReportedNotFound, onNotFound, swallowRecoveryErrors}
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.withTransaction
 
@@ -199,14 +199,7 @@ object UsernameRenameResolver {
             case Some(ref) => resolveFromTournament(client, ref, staleUsername)
           }
         } else { ZIO.none }
-    }.catchAll {
-      // HTTP errors are expected — cancelled match, missing tournament, intermittent 5xx. Swallow so the caller's
-      // original 404 propagates unchanged. Non-HTTP errors (DB, decode) are unexpected — log at debug for triage
-      // but still return None so we don't mask the original failure with a recovery-internal error.
-      case _: HttpStatusException => ZIO.none
-      case e =>
-        ZIO.logDebug(s"  Tier B rename recovery internal error for $staleUsername: ${e.getMessage}").as(None)
-    }
+    }.swallowRecoveryErrors(s"Tier B rename recovery for $staleUsername")
 
   private def fetchBoard(
     client: ChessComClient,
@@ -299,11 +292,7 @@ object UsernameRenameResolver {
           case Some(pid) => tierBBoard(client, pid, staleUsername, tournamentFallback)
           case None      => ZIO.none
         }
-    }.catchAll {
-      case _: HttpStatusException => ZIO.none
-      case e =>
-        ZIO.logDebug(s"  Resolver internal error for $staleUsername: ${e.getMessage}").as(None)
-    }
+    }.swallowRecoveryErrors(s"resolver for $staleUsername")
 
   /** Verification fetch. Confirms the candidate username resolves on Chess.com and (when hint is present) that the
     * playerId matches our expectation. Returns `None` on 404 (resolver guessed wrong) or on playerId mismatch.

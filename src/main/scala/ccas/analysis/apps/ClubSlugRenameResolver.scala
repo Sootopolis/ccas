@@ -1,7 +1,5 @@
 package ccas.analysis.apps
 
-import java.sql.SQLException
-
 import zio.{RIO, ZIO}
 
 import ccas.analysis.tables.{Club, ClubAdmin, Player}
@@ -9,7 +7,7 @@ import ccas.api.club.ApiClub
 import ccas.api.misc.enums.PlayerStatusCategory
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, Username}
 import ccas.api.player.ApiPlayerClubs
-import ccas.utils.client.{ChessComClient, HttpStatusException, ReportedNotFound, onNotFound}
+import ccas.utils.client.{ChessComClient, NetworkUnavailableException, ReportedNotFound, onNotFound, swallowRecoveryErrors}
 import ccas.utils.sql.PostgresClient
 
 /** Resolves the current canonical slug for a club whose previously-known slug 404s on Chess.com.
@@ -114,14 +112,7 @@ object ClubSlugRenameResolver {
       case Some(hint) =>
         Club.slugFromMatchRef(hint, client).map(_.filter(s => s != staleSlug && !isTombstone(s)))
     }
-    effect.catchAll {
-      // HTTP errors on the match-ref endpoint are expected (cancelled match, intermittent 5xx). Swallow so the
-      // caller's original 404 propagates. Other errors (DB, decode) get a debug log but still return None to avoid
-      // masking the original failure.
-      case _: HttpStatusException => ZIO.none
-      case e =>
-        ZIO.logDebug(s"  Tier B slug recovery internal error for $staleSlug: ${e.getMessage}").as(None)
-    }
+    effect.swallowRecoveryErrors(s"Tier B slug recovery for $staleSlug")
   }
 
   /** Resolves a candidate fresh slug. Errors are swallowed (debug-logged when non-HTTP) so the caller's original 404
@@ -140,11 +131,7 @@ object ClubSlugRenameResolver {
           tierCAdminClubs(client, effectiveHint, staleSlug)
         )
       )(identity)
-    }.catchAll {
-      case _: HttpStatusException => ZIO.none
-      case e =>
-        ZIO.logDebug(s"  Slug resolver internal error for $staleSlug: ${e.getMessage}").as(None)
-    }
+    }.swallowRecoveryErrors(s"slug resolver for $staleSlug")
 
   /** Tier C: fans out across stored `ClubAdmin` rows for the hint, querying each admin's `/pub/player/{u}/clubs`
     * and looking for a slug whose verified `ApiClub.clubId` matches the hint. Slugs already known to our `Club` table
@@ -178,11 +165,7 @@ object ClubSlugRenameResolver {
           )
         } yield result
     }
-    effect.catchAll {
-      case _: HttpStatusException => ZIO.none
-      case e =>
-        ZIO.logDebug(s"  Tier C slug recovery internal error for $staleSlug: ${e.getMessage}").as(None)
-    }
+    effect.swallowRecoveryErrors(s"Tier C slug recovery for $staleSlug")
   }
 
   /** Per-admin step of Tier C: fetch the admin's clubs list, filter to slugs we don't already know, and verify
@@ -202,11 +185,7 @@ object ClubSlugRenameResolver {
       unknown = candidates.filterNot(knownSlugs.contains).toList
       result <- ZIO.collectFirst(unknown)(verifyClubIdMatch(client, _, hint))
     } yield result
-    effect.catchAll {
-      case _: HttpStatusException => ZIO.none
-      case e =>
-        ZIO.logDebug(s"  Tier C admin lookup error for $username: ${e.getMessage}").as(None)
-    }
+    effect.swallowRecoveryErrors(s"Tier C admin lookup for $username")
   }
 
   /** Fetches `ApiClub` for `slug` and returns `Some(slug)` only if its `clubId` matches `hint`. 404s become `None`
@@ -247,9 +226,10 @@ object ClubSlugRenameResolver {
     }.onNotFound(_ => ZIO.none)
 
   /** Resolves a club slug to its ID: returns `Some(clubId)` if the slug is known locally; otherwise fetches from
-    * Chess.com and persists. Errors (network, decode, SQL) are swallowed → `None`, matching the
-    * `Club.resolveOrFetch` semantics this supersedes. Lives in apps/ rather than tables/ to keep the resolver
-    * primitives co-located, avoiding a cycle with `tables.Club`.
+    * Chess.com and persists. Expected errors (404, decode, SQL) are swallowed → `None`, matching the
+    * `Club.resolveOrFetch` semantics this supersedes; a systemic [[NetworkUnavailableException]] re-raises so a
+    * caller's retry loop aborts cleanly instead of recording a bogus skip (#119). Lives in apps/ rather than
+    * tables/ to keep the resolver primitives co-located, avoiding a cycle with `tables.Club`.
     *
     * Slug-rename recovery is intentionally NOT wired here. The wrap would invoke the resolver, which derives its
     * `clubIdHint` via `Club.selectBySlug(stale)` — the very lookup this helper just performed at L1. With no other
@@ -259,7 +239,7 @@ object ClubSlugRenameResolver {
   def resolveOrFetch(
     client: ChessComClient,
     slug: ClubSlug
-  ): ZIO[PostgresClient, SQLException, Option[ClubId]] =
+  ): RIO[PostgresClient, Option[ClubId]] =
     Club.selectBySlug(slug).flatMap {
       case Some(club) => ZIO.some(club.clubId)
       case None =>
@@ -269,7 +249,7 @@ object ClubSlugRenameResolver {
           _ <- Club.upsertResolvingSlugConflict(Club.fromApi(apiClub, canonical), client)
         } yield Option(apiClub.clubId))
           .tapError(e => ZIO.logDebug(s"  ClubSlugRenameResolver.resolveOrFetch $slug failed: ${e.getMessage}"))
-          .catchAll(_ => ZIO.none)
+          .catchAll(e => NetworkUnavailableException.recoverUnless(e)(ZIO.none))
     }
 }
 

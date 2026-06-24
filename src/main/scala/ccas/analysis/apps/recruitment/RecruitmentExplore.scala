@@ -12,7 +12,7 @@ import ccas.api.club.{ApiClub, ApiClubMembers}
 import ccas.api.misc.enums.ClubMatchStatus
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, Username}
 import ccas.api.player.*
-import ccas.utils.client.{ChessComClient, onNotFound}
+import ccas.utils.client.{ChessComClient, NetworkUnavailableException, onNotFound}
 import ccas.utils.ApiConcurrency
 
 private[recruitment] object RecruitmentExplore {
@@ -397,7 +397,9 @@ private[recruitment] object RecruitmentExplore {
         } yield archives.flatMap(
           _.games.filter(g => g.timeClass == "daily" && g.`match`.isDefined && g.endTime >= cutoff.getEpochSecond)
         ).flatMap(nonTimeoutOpponent(_, effectiveUname)).toSet
-        gather.catchAll(_ => ZIO.succeed(Set.empty[Username]))
+        // Per-player gather failures degrade to "no opponents from this player"; a systemic outage re-raises so the
+        // run aborts rather than silently yielding an empty opponent pool.
+        gather.catchAll(error => NetworkUnavailableException.recoverUnless(error)(ZIO.succeed(Set.empty[Username])))
       }
       allOpponents = opponentSets.foldLeft(Set.empty[Username])(_ ++ _)
       _ <- ZIO.logInfo(s"[Explore] Candidate opponents strategy found ${allOpponents.size} opponents")

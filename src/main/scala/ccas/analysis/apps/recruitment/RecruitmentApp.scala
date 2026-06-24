@@ -2,7 +2,7 @@ package ccas.analysis.apps.recruitment
 
 import java.time.{Duration as JDuration, Instant}
 
-import zio.{Clock, RIO, Ref, Scope, Task, ZEnvironment, ZIO, ZIOAppArgs, ZIOAppDefault}
+import zio.{Clock, ExitCode, RIO, Ref, Scope, Task, ZEnvironment, ZIO, ZIOAppArgs, ZIOAppDefault}
 
 import ccas.analysis.apps.membership.MembershipApp
 import ccas.analysis.apps.ref.RefHelpers
@@ -13,7 +13,7 @@ import ccas.api.club.{ApiClub, ApiClubMatches, ApiClubMembers}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId, PlayerId, Username}
 import ccas.api.player.ApiPlayer
 import ccas.utils.{display, OutputFile, ProgressDisplay}
-import ccas.utils.client.{ChessComClient, HttpClientLayer}
+import ccas.utils.client.{ChessComClient, HttpClientLayer, NetworkUnavailableException}
 import ccas.utils.errors.{BadRequestException, NotFoundException}
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.withTransaction
@@ -107,12 +107,16 @@ object RecruitmentApp extends ZIOAppDefault {
             _ <- OutputFile.writeAndLog("recruitment", clubSlug, output)
           } yield ()
         case _ => ZIO.fail(BadRequestException(help))
-      }).provideSome[Scope](
-        ProgressDisplay.live(showProgress = true),
-        ChessComClient.live("recruitment"),
-        HttpClientLayer.live,
-        PostgresClient.live(onInit = Tables.ensureTables)
-      )
+      })
+        // A systemic outage aborts instead of mass-marking candidates `Error`; the in-flight `recruitment_run` row
+        // stays incomplete (ignored downstream) and the next run retries.
+        .catchSome(NetworkUnavailableException.abortRun("RecruitmentApp", "run left incomplete")(exit(ExitCode.failure)))
+        .provideSome[Scope](
+          ProgressDisplay.live(showProgress = true),
+          ChessComClient.live("recruitment"),
+          HttpClientLayer.live,
+          PostgresClient.live(onInit = Tables.ensureTables)
+        )
     } yield ()
 
   // --- Phase 1: Initialize ---

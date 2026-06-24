@@ -9,6 +9,7 @@ import RecruitmentPersistence.*
 import ccas.analysis.tables.RecruitmentCriteria
 import ccas.analysis.tables.subtypes.RecruitmentRunId
 import ccas.api.misc.subtypes.Username
+import ccas.utils.client.NetworkUnavailableException
 import ccas.utils.errors.safeMessage
 
 private[recruitment] object RecruitmentFilters {
@@ -31,10 +32,14 @@ private[recruitment] object RecruitmentFilters {
         _                         <- persistCandidateResults(runId, now, finalCandidate, outcome, env.run.client)
         _                         <- writePlayerMatchRef(env.run.client, finalCandidate).ignore
       } yield outcome).catchAll { error =>
-        for {
-          latestCtx <- ctxRef.get
-          _         <- persistCandidateResults(runId, now, latestCtx, CandidateOutcome.Error, env.run.client, Some(error.safeMessage))
-        } yield CandidateOutcome.Error
+        // A systemic outage hits every in-flight candidate; re-raise so the run aborts rather than persisting an
+        // `Error` row for each (which would suppress them as evaluated). Genuine per-candidate errors still record.
+        NetworkUnavailableException.recoverUnless(error) {
+          for {
+            latestCtx <- ctxRef.get
+            _         <- persistCandidateResults(runId, now, latestCtx, CandidateOutcome.Error, env.run.client, Some(error.safeMessage))
+          } yield CandidateOutcome.Error
+        }
       }
     } yield result
   }

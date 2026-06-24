@@ -2,7 +2,7 @@ package ccas.analysis.apps.history
 
 import java.time.{Duration as JDuration, Instant}
 
-import zio.{Chunk, NonEmptyChunk, RIO, Ref, Scope, URIO, ZEnvironment, ZIO, ZIOAppArgs, ZIOAppDefault}
+import zio.{Chunk, ExitCode, NonEmptyChunk, RIO, Ref, Scope, URIO, ZEnvironment, ZIO, ZIOAppArgs, ZIOAppDefault}
 import HistoryUtils.*
 
 import ccas.analysis.apps.membership.MembershipApp
@@ -10,7 +10,7 @@ import ccas.analysis.tables.*
 import ccas.analysis.tables.subtypes.HistoryRunId
 import ccas.api.misc.subtypes.*
 import ccas.utils.{display, OutputFile, ProgressDisplay}
-import ccas.utils.client.{ChessComClient, HttpClientLayer}
+import ccas.utils.client.{ChessComClient, HttpClientLayer, NetworkUnavailableException}
 import ccas.utils.errors.BadRequestException
 import ccas.utils.sql.PostgresClient
 
@@ -94,12 +94,17 @@ object HistoryApp extends ZIOAppDefault {
         includeFinished = parsed.includeFinished,
         refreshMinHours = parsed.refreshMinHours
       )
-    } yield ()).provideSomeAuto(
-      ProgressDisplay.live(showProgress = true),
-      ChessComClient.live("history"),
-      HttpClientLayer.live,
-      PostgresClient.live(onInit = Tables.ensureTables)
-    )
+    } yield ())
+      // A systemic outage aborts rather than marking matches `ApiError`, building dataless boards, or persisting
+      // misleading run counters. Committed per-match work stays; pending matches re-process next run; the
+      // `history_run` row stays incomplete (a failure doesn't run the interrupt-finalizer).
+      .catchSome(NetworkUnavailableException.abortRun("HistoryApp", "run left incomplete")(exit(ExitCode.failure)))
+      .provideSomeAuto(
+        ProgressDisplay.live(showProgress = true),
+        ChessComClient.live("history"),
+        HttpClientLayer.live,
+        PostgresClient.live(onInit = Tables.ensureTables)
+      )
 
   private[history] case class HistoryAppArgs(
     slugs: NonEmptyChunk[ClubSlug],

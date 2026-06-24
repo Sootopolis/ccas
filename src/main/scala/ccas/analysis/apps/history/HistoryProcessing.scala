@@ -14,7 +14,7 @@ import ccas.api.misc.enums.*
 import ccas.api.misc.subtypes.*
 import ccas.api.player.{ApiPlayer, ApiPlayerClubs}
 import ccas.utils.{ApiConcurrency, ProgressBar, ProgressDisplay}
-import ccas.utils.client.ReportedNotFound
+import ccas.utils.client.{NetworkUnavailableException, ReportedNotFound}
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.withTransaction
 
@@ -67,7 +67,11 @@ private[history] object HistoryProcessing {
                         ctx.seedPlayerMatchesUnchanged
                       )
                       .zipLeft(ZIO.foreachDiscard(shared)(_.queriedPlayers.update(_ + dp.playerId)))
-                      .catchAll(error => ZIO.logWarning(s"  ${dp.username}: failed to seed — ${error.getMessage}"))
+                      .catchAll(error =>
+                        NetworkUnavailableException.recoverUnless(error)(
+                          ZIO.logWarning(s"  ${dp.username}: failed to seed — ${error.getMessage}")
+                        )
+                      )
                   }.withParallelism(ApiConcurrency.fiberCap(ctx.client))
               }
 
@@ -114,6 +118,8 @@ private[history] object HistoryProcessing {
     ZIO.foreachParDiscard(pending) { pm =>
       processMatch(ctx, pm.matchId, pm.isLive, shared)
         .catchAll {
+          // Systemic outage — re-raise so the wave aborts instead of marking this match `ApiError` (a bogus skip).
+          case e: NetworkUnavailableException => ZIO.fail(e)
           case _: ReportedNotFound =>
             for {
               _ <- ctx.matchesAborted.update(_ + 1)
@@ -303,6 +309,8 @@ private[history] object HistoryProcessing {
         ZIO.foreachParDiscard(batch) { matchId =>
           refreshSingleMatch(ctx, matchId)
             .catchAll {
+              // Systemic outage — re-raise so the refresh aborts instead of counting this match as a one-off failure.
+              case e: NetworkUnavailableException => ZIO.fail(e)
               // No transaction needed here: the refresh path has no pending-table row to delete, and
               // `markAborted` is the only write. `selectSettledForRefreshBatch` selected this row so
               // rows-affected is virtually always 1; rows == 0 indicates a concurrent delete.
@@ -435,7 +443,11 @@ private[history] object HistoryProcessing {
               UnresolvedBoardPlayer.insert(matchId, boardNum, isTeam1 = false, t2Username).ignore
             )
 
-            boardData <- ctx.client.get[ApiMatchBoard](ApiMatchBoard.dailyUrl(matchId, boardNum)).option
+            // Per-board fetch failures degrade to a board row with no API data; a systemic outage re-raises so the
+            // match isn't persisted with dataless boards.
+            boardData <- ctx.client.get[ApiMatchBoard](ApiMatchBoard.dailyUrl(matchId, boardNum))
+                           .map(Option(_))
+                           .catchAll(err => NetworkUnavailableException.recoverUnless(err)(ZIO.none))
           } yield {
             val g1 = HistoryBoardBuilder.normalizeGameOutcome(
               t1Player.playedAsWhite,
@@ -544,13 +556,19 @@ private[history] object HistoryProcessing {
     } yield result
 
     // The doer handles success/failure and completes the promise.
-    // On failure: log once, count once, resolve promise to None so awaiting fibers get None (not an exception).
-    // Log uses the input `username` since failures here mean we couldn't even authenticate it.
+    // On a non-network failure: log once, count once, resolve promise to None so awaiting fibers get None (not an
+    // exception). A systemic outage instead re-raises (interrupting the parallel region) — the promise is left
+    // un-completed and torn down with the failing fiber tree. Log uses the input `username` since a failure here
+    // means we couldn't even authenticate it.
     work.foldZIO(
       error =>
-        ctx.playersFailed.update(_ + 1)
-          *> ZIO.logWarning(s"    Cannot resolve player $username: ${error.getMessage}")
-          *> promise.succeed(None).as(None),
+        NetworkUnavailableException.recoverUnless(error) {
+          for {
+            _ <- ctx.playersFailed.update(_ + 1)
+            _ <- ZIO.logWarning(s"    Cannot resolve player $username: ${error.getMessage}")
+            _ <- promise.succeed(None)
+          } yield None
+        },
       result => promise.succeed(result).as(result)
     )
   }
@@ -585,11 +603,15 @@ private[history] object HistoryProcessing {
           _ <- ClubMember.insert(member)
         } yield ()
 
-        fromApi.catchAll { _ =>
-          val since = matchStartTime.getOrElse(Instant.ofEpochSecond(apiPlayer.joined))
-          val until = if (statusCategory == PlayerStatusCategory.Active) { None }
-          else { Some(Instant.ofEpochSecond(apiPlayer.lastOnline)) }
-          ClubMember.insert(ClubMember(clubId, playerId, since, until, sinceApproximate = true)).unit
+        fromApi.catchAll { err =>
+          // The /clubs fetch failing falls back to an approximate membership; a systemic outage re-raises so we
+          // don't persist a bogus approximate row (this runs inside a transaction — re-raise rolls it back).
+          NetworkUnavailableException.recoverUnless(err) {
+            val since = matchStartTime.getOrElse(Instant.ofEpochSecond(apiPlayer.joined))
+            val until = if (statusCategory == PlayerStatusCategory.Active) { None }
+            else { Some(Instant.ofEpochSecond(apiPlayer.lastOnline)) }
+            ClubMember.insert(ClubMember(clubId, playerId, since, until, sinceApproximate = true)).unit
+          }
         }
     }
   }

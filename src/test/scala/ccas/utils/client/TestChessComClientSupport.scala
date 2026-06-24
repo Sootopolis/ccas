@@ -109,6 +109,19 @@ object TestChessComClientSupport {
       (client, stateRef, stats)
     }
 
+  /** A client whose every request fails with a DNS error — simulates a machine-wide network outage. The real
+    * `ChessComClient` wraps the surviving `UnknownHostException` into a `NetworkUnavailableException` once its
+    * connection-retry schedule exhausts. Small retry knobs keep that exhaustion fast under `withLiveClock` tests.
+    * Built on `makeClient` (not `fakeClient`) because only a failing `handler` produces a transport-level error.
+    */
+  def networkDownClient: ZIO[Scope & PostgresClient, Nothing, ChessComClient] =
+    makeClient(
+      handler = _ => ZIO.fail(new java.net.UnknownHostException("api.chess.com: Temporary failure in name resolution")),
+      retryBase = 10.millis,
+      maxConnectionRetries = 2,
+      permits = 5
+    ).map(_._1)
+
   /** Dummy ChessComClient layer that returns 404 for all requests. Useful for tests that need a ChessComClient in the
     * environment but never actually make HTTP calls.
     */

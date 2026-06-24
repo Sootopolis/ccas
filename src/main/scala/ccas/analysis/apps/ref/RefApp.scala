@@ -9,7 +9,7 @@ import RefUtils.*
 import ccas.analysis.tables.{ClubRefSkip, PlayerRefSkip, PlayerTournamentRef, SkipCount, Tables}
 import ccas.utils.{display, ApiConcurrency, OutputFile, ProgressDisplay}
 import ccas.utils.client.{ChessComClient, HttpClientLayer, NetworkUnavailableException}
-import ccas.utils.errors.{BadRequestException, safeMessage}
+import ccas.utils.errors.BadRequestException
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.connectZIO
@@ -48,12 +48,9 @@ object RefApp extends ZIOAppDefault {
       data <- populate(forceSkipped = forceSkipped, upgradeRefs = upgradeRefs)
       _    <- OutputFile.writeAndLogGlobal("ref", formatReport(data), "_ccas")
     } yield ())
-      .catchSome { case e: NetworkUnavailableException =>
-        // A systemic outage aborted the run (no skips recorded). Log one clean line and exit non-zero via `exit`
-        // (still inside the ProgressDisplay logger scope). `ZIO.fail` here would also dump the raw cause through
-        // ZIOAppDefault's default reporting once it escaped the layer scope — double output.
-        ZIO.logError(s"RefApp aborted — network unavailable; no skips recorded: ${e.safeMessage}") *> exit(ExitCode.failure)
-      }
+      // A systemic outage aborted the run (no skips recorded). `exit` keeps it inside the ProgressDisplay logger
+      // scope; `ZIO.fail` would double-report the cause through ZIOAppDefault once it escaped the layer scope.
+      .catchSome(NetworkUnavailableException.abortRun("RefApp", "no skips recorded")(exit(ExitCode.failure)))
       .provideSome[ZIOAppArgs & Scope](
       ProgressDisplay.live(showProgress = true),
       ChessComClient.live("ref"),

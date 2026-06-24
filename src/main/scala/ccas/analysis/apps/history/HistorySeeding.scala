@@ -18,7 +18,7 @@ import ccas.analysis.tables.*
 import ccas.api.club.ApiClubMatches
 import ccas.api.misc.subtypes.*
 import ccas.api.player.{ApiPlayer, ApiPlayerMatches}
-import ccas.utils.client.{ChessComClient, onNotFound}
+import ccas.utils.client.{ChessComClient, NetworkUnavailableException, onNotFound}
 import ccas.utils.ApiConcurrency
 import ccas.utils.ProgressDisplay
 
@@ -54,7 +54,7 @@ private[history] object HistorySeeding {
                         }
                       } *> resolvedRef.update(_ + entries.size)
                     case None => ZIO.unit
-                  }.ignore *>
+                  }.catchAll(e => NetworkUnavailableException.recoverUnless(e)(ZIO.unit)) *>
                     counterRef.updateAndGet(_ + 1)
                       .flatMap(n => bar.print(n, total, s"  Retrying unresolved clubs: $n/$total"))
                 }
@@ -91,7 +91,9 @@ private[history] object HistorySeeding {
                       recoverEntriesAfter404(client, username, entries)
                     }
                     .catchAll { error =>
-                      ZIO.logWarning(s"  Retry $username: ${error.getMessage}").as(0)
+                      NetworkUnavailableException.recoverUnless(error)(
+                        ZIO.logWarning(s"  Retry $username: ${error.getMessage}").as(0)
+                      )
                     }
                     .flatMap(n => resolvedRef.update(_ + n)) *>
                     counterRef.updateAndGet(_ + 1)
@@ -145,9 +147,11 @@ private[history] object HistorySeeding {
             s"  Rename recovery failed for $staleUsername (match ${entry.matchId} board ${entry.board}); leaving row"
           ).as(0)
       }.catchAll { error =>
-        ZIO.logWarning(
-          s"  Rename recovery errored for $staleUsername (match ${entry.matchId} board ${entry.board}): ${error.getMessage}"
-        ).as(0)
+        NetworkUnavailableException.recoverUnless(error)(
+          ZIO.logWarning(
+            s"  Rename recovery errored for $staleUsername (match ${entry.matchId} board ${entry.board}): ${error.getMessage}"
+          ).as(0)
+        )
       }.map(acc + _)
     }
 
@@ -178,7 +182,9 @@ private[history] object HistorySeeding {
     fetch(clubSlug)
       .withClubSlugRenameRecovery(client, clubSlug, Some(clubId))(fetch)
       .catchAll { error =>
-        ZIO.logWarning(s"  Failed to fetch club matches: ${error.getMessage}").as(0)
+        NetworkUnavailableException.recoverUnless(error)(
+          ZIO.logWarning(s"  Failed to fetch club matches: ${error.getMessage}").as(0)
+        )
       }
   }
 
@@ -248,8 +254,10 @@ private[history] object HistorySeeding {
             )
               .foldZIO(
                 error =>
-                  failedMembersRef.update(_ :+ FailedMember(username, error.getMessage))
-                    *> ZIO.logWarning(s"  $username: failed — ${error.getMessage}"),
+                  NetworkUnavailableException.recoverUnless(error)(
+                    failedMembersRef.update(_ :+ FailedMember(username, error.getMessage))
+                      *> ZIO.logWarning(s"  $username: failed — ${error.getMessage}")
+                  ),
                 count =>
                   seedRef.update(_ + count) *> counterRef.updateAndGet(_ + 1).flatMap { n =>
                     bar.print(n, total, s"  Querying member matches: $n/$total")
