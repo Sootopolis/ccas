@@ -1,13 +1,14 @@
 package ccas.server.jobs
 
-import java.nio.file.{Files, Paths}
+import java.nio.charset.StandardCharsets
+import java.nio.file.{Files, Path, Paths, StandardOpenOption}
 
 import scala.jdk.CollectionConverters.*
 
 import com.typesafe.config.ConfigFactory
 
 import ccas.utils.sql.PostgresClient
-import zio.{durationInt, Promise, Scope, ZIO, ZLayer}
+import zio.{durationInt, Promise, Ref, Scope, ZIO, ZLayer}
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.analysis.tables.{Club, RunTrigger}
@@ -32,7 +33,10 @@ object TestJobRunner extends ZIOSpecDefault {
     testSubmitWritesJobLog,
     testLogStreamReplaysCompletedJob,
     testLogStreamUnknownReturnsNone,
-    testLogStreamTailsLiveJob
+    testLogStreamTailsLiveJob,
+    testLogStreamCarriesPartialLineAcrossTicks,
+    testLogStreamJoinsMultibyteCharAcrossTicks,
+    testLogStreamReassemblesCjkAndEmojiTornMidChar
   ).provideShared(
     FreshSchemaLayer("test_job_runner", onInit = ServerTables.ensureTables),
     TestChessComClientSupport.dummyLayer,
@@ -209,6 +213,83 @@ object TestJobRunner extends ZIOSpecDefault {
       lines     <- collect.join.map(_.toList)
     } yield assertTrue(lines.exists(_.contains("streaming line")))
   }
+
+  // Offset-incremental tail: a line written across two appends (no newline on the first) must be buffered and emitted
+  // once complete, never as a torn fragment. Drives `FileTail` directly with a hand-built completions map so we control
+  // the partial-then-complete timing; an uncompleted promise keeps the job "live" until we flip it terminal.
+  private def testLogStreamCarriesPartialLineAcrossTicks =
+    test("FileTail buffers a line split across two appends and emits it exactly once") {
+      for {
+        dir     <- ZIO.attempt(Files.createTempDirectory("ccas-filetail-partial"))
+        jobId    = JobRunId.wrap("partial-line-job")
+        path     = dir.resolve(s"${JobRunId.unwrap(jobId)}.log")
+        promise <- Promise.make[Nothing, Unit]
+        ref     <- Ref.make(Map(jobId -> promise)) // present + uncompleted => treated as live
+        tail     = new FileTail(dir, ref, 20.millis) // small poll interval for a fast, deterministic test
+        collect <- tail.subscribe(jobId).runCollect.fork
+        _       <- appendBytes(path, "hello".getBytes(StandardCharsets.UTF_8)) // no trailing newline: stays buffered
+        _       <- ZIO.sleep(200.millis)                                       // > pollInterval: a tick observes the partial
+        _       <- appendBytes(path, " world\n".getBytes(StandardCharsets.UTF_8))
+        _       <- ZIO.sleep(200.millis)  // let a live tick emit the joined line before we flip terminal
+        _       <- promise.succeed(())    // job now terminal => stream drains and ends
+        lines   <- collect.join.map(_.toList)
+      } yield assertTrue(lines == List("hello world"))
+    }
+
+  // A multibyte UTF-8 char (é = 0xC3 0xA9) split across two appends must decode whole. Proves the byte-offset tail
+  // never tears a char at a read boundary: splitting on the '\n' byte (0x0A, which never appears mid-sequence) always
+  // lands on a char boundary, so the half-char stays buffered until its second byte arrives.
+  private def testLogStreamJoinsMultibyteCharAcrossTicks =
+    test("FileTail joins a multibyte UTF-8 char split across two appends") {
+      for {
+        dir     <- ZIO.attempt(Files.createTempDirectory("ccas-filetail-multibyte"))
+        jobId    = JobRunId.wrap("multibyte-line-job")
+        path     = dir.resolve(s"${JobRunId.unwrap(jobId)}.log")
+        promise <- Promise.make[Nothing, Unit]
+        ref     <- Ref.make(Map(jobId -> promise))
+        tail     = new FileTail(dir, ref, 20.millis)
+        collect <- tail.subscribe(jobId).runCollect.fork
+        _       <- appendBytes(path, Array[Byte]('x'.toByte, 0xC3.toByte)) // "x" + lead byte of é, no newline
+        _       <- ZIO.sleep(200.millis)
+        _       <- appendBytes(path, Array[Byte](0xA9.toByte, '\n'.toByte)) // trailing byte of é + newline
+        _       <- ZIO.sleep(200.millis)
+        _       <- promise.succeed(())
+        lines   <- collect.join.map(_.toList)
+      } yield assertTrue(lines == List("x\u00e9")) // "x" + e-acute (U+00E9), decoded from bytes 0xC3 0xA9
+    }
+
+  // Club names carry Chinese (3-byte UTF-8) and emoji (4-byte UTF-8 / surrogate pair) glyphs, so log lines do too.
+  // Split a line right through the middle of the 4-byte emoji (after only 2 of its bytes) across two appends: the tail
+  // must still emit the line whole. Worst case for the byte-offset reader \u2014 the torn fragment is wider than the 2-byte
+  // \u00e9 case and the break lands deep inside the sequence.
+  private def testLogStreamReassemblesCjkAndEmojiTornMidChar =
+    test("FileTail reassembles a Chinese + emoji line torn mid-emoji across appends") {
+      val line  = "\u4e2d\u6587\ud83d\ude00" // U+4E2D U+6587 (3-byte CJK each) + grinning-face emoji U+1F600 (4-byte / surrogate pair)
+      val bytes = line.getBytes(StandardCharsets.UTF_8) // 10 bytes total: 3 + 3 + 4
+      for {
+        dir     <- ZIO.attempt(Files.createTempDirectory("ccas-filetail-cjk"))
+        jobId    = JobRunId.wrap("cjk-emoji-job")
+        path     = dir.resolve(s"${JobRunId.unwrap(jobId)}.log")
+        promise <- Promise.make[Nothing, Unit]
+        ref     <- Ref.make(Map(jobId -> promise))
+        tail     = new FileTail(dir, ref, 20.millis)
+        collect <- tail.subscribe(jobId).runCollect.fork
+        _       <- appendBytes(path, bytes.slice(0, 8)) // \u4e2d\u6587 + first 2 of the emoji's 4 bytes, no newline
+        _       <- ZIO.sleep(200.millis)
+        _       <- appendBytes(path, bytes.slice(8, bytes.length) ++ Array('\n'.toByte)) // last 2 emoji bytes + newline
+        _       <- ZIO.sleep(200.millis)
+        _       <- promise.succeed(())
+        lines   <- collect.join.map(_.toList)
+      } yield assertTrue(lines == List(line))
+    }
+
+  // Append raw bytes, flushing synchronously (open/write/close per call), so the on-disk state is settled before the
+  // next poll observes it.
+  private def appendBytes(path: Path, bytes: Array[Byte]): ZIO[Any, Throwable, Unit] =
+    ZIO.attemptBlocking {
+      Files.write(path, bytes, StandardOpenOption.CREATE, StandardOpenOption.APPEND)
+      ()
+    }
 
   private def testRecentJobsOrdered = test("recentJobs returns ordered list") {
     for {
