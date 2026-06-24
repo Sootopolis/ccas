@@ -27,7 +27,7 @@ import ccas.api.misc.subtypes.{ClubMatchId, PlayerId, TournamentSlug, Username}
 import ccas.api.player.{ApiPlayer, ApiPlayerMatches, ApiPlayerTournaments}
 import ccas.api.player.ApiPlayerMatches.ApiPlayerMatch
 import ccas.api.tournament.ApiTournamentRound
-import ccas.utils.client.{ChessComClient, ReportedNotFound}
+import ccas.utils.client.{ChessComClient, NetworkUnavailableException, ReportedNotFound}
 import ccas.utils.errors.safeMessage
 import ccas.utils.ProgressDisplay
 
@@ -43,10 +43,13 @@ private[ref] object RefResolution {
       dbRef <- ClubMatchBoard.inferPlayerMatchRef(player.playerId)
       resolved <- dbRef match {
         case Some(ref) =>
-          withTransaction {
-            PlayerMatchRef.upsert(ref) *> PlayerRefSkip.deleteId(player.playerId)
-          } *> ctx.playersResolvedDb.update(_ + 1) *>
-            ZIO.logDebug(s"  ${player.username}: resolved via DB").as(true)
+          for {
+            _ <- withTransaction {
+              PlayerMatchRef.upsert(ref) *> PlayerRefSkip.deleteId(player.playerId)
+            }
+            _ <- ctx.playersResolvedDb.update(_ + 1)
+            _ <- ZIO.logDebug(s"  ${player.username}: resolved via DB")
+          } yield true
         case None =>
           resolvePlayerViaMatch(ctx, player, countResolved = true).flatMap {
             case ResolveResult.Resolved   => ZIO.succeed(true)
@@ -81,13 +84,21 @@ private[ref] object RefResolution {
               ZIO.logInfo(s"  ${player.username}: rename recovered → $fresh; retrying resolution") *>
                 resolvePlayer(ctx, player.copy(username = fresh))
             case None =>
-              ZIO.logWarning(s"  ${player.username}: 404 — ${e.safeMessage}") *>
-                skipPlayer(ctx, player, RefSkipReason.NotFound, Some(e.safeMessage)).as(false)
+              for {
+                _ <- ZIO.logWarning(s"  ${player.username}: 404 — ${e.safeMessage}")
+                _ <- skipPlayer(ctx, player, RefSkipReason.NotFound, Some(e.safeMessage))
+              } yield false
           }
         } yield result
+      case e: NetworkUnavailableException =>
+        // Systemic network/DNS outage (survived the client's retry schedule), not this player's fault. Abort the run
+        // instead of recording a bogus ApiError skip that would suppress the player for 3 days; the next run retries.
+        ZIO.fail(e)
       case error =>
-        ZIO.logWarning(s"  ${player.username}: error — ${error.safeMessage}") *>
-          skipPlayer(ctx, player, RefSkipReason.ApiError, Some(error.safeMessage)).as(false)
+        for {
+          _ <- ZIO.logWarning(s"  ${player.username}: error — ${error.safeMessage}")
+          _ <- skipPlayer(ctx, player, RefSkipReason.ApiError, Some(error.safeMessage))
+        } yield false
     }
 
   private def resolvePlayerViaMatch(
@@ -105,9 +116,10 @@ private[ref] object RefResolution {
         }
       }
       unchangedGate(result, PlayerRefSkip.selectId(player.playerId))(
-        ctx.playerMatchesUnchanged.update(_ + 1) *>
-          ZIO.logDebug(s"  ${player.username}: player-matches unchanged, skipping candidate iteration")
-            .as(ResolveResult.NotFound)
+        for {
+          _ <- ctx.playerMatchesUnchanged.update(_ + 1)
+          _ <- ZIO.logDebug(s"  ${player.username}: player-matches unchanged, skipping candidate iteration")
+        } yield ResolveResult.NotFound
       )(iterate)
     }
 
@@ -140,16 +152,22 @@ private[ref] object RefResolution {
           case true => ZIO.succeed(ResolveResult.NotFound)
           case false =>
             fetchMatch(ctx, parsed.matchId, parsed.isLive).foldZIO(
-              error => recordFailedUrl(ctx, parsed.matchUrl, error, "player").as(ResolveResult.NotFound),
+              error =>
+                NetworkUnavailableException.recoverUnless(error)(
+                  recordFailedUrl(ctx, parsed.matchUrl, error, "player").as(ResolveResult.NotFound)
+                ),
               teams =>
                 RefHelpers.findPlayerIsTeam1(teams, player.username) match {
                   case None => ZIO.succeed(ResolveResult.NotFound)
                   case Some(isTeam1) =>
                     handleVerification(ctx, player) {
                       val ref = PlayerMatchRef(player.playerId, parsed.matchId, parsed.isLive, isTeam1, boardIdx)
-                      withTransaction {
-                        PlayerMatchRef.upsert(ref) *> PlayerRefSkip.deleteId(player.playerId)
-                      } *> ZIO.whenDiscard(countResolved)(ctx.playersResolvedApi.update(_ + 1)).as(ResolveResult.Resolved)
+                      for {
+                        _ <- withTransaction {
+                          PlayerMatchRef.upsert(ref) *> PlayerRefSkip.deleteId(player.playerId)
+                        }
+                        _ <- ZIO.whenDiscard(countResolved)(ctx.playersResolvedApi.update(_ + 1))
+                      } yield ResolveResult.Resolved
                     }
                 }
             )
@@ -172,9 +190,10 @@ private[ref] object RefResolution {
         }
       }
       unchangedGate(result, PlayerRefSkip.selectId(player.playerId))(
-        ctx.playerTournamentsUnchanged.update(_ + 1) *>
-          ZIO.logDebug(s"  ${player.username}: player-tournaments unchanged, skipping candidate iteration")
-            .as(ResolveResult.NotFound)
+        for {
+          _ <- ctx.playerTournamentsUnchanged.update(_ + 1)
+          _ <- ZIO.logDebug(s"  ${player.username}: player-tournaments unchanged, skipping candidate iteration")
+        } yield ResolveResult.NotFound
       )(iterate)
     }
 
@@ -201,7 +220,10 @@ private[ref] object RefResolution {
       case true => ZIO.succeed(ResolveResult.NotFound)
       case false =>
         ctx.client.get[ApiTournamentRound](roundUrl).foldZIO(
-          error => recordFailedUrl(ctx, roundUrl, error, "player").as(ResolveResult.NotFound),
+          error =>
+            NetworkUnavailableException.recoverUnless(error)(
+              recordFailedUrl(ctx, roundUrl, error, "player").as(ResolveResult.NotFound)
+            ),
           round => {
             val playerIdx = round.players.indexWhere(rp => rp.username == player.username)
             if (playerIdx < 0) {
@@ -209,10 +231,13 @@ private[ref] object RefResolution {
             } else {
               handleVerification(ctx, player) {
                 val ref = PlayerTournamentRef(player.playerId, slug, playerIdx)
-                withTransaction {
-                  PlayerTournamentRef.upsert(ref) *> PlayerRefSkip.deleteId(player.playerId)
-                } *> ctx.newTournamentRefPlayerIds.update(_ + player.playerId) *>
-                  ctx.playersResolvedApi.update(_ + 1).as(ResolveResult.Resolved)
+                for {
+                  _ <- withTransaction {
+                    PlayerTournamentRef.upsert(ref) *> PlayerRefSkip.deleteId(player.playerId)
+                  }
+                  _ <- ctx.newTournamentRefPlayerIds.update(_ + player.playerId)
+                  _ <- ctx.playersResolvedApi.update(_ + 1)
+                } yield ResolveResult.Resolved
               }
             }
           }
@@ -230,10 +255,13 @@ private[ref] object RefResolution {
       dbRef <- ClubMatch.inferClubMatchRef(club.clubId)
       resolved <- dbRef match {
         case Some(ref) =>
-          withTransaction {
-            ClubMatchRef.upsert(ref) *> ClubRefSkip.deleteId(club.clubId)
-          } *> ctx.clubsResolvedDb.update(_ + 1) *>
-            ZIO.logDebug(s"  ${club.slug}: resolved via DB").as(true)
+          for {
+            _ <- withTransaction {
+              ClubMatchRef.upsert(ref) *> ClubRefSkip.deleteId(club.clubId)
+            }
+            _ <- ctx.clubsResolvedDb.update(_ + 1)
+            _ <- ZIO.logDebug(s"  ${club.slug}: resolved via DB")
+          } yield true
         case None =>
           ctx.client.getCacheable[ApiClubMatches](ApiClubMatches.getUrl(club.slug)).flatMap { result =>
             def iterate(clubMatches: ApiClubMatches): RIO[ProgressDisplay & PostgresClient, Boolean] =
@@ -246,9 +274,11 @@ private[ref] object RefResolution {
                 }
               }
             unchangedGate(result, ClubRefSkip.selectId(club.clubId))(
-              ctx.clubMatchesUnchanged.update(_ + 1) *>
-                ZIO.logDebug(s"  ${club.slug}: club-matches unchanged, skipping candidate iteration") *>
-                skipClub(ctx, club, RefSkipReason.ResolutionFailed).as(false)
+              for {
+                _ <- ctx.clubMatchesUnchanged.update(_ + 1)
+                _ <- ZIO.logDebug(s"  ${club.slug}: club-matches unchanged, skipping candidate iteration")
+                _ <- skipClub(ctx, club, RefSkipReason.ResolutionFailed)
+              } yield false
             )(iterate)
           }
       }
@@ -265,13 +295,20 @@ private[ref] object RefResolution {
               ZIO.logInfo(s"  ${club.slug}: slug rename recovered → $fresh; retrying resolution") *>
                 resolveClub(ctx, club.copy(slug = fresh))
             case None =>
-              ZIO.logWarning(s"  ${club.slug}: 404 — ${e.safeMessage}") *>
-                skipClub(ctx, club, RefSkipReason.NotFound, Some(e.safeMessage)).as(false)
+              for {
+                _ <- ZIO.logWarning(s"  ${club.slug}: 404 — ${e.safeMessage}")
+                _ <- skipClub(ctx, club, RefSkipReason.NotFound, Some(e.safeMessage))
+              } yield false
           }
         } yield result
+      case e: NetworkUnavailableException =>
+        // Systemic network/DNS outage — abort rather than record a bogus ApiError skip (symmetric to resolvePlayer).
+        ZIO.fail(e)
       case error =>
-        ZIO.logWarning(s"  ${club.slug}: error — ${error.safeMessage}") *>
-          skipClub(ctx, club, RefSkipReason.ApiError, Some(error.safeMessage)).as(false)
+        for {
+          _ <- ZIO.logWarning(s"  ${club.slug}: error — ${error.safeMessage}")
+          _ <- skipClub(ctx, club, RefSkipReason.ApiError, Some(error.safeMessage))
+        } yield false
     }
 
   private def tryClubMatches(
@@ -294,15 +331,21 @@ private[ref] object RefResolution {
       case true => ZIO.succeed(false)
       case false =>
         fetchMatch(ctx, parsed.matchId, parsed.isLive).foldZIO(
-          error => recordFailedUrl(ctx, parsed.matchUrl, error, "club").as(false),
+          error =>
+            NetworkUnavailableException.recoverUnless(error)(
+              recordFailedUrl(ctx, parsed.matchUrl, error, "club").as(false)
+            ),
           teams =>
             RefHelpers.findClubIsTeam1(teams, club.slug) match {
               case None => ZIO.succeed(false)
               case Some(isTeam1) =>
                 val ref = ClubMatchRef(club.clubId, parsed.matchId, parsed.isLive, isTeam1)
-                withTransaction {
-                  ClubMatchRef.upsert(ref) *> ClubRefSkip.deleteId(club.clubId)
-                } *> ctx.clubsResolvedApi.update(_ + 1).as(true)
+                for {
+                  _ <- withTransaction {
+                    ClubMatchRef.upsert(ref) *> ClubRefSkip.deleteId(club.clubId)
+                  }
+                  _ <- ctx.clubsResolvedApi.update(_ + 1)
+                } yield true
             }
         )
     }
@@ -379,12 +422,17 @@ private[ref] object RefResolution {
   )(onVerified: => RIO[PostgresClient, ResolveResult]): RIO[ProgressDisplay & PostgresClient, ResolveResult] =
     verifyPlayerId(ctx.client, player.username, player.playerId).foldZIO(
       error =>
-        ZIO.logWarning(s"  ${player.username}: verification error — ${error.safeMessage}").as(ResolveResult.NotFound),
+        NetworkUnavailableException.recoverUnless(error)(
+          ZIO.logWarning(s"  ${player.username}: verification error — ${error.safeMessage}").as(ResolveResult.NotFound)
+        ),
       {
         case Left(actualId) =>
-          ZIO.logWarning(
-            s"  ${player.username}: player_id mismatch (expected ${player.playerId}, actual $actualId), skipping"
-          ) *> ctx.skippedPlayers.update(_ :+ SkippedPlayer(player.playerId, player.username)).as(ResolveResult.SkipPlayer)
+          for {
+            _ <- ZIO.logWarning(
+              s"  ${player.username}: player_id mismatch (expected ${player.playerId}, actual $actualId), skipping"
+            )
+            _ <- ctx.skippedPlayers.update(_ :+ SkippedPlayer(player.playerId, player.username))
+          } yield ResolveResult.SkipPlayer
         case Right(()) => onVerified
       }
     )
@@ -428,8 +476,10 @@ private[ref] object RefResolution {
       dbRef <- ClubMatchBoard.inferPlayerMatchRef(player.playerId)
       resolved <- dbRef match {
         case Some(ref) =>
-          PlayerMatchRef.upsert(ref) *>
-            ZIO.logDebug(s"  ${player.username}: upgraded via DB").as(true)
+          for {
+            _ <- PlayerMatchRef.upsert(ref)
+            _ <- ZIO.logDebug(s"  ${player.username}: upgraded via DB")
+          } yield true
         case None =>
           resolvePlayerViaMatch(ctx, player, countResolved = false).map {
             case ResolveResult.Resolved => true
@@ -487,8 +537,10 @@ private[ref] object RefResolution {
               if (playerIdx < 0) { ZIO.succeed(None) }
               else {
                 val ref = PlayerTournamentRef(trp.playerId, slug, playerIdx)
-                PlayerTournamentRef.upsert(ref) *>
-                  ZIO.logDebug(s"  ${trp.username}: tournament ref upgraded to $slug").as(Some(true))
+                for {
+                  _ <- PlayerTournamentRef.upsert(ref)
+                  _ <- ZIO.logDebug(s"  ${trp.username}: tournament ref upgraded to $slug")
+                } yield Some(true)
               }
             }
           )

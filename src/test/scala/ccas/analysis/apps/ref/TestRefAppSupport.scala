@@ -3,7 +3,7 @@ package ccas.analysis.apps.ref
 import java.time.{Instant, LocalDateTime, ZoneOffset}
 
 import com.augustnagro.magnum.sql
-import zio.{RIO, Scope, ZIO, ZLayer}
+import zio.{durationInt, RIO, Scope, ZIO, ZLayer}
 import zio.http.*
 
 import ccas.analysis.tables.*
@@ -104,10 +104,52 @@ object TestRefAppSupport {
     responses: Map[String, String],
     failures: Set[String] = Set.empty,
     notFound: Map[String, String] = Map.empty
-  ): RIO[PostgresClient, ChessComClient] = {
+  ): RIO[PostgresClient, ChessComClient] =
+    TestChessComClientSupport.fakeClient(refRoutes(responses, failures, notFound), permits = 5)
+
+  /** DNS/network failure as it surfaces from the JVM resolver (`UnknownHostException`, the exact prod message). The
+    * real `ChessComClient` wraps this into `NetworkUnavailableException` after its retry schedule exhausts.
+    */
+  private def networkDownCause: Throwable =
+    new java.net.UnknownHostException("api.chess.com: Temporary failure in name resolution")
+
+  /** A client whose every request fails with a DNS error — simulates a machine-wide network outage. Built on
+    * `makeClient` (not the routes-based `fakeClient`) because only a failing `handler` can produce a transport-level
+    * connection error; small retry knobs keep the exhaustion fast under live-clock tests.
+    */
+  def networkDownChessComClient: RIO[Scope & PostgresClient, ChessComClient] =
+    TestChessComClientSupport
+      .makeClient(handler = _ => ZIO.fail(networkDownCause), retryBase = 10.millis, maxConnectionRetries = 2, permits = 5)
+      .map(_._1)
+
+  /** A client that serves `responses` normally but fails the requests matching `isDown` with a DNS error. Lets a test
+    * exercise the outage reaching a deeper fetch (e.g. a served match-listing whose per-match fetch is down).
+    */
+  def chessComClientWithOutage(
+    responses: Map[String, String],
+    isDown: Request => Boolean,
+    failures: Set[String] = Set.empty,
+    notFound: Map[String, String] = Map.empty
+  ): RIO[Scope & PostgresClient, ChessComClient] = {
+    val routes = refRoutes(responses, failures, notFound)
+    TestChessComClientSupport
+      .makeClient(
+        handler = req => if (isDown(req)) ZIO.fail(networkDownCause) else ZIO.scoped(routes.runZIO(req)),
+        retryBase = 10.millis,
+        maxConnectionRetries = 2,
+        permits = 5
+      )
+      .map(_._1)
+  }
+
+  private def refRoutes(
+    responses: Map[String, String],
+    failures: Set[String],
+    notFound: Map[String, String]
+  ): Routes[Any, Response] = {
     def maybeNotFound(key: String): Option[Response] =
       notFound.get(key).map(body => Response.json(body).copy(status = Status.NotFound))
-    val routes: Routes[Any, Response] = Routes(
+    Routes(
       Method.GET / "pub" / "player" / string("username") / "tournaments" -> handler { (username: String, _: Request) =>
         if (failures.contains(username)) Response(status = Status.InternalServerError)
         else maybeNotFound(s"player/$username/tournaments").getOrElse(
@@ -142,7 +184,6 @@ object TestRefAppSupport {
           responses.get(s"tournament/$slug/$round").fold(Response.json("""{"code": 0, "message": "Resource \"\" not found."}""").copy(status = Status.NotFound))(Response.json(_))
       }
     )
-    TestChessComClientSupport.fakeClient(routes, permits = 5)
   }
 
   // --- DB helpers ---
