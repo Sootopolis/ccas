@@ -32,12 +32,8 @@ object MembershipApp extends ZIOAppDefault {
         mode match {
           case ReconcileOnly =>
             for {
-              result      <- reconcile(clubName)
-              club        <- Club.selectBySlug(clubName)
-                               .someOrFail(new IllegalStateException(s"Club '$clubName' not found after reconcile"))
-              invitations <- MembershipReport.lookupJoinInvitations(club.clubId, result.changes.toList)
-              _           <- MembershipReport.reportReconciliation(result, invitations)
-              _           <- OutputFile.writeAndLog(MEMBERSHIP, clubName, MembershipReport.formatReconciliation(result, invitations))
+              (result, invitations) <- reconcileAndReport(clubName, trustUsernames = true, RunTrigger.Cli, jobRunId = None)
+              _ <- OutputFile.writeAndLog(MEMBERSHIP, clubName, MembershipReport.formatReconciliation(result, invitations))
             } yield ()
           case SinceNow(since) =>
             for {
@@ -164,9 +160,32 @@ object MembershipApp extends ZIOAppDefault {
         dbState.membersByPlayerId.get(pid).map(_.member)
       })
     } yield mergeResults(
-      phaseB, phaseC, currentMemberCount, previousMemberCount, startedAt, completedAt,
+      clubId, phaseB, phaseC, currentMemberCount, previousMemberCount, startedAt, completedAt,
       externalChanges, externalMemberships
     )
+
+  // Shared by the CLI ReconcileOnly path and the server membership job (JobRoutes): reconcile, then emit the
+  // reconciliation summary via reportReconciliation so it lands in the per-job log / streams to the CLI. Returns the
+  // result and join invitations so the CLI can additionally write its out/ report (the server discards the tuple — its
+  // summary is already logged). Uses result.clubId rather than re-selecting by clubSlug, which would 404 a club whose
+  // slug reconcile resolved through a rename. The invitation lookup is best-effort: a DB hiccup there must not flip an
+  // already-committed reconcile to a failed job, so it logs and falls back to no invite annotations.
+  def reconcileAndReport(
+    clubSlug: ClubSlug,
+    trustUsernames: Boolean,
+    trigger: RunTrigger,
+    jobRunId: Option[JobRunId]
+  ): RIO[ProgressDisplay & ChessComClient & PostgresClient, (ReconciliationResult, Map[PlayerId, Instant])] =
+    for {
+      result      <- reconcile(clubSlug, trustUsernames, trigger = trigger, jobRunId = jobRunId)
+      invitations <- MembershipReport.lookupJoinInvitations(result.clubId, result.changes.toList)
+                       .catchAll(e =>
+                         ZIO
+                           .logWarning(s"Join-invitation lookup failed for club ${result.clubId}: ${e.getMessage}")
+                           .as(Map.empty[PlayerId, Instant])
+                       )
+      _           <- MembershipReport.reportReconciliation(result, invitations)
+    } yield (result, invitations)
 
   private[membership] def buildDbState(clubId: ClubId): RIO[PostgresClient, DbState] =
     for {
@@ -200,6 +219,7 @@ object MembershipApp extends ZIOAppDefault {
   // --- Merge & Persist ---
 
   private[membership] def mergeResults(
+    clubId: ClubId,
     b: MembershipClassify.PhaseBResult,
     c: MembershipClassify.PhaseCResult,
     currentMemberCount: Int,
@@ -210,6 +230,7 @@ object MembershipApp extends ZIOAppDefault {
     externalMemberships: Chunk[ClubMember] = Chunk.empty
   ): ReconciliationResult =
     ReconciliationResult(
+      clubId = clubId,
       changes = b.changes ++ c.changes ++ externalChanges,
       newPlayers = b.newPlayers,
       updatedPlayers = b.updatedPlayers ++ c.updatedPlayers,

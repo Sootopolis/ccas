@@ -150,12 +150,12 @@ object JobRoutes {
             slug,
             Some(body.toJson),
             jobRunId =>
-              MembershipApp.reconcile(
+              MembershipApp.reconcileAndReport(
                 slug,
                 body.trustUsernames.getOrElse(true),
-                trigger = RunTrigger.Api,
-                jobRunId = jobRunId
-              )
+                RunTrigger.Api,
+                jobRunId
+              ).unit
           )
         )
       } yield jsonResponse(Status.Ok, results)).pipe(withErrorHandling)

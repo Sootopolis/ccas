@@ -59,3 +59,7 @@ build/
 .bsp/
 /.idea/
 .scala-build/
+
+### Runtime ###
+# Server per-job logs (job-logs.directory = logs/jobs in application.conf)
+logs/
