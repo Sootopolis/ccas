@@ -85,8 +85,8 @@ object CliCommand {
     params: Option[String]
   ) extends ServerCommand
   final case class ScheduleRemove(server: String, id: Long) extends ServerCommand
-  final case class ClubsAdd(server: String, club: Option[String]) extends ServerCommand
-  final case class ClubsRemove(server: String, club: Option[String]) extends ServerCommand
+  final case class ClubsAdd(server: String, slug: String) extends ServerCommand
+  final case class ClubsRemove(server: String, slug: String) extends ServerCommand
   final case class ClubsList(server: String) extends ServerCommand
 
   // --- Shared options ---
@@ -268,15 +268,17 @@ object CliCommand {
       .withHelp("Manage scheduled jobs")
       .subcommands(scheduleList(default), scheduleAdd(default), scheduleRemove(default))
 
+  // `club add`/`remove` manage the membership set itself, so the club is the direct operand — a required positional
+  // slug (like `git remote add <name>`), not the `--club` context option the operation commands use.
   private def clubsAdd(default: String): Command[CliCommand] =
-    Command("add", serverOpt(default) ++ clubOpt)
-      .withHelp("Mark a club as one you manage with CCAS (--club, or the current club)")
-      .map { case (server, club) => ClubsAdd(server, club) }
+    Command("add", serverOpt(default), Args.text("slug") ?? "Club slug (URL name) to start managing")
+      .withHelp("Mark a club as one you manage with CCAS")
+      .map { case (server, slug) => ClubsAdd(server, slug) }
 
   private def clubsRemove(default: String): Command[CliCommand] =
-    Command("remove", serverOpt(default) ++ clubOpt)
-      .withHelp("Remove a club from the ones you manage (--club, or the current club)")
-      .map { case (server, club) => ClubsRemove(server, club) }
+    Command("remove", serverOpt(default), Args.text("slug") ?? "Club slug (URL name) to stop managing")
+      .withHelp("Remove a club from the ones you manage")
+      .map { case (server, slug) => ClubsRemove(server, slug) }
 
   private def clubsList(default: String): Command[CliCommand] =
     Command("list", serverOpt(default))

@@ -106,22 +106,23 @@ object TestCliParser extends ZIOSpecDefault {
     test("schedule remove parses the id") {
       parsed("schedule", "remove", "7").map(c => assertTrue(c.contains(CliCommand.ScheduleRemove(DefaultServer, 7L))))
     },
-    test("club add parses --club") {
-      parsed("club", "add", "--club", "team-alpha").map(c =>
-        assertTrue(c.contains(CliCommand.ClubsAdd(DefaultServer, Some("team-alpha"))))
+    test("club add parses the slug positional") {
+      parsed("club", "add", "team-alpha").map(c =>
+        assertTrue(c.contains(CliCommand.ClubsAdd(DefaultServer, "team-alpha")))
       )
     },
-    test("club remove parses --club") {
-      parsed("club", "remove", "--club", "team-alpha").map(c =>
-        assertTrue(c.contains(CliCommand.ClubsRemove(DefaultServer, Some("team-alpha"))))
+    test("club remove parses the slug positional") {
+      parsed("club", "remove", "team-alpha").map(c =>
+        assertTrue(c.contains(CliCommand.ClubsRemove(DefaultServer, "team-alpha")))
       )
     },
     test("club list parses with no slug and defaults the server") {
       parsed("club", "list").map(c => assertTrue(c.contains(CliCommand.ClubsList(DefaultServer))))
     },
-    // No --club now parses (None); the "no club" error is the Dispatcher's job against current_club.
-    test("club add with no --club parses to None") {
-      parsed("club", "add").map(c => assertTrue(c.contains(CliCommand.ClubsAdd(DefaultServer, None))))
+    // `club add`/`remove` manage the set, so the slug is a required operand — no slug fails validation (not a
+    // current_club fallback like the operation commands).
+    test("club add with no slug fails validation") {
+      parse("club", "add").exit.map(e => assertTrue(e.isFailure))
     },
     test("completion parses the shell argument (no server)") {
       parsed("completion", "bash").map(c => assertTrue(c.contains(CliCommand.Completion("bash"))))

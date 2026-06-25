@@ -84,9 +84,9 @@ object CompletionSpec {
       Other
     ),
     Leaf(List("schedule", "remove"), List(server), List(server), Other),
-    Leaf(List("clubs", "add"), List(server, clubFlag), List(server, clubFlag), NoArgs),
-    Leaf(List("clubs", "remove"), List(server, clubFlag), List(server, clubFlag), NoArgs),
-    Leaf(List("clubs", "list"), List(server), List(server), NoArgs),
+    Leaf(List("club", "add"), List(server), List(server), Slug),
+    Leaf(List("club", "remove"), List(server), List(server), Slug),
+    Leaf(List("club", "list"), List(server), List(server), NoArgs),
     Leaf(List("completion"), List("--help"), Nil, Shell)
   )
 
@@ -132,8 +132,8 @@ object CompletionSpec {
     List("jobs")                -> "List recent jobs and their status",
     List("logs")                -> "Poll a job's status and logs until it finishes",
     List("completion")          -> "Emit a shell completion script (bash, zsh, or fish)",
-    List("club", "add")         -> "Mark a club as one you manage with CCAS (--club, or the current club)",
-    List("club", "remove")      -> "Remove a club from the ones you manage (--club, or the current club)",
+    List("club", "add")         -> "Mark a club as one you manage with CCAS",
+    List("club", "remove")      -> "Remove a club from the ones you manage",
     List("club", "list")        -> "List the clubs you manage with CCAS",
     List("blacklist", "add")    -> "Blacklist one or more usernames for a club",
     List("blacklist", "list")   -> "List a club's blacklist entries",

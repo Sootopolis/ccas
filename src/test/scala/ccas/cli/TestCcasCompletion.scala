@@ -102,6 +102,15 @@ object TestCcasCompletion extends ZIOSpecDefault {
         positionalOf("completion") == PositionalKind.Shell,
         positionalOf("blacklist", "add") == PositionalKind.Other
       )
+    },
+    // Each group's declared children must have a matching leaf under that group name. Guards the class of bug where a
+    // group is renamed (`clubs` -> `club`) but its leaf `path`s aren't, leaving `leavesOf(group)` empty so the group's
+    // subcommands silently lose argument completion and summaries.
+    test("every group's children have a matching leaf under the group name") {
+      val mismatches = CompletionSpec.groups.filter(g =>
+        CompletionSpec.leavesOf(g.name).map(_.name).toSet != g.children.toSet
+      )
+      assertTrue(mismatches.isEmpty)
     }
   ) @@ TestAspect.sequential
 }
