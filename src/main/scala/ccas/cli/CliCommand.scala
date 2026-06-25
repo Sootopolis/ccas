@@ -39,6 +39,12 @@ object CliCommand {
   case object Stop extends CliCommand
   final case class Completion(shell: String) extends CliCommand
   final case class Use(slug: String) extends CliCommand
+  final case class ConfigGet(key: String) extends CliCommand
+  final case class ConfigSet(key: String, value: String) extends CliCommand
+  final case class ConfigUnset(key: String) extends CliCommand
+  final case class ConfigList(showSecrets: Boolean) extends CliCommand
+  case object ConfigPath extends CliCommand
+  case object ConfigInit extends CliCommand
 
   // Server commands — dispatched as HTTP calls by `Dispatcher`. Club-targeting fields hold the *parsed* request
   // (`clubs`/`club` may be empty/None); `Dispatcher` resolves them against `--all` and the config's `current_club`.
@@ -295,6 +301,51 @@ object CliCommand {
       .withHelp("Emit a shell completion script (bash, zsh, or fish)")
       .map(Completion.apply)
 
+  // `ccas config` — local management of the server-bootstrap env file (ccas.env). No `--server`: it edits a local file,
+  // not a running server. Named `configCmd` because `config` is already the zio-cli `CliConfig` val below.
+  private val showSecretsOpt: Options[Boolean] =
+    Options.boolean("show-secrets") ?? "Reveal secret values (DATABASE_URL, DB_PASSWORD) instead of ****"
+
+  private val configGet: Command[CliCommand] =
+    Command("get", Args.text("key") ?? "Env var name to read")
+      .withHelp("Print one value from the server config file (ccas.env)")
+      .map(ConfigGet.apply)
+
+  private val configSet: Command[CliCommand] =
+    Command("set", Args.text("key") ++ Args.text("value"))
+      .withHelp("Set a value in the server config file (written 0600); warns on an unknown key")
+      .map { case (key, value) => ConfigSet(key, value) }
+
+  private val configUnset: Command[CliCommand] =
+    Command("unset", Args.text("key") ?? "Env var name to remove")
+      .withHelp("Remove a value from the server config file")
+      .map(ConfigUnset.apply)
+
+  private val configList: Command[CliCommand] =
+    Command("list", showSecretsOpt)
+      .withHelp("List known settings and current values (secrets redacted unless --show-secrets)")
+      .map(ConfigList.apply)
+
+  private val configShow: Command[CliCommand] =
+    Command("show", showSecretsOpt)
+      .withHelp("Alias for 'config list'")
+      .map(ConfigList.apply)
+
+  private val configPath: Command[CliCommand] =
+    Command("path")
+      .withHelp("Print the server config file path")
+      .map(_ => ConfigPath)
+
+  private val configInit: Command[CliCommand] =
+    Command("init")
+      .withHelp("Interactive wizard to create the server config file (ccas.env)")
+      .map(_ => ConfigInit)
+
+  private val configCmd: Command[CliCommand] =
+    Command("config")
+      .withHelp("Manage the local server-bootstrap config file (ccas.env)")
+      .subcommands(configGet, configSet, configUnset, configList, configShow, configPath, configInit)
+
   /** zio-cli config for the `ccas` command tree. `finalCheckBuiltIn = false` works around a zio-cli 0.8.1 bug: with
     * the default `true`, `ccas <sub> --help` renders the FIRST subcommand's help (`serve`) instead of the named one.
     * `Command.Subcommands.parse` feeds the child `OrElse` a `finalCheckBuiltIn = true` config, so
@@ -321,6 +372,7 @@ object CliCommand {
       blacklist(defaultServer),
       schedule(defaultServer),
       clubs(defaultServer),
+      configCmd,
       completion
     )
 }

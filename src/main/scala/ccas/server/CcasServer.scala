@@ -6,6 +6,7 @@ import com.typesafe.config.ConfigFactory
 import zio.{Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
 import zio.http.{Routes, Server}
 
+import ccas.server.config.{ServerEnvOverlay, ServerEnvPaths}
 import ccas.server.jobs.JobRunner
 import ccas.server.routes.{
   BlacklistRoutes,
@@ -23,37 +24,42 @@ import ccas.utils.sql.PostgresClient
 
 object CcasServer extends ZIOAppDefault {
 
-  override def run: ZIO[Any & ZIOAppArgs & Scope, Any, Any] = {
-    val config = ConfigFactory.load()
-    val host   = config.getString("server.host")
-    val port   = config.getInt("server.port")
+  // Apply the ccas.env overlay (file → system properties for any env var not already set) BEFORE the first
+  // ConfigFactory.load below, so the standalone `ccas-server` binary (and the systemd unit) boot from `ccas config`'s
+  // file without hand-exported env. `suspendSucceed` defers the config read until the overlay effect has run. Foreground
+  // `ccas serve` already runs the overlay in `Main` before this; the only-if-absent guard makes this call idempotent.
+  override def run: ZIO[Any & ZIOAppArgs & Scope, Any, Any] =
+    ServerEnvOverlay(ServerEnvPaths.file) *> ZIO.suspendSucceed {
+      val config = ConfigFactory.load()
+      val host   = config.getString("server.host")
+      val port   = config.getInt("server.port")
 
-    val routes: Routes[JobRunner & ChessComClient & PostgresClient, Nothing] =
-      List(
-        HealthRoutes.routes,
-        JobRoutes.routes,
-        ScheduleRoutes.routes,
-        BlacklistRoutes.routes,
-        RecruitmentCriteriaRoutes.routes,
-        ManagedClubRoutes.routes,
-        ClubRoutes.routes
-      ).reduce(_ ++ _)
+      val routes: Routes[JobRunner & ChessComClient & PostgresClient, Nothing] =
+        List(
+          HealthRoutes.routes,
+          JobRoutes.routes,
+          ScheduleRoutes.routes,
+          BlacklistRoutes.routes,
+          RecruitmentCriteriaRoutes.routes,
+          ManagedClubRoutes.routes,
+          ClubRoutes.routes
+        ).reduce(_ ++ _)
 
-    (for {
-      _         <- pidFileManaged
-      scheduler <- ZIO.service[JobScheduler]
-      _         <- scheduler.start
-      _         <- Server.serve(routes)
-    } yield ()).provideSome[Scope](
-      ProgressDisplay.live(showProgress = false),
-      ChessComClient.live("server"),
-      HttpClientLayer.live,
-      PostgresClient.live(onInit = ServerTables.ensureTables),
-      JobRunner.live,
-      JobScheduler.live,
-      Server.defaultWith(_.binding(host, port))
-    )
-  }
+      (for {
+        _         <- pidFileManaged
+        scheduler <- ZIO.service[JobScheduler]
+        _         <- scheduler.start
+        _         <- Server.serve(routes)
+      } yield ()).provideSome[Scope](
+        ProgressDisplay.live(showProgress = false),
+        ChessComClient.live("server"),
+        HttpClientLayer.live,
+        PostgresClient.live(onInit = ServerTables.ensureTables),
+        JobRunner.live,
+        JobScheduler.live,
+        Server.defaultWith(_.binding(host, port))
+      )
+    }
 
   /** When launched detached (`ccas serve --detach`), the CLI parent passes the pid-file path via `CCAS_PID_FILE`. We
     * write our OWN pid here on boot and delete it on shutdown — the server owns its pid-file lifecycle, so the path is
