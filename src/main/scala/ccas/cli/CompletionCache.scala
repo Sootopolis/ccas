@@ -43,6 +43,16 @@ object CompletionCache {
       }
     }.orElseSucceed(true)
 
+  /** Read the cached club slugs (one per line), best-effort: any IO error or a missing file yields `Nil`. Used by
+    * `ccas use-club` for an offline "unknown slug" warning — never a source of truth, just a typo hint.
+    */
+  def readClubs: UIO[List[String]] =
+    ZIO.attemptBlocking {
+      val f = XdgPaths.clubsFile
+      if (Files.exists(f)) { Files.readAllLines(f).asScala.toList.map(_.trim).filter(_.nonEmpty) }
+      else { Nil }
+    }.orElseSucceed(Nil)
+
   /** Overwrite the clubs cache with one slug per line (the endpoint already sorts them). */
   def writeClubs(slugs: List[String]): UIO[Unit] =
     ZIO.attemptBlocking {

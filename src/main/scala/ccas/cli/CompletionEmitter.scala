@@ -22,7 +22,6 @@ object CompletionEmitter {
   // --- shared spec-derived fragments ---
 
   private def posTag(k: PositionalKind): String = k match {
-    case PositionalKind.Slugs => "slugs"
     case PositionalKind.Slug  => "slug"
     case PositionalKind.JobId => "jobid"
     case PositionalKind.Shell => "shell"
@@ -118,8 +117,9 @@ object CompletionEmitter {
       "    esac",
       "  done",
       "",
-      "  # Right after a value-taking flag: let the user type the value, offer nothing.",
+      "  # Right after --club: offer cached club slugs. Right after any other value flag: offer nothing.",
       "  case \"$prev\" in",
+      "    " + CompletionSpec.clubFlag + ") COMPREPLY=( $(compgen -W \"$(_ccas_cache clubs.txt)\" -- \"$cur\") ); return ;;",
       "    " + valueGuard + ") return ;;",
       "  esac",
       "",
@@ -148,7 +148,6 @@ object CompletionEmitter {
       "  local posIndex=$(( posn - base ))",
       "",
       "  case \"$pos\" in",
-      "    slugs) COMPREPLY=( $(compgen -W \"$(_ccas_cache clubs.txt)\" -- \"$cur\") ) ;;",
       "    slug)  (( posIndex == 0 )) && COMPREPLY=( $(compgen -W \"$(_ccas_cache clubs.txt)\" -- \"$cur\") ) ;;",
       "    jobid) (( posIndex == 0 )) && COMPREPLY=( $(compgen -W \"$(_ccas_cache recent-jobs.txt)\" -- \"$cur\") ) ;;",
       "    shell) (( posIndex == 0 )) && COMPREPLY=( $(compgen -W \"bash zsh fish\" -- \"$cur\") ) ;;",
@@ -204,6 +203,7 @@ object CompletionEmitter {
       "  done",
       "",
       "  case \"$prev\" in",
+      "    " + CompletionSpec.clubFlag + ") compadd -- ${(f)\"$(_ccas_cache clubs.txt)\"}; return ;;",
       "    " + valueGuard + ") return ;;",
       "  esac",
       "",
@@ -229,7 +229,6 @@ object CompletionEmitter {
       "  local posIndex=$(( posn - base ))",
       "",
       "  case \"$pos\" in",
-      "    slugs) compadd -- ${(f)\"$(_ccas_cache clubs.txt)\"} ;;",
       "    slug)  (( posIndex == 0 )) && compadd -- ${(f)\"$(_ccas_cache clubs.txt)\"} ;;",
       "    jobid) (( posIndex == 0 )) && compadd -- ${(f)\"$(_ccas_cache recent-jobs.txt)\"} ;;",
       "    shell) (( posIndex == 0 )) && compadd -- bash zsh fish ;;",
@@ -257,21 +256,22 @@ object CompletionEmitter {
     // `--help` is on every command (zio-cli built-in); append it for parity with the bash/zsh scripts.
     (leaf.flags :+ "--help").distinct.map { f =>
       val rArg = if (leaf.valueFlags.contains(f)) " -r" else ""
-      "complete -c ccas -n '" + cond + "' -l " + fishLong(f) + rArg
+      // `--club` takes a club slug as its value: offer the cached slugs as its argument candidates.
+      val clubArg = if (f == CompletionSpec.clubFlag) " -a '(__fish_ccas_cache clubs.txt)'" else ""
+      "complete -c ccas -n '" + cond + "' -l " + fishLong(f) + rArg + clubArg
     }
   }
 
-  // NOTE: unlike the bash/zsh scripts (which track a positional index), fish offers club slugs at *every* positional of
-  // a single-slug command, not just the first — fish has no portable positional-count primitive, and the over-suggestion
-  // is cosmetic (e.g. `blacklist remove <slug> <username>` briefly offers slugs at the username). Slugs/JobId/Shell are
-  // all cache-or-static candidates fish filters by the typed prefix, so a stray suggestion is harmless.
+  // NOTE: fish offers a command's positional candidates (club slugs for `use-club`, job ids for `logs`, shells for
+  // `completion`) without a positional-count guard — fish has no portable positional primitive. Harmless: each such
+  // command takes exactly one positional, and the candidates are prefix-filtered by what's typed.
   private def fishPosLine(leaf: Leaf): Option[String] = {
     val cond = fishCond(leaf)
     val cache = leaf.positional match {
-      case PositionalKind.Slugs | PositionalKind.Slug => Some("(__fish_ccas_cache clubs.txt)")
-      case PositionalKind.JobId                       => Some("(__fish_ccas_cache recent-jobs.txt)")
-      case PositionalKind.Shell                       => Some("bash zsh fish")
-      case _                                          => None
+      case PositionalKind.Slug  => Some("(__fish_ccas_cache clubs.txt)")
+      case PositionalKind.JobId => Some("(__fish_ccas_cache recent-jobs.txt)")
+      case PositionalKind.Shell => Some("bash zsh fish")
+      case _                    => None
     }
     cache.map(a => "complete -c ccas -n '" + cond + "' -f -a '" + a + "'")
   }

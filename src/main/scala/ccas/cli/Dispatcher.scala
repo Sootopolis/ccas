@@ -24,10 +24,10 @@ object Dispatcher {
 
   private val MaxJobWait: Duration = 60.minutes
 
-  def dispatch(cmd: CliCommand.ServerCommand): UIO[ExitCode] =
+  def dispatch(cmd: CliCommand.ServerCommand, currentClub: Option[String]): UIO[ExitCode] =
     CcasApiClient
       .live(cmd.server)
-      .flatMap(api => runCommand(api, JobFollower(api, MaxJobWait), cmd).tap(_ => refreshClubsCache(api)))
+      .flatMap(api => runCommand(api, JobFollower(api, MaxJobWait), cmd, currentClub).tap(_ => refreshClubsCache(api)))
       .provide(Client.default)
       .catchAll {
         case e: CliError  => Console.printLineError(s"error: ${e.message}").orDie.as(e.exitCode)
@@ -54,38 +54,51 @@ object Dispatcher {
       }
     }
 
-  private def runCommand(api: CcasApiClient, follower: JobFollower, cmd: CliCommand.ServerCommand): Task[Int] = cmd match {
-    case CliCommand.Membership(_, slugs, trust) =>
-      api.postJson[MembershipRequest, List[ClubJobResult]](
-        "/api/jobs/membership",
-        MembershipRequest(toSlugs(slugs), trust)
-      ).flatMap(follower.handleBatch)
+  private def runCommand(
+    api: CcasApiClient,
+    follower: JobFollower,
+    cmd: CliCommand.ServerCommand,
+    currentClub: Option[String]
+  ): Task[Int] = cmd match {
+    case CliCommand.Membership(_, clubs, all, trust) =>
+      resolveClubs(api, clubs, all, currentClub).flatMap(slugs =>
+        api.postJson[MembershipRequest, List[ClubJobResult]](
+          "/api/jobs/membership",
+          MembershipRequest(slugs, trust)
+        ).flatMap(follower.handleBatch)
+      )
 
-    case CliCommand.History(_, slugs, full, includeFinished, refresh, refreshMinHours) =>
-      api.postJson[HistoryRequest, List[ClubJobResult]](
-        "/api/jobs/history",
-        HistoryRequest(toSlugs(slugs), flag(full), flag(includeFinished), flag(refresh), refreshMinHours)
-      ).flatMap(follower.handleBatch)
+    case CliCommand.History(_, clubs, all, full, includeFinished, refresh, refreshMinHours) =>
+      resolveClubs(api, clubs, all, currentClub).flatMap(slugs =>
+        api.postJson[HistoryRequest, List[ClubJobResult]](
+          "/api/jobs/history",
+          HistoryRequest(slugs, flag(full), flag(includeFinished), flag(refresh), refreshMinHours)
+        ).flatMap(follower.handleBatch)
+      )
 
-    case CliCommand.Recruit(_, slug, alias, target, cumulative, sourceClubs, timeLimitMinutes, explore) =>
-      api.postJson[RecruitmentRequest, JobResult](
-        "/api/jobs/recruitment",
-        RecruitmentRequest(
-          ClubSlug(slug),
-          alias,
-          target,
-          flag(cumulative),
-          Option.when(sourceClubs.nonEmpty)(sourceClubs.map(ClubSlug(_))),
-          timeLimitMinutes,
-          explore
-        )
-      ).flatMap(follower.handleSingle(slug, _))
+    case CliCommand.Recruit(_, club, alias, target, cumulative, sourceClubs, timeLimitMinutes, explore) =>
+      resolveClub(club, currentClub).flatMap(slug =>
+        api.postJson[RecruitmentRequest, JobResult](
+          "/api/jobs/recruitment",
+          RecruitmentRequest(
+            slug,
+            alias,
+            target,
+            flag(cumulative),
+            Option.when(sourceClubs.nonEmpty)(sourceClubs.map(ClubSlug(_))),
+            timeLimitMinutes,
+            explore
+          )
+        ).flatMap(follower.handleSingle(ClubSlug.unwrap(slug), _))
+      )
 
-    case CliCommand.Stats(_, slug, since, until) =>
-      api.postJson[StatsRequest, ClubJobResult](
-        "/api/jobs/stats",
-        StatsRequest(ClubSlug(slug), since, until)
-      ).flatMap(follower.handleClubSingle)
+    case CliCommand.Stats(_, club, since, until) =>
+      resolveClub(club, currentClub).flatMap(slug =>
+        api.postJson[StatsRequest, ClubJobResult](
+          "/api/jobs/stats",
+          StatsRequest(slug, since, until)
+        ).flatMap(follower.handleClubSingle)
+      )
 
     case CliCommand.Jobs(_, limit) =>
       api.getJson[List[JobStatusResponse]]("/api/jobs").flatMap(all => printJobs(limit.fold(all)(all.take)).as(0))
@@ -93,18 +106,25 @@ object Dispatcher {
     case CliCommand.Logs(_, jobId) =>
       follower.followJob(jobId)
 
-    case CliCommand.BlacklistAdd(_, slug, usernames, reason, months) =>
-      api.postUnit[CreateBlacklistRequest](
-        "/api/blacklist",
-        CreateBlacklistRequest(ClubSlug(slug), usernames.map(Username(_)), reason, months)
-      ) *> Console.printLine(s"blacklisted ${usernames.mkString(", ")} for $slug").orDie.as(0)
+    case CliCommand.BlacklistAdd(_, club, usernames, reason, months) =>
+      resolveClub(club, currentClub).flatMap(slug =>
+        api.postUnit[CreateBlacklistRequest](
+          "/api/blacklist",
+          CreateBlacklistRequest(slug, usernames.map(Username(_)), reason, months)
+        ) *> Console.printLine(s"blacklisted ${usernames.mkString(", ")} for ${ClubSlug.unwrap(slug)}").orDie.as(0)
+      )
 
-    case CliCommand.BlacklistList(_, slug) =>
-      api.getJson[List[BlacklistEntryResponse]](s"/api/blacklist/$slug").flatMap(entries => printBlacklist(entries).as(0))
+    case CliCommand.BlacklistList(_, club) =>
+      resolveClub(club, currentClub).flatMap(slug =>
+        api.getJson[List[BlacklistEntryResponse]](s"/api/blacklist/${ClubSlug.unwrap(slug)}")
+          .flatMap(entries => printBlacklist(entries).as(0))
+      )
 
-    case CliCommand.BlacklistRemove(_, slug, username) =>
-      api.delete(s"/api/blacklist/$slug/$username") *>
-        Console.printLine(s"removed $username from $slug blacklist").orDie.as(0)
+    case CliCommand.BlacklistRemove(_, club, username) =>
+      resolveClub(club, currentClub).flatMap(slug =>
+        api.delete(s"/api/blacklist/${ClubSlug.unwrap(slug)}/$username") *>
+          Console.printLine(s"removed $username from ${ClubSlug.unwrap(slug)} blacklist").orDie.as(0)
+      )
 
     case CliCommand.ScheduleList(_) =>
       api.getJson[List[ScheduleResponse]]("/api/schedules").flatMap(schedules => printSchedules(schedules).as(0))
@@ -118,13 +138,17 @@ object Dispatcher {
     case CliCommand.ScheduleRemove(_, id) =>
       api.delete(s"/api/schedules/$id") *> Console.printLine(s"deleted schedule $id").orDie.as(0)
 
-    case CliCommand.ClubsAdd(_, slug) =>
-      api.postUnit[MarkManagedRequest]("/api/managed-clubs", MarkManagedRequest(ClubSlug(slug))) *>
-        Console.printLine(s"now managing $slug").orDie.as(0)
+    case CliCommand.ClubsAdd(_, club) =>
+      resolveClub(club, currentClub).flatMap(slug =>
+        api.postUnit[MarkManagedRequest]("/api/managed-clubs", MarkManagedRequest(slug)) *>
+          Console.printLine(s"now managing ${ClubSlug.unwrap(slug)}").orDie.as(0)
+      )
 
-    case CliCommand.ClubsRemove(_, slug) =>
-      api.delete(s"/api/managed-clubs/$slug") *>
-        Console.printLine(s"stopped managing $slug").orDie.as(0)
+    case CliCommand.ClubsRemove(_, club) =>
+      resolveClub(club, currentClub).flatMap(slug =>
+        api.delete(s"/api/managed-clubs/${ClubSlug.unwrap(slug)}") *>
+          Console.printLine(s"stopped managing ${ClubSlug.unwrap(slug)}").orDie.as(0)
+      )
 
     case CliCommand.ClubsList(_) =>
       api.getJson[List[ManagedClubResponse]]("/api/managed-clubs").flatMap(clubs => printManagedClubs(clubs).as(0))
@@ -136,12 +160,22 @@ object Dispatcher {
       ZIO.foreachDiscard(clubs)(c => Console.printLine(s"${c.slug}  ${c.name}  marked=${c.markedAt}").orDie)
     }
 
-  // zio-cli's `repeat1` guarantees a non-empty list; the empty branch is unreachable (and caught by dispatch's
-  // defect net if a future parser change ever violated that).
-  private def toSlugs(slugs: List[String]): NonEmptyChunk[ClubSlug] =
-    NonEmptyChunk
-      .fromIterableOption(slugs.map(ClubSlug(_)))
-      .getOrElse(throw new IllegalStateException("membership/history require at least one slug"))
+  // Resolution lives in the pure, testable `ClubResolver`; the `--all` expansion's network call is injected here.
+  private def resolveClub(explicit: Option[String], currentClub: Option[String]): IO[CliError, ClubSlug] =
+    ClubResolver.single(explicit, currentClub)
+
+  private def resolveClubs(
+    api: CcasApiClient,
+    explicit: List[String],
+    all: Boolean,
+    currentClub: Option[String]
+  ): Task[NonEmptyChunk[ClubSlug]] =
+    ClubResolver.multi(
+      api.getJson[List[ManagedClubResponse]]("/api/managed-clubs").map(_.map(_.slug)),
+      explicit,
+      all,
+      currentClub
+    )
 
   // Absent flag -> None (server defaults to false); present -> Some(true). Avoids sending a redundant `false`.
   private def flag(b: Boolean): Option[Boolean] = Option.when(b)(true)

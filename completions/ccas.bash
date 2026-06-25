@@ -31,10 +31,10 @@ _ccas() {
     words=("${COMP_WORDS[@]}")
   fi
 
-  local top="serve stop membership history recruit stats jobs logs blacklist schedule clubs completion"
+  local top="serve stop use-club membership history recruit stats jobs logs blacklist schedule club completion"
   local global="--help --version"
 
-  # First non-flag word after "ccas" is the command; the next is the subcommand (blacklist/schedule/clubs).
+  # First non-flag word after "ccas" is the command; the next is the subcommand (blacklist/schedule/club).
   local cmd="" sub="" i
   for (( i = 1; i < cword; i++ )); do
     case "${words[i]}" in
@@ -43,9 +43,10 @@ _ccas() {
     esac
   done
 
-  # Right after a value-taking flag: let the user type the value, offer nothing.
+  # Right after --club: offer cached club slugs. Right after any other value flag: offer nothing.
   case "$prev" in
-    --server|--refresh-min-hours|--alias|--target|--source-clubs|--time-limit-minutes|--since|--until|--limit|--reason|--months|--kind|--interval-hours|--club|--params) return ;;
+    --club) COMPREPLY=( $(compgen -W "$(_ccas_cache clubs.txt)" -- "$cur") ); return ;;
+    --server|--club|--refresh-min-hours|--alias|--target|--source-clubs|--time-limit-minutes|--since|--until|--limit|--reason|--months|--kind|--interval-hours|--params) return ;;
   esac
 
   local opts="" pos=""
@@ -53,18 +54,19 @@ _ccas() {
     "") COMPREPLY=( $(compgen -W "$top $global" -- "$cur") ); return ;;
     serve) opts="--detach" ;;
     stop)  ;;
-    membership) opts="--server --trust-usernames --no-trust-usernames"; pos="slugs" ;;
-    history) opts="--server --full --include-finished --refresh --refresh-min-hours"; pos="slugs" ;;
-    recruit) opts="--server --alias --target --cumulative --source-clubs --time-limit-minutes --explore --no-explore"; pos="slug" ;;
-    stats) opts="--server --since --until"; pos="slug" ;;
+    use-club) pos="slug" ;;
+    membership) opts="--server --trust-usernames --no-trust-usernames --club --all" ;;
+    history) opts="--server --full --include-finished --refresh --refresh-min-hours --club --all" ;;
+    recruit) opts="--server --alias --target --cumulative --source-clubs --time-limit-minutes --explore --no-explore --club" ;;
+    stats) opts="--server --since --until --club" ;;
     jobs) opts="--server --limit" ;;
     logs) opts="--server"; pos="jobid" ;;
     blacklist)
       case "$sub" in
         "") COMPREPLY=( $(compgen -W "add list remove --help" -- "$cur") ); return ;;
-        add) opts="--server --reason --months"; pos="slug" ;;
-        list) opts="--server"; pos="slug" ;;
-        remove) opts="--server"; pos="slug" ;;
+        add) opts="--server --reason --months --club" ;;
+        list) opts="--server --club" ;;
+        remove) opts="--server --club" ;;
         *) COMPREPLY=(); return ;;
       esac ;;
     schedule)
@@ -75,12 +77,9 @@ _ccas() {
         remove) opts="--server" ;;
         *) COMPREPLY=(); return ;;
       esac ;;
-    clubs)
+    club)
       case "$sub" in
         "") COMPREPLY=( $(compgen -W "add remove list --help" -- "$cur") ); return ;;
-        add) opts="--server"; pos="slug" ;;
-        remove) opts="--server"; pos="slug" ;;
-        list) opts="--server" ;;
         *) COMPREPLY=(); return ;;
       esac ;;
     completion) pos="shell" ;;
@@ -97,15 +96,14 @@ _ccas() {
     w="${words[j]}"
     if (( skip )); then skip=0; continue; fi
     case "$w" in
-      -*) case "$w" in --server|--refresh-min-hours|--alias|--target|--source-clubs|--time-limit-minutes|--since|--until|--limit|--reason|--months|--kind|--interval-hours|--club|--params) skip=1 ;; esac ;;
+      -*) case "$w" in --server|--club|--refresh-min-hours|--alias|--target|--source-clubs|--time-limit-minutes|--since|--until|--limit|--reason|--months|--kind|--interval-hours|--params) skip=1 ;; esac ;;
       *) (( posn++ )) ;;
     esac
   done
-  [[ $cmd == blacklist || $cmd == schedule || $cmd == clubs ]] && base=2
+  [[ $cmd == blacklist || $cmd == schedule || $cmd == club ]] && base=2
   local posIndex=$(( posn - base ))
 
   case "$pos" in
-    slugs) COMPREPLY=( $(compgen -W "$(_ccas_cache clubs.txt)" -- "$cur") ) ;;
     slug)  (( posIndex == 0 )) && COMPREPLY=( $(compgen -W "$(_ccas_cache clubs.txt)" -- "$cur") ) ;;
     jobid) (( posIndex == 0 )) && COMPREPLY=( $(compgen -W "$(_ccas_cache recent-jobs.txt)" -- "$cur") ) ;;
     shell) (( posIndex == 0 )) && COMPREPLY=( $(compgen -W "bash zsh fish" -- "$cur") ) ;;
