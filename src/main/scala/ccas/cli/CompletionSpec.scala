@@ -18,6 +18,7 @@ object CompletionSpec {
     case Slug    // a single club slug: use-club
     case JobId   // a single job-run id: logs
     case Shell   // bash | zsh | fish: completion
+    case EnvKey  // a server-env var name: config get/set/unset (candidates from ServerEnvKeys.all)
     case Other   // an opaque value we don't complete: schedule add/remove, blacklist usernames
     case NoArgs  // no positional (club, if any, comes via --club): serve, membership, jobs, …
   }
@@ -87,11 +88,12 @@ object CompletionSpec {
     Leaf(List("club", "add"), List(server), List(server), Slug),
     Leaf(List("club", "remove"), List(server), List(server), Slug),
     Leaf(List("club", "list"), List(server), List(server), NoArgs),
-    // `config` is local (no --server): it edits the local ccas.env file. get/set/unset take env-var-name positionals
-    // we don't complete (Other); --show-secrets is a boolean (not a value flag), so list/show keep empty valueFlags.
-    Leaf(List("config", "get"), Nil, Nil, Other),
-    Leaf(List("config", "set"), Nil, Nil, Other),
-    Leaf(List("config", "unset"), Nil, Nil, Other),
+    // `config` is local (no --server): it edits the local ccas.env file. get/set/unset take an env-var-name positional
+    // we complete from ServerEnvKeys.all (EnvKey); --show-secrets is a boolean (not a value flag), so list/show keep
+    // empty valueFlags.
+    Leaf(List("config", "get"), Nil, Nil, EnvKey),
+    Leaf(List("config", "set"), Nil, Nil, EnvKey),
+    Leaf(List("config", "unset"), Nil, Nil, EnvKey),
     Leaf(List("config", "list"), List("--show-secrets"), Nil, NoArgs),
     Leaf(List("config", "show"), List("--show-secrets"), Nil, NoArgs),
     Leaf(List("config", "path"), Nil, Nil, NoArgs),

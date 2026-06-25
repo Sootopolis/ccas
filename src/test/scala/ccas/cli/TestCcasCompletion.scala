@@ -100,7 +100,10 @@ object TestCcasCompletion extends ZIOSpecDefault {
         positionalOf("recruit") == PositionalKind.NoArgs,
         positionalOf("logs") == PositionalKind.JobId,
         positionalOf("completion") == PositionalKind.Shell,
-        positionalOf("blacklist", "add") == PositionalKind.Other
+        positionalOf("blacklist", "add") == PositionalKind.Other,
+        positionalOf("config", "get") == PositionalKind.EnvKey,
+        positionalOf("config", "set") == PositionalKind.EnvKey,
+        positionalOf("config", "unset") == PositionalKind.EnvKey
       )
     },
     // Each group's declared children must have a matching leaf under that group name. Guards the class of bug where a
