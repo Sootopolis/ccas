@@ -6,7 +6,7 @@ import zio.Chunk
 
 import ccas.analysis.tables.{ClubMember, Player, PlayerSnapshot}
 import ccas.api.misc.enums.PlayerStatusCategory
-import ccas.api.misc.subtypes.{PlayerId, Username}
+import ccas.api.misc.subtypes.{ClubId, PlayerId, Username}
 
 object MembershipChange {
   final case class MemberChangeSummary(playerId: PlayerId, username: Username, changes: Chunk[MemberChange])
@@ -36,6 +36,7 @@ object MembershipChange {
   )
 
   final case class ReconciliationResult(
+    clubId: ClubId,
     changes: Chunk[MemberChangeSummary],
     newPlayers: Chunk[Player],
     updatedPlayers: Chunk[Player],

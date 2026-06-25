@@ -160,7 +160,7 @@ object TestMembershipAppPure extends ZIOSpecDefault {
       Chunk(bClosed)
     )
     val phaseC = PhaseCResult(Chunk(cChange), Chunk(cUpdated), Chunk(cArchived), Chunk(cClosed))
-    val result = MembershipApp.mergeResults(phaseB, phaseC, 10, 8, Times.t0, Times.t1)
+    val result = MembershipApp.mergeResults(clubId, phaseB, phaseC, 10, 8, Times.t0, Times.t1)
 
     assertTrue(
       result.changes == Chunk(bChange, cChange),

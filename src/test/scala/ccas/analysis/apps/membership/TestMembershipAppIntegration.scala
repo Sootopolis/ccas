@@ -154,7 +154,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
     val extChange = MemberChangeSummary(pid1, Username("bob"), Chunk(JoinedClub(Times.t1)))
     val extMember = ClubMember(clubId, pid1, Times.t1, None, sinceApproximate = false)
     val result = MembershipApp.mergeResults(
-      phaseB, phaseC, 10, 8, Times.t0, Times.t1,
+      clubId, phaseB, phaseC, 10, 8, Times.t0, Times.t1,
       externalChanges = Chunk(extChange),
       externalMemberships = Chunk(extMember)
     )
