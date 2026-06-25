@@ -51,6 +51,23 @@ object TestCliParser extends ZIOSpecDefault {
     test("use-club parses the slug (local, no server)") {
       parsed("use-club", "team-alpha").map(c => assertTrue(c.contains(CliCommand.Use("team-alpha"))))
     },
+    test("config set parses key and value (local, no server)") {
+      parsed("config", "set", "DB_HOST", "localhost").map(c =>
+        assertTrue(c.contains(CliCommand.ConfigSet("DB_HOST", "localhost")))
+      )
+    },
+    test("config get parses the key") {
+      parsed("config", "get", "DATABASE_URL").map(c => assertTrue(c.contains(CliCommand.ConfigGet("DATABASE_URL"))))
+    },
+    test("config list defaults --show-secrets to false") {
+      parsed("config", "list").map(c => assertTrue(c.contains(CliCommand.ConfigList(false))))
+    },
+    test("config list --show-secrets parses the flag") {
+      parsed("config", "list", "--show-secrets").map(c => assertTrue(c.contains(CliCommand.ConfigList(true))))
+    },
+    test("config init parses with no args") {
+      parsed("config", "init").map(c => assertTrue(c.contains(CliCommand.ConfigInit)))
+    },
     test("--server overrides the default") {
       parsed("jobs", "--server", "http://example:9000").map(c =>
         assertTrue(c.contains(CliCommand.Jobs("http://example:9000", None)))

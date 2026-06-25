@@ -160,7 +160,7 @@ DELETE /api/schedules/:id
 
 ## Configuration
 
-All environment variables are listed in [`.env.example`](.env.example). Required variables:
+All environment variables are listed in [`.env.example`](.env.example). For the packaged binary the easiest way to set them is **`ccas config init`** (see [Server config file](#server-config-file-ccas-config) below), which persists them to a local file the server reads at boot — no hand-exported env vars. Required variables:
 
 | Variable | Description |
 |----------|-------------|
@@ -182,6 +182,22 @@ Optional overrides with defaults:
 | `CHESS_COM_API_COOLDOWN_SECONDS` | 30 | Backoff cooldown after rate limiting |
 
 See [`application.conf`](src/main/resources/application.conf) for the full set of tunable parameters.
+
+### Server config file (`ccas config`)
+
+The packaged `ccas` / `ccas-server` binaries read the settings above from the **process environment** — they do **not** load a `.env` file (that's auto-sourced only for `sbt run`). Rather than export them by hand before every `ccas serve`, manage them with `ccas config`, which persists them to `${XDG_CONFIG_HOME:-~/.config}/ccas/ccas.env` — an owner-only (`0600`) `KEY=VALUE` file:
+
+```
+ccas config init                   # interactive wizard: contact email, DB connection, port
+ccas config set SERVER_PORT 9090   # set one value
+ccas config get DATABASE_URL       # print one value (raw)
+ccas config list                   # show known settings (secrets shown as ****)
+ccas config list --show-secrets    # reveal secret values
+ccas config unset SERVER_PORT      # remove a value
+ccas config path                   # print the file's path
+```
+
+At boot the server applies this file as a JVM overlay, so the **resolution order is: process environment → `ccas.env` → built-in default.** A real env var (or a systemd `Environment=` / container secret) always wins over the file, so hosted deployments keep injecting secrets through the environment. `DATABASE_URL` and `DB_PASSWORD` live in the `0600` file and are redacted by `list`/`show` unless `--show-secrets`. The file is plain env-var form, so it doubles as a systemd `EnvironmentFile`. `ccas config set DATABASE_URL <url>` stores the URL literally (no shell-quoting needed) — only single-quote the `&` yourself if you intend to `source` the file in a POSIX shell. This is the *server*-bootstrap file; it is separate from the CLI client's [`config.conf`](#cli-config-file).
 
 ### DB-owned settings
 

@@ -87,19 +87,30 @@ object CompletionSpec {
     Leaf(List("club", "add"), List(server), List(server), Slug),
     Leaf(List("club", "remove"), List(server), List(server), Slug),
     Leaf(List("club", "list"), List(server), List(server), NoArgs),
+    // `config` is local (no --server): it edits the local ccas.env file. get/set/unset take env-var-name positionals
+    // we don't complete (Other); --show-secrets is a boolean (not a value flag), so list/show keep empty valueFlags.
+    Leaf(List("config", "get"), Nil, Nil, Other),
+    Leaf(List("config", "set"), Nil, Nil, Other),
+    Leaf(List("config", "unset"), Nil, Nil, Other),
+    Leaf(List("config", "list"), List("--show-secrets"), Nil, NoArgs),
+    Leaf(List("config", "show"), List("--show-secrets"), Nil, NoArgs),
+    Leaf(List("config", "path"), Nil, Nil, NoArgs),
+    Leaf(List("config", "init"), Nil, Nil, NoArgs),
     Leaf(List("completion"), List("--help"), Nil, Shell)
   )
 
   val groups: List[Group] = List(
     Group("blacklist", List("add", "list", "remove"), "Manage a club's recruitment blacklist"),
     Group("schedule", List("list", "add", "remove"), "Manage scheduled jobs"),
-    Group("club", List("add", "remove", "list"), "Manage the set of clubs you run CCAS for")
+    Group("club", List("add", "remove", "list"), "Manage the set of clubs you run CCAS for"),
+    Group("config", List("get", "set", "unset", "list", "show", "path", "init"),
+      "Manage the local server-bootstrap config file (ccas.env)")
   )
 
   /** Top-level subcommand names, in tree order (matches `CliCommand.command(...).subcommands`). */
   val topLevel: List[String] =
     List("serve", "stop", "use-club", "membership", "history", "recruit", "stats", "jobs", "logs", "blacklist",
-      "schedule", "club", "completion")
+      "schedule", "club", "config", "completion")
 
   /** Flags available on every command. */
   val globalFlags: List[String] = List("--help", "--version")
@@ -140,6 +151,13 @@ object CompletionSpec {
     List("blacklist", "remove") -> "Remove a username from a club's blacklist",
     List("schedule", "list")    -> "List scheduled jobs",
     List("schedule", "add")     -> "Create a scheduled job",
-    List("schedule", "remove")  -> "Delete a scheduled job by id"
+    List("schedule", "remove")  -> "Delete a scheduled job by id",
+    List("config", "get")       -> "Print one value from the server config file (ccas.env)",
+    List("config", "set")       -> "Set a value in the server config file (written 0600)",
+    List("config", "unset")     -> "Remove a value from the server config file",
+    List("config", "list")      -> "List known settings and current values (secrets redacted)",
+    List("config", "show")      -> "Alias for 'config list'",
+    List("config", "path")      -> "Print the server config file path",
+    List("config", "init")      -> "Interactive wizard to create the server config file (ccas.env)"
   )
 }

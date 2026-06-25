@@ -6,6 +6,7 @@ import zio.cli.{CliApp, CliError, HelpDoc}
 import zio.{Console, ExitCode, Scope, UIO, URIO, ZIO, ZIOAppArgs, ZIOAppDefault}
 
 import ccas.cli.config.CliConfig
+import ccas.server.config.ServerEnvOverlay
 import ccas.cli.serve.{Detach, PidFile, Stop}
 import ccas.info.BuildInfo
 import ccas.server.CcasServer
@@ -61,48 +62,64 @@ object Main extends ZIOAppDefault {
     case CliCommand.Stop                 => Stop.run(PidFile.path)
     case CliCommand.Completion(shell)    => printCompletion(shell)
     case CliCommand.Use(slug)            => UseClub.run(slug)
+    case CliCommand.ConfigGet(key)       => ConfigCommand.get(key)
+    case CliCommand.ConfigSet(key, v)    => ConfigCommand.set(key, v)
+    case CliCommand.ConfigUnset(key)     => ConfigCommand.unset(key)
+    case CliCommand.ConfigList(secrets)  => ConfigCommand.list(secrets)
+    case CliCommand.ConfigPath           => ConfigCommand.path
+    case CliCommand.ConfigInit           => ConfigCommand.init
     case other: CliCommand.ServerCommand => Dispatcher.dispatch(other, cfg.currentClub)
   }
 
-  // Detached serve: same mandatory-env precheck as foreground (a detached child with missing env would just die in
-  // server.log), then hand off to the spawner. `log_dir` from the CLI config sets the server's log location, defaulting
-  // to `${XDG_STATE_HOME:-~/.local/state}/ccas/logs`.
+  // Detached serve: apply the ccas.env overlay first (so a file-only SERVER_PORT is honoured by the readiness probe in
+  // `Detach`, which reads `server.port` via ConfigFactory.load in THIS parent JVM), then the same mandatory-config
+  // precheck as foreground, then hand off to the spawner. `log_dir` from the CLI config sets the server's log location,
+  // defaulting to `${XDG_STATE_HOME:-~/.local/state}/ccas/logs`. The detached child re-runs the overlay in its own JVM.
   private def detachServe(cfg: CliConfig): URIO[ZIOAppArgs, ExitCode] =
-    missingServeEnv match {
-      case Some(msg) => Console.printLineError(s"error: $msg").orDie.as(ExitCode(2))
-      case None =>
-        val logDir = cfg.logDir.fold(XdgPaths.stateDir.resolve("logs"))(Paths.get(_))
-        Detach.run(logDir, PidFile.path)
+    ServerEnvOverlay(XdgPaths.serverEnvFile) *> ZIO.suspendSucceed {
+      missingServeEnv match {
+        case Some(msg) => Console.printLineError(s"error: $msg").orDie.as(ExitCode(2))
+        case None =>
+          val logDir = cfg.logDir.fold(XdgPaths.stateDir.resolve("logs"))(Paths.get(_))
+          Detach.run(logDir, PidFile.path)
+      }
     }
 
+  // Apply the ccas.env overlay (file → system properties for any env var not already set) BEFORE checking mandatory
+  // config or booting CcasServer, so the server can boot from `ccas config`'s file without hand-exported env vars.
+  // `suspendSucceed` defers `missingServeEnv` until after the overlay has run (it reads the system properties just set).
   private def serve: URIO[ZIOAppArgs, ExitCode] =
-    missingServeEnv match {
-      // Known missing config → a one-line message, not the raw ConfigException stack from ConfigFactory.load.
-      case Some(msg) => Console.printLineError(s"error: $msg").orDie.as(ExitCode(2))
-      // `.fold(_ => failure, _ => success)` would be the deprecated `ZIO#exitCode`, which swallows the cause; CcasServer
-      // logs nothing itself, so map via foldCauseZIO and log the cause — else an unexpected crash exits with no diagnostic.
-      case None =>
-        ZIO
-          .scoped(CcasServer.run)
-          .foldCauseZIO(
-            cause => ZIO.logErrorCause("ccas server exited abnormally", cause).as(ExitCode.failure),
-            _ => ZIO.succeed(ExitCode.success)
-          )
+    ServerEnvOverlay(XdgPaths.serverEnvFile) *> ZIO.suspendSucceed {
+      missingServeEnv match {
+        // Known missing config → a one-line message, not the raw ConfigException stack from ConfigFactory.load.
+        case Some(msg) => Console.printLineError(s"error: $msg").orDie.as(ExitCode(2))
+        // `.fold(_ => failure, _ => success)` would be the deprecated `ZIO#exitCode`, which swallows the cause; CcasServer
+        // logs nothing itself, so map via foldCauseZIO and log the cause — else an unexpected crash exits with no diagnostic.
+        case None =>
+          ZIO
+            .scoped(CcasServer.run)
+            .foldCauseZIO(
+              cause => ZIO.logErrorCause("ccas server exited abnormally", cause).as(ExitCode.failure),
+              _ => ZIO.succeed(ExitCode.success)
+            )
+      }
     }
 
-  // Mandatory server config comes from the process env (the staged binary doesn't load `.env`). Surface the first
-  // missing piece as a clean message instead of letting `ConfigFactory.load` throw an UnresolvedSubstitution stack.
+  // Mandatory server config resolves from the process env OR the ccas.env overlay (applied as system properties by
+  // `ServerEnvOverlay` before this runs). Surface the first missing piece as a clean message instead of letting
+  // `ConfigFactory.load` throw an UnresolvedSubstitution stack.
   private def missingServeEnv: Option[String] = {
-    def unset(name: String): Boolean = sys.env.get(name).forall(_.trim.isEmpty)
+    def unset(name: String): Boolean =
+      sys.env.get(name).orElse(Option(System.getProperty(name))).forall(_.trim.isEmpty)
     if (unset("CCAS_CONTACT_EMAIL")) {
       Some(
         "CCAS_CONTACT_EMAIL is not set (required for the Chess.com API User-Agent). " +
-          "Export it before 'ccas serve' — see README → Configuration."
+          "Set it with 'ccas config init' (or 'ccas config set'), or export it — see README → Configuration."
       )
     } else if (unset("DATABASE_URL") && unset("DB_NAME")) {
       Some(
-        "no database configured. Set DATABASE_URL, or DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASSWORD. " +
-          "See README → Configuration."
+        "no database configured. Set DATABASE_URL, or DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASSWORD, " +
+          "via 'ccas config init'. See README → Configuration."
       )
     } else {
       None
