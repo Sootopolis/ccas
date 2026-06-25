@@ -55,15 +55,22 @@ sbt "runMain ccas.cli.Main serve"     # boots CcasServer on 127.0.0.1:8080
 # Or, with those vars exported into the environment, the staged binary:  ccas serve
 
 # Terminal 2 — commands. No environment needed; they just call the server.
+ccas use-club team-alpha          # set the current club once…
 ccas jobs
-ccas membership <club-slug>
-ccas recruit --target 30 <club-slug>
-ccas blacklist list <club-slug>
+ccas membership                   # …then commands target it with no slug
+ccas membership --club team-beta  # override for one command
+ccas membership --all             # every managed club
+ccas recruit --target 30 --club team-alpha
+ccas blacklist list --club team-alpha
 ccas --help              # full command tree
 ccas <command> --help    # per-command flags
 ```
 
-Commands: `serve`, `stop`, `membership`, `history`, `recruit`, `stats`, `jobs`, `logs`, `blacklist {add|list|remove}`, `schedule {list|add|remove}`. The server URL resolves in order: a global `--server <url>` flag, else `api_url` from the [config file](#cli-config-file), else the built-in default `http://127.0.0.1:8080`.
+Commands: `serve`, `stop`, `use`, `membership`, `history`, `recruit`, `stats`, `jobs`, `logs`, `blacklist {add|list|remove}`, `schedule {list|add|remove}`, `club {add|remove|list}`.
+
+**Club targeting.** Slug-requiring commands take the club via `--club <slug>` rather than a positional argument; `membership`/`history` accept a comma-separated `--club a,b` or `--all` (every managed club) — but not both at once (`--all` with `--club` is rejected as a likely mistake). When neither is given, the command falls back to the **current club** set with `ccas use-club <slug>` (stored as `current_club` in the [config file](#cli-config-file)); an explicit `--club`/`--all` always wins. `ccas use-club` is a local config write — no server call — so it works offline and only warns (does not reject) if the slug isn't among the cached clubs.
+
+The server URL resolves in order: a global `--server <url>` flag, else `api_url` from the [config file](#cli-config-file), else the built-in default `http://127.0.0.1:8080`.
 
 `ccas --version` prints the version; `ccas --help` and `ccas <command> --help` show usage.
 
@@ -78,11 +85,11 @@ ccas stop             # reads the pid file, sends SIGTERM, waits for a clean shu
 
 The detached server writes its pid to `${XDG_STATE_HOME:-~/.local/state}/ccas/ccas.pid` and its stdout/stderr to `<log_dir>/server.log` (`log_dir` from the [config file](#cli-config-file), default `~/.local/state/ccas/logs`). A second `ccas serve --detach` while one is running exits with `already running, pid=<n>`. For a supervised/long-lived server (systemd, Docker, Render) run the foreground `ccas-server` binary instead.
 
-> **Two gotchas.** The parser (zio-cli) expects options **before** positional arguments — `ccas membership --no-trust-usernames team-alpha`, not `… team-alpha --no-trust-usernames` (a misplaced flag is silently dropped). And the staged binary reads configuration from the **process environment only** — it does not load `.env` (that is auto-sourced for `sbt run` / `sbt runMain`).
+> **Two gotchas.** The parser (zio-cli) expects options **before** positional arguments — `ccas blacklist add --club team-alpha alice bob`, not `… alice bob --club team-alpha` (a misplaced flag is silently swallowed as a username). And the staged binary reads configuration from the **process environment only** — it does not load `.env` (that is auto-sourced for `sbt run` / `sbt runMain`).
 
 ### Shell completion
 
-`ccas completion <bash|zsh|fish>` prints a self-contained, **pure-shell** completion script. It boots the JVM once when you install it; afterwards every `<TAB>` runs entirely in the shell (no JVM, no network), so completion is instant. The scripts complete subcommands and flags, plus **club slugs** (at slug positions) and **recent job ids** (for `ccas logs`) read from cache files.
+`ccas completion <bash|zsh|fish>` prints a self-contained, **pure-shell** completion script. It boots the JVM once when you install it; afterwards every `<TAB>` runs entirely in the shell (no JVM, no network), so completion is instant. The scripts complete subcommands and flags, plus **club slugs** (after `--club`, and for the `ccas use-club` argument) and **recent job ids** (for `ccas logs`) read from cache files.
 
 ```bash
 # bash — install once (bash-completion auto-loads it)
@@ -201,10 +208,12 @@ The `ccas` CLI (the client, not the server) reads optional settings from `${XDG_
 api_url       = "http://127.0.0.1:8080"        # default server URL
 default_clubs = ["team-alpha", "team-beta"]    # seed shell-completion suggestions
 log_dir       = "~/.local/state/ccas/logs"     # where `ccas serve --detach` writes server.log
+current_club  = "team-alpha"                   # default club when a command omits --club (set via `ccas use-club`)
 ```
 
 - **Server URL** resolves `--server <url>` flag → `api_url` → built-in `http://127.0.0.1:8080`.
 - **`default_clubs`** seeds the completion club list on a fresh install (before any `GET /api/clubs` round-trip); real slugs replace it on the next command.
+- **`current_club`** is the club a slug-requiring command targets when neither `--club` nor `--all` is given. Set it with `ccas use-club <slug>` (which rewrites just this key, preserving your other keys and comments) rather than editing by hand.
 - A missing file is fine — the CLI falls back to built-in defaults. A malformed file fails fast with `error: invalid config file <path>: …` (exit 2).
 
 This is separate from the server's `application.conf` / environment configuration above.

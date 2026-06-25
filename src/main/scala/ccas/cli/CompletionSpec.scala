@@ -10,14 +10,16 @@ package ccas.cli
   */
 object CompletionSpec {
 
-  /** What a command's positional arguments accept, so completion can offer the right cache (or nothing). */
+  /** What a command's positional arguments accept, so completion can offer the right cache (or nothing). Note: club
+    * slugs are now targeted by the `--club` option (see [[clubFlag]]), not a positional — the only command left with a
+    * positional club slug is `use-club`.
+    */
   enum PositionalKind {
-    case Slugs   // one or more club slugs (variadic): membership, history
-    case Slug    // a single club slug: recruit, stats, blacklist add/list/remove
+    case Slug    // a single club slug: use-club
     case JobId   // a single job-run id: logs
     case Shell   // bash | zsh | fish: completion
-    case Other   // an opaque value we don't complete: schedule add/remove
-    case NoArgs  // no positional: serve, jobs, schedule list
+    case Other   // an opaque value we don't complete: schedule add/remove, blacklist usernames
+    case NoArgs  // no positional (club, if any, comes via --club): serve, membership, jobs, …
   }
 
   import PositionalKind.*
@@ -35,40 +37,55 @@ object CompletionSpec {
 
   private val server = "--server"
 
+  /** The club-targeting option. Completion offers cached club slugs as its value wherever it appears, so it is a
+    * value flag on every club command (and on `schedule add`). */
+  val clubFlag = "--club"
+
   /** Leaves in tree order. `valueFlags` always lists `--server` first to match its position in `flags`. */
   val leaves: List[Leaf] = List(
     Leaf(List("serve"), List("--detach"), Nil, NoArgs),
     Leaf(List("stop"), Nil, Nil, NoArgs),
-    Leaf(List("membership"), List(server, "--trust-usernames", "--no-trust-usernames"), List(server), Slugs),
+    Leaf(List("use-club"), Nil, Nil, Slug),
+    Leaf(
+      List("membership"),
+      List(server, "--trust-usernames", "--no-trust-usernames", clubFlag, "--all"),
+      List(server, clubFlag),
+      NoArgs
+    ),
     Leaf(
       List("history"),
-      List(server, "--full", "--include-finished", "--refresh", "--refresh-min-hours"),
-      List(server, "--refresh-min-hours"),
-      Slugs
+      List(server, "--full", "--include-finished", "--refresh", "--refresh-min-hours", clubFlag, "--all"),
+      List(server, "--refresh-min-hours", clubFlag),
+      NoArgs
     ),
     Leaf(
       List("recruit"),
       List(server, "--alias", "--target", "--cumulative", "--source-clubs", "--time-limit-minutes", "--explore",
-        "--no-explore"),
-      List(server, "--alias", "--target", "--source-clubs", "--time-limit-minutes"),
-      Slug
+        "--no-explore", clubFlag),
+      List(server, "--alias", "--target", "--source-clubs", "--time-limit-minutes", clubFlag),
+      NoArgs
     ),
-    Leaf(List("stats"), List(server, "--since", "--until"), List(server, "--since", "--until"), Slug),
+    Leaf(List("stats"), List(server, "--since", "--until", clubFlag), List(server, "--since", "--until", clubFlag), NoArgs),
     Leaf(List("jobs"), List(server, "--limit"), List(server, "--limit"), NoArgs),
     Leaf(List("logs"), List(server), List(server), JobId),
-    Leaf(List("blacklist", "add"), List(server, "--reason", "--months"), List(server, "--reason", "--months"), Slug),
-    Leaf(List("blacklist", "list"), List(server), List(server), Slug),
-    Leaf(List("blacklist", "remove"), List(server), List(server), Slug),
+    Leaf(
+      List("blacklist", "add"),
+      List(server, "--reason", "--months", clubFlag),
+      List(server, "--reason", "--months", clubFlag),
+      Other
+    ),
+    Leaf(List("blacklist", "list"), List(server, clubFlag), List(server, clubFlag), NoArgs),
+    Leaf(List("blacklist", "remove"), List(server, clubFlag), List(server, clubFlag), Other),
     Leaf(List("schedule", "list"), List(server), List(server), NoArgs),
     Leaf(
       List("schedule", "add"),
-      List(server, "--kind", "--interval-hours", "--club", "--params"),
-      List(server, "--kind", "--interval-hours", "--club", "--params"),
+      List(server, "--kind", "--interval-hours", clubFlag, "--params"),
+      List(server, "--kind", "--interval-hours", clubFlag, "--params"),
       Other
     ),
     Leaf(List("schedule", "remove"), List(server), List(server), Other),
-    Leaf(List("clubs", "add"), List(server), List(server), Slug),
-    Leaf(List("clubs", "remove"), List(server), List(server), Slug),
+    Leaf(List("clubs", "add"), List(server, clubFlag), List(server, clubFlag), NoArgs),
+    Leaf(List("clubs", "remove"), List(server, clubFlag), List(server, clubFlag), NoArgs),
     Leaf(List("clubs", "list"), List(server), List(server), NoArgs),
     Leaf(List("completion"), List("--help"), Nil, Shell)
   )
@@ -76,13 +93,13 @@ object CompletionSpec {
   val groups: List[Group] = List(
     Group("blacklist", List("add", "list", "remove"), "Manage a club's recruitment blacklist"),
     Group("schedule", List("list", "add", "remove"), "Manage scheduled jobs"),
-    Group("clubs", List("add", "remove", "list"), "Manage the set of clubs you run CCAS for")
+    Group("club", List("add", "remove", "list"), "Manage the set of clubs you run CCAS for")
   )
 
   /** Top-level subcommand names, in tree order (matches `CliCommand.command(...).subcommands`). */
   val topLevel: List[String] =
-    List("serve", "stop", "membership", "history", "recruit", "stats", "jobs", "logs", "blacklist", "schedule",
-      "clubs", "completion")
+    List("serve", "stop", "use-club", "membership", "history", "recruit", "stats", "jobs", "logs", "blacklist",
+      "schedule", "club", "completion")
 
   /** Flags available on every command. */
   val globalFlags: List[String] = List("--help", "--version")
@@ -107,16 +124,17 @@ object CompletionSpec {
   private[cli] val summaries: Map[List[String], String] = Map(
     List("serve")               -> "Run the ccas backend HTTP server (foreground by default; --detach to background it)",
     List("stop")                -> "Stop a detached ccas server (reads the pid file and sends SIGTERM)",
-    List("membership")          -> "Submit a membership-sync job for one or more clubs",
-    List("history")             -> "Submit a match-history crawl job for one or more clubs",
+    List("use-club")            -> "Set the current club used by commands that omit --club",
+    List("membership")          -> "Submit a membership-sync job (current club, --club a,b, or --all managed clubs)",
+    List("history")             -> "Submit a match-history crawl job (current club, --club a,b, or --all managed clubs)",
     List("recruit")             -> "Submit a recruitment scouting job for a club",
     List("stats")               -> "Submit a club performance-stats job",
     List("jobs")                -> "List recent jobs and their status",
     List("logs")                -> "Poll a job's status and logs until it finishes",
     List("completion")          -> "Emit a shell completion script (bash, zsh, or fish)",
-    List("clubs", "add")        -> "Mark a club as one you manage with CCAS",
-    List("clubs", "remove")     -> "Remove a club from the ones you manage",
-    List("clubs", "list")       -> "List the clubs you manage with CCAS",
+    List("club", "add")         -> "Mark a club as one you manage with CCAS (--club, or the current club)",
+    List("club", "remove")      -> "Remove a club from the ones you manage (--club, or the current club)",
+    List("club", "list")        -> "List the clubs you manage with CCAS",
     List("blacklist", "add")    -> "Blacklist one or more usernames for a club",
     List("blacklist", "list")   -> "List a club's blacklist entries",
     List("blacklist", "remove") -> "Remove a username from a club's blacklist",

@@ -60,7 +60,8 @@ object Main extends ZIOAppDefault {
     case CliCommand.Serve(true)          => detachServe(cfg)
     case CliCommand.Stop                 => Stop.run(PidFile.path)
     case CliCommand.Completion(shell)    => printCompletion(shell)
-    case other: CliCommand.ServerCommand => Dispatcher.dispatch(other)
+    case CliCommand.Use(slug)            => UseClub.run(slug)
+    case other: CliCommand.ServerCommand => Dispatcher.dispatch(other, cfg.currentClub)
   }
 
   // Detached serve: same mandatory-env precheck as foreground (a detached child with missing env would just die in

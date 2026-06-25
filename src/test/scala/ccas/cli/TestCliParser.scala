@@ -38,10 +38,18 @@ object TestCliParser extends ZIOSpecDefault {
     }
 
   override def spec: Spec[Any, Any] = suite("TestCliParser")(
-    test("membership parses slugs and defaults the server") {
-      parsed("membership", "team-alpha", "team-beta").map(c =>
-        assertTrue(c.contains(CliCommand.Membership(DefaultServer, List("team-alpha", "team-beta"), None)))
+    test("membership parses comma-separated --club and defaults the server") {
+      parsed("membership", "--club", "team-alpha,team-beta").map(c =>
+        assertTrue(c.contains(CliCommand.Membership(DefaultServer, List("team-alpha", "team-beta"), false, None)))
       )
+    },
+    test("membership --all parses with no explicit clubs") {
+      parsed("membership", "--all").map(c =>
+        assertTrue(c.contains(CliCommand.Membership(DefaultServer, Nil, true, None)))
+      )
+    },
+    test("use-club parses the slug (local, no server)") {
+      parsed("use-club", "team-alpha").map(c => assertTrue(c.contains(CliCommand.Use("team-alpha"))))
     },
     test("--server overrides the default") {
       parsed("jobs", "--server", "http://example:9000").map(c =>
@@ -56,32 +64,38 @@ object TestCliParser extends ZIOSpecDefault {
         assertTrue(s.contains("http://flag:9999"))
       )
     },
-    test("membership with no slug fails validation") {
-      parse("membership").exit.map(e => assertTrue(e.isFailure))
+    // No slug and no --club/--all now PARSES (empty clubs); the "no club" error is raised later by the Dispatcher
+    // against the config's current_club, not at parse time.
+    test("membership with no club parses to empty clubs") {
+      parsed("membership").map(c => assertTrue(c.contains(CliCommand.Membership(DefaultServer, Nil, false, None))))
     },
-    // zio-cli requires options before positional arguments (see CliCommand scaladoc).
     test("--no-trust-usernames maps to Some(false)") {
-      parsed("membership", "--no-trust-usernames", "team-alpha").map(c =>
-        assertTrue(c.contains(CliCommand.Membership(DefaultServer, List("team-alpha"), Some(false))))
+      parsed("membership", "--no-trust-usernames", "--club", "team-alpha").map(c =>
+        assertTrue(c.contains(CliCommand.Membership(DefaultServer, List("team-alpha"), false, Some(false))))
       )
     },
-    test("recruit parses options, comma-separated source-clubs, and slug") {
-      parsed("recruit", "--target", "5", "--no-explore", "--source-clubs", "x,y", "team-alpha").map(c =>
+    test("recruit parses options, comma-separated source-clubs, and --club") {
+      parsed("recruit", "--target", "5", "--no-explore", "--source-clubs", "x,y", "--club", "team-alpha").map(c =>
         assertTrue(
           c.contains(
-            CliCommand.Recruit(DefaultServer, "team-alpha", None, Some(5), false, List("x", "y"), None, Some(false))
+            CliCommand.Recruit(DefaultServer, Some("team-alpha"), None, Some(5), false, List("x", "y"), None, Some(false))
           )
         )
       )
     },
+    test("recruit with no --club parses to None") {
+      parsed("recruit").map(c =>
+        assertTrue(c.contains(CliCommand.Recruit(DefaultServer, None, None, None, false, Nil, None, None)))
+      )
+    },
     test("history flags parse") {
-      parsed("history", "--full", "--include-finished", "team-alpha").map(c =>
-        assertTrue(c.contains(CliCommand.History(DefaultServer, List("team-alpha"), true, true, false, None)))
+      parsed("history", "--full", "--include-finished", "--club", "team-alpha").map(c =>
+        assertTrue(c.contains(CliCommand.History(DefaultServer, List("team-alpha"), false, true, true, false, None)))
       )
     },
     test("blacklist add parses usernames and options") {
-      parsed("blacklist", "add", "--reason", "spam", "--months", "3", "team-alpha", "u1", "u2").map(c =>
-        assertTrue(c.contains(CliCommand.BlacklistAdd(DefaultServer, "team-alpha", List("u1", "u2"), Some("spam"), Some(3))))
+      parsed("blacklist", "add", "--reason", "spam", "--months", "3", "--club", "team-alpha", "u1", "u2").map(c =>
+        assertTrue(c.contains(CliCommand.BlacklistAdd(DefaultServer, Some("team-alpha"), List("u1", "u2"), Some("spam"), Some(3))))
       )
     },
     test("schedule add parses kind and interval") {
@@ -92,21 +106,22 @@ object TestCliParser extends ZIOSpecDefault {
     test("schedule remove parses the id") {
       parsed("schedule", "remove", "7").map(c => assertTrue(c.contains(CliCommand.ScheduleRemove(DefaultServer, 7L))))
     },
-    test("clubs add parses the slug") {
-      parsed("clubs", "add", "team-alpha").map(c =>
-        assertTrue(c.contains(CliCommand.ClubsAdd(DefaultServer, "team-alpha")))
+    test("club add parses --club") {
+      parsed("club", "add", "--club", "team-alpha").map(c =>
+        assertTrue(c.contains(CliCommand.ClubsAdd(DefaultServer, Some("team-alpha"))))
       )
     },
-    test("clubs remove parses the slug") {
-      parsed("clubs", "remove", "team-alpha").map(c =>
-        assertTrue(c.contains(CliCommand.ClubsRemove(DefaultServer, "team-alpha")))
+    test("club remove parses --club") {
+      parsed("club", "remove", "--club", "team-alpha").map(c =>
+        assertTrue(c.contains(CliCommand.ClubsRemove(DefaultServer, Some("team-alpha"))))
       )
     },
-    test("clubs list parses with no slug and defaults the server") {
-      parsed("clubs", "list").map(c => assertTrue(c.contains(CliCommand.ClubsList(DefaultServer))))
+    test("club list parses with no slug and defaults the server") {
+      parsed("club", "list").map(c => assertTrue(c.contains(CliCommand.ClubsList(DefaultServer))))
     },
-    test("clubs add with no slug fails validation") {
-      parse("clubs", "add").exit.map(e => assertTrue(e.isFailure))
+    // No --club now parses (None); the "no club" error is the Dispatcher's job against current_club.
+    test("club add with no --club parses to None") {
+      parsed("club", "add").map(c => assertTrue(c.contains(CliCommand.ClubsAdd(DefaultServer, None))))
     },
     test("completion parses the shell argument (no server)") {
       parsed("completion", "bash").map(c => assertTrue(c.contains(CliCommand.Completion("bash"))))

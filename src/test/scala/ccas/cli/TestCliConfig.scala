@@ -42,19 +42,29 @@ object TestCliConfig extends ZIOSpecDefault {
         """api_url = "http://host:9000"
           |default_clubs = ["team-alpha", "team-beta"]
           |log_dir = "~/.local/state/ccas/logs"
+          |current_club = "team-alpha"
           |""".stripMargin
       writeConfig(content).flatMap(CliConfig.load).map { cfg =>
         assertTrue(
           cfg.apiUrl.contains("http://host:9000"),
           cfg.defaultClubs == List("team-alpha", "team-beta"),
-          cfg.logDir.contains(s"$home/.local/state/ccas/logs")
+          cfg.logDir.contains(s"$home/.local/state/ccas/logs"),
+          cfg.currentClub.contains("team-alpha")
         )
       }
     },
     test("partial config defaults the absent keys") {
       writeConfig("api_url = \"http://only:1\"\n").flatMap(CliConfig.load).map { cfg =>
-        assertTrue(cfg.apiUrl.contains("http://only:1"), cfg.defaultClubs.isEmpty, cfg.logDir.isEmpty)
+        assertTrue(
+          cfg.apiUrl.contains("http://only:1"),
+          cfg.defaultClubs.isEmpty,
+          cfg.logDir.isEmpty,
+          cfg.currentClub.isEmpty
+        )
       }
+    },
+    test("blank current_club is treated as unset") {
+      writeConfig("current_club = \"  \"\n").flatMap(CliConfig.load).map(cfg => assertTrue(cfg.currentClub.isEmpty))
     },
     test("malformed config fails with a message naming the file") {
       writeConfig("api_url = \"unterminated\n").flatMap { f =>

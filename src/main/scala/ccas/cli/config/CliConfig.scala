@@ -15,18 +15,27 @@ import zio.config.typesafe.TypesafeConfigProvider
   * always has working defaults. `default_clubs` feeds shell completions; `api_url` is the resolved server URL's
   * config-level default (overridden by `--server`, falling back to the built-in default). `log_dir` sets where a
   * detached `ccas serve --detach` server writes `server.log` (default `${XDG_STATE_HOME:-~/.local/state}/ccas/logs`).
+  * `current_club` is the club a slug-requiring command targets when neither `--club` nor `--all` is given (set with
+  * `ccas use-club <slug>`, written by [[ConfigWriter]]).
   */
-final case class CliConfig(apiUrl: Option[String], defaultClubs: List[String], logDir: Option[String])
+final case class CliConfig(
+  apiUrl: Option[String],
+  defaultClubs: List[String],
+  logDir: Option[String],
+  currentClub: Option[String]
+)
 
 object CliConfig {
 
-  val empty: CliConfig = CliConfig(None, Nil, None)
+  val empty: CliConfig = CliConfig(None, Nil, None, None)
 
   private val descriptor: Config[CliConfig] =
     (Config.string("api_url").optional.map(blankToNone) ++
       Config.listOf("default_clubs", Config.string).withDefault(Nil) ++
-      Config.string("log_dir").optional.map(blankToNone)).map { case (apiUrl, defaultClubs, logDir) =>
-      CliConfig(apiUrl, defaultClubs, logDir.map(expandTilde))
+      Config.string("log_dir").optional.map(blankToNone) ++
+      Config.string("current_club").optional.map(blankToNone)).map {
+      case (apiUrl, defaultClubs, logDir, currentClub) =>
+        CliConfig(apiUrl, defaultClubs, logDir.map(expandTilde), currentClub)
     }
 
   // A present-but-blank value (`api_url = ""` / whitespace) is treated as unset, so it falls back to the next

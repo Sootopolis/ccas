@@ -34,8 +34,9 @@ object TestCcasCompletion extends ZIOSpecDefault {
     """(--[a-z][a-z0-9-]*) <""".r.findAllMatchIn(help).map(_.group(1)).toSet
 
   // Command words from enumeration lines like "- blacklist add [--server …] <slug> …" (path = words before [ or <).
+  // The char class allows `-` so a hyphenated top-level command (e.g. `use-club`) is still seen by the drift guard.
   private val treeCommandWords: Set[String] =
-    """(?m)^\s*-\s+([a-z][a-z ]*?) +[\[<]""".r
+    """(?m)^\s*-\s+([a-z][a-z -]*?) +[\[<]""".r
       .findAllMatchIn(help)
       .flatMap(_.group(1).trim.split(" "))
       .toSet
@@ -93,12 +94,13 @@ object TestCcasCompletion extends ZIOSpecDefault {
     },
     test("positional kinds are pinned (not recoverable from help text)") {
       assertTrue(
-        positionalOf("membership") == PositionalKind.Slugs,
-        positionalOf("history") == PositionalKind.Slugs,
-        positionalOf("recruit") == PositionalKind.Slug,
+        positionalOf("use-club") == PositionalKind.Slug,
+        positionalOf("membership") == PositionalKind.NoArgs,
+        positionalOf("history") == PositionalKind.NoArgs,
+        positionalOf("recruit") == PositionalKind.NoArgs,
         positionalOf("logs") == PositionalKind.JobId,
         positionalOf("completion") == PositionalKind.Shell,
-        positionalOf("blacklist", "add") == PositionalKind.Slug
+        positionalOf("blacklist", "add") == PositionalKind.Other
       )
     }
   ) @@ TestAspect.sequential
