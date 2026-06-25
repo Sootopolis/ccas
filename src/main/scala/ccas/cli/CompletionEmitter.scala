@@ -1,6 +1,7 @@
 package ccas.cli
 
 import ccas.cli.CompletionSpec.{Group, Leaf, PositionalKind}
+import ccas.server.config.ServerEnvKeys
 
 /** Emits self-contained, pure-shell completion scripts (bash/zsh/fish) generated from [[CompletionSpec]]. The scripts
   * run entirely in the shell at `<TAB>` time — no JVM boot, no network — so completion is instant (the issue's <50ms
@@ -22,11 +23,16 @@ object CompletionEmitter {
   // --- shared spec-derived fragments ---
 
   private def posTag(k: PositionalKind): String = k match {
-    case PositionalKind.Slug  => "slug"
-    case PositionalKind.JobId => "jobid"
-    case PositionalKind.Shell => "shell"
-    case _                    => ""
+    case PositionalKind.Slug   => "slug"
+    case PositionalKind.JobId  => "jobid"
+    case PositionalKind.Shell  => "shell"
+    case PositionalKind.EnvKey => "envkey"
+    case _                     => ""
   }
+
+  // Static, compile-time candidate list for the `config get/set/unset` env-var-name positional. The completion scripts
+  // are pure-shell (no JVM callback), so the names are embedded directly. Registry order → byte-stable output.
+  private val envKeys: String = ServerEnvKeys.all.map(_.name).mkString(" ")
 
   // `--help` is appended by the emitted scripts themselves, so it is dropped from the per-command option list here.
   private def optsOf(leaf: Leaf): String = leaf.flags.filterNot(_ == "--help").mkString(" ")
@@ -107,6 +113,7 @@ object CompletionEmitter {
       "",
       "  local top=\"" + top + "\"",
       "  local global=\"" + global + "\"",
+      "  local envkeys=\"" + envKeys + "\"",
       "",
       "  # First non-flag word after \"ccas\" is the command; the next is the subcommand (" + groupNames + ").",
       "  local cmd=\"\" sub=\"\" i",
@@ -148,9 +155,10 @@ object CompletionEmitter {
       "  local posIndex=$(( posn - base ))",
       "",
       "  case \"$pos\" in",
-      "    slug)  (( posIndex == 0 )) && COMPREPLY=( $(compgen -W \"$(_ccas_cache clubs.txt)\" -- \"$cur\") ) ;;",
-      "    jobid) (( posIndex == 0 )) && COMPREPLY=( $(compgen -W \"$(_ccas_cache recent-jobs.txt)\" -- \"$cur\") ) ;;",
-      "    shell) (( posIndex == 0 )) && COMPREPLY=( $(compgen -W \"bash zsh fish\" -- \"$cur\") ) ;;",
+      "    slug)   (( posIndex == 0 )) && COMPREPLY=( $(compgen -W \"$(_ccas_cache clubs.txt)\" -- \"$cur\") ) ;;",
+      "    jobid)  (( posIndex == 0 )) && COMPREPLY=( $(compgen -W \"$(_ccas_cache recent-jobs.txt)\" -- \"$cur\") ) ;;",
+      "    shell)  (( posIndex == 0 )) && COMPREPLY=( $(compgen -W \"bash zsh fish\" -- \"$cur\") ) ;;",
+      "    envkey) (( posIndex == 0 )) && COMPREPLY=( $(compgen -W \"$envkeys\" -- \"$cur\") ) ;;",
       "    *) COMPREPLY=( $(compgen -W \"$opts --help\" -- \"$cur\") ) ;;",
       "  esac",
       "}",
@@ -192,6 +200,7 @@ object CompletionEmitter {
       "_ccas() {",
       "  local top=\"" + top + "\"",
       "  local global=\"" + global + "\"",
+      "  local envkeys=\"" + envKeys + "\"",
       "  local cur=\"${words[CURRENT]}\" prev=\"${words[CURRENT-1]}\"",
       "",
       "  local cmd=\"\" sub=\"\" i",
@@ -229,9 +238,10 @@ object CompletionEmitter {
       "  local posIndex=$(( posn - base ))",
       "",
       "  case \"$pos\" in",
-      "    slug)  (( posIndex == 0 )) && compadd -- ${(f)\"$(_ccas_cache clubs.txt)\"} ;;",
-      "    jobid) (( posIndex == 0 )) && compadd -- ${(f)\"$(_ccas_cache recent-jobs.txt)\"} ;;",
-      "    shell) (( posIndex == 0 )) && compadd -- bash zsh fish ;;",
+      "    slug)   (( posIndex == 0 )) && compadd -- ${(f)\"$(_ccas_cache clubs.txt)\"} ;;",
+      "    jobid)  (( posIndex == 0 )) && compadd -- ${(f)\"$(_ccas_cache recent-jobs.txt)\"} ;;",
+      "    shell)  (( posIndex == 0 )) && compadd -- bash zsh fish ;;",
+      "    envkey) (( posIndex == 0 )) && compadd -- ${=envkeys} ;;",
       "    *) compadd -- ${=opts} --help ;;",
       "  esac",
       "}",
@@ -268,10 +278,11 @@ object CompletionEmitter {
   private def fishPosLine(leaf: Leaf): Option[String] = {
     val cond = fishCond(leaf)
     val cache = leaf.positional match {
-      case PositionalKind.Slug  => Some("(__fish_ccas_cache clubs.txt)")
-      case PositionalKind.JobId => Some("(__fish_ccas_cache recent-jobs.txt)")
-      case PositionalKind.Shell => Some("bash zsh fish")
-      case _                    => None
+      case PositionalKind.Slug   => Some("(__fish_ccas_cache clubs.txt)")
+      case PositionalKind.JobId  => Some("(__fish_ccas_cache recent-jobs.txt)")
+      case PositionalKind.Shell  => Some("bash zsh fish")
+      case PositionalKind.EnvKey => Some(envKeys)
+      case _                     => None
     }
     cache.map(a => "complete -c ccas -n '" + cond + "' -f -a '" + a + "'")
   }

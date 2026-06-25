@@ -71,16 +71,17 @@ object ConfigCommand {
     }
 
   private def printList(map: Map[String, String], showSecrets: Boolean): UIO[ExitCode] = {
-    val knownLines = ServerEnvKeys.all.map { k =>
-      val display = map.get(k.name).fold("(unset)")(v => if (showSecrets) { v } else { ServerEnvKeys.redact(k.name, v) })
-      s"${k.name}=$display"
+    def display(name: String, v: String): String = if (showSecrets) { v } else { ServerEnvKeys.redact(name, v) }
+    def line(name: String): String = s"$name=${map.get(name).fold("(unset)")(display(name, _))}"
+    // Known keys grouped under a `# <domain>` header (registry order within each domain); domains separated by a blank.
+    val knownSections = ServerEnvKeys.grouped.map { case (domain, keys) =>
+      (s"# ${domain.label}" :: keys.map(k => line(k.name))).mkString("\n")
     }
     val knownNames = ServerEnvKeys.all.map(_.name).toSet
-    val otherLines = map.view.filterKeys(!knownNames(_)).toList.sortBy(_._1).map { case (name, v) =>
-      s"$name=${if (showSecrets) { v } else { ServerEnvKeys.redact(name, v) }}"
-    }
-    val output = (knownLines ::: (if (otherLines.nonEmpty) { "" :: "# Other keys set in the file:" :: otherLines } else { Nil }))
-      .mkString("\n")
+    val otherLines = map.view.filterKeys(!knownNames(_)).toList.sortBy(_._1).map { case (name, v) => s"$name=${display(name, v)}" }
+    val otherSection =
+      if (otherLines.nonEmpty) { List(("# Other keys set in the file:" :: otherLines).mkString("\n")) } else { Nil }
+    val output = (knownSections ::: otherSection).mkString("\n\n")
     Console.printLine(output).orDie.as(ExitCode.success)
   }
 
