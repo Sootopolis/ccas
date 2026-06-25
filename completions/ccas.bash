@@ -80,6 +80,9 @@ _ccas() {
     club)
       case "$sub" in
         "") COMPREPLY=( $(compgen -W "add remove list --help" -- "$cur") ); return ;;
+        add) opts="--server"; pos="slug" ;;
+        remove) opts="--server"; pos="slug" ;;
+        list) opts="--server" ;;
         *) COMPREPLY=(); return ;;
       esac ;;
     completion) pos="shell" ;;

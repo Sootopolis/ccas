@@ -138,17 +138,15 @@ object Dispatcher {
     case CliCommand.ScheduleRemove(_, id) =>
       api.delete(s"/api/schedules/$id") *> Console.printLine(s"deleted schedule $id").orDie.as(0)
 
-    case CliCommand.ClubsAdd(_, club) =>
-      resolveClub(club, currentClub).flatMap(slug =>
-        api.postUnit[MarkManagedRequest]("/api/managed-clubs", MarkManagedRequest(slug)) *>
-          Console.printLine(s"now managing ${ClubSlug.unwrap(slug)}").orDie.as(0)
-      )
+    case CliCommand.ClubsAdd(_, slug) =>
+      val add = ClubSlug(slug.trim)
+      api.postUnit[MarkManagedRequest]("/api/managed-clubs", MarkManagedRequest(add)) *>
+        Console.printLine(s"now managing ${ClubSlug.unwrap(add)}").orDie.as(0)
 
-    case CliCommand.ClubsRemove(_, club) =>
-      resolveClub(club, currentClub).flatMap(slug =>
-        api.delete(s"/api/managed-clubs/${ClubSlug.unwrap(slug)}") *>
-          Console.printLine(s"stopped managing ${ClubSlug.unwrap(slug)}").orDie.as(0)
-      )
+    case CliCommand.ClubsRemove(_, slug) =>
+      val remove = ClubSlug(slug.trim)
+      api.delete(s"/api/managed-clubs/${ClubSlug.unwrap(remove)}") *>
+        Console.printLine(s"stopped managing ${ClubSlug.unwrap(remove)}").orDie.as(0)
 
     case CliCommand.ClubsList(_) =>
       api.getJson[List[ManagedClubResponse]]("/api/managed-clubs").flatMap(clubs => printManagedClubs(clubs).as(0))
