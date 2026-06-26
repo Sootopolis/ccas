@@ -2,6 +2,7 @@ package ccas.server.jobs
 
 import java.nio.file.{Files, Path, Paths}
 import java.sql.SQLException
+import java.time.temporal.ChronoUnit
 
 import com.typesafe.config.ConfigFactory
 
@@ -10,7 +11,7 @@ import ccas.utils.sql.PostgresClient.withTransaction
 import zio.stream.ZStream
 import zio.{Clock, Duration, Promise, RIO, RLayer, Ref, Scope, UIO, ZIO, ZLayer, durationInt}
 
-import ccas.analysis.tables.RunTrigger
+import ccas.analysis.tables.{AppSetting, RunTrigger}
 import ccas.api.misc.subtypes.{ClubId, JobRunId}
 import ccas.utils.client.ChessComClient
 import ccas.utils.errors.{ConflictException, safeMessage}
@@ -70,6 +71,13 @@ object JobRunner {
           dir
         }.orDie
         _ <- JobRun.markOrphansAsFailed.provideEnvironment(zio.ZEnvironment(pgClient))
+        days   <- AppSetting.get(AppSetting.JobLogRetentionDays).provideEnvironment(zio.ZEnvironment(pgClient))
+        cutoff <- Clock.instant.map(_.minus(days.toLong, ChronoUnit.DAYS))
+        swept <- FileSink
+          .sweepBefore(logDir, cutoff)
+          .tapError(t => ZIO.logWarning(s"Job-log retention sweep failed: ${t.safeMessage}"))
+          .orElseSucceed(0)
+        _ <- ZIO.logInfo(s"Swept $swept job log(s) older than $days day(s) from $logDir").when(swept > 0)
       } yield new JobRunnerLive(display, client, pgClient, completions, layerScope, logDir)
     }
 

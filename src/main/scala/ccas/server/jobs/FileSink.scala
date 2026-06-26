@@ -3,7 +3,11 @@ package ccas.server.jobs
 import java.io.BufferedWriter
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, NoSuchFileException, Path, StandardOpenOption}
+import java.time.Instant
 import java.util.concurrent.atomic.AtomicBoolean
+
+import scala.jdk.CollectionConverters.*
+import scala.util.control.NonFatal
 
 import zio.{UIO, ZIO}
 
@@ -109,4 +113,28 @@ object FileSink {
     }
     new FileSink(path, None)
   }
+
+  /** Delete `*.log` files in `logDir` whose last-modified time is before `cutoff`, returning the count removed.
+    * Best-effort: a file that vanishes mid-sweep or can't be stat'd / deleted is skipped, never failing the sweep.
+    * Called one-shot from `JobRunner.live` at startup, mirroring the cache-retention sweep in `Tables.ensureTables`.
+    * The `*.log` glob means non-log files in the directory are left untouched.
+    */
+  def sweepBefore(logDir: Path, cutoff: Instant): ZIO[Any, Throwable, Int] =
+    ZIO.attemptBlocking {
+      val stream = Files.newDirectoryStream(logDir, "*.log")
+      val stale =
+        try stream.iterator().asScala.filter(olderThan(cutoff)).toList
+        finally stream.close()
+      stale.count(deleteQuietly)
+    }
+
+  // A file that vanished or can't be stat'd is treated as not-old (left alone); any non-fatal IO error is swallowed so
+  // one bad file never aborts the whole sweep.
+  private def olderThan(cutoff: Instant)(path: Path): Boolean =
+    try Files.getLastModifiedTime(path).toInstant.isBefore(cutoff)
+    catch { case NonFatal(_) => false }
+
+  private def deleteQuietly(path: Path): Boolean =
+    try Files.deleteIfExists(path)
+    catch { case NonFatal(_) => false }
 }

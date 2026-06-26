@@ -3,6 +3,9 @@ package ccas.utils
 import java.io.{ByteArrayOutputStream, PrintStream}
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
+import java.nio.file.attribute.FileTime
+import java.time.Instant
+import java.time.temporal.ChronoUnit
 
 import scala.jdk.CollectionConverters.*
 
@@ -18,7 +21,8 @@ object TestJobLogSink extends ZIOSpecDefault {
     testFileSinkTeesAnsiToStdout,
     testFileSinkCloseFlushesAndLatches,
     testFileSinkOpenFailureDisablesFile,
-    testCurrentSinkLocallyOverride
+    testCurrentSinkLocallyOverride,
+    testSweepBeforeDeletesOldLogsOnly
   ) @@ TestAspect.sequential
 
   // Built at runtime to avoid embedding a raw ESC byte in the source file.
@@ -115,6 +119,33 @@ object TestJobLogSink extends ZIOSpecDefault {
       ).map { case (fileAbsent, out) =>
         assertTrue(fileAbsent, out.contains("teed"))
       }
+    }
+
+  private def testSweepBeforeDeletesOldLogsOnly =
+    test("sweepBefore deletes *.log files older than cutoff, keeps fresh logs and non-log files") {
+      for {
+        dir     <- tempLogDir
+        oldLog   = dir.resolve("old.log")
+        freshLog = dir.resolve("fresh.log")
+        keepTxt  = dir.resolve("keep.txt") // old, but not a *.log → must survive the glob
+        cutoff   = Instant.now()
+        old      = FileTime.from(cutoff.minus(2, ChronoUnit.DAYS))
+        fresh    = FileTime.from(cutoff.plus(1, ChronoUnit.DAYS)) // pin ahead of cutoff so mtime granularity can't flip it
+        _ <- ZIO.attempt {
+          Files.write(oldLog, "old".getBytes(StandardCharsets.UTF_8))
+          Files.write(freshLog, "fresh".getBytes(StandardCharsets.UTF_8))
+          Files.write(keepTxt, "keep".getBytes(StandardCharsets.UTF_8))
+          Files.setLastModifiedTime(oldLog, old)
+          Files.setLastModifiedTime(freshLog, fresh)
+          Files.setLastModifiedTime(keepTxt, old)
+        }
+        deleted <- ccas.server.jobs.FileSink.sweepBefore(dir, cutoff)
+      } yield assertTrue(
+        deleted == 1,
+        !Files.exists(oldLog),
+        Files.exists(freshLog),
+        Files.exists(keepTxt)
+      )
     }
 
   /** Verifies the wiring path that JobRunner relies on: a `currentSink.locally(capture)` block around an effect that

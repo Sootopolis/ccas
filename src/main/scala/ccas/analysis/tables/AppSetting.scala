@@ -30,8 +30,11 @@ object AppSetting {
   /** Retention window (days) for `api_response_cache`, applied by `Tables.ensureTables`. */
   val CacheRetentionDays: Key[Int] = Key("cache_retention_days", 7, _.toIntOption, _.toString)
 
+  /** Retention window (days) for per-job log files in `${JOB_LOGS_DIR}`, applied by `JobRunner.live` on startup. */
+  val JobLogRetentionDays: Key[Int] = Key("job_log_retention_days", 14, _.toIntOption, _.toString)
+
   /** Every known key — for discoverability (e.g. a future `ccas settings list`). */
-  val all: List[Key[?]] = List(CacheRetentionDays)
+  val all: List[Key[?]] = List(CacheRetentionDays, JobLogRetentionDays)
 
   def createTable: ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
