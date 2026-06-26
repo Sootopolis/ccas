@@ -108,32 +108,44 @@ object JobRunner {
         }
         sink    <- FileSink.make(logDir, JobRunId.unwrap(id))
         promise <- Promise.make[Nothing, Unit]
+        // Runs in the CHILD fiber when the job ends (success, failure, or interruption): close the sink (flush + close
+        // the held-open writer) FIRST, then fire the completion promise, then de-register — so a tailer observes a
+        // fully written, closed file before it sees the job done, and always gets EOF, including on shutdown.
+        release = for {
+          _ <- sink.close()
+          _ <- promise.succeed(())
+          _ <- completions.update(_ - id)
+        } yield ()
         // Fork the job into the layer scope (not the submitting fiber) so it outlives the request that submitted it;
         // plain `.fork` would make it a child of the request handler fiber and structured concurrency would interrupt
         // it the moment the HTTP response is sent. `forkIn` also interrupts any still-running job when the layer scope
         // closes on server shutdown, and self-cleans on normal completion, so it's the sole job-lifecycle mechanism.
         //
         // Register the completion promise in the PARENT, before forking, so a log-tail subscribe issued the instant
-        // submit returns always sees the promise. The release (complete promise + de-register) runs in the CHILD fiber
-        // via `ensuring` — acquire and release live in different fibers, so a single `acquireRelease` bracket doesn't
-        // fit. `uninterruptibleMask` makes the register→fork pair atomic (an interrupt in between would leave a promise
-        // registered but never completed, hanging a later subscribe); `restore` keeps the forked job interruptible.
+        // submit returns always sees the promise. `release` (run via `ensuring`) completes the promise + de-registers
+        // in the CHILD fiber — acquire and release live in different fibers, so a single `acquireRelease` bracket
+        // doesn't fit. `uninterruptibleMask` makes the register→fork pair atomic (an interrupt in between would leave a
+        // promise registered but never completed, hanging a later subscribe); `restore` keeps the forked job interruptible.
         //
         // `currentSink.locally` wraps the entire `runJob` (not just the user effect) so the success/failure handlers'
         // own `ZIO.logError` calls also land in the per-job file. FiberRef values are inherited by forked children, so
-        // any parallel work the job spawns sees the same sink. The `ensuring` closes the sink (flushing + closing the
-        // held-open writer) and only then fires the completion promise, so the tailer observes a fully written, closed
-        // file before it sees the job as done; it runs on success, failure, and interruption, so a tailing client
-        // always gets EOF — including on shutdown.
+        // any parallel work the job spawns sees the same sink.
         _ <- ZIO.uninterruptibleMask { restore =>
-          completions.update(_ + (id -> promise)) *>
-            restore(
-              JobLogSink.currentSink
-                .locally(sink)(
-                  runJob(id, effect(Some(id)))
-                    .ensuring(sink.close() *> promise.succeed(()) *> completions.update(_ - id))
-                )
+          for {
+            _ <- completions.update(_ + (id -> promise))
+            _ <- restore(
+              // `installLogger` forces ProgressDisplay's ZLogger onto the job fiber itself, so the per-job FileSink is
+              // written regardless of which fiber submitted the job. `forkIn` inherits the submitter's loggers, and an
+              // HTTP request handler carries only the default logger (not the app-scoped ProgressDisplay one) — so
+              // without this, HTTP-submitted jobs logged to the default logger and their per-job file stayed empty (#132).
+              display.installLogger(
+                JobLogSink.currentSink
+                  .locally(sink)(
+                    runJob(id, effect(Some(id))).ensuring(release)
+                  )
+              )
             ).forkIn(layerScope)
+          } yield ()
         }
       } yield id).catchSome {
         // Phantom-row race: two transactions both saw no running job, the unique partial index

@@ -142,6 +142,25 @@ final class ProgressDisplay private[utils] (
     }
   }
 
+  /** Run `zio` (and every fiber it forks) with the runtime's default loggers removed and this display's `asZLogger`
+    * installed — the same `{asZLogger}` end-state `live` establishes (idempotent when already in it, e.g. the
+    * scheduler path), but applied inline to one effect rather than a layer scope. `JobRunner` wraps each
+    * job with this so a job submitted from a fiber that never entered the `live` logger scope — e.g. a zio-http
+    * request handler, which carries only the runtime's default loggers — still routes its `ZIO.log*` through
+    * `asZLogger` into the per-job `JobLogSink` file ([[ccas.server.jobs.FileSink]]). Without it, `.forkIn` inheritance
+    * leaves such jobs logging via the default logger and the per-job file stays empty (#132). Removing the defaults
+    * (not merely adding `asZLogger`) keeps those jobs from also emitting a second, structured copy to the server
+    * console, so HTTP-submitted jobs log identically to scheduler-submitted ones.
+    */
+  def installLogger[R, E, A](zio: ZIO[R, E, A]): ZIO[R, E, A] =
+    ZIO.scoped[R] {
+      for {
+        _ <- Runtime.removeDefaultLoggers.build
+        _ <- ZIO.withLoggerScoped(asZLogger)
+        a <- zio
+      } yield a
+    }
+
   // ---------------------------------------------------------------------------
   // Internal rendering — single-line, \r-based (no cursor-up needed). The `enabled` check lives in these
   // helpers so callers don't repeat it; both also short-circuit on empty bar lists. Always called from inside

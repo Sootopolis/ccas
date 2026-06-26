@@ -8,7 +8,7 @@ import scala.jdk.CollectionConverters.*
 import com.typesafe.config.ConfigFactory
 
 import ccas.utils.sql.PostgresClient
-import zio.{durationInt, Promise, Ref, Scope, ZIO, ZLayer}
+import zio.{durationInt, Promise, Ref, ZIO, ZLayer}
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.analysis.tables.{Club, RunTrigger}
@@ -41,9 +41,15 @@ object TestJobRunner extends ZIOSpecDefault {
     FreshSchemaLayer("test_job_runner", onInit = ServerTables.ensureTables),
     TestChessComClientSupport.dummyLayer,
     JobRunner.live,
-    // `Scope.default` is the global, never-closing scope. Fine for a single suite — the ZLogger swap and
-    // `finishAllSync` finalizer would only matter if multiple suites shared this layer. Revisit if that changes.
-    Scope.default >>> ProgressDisplay.live(showProgress = false)
+    // #132 regression seam: provide ProgressDisplay as a plain *service* with NO ambient ZLogger. `ProgressDisplay.live`
+    // would install `asZLogger` into `currentLoggers` for the whole suite fiber tree, so every `submit` would inherit it
+    // and fill the per-job file even on the unfixed code — masking the bug. `make` installs no logger, so each `submit`
+    // here runs from the same default-logger context as a zio-http request handler (the condition #132 fails under).
+    // The fix wraps each job in `display.installLogger`, so the per-job-log assertions (testSubmitWritesJobLog,
+    // testLogStreamReplaysCompletedJob, testLogStreamTailsLiveJob) pass only with the fix applied. Caveat: without
+    // `live`'s suite-wide default-logger removal, a test that logs at the test-fiber level (outside a job) hits the
+    // default logger, not `asZLogger` — assert per-job-log behaviour only through `submit`.
+    ZLayer.succeed(ProgressDisplay.make(enabled = false))
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock @@ TestAspect.timeout(30.seconds)
 
   private object Times {
