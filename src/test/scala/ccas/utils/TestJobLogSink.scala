@@ -19,8 +19,8 @@ object TestJobLogSink extends ZIOSpecDefault {
     testFileSinkAppendsLines,
     testFileSinkStripsAnsiFromFile,
     testFileSinkTeesAnsiToStdout,
-    testFileSinkCloseFlushesAndLatches,
-    testFileSinkOpenFailureDisablesFile,
+    testFileSinkClosesAndIgnoresLateWrites,
+    testFileSinkOpenFailureSuppressesAndRetries,
     testCurrentSinkLocallyOverride,
     testSweepBeforeDeletesOldLogsOnly
   ) @@ TestAspect.sequential
@@ -90,7 +90,7 @@ object TestJobLogSink extends ZIOSpecDefault {
     }
   }
 
-  private def testFileSinkCloseFlushesAndLatches =
+  private def testFileSinkClosesAndIgnoresLateWrites =
     test("close flushes buffered content and a post-close writeFileSync is a no-op") {
       captureStdout(
         for {
@@ -98,21 +98,23 @@ object TestJobLogSink extends ZIOSpecDefault {
           sink  <- ccas.server.jobs.FileSink.make(dir, "job-close")
           _     <- ZIO.succeed(sink.writeFileSync("before-close"))
           _     <- sink.close()
-          _     <- ZIO.succeed(sink.writeFileSync("after-close")) // latched → dropped, must not throw
+          _     <- ZIO.succeed(sink.writeFileSync("after-close")) // closed → no-op, must not throw
           path  =  dir.resolve("job-close.log")
           lines <- ZIO.attempt(Files.readAllLines(path).asScala.toList)
         } yield assertTrue(lines == List("before-close"))
       ).map(_._1)
     }
 
-  private def testFileSinkOpenFailureDisablesFile =
-    test("make tolerates an open failure: file logging disabled, stdout tee still works, no throw") {
+  // A single write into a missing dir stays suppressed (no reopen until the default retry gate opens), so the file is
+  // still absent here; the full suppress → retry → recover behaviour is covered in ccas.server.jobs.TestFileSink.
+  private def testFileSinkOpenFailureSuppressesAndRetries =
+    test("make tolerates an open failure: file logging suppressed, stdout tee still works, no throw") {
       captureStdout(
         for {
           base       <- tempLogDir
           missing    =  base.resolve("does-not-exist") // parent dir absent → newBufferedWriter(CREATE) fails
           sink       <- ccas.server.jobs.FileSink.make(missing, "job-nodir")
-          _          <- ZIO.succeed(sink.writeFileSync("dropped"))   // file disabled → no-op, must not throw
+          _          <- ZIO.succeed(sink.writeFileSync("dropped"))   // suppressed, gate closed → no-op, must not throw
           _          <- ZIO.succeed(sink.writeConsoleSync("teed"))   // tee still works
           fileAbsent <- ZIO.attempt(!Files.exists(missing.resolve("job-nodir.log")))
         } yield fileAbsent
