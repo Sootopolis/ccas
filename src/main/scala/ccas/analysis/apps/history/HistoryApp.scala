@@ -2,7 +2,7 @@ package ccas.analysis.apps.history
 
 import java.time.{Duration as JDuration, Instant}
 
-import zio.{Chunk, ExitCode, NonEmptyChunk, RIO, Ref, Scope, URIO, ZEnvironment, ZIO, ZIOAppArgs, ZIOAppDefault}
+import zio.{Chunk, ExitCode, NonEmptyChunk, RIO, Ref, Scope, Task, URIO, ZEnvironment, ZIO, ZIOAppArgs, ZIOAppDefault}
 import HistoryUtils.*
 
 import ccas.analysis.apps.membership.MembershipApp
@@ -170,9 +170,10 @@ object HistoryApp extends ZIOAppDefault {
       } yield ()
     }
 
-  private def outputResult(r: HistoryResult): RIO[ProgressDisplay, Unit] =
-    logSummary(r.stats, r.startedAt, r.completedAt) *>
-      OutputFile.writeAndLog("history", r.clubSlug, formatReport(r.stats, r.clubSlug, r.startedAt, r.completedAt))
+  // Summary logging now happens inside discoverClub (shared by CLI + server + scheduler); the CLI additionally writes
+  // the out/ report file here.
+  private def outputResult(r: HistoryResult): Task[Unit] =
+    OutputFile.writeAndLog("history", r.clubSlug, formatReport(r.stats, r.clubSlug, r.startedAt, r.completedAt))
 
   private def initialize(
     clubSlug: ClubSlug,
@@ -350,6 +351,10 @@ object HistoryApp extends ZIOAppDefault {
         totalStats.refreshMatchUnchanged, totalStats.seedClubMatchesUnchanged, totalStats.seedPlayerMatchesUnchanged,
         totalStats.matchesAborted
       )
+      // Emit the completion summary from inside the core fn (not the CLI-only outputResult) so HTTP- and
+      // scheduler-submitted jobs surface it in their per-job log too — the silent-tail gap membership #130 closed for
+      // reconcile. Mutually exclusive with finalizeInterrupted's logSummary (onInterrupt vs normal completion).
+      _ <- logSummary(totalStats, startedAt, completedAt)
     } yield HistoryResult(totalStats, clubSlug, startedAt, completedAt)
   }
 
