@@ -223,9 +223,10 @@ object JobRoutes {
           Some(body.toJson),
           _ => parsed match {
             case Some((since, until)) =>
-              StatsApp.playerOfPeriod(body.clubSlug, since, until).unit
+              // minGames=1 mirrors the CLI default; StatsRequest carries no min-games field.
+              StatsApp.playerOfPeriodAndReport(body.clubSlug, since, until, 1).unit
             case None =>
-              StatsApp.memberStats(body.clubSlug).unit
+              StatsApp.memberStatsAndReport(body.clubSlug).unit
           }
         )
       } yield jsonResponse(Status.Ok, result)).pipe(withErrorHandling)

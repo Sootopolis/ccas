@@ -62,19 +62,16 @@ object StatsApp extends ZIOAppDefault {
         parsed <- parseArgs(args)
         _ <- (parsed.since, parsed.until) match {
           case (Some(s), Some(u)) =>
+            val mg = parsed.minGames.getOrElse(1)
             for {
-              result  <- playerOfPeriod(parsed.slug, s, u)
-              mg       = parsed.minGames.getOrElse(1)
-              content  = StatsReport.formatPlayerOfPeriod(result.contributions, mg)
-              eligible = result.contributions.count(_.raw.games >= mg)
-              _ <- ZIO.logInfo(s"Players: ${result.contributions.size}, Eligible (>=$mg games): $eligible")
+              result <- playerOfPeriodAndReport(parsed.slug, s, u, mg)
+              content = StatsReport.formatPlayerOfPeriod(result.contributions, mg)
               _ <- OutputFile.writeAndLog("stats", parsed.slug, content, ext = "csv")
             } yield ()
           case (None, None) =>
             for {
-              result  <- memberStats(parsed.slug)
-              content  = StatsReport.formatContribution(result.contributions)
-              _ <- ZIO.logInfo(s"Players: ${result.contributions.size}, Boards: ${result.boardCount}, Matches: ${result.matchCount}")
+              result <- memberStatsAndReport(parsed.slug)
+              content = StatsReport.formatContribution(result.contributions)
               _ <- OutputFile.writeAndLog("stats", parsed.slug, content, ext = "csv")
             } yield ()
           case _ => ZIO.fail(BadRequestException("Both --since and --until are required for period stats"))
@@ -114,6 +111,26 @@ object StatsApp extends ZIOAppDefault {
       usernameMap <- Player.resolveUsernames(playerIds)
       contributions = aggregate(rows, usernameMap)
     } yield StatsResult(contributions, rows.size, matchCount)
+
+  // The core stats fns are pure DB reads with no logging. These wrappers append the one-line summary so HTTP- and
+  // scheduler-submitted stats jobs surface it in their per-job log (the CLI additionally writes the out/ CSV) — the
+  // shared-reporting split membership #130 established. Period eligibility is a presentation threshold (minGames), so
+  // it stays a wrapper arg rather than polluting playerOfPeriod's signature.
+  def memberStatsAndReport(clubSlug: ClubSlug): RIO[PostgresClient, StatsResult] =
+    memberStats(clubSlug).tap(r =>
+      ZIO.logInfo(s"Players: ${r.contributions.size}, Boards: ${r.boardCount}, Matches: ${r.matchCount}")
+    )
+
+  def playerOfPeriodAndReport(
+    clubSlug: ClubSlug,
+    since: Instant,
+    until: Instant,
+    minGames: Int
+  ): RIO[PostgresClient, StatsResult] =
+    playerOfPeriod(clubSlug, since, until).tap { r =>
+      val eligible = r.contributions.count(_.raw.games >= minGames)
+      ZIO.logInfo(s"Players: ${r.contributions.size}, Eligible (>=$minGames games): $eligible")
+    }
 
   private def flagValue(args: zio.Chunk[String], flag: String): Option[String] = {
     val idx = args.indexOf(flag)

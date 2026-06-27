@@ -92,7 +92,7 @@ object JobScheduler {
         case JobKind.Membership =>
           (jobRunId: Option[JobRunId]) =>
             requireClubSlug.flatMap(name =>
-              MembershipApp.reconcile(name, trigger = RunTrigger.Scheduled, jobRunId = jobRunId).unit
+              MembershipApp.reconcileAndReport(name, trustUsernames = true, RunTrigger.Scheduled, jobRunId).unit
             )
         case JobKind.MatchRef =>
           (_: Option[JobRunId]) => RefApp.populate(forceSkipped = false, upgradeRefs = false).unit
@@ -103,7 +103,7 @@ object JobScheduler {
             )
         case JobKind.Stats =>
           (_: Option[JobRunId]) =>
-            requireClubSlug.flatMap(name => StatsApp.memberStats(name).unit)
+            requireClubSlug.flatMap(name => StatsApp.memberStatsAndReport(name).unit)
         case JobKind.ClubData =>
           (_: Option[JobRunId]) => ClubDataApp.refresh(minAgeHours = None).unit
       }
