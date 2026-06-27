@@ -247,9 +247,17 @@ object HistoryApp extends ZIOAppDefault {
       memberSeedRef <- Ref.make(MemberSeedResult(0, 0, Nil))
       seedStaleRef  <- Ref.make(0)
       refreshedRef  <- Ref.make(0)
+      // Flipped once the success-path finalizer commits, so the onInterrupt finalizer below skips a second
+      // (partial-stats) finalize on a late interrupt — see #137.
+      finalizedRef  <- Ref.make(false)
 
-      // === Phases 2-3: Seed + Process (interrupt-safe) ===
-      waveStats <- {
+      // === Phases 2-4: Seed + Process + Finalize (interrupt-safe as a whole) ===
+      // The guard spans Phase 4 too, so an interrupt landing in finalization no longer escapes between the old
+      // Phases-2-3-only guard and the finalize step, stranding a non-terminal history_run (#137). The success-path
+      // finalizer (HistoryRun.complete + logSummary + finalizedRef) and the onInterrupt finalizer are mutually
+      // exclusive: success runs atomically (uninterruptible) and flips finalizedRef, so a late interrupt skips the
+      // interrupt path; an interrupt anywhere earlier finds finalizedRef false and completes the run with partial stats.
+      result <- {
         for {
           // Phase 2: Seed match IDs
           _ <- ZIO.logInfo(
@@ -320,42 +328,44 @@ object HistoryApp extends ZIOAppDefault {
             case None => ZIO.succeed(0)
           }
           _ <- refreshedRef.set(refreshed)
-        } yield ws.copy(matchesRefreshed = refreshed)
-      }.onInterrupt {
-        for {
-          sc <- seedClubRef.get
-          ms <- memberSeedRef.get
-          ss <- seedStaleRef.get
-          rf <- refreshedRef.get
-          skip = allMembers.size - ms.queried - ms.failed
-          _ <- finalizeInterrupted(ctx, runId, startedAt, clubSlug, ms, skip, sc, ss, rf)
-            .provideEnvironment(ZEnvironment(display, pgClient)).orDie
-        } yield ()
-      }
+          waveStats = ws.copy(matchesRefreshed = refreshed)
 
-      // === Phase 4: Finalize ===
-      seedClub   <- seedClubRef.get
-      memberSeed <- memberSeedRef.get
-      seedStale  <- seedStaleRef.get
-      membersSkipped = allMembers.size - memberSeed.queried - memberSeed.failed
-      completedAt    = Instant.now()
-      totalStats = waveStats.copy(
-        membersQueried = memberSeed.queried,
-        membersSkipped = membersSkipped,
-        membersFailed = memberSeed.failed,
-        matchesSeeded = seedClub + memberSeed.seeded + seedStale,
-        failedMembers = memberSeed.failedMembers
-      )
-      _ <- HistoryRun.complete(
-        runId, completedAt, totalStats.matchesProcessed + totalStats.matchesSharedSkip, totalStats.playersDiscovered,
-        totalStats.refreshMatchUnchanged, totalStats.seedClubMatchesUnchanged, totalStats.seedPlayerMatchesUnchanged,
-        totalStats.matchesAborted
-      )
-      // Emit the completion summary from inside the core fn (not the CLI-only outputResult) so HTTP- and
-      // scheduler-submitted jobs surface it in their per-job log too — the silent-tail gap membership #130 closed for
-      // reconcile. Mutually exclusive with finalizeInterrupted's logSummary (onInterrupt vs normal completion).
-      _ <- logSummary(totalStats, startedAt, completedAt)
-    } yield HistoryResult(totalStats, clubSlug, startedAt, completedAt)
+          // === Phase 4: Finalize ===
+          seedClub   <- seedClubRef.get
+          memberSeed <- memberSeedRef.get
+          seedStale  <- seedStaleRef.get
+          membersSkipped = allMembers.size - memberSeed.queried - memberSeed.failed
+          completedAt    = Instant.now()
+          totalStats = waveStats.copy(
+            membersQueried = memberSeed.queried,
+            membersSkipped = membersSkipped,
+            membersFailed = memberSeed.failed,
+            matchesSeeded = seedClub + memberSeed.seeded + seedStale,
+            failedMembers = memberSeed.failedMembers
+          )
+          // Complete + summary + flag commit atomically: an interrupt can't split them (leaving the run marked complete
+          // but unlogged, or finalizedRef unset). logSummary lands the completion summary in the per-job log for HTTP-
+          // and scheduler-submitted jobs too — the silent-tail gap membership #130 closed for reconcile.
+          _ <- (HistoryRun.complete(
+            runId, completedAt, totalStats.matchesProcessed + totalStats.matchesSharedSkip, totalStats.playersDiscovered,
+            totalStats.refreshMatchUnchanged, totalStats.seedClubMatchesUnchanged, totalStats.seedPlayerMatchesUnchanged,
+            totalStats.matchesAborted
+          ) *> logSummary(totalStats, startedAt, completedAt) *> finalizedRef.set(true)).uninterruptible
+        } yield HistoryResult(totalStats, clubSlug, startedAt, completedAt)
+      }.onInterrupt {
+        ZIO.unlessZIODiscard(finalizedRef.get) {
+          for {
+            sc <- seedClubRef.get
+            ms <- memberSeedRef.get
+            ss <- seedStaleRef.get
+            rf <- refreshedRef.get
+            skip = allMembers.size - ms.queried - ms.failed
+            _ <- finalizeInterrupted(ctx, runId, startedAt, clubSlug, ms, skip, sc, ss, rf)
+              .provideEnvironment(ZEnvironment(display, pgClient)).orDie
+          } yield ()
+        }
+      }
+    } yield result
   }
 
   // === Reporting ===
