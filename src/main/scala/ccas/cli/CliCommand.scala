@@ -86,7 +86,10 @@ object CliCommand {
   final case class ScheduleAdd(
     server: String,
     kind: String,
-    intervalHours: Int,
+    intervalHours: Option[Int],
+    cron: Option[String],
+    tz: Option[String],
+    misfire: Option[String],
     club: Option[String],
     params: Option[String]
   ) extends ServerCommand
@@ -254,12 +257,15 @@ object CliCommand {
       "add",
       serverOpt(default) ++
         (Options.text("kind") ?? "Job kind: Recruitment, Membership, MatchRef, History, Stats, or ClubData") ++
-        (Options.integer("interval-hours").map(_.toInt) ?? "Run the job every N hours") ++
+        (intOpt("interval-hours") ?? "Interval trigger: run the job every N hours") ++
+        (Options.text("cron").optional ?? "Cron trigger: 5-field expression, e.g. '0 9 * * MON'") ++
+        (Options.text("tz").optional ?? "Cron timezone (IANA, e.g. Europe/London; default UTC)") ++
+        (Options.text("misfire").optional ?? "Cron misfire policy: skip (default) or catch_up") ++
         (Options.text("club").optional ?? "Club slug the job targets (when the kind needs one)") ++
         (Options.text("params").optional ?? "Extra job parameters passed to the run")
-    ).withHelp("Create a scheduled job")
-      .map { case (server, kind, intervalHours, club, params) =>
-        ScheduleAdd(server, kind, intervalHours, club, params)
+    ).withHelp("Create a scheduled job (interval via --interval-hours, or wall-clock via --cron)")
+      .map { case (server, kind, intervalHours, cron, tz, misfire, club, params) =>
+        ScheduleAdd(server, kind, intervalHours, cron, tz, misfire, club, params)
       }
 
   private def scheduleRemove(default: String): Command[CliCommand] =

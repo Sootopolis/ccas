@@ -117,7 +117,31 @@ object TestCliParser extends ZIOSpecDefault {
     },
     test("schedule add parses kind and interval") {
       parsed("schedule", "add", "--kind", "Recruitment", "--interval-hours", "24", "--club", "team-alpha").map(c =>
-        assertTrue(c.contains(CliCommand.ScheduleAdd(DefaultServer, "Recruitment", 24, Some("team-alpha"), None)))
+        assertTrue(
+          c.contains(
+            CliCommand.ScheduleAdd(DefaultServer, "Recruitment", Some(24), None, None, None, Some("team-alpha"), None)
+          )
+        )
+      )
+    },
+    test("schedule add parses cron, tz and misfire") {
+      parsed(
+        "schedule", "add", "--kind", "ClubData", "--cron", "0 9 * * MON", "--tz", "Europe/London", "--misfire", "catch_up"
+      ).map(c =>
+        assertTrue(
+          c.contains(
+            CliCommand.ScheduleAdd(
+              DefaultServer,
+              "ClubData",
+              None,
+              Some("0 9 * * MON"),
+              Some("Europe/London"),
+              Some("catch_up"),
+              None,
+              None
+            )
+          )
+        )
       )
     },
     test("schedule remove parses the id") {

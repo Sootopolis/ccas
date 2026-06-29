@@ -16,6 +16,7 @@ import ccas.server.routes.JobRoutes.{
   StatsRequest
 }
 import ccas.server.routes.ScheduleRoutes.{CreateScheduleRequest, ScheduleResponse}
+import ccas.server.scheduler.{MisfirePolicy, TriggerType}
 
 /** Maps a parsed [[CliCommand]] to HTTP calls against the local server and renders the result, returning the process
   * exit code. `Serve` is handled in [[Main]] (it boots the server rather than calling it), never here.
@@ -129,11 +130,18 @@ object Dispatcher {
     case CliCommand.ScheduleList(_) =>
       api.getJson[List[ScheduleResponse]]("/api/schedules").flatMap(schedules => printSchedules(schedules).as(0))
 
-    case CliCommand.ScheduleAdd(_, kind, intervalHours, club, params) =>
-      api.postJson[CreateScheduleRequest, ScheduleResponse](
-        "/api/schedules",
-        CreateScheduleRequest(kind, club, params, intervalHours)
-      ).flatMap(s => Console.printLine(s"created schedule ${s.id} (${s.kind}, every ${s.intervalHours}h)").orDie.as(0))
+    case CliCommand.ScheduleAdd(_, kind, intervalHours, cron, tz, misfire, club, params) =>
+      // --interval-hours and --cron are mutually exclusive (exactly one required); the server enforces the XOR
+      // and returns a clean 400 if both/neither are given. triggerType follows whether --cron is present.
+      for {
+        mp <- ZIO.foreach(misfire)(parseMisfire)
+        triggerType = if (cron.isDefined) TriggerType.Cron else TriggerType.Interval
+        s <- api.postJson[CreateScheduleRequest, ScheduleResponse](
+          "/api/schedules",
+          CreateScheduleRequest(kind, club, params, Some(triggerType), intervalHours, cron, tz, mp)
+        )
+        _ <- Console.printLine(s"created schedule ${s.id} (${s.kind}, ${triggerSummary(s)})").orDie
+      } yield 0
 
     case CliCommand.ScheduleRemove(_, id) =>
       api.delete(s"/api/schedules/$id") *> Console.printLine(s"deleted schedule $id").orDie.as(0)
@@ -178,6 +186,20 @@ object Dispatcher {
   // Absent flag -> None (server defaults to false); present -> Some(true). Avoids sending a redundant `false`.
   private def flag(b: Boolean): Option[Boolean] = Option.when(b)(true)
 
+  private def parseMisfire(s: String): IO[CliError, MisfirePolicy] =
+    s.trim.toLowerCase match {
+      case "skip"                 => ZIO.succeed(MisfirePolicy.Skip)
+      case "catch_up" | "catchup" => ZIO.succeed(MisfirePolicy.CatchUp)
+      case other                  => ZIO.fail(CliError(s"invalid --misfire '$other' (expected skip or catch_up)", 2))
+    }
+
+  // One-line trigger description for a schedule response (interval vs cron).
+  private def triggerSummary(s: ScheduleResponse): String =
+    s.cron match {
+      case Some(c) => s"cron '$c' (${s.timezone.getOrElse("UTC")}, misfire ${s.misfire.getOrElse("skip")})"
+      case None    => s"every ${s.intervalHours.getOrElse(0)}h"
+    }
+
   private def printJobs(jobs: List[JobStatusResponse]): UIO[Unit] =
     if (jobs.isEmpty) { Console.printLine("no jobs").orDie }
     else {
@@ -194,7 +216,7 @@ object Dispatcher {
       ZIO.foreachDiscard(schedules)(s =>
         Console
           .printLine(
-            s"#${s.id}  ${s.kind}  every ${s.intervalHours}h  enabled=${s.enabled}${s.clubId.fold("")(c => s"  club=$c")}"
+            s"#${s.id}  ${s.kind}  ${triggerSummary(s)}  enabled=${s.enabled}${s.clubId.fold("")(c => s"  club=$c")}"
           )
           .orDie
       )

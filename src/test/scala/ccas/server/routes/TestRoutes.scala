@@ -482,7 +482,13 @@ object TestRoutes extends ZIOSpecDefault {
     testPostSchedulesNonPositiveIntervalReturns400,
     testPostSchedulesUnknownClubReturns404,
     testPutScheduleNonPositiveIntervalReturns400,
-    testPutScheduleUnknownIdReturns404
+    testPutScheduleUnknownIdReturns404,
+    testPostCronScheduleCreates,
+    testPostCronInvalidExprReturns400,
+    testPostCronInvalidTimezoneReturns400,
+    testPostBothTriggersReturns400,
+    testPostCronMissingExprReturns400,
+    testPostSchedulesIntervalOverflowReturns400
   )
 
   private def testGetSchedulesReturnsEmptyList = test("GET /api/schedules returns empty list") {
@@ -576,10 +582,17 @@ object TestRoutes extends ZIOSpecDefault {
 
   private def testPutScheduleNonPositiveIntervalReturns400 = test("PUT /api/schedules/:id with non-positive intervalHours returns 400") {
     for {
-      response <- ScheduleRoutes.routes.runZIO(
-        jsonRequest(Method.PUT, "/api/schedules/1", """{"intervalHours":-1}""")
+      _ <- deleteAllSchedules
+      createResp <- ScheduleRoutes.routes.runZIO(
+        jsonRequest(Method.POST, "/api/schedules", """{"kind":"Recruitment","clubSlug":"test-club","intervalHours":24}""")
       )
-    } yield assertTrue(response.status == Status.BadRequest)
+      listResp <- ScheduleRoutes.routes.runZIO(jsonRequest(Method.GET, "/api/schedules"))
+      listBody <- listResp.body.asString
+      id = extractFirstId(listBody)
+      response <- ScheduleRoutes.routes.runZIO(
+        jsonRequest(Method.PUT, s"/api/schedules/$id", """{"intervalHours":-1}""")
+      )
+    } yield assertTrue(createResp.status == Status.Created, response.status == Status.BadRequest)
   }
 
   private def testPutScheduleUnknownIdReturns404 = test("PUT /api/schedules with unknown id returns 404") {
@@ -588,6 +601,74 @@ object TestRoutes extends ZIOSpecDefault {
         jsonRequest(Method.PUT, "/api/schedules/999999", """{"enabled":false}""")
       )
     } yield assertTrue(response.status == Status.NotFound)
+  }
+
+  private def testPostCronScheduleCreates = test("POST /api/schedules creates a cron schedule") {
+    for {
+      _ <- deleteAllSchedules
+      response <- ScheduleRoutes.routes.runZIO(
+        jsonRequest(
+          Method.POST,
+          "/api/schedules",
+          """{"kind":"ClubData","triggerType":"cron","cron":"0 9 * * MON","timezone":"Europe/London","misfire":"catch_up"}"""
+        )
+      )
+      body <- response.body.asString
+    } yield assertTrue(
+      response.status == Status.Created,
+      body.contains("\"triggerType\":\"cron\""),
+      body.contains("Europe/London"),
+      body.contains("catch_up"),
+      body.contains("0 9 * * MON") // de-normalized back to the 5-field input the user typed (seconds dropped, ? -> *)
+    )
+  }
+
+  private def testPostCronInvalidExprReturns400 = test("POST /api/schedules with an invalid cron returns 400") {
+    for {
+      response <- ScheduleRoutes.routes.runZIO(
+        jsonRequest(Method.POST, "/api/schedules", """{"kind":"ClubData","triggerType":"cron","cron":"99 9 * * *"}""")
+      )
+    } yield assertTrue(response.status == Status.BadRequest)
+  }
+
+  private def testPostCronInvalidTimezoneReturns400 = test("POST /api/schedules with a bad timezone returns 400") {
+    for {
+      response <- ScheduleRoutes.routes.runZIO(
+        jsonRequest(
+          Method.POST,
+          "/api/schedules",
+          """{"kind":"ClubData","triggerType":"cron","cron":"0 9 * * *","timezone":"Mars/Phobos"}"""
+        )
+      )
+    } yield assertTrue(response.status == Status.BadRequest)
+  }
+
+  private def testPostBothTriggersReturns400 = test("POST /api/schedules with both intervalHours and cron returns 400") {
+    for {
+      response <- ScheduleRoutes.routes.runZIO(
+        jsonRequest(
+          Method.POST,
+          "/api/schedules",
+          """{"kind":"ClubData","triggerType":"cron","intervalHours":24,"cron":"0 9 * * *"}"""
+        )
+      )
+    } yield assertTrue(response.status == Status.BadRequest)
+  }
+
+  private def testPostCronMissingExprReturns400 = test("POST /api/schedules cron trigger without a cron expression returns 400") {
+    for {
+      response <- ScheduleRoutes.routes.runZIO(
+        jsonRequest(Method.POST, "/api/schedules", """{"kind":"ClubData","triggerType":"cron","timezone":"UTC"}""")
+      )
+    } yield assertTrue(response.status == Status.BadRequest)
+  }
+
+  private def testPostSchedulesIntervalOverflowReturns400 = test("POST /api/schedules with intervalHours above SMALLINT returns 400") {
+    for {
+      response <- ScheduleRoutes.routes.runZIO(
+        jsonRequest(Method.POST, "/api/schedules", """{"kind":"Recruitment","clubSlug":"test-club","intervalHours":40000}""")
+      )
+    } yield assertTrue(response.status == Status.BadRequest)
   }
 
   // ==========================================================================
