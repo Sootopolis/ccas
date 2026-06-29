@@ -15,4 +15,5 @@ object Versions {
   val vUlidCreator  = "5.2.4"
   val vZioCli       = "0.8.1"
   val vSlf4j        = "2.0.17"
+  val vCron4s       = "0.8.2"
 }

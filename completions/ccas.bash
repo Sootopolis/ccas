@@ -47,7 +47,7 @@ _ccas() {
   # Right after --club: offer cached club slugs. Right after any other value flag: offer nothing.
   case "$prev" in
     --club) COMPREPLY=( $(compgen -W "$(_ccas_cache clubs.txt)" -- "$cur") ); return ;;
-    --server|--club|--refresh-min-hours|--alias|--target|--source-clubs|--time-limit-minutes|--since|--until|--limit|--reason|--months|--kind|--interval-hours|--params) return ;;
+    --server|--club|--refresh-min-hours|--alias|--target|--source-clubs|--time-limit-minutes|--since|--until|--limit|--reason|--months|--kind|--interval-hours|--cron|--tz|--misfire|--params) return ;;
   esac
 
   local opts="" pos=""
@@ -74,7 +74,7 @@ _ccas() {
       case "$sub" in
         "") COMPREPLY=( $(compgen -W "list add remove --help" -- "$cur") ); return ;;
         list) opts="--server" ;;
-        add) opts="--server --kind --interval-hours --club --params" ;;
+        add) opts="--server --kind --interval-hours --cron --tz --misfire --club --params" ;;
         remove) opts="--server" ;;
         *) COMPREPLY=(); return ;;
       esac ;;
@@ -112,7 +112,7 @@ _ccas() {
     w="${words[j]}"
     if (( skip )); then skip=0; continue; fi
     case "$w" in
-      -*) case "$w" in --server|--club|--refresh-min-hours|--alias|--target|--source-clubs|--time-limit-minutes|--since|--until|--limit|--reason|--months|--kind|--interval-hours|--params) skip=1 ;; esac ;;
+      -*) case "$w" in --server|--club|--refresh-min-hours|--alias|--target|--source-clubs|--time-limit-minutes|--since|--until|--limit|--reason|--months|--kind|--interval-hours|--cron|--tz|--misfire|--params) skip=1 ;; esac ;;
       *) (( posn++ )) ;;
     esac
   done

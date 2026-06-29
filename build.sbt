@@ -38,6 +38,9 @@ libraryDependencies ++= Seq(
   // zio-cli (CLI parsing — ZIO-native, also generates shell completions)
   "dev.zio" %% "zio-cli" % vZioCli,
 
+  // cron4s — wall-clock CRON schedule triggers (6-field; java.time next/prev via cron4s.lib.javatime)
+  "com.github.alonsodomin.cron4s" %% "cron4s-core" % vCron4s,
+
   // No-op SLF4J binding: we log via ZIO, not SLF4J. Without a binding, transitive SLF4J users (netty, etc.) print
   // "No SLF4J providers were found" on every CLI invocation; the NOP binding silences that library noise.
   "org.slf4j" % "slf4j-nop" % vSlf4j

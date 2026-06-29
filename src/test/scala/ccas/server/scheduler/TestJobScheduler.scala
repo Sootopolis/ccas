@@ -28,6 +28,7 @@ object TestJobScheduler extends ZIOSpecDefault {
     suite("TestJobScheduler")(
       testPollFiberStopsOnScopeClose,
       testDueScheduleSubmitted,
+      testCronScheduleSubmitted,
       testNotYetDueScheduleSkipped,
       testDisabledScheduleSkipped,
       testErrorDoesNotCrashScheduler,
@@ -93,7 +94,7 @@ object TestJobScheduler extends ZIOSpecDefault {
       now <- Clock.instant
       _ <- Club.upsert(Club(schedClubId, now, ClubSlug("sched-test"), "Sched Test", None, None, None))
       _ <- JobSchedule.insert(
-        JobSchedule(0L, JobKind.Membership, Some(schedClubId), None, intervalHours = 0, enabled = true, lastRunAt = None)
+        JobSchedule.interval(0L, JobKind.Membership, Some(schedClubId), None, intervalHours = 0, enabled = true, lastRunAt = None)
       )
 
       _ <- ZIO.scoped {
@@ -126,13 +127,48 @@ object TestJobScheduler extends ZIOSpecDefault {
       twoHoursAgo = now.minus(2, ChronoUnit.HOURS)
       _ <- Club.upsert(Club(dueClubId, twoHoursAgo, ClubSlug("due-test"), "Due Test", None, None, None))
       _ <- JobSchedule.insert(
-        JobSchedule(0L, JobKind.Membership, Some(dueClubId), None, intervalHours = 1, enabled = true, lastRunAt = Some(twoHoursAgo))
+        JobSchedule.interval(0L, JobKind.Membership, Some(dueClubId), None, intervalHours = 1, enabled = true, lastRunAt = Some(twoHoursAgo))
       )
       _ <- ZIO.scoped {
         for {
           _ <- scheduler.start
           _ <- TestClock.adjust(advanceWindow)
           _ <- submitted.get.repeatUntil(_.exists(_.contains(dueClubId)))
+        } yield ()
+      }
+    } yield assertCompletes
+  }
+
+  private def testCronScheduleSubmitted = test("submits job when a cron schedule's boundary has passed") {
+    val cronClubId = ClubId(308)
+    for {
+      pgClient  <- ZIO.service[PostgresClient]
+      submitted <- Ref.make(List.empty[Option[ClubId]])
+      runner = trackingRunner(submitted)
+      scheduler = new JobScheduler.JobSchedulerLive(runner, pgClient, pollInterval)
+
+      now <- Clock.instant
+      _ <- Club.upsert(Club(cronClubId, now, ClubSlug("cron-test"), "Cron Test", None, None, None))
+      // Fires every minute (normalized 6-field, dow blanked to `?`); CatchUp sidesteps grace timing under the
+      // virtual clock. lastRunAt = now ⇒ the first boundary crossed by advancing the clock is due.
+      _ <- JobSchedule.insert(
+        JobSchedule.cron(
+          0L,
+          JobKind.Membership,
+          Some(cronClubId),
+          None,
+          "0 * * * * ?",
+          "UTC",
+          MisfirePolicy.CatchUp,
+          enabled = true,
+          lastRunAt = Some(now)
+        )
+      )
+      _ <- ZIO.scoped {
+        for {
+          _ <- scheduler.start
+          _ <- TestClock.adjust(advanceWindow)
+          _ <- submitted.get.repeatUntil(_.exists(_.contains(cronClubId)))
         } yield ()
       }
     } yield assertCompletes
@@ -151,13 +187,13 @@ object TestJobScheduler extends ZIOSpecDefault {
       _ <- Club.upsert(Club(notDueClubId, now, ClubSlug("notdue-test"), "Not Due Test", None, None, None))
       _ <- Club.upsert(Club(ctrlClubId, now, ClubSlug("notdue-ctrl"), "Ctrl Always-Due", None, None, None))
       _ <- JobSchedule.insert(
-        JobSchedule(0L, JobKind.Membership, Some(notDueClubId), None, intervalHours = 24, enabled = true, lastRunAt = Some(now))
+        JobSchedule.interval(0L, JobKind.Membership, Some(notDueClubId), None, intervalHours = 24, enabled = true, lastRunAt = Some(now))
       )
       // Always-due control: its submission proves a full pollLoop iteration ran (and thus the
       // not-due schedule was evaluated and rejected). Originally introduced to replace a
       // `ZIO.sleep(200.millis)` race; now still useful as a sync signal under sequential execution.
       _ <- JobSchedule.insert(
-        JobSchedule(0L, JobKind.Membership, Some(ctrlClubId), None, intervalHours = 0, enabled = true, lastRunAt = None)
+        JobSchedule.interval(0L, JobKind.Membership, Some(ctrlClubId), None, intervalHours = 0, enabled = true, lastRunAt = None)
       )
       _ <- ZIO.scoped {
         for {
@@ -184,11 +220,11 @@ object TestJobScheduler extends ZIOSpecDefault {
       _ <- Club.upsert(Club(disabledClubId, now, ClubSlug("disabled-test"), "Disabled Test", None, None, None))
       _ <- Club.upsert(Club(ctrlClubId, now, ClubSlug("disabled-ctrl"), "Ctrl Always-Due", None, None, None))
       _ <- JobSchedule.insert(
-        JobSchedule(0L, JobKind.Membership, Some(disabledClubId), None, intervalHours = 0, enabled = false, lastRunAt = None)
+        JobSchedule.interval(0L, JobKind.Membership, Some(disabledClubId), None, intervalHours = 0, enabled = false, lastRunAt = None)
       )
       // Always-due control to anchor the assertion on a full pollLoop iteration completing.
       _ <- JobSchedule.insert(
-        JobSchedule(0L, JobKind.Membership, Some(ctrlClubId), None, intervalHours = 0, enabled = true, lastRunAt = None)
+        JobSchedule.interval(0L, JobKind.Membership, Some(ctrlClubId), None, intervalHours = 0, enabled = true, lastRunAt = None)
       )
       _ <- ZIO.scoped {
         for {
@@ -226,7 +262,7 @@ object TestJobScheduler extends ZIOSpecDefault {
       now <- Clock.instant
       _ <- Club.upsert(Club(errorClubId, now, ClubSlug("error-test"), "Error Test", None, None, None))
       _ <- JobSchedule.insert(
-        JobSchedule(0L, JobKind.Membership, Some(errorClubId), None, intervalHours = 0, enabled = true, lastRunAt = None)
+        JobSchedule.interval(0L, JobKind.Membership, Some(errorClubId), None, intervalHours = 0, enabled = true, lastRunAt = None)
       )
       _ <- ZIO.scoped {
         for {
@@ -266,10 +302,10 @@ object TestJobScheduler extends ZIOSpecDefault {
         _ <- Club.upsert(Club(failClubId, now, ClubSlug("fail-sched"), "Fail", None, None, None))
         _ <- Club.upsert(Club(goodClubId, now, ClubSlug("good-sched"), "Good", None, None, None))
         _ <- JobSchedule.insert(
-          JobSchedule(0L, JobKind.Membership, Some(failClubId), None, intervalHours = 0, enabled = true, lastRunAt = None)
+          JobSchedule.interval(0L, JobKind.Membership, Some(failClubId), None, intervalHours = 0, enabled = true, lastRunAt = None)
         )
         _ <- JobSchedule.insert(
-          JobSchedule(0L, JobKind.History, Some(goodClubId), None, intervalHours = 0, enabled = true, lastRunAt = None)
+          JobSchedule.interval(0L, JobKind.History, Some(goodClubId), None, intervalHours = 0, enabled = true, lastRunAt = None)
         )
         _ <- ZIO.scoped {
           for {
@@ -314,7 +350,7 @@ object TestJobScheduler extends ZIOSpecDefault {
         _ <- Club.upsert(Club(conflictClubId, twoHoursAgo, ClubSlug("conflict-test"), "Conflict Test", None, None, None))
         // Due (last run 2h ago, 1h interval). Each tick re-selects it; submit always conflicts.
         scheduleId <- JobSchedule.insert(
-          JobSchedule(0L, JobKind.Membership, Some(conflictClubId), None, intervalHours = 1, enabled = true, lastRunAt = Some(twoHoursAgo))
+          JobSchedule.interval(0L, JobKind.Membership, Some(conflictClubId), None, intervalHours = 1, enabled = true, lastRunAt = Some(twoHoursAgo))
         )
         _ <- ZIO.scoped {
           for {

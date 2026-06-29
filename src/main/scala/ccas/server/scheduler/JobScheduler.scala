@@ -1,6 +1,5 @@
 package ccas.server.scheduler
 
-import java.time.temporal.ChronoUnit
 import java.time.Instant
 
 import com.typesafe.config.ConfigFactory
@@ -40,6 +39,10 @@ object JobScheduler {
 
     private val pgClientEnv = zio.ZEnvironment(pgClient)
 
+    // Skip lateness ceiling for cron `Skip` schedules: a boundary may land just after a poll (observed up to one
+    // pollInterval late) plus headroom for poll execution / DB latency. CatchUp ignores this; Interval is unaffected.
+    private val grace: Duration = pollInterval.multipliedBy(2)
+
     override def start: URIO[Scope, Unit] =
       pollLoop
         .repeat(zio.Schedule.fixed(pollInterval))
@@ -51,18 +54,28 @@ object JobScheduler {
         schedules <- JobSchedule.selectEnabled.provideEnvironment(pgClientEnv)
         now       <- Clock.instant
         _ <- ZIO.foreachDiscard(schedules) { schedule =>
-          val isDue = schedule.lastRunAt.forall(ts => ChronoUnit.HOURS.between(ts, now) >= schedule.intervalHours)
-          ZIO.whenDiscard(isDue) {
-            runSchedule(schedule, now).catchAll {
-              // A job of this kind/club is already running (e.g. a forked job outliving its own
-              // intervalHours). Expected and benign: last_run_at stays put, so the next tick after
-              // the job ends submits promptly. Debug-log instead of ERROR-spamming for the duration.
-              case _: ConflictException =>
-                ZIO.logDebug(s"[Scheduler] ${schedule.kind} (club ${schedule.clubId}): already running, skipping tick")
-              case e =>
-                ZIO.logError(s"[Scheduler] ${schedule.kind} (club ${schedule.clubId}): ${e.getMessage}")
+          // `isDue` decodes the trigger and can throw on a malformed (hand-edited) cron row; isolate that so one
+          // bad row logs and is treated as not-due rather than aborting the whole poll iteration.
+          ZIO
+            .attempt(schedule.isDue(now, grace))
+            .catchAll(e =>
+              ZIO
+                .logError(s"[Scheduler] ${schedule.kind} (club ${schedule.clubId}): invalid trigger: ${e.getMessage}")
+                .as(false)
+            )
+            .flatMap { due =>
+              ZIO.whenDiscard(due) {
+                runSchedule(schedule, now).catchAll {
+                  // A job of this kind/club is already running (e.g. a forked job outliving its own
+                  // intervalHours). Expected and benign: last_run_at stays put, so the next tick after
+                  // the job ends submits promptly. Debug-log instead of ERROR-spamming for the duration.
+                  case _: ConflictException =>
+                    ZIO.logDebug(s"[Scheduler] ${schedule.kind} (club ${schedule.clubId}): already running, skipping tick")
+                  case e =>
+                    ZIO.logError(s"[Scheduler] ${schedule.kind} (club ${schedule.clubId}): ${e.getMessage}")
+                }
+              }
             }
-          }
         }
       } yield ())
         .catchAll(e => ZIO.logError(s"[Scheduler] Poll error: ${e.getMessage}"))

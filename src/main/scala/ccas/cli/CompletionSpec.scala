@@ -80,8 +80,8 @@ object CompletionSpec {
     Leaf(List("schedule", "list"), List(server), List(server), NoArgs),
     Leaf(
       List("schedule", "add"),
-      List(server, "--kind", "--interval-hours", clubFlag, "--params"),
-      List(server, "--kind", "--interval-hours", clubFlag, "--params"),
+      List(server, "--kind", "--interval-hours", "--cron", "--tz", "--misfire", clubFlag, "--params"),
+      List(server, "--kind", "--interval-hours", "--cron", "--tz", "--misfire", clubFlag, "--params"),
       Other
     ),
     Leaf(List("schedule", "remove"), List(server), List(server), Other),
