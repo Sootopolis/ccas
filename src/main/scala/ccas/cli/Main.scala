@@ -7,15 +7,15 @@ import zio.{Console, ExitCode, Scope, UIO, URIO, ZIO, ZIOAppArgs, ZIOAppDefault}
 
 import ccas.cli.config.CliConfig
 import ccas.server.config.ServerEnvOverlay
-import ccas.cli.serve.{Detach, PidFile, Stop}
+import ccas.cli.serve.{Detach, PidFile, Status, Stop}
 import ccas.info.BuildInfo
 import ccas.server.CcasServer
 
 /** Single entry point for the `ccas` binary.
   *
   * `zio-cli` parses argv against the [[CliCommand]] tree, renders `--help`/usage and shell completions, then hands the
-  * parsed model to [[execute]]. `serve` boots [[CcasServer]] in this process; every other subcommand is dispatched as a
-  * thin HTTP client ([[Dispatcher]]). Exit codes: 0 success / help, 1 job failure, 2 usage error.
+  * parsed model to [[execute]]. `server start` boots [[CcasServer]] in this process; every other subcommand is
+  * dispatched as a thin HTTP client ([[Dispatcher]]). Exit codes: 0 success / help, 1 job failure, 2 usage error.
   */
 object Main extends ZIOAppDefault {
 
@@ -60,6 +60,7 @@ object Main extends ZIOAppDefault {
     case CliCommand.Serve(false)         => serve
     case CliCommand.Serve(true)          => detachServe(cfg)
     case CliCommand.Stop                 => Stop.run(PidFile.path)
+    case CliCommand.ServerStatus         => statusServe
     case CliCommand.Completion(shell)    => printCompletion(shell)
     case CliCommand.Use(slug)            => UseClub.run(slug)
     case CliCommand.ConfigGet(key)       => ConfigCommand.get(key)
@@ -84,6 +85,12 @@ object Main extends ZIOAppDefault {
           Detach.run(logDir, PidFile.path)
       }
     }
+
+  // `server status`: apply the ccas.env overlay first so a file-only SERVER_PORT is honoured when `Status` reads
+  // `server.port` via ConfigFactory.load. Unlike `serve`, no mandatory-config precheck — status only needs the port,
+  // not CCAS_CONTACT_EMAIL / a database.
+  private def statusServe: URIO[ZIOAppArgs, ExitCode] =
+    ServerEnvOverlay(XdgPaths.serverEnvFile) *> Status.run(PidFile.path)
 
   // Apply the ccas.env overlay (file → system properties for any env var not already set) BEFORE checking mandatory
   // config or booting CcasServer, so the server can boot from `ccas config`'s file without hand-exported env vars.

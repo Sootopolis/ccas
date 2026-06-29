@@ -37,6 +37,7 @@ object CliCommand {
   // Local commands — handled in `Main`, no client HTTP, no `--server`.
   final case class Serve(detach: Boolean) extends CliCommand
   case object Stop extends CliCommand
+  case object ServerStatus extends CliCommand
   final case class Completion(shell: String) extends CliCommand
   final case class Use(slug: String) extends CliCommand
   final case class ConfigGet(key: String) extends CliCommand
@@ -138,10 +139,12 @@ object CliCommand {
 
   // --- Leaf commands (each typed Command[CliCommand] so subcommands share a uniform type) ---
 
-  private val serve: Command[CliCommand] =
+  // NOTE: `Detach.reconstruct`/`fallbackCommand` rebuild the detached child as `... ccas.cli.Main server start`, so
+  // renaming this subcommand requires updating them in lockstep or detached start breaks.
+  private val serverStart: Command[CliCommand] =
     Command(
-      "serve",
-      Options.boolean("detach") ?? "Run the server as a detached background process (writes a pid file; stop with 'ccas stop')"
+      "start",
+      Options.boolean("detach") ?? "Run the server as a detached background process (writes a pid file; stop with 'ccas server stop')"
     ).withHelp("Run the ccas backend HTTP server (foreground by default; --detach to background it)")
       .map(detach => Serve(detach))
 
@@ -149,6 +152,16 @@ object CliCommand {
     Command("stop")
       .withHelp("Stop a detached ccas server (reads the pid file and sends SIGTERM)")
       .map(_ => Stop)
+
+  private val serverStatus: Command[CliCommand] =
+    Command("status")
+      .withHelp("Report whether the local ccas server is running and ready")
+      .map(_ => ServerStatus)
+
+  private val serverGroup: Command[CliCommand] =
+    Command("server")
+      .withHelp("Run and manage the ccas backend HTTP server")
+      .subcommands(serverStart, stop, serverStatus)
 
   private val useClub: Command[CliCommand] =
     Command("use-club", Args.text("slug") ?? "Club slug (URL name) to set as the current club")
@@ -353,7 +366,7 @@ object CliCommand {
       .subcommands(configGet, configSet, configUnset, configList, configShow, configPath, configInit)
 
   /** zio-cli config for the `ccas` command tree. `finalCheckBuiltIn = false` works around a zio-cli 0.8.1 bug: with
-    * the default `true`, `ccas <sub> --help` renders the FIRST subcommand's help (`serve`) instead of the named one.
+    * the default `true`, `ccas <sub> --help` renders the FIRST subcommand's help (`server`) instead of the named one.
     * `Command.Subcommands.parse` feeds the child `OrElse` a `finalCheckBuiltIn = true` config, so
     * `Command.Single.parse`'s `exhaustiveSearch` claims the `--help` token for the first alternative regardless of the
     * command name, short-circuiting the `OrElse`. Disabling it routes `--help` to the correct subcommand (and to the
@@ -366,8 +379,7 @@ object CliCommand {
     */
   def command(defaultServer: String): Command[CliCommand] =
     Command("ccas").subcommands(
-      serve,
-      stop,
+      serverGroup,
       useClub,
       membership(defaultServer),
       history(defaultServer),

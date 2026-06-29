@@ -31,11 +31,11 @@ _ccas() {
     words=("${COMP_WORDS[@]}")
   fi
 
-  local top="serve stop use-club membership history recruit stats jobs logs blacklist schedule club config completion"
+  local top="server use-club membership history recruit stats jobs logs blacklist schedule club config completion"
   local global="--help --version"
   local envkeys="CCAS_CONTACT_EMAIL DATABASE_URL DB_HOST DB_PORT DB_NAME DB_USER DB_PASSWORD DB_SCHEMA SERVER_PORT SERVER_HOST JOB_LOGS_DIR SCHEDULER_POLL_MINUTES SCHEDULER_MATCHREF_INTERVAL_HOURS SCHEDULER_MATCHREF_ENABLED SCHEDULER_CLUBDATA_INTERVAL_HOURS SCHEDULER_CLUBDATA_ENABLED SCHEDULER_HISTORY_INTERVAL_HOURS SCHEDULER_HISTORY_ENABLED SCHEDULER_MEMBERSHIP_INTERVAL_HOURS SCHEDULER_MEMBERSHIP_ENABLED DB_POOL_MAX DB_POOL_MIN_IDLE DB_POOL_CONNECTION_TIMEOUT DB_POOL_IDLE_TIMEOUT DB_POOL_MAX_LIFETIME DB_POOL_KEEPALIVE_TIME DB_POOL_CONNECTION_TEST_QUERY DB_POOL_INIT_FAIL_TIMEOUT DB_SOCKET_TIMEOUT_SECONDS DB_CONNECT_TIMEOUT_SECONDS DB_TCP_KEEP_ALIVE DB_RETRY_BASE_DELAY_MS DB_RETRY_MAX_RETRIES CHESS_COM_API_RECOVERY_TIERS CHESS_COM_API_COOLDOWN_SECONDS CHESS_COM_API_CF_COOLDOWN_SECONDS CHESS_COM_API_FAILURE_WINDOW_SIZE CHESS_COM_API_FAILURE_THRESHOLD CHESS_COM_API_MIN_SAMPLE_SIZE CHESS_COM_API_MIN_REQUEST_DELAY_MS CHESS_COM_API_EMA_TAU_MS CHESS_COM_API_MIN_TIER_OBSERVATION_SECONDS CHESS_COM_API_RETRY_BASE_SECONDS CHESS_COM_API_CF_RETRY_DELAY_SECONDS CHESS_COM_API_CONNECTION_RETRY_BASE_SECONDS CHESS_COM_API_MAX_429_RETRIES CHESS_COM_API_MAX_CF_RETRIES CHESS_COM_API_MAX_CONNECTION_RETRIES CHESS_COM_API_STATS_FLUSH_INTERVAL_SECONDS"
 
-  # First non-flag word after "ccas" is the command; the next is the subcommand (blacklist/schedule/club/config).
+  # First non-flag word after "ccas" is the command; the next is the subcommand (server/blacklist/schedule/club/config).
   local cmd="" sub="" i
   for (( i = 1; i < cword; i++ )); do
     case "${words[i]}" in
@@ -53,8 +53,14 @@ _ccas() {
   local opts="" pos=""
   case "$cmd" in
     "") COMPREPLY=( $(compgen -W "$top $global" -- "$cur") ); return ;;
-    serve) opts="--detach" ;;
-    stop)  ;;
+    server)
+      case "$sub" in
+        "") COMPREPLY=( $(compgen -W "start stop status --help" -- "$cur") ); return ;;
+        start) opts="--detach" ;;
+        stop)  ;;
+        status)  ;;
+        *) COMPREPLY=(); return ;;
+      esac ;;
     use-club) pos="slug" ;;
     membership) opts="--server --trust-usernames --no-trust-usernames --club --all" ;;
     history) opts="--server --full --include-finished --refresh --refresh-min-hours --club --all" ;;
@@ -116,7 +122,7 @@ _ccas() {
       *) (( posn++ )) ;;
     esac
   done
-  [[ $cmd == blacklist || $cmd == schedule || $cmd == club || $cmd == config ]] && base=2
+  [[ $cmd == server || $cmd == blacklist || $cmd == schedule || $cmd == club || $cmd == config ]] && base=2
   local posIndex=$(( posn - base ))
 
   case "$pos" in
