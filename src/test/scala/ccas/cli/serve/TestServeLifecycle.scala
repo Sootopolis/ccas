@@ -61,11 +61,13 @@ object TestServeLifecycle extends ZIOSpecDefault {
       }
     ),
     suite("Detach.reconstruct")(
-      test("truncates at ccas.cli.Main, drops trailing CLI args, appends serve") {
-        val args = List("--enable-native-access=ALL-UNNAMED", "-cp", "/a.jar:/b.jar", "ccas.cli.Main", "serve", "--detach")
+      test("truncates at ccas.cli.Main, drops trailing CLI args, appends server start") {
+        val args =
+          List("--enable-native-access=ALL-UNNAMED", "-cp", "/a.jar:/b.jar", "ccas.cli.Main", "server", "start", "--detach")
         assertTrue(
           Detach.reconstruct("/usr/bin/java", args).contains(
-            List("/usr/bin/java", "--enable-native-access=ALL-UNNAMED", "-cp", "/a.jar:/b.jar", "ccas.cli.Main", "serve")
+            List("/usr/bin/java", "--enable-native-access=ALL-UNNAMED", "-cp", "/a.jar:/b.jar", "ccas.cli.Main", "server",
+              "start")
           )
         )
       },
@@ -92,6 +94,32 @@ object TestServeLifecycle extends ZIOSpecDefault {
             removed <- ZIO.attempt(!Files.exists(stale))
           } yield assertTrue(code == ExitCode(1), err.exists(_.contains("stale pid file")), removed)
         }
+      }
+    ),
+    suite("Status.describe")(
+      test("ready with a live pid -> success, shows pid + db ok") {
+        val (msg, code) = Status.describe(ready = true, up = true, livePid = Some(48213L), stalePid = false, port = 8080)
+        assertTrue(code == ExitCode.success, msg == "running (ready)  pid 48213  127.0.0.1:8080  db ok")
+      },
+      test("ready with no pid file (foreground server) -> success, no pid shown") {
+        val (msg, code) = Status.describe(ready = true, up = true, livePid = None, stalePid = false, port = 9000)
+        assertTrue(code == ExitCode.success, msg == "running (ready)  127.0.0.1:9000  db ok")
+      },
+      test("up but db unavailable -> non-zero") {
+        val (msg, code) = Status.describe(ready = false, up = true, livePid = Some(7L), stalePid = false, port = 8080)
+        assertTrue(code == ExitCode(1), msg == "running (db unavailable)  pid 7  127.0.0.1:8080")
+      },
+      test("not responding but pid alive -> starting/unhealthy, non-zero") {
+        val (msg, code) = Status.describe(ready = false, up = false, livePid = Some(7L), stalePid = false, port = 8080)
+        assertTrue(code == ExitCode(1), msg == "starting or unhealthy (pid 7, no response on :8080)")
+      },
+      test("not responding, no pid -> not running, non-zero") {
+        val (msg, code) = Status.describe(ready = false, up = false, livePid = None, stalePid = false, port = 8080)
+        assertTrue(code == ExitCode(1), msg == "not running")
+      },
+      test("not responding, stale pid file -> not running (stale pid file), non-zero") {
+        val (msg, code) = Status.describe(ready = false, up = false, livePid = None, stalePid = true, port = 8080)
+        assertTrue(code == ExitCode(1), msg == "not running (stale pid file)")
       }
     )
   )

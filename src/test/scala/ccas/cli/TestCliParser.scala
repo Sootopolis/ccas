@@ -168,14 +168,23 @@ object TestCliParser extends ZIOSpecDefault {
     test("completion parses the shell argument (no server)") {
       parsed("completion", "bash").map(c => assertTrue(c.contains(CliCommand.Completion("bash"))))
     },
-    test("serve defaults to foreground (no --detach)") {
-      parsed("serve").map(c => assertTrue(c.contains(CliCommand.Serve(false))))
+    test("server start defaults to foreground (no --detach)") {
+      parsed("server", "start").map(c => assertTrue(c.contains(CliCommand.Serve(false))))
     },
-    test("serve --detach parses the flag") {
-      parsed("serve", "--detach").map(c => assertTrue(c.contains(CliCommand.Serve(true))))
+    test("server start --detach parses the flag") {
+      parsed("server", "start", "--detach").map(c => assertTrue(c.contains(CliCommand.Serve(true))))
     },
-    test("stop parses (no server)") {
-      parsed("stop").map(c => assertTrue(c.contains(CliCommand.Stop)))
+    test("server stop parses to Stop (no server)") {
+      parsed("server", "stop").map(c => assertTrue(c.contains(CliCommand.Stop)))
+    },
+    test("server status parses (no server)") {
+      parsed("server", "status").map(c => assertTrue(c.contains(CliCommand.ServerStatus)))
+    },
+    test("top-level serve and stop no longer parse (grouped under server)") {
+      for {
+        serveFailed <- parse("serve").exit.map(_.isFailure)
+        stopFailed  <- parse("stop").exit.map(_.isFailure)
+      } yield assertTrue(serveFailed, stopFailed)
     },
     test("unknown subcommand fails validation") {
       parse("nonsense").exit.map(e => assertTrue(e.isFailure))
@@ -183,9 +192,9 @@ object TestCliParser extends ZIOSpecDefault {
     test("--help yields a BuiltIn directive") {
       parse("--help").map(d => assertTrue(d.isInstanceOf[CommandDirective.BuiltIn]))
     },
-    // Regression: zio-cli 0.8.1 routed every `<sub> --help` to the FIRST subcommand (serve). With
+    // Regression: zio-cli 0.8.1 routed every `<sub> --help` to the FIRST subcommand (now `server`). With
     // CliCommand.config (finalCheckBuiltIn = false), each --help must render its own command's help.
-    test("membership --help renders membership help, not serve") {
+    test("membership --help renders membership help, not the first subcommand") {
       helpText("membership", "--help").map(t =>
         assertTrue(t.exists(_.contains("trust-usernames"))) // membership-only option; absent from serve
       )

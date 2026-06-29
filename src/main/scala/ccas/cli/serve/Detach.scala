@@ -13,9 +13,9 @@ import scala.jdk.OptionConverters.*
 import com.typesafe.config.ConfigFactory
 import zio.{Console, durationInt, ExitCode, UIO, ZIO}
 
-/** Parent side of `ccas serve --detach`: spawn the server as a background process, wait for it to become ready, then
-  * return to the shell with the pid printed. The JVM can't `fork()`, so we re-exec this same binary's `serve`
-  * (foreground) as a child under `setsid` (a new session detached from the controlling terminal — the pragmatic
+/** Parent side of `ccas server start --detach`: spawn the server as a background process, wait for it to become ready,
+  * then return to the shell with the pid printed. The JVM can't `fork()`, so we re-exec this same binary's
+  * `server start` (foreground) as a child under `setsid` (a new session detached from the controlling terminal — the pragmatic
   * equivalent of a daemon double-fork; the child survives the parent/shell exiting). The child writes its own pid file
   * (path handed over via `CCAS_PID_FILE`); the parent only reads it back to report.
   */
@@ -31,13 +31,13 @@ object Detach {
 
   /** Rebuild the child command line from the current process's `java` executable + arguments. Keep everything up to
     * and including the `ccas.cli.Main` token (preserves `-cp <classpath>`, `-D…`, `--enable-native-access`, etc.) and
-    * append `serve` — dropping whatever CLI args (`serve --detach`) followed the main class. `None` when the main-class
-    * token isn't present (caller falls back to a from-scratch reconstruction). Pure.
+    * append `server start` — dropping whatever CLI args (`server start --detach`) followed the main class. `None` when
+    * the main-class token isn't present (caller falls back to a from-scratch reconstruction). Pure.
     */
   def reconstruct(command: String, arguments: List[String]): Option[List[String]] = {
     val idx = arguments.indexOf(MainClass)
     if (idx < 0) { None }
-    else { Some(command :: (arguments.take(idx + 1) ::: List("serve"))) }
+    else { Some(command :: (arguments.take(idx + 1) ::: List("server", "start"))) }
   }
 
   // Last-resort reconstruction if ProcessHandle can't report the live command (loses launcher JVM flags; harmless).
@@ -47,7 +47,8 @@ object Detach {
       "-cp",
       System.getProperty("java.class.path"),
       MainClass,
-      "serve"
+      "server",
+      "start"
     )
 
   private def baseCommand: List[String] = {
