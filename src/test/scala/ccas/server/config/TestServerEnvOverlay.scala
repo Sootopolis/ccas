@@ -4,14 +4,21 @@ import java.nio.file.{Files, Path}
 
 import com.typesafe.config.ConfigFactory
 import zio.{UIO, ZIO}
-import zio.test.{assertTrue, Spec, ZIOSpecDefault}
+import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 /** Tests [[ServerEnvOverlay]]: a file value is promoted to a JVM system property only when the env var and property are
   * both unset, and Typesafe Config then resolves both optional `${?VAR}` and required `${VAR}` substitutions to it. The
   * env-wins case is exercised via a pre-set system property (a stand-in: a process env var can't be set in-JVM, but the
   * code guards on env OR property and skips either way). Each case uses a private `CCAS_TEST_OVERLAY_*` key and clears it
-  * in `ensuring` so nothing leaks across suites (the repo also runs `Test / parallelExecution := false`). No app.conf
-  * dependency: the substitution resolution is proven self-contained with `defaultOverrides` + `parseString`.
+  * in `ensuring` so nothing leaks across suites. No app.conf dependency: the substitution resolution is proven
+  * self-contained with `defaultOverrides` + `parseString`.
+  *
+  * `@@ TestAspect.sequential` is REQUIRED: every test mutates two pieces of process-global state — JVM system properties
+  * and the global Typesafe `ConfigFactory` systemProperties cache (`defaultOverrides()` reads it; `invalidateCaches()`
+  * resets it). `Test / parallelExecution := false` (build.sbt) only serialises across *suites*; ZIO Test runs the tests
+  * *within* a suite in parallel by default. Without sequential, a sibling test's `invalidateCaches()`/`defaultOverrides()`
+  * can land between this test's overlay-set and its `resolve()`, dropping the optional `${?VAR}` value and throwing
+  * `ConfigException$Missing` for key `v` — the 2026-06-29 CI flake (run 28403494042 attempt 1).
   */
 object TestServerEnvOverlay extends ZIOSpecDefault {
 
@@ -122,5 +129,5 @@ object TestServerEnvOverlay extends ZIOSpecDefault {
         applied <- ServerEnvOverlay(dir.resolve("does-not-exist.env"))
       } yield assertTrue(applied.isEmpty)
     }
-  )
+  ) @@ TestAspect.sequential
 }

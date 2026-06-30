@@ -1119,9 +1119,12 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
           _ <- ZIO.foreachDiscard(6 to 30)(i =>
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get)
           )
-          // Poll until full recovery, which flushes throttledMs
+          // Poll until full recovery, which flushes throttledMs. Live-clock (see suite comment): the budget must
+          // absorb CI-runner scheduling jitter over the 100ms cooldown. 12s sits deliberately UNDER the suite's
+          // `@@ timeout(15.seconds)` so this specific "recovery did not complete" message fires first, instead of a
+          // tight 5s that a loaded runner can trip.
           _ <- stateRef.get.repeatUntil(s => !s.coolingDown)
-            .timeoutFail(new RuntimeException("recovery did not complete"))(5.seconds)
+            .timeoutFail(new RuntimeException("recovery did not complete"))(12.seconds)
           s <- statsRef.get
         } yield assertTrue(
           s.throttleDowns >= 1L,
