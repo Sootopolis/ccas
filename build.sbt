@@ -73,6 +73,12 @@ lazy val root = (project in file("."))
     Compile / mainClass             := Some("ccas.cli.Main"),
     executableScriptName            := "ccas",
     Compile / discoveredMainClasses := Seq("ccas.cli.Main", "ccas.server.CcasServer"),
+    // native-packager's stage pulls packagedArtifacts, which builds the javadoc + sources jars
+    // only for universalDepMappings to discard them — and scaladoc now fails outright reading
+    // cron4s-core's TASTy (its JVM jar bakes in scalajs-stubs annotations like JSExportTopLevel
+    // that don't resolve on a JVM classpath). Nothing consumes these jars; skip them.
+    Compile / packageDoc / publishArtifact := false,
+    Compile / packageSrc / publishArtifact := false,
     buildInfoKeys                   := Seq(name, version, scalaVersion, sbtVersion),
     buildInfoPackage                := "ccas.info",
     // Silence the sun.misc.Unsafe deprecation warning (scala-library's LazyVals) that the JVM
