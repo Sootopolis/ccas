@@ -10,7 +10,6 @@ import java.time.{Duration => JDuration}
 import scala.jdk.CollectionConverters.*
 import scala.jdk.OptionConverters.*
 
-import com.typesafe.config.ConfigFactory
 import zio.{Console, durationInt, ExitCode, UIO, ZIO}
 
 /** Parent side of `ccas server up --detach`: spawn the server as a background process, wait for it to become ready,
@@ -76,7 +75,7 @@ object Detach {
 
   private def start(logDir: Path, pidPath: Path): ZIO[Any, Throwable, ExitCode] =
     for {
-      port    <- ZIO.attemptBlocking(ConfigFactory.load().getInt("server.port"))
+      port    <- HealthProbe.resolvePort
       logFile  = logDir.resolve("server.log")
       _       <- ZIO.attemptBlocking(Files.createDirectories(logDir))
       cmd     <- ZIO.attempt(baseCommand)
