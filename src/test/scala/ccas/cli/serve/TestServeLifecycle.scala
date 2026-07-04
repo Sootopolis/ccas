@@ -76,24 +76,46 @@ object TestServeLifecycle extends ZIOSpecDefault {
       }
     ),
     suite("Stop.run")(
-      test("no pid file -> non-zero with a clear message") {
+      // The `liveServerPort` seam is injected (ZIO.succeed) so these exercise the pid-file branches without touching
+      // the network — no dependence on whether anything happens to be listening on the resolved port.
+      test("no pid file, no live server -> non-zero, clear message, no foreground hint") {
         withTempDir { dir =>
           for {
-            code <- Stop.run(dir.resolve("absent.pid"))
+            code <- Stop.run(dir.resolve("absent.pid"), ZIO.succeed(Option.empty[Int]))
             err  <- TestConsole.outputErr
-          } yield assertTrue(code == ExitCode(1), err.exists(_.contains("no detached server running")))
+          } yield assertTrue(
+            code == ExitCode(1),
+            err.exists(_.contains("no detached server running")),
+            !err.exists(_.contains("still responding"))
+          )
         }
       },
-      test("stale pid file -> non-zero, message, and the file is removed") {
+      test("stale pid file, no live server -> non-zero, message, and the file is removed") {
         withTempDir { dir =>
           val stale = dir.resolve("stale.pid")
           for {
             _       <- ZIO.attempt(Files.writeString(stale, deadPid().toString + "\n"))
-            code    <- Stop.run(stale)
+            code    <- Stop.run(stale, ZIO.succeed(Option.empty[Int]))
             err     <- TestConsole.outputErr
             removed <- ZIO.attempt(!Files.exists(stale))
           } yield assertTrue(code == ExitCode(1), err.exists(_.contains("stale pid file")), removed)
         }
+      },
+      test("no detached pid but a server is still up -> appends the foreground hint naming its port") {
+        withTempDir { dir =>
+          for {
+            code <- Stop.run(dir.resolve("absent.pid"), ZIO.succeed(Option(9137)))
+            err  <- TestConsole.outputErr
+          } yield assertTrue(code == ExitCode(1), err.exists(_.contains("still responding on 127.0.0.1:9137")))
+        }
+      },
+      test("foregroundHint names the probed port and both ways to stop a foreground server") {
+        val hint = Stop.foregroundHint(9137)
+        assertTrue(
+          hint.contains("127.0.0.1:9137"),
+          hint.contains("Ctrl-C"),
+          hint.contains("lsof -ti tcp:9137")
+        )
       }
     ),
     suite("Status.describe")(

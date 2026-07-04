@@ -59,7 +59,7 @@ object Main extends ZIOAppDefault {
   private def execute(cfg: CliConfig)(cmd: CliCommand): URIO[ZIOAppArgs, ExitCode] = cmd match {
     case CliCommand.Serve(false)         => serve
     case CliCommand.Serve(true)          => detachServe(cfg)
-    case CliCommand.Stop                 => Stop.run(PidFile.path)
+    case CliCommand.Stop                 => stopServe
     case CliCommand.ServerStatus         => statusServe
     case CliCommand.Completion(shell)    => printCompletion(shell)
     case CliCommand.Use(slug)            => UseClub.run(slug)
@@ -91,6 +91,12 @@ object Main extends ZIOAppDefault {
   // not CCAS_CONTACT_EMAIL / a database.
   private def statusServe: URIO[ZIOAppArgs, ExitCode] =
     ServerEnvOverlay(XdgPaths.serverEnvFile) *> Status.run(PidFile.path)
+
+  // `server down`: apply the ccas.env overlay first so the "still responding?" port hint (Stop.foregroundHint) probes
+  // the same file-only SERVER_PORT that `Status` reads — otherwise the hint could probe the wrong port and miss a live
+  // foreground server. Stopping the detached pid itself needs no config.
+  private def stopServe: URIO[ZIOAppArgs, ExitCode] =
+    ServerEnvOverlay(XdgPaths.serverEnvFile) *> Stop.run(PidFile.path)
 
   // Apply the ccas.env overlay (file → system properties for any env var not already set) BEFORE checking mandatory
   // config or booting CcasServer, so the server can boot from `ccas config`'s file without hand-exported env vars.
