@@ -139,17 +139,17 @@ object CliCommand {
 
   // --- Leaf commands (each typed Command[CliCommand] so subcommands share a uniform type) ---
 
-  // NOTE: `Detach.reconstruct`/`fallbackCommand` rebuild the detached child as `... ccas.cli.Main server start`, so
-  // renaming this subcommand requires updating them in lockstep or detached start breaks.
-  private val serverStart: Command[CliCommand] =
+  // NOTE: `Detach.reconstruct`/`fallbackCommand` rebuild the detached child as `... ccas.cli.Main server up`, so
+  // renaming this subcommand requires updating them in lockstep or detached launch breaks.
+  private val serverUp: Command[CliCommand] =
     Command(
-      "start",
-      Options.boolean("detach") ?? "Run the server as a detached background process (writes a pid file; stop with 'ccas server stop')"
-    ).withHelp("Run the ccas backend HTTP server (foreground by default; --detach to background it)")
+      "up",
+      Options.boolean("detach").alias("d") ?? "Run the server as a detached background process (writes a pid file; stop with 'ccas server down')"
+    ).withHelp("Run the ccas backend HTTP server (foreground by default; --detach/-d to background it)")
       .map(detach => Serve(detach))
 
-  private val stop: Command[CliCommand] =
-    Command("stop")
+  private val serverDown: Command[CliCommand] =
+    Command("down")
       .withHelp("Stop a detached ccas server (reads the pid file and sends SIGTERM)")
       .map(_ => Stop)
 
@@ -161,7 +161,7 @@ object CliCommand {
   private val serverGroup: Command[CliCommand] =
     Command("server")
       .withHelp("Run and manage the ccas backend HTTP server")
-      .subcommands(serverStart, stop, serverStatus)
+      .subcommands(serverUp, serverDown, serverStatus)
 
   private val useClub: Command[CliCommand] =
     Command("use-club", Args.text("slug") ?? "Club slug (URL name) to set as the current club")

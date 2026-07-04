@@ -6,7 +6,7 @@ import java.nio.file.{Path, Paths}
   * generated completion scripts read, `${XDG_CACHE_HOME:-$HOME/.cache}/ccas/`), the CLI config file
   * (`${XDG_CONFIG_HOME:-$HOME/.config}/ccas/config.conf`), the server-bootstrap env file (`.../ccas/ccas.env`,
   * managed by `ccas config`), and the runtime state dir / pid file used by
-  * `ccas server start --detach` / `ccas server stop` (`${XDG_STATE_HOME:-$HOME/.local/state}/ccas/ccas.pid`). Kept in lock-step with
+  * `ccas server up --detach` / `ccas server down` (`${XDG_STATE_HOME:-$HOME/.local/state}/ccas/ccas.pid`). Kept in lock-step with
   * [[CompletionEmitter]]'s shell helpers.
   */
 object XdgPaths {

@@ -44,8 +44,8 @@ object CompletionSpec {
 
   /** Leaves in tree order. `valueFlags` always lists `--server` first to match its position in `flags`. */
   val leaves: List[Leaf] = List(
-    Leaf(List("server", "start"), List("--detach"), Nil, NoArgs),
-    Leaf(List("server", "stop"), Nil, Nil, NoArgs),
+    Leaf(List("server", "up"), List("--detach", "-d"), Nil, NoArgs),
+    Leaf(List("server", "down"), Nil, Nil, NoArgs),
     Leaf(List("server", "status"), Nil, Nil, NoArgs),
     Leaf(List("use-club"), Nil, Nil, Slug),
     Leaf(
@@ -103,7 +103,7 @@ object CompletionSpec {
   )
 
   val groups: List[Group] = List(
-    Group("server", List("start", "stop", "status"), "Run and manage the ccas backend HTTP server"),
+    Group("server", List("up", "down", "status"), "Run and manage the ccas backend HTTP server"),
     Group("blacklist", List("add", "list", "remove"), "Manage a club's recruitment blacklist"),
     Group("schedule", List("list", "add", "remove"), "Manage scheduled jobs"),
     Group("club", List("add", "remove", "list"), "Manage the set of clubs you run CCAS for"),
@@ -137,8 +137,8 @@ object CompletionSpec {
 
   /** One-line help per command path, mirroring the `withHelp(...)` strings in [[CliCommand]]; used as fish `-d` text. */
   private[cli] val summaries: Map[List[String], String] = Map(
-    List("server", "start")     -> "Run the ccas backend HTTP server (foreground by default; --detach to background it)",
-    List("server", "stop")      -> "Stop a detached ccas server (reads the pid file and sends SIGTERM)",
+    List("server", "up")        -> "Run the ccas backend HTTP server (foreground by default; --detach/-d to background it)",
+    List("server", "down")      -> "Stop a detached ccas server (reads the pid file and sends SIGTERM)",
     List("server", "status")    -> "Report whether the local ccas server is running and ready",
     List("use-club")            -> "Set the current club used by commands that omit --club",
     List("membership")          -> "Submit a membership-sync job (current club, --club a,b, or --all managed clubs)",
