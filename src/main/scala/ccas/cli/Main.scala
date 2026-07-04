@@ -14,7 +14,7 @@ import ccas.server.CcasServer
 /** Single entry point for the `ccas` binary.
   *
   * `zio-cli` parses argv against the [[CliCommand]] tree, renders `--help`/usage and shell completions, then hands the
-  * parsed model to [[execute]]. `server start` boots [[CcasServer]] in this process; every other subcommand is
+  * parsed model to [[execute]]. `server up` boots [[CcasServer]] in this process; every other subcommand is
   * dispatched as a thin HTTP client ([[Dispatcher]]). Exit codes: 0 success / help, 1 job failure, 2 usage error.
   */
 object Main extends ZIOAppDefault {

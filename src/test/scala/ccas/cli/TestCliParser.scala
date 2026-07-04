@@ -168,14 +168,17 @@ object TestCliParser extends ZIOSpecDefault {
     test("completion parses the shell argument (no server)") {
       parsed("completion", "bash").map(c => assertTrue(c.contains(CliCommand.Completion("bash"))))
     },
-    test("server start defaults to foreground (no --detach)") {
-      parsed("server", "start").map(c => assertTrue(c.contains(CliCommand.Serve(false))))
+    test("server up defaults to foreground (no --detach)") {
+      parsed("server", "up").map(c => assertTrue(c.contains(CliCommand.Serve(false))))
     },
-    test("server start --detach parses the flag") {
-      parsed("server", "start", "--detach").map(c => assertTrue(c.contains(CliCommand.Serve(true))))
+    test("server up --detach parses the flag") {
+      parsed("server", "up", "--detach").map(c => assertTrue(c.contains(CliCommand.Serve(true))))
     },
-    test("server stop parses to Stop (no server)") {
-      parsed("server", "stop").map(c => assertTrue(c.contains(CliCommand.Stop)))
+    test("server up -d parses the detach alias") {
+      parsed("server", "up", "-d").map(c => assertTrue(c.contains(CliCommand.Serve(true))))
+    },
+    test("server down parses to Stop (no server)") {
+      parsed("server", "down").map(c => assertTrue(c.contains(CliCommand.Stop)))
     },
     test("server status parses (no server)") {
       parsed("server", "status").map(c => assertTrue(c.contains(CliCommand.ServerStatus)))

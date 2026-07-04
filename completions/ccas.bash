@@ -55,9 +55,9 @@ _ccas() {
     "") COMPREPLY=( $(compgen -W "$top $global" -- "$cur") ); return ;;
     server)
       case "$sub" in
-        "") COMPREPLY=( $(compgen -W "start stop status --help" -- "$cur") ); return ;;
-        start) opts="--detach" ;;
-        stop)  ;;
+        "") COMPREPLY=( $(compgen -W "up down status --help" -- "$cur") ); return ;;
+        up) opts="--detach -d" ;;
+        down)  ;;
         status)  ;;
         *) COMPREPLY=(); return ;;
       esac ;;

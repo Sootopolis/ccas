@@ -61,13 +61,13 @@ object TestServeLifecycle extends ZIOSpecDefault {
       }
     ),
     suite("Detach.reconstruct")(
-      test("truncates at ccas.cli.Main, drops trailing CLI args, appends server start") {
+      test("truncates at ccas.cli.Main, drops trailing CLI args, appends server up") {
         val args =
-          List("--enable-native-access=ALL-UNNAMED", "-cp", "/a.jar:/b.jar", "ccas.cli.Main", "server", "start", "--detach")
+          List("--enable-native-access=ALL-UNNAMED", "-cp", "/a.jar:/b.jar", "ccas.cli.Main", "server", "up", "--detach")
         assertTrue(
           Detach.reconstruct("/usr/bin/java", args).contains(
             List("/usr/bin/java", "--enable-native-access=ALL-UNNAMED", "-cp", "/a.jar:/b.jar", "ccas.cli.Main", "server",
-              "start")
+              "up")
           )
         )
       },

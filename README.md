@@ -51,8 +51,8 @@ The CLI is a thin HTTP client to a local `CcasServer`, so start a server first (
 ```bash
 # Terminal 1 — the server. Needs DATABASE_URL/DB_* and CCAS_CONTACT_EMAIL.
 # Under sbt these are sourced from .env automatically:
-sbt "runMain ccas.cli.Main serve"     # boots CcasServer on 127.0.0.1:8080
-# Or, with those vars exported into the environment, the staged binary:  ccas server start
+sbt "runMain ccas.cli.Main server up"     # boots CcasServer on 127.0.0.1:8080
+# Or, with those vars exported into the environment, the staged binary:  ccas server up
 
 # Terminal 2 — commands. No environment needed; they just call the server.
 ccas use-club team-alpha          # set the current club once…
@@ -66,7 +66,7 @@ ccas --help              # full command tree
 ccas <command> --help    # per-command flags
 ```
 
-Commands: `server {start|stop|status}`, `use`, `membership`, `history`, `recruit`, `stats`, `jobs`, `logs`, `blacklist {add|list|remove}`, `schedule {list|add|remove}`, `club {add|remove|list}`.
+Commands: `server {up|down|status}`, `use`, `membership`, `history`, `recruit`, `stats`, `jobs`, `logs`, `blacklist {add|list|remove}`, `schedule {list|add|remove}`, `club {add|remove|list}`.
 
 **Club targeting.** Slug-requiring commands take the club via `--club <slug>` rather than a positional argument; `membership`/`history` accept a comma-separated `--club a,b` or `--all` (every managed club) — but not both at once (`--all` with `--club` is rejected as a likely mistake). When neither is given, the command falls back to the **current club** set with `ccas use-club <slug>` (stored as `current_club` in the [config file](#cli-config-file)); an explicit `--club`/`--all` always wins. `ccas use-club` is a local config write — no server call — so it works offline and only warns (does not reject) if the slug isn't among the cached clubs.
 
@@ -76,17 +76,17 @@ The server URL resolves in order: a global `--server <url>` flag, else `api_url`
 
 ### Running the server detached
 
-`ccas server start` runs in the foreground (logs to stdout, Ctrl-C to stop). To background it:
+`ccas server up` runs in the foreground (logs to stdout, Ctrl-C to stop). To background it:
 
 ```bash
-ccas server start --detach   # spawns a detached server, waits for /health/ready, prints "started, pid=<n>"
+ccas server up --detach      # (or -d) spawns a detached server, waits for /health/ready, prints "started, pid=<n>"
 ccas server status           # "running (ready)  pid <n>  127.0.0.1:8080  db ok" (exit 0), else "not running" (exit 1)
-ccas server stop             # reads the pid file, sends SIGTERM, waits for a clean shutdown
+ccas server down             # reads the pid file, sends SIGTERM, waits for a clean shutdown
 ```
 
 `server status` probes the loopback `/health/ready` endpoint (so it also detects a foreground server, which writes no pid file) and augments that with the pid file; it exits 0 only when the server is up **and** the database is reachable.
 
-The detached server writes its pid to `${XDG_STATE_HOME:-~/.local/state}/ccas/ccas.pid` and its stdout/stderr to `<log_dir>/server.log` (`log_dir` from the [config file](#cli-config-file), default `~/.local/state/ccas/logs`). A second `ccas server start --detach` while one is running exits with `already running, pid=<n>`. For a supervised/long-lived server (systemd, Docker, Render) run the foreground `ccas-server` binary instead.
+The detached server writes its pid to `${XDG_STATE_HOME:-~/.local/state}/ccas/ccas.pid` and its stdout/stderr to `<log_dir>/server.log` (`log_dir` from the [config file](#cli-config-file), default `~/.local/state/ccas/logs`). A second `ccas server up --detach` while one is running exits with `already running, pid=<n>`. For a supervised/long-lived server (systemd, Docker, Render) run the foreground `ccas-server` binary instead.
 
 > **Two gotchas.** The parser (zio-cli) expects options **before** positional arguments — `ccas blacklist add --club team-alpha alice bob`, not `… alice bob --club team-alpha` (a misplaced flag is silently swallowed as a username). And the staged binary reads configuration from the **process environment only** — it does not load `.env` (that is auto-sourced for `sbt run` / `sbt runMain`).
 
@@ -188,7 +188,7 @@ See [`application.conf`](src/main/resources/application.conf) for the full set o
 
 ### Server config file (`ccas config`)
 
-The packaged `ccas` / `ccas-server` binaries read the settings above from the **process environment** — they do **not** load a `.env` file (that's auto-sourced only for `sbt run`). Rather than export them by hand before every `ccas server start`, manage them with `ccas config`, which persists them to `${XDG_CONFIG_HOME:-~/.config}/ccas/ccas.env` — an owner-only (`0600`) `KEY=VALUE` file:
+The packaged `ccas` / `ccas-server` binaries read the settings above from the **process environment** — they do **not** load a `.env` file (that's auto-sourced only for `sbt run`). Rather than export them by hand before every `ccas server up`, manage them with `ccas config`, which persists them to `${XDG_CONFIG_HOME:-~/.config}/ccas/ccas.env` — an owner-only (`0600`) `KEY=VALUE` file:
 
 ```
 ccas config init                   # interactive wizard: contact email, DB connection, port
@@ -226,7 +226,7 @@ The `ccas` CLI (the client, not the server) reads optional settings from `${XDG_
 ```hocon
 api_url       = "http://127.0.0.1:8080"        # default server URL
 default_clubs = ["team-alpha", "team-beta"]    # seed shell-completion suggestions
-log_dir       = "~/.local/state/ccas/logs"     # where `ccas server start --detach` writes server.log
+log_dir       = "~/.local/state/ccas/logs"     # where `ccas server up --detach` writes server.log
 current_club  = "team-alpha"                   # default club when a command omits --club (set via `ccas use-club`)
 ```
 
