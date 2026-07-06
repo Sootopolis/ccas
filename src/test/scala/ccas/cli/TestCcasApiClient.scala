@@ -28,7 +28,7 @@ object TestCcasApiClient extends ZIOSpecDefault {
         case _                 => false
       })
     },
-    test("streamLines against an unreachable server yields a friendly CliError") {
+    test("streamLines against an unreachable server yields a friendly CliError (never connected)") {
       for {
         port <- refusedPort
         result <- CcasApiClient
@@ -37,7 +37,8 @@ object TestCcasApiClient extends ZIOSpecDefault {
           .provide(Client.default)
           .either
       } yield assertTrue(result match {
-        case Left(e: CliError) => e.message.contains("is a server running") && e.exitCode == 1
+        // Never reached the server → an unreachable CliError, not a mid-stream StreamDropped.
+        case Left(e: CliError) => e.message.contains("cannot reach") && e.exitCode == 1
         case _                 => false
       })
     }

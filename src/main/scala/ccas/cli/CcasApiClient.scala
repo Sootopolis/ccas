@@ -5,6 +5,7 @@ import zio.http.*
 import zio.json.*
 import zio.stream.{ZPipeline, ZStream}
 
+import ccas.server.jobs.JobLogStream
 import ccas.utils.errors.ErrorResponse
 
 /** Thin HTTP client to a local `CcasServer`. Every method fails with [[CliError]] (carrying an exit code) so the
@@ -42,7 +43,7 @@ object CcasApiClient {
     /** Any transport-level failure means the server isn't reachable — non-2xx responses come back as a `Response`. */
     private def send(req: Request): Task[Response] =
       http(req).mapError(e =>
-        CliError(s"cannot reach $baseUrl. start a server with 'ccas serve' first. (${rootMessage(e)})", 1)
+        CliError(s"cannot reach $baseUrl — start a server with 'ccas server up'. (${rootMessage(e)})", 1)
       )
 
     private def errorMessage(body: String, status: Status): String =
@@ -89,20 +90,36 @@ object CcasApiClient {
 
     // `client.stream` keeps the connection open and surfaces the chunked body as a live byte stream (unlike `batched`,
     // which buffers the whole response — wrong for following a still-running job). A non-success status fails the
-    // stream with the server's error message. Any other transport error covers both "never connected" and "connection
-    // dropped mid-stream", so the message stays honest for both rather than asserting the server was unreachable.
+    // stream with the server's error message. `KeepAliveLine` frames (interleaved by the server so a silent job can't
+    // idle the connection shut, #150) are filtered out here so callers only see real log lines. A transport failure is
+    // split on the `connected` flag: if a 200 already reached us the stream dropped mid-follow (the job keeps running
+    // server-side) → `StreamDropped`; otherwise we never reached the server → an unreachable `CliError`.
     override def streamLines(path: String)(onLine: String => UIO[Unit]): Task[Unit] =
-      url(path).flatMap { u =>
-        client
+      for {
+        u         <- url(path)
+        connected <- Ref.make(false)
+        _ <- client
           .stream(Request(method = Method.GET, url = u)) { resp =>
-            if (resp.status.isSuccess) { resp.body.asStream.via(ZPipeline.utf8Decode >>> ZPipeline.splitLines) }
-            else { ZStream.fromZIO(resp.body.asString.flatMap(s => ZIO.fail(CliError(errorMessage(s, resp.status), 1)))) }
+            if (resp.status.isSuccess) {
+              ZStream.fromZIO(connected.set(true)).drain ++
+                resp.body.asStream
+                  .via(ZPipeline.utf8Decode >>> ZPipeline.splitLines)
+                  .filter(_ != JobLogStream.KeepAliveLine)
+            } else {
+              ZStream.fromZIO(resp.body.asString.flatMap(s => ZIO.fail(CliError(errorMessage(s, resp.status), 1))))
+            }
           }
           .runForeach(onLine)
-          .mapError {
-            case e: CliError => e
-            case e => CliError(s"lost connection to $baseUrl — is a server running? start one with 'ccas serve'. (${rootMessage(e)})", 1)
+          .catchAll {
+            case e: CliError => ZIO.fail(e)
+            case e =>
+              connected.get.flatMap { wasConnected =>
+                if (wasConnected) { ZIO.fail(StreamDropped(rootMessage(e))) }
+                else {
+                  ZIO.fail(CliError(s"cannot reach $baseUrl — start a server with 'ccas server up'. (${rootMessage(e)})", 1))
+                }
+              }
           }
-      }
+      } yield ()
   }
 }
