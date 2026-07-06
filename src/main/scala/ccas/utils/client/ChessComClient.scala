@@ -551,7 +551,7 @@ final class ChessComClient(
   private def applyThrottle(oldMax: Long, gen: Long, cooldown: Duration): Task[Unit] =
     for {
       _     <- statsRef.update(_.incThrottleDowns)
-      _     <- ZIO.logWarning(s"Rate limit throttle: $oldMax \u2192 1 permit")
+      _     <- ProgressDisplay.sourced("rate-limit")(ZIO.logWarning(s"Rate limit throttle: $oldMax \u2192 1 permit"))
       fiber <- scheduleRecovery(gen, cooldown).forkDaemon
       _     <- scope.addFinalizerExit(_ => fiber.interrupt)
     } yield ()
@@ -609,13 +609,15 @@ final class ChessComClient(
             if (newMax == oldMax) {
               scheduleRecovery(gen, cooldown)
             } else if (newMax < oldMax) {
-              ZIO.logWarning(s"Rate limit dropping back: $oldMax \u2192 $newMax permit(s)") *>
+              ProgressDisplay.sourced("rate-limit")(
+                ZIO.logWarning(s"Rate limit dropping back: $oldMax \u2192 $newMax permit(s)")
+              ) *>
                 scheduleRecovery(gen, cooldown)
             } else {
               val msg =
                 if (newMax == config.maxPermits) "Rate limit throttle lifted"
                 else s"Rate limit easing: $oldMax \u2192 $newMax permits"
-              ZIO.logInfo(msg) *>
+              ProgressDisplay.sourced("rate-limit")(ZIO.logInfo(msg)) *>
                 ZIO.unlessDiscard(newMax == config.maxPermits)(scheduleRecovery(gen, cooldown))
             }
           }

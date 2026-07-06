@@ -3,7 +3,7 @@ package ccas.server.scheduler
 import java.time.Instant
 
 import com.typesafe.config.ConfigFactory
-import zio.{durationLong, Clock, Duration, Scope, Task, UIO, URIO, URLayer, ZIO, ZLayer}
+import zio.{durationLong, Clock, Duration, RIO, Scope, Task, UIO, URIO, URLayer, ZIO, ZLayer}
 
 import ccas.analysis.apps.clubdata.ClubDataApp
 import ccas.analysis.apps.history.HistoryApp
@@ -13,7 +13,9 @@ import ccas.analysis.apps.ref.RefApp
 import ccas.analysis.apps.stats.StatsApp
 import ccas.analysis.tables.{Club, RunTrigger}
 import ccas.api.misc.subtypes.{ClubSlug, JobRunId}
-import ccas.server.jobs.{JobKind, JobRunner}
+import ccas.server.jobs.{JobCaps, JobKind, JobRunner}
+import ccas.utils.ProgressDisplay
+import ccas.utils.client.ChessComClient
 import ccas.utils.errors.ConflictException
 import ccas.utils.sql.PostgresClient
 
@@ -59,8 +61,10 @@ object JobScheduler {
           ZIO
             .attempt(schedule.isDue(now, grace))
             .catchAll(e =>
-              ZIO
-                .logError(s"[Scheduler] ${schedule.kind} (club ${schedule.clubId}): invalid trigger: ${e.getMessage}")
+              ProgressDisplay
+                .sourced("scheduler")(
+                  ZIO.logError(s"${schedule.kind} (club ${schedule.clubId}): invalid trigger: ${e.getMessage}")
+                )
                 .as(false)
             )
             .flatMap { due =>
@@ -70,15 +74,19 @@ object JobScheduler {
                   // intervalHours). Expected and benign: last_run_at stays put, so the next tick after
                   // the job ends submits promptly. Debug-log instead of ERROR-spamming for the duration.
                   case _: ConflictException =>
-                    ZIO.logDebug(s"[Scheduler] ${schedule.kind} (club ${schedule.clubId}): already running, skipping tick")
+                    ProgressDisplay.sourced("scheduler")(
+                      ZIO.logDebug(s"${schedule.kind} (club ${schedule.clubId}): already running, skipping tick")
+                    )
                   case e =>
-                    ZIO.logError(s"[Scheduler] ${schedule.kind} (club ${schedule.clubId}): ${e.getMessage}")
+                    ProgressDisplay.sourced("scheduler")(
+                      ZIO.logError(s"${schedule.kind} (club ${schedule.clubId}): ${e.getMessage}")
+                    )
                 }
               }
             }
         }
       } yield ())
-        .catchAll(e => ZIO.logError(s"[Scheduler] Poll error: ${e.getMessage}"))
+        .catchAll(e => ProgressDisplay.sourced("scheduler")(ZIO.logError(s"Poll error: ${e.getMessage}")))
 
     private def runSchedule(schedule: JobSchedule, now: Instant): Task[Unit] = {
       def requireClubSlug: Task[ClubSlug] =
@@ -90,40 +98,78 @@ object JobScheduler {
               .map(_.slug)
           }
 
-      val effect = schedule.kind match {
-        case JobKind.Recruitment =>
-          (jobRunId: Option[JobRunId]) =>
-            requireClubSlug.flatMap(name =>
-              RecruitmentApp.recruit(
-                name,
-                "default",
-                timeLimitMinutes = Some(30),
-                trigger = RunTrigger.Scheduled,
-                jobRunId = jobRunId
-              ).unit
-            )
-        case JobKind.Membership =>
-          (jobRunId: Option[JobRunId]) =>
-            requireClubSlug.flatMap(name =>
-              MembershipApp.reconcileAndReport(name, trustUsernames = true, RunTrigger.Scheduled, jobRunId).unit
-            )
-        case JobKind.MatchRef =>
-          (_: Option[JobRunId]) => RefApp.populate(forceSkipped = false, upgradeRefs = false).unit
-        case JobKind.History =>
-          (jobRunId: Option[JobRunId]) =>
-            requireClubSlug.flatMap(name =>
-              HistoryApp.discover(name, trigger = RunTrigger.Scheduled, jobRunId = jobRunId).unit
-            )
-        case JobKind.Stats =>
-          (_: Option[JobRunId]) =>
-            requireClubSlug.flatMap(name => StatsApp.memberStatsAndReport(name).unit)
-        case JobKind.ClubData =>
-          (_: Option[JobRunId]) => ClubDataApp.refresh(minAgeHours = None).unit
-      }
+      // Decode `schedule.params` into typed per-kind options and thread them into the app call. Decoding is
+      // eager (before `submit`), so a malformed row fails here — caught by the poll loop's per-schedule guard
+      // — without submitting or advancing `last_run_at`. Absent params decode to the kind's all-`None`
+      // defaults, reproducing the previous hardcoded behaviour exactly.
+      val buildEffect: Task[Option[JobRunId] => RIO[ProgressDisplay & ChessComClient & PostgresClient, Any]] =
+        schedule.kind match {
+          case JobKind.Recruitment =>
+            ScheduleParams.decode(schedule.params, ScheduleParams.RecruitmentOptions.Default).map { opts => (jobRunId: Option[JobRunId]) =>
+              requireClubSlug.flatMap(name =>
+                RecruitmentApp.recruit(
+                  name,
+                  opts.alias.getOrElse("default"),
+                  target = opts.target.map(_ min JobCaps.MaxTarget),
+                  cumulative = opts.cumulative.getOrElse(false),
+                  sourceClubs = opts.sourceClubs.getOrElse(Nil),
+                  timeLimitMinutes = opts.timeLimitMinutes.map(_ min JobCaps.MaxTimeLimitMinutes).orElse(Some(30)),
+                  explore = opts.explore.getOrElse(true),
+                  trigger = RunTrigger.Scheduled,
+                  jobRunId = jobRunId
+                ).unit
+              )
+            }
+          case JobKind.Membership =>
+            ScheduleParams.decode(schedule.params, ScheduleParams.MembershipOptions.Default).map { opts => (jobRunId: Option[JobRunId]) =>
+              requireClubSlug.flatMap(name =>
+                MembershipApp.reconcileAndReport(name, opts.trustUsernames.getOrElse(true), RunTrigger.Scheduled, jobRunId).unit
+              )
+            }
+          case JobKind.MatchRef =>
+            ScheduleParams.decode(schedule.params, ScheduleParams.MatchRefOptions.Default).map { opts => (_: Option[JobRunId]) =>
+              RefApp.populate(opts.forceSkipped.getOrElse(false), opts.upgradeRefs.getOrElse(false)).unit
+            }
+          case JobKind.History =>
+            ScheduleParams.decode(schedule.params, ScheduleParams.HistoryOptions.Default).map { opts =>
+              val refresh = ScheduleParams.HistoryOptions.effectiveRefresh(opts)
+              (jobRunId: Option[JobRunId]) =>
+                requireClubSlug.flatMap(name =>
+                  HistoryApp.discover(
+                    name,
+                    opts.full.getOrElse(false),
+                    opts.includeFinished.getOrElse(false),
+                    refresh,
+                    RunTrigger.Scheduled,
+                    jobRunId = jobRunId
+                  ).unit
+                )
+            }
+          case JobKind.Stats =>
+            ScheduleParams.decode(schedule.params, ScheduleParams.StatsOptions.Default).flatMap { opts =>
+              ScheduleParams.statsPeriod(opts).map { periodOpt => (_: Option[JobRunId]) =>
+                requireClubSlug.flatMap(name =>
+                  periodOpt match {
+                    case Some((since, until)) =>
+                      StatsApp.playerOfPeriodAndReport(name, since, until, opts.minGames.getOrElse(1)).unit
+                    case None =>
+                      StatsApp.memberStatsAndReport(name).unit
+                  }
+                )
+              }
+            }
+          case JobKind.ClubData =>
+            ScheduleParams.decode(schedule.params, ScheduleParams.ClubDataOptions.Default).map { opts => (_: Option[JobRunId]) =>
+              ClubDataApp.refresh(opts.minAgeHours).unit
+            }
+        }
 
-      runner.submit(schedule.kind, schedule.clubId, schedule.params, RunTrigger.Scheduled, effect)
-        .provideEnvironment(pgClientEnv) *>
-        JobSchedule.updateLastRunAt(schedule.id, now).provideEnvironment(pgClientEnv).unit
+      for {
+        effect <- buildEffect
+        _ <- runner.submit(schedule.kind, schedule.clubId, schedule.params, RunTrigger.Scheduled, effect)
+               .provideEnvironment(pgClientEnv)
+        _ <- JobSchedule.updateLastRunAt(schedule.id, now).provideEnvironment(pgClientEnv).unit
+      } yield ()
     }
   }
 }

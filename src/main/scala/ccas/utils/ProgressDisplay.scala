@@ -248,6 +248,22 @@ object ProgressDisplay {
   }
 
   // ---------------------------------------------------------------------------
+  // Log source attribution — a reserved log-annotation key rendered by `format` as a bracketed prefix
+  // (`[INFO HH:mm:ss] [<src>] msg`) so interleaved console output shows which app/job/component emitted
+  // each line. `sourced` sets it via `ZIO.logAnnotate` (core ZIO, inherited by forked children), so all
+  // of an effect's `ZIO.log*` — and any fibers it forks — carry the tag. Global logs (rate-limit,
+  // scheduler) set their own `src` to stay attributable even when running on a job's fiber.
+  // ---------------------------------------------------------------------------
+
+  /** Reserved log-annotation key: `format` renders its value as the bracketed source prefix and drops it from the
+    * trailing `k=v` set, so no other call site should annotate with this key. Set it via [[sourced]].
+    */
+  val LogSource: String = "src"
+
+  def sourced[R, E, A](src: String)(zio: ZIO[R, E, A]): ZIO[R, E, A] =
+    ZIO.logAnnotate(LogSource, src)(zio)
+
+  // ---------------------------------------------------------------------------
   // Private formatter — ANSI colours, [LEVEL HH:mm:ss] msg, optional cause / spans / annotations
   // ---------------------------------------------------------------------------
 
@@ -286,8 +302,9 @@ object ProgressDisplay {
     spans: List[LogSpan],
     annotations: Map[String, String]
   ): String = {
-    val base = s"${colorFor(level)}[${level.label} ${formatTime(when)}]$Reset $msg"
-    val sb   = new StringBuilder(base)
+    val srcTag = annotations.get(LogSource).fold("")(s => s" [$s]")
+    val base   = s"${colorFor(level)}[${level.label} ${formatTime(when)}]$Reset$srcTag $msg"
+    val sb     = new StringBuilder(base)
     if (!cause.isEmpty) {
       sb.append('\n')
       val rendered = cause.prettyPrint
@@ -299,9 +316,10 @@ object ProgressDisplay {
       sb.append("  spans=")
       sb.append(spans.map(s => s"${s.label}=${now - s.startTime}ms").mkString(" "))
     }
-    if (annotations.nonEmpty) {
+    val rest = annotations - LogSource // `src` is rendered as the prefix above; don't duplicate it here
+    if (rest.nonEmpty) {
       sb.append("  ")
-      sb.append(annotations.map { case (k, v) => s"$k=$v" }.mkString(" "))
+      sb.append(rest.map { case (k, v) => s"$k=$v" }.mkString(" "))
     }
     sb.toString
   }
