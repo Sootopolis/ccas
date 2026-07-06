@@ -11,8 +11,8 @@ import ccas.utils.sql.PostgresClient.withTransaction
 import zio.stream.ZStream
 import zio.{Clock, Duration, Promise, RIO, RLayer, Ref, Scope, UIO, ZIO, ZLayer, durationInt}
 
-import ccas.analysis.tables.{AppSetting, RunTrigger}
-import ccas.api.misc.subtypes.{ClubId, JobRunId}
+import ccas.analysis.tables.{AppSetting, Club, RunTrigger}
+import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId}
 import ccas.utils.client.ChessComClient
 import ccas.utils.errors.{ConflictException, safeMessage}
 import ccas.utils.{JobLogSink, ProgressDisplay}
@@ -124,6 +124,13 @@ object JobRunner {
           _ <- promise.succeed(())
           _ <- completions.update(_ - id)
         } yield ()
+        // Source tag for this job's log lines (`[Kind/slug]`), resolved best-effort — a missing club or a
+        // read failure degrades to the numeric id, never fails the submit. Cosmetic, so it stays outside
+        // the `withTransaction` block above.
+        slugOpt <- ZIO.foreach(clubId)(Club.selectId).map(_.flatten.map(_.slug)).catchAll(_ => ZIO.none)
+        label = clubId.fold(kind.toString)(cid =>
+          s"$kind/${slugOpt.fold(s"#${ClubId.unwrap(cid)}")(ClubSlug.unwrap)}"
+        )
         // Fork the job into the layer scope (not the submitting fiber) so it outlives the request that submitted it;
         // plain `.fork` would make it a child of the request handler fiber and structured concurrency would interrupt
         // it the moment the HTTP response is sent. `forkIn` also interrupts any still-running job when the layer scope
@@ -147,10 +154,12 @@ object JobRunner {
               // HTTP request handler carries only the default logger (not the app-scoped ProgressDisplay one) — so
               // without this, HTTP-submitted jobs logged to the default logger and their per-job file stayed empty (#132).
               display.installLogger(
-                JobLogSink.currentSink
-                  .locally(sink)(
-                    runJob(id, effect(Some(id))).ensuring(release)
-                  )
+                ProgressDisplay.sourced(label)(
+                  JobLogSink.currentSink
+                    .locally(sink)(
+                      runJob(id, effect(Some(id))).ensuring(release)
+                    )
+                )
               )
             ).forkIn(layerScope)
           } yield ()

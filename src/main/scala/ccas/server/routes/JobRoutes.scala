@@ -26,8 +26,8 @@ object JobRoutes {
 
   // --- Request types ---
 
-  private val MaxTarget           = 40 // cap to avoid runaway API usage per recruitment run
-  private val MaxTimeLimitMinutes = 30 // keep individual jobs within a reasonable wall-clock window
+  // Recruitment caps (`JobCaps.MaxTarget` / `JobCaps.MaxTimeLimitMinutes`) are shared with the scheduled-job
+  // path (`ScheduleParams`) so both submission routes apply identical bounds.
 
   private[ccas] case class RecruitmentRequest(
     clubSlug: ClubSlug,
@@ -117,8 +117,8 @@ object JobRoutes {
         result <- Club.selectBySlug(body.clubSlug).flatMap {
           case None => ZIO.succeed(JobResult(None, Some(s"Club not found: ${body.clubSlug}")))
           case Some(club) =>
-            val cappedTarget       = body.target.map(_ min MaxTarget)
-            val effectiveTimeLimit = body.timeLimitMinutes.map(_ min MaxTimeLimitMinutes)
+            val cappedTarget       = body.target.map(_ min JobCaps.MaxTarget)
+            val effectiveTimeLimit = body.timeLimitMinutes.map(_ min JobCaps.MaxTimeLimitMinutes)
             val effect = (jobRunId: Option[JobRunId]) =>
               RecruitmentApp.recruit(
                 body.clubSlug,

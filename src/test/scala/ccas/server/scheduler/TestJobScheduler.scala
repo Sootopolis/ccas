@@ -33,7 +33,9 @@ object TestJobScheduler extends ZIOSpecDefault {
       testDisabledScheduleSkipped,
       testErrorDoesNotCrashScheduler,
       testErrorInOneScheduleDoesNotBlockOthers,
-      testConflictKeepsPollingAndDoesNotAdvanceLastRunAt
+      testConflictKeepsPollingAndDoesNotAdvanceLastRunAt,
+      testParamsThreadedToSubmit,
+      testMalformedParamsDoesNotBlockOthers
     )
       @@ TestAspect.before(TestDbCleanup.clearJobSchedules)
       @@ TestAspect.sequential
@@ -60,6 +62,22 @@ object TestJobScheduler extends ZIOSpecDefault {
       effect: Option[JobRunId] => RIO[ProgressDisplay & ChessComClient & PostgresClient, Any]
     ): RIO[PostgresClient, JobRunId] =
       submissions.update(_ + 1).as(JobRunId.generate())
+
+    override def status(id: JobRunId): RIO[PostgresClient, Option[JobRun]] = ZIO.none
+    override def recentJobs(limit: Int): RIO[PostgresClient, List[JobRun]] = ZIO.succeed(Nil)
+    override def logStream(id: JobRunId): RIO[PostgresClient, Option[ZStream[Any, Throwable, String]]] = ZIO.none
+  }
+
+  /** JobRunner stub that captures the raw `params` string of each submission. */
+  private def paramsCapturingRunner(captured: Ref[List[Option[String]]]): JobRunner = new JobRunner {
+    override def submit(
+      kind: JobKind,
+      clubId: Option[ClubId],
+      params: Option[String],
+      trigger: RunTrigger,
+      effect: Option[JobRunId] => RIO[ProgressDisplay & ChessComClient & PostgresClient, Any]
+    ): RIO[PostgresClient, JobRunId] =
+      captured.update(params :: _).as(JobRunId.generate())
 
     override def status(id: JobRunId): RIO[PostgresClient, Option[JobRun]] = ZIO.none
     override def recentJobs(limit: Int): RIO[PostgresClient, List[JobRun]] = ZIO.succeed(Nil)
@@ -364,6 +382,66 @@ object TestJobScheduler extends ZIOSpecDefault {
       } yield assertTrue(
         finalCount >= 2,                                   // kept polling across ticks despite the conflict
         reloaded.exists(_.lastRunAt.contains(twoHoursAgo)) // last_run_at NOT advanced by the conflict
+      )
+    }
+
+  // A well-formed `params` string is decoded (proving the scheduler now consumes it) and the raw string still
+  // reaches `submit` for persistence into `job_run.params`. ClubData is a global (clubId = None) kind, so this
+  // needs no club fixture or effect execution.
+  private def testParamsThreadedToSubmit =
+    test("well-formed schedule params decode and the raw string reaches submit") {
+      val paramsJson = """{"minAgeHours":24}"""
+      for {
+        pgClient <- ZIO.service[PostgresClient]
+        captured <- Ref.make(List.empty[Option[String]])
+        runner = paramsCapturingRunner(captured)
+        scheduler = new JobScheduler.JobSchedulerLive(runner, pgClient, pollInterval)
+        _ <- JobSchedule.insert(
+          JobSchedule.interval(0L, JobKind.ClubData, None, Some(paramsJson), intervalHours = 0, enabled = true, lastRunAt = None)
+        )
+        _ <- ZIO.scoped {
+          for {
+            _ <- scheduler.start
+            _ <- TestClock.adjust(advanceWindow)
+            _ <- captured.get.repeatUntil(_.nonEmpty)
+          } yield ()
+        }
+        seen <- captured.get
+      } yield assertTrue(seen.contains(Some(paramsJson)))
+    }
+
+  // A schedule whose `params` is malformed JSON fails to decode *before* `submit`; the poll loop's per-schedule
+  // guard isolates it (logs, does not crash) so an always-due control on another schedule still submits, and the
+  // malformed row itself never submits.
+  private def testMalformedParamsDoesNotBlockOthers =
+    test("malformed schedule params do not block other schedules") {
+      val ctrlClubId = ClubId(314)
+      for {
+        pgClient  <- ZIO.service[PostgresClient]
+        submitted <- Ref.make(List.empty[Option[ClubId]])
+        runner = trackingRunner(submitted)
+        scheduler = new JobScheduler.JobSchedulerLive(runner, pgClient, pollInterval)
+
+        now <- Clock.instant
+        _ <- Club.upsert(Club(ctrlClubId, now, ClubSlug("badparams-ctrl"), "Ctrl Always-Due", None, None, None))
+        // Malformed-params global job: decode fails before submit and must not block the control.
+        _ <- JobSchedule.insert(
+          JobSchedule.interval(0L, JobKind.ClubData, None, Some("{not-json"), intervalHours = 0, enabled = true, lastRunAt = None)
+        )
+        _ <- JobSchedule.insert(
+          JobSchedule.interval(0L, JobKind.Membership, Some(ctrlClubId), None, intervalHours = 0, enabled = true, lastRunAt = None)
+        )
+        _ <- ZIO.scoped {
+          for {
+            _ <- scheduler.start
+            _ <- TestClock.adjust(advanceWindow)
+            _ <- submitted.get.repeatUntil(_.exists(_.contains(ctrlClubId)))
+          } yield ()
+        }
+        clubs <- submitted.get
+      } yield assertTrue(
+        clubs.exists(_.contains(ctrlClubId)), // control still submitted
+        !clubs.contains(None)                 // malformed ClubData row never submitted
       )
     }
 }

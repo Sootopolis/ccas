@@ -20,7 +20,8 @@ object TestProgressBar extends ZIOSpecDefault {
     testZioLogInfoRoutesThroughLiveLogger,
     testCurrentLogLevelFiltersDebug,
     testCurrentLogLevelEnablesDebug,
-    testLoggerSwallowsThrow
+    testLoggerSwallowsThrow,
+    testSourcedRendersPrefixTag
   )
   // No `@@ TestAspect.sequential`: each test owns its capture buffers and installs loggers/sinks via fiber-scoped
   // FiberRefs (`currentLoggers`, `currentSink`), so the suite holds no process-global state to serialise. (Cross-suite
@@ -267,6 +268,25 @@ object TestProgressBar extends ZIOSpecDefault {
     * `liveWith` injects the capture streams so the stack trace and any (here, none) log output are observed without
     * mutating process-global `System.err` / `System.out`.
     */
+  /** The reserved `src` log annotation (set via `ProgressDisplay.sourced`) renders as a bracketed prefix right after
+    * the time bracket — `[INFO HH:mm:ss] [<src>] msg` — so interleaved console output shows which job/component
+    * emitted each line. Any other co-present annotation still renders as trailing `k=v`, and `src` itself is not
+    * duplicated there.
+    */
+  private def testSourcedRendersPrefixTag = test("sourced renders a bracketed prefix; other annotations stay trailing") {
+    val effect = ProgressDisplay.sourced("membership/london-cc")(
+      ZIO.logAnnotate("run", "abc123")(ZIO.logInfo("reconciled"))
+    )
+    withLogCapture(effect).map { case (_, out) =>
+      val clean = stripAnsi(out)
+      assertTrue(
+        clean.contains("] [membership/london-cc] reconciled"),
+        clean.contains("run=abc123"),
+        !clean.contains("src=")
+      )
+    }
+  }
+
   private def testLoggerSwallowsThrow = test("asLogger swallows exceptions from a throwing message thunk") {
     ZIO.suspendSucceed {
       val outBaos = new ByteArrayOutputStream
