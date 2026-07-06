@@ -21,7 +21,8 @@ object TestProgressBar extends ZIOSpecDefault {
     testCurrentLogLevelFiltersDebug,
     testCurrentLogLevelEnablesDebug,
     testLoggerSwallowsThrow,
-    testSourcedRendersPrefixTag
+    testSourcedRendersPrefixTag,
+    testStripSourceTag
   )
   // No `@@ TestAspect.sequential`: each test owns its capture buffers and installs loggers/sinks via fiber-scoped
   // FiberRefs (`currentLoggers`, `currentSink`), so the suite holds no process-global state to serialise. (Cross-suite
@@ -285,6 +286,18 @@ object TestProgressBar extends ZIOSpecDefault {
         !clean.contains("src=")
       )
     }
+  }
+
+  /** `stripSourceTag` (used by the per-job file sink) removes only the source prefix directly abutting the level
+    * bracket, leaving a message that itself starts with a `[...]` token — e.g. the reconciliation `[LEFT CLUB]`
+    * headings — intact.
+    */
+  private def testStripSourceTag = test("stripSourceTag removes the source prefix and preserves a bracketed message") {
+    assertTrue(
+      ProgressDisplay.stripSourceTag("[INFO 00:00:00] [Membership/london-cc] reconciled") == "[INFO 00:00:00] reconciled",
+      ProgressDisplay.stripSourceTag("[INFO 00:00:00] [Membership/x] [LEFT CLUB]") == "[INFO 00:00:00] [LEFT CLUB]",
+      ProgressDisplay.stripSourceTag("[INFO 00:00:00] no tag here") == "[INFO 00:00:00] no tag here"
+    )
   }
 
   private def testLoggerSwallowsThrow = test("asLogger swallows exceptions from a throwing message thunk") {
