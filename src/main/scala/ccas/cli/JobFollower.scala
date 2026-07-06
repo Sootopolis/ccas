@@ -25,6 +25,17 @@ final class JobFollower(api: CcasApiClient, maxWait: Duration) {
             .orDie
             .as(1)
       }
+      // A mid-follow stream drop (e.g. a long silent phase idling the connection shut) doesn't stop the detached job —
+      // it keeps running server-side. Report honestly and point the user back at it rather than failing loudly (#150).
+      .catchSome { case StreamDropped(cause) =>
+        Console
+          .printLineError(
+            s"$jobId: lost the log stream ($cause). The job keeps running on the server — " +
+              s"reattach with 'ccas logs $jobId' or check 'ccas jobs'."
+          )
+          .orDie
+          .as(1)
+      }
 
   // The stream closing tells us the job finished but not whether it succeeded; read the terminal status once to decide.
   // An unexpected status (server adds a new terminal kind, or a stale Running) exits non-zero rather than passing.

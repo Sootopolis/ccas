@@ -260,7 +260,11 @@ object JobRoutes {
           Response(
             status = Status.Ok,
             headers = Headers(Header.ContentType(MediaType.text.`plain`, charset = Some(StandardCharsets.UTF_8))),
-            body = Body.fromCharSequenceStreamChunked(lines.map(_ + "\n"), StandardCharsets.UTF_8)
+            // Interleave a keepalive tick so a >50s silent job phase can't idle the follower's connection shut (#150).
+            body = Body.fromCharSequenceStreamChunked(
+              JobLogStream.withKeepAlive(lines).map(_ + "\n"),
+              StandardCharsets.UTF_8
+            )
           )
       }).pipe(withErrorHandling)
     }
