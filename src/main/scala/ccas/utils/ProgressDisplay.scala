@@ -4,6 +4,7 @@ import java.io.PrintStream
 import java.time.format.DateTimeFormatter
 import java.time.{Instant, ZoneId}
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.regex.Pattern
 
 import zio.{Cause, FiberId, FiberRef, FiberRefs, LogLevel, LogSpan, Ref, Runtime, Scope, Trace, UIO, URIO, URLayer, ZIO, ZLayer, ZLogger}
 
@@ -262,6 +263,19 @@ object ProgressDisplay {
 
   def sourced[R, E, A](src: String)(zio: ZIO[R, E, A]): ZIO[R, E, A] =
     ZIO.logAnnotate(LogSource, src)(zio)
+
+  // Matches the leading `[LEVEL HH:mm:ss] ` bracket (group 1) followed by the `[<src>] ` prefix that `format`
+  // inserts. Bracket contents never contain `]` (level labels, times, and source tags — kind/slug, `#id`,
+  // `rate-limit`, `scheduler` — are all `]`-free), so `[^\]]+` is unambiguous.
+  private val SourceTagPrefix: Pattern = Pattern.compile("^(\\[[^\\]]+\\] )\\[[^\\]]+\\] ")
+
+  /** Strip the bracketed source prefix (`[<src>] `) that `format` inserts after the `[LEVEL HH:mm:ss]` bracket, so a
+    * per-job log file — and the CLI that streams it — isn't cluttered by a tag that only earns its keep on the
+    * multiplexed server console. Scoped to the per-job file path ([[ccas.server.jobs.FileSink]]), where every line
+    * carries the tag; a line whose message merely starts with a second `[...]` token is left intact because only the
+    * source tag directly abutting the level bracket is removed.
+    */
+  def stripSourceTag(line: String): String = SourceTagPrefix.matcher(line).replaceFirst("$1")
 
   // ---------------------------------------------------------------------------
   // Private formatter — ANSI colours, [LEVEL HH:mm:ss] msg, optional cause / spans / annotations

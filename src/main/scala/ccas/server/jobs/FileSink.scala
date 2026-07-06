@@ -10,7 +10,7 @@ import scala.util.control.NonFatal
 
 import zio.{UIO, ZIO}
 
-import ccas.utils.JobLogSink
+import ccas.utils.{JobLogSink, ProgressDisplay}
 
 /** Per-job file-backed sink. `writeConsoleSync` tees the formatted log line to `System.out` (so the server console
   * keeps showing every job's output); `writeFileSync` appends the same line, stripped of ANSI escapes, to
@@ -87,7 +87,7 @@ final class FileSink private[jobs] (
   // line that failed, and log one stderr trace for this episode.
   private def writeOrSuppress(w: BufferedWriter, line: String): Unit =
     try {
-      w.write(JobLogSink.stripAnsi(line))
+      w.write(fileLine(line))
       w.write("\n")
       w.flush()
     } catch {
@@ -118,7 +118,7 @@ final class FileSink private[jobs] (
       try {
         val w = openWriter()
         w.write(resumeMarker)
-        w.write(JobLogSink.stripAnsi(line))
+        w.write(fileLine(line))
         w.write("\n")
         w.flush()
         writer = Some(w)
@@ -190,6 +190,11 @@ final class FileSink private[jobs] (
     else s"[FileSink] file logging resumed after $suppressedDrops dropped line(s)\n"
 
   private def summaryLine: String = s"[FileSink] $droppedLines log line(s) dropped due to write failures\n"
+
+  // The durable file form of a formatted log line: ANSI stripped (so `cat job.log` is readable) and the `[<src>]`
+  // prefix removed — a per-job file is single-source, so the tag that disambiguates the multiplexed console is noise
+  // here (and doubly so when the CLI streams this file for one job). The stdout tee keeps both.
+  private def fileLine(line: String): String = ProgressDisplay.stripSourceTag(JobLogSink.stripAnsi(line))
 
   private def closeQuietly(w: BufferedWriter): Unit =
     try w.close()

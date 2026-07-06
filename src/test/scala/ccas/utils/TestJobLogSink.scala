@@ -18,6 +18,7 @@ object TestJobLogSink extends ZIOSpecDefault {
     testStdoutSinkIsDefault,
     testFileSinkAppendsLines,
     testFileSinkStripsAnsiFromFile,
+    testFileSinkStripsSourceTagFromFile,
     testFileSinkTeesAnsiToStdout,
     testFileSinkClosesAndIgnoresLateWrites,
     testFileSinkOpenFailureSuppressesAndRetries,
@@ -77,6 +78,29 @@ object TestJobLogSink extends ZIOSpecDefault {
       )
     ).map(_._1)
   }
+
+  // A per-job file is single-source, so the `[<src>]` prefix that disambiguates the multiplexed console is stripped
+  // from the file (and thus from the CLI stream that tails it) while the stdout tee keeps it.
+  private val TaggedLine = s"${Esc}[32m[INFO 00:00:00]${Esc}[0m [Membership/london-cc] reconciled"
+  private def testFileSinkStripsSourceTagFromFile =
+    test("FileSink drops the source tag from file content but keeps it on the stdout tee") {
+      captureStdout(
+        for {
+          dir  <- tempLogDir
+          sink <- ccas.server.jobs.FileSink.make(dir, "job-srctag")
+          _    <- ZIO.succeed(sink.writeFileSync(TaggedLine))
+          _    <- ZIO.succeed(sink.writeConsoleSync(TaggedLine))
+          path =  dir.resolve("job-srctag.log")
+          text <- ZIO.attempt(new String(Files.readAllBytes(path), StandardCharsets.UTF_8))
+        } yield text.trim
+      ).map { case (fileText, out) =>
+        assertTrue(
+          fileText == "[INFO 00:00:00] reconciled",
+          !fileText.contains("Membership/london-cc"),
+          out.contains("[Membership/london-cc]")
+        )
+      }
+    }
 
   private def testFileSinkTeesAnsiToStdout = test("FileSink tees the ANSI-preserved line to stdout") {
     captureStdout(
