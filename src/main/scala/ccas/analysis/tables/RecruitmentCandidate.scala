@@ -53,7 +53,8 @@ object RecruitmentCandidate {
   def selectInvitedByRun(runId: RecruitmentRunId): ZIO[PostgresClient, SQLException, List[RecruitmentCandidate]] =
     connectZIO {
       val invited: CandidateOutcome = CandidateOutcome.Invited
-      sql"SELECT $selectCols FROM recruitment_candidate WHERE run_id = $runId AND outcome = $invited"
+      sql"""SELECT $selectCols FROM recruitment_candidate WHERE run_id = $runId AND outcome = $invited
+            ORDER BY player_id"""
         .query[RecruitmentCandidate].run().toList
     }
 
@@ -97,7 +98,8 @@ object RecruitmentCandidate {
               AND rr.completed_at IS NOT NULL
               AND rr.started_at >= date_trunc('day', NOW() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
               AND rr.started_at < date_trunc('day', NOW() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' + INTERVAL '1 day'
-              AND rc.outcome = $invited"""
+              AND rc.outcome = $invited
+            ORDER BY rc.player_id"""
         .query[RecruitmentCandidate].run().toList
     }
 

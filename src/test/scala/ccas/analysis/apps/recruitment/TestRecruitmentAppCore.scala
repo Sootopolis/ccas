@@ -160,6 +160,21 @@ object TestRecruitmentAppCore extends ZIOSpecDefault {
         invited.head.playerId == pid0
       )
     },
+    test("RecruitmentCandidate selectInvitedByRun orders by player_id") {
+      for {
+        _          <- seedDb
+        _          <- seedPlayer(pid0)
+        _          <- seedPlayer(pid1)
+        _          <- seedPlayer(pid2)
+        criteriaId <- seedCriteria(makeCriteria())
+        runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None)
+        // Insert out of player_id order; the query must return them ascending regardless.
+        _ <- ZIO.foreachDiscard(List(pid2, pid0, pid1)) { pid =>
+          RecruitmentCandidate.insert(RecruitmentCandidate(runId, pid, Times.t0, CandidateOutcome.Invited, None))
+        }
+        invited <- RecruitmentCandidate.selectInvitedByRun(runId)
+      } yield assertTrue(invited.map(_.playerId) == List(pid0, pid1, pid2))
+    },
     test("CandidateOutcome enum round-trip for all variants") {
       val enumPids = CandidateOutcome.values.toList.zipWithIndex.map((_, i) => PlayerId.wrap(250L + i))
       for {
