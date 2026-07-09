@@ -114,39 +114,33 @@ object JobRunner {
             _   <- JobRun.insert(jobRun)
           } yield id
         }
-        sink    <- FileSink.make(logDir, JobRunId.unwrap(id))
-        promise <- Promise.make[Nothing, Unit]
-        // Runs in the CHILD fiber when the job ends (success, failure, or interruption): close the sink (flush + close
-        // the held-open writer) FIRST, then fire the completion promise, then de-register — so a tailer observes a
-        // fully written, closed file before it sees the job done, and always gets EOF, including on shutdown.
-        release = for {
-          _ <- sink.close()
-          _ <- promise.succeed(())
-          _ <- completions.update(_ - id)
-        } yield ()
-        // Source tag for this job's log lines (`[Kind/slug]`), resolved best-effort — a missing club or a
-        // read failure degrades to the numeric id, never fails the submit. Cosmetic, so it stays outside
-        // the `withTransaction` block above.
+        // Source tag for this job's log lines (`[Kind/slug]`), resolved best-effort — a missing club or read failure
+        // degrades to the numeric id, never fails the submit. Resolved before the sink is opened so this interruptible
+        // DB read (can block seconds on a Neon cold start) holds no fd: an interrupt here leaks nothing.
         slugOpt <- ZIO.foreach(clubId)(Club.selectId).map(_.flatten.map(_.slug)).catchAll(_ => ZIO.none)
         label = clubId.fold(kind.toString)(cid =>
           s"$kind/${slugOpt.fold(s"#${ClubId.unwrap(cid)}")(ClubSlug.unwrap)}"
         )
-        // Fork the job into the layer scope (not the submitting fiber) so it outlives the request that submitted it;
-        // plain `.fork` would make it a child of the request handler fiber and structured concurrency would interrupt
-        // it the moment the HTTP response is sent. `forkIn` also interrupts any still-running job when the layer scope
-        // closes on server shutdown, and self-cleans on normal completion, so it's the sole job-lifecycle mechanism.
-        //
-        // Register the completion promise in the PARENT, before forking, so a log-tail subscribe issued the instant
-        // submit returns always sees the promise. `release` (run via `ensuring`) completes the promise + de-registers
-        // in the CHILD fiber — acquire and release live in different fibers, so a single `acquireRelease` bracket
-        // doesn't fit. `uninterruptibleMask` makes the register→fork pair atomic (an interrupt in between would leave a
-        // promise registered but never completed, hanging a later subscribe); `restore` keeps the forked job interruptible.
-        //
-        // `currentSink.locally` wraps the entire `runJob` (not just the user effect) so the success/failure handlers'
-        // own `ZIO.logError` calls also land in the per-job file. FiberRef values are inherited by forked children, so
-        // any parallel work the job spawns sees the same sink.
+        // `FileSink.make` acquires a held-open fd whose only close path is `release` (the child's `.ensuring`); an
+        // interrupt between the open and the `forkIn` would leak it, so open + register + fork sit inside one
+        // `uninterruptibleMask` (`restore` keeps only the forked job interruptible). `forkIn(layerScope)` — not
+        // `.fork` — so the job outlives the submitting request and is interrupted on server shutdown. The completion
+        // promise is registered before forking so a log-tail subscribe sees it the instant submit returns; `release`
+        // completes + de-registers it in the CHILD fiber, so a single `acquireRelease` bracket doesn't fit.
+        // `currentSink.locally` wraps the whole `runJob` so the success/failure handlers' own logs also land in the
+        // per-job file; forked children inherit the FiberRef, so parallel work shares the sink.
         _ <- ZIO.uninterruptibleMask { restore =>
           for {
+            sink    <- FileSink.make(logDir, JobRunId.unwrap(id))
+            promise <- Promise.make[Nothing, Unit]
+            // Runs in the CHILD fiber when the job ends (success, failure, or interruption): close the sink (flush +
+            // close the held-open writer) FIRST, then fire the completion promise, then de-register — so a tailer
+            // observes a fully written, closed file before it sees the job done, and always gets EOF, incl. on shutdown.
+            release = for {
+              _ <- sink.close()
+              _ <- promise.succeed(())
+              _ <- completions.update(_ - id)
+            } yield ()
             _ <- completions.update(_ + (id -> promise))
             _ <- restore(
               // `installLogger` forces ProgressDisplay's ZLogger onto the job fiber itself, so the per-job FileSink is

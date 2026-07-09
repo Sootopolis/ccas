@@ -2,7 +2,7 @@ package ccas.utils.client
 
 import zio.{ZLayer, durationInt}
 import zio.http.netty.NettyConfig
-import zio.http.{Client, Decompression, DnsResolver, ZClient}
+import zio.http.{Client, ConnectionPoolConfig, Decompression, DnsResolver, ZClient}
 
 /** Custom zio-http Client ZLayer shared by every CCAS app and the server. Used in place of `Client.default` at every
   * layer-provisioning call site so that transport-level configuration (gzip, HTTP/2 in the future, connection pools,
@@ -44,6 +44,15 @@ object HttpClientLayer {
       // hang a fiber on connection setup while waiting on the much longer OS-level TCP timeout.
       .idleTimeout(50.seconds)
       .connectionTimeout(10.seconds)
+      // Connection pool with a `ttl` shorter than Chess.com's Cloudflare-edge idle timeout, so stale keep-alive
+      // connections are evicted before the origin reaps them server-side. zio-http's default `Fixed(10)` has no idle
+      // TTL, so it hands out reaped connections and the next request fails mid-flight with Netty's
+      // `PrematureChannelClosureException` (`ChessComClient`'s connection-error retry then recovers, but noisily).
+      // `maximum` is headroom over the real outbound concurrency ceiling (the gate's `maxPermits`, itself bounded by
+      // `ApiConcurrency.fiberCap` ≤ the Hikari pool ~20), so raising `maxPermits` in config can't silently undersize
+      // the pool below demand. `minimum = 0` keeps no idle connections, so the generous cap costs nothing at rest
+      // (the pool drains during idle gaps — Neon scale-to-zero / between-job pauses).
+      .copy(connectionPool = ConnectionPoolConfig.Dynamic(minimum = 0, maximum = 32, ttl = 30.seconds))
       // When zio-http adds HTTP/2 (issue #3473), enable it here, e.g.:
       //   .copy(protocols = NonEmptyChunk(Version.Http_2, Version.Http_1_1))
     (ZLayer.succeed(config) ++

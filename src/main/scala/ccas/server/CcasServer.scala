@@ -3,7 +3,7 @@ package ccas.server
 import java.nio.file.{Files, Paths}
 
 import com.typesafe.config.ConfigFactory
-import zio.{Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
+import zio.{durationInt, Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
 import zio.http.{Routes, Server}
 
 import ccas.server.config.{ServerEnvOverlay, ServerEnvPaths}
@@ -57,7 +57,11 @@ object CcasServer extends ZIOAppDefault {
         PostgresClient.live(onInit = ServerTables.ensureTables),
         JobRunner.live,
         JobScheduler.live,
-        Server.defaultWith(_.binding(host, port))
+        // Read-idle reaper for keep-alive connections (zio-http's `Server.Config.default` leaves `idleTimeout=None`),
+        // so a client that vanishes without FIN/RST can't pin a Netty channel + fd forever. Set above
+        // `JobLogStream.KeepAliveInterval` (20s) so a streaming `/api/jobs/{id}/logs` follow's keepalive resets the
+        // timer before it fires; only genuinely dead connections get reaped.
+        Server.defaultWith(_.binding(host, port).idleTimeout(60.seconds))
       )
     }
 
