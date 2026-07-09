@@ -175,6 +175,36 @@ object TestRecruitmentAppCore extends ZIOSpecDefault {
         invited <- RecruitmentCandidate.selectInvitedByRun(runId)
       } yield assertTrue(invited.map(_.playerId) == List(pid0, pid1, pid2))
     },
+    test("RecruitmentCandidate selectInvitedToday dedups by player, latest invite wins") {
+      for {
+        _          <- seedDb
+        _          <- seedPlayer(pid0)
+        _          <- seedPlayer(pid1)
+        _          <- seedPlayer(pid2)
+        criteriaId <- seedCriteria(makeCriteria()) // seeds alias "default" -> criteriaId
+        // Today-window query stamps runs off the DB clock (not Instant.now()) so the row timestamps and the NOW()
+        // predicate share one clock.
+        nowT    <- dbNow
+        earlier = nowT.minusSeconds(120)
+        // Two completed runs today for the same club/alias.
+        runA <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, nowT, None)
+        _    <- RecruitmentRun.update(RecruitmentRun(runA, clubId, criteriaId, RunTrigger.Cli, nowT, Some(nowT), 0, None))
+        runB <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, nowT, None)
+        _    <- RecruitmentRun.update(RecruitmentRun(runB, clubId, criteriaId, RunTrigger.Cli, nowT, Some(nowT), 0, None))
+        // pid0 invited in BOTH runs (the duplicate); pid1 only in A; pid2 only in B.
+        _ <- RecruitmentCandidate.insert(RecruitmentCandidate(runA, pid0, earlier, CandidateOutcome.Invited, None))
+        _ <- RecruitmentCandidate.insert(RecruitmentCandidate(runB, pid0, nowT, CandidateOutcome.Invited, None))
+        _ <- RecruitmentCandidate.insert(RecruitmentCandidate(runA, pid1, earlier, CandidateOutcome.Invited, None))
+        _ <- RecruitmentCandidate.insert(RecruitmentCandidate(runB, pid2, nowT, CandidateOutcome.Invited, None))
+        invited <- RecruitmentCandidate.selectInvitedToday(clubId, "default")
+        pid0Row = invited.find(_.playerId == pid0)
+      } yield assertTrue(
+        // one row per player, ascending by player_id (pid0 not duplicated)
+        invited.map(_.playerId) == List(pid0, pid1, pid2),
+        // surviving pid0 row is the later-evaluated one, from run B
+        pid0Row.exists(_.runId == runB)
+      )
+    },
     test("CandidateOutcome enum round-trip for all variants") {
       val enumPids = CandidateOutcome.values.toList.zipWithIndex.map((_, i) => PlayerId.wrap(250L + i))
       for {

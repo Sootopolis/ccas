@@ -445,6 +445,11 @@ object RecruitmentTestSupport {
       _          <- RecruitmentAlias.insert(RecruitmentAlias(clubId, "default", Instant.now(), criteriaId))
     } yield criteriaId
 
+  /** The database's clock. Use this (not `Instant.now()`) to stamp rows a `NOW()`-windowed query must match, so the
+    * row timestamp and the query predicate share one clock rather than risking JVM/DB skew at a day boundary. */
+  def dbNow: RIO[PostgresClient, Instant] =
+    PostgresClient.connectZIO(sql"SELECT NOW()".query[Instant].run().head)
+
   def seedDb: RIO[PostgresClient, Unit] =
     for {
       // Clean up test data

@@ -90,7 +90,9 @@ object RecruitmentCandidate {
   def selectInvitedToday(clubId: ClubId, alias: String): ZIO[PostgresClient, SQLException, List[RecruitmentCandidate]] =
     connectZIO {
       val invited: CandidateOutcome = CandidateOutcome.Invited
-      sql"""SELECT $selectColsRc FROM recruitment_candidate rc
+      // Spans every run today, so a player invited in more than one run has multiple rows. DISTINCT ON keeps one
+      // per player — the latest invite wins — and leads ORDER BY with player_id so the output stays ascending.
+      sql"""SELECT DISTINCT ON (rc.player_id) $selectColsRc FROM recruitment_candidate rc
             JOIN recruitment_run rr ON rc.run_id = rr.run_id
             WHERE rr.club_id = $clubId AND rr.criteria_id IN (
               SELECT criteria_id FROM recruitment_alias WHERE club_id = $clubId AND alias = $alias
@@ -99,7 +101,7 @@ object RecruitmentCandidate {
               AND rr.started_at >= date_trunc('day', NOW() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
               AND rr.started_at < date_trunc('day', NOW() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' + INTERVAL '1 day'
               AND rc.outcome = $invited
-            ORDER BY rc.player_id"""
+            ORDER BY rc.player_id, rc.evaluated_at DESC, rc.run_id DESC"""
         .query[RecruitmentCandidate].run().toList
     }
 
