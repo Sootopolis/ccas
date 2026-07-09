@@ -1,7 +1,7 @@
 package ccas.utils.client
 
 import ccas.utils.sql.PostgresClient
-import zio.{durationInt, Duration, RIO, Ref, Scope, Semaphore, Task, URLayer, ZIO, ZLayer}
+import zio.{durationInt, Duration, Fiber, RIO, Ref, Scope, Semaphore, Task, URLayer, ZIO, ZLayer}
 import zio.http.*
 import zio.json.*
 
@@ -40,12 +40,15 @@ object TestChessComClientSupport {
     emaTauMs: Long = 500
   ): ZIO[Scope & PostgresClient, Nothing, (ChessComClient, Ref[ChessComClient.ThrottleState], Ref[ClientStatsAccumulator])] =
     for {
-      testScope     <- ZIO.service[Scope]
       pgClient      <- ZIO.service[PostgresClient]
       stateRef      <- Ref.make(ChessComClient.ThrottleState(permits, 0, Vector.empty))
       activeRef     <- Ref.make(0)
       rateLimitGate <- Semaphore.make(1)
       lastReqRef    <- Ref.make(0L)
+      recoveryFiberRef    <- Ref.make(Option.empty[Fiber.Runtime[Throwable, Unit]])
+      // Mirror `ChessComClient.live`: interrupt the in-flight recovery fiber when the scope closes, so a throttled
+      // client doesn't leak its recovery daemon past the test scope.
+      _ <- ZIO.addFinalizer(recoveryFiberRef.get.flatMap(ZIO.foreachDiscard(_)(_.interrupt)))
       bar                 <- ProgressDisplay.make(enabled = false).addBar
       stats               <- Ref.make(ClientStatsAccumulator())
       config = ChessComClient.ThrottleConfig(
@@ -103,7 +106,7 @@ object TestChessComClientSupport {
         stats,
         bar,
         config,
-        testScope,
+        recoveryFiberRef,
         ZIO.unit
       )
       (client, stateRef, stats)
@@ -149,6 +152,11 @@ object TestChessComClientSupport {
       activeRef     <- Ref.make(0)
       rateLimitGate <- Semaphore.make(1)
       lastReqRef    <- Ref.make(0L)
+      // No scope finalizer for this ref (unlike `makeClient`/`ChessComClient.live`): `fakeClient` isn't scoped. Safe
+      // because it never drives a throttle-down — default `permits = 1` keeps `currentMax` at 1 (throttle-down needs
+      // `currentMax > 1`) and route fakes return no 429s, so no recovery fiber is ever forked. Use `makeClient` for
+      // tests that need throttling with cleanup.
+      recoveryFiberRef    <- Ref.make(Option.empty[Fiber.Runtime[Throwable, Unit]])
       bar                 <- ProgressDisplay.make(enabled = false).addBar
       stats               <- Ref.make(ClientStatsAccumulator())
     } yield {
@@ -189,7 +197,7 @@ object TestChessComClientSupport {
         stats,
         bar,
         ChessComClient.ThrottleConfig(Vector(2, permits.toInt.max(2)).distinct, 30.seconds, 5.seconds, 1.second, 10.seconds, 1.second, 5, 2, 3, 20, 0.2, 10, 0, Duration.Zero, 500L),
-        Scope.global,
+        recoveryFiberRef,
         ZIO.unit
       )
     }

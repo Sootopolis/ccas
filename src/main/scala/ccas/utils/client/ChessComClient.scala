@@ -77,7 +77,7 @@ final class ChessComClient(
   statsRef: Ref[ClientStatsAccumulator],
   progressBar: ProgressBar,
   config: ChessComClient.ThrottleConfig,
-  scope: Scope,
+  recoveryFiberRef: Ref[Option[Fiber.Runtime[Throwable, Unit]]],
   endSessionEffect: UIO[Unit]
 ) {
   import throttle.*
@@ -553,7 +553,12 @@ final class ChessComClient(
       _     <- statsRef.update(_.incThrottleDowns)
       _     <- ProgressDisplay.sourced("rate-limit")(ZIO.logWarning(s"Rate limit throttle: $oldMax \u2192 1 permit"))
       fiber <- scheduleRecovery(gen, cooldown).forkDaemon
-      _     <- scope.addFinalizerExit(_ => fiber.interrupt)
+      // Interrupt-and-replace so at most one recovery fiber is ever retained: a fresh throttle-down supersedes any
+      // in-flight recovery (the older one is already a generation-stale no-op — see the `generation` guard in
+      // `scheduleRecovery`). A single scope finalizer (in `live`) interrupts whatever fiber remains at shutdown.
+      // `interruptFork` so this response-path effect never blocks awaiting the superseded fiber's teardown.
+      prev  <- recoveryFiberRef.getAndSet(Some(fiber))
+      _     <- ZIO.foreachDiscard(prev)(_.interruptFork)
     } yield ()
 
   /** Wait for in-flight requests to drain, sleep for cooldown, then recover permits if failure rate has dropped. After
@@ -857,7 +862,6 @@ object ChessComClient {
           !statsFlushInterval.isNegative && !statsFlushInterval.isZero,
           s"stats-flush-interval-seconds must be positive, got: $statsFlushInterval"
         ))
-        clientScope   <- ZIO.service[Scope]
         client        <- ZIO.service[Client]
         pgClient      <- ZIO.service[PostgresClient]
         display       <- ZIO.service[ProgressDisplay]
@@ -865,6 +869,9 @@ object ChessComClient {
         activeRef     <- Ref.make(0)
         rateLimitGate <- Semaphore.make(1)
         lastReqRef    <- Ref.make(0L)
+        // Holds the single in-flight rate-limit recovery fiber (interrupt-and-replaced per throttle in `applyThrottle`);
+        // the finalizer below interrupts whatever remains at shutdown.
+        recoveryFiberRef <- Ref.make(Option.empty[Fiber.Runtime[Throwable, Unit]])
         startedAt     <- Clock.instant
         sessionId      = startedAt.toString.replace(":", "").replace("-", "")
         stats               <- Ref.make(ClientStatsAccumulator())
@@ -876,6 +883,7 @@ object ChessComClient {
           ClientStatsFlushContext(sessionId, appLabel, startedAt, stats, configIdRef, throttleConfig, stateRef, pgClient, endedAtRef)
         flushFiber <- ClientStatsPersistence.persistStats(flushCtx).repeat(Schedule.fixed(statsFlushInterval)).forkDaemon
         _ <- ZIO.addFinalizer(flushFiber.interrupt *> ClientStatsPersistence.finalFlush(flushCtx))
+        _ <- ZIO.addFinalizer(recoveryFiberRef.get.flatMap(ZIO.foreachDiscard(_)(_.interrupt)))
       } yield ChessComClient(
         client,
         pgClient,
@@ -884,7 +892,7 @@ object ChessComClient {
         stats,
         bar,
         throttleConfig,
-        clientScope,
+        recoveryFiberRef,
         ClientStatsPersistence.endSession(flushCtx, flushFiber)
       )
     }

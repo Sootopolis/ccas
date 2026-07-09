@@ -3,7 +3,7 @@ package ccas.analysis.apps.recruitment
 import java.time.Instant
 
 import com.augustnagro.magnum.sql
-import zio.{durationInt, Promise, RIO, Ref, Scope, Semaphore, ZIO}
+import zio.{durationInt, Fiber, Promise, RIO, Ref, Scope, Semaphore, ZIO}
 import zio.http.*
 
 import ccas.analysis.apps.TestTimes
@@ -380,6 +380,9 @@ object RecruitmentTestSupport {
       activeRef     <- Ref.make(0)
       rateLimitGate <- Semaphore.make(1)
       lastReqRef    <- Ref.make(0L)
+      // No scope finalizer for this ref (this factory isn't scoped): the block/JSON route fakes return no 429s, so the
+      // failure window never triggers a throttle-down and no recovery fiber is ever forked. See `fakeClient`.
+      recoveryFiberRef    <- Ref.make(Option.empty[Fiber.Runtime[Throwable, Unit]])
       bar                 <- ProgressDisplay.make(enabled = false).addBar
       stats               <- Ref.make(ClientStatsAccumulator())
       playerCount         <- Ref.make(0)
@@ -432,7 +435,7 @@ object RecruitmentTestSupport {
         stats,
         bar,
         ChessComClient.ThrottleConfig(Vector(2, 5), 30.seconds, 5.seconds, 1.second, 10.seconds, 1.second, 5, 2, 3, 20, 0.2, 10, 0, java.time.Duration.ZERO, 500L),
-        Scope.global,
+        recoveryFiberRef,
         ZIO.unit
       )
     }
