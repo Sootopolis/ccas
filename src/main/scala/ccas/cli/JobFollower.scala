@@ -14,8 +14,12 @@ import ccas.server.routes.JobRoutes.{ClubJobResult, JobResult, JobStatusResponse
 final class JobFollower(api: CcasApiClient, maxWait: Duration) {
 
   def followJob(jobId: String): Task[Int] =
+    followJob(jobId, line => Console.printLine(line).orDie)
+
+  // `onLine` sinks each streamed log line; `--stdout` routes it to stderr so stdout carries only the username payload.
+  private def followJob(jobId: String, onLine: String => UIO[Unit]): Task[Int] =
     api
-      .streamLines(s"/api/jobs/$jobId/logs")(line => Console.printLine(line).orDie)
+      .streamLines(s"/api/jobs/$jobId/logs")(onLine)
       .timeout(maxWait)
       .flatMap {
         case Some(_) => finalExitCode(jobId)
@@ -54,6 +58,36 @@ final class JobFollower(api: CcasApiClient, maxWait: Duration) {
       case (Some(err), _) => Console.printLineError(s"$label: $err").orDie.as(1)
       case (_, Some(id)) =>
         CompletionCache.appendJob(id) *> Console.printLine(s"$label submitted: $id").orDie *> followJob(id)
+      case _ => Console.printLineError(s"$label: server returned no job id").orDie.as(1)
+    }
+
+  /** Recruit submit + result delivery. When `logsToStderr`, the submit notice and streamed job logs go to stderr so
+    * stdout carries only the bare-username payload (`ccas recruit --stdout | wl-copy`, and the non-interactive
+    * deferred-report path); the interactive confirm flow keeps both on stdout. `onComplete` runs only when the job
+    * reaches `Completed`, receiving the job id so the caller can fetch/confirm and render the usernames; it is
+    * skipped on failure/timeout/no-id.
+    */
+  def handleRecruit(
+    label: String,
+    result: JobResult,
+    logsToStderr: Boolean,
+    onComplete: String => Task[Unit]
+  ): Task[Int] =
+    (result.error, result.jobId) match {
+      case (Some(err), _) => Console.printLineError(s"$label: $err").orDie.as(1)
+      case (_, Some(id)) =>
+        val notice: UIO[Unit] =
+          (if (logsToStderr) { Console.printLineError(s"$label submitted: $id") }
+           else { Console.printLine(s"$label submitted: $id") }).orDie
+        val onLine: String => UIO[Unit] =
+          if (logsToStderr) { line => Console.printLineError(line).orDie }
+          else { line => Console.printLine(line).orDie }
+        for {
+          _    <- CompletionCache.appendJob(id)
+          _    <- notice
+          code <- followJob(id, onLine)
+          _    <- ZIO.whenDiscard(code == 0)(onComplete(id))
+        } yield code
       case _ => Console.printLineError(s"$label: server returned no job id").orDie.as(1)
     }
 

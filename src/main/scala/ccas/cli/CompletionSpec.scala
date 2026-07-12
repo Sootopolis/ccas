@@ -63,8 +63,10 @@ object CompletionSpec {
     Leaf(
       List("recruit"),
       List(server, "--alias", "--target", "--cumulative", "--source-clubs", "--time-limit-minutes", "--explore",
-        "--no-explore", clubFlag),
+        "--no-explore", clubFlag, "--stdout", "--report"),
       List(server, "--alias", "--target", "--source-clubs", "--time-limit-minutes", clubFlag),
+      // `--report`'s optional `[run-id]` is a bare numeric positional with nothing to complete, so NoArgs (suggest
+      // nothing) is the right shell behavior.
       NoArgs
     ),
     Leaf(List("stats"), List(server, "--since", "--until", clubFlag), List(server, "--since", "--until", clubFlag), NoArgs),

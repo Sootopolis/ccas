@@ -11,15 +11,18 @@ import zio.stream.ZStream
 import zio.json.DecoderOps
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault, ZTestLogger}
 
-import ccas.analysis.tables.{Club, RunTrigger}
-import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId}
+import ccas.analysis.apps.recruitment.CandidateOutcome
+import ccas.analysis.tables.{Club, RecruitmentCandidate, RecruitmentCriteria, RecruitmentRun, RunTrigger}
+import ccas.analysis.tables.subtypes.RecruitmentRunId
+import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId, PlayerId, Username}
 import ccas.server.jobs.*
-import ccas.server.routes.JobRoutes.{ClubJobResult, JobResult}
+import ccas.server.routes.JobRoutes.{ClubJobResult, ConfirmResult, InvitedUsernames, JobResult}
 import ccas.server.scheduler.{JobSchedule, ScheduleSeed}
 import ccas.server.ServerTables
 import ccas.utils.client.{ChessComClient, TestChessComClientSupport}
 import ccas.utils.errors.ConflictException
 import ccas.utils.sql.{FreshSchemaLayer, TestDbCleanup}
+import ccas.utils.sql.DbCodecs.given
 import ccas.utils.ProgressDisplay
 
 object TestRoutes extends ZIOSpecDefault {
@@ -149,6 +152,9 @@ object TestRoutes extends ZIOSpecDefault {
     testGetJobLogsReturns404,
     testStatsWithInvalidDateReturns400,
     testStatsWithPartialDatesReturns400,
+    testRecruitmentInvitedAndFound,
+    testRecruitmentConfirmFlipsDeferred,
+    testRecruitmentReport,
     testUnhandledErrorReturns500AndLogsCause,
     testInterruptPropagatesWithoutLogging
   )
@@ -469,6 +475,94 @@ object TestRoutes extends ZIOSpecDefault {
     _ <- Club.upsert(Club(ClubId(200), t0, ClubSlug("test-club"), "Test Club", None, None, None))
     _ <- Club.upsert(Club(ClubId(201), t0, ClubSlug("other-club"), "Other Club", None, None, None))
   } yield ()
+
+  // Seed a completed recruitment run linked to `jobId` with the given invited/deferred candidates (each a
+  // (playerId, username) pair). Distinct ids/jobIds across tests avoid PK collisions on the shared schema.
+  private def seedRecruitmentRun(
+    jobId: String,
+    clubId: ClubId,
+    invited: List[(Long, String)],
+    deferred: List[(Long, String)]
+  ): RIO[PostgresClient, RecruitmentRunId] =
+    for {
+      _          <- ensureClubs
+      criteriaId <- RecruitmentCriteria.insert(RecruitmentCriteria.defaultDaily)
+      runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Api, t0, Some(JobRunId.wrap(jobId)))
+      _          <- ZIO.foreachDiscard(invited ++ deferred) { case (pid, name) => seedPlayer(pid, name) }
+      _ <- ZIO.foreachDiscard(invited) { case (pid, _) =>
+        RecruitmentCandidate.insert(RecruitmentCandidate(runId, PlayerId(pid), t0, CandidateOutcome.Invited, None))
+      }
+      _ <- ZIO.foreachDiscard(deferred) { case (pid, _) =>
+        RecruitmentCandidate.insert(RecruitmentCandidate(runId, PlayerId(pid), t0, CandidateOutcome.Deferred, None))
+      }
+    } yield runId
+
+  private def seedPlayer(pid: Long, name: String): RIO[PostgresClient, Unit] =
+    PostgresClient.connectZIO {
+      sql"""INSERT INTO player (player_id, joined, username, status, title, since)
+            VALUES (${PlayerId(pid)}, $t0, ${Username(name)}, 'Active', NULL, $t0)
+            ON CONFLICT (player_id) DO NOTHING""".update.run()
+    }.unit
+
+  private def testRecruitmentInvitedAndFound = test("GET recruitment invited/found split by outcome; 404 for unknown job") {
+    for {
+      _         <- seedRecruitmentRun("rr-job-1", ClubId(200), invited = List((9001L, "alice")), deferred = List((9002L, "bob")))
+      invResp   <- JobRoutes.routes.runZIO(jsonRequest(Method.GET, "/api/jobs/rr-job-1/recruitment/invited"))
+      invBody   <- invResp.body.asString
+      foundResp <- JobRoutes.routes.runZIO(jsonRequest(Method.GET, "/api/jobs/rr-job-1/recruitment/found"))
+      foundBody <- foundResp.body.asString
+      missResp  <- JobRoutes.routes.runZIO(jsonRequest(Method.GET, "/api/jobs/no-such-job/recruitment/found"))
+    } yield assertTrue(
+      invResp.status == Status.Ok,
+      invBody.fromJson[InvitedUsernames] == Right(InvitedUsernames(List("alice"))),
+      foundResp.status == Status.Ok,
+      foundBody.fromJson[InvitedUsernames] == Right(InvitedUsernames(List("bob"))),
+      missResp.status == Status.NotFound
+    )
+  }
+
+  private def testRecruitmentConfirmFlipsDeferred = test("POST recruitment confirm flips Deferred, records count, idempotent, 404 unknown") {
+    for {
+      runId    <- seedRecruitmentRun("rr-job-2", ClubId(200), invited = Nil, deferred = List((9101L, "carol"), (9102L, "dave")))
+      resp1    <- JobRoutes.routes.runZIO(jsonRequest(Method.POST, "/api/jobs/rr-job-2/recruitment/confirm"))
+      body1    <- resp1.body.asString
+      runAfter <- RecruitmentRun.selectId(runId)
+      resp2    <- JobRoutes.routes.runZIO(jsonRequest(Method.POST, "/api/jobs/rr-job-2/recruitment/confirm"))
+      body2    <- resp2.body.asString
+      missResp <- JobRoutes.routes.runZIO(jsonRequest(Method.POST, "/api/jobs/no-such-job/recruitment/confirm"))
+    } yield assertTrue(
+      resp1.status == Status.Ok,
+      body1.fromJson[ConfirmResult] == Right(ConfirmResult(2, List("carol", "dave"))),
+      runAfter.exists(_.candidatesFound == 2),
+      // Re-POST: nothing left to flip; count stays 2 and the same invited list comes back.
+      body2.fromJson[ConfirmResult] == Right(ConfirmResult(0, List("carol", "dave"))),
+      missResp.status == Status.NotFound
+    )
+  }
+
+  private def testRecruitmentReport = test("GET recruitment report by run id and club-latest; 400/404 branches") {
+    for {
+      runId   <- seedRecruitmentRun("rr-job-3", ClubId(201), invited = List((9201L, "erin")), deferred = Nil)
+      _       <- Club.upsert(Club(ClubId(202), t0, ClubSlug("empty-club"), "Empty Club", None, None, None))
+      byRun   <- JobRoutes.routes.runZIO(jsonRequest(Method.GET, s"/api/recruitment/runs/${RecruitmentRunId.unwrap(runId)}/invited"))
+      byRunB  <- byRun.body.asString
+      latest  <- JobRoutes.routes.runZIO(jsonRequest(Method.GET, "/api/recruitment/clubs/other-club/latest/invited"))
+      latestB <- latest.body.asString
+      badId   <- JobRoutes.routes.runZIO(jsonRequest(Method.GET, "/api/recruitment/runs/not-a-number/invited"))
+      noRun   <- JobRoutes.routes.runZIO(jsonRequest(Method.GET, "/api/recruitment/runs/999999/invited"))
+      noClub  <- JobRoutes.routes.runZIO(jsonRequest(Method.GET, "/api/recruitment/clubs/ghost-club/latest/invited"))
+      noRuns  <- JobRoutes.routes.runZIO(jsonRequest(Method.GET, "/api/recruitment/clubs/empty-club/latest/invited"))
+    } yield assertTrue(
+      byRun.status == Status.Ok,
+      byRunB.fromJson[InvitedUsernames] == Right(InvitedUsernames(List("erin"))),
+      latest.status == Status.Ok,
+      latestB.fromJson[InvitedUsernames] == Right(InvitedUsernames(List("erin"))),
+      badId.status == Status.BadRequest,
+      noRun.status == Status.NotFound,
+      noClub.status == Status.NotFound,
+      noRuns.status == Status.NotFound
+    )
+  }
 
   private val deleteAllSchedules = TestDbCleanup.clearJobSchedules *> ensureClubs
 

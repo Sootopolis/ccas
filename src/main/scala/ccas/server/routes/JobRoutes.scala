@@ -5,6 +5,7 @@ import java.nio.charset.StandardCharsets
 import scala.util.chaining.*
 
 import ccas.utils.sql.PostgresClient
+import ccas.utils.sql.PostgresClient.withTransaction
 import zio.{NonEmptyChunk, RIO, ZIO}
 import zio.http.*
 import zio.json.{DeriveJsonCodec, EncoderOps, JsonCodec}
@@ -14,8 +15,9 @@ import ccas.analysis.apps.membership.MembershipApp
 import ccas.analysis.apps.recruitment.RecruitmentApp
 import ccas.analysis.apps.ref.RefApp
 import ccas.analysis.apps.stats.StatsApp
-import ccas.analysis.tables.{Club, RunTrigger}
-import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId}
+import ccas.analysis.tables.{Club, Player, RecruitmentCandidate, RecruitmentRun, RunTrigger}
+import ccas.analysis.tables.subtypes.RecruitmentRunId
+import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId, Username}
 import ccas.server.jobs.*
 import ccas.server.routes.RouteHelpers.*
 import ccas.utils.{ProgressDisplay, TimeParser}
@@ -36,7 +38,10 @@ object JobRoutes {
     cumulative: Option[Boolean],
     sourceClubs: Option[List[ClubSlug]],
     timeLimitMinutes: Option[Int],
-    explore: Option[Boolean]
+    explore: Option[Boolean],
+    // When Some(false) the scout leaves candidates Deferred for the CLI to confirm; absent/Some(true) auto-confirms
+    // (scheduler, raw API, and non-interactive `ccas recruit`). The interactive CLI sends false.
+    autoConfirm: Option[Boolean]
   )
   object RecruitmentRequest {
     given JsonCodec[RecruitmentRequest] = DeriveJsonCodec.gen
@@ -79,6 +84,20 @@ object JobRoutes {
   private[ccas] case class ClubJobResult(clubSlug: String, jobId: Option[String], error: Option[String])
   object ClubJobResult {
     given JsonCodec[ClubJobResult] = DeriveJsonCodec.gen
+  }
+
+  /** Paste-ready invited usernames for a completed recruitment job (drives `ccas recruit --stdout` and the interactive
+    * confirm/report flows). */
+  private[ccas] case class InvitedUsernames(usernames: List[String])
+  object InvitedUsernames {
+    given JsonCodec[InvitedUsernames] = DeriveJsonCodec.gen
+  }
+
+  /** Confirm-endpoint result: `marked` is the actual number of rows flipped Deferred→Invited (may exceed `usernames`
+    * if some invited player id doesn't resolve to a handle), `usernames` is the paste-ready resolved subset. */
+  private[ccas] case class ConfirmResult(marked: Int, usernames: List[String])
+  object ConfirmResult {
+    given JsonCodec[ConfirmResult] = DeriveJsonCodec.gen
   }
 
   private[ccas] case class JobStatusResponse(
@@ -129,6 +148,7 @@ object JobRoutes {
                 timeLimitMinutes = effectiveTimeLimit,
                 explore = body.explore.getOrElse(true),
                 trigger = RunTrigger.Api,
+                autoConfirm = body.autoConfirm.getOrElse(true),
                 jobRunId = jobRunId
               )
             runner.submit(JobKind.Recruitment, Some(club.clubId), Some(body.toJson), RunTrigger.Api, effect)
@@ -267,8 +287,92 @@ object JobRoutes {
             )
           )
       }).pipe(withErrorHandling)
+    },
+    // Invited usernames for the recruitment run linked to a job — the paste-ready payload the CLI fetches once the
+    // job is terminal (the `ccas recruit --stdout` auto-confirm path). 404 if the job id has no recruitment run.
+    // Scope is THIS run only, deliberately: a `--cumulative` top-up returns just its new invites so the operator
+    // doesn't re-paste players already invited earlier today.
+    Method.GET / "api" / "jobs" / string("jobId") / "recruitment" / "invited" -> handler { (jobId: String, _: Request) =>
+      candidatesByJobResponse(jobId, RecruitmentCandidate.selectInvitedByRun).pipe(withErrorHandling)
+    },
+    // Still-deferred candidates for a job's recruitment run — shown by interactive `ccas recruit` before the operator
+    // confirms (a deferred-confirm run leaves everything Deferred). 404 if the job has no recruitment run.
+    Method.GET / "api" / "jobs" / string("jobId") / "recruitment" / "found" -> handler { (jobId: String, _: Request) =>
+      candidatesByJobResponse(jobId, RecruitmentCandidate.selectDeferredByRun).pipe(withErrorHandling)
+    },
+    // Confirm a deferred-confirm run: flip its Deferred candidates to Invited, record the count, return the confirmed
+    // usernames. A re-POST finds nothing deferred (flipped = 0) and returns the same already-invited list.
+    Method.POST / "api" / "jobs" / string("jobId") / "recruitment" / "confirm" -> handler { (jobId: String, _: Request) =>
+      withRunForJob(jobId) { run =>
+        for {
+          // Flip and count-update share one transaction so a crash can't leave candidates Invited with the run's
+          // candidates_found still 0 (which would make a later --cumulative run undercount and over-invite).
+          flipped <- withTransaction {
+            for {
+              f <- RecruitmentCandidate.confirmDeferredByRun(run.runId)
+              _ <- ZIO.whenDiscard(f > 0)(RecruitmentRun.setCandidatesFound(run.runId, f))
+            } yield f
+          }
+          usernames <- RecruitmentCandidate.selectInvitedByRun(run.runId).flatMap(usernamesFor)
+        } yield jsonResponse(Status.Ok, ConfirmResult(flipped, usernames))
+      }.pipe(withErrorHandling)
+    },
+    // Report the latest recruitment run's invited usernames for a club — `ccas recruit --report`.
+    Method.GET / "api" / "recruitment" / "clubs" / string("slug") / "latest" / "invited" -> handler {
+      (slug: String, _: Request) =>
+        (Club.selectBySlug(ClubSlug.wrap(slug)).flatMap {
+          case None       => ZIO.succeed(jsonResponse(Status.NotFound, ErrorResponse(s"Club not found: $slug")))
+          case Some(club) =>
+            RecruitmentRun.selectLatest(club.clubId).flatMap {
+              case None      => ZIO.succeed(jsonResponse(Status.NotFound, ErrorResponse(s"No recruitment runs for $slug")))
+              case Some(run) => invitedRunResponse(run.runId)
+            }
+        }).pipe(withErrorHandling)
+    },
+    // Report a specific recruitment run's invited usernames — `ccas recruit --report --run N`.
+    Method.GET / "api" / "recruitment" / "runs" / string("runId") / "invited" -> handler { (runId: String, _: Request) =>
+      (runId.toLongOption match {
+        case None     => ZIO.succeed(jsonResponse(Status.BadRequest, ErrorResponse(s"Invalid run id: $runId")))
+        case Some(id) =>
+          val rid = RecruitmentRunId.wrap(id)
+          RecruitmentRun.selectId(rid).flatMap {
+            case None    => ZIO.succeed(jsonResponse(Status.NotFound, ErrorResponse(s"Run $runId not found")))
+            case Some(_) => invitedRunResponse(rid)
+          }
+      }).pipe(withErrorHandling)
     }
   )
+
+  // --- Recruitment result helpers ---
+
+  /** Resolve candidate rows to their bare usernames, dropping any that don't resolve — a `[pid=N]` placeholder is not
+    * an invitable Chess.com handle, and these lists are meant to be pasted into invites.
+    */
+  private def usernamesFor(candidates: List[RecruitmentCandidate]): RIO[PostgresClient, List[String]] =
+    Player.resolveUsernames(candidates.map(_.playerId)).map { resolved =>
+      candidates.flatMap(c => resolved.get(c.playerId)).map(Username.unwrap)
+    }
+
+  /** Resolve the recruitment run linked to a job, or 404. Shared by the invited/found/confirm job-scoped endpoints. */
+  private def withRunForJob(jobId: String)(f: RecruitmentRun => RIO[PostgresClient, Response]): RIO[PostgresClient, Response] =
+    RecruitmentRun.selectByJobRunId(JobRunId.wrap(jobId)).flatMap {
+      case None      => ZIO.succeed(jsonResponse(Status.NotFound, ErrorResponse(s"No recruitment run for job $jobId")))
+      case Some(run) => f(run)
+    }
+
+  /** Wrap a candidate selection as a 200 response of bare resolved usernames. */
+  private def usernamesResponse(select: RIO[PostgresClient, List[RecruitmentCandidate]]): RIO[PostgresClient, Response] =
+    select.flatMap(usernamesFor).map(u => jsonResponse(Status.Ok, InvitedUsernames(u)))
+
+  /** 404-or-usernames for a job-linked run, selecting candidate rows with `select` (invited or deferred). */
+  private def candidatesByJobResponse(
+    jobId: String,
+    select: RecruitmentRunId => RIO[PostgresClient, List[RecruitmentCandidate]]
+  ): RIO[PostgresClient, Response] =
+    withRunForJob(jobId)(run => usernamesResponse(select(run.runId)))
+
+  private def invitedRunResponse(runId: RecruitmentRunId): RIO[PostgresClient, Response] =
+    usernamesResponse(RecruitmentCandidate.selectInvitedByRun(runId))
 
   // --- Helpers ---
 

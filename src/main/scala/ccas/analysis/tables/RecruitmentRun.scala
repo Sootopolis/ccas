@@ -58,6 +58,13 @@ object RecruitmentRun {
         .query[RecruitmentRun].run().headOption
     }
 
+  // One recruit job inserts exactly one run, so at most one row matches; ORDER BY + LIMIT 1 is defensive belt-and-braces.
+  def selectByJobRunId(jobRunId: JobRunId): ZIO[PostgresClient, SQLException, Option[RecruitmentRun]] =
+    connectZIO {
+      sql"SELECT $selectCols FROM recruitment_run WHERE job_run_id = $jobRunId ORDER BY started_at DESC LIMIT 1"
+        .query[RecruitmentRun].run().headOption
+    }
+
   def sumCandidatesFoundToday(clubId: ClubId, alias: String): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""SELECT COALESCE(SUM(candidates_found), 0) FROM recruitment_run
@@ -87,5 +94,12 @@ object RecruitmentRun {
     connectZIO {
       sql"""UPDATE recruitment_run SET completed_at = ${item.completedAt}, candidates_found = ${item.candidatesFound}
             WHERE run_id = ${item.runId}""".update.run()
+    }
+
+  // Set candidates_found without touching completed_at — used when a deferred-confirm run is confirmed after the fact
+  // (the scout left it at 0; confirming flips its Deferred candidates to Invited and records how many). Rows affected.
+  def setCandidatesFound(runId: RecruitmentRunId, count: Int): ZIO[PostgresClient, SQLException, Int] =
+    connectZIO {
+      sql"UPDATE recruitment_run SET candidates_found = $count WHERE run_id = $runId".update.run()
     }
 }

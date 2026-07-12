@@ -10,8 +10,8 @@ import zio.cli.*
   *
   * Club targeting is via the `--club <slug>` option (comma-separated on `membership`/`history`), with `--all` on those
   * two to mean every managed club; when neither is given the command falls back to the config's `current_club` (set
-  * with `ccas use-club`). There are no positional club slugs — the only remaining positionals are `<username>...` on
-  * the blacklist commands and the `<slug>` of `ccas use-club` itself.
+  * with `ccas use-club`). There are no positional club slugs — the remaining positionals are `<username>...` on the
+  * blacklist commands, the `<slug>` of `ccas use-club`, and the optional `[run-id]` on `ccas recruit --report`.
   *
   * IMPORTANT — option/argument ordering: zio-cli expects all options BEFORE positional arguments, e.g.
   * `ccas blacklist add --club team-alpha alice bob`. Options placed AFTER a positional are NOT errors — they are
@@ -68,7 +68,10 @@ object CliCommand {
     cumulative: Boolean,
     sourceClubs: List[String],
     timeLimitMinutes: Option[Int],
-    explore: Option[Boolean]
+    explore: Option[Boolean],
+    stdout: Boolean,
+    report: Boolean,
+    runId: Option[Int]
   ) extends ServerCommand
   final case class Stats(server: String, club: Option[String], since: Option[String], until: Option[String])
       extends ServerCommand
@@ -202,10 +205,16 @@ object CliCommand {
         (Options.boolean("cumulative") ?? "Count candidates already found earlier today toward the target") ++
         sourceClubsOpt ++
         (intOpt("time-limit-minutes") ?? "Stop scouting after roughly N minutes") ++
-        exploreOpt ++ clubOpt
-    ).withHelp("Submit a recruitment scouting job for a club")
-      .map { case (server, alias, target, cumulative, sourceClubs, timeLimitMinutes, explore, club) =>
-        Recruit(server, club, alias, target, cumulative, sourceClubs, timeLimitMinutes, explore)
+        exploreOpt ++ clubOpt ++
+        (Options.boolean("stdout") ?? "Print invited usernames (bare, newline-separated) to stdout for piping to a clipboard tool (e.g. wl-copy); logs go to stderr. Auto-confirms invites") ++
+        (Options.boolean("report") ?? "Show a past run's invited usernames instead of scouting (the club's latest run, or the run id given as an argument)"),
+      (Args.integer("run-id") ?? "With --report, the run id to show (default: the club's latest run)")
+        .atMost(1)
+        .map(_.headOption.map(_.toInt))
+    ).withHelp("Submit a recruitment scouting job for a club (interactive runs confirm invites before marking them)")
+      // Options and the optional `[run-id]` arg combine as (optionsTuple, argValue), so destructure the two levels.
+      .map { case ((server, alias, target, cumulative, sourceClubs, timeLimitMinutes, explore, club, stdout, report), runId) =>
+        Recruit(server, club, alias, target, cumulative, sourceClubs, timeLimitMinutes, explore, stdout, report, runId)
       }
 
   private def stats(default: String): Command[CliCommand] =
