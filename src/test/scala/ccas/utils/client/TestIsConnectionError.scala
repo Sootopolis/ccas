@@ -1,6 +1,7 @@
 package ccas.utils.client
 
 import io.netty.handler.codec.PrematureChannelClosureException
+import io.netty.handler.timeout.ReadTimeoutException
 import zio.http.URL
 import zio.test.{assertTrue, Spec, ZIOSpecDefault}
 
@@ -23,6 +24,9 @@ object TestIsConnectionError extends ZIOSpecDefault {
     },
     test("PrematureChannelClosureException is a connection error") {
       assertTrue(ConnectionError.isConnectionError(new PrematureChannelClosureException()))
+    },
+    test("ReadTimeoutException is a connection error (ChannelException, not IOException)") {
+      assertTrue(ConnectionError.isConnectionError(ReadTimeoutException.INSTANCE))
     },
     test("ConnectException (Connection refused) is a connection error (IOException subtype)") {
       assertTrue(ConnectionError.isConnectionError(new java.net.ConnectException("Connection refused")))
