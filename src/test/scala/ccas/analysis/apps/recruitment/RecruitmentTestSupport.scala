@@ -628,13 +628,22 @@ object RecruitmentTestSupport {
     target: Option[Int] = None,
     explore: Boolean = false,
     alias: String = "default",
-    trigger: RunTrigger = RunTrigger.Api
+    trigger: RunTrigger = RunTrigger.Api,
+    autoConfirm: Boolean = true
   ): ZIO[ProgressDisplay & PostgresClient, Throwable, RecruitmentRun] =
     for {
       xa      <- ZIO.service[PostgresClient]
       display <- ZIO.service[ProgressDisplay]
       result <- RecruitmentApp
-        .recruit(clubSlug, alias, target = target, sourceClubs = sourceClubs, explore = explore, trigger = trigger)
+        .recruit(
+          clubSlug,
+          alias,
+          target = target,
+          sourceClubs = sourceClubs,
+          explore = explore,
+          trigger = trigger,
+          autoConfirm = autoConfirm
+        )
         .provideEnvironment(zio.ZEnvironment(client, xa, display))
     } yield result
 }

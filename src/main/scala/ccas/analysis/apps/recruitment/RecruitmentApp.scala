@@ -131,6 +131,10 @@ object RecruitmentApp extends ZIOAppDefault {
     explore: Boolean = true,
     showHints: Boolean = false,
     trigger: RunTrigger = RunTrigger.Cli,
+    // When false (interactive `ccas recruit` on a TTY), the scout leaves found candidates Deferred instead of marking
+    // them Invited — the CLI confirms them afterwards via the confirm endpoint. Defaults true so the standalone app,
+    // the scheduler, and non-interactive API calls keep auto-confirming.
+    autoConfirm: Boolean = true,
     jobRunId: Option[JobRunId] = None
   ): RIO[ProgressDisplay & ChessComClient & PostgresClient, RecruitmentRun] = ZIO.scoped {
     for {
@@ -241,6 +245,7 @@ object RecruitmentApp extends ZIOAppDefault {
               cumulative,
               alreadyFound,
               "Recruitment Complete (target already met)",
+              autoConfirm = autoConfirm,
               jobRunId = jobRunId
             )
         } else {
@@ -254,6 +259,7 @@ object RecruitmentApp extends ZIOAppDefault {
             now,
             cumulative,
             alreadyFound,
+            autoConfirm,
             jobRunId
           )
         }
@@ -270,6 +276,7 @@ object RecruitmentApp extends ZIOAppDefault {
     startedAt: Instant,
     cumulative: Boolean,
     alreadyFound: Int,
+    autoConfirm: Boolean,
     jobRunId: Option[JobRunId]
   ): RIO[ChessComClient & PostgresClient, RecruitmentRun] =
     for {
@@ -321,6 +328,7 @@ object RecruitmentApp extends ZIOAppDefault {
           alreadyFound,
           "Recruitment Interrupted",
           interrupted = true,
+          autoConfirm = autoConfirm,
           jobRunId = jobRunId
         )
           .provideEnvironment(ZEnvironment(pgClient))
@@ -335,6 +343,7 @@ object RecruitmentApp extends ZIOAppDefault {
         cumulative,
         alreadyFound,
         "Recruitment Complete",
+        autoConfirm = autoConfirm,
         jobRunId = jobRunId
       )
     } yield finalRun
@@ -347,6 +356,7 @@ object RecruitmentApp extends ZIOAppDefault {
     alreadyFound: Int,
     label: String,
     interrupted: Boolean = false,
+    autoConfirm: Boolean,
     jobRunId: Option[JobRunId]
   ): RIO[PostgresClient, RecruitmentRun] =
     for {
@@ -367,7 +377,10 @@ object RecruitmentApp extends ZIOAppDefault {
       confirmed <-
         if (interrupted || found.isEmpty) ZIO.succeed(List.empty[Username])
         else if (trigger == RunTrigger.Cli) promptConfirmation(found)
-        else ZIO.succeed(found) // Api, Scheduled, FollowUp: auto-confirm
+        // Deferred-confirm (interactive `ccas recruit`): leave found candidates Deferred so the CLI can confirm them
+        // via the confirm endpoint. Not confirming here means nobody is burned if the operator declines.
+        else if (!autoConfirm) ZIO.succeed(List.empty[Username])
+        else ZIO.succeed(found) // auto-confirm: Api/Scheduled default, and non-interactive `ccas recruit`
 
       evalCount <- ctx.evalCountRef.get
       clubId    = ctx.runCtx.clubId

@@ -95,14 +95,29 @@ object TestCliParser extends ZIOSpecDefault {
       parsed("recruit", "--target", "5", "--no-explore", "--source-clubs", "x,y", "--club", "team-alpha").map(c =>
         assertTrue(
           c.contains(
-            CliCommand.Recruit(DefaultServer, Some("team-alpha"), None, Some(5), false, List("x", "y"), None, Some(false))
+            CliCommand
+              .Recruit(DefaultServer, Some("team-alpha"), None, Some(5), false, List("x", "y"), None, Some(false), false, false, None)
           )
         )
       )
     },
     test("recruit with no --club parses to None") {
       parsed("recruit").map(c =>
-        assertTrue(c.contains(CliCommand.Recruit(DefaultServer, None, None, None, false, Nil, None, None)))
+        assertTrue(c.contains(CliCommand.Recruit(DefaultServer, None, None, None, false, Nil, None, None, false, false, None)))
+      )
+    },
+    test("recruit --stdout sets stdout") {
+      parsed("recruit", "--stdout").map(c =>
+        assertTrue(c.contains(CliCommand.Recruit(DefaultServer, None, None, None, false, Nil, None, None, true, false, None)))
+      )
+    },
+    test("recruit --report parses, with an optional run-id argument") {
+      for {
+        r <- parsed("recruit", "--report")
+        n <- parsed("recruit", "--report", "42")
+      } yield assertTrue(
+        r.contains(CliCommand.Recruit(DefaultServer, None, None, None, false, Nil, None, None, false, true, None)),
+        n.contains(CliCommand.Recruit(DefaultServer, None, None, None, false, Nil, None, None, false, true, Some(42)))
       )
     },
     test("history flags parse") {

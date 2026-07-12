@@ -84,6 +84,39 @@ object TestJobFollower extends ZIOSpecDefault {
         code   <- follower.handleSingle("recruit", JobResult(None, Some("Club not found")))
       } yield assertTrue(code == 1)
     },
+    test("handleRecruit runs onComplete on success and routes logs to stderr when piping") {
+      for {
+        follower <- followerWith("Completed", None, List("hello"))
+        ran      <- Ref.make(false)
+        code     <- follower.handleRecruit("recruit", JobResult(Some("job-1"), None), logsToStderr = true, _ => ran.set(true))
+        didRun   <- ran.get
+        out      <- TestConsole.output
+        err      <- TestConsole.outputErr
+      } yield assertTrue(
+        code == 0,
+        didRun,
+        // stdout stays clean for the pipe; the submit notice and log line land on stderr.
+        !out.exists(_.contains("hello")),
+        err.exists(_.contains("hello")),
+        err.exists(_.contains("recruit submitted: job-1"))
+      )
+    },
+    test("handleRecruit skips onComplete when the job fails") {
+      for {
+        follower <- followerWith("Failed", Some("boom"), List("partial"))
+        ran      <- Ref.make(false)
+        code     <- follower.handleRecruit("recruit", JobResult(Some("job-1"), None), logsToStderr = false, _ => ran.set(true))
+        didRun   <- ran.get
+      } yield assertTrue(code == 1, !didRun)
+    },
+    test("handleRecruit short-circuits on a submission error without following") {
+      for {
+        follower <- followerWith("Completed", None, Nil)
+        ran      <- Ref.make(false)
+        code     <- follower.handleRecruit("recruit", JobResult(None, Some("Club not found")), logsToStderr = true, _ => ran.set(true))
+        didRun   <- ran.get
+      } yield assertTrue(code == 1, !didRun)
+    },
     test("handleBatch fails overall if any job fails to submit") {
       for {
         follower <- followerWith("Completed", None, Nil)

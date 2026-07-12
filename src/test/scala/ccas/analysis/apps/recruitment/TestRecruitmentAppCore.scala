@@ -363,6 +363,47 @@ object TestRecruitmentAppCore extends ZIOSpecDefault {
         playerA.isDefined,
         playerB.isDefined
       )
+    },
+    test("autoConfirm=false leaves candidates Deferred until confirmDeferredByRun flips them") {
+      val responses = Map(
+        s"club/$clubSlug"          -> apiClubJson(clubId.value, clubSlug.value),
+        s"club/$clubSlug/members"  -> apiClubMembersJson(List(("existing", Times.t0.getEpochSecond))),
+        "club/source-club"         -> apiClubJson(sourceClubId.value, "source-club"),
+        "club/source-club/members" -> apiClubMembersJson(
+          List(
+            ("existing", Times.t0.getEpochSecond),
+            ("candidate-a", Times.t0.getEpochSecond),
+            ("candidate-b", Times.t0.getEpochSecond)
+          )
+        ),
+        "player/existing"    -> apiPlayerJson(199, "existing"),
+        "player/candidate-a" -> apiPlayerJson(200, "candidate-a"),
+        "player/candidate-b" -> apiPlayerJson(201, "candidate-b")
+      )
+      for {
+        _      <- seedDb
+        _      <- seedCriteria(makeCriteria())
+        client <- fakeChessComClient(responses)
+        result <- runRecruit(client, sourceClubs = List(ClubSlug("source-club")), autoConfirm = false)
+        // Nothing invited yet; both candidates parked as Deferred, run count still 0.
+        invitedBefore  <- RecruitmentCandidate.selectInvitedByRun(result.runId)
+        deferredBefore <- RecruitmentCandidate.selectDeferredByRun(result.runId)
+        runBefore      <- RecruitmentRun.selectId(result.runId)
+        // Confirm flips Deferred -> Invited and reports the count.
+        flipped       <- RecruitmentCandidate.confirmDeferredByRun(result.runId)
+        _             <- RecruitmentRun.setCandidatesFound(result.runId, flipped)
+        invitedAfter  <- RecruitmentCandidate.selectInvitedByRun(result.runId)
+        deferredAfter <- RecruitmentCandidate.selectDeferredByRun(result.runId)
+        runAfter      <- RecruitmentRun.selectId(result.runId)
+      } yield assertTrue(
+        invitedBefore.isEmpty,
+        deferredBefore.size == 2,
+        runBefore.get.candidatesFound == 0,
+        flipped == 2,
+        invitedAfter.size == 2,
+        deferredAfter.isEmpty,
+        runAfter.get.candidatesFound == 2
+      )
     }
   )
   // ==========================================================================
