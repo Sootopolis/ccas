@@ -7,6 +7,7 @@ import zio.*
 import zio.http.Client
 
 import ccas.api.misc.subtypes.{ClubSlug, Username}
+import ccas.api.player.ApiPlayer
 import ccas.server.routes.BlacklistRoutes.{BlacklistEntryResponse, CreateBlacklistRequest}
 import ccas.server.routes.ManagedClubRoutes.{ManagedClubResponse, MarkManagedRequest}
 import ccas.server.routes.JobRoutes.{
@@ -245,6 +246,16 @@ object Dispatcher {
   private def printBare(names: List[String]): Task[Unit] =
     ZIO.foreachDiscard(names)(n => Console.printLine(n).orDie)
 
+  // `<username> <profile-url>` per line — the human-review form. Delegates to the same `ApiPlayer.profileLine` the
+  // recruitment out file uses for its detail lines, so the CLI and the out file render players identically.
+  private def profileUrlLine(name: String): String = ApiPlayer.profileLine(Username.wrap(name))
+
+  // The out-file review block for a list of raw usernames — a space-separated username line then one
+  // `<username> <profile-url>` line per player. Reused for `--report` / confirm delivery so console, clipboard, and the
+  // out files all render identically (via `ApiPlayer.profileReviewBlock`). `Username.wrap` canonicalizes to the DB /
+  // out-file form (lowercase); server usernames already are, so this is a no-op that just satisfies the `Username` API.
+  private def reviewBlock(names: List[String]): String = ApiPlayer.profileReviewBlock(names.map(Username.wrap))
+
   // Deferred-confirm flow: the scout left candidates Deferred. Show them, ask, and only then flip to Invited + copy.
   // Declining (or a read failure defaulting to "n") leaves them Deferred — nobody is burned, and they resurface.
   private def confirmFlow(api: CcasApiClient, jobId: String): Task[Unit] =
@@ -256,7 +267,7 @@ object Dispatcher {
   private def confirmPrompt(api: CcasApiClient, jobId: String, names: List[String]): Task[Unit] =
     for {
       _      <- Console.printLine(s"\nFound ${names.size} candidates:").orDie
-      _      <- ZIO.foreachDiscard(names)(n => Console.printLine(s"  $n").orDie)
+      _      <- ZIO.foreachDiscard(names)(n => Console.printLine(s"  ${profileUrlLine(n)}").orDie)
       answer <- ZIO.attemptBlocking(scala.io.StdIn.readLine(s"\nMark all ${names.size} as Invited and copy to clipboard? [Y/n] "))
         .orElseSucceed("n")
       _ <-
@@ -265,8 +276,20 @@ object Dispatcher {
     } yield ()
 
   private def confirmAndCopy(api: CcasApiClient, jobId: String): Task[Unit] =
-    api.postEmpty[ConfirmResult](s"/api/jobs/$jobId/recruitment/confirm").flatMap { r =>
-      Console.printLine(s"Marked ${r.marked} as invited.").orDie *> copyToClipboard(r.usernames)
+    api.postEmpty[ConfirmResult](s"/api/jobs/$jobId/recruitment/confirm").flatMap(reportConfirmed)
+
+  private def reportConfirmed(r: ConfirmResult): Task[Unit] =
+    if (r.usernames.isEmpty) { Console.printLine(s"Marked ${r.marked} as invited.").orDie }
+    else {
+      // Canonicalize once and share it between the printed line and the copied block so they can't diverge. The prompt
+      // already listed the players with URLs; here print just the paste-ready space-separated line and copy the full
+      // review block (space list + profile URLs) so a paste carries both.
+      val names = r.usernames.map(Username.wrap)
+      for {
+        _ <- Console.printLine(s"Marked ${r.marked} as invited.").orDie
+        _ <- Console.printLine(names.mkString(" ")).orDie
+        _ <- copyToClipboard(ApiPlayer.profileReviewBlock(names), s"${names.size} usernames + profile URLs")
+      } yield ()
     }
 
   // Non-interactive run with no --stdout: the server deferred the candidates (nothing invited). We can't prompt, so
@@ -293,7 +316,8 @@ object Dispatcher {
     ).orDie
 
   // Report a past run's invited usernames (`ccas recruit --report`). --run picks a specific run; otherwise the club's
-  // latest. Prints the list to stdout and, on an interactive terminal (no --stdout), also copies it.
+  // latest. `--stdout` prints a bare list for piping; otherwise it prints `<username> <profile-url>` per line (so the
+  // operator can vet players) and, on an interactive terminal, copies the bare usernames (paste-ready for invites).
   private def reportInvited(
     api: CcasApiClient,
     club: Option[String],
@@ -313,8 +337,13 @@ object Dispatcher {
 
   private def renderReport(names: List[String], stdout: Boolean): Task[Unit] =
     if (names.isEmpty) { Console.printLineError("no invited usernames for that run").orDie }
+    // --stdout: bare newline list, the pipe payload. Otherwise: the out-file review block (space-separated usernames
+    // then `<username> <profile-url>` lines) to the console, and the same block to the clipboard on a TTY.
+    else if (stdout) { printBare(names) }
     else {
-      printBare(names) *> ZIO.whenDiscard(!stdout && hasTty)(copyToClipboard(names))
+      val block = reviewBlock(names)
+      Console.printLine(block).orDie *>
+        ZIO.whenDiscard(hasTty)(copyToClipboard(block, s"${names.size} usernames + profile URLs"))
     }
 
   // Default-yes: bare Enter or a y* answer confirms; a read failure defaulted to "n" above so this stays false there.
@@ -330,21 +359,21 @@ object Dispatcher {
         "they are listed in the job log above."
     ).orDie
 
-  // Copy the usernames to the system clipboard. A native clipboard tool is preferred: its forked daemon keeps owning
-  // the selection after this short-lived CLI exits, whereas an in-process JVM clipboard (AWT) would lose the contents
-  // the moment we exit. The OSC 52 terminal escape is only a fallback for a remote/SSH session whose *local* terminal
-  // implements it — many terminals (notably GNOME Terminal / VTE) silently ignore OSC 52 clipboard writes, which is
-  // why the old escape-only path copied nothing. The "Copied" line prints only when the copy actually succeeds.
-  private def copyToClipboard(names: List[String]): Task[Unit] =
-    if (names.isEmpty) { Console.printLineError("no invited usernames to copy").orDie }
+  // Copy `payload` to the system clipboard, printing "Copied <summary>." only on success. A native clipboard tool is
+  // preferred: its forked daemon keeps owning the selection after this short-lived CLI exits, whereas an in-process JVM
+  // clipboard (AWT) would lose the contents the moment we exit. The OSC 52 terminal escape is only a fallback for a
+  // remote/SSH session whose *local* terminal implements it — many terminals (notably GNOME Terminal / VTE) silently
+  // ignore OSC 52 clipboard writes, which is why the old escape-only path copied nothing.
+  private def copyToClipboard(payload: String, summary: String): Task[Unit] =
+    if (payload.isEmpty) { ZIO.unit } // guard: an empty payload would clobber the clipboard and print "Copied 0 …"
     else {
       clipboardCommand match {
         case Some(cmd) =>
-          copyViaTool(cmd, names).flatMap { copied =>
-            if (copied) { Console.printLine(s"Copied ${names.size} usernames.").orDie }
-            else { copyFallback(names) }
+          copyViaTool(cmd, payload).flatMap { copied =>
+            if (copied) { Console.printLine(s"Copied $summary.").orDie }
+            else { copyFallback(payload) }
           }
-        case None => copyFallback(names)
+        case None => copyFallback(payload)
       }
     }
 
@@ -359,10 +388,10 @@ object Dispatcher {
   private def isMac: Boolean                = sys.props.getOrElse("os.name", "").toLowerCase.contains("mac")
   private def envSet(name: String): Boolean = Option(java.lang.System.getenv(name)).exists(_.nonEmpty)
 
-  // Feed the newline-joined usernames to the clipboard tool's stdin, then wait. Returns true only if the process
+  // Feed `payload` to the clipboard tool's stdin, then wait. Returns true only if the process
   // launched and exited 0; a launch failure (tool not installed -> IOException) or non-zero exit yields false so the
   // caller falls back. Closing stdin sends EOF, which wl-copy / xclip / pbcopy wait for before taking ownership.
-  private def copyViaTool(cmd: List[String], names: List[String]): UIO[Boolean] =
+  private def copyViaTool(cmd: List[String], payload: String): UIO[Boolean] =
     ZIO.attemptBlocking {
       val pb = new ProcessBuilder(cmd*)
       // Discard the tool's stdout/stderr rather than leaving an un-drained pipe that could wedge waitFor if the tool
@@ -371,27 +400,27 @@ object Dispatcher {
       pb.redirectError(ProcessBuilder.Redirect.DISCARD)
       val process = pb.start()
       val stdin   = process.getOutputStream
-      try { stdin.write(names.mkString("\n").getBytes(StandardCharsets.UTF_8)) }
+      try { stdin.write(payload.getBytes(StandardCharsets.UTF_8)) }
       finally { stdin.close() }
       process.waitFor() == 0
     }.orElseSucceed(false)
 
-  // No working native clipboard tool. The usernames were already printed by the caller (renderReport / confirmPrompt),
-  // so don't reprint them — on a TTY emit the OSC 52 escape as a best-effort copy (works only if the terminal honours
+  // No working native clipboard tool. The list was already printed by the caller (renderReport / reportConfirmed), so
+  // don't reprint it — on a TTY emit the OSC 52 escape as a best-effort copy (works only if the terminal honours
   // it, e.g. an SSH session into kitty / tmux with `set -g set-clipboard on`) and note the caveat on stderr. ESC/BEL as
   // \u escapes per the repo's no-raw-control-bytes convention.
-  private def copyFallback(names: List[String]): Task[Unit] =
+  private def copyFallback(payload: String): Task[Unit] =
     if (hasTty) {
-      val b64   = Base64.getEncoder.encodeToString(names.mkString("\n").getBytes(StandardCharsets.UTF_8))
+      val b64   = Base64.getEncoder.encodeToString(payload.getBytes(StandardCharsets.UTF_8))
       val osc52 = "\u001b]52;c;" + b64 + "\u0007"
       Console.print(osc52).orDie *>
         Console.printLineError(
           "no clipboard tool found (install wl-copy or xclip); sent an OSC 52 copy escape as a fallback — it only " +
-            "works if your terminal supports it. The usernames are listed above."
+            "works if your terminal supports it. The list is shown above."
         ).orDie
     } else {
       Console.printLineError(
-        "clipboard unavailable (no clipboard tool and not an interactive terminal); the usernames are listed above."
+        "clipboard unavailable (no clipboard tool and not an interactive terminal); the list is shown above."
       ).orDie
     }
 

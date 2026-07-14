@@ -72,11 +72,12 @@ object RecruitmentApp extends ZIOAppDefault {
             report <- showReport(clubSlug, rest.headOption)
             now    <- Clock.instant
             completedAt = report.run.completedAt.getOrElse(now)
-            _ <- OutputFile.writeAndLog(
-              "recruitment",
-              clubSlug,
-              formatRecruitmentOutput(report.usernames, report.evaluatedCount, report.run.startedAt, completedAt)
-            )
+            // One formatter for both the console echo and the out file, so they can't drift. Echo line-by-line so each
+            // report line is its own clean log entry rather than one entry with an embedded multi-line block.
+            output = formatRecruitmentOutput(report.usernames, report.evaluatedCount, report.run.startedAt, completedAt)
+            _ <- ZIO.logInfo(s"=== Recruitment Report for $clubSlug (run ${report.run.runId}) ===")
+            _ <- ZIO.foreachDiscard(output.linesIterator.toList)(line => ZIO.logInfo(line))
+            _ <- OutputFile.writeAndLog("recruitment", clubSlug, output)
           } yield ()
         case clubStr :: rest =>
           val parsed   = parseRecruitArgs(rest)
@@ -460,9 +461,7 @@ object RecruitmentApp extends ZIOAppDefault {
     val duration = JDuration.between(startedAt, completedAt)
     val timing   = s"Started:   $startedAt\nCompleted: $completedAt\nDuration:  ${duration.display}\n\n"
     val stats    = s"Evaluated: $evaluatedCount | Invited: ${usernames.size}"
-    val header   = usernames.mkString(" ")
-    val detail   = usernames.map(name => s"$name ${ApiPlayer.getProfileUrl(name)}").mkString("\n")
-    s"$timing$stats\n\n$header\n\n$detail\n"
+    s"$timing$stats\n\n${ApiPlayer.profileReviewBlock(usernames)}\n"
   }
 
   final case class RecruitmentReportResult(usernames: List[Username], evaluatedCount: Int, run: RecruitmentRun)
@@ -489,19 +488,9 @@ object RecruitmentApp extends ZIOAppDefault {
       invited        <- RecruitmentCandidate.selectInvitedByRun(run.runId)
       evaluatedCount <- RecruitmentCandidate.selectCountByRun(run.runId)
       resolvedMap    <- Player.resolveUsernames(invited.map(_.playerId))
-      // Drop unresolved player_ids (see the scout path): paste-ready invite list, identical to the server's
-      // `usernamesFor`, so `report`'s file matches `--report`/clipboard.
+      // Drop unresolved player_ids: paste-ready invite list, identical to the server's `usernamesFor`, so the file
+      // matches `--report`/clipboard. Rendering is the caller's job (via `formatRecruitmentOutput`) — no formatting here.
       usernames = invited.flatMap(c => resolvedMap.get(c.playerId))
-      _ <- ZIO.logInfo(s"=== Recruitment Report for $clubSlug (run ${run.runId}) ===")
-      _ <- ZIO.logInfo(s"Started: ${run.startedAt}")
-      _ <- ZIO.logInfo(s"Completed: ${run.completedAt.getOrElse("in progress")}")
-      // Report the paste-ready count (post-drop), matching the file's stat line and the --report/clipboard payload.
-      _ <- ZIO.logInfo(s"Evaluated: $evaluatedCount | Invited: ${usernames.size}")
-      _ <- ZIO.logInfo(usernames.mkString(" "))
-      _ <- ZIO.logInfo("")
-      _ <- ZIO.foreachDiscard(usernames) { name =>
-        ZIO.logInfo(ApiPlayer.getProfileUrl(name).toString)
-      }
     } yield RecruitmentReportResult(usernames, evaluatedCount, run)
 
   // --- Match ref writing ---

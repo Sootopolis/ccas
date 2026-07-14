@@ -38,4 +38,14 @@ object ApiPlayer {
   def getUrl(username: Username): URL = host.addPath(username.value)
 
   def getProfileUrl(username: Username): URL = Hosts.website.addPath("member").addPath(username.value)
+
+  // A `<username> <profile-url>` review line — the shared building block for the recruitment out-file detail and the
+  // CLI `--report` / confirm-prompt listings, so an operator sees the same clickable form everywhere.
+  def profileLine(username: Username): String = s"$username ${getProfileUrl(username)}"
+
+  // The recruitment review block shared by the out file and the CLI `--report` / confirm delivery: a space-separated
+  // username line (neat and paste-ready for invites), a blank line, then one `<username> <profile-url>` line per player
+  // for manual inspection. One source so the file and clipboard/console render identically.
+  def profileReviewBlock(usernames: List[Username]): String =
+    usernames.mkString(" ") + "\n\n" + usernames.map(profileLine).mkString("\n")
 }
