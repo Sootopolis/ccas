@@ -487,7 +487,7 @@ object TestRoutes extends ZIOSpecDefault {
     for {
       _          <- ensureClubs
       criteriaId <- RecruitmentCriteria.insert(RecruitmentCriteria.defaultDaily)
-      runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Api, t0, Some(JobRunId.wrap(jobId)))
+      runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Api, t0, None, Some(JobRunId.wrap(jobId)))
       _          <- ZIO.foreachDiscard(invited ++ deferred) { case (pid, name) => seedPlayer(pid, name) }
       _ <- ZIO.foreachDiscard(invited) { case (pid, _) =>
         RecruitmentCandidate.insert(RecruitmentCandidate(runId, PlayerId(pid), t0, CandidateOutcome.Invited, None))

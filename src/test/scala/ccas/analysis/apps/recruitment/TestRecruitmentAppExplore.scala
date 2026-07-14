@@ -165,9 +165,10 @@ object TestRecruitmentAppExplore extends ZIOSpecDefault {
         deferred.nonEmpty
       )
     } @@ TestAspect.withLiveClock,
-    test("excess invited candidates are reclassified as Deferred") {
+    test("excess invited candidates stay Deferred and carry forward (auto-confirm)") {
       val source = ClubSlug("defer-source")
-      // 6 candidates, target=2 → should get exactly 2 Invited, rest Deferred or Rejected
+      // 6 candidates, target=2 → exactly 2 Invited; the 4 chunk-overshoot passers stay Deferred (NOT deleted) so they
+      // carry to the next run via selectDeferredByClub.
       val candidateNames = (0 to 5).map(i => s"defer-cand-$i").toList
       val responses = Map(
         s"club/$clubSlug"         -> apiClubJson(clubId.value, clubSlug.value),
@@ -192,7 +193,51 @@ object TestRecruitmentAppExplore extends ZIOSpecDefault {
       } yield assertTrue(
         invited.size == 2,
         result.candidatesFound == 2,
-        invited.size + deferred.size >= 2
+        deferred.size == candidateNames.size - 2
+      )
+    },
+    test("deferred-confirm caps invited at target, leaving excess Deferred for next run") {
+      // Regression for the 31-vs-30 bug: a chunk overshoot persists more Deferred than target, and the old uncapped
+      // confirm flipped ALL of them. Now /found (selectDeferredByRun) and the confirm both cap at the run's stored
+      // target, and the excess stays Deferred to carry forward.
+      val source         = ClubSlug("confirm-source")
+      val candidateNames = (0 to 5).map(i => s"confirm-cand-$i").toList
+      val responses = Map(
+        s"club/$clubSlug"         -> apiClubJson(clubId.value, clubSlug.value),
+        s"club/$clubSlug/members" -> apiClubMembersJson(Nil),
+        s"club/$source"           -> apiClubJson(ClubId(902).value, source.value),
+        s"club/$source/members" -> apiClubMembersJson(
+          candidateNames.map(n => (n, Times.t0.getEpochSecond))
+        )
+      ) ++ candidateNames.zipWithIndex.map { (name, i) =>
+        s"player/$name" -> apiPlayerJson(410 + i, name)
+      }.toMap
+      val criteria = makeCriteria()
+
+      for {
+        _      <- seedDb
+        _      <- seedCriteria(criteria)
+        client <- fakeChessComClient(responses)
+        result <- runRecruit(client, target = Some(2), sourceClubs = List(source), autoConfirm = false)
+        allBefore         <- RecruitmentCandidate.selectByRun(result.runId)
+        allDeferredBefore = allBefore.filter(_.outcome == CandidateOutcome.Deferred)
+        foundBefore       <- RecruitmentCandidate.selectDeferredByRun(result.runId)
+        firstFlip         <- RecruitmentCandidate.confirmDeferredByRun(result.runId)
+        invited           <- RecruitmentCandidate.selectInvitedByRun(result.runId)
+        // Re-POST must be idempotent (JobRoutes contract): flip 0, invited stays at target — it must NOT sweep up the
+        // still-Deferred overshoot.
+        secondFlip        <- RecruitmentCandidate.confirmDeferredByRun(result.runId)
+        invitedAfterRepost <- RecruitmentCandidate.selectInvitedByRun(result.runId)
+        allAfter          <- RecruitmentCandidate.selectByRun(result.runId)
+        deferredAfter     = allAfter.filter(_.outcome == CandidateOutcome.Deferred)
+      } yield assertTrue(
+        allDeferredBefore.size == candidateNames.size, // all 6 evaluated, nothing deleted
+        foundBefore.size == 2,                         // /found capped at target
+        firstFlip == 2,                                // confirm flips exactly target
+        invited.size == 2,                             // confirm capped at target
+        secondFlip == 0,                               // re-POST flips nothing (idempotent)
+        invitedAfterRepost.size == 2,                  // still exactly target after re-POST
+        deferredAfter.size == candidateNames.size - 2  // excess (4) carried forward as Deferred
       )
     },
     test("deferred candidates from prior run are prioritised in next run") {
@@ -216,9 +261,9 @@ object TestRecruitmentAppExplore extends ZIOSpecDefault {
         client     <- fakeChessComClient(responses)
         // Seed prior run with a Deferred candidate (need Player row)
         _          <- Player.insert(Player(PlayerId(500), Times.t0, Username("prio-deferred"), Active, None, Times.t0))
-        priorRunId <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None)
+        priorRunId <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None, None)
         _ <- RecruitmentRun.update(
-          RecruitmentRun(priorRunId, clubId, criteriaId, RunTrigger.Cli, Times.t0, Some(Times.t1), 0, None)
+          RecruitmentRun(priorRunId, clubId, criteriaId, RunTrigger.Cli, Times.t0, Some(Times.t1), 0, None, None)
         )
         _ <- RecruitmentCandidate.insert(
           RecruitmentCandidate(priorRunId, PlayerId(500), Times.t0, CandidateOutcome.Deferred, None)
@@ -253,9 +298,9 @@ object TestRecruitmentAppExplore extends ZIOSpecDefault {
         _ <- Player.insert(Player(PlayerId(600), Times.t0, Username("resolved-player"), Active, None, Times.t0))
 
         // Run 1: candidate is Deferred
-        runId1 <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None)
+        runId1 <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None, None)
         _ <- RecruitmentRun.update(
-          RecruitmentRun(runId1, clubId, criteriaId, RunTrigger.Cli, Times.t0, Some(Times.t1), 0, None)
+          RecruitmentRun(runId1, clubId, criteriaId, RunTrigger.Cli, Times.t0, Some(Times.t1), 0, None, None)
         )
         _ <- RecruitmentCandidate.insert(
           RecruitmentCandidate(runId1, PlayerId(600), Times.t0, CandidateOutcome.Deferred, None)
@@ -265,9 +310,9 @@ object TestRecruitmentAppExplore extends ZIOSpecDefault {
         deferredBefore <- RecruitmentCandidate.selectDeferredByClub(clubId)
 
         // Run 2: same candidate is Invited (later timestamp)
-        runId2 <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t2, None)
+        runId2 <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t2, None, None)
         _ <- RecruitmentRun.update(
-          RecruitmentRun(runId2, clubId, criteriaId, RunTrigger.Cli, Times.t2, Some(Times.t3), 1, None)
+          RecruitmentRun(runId2, clubId, criteriaId, RunTrigger.Cli, Times.t2, Some(Times.t3), 1, None, None)
         )
         _ <- RecruitmentCandidate.insert(
           RecruitmentCandidate(runId2, PlayerId(600), Times.t2, CandidateOutcome.Invited, None)

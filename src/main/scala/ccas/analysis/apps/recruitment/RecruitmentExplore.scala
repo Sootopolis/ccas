@@ -217,8 +217,10 @@ private[recruitment] object RecruitmentExplore {
       )
     } yield ()
 
-  /** When found count exceeds the target, trim the newest excess from invitedRef. All candidates are already Deferred
-    * in the DB; no status flip needed here.
+  /** When found count exceeds the target, trim the newest excess from invitedRef so the loop stops and the auto-confirm
+    * `found` list is capped. The excess candidates stay Deferred in the DB (carried to the next run via
+    * `selectDeferredByClub`); the interactive confirm path caps its flip at the run's target, so a chunk overshoot never
+    * invites beyond target. No DB write is needed here.
     */
   def reclassifyExcessInvited(ctx: ExploreContext): RIO[PostgresClient, Unit] =
     // invitedRef is prepend-ordered (newest first), so drop excess from the head

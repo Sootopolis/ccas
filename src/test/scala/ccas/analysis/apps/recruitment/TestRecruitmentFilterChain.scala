@@ -37,7 +37,7 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
     for {
       _          <- seedDb
       criteriaId <- seedCriteria(criteria)
-      runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None)
+      runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None, None)
       client     <- fakeChessComClient(responses)
       invited    <- evalCandidates(client, runId, List(Username.wrap(username)), criteria)
     } yield
@@ -233,7 +233,7 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
     for {
       _          <- seedDb
       criteriaId <- seedCriteria(criteria)
-      runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None)
+      runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None, None)
       client     <- fakeChessComClient(responses)
       _          <- evalCandidates(client, runId, List(Username.wrap("alice")), criteria)
       failures   <- ApiFetchFailure.selectRecent(now.minus(Duration.ofMinutes(1)))
@@ -273,7 +273,7 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
     for {
       _          <- seedDb
       criteriaId <- seedCriteria(criteria)
-      runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None)
+      runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None, None)
       client     <- fakeChessComClient(responses)
       _          <- evalCandidates(client, runId, List(Username.wrap("alice")), criteria)
       cache      <- PlayerRecruitmentCache.selectId(pid0)
@@ -321,7 +321,7 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
       _          <- seedDb
       _          <- Club.upsert(Club(bannedClubId, Times.t0, ClubSlug("banned-club"), "Banned Club", None, None, None))
       criteriaId <- seedCriteria(criteria)
-      runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None)
+      runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None, None)
       client     <- fakeChessComClient(responses)
       _          <- evalCandidates(client, runId, List(Username.wrap("alice")), criteria)
       cands      <- RecruitmentCandidate.selectByRun(runId)
@@ -355,12 +355,12 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
       // Seed player row for FK constraint
       _ <- seedPlayer(pid0)
       // Create a prior run with alice invited recently
-      priorRunId <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Instant.now(), None)
+      priorRunId <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Instant.now(), None, None)
       _ <- RecruitmentCandidate.insert(
         RecruitmentCandidate(priorRunId, pid0, Instant.now(), CandidateOutcome.Invited, None)
       )
       // Now evaluate alice again
-      runId  <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None)
+      runId  <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None, None)
       client <- fakeChessComClient(Map("player/alice" -> apiPlayerJson(200, "alice")))
       _      <- evalCandidates(client, runId, List(Username("alice")), criteria)
       cands  <- RecruitmentCandidate.selectByRun(runId)
@@ -451,7 +451,7 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
     for {
       _          <- seedDb
       criteriaId <- seedCriteria(criteria)
-      runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None)
+      runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None, None)
       client     <- fakeChessComClient(responses)
       _          <- evalCandidates(client, runId, List(Username("alice")), criteria)
       cached     <- PlayerRecruitmentCache.selectId(pid0)
@@ -474,7 +474,7 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
       // Seed alice as a former member of the club (player row needed for FK)
       _      <- seedPlayer(pid0)
       _      <- ClubMember.insert(ClubMember(clubId, pid0, Times.t0, Some(Times.t1), sinceApproximate = false))
-      runId  <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None)
+      runId  <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None, None)
       client <- fakeChessComClient(responses)
       _      <- evalCandidates(client, runId, List(Username("alice")), criteria)
       cands  <- RecruitmentCandidate.selectByRun(runId)
@@ -490,7 +490,7 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
       // Seed alice as a former member of the club
       _      <- seedPlayer(pid0)
       _      <- ClubMember.insert(ClubMember(clubId, pid0, Times.t0, Some(Times.t1), sinceApproximate = false))
-      runId  <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None)
+      runId  <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None, None)
       client <- fakeChessComClient(responses)
       _      <- evalCandidates(client, runId, List(Username("alice")), criteria)
       cands  <- RecruitmentCandidate.selectByRun(runId)
@@ -507,7 +507,7 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
       _ <- seedPlayer(pid0)
       _ <- ClubAdmin.insertBatch(List(ClubAdmin(sizableClubId, pid0)))
       criteriaId <- seedCriteria(criteria)
-      runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None)
+      runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None, None)
       client     <- fakeChessComClient(responses)
       _          <- evalCandidates(client, runId, List(Username("alice")), criteria)
       cands      <- RecruitmentCandidate.selectByRun(runId)
@@ -524,7 +524,7 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
       _ <- seedPlayer(pid0)
       _ <- ClubAdmin.insertBatch(List(ClubAdmin(sizableClubId, pid0)))
       criteriaId <- seedCriteria(criteria)
-      runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None)
+      runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None, None)
       client     <- fakeChessComClient(responses)
       _          <- evalCandidates(client, runId, List(Username("alice")), criteria)
       cands      <- RecruitmentCandidate.selectByRun(runId)
@@ -548,7 +548,7 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
     for {
       _               <- seedDb
       criteriaId      <- seedCriteria(criteria)
-      runId           <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None)
+      runId           <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None, None)
       client          <- fakeChessComClient(responses)
       _               <- evalCandidates(client, runId, List(Username("alice")), criteria)
       cands           <- RecruitmentCandidate.selectByRun(runId)
@@ -582,7 +582,7 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
     for {
       _          <- seedDb
       criteriaId <- seedCriteria(criteria)
-      runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None)
+      runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None, None)
       client     <- fakeChessComClient(responses)
       _          <- evalCandidates(client, runId, List(Username("alice"), Username("bob")), criteria)
       cands      <- RecruitmentCandidate.selectByRun(runId)
@@ -609,7 +609,7 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
     for {
       _               <- seedDb
       criteriaId      <- seedCriteria(criteria)
-      runId           <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None)
+      runId           <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None, None)
       client          <- fakeChessComClient(responses)
       _               <- evalCandidates(client, runId, List(Username("alice")), criteria)
       cands           <- RecruitmentCandidate.selectByRun(runId)
