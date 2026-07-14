@@ -8,38 +8,106 @@ import ccas.server.routes.JobRoutes.{ClubJobResult, JobResult, JobStatusResponse
   * line as it arrives. The server holds the response open until the job is terminal and the tail reaches EOF, so the
   * stream closing means "job finished" — at which point one `GET /api/jobs/{id}` resolves the exit code.
   *
-  * `maxWait` is injected (no default) so tests run fast; production wires a generous wall-clock cap. Exit codes: 0 when
-  * the job reaches `Completed`, 1 when it reaches `Failed`, could not be submitted, or did not finish within `maxWait`.
+  * A silent job phase longer than the server's 60s read-idle timeout gets its follow connection reaped mid-stream (the
+  * keepalive from #152 resets the *client's* read timer but not the server's `ReadTimeoutHandler` — #161). The detached
+  * job keeps running server-side, so a drop is a transport artefact, not the end of the work: we transparently
+  * reconnect and resume tailing instead of surfacing it as a failure. Only when reconnects are exhausted do we fall
+  * back to the "reattach with `ccas logs`" hint.
+  *
+  * `maxWait`, `reconnectBackoff`, and `maxReconnects` are injected (no defaults) so tests run fast; production wires
+  * generous values. Exit codes: 0 when the job reaches `Completed`, 1 when it reaches `Failed`, could not be submitted,
+  * did not finish within `maxWait`, or the follow was lost past `maxReconnects` reconnects.
   */
-final class JobFollower(api: CcasApiClient, maxWait: Duration) {
+final class JobFollower(api: CcasApiClient, maxWait: Duration, reconnectBackoff: Duration, maxReconnects: Int) {
 
   def followJob(jobId: String): Task[Int] =
     followJob(jobId, line => Console.printLine(line).orDie)
 
   // `onLine` sinks each streamed log line; `--stdout` routes it to stderr so stdout carries only the username payload.
   private def followJob(jobId: String, onLine: String => UIO[Unit]): Task[Int] =
-    api
-      .streamLines(s"/api/jobs/$jobId/logs")(onLine)
-      .timeout(maxWait)
-      .flatMap {
-        case Some(_) => finalExitCode(jobId)
-        case None =>
-          Console
-            .printLineError(s"$jobId: still running after ${maxWait.toMinutes}m — check 'ccas jobs' / 'ccas logs $jobId'")
-            .orDie
-            .as(1)
+    Ref.make(0).flatMap { printed =>
+      follow(jobId, onLine, printed).timeout(maxWait).flatMap {
+        case Some(Right(()))   => finalExitCode(jobId)
+        case Some(Left(cause)) => streamLost(jobId, cause).as(1)
+        case None              => stillRunning(jobId).as(1)
       }
-      // A mid-follow stream drop (e.g. a long silent phase idling the connection shut) doesn't stop the detached job —
-      // it keeps running server-side. Report honestly and point the user back at it rather than failing loudly (#150).
-      .catchSome { case StreamDropped(cause) =>
-        Console
-          .printLineError(
-            s"$jobId: lost the log stream ($cause). The job keeps running on the server — " +
-              s"reattach with 'ccas logs $jobId' or check 'ccas jobs'."
+    }
+
+  /** Follow the log stream, auto-reconnecting across a mid-stream drop (#161). Each (re)connect replays the log from
+    * the start of the file (`FileTail.subscribe` begins at offset 0), so [[skipReplay]] drops the lines already shown
+    * and only genuinely new lines print. `Right(())` = the stream reached EOF (the job is terminal); `Left(cause)` = we
+    * gave up after `maxReconnects` drops. A non-drop error (e.g. a 404 for a GC'd job) propagates unchanged.
+    */
+  private def follow(jobId: String, onLine: String => UIO[Unit], printed: Ref[Int]): Task[Either[String, Unit]] = {
+    def attempt(reconnects: Int): Task[Either[String, Unit]] =
+      for {
+        startPrinted <- printed.get
+        seen         <- Ref.make(0)
+        result <- api
+          .streamLines(s"/api/jobs/$jobId/logs")(skipReplay(onLine, printed, seen, startPrinted))
+          .foldZIO(
+            {
+              case StreamDropped(cause) => afterDrop(jobId, cause, reconnects, () => attempt(reconnects + 1))
+              case other                => ZIO.fail(other)
+            },
+            _ => ZIO.succeed(Right(()))
           )
-          .orDie
-          .as(1)
+      } yield result
+    attempt(0)
+  }
+
+  // Wrap `onLine` so a reconnected stream's replayed prefix (the `startPrinted` lines already shown) is skipped and
+  // only new lines print. Line N is stable across reconnects because the log file is append-only. `printed` tracks the
+  // running total shown so the next reconnect knows where to resume; `seen` is this attempt's line counter.
+  private def skipReplay(
+    onLine: String => UIO[Unit],
+    printed: Ref[Int],
+    seen: Ref[Int],
+    startPrinted: Int
+  ): String => UIO[Unit] =
+    line =>
+      seen.updateAndGet(_ + 1).flatMap { n =>
+        ZIO.unlessDiscard(n <= startPrinted)(onLine(line) *> printed.update(_ + 1))
       }
+
+  // A drop while following: the detached job is still running (or just finished with its tail not yet drained to us).
+  // Reconnect after a short backoff — a still-running job's re-follow resumes live tailing (bounded overall by
+  // `maxWait`); a terminal job's re-follow replays to EOF and returns `Right`. `maxReconnects` is a *cumulative*
+  // busy-loop backstop over the whole follow (not consecutive) for a stream that redrops instantly — `maxWait` is the
+  // real wall-clock bound, and is sized far above any real job's silent-gap count. One-time notice per follow.
+  private def afterDrop(
+    jobId: String,
+    cause: String,
+    reconnects: Int,
+    retry: () => Task[Either[String, Unit]]
+  ): Task[Either[String, Unit]] =
+    if (reconnects >= maxReconnects) {
+      ZIO.succeed(Left(cause))
+    } else {
+      for {
+        _      <- ZIO.whenDiscard(reconnects == 0)(reconnectNotice(jobId))
+        _      <- ZIO.sleep(reconnectBackoff)
+        result <- retry()
+      } yield result
+    }
+
+  private def reconnectNotice(jobId: String): UIO[Unit] =
+    Console
+      .printLineError(s"$jobId: log stream dropped on a silent phase — reconnecting (the job keeps running)…")
+      .orDie
+
+  private def streamLost(jobId: String, cause: String): UIO[Unit] =
+    Console
+      .printLineError(
+        s"$jobId: lost the log stream ($cause). The job keeps running on the server — " +
+          s"reattach with 'ccas logs $jobId' or check 'ccas jobs'."
+      )
+      .orDie
+
+  private def stillRunning(jobId: String): UIO[Unit] =
+    Console
+      .printLineError(s"$jobId: still running after ${maxWait.toMinutes}m — check 'ccas jobs' / 'ccas logs $jobId'")
+      .orDie
 
   // The stream closing tells us the job finished but not whether it succeeded; read the terminal status once to decide.
   // An unexpected status (server adds a new terminal kind, or a stale Running) exits non-zero rather than passing.

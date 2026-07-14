@@ -29,11 +29,19 @@ import ccas.server.scheduler.{MisfirePolicy, TriggerType}
 object Dispatcher {
 
   private val MaxJobWait: Duration = 60.minutes
+  // Auto-reconnect tuning for a dropped log follow (#161): the server reaps the connection at its 60s read-idle
+  // timeout during a silent job phase, so we re-follow. `MaxJobWait` is the real wall-clock bound; `MaxReconnects` is
+  // only a busy-loop backstop for a stream that redrops instantly, sized well above any real job's silent-phase count.
+  private val ReconnectBackoff: Duration = 2.seconds
+  private val MaxReconnects: Int         = 1000
 
   def dispatch(cmd: CliCommand.ServerCommand, currentClub: Option[String]): UIO[ExitCode] =
     CcasApiClient
       .live(cmd.server)
-      .flatMap(api => runCommand(api, JobFollower(api, MaxJobWait), cmd, currentClub).tap(_ => refreshClubsCache(api)))
+      .flatMap(api =>
+        runCommand(api, JobFollower(api, MaxJobWait, ReconnectBackoff, MaxReconnects), cmd, currentClub)
+          .tap(_ => refreshClubsCache(api))
+      )
       .provide(Client.default)
       .catchAll {
         case e: CliError  => Console.printLineError(s"error: ${e.message}").orDie.as(e.exitCode)
