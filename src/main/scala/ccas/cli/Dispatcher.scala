@@ -330,20 +330,69 @@ object Dispatcher {
         "they are listed in the job log above."
     ).orDie
 
-  // OSC 52 clipboard write: `ESC ] 52 ; c ; <base64 payload> BEL`. The terminal itself owns the clipboard, so this
-  // works over SSH (tmux needs `set -g set-clipboard on`). Payloads are a handful of usernames, far under any
-  // terminal's OSC 52 size cap. ESC/BEL as \u escapes per the repo's no-raw-control-bytes convention.
+  // Copy the usernames to the system clipboard. A native clipboard tool is preferred: its forked daemon keeps owning
+  // the selection after this short-lived CLI exits, whereas an in-process JVM clipboard (AWT) would lose the contents
+  // the moment we exit. The OSC 52 terminal escape is only a fallback for a remote/SSH session whose *local* terminal
+  // implements it — many terminals (notably GNOME Terminal / VTE) silently ignore OSC 52 clipboard writes, which is
+  // why the old escape-only path copied nothing. The "Copied" line prints only when the copy actually succeeds.
   private def copyToClipboard(names: List[String]): Task[Unit] =
     if (names.isEmpty) { Console.printLineError("no invited usernames to copy").orDie }
-    // Callers only reach here on a TTY, but guard defensively: an OSC 52 escape to a non-terminal would corrupt the
-    // stream and no terminal is there to honour it, so fall back to just printing the usernames.
-    else if (!hasTty) {
-      Console.printLineError("clipboard unavailable (not an interactive terminal); printing usernames instead").orDie *>
-        printBare(names)
-    } else {
+    else {
+      clipboardCommand match {
+        case Some(cmd) =>
+          copyViaTool(cmd, names).flatMap { copied =>
+            if (copied) { Console.printLine(s"Copied ${names.size} usernames.").orDie }
+            else { copyFallback(names) }
+          }
+        case None => copyFallback(names)
+      }
+    }
+
+  // The native clipboard command for this environment, if any: macOS -> pbcopy; Wayland -> wl-copy; X11 -> xclip.
+  // None on a headless / unknown session, which routes to the OSC 52 fallback.
+  private def clipboardCommand: Option[List[String]] =
+    if (isMac) { Some(List("pbcopy")) }
+    else if (envSet("WAYLAND_DISPLAY")) { Some(List("wl-copy")) }
+    else if (envSet("DISPLAY")) { Some(List("xclip", "-selection", "clipboard")) }
+    else { None }
+
+  private def isMac: Boolean                = sys.props.getOrElse("os.name", "").toLowerCase.contains("mac")
+  private def envSet(name: String): Boolean = Option(java.lang.System.getenv(name)).exists(_.nonEmpty)
+
+  // Feed the newline-joined usernames to the clipboard tool's stdin, then wait. Returns true only if the process
+  // launched and exited 0; a launch failure (tool not installed -> IOException) or non-zero exit yields false so the
+  // caller falls back. Closing stdin sends EOF, which wl-copy / xclip / pbcopy wait for before taking ownership.
+  private def copyViaTool(cmd: List[String], names: List[String]): UIO[Boolean] =
+    ZIO.attemptBlocking {
+      val pb = new ProcessBuilder(cmd*)
+      // Discard the tool's stdout/stderr rather than leaving an un-drained pipe that could wedge waitFor if the tool
+      // ever got chatty (wl-copy / xclip / pbcopy are silent on success, but this is robust regardless).
+      pb.redirectOutput(ProcessBuilder.Redirect.DISCARD)
+      pb.redirectError(ProcessBuilder.Redirect.DISCARD)
+      val process = pb.start()
+      val stdin   = process.getOutputStream
+      try { stdin.write(names.mkString("\n").getBytes(StandardCharsets.UTF_8)) }
+      finally { stdin.close() }
+      process.waitFor() == 0
+    }.orElseSucceed(false)
+
+  // No working native clipboard tool. The usernames were already printed by the caller (renderReport / confirmPrompt),
+  // so don't reprint them — on a TTY emit the OSC 52 escape as a best-effort copy (works only if the terminal honours
+  // it, e.g. an SSH session into kitty / tmux with `set -g set-clipboard on`) and note the caveat on stderr. ESC/BEL as
+  // \u escapes per the repo's no-raw-control-bytes convention.
+  private def copyFallback(names: List[String]): Task[Unit] =
+    if (hasTty) {
       val b64   = Base64.getEncoder.encodeToString(names.mkString("\n").getBytes(StandardCharsets.UTF_8))
       val osc52 = "\u001b]52;c;" + b64 + "\u0007"
-      Console.print(osc52).orDie *> Console.printLine(s"Copied ${names.size} usernames.").orDie
+      Console.print(osc52).orDie *>
+        Console.printLineError(
+          "no clipboard tool found (install wl-copy or xclip); sent an OSC 52 copy escape as a fallback — it only " +
+            "works if your terminal supports it. The usernames are listed above."
+        ).orDie
+    } else {
+      Console.printLineError(
+        "clipboard unavailable (no clipboard tool and not an interactive terminal); the usernames are listed above."
+      ).orDie
     }
 
   private def parseMisfire(s: String): IO[CliError, MisfirePolicy] =
