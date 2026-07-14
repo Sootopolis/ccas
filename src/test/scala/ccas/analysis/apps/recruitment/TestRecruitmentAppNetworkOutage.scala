@@ -36,7 +36,7 @@ object TestRecruitmentAppNetworkOutage extends ZIOSpecDefault {
       for {
         _          <- seedDb
         criteriaId <- seedCriteria(criteria)
-        runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None)
+        runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None, None)
         client     <- TestChessComClientSupport.networkDownClient
         discovered <- Ref.make(Set.empty[Username])
         failed     <- Ref.make(Set.empty[ClubSlug])

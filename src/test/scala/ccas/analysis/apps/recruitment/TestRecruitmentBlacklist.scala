@@ -45,7 +45,7 @@ object TestRecruitmentBlacklist extends ZIOSpecDefault {
       _ <- RecruitmentBlacklist.insert(
         RecruitmentBlacklist(clubId, pid0, Times.t0, expiresAt = None, reason = Some("banned"))
       )
-      runId  <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None)
+      runId  <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None, None)
       client <- fakeChessComClient(responses)
       _      <- evalCandidates(client, runId, List(Username("alice")), criteria)
       cands  <- RecruitmentCandidate.selectByRun(runId)
@@ -73,7 +73,7 @@ object TestRecruitmentBlacklist extends ZIOSpecDefault {
           reason = Some("temp ban")
         )
       )
-      runId  <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, now, None)
+      runId  <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, now, None, None)
       client <- fakeChessComClient(responses)
       _      <- evalCandidates(client, runId, List(Username("alice")), criteria)
       cands  <- RecruitmentCandidate.selectByRun(runId)

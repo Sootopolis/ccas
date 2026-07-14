@@ -118,25 +118,47 @@ object RecruitmentCandidate {
         .query[Int].run().headOption
     }.someOrFail(new SQLException("COUNT query produced no rows"))
 
-  // The run's still-deferred candidates, for the interactive `ccas recruit` confirm prompt (a deferred-confirm run
-  // leaves everything Deferred; the operator reviews these before any are marked Invited). Ordered by player_id to
-  // match `selectInvitedByRun`'s deterministic output.
+  // The run's still-deferred candidates the operator will confirm, for the interactive `ccas recruit` confirm prompt (a
+  // deferred-confirm run leaves everything Deferred; the operator reviews these before any are marked Invited). Capped
+  // at the run's remaining budget — `target` minus those already Invited this run — so a chunk overshoot isn't
+  // shown/confirmed above target and a re-fetch after a partial confirm shows only what's still confirmable. The excess
+  // stays Deferred and carries to the next run. Legacy runs (NULL target) fall through to `LIMIT NULL` (no cap). Ordered
+  // by player_id to match `selectInvitedByRun` and `confirmDeferredByRun`.
   def selectDeferredByRun(runId: RecruitmentRunId): ZIO[PostgresClient, SQLException, List[RecruitmentCandidate]] =
     connectZIO {
       val deferred: CandidateOutcome = CandidateOutcome.Deferred
+      val invited: CandidateOutcome  = CandidateOutcome.Invited
       sql"""SELECT $selectCols FROM recruitment_candidate WHERE run_id = $runId AND outcome = $deferred
-            ORDER BY player_id"""
+            ORDER BY player_id
+            LIMIT (SELECT CASE WHEN rr.target IS NULL THEN NULL
+                               ELSE GREATEST(rr.target - (SELECT COUNT(*) FROM recruitment_candidate
+                                                          WHERE run_id = $runId AND outcome = $invited), 0)
+                          END
+                   FROM recruitment_run rr WHERE rr.run_id = $runId)"""
         .query[RecruitmentCandidate].run().toList
     }
 
-  // Confirm a deferred-confirm run: flip its Deferred candidates to Invited in one statement. Returns rows affected
-  // (0 if already confirmed or nothing found), so the caller can update `recruitment_run.candidates_found`.
+  // Confirm a deferred-confirm run: flip its remaining-budget Deferred candidates (lowest player_ids first) to Invited.
+  // Matches `selectDeferredByRun`'s cap+order so the operator invites exactly what the prompt showed. The cap is
+  // `target - already-invited-this-run`, so a re-POST after a full confirm flips 0 (idempotent, per the endpoint's
+  // contract) rather than sweeping up the still-Deferred overshoot; that excess carries to the next run. Legacy runs
+  // (NULL target) flip all Deferred. Returns rows affected (0 if already confirmed or nothing found), so the caller can
+  // update `recruitment_run.candidates_found`.
   def confirmDeferredByRun(runId: RecruitmentRunId): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       val invited: CandidateOutcome  = CandidateOutcome.Invited
       val deferred: CandidateOutcome = CandidateOutcome.Deferred
       sql"""UPDATE recruitment_candidate SET outcome = $invited
-            WHERE run_id = $runId AND outcome = $deferred""".update.run()
+            WHERE run_id = $runId AND player_id IN (
+              SELECT player_id FROM recruitment_candidate
+              WHERE run_id = $runId AND outcome = $deferred
+              ORDER BY player_id
+              LIMIT (SELECT CASE WHEN rr.target IS NULL THEN NULL
+                                 ELSE GREATEST(rr.target - (SELECT COUNT(*) FROM recruitment_candidate
+                                                            WHERE run_id = $runId AND outcome = $invited), 0)
+                            END
+                     FROM recruitment_run rr WHERE rr.run_id = $runId)
+            ) AND outcome = $deferred""".update.run()
     }
 
   /** Returns deferred candidates for a club that have not been resolved (Invited/Rejected) in a later run. */

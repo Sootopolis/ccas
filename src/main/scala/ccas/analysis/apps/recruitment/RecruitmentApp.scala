@@ -95,7 +95,10 @@ object RecruitmentApp extends ZIOAppDefault {
               if (parsed.cumulative) RecruitmentCandidate.selectInvitedToday(run.clubId, parsed.alias)
               else RecruitmentCandidate.selectInvitedByRun(run.runId)
             resolvedMap <- Player.resolveUsernames(candidates.map(_.playerId))
-            usernames = candidates.map(c => resolvedMap.getOrElse(c.playerId, Username.wrap(s"[pid=${c.playerId}]")))
+            // Drop any player_id that doesn't resolve to a handle — these lists are paste-ready invite targets, and a
+            // `[pid=N]` placeholder isn't invitable. Matches the server's `usernamesFor` so the file and the
+            // --report/clipboard output are identical.
+            usernames = candidates.flatMap(c => resolvedMap.get(c.playerId))
             evaluatedCount <- RecruitmentCandidate.selectCountByRun(run.runId)
             now            <- Clock.instant
             output = formatRecruitmentOutput(
@@ -162,7 +165,7 @@ object RecruitmentApp extends ZIOAppDefault {
         else ZIO.succeed(0)
       effectiveTarget = (resolvedTarget - alreadyFound) max 0
       now <- Clock.instant
-      runId <- RecruitmentRun.insert(clubId, criteria.criteriaId, trigger, now, jobRunId)
+      runId <- RecruitmentRun.insert(clubId, criteria.criteriaId, trigger, now, Some(effectiveTarget), jobRunId)
 
       // --- Shared setup ---
       targetMembers <- ApiClubMembers.get(client, effectiveSlug)
@@ -401,6 +404,7 @@ object RecruitmentApp extends ZIOAppDefault {
             startedAt,
             Some(completedAt),
             confirmed.size,
+            Some(ctx.target),
             jobRunId
           )
           _ <- RecruitmentRun.update(finalRun)
@@ -484,12 +488,15 @@ object RecruitmentApp extends ZIOAppDefault {
       }
       invited        <- RecruitmentCandidate.selectInvitedByRun(run.runId)
       evaluatedCount <- RecruitmentCandidate.selectCountByRun(run.runId)
-      _              <- ZIO.logInfo(s"=== Recruitment Report for $clubSlug (run ${run.runId}) ===")
-      _              <- ZIO.logInfo(s"Started: ${run.startedAt}")
-      _              <- ZIO.logInfo(s"Completed: ${run.completedAt.getOrElse("in progress")}")
-      _              <- ZIO.logInfo(s"Evaluated: $evaluatedCount | Invited: ${invited.size}")
       resolvedMap    <- Player.resolveUsernames(invited.map(_.playerId))
-      usernames = invited.map(c => resolvedMap.getOrElse(c.playerId, Username.wrap(s"[pid=${c.playerId}]")))
+      // Drop unresolved player_ids (see the scout path): paste-ready invite list, identical to the server's
+      // `usernamesFor`, so `report`'s file matches `--report`/clipboard.
+      usernames = invited.flatMap(c => resolvedMap.get(c.playerId))
+      _ <- ZIO.logInfo(s"=== Recruitment Report for $clubSlug (run ${run.runId}) ===")
+      _ <- ZIO.logInfo(s"Started: ${run.startedAt}")
+      _ <- ZIO.logInfo(s"Completed: ${run.completedAt.getOrElse("in progress")}")
+      // Report the paste-ready count (post-drop), matching the file's stat line and the --report/clipboard payload.
+      _ <- ZIO.logInfo(s"Evaluated: $evaluatedCount | Invited: ${usernames.size}")
       _ <- ZIO.logInfo(usernames.mkString(" "))
       _ <- ZIO.logInfo("")
       _ <- ZIO.foreachDiscard(usernames) { name =>

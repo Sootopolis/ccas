@@ -21,12 +21,16 @@ final case class RecruitmentRun(
   startedAt: Instant,
   completedAt: Option[Instant],
   candidatesFound: Int,
+  // The run's effective target (invite budget). Read by `selectDeferredByRun` / `confirmDeferredByRun` to cap the
+  // interactive confirm at target, leaving any chunk-overshoot excess Deferred to carry forward. NULL only for legacy
+  // rows created before this column existed (treated as "no cap").
+  target: Option[Int],
   jobRunId: Option[JobRunId]
 ) derives DbCodec
 
 object RecruitmentRun {
   private val selectCols = SqlLiteral(
-    "run_id, club_id, criteria_id, trigger, started_at, completed_at, candidates_found, job_run_id"
+    "run_id, club_id, criteria_id, trigger, started_at, completed_at, candidates_found, target, job_run_id"
   )
 
   def createTable: ZIO[PostgresClient, SQLException, Int] =
@@ -39,6 +43,7 @@ object RecruitmentRun {
               started_at        TIMESTAMPTZ NOT NULL,
               completed_at      TIMESTAMPTZ,
               candidates_found  INT NOT NULL,
+              target            INT,
               job_run_id        TEXT,
               FOREIGN KEY (club_id) REFERENCES club (club_id) ON DELETE RESTRICT,
               FOREIGN KEY (criteria_id) REFERENCES recruitment_criteria (criteria_id) ON DELETE RESTRICT
@@ -82,11 +87,12 @@ object RecruitmentRun {
     criteriaId: Long,
     trigger: RunTrigger,
     startedAt: Instant,
+    target: Option[Int],
     jobRunId: Option[JobRunId]
   ): ZIO[PostgresClient, SQLException, RecruitmentRunId] =
     connectZIO {
-      sql"""INSERT INTO recruitment_run (club_id, criteria_id, trigger, started_at, candidates_found, job_run_id)
-            VALUES ($clubId, $criteriaId, $trigger, $startedAt, 0, $jobRunId)
+      sql"""INSERT INTO recruitment_run (club_id, criteria_id, trigger, started_at, candidates_found, target, job_run_id)
+            VALUES ($clubId, $criteriaId, $trigger, $startedAt, 0, $target, $jobRunId)
             RETURNING run_id""".query[RecruitmentRunId].run().headOption
     }.someOrFail(new SQLException("INSERT RETURNING produced no rows"))
 
