@@ -58,9 +58,14 @@ object CcasServer extends ZIOAppDefault {
         JobRunner.live,
         JobScheduler.live,
         // Read-idle reaper for keep-alive connections (zio-http's `Server.Config.default` leaves `idleTimeout=None`),
-        // so a client that vanishes without FIN/RST can't pin a Netty channel + fd forever. Set above
-        // `JobLogStream.KeepAliveInterval` (20s) so a streaming `/api/jobs/{id}/logs` follow's keepalive resets the
-        // timer before it fires; only genuinely dead connections get reaped.
+        // so a client that vanishes without FIN/RST can't pin a Netty channel + fd forever. This installs a *read-only*
+        // Netty `ReadTimeoutHandler` (`ServerChannelInitializer`): it resets on inbound (client→server) reads only, never
+        // on writes. A streaming `/api/jobs/{id}/{logs,progress}` follow is write-only server→client once the GET is sent,
+        // so its `JobLogStream` keepalive ticks (outbound) can't reset this timer — every live follow is reaped on the 60s
+        // schedule and the follower transparently reconnects (#161). That reap's `ReadTimeoutException` surfaces as a
+        // "Fatal exception in Netty" WARN which is benign noise, filtered at the logger (`ProgressDisplay.isBenignReadIdleReap`);
+        // this reaper's real remaining job is bounding idle *non-streaming* keep-alive fds. zio-http exposes no per-route
+        // idleTimeout nor a server `SO_KEEPALIVE` option, so one global read-idle timeout is the only knob available.
         Server.defaultWith(_.binding(host, port).idleTimeout(60.seconds))
       )
     }
