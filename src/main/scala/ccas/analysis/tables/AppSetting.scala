@@ -33,8 +33,16 @@ object AppSetting {
   /** Retention window (days) for per-job log files in `${JOB_LOGS_DIR}`, applied by `JobRunner.live` on startup. */
   val JobLogRetentionDays: Key[Int] = Key("job_log_retention_days", 14, _.toIntOption, _.toString)
 
+  /** Sample spacing (milliseconds) for progress-bar frames on `GET /api/jobs/{id}/progress`. The server samples the
+    * merged bar state at this interval and de-duplicates, so a busy job's updates collapse to at most one encoded +
+    * sent frame per interval (an idle job sends none). Caps server work + follower traffic while still delivering the
+    * latest state within one interval. Default 100ms (10 fps): smooth for a bar, light on the server; floored at 16ms.
+    * Read per subscribe in `JobRunner`.
+    */
+  val ProgressRefreshIntervalMillis: Key[Int] = Key("progress_refresh_interval_ms", 100, _.toIntOption, _.toString)
+
   /** Every known key — for discoverability (e.g. a future `ccas settings list`). */
-  val all: List[Key[?]] = List(CacheRetentionDays, JobLogRetentionDays)
+  val all: List[Key[?]] = List(CacheRetentionDays, JobLogRetentionDays, ProgressRefreshIntervalMillis)
 
   def createTable: ZIO[PostgresClient, SQLException, Int] =
     connectZIO {

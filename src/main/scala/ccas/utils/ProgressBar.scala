@@ -23,7 +23,9 @@ class ProgressBar private[utils] (id: Int, display: ProgressDisplay) {
     val bar       = "\u2588" * filled + "\u2591" * (20 - filled)
     val full      = f"$text $bar $pct%.1f%%"
     val lineCount = full.count(_ == '\n') + 1
-    display.render(id, full, lineCount)
+    // Pass both the rendered line (for the local terminal draw) and the raw fields (mirrored to this bar's channel as
+    // an unrendered `BarSnapshot`, so a following CLI re-renders the block bar at its own terminal width).
+    display.render(id, full, lineCount, current, total, text)
   }
 
   /** Remove this bar from the display. No-op if already removed. */

@@ -62,12 +62,12 @@ _ccas() {
         *) COMPREPLY=(); return ;;
       esac ;;
     use-club) pos="slug" ;;
-    membership) opts="--server --trust-usernames --no-trust-usernames --club --all" ;;
-    history) opts="--server --full --include-finished --refresh --refresh-min-hours --club --all" ;;
-    recruit) opts="--server --alias --target --cumulative --source-clubs --time-limit-minutes --explore --no-explore --club --stdout --report" ;;
-    stats) opts="--server --since --until --club" ;;
+    membership) opts="--server --trust-usernames --no-trust-usernames --club --all --no-progress" ;;
+    history) opts="--server --full --include-finished --refresh --refresh-min-hours --club --all --no-progress" ;;
+    recruit) opts="--server --alias --target --cumulative --source-clubs --time-limit-minutes --explore --no-explore --club --stdout --report --no-progress" ;;
+    stats) opts="--server --since --until --club --no-progress" ;;
     jobs) opts="--server --limit" ;;
-    logs) opts="--server"; pos="jobid" ;;
+    logs) opts="--server --no-progress"; pos="jobid" ;;
     blacklist)
       case "$sub" in
         "") COMPREPLY=( $(compgen -W "add list remove --help" -- "$cur") ); return ;;

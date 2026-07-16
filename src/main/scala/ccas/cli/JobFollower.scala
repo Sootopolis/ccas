@@ -18,27 +18,87 @@ import ccas.server.routes.JobRoutes.{ClubJobResult, JobResult, JobStatusResponse
   * generous values. Exit codes: 0 when the job reaches `Completed`, 1 when it reaches `Failed`, could not be submitted,
   * did not finish within `maxWait`, or the follow was lost past `maxReconnects` reconnects.
   */
-final class JobFollower(api: CcasApiClient, maxWait: Duration, reconnectBackoff: Duration, maxReconnects: Int) {
+final class JobFollower(
+  api: CcasApiClient,
+  maxWait: Duration,
+  reconnectBackoff: Duration,
+  maxReconnects: Int,
+  showProgress: Boolean
+) {
 
   def followJob(jobId: String): Task[Int] =
-    followJob(jobId, line => Console.printLine(line).orDie)
+    followWith(jobId, line => Console.printLine(line).orDie, bars = showProgress)
 
-  // `onLine` sinks each streamed log line; `--stdout` routes it to stderr so stdout carries only the username payload.
-  private def followJob(jobId: String, onLine: String => UIO[Unit]): Task[Int] =
-    Ref.make(0).flatMap { printed =>
-      follow(jobId, onLine, printed).timeout(maxWait).flatMap {
-        case Some(Right(()))   => finalExitCode(jobId)
-        case Some(Left(cause)) => streamLost(jobId, cause).as(1)
-        case None              => stillRunning(jobId).as(1)
-      }
+  // Follow a job, optionally rendering its live progress bars above the streamed log lines. When not `bars`, log lines
+  // go straight to `sink` (the pre-bars behaviour: `--stdout` routes to stderr, everything else stdout) and the reconnect
+  // notice to stderr. When `bars`, delegate to `withBars`. `interpret` maps the raw follow outcome to an exit code.
+  private def followWith(jobId: String, sink: String => UIO[Unit], bars: Boolean): Task[Int] =
+    if (!bars) { followResult(jobId, sink, stderrNotice).flatMap(interpret(jobId, _)) }
+    else { withBars(jobId) }
+
+  // Bars branch: draw progress bars from `/api/jobs/{id}/progress` above the log lines. The progress consumer runs on a
+  // scope-owned fiber (`forkScoped`, so it can't leak in the window between fork and cleanup registration) and
+  // auto-reconnects across the server's ~60s read-idle drop (#161) just like the log follow — otherwise the bars would
+  // freeze partway through a long job. `onExit` interrupts that fiber and clears the bars BEFORE `interpret` prints any
+  // terminal status, so the final message lands on a quiescent terminal (not jammed onto a bar line). The one-time
+  // reconnect notice for the *log* follow routes through `renderer.logLine` (the render lock), so it can't tear a live
+  // bar redraw either. Both log lines and bars write through the one display's lock, so they never interleave mid-line.
+  private def withBars(jobId: String): Task[Int] =
+    ZIO.scoped {
+      for {
+        renderer <- ClientProgressRenderer.make
+        progress <- consumeProgress(jobId, renderer).forkScoped
+        result <- followResult(jobId, renderer.logLine, renderer.logLine)
+          .onExit(_ => progress.interrupt *> renderer.clear)
+        code <- interpret(jobId, result)
+      } yield code
     }
+
+  // Consume the progress stream, reconnecting on a mid-stream drop — the same ~60s read-idle reap the log follow handles
+  // (#161) — so bars stay live for the whole job. Frames are latest-wins, so a reconnect needs no replay: the next frame
+  // re-syncs every bar. A clean end (the server closes the stream at job completion) or any non-drop error stops without
+  // retrying; the parallel log follow surfaces any real failure. Bounded by this fiber's scope (interrupted in `withBars`
+  // once the follow ends), so the reconnect loop can't outlive the job.
+  private def consumeProgress(jobId: String, renderer: ClientProgressRenderer): UIO[Unit] =
+    api
+      .streamProgress(s"/api/jobs/$jobId/progress")(renderer.render)
+      .catchAll {
+        case StreamDropped(_) => ZIO.sleep(reconnectBackoff) *> consumeProgress(jobId, renderer)
+        case _                => ZIO.unit
+      }
+
+  // Run the log follow (reconnecting across drops, bounded by `maxWait`) and return the raw outcome without printing any
+  // terminal status: Some(Right)=EOF/terminal, Some(Left)=gave up after maxReconnects, None=timed out. `notice` sinks the
+  // one-time reconnect message — stderr for the plain follow, `renderer.logLine` when bars are drawn.
+  private def followResult(
+    jobId: String,
+    onLine: String => UIO[Unit],
+    notice: String => UIO[Unit]
+  ): Task[Option[Either[String, Unit]]] =
+    Ref.make(0).flatMap(printed => follow(jobId, onLine, printed, notice).timeout(maxWait))
+
+  // Map the follow outcome to an exit code, printing the terminal status. In bars mode this runs AFTER the bars are
+  // cleared (see `withBars`), so the message can't be jammed onto a live bar line.
+  private def interpret(jobId: String, result: Option[Either[String, Unit]]): Task[Int] =
+    result match {
+      case Some(Right(()))   => finalExitCode(jobId)
+      case Some(Left(cause)) => streamLost(jobId, cause).as(1)
+      case None              => stillRunning(jobId).as(1)
+    }
+
+  private val stderrNotice: String => UIO[Unit] = line => Console.printLineError(line).orDie
 
   /** Follow the log stream, auto-reconnecting across a mid-stream drop (#161). Each (re)connect replays the log from
     * the start of the file (`FileTail.subscribe` begins at offset 0), so [[skipReplay]] drops the lines already shown
     * and only genuinely new lines print. `Right(())` = the stream reached EOF (the job is terminal); `Left(cause)` = we
     * gave up after `maxReconnects` drops. A non-drop error (e.g. a 404 for a GC'd job) propagates unchanged.
     */
-  private def follow(jobId: String, onLine: String => UIO[Unit], printed: Ref[Int]): Task[Either[String, Unit]] = {
+  private def follow(
+    jobId: String,
+    onLine: String => UIO[Unit],
+    printed: Ref[Int],
+    notice: String => UIO[Unit]
+  ): Task[Either[String, Unit]] = {
     def attempt(reconnects: Int): Task[Either[String, Unit]] =
       for {
         startPrinted <- printed.get
@@ -47,7 +107,7 @@ final class JobFollower(api: CcasApiClient, maxWait: Duration, reconnectBackoff:
           .streamLines(s"/api/jobs/$jobId/logs")(skipReplay(onLine, printed, seen, startPrinted))
           .foldZIO(
             {
-              case StreamDropped(cause) => afterDrop(jobId, cause, reconnects, () => attempt(reconnects + 1))
+              case StreamDropped(cause) => afterDrop(jobId, cause, reconnects, notice, () => attempt(reconnects + 1))
               case other                => ZIO.fail(other)
             },
             _ => ZIO.succeed(Right(()))
@@ -79,22 +139,21 @@ final class JobFollower(api: CcasApiClient, maxWait: Duration, reconnectBackoff:
     jobId: String,
     cause: String,
     reconnects: Int,
+    notice: String => UIO[Unit],
     retry: () => Task[Either[String, Unit]]
   ): Task[Either[String, Unit]] =
     if (reconnects >= maxReconnects) {
       ZIO.succeed(Left(cause))
     } else {
       for {
-        _      <- ZIO.whenDiscard(reconnects == 0)(reconnectNotice(jobId))
+        _      <- ZIO.whenDiscard(reconnects == 0)(notice(reconnectMessage(jobId)))
         _      <- ZIO.sleep(reconnectBackoff)
         result <- retry()
       } yield result
     }
 
-  private def reconnectNotice(jobId: String): UIO[Unit] =
-    Console
-      .printLineError(s"$jobId: log stream dropped on a silent phase — reconnecting (the job keeps running)…")
-      .orDie
+  private def reconnectMessage(jobId: String): String =
+    s"$jobId: log stream dropped on a silent phase — reconnecting (the job keeps running)…"
 
   private def streamLost(jobId: String, cause: String): UIO[Unit] =
     Console
@@ -150,10 +209,12 @@ final class JobFollower(api: CcasApiClient, maxWait: Duration, reconnectBackoff:
         val onLine: String => UIO[Unit] =
           if (logsToStderr) { line => Console.printLineError(line).orDie }
           else { line => Console.printLine(line).orDie }
+        // `--stdout` (logsToStderr) keeps stdout clean for the username payload, so no bars there; an interactive run
+        // gets bars when the terminal supports them.
         for {
           _    <- CompletionCache.appendJob(id)
           _    <- notice
-          code <- followJob(id, onLine)
+          code <- followWith(id, onLine, bars = showProgress && !logsToStderr)
           _    <- ZIO.whenDiscard(code == 0)(onComplete(id))
         } yield code
       case _ => Console.printLineError(s"$label: server returned no job id").orDie.as(1)

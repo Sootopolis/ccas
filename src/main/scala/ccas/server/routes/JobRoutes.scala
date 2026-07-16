@@ -288,6 +288,27 @@ object JobRoutes {
           )
       }).pipe(withErrorHandling)
     },
+    // Chunked NDJSON stream of a job's live progress: one `ProgressSnapshot` per line (latest-wins), merging the job's
+    // app bars with the shared client's API gauge. Live-only — closes when the job is terminal. The following CLI opens
+    // this only when it wants bars (interactive TTY, not `--no-progress`); it never affects the `/logs` follow.
+    Method.GET / "api" / "jobs" / string("jobId") / "progress" -> handler { (jobId: String, _: Request) =>
+      (for {
+        runner    <- ZIO.service[JobRunner]
+        streamOpt <- runner.progressStream(JobRunId.wrap(jobId))
+      } yield streamOpt match {
+        case None => Response.text(s"Job $jobId not found").status(Status.NotFound)
+        case Some(frames) =>
+          Response(
+            status = Status.Ok,
+            headers = Headers(Header.ContentType(MediaType.text.`plain`, charset = Some(StandardCharsets.UTF_8))),
+            // Same keepalive tick as `/logs`: a job phase with no bar changes for >50s must not idle the follower shut.
+            body = Body.fromCharSequenceStreamChunked(
+              JobLogStream.withKeepAlive(frames).map(_ + "\n"),
+              StandardCharsets.UTF_8
+            )
+          )
+      }).pipe(withErrorHandling)
+    },
     // Invited usernames for the recruitment run linked to a job — the paste-ready payload the CLI fetches once the
     // job is terminal (the `ccas recruit --stdout` auto-confirm path). 404 if the job id has no recruitment run.
     // Scope is THIS run only, deliberately: a `--cumulative` top-up returns just its new invites so the operator
