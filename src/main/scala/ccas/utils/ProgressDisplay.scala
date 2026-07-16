@@ -7,6 +7,7 @@ import java.time.{Instant, ZoneId}
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.regex.Pattern
 
+import io.netty.handler.timeout.ReadTimeoutException
 import zio.stream.SubscriptionRef
 import zio.{Cause, FiberId, FiberRef, FiberRefs, LogLevel, LogSpan, Ref, Runtime, Scope, Trace, UIO, Unsafe, URIO, URLayer, ZIO, ZLayer, ZLogger}
 
@@ -204,8 +205,13 @@ final class ProgressDisplay private[utils] (
       val threshold = context.getOrDefault(FiberRef.currentLogLevel)
       if (level >= threshold) {
         try {
-          val sink = context.getOrDefault(JobLogSink.currentSink)
-          logAboveBarsSync(sink, ProgressDisplay.format(level, message(), Instant.now(), cause, spans, annotations))
+          // Force the message thunk once, inside the try so a throwing thunk stays caught (see `testLoggerSwallowsThrow`),
+          // and reuse it for both the read-idle-reap filter and the formatter.
+          val msg = message()
+          if (!ProgressDisplay.isBenignReadIdleReap(level, msg, cause)) {
+            val sink = context.getOrDefault(JobLogSink.currentSink)
+            logAboveBarsSync(sink, ProgressDisplay.format(level, msg, Instant.now(), cause, spans, annotations))
+          }
         } catch { case t: Throwable => t.printStackTrace(err) }
       }
     }
@@ -459,6 +465,30 @@ object ProgressDisplay {
 
   private def formatTime(when: Instant): String =
     when.atZone(Zone).toLocalTime.format(TimeFormat)
+
+  /** zio-http's `ServerInboundHandler.exceptionCaught` logs every fatal channel exception under this exact message. */
+  private val FatalNettyExceptionMessage = "Fatal exception in Netty"
+
+  /** True for the benign WARN zio-http emits when the server's read-idle reaper closes a live streaming follow.
+    *
+    * `CcasServer` sets `Server.Config#idleTimeout`, which installs a read-only Netty `ReadTimeoutHandler`. A job-log /
+    * progress follow (`GET /api/jobs/{id}/{logs,progress}`) is write-only server→client once the request is sent, so the
+    * read timer is never reset and the handler reaps every live follow on schedule — surfacing as zio-http's
+    * `ZIO.logWarningCause("Fatal exception in Netty", Cause.die(ReadTimeoutException))`. The follow's client transparently
+    * reconnects (#161), so the reap is benign transport noise, not a failure, and we drop exactly this WARN.
+    *
+    * The match is deliberately over-specified — the exact zio-http message AND a cause that is *solely* a
+    * `ReadTimeoutException` defect (no typed failure, no other defect). This scopes it to the server reaper rather than
+    * any bare read-timeout WARN elsewhere, and makes both coordinates fail *open*: if a zio-http upgrade renames the
+    * message or wraps the exception, the filter simply stops matching and the (still benign) WARN reappears — noise
+    * returns, no genuine signal is ever hidden.
+    */
+  private def isBenignReadIdleReap(level: LogLevel, message: String, cause: Cause[Any]): Boolean =
+    level == LogLevel.Warning &&
+      message == FatalNettyExceptionMessage &&
+      cause.failures.isEmpty &&
+      cause.defects.nonEmpty &&
+      cause.defects.forall(_.isInstanceOf[ReadTimeoutException])
 
   private def format(
     level: LogLevel,

@@ -2,8 +2,9 @@ package ccas.utils
 
 import java.io.{ByteArrayOutputStream, PrintStream}
 
+import io.netty.handler.timeout.ReadTimeoutException
 import zio.stream.SubscriptionRef
-import zio.{LogLevel, Promise, Ref, ZIO}
+import zio.{Cause, LogLevel, Promise, Ref, ZIO}
 import zio.test.{assertCompletes, assertTrue, Spec, ZIOSpecDefault}
 
 object TestProgressBar extends ZIOSpecDefault {
@@ -25,7 +26,8 @@ object TestProgressBar extends ZIOSpecDefault {
     testCurrentLogLevelEnablesDebug,
     testLoggerSwallowsThrow,
     testSourcedRendersPrefixTag,
-    testStripSourceTag
+    testStripSourceTag,
+    testBenignReadIdleReapFiltered
   )
   // No `@@ TestAspect.sequential`: each test owns its capture buffers and installs loggers/sinks via fiber-scoped
   // FiberRefs (`currentLoggers`, `currentSink`), so the suite holds no process-global state to serialise. (Cross-suite
@@ -355,6 +357,31 @@ object TestProgressBar extends ZIOSpecDefault {
       ProgressDisplay.stripSourceTag("[INFO 00:00:00] no tag here") == "[INFO 00:00:00] no tag here"
     )
   }
+
+  /** The server's read-idle reaper closes every live streaming follow on schedule (a read-only `ReadTimeoutHandler`
+    * can't be reset by the outbound keepalive), which zio-http logs as a benign `Cause.die(ReadTimeoutException)` WARN.
+    * The logger drops exactly that WARN (`ProgressDisplay.isBenignReadIdleReap`), but any other fatal-Netty WARN — a
+    * defect of a different type — must still be rendered. Both are emitted here; only the second should survive.
+    */
+  private def testBenignReadIdleReapFiltered =
+    test("read-idle-reap WARN is filtered while other fatal-Netty WARNs still log") {
+      val effect =
+        ZIO.logWarningCause("Fatal exception in Netty", Cause.die(ReadTimeoutException.INSTANCE)) *>
+          ZIO.logWarningCause("genuine netty fault", Cause.die(new RuntimeException("kaboom"))) *>
+          ZIO.logWarningCause("read timeout we DO want", Cause.die(ReadTimeoutException.INSTANCE))
+      withLogCapture(effect).map { case (_, out) =>
+        val clean = stripAnsi(out)
+        assertTrue(
+          // The exact zio-http server-reaper WARN (its message + a bare ReadTimeoutException) is dropped...
+          !clean.contains("Fatal exception in Netty"),
+          // ...but a different fatal-Netty WARN survives...
+          clean.contains("genuine netty fault"),
+          clean.contains("kaboom"),
+          // ...and so does a bare ReadTimeoutException under a different message — the filter is scoped, not blanket.
+          clean.contains("read timeout we DO want")
+        )
+      }
+    }
 
   private def testLoggerSwallowsThrow = test("asLogger swallows exceptions from a throwing message thunk") {
     ZIO.suspendSucceed {
