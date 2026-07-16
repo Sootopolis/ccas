@@ -36,7 +36,9 @@ object TestJobRunner extends ZIOSpecDefault {
     testLogStreamTailsLiveJob,
     testLogStreamCarriesPartialLineAcrossTicks,
     testLogStreamJoinsMultibyteCharAcrossTicks,
-    testLogStreamReassemblesCjkAndEmojiTornMidChar
+    testLogStreamReassemblesCjkAndEmojiTornMidChar,
+    testProgressStreamTailsLiveJobAndCloses,
+    testProgressStreamUnknownReturnsNone
   ).provideShared(
     FreshSchemaLayer("test_job_runner", onInit = ServerTables.ensureTables),
     TestChessComClientSupport.dummyLayer,
@@ -201,6 +203,53 @@ object TestJobRunner extends ZIOSpecDefault {
     for {
       runner <- ZIO.service[JobRunner]
       result <- runner.logStream(JobRunId.wrap("does-not-exist"))
+    } yield assertTrue(result.isEmpty)
+  }
+
+  // End-to-end for `progressStream`: submit → `currentChannel.locally` → a job bar publishes into the per-job channel →
+  // the stream emits its snapshot → the job completes → `interruptWhen(promise)` closes the stream. We wait for a bar
+  // frame *before* releasing the job (deterministic — otherwise the job could finish and drop the bar before the
+  // subscriber observes it), then assert the stream ended on completion. Global-gauge merge is None here (the suite's
+  // `ProgressDisplay.make` has no global channel), so this covers the `(None, Some(job))` path + the completion halt.
+  private def testProgressStreamTailsLiveJobAndCloses =
+    test("progressStream emits a running job's bar snapshots and closes when it finishes") {
+      for {
+        _      <- deleteAllJobRuns
+        runner <- ZIO.service[JobRunner]
+        gate   <- Promise.make[Nothing, Unit]
+        id <- runner.submit(
+          JobKind.MatchRef,
+          None,
+          None,
+          RunTrigger.Cli,
+          _ =>
+            ZIO.scoped {
+              for {
+                bar <- ProgressDisplay.progressBar
+                _   <- bar.print(1, 2, "working")
+                _   <- gate.await // stay Running until the subscriber has seen the bar frame
+              } yield ()
+            }
+        )
+        streamOpt <- runner.progressStream(id)
+        stream    <- ZIO.fromOption(streamOpt).orElseFail(new Exception("expected a live progress stream"))
+        seen      <- Promise.make[Nothing, Unit]
+        framesRef <- Ref.make(List.empty[String])
+        collect <- stream
+          .runForeach(f => framesRef.update(f :: _) *> ZIO.whenDiscard(f.contains("working"))(seen.succeed(()).unit))
+          .fork
+        _      <- seen.await.timeoutFail(new Exception("no bar frame observed"))(10.seconds)
+        _      <- gate.succeed(())
+        _      <- awaitStatus(runner, id)
+        _      <- collect.join // returns only if the stream ended — proves close-on-completion
+        frames <- framesRef.get
+      } yield assertTrue(frames.exists(_.contains("\"text\":\"working\"")))
+    }
+
+  private def testProgressStreamUnknownReturnsNone = test("progressStream returns None for unknown id") {
+    for {
+      runner <- ZIO.service[JobRunner]
+      result <- runner.progressStream(JobRunId.wrap("does-not-exist"))
     } yield assertTrue(result.isEmpty)
   }
 

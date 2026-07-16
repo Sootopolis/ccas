@@ -8,14 +8,15 @@ import com.typesafe.config.ConfigFactory
 
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.withTransaction
-import zio.stream.ZStream
-import zio.{Clock, Duration, Promise, RIO, RLayer, Ref, Scope, UIO, ZIO, ZLayer, durationInt}
+import zio.json.EncoderOps
+import zio.stream.{SubscriptionRef, ZStream}
+import zio.{Clock, Duration, Promise, RIO, RLayer, Ref, Schedule, Scope, UIO, ZIO, ZLayer, durationInt}
 
 import ccas.analysis.tables.{AppSetting, Club, RunTrigger}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId}
 import ccas.utils.client.ChessComClient
 import ccas.utils.errors.{ConflictException, safeMessage}
-import ccas.utils.{JobLogSink, ProgressDisplay}
+import ccas.utils.{BarSnapshot, JobLogSink, ProgressDisplay, ProgressSnapshot}
 
 /** Asynchronous job executor that runs analysis tasks as forked fibers.
   *
@@ -47,12 +48,22 @@ trait JobRunner {
     * per-job log file live and closes once the job is terminal and the tail has reached EOF.
     */
   def logStream(id: JobRunId): RIO[PostgresClient, Option[ZStream[Any, Throwable, String]]]
+
+  /** Stream a job's live progress as latest-wins [[ccas.utils.ProgressSnapshot]] JSON frames (one per line), or `None`
+    * if no such job exists. Each frame merges the job's own app bars with the shared client's global API gauge. The
+    * stream closes when the job is terminal — bars are ephemeral, so nothing is persisted or replayed.
+    */
+  def progressStream(id: JobRunId): RIO[PostgresClient, Option[ZStream[Any, Throwable, String]]]
 }
 
 object JobRunner {
 
   // How often the file-tail transport re-polls a job's log file for newly-appended lines while the job is running.
   private val LogTailPollInterval: Duration = 250.millis
+
+  // Floor for the `/progress` sample interval (see `AppSetting.ProgressRefreshIntervalMillis`) — guards a mis-set
+  // 0/negative value from busy-looping the sampler. ~60 fps, far tighter than any sensible configured cap.
+  private val MinRefreshInterval: Duration = 16.millis
 
   val live: RLayer[ProgressDisplay & ChessComClient & PostgresClient, JobRunner] =
     ZLayer.scoped {
@@ -61,6 +72,9 @@ object JobRunner {
         client      <- ZIO.service[ChessComClient]
         pgClient    <- ZIO.service[PostgresClient]
         completions <- Ref.make(Map.empty[JobRunId, Promise[Nothing, Unit]])
+        // Per-job progress channels, registered on submit and dropped on completion — the in-memory analog of
+        // `completions`, read by `progressStream` to serve `GET /api/jobs/{id}/progress`.
+        jobChannels <- Ref.make(Map.empty[JobRunId, ProgressDisplay.BarChannel])
         // The layer's own scope owns the job fibers (see `submit`): forking into it detaches each job from the
         // short-lived request fiber that submitted it, and interrupts any still in flight when the server shuts down.
         // `forkIn` self-cleans — a job's child scope closes when its fiber exits — so completed jobs don't accumulate.
@@ -78,7 +92,7 @@ object JobRunner {
           .tapError(t => ZIO.logWarning(s"Job-log retention sweep failed: ${t.safeMessage}"))
           .orElseSucceed(0)
         _ <- ZIO.logInfo(s"Swept $swept job log(s) older than $days day(s) from $logDir").when(swept > 0)
-      } yield new JobRunnerLive(display, client, pgClient, completions, layerScope, logDir)
+      } yield new JobRunnerLive(display, client, pgClient, completions, jobChannels, layerScope, logDir)
     }
 
   private class JobRunnerLive(
@@ -86,6 +100,7 @@ object JobRunner {
     client: ChessComClient,
     pgClient: PostgresClient,
     completions: Ref[Map[JobRunId, Promise[Nothing, Unit]]],
+    jobChannels: Ref[Map[JobRunId, ProgressDisplay.BarChannel]],
     layerScope: Scope,
     logDir: Path
   ) extends JobRunner {
@@ -133,26 +148,37 @@ object JobRunner {
           for {
             sink    <- FileSink.make(logDir, JobRunId.unwrap(id))
             promise <- Promise.make[Nothing, Unit]
+            // The per-job bar channel: app bars created inside this job (via `currentChannel.locally` below) publish
+            // here; `progressStream` merges it with the global API gauge to serve this job's `/progress`.
+            channel <- SubscriptionRef.make(Map.empty[Int, BarSnapshot])
             // Runs in the CHILD fiber when the job ends (success, failure, or interruption): close the sink (flush +
             // close the held-open writer) FIRST, then fire the completion promise, then de-register — so a tailer
             // observes a fully written, closed file before it sees the job done, and always gets EOF, incl. on shutdown.
+            // The channel de-registers too: `/progress`'s `interruptWhen(promise)` already ends live followers, and a
+            // later subscribe finds no channel (job terminal) and emits a single settling frame.
             release = for {
               _ <- sink.close()
               _ <- promise.succeed(())
               _ <- completions.update(_ - id)
+              _ <- jobChannels.update(_ - id)
             } yield ()
             _ <- completions.update(_ + (id -> promise))
+            _ <- jobChannels.update(_ + (id -> channel))
             _ <- restore(
               // `installLogger` forces ProgressDisplay's ZLogger onto the job fiber itself, so the per-job FileSink is
               // written regardless of which fiber submitted the job. `forkIn` inherits the submitter's loggers, and an
               // HTTP request handler carries only the default logger (not the app-scoped ProgressDisplay one) — so
               // without this, HTTP-submitted jobs logged to the default logger and their per-job file stayed empty (#132).
+              // `currentChannel.locally` scopes bar publishing to this job's channel for the whole run (forked children
+              // inherit the FiberRef), mirroring `currentSink` for log lines.
               display.installLogger(
                 ProgressDisplay.sourced(label)(
-                  JobLogSink.currentSink
-                    .locally(sink)(
-                      runJob(id, effect(Some(id))).ensuring(release)
-                    )
+                  ProgressDisplay.currentChannel.locally(Some(channel))(
+                    JobLogSink.currentSink
+                      .locally(sink)(
+                        runJob(id, effect(Some(id))).ensuring(release)
+                      )
+                  )
                 )
               )
             ).forkIn(layerScope)
@@ -195,5 +221,52 @@ object JobRunner {
 
     override def logStream(id: JobRunId): RIO[PostgresClient, Option[ZStream[Any, Throwable, String]]] =
       status(id).map(_.map(_ => transport.subscribe(id)))
+
+    override def progressStream(id: JobRunId): RIO[PostgresClient, Option[ZStream[Any, Throwable, String]]] =
+      status(id).flatMap {
+        case None => ZIO.none
+        case Some(_) =>
+          for {
+            chans <- jobChannels.get
+            comps <- completions.get
+            // The refresh cap is a non-essential tuning knob for best-effort bars — a failed settings read (transient DB
+            // error) falls back to the compiled-in default rather than failing the `/progress` subscribe.
+            ms <- AppSetting
+              .get(AppSetting.ProgressRefreshIntervalMillis)
+              .orElseSucceed(AppSetting.ProgressRefreshIntervalMillis.default)
+          } yield Some(progressFrames(chans.get(id), comps.get(id), ms.millis))
+      }
+
+    // Build the `/progress` frame stream by SAMPLING the merged bar state (the shared global gauge channel plus this
+    // job's channel — later keys win; a job never shares a bar id with the gauge, so the union is disjoint) at
+    // `refreshInterval` and de-duplicating consecutive-identical samples. Sampling + `changes` gives conflation: a busy
+    // job's rapid updates collapse to at most one frame per interval (bounding the encode + send the operator asked to
+    // cap), an idle job emits nothing (consecutive samples are equal), and — unlike dropping excess — the LATEST state
+    // is always delivered within one interval, so a bar that ticks once then goes quiet still reaches the follower.
+    // Frames render bar-id-ordered (creation order: gauge first, then app bars). The stream ends when the job completes;
+    // a terminal job (no live channel / promise) emits a single settling frame and closes.
+    private def progressFrames(
+      jobChannel: Option[ProgressDisplay.BarChannel],
+      completion: Option[Promise[Nothing, Unit]],
+      refreshInterval: Duration
+    ): ZStream[Any, Throwable, String] = {
+      val readState: UIO[Map[Int, BarSnapshot]] =
+        for {
+          global <- display.globalBarSnapshot
+          job    <- jobChannel.fold(ZIO.succeed(Map.empty[Int, BarSnapshot]))(_.get)
+        } yield global ++ job
+      // Floor the interval so a mis-set 0/negative can't busy-loop the sampler.
+      val interval = if (refreshInterval.toNanos > MinRefreshInterval.toNanos) { refreshInterval } else { MinRefreshInterval }
+      val frames =
+        ZStream
+          .fromZIO(readState)
+          .repeat(Schedule.spaced(interval))
+          .changes
+          .map(m => ProgressSnapshot(m.values.toList.sortBy(_.id)).toJson)
+      completion match {
+        case Some(p) => frames.interruptWhen(p.await)
+        case None    => frames.take(1)
+      }
+    }
   }
 }

@@ -18,9 +18,15 @@ object TestJobFollower extends ZIOSpecDefault {
   private case object Hang                                                extends StreamBehaviour
   private final case class AlwaysFail(err: Throwable)                       extends StreamBehaviour
   private final case class Attempts(ref: Ref[List[(List[String], Boolean)]]) extends StreamBehaviour
+  // Stay open until `gate` completes (a progress-reconnect signal), then reach EOF — models a /logs stream that
+  // outlives the /progress reconnect so the test can observe it.
+  private final case class AwaitThenComplete(gate: Promise[Nothing, Unit]) extends StreamBehaviour
 
-  /** Stub that replays a fixed `JobStatusResponse` body for `getJson` and drives `streamLines` per [[StreamBehaviour]]. */
-  private final class StubApi(script: Ref[List[String]], behaviour: StreamBehaviour) extends CcasApiClient {
+  /** Stub that replays a fixed `JobStatusResponse` body for `getJson`, drives `streamLines` per [[StreamBehaviour]], and
+    * runs `progress` (re-evaluated per call, so a Ref-backed effect can script a drop-then-reconnect) for `streamProgress`.
+    */
+  private final class StubApi(script: Ref[List[String]], behaviour: StreamBehaviour, progress: Task[Unit])
+      extends CcasApiClient {
     override def getJson[Resp: JsonDecoder](path: String): Task[Resp] =
       script.modify {
         case head :: tail => (head, tail)
@@ -32,6 +38,7 @@ object TestJobFollower extends ZIOSpecDefault {
         case ReplayOnce(lines) => ZIO.foreachDiscard(lines)(onLine)
         case Hang              => ZIO.never
         case AlwaysFail(err)     => ZIO.fail(err)
+        case AwaitThenComplete(gate) => gate.await
         case Attempts(ref) =>
           ref.modify {
             case head :: tail => (Some(head), tail)
@@ -50,19 +57,27 @@ object TestJobFollower extends ZIOSpecDefault {
       ZIO.die(new UnsupportedOperationException("postEmpty"))
     override def postUnit[Req: JsonEncoder](path: String, body: Req): Task[Unit] = ZIO.unit
     override def delete(path: String): Task[Unit]                                = ZIO.unit
+
+    // Rendering is exercised in TestClientProgressRenderer; here `progress` scripts the transport (default ZIO.unit =
+    // one clean pass; a Ref-backed effect scripts a drop-then-reconnect). onFrame is unused — no frames are emitted.
+    override def streamProgress(path: String)(onFrame: ccas.utils.ProgressSnapshot => UIO[Unit]): Task[Unit] = progress
   }
 
   private def statusJson(status: String, error: Option[String]): String =
     JobStatusResponse("job-1", "Membership", status, None, "2026-01-01T00:00:00Z", None, error, "Cli").toJson
 
-  // Fast reconnect tuning for tests: negligible backoff, tiny cap so the give-up path resolves quickly.
+  // Fast reconnect tuning for tests: negligible backoff, tiny cap so the give-up path resolves quickly. Bars off by
+  // default (plain log lines, asserted via TestConsole); `barsFollower` flips `showProgress` on for the bars-path test.
   private def follower(api: CcasApiClient, maxWait: Duration): JobFollower =
-    JobFollower(api, maxWait, reconnectBackoff = 1.milli, maxReconnects = 3)
+    JobFollower(api, maxWait, reconnectBackoff = 1.milli, maxReconnects = 3, showProgress = false)
+
+  private def barsFollower(api: CcasApiClient, maxWait: Duration): JobFollower =
+    JobFollower(api, maxWait, reconnectBackoff = 1.milli, maxReconnects = 3, showProgress = true)
 
   private def followerWith(status: String, error: Option[String], logLines: List[String]): UIO[JobFollower] =
     Ref
       .make(List(statusJson(status, error)))
-      .map(ref => follower(new StubApi(ref, ReplayOnce(logLines)), 1.minute))
+      .map(ref => follower(new StubApi(ref, ReplayOnce(logLines), ZIO.unit), 1.minute))
 
   override def spec: Spec[Any, Throwable] = suite("TestJobFollower")(
     test("followJob streams the log lines and returns 0 when the job completes") {
@@ -77,10 +92,44 @@ object TestJobFollower extends ZIOSpecDefault {
         code   <- follower.followJob("job-1")
       } yield assertTrue(code == 1)
     },
+    test("followJob with progress bars on forks the progress consumer, follows, and completes cleanly") {
+      // showProgress = true takes the bars branch: build a client ProgressDisplay, fork the (empty) /progress consumer,
+      // follow the log stream through the display, then tear the consumer down and clear bars on completion. Asserts the
+      // follow still resolves to 0 — i.e. the bars wiring doesn't break or hang the log follow.
+      for {
+        ref  <- Ref.make(List(statusJson("Completed", None)))
+        code <- barsFollower(new StubApi(ref, ReplayOnce(List("log line")), ZIO.unit), 1.minute).followJob("job-1")
+      } yield assertTrue(code == 0)
+    },
+    test("bars mode reconnects the /progress stream after a mid-stream drop") {
+      // The server reaps /progress at its read-idle timeout just like /logs (#161); the consumer must reconnect or the
+      // bars freeze for the rest of the job. /progress drops on its 1st subscribe, then on reconnect signals `reconnected`
+      // and ends; /logs stays open until that signal, so the reconnect is observed before the follow finishes.
+      for {
+        reconnected  <- Promise.make[Nothing, Unit]
+        progressCall <- Ref.make(0)
+        progress = progressCall.updateAndGet(_ + 1).flatMap(n =>
+          if (n == 1) { ZIO.fail(StreamDropped("read-idle reap")) }
+          else { reconnected.succeed(()).unit }
+        )
+        ref   <- Ref.make(List(statusJson("Completed", None)))
+        code  <- barsFollower(new StubApi(ref, AwaitThenComplete(reconnected), progress), 1.minute).followJob("job-1")
+        calls <- progressCall.get
+      } yield assertTrue(code == 0, calls >= 2)
+    },
+    test("bars mode times out cleanly and still reports 'still running'") {
+      // Bug-fix guard: on the timeout path the bars are cleared (onExit) BEFORE interpret prints the terminal status, so
+      // the follow resolves to 1 and the message is emitted rather than lost/hung.
+      for {
+        ref  <- Ref.make(List(statusJson("Running", None)))
+        code <- barsFollower(new StubApi(ref, Hang, ZIO.unit), 30.millis).followJob("job-1")
+        err  <- TestConsole.outputErr
+      } yield assertTrue(code == 1, err.exists(_.contains("still running")))
+    },
     test("followJob times out when the log stream never ends") {
       for {
         ref <- Ref.make(List(statusJson("Running", None)))
-        code <- follower(new StubApi(ref, Hang), 30.millis).followJob("job-1")
+        code <- follower(new StubApi(ref, Hang, ZIO.unit), 30.millis).followJob("job-1")
       } yield assertTrue(code == 1)
     },
     test("followJob reconnects across a mid-stream drop and resumes without re-printing seen lines") {
@@ -88,7 +137,7 @@ object TestJobFollower extends ZIOSpecDefault {
         // Attempt 1 shows a,b then drops; attempt 2 replays a,b (skipped as already-shown) and finishes with c,d.
         attempts <- Ref.make(List(List("a", "b") -> true, List("a", "b", "c", "d") -> false))
         ref      <- Ref.make(List(statusJson("Completed", None)))
-        code     <- follower(new StubApi(ref, Attempts(attempts)), 1.minute).followJob("job-1")
+        code     <- follower(new StubApi(ref, Attempts(attempts), ZIO.unit), 1.minute).followJob("job-1")
         out      <- TestConsole.output
         err      <- TestConsole.outputErr
       } yield assertTrue(
@@ -104,7 +153,7 @@ object TestJobFollower extends ZIOSpecDefault {
       for {
         ref <- Ref.make(List(statusJson("Running", None)))
         // Always drops → never reaches EOF → give up after maxReconnects and surface the reattach hint.
-        code <- follower(new StubApi(ref, AlwaysFail(StreamDropped("idle timeout"))), 1.minute).followJob("job-1")
+        code <- follower(new StubApi(ref, AlwaysFail(StreamDropped("idle timeout")), ZIO.unit), 1.minute).followJob("job-1")
         err  <- TestConsole.outputErr
       } yield assertTrue(
         code == 1,

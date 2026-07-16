@@ -49,8 +49,13 @@ object CliCommand {
 
   // Server commands — dispatched as HTTP calls by `Dispatcher`. Club-targeting fields hold the *parsed* request
   // (`clubs`/`club` may be empty/None); `Dispatcher` resolves them against `--all` and the config's `current_club`.
-  final case class Membership(server: String, clubs: List[String], all: Boolean, trustUsernames: Option[Boolean])
-      extends ServerCommand
+  final case class Membership(
+    server: String,
+    clubs: List[String],
+    all: Boolean,
+    trustUsernames: Option[Boolean],
+    noProgress: Boolean
+  ) extends ServerCommand
   final case class History(
     server: String,
     clubs: List[String],
@@ -58,7 +63,8 @@ object CliCommand {
     full: Boolean,
     includeFinished: Boolean,
     refresh: Boolean,
-    refreshMinHours: Option[Int]
+    refreshMinHours: Option[Int],
+    noProgress: Boolean
   ) extends ServerCommand
   final case class Recruit(
     server: String,
@@ -71,12 +77,18 @@ object CliCommand {
     explore: Option[Boolean],
     stdout: Boolean,
     report: Boolean,
-    runId: Option[Int]
+    runId: Option[Int],
+    noProgress: Boolean
   ) extends ServerCommand
-  final case class Stats(server: String, club: Option[String], since: Option[String], until: Option[String])
-      extends ServerCommand
+  final case class Stats(
+    server: String,
+    club: Option[String],
+    since: Option[String],
+    until: Option[String],
+    noProgress: Boolean
+  ) extends ServerCommand
   final case class Jobs(server: String, limit: Option[Int]) extends ServerCommand
-  final case class Logs(server: String, jobId: String) extends ServerCommand
+  final case class Logs(server: String, jobId: String, noProgress: Boolean) extends ServerCommand
   final case class BlacklistAdd(
     server: String,
     club: Option[String],
@@ -126,6 +138,11 @@ object CliCommand {
       case _         => None
     }
 
+  // Opt out of live progress bars while following a job (plain log lines only). Bars otherwise render on an interactive
+  // terminal; a non-TTY (piped/redirected) already suppresses them regardless of this flag.
+  private val noProgressOpt: Options[Boolean] =
+    Options.boolean("no-progress") ?? "Don't render progress bars while following the job (plain log lines only)"
+
   private def intOpt(name: String): Options[Option[Int]] = Options.integer(name).map(_.toInt).optional
 
   // Single-club target. Absent → Dispatcher falls back to the config's `current_club`.
@@ -172,10 +189,10 @@ object CliCommand {
       .map(Use.apply)
 
   private def membership(default: String): Command[CliCommand] =
-    Command("membership", serverOpt(default) ++ trustOpt ++ clubsOpt ++ allOpt)
+    Command("membership", serverOpt(default) ++ trustOpt ++ clubsOpt ++ allOpt ++ noProgressOpt)
       .withHelp("Submit a membership-sync job (current club, --club a,b, or --all managed clubs)")
-      .map { case (server, trust, clubs, all) =>
-        Membership(server, clubs, all, trust)
+      .map { case (server, trust, clubs, all, noProgress) =>
+        Membership(server, clubs, all, trust, noProgress)
       }
 
   private def history(default: String): Command[CliCommand] =
@@ -186,10 +203,10 @@ object CliCommand {
         (Options.boolean("include-finished") ?? "Re-queue recently finished matches for refresh") ++
         (Options.boolean("refresh") ?? "Refresh already-stored matches, not just newly seen ones") ++
         (intOpt("refresh-min-hours") ?? "Skip refreshing a match seen within the last N hours") ++
-        clubsOpt ++ allOpt
+        clubsOpt ++ allOpt ++ noProgressOpt
     ).withHelp("Submit a match-history crawl job (current club, --club a,b, or --all managed clubs)")
-      .map { case (server, full, includeFinished, refresh, refreshMinHours, clubs, all) =>
-        History(server, clubs, all, full, includeFinished, refresh, refreshMinHours)
+      .map { case (server, full, includeFinished, refresh, refreshMinHours, clubs, all, noProgress) =>
+        History(server, clubs, all, full, includeFinished, refresh, refreshMinHours, noProgress)
       }
 
   private val sourceClubsOpt: Options[List[String]] =
@@ -207,14 +224,16 @@ object CliCommand {
         (intOpt("time-limit-minutes") ?? "Stop scouting after roughly N minutes") ++
         exploreOpt ++ clubOpt ++
         (Options.boolean("stdout") ?? "Print invited usernames (bare, newline-separated) to stdout for piping to a clipboard tool (e.g. wl-copy); logs go to stderr. Auto-confirms invites") ++
-        (Options.boolean("report") ?? "Show a past run's invited usernames instead of scouting (the club's latest run, or the run id given as an argument)"),
+        (Options.boolean("report") ?? "Show a past run's invited usernames instead of scouting (the club's latest run, or the run id given as an argument)") ++
+        noProgressOpt,
       (Args.integer("run-id") ?? "With --report, the run id to show (default: the club's latest run)")
         .atMost(1)
         .map(_.headOption.map(_.toInt))
     ).withHelp("Submit a recruitment scouting job for a club (interactive runs confirm invites before marking them)")
       // Options and the optional `[run-id]` arg combine as (optionsTuple, argValue), so destructure the two levels.
-      .map { case ((server, alias, target, cumulative, sourceClubs, timeLimitMinutes, explore, club, stdout, report), runId) =>
-        Recruit(server, club, alias, target, cumulative, sourceClubs, timeLimitMinutes, explore, stdout, report, runId)
+      .map {
+        case ((server, alias, target, cumulative, sourceClubs, timeLimitMinutes, explore, club, stdout, report, noProgress), runId) =>
+          Recruit(server, club, alias, target, cumulative, sourceClubs, timeLimitMinutes, explore, stdout, report, runId, noProgress)
       }
 
   private def stats(default: String): Command[CliCommand] =
@@ -223,9 +242,9 @@ object CliCommand {
       serverOpt(default) ++
         (Options.text("since").optional ?? "Start of the date window (ISO-8601 date or instant)") ++
         (Options.text("until").optional ?? "End of the date window (requires --since)") ++
-        clubOpt
+        clubOpt ++ noProgressOpt
     ).withHelp("Submit a club performance-stats job")
-      .map { case (server, since, until, club) => Stats(server, club, since, until) }
+      .map { case (server, since, until, club, noProgress) => Stats(server, club, since, until, noProgress) }
 
   private def jobs(default: String): Command[CliCommand] =
     Command("jobs", serverOpt(default) ++ (intOpt("limit") ?? "Maximum number of recent jobs to list"))
@@ -233,9 +252,9 @@ object CliCommand {
       .map { case (server, limit) => Jobs(server, limit) }
 
   private def logs(default: String): Command[CliCommand] =
-    Command("logs", serverOpt(default), Args.text("jobId") ?? "Job run id to poll")
+    Command("logs", serverOpt(default) ++ noProgressOpt, Args.text("jobId") ?? "Job run id to poll")
       .withHelp("Poll a job's status and logs until it finishes")
-      .map { case (server, jobId) => Logs(server, jobId) }
+      .map { case ((server, noProgress), jobId) => Logs(server, jobId, noProgress) }
 
   private def blacklistAdd(default: String): Command[CliCommand] =
     Command(

@@ -1,14 +1,16 @@
 package ccas.utils
 
 import java.io.PrintStream
+import java.nio.charset.StandardCharsets
 import java.time.format.DateTimeFormatter
 import java.time.{Instant, ZoneId}
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.regex.Pattern
 
-import zio.{Cause, FiberId, FiberRef, FiberRefs, LogLevel, LogSpan, Ref, Runtime, Scope, Trace, UIO, URIO, URLayer, ZIO, ZLayer, ZLogger}
+import zio.stream.SubscriptionRef
+import zio.{Cause, FiberId, FiberRef, FiberRefs, LogLevel, LogSpan, Ref, Runtime, Scope, Trace, UIO, Unsafe, URIO, URLayer, ZIO, ZLayer, ZLogger}
 
-/** Manages progress bars rendered as a single line on stdout, overwritten in-place via `\r`.
+/** Manages progress bars rendered one-per-line on stdout; a redraw moves the cursor up over the block and repaints it.
   *
   * State (`bars`) is guarded by a Java intrinsic monitor (`lock`) so the synchronous `ZLogger` callback installed by
   * `ProgressDisplay.live` and the ZIO-effect entry points (`render`, `removeBar`, `finishAllSync`) all serialise their
@@ -32,23 +34,44 @@ import zio.{Cause, FiberId, FiberRef, FiberRefs, LogLevel, LogSpan, Ref, Runtime
 final class ProgressDisplay private[utils] (
   private val enabled: Boolean,
   private val out: PrintStream,
-  private val err: PrintStream
+  private val err: PrintStream,
+  private val globalChannel: Option[ProgressDisplay.BarChannel]
 ) {
 
   private val lock                                  = new Object
   private var bars: List[ProgressDisplay.BarState]  = Nil
   private val idGen                                 = new AtomicInteger(0)
+  // Physical terminal lines the last draw occupied — so a redraw moves the cursor back to the top of the bar block and
+  // repaints it. Only touched inside `lock.synchronized`.
+  private var lastDrawnLines: Int = 0
+
+  /** Current snapshot of the process-wide global bar channel — the bars created outside any job's
+    * [[ProgressDisplay.currentChannel]] scope (e.g. the shared `ChessComClient` API gauge). `progressStream` samples this
+    * (merged with a job's own channel) to build each `/progress` frame so the gauge shows alongside a job's app bars.
+    * Read-only (`.get`), so no caller can mutate the shared gauge state; empty when the display has no global channel
+    * (the sync test factory / server console).
+    */
+  private[ccas] def globalBarSnapshot: UIO[Map[Int, BarSnapshot]] =
+    globalChannel.fold(ZIO.succeed(Map.empty[Int, BarSnapshot]))(_.get)
 
   // ---------------------------------------------------------------------------
   // Bar lifecycle
   // ---------------------------------------------------------------------------
 
-  /** Create a new progress bar appended to the bottom of the display. */
-  def addBar: UIO[ProgressBar] = ZIO.succeed {
-    val id = idGen.getAndIncrement()
-    lock.synchronized { bars = bars :+ ProgressDisplay.BarState(id, 0, "") }
-    new ProgressBar(id, this)
-  }
+  /** Create a new progress bar appended to the bottom of the display.
+    *
+    * The bar's publish target is captured **now**, from the creating fiber's [[ProgressDisplay.currentChannel]] (a job's
+    * channel when created inside a job effect; otherwise the shared [[globalChannel]]). Capturing at creation — not at
+    * each `render` — keeps a bar's snapshots flowing to one channel for its whole life, even though later updates may run
+    * on other fibers (e.g. the API gauge is created outside any job but updated from job fibers).
+    */
+  def addBar: UIO[ProgressBar] =
+    ProgressDisplay.currentChannel.get.map { jobChannel =>
+      val id     = idGen.getAndIncrement()
+      val target = jobChannel.orElse(globalChannel)
+      lock.synchronized { bars = bars :+ ProgressDisplay.BarState(id, 0, "", 0, 0, "", target) }
+      new ProgressBar(id, this)
+    }
 
   /** Create a scoped progress bar — automatically removed when the scope closes. */
   def addBarScoped: ZIO[Scope, Nothing, ProgressBar] =
@@ -61,29 +84,59 @@ final class ProgressDisplay private[utils] (
   // `addBarScoped` finalisers stay consistent (otherwise disabled-mode bars would leak in `bars`).
   // ---------------------------------------------------------------------------
 
-  /** Update one bar's output and re-render the whole display. */
-  private[utils] def render(barId: Int, output: String, lineCount: Int): UIO[Unit] = ZIO.succeed {
-    lock.synchronized {
-      bars = bars.map(b =>
-        if (b.id == barId) ProgressDisplay.BarState(barId, lineCount, output) else b
-      )
-      drawAllSync()
-    }
-  }
+  /** Update one bar's output and re-render the whole display, then republish the bar's channel from `bars`.
+    *
+    * `output` is the already-rendered line (block bar + percentage) used for the local terminal draw; the raw
+    * `current` / `total` / `text` are stored so [[publishChannel]] can emit an unrendered [[BarSnapshot]] (the following
+    * CLI re-renders it at its own width). Publishing runs outside the terminal lock (a `SubscriptionRef` write is an
+    * effect) but re-reads `bars` under the lock at publish time, so it can't diverge from local state.
+    */
+  private[utils] def render(barId: Int, output: String, lineCount: Int, current: Int, total: Int, text: String): UIO[Unit] =
+    ZIO.succeed {
+      lock.synchronized {
+        val target = bars.find(_.id == barId).flatMap(_.target)
+        bars = bars.map(b =>
+          if (b.id == barId) b.copy(lineCount = lineCount, lastOutput = output, current = current, total = total, text = text)
+          else b
+        )
+        clearBlockSync()
+        drawAllSync()
+        target
+      }
+    }.flatMap(publishChannel)
 
-  /** Remove a bar from the display. */
-  private[utils] def removeBar(barId: Int): UIO[Unit] = ZIO.succeed {
-    lock.synchronized {
-      clearLineSync()
-      bars = bars.filterNot(_.id == barId)
-      drawAllSync()
+  /** Remove a bar from the display, then republish its channel from `bars` (the bar is now gone, so it drops out). */
+  private[utils] def removeBar(barId: Int): UIO[Unit] =
+    ZIO.succeed {
+      lock.synchronized {
+        val target = bars.find(_.id == barId).flatMap(_.target)
+        clearBlockSync()
+        bars = bars.filterNot(_.id == barId)
+        drawAllSync()
+        target
+      }
+    }.flatMap(publishChannel)
+
+  // Republish `target`'s snapshot by re-deriving it from `bars` (the lock-guarded source of truth) at publish time and
+  // `set`-ing the whole map — NOT an incremental delta. So even when concurrent render/removeBar publishes for the same
+  // channel reorder relative to their locked mutations, the last publish to run re-reads the final `bars` and the
+  // channel converges to it (no sticky ghost bar). No-op when the bar has no channel (sync `make` / server console).
+  private def publishChannel(target: Option[ProgressDisplay.BarChannel]): UIO[Unit] =
+    ZIO.foreachDiscard(target) { channel =>
+      ZIO.succeed {
+        lock.synchronized {
+          bars.collect {
+            case b if b.lineCount > 0 && b.target.exists(_ eq channel) =>
+              b.id -> BarSnapshot(b.id, b.current, b.total, b.text)
+          }.toMap
+        }
+      }.flatMap(channel.set)
     }
-  }
 
   /** Finish all bars — erase without redraw. Called from the live layer's release block. */
   private[utils] def finishAllSync(): Unit =
     lock.synchronized {
-      clearLineSync()
+      clearBlockSync()
       bars = Nil
     }
 
@@ -107,11 +160,26 @@ final class ProgressDisplay private[utils] (
   private[utils] def logAboveBarsSync(sink: JobLogSink, msg: String): Unit = {
     sink.writeFileSync(msg)
     lock.synchronized {
-      clearLineSync()
+      clearBlockSync()
       sink.writeConsoleSync(msg)
       drawAllSync()
     }
   }
+
+  /** Print a log line above the bars on this display's own `out` stream — the CLI-follow analog of [[logAboveBarsSync]]
+    * (which routes through a [[JobLogSink]]). The CLI `JobFollower` uses this to interleave each streamed job-log line
+    * above the bars it renders from `/api/jobs/{id}/progress`. Clears the bar block, prints the line, redraws — all under
+    * the render lock, so it can't tear against a concurrent bar [[render]] on the same display. When `enabled` is false
+    * (bars suppressed / non-TTY), it degrades to a plain `out.println(line)`.
+    */
+  private[ccas] def logLineAboveBars(line: String): UIO[Unit] =
+    ZIO.succeed {
+      lock.synchronized {
+        clearBlockSync()
+        out.println(line)
+        drawAllSync()
+      }
+    }
 
   // ---------------------------------------------------------------------------
   // ZLogger — installed by `live` via `Runtime.removeDefaultLoggers ++ ZIO.withLoggerScoped`. Companion-visible
@@ -163,24 +231,101 @@ final class ProgressDisplay private[utils] (
     }
 
   // ---------------------------------------------------------------------------
-  // Internal rendering — single-line, \r-based (no cursor-up needed). The `enabled` check lives in these
-  // helpers so callers don't repeat it; both also short-circuit on empty bar lists. Always called from inside
-  // a `lock.synchronized` block so the read of `bars` is consistent.
+  // Internal rendering — multi-line: each bar draws on its own line, and a redraw moves the cursor up over the block
+  // (CSI n A) then clears to end of screen (CSI J) before repainting. The `enabled` check lives in these helpers so
+  // callers don't repeat it. Always called from inside a `lock.synchronized` block so the reads of `bars` and
+  // `lastDrawnLines` stay consistent. ANSI cursor control was already assumed (the old \r-overwrite used CSI K), so
+  // this needs no capability beyond what a disabled / non-TTY display already gated out. `Esc` is built via 27.toChar
+  // (equivalent to a unicode-escape ESC, as the colour literals in the companion use) — both avoid a raw control byte;
+  // 27.toChar just keeps the string interpolations below free of escape noise.
   // ---------------------------------------------------------------------------
 
-  private def clearLineSync(): Unit =
-    if (enabled && bars.exists(_.lineCount > 0)) out.print("\r\u001b[K")
+  private val Esc: String = 27.toChar.toString
 
+  // The visible bars as physical lines: each bar's output split on any embedded newlines, trimmed, and truncated to the
+  // detected terminal width so a too-wide bar can't wrap onto a second row and desync the cursor-up count.
+  private def barLinesSync(): List[String] =
+    bars.filter(_.lineCount > 0).flatMap(_.lastOutput.split("\n", -1)).map(l => truncateToWidth(l.trim))
+
+  // Move the cursor to column 0 of the FIRST bar line — up `lastDrawnLines - 1` rows — when a block is currently drawn.
+  private def moveToBlockTopSync(): Unit =
+    if (lastDrawnLines > 0) {
+      out.print("\r")
+      if (lastDrawnLines > 1) { out.print(s"$Esc[${lastDrawnLines - 1}A") }
+    }
+
+  // Erase the currently-drawn bar block, leaving the cursor at the top of where it was (so a log line prints there and
+  // the bars redraw below it). Resets the line count.
+  private def clearBlockSync(): Unit =
+    if (enabled && lastDrawnLines > 0) {
+      moveToBlockTopSync()
+      out.print(s"$Esc[J") // clear from cursor to end of screen
+      lastDrawnLines = 0
+    }
+
+  // Draw every visible bar one per line and record how many physical lines that took. Each line is `\r`-anchored and
+  // cleared to end of line (CSI K); lines are separated by `\n`. Assumes the block region is already clear (callers
+  // pair this with `clearBlockSync`), so a shrinking block leaves no orphaned rows.
   private def drawAllSync(): Unit =
     if (enabled) {
-      val parts = bars.filter(_.lineCount > 0).map(_.lastOutput.trim)
-      if (parts.nonEmpty) out.print("\r" + parts.mkString("  ") + "\u001b[K")
+      val lines = barLinesSync()
+      if (lines.nonEmpty) {
+        out.print(lines.mkString("\r", s"$Esc[K\n\r", s"$Esc[K"))
+        lastDrawnLines = lines.size
+      }
     }
+
+  // Best-effort terminal width, resolved once at construction (the window is stable enough over a short interactive run).
+  // Prefer an exported COLUMNS, else ask the controlling terminal directly — bash does NOT export COLUMNS to a child
+  // JVM, so it's usually absent and a fixed 80 would mis-truncate on a narrower window — else fall back to 80. Computed
+  // eagerly (not lazily on first draw) so the `sttyCols` sub-process spawn runs here, off the render lock, rather than
+  // inside `lock.synchronized` on the first bar. Only an `enabled` display probes; the server / non-TTY path stays at 80.
+  private val terminalWidth: Int =
+    if (enabled) { Option(System.getenv("COLUMNS")).flatMap(_.toIntOption).filter(_ > 0).orElse(sttyCols).getOrElse(80) }
+    else { 80 }
+
+  // The controlling terminal's column count via `stty size` (prints "<rows> <cols>"), reading /dev/tty so it reflects
+  // the real window even when this process's stdin/stdout are redirected. Any failure (no tty, stty absent) yields None.
+  private def sttyCols: Option[Int] =
+    try {
+      val proc   = new ProcessBuilder("sh", "-c", "stty size < /dev/tty 2>/dev/null").start()
+      val output = new String(proc.getInputStream.readAllBytes(), StandardCharsets.UTF_8).trim
+      proc.waitFor()
+      output.split("\\s+").lift(1).flatMap(_.toIntOption).filter(_ > 0)
+    } catch { case _: Throwable => None }
+
+  // Truncate a bar line to the detected width so it can't wrap onto a second physical row and desync the cursor-up count.
+  private def truncateToWidth(line: String): String =
+    if (line.length <= terminalWidth) { line } else { line.take(terminalWidth - 1) } // leave the last column, avoid wrap
 }
 
 object ProgressDisplay {
 
-  private case class BarState(id: Int, lineCount: Int, lastOutput: String)
+  /** A per-job (or the shared global) bar channel: the current set of that scope's bars keyed by bar id, published as a
+    * latest-wins snapshot. `GET /api/jobs/{id}/progress` streams `.changes`; removal is a key drop.
+    */
+  type BarChannel = SubscriptionRef[Map[Int, BarSnapshot]]
+
+  /** Per-fiber active bar channel — the job-scoped destination for bars created on this fiber (and, via FiberRef
+    * inheritance, its forked children). [[ccas.server.jobs.JobRunner]] sets it per job with `currentChannel.locally`,
+    * exactly as it does [[JobLogSink.currentSink]] for log lines, so a job's app bars land in that job's channel.
+    * `None` (the default) routes a bar to the display's shared global channel instead.
+    */
+  val currentChannel: FiberRef[Option[BarChannel]] =
+    Unsafe.unsafe(implicit u => FiberRef.unsafe.make[Option[BarChannel]](None))
+
+  // `lastOutput` is the rendered line for the local terminal draw; `current`/`total`/`text` are the raw fields mirrored
+  // into `target` (this bar's channel) as an unrendered `BarSnapshot`. `target` is captured at `addBar` and fixed for
+  // the bar's life. `lineCount > 0` marks a bar that has actually been printed (drawn + snapshot-eligible).
+  private case class BarState(
+    id: Int,
+    lineCount: Int,
+    lastOutput: String,
+    current: Int,
+    total: Int,
+    text: String,
+    target: Option[BarChannel]
+  )
 
   /** Synchronous factory — no IO, just allocates the lock + state. Use `live` instead in production code; `make` is
     * intended for tests that need a noop / quiet display without spinning up the layer machinery.
@@ -189,13 +334,19 @@ object ProgressDisplay {
     *   `true` for stdout rendering. `false` suppresses every stdout side-effect — bar lifecycle (`addBar`/`removeBar`)
     *   still tracks state correctly so that `addBarScoped` finalisers behave the same in both modes.
     */
-  def make(enabled: Boolean): ProgressDisplay = makeWith(enabled, System.out, System.err)
+  def make(enabled: Boolean): ProgressDisplay = makeWith(enabled, System.out, System.err, None)
 
   /** Test-only factory that injects the bar-redraw (`out`) and defect (`err`) streams so suites can capture output
-    * without mutating process-global `System.out` / `System.err`. Production code uses [[make]] / [[live]].
+    * without mutating process-global `System.out` / `System.err`, and the optional global bar channel. Production code
+    * uses [[make]] / [[live]].
     */
-  private[utils] def makeWith(enabled: Boolean, out: PrintStream, err: PrintStream): ProgressDisplay =
-    new ProgressDisplay(enabled, out, err)
+  private[ccas] def makeWith(
+    enabled: Boolean,
+    out: PrintStream,
+    err: PrintStream,
+    globalChannel: Option[BarChannel]
+  ): ProgressDisplay =
+    new ProgressDisplay(enabled, out, err, globalChannel)
 
   /** Provides a `ProgressDisplay` service AND replaces ZIO's default console logger with the progress-display
     * `ZLogger` for the layer's scope. ZIO's default console logger is therefore inactive while this layer is alive —
@@ -218,8 +369,9 @@ object ProgressDisplay {
   private[utils] def liveWith(showProgress: Boolean, out: PrintStream, err: PrintStream): URLayer[Scope, ProgressDisplay] =
     Runtime.removeDefaultLoggers ++ ZLayer.scoped {
       for {
+        channel <- SubscriptionRef.make(Map.empty[Int, BarSnapshot])
         d <- ZIO.acquireRelease(
-          ZIO.succeed(makeWith(showProgress, out, err))
+          ZIO.succeed(makeWith(showProgress, out, err, Some(channel)))
         )(d => ZIO.succeed(d.finishAllSync()))
         _ <- ZIO.withLoggerScoped(d.asZLogger)
       } yield d

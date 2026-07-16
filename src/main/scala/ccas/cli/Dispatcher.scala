@@ -40,8 +40,14 @@ object Dispatcher {
     CcasApiClient
       .live(cmd.server)
       .flatMap(api =>
-        runCommand(api, JobFollower(api, MaxJobWait, ReconnectBackoff, MaxReconnects), cmd, currentClub)
-          .tap(_ => refreshClubsCache(api))
+        // Bars render only on an interactive terminal (hasTty) and unless `--no-progress` was passed; piped/redirected
+        // output stays plain lines regardless.
+        runCommand(
+          api,
+          JobFollower(api, MaxJobWait, ReconnectBackoff, MaxReconnects, showProgress = hasTty && !noProgressFor(cmd)),
+          cmd,
+          currentClub
+        ).tap(_ => refreshClubsCache(api))
       )
       .provide(Client.default)
       .catchAll {
@@ -55,6 +61,16 @@ object Dispatcher {
 
   private def rootMessage(e: Throwable): String =
     Option(e.getMessage).getOrElse(e.getClass.getSimpleName)
+
+  // Whether `--no-progress` was set — only the job-following commands carry the flag; the rest never draw bars.
+  private def noProgressFor(cmd: CliCommand.ServerCommand): Boolean = cmd match {
+    case c: CliCommand.Membership => c.noProgress
+    case c: CliCommand.History    => c.noProgress
+    case c: CliCommand.Recruit    => c.noProgress
+    case c: CliCommand.Stats      => c.noProgress
+    case c: CliCommand.Logs       => c.noProgress
+    case _                        => false
+  }
 
   // Best-effort, staleness-gated refresh of the completion club-slug cache after a successful command. Fully ignored:
   // it never blocks the result or alters the exit code (the `.tap` runs only on the success channel).
@@ -75,23 +91,27 @@ object Dispatcher {
     cmd: CliCommand.ServerCommand,
     currentClub: Option[String]
   ): Task[Int] = cmd match {
-    case CliCommand.Membership(_, clubs, all, trust) =>
+    case CliCommand.Membership(_, clubs, all, trust, _) =>
       resolveClubs(api, clubs, all, currentClub).flatMap(slugs =>
-        api.postJson[MembershipRequest, List[ClubJobResult]](
-          "/api/jobs/membership",
-          MembershipRequest(slugs, trust)
-        ).flatMap(follower.handleBatch)
+        followEachClub(follower, slugs)(slug =>
+          api.postJson[MembershipRequest, List[ClubJobResult]](
+            "/api/jobs/membership",
+            MembershipRequest(NonEmptyChunk.single(slug), trust)
+          )
+        )
       )
 
-    case CliCommand.History(_, clubs, all, full, includeFinished, refresh, refreshMinHours) =>
+    case CliCommand.History(_, clubs, all, full, includeFinished, refresh, refreshMinHours, _) =>
       resolveClubs(api, clubs, all, currentClub).flatMap(slugs =>
-        api.postJson[HistoryRequest, List[ClubJobResult]](
-          "/api/jobs/history",
-          HistoryRequest(slugs, flag(full), flag(includeFinished), flag(refresh), refreshMinHours)
-        ).flatMap(follower.handleBatch)
+        followEachClub(follower, slugs)(slug =>
+          api.postJson[HistoryRequest, List[ClubJobResult]](
+            "/api/jobs/history",
+            HistoryRequest(NonEmptyChunk.single(slug), flag(full), flag(includeFinished), flag(refresh), refreshMinHours)
+          )
+        )
       )
 
-    case CliCommand.Recruit(_, club, alias, target, cumulative, sourceClubs, timeLimitMinutes, explore, stdout, report, runId) =>
+    case CliCommand.Recruit(_, club, alias, target, cumulative, sourceClubs, timeLimitMinutes, explore, stdout, report, runId, _) =>
       // Guard the read-only flag: a run-id argument without `--report` would otherwise be silently dropped and launch
       // a fresh scout — and with `--stdout` it would auto-confirm that scout's invites. Fail before submitting.
       if (runId.isDefined && !report) { ZIO.fail(CliError("a run id can only be given with --report", 2)) }
@@ -121,7 +141,7 @@ object Dispatcher {
         )
       }
 
-    case CliCommand.Stats(_, club, since, until) =>
+    case CliCommand.Stats(_, club, since, until, _) =>
       resolveClub(club, currentClub).flatMap(slug =>
         api.postJson[StatsRequest, ClubJobResult](
           "/api/jobs/stats",
@@ -132,7 +152,7 @@ object Dispatcher {
     case CliCommand.Jobs(_, limit) =>
       api.getJson[List[JobStatusResponse]]("/api/jobs").flatMap(all => printJobs(limit.fold(all)(all.take)).as(0))
 
-    case CliCommand.Logs(_, jobId) =>
+    case CliCommand.Logs(_, jobId, _) =>
       follower.followJob(jobId)
 
     case CliCommand.BlacklistAdd(_, club, usernames, reason, months) =>
@@ -193,6 +213,26 @@ object Dispatcher {
     else {
       ZIO.foreachDiscard(clubs)(c => Console.printLine(s"${c.slug}  ${c.name}  marked=${c.markedAt}").orDie)
     }
+
+  // Run each club through submit-then-follow ONE at a time, so a multi-club (`--all`) run streams each club's logs and
+  // bars live in turn rather than following the first while the rest run blind and dump their logs at the end. The next
+  // club isn't submitted until the current one's follow completes; overall exit is 0 only if every club succeeded. Each
+  // `submitOne` posts a single-club job (the batch routes accept a one-element list) whose result `handleBatch` follows.
+  // Near-free vs concurrent submission: the shared Chess.com client is gate-bound, so total wall-clock is ~unchanged.
+  //
+  // Each club is best-effort: a submit / transport failure (a 4xx/5xx or a dropped connection for one club) is caught,
+  // reported, and scored as a failure for that club WITHOUT aborting the rest — matching `handleBatch`'s handling of
+  // per-club errors in a 200 body, and preserving the old batch design's "every club still runs" property.
+  private def followEachClub(follower: JobFollower, slugs: NonEmptyChunk[ClubSlug])(
+    submitOne: ClubSlug => Task[List[ClubJobResult]]
+  ): Task[Int] =
+    ZIO
+      .foreach(slugs.toChunk.toList)(slug =>
+        submitOne(slug)
+          .flatMap(follower.handleBatch)
+          .catchAll(e => Console.printLineError(s"${ClubSlug.unwrap(slug)}: ${rootMessage(e)}").orDie.as(1))
+      )
+      .map(codes => if (codes.forall(_ == 0)) { 0 } else { 1 })
 
   // Resolution lives in the pure, testable `ClubResolver`; the `--all` expansion's network call is injected here.
   private def resolveClub(explicit: Option[String], currentClub: Option[String]): IO[CliError, ClubSlug] =

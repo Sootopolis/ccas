@@ -50,28 +50,33 @@ object CompletionSpec {
     Leaf(List("use-club"), Nil, Nil, Slug),
     Leaf(
       List("membership"),
-      List(server, "--trust-usernames", "--no-trust-usernames", clubFlag, "--all"),
+      List(server, "--trust-usernames", "--no-trust-usernames", clubFlag, "--all", "--no-progress"),
       List(server, clubFlag),
       NoArgs
     ),
     Leaf(
       List("history"),
-      List(server, "--full", "--include-finished", "--refresh", "--refresh-min-hours", clubFlag, "--all"),
+      List(server, "--full", "--include-finished", "--refresh", "--refresh-min-hours", clubFlag, "--all", "--no-progress"),
       List(server, "--refresh-min-hours", clubFlag),
       NoArgs
     ),
     Leaf(
       List("recruit"),
       List(server, "--alias", "--target", "--cumulative", "--source-clubs", "--time-limit-minutes", "--explore",
-        "--no-explore", clubFlag, "--stdout", "--report"),
+        "--no-explore", clubFlag, "--stdout", "--report", "--no-progress"),
       List(server, "--alias", "--target", "--source-clubs", "--time-limit-minutes", clubFlag),
       // `--report`'s optional `[run-id]` is a bare numeric positional with nothing to complete, so NoArgs (suggest
       // nothing) is the right shell behavior.
       NoArgs
     ),
-    Leaf(List("stats"), List(server, "--since", "--until", clubFlag), List(server, "--since", "--until", clubFlag), NoArgs),
+    Leaf(
+      List("stats"),
+      List(server, "--since", "--until", clubFlag, "--no-progress"),
+      List(server, "--since", "--until", clubFlag),
+      NoArgs
+    ),
     Leaf(List("jobs"), List(server, "--limit"), List(server, "--limit"), NoArgs),
-    Leaf(List("logs"), List(server), List(server), JobId),
+    Leaf(List("logs"), List(server, "--no-progress"), List(server), JobId),
     Leaf(
       List("blacklist", "add"),
       List(server, "--reason", "--months", clubFlag),

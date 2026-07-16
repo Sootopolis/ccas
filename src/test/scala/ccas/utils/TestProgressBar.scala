@@ -2,6 +2,7 @@ package ccas.utils
 
 import java.io.{ByteArrayOutputStream, PrintStream}
 
+import zio.stream.SubscriptionRef
 import zio.{LogLevel, Promise, Ref, ZIO}
 import zio.test.{assertCompletes, assertTrue, Spec, ZIOSpecDefault}
 
@@ -16,6 +17,8 @@ object TestProgressBar extends ZIOSpecDefault {
     testDisplayMultipleBars,
     testDisabledBarIsNoOp,
     testDisabledBarRemovedFromList,
+    testRenderPublishesRawSnapshotToChannel,
+    testMultiLineBarsUseCursorUp,
     testLogAboveBarsRoutesThroughDisplay,
     testZioLogInfoRoutesThroughLiveLogger,
     testCurrentLogLevelFiltersDebug,
@@ -43,7 +46,7 @@ object TestProgressBar extends ZIOSpecDefault {
     ZIO.suspendSucceed {
       val baos    = new ByteArrayOutputStream
       val ps      = new PrintStream(baos, true, "UTF-8")
-      val display = ProgressDisplay.makeWith(enabled, ps, ps)
+      val display = ProgressDisplay.makeWith(enabled, ps, ps, None)
       val sink    = new JobLogSink { override def writeConsoleSync(line: String): Unit = ps.println(line) }
       use(display, sink).map { a =>
         ps.flush()
@@ -193,6 +196,59 @@ object TestProgressBar extends ZIOSpecDefault {
         empty  <- ZIO.succeed(display.barCount)
       } yield assertTrue(after3 == 3, empty == 0)
     }.map(_._1)
+  }
+
+  /** A bar created under an active [[ProgressDisplay.currentChannel]] (as `JobRunner` sets per job) mirrors its raw,
+    * unrendered `current` / `total` / `text` into that channel on each `print` — keyed by bar id — and drops the key on
+    * `finish`. This is the state `GET /api/jobs/{id}/progress` streams. Uses a disabled display: publishing is
+    * independent of terminal drawing, so no capture stream is needed.
+    */
+  private def testRenderPublishesRawSnapshotToChannel =
+    test("bar print publishes a raw snapshot to the active channel; finish drops it") {
+      val display = ProgressDisplay.makeWith(enabled = false, System.out, System.err, None)
+      for {
+        channel <- SubscriptionRef.make(Map.empty[Int, BarSnapshot])
+        afterPrint <- ProgressDisplay.currentChannel.locally(Some(channel)) {
+          ZIO.scoped {
+            for {
+              bar  <- display.addBarScoped
+              _    <- bar.print(3, 12, "  Working")
+              snap <- channel.get
+            } yield snap
+          }
+        }
+        afterFinish <- channel.get
+      } yield assertTrue(
+        afterPrint.size == 1,
+        afterPrint.values.head == BarSnapshot(afterPrint.keys.head, 3, 12, "  Working"),
+        afterFinish.isEmpty
+      )
+    }
+
+  /** Two bars draw on their own lines (a `\n` between them), and re-rendering a two-line block moves the cursor up over
+    * it (`ESC[1A`) before repainting — the multi-line behaviour that replaced the old single `\r`-line. `ESC` is built
+    * via `27.toChar` here (no source escape), matching the display.
+    */
+  private def testMultiLineBarsUseCursorUp = test("multiple bars draw on separate lines and redraw via cursor-up") {
+    withCapture(enabled = true) { (display, _) =>
+      ZIO.scoped {
+        for {
+          b1 <- display.addBarScoped
+          b2 <- display.addBarScoped
+          _  <- b1.print(1, 10, "Alpha")
+          _  <- b2.print(2, 10, "Beta") // now a two-line block
+          _  <- b1.print(3, 10, "Alpha") // redraw => cursor up over the two lines
+        } yield ()
+      }
+    }.map { case (_, out) =>
+      val esc = 27.toChar.toString
+      assertTrue(
+        out.contains("Alpha"),
+        out.contains("Beta"),
+        out.contains("\n"),          // bars occupy their own lines
+        out.contains(s"$esc[1A")     // moved up one row to repaint the two-line block
+      )
+    }
   }
 
   private def testLogAboveBarsRoutesThroughDisplay = test("logAboveBarsSync interleaves above the active bar") {

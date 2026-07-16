@@ -6,6 +6,7 @@ import zio.json.*
 import zio.stream.{ZPipeline, ZStream}
 
 import ccas.server.jobs.JobLogStream
+import ccas.utils.ProgressSnapshot
 import ccas.utils.errors.ErrorResponse
 
 /** Thin HTTP client to a local `CcasServer`. Every method fails with [[CliError]] (carrying an exit code) so the
@@ -22,6 +23,12 @@ trait CcasApiClient {
     * follow a job's live log output; scoped internally so callers need no `Scope`.
     */
   def streamLines(path: String)(onLine: String => UIO[Unit]): Task[Unit]
+
+  /** Stream a job's `/progress` NDJSON endpoint, invoking `onFrame` for each decoded [[ProgressSnapshot]]. A line that
+    * fails to decode is skipped (never fails the stream) — bar rendering is best-effort. Transport errors propagate as
+    * for [[streamLines]]; the follow path treats them as non-fatal (bars just stop).
+    */
+  def streamProgress(path: String)(onFrame: ProgressSnapshot => UIO[Unit]): Task[Unit]
 }
 
 object CcasApiClient {
@@ -121,5 +128,10 @@ object CcasApiClient {
               }
           }
       } yield ()
+
+    // Each `/progress` line is one `ProgressSnapshot` JSON object; a decode failure (should never happen) is dropped so
+    // a malformed frame can't kill live bar rendering. `streamLines` already filters the keepalive frames.
+    override def streamProgress(path: String)(onFrame: ProgressSnapshot => UIO[Unit]): Task[Unit] =
+      streamLines(path)(line => ZIO.fromEither(line.fromJson[ProgressSnapshot]).foldZIO(_ => ZIO.unit, onFrame))
   }
 }
