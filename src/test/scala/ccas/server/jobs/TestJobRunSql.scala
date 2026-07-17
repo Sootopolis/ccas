@@ -21,7 +21,9 @@ object TestJobRunSql extends ZIOSpecDefault {
     testSelectRunningForUpdateNullClub,
     testSelectRunningForUpdateIgnoresNonRunning,
     testSelectRecentOrdering,
-    testMarkOrphansAsFailed
+    testMarkOrphansAsFailed,
+    testMarkCancelledFlipsRunning,
+    testMarkCancelledIgnoresTerminal
   ).provideShared(
     FreshSchemaLayer("test_job_run", onInit = ServerTables.ensureTables)
   ) @@ TestAspect.sequential
@@ -178,7 +180,7 @@ object TestJobRunSql extends ZIOSpecDefault {
       _     <- JobRun.insert(running1)
       _     <- JobRun.insert(running2)
       _     <- JobRun.insert(completed)
-      count <- JobRun.markOrphansAsFailed
+      count <- JobRun.markOrphansAsFailed(Times.t2)
       r0    <- JobRun.selectId(id0)
       r1    <- JobRun.selectId(id1)
       r2    <- JobRun.selectId(id2)
@@ -186,8 +188,39 @@ object TestJobRunSql extends ZIOSpecDefault {
       count == 2,
       r0.get.status == JobRunStatus.Failed,
       r0.get.error.contains("Service restarted"),
+      r0.get.completedAt.contains(Times.t2),
       r1.get.status == JobRunStatus.Failed,
       r2.get.status == JobRunStatus.Completed
     )
   }
+
+  private def testMarkCancelledFlipsRunning = test("markCancelled marks a Running job Cancelled with completedAt + error") {
+    for {
+      _      <- deleteAll
+      _      <- JobRun.insert(run0) // Running
+      count  <- JobRun.markCancelled(id0, Times.t1)
+      result <- JobRun.selectId(id0)
+    } yield assertTrue(
+      count == 1,
+      result.get.status == JobRunStatus.Cancelled,
+      result.get.completedAt.contains(Times.t1),
+      result.get.error.contains("Cancelled by operator")
+    )
+  }
+
+  private def testMarkCancelledIgnoresTerminal =
+    test("markCancelled is a no-op on an already-terminal job (guards against clobbering Completed/Failed)") {
+      val completed =
+        JobRun(id0, JobKind.Recruitment, None, RunTrigger.Cli, JobRunStatus.Completed, None, Times.t0, Some(Times.t1), None)
+      for {
+        _      <- deleteAll
+        _      <- JobRun.insert(completed)
+        count  <- JobRun.markCancelled(id0, Times.t1)
+        result <- JobRun.selectId(id0)
+      } yield assertTrue(
+        count == 0,
+        result.get.status == JobRunStatus.Completed,
+        result.get.error.isEmpty
+      )
+    }
 }

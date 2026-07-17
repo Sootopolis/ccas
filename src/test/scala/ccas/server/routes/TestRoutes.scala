@@ -73,6 +73,17 @@ object TestRoutes extends ZIOSpecDefault {
     override def status(id: JobRunId): RIO[PostgresClient, Option[JobRun]] =
       jobs.get.map(_.get(id))
 
+    // Flip a stored Running job to Cancelled (returns true); unknown or already-terminal → false. Enough to pin the
+    // cancel route's 200/404 without the real fiber-interrupt mechanics (covered against JobRunner.live in TestJobRunner).
+    override def cancel(id: JobRunId): UIO[Boolean] =
+      jobs.modify { m =>
+        m.get(id) match {
+          case Some(job) if job.status == JobRunStatus.Running =>
+            (true, m + (id -> job.copy(status = JobRunStatus.Cancelled, completedAt = Some(Instant.now()))))
+          case _ => (false, m)
+        }
+      }
+
     override def recentJobs(limit: Int): RIO[PostgresClient, List[JobRun]] =
       jobs.get.map(_.values.toList.sortBy(_.startedAt)(using Ordering[Instant].reverse).take(limit))
 
@@ -152,6 +163,8 @@ object TestRoutes extends ZIOSpecDefault {
     testGetJobsReturnsList,
     testGetJobByIdReturns200,
     testGetJobByIdReturns404,
+    testCancelJobReturns200,
+    testCancelJobReturns404,
     testGetJobLogsReturns200,
     testGetJobLogsReturns404,
     testGetJobProgressReturns200,
@@ -376,6 +389,38 @@ object TestRoutes extends ZIOSpecDefault {
   private def testGetJobByIdReturns404 = test("GET /api/jobs/:id returns 404 for unknown") {
     for {
       response <- JobRoutes.routes.runZIO(jsonRequest(Method.GET, "/api/jobs/nonexistent"))
+    } yield assertTrue(response.status == Status.NotFound)
+  }
+
+  private def testCancelJobReturns200 = test("POST /api/jobs/:id/cancel returns 200 and cancels a running job") {
+    val t0 = LocalDateTime.of(2025, 6, 1, 0, 0).toInstant(ZoneOffset.UTC)
+    val job = JobRun(
+      id = JobRunId.wrap("cancel-id"),
+      kind = JobKind.Membership,
+      clubId = None,
+      trigger = RunTrigger.Cli,
+      status = JobRunStatus.Running,
+      params = None,
+      startedAt = t0,
+      completedAt = None,
+      error = None
+    )
+    for {
+      fake     <- getFakeRunner
+      _        <- fake.prePopulate(job)
+      response <- JobRoutes.routes.runZIO(jsonRequest(Method.POST, "/api/jobs/cancel-id/cancel"))
+      body     <- response.body.asString
+      after    <- fake.status(JobRunId.wrap("cancel-id"))
+    } yield assertTrue(
+      response.status == Status.Ok,
+      body.contains("cancel-id"),
+      after.exists(_.status == JobRunStatus.Cancelled)
+    )
+  }
+
+  private def testCancelJobReturns404 = test("POST /api/jobs/:id/cancel returns 404 for an unknown or terminal job") {
+    for {
+      response <- JobRoutes.routes.runZIO(jsonRequest(Method.POST, "/api/jobs/nonexistent/cancel"))
     } yield assertTrue(response.status == Status.NotFound)
   }
 

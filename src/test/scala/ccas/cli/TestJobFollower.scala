@@ -92,6 +92,12 @@ object TestJobFollower extends ZIOSpecDefault {
         code   <- follower.followJob("job-1")
       } yield assertTrue(code == 1)
     },
+    test("followJob returns 1 when the job was cancelled") {
+      for {
+        follower <- followerWith("Cancelled", Some("Cancelled by operator"), List("partial output"))
+        code     <- follower.followJob("job-1")
+      } yield assertTrue(code == 1)
+    },
     test("followJob with progress bars on forks the progress consumer, follows, and completes cleanly") {
       // showProgress = true takes the bars branch: build a client ProgressDisplay, fork the (empty) /progress consumer,
       // follow the log stream through the display, then tear the consumer down and clear bars on completion. Asserts the

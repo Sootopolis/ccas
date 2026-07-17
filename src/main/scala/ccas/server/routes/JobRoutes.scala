@@ -100,6 +100,13 @@ object JobRoutes {
     given JsonCodec[ConfirmResult] = DeriveJsonCodec.gen
   }
 
+  /** Result of a cancel request: `jobId` echoed back. A 200 means the interrupt was dispatched to a live job fiber
+    * ("cancellation requested"); a missing / already-terminal job is a 404 instead. */
+  private[ccas] case class CancelResult(jobId: String)
+  object CancelResult {
+    given JsonCodec[CancelResult] = DeriveJsonCodec.gen
+  }
+
   private[ccas] case class JobStatusResponse(
     id: String,
     kind: String,
@@ -267,6 +274,19 @@ object JobRoutes {
         case Some(job) => jsonResponse(Status.Ok, JobStatusResponse.fromJobRun(job))
         case None      => jsonResponse(Status.NotFound, ErrorResponse(s"Job $jobId not found"))
       }).pipe(withErrorHandling)
+    },
+    // Request cancellation of a running job: interrupt its fiber (best-effort, async — the job records `Cancelled`
+    // itself as it unwinds). 200 if a live job fiber was found and interrupted; 404 if the id is unknown, already
+    // terminal, or (unsupported multi-server) owned by another instance. POST, not DELETE: the row is retained, this
+    // is a state transition, not a resource removal.
+    Method.POST / "api" / "jobs" / string("jobId") / "cancel" -> handler { (jobId: String, _: Request) =>
+      (for {
+        runner    <- ZIO.service[JobRunner]
+        cancelled <- runner.cancel(JobRunId.wrap(jobId))
+      } yield
+        if (cancelled) { jsonResponse(Status.Ok, CancelResult(jobId)) }
+        else { jsonResponse(Status.NotFound, ErrorResponse(s"No running job $jobId to cancel")) }
+      ).pipe(withErrorHandling)
     },
     // Chunked `text/plain` stream of a job's log lines. Stays open while the job runs (lines arrive as emitted) and
     // closes once the job is terminal and the tail reaches EOF, so a client can treat body-close as "job finished".

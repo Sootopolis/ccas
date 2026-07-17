@@ -11,6 +11,7 @@ import ccas.api.player.ApiPlayer
 import ccas.server.routes.BlacklistRoutes.{BlacklistEntryResponse, CreateBlacklistRequest}
 import ccas.server.routes.ManagedClubRoutes.{ManagedClubResponse, MarkManagedRequest}
 import ccas.server.routes.JobRoutes.{
+  CancelResult,
   ClubJobResult,
   ConfirmResult,
   HistoryRequest,
@@ -154,6 +155,12 @@ object Dispatcher {
 
     case CliCommand.Logs(_, jobId, _) =>
       follower.followJob(jobId)
+
+    // A 404 (no running job to cancel) surfaces via the client's decode path as a CliError, rendered by `dispatch`'s
+    // catchAll as "error: …" with exit 1 — so success here means the interrupt was dispatched.
+    case CliCommand.Cancel(_, jobId) =>
+      api.postEmpty[CancelResult](s"/api/jobs/$jobId/cancel")
+        .flatMap(_ => Console.printLine(s"cancellation requested for job $jobId").orDie.as(0))
 
     case CliCommand.BlacklistAdd(_, club, usernames, reason, months) =>
       resolveClub(club, currentClub).flatMap(slug =>

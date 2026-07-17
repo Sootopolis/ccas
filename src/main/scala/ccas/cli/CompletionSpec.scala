@@ -77,6 +77,7 @@ object CompletionSpec {
     ),
     Leaf(List("jobs"), List(server, "--limit"), List(server, "--limit"), NoArgs),
     Leaf(List("logs"), List(server, "--no-progress"), List(server), JobId),
+    Leaf(List("cancel"), List(server), List(server), JobId),
     Leaf(
       List("blacklist", "add"),
       List(server, "--reason", "--months", clubFlag),
@@ -120,7 +121,7 @@ object CompletionSpec {
 
   /** Top-level subcommand names, in tree order (matches `CliCommand.command(...).subcommands`). */
   val topLevel: List[String] =
-    List("server", "use-club", "membership", "history", "recruit", "stats", "jobs", "logs",
+    List("server", "use-club", "membership", "history", "recruit", "stats", "jobs", "logs", "cancel",
       "blacklist", "schedule", "club", "config", "completion")
 
   /** Flags available on every command. */
@@ -154,6 +155,7 @@ object CompletionSpec {
     List("stats")               -> "Submit a club performance-stats job",
     List("jobs")                -> "List recent jobs and their status",
     List("logs")                -> "Poll a job's status and logs until it finishes",
+    List("cancel")              -> "Request cancellation of a running job (the job stops as soon as it reaches an interruptible point)",
     List("completion")          -> "Emit a shell completion script (bash, zsh, or fish)",
     List("club", "add")         -> "Mark a club as one you manage with CCAS",
     List("club", "remove")      -> "Remove a club from the ones you manage",
