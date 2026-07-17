@@ -57,6 +57,7 @@ sbt "runMain ccas.cli.Main server up"     # boots CcasServer on 127.0.0.1:8080
 # Terminal 2 — commands. No environment needed; they just call the server.
 ccas use-club team-alpha          # set the current club once…
 ccas jobs
+ccas cancel <job-id>              # request cancellation of a running job
 ccas membership                   # …then commands target it with no slug
 ccas membership --club team-beta  # override for one command
 ccas membership --all             # every managed club
@@ -66,7 +67,9 @@ ccas --help              # full command tree
 ccas <command> --help    # per-command flags
 ```
 
-Commands: `server {up|down|status}`, `use`, `membership`, `history`, `recruit`, `stats`, `jobs`, `logs`, `blacklist {add|list|remove}`, `schedule {list|add|remove}`, `club {add|remove|list}`.
+Commands: `server {up|down|status}`, `use`, `membership`, `history`, `recruit`, `stats`, `jobs`, `logs`, `cancel`, `blacklist {add|list|remove}`, `schedule {list|add|remove}`, `club {add|remove|list}`.
+
+**Cancelling a job.** `ccas cancel <job-id>` requests cancellation of a running job — it interrupts the job's fiber on the server, which records the run as `Cancelled`. Cancellation is best-effort: an in-flight blocking database statement runs to completion first, so the job stops at its next interruptible point rather than instantly. A cancelled recruitment run leaves the candidates it found so far as **deferred** (nothing invited), so you can review and confirm them afterwards. Cancel is single-server-scoped — it reaches jobs running on the server it is sent to.
 
 **Club targeting.** Slug-requiring commands take the club via `--club <slug>` rather than a positional argument; `membership`/`history` accept a comma-separated `--club a,b` or `--all` (every managed club) — but not both at once (`--all` with `--club` is rejected as a likely mistake). When neither is given, the command falls back to the **current club** set with `ccas use-club <slug>` (stored as `current_club` in the [config file](#cli-config-file)); an explicit `--club`/`--all` always wins. `ccas use-club` is a local config write — no server call — so it works offline and only warns (does not reject) if the slug isn't among the cached clubs.
 
@@ -92,7 +95,7 @@ The detached server writes its pid to `${XDG_STATE_HOME:-~/.local/state}/ccas/cc
 
 ### Shell completion
 
-`ccas completion <bash|zsh|fish>` prints a self-contained, **pure-shell** completion script. It boots the JVM once when you install it; afterwards every `<TAB>` runs entirely in the shell (no JVM, no network), so completion is instant. The scripts complete subcommands and flags, plus **club slugs** (after `--club`, and for the `ccas use-club` argument) and **recent job ids** (for `ccas logs`) read from cache files.
+`ccas completion <bash|zsh|fish>` prints a self-contained, **pure-shell** completion script. It boots the JVM once when you install it; afterwards every `<TAB>` runs entirely in the shell (no JVM, no network), so completion is instant. The scripts complete subcommands and flags, plus **club slugs** (after `--club`, and for the `ccas use-club` argument) and **recent job ids** (for `ccas logs` and `ccas cancel`) read from cache files.
 
 ```bash
 # bash — install once (bash-completion auto-loads it)

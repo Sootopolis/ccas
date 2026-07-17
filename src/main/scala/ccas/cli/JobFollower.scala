@@ -175,6 +175,9 @@ final class JobFollower(
       job.status match {
         case "Completed" => ZIO.succeed(0)
         case "Failed"    => Console.printLineError(s"$jobId failed: ${job.error.getOrElse("unknown error")}").orDie.as(1)
+        // A followed job cancelled out from under us (e.g. `ccas cancel` from another terminal): a clean terminal
+        // outcome, not an "unexpected status". Non-zero — the job did not complete.
+        case "Cancelled" => Console.printLineError(s"$jobId was cancelled").orDie.as(1)
         case other       => Console.printLineError(s"$jobId: unexpected status '$other'").orDie.as(1)
       }
     }

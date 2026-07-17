@@ -73,6 +73,11 @@ object TestCliParser extends ZIOSpecDefault {
         assertTrue(c.contains(CliCommand.Jobs("http://example:9000", None)))
       )
     },
+    test("cancel parses the jobId (options before the positional)") {
+      parsed("cancel", "--server", "http://example:9000", "job-123").map(c =>
+        assertTrue(c.contains(CliCommand.Cancel("http://example:9000", "job-123")))
+      )
+    },
     test("config api_url becomes the default when --server is absent") {
       serverOf("http://config:1234")("jobs").map(s => assertTrue(s.contains("http://config:1234")))
     },

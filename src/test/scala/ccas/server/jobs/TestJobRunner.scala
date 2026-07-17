@@ -29,6 +29,9 @@ object TestJobRunner extends ZIOSpecDefault {
     testSubmitAllowsDifferentClub,
     testSubmitAllowsDifferentKind,
     testStatusUnknown,
+    testCancelInterruptsRunningJob,
+    testCancelUnknownReturnsFalse,
+    testNonOperatorInterruptDoesNotMarkCancelled,
     testRecentJobsOrdered,
     testSubmitWritesJobLog,
     testLogStreamReplaysCompletedJob,
@@ -161,6 +164,47 @@ object TestJobRunner extends ZIOSpecDefault {
       result <- runner.status(JobRunId.wrap("nonexistent"))
     } yield assertTrue(result.isEmpty)
   }
+
+  private def testCancelInterruptsRunningJob = test("cancel interrupts a running job and marks it Cancelled") {
+    for {
+      _       <- deleteAllJobRuns
+      runner  <- ZIO.service[JobRunner]
+      started <- Promise.make[Nothing, Unit]
+      // The job announces it is running, then blocks forever — so it is unambiguously live when we cancel.
+      id  <- runner.submit(JobKind.MatchRef, None, None, RunTrigger.Cli, _ => started.succeed(()) *> ZIO.never)
+      _   <- started.await
+      cancelled <- runner.cancel(id)
+      job       <- awaitStatus(runner, id) // returns once the job leaves Running (here: Cancelled via onInterrupt)
+    } yield assertTrue(
+      cancelled,
+      job.status == JobRunStatus.Cancelled,
+      job.completedAt.isDefined,
+      job.error.exists(_.contains("Cancelled"))
+    )
+  }
+
+  private def testCancelUnknownReturnsFalse = test("cancel returns false for unknown id") {
+    for {
+      runner <- ZIO.service[JobRunner]
+      result <- runner.cancel(JobRunId.wrap("does-not-exist"))
+    } yield assertTrue(!result)
+  }
+
+  // Guards the cancel-vs-shutdown distinction: the job interrupts ITSELF (stands in for the `layerScope` interrupt fired
+  // at every in-flight job on server shutdown), so no operator `cancel` ran and no id is in `cancelRequested`. The
+  // onInterrupt hook must therefore NOT write Cancelled — the row stays Running for the next boot's orphan sweep. Were
+  // the gate absent, this would flip to Cancelled/"Cancelled by operator", mislabeling a shutdown as an operator cancel.
+  private def testNonOperatorInterruptDoesNotMarkCancelled =
+    test("a job interrupted without an operator cancel is left Running, not marked Cancelled") {
+      for {
+        _      <- deleteAllJobRuns
+        runner <- ZIO.service[JobRunner]
+        id     <- runner.submit(JobKind.MatchRef, None, None, RunTrigger.Cli, _ => ZIO.interrupt)
+        // The fiber self-interrupts immediately; wait past its unwind + release, then confirm the row never left Running.
+        _   <- ZIO.sleep(300.millis)
+        job <- runner.status(id)
+      } yield assertTrue(job.exists(j => j.status == JobRunStatus.Running && j.completedAt.isEmpty))
+    }
 
   private def testSubmitWritesJobLog = test("submit routes job log lines into the per-job file") {
     val logDir = Paths.get(ConfigFactory.load().getString("job-logs.directory"))

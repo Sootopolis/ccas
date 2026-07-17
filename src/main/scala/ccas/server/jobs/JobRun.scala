@@ -95,11 +95,25 @@ object JobRun {
              WHERE id = $id""".update.run()
     }
 
-  def markOrphansAsFailed: ZIO[PostgresClient, SQLException, Int] =
+  // `completedAt` is supplied by the caller (from `Clock.instant`) rather than SQL `NOW()` so every job timestamp comes
+  // from the one testable app clock — consistent with `startedAt` / `updateStatus`, and skew-free against the DB host.
+  def markOrphansAsFailed(completedAt: Instant): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       val failed  = JobRunStatus.Failed
       val running = JobRunStatus.Running
-      sql"""UPDATE job_run SET status = $failed, completed_at = NOW(), error = 'Service restarted'
+      sql"""UPDATE job_run SET status = $failed, completed_at = $completedAt, error = 'Service restarted'
             WHERE status = $running""".update.run()
+    }
+
+  // Flip a job to Cancelled — the terminal write when an operator interrupts a running job (see JobRunner.cancel). The
+  // `WHERE status = Running` guard makes it a no-op if the job already reached Completed/Failed between the interrupt
+  // request and this write, so a cancel can never clobber a genuine terminal outcome. Returns rows affected (0 or 1).
+  // `completedAt` comes from the caller's `Clock.instant` for the same clock-consistency reason as `markOrphansAsFailed`.
+  def markCancelled(id: JobRunId, completedAt: Instant): ZIO[PostgresClient, SQLException, Int] =
+    connectZIO {
+      val cancelled = JobRunStatus.Cancelled
+      val running   = JobRunStatus.Running
+      sql"""UPDATE job_run SET status = $cancelled, completed_at = $completedAt, error = 'Cancelled by operator'
+            WHERE id = $id AND status = $running""".update.run()
     }
 }

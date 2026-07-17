@@ -89,6 +89,7 @@ object CliCommand {
   ) extends ServerCommand
   final case class Jobs(server: String, limit: Option[Int]) extends ServerCommand
   final case class Logs(server: String, jobId: String, noProgress: Boolean) extends ServerCommand
+  final case class Cancel(server: String, jobId: String) extends ServerCommand
   final case class BlacklistAdd(
     server: String,
     club: Option[String],
@@ -256,6 +257,11 @@ object CliCommand {
       .withHelp("Poll a job's status and logs until it finishes")
       .map { case ((server, noProgress), jobId) => Logs(server, jobId, noProgress) }
 
+  private def cancel(default: String): Command[CliCommand] =
+    Command("cancel", serverOpt(default), Args.text("jobId") ?? "Job run id to cancel")
+      .withHelp("Request cancellation of a running job (the job stops as soon as it reaches an interruptible point)")
+      .map { case (server, jobId) => Cancel(server, jobId) }
+
   private def blacklistAdd(default: String): Command[CliCommand] =
     Command(
       "add",
@@ -415,6 +421,7 @@ object CliCommand {
       stats(defaultServer),
       jobs(defaultServer),
       logs(defaultServer),
+      cancel(defaultServer),
       blacklist(defaultServer),
       schedule(defaultServer),
       clubs(defaultServer),

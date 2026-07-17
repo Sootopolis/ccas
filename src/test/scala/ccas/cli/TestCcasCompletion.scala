@@ -99,6 +99,7 @@ object TestCcasCompletion extends ZIOSpecDefault {
         positionalOf("history") == PositionalKind.NoArgs,
         positionalOf("recruit") == PositionalKind.NoArgs,
         positionalOf("logs") == PositionalKind.JobId,
+        positionalOf("cancel") == PositionalKind.JobId,
         positionalOf("completion") == PositionalKind.Shell,
         positionalOf("blacklist", "add") == PositionalKind.Other,
         positionalOf("config", "get") == PositionalKind.EnvKey,
