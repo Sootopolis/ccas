@@ -54,7 +54,8 @@ object CliCommand {
     clubs: List[String],
     all: Boolean,
     trustUsernames: Option[Boolean],
-    noProgress: Boolean
+    noProgress: Boolean,
+    detach: Boolean
   ) extends ServerCommand
   final case class History(
     server: String,
@@ -64,7 +65,8 @@ object CliCommand {
     includeFinished: Boolean,
     refresh: Boolean,
     refreshMinHours: Option[Int],
-    noProgress: Boolean
+    noProgress: Boolean,
+    detach: Boolean
   ) extends ServerCommand
   final case class Recruit(
     server: String,
@@ -85,7 +87,8 @@ object CliCommand {
     club: Option[String],
     since: Option[String],
     until: Option[String],
-    noProgress: Boolean
+    noProgress: Boolean,
+    detach: Boolean
   ) extends ServerCommand
   final case class Jobs(server: String, limit: Option[Int]) extends ServerCommand
   final case class Logs(server: String, jobId: String, noProgress: Boolean) extends ServerCommand
@@ -144,6 +147,11 @@ object CliCommand {
   private val noProgressOpt: Options[Boolean] =
     Options.boolean("no-progress") ?? "Don't render progress bars while following the job (plain log lines only)"
 
+  // Fire-and-forget: submit the job and return immediately without following it. Reattach later with `ccas logs <id>`.
+  // Not offered on `recruit` (its result delivery / invite confirmation needs the follow) or `logs` (which IS the follow).
+  private val detachOpt: Options[Boolean] =
+    Options.boolean("detach") ?? "Submit the job and return immediately without following it (reattach with 'ccas logs <id>')"
+
   private def intOpt(name: String): Options[Option[Int]] = Options.integer(name).map(_.toInt).optional
 
   // Single-club target. Absent → Dispatcher falls back to the config's `current_club`.
@@ -190,10 +198,10 @@ object CliCommand {
       .map(Use.apply)
 
   private def membership(default: String): Command[CliCommand] =
-    Command("membership", serverOpt(default) ++ trustOpt ++ clubsOpt ++ allOpt ++ noProgressOpt)
+    Command("membership", serverOpt(default) ++ trustOpt ++ clubsOpt ++ allOpt ++ noProgressOpt ++ detachOpt)
       .withHelp("Submit a membership-sync job (current club, --club a,b, or --all managed clubs)")
-      .map { case (server, trust, clubs, all, noProgress) =>
-        Membership(server, clubs, all, trust, noProgress)
+      .map { case (server, trust, clubs, all, noProgress, detach) =>
+        Membership(server, clubs, all, trust, noProgress, detach)
       }
 
   private def history(default: String): Command[CliCommand] =
@@ -204,10 +212,10 @@ object CliCommand {
         (Options.boolean("include-finished") ?? "Re-queue recently finished matches for refresh") ++
         (Options.boolean("refresh") ?? "Refresh already-stored matches, not just newly seen ones") ++
         (intOpt("refresh-min-hours") ?? "Skip refreshing a match seen within the last N hours") ++
-        clubsOpt ++ allOpt ++ noProgressOpt
+        clubsOpt ++ allOpt ++ noProgressOpt ++ detachOpt
     ).withHelp("Submit a match-history crawl job (current club, --club a,b, or --all managed clubs)")
-      .map { case (server, full, includeFinished, refresh, refreshMinHours, clubs, all, noProgress) =>
-        History(server, clubs, all, full, includeFinished, refresh, refreshMinHours, noProgress)
+      .map { case (server, full, includeFinished, refresh, refreshMinHours, clubs, all, noProgress, detach) =>
+        History(server, clubs, all, full, includeFinished, refresh, refreshMinHours, noProgress, detach)
       }
 
   private val sourceClubsOpt: Options[List[String]] =
@@ -243,9 +251,11 @@ object CliCommand {
       serverOpt(default) ++
         (Options.text("since").optional ?? "Start of the date window (ISO-8601 date or instant)") ++
         (Options.text("until").optional ?? "End of the date window (requires --since)") ++
-        clubOpt ++ noProgressOpt
+        clubOpt ++ noProgressOpt ++ detachOpt
     ).withHelp("Submit a club performance-stats job")
-      .map { case (server, since, until, club, noProgress) => Stats(server, club, since, until, noProgress) }
+      .map { case (server, since, until, club, noProgress, detach) =>
+        Stats(server, club, since, until, noProgress, detach)
+      }
 
   private def jobs(default: String): Command[CliCommand] =
     Command("jobs", serverOpt(default) ++ (intOpt("limit") ?? "Maximum number of recent jobs to list"))

@@ -2,7 +2,7 @@ package ccas.cli
 
 import zio.*
 
-import ccas.server.routes.JobRoutes.{ClubJobResult, JobResult, JobStatusResponse}
+import ccas.server.routes.JobRoutes.{CancelResult, ClubJobResult, JobResult, JobStatusResponse}
 
 /** Drives a submitted job to completion by **following its log stream** (`GET /api/jobs/{id}/logs`), printing each
   * line as it arrives. The server holds the response open until the job is terminal and the tail reaches EOF, so the
@@ -70,12 +70,32 @@ final class JobFollower(
   // Run the log follow (reconnecting across drops, bounded by `maxWait`) and return the raw outcome without printing any
   // terminal status: Some(Right)=EOF/terminal, Some(Left)=gave up after maxReconnects, None=timed out. `notice` sinks the
   // one-time reconnect message — stderr for the plain follow, `renderer.logLine` when bars are drawn.
+  //
+  // Ctrl-C during a follow cancels the server job (#170): the `.onInterrupt` is attached OUTSIDE `.timeout`, so a genuine
+  // `maxWait` expiry (which internally interrupts `follow` and returns `None` on the main path) does NOT trip it — only a
+  // real fiber interruption of this whole effect does. Both the plain and bars follow paths route through here, so the
+  // cancel hook covers both. It fires while the CLI's `Client` layer scope is still open (the follower runs inside it and
+  // finalizers unwind inner-to-outer), so the POST lands during teardown. Not scoped over `interpret`: once the stream
+  // reaches EOF the job is already terminal, so a Ctrl-C during the final status read has nothing to cancel.
   private def followResult(
     jobId: String,
     onLine: String => UIO[Unit],
     notice: String => UIO[Unit]
   ): Task[Option[Either[String, Unit]]] =
-    Ref.make(0).flatMap(printed => follow(jobId, onLine, printed, notice).timeout(maxWait))
+    Ref.make(0).flatMap(printed =>
+      follow(jobId, onLine, printed, notice).timeout(maxWait).onInterrupt(cancelOnInterrupt(jobId, notice))
+    )
+
+  // Best-effort cancel of the followed job when the follow is interrupted (Ctrl-C). The notice routes through the
+  // follow's `notice` sink — the render-lock-safe `renderer.logLine` in bars mode, stderr otherwise — so it can't tear a
+  // live bar line (this finalizer runs BEFORE `withBars`' `renderer.clear`, which is the outer `.onExit`). It emits
+  // first so the operator sees it even if the POST is slow or fails; the POST itself is `.ignore`d — a 404 (the job
+  // already reached a terminal state before the interrupt landed) or a transport error during teardown must not turn a
+  // clean Ctrl-C into a stack trace. Cancellation is best-effort/asynchronous server-side (an in-flight blocking
+  // statement runs to completion first), so this requests the cancel and returns — it does not wait for `Cancelled`.
+  private def cancelOnInterrupt(jobId: String, notice: String => UIO[Unit]): UIO[Unit] =
+    notice(s"$jobId: cancelling on interrupt…") *>
+      api.postEmpty[CancelResult](s"/api/jobs/$jobId/cancel").ignore
 
   // Map the follow outcome to an exit code, printing the terminal status. In bars mode this runs AFTER the bars are
   // cleared (see `withBars`), so the message can't be jammed onto a live bar line.

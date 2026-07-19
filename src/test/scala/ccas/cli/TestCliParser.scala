@@ -40,12 +40,12 @@ object TestCliParser extends ZIOSpecDefault {
   override def spec: Spec[Any, Any] = suite("TestCliParser")(
     test("membership parses comma-separated --club and defaults the server") {
       parsed("membership", "--club", "team-alpha,team-beta").map(c =>
-        assertTrue(c.contains(CliCommand.Membership(DefaultServer, List("team-alpha", "team-beta"), false, None, false)))
+        assertTrue(c.contains(CliCommand.Membership(DefaultServer, List("team-alpha", "team-beta"), false, None, false, false)))
       )
     },
     test("membership --all parses with no explicit clubs") {
       parsed("membership", "--all").map(c =>
-        assertTrue(c.contains(CliCommand.Membership(DefaultServer, Nil, true, None, false)))
+        assertTrue(c.contains(CliCommand.Membership(DefaultServer, Nil, true, None, false, false)))
       )
     },
     test("use-club parses the slug (local, no server)") {
@@ -89,16 +89,32 @@ object TestCliParser extends ZIOSpecDefault {
     // No slug and no --club/--all now PARSES (empty clubs); the "no club" error is raised later by the Dispatcher
     // against the config's current_club, not at parse time.
     test("membership with no club parses to empty clubs") {
-      parsed("membership").map(c => assertTrue(c.contains(CliCommand.Membership(DefaultServer, Nil, false, None, false))))
+      parsed("membership").map(c => assertTrue(c.contains(CliCommand.Membership(DefaultServer, Nil, false, None, false, false))))
     },
     test("--no-trust-usernames maps to Some(false)") {
       parsed("membership", "--no-trust-usernames", "--club", "team-alpha").map(c =>
-        assertTrue(c.contains(CliCommand.Membership(DefaultServer, List("team-alpha"), false, Some(false), false)))
+        assertTrue(c.contains(CliCommand.Membership(DefaultServer, List("team-alpha"), false, Some(false), false, false)))
       )
     },
     test("--no-progress sets the flag on a follow command") {
       parsed("membership", "--no-progress", "--club", "team-alpha").map(c =>
-        assertTrue(c.contains(CliCommand.Membership(DefaultServer, List("team-alpha"), false, None, true)))
+        assertTrue(c.contains(CliCommand.Membership(DefaultServer, List("team-alpha"), false, None, true, false)))
+      )
+    },
+    test("--detach sets the flag on membership/history/stats (#170)") {
+      for {
+        m <- parsed("membership", "--detach", "--club", "team-alpha")
+        h <- parsed("history", "--detach", "--club", "team-alpha")
+        s <- parsed("stats", "--detach", "--club", "team-alpha")
+      } yield assertTrue(
+        m.contains(CliCommand.Membership(DefaultServer, List("team-alpha"), false, None, false, true)),
+        h.contains(CliCommand.History(DefaultServer, List("team-alpha"), false, false, false, false, None, false, true)),
+        s.contains(CliCommand.Stats(DefaultServer, Some("team-alpha"), None, None, false, true))
+      )
+    },
+    test("stats defaults --detach to false") {
+      parsed("stats", "--club", "team-alpha").map(c =>
+        assertTrue(c.contains(CliCommand.Stats(DefaultServer, Some("team-alpha"), None, None, false, false)))
       )
     },
     test("recruit parses options, comma-separated source-clubs, and --club") {
@@ -132,7 +148,7 @@ object TestCliParser extends ZIOSpecDefault {
     },
     test("history flags parse") {
       parsed("history", "--full", "--include-finished", "--club", "team-alpha").map(c =>
-        assertTrue(c.contains(CliCommand.History(DefaultServer, List("team-alpha"), false, true, true, false, None, false)))
+        assertTrue(c.contains(CliCommand.History(DefaultServer, List("team-alpha"), false, true, true, false, None, false, false)))
       )
     },
     test("blacklist add parses usernames and options") {

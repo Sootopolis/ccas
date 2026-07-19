@@ -62,10 +62,10 @@ _ccas() {
         *) COMPREPLY=(); return ;;
       esac ;;
     use-club) pos="slug" ;;
-    membership) opts="--server --trust-usernames --no-trust-usernames --club --all --no-progress" ;;
-    history) opts="--server --full --include-finished --refresh --refresh-min-hours --club --all --no-progress" ;;
+    membership) opts="--server --trust-usernames --no-trust-usernames --club --all --no-progress --detach" ;;
+    history) opts="--server --full --include-finished --refresh --refresh-min-hours --club --all --no-progress --detach" ;;
     recruit) opts="--server --alias --target --cumulative --source-clubs --time-limit-minutes --explore --no-explore --club --stdout --report --no-progress" ;;
-    stats) opts="--server --since --until --club --no-progress" ;;
+    stats) opts="--server --since --until --club --no-progress --detach" ;;
     jobs) opts="--server --limit" ;;
     logs) opts="--server --no-progress"; pos="jobid" ;;
     cancel) opts="--server"; pos="jobid" ;;

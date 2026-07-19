@@ -63,6 +63,29 @@ object TestJobFollower extends ZIOSpecDefault {
     override def streamProgress(path: String)(onFrame: ccas.utils.ProgressSnapshot => UIO[Unit]): Task[Unit] = progress
   }
 
+  /** Stub that records every `postEmpty` (the cancel POST) path and drives `streamLines` via `stream`, so an interrupt
+    * test can assert whether following a job fired the cancel-on-interrupt POST (#170). `getJson` replays a fixed status.
+    * `postEmpty` returns a valid `CancelResult` body decoded through the caller's own `Resp` decoder (the follower
+    * `.ignore`s it anyway), so no `CancelResult` codec is needed here.
+    */
+  private final class CancelRecordingApi(
+    status: String,
+    cancelled: Ref[List[String]],
+    stream: (String => UIO[Unit]) => Task[Unit]
+  ) extends CcasApiClient {
+    override def getJson[Resp: JsonDecoder](path: String): Task[Resp] =
+      ZIO.fromEither(statusJson(status, None).fromJson[Resp]).mapError(m => CliError(s"stub decode failed: $m", 1))
+    override def streamLines(path: String)(onLine: String => UIO[Unit]): Task[Unit] = stream(onLine)
+    override def streamProgress(path: String)(onFrame: ccas.utils.ProgressSnapshot => UIO[Unit]): Task[Unit] = ZIO.unit
+    override def postEmpty[Resp: JsonDecoder](path: String): Task[Resp] =
+      cancelled.update(path :: _) *>
+        ZIO.fromEither("""{"jobId":"job-1"}""".fromJson[Resp]).mapError(m => CliError(s"stub decode failed: $m", 1))
+    override def postJson[Req: JsonEncoder, Resp: JsonDecoder](path: String, body: Req): Task[Resp] =
+      ZIO.die(new UnsupportedOperationException("postJson"))
+    override def postUnit[Req: JsonEncoder](path: String, body: Req): Task[Unit] = ZIO.unit
+    override def delete(path: String): Task[Unit]                                = ZIO.unit
+  }
+
   private def statusJson(status: String, error: Option[String]): String =
     JobStatusResponse("job-1", "Membership", status, None, "2026-01-01T00:00:00Z", None, error, "Cli").toJson
 
@@ -165,6 +188,34 @@ object TestJobFollower extends ZIOSpecDefault {
         code == 1,
         err.exists(line => line.contains("ccas logs job-1") && line.contains("keeps running"))
       )
+    },
+    test("an interrupt during a follow cancels the server job (#170)") {
+      for {
+        cancelled <- Ref.make(List.empty[String])
+        started   <- Promise.make[Nothing, Unit]
+        // The stream signals it is live, then hangs — so the follow is unambiguously inside `streamLines` (its
+        // onInterrupt installed) when we interrupt. `Running` status is irrelevant; interpret never runs.
+        api = new CancelRecordingApi("Running", cancelled, _ => started.succeed(()) *> ZIO.never)
+        fiber     <- follower(api, 1.minute).followJob("job-1").fork
+        _         <- started.await
+        _         <- fiber.interrupt
+        recorded  <- cancelled.get
+      } yield assertTrue(recorded.exists(p => p.contains("job-1") && p.contains("cancel")))
+    },
+    test("an interrupt during the post-follow recruit confirm does not cancel (#170)") {
+      for {
+        cancelled <- Ref.make(List.empty[String])
+        inConfirm <- Promise.make[Nothing, Unit]
+        // The stream completes immediately (job terminal) so the follow returns before we interrupt; the interrupt lands
+        // in the `onComplete` (confirm) phase, which is OUTSIDE the follow's cancel-on-interrupt scope. No cancel fires.
+        api = new CancelRecordingApi("Completed", cancelled, _ => ZIO.unit)
+        fiber <- follower(api, 1.minute)
+          .handleRecruit("recruit", JobResult(Some("job-1"), None), logsToStderr = false, _ => inConfirm.succeed(()) *> ZIO.never)
+          .fork
+        _        <- inConfirm.await
+        _        <- fiber.interrupt
+        recorded <- cancelled.get
+      } yield assertTrue(recorded.isEmpty)
     },
     test("handleSingle short-circuits on a submission error") {
       for {
