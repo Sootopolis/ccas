@@ -92,9 +92,9 @@ object Dispatcher {
     cmd: CliCommand.ServerCommand,
     currentClub: Option[String]
   ): Task[Int] = cmd match {
-    case CliCommand.Membership(_, clubs, all, trust, _) =>
+    case CliCommand.Membership(_, clubs, all, trust, _, detach) =>
       resolveClubs(api, clubs, all, currentClub).flatMap(slugs =>
-        followEachClub(follower, slugs)(slug =>
+        followEachClub(follower, slugs, detach)(slug =>
           api.postJson[MembershipRequest, List[ClubJobResult]](
             "/api/jobs/membership",
             MembershipRequest(NonEmptyChunk.single(slug), trust)
@@ -102,9 +102,9 @@ object Dispatcher {
         )
       )
 
-    case CliCommand.History(_, clubs, all, full, includeFinished, refresh, refreshMinHours, _) =>
+    case CliCommand.History(_, clubs, all, full, includeFinished, refresh, refreshMinHours, _, detach) =>
       resolveClubs(api, clubs, all, currentClub).flatMap(slugs =>
-        followEachClub(follower, slugs)(slug =>
+        followEachClub(follower, slugs, detach)(slug =>
           api.postJson[HistoryRequest, List[ClubJobResult]](
             "/api/jobs/history",
             HistoryRequest(NonEmptyChunk.single(slug), flag(full), flag(includeFinished), flag(refresh), refreshMinHours)
@@ -142,12 +142,15 @@ object Dispatcher {
         )
       }
 
-    case CliCommand.Stats(_, club, since, until, _) =>
+    case CliCommand.Stats(_, club, since, until, _, detach) =>
       resolveClub(club, currentClub).flatMap(slug =>
         api.postJson[StatsRequest, ClubJobResult](
           "/api/jobs/stats",
           StatsRequest(slug, since, until)
-        ).flatMap(follower.handleClubSingle)
+        ).flatMap(result =>
+          if (detach) { reportDetachedClub(result) }
+          else { follower.handleClubSingle(result) }
+        )
       )
 
     case CliCommand.Jobs(_, limit) =>
@@ -227,19 +230,40 @@ object Dispatcher {
   // `submitOne` posts a single-club job (the batch routes accept a one-element list) whose result `handleBatch` follows.
   // Near-free vs concurrent submission: the shared Chess.com client is gate-bound, so total wall-clock is ~unchanged.
   //
+  // With `detach` (#170) the follow is skipped: each club's job is submitted, its id printed, and the command returns —
+  // no log stream, no Ctrl-C-cancel. Reattach later with `ccas logs <id>`. Serialization is irrelevant then (nothing is
+  // streamed), but the same per-club loop is reused so error handling and scoring stay identical.
+  //
   // Each club is best-effort: a submit / transport failure (a 4xx/5xx or a dropped connection for one club) is caught,
   // reported, and scored as a failure for that club WITHOUT aborting the rest — matching `handleBatch`'s handling of
   // per-club errors in a 200 body, and preserving the old batch design's "every club still runs" property.
-  private def followEachClub(follower: JobFollower, slugs: NonEmptyChunk[ClubSlug])(
+  private def followEachClub(follower: JobFollower, slugs: NonEmptyChunk[ClubSlug], detach: Boolean)(
     submitOne: ClubSlug => Task[List[ClubJobResult]]
-  ): Task[Int] =
+  ): Task[Int] = {
+    val handle: List[ClubJobResult] => Task[Int] =
+      if (detach) { results =>
+        ZIO.foreach(results)(reportDetachedClub).map(codes => if (codes.forall(_ == 0)) { 0 } else { 1 })
+      } else { follower.handleBatch }
     ZIO
       .foreach(slugs.toChunk.toList)(slug =>
         submitOne(slug)
-          .flatMap(follower.handleBatch)
+          .flatMap(handle)
           .catchAll(e => Console.printLineError(s"${ClubSlug.unwrap(slug)}: ${rootMessage(e)}").orDie.as(1))
       )
       .map(codes => if (codes.forall(_ == 0)) { 0 } else { 1 })
+  }
+
+  // Detached submit of a single club-scoped job (#170): print its id (or its submit error) and DON'T follow. Cache the
+  // id for `ccas logs`/`ccas cancel` completion, and note the reattach command. Exit 1 for a per-club submit failure so
+  // a partial `--all --detach` batch still scores as failed overall (mirrors `handleClubSingle`'s error scoring).
+  private def reportDetachedClub(result: ClubJobResult): UIO[Int] =
+    (result.error, result.jobId) match {
+      case (Some(err), _) => Console.printLineError(s"${result.clubSlug}: $err").orDie.as(1)
+      case (_, Some(id)) =>
+        CompletionCache.appendJob(id) *>
+          Console.printLine(s"${result.clubSlug} submitted (detached): $id — follow with 'ccas logs $id'").orDie.as(0)
+      case _ => Console.printLineError(s"${result.clubSlug}: server returned no job id").orDie.as(1)
+    }
 
   // Resolution lives in the pure, testable `ClubResolver`; the `--all` expansion's network call is injected here.
   private def resolveClub(explicit: Option[String], currentClub: Option[String]): IO[CliError, ClubSlug] =

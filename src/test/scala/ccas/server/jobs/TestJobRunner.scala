@@ -25,6 +25,7 @@ object TestJobRunner extends ZIOSpecDefault {
     testSubmitSucceeds,
     testSubmitRecordsFailed,
     testSubmitRejectsDuplicate,
+    testConflictWhileCancelInFlight,
     testConcurrentSubmitConflict,
     testSubmitAllowsDifferentClub,
     testSubmitAllowsDifferentKind,
@@ -121,6 +122,38 @@ object TestJobRunner extends ZIOSpecDefault {
       result.left.exists(_.isInstanceOf[ConflictException])
     )
   }
+
+  // #170: a resubmit that races an in-flight cancel of the same (kind, club) must read the self-resolving "finishing
+  // cancellation — retry in a moment" wording, not the baffling "already running". The job parks in an UNINTERRUPTIBLE
+  // await so, after `cancel` registers it in `cancelRequested` and forks the interrupt, the interrupt stays pending: the
+  // row is still Running AND the id sits in `cancelRequested` — the exact window `submit` special-cases. Releasing the
+  // gate ends the uninterruptible region, the pending interrupt lands, and the job settles to Cancelled.
+  private def testConflictWhileCancelInFlight =
+    test("a resubmit racing an in-flight cancel gets the 'finishing cancellation' message") {
+      for {
+        _       <- deleteAllJobRuns
+        runner  <- ZIO.service[JobRunner]
+        started <- Promise.make[Nothing, Unit]
+        gate    <- Promise.make[Nothing, Unit]
+        id <- runner.submit(
+          JobKind.Membership,
+          Some(clubIdA),
+          None,
+          RunTrigger.Cli,
+          _ => (started.succeed(()) *> gate.await).uninterruptible
+        )
+        _      <- started.await
+        _      <- runner.cancel(id) // registers id in cancelRequested; the forked interrupt can't land (uninterruptible)
+        result <- runner.submit(JobKind.Membership, Some(clubIdA), None, RunTrigger.Cli, _ => ZIO.unit).either
+        _      <- gate.succeed(()) // release the await → pending interrupt lands → job settles Cancelled
+        _      <- awaitStatus(runner, id)
+      } yield assertTrue(
+        result.left.exists {
+          case e: ConflictException => e.getMessage.contains("finishing cancellation")
+          case _                    => false
+        }
+      )
+    }
 
   private def testConcurrentSubmitConflict = test("concurrent submits for same kind/club produce exactly one winner") {
     for {

@@ -50,13 +50,14 @@ object CompletionSpec {
     Leaf(List("use-club"), Nil, Nil, Slug),
     Leaf(
       List("membership"),
-      List(server, "--trust-usernames", "--no-trust-usernames", clubFlag, "--all", "--no-progress"),
+      List(server, "--trust-usernames", "--no-trust-usernames", clubFlag, "--all", "--no-progress", "--detach"),
       List(server, clubFlag),
       NoArgs
     ),
     Leaf(
       List("history"),
-      List(server, "--full", "--include-finished", "--refresh", "--refresh-min-hours", clubFlag, "--all", "--no-progress"),
+      List(server, "--full", "--include-finished", "--refresh", "--refresh-min-hours", clubFlag, "--all",
+        "--no-progress", "--detach"),
       List(server, "--refresh-min-hours", clubFlag),
       NoArgs
     ),
@@ -71,7 +72,7 @@ object CompletionSpec {
     ),
     Leaf(
       List("stats"),
-      List(server, "--since", "--until", clubFlag, "--no-progress"),
+      List(server, "--since", "--until", clubFlag, "--no-progress", "--detach"),
       List(server, "--since", "--until", clubFlag),
       NoArgs
     ),

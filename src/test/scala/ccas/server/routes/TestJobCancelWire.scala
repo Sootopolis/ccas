@@ -6,7 +6,7 @@ import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.analysis.tables.RunTrigger
 import ccas.api.misc.subtypes.JobRunId
-import ccas.cli.{CcasApiClient, CliError}
+import ccas.cli.{CcasApiClient, CliError, JobFollower}
 import ccas.server.jobs.{JobKind, JobRun, JobRunner, JobRunStatus}
 import ccas.server.routes.JobRoutes.CancelResult
 import ccas.server.ServerTables
@@ -26,7 +26,8 @@ object TestJobCancelWire extends ZIOSpecDefault {
 
   override def spec: Spec[Any, Throwable] = suite("TestJobCancelWire")(
     testCancelLiveJobOverHttp,
-    testCancelUnknownJobOverHttp
+    testCancelUnknownJobOverHttp,
+    testCancelViaFollowInterrupt
   ).provideShared(
     FreshSchemaLayer("test_cancel_wire", onInit = ServerTables.ensureTables),
     TestChessComClientSupport.dummyLayer,
@@ -69,6 +70,35 @@ object TestJobCancelWire extends ZIOSpecDefault {
         job    <- awaitCancelled(runner, id)
       } yield assertTrue(
         result.jobId == JobRunId.unwrap(id),
+        job.status == JobRunStatus.Cancelled,
+        job.completedAt.isDefined,
+        job.error.exists(_.contains("Cancelled"))
+      )
+    }
+
+  // The #170 path: Ctrl-C during a `ccas logs`-style follow must cancel the server job. Drives the REAL `JobFollower`
+  // (the CLI's follow loop) against the real server+client, interrupts its fiber, and asserts the job reaches
+  // `Cancelled` — proving the follow's `.onInterrupt` cancel POST actually lands over real HTTP as the fiber tears down
+  // (something the stubbed `TestJobFollower` can't exercise). Readiness is deterministic: once the follow fiber is
+  // `Suspended` it has installed its onInterrupt hook and parked on the (silent) log stream, so the interrupt is
+  // guaranteed to land inside the cancel scope — no timing sleep.
+  private def testCancelViaFollowInterrupt =
+    test("interrupting a live follow cancels the server job over real HTTP") {
+      for {
+        runner  <- ZIO.service[JobRunner]
+        port    <- ZIO.service[ServerPort]
+        api     <- apiFor(port)
+        started <- Promise.make[Nothing, Unit]
+        id      <- runner.submit(JobKind.MatchRef, None, None, RunTrigger.Cli, _ => started.succeed(()) *> ZIO.never)
+        _       <- started.await
+        follower = JobFollower(api, maxWait = 60.seconds, reconnectBackoff = 1.second, maxReconnects = 1000, showProgress = false)
+        fiber <- follower.followJob(JobRunId.unwrap(id)).fork
+        _ <- (ZIO.sleep(20.millis) *> fiber.status)
+          .repeatUntil { case _: Fiber.Status.Suspended => true; case _ => false }
+          .timeoutFail(new Exception("follow never suspended"))(10.seconds)
+        _   <- fiber.interrupt
+        job <- awaitCancelled(runner, id)
+      } yield assertTrue(
         job.status == JobRunStatus.Cancelled,
         job.completedAt.isDefined,
         job.error.exists(_.contains("Cancelled"))

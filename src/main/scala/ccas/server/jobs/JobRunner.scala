@@ -149,14 +149,23 @@ object JobRunner {
       trigger: RunTrigger,
       effect: Option[JobRunId] => RIO[ProgressDisplay & ChessComClient & PostgresClient, Any]
     ): RIO[PostgresClient, JobRunId] = {
-      def conflictError = ConflictException(
-        s"A $kind job is already running" + clubId.fold("")(c => s" for club $c")
-      )
+      // `cancelling` distinguishes a blocker that an operator has already asked to cancel (its id is in `cancelRequested`)
+      // but whose interrupt hasn't landed yet — an in-flight blocking statement runs to completion before the fiber
+      // flips to `Cancelled` and `release` clears it from the set. Without this, a `ccas ... ` immediately after a
+      // Ctrl-C cancel of the same (kind, club) reads the baffling "already running" for a job the operator just killed;
+      // the "finishing cancellation — retry in a moment" wording tells them it is self-resolving. (#170)
+      def conflictError(cancelling: Boolean): ConflictException = {
+        val forClub = clubId.fold("")(c => s" for club $c")
+        if (cancelling) { ConflictException(s"A $kind job$forClub is finishing cancellation — retry in a moment") }
+        else { ConflictException(s"A $kind job is already running$forClub") }
+      }
       (for {
         id <- withTransaction {
           for {
             existing <- JobRun.selectRunningForUpdate(kind, clubId)
-            _ <- ZIO.whenDiscard(existing.isDefined)(ZIO.fail(conflictError))
+            _ <- ZIO.foreachDiscard(existing)(job =>
+              cancelRequested.get.flatMap(pending => ZIO.fail(conflictError(pending.contains(job.id))))
+            )
             id   = JobRunId.generate()
             now <- Clock.instant
             jobRun = JobRun(id, kind, clubId, trigger, JobRunStatus.Running, params, now, None, None)
@@ -227,8 +236,9 @@ object JobRunner {
         }
       } yield id).catchSome {
         // Phantom-row race: two transactions both saw no running job, the unique partial index
-        // on (kind, COALESCE(club_id, -1)) WHERE status = 'Running' caught the second insert.
-        case e: SQLException if e.getSQLState == "23505" => ZIO.fail(conflictError)
+        // on (kind, COALESCE(club_id, -1)) WHERE status = 'Running' caught the second insert. A genuine concurrent
+        // submit (not a cancel-in-flight), so the plain "already running" wording is right.
+        case e: SQLException if e.getSQLState == "23505" => ZIO.fail(conflictError(cancelling = false))
       }
     }
 
