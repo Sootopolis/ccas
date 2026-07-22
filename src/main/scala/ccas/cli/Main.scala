@@ -62,7 +62,11 @@ object Main extends ZIOAppDefault {
     case CliCommand.Stop                 => stopServe
     case CliCommand.ServerStatus         => statusServe
     case CliCommand.Completion(shell)    => printCompletion(shell)
-    case CliCommand.Use(slug)            => UseClub.run(slug)
+    case CliCommand.Use(slugs, clear)    =>
+      // Same server the `--server`-less commands resolve to (config `api_url`, else the built-in default): use-club has
+      // no `--server` flag of its own — its network use is a best-effort probe against the configured server, not a
+      // server operation — so it inherits the same default the command tree was built with.
+      UseClub.run(slugs, clear, cfg.currentClub, cfg.apiUrl.getOrElse(CliCommand.DefaultServer))
     case CliCommand.ConfigGet(key)       => ConfigCommand.get(key)
     case CliCommand.ConfigSet(key, v)    => ConfigCommand.set(key, v)
     case CliCommand.ConfigUnset(key)     => ConfigCommand.unset(key)

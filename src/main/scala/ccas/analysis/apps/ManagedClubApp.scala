@@ -8,7 +8,7 @@ import ccas.utils.errors.NotFoundException
 import ccas.utils.sql.PostgresClient
 
 /** Synchronous CRUD for the [[ManagedClub]] marker — the explicit "I manage this club" act. Invoked from
-  * `ManagedClubRoutes` (and so `ccas manage|unmanage|managed`). No `ChessComClient`: the club must already exist
+  * `ManagedClubRoutes` (and so `ccas club add|remove|list`). No `ChessComClient`: the club must already exist
   * locally; this never fetches Chess.com.
   */
 object ManagedClubApp {

@@ -47,7 +47,7 @@ object CompletionSpec {
     Leaf(List("server", "up"), List("--detach", "-d"), Nil, NoArgs),
     Leaf(List("server", "down"), Nil, Nil, NoArgs),
     Leaf(List("server", "status"), Nil, Nil, NoArgs),
-    Leaf(List("use-club"), Nil, Nil, Slug),
+    Leaf(List("use-club"), List("--clear"), Nil, Slug),
     Leaf(
       List("membership"),
       List(server, "--trust-usernames", "--no-trust-usernames", clubFlag, "--all", "--no-progress", "--detach"),
@@ -115,7 +115,8 @@ object CompletionSpec {
     Group("server", List("up", "down", "status"), "Run and manage the ccas backend HTTP server"),
     Group("blacklist", List("add", "list", "remove"), "Manage a club's recruitment blacklist"),
     Group("schedule", List("list", "add", "remove"), "Manage scheduled jobs"),
-    Group("club", List("add", "remove", "list"), "Manage the set of clubs you run CCAS for"),
+    Group("club", List("add", "remove", "list"),
+      "Manage the set of clubs you run CCAS for (pick the one commands target with 'ccas use-club')"),
     Group("config", List("get", "set", "unset", "list", "show", "path", "init"),
       "Manage the local server-bootstrap config file (ccas.env)")
   )
@@ -149,7 +150,7 @@ object CompletionSpec {
     List("server", "up")        -> "Run the ccas backend HTTP server (foreground by default; --detach/-d to background it)",
     List("server", "down")      -> "Stop a detached ccas server (reads the pid file and sends SIGTERM)",
     List("server", "status")    -> "Report whether the local ccas server is running and ready",
-    List("use-club")            -> "Set the current club used by commands that omit --club",
+    List("use-club")            -> "Show, set, or clear the current club used by commands that omit --club",
     List("membership")          -> "Submit a membership-sync job (current club, --club a,b, or --all managed clubs)",
     List("history")             -> "Submit a match-history crawl job (current club, --club a,b, or --all managed clubs)",
     List("recruit")             -> "Submit a recruitment scouting job for a club",

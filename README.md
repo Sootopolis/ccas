@@ -67,11 +67,22 @@ ccas --help              # full command tree
 ccas <command> --help    # per-command flags
 ```
 
-Commands: `server {up|down|status}`, `use`, `membership`, `history`, `recruit`, `stats`, `jobs`, `logs`, `cancel`, `blacklist {add|list|remove}`, `schedule {list|add|remove}`, `club {add|remove|list}`.
+Commands: `server {up|down|status}`, `use-club`, `membership`, `history`, `recruit`, `stats`, `jobs`, `logs`, `cancel`, `blacklist {add|list|remove}`, `schedule {list|add|remove}`, `club {add|remove|list}`.
 
 **Cancelling a job.** `ccas cancel <job-id>` requests cancellation of a running job — it interrupts the job's fiber on the server, which records the run as `Cancelled`. Cancellation is best-effort: an in-flight blocking database statement runs to completion first, so the job stops at its next interruptible point rather than instantly. A cancelled recruitment run leaves the candidates it found so far as **deferred** (nothing invited), so you can review and confirm them afterwards. Cancel is single-server-scoped — it reaches jobs running on the server it is sent to.
 
-**Club targeting.** Slug-requiring commands take the club via `--club <slug>` rather than a positional argument; `membership`/`history` accept a comma-separated `--club a,b` or `--all` (every managed club) — but not both at once (`--all` with `--club` is rejected as a likely mistake). When neither is given, the command falls back to the **current club** set with `ccas use-club <slug>` (stored as `current_club` in the [config file](#cli-config-file)); an explicit `--club`/`--all` always wins. `ccas use-club` is a local config write — no server call — so it works offline and only warns (does not reject) if the slug isn't among the cached clubs.
+**Club targeting.** Slug-requiring commands take the club via `--club <slug>` rather than a positional argument; `membership`/`history` accept a comma-separated `--club a,b` or `--all` (every managed club) — but not both at once (`--all` with `--club` is rejected as a likely mistake). When neither is given, the command falls back to the **current club** set with `ccas use-club <slug>` (stored as `current_club` in the [config file](#cli-config-file)); an explicit `--club`/`--all` always wins. `ccas use-club` is a local config write that always succeeds — even with the server down — so it works offline. When a server *is* reachable it additionally makes a short best-effort check: it refreshes the completion cache and, if the slug isn't one of your managed clubs, notes so (it never rejects — an unmanaged club is a valid target). If the server can't be reached in a second or two it falls back to a cache-based hint and sets the club anyway.
+
+```bash
+ccas use-club              # print the current club (exit 2 if none is set)
+ccas use-club team-alpha   # set it
+ccas use-club --clear      # unset it
+ccas club list             # the managed set; '*' marks the current club
+```
+
+The current club and the managed set are separate things: `ccas club {add,remove,list}` edits the server-side set of clubs you run CCAS for (shared by every client of that server), while `ccas use-club` is a local per-machine pointer at which of them your commands target by default. Removing the club you're currently using clears the pointer, so the next bare command asks you to pick one instead of silently running against a club you no longer manage.
+
+**Flags go before positional arguments.** `ccas use-club --clear` works; `ccas use-club team-alpha --clear` does not — the underlying CLI library swallows an option written after a positional and treats it as another argument. `use-club` detects this and fails with the working order rather than acting on a misread command, but elsewhere in the tree a trailing flag is silently ignored, so keep options first: `ccas blacklist add --club team-alpha alice bob`.
 
 The server URL resolves in order: a global `--server <url>` flag, else `api_url` from the [config file](#cli-config-file), else the built-in default `http://127.0.0.1:8080`.
 
@@ -108,7 +119,7 @@ eval "$(ccas completion zsh)"
 ccas completion fish > ~/.config/fish/completions/ccas.fish
 ```
 
-Dynamic candidates come from `${XDG_CACHE_HOME:-~/.cache}/ccas/clubs.txt` and `recent-jobs.txt`, refreshed automatically as you run normal commands (the club list is fetched from `GET /api/clubs` at most every few hours; each submitted job id is recorded). On a fresh install these are empty, so only subcommands and flags complete until the first command populates them — unless `default_clubs` is set in the [config file](#cli-config-file), which seeds the club list so completion works immediately.
+Dynamic candidates come from `${XDG_CACHE_HOME:-~/.cache}/ccas/clubs.txt` and `recent-jobs.txt`, refreshed automatically as you run normal commands (the club list is fetched from `GET /api/managed-clubs` at most every few hours — falling back to `GET /api/clubs` only while you manage no clubs yet; each submitted job id is recorded). On a fresh install these are empty, so only subcommands and flags complete until the first command populates them — unless `default_clubs` is set in the [config file](#cli-config-file), which seeds the club list so completion works immediately.
 
 The committed `completions/ccas.bash` is the generated output of `ccas completion bash`; `TestCcasCompletion` fails if it drifts from the emitter or if a new subcommand/flag isn't covered. Regenerate it with `ccas completion bash > completions/ccas.bash`.
 
@@ -234,7 +245,7 @@ current_club  = "team-alpha"                   # default club when a command omi
 ```
 
 - **Server URL** resolves `--server <url>` flag → `api_url` → built-in `http://127.0.0.1:8080`.
-- **`default_clubs`** seeds the completion club list on a fresh install (before any `GET /api/clubs` round-trip); real slugs replace it on the next command.
+- **`default_clubs`** seeds the completion club list on a fresh install (before any `GET /api/managed-clubs` round-trip); real slugs replace it on the next command.
 - **`current_club`** is the club a slug-requiring command targets when neither `--club` nor `--all` is given. Set it with `ccas use-club <slug>` (which rewrites just this key, preserving your other keys and comments) rather than editing by hand.
 - A missing file is fine — the CLI falls back to built-in defaults. A malformed file fails fast with `error: invalid config file <path>: …` (exit 2).
 
