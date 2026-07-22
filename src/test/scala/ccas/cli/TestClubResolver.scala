@@ -35,6 +35,13 @@ object TestClubResolver extends ZIOSpecDefault {
     test("single: a whitespace-only --club is treated as unset and falls back to current_club") {
       ClubResolver.single(Some("   "), Some("current")).map(s => assertTrue(ClubSlug.unwrap(s) == "current"))
     },
+    // Pins the deliberate non-validation the auto-clear in `Dispatcher` exists to compensate for: an unmanaged (or
+    // renamed-away) current_club resolves verbatim, so nothing here catches a club the user has stopped managing.
+    test("single: returns an unmanaged current_club verbatim — it validates nothing") {
+      ClubResolver.single(None, Some("no-longer-managed")).map(s =>
+        assertTrue(ClubSlug.unwrap(s) == "no-longer-managed")
+      )
+    },
     test("multi: explicit list wins, without fetching managed clubs") {
       ClubResolver.multi(mustNotFetch, List("a", "b"), all = false, Some("current")).map(cs =>
         assertTrue(cs.map(ClubSlug.unwrap).toList == List("a", "b"))

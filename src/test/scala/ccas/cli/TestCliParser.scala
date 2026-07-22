@@ -49,7 +49,26 @@ object TestCliParser extends ZIOSpecDefault {
       )
     },
     test("use-club parses the slug (local, no server)") {
-      parsed("use-club", "team-alpha").map(c => assertTrue(c.contains(CliCommand.Use("team-alpha"))))
+      parsed("use-club", "team-alpha").map(c => assertTrue(c.contains(CliCommand.Use(List("team-alpha"), false))))
+    },
+    test("bare use-club parses with no slug (the show-current form)") {
+      parsed("use-club").map(c => assertTrue(c.contains(CliCommand.Use(Nil, false))))
+    },
+    test("use-club --clear parses with no slug") {
+      parsed("use-club", "--clear").map(c => assertTrue(c.contains(CliCommand.Use(Nil, true))))
+    },
+    // Every positional must survive parsing so `UseClub` can reject the arity. `atMost(1)` silently dropped the extra,
+    // which (with zio-cli swallowing a trailing option as a positional) made `use-club <slug> --clear` a silent SET of
+    // the club the user asked to clear.
+    test("use-club keeps extra positionals so the arity can be rejected downstream") {
+      parsed("use-club", "team-a", "team-b").map(c =>
+        assertTrue(c.contains(CliCommand.Use(List("team-a", "team-b"), false)))
+      )
+    },
+    test("use-club with --clear AFTER the slug keeps the flag as a positional (zio-cli ordering bug)") {
+      parsed("use-club", "team-alpha", "--clear").map(c =>
+        assertTrue(c.contains(CliCommand.Use(List("team-alpha", "--clear"), false)))
+      )
     },
     test("config set parses key and value (local, no server)") {
       parsed("config", "set", "DB_HOST", "localhost").map(c =>

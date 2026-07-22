@@ -10,8 +10,9 @@ import zio.cli.*
   *
   * Club targeting is via the `--club <slug>` option (comma-separated on `membership`/`history`), with `--all` on those
   * two to mean every managed club; when neither is given the command falls back to the config's `current_club` (set
-  * with `ccas use-club`). There are no positional club slugs — the remaining positionals are `<username>...` on the
-  * blacklist commands, the `<slug>` of `ccas use-club`, and the optional `[run-id]` on `ccas recruit --report`.
+  * with `ccas use-club`). There are no positional club slugs on the operation commands — the remaining positionals are
+  * `<username>...` on the blacklist commands, the `<slug>` of `ccas club add`/`remove`, the optional `[slug]` of
+  * `ccas use-club` (absent = print the current club), and the optional `[run-id]` on `ccas recruit --report`.
   *
   * IMPORTANT — option/argument ordering: zio-cli expects all options BEFORE positional arguments, e.g.
   * `ccas blacklist add --club team-alpha alice bob`. Options placed AFTER a positional are NOT errors — they are
@@ -39,7 +40,7 @@ object CliCommand {
   case object Stop extends CliCommand
   case object ServerStatus extends CliCommand
   final case class Completion(shell: String) extends CliCommand
-  final case class Use(slug: String) extends CliCommand
+  final case class Use(slugs: List[String], clear: Boolean) extends CliCommand
   final case class ConfigGet(key: String) extends CliCommand
   final case class ConfigSet(key: String, value: String) extends CliCommand
   final case class ConfigUnset(key: String) extends CliCommand
@@ -156,11 +157,11 @@ object CliCommand {
 
   // Single-club target. Absent → Dispatcher falls back to the config's `current_club`.
   private val clubOpt: Options[Option[String]] =
-    Options.text("club").optional ?? "Club slug (URL name); falls back to the current club (set with 'ccas use')"
+    Options.text("club").optional ?? "Club slug (URL name); falls back to the current club (set with 'ccas use-club')"
 
   // Multi-club target: comma-separated slugs. Absent (and without --all) → Dispatcher falls back to `current_club`.
   private val clubsOpt: Options[List[String]] =
-    (Options.text("club").optional ?? "Comma-separated club slugs; falls back to the current club (set with 'ccas use')")
+    (Options.text("club").optional ?? "Comma-separated club slugs; falls back to the current club (set with 'ccas use-club')")
       .map(_.fold(List.empty[String])(_.split(",").toList.map(_.trim).filter(_.nonEmpty)))
 
   private val allOpt: Options[Boolean] =
@@ -192,10 +193,22 @@ object CliCommand {
       .withHelp("Run and manage the ccas backend HTTP server")
       .subcommands(serverUp, serverDown, serverStatus)
 
+  // The slug is optional so a bare `ccas use-club` PRINTS the current club rather than erroring — the only read path
+  // for a value that is otherwise write-only (`git branch` / `kubectl config current-context` shape). `--clear` drops
+  // it; passing both is rejected as conflicting intent, mirroring `--all` vs `--club`.
+  //
+  // `repeat` rather than `atMost(1)` because `atMost(1)` silently TRUNCATES extra positionals instead of rejecting
+  // them. Combined with the zio-cli ordering bug documented at the top of this file — an option written after a
+  // positional is swallowed as another positional — `ccas use-club team-alpha --clear` would parse as a plain set and
+  // silently set the very club the user asked to clear. Capturing every positional lets `UseClub` reject the arity and
+  // point at the right ordering.
   private val useClub: Command[CliCommand] =
-    Command("use-club", Args.text("slug") ?? "Club slug (URL name) to set as the current club")
-      .withHelp("Set the current club used by commands that omit --club")
-      .map(Use.apply)
+    Command(
+      "use-club",
+      Options.boolean("clear") ?? "Clear the current club instead of setting one",
+      (Args.text("slug") ?? "Club slug (URL name) to set as the current club; omit to print the current one").repeat
+    ).withHelp("Show, set, or clear the current club used by commands that omit --club")
+      .map { case (clear, slugs) => Use(slugs, clear) }
 
   private def membership(default: String): Command[CliCommand] =
     Command("membership", serverOpt(default) ++ trustOpt ++ clubsOpt ++ allOpt ++ noProgressOpt ++ detachOpt)
@@ -354,9 +367,11 @@ object CliCommand {
       .withHelp("List the clubs you manage with CCAS")
       .map(ClubsList.apply)
 
+  // The group help names `use-club` because the two are easy to confuse and live on opposite sides of the tree: this
+  // group edits the server-side managed set, while `use-club` is a local pointer at which of them commands target.
   private def clubs(default: String): Command[CliCommand] =
     Command("club")
-      .withHelp("Manage the set of clubs you run CCAS for")
+      .withHelp("Manage the set of clubs you run CCAS for (pick the one commands target with 'ccas use-club')")
       .subcommands(clubsAdd(default), clubsRemove(default), clubsList(default))
 
   private val completion: Command[CliCommand] =
