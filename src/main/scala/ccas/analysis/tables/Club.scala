@@ -71,6 +71,17 @@ object Club {
             FROM club WHERE slug = $slug""".query[Club].run().headOption
     }
 
+  /** Resolve a club the CLI is targeting: by its stable `ClubId` when the caller has one (rename-proof — the id never
+    * moves when Chess.com renames the slug), otherwise by slug. The CLI carries the id for a `current_club`-sourced
+    * submit, so a renamed current club still resolves here instead of 404-ing on its stale slug (#176). Slug remains the
+    * fallback for a freshly-typed `--club <slug>` the CLI has no id for yet.
+    */
+  def resolveByIdOrSlug(clubId: Option[ClubId], slug: ClubSlug): ZIO[PostgresClient, SQLException, Option[Club]] =
+    clubId match {
+      case Some(id) => selectId(id)
+      case None     => selectBySlug(slug)
+    }
+
   /** Returns the subset of `slugs` that exist in the `club` table. One round-trip via `WHERE slug = ANY(...)` —
     * preferred over per-slug `selectBySlug` calls for callers that need bulk membership testing.
     */

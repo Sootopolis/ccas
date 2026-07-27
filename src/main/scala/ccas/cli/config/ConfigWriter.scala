@@ -7,11 +7,14 @@ import scala.util.matching.Regex
 
 import zio.{Task, ZIO}
 
+import ccas.api.misc.subtypes.ClubId
+
 /** Writes (and removes) the single `current_club` key in the CLI config file. zio-config (the read side, [[CliConfig]])
   * is a parser only — it has no HOCON writer — so this does a *surgical* line edit rather than serialising the whole
   * config: it drops any existing top-level `current_club` assignment and, when setting, appends a fresh one, leaving
-  * every other key, blank line, and comment untouched. `current_club` is always a simple quoted string, so a flat-key
-  * edit is sufficient (the descriptor only reads flat keys anyway).
+  * every other key, blank line, and comment untouched. `current_club` is always a simple quoted string (an
+  * `<id>:<slug>` pair or a bare slug — see [[CurrentClubRef]]), so a flat-key edit is sufficient (the descriptor only
+  * reads flat keys anyway).
   */
 object ConfigWriter {
 
@@ -19,8 +22,11 @@ object ConfigWriter {
   // so user comments survive. The trailing `.*` also drops any inline comment on the old assignment we're replacing.
   private val CurrentClubAssignment: Regex = """^\s*current_club\s*[=:].*$""".r
 
-  def setCurrentClub(file: Path, slug: String): Task[Unit] =
-    rewrite(file, Some(s"""current_club = "${escape(slug)}""""))
+  /** Set `current_club` to the `<id>:<slug>` form when `clubId` is known, or a bare slug when it isn't (offline set, or
+    * a club the server couldn't resolve an id for) — the id is backfilled on the next successful command.
+    */
+  def setCurrentClub(file: Path, clubId: Option[ClubId], slug: String): Task[Unit] =
+    rewrite(file, Some(s"""current_club = "${escape(CurrentClubRef.render(clubId, slug))}""""))
 
   /** Drop the `current_club` assignment, leaving the rest of the config intact. Used by `ccas use-club --clear` and by
     * `ccas club remove` when it unmanages the club the pointer names.
