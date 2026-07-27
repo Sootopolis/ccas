@@ -44,6 +44,11 @@ object Tables extends ZIOAppDefault {
       _ <- ApiResponseBody.normalizeCfBodies
       days <- AppSetting.get(AppSetting.CacheRetentionDays)
       _ <- ApiResponseCache.deleteBefore(Instant.now().minus(days.toLong, ChronoUnit.DAYS))
+      // Sweep the failure audit trail on the same startup pass. `deleteBefore` also runs `ApiResponseBody.deleteOrphans`
+      // internally, catching bodies freed once their last fetch-failure reference is gone (cache sweep already ran, so a
+      // body pinned only by a just-deleted failure row is now collectable).
+      failureDays <- AppSetting.get(AppSetting.FetchFailureRetentionDays)
+      _ <- ApiFetchFailure.deleteBefore(Instant.now().minus(failureDays.toLong, ChronoUnit.DAYS))
       _ <- ClubMatch.createTable
       _ <- ClubMatchBoard.createTable
       _ <- ClubMatchGame.createTable

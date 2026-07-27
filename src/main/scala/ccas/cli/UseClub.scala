@@ -1,10 +1,10 @@
 package ccas.cli
 
 import zio.{Console, Duration, ExitCode, UIO, ZIO}
-import zio.http.Client
 
 import ccas.cli.config.ConfigWriter
 import ccas.server.routes.ManagedClubRoutes.ManagedClubResponse
+import ccas.utils.client.HttpClientLayer
 
 /** `ccas use-club [slug] [--clear]` — a per-machine pointer at the club that commands target when they omit `--club`.
   *
@@ -107,13 +107,15 @@ object UseClub {
   //
   // Operator order is load-bearing. `timeout` must sit OUTSIDE `provide` or the layer's acquire/release runs unbounded,
   // and `disconnect` is required because plain `timeout` waits for the interrupted fiber to finish unwinding —
-  // zio-http's `NettyConnectionPool.createChannel` is uninterruptible with a 30s connect default, so against a
-  // black-holed host the "2s" bound measured 31s before `disconnect` moved that unwinding into the background.
+  // zio-http's `NettyConnectionPool.createChannel` is uninterruptible, so against a black-holed host the "2s" bound
+  // measured 31s before `disconnect` moved that unwinding into the background. `HttpClientLayer.live` now caps connect
+  // at 10s natively (#182), but this probe wants a far tighter interactive bound, so the 2s `timeout` + `disconnect`
+  // still carry the snappy cutoff; the layer's 10s is only a backstop.
   private def fetchManaged(server: String): UIO[Option[List[String]]] =
     CcasApiClient
       .live(server)
       .flatMap(_.getJson[List[ManagedClubResponse]]("/api/managed-clubs").map(_.map(_.slug)))
-      .provide(Client.default)
+      .provide(HttpClientLayer.live)
       .disconnect
       .timeout(VerifyTimeout)
       .catchAllCause(_ => ZIO.none)

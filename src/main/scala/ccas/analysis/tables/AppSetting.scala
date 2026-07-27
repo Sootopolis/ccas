@@ -30,6 +30,14 @@ object AppSetting {
   /** Retention window (days) for `api_response_cache`, applied by `Tables.ensureTables`. */
   val CacheRetentionDays: Key[Int] = Key("cache_retention_days", 7, _.toIntOption, _.toString)
 
+  /** Retention window (days) for `api_fetch_failure`, applied by `Tables.ensureTables` alongside the cache sweep. Every
+    * failed attempt writes a row (plus a deduped body), a 404 body embeds the requested slug so SHA-256 dedup never
+    * collapses distinct bogus slugs, and orphan bodies are pinned by `ON DELETE RESTRICT` — so without this sweep the
+    * table grows unbounded under any volume of bogus-slug traffic. Longer default than the cache (30d vs 7d) because
+    * these rows are the diagnostic audit trail for API failures, kept for post-hoc analysis rather than serving reads.
+    */
+  val FetchFailureRetentionDays: Key[Int] = Key("fetch_failure_retention_days", 30, _.toIntOption, _.toString)
+
   /** Retention window (days) for per-job log files in `${JOB_LOGS_DIR}`, applied by `JobRunner.live` on startup. */
   val JobLogRetentionDays: Key[Int] = Key("job_log_retention_days", 14, _.toIntOption, _.toString)
 
@@ -42,7 +50,8 @@ object AppSetting {
   val ProgressRefreshIntervalMillis: Key[Int] = Key("progress_refresh_interval_ms", 100, _.toIntOption, _.toString)
 
   /** Every known key — for discoverability (e.g. a future `ccas settings list`). */
-  val all: List[Key[?]] = List(CacheRetentionDays, JobLogRetentionDays, ProgressRefreshIntervalMillis)
+  val all: List[Key[?]] =
+    List(CacheRetentionDays, FetchFailureRetentionDays, JobLogRetentionDays, ProgressRefreshIntervalMillis)
 
   def createTable: ZIO[PostgresClient, SQLException, Int] =
     connectZIO {

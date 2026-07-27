@@ -4,7 +4,6 @@ import java.nio.charset.StandardCharsets
 import java.util.Base64
 
 import zio.*
-import zio.http.Client
 
 import ccas.api.misc.subtypes.{ClubSlug, Username}
 import ccas.api.player.ApiPlayer
@@ -25,6 +24,7 @@ import ccas.server.routes.JobRoutes.{
 import ccas.server.routes.ManagedClubRoutes.{ManagedClubResponse, MarkManagedRequest}
 import ccas.server.routes.ScheduleRoutes.{CreateScheduleRequest, ScheduleResponse}
 import ccas.server.scheduler.{MisfirePolicy, TriggerType}
+import ccas.utils.client.HttpClientLayer
 
 /** Maps a parsed [[CliCommand]] to HTTP calls against the local server and renders the result, returning the process
   * exit code. `Serve` is handled in [[Main]] (it boots the server rather than calling it), never here.
@@ -51,7 +51,12 @@ object Dispatcher {
           currentClub
         ).tap(_ => refreshClubsCache(api))
       )
-      .provide(Client.default)
+      // `HttpClientLayer.live` (not `Client.default`) so every Dispatcher call inherits the shared transport's
+      // `connectionTimeout(10s)` — a black-holed server now fails connect natively at 10s instead of parking a fiber on
+      // zio-http's unbounded 30s default (#182). Bounding connect at the Netty layer, below ZIO interruption, avoids the
+      // uninterruptible-unwind problem a ZIO-level `.timeout` hits, and — unlike a blanket request timeout — leaves
+      // legitimately-slow synchronous calls (e.g. a large `blacklist` add) and the streaming follows untouched.
+      .provide(HttpClientLayer.live)
       .catchAll {
         case e: CliError  => Console.printLineError(s"error: ${e.message}").orDie.as(e.exitCode)
         case e: Throwable => Console.printLineError(s"error: ${rootMessage(e)}").orDie.as(1)
@@ -84,13 +89,32 @@ object Dispatcher {
   // it in the thousands, almost all opponents and scouted clubs — so it serves only as a fallback for a fresh install
   // with nothing managed yet, leaving completion useful before the first `club add`.
   private def writeClubsCache(api: CcasApiClient): UIO[Unit] =
+    writeClubsCacheResult(api).ignore
+
+  // Reporting variant for the `club add`/`remove` handlers: a *write* failure (cache dir unwritable) is named on stderr,
+  // while a *fetch* failure stays silent. The distinction matters — the server call that preceded this just succeeded,
+  // so a subsequent managed-set fetch failing is a transient blip, not a cache-dir problem, and blaming the cache would
+  // misdirect. Never fails and never changes the exit code: a broken completion cache is not a failed command (#181).
+  private def writeClubsCacheReporting(api: CcasApiClient): UIO[Unit] =
+    writeClubsCacheResult(api).foldZIO(_ => ZIO.unit, wrote => ZIO.unlessDiscard(wrote)(cacheWriteFailed))
+
+  // Shared core: pick the managed set (falling back to all clubs only for a fresh install with nothing managed), write
+  // it, and return whether the write landed. Fails only if the *fetch* fails; `writeClubs` itself never fails.
+  private def writeClubsCacheResult(api: CcasApiClient): Task[Boolean] =
     managedSlugs(api)
       .flatMap(slugs =>
         if (slugs.nonEmpty) { ZIO.succeed(slugs) }
         else { allClubSlugs(api) }
       )
       .flatMap(CompletionCache.writeClubs)
-      .ignore
+
+  private def cacheWriteFailed: UIO[Unit] =
+    Console
+      .printLineError(
+        s"warning: could not update the club cache at ${XdgPaths.clubsFile} — " +
+          "shell completion won't reflect your managed clubs until that is writable"
+      )
+      .orDie
 
   private def managedSlugs(api: CcasApiClient): Task[List[String]] =
     api.getJson[List[ManagedClubResponse]]("/api/managed-clubs").map(_.map(_.slug))
@@ -237,13 +261,17 @@ object Dispatcher {
     case CliCommand.ScheduleRemove(_, id) =>
       api.delete(s"/api/schedules/$id") *> Console.printLine(s"deleted schedule $id").orDie.as(0)
 
-    // Both mutate the managed set, which IS the completion cache's source — drop it so the post-command refresh
-    // repopulates immediately instead of serving the pre-change list for up to the 6h TTL.
+    // Both mutate the managed set, which IS the completion cache's source, so they repopulate it right here rather than
+    // leaning on the post-command `.tap` refresh. The explicit write is REPORTED: a failure to write is surfaced on
+    // stderr (#181), because setting up club context is exactly when a broken cache dir should be named instead of
+    // leaving completion silently dead. The direct overwrite supersedes the old `invalidate`-then-tap-repopulate — a
+    // failed *delete* is a poor signal for an unwritable dir (deleting an absent file succeeds), whereas the write is
+    // the operation that actually fails. The trailing `.tap` then no-ops on the now-fresh file.
     case CliCommand.ClubsAdd(_, slug) =>
       val add = ClubSlug(slug.trim)
       api.postUnit[MarkManagedRequest]("/api/managed-clubs", MarkManagedRequest(add)) *>
         Console.printLine(s"now managing ${ClubSlug.unwrap(add)}").orDie *>
-        CompletionCache.invalidate.as(0)
+        writeClubsCacheReporting(api).as(0)
 
     case CliCommand.ClubsRemove(_, slug) =>
       val remove = ClubSlug(slug.trim)
@@ -251,7 +279,7 @@ object Dispatcher {
         _ <- api.delete(s"/api/managed-clubs/${ClubSlug.unwrap(remove)}")
         _ <- Console.printLine(s"stopped managing ${ClubSlug.unwrap(remove)}").orDie
         _ <- clearCurrentIfRemoved(remove, currentClub)
-        _ <- CompletionCache.invalidate
+        _ <- writeClubsCacheReporting(api)
       } yield 0
 
     case CliCommand.ClubsList(_) =>
