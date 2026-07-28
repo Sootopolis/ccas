@@ -31,6 +31,10 @@ object JobRoutes {
   // Recruitment caps (`JobCaps.MaxTarget` / `JobCaps.MaxTimeLimitMinutes`) are shared with the scheduled-job
   // path (`ScheduleParams`) so both submission routes apply identical bounds.
 
+  // `clubId` (on every club-scoped request) is the target club's stable Chess.com id, sent by the CLI when it has one
+  // cached for the resolved `current_club`. When present the server resolves by id — rename-proof — and runs the job
+  // against the club's canonical slug rather than the (possibly stale) `clubSlug` the CLI echoed; absent, it resolves by
+  // `clubSlug` as before. Optional so an older client / raw API caller still works (#176, #180).
   private[ccas] case class RecruitmentRequest(
     clubSlug: ClubSlug,
     alias: Option[String],
@@ -41,13 +45,21 @@ object JobRoutes {
     explore: Option[Boolean],
     // When Some(false) the scout leaves candidates Deferred for the CLI to confirm; absent/Some(true) auto-confirms
     // (scheduler, raw API, and non-interactive `ccas recruit`). The interactive CLI sends false.
-    autoConfirm: Option[Boolean]
+    autoConfirm: Option[Boolean],
+    clubId: Option[ClubId] = None
   )
   object RecruitmentRequest {
     given JsonCodec[RecruitmentRequest] = DeriveJsonCodec.gen
   }
 
-  private[ccas] case class MembershipRequest(clubSlugs: NonEmptyChunk[ClubSlug], trustUsernames: Option[Boolean])
+  // The batch DTOs carry a slug list, but the CLI always submits ONE club per call, so `clubId` is a scalar honoured
+  // only when `clubSlugs` is single-element (a genuine multi-club batch — which the CLI never sends — leaves it None and
+  // resolves each by slug). See [[RecruitmentRequest]] for the id-vs-slug resolution rationale.
+  private[ccas] case class MembershipRequest(
+    clubSlugs: NonEmptyChunk[ClubSlug],
+    trustUsernames: Option[Boolean],
+    clubId: Option[ClubId] = None
+  )
   object MembershipRequest {
     given JsonCodec[MembershipRequest] = DeriveJsonCodec.gen
   }
@@ -57,7 +69,8 @@ object JobRoutes {
     full: Option[Boolean],
     includeFinished: Option[Boolean],
     refresh: Option[Boolean],
-    refreshMinHours: Option[Int]
+    refreshMinHours: Option[Int],
+    clubId: Option[ClubId] = None
   )
   object HistoryRequest {
     given JsonCodec[HistoryRequest] = DeriveJsonCodec.gen
@@ -66,7 +79,8 @@ object JobRoutes {
   private[ccas] case class StatsRequest(
     clubSlug: ClubSlug,
     since: Option[String],
-    until: Option[String]
+    until: Option[String],
+    clubId: Option[ClubId] = None
   )
   object StatsRequest {
     given JsonCodec[StatsRequest] = DeriveJsonCodec.gen
@@ -74,14 +88,30 @@ object JobRoutes {
 
   // --- Response types ---
 
+  // `clubId` / `canonicalSlug` on the two result types report the resolved club's stable id and current canonical slug
+  // (both None on a resolution miss, and clubId None for the club-less matchref job). The CLI uses them to freshen a
+  // `current_club` whose stored display slug has gone stale after a rename, and to backfill an id it didn't have yet.
+
   /** Result of submitting a single job (recruitment, matchref). */
-  private[ccas] case class JobResult(jobId: Option[String], error: Option[String])
+  private[ccas] case class JobResult(
+    jobId: Option[String],
+    error: Option[String],
+    clubId: Option[Long] = None,
+    canonicalSlug: Option[String] = None
+  )
   object JobResult {
     given JsonCodec[JobResult] = DeriveJsonCodec.gen
   }
 
-  /** Result of submitting a club-specific job within a batch (membership, history). */
-  private[ccas] case class ClubJobResult(clubSlug: String, jobId: Option[String], error: Option[String])
+  /** Result of submitting a club-specific job within a batch (membership, history). `clubSlug` echoes the requested slug
+    * (the CLI matches results and invalidates its cache by it); `canonicalSlug` is the server-resolved current slug. */
+  private[ccas] case class ClubJobResult(
+    clubSlug: String,
+    jobId: Option[String],
+    error: Option[String],
+    clubId: Option[Long] = None,
+    canonicalSlug: Option[String] = None
+  )
   object ClubJobResult {
     given JsonCodec[ClubJobResult] = DeriveJsonCodec.gen
   }
@@ -140,14 +170,15 @@ object JobRoutes {
       (for {
         body   <- parseJsonBody[RecruitmentRequest](req)
         runner <- ZIO.service[JobRunner]
-        result <- Club.selectBySlug(body.clubSlug).flatMap {
+        result <- Club.resolveByIdOrSlug(body.clubId, body.clubSlug).flatMap {
           case None => ZIO.succeed(JobResult(None, Some(s"Club not found: ${body.clubSlug}")))
           case Some(club) =>
             val cappedTarget       = body.target.map(_ min JobCaps.MaxTarget)
             val effectiveTimeLimit = body.timeLimitMinutes.map(_ min JobCaps.MaxTimeLimitMinutes)
+            val canonical          = JobResult(None, None, Some(ClubId.unwrap(club.clubId)), Some(ClubSlug.unwrap(club.slug)))
             val effect = (jobRunId: Option[JobRunId]) =>
               RecruitmentApp.recruit(
-                body.clubSlug,
+                club.slug,
                 body.alias.getOrElse("default"),
                 target = cappedTarget,
                 cumulative = body.cumulative.getOrElse(false),
@@ -159,9 +190,9 @@ object JobRoutes {
                 jobRunId = jobRunId
               )
             runner.submit(JobKind.Recruitment, Some(club.clubId), Some(body.toJson), RunTrigger.Api, effect)
-              .map(id => JobResult(Some(JobRunId.unwrap(id)), None))
+              .map(id => canonical.copy(jobId = Some(JobRunId.unwrap(id))))
               .catchSome { case e: ConflictException =>
-                ZIO.succeed(JobResult(None, Some(e.getMessage)))
+                ZIO.succeed(canonical.copy(error = Some(e.getMessage)))
               }
         }
       } yield jsonResponse(Status.Ok, result)).pipe(withErrorHandling)
@@ -170,19 +201,22 @@ object JobRoutes {
       (for {
         body   <- parseJsonBody[MembershipRequest](req)
         runner <- ZIO.service[JobRunner]
+        clubIdForSingle = singleClubId(body.clubSlugs, body.clubId)
         results <- ZIO.foreach(body.clubSlugs.toChunk.toList)(slug =>
           submitClubJob(
             runner,
             JobKind.Membership,
+            clubIdForSingle,
             slug,
             Some(body.toJson),
-            jobRunId =>
-              MembershipApp.reconcileAndReport(
-                slug,
-                body.trustUsernames.getOrElse(true),
-                RunTrigger.Api,
-                jobRunId
-              ).unit
+            club =>
+              jobRunId =>
+                MembershipApp.reconcileAndReport(
+                  club.slug,
+                  body.trustUsernames.getOrElse(true),
+                  RunTrigger.Api,
+                  jobRunId
+                ).unit
           )
         )
       } yield jsonResponse(Status.Ok, results)).pipe(withErrorHandling)
@@ -209,21 +243,24 @@ object JobRoutes {
         body   <- parseJsonBody[HistoryRequest](req)
         runner <- ZIO.service[JobRunner]
         effectiveRefresh = body.refreshMinHours.orElse(body.refresh.filter(identity).map(_ => 0))
+        clubIdForSingle  = singleClubId(body.clubSlugs, body.clubId)
         results <- ZIO.foreach(body.clubSlugs.toChunk.toList)(slug =>
           submitClubJob(
             runner,
             JobKind.History,
+            clubIdForSingle,
             slug,
             Some(body.toJson),
-            jobRunId =>
-              HistoryApp.discover(
-                slug,
-                body.full.getOrElse(false),
-                body.includeFinished.getOrElse(false),
-                effectiveRefresh,
-                RunTrigger.Api,
-                jobRunId = jobRunId
-              ).unit
+            club =>
+              jobRunId =>
+                HistoryApp.discover(
+                  club.slug,
+                  body.full.getOrElse(false),
+                  body.includeFinished.getOrElse(false),
+                  effectiveRefresh,
+                  RunTrigger.Api,
+                  jobRunId = jobRunId
+                ).unit
           )
         )
       } yield jsonResponse(Status.Ok, results)).pipe(withErrorHandling)
@@ -246,15 +283,18 @@ object JobRoutes {
         result <- submitClubJob(
           runner,
           JobKind.Stats,
+          body.clubId,
           body.clubSlug,
           Some(body.toJson),
-          _ => parsed match {
-            case Some((since, until)) =>
-              // minGames=1 mirrors the CLI default; StatsRequest carries no min-games field.
-              StatsApp.playerOfPeriodAndReport(body.clubSlug, since, until, 1).unit
-            case None =>
-              StatsApp.memberStatsAndReport(body.clubSlug).unit
-          }
+          club =>
+            _ =>
+              parsed match {
+                case Some((since, until)) =>
+                  // minGames=1 mirrors the CLI default; StatsRequest carries no min-games field.
+                  StatsApp.playerOfPeriodAndReport(club.slug, since, until, 1).unit
+                case None =>
+                  StatsApp.memberStatsAndReport(club.slug).unit
+              }
         )
       } yield jsonResponse(Status.Ok, result)).pipe(withErrorHandling)
     },
@@ -417,21 +457,37 @@ object JobRoutes {
 
   // --- Helpers ---
 
-  /** Resolve a club slug and submit a single job. Returns a [[ClubJobResult]] with either a job ID or an error. */
+  /** The batch request's `clubId` applies only to a single-club submit: for a genuine multi-club batch (which the CLI
+    * never sends) an id can't be shared across slugs, so it's dropped and each club resolves by slug.
+    */
+  private def singleClubId(slugs: NonEmptyChunk[ClubSlug], clubId: Option[ClubId]): Option[ClubId] =
+    if (slugs.size == 1) { clubId } else { None }
+
+  /** Resolve a club (by id when the caller has one, else by the requested slug) and submit a single job. The `effect` is
+    * built from the *resolved* [[Club]], not the requested slug, so a job launched against a renamed `current_club` runs
+    * on the club's canonical slug instead of 404-ing on the stale one the CLI echoed. The [[ClubJobResult]] echoes the
+    * requested slug (for CLI matching / cache invalidation) and carries the canonical id + slug for `current_club`
+    * refresh.
+    */
   private def submitClubJob(
     runner: JobRunner,
     kind: JobKind,
-    slug: ClubSlug,
+    clubId: Option[ClubId],
+    requestedSlug: ClubSlug,
     params: Option[String],
-    effect: Option[JobRunId] => RIO[ProgressDisplay & ChessComClient & PostgresClient, Any]
-  ): RIO[PostgresClient, ClubJobResult] =
-    Club.selectBySlug(slug).flatMap {
-      case None => ZIO.succeed(ClubJobResult(ClubSlug.unwrap(slug), None, Some("Club not found")))
+    effect: Club => Option[JobRunId] => RIO[ProgressDisplay & ChessComClient & PostgresClient, Any]
+  ): RIO[PostgresClient, ClubJobResult] = {
+    val echoed = ClubSlug.unwrap(requestedSlug)
+    Club.resolveByIdOrSlug(clubId, requestedSlug).flatMap {
+      case None => ZIO.succeed(ClubJobResult(echoed, None, Some("Club not found")))
       case Some(club) =>
-        runner.submit(kind, Some(club.clubId), params, RunTrigger.Api, effect)
-          .map(id => ClubJobResult(ClubSlug.unwrap(slug), Some(JobRunId.unwrap(id)), None))
+        runner.submit(kind, Some(club.clubId), params, RunTrigger.Api, effect(club))
+          .map(id =>
+            ClubJobResult(echoed, Some(JobRunId.unwrap(id)), None, Some(ClubId.unwrap(club.clubId)), Some(ClubSlug.unwrap(club.slug)))
+          )
           .catchSome { case e: ConflictException =>
-            ZIO.succeed(ClubJobResult(ClubSlug.unwrap(slug), None, Some(e.getMessage)))
+            ZIO.succeed(ClubJobResult(echoed, None, Some(e.getMessage), Some(ClubId.unwrap(club.clubId)), Some(ClubSlug.unwrap(club.slug))))
           }
     }
+  }
 }

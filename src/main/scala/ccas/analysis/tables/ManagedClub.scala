@@ -21,8 +21,9 @@ final case class ManagedClub(
   markedAt: Instant
 ) derives DbCodec
 
-/** A managed club joined to its `club` row for display (slug + name). */
+/** A managed club joined to its `club` row for display (slug + name) and stable-id targeting (`clubId`). */
 final case class ManagedClubView(
+  clubId: ClubId,
   slug: ClubSlug,
   name: String,
   markedAt: Instant
@@ -49,7 +50,7 @@ object ManagedClub {
     */
   def selectAllWithClub: ZIO[PostgresClient, SQLException, List[ManagedClubView]] =
     connectZIO {
-      sql"""SELECT c.slug, c.name, mc.marked_at
+      sql"""SELECT c.club_id, c.slug, c.name, mc.marked_at
             FROM managed_club mc
             JOIN club c ON c.club_id = mc.club_id
             ORDER BY mc.marked_at DESC""".query[ManagedClubView].run().toList

@@ -17,6 +17,7 @@ object TestClubSql extends ZIOSpecDefault {
     testClubUpsert,
     testClubUpsertUpdate,
     testClubUpsertBatch,
+    testClubResolveByIdOrSlug,
     testClubSelect,
     testClubSelectExistingSlugs,
     testClubMembersCount,
@@ -89,6 +90,22 @@ object TestClubSql extends ZIOSpecDefault {
       a.contains(clubA),
       b.contains(clubB),
       notFound.isEmpty
+    )
+  }
+
+  private def testClubResolveByIdOrSlug = test("resolveByIdOrSlug: id wins (rename-proof); falls back to slug") {
+    for {
+      _ <- Club.upsert(clubA)
+      // Id resolves even when the slug passed is stale / wrong — the rename-proof path.
+      byStaleSlugWithId <- Club.resolveByIdOrSlug(Some(clubA.clubId), ClubSlug("was-renamed"))
+      // No id: resolve by slug, as before.
+      bySlug <- Club.resolveByIdOrSlug(None, clubA.slug)
+      // A slug that doesn't exist and no id: nothing.
+      miss <- Club.resolveByIdOrSlug(None, ClubSlug("no-such-club"))
+    } yield assertTrue(
+      byStaleSlugWithId.contains(clubA),
+      bySlug.contains(clubA),
+      miss.isEmpty
     )
   }
 

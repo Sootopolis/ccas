@@ -2,7 +2,8 @@ package ccas.cli
 
 import zio.{Console, Duration, ExitCode, UIO, ZIO}
 
-import ccas.cli.config.ConfigWriter
+import ccas.api.misc.subtypes.ClubId
+import ccas.cli.config.{ConfigWriter, CurrentClubRef}
 import ccas.server.routes.ManagedClubRoutes.ManagedClubResponse
 import ccas.utils.client.HttpClientLayer
 
@@ -57,7 +58,8 @@ object UseClub {
   // A pure read — no network, no cache refresh — so it stays instant and offline.
   private def showCurrent(currentClub: Option[String]): UIO[ExitCode] =
     currentClub match {
-      case Some(s) => Console.printLine(s).orDie.as(ExitCode.success)
+      // Show the human-readable slug, not the stored `<id>:<slug>` form.
+      case Some(s) => Console.printLine(CurrentClubRef.parse(s).slug).orDie.as(ExitCode.success)
       case None =>
         Console.printLineError("no current club set; set one with 'ccas use-club <slug>'").orDie.as(ExitCode(2))
     }
@@ -69,7 +71,7 @@ object UseClub {
       case Some(s) =>
         ConfigWriter
           .clearCurrentClub(XdgPaths.configFile)
-          .foldZIO(saveFailed("clear current club"), _ => cleared(s))
+          .foldZIO(saveFailed("clear current club"), _ => cleared(CurrentClubRef.parse(s).slug))
     }
 
   private def setCurrent(slug: String, server: String): UIO[ExitCode] = {
@@ -78,10 +80,11 @@ object UseClub {
     val s = slug.trim
     if (s.isEmpty) { usageError("club slug must not be blank") }
     else {
-      // Write first, unconditionally: the local pointer is the guaranteed effect and must land even offline. The
-      // verification that follows only refreshes the cache and refines the advisory note.
+      // Write first, unconditionally: the local pointer is the guaranteed effect and must land even offline. It goes in
+      // slug-only (no id yet); the verification that follows refreshes the cache, refines the advisory note, and — when
+      // the club turns out to be managed — upgrades the pointer to the rename-proof `<id>:<slug>` form.
       ConfigWriter
-        .setCurrentClub(XdgPaths.configFile, s)
+        .setCurrentClub(XdgPaths.configFile, None, s)
         .foldZIO(saveFailed("save current club"), _ => verifyThenConfirm(s, server))
     }
   }
@@ -89,6 +92,11 @@ object UseClub {
   private def verifyThenConfirm(slug: String, server: String): UIO[ExitCode] =
     for {
       managed <- fetchManaged(server)
+      slugs = managed.map(_.map(_.slug))
+      // If the club is managed, upgrade the pointer to the rename-proof `<id>:<slug>` form. Best-effort: the slug-only
+      // pointer already landed, so a write failure here doesn't fail the command. An unmanaged / unverified club stays
+      // slug-only and gets its id backfilled on the next successful job submit.
+      _ <- ZIO.foreachDiscard(matchedId(slug, managed))(id => upgradePointer(id, slug))
       // A live list means the cache is now authoritative for this club too — write it so the false-alarm case (a
       // managed club the cache hadn't yet learned) can't recur, and so completion picks the club up immediately.
       // Only worth caching when the managed set has something in it. Writing an empty list would truncate the cache to
@@ -96,11 +104,19 @@ object UseClub {
       // and its `/api/clubs` fallback for the whole TTL, while `seedClubs` no-ops because the file now exists. That
       // fallback policy is `Dispatcher`'s to apply; this opportunistic write deliberately owns none of it and just
       // steps aside.
-      written <- ZIO.foreach(managed.filter(_.nonEmpty))(CompletionCache.writeClubs)
+      written <- ZIO.foreach(slugs.filter(_.nonEmpty))(CompletionCache.writeClubs)
       _       <- ZIO.whenDiscard(written.contains(false))(cacheWriteFailed)
-      _       <- advise(slug, classify(slug, managed))
+      _       <- advise(slug, classify(slug, slugs))
       _       <- Console.printLine(s"current club set to $slug").orDie
     } yield ExitCode.success
+
+  // The managed club matching the typed slug (case-insensitive; `ClubSlug.normalize` only lowercases), and its stable
+  // id — the value that upgrades the pointer to rename-proof form.
+  private def matchedId(slug: String, managed: Option[List[ManagedClubResponse]]): Option[ClubId] =
+    managed.flatMap(_.find(_.slug.equalsIgnoreCase(slug))).map(c => ClubId.wrap(c.clubId))
+
+  private def upgradePointer(id: ClubId, slug: String): UIO[Unit] =
+    ConfigWriter.setCurrentClub(XdgPaths.configFile, Some(id), slug).ignore
 
   // Best-effort: build the CLI client, fetch the managed set, bound it, and collapse every failure (refused connection,
   // timeout, non-2xx, decode error, defect) to None so the caller falls back to the offline path.
@@ -111,10 +127,10 @@ object UseClub {
   // measured 31s before `disconnect` moved that unwinding into the background. `HttpClientLayer.live` now caps connect
   // at 10s natively (#182), but this probe wants a far tighter interactive bound, so the 2s `timeout` + `disconnect`
   // still carry the snappy cutoff; the layer's 10s is only a backstop.
-  private def fetchManaged(server: String): UIO[Option[List[String]]] =
+  private def fetchManaged(server: String): UIO[Option[List[ManagedClubResponse]]] =
     CcasApiClient
       .live(server)
-      .flatMap(_.getJson[List[ManagedClubResponse]]("/api/managed-clubs").map(_.map(_.slug)))
+      .flatMap(_.getJson[List[ManagedClubResponse]]("/api/managed-clubs"))
       .provide(HttpClientLayer.live)
       .disconnect
       .timeout(VerifyTimeout)

@@ -155,6 +155,7 @@ object TestRoutes extends ZIOSpecDefault {
     testRecruitmentConflict,
     testRecruitmentBadJson,
     testMembershipSingleClub,
+    testMembershipResolvesByIdOverStaleSlug,
     testMembershipEmptyClubSlugs,
     testMembershipMultipleClubs,
     testMembershipWithUnknownClub,
@@ -272,6 +273,33 @@ object TestRoutes extends ZIOSpecDefault {
       )
     }
   }
+
+  // Case B (#176): the CLI holds a stale slug for a club that has since been renamed, but the correct stable id. The
+  // server must resolve by id and report the canonical slug back (for `current_club` refresh), never 404 on the slug.
+  private def testMembershipResolvesByIdOverStaleSlug =
+    test("POST /api/jobs/membership resolves by clubId even when the slug is stale") {
+      for {
+        _    <- ensureClubs
+        fake <- getFakeRunner
+        _    <- fake.setNextAction(Action.Succeed)
+        // clubId 200 is "test-club"; the slug sent no longer exists, but the id pins the club.
+        response <- JobRoutes.routes.runZIO(
+          jsonRequest(Method.POST, "/api/jobs/membership", """{"clubSlugs":["renamed-away"],"clubId":200}""")
+        )
+        body   <- response.body.asString
+        parsed = body.fromJson[List[ClubJobResult]]
+      } yield {
+        val r = parsed.toOption.get.head
+        assertTrue(
+          response.status == Status.Ok,
+          r.clubSlug == "renamed-away",         // echoes the requested slug (CLI matches / invalidates by it)
+          r.jobId.isDefined,
+          r.error.isEmpty,
+          r.clubId.contains(200L),              // canonical id
+          r.canonicalSlug.contains("test-club") // canonical current slug, for current_club refresh
+        )
+      }
+    }
 
   private def testMembershipWithUnknownClub = test("POST /api/jobs/membership with unknown club") {
     for {
@@ -940,13 +968,14 @@ object TestRoutes extends ZIOSpecDefault {
       )
     }
 
-  private def testManagedListWireShape = test("GET response uses {slug,name,markedAt} wire shape") {
+  private def testManagedListWireShape = test("GET response uses {clubId,slug,name,markedAt} wire shape") {
     for {
       _    <- resetManaged
       _    <- ManagedClubRoutes.routes.runZIO(jsonRequest(Method.POST, "/api/managed-clubs", """{"clubSlug":"test-club"}"""))
       resp <- ManagedClubRoutes.routes.runZIO(jsonRequest(Method.GET, "/api/managed-clubs"))
       body <- resp.body.asString
     } yield assertTrue(
+      body.contains("\"clubId\""),
       body.contains("\"slug\""),
       body.contains("\"name\""),
       body.contains("\"markedAt\"")

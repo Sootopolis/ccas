@@ -7,7 +7,7 @@ import zio.json.{DeriveJsonCodec, JsonCodec}
 
 import ccas.analysis.apps.ManagedClubApp
 import ccas.analysis.tables.ManagedClubView
-import ccas.api.misc.subtypes.ClubSlug
+import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 import ccas.server.routes.RouteHelpers.*
 import ccas.server.scheduler.JobSchedule
 import ccas.utils.sql.PostgresClient
@@ -24,12 +24,17 @@ object ManagedClubRoutes {
     given JsonCodec[MarkManagedRequest] = DeriveJsonCodec.gen
   }
 
-  private[ccas] case class ManagedClubResponse(slug: String, name: String, markedAt: String)
+  private[ccas] case class ManagedClubResponse(clubId: Long, slug: String, name: String, markedAt: String)
   object ManagedClubResponse {
     given JsonCodec[ManagedClubResponse] = DeriveJsonCodec.gen
 
     def fromView(v: ManagedClubView): ManagedClubResponse =
-      ManagedClubResponse(slug = ClubSlug.unwrap(v.slug), name = v.name, markedAt = v.markedAt.toString)
+      ManagedClubResponse(
+        clubId = ClubId.unwrap(v.clubId),
+        slug = ClubSlug.unwrap(v.slug),
+        name = v.name,
+        markedAt = v.markedAt.toString
+      )
   }
 
   // --- Routes ---

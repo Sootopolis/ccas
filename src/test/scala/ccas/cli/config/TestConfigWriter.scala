@@ -5,6 +5,8 @@ import java.nio.file.{Files, Path}
 import zio.{UIO, ZIO}
 import zio.test.{assertTrue, Spec, ZIOSpecDefault}
 
+import ccas.api.misc.subtypes.ClubId
+
 /** Tests [[ConfigWriter]] against temp config files.
   *
   * Set side: creates the file (and parents) when absent, preserves other keys and comments, overwrites an existing
@@ -30,9 +32,23 @@ object TestConfigWriter extends ZIOSpecDefault {
       for {
         dir <- tempDir
         file = dir.resolve("nested/config.conf")
-        _   <- ConfigWriter.setCurrentClub(file, "team-alpha").orDie
+        _   <- ConfigWriter.setCurrentClub(file, None, "team-alpha").orDie
         cfg <- load(file)
       } yield assertTrue(cfg.currentClub.contains("team-alpha"))
+    },
+    test("writes the <id>:<slug> form when a club id is known, and it round-trips through CurrentClubRef") {
+      for {
+        dir <- tempDir
+        file = dir.resolve("config.conf")
+        _    <- ConfigWriter.setCurrentClub(file, Some(ClubId.wrap(1234L)), "team-alpha").orDie
+        text <- read(file)
+        cfg  <- load(file)
+        ref = CurrentClubRef.parse(cfg.currentClub.getOrElse(""))
+      } yield assertTrue(
+        text.contains("current_club = \"1234:team-alpha\""),
+        ref.clubId.contains(ClubId.wrap(1234L)),
+        ref.slug == "team-alpha"
+      )
     },
     test("preserves other keys and comments while setting current_club") {
       val existing =
@@ -44,7 +60,7 @@ object TestConfigWriter extends ZIOSpecDefault {
         dir <- tempDir
         file = dir.resolve("config.conf")
         _    <- ZIO.attemptBlocking(Files.writeString(file, existing)).orDie
-        _    <- ConfigWriter.setCurrentClub(file, "team-beta").orDie
+        _    <- ConfigWriter.setCurrentClub(file, None, "team-beta").orDie
         text <- read(file)
         cfg  <- load(file)
       } yield assertTrue(
@@ -59,8 +75,8 @@ object TestConfigWriter extends ZIOSpecDefault {
       for {
         dir <- tempDir
         file = dir.resolve("config.conf")
-        _    <- ConfigWriter.setCurrentClub(file, "first").orDie
-        _    <- ConfigWriter.setCurrentClub(file, "second").orDie
+        _    <- ConfigWriter.setCurrentClub(file, None, "first").orDie
+        _    <- ConfigWriter.setCurrentClub(file, None, "second").orDie
         text <- read(file)
         cfg  <- load(file)
       } yield assertTrue(
@@ -92,7 +108,7 @@ object TestConfigWriter extends ZIOSpecDefault {
       for {
         dir <- tempDir
         file = dir.resolve("config.conf")
-        _    <- ConfigWriter.setCurrentClub(file, "team-alpha").orDie
+        _    <- ConfigWriter.setCurrentClub(file, None, "team-alpha").orDie
         _    <- ConfigWriter.clearCurrentClub(file).orDie
         text <- read(file)
         cfg  <- load(file)
@@ -110,9 +126,9 @@ object TestConfigWriter extends ZIOSpecDefault {
       for {
         dir <- tempDir
         file = dir.resolve("config.conf")
-        _    <- ConfigWriter.setCurrentClub(file, "first").orDie
+        _    <- ConfigWriter.setCurrentClub(file, None, "first").orDie
         _    <- ConfigWriter.clearCurrentClub(file).orDie
-        _    <- ConfigWriter.setCurrentClub(file, "second").orDie
+        _    <- ConfigWriter.setCurrentClub(file, None, "second").orDie
         cfg  <- load(file)
         text <- read(file)
       } yield assertTrue(
