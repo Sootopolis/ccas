@@ -25,6 +25,7 @@ import ccas.server.routes.ManagedClubRoutes.{ManagedClubResponse, MarkManagedReq
 import ccas.server.routes.ScheduleRoutes.{CreateScheduleRequest, ScheduleResponse}
 import ccas.server.scheduler.{MisfirePolicy, TriggerType}
 import ccas.utils.client.HttpClientLayer
+import ccas.utils.errors.ClubProblem
 
 /** Maps a parsed [[CliCommand]] to HTTP calls against the local server and renders the result, returning the process
   * exit code. `Serve` is handled in [[Main]] (it boots the server rather than calling it), never here.
@@ -423,19 +424,21 @@ object Dispatcher {
       case _ => Console.printLineError(s"${result.clubSlug}: server returned no job id").orDie.as(1)
     }
 
-  // The server gates submission on an exact-slug `Club.selectBySlug` before any rename recovery can run, so a club
-  // renamed on Chess.com since our last cache refresh comes back as "Club not found" — indistinguishable from a typo,
-  // and the dead slug is very likely what completion just suggested. Two response shapes carry it: `ClubJobResult`
-  // ("Club not found") and `JobResult` ("Club not found: <slug>"), hence the prefix match.
+  // A club-scoped result is "missing" — worth busting the completion cache and hinting a stranded `current_club` — when
+  // the server reports a typed `NotFound` / `Problematic` problem. Named arms rather than `problem.isDefined` so future
+  // arms (`Renamed`, `NotManaged`) that call for different handling don't silently fall in here. The legacy
+  // `error.startsWith("Club not found")` string is retained only as a fallback for a server predating the typed field.
   private val ClubNotFound = "Club not found"
 
-  private def missingClub(error: Option[String]): Boolean = error.exists(_.startsWith(ClubNotFound))
+  private[cli] def missingClub(problem: Option[ClubProblem], error: Option[String]): Boolean =
+    problem.exists(p => p == ClubProblem.NotFound || p == ClubProblem.Problematic) ||
+      error.exists(_.startsWith(ClubNotFound))
 
   private def missingFrom(results: List[ClubJobResult]): List[String] =
-    results.filter(r => missingClub(r.error)).map(_.clubSlug)
+    results.filter(r => missingClub(r.problem, r.error)).map(_.clubSlug)
 
   private def missingFor(slug: ClubSlug, result: JobResult): List[String] =
-    if (missingClub(result.error)) { List(ClubSlug.unwrap(slug)) }
+    if (missingClub(result.problem, result.error)) { List(ClubSlug.unwrap(slug)) }
     else { Nil }
 
   // Drop the cache so the post-command refresh repopulates it — the 6h TTL would otherwise re-suggest the same dead

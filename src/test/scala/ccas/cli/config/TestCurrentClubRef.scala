@@ -37,8 +37,8 @@ object TestCurrentClubRef extends ZIOSpecDefault {
     },
     test("render round-trips both forms") {
       assertTrue(
-        CurrentClubRef.render(Some(ClubId.wrap(7L)), "team-a") == "7:team-a",
-        CurrentClubRef.render(None, "team-a") == "team-a"
+        CurrentClubRef(Some(ClubId.wrap(7L)), "team-a").render == "7:team-a",
+        CurrentClubRef(None, "team-a").render == "team-a"
       )
     },
     suite("refreshedRef (the write-back decision)")(
