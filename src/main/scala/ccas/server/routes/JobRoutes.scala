@@ -10,6 +10,7 @@ import zio.{NonEmptyChunk, RIO, ZIO}
 import zio.http.*
 import zio.json.{DeriveJsonCodec, EncoderOps, JsonCodec}
 
+import ccas.analysis.apps.{ClubResolution, ClubVerdict}
 import ccas.analysis.apps.history.HistoryApp
 import ccas.analysis.apps.membership.MembershipApp
 import ccas.analysis.apps.recruitment.RecruitmentApp
@@ -22,7 +23,7 @@ import ccas.server.jobs.*
 import ccas.server.routes.RouteHelpers.*
 import ccas.utils.{ProgressDisplay, TimeParser}
 import ccas.utils.client.ChessComClient
-import ccas.utils.errors.{BadRequestException, ConflictException, ErrorResponse}
+import ccas.utils.errors.{BadRequestException, ClubProblem, ConflictException, ErrorResponse}
 
 object JobRoutes {
 
@@ -92,12 +93,16 @@ object JobRoutes {
   // (both None on a resolution miss, and clubId None for the club-less matchref job). The CLI uses them to freshen a
   // `current_club` whose stored display slug has gone stale after a rename, and to backfill an id it didn't have yet.
 
+  // `problem` is the typed reason a club-scoped submit didn't run (`None` when it did), carried alongside the
+  // human-readable `error` so the CLI branches on a value instead of `error.startsWith("Club not found")`.
+
   /** Result of submitting a single job (recruitment, matchref). */
   private[ccas] case class JobResult(
     jobId: Option[String],
     error: Option[String],
     clubId: Option[Long] = None,
-    canonicalSlug: Option[String] = None
+    canonicalSlug: Option[String] = None,
+    problem: Option[ClubProblem] = None
   )
   object JobResult {
     given JsonCodec[JobResult] = DeriveJsonCodec.gen
@@ -110,7 +115,8 @@ object JobRoutes {
     jobId: Option[String],
     error: Option[String],
     clubId: Option[Long] = None,
-    canonicalSlug: Option[String] = None
+    canonicalSlug: Option[String] = None,
+    problem: Option[ClubProblem] = None
   )
   object ClubJobResult {
     given JsonCodec[ClubJobResult] = DeriveJsonCodec.gen
@@ -170,9 +176,10 @@ object JobRoutes {
       (for {
         body   <- parseJsonBody[RecruitmentRequest](req)
         runner <- ZIO.service[JobRunner]
-        result <- Club.resolveByIdOrSlug(body.clubId, body.clubSlug).flatMap {
-          case None => ZIO.succeed(JobResult(None, Some(s"Club not found: ${body.clubSlug}")))
-          case Some(club) =>
+        result <- ClubResolution.resolve(body.clubId, body.clubSlug).flatMap {
+          case other @ (ClubVerdict.NotLocal(_) | ClubVerdict.Problematic(_)) =>
+            ZIO.succeed(JobResult(None, other.message, problem = other.problem))
+          case ClubVerdict.Known(club) =>
             val cappedTarget       = body.target.map(_ min JobCaps.MaxTarget)
             val effectiveTimeLimit = body.timeLimitMinutes.map(_ min JobCaps.MaxTimeLimitMinutes)
             val canonical          = JobResult(None, None, Some(ClubId.unwrap(club.clubId)), Some(ClubSlug.unwrap(club.slug)))
@@ -478,9 +485,8 @@ object JobRoutes {
     effect: Club => Option[JobRunId] => RIO[ProgressDisplay & ChessComClient & PostgresClient, Any]
   ): RIO[PostgresClient, ClubJobResult] = {
     val echoed = ClubSlug.unwrap(requestedSlug)
-    Club.resolveByIdOrSlug(clubId, requestedSlug).flatMap {
-      case None => ZIO.succeed(ClubJobResult(echoed, None, Some("Club not found")))
-      case Some(club) =>
+    ClubResolution.resolve(clubId, requestedSlug).flatMap {
+      case ClubVerdict.Known(club) =>
         runner.submit(kind, Some(club.clubId), params, RunTrigger.Api, effect(club))
           .map(id =>
             ClubJobResult(echoed, Some(JobRunId.unwrap(id)), None, Some(ClubId.unwrap(club.clubId)), Some(ClubSlug.unwrap(club.slug)))
@@ -488,6 +494,8 @@ object JobRoutes {
           .catchSome { case e: ConflictException =>
             ZIO.succeed(ClubJobResult(echoed, None, Some(e.getMessage), Some(ClubId.unwrap(club.clubId)), Some(ClubSlug.unwrap(club.slug))))
           }
+      case other =>
+        ZIO.succeed(ClubJobResult(echoed, None, other.message, problem = other.problem))
     }
   }
 }

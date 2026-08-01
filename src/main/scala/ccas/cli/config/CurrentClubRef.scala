@@ -12,7 +12,14 @@ import ccas.api.misc.subtypes.ClubId
   * and the left side is treated as an id only when it is all digits. Anything else is a bare slug, which keeps existing
   * slug-only configs working unchanged and tolerates a hand-typed value.
   */
-final case class CurrentClubRef(clubId: Option[ClubId], slug: String)
+final case class CurrentClubRef(clubId: Option[ClubId], slug: String) {
+
+  /** Render for storage: `"<id>:<slug>"` when an id is known, else the bare slug. The inverse of [[CurrentClubRef.parse]]. */
+  def render: String = clubId match {
+    case Some(id) => s"${ClubId.unwrap(id)}:$slug"
+    case None     => slug
+  }
+}
 
 object CurrentClubRef {
 
@@ -31,13 +38,6 @@ object CurrentClubRef {
         }
     }
   }
-
-  /** Render for storage: `"<id>:<slug>"` when an id is known, else the bare slug. */
-  def render(clubId: Option[ClubId], slug: String): String =
-    clubId match {
-      case Some(id) => s"${ClubId.unwrap(id)}:$slug"
-      case None     => slug
-    }
 
   /** Decide how (if at all) to refresh `current_club` after a job submit resolved a club server-side. Pure so the
     * write-back heuristic is testable without the dispatcher.
@@ -66,7 +66,7 @@ object CurrentClubRef {
         val isCurrent =
           ref.clubId.exists(cur => ClubId.unwrap(cur) == id) || (!targetHasId && sameSlug(ref.slug, targetSlug))
         val next = CurrentClubRef(Some(ClubId.wrap(id)), canon)
-        Option.when(isCurrent && render(next.clubId, next.slug) != raw.trim)(next)
+        Option.when(isCurrent && next.render != raw.trim)(next)
       case _ => None
     }
 

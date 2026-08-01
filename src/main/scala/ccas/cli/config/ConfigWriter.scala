@@ -26,7 +26,7 @@ object ConfigWriter {
     * a club the server couldn't resolve an id for) — the id is backfilled on the next successful command.
     */
   def setCurrentClub(file: Path, clubId: Option[ClubId], slug: String): Task[Unit] =
-    rewrite(file, Some(s"""current_club = "${escape(CurrentClubRef.render(clubId, slug))}""""))
+    rewrite(file, Some(s"""current_club = "${escape(CurrentClubRef(clubId, slug).render)}""""))
 
   /** Drop the `current_club` assignment, leaving the rest of the config intact. Used by `ccas use-club --clear` and by
     * `ccas club remove` when it unmanages the club the pointer names.

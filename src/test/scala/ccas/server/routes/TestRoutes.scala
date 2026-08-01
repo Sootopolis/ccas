@@ -20,7 +20,7 @@ import ccas.server.routes.JobRoutes.{ClubJobResult, ConfirmResult, InvitedUserna
 import ccas.server.scheduler.{JobSchedule, ScheduleSeed}
 import ccas.server.ServerTables
 import ccas.utils.client.{ChessComClient, TestChessComClientSupport}
-import ccas.utils.errors.ConflictException
+import ccas.utils.errors.{ClubProblem, ConflictException}
 import ccas.utils.sql.{FreshSchemaLayer, TestDbCleanup}
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.ProgressDisplay
@@ -321,8 +321,10 @@ object TestRoutes extends ZIOSpecDefault {
         results.size == 2,
         found.jobId.isDefined,
         found.error.isEmpty,
+        found.problem.isEmpty,
         notFound.jobId.isEmpty,
-        notFound.error.contains("Club not found")
+        notFound.error.exists(_.startsWith("Club not found")),
+        notFound.problem.contains(ClubProblem.NotFound)
       )
     }
   }
