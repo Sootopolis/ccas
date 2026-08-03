@@ -882,7 +882,13 @@ object ChessComClient {
         flushCtx =
           ClientStatsFlushContext(sessionId, appLabel, startedAt, stats, configIdRef, throttleConfig, stateRef, pgClient, endedAtRef)
         flushFiber <- ClientStatsPersistence.persistStats(flushCtx).repeat(Schedule.fixed(statsFlushInterval)).forkDaemon
-        _ <- ZIO.addFinalizer(flushFiber.interrupt *> ClientStatsPersistence.finalFlush(flushCtx))
+        // Bounded, best-effort final flush so a dead DB pool can't wedge scope-close (#193): interruptFork (don't await
+        // a periodic flush that may be parked in a blocking checkout — matching endSession's rationale), then a
+        // disconnected 5s timeout so the doomed write unwinds in the background instead of blocking shutdown for the
+        // full connectionTimeout x retry cycle.
+        _ <- ZIO.addFinalizer(
+          flushFiber.interruptFork *> ClientStatsPersistence.finalFlush(flushCtx).disconnect.timeout(5.seconds)
+        )
         _ <- ZIO.addFinalizer(recoveryFiberRef.get.flatMap(ZIO.foreachDiscard(_)(_.interrupt)))
       } yield ChessComClient(
         client,
