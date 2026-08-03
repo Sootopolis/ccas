@@ -2,7 +2,7 @@ package ccas.utils.sql
 
 import java.io.PrintWriter
 import java.lang.reflect.Method
-import java.sql.{Connection, SQLException}
+import java.sql.{Connection, SQLException, SQLTransientConnectionException}
 import java.util.logging.Logger as JLogger
 import javax.sql.DataSource
 
@@ -36,16 +36,21 @@ final class PostgresClient private (
       Schedule.recurs(retryMaxRetries) &&
       Schedule.recurWhile[E](isTransient)
 
+  // `attemptBlockingInterrupt` (not `attemptBlocking`) so ZIO interruption Thread-interrupts the JDBC worker: on
+  // shutdown/cancel a fiber parked in Hikari's connection checkout aborts the wait promptly instead of blocking for the
+  // full `connectionTimeout` (#193). An in-flight `socket.read()` still ignores the interrupt, but that is already
+  // bounded by the driver `socketTimeout`.
+
   /** Run a read-only block with a pooled connection, retrying on transient errors. */
   def connect[A](f: DbCon ?=> A): IO[SQLException, A] =
-    ZIO.attemptBlocking(com.augustnagro.magnum.connect(transactor)(f))
+    ZIO.attemptBlockingInterrupt(com.augustnagro.magnum.connect(transactor)(f))
       .mapError(unwrapSqlCause)
       .refineToOrDie[SQLException]
       .retry(retrySchedule)
 
   /** Run a single-statement write in its own transaction, retrying on transient errors. */
   def transact[A](f: DbTx ?=> A): IO[SQLException, A] =
-    ZIO.attemptBlocking(com.augustnagro.magnum.transact(transactor)(f))
+    ZIO.attemptBlockingInterrupt(com.augustnagro.magnum.transact(transactor)(f))
       .mapError(unwrapSqlCause)
       .refineToOrDie[SQLException]
       .retry(retrySchedule)
@@ -202,13 +207,20 @@ object PostgresClient {
   // --- Transient error detection ---
 
   private[sql] def isTransient(e: Throwable): Boolean = e match {
+    // Hikari throws SQLTransientConnectionException when it can't hand out a connection within `connectionTimeout`
+    // (pool exhausted, or the DB unreachable *right now*), and stamps it with the last connect failure's 08xxx state —
+    // so it would otherwise match the 08xxx branch below and be retried. Retrying inside the same call just re-times-out
+    // after another `connectionTimeout`, turning one write into N x connectionTimeout of blocking (#193). Fail fast on
+    // the *type* (robust to Hikari message-wording changes, unlike a substring match); the caller — or the next
+    // scheduled tick — retries later, outside this blocking cycle.
+    case _: SQLTransientConnectionException => false
     case sql: SQLException =>
       Option(sql.getSQLState).exists(_.startsWith("08")) ||
-      Option(sql.getMessage).exists { msg =>
-        msg.contains("terminating connection") ||
-        msg.contains("Connection is closed") ||
-        msg.contains("This connection has been closed")
-      }
+        Option(sql.getMessage).exists { msg =>
+          msg.contains("terminating connection") ||
+          msg.contains("Connection is closed") ||
+          msg.contains("This connection has been closed")
+        }
     case _ => false
   }
 

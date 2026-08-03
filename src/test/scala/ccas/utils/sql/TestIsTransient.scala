@@ -1,6 +1,6 @@
 package ccas.utils.sql
 
-import java.sql.SQLException
+import java.sql.{SQLException, SQLTransientConnectionException}
 
 import zio.test.{assertTrue, Spec, ZIOSpecDefault}
 
@@ -24,6 +24,18 @@ object TestIsTransient extends ZIOSpecDefault {
     },
     test("message containing 'This connection has been closed' is transient") {
       assertTrue(PostgresClient.isTransient(sqlEx(null, "This connection has been closed")))
+    },
+    test("Hikari pool timeout (SQLTransientConnectionException) is not transient even with an 08xxx state") {
+      // Hikari stamps its pool-timeout with the last connect failure's SQLState, so the 08xxx branch would retry it.
+      // Fail fast on the type so retrying doesn't just re-time-out after another connectionTimeout.
+      assertTrue(
+        !PostgresClient.isTransient(
+          new SQLTransientConnectionException(
+            "HikariPool-1 - Connection is not available, request timed out after 30000ms",
+            "08001"
+          )
+        )
+      )
     },
     test("SQLState 23505 (unique_violation) is not transient") {
       assertTrue(!PostgresClient.isTransient(sqlEx("23505", "duplicate key value violates unique constraint")))
