@@ -54,7 +54,7 @@ object ClubAdminResolver {
     client: ChessComClient,
     username: Username
   ): RIO[PostgresClient, Option[(Username, PlayerId)]] =
-    client.get[ApiPlayer](ApiPlayer.getUrl(username)).map(Some(_)).catchSome {
+    client.getUncached[ApiPlayer](ApiPlayer.getUrl(username)).map(Some(_)).catchSome {
       case e: HttpStatusException if e.statusCode == 404 =>
         UsernameRenameResolver.resolveAndVerify(client, username, playerIdHint = None).map(_.map(_._2))
     }.flatMap {

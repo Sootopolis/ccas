@@ -221,10 +221,12 @@ object ClubDataApp extends ZIOAppDefault {
           for {
             matchesOpt <- fetchClubMatches(client, club.slug)
               .withClubSlugRenameRecovery(client, club.slug, Some(club.clubId))(fresh => fetchClubMatches(client, fresh))
-              .asSome
               .catchAll { error =>
                 ZIO.logInfo(s"[ClubData] Match fetch failed for ${club.slug}: ${error.getMessage}").as(None)
               }
+            // `matchesOpt` is None on an unchanged listing as well as on fetch failure (see `fetchClubMatches`): the
+            // DB-vs-cached reconciliation below still runs, but the API-derived timestamp and the opportunistic ref
+            // population are skipped by design when nothing changed.
             apiLatest = matchesOpt.flatMap(latestTimestamp(_, now))
             combined  = List(club.latestMatchAt, dbLatest, apiLatest).flatten.maxOption
             _ <- ZIO.whenDiscard(combined != club.latestMatchAt)(Club.updateLatestMatchAt(club.clubId, combined))
@@ -235,8 +237,22 @@ object ClubDataApp extends ZIOAppDefault {
     }
   }
 
-  private def fetchClubMatches(client: ChessComClient, clubSlug: ClubSlug): Task[ApiClubMatches] =
-    client.get[ApiClubMatches](ApiClubMatches.getUrl(clubSlug))
+  /** Fetches the club's `/matches` listing, folding an unchanged cache result (Fresh / 304-revalidated / byte-identical
+    * 200) to `None` so the caller skips the `SELECT body` Neon read — the #190 egress cut. The row stays cached, so the
+    * 304 still spares Chess.com's bandwidth; only our metered read is dropped.
+    *
+    * Deliberate consequence at the callsite: an unchanged listing yields no API-derived timestamp and no opportunistic
+    * `ClubMatchRef` population. A club with registered / in-progress matches is therefore no longer re-stamped
+    * `latestMatchAt = now`, so once its stamp ages past `ApiSkipThreshold` (180d) *and* the listing stays byte-stable,
+    * it revalidates (a cheap 304, no egress) each sweep instead of being gate-skipped. That is the intended trade —
+    * unmetered Chess.com revalidation over metered Neon egress, same as the rest of #190. Active clubs play matches
+    * within 180d, hit the `Changed` branch, and re-stamp normally, so only stalled registered matches see the extra
+    * 304s. `RefApp` stays the primary `ClubMatchRef` populator, so the skipped opportunistic write is backfilled there.
+    */
+  private def fetchClubMatches(client: ChessComClient, clubSlug: ClubSlug): Task[Option[ApiClubMatches]] =
+    client
+      .getCacheable[ApiClubMatches](ApiClubMatches.getUrl(clubSlug))
+      .flatMap(_.foldZIO(_ => ZIO.none)(matches => ZIO.some(matches)))
 
   /** Returns the most recent activity timestamp: `now` if any registered match exists (signalling current activity),
     * otherwise the max `start_time` across in-progress and finished matches.

@@ -411,7 +411,7 @@ private[ref] object RefResolution {
     username: Username,
     expectedPlayerId: PlayerId
   ): Task[Either[PlayerId, Unit]] =
-    client.get[ApiPlayer](ApiPlayer.getUrl(username)).map { apiPlayer =>
+    client.getUncached[ApiPlayer](ApiPlayer.getUrl(username)).map { apiPlayer =>
       if (apiPlayer.playerId == expectedPlayerId) { Right(()) }
       else { Left(apiPlayer.playerId) }
     }

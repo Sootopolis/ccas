@@ -31,7 +31,7 @@ object PlayerUpdater {
           case None => ZIO.unit
           case Some(conflicting) =>
             for {
-              apiPlayer <- client.get[ApiPlayer](ApiPlayer.getUrl(conflicting.username))
+              apiPlayer <- client.getUncached[ApiPlayer](ApiPlayer.getUrl(conflicting.username))
               _ <-
                 if (apiPlayer.playerId != conflicting.playerId) {
                   // Recycled handle: the API now serves the conflicting username for a different player. Our

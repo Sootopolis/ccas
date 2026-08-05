@@ -314,7 +314,7 @@ private[membership] object MembershipClassify {
     val playerId    = state.player.playerId
     val oldUsername = state.player.username
 
-    client.get[ApiPlayer](ApiPlayer.getUrl(oldUsername)).foldZIO(
+    client.getUncached[ApiPlayer](ApiPlayer.getUrl(oldUsername)).foldZIO(
       // A systemic outage must not be swallowed into the match-ref fallback (which would misclassify the member as
       // left/closed/unresolvable on incomplete data); re-raise so the run aborts before persist.
       error => NetworkUnavailableException.recoverUnless(error)(matchRefFallback(client, state, closedMember, apiMap, now)),
