@@ -33,5 +33,5 @@ object ApiClub {
 
   def getUrl(clubSlug: ClubSlug): URL = host.addPath(clubSlug.value)
 
-  def get(client: ChessComClient, clubSlug: ClubSlug): Task[ApiClub] = client.get[ApiClub](getUrl(clubSlug))
+  def get(client: ChessComClient, clubSlug: ClubSlug): Task[ApiClub] = client.getUncached[ApiClub](getUrl(clubSlug))
 }

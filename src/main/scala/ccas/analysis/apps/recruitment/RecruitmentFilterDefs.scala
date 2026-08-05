@@ -220,7 +220,7 @@ private[recruitment] object RecruitmentFilterDefs {
   object CheckClubs extends RecruitmentFilter {
     def apply(env: FilterEnv): RIO[PostgresClient, FilterResult] = {
       def fetch(uname: Username): RIO[PostgresClient, ApiPlayerClubs] =
-        env.run.client.get[ApiPlayerClubs](ApiPlayerClubs.getUrl(uname))
+        env.run.client.getUncached[ApiPlayerClubs](ApiPlayerClubs.getUrl(uname))
       for {
         apiPlayer <- requireApiPlayer(env)
         playerClubs <- fetch(env.candidate.username)

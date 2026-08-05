@@ -179,7 +179,7 @@ object ClubSlugRenameResolver {
     staleSlug: ClubSlug
   ): RIO[PostgresClient, Option[ClubSlug]] = {
     val effect = for {
-      apiClubs <- client.get[ApiPlayerClubs](ApiPlayerClubs.getUrl(username))
+      apiClubs <- client.getUncached[ApiPlayerClubs](ApiPlayerClubs.getUrl(username))
       candidates = apiClubs.clubs.map(_.clubName).distinct.filter(s => s != staleSlug && !isTombstone(s))
       knownSlugs <- Club.selectExistingSlugs(candidates.toSet)
       unknown = candidates.filterNot(knownSlugs.contains).toList

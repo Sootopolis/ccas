@@ -586,7 +586,7 @@ private[history] object HistoryProcessing {
       case true => ZIO.unit
       case false =>
         val fromApi = for {
-          playerClubs <- ctx.client.get[ApiPlayerClubs](ApiPlayerClubs.getUrl(apiPlayer.username))
+          playerClubs <- ctx.client.getUncached[ApiPlayerClubs](ApiPlayerClubs.getUrl(apiPlayer.username))
           clubOpt = playerClubs.clubs.find(_.clubName == ctx.clubSlug)
           member = clubOpt match {
             case Some(apiClub) =>

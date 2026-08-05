@@ -114,7 +114,7 @@ object UsernameRenameResolver {
     username: Username,
     playerIdHint: Option[PlayerId] = None
   ): RIO[PostgresClient, ApiPlayer] =
-    client.get[ApiPlayer](ApiPlayer.getUrl(username)).catchSome {
+    client.getUncached[ApiPlayer](ApiPlayer.getUrl(username)).catchSome {
       case e: ReportedNotFound =>
         resolveAndVerify(client, username, playerIdHint).flatMap {
           case Some((_, apiPlayer)) => ZIO.succeed(apiPlayer)
@@ -302,7 +302,7 @@ object UsernameRenameResolver {
     candidate: Username,
     playerIdHint: Option[PlayerId]
   ): RIO[Any, Option[(Username, ApiPlayer)]] =
-    client.get[ApiPlayer](ApiPlayer.getUrl(candidate)).map { apiPlayer =>
+    client.getUncached[ApiPlayer](ApiPlayer.getUrl(candidate)).map { apiPlayer =>
       val matches = playerIdHint.forall(_ == apiPlayer.playerId)
       Option.when(matches)((apiPlayer.username, apiPlayer))
     }.onNotFound(_ => ZIO.none)

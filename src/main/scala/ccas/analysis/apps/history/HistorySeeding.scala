@@ -116,7 +116,7 @@ private[history] object HistorySeeding {
     entries: Iterable[UnresolvedBoardPlayer]
   ): RIO[ProgressDisplay & PostgresClient, Int] =
     for {
-      apiPlayer <- client.get[ApiPlayer](ApiPlayer.getUrl(username))
+      apiPlayer <- client.getUncached[ApiPlayer](ApiPlayer.getUrl(username))
       playerId = apiPlayer.playerId
       _ <- withTransaction {
         PlayerUpdater.reconcile(apiPlayer, client) *>

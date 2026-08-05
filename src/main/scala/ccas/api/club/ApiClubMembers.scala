@@ -26,5 +26,5 @@ object ApiClubMembers {
   def getUrl(clubSlug: ClubSlug): URL = ApiClub.getUrl(clubSlug).addPath("members")
 
   def get(client: ChessComClient, clubSlug: ClubSlug): Task[ApiClubMembers] =
-    client.get[ApiClubMembers](getUrl(clubSlug))
+    client.getUncached[ApiClubMembers](getUrl(clubSlug))
 }
