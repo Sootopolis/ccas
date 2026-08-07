@@ -25,6 +25,7 @@ object ServerEnvKey {
     case Server         extends Domain("Server")
     case Scheduler      extends Domain("Scheduler")
     case ChessComClient extends Domain("Chess.com client")
+    case BodyStore      extends Domain("Response-body store")
   }
 }
 
@@ -83,7 +84,15 @@ object ServerEnvKeys {
     ServerEnvKey("CHESS_COM_API_MAX_429_RETRIES", "Max 429 retries (default 5)", ChessComClient, essential = false, secret = false),
     ServerEnvKey("CHESS_COM_API_MAX_CF_RETRIES", "Max Cloudflare-403 retries (default 2)", ChessComClient, essential = false, secret = false),
     ServerEnvKey("CHESS_COM_API_MAX_CONNECTION_RETRIES", "Max connection-error retries (default 3)", ChessComClient, essential = false, secret = false),
-    ServerEnvKey("CHESS_COM_API_STATS_FLUSH_INTERVAL_SECONDS", "Client-stats flush interval s (default 30)", ChessComClient, essential = false, secret = false)
+    ServerEnvKey("CHESS_COM_API_STATS_FLUSH_INTERVAL_SECONDS", "Client-stats flush interval s (default 30)", ChessComClient, essential = false, secret = false),
+    // Response-body store (#191): where cached Chess.com bodies live. The s3-* keys are only consulted when backend = s3.
+    ServerEnvKey("CCAS_BODY_STORE_BACKEND", "Response-body store backend: fs (default) or s3", BodyStore, essential = false, secret = false),
+    ServerEnvKey("CCAS_BODY_STORE_FS_ROOT", "Filesystem root for the fs body store", BodyStore, essential = false, secret = false),
+    ServerEnvKey("CCAS_R2_ENDPOINT", "R2 S3 endpoint URL (when backend = s3)", BodyStore, essential = false, secret = false),
+    ServerEnvKey("CCAS_R2_BUCKET", "R2 bucket name (when backend = s3)", BodyStore, essential = false, secret = false),
+    ServerEnvKey("CCAS_R2_REGION", "R2 region (default auto)", BodyStore, essential = false, secret = false),
+    ServerEnvKey("CCAS_R2_ACCESS_KEY", "R2 S3 access key id (when backend = s3)", BodyStore, essential = false, secret = true),
+    ServerEnvKey("CCAS_R2_SECRET_KEY", "R2 S3 secret access key (when backend = s3)", BodyStore, essential = false, secret = true)
   )
 
   val essential: List[ServerEnvKey] = all.filter(_.essential)
