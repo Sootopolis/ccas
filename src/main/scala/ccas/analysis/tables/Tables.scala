@@ -6,6 +6,7 @@ import java.time.temporal.ChronoUnit
 import zio.{RIO, Scope, ZIO, ZIOAppDefault}
 
 import ccas.utils.ProgressDisplay
+import ccas.utils.client.BodyStore
 import ccas.utils.sql.PostgresClient
 
 object Tables extends ZIOAppDefault {
@@ -13,11 +14,18 @@ object Tables extends ZIOAppDefault {
   override def run: RIO[Scope, Unit] =
     for {
       _ <- ProgressDisplay.live(showProgress = false).build
-      _ <- ensureTables.provide(PostgresClient.live())
+      _ <- ensureTables.provide(PostgresClient.live(), BodyStore.live)
       _ <- ZIO.logInfo("All tables ensured")
     } yield ()
 
-  def ensureTables: RIO[PostgresClient, Unit] =
+  /** [[ensureTables]] with its [[BodyStore]] self-provided, so it fits the `PostgresClient.live(onInit = ...)` hook —
+    * which runs the init effect with only `PostgresClient` in scope. The store instance is scoped to the init run
+    * (a fresh, cheap client, distinct from the long-lived one the app wires into `ChessComClient`).
+    */
+  val ensureTablesOnInit: RIO[PostgresClient, Unit] =
+    ensureTables.provideSomeLayer[PostgresClient](BodyStore.live)
+
+  def ensureTables: RIO[PostgresClient & BodyStore, Unit] =
     for {
       _ <- AppSetting.createTable
       _ <- Player.createTable

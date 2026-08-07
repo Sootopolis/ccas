@@ -12,7 +12,7 @@ import ccas.analysis.tables.{Club, ClubAdmin, ClubMatch, ClubMatchRef, Player, P
 import ccas.api.misc.enums.{ClubMatchStatus, PlayerStatusCategory, TimeClass}
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username}
 import ccas.utils.ProgressDisplay
-import ccas.utils.client.{ChessComClient, TestChessComClientSupport}
+import ccas.utils.client.{BodyStore, ChessComClient, TestChessComClientSupport}
 import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
 import ccas.utils.sql.PostgresClient.connectZIO
 
@@ -131,7 +131,7 @@ object TestClubDataApp extends ZIOSpecDefault {
     responses: Map[String, String],
     profileFailureStatus: Status = Status.NotFound,
     profileFailureBody: String = reportedNotFoundBody
-  ): RIO[PostgresClient, ChessComClient] = {
+  ): RIO[PostgresClient & BodyStore, ChessComClient] = {
     val emptyClubMatches = """{"finished": [], "in_progress": [], "registered": []}"""
     val routes: Routes[Any, Response] = Routes(
       Method.GET / "pub" / "club" / string("slug") / "matches" -> handler {

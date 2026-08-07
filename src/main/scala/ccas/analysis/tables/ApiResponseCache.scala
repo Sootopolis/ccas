@@ -7,13 +7,14 @@ import com.augustnagro.magnum.*
 import zio.ZIO
 
 import ccas.analysis.tables.subtypes.{ApiResponseBodyId, ApiResponseCacheId}
+import ccas.utils.client.BodyStore
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.{connectZIO, withTransaction}
 
 /** Persistent cache of Chess.com API responses keyed by URL. Holds cache-control metadata (ETag, Last-Modified,
   * max-age) alongside a foreign key into `api_response_body` for the body itself — body storage is deduplicated
-  * by SHA-256 hash via `ApiResponseBody.ensureBody`, so repeated identical responses across different URLs share
+  * by SHA-256 hash via `ApiResponseBody.putBody`, so repeated identical responses across different URLs share
   * a single row in the body table.
   *
   * Lookups via `lookupMeta` intentionally do not load the body — `ChessComClient.getCacheable` reads only this
@@ -58,8 +59,10 @@ object ApiResponseCache {
             FROM api_response_cache WHERE url = $url""".query[ApiResponseCache].run().headOption
     }
 
-  /** Upsert a fresh cache entry. Stores the body via `ApiResponseBody.ensureBody` (SHA-256 dedupe) and returns the
-    * resolved `body_id` so the caller can compare against the prior `body_id` to detect byte-identical content.
+  /** Upsert a fresh cache entry. Stores the body via `ApiResponseBody.putBody` (SHA-256 dedupe) — done BEFORE the
+    * transaction opens so the object-store round-trip never holds a pooled connection idle-in-transaction — then
+    * writes the hash-pointer and cache rows atomically, returning the resolved `body_id` so the caller can compare
+    * against the prior `body_id` to detect byte-identical content.
     */
   def upsertWithBody(
     url: String,
@@ -69,22 +72,24 @@ object ApiResponseCache {
     maxAgeSeconds: Option[Long],
     contentType: Option[String],
     fetchedAt: Instant
-  ): ZIO[PostgresClient, SQLException, ApiResponseBodyId] =
-    withTransaction {
-      ApiResponseBody.ensureBody(body).flatMap { bodyId =>
-        val rawBodyId = ApiResponseBodyId.unwrap(bodyId)
-        connectZIO {
-          sql"""INSERT INTO api_response_cache
-                  (fetched_at, url, content_type, max_age_seconds, etag, last_modified, body_id)
-                VALUES ($fetchedAt, $url, $contentType, $maxAgeSeconds, $etag, $lastModified, $rawBodyId)
-                ON CONFLICT (url) DO UPDATE SET
-                  fetched_at      = EXCLUDED.fetched_at,
-                  content_type    = EXCLUDED.content_type,
-                  max_age_seconds = EXCLUDED.max_age_seconds,
-                  etag            = EXCLUDED.etag,
-                  last_modified   = EXCLUDED.last_modified,
-                  body_id         = EXCLUDED.body_id""".update.run()
-        }.as(bodyId)
+  ): ZIO[PostgresClient & BodyStore, Throwable, ApiResponseBodyId] =
+    ApiResponseBody.putBody(body).flatMap { hash =>
+      withTransaction {
+        ApiResponseBody.ensureBodyPointer(hash).flatMap { bodyId =>
+          val rawBodyId = ApiResponseBodyId.unwrap(bodyId)
+          connectZIO {
+            sql"""INSERT INTO api_response_cache
+                    (fetched_at, url, content_type, max_age_seconds, etag, last_modified, body_id)
+                  VALUES ($fetchedAt, $url, $contentType, $maxAgeSeconds, $etag, $lastModified, $rawBodyId)
+                  ON CONFLICT (url) DO UPDATE SET
+                    fetched_at      = EXCLUDED.fetched_at,
+                    content_type    = EXCLUDED.content_type,
+                    max_age_seconds = EXCLUDED.max_age_seconds,
+                    etag            = EXCLUDED.etag,
+                    last_modified   = EXCLUDED.last_modified,
+                    body_id         = EXCLUDED.body_id""".update.run()
+          }.as(bodyId)
+        }
       }
     }
 
@@ -151,12 +156,13 @@ object ApiResponseCache {
     * `None` (the body was pruned out from under a `Fresh` / `Revalidated` result) falls through to a fresh network
     * fetch via `ChessComClient.loadAndDecode`'s recovery path.
     */
-  def deleteBefore(cutoff: Instant): ZIO[PostgresClient, SQLException, Int] =
+  def deleteBefore(cutoff: Instant): ZIO[PostgresClient & BodyStore, SQLException, Int] =
     withTransaction {
-      connectZIO {
-        sql"DELETE FROM api_response_cache WHERE fetched_at < $cutoff".update.run()
-      }.flatMap { count =>
-        ApiResponseBody.deleteOrphans.as(count)
-      }
+      for {
+        count  <- connectZIO(sql"DELETE FROM api_response_cache WHERE fetched_at < $cutoff".update.run())
+        hashes <- ApiResponseBody.deleteOrphanRows
+      } yield (count, hashes)
+    }.flatMap { case (count, hashes) =>
+      ZIO.foreachDiscard(hashes)(hash => BodyStore.delete(hash).ignore).as(count)
     }
 }

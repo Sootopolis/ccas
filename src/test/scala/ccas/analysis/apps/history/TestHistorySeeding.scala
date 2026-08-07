@@ -17,7 +17,7 @@ import ccas.analysis.tables.*
 import ccas.api.misc.enums.{ClubMatchStatus, PlayerStatusCategory, TimeClass, Title}
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username}
 import ccas.utils.ProgressDisplay
-import ccas.utils.client.{ChessComClient, TestChessComClientSupport}
+import ccas.utils.client.{BodyStore, ChessComClient, TestChessComClientSupport}
 import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
 import ccas.utils.sql.PostgresClient.connectZIO
 
@@ -133,7 +133,7 @@ object TestHistorySeeding extends ZIOSpecDefault {
   private def fakeClient(
     responses: Map[String, String],
     playerErrors: Map[String, Status] = Map.empty
-  ): RIO[PostgresClient, ChessComClient] = {
+  ): RIO[PostgresClient & BodyStore, ChessComClient] = {
     val routes: Routes[Any, Response] = Routes(
       Method.GET / "pub" / "player" / string("username") -> handler { (username: String, _: Request) =>
         playerErrors.get(username) match {

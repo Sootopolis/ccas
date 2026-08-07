@@ -11,7 +11,7 @@ import ccas.analysis.tables.*
 import ccas.analysis.tables.subtypes.RecruitmentRunId
 import ccas.api.club.ApiClubMatches
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username}
-import ccas.utils.client.{ChessComClient, ClientStatsAccumulator, TestChessComClientSupport}
+import ccas.utils.client.{BodyStore, ChessComClient, ClientStatsAccumulator, TestChessComClientSupport}
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient
 import ccas.utils.ProgressDisplay
@@ -360,7 +360,7 @@ object RecruitmentTestSupport {
   def fakeChessComClient(
     responses: Map[String, String],
     failures: Set[String] = Set.empty
-  ): RIO[PostgresClient, ChessComClient] =
+  ): RIO[PostgresClient & BodyStore, ChessComClient] =
     TestChessComClientSupport.fakeClient(buildRoutes(responses, failures))
 
   /** A variant of fakeChessComClient where the Nth player profile request blocks. After `blockAfterN` successful player
@@ -373,9 +373,10 @@ object RecruitmentTestSupport {
     blockAfterN: Int,
     reached: Promise[Nothing, Unit],
     gate: Promise[Nothing, Unit]
-  ): RIO[PostgresClient, ChessComClient] =
+  ): RIO[PostgresClient & BodyStore, ChessComClient] =
     for {
       pgClient      <- ZIO.service[PostgresClient]
+      bodyStore     <- ZIO.service[BodyStore]
       stateRef      <- Ref.make(ChessComClient.ThrottleState(5, 0, Vector.empty))
       activeRef     <- Ref.make(0)
       rateLimitGate <- Semaphore.make(1)
@@ -430,6 +431,7 @@ object RecruitmentTestSupport {
       ChessComClient(
         ZClient.fromDriver(driver),
         pgClient,
+        bodyStore,
         Headers.empty,
         refs,
         stats,

@@ -13,7 +13,7 @@ import ccas.api.club.{ApiClub, ApiClubMatches, ApiClubMembers}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId, PlayerId, Username}
 import ccas.api.player.ApiPlayer
 import ccas.utils.{display, OutputFile, ProgressDisplay}
-import ccas.utils.client.{ChessComClient, HttpClientLayer, NetworkUnavailableException}
+import ccas.utils.client.{BodyStore, ChessComClient, HttpClientLayer, NetworkUnavailableException}
 import ccas.utils.errors.{BadRequestException, NotFoundException}
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.withTransaction
@@ -119,7 +119,8 @@ object RecruitmentApp extends ZIOAppDefault {
           ProgressDisplay.live(showProgress = true),
           ChessComClient.live("recruitment"),
           HttpClientLayer.live,
-          PostgresClient.live(onInit = Tables.ensureTables)
+          BodyStore.live,
+          PostgresClient.live(onInit = Tables.ensureTablesOnInit)
         )
     } yield ()
 

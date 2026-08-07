@@ -9,7 +9,7 @@ import ccas.analysis.tables.*
 import ccas.api.club.ApiClub
 import ccas.api.misc.subtypes.{ClubSlug, Username}
 import ccas.utils.ProgressDisplay
-import ccas.utils.client.{ChessComClient, HttpClientLayer}
+import ccas.utils.client.{BodyStore, ChessComClient, HttpClientLayer}
 import ccas.utils.errors.{BadRequestException, NotFoundException}
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.withTransaction
@@ -45,7 +45,8 @@ object BlacklistApp extends ZIOAppDefault {
       ProgressDisplay.live(showProgress = true),
       ChessComClient.live("blacklist"),
       HttpClientLayer.live,
-      PostgresClient.live(onInit = Tables.ensureTables)
+      BodyStore.live,
+      PostgresClient.live(onInit = Tables.ensureTablesOnInit)
     )
 
   def addToBlacklist(

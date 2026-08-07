@@ -72,6 +72,7 @@ import ccas.utils.json.JsonDecodingException
 final class ChessComClient(
   client: Client,
   pgClient: PostgresClient,
+  bodyStore: BodyStore,
   headers: Headers,
   throttle: ChessComClient.ThrottleRefs,
   statsRef: Ref[ClientStatsAccumulator],
@@ -119,7 +120,7 @@ final class ChessComClient(
       }
       ApiFetchFailure
         .insert(ApiFetchFailure(Instant.now(), url.encode, errorType, msg, body))
-        .provideEnvironment(ZEnvironment(pgClient))
+        .provideEnvironment(ZEnvironment(pgClient, bodyStore))
         .tapError(dbErr => ZIO.logWarning(s"Failed to record api_fetch_failure for ${url.encode}: ${dbErr.safeMessage}"))
         .ignore
     }
@@ -285,7 +286,7 @@ final class ChessComClient(
             contentType = validators.contentType,
             fetchedAt = Instant.now()
           )
-          .provideEnvironment(ZEnvironment(pgClient))
+          .provideEnvironment(ZEnvironment(pgClient, bodyStore))
           .asSome
     val decodeLazy = ZIO.fromEither(jsonDecoder.decodeJson(string)).mapError(JsonDecodingException(_))
     for {
@@ -329,7 +330,7 @@ final class ChessComClient(
       .ignore *> getCacheableImpl[T](url, cacheWrites).flatMap(_.getValue)
     ApiResponseBody
       .loadById(bodyId)
-      .provideEnvironment(ZEnvironment(pgClient))
+      .provideEnvironment(ZEnvironment(pgClient, bodyStore))
       .flatMap {
         case Some(body) =>
           ZIO.fromEither(jsonDecoder.decodeJson(body))
@@ -848,7 +849,7 @@ object ChessComClient {
       Header.AcceptEncoding.GZip()
     )
 
-  def live(appLabel: String): RLayer[Client & PostgresClient & ProgressDisplay, ChessComClient] =
+  def live(appLabel: String): RLayer[Client & PostgresClient & ProgressDisplay & BodyStore, ChessComClient] =
     ZLayer.scoped {
       import ChessComClientConfig.*
       val provider = TypesafeConfigProvider.fromTypesafeConfig(
@@ -864,6 +865,7 @@ object ChessComClient {
         ))
         client        <- ZIO.service[Client]
         pgClient      <- ZIO.service[PostgresClient]
+        bodyStore     <- ZIO.service[BodyStore]
         display       <- ZIO.service[ProgressDisplay]
         stateRef      <- Ref.make(ThrottleState(throttleConfig.maxPermits, 0, Vector.empty))
         activeRef     <- Ref.make(0)
@@ -893,6 +895,7 @@ object ChessComClient {
       } yield ChessComClient(
         client,
         pgClient,
+        bodyStore,
         userAgentHeaders(rawConfig.contactEmail),
         refs,
         stats,

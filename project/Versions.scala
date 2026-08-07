@@ -16,4 +16,5 @@ object Versions {
   val vZioCli       = "0.8.1"
   val vSlf4j        = "2.0.17"
   val vCron4s       = "0.8.2"
+  val vAwsSdk       = "2.31.0"
 }

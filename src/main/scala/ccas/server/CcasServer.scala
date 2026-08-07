@@ -19,7 +19,7 @@ import ccas.server.routes.{
 }
 import ccas.server.scheduler.JobScheduler
 import ccas.utils.ProgressDisplay
-import ccas.utils.client.{ChessComClient, HttpClientLayer}
+import ccas.utils.client.{BodyStore, ChessComClient, HttpClientLayer}
 import ccas.utils.sql.PostgresClient
 
 object CcasServer extends ZIOAppDefault {
@@ -54,6 +54,7 @@ object CcasServer extends ZIOAppDefault {
         ProgressDisplay.live(showProgress = false),
         ChessComClient.live("server"),
         HttpClientLayer.live,
+        BodyStore.live,
         PostgresClient.live(onInit = ServerTables.ensureTables),
         JobRunner.live,
         JobScheduler.live,

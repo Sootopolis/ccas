@@ -65,7 +65,7 @@ object RecruitmentCriteriaApp extends ZIOAppDefault {
         case _ => ZIO.fail(BadRequestException(help))
       }
     } yield ()).provideSomeAuto(
-      PostgresClient.live(onInit = Tables.ensureTables)
+      PostgresClient.live(onInit = Tables.ensureTablesOnInit)
     )
 
   // --- Core (reused by RecruitmentCriteriaRoutes) ---

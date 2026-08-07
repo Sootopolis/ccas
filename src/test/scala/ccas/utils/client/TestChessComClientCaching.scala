@@ -498,9 +498,10 @@ object TestChessComClientCaching extends ZIOSpecDefault {
           before <- ApiResponseCache.lookupMeta(url.encode)
           bodyId  = before.get.bodyId
           // Corrupt the cached body so loadAndDecode's decode fails on the next read.
-          _      <- connectZIO(
-            sql"UPDATE api_response_body SET body = '{\"oops\":true}' WHERE body_id = ${ApiResponseBodyId.unwrap(bodyId)}".update.run()
+          hash   <- connectZIO(
+            sql"SELECT body_hash FROM api_response_body WHERE body_id = ${ApiResponseBodyId.unwrap(bodyId)}".query[String].run().head
           )
+          _ <- ZIO.serviceWithZIO[BodyStore](_.put(hash, """{"oops":true}""".getBytes(java.nio.charset.StandardCharsets.UTF_8)))
           value  <- client.getUncached[Payload](url)  // Fresh hit → decode fails → refetch (network #2)
           calls  <- netCalls.get
           meta   <- ApiResponseCache.lookupMeta(url.encode)
@@ -531,9 +532,10 @@ object TestChessComClientCaching extends ZIOSpecDefault {
           meta   <- ApiResponseCache.lookupMeta(url.encode)
           bodyId  = meta.get.bodyId
           // Corrupt cached body so the next read triggers loadAndDecode → catchSome → refetch.
-          _      <- connectZIO(
-            sql"UPDATE api_response_body SET body = '{\"oops\":true}' WHERE body_id = ${ApiResponseBodyId.unwrap(bodyId)}".update.run()
+          hash   <- connectZIO(
+            sql"SELECT body_hash FROM api_response_body WHERE body_id = ${ApiResponseBodyId.unwrap(bodyId)}".query[String].run().head
           )
+          _ <- ZIO.serviceWithZIO[BodyStore](_.put(hash, """{"oops":true}""".getBytes(java.nio.charset.StandardCharsets.UTF_8)))
           // `get` forces full decode. Refetch returns bad JSON too; without the bounded-catchSome fix this would
           // loop forever and hit the suite-level timeout. With the fix, fails after exactly one refetch.
           err   <- client.get[Payload](url).flip
@@ -567,9 +569,10 @@ object TestChessComClientCaching extends ZIOSpecDefault {
           bodyId = fresh.asInstanceOf[CacheableResult.Fresh[Payload]].bodyId
           // Corrupt the cached body so the next decode throws JsonDecodingException. Unique body content means
           // this UPDATE only affects the row we created for this URL — no other test shares it.
-          _     <- connectZIO(
-            sql"UPDATE api_response_body SET body = '{\"oops\":true}' WHERE body_id = ${ApiResponseBodyId.unwrap(bodyId)}".update.run()
+          hash  <- connectZIO(
+            sql"SELECT body_hash FROM api_response_body WHERE body_id = ${ApiResponseBodyId.unwrap(bodyId)}".query[String].run().head
           )
+          _ <- ZIO.serviceWithZIO[BodyStore](_.put(hash, """{"oops":true}""".getBytes(java.nio.charset.StandardCharsets.UTF_8)))
           value <- fresh.getValue                                // decode fails → invalidate + refetch from network
           calls <- netCalls.get
           meta  <- ApiResponseCache.lookupMeta(url.encode)

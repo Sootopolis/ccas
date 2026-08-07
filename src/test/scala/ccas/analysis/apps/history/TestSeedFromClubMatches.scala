@@ -11,7 +11,7 @@ import ccas.analysis.tables.{Club, ClubMatch, HistoryPendingMatch, Tables}
 import ccas.api.misc.enums.{ClubMatchStatus, TimeClass}
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug}
 import ccas.utils.ProgressDisplay
-import ccas.utils.client.{ChessComClient, TestChessComClientSupport}
+import ccas.utils.client.{BodyStore, ChessComClient, TestChessComClientSupport}
 import ccas.utils.sql.FreshSchemaLayer
 
 object TestSeedFromClubMatches extends ZIOSpecDefault {
@@ -55,7 +55,7 @@ object TestSeedFromClubMatches extends ZIOSpecDefault {
 
   private def fakeChessComClient(
     clubMatchesJson: String
-  ): RIO[PostgresClient, ChessComClient] = {
+  ): RIO[PostgresClient & BodyStore, ChessComClient] = {
     val routes: Routes[Any, Response] = Routes(
       Method.GET / "pub" / "club" / string("club") / "matches" -> handler { (_: String, _: Request) =>
         Response.json(clubMatchesJson)
@@ -70,7 +70,7 @@ object TestSeedFromClubMatches extends ZIOSpecDefault {
   private def fakeChessComClientCounting(
     clubMatchesJson: String,
     counter: Ref[Int]
-  ): RIO[PostgresClient, ChessComClient] = {
+  ): RIO[PostgresClient & BodyStore, ChessComClient] = {
     val routes: Routes[Any, Response] = Routes(
       Method.GET / "pub" / "club" / string("club") / "matches" -> handler { (_: String, _: Request) =>
         counter.update(_ + 1).as(
@@ -156,7 +156,7 @@ object TestSeedFromClubMatches extends ZIOSpecDefault {
     } yield assertTrue(count == 0, pending.isEmpty)
   }
 
-  private def fakeChessComClientError: RIO[PostgresClient, ChessComClient] = {
+  private def fakeChessComClientError: RIO[PostgresClient & BodyStore, ChessComClient] = {
     val routes: Routes[Any, Response] = Routes(
       Method.GET / "pub" / "club" / string("club") / "matches" -> handler { (_: String, _: Request) =>
         Response.status(Status.InternalServerError)

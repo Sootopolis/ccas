@@ -10,7 +10,7 @@ import ccas.analysis.tables.*
 import ccas.analysis.tables.subtypes.HistoryRunId
 import ccas.api.misc.subtypes.*
 import ccas.utils.{display, OutputFile, ProgressDisplay}
-import ccas.utils.client.{ChessComClient, HttpClientLayer, NetworkUnavailableException}
+import ccas.utils.client.{BodyStore, ChessComClient, HttpClientLayer, NetworkUnavailableException}
 import ccas.utils.errors.BadRequestException
 import ccas.utils.sql.PostgresClient
 
@@ -103,7 +103,8 @@ object HistoryApp extends ZIOAppDefault {
         ProgressDisplay.live(showProgress = true),
         ChessComClient.live("history"),
         HttpClientLayer.live,
-        PostgresClient.live(onInit = Tables.ensureTables)
+        BodyStore.live,
+        PostgresClient.live(onInit = Tables.ensureTablesOnInit)
       )
 
   private[history] case class HistoryAppArgs(

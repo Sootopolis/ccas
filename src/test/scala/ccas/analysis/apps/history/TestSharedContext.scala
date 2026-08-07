@@ -11,7 +11,7 @@ import ccas.analysis.tables.*
 import ccas.api.misc.enums.{ClubMatchStatus, PlayerStatusCategory, TimeClass}
 import ccas.api.misc.subtypes.*
 import ccas.utils.ProgressDisplay
-import ccas.utils.client.{ChessComClient, TestChessComClientSupport}
+import ccas.utils.client.{BodyStore, ChessComClient, TestChessComClientSupport}
 import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
 
 object TestSharedContext extends ZIOSpecDefault {
@@ -89,7 +89,7 @@ object TestSharedContext extends ZIOSpecDefault {
 
   private def fakeChessComClient(
     playerMatchJson: Map[String, String]
-  ): RIO[PostgresClient, ChessComClient] = {
+  ): RIO[PostgresClient & BodyStore, ChessComClient] = {
     val routes: Routes[Any, Response] = Routes(
       Method.GET / "pub" / "player" / string("username") / "matches" -> handler {
         (username: String, _: Request) =>

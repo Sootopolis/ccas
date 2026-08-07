@@ -10,6 +10,7 @@ import ccas.analysis.apps.recruitment.RecruitmentTestSupport.*
 import ccas.analysis.tables.*
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, Elo, Username}
 import ccas.utils.ProgressDisplay
+import ccas.utils.client.BodyStore
 import ccas.utils.sql.FreshSchemaLayer
 
 object TestRecruitmentFilterChain extends ZIOSpecDefault {
@@ -33,7 +34,7 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
     responses: Map[String, String],
     criteria: RecruitmentCriteria,
     username: String = "alice"
-  ): RIO[ProgressDisplay & PostgresClient, CandidateOutcome] =
+  ): RIO[ProgressDisplay & PostgresClient & BodyStore, CandidateOutcome] =
     for {
       _          <- seedDb
       criteriaId <- seedCriteria(criteria)
