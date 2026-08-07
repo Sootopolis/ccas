@@ -20,7 +20,11 @@ object TestChessComClientCaching extends ZIOSpecDefault {
     suiteCacheable
   ).provideShared(
     FreshSchemaLayer("test_client_caching", Tables.ensureTables)
-  ) @@ TestAspect.withLiveClock @@ TestAspect.timeout(15.seconds)
+  // `sequential`: these tests share one schema + one per-suite fs body-store, and most reuse `jsonBody` (so one
+  // SHA-256-deduped body object). Run in parallel (ZIO Test's default), the `deleteOrphans` test can delete that
+  // shared object mid-flight out from under a sibling's `getValue` → an extra refetch skews revalidation/attempt
+  // counts. Removing the within-suite concurrency kills the race at root (cf. #65's `Test/parallelExecution := false`).
+  ) @@ TestAspect.sequential @@ TestAspect.withLiveClock @@ TestAspect.timeout(15.seconds)
 
   /** Build a `Response` with typed Cache-Control / ETag / Content-Type headers so the cache-parsing path is
     * exercised end-to-end. `maxAge = None` + `noStore = false` + `noCache = false` produces no Cache-Control header

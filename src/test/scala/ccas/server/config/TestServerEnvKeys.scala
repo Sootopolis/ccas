@@ -25,12 +25,13 @@ object TestServerEnvKeys extends ZIOSpecDefault {
         ServerEnvKeys.byName("SERVER_PORT").map(_.domain) == Some(Server),
         ServerEnvKeys.byName("JOB_LOGS_DIR").map(_.domain) == Some(Server),
         ServerEnvKeys.byName("SCHEDULER_POLL_MINUTES").map(_.domain) == Some(Scheduler),
-        ServerEnvKeys.byName("CHESS_COM_API_COOLDOWN_SECONDS").map(_.domain) == Some(ChessComClient)
+        ServerEnvKeys.byName("CHESS_COM_API_COOLDOWN_SECONDS").map(_.domain) == Some(ChessComClient),
+        ServerEnvKeys.byName("CCAS_R2_ENDPOINT").map(_.domain) == Some(BodyStore)
       )
     },
     test("grouped lists domains in enum order, registry order within a domain") {
       assertTrue(
-        ServerEnvKeys.grouped.map(_._1) == List(Contact, Database, Server, Scheduler, ChessComClient),
+        ServerEnvKeys.grouped.map(_._1) == List(Contact, Database, Server, Scheduler, ChessComClient, BodyStore),
         ServerEnvKeys.grouped.find(_._1 == Database).map(_._2.head.name) == Some("DATABASE_URL")
       )
     },
@@ -39,6 +40,14 @@ object TestServerEnvKeys extends ZIOSpecDefault {
         ServerEnvKeys.isSecret("DATABASE_URL"),
         ServerEnvKeys.isSecret("DB_PASSWORD"),
         !ServerEnvKeys.isSecret("CCAS_CONTACT_EMAIL")
+      )
+    },
+    test("R2 credential keys are secret (redacted); the R2 endpoint/bucket are not") {
+      assertTrue(
+        ServerEnvKeys.isSecret("CCAS_R2_SECRET_KEY"),
+        ServerEnvKeys.isSecret("CCAS_R2_ACCESS_KEY"),
+        !ServerEnvKeys.isSecret("CCAS_R2_ENDPOINT"),
+        !ServerEnvKeys.isSecret("CCAS_R2_BUCKET")
       )
     },
     test("redact masks secret values, passes non-secrets and blanks through") {
