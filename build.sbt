@@ -41,6 +41,12 @@ libraryDependencies ++= Seq(
   // cron4s — wall-clock CRON schedule triggers (6-field; java.time next/prev via cron4s.lib.javatime)
   "com.github.alonsodomin.cron4s" %% "cron4s-core" % vCron4s,
 
+  // AWS S3 SDK v2 — response-body blob store off metered Postgres (BodyStore → Cloudflare R2, #191). Sync client
+  // wrapped in attemptBlockingInterrupt (matches the JDBC idiom); url-connection-client is the JDK-HttpURLConnection
+  // transport, avoiding the heavier netty-nio async client. Endpoint override points the S3 API at R2/B2/MinIO.
+  "software.amazon.awssdk" % "s3"                    % vAwsSdk,
+  "software.amazon.awssdk" % "url-connection-client" % vAwsSdk,
+
   // No-op SLF4J binding: we log via ZIO, not SLF4J. Without a binding, transitive SLF4J users (netty, etc.) print
   // "No SLF4J providers were found" on every CLI invocation; the NOP binding silences that library noise.
   "org.slf4j" % "slf4j-nop" % vSlf4j

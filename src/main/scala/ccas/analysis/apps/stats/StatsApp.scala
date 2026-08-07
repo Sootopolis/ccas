@@ -76,7 +76,7 @@ object StatsApp extends ZIOAppDefault {
             } yield ()
           case _ => ZIO.fail(BadRequestException("Both --since and --until are required for period stats"))
         }
-      } yield ()).provideSomeAuto(PostgresClient.live(onInit = Tables.ensureTables))
+      } yield ()).provideSomeAuto(PostgresClient.live(onInit = Tables.ensureTablesOnInit))
     } yield ()
 
   /** All-time member contribution summary for a club. */

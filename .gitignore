@@ -63,3 +63,5 @@ build/
 ### Runtime ###
 # Server per-job logs (job-logs.directory = logs/jobs in application.conf)
 logs/
+# Local-filesystem BodyStore (body-store.fs-root = cache/bodies; the fs backend, #191)
+cache/

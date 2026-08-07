@@ -11,7 +11,7 @@ import ccas.analysis.apps.recruitment.CandidateOutcome
 import ccas.analysis.tables.{Club, ClubMember, Player, PlayerMatchRef, PlayerSnapshot, RecruitmentCandidate}
 import ccas.analysis.tables.subtypes.RecruitmentRunId
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId}
-import ccas.utils.client.{ChessComClient, TestChessComClientSupport}
+import ccas.utils.client.{BodyStore, ChessComClient, TestChessComClientSupport}
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient.connectZIO
@@ -48,7 +48,7 @@ object TestMembershipAppSupport {
     clubsResponses: Map[String, String] = Map.empty,
     matchResponses: Map[String, String] = Map.empty,
     boardResponses: Map[(String, String), String] = Map.empty
-  ): RIO[PostgresClient, ChessComClient] = {
+  ): RIO[PostgresClient & BodyStore, ChessComClient] = {
     val routes: Routes[Any, Response] = Routes(
       Method.GET / "pub" / "player" / string("username") -> handler { (username: String, _: Request) =>
         if (failures.contains(username)) { Response.json(notFoundBody).copy(status = Status.NotFound) }

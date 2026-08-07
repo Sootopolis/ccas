@@ -9,7 +9,7 @@ import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 import ccas.analysis.tables.*
 import ccas.api.misc.enums.PlayerStatusCategory
 import ccas.api.misc.subtypes.*
-import ccas.utils.client.{ChessComClient, TestChessComClientSupport}
+import ccas.utils.client.{BodyStore, ChessComClient, TestChessComClientSupport}
 import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
 
 object TestSeedMatchesForPlayer extends ZIOSpecDefault {
@@ -43,7 +43,7 @@ object TestSeedMatchesForPlayer extends ZIOSpecDefault {
   private def fakeChessComClientCounting(
     json: String,
     counter: Ref[Int]
-  ): RIO[PostgresClient, ChessComClient] = {
+  ): RIO[PostgresClient & BodyStore, ChessComClient] = {
     val routes: Routes[Any, Response] = Routes(
       Method.GET / "pub" / "player" / string("username") / "matches" -> handler {
         (_: String, _: Request) =>

@@ -15,7 +15,7 @@ import ccas.analysis.tables.{Club, Player, RecruitmentBlacklist, Tables}
 import ccas.api.misc.enums.PlayerStatusCategory
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
 import ccas.server.routes.BlacklistRoutes.BlacklistEntryResponse
-import ccas.utils.client.ChessComClient
+import ccas.utils.client.{BodyStore, ChessComClient}
 import ccas.utils.sql.{FreshSchemaLayer, PostgresClient, TestDbCleanup}
 import ccas.utils.ProgressDisplay
 
@@ -74,7 +74,7 @@ object TestBlacklistRoutes extends ZIOSpecDefault {
     path: String,
     body: String,
     responses: Map[String, String]
-  ): RIO[Scope & ProgressDisplay & PostgresClient, Response] =
+  ): RIO[Scope & ProgressDisplay & PostgresClient & BodyStore, Response] =
     RecruitmentTestSupport.fakeChessComClient(responses).flatMap { client =>
       BlacklistRoutes.routes
         .runZIO(jsonRequest(method, path, body))
@@ -82,7 +82,7 @@ object TestBlacklistRoutes extends ZIOSpecDefault {
     }
 
   /** Convenience for GET / DELETE routes that take no body and don't trigger any HTTP fetch. */
-  private def runNoBody(method: Method, path: String): RIO[Scope & ProgressDisplay & PostgresClient, Response] =
+  private def runNoBody(method: Method, path: String): RIO[Scope & ProgressDisplay & PostgresClient & BodyStore, Response] =
     runReq(method, path, body = "", responses = Map.empty)
 
   /** Decode the response body as a JSON list of [[BlacklistEntryResponse]]. Fails loudly on a non-OK status

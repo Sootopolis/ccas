@@ -23,7 +23,7 @@ import ccas.api.clubmatch.ApiDailyMatch
 import ccas.api.misc.enums.{ClubMatchStatus, TimeClass}
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug}
 import ccas.utils.ProgressDisplay
-import ccas.utils.client.TestChessComClientSupport
+import ccas.utils.client.{BodyStore, TestChessComClientSupport}
 import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
 import ccas.utils.sql.PostgresClient.connectZIO
 
@@ -99,7 +99,7 @@ object TestRefreshSingleMatch extends ZIOSpecDefault {
     cacheMaxAge: Long,
     cacheFetchedAt: Instant,
     expectedCalls: Int
-  )(routeResponse: => Response): RIO[PostgresClient, TestResult] = {
+  )(routeResponse: => Response): RIO[PostgresClient & BodyStore, TestResult] = {
     val url = ApiDailyMatch.getUrl(matchId).encode
     for {
       _ <- seedFixtures(matchId.value)
@@ -175,7 +175,7 @@ object TestRefreshSingleMatch extends ZIOSpecDefault {
   private def testIdenticalBodySkipsPipeline =
     test("IdenticalBody: stale entry + 200 with byte-identical body skips pipeline, bumps counter and fetched_at") {
       // Distinct ETag so the route doesn't coincidentally match a 304 path; identical body bytes so SHA-256 dedupe
-      // in `ApiResponseBody.ensureBody` returns the same `body_id`, yielding `IdenticalBody`.
+      // in `ApiResponseBody.putBody`/`ensureBodyPointer` returns the same `body_id`, yielding `IdenticalBody`.
       runUnchangedCase(
         matchId        = ClubMatchId(8003),
         cacheMaxAge    = 0,

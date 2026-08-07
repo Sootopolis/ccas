@@ -8,7 +8,7 @@ import RefUtils.*
 
 import ccas.analysis.tables.{ClubRefSkip, PlayerRefSkip, PlayerTournamentRef, SkipCount, Tables}
 import ccas.utils.{display, ApiConcurrency, OutputFile, ProgressDisplay}
-import ccas.utils.client.{ChessComClient, HttpClientLayer, NetworkUnavailableException}
+import ccas.utils.client.{BodyStore, ChessComClient, HttpClientLayer, NetworkUnavailableException}
 import ccas.utils.errors.BadRequestException
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient
@@ -55,7 +55,8 @@ object RefApp extends ZIOAppDefault {
       ProgressDisplay.live(showProgress = true),
       ChessComClient.live("ref"),
       HttpClientLayer.live,
-      PostgresClient.live(onInit = Tables.ensureTables)
+      BodyStore.live,
+      PostgresClient.live(onInit = Tables.ensureTablesOnInit)
     )
 
   private case class RefAppResolutionStats(total: Int, resolvedDb: Int, resolvedApi: Int, skippedNew: Int)

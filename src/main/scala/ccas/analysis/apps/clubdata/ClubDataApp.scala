@@ -10,7 +10,7 @@ import ccas.api.club.ApiClubMatches
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
 import ccas.utils.{ApiConcurrency, OutputFile, ProgressDisplay}
 import ccas.analysis.apps.{ClubSlugRenameResolver, withClubSlugRenameRecovery}
-import ccas.utils.client.{ChessComClient, HttpClientLayer}
+import ccas.utils.client.{BodyStore, ChessComClient, HttpClientLayer}
 import ccas.utils.sql.PostgresClient
 
 object ClubDataApp extends ZIOAppDefault {
@@ -28,7 +28,8 @@ object ClubDataApp extends ZIOAppDefault {
       ProgressDisplay.live(showProgress = true),
       ChessComClient.live("clubdata"),
       HttpClientLayer.live,
-      PostgresClient.live(onInit = Tables.ensureTables)
+      BodyStore.live,
+      PostgresClient.live(onInit = Tables.ensureTablesOnInit)
     )
 
   /** @param slugs empty list means "refresh all known clubs" — see `run`'s `Nil` branch. */

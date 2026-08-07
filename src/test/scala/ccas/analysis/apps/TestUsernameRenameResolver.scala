@@ -9,7 +9,7 @@ import ccas.analysis.apps.recruitment.RecruitmentTestSupport.*
 import ccas.analysis.tables.*
 import ccas.api.misc.enums.PlayerStatusCategory
 import ccas.api.misc.subtypes.{ClubMatchId, PlayerId, Username}
-import ccas.utils.client.{ChessComClient, TestChessComClientSupport}
+import ccas.utils.client.{BodyStore, ChessComClient, TestChessComClientSupport}
 import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
 import ccas.utils.sql.PostgresClient.transactZIO
 
@@ -47,7 +47,7 @@ object TestUsernameRenameResolver extends ZIOSpecDefault {
   /** Local fake client that adds a `/pub/match/{id}/{board}` route on top of the shared `RecruitmentTestSupport`
     * routes. Used by Tier B tests since `buildRoutes` doesn't expose the board endpoint.
     */
-  private def fakeClientWithBoard(responses: Map[String, String]): RIO[PostgresClient, ChessComClient] = {
+  private def fakeClientWithBoard(responses: Map[String, String]): RIO[PostgresClient & BodyStore, ChessComClient] = {
     val routes: Routes[Any, Response] = Routes(
       Method.GET / "pub" / "player" / string("username") -> handler { (username: String, _: Request) =>
         responses.get(s"player/$username") match {

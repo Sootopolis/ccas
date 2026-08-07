@@ -19,7 +19,7 @@ object ServerTables extends ZIOAppDefault {
 
   def ensureTables: RIO[PostgresClient, Unit] =
     for {
-      _ <- Tables.ensureTables
+      _ <- Tables.ensureTablesOnInit
       _ <- JobRun.createTable
       _ <- JobSchedule.createTable
       // ZIO.attempt so a malformed scheduler.defaults value (non-int, non-bool, out-of-range) fails boot

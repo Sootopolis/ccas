@@ -38,9 +38,10 @@ object TestChessComClientSupport {
     minRequestDelayMs: Long = 0,
     minTierObservation: Duration = Duration.Zero,
     emaTauMs: Long = 500
-  ): ZIO[Scope & PostgresClient, Nothing, (ChessComClient, Ref[ChessComClient.ThrottleState], Ref[ClientStatsAccumulator])] =
+  ): ZIO[Scope & PostgresClient & BodyStore, Nothing, (ChessComClient, Ref[ChessComClient.ThrottleState], Ref[ClientStatsAccumulator])] =
     for {
       pgClient      <- ZIO.service[PostgresClient]
+      bodyStore     <- ZIO.service[BodyStore]
       stateRef      <- Ref.make(ChessComClient.ThrottleState(permits, 0, Vector.empty))
       activeRef     <- Ref.make(0)
       rateLimitGate <- Semaphore.make(1)
@@ -101,6 +102,7 @@ object TestChessComClientSupport {
       val client = ChessComClient(
         ZClient.fromDriver(driver),
         pgClient,
+        bodyStore,
         Headers.empty,
         refs,
         stats,
@@ -117,7 +119,7 @@ object TestChessComClientSupport {
     * connection-retry schedule exhausts. Small retry knobs keep that exhaustion fast under `withLiveClock` tests.
     * Built on `makeClient` (not `fakeClient`) because only a failing `handler` produces a transport-level error.
     */
-  def networkDownClient: ZIO[Scope & PostgresClient, Nothing, ChessComClient] =
+  def networkDownClient: ZIO[Scope & PostgresClient & BodyStore, Nothing, ChessComClient] =
     makeClient(
       handler = _ => ZIO.fail(new java.net.UnknownHostException("api.chess.com: Temporary failure in name resolution")),
       retryBase = 10.millis,
@@ -128,7 +130,7 @@ object TestChessComClientSupport {
   /** Dummy ChessComClient layer that returns 404 for all requests. Useful for tests that need a ChessComClient in the
     * environment but never actually make HTTP calls.
     */
-  val dummyLayer: URLayer[PostgresClient, ChessComClient] =
+  val dummyLayer: URLayer[PostgresClient & BodyStore, ChessComClient] =
     ZLayer.fromZIO {
       makeClient(_ => ZIO.succeed(Response(status = Status.NotFound))).provideSomeLayer(Scope.default).map(_._1)
     }
@@ -145,9 +147,10 @@ object TestChessComClientSupport {
   def fakeClient(
     routes: Routes[Any, Response],
     permits: Long = 1
-  ): RIO[PostgresClient, ChessComClient] =
+  ): RIO[PostgresClient & BodyStore, ChessComClient] =
     for {
       pgClient      <- ZIO.service[PostgresClient]
+      bodyStore     <- ZIO.service[BodyStore]
       stateRef      <- Ref.make(ChessComClient.ThrottleState(permits, 0, Vector.empty))
       activeRef     <- Ref.make(0)
       rateLimitGate <- Semaphore.make(1)
@@ -192,6 +195,7 @@ object TestChessComClientSupport {
       ChessComClient(
         ZClient.fromDriver(driver),
         pgClient,
+        bodyStore,
         Headers.empty,
         refs,
         stats,

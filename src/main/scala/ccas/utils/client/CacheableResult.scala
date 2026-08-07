@@ -91,7 +91,7 @@ object CacheableResult {
     getValue: Task[T]
   ) extends Unchanged[T]
 
-  /** Server returned `200` but the new body is byte-identical to what we had — `ApiResponseBody.ensureBody` deduped
+  /** Server returned `200` but the new body is byte-identical to what we had — `ApiResponseBody.putBody` deduped
     * via its SHA-256 hash and we got back the same `body_id`. The body is already in memory (we received it over
     * the wire) so `getValue` just runs the decoder on that in-memory string — no DB read required.
     */

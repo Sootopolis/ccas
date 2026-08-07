@@ -12,7 +12,7 @@ import ccas.analysis.tables.*
 import ccas.api.club.ApiClubMembers
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId, PlayerId}
 import ccas.utils.{OutputFile, ProgressDisplay, TimeParser}
-import ccas.utils.client.{ChessComClient, HttpClientLayer, NetworkUnavailableException}
+import ccas.utils.client.{BodyStore, ChessComClient, HttpClientLayer, NetworkUnavailableException}
 import ccas.utils.errors.BadRequestException
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.withTransaction
@@ -57,7 +57,8 @@ object MembershipApp extends ZIOAppDefault {
         ProgressDisplay.live(showProgress = true),
         ChessComClient.live(MEMBERSHIP),
         HttpClientLayer.live,
-        PostgresClient.live(onInit = Tables.ensureTables)
+        BodyStore.live,
+        PostgresClient.live(onInit = Tables.ensureTablesOnInit)
       )
 
   private sealed trait RunMode

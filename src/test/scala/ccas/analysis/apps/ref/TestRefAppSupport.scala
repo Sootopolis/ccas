@@ -10,7 +10,7 @@ import ccas.analysis.tables.*
 import ccas.api.misc.enums.PlayerStatusCategory.Active
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
 import ccas.utils.ProgressDisplay
-import ccas.utils.client.{ChessComClient, TestChessComClientSupport}
+import ccas.utils.client.{BodyStore, ChessComClient, TestChessComClientSupport}
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.connectZIO
 
@@ -104,7 +104,7 @@ object TestRefAppSupport {
     responses: Map[String, String],
     failures: Set[String] = Set.empty,
     notFound: Map[String, String] = Map.empty
-  ): RIO[PostgresClient, ChessComClient] =
+  ): RIO[PostgresClient & BodyStore, ChessComClient] =
     TestChessComClientSupport.fakeClient(refRoutes(responses, failures, notFound), permits = 5)
 
   /** DNS/network failure as it surfaces from the JVM resolver (`UnknownHostException`, the exact prod message). The
@@ -117,7 +117,7 @@ object TestRefAppSupport {
     * `makeClient` (not the routes-based `fakeClient`) because only a failing `handler` can produce a transport-level
     * connection error; small retry knobs keep the exhaustion fast under live-clock tests.
     */
-  def networkDownChessComClient: RIO[Scope & PostgresClient, ChessComClient] =
+  def networkDownChessComClient: RIO[Scope & PostgresClient & BodyStore, ChessComClient] =
     TestChessComClientSupport
       .makeClient(handler = _ => ZIO.fail(networkDownCause), retryBase = 10.millis, maxConnectionRetries = 2, permits = 5)
       .map(_._1)
@@ -130,7 +130,7 @@ object TestRefAppSupport {
     isDown: Request => Boolean,
     failures: Set[String] = Set.empty,
     notFound: Map[String, String] = Map.empty
-  ): RIO[Scope & PostgresClient, ChessComClient] = {
+  ): RIO[Scope & PostgresClient & BodyStore, ChessComClient] = {
     val routes = refRoutes(responses, failures, notFound)
     TestChessComClientSupport
       .makeClient(

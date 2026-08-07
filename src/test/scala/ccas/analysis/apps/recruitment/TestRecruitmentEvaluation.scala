@@ -10,6 +10,7 @@ import ccas.analysis.apps.recruitment.RecruitmentTestSupport.*
 import ccas.analysis.tables.*
 import ccas.api.misc.subtypes.{Elo, Username}
 import ccas.utils.ProgressDisplay
+import ccas.utils.client.BodyStore
 import ccas.utils.sql.FreshSchemaLayer
 
 object TestRecruitmentEvaluation extends ZIOSpecDefault {
@@ -145,7 +146,7 @@ object TestRecruitmentEvaluation extends ZIOSpecDefault {
     criteria: RecruitmentCriteria,
     cache: PlayerRecruitmentCache,
     username: String = "alice"
-  ): RIO[ProgressDisplay & PostgresClient, Option[CandidateOutcome]] =
+  ): RIO[ProgressDisplay & PostgresClient & BodyStore, Option[CandidateOutcome]] =
     for {
       _ <- seedDb
       // Seed player row for FK constraint, then seed cache
