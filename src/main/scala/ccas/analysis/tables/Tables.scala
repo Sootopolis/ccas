@@ -21,6 +21,10 @@ object Tables extends ZIOAppDefault {
   /** [[ensureTables]] with its [[BodyStore]] self-provided, so it fits the `PostgresClient.live(onInit = ...)` hook —
     * which runs the init effect with only `PostgresClient` in scope. The store instance is scoped to the init run
     * (a fresh, cheap client, distinct from the long-lived one the app wires into `ChessComClient`).
+    *
+    * Health tracking is per-instance, so a store outage spanning startup logs its one WARN here and another from the
+    * long-lived instance later. Two lines for one outage is the accepted cost of not threading a shared store
+    * through the pool's init hook.
     */
   val ensureTablesOnInit: RIO[PostgresClient, Unit] =
     ensureTables.provideSomeLayer[PostgresClient](BodyStore.live)

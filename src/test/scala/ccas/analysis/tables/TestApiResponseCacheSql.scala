@@ -67,13 +67,14 @@ object TestApiResponseCacheSql extends ZIOSpecDefault {
         contentType = Some("application/json"),
         fetchedAt = Times.t0
       )
-      rawId    = ApiResponseBodyId.unwrap(bodyId)
+      rawId    = bodyId.map(ApiResponseBodyId.unwrap)
       cache    <- countCache
       bodies   <- countBodies
     } yield assertTrue(
       cache == 1,
       bodies == 1,
-      rawId > 0L
+      // `Some` = the body reached the store; `None` would mean the store rejected the write and nothing was persisted.
+      rawId.exists(_ > 0L)
     )
   }
 
@@ -108,7 +109,7 @@ object TestApiResponseCacheSql extends ZIOSpecDefault {
       bodies == 2, // original body and new body both present
       meta.exists(_.etag.contains("\"def\"")),
       meta.exists(_.maxAgeSeconds.contains(7200L)),
-      meta.exists(_.bodyId == newBodyId)
+      newBodyId.exists(id => meta.exists(_.bodyId == id))
     )
   }
 
@@ -136,6 +137,7 @@ object TestApiResponseCacheSql extends ZIOSpecDefault {
         cache  <- countCache
         bodies <- countBodies
       } yield assertTrue(
+        initial.isDefined,
         initial == again,
         cache == 2, // urlA + urlB
         bodies == 2 // bodyA (shared) + bodyB (from urlA's second upsert)
@@ -239,11 +241,11 @@ object TestApiResponseCacheSql extends ZIOSpecDefault {
         )
         meta <- ApiResponseCache.lookupMeta(urlB)
       } yield assertTrue(
-        ApiResponseBodyId.unwrap(bodyId) > 0L,
+        bodyId.map(ApiResponseBodyId.unwrap).exists(_ > 0L),
         meta.exists(_.etag.isEmpty),
         meta.exists(_.maxAgeSeconds.isEmpty),
         meta.exists(_.contentType.isEmpty),
-        meta.exists(_.bodyId == bodyId)
+        bodyId.exists(id => meta.exists(_.bodyId == id))
       )
     }
 
@@ -279,7 +281,7 @@ object TestApiResponseCacheSql extends ZIOSpecDefault {
         cacheAfter == 1,
         bodiesBefore == 2,         // bodyOld + bodyFresh
         bodiesAfter == 1,          // bodyOld was orphaned and swept; bodyFresh is still referenced
-        freshStill.exists(_.bodyId == freshBodyId),
+        freshBodyId.exists(id => freshStill.exists(_.bodyId == id)),
         oldGone.isEmpty
       )
     }
