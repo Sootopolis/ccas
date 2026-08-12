@@ -5,8 +5,13 @@ services:
       POSTGRES_DB: ccas
       POSTGRES_USER: ccas
       POSTGRES_PASSWORD: ccas
+    # Published port follows DB_PORT (compose reads .env automatically), so a host-native PostgreSQL already on
+    # 5432 can be worked around by changing one variable — which moves the container and points the app at it in
+    # the same stroke. The in-container port stays 5432. POSTGRES_USER/DB above are deliberately NOT parameterised:
+    # src/test/resources/application.conf hardcodes user `ccas` and database `ccas_test`, so varying them would
+    # break the test suite silently.
     ports:
-      - "5432:5432"
+      - "${DB_PORT:-5432}:5432"
     volumes:
       - ./docker/init-test-db.sql:/docker-entrypoint-initdb.d/01-init-test-db.sql:ro
       - ./docker/init-test-schema.sql:/docker-entrypoint-initdb.d/02-init-test-schema.sql:ro

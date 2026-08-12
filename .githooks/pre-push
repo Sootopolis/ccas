@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Skip the test run when every ref being pushed is a deletion. Git feeds
+# `<local-ref> <local-sha> <remote-ref> <remote-sha>` lines on stdin; a
+# deletion has local-sha = 0000000000000000000000000000000000000000.
+zero=0000000000000000000000000000000000000000
+all_deletes=1
+saw_any=0
+while read local_ref local_sha remote_ref remote_sha; do
+  saw_any=1
+  if [ "$local_sha" != "$zero" ]; then
+    all_deletes=0
+  fi
+done
+
+if [ "$saw_any" = 1 ] && [ "$all_deletes" = 1 ]; then
+  echo "Pre-push: delete-only push, skipping tests."
+  exit 0
+fi
+
+echo "Running tests before push..."
+sbt test
