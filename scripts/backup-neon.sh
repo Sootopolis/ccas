@@ -29,20 +29,67 @@ RETAIN="${CCAS_BACKUP_RETAIN:-6}"
 # recreates the empty tables and the app refills them.
 EXCLUDE_DATA=(api_response_cache api_response_body api_fetch_failure)
 
-# Percent-decode a URI component (%20 -> space, +-> space).
+# Percent-decode, one character at a time. Only the two hex digits of an escape
+# are ever handed to printf's '%b': the whole-string form ("${s//%/\\x}") would
+# also expand any backslash the password itself contains, and would turn a '%'
+# that is not an escape into an invalid \x. Bytes are appended individually, so
+# a multi-byte UTF-8 escape (%C3%A9) reassembles correctly.
+urldecode_pct() {
+  local s="$1" out="" c
+  while [[ -n "$s" ]]; do
+    c="${s:0:1}"
+    if [[ "$c" == "%" && "${s:1:2}" =~ ^[0-9A-Fa-f]{2}$ ]]; then
+      out+="$(printf '%b' "\\x${s:1:2}")"
+      s="${s:3}"
+    else
+      out+="$c"
+      s="${s:1}"
+    fi
+  done
+  printf '%s' "$out"
+}
+
+# A query-string value, matching how pgjdbc reads `?password=` out of a JDBC URL
+# (URLDecoder rules, so '+' is a space).
 urldecode() {
-  local s="${1//+/ }"
-  printf '%b' "${s//%/\\x}"
+  urldecode_pct "${1//+/ }"
+}
+
+# A userinfo component. RFC 3986 has no plus-is-space rule there, so a '+' in the
+# password must survive as a literal plus.
+urldecode_userinfo() {
+  urldecode_pct "$1"
 }
 
 # Resolve a libpq conninfo string from the app's env, with the password routed
 # to PGPASSWORD rather than the URI/argv.
 if [[ -n "${DATABASE_URL:-}" ]]; then
-  # The app stores DATABASE_URL as a JDBC URI:
+  # DATABASE_URL may be in either accepted form (the app normalises both — see
+  # PostgresClient.normalizeJdbcUrl):
   #   jdbc:postgresql://host/db?user=...&password=...&sslmode=require
-  # Stripping the "jdbc:" prefix yields a libpq URI pg_dump accepts. Pull the
-  # password query param out into PGPASSWORD so it never reaches argv.
+  #   postgresql://user:pass@host/db?sslmode=require       (what providers hand out)
+  # Stripping the "jdbc:" prefix yields a libpq URI pg_dump accepts. Credentials
+  # are pulled out of whichever position they sit in, into PGPASSWORD, so the
+  # password never reaches argv (where `ps` would expose it to other local users).
   CONN="${DATABASE_URL#jdbc:}"
+
+  # Userinfo form: split the authority at its last '@' (a password may contain an
+  # unescaped one), keeping the username in the URI and routing the password out.
+  authority="${CONN#*://}"
+  authority="${authority%%\?*}"
+  if [[ "$authority" == *@* ]]; then
+    scheme="${CONN%%://*}"
+    query=""
+    [[ "$CONN" == *\?* ]] && query="?${CONN#*\?}"
+    userinfo="${authority%@*}"
+    hostpath="${authority##*@}"
+    if [[ "$userinfo" == *:* ]]; then
+      export PGPASSWORD="$(urldecode_userinfo "${userinfo#*:}")"
+      userinfo="${userinfo%%:*}"
+    fi
+    CONN="${scheme}://${userinfo}@${hostpath}${query}"
+  fi
+
   if [[ "$CONN" == *\?* ]]; then
     base="${CONN%%\?*}"
     query="${CONN#*\?}"

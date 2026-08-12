@@ -114,6 +114,153 @@ object PostgresClient {
       .map(_.trim)
       .filter(_.nonEmpty)
 
+  /** A JDBC URL with any embedded credentials lifted out of it, ready to hand to Hikari. */
+  private[ccas] final case class ResolvedJdbcUrl(jdbcUrl: String, user: Option[String], password: Option[String])
+
+  /** libpq-only connection parameters that pgjdbc has no equivalent for. pgjdbc keeps unrecognised query parameters in
+    * its `Properties` and ignores them, so leaving them in would not break a connection — they are dropped so the URL
+    * stays honest about what is actually in effect. Not exhaustive: libpq has many more parameters, and any of them
+    * that pgjdbc does not recognise is silently inert whether or not it is listed here. These are the ones that appear
+    * in the connection strings providers hand out. Note `connect_timeout` is libpq's spelling; pgjdbc's own equivalent
+    * is `connectTimeout` (set from `pool.connectTimeoutSeconds`) and is unaffected.
+    */
+  private val LibpqOnlyParams =
+    Set("channel_binding", "connect_timeout", "target_session_attrs", "passfile", "gssencmode", "service")
+
+  /** Normalise a configured `database.url` into a JDBC URL plus separately-carried credentials.
+    *
+    * Every managed Postgres provider (Neon, Heroku, Render, Supabase, Railway, …) hands out the '''libpq''' connection
+    * URI from PostgreSQL's own docs — `postgresql://user:pass@host/db?sslmode=require` — while pgjdbc accepts neither
+    * its scheme (it requires the `jdbc:` subprotocol) nor credentials in userinfo position (it requires `?user=` /
+    * `?password=`). Pasting a provider URL verbatim therefore failed at boot with Hikari's opaque
+    * `RuntimeException: Failed to get driver instance for jdbcUrl=…`, naming the driver rather than the URL shape. This
+    * accepts both forms and converts.
+    *
+    * Credentials are always lifted out of the URL rather than left in it, for both accepted forms: Hikari echoes the
+    * `jdbcUrl` into that failure message, so a password embedded in the URL lands in the log on any driver-level
+    * failure. `hikariConfig.setUsername` / `setPassword` are equivalent to the query parameters as far as pgjdbc is
+    * concerned, and keep the secret out of the string.
+    *
+    * Percent-decoding differs by position, deliberately: userinfo follows RFC 3986 (percent-escapes only, `+` is a
+    * literal plus), while query values follow what pgjdbc itself does to them (`URLDecoder`, so `+` decodes to a
+    * space). Decoding a lifted query credential any other way would silently change the password of an existing,
+    * working `jdbc:` configuration.
+    *
+    * Non-Postgres `jdbc:` URLs pass through untouched, as does any `jdbc:` URL this cannot improve on. Returns `Left`
+    * with an actionable, credential-free message for anything that is neither form.
+    *
+    * Scheme matching is case-insensitive (RFC 3986 §3.1); the rest of the URL is left in the case it was written.
+    */
+  private[ccas] def normalizeJdbcUrl(raw: String): Either[String, ResolvedJdbcUrl] = {
+    val url       = raw.trim
+    val lowered   = url.toLowerCase
+    val shapeHint =
+      "expected a JDBC URL (jdbc:postgresql://host[:port]/db?user=…&password=…) " +
+        "or a libpq URI (postgresql://user:pass@host[:port]/db)"
+
+    def after(prefix: String): String = url.drop(prefix.length)
+
+    if (url.isEmpty) Left(s"database.url is blank — $shapeHint")
+    else if (lowered.startsWith("jdbc:postgresql://")) rewrite(after("jdbc:postgresql://"), url, alreadyJdbc = true)
+    else if (lowered.startsWith("jdbc:")) Right(ResolvedJdbcUrl(url, None, None))
+    else if (lowered.startsWith("postgresql://")) rewrite(after("postgresql://"), url, alreadyJdbc = false)
+    else if (lowered.startsWith("postgres://")) rewrite(after("postgres://"), url, alreadyJdbc = false)
+    else Left(s"database.url has an unrecognised scheme — $shapeHint")
+  }
+
+  /** Rebuild `<authority>[/db][?query]` (everything after `://`) as a credential-free `jdbc:postgresql://` URL.
+    * `original` is the URL `rest` came from, and `alreadyJdbc` says whether it was already in JDBC form — together they
+    * let an input pgjdbc can handle but this cannot improve on pass through unchanged rather than be rejected.
+    */
+  private def rewrite(rest: String, original: String, alreadyJdbc: Boolean): Either[String, ResolvedJdbcUrl] = {
+    // Split the query off first: a password may legitimately contain '@' or '/', so searching the whole string for the
+    // userinfo/host boundary would mis-split a URL whose query carries the credentials.
+    val (beforeQuery, query) = rest.indexOf('?') match {
+      case -1 => (rest, "")
+      case i  => (rest.take(i), rest.drop(i + 1))
+    }
+
+    // Last '@', not first: an unescaped '@' inside a password is common enough that libpq documents percent-encoding
+    // it, and splitting at the last one keeps such a URL working instead of producing a nonsense host.
+    val (userInfo, hostAndPath) = beforeQuery.lastIndexOf('@') match {
+      case -1 => (None, beforeQuery)
+      case i  => (Some(beforeQuery.take(i)), beforeQuery.drop(i + 1))
+    }
+
+    val (hostPort, path) = hostAndPath.indexOf('/') match {
+      case -1 => (hostAndPath, "")
+      case i  => (hostAndPath.take(i), hostAndPath.drop(i))
+    }
+
+    // An empty host is meaningful to pgjdbc — `jdbc:postgresql:///db` parses, taking host and port from its own
+    // defaults — so an already-JDBC URL passes through untouched rather than being rejected for a shape the driver
+    // accepts. The libpq spelling of the same thing means a local Unix-socket connection, which a JDBC URL cannot
+    // express at all, so that one is worth failing on with a message that says so.
+    if (hostPort.isEmpty && alreadyJdbc) Right(ResolvedJdbcUrl(original, None, None))
+    else if (hostPort.isEmpty) {
+      Left(
+        "database.url has no host — a local-socket libpq URI (postgresql:///db) has no JDBC equivalent; " +
+          "give a host, as in postgresql://user:pass@host[:port]/db"
+      )
+    } else {
+      val (userInfoUser, userInfoPassword) = userInfo match {
+        case None => (None, None)
+        case Some(info) =>
+          info.indexOf(':') match {
+            case -1 => (Some(decodePercent(info)), None)
+            case i  => (Some(decodePercent(info.take(i))), Some(decodePercent(info.drop(i + 1))))
+          }
+      }
+
+      val params = query.split('&').toList.filter(_.nonEmpty).map { param =>
+        param.indexOf('=') match {
+          case -1 => (param, "")
+          case i  => (param.take(i), param.drop(i + 1))
+        }
+      }
+
+      // An explicit query parameter wins over userinfo: that is the value pgjdbc would have used for an already-working
+      // `jdbc:` URL, so lifting it preserves the existing behaviour of every configuration that has one. Last
+      // occurrence wins for the same reason — pgjdbc puts each token into a `Properties`, so a repeated key overwrites.
+      val queryUser     = params.collect { case ("user", v) => decodeQuery(v) }.lastOption
+      val queryPassword = params.collect { case ("password", v) => decodeQuery(v) }.lastOption
+
+      val kept = params.collect {
+        case (k, v) if k != "user" && k != "password" && !LibpqOnlyParams.contains(k) => s"$k=$v"
+      }
+
+      val jdbcUrl = s"jdbc:postgresql://$hostPort$path" + (if (kept.isEmpty) "" else kept.mkString("?", "&", ""))
+      Right(ResolvedJdbcUrl(jdbcUrl, queryUser.orElse(userInfoUser), queryPassword.orElse(userInfoPassword)))
+    }
+  }
+
+  /** RFC 3986 percent-decoding for userinfo — `+` is a literal plus, unlike in a query string. Decodes to bytes first
+    * and converts once, so a multi-byte UTF-8 escape sequence (`%C3%A9`) round-trips instead of becoming two
+    * mis-decoded characters.
+    */
+  private def decodePercent(s: String): String = {
+    val bytes = new java.io.ByteArrayOutputStream(s.length)
+    var i     = 0
+    while (i < s.length) {
+      val isEscape = s.charAt(i) == '%' && i + 2 < s.length && isHex(s.charAt(i + 1)) && isHex(s.charAt(i + 2))
+      if (isEscape) {
+        bytes.write(Integer.parseInt(s.substring(i + 1, i + 3), 16))
+        i += 3
+      } else {
+        bytes.write(s.substring(i, i + 1).getBytes(java.nio.charset.StandardCharsets.UTF_8))
+        i += 1
+      }
+    }
+    new String(bytes.toByteArray, java.nio.charset.StandardCharsets.UTF_8)
+  }
+
+  private def isHex(c: Char): Boolean =
+    (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+
+  /** Query-value decoding, matching what pgjdbc applies to `?user=` / `?password=` (so `+` decodes to a space). */
+  private def decodeQuery(s: String): String =
+    java.net.URLDecoder.decode(s, java.nio.charset.StandardCharsets.UTF_8)
+
   def live(
     prefix: String = "database",
     schema: Option[String] = None,
@@ -126,7 +273,15 @@ object PostgresClient {
           val hikariConfig = new HikariConfig()
 
           if (config.hasPath("url")) {
-            hikariConfig.setJdbcUrl(config.getString("url"))
+            // Accepts both the JDBC and libpq URL forms, and carries any embedded credentials separately so they never
+            // reach Hikari's `jdbcUrl` (which it echoes into driver-level failure messages). See `normalizeJdbcUrl`.
+            val resolved = normalizeJdbcUrl(config.getString("url")).fold(
+              msg => throw new IllegalArgumentException(msg),
+              identity
+            )
+            hikariConfig.setJdbcUrl(resolved.jdbcUrl)
+            resolved.user.foreach(hikariConfig.setUsername)
+            resolved.password.foreach(hikariConfig.setPassword)
           } else {
             val dsConfig = config.getConfig("dataSource")
             hikariConfig.setJdbcUrl(
