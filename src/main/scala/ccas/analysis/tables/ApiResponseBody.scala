@@ -5,7 +5,7 @@ import java.security.MessageDigest
 import java.sql.SQLException
 
 import com.augustnagro.magnum.*
-import zio.ZIO
+import zio.{URIO, ZIO}
 
 import ccas.analysis.tables.subtypes.ApiResponseBodyId
 import ccas.utils.client.BodyStore
@@ -29,6 +29,11 @@ object ApiResponseBody {
     */
   val CfCanonicalBody = "[Cloudflare challenge: /cdn-cgi/challenge-platform/]"
 
+  /** [[CfCanonicalBody]]'s SHA-256 — its `body_hash` in this table and its object key in the [[BodyStore]]. Exposed
+    * because it is the one hash in the schema that is a compile-time constant rather than derived from a response.
+    */
+  val CfCanonicalHash: String = sha256(CfCanonicalBody)
+
   def createTable: ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""CREATE TABLE IF NOT EXISTS api_response_body (
@@ -37,7 +42,8 @@ object ApiResponseBody {
             )""".update.run()
     }
 
-  /** Store a body's bytes in the [[BodyStore]] and return its SHA-256 hash (the store key + dedup key).
+  /** Store a body's bytes in the [[BodyStore]] and return its SHA-256 hash (the store key + dedup key), or `None`
+    * when the store rejected the write.
     *
     * Call this BEFORE opening the JDBC transaction that writes the pointer/cache/failure row — the R2 `PutObject` is
     * a network round-trip, and running it inside `withTransaction` would pin a pooled Postgres connection
@@ -45,10 +51,13 @@ object ApiResponseBody {
     * pointer always has bytes behind it; the reverse would let a reader see a pointer with no object. A `put` whose
     * transaction later rolls back leaves a harmless dangling object (idempotent re-put; swept by [[deleteOrphans]]).
     * The SHA-256 is over the String's UTF-8 bytes, so the store key and the stored bytes stay consistent.
+    *
+    * `None` is the store-outage signal (see [[BodyStore.putOrSkip]]): the caller must skip the pointer row it was
+    * about to write, degrading that write to "uncached" rather than failing the request the body came from.
     */
-  def putBody(body: String): ZIO[BodyStore, Throwable, String] = {
+  def putBody(body: String): URIO[BodyStore, Option[String]] = {
     val hash = sha256(body)
-    BodyStore.put(hash, body.getBytes(StandardCharsets.UTF_8)).as(hash)
+    BodyStore.putOrSkip(hash, body.getBytes(StandardCharsets.UTF_8)).map(Option.when(_)(hash))
   }
 
   /** Upsert the hash-pointer row for an already-stored body (see [[putBody]]) and return its `body_id`. Pure DB, so
@@ -65,16 +74,21 @@ object ApiResponseBody {
       .map(ApiResponseBodyId.wrap)
 
   /** Read a cached body by id: resolve the hash-pointer row (a tiny Neon read) then load the bytes from the
-    * [[BodyStore]]. Used by `CacheableResult.Fresh` / `Revalidated` lazy-loading. Returns `None` if either the
-    * pointer row was deleted (e.g. by orphan cleanup) or the object is absent from the store — the caller treats
-    * that as a cache miss and falls through to a network refetch.
+    * [[BodyStore]]. Used by `CacheableResult.Fresh` / `Revalidated` lazy-loading. Returns `None` if the pointer row
+    * was deleted (e.g. by orphan cleanup), the object is absent from the store, or the store errored — the caller
+    * treats all three as a cache miss and falls through to a network refetch.
+    *
+    * Folding a store *error* into the same `None` is what makes an object-store outage non-fatal: the caller's
+    * recovery path drops the cache row and does an unconditional GET, which is the only correct move anyway (a
+    * conditional GET could come back 304, leaving us with metadata and still no body). The metadata self-heals on
+    * the next successful cache write.
     */
-  def loadById(bodyId: ApiResponseBodyId): ZIO[PostgresClient & BodyStore, Throwable, Option[String]] =
+  def loadById(bodyId: ApiResponseBodyId): ZIO[PostgresClient & BodyStore, SQLException, Option[String]] =
     connectZIO {
       val raw = ApiResponseBodyId.unwrap(bodyId)
       sql"SELECT body_hash FROM api_response_body WHERE body_id = $raw".query[String].run().headOption
     }.flatMap {
-      case Some(hash) => BodyStore.get(hash).map(_.map(bytes => new String(bytes, StandardCharsets.UTF_8)))
+      case Some(hash) => BodyStore.getOrMiss(hash).map(_.map(bytes => new String(bytes, StandardCharsets.UTF_8)))
       case None       => ZIO.none
     }
 
@@ -110,18 +124,25 @@ object ApiResponseBody {
     * startup. Going forward every CF 403 is written with [[CfCanonicalBody]] at fetch time (see
     * `ChessComClient.handleResponse`), so all CF failure rows already dedup to this one hash; any legacy per-request
     * CF variant rows from before that behaviour age out via the `api_fetch_failure` retention sweep.
+    *
+    * A store outage skips the pointer row and returns 0 rather than failing startup — this is only a pre-warm; the
+    * first CF 403 recreates object + pointer through the normal [[putBody]] path.
     */
-  def normalizeCfBodies: ZIO[PostgresClient & BodyStore, Throwable, Int] = {
-    val canonicalHash  = sha256(CfCanonicalBody)
-    val canonicalBytes = CfCanonicalBody.getBytes(StandardCharsets.UTF_8)
-    for {
-      _ <- BodyStore.put(canonicalHash, canonicalBytes)
-      inserted <- connectZIO {
-        sql"""INSERT INTO api_response_body (body_hash) VALUES ($canonicalHash)
-              ON CONFLICT (body_hash) DO NOTHING""".update.run()
-      }
-    } yield inserted
-  }
+  def normalizeCfBodies: ZIO[PostgresClient & BodyStore, SQLException, Int] =
+    // Uses the precomputed [[CfCanonicalHash]] rather than routing through [[putBody]], which would re-derive the
+    // same constant SHA-256 on every startup. The put-before-pointer ordering putBody documents still holds.
+    BodyStore.putOrSkip(CfCanonicalHash, CfCanonicalBody.getBytes(StandardCharsets.UTF_8)).flatMap { stored =>
+      if (stored) { insertPointerIfAbsent(CfCanonicalHash) }
+      // Debug, not warn: `BodyStore`'s health decorator already raised one WARN for the outage itself, and this
+      // adds only which pre-warm was skipped.
+      else { ZIO.logDebug("BodyStore unavailable; skipping Cloudflare canonical-body pre-warm").as(0) }
+    }
+
+  private def insertPointerIfAbsent(hash: String): ZIO[PostgresClient, SQLException, Int] =
+    connectZIO {
+      sql"""INSERT INTO api_response_body (body_hash) VALUES ($hash)
+            ON CONFLICT (body_hash) DO NOTHING""".update.run()
+    }
 
   private def sha256(input: String): String = {
     val digest = MessageDigest.getInstance("SHA-256")

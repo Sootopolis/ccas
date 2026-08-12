@@ -253,7 +253,9 @@ final class ChessComClient(
 
   /** Success path: extract cache-control headers, upsert the response body into the cache (unless `no-store`), and
     * return `IdenticalBody` when the new body deduped to the same `body_id` as the prior cache entry, otherwise
-    * `Changed` with the eagerly-decoded value.
+    * `Changed` with the eagerly-decoded value. A body-store outage makes the upsert a no-op (see
+    * [[ApiResponseCache.upsertWithBody]]) and the result `Changed` — the value is already in memory, so the request
+    * succeeds uncached rather than failing on a non-authoritative cache.
     */
   private def handleSuccessBody[T](
     url: URL,
@@ -268,8 +270,9 @@ final class ChessComClient(
     // by dropping any `max-age` so `isFresh` never returns true — subsequent requests go out as conditional GETs
     // (validated via etag / last-modified) rather than being served locally.
     val effectiveMaxAge = if (directives.noCache) None else directives.maxAgeSeconds
-    // When `cacheWrites=false` the upsert is skipped and `newBodyIdOpt` is always `None`, so the match below cannot
-    // reach the `IdenticalBody` arm — every uncached 200 increments `cacheMisses`. That is intentional: hit-vs-miss
+    // `newBodyIdOpt` is `None` in three cases: the caller opted out of cache writes, the response said `no-store`,
+    // or the body store rejected the write (outage — `upsertWithBody` then persists nothing at all). All three land
+    // on the `Changed` arm below and increment `cacheMisses`, never `IdenticalBody`. That is intentional: hit-vs-miss
     // discrimination requires comparing the new body's `body_id` against the prior one, which only the upsert
     // produces. Don't try to "fix" by SHA-256-ing the body to reconstruct the comparison — the stat is meant to
     // count Chess.com bytes downloaded, and an uncached caller has by definition just downloaded fresh bytes.
@@ -287,7 +290,6 @@ final class ChessComClient(
             fetchedAt = Instant.now()
           )
           .provideEnvironment(ZEnvironment(pgClient, bodyStore))
-          .asSome
     val decodeLazy = ZIO.fromEither(jsonDecoder.decodeJson(string)).mapError(JsonDecodingException(_))
     for {
       _            <- logEtagParseMiss(response)
@@ -320,6 +322,11 @@ final class ChessComClient(
     * uncached caller doesn't silently re-cache via the recovery path. Recovery is bounded to a single attempt:
     * `catchSome` is scoped to the cached-body decode only, so a fresh-body decode failure (persistent origin-side
     * bug) propagates instead of looping back through `catchSome → refetch → catchSome`.
+    *
+    * The same recovery covers an unreadable body — pruned pointer row, missing object, or a body-store outage, all
+    * of which `ApiResponseBody.loadById` reports as `None`. Dropping the cache row first is deliberate even for a
+    * transient outage: without a body we need an unconditional GET, and leaving the validators in place would let
+    * the next request come back 304 with still no body to serve.
     */
   private def loadAndDecode[T](url: URL, bodyId: ApiResponseBodyId, cacheWrites: Boolean)(
     using jsonDecoder: JsonDecoder[T]
@@ -336,7 +343,10 @@ final class ChessComClient(
           ZIO.fromEither(jsonDecoder.decodeJson(body))
             .mapError(JsonDecodingException(_))
             .catchSome { case _: JsonDecodingException => refetch }
-        case None => refetch
+        // The BodyStore is content-addressed and so URL-agnostic; its own logs can only name a hash. This is the
+        // nearest frame that knows which endpoint lost its cached body, so it is where the URL gets recorded.
+        case None =>
+          ZIO.logDebug(s"Cached body unavailable for ${url.encode}; invalidating and refetching") *> refetch
       }
   }
 

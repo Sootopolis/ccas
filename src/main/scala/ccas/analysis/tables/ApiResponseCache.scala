@@ -63,6 +63,10 @@ object ApiResponseCache {
     * transaction opens so the object-store round-trip never holds a pooled connection idle-in-transaction — then
     * writes the hash-pointer and cache rows atomically, returning the resolved `body_id` so the caller can compare
     * against the prior `body_id` to detect byte-identical content.
+    *
+    * Returns `None` when the body store rejected the write: nothing is persisted at all (no pointer row, no cache
+    * row), because a cache row whose body can't be read is a row that can only ever produce a refetch. The caller
+    * still has the body in memory, so the request succeeds — uncached. See [[ccas.utils.client.BodyStore.putOrSkip]].
     */
   def upsertWithBody(
     url: String,
@@ -72,24 +76,48 @@ object ApiResponseCache {
     maxAgeSeconds: Option[Long],
     contentType: Option[String],
     fetchedAt: Instant
-  ): ZIO[PostgresClient & BodyStore, Throwable, ApiResponseBodyId] =
-    ApiResponseBody.putBody(body).flatMap { hash =>
-      withTransaction {
-        ApiResponseBody.ensureBodyPointer(hash).flatMap { bodyId =>
-          val rawBodyId = ApiResponseBodyId.unwrap(bodyId)
-          connectZIO {
-            sql"""INSERT INTO api_response_cache
-                    (fetched_at, url, content_type, max_age_seconds, etag, last_modified, body_id)
-                  VALUES ($fetchedAt, $url, $contentType, $maxAgeSeconds, $etag, $lastModified, $rawBodyId)
-                  ON CONFLICT (url) DO UPDATE SET
-                    fetched_at      = EXCLUDED.fetched_at,
-                    content_type    = EXCLUDED.content_type,
-                    max_age_seconds = EXCLUDED.max_age_seconds,
-                    etag            = EXCLUDED.etag,
-                    last_modified   = EXCLUDED.last_modified,
-                    body_id         = EXCLUDED.body_id""".update.run()
-          }.as(bodyId)
-        }
+  ): ZIO[PostgresClient & BodyStore, SQLException, Option[ApiResponseBodyId]] =
+    ApiResponseBody.putBody(body).flatMap {
+      case None => ZIO.none
+      case Some(hash) =>
+        upsertRow(
+          hash = hash,
+          url = url,
+          etag = etag,
+          lastModified = lastModified,
+          maxAgeSeconds = maxAgeSeconds,
+          contentType = contentType,
+          fetchedAt = fetchedAt
+        ).asSome
+    }
+
+  /** Write the hash-pointer row and the cache row for an already-stored body, atomically. Pure DB — no object-store
+    * I/O inside the transaction.
+    */
+  private def upsertRow(
+    hash: String,
+    url: String,
+    etag: Option[String],
+    lastModified: Option[Instant],
+    maxAgeSeconds: Option[Long],
+    contentType: Option[String],
+    fetchedAt: Instant
+  ): ZIO[PostgresClient, SQLException, ApiResponseBodyId] =
+    withTransaction {
+      ApiResponseBody.ensureBodyPointer(hash).flatMap { bodyId =>
+        val rawBodyId = ApiResponseBodyId.unwrap(bodyId)
+        connectZIO {
+          sql"""INSERT INTO api_response_cache
+                  (fetched_at, url, content_type, max_age_seconds, etag, last_modified, body_id)
+                VALUES ($fetchedAt, $url, $contentType, $maxAgeSeconds, $etag, $lastModified, $rawBodyId)
+                ON CONFLICT (url) DO UPDATE SET
+                  fetched_at      = EXCLUDED.fetched_at,
+                  content_type    = EXCLUDED.content_type,
+                  max_age_seconds = EXCLUDED.max_age_seconds,
+                  etag            = EXCLUDED.etag,
+                  last_modified   = EXCLUDED.last_modified,
+                  body_id         = EXCLUDED.body_id""".update.run()
+        }.as(bodyId)
       }
     }
 

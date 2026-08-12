@@ -63,5 +63,5 @@ build/
 ### Runtime ###
 # Server per-job logs (job-logs.directory = logs/jobs in application.conf)
 logs/
-# Local-filesystem BodyStore (body-store.fs-root = cache/bodies; the fs backend, #191)
-cache/
+# No entry for the local-filesystem BodyStore: since #200 its root defaults to ${XDG_CACHE_HOME:-~/.cache}/ccas/bodies,
+# outside the repo. A `cache/` directory here is a leftover from the pre-#200 default and is safe to delete.

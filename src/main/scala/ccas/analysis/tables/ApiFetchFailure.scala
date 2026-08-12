@@ -50,9 +50,10 @@ object ApiFetchFailure {
     }
 
   /** Recent failures with their response bodies. The join resolves each row's `body_hash`; the body bytes are then
-    * loaded from the [[BodyStore]] (a missing object yields `None`, e.g. a legacy row whose body predates R2).
+    * loaded from the [[BodyStore]] (a missing object — or an unreachable store — yields `None`, e.g. a legacy row
+    * whose body predates R2).
     */
-  def selectRecent(since: Instant): ZIO[PostgresClient & BodyStore, Throwable, List[ApiFetchFailure]] =
+  def selectRecent(since: Instant): ZIO[PostgresClient & BodyStore, SQLException, List[ApiFetchFailure]] =
     connectZIO {
       sql"""SELECT f.occurred_at, f.url, f.error_type, f.error_message, b.body_hash
             FROM api_fetch_failure f
@@ -63,15 +64,18 @@ object ApiFetchFailure {
     }.flatMap { rows =>
       ZIO.foreach(rows) { row =>
         ZIO
-          .foreach(row.bodyHash)(hash => BodyStore.get(hash).map(_.map(new String(_, StandardCharsets.UTF_8))))
+          .foreach(row.bodyHash)(hash => BodyStore.getOrMiss(hash).map(_.map(new String(_, StandardCharsets.UTF_8))))
           .map(bodyOpt => ApiFetchFailure(row.occurredAt, row.url, row.errorType, row.errorMessage, bodyOpt.flatten))
       }
     }
 
-  def insert(item: ApiFetchFailure): ZIO[PostgresClient & BodyStore, Throwable, Int] =
+  /** Record a failed fetch. A [[BodyStore]] outage degrades to a body-less row rather than losing the failure
+    * entirely — the audit trail is the point, the response body is a bonus.
+    */
+  def insert(item: ApiFetchFailure): ZIO[PostgresClient & BodyStore, SQLException, Int] =
     for {
       // Store the body BEFORE opening the transaction so the object-store round-trip never holds a pooled connection.
-      hashOpt <- ZIO.foreach(item.responseBody)(ApiResponseBody.putBody)
+      hashOpt <- ZIO.foreach(item.responseBody)(ApiResponseBody.putBody).map(_.flatten)
       result <- withTransaction {
         for {
           bodyIdOpt <- ZIO.foreach(hashOpt)(ApiResponseBody.ensureBodyPointer)
