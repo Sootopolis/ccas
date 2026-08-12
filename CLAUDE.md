@@ -16,7 +16,25 @@ This is an SBT project (Scala 3.8.3, SBT 1.12.8).
 - **Continuous compile on change:** `sbt ~compile`
 - **Interactive SBT shell:** `sbt` then run commands without the `sbt` prefix
 
-Tests use ZIO Test (`ZIOSpecDefault`). SQL tests require a running PostgreSQL instance with a `ccas_test` database (see `src/test/resources/application.conf`).
+Tests use ZIO Test (`ZIOSpecDefault`). SQL tests require a running PostgreSQL instance with a `ccas_test` database (see `src/test/resources/application.conf`). A tracked `pre-push` hook runs the full suite before every push — enable it per clone with `git config core.hooksPath .githooks`.
+
+## Conventions
+
+Rules that aren't derivable from reading the code. Follow them; they exist because the alternative was tried.
+
+**Scala style.** Braces on `match`, parens on `if`/`else`; no Scala 3 braceless (indentation-only) syntax. All imports at the top of the file, never mid-file. Prefer a for-comprehension over a chain of 3+ ZIO combinators, especially inside a `catchAll` body. Don't put large blocks inside `fold` / `foldZIO` / `mapBoth` bodies — extract a named method. Name arguments when a construction is already one field per line, above all for adjacent same-typed `None` / `Some` fields. No default argument values unless a caller genuinely needs them: this is an application, not a library. Never embed a raw control byte (ESC and friends) in a string literal — use `\uXXXX`.
+
+**ZIO idioms.** `ZIO.whenDiscard` / `unlessDiscard` when the result is `Unit`. `layer.build *> rest` when a layer is provided purely for its side effect (silences the `ZLayer` macro warning). Note that in ZIO 2.1 `ZIO.logInfo` and friends ignore `currentLogLevel`, so any per-fiber level filter has to live in the `ZLogger` itself.
+
+**SQL.** Write methods return the number of rows affected, not `Unit`. Prefer `UNION ALL` over `UNION` where deduplication isn't needed. Magnum specifics: a custom `DbCodec` must not throw on `null`, because Magnum's `OptionCodec` reads the value *before* checking `wasNull`; and interpolating a bare enum case (`${TriggerType.Interval}`) into `sql""` emits no placeholder and produces a syntax error — widen the value to the enum type first.
+
+**Formatting.** The repo is not scalafmt-clean. Never run `scalafmtAll` / `scalafmtSbt` — it churns ~120 files. Format only the files you touched, and even then check the diff: reformatting a file that was never formatted rewraps comments and reorders imports far beyond your change.
+
+**Tests.** `Test/parallelExecution := false` is deliberate — several suites touch process-global state or a shared schema. Within a suite ZIO Test still runs tests in parallel, so a suite sharing mutable schema or filesystem state needs `@@ TestAspect.sequential`. Fix flakes at the root; `@@ TestAspect.flaky` is not an acceptable remedy.
+
+**Output files.** Apps that write reports go through `OutputFile` (`ccas.utils`), which owns the layout and archives any previous file for the same app into an `archive/` subdirectory first. Club-scoped output uses `write` / `writeAndLog` → `out/{clubSlug}/{timestamp}-{appName}.{ext}`, grouped by club so one club's history reads in order; output with no single club uses `writeGlobal` / `writeAndLogGlobal`, which takes an explicit subdirectory → `out/{subDir}/{timestamp}-{appName}.{ext}`. Don't hand-roll paths.
+
+**Chess.com API reliability.** Three fields lie, and code must not branch on them: a tournament's `status`, `ApiClub.lastActivity` (observed 12+ years off on active clubs), and the match endpoint's view of a match (it lags the game archives — prefer archive data). A 404 is not permanent: `"X not found"` bodies are timeline-unstable, and usernames and club slugs can flip 404 → 200 when a handle is registered later. High 404 counts on cancelled matches are expected noise.
 
 ## Architecture
 
@@ -118,7 +136,7 @@ The invariant: **the body cache is not source of truth, so a store outage takes 
 
 ### Database
 
-Uses Magnum (`com.augustnagro.magnum`) for SQL access with PostgreSQL. `PostgresClient` (`ccas.utils.sql`) wraps a Magnum `Transactor` backed by HikariCP and adds connection-pool hardening (keepalive probes, validation queries, lazy initialization) and transient-error retry (exponential backoff on SQLState `08xxx`, though a Hikari pool-checkout timeout fails fast instead). `PostgresClient.live` reads config from `application.conf` under the `database` prefix and provides a `PostgresClient` ZLayer; all app and server code depends on `PostgresClient` rather than `Transactor` directly. Custom `DbCodec` instances handle `Instant` (via `TIMESTAMPTZ`), `URL`, and `List[String]` (PostgreSQL arrays). Table names are derived from case class names via `CamelToSnakeCase` naming strategy. Server tables (`JobRun`, `JobSchedule`) reference clubs by `club_id` FK; route handlers resolve the slug from HTTP requests to a `ClubId` before submitting jobs. Analysis run tables (`MembershipRun`, `RecruitmentRun`, `HistoryRun`) have an optional `job_run_id` column linking back to the server-level job. Schema migrations for existing databases are managed via manual SQL scripts in the `sql/` directory.
+Uses Magnum (`com.augustnagro.magnum`) for SQL access with PostgreSQL. `PostgresClient` (`ccas.utils.sql`) wraps a Magnum `Transactor` backed by HikariCP and adds connection-pool hardening (keepalive probes, validation queries, lazy initialization) and transient-error retry (exponential backoff on SQLState `08xxx`, though a Hikari pool-checkout timeout fails fast instead). `PostgresClient.live` reads config from `application.conf` under the `database` prefix and provides a `PostgresClient` ZLayer; all app and server code depends on `PostgresClient` rather than `Transactor` directly. Custom `DbCodec` instances handle `Instant` (via `TIMESTAMPTZ`), `URL`, and `List[String]` (PostgreSQL arrays). Table names are derived from case class names via `CamelToSnakeCase` naming strategy. Server tables (`JobRun`, `JobSchedule`) reference clubs by `club_id` FK; route handlers resolve the slug from HTTP requests to a `ClubId` before submitting jobs. Analysis run tables (`MembershipRun`, `RecruitmentRun`, `HistoryRun`) have an optional `job_run_id` column linking back to the server-level job. **The `createTable` definitions in code are the schema of record** — there is no migration framework. Apply a schema change by editing the `CREATE TABLE` and running the equivalent `ALTER` against each existing database by hand (`psql`). `sql/` holds dated scripts from earlier changes and is kept for history; new changes are not scripted there unless the change is intricate enough to be worth replaying, so treat the directory as an archive rather than a ledger you must append to.
 
 ### Test Data
 

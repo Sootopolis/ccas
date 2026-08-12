@@ -20,12 +20,17 @@ docker compose up -d
 # Configure environment
 cp .env.example .env   # edit with your values
 
+# Enable the tracked git hooks (pre-push runs the full test suite)
+git config core.hooksPath .githooks
+
 # Run the server (default port 8080)
 sbt "runMain ccas.cli.Main serve"
 
 # Run tests (requires ccas_test database from docker compose)
 sbt test
 ```
+
+`core.hooksPath` is per-clone and not carried by `git clone`, so set it once on every machine you work from — otherwise pushes skip the pre-push test run silently.
 
 ## Install the `ccas` CLI
 
@@ -200,6 +205,8 @@ Optional overrides with defaults:
 
 See [`application.conf`](src/main/resources/application.conf) for the full set of tunable parameters.
 
+**Letting a Neon compute scale to zero.** Neon suspends an idle compute after ~5 minutes, but *any* open or periodically-pinged connection counts as a live session and keeps it awake, burning the free tier's monthly compute hours. Three pool settings together let it suspend shortly after a run finishes: `DB_POOL_MIN_IDLE=0` (drain the pool so the session actually closes), `DB_POOL_KEEPALIVE_TIME=0` (stop Hikari's idle ping resetting Neon's timer), and `DB_POOL_IDLE_TIMEOUT=30000` (retire idle connections in 30 s rather than 10 minutes). The cost is a cold-start delay on the next query and the occasional transient `08xxx` reconnect, which the socket-timeout and transient-retry hardening absorbs. Expect benign "idle" warnings if a command sits at a confirmation prompt.
+
 ### Server config file (`ccas config`)
 
 The packaged `ccas` / `ccas-server` binaries read the settings above from the **process environment** — they do **not** load a `.env` file (that's auto-sourced only for `sbt run`). Rather than export them by hand before every `ccas server up`, manage them with `ccas config`, which persists them to `${XDG_CONFIG_HOME:-~/.config}/ccas/ccas.env` — an owner-only (`0600`) `KEY=VALUE` file:
@@ -226,6 +233,19 @@ ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
 ```
 
 It takes effect on each process's next startup (the value is read once in `Tables.ensureTables`).
+
+### Response-body store
+
+Cached Chess.com response **bodies** are content-addressed by SHA-256 and stored outside Postgres; only the metadata index (`api_response_cache`) stays in the database. The backend is chosen by `CCAS_BODY_STORE_BACKEND`:
+
+| Backend | Notes |
+|---------|-------|
+| `fs` (default) | Local disk, no configuration. Root defaults to `${XDG_CACHE_HOME:-~/.cache}/ccas/bodies`; override with `CCAS_BODY_STORE_FS_ROOT`. Give it an **absolute** path — a relative one resolves against whatever directory the process was launched from, and the server warns at startup when it sees one |
+| `s3` | Any S3-compatible endpoint. Used against Cloudflare R2, where egress is free. Requires `CCAS_R2_ENDPOINT`, `CCAS_R2_BUCKET` and the `CCAS_R2_ACCESS_KEY` / `CCAS_R2_SECRET_KEY` pair (`CCAS_R2_REGION` defaults to `auto`) |
+
+Set the two R2 credentials with `ccas config set` rather than in `.env` — `ccas config` stores them `0600` and redacts them from `list`.
+
+The store is deliberately **non-critical**: it is a cache, not a source of truth, so a lost or unreachable body just re-fetches from Chess.com. An outage degrades caching to off — reads fall through to the network, writes are skipped, requests keep succeeding — and the cache self-heals on the first successful write. The server logs one warning when the store first fails and one info line when it recovers, rather than one line per failed operation.
 
 ### Deployment model
 
@@ -281,6 +301,18 @@ src/main/scala/ccas/
   server/      HTTP server, job runner, scheduler
   utils/       Shared infrastructure (HTTP client, JSON, SQL, logging)
 ```
+
+## Troubleshooting
+
+**`docker compose up` fails to bind port 5432.** A host-native PostgreSQL is already listening. Either use it directly (create the `ccas` and `ccas_test` databases and a matching role yourself, then point `DB_*`/`DATABASE_URL` at it) or move the container to another port with `DB_PORT`.
+
+**`sbt test` fails with `Failed to get driver instance for ...ccas_test` or `No suitable driver`.** The pgjdbc driver can deregister itself in a long-lived, repeatedly-reloaded sbt JVM. It is not a code failure: a cold `sbt test` in a fresh shell passes. Forking (`sbt ';set Test/fork := true ;test'`) also re-registers the driver.
+
+**A run hangs with no progress.** Read the client's progress bar first — it prints `API: active/currentMax`, and `active` is only above zero while a fiber holds an HTTP slot. A hang showing **`API: 0/N`** therefore means nothing is in flight over HTTP, so the stuck fiber is in a blocking JDBC call; `API: N/N` stuck at N ≥ 1 points at an HTTP read instead. The JDBC case was the symptom of pgjdbc's `socketTimeout` defaulting to infinite (a silently-dropped connection parks in `socket.read()` forever); that is now bounded by `DB_SOCKET_TIMEOUT_SECONDS` / `DB_CONNECT_TIMEOUT_SECONDS` / `DB_TCP_KEEP_ALIVE`, so raise those before suspecting application code.
+
+**Phantom `X is not a member of ccas` compile errors.** IntelliJ's sbt shell and a terminal `sbt` share `target/`, and concurrent use corrupts the Zinc incremental-compilation state. Run one at a time; `sbt clean` recovers.
+
+**Tests are order-dependent or flaky.** `Test/parallelExecution := false` is set deliberately — several suites touch process-global state (stdout capture, config caches) or a shared schema. Within a suite, ZIO Test still runs tests in parallel, so a suite sharing mutable schema or filesystem state needs `@@ TestAspect.sequential`. Fix races at the root; do not paper over them with `@@ TestAspect.flaky`.
 
 ## Further Reading
 
