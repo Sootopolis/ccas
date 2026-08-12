@@ -34,6 +34,15 @@ sbt test
 
 ## Install the `ccas` CLI
 
+On a new dev machine, [`scripts/install-cli.sh`](scripts/install-cli.sh) does the whole client-side setup in one go — stages the binary, symlinks it onto your `PATH`, and installs shell completion for your shell:
+
+```bash
+scripts/install-cli.sh              # add --shell zsh|bash|fish to override shell detection
+scripts/install-cli.sh --help       # flags: --bin-dir, --stage, --no-stage, --no-rc
+```
+
+It is idempotent: re-run it after a `git pull` (with `--stage` to force a rebuild) and it refreshes the launcher and completion script, leaving your rc file untouched if the line is already there. It deliberately stops short of server configuration — run `ccas config init` afterwards. The manual equivalent of each step is below.
+
 `sbt stage` (sbt-native-packager) produces two launcher scripts under `target/universal/stage/bin/`:
 
 - `ccas` — the CLI / primary entry point
@@ -113,6 +122,8 @@ The detached server writes its pid to `${XDG_STATE_HOME:-~/.local/state}/ccas/cc
 
 `ccas completion <bash|zsh|fish>` prints a self-contained, **pure-shell** completion script. It boots the JVM once when you install it; afterwards every `<TAB>` runs entirely in the shell (no JVM, no network), so completion is instant. The scripts complete subcommands and flags, plus **club slugs** (after `--club`, and for the `ccas use-club` argument) and **recent job ids** (for `ccas logs` and `ccas cancel`) read from cache files.
 
+[`scripts/install-cli.sh`](#install-the-ccas-cli) installs it for you; the manual equivalents are:
+
 ```bash
 # bash — install once (bash-completion auto-loads it)
 ccas completion bash > ~/.local/share/bash-completion/completions/ccas
@@ -123,6 +134,8 @@ eval "$(ccas completion zsh)"
 # fish
 ccas completion fish > ~/.config/fish/completions/ccas.fish
 ```
+
+For zsh, prefer generating the script once to a file and sourcing that (`ccas completion zsh > ~/.config/ccas/completion.zsh`, then `source ~/.config/ccas/completion.zsh` at the end of `~/.zshrc`) — the `eval` form boots the JVM on every new shell, while a pre-generated file keeps shell startup JVM-free. That is what the install script does.
 
 Dynamic candidates come from `${XDG_CACHE_HOME:-~/.cache}/ccas/clubs.txt` and `recent-jobs.txt`, refreshed automatically as you run normal commands (the club list is fetched from `GET /api/managed-clubs` at most every few hours — falling back to `GET /api/clubs` only while you manage no clubs yet; each submitted job id is recorded). On a fresh install these are empty, so only subcommands and flags complete until the first command populates them — unless `default_clubs` is set in the [config file](#cli-config-file), which seeds the club list so completion works immediately.
 
@@ -304,7 +317,15 @@ src/main/scala/ccas/
 
 ## Troubleshooting
 
-**`docker compose up` fails to bind port 5432.** A host-native PostgreSQL is already listening. Either use it directly (create the `ccas` and `ccas_test` databases and a matching role yourself, then point `DB_*`/`DATABASE_URL` at it) or move the container to another port with `DB_PORT`.
+**`docker compose up` fails to bind port 5432.** A host-native PostgreSQL is already listening. Either move the container to another port with `DB_PORT` (which also points the app and the test suite at it), or stop that service, or use it directly — Compose exists here only to supply the databases, so a local instance serves them once it has the role and both databases:
+
+```sql
+CREATE ROLE ccas LOGIN PASSWORD 'ccas';
+CREATE DATABASE ccas OWNER ccas;
+CREATE DATABASE ccas_test OWNER ccas;   -- OWNER matters: Postgres 15+ blocks non-owner writes to public
+\c ccas
+CREATE SCHEMA IF NOT EXISTS test AUTHORIZATION ccas;
+```
 
 **`sbt test` fails with `Failed to get driver instance for ...ccas_test` or `No suitable driver`.** The pgjdbc driver can deregister itself in a long-lived, repeatedly-reloaded sbt JVM. It is not a code failure: a cold `sbt test` in a fresh shell passes. Forking (`sbt ';set Test/fork := true ;test'`) also re-registers the driver.
 
