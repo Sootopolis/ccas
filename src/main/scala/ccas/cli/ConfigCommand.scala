@@ -6,6 +6,7 @@ import java.nio.file.{Files, Path}
 import zio.{Console, ExitCode, Task, UIO, ZIO}
 
 import ccas.server.config.{ServerEnvFile, ServerEnvKeys}
+import ccas.utils.sql.PostgresClient
 
 /** Handlers for `ccas config` — a purely local command (no server, no DB) that manages the server-bootstrap env file
   * (`~/.config/ccas/ccas.env`, [[XdgPaths.serverEnvFile]]) which [[ccas.server.config.ServerEnvOverlay]] applies at boot.
@@ -34,7 +35,7 @@ object ConfigCommand {
         .orDie
         .as(ExitCode(2))
     } else {
-      warnIfUnknown(k) *> ServerEnvFile
+      warnIfUnknown(k) *> warnIfUnusableDatabaseUrl(k, value) *> ServerEnvFile
         .set(file, k, value)
         .foldZIO(ioError, _ => Console.printLine(s"set $k = ${ServerEnvKeys.redact(k, value)}").orDie.as(ExitCode.success))
     }
@@ -68,6 +69,20 @@ object ConfigCommand {
   private def warnIfUnknown(key: String): UIO[Unit] =
     ZIO.whenDiscard(ServerEnvKeys.byName(key).isEmpty) {
       Console.printLineError(s"warning: '$key' is not a known ccas setting (writing anyway)").orDie
+    }
+
+  /** Surface an unusable `DATABASE_URL` here rather than at the next `ccas server up`. Both the JDBC and libpq forms are
+    * accepted at boot ([[ccas.utils.sql.PostgresClient.normalizeJdbcUrl]]); anything else only fails once the pool is
+    * built, so warn at write time. Writes anyway — same reasoning as `warnIfUnknown`: this is a bootstrap file, and
+    * refusing a value the operator meant to stage would be worse than a warning. The message comes from the normaliser
+    * and never echoes the URL, so a mistyped password cannot land in the terminal scrollback.
+    */
+  private def warnIfUnusableDatabaseUrl(key: String, value: String): UIO[Unit] =
+    if (key != "DATABASE_URL") { ZIO.unit }
+    else {
+      PostgresClient
+        .normalizeJdbcUrl(value)
+        .fold(msg => Console.printLineError(s"warning: $msg (writing anyway)").orDie, _ => ZIO.unit)
     }
 
   private def printList(map: Map[String, String], showSecrets: Boolean): UIO[ExitCode] = {

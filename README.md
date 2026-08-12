@@ -189,6 +189,8 @@ All environment variables are listed in [`.env.example`](.env.example). For the 
 | `CCAS_CONTACT_EMAIL` | Used in `User-Agent` header for Chess.com API requests |
 | `DATABASE_URL` *or* `DB_USER` + `DB_PASSWORD` + `DB_NAME` + `DB_PORT` + `DB_HOST` + `DB_SCHEMA` | PostgreSQL connection. `DATABASE_URL` (JDBC form, single-quoted to escape `&`) takes priority; the `DB_*` fields are only consulted when it's absent |
 
+> **Provider connection strings work as-is.** Neon, Heroku, Render, Supabase and friends hand out the *libpq* URI — `postgresql://user:pass@host/db?sslmode=require&channel_binding=require` — which pgJDBC rejects outright: it accepts neither the `postgresql://` scheme (it wants `jdbc:postgresql://`) nor credentials in userinfo position (it wants `?user=`/`?password=`), and a verbatim paste used to fail at boot with the driver-level `RuntimeException: Failed to get driver instance for jdbcUrl=…`. `DATABASE_URL` now accepts either form and converts, so paste whichever your provider gives you. Credentials are lifted out of the URL and handed to the pool separately either way, so they cannot leak through that message. Libpq-only parameters (`channel_binding`) are dropped, since pgJDBC has no equivalent.
+
 Optional overrides with defaults:
 
 | Variable | Default | Description |
