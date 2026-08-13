@@ -168,8 +168,12 @@ object BodyStore {
       write <- positiveMs(config.writeTimeoutMs, DefaultWriteTimeoutMs, "body-store.write-timeout-ms")
     } yield BodyStoreLimits(read, write)
 
-  /** The S3 transport's own budget, nested strictly inside the accessor deadlines: accessor deadline > `apiCall` >=
-    * `apiCallAttempt` = socket timeout.
+  /** The S3 transport's own budget, derived from the accessor deadlines: `apiCall` = the '''widest''' accessor
+    * deadline >= `apiCallAttempt` = socket timeout.
+    *
+    * One `S3Client` carries one `apiCallTimeout`, so the ceiling is sized for the widest operation (`write`, by
+    * default). A read abandoned at its own 5s deadline is therefore capped by the transport at the 10s write budget
+    * rather than at 5s — the orphan is bounded, not made as short as the accessor that spawned it.
     *
     * This is not hygiene. `attemptBlockingInterrupt` cannot unblock a `UrlConnectionHttpClient` socket read —
     * `Thread.interrupt` does not reach it — so [[Deadlines]]'s `.disconnect` frees the *caller* at the deadline
@@ -339,7 +343,7 @@ object BodyStore {
       _ <- ZIO.logDebug(s"BodyStore: s3 backend at $endpoint, bucket '$bucket', region '$region'")
     } yield new S3BodyStore(client, bucket)
 
-  private def buildS3Client(
+  private[ccas] def buildS3Client(
     endpoint: String,
     region: String,
     accessKey: String,
@@ -359,8 +363,10 @@ object BodyStore {
       .httpClientBuilder(s3HttpBuilder(timeouts))
       .build()
 
-  // Extracted so the applied durations are assertable: the SDK does not expose its resolved configuration off a
-  // built S3Client, and the defect being fixed here is literally "the builder was called bare".
+  // Extracted so the mapping from S3Timeouts onto the SDK's two API-call budgets is assertable in isolation. The
+  // wiring into `buildS3Client` — the defect being fixed here is literally "the builder was called bare" — is
+  // pinned separately by reading `serviceClientConfiguration` back off a built client. The HTTP client's own
+  // connect/socket values have no such getter, so `s3HttpBuilder` stays asserted on the pure builder input.
   private[ccas] def s3Overrides(timeouts: S3Timeouts): ClientOverrideConfiguration =
     ClientOverrideConfiguration
       .builder()

@@ -8,7 +8,7 @@ import java.util.concurrent.ConcurrentLinkedQueue
 import scala.jdk.CollectionConverters.*
 
 import com.typesafe.config.ConfigFactory
-import zio.{Cause, Chunk, FiberId, FiberRefs, LogLevel, LogSpan, Ref, Scope, Trace, UIO, ZEnvironment, ZIO, ZLogger, durationInt}
+import zio.{Cause, Chunk, Exit, FiberId, FiberRefs, LogLevel, LogSpan, Ref, Scope, Trace, UIO, ZEnvironment, ZIO, ZLogger, durationInt}
 import zio.config.magnolia.DeriveConfig
 import zio.config.typesafe.TypesafeConfigProvider
 import zio.test.*
@@ -295,18 +295,28 @@ object TestBodyStore extends ZIOSpecDefault {
       // The assertion that catches a dropped `.disconnect`. Without it, `timeoutFail` waits for the inner effect's
       // interruption to complete — which an interrupt-deaf blocking call never does — so the elapsed time would be
       // the full stall rather than the budget.
-      val limits = BodyStore.BodyStoreLimits(read = 200.millis, write = 200.millis)
+      // Budgets are deliberately asymmetric: equal ones would let a read/write swap in `Deadlines` pass unnoticed.
+      // Asserting the breached `limit` is what kills that mutation; asserting `op` pins the label the operator sees
+      // in the DEBUG line.
+      val limits = BodyStore.BodyStoreLimits(read = 200.millis, write = 800.millis)
+      val breach = (exit: Exit[Throwable, Any]) =>
+        exit.causeOption.flatMap(_.failureOption).collect { case t: BodyStore.BodyStoreTimeoutException => t }
       for {
         (store, _)      <- freshStore
         faulty          <- FaultyBodyStore.make(store)
         _               <- faulty.stallReads(5.seconds)
+        _               <- faulty.stallWrites(5.seconds)
         bounded          = new BodyStore.Deadlines(faulty, limits)
         (elapsed, exit) <- bounded.get(hash).exit.timed
-        failure          = exit.causeOption.flatMap(_.failureOption)
+        putExit         <- bounded.put(hash, bytes).exit
+        deleteExit      <- bounded.delete(hash).exit
       } yield assertTrue(
         exit.isFailure,
         elapsed.toMillis < 3000,
-        failure.exists(_.isInstanceOf[BodyStore.BodyStoreTimeoutException])
+        breach(exit).exists(t => t.op == "read" && t.limit.toMillis == 200L),
+        breach(putExit).exists(t => t.op == "write" && t.limit.toMillis == 800L),
+        // Deletes ride the write budget on purpose: an outage takes the whole store down, not one verb.
+        breach(deleteExit).exists(t => t.op == "delete" && t.limit.toMillis == 800L)
       )
     },
     test("a stalled store degrades exactly as a broken one: Unavailable on read, skipped write") {
@@ -359,6 +369,13 @@ object TestBodyStore extends ZIOSpecDefault {
         bounded          = new BodyStore.Deadlines(faulty, limits)
         (elapsed, exit) <- bounded.delete(hash).exit.timed
       } yield assertTrue(exit.isFailure, elapsed.toMillis < 3000)
+    },
+    test("live builds the pinned nesting, with HealthLogging outermost") {
+      // The test above pins what the two orders *do*; this pins which one `live` picks, which is otherwise
+      // unobservable — the decorators are structural, and a stalling store cannot be injected under `live`.
+      ZIO.scoped {
+        BodyStore.live.build.map(env => assertTrue(env.get[BodyStore].isInstanceOf[BodyStore.HealthLogging]))
+      }
     },
     test("an outer interruption still propagates through a bounded operation") {
       // `.disconnect` must not cost us shutdown: a fiber parked on a stalled store has to die when the scope does.
@@ -431,6 +448,39 @@ object TestBodyStore extends ZIOSpecDefault {
         overrides.apiCallAttemptTimeout.isPresent,
         overrides.apiCallAttemptTimeout.get == 4.seconds
       )
+    },
+    test("the derived durations actually reach the built S3 client") {
+      // The mapping test above would still pass if `buildS3Client` dropped the `.overrideConfiguration` call —
+      // which is precisely the defect being fixed ("the builder was called bare"). Read the applied configuration
+      // back off a built client instead. No connection is opened and no credential chain is consulted: region,
+      // credentials and endpoint are all explicit.
+      val timeouts = BodyStore.S3Timeouts(
+        connect = 1.second,
+        socket = 4.seconds,
+        apiCallAttempt = 4.seconds,
+        apiCall = 8.seconds
+      )
+      ZIO.acquireReleaseWith(
+        ZIO.attempt(
+          BodyStore.buildS3Client(
+            endpoint = "https://example.invalid",
+            region = "auto",
+            accessKey = "test-access-key",
+            secretKey = "test-secret-key",
+            timeouts = timeouts
+          )
+        )
+      )(client => ZIO.attempt(client.close()).ignore) { client =>
+        val applied = client.serviceClientConfiguration.overrideConfiguration
+        ZIO.succeed(
+          assertTrue(
+            applied.apiCallTimeout.isPresent,
+            applied.apiCallTimeout.get == 8.seconds,
+            applied.apiCallAttemptTimeout.isPresent,
+            applied.apiCallAttemptTimeout.get == 4.seconds
+          )
+        )
+      }
     }
   )
 
