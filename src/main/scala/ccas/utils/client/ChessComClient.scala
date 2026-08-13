@@ -316,37 +316,56 @@ final class ChessComClient(
       .fold(ChessComClient.CacheDirectives.empty)(walk(_, ChessComClient.CacheDirectives.empty))
   }
 
-  /** Lazy body-load + decode for `Fresh` and `Revalidated` results. On JSON decode failure of the cached body
-    * (schema drift where an old cached row no longer parses against a newer case class), invalidate the cache row
-    * and refetch over the wire. The recovery refetch inherits the original caller's `cacheWrites` flag so an
-    * uncached caller doesn't silently re-cache via the recovery path. Recovery is bounded to a single attempt:
+  /** Lazy body-load + decode for `Fresh` and `Revalidated` results. Every recovery path here refetches
+    * unconditionally — without a body we cannot serve a 304, so sending validators would risk coming back with
+    * metadata and still nothing to serve. The recovery inherits the original caller's `cacheWrites` flag so an
+    * uncached caller doesn't silently re-cache via the recovery path, and is bounded to a single attempt:
     * `catchSome` is scoped to the cached-body decode only, so a fresh-body decode failure (persistent origin-side
     * bug) propagates instead of looping back through `catchSome → refetch → catchSome`.
     *
-    * The same recovery covers an unreadable body — pruned pointer row, missing object, or a body-store outage, all
-    * of which `ApiResponseBody.loadById` reports as `None`. Dropping the cache row first is deliberate even for a
-    * transient outage: without a body we need an unconditional GET, and leaving the validators in place would let
-    * the next request come back 304 with still no body to serve.
+    * What differs across the three failures is whether the '''cache row survives''' (#215):
+    *
+    *   - Decode failure (schema drift: the body is there but no longer parses) and [[BodyRead.Missing]] (pruned
+    *     pointer row, or an object absent from the store) both mean the row points at something unusable, so it is
+    *     dropped.
+    *   - [[BodyRead.Unavailable]] — the store errored or outran its deadline — means the row is still accurate. It
+    *     is '''kept'''. Dropping it would spend a transient outage's worth of validators permanently: every URL
+    *     touched while the store was down would lose its ETag and `max-age` and pay a full unconditional GET after
+    *     recovery instead of a cheap 304. The refetch's own `upsertWithBody` no-ops while the store is still down
+    *     (`putOrSkip` returns false), leaving the row intact to self-heal on the first successful put.
+    *
+    * Every path also records `cacheUnserved`, the reconciling term for the optimistic `cacheHit` / `cacheRevalidation`
+    * counted before the body was ever read — see [[ClientStatsAccumulator.cacheUnserved]].
     */
   private def loadAndDecode[T](url: URL, bodyId: ApiResponseBodyId, cacheWrites: Boolean)(
     using jsonDecoder: JsonDecoder[T]
   ): Task[T] = {
-    val refetch = ApiResponseCache
+    // No `lookupMeta` round-trip on the way back in: the row was either just deleted or is deliberately being
+    // preserved, and in both cases the next step is the same unconditional GET the miss arm of `getCacheableImpl`
+    // would have dispatched.
+    val refetch =
+      statsRef.update(_.incCacheUnserved.incRequests) *>
+        withRetries(gatedRawGet[T](url, conditional = None, cacheWrites)).flatMap(_.getValue)
+    val invalidateAndRefetch = ApiResponseCache
       .invalidate(url.encode)
       .provideEnvironment(ZEnvironment(pgClient))
-      .ignore *> getCacheableImpl[T](url, cacheWrites).flatMap(_.getValue)
+      .ignore *> refetch
     ApiResponseBody
       .loadById(bodyId)
       .provideEnvironment(ZEnvironment(pgClient, bodyStore))
       .flatMap {
-        case Some(body) =>
+        case BodyRead.Found(body) =>
           ZIO.fromEither(jsonDecoder.decodeJson(body))
             .mapError(JsonDecodingException(_))
-            .catchSome { case _: JsonDecodingException => refetch }
+            .catchSome { case _: JsonDecodingException => invalidateAndRefetch }
         // The BodyStore is content-addressed and so URL-agnostic; its own logs can only name a hash. This is the
         // nearest frame that knows which endpoint lost its cached body, so it is where the URL gets recorded.
-        case None =>
-          ZIO.logDebug(s"Cached body unavailable for ${url.encode}; invalidating and refetching") *> refetch
+        case BodyRead.Missing =>
+          ZIO.logDebug(s"Cached body missing for ${url.encode}; invalidating and refetching") *> invalidateAndRefetch
+        case BodyRead.Unavailable =>
+          ZIO.logDebug(
+            s"Body store could not serve the cached body for ${url.encode}; refetching and keeping the cache entry"
+          ) *> refetch
       }
   }
 

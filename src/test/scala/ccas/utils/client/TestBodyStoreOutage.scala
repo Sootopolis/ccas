@@ -47,12 +47,20 @@ object TestBodyStoreOutage extends ZIOSpecDefault {
     */
   private def faultyStoreClient(
     handler: Request => Task[Response]
-  ): ZIO[Scope & PostgresClient & BodyStore, Nothing, (ChessComClient, FaultyBodyStore)] =
+  ): ZIO[
+    Scope & PostgresClient & BodyStore,
+    Nothing,
+    (ChessComClient, FaultyBodyStore, Ref[ClientStatsAccumulator])
+  ] =
     for {
       working <- ZIO.service[BodyStore]
       faulty  <- FaultyBodyStore.make(working)
-      built   <- makeClient(handler).provideSomeEnvironment[Scope & PostgresClient](_.add[BodyStore](faulty))
-    } yield (built._1, faulty)
+      // Wrapped in the production decorator, so these drive the same stack `BodyStore.live` builds and a stall is a
+      // real deadline breach rather than merely a slow call. The budget is far above what the suite's local
+      // filesystem store takes while healthy, so only a deliberate `stallReads`/`stallWrites` can trip it.
+      bounded = new BodyStore.Deadlines(faulty, BodyStore.BodyStoreLimits(read = 500.millis, write = 500.millis))
+      built <- makeClient(handler).provideSomeEnvironment[Scope & PostgresClient](_.add[BodyStore](bounded))
+    } yield (built._1, faulty, built._3)
 
   private def bodyRowCount: ZIO[PostgresClient, Throwable, Long] =
     connectZIO(sql"SELECT count(*) FROM api_response_body".query[Long].run().head)
@@ -77,43 +85,82 @@ object TestBodyStoreOutage extends ZIOSpecDefault {
       val body = """{"value":"read-outage"}"""
       ZIO.scoped {
         for {
-          netCalls          <- Ref.make(0)
-          (client, faulty)  <- faultyStoreClient(_ => netCalls.update(_ + 1).as(cacheable200(body, maxAge = 3600)))
-          _                 <- client.getCacheable[Payload](url) // populate while healthy (network #1)
-          _                 <- faulty.breakReads
-          fresh             <- client.getCacheable[Payload](url) // metadata-only hit; body not loaded yet
-          value             <- fresh.getValue                    // body unreadable → refetch (network #2)
-          calls             <- netCalls.get
-          meta              <- ApiResponseCache.lookupMeta(url.encode)
+          netCalls              <- Ref.make(0)
+          (client, faulty, sts) <- faultyStoreClient(_ => netCalls.update(_ + 1).as(cacheable200(body, maxAge = 3600)))
+          _                     <- client.getCacheable[Payload](url) // populate while healthy (network #1)
+          _                     <- faulty.breakReads
+          fresh                 <- client.getCacheable[Payload](url) // metadata-only hit; body not loaded yet
+          value                 <- fresh.getValue                    // body unreadable → refetch (network #2)
+          calls                 <- netCalls.get
+          meta                  <- ApiResponseCache.lookupMeta(url.encode)
+          stats                 <- sts.get
         } yield assertTrue(
           fresh.isInstanceOf[CacheableResult.Fresh[?]],
           value.value == "read-outage",
           calls == 2,
-          // Writes are still healthy here, so the refetch repopulated the row it invalidated — the cache self-heals.
-          meta.isDefined
+          meta.isDefined,
+          // The hit was counted on the metadata lookup, before the body was read, so it has to be reconciled:
+          // `cacheUnserved` is what keeps `cache_hits` from claiming an entry that in fact cost a full round trip.
+          stats.cacheHits == 1,
+          stats.cacheUnserved == 1,
+          stats.requests == 2
         )
       }
     },
-    test("a read outage across both the hit and the refetch still returns a value") {
-      // Worst case: the store is down for the whole request, so the refetch can't cache either. The caller must
-      // still get its value — every Chess.com byte is in memory by then.
+    test("an unreadable body keeps its cache entry, so the outage doesn't outlive itself") {
+      // #215. Worst case: the store is down for the whole request, so the refetch can't repopulate either. The
+      // caller must still get its value — every Chess.com byte is in memory by then — and, crucially, the metadata
+      // row must SURVIVE. It is still accurate; only the body is unreachable. Dropping it would throw away the ETag
+      // and max-age, so every URL touched during an outage would pay a full unconditional GET after recovery
+      // instead of a cheap 304 — the outage's cost billed to the Chess.com rate limit long after it ended.
       val url  = URL.decode("http://test.example.com/api/outage/read-and-write-down").toOption.get
       val body = """{"value":"fully-down"}"""
       ZIO.scoped {
         for {
-          netCalls         <- Ref.make(0)
-          (client, faulty) <- faultyStoreClient(_ => netCalls.update(_ + 1).as(cacheable200(body, maxAge = 3600)))
-          _                <- client.getCacheable[Payload](url) // populate while healthy
-          _                <- faulty.breakReads
-          _                <- faulty.breakWrites
-          value            <- client.get[Payload](url)
-          calls            <- netCalls.get
-          meta             <- ApiResponseCache.lookupMeta(url.encode)
+          netCalls              <- Ref.make(0)
+          (client, faulty, sts) <- faultyStoreClient(_ => netCalls.update(_ + 1).as(cacheable200(body, maxAge = 3600)))
+          _                     <- client.getCacheable[Payload](url) // populate while healthy
+          before                <- ApiResponseCache.lookupMeta(url.encode)
+          _                     <- faulty.breakReads
+          _                     <- faulty.breakWrites
+          value                 <- client.get[Payload](url)
+          calls                 <- netCalls.get
+          after                 <- ApiResponseCache.lookupMeta(url.encode)
+          stats                 <- sts.get
         } yield assertTrue(
           value.value == "fully-down",
           calls == 2,
-          // The unreadable row was invalidated and the refetch couldn't rewrite it: the cache is off, not corrupt.
-          meta.isEmpty
+          after.isDefined,
+          // The validators specifically — they are the whole reason keeping the row is worth anything.
+          after.flatMap(_.etag) == before.flatMap(_.etag),
+          after.flatMap(_.maxAgeSeconds) == before.flatMap(_.maxAgeSeconds),
+          stats.cacheUnserved == 1
+        )
+      }
+    },
+    test("a store too slow to answer takes the same path as a broken one") {
+      // #211 meets #215: a deadline breach is a third way for a read to come back empty, and it is an *unavailable*,
+      // not a *missing*. If it were treated as missing, a slow store — which times out far more often than a broken
+      // one errors — would delete metadata faster than an outage does.
+      val url  = URL.decode("http://test.example.com/api/outage/read-stalled").toOption.get
+      val body = """{"value":"stalled"}"""
+      ZIO.scoped {
+        for {
+          netCalls              <- Ref.make(0)
+          (client, faulty, sts) <- faultyStoreClient(_ => netCalls.update(_ + 1).as(cacheable200(body, maxAge = 3600)))
+          _                     <- client.getCacheable[Payload](url) // populate while responsive
+          _                     <- faulty.stallReads(2.seconds)
+          fresh                 <- client.getCacheable[Payload](url)
+          value                 <- fresh.getValue
+          _                     <- faulty.stallReads(Duration.Zero)
+          calls                 <- netCalls.get
+          meta                  <- ApiResponseCache.lookupMeta(url.encode)
+          stats                 <- sts.get
+        } yield assertTrue(
+          value.value == "stalled",
+          calls == 2,
+          meta.isDefined,
+          stats.cacheUnserved == 1
         )
       }
     },
@@ -140,16 +187,17 @@ object TestBodyStoreOutage extends ZIOSpecDefault {
       val body = """{"value":"write-outage"}"""
       ZIO.scoped {
         for {
-          netCalls         <- Ref.make(0)
-          (client, faulty) <- faultyStoreClient(_ => netCalls.update(_ + 1).as(cacheable200(body, maxAge = 3600)))
-          _                <- faulty.breakWrites
-          bodiesBefore     <- bodyRowCount
-          result           <- client.getCacheable[Payload](url)
-          value            <- result.getValue
-          meta             <- ApiResponseCache.lookupMeta(url.encode)
-          _                <- client.getCacheable[Payload](url) // nothing cached, so this must hit the network again
-          calls            <- netCalls.get
-          bodiesAfter      <- bodyRowCount
+          netCalls              <- Ref.make(0)
+          (client, faulty, sts) <- faultyStoreClient(_ => netCalls.update(_ + 1).as(cacheable200(body, maxAge = 3600)))
+          _                     <- faulty.breakWrites
+          bodiesBefore          <- bodyRowCount
+          result                <- client.getCacheable[Payload](url)
+          value                 <- result.getValue
+          meta                  <- ApiResponseCache.lookupMeta(url.encode)
+          _                     <- client.getCacheable[Payload](url) // nothing cached, so it must hit the network again
+          calls                 <- netCalls.get
+          bodiesAfter           <- bodyRowCount
+          stats                 <- sts.get
         } yield assertTrue(
           result.isInstanceOf[CacheableResult.Changed[?]],
           value.value == "write-outage",
@@ -157,7 +205,11 @@ object TestBodyStoreOutage extends ZIOSpecDefault {
           calls == 2,
           // No dangling hash-pointer row either: a pointer with no object behind it is a cache entry that can only
           // ever produce a refetch, so `upsertWithBody` skips the whole write rather than half of it.
-          bodiesAfter == bodiesBefore
+          bodiesAfter == bodiesBefore,
+          // A write outage claims nothing was served, so it must not touch `cacheUnserved` — that counter exists to
+          // retract an optimistic *hit*, and there was never one here.
+          stats.cacheUnserved == 0,
+          stats.cacheHits == 0
         )
       }
     },
@@ -166,23 +218,27 @@ object TestBodyStoreOutage extends ZIOSpecDefault {
       val body = """{"value":"self-heal"}"""
       ZIO.scoped {
         for {
-          netCalls         <- Ref.make(0)
-          (client, faulty) <- faultyStoreClient(_ => netCalls.update(_ + 1).as(cacheable200(body, maxAge = 3600)))
-          _                <- faulty.breakWrites
-          _                <- client.getCacheable[Payload](url) // network #1, uncached
-          during           <- ApiResponseCache.lookupMeta(url.encode)
-          _                <- faulty.healWrites
-          _                <- client.getCacheable[Payload](url) // network #2, cached this time
-          after            <- ApiResponseCache.lookupMeta(url.encode)
-          fresh            <- client.getCacheable[Payload](url) // served from cache, no network
-          value            <- fresh.getValue
-          calls            <- netCalls.get
+          netCalls              <- Ref.make(0)
+          (client, faulty, sts) <- faultyStoreClient(_ => netCalls.update(_ + 1).as(cacheable200(body, maxAge = 3600)))
+          _                     <- faulty.breakWrites
+          _                     <- client.getCacheable[Payload](url) // network #1, uncached
+          during                <- ApiResponseCache.lookupMeta(url.encode)
+          _                     <- faulty.healWrites
+          _                     <- client.getCacheable[Payload](url) // network #2, cached this time
+          after                 <- ApiResponseCache.lookupMeta(url.encode)
+          fresh                 <- client.getCacheable[Payload](url) // served from cache, no network
+          value                 <- fresh.getValue
+          calls                 <- netCalls.get
+          stats                 <- sts.get
         } yield assertTrue(
           during.isEmpty,
           after.isDefined,
           fresh.isInstanceOf[CacheableResult.Fresh[?]],
           value.value == "self-heal",
-          calls == 2
+          calls == 2,
+          // A genuine hit, served end to end: nothing to reconcile.
+          stats.cacheHits == 1,
+          stats.cacheUnserved == 0
         )
       }
     },

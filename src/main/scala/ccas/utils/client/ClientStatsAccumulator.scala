@@ -29,7 +29,8 @@ private[ccas] case class ClientStatsAccumulator(
   errorsCf403ByTier: Map[Int, Long] = Map.empty,
   cacheHits: Long = 0,
   cacheRevalidations: Long = 0,
-  cacheMisses: Long = 0
+  cacheMisses: Long = 0,
+  cacheUnserved: Long = 0
 ) {
   def incRequests: ClientStatsAccumulator           = copy(requests = requests + 1)
   def incSuccesses: ClientStatsAccumulator          = copy(successes = successes + 1)
@@ -39,6 +40,17 @@ private[ccas] case class ClientStatsAccumulator(
   def incCacheHit: ClientStatsAccumulator           = copy(cacheHits = cacheHits + 1)
   def incCacheRevalidation: ClientStatsAccumulator  = copy(cacheRevalidations = cacheRevalidations + 1)
   def incCacheMiss: ClientStatsAccumulator          = copy(cacheMisses = cacheMisses + 1)
+
+  /** A cache entry we had already counted as served could not actually be served, forcing a network refetch: the
+    * body was pruned, absent, or the store errored / outran its deadline (#211, #215).
+    *
+    * `cacheHits` is incremented on the metadata lookup, before any body is read, and `cacheRevalidations` on a 304 —
+    * both optimistic, because `CacheableResult` only carries a lazy `getValue`. This is the reconciling term, so
+    * genuinely-served entries are `cacheHits + cacheRevalidations - cacheUnserved`. Additive and monotonic on
+    * purpose: retracting `cacheHits` instead would change the meaning of an already-populated column and would rest
+    * on `getValue` being forced exactly once, which nothing enforces.
+    */
+  def incCacheUnserved: ClientStatsAccumulator     = copy(cacheUnserved = cacheUnserved + 1)
 
   /** True if this session did anything worth persisting. `requests` covers every network request
     * (cacheMisses and cacheRevalidations both ride along with `incRequests`); `cacheHits` catches the one case
@@ -135,7 +147,8 @@ private[ccas] case class ClientStatsAccumulator(
       latencyBucket1000Plus = latencyBuckets(5),
       cacheHits = cacheHits,
       cacheRevalidations = cacheRevalidations,
-      cacheMisses = cacheMisses
+      cacheMisses = cacheMisses,
+      cacheUnserved = cacheUnserved
     )
   }
 
@@ -154,9 +167,10 @@ private[ccas] case class ClientStatsAccumulator(
       if (throttledMs > 0) Some(s"throttled=${throttledMs}ms") else None
     ).flatten
     val overheadSuffix = if (overheadParts.nonEmpty) s", overhead ${overheadParts.mkString(", ")}" else ""
+    val unservedSuffix = if (cacheUnserved > 0) s" / $cacheUnserved unserved" else ""
     val cacheSuffix =
       if (cacheHits > 0 || cacheRevalidations > 0 || cacheMisses > 0)
-        s", cache: $cacheHits hits / $cacheRevalidations revalidated / $cacheMisses misses"
+        s", cache: $cacheHits hits / $cacheRevalidations revalidated / $cacheMisses misses$unservedSuffix"
       else ""
     s"API stats: $requests requests$failedSuffix$retrySuffix$throttleSuffix$latencySuffix$overheadSuffix$cacheSuffix"
   }

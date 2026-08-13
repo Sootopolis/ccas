@@ -52,7 +52,10 @@ final case class ClientStats(
   // cache
   cacheHits: Long,
   cacheRevalidations: Long,
-  cacheMisses: Long
+  cacheMisses: Long,
+  // Reconciling term for the optimistic cacheHits / cacheRevalidations: an entry counted as served whose body could
+  // not actually be loaded, forcing a refetch (#211, #215). Served = hits + revalidations - unserved.
+  cacheUnserved: Long
 ) derives DbCodec
 
 object ClientStats {
@@ -66,7 +69,7 @@ object ClientStats {
        latency_min_ms, latency_max_ms, latency_mean_ms,
        latency_bucket0_to50, latency_bucket50_to100, latency_bucket100_to200,
        latency_bucket200_to500, latency_bucket500_to1000, latency_bucket1000_plus,
-       cache_hits, cache_revalidations, cache_misses"""
+       cache_hits, cache_revalidations, cache_misses, cache_unserved"""
   )
 
   def createTable: ZIO[PostgresClient, SQLException, Int] =
@@ -106,6 +109,7 @@ object ClientStats {
               cache_hits               BIGINT NOT NULL,
               cache_revalidations      BIGINT NOT NULL,
               cache_misses             BIGINT NOT NULL,
+              cache_unserved           BIGINT NOT NULL,
               FOREIGN KEY (config_id) REFERENCES client_config (config_id) ON DELETE RESTRICT
             )""".update.run()
       sql"""CREATE INDEX IF NOT EXISTS idx_client_stats_started_at
@@ -129,7 +133,7 @@ object ClientStats {
               ${item.latencyMinMs}, ${item.latencyMaxMs}, ${item.latencyMeanMs},
               ${item.latencyBucket0To50}, ${item.latencyBucket50To100}, ${item.latencyBucket100To200},
               ${item.latencyBucket200To500}, ${item.latencyBucket500To1000}, ${item.latencyBucket1000Plus},
-              ${item.cacheHits}, ${item.cacheRevalidations}, ${item.cacheMisses}
+              ${item.cacheHits}, ${item.cacheRevalidations}, ${item.cacheMisses}, ${item.cacheUnserved}
             ) ON CONFLICT (session_id) DO UPDATE SET
               completed_at = EXCLUDED.completed_at,
               requests = EXCLUDED.requests,
@@ -160,7 +164,8 @@ object ClientStats {
               latency_bucket1000_plus = EXCLUDED.latency_bucket1000_plus,
               cache_hits = EXCLUDED.cache_hits,
               cache_revalidations = EXCLUDED.cache_revalidations,
-              cache_misses = EXCLUDED.cache_misses
+              cache_misses = EXCLUDED.cache_misses,
+              cache_unserved = EXCLUDED.cache_unserved
             """.update.run()
     }
 

@@ -240,14 +240,23 @@ At boot the server applies this file as a JVM overlay, so the **resolution order
 
 ### DB-owned settings
 
-Some app-wide policy lives in the `app_setting` table (`key TEXT PK, value TEXT`) rather than HOCON/env, so it stays consistent across every process on one DB and is tunable without a redeploy. Each setting has a compiled-in default used when its row is absent; the DB row, once set, overrides it. Today the only key is `cache_retention_days` (default 7) — how long cached Chess.com responses are kept before the startup pruning sweep. Change it with SQL:
+Some app-wide policy lives in the `app_setting` table (`key TEXT PK, value TEXT`) rather than HOCON/env, so it stays consistent across every process on one DB and is tunable without a redeploy. Each setting has a compiled-in default used when its row is absent; the DB row, once set, overrides it. The registry is `AppSetting.all`:
+
+| Key | Default | Effect |
+|-----|---------|--------|
+| `cache_retention_days` | 7 | How long cached Chess.com responses are kept before the startup pruning sweep |
+| `fetch_failure_retention_days` | 30 | How long `api_fetch_failure` audit rows are kept |
+| `job_log_retention_days` | 14 | How long per-job log files are kept |
+| `progress_refresh_interval_ms` | 100 | How often a followed job's progress bar redraws |
+
+Change one with SQL:
 
 ```sql
 INSERT INTO app_setting (key, value) VALUES ('cache_retention_days', '14')
 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
 ```
 
-It takes effect on each process's next startup (the value is read once in `Tables.ensureTables`).
+Most take effect on each process's next startup, since the value is read once in `Tables.ensureTables`. `progress_refresh_interval_ms` is the exception — it is read per progress subscription, so it applies to the next followed job without a restart.
 
 ### Response-body store
 
@@ -261,6 +270,19 @@ Cached Chess.com response **bodies** are content-addressed by SHA-256 and stored
 Set the two R2 credentials with `ccas config set` rather than in `.env` — `ccas config` stores them `0600` and redacts them from `list`.
 
 The store is deliberately **non-critical**: it is a cache, not a source of truth, so a lost or unreachable body just re-fetches from Chess.com. An outage degrades caching to off — reads fall through to the network, writes are skipped, requests keep succeeding — and the cache self-heals on the first successful write. The server logs one warning when the store first fails and one info line when it recovers, rather than one line per failed operation.
+
+Because waiting on a cache is never obligatory, the same applies to a store that is merely **slow**: every operation has a deadline, and breaching it degrades exactly like an error.
+
+| Key | Default | Effect |
+|-----|---------|--------|
+| `CCAS_BODY_STORE_READ_TIMEOUT_MS` | 5000 | Deadline for a cache read. Breaching it costs one Chess.com request |
+| `CCAS_BODY_STORE_WRITE_TIMEOUT_MS` | 10000 | Deadline for a cache write. Breaching it only means the response is not cached |
+| `CCAS_R2_CONNECT_TIMEOUT_MS` | 2000 | `s3` transport connect timeout |
+| `CCAS_R2_SOCKET_TIMEOUT_MS` | 5000 | `s3` transport socket timeout. Must not exceed the widest deadline above |
+
+The defaults are deliberately loose, and tightening them is not free: a bypassed read costs a full Chess.com request, so a read deadline below the store's real p99 turns the cache into an *amplifier* of upstream load. Tighten from measurement — `client_stats.cache_unserved` counts entries that were counted as cache hits but could not actually be served — rather than by guessing.
+
+One accepted wart: a write abandoned at its deadline can still land in the bucket afterwards, while CCAS has (correctly) skipped the database row that would reference it. Nothing can later find that object, because the cleanup sweep walks database rows. It costs storage only, self-heals if the identical body is fetched again, and is best mitigated with an R2 lifecycle rule expiring unreferenced keys.
 
 ### Deployment model
 

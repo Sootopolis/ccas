@@ -64,7 +64,10 @@ object ApiFetchFailure {
     }.flatMap { rows =>
       ZIO.foreach(rows) { row =>
         ZIO
-          .foreach(row.bodyHash)(hash => BodyStore.getOrMiss(hash).map(_.map(new String(_, StandardCharsets.UTF_8))))
+          // `toOption`: this is an audit-trail display, so "the object is gone" and "the store is down" both mean
+          // the same thing to the reader — a row whose body we cannot show. Cache repair is the only caller that
+          // needs the distinction (see BodyRead).
+          .foreach(row.bodyHash)(hash => BodyStore.read(hash).map(_.map(new String(_, StandardCharsets.UTF_8)).toOption))
           .map(bodyOpt => ApiFetchFailure(row.occurredAt, row.url, row.errorType, row.errorMessage, bodyOpt.flatten))
       }
     }
