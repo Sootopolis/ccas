@@ -72,9 +72,10 @@ object ClientStats {
        cache_hits, cache_revalidations, cache_misses, cache_unserved"""
   )
 
-  // `cache_unserved` carries a DEFAULT so the hand-applied ALTER on an existing database (there is no migration
-  // framework) is a single statement leaving it identical to a freshly created one. Inert at runtime: `allCols` is
-  // explicit and every INSERT supplies the value.
+  // No DEFAULTs on the cache counters. A default is load-bearing only while backfilling an existing table, so the
+  // migration adds it and drops it again (sql/2026-08-14-client-stats-cache-unserved.sql, following
+  // sql/2026-04-25-drop-client-stats-cache-defaults.sql); leaving one behind would make raw-SQL inserts look
+  // optional about a column `upsert` always writes.
   def createTable: ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""CREATE TABLE IF NOT EXISTS client_stats (
@@ -112,7 +113,7 @@ object ClientStats {
               cache_hits               BIGINT NOT NULL,
               cache_revalidations      BIGINT NOT NULL,
               cache_misses             BIGINT NOT NULL,
-              cache_unserved           BIGINT NOT NULL DEFAULT 0,
+              cache_unserved           BIGINT NOT NULL,
               FOREIGN KEY (config_id) REFERENCES client_config (config_id) ON DELETE RESTRICT
             )""".update.run()
       sql"""CREATE INDEX IF NOT EXISTS idx_client_stats_started_at
