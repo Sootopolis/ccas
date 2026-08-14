@@ -31,7 +31,8 @@ import ccas.utils.json.JsonDecodingException
   *   - '''EMA-based rate delay''' — tracks an exponential moving average of response times and staggers outgoing
   *     requests so that the full permit budget is utilised without bursting. When permits are reduced the per-request
   *     delay grows proportionally. A configurable floor (`min-request-delay-ms`) prevents burst behaviour when
-  *     response times are unusually low.
+  *     response times are unusually low. The average samples the HTTP exchange alone and never the cache writes that
+  *     follow it — see [[ChessComClient.TimedFetch]].
   *   - '''Failure-window throttle-down''' — maintains a rolling window of success/failure outcomes. HTTP 429 counts as a
   *     failure; non-rate-limit responses (403 non-CF, 404, 500, etc.) count as successes. Cloudflare challenge 403s
   *     bypass the window and trigger an immediate hard throttle. Connection errors are retried but do not feed the
@@ -102,18 +103,25 @@ final class ChessComClient(
     else ZIO.fail(Exception(s"Redirect failed: $message"))
   }
 
+  /** One HTTP attempt, paired with the duration of the exchange itself (see [[ChessComClient.TimedFetch]]).
+    *
+    * The timed region is `batchedClient(request)` and nothing else. That single call covers the whole network read:
+    * `client.batched` materialises the response into memory before resuming, so `handleResponse`'s
+    * `response.body.asString` is an in-memory operation and everything below the exchange — the cache upsert, the
+    * body-store put, the `tapError` failure row — is our own storage I/O.
+    */
   private def rawGet[T](url: URL, conditional: Option[ApiResponseCache], cacheWrites: Boolean)(
     using jsonDecoder: JsonDecoder[T]
-  ): Task[CacheableResult[T]] = {
+  ): Task[ChessComClient.TimedFetch[T]] = {
     val request = buildRequest(url, conditional)
     (for {
       tier <- stateRef.get.map(_.currentMax.toInt)
       _    <- statsRef.update(_.incAttemptAtTier(tier))
-      response <- batchedClient(request).tapError { e =>
+      (exchange, response) <- batchedClient(request).tapError { e =>
         ZIO.whenDiscard(ConnectionError.isConnectionError(e))(statsRef.update(_.incConnectionErrors))
-      }
+      }.timed
       result <- handleResponse[T](url, conditional, response, tier, cacheWrites)
-    } yield result).tapError { e =>
+    } yield ChessComClient.TimedFetch(exchange.toMillis, result)).tapError { e =>
       val (errorType, msg, body) = e match {
         case e: HttpStatusException => (e.getClass.getSimpleName, Some(e.statusCode.toString), Some(e.responseBody))
         case other                  => (other.getClass.getSimpleName, Option(other.getMessage), None)
@@ -377,6 +385,19 @@ final class ChessComClient(
 
   /** Wrap the existing gate / permit / latency-timing block around `rawGet`, parameterised by the optional
     * conditional cache entry. All throttle, retry, and error-recording machinery lives inside here.
+    *
+    * Two different durations are recorded here, and they are deliberately not the same number:
+    *
+    *   - `exchangeMs` — the Chess.com HTTP exchange. It paces the next request (`updateResponseTimeEma`) and is what
+    *     the reported latency distribution means, so it must not include our own storage I/O (#216).
+    *   - `held` — the whole of `rawGet`, which is how long this request occupied one of `currentMax` active slots. A
+    *     slot '''is''' held across the cache write, so `addActiveMs` keeps the wider window; narrowing it would
+    *     understate utilisation.
+    *
+    * The set of attempts that get recorded is unchanged by the split: `.timed` short-circuits on failure, so an
+    * attempt only contributes once its whole `rawGet` has succeeded. A 404 or 429 still feeds neither the EMA nor the
+    * latency histogram — that is a separate question from which window to measure, and folding error responses in
+    * would change pacing on 404-heavy workloads (which are routine here, see the crawl paths in `HistoryApp`).
     */
   private def gatedRawGet[T](url: URL, conditional: Option[ApiResponseCache], cacheWrites: Boolean)(
     using jsonDecoder: JsonDecoder[T]
@@ -391,11 +412,10 @@ final class ChessComClient(
             _ <- statsRef.update(_.addGateWait(gateWait.toMillis).addEmaDelay(emaWait.toMillis).updatePeak(active))
           } yield ()
         }
-        (duration, result) <- rawGet(url, conditional, cacheWrites).timed
-        ms = duration.toMillis
-        _ <- updateResponseTimeEma(ms)
-        _ <- statsRef.update(_.recordLatency(ms).addActiveMs(ms))
-      } yield result
+        (held, fetch) <- rawGet(url, conditional, cacheWrites).timed
+        _             <- updateResponseTimeEma(fetch.exchangeMs)
+        _             <- statsRef.update(_.recordLatency(fetch.exchangeMs).addActiveMs(held.toMillis))
+      } yield fetch.result
     }
 
   /** Cache-aware entry point. Checks `api_response_cache` first; on a fresh hit (within `max-age`) returns a
@@ -497,10 +517,17 @@ final class ChessComClient(
     } yield active < state.currentMax.toInt)
       .repeat(Schedule.spaced(10.millis) && Schedule.recurWhile(!_)).unit
 
+  /** Space this request off the previous one. Gated on `lastEmaSampleAt`, which is the actual "have we sampled yet"
+    * flag — `responseTimeEma > 0` reads as one only while a genuine zero is unreachable, and #216 made it reachable:
+    * the window is now the HTTP exchange alone, and `Duration.toMillis` truncates, so a sub-millisecond exchange
+    * samples 0. Gating on the value would then skip the delay entirely — including the `min-request-delay-ms` floor,
+    * whose whole job is to stop us bursting when responses are unusually fast. An EMA of 0 with a sample behind it
+    * is a real measurement and falls through to the floor, which is what `math.max` below is for.
+    */
   private def emaDelay: Task[Unit] =
     ZIO.whenDiscard(config.maxPermits > 1) {
       stateRef.get.flatMap { state =>
-        ZIO.whenDiscard(state.responseTimeEma > 0) {
+        ZIO.whenDiscard(state.lastEmaSampleAt > 0L) {
           val targetDelay = math.max((state.responseTimeEma / state.currentMax).toLong, config.minRequestDelayMs)
           for {
             now <- Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS)
@@ -516,14 +543,17 @@ final class ChessComClient(
   /** Wall-clock EMA update. `alpha = 1 - exp(-dt / emaTauMs)` so an outlier sample's influence decays in real time:
     * a slow response that holds the fiber for tens of seconds is naturally cancelled by the very next sample's large
     * `dt`. `dt` is intentionally NOT capped — after a long idle the prior EMA is stale, and snapping to the new sample
-    * (alpha → 1) is the correct behaviour. The first sample (or first after `responseTimeEma` was reset on full
-    * recovery) seeds the EMA directly.
+    * (alpha → 1) is the correct behaviour. The first sample (or first after full recovery, which resets both fields)
+    * seeds the EMA directly.
+    *
+    * "First sample" is `lastEmaSampleAt == 0L` alone, for the same reason [[emaDelay]] gates on it: a genuine 0 ms
+    * exchange is reachable since #216, and re-seeding on every one of them would discard the blend each time.
     */
   private def updateResponseTimeEma(responseMs: Long): UIO[Unit] =
     Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS).flatMap { now =>
       stateRef.update { state =>
         val newEma =
-          if (state.responseTimeEma <= 0 || state.lastEmaSampleAt == 0L) {
+          if (state.lastEmaSampleAt == 0L) {
             responseMs.toDouble
           } else {
             // Floor dt at 1 ms so two concurrent updates landing on the same wall-clock millisecond
@@ -699,6 +729,21 @@ object ChessComClient {
   private[ccas] object CacheDirectives {
     val empty: CacheDirectives = CacheDirectives(None, false, false)
   }
+
+  /** A completed fetch attempt, carrying how long '''the Chess.com HTTP exchange alone''' took.
+    *
+    * The duration is threaded out of `rawGet` rather than measured around it because `rawGet` also writes: the cache
+    * upsert, the `BodyStore` put, and (on the error path) the `api_fetch_failure` row. Timing the whole of it folded
+    * our own storage latency into `responseTimeEma`, which paces every subsequent outgoing request at
+    * `responseTimeEma / currentMax` — so a slow object store or a cold Postgres compute throttled our Chess.com
+    * request rate, applying the control action to the domain that was healthy (#216). At 8 permits a 2s store write
+    * injected ~250ms of spacing per request; at `currentMax = 1` during a throttle-down, the full 2s.
+    *
+    * Keeping the two apart also restores the EMA as a diagnostic: "Chess.com is slow" and "our store is slow" are
+    * only distinguishable if they are measured separately. Cross-referencing them is a *diagnosis* concern and lives
+    * in [[BodyStore.HealthLogging]]; neither may change the other's behaviour (see the failure-domain rule in #211).
+    */
+  private[ccas] final case class TimedFetch[T](exchangeMs: Long, result: CacheableResult[T])
 
   /** Validators and content-type extracted from a response and persisted alongside the cached body. Shared by the
     * 200 (`handleSuccessBody`) and 304 (`handleNotModified`) paths so the header-parsing rules live in one place.

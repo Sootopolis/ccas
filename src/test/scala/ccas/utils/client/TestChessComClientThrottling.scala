@@ -11,7 +11,7 @@ import ccas.analysis.tables.Tables
 import ccas.utils.client.ChessComClient.ChessComClientConfig
 import ccas.utils.client.ChessComClient.ChessComClientConfig.*
 import ccas.utils.client.TestChessComClientSupport.*
-import ccas.utils.sql.FreshSchemaLayer
+import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
 import ccas.utils.sql.PostgresClient.connectZIO
 import zio.config.magnolia.DeriveConfig
 import zio.config.typesafe.TypesafeConfigProvider
@@ -31,6 +31,19 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
     Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS).flatMap { now =>
       if (targetMs > now) TestClock.adjust((targetMs - now).millis) else ZIO.unit
     }
+
+  /** A [[BodyStore]] whose writes consume a fixed amount of '''virtual''' time.
+    *
+    * Deliberately a `ZIO.sleep`, unlike [[FaultyBodyStore]]'s stalls, which are a blocking `Thread.sleep` because
+    * what they test is a call that ignores `Thread.interrupt`. Here the sleep has to register on the `TestClock`
+    * that `.timed` reads: a blocking stall would elapse in real time and measure as zero virtual milliseconds,
+    * which is exactly the contamination the test using this store exists to detect.
+    */
+  private final class SlowWriteBodyStore(delegate: BodyStore, delay: Duration) extends BodyStore {
+    def get(hash: String): Task[Option[Array[Byte]]]      = delegate.get(hash)
+    def put(hash: String, bytes: Array[Byte]): Task[Unit] = ZIO.sleep(delay) *> delegate.put(hash, bytes)
+    def delete(hash: String): Task[Unit]                  = delegate.delete(hash)
+  }
 
   override def spec: Spec[Any, Throwable] = suite("TestChessComClientThrottling")(
     test("normal 200 succeeds without throttle activation") {
@@ -753,6 +766,85 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
         )
       }
     },
+    test("EMA and latency measure the HTTP exchange only, never the cache write (#216)") {
+      ZIO.scoped {
+        for {
+          fsStore <- ZIO.service[BodyStore]
+          // 20 ms on the wire, 500 ms writing the body to the store. Before #216 the EMA sampled all of `rawGet`
+          // and would read 520 — pacing every subsequent Chess.com request off our own storage latency.
+          (client, stateRef, statsRef) <- makeClient(
+            handler = _ => ZIO.sleep(20.millis).as(Response.json(jsonBody)),
+            permits = 4,
+            emaTauMs = 500L
+          ).provideSomeLayer[Scope & PostgresClient](
+            ZLayer.succeed[BodyStore](new SlowWriteBodyStore(fsStore, 500.millis))
+          )
+          fiber      <- client.get[Payload](URL.decode("http://test.example.com/api/ema-window").toOption.get).fork
+          _          <- TestClock.adjust(advanceWindow)
+          _          <- fiber.join
+          finalState <- stateRef.get
+          s          <- statsRef.get
+        } yield assertTrue(
+          // First sample seeds the EMA directly, so this is the measured value itself rather than a blend.
+          finalState.responseTimeEma == 20.0,
+          s.latencyMaxMs == 20L,
+          // activeMs keeps the wider window on purpose: an active slot IS held across the store write.
+          s.activeMs >= 520L
+        )
+      }
+    },
+    test("a 0 ms exchange is a sample, not an absent one: pacing falls back to the minimum delay floor") {
+      ZIO.scoped {
+        for {
+          // Put the clock somewhere non-zero first, so `lastEmaSampleAt` can't read as "never sampled" simply
+          // because TestClock starts at the epoch.
+          _ <- TestClock.adjust(1.second)
+          (client, stateRef, statsRef) <- makeClient(
+            handler = _ => ZIO.succeed(Response.json(jsonBody)), // no sleep: 0 virtual ms on the wire
+            permits = 4,
+            minRequestDelayMs = 50
+          )
+          fiber <- ZIO.foreachDiscard(1 to 4)(i =>
+            client.get[Payload](URL.decode(s"http://test.example.com/api/floor-$i").toOption.get)
+          ).fork
+          _          <- TestClock.adjust(advanceWindow)
+          _          <- fiber.join
+          finalState <- stateRef.get
+          s          <- statsRef.get
+          // Reachable only since #216 narrowed the window to the exchange: `Duration.toMillis` truncates, so a
+          // sub-millisecond exchange samples 0. While `emaDelay` gated on `responseTimeEma > 0` that zero was
+          // indistinguishable from "no sample yet" and disabled pacing outright — floor included.
+        } yield assertTrue(
+          finalState.responseTimeEma == 0.0,
+          finalState.lastEmaSampleAt > 0L,
+          s.emaDelayMs >= 50L
+        )
+      }
+    },
+    test("an error response feeds neither the EMA nor the latency histogram") {
+      ZIO.scoped {
+        for {
+          (client, stateRef, statsRef) <- makeClient(
+            handler = _ => ZIO.sleep(20.millis).as(Response(status = Status.NotFound)),
+            permits = 4
+          )
+          fiber      <- client.get[Payload](URL.decode("http://test.example.com/api/missing").toOption.get).exit.fork
+          _          <- TestClock.adjust(advanceWindow)
+          exit       <- fiber.join
+          finalState <- stateRef.get
+          s          <- statsRef.get
+          // Narrowing the measurement window (#216) deliberately did not widen the sample population: only an
+          // attempt whose whole `rawGet` succeeded is recorded. Pinned because moving the EMA update next to the
+          // exchange it now measures is an easy-looking simplification that would silently start sampling 404s,
+          // and 404s are routine noise on the history crawl — cheap ones would pull the EMA down and speed us up.
+        } yield assertTrue(
+          exit.isFailure,
+          finalState.responseTimeEma == 0.0,
+          s.latencyCount == 0L,
+          s.failures == 1L
+        )
+      }
+    },
     test("recovery drops back when new tier shows failures instead of advancing on stale outcomes") {
       ZIO.scoped {
         for {
@@ -874,7 +966,7 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
           ts  <- timestamps.get.map(_.reverse)
           gaps = ts.sliding(2).collect { case List(a, b) => b - a }.toList
           // Skip request 2's gap: lastRequestRef is only set inside emaDelay's active branch
-          // and request 1 doesn't enter that branch (ema starts at 0), so request 2's gap
+          // and request 1 doesn't enter that branch (no sample yet — lastEmaSampleAt is 0), so request 2's gap
           // is computed against an uninitialized lastRequestRef and bypasses the floor by
           // design. From request 3 onwards the floor is enforced on every iteration.
           flooredGaps = gaps.drop(1)
@@ -888,9 +980,15 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
     test("min delay floor is inactive when maxPermits is 1") {
       ZIO.scoped {
         for {
+          // `recoveryTiers` is what sets `ThrottleConfig.maxPermits` (it is `recoveryTiers.last`), and `permits = 1`
+          // alone does not produce a single-permit *config*: `doublingTiers` floors the ladder at 2, so this test
+          // used to run with maxPermits = 2 and passed only because a sleepless handler left the EMA at 0 and the
+          // delay block was skipped for that reason instead. Pin the tier explicitly so the short-circuit under
+          // test is the one actually being exercised.
           (client, _, statsRef) <- makeClient(
             handler = _ => ZIO.succeed(Response.json(jsonBody)),
             permits = 1,
+            recoveryTiers = Some(Vector(1)),
             minRequestDelayMs = 500
           )
           urls = (1 to 3).map(i => URL.decode(s"http://test.example.com/api/$i").toOption.get)

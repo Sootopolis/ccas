@@ -92,6 +92,16 @@ private[ccas] case class ClientStatsAccumulator(
   def incErrorOther: ClientStatsAccumulator =
     copy(errorsOther = errorsOther + 1)
 
+  /** Record one response latency.
+    *
+    * '''The series changes meaning at #216''': rows written before it measured the whole of `ChessComClient.rawGet`
+    * — the HTTP exchange plus our own `api_response_cache` upsert and `BodyStore` put — while rows after it measure
+    * the exchange alone, which is what "API latency" is read as. Post-#216 rows are therefore lower by the storage
+    * write, and the two are not comparable. Nothing in `client_stats` marks the break: a marker column would have to
+    * be carried forever to explain one boundary, and the fix is a straight correction rather than a policy that
+    * could change back. Date the boundary off the deploy, and treat any regression that straddles it as suspect.
+    * The `cache_*` counters are unaffected, and `active_ms` deliberately keeps the wider window.
+    */
   def recordLatency(ms: Long): ClientStatsAccumulator = {
     val idx = ClientStatsAccumulator.LatencyBuckets.indexWhere(ms < _) match {
       case -1 => ClientStatsAccumulator.LatencyBuckets.length
