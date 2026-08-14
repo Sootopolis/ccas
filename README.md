@@ -4,16 +4,21 @@ Chess Club Admin System -- a Scala 3 / ZIO application that integrates with the 
 
 ## Tech Stack
 
-- Scala 3.8.3, SBT 1.12.8
+- Scala 3.8.3, SBT 1.12.8, JDK 25 LTS (Temurin)
 - ZIO 2.x (zio-http, zio-json, zio-config)
 - Magnum ORM + PostgreSQL 17
 - Docker Compose for local dev
 
 ## Getting Started
 
-**Prerequisites:** JDK 21+, SBT, Docker
+**Prerequisites:** JDK 25 LTS, SBT, Docker
+
+The JDK is pinned in `.sdkmanrc`. With [SDKMAN](https://sdkman.io) installed, `sdk env install` in the repo root fetches and selects it; `sdk env` alone selects it once it is present, and setting `sdkman_auto_env=true` in `~/.sdkman/etc/config` applies it on `cd`. Without SDKMAN, install Temurin 25 by whatever means you prefer and point `JAVA_HOME` at it.
 
 ```bash
+# Select the pinned JDK (SDKMAN)
+sdk env install
+
 # Start PostgreSQL (creates both ccas and ccas_test databases)
 docker compose up -d
 
@@ -240,14 +245,23 @@ At boot the server applies this file as a JVM overlay, so the **resolution order
 
 ### DB-owned settings
 
-Some app-wide policy lives in the `app_setting` table (`key TEXT PK, value TEXT`) rather than HOCON/env, so it stays consistent across every process on one DB and is tunable without a redeploy. Each setting has a compiled-in default used when its row is absent; the DB row, once set, overrides it. Today the only key is `cache_retention_days` (default 7) — how long cached Chess.com responses are kept before the startup pruning sweep. Change it with SQL:
+Some app-wide policy lives in the `app_setting` table (`key TEXT PK, value TEXT`) rather than HOCON/env, so it stays consistent across every process on one DB and is tunable without a redeploy. Each setting has a compiled-in default used when its row is absent; the DB row, once set, overrides it. The registry is `AppSetting.all`:
+
+| Key | Default | Effect |
+|-----|---------|--------|
+| `cache_retention_days` | 7 | How long cached Chess.com responses are kept before the startup pruning sweep |
+| `fetch_failure_retention_days` | 30 | How long `api_fetch_failure` audit rows are kept |
+| `job_log_retention_days` | 14 | How long per-job log files are kept |
+| `progress_refresh_interval_ms` | 100 | How often a followed job's progress bar redraws |
+
+Change one with SQL:
 
 ```sql
 INSERT INTO app_setting (key, value) VALUES ('cache_retention_days', '14')
 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
 ```
 
-It takes effect on each process's next startup (the value is read once in `Tables.ensureTables`).
+Most take effect on each process's next startup, since the value is read once in `Tables.ensureTables`. `progress_refresh_interval_ms` is the exception — it is read per progress subscription, so it applies to the next followed job without a restart.
 
 ### Response-body store
 
@@ -261,6 +275,21 @@ Cached Chess.com response **bodies** are content-addressed by SHA-256 and stored
 Set the two R2 credentials with `ccas config set` rather than in `.env` — `ccas config` stores them `0600` and redacts them from `list`.
 
 The store is deliberately **non-critical**: it is a cache, not a source of truth, so a lost or unreachable body just re-fetches from Chess.com. An outage degrades caching to off — reads fall through to the network, writes are skipped, requests keep succeeding — and the cache self-heals on the first successful write. The server logs one warning when the store first fails and one info line when it recovers, rather than one line per failed operation.
+
+Because waiting on a cache is never obligatory, the same applies to a store that is merely **slow**: every operation has a deadline, and breaching it degrades exactly like an error.
+
+| Key | Default | Effect |
+|-----|---------|--------|
+| `CCAS_BODY_STORE_READ_TIMEOUT_MS` | 5000 | Deadline for a cache read. Breaching it costs one Chess.com request |
+| `CCAS_BODY_STORE_WRITE_TIMEOUT_MS` | 10000 | Deadline for a cache write. Breaching it only means the response is not cached |
+| `CCAS_R2_CONNECT_TIMEOUT_MS` | 2000 | `s3` transport connect timeout |
+| `CCAS_R2_SOCKET_TIMEOUT_MS` | 5000 | `s3` transport socket timeout. Must not exceed the widest deadline above |
+
+The defaults are deliberately loose, and tightening them is not free: a bypassed read costs a full Chess.com request, so a read deadline below the store's real p99 turns the cache into an *amplifier* of upstream load. Tighten from measurement — `client_stats.cache_unserved` counts entries that were counted as cache hits but could not actually be served — rather than by guessing.
+
+One accepted wart: a write abandoned at its deadline can still land in the bucket afterwards, while CCAS has (correctly) skipped the database row that would reference it. Nothing can later find that object, because the cleanup sweep walks database rows. The same is true of an object whose delete fails during cleanup, which is not new. It costs storage only, and self-heals if the identical body is ever fetched again.
+
+To collect them, set an **age-based** lifecycle rule on the bucket — S3/R2 rules cannot see CCAS's tables, so there is no "unreferenced" rule to write. Give it an expiry longer than the longest retention window (`cache_retention_days`, `fetch_failure_retention_days`) and it will only catch true orphans; revisit it if you raise either. Too short degrades rather than corrupts, though not identically for both kinds of object: an early-expired *cached response* is simply refetched, at the cost of one request, while an early-expired *fetch-failure* body has nothing to refetch from — that audit row just loses its response body.
 
 ### Deployment model
 
@@ -332,6 +361,8 @@ CREATE SCHEMA IF NOT EXISTS test AUTHORIZATION ccas;
 **`sbt test` fails with `Failed to get driver instance for ...ccas_test` or `No suitable driver`.** The pgjdbc driver can deregister itself in a long-lived, repeatedly-reloaded sbt JVM. It is not a code failure: a cold `sbt test` in a fresh shell passes. Forking (`sbt ';set Test/fork := true ;test'`) also re-registers the driver.
 
 **A run hangs with no progress.** Read the client's progress bar first — it prints `API: active/currentMax`, and `active` is only above zero while a fiber holds an HTTP slot. A hang showing **`API: 0/N`** therefore means nothing is in flight over HTTP, so the stuck fiber is in a blocking JDBC call; `API: N/N` stuck at N ≥ 1 points at an HTTP read instead. The JDBC case was the symptom of pgjdbc's `socketTimeout` defaulting to infinite (a silently-dropped connection parks in `socket.read()` forever); that is now bounded by `DB_SOCKET_TIMEOUT_SECONDS` / `DB_CONNECT_TIMEOUT_SECONDS` / `DB_TCP_KEEP_ALIVE`, so raise those before suspecting application code.
+
+**Any build fails with `Unable to locate a Java Runtime`.** Check `java -version` before suspecting anything else. This has happened via a stale SDKMAN candidate: an entry installed from Homebrew (`21.0.12-brew`) is a symlink into the Homebrew keg, so removing or upgrading that formula leaves the candidate dangling and every `java` invocation fails. `sdk env` in the repo root selects the pinned Temurin build; `sdk uninstall java <dangling-candidate>` clears the stale entry.
 
 **Phantom `X is not a member of ccas` compile errors.** IntelliJ's sbt shell and a terminal `sbt` share `target/`, and concurrent use corrupts the Zinc incremental-compilation state. Run one at a time; `sbt clean` recovers.
 

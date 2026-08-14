@@ -92,7 +92,11 @@ object ServerEnvKeys {
     ServerEnvKey("CCAS_R2_BUCKET", "R2 bucket name (when backend = s3)", BodyStore, essential = false, secret = false),
     ServerEnvKey("CCAS_R2_REGION", "R2 region (default auto)", BodyStore, essential = false, secret = false),
     ServerEnvKey("CCAS_R2_ACCESS_KEY", "R2 S3 access key id (when backend = s3)", BodyStore, essential = false, secret = true),
-    ServerEnvKey("CCAS_R2_SECRET_KEY", "R2 S3 secret access key (when backend = s3)", BodyStore, essential = false, secret = true)
+    ServerEnvKey("CCAS_R2_SECRET_KEY", "R2 S3 secret access key (when backend = s3)", BodyStore, essential = false, secret = true),
+    ServerEnvKey("CCAS_BODY_STORE_READ_TIMEOUT_MS", "Body-store read deadline ms (default 5000)", BodyStore, essential = false, secret = false),
+    ServerEnvKey("CCAS_BODY_STORE_WRITE_TIMEOUT_MS", "Body-store write deadline ms (default 10000)", BodyStore, essential = false, secret = false),
+    ServerEnvKey("CCAS_R2_CONNECT_TIMEOUT_MS", "R2 transport connect timeout ms (default 2000)", BodyStore, essential = false, secret = false),
+    ServerEnvKey("CCAS_R2_SOCKET_TIMEOUT_MS", "R2 transport socket timeout ms (default 5000)", BodyStore, essential = false, secret = false)
   )
 
   val essential: List[ServerEnvKey] = all.filter(_.essential)
