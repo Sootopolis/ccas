@@ -517,6 +517,40 @@ object TestChessComClientCaching extends ZIOSpecDefault {
         )
       }
     },
+    test("getUncached whose stored object is gone (Missing) drops the cache row") {
+      // #215's other half. `Unavailable` keeps the cache row (TestBodyStoreOutage) because it is still accurate;
+      // `Missing` means it points at nothing, so it must be dropped. Under cacheWrites=true the recovery refetch's
+      // upsert rewrites the row either way, so `getUncached` is the only shape that can observe the invalidate —
+      // without it, collapsing the two arms passes the whole suite.
+      //
+      // Deleting the object while leaving both the pointer row and the cache row is also the one production shape
+      // that yields `Missing`: the FK is ON DELETE RESTRICT, so in-app pruning can never strand a referenced row.
+      // It takes an out-of-band sweep — an R2 lifecycle rule, or someone clearing the fs root.
+      val url         = URL.decode("http://test.example.com/api/cacheable/uncached-body-missing").toOption.get
+      val refetchBody = """{"value":"body-missing"}""" // unique, so its hash isn't shared with a sibling's row
+      ZIO.scoped {
+        for {
+          netCalls <- Ref.make(0)
+          (client, _, _) <- makeClient { _ =>
+            netCalls.update(_ + 1).as(cacheable200(refetchBody, maxAge = Some(3600)))
+          }
+          _      <- client.getCacheable[Payload](url) // populate (network #1)
+          before <- ApiResponseCache.lookupMeta(url.encode)
+          bodyId  = before.get.bodyId
+          hash   <- connectZIO(
+            sql"SELECT body_hash FROM api_response_body WHERE body_id = ${ApiResponseBodyId.unwrap(bodyId)}".query[String].run().head
+          )
+          _      <- ZIO.serviceWithZIO[BodyStore](_.delete(hash))
+          value  <- client.getUncached[Payload](url)  // Fresh hit → body Missing → invalidate + refetch (network #2)
+          calls  <- netCalls.get
+          meta   <- ApiResponseCache.lookupMeta(url.encode)
+        } yield assertTrue(
+          value.value == "body-missing",
+          calls == 2,
+          meta.isEmpty
+        )
+      }
+    },
     test("loadAndDecode bounds recovery to one refetch — persistently bad JSON propagates without looping") {
       // Regression guard for an unbounded retry loop: previously `catchSome` was scoped to the whole chain so a
       // refetch whose body ALSO failed to decode would trigger another refetch, ad infinitum. Now `catchSome` only

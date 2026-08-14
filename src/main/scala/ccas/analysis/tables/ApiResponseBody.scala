@@ -8,7 +8,7 @@ import com.augustnagro.magnum.*
 import zio.{URIO, ZIO}
 
 import ccas.analysis.tables.subtypes.ApiResponseBodyId
-import ccas.utils.client.BodyStore
+import ccas.utils.client.{BodyRead, BodyStore}
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.connectZIO
 
@@ -74,22 +74,26 @@ object ApiResponseBody {
       .map(ApiResponseBodyId.wrap)
 
   /** Read a cached body by id: resolve the hash-pointer row (a tiny Neon read) then load the bytes from the
-    * [[BodyStore]]. Used by `CacheableResult.Fresh` / `Revalidated` lazy-loading. Returns `None` if the pointer row
-    * was deleted (e.g. by orphan cleanup), the object is absent from the store, or the store errored — the caller
-    * treats all three as a cache miss and falls through to a network refetch.
+    * [[BodyStore]]. Used by `CacheableResult.Fresh` / `Revalidated` lazy-loading. Every non-`Found` outcome is a
+    * cache miss the caller heals with a network refetch; the two of them differ only in what happens to the
+    * *metadata* row.
     *
-    * Folding a store *error* into the same `None` is what makes an object-store outage non-fatal: the caller's
-    * recovery path drops the cache row and does an unconditional GET, which is the only correct move anyway (a
-    * conditional GET could come back 304, leaving us with metadata and still no body). The metadata self-heals on
-    * the next successful cache write.
+    *   - [[BodyRead.Missing]] — the pointer row is gone (orphan cleanup) or the object is absent from the store. The
+    *     `api_response_cache` row pointing here is a lie, so the caller drops it.
+    *   - [[BodyRead.Unavailable]] — the store errored or outran its deadline. The cache row is still accurate and
+    *     still holds the validators that make the next request cheap, so the caller '''keeps''' it and refetches
+    *     unconditionally. Dropping it would convert a transient outage into a permanently cold cache (#215).
+    *
+    * Either way the refetch is unconditional rather than validated: a conditional GET could come back 304, leaving
+    * us with metadata and still no body.
     */
-  def loadById(bodyId: ApiResponseBodyId): ZIO[PostgresClient & BodyStore, SQLException, Option[String]] =
+  def loadById(bodyId: ApiResponseBodyId): ZIO[PostgresClient & BodyStore, SQLException, BodyRead[String]] =
     connectZIO {
       val raw = ApiResponseBodyId.unwrap(bodyId)
       sql"SELECT body_hash FROM api_response_body WHERE body_id = $raw".query[String].run().headOption
     }.flatMap {
-      case Some(hash) => BodyStore.getOrMiss(hash).map(_.map(bytes => new String(bytes, StandardCharsets.UTF_8)))
-      case None       => ZIO.none
+      case Some(hash) => BodyStore.read(hash).map(_.map(bytes => new String(bytes, StandardCharsets.UTF_8)))
+      case None       => ZIO.succeed(BodyRead.Missing)
     }
 
   /** Delete pointer rows no longer referenced by the cache or by `api_fetch_failure`, returning their freed hashes.
