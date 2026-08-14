@@ -1,0 +1,8 @@
+# SDKMAN per-directory toolchain. Run `sdk env` in this directory to select it
+# (or `sdk env install` on a fresh machine), and enable
+# sdkman_auto_env=true in ~/.sdkman/etc/config to have it applied on cd.
+#
+# Pinned because the JDK was previously unpinned and drifted: a Homebrew-backed
+# SDKMAN candidate (21.0.12-brew) dangled when Homebrew removed the keg it
+# symlinked into, which broke every build with "Unable to locate a Java Runtime".
+java=25.0.4-tem

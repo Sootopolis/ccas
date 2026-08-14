@@ -8,7 +8,9 @@ CCAS (Chess Club Admin System) is a Scala 3 application that pulls data from the
 
 ## Build & Test Commands
 
-This is an SBT project (Scala 3.8.3, SBT 1.12.8).
+This is an SBT project (Scala 3.8.3, SBT 1.12.8, JDK 25 LTS).
+
+The JDK is pinned in `.sdkmanrc` (`java=25.0.4-tem`) — run `sdk env` in the repo root, or `sdk env install` on a fresh machine. It is pinned because it drifted once: a Homebrew-backed SDKMAN candidate dangled when Homebrew removed the keg it symlinked into, and every build then failed with "Unable to locate a Java Runtime". If a build fails that way, check `java -version` before anything else.
 
 - **Compile:** `sbt compile`
 - **Run all tests:** `sbt test`
