@@ -30,8 +30,9 @@ object TestBodyStore extends ZIOSpecDefault {
       Files.walk(dir).sorted(java.util.Comparator.reverseOrder()).forEach(p => { Files.deleteIfExists(p); () })
     }
 
-  private val hash  = "a" * 64
-  private val bytes = """{"value":"ok"}""".getBytes(StandardCharsets.UTF_8)
+  private val hash   = "a" * 64
+  private val bytes  = """{"value":"ok"}""".getBytes(StandardCharsets.UTF_8)
+  private val source = "https://api.chess.com/pub/player/example"
 
   /** Runs `body` with an extra logger attached for the duration, handing it an effect that reads back exactly what
     * was logged inside. Counting entries out of the shared `ZTestLogger` instead would tie the assertion to how the
@@ -229,10 +230,10 @@ object TestBodyStore extends ZIOSpecDefault {
         (store, _) <- freshStore
         faulty     <- FaultyBodyStore.make(store)
         _          <- faulty.breakWrites
-        skipped    <- BodyStore.putOrSkip(hash, bytes).provideEnvironment(ZEnvironment[BodyStore](faulty))
+        skipped    <- BodyStore.putOrSkip(hash, bytes, source).provideEnvironment(ZEnvironment[BodyStore](faulty))
         absent     <- store.get(hash)
         _          <- faulty.healWrites
-        stored     <- BodyStore.putOrSkip(hash, bytes).provideEnvironment(ZEnvironment[BodyStore](faulty))
+        stored     <- BodyStore.putOrSkip(hash, bytes, source).provideEnvironment(ZEnvironment[BodyStore](faulty))
         present    <- store.get(hash)
       } yield assertTrue(!skipped, absent.isEmpty, stored, present.exists(_.sameElements(bytes)))
     },
@@ -244,7 +245,7 @@ object TestBodyStore extends ZIOSpecDefault {
         _          <- faulty.breakWrites
         env        = ZEnvironment[BodyStore](faulty)
         readExit   <- BodyStore.read(hash).provideEnvironment(env).exit
-        writeExit  <- BodyStore.putOrSkip(hash, bytes).provideEnvironment(env).exit
+        writeExit  <- BodyStore.putOrSkip(hash, bytes, source).provideEnvironment(env).exit
       } yield assertTrue(readExit.isSuccess, writeExit.isSuccess)
     },
     test("an outage logs one warning however long it lasts, and one info on recovery") {
@@ -316,8 +317,51 @@ object TestBodyStore extends ZIOSpecDefault {
         breach(exit).exists(t => t.op == "read" && t.limit.toMillis == 200L),
         breach(putExit).exists(t => t.op == "write" && t.limit.toMillis == 800L),
         // Deletes ride the write budget on purpose: an outage takes the whole store down, not one verb.
-        breach(deleteExit).exists(t => t.op == "delete" && t.limit.toMillis == 800L)
+        breach(deleteExit).exists(t => t.op == "delete" && t.limit.toMillis == 800L),
+        // The size is asserted as a field, not only through the rendered message: it exists so a later latency
+        // breaker can match on it, and a message reformat must not silently drop that contract.
+        breach(putExit).exists(_.bytes.contains(bytes.length)),
+        breach(exit).exists(_.bytes.isEmpty),
+        breach(deleteExit).exists(_.bytes.isEmpty)
       )
+    },
+    test("a breached write names the object's size; a read and a delete have none to name") {
+      // #222: `HealthLogging` prints only the throwable's message, so the size must travel on the exception to
+      // reach the one line an operator reads.
+      val limits = BodyStore.BodyStoreLimits(read = 150.millis, write = 150.millis)
+      for {
+        (store, _) <- freshStore
+        faulty     <- FaultyBodyStore.make(store)
+        _          <- faulty.stallReads(5.seconds)
+        _          <- faulty.stallWrites(5.seconds)
+        bounded     = new BodyStore.Deadlines(faulty, limits)
+        putExit    <- bounded.put(hash, bytes).exit
+        readExit   <- bounded.get(hash).exit
+        deleteExit <- bounded.delete(hash).exit
+        // `Option.contains` below is whole-string equality, not substring matching — the assertions pin the entire
+        // rendered message, which is what the operator reads.
+        exactMessage = (exit: Exit[Throwable, Any]) => exit.causeOption.flatMap(_.failureOption).map(_.getMessage)
+      } yield assertTrue(
+        exactMessage(putExit).contains(s"BodyStore write of ${bytes.length} bytes exceeded its 150ms deadline"),
+        exactMessage(readExit).contains("BodyStore read exceeded its 150ms deadline"),
+        exactMessage(deleteExit).contains("BodyStore delete exceeded its 150ms deadline")
+      )
+    },
+    test("the size reaches the operator's WARN, not just the exception") {
+      // The test above pins the message; this pins that it survives `safeMessage` into the WARN itself.
+      val limits = BodyStore.BodyStoreLimits(read = 150.millis, write = 150.millis)
+      capturingLogs { sink =>
+        for {
+          (store, _) <- freshStore
+          faulty     <- FaultyBodyStore.make(store)
+          degraded   <- Ref.make(false)
+          _          <- faulty.stallWrites(5.seconds)
+          monitored   = new BodyStore.HealthLogging(new BodyStore.Deadlines(faulty, limits), degraded)
+          _          <- monitored.put(hash, bytes).ignore
+          entries    <- sink
+          warnings    = entries.collect { case (LogLevel.Warning, msg) => msg }
+        } yield assertTrue(warnings.exists(_.contains(s"write of ${bytes.length} bytes")))
+      }
     },
     test("a stalled store degrades exactly as a broken one: Unavailable on read, skipped write") {
       // The whole point of raising a typed failure rather than a new outcome: the accessors' existing `catchAll`
@@ -330,7 +374,7 @@ object TestBodyStore extends ZIOSpecDefault {
         _          <- faulty.stallWrites(5.seconds)
         env         = ZEnvironment[BodyStore](new BodyStore.Deadlines(faulty, limits))
         read       <- BodyStore.read(hash).provideEnvironment(env)
-        wrote      <- BodyStore.putOrSkip(hash, bytes).provideEnvironment(env)
+        wrote      <- BodyStore.putOrSkip(hash, bytes, source).provideEnvironment(env)
         stored     <- store.get(hash)
       } yield assertTrue(read == BodyRead.Unavailable, !wrote, stored.isEmpty)
     },
@@ -421,11 +465,47 @@ object TestBodyStore extends ZIOSpecDefault {
       assertTrue(
         derived.map(_.connect.toMillis) == Right(BodyStore.DefaultS3ConnectTimeoutMs.toLong),
         derived.map(_.socket.toMillis) == Right(BodyStore.DefaultS3SocketTimeoutMs.toLong),
-        // apiCallAttempt tracks the socket timeout; apiCall is the widest accessor deadline, so the transport never
-        // outlives the operation it serves but always outlives a single attempt.
-        derived.map(_.apiCallAttempt.toMillis) == Right(BodyStore.DefaultS3SocketTimeoutMs.toLong),
-        derived.map(_.apiCall.toMillis) == Right(9000L)
+        derived.map(_.apiCall.toMillis) == Right(9000L),
+        // The widest deadline, not the narrower one: an abandoned read is bounded by the write budget on purpose.
+        derived.map(_.apiCallAttempt.toMillis) == Right(9000L)
       )
+    },
+    test("the budget follows the widest deadline even when that is the read one") {
+      // Both derived values now come from `widest`, so a mutation to `limits.write` would survive every other case
+      // in this suite — all of which happen to have write >= read.
+      val readWidest = BodyStore.BodyStoreLimits(read = 9.seconds, write = 3.seconds)
+      val derived    = BodyStore.s3Timeouts(storeConfig(None, None, None, None), readWidest)
+      assertTrue(
+        derived.map(_.apiCall.toMillis) == Right(9000L),
+        derived.map(_.apiCallAttempt.toMillis) == Right(9000L)
+      )
+    },
+    test("one attempt may spend the whole SDK budget, so a slow upload is never restarted from byte zero") {
+      // #222: `apiCallAttempt` used to track the socket timeout, and `ApiCallAttemptTimeoutException` is retryable,
+      // so a put slower than it was cut, restarted from byte zero, and cut again — never able to succeed. Asserted
+      // as a relationship, since the mutation to catch is "derive the attempt budget from something narrower
+      // again", which two literals updated in lockstep would miss.
+      val defaults = BodyStore.BodyStoreLimits(
+        read = BodyStore.DefaultReadTimeoutMs.millis,
+        write = BodyStore.DefaultWriteTimeoutMs.millis
+      )
+      val widerSocket = BodyStore.s3Timeouts(storeConfig(None, None, None, Some(9000)), defaults)
+      val derived     = BodyStore.s3Timeouts(storeConfig(None, None, None, None), defaults)
+      assertTrue(
+        derived.map(t => t.apiCallAttempt == t.apiCall) == Right(true),
+        // The socket timeout must no longer bound an attempt: at the shipped defaults it is strictly smaller...
+        derived.map(t => t.socket.compareTo(t.apiCallAttempt) < 0) == Right(true),
+        // ...and moving it must not move the attempt budget with it.
+        widerSocket.map(_.apiCallAttempt) == derived.map(_.apiCallAttempt)
+      )
+    },
+    test("the accessor deadline is what the operator sees breached, so the SDK must not give up first") {
+      // Deliberately NOT shortened for "diagnosis": that surfaces only `ApiCallTimeoutException`, which carries no
+      // status code, in place of `BodyStoreTimeoutException`, which names the operation, budget and size. See
+      // `BodyStore.S3Timeouts`.
+      val limits  = BodyStore.BodyStoreLimits(read = 5.seconds, write = 10.seconds)
+      val derived = BodyStore.s3Timeouts(storeConfig(None, None, None, None), limits)
+      assertTrue(derived.map(_.apiCall) == Right(limits.write))
     },
     test("a socket timeout wider than the widest accessor deadline is rejected") {
       val limits = BodyStore.BodyStoreLimits(read = 1.second, write = 2.seconds)

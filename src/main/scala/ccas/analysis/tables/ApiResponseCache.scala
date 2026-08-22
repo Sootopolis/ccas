@@ -77,7 +77,7 @@ object ApiResponseCache {
     contentType: Option[String],
     fetchedAt: Instant
   ): ZIO[PostgresClient & BodyStore, SQLException, Option[ApiResponseBodyId]] =
-    ApiResponseBody.putBody(body).flatMap {
+    ApiResponseBody.putBody(source = url, body = body).flatMap {
       case None => ZIO.none
       case Some(hash) =>
         upsertRow(
