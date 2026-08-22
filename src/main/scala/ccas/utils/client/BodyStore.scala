@@ -110,7 +110,9 @@ object BodyStore {
     * Skipping the whole cache write instead means an outage degrades to "no cache" and self-heals on the first
     * successful put. #199's budget guard reuses this exact skip (a `put` that no-ops without failing the fetch).
     *
-    * DEBUG-level per-failure logging, for the same reason as [[read]].
+    * `source` names what the body came from (the URL, or the writer where there is none), because a
+    * content-addressed store can otherwise report only a hash — the gap `ChessComClient.loadAndDecode` already
+    * closes on the read path (#222). DEBUG-level per-failure logging, for the same reason as [[read]].
     *
     * '''Known leak.''' A write abandoned at its [[Deadlines]] budget may still complete against the store
     * afterwards, while this returns `false` and the caller correctly declines to write the pointer row. The
@@ -134,9 +136,13 @@ object BodyStore {
     * raised past it. Tracked as an input to #199, since these are billed bytes no accounting in this codebase can
     * see.
     */
-  def putOrSkip(hash: String, bytes: Array[Byte]): URIO[BodyStore, Boolean] =
+  def putOrSkip(hash: String, bytes: Array[Byte], source: String): URIO[BodyStore, Boolean] =
     ZIO.serviceWithZIO[BodyStore](_.put(hash, bytes)).as(true).catchAll { e =>
-      ZIO.logDebug(s"BodyStore write failed for $hash, body not cached: ${e.safeMessage}").as(false)
+      ZIO
+        .logDebug(
+          s"BodyStore write failed for $source ($hash, ${bytes.length} bytes), body not cached: ${e.safeMessage}"
+        )
+        .as(false)
     }
 
   /** Delete an object. Left in raw `Task` form because every callsite is already a best-effort `.ignore` — orphan
@@ -147,14 +153,25 @@ object BodyStore {
 
   /** Raised by [[Deadlines]] when an operation outruns its budget. A named type (rather than a bare
     * `TimeoutException`) so a later latency breaker can match on it; the message is what the accessors' existing
-    * `safeMessage` DEBUG line prints.
+    * `safeMessage` DEBUG line prints, and what [[HealthLogging]]'s single operator-facing WARN prints.
+    *
+    * `bytes` is populated for a write and absent otherwise: size is what separates "too big to upload inside the
+    * budget" from "slow regardless of size" (#222), and it is the only such datum the WARN can carry.
     *
     * No stack trace: this is control flow on the hot read path during exactly the incident where throughput matters,
     * not a defect, and the frames would name the decorator rather than anything diagnostic.
     */
-  final class BodyStoreTimeoutException(val op: String, val limit: Duration)
-      extends RuntimeException(s"BodyStore $op exceeded its ${limit.toMillis}ms deadline") {
+  final class BodyStoreTimeoutException(val op: String, val limit: Duration, val bytes: Option[Int])
+      extends RuntimeException(BodyStoreTimeoutException.message(op, limit, bytes)) {
     override def fillInStackTrace(): Throwable = this
+  }
+
+  private object BodyStoreTimeoutException {
+    private def message(op: String, limit: Duration, bytes: Option[Int]): String =
+      bytes match {
+        case Some(count) => s"BodyStore $op of $count bytes exceeded its ${limit.toMillis}ms deadline"
+        case None        => s"BodyStore $op exceeded its ${limit.toMillis}ms deadline"
+      }
   }
 
   private[ccas] val DefaultReadTimeoutMs      = 5000
@@ -181,11 +198,25 @@ object BodyStore {
       write <- positiveMs(config.writeTimeoutMs, DefaultWriteTimeoutMs, "body-store.write-timeout-ms")
     } yield BodyStoreLimits(read, write)
 
-  /** The S3 transport's own budget, derived from the accessor deadlines: `apiCall` = the '''widest''' accessor
-    * deadline >= `apiCallAttempt` = socket timeout.
+  /** The S3 transport's own budget, derived from the accessor deadlines: `apiCall` = `apiCallAttempt` = the
+    * '''widest''' accessor deadline, with `socket` its own independently-configured knob underneath.
+    *
+    * '''`apiCallAttempt` equals `apiCall` deliberately''' (#222). Deriving the attempt budget from the socket
+    * timeout — 5s inside a 10s write budget — made every put needing more than 5s '''unsatisfiable''':
+    * `ApiCallAttemptTimeoutException` is retryable, so a large upload was cut at 5s, restarted from byte zero, and
+    * cut again at 10s, at twice the bytes. Equal budgets also make the retry self-limiting, since `apiCallTimeout`
+    * is an absolute ceiling across attempts: a stalled attempt consumes it, a fast 429/5xx leaves room for one.
+    * Hence the SDK's retry strategy stays at its default.
+    *
+    * '''Do not shorten `apiCall` below the accessor deadline to surface the SDK's own error.''' Tried in #222 and
+    * reverted: it yields only `ApiCallTimeoutException` ("Client execution did not complete before the specified
+    * timeout configuration"), which carries no status code and leaves `numAttempts` unset, and it displaces
+    * [[BodyStoreTimeoutException]], which names the operation, the budget and the size. Errors that '''do''' carry
+    * a status never needed rescuing: a 429/503 exhausting LEGACY's four attempts costs at most ~3.5s and surfaces
+    * as an `S3Exception` well inside either budget.
     *
     * One `S3Client` carries one `apiCallTimeout`, so the ceiling is sized for the widest operation (`write`, by
-    * default). A read abandoned at its own 5s deadline is therefore capped by the transport at the 10s write budget
+    * default). A read abandoned at its own 5s deadline is therefore capped by the transport at the write budget
     * rather than at 5s — the orphan is bounded, not made as short as the accessor that spawned it.
     *
     * This is not hygiene. `attemptBlockingInterrupt` cannot unblock a `UrlConnectionHttpClient` socket read —
@@ -194,9 +225,11 @@ object BodyStore {
     * The SDK ships `DEFAULT_SOCKET_READ_TIMEOUT = 30s` / `DEFAULT_CONNECTION_TIMEOUT = 2s` and no API-call ceiling
     * at all, and [[buildS3Client]] used to set none of them.
     *
+    * `socket` bounds inactivity on a socket *read* and cannot be made an upload ceiling: the SDK streams a put
+    * with `setFixedLengthStreamingMode`, where `SO_TIMEOUT` does not apply to writes. That is `apiCall`'s job.
+    *
     * `apiCallAttempt` and `apiCall` are '''derived''' rather than exposed as knobs, which is what makes an
-    * incoherent budget unconfigurable. Retry count stays at the SDK default: `apiCallTimeout` is an absolute ceiling
-    * across all attempts, so the attempt count cannot extend it.
+    * incoherent budget unconfigurable.
     */
   private[ccas] final case class S3Timeouts(
     connect: Duration,
@@ -216,7 +249,7 @@ object BodyStore {
         s"body-store.s3-socket-timeout-ms (${socket.toMillis}) must not exceed the widest accessor deadline " +
           s"(${widest.toMillis}ms): the transport would outlive the operation it serves."
       )
-    } yield S3Timeouts(connect = connect, socket = socket, apiCallAttempt = socket, apiCall = widest)
+    } yield S3Timeouts(connect = connect, socket = socket, apiCallAttempt = widest, apiCall = widest)
   }
 
   private def positiveMs(configured: Option[Int], default: Int, key: String): Either[String, Duration] =
@@ -419,14 +452,17 @@ object BodyStore {
     */
   private[ccas] final class Deadlines(underlying: BodyStore, limits: BodyStoreLimits) extends BodyStore {
 
-    def get(hash: String): Task[Option[Array[Byte]]] = bounded("read", limits.read, underlying.get(hash))
+    def get(hash: String): Task[Option[Array[Byte]]] =
+      bounded(op = "read", limit = limits.read, bytes = None, effect = underlying.get(hash))
 
-    def put(hash: String, bytes: Array[Byte]): Task[Unit] = bounded("write", limits.write, underlying.put(hash, bytes))
+    def put(hash: String, bytes: Array[Byte]): Task[Unit] =
+      bounded(op = "write", limit = limits.write, bytes = Some(bytes.length), effect = underlying.put(hash, bytes))
 
-    def delete(hash: String): Task[Unit] = bounded("delete", limits.write, underlying.delete(hash))
+    def delete(hash: String): Task[Unit] =
+      bounded(op = "delete", limit = limits.write, bytes = None, effect = underlying.delete(hash))
 
-    private def bounded[A](op: String, limit: Duration, effect: Task[A]): Task[A] =
-      effect.disconnect.timeoutFail(new BodyStoreTimeoutException(op, limit))(limit)
+    private def bounded[A](op: String, limit: Duration, bytes: Option[Int], effect: Task[A]): Task[A] =
+      effect.disconnect.timeoutFail(new BodyStoreTimeoutException(op, limit, bytes))(limit)
   }
 
   /** Backend decorator that tracks store health and logs the '''transitions''' — one WARN when the store first

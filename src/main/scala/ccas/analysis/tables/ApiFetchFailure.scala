@@ -78,7 +78,9 @@ object ApiFetchFailure {
   def insert(item: ApiFetchFailure): ZIO[PostgresClient & BodyStore, SQLException, Int] =
     for {
       // Store the body BEFORE opening the transaction so the object-store round-trip never holds a pooled connection.
-      hashOpt <- ZIO.foreach(item.responseBody)(ApiResponseBody.putBody).map(_.flatten)
+      hashOpt <- ZIO
+        .foreach(item.responseBody)(body => ApiResponseBody.putBody(source = item.url, body = body))
+        .map(_.flatten)
       result <- withTransaction {
         for {
           bodyIdOpt <- ZIO.foreach(hashOpt)(ApiResponseBody.ensureBodyPointer)

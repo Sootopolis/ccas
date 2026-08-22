@@ -54,10 +54,16 @@ object ApiResponseBody {
     *
     * `None` is the store-outage signal (see [[BodyStore.putOrSkip]]): the caller must skip the pointer row it was
     * about to write, degrading that write to "uncached" rather than failing the request the body came from.
+    *
+    * `source` is the URL, threaded into the store's failure log so a skipped write names a request rather than a
+    * bare hash (#222). '''Pass both arguments by name''': they are both `String`, so a transposition compiles and
+    * stores the URL '''as''' the body, and every later read of that entry then decodes a URL as JSON. A distinct
+    * type would enforce it, but the URL is a bare `String` throughout this package, so a wrapper would only move
+    * the same transposition to the conversion site.
     */
-  def putBody(body: String): URIO[BodyStore, Option[String]] = {
+  def putBody(source: String, body: String): URIO[BodyStore, Option[String]] = {
     val hash = sha256(body)
-    BodyStore.putOrSkip(hash, body.getBytes(StandardCharsets.UTF_8)).map(Option.when(_)(hash))
+    BodyStore.putOrSkip(hash, body.getBytes(StandardCharsets.UTF_8), source).map(Option.when(_)(hash))
   }
 
   /** Upsert the hash-pointer row for an already-stored body (see [[putBody]]) and return its `body_id`. Pure DB, so
@@ -135,12 +141,14 @@ object ApiResponseBody {
   def normalizeCfBodies: ZIO[PostgresClient & BodyStore, SQLException, Int] =
     // Uses the precomputed [[CfCanonicalHash]] rather than routing through [[putBody]], which would re-derive the
     // same constant SHA-256 on every startup. The put-before-pointer ordering putBody documents still holds.
-    BodyStore.putOrSkip(CfCanonicalHash, CfCanonicalBody.getBytes(StandardCharsets.UTF_8)).flatMap { stored =>
-      if (stored) { insertPointerIfAbsent(CfCanonicalHash) }
-      // Debug, not warn: `BodyStore`'s health decorator already raised one WARN for the outage itself, and this
-      // adds only which pre-warm was skipped.
-      else { ZIO.logDebug("BodyStore unavailable; skipping Cloudflare canonical-body pre-warm").as(0) }
-    }
+    BodyStore
+      .putOrSkip(CfCanonicalHash, CfCanonicalBody.getBytes(StandardCharsets.UTF_8), "startup Cloudflare pre-warm")
+      .flatMap { stored =>
+        if (stored) { insertPointerIfAbsent(CfCanonicalHash) }
+        // Debug, not warn: `BodyStore`'s health decorator already raised one WARN for the outage itself, and this
+        // adds only which pre-warm was skipped.
+        else { ZIO.logDebug("BodyStore unavailable; skipping Cloudflare canonical-body pre-warm").as(0) }
+      }
 
   private def insertPointerIfAbsent(hash: String): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
