@@ -1,6 +1,6 @@
 package ccas.utils.client
 
-import zio.{ZLayer, durationInt}
+import zio.{ZIO, ZLayer, durationInt}
 import zio.http.netty.NettyConfig
 import zio.http.{Client, ConnectionPoolConfig, Decompression, DnsResolver, ZClient}
 
@@ -32,7 +32,12 @@ import zio.http.{Client, ConnectionPoolConfig, Decompression, DnsResolver, ZClie
   */
 object HttpClientLayer {
 
-  val live: ZLayer[Any, Throwable, Client] = {
+  // A layer rather than an object-init side effect, so the install is tied to building a client; `ZIO.attempt` because
+  // a log filter must never be able to fail the `Client` layer. Ordering is not load-bearing (see `install`).
+  private val silenceTailNoise: ZLayer[Any, Nothing, Unit] =
+    ZLayer(ZIO.attempt(NettyTailNoise.install()).catchAll(e => ZIO.logDebug(s"Netty tail-noise filter not installed: $e")))
+
+  private val nettyClient: ZLayer[Any, Throwable, Client] = {
     val config = ZClient.Config.default
       .copy(requestDecompression = Decompression.NonStrict)
       // Transport-level timeouts so a silently-dropped TCP connection (peer gone, no RST/FIN) can't park a fiber
@@ -44,14 +49,18 @@ object HttpClientLayer {
       // hang a fiber on connection setup while waiting on the much longer OS-level TCP timeout.
       .idleTimeout(50.seconds)
       .connectionTimeout(10.seconds)
-      // Connection pool with a `ttl` shorter than Chess.com's Cloudflare-edge idle timeout, so stale keep-alive
-      // connections are evicted before the origin reaps them server-side. zio-http's default `Fixed(10)` has no idle
-      // TTL, so it hands out reaped connections and the next request fails mid-flight with Netty's
-      // `PrematureChannelClosureException` (`ChessComClient`'s connection-error retry then recovers, but noisily).
-      // `maximum` is headroom over the real outbound concurrency ceiling (the gate's `maxPermits`, itself bounded by
-      // `ApiConcurrency.fiberCap` ≤ the Hikari pool ~20), so raising `maxPermits` in config can't silently undersize
-      // the pool below demand. `minimum = 0` keeps no idle connections, so the generous cap costs nothing at rest
-      // (the pool drains during idle gaps — Neon scale-to-zero / between-job pauses).
+      // Connection pool. `maximum` is headroom over the real outbound concurrency ceiling (the gate's `maxPermits`,
+      // itself bounded by `ApiConcurrency.fiberCap` ≤ the Hikari pool ~20), so raising `maxPermits` in config can't
+      // silently undersize the pool below demand. `minimum = 0` keeps no idle connections, so the generous cap costs
+      // nothing at rest.
+      //
+      // `ttl` is not a per-connection idle expiry, whatever the name suggests. It reaches `ZPool.Strategy.TimeToLive`,
+      // whose clock resets on every allocate *and* release, so under a sustained crawl it never fires and cannot
+      // pre-empt a server-side reap; what it does govern is the at-rest drain above — how long after the last checkout
+      // or return the pool shrinks back to `minimum` (Neon scale-to-zero / between-job pauses). Being handed a
+      // connection the origin has already closed is unavoidable here, since the `channel.isOpen` check at checkout
+      // cannot see an unprocessed FIN, and is handled where it lands: `ChessComClient`'s `retryConnectionSchedule`
+      // retries, and `NettyTailNoise` drops the duplicate WARN Netty logs from the pipeline tail (#225).
       .copy(connectionPool = ConnectionPoolConfig.Dynamic(minimum = 0, maximum = 32, ttl = 30.seconds))
       // When zio-http adds HTTP/2 (issue #3473), enable it here, e.g.:
       //   .copy(protocols = NonEmptyChunk(Version.Http_2, Version.Http_1_1))
@@ -59,4 +68,6 @@ object HttpClientLayer {
       ZLayer.succeed(NettyConfig.defaultWithFastShutdown) ++
       DnsResolver.default) >>> Client.live
   }
+
+  val live: ZLayer[Any, Throwable, Client] = silenceTailNoise >>> nettyClient
 }

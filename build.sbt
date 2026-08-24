@@ -49,6 +49,9 @@ libraryDependencies ++= Seq(
 
   // No-op SLF4J binding: we log via ZIO, not SLF4J. Without a binding, transitive SLF4J users (netty, etc.) print
   // "No SLF4J providers were found" on every CLI invocation; the NOP binding silences that library noise.
+  // Not what routes Netty to JUL, despite sitting next to it: Netty rejects a NOP binding, and no binding at all is a
+  // NOP binding too. What `NettyTailNoise` needs is that no *real* binding (or transitive `log4j-core`) ever arrives —
+  // one would move Netty off JUL and silently retire that filter. `TestNettyTailNoise` pins the resolution.
   "org.slf4j" % "slf4j-nop" % vSlf4j
 )
 
