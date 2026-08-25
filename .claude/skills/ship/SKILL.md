@@ -16,7 +16,7 @@ Take the work on the **current branch** through this repo's full release flow. B
 
 ## 1. Commit (only if there are changes)
 - Conventional Commits. Subject ≤ ~70 chars; body explains the *why* per change, not the *what*.
-- End every commit message with the required trailers (`Co-Authored-By:` + `Claude-Session:`) from the global/CLAUDE instructions.
+- End every commit message with the `Co-authored-by:` trailer from the global CLAUDE instructions, matching the casing already in `git log` (this repo uses `Co-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com>`). Add a session trailer ONLY if one appears in recent commits — do not invent one.
 - Branch already has commits ahead of base and a clean tree → skip to step 2.
 
 ## 2. Push
@@ -31,6 +31,14 @@ Take the work on the **current branch** through this repo's full release flow. B
   - title mirroring the main commit subject;
   - body: **What / Fixes / Testing / linked issues**.
 - End the PR body with the required footer (`🤖 Generated with Claude Code` + session URL).
+
+## 3b. Permission preflight (before anything irreversible)
+Steps 7-9 use commands that may be gated (classifier or allowlist). A denial there strands the flow *after* the merge,
+which is the one step that cannot be undone. So check first, while everything is still reversible:
+- Confirm `gh pr`, `gh run` and `gh issue` are usable — a cheap `gh run list --branch <base> --limit 1` proves it.
+- Post the step-9 issue backrefs NOW (comment only; leave closing until after the merge, since the SHA isn't known yet).
+- If any of those is denied: say so and ask whether to merge anyway. Merging with the follow-up steps known-blocked is a
+  choice the user should make deliberately, not discover afterwards.
 
 ## 4. Watch PR CI
 - `gh pr checks <n> --watch --interval 20`.
@@ -48,7 +56,14 @@ Take the work on the **current branch** through this repo's full release flow. B
 Squash-merge gives `main` a new SHA, so the feature branch now diverges. Decide by role:
 - **Persistent / rolling branch** — one the user reuses across features (default: `wip`; treat any branch the user keeps coming back to this way). Recycle it onto merged base so it's a clean start:
   - working tree must be clean: `git reset --hard origin/<base>` then `git push --no-verify --force-with-lease origin <branch>` (`--no-verify`: the tree is byte-identical to the just-merged, CI-green base, so the pre-push `sbt test` is pure waste).
-  - Run the reset and the push as **separate Bash invocations**, never chained with `&&` — the settings allowlist uses exact-match rules that don't match compound commands.
+  - Run the reset and the push as **separate Bash invocations**, never chained with `&&`: a compound command is judged as
+    one unit, so the harmless reset inherits the force-push's risk profile and both get refused together.
+  - **Expect the force-push to be gated.** It rewrites a shared branch and skips the pre-push hook, so it is deliberately
+    NOT on the allowlist and a permission layer may refuse it even mid-ship. That is the gate working, not a fault —
+    never try to route around it.
+  - **If the reset lands and the push is refused**, the pair is not atomic and you are left with local recycled /
+    remote stale. Nothing is lost (the commits are exactly what the squash contains). Do NOT improvise: report both
+    SHAs plainly and hand back the one-line resume — `git push --no-verify --force-with-lease origin <branch>`.
 - **Throwaway feature branch** — one PR, one purpose: delete it: `git push origin --delete <branch>`, and prune any local branch/worktree.
 - **Ambiguous?** ASK recycle-vs-delete before doing either. Default `wip` → recycle.
 - (If the user later runs several rolling branches, lift the single `wip` default into a small "persistent branches" list — until then, default + ask is enough.)
@@ -62,8 +77,12 @@ When the shipped branch was a **throwaway cut from base** while a worktree sat p
 - `gh run list --branch <base> --limit 1` → `gh run watch <id> --interval 20 --exit-status` on the merge commit's run. Report green/red.
 
 ## 9. Update issues
+Backref comments should already be posted (step 3b); this step adds the merge SHA and closes what the PR resolved.
 - Issues the PR *resolves*: comment with the PR link + merge SHA, then close.
 - Issues *deferred* or `pending-decision`: comment a backref (PR + SHA), keep open. Never auto-close a `pending-decision` item.
+- If no issue is resolved by the PR, say so explicitly rather than silently skipping the step.
 
 ## Output
 Finish with a compact status table: commit SHA, PR #, PR CI, merge SHA, base-worktree sync, branch disposal, main CI, issues touched.
+Mark any step that was refused or skipped as such — never leave a blocked step looking complete, and list the exact
+commands needed to finish it.
