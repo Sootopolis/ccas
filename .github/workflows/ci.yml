@@ -53,5 +53,7 @@ jobs:
         if: always()
         with:
           name: Test results
-          path: '**/target/test-reports/TEST-*.xml'
+          # Unanchored on purpose: a `**/target/test-reports/` form stops matching if the output layout moves
+          # (sbt 2 nests it under `target/out/`), and `if: always()` means a stale glob reports an empty run.
+          path: '**/test-reports/TEST-*.xml'
           reporter: java-junit
