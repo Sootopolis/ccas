@@ -8,7 +8,7 @@ import zio.http.{Client, ConnectionPoolConfig, Decompression, DnsResolver, ZClie
   * layer-provisioning call site so that transport-level configuration (gzip, HTTP/2 in the future, connection pools,
   * etc.) is set in one place.
   *
-  * '''Gzip''' — zio-http 3.10.1's `Client.default` uses `Decompression.No`, which means gzipped responses come back
+  * '''Gzip''' — zio-http 3.11.4's `Client.default` uses `Decompression.No`, which means gzipped responses come back
   * as raw bytes and JSON decoding fails. We enable `Decompression.NonStrict` so Netty's `HttpContentDecompressor` is
   * installed in the pipeline and responses with `Content-Encoding: gzip` are decoded automatically. Responses that
   * are not compressed pass through unchanged, so the header-driven branching is entirely handled inside Netty.
@@ -20,7 +20,7 @@ import zio.http.{Client, ConnectionPoolConfig, Decompression, DnsResolver, ZClie
   * surface immediately as `JsonDecodingException` on every response (gzip bytes don't parse as JSON), and those
   * failures are already persisted to `api_fetch_failure` with dedup of the raw body into `api_response_body`.
   *
-  * '''HTTP/2 (future)''' — zio-http 3.10.1 does not yet support HTTP/2; its `Version` sealed trait only defines
+  * '''HTTP/2 (future)''' — zio-http 3.11.4 does not yet support HTTP/2; its `Version` sealed trait only defines
   * `Http_1_0` and `Http_1_1`, and the Netty client driver only negotiates HTTP/1.1 regardless of what ALPN offers.
   * HTTP/2 support is tracked upstream at https://github.com/zio/zio-http/issues/3473. When that lands in a zio-http
   * release we upgrade to, HTTP/2 becomes the single-line config change below (most likely a new field on
@@ -42,7 +42,7 @@ object HttpClientLayer {
       .copy(requestDecompression = Decompression.NonStrict)
       // Transport-level timeouts so a silently-dropped TCP connection (peer gone, no RST/FIN) can't park a fiber
       // forever on a network read — the HTTP analogue of the DB `socketTimeout` hardening in `PostgresClient`.
-      // `idleTimeout` (read/write inactivity) is pinned to zio-http 3.10.1's current 50s default rather than left
+      // `idleTimeout` (read/write inactivity) is pinned to zio-http 3.11.4's current 50s default rather than left
       // implicit, so a future zio-http upgrade can't silently remove this guard: it fires on a mid-response stall,
       // closes the channel, and fails the request, which `ChessComClient`'s connection-error retry then handles.
       // `connectionTimeout` defaults to `None` (unbounded connect) — set it so a black-holed SYN to the origin can't

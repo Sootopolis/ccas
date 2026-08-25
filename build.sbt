@@ -2,7 +2,9 @@ import Versions.*
 
 ThisBuild / version      := vCcas
 ThisBuild / scalaVersion := vScala
-ThisBuild / sbtVersion   := vSbt
+// No `ThisBuild / sbtVersion` override: sbt already knows which sbt is running, and the launcher takes that from
+// project/build.properties regardless. Assigning it from a second pin only creates a copy that can silently
+// disagree with the one that decides anything.
 
 // modules
 libraryDependencies ++= Seq(
@@ -43,8 +45,16 @@ libraryDependencies ++= Seq(
 
   // AWS S3 SDK v2 — response-body blob store off metered Postgres (BodyStore → Cloudflare R2, #191). Sync client
   // wrapped in attemptBlockingInterrupt (matches the JDBC idiom); url-connection-client is the JDK-HttpURLConnection
-  // transport, avoiding the heavier netty-nio async client. Endpoint override points the S3 API at R2/B2/MinIO.
-  "software.amazon.awssdk" % "s3"                    % vAwsSdk,
+  // transport. Endpoint override points the S3 API at R2/B2/MinIO.
+  //
+  // The exclusions are what actually keep the other two transports off the classpath — `s3` pulls both transitively,
+  // and until they were excluded netty-nio-client put Netty 4.1 alongside the 4.2 zio-http selects. The two lines
+  // share 192 fully-qualified class names (4.1's netty-codec vs 4.2's netty-codec-base + netty-codec-compression
+  // split), so which copy of `ByteToMessageDecoder` and the gzip decompressors loads is decided by classpath order
+  // alone. Measured at 2.54.2 the jar saving is minor (103 -> 100); the version skew is the reason.
+  ("software.amazon.awssdk" % "s3" % vAwsSdk)
+    .exclude("software.amazon.awssdk", "netty-nio-client")
+    .exclude("software.amazon.awssdk", "apache-client"),
   "software.amazon.awssdk" % "url-connection-client" % vAwsSdk,
 
   // No-op SLF4J binding: we log via ZIO, not SLF4J. Without a binding, transitive SLF4J users (netty, etc.) print
