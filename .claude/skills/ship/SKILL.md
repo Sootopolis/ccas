@@ -27,10 +27,21 @@ Take the work on the **current branch** through this repo's full release flow. B
 
 ## 2. Push
 - `git push -u origin <branch>`. This fires the pre-push hook (full `sbt test`).
-- **Known infra flake:** in a churned sbt JVM the pgjdbc driver can deregister → `Failed to get driver instance for ...ccas_test` / `No suitable driver`. That is NOT a code failure (see memory `project_sbt_test_driver_deregistration_flake`). If the hook fails ONLY on that:
-  1. prove the code with a forked run: `sbt ';set Test/fork := true ;testOnly <touched suites>'` (forking re-registers the driver);
-  2. then `git push --no-verify` and let CI (runs cold) be the gate.
+- **Possible infra flake — verify, do not assume.** `Failed to get driver instance for ...ccas_test` / `No suitable driver`
+  can come from pgjdbc's JVM-global `DriverManager` registration rather than from the code: the driver self-registers on
+  first class load, and if a later run gets a fresh test classloader, `DriverManager.isDriverAllowed` resolves
+  `org.postgresql.Driver` to a different `Class` object and rejects it. It reaches `PostgresClient`'s `setJdbcUrl` path,
+  not the `dataSource.*` one.
+- Treat that as a hypothesis, never as a licence to skip the gate. **Reproduce it before acting**: re-run the suite in a
+  *fresh* sbt server (`sbt --client shutdown`, then `sbt -batch test`). If it passes cold, it was environmental; if it
+  fails cold, it is real and you stop. Only once it is cold-green:
+  1. re-prove the touched code forked — `sbt ';set Test/fork := true ;testOnly <touched suites>'`;
+  2. then `git push --no-verify` and let CI (which always runs cold) be the gate, saying plainly in the PR that the hook
+     was bypassed and why.
 - Any REAL test failure → stop and fix. Never `--no-verify` past a real failure.
+- Status note: as of 2026-08-25 this had not been reproduced on sbt 1.13.0 — the hook ran clean repeatedly, and four
+  consecutive `testFull` runs in one warm sbt 2.0.7 server were green. If you hit it, capture the evidence rather than
+  citing this line.
 
 ## 3. Open the PR
 - `gh pr create --base <base> --head <branch>` with:
