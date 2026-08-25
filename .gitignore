@@ -57,6 +57,9 @@ build/
 
 ### Scala ###
 .bsp/
+# Metals writes this on import and pins its own sbt-bloop version; tracking it means a generated file
+# drifts in git and its bloop pin ages independently of anything the build declares.
+project/metals.sbt
 /.idea/
 .scala-build/
 
