@@ -371,4 +371,7 @@ CREATE SCHEMA IF NOT EXISTS test AUTHORIZATION ccas;
 ## Further Reading
 
 - [Adaptive rate limiting](docs/adaptive-rate-limiting.md) -- design notes on the Chess.com API throttling strategy
+- [ChessComClient follow-ups](docs/chess-com-client-followups.md) -- items parked during the `client_stats` analysis
+- [Dependency decisions, 2026-08](docs/dependency-upgrades-2026-08.md) -- the version calls that needed weighing, and what was held
+- [sbt 2 evaluation](docs/sbt-2-evaluation.md) -- why we stayed on sbt 1.13, and what would change that
 - [CLAUDE.md](CLAUDE.md) -- detailed architecture and code patterns for AI-assisted development
