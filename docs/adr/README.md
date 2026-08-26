@@ -28,3 +28,5 @@ scaladoc and the README.
 | [0010](0010-rename-recovery-for-usernames-and-club-slugs.md) | Username / club-slug rename recovery | Accepted, 2026-05-07 |
 | [0011](0011-cli-locality-and-the-current-club-pointer.md) | CLI locality, `current_club`, config files | Accepted, 2026-06-25 |
 | [0012](0012-gate-based-adaptive-throttle.md) | Gate-based adaptive throttle for `ChessComClient` | Accepted, 2026-04-01 |
+| [0013](0013-job-log-sink-survives-write-failures.md) | A job's log sink degrades and retries rather than switching off | Accepted, 2026-06-26 |
+| [0014](0014-accept-both-database-url-forms.md) | Accept both database URL forms, lift credentials out of either | Accepted, 2026-08-13 |

@@ -11,26 +11,20 @@ import io.netty.handler.timeout.ReadTimeoutException
 import zio.stream.SubscriptionRef
 import zio.{Cause, FiberId, FiberRef, FiberRefs, LogLevel, LogSpan, Ref, Runtime, Scope, Trace, UIO, Unsafe, URIO, URLayer, ZIO, ZLayer, ZLogger}
 
-/** Manages progress bars rendered one-per-line on stdout; a redraw moves the cursor up over the block and repaints it.
+/** Manages progress bars rendered one-per-line on stdout; a redraw moves the cursor up over the block and repaints.
   *
-  * State (`bars`) is guarded by a Java intrinsic monitor (`lock`) so the synchronous `ZLogger` callback installed by
-  * `ProgressDisplay.live` and the ZIO-effect entry points (`render`, `removeBar`, `finishAllSync`) all serialise their
-  * stdout writes through the same mutex. JVM monitors are reentrant, so a logger callback fired from a thread that
-  * already holds the lock proceeds without deadlock. Bar redraws go directly to the injected `out` stream (`System.out`
-  * in production; a capture buffer under test), not through `zio.Console`, because `ZLogger.apply` is synchronous and
-  * cannot run a ZIO effect. The injected `err` stream receives the last-resort stack trace if a log message thunk
-  * throws inside the `ZLogger` callback.
+  * `bars` is guarded by a Java intrinsic monitor, so the synchronous `ZLogger` callback installed by
+  * [[ProgressDisplay.live]] and the ZIO entry points all serialise their stdout writes through one mutex. JVM
+  * monitors are reentrant, so a callback fired from a thread already holding it proceeds without deadlock. Redraws
+  * go straight to the injected `out` rather than through `zio.Console`, because `ZLogger.apply` is synchronous and
+  * cannot run an effect; `err` takes the last-resort stack trace if a message thunk throws inside the callback.
   *
-  * `logAboveBarsSync` routes the active `JobLogSink`'s file write (`writeFileSync`) *outside* the lock — a per-job
-  * `FileSink` serialises its own `BufferedWriter`, so file IO never contends here (#53). Only the terminal-visible
-  * sequence stays inside the lock: `clear → writeConsoleSync (stdout tee) → redraw`, kept atomic across fibers so a bar
-  * redraw can't tear across a log line. The default `StdoutSink`'s `writeConsoleSync` is a single `println`, so the
-  * critical section stays short.
+  * `logAboveBarsSync` routes the active `JobLogSink`'s file write OUTSIDE the lock — a per-job `FileSink` serialises
+  * its own writer, so file IO never contends here (#53). Only `clear -> writeConsoleSync -> redraw` stays inside,
+  * kept atomic so a redraw can't tear across a log line.
   *
-  * When `enabled` is `false` the bar list is still tracked (so `addBarScoped` finalisers behave consistently across
-  * modes) but the bar-redraw side-effects are suppressed. `logAboveBarsSync` still routes its line through the active
-  * `JobLogSink` (the default `StdoutSink` writes the log line to `out`); only the bar dance is skipped — suitable for
-  * server / non-interactive mode.
+  * With `enabled = false` the bar list is still tracked, so `addBarScoped` finalisers behave the same across modes,
+  * but the redraw side-effects are suppressed — server / non-interactive mode.
   */
 final class ProgressDisplay private[utils] (
   private val enabled: Boolean,

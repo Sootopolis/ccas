@@ -152,7 +152,9 @@ in `docs/`.
 
 ## 8. Enforcement
 
-Two things here are mechanically checkable, and both belong in `.githooks/pre-push` (or an sbt task):
+Two things here are mechanically checkable, and `scripts/check-docs.py` enforces both from
+`.githooks/pre-push` (enable per clone with `git config core.hooksPath .githooks`). Run it directly
+with `python3 scripts/check-docs.py`.
 
 1. **Comment-block length** — fail on a block over 15 lines outside `docs/`. Cheap, and it prevents
    the slow return of essays.
@@ -161,9 +163,6 @@ Two things here are mechanically checkable, and both belong in `.githooks/pre-pu
    replace an explanation only when the target holds it, and nothing else enforces that. It has
    already broken once: renaming `sbt-2-evaluation.md` into `docs/adr/` stranded the link to it in
    ADR 0002, and a throwaway script caught it rather than a gate.
-
-Turn both on only once the existing over-budget blocks are cleared, or every push fails on debt the
-committer did not create.
 
 Everything else in this document is a review rule, not a lint rule.
 

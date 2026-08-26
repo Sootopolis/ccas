@@ -49,6 +49,20 @@ self-heals on the first successful put. `ApiFetchFailure.insert` degrades to a b
 `normalizeCfBodies` skips its pre-warm rather than failing boot. #199's budget guard is this same
 mechanism.
 
+### Put before the transaction, never inside it
+
+`ApiResponseBody.putBody` must run *before* the JDBC transaction that writes the pointer, cache or
+failure row. The `PutObject` is a network round-trip, and running it inside `withTransaction` would
+pin a pooled Postgres connection idle-in-transaction for that round-trip on the hot write path.
+
+Put-then-insert is also the safe order for readers: a committed pointer always has bytes behind it,
+where the reverse would let a reader see a pointer with no object. A put whose transaction later
+rolls back leaves a harmless dangling object — re-putting is idempotent, and `deleteOrphans` sweeps
+it.
+
+The SHA-256 is taken over the String's UTF-8 bytes, so the store key and the stored bytes stay
+consistent.
+
 ### A missing object and an unreachable store are not the same failure (#215)
 
 `BodyStore.read` returns a three-valued `BodyRead` — `Found` / `Missing` / `Unavailable` — because

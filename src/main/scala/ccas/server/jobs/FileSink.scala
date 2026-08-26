@@ -12,37 +12,18 @@ import zio.{UIO, ZIO}
 
 import ccas.utils.{JobLogSink, ProgressDisplay}
 
-/** Per-job file-backed sink. `writeConsoleSync` tees the formatted log line to `System.out` (so the server console
-  * keeps showing every job's output); `writeFileSync` appends the same line, stripped of ANSI escapes, to
-  * `${logDir}/<jobId>.log`.
+/** Per-job file-backed sink. `writeConsoleSync` tees the formatted line to `System.out` so the server console keeps
+  * showing every job's output; `writeFileSync` appends the same line, ANSI stripped, to `${logDir}/<jobId>.log`.
   *
-  * Stripping ANSI from the file (but not the stdout tee) keeps `cat job.log` human-readable while preserving colour
-  * for an interactive operator watching the server console.
+  * The [[java.io.BufferedWriter]] is opened once in [[FileSink.make]] and held for the job's lifetime, closed by
+  * `JobRunner` from its terminal-status finaliser. Each write appends one line and flushes so the file-tail endpoint
+  * sees lines as they land, guarded by a per-sink monitor because one sink is shared across all of a job's forked
+  * fibers and `BufferedWriter` is not thread-safe. The write runs outside `ProgressDisplay`'s render lock, so a slow
+  * disk never stalls bar redraws.
   *
-  * The underlying [[java.io.BufferedWriter]] is opened once in [[FileSink.make]] and held open for the job's lifetime;
-  * `JobRunner` closes it via [[close]] from its terminal-status finaliser. Each `writeFileSync` writes one line and
-  * flushes (so the file-tail logs endpoint sees lines as they land), guarded by a per-sink monitor because
-  * `BufferedWriter` is not thread-safe and the same `FileSink` is shared across all of a job's forked fibers (via
-  * `JobLogSink.currentSink.locally`). The file write runs *outside* `ProgressDisplay`'s render lock, so a slow disk
-  * never stalls bar redraws.
-  *
-  * '''Write-failure handling (issue #52).''' A write failure no longer permanently disables file logging. Instead the
-  * sink enters a *suppressed* state, counts the dropped line, and periodically retries by reopening a fresh writer in
-  * `CREATE, APPEND` mode (gated by [[retryAfterLines]] lines or [[retryAfterNanos]] elapsed, whichever first — so a
-  * permanent cause like disk-full doesn't reopen on every line, and stderr sees one trace per failure episode rather
-  * than per line). On recovery it writes a `resumed after N dropped line(s)` marker, then continues; on [[close]] a
-  * `N log line(s) dropped` summary is recorded if any were lost. Both markers flow through the file-tail logs endpoint
-  * (#47), and the running total is exposed via [[droppedLineCount]]. This recovers transient failures: an initial open
-  * failure that later clears (the `logDir` reappears), and `write`/`flush` failures that later clear (disk space freed,
-  * perms restored).
-  *
-  * Out of scope, by construction: a file deleted under an already-open fd (Linux keeps writing to the unlinked inode,
-  * so no failure ever fires and the data is silently lost), and the file-tail offset desync that follows a
-  * delete-then-recreate. Both are documented limitations, not handled here.
-  *
-  * `logDir` is assumed to already exist; `JobRunner.live` creates it once at server startup. If opening the writer
-  * fails, [[FileSink.make]] still returns a sink — one that starts suppressed and retries on its first write — so the
-  * job runs and the stdout tee keeps working regardless.
+  * A write failure suppresses the sink rather than disabling it, counting dropped lines and periodically reopening;
+  * [[droppedLineCount]] exposes the running total. The retry gating, the recovery markers, and the two failure modes
+  * that are out of scope by construction: `docs/adr/0013-job-log-sink-survives-write-failures.md` (#52).
   */
 final class FileSink private[jobs] (
     path: Path,

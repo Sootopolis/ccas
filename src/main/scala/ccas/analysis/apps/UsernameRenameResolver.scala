@@ -17,38 +17,18 @@ import ccas.utils.sql.PostgresClient.withTransaction
 
 /** Resolves the current canonical username for a player whose previously-known username 404s on Chess.com.
   *
-  * Strategy:
+  *  - **Tier A (DB lookup)** — never fires HTTP: `Player.selectByUsername` plus
+  *    [[PlayerSnapshot.selectLatestPlayerIdByUsername]], for renames our DB already learned by another path.
+  *  - **Tier B (board endpoint)** — only when Tier A returns `None` and a `playerIdHint` is supplied. Fetches a
+  *    `PlayerMatchRef` board and identifies the player by eliminating the opposing side's canonical name, optionally
+  *    falling back to `PlayerTournamentRef`.
   *
-  *  - **Tier A (DB lookup)** — never fires HTTP. Uses `Player.selectByUsername` and
-  *    [[PlayerSnapshot.selectLatestPlayerIdByUsername]] to discover whether our DB has already learned the rename via
-  *    some other path. With a `playerIdHint`, recycled-handle cases (the freed username has been re-registered by a
-  *    different player) are detected directly. Without a hint, only unambiguous (single-player) snapshot matches are
-  *    accepted.
+  * A verification fetch confirms the `playerId` before the name is returned; [[resolveAndReconcile]] also runs
+  * `PlayerUpdater.reconcile` so future lookups skip the resolver. Tombstoned rows (`_stale_<playerId>`) are never
+  * returned as fresh.
   *
-  *  - **Tier B (board endpoint)** — only when Tier A returns `None` AND a `playerIdHint` is supplied. Looks up a
-  *    `PlayerMatchRef` for the player (auto-promoting from `club_match_board` via `PlayerMatchRef.findOrInfer`),
-  *    fetches the board endpoint, and identifies the player's current username by eliminating the opposing side's
-  *    canonical name. Optionally falls back to `PlayerTournamentRef` when no match ref exists.
-  *
-  * After a candidate fresh username is found, the resolver fires a verification fetch
-  * (`/pub/player/{candidate}`) and confirms `playerId` matches the hint when present. A 404 on verification means
-  * the resolver guessed wrong (deletion or stale snapshot pointing nowhere) and the resolver returns `None` so the
-  * caller's original 404 propagates as today.
-  *
-  * `LookupAndReconcile` (via [[resolveAndReconcile]]) additionally runs `PlayerUpdater.reconcile` against the
-  * verified `ApiPlayer` so the `player` row reflects the new username and future lookups skip the resolver entirely.
-  *
-  * **Tombstone handling.** Players whose row was vacated to free a UNIQUE-constrained handle are stored with a
-  * sentinel username `_stale_<playerId>` (mirrors `Club.resolveStaleSlug`). Tier A skips these so a tombstone is
-  * never returned as a "fresh" name. Format collision risk is tracked in
-  * [Sootopolis/ccas#21](https://github.com/Sootopolis/ccas/issues/21).
-  *
-  * Coordination with [Sootopolis/ccas#3](https://github.com/Sootopolis/ccas/issues/3): the resolver entry points
-  * (`fetchOrRecover`, `withPlayerRenameRecovery`) gate on [[ccas.utils.client.ReportedNotFound]] — the canonical
-  * Chess.com `X "id" not found.` 404 body — rather than any 404. Transient backend 404s
-  * (`An internal error has occurred`) short-circuit before the resolver runs, so callers always see the original
-  * 404 propagate. Per #3, `/pub/player/{username}` 404s are 100% genuine, so the gate is a no-op there today; it
-  * stays for symmetry with the club-side resolver and resilience to future maintenance-mode behavior.
+  * Why the entry points gate on [[ccas.utils.client.ReportedNotFound]] rather than any 404, and what a failed
+  * resolution does: `docs/adr/0010-rename-recovery-for-usernames-and-club-slugs.md`.
   */
 object UsernameRenameResolver {
 

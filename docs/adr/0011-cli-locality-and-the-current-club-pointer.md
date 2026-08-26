@@ -64,6 +64,18 @@ differs from what is stored, so display names self-heal.
 - `--all` and an explicit `--club <slug>` carry no id; id resolution is scoped to `current_club` for
   now. A slug-only target therefore still resolves by exact slug *before* any rename recovery can
   run, so `ClubSlugRenameResolver` stays unreachable from that path (#176 / #180).
+- **Club targeting is by option, never by positional.** `--club <slug>` (comma-separated on `membership`
+  and `history`), `--all` on those two for every managed club, and otherwise the config's
+  `current_club`. The remaining positionals are `<username>...` on the blacklist commands, the
+  `<slug>` of `club add` / `remove`, the optional `[slug]` of `use-club`, and the optional `[run-id]`
+  on `recruit --report`.
+- **`ServerEnvFile` is modelled as an ordered list of lines**, so setting or unsetting one key leaves
+  every other key, blank line, comment and even the line ordering untouched. A line with no `=`, and
+  any comment or blank, is preserved verbatim, so a malformed line never crashes parsing. Values
+  split on the FIRST `=`, which is what keeps a JDBC URL's `&?=:` intact, and an optional surrounding
+  quote pair is stripped on read and re-added on write only when the value needs it. Writes go
+  through a temp-file-then-rename that creates the temp file owner-only (0600) and carries that mode
+  across the rename, so `DATABASE_URL` and `DB_PASSWORD` are never world-readable.
 - **Two config files, deliberately separate.** `${XDG_CONFIG_HOME:-~/.config}/ccas/config.conf` holds
   CLI *client* settings (`api_url`, `default_clubs`, `log_dir`, `current_club`) — read by `CliConfig`
   via zio-config, written by `ConfigWriter` as a surgical line edit, since zio-config has no HOCON

@@ -42,24 +42,15 @@ object ApiResponseBody {
             )""".update.run()
     }
 
-  /** Store a body's bytes in the [[BodyStore]] and return its SHA-256 hash (the store key + dedup key), or `None`
-    * when the store rejected the write.
+  /** Store a body's bytes in the [[BodyStore]] and return its SHA-256 hash — the store key and dedup key — or
+    * `None` when the store rejected the write.
     *
-    * Call this BEFORE opening the JDBC transaction that writes the pointer/cache/failure row — the R2 `PutObject` is
-    * a network round-trip, and running it inside `withTransaction` would pin a pooled Postgres connection
-    * idle-in-transaction for the round-trip's duration on the hot write path. Put-then-insert also means a committed
-    * pointer always has bytes behind it; the reverse would let a reader see a pointer with no object. A `put` whose
-    * transaction later rolls back leaves a harmless dangling object (idempotent re-put; swept by [[deleteOrphans]]).
-    * The SHA-256 is over the String's UTF-8 bytes, so the store key and the stored bytes stay consistent.
+    * Call this BEFORE opening the JDBC transaction that writes the pointer, cache or failure row; why, and why
+    * put-then-insert is the safe order: `docs/adr/0008-body-store-outside-postgres.md`. `None` is the store-outage
+    * signal (see [[BodyStore.putOrSkip]]): skip the pointer row entirely rather than failing the request.
     *
-    * `None` is the store-outage signal (see [[BodyStore.putOrSkip]]): the caller must skip the pointer row it was
-    * about to write, degrading that write to "uncached" rather than failing the request the body came from.
-    *
-    * `source` is the URL, threaded into the store's failure log so a skipped write names a request rather than a
-    * bare hash (#222). '''Pass both arguments by name''': they are both `String`, so a transposition compiles and
-    * stores the URL '''as''' the body, and every later read of that entry then decodes a URL as JSON. A distinct
-    * type would enforce it, but the URL is a bare `String` throughout this package, so a wrapper would only move
-    * the same transposition to the conversion site.
+    * '''Pass both arguments by name.''' They are both `String`, so a transposition compiles and stores the URL as
+    * the body, and every later read of that entry decodes a URL as JSON.
     */
   def putBody(source: String, body: String): URIO[BodyStore, Option[String]] = {
     val hash = sha256(body)

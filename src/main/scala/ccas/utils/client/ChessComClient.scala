@@ -21,20 +21,16 @@ import ccas.utils.json.JsonDecodingException
 
 /** HTTP client for the Chess.com public API with adaptive rate limiting and response caching.
   *
-  * Wraps a zio-http `Client` (built by [[HttpClientLayer]]) and adds, in layers:
+  * Wraps a zio-http `Client` from [[HttpClientLayer]] and adds, in layers: a single-permit gate admitting requests
+  * against `currentMax`, so a throttle-down takes effect at once; EMA-based pacing with a `min-request-delay-ms`
+  * floor; a rolling failure window that drops `currentMax` to 1, an immediate hard throttle on a Cloudflare 403, and
+  * a generation-gated ladder walking permits back up; separate retry schedules for 429, Cloudflare 403 and
+  * connection errors, with non-Cloudflare 403 and 404 never retried; response caching via [[getCacheable]], which
+  * returns a [[CacheableResult]] and defers body load and decode; and a daemon fiber flushing cumulative
+  * `client_stats`, with a final flush in the scope finalizer.
   *
-  *   - a single-permit '''gate''' that admits requests against `currentMax`, so a throttle-down takes effect at once;
-  *   - '''EMA-based pacing''' that staggers outgoing requests, with a `min-request-delay-ms` floor;
-  *   - a rolling '''failure window''' that drops `currentMax` to 1, plus an immediate hard throttle on a Cloudflare
-  *     403, and a generation-gated ladder that walks permits back up;
-  *   - '''separate retry schedules''' for 429, Cloudflare 403 and connection errors — non-Cloudflare 403 and 404 are
-  *     permanent and never retried;
-  *   - '''response caching''' via [[getCacheable]], which returns a [[CacheableResult]] describing why a response was
-  *     considered unchanged, and defers body load and decode until the caller asks;
-  *   - a daemon fiber that flushes cumulative `client_stats`, with a final flush in the scope finalizer.
-  *
-  * Rationale for all of it: `docs/adr/0012-gate-based-adaptive-throttle.md` (throttle),
-  * `docs/adr/0006-pacing-ema-measures-the-http-exchange-only.md` (what the EMA measures) and
+  * Rationale: `docs/adr/0012-gate-based-adaptive-throttle.md` (throttle),
+  * `docs/adr/0006-pacing-ema-measures-the-http-exchange-only.md` (what the EMA measures),
   * `docs/adr/0007-response-caching-in-postgres.md` (caching). Configured from `application.conf` under
   * `chess-com-client` by [[ChessComClient.live]].
   */
