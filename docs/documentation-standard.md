@@ -30,8 +30,13 @@ different lifetimes, and mixing them is what makes a document unmaintainable. De
 then the code carries a pointer, not a copy:
 
 ```scala
-// Attempt budget == total budget, deliberately. See docs/adr/0007-body-store-deadlines.md (#222).
+// Attempt budget == total budget, deliberately. See docs/adr/0009-bound-every-body-store-operation.md (#222).
 ```
+
+**Only an ADR is a safe unqualified pointer target.** ADRs are immutable, so a file path is enough:
+what the pointer promised is still there. Everything else moves. A pointer into `README.md` or
+`docs/architecture.md` must name the section it means, so a reader who lands on a rewritten page can
+tell that the target is gone instead of reading the wrong thing.
 
 ## 2. Never restate a machine-readable fact
 
@@ -57,8 +62,9 @@ should be squeezed.
 | `CLAUDE.md` | 2,000 words total | move to `docs/`, link from `CLAUDE.md` |
 | ADR | 2 pages | the decision is really several decisions |
 
-`@param` / `@return` blocks on a config or DTO case class are reference material and are exempt from
-the member budget — one line per field, no prose beyond it.
+Budgets count every line of the comment, delimiters included, so a 10-line scaladoc is `/**`, eight
+lines of text and `*/`. `@param` / `@return` blocks on a config or DTO case class are reference
+material and are exempt — one line per field, no prose beyond it.
 
 `CLAUDE.md` is loaded into every agent session, so its cost is paid on every task, and long
 instruction files measurably degrade adherence to the instructions already in them
@@ -135,13 +141,32 @@ body *before* trimming the comment that quotes it.
 
 ## 7. Where the existing `docs/` fit
 
-`docs/sbt-2-evaluation.md`, `docs/dependency-upgrades-2026-08.md`,
-`docs/adaptive-rate-limiting.md` and `docs/chess-com-client-followups.md` are already ADRs in
-everything but name — Problem / Options / Decision, dated, immutable. Move them to `docs/adr/` with
-numbers, and use them as the template for new ones.
+Three of the four files already in `docs/` were ADRs in everything but name — Problem / Options /
+Decision, dated, immutable — and now live in [`docs/adr/`](adr/) with numbers. Use them as the
+template for new ones.
+
+`docs/chess-com-client-followups.md` is the exception and deliberately stays put: it is a list of
+four parked items, not a decision, and forcing it into the ADR numbering would make the sequence
+mean two different things. Its real home is GitHub issues; until they are filed it is a backlog note
+in `docs/`.
 
 ## 8. Enforcement
 
-Line-count budgets are checkable. A `.githooks/pre-push` grep (or an sbt task) that fails on a
-comment block over 15 lines outside `docs/` costs little and prevents the slow return of essays.
+Two things here are mechanically checkable, and both belong in `.githooks/pre-push` (or an sbt task):
+
+1. **Comment-block length** — fail on a block over 15 lines outside `docs/`. Cheap, and it prevents
+   the slow return of essays.
+2. **Pointer resolution** — fail on a markdown link or a cited `docs/...` path that does not resolve,
+   scanning `docs/**` *and* the `docs/adr/...` paths cited from `.scala` files. §6 lets a reference
+   replace an explanation only when the target holds it, and nothing else enforces that. It has
+   already broken once: renaming `sbt-2-evaluation.md` into `docs/adr/` stranded the link to it in
+   ADR 0002, and a throwaway script caught it rather than a gate.
+
+Turn both on only once the existing over-budget blocks are cleared, or every push fails on debt the
+committer did not create.
+
 Everything else in this document is a review rule, not a lint rule.
+
+**Dating a status line.** Take it from git — `git log -S<symbol> --reverse --date=short` on the
+symbol the decision introduced — never from memory or from an issue number. Every date in
+`docs/adr/` was wrong on first writing for exactly that reason.
