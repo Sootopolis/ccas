@@ -230,15 +230,12 @@ final class ProgressDisplay private[utils] (
       } yield a
     }
 
-  // ---------------------------------------------------------------------------
-  // Internal rendering — multi-line: each bar draws on its own line, and a redraw moves the cursor up over the block
-  // (CSI n A) then clears to end of screen (CSI J) before repainting. The `enabled` check lives in these helpers so
-  // callers don't repeat it. Always called from inside a `lock.synchronized` block so the reads of `bars` and
-  // `lastDrawnLines` stay consistent. ANSI cursor control was already assumed (the old \r-overwrite used CSI K), so
-  // this needs no capability beyond what a disabled / non-TTY display already gated out. `Esc` is built via 27.toChar
-  // (equivalent to a unicode-escape ESC, as the colour literals in the companion use) — both avoid a raw control byte;
-  // 27.toChar just keeps the string interpolations below free of escape noise.
-  // ---------------------------------------------------------------------------
+  // Internal rendering, multi-line: each bar draws on its own line; a redraw moves the cursor up over the block
+  // (CSI n A), clears to end of screen (CSI J), then repaints. The `enabled` check lives in these helpers so callers
+  // don't repeat it, and they are always called inside `lock.synchronized` so `bars` and `lastDrawnLines` stay
+  // consistent. ANSI cursor control was already assumed, so this needs no capability a non-TTY display hasn't
+  // already gated out. `Esc` is `27.toChar` rather than a unicode escape only to keep the interpolations below
+  // free of escape noise — both avoid a raw control byte.
 
   private val Esc: String = 27.toChar.toString
 

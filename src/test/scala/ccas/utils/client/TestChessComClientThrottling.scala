@@ -1150,17 +1150,11 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
     FreshSchemaLayer("test_client_throttling", Tables.ensureTables)
   ) @@ TestAspect.timeout(15.seconds)
 
-  // Timing stats (integration): these two tests deliberately run on the real clock.
-  //
-  //   1. "successful requests populate gate wait…" — `getAll` is called synchronously, so the handler's
-  //      `ZIO.sleep` would block forever under TestClock, and `latencyMinMs` would measure virtual sleeps
-  //      rather than actual handler cost.
-  //   2. "throttle-down and recovery records throttled duration" — `foreachParDiscard` contains 429-retry
-  //      loops on `Schedule.exponential`, and `repeatUntil(!s.coolingDown)` polls for a cooldown that never
-  //      expires without `TestClock.adjust` driving it.
-  //
-  // Migrating means fork + `TestClock.adjust` per phase and a staged adjust in place of `repeatUntil`. The
-  // `throttledMs` / `latencyMinMs` assertions would still hold, but the intent here is wall-clock integration.
+  // Timing stats: these two deliberately run on the real clock, and the intent is wall-clock integration.
+  // Test 1 calls `getAll` synchronously, so the handler's `ZIO.sleep` would block forever under TestClock and
+  // `latencyMinMs` would measure virtual sleeps. Test 2's `foreachParDiscard` holds 429-retry loops on
+  // `Schedule.exponential`, and its `repeatUntil(!s.coolingDown)` polls for a cooldown that never expires
+  // without `TestClock.adjust`. Migrating means fork + adjust per phase and a staged adjust for `repeatUntil`.
 
   private def suiteTimingStats = suite("timing stats")(
     test("successful requests populate gate wait, EMA delay, and latency") {

@@ -86,6 +86,19 @@ differs from what is stored, so display names self-heal.
 - Both paths resolve through `XdgPaths`, which reads environment variables — so any code a test must
   exercise against a temp path needs an explicit-path form (see `CompletionCache`'s `…In` variants)
   rather than relying on rebinding the environment.
+- **Multi-club runs are serialized, deliberately.** `--all` puts each club through submit-then-follow
+  one at a time, so each club's logs and bars stream live in turn rather than the first being
+  followed while the rest run blind and dump at the end. It is near-free: the shared Chess.com client
+  is gate-bound, so total wall-clock is roughly unchanged by not submitting concurrently. Each club
+  is best-effort — a submit or transport failure is caught, reported, and scored as that club's
+  failure without aborting the rest. With `--detach` (#170) the follow is skipped entirely, but the
+  same per-club loop is reused so error handling and scoring stay identical.
+- **`club remove` matches `current_club` on the display slug, not the id.** The command gives us only
+  the typed slug and the DELETE returns no id to compare against. The display slug is kept fresh by
+  the post-submit write-back, so the stale window is narrow: a club renamed with no job run since,
+  then removed under its new canonical slug, would not clear the pointer. That residual case is
+  defence-in-depth for #177, which properly gates submission on managed status. Comparison is
+  case-insensitive on the trimmed slug, because `ClubSlug.normalize` lowercases but does not trim.
 - **Completion cache.** `${XDG_CACHE_HOME:-~/.cache}/ccas/{clubs.txt,recent-jobs.txt}`, read by the
   generated scripts with a bare `cat` — no JVM, no network. `Dispatcher.refreshClubsCache` repopulates
   it after any successful server-touching command, gated on a 6h TTL, sourced from

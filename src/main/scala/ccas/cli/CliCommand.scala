@@ -188,14 +188,11 @@ object CliCommand {
       .subcommands(serverUp, serverDown, serverStatus)
 
   // The slug is optional so a bare `ccas use-club` PRINTS the current club rather than erroring — the only read path
-  // for a value that is otherwise write-only (`git branch` / `kubectl config current-context` shape). `--clear` drops
-  // it; passing both is rejected as conflicting intent, mirroring `--all` vs `--club`.
+  // for an otherwise write-only value. `--clear` drops it; passing both is rejected as conflicting intent.
   //
-  // `repeat` rather than `atMost(1)` because `atMost(1)` silently TRUNCATES extra positionals instead of rejecting
-  // them. Combined with the zio-cli ordering bug documented at the top of this file — an option written after a
-  // positional is swallowed as another positional — `ccas use-club team-alpha --clear` would parse as a plain set and
-  // silently set the very club the user asked to clear. Capturing every positional lets `UseClub` reject the arity and
-  // point at the right ordering.
+  // `repeat` rather than `atMost(1)`, which silently TRUNCATES extra positionals. Combined with the ordering bug at
+  // the top of this file, `ccas use-club team-alpha --clear` would otherwise parse as a plain set and set the very
+  // club the user asked to clear. Capturing every positional lets `UseClub` reject the arity instead.
   private val useClub: Command[CliCommand] =
     Command(
       "use-club",

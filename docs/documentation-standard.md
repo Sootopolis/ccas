@@ -156,13 +156,21 @@ Two things here are mechanically checkable, and `scripts/check-docs.py` enforces
 `.githooks/pre-push` (enable per clone with `git config core.hooksPath .githooks`). Run it directly
 with `python3 scripts/check-docs.py`.
 
-1. **Comment-block length** — fail on a block over 15 lines outside `docs/`. Cheap, and it prevents
-   the slow return of essays.
-2. **Pointer resolution** — fail on a markdown link or a cited `docs/...` path that does not resolve,
+1. **Comment-block length** — a block comment over 15 lines, or a run of `//` lines over 8, fails.
+   `@param` / `@return` lines and their continuations are discounted, so per-field reference material
+   does not count but a single tag cannot exempt an essay around it.
+2. **Pointer resolution** — a markdown link or a cited `docs/...` path that does not resolve fails,
    scanning `docs/**` *and* the `docs/adr/...` paths cited from `.scala` files. §6 lets a reference
    replace an explanation only when the target holds it, and nothing else enforces that. It has
-   already broken once: renaming `sbt-2-evaluation.md` into `docs/adr/` stranded the link to it in
-   ADR 0002, and a throwaway script caught it rather than a gate.
+   already broken twice while this document was being written: once when a doc was renamed into
+   `docs/adr/`, and once when an ADR's status line pointed at a superseded ADR.
+
+**The gate is looser than §3 on purpose, and the gap is the point.** A regex cannot tell a member
+scaladoc from a class one, and it cannot judge whether five lines of `//` earn their place — so the
+ceilings here catch essays while §3's numbers stay review rules. They are set off this repo's own
+distribution rather than taste: 88% of `//` blocks are already within the §3 budget of 3 and 99% are
+within the gate's 8, so a failure means something genuinely new rather than pre-existing debt. Do not
+read a green check as "this comment is the right length"; read it as "this comment is not an essay".
 
 Everything else in this document is a review rule, not a lint rule.
 

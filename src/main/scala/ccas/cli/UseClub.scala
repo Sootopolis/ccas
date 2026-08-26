@@ -118,15 +118,14 @@ object UseClub {
   private def upgradePointer(id: ClubId, slug: String): UIO[Unit] =
     ConfigWriter.setCurrentClub(XdgPaths.configFile, Some(id), slug).ignore
 
-  // Best-effort: build the CLI client, fetch the managed set, bound it, and collapse every failure (refused connection,
-  // timeout, non-2xx, decode error, defect) to None so the caller falls back to the offline path.
+  // Best-effort: build the client, fetch the managed set, bound it, and collapse every failure to None so the caller
+  // falls back to the offline path.
   //
-  // Operator order is load-bearing. `timeout` must sit OUTSIDE `provide` or the layer's acquire/release runs unbounded,
-  // and `disconnect` is required because plain `timeout` waits for the interrupted fiber to finish unwinding —
-  // zio-http's `NettyConnectionPool.createChannel` is uninterruptible, so against a black-holed host the "2s" bound
-  // measured 31s before `disconnect` moved that unwinding into the background. `HttpClientLayer.live` now caps connect
-  // at 10s natively (#182), but this probe wants a far tighter interactive bound, so the 2s `timeout` + `disconnect`
-  // still carry the snappy cutoff; the layer's 10s is only a backstop.
+  // Operator order is load-bearing. `timeout` must sit OUTSIDE `provide`, or the layer's acquire/release runs
+  // unbounded; `disconnect` is required because plain `timeout` waits for the interrupted fiber to unwind, and
+  // `NettyConnectionPool.createChannel` is uninterruptible — against a black-holed host the "2s" bound measured 31s
+  // without it. Same hazard as BodyStore's deadlines, docs/adr/0009-bound-every-body-store-operation.md.
+  // `HttpClientLayer` caps connect at 10s (#182), but this probe wants a far tighter interactive cutoff.
   private def fetchManaged(server: String): UIO[Option[List[ManagedClubResponse]]] =
     CcasApiClient
       .live(server)
