@@ -55,19 +55,13 @@ private[ccas] object ClientStatsPersistence {
       .tapError(e => ZIO.logWarning(s"Failed to persist client_stats for session ${ctx.sessionId}: ${e.safeMessage}"))
       .ignore
 
-  /** Marks the end of API work for this session: pins the window-end to the current instant, signals the periodic
-    * flush fiber to stop, and performs one final pinned flush. Callers invoke this once the last request has
-    * completed but before any human pause (CLI confirmation prompt), so the persisted session window reflects API
-    * work, not wall-clock-until-exit. Idempotent — pinning only takes on the first call.
+  /** Marks the end of API work: pins the window-end, stops the periodic flush fiber, and performs one final pinned
+    * flush. Call it after the last request but before any human pause, so the persisted window reflects API work
+    * rather than wall-clock-until-exit. Idempotent — pinning takes only on the first call.
     *
-    * The immediate flush (not just the pin) makes the pinned snapshot durable even if the process is killed during
-    * the human pause that follows — the scope-close `finalFlush` would otherwise be the only writer of the pinned
-    * value, and the last periodic tick before the pin carries the pre-pin (live) window-end.
-    *
-    * Interruption is forked rather than awaited: a periodic flush stuck on a dead DB socket would otherwise block
-    * the caller for up to `socketTimeout` while interruption drains. The final flush below may then briefly overlap
-    * a dying periodic flush, but both target the same session row via an idempotent upsert and swallow errors, so
-    * the overlap is harmless.
+    * The flush is immediate, not just the pin, so the pinned snapshot survives a kill during that pause.
+    * Interruption is forked rather than awaited, since a flush stuck on a dead DB socket would block the caller for
+    * `socketTimeout`; the resulting overlap is harmless because both writers upsert the same row and swallow errors.
     */
   def endSession(ctx: ClientStatsFlushContext, flushFiber: Fiber[Any, Any]): UIO[Unit] =
     for {

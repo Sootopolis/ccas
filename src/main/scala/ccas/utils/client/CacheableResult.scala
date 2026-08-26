@@ -4,21 +4,11 @@ import zio.{Task, ZIO}
 
 import ccas.analysis.tables.subtypes.ApiResponseBodyId
 
-/** Result type returned by [[ChessComClient.getCacheable]]. Lets callers distinguish whether a response came from
-  * the cache (and why) vs. the network, and defers body loading + JSON decoding until the caller actually asks for
-  * the value via [[getValue]].
+/** Result of [[ChessComClient.getCacheable]]: whether a response came from the cache, why, and a [[getValue]] that
+  * defers body load and JSON decode until the caller asks.
   *
-  * '''Why four variants rather than one `Unchanged`''': observability. A log or metric that pattern-matches on the
-  * variant can distinguish "we never asked the server" (`Fresh`) from "the server confirmed unchanged via 304"
-  * (`Revalidated`) from "we asked and got a byte-identical reply" (`IdenticalBody`). Each variant also carries the
-  * `bodyId` (when one exists), enabling future debug/cross-reference use cases. The three hit variants share a
-  * common [[CacheableResult.Unchanged]] supertype so callers can branch on "any cache hit" uniformly while still
-  * retaining the option to distinguish by variant.
-  *
-  * '''Why `getValue` is lazy''': callers that only branch on [[isUnchanged]] to decide whether to re-process pay
-  * zero cost beyond the cache-row lookup. The body is loaded from `api_response_body` and decoded only if and when
-  * `getValue` is invoked. For [[Changed]] the value is eager so that decode errors on network responses surface at
-  * fetch time rather than being deferred into the caller.
+  * Why four variants rather than one `Unchanged`, and why `getValue` is lazy for the three hit variants but eager
+  * for [[Changed]]: `docs/adr/0007-response-caching-in-postgres.md`.
   */
 sealed trait CacheableResult[+T] {
   /** `true` if this response is known to be unchanged since the last fetch; the caller may skip downstream
@@ -33,14 +23,11 @@ sealed trait CacheableResult[+T] {
     */
   def getValue: Task[T]
 
-  /** Symmetric branch on cache-hit-vs-change. The unchanged branch receives the specific
-    * [[CacheableResult.Unchanged]] variant (for logging / `bodyId` access); the changed branch receives the
-    * already-decoded value. Neither branch forces `getValue` on an unchanged variant, so the laziness is
-    * preserved: callers that only care about "did it change" pay no body-load or decode cost on the skip path.
+  /** Symmetric branch on cache-hit-vs-change. Neither branch forces `getValue` on an unchanged variant, so a
+    * caller that only asks "did it change" pays no body-load or decode cost.
     *
-    * Dispatched via `final` overrides on [[CacheableResult.Unchanged]] and [[CacheableResult.Changed]] rather than
-    * a pattern match — avoids an erased-type `case c: Changed[T @unchecked]` cast and lets the compiler verify
-    * each branch's typing end-to-end.
+    * Dispatched via `final` overrides rather than a pattern match, which avoids an erased
+    * `case c: Changed[T @unchecked]` cast and lets the compiler verify each branch end-to-end.
     */
   def foldZIO[R, E >: Throwable, A](
     ifUnchanged: CacheableResult.Unchanged[T] => ZIO[R, E, A]
@@ -56,9 +43,7 @@ sealed trait CacheableResult[+T] {
 
 object CacheableResult {
 
-  /** Common supertype of the three cache-hit variants (`Fresh`, `Revalidated`, `IdenticalBody`). All three carry a
-    * `bodyId` and a lazy `getValue`; differ only in how the cache layer arrived at the "unchanged" conclusion.
-    */
+  /** The cache-hit variants, which differ only in how the layer concluded "unchanged". */
   sealed trait Unchanged[+T] extends CacheableResult[T] {
     def bodyId: ApiResponseBodyId
     final val isUnchanged: Boolean = true

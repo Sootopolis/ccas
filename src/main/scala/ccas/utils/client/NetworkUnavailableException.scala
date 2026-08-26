@@ -41,21 +41,13 @@ object NetworkUnavailableException {
   }
 }
 
-/** Recovery-internal swallow for tiered rename / slug resolution. The tiers (DB lookup, board-endpoint trick,
-  * admin-clubs scan) must never replace the caller's original 404 with a recovery-internal error, so their failures
-  * resolve to `None` and the caller's `onNotFound` block falls through to the original failure. But a systemic
-  * outage is different: it has to re-raise so the run aborts instead of recording a bogus skip (issue #119; the
-  * latent hole #121 left open on RefApp's rename path).
+/** Recovery-internal swallow for tiered rename / slug resolution: a tier's own failure must never replace the
+  * caller's original 404, but a systemic outage must still abort the run rather than record a bogus skip (#119).
+  * The tier design is `docs/adr/0010-rename-recovery-for-usernames-and-club-slugs.md`.
   *
-  * The single classifier:
   *   - [[NetworkUnavailableException]] — re-raise (systemic outage, abort the run).
-  *   - [[HttpStatusException]] — `None`, silently (expected: cancelled match, missing tournament, intermittent 5xx).
+  *   - [[HttpStatusException]] — `None`, silently (cancelled match, missing tournament, intermittent 5xx).
   *   - anything else (DB / decode) — debug-log for triage, then `None`.
-  *
-  * Top-level effect-receiver extension matching the file-local convention for effect combinators (`onNotFound` in
-  * `HttpStatusException.scala`, `withPlayerRenameRecovery` / `withClubSlugRenameRecovery` in the resolvers) — the
-  * receiver genuinely is the effect, unlike the `recoverUnless` / `abortRun` companion methods above whose argument
-  * is the caught `Throwable` (cf. #120).
   */
 extension [R, A](self: RIO[R, Option[A]])
   def swallowRecoveryErrors(context: String): RIO[R, Option[A]] =

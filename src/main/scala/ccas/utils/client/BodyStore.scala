@@ -17,21 +17,14 @@ import software.amazon.awssdk.services.s3.S3Client
 
 import ccas.utils.errors.safeMessage
 
-/** Content-addressed store for cached Chess.com response bodies, keyed by the SHA-256 hash already computed in
-  * [[ccas.analysis.tables.ApiResponseBody]]. Keeping bodies here (rather than in a `body` column on metered
-  * Postgres) is the fix for #191: the blob cache is not source of truth (a lost body just re-fetches from
-  * Chess.com), so it has no business round-tripping through Neon egress on every cache hit.
+/** Content-addressed store for cached Chess.com response bodies, keyed by the hex SHA-256 already computed in
+  * [[ccas.analysis.tables.ApiResponseBody]] — so `put` is idempotent and dedup is preserved for free.
   *
-  * The key is the existing hex SHA-256, so `put` is naturally idempotent (byte-identical bodies collide on the same
-  * key) and dedup is preserved for free. `get` returns `None` for a missing key, which the caller treats as a cache
-  * miss and heals via a network refetch — the same mid-flight-race path that already existed when a body row was
-  * pruned out from under a `Fresh` / `Revalidated` result.
-  *
-  * The trait itself is honest about I/O (`Task`); the '''degradation policy''' lives in the companion's accessors
-  * ([[BodyStore.read]] / [[BodyStore.putOrSkip]]), which is what persistence code calls. Because the cache is
-  * not source of truth, a store outage must degrade the cache to "off" rather than fail live requests (#200), and a
-  * store *stall* must do the same — [[BodyStore.Deadlines]] bounds every operation so a slow store cannot become
-  * our latency (#211).
+  * The trait is honest about I/O (`Task`); the degradation policy lives in the companion's accessors
+  * ([[BodyStore.read]] / [[BodyStore.putOrSkip]]), which is what persistence code calls. The invariant those
+  * enforce — the cache is not source of truth, so an outage takes it offline and never the app, and a merely slow
+  * store must degrade identically — is `docs/adr/0008-body-store-outside-postgres.md` (#191, #200) and
+  * `docs/adr/0009-bound-every-body-store-operation.md` (#211).
   */
 trait BodyStore {
   def get(hash: String): Task[Option[Array[Byte]]]
@@ -41,15 +34,11 @@ trait BodyStore {
 
 /** Outcome of a [[BodyStore]] read once the store's own failures have been absorbed.
   *
-  * The three cases exist because "the object is genuinely absent" and "the store could not answer" are the same
-  * `None` at the trait level but demand '''different''' repairs upstream (#215). A `Missing` object means the
-  * `api_response_cache` row pointing at it is a lie, so dropping that row is the fix. An `Unavailable` store means
-  * the row is perfectly good — it still holds the ETag and `max-age` that make the next request cheap — so dropping
-  * it converts a transient outage into a permanently cold cache, and every URL touched during the outage pays a full
-  * unconditional GET after recovery instead of a 304.
-  *
-  * The backends already draw this line correctly (`NoSuchFileException` / `NoSuchKeyException` map to `None`, and
-  * everything else stays a typed error); this type is what stops the accessor from throwing it away again.
+  * `Missing` and `Unavailable` are one `None` at the trait level but demand different repairs upstream: a missing
+  * object means the `api_response_cache` row is a lie and must be dropped; an unavailable store means the row is
+  * still good and must be kept. See `docs/adr/0008-body-store-outside-postgres.md` (#215). The backends already
+  * draw the line (`NoSuchFileException` / `NoSuchKeyException` map to `None`); this type stops the accessor
+  * throwing it away again.
   */
 enum BodyRead[+A] {
   case Found(value: A)
@@ -78,17 +67,12 @@ object BodyStore {
   // provided once at each callsite via `ZEnvironment(pgClient, bodyStore)`. Reads and writes are deliberately
   // exposed ONLY in their error-degrading form — there is no raw `get`/`put` accessor to reach for by mistake.
 
-  /** Read a body's bytes, absorbing a store error (or a [[Deadlines]] breach) into [[BodyRead.Unavailable]] while
-    * keeping it distinct from the [[BodyRead.Missing]] a genuinely absent object produces.
+  /** Read a body's bytes, absorbing a store error or a [[Deadlines]] breach into [[BodyRead.Unavailable]], kept
+    * distinct from the [[BodyRead.Missing]] a genuinely absent object produces — see [[BodyRead]].
     *
-    * Both cases are healed by a network refetch, so an object-store outage (R2 down, credentials rotated, disk
-    * unreadable, or merely too slow to answer) degrades the body cache to "no cache" instead of failing live
-    * requests. They differ in what happens to the *metadata*: only `Missing` justifies dropping the cache row — see
-    * [[BodyRead]]. Interruption still propagates (`catchAll` covers typed failures only), so shutdown is unaffected.
-    *
-    * Per-operation failures log at DEBUG on purpose: an outage fails *every* read on a fetch-heavy run, and one
-    * WARN each would bury the log. The operator-facing signal is the single WARN [[HealthLogging]] emits when the
-    * store first goes down (and the INFO when it comes back).
+    * Interruption still propagates (`catchAll` covers typed failures only), so shutdown is unaffected.
+    * Per-operation failures log at DEBUG: an outage fails every read on a fetch-heavy run, and the operator-facing
+    * signal is [[HealthLogging]]'s single transition WARN.
     */
   def read(hash: String): URIO[BodyStore, BodyRead[Array[Byte]]] =
     ZIO
@@ -106,35 +90,16 @@ object BodyStore {
   /** Store a body's bytes, returning `false` when the store rejected the write.
     *
     * Callers must NOT write a hash-pointer row on `false`: a pointer with no object behind it is a cache entry that
-    * can never be served — every read of it falls through to a refetch, so it costs a Postgres row and buys nothing.
-    * Skipping the whole cache write instead means an outage degrades to "no cache" and self-heals on the first
-    * successful put. #199's budget guard reuses this exact skip (a `put` that no-ops without failing the fetch).
+    * can never be served, so it costs a Postgres row and buys nothing. Skipping the whole cache write instead means
+    * an outage degrades to "no cache" and self-heals on the first successful put. #199's budget guard reuses this
+    * exact skip.
     *
-    * `source` names what the body came from (the URL, or the writer where there is none), because a
-    * content-addressed store can otherwise report only a hash — the gap `ChessComClient.loadAndDecode` already
-    * closes on the read path (#222). DEBUG-level per-failure logging, for the same reason as [[read]].
+    * `source` names what the body came from — a content-addressed store can otherwise report only a hash.
+    * DEBUG-level per-failure logging, for the same reason as [[read]].
     *
-    * '''Known leak.''' A write abandoned at its [[Deadlines]] budget may still complete against the store
-    * afterwards, while this returns `false` and the caller correctly declines to write the pointer row. The
-    * resulting object has no `api_response_body` row, and [[ccas.analysis.tables.ApiResponseBody.deleteOrphanRows]]
-    * enumerates pointer *rows*, so no sweep can ever see it. It self-heals only if the identical body is fetched
-    * again (content-addressing means a later put adopts it). Accepted rather than reconciled — a sweep able to find
-    * these would have to enumerate the bucket, which is what content-addressing exists to avoid.
-    *
-    * The same permanent leak already exists on the delete side: [[ccas.analysis.tables.ApiResponseBody.deleteOrphans]]
-    * drops the pointer row FIRST and then deletes the object best-effort, so a delete that fails — or, since #211,
-    * one that outruns its deadline — strands the object with the row that named it already gone. Bounding `delete`
-    * therefore raises the rate of a pre-existing leak; it does not introduce one.
-    *
-    * Mitigation is an '''age-based''' bucket lifecycle rule, not a reference-aware one — S3/R2 rules cannot see our
-    * pointer table. Set the expiry above the longest retention window (`cache_retention_days`,
-    * `fetch_failure_retention_days`) and it collects only true orphans. Setting it too low is degrading rather than
-    * corrupting, but the two kinds of object degrade differently: a cached response body expired early reads back as
-    * [[BodyRead.Missing]], which invalidates the row and refetches (cost: one wasted request), whereas an
-    * `api_fetch_failure` body has no refetch path at all — `ApiFetchFailure.selectRecent` simply renders the audit
-    * row without its body, so the evidence is gone for good. Revisit the rule if either retention window is ever
-    * raised past it. Tracked as an input to #199, since these are billed bytes no accounting in this codebase can
-    * see.
+    * A write abandoned at its [[Deadlines]] budget may still land its object, stranding one no sweep can ever see.
+    * That leak, and the age-based bucket lifecycle rule that is its only sound mitigation:
+    * `docs/adr/0009-bound-every-body-store-operation.md`.
     */
   def putOrSkip(hash: String, bytes: Array[Byte], source: String): URIO[BodyStore, Boolean] =
     ZIO.serviceWithZIO[BodyStore](_.put(hash, bytes)).as(true).catchAll { e =>
@@ -151,15 +116,12 @@ object BodyStore {
   def delete(hash: String): ZIO[BodyStore, Throwable, Unit] =
     ZIO.serviceWithZIO[BodyStore](_.delete(hash))
 
-  /** Raised by [[Deadlines]] when an operation outruns its budget. A named type (rather than a bare
-    * `TimeoutException`) so a later latency breaker can match on it; the message is what the accessors' existing
-    * `safeMessage` DEBUG line prints, and what [[HealthLogging]]'s single operator-facing WARN prints.
+  /** Raised by [[Deadlines]] when an operation outruns its budget. Named rather than a bare `TimeoutException` so a
+    * later latency breaker can match on it.
     *
-    * `bytes` is populated for a write and absent otherwise: size is what separates "too big to upload inside the
-    * budget" from "slow regardless of size" (#222), and it is the only such datum the WARN can carry.
-    *
-    * No stack trace: this is control flow on the hot read path during exactly the incident where throughput matters,
-    * not a defect, and the frames would name the decorator rather than anything diagnostic.
+    * `bytes` is populated for a write only: size separates "too big to upload inside the budget" from "slow
+    * regardless of size" (#222). No stack trace — this is control flow on the hot read path, not a defect, and the
+    * frames would name the decorator.
     */
   final class BodyStoreTimeoutException(val op: String, val limit: Duration, val bytes: Option[Int])
       extends RuntimeException(BodyStoreTimeoutException.message(op, limit, bytes)) {
@@ -179,16 +141,12 @@ object BodyStore {
   private[ccas] val DefaultS3ConnectTimeoutMs = 2000
   private[ccas] val DefaultS3SocketTimeoutMs  = 5000
 
-  /** Per-operation wall-clock budgets for the store, from `body-store.{read,write}-timeout-ms`.
+  /** Per-operation wall-clock budgets, from `body-store.{read,write}-timeout-ms`. Reads get the tighter one;
+    * writes are generous because an abandoned write manufactures the orphan objects [[putOrSkip]] documents.
     *
-    * Reads get the tighter budget: abandoning one costs an immediate Chess.com request, whereas abandoning a write
-    * costs only a future refetch that may never happen. Writes are nonetheless deliberately generous, because a
-    * write abandoned mid-flight is what manufactures the uncollectable orphan objects documented on [[putOrSkip]].
-    *
-    * Both defaults are deliberately loose. Set below the store's true p99 and the body cache silently becomes an
-    * '''amplifier''' of Chess.com load — each bypassed read costs an unconditional GET plus gate wait plus EMA
-    * delay, spending the scarce resource to save the abundant one. Tighten from measurement (`cache_unserved` and
-    * the store's own latency distribution), not from argument; see #211.
+    * Both defaults are deliberately loose — set below the store's true p99 and the cache becomes an amplifier of
+    * Chess.com load. Tighten from measurement, not argument:
+    * `docs/adr/0009-bound-every-body-store-operation.md` (#211).
     */
   private[ccas] final case class BodyStoreLimits(read: Duration, write: Duration)
 
@@ -198,38 +156,15 @@ object BodyStore {
       write <- positiveMs(config.writeTimeoutMs, DefaultWriteTimeoutMs, "body-store.write-timeout-ms")
     } yield BodyStoreLimits(read, write)
 
-  /** The S3 transport's own budget, derived from the accessor deadlines: `apiCall` = `apiCallAttempt` = the
-    * '''widest''' accessor deadline, with `socket` its own independently-configured knob underneath.
+  /** The S3 transport's own budget, derived from the accessor deadlines: `apiCall` = `apiCallAttempt` = the widest
+    * accessor deadline, with `socket` its own knob underneath.
     *
-    * '''`apiCallAttempt` equals `apiCall` deliberately''' (#222). Deriving the attempt budget from the socket
-    * timeout — 5s inside a 10s write budget — made every put needing more than 5s '''unsatisfiable''':
-    * `ApiCallAttemptTimeoutException` is retryable, so a large upload was cut at 5s, restarted from byte zero, and
-    * cut again at 10s, at twice the bytes. Equal budgets also make the retry self-limiting, since `apiCallTimeout`
-    * is an absolute ceiling across attempts: a stalled attempt consumes it, a fast 429/5xx leaves room for one.
-    * Hence the SDK's retry strategy stays at its default.
+    * The two SDK-level values are derived rather than exposed, which is what makes an incoherent budget
+    * unconfigurable. A transport ceiling is required, not hygiene: [[Deadlines]]'s `.disconnect` frees the caller
+    * while the attempt runs on, and without one that orphan is a leaked blocking-pool thread per read.
     *
-    * '''Do not shorten `apiCall` below the accessor deadline to surface the SDK's own error.''' Tried in #222 and
-    * reverted: it yields only `ApiCallTimeoutException` ("Client execution did not complete before the specified
-    * timeout configuration"), which carries no status code and leaves `numAttempts` unset, and it displaces
-    * [[BodyStoreTimeoutException]], which names the operation, the budget and the size. Errors that '''do''' carry
-    * a status never needed rescuing: a 429/503 exhausting LEGACY's four attempts costs at most ~3.5s and surfaces
-    * as an `S3Exception` well inside either budget.
-    *
-    * One `S3Client` carries one `apiCallTimeout`, so the ceiling is sized for the widest operation (`write`, by
-    * default). A read abandoned at its own 5s deadline is therefore capped by the transport at the write budget
-    * rather than at 5s — the orphan is bounded, not made as short as the accessor that spawned it.
-    *
-    * This is not hygiene. `attemptBlockingInterrupt` cannot unblock a `UrlConnectionHttpClient` socket read —
-    * `Thread.interrupt` does not reach it — so [[Deadlines]]'s `.disconnect` frees the *caller* at the deadline
-    * while the attempt runs on. Without a transport ceiling that orphan is a leaked blocking-pool thread per read.
-    * The SDK ships `DEFAULT_SOCKET_READ_TIMEOUT = 30s` / `DEFAULT_CONNECTION_TIMEOUT = 2s` and no API-call ceiling
-    * at all, and [[buildS3Client]] used to set none of them.
-    *
-    * `socket` bounds inactivity on a socket *read* and cannot be made an upload ceiling: the SDK streams a put
-    * with `setFixedLengthStreamingMode`, where `SO_TIMEOUT` does not apply to writes. That is `apiCall`'s job.
-    *
-    * `apiCallAttempt` and `apiCall` are '''derived''' rather than exposed as knobs, which is what makes an
-    * incoherent budget unconfigurable.
+    * Why `apiCallAttempt` must equal `apiCall`, why shortening `apiCall` below the accessor deadline was tried and
+    * reverted, and why `socket` cannot bound an upload: `docs/adr/0009-bound-every-body-store-operation.md` (#222).
     */
   private[ccas] final case class S3Timeouts(
     connect: Duration,
@@ -287,15 +222,12 @@ object BodyStore {
   }
 
   /** Reads the `body-store` config section and builds the selected backend, wrapped in [[Deadlines]] and then
-    * [[HealthLogging]] so an outage is announced once rather than once per operation. Scoped because the S3 client is
-    * a closable resource. Fails the layer with a clear message on an unknown backend, an unresolvable `fs` root,
-    * missing S3 credentials, or an incoherent timeout budget.
+    * [[HealthLogging]]. Scoped, because the S3 client is closable. Fails the layer with a clear message on an
+    * unknown backend, an unresolvable `fs` root, missing S3 credentials, or an incoherent timeout budget.
     *
-    * '''Decorator order is load-bearing and invisible at the callsite.''' `Deadlines` must nest INSIDE
-    * `HealthLogging`: `HealthLogging.track` observes via `tapBoth`, which does not fire on interruption, and
-    * `Deadlines` interrupts the inner effect. With the order inverted a store slow enough to blow every deadline
-    * never flips the degraded flag, so the operator loses the one WARN that says the cache is off. Verified both
-    * ways; `TestBodyStore` pins it, because nothing else would catch the inversion.
+    * Decorator order is load-bearing and invisible at the callsite: `Deadlines` must nest INSIDE `HealthLogging`,
+    * or a store slow enough to blow every deadline never flips the degraded flag. `TestBodyStore` pins both orders
+    * — see `docs/adr/0009-bound-every-body-store-operation.md`.
     */
   val live: RLayer[Any, BodyStore] =
     ZLayer.scoped {
@@ -340,19 +272,13 @@ object BodyStore {
       _ <- ZIO.logDebug(s"BodyStore: fs backend rooted at $root")
     } yield new FsBodyStore(root)
 
-  /** Resolve the `fs` backend's root directory: an explicit, non-blank `body-store.fs-root` wins; otherwise
+  /** Resolve the `fs` backend's root: an explicit, non-blank `body-store.fs-root` wins, else
     * `${XDG_CACHE_HOME:-$HOME/.cache}/ccas/bodies`.
     *
-    * The default is resolved here rather than as a HOCON literal because a relative literal (the old
-    * `cache/bodies`) is CWD-dependent — it dropped runtime blobs wherever the process happened to be started,
-    * typically the repo tree. The XDG lookup is inlined rather than delegating to `ccas.cli.XdgPaths.cacheDir`
-    * because `ccas.utils.client` must not depend on `ccas.cli` (wrong layering); keep the two in step if the
-    * convention changes.
-    *
-    * Every fallback is checked for blankness and the no-source case returns a `Left` rather than a best guess.
-    * `Paths.get("")` is the current directory and `Paths.get(null + "/.cache")` is a *relative* directory literally
-    * named "null" — either would silently reinstate the CWD-dependence this method exists to remove, so an
-    * unresolvable root fails the layer with an actionable message instead.
+    * Resolved in code rather than as a HOCON literal, and every fallback blank-checked, so an unresolvable root
+    * returns `Left` instead of a CWD-relative best guess. The XDG lookup is inlined rather than reusing
+    * `ccas.cli.XdgPaths` because this package must not depend on `ccas.cli` — keep the two in step. Why each of
+    * those: `docs/adr/0008-body-store-outside-postgres.md`.
     */
   private[ccas] def resolveFsRoot(
     configured: Option[String],
@@ -431,24 +357,15 @@ object BodyStore {
       .fromOption(nonBlank(value))
       .orElseFail(new IllegalArgumentException(s"body-store.backend='s3' requires $key to be set"))
 
-  /** Backend decorator that bounds every operation's wall time, so a store that is merely '''slow''' degrades the
-    * same way a broken one already did (#211). The cache is not source of truth, so waiting on it is never
-    * obligatory; the previous code had no ceiling anywhere, and the S3 SDK's own defaults bound a socket read rather
-    * than an operation.
+  /** Backend decorator bounding every operation's wall time, so a merely slow store degrades like a broken one.
     *
-    * `.disconnect` is not optional. A plain `.timeout` waits for the inner effect's *interruption* to complete, and
-    * neither a `UrlConnectionHttpClient` socket read nor a stalled network-mount `Files.readAllBytes` honours
-    * `Thread.interrupt` — so without it the caller still hangs for exactly the duration being bounded (measured: a
-    * 300ms budget on a 3000ms operation returned at 3020ms without, 312ms with). With it, the caller returns at the
-    * deadline and the orphaned attempt unwinds in the background, itself bounded by the transport timeouts
-    * [[S3Timeouts]] sets. An outer interruption still propagates, so shutdown is unaffected.
+    * `.disconnect` is mandatory: a plain `.timeout` waits for the inner effect's interruption, which a socket read
+    * does not honour, so the caller hangs for exactly the duration being bounded. Policy-free by design — it raises
+    * a typed failure and nothing else, leaving [[read]] and [[putOrSkip]] to fold it into a miss.
     *
-    * Policy-free by design: this raises a typed failure and nothing else, so [[read]]'s and [[putOrSkip]]'s existing
-    * `catchAll` folds a stall into the same [[BodyRead.Unavailable]] / `false` an error produces. The decorator
-    * enforces the clock, [[HealthLogging]] observes, the accessors decide what failure means.
-    *
-    * `delete` rides the write budget. Not incidental: `Tables.ensureTables` drives `BodyStore.delete` once per swept
-    * hash on '''every''' CLI invocation, so an unbounded delete is a boot hang on a command the user typed.
+    * `delete` rides the write budget deliberately: `Tables.ensureTables` drives it once per swept hash on every CLI
+    * invocation, so an unbounded delete is a boot hang. Measurements and the transport ceiling:
+    * `docs/adr/0009-bound-every-body-store-operation.md` (#211).
     */
   private[ccas] final class Deadlines(underlying: BodyStore, limits: BodyStoreLimits) extends BodyStore {
 
@@ -465,17 +382,12 @@ object BodyStore {
       effect.disconnect.timeoutFail(new BodyStoreTimeoutException(op, limit, bytes))(limit)
   }
 
-  /** Backend decorator that tracks store health and logs the '''transitions''' — one WARN when the store first
+  /** Backend decorator tracking store health and logging only the transitions — one WARN when the store first
     * fails, one INFO when it next succeeds — instead of one line per failed operation.
     *
-    * Without this, an R2 outage on a fetch-heavy run emits a WARN for every read and every write (thousands of
-    * identical lines), which buries the signal it is trying to raise. Errors are re-raised unchanged: this layer
-    * only observes. Turning them into cache misses stays the job of [[read]] / [[putOrSkip]], so health
-    * reporting and degradation policy remain separable — the split #199's budget guard slots into.
-    *
-    * When that guard lands it belongs '''above''' this decorator, not below it next to [[Deadlines]]: a quota
-    * decline is a deliberate policy decision, and observed from underneath it would flip the degraded flag and log
-    * "BodyStore unavailable" on every skipped write.
+    * Errors are re-raised unchanged; this layer only observes. Why the split matters, why #199's budget guard
+    * belongs above this decorator rather than below it, and why the transition log is a lower bound on failures
+    * rather than a count: `docs/adr/0008-body-store-outside-postgres.md`.
     */
   private[ccas] final class HealthLogging(underlying: BodyStore, degraded: Ref[Boolean]) extends BodyStore {
 

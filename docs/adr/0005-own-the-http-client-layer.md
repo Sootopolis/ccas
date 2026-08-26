@@ -40,7 +40,30 @@ no idle connections, so the generous cap costs nothing at rest.
 
 **Tail-noise filter.** Installed as a layer rather than an object-init side effect, so it is tied to
 building a client, and wrapped in `ZIO.attempt` because a log filter must never be able to fail the
-`Client` layer. See `NettyTailNoise` for what it drops and why the filter is narrow (#225).
+`Client` layer.
+
+Two exceptions share the class `PrematureChannelClosureException`, and only one means a request
+failed. zio-http's ("Channel closed while executing the request…") is a real in-flight closure —
+counted, written to `api_fetch_failure`, retried. Netty's ("channel gone inactive with N missing
+response(s)") is an echo of that same failure, raised at the pipeline tail after `resetChannel`
+removed `ClientFailureHandler`, the per-request handler that would have terminated `exceptionCaught`.
+`NettyTailNoise` drops exactly that record.
+
+Three choices there are load-bearing:
+
+- **A JUL filter, not a `ZLogger` one.** Netty logs this itself, outside ZIO, so it prints straight
+  through `ProgressDisplay`'s bars. `ProgressDisplay.isBenignReadIdleReap` is the same idea one layer
+  up.
+- **A `Filter`, not `setLevel(SEVERE)`.** `DefaultChannelPipeline` never logs at SEVERE, and on a
+  channel idle in the pool both per-request handlers are gone, so the tail is the only place an
+  `SSLException` or an `OutOfDirectMemoryError` could still surface.
+- **The match is over-specified and fails _open_.** Level, exception type and the whole message must
+  all hold, so a Netty reword brings the harmless noise back rather than hiding something real. Two
+  near misses are kept deliberately: zio-http's identically-typed message, and any count above one,
+  which no path we run should be able to reach.
+
+Exit condition: zio-http hardcodes `HttpClientCodec(failOnMissingResponse = true)` in
+`NettyConnectionPool`. Delete the filter when that changes (#225).
 
 ## Consequences
 

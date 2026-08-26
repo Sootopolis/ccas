@@ -41,17 +41,12 @@ private[ccas] case class ClientStatsAccumulator(
   def incCacheRevalidation: ClientStatsAccumulator  = copy(cacheRevalidations = cacheRevalidations + 1)
   def incCacheMiss: ClientStatsAccumulator          = copy(cacheMisses = cacheMisses + 1)
 
-  /** A cache entry we had already counted as served could not actually be served, forcing a network refetch: the
-    * body was pruned, absent, or the store errored / outran its deadline (#211, #215).
+  /** A cache entry already counted as served could not actually be served, forcing a network refetch.
     *
-    * `cacheHits` is incremented on the metadata lookup, before any body is read, and `cacheRevalidations` on a 304 —
-    * both optimistic, because `CacheableResult` only carries a lazy `getValue`. This is the reconciling term, so
-    * genuinely-served entries are `cacheHits + cacheRevalidations - cacheUnserved` '''provided each result's
-    * `getValue` is forced at most once'''. Nothing enforces that — `getValue` is a plain re-runnable `Task`
-    * (`CacheableResult.getValue`) — so a caller that forces one `Fresh` result twice during an outage charges two
-    * unserved against one hit and drives the difference negative. Read the difference as an estimate, not an
-    * identity; the counter itself stays additive and monotonic, which a retraction scheme would not, and which is
-    * what makes it safe to compare across sessions.
+    * The reconciling term for the optimistic `cacheHits` / `cacheRevalidations`: genuinely-served entries are
+    * `cacheHits + cacheRevalidations - cacheUnserved`, but only if each result's `getValue` is forced at most once,
+    * which nothing enforces. Read it as an estimate, not an identity — and see
+    * `docs/adr/0007-response-caching-in-postgres.md` for why the counter stays additive rather than retracting.
     */
   def incCacheUnserved: ClientStatsAccumulator      = copy(cacheUnserved = cacheUnserved + 1)
 
@@ -94,13 +89,9 @@ private[ccas] case class ClientStatsAccumulator(
 
   /** Record one response latency.
     *
-    * '''The series changes meaning at #216''': rows written before it measured the whole of `ChessComClient.rawGet`
-    * — the HTTP exchange plus our own `api_response_cache` upsert and `BodyStore` put — while rows after it measure
-    * the exchange alone, which is what "API latency" is read as. Post-#216 rows are therefore lower by the storage
-    * write, and the two are not comparable. Nothing in `client_stats` marks the break: a marker column would have to
-    * be carried forever to explain one boundary, and the fix is a straight correction rather than a policy that
-    * could change back. Date the boundary off the deploy, and treat any regression that straddles it as suspect.
-    * The `cache_*` counters are unaffected, and `active_ms` deliberately keeps the wider window.
+    * The series changes meaning at #216 — earlier rows include our own storage write, later rows do not — and
+    * nothing in `client_stats` marks the break, so a regression straddling it is suspect. Why there is no marker
+    * column: `docs/adr/0006-pacing-ema-measures-the-http-exchange-only.md`.
     */
   def recordLatency(ms: Long): ClientStatsAccumulator = {
     val idx = ClientStatsAccumulator.LatencyBuckets.indexWhere(ms < _) match {

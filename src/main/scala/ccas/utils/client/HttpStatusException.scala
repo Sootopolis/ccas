@@ -22,20 +22,13 @@ object HttpStatusException {
   /** Construct the right subclass for a failed HTTP response. Used at the single throw site in `ChessComClient`
     * and by tests that fabricate exceptions directly.
     *
-    * The match anchors on the JSON-string closing quote (`not found."`), not the bare phrase, so a body that
-    * happens to mention "not found." mid-sentence won't classify — only canonical Chess.com bodies of the form
-    * `{"code":0,"message":"X \"id\" not found."}` reach `ReportedNotFound`. Case-sensitive on purpose:
-    * Chess.com's production wire is lowercase per the #3 survey, so loosening would mask test-fixture drift
-    * rather than catch a real signal. Test fixtures should mirror the production wire shape verbatim.
+    * The match anchors on the JSON-string closing quote (`not found."`), not the bare phrase, so a body merely
+    * mentioning "not found." mid-sentence won't classify. Case-sensitive on purpose: Chess.com's production wire is
+    * lowercase, so loosening would mask test-fixture drift rather than catch a signal. Structured classification is
+    * #3.
     *
-    * Future work tracked in #3: replace this with a JSON parse of the body into `(code, message)` and key off
-    * the structured fields. Bundles cleanly with the planned `api_fetch_failure.body_code` /
-    * `body_message_kind` columns, hence deferred from the current change.
-    *
-    * Telemetry note: `api_fetch_failure.error_type` is populated from `e.getClass.getSimpleName` at the throw
-    * site, so 404s previously stamped as `HttpStatusException` will now stamp as `ReportedNotFound` for the ~5%
-    * with the canonical body. Aggregations that span the rollout boundary should treat both labels as the same
-    * shape.
+    * `api_fetch_failure.error_type` comes from `getClass.getSimpleName`, so aggregations spanning this class's
+    * introduction must treat `HttpStatusException` and `ReportedNotFound` as one shape.
     */
   def classify(statusCode: Int, url: URL, body: String): HttpStatusException =
     if (statusCode == 404 && body.contains("not found.\"")) ReportedNotFound(url, body)
