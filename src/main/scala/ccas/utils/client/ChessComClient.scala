@@ -19,56 +19,20 @@ import ccas.utils.{HttpDate, ProgressBar, ProgressDisplay}
 import ccas.utils.errors.safeMessage
 import ccas.utils.json.JsonDecodingException
 
-/** HTTP client for the Chess.com public API with adaptive rate limiting.
+/** HTTP client for the Chess.com public API with adaptive rate limiting and response caching.
   *
-  * Wraps a `zio-http` `Client` and adds several layers of concurrency and error management:
+  * Wraps a zio-http `Client` from [[HttpClientLayer]] and adds, in layers: a single-permit gate admitting requests
+  * against `currentMax`, so a throttle-down takes effect at once; EMA-based pacing with a `min-request-delay-ms`
+  * floor; a rolling failure window that drops `currentMax` to 1, an immediate hard throttle on a Cloudflare 403, and
+  * a generation-gated ladder walking permits back up; separate retry schedules for 429, Cloudflare 403 and
+  * connection errors, with non-Cloudflare 403 and 404 never retried; response caching via [[getCacheable]], which
+  * returns a [[CacheableResult]] and defers body load and decode; and a daemon fiber flushing cumulative
+  * `client_stats`, with a final flush in the scope finalizer.
   *
-  *   - '''Gate-based admission control''' — a single-permit gate serializes request admission. Before each request, the
-  *     gate checks that the number of in-flight requests (`activeRef`) is below `currentMax`. If not, it polls until a
-  *     slot opens, then atomically increments the slot count before releasing the gate. This enforces the concurrency
-  *     limit without a semaphore, so throttle-down takes effect immediately for all requests that haven't yet entered
-  *     the gate. The gate wait is interruptible so that pending requests can be cancelled promptly on shutdown.
-  *   - '''EMA-based rate delay''' — tracks an exponential moving average of response times and staggers outgoing
-  *     requests so that the full permit budget is utilised without bursting. When permits are reduced the per-request
-  *     delay grows proportionally. A configurable floor (`min-request-delay-ms`) prevents burst behaviour when
-  *     response times are unusually low. The average samples the HTTP exchange alone and never the cache writes that
-  *     follow it — see [[ChessComClient.TimedFetch]].
-  *   - '''Failure-window throttle-down''' — maintains a rolling window of success/failure outcomes. HTTP 429 counts as a
-  *     failure; non-rate-limit responses (403 non-CF, 404, 500, etc.) count as successes. Cloudflare challenge 403s
-  *     bypass the window and trigger an immediate hard throttle. Connection errors are retried but do not feed the
-  *     window (reducing permits doesn't fix a broken network). When the failure rate in the window exceeds a
-  *     configurable threshold, `currentMax` drops to 1 and the gate immediately enforces it.
-  *   - '''Generation-gated recovery''' — after a cooldown period, a background fiber walks `currentMax` up through the
-  *     configured `recoveryTiers` (one step per cooldown cycle), or holds if failures persist. Each tier must be
-  *     observed for at least `min-tier-observation-seconds` before being evaluated for promotion, preventing premature
-  *     step-ups when high concurrency fills the outcome window quickly. `coolingDown` stays true throughout the
-  *     recovery ladder to prevent `recordOutcome` from triggering additional throttle-downs mid-recovery; it is only
-  *     cleared when permits reach `maxPermits`. A generation counter ensures that only the most recent throttle-down
-  *     triggers recovery, preventing stale fibers from interfering. The response-time EMA is reset to zero on full
-  *     recovery so that stale inflated values do not gate post-recovery request pacing. Recovery fibers are scoped to
-  *     the client's lifetime and interrupted when the layer is torn down.
-  *   - '''Retry schedules''' — separate schedules handle HTTP 429 (exponential backoff), Cloudflare challenge 403s
-  *     (fixed delay), and transient connection errors (exponential backoff); each has an independent retry-count
-  *     budget configured via `max-429-retries`, `max-cf-retries`, and `max-connection-retries`. Non-Cloudflare 403
-  *     and HTTP 404 are treated as permanent and never retried.
-  *   - '''Cumulative stats flushing''' — a background daemon fiber upserts a single `client_stats` row per session
-  *     every `stats-flush-interval-seconds`, overwriting the previous snapshot with cumulative totals. The throttle
-  *     configuration is inserted once into `client_config` on first flush and referenced by FK. A final flush runs
-  *     in the scope finalizer to ensure stats survive non-graceful shutdowns with at most one interval's worth of
-  *     data loss.
-  *   - '''Response caching''' — every successful fetch is persisted to `api_response_cache`, keyed by URL, with the
-  *     ETag / Last-Modified / `Cache-Control: max-age` / Content-Type metadata and a FK into `api_response_body`
-  *     (whose SHA-256 dedupe means byte-identical bodies share one row even across URLs). The public [[getCacheable]]
-  *     entry point short-circuits to a `Fresh` result when the cache entry is still within `max-age`, never entering
-  *     the gate or sending a request. Stale entries are sent as conditional GETs (`If-None-Match` +
-  *     `If-Modified-Since`); a 304 response returns `Revalidated` and bumps `fetched_at` without re-downloading.
-  *     A 200 that dedupes to the same `body_id` returns `IdenticalBody`; otherwise `Changed`. `Cache-Control:
-  *     no-store` is honoured (response is not cached). Cache hits and revalidations are tracked as separate counters
-  *     on `ClientStatsAccumulator` so the `requests` / `successes` / `failures` numbers continue to reflect only real
-  *     Chess.com API load.
-  *
-  * Constructed via the `ChessComClient.live` ZLayer which reads configuration from `application.conf` under the
-  * `chess-com-client` prefix.
+  * Rationale: `docs/adr/0012-gate-based-adaptive-throttle.md` (throttle),
+  * `docs/adr/0006-pacing-ema-measures-the-http-exchange-only.md` (what the EMA measures),
+  * `docs/adr/0007-response-caching-in-postgres.md` (caching). Configured from `application.conf` under
+  * `chess-com-client` by [[ChessComClient.live]].
   */
 final class ChessComClient(
   client: Client,
@@ -134,20 +98,12 @@ final class ChessComClient(
     }
   }
 
-  /** Build the outgoing request, attaching `If-None-Match` and/or `If-Modified-Since` validators when a prior cache
-    * entry is present. Both headers are sent when available for standards correctness, but empirically the current
-    * Chess.com API honours only `If-None-Match` — `If-Modified-Since` is silently ignored regardless of value
-    * (verified 2026-04-17; Chess.com have confirmed the current API is in maintenance mode, with a future rewrite
-    * that may or may not change this). The echo path stays wired so we're ready if the next API starts honouring it.
+  /** Build the outgoing request, attaching `If-None-Match` and `If-Modified-Since` when a prior cache entry exists.
     *
-    * Note: `If-None-Match` is attached via `Header.Custom` with the raw wire-format etag (quotes included). The
-    * quote loss is in `Header.ETag.parse`, not in rendering: it strips the delimiters (`drop(1).dropRight(1)`), so
-    * an etag routed through the typed `Header.ETag` arrives unquoted and `IfNoneMatch.render` — a plain
-    * `etags.mkString(",")` — faithfully emits it that way, producing a header the origin won't match (verified
-    * against zio-http 3.11.4 sources; unchanged since 3.10.1). `Header.Custom` bypasses that parse entirely. The
-    * stored etag in `api_response_cache.etag` is already in wire format — `extractValidators` reads via the typed
-    * `Header.ETag` and re-renders through `Header.ETag.render` on the persist path — so it can be echoed back
-    * verbatim here.
+    * `If-None-Match` goes through `Header.Custom` with the raw wire-format etag, quotes included, because
+    * `Header.ETag.parse` strips the delimiters and the origin then never matches. Both validators are sent for
+    * correctness even though Chess.com honours only the etag. Why, and the `Last-Modified` parsing quirk:
+    * `docs/adr/0007-response-caching-in-postgres.md`.
     */
   private def buildRequest(url: URL, conditional: Option[ApiResponseCache]): Request = {
     val base = Request(method = GET, url = url).addHeaders(headers)
@@ -221,14 +177,11 @@ final class ChessComClient(
     )
   }
 
-  /** 304 path: bump `fetched_at` and merge any fresh validators or cache-control value from the response. 304s
-    * count as a success for the failure window (the origin is reachable and willing to serve us) — the `true`
-    * argument to `recordOutcome` keeps the non-429 branch, same as any other non-rate-limit response.
+  /** 304 path: bump `fetched_at` and merge any fresh validators or cache-control value from the response.
     *
-    * `maxAgeUpdate` carries the wire-level intent — `Preserve` when no `Cache-Control` header is present,
-    * `Clear` for `no-cache` (matching the 200 path at [[handleSuccessBody]]), and `Overwrite(n)` for
-    * `max-age=n`. ETag / Last-Modified / Content-Type use COALESCE semantics inside [[ApiResponseCache.touch]],
-    * so a 304 that omits any of them preserves the stored value.
+    * A 304 counts as a success for the failure window — the origin is reachable and willing to serve us. The
+    * `maxAgeUpdate` ADT carries the wire-level intent, and the validators merge via COALESCE inside
+    * [[ApiResponseCache.touch]]: `docs/adr/0007-response-caching-in-postgres.md`.
     */
   private def handleNotModified[T](
     url: URL,
@@ -327,26 +280,15 @@ final class ChessComClient(
       .fold(ChessComClient.CacheDirectives.empty)(walk(_, ChessComClient.CacheDirectives.empty))
   }
 
-  /** Lazy body-load + decode for `Fresh` and `Revalidated` results. Every recovery path here refetches
-    * unconditionally — without a body we cannot serve a 304, so sending validators would risk coming back with
-    * metadata and still nothing to serve. The recovery inherits the original caller's `cacheWrites` flag so an
-    * uncached caller doesn't silently re-cache via the recovery path, and is bounded to a single attempt:
-    * `catchSome` is scoped to the cached-body decode only, so a fresh-body decode failure (persistent origin-side
-    * bug) propagates instead of looping back through `catchSome → refetch → catchSome`.
+  /** Lazy body-load and decode for `Fresh` and `Revalidated` results.
     *
-    * What differs across the three failures is whether the '''cache row survives''' (#215):
+    * Recovery always refetches unconditionally, inherits the caller's `cacheWrites` flag, and is bounded to one
+    * attempt — `catchSome` is scoped to the cached-body decode, so a fresh-body decode failure propagates instead
+    * of looping. Whether the cache row survives differs by failure: a decode failure or [[BodyRead.Missing]] drops
+    * it, [[BodyRead.Unavailable]] keeps it. Why keeping it matters:
+    * `docs/adr/0008-body-store-outside-postgres.md` (#215).
     *
-    *   - Decode failure (schema drift: the body is there but no longer parses) and [[BodyRead.Missing]] (pruned
-    *     pointer row, or an object absent from the store) both mean the row points at something unusable, so it is
-    *     dropped.
-    *   - [[BodyRead.Unavailable]] — the store errored or outran its deadline — means the row is still accurate. It
-    *     is '''kept'''. Dropping it would spend a transient outage's worth of validators permanently: every URL
-    *     touched while the store was down would lose its ETag and `max-age` and pay a full unconditional GET after
-    *     recovery instead of a cheap 304. The refetch's own `upsertWithBody` no-ops while the store is still down
-    *     (`putOrSkip` returns false), leaving the row intact to self-heal on the first successful put.
-    *
-    * Every path also records `cacheUnserved`, the reconciling term for the optimistic `cacheHit` / `cacheRevalidation`
-    * counted before the body was ever read — see [[ClientStatsAccumulator.cacheUnserved]].
+    * Every path records `cacheUnserved` — see [[ClientStatsAccumulator.cacheUnserved]].
     */
   private def loadAndDecode[T](url: URL, bodyId: ApiResponseBodyId, cacheWrites: Boolean)(
     using jsonDecoder: JsonDecoder[T]
@@ -386,21 +328,13 @@ final class ChessComClient(
   private def isFresh(meta: ApiResponseCache, now: Instant): Boolean =
     meta.maxAgeSeconds.exists(maxAge => now.isBefore(meta.fetchedAt.plusSeconds(maxAge)))
 
-  /** Wrap the existing gate / permit / latency-timing block around `rawGet`, parameterised by the optional
-    * conditional cache entry. All throttle, retry, and error-recording machinery lives inside here.
+  /** Wrap the gate / permit / latency-timing block around `rawGet`. All throttle, retry and error-recording
+    * machinery lives inside here.
     *
-    * Two different durations are recorded here, and they are deliberately not the same number:
-    *
-    *   - `exchangeMs` — the Chess.com HTTP exchange. It paces the next request (`updateResponseTimeEma`) and is what
-    *     the reported latency distribution means, so it must not include our own storage I/O (#216).
-    *   - `held` — the whole of `rawGet`, which is how long this request occupied one of `currentMax` active slots. A
-    *     slot '''is''' held across the cache write, so `addActiveMs` keeps the wider window; narrowing it would
-    *     understate utilisation.
-    *
-    * The set of attempts that get recorded is unchanged by the split: `.timed` short-circuits on failure, so an
-    * attempt only contributes once its whole `rawGet` has succeeded. A 404 or 429 still feeds neither the EMA nor the
-    * latency histogram — that is a separate question from which window to measure, and folding error responses in
-    * would change pacing on 404-heavy workloads (which are routine here, see the crawl paths in `HistoryApp`).
+    * The two durations recorded are deliberately different numbers: `exchangeMs` is the Chess.com HTTP exchange
+    * alone, which paces the next request; `held` is the whole of `rawGet`, which is how long a slot was occupied.
+    * Why they must not be the same, and why a 404 feeds neither:
+    * `docs/adr/0006-pacing-ema-measures-the-http-exchange-only.md` (#216).
     */
   private def gatedRawGet[T](url: URL, conditional: Option[ApiResponseCache], cacheWrites: Boolean)(
     using jsonDecoder: JsonDecoder[T]
@@ -543,14 +477,12 @@ final class ChessComClient(
       }
     }
 
-  /** Wall-clock EMA update. `alpha = 1 - exp(-dt / emaTauMs)` so an outlier sample's influence decays in real time:
-    * a slow response that holds the fiber for tens of seconds is naturally cancelled by the very next sample's large
-    * `dt`. `dt` is intentionally NOT capped — after a long idle the prior EMA is stale, and snapping to the new sample
-    * (alpha → 1) is the correct behaviour. The first sample (or first after full recovery, which resets both fields)
-    * seeds the EMA directly.
+  /** Wall-clock EMA update: `alpha = 1 - exp(-dt / emaTauMs)`, so an outlier decays in real time. `dt` is
+    * deliberately uncapped — after a long idle the prior EMA is stale and snapping to the new sample is correct.
     *
-    * "First sample" is `lastEmaSampleAt == 0L` alone, for the same reason [[emaDelay]] gates on it: a genuine 0 ms
-    * exchange is reachable since #216, and re-seeding on every one of them would discard the blend each time.
+    * "First sample" is `lastEmaSampleAt == 0L` alone, never `responseTimeEma > 0`: a genuine 0 ms exchange is
+    * reachable, so testing the value would re-seed and discard the blend. See
+    * `docs/adr/0006-pacing-ema-measures-the-http-exchange-only.md` (#216).
     */
   private def updateResponseTimeEma(responseMs: Long): UIO[Unit] =
     Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS).flatMap { now =>
@@ -625,14 +557,11 @@ final class ChessComClient(
       _     <- ZIO.foreachDiscard(prev)(_.interruptFork)
     } yield ()
 
-  /** Wait for in-flight requests to drain, sleep for cooldown, then recover permits if failure rate has dropped. After
-    * the cooldown, enforces `minTierObservation` — if not enough wall-clock time has elapsed since the current tier was
-    * entered, the fiber sleeps the remainder so that each tier is observed under real load before being evaluated. If
-    * the failure rate is still above threshold, drops back one tier (via `previousTier`) to find a sustainable level
-    * rather than holding at a tier that's too aggressive. Clears the outcome window and resets `tierEnteredAt` on each
-    * step so every tier is evaluated on its own merits. Keeps coolingDown true throughout the recovery ladder to prevent
-    * mid-recovery re-throttling; clears it only when permits reach maxPermits. Resets the response-time EMA on full
-    * recovery.
+  /** Drain in-flight requests, sleep for the cooldown, then step `currentMax` up one recovery tier — or back down
+    * one, if the failure rate is still above threshold. Enforces `minTierObservation` so a tier is tested under real
+    * load before promotion, clears the outcome window and `tierEnteredAt` on each step, holds `coolingDown` until
+    * permits reach `maxPermits`, and resets the EMA on full recovery. Why each of those:
+    * `docs/adr/0012-gate-based-adaptive-throttle.md`.
     */
   private def scheduleRecovery(generation: Long, cooldown: Duration): Task[Unit] =
     for {
@@ -733,18 +662,11 @@ object ChessComClient {
     val empty: CacheDirectives = CacheDirectives(None, false, false)
   }
 
-  /** A completed fetch attempt, carrying how long '''the Chess.com HTTP exchange alone''' took.
+  /** A completed fetch attempt, carrying how long the Chess.com HTTP exchange alone took.
     *
-    * The duration is threaded out of `rawGet` rather than measured around it because `rawGet` also writes: the cache
-    * upsert, the `BodyStore` put, and (on the error path) the `api_fetch_failure` row. Timing the whole of it folded
-    * our own storage latency into `responseTimeEma`, which paces every subsequent outgoing request at
-    * `responseTimeEma / currentMax` — so a slow object store or a cold Postgres compute throttled our Chess.com
-    * request rate, applying the control action to the domain that was healthy (#216). At 8 permits a 2s store write
-    * injected ~250ms of spacing per request; at `currentMax = 1` during a throttle-down, the full 2s.
-    *
-    * Keeping the two apart also restores the EMA as a diagnostic: "Chess.com is slow" and "our store is slow" are
-    * only distinguishable if they are measured separately. Cross-referencing them is a *diagnosis* concern and lives
-    * in [[BodyStore.HealthLogging]]; neither may change the other's behaviour (see the failure-domain rule in #211).
+    * The duration is threaded out of `rawGet` rather than measured around it, because `rawGet` also performs the
+    * cache upsert, the `BodyStore` put and the `api_fetch_failure` row — folding those into the EMA let a slow
+    * store throttle a healthy Chess.com. See `docs/adr/0006-pacing-ema-measures-the-http-exchange-only.md`.
     */
   private[ccas] final case class TimedFetch[T](exchangeMs: Long, result: CacheableResult[T])
 
@@ -801,16 +723,12 @@ object ChessComClient {
     * @param minSampleSize
     *   Minimum outcomes in the window before the failure rate is evaluated.
     * @param minRequestDelayMs
-    *   Hard floor on inter-request spacing in milliseconds, applied inside `emaDelay`. Prevents burst behaviour at high
-    *   permit counts when response times are unusually low. Set to 0 to disable.
+    *   Hard floor on inter-request spacing in milliseconds, applied inside `emaDelay`. 0 disables it.
     * @param minTierObservation
-    *   Minimum wall-clock time that must elapse at a recovery tier before the tier is evaluated for promotion. Prevents
-    *   premature step-ups when high concurrency fills the outcome window quickly.
+    *   Minimum wall-clock time at a recovery tier before it is evaluated for promotion.
     * @param emaTauMs
-    *   Time constant in milliseconds for the response-time EMA's wall-clock exponential decay. Each new sample shifts
-    *   the EMA by `1 - exp(-dt / emaTauMs)`, where `dt` is the elapsed time since the previous sample. A single slow
-    *   outlier therefore decays out in real time rather than over a fixed number of subsequent samples — important
-    *   for small-N sequential workloads where one slow response would otherwise dominate the run.
+    *   Time constant in milliseconds for the response-time EMA's wall-clock decay: each sample shifts the EMA by
+    *   `1 - exp(-dt / emaTauMs)`.
     */
   private[ccas] case class ThrottleConfig(
     recoveryTiers: Vector[Int],

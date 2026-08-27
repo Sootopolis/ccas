@@ -11,23 +11,19 @@ import zio.{Chunk, Duration, Promise, Ref, UIO, ZIO}
 
 import ccas.api.misc.subtypes.JobRunId
 
-/** Streams a previously-submitted job's log file `${logDir}/<jobId>.log` (written by [[FileSink]]) as a sequence of
-  * lines, emitting them as they're appended and closing when the job is terminal and the tail has reached EOF. The
-  * abstraction boundary for callers is [[JobRunner.logStream]], which returns the resulting `ZStream`; this is its sole
-  * backing implementation. An SSE / WebSocket variant would just reframe the same line stream at the route, so no
-  * transport interface is introduced here.
+/** Streams a submitted job's log file `${logDir}/<jobId>.log` (written by [[FileSink]]) as lines, emitting them as
+  * they are appended and closing once the job is terminal and the tail has reached EOF. Callers go through
+  * [[JobRunner.logStream]]; this is its sole backing implementation.
   *
-  * The "is this job still running?" signal comes from `completions`, the in-process registry of completion promises
-  * maintained by [[JobRunner]]. A job present in the map is live → tail until its promise fires; a job absent from the
-  * map (already terminal, or — on a recycled host — never ours) is treated as drained, so the stream reads whatever is
-  * on disk and ends. A missing log file (job logged nothing yet, or the disk was wiped) reads as empty rather than
-  * failing, so the worst case is an immediate empty close, never a hang.
+  * "Is this job still running?" comes from `completions`, [[JobRunner]]'s in-process registry of completion
+  * promises: present means live, so tail until the promise fires; absent means already terminal — or never ours, on
+  * a recycled host — so read what is on disk and end. A missing log file reads as empty rather than failing, so the
+  * worst case is an immediate empty close, never a hang.
   *
-  * The tailer is offset-incremental: it tracks a byte offset and each tick reads only the bytes appended since the last
-  * read (O(appended), not O(file size)), carrying a partial line across ticks in a byte buffer until its newline lands.
-  * Splitting on the `'\n'` byte is UTF-8-safe — `0x0A` never appears inside a multibyte sequence — so a char torn at a
-  * read boundary always sits after the last newline and stays buffered, fully decoded only once its remaining bytes
-  * arrive. It reads via an independent [[FileChannel]] handle, so [[FileSink]]'s held-open writer never blocks it.
+  * The tailer is offset-incremental, reading only bytes appended since the last tick and carrying a partial line in
+  * a byte buffer. Splitting on the `'\n'` byte is UTF-8-safe — `0x0A` never appears inside a multibyte sequence —
+  * so a char torn at a read boundary always sits after the last newline and stays buffered. It reads through its own
+  * [[FileChannel]], so [[FileSink]]'s held-open writer never blocks it.
   */
 final class FileTail(
   logDir: Path,

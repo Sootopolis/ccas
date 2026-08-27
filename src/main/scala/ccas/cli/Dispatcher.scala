@@ -294,15 +294,10 @@ object Dispatcher {
         .flatMap(clubs => printManagedClubs(clubs, currentClub).as(0))
   }
 
-  // Unmanaging leaves the `club` row intact and job submission gates on that row, not on managed status — so a
-  // `current_club` still pointing at the removed club would keep silently running real jobs against it (while `--all`
-  // correctly skips it). Clear the pointer so the next bare command fails loudly with `ClubResolver.NoClubError`.
-  // Compare case-insensitively on the trimmed slug: `ClubSlug.normalize` lowercases but does not trim.
-  //
-  // Match is on `current_club`'s *display* slug, not its id: `club remove <slug>` gives us only the typed slug, and the
-  // DELETE returns no id to compare against. The display slug is kept fresh by the post-submit write-back, so the stale
-  // window is narrow — a club renamed with no job run since, then removed by its new canonical slug, wouldn't clear
-  // here. That residual case is defense-in-depth for #177 (which properly gates submission on managed status).
+  // Unmanaging leaves the `club` row intact and submission gates on that row, not on managed status, so a
+  // `current_club` still pointing at the removed club would keep running real jobs against it. Clear it so the next
+  // bare command fails loudly with `ClubResolver.NoClubError`. Why the match is on the display slug rather than the
+  // id, and the narrow stale window that leaves: docs/adr/0011-cli-locality-and-the-current-club-pointer.md.
   private def clearCurrentIfRemoved(removed: ClubSlug, currentClub: Option[String]): UIO[Unit] =
     ZIO.whenDiscard(currentSlug(currentClub).exists(sameSlug(_, ClubSlug.unwrap(removed)))) {
       ConfigWriter
@@ -368,19 +363,13 @@ object Dispatcher {
         .orDie
     )
 
-  // Run each club through submit-then-follow ONE at a time, so a multi-club (`--all`) run streams each club's logs and
-  // bars live in turn rather than following the first while the rest run blind and dump their logs at the end. The next
-  // club isn't submitted until the current one's follow completes; overall exit is 0 only if every club succeeded. Each
-  // `submitOne` posts a single-club job (the batch routes accept a one-element list) whose result `handleBatch` follows.
-  // Near-free vs concurrent submission: the shared Chess.com client is gate-bound, so total wall-clock is ~unchanged.
+  // Run each club through submit-then-follow ONE at a time: the next club isn't submitted until the current one's
+  // follow completes, and overall exit is 0 only if every club succeeded. Each `submitOne` posts a single-club job
+  // (the batch routes accept a one-element list) whose result `handleBatch` follows. With `--detach` (#170) the
+  // follow is skipped but the same loop is reused, so error handling and scoring stay identical.
   //
-  // With `detach` (#170) the follow is skipped: each club's job is submitted, its id printed, and the command returns —
-  // no log stream, no Ctrl-C-cancel. Reattach later with `ccas logs <id>`. Serialization is irrelevant then (nothing is
-  // streamed), but the same per-club loop is reused so error handling and scoring stay identical.
-  //
-  // Each club is best-effort: a submit / transport failure (a 4xx/5xx or a dropped connection for one club) is caught,
-  // reported, and scored as a failure for that club WITHOUT aborting the rest — matching `handleBatch`'s handling of
-  // per-club errors in a 200 body, and preserving the old batch design's "every club still runs" property.
+  // Why serialized rather than concurrent, and why each club is best-effort:
+  // docs/adr/0011-cli-locality-and-the-current-club-pointer.md.
   private def followEachClub(
     follower: JobFollower,
     targets: NonEmptyChunk[ClubTarget],

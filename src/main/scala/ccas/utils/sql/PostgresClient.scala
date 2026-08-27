@@ -129,27 +129,13 @@ object PostgresClient {
 
   /** Normalise a configured `database.url` into a JDBC URL plus separately-carried credentials.
     *
-    * Every managed Postgres provider (Neon, Heroku, Render, Supabase, Railway, …) hands out the '''libpq''' connection
-    * URI from PostgreSQL's own docs — `postgresql://user:pass@host/db?sslmode=require` — while pgjdbc accepts neither
-    * its scheme (it requires the `jdbc:` subprotocol) nor credentials in userinfo position (it requires `?user=` /
-    * `?password=`). Pasting a provider URL verbatim therefore failed at boot with Hikari's opaque
-    * `RuntimeException: Failed to get driver instance for jdbcUrl=…`, naming the driver rather than the URL shape. This
-    * accepts both forms and converts.
+    * Accepts both the `jdbc:` form and the libpq URI every managed provider hands out
+    * (`postgresql://user:pass@host/db`), which pgjdbc rejects on both scheme and userinfo credentials. Credentials
+    * are lifted out of the URL for both forms, because Hikari echoes the `jdbcUrl` into its failure message.
     *
-    * Credentials are always lifted out of the URL rather than left in it, for both accepted forms: Hikari echoes the
-    * `jdbcUrl` into that failure message, so a password embedded in the URL lands in the log on any driver-level
-    * failure. `hikariConfig.setUsername` / `setPassword` are equivalent to the query parameters as far as pgjdbc is
-    * concerned, and keep the secret out of the string.
-    *
-    * Percent-decoding differs by position, deliberately: userinfo follows RFC 3986 (percent-escapes only, `+` is a
-    * literal plus), while query values follow what pgjdbc itself does to them (`URLDecoder`, so `+` decodes to a
-    * space). Decoding a lifted query credential any other way would silently change the password of an existing,
-    * working `jdbc:` configuration.
-    *
-    * Non-Postgres `jdbc:` URLs pass through untouched, as does any `jdbc:` URL this cannot improve on. Returns `Left`
-    * with an actionable, credential-free message for anything that is neither form.
-    *
-    * Scheme matching is case-insensitive (RFC 3986 §3.1); the rest of the URL is left in the case it was written.
+    * Percent-decoding differs by position on purpose — RFC 3986 for userinfo, `URLDecoder` for query values — and
+    * unifying the two would silently change the password of an existing working config. That, and what passes
+    * through untouched: `docs/adr/0014-accept-both-database-url-forms.md`.
     */
   private[ccas] def normalizeJdbcUrl(raw: String): Either[String, ResolvedJdbcUrl] = {
     val url       = raw.trim

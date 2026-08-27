@@ -7,20 +7,14 @@ import scala.jdk.CollectionConverters.*
 import zio.{Task, ZIO}
 
 /** Reads and writes the server-bootstrap env file (`KEY=VALUE`, `#` comments) that `ccas config` manages and
-  * [[ServerEnvOverlay]] applies at boot. Distinct from `ccas.cli.config.CliConfig` (the HOCON CLI *client* config): this
-  * file holds the settings the *server* needs to boot (DB connection, contact email, port), in plain env-var form so the
-  * same file doubles as a systemd `EnvironmentFile` and a shell-`source`-able file. Lives in `ccas.server.config` (not
-  * `ccas.cli`) so `CcasServer` can apply it at boot without a server→cli package cycle.
+  * [[ServerEnvOverlay]] applies at boot.
   *
-  * The file is modelled as an ordered list of [[Line]]s so a `set`/`unset` of one key leaves every other key, blank
-  * line, comment, and even line ordering untouched — only the touched key's line is rewritten. A line with no `=`, or a
-  * comment/blank, is preserved verbatim as [[Line.Other]] (a malformed line never crashes parsing). Values are split on
-  * the FIRST `=` so JDBC URLs keep their `&`, `?`, `=`, `:` intact, and an optional surrounding `"`/`'` pair is stripped
-  * on read (and re-added on write only when the value needs it).
+  * Distinct from `ccas.cli.config.CliConfig`, the HOCON CLI *client* config: this file holds what the *server* needs
+  * to boot, in plain env-var form so it doubles as a systemd `EnvironmentFile` and a shell-sourceable file. It lives
+  * in `ccas.server.config` rather than `ccas.cli` so `CcasServer` can apply it without a server-to-cli package cycle.
   *
-  * Writes go through [[writeAtomic]], which copies `ConfigWriter`'s temp-file-then-rename strategy: the temp file is
-  * created owner-only (0600) and that mode rides the atomic rename onto the target, so secrets (DATABASE_URL,
-  * DB_PASSWORD) are never world-readable.
+  * The line model that makes a one-key edit non-destructive, the first-`=` split, and [[writeAtomic]]'s 0600
+  * temp-then-rename: `docs/adr/0011-cli-locality-and-the-current-club-pointer.md`.
   */
 object ServerEnvFile {
 

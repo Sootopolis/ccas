@@ -12,31 +12,18 @@ import ccas.utils.sql.PostgresClient
 
 /** Resolves the current canonical slug for a club whose previously-known slug 404s on Chess.com.
   *
-  * Strategy:
+  *  - **Tier A (DB lookup)** — never fires HTTP: `Club.selectId(hint).slug`, when it differs from the stale input.
+  *    A no-op without a hint, since `Club` keeps no historical slug table.
+  *  - **Tier B (match-ref endpoint)** — `Club.slugFromMatchRef`, which reads a `ClubMatchRef` board's team URL.
+  *  - **Tier C (admin clubs)** — fetches each stored `ClubAdmin`'s `/pub/player/{username}/clubs` and looks for a
+  *    slug whose `ApiClub.clubId` matches the hint. Bounded by the admin count, short-circuits on first hit, and
+  *    closes the gap for a club that has never played a match.
   *
-  *  - **Tier A (DB lookup)** — never fires HTTP. With a `clubIdHint`, returns `Club.selectId(hint).slug` if the row's
-  *    slug differs from the stale input (some other path already learned the new slug). Without a hint, Tier A is a
-  *    no-op since `Club` has no historical slug table.
+  * Verification fetches `ApiClub` for the candidate; on 404 the caller's original 404 propagates. Tombstoned slugs
+  * (`_stale_<clubId>`) are never returned as fresh.
   *
-  *  - **Tier B (match-ref endpoint)** — when Tier A returns `None` AND `clubIdHint` is `Some`, delegates to the
-  *    existing `Club.slugFromMatchRef`, which fetches a `ClubMatchRef` board's team URL and extracts the slug.
-  *
-  *  - **Tier C (admin-clubs lookup)** — when Tier B returns `None` AND `clubIdHint` is `Some`, loads stored
-  *    `ClubAdmin` rows for the club, fetches each admin's `/pub/player/{username}/clubs`, and looks for a slug whose
-  *    `ApiClub.clubId` matches the hint. Bounded by the admin count; short-circuits on first verified hit. Closes the
-  *    gap for clubs that have never played a match (Tier B is a no-op there since no `ClubMatchRef` exists).
-  *
-  * Verification fetches `ApiClub` for the candidate slug; on 404 the resolver returns `None` so the caller's original
-  * 404 propagates.
-  *
-  * The entry points (`fetchOrRecover`, `withClubSlugRenameRecovery`) only run recovery when the original failure is a
-  * [[ccas.utils.client.ReportedNotFound]] — the canonical Chess.com `X "id" not found.` 404 body. Transient
-  * backend 404s (`An internal error has occurred`, codes 0/3024/403, ~93% of `/club/{slug}` 404s per #3) skip recovery
-  * entirely, avoiding the Tier C admin fan-out's wasted network calls.
-  *
-  * **Tombstone handling.** Slugs of the form `_stale_<clubId>` (set by `Club.resolveStaleSlug`) are skipped — never
-  * returned as a "fresh" slug. Format collision risk is tracked in
-  * [Sootopolis/ccas#21](https://github.com/Sootopolis/ccas/issues/21).
+  * Why the entry points gate on [[ccas.utils.client.ReportedNotFound]] rather than any 404 — it is what stops Tier
+  * C's fan-out firing on noise: `docs/adr/0010-rename-recovery-for-usernames-and-club-slugs.md`.
   */
 object ClubSlugRenameResolver {
 
@@ -225,16 +212,14 @@ object ClubSlugRenameResolver {
       Option.when(matches)((ClubSlug.wrap(apiClub.`@id`.path.segments.last), apiClub))
     }.onNotFound(_ => ZIO.none)
 
-  /** Resolves a club slug to its ID: returns `Some(clubId)` if the slug is known locally; otherwise fetches from
-    * Chess.com and persists. Expected errors (404, decode, SQL) are swallowed → `None`, matching the
-    * `Club.resolveOrFetch` semantics this supersedes; a systemic [[NetworkUnavailableException]] re-raises so a
-    * caller's retry loop aborts cleanly instead of recording a bogus skip (#119). Lives in apps/ rather than
-    * tables/ to keep the resolver primitives co-located, avoiding a cycle with `tables.Club`.
+  /** Resolves a club slug to its ID: `Some(clubId)` if known locally, else fetch from Chess.com and persist.
     *
-    * Slug-rename recovery is intentionally NOT wired here. The wrap would invoke the resolver, which derives its
-    * `clubIdHint` via `Club.selectBySlug(stale)` — the very lookup this helper just performed at L1. With no other
-    * source of clubId for a slug, both Tier A and Tier B no-op and the wrap can't fire. A future recovery primitive
-    * keyed on match-id (e.g. via `unresolved_match_club.match_id`) could plug in here once it lands.
+    * Expected errors (404, decode, SQL) swallow to `None`, matching the `Club.resolveOrFetch` semantics this
+    * supersedes; a systemic [[NetworkUnavailableException]] re-raises so a caller's retry loop aborts cleanly rather
+    * than recording a bogus skip (#119). Lives in apps/ rather than tables/ to avoid a cycle with `tables.Club`.
+    *
+    * Slug-rename recovery is deliberately not wired here — it could not fire. See
+    * `docs/adr/0010-rename-recovery-for-usernames-and-club-slugs.md`.
     */
   def resolveOrFetch(
     client: ChessComClient,

@@ -1,5 +1,7 @@
 # Dependency decisions — 2026-08-24
 
+**Status:** Accepted, 2026-08-25.
+
 From the first full version review in a while. Records only the calls that needed weighing; the
 routine bumps are legible from `project/Versions.scala` and aren't repeated here.
 
@@ -77,7 +79,7 @@ before reaching `main()`. 25.0.4-tem is also the newest 25.x SDKMAN offers for d
 latent gap: those JVM flags are added *only* by native-packager's `bashScriptExtraDefines`, so on
 JDK 26 `sbt test`/`run` and IDE runs would break while the packaged launcher kept working.
 
-**sbt 2.x** — see [sbt 2 evaluation](sbt-2-evaluation.md).
+**sbt 2.x** — see [sbt 2 evaluation](0003-defer-sbt-2.md).
 
 ## Accepted without verification
 

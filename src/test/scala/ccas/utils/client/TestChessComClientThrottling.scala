@@ -1150,28 +1150,11 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
     FreshSchemaLayer("test_client_throttling", Tables.ensureTables)
   ) @@ TestAspect.timeout(15.seconds)
 
-  // ==========================================================================
-  // Timing stats (integration) — these two tests cannot run under TestClock
-  // without significant rewrites:
-  //
-  //   Test 1 ("successful requests populate gate wait…"): client.getAll is
-  //   called synchronously (no fork/adjust). The handler's ZIO.sleep(5.millis)
-  //   would block forever under TestClock; latencyMinMs would also lose its
-  //   real-time semantics (it would reflect virtual sleeps, not actual handler
-  //   cost).
-  //
-  //   Test 2 ("throttle-down and recovery records throttled duration"):
-  //   ZIO.foreachParDiscard (no fork) contains 429-retry loops driven by
-  //   Schedule.exponential sleeps that freeze under TestClock, and
-  //   repeatUntil(!s.coolingDown) polls until the recovery daemon's cooldown
-  //   sleep expires — which never advances without TestClock.adjust driving it.
-  //
-  // To migrate: fork + TestClock.adjust for each foreachPar/foreachDiscard
-  // phase, and replace repeatUntil with a staged adjust (Pattern B). Both
-  // tests also verify throttledMs/latencyMinMs > 0 which depends on real or
-  // virtual elapsed time; the assertion would remain valid under TestClock once
-  // the sleeps are driven, but the test intention is wall-clock integration.
-  // ==========================================================================
+  // Timing stats: these two deliberately run on the real clock, and the intent is wall-clock integration.
+  // Test 1 calls `getAll` synchronously, so the handler's `ZIO.sleep` would block forever under TestClock and
+  // `latencyMinMs` would measure virtual sleeps. Test 2's `foreachParDiscard` holds 429-retry loops on
+  // `Schedule.exponential`, and its `repeatUntil(!s.coolingDown)` polls for a cooldown that never expires
+  // without `TestClock.adjust`. Migrating means fork + adjust per phase and a staged adjust for `repeatUntil`.
 
   private def suiteTimingStats = suite("timing stats")(
     test("successful requests populate gate wait, EMA delay, and latency") {

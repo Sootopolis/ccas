@@ -1,5 +1,7 @@
 # sbt 2 — evaluated and deferred (2026-08-24)
 
+**Status:** Deferred, 2026-08-25. Revisit on the triggers at the end.
+
 **Decision: stay on sbt 1.13.0.** Not blocked — the payoff doesn't cover the cost. Revisit on the
 triggers at the end.
 

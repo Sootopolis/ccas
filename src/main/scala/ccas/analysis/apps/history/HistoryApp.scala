@@ -16,64 +16,12 @@ import ccas.utils.sql.PostgresClient
 
 /** Discovers and persists a chess club's match history by crawling the Chess.com API.
   *
-  * Starting from a club's known members, it collects match IDs, fetches match data, and follows links to newly
-  * discovered players via breadth-first search (BFS) waves — expanding the match graph until no new matches remain.
+  * Starting from a club's known members it collects match IDs, fetches match data, and follows links to newly
+  * discovered players in breadth-first waves until no new matches remain.
   *
-  * ==Run Modes==
-  *   - '''Default (active-only, incremental):''' Only queries members whose match lists haven't been fetched before,
-  *     and re-queues only the actively-changing matches (Registration + InProgress). Matches we already have stored as
-  *     Finished are not re-fetched — Finished data is effectively immutable — but genuinely-new matches of any status
-  *     (including newly-Finished ones absent from `club_match`) are still ingested via the listing endpoints. This is
-  *     the cheapest mode for regular / scheduled updates.
-  *   - '''`--include-finished`:''' Also re-queues already-stored recently-Finished matches (Finished within the
-  *     90-day stale window), i.e. the previous default behaviour. Use periodically to pick up rare organiser
-  *     corrections to settled-looking matches; settled (>90-day) matches are still only touched by `--refresh`.
-  *   - '''`--full`:''' Clears member query history so every member's match list is re-fetched from the API. Use when
-  *     you want a complete rebuild of the match graph (e.g., after a long gap or to pick up retroactive API changes).
-  *   - '''`--refresh [hours]`:''' After BFS processing, re-fetches settled matches (finished + past the stale window)
-  *     directly from `club_match`, bypassing the pending table. If `hours` is specified, only refreshes settled matches
-  *     whose `fetchedAt` is older than that many hours — enabling resumable partial refreshes (already-refreshed matches
-  *     have updated `fetchedAt` and are naturally skipped). Without `hours`, refreshes all settled matches.
+  * Run modes, the four phases, how unresolved clubs and board players are recorded, and what the shared multi-club
+  * context deduplicates: `docs/architecture.md`, under "Applications" → "`HistoryApp` run modes".
   *
-  * ==Workflow (4 Phases)==
-  *   1. '''Initialize''' — Reconcile club membership, load current state (members, snapshots, processed counts), reset
-  *      pending match statuses, and create a `HistoryRun` record.
-  *   2. '''Seed''' — Collect match IDs into `history_pending_match` from three sources: the club matches endpoint, each
-  *      member's match list, and stale existing matches. Also retries previously unresolved clubs and board players
-  *      from prior runs.
-  *   3. '''Process''' — BFS wave loop: fetch and persist match data in parallel batches, discover unknown players, seed
-  *      their match lists, and repeat until no new pending matches remain.
-  *   3.5. '''Refresh''' (if `--refresh`) — Re-fetch settled matches directly from `club_match` in batches, bypassing the
-  *      pending table. Failed matches keep their old `fetchedAt` and are retried on the next refresh.
-  *   4. '''Finalize''' — Mark the `HistoryRun` complete, log summary stats, and write a report file.
-  *
-  * ==Unresolved Entities==
-  * During processing, some entities may not be resolvable via the API:
-  *   - '''Unresolved match clubs:''' If a team's club URL can't be resolved to a `ClubId` (club deleted or API error),
-  *     the slug is recorded in `unresolved_match_club`. If ''neither'' team resolves to the target club, the match is
-  *     marked `Unidentified` — data is saved but BFS expansion is skipped for that match.
-  *   - '''Unresolved board players:''' If a player's username can't be resolved to a `PlayerId` (account closed or
-  *     deleted), it is recorded in `unresolved_board_player`. The board row is saved with a `None` player ID.
-  *
-  * Both types are retried at the start of each run. Successfully resolved entries are patched in-place and removed from
-  * their respective unresolved tables.
-  *
-  * ==Multi-Club Deduplication==
-  * When multiple club slugs are provided in a single CLI invocation, clubs are processed sequentially with a shared
-  * `SharedContext` that eliminates redundant API calls across clubs:
-  *   - '''Unresolved retries''' run once before the per-club loop instead of per-club.
-  *   - '''Member match lists:''' When a member's match list is fetched for one club, matches are also seeded into the
-  *     pending queues of all other clubs in the batch. Subsequent clubs skip API calls for those members, writing only
-  *     a `HistoryMemberQuery` record so future incremental runs have correct per-club history.
-  *   - '''Match processing:''' Matches fully processed by a prior club are skipped — the pending entry is deleted
-  *     without re-fetching from the API. The `history_run.matches_processed` column counts total matches handled
-  *     (processed + shared-skipped) to preserve consistent run-level totals.
-  *   - '''Stale seeding:''' Matches already processed by a prior club in the batch are filtered out before being
-  *     re-queued as pending.
-  *
-  * This deduplication only applies to the CLI multi-club path. API-submitted jobs run independently per club.
-  *
-  * ==Invocation==
   *   - '''CLI:''' `HistoryApp <club-slug> [club-slug ...] [--full] [--include-finished] [--refresh [hours]]`
   *   - '''API:''' `POST /api/jobs/history` with
   *     `{"clubSlugs": ["..."], "full": true/false, "includeFinished": true/false, "refreshMinHours": 24}`

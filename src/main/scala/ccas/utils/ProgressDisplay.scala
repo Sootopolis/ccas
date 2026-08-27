@@ -11,26 +11,20 @@ import io.netty.handler.timeout.ReadTimeoutException
 import zio.stream.SubscriptionRef
 import zio.{Cause, FiberId, FiberRef, FiberRefs, LogLevel, LogSpan, Ref, Runtime, Scope, Trace, UIO, Unsafe, URIO, URLayer, ZIO, ZLayer, ZLogger}
 
-/** Manages progress bars rendered one-per-line on stdout; a redraw moves the cursor up over the block and repaints it.
+/** Manages progress bars rendered one-per-line on stdout; a redraw moves the cursor up over the block and repaints.
   *
-  * State (`bars`) is guarded by a Java intrinsic monitor (`lock`) so the synchronous `ZLogger` callback installed by
-  * `ProgressDisplay.live` and the ZIO-effect entry points (`render`, `removeBar`, `finishAllSync`) all serialise their
-  * stdout writes through the same mutex. JVM monitors are reentrant, so a logger callback fired from a thread that
-  * already holds the lock proceeds without deadlock. Bar redraws go directly to the injected `out` stream (`System.out`
-  * in production; a capture buffer under test), not through `zio.Console`, because `ZLogger.apply` is synchronous and
-  * cannot run a ZIO effect. The injected `err` stream receives the last-resort stack trace if a log message thunk
-  * throws inside the `ZLogger` callback.
+  * `bars` is guarded by a Java intrinsic monitor, so the synchronous `ZLogger` callback installed by
+  * [[ProgressDisplay.live]] and the ZIO entry points all serialise their stdout writes through one mutex. JVM
+  * monitors are reentrant, so a callback fired from a thread already holding it proceeds without deadlock. Redraws
+  * go straight to the injected `out` rather than through `zio.Console`, because `ZLogger.apply` is synchronous and
+  * cannot run an effect; `err` takes the last-resort stack trace if a message thunk throws inside the callback.
   *
-  * `logAboveBarsSync` routes the active `JobLogSink`'s file write (`writeFileSync`) *outside* the lock — a per-job
-  * `FileSink` serialises its own `BufferedWriter`, so file IO never contends here (#53). Only the terminal-visible
-  * sequence stays inside the lock: `clear → writeConsoleSync (stdout tee) → redraw`, kept atomic across fibers so a bar
-  * redraw can't tear across a log line. The default `StdoutSink`'s `writeConsoleSync` is a single `println`, so the
-  * critical section stays short.
+  * `logAboveBarsSync` routes the active `JobLogSink`'s file write OUTSIDE the lock — a per-job `FileSink` serialises
+  * its own writer, so file IO never contends here (#53). Only `clear -> writeConsoleSync -> redraw` stays inside,
+  * kept atomic so a redraw can't tear across a log line.
   *
-  * When `enabled` is `false` the bar list is still tracked (so `addBarScoped` finalisers behave consistently across
-  * modes) but the bar-redraw side-effects are suppressed. `logAboveBarsSync` still routes its line through the active
-  * `JobLogSink` (the default `StdoutSink` writes the log line to `out`); only the bar dance is skipped — suitable for
-  * server / non-interactive mode.
+  * With `enabled = false` the bar list is still tracked, so `addBarScoped` finalisers behave the same across modes,
+  * but the redraw side-effects are suppressed — server / non-interactive mode.
   */
 final class ProgressDisplay private[utils] (
   private val enabled: Boolean,
@@ -236,15 +230,12 @@ final class ProgressDisplay private[utils] (
       } yield a
     }
 
-  // ---------------------------------------------------------------------------
-  // Internal rendering — multi-line: each bar draws on its own line, and a redraw moves the cursor up over the block
-  // (CSI n A) then clears to end of screen (CSI J) before repainting. The `enabled` check lives in these helpers so
-  // callers don't repeat it. Always called from inside a `lock.synchronized` block so the reads of `bars` and
-  // `lastDrawnLines` stay consistent. ANSI cursor control was already assumed (the old \r-overwrite used CSI K), so
-  // this needs no capability beyond what a disabled / non-TTY display already gated out. `Esc` is built via 27.toChar
-  // (equivalent to a unicode-escape ESC, as the colour literals in the companion use) — both avoid a raw control byte;
-  // 27.toChar just keeps the string interpolations below free of escape noise.
-  // ---------------------------------------------------------------------------
+  // Internal rendering, multi-line: each bar draws on its own line; a redraw moves the cursor up over the block
+  // (CSI n A), clears to end of screen (CSI J), then repaints. The `enabled` check lives in these helpers so callers
+  // don't repeat it, and they are always called inside `lock.synchronized` so `bars` and `lastDrawnLines` stay
+  // consistent. ANSI cursor control was already assumed, so this needs no capability a non-TTY display hasn't
+  // already gated out. `Esc` is `27.toChar` rather than a unicode escape only to keep the interpolations below
+  // free of escape noise — both avoid a raw control byte.
 
   private val Esc: String = 27.toChar.toString
 

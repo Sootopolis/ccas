@@ -2,22 +2,16 @@ package ccas.cli
 
 import zio.cli.*
 
-/** Parsed `ccas` subcommand. Each variant carries the resolved server URL plus its already-validated arguments;
-  * `zio-cli` does all parsing/validation, so the dispatcher only translates these into HTTP calls.
+/** Parsed `ccas` subcommand. Each variant carries the resolved server URL plus its already-validated arguments, so
+  * the dispatcher only translates these into HTTP calls; zio-cli does all parsing and validation.
   *
   * The global `--server` option is composed into every subcommand. zio-cli takes bare option names and renders the
-  * leading dashes itself (`server` -> `--server`).
+  * leading dashes itself (`server` -> `--server`). Club targeting is by option, never positional — see
+  * `docs/adr/0011-cli-locality-and-the-current-club-pointer.md`.
   *
-  * Club targeting is via the `--club <slug>` option (comma-separated on `membership`/`history`), with `--all` on those
-  * two to mean every managed club; when neither is given the command falls back to the config's `current_club` (set
-  * with `ccas use-club`). There are no positional club slugs on the operation commands — the remaining positionals are
-  * `<username>...` on the blacklist commands, the `<slug>` of `ccas club add`/`remove`, the optional `[slug]` of
-  * `ccas use-club` (absent = print the current club), and the optional `[run-id]` on `ccas recruit --report`.
-  *
-  * IMPORTANT — option/argument ordering: zio-cli expects all options BEFORE positional arguments, e.g.
-  * `ccas blacklist add --club team-alpha alice bob`. Options placed AFTER a positional are NOT errors — they are
-  * silently swallowed as positional values (variadic `<username>...`). The per-subcommand `--help` shows the required
-  * `[options] <args>` order.
+  * IMPORTANT — option/argument ordering: zio-cli expects all options BEFORE positionals, e.g.
+  * `ccas blacklist add --club team-alpha alice bob`. An option placed AFTER a positional is NOT an error — it is
+  * silently swallowed as a positional value. Each subcommand's `--help` shows the required `[options] <args>` order.
   */
 sealed trait CliCommand
 
@@ -194,14 +188,11 @@ object CliCommand {
       .subcommands(serverUp, serverDown, serverStatus)
 
   // The slug is optional so a bare `ccas use-club` PRINTS the current club rather than erroring — the only read path
-  // for a value that is otherwise write-only (`git branch` / `kubectl config current-context` shape). `--clear` drops
-  // it; passing both is rejected as conflicting intent, mirroring `--all` vs `--club`.
+  // for an otherwise write-only value. `--clear` drops it; passing both is rejected as conflicting intent.
   //
-  // `repeat` rather than `atMost(1)` because `atMost(1)` silently TRUNCATES extra positionals instead of rejecting
-  // them. Combined with the zio-cli ordering bug documented at the top of this file — an option written after a
-  // positional is swallowed as another positional — `ccas use-club team-alpha --clear` would parse as a plain set and
-  // silently set the very club the user asked to clear. Capturing every positional lets `UseClub` reject the arity and
-  // point at the right ordering.
+  // `repeat` rather than `atMost(1)`, which silently TRUNCATES extra positionals. Combined with the ordering bug at
+  // the top of this file, `ccas use-club team-alpha --clear` would otherwise parse as a plain set and set the very
+  // club the user asked to clear. Capturing every positional lets `UseClub` reject the arity instead.
   private val useClub: Command[CliCommand] =
     Command(
       "use-club",

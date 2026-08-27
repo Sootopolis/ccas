@@ -17,5 +17,12 @@ if [ "$saw_any" = 1 ] && [ "$all_deletes" = 1 ]; then
   exit 0
 fi
 
+if command -v python3 >/dev/null 2>&1; then
+  echo "Checking the documentation standard..."
+  python3 scripts/check-docs.py || exit 1
+else
+  echo "Pre-push: python3 not found, skipping the documentation check."
+fi
+
 echo "Running tests before push..."
 sbt test

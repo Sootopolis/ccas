@@ -67,16 +67,14 @@ final class JobFollower(
         case _                => ZIO.unit
       }
 
-  // Run the log follow (reconnecting across drops, bounded by `maxWait`) and return the raw outcome without printing any
-  // terminal status: Some(Right)=EOF/terminal, Some(Left)=gave up after maxReconnects, None=timed out. `notice` sinks the
-  // one-time reconnect message — stderr for the plain follow, `renderer.logLine` when bars are drawn.
+  // Run the log follow (reconnecting across drops, bounded by `maxWait`) and return the raw outcome without printing
+  // a terminal status: Some(Right)=EOF/terminal, Some(Left)=gave up after maxReconnects, None=timed out. `notice`
+  // sinks the one-time reconnect message.
   //
-  // Ctrl-C during a follow cancels the server job (#170): the `.onInterrupt` is attached OUTSIDE `.timeout`, so a genuine
-  // `maxWait` expiry (which internally interrupts `follow` and returns `None` on the main path) does NOT trip it — only a
-  // real fiber interruption of this whole effect does. Both the plain and bars follow paths route through here, so the
-  // cancel hook covers both. It fires while the CLI's `Client` layer scope is still open (the follower runs inside it and
-  // finalizers unwind inner-to-outer), so the POST lands during teardown. Not scoped over `interpret`: once the stream
-  // reaches EOF the job is already terminal, so a Ctrl-C during the final status read has nothing to cancel.
+  // Ctrl-C during a follow cancels the server job (#170). `.onInterrupt` is attached OUTSIDE `.timeout` on purpose,
+  // so a genuine `maxWait` expiry — which interrupts `follow` internally and returns `None` — does NOT trip it; only
+  // a real interruption of this whole effect does. It fires while the CLI's `Client` scope is still open, so the POST
+  // lands during teardown. Deliberately not scoped over `interpret`: at EOF the job is already terminal.
   private def followResult(
     jobId: String,
     onLine: String => UIO[Unit],

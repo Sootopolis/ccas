@@ -4,7 +4,7 @@ Chess Club Admin System -- a Scala 3 / ZIO application that integrates with the 
 
 ## Tech Stack
 
-- Scala 3.8.3, SBT 1.12.8, JDK 25 LTS (Temurin)
+- Scala 3, sbt, JDK 25 LTS (Temurin) — exact versions in `project/Versions.scala`, `project/build.properties` and `.sdkmanrc`
 - ZIO 2.x (zio-http, zio-json, zio-config)
 - Magnum ORM + PostgreSQL 17
 - Docker Compose for local dev
@@ -370,8 +370,7 @@ CREATE SCHEMA IF NOT EXISTS test AUTHORIZATION ccas;
 
 ## Further Reading
 
-- [Adaptive rate limiting](docs/adaptive-rate-limiting.md) -- design notes on the Chess.com API throttling strategy
-- [ChessComClient follow-ups](docs/chess-com-client-followups.md) -- items parked during the `client_stats` analysis
-- [Dependency decisions, 2026-08](docs/dependency-upgrades-2026-08.md) -- the version calls that needed weighing, and what was held
-- [sbt 2 evaluation](docs/sbt-2-evaluation.md) -- why we stayed on sbt 1.13, and what would change that
-- [CLAUDE.md](CLAUDE.md) -- detailed architecture and code patterns for AI-assisted development
+- [Architecture reference](docs/architecture.md) -- what each part is and how the pieces connect
+- [Architecture decision records](docs/adr/) -- why things are the way they are, one decision per file
+- [Documentation standard](docs/documentation-standard.md) -- where each kind of knowledge lives, and how much of it to write
+- [CLAUDE.md](CLAUDE.md) -- conventions and build commands for AI-assisted development
