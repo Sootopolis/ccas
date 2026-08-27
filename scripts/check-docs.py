@@ -15,11 +15,18 @@ failure means something genuinely new, not pre-existing debt.
 """
 import os, re, sys
 
-MAX_LINE_BLOCK = 8    # consecutive `//` lines
-MAX_DOC_BLOCK = 15    # scaladoc / block comment
+MAX_LINE_BLOCK = 8       # consecutive `//` lines
+MAX_DOC_BLOCK = 15       # scaladoc / block comment
+MAX_CLAUDE_WORDS = 2500  # section 6
 SKIP_DIRS = {'.git', 'target', '.bloop', '.metals', '.idea', 'out', 'logs'}
 LINK = re.compile(r'\[[^\]]*\]\(([^)#\s]+)(?:#[^)\s]*)?(?:\s+"[^"]*")?\)')
 DOC_PATH = re.compile(r'docs/[A-Za-z0-9._/-]+\.md')
+ADR_DIR = os.path.join('.', 'docs', 'adr')
+ADR_FILE = re.compile(r'\b(\d{4}-[A-Za-z0-9-]+\.md)')
+# The status line marks a DEAD decision with the past participle; "Supersedes" on a live ADR's
+# status must not match it. A citing line may use any form of the word.
+STATUS_DEAD = re.compile(r'\bsuperseded\b', re.I)
+CITE_MARKER = re.compile(r'supersed', re.I)
 
 failures = []
 
@@ -88,8 +95,57 @@ def check_pointers():
                 failures.append(f'{path}: unresolved doc pointer -> {m.group(0)}')
 
 
+def check_claude_size():
+    words = len(open('CLAUDE.md').read().split())
+    if words > MAX_CLAUDE_WORDS:
+        failures.append(f'CLAUDE.md: {words} words (max {MAX_CLAUDE_WORDS}). '
+                        f'Move architecture prose to docs/ and link to it.')
+
+
+def status_line(path):
+    """The ADR's `**Status:**` line, joined with the line after it so a wrapped status still reads whole."""
+    lines = open(path).read().split('\n')
+    for i, l in enumerate(lines):
+        if l.startswith('**Status:**'):
+            return ' '.join(lines[i:i + 2])
+    return ''
+
+
+def check_adr_currency():
+    """Immutability is not currency: a superseded ADR still resolves, so a bare pointer into one
+    hands the reader a decision that no longer holds. Require a forward link on the ADR, and require
+    every citation from outside docs/adr/ to say the target is superseded."""
+    if not os.path.isdir(ADR_DIR):
+        return
+    superseded = set()
+    for fn in sorted(os.listdir(ADR_DIR)):
+        if not ADR_FILE.fullmatch(fn):
+            continue
+        status = status_line(os.path.join(ADR_DIR, fn))
+        if not STATUS_DEAD.search(status):
+            continue
+        superseded.add(fn)
+        forward = [m for m in ADR_FILE.findall(status) if m != fn]
+        if not forward:
+            failures.append(f'docs/adr/{fn}: status says superseded but links to no successor. '
+                            f'Add the link so a reader can walk to the live decision.')
+    if not superseded:
+        return
+    for ext in ('.scala', '.md'):
+        for path in walk(ext):
+            if os.path.normpath(path).startswith(os.path.normpath(ADR_DIR)):
+                continue          # ADRs legitimately discuss one another
+            for n, line in enumerate(open(path).read().split('\n'), 1):
+                for fn in ADR_FILE.findall(line):
+                    if fn in superseded and not CITE_MARKER.search(line):
+                        failures.append(f'{path}:{n}: cites superseded ADR {fn} without saying so. '
+                                        f'Point at its successor, or say "superseded" on this line.')
+
+
 check_blocks()
 check_pointers()
+check_claude_size()
+check_adr_currency()
 
 if failures:
     print('Documentation standard violations (docs/documentation-standard.md):\n')
