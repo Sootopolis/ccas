@@ -178,10 +178,11 @@ Three of the four files originally in `docs/` were ADRs in everything but name �
 Decision, dated, immutable — and now live in [`docs/adr/`](adr/) with numbers. Use them as the
 template for new ones.
 
-`docs/chess-com-client-followups.md` is the exception and deliberately stays put: it is a list of
-parked items, not a decision, and forcing it into the ADR numbering would make the sequence mean two
-different things. Its real home is GitHub issues; until they are filed it is a backlog note in
-`docs/`.
+The fourth was not an ADR and was not forced into the numbering: `chess-com-client-followups.md`
+was a list of parked items, not a decision, so it became issues
+[#233](https://github.com/Sootopolis/ccas/issues/233)–[#236](https://github.com/Sootopolis/ccas/issues/236)
+and the file was deleted. That is the general rule — a backlog belongs in the tracker, where it can
+be closed, and `docs/` holds only things that are finished.
 
 ## 9. Enforcement
 

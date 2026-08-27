@@ -373,5 +373,4 @@ CREATE SCHEMA IF NOT EXISTS test AUTHORIZATION ccas;
 - [Architecture reference](docs/architecture.md) -- what each part is and how the pieces connect
 - [Architecture decision records](docs/adr/) -- why things are the way they are, one decision per file
 - [Documentation standard](docs/documentation-standard.md) -- where each kind of knowledge lives, and how much of it to write
-- [ChessComClient follow-ups](docs/chess-com-client-followups.md) -- items parked during the `client_stats` analysis
 - [CLAUDE.md](CLAUDE.md) -- conventions and build commands for AI-assisted development
