@@ -195,6 +195,9 @@ different things. Its real home is GitHub issues; until they are filed it is a b
 4. **ADR currency** — a superseded ADR whose status line has no forward link fails, as does a
    citation of one from code or from a doc outside `docs/adr/` that does not say it is superseded.
 
+Rules 1 and 2 are judgement calls and can be waived inline; 3 and 4 are correctness and cannot. See
+§10.
+
 **The gate is looser than §6 on purpose, and the gap is the point.** A regex cannot tell a member
 scaladoc from a class one, and it cannot judge whether five lines of `//` earn their place — so the
 ceilings catch essays while §6's numbers stay review rules. They are set off this repo's own
@@ -208,7 +211,42 @@ essay". Everything else in this document is a review rule.
 symbol the decision introduced — never from memory or from an issue number. Every date in
 `docs/adr/` was wrong on first writing for exactly that reason.
 
-## 10. When to revisit this
+## 10. Keeping this from becoming ritual
+
+A standard fails in two directions. It rots, which §9 guards. Or it calcifies — kept because it is
+written down, obeyed because disobeying it is more trouble than the contortion it demands. The second
+failure is quieter, so it gets the explicit machinery.
+
+**Judgement rules are waivable; correctness rules are not.** A length ceiling is a heuristic standing
+in for a judgement a regex cannot make, so a case where it is wrong is expected, not a violation. Put
+
+```scala
+* docs-standard: allow long-block -- the 30 codec cases have to be listed in one place
+```
+
+anywhere inside the block. The reason is mandatory: an unexplained waiver is indistinguishable from a
+bypass and carries nothing into the next review. A broken pointer or a bare citation of a superseded
+ADR is never a judgement call, so nothing suppresses those — reach for `--no-verify` and you skip the
+test suite too, which is the correct disincentive.
+
+**Waivers are the evidence, not the leak.** `python3 scripts/check-docs.py --report` prints the review
+agenda: live measurements against the [Baseline](#baseline-august-2026), every waiver with its reason
+and location, and the rules that did not fire. Five waivers on one rule is the report telling you the
+threshold is wrong — change the number or delete the rule, and do not add a sixth. That is why the
+waiver counts rather than merely suppressing: a bypass that leaves no trace makes the next review an
+argument from memory.
+
+**The default action of a review is deletion.** Standards only ever grow, because adding a rule feels
+like diligence and removing one feels like giving up. Invert it: a rule earns its place by having
+fired or been waived. One clean run proves nothing — a healthy tree is exactly when nothing fires —
+but a rule that has done neither across several reviews is costing reading attention and buying
+nothing. Delete it. The document earns growth; it does not accrue it.
+
+**Nothing here outranks the work.** If following a rule would make a change worse, the rule is wrong
+for that case: waive it, say why, and move on. Do not contort code to satisfy this document, and do
+not block a change on a documentation rule that a review could settle later.
+
+## 11. When to revisit this
 
 The signal that produced this document was specific and reusable: **compliance high, consumption
 zero.** Every comment was written conscientiously and none of them were read, because finding the
@@ -217,6 +255,9 @@ one relevant paragraph cost more than re-deriving it from the code.
 Watch for that, not for volume. Volume is the symptom; unreadability is the disease, and a document
 can rot into unreadability at constant size. When the next revision is prompted, it should be a
 diagnosis rather than an accumulation of irritation.
+
+Run `--report` when the question comes up, not on a calendar. A scheduled review with nothing to
+decide is itself the ritual this section exists to prevent.
 
 ## Baseline (August 2026)
 
