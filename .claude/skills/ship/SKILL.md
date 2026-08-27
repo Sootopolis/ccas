@@ -77,10 +77,27 @@ new SHA and the branch then diverges. Unpublished, recycling is a local reset no
 
 - **The shipped branch** — delete it: `git push origin --delete <branch>` (only if it was published), then prune the
   local branch. Never `--delete-branch` on the merge; disposal is decided here.
-- **Before deleting anything published, prove it holds nothing unique.** `git rev-list` "ahead" counts are misleading
-  under squash-merge: the branch commit and the squash commit have the same content and different SHAs, so a merged
-  branch still reads as ahead. Use `git cherry <base> <branch>` — `-` means the patch is already in base (safe), `+`
-  means genuinely absent (STOP and ASK). Cross-check with `gh pr list --state all --head <branch>`.
+- **Before deleting anything published, prove it holds nothing unique.** Compare the branch against the commit the
+  merge actually produced, which is the only reference point that cannot move:
+
+  ```
+  MERGED=$(gh pr view <n> --json mergeCommit -q .mergeCommit.oid)   # resolves for a squash merge too
+  git diff $MERGED <branch>                                          # empty -> the squash captured the branch exactly
+  ```
+
+  Empty means every byte of the branch is in that commit, so deletion loses nothing no matter what has landed since.
+  Non-empty means STOP and ASK. Cross-check with `gh pr list --state all --head <branch>`.
+- **Anything compared against `<base>` gives a false STOP once base moves on.** `git diff <base> <branch>` is a fine
+  shortcut *immediately* after the merge, but a concurrent PR landing on base makes it non-empty — it reports the
+  other PR's files as deletions — and there is then no way to tell "branch has unique work" from "base has newer
+  work". Measured: 0 lines right after the squash, 7 lines after one unrelated commit. The merge commit above is
+  immune to this; base is not.
+- **Never use `git rev-list` counts or `git cherry` for this.** They compare commits rather than content, and
+  squash-merge guarantees the two disagree: `rev-list` still reads the branch as ahead because the squash is a new
+  SHA, and `git cherry` compares *patch-ids*, so an N-commit branch collapsed into one squash commit yields N
+  patch-ids matching nothing in base. It printed `+` nine times on a fully-merged branch during #237 — "STOP and
+  ASK" on a branch whose tree was byte-identical to `main`. `git cherry` is only trustworthy when the branch had
+  exactly one commit, which is not the normal case here.
 - **Ambiguous, or the user calls a branch long-lived?** ASK before deleting. Deletion is irreversible from here.
 
 ### Re-base the parked branch (`wip`)
