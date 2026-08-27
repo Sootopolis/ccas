@@ -38,6 +38,9 @@ CITE_MARKER = re.compile(r'supersed', re.I)
 # Waivers apply to judgement rules only. The reason is mandatory: an unexplained waiver
 # is indistinguishable from a bypass, and carries no evidence into the next review.
 WAIVER = re.compile(r'docs-standard:\s*allow\s+([a-z-]+)\s*(?:--|—)\s*(\S.*?)\s*$')
+MARKER = re.compile(r'docs-standard:')          # a marker that may or may not parse
+WAIVABLE = {'long-block'}                        # inline-waivable rules, by name
+WAIVER_THRESHOLD = 5                             # section 10: at this many, the rule is wrong
 
 failures = []
 waivers = []      # (rule, path, line, reason)
@@ -72,6 +75,7 @@ def flush(path, start, buf):
     if start is None:
         return
     waived = next((WAIVER.search(b) for b in buf if WAIVER.search(b)), None)
+    marker = any(MARKER.search(b) for b in buf)
     line_comment = all(b.strip().startswith('//') for b in buf)
     ceiling = MAX_LINE_BLOCK if line_comment else MAX_DOC_BLOCK
     # Drop `@param x ...` / `@return ...` and their wrapped continuation lines: only
@@ -88,11 +92,18 @@ def flush(path, start, buf):
         prose.append(b)
     if len(prose) <= ceiling:
         return
-    if waived and waived.group(1) == 'long-block':
-        waivers.append(('long-block', path, start, waived.group(2)))
-        fired.add('long-block')
-        return
     fired.add('long-block')
+    if waived and waived.group(1) in WAIVABLE:
+        waivers.append((waived.group(1), path, start, waived.group(2)))
+        return
+    if marker:
+        # A marker that did not take is worse than none: the author believes the block is waived.
+        named = waived.group(1) if waived else None
+        detail = (f'unknown rule "{named}"' if named
+                  else 'unparseable marker (expected: docs-standard: allow <rule> -- <reason>)')
+        failures.append(f'{path}:{start}: waiver not applied — {detail}. '
+                        f'Waivable rules: {", ".join(sorted(WAIVABLE))}.')
+        return
     kind = 'line-comment block' if line_comment else 'comment block'
     failures.append(f'{path}:{start}: {kind} is {len(prose)} lines (max {ceiling}). '
                     f'Move the rationale to docs/adr/, leave a pointer, or waive it inline with '
@@ -116,6 +127,8 @@ def check_pointers():
 
 
 def check_claude_size():
+    if not os.path.exists('CLAUDE.md'):
+        return
     words = len(open('CLAUDE.md').read().split())
     if words > MAX_CLAUDE_WORDS:
         fired.add('claude-size'); failures.append(f'CLAUDE.md: {words} words (max {MAX_CLAUDE_WORDS}). '
@@ -123,11 +136,17 @@ def check_claude_size():
 
 
 def status_line(path):
-    """The ADR's `**Status:**` line, joined with the line after it so a wrapped status still reads whole."""
+    """The ADR's `**Status:**` paragraph — to the first blank line, since a status that explains a
+    supersession often wraps past one continuation and the forward link can be on any of them."""
     lines = open(path).read().split('\n')
     for i, l in enumerate(lines):
         if l.startswith('**Status:**'):
-            return ' '.join(lines[i:i + 2])
+            para = []
+            for nxt in lines[i:]:
+                if not nxt.strip():
+                    break
+                para.append(nxt)
+            return ' '.join(para)
     return ''
 
 
@@ -202,16 +221,24 @@ def measure():
     def within(n):
         return 100 * sum(1 for x in sizes if x <= n) // len(sizes) if sizes else 100
 
+    share = f'{100 * comment // total}%' if total else 'n/a (no src/main)'
+    claude = (f'{len(open("CLAUDE.md").read().split())}' if os.path.exists('CLAUDE.md') else 'n/a')
     return {
-        'comment share of src/main': f'{100 * comment // total}%  (Baseline: 16%; 1% in March 2026)',
+        'comment share of src/main': f'{share}  (Baseline: 16%; 1% in March 2026)',
         'src // blocks within the review budget of 3': f'{within(3)}%  (Baseline: 88%)',
         f'src // blocks within the gate ceiling of {MAX_LINE_BLOCK}': f'{within(MAX_LINE_BLOCK)}%  (Baseline: 99%)',
-        'CLAUDE.md words': f'{len(open("CLAUDE.md").read().split())}  (budget: {MAX_CLAUDE_WORDS})',
+        'CLAUDE.md words': f'{claude}  (budget: {MAX_CLAUDE_WORDS})',
     }
 
 
 def report():
     print('Documentation standard — review agenda\n')
+    print(f'Open violations ({len(failures)}):')
+    if not failures:
+        print('  none.')
+    for f in failures:
+        print(f'  {f}')
+    print()
     print('Measurements (compare against the Baseline section of the standard):')
     for k, v in measure().items():
         print(f'  {k}: {v}')
@@ -226,7 +253,7 @@ def report():
     for rule, *_ in waivers:
         by_rule[rule] = by_rule.get(rule, 0) + 1
     for rule, n in sorted(by_rule.items()):
-        if n >= 5:
+        if n >= WAIVER_THRESHOLD:
             print(f'\n  {rule} waived {n}x. That is evidence the threshold is wrong, not that the')
             print('  code is. Change the number or delete the rule; do not add a sixth waiver.')
 
@@ -248,7 +275,7 @@ check_adr_currency()
 
 if '--report' in sys.argv:
     report()
-    sys.exit(0)
+    sys.exit(1 if failures else 0)
 
 if failures:
     print('Documentation standard violations (docs/documentation-standard.md):\n')

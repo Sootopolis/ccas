@@ -195,8 +195,9 @@ different things. Its real home is GitHub issues; until they are filed it is a b
 4. **ADR currency** — a superseded ADR whose status line has no forward link fails, as does a
    citation of one from code or from a doc outside `docs/adr/` that does not say it is superseded.
 
-Rules 1 and 2 are judgement calls and can be waived inline; 3 and 4 are correctness and cannot. See
-§10.
+Rules 1 and 2 are judgement calls; 3 and 4 are correctness. Only rule 1 takes an inline waiver —
+`CLAUDE.md`'s budget is one global number rather than a per-case call, so it is changed in the script
+deliberately, not waived in passing. See §10.
 
 **The gate is looser than §6 on purpose, and the gap is the point.** A regex cannot tell a member
 scaladoc from a class one, and it cannot judge whether five lines of `//` earn their place — so the
@@ -229,12 +230,18 @@ bypass and carries nothing into the next review. A broken pointer or a bare cita
 ADR is never a judgement call, so nothing suppresses those — reach for `--no-verify` and you skip the
 test suite too, which is the correct disincentive.
 
+A marker that does not parse, or names a rule that is not waivable, **fails** rather than passing
+quietly — a waiver the author believes is in force but that never took is worse than no waiver at all.
+
 **Waivers are the evidence, not the leak.** `python3 scripts/check-docs.py --report` prints the review
-agenda: live measurements against the [Baseline](#baseline-august-2026), every waiver with its reason
-and location, and the rules that did not fire. Five waivers on one rule is the report telling you the
-threshold is wrong — change the number or delete the rule, and do not add a sixth. That is why the
-waiver counts rather than merely suppressing: a bypass that leaves no trace makes the next review an
-argument from memory.
+agenda: open violations, live measurements against the [Baseline](#baseline-august-2026), every waiver
+with its reason and location, and the rules that did not fire.
+
+**Five waivers on one rule is the threshold.** At that point the rule is wrong, not the code: change
+the number or delete the rule, and do not add a sixth. The figure is deliberately low, and it is
+written here as well as in the script so the document and the tool cannot disagree about it. That is
+why a waiver counts rather than merely suppressing — a bypass that leaves no trace makes the next
+review an argument from memory.
 
 **The default action of a review is deletion.** Standards only ever grow, because adding a rule feels
 like diligence and removing one feels like giving up. Invert it: a rule earns its place by having
