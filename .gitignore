@@ -50,6 +50,9 @@ build/
 
 ### Environment ###
 .env
+# Per-worktree direnv overrides. Never tracked: a committed .envrc would also apply to the `main` worktree, which
+# runs against production Neon on purpose.
+.envrc
 .mcp.json
 
 ### Mac OS ###

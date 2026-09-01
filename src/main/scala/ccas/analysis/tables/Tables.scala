@@ -1,9 +1,10 @@
 package ccas.analysis.tables
 
+import java.sql.SQLException
 import java.time.Instant
 import java.time.temporal.ChronoUnit
 
-import zio.{RIO, Scope, ZIO, ZIOAppDefault}
+import zio.{duration2DurationOps, Clock, RIO, Scope, ZIO, ZIOAppDefault}
 
 import ccas.utils.ProgressDisplay
 import ccas.utils.client.BodyStore
@@ -54,13 +55,6 @@ object Tables extends ZIOAppDefault {
       _ <- ApiResponseCache.createTable
       _ <- ApiFetchFailure.createTable
       _ <- ApiResponseBody.normalizeCfBodies
-      days <- AppSetting.get(AppSetting.CacheRetentionDays)
-      _ <- ApiResponseCache.deleteBefore(Instant.now().minus(days.toLong, ChronoUnit.DAYS))
-      // Sweep the failure audit trail on the same startup pass. `deleteBefore` also runs `ApiResponseBody.deleteOrphans`
-      // internally, catching bodies freed once their last fetch-failure reference is gone (cache sweep already ran, so a
-      // body pinned only by a just-deleted failure row is now collectable).
-      failureDays <- AppSetting.get(AppSetting.FetchFailureRetentionDays)
-      _ <- ApiFetchFailure.deleteBefore(Instant.now().minus(failureDays.toLong, ChronoUnit.DAYS))
       _ <- ClubMatch.createTable
       _ <- ClubMatchBoard.createTable
       _ <- ClubMatchGame.createTable
@@ -72,4 +66,37 @@ object Tables extends ZIOAppDefault {
       _ <- ClientConfig.createTable
       _ <- ClientStats.createTable
     } yield ()
+
+  /** Retention sweep for the two API-diagnostics tables, deliberately NOT part of [[ensureTables]]: it frees an
+    * unbounded number of body objects at one round trip each, so on the boot path it held the HTTP port closed for as
+    * long as the backlog took. `CcasServer` forks it alongside `Server.serve` instead.
+    * See docs/adr/0007-response-caching-in-postgres.md.
+    */
+  private[ccas] def retentionSweep: RIO[PostgresClient & BodyStore, Unit] =
+    ProgressDisplay.sourced("retention") {
+      for {
+        days        <- AppSetting.get(AppSetting.CacheRetentionDays)
+        failureDays <- AppSetting.get(AppSetting.FetchFailureRetentionDays)
+        now         <- Clock.instant
+        cacheCutoff   = now.minus(days.toLong, ChronoUnit.DAYS)
+        failureCutoff = now.minus(failureDays.toLong, ChronoUnit.DAYS)
+        timed <- sweep(cacheCutoff, failureCutoff).timed
+        (elapsed, (cacheRows, failureRows)) = timed
+        _ <- ZIO.logInfo(
+               s"Retention sweep: $cacheRows cache rows (>${days}d), $failureRows fetch-failure rows " +
+                 s"(>${failureDays}d) in ${elapsed.render}"
+             )
+      } yield ()
+    }
+
+  // `ApiFetchFailure.deleteBefore` re-runs `ApiResponseBody.deleteOrphans` internally, so ordering it second catches
+  // bodies pinned only by a just-deleted failure row.
+  private def sweep(
+    cacheCutoff: Instant,
+    failureCutoff: Instant
+  ): ZIO[PostgresClient & BodyStore, SQLException, (Int, Int)] =
+    for {
+      cacheRows   <- ApiResponseCache.deleteBefore(cacheCutoff)
+      failureRows <- ApiFetchFailure.deleteBefore(failureCutoff)
+    } yield (cacheRows, failureRows)
 }

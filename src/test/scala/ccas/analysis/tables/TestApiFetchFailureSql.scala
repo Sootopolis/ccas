@@ -30,11 +30,15 @@ object TestApiFetchFailureSql extends ZIOSpecDefault {
     val t3: Instant = t0.plus(Duration.ofDays(3))
   }
 
-  private def countBodies: ZIO[PostgresClient, Throwable, Int] =
-    connectZIO(sql"SELECT COUNT(*) FROM api_response_body".query[Long].run().head.toInt)
+  // Excludes the Cloudflare canonical pre-warm row `ensureTables` writes, so the count is what this suite created.
+  private def countBodies: ZIO[PostgresClient, Throwable, Long] =
+    connectZIO {
+      val cfHash = ApiResponseBody.CfCanonicalHash
+      sql"SELECT COUNT(*) FROM api_response_body WHERE body_hash <> $cfHash".query[Long].run().head
+    }
 
-  private def countFailures: ZIO[PostgresClient, Throwable, Int] =
-    connectZIO(sql"SELECT COUNT(*) FROM api_fetch_failure".query[Long].run().head.toInt)
+  private def countFailures: ZIO[PostgresClient, Throwable, Long] =
+    connectZIO(sql"SELECT COUNT(*) FROM api_fetch_failure".query[Long].run().head)
 
   private def testInsertWithoutBody = test("insert without response body") {
     val item = ApiFetchFailure(Times.t0, "https://example.com/a", "Timeout", Some("timed out"), None)

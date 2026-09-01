@@ -70,16 +70,36 @@ full rework) and `HistorySeeding.seed{FromClubMatches,MatchesForPlayer,MatchesFo
   difference as an estimate rather than an identity. The counter is additive and monotonic on
   purpose: retracting `cache_hits` would change the meaning of an already-populated column and would
   rest on the same unenforced invariant while also breaking comparability across sessions.
-- **Retention.** `Tables.ensureTables` calls `ApiResponseCache.deleteBefore(now - retention)` on
-  every app startup, chained with `ApiResponseBody.deleteOrphans` in one transaction. The window is
-  `cache_retention_days` from `app_setting` (default 7 days when the row is absent or unparseable).
+- **Retention.** `Tables.retentionSweep` calls `ApiResponseCache.deleteBefore(now - retention)`,
+  chained with `ApiResponseBody.deleteOrphans` in one transaction. The window is
+  `cache_retention_days` from `app_setting` (default 60 days when the row is absent or unparseable).
   The same pass sweeps `api_fetch_failure` via `FetchFailureRetentionDays` (default 30) — without it
   that table grows unbounded, since every failed attempt writes a row plus a body, a 404 body embeds
   the requested slug so dedup never collapses distinct bogus slugs, and orphan bodies are pinned by
-  `ON DELETE RESTRICT`. There is no HOCON or env mirror; change it with SQL, effective on each
-  process's next startup.
+  `ON DELETE RESTRICT`. There is no HOCON or env mirror; change it with SQL, effective on the next
+  daily sweep pass. The compiled default rose from 7 days to 60 once bodies left Postgres for the
+  BodyStore: what an entry costs is now R2 storage plus a metadata row, and `touch` bumps
+  `fetched_at` on every revalidation, so the window only governs entries nothing revisits.
+- **The sweep is not boot work.** It lived in `Tables.ensureTables`, which runs inside
+  `PostgresClient.live`'s init hook — so the HTTP port stayed closed until it finished. Its cost is
+  a function of how much aged out since the last boot, which on a long-lived server is the whole
+  backlog: the DB delete commits first, then one object delete per freed hash. At R2 round-trip
+  latency that is minutes to tens of minutes of silent startup, and killing the process "fixed" it
+  only because the committed delete left the next boot nothing to sweep — at the price of orphaning
+  every not-yet-deleted object permanently (the pointer row is already gone, so no sweep can ever
+  see it again). `CcasServer` now forks `retentionSweep` alongside `Server.serve`, and the object
+  deletes run at `ApiResponseBody.ObjectDeleteParallelism`. It then repeats daily, so what a pass
+  removes is roughly one day of expirations rather than everything since the last restart — the
+  restart cliff was the boot cost's real cause, and forking alone would only have hidden it. Each
+  pass re-reads `app_setting`, so a retention change lands within a day. One consequence worth
+  knowing: a standalone app run (`RefApp` and friends, which wire `ensureTablesOnInit`) no longer
+  sweeps at all — retention is now the server's job alone.
 - Mid-flight races are tolerated: a `Fresh` / `Revalidated` result whose body was pruned by another
   process falls through to a recursive network refetch via `loadAndDecode`'s `None` branch or its
-  `JsonDecodingException` recovery.
+  `JsonDecodingException` recovery. Forking the sweep makes that the expected case rather than the
+  theoretical one — it now overlaps the scheduler's own boot backlog (#212) instead of finishing
+  before the port opened — so the price of a lost race is a wasted request, paid at whatever rate
+  the sweep and the fetch path collide. That, not sweep throughput, is what caps
+  `ObjectDeleteParallelism`.
 - "Disable caching" would be a future `CacheMode` (a mode), not a `BodyStore` backend value (a
   location): a null store would still run the metadata path and revalidate-then-refetch every time.
