@@ -11,11 +11,18 @@ Take the work on the **current branch** through this repo's full release flow. B
 - Current branch: `git rev-parse --abbrev-ref HEAD`.
 - Base branch: `gh repo view --json defaultBranchRef -q .defaultBranchRef.name` (here: `main`).
 - If current branch == base → STOP. Nothing to ship from base; tell the user to branch first.
-- If current branch == the local-only parking branch (`wip`) → **STOP.** Step 2's `git push -u` would republish it and
-  reintroduce the force-push cycle that unpublishing it removed. The work needs a throwaway branch first — carry it
-  across with `git switch -c <feature>` (which brings uncommitted changes with it), and if commits were already made
-  on `wip`, put `wip` back afterwards with `git reset --hard origin/<base>`. Say this; do not do it unasked, since it
-  moves the user's work.
+- If current branch == the local-only parking branch (`wip`) → **cut a throwaway branch and carry on.** Never push
+  `wip`: step 2's `git push -u` would republish it and reintroduce the force-push cycle that unpublishing it removed.
+  `git switch -c <type>/<slug>` brings uncommitted changes across, so do it without asking — the branch name follows
+  the commit's Conventional Commits type (`fix/…`, `chore/…`), and step 7 deletes it after the merge, also without
+  asking. Nothing is lost if the ship is abandoned midway: the work sits on the new branch, and `wip` is re-parked in
+  step 7 either way.
+  - **`wip` had commits of its own** (`git rev-list --left-right --count origin/<base>...wip` shows any ahead) → the
+    switch carries them too, and `wip` must be put back with `git reset --hard origin/<base>` in step 7. Say which
+    commits moved.
+  - This is the one place the flow moves work without being asked, and it is safe because it only ever *adds* a ref.
+    Anything that would discard a ref — `reset --hard` on a branch with unshipped commits, a force-push — still stops
+    and asks.
 - `git status --porcelain` — uncommitted changes are part of this ship (step 1). If clean AND `git rev-list --left-right --count origin/<base>...HEAD` shows 0 ahead → STOP (nothing to ship).
 - `git worktree list --porcelain` — note which worktree holds the base branch (fast-forwarded in step 6) and whether any worktree sits **parked** on a local branch (`wip`) that is *not* the branch being shipped — that parked branch is re-based onto the merge in step 7. NEVER hardcode worktree paths.
 - `git rev-parse --abbrev-ref <branch>@{upstream}` — whether the shipped branch is published. A branch with no upstream has never left the machine, which changes disposal (step 7).
@@ -76,7 +83,8 @@ That is deliberate: a published branch would have to be force-pushed to recycle,
 new SHA and the branch then diverges. Unpublished, recycling is a local reset nobody has to approve.
 
 - **The shipped branch** — delete it: `git push origin --delete <branch>` (only if it was published), then prune the
-  local branch. Never `--delete-branch` on the merge; disposal is decided here.
+  local branch. No confirmation needed for a throwaway branch this flow cut in step 0, once the equality check below
+  passes. Never `--delete-branch` on the merge; disposal is decided here.
 - **Before deleting anything published, prove it holds nothing unique.** Compare the branch against the commit the
   merge actually produced, which is the only reference point that cannot move:
 
