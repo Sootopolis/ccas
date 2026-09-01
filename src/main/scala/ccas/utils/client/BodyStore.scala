@@ -363,8 +363,9 @@ object BodyStore {
     * does not honour, so the caller hangs for exactly the duration being bounded. Policy-free by design — it raises
     * a typed failure and nothing else, leaving [[read]] and [[putOrSkip]] to fold it into a miss.
     *
-    * `delete` rides the write budget deliberately: `Tables.ensureTables` drives it once per swept hash on every CLI
-    * invocation, so an unbounded delete is a boot hang. Measurements and the transport ceiling:
+    * `delete` rides the write budget deliberately: `Tables.retentionSweep` drives it once per swept hash, so an
+    * unbounded delete would park the sweep indefinitely. The per-hash bound does not bound the sweep — that is what
+    * the sweep's own parallelism and its being off the boot path are for. Measurements and the transport ceiling:
     * `docs/adr/0009-bound-every-body-store-operation.md` (#211).
     */
   private[ccas] final class Deadlines(underlying: BodyStore, limits: BodyStoreLimits) extends BodyStore {

@@ -74,7 +74,9 @@ forbidden; coupling which changes *diagnosis* is free.
   `deleteOrphans` drops the pointer row *before* best-effort-deleting the object, so bounding
   `delete` raises the rate of a pre-existing leak rather than introducing one. Accepted rather than
   reconciled: a sweep able to see these would have to enumerate the bucket, which content-addressing
-  exists to avoid.
+  exists to avoid. Since the retention sweep became a forked fiber (ADR 0007), shutdown interrupts it
+  mid-pass, so every restart during a sweep leaks the rest of that pass — routine, not exceptional,
+  which promotes the lifecycle rule below from mitigation to requirement.
 - **Mitigate with an age-based bucket lifecycle rule, not a reference-aware one** — S3/R2 cannot see
   the pointer table. Set the expiry above the longest retention window (`cache_retention_days`,
   `fetch_failure_retention_days`) and revisit if either is raised. Too low is degrading, not

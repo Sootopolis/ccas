@@ -185,12 +185,7 @@ object ApiResponseCache {
     * fetch via `ChessComClient.loadAndDecode`'s recovery path.
     */
   def deleteBefore(cutoff: Instant): ZIO[PostgresClient & BodyStore, SQLException, Int] =
-    withTransaction {
-      for {
-        count  <- connectZIO(sql"DELETE FROM api_response_cache WHERE fetched_at < $cutoff".update.run())
-        hashes <- ApiResponseBody.deleteOrphanRows
-      } yield (count, hashes)
-    }.flatMap { case (count, hashes) =>
-      ZIO.foreachDiscard(hashes)(hash => BodyStore.delete(hash).ignore).as(count)
-    }
+    ApiResponseBody.deleteRowsAndSweepOrphans(
+      connectZIO(sql"DELETE FROM api_response_cache WHERE fetched_at < $cutoff".update.run())
+    )
 }

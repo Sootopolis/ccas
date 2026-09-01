@@ -94,12 +94,7 @@ object ApiFetchFailure {
     } yield result
 
   def deleteBefore(cutoff: Instant): ZIO[PostgresClient & BodyStore, SQLException, Int] =
-    withTransaction {
-      for {
-        count  <- connectZIO(sql"DELETE FROM api_fetch_failure WHERE occurred_at < $cutoff".update.run())
-        hashes <- ApiResponseBody.deleteOrphanRows
-      } yield (count, hashes)
-    }.flatMap { case (count, hashes) =>
-      ZIO.foreachDiscard(hashes)(hash => BodyStore.delete(hash).ignore).as(count)
-    }
+    ApiResponseBody.deleteRowsAndSweepOrphans(
+      connectZIO(sql"DELETE FROM api_fetch_failure WHERE occurred_at < $cutoff".update.run())
+    )
 }

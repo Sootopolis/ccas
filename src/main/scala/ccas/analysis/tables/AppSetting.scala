@@ -28,7 +28,10 @@ object AppSetting {
   final case class Key[A](key: String, default: A, parse: String => Option[A], render: A => String)
 
   /** Retention window (days) for `api_response_cache`, applied by `Tables.ensureTables`. */
-  val CacheRetentionDays: Key[Int] = Key("cache_retention_days", 7, _.toIntOption, _.toString)
+  // 60 rather than the original 7: bodies left metered Postgres for the BodyStore (#191), so the cost of keeping an
+  // entry is R2 storage plus a ~200-byte metadata row. `touch` bumps `fetched_at` on every revalidation, so this only
+  // decides how long an entry nothing revisits survives — 60 days covers a monthly crawl cycle with room for drift.
+  val CacheRetentionDays: Key[Int] = Key("cache_retention_days", 60, _.toIntOption, _.toString)
 
   /** Retention window (days) for `api_fetch_failure`, applied by `Tables.ensureTables` alongside the cache sweep. Every
     * failed attempt writes a row (plus a deduped body), a 404 body embeds the requested slug so SHA-256 dedup never

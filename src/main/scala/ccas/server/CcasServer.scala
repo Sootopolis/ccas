@@ -3,9 +3,10 @@ package ccas.server
 import java.nio.file.{Files, Paths}
 
 import com.typesafe.config.ConfigFactory
-import zio.{durationInt, Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
+import zio.{durationInt, Schedule, Scope, URIO, ZIO, ZIOAppArgs, ZIOAppDefault}
 import zio.http.{Routes, Server}
 
+import ccas.analysis.tables.Tables
 import ccas.server.config.{ServerEnvOverlay, ServerEnvPaths}
 import ccas.server.jobs.JobRunner
 import ccas.server.routes.{
@@ -49,6 +50,7 @@ object CcasServer extends ZIOAppDefault {
         _         <- pidFileManaged
         scheduler <- ZIO.service[JobScheduler]
         _         <- scheduler.start
+        _         <- retentionSweepForked
         _         <- Server.serve(routes)
       } yield ()).provideSome[Scope](
         ProgressDisplay.live(showProgress = false),
@@ -65,6 +67,23 @@ object CcasServer extends ZIOAppDefault {
         Server.defaultWith(_.binding(host, port).idleTimeout(60.seconds))
       )
     }
+
+  /** Cache retention: forked so the port binds without waiting for it, then daily so the backlog never accumulates
+    * into the restart cliff it used to be (it ran inside `PostgresClient.live`'s init hook, once, however much had
+    * aged out). Failure is caught inside the repeat — one bad pass must not end the loop — and is never fatal: a
+    * stale cache row costs one conditional GET, so nothing here is worth refusing to serve over. Shutdown interrupts
+    * whatever pass is in flight; that leaks objects, which the bucket lifecycle rule in ADR 0009 exists to collect.
+    */
+  private val retentionSweepForked: URIO[Scope & PostgresClient & BodyStore, Unit] =
+    Tables.retentionSweep
+      .catchAllCause(cause => ZIO.logErrorCause("Retention sweep failed", cause))
+      .repeat(Schedule.fixed(RetentionSweepInterval))
+      .forkScoped
+      .unit
+
+  // Daily, because both retention windows are day-granular. Each pass re-reads `app_setting`, so a retention change
+  // takes effect within a day rather than at the next restart.
+  private val RetentionSweepInterval = 24.hours
 
   /** When launched detached (`ccas serve --detach`), the CLI parent passes the pid-file path via `CCAS_PID_FILE`. We
     * write our OWN pid here on boot and delete it on shutdown — the server owns its pid-file lifecycle, so the path is
