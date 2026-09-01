@@ -78,12 +78,20 @@ forbidden; coupling which changes *diagnosis* is free.
   mid-pass, so every restart during a sweep leaks the rest of that pass — routine, not exceptional,
   which promotes the lifecycle rule below from mitigation to requirement.
 - **Mitigate with an age-based bucket lifecycle rule, not a reference-aware one** — S3/R2 cannot see
-  the pointer table. Set the expiry above the longest retention window (`cache_retention_days`,
-  `fetch_failure_retention_days`) and revisit if either is raised. Too low is degrading, not
+  the pointer table. The longest retention window (`cache_retention_days`,
+  `fetch_failure_retention_days`) is the floor, not a safe setting: **the rule ages objects, retention
+  ages rows, and the two are not related.** `touch` bumps `fetched_at` on every 304, while
+  `putOrSkip` rewrites the object only on a 200 — so an entry that revalidates forever, which is
+  exactly the immutable past-month archive the window exists to keep, holds a young row over an
+  object of unbounded age. No fixed expiry avoids deleting some referenced objects; the setting only
+  decides how often. Pick generously (180 days against a 60-day window) and read the cost below to
+  see why the fetch-failure side is what forces the margin. Too low is degrading, not
   corrupting, but the two object kinds degrade differently: an early-expired *cache* body reads back
   as `BodyRead.Missing`, which invalidates and refetches (one wasted request), while an early-expired
   *`api_fetch_failure`* body has no refetch path — `selectRecent` renders the audit row without it and
-  the evidence is gone. Input to #199.
+  the evidence is gone. Input to #199. Scope the rule to a key prefix as soon as the bucket holds
+  anything but `BodyStore` objects: a bucket-wide "delete after N days" is indiscriminate about
+  object kinds nobody had thought of yet when it was written.
 - Bodies are stored **uncompressed** while fetched gzipped (measured 4.6–4.9× on real archives), so
   the write path spends several times the read path's bytes on the narrower half of an asymmetric
   link. The back-pressure and observability half of that is #223.
