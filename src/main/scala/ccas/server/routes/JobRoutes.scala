@@ -342,8 +342,14 @@ object JobRoutes {
         runner    <- ZIO.service[JobRunner]
         streamOpt <- runner.logStream(JobRunId.wrap(jobId))
       } yield streamOpt match {
-        case None => Response.text(s"Job $jobId not found").status(Status.NotFound)
-        case Some(lines) =>
+        case JobLogs.NoSuchJob => Response.text(s"Job $jobId not found").status(Status.NotFound)
+        // 410 rather than 404: the job is real and its row is still queryable, only its log is not. Retention is the
+        // usual cause but not the only one — a sink that never opened writes no file either, so the text hedges.
+        case JobLogs.Expired =>
+          Response
+            .text(s"Job $jobId has no log available — aged out of job_log_retention_days, or never written")
+            .status(Status.Gone)
+        case JobLogs.Streaming(lines) =>
           Response(
             status = Status.Ok,
             headers = Headers(Header.ContentType(MediaType.text.`plain`, charset = Some(StandardCharsets.UTF_8))),

@@ -222,19 +222,23 @@ object FileSink {
     build(path, open, None)
   }
 
-  /** Delete `*.log` files in `logDir` whose last-modified time is before `cutoff`, returning the count removed.
-    * Best-effort: a file that vanishes mid-sweep or can't be stat'd / deleted is skipped, never failing the sweep.
-    * Called one-shot from `JobRunner.live` at startup, mirroring the cache-retention sweep in `Tables.ensureTables`.
-    * The `*.log` glob means non-log files in the directory are left untouched.
+  /** Delete `*.log` files in `logDir` last modified before `cutoff`, skipping the jobs named in `live`, and return the
+    * count removed. Best-effort: a file that vanishes mid-sweep or can't be stat'd / deleted is skipped, never failing
+    * the sweep. The `*.log` glob leaves non-log files in the directory untouched.
+    *
+    * `live` must name every job still writing, and the walk is interruptible, because the caller is a long-lived
+    * fiber rather than startup (#244).
     */
-  def sweepBefore(logDir: Path, cutoff: Instant): ZIO[Any, Throwable, Int] =
-    ZIO.attemptBlocking {
+  def sweepBefore(logDir: Path, cutoff: Instant, live: Set[String]): ZIO[Any, Throwable, Int] = {
+    val pinned = live.map(id => s"$id.log")
+    ZIO.attemptBlockingInterrupt {
       val stream = Files.newDirectoryStream(logDir, "*.log")
       val stale =
-        try stream.iterator().asScala.filter(olderThan(cutoff)).toList
+        try stream.iterator().asScala.filterNot(p => pinned(p.getFileName.toString)).filter(olderThan(cutoff)).toList
         finally stream.close()
       stale.count(deleteQuietly)
     }
+  }
 
   // A file that vanished or can't be stat'd is treated as not-old (left alone); any non-fatal IO error is swallowed so
   // one bad file never aborts the whole sweep.

@@ -2,6 +2,9 @@ package ccas.server.jobs
 
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path, Paths, StandardOpenOption}
+import java.nio.file.attribute.FileTime
+import java.time.Instant
+import java.time.temporal.ChronoUnit
 
 import scala.jdk.CollectionConverters.*
 
@@ -11,7 +14,7 @@ import ccas.utils.sql.PostgresClient
 import zio.{durationInt, Promise, Ref, ZIO, ZLayer}
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
-import ccas.analysis.tables.{Club, RunTrigger}
+import ccas.analysis.tables.{AppSetting, Club, RunTrigger}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId}
 import ccas.server.ServerTables
 import ccas.utils.client.TestChessComClientSupport
@@ -37,12 +40,16 @@ object TestJobRunner extends ZIOSpecDefault {
     testSubmitWritesJobLog,
     testLogStreamReplaysCompletedJob,
     testLogStreamUnknownReturnsNone,
+    testLogStreamReportsASweptLogAsExpired,
+    testLogStreamKeepsStreamingARunningJobWithNoFile,
     testLogStreamTailsLiveJob,
     testLogStreamCarriesPartialLineAcrossTicks,
     testLogStreamJoinsMultibyteCharAcrossTicks,
     testLogStreamReassemblesCjkAndEmojiTornMidChar,
     testProgressStreamTailsLiveJobAndCloses,
-    testProgressStreamUnknownReturnsNone
+    testProgressStreamUnknownReturnsNone,
+    testSweepLogsRemovesAgedLogsAndSparesLiveJobs,
+    testSweepLogsIgnoresANonPositiveRetentionWindow
   ).provideShared(
     FreshSchemaLayer("test_job_runner", onInit = ServerTables.ensureTables),
     TestChessComClientSupport.dummyLayer,
@@ -255,6 +262,68 @@ object TestJobRunner extends ZIOSpecDefault {
     )
   }
 
+  /** `sweepLogs` runs on `CcasServer`'s repeating retention fiber, so unlike its predecessor on the boot path it can
+    * overlap a job that still holds its log file open — hence the live-job half of this assertion (#244).
+    */
+  private def testSweepLogsRemovesAgedLogsAndSparesLiveJobs =
+    test("sweepLogs honours the stored window, deletes aged job logs, and never a running job's") {
+      val logDir = Paths.get(ConfigFactory.load().getString("job-logs.directory"))
+      val aged   = logDir.resolve("aged-by-test.log")
+      (for {
+        _       <- deleteAllJobRuns
+        // A window shorter than the compiled default, so a two-day-old log is swept only if this pass re-read the row.
+        _       <- AppSetting.set(AppSetting.JobLogRetentionDays, 1)
+        runner  <- ZIO.service[JobRunner]
+        started <- Promise.make[Nothing, Unit]
+        release <- Promise.make[Nothing, Unit]
+        id <- runner.submit(
+          JobKind.MatchRef,
+          None,
+          None,
+          RunTrigger.Cli,
+          _ => ZIO.logInfo("still running") *> started.succeed(()) *> release.await
+        )
+        _       <- started.await
+        liveLog = logDir.resolve(s"${JobRunId.unwrap(id)}.log")
+        _ <- ZIO.attempt {
+          Files.write(aged, "aged".getBytes(StandardCharsets.UTF_8))
+          Files.setLastModifiedTime(aged, twoDaysAgo)
+          Files.setLastModifiedTime(liveLog, twoDaysAgo)
+        }
+        _        <- runner.sweepLogs
+        agedGone <- ZIO.attempt(!Files.exists(aged))
+        liveKept <- ZIO.attempt(Files.exists(liveLog))
+        _        <- release.succeed(())
+        _        <- awaitStatus(runner, id)
+      } yield assertTrue(agedGone, liveKept)).ensuring(restoreRetentionDefault)
+    }
+
+  /** A non-positive window would put the cutoff at or past `now` and wipe every unpinned log on every pass, so
+    * `sweepLogs` falls back to the compiled default instead (#244).
+    */
+  private def testSweepLogsIgnoresANonPositiveRetentionWindow =
+    test("sweepLogs falls back to the default window rather than sweeping everything on a non-positive setting") {
+      val logDir = Paths.get(ConfigFactory.load().getString("job-logs.directory"))
+      val recent = logDir.resolve("recent-by-test.log")
+      (for {
+        _      <- AppSetting.set(AppSetting.JobLogRetentionDays, -1)
+        runner <- ZIO.service[JobRunner]
+        _ <- ZIO.attempt {
+          Files.write(recent, "recent".getBytes(StandardCharsets.UTF_8))
+          Files.setLastModifiedTime(recent, twoDaysAgo)
+        }
+        _    <- runner.sweepLogs
+        kept <- ZIO.attempt(Files.exists(recent))
+      } yield assertTrue(kept)).ensuring(restoreRetentionDefault)
+    }
+
+  // Both sweep tests overwrite the shared row, so neither may leave its value behind for whatever runs next.
+  private def restoreRetentionDefault =
+    AppSetting.set(AppSetting.JobLogRetentionDays, AppSetting.JobLogRetentionDays.default).orDie
+
+  // Older than the 1-day window these tests store, younger than the compiled default — which applied decides survival.
+  private def twoDaysAgo = FileTime.from(Instant.now().minus(2, ChronoUnit.DAYS))
+
   private def testLogStreamReplaysCompletedJob = test("logStream replays a completed job's log and ends") {
     for {
       _      <- deleteAllJobRuns
@@ -267,8 +336,8 @@ object TestJobRunner extends ZIOSpecDefault {
         _ => ZIO.logInfo("line one") *> ZIO.logInfo("line two")
       )
       _         <- awaitStatus(runner, id)
-      streamOpt <- runner.logStream(id)
-      stream    <- ZIO.fromOption(streamOpt).orElseFail(new Exception("expected a stream for a known job"))
+      logs      <- runner.logStream(id)
+      stream    <- streamingLines(logs)
       lines     <- stream.runCollect.map(_.toList)
     } yield assertTrue(
       lines.exists(_.contains("line one")),
@@ -276,12 +345,61 @@ object TestJobRunner extends ZIOSpecDefault {
     )
   }
 
-  private def testLogStreamUnknownReturnsNone = test("logStream returns None for unknown id") {
+  private def testLogStreamUnknownReturnsNone = test("logStream reports an unknown id as NoSuchJob") {
     for {
       runner <- ZIO.service[JobRunner]
       result <- runner.logStream(JobRunId.wrap("does-not-exist"))
-    } yield assertTrue(result.isEmpty)
+    } yield assertTrue(result == JobLogs.NoSuchJob)
   }
+
+  /** A swept log leaves the `job_run` row behind, and the old `Option` result could not tell that from a job that
+    * logged nothing — the route answered both with an empty 200 (#244).
+    */
+  private def testLogStreamReportsASweptLogAsExpired =
+    test("logStream reports a job whose log file is gone as Expired, not an empty stream") {
+      val logDir = Paths.get(ConfigFactory.load().getString("job-logs.directory"))
+      for {
+        _      <- deleteAllJobRuns
+        runner <- ZIO.service[JobRunner]
+        id     <- runner.submit(JobKind.MatchRef, None, None, RunTrigger.Cli, _ => ZIO.logInfo("will be swept"))
+        _      <- awaitStatus(runner, id)
+        _      <- ZIO.attempt(Files.delete(logDir.resolve(s"${JobRunId.unwrap(id)}.log")))
+        result <- runner.logStream(id)
+        status <- runner.status(id)
+      } yield assertTrue(result == JobLogs.Expired, status.isDefined)
+    }
+
+  /** A suppressed sink retries the open on later writes, so a running job with no file yet must still stream — only a
+    * terminal row with no file has lost its log for good (#244).
+    */
+  private def testLogStreamKeepsStreamingARunningJobWithNoFile =
+    test("logStream streams a running job even when its log file is absent") {
+      val logDir = Paths.get(ConfigFactory.load().getString("job-logs.directory"))
+      for {
+        _       <- deleteAllJobRuns
+        runner  <- ZIO.service[JobRunner]
+        started <- Promise.make[Nothing, Unit]
+        release <- Promise.make[Nothing, Unit]
+        id      <- runner.submit(
+          JobKind.MatchRef,
+          None,
+          None,
+          RunTrigger.Cli,
+          _ => started.succeed(()) *> release.await
+        )
+        _      <- started.await
+        _      <- ZIO.attempt(Files.deleteIfExists(logDir.resolve(s"${JobRunId.unwrap(id)}.log")))
+        result <- runner.logStream(id)
+        _      <- release.succeed(())
+        _      <- awaitStatus(runner, id)
+      } yield assertTrue(result.isInstanceOf[JobLogs.Streaming])
+    }
+
+  private def streamingLines(logs: JobLogs) =
+    logs match {
+      case JobLogs.Streaming(lines) => ZIO.succeed(lines)
+      case other                    => ZIO.fail(new Exception(s"expected a stream, got $other"))
+    }
 
   // End-to-end for `progressStream`: submit → `currentChannel.locally` → a job bar publishes into the per-job channel →
   // the stream emits its snapshot → the job completes → `interruptWhen(promise)` closes the stream. We wait for a bar
@@ -337,8 +455,8 @@ object TestJobRunner extends ZIOSpecDefault {
       gate   <- Promise.make[Nothing, Unit]
       // The job logs a line, then blocks on the gate so it stays Running while we subscribe.
       id        <- runner.submit(JobKind.MatchRef, None, None, RunTrigger.Cli, _ => ZIO.logInfo("streaming line") *> gate.await)
-      streamOpt <- runner.logStream(id)
-      stream    <- ZIO.fromOption(streamOpt).orElseFail(new Exception("expected a live stream"))
+      logs      <- runner.logStream(id)
+      stream    <- streamingLines(logs)
       collect   <- stream.runCollect.fork
       _         <- gate.succeed(())
       _         <- awaitStatus(runner, id)

@@ -49,7 +49,11 @@ object TestRoutes extends ZIOSpecDefault {
     case Fail(msg: String)
   }
 
-  private class FakeJobRunner(jobs: Ref[Map[JobRunId, JobRun]], nextAction: Ref[Action]) extends JobRunner {
+  private class FakeJobRunner(
+    jobs: Ref[Map[JobRunId, JobRun]],
+    nextAction: Ref[Action],
+    sweptLogs: Ref[Set[JobRunId]]
+  ) extends JobRunner {
 
     override def submit(
       kind: JobKind,
@@ -87,18 +91,29 @@ object TestRoutes extends ZIOSpecDefault {
     override def recentJobs(limit: Int): RIO[PostgresClient, List[JobRun]] =
       jobs.get.map(_.values.toList.sortBy(_.startedAt)(using Ordering[Instant].reverse).take(limit))
 
-    // Canned two-line stream for any known job; None for unknown — enough to pin the route's 200/404 + framing
-    // without the real file-tailing mechanics (those are covered against JobRunner.live in TestJobRunner).
-    override def logStream(id: JobRunId): RIO[PostgresClient, Option[ZStream[Any, Throwable, String]]] =
-      jobs.get.map(_.get(id).map(_ => ZStream.fromIterable(List("alpha", "beta"))))
+    // Canned two-line stream for any known job — enough to pin the route's 200/404/410 + framing without the real
+    // file-tailing mechanics (those are covered against JobRunner.live in TestJobRunner).
+    override def logStream(id: JobRunId): RIO[PostgresClient, JobLogs] =
+      for {
+        known <- jobs.get.map(_.contains(id))
+        swept <- sweptLogs.get.map(_.contains(id))
+      } yield {
+        if (!known) { JobLogs.NoSuchJob }
+        else if (swept) { JobLogs.Expired }
+        else { JobLogs.Streaming(ZStream.fromIterable(List("alpha", "beta"))) }
+      }
 
     // Canned single progress frame for any known job; None for unknown — pins the /progress route's 200/404 + framing.
     override def progressStream(id: JobRunId): RIO[PostgresClient, Option[ZStream[Any, Throwable, String]]] =
       jobs.get.map(_.get(id).map(_ => ZStream.fromIterable(List("""{"bars":[]}"""))))
 
+    override def sweepLogs: URIO[PostgresClient, Int] = ZIO.succeed(0)
+
     def setNextAction(action: Action): UIO[Unit] = nextAction.set(action)
 
     def prePopulate(jobRun: JobRun): UIO[Unit] = jobs.update(_ + (jobRun.id -> jobRun))
+
+    def markLogSwept(id: JobRunId): UIO[Unit] = sweptLogs.update(_ + id)
   }
 
   private val fakeJobRunnerLayer: ULayer[JobRunner] =
@@ -106,7 +121,8 @@ object TestRoutes extends ZIOSpecDefault {
       for {
         jobs       <- Ref.make(Map.empty[JobRunId, JobRun])
         nextAction <- Ref.make[Action](Action.Succeed)
-      } yield new FakeJobRunner(jobs, nextAction)
+        sweptLogs  <- Ref.make(Set.empty[JobRunId])
+      } yield new FakeJobRunner(jobs, nextAction, sweptLogs)
     }
 
   // --- Request helper ---
@@ -168,6 +184,7 @@ object TestRoutes extends ZIOSpecDefault {
     testCancelJobReturns404,
     testGetJobLogsReturns200,
     testGetJobLogsReturns404,
+    testGetJobLogsReturns410ForASweptLog,
     testGetJobProgressReturns200,
     testGetJobProgressReturns404,
     testStatsWithInvalidDateReturns400,
@@ -478,6 +495,31 @@ object TestRoutes extends ZIOSpecDefault {
       body == "alpha\nbeta\n"
     )
   }
+
+  /** 410 and not 404: the job exists, only its log has aged out — a 404 would send the operator hunting for a typo.
+    */
+  private def testGetJobLogsReturns410ForASweptLog =
+    test("GET /api/jobs/:id/logs returns 410 for a job whose log has aged out") {
+      val t0 = LocalDateTime.of(2025, 6, 1, 0, 0).toInstant(ZoneOffset.UTC)
+      val job = JobRun(
+        id = JobRunId.wrap("swept-id"),
+        kind = JobKind.Membership,
+        clubId = None,
+        trigger = RunTrigger.Cli,
+        status = JobRunStatus.Completed,
+        params = None,
+        startedAt = t0,
+        completedAt = Some(t0),
+        error = None
+      )
+      for {
+        fake     <- getFakeRunner
+        _        <- fake.prePopulate(job)
+        _        <- fake.markLogSwept(job.id)
+        response <- JobRoutes.routes.runZIO(jsonRequest(Method.GET, "/api/jobs/swept-id/logs"))
+        body     <- response.body.asString
+      } yield assertTrue(response.status == Status.Gone, body.contains("no log available"))
+    }
 
   private def testGetJobLogsReturns404 = test("GET /api/jobs/:id/logs returns 404 plain text for unknown job") {
     for {

@@ -10,9 +10,9 @@ import ccas.utils.sql.PostgresClient.connectZIO
 
 /** Generic single-row-per-key store (`app_setting (key TEXT PK, value TEXT)`) for DB-owned app-level settings: values
   * tunable at runtime without a config-file edit or redeploy, and consistent across every process sharing one DB (the
-  * server plus any CLI invocation that boots `Tables.ensureTables` and runs the cache sweep). A single server is the
-  * supported deployment model (see CLAUDE.md "Deployment model"). Kept orthogonal to `client_config`, which holds
-  * per-process `ChessComClient` tuning.
+  * server plus any CLI invocation that boots `Tables.ensureTables`). A single server is the supported deployment model
+  * (see CLAUDE.md "Deployment model"). Kept orthogonal to `client_config`, which holds per-process `ChessComClient`
+  * tuning.
   *
   * Typed access goes through [[AppSetting.Key]] and the registry in the companion (`CacheRetentionDays`, `all`) so the
   * stringly-typed table is confined to one place; each key carries a compiled-in default, the fallback when its row is
@@ -27,21 +27,24 @@ object AppSetting {
   /** A typed setting: its DB key, compiled-in default, and the string <-> A codec used to (de)serialise the row. */
   final case class Key[A](key: String, default: A, parse: String => Option[A], render: A => String)
 
-  /** Retention window (days) for `api_response_cache`, applied by `Tables.ensureTables`. */
+  /** Retention window (days) for `api_response_cache`, applied by the server's retention sweep. */
   // 60 rather than the original 7: bodies left metered Postgres for the BodyStore (#191), so the cost of keeping an
   // entry is R2 storage plus a ~200-byte metadata row. `touch` bumps `fetched_at` on every revalidation, so this only
   // decides how long an entry nothing revisits survives — 60 days covers a monthly crawl cycle with room for drift.
   val CacheRetentionDays: Key[Int] = Key("cache_retention_days", 60, _.toIntOption, _.toString)
 
-  /** Retention window (days) for `api_fetch_failure`, applied by `Tables.ensureTables` alongside the cache sweep. Every
-    * failed attempt writes a row (plus a deduped body), a 404 body embeds the requested slug so SHA-256 dedup never
-    * collapses distinct bogus slugs, and orphan bodies are pinned by `ON DELETE RESTRICT` — so without this sweep the
-    * table grows unbounded under any volume of bogus-slug traffic. Longer default than the cache (30d vs 7d) because
-    * these rows are the diagnostic audit trail for API failures, kept for post-hoc analysis rather than serving reads.
+  /** Retention window (days) for `api_fetch_failure`, applied alongside the cache sweep. Every failed attempt writes
+    * a row (plus a deduped body), a 404 body embeds the requested slug so SHA-256 dedup never collapses distinct bogus
+    * slugs, and orphan bodies are pinned by `ON DELETE RESTRICT` — so without this sweep the table grows unbounded
+    * under any volume of bogus-slug traffic. These rows are the diagnostic audit trail for API failures, kept for
+    * post-hoc analysis rather than to serve reads.
     */
   val FetchFailureRetentionDays: Key[Int] = Key("fetch_failure_retention_days", 30, _.toIntOption, _.toString)
 
-  /** Retention window (days) for per-job log files in `${JOB_LOGS_DIR}`, applied by `JobRunner.live` on startup. */
+  /** Retention window (days) for per-job log files in `${JOB_LOGS_DIR}`, applied by the server's retention sweep.
+    * Must be positive — a non-positive value is rejected in favour of this default, so it cannot wipe the directory
+    * on every pass.
+    */
   val JobLogRetentionDays: Key[Int] = Key("job_log_retention_days", 14, _.toIntOption, _.toString)
 
   /** Sample spacing (milliseconds) for progress-bar frames on `GET /api/jobs/{id}/progress`. The server samples the

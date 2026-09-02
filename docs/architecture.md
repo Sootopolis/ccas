@@ -76,9 +76,10 @@ require a `Save? [Y/n]` confirmation. The `CriteriaSpec` DTO (`RecruitmentCriter
 ## Server (`ccas.server`)
 
 `CcasServer extends ZIOAppDefault`. `ServerTables` ensures both analysis and server tables exist on
-startup. Cache retention is not part of that: `Tables.retentionSweep` is forked alongside
-`Server.serve` and repeats daily, so the port binds without waiting for it
-([0007](adr/0007-response-caching-in-postgres.md)).
+startup. Retention is not part of that, and not part of any layer's construction: one forked fiber
+runs `JobRunner.sweepLogs` and then `Tables.retentionSweep`, repeating daily, so the port binds
+without waiting for either ([0007](adr/0007-response-caching-in-postgres.md)). That fiber outlives
+startup, so the log sweep skips jobs that are still running.
 
 ### Routes
 
