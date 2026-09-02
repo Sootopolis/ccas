@@ -23,7 +23,8 @@ object TestJobLogSink extends ZIOSpecDefault {
     testFileSinkClosesAndIgnoresLateWrites,
     testFileSinkOpenFailureSuppressesAndRetries,
     testCurrentSinkLocallyOverride,
-    testSweepBeforeDeletesOldLogsOnly
+    testSweepBeforeDeletesOldLogsOnly,
+    testSweepBeforeSkipsLiveJobLogs
   ) @@ TestAspect.sequential
 
   // Built at runtime to avoid embedding a raw ESC byte in the source file.
@@ -165,12 +166,34 @@ object TestJobLogSink extends ZIOSpecDefault {
           Files.setLastModifiedTime(freshLog, fresh)
           Files.setLastModifiedTime(keepTxt, old)
         }
-        deleted <- ccas.server.jobs.FileSink.sweepBefore(dir, cutoff)
+        deleted <- ccas.server.jobs.FileSink.sweepBefore(dir, cutoff, live = Set.empty)
       } yield assertTrue(
         deleted == 1,
         !Files.exists(oldLog),
         Files.exists(freshLog),
         Files.exists(keepTxt)
+      )
+    }
+
+  private def testSweepBeforeSkipsLiveJobLogs =
+    test("sweepBefore leaves a live job's log alone even when it is older than the cutoff") {
+      for {
+        dir     <- tempLogDir
+        liveLog  = dir.resolve("live-job.log")
+        deadLog  = dir.resolve("dead-job.log")
+        cutoff   = Instant.now()
+        old      = FileTime.from(cutoff.minus(2, ChronoUnit.DAYS))
+        _ <- ZIO.attempt {
+          Files.write(liveLog, "live".getBytes(StandardCharsets.UTF_8))
+          Files.write(deadLog, "dead".getBytes(StandardCharsets.UTF_8))
+          Files.setLastModifiedTime(liveLog, old)
+          Files.setLastModifiedTime(deadLog, old)
+        }
+        deleted <- ccas.server.jobs.FileSink.sweepBefore(dir, cutoff, live = Set("live-job"))
+      } yield assertTrue(
+        deleted == 1,
+        Files.exists(liveLog),
+        !Files.exists(deadLog)
       )
     }
 

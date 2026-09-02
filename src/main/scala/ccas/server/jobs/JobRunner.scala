@@ -10,13 +10,22 @@ import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.withTransaction
 import zio.json.EncoderOps
 import zio.stream.{SubscriptionRef, ZStream}
-import zio.{Clock, Duration, Fiber, Promise, RIO, RLayer, Ref, Schedule, Scope, UIO, ZIO, ZLayer, durationInt}
+import zio.{Clock, Duration, Fiber, Promise, RIO, RLayer, Ref, Schedule, Scope, UIO, URIO, ZIO, ZLayer, durationInt}
 
 import ccas.analysis.tables.{AppSetting, Club, RunTrigger}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId}
 import ccas.utils.client.ChessComClient
 import ccas.utils.errors.{ConflictException, safeMessage}
 import ccas.utils.{BarSnapshot, JobLogSink, ProgressDisplay, ProgressSnapshot}
+
+/** Why a job's logs might not stream, so the route can tell an unknown job from one whose log has aged out instead of
+  * answering both with an empty success (#244).
+  */
+enum JobLogs {
+  case NoSuchJob
+  case Expired
+  case Streaming(lines: ZStream[Any, Throwable, String])
+}
 
 /** Asynchronous job executor that runs analysis tasks as forked fibers.
   *
@@ -53,16 +62,19 @@ trait JobRunner {
   /** Return the most recent jobs ordered by start time descending, up to `limit`. */
   def recentJobs(limit: Int): RIO[PostgresClient, List[JobRun]]
 
-  /** Stream the log lines for a job, or `None` if no such job exists (drives the route's 404). The stream tails the
-    * per-job log file live and closes once the job is terminal and the tail has reached EOF.
+  /** Stream the log lines for a job. The stream tails the per-job log file live and closes once the job is terminal
+    * and the tail has reached EOF.
     */
-  def logStream(id: JobRunId): RIO[PostgresClient, Option[ZStream[Any, Throwable, String]]]
+  def logStream(id: JobRunId): RIO[PostgresClient, JobLogs]
 
   /** Stream a job's live progress as latest-wins [[ccas.utils.ProgressSnapshot]] JSON frames (one per line), or `None`
     * if no such job exists. Each frame merges the job's own app bars with the shared client's global API gauge. The
     * stream closes when the job is terminal — bars are ephemeral, so nothing is persisted or replayed.
     */
   def progressStream(id: JobRunId): RIO[PostgresClient, Option[ZStream[Any, Throwable, String]]]
+
+  /** Delete job logs older than `job_log_retention_days`, returning the count removed. */
+  def sweepLogs: URIO[PostgresClient, Int]
 }
 
 object JobRunner {
@@ -107,13 +119,6 @@ object JobRunner {
         }.orDie
         now <- Clock.instant
         _   <- JobRun.markOrphansAsFailed(now).provideEnvironment(zio.ZEnvironment(pgClient))
-        days   <- AppSetting.get(AppSetting.JobLogRetentionDays).provideEnvironment(zio.ZEnvironment(pgClient))
-        cutoff <- Clock.instant.map(_.minus(days.toLong, ChronoUnit.DAYS))
-        swept <- FileSink
-          .sweepBefore(logDir, cutoff)
-          .tapError(t => ZIO.logWarning(s"Job-log retention sweep failed: ${t.safeMessage}"))
-          .orElseSucceed(0)
-        _ <- ZIO.logInfo(s"Swept $swept job log(s) older than $days day(s) from $logDir").when(swept > 0)
       } yield new JobRunnerLive(
         display,
         client,
@@ -303,8 +308,49 @@ object JobRunner {
     override def recentJobs(limit: Int): RIO[PostgresClient, List[JobRun]] =
       JobRun.selectRecent(limit)
 
-    override def logStream(id: JobRunId): RIO[PostgresClient, Option[ZStream[Any, Throwable, String]]] =
-      status(id).map(_.map(_ => transport.subscribe(id)))
+    override def logStream(id: JobRunId): RIO[PostgresClient, JobLogs] =
+      status(id).flatMap {
+        case None => ZIO.succeed(JobLogs.NoSuchJob)
+        // A running job streams whatever it has: an open failure degrades `FileSink` to a suppressed sink that retries
+        // on later writes, so a file missing now may still appear, and the tailer waits that out. Only for a terminal
+        // row does a missing file mean gone for good — `job_run` has no retention, the log directory does.
+        case Some(job) if job.status == JobRunStatus.Running =>
+          ZIO.succeed(JobLogs.Streaming(transport.subscribe(id)))
+        case Some(_) =>
+          // The sweep can still delete the file between this check and the tail's first read; by then the 200 is on
+          // the wire and cannot become a 410, so it reads as empty — the old answer, narrowed to a microsecond.
+          ZIO.attemptBlocking(Files.exists(logDir.resolve(s"${JobRunId.unwrap(id)}.log"))).map {
+            case true  => JobLogs.Streaming(transport.subscribe(id))
+            case false => JobLogs.Expired
+          }
+      }
+
+    override def sweepLogs: URIO[PostgresClient, Int] =
+      ProgressDisplay.sourced("retention") {
+        (for {
+          days   <- AppSetting.get(AppSetting.JobLogRetentionDays)
+          window <- retentionWindow(days)
+          now    <- Clock.instant
+          // `completions` and not `runningFibers`: `release` closes the sink before de-registering (see `submit`),
+          // so an id is present here for at least as long as its log file is open.
+          live <- completions.get.map(_.keySet.map(JobRunId.unwrap))
+          swept  <- FileSink.sweepBefore(logDir, now.minus(window.toLong, ChronoUnit.DAYS), live)
+          _      <- ZIO.logInfo(s"Retention sweep: $swept job log(s) (>${window}d) from $logDir")
+        } yield swept)
+          .tapError(t => ZIO.logWarning(s"Job-log retention sweep failed: ${t.safeMessage}"))
+          .orElseSucceed(0)
+      }
+
+    // A window of 0 or less puts the cutoff at or past `now`, so every log that isn't pinned matches. Treated like an
+    // unparseable value, which `AppSetting.get` already falls back to the compiled default for.
+    private def retentionWindow(days: Int): UIO[Int] =
+      if (days > 0) { ZIO.succeed(days) }
+      else {
+        val fallback = AppSetting.JobLogRetentionDays.default
+        ZIO
+          .logWarning(s"app_setting 'job_log_retention_days' = $days is not positive; using default $fallback")
+          .as(fallback)
+      }
 
     override def progressStream(id: JobRunId): RIO[PostgresClient, Option[ZStream[Any, Throwable, String]]] =
       status(id).flatMap {

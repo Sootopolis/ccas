@@ -261,7 +261,7 @@ INSERT INTO app_setting (key, value) VALUES ('cache_retention_days', '14')
 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
 ```
 
-`cache_retention_days` and `fetch_failure_retention_days` are re-read by every pass of the server's daily retention sweep, so a change lands within a day. `job_log_retention_days` is read once per `JobRunner` build, so it takes effect on the server's next startup. `progress_refresh_interval_ms` is read per progress subscription, so it applies to the next followed job.
+`cache_retention_days`, `fetch_failure_retention_days` and `job_log_retention_days` are re-read by every pass of the server's daily retention sweep, so a change lands within a day; `job_log_retention_days` must be positive, and a non-positive value is rejected in favour of the compiled default rather than sweeping the whole log directory on every pass. `progress_refresh_interval_ms` is read per progress subscription, so it applies to the next followed job.
 
 ### Response-body store
 
@@ -295,7 +295,7 @@ To collect them, set an **age-based** lifecycle rule on the bucket — S3/R2 rul
 
 **One `CcasServer` per database is the supported model.** Running CLI commands alongside that server against the same DB is fine — the CLI has no `JobRunner`, so it never touches scheduled-job state; it only shares the Chess.com egress.
 
-Running **two or more servers** against one DB is **not supported** and is at your own risk: a starting server marks *all* `Running` jobs as failed with no instance-ownership filter (it would kill another server's live jobs — #110), and the Chess.com rate limiter is per-process (N servers ≈ N× the per-IP request rate — #111). Each server also runs its own daily retention sweep, so N servers sweep N times against one orphan set — harmless (row deletes are idempotent, object deletes best-effort) but wasteful, and it multiplies the mid-flight cache race described in [ADR 0007](docs/adr/0007-response-caching-in-postgres.md). Multi-server hosting is tracked separately under #60 and is gated on fixing both.
+Running **two or more servers** against one DB is **not supported** and is at your own risk: a starting server marks *all* `Running` jobs as failed with no instance-ownership filter (it would kill another server's live jobs — #110), and the Chess.com rate limiter is per-process (N servers ≈ N× the per-IP request rate — #111), and each server's job-log sweep spares only the jobs running in its own process, so two servers sharing a `JOB_LOGS_DIR` delete each other's live job logs. Each server also runs its own daily retention sweep, so N servers sweep N times against one orphan set — harmless (row deletes are idempotent, object deletes best-effort) but wasteful, and it multiplies the mid-flight cache race described in [ADR 0007](docs/adr/0007-response-caching-in-postgres.md). Multi-server hosting is tracked separately under #60 and is gated on fixing both.
 
 ### CLI config file
 

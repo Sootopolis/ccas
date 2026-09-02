@@ -402,9 +402,9 @@ object TestBodyStore extends ZIOSpecDefault {
         } yield assertTrue(insideSaw, !outsideSaw, warnings == 1)
       }
     },
-    test("delete is bounded too, so a hung store cannot stall the startup sweep") {
-      // `Tables.ensureTables` drives `BodyStore.delete` once per swept hash on every CLI invocation, so an
-      // unbounded delete is a boot hang on a command the user typed.
+    test("delete is bounded too, so a hung store cannot stall the retention sweep") {
+      // `Tables.retentionSweep` drives `BodyStore.delete` once per swept hash, so an unbounded delete parks the
+      // retention fiber until the next restart rather than for one pass.
       val limits = BodyStore.BodyStoreLimits(read = 150.millis, write = 150.millis)
       for {
         (store, _)      <- freshStore

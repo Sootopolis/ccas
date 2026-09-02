@@ -68,20 +68,27 @@ object CcasServer extends ZIOAppDefault {
       )
     }
 
-  /** Cache retention: forked so the port binds without waiting for it, then daily so the backlog never accumulates
-    * into the restart cliff it used to be (it ran inside `PostgresClient.live`'s init hook, once, however much had
-    * aged out). Failure is caught inside the repeat — one bad pass must not end the loop — and is never fatal: a
-    * stale cache row costs one conditional GET, so nothing here is worth refusing to serve over. Shutdown interrupts
-    * whatever pass is in flight; that leaks objects, which the bucket lifecycle rule in ADR 0009 exists to collect.
+  /** One pass of every retention sweep this server runs: the job-log files, then the two API-diagnostics tables.
+    * Each half is caught on its own — one bad pass must not end the loop, and neither half's failure may skip the
+    * other — and neither is fatal: a stale cache row costs one conditional GET, so nothing here is worth refusing to
+    * serve over. The file sweep goes first because it is bounded by one directory walk, where the table half frees an
+    * unbounded number of body objects at a round trip each.
     */
-  private val retentionSweepForked: URIO[Scope & PostgresClient & BodyStore, Unit] =
-    Tables.retentionSweep
-      .catchAllCause(cause => ZIO.logErrorCause("Retention sweep failed", cause))
-      .repeat(Schedule.fixed(RetentionSweepInterval))
-      .forkScoped
-      .unit
+  private[server] val retentionPass: URIO[PostgresClient & BodyStore & JobRunner, Unit] =
+    ZIO
+      .serviceWithZIO[JobRunner](_.sweepLogs)
+      .catchAllCause(cause => ZIO.logErrorCause("Job-log sweep failed", cause)) *>
+      Tables.retentionSweep.catchAllCause(cause => ZIO.logErrorCause("Retention sweep failed", cause))
 
-  // Daily, because both retention windows are day-granular. Each pass re-reads `app_setting`, so a retention change
+  /** Forked so the port binds without waiting for a pass, and daily so no pass has more than a day of backlog to
+    * clear. See docs/adr/0007-response-caching-in-postgres.md. Shutdown interrupts whatever pass is in flight; for
+    * the table half that leaks objects, which the bucket lifecycle rule in ADR 0009 exists to collect (an interrupted
+    * file sweep leaks nothing — the files remain).
+    */
+  private val retentionSweepForked: URIO[Scope & PostgresClient & BodyStore & JobRunner, Unit] =
+    retentionPass.repeat(Schedule.fixed(RetentionSweepInterval)).forkScoped.unit
+
+  // Daily, because every retention window is day-granular. Each pass re-reads `app_setting`, so a retention change
   // takes effect within a day rather than at the next restart.
   private val RetentionSweepInterval = 24.hours
 
