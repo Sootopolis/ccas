@@ -1,7 +1,7 @@
 object Versions {
   // core
   val vCcas  = "0.1.0-SNAPSHOT"
-  val vScala = "3.8.4"
+  val vScala = "3.9.0"
   // sbt's own version is pinned in project/build.properties, which is what the launcher reads. Deliberately not
   // mirrored here — see build.sbt.
 
