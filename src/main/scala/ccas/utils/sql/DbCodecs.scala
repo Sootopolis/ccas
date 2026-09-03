@@ -35,7 +35,7 @@ object DbCodecs {
   given listCodec[T: DbCodec as dbCodec]: DbCodec[List[T]] = new DbCodec[List[T]] {
     override def cols: IArray[Int] = IArray(Types.ARRAY)
 
-    private val (sqlTypeName, toJdbc): (String, T => AnyRef) = dbCodec.cols(0) match {
+    private val (sqlTypeName, toJdbc) = dbCodec.cols(0) match {
       case Types.VARCHAR | Types.LONGVARCHAR => ("TEXT", (v: T) => v.asInstanceOf[AnyRef])
       case Types.BIGINT                      => ("BIGINT", (v: T) => Long.box(v.asInstanceOf[Long]))
       case Types.INTEGER                     => ("INTEGER", (v: T) => Int.box(v.asInstanceOf[Int]))
