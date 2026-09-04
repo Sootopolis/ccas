@@ -34,21 +34,13 @@ Take the work on the **current branch** through this repo's full release flow. B
 
 ## 2. Push
 - `git push -u origin <branch>`. This fires the pre-push hook (full `sbt test`).
-- **Possible infra flake — verify, do not assume.** `Failed to get driver instance for ...ccas_test` / `No suitable driver`
-  can come from pgjdbc's JVM-global `DriverManager` registration rather than from the code: the driver self-registers on
-  first class load, and if a later run gets a fresh test classloader, `DriverManager.isDriverAllowed` resolves
-  `org.postgresql.Driver` to a different `Class` object and rejects it. It reaches `PostgresClient`'s `setJdbcUrl` path,
-  not the `dataSource.*` one.
-- Treat that as a hypothesis, never as a licence to skip the gate. **Reproduce it before acting**: re-run the suite in a
-  *fresh* sbt server (`sbt --client shutdown`, then `sbt -batch test`). If it passes cold, it was environmental; if it
-  fails cold, it is real and you stop. Only once it is cold-green:
+- Any REAL test failure → stop and fix. **Never `--no-verify` past a real failure.**
+- One symptom is a suspected warm-server artefact rather than a real failure: `Failed to get driver instance for
+  ...ccas_test` / `No suitable driver`. Never reproduced on sbt 1.13.0, so treat it as a hypothesis. Re-run cold
+  (`sbt --client shutdown`, then `sbt -batch test`); cold-red is real and you stop. Only once it is cold-green:
   1. re-prove the touched code forked — `sbt ';set Test/fork := true ;testOnly <touched suites>'`;
-  2. then `git push --no-verify` and let CI (which always runs cold) be the gate, saying plainly in the PR that the hook
-     was bypassed and why.
-- Any REAL test failure → stop and fix. Never `--no-verify` past a real failure.
-- Status note: as of 2026-08-25 this had not been reproduced on sbt 1.13.0 — the hook ran clean repeatedly, and four
-  consecutive `testFull` runs in one warm sbt 2.0.7 server were green. If you hit it, capture the evidence rather than
-  citing this line.
+  2. then `git push --no-verify`, letting CI (which always runs cold) be the gate, and say in the PR that the hook was
+     bypassed and why.
 
 ## 3. Open the PR
 - `gh pr create --base <base> --head <branch>` with:
@@ -63,6 +55,10 @@ which is the one step that cannot be undone. So check first, while everything is
 - Post the step-9 issue backrefs NOW (comment only; leave closing until after the merge, since the SHA isn't known yet).
 - If any of those is denied: say so and ask whether to merge anyway. Merging with the follow-up steps known-blocked is a
   choice the user should make deliberately, not discover afterwards.
+- **That probe says nothing about step 5.** The classifier judges the action, not the binary: `gh pr merge --squash`
+  was denied on #246 (2026-09-03) with `Bash(gh pr:*)` allowlisted and `gh run list` answering fine, and a merge has no
+  cheap probe. On denial, hand over `gh pr merge <n> --squash` for the user to run with `!` and resume at step 6 —
+  nothing is stranded, it lands before the irreversible act. Never edit settings to unblock yourself.
 
 ## 4. Watch PR CI
 - `gh pr checks <n> --watch --interval 20`.
@@ -95,6 +91,9 @@ new SHA and the branch then diverges. Unpublished, recycling is a local reset no
 
   Empty means every byte of the branch is in that commit, so deletion loses nothing no matter what has landed since.
   Non-empty means STOP and ASK. Cross-check with `gh pr list --state all --head <branch>`.
+- **`git branch -d` will refuse; that refusal is noise.** It tests commit reachability, which squash-merge always
+  breaks. That empty diff is the proof `-d` wanted — use `git branch -D` once it is clean, never before. The remote
+  delete fires `pre-push`, which self-skips on a delete-only push; nothing to bypass.
 - **Anything compared against `<base>` gives a false STOP once base moves on.** `git diff <base> <branch>` is a fine
   shortcut *immediately* after the merge, but a concurrent PR landing on base makes it non-empty — it reports the
   other PR's files as deletions — and there is then no way to tell "branch has unique work" from "base has newer

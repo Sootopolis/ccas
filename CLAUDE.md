@@ -119,9 +119,8 @@ timeout, which fails fast rather than re-blocking for another `connectionTimeout
 **Database URLs.** `database.url` (`DATABASE_URL`) passes through `PostgresClient.normalizeJdbcUrl`,
 which accepts both the JDBC form and the libpq URI managed providers hand out
 (`postgresql://user:pass@host/db`). Credentials are lifted out of the URL into Hikari's
-`setUsername` / `setPassword` for both forms, because Hikari echoes `jdbcUrl` into its failure
-message. Percent-decoding differs by position deliberately: RFC 3986 for userinfo, `URLDecoder` for
-query values, matching what pgjdbc itself applies.
+`setUsername` / `setPassword` for both forms, and percent-decoding differs by position on purpose —
+[0014](docs/adr/0014-accept-both-database-url-forms.md) holds why, and says not to unify it.
 
 ### Where the rationale lives
 
@@ -137,6 +136,9 @@ query values, matching what pgjdbc itself applies.
 | `BodyStore` deadlines and the S3 budget | [0009](docs/adr/0009-bound-every-body-store-operation.md) |
 | Username / club-slug rename recovery | [0010](docs/adr/0010-rename-recovery-for-usernames-and-club-slugs.md) |
 | CLI locality, `current_club`, config files | [0011](docs/adr/0011-cli-locality-and-the-current-club-pointer.md) |
+| Job-log sink surviving write failures | [0013](docs/adr/0013-job-log-sink-survives-write-failures.md) |
+| Both `DATABASE_URL` forms, credential lifting | [0014](docs/adr/0014-accept-both-database-url-forms.md) |
+| The server read-idle reaper | [0015](docs/adr/0015-server-read-idle-reaper.md) |
 
 Component-level detail — the apps and their run modes, the route surface, `JobRunner` cancellation
 semantics, the scheduler, `app_setting` — is in [`docs/architecture.md`](docs/architecture.md).
