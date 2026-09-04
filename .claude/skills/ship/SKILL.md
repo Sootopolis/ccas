@@ -29,6 +29,9 @@ Take the work on the **current branch** through this repo's full release flow. B
 
 ## 1. Commit (only if there are changes)
 - Conventional Commits. Subject ≤ ~70 chars; body explains the *why* per change, not the *what*.
+- **Do not hard-wrap the body.** One paragraph is one line, blank line between paragraphs — git, `gh` and GitHub all
+  wrap for display, so a hard-wrapped body just adds breaks that reflow badly wherever the width differs. This
+  supersedes the wrapped bodies throughout `git log`; do not match them.
 - End every commit message with the `Co-authored-by:` trailer from the global CLAUDE instructions, matching the casing already in `git log` (this repo uses `Co-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com>`). Add a session trailer ONLY if one appears in recent commits — do not invent one.
 - Branch already has commits ahead of base and a clean tree → skip to step 2.
 
@@ -49,8 +52,9 @@ Take the work on the **current branch** through this repo's full release flow. B
 - End the PR body with the required footer (`🤖 Generated with Claude Code` + session URL).
 
 ## 3b. Permission preflight (before anything irreversible)
-Steps 7-9 use commands that may be gated (classifier or allowlist). A denial there strands the flow *after* the merge,
-which is the one step that cannot be undone. So check first, while everything is still reversible:
+Step 5 and steps 7-9 all use commands that may be gated (classifier or allowlist), and where the denial lands decides
+how much it costs: on the merge it is merely a handover, but in 7-9 it strands the flow *past* the one step that cannot
+be undone. So check what can be checked now, while everything is still reversible:
 - Confirm `gh pr`, `gh run` and `gh issue` are usable — a cheap `gh run list --branch <base> --limit 1` proves it.
 - Post the step-9 issue backrefs NOW (comment only; leave closing until after the merge, since the SHA isn't known yet).
 - If any of those is denied: say so and ask whether to merge anyway. Merging with the follow-up steps known-blocked is a
@@ -108,16 +112,22 @@ new SHA and the branch then diverges. Unpublished, recycling is a local reset no
 - **Ambiguous, or the user calls a branch long-lived?** ASK before deleting. Deletion is irreversible from here.
 
 ### Re-base the parked branch (`wip`)
-The worktree parked on `wip` (from step 0) is now behind the merge. Because `wip` is local-only this is one command,
-no push and no force:
-- **Pure-lag only.** `git rev-list --left-right --count origin/<base>...wip` must show **0 ahead**. Then, with a clean
-  tree: `git reset --hard origin/<base>`.
-- **Has commits ahead?** STOP and ASK. That is unshipped work and `reset --hard` destroys it.
+The worktree parked on `wip` (from step 0) is now behind the merge. Because `wip` is local-only, putting it back takes
+no push and no force — a proof, then a reset:
+- **Prove `wip` holds nothing unique, by content.** Re-resolve the merge SHA here rather than reusing `$MERGED` from
+  the disposal block above — shell state does not survive between tool calls, and an empty variable diffs the working
+  tree, which is clean by now, so the guard would pass vacuously. `git diff $(gh pr view <n> --json mergeCommit -q
+  .mergeCommit.oid) wip` must be empty; then, with a clean tree, `git reset --hard origin/<base>`. Never a `rev-list`
+  count after the merge: when the ship started from a commit already on `wip`, the squash guarantees `wip` reads as
+  ahead, so a count says STOP on every such ship — it read `1 1` on a `wip` byte-identical to the merge during #247.
+- **Non-empty diff?** STOP and ASK. That is unshipped work and `reset --hard` destroys it.
 - **If `wip` has somehow acquired an upstream again**, do not force-push it back into line — say so and ask. Getting it
   republished is the regression; a force-push would just entrench it.
 
 ## 8. Watch main CI
-- `gh run list --branch <base> --limit 1` → `gh run watch <id> --interval 20 --exit-status` on the merge commit's run. Report green/red.
+- `gh run list --branch <base> --limit 1 --json databaseId,headSha` → confirm `headSha` is the merge commit before
+  `gh run watch <id> --interval 20 --exit-status`. The newest run on base is not automatically yours; another PR
+  landing between the merge and this step would have you reporting its result as this ship's. Report green/red.
 
 ## 9. Update issues
 Backref comments should already be posted (step 3b); this step adds the merge SHA and closes what the PR resolved.
