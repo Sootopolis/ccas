@@ -16,26 +16,42 @@ import zio.config.typesafe.TypesafeConfigProvider
   * config-level default (overridden by `--server`, falling back to the built-in default). `log_dir` sets where a
   * detached `ccas serve --detach` server writes `server.log` (default `${XDG_STATE_HOME:-~/.local/state}/ccas/logs`).
   * `current_club` is the club a slug-requiring command targets when neither `--club` nor `--all` is given (set with
-  * `ccas use-club <slug>`, written by [[ConfigWriter]]).
+  * `ccas use-club <slug>`, written by [[ConfigWriter]]). `ready_timeout_seconds` is how long `ccas server up --detach`
+  * waits for readiness before giving up — the right value depends on the database (a suspended serverless compute wakes
+  * far slower than a local Postgres), so it is a setting, not a constant.
   */
 final case class CliConfig(
   apiUrl: Option[String],
   defaultClubs: List[String],
   logDir: Option[String],
-  currentClub: Option[String]
+  currentClub: Option[String],
+  readyTimeoutSeconds: Option[Int]
 )
 
 object CliConfig {
 
-  val empty: CliConfig = CliConfig(None, Nil, None, None)
+  val empty: CliConfig = CliConfig(
+    apiUrl = None,
+    defaultClubs = Nil,
+    logDir = None,
+    currentClub = None,
+    readyTimeoutSeconds = None
+  )
 
   private val descriptor: Config[CliConfig] =
     (Config.string("api_url").optional.map(blankToNone) ++
       Config.listOf("default_clubs", Config.string).withDefault(Nil) ++
       Config.string("log_dir").optional.map(blankToNone) ++
-      Config.string("current_club").optional.map(blankToNone)).map {
-      case (apiUrl, defaultClubs, logDir, currentClub) =>
-        CliConfig(apiUrl, defaultClubs, logDir.map(expandTilde), currentClub)
+      Config.string("current_club").optional.map(blankToNone) ++
+      Config.int("ready_timeout_seconds").optional).map {
+      case (apiUrl, defaultClubs, logDir, currentClub, readyTimeoutSeconds) =>
+        CliConfig(
+          apiUrl = apiUrl,
+          defaultClubs = defaultClubs,
+          logDir = logDir.map(expandTilde),
+          currentClub = currentClub,
+          readyTimeoutSeconds = readyTimeoutSeconds
+        )
     }
 
   // A present-but-blank value (`api_url = ""` / whitespace) is treated as unset, so it falls back to the next

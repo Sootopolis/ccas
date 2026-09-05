@@ -229,13 +229,24 @@ object TestCliParser extends ZIOSpecDefault {
       parsed("completion", "bash").map(c => assertTrue(c.contains(CliCommand.Completion("bash"))))
     },
     test("server up defaults to foreground (no --detach)") {
-      parsed("server", "up").map(c => assertTrue(c.contains(CliCommand.Serve(false))))
+      parsed("server", "up").map(c => assertTrue(c.contains(CliCommand.Serve(false, None))))
     },
     test("server up --detach parses the flag") {
-      parsed("server", "up", "--detach").map(c => assertTrue(c.contains(CliCommand.Serve(true))))
+      parsed("server", "up", "--detach").map(c => assertTrue(c.contains(CliCommand.Serve(true, None))))
     },
     test("server up -d parses the detach alias") {
-      parsed("server", "up", "-d").map(c => assertTrue(c.contains(CliCommand.Serve(true))))
+      parsed("server", "up", "-d").map(c => assertTrue(c.contains(CliCommand.Serve(true, None))))
+    },
+    test("server up --ready-timeout-seconds parses the readiness deadline") {
+      parsed("server", "up", "--detach", "--ready-timeout-seconds", "120")
+        .map(c => assertTrue(c.contains(CliCommand.Serve(true, Some(120)))))
+    },
+    // A bare `.toInt` on zio-cli's BigInt would wrap this to 1 and silently run with a 1-second deadline.
+    test("an integer option beyond Int range fails validation instead of wrapping") {
+      parse("server", "up", "--detach", "--ready-timeout-seconds", "4294967297").exit.map(e => assertTrue(e.isFailure))
+    },
+    test("server up --ready-timeout-seconds without --detach is rejected, not ignored") {
+      parse("server", "up", "--ready-timeout-seconds", "120").exit.map(e => assertTrue(e.isFailure))
     },
     test("server down parses to Stop (no server)") {
       parsed("server", "down").map(c => assertTrue(c.contains(CliCommand.Stop)))

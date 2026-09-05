@@ -57,8 +57,9 @@ object Main extends ZIOAppDefault {
   }
 
   private def execute(cfg: CliConfig)(cmd: CliCommand): URIO[ZIOAppArgs, ExitCode] = cmd match {
-    case CliCommand.Serve(false)         => serve
-    case CliCommand.Serve(true)          => detachServe(cfg)
+    // `Serve(false, Some(_))` never reaches here: `CliCommand.serverUpOptions` rejects it at parse time.
+    case CliCommand.Serve(false, _)      => serve
+    case CliCommand.Serve(true, timeout) => detachServe(cfg, timeout)
     case CliCommand.Stop                 => stopServe
     case CliCommand.ServerStatus         => statusServe
     case CliCommand.Completion(shell)    => printCompletion(shell)
@@ -80,13 +81,15 @@ object Main extends ZIOAppDefault {
   // `Detach`, which reads `server.port` via ConfigFactory.load in THIS parent JVM), then the same mandatory-config
   // precheck as foreground, then hand off to the spawner. `log_dir` from the CLI config sets the server's log location,
   // defaulting to `${XDG_STATE_HOME:-~/.local/state}/ccas/logs`. The detached child re-runs the overlay in its own JVM.
-  private def detachServe(cfg: CliConfig): URIO[ZIOAppArgs, ExitCode] =
+  private def detachServe(cfg: CliConfig, readyTimeoutSeconds: Option[Int]): URIO[ZIOAppArgs, ExitCode] =
     ServerEnvOverlay(XdgPaths.serverEnvFile) *> ZIO.suspendSucceed {
-      missingServeEnv match {
-        case Some(msg) => Console.printLineError(s"error: $msg").orDie.as(ExitCode(2))
-        case None =>
+      (missingServeEnv, Detach.resolveDeadline(readyTimeoutSeconds, cfg.readyTimeoutSeconds)) match {
+        case (Some(msg), _) => Console.printLineError(s"error: $msg").orDie.as(ExitCode(2))
+        // A non-positive deadline is a usage error (exit 2), from the flag or the config file alike — not a failed boot.
+        case (None, Left(msg)) => Console.printLineError(s"error: $msg").orDie.as(ExitCode(2))
+        case (None, Right(deadline)) =>
           val logDir = cfg.logDir.fold(XdgPaths.stateDir.resolve("logs"))(Paths.get(_))
-          Detach.run(logDir, PidFile.path)
+          Detach.run(logDir, PidFile.path, deadline)
       }
     }
 

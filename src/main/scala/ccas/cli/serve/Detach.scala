@@ -10,7 +10,7 @@ import java.time.{Duration => JDuration}
 import scala.jdk.CollectionConverters.*
 import scala.jdk.OptionConverters.*
 
-import zio.{Console, durationInt, ExitCode, UIO, ZIO}
+import zio.{Console, Duration, durationInt, ExitCode, UIO, ZIO}
 
 /** Parent side of `ccas server up --detach`: spawn the server as a background process, wait for it to become ready,
   * then return to the shell with the pid printed. The JVM can't `fork()`, so we re-exec this same binary's
@@ -20,10 +20,14 @@ import zio.{Console, durationInt, ExitCode, UIO, ZIO}
   */
 object Detach {
 
-  private val MainClass     = "ccas.cli.Main"
-  private val ReadyDeadline = 30.seconds
-  private val PollInterval  = 250.millis
-  private val HttpTimeout   = JDuration.ofSeconds(2)
+  private val MainClass    = "ccas.cli.Main"
+  private val PollInterval = 250.millis
+  private val HttpTimeout  = JDuration.ofSeconds(2)
+
+  /** Readiness wait when neither `--ready-timeout-seconds` nor `ready_timeout_seconds` is set. Generous for a local Postgres,
+    * tight for a serverless provider that suspends after minutes of idle — hence [[resolveDeadline]].
+    */
+  val DefaultReadyDeadline: Duration = 30.seconds
   // Consecutive "not alive" polls (~2s) before declaring the child dead. Tolerates the brief early-boot window in the
   // setsid-fork case where the spawn process has exited but the server JVM hasn't written its pid file yet.
   private val DeadStreakLimit = 8
@@ -58,13 +62,28 @@ object Detach {
     }
   }
 
-  def run(logDir: Path, pidPath: Path): UIO[ExitCode] = {
+  /** Readiness deadline for one `--detach` run: `--ready-timeout-seconds` beats the config's `ready_timeout_seconds`, which
+    * beats [[DefaultReadyDeadline]]. `Left` is a ready-to-print message naming the source that supplied the bad value,
+    * since a non-positive deadline means "give up before the first poll" — never what the operator meant. Pure.
+    */
+  def resolveDeadline(flag: Option[Int], configured: Option[Int]): Either[String, Duration] =
+    (flag, configured) match {
+      case (Some(seconds), _)    => positiveSeconds(seconds, "--ready-timeout-seconds")
+      case (None, Some(seconds)) => positiveSeconds(seconds, "ready_timeout_seconds in the CLI config file")
+      case (None, None)          => Right(DefaultReadyDeadline)
+    }
+
+  private def positiveSeconds(seconds: Int, source: String): Either[String, Duration] =
+    if (seconds > 0) { Right(seconds.seconds) }
+    else { Left(s"$source must be a positive number of seconds (got $seconds)") }
+
+  def run(logDir: Path, pidPath: Path, readyDeadline: Duration): UIO[ExitCode] = {
     val program =
       for {
         running <- ZIO.attemptBlocking(PidFile.alreadyRunning(PidFile.read(pidPath), PidFile.isAlive))
         code <- running match {
           case Some(pid) => Console.printLineError(s"already running, pid=$pid").orDie.as(ExitCode(1))
-          case None      => start(logDir, pidPath)
+          case None      => start(logDir, pidPath, readyDeadline)
         }
       } yield code
 
@@ -73,14 +92,14 @@ object Detach {
     )
   }
 
-  private def start(logDir: Path, pidPath: Path): ZIO[Any, Throwable, ExitCode] =
+  private def start(logDir: Path, pidPath: Path, readyDeadline: Duration): ZIO[Any, Throwable, ExitCode] =
     for {
       port    <- HealthProbe.resolvePort
       logFile  = logDir.resolve("server.log")
       _       <- ZIO.attemptBlocking(Files.createDirectories(logDir))
       cmd     <- ZIO.attempt(baseCommand)
       process <- spawn(cmd, logFile, pidPath)
-      code    <- awaitReady(process, port, logFile, pidPath)
+      code    <- awaitReady(process, port, logFile, pidPath, readyDeadline)
     } yield code
 
   // Try setsid (new session — full terminal detach), then nohup (SIGHUP-immune), then bare. Each prefix is only
@@ -101,7 +120,13 @@ object Detach {
     attempt(List("setsid")).orElse(attempt(List("nohup"))).orElse(attempt(Nil))
   }
 
-  private def awaitReady(process: Process, port: Int, logFile: Path, pidPath: Path): UIO[ExitCode] = {
+  private def awaitReady(
+    process: Process,
+    port: Int,
+    logFile: Path,
+    pidPath: Path,
+    readyDeadline: Duration
+  ): UIO[ExitCode] = {
     val client    = HttpClient.newBuilder().connectTimeout(HttpTimeout).build()
     val readyUri  = URI.create(s"http://127.0.0.1:$port/health/ready")
     val pollReady = ZIO
@@ -113,10 +138,12 @@ object Detach {
 
     // Liveness is the spawn process OR a live pid in the pid file. The pid-file signal makes this independent of
     // whether `setsid` exec-replaced in place (pid preserved → `process` is the server) or forked (the spawn process
-    // is a short-lived shim and only the pid file tracks the real server). On a read error, assume alive (the overall
-    // deadline still bounds the wait) rather than risk a false crash report.
-    val serverAlive =
-      ZIO.attemptBlocking(process.isAlive || PidFile.read(pidPath).exists(PidFile.isAlive)).orElseSucceed(true)
+    // is a short-lived shim and only the pid file tracks the real server). `None` is a failed read.
+    val liveness = ZIO.attemptBlocking(process.isAlive || PidFile.read(pidPath).exists(PidFile.isAlive)).option
+
+    // The loop assumes alive on a read error (the overall deadline still bounds the wait) rather than risk a false
+    // crash report; the timeout message keeps the unknown instead of reporting the assumption as fact.
+    val serverAlive = liveness.map(_.getOrElse(true))
 
     // Succeeds when the server reports ready; fails (ProcessDied) after DeadStreakLimit consecutive not-alive polls.
     def waitLoop(deadStreak: Int): ZIO[Any, ProcessDied.type, Unit] =
@@ -130,11 +157,21 @@ object Detach {
           }
       }
 
-    waitLoop(0).timeout(ReadyDeadline).foldZIO(
+    // Liveness is read BEFORE the kill, so the timeout message can separate a slow boot from a dead child — the very
+    // distinction the old empty "Last log lines:" left ambiguous.
+    def onTimeout: UIO[ExitCode] =
+      for {
+        alive <- liveness
+        _     <- killServer(process, pidPath)
+        tail  <- tailLog(logFile)
+        code  <- fail(timeoutMessage(readyDeadline, alive, logFile, tail))
+      } yield code
+
+    waitLoop(0).timeout(readyDeadline).foldZIO(
       _ => childDied(logFile),
       {
         case Some(_) => ready(pidPath, logFile)
-        case None    => timedOut(process, pidPath, logFile)
+        case None    => onTimeout
       }
     )
   }
@@ -149,18 +186,45 @@ object Detach {
     }
 
   private def childDied(logFile: Path): UIO[ExitCode] =
-    tailLog(logFile).flatMap(tail =>
-      Console.printLineError(s"error: server exited during startup. Last log lines:\n$tail").orDie.as(ExitCode(1))
-    )
+    tailLog(logFile).flatMap(tail => fail(diedMessage(logFile, tail)))
 
-  private def timedOut(process: Process, pidPath: Path, logFile: Path): UIO[ExitCode] =
-    killServer(process, pidPath) *>
-      tailLog(logFile).flatMap(tail =>
-        Console
-          .printLineError(s"error: server did not become ready within ${ReadyDeadline.getSeconds}s. Last log lines:\n$tail")
-          .orDie
-          .as(ExitCode(1))
-      )
+  private def fail(message: String): UIO[ExitCode] =
+    Console.printLineError(s"error: $message").orDie.as(ExitCode(1))
+
+  /** Failure text for a readiness timeout. `alive` picks the advice — `None` being a liveness read that failed, which
+    * is reported as the unknown it is rather than as the loop's assume-alive default. A process still running was
+    * probably only slow to boot, so the deadline is worth raising; one already gone will not come up however long we
+    * wait. Pure.
+    */
+  def timeoutMessage(deadline: Duration, alive: Option[Boolean], logFile: Path, tail: String): String = {
+    val seconds = deadline.getSeconds
+    val slowBoot =
+      s"It may only have needed longer to start (a suspended serverless compute can take well over ${seconds}s to " +
+        s"wake). Retry with `ccas server up --detach --ready-timeout-seconds ${seconds * 2}`, set " +
+        "`ready_timeout_seconds` in the CLI config file, or run `ccas server up` in the foreground to watch it boot."
+    val advice = alive match {
+      case Some(true) => s"The server process was still running. $slowBoot"
+      case None       => s"The server process's state could not be read. $slowBoot"
+      case Some(false) =>
+        "The server process was already gone, so a longer deadline will not help. " +
+          "Run `ccas server up` in the foreground to see why it died."
+    }
+    s"server did not become ready within ${seconds}s; stopped it.\n${logEvidence(logFile, tail)}\n$advice"
+  }
+
+  /** Failure text for a child that exited before reporting ready. With no log content there is nothing to report but
+    * the path, so say that instead of printing an empty "Last log lines:" section. Pure.
+    */
+  def diedMessage(logFile: Path, tail: String): String = {
+    val evidence = logEvidence(logFile, tail)
+    if (tail.nonEmpty) { s"server exited during startup.\n$evidence" }
+    else { s"server exited during startup.\n$evidence Run `ccas server up` in the foreground to see why." }
+  }
+
+  // Never promise evidence we don't have: an empty tail names the file the operator should watch instead.
+  private def logEvidence(logFile: Path, tail: String): String =
+    if (tail.nonEmpty) { s"Last log lines from $logFile:\n$tail" }
+    else { s"Nothing has been written to $logFile yet." }
 
   // Kill the real server by its pid-file pid (works whether setsid forked or not); fall back to the spawn process if
   // the pid file isn't there. Avoids leaving an orphaned half-started server when `process` is a dead setsid shim.
