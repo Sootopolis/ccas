@@ -2,11 +2,12 @@ package ccas.cli.serve
 
 import java.nio.file.{Files, Path}
 
-import zio.{ExitCode, ZIO}
+import zio.{durationInt, ExitCode, ZIO}
 import zio.test.{assertTrue, Spec, TestConsole, ZIOSpecDefault}
 
 /** Deterministic, DB-free unit tests for the `ccas serve --detach` / `ccas stop` lifecycle. The pure decision logic
-  * ([[Detach.reconstruct]], [[PidFile.parse]], [[PidFile.alreadyRunning]]) is tested directly; the effectful pid-file
+  * ([[Detach.reconstruct]], [[Detach.resolveDeadline]], [[Detach.timeoutMessage]], [[Detach.diedMessage]],
+  * [[PidFile.parse]], [[PidFile.alreadyRunning]]) is tested directly; the effectful pid-file
   * paths are exercised against an explicit temp path (the `XdgPaths`-backed default reads `System.getenv`, which can't
   * be set in-process). The full spawn/health-poll round-trip is covered by manual e2e, not here.
   */
@@ -73,6 +74,74 @@ object TestServeLifecycle extends ZIOSpecDefault {
       },
       test("returns None when the main-class token is absent") {
         assertTrue(Detach.reconstruct("/usr/bin/java", List("-cp", "/a.jar", "some.Other.Main", "x")).isEmpty)
+      }
+    ),
+    suite("Detach.resolveDeadline")(
+      test("no flag and no config -> the built-in default") {
+        assertTrue(Detach.resolveDeadline(None, None).contains(Detach.DefaultReadyDeadline))
+      },
+      test("config supplies the deadline when the flag is absent") {
+        assertTrue(Detach.resolveDeadline(None, Some(120)).contains(120.seconds))
+      },
+      test("the flag wins over the config") {
+        assertTrue(Detach.resolveDeadline(Some(5), Some(120)).contains(5.seconds))
+      },
+      test("a non-positive flag is rejected, naming the flag") {
+        val left = Detach.resolveDeadline(Some(0), None).swap.toOption
+        assertTrue(left.exists(_.contains("--ready-timeout-seconds")), left.exists(_.contains("(got 0)")))
+      },
+      test("a non-positive config value is rejected, naming the key") {
+        val left = Detach.resolveDeadline(None, Some(-5)).swap.toOption
+        assertTrue(left.exists(_.contains("ready_timeout_seconds")), left.exists(_.contains("(got -5)")))
+      }
+    ),
+    suite("Detach failure messages")(
+      // The regression this guards: an empty tail used to render as "Last log lines:" followed by nothing, which
+      // promised evidence the CLI did not have and left the operator with no next move.
+      test("an empty log names the file instead of an empty 'last log lines' section") {
+        val msg = Detach.timeoutMessage(30.seconds, Some(true), Path.of("/state/server.log"), "")
+        assertTrue(
+          msg.contains("Nothing has been written to /state/server.log yet."),
+          !msg.contains("Last log lines")
+        )
+      },
+      test("a non-empty log is quoted and attributed to the file") {
+        val msg = Detach.timeoutMessage(30.seconds, Some(false), Path.of("/state/server.log"), "boom")
+        assertTrue(msg.contains("Last log lines from /state/server.log:\nboom"))
+      },
+      test("a still-running server is told the deadline is raisable, with a concrete larger value") {
+        val msg = Detach.timeoutMessage(45.seconds, Some(true), Path.of("/state/server.log"), "")
+        assertTrue(
+          msg.contains("did not become ready within 45s"),
+          msg.contains("still running"),
+          msg.contains("--ready-timeout-seconds 90"),
+          msg.contains("ready_timeout_seconds"),
+          msg.contains("in the foreground to watch it boot")
+        )
+      },
+      test("a failed liveness read says so rather than claiming the server was up") {
+        val msg = Detach.timeoutMessage(30.seconds, None, Path.of("/state/server.log"), "")
+        assertTrue(
+          msg.contains("state could not be read"),
+          !msg.contains("was still running"),
+          msg.contains("--ready-timeout-seconds 60")
+        )
+      },
+      test("a dead server is told a longer deadline will not help") {
+        val msg = Detach.timeoutMessage(30.seconds, Some(false), Path.of("/state/server.log"), "")
+        assertTrue(
+          msg.contains("already gone"),
+          msg.contains("longer deadline will not help"),
+          !msg.contains("--ready-timeout-seconds 60")
+        )
+      },
+      test("an exit during startup with no log suggests the foreground run") {
+        val msg = Detach.diedMessage(Path.of("/state/server.log"), "")
+        assertTrue(msg.contains("Nothing has been written"), msg.contains("in the foreground"))
+      },
+      test("an exit during startup with a log leaves the log to speak") {
+        val msg = Detach.diedMessage(Path.of("/state/server.log"), "Caused by: ConnectException")
+        assertTrue(msg.contains("Caused by: ConnectException"), !msg.contains("in the foreground"))
       }
     ),
     suite("Stop.run")(

@@ -77,7 +77,7 @@ differs from what is stored, so display names self-heal.
   through a temp-file-then-rename that creates the temp file owner-only (0600) and carries that mode
   across the rename, so `DATABASE_URL` and `DB_PASSWORD` are never world-readable.
 - **Two config files, deliberately separate.** `${XDG_CONFIG_HOME:-~/.config}/ccas/config.conf` holds
-  CLI *client* settings (`api_url`, `default_clubs`, `log_dir`, `current_club`) — read by `CliConfig`
+  CLI *client* settings — whatever `CliConfig` declares, `current_club` among them — read by `CliConfig`
   via zio-config, written by `ConfigWriter` as a surgical line edit, since zio-config has no HOCON
   writer. `${XDG_CONFIG_HOME:-~/.config}/ccas/ccas.env` holds what the *server* needs to boot
   (`CCAS_CONTACT_EMAIL`, `DATABASE_URL`, …) and is what `ccas config get|set|unset|list|path`

@@ -30,7 +30,7 @@ object CliCommand {
   }
 
   // Local commands — handled in `Main`, no client HTTP, no `--server`.
-  final case class Serve(detach: Boolean) extends CliCommand
+  final case class Serve(detach: Boolean, readyTimeoutSeconds: Option[Int]) extends CliCommand
   case object Stop extends CliCommand
   case object ServerStatus extends CliCommand
   final case class Completion(shell: String) extends CliCommand
@@ -147,7 +147,18 @@ object CliCommand {
   private val detachOpt: Options[Boolean] =
     Options.boolean("detach") ?? "Submit the job and return immediately without following it (reattach with 'ccas logs <id>')"
 
-  private def intOpt(name: String): Options[Option[Int]] = Options.integer(name).map(_.toInt).optional
+  // `Options.integer` yields a BigInt and a bare `.toInt` WRAPS, so `--limit 4294967297` would silently become 1 —
+  // a different request, not a rejected one. Out-of-range values fail as usage errors instead.
+  private def intOpt(name: String): Options[Option[Int]] =
+    Options
+      .integer(name)
+      .mapOrFail(n =>
+        if (n.isValidInt) { Right(n.toInt) }
+        else {
+          Left(ValidationError(ValidationErrorType.InvalidValue, HelpDoc.p(s"--$name must fit in a 32-bit integer (got $n)")))
+        }
+      )
+      .optional
 
   // Single-club target. Absent → Dispatcher falls back to the config's `current_club`.
   private val clubOpt: Options[Option[String]] =
@@ -165,12 +176,26 @@ object CliCommand {
 
   // NOTE: `Detach.reconstruct`/`fallbackCommand` rebuild the detached child as `... ccas.cli.Main server up`, so
   // renaming this subcommand requires updating them in lockstep or detached launch breaks.
+  // The readiness deadline is meaningless without a `--detach` to wait, so the pair is rejected here rather than
+  // silently dropped — the same stance `--all` with `--club` takes, and it keeps `Main` free of parse rules.
+  private val serverUpOptions: Options[(Boolean, Option[Int])] =
+    ((Options.boolean("detach").alias("d") ?? "Run the server as a detached background process (writes a pid file; stop with 'ccas server down')") ++
+      (intOpt("ready-timeout-seconds") ?? "How long --detach waits for readiness (default 30; overrides the config file's ready_timeout_seconds)"))
+      .mapOrFail {
+        case (false, Some(_)) =>
+          Left(
+            ValidationError(
+              ValidationErrorType.InvalidValue,
+              HelpDoc.p("--ready-timeout-seconds applies only to a detached server; add --detach")
+            )
+          )
+        case parsed => Right(parsed)
+      }
+
   private val serverUp: Command[CliCommand] =
-    Command(
-      "up",
-      Options.boolean("detach").alias("d") ?? "Run the server as a detached background process (writes a pid file; stop with 'ccas server down')"
-    ).withHelp("Run the ccas backend HTTP server (foreground by default; --detach/-d to background it)")
-      .map(detach => Serve(detach))
+    Command("up", serverUpOptions)
+      .withHelp("Run the ccas backend HTTP server (foreground by default; --detach/-d to background it)")
+      .map { case (detach, readyTimeout) => Serve(detach, readyTimeout) }
 
   private val serverDown: Command[CliCommand] =
     Command("down")

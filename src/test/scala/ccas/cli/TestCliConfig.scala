@@ -43,13 +43,15 @@ object TestCliConfig extends ZIOSpecDefault {
           |default_clubs = ["team-alpha", "team-beta"]
           |log_dir = "~/.local/state/ccas/logs"
           |current_club = "team-alpha"
+          |ready_timeout_seconds = 120
           |""".stripMargin
       writeConfig(content).flatMap(CliConfig.load).map { cfg =>
         assertTrue(
           cfg.apiUrl.contains("http://host:9000"),
           cfg.defaultClubs == List("team-alpha", "team-beta"),
           cfg.logDir.contains(s"$home/.local/state/ccas/logs"),
-          cfg.currentClub.contains("team-alpha")
+          cfg.currentClub.contains("team-alpha"),
+          cfg.readyTimeoutSeconds.contains(120)
         )
       }
     },
@@ -59,7 +61,8 @@ object TestCliConfig extends ZIOSpecDefault {
           cfg.apiUrl.contains("http://only:1"),
           cfg.defaultClubs.isEmpty,
           cfg.logDir.isEmpty,
-          cfg.currentClub.isEmpty
+          cfg.currentClub.isEmpty,
+          cfg.readyTimeoutSeconds.isEmpty
         )
       }
     },

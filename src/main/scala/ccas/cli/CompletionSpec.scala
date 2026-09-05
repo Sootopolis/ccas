@@ -44,7 +44,7 @@ object CompletionSpec {
 
   /** Leaves in tree order. `valueFlags` always lists `--server` first to match its position in `flags`. */
   val leaves: List[Leaf] = List(
-    Leaf(List("server", "up"), List("--detach", "-d"), Nil, NoArgs),
+    Leaf(List("server", "up"), List("--detach", "-d", "--ready-timeout-seconds"), List("--ready-timeout-seconds"), NoArgs),
     Leaf(List("server", "down"), Nil, Nil, NoArgs),
     Leaf(List("server", "status"), Nil, Nil, NoArgs),
     Leaf(List("use-club"), List("--clear"), Nil, Slug),

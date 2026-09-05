@@ -119,7 +119,7 @@ ccas server down             # reads the pid file, sends SIGTERM, waits for a cl
 
 `server status` probes the loopback `/health/ready` endpoint (so it also detects a foreground server, which writes no pid file) and augments that with the pid file; it exits 0 only when the server is up **and** the database is reachable.
 
-The detached server writes its pid to `${XDG_STATE_HOME:-~/.local/state}/ccas/ccas.pid` and its stdout/stderr to `<log_dir>/server.log` (`log_dir` from the [config file](#cli-config-file), default `~/.local/state/ccas/logs`). A second `ccas server up --detach` while one is running exits with `already running, pid=<n>`. For a supervised/long-lived server (systemd, Docker, Render) run the foreground `ccas-server` binary instead.
+The detached server writes its pid to `${XDG_STATE_HOME:-~/.local/state}/ccas/ccas.pid` and its stdout/stderr to `<log_dir>/server.log` (`log_dir` from the [config file](#cli-config-file), default `~/.local/state/ccas/logs`). A second `ccas server up --detach` while one is running exits with `already running, pid=<n>`. It waits 30s for the server to report ready before giving up and stopping it — raise that with `--ready-timeout-seconds <n>` or the config file's `ready_timeout_seconds` when the database is slow to wake (a suspended serverless compute can take longer than the default). For a supervised/long-lived server (systemd, Docker, Render) run the foreground `ccas-server` binary instead.
 
 > **Two gotchas.** The parser (zio-cli) expects options **before** positional arguments — `ccas blacklist add --club team-alpha alice bob`, not `… alice bob --club team-alpha` (a misplaced flag is silently swallowed as a username). And the staged binary reads configuration from the **process environment only** — it does not load `.env` (that is auto-sourced for `sbt run` / `sbt runMain`).
 
@@ -302,15 +302,17 @@ Running **two or more servers** against one DB is **not supported** and is at yo
 The `ccas` CLI (the client, not the server) reads optional settings from `${XDG_CONFIG_HOME:-~/.config}/ccas/config.conf` (HOCON):
 
 ```hocon
-api_url       = "http://127.0.0.1:8080"        # default server URL
-default_clubs = ["team-alpha", "team-beta"]    # seed shell-completion suggestions
-log_dir       = "~/.local/state/ccas/logs"     # where `ccas server up --detach` writes server.log
-current_club  = "team-alpha"                   # default club when a command omits --club (set via `ccas use-club`)
+api_url               = "http://127.0.0.1:8080"     # default server URL
+default_clubs         = ["team-alpha", "team-beta"] # seed shell-completion suggestions
+log_dir               = "~/.local/state/ccas/logs"  # where `ccas server up --detach` writes server.log
+current_club          = "team-alpha"                # default club when a command omits --club (via `ccas use-club`)
+ready_timeout_seconds = 90                          # readiness wait for `ccas server up --detach` (default 30)
 ```
 
 - **Server URL** resolves `--server <url>` flag → `api_url` → built-in `http://127.0.0.1:8080`.
 - **`default_clubs`** seeds the completion club list on a fresh install (before any `GET /api/managed-clubs` round-trip); real slugs replace it on the next command.
 - **`current_club`** is the club a slug-requiring command targets when neither `--club` nor `--all` is given. Set it with `ccas use-club <slug>` (which rewrites just this key, preserving your other keys and comments) rather than editing by hand.
+- **`ready_timeout_seconds`** is the readiness wait for `ccas server up --detach`, overridden per run by `--ready-timeout-seconds <n>`. The right value depends on the database, not on the code: 30s is generous for a local Postgres and tight for a provider that suspends idle computes.
 - A missing file is fine — the CLI falls back to built-in defaults. A malformed file fails fast with `error: invalid config file <path>: …` (exit 2).
 
 This is separate from the server's `application.conf` / environment configuration above.
