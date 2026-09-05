@@ -29,7 +29,7 @@ cp .env.example .env   # edit with your values
 git config core.hooksPath .githooks
 
 # Run the server (default port 8080)
-sbt "runMain ccas.cli.Main serve"
+sbt "runMain ccas.cli.Main server up"
 
 # Run tests (requires ccas_test database from docker compose)
 sbt test
@@ -86,7 +86,7 @@ ccas --help              # full command tree
 ccas <command> --help    # per-command flags
 ```
 
-Commands: `server {up|down|status}`, `use-club`, `membership`, `history`, `recruit`, `stats`, `jobs`, `logs`, `cancel`, `blacklist {add|list|remove}`, `schedule {list|add|remove}`, `club {add|remove|list}`.
+Commands: `server {up|down|status}`, `use-club`, `membership`, `history`, `recruit`, `stats`, `jobs`, `logs`, `cancel`, `blacklist {add|list|remove}`, `schedule {list|add|remove}`, `club {add|remove|list}`, `config {init|get|set|unset|list|path}`, `completion`.
 
 **Cancelling a job.** `ccas cancel <job-id>` requests cancellation of a running job — it interrupts the job's fiber on the server, which records the run as `Cancelled`. Cancellation is best-effort: an in-flight blocking database statement runs to completion first, so the job stops at its next interruptible point rather than instantly. A cancelled recruitment run leaves the candidates it found so far as **deferred** (nothing invited), so you can review and confirm them afterwards. Cancel is single-server-scoped — it reaches jobs running on the server it is sent to.
 
@@ -156,7 +156,8 @@ Jobs can be submitted via the REST API or run on a schedule.
 | **Membership**  | Reconciles the club member list against the Chess.com API, tracks joins and departures                            |
 | **History**     | Crawls match archives for club members, discovering new players wave by wave                                      |
 | **MatchRef**    | Resolves player/club references to concrete match boards (runs automatically after other jobs)                    |
-| **Blacklist**   | Adds a player to the recruitment blacklist                                                                        |
+| **Stats**       | Summarises club match results over a date range                                                                  |
+| **ClubData**    | Refreshes club profiles and admin lists (scheduled only — no submit endpoint)                                    |
 
 ## API
 
@@ -182,25 +183,28 @@ POST /api/jobs/history
 POST /api/jobs/matchref
      (no body)
 
-POST /api/jobs/blacklist
-     { clubSlug, username, reason?, expiresAt? }
+POST /api/jobs/stats
+     { clubSlug, since?, until? }
 
-GET  /api/jobs          List recent jobs (last 50)
-GET  /api/jobs/:id      Job status by ID
+GET  /api/jobs             List recent jobs (last 50)
+GET  /api/jobs/:id         Job status by ID
+POST /api/jobs/:id/cancel  Request cancellation of a running job
 ```
+
+Blacklist entries are **not** jobs — they are synchronous `/api/blacklist` routes. The full route surface, including those, the recruitment-criteria and managed-club routes and the per-run recruitment reporting, is in [`docs/architecture.md`](docs/architecture.md) § Routes.
 
 ### Schedules
 
 ```
 GET    /api/schedules          List all schedules
-POST   /api/schedules          { kind, clubSlug?, params?, intervalHours }
-PUT    /api/schedules/:id      { intervalHours?, enabled?, params? }
+POST   /api/schedules          { kind, clubSlug?, params?, triggerType?, intervalHours?, cron?, timezone?, misfire? }
+PUT    /api/schedules/:id      { intervalHours?, cron?, timezone?, misfire?, enabled?, params? }
 DELETE /api/schedules/:id
 ```
 
 ## Configuration
 
-All environment variables are listed in [`.env.example`](.env.example). For the packaged binary the easiest way to set them is **`ccas config init`** (see [Server config file](#server-config-file-ccas-config) below), which persists them to a local file the server reads at boot — no hand-exported env vars. Required variables:
+The variables needed to boot are in [`.env.example`](.env.example); [`application.conf`](src/main/resources/application.conf) holds the full set. For the packaged binary the easiest way to set them is **`ccas config init`** (see [Server config file](#server-config-file-ccas-config) below), which persists them to a local file the server reads at boot — no hand-exported env vars. Required variables:
 
 | Variable | Description |
 |----------|-------------|
@@ -216,14 +220,12 @@ Optional overrides with defaults:
 | `SERVER_PORT` | 8080 | HTTP server port |
 | `SERVER_HOST` | 127.0.0.1 | Bind address. Loopback by default (single-user, no-auth local model); set `0.0.0.0` for hosted deploys |
 | `SCHEDULER_POLL_MINUTES` | 15 | How often the scheduler checks for due jobs. Keep ≥ 15 against Neon so polls don't keep the compute always-warm (it auto-suspends after ~5 min idle, budget is 192 active-hr/mo on free tier) |
-| `SCHEDULER_MATCHREF_INTERVAL_HOURS` / `SCHEDULER_MATCHREF_ENABLED` | 24 / true | Boot-seed cadence/enable for the global `MatchRef` (rename-recovery) maintenance schedule. Seed-only: applied on a fresh DB; once the row exists, edit it via `ccas schedule` instead |
-| `SCHEDULER_CLUBDATA_INTERVAL_HOURS` / `SCHEDULER_CLUBDATA_ENABLED` | 6 / true | Boot-seed cadence/enable for the global `ClubData` (club/admin refresh) maintenance schedule. Seed-only, same as above |
+| `SCHEDULER_<JOB>_INTERVAL_HOURS` / `SCHEDULER_<JOB>_ENABLED` | — | Boot-seed cadence/enable, per job, defaults in `application.conf`. Two groups: the global sweeps `MATCHREF` and `CLUBDATA`, seeded once; and `HISTORY` and `MEMBERSHIP`, seeded once **per managed club**. Seed-only: applied on a fresh DB; once the row exists, edit it via `ccas schedule` instead |
 | `DB_POOL_MAX` / `DB_POOL_MIN_IDLE` | 20 / 2 | HikariCP pool sizing (set `MIN_IDLE=0` for Neon scale-to-zero) |
 | `DB_POOL_CONNECTION_TIMEOUT` / `DB_POOL_IDLE_TIMEOUT` / `DB_POOL_MAX_LIFETIME` / `DB_POOL_KEEPALIVE_TIME` | 30 000 / 600 000 / 1 800 000 / 120 000 ms | HikariCP timeouts |
-| `CHESS_COM_API_PERMITS` | 16 | Max parallel Chess.com API requests |
-| `CHESS_COM_API_COOLDOWN_SECONDS` | 30 | Backoff cooldown after rate limiting |
+| `CHESS_COM_API_COOLDOWN_SECONDS` | 15 | Backoff cooldown after rate limiting (Cloudflare has its own, `CHESS_COM_API_CF_COOLDOWN_SECONDS`) |
 
-See [`application.conf`](src/main/resources/application.conf) for the full set of tunable parameters.
+API fan-out has no permit variable of its own: the in-flight ceiling is the **last `CHESS_COM_API_RECOVERY_TIERS` entry**, between which the gate moves with observed success ([ADR 0012](docs/adr/0012-gate-based-adaptive-throttle.md)), and fan-out is then capped again against the DB pool ([ADR 0004](docs/adr/0004-api-fan-out-concurrency-cap.md)). See [`application.conf`](src/main/resources/application.conf) for the full set of tunable parameters.
 
 **Letting a Neon compute scale to zero.** Neon suspends an idle compute after ~5 minutes, but *any* open or periodically-pinged connection counts as a live session and keeps it awake, burning the free tier's monthly compute hours. Three pool settings together let it suspend shortly after a run finishes: `DB_POOL_MIN_IDLE=0` (drain the pool so the session actually closes), `DB_POOL_KEEPALIVE_TIME=0` (stop Hikari's idle ping resetting Neon's timer), and `DB_POOL_IDLE_TIMEOUT=30000` (retire idle connections in 30 s rather than 10 minutes). The cost is a cold-start delay on the next query and the occasional transient `08xxx` reconnect, which the socket-timeout and transient-retry hardening absorbs. Expect benign "idle" warnings if a command sits at a confirmation prompt.
 
