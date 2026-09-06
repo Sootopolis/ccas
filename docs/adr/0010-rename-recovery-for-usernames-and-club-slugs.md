@@ -1,6 +1,6 @@
 # Recover renamed usernames and club slugs instead of treating a 404 as death
 
-**Status:** Accepted, 2026-05-07 (#23).
+**Status:** Accepted, 2026-05-07 (#23). The tombstone consequence is replaced by [0016](0016-identity-is-the-id-names-are-observations.md) once its migration lands; the tier design below stays live.
 
 ## Context
 

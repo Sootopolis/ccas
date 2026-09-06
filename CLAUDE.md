@@ -57,7 +57,7 @@ Rules that aren't derivable from reading the code. Follow them; they exist becau
 
 **Chess.com API reliability.** Three fields lie, and code must not branch on them: a tournament's `status`, `ApiClub.lastActivity` (observed 12+ years off on active clubs), and the match endpoint's view of a match (it lags the game archives — prefer archive data). A 404 is not permanent: `"X not found"` bodies are timeline-unstable, and usernames and club slugs can flip 404 → 200 when a handle is registered later. High 404 counts on cancelled matches are expected noise.
 
-**Schema changes.** The `createTable` definitions in code are the schema of record — there is no migration framework. Apply a change by editing the `CREATE TABLE` and running the equivalent `ALTER` against each existing database by hand (`psql`). `sql/` holds dated scripts from earlier changes and is kept for history; new changes are not scripted there unless the change is intricate enough to be worth replaying. Treat that directory as an archive, not a ledger you must append to.
+**Schema changes.** Never key a table on a mutable external label: when Chess.com owns both an id and a name, the id is identity and the name is history ([0016](docs/adr/0016-identity-is-the-id-names-are-observations.md)). The `createTable` definitions in code are the schema of record — there is no migration framework. Apply a change by editing the `CREATE TABLE` and running the equivalent `ALTER` against each existing database by hand (`psql`). `sql/` holds dated scripts from earlier changes and is kept for history; new changes are not scripted there unless the change is intricate enough to be worth replaying. Treat that directory as an archive, not a ledger you must append to.
 
 **Deployment.** One `CcasServer` per database is the supported model. A CLI invocation alongside the server on the same DB is fine — the CLI builds no `JobRunner`, so it never mutates scheduled-job state. Two or more servers against one DB is unsupported: `JobRun.markOrphansAsFailed` fails *all* `Running` jobs on startup with no instance-ownership filter (#110), and the rate limiter is per-process (#111). Scheduler double-fire *is* prevented, and all seeders are idempotent. Multi-server hosting is #60, gated on #110 + #111.
 
@@ -139,6 +139,8 @@ which accepts both the JDBC form and the libpq URI managed providers hand out
 | Job-log sink surviving write failures | [0013](docs/adr/0013-job-log-sink-survives-write-failures.md) |
 | Both `DATABASE_URL` forms, credential lifting | [0014](docs/adr/0014-accept-both-database-url-forms.md) |
 | The server read-idle reaper | [0015](docs/adr/0015-server-read-idle-reaper.md) |
+| Ids are identity; names are observations | [0016](docs/adr/0016-identity-is-the-id-names-are-observations.md) |
+| What earns a history table | [0017](docs/adr/0017-what-earns-a-history-table.md) |
 
 Component-level detail — the apps and their run modes, the route surface, `JobRunner` cancellation
 semantics, the scheduler, `app_setting` — is in [`docs/architecture.md`](docs/architecture.md).

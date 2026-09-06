@@ -31,3 +31,5 @@ scaladoc and the README.
 | [0013](0013-job-log-sink-survives-write-failures.md) | A job's log sink degrades and retries rather than switching off | Accepted, 2026-06-26 |
 | [0014](0014-accept-both-database-url-forms.md) | Accept both database URL forms, lift credentials out of either | Accepted, 2026-08-13 |
 | [0015](0015-server-read-idle-reaper.md) | One global read-idle timeout; live follows are reaped by it | Accepted, 2026-07-10 |
+| [0016](0016-identity-is-the-id-names-are-observations.md) | Identity is the id; a name is an observation over time | Accepted, 2026-09-06 |
+| [0017](0017-what-earns-a-history-table.md) | What earns a history table | Accepted, 2026-09-06 |
