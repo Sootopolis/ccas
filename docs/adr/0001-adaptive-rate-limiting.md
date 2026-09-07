@@ -2,10 +2,7 @@
 
 **Status:** Accepted 2026-03-11; superseded 2026-04-01 by [0012](0012-gate-based-adaptive-throttle.md).
 
-This records the *original* binary parallel/sequential throttle and the options weighed against it in
-March 2026. The mechanism described below — `Ref[Boolean]` plus a `Semaphore(1)`, a 30-second
-cooldown, four retries — is no longer what the code does. Kept unedited because an ADR is a record of
-a decision taken, not a description of current behaviour.
+This records the *original* binary parallel/sequential throttle and the options weighed against it in March 2026. The mechanism described below — `Ref[Boolean]` plus a `Semaphore(1)`, a 30-second cooldown, four retries — is no longer what the code does. Kept unedited because an ADR is a record of a decision taken, not a description of current behaviour.
 
 ## Problem
 

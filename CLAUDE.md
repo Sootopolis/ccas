@@ -2,28 +2,17 @@
 
 Guidance for Claude Code (claude.ai/code) working in this repository.
 
-This file holds **rules and orientation** — the things you must not get wrong, and enough of a map to
-find the rest. What each part *is* lives in [`docs/architecture.md`](docs/architecture.md); *why* it
-is that way lives in [`docs/adr/`](docs/adr/); how to install, run and configure it lives in
-[`README.md`](README.md). See [`docs/documentation-standard.md`](docs/documentation-standard.md) for
-why the split exists and what belongs where.
+This file holds **rules and orientation** — the things you must not get wrong, and enough of a map to find the rest. What each part *is* lives in [`docs/architecture.md`](docs/architecture.md); *why* it is that way lives in [`docs/adr/`](docs/adr/); how to install, run and configure it lives in [`README.md`](README.md). See [`docs/documentation-standard.md`](docs/documentation-standard.md) for why the split exists and what belongs where.
 
 ## Project Overview
 
-CCAS (Chess Club Admin System) pulls data from the Chess.com public API into PostgreSQL for chess
-club administration: membership tracking, member performance analysis, and scouting/recruiting
-players from other clubs. It includes a backend HTTP server with job scheduling, and a CLI.
+CCAS (Chess Club Admin System) pulls data from the Chess.com public API into PostgreSQL for chess club administration: membership tracking, member performance analysis, and scouting/recruiting players from other clubs. It includes a backend HTTP server with job scheduling, and a CLI.
 
 ## Build & Test Commands
 
-An sbt project (Scala 3, JDK 25 LTS). Exact versions live in `project/Versions.scala`,
-`project/build.properties` and `.sdkmanrc` — they are not mirrored here, because a prose copy drifts
-on the next bump (it already had).
+An sbt project (Scala 3, JDK 25 LTS). Exact versions live in `project/Versions.scala`, `project/build.properties` and `.sdkmanrc` — they are not mirrored here, because a prose copy drifts on the next bump (it already had).
 
-The JDK is pinned in `.sdkmanrc` — run `sdk env` in the repo root, or `sdk env install` on a fresh
-machine. It is pinned because it drifted once: a Homebrew-backed SDKMAN candidate dangled when
-Homebrew removed the keg it symlinked into, and every build then failed with "Unable to locate a Java
-Runtime". If a build fails that way, check `java -version` before anything else.
+The JDK is pinned in `.sdkmanrc` — run `sdk env` in the repo root, or `sdk env install` on a fresh machine. It is pinned because it drifted once: a Homebrew-backed SDKMAN candidate dangled when Homebrew removed the keg it symlinked into, and every build then failed with "Unable to locate a Java Runtime". If a build fails that way, check `java -version` before anything else.
 
 - **Compile:** `sbt compile`
 - **Run all tests:** `sbt test`
@@ -31,9 +20,7 @@ Runtime". If a build fails that way, check `java -version` before anything else.
 - **Continuous compile on change:** `sbt ~compile`
 - **Interactive SBT shell:** `sbt` then run commands without the `sbt` prefix
 
-Tests use ZIO Test (`ZIOSpecDefault`). SQL tests require a running PostgreSQL instance with a
-`ccas_test` database (see `src/test/resources/application.conf`). A tracked `pre-push` hook runs the
-full suite before every push — enable it per clone with `git config core.hooksPath .githooks`.
+Tests use ZIO Test (`ZIOSpecDefault`). SQL tests require a running PostgreSQL instance with a `ccas_test` database (see `src/test/resources/application.conf`). A tracked `pre-push` hook runs the full suite before every push — enable it per clone with `git config core.hooksPath .githooks`.
 
 ## Conventions
 
@@ -61,10 +48,7 @@ Rules that aren't derivable from reading the code. Follow them; they exist becau
 
 **Deployment.** One `CcasServer` per database is the supported model. A CLI invocation alongside the server on the same DB is fine — the CLI builds no `JobRunner`, so it never mutates scheduled-job state. Two or more servers against one DB is unsupported: `JobRun.markOrphansAsFailed` fails *all* `Running` jobs on startup with no instance-ownership filter (#110), and the rate limiter is per-process (#111). Scheduler double-fire *is* prevented, and all seeders are idempotent. Multi-server hosting is #60, gated on #110 + #111.
 
-**Shell completions.** `completions/ccas.bash` is committed and asserted byte-equal to `CompletionEmitter.bash` by `TestCcasCompletion`. Regenerate after any CLI tree change with
-`sbt --server -batch -error 'runMain ccas.cli.Main completion bash' > completions/ccas.bash`.
-`--server` is load-bearing: with `SBT_NATIVE_CLIENT=true`, `-batch` alone still routes through the
-thin client, which writes banner lines and a raw ESC into **stdout**, corrupting the redirect.
+**Shell completions.** `completions/ccas.bash` is committed and asserted byte-equal to `CompletionEmitter.bash` by `TestCcasCompletion`. Regenerate after any CLI tree change with `sbt --server -batch -error 'runMain ccas.cli.Main completion bash' > completions/ccas.bash`. `--server` is load-bearing: with `SBT_NATIVE_CLIENT=true`, `-batch` alone still routes through the thin client, which writes banner lines and a raw ESC into **stdout**, corrupting the redirect.
 
 **zio-cli argument parsing.** zio-cli swallows an option written *after* a positional as another positional value, and `Args.atMost(n)` silently *truncates* extra values rather than rejecting them. Together those turned `ccas use-club team-alpha --clear` into a silent *set* of the club the user asked to clear. Capture every positional with `.repeat` and validate arity by hand (see `UseClub`) wherever a dropped argument would change what the command does.
 
@@ -72,55 +56,24 @@ thin client, which writes banner lines and a raw ESC into **stdout**, corrupting
 
 ### Packages
 
-1. **`ccas.api`** — Chess.com API models and client. Case classes model API JSON responses
-   (`ApiPlayer`, `ApiClub`, `ApiDailyMatch`, …); each companion extends `JsonDecoding[T]`. These are
-   read-only DTOs and are never written to the database directly.
-2. **`ccas.analysis`** — domain tables and business logic. `analysis.tables` holds the persisted
-   entities (core, ref resolution, recruitment, history crawl, run tracking, `AppSetting`, and API
-   diagnostics/caching). `analysis.apps` holds the runnable applications — `MembershipApp`,
-   `RecruitmentApp`, `RecruitmentCriteriaApp`, `RefApp`, `HistoryApp`, `StatsApp`, `ClubDataApp` —
-   and shared helpers (`PlayerUpdater`, `UsernameRenameResolver`, `ClubSlugRenameResolver`).
-3. **`ccas.server`** — zio-http backend. `server.jobs` (`JobRunner`, `JobRun`, `JobSchedule`),
-   `server.routes` (jobs, schedules, blacklist, recruitment criteria, health),
-   `server.scheduler` (`JobScheduler`). Entry point `CcasServer extends ZIOAppDefault`.
-4. **`ccas.utils`** — shared infrastructure: HTTP client (`client/`), JSON traits (`json/`), SQL
-   client and helpers (`sql/`), opaque-type utilities (`opaque/`), pretty-printing.
+1. **`ccas.api`** — Chess.com API models and client. Case classes model API JSON responses (`ApiPlayer`, `ApiClub`, `ApiDailyMatch`, …); each companion extends `JsonDecoding[T]`. These are read-only DTOs and are never written to the database directly.
+2. **`ccas.analysis`** — domain tables and business logic. `analysis.tables` holds the persisted entities (core, ref resolution, recruitment, history crawl, run tracking, `AppSetting`, and API diagnostics/caching). `analysis.apps` holds the runnable applications — `MembershipApp`, `RecruitmentApp`, `RecruitmentCriteriaApp`, `RefApp`, `HistoryApp`, `StatsApp`, `ClubDataApp` — and shared helpers (`PlayerUpdater`, `UsernameRenameResolver`, `ClubSlugRenameResolver`).
+3. **`ccas.server`** — zio-http backend. `server.jobs` (`JobRunner`, `JobRun`, `JobSchedule`), `server.routes` (jobs, schedules, blacklist, recruitment criteria, health), `server.scheduler` (`JobScheduler`). Entry point `CcasServer extends ZIOAppDefault`.
+4. **`ccas.utils`** — shared infrastructure: HTTP client (`client/`), JSON traits (`json/`), SQL client and helpers (`sql/`), opaque-type utilities (`opaque/`), pretty-printing.
 
-`ccas.cli` (`ccas.cli.Main`) is the zio-cli binary: `CliCommand` defines the tree, `Dispatcher` turns
-each parsed command into HTTP calls against a running server, `CompletionSpec` / `CompletionEmitter`
-generate shell completions. Exit codes: 0 success/help, 1 job failure, 2 usage error.
+`ccas.cli` (`ccas.cli.Main`) is the zio-cli binary: `CliCommand` defines the tree, `Dispatcher` turns each parsed command into HTTP calls against a running server, `CompletionSpec` / `CompletionEmitter` generate shell completions. Exit codes: 0 success/help, 1 job failure, 2 usage error.
 
 ### Key patterns
 
-**Table entities (Magnum).** A case class annotated `@Table(PostgresDbType, SqlNameMapper.CamelToSnakeCase)`
-and `derives DbCodec`; its companion provides `createTable`, `selectAll`, `selectId`, `insert`,
-`insertBatch`, `update`, `upsert`. All SQL wraps Magnum queries in `PostgresClient.connectZIO`
-(reads) or `transactZIO` (writes). Complex queries use `SqlLiteral` for reusable column lists. Some
-entities also use Magnum's `Repo[T, T, ID]` / `ImmutableRepo[T, ID]`.
+**Table entities (Magnum).** A case class annotated `@Table(PostgresDbType, SqlNameMapper.CamelToSnakeCase)` and `derives DbCodec`; its companion provides `createTable`, `selectAll`, `selectId`, `insert`, `insertBatch`, `update`, `upsert`. All SQL wraps Magnum queries in `PostgresClient.connectZIO` (reads) or `transactZIO` (writes). Complex queries use `SqlLiteral` for reusable column lists. Some entities also use Magnum's `Repo[T, T, ID]` / `ImmutableRepo[T, ID]`.
 
-**Opaque types.** Domain IDs and constrained values are Scala 3 opaque types with companion traits
-(`StringCompanion`, `StringKeyCompanion`, `IntCompanion`, `LongCompanion`, `DoubleCompanion`) in
-`ccas.utils.opaque`, each providing `JsonCodec`, `DbCodec` and `DeriveConfig`, plus optional
-`validateRaw` / `normalize`. Chess.com domain IDs live in `ccas.api.misc.subtypes`; internal DB
-surrogate IDs in `ccas.analysis.tables.subtypes`, the latter with a stricter `> 0L` validator since
-`BIGSERIAL` keys start at 1.
+**Opaque types.** Domain IDs and constrained values are Scala 3 opaque types with companion traits (`StringCompanion`, `StringKeyCompanion`, `IntCompanion`, `LongCompanion`, `DoubleCompanion`) in `ccas.utils.opaque`, each providing `JsonCodec`, `DbCodec` and `DeriveConfig`, plus optional `validateRaw` / `normalize`. Chess.com domain IDs live in `ccas.api.misc.subtypes`; internal DB surrogate IDs in `ccas.analysis.tables.subtypes`, the latter with a stricter `> 0L` validator since `BIGSERIAL` keys start at 1.
 
-**Enums.** `EnumJson[T]` for JSON (snake_case wire, PascalCase in Scala) and/or `EnumSql[T]` for the
-database; both supply codecs via `given`. Some override `jsonToEnum` for non-standard Chess.com
-mappings (`"closed:fair_play_violations"` → `Fairplay`).
+**Enums.** `EnumJson[T]` for JSON (snake_case wire, PascalCase in Scala) and/or `EnumSql[T]` for the database; both supply codecs via `given`. Some override `jsonToEnum` for non-standard Chess.com mappings (`"closed:fair_play_violations"` → `Fairplay`).
 
-**ZIO effect types.** `connectZIO` and `transactZIO` (`ccas.utils.sql.PostgresClient` companion)
-bridge Magnum's context-function API to `ZIO[PostgresClient, SQLException, A]`. `withTransaction`
-runs several `connectZIO` calls in one JDBC transaction via a shared proxied connection. All three
-run on `attemptBlockingInterrupt`, so interruption on cancel/shutdown aborts a fiber parked on pool
-checkout, and retry on transient connection errors (SQLState `08xxx`) — except a Hikari pool-checkout
-timeout, which fails fast rather than re-blocking for another `connectionTimeout`.
+**ZIO effect types.** `connectZIO` and `transactZIO` (`ccas.utils.sql.PostgresClient` companion) bridge Magnum's context-function API to `ZIO[PostgresClient, SQLException, A]`. `withTransaction` runs several `connectZIO` calls in one JDBC transaction via a shared proxied connection. All three run on `attemptBlockingInterrupt`, so interruption on cancel/shutdown aborts a fiber parked on pool checkout, and retry on transient connection errors (SQLState `08xxx`) — except a Hikari pool-checkout timeout, which fails fast rather than re-blocking for another `connectionTimeout`.
 
-**Database URLs.** `database.url` (`DATABASE_URL`) passes through `PostgresClient.normalizeJdbcUrl`,
-which accepts both the JDBC form and the libpq URI managed providers hand out
-(`postgresql://user:pass@host/db`). Credentials are lifted out of the URL into Hikari's
-`setUsername` / `setPassword` for both forms, and percent-decoding differs by position on purpose —
-[0014](docs/adr/0014-accept-both-database-url-forms.md) holds why, and says not to unify it.
+**Database URLs.** `database.url` (`DATABASE_URL`) passes through `PostgresClient.normalizeJdbcUrl`, which accepts both the JDBC form and the libpq URI managed providers hand out (`postgresql://user:pass@host/db`). Credentials are lifted out of the URL into Hikari's `setUsername` / `setPassword` for both forms, and percent-decoding differs by position on purpose — [0014](docs/adr/0014-accept-both-database-url-forms.md) holds why, and says not to unify it.
 
 ### Where the rationale lives
 
@@ -143,14 +96,10 @@ which accepts both the JDBC form and the libpq URI managed providers hand out
 | What earns a history table | [0017](docs/adr/0017-what-earns-a-history-table.md) |
 | The two JVM flags, and their three homes | [0018](docs/adr/0018-every-jvm-carries-the-same-two-flags.md) |
 
-Component-level detail — the apps and their run modes, the route surface, `JobRunner` cancellation
-semantics, the scheduler, `app_setting` — is in [`docs/architecture.md`](docs/architecture.md).
+Component-level detail — the apps and their run modes, the route surface, `JobRunner` cancellation semantics, the scheduler, `app_setting` — is in [`docs/architecture.md`](docs/architecture.md).
 
-Read the relevant ADR **before** changing anything in `ccas.utils.client`, the cache tables, or the
-CLI command tree. Each one records a trade-off that was argued and, in several cases, a fix that was
-tried and reverted.
+Read the relevant ADR **before** changing anything in `ccas.utils.client`, the cache tables, or the CLI command tree. Each one records a trade-off that was argued and, in several cases, a fix that was tried and reverted.
 
 ### Test data
 
-API JSON fixtures live in `data/test/api/*.json`; `TestApiJsonParsing` asserts they parse into the
-API model types.
+API JSON fixtures live in `data/test/api/*.json`; `TestApiJsonParsing` asserts they parse into the API model types.
