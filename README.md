@@ -362,8 +362,6 @@ CREATE DATABASE ccas_test OWNER ccas;   -- OWNER matters: Postgres 15+ blocks no
 CREATE SCHEMA IF NOT EXISTS test AUTHORIZATION ccas;
 ```
 
-**`sbt test` fails with `Failed to get driver instance for ...ccas_test` or `No suitable driver`.** The pgjdbc driver can deregister itself in a long-lived, repeatedly-reloaded sbt JVM. It is not a code failure: a cold `sbt test` in a fresh shell passes. Forking (`sbt ';set Test/fork := true ;test'`) also re-registers the driver.
-
 **A run hangs with no progress.** Read the client's progress bar first — it prints `API: active/currentMax`, and `active` is only above zero while a fiber holds an HTTP slot. A hang showing **`API: 0/N`** therefore means nothing is in flight over HTTP, so the stuck fiber is in a blocking JDBC call; `API: N/N` stuck at N ≥ 1 points at an HTTP read instead. The JDBC case was the symptom of pgjdbc's `socketTimeout` defaulting to infinite (a silently-dropped connection parks in `socket.read()` forever); that is now bounded by `DB_SOCKET_TIMEOUT_SECONDS` / `DB_CONNECT_TIMEOUT_SECONDS` / `DB_TCP_KEEP_ALIVE`, so raise those before suspecting application code.
 
 **Any build fails with `Unable to locate a Java Runtime`.** Check `java -version` before suspecting anything else. This has happened via a stale SDKMAN candidate: an entry installed from Homebrew (`21.0.12-brew`) is a symlink into the Homebrew keg, so removing or upgrading that formula leaves the candidate dangling and every `java` invocation fails. `sdk env` in the repo root selects the pinned Temurin build; `sdk uninstall java <dangling-candidate>` clears the stale entry.

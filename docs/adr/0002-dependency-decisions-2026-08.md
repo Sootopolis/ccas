@@ -73,11 +73,7 @@ than failing loudly.
 **Scala 3.9** is still RC. Do not take 3.3.8 LTS instead — that is the JDK-8-era line and a two-year
 step back.
 
-**JDK 26** would hard-fail this stack: it flips `--sun-misc-unsafe-memory-access` from `warn` to
-`deny`, and `scala.runtime.LazyVals$.getOffsetStatic` → `izumi.reflect` → `ZLayer` dies at class-init
-before reaching `main()`. 25.0.4-tem is also the newest 25.x SDKMAN offers for darwinarm64. Related
-latent gap: those JVM flags are added *only* by native-packager's `bashScriptExtraDefines`, so on
-JDK 26 `sbt test`/`run` and IDE runs would break while the packaged launcher kept working.
+**JDK 26** would hard-fail this stack: it flips `--sun-misc-unsafe-memory-access` from `warn` to `deny`, and `scala.runtime.LazyVals$.getOffsetStatic` → `izumi.reflect` → `ZLayer` dies at class-init before reaching `main()`. 25.0.4-tem is also the newest 25.x SDKMAN offers for darwinarm64. Related latent gap, since closed by [0018](0018-every-jvm-carries-the-same-two-flags.md): those JVM flags were added *only* by native-packager's `bashScriptExtraDefines`, so on JDK 26 `sbt test`/`run` and IDE runs would have broken while the packaged launcher kept working. They now also live in `.jvmopts` and on the forked test JVM.
 
 **sbt 2.x** — see [sbt 2 evaluation](0003-defer-sbt-2.md).
 

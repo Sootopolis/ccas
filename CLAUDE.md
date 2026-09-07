@@ -141,6 +141,7 @@ which accepts both the JDBC form and the libpq URI managed providers hand out
 | The server read-idle reaper | [0015](docs/adr/0015-server-read-idle-reaper.md) |
 | Ids are identity; names are observations | [0016](docs/adr/0016-identity-is-the-id-names-are-observations.md) |
 | What earns a history table | [0017](docs/adr/0017-what-earns-a-history-table.md) |
+| The two JVM flags, and their three homes | [0018](docs/adr/0018-every-jvm-carries-the-same-two-flags.md) |
 
 Component-level detail — the apps and their run modes, the route surface, `JobRunner` cancellation
 semantics, the scheduler, `app_setting` — is in [`docs/architecture.md`](docs/architecture.md).

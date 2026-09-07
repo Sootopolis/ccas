@@ -33,3 +33,4 @@ scaladoc and the README.
 | [0015](0015-server-read-idle-reaper.md) | One global read-idle timeout; live follows are reaped by it | Accepted, 2026-07-10 |
 | [0016](0016-identity-is-the-id-names-are-observations.md) | Identity is the id; a name is an observation over time | Accepted, 2026-09-06 |
 | [0017](0017-what-earns-a-history-table.md) | What earns a history table | Accepted, 2026-09-06 |
+| [0018](0018-every-jvm-carries-the-same-two-flags.md) | Every JVM this project starts carries the same two flags | Accepted, 2026-09-07 |
