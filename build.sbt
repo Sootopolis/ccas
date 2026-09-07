@@ -82,6 +82,11 @@ scalacOptions ++= Seq(
 // suite is DB-I/O-bound, so serialising adds ~11s to the test phase (~17s -> ~28s), not a multiple. Tracked: #65.
 Test / parallelExecution := false
 
+// The test JVM is the one `.jvmopts` cannot reach, and `run` is deliberately not forked. See
+// docs/adr/0018-every-jvm-carries-the-same-two-flags.md (#231).
+Test / fork        := true
+Test / javaOptions ++= Seq("--sun-misc-unsafe-memory-access=allow", "--enable-native-access=ALL-UNNAMED")
+
 lazy val root = (project in file("."))
   .enablePlugins(BuildInfoPlugin, JavaAppPackaging)
   .settings(
@@ -100,12 +105,10 @@ lazy val root = (project in file("."))
     Compile / packageSrc / publishArtifact := false,
     buildInfoKeys                   := Seq(name, version, scalaVersion, sbtVersion),
     buildInfoPackage                := "ccas.info",
-    // Silence the sun.misc.Unsafe deprecation warning (scala-library's LazyVals) that the JVM
-    // prints on JDK 24+. The `--sun-misc-unsafe-memory-access` flag only exists on JDK 23+, so
-    // probe the runtime version in the launcher and add it conditionally (older JDKs don't warn).
+    // The launcher's copy of the two flags, and the only one that probes the JDK — it can meet a version neither
+    // `.sdkmanrc` nor CI pins. See docs/adr/0018-every-jvm-carries-the-same-two-flags.md (#231).
     bashScriptExtraDefines ++= Seq(
-      // Grant native access to unnamed-module code (netty's loadLibrary) so the JVM doesn't print "restricted method"
-      // warnings on JDK 24+. Valid since JDK 16 and harmless on older JDKs, so add it unconditionally.
+      // Valid since JDK 17 and harmless on older ones, so this one is added unconditionally.
       "addJava \"--enable-native-access=ALL-UNNAMED\"",
       """java_major=$("${java_cmd:-java}" -version 2>&1 | head -n1 | sed -E 's/.*version "?([0-9]+).*/\1/')""",
       """if [ "${java_major:-0}" -ge 23 ] 2>/dev/null; then addJava "--sun-misc-unsafe-memory-access=allow"; fi"""

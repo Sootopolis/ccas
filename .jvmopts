@@ -1,0 +1,4 @@
+# JVM flags for anything the `sbt` script starts. The test JVM and the packaged launcher have their own copies, and the reason there are three is in docs/adr/0018-every-jvm-carries-the-same-two-flags.md (#231). Needs JDK 23+.
+
+--sun-misc-unsafe-memory-access=allow
+--enable-native-access=ALL-UNNAMED
