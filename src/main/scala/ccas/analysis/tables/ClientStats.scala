@@ -20,6 +20,8 @@ final case class ClientStats(
   completedAt: Instant,
   // throughput
   requests: Long,
+  // successes / failures (and errors_other below) change meaning at #234: a reported-not-found 404 is a completed
+  // exchange (FetchResult.Missing), so it counts as a success where earlier rows counted it as a failure.
   successes: Long,
   failures: Long,
   attempts: Long,

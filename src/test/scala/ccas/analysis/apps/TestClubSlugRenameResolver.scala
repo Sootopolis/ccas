@@ -112,7 +112,7 @@ object TestClubSlugRenameResolver extends ZIOSpecDefault {
         result <- ClubSlugRenameResolver.resolveAndPersist(client, staleSlug, Some(clubId))
         updated <- Club.selectId(clubId)
       } yield assertTrue(
-        result.exists((slug, ac) => slug == freshSlug && ac.clubId == clubId),
+        result.exists(r => r.slug == freshSlug && r.api.clubId == clubId),
         updated.exists(_.slug == freshSlug)
       )
     }
@@ -174,7 +174,7 @@ object TestClubSlugRenameResolver extends ZIOSpecDefault {
         // No `api_fetch_failure` row should reference the tombstone URL — proves Tier C never hit it.
         tombstoneFailures <- fetchFailureCountFor(s"player/$tombstoneName")
       } yield assertTrue(
-        result.exists((s, _) => s == freshSlug),
+        result.exists(_.slug == freshSlug),
         tombstoneFailures == 0L
       )
     }
@@ -202,7 +202,7 @@ object TestClubSlugRenameResolver extends ZIOSpecDefault {
         result         <- ClubSlugRenameResolver.resolveAndPersist(client, staleSlug, Some(clubId))
         closedFailures <- fetchFailureCountFor(s"player/$closedName")
       } yield assertTrue(
-        result.exists((s, _) => s == freshSlug),
+        result.exists(_.slug == freshSlug),
         closedFailures == 0L
       )
     }
@@ -231,7 +231,7 @@ object TestClubSlugRenameResolver extends ZIOSpecDefault {
         _      <- insertAdmin(targetClubId, adminPid)
         client <- fakeChessComClient(responses)
         result <- ClubSlugRenameResolver.resolveAndPersist(client, staleSlug, Some(targetClubId))
-      } yield assertTrue(result.exists((s, _) => s == freshSlug))
+      } yield assertTrue(result.exists(_.slug == freshSlug))
     }
 
   private def tierCAdvancesPastAdminWhose404s =
@@ -257,7 +257,7 @@ object TestClubSlugRenameResolver extends ZIOSpecDefault {
         // failures gates `/pub/player/$user/*` to 404 unconditionally.
         client <- fakeChessComClient(responses, failures = Set(goneName))
         result <- ClubSlugRenameResolver.resolveAndPersist(client, staleSlug, Some(clubId))
-      } yield assertTrue(result.exists((s, _) => s == freshSlug))
+      } yield assertTrue(result.exists(_.slug == freshSlug))
     }
 
   private def tierCNoOpWithoutHint =

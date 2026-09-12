@@ -50,8 +50,7 @@ object UsernameRenameResolver {
   ): RIO[PostgresClient, Option[Username]] =
     resolveCandidate(staleUsername, playerIdHint, client, tournamentFallback).flatMap {
       case None => ZIO.none
-      case Some(candidate) =>
-        verify(client, candidate, playerIdHint).map(_.map(_._1))
+      case Some(candidate) => verify(client, candidate, playerIdHint).map(_.map(_._1))
     }
 
   /** Resolves the current canonical username AND verifies via `ApiPlayer` fetch. Does NOT update the `player` table
@@ -282,9 +281,8 @@ object UsernameRenameResolver {
     candidate: Username,
     playerIdHint: Option[PlayerId]
   ): RIO[Any, Option[(Username, ApiPlayer)]] =
-    client.getUncached[ApiPlayer](ApiPlayer.getUrl(candidate)).map { apiPlayer =>
-      val matches = playerIdHint.forall(_ == apiPlayer.playerId)
-      Option.when(matches)((apiPlayer.username, apiPlayer))
+    client.getUncachedOptional[ApiPlayer](ApiPlayer.getUrl(candidate)).map { apiPlayerOpt =>
+      apiPlayerOpt.filter(apiPlayer => playerIdHint.forall(_ == apiPlayer.playerId)).map(p => (p.username, p))
     }.onNotFound(_ => ZIO.none)
 }
 

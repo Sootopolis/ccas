@@ -149,13 +149,11 @@ object RecruitmentApp extends ZIOAppDefault {
       // the `club` table (deriveHint) — matching how MembershipApp's earlier reconcile resolves the slug.
       apiClub <- ApiClub.get(client, clubSlug)
         .withClubSlugRenameRecovery(client, clubSlug, clubIdHint = None)(fresh => ApiClub.get(client, fresh))
-      clubId = apiClub.clubId
-      // Read the canonical slug from the API response — recovery may have rewritten it. On the happy path
-      // (no recovery) this is just the input slug echoed back, and the local upsert below is the source of truth.
-      // On the recovery path the resolver already upserted under the canonical slug, so the local upsert becomes
-      // an idempotent reaffirmation.
-      effectiveSlug = ClubSlug.wrap(apiClub.`@id`.path.segments.last)
-      club          = Club.fromApi(apiClub, effectiveSlug)
+      clubId        = apiClub.clubId
+      effectiveSlug = apiClub.canonicalSlug
+      club          = Club.fromApi(apiClub)
+      // On the recovery path the resolver already upserted under the canonical slug, so this is an idempotent
+      // reaffirmation; on the happy path it is the source-of-truth write.
       _ <- Club.upsertResolvingSlugConflict(club, client)
       aliasRow <- RecruitmentAlias.selectLatest(clubId, alias)
         .someOrFail(NotFoundException(s"No recruitment alias '$alias' found for club '$clubSlug'"))

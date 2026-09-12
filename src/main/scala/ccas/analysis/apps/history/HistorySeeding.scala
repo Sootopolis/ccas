@@ -177,8 +177,8 @@ private[history] object HistorySeeding {
     unchangedCounter: Ref[Int]
   ): RIO[ProgressDisplay & PostgresClient, Int] = {
     def fetch(slug: ClubSlug): RIO[PostgresClient, Int] =
-      client.getCacheable[ApiClubMatches](ApiClubMatches.getUrl(slug))
-        .flatMap(_.foldZIO(_ => unchangedCounter.update(_ + 1).as(0))(insertPendingFromClubMatches(clubId, _)))
+      client.getResult[ApiClubMatches](ApiClubMatches.getUrl(slug))
+        .flatMap(_.foldPresentZIO(_ => unchangedCounter.update(_ + 1).as(0), insertPendingFromClubMatches(clubId, _)))
     fetch(clubSlug)
       .withClubSlugRenameRecovery(client, clubSlug, Some(clubId))(fetch)
       .catchAll { error =>
@@ -303,11 +303,12 @@ private[history] object HistorySeeding {
       case Some(sc) =>
         def go(uname: Username): RIO[PostgresClient, Int] =
           for {
-            result     <- client.getCacheable[ApiPlayerMatches](ApiPlayerMatches.getUrl(uname))
+            result     <- client.getResult[ApiPlayerMatches](ApiPlayerMatches.getUrl(uname))
             otherClubs <- sc.resolvedClubs.get.map(_.removed(clubSlug).toList)
-            primaryCount <- result.foldZIO(_ =>
-              unchangedCounter.update(_ + 1) *> stampQueriedAllClubs(clubId, otherClubs, playerId).as(0)
-            )(seedAndStampAllClubs(clubId, clubSlug, excludeMatchIds, includeFinished, sc, otherClubs, playerId, _))
+            primaryCount <- result.foldPresentZIO(
+              _ => unchangedCounter.update(_ + 1) *> stampQueriedAllClubs(clubId, otherClubs, playerId).as(0),
+              seedAndStampAllClubs(clubId, clubSlug, excludeMatchIds, includeFinished, sc, otherClubs, playerId, _)
+            )
             _ <- sc.queriedPlayers.update(_ + playerId)
           } yield primaryCount
         go(username).withPlayerRenameRecovery(client, username, Some(playerId))(go)
@@ -329,9 +330,8 @@ private[history] object HistorySeeding {
       sc.knownMatchIdsByClub.get.map(_.get(clubId)).flatMap {
         case Some(ids) => ZIO.succeed(ids)
         case None =>
-          ClubMatch.selectMatchIdsForClub(clubId).flatMap { ids =>
-            sc.knownMatchIdsByClub.update(_.updated(clubId, ids)).as(ids)
-          }
+          ClubMatch.selectMatchIdsForClub(clubId)
+            .tap(ids => sc.knownMatchIdsByClub.update(_.updated(clubId, ids)))
       }
     }
 
@@ -405,8 +405,9 @@ private[history] object HistorySeeding {
     // matching the original `HistoryMemberQuery.upsert(... Instant.now())` call inside the for-comprehension.
     def stamp = HistoryMemberQuery.upsert(HistoryMemberQuery(clubId, playerId, Instant.now()))
     def fetch(uname: Username): RIO[PostgresClient, Int] =
-      client.getCacheable[ApiPlayerMatches](ApiPlayerMatches.getUrl(uname)).flatMap {
-        _.foldZIO(_ => unchangedCounter.update(_ + 1) *> stamp.as(0))(
+      client.getResult[ApiPlayerMatches](ApiPlayerMatches.getUrl(uname)).flatMap {
+        _.foldPresentZIO(
+          _ => unchangedCounter.update(_ + 1) *> stamp.as(0),
           seedMatchesFromPlayerMatches(clubId, clubSlug, excludeMatchIds, _).zipLeft(stamp)
         )
       }

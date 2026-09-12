@@ -32,7 +32,11 @@ final class FsBodyStore(root: Path) extends BodyStore {
       try {
         Files.write(tmp, bytes)
         Files.move(tmp, path, StandardCopyOption.REPLACE_EXISTING)
-      } finally { Files.deleteIfExists(tmp) }
+        ()
+      } finally {
+        Files.deleteIfExists(tmp)
+        ()
+      }
     }
 
   def delete(hash: String): Task[Unit] =

@@ -151,9 +151,9 @@ object ClubDataApp extends ZIOAppDefault {
       // lose the error-isolation property and is deferred.
       _ <- refreshLatestMatchAt(client, club)
 
-      fetched <- ClubSlugRenameResolver.fetchOrRecover(client, club.slug, Some(club.clubId))
-      (apiClub, resolvedSlug) = fetched
-      _ <- Club.upsertResolvingSlugConflict(Club.fromApi(apiClub, resolvedSlug), client)
+      resolved <- ClubSlugRenameResolver.fetchOrRecover(client, club.slug, Some(club.clubId))
+      apiClub = resolved.api
+      _ <- Club.upsertResolvingSlugConflict(Club.fromApi(apiClub), client)
 
       adminUsernames   = ClubAdmin.extractAdminUsernames(apiClub)
       existingAdminIds <- ClubAdmin.selectPlayerIdsByClub(club.clubId)
@@ -193,13 +193,11 @@ object ClubDataApp extends ZIOAppDefault {
     s"[ClubData] Admin changes for ${club.slug} (${club.name}):\n$body"
   }
 
-  private def adminDiffLines(ids: Set[PlayerId], prefix: String, usernames: Map[PlayerId, Username]): List[String] = {
-    val unknown = (id: PlayerId) => s"<unknown player #${PlayerId.unwrap(id)}>"
+  private def adminDiffLines(ids: Set[PlayerId], prefix: String, usernames: Map[PlayerId, Username]): List[String] =
     ids.toList
-      .map(id => usernames.get(id).map(Player.displayUsername(_, id)).getOrElse(unknown(id)))
+      .map(id => usernames.get(id).fold(s"<unknown player #${PlayerId.unwrap(id)}>")(Player.displayUsername(_, id)))
       .sorted
       .map(name => s"  $prefix $name")
-  }
 
   /** Refreshes `club.latest_match_at` using a tiered strategy to minimise API calls:
     *   1. If the cached value on `club` is fresher than [[ClubAdmin.ApiSkipThreshold]], trust it and do nothing.
@@ -252,8 +250,8 @@ object ClubDataApp extends ZIOAppDefault {
     */
   private def fetchClubMatches(client: ChessComClient, clubSlug: ClubSlug): Task[Option[ApiClubMatches]] =
     client
-      .getCacheable[ApiClubMatches](ApiClubMatches.getUrl(clubSlug))
-      .flatMap(_.foldZIO(_ => ZIO.none)(matches => ZIO.some(matches)))
+      .getResult[ApiClubMatches](ApiClubMatches.getUrl(clubSlug))
+      .flatMap(_.foldPresentZIO(_ => ZIO.none, matches => ZIO.some(matches)))
 
   /** Returns the most recent activity timestamp: `now` if any registered match exists (signalling current activity),
     * otherwise the max `start_time` across in-progress and finished matches.

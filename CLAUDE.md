@@ -42,7 +42,7 @@ Rules that aren't derivable from reading the code. Follow them; they exist becau
 
 **Output files.** Apps that write reports go through `OutputFile` (`ccas.utils`), which owns the layout and archives any previous file for the same app into an `archive/` subdirectory first. Club-scoped output uses `write` / `writeAndLog` → `out/{clubSlug}/{timestamp}-{appName}.{ext}`, grouped by club so one club's history reads in order; output with no single club uses `writeGlobal` / `writeAndLogGlobal`, which takes an explicit subdirectory → `out/{subDir}/{timestamp}-{appName}.{ext}`. Don't hand-roll paths.
 
-**Chess.com API reliability.** Three fields lie, and code must not branch on them: a tournament's `status`, `ApiClub.lastActivity` (observed 12+ years off on active clubs), and the match endpoint's view of a match (it lags the game archives — prefer archive data). A 404 is not permanent: `"X not found"` bodies are timeline-unstable, and usernames and club slugs can flip 404 → 200 when a handle is registered later. High 404 counts on cancelled matches are expected noise.
+**Chess.com API reliability.** Three fields lie, and code must not branch on them: a tournament's `status`, `ApiClub.lastActivity` (observed 12+ years off on active clubs), and the match endpoint's view of a match (it lags the game archives — prefer archive data). A 404 is not permanent: `"X not found"` bodies are timeline-unstable, and usernames and club slugs can flip 404 → 200 when a handle is registered later. High 404 counts on cancelled matches are expected noise. A reported-not-found is an answer, not a failure: the client returns `FetchResult.Missing` and the app decides what absence means (`fold`, or `get` / `foldPresentZIO` to raise it). A 404 carrying an internal-error body is a malfunction and stays in the error channel.
 
 **Schema changes.** Never key a table on a mutable external label: when Chess.com owns both an id and a name, the id is identity and the name is history ([0016](docs/adr/0016-identity-is-the-id-names-are-observations.md)). The `createTable` definitions in code are the schema of record — there is no migration framework. Apply a change by editing the `CREATE TABLE` and running the equivalent `ALTER` against each existing database by hand (`psql`). `sql/` holds dated scripts from earlier changes and is kept for history; new changes are not scripted there unless the change is intricate enough to be worth replaying. Treat that directory as an archive, not a ledger you must append to.
 
@@ -95,6 +95,7 @@ Rules that aren't derivable from reading the code. Follow them; they exist becau
 | Ids are identity; names are observations | [0016](docs/adr/0016-identity-is-the-id-names-are-observations.md) |
 | What earns a history table | [0017](docs/adr/0017-what-earns-a-history-table.md) |
 | The two JVM flags, and their three homes | [0018](docs/adr/0018-every-jvm-carries-the-same-two-flags.md) |
+| A reported 404 is an answer, not a failure | [0019](docs/adr/0019-a-reported-404-is-an-answer.md) |
 
 Component-level detail — the apps and their run modes, the route surface, `JobRunner` cancellation semantics, the scheduler, `app_setting` — is in [`docs/architecture.md`](docs/architecture.md).
 

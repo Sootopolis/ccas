@@ -62,8 +62,7 @@ object BlacklistApp extends ZIOAppDefault {
       // stale slug still 404s, which is the correct behaviour: nothing in our DB knows what they meant.
       apiClub <- ApiClub.get(client, clubSlug)
         .withClubSlugRenameRecovery(client, clubSlug, clubIdHint = None)(fresh => ApiClub.get(client, fresh))
-      effectiveSlug = ClubSlug.wrap(apiClub.`@id`.path.segments.last)
-      club          = Club.fromApi(apiClub, effectiveSlug)
+      club = Club.fromApi(apiClub)
       // On the recovery path the resolver already upserted under the canonical slug; this is an idempotent
       // reaffirmation. On the no-recovery happy path, this is the source-of-truth write.
       _ <- Club.upsertResolvingSlugConflict(club, client)

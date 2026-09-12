@@ -9,6 +9,7 @@ import ccas.api.clubmatch.ApiDailyMatch
 import ccas.api.clubmatch.ApiMatchBoard.{ApiBoardGame, ApiBoardPlayer}
 import ccas.api.misc.enums.{BoardGameWinner, GameResultDetail, GameRule, TimeClass}
 import ccas.api.misc.subtypes.{ClubMatchId, Elo, PlayerId, Username}
+import ccas.analysis.apps.history.HistoryBoardBuilder.ScoreX2
 
 object TestHistoryBoardBuilder extends ZIOSpecDefault {
 
@@ -168,22 +169,23 @@ object TestHistoryBoardBuilder extends ZIOSpecDefault {
       assertTrue(HistoryBoardBuilder.scoresMatch(Map.empty, Nil))
     },
     test("returns true when expected and existing align board-by-board") {
-      val expected = Map[Short, (Short, Short)](1.toShort -> (4.toShort, 0.toShort), 2.toShort -> (2.toShort, 2.toShort))
+      val expected =
+        Map[Short, ScoreX2](1.toShort -> ScoreX2(4, 0), 2.toShort -> ScoreX2(2, 2))
       val existing = List(boardRow(1, 4, 0), boardRow(2, 2, 2))
       assertTrue(HistoryBoardBuilder.scoresMatch(expected, existing))
     },
     test("returns false when sizes differ") {
-      val expected = Map[Short, (Short, Short)](1.toShort -> (4.toShort, 0.toShort))
+      val expected = Map[Short, ScoreX2](1.toShort -> ScoreX2(4, 0))
       val existing = List(boardRow(1, 4, 0), boardRow(2, 2, 2))
       assertTrue(!HistoryBoardBuilder.scoresMatch(expected, existing))
     },
     test("returns false when a board's score differs") {
-      val expected = Map[Short, (Short, Short)](1.toShort -> (4.toShort, 0.toShort))
+      val expected = Map[Short, ScoreX2](1.toShort -> ScoreX2(4, 0))
       val existing = List(boardRow(1, 3, 1))
       assertTrue(!HistoryBoardBuilder.scoresMatch(expected, existing))
     },
     test("returns false when a board number is missing from expected") {
-      val expected = Map[Short, (Short, Short)](1.toShort -> (4.toShort, 0.toShort))
+      val expected = Map[Short, ScoreX2](1.toShort -> ScoreX2(4, 0))
       val existing = List(boardRow(2, 4, 0))
       assertTrue(!HistoryBoardBuilder.scoresMatch(expected, existing))
     }
@@ -205,7 +207,7 @@ object TestHistoryBoardBuilder extends ZIOSpecDefault {
     test("Finished match returns one entry per board with totals summing to 4") {
       matchFinishedFixture.map { m =>
         val scores = HistoryBoardBuilder.computeExpectedScores(m)
-        val allTotalsAreFour = scores.values.forall { case (t1, t2) => (t1 + t2) == 4 }
+        val allTotalsAreFour = scores.values.forall(s => (s.team1 + s.team2) == 4)
         // matchFinished.json has 13 boards
         assertTrue(
           scores.size == 13,

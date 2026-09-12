@@ -84,27 +84,31 @@ private[history] object HistoryBoardBuilder {
         GameOutcome(None, None)
     }
 
+  /** Doubled scores for the two sides — of a single game, or of a board once its two games are added. Named rather
+    * than a `(Short, Short)` because the sides are the same type: a transposition anywhere on the path from here to
+    * `club_match_board` would invert a result silently.
+    */
+  private[history] final case class ScoreX2(team1: Short, team2: Short)
+
   private[history] def computeScoreX2(
     game1Winner: Option[BoardGameWinner],
     game2Winner: Option[BoardGameWinner],
     team1FairPlay: Boolean,
     team2FairPlay: Boolean
-  ): (Short, Short) = {
-    def gameScore(winner: Option[BoardGameWinner]): (Int, Int) = {
+  ): ScoreX2 = {
+    def gameScore(winner: Option[BoardGameWinner]): ScoreX2 = {
       val t1 = GameScoring.classifyGame(winner, team1FairPlay, team2FairPlay).fold(0)(GameScoring.scoreX2)
       val t2 = winner.fold(0)(_ => 2 - t1)
-      (t1, t2)
+      ScoreX2(t1.toShort, t2.toShort)
     }
 
-    val (g1t1, g1t2) = gameScore(game1Winner)
-    val (g2t1, g2t2) = gameScore(game2Winner)
-    ((g1t1 + g2t1).toShort, (g1t2 + g2t2).toShort)
+    val g1 = gameScore(game1Winner)
+    val g2 = gameScore(game2Winner)
+    ScoreX2((g1.team1 + g2.team1).toShort, (g1.team2 + g2.team2).toShort)
   }
 
-  /** Computes expected board scores from match-level data alone (no board endpoint needed).
-    * Returns a map of boardNum → (team1ScoreX2, team2ScoreX2).
-    */
-  private[history] def computeExpectedScores(dailyMatch: ApiDailyMatch): Map[Short, (Short, Short)] =
+  /** Computes expected board scores from match-level data alone (no board endpoint needed). */
+  private[history] def computeExpectedScores(dailyMatch: ApiDailyMatch): Map[Short, ScoreX2] =
     dailyMatch match {
       case _: ApiDailyMatchRegistered => Map.empty
       case _ =>
@@ -136,11 +140,11 @@ private[history] object HistoryBoardBuilder {
 
   /** Returns true if the expected board scores match the existing DB rows exactly. */
   private[history] def scoresMatch(
-    expected: Map[Short, (Short, Short)],
+    expected: Map[Short, ScoreX2],
     existing: List[ClubMatchBoard]
   ): Boolean =
     expected.size == existing.size && existing.forall { b =>
-      expected.get(b.board).contains((b.team1ScoreX2, b.team2ScoreX2))
+      expected.get(b.board).contains(ScoreX2(b.team1ScoreX2, b.team2ScoreX2))
     }
 
   private[history] def buildClubMatchRow(

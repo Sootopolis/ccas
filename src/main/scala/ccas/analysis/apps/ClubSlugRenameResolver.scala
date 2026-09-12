@@ -27,6 +27,15 @@ import ccas.utils.sql.PostgresClient
   */
 object ClubSlugRenameResolver {
 
+  /** A club identified afresh from Chess.com: the canonical slug it answers to now, and the body that proved it.
+    * Named rather than a pair because every rename path carries both, and a pair of them reads positionally.
+    */
+  final case class ResolvedClub(slug: ClubSlug, api: ApiClub)
+
+  object ResolvedClub {
+    def fromApi(apiClub: ApiClub): ResolvedClub = ResolvedClub(apiClub.canonicalSlug, apiClub)
+  }
+
   /** Delegates to [[Club.isTombstoneSlug]] — single source of truth for the tombstone format. */
   def isTombstone(s: ClubSlug): Boolean = Club.isTombstoneSlug(s)
 
@@ -42,7 +51,7 @@ object ClubSlugRenameResolver {
     staleSlug: ClubSlug,
     clubIdHint: Option[ClubId]
   ): RIO[PostgresClient, Option[ClubSlug]] =
-    resolveAndPersist(client, staleSlug, clubIdHint).map(_.map(_._1))
+    resolveAndPersist(client, staleSlug, clubIdHint).map(_.map(_.slug))
 
   /** Resolves the current slug AND persists it via `Club.upsertResolvingSlugConflict`. Returns the verified `ApiClub`
     * so callers don't have to refetch.
@@ -51,42 +60,32 @@ object ClubSlugRenameResolver {
     client: ChessComClient,
     staleSlug: ClubSlug,
     clubIdHint: Option[ClubId]
-  ): RIO[PostgresClient, Option[(ClubSlug, ApiClub)]] =
-    resolveCandidate(client, staleSlug, clubIdHint).flatMap {
-      case None => ZIO.none
-      case Some(candidate) =>
-        verify(client, candidate, clubIdHint).flatMap {
-          case None => ZIO.none
-          case Some((fresh, apiClub)) =>
-            Club.upsertResolvingSlugConflict(Club.fromApi(apiClub, fresh), client).as(Some((fresh, apiClub)))
-        }
-    }
+  ): RIO[PostgresClient, Option[ResolvedClub]] =
+    for {
+      candidateOption <- resolveCandidate(client, staleSlug, clubIdHint)
+      resolvedOption <- ZIO.foreach(candidateOption)(verify(client, _, clubIdHint)).map(_.flatten)
+      _ <- ZIO.foreachDiscard(resolvedOption) { resolved =>
+        Club.upsertResolvingSlugConflict(Club.fromApi(resolved.api), client)
+      }
+    } yield resolvedOption
 
   /** Convenience: fetches `/pub/club/{slug}` and falls back to slug-rename recovery on 404. Returns the verified
-    * (post-recovery) `ApiClub` paired with the canonical slug — saves callers a re-fetch when they need both. On 404
-    * with no rename inferred, the original 404 propagates. Mirrors [[UsernameRenameResolver.fetchOrRecover]] for the
-    * club path.
+    * (post-recovery) [[ResolvedClub]] — saves callers a re-fetch when they need both halves. On 404 with no rename
+    * inferred, the original 404 propagates. Mirrors [[UsernameRenameResolver.fetchOrRecover]] for the club path.
     */
   def fetchOrRecover(
     client: ChessComClient,
     slug: ClubSlug,
     clubIdHint: Option[ClubId] = None
-  ): RIO[PostgresClient, (ApiClub, ClubSlug)] =
-    ApiClub.get(client, slug).map(_ -> slug).catchSome { case e: ReportedNotFound =>
-      resolveAndPersist(client, slug, clubIdHint).flatMap {
-        case Some((freshSlug, apiClub)) => ZIO.succeed(apiClub -> freshSlug)
-        case None                       => ZIO.fail(e)
-      }
+  ): RIO[PostgresClient, ResolvedClub] =
+    ApiClub.get(client, slug).map(ResolvedClub.fromApi).catchSome { case e: ReportedNotFound =>
+      resolveAndPersist(client, slug, clubIdHint).someOrFail(e)
     }
 
   private def tierADb(staleSlug: ClubSlug, clubIdHint: Option[ClubId]): RIO[PostgresClient, Option[ClubSlug]] =
     clubIdHint match {
       case None => ZIO.none
-      case Some(hint) =>
-        Club.selectId(hint).map(_.flatMap { current =>
-          if (current.slug != staleSlug && !isTombstone(current.slug)) { Some(current.slug) }
-          else { None }
-        })
+      case Some(hint) => Club.selectId(hint).map(_.map(_.slug).filter(slug => slug != staleSlug && !isTombstone(slug)))
     }
 
   private def tierBMatchRef(
@@ -183,8 +182,10 @@ object ClubSlugRenameResolver {
     slug: ClubSlug,
     hint: ClubId
   ): RIO[Any, Option[ClubSlug]] =
-    ApiClub.get(client, slug)
-      .map(c => Option.when(c.clubId == hint)(slug))
+    ApiClub.getOptional(client, slug)
+      .map(_.flatMap(c => Option.when(c.clubId == hint)(slug)))
+      // A candidate whose club endpoint is broken (a 404 with an internal-error body) is skipped like a wrong one:
+      // one such club must not end the scan, and `collectFirst` reads a failure as the end.
       .onNotFound(_ => ZIO.none)
 
   /** Derives a `clubIdHint` from the stale slug when the caller didn't supply one. Looks up our `club` table by the
@@ -204,13 +205,13 @@ object ClubSlugRenameResolver {
     client: ChessComClient,
     candidate: ClubSlug,
     clubIdHint: Option[ClubId]
-  ): RIO[Any, Option[(ClubSlug, ApiClub)]] =
-    ApiClub.get(client, candidate).map { apiClub =>
+  ): RIO[Any, Option[ResolvedClub]] =
+    ApiClub.getOptional(client, candidate).map(_.flatMap { apiClub =>
       val matches = clubIdHint.forall(_ == apiClub.clubId)
       // Read the slug from `@id`'s last path segment so we get whatever Chess.com normalized to (the candidate slug
       // might differ from the canonical one returned in the response).
-      Option.when(matches)((ClubSlug.wrap(apiClub.`@id`.path.segments.last), apiClub))
-    }.onNotFound(_ => ZIO.none)
+      Option.when(matches)(ResolvedClub.fromApi(apiClub))
+    }).onNotFound(_ => ZIO.none)
 
   /** Resolves a club slug to its ID: `Some(clubId)` if known locally, else fetch from Chess.com and persist.
     *
@@ -230,8 +231,7 @@ object ClubSlugRenameResolver {
       case None =>
         (for {
           apiClub <- ApiClub.get(client, slug)
-          canonical = ClubSlug.wrap(apiClub.`@id`.path.segments.last)
-          _ <- Club.upsertResolvingSlugConflict(Club.fromApi(apiClub, canonical), client)
+          _ <- Club.upsertResolvingSlugConflict(Club.fromApi(apiClub), client)
         } yield Option(apiClub.clubId))
           .tapError(e => ZIO.logDebug(s"  ClubSlugRenameResolver.resolveOrFetch $slug failed: ${e.getMessage}"))
           .catchAll(e => NetworkUnavailableException.recoverUnless(e)(ZIO.none))
@@ -250,8 +250,8 @@ extension [R, A](self: ZIO[R, Throwable, A])
     : ZIO[R & PostgresClient, Throwable, A] =
     self.catchSome { case e: ReportedNotFound =>
       ClubSlugRenameResolver.resolveAndPersist(client, stale, clubIdHint).flatMap {
-        case Some((fresh, _)) =>
-          ZIO.logInfo(s"  Slug rename recovered: $stale → $fresh; retrying") *> retryWith(fresh)
+        case Some(resolved) =>
+          ZIO.logInfo(s"  Slug rename recovered: $stale → ${resolved.slug}; retrying") *> retryWith(resolved.slug)
         case None => ZIO.fail(e)
       }
     }

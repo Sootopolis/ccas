@@ -14,13 +14,18 @@ class HttpStatusException(val statusCode: Int, val url: URL, val responseBody: S
   * Note: "reported" rather than "permanent" — per #27, a `not found` on Chess.com is timeline-unstable. Slugs and
   * usernames can flip 404→200 if the original holder renames back, or if a different account registers the freed
   * handle. Callers must treat this as "missing right now," not "missing forever."
+  *
+  * Usually reached as the payload of [[FetchResult.Missing]] rather than as a failure: it is raised only where a
+  * caller has decided absence is an error (`get`, `foldPresentZIO`). See
+  * `docs/adr/0019-a-reported-404-is-an-answer.md`.
   */
 class ReportedNotFound(u: URL, b: String) extends HttpStatusException(404, u, b)
 
 object HttpStatusException {
 
-  /** Construct the right subclass for a failed HTTP response. Used at the single throw site in `ChessComClient`
-    * and by tests that fabricate exceptions directly.
+  /** Construct the right subclass for a non-2xx response. Used at the single classification point in
+    * `ChessComClient` — which returns a [[ReportedNotFound]] as [[FetchResult.Missing]] and fails with anything
+    * else — and by tests that fabricate exceptions directly.
     *
     * The match anchors on the JSON-string closing quote (`not found."`), not the bare phrase, so a body merely
     * mentioning "not found." mid-sentence won't classify. Case-sensitive on purpose: Chess.com's production wire is
@@ -35,6 +40,9 @@ object HttpStatusException {
     else HttpStatusException(statusCode, url, body)
 }
 
+/** Recovery for a caller whose answer to *any* 404 is the same — including the internal-error kind, which
+  * [[FetchResult.Missing]] deliberately excludes. Used where one broken resource must not end a scan.
+  */
 extension [R, A](effect: ZIO[R, Throwable, A])
   def onNotFound[R1 <: R, A1 >: A](recover: HttpStatusException => ZIO[R1, Throwable, A1]): ZIO[R1, Throwable, A1] =
     effect.catchSome { case e: HttpStatusException if e.statusCode == 404 => recover(e) }

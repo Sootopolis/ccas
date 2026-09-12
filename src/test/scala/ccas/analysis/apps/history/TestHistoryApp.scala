@@ -249,83 +249,83 @@ object TestHistoryApp extends ZIOSpecDefault {
   )
 
   private def testTeam1WinsBothGames = test("normal scoring: team1 wins both games") {
-    val (t1, t2) = HistoryBoardBuilder.computeScoreX2(
+    val score = HistoryBoardBuilder.computeScoreX2(
       Some(BoardGameWinner.Team1),
       Some(BoardGameWinner.Team1),
       team1FairPlay = false,
       team2FairPlay = false
     )
-    assertTrue(t1 == 4.toShort, t2 == 0.toShort)
+    assertTrue(score.team1 == 4, score.team2 == 0)
   }
 
   private def testSplitResults = test("normal scoring: split results") {
-    val (t1, t2) = HistoryBoardBuilder.computeScoreX2(
+    val score = HistoryBoardBuilder.computeScoreX2(
       Some(BoardGameWinner.Team1),
       Some(BoardGameWinner.Team2),
       team1FairPlay = false,
       team2FairPlay = false
     )
-    assertTrue(t1 == 2.toShort, t2 == 2.toShort)
+    assertTrue(score.team1 == 2, score.team2 == 2)
   }
 
   private def testBothDraws = test("normal scoring: both draws") {
-    val (t1, t2) = HistoryBoardBuilder.computeScoreX2(
+    val score = HistoryBoardBuilder.computeScoreX2(
       Some(BoardGameWinner.Draw),
       Some(BoardGameWinner.Draw),
       team1FairPlay = false,
       team2FairPlay = false
     )
-    assertTrue(t1 == 2.toShort, t2 == 2.toShort)
+    assertTrue(score.team1 == 2, score.team2 == 2)
   }
 
   private def testTeam1BannedTeam2Gets2PerGame = test("team1 banned: team2 gets 2 per game") {
-    val (t1, t2) = HistoryBoardBuilder.computeScoreX2(
+    val score = HistoryBoardBuilder.computeScoreX2(
       Some(BoardGameWinner.Team2),
       Some(BoardGameWinner.Team2),
       team1FairPlay = true,
       team2FairPlay = false
     )
-    assertTrue(t1 == 0.toShort, t2 == 4.toShort)
+    assertTrue(score.team1 == 0, score.team2 == 4)
   }
 
   private def testTeam2BannedTeam1Gets2PerGame = test("team2 banned: team1 gets 2 per game") {
-    val (t1, t2) = HistoryBoardBuilder.computeScoreX2(
+    val score = HistoryBoardBuilder.computeScoreX2(
       Some(BoardGameWinner.Team2),
       Some(BoardGameWinner.Team2),
       team1FairPlay = false,
       team2FairPlay = true
     )
-    assertTrue(t1 == 4.toShort, t2 == 0.toShort)
+    assertTrue(score.team1 == 4, score.team2 == 0)
   }
 
   private def testBothBannedEachGets1PerGame = test("both players banned: each gets 1 per game") {
-    val (t1, t2) = HistoryBoardBuilder.computeScoreX2(
+    val score = HistoryBoardBuilder.computeScoreX2(
       Some(BoardGameWinner.Team1),
       Some(BoardGameWinner.Team1),
       team1FairPlay = true,
       team2FairPlay = true
     )
-    assertTrue(t1 == 2.toShort, t2 == 2.toShort)
+    assertTrue(score.team1 == 2, score.team2 == 2)
   }
 
   private def testGameNotPlayedBothGet0 = test("game not played: both get 0") {
-    val (t1, t2) = HistoryBoardBuilder.computeScoreX2(
+    val score = HistoryBoardBuilder.computeScoreX2(
       None,
       None,
       team1FairPlay = false,
       team2FairPlay = false
     )
-    assertTrue(t1 == 0.toShort, t2 == 0.toShort)
+    assertTrue(score.team1 == 0, score.team2 == 0)
   }
 
   private def testOneGamePlayedOneNot = test("one game played, one not") {
-    val (t1, t2) = HistoryBoardBuilder.computeScoreX2(
+    val score = HistoryBoardBuilder.computeScoreX2(
       Some(BoardGameWinner.Team1),
       None,
       team1FairPlay = false,
       team2FairPlay = false
     )
-    assertTrue(t1 == 2.toShort, t2 == 0.toShort)
+    assertTrue(score.team1 == 2, score.team2 == 0)
   }
 
   // --- parseArgs ---

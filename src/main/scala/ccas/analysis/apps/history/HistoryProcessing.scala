@@ -335,7 +335,7 @@ private[history] object HistoryProcessing {
       }
     } yield ()
 
-  /** Settled matches by definition can't change, so an `isUnchanged` response from the cache layer means every
+  /** Settled matches by definition can't change, so an unchanged response from the cache layer means every
     * downstream step would be a no-op — just bump `fetched_at` so the cursor-paginated refresh loop advances.
     * Bypasses the in-memory `matchCache` dedup because the cursor scan visits each match exactly once per run.
     */
@@ -343,11 +343,13 @@ private[history] object HistoryProcessing {
     ctx: ProcessingContext,
     matchId: ClubMatchId
   ): RIO[ProgressDisplay & PostgresClient, Unit] =
-    ctx.client.getCacheable[ApiDailyMatch](ApiDailyMatch.getUrl(matchId)).flatMap {
-      _.foldZIO(_ =>
-        ctx.refreshMatchUnchanged.update(_ + 1) *>
-          ClubMatch.updateFetchedAt(matchId, Instant.now()).unit
-      )(refreshSingleMatchWithBody(ctx, matchId, _))
+    ctx.client.getResult[ApiDailyMatch](ApiDailyMatch.getUrl(matchId)).flatMap {
+      _.foldPresentZIO(
+        _ =>
+          ctx.refreshMatchUnchanged.update(_ + 1) *>
+            ClubMatch.updateFetchedAt(matchId, Instant.now()).unit,
+        refreshSingleMatchWithBody(ctx, matchId, _)
+      )
     }
 
   private def refreshSingleMatchWithBody(
@@ -459,7 +461,7 @@ private[history] object HistoryProcessing {
               t1Player.playedAsBlack,
               whiteTeamIsTeam1 = false
             )
-            val (t1Score, t2Score) = HistoryBoardBuilder.computeScoreX2(g1.winner, g2.winner, t1FairPlay, t2FairPlay)
+            val score = HistoryBoardBuilder.computeScoreX2(g1.winner, g2.winner, t1FairPlay, t2FairPlay)
 
             val board = ClubMatchBoard(
               matchId = matchId,
@@ -468,8 +470,8 @@ private[history] object HistoryProcessing {
               team1FairPlay = t1FairPlay,
               team2PlayerId = t2Pid,
               team2FairPlay = t2FairPlay,
-              team1ScoreX2 = t1Score,
-              team2ScoreX2 = t2Score
+              team1ScoreX2 = score.team1,
+              team2ScoreX2 = score.team2
             )
 
             // Partition board API games by team perspective (team1-white vs team2-white)

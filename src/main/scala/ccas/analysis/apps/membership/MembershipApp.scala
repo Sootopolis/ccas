@@ -127,14 +127,15 @@ object MembershipApp extends ZIOAppDefault {
     for {
       startedAt <- Clock.instant
       client    <- ZIO.service[ChessComClient]
-      (apiClub, resolvedSlug) <- ClubSlugRenameResolver.fetchOrRecover(client, clubSlug)
-      clubId = apiClub.clubId
-      club   = Club.fromApi(apiClub, resolvedSlug)
+      resolved <- ClubSlugRenameResolver.fetchOrRecover(client, clubSlug)
+      apiClub   = resolved.api
+      clubId    = apiClub.clubId
+      club      = Club.fromApi(apiClub)
       _                     <- Club.upsertResolvingSlugConflict(club, client)
       runId <- ZIO.when(trackRun)(MembershipRun.insert(clubId, trigger, startedAt, jobRunId))
       // Wrap belt-and-suspenders against a second rename between the `ApiClub.get` recovery above and now.
-      (apiMembers, dbState) <- ApiClubMembers.get(client, resolvedSlug)
-        .withClubSlugRenameRecovery(client, resolvedSlug, Some(clubId))(fresh => ApiClubMembers.get(client, fresh))
+      (apiMembers, dbState) <- ApiClubMembers.get(client, resolved.slug)
+        .withClubSlugRenameRecovery(client, resolved.slug, Some(clubId))(fresh => ApiClubMembers.get(client, fresh))
         .zipPar(buildDbState(clubId))
       prevMemberIds <- loadPreviousMemberIds(clubId)
       // Both counts filter on player.status=Active to exclude Closed-but-still-member phantoms.

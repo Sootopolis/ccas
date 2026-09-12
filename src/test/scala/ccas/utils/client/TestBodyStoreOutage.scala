@@ -1,7 +1,5 @@
 package ccas.utils.client
 
-import java.time.Instant
-
 import com.augustnagro.magnum.sql
 import zio.*
 import zio.http.*
@@ -17,7 +15,7 @@ import ccas.utils.client.TestChessComClientSupport.*
   * skipped write, never surface as a failed request.
   *
   * These drive the real `ChessComClient` / table code against a [[FaultyBodyStore]] wrapping the suite's working
-  * filesystem store, so the whole path is covered: `getCacheableImpl` → `loadById` / `upsertWithBody` → accessor.
+  * filesystem store, so the whole path is covered: `getResultImpl` → `loadById` / `upsertWithBody` → accessor.
   */
 object TestBodyStoreOutage extends ZIOSpecDefault {
 
@@ -87,15 +85,15 @@ object TestBodyStoreOutage extends ZIOSpecDefault {
         for {
           netCalls              <- Ref.make(0)
           (client, faulty, sts) <- faultyStoreClient(_ => netCalls.update(_ + 1).as(cacheable200(body, maxAge = 3600)))
-          _                     <- client.getCacheable[Payload](url) // populate while healthy (network #1)
+          _                     <- client.getResult[Payload](url) // populate while healthy (network #1)
           _                     <- faulty.breakReads
-          fresh                 <- client.getCacheable[Payload](url) // metadata-only hit; body not loaded yet
+          fresh                 <- client.getResult[Payload](url) // metadata-only hit; body not loaded yet
           value                 <- fresh.getValue                    // body unreadable → refetch (network #2)
           calls                 <- netCalls.get
           meta                  <- ApiResponseCache.lookupMeta(url.encode)
           stats                 <- sts.get
         } yield assertTrue(
-          fresh.isInstanceOf[CacheableResult.Fresh[?]],
+          fresh.isInstanceOf[FetchResult.Fresh[?]],
           value.value == "read-outage",
           calls == 2,
           meta.isDefined,
@@ -119,7 +117,7 @@ object TestBodyStoreOutage extends ZIOSpecDefault {
         for {
           netCalls              <- Ref.make(0)
           (client, faulty, sts) <- faultyStoreClient(_ => netCalls.update(_ + 1).as(cacheable200(body, maxAge = 3600)))
-          _                     <- client.getCacheable[Payload](url) // populate while healthy
+          _                     <- client.getResult[Payload](url) // populate while healthy
           before                <- ApiResponseCache.lookupMeta(url.encode)
           _                     <- faulty.breakReads
           _                     <- faulty.breakWrites
@@ -148,9 +146,9 @@ object TestBodyStoreOutage extends ZIOSpecDefault {
         for {
           netCalls              <- Ref.make(0)
           (client, faulty, sts) <- faultyStoreClient(_ => netCalls.update(_ + 1).as(cacheable200(body, maxAge = 3600)))
-          _                     <- client.getCacheable[Payload](url) // populate while responsive
+          _                     <- client.getResult[Payload](url) // populate while responsive
           _                     <- faulty.stallReads(2.seconds)
-          fresh                 <- client.getCacheable[Payload](url)
+          fresh                 <- client.getResult[Payload](url)
           value                 <- fresh.getValue
           _                     <- faulty.stallReads(Duration.Zero)
           calls                 <- netCalls.get
@@ -191,15 +189,15 @@ object TestBodyStoreOutage extends ZIOSpecDefault {
           (client, faulty, sts) <- faultyStoreClient(_ => netCalls.update(_ + 1).as(cacheable200(body, maxAge = 3600)))
           _                     <- faulty.breakWrites
           bodiesBefore          <- bodyRowCount
-          result                <- client.getCacheable[Payload](url)
+          result                <- client.getResult[Payload](url)
           value                 <- result.getValue
           meta                  <- ApiResponseCache.lookupMeta(url.encode)
-          _                     <- client.getCacheable[Payload](url) // nothing cached, so it must hit the network again
+          _                     <- client.getResult[Payload](url) // nothing cached, so it must hit the network again
           calls                 <- netCalls.get
           bodiesAfter           <- bodyRowCount
           stats                 <- sts.get
         } yield assertTrue(
-          result.isInstanceOf[CacheableResult.Changed[?]],
+          result.isInstanceOf[FetchResult.Changed[?]],
           value.value == "write-outage",
           meta.isEmpty,
           calls == 2,
@@ -221,19 +219,19 @@ object TestBodyStoreOutage extends ZIOSpecDefault {
           netCalls              <- Ref.make(0)
           (client, faulty, sts) <- faultyStoreClient(_ => netCalls.update(_ + 1).as(cacheable200(body, maxAge = 3600)))
           _                     <- faulty.breakWrites
-          _                     <- client.getCacheable[Payload](url) // network #1, uncached
+          _                     <- client.getResult[Payload](url) // network #1, uncached
           during                <- ApiResponseCache.lookupMeta(url.encode)
           _                     <- faulty.healWrites
-          _                     <- client.getCacheable[Payload](url) // network #2, cached this time
+          _                     <- client.getResult[Payload](url) // network #2, cached this time
           after                 <- ApiResponseCache.lookupMeta(url.encode)
-          fresh                 <- client.getCacheable[Payload](url) // served from cache, no network
+          fresh                 <- client.getResult[Payload](url) // served from cache, no network
           value                 <- fresh.getValue
           calls                 <- netCalls.get
           stats                 <- sts.get
         } yield assertTrue(
           during.isEmpty,
           after.isDefined,
-          fresh.isInstanceOf[CacheableResult.Fresh[?]],
+          fresh.isInstanceOf[FetchResult.Fresh[?]],
           value.value == "self-heal",
           calls == 2,
           // A genuine hit, served end to end: nothing to reconcile.

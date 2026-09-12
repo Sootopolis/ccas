@@ -9,7 +9,7 @@ import zio.test.{assertCompletes, assertTrue, Spec, ZIOSpecDefault}
 import ccas.api.club.{ApiClub, ApiClubMatches, ApiClubMembers}
 import ccas.api.clubmatch.{ApiDailyMatch, ApiLiveMatch, ApiMatchBoard}
 import ccas.api.misc.enums.{League, PlayerStatus}
-import ccas.api.misc.subtypes.{PlayerId, Username}
+import ccas.api.misc.subtypes.{ClubSlug, PlayerId, Username}
 import ccas.api.player.*
 import ccas.api.tournament.{ApiTournament, ApiTournamentRound}
 
@@ -34,7 +34,11 @@ object TestApiJsonParsing extends ZIOSpecDefault {
     generateTest[ApiLiveMatch]("liveMatchFinished"),
     generateTest[ApiPlayerTournaments]("playerTournaments"),
     generateTest[ApiTournament]("tournament"),
-    generateTest[ApiTournamentRound]("tournamentRound")
+    generateTest[ApiTournamentRound]("tournamentRound"),
+    test("ApiClub.canonicalSlug reads the slug Chess.com answers to, from `@id`") {
+      readJsonLinesAs[ApiClub](getFileName("club")).runHead.someOrFailException
+        .map(club => assertTrue(club.canonicalSlug == ClubSlug.wrap("chess-com-developer-community")))
+    }
   )
 
   private def getFileName(label: String) = s"data/test/api/$label.json"

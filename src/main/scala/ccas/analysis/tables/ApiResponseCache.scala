@@ -17,9 +17,9 @@ import ccas.utils.sql.PostgresClient.{connectZIO, withTransaction}
   * by SHA-256 hash via `ApiResponseBody.putBody`, so repeated identical responses across different URLs share
   * a single row in the body table.
   *
-  * Lookups via `lookupMeta` intentionally do not load the body — `ChessComClient.getCacheable` reads only this
+  * Lookups via `lookupMeta` intentionally do not load the body — `ChessComClient.fetch` reads only this
   * row during cache-hit dispatch and defers the body fetch to `ApiResponseBody.loadById` inside a lazy `getValue`
-  * Task. Callers that branch on `isUnchanged` without needing the value thus never touch body storage.
+  * Task. Callers that fold on the unchanged arm without needing the value thus never touch body storage.
   */
 final case class ApiResponseCache(
   cacheId: ApiResponseCacheId,
