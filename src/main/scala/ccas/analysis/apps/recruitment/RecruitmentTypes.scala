@@ -34,7 +34,7 @@ private[recruitment] case class RunContext(
   excludedSlugs: Set[ClubSlug],
   now: Instant,
   discoveredOpponents: Ref[Set[Username]],
-  /** Slugs whose `ApiClub.get` failed during this run (e.g. persistent 404s on restricted mega-clubs). The
+  /** Slugs whose `ApiClub.get` failed during this run (e.g. a Chess.com internal-error 404). The
     * [[ccas.analysis.apps.recruitment.RecruitmentFilterDefs.CheckAdminOfDiscoveredClub]] filter consults this set to
     * avoid re-fetching slugs we've already given up on for this run.
     */

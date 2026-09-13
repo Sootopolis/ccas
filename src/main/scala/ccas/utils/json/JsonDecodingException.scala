@@ -1,5 +1,4 @@
 package ccas.utils.json
 
-class JsonDecodingException(message: String) extends Exception(message) {
-  def this(throwable: Throwable) = this(throwable.getMessage)
-}
+/** `responseBody` is the text that failed to decode, kept so `api_fetch_failure` can record what did not parse. */
+class JsonDecodingException(message: String, val responseBody: Option[String]) extends Exception(message)

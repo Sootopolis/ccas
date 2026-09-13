@@ -94,8 +94,9 @@ final class ChessComClient(
     */
   private def recordFetchFailure(url: URL, error: Throwable): UIO[Unit] = {
     val (errorType, msg, body) = error match {
-      case e: HttpStatusException => (e.getClass.getSimpleName, Some(e.statusCode.toString), Some(e.responseBody))
-      case other                  => (other.getClass.getSimpleName, Option(other.getMessage), None)
+      case e: HttpStatusException   => (e.getClass.getSimpleName, Some(e.statusCode.toString), Some(e.responseBody))
+      case e: JsonDecodingException => (e.getClass.getSimpleName, Option(e.getMessage), e.responseBody)
+      case other                    => (other.getClass.getSimpleName, Option(other.getMessage), None)
     }
     ApiFetchFailure
       .insert(ApiFetchFailure(Instant.now(), url.encode, errorType, msg, body))
@@ -267,13 +268,15 @@ final class ChessComClient(
             fetchedAt = Instant.now()
           )
           .provideEnvironment(ZEnvironment(pgClient, bodyStore))
-    val decodeLazy = ZIO.fromEither(jsonDecoder.decodeJson(string)).mapError(JsonDecodingException(_))
+    val decodeLazy = ZIO.fromEither(jsonDecoder.decodeJson(string)).mapError(JsonDecodingException(_, Some(string)))
     for {
       _            <- logEtagParseMiss(response)
       newBodyIdOpt <- upsertEffect
       result <- (newBodyIdOpt, conditional.map(_.bodyId)) match {
+        // This decode runs after `rawGet` has returned, beyond its `tapError`, so it records its own failure row.
         case (Some(newBodyId), Some(oldBodyId)) if newBodyId == oldBodyId =>
-          statsRef.update(_.incCacheHit).as(FetchResult.IdenticalBody(newBodyId, decodeLazy))
+          val recordedDecode = decodeLazy.tapError(recordFetchFailure(url, _))
+          statsRef.update(_.incCacheHit).as(FetchResult.IdenticalBody(newBodyId, recordedDecode))
         case _ =>
           statsRef.update(_.incCacheMiss) *> decodeLazy.map(FetchResult.Changed(_, newBodyIdOpt))
       }
@@ -322,7 +325,7 @@ final class ChessComClient(
       .flatMap {
         case BodyRead.Found(body) =>
           ZIO.fromEither(jsonDecoder.decodeJson(body))
-            .mapError(JsonDecodingException(_))
+            .mapError(JsonDecodingException(_, Some(body)))
             .catchSome { case _: JsonDecodingException => invalidateAndRefetch }
         // The BodyStore is content-addressed and so URL-agnostic; its own logs can only name a hash. This is the
         // nearest frame that knows which endpoint lost its cached body, so it is where the URL gets recorded.

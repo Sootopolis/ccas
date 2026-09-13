@@ -244,8 +244,8 @@ private[recruitment] object RecruitmentFilterDefs {
     * [[ClubAdminResolver.resolveAndPersistAdmins]], and rejects the candidate if they're an admin of a sizable, active,
     * non-over-administered club.
     *
-    * Slugs whose `ApiClub.get` fails (typically restricted mega-clubs that return 404 on the public API) are recorded
-    * in `runCtx.failedAdminSlugs` and skipped for the rest of the run.
+    * Slugs whose `ApiClub.get` fails (e.g. a Chess.com internal-error 404) are recorded in `runCtx.failedAdminSlugs`
+    * and skipped for the rest of the run.
     */
   object CheckAdminOfDiscoveredClub extends RecruitmentFilter {
     def apply(env: FilterEnv): RIO[PostgresClient, FilterResult] =
