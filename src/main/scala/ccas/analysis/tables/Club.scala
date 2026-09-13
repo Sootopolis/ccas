@@ -9,7 +9,7 @@ import zio.{Task, ZIO}
 import ccas.analysis.apps.ref.RefHelpers
 import ccas.api.club.ApiClub
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
-import ccas.utils.client.ChessComClient
+import ccas.utils.client.{ChessComClient, FetchResult}
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.{connectZIO, transactZIO, withTransaction}
@@ -149,16 +149,28 @@ object Club {
     clubId: ClubId,
     client: ChessComClient
   ): ZIO[PostgresClient, Throwable, Option[ClubSlug]] =
+    slugFromMatchRefResult(clubId, client).flatMap {
+      case Some(result) => result.foldPresentZIO(_.getValue, _.getValue)
+      case None         => ZIO.none
+    }
+
+  /** [[slugFromMatchRef]], but exposing the fetch outcome as a value instead of committing to "fail on absence" —
+    * used by `ClubSlugRenameResolver.tierBMatchRef`, whose answer to absence is "try Tier C," not "fail."
+    */
+  def slugFromMatchRefResult(
+    clubId: ClubId,
+    client: ChessComClient
+  ): ZIO[PostgresClient, Throwable, Option[FetchResult[Option[ClubSlug]]]] =
     ClubMatchRef.findOrInfer(clubId).flatMap {
-      case Some(ref) => fetchCurrentSlug(ref, client)
+      case Some(ref) => fetchCurrentSlugResult(ref, client).asSome
       case None      => ZIO.none
     }
 
-  private def fetchCurrentSlug(ref: ClubMatchRef, client: ChessComClient): Task[Option[ClubSlug]] =
-    RefHelpers.fetchTeamMatchTeams(client, ref.matchId, ref.isLive).map { teams =>
+  private def fetchCurrentSlugResult(ref: ClubMatchRef, client: ChessComClient): Task[FetchResult[Option[ClubSlug]]] =
+    RefHelpers.fetchTeamMatchTeamsResult(client, ref.matchId, ref.isLive).map(_.map { teams =>
       val team = if (ref.isTeam1) { teams.team1 } else { teams.team2 }
-      team.`@id`.path.segments.lastOption.map(ClubSlug.wrap)
-    }
+      ClubSlug.fromUrlOption(team.`@id`)
+    })
 
   private def resolveStaleSlug(stale: Club, client: ChessComClient): ZIO[PostgresClient, Throwable, Unit] =
     slugFromMatchRef(stale.clubId, client).flatMap {

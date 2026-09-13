@@ -46,6 +46,12 @@ sealed trait FetchResult[+T] {
     ifChanged: FetchResult.Changed[T] => ZIO[R, E, A]
   ): ZIO[R, E, A] =
     foldZIO(missing => ZIO.fail(missing.cause), ifUnchanged, ifChanged)
+
+  /** Structure-preserving projection: keeps the Missing/Fresh/Revalidated/IdenticalBody/Changed shape and each
+    * `Unchanged` variant's `bodyId`, transforming only the eventual value. `f` must be pure and total — for
+    * [[FetchResult.Changed]], whose `getValue` is already eager, `f` runs immediately.
+    */
+  def map[B](f: T => B): FetchResult[B]
 }
 
 object FetchResult {
@@ -62,6 +68,8 @@ object FetchResult {
       ifUnchanged: Unchanged[Nothing] => ZIO[R, E, A],
       ifChanged: Changed[Nothing] => ZIO[R, E, A]
     ): ZIO[R, E, A] = ifMissing(this)
+
+    override def map[B](f: Nothing => B): FetchResult[B] = this
   }
 
   /** The cache-hit variants, which differ only in how the layer concluded "unchanged". */
@@ -82,7 +90,9 @@ object FetchResult {
   final case class Fresh[T] private[client] (
     bodyId: ApiResponseBodyId,
     getValue: Task[T]
-  ) extends Unchanged[T]
+  ) extends Unchanged[T] {
+    override def map[B](f: T => B): FetchResult[B] = Fresh(bodyId, getValue.map(f))
+  }
 
   /** Sent a conditional GET (`If-None-Match` / `If-Modified-Since`) and the server returned `304 Not Modified`.
     * The cached row's `fetched_at` is refreshed as a side effect. No body was loaded from DB; `getValue` does it
@@ -91,7 +101,9 @@ object FetchResult {
   final case class Revalidated[T] private[client] (
     bodyId: ApiResponseBodyId,
     getValue: Task[T]
-  ) extends Unchanged[T]
+  ) extends Unchanged[T] {
+    override def map[B](f: T => B): FetchResult[B] = Revalidated(bodyId, getValue.map(f))
+  }
 
   /** Server returned `200` but the new body is byte-identical to what we had — `ApiResponseBody.putBody` deduped
     * via its SHA-256 hash and we got back the same `body_id`. The body is already in memory (we received it over
@@ -100,7 +112,9 @@ object FetchResult {
   final case class IdenticalBody[T] private[client] (
     bodyId: ApiResponseBodyId,
     getValue: Task[T]
-  ) extends Unchanged[T]
+  ) extends Unchanged[T] {
+    override def map[B](f: T => B): FetchResult[B] = IdenticalBody(bodyId, getValue.map(f))
+  }
 
   /** First fetch, or cache was stale and the server returned a new body. Already decoded at construction time so
     * any decode error surfaces from the fetch path rather than from `getValue`. `bodyId` is `None` when the write
@@ -115,5 +129,7 @@ object FetchResult {
       ifUnchanged: Unchanged[T] => ZIO[R, E, A],
       ifChanged: Changed[T] => ZIO[R, E, A]
     ): ZIO[R, E, A] = ifChanged(this)
+
+    override def map[B](f: T => B): FetchResult[B] = Changed(f(value), bodyId)
   }
 }

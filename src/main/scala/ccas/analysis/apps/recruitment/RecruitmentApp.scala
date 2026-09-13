@@ -503,9 +503,9 @@ object RecruitmentApp extends ZIOAppDefault {
     ZIO.whenZIODiscard(ClubMatchRef.findOrInfer(clubId).map(_.isEmpty)) {
       ZIO.foreachDiscard(clubMatches.finished.headOption) { m =>
         val parsed = RefHelpers.parseMatchUrl(m.`@id`)
-        RefHelpers.fetchTeamMatchTeams(client, parsed.matchId, parsed.isLive).flatMap { teams =>
-          ZIO.foreachDiscard(RefHelpers.findClubIsTeam1(teams, clubSlug)) { t1 =>
-            ClubMatchRef.upsert(ClubMatchRef(clubId, parsed.matchId, parsed.isLive, t1)).unit
+        RefHelpers.fetchTeamMatchTeamsOptional(client, parsed.matchId, parsed.isLive).flatMap { teamsOpt =>
+          ZIO.foreachDiscard(teamsOpt.flatMap(RefHelpers.findClubIsTeam1(_, clubSlug))) { isTeam1 =>
+            ClubMatchRef.upsert(ClubMatchRef(clubId, parsed.matchId, parsed.isLive, isTeam1)).unit
           }
         }
       }

@@ -4,11 +4,14 @@ import java.time.{Duration, Instant, LocalDateTime, ZoneOffset}
 
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 import zio.Chunk
+import zio.http.*
 
 import com.augustnagro.magnum.sql
 
+import ccas.analysis.apps.recruitment.RecruitmentTestSupport.notFoundBody
 import ccas.api.misc.enums.PlayerStatusCategory.{Active, Closed}
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username}
+import ccas.utils.client.{ReportedNotFound, TestChessComClientSupport}
 import ccas.utils.sql.FreshSchemaLayer
 import ccas.utils.sql.PostgresClient.connectZIO
 
@@ -29,6 +32,7 @@ object TestClubSql extends ZIOSpecDefault {
     testClubMatchRefUpsert,
     testClubMatchRefDelete,
     testClubMatchRefDeleteAll,
+    testUpsertResolvingSlugConflictPropagatesGenuine404,
     testReplaceSinceApproximate,
     testReplaceSinceNonApproximate,
     testClubAdminInsertAndSelect,
@@ -37,7 +41,7 @@ object TestClubSql extends ZIOSpecDefault {
     testClubAdminReplaceForClub
   ).provideShared(
     FreshSchemaLayer("test_club_sql", onInit = Tables.ensureTables)
-  ) @@ TestAspect.sequential
+  ) @@ TestAspect.sequential @@ TestAspect.withLiveClock
 
   private object Times {
     val t0: Instant = LocalDateTime.of(2025, 6, 1, 0, 0).toInstant(ZoneOffset.UTC)
@@ -218,6 +222,31 @@ object TestClubSql extends ZIOSpecDefault {
       resultB <- ClubMatchRef.selectId(refB.clubId)
     } yield assertTrue(resultA.isEmpty, resultB.isEmpty)
   }
+
+  // Regression for #258: `slugFromMatchRef`'s answer to a genuine API 404 (as opposed to "no ref in DB", which
+  // falls back to a placeholder slug) must still fail the whole upsert — this is the "must never silently accept
+  // absence" call site `foldPresentZIO` exists for. No prior test exercised this branch at all.
+  private def testUpsertResolvingSlugConflictPropagatesGenuine404 =
+    test("upsertResolvingSlugConflict propagates a genuine 404 on the stale club's match ref, slug untouched") {
+      val staleClub    = Club(ClubId(220), Times.t0, ClubSlug("contested-slug"), "Stale Club", None, None, None)
+      val incomingClub = Club(ClubId(221), Times.t0, ClubSlug("contested-slug"), "Incoming Club", None, None, None)
+      val matchId      = ClubMatchId(9600)
+      val routes = Routes(
+        Method.GET / "pub" / "match" / long("matchId") -> handler { (_: Long, _: Request) =>
+          Response.json(notFoundBody).status(Status.NotFound)
+        }
+      )
+      for {
+        _        <- Club.upsert(staleClub)
+        _        <- ClubMatchRef.insert(ClubMatchRef(staleClub.clubId, matchId, isLive = false, isTeam1 = true))
+        client   <- TestChessComClientSupport.fakeClient(routes)
+        result   <- Club.upsertResolvingSlugConflict(incomingClub, client).either
+        slugAfter <- Club.selectId(staleClub.clubId).map(_.map(_.slug))
+      } yield assertTrue(
+        result.left.exists(_.isInstanceOf[ReportedNotFound]),
+        slugAfter.contains(staleClub.slug)
+      )
+    }
 
   // --- ClubMember.replaceSince tests ---
 

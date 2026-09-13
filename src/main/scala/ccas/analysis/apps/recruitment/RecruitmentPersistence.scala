@@ -33,29 +33,22 @@ private[recruitment] object RecruitmentPersistence {
               // `insertIfNew`, not `insert`: a filter (e.g. CheckAdminOfDiscoveredClub via ClubAdminResolver) may have
               // already inserted this player into the table during evaluation, in which case the row is already current.
               Player.insertIfNew(
-                Player(
-                  ap.playerId,
-                  ap.joinedAt,
-                  candidate.username,
-                  ap.status.category,
-                  ap.title,
-                  now
-                )
+                Player(ap.playerId, ap.joinedAt, candidate.username, ap.status.category, ap.title, now)
               ).unit
             } else {
               Player.selectIdForUpdate(ap.playerId).flatMap {
-                case Some(existing) if existing.stateMatches(candidate.username, ap.status.category, ap.title) =>
-                  ZIO.unit
-                case Some(existing) =>
-                  PlayerUpdater.archiveAndUpdate(
-                    existing,
-                    candidate.username,
-                    ap.status.category,
-                    ap.title,
-                    now,
-                    client
-                  ).unit
-                case None => ZIO.unit
+                ZIO.foreachDiscard(_) { existing =>
+                  ZIO.whenDiscard(!existing.stateMatches(candidate.username, ap.status.category, ap.title)) {
+                    PlayerUpdater.archiveAndUpdate(
+                      existing = existing,
+                      newUsername = candidate.username,
+                      newStatus = ap.status.category,
+                      newTitle = ap.title,
+                      since = now,
+                      client = client
+                    ).unit
+                  }
+                }
               }
             }
           _ <- ZIO.foreachDiscard(candidate.cache)(PlayerRecruitmentCache.upsert)
@@ -93,9 +86,9 @@ private[recruitment] object RecruitmentPersistence {
       val parsed   = RefHelpers.parseMatchUrl(m.`@id`)
       val boardIdx = m.board.get.path.segments.lastOption.flatMap(_.toIntOption).map(_.toShort)
       ZIO.foreachDiscard(boardIdx) { idx =>
-        RefHelpers.fetchTeamMatchTeams(client, parsed.matchId, parsed.isLive).flatMap { teams =>
-          ZIO.foreachDiscard(RefHelpers.findPlayerIsTeam1(teams, username)) { t1 =>
-            PlayerMatchRef.upsert(PlayerMatchRef(playerId, parsed.matchId, parsed.isLive, t1, idx)).unit
+        RefHelpers.fetchTeamMatchTeamsOptional(client, parsed.matchId, parsed.isLive).flatMap { teamsOpt =>
+          ZIO.foreachDiscard(teamsOpt.flatMap(RefHelpers.findPlayerIsTeam1(_, username))) { isTeam1 =>
+            PlayerMatchRef.upsert(PlayerMatchRef(playerId, parsed.matchId, parsed.isLive, isTeam1, idx)).unit
           }
         }
       }

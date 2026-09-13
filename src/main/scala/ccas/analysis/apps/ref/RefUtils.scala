@@ -8,7 +8,7 @@ import zio.{Promise, Ref, UIO}
 import ccas.analysis.tables.{MatchKey, RefSkipReason}
 import ccas.api.clubmatch.TeamMatchTeams
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, TournamentSlug, Username}
-import ccas.utils.client.ChessComClient
+import ccas.utils.client.{ChessComClient, ReportedNotFound}
 
 private[ref] object RefUtils {
 
@@ -31,7 +31,7 @@ private[ref] object RefUtils {
     val ResolutionFailed: Long = 7
     val ApiError: Long         = 3
 
-    def cutoff(reason: RefSkipReason, now: Instant): Instant = {
+    private def cutoff(reason: RefSkipReason, now: Instant): Instant = {
       val days = reason match {
         case RefSkipReason.NoData           => NoData
         case RefSkipReason.NotFound         => NotFound
@@ -61,7 +61,7 @@ private[ref] object RefUtils {
 
   class RefContext(
     val client: ChessComClient,
-    val cache: Ref[Map[MatchKey, Promise[Throwable, TeamMatchTeams]]],
+    val cache: Ref[Map[MatchKey, Promise[Throwable, Either[ReportedNotFound, TeamMatchTeams]]]],
     val failedUrls: Ref[Map[String, String]],
     val failedUrlSource: Ref[Map[String, String]],
     val clubsResolvedDb: Ref[Int],
@@ -80,7 +80,7 @@ private[ref] object RefUtils {
   object RefContext {
     def make(client: ChessComClient): UIO[RefContext] =
       for {
-        cache              <- Ref.make(Map.empty[MatchKey, Promise[Throwable, TeamMatchTeams]])
+        cache              <- Ref.make(Map.empty[MatchKey, Promise[Throwable, Either[ReportedNotFound, TeamMatchTeams]]])
         failedUrls         <- Ref.make(Map.empty[String, String])
         failedUrlSource    <- Ref.make(Map.empty[String, String])
         clubsResolvedDb    <- Ref.make(0)
@@ -95,21 +95,21 @@ private[ref] object RefUtils {
         playerTournamentsUnchanged <- Ref.make(0)
         clubMatchesUnchanged      <- Ref.make(0)
       } yield new RefContext(
-        client,
-        cache,
-        failedUrls,
-        failedUrlSource,
-        clubsResolvedDb,
-        clubsResolvedApi,
-        playersResolvedDb,
-        playersResolvedApi,
-        skippedPlayers,
-        playersSkippedNew,
-        clubsSkippedNew,
-        newTournamentRefPlayerIds,
-        playerMatchesUnchanged,
-        playerTournamentsUnchanged,
-        clubMatchesUnchanged
+        client = client,
+        cache = cache,
+        failedUrls = failedUrls,
+        failedUrlSource = failedUrlSource,
+        clubsResolvedDb = clubsResolvedDb,
+        clubsResolvedApi = clubsResolvedApi,
+        playersResolvedDb = playersResolvedDb,
+        playersResolvedApi = playersResolvedApi,
+        skippedPlayers = skippedPlayers,
+        playersSkippedNew = playersSkippedNew,
+        clubsSkippedNew = clubsSkippedNew,
+        newTournamentRefPlayerIds = newTournamentRefPlayerIds,
+        playerMatchesUnchanged = playerMatchesUnchanged,
+        playerTournamentsUnchanged = playerTournamentsUnchanged,
+        clubMatchesUnchanged = clubMatchesUnchanged
       )
   }
 

@@ -275,8 +275,8 @@ object ClubDataApp extends ZIOAppDefault {
         case Some(_) => ZIO.unit
         case None =>
           val parsed = RefHelpers.parseMatchUrl(matches.finished.head.`@id`)
-          RefHelpers.fetchTeamMatchTeams(client, parsed.matchId, parsed.isLive).flatMap { teams =>
-            ZIO.foreachDiscard(RefHelpers.findClubIsTeam1(teams, slug)) { isTeam1 =>
+          RefHelpers.fetchTeamMatchTeamsOptional(client, parsed.matchId, parsed.isLive).flatMap { teamsOpt =>
+            ZIO.foreachDiscard(teamsOpt.flatMap(RefHelpers.findClubIsTeam1(_, slug))) { isTeam1 =>
               ClubMatchRef.upsert(ClubMatchRef(clubId, parsed.matchId, parsed.isLive, isTeam1)).unit
             }
           }
