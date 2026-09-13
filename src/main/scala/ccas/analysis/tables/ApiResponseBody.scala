@@ -70,6 +70,16 @@ object ApiResponseBody {
     }.someOrFail(new SQLException("INSERT RETURNING produced no rows"))
       .map(ApiResponseBodyId.wrap)
 
+  /** Resolve a body's SHA-256 hash from its surrogate id — a tiny indexed Neon read, no object-store I/O. Lets a
+    * caller fingerprint a fetch's content (e.g. as a durable, self-contained marker in its own table) without
+    * pulling in `BodyStore` or paying for the body itself.
+    */
+  def hashById(bodyId: ApiResponseBodyId): ZIO[PostgresClient, SQLException, Option[String]] =
+    connectZIO {
+      val raw = ApiResponseBodyId.unwrap(bodyId)
+      sql"SELECT body_hash FROM api_response_body WHERE body_id = $raw".query[String].run().headOption
+    }
+
   /** Read a cached body by id: resolve the hash-pointer row (a tiny Neon read) then load the bytes from the
     * [[BodyStore]]. Used by `FetchResult.Fresh` / `Revalidated` lazy-loading. Every non-`Found` outcome is a cache
     * miss the caller heals with a network refetch — see [[BodyRead]] for why the two failure cases get different
@@ -77,10 +87,7 @@ object ApiResponseBody {
     * back 304, leaving us with metadata and still no body.
     */
   def loadById(bodyId: ApiResponseBodyId): ZIO[PostgresClient & BodyStore, SQLException, BodyRead[String]] =
-    connectZIO {
-      val raw = ApiResponseBodyId.unwrap(bodyId)
-      sql"SELECT body_hash FROM api_response_body WHERE body_id = $raw".query[String].run().headOption
-    }.flatMap {
+    hashById(bodyId).flatMap {
       case Some(hash) => BodyStore.read(hash).map(_.map(bytes => new String(bytes, StandardCharsets.UTF_8)))
       case None       => ZIO.succeed(BodyRead.NotStored)
     }

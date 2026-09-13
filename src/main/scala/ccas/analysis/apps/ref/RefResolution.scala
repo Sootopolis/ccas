@@ -377,7 +377,7 @@ private[ref] object RefResolution {
           case Some(_) => ifSkipped
           case None    => unchanged.getValue.flatMap(onBody)
         },
-      ifChanged = onBody
+      ifChanged = changed => onBody(changed.value)
     )
 
   // --- Match fetching ---

@@ -174,7 +174,10 @@ private[history] object HistoryBoardBuilder {
       team1ScoreX2 = (teams.team1.score * 2).toShort,
       team2ClubId = team2ClubId,
       team2ScoreX2 = (teams.team2.score * 2).toShort,
-      fetchedAt = Instant.now()
+      fetchedAt = Instant.now(),
+      // Only the settled-refresh path (HistoryProcessing.refreshSingleMatchWithBody) knows the fetch's content
+      // hash; it overrides this via `.copy` before upserting. Every other caller leaves it unset.
+      processedBodyHash = None
     )
   }
 }

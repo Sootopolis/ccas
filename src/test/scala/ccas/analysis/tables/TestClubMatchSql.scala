@@ -51,7 +51,8 @@ object TestClubMatchSql extends ZIOSpecDefault {
     testClubMatchBoardUpdatePlayerId,
     testClubMatchBoardInferPlayerMatchRefIsLive,
     testPlayerMatchRefUpsert,
-    testPlayerMatchRefFindOrInfer
+    testPlayerMatchRefFindOrInfer,
+    testClubMatchSelectProcessedBodyHash
   ).provideShared(
     FreshSchemaLayer("test_club_match_sql", onInit = Tables.ensureTables)
   ) @@ TestAspect.sequential
@@ -84,7 +85,8 @@ object TestClubMatchSql extends ZIOSpecDefault {
     team1ScoreX2 = 12,
     team2ClubId = Some(clubB.clubId),
     team2ScoreX2 = 8,
-    fetchedAt = Times.t2
+    fetchedAt = Times.t2,
+    processedBodyHash = None
   )
 
   private val matchInProgress = ClubMatch(
@@ -99,7 +101,8 @@ object TestClubMatchSql extends ZIOSpecDefault {
     team1ScoreX2 = 4,
     team2ClubId = None,
     team2ScoreX2 = 2,
-    fetchedAt = Times.t2
+    fetchedAt = Times.t2,
+    processedBodyHash = None
   )
 
   // --- ClubMatch tests ---
@@ -798,6 +801,22 @@ object TestClubMatchSql extends ZIOSpecDefault {
       } yield assertTrue(
         dailyRef.exists(r => !r.isLive && r.isTeam1 && r.matchId == dailyMatch.matchId && r.boardIdx == 1),
         liveRef.exists(r => r.isLive && !r.isTeam1 && r.matchId == liveMatch.matchId && r.boardIdx == 2)
+      )
+    }
+
+  private def testClubMatchSelectProcessedBodyHash =
+    test("selectProcessedBodyHash round-trips through upsert; None for an unset marker and for an unknown match") {
+      val withMarker = matchFinished.copy(processedBodyHash = Some("deadbeef"))
+      for {
+        unset   <- ClubMatch.selectProcessedBodyHash(matchFinished.matchId) // matchFinished currently has no marker
+        _       <- ClubMatch.upsert(withMarker)
+        set     <- ClubMatch.selectProcessedBodyHash(matchFinished.matchId)
+        unknown <- ClubMatch.selectProcessedBodyHash(ClubMatchId(99_999))
+        _       <- ClubMatch.upsert(matchFinished) // restore for downstream tests
+      } yield assertTrue(
+        unset.isEmpty,
+        set.contains("deadbeef"),
+        unknown.isEmpty
       )
     }
 }

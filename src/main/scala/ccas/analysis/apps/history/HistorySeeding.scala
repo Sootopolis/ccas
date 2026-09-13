@@ -178,7 +178,12 @@ private[history] object HistorySeeding {
   ): RIO[ProgressDisplay & PostgresClient, Int] = {
     def fetch(slug: ClubSlug): RIO[PostgresClient, Int] =
       client.getResult[ApiClubMatches](ApiClubMatches.getUrl(slug))
-        .flatMap(_.foldPresentZIO(_ => unchangedCounter.update(_ + 1).as(0), insertPendingFromClubMatches(clubId, _)))
+        .flatMap(
+          _.foldPresentZIO(
+            _ => unchangedCounter.update(_ + 1).as(0),
+            changed => insertPendingFromClubMatches(clubId, changed.value)
+          )
+        )
     fetch(clubSlug)
       .withClubSlugRenameRecovery(client, clubSlug, Some(clubId))(fetch)
       .catchAll { error =>
@@ -307,7 +312,10 @@ private[history] object HistorySeeding {
             otherClubs <- sc.resolvedClubs.get.map(_.removed(clubSlug).toList)
             primaryCount <- result.foldPresentZIO(
               _ => unchangedCounter.update(_ + 1) *> stampQueriedAllClubs(clubId, otherClubs, playerId).as(0),
-              seedAndStampAllClubs(clubId, clubSlug, excludeMatchIds, includeFinished, sc, otherClubs, playerId, _)
+              changed =>
+                seedAndStampAllClubs(
+                  clubId, clubSlug, excludeMatchIds, includeFinished, sc, otherClubs, playerId, changed.value
+                )
             )
             _ <- sc.queriedPlayers.update(_ + playerId)
           } yield primaryCount
@@ -408,7 +416,7 @@ private[history] object HistorySeeding {
       client.getResult[ApiPlayerMatches](ApiPlayerMatches.getUrl(uname)).flatMap {
         _.foldPresentZIO(
           _ => unchangedCounter.update(_ + 1) *> stamp.as(0),
-          seedMatchesFromPlayerMatches(clubId, clubSlug, excludeMatchIds, _).zipLeft(stamp)
+          changed => seedMatchesFromPlayerMatches(clubId, clubSlug, excludeMatchIds, changed.value).zipLeft(stamp)
         )
       }
     fetch(username).withPlayerRenameRecovery(client, username, Some(playerId))(fetch)

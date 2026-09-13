@@ -27,12 +27,14 @@ sealed trait FetchResult[+T] {
     * change" pays no body-load or decode cost.
     *
     * Dispatched via `final` overrides rather than a pattern match, which avoids an erased
-    * `case c: Changed[T @unchecked]` cast and lets the compiler verify each branch end-to-end.
+    * `case c: Changed[T @unchecked]` cast and lets the compiler verify each branch end-to-end. `ifChanged` receives
+    * the whole [[FetchResult.Changed]], symmetric with `ifUnchanged`, so a caller needing its `bodyId` never has to
+    * pattern-match `FetchResult` itself to get it.
     */
   def foldZIO[R, E >: Throwable, A](
     ifMissing: FetchResult.Missing => ZIO[R, E, A],
     ifUnchanged: FetchResult.Unchanged[T] => ZIO[R, E, A],
-    ifChanged: T => ZIO[R, E, A]
+    ifChanged: FetchResult.Changed[T] => ZIO[R, E, A]
   ): ZIO[R, E, A]
 
   /** [[foldZIO]] for a caller whose answer to absence is "fail": it raises the reported 404, which is what the
@@ -41,7 +43,7 @@ sealed trait FetchResult[+T] {
     */
   final def foldPresentZIO[R, E >: Throwable, A](
     ifUnchanged: FetchResult.Unchanged[T] => ZIO[R, E, A],
-    ifChanged: T => ZIO[R, E, A]
+    ifChanged: FetchResult.Changed[T] => ZIO[R, E, A]
   ): ZIO[R, E, A] =
     foldZIO(missing => ZIO.fail(missing.cause), ifUnchanged, ifChanged)
 }
@@ -58,7 +60,7 @@ object FetchResult {
     override def foldZIO[R, E >: Throwable, A](
       ifMissing: Missing => ZIO[R, E, A],
       ifUnchanged: Unchanged[Nothing] => ZIO[R, E, A],
-      ifChanged: Nothing => ZIO[R, E, A]
+      ifChanged: Changed[Nothing] => ZIO[R, E, A]
     ): ZIO[R, E, A] = ifMissing(this)
   }
 
@@ -69,7 +71,7 @@ object FetchResult {
     final override def foldZIO[R, E >: Throwable, A](
       ifMissing: Missing => ZIO[R, E, A],
       ifUnchanged: Unchanged[T] => ZIO[R, E, A],
-      ifChanged: T => ZIO[R, E, A]
+      ifChanged: Changed[T] => ZIO[R, E, A]
     ): ZIO[R, E, A] = ifUnchanged(this)
   }
 
@@ -101,15 +103,17 @@ object FetchResult {
   ) extends Unchanged[T]
 
   /** First fetch, or cache was stale and the server returned a new body. Already decoded at construction time so
-    * any decode error surfaces from the fetch path rather than from `getValue`.
+    * any decode error surfaces from the fetch path rather than from `getValue`. `bodyId` is `None` when the write
+    * that would have produced one didn't happen — cache writes disabled, `no-store`, or a body-store outage — mirrors
+    * why `newBodyIdOpt` can be absent in `ChessComClient.handleSuccessBody`.
     */
-  final case class Changed[T] private[client] (value: T) extends FetchResult[T] {
+  final case class Changed[+T] private[client] (value: T, bodyId: Option[ApiResponseBodyId]) extends FetchResult[T] {
     override val getValue: Task[T] = ZIO.succeed(value)
 
     override def foldZIO[R, E >: Throwable, A](
       ifMissing: Missing => ZIO[R, E, A],
       ifUnchanged: Unchanged[T] => ZIO[R, E, A],
-      ifChanged: T => ZIO[R, E, A]
-    ): ZIO[R, E, A] = ifChanged(value)
+      ifChanged: Changed[T] => ZIO[R, E, A]
+    ): ZIO[R, E, A] = ifChanged(this)
   }
 }

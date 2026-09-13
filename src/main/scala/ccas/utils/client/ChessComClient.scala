@@ -275,7 +275,7 @@ final class ChessComClient(
         case (Some(newBodyId), Some(oldBodyId)) if newBodyId == oldBodyId =>
           statsRef.update(_.incCacheHit).as(FetchResult.IdenticalBody(newBodyId, decodeLazy))
         case _ =>
-          statsRef.update(_.incCacheMiss) *> decodeLazy.map(FetchResult.Changed(_))
+          statsRef.update(_.incCacheMiss) *> decodeLazy.map(FetchResult.Changed(_, newBodyIdOpt))
       }
     } yield result
   }

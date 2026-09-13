@@ -251,7 +251,7 @@ object ClubDataApp extends ZIOAppDefault {
   private def fetchClubMatches(client: ChessComClient, clubSlug: ClubSlug): Task[Option[ApiClubMatches]] =
     client
       .getResult[ApiClubMatches](ApiClubMatches.getUrl(clubSlug))
-      .flatMap(_.foldPresentZIO(_ => ZIO.none, matches => ZIO.some(matches)))
+      .flatMap(_.foldPresentZIO(_ => ZIO.none, changed => ZIO.some(changed.value)))
 
   /** Returns the most recent activity timestamp: `now` if any registered match exists (signalling current activity),
     * otherwise the max `start_time` across in-progress and finished matches.

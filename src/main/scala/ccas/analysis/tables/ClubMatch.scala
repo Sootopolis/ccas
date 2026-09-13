@@ -25,7 +25,11 @@ final case class ClubMatch(
   team1ScoreX2: Short,
   team2ClubId: Option[ClubId],
   team2ScoreX2: Short,
-  fetchedAt: Instant
+  fetchedAt: Instant,
+  // SHA-256 of the fetch body last confirmed to have produced this row's `club_match_board` state; `None` always
+  // forces a real reprocess rather than trusting `FetchResult.Unchanged` alone. A content hash, not the client
+  // cache's surrogate `body_id` — self-contained application data even if the cache is wiped. Why: issue #257.
+  processedBodyHash: Option[String]
 ) derives DbCodec
 
 object ClubMatch {
@@ -46,7 +50,8 @@ object ClubMatch {
               team1_score_x2  SMALLINT NOT NULL,
               team2_club_id   BIGINT REFERENCES club (club_id) ON DELETE RESTRICT,
               team2_score_x2  SMALLINT NOT NULL,
-              fetched_at      TIMESTAMPTZ NOT NULL
+              fetched_at      TIMESTAMPTZ NOT NULL,
+              processed_body_hash TEXT
             )""".update.run()
       sql"""CREATE INDEX IF NOT EXISTS idx_club_match_team1_club ON club_match (team1_club_id)""".update.run()
       sql"""CREATE INDEX IF NOT EXISTS idx_club_match_team2_club ON club_match (team2_club_id)""".update.run()
@@ -144,19 +149,19 @@ object ClubMatch {
     connectZIO {
       sql"""INSERT INTO club_match (match_id, name, status, time_class, start_time, end_time, boards,
               team1_club_id, team1_score_x2,
-              team2_club_id, team2_score_x2, fetched_at)
+              team2_club_id, team2_score_x2, fetched_at, processed_body_hash)
             VALUES (${item.matchId}, ${item.name}, ${item.status}, ${item.timeClass},
               ${item.startTime}, ${item.endTime}, ${item.boards},
               ${item.team1ClubId}, ${item.team1ScoreX2},
               ${item.team2ClubId}, ${item.team2ScoreX2},
-              ${item.fetchedAt})
+              ${item.fetchedAt}, ${item.processedBodyHash})
             ON CONFLICT (match_id) DO UPDATE SET
               name = EXCLUDED.name, status = EXCLUDED.status,
               time_class = EXCLUDED.time_class, start_time = EXCLUDED.start_time, end_time = EXCLUDED.end_time,
               boards = EXCLUDED.boards,
               team1_club_id = EXCLUDED.team1_club_id, team1_score_x2 = EXCLUDED.team1_score_x2,
               team2_club_id = EXCLUDED.team2_club_id, team2_score_x2 = EXCLUDED.team2_score_x2,
-              fetched_at = EXCLUDED.fetched_at""".update.run()
+              fetched_at = EXCLUDED.fetched_at, processed_body_hash = EXCLUDED.processed_body_hash""".update.run()
     }
 
   /** Counts settled matches (finished + past stale window) with `fetchedAt` before the given cutoff. */
@@ -204,6 +209,13 @@ object ClubMatch {
     connectZIO {
       sql"UPDATE club_match SET fetched_at = $at WHERE match_id = $matchId".update.run()
     }
+
+  /** The `processed_body_hash` marker `refreshSingleMatch` compares a fetch's content hash against. `None` for a
+    * nonexistent row and for a row that has never had the marker recorded are indistinguishable — both correctly
+    * force a reprocess.
+    */
+  def selectProcessedBodyHash(matchId: ClubMatchId): ZIO[PostgresClient, SQLException, Option[String]] =
+    selectId(matchId).map(_.flatMap(_.processedBodyHash))
 
   // Terminal state for matches that 404 with Chess.com's permanent "not found" body. Returns rows affected so
   // callers can detect orphan match IDs not in club_match (rowsAffected = 0).

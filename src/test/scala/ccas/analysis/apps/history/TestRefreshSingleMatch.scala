@@ -3,12 +3,13 @@ package ccas.analysis.apps.history
 import java.time.{Duration, Instant, LocalDateTime, ZoneOffset}
 
 import com.augustnagro.magnum.sql
-import zio.{Ref, RIO}
+import zio.{Ref, RIO, ZIO}
 import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, TestResult, ZIOSpecDefault}
 
 import ccas.analysis.apps.history.HistoryUtils.ProcessingContext
 import ccas.analysis.tables.{
+  ApiResponseBody,
   ApiResponseCache,
   Club,
   ClubMatch,
@@ -24,6 +25,7 @@ import ccas.api.misc.enums.{ClubMatchStatus, TimeClass}
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug}
 import ccas.utils.ProgressDisplay
 import ccas.utils.client.{BodyStore, TestChessComClientSupport}
+import ccas.utils.json.JsonDecodingException
 import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
 import ccas.utils.sql.PostgresClient.connectZIO
 
@@ -47,24 +49,25 @@ object TestRefreshSingleMatch extends ZIOSpecDefault {
     */
   private val initialFetchedAt: Instant = Instant.EPOCH
 
-  private def clubMatchRow(matchId: Long): ClubMatch =
+  private def clubMatchRow(matchId: Long, processedBodyHash: Option[String]): ClubMatch =
     ClubMatch(
-      matchId      = ClubMatchId(matchId),
-      name         = s"Match $matchId",
-      status       = ClubMatchStatus.Finished,
-      timeClass    = TimeClass.Daily,
-      startTime    = Some(t0),
-      endTime      = Some(t0.plus(Duration.ofDays(7))),
-      boards       = 10,
-      team1ClubId  = Some(clubId),
-      team1ScoreX2 = 10,
-      team2ClubId  = Some(opponentId),
-      team2ScoreX2 = 10,
-      fetchedAt    = initialFetchedAt
+      matchId           = ClubMatchId(matchId),
+      name              = s"Match $matchId",
+      status            = ClubMatchStatus.Finished,
+      timeClass         = TimeClass.Daily,
+      startTime         = Some(t0),
+      endTime           = Some(t0.plus(Duration.ofDays(7))),
+      boards            = 10,
+      team1ClubId       = Some(clubId),
+      team1ScoreX2      = 10,
+      team2ClubId       = Some(opponentId),
+      team2ScoreX2      = 10,
+      fetchedAt         = initialFetchedAt,
+      processedBodyHash = processedBodyHash
     )
 
-  private def seedFixtures(matchId: Long): RIO[PostgresClient, Unit] =
-    Club.upsert(club) *> Club.upsert(opponentClub) *> ClubMatch.upsert(clubMatchRow(matchId)).unit
+  private def seedFixtures(matchId: Long, processedBodyHash: Option[String]): RIO[PostgresClient, Unit] =
+    Club.upsert(club) *> Club.upsert(opponentClub) *> ClubMatch.upsert(clubMatchRow(matchId, processedBodyHash)).unit
 
   private def runRefresh(ctx: ProcessingContext, matchId: ClubMatchId): RIO[PostgresClient, Unit] =
     HistoryProcessing.refreshSingleMatch(ctx, matchId)
@@ -90,9 +93,10 @@ object TestRefreshSingleMatch extends ZIOSpecDefault {
       unresolvedPlayers.isEmpty
     )
 
-  /** Drives one Unchanged-variant scenario end-to-end: seed fixtures, pre-seed cache, build a counting fake client
-    * around the supplied route response, run `refreshSingleMatch` once, assert counter / fetched_at / no downstream
-    * writes / expected route hit count.
+  /** Drives one Unchanged-variant scenario end-to-end: pre-seed the cache, seed `club_match` with a matching
+    * `processedBodyHash` marker (the trusted-skip precondition — see [[HistoryProcessing.refreshSingleMatch]]),
+    * build a counting fake client around the supplied route response, run `refreshSingleMatch` once, assert
+    * counter / fetched_at / no downstream writes / expected route hit count.
     */
   private def runUnchangedCase(
     matchId: ClubMatchId,
@@ -102,8 +106,8 @@ object TestRefreshSingleMatch extends ZIOSpecDefault {
   )(routeResponse: => Response): RIO[PostgresClient & BodyStore, TestResult] = {
     val url = ApiDailyMatch.getUrl(matchId).encode
     for {
-      _ <- seedFixtures(matchId.value)
-      _ <- ApiResponseCache.upsertWithBody(
+      _ <- Club.upsert(club) *> Club.upsert(opponentClub)
+      bodyId <- ApiResponseCache.upsertWithBody(
         url           = url,
         body          = cannedBody,
         etag          = Some("\"v1\""),
@@ -112,6 +116,8 @@ object TestRefreshSingleMatch extends ZIOSpecDefault {
         contentType   = Some("application/json"),
         fetchedAt     = cacheFetchedAt
       )
+      hash <- bodyId.fold[RIO[PostgresClient, Option[String]]](ZIO.none)(ApiResponseBody.hashById)
+      _    <- ClubMatch.upsert(clubMatchRow(matchId.value, hash))
       netCalls <- Ref.make(0)
       routes = Routes(
         Method.GET / "pub" / "match" / long("matchId") -> handler { (_: Long, _: Request) =>
@@ -135,11 +141,55 @@ object TestRefreshSingleMatch extends ZIOSpecDefault {
     ) && downstream
   }
 
+  /** Minimal decodable `ApiDailyMatchFinished` body: 0 boards, no players on either team, so `computeExpectedScores`
+    * is empty and `scoresMatch` trivially holds — `refreshSingleMatchWithBody` takes its cheap `boardSkip` branch
+    * (a plain `ClubMatch.upsert`) without exercising board/player resolution. Team `@id`s match `club`/`opponentClub`'s
+    * slugs so `resolveClubIdFromTeamUrl` resolves locally, no network round trip.
+    */
+  private def minimalFinishedMatchBody(matchId: Long): String =
+    s"""{
+      "@id": "https://api.chess.com/pub/match/$matchId",
+      "name": "Match $matchId",
+      "url": "https://www.chess.com/club/matches/$matchId",
+      "start_time": ${t0.getEpochSecond},
+      "end_time": ${t0.plus(Duration.ofDays(7)).getEpochSecond},
+      "status": "finished",
+      "boards": 0,
+      "settings": {
+        "rules": "chess",
+        "time_class": "daily",
+        "time_control": "1/259200",
+        "min_required_games": 0
+      },
+      "teams": {
+        "team1": {
+          "@id": "https://api.chess.com/pub/club/${clubSlug.value}",
+          "name": "Test Club",
+          "url": "https://www.chess.com/club/${clubSlug.value}",
+          "score": 0,
+          "result": "draw",
+          "players": [],
+          "fair_play_removals": []
+        },
+        "team2": {
+          "@id": "https://api.chess.com/pub/club/other",
+          "name": "Other Club",
+          "url": "https://www.chess.com/club/other",
+          "score": 0,
+          "result": "draw",
+          "players": [],
+          "fair_play_removals": []
+        }
+      }
+    }"""
+
   override def spec: Spec[Any, Throwable] = suite("refreshSingleMatch unchanged path")(
     testFreshSkipsNetworkAndPipeline,
     testRevalidatedSkipsPipeline,
     testIdenticalBodySkipsPipeline,
-    testPermanent404FlipsToAborted
+    testPermanent404FlipsToAborted,
+    testUnmarkedUnchangedForcesReprocess,
+    testChangedRecordsMarkerTrustedByLaterUnchanged
   ).provideShared(
     FreshSchemaLayer("test_refresh_single_match", Tables.ensureTables)
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock
@@ -204,7 +254,7 @@ object TestRefreshSingleMatch extends ZIOSpecDefault {
       // Use t0-based offsets (t0 = 2025-06-01) for deterministic dates regardless of suite run-time.
       val endTime    = t0.plus(Duration.ofDays(7))   // 2025-06-08
       val fetchedAt  = endTime.plus(Duration.ofDays(95)) // 2025-09-11; past stale window, before "now"
-      val settledRow = clubMatchRow(matchId.value).copy(
+      val settledRow = clubMatchRow(matchId.value, None).copy(
         endTime     = Some(endTime),
         fetchedAt   = fetchedAt,
         team1ClubId = Some(isolatedClubId),
@@ -232,6 +282,80 @@ object TestRefreshSingleMatch extends ZIOSpecDefault {
         aborted == 1,
         // Aborted is treated as a successful terminal transition, not a failure: refreshed counter = 1.
         refreshed == 1
+      )
+    }
+
+  // Regression test for #257: a row with no recorded `processedBodyHash` must not be trusted just because the
+  // client reports `Unchanged` — `refreshSingleMatch` must actually attempt the value. `cannedBody` isn't valid
+  // `ApiDailyMatch` JSON, so the decode failure is the proof it took the reprocess branch, not a silent skip.
+  private def testUnmarkedUnchangedForcesReprocess =
+    test("Unchanged with no recorded marker forces a decode attempt instead of trusting the cache") {
+      val matchId = ClubMatchId(8004)
+      val url     = ApiDailyMatch.getUrl(matchId).encode
+      for {
+        _ <- seedFixtures(matchId.value, None)
+        _ <- ApiResponseCache.upsertWithBody(
+          url           = url,
+          body          = cannedBody,
+          etag          = Some("\"v1\""),
+          lastModified  = None,
+          maxAgeSeconds = Some(3600), // within max-age: would be `Fresh` and skip the network entirely
+          contentType   = Some("application/json"),
+          fetchedAt     = Instant.now()
+        )
+        routes = Routes(
+          Method.GET / "pub" / "match" / long("matchId") -> handler { (_: Long, _: Request) =>
+            Response.json(cannedBody)
+          }
+        )
+        client         <- TestChessComClientSupport.fakeClient(routes)
+        ctx            <- ProcessingContext.make(client, clubId, clubSlug, Map.empty)
+        result         <- runRefresh(ctx, matchId).either
+        unchangedCount <- ctx.refreshMatchUnchanged.get
+        rowAfter       <- ClubMatch.selectId(matchId)
+      } yield assertTrue(
+        result.left.exists(_.isInstanceOf[JsonDecodingException]),
+        unchangedCount == 0, // never reached the trusted-skip branch
+        rowAfter.exists(_.fetchedAt == initialFetchedAt) // no updateFetchedAt on the failed-decode path
+      )
+    }
+
+  // Companion to the above: proves the marker mechanism's other half — a real write does record
+  // `processedBodyHash`, and a later fetch reporting the same content hash as `Unchanged` is then correctly
+  // trusted (skips without decoding).
+  private def testChangedRecordsMarkerTrustedByLaterUnchanged =
+    test("Changed records processedBodyHash; a later Unchanged fetch with the same content hash is trusted") {
+      val matchId = ClubMatchId(8006)
+      val body    = minimalFinishedMatchBody(matchId.value)
+      for {
+        _ <- seedFixtures(matchId.value, None)
+        netCalls <- Ref.make(0)
+        routes = Routes(
+          Method.GET / "pub" / "match" / long("matchId") -> handler { (_: Long, _: Request) =>
+            netCalls.update(_ + 1).as(
+              Response.json(body)
+                .addHeader(Header.CacheControl.MaxAge(3600))
+                .addHeader(Header.ETag.Strong("v1"))
+            )
+          }
+        )
+        client <- TestChessComClientSupport.fakeClient(routes)
+        ctx    <- ProcessingContext.make(client, clubId, clubSlug, Map.empty)
+
+        _            <- runRefresh(ctx, matchId) // Changed: writes club_match with the fetch's content hash as the marker
+        afterFirst   <- ClubMatch.selectId(matchId)
+        markerAfterFirst = afterFirst.flatMap(_.processedBodyHash)
+
+        _             <- runRefresh(ctx, matchId) // Fresh (within max-age): marker matches -> trusted skip
+        callsAfterBoth <- netCalls.get
+        unchangedCount <- ctx.refreshMatchUnchanged.get
+        afterSecond    <- ClubMatch.selectId(matchId)
+      } yield assertTrue(
+        markerAfterFirst.isDefined,
+        callsAfterBoth == 1, // second call served entirely from cache, no network round trip
+        unchangedCount == 1,
+        afterSecond.flatMap(_.processedBodyHash) == markerAfterFirst,
+        afterSecond.exists(_.fetchedAt.isAfter(initialFetchedAt))
       )
     }
 }

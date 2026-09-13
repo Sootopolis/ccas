@@ -57,12 +57,12 @@ object TestFetchResult extends ZIOSpecDefault {
         } yield assertTrue(r == 3L)
       },
       test("Changed dispatches to ifChanged and passes the decoded value") {
-        val changed: FetchResult[Int] = FetchResult.Changed(42)
+        val changed: FetchResult[Int] = FetchResult.Changed(42, None)
         for {
           r <- changed.foldZIO(
             ifMissing = _ => ZIO.succeed(-2),
             ifUnchanged = _ => ZIO.succeed(-1),
-            ifChanged = v => ZIO.succeed(v * 2)
+            ifChanged = c => ZIO.succeed(c.value * 2)
           )
         } yield assertTrue(r == 84)
       },
