@@ -99,6 +99,40 @@ object TestFetchResult extends ZIOSpecDefault {
           )
         } yield assertTrue(r == "skipped")
       }
+    ),
+    suite("map")(
+      test("Fresh keeps its bodyId and the mapped getValue stays lazy") {
+        val fresh: FetchResult[Int] = FetchResult.Fresh(bodyId1, explodingValue)
+        val mapped                  = fresh.map(_.toString)
+        for {
+          r <- mapped.foldZIO(
+            ifMissing = _ => ZIO.succeed("missing"),
+            ifUnchanged = u => ZIO.succeed(s"unchanged-${u.bodyId.value}"),
+            ifChanged = _ => ZIO.succeed("changed")
+          )
+        } yield assertTrue(r == "unchanged-1")
+      },
+      test("Changed applies f immediately, visible without going through getValue") {
+        val changed: FetchResult[Int] = FetchResult.Changed(21, None)
+        val mapped                    = changed.map(_ * 2)
+        val value = mapped match {
+          case FetchResult.Changed(v, _) => v
+          case _                         => -1
+        }
+        assertTrue(value == 42)
+      },
+      test("Changed's getValue reflects the mapped value") {
+        val changed: FetchResult[Int] = FetchResult.Changed(21, None)
+        for {
+          v <- changed.map(_ * 2).getValue
+        } yield assertTrue(v == 42)
+      },
+      test("Missing passes through unchanged, still failing getValue with the reported 404") {
+        val missing: FetchResult[Int] = FetchResult.Missing(notFound)
+        for {
+          e <- missing.map(_.toString).getValue.either
+        } yield assertTrue(e == Left(notFound))
+      }
     )
   )
 }

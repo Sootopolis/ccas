@@ -209,7 +209,7 @@ object UsernameRenameResolver {
   /** Finds the opposing player's current username on this board, preferring the DB-first path. If the opposing side
     * is already linked on `club_match_board`, reads their current username from `player`. Otherwise falls back to
     * the match endpoint's match-time username (still authoritative for the common case where only one side was
-    * renamed). The fallback dispatches to the daily or live match endpoint via `RefHelpers.fetchTeamMatchTeams`.
+    * renamed). The fallback dispatches to the daily or live match endpoint via `RefHelpers.fetchTeamMatchTeamsOptional`.
     */
   private def opposingCurrentUsername(
     client: ChessComClient,
@@ -236,10 +236,12 @@ object UsernameRenameResolver {
     isTeam1: Boolean,
     isLive: Boolean
   ): RIO[Any, Option[Username]] =
-    RefHelpers.fetchTeamMatchTeams(client, matchId, isLive).map { teams =>
-      val opposingTeam = if (isTeam1) { teams.team2 } else { teams.team1 }
-      opposingTeam.players.collectFirst {
-        case p: TeamMatchPlayerStarted if p.board.path.segments.lastOption.exists(_.toShort == board) => p.username
+    RefHelpers.fetchTeamMatchTeamsOptional(client, matchId, isLive).map { teamsOpt =>
+      teamsOpt.flatMap { teams =>
+        val opposingTeam = if (isTeam1) { teams.team2 } else { teams.team1 }
+        opposingTeam.players.collectFirst {
+          case p: TeamMatchPlayerStarted if p.board.path.segments.lastOption.exists(_.toShort == board) => p.username
+        }
       }
     }.catchSome { case _: HttpStatusException => ZIO.none }
 

@@ -634,6 +634,11 @@ private[history] object HistoryProcessing {
 
   // === Caching ===
 
+  /** Caches the resolved value, not `FetchResult[ApiDailyMatch]`: neither consumer below ever branches on the
+    * fetch's shape (both want "fail loudly on absence"), and `FetchResult`'s `Unchanged` variants carry an
+    * unmemoized `Task[T]` — caching that instead of the decoded value would make every waiter re-run the DB-read-
+    * and-decode independently rather than once. `client.get` already forces it exactly once, here.
+    */
   private def fetchMatch(ctx: ProcessingContext, matchId: ClubMatchId): Task[ApiDailyMatch] =
     for {
       promise <- Promise.make[Throwable, ApiDailyMatch]
@@ -641,8 +646,7 @@ private[history] object HistoryProcessing {
         m.get(matchId) match {
           case Some(existing) => (existing.await, m)
           case None =>
-            val fetch =
-              ctx.client.get[ApiDailyMatch](ApiDailyMatch.getUrl(matchId)).tapBoth(promise.fail, promise.succeed)
+            val fetch = ctx.client.get[ApiDailyMatch](ApiDailyMatch.getUrl(matchId)).tapBoth(promise.fail, promise.succeed)
             (fetch, m + (matchId -> promise))
         }
       }
@@ -656,8 +660,7 @@ private[history] object HistoryProcessing {
         m.get(matchId) match {
           case Some(existing) => (existing.await, m)
           case None =>
-            val fetch =
-              ctx.client.get[ApiLiveMatch](ApiLiveMatch.getUrl(matchId)).tapBoth(promise.fail, promise.succeed)
+            val fetch = ctx.client.get[ApiLiveMatch](ApiLiveMatch.getUrl(matchId)).tapBoth(promise.fail, promise.succeed)
             (fetch, m + (matchId -> promise))
         }
       }

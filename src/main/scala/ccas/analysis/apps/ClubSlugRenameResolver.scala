@@ -93,11 +93,10 @@ object ClubSlugRenameResolver {
     clubIdHint: Option[ClubId],
     staleSlug: ClubSlug
   ): RIO[PostgresClient, Option[ClubSlug]] = {
-    val effect: RIO[PostgresClient, Option[ClubSlug]] = clubIdHint match {
-      case None => ZIO.none
-      case Some(hint) =>
-        Club.slugFromMatchRef(hint, client).map(_.filter(s => s != staleSlug && !isTombstone(s)))
-    }
+    val effect = for {
+      resultOption <- ZIO.foreach(clubIdHint)(Club.slugFromMatchRefResult(_, client)).map(_.flatten)
+      slugOption <- ZIO.foreach(resultOption)(_.foldZIO(_ => ZIO.none, _.getValue, _.getValue)).map(_.flatten)
+    } yield slugOption.filter(slug => slug != staleSlug && !isTombstone(slug))
     effect.swallowRecoveryErrors(s"Tier B slug recovery for $staleSlug")
   }
 

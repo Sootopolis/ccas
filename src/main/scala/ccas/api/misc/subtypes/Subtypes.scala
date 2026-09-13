@@ -40,6 +40,11 @@ object ClubSlug extends StringKeyCompanion {
   override protected def normalize(raw: String): String = raw.toLowerCase
   override protected def validateRaw(raw: String): Either[String, String] =
     Either.cond(raw.nonEmpty, raw, s"$name must not be empty")
+
+  /** Unlike [[ClubMatchId.fromUrl]], doesn't throw: a team/club `@id` reaches this from parsed API responses whose
+    * shape isn't guaranteed the way a URL we constructed ourselves is, so a malformed path is "no slug", not a bug.
+    */
+  def fromUrlOption(url: URL): Option[ClubSlug] = url.path.segments.lastOption.map(wrap)
 }
 
 type ClubMatchId = ClubMatchId.Type

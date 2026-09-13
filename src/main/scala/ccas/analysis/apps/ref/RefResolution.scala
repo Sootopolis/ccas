@@ -156,19 +156,21 @@ private[ref] object RefResolution {
                 NetworkUnavailableException.recoverUnless(error)(
                   recordFailedUrl(ctx, parsed.matchUrl, error, "player").as(ResolveResult.NotFound)
                 ),
-              teams =>
-                RefHelpers.findPlayerIsTeam1(teams, player.username) match {
-                  case None => ZIO.succeed(ResolveResult.NotFound)
-                  case Some(isTeam1) =>
-                    handleVerification(ctx, player) {
-                      val ref = PlayerMatchRef(player.playerId, parsed.matchId, parsed.isLive, isTeam1, boardIdx)
-                      for {
-                        _ <- withTransaction {
-                          PlayerMatchRef.upsert(ref) *> PlayerRefSkip.deleteId(player.playerId)
-                        }
-                        _ <- ZIO.whenDiscard(countResolved)(ctx.playersResolvedApi.update(_ + 1))
-                      } yield ResolveResult.Resolved
-                    }
+              result =>
+                onTeamMatchTeams(ctx, parsed.matchUrl, "player", result, ResolveResult.NotFound) { teams =>
+                  RefHelpers.findPlayerIsTeam1(teams, player.username) match {
+                    case None => ZIO.succeed(ResolveResult.NotFound)
+                    case Some(isTeam1) =>
+                      handleVerification(ctx, player) {
+                        val ref = PlayerMatchRef(player.playerId, parsed.matchId, parsed.isLive, isTeam1, boardIdx)
+                        for {
+                          _ <- withTransaction {
+                            PlayerMatchRef.upsert(ref) *> PlayerRefSkip.deleteId(player.playerId)
+                          }
+                          _ <- ZIO.whenDiscard(countResolved)(ctx.playersResolvedApi.update(_ + 1))
+                        } yield ResolveResult.Resolved
+                      }
+                  }
                 }
             )
         }
@@ -335,17 +337,19 @@ private[ref] object RefResolution {
             NetworkUnavailableException.recoverUnless(error)(
               recordFailedUrl(ctx, parsed.matchUrl, error, "club").as(false)
             ),
-          teams =>
-            RefHelpers.findClubIsTeam1(teams, club.slug) match {
-              case None => ZIO.succeed(false)
-              case Some(isTeam1) =>
-                val ref = ClubMatchRef(club.clubId, parsed.matchId, parsed.isLive, isTeam1)
-                for {
-                  _ <- withTransaction {
-                    ClubMatchRef.upsert(ref) *> ClubRefSkip.deleteId(club.clubId)
-                  }
-                  _ <- ctx.clubsResolvedApi.update(_ + 1)
-                } yield true
+          result =>
+            onTeamMatchTeams(ctx, parsed.matchUrl, "club", result, false) { teams =>
+              RefHelpers.findClubIsTeam1(teams, club.slug) match {
+                case None => ZIO.succeed(false)
+                case Some(isTeam1) =>
+                  val ref = ClubMatchRef(club.clubId, parsed.matchId, parsed.isLive, isTeam1)
+                  for {
+                    _ <- withTransaction {
+                      ClubMatchRef.upsert(ref) *> ClubRefSkip.deleteId(club.clubId)
+                    }
+                    _ <- ctx.clubsResolvedApi.update(_ + 1)
+                  } yield true
+              }
             }
         )
     }
@@ -382,13 +386,19 @@ private[ref] object RefResolution {
 
   // --- Match fetching ---
 
+  /** Caches the decoded outcome, not `FetchResult[TeamMatchTeams]`: `Unchanged`'s `getValue` is an unmemoized
+    * `Task`, so caching it directly would make every waiter on a shared match re-run the DB-read-and-decode
+    * instead of once. `Either` still keeps absence out of the error channel (a `Left` completes the `Promise`
+    * successfully, same as every other outcome) — it just holds the already-resolved value instead of a
+    * re-runnable descriptor of how to get it.
+    */
   private def fetchMatch(
     ctx: RefContext,
     matchId: ClubMatchId,
     isLive: Boolean
-  ): Task[TeamMatchTeams] =
+  ): Task[Either[ReportedNotFound, TeamMatchTeams]] =
     for {
-      promise <- Promise.make[Throwable, TeamMatchTeams]
+      promise <- Promise.make[Throwable, Either[ReportedNotFound, TeamMatchTeams]]
       key = MatchKey(matchId, isLive)
       action <- ctx.cache.modify { m =>
         m.get(key) match {
@@ -401,11 +411,34 @@ private[ref] object RefResolution {
 
   private def fetchAndComplete(
     client: ChessComClient,
-    promise: Promise[Throwable, TeamMatchTeams],
+    promise: Promise[Throwable, Either[ReportedNotFound, TeamMatchTeams]],
     matchId: ClubMatchId,
     isLive: Boolean
-  ): Task[TeamMatchTeams] =
-    RefHelpers.fetchTeamMatchTeams(client, matchId, isLive).tapBoth(promise.fail, promise.succeed)
+  ): Task[Either[ReportedNotFound, TeamMatchTeams]] =
+    RefHelpers.fetchTeamMatchTeamsResult(client, matchId, isLive).flatMap {
+      _.foldZIO(
+        ifMissing = missing => ZIO.succeed(Left(missing.cause)),
+        ifUnchanged = _.getValue.map(Right(_)),
+        ifChanged = changed => ZIO.succeed(Right(changed.value))
+      )
+    }.tapBoth(promise.fail, promise.succeed)
+
+  /** Branches on a match fetch's outcome: absence records the URL as failed (the same diagnostic `tryOneMatch`/
+    * `tryOneClubMatch` always recorded, now reached via the value channel instead of a caught exception) and
+    * answers `ifMissing`; presence runs `onTeams`. Genuine fetch failures (network, decode) stay in `fetchMatch`'s
+    * own `Task` error channel, handled by the caller's outer `foldZIO`.
+    */
+  private def onTeamMatchTeams[R, A](
+    ctx: RefContext,
+    matchUrl: URL,
+    source: String,
+    result: Either[ReportedNotFound, TeamMatchTeams],
+    ifMissing: A
+  )(onTeams: TeamMatchTeams => RIO[R, A]): RIO[R, A] =
+    result match {
+      case Left(cause)  => recordFailedUrl(ctx, matchUrl, cause, source).as(ifMissing)
+      case Right(teams) => onTeams(teams)
+    }
 
   // --- Shared helpers ---
 

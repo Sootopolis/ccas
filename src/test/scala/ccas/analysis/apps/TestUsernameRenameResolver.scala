@@ -36,6 +36,7 @@ object TestUsernameRenameResolver extends ZIOSpecDefault {
     testVerificationFailureReturnsNone,
     testVerificationPlayerIdMismatchReturnsNone,
     testTierBBoardEndpointResolves,
+    testTierBFallsBackToMatchEndpointWhenOpponentUnlinked,
     testResolveAndReconcileUpdatesPlayer
   ) @@ TestAspect.before(resetTables)).provideShared(
     FreshSchemaLayer("test_username_rename_resolver", onInit = Tables.ensureTables)
@@ -199,6 +200,41 @@ object TestUsernameRenameResolver extends ZIOSpecDefault {
         )
         _ <- ClubMatchBoard.insertBatch(
           List(ClubMatchBoard(matchId, 1, Some(pidA), false, Some(pidB), false, 2, 0))
+        )
+        _ <- PlayerMatchRef.insert(PlayerMatchRef(pidA, matchId, isLive = false, isTeam1 = true, boardIdx = 1))
+        result <- UsernameRenameResolver.resolveCurrentUsername(client, Username("alpha"), Some(pidA))
+      } yield assertTrue(result.contains(Username("newa")))
+    }
+
+  // Regression for #258: opposingCurrentUsername prefers the DB link (club_match_board.team2PlayerId), so the
+  // above test never actually reaches RefHelpers.fetchTeamMatchTeamsOptional. This forces the opposing side
+  // unlinked so the fallback to the full match endpoint is what resolves the rename.
+  private def testTierBFallsBackToMatchEndpointWhenOpponentUnlinked =
+    test("Tier B: opposing side not linked in club_match_board falls back to the match endpoint") {
+      val matchId   = ClubMatchId(90002L)
+      val tombstone = UsernameRenameResolver.stalePlaceholder(pidA).value
+      val responses = Map(
+        s"match/90002" -> apiDailyMatchJson(
+          90002L, "clubx", "cluby",
+          team1Players = List(("newa", 1)),
+          team2Players = List(("opponent", 1))
+        ),
+        s"match/90002/1" -> apiMatchBoardJson(90002L, 1, "newa", "opponent"),
+        s"player/newa" -> apiPlayerJson(PlayerId.unwrap(pidA), "newa")
+      )
+      for {
+        client <- fakeClientWithBoard(responses)
+        _      <- insertPlayer(pidA, tombstone)
+        _ <- ClubMatch.upsert(
+          ClubMatch(
+            matchId, "Test Match",
+            ccas.api.misc.enums.ClubMatchStatus.Finished, ccas.api.misc.enums.TimeClass.Daily,
+            Some(TestTimes.t0), Some(TestTimes.t1), 1,
+            None, 20, None, 10, TestTimes.t0, None
+          )
+        )
+        _ <- ClubMatchBoard.insertBatch(
+          List(ClubMatchBoard(matchId, 1, Some(pidA), false, None, false, 2, 0))
         )
         _ <- PlayerMatchRef.insert(PlayerMatchRef(pidA, matchId, isLive = false, isTeam1 = true, boardIdx = 1))
         result <- UsernameRenameResolver.resolveCurrentUsername(client, Username("alpha"), Some(pidA))

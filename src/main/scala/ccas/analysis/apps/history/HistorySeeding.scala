@@ -277,11 +277,11 @@ private[history] object HistorySeeding {
     } yield MemberSeedResult(seeded, queried, failedMembers)
 
   private[history] def isClubDailyMatch(m: ApiPlayerMatches.ApiPlayerMatch, clubSlug: ClubSlug): Boolean =
-    m.club.path.segments.lastOption.map(ClubSlug.wrap).contains(clubSlug)
+    ClubSlug.fromUrlOption(m.club).contains(clubSlug)
       && !m.`@id`.path.segments.contains("live")
 
   private[history] def isClubLiveMatch(m: ApiPlayerMatches.ApiPlayerMatch, clubSlug: ClubSlug): Boolean =
-    m.club.path.segments.lastOption.map(ClubSlug.wrap).contains(clubSlug)
+    ClubSlug.fromUrlOption(m.club).contains(clubSlug)
       && m.`@id`.path.segments.contains("live")
 
   /** Wraps `seedMatchesForPlayer` with cross-club fan-out when `shared` is present. Fetches the player's match list
