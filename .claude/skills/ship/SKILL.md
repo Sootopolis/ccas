@@ -1,17 +1,17 @@
 ---
 name: ship
-description: Ship the current branch through the full release flow — commit, push, open a PR, merge when CI is green, sync worktrees, watch main CI, and update issues. Use when the user says "ship it", "ship this", "ship the branch", or asks to take the current branch through PR → merge → sync.
+description: Ship the current branch through the full release flow — commit, push, open a PR, wait for the user to merge it in the GitHub UI once CI is green, then sync worktrees, watch main CI, and update issues. Use when the user says "ship it", "ship this", "ship the branch", or asks to take the current branch through PR → merge → sync.
 ---
 
 # Ship the current branch
 
-Take the work on the **current branch** through this repo's full release flow. Branch-agnostic: ships whatever branch is checked out — it must NOT be the base branch. The whole sequence is authorized in one go only when the user explicitly asks to ship (i.e. asks for the downstream steps too); otherwise stop after the step they named.
+Take the work on the **current branch** through this repo's full release flow. Branch-agnostic: ships whatever branch is checked out — it must NOT be the base branch. The whole sequence is authorized in one go only when the user explicitly asks to ship (i.e. asks for the downstream steps too); otherwise stop after the step they named. The merge itself is never part of that authorization: the user always merges (step 5).
 
 ## 0. Preflight (gather, don't assume)
 - Current branch: `git rev-parse --abbrev-ref HEAD`.
 - Base branch: `gh repo view --json defaultBranchRef -q .defaultBranchRef.name` (here: `main`).
 - If current branch == base → STOP. Nothing to ship from base; tell the user to branch first.
-- If current branch == the local-only parking branch (`wip`) → **cut a throwaway branch and carry on.** Never push `wip`: step 2's `git push -u` would republish it, and a published `wip` needs a force-push to recycle. `git switch -c <type>/<slug>` brings uncommitted changes across, so do it without asking — the branch name follows the commit's Conventional Commits type (`fix/…`, `chore/…`), and step 7 deletes it after the merge, also without asking. Nothing is lost if the ship is abandoned midway: the work sits on the new branch, and `wip` is re-parked in step 7 either way.
+- If current branch == the local-only parking branch (`wip`) → **cut a throwaway branch and carry on.** Never push `wip`: step 2's `git push -u` would republish it, and a published `wip` needs a force-push to recycle. `git switch -c <type>/<slug>` brings uncommitted changes across, so do it without asking — the branch name follows the commit's Conventional Commits type (`fix/…`, `chore/…`), and step 7 disposes of it after the merge, also without asking. Nothing is lost if the ship is abandoned midway: the work sits on the new branch, and `wip` is re-parked in step 7 either way.
   - **`wip` should carry no commits of its own** — step 1 forbids committing while it is checked out, so the switch
     normally carries uncommitted work and nothing else. If `git rev-list --count origin/<base>..wip` is non-zero
     anyway, the switch carries those commits too; say which moved, and expect step 7's fast-forward to refuse until
@@ -44,20 +44,27 @@ Take the work on the **current branch** through this repo's full release flow. B
   - body: **What / Fixes / Testing / linked issues**.
 - End the PR body with `Generated with [Claude Code](https://claude.com/claude-code)` and nothing else — **no robot emoji** and **no session URL**, in the footer or anywhere in the body. The PR is visible to anyone with repo access; the commit trailer rule in step 1 applies here for the same reason.
 
-## 3b. Permission preflight (before anything irreversible)
-Step 5 and steps 7-9 all use commands that may be gated (classifier or allowlist), and where the denial lands decides how much it costs: on the merge it is merely a handover, but in 7-9 it strands the flow *past* the one step that cannot be undone. So check what can be checked now, while everything is still reversible:
+## 3b. Preflight the post-merge steps
+Steps 6-9 run after the merge, which cannot be undone, so check what can be checked while everything is still reversible:
 - Confirm `gh pr`, `gh run` and `gh issue` are usable — a cheap `gh run list --branch <base> --limit 1` proves it.
-- Post the step-9 issue backrefs NOW (comment only; leave closing until after the merge, since the SHA isn't known yet).
-- If any of those is denied: say so and ask whether to merge anyway. Merging with the follow-up steps known-blocked is a choice the user should make deliberately, not discover afterwards.
-- **That probe says nothing about step 5.** The classifier judges the action, not the binary, so `gh pr merge --squash` can be denied while `Bash(gh pr:*)` is allowlisted and `gh run list` answers fine — and a merge has no cheap probe. On denial, hand over `gh pr merge <n> --squash` for the user to run with `!` and resume at step 6; nothing is stranded, it lands before the irreversible act. Never edit settings to unblock yourself.
+- Post the step-9 issue backrefs NOW (comment only; closing waits for the merge SHA).
+- If any of those is denied, say so when handing over the merge, so the user merges knowing which follow-ups they will run by hand. Never edit settings to unblock yourself.
 
 ## 4. Watch PR CI
 - `gh pr checks <n> --watch --interval 20`.
 - Green → step 5. Failure → `gh run view <id> --log-failed`, report the real failure, stop.
 
-## 5. Merge when green
-- Match the repo's merge convention. **This repo squash-merges** (PR number shows up in `main` commit subjects, e.g. `… (#94)`): `gh pr merge <n> --squash`.
-- Do NOT pass `--delete-branch`; branch disposal is step 7 and depends on the branch's role.
+## 5. Hand the merge to the user
+**Never merge the PR yourself** — no `gh pr merge`, even when the user said "ship". The user merges in the GitHub UI: it is their last look at the PR, and an agent merging its own PR trips the auto-mode classifier's "Merge Without Review" denial.
+- Once CI is green, report the PR link and CI result, and ask for **Squash and merge** — this repo's convention (PR number in `main` subjects, e.g. `… (#94)`). Mention the merged page's **Delete branch** button, which does the remote half of step 7.
+- Then wait with a background command (`run_in_background`), which re-invokes the session when the PR leaves `OPEN`:
+
+  ```
+  until state=$(gh pr view <n> --json state -q .state) && [ "$state" != OPEN ]; do sleep 30; done; echo "$state"
+  ```
+
+  The assignment inside `until` keeps a failed `gh` call (network, auth) waiting instead of reading its empty output as "no longer open", so the command only ever exits printing `MERGED` or `CLOSED`. A "merged" from the user in chat also resumes the flow; confirm it with `gh pr view <n> --json state` rather than on trust.
+- `MERGED` → step 6. `CLOSED` without a merge → report and stop; dispose of nothing.
 
 ## 6. Sync the base worktree
 - `git fetch origin --prune`.
@@ -66,7 +73,8 @@ Step 5 and steps 7-9 all use commands that may be gated (classifier or allowlist
 ## 7. Dispose of the shipped branch
 **The working model is throwaway branches.** One branch per PR, cut from base, deleted after merge. `wip` is a *local-only parking branch* for the worktree — it is never pushed and has no upstream (`origin` holds `main` alone). That is deliberate: a published branch would have to be force-pushed to recycle, because squash-merge gives `main` a new SHA and the branch then diverges. Unpublished, recycling is a local fast-forward nobody has to approve.
 
-- **The shipped branch** — delete it: `git push origin --delete <branch>` (only if it was published), then catch `wip` up (below) and delete the local branch from there. That order is forced: git refuses to delete the branch you are standing on, and step 0 left you on it. No confirmation needed for a throwaway branch this flow cut in step 0, once the equality check below passes. Never `--delete-branch` on the merge; disposal is decided here.
+- **The shipped branch** — delete it: `git push origin --delete <branch>` (only if it was published and the user did not already press **Delete branch**), then catch `wip` up (below) and delete the local branch from there. That order is forced: git refuses to delete the branch you are standing on, and step 0 left you on it. No confirmation needed for a throwaway branch this flow cut in step 0, once the equality check below passes. A remote deleted from the UI before that check loses nothing — the local branch still holds the work until the check clears it.
+- **A delete denied by the classifier** ("Git Destructive") is handed over, not worked around: give the exact `git push origin --delete` / `git branch -D` commands for the user to run with `!`.
 - **Before deleting anything published, prove it holds nothing unique.** Compare the branch against the commit the merge actually produced, which is the only reference point that cannot move:
 
   ```
@@ -74,8 +82,8 @@ Step 5 and steps 7-9 all use commands that may be gated (classifier or allowlist
   git diff $MERGED <branch>                                          # empty -> the squash captured the branch exactly
   ```
 
-  Empty means every byte of the branch is in that commit, so deletion loses nothing no matter what has landed since. Non-empty means STOP and ASK. Cross-check with `gh pr list --state all --head <branch>`.
-- **`git branch -d` will refuse; that refusal is noise.** It tests commit reachability, which squash-merge always breaks. That empty diff is the proof `-d` wanted — use `git branch -D` once it is clean, never before. The remote delete fires `pre-push`, which self-skips on a delete-only push; nothing to bypass. It can instead fail with `remote ref does not exist` when the repo auto-deletes merged branches — harmless, the branch is already gone.
+  Empty means every byte of the branch is in that commit, so deletion loses nothing no matter what has landed since. Non-empty means STOP and ASK — including when the user picked a merge method other than squash, which can make it non-empty by itself. Cross-check with `gh pr list --state all --head <branch>`.
+- **`git branch -d` will refuse; that refusal is noise.** It tests commit reachability, which squash-merge always breaks. That empty diff is the proof `-d` wanted — use `git branch -D` once it is clean, never before. The remote delete fires `pre-push`, which self-skips on a delete-only push; nothing to bypass. It can instead fail with `remote ref does not exist` when the branch was already deleted from the UI — harmless, the branch is already gone.
 - **Do not compare against `<base>` instead.** A concurrent PR landing on base makes `git diff <base> <branch>` non-empty by reporting the other PR's files as deletions, and nothing then distinguishes "branch has unique work" from "base has newer work". The merge commit above is immune; base is not.
 - **Never use `git rev-list` counts or `git cherry` for this.** They compare commits rather than content, and squash-merge guarantees the two disagree: `rev-list` reads the branch as ahead because the squash is a new SHA, and `git cherry` compares *patch-ids*, so an N-commit branch collapsed into one squash commit yields N patch-ids matching nothing in base. `git cherry` is trustworthy only when the branch had exactly one commit, which is not the normal case here.
 - **Ambiguous, or the user calls a branch long-lived?** ASK before deleting. Deletion is irreversible from here.
@@ -98,4 +106,4 @@ Backref comments should already be posted (step 3b); this step adds the merge SH
 - If no issue is resolved by the PR, say so explicitly rather than silently skipping the step.
 
 ## Output
-Finish with a compact status table: commit SHA, PR #, PR CI, merge SHA, base-worktree sync, branch disposal, main CI, issues touched. Mark any step that was refused or skipped as such — never leave a blocked step looking complete, and list the exact commands needed to finish it.
+Finish with a compact status table: commit SHA, PR #, PR CI, merge SHA (merged by the user), base-worktree sync, branch disposal, main CI, issues touched. Mark any step that was refused or skipped as such — never leave a blocked step looking complete, and list the exact commands needed to finish it.
