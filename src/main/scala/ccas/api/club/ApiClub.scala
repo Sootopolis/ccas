@@ -26,7 +26,12 @@ final case class ApiClub(
   joinRequest: URL,           // location to submit a request to join this club
   admin: Chunk[URL],          // array of URLs to the player profiles for the admins of this club
   description: Option[String] // text description of the club
-) derives JsonDecoder
+) derives JsonDecoder {
+  /** The slug Chess.com answers to for this club right now, read from the self-referencing `@id` rather than from
+    * whatever slug was requested — the two differ after a rename, and only this one is safe to persist.
+    */
+  def canonicalSlug: ClubSlug = ClubSlug.wrap(`@id`.path.segments.last)
+}
 
 object ApiClub {
   val host: URL = Hosts.api.addPath("club")
@@ -34,4 +39,8 @@ object ApiClub {
   def getUrl(clubSlug: ClubSlug): URL = host.addPath(clubSlug.value)
 
   def get(client: ChessComClient, clubSlug: ClubSlug): Task[ApiClub] = client.getUncached[ApiClub](getUrl(clubSlug))
+
+  /** [[get]] for a slug that may not exist — a rename probe, say. `None` on 404, and that 404 is not a failure. */
+  def getOptional(client: ChessComClient, clubSlug: ClubSlug): Task[Option[ApiClub]] =
+    client.getUncachedOptional[ApiClub](getUrl(clubSlug))
 }

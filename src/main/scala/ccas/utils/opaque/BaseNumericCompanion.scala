@@ -21,7 +21,7 @@ trait BaseNumericCompanion[T] {
   def wrap(value: T): Type
   def unwrap(value: Type): T
 
-  // `def` (not `val`) so the lookup happens on first call, after subclass linearization completes — avoids a
+  // `def` (not `val`) so the lookup happens on first call, after subclass linearisation completes — avoids a
   // null-`name` race if a `given` body somehow gets resolved during init.
   protected def name: String = getClass.getSimpleName.stripSuffix("$")
 

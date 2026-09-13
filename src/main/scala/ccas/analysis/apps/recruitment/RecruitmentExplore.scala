@@ -287,15 +287,15 @@ private[recruitment] object RecruitmentExplore {
     val combined: RIO[PostgresClient, (List[Username], Set[Username])] =
       fetchBoth(clubSlug).onNotFound { e =>
         ClubSlugRenameResolver.resolveAndPersist(client, clubSlug, clubIdHint = None).flatMap {
-          case Some((fresh, apiClub)) =>
+          case Some(resolved) =>
             // Reuse the resolver's verified ApiClub to skip a duplicate `ApiClub.get(fresh)` on the admins leg.
             // Members still need a fresh fetch (different endpoint).
-            val adminsCached = ZIO.succeed(ClubAdmin.extractAdminUsernames(apiClub))
-            val membersFresh = fetchMembers(fresh)
+            val adminsCached = ZIO.succeed(ClubAdmin.extractAdminUsernames(resolved.api))
+            val membersFresh = fetchMembers(resolved.slug)
             val retried =
               if (excludeSourceAdmins) { membersFresh.zipPar(adminsCached) }
               else { membersFresh.map(m => (m, Set.empty[Username])) }
-            ZIO.logInfo(s"  Slug rename recovered: $clubSlug → $fresh; retrying gatherClubCandidates") *>
+            ZIO.logInfo(s"  Slug rename recovered: $clubSlug → ${resolved.slug}; retrying gatherClubCandidates") *>
               retried
           case None => ZIO.fail(e)
         }

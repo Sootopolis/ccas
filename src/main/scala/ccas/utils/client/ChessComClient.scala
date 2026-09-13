@@ -25,8 +25,8 @@ import ccas.utils.json.JsonDecodingException
   * against `currentMax`, so a throttle-down takes effect at once; EMA-based pacing with a `min-request-delay-ms`
   * floor; a rolling failure window that drops `currentMax` to 1, an immediate hard throttle on a Cloudflare 403, and
   * a generation-gated ladder walking permits back up; separate retry schedules for 429, Cloudflare 403 and
-  * connection errors, with non-Cloudflare 403 and 404 never retried; response caching via [[getCacheable]], which
-  * returns a [[CacheableResult]] and defers body load and decode; and a daemon fiber flushing cumulative
+  * connection errors, with non-Cloudflare 403 and 404 never retried; response caching via [[getResult]], which
+  * returns a [[FetchResult]] and defers body load and decode; and a daemon fiber flushing cumulative
   * `client_stats`, with a final flush in the scope finalizer.
   *
   * Rationale: `docs/adr/0012-gate-based-adaptive-throttle.md` (throttle),
@@ -85,17 +85,23 @@ final class ChessComClient(
         ZIO.whenDiscard(ConnectionError.isConnectionError(e))(statsRef.update(_.incConnectionErrors))
       }.timed
       result <- handleResponse[T](url, conditional, response, tier, cacheWrites)
-    } yield ChessComClient.TimedFetch(exchange.toMillis, result)).tapError { e =>
-      val (errorType, msg, body) = e match {
-        case e: HttpStatusException => (e.getClass.getSimpleName, Some(e.statusCode.toString), Some(e.responseBody))
-        case other                  => (other.getClass.getSimpleName, Option(other.getMessage), None)
-      }
-      ApiFetchFailure
-        .insert(ApiFetchFailure(Instant.now(), url.encode, errorType, msg, body))
-        .provideEnvironment(ZEnvironment(pgClient, bodyStore))
-        .tapError(dbErr => ZIO.logWarning(s"Failed to record api_fetch_failure for ${url.encode}: ${dbErr.safeMessage}"))
-        .ignore
+    } yield ChessComClient.TimedFetch(exchange.toMillis, result)).tapError(recordFetchFailure(url, _))
+  }
+
+  /** Record the forensic row for a fetch that yielded no value. Also called for a [[FetchResult.Missing]], which is
+    * not an error and so never reaches a `tapError` — until the negative fact has a home with a TTL (#236), this
+    * table is the only place an absence is written down.
+    */
+  private def recordFetchFailure(url: URL, error: Throwable): UIO[Unit] = {
+    val (errorType, msg, body) = error match {
+      case e: HttpStatusException => (e.getClass.getSimpleName, Some(e.statusCode.toString), Some(e.responseBody))
+      case other                  => (other.getClass.getSimpleName, Option(other.getMessage), None)
     }
+    ApiFetchFailure
+      .insert(ApiFetchFailure(Instant.now(), url.encode, errorType, msg, body))
+      .provideEnvironment(ZEnvironment(pgClient, bodyStore))
+      .tapError(dbErr => ZIO.logWarning(s"Failed to record api_fetch_failure for ${url.encode}: ${dbErr.safeMessage}"))
+      .ignore
   }
 
   /** Build the outgoing request, attaching `If-None-Match` and `If-Modified-Since` when a prior cache entry exists.
@@ -127,7 +133,7 @@ final class ChessComClient(
     response: Response,
     tier: Int,
     cacheWrites: Boolean
-  )(using jsonDecoder: JsonDecoder[T]): Task[CacheableResult[T]] = {
+  )(using jsonDecoder: JsonDecoder[T]): Task[FetchResult[T]] = {
     if (response.status == Status.NotModified) {
       conditional match {
         case Some(meta) => handleNotModified[T](url, meta, response, cacheWrites)
@@ -144,11 +150,18 @@ final class ChessComClient(
           if (response.status.isSuccess) {
             handleSuccessBody[T](url, conditional, response, string, cacheWrites)
           } else {
-            val errorUpdate =
-              if (cfChallenge) statsRef.update(_.incCf403AtTier(tier))
-              else if (response.status.code == 429) statsRef.update(_.incError429AtTier(tier))
-              else statsRef.update(_.incErrorOther)
-            errorUpdate *> ZIO.fail(HttpStatusException.classify(response.status.code, url, errorBody))
+            HttpStatusException.classify(response.status.code, url, errorBody) match {
+              // Chess.com answered: nothing lives here. The exchange completed, so it counts as one, and what
+              // absence means is the caller's decision (#234).
+              case missing: ReportedNotFound => recordFetchFailure(url, missing).as(FetchResult.Missing(missing))
+              case error =>
+                val errorUpdate = {
+                  if (cfChallenge) statsRef.update(_.incCf403AtTier(tier))
+                  else if (response.status.code == 429) statsRef.update(_.incError429AtTier(tier))
+                  else statsRef.update(_.incErrorOther)
+                }
+                errorUpdate *> ZIO.fail(error)
+            }
           }
         outcomeEffect *> errorPath
       }
@@ -188,7 +201,7 @@ final class ChessComClient(
     meta: ApiResponseCache,
     response: Response,
     cacheWrites: Boolean
-  )(using jsonDecoder: JsonDecoder[T]): Task[CacheableResult[T]] = {
+  )(using jsonDecoder: JsonDecoder[T]): Task[FetchResult[T]] = {
     val directives = parseCacheDirectives(response)
     val maxAgeUpdate: ApiResponseCache.MaxAgeUpdate =
       if (response.header(Header.CacheControl).isEmpty) ApiResponseCache.MaxAgeUpdate.Preserve
@@ -212,7 +225,7 @@ final class ChessComClient(
       _ <- recordOutcome(true)
       _ <- statsRef.update(_.incCacheRevalidation)
       _ <- touchEffect
-    } yield CacheableResult.Revalidated(meta.bodyId, loadAndDecode[T](url, meta.bodyId, cacheWrites))
+    } yield FetchResult.Revalidated(meta.bodyId, loadAndDecode[T](url, meta.bodyId, cacheWrites))
   }
 
   /** Success path: extract cache-control headers, upsert the response body into the cache (unless `no-store`), and
@@ -227,7 +240,7 @@ final class ChessComClient(
     response: Response,
     string: String,
     cacheWrites: Boolean
-  )(using jsonDecoder: JsonDecoder[T]): Task[CacheableResult[T]] = {
+  )(using jsonDecoder: JsonDecoder[T]): Task[FetchResult[T]] = {
     val directives = parseCacheDirectives(response)
     val validators = extractValidators(response)
     // RFC 7234 §5.2.2.2: `Cache-Control: no-cache` means "cache but always revalidate before reuse". We honour it
@@ -260,9 +273,9 @@ final class ChessComClient(
       newBodyIdOpt <- upsertEffect
       result <- (newBodyIdOpt, conditional.map(_.bodyId)) match {
         case (Some(newBodyId), Some(oldBodyId)) if newBodyId == oldBodyId =>
-          statsRef.update(_.incCacheHit).as(CacheableResult.IdenticalBody(newBodyId, decodeLazy))
+          statsRef.update(_.incCacheHit).as(FetchResult.IdenticalBody(newBodyId, decodeLazy))
         case _ =>
-          statsRef.update(_.incCacheMiss) *> decodeLazy.map(CacheableResult.Changed(_))
+          statsRef.update(_.incCacheMiss) *> decodeLazy.map(FetchResult.Changed(_, newBodyIdOpt))
       }
     } yield result
   }
@@ -284,7 +297,7 @@ final class ChessComClient(
     *
     * Recovery always refetches unconditionally, inherits the caller's `cacheWrites` flag, and is bounded to one
     * attempt — `catchSome` is scoped to the cached-body decode, so a fresh-body decode failure propagates instead
-    * of looping. Whether the cache row survives differs by failure: a decode failure or [[BodyRead.Missing]] drops
+    * of looping. Whether the cache row survives differs by failure: a decode failure or [[BodyRead.NotStored]] drops
     * it, [[BodyRead.Unavailable]] keeps it. Why keeping it matters:
     * `docs/adr/0008-body-store-outside-postgres.md` (#215).
     *
@@ -294,7 +307,7 @@ final class ChessComClient(
     using jsonDecoder: JsonDecoder[T]
   ): Task[T] = {
     // No `lookupMeta` round-trip on the way back in: the row was either just deleted or is deliberately being
-    // preserved, and in both cases the next step is the same unconditional GET the miss arm of `getCacheableImpl`
+    // preserved, and in both cases the next step is the same unconditional GET the miss arm of `getResultImpl`
     // would have dispatched.
     val refetch =
       statsRef.update(_.incCacheUnserved.incRequests) *>
@@ -313,7 +326,7 @@ final class ChessComClient(
             .catchSome { case _: JsonDecodingException => invalidateAndRefetch }
         // The BodyStore is content-addressed and so URL-agnostic; its own logs can only name a hash. This is the
         // nearest frame that knows which endpoint lost its cached body, so it is where the URL gets recorded.
-        case BodyRead.Missing =>
+        case BodyRead.NotStored =>
           ZIO.logDebug(s"Cached body missing for ${url.encode}; invalidating and refetching") *> invalidateAndRefetch
         case BodyRead.Unavailable =>
           ZIO.logDebug(
@@ -338,7 +351,7 @@ final class ChessComClient(
     */
   private def gatedRawGet[T](url: URL, conditional: Option[ApiResponseCache], cacheWrites: Boolean)(
     using jsonDecoder: JsonDecoder[T]
-  ): Task[CacheableResult[T]] =
+  ): Task[FetchResult[T]] =
     ZIO.scoped {
       for {
         _ <- rateLimitGate.withPermit {
@@ -355,28 +368,30 @@ final class ChessComClient(
       } yield fetch.result
     }
 
-  /** Cache-aware entry point. Checks `api_response_cache` first; on a fresh hit (within `max-age`) returns a
-    * `Fresh` result without a network call. Otherwise dispatches to the gated + retried `rawGet`, passing any prior
-    * cache row so `If-None-Match` / `If-Modified-Since` validators can be attached. Callers that want to skip
-    * downstream processing on unchanged data should use this directly; callers that just want `T` should use `get`,
-    * or `getUncached` to suppress cache writes for one-shot volatile-body endpoints.
+  /** Cache-aware entry point returning the full outcome — the answer this class exists to give, and the one every
+    * `get*` method below is a fixed policy over. Checks `api_response_cache` first; on a fresh hit (within
+    * `max-age`) returns a `Fresh` result without a network call. Otherwise dispatches to the gated + retried
+    * `rawGet`, passing any prior cache row so `If-None-Match` / `If-Modified-Since` validators can be attached.
+    * Callers that just want `T` should use `get`, or `getUncached` to suppress cache writes for one-shot
+    * volatile-body endpoints.
     *
     * Error contract: a connection / DNS error that survives the connection-retry schedule (the network was
     * unreachable across all attempts, not a one-off blip) surfaces as [[NetworkUnavailableException]] (with the
-    * underlying transport exception as its cause). Match that type to react to a systemic outage; HTTP errors still
-    * surface as [[HttpStatusException]] / [[ReportedNotFound]].
+    * underlying transport exception as its cause). Match that type to react to a systemic outage; other HTTP
+    * failures surface as [[HttpStatusException]]. An absent resource is not a failure — it returns
+    * [[FetchResult.Missing]].
     */
-  def getCacheable[T](url: URL)(using jsonDecoder: JsonDecoder[T]): Task[CacheableResult[T]] =
-    getCacheableImpl[T](url, cacheWrites = true)
+  def getResult[T](url: URL)(using jsonDecoder: JsonDecoder[T]): Task[FetchResult[T]] =
+    getResultImpl[T](url, cacheWrites = true)
 
-  /** Shared implementation behind `getCacheable` (cacheWrites = true) and `getUncached` (cacheWrites = false). When
+  /** Shared implementation behind `getResult` (cacheWrites = true) and `getUncached` (cacheWrites = false). When
     * `cacheWrites` is false, a successful 200 response is decoded but never written to `api_response_cache` /
     * `api_response_body`, and a 304 does not bump `fetched_at` on any pre-existing cache row. The read path is
     * unchanged: a `Fresh` row from another caller is still served without a network call.
     */
-  private def getCacheableImpl[T](url: URL, cacheWrites: Boolean)(
+  private def getResultImpl[T](url: URL, cacheWrites: Boolean)(
     using jsonDecoder: JsonDecoder[T]
-  ): Task[CacheableResult[T]] =
+  ): Task[FetchResult[T]] =
     ApiResponseCache
       .lookupMeta(url.encode)
       .provideEnvironment(ZEnvironment(pgClient))
@@ -384,17 +399,34 @@ final class ChessComClient(
         case Some(meta) if isFresh(meta, Instant.now()) =>
           statsRef
             .update(_.incCacheHit)
-            .as(CacheableResult.Fresh(meta.bodyId, loadAndDecode[T](url, meta.bodyId, cacheWrites)))
+            .as(FetchResult.Fresh(meta.bodyId, loadAndDecode[T](url, meta.bodyId, cacheWrites)))
         case cachedOpt =>
           statsRef.update(_.incRequests) *> withRetries(gatedRawGet[T](url, cachedOpt, cacheWrites))
       }
 
   def get[T](url: URL)(using jsonDecoder: JsonDecoder[T]): Task[T] =
-    getCacheable[T](url).flatMap(_.getValue)
+    getResult[T](url).flatMap(_.getValue)
 
   /** Like `get` but skips cache writes (and 304 `touch`). Reads still hit the cache. */
   def getUncached[T](url: URL)(using jsonDecoder: JsonDecoder[T]): Task[T] =
-    getCacheableImpl[T](url, cacheWrites = false).flatMap(_.getValue)
+    getResultImpl[T](url, cacheWrites = false).flatMap(_.getValue)
+
+  /** `get` for a resource the caller knows may not exist: absence yields `None` instead of failing. */
+  def getOptional[T](url: URL)(using jsonDecoder: JsonDecoder[T]): Task[Option[T]] =
+    optional(getResultImpl[T](url, cacheWrites = true))
+
+  /** [[getOptional]] with `getUncached`'s cache-write suppression. */
+  def getUncachedOptional[T](url: URL)(using jsonDecoder: JsonDecoder[T]): Task[Option[T]] =
+    optional(getResultImpl[T](url, cacheWrites = false))
+
+  /** The `catchSome` is not redundant with the `Missing` arm: a cache hit whose body has been pruned refetches
+    * inside `getValue` (see [[loadAndDecode]]), and that refetch is where a since-deleted resource reports absent.
+    */
+  private def optional[T](fetched: Task[FetchResult[T]]): Task[Option[T]] =
+    fetched.flatMap {
+      case _: FetchResult.Missing => ZIO.none
+      case present                => present.getValue.asSome.catchSome { case _: ReportedNotFound => ZIO.none }
+    }
 
   private def withRetries[T](effect: Task[T]): Task[T] =
     effect
@@ -668,7 +700,7 @@ object ChessComClient {
     * cache upsert, the `BodyStore` put and the `api_fetch_failure` row — folding those into the EMA let a slow
     * store throttle a healthy Chess.com. See `docs/adr/0006-pacing-ema-measures-the-http-exchange-only.md`.
     */
-  private[ccas] final case class TimedFetch[T](exchangeMs: Long, result: CacheableResult[T])
+  private[ccas] final case class TimedFetch[T](exchangeMs: Long, result: FetchResult[T])
 
   /** Validators and content-type extracted from a response and persisted alongside the cached body. Shared by the
     * 200 (`handleSuccessBody`) and 304 (`handleNotModified`) paths so the header-parsing rules live in one place.

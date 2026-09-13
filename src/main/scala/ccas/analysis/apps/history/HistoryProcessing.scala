@@ -335,25 +335,39 @@ private[history] object HistoryProcessing {
       }
     } yield ()
 
-  /** Settled matches by definition can't change, so an `isUnchanged` response from the cache layer means every
-    * downstream step would be a no-op — just bump `fetched_at` so the cursor-paginated refresh loop advances.
-    * Bypasses the in-memory `matchCache` dedup because the cursor scan visits each match exactly once per run.
+  /** A settled match can't change on Chess.com's side, but "the client reports the body unchanged" is not on its
+    * own proof that *we* successfully applied it last time — a prior attempt's write can fail after the client's
+    * cache already committed the body (see #257). So `Unchanged` only short-circuits when the fetch's content hash
+    * matches `club_match.processedBodyHash`, the marker `refreshSingleMatchWithBody` sets in the same transaction
+    * as the write it guards; any mismatch (including no marker at all) forces a real reprocess. A hash rather than
+    * the client cache's `body_id`: application data should stay meaningful even if every cache row is gone.
     */
   private[history] def refreshSingleMatch(
     ctx: ProcessingContext,
     matchId: ClubMatchId
   ): RIO[ProgressDisplay & PostgresClient, Unit] =
-    ctx.client.getCacheable[ApiDailyMatch](ApiDailyMatch.getUrl(matchId)).flatMap {
-      _.foldZIO(_ =>
-        ctx.refreshMatchUnchanged.update(_ + 1) *>
-          ClubMatch.updateFetchedAt(matchId, Instant.now()).unit
-      )(refreshSingleMatchWithBody(ctx, matchId, _))
+    ctx.client.getResult[ApiDailyMatch](ApiDailyMatch.getUrl(matchId)).flatMap {
+      _.foldPresentZIO(
+        unchanged =>
+          (ClubMatch.selectProcessedBodyHash(matchId) <&> ApiResponseBody.hashById(unchanged.bodyId)).flatMap {
+            case (Some(marker), Some(hash)) if marker == hash =>
+              ctx.refreshMatchUnchanged.update(_ + 1) *>
+                ClubMatch.updateFetchedAt(matchId, Instant.now()).unit
+            case (_, hash) =>
+              unchanged.getValue.flatMap(refreshSingleMatchWithBody(ctx, matchId, _, hash))
+          },
+        changed =>
+          changed.bodyId
+            .fold[RIO[PostgresClient, Option[String]]](ZIO.none)(ApiResponseBody.hashById)
+            .flatMap(hash => refreshSingleMatchWithBody(ctx, matchId, changed.value, hash))
+      )
     }
 
   private def refreshSingleMatchWithBody(
     ctx: ProcessingContext,
     matchId: ClubMatchId,
-    dailyMatch: ApiDailyMatch
+    dailyMatch: ApiDailyMatch,
+    newBodyHash: Option[String]
   ): RIO[ProgressDisplay & PostgresClient, Unit] =
     for {
       (team1ClubId, team2ClubId) <-
@@ -363,7 +377,9 @@ private[history] object HistoryProcessing {
       _ <- trackUnresolvedClub(matchId, isTeam1 = true, dailyMatch.teams.team1.`@id`, team1ClubId) <&>
         trackUnresolvedClub(matchId, isTeam1 = false, dailyMatch.teams.team2.`@id`, team2ClubId)
 
-      clubMatch = HistoryBoardBuilder.buildClubMatchRow(matchId, dailyMatch, team1ClubId, team2ClubId)
+      clubMatch =
+        HistoryBoardBuilder.buildClubMatchRow(matchId, dailyMatch, team1ClubId, team2ClubId)
+          .copy(processedBodyHash = newBodyHash)
 
       weAreTeam1: Option[Boolean] =
         if (team1ClubId.contains(ctx.clubId)) { Some(true) }
@@ -459,7 +475,7 @@ private[history] object HistoryProcessing {
               t1Player.playedAsBlack,
               whiteTeamIsTeam1 = false
             )
-            val (t1Score, t2Score) = HistoryBoardBuilder.computeScoreX2(g1.winner, g2.winner, t1FairPlay, t2FairPlay)
+            val score = HistoryBoardBuilder.computeScoreX2(g1.winner, g2.winner, t1FairPlay, t2FairPlay)
 
             val board = ClubMatchBoard(
               matchId = matchId,
@@ -468,8 +484,8 @@ private[history] object HistoryProcessing {
               team1FairPlay = t1FairPlay,
               team2PlayerId = t2Pid,
               team2FairPlay = t2FairPlay,
-              team1ScoreX2 = t1Score,
-              team2ScoreX2 = t2Score
+              team1ScoreX2 = score.team1,
+              team2ScoreX2 = score.team2
             )
 
             // Partition board API games by team perspective (team1-white vs team2-white)

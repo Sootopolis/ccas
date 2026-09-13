@@ -49,7 +49,7 @@ object TestStatsApp extends ZIOSpecDefault {
       )
       _ <- ClubMatch.upsert(
         ClubMatch(matchId1, "Match 1", ClubMatchStatus.Finished, TimeClass.Daily,
-          Some(Times.t0), Some(Times.t1), 10, Some(clubId), 10, Some(oppId), 10, Times.t1)
+          Some(Times.t0), Some(Times.t1), 10, Some(clubId), 10, Some(oppId), 10, Times.t1, None)
       )
       _ <- ClubMatchBoard.insert(
         ClubMatchBoard(matchId1, 1, Some(pid1), false, None, false, 1, 1)
@@ -96,7 +96,7 @@ object TestStatsApp extends ZIOSpecDefault {
       // Match where team2-club is team2; opponent (clubId=100) wins as Team1
       _ <- ClubMatch.upsert(
         ClubMatch(matchId3, "Match 3", ClubMatchStatus.Finished, TimeClass.Daily,
-          Some(Times.t0), Some(Times.t1), 10, Some(clubId), 10, Some(team2Id), 10, Times.t1)
+          Some(Times.t0), Some(Times.t1), 10, Some(clubId), 10, Some(team2Id), 10, Times.t1, None)
       )
       // dave is on team2 side
       _ <- ClubMatchBoard.insert(
@@ -122,7 +122,7 @@ object TestStatsApp extends ZIOSpecDefault {
       _ <- Club.upsert(Club(noBoardId, Times.t0, noBoardSlug, "No Board Club", None, None, None))
       _ <- ClubMatch.upsert(
         ClubMatch(ClubMatchId(2001L), "Match NB", ClubMatchStatus.Finished, TimeClass.Daily,
-          Some(Times.t0), Some(Times.t1), 10, Some(noBoardId), 10, Some(oppId), 10, Times.t1)
+          Some(Times.t0), Some(Times.t1), 10, Some(noBoardId), 10, Some(oppId), 10, Times.t1, None)
       )
       result <- StatsApp.memberStats(noBoardSlug)
     } yield assertTrue(
@@ -137,7 +137,7 @@ object TestStatsApp extends ZIOSpecDefault {
       // matchId1 ends at t1 (within [t0, t2)), matchId2 ends at t3 (outside)
       _ <- ClubMatch.upsert(
         ClubMatch(matchId2, "Match 2", ClubMatchStatus.Finished, TimeClass.Daily,
-          Some(Times.t2), Some(Times.t3), 10, Some(clubId), 10, Some(oppId), 10, Times.t3)
+          Some(Times.t2), Some(Times.t3), 10, Some(clubId), 10, Some(oppId), 10, Times.t3, None)
       )
       _ <- ClubMatchBoard.insert(
         ClubMatchBoard(matchId2, 1, Some(pid1), false, None, false, 1, 1)

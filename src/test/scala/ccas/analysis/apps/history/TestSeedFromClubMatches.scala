@@ -40,7 +40,8 @@ object TestSeedFromClubMatches extends ZIOSpecDefault {
       team1ScoreX2 = 10,
       team2ClubId = Some(ClubId(999)),
       team2ScoreX2 = 10,
-      fetchedAt = Times.t1
+      fetchedAt = Times.t1,
+      processedBodyHash = None
     )
 
   private def apiClubMatchesJson(finishedIds: List[Long], inProgressIds: List[Long] = Nil): String = {

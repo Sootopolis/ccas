@@ -1,6 +1,6 @@
 # Cache API responses in Postgres, keyed by URL
 
-**Status:** Accepted, 2026-04-16. Body storage split out in [0008](0008-body-store-outside-postgres.md).
+**Status:** Accepted, 2026-04-16. Body storage split out in [0008](0008-body-store-outside-postgres.md). Extended by [0019](0019-a-reported-404-is-an-answer.md), which renames `CacheableResult` to `FetchResult`, renames `getCacheable` to `getResult`, and adds a fifth variant for an absent resource.
 
 ## Context
 
@@ -10,16 +10,16 @@ The history crawl and recruitment fan-outs re-request the same Chess.com URLs ac
 
 Persist every successful fetch to `api_response_cache`, keyed by URL, with ETag / Last-Modified / `Cache-Control: max-age` / Content-Type metadata and a pointer to the body.
 
-`ChessComClient.getCacheable[T](url)` returns a `CacheableResult[T]` with four variants:
+`ChessComClient.getResult[T](url)` returns a `FetchResult[T]` with four variants (a fifth, `Missing`, arrives in [0019](0019-a-reported-404-is-an-answer.md)):
 
 - `Fresh` — served from cache, no network call; the entry was within `max-age`.
 - `Revalidated` — a conditional GET returned 304; `fetched_at` is refreshed.
 - `IdenticalBody` — 200 OK whose body was byte-identical (SHA-256 dedup kept the same `body_id`).
 - `Changed` — first fetch, or a real content change.
 
-Four variants rather than one `Unchanged` because the distinction is observability: "we never asked the server" is a different fact from "the server confirmed unchanged" and from "we asked and got the same bytes back". The three hit variants share a sealed `Unchanged[T]` supertype so callers can branch on "any cache hit" uniformly, and `foldZIO` / `unlessUnchangedDiscard` dispatch through `final` overrides on it rather than a pattern match — that avoids an erased `case c: Changed[T @unchecked]` cast and lets the compiler verify T end to end.
+Four variants rather than one `Unchanged` because the distinction is observability: "we never asked the server" is a different fact from "the server confirmed unchanged" and from "we asked and got the same bytes back". The three hit variants share a sealed `Unchanged[T]` supertype so callers can branch on "any cache hit" uniformly, and `foldZIO` dispatches through `final` overrides on it rather than a pattern match — that avoids an erased `case c: Changed[T @unchecked]` cast and lets the compiler verify T end to end.
 
-Each variant carries a lazy `getValue: Task[T]`, so a caller that only branches on `isUnchanged` pays nothing beyond the cache-row lookup. `Changed` is eager, so decode errors on network responses surface at fetch time rather than inside the caller. `get[T]` is a thin `getCacheable[T](url).flatMap(_.getValue)`.
+Each variant carries a lazy `getValue: Task[T]`, so a caller that only branches on cache-hit-ness pays nothing beyond the cache-row lookup. `Changed` is eager, so decode errors on network responses surface at fetch time rather than inside the caller. `get[T]` is a thin `getResult[T](url).flatMap(_.getValue)`.
 
 Current callers: `HistoryProcessing.refreshSingleMatch` (unchanged → bump `fetched_at`; changed → full rework) and `HistorySeeding.seed{FromClubMatches,MatchesForPlayer,MatchesForPlayerAllClubs}` (unchanged → skip the INSERT pipeline but still stamp `HistoryMemberQuery` where required).
 

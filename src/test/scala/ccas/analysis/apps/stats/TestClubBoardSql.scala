@@ -57,7 +57,7 @@ object TestClubBoardSql extends ZIOSpecDefault {
     endTime: Option[Instant] = Some(Times.t1)
   ): ClubMatch =
     ClubMatch(matchId, s"Match ${ClubMatchId.unwrap(matchId)}", status, TimeClass.Daily,
-      Some(Times.t0), endTime, 10, Some(team1Club), 10, Some(team2Club), 10, Times.t1)
+      Some(Times.t0), endTime, 10, Some(team1Club), 10, Some(team2Club), 10, Times.t1, None)
 
   private def boardRow(
     matchId: ClubMatchId,

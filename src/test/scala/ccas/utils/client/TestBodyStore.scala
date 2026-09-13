@@ -206,8 +206,8 @@ object TestBodyStore extends ZIOSpecDefault {
     * of truth, so an outage has to take the cache offline rather than the app.
     */
   private def suiteDegradation = suite("error degradation")(
-    test("read separates an absent object (Missing) from a store that could not answer (Unavailable)") {
-      // #215: both are cache misses the caller heals by refetching, but only `Missing` means the cache row pointing
+    test("read separates an absent object (NotStored) from a store that could not answer (Unavailable)") {
+      // #215: both are cache misses the caller heals by refetching, but only `NotStored` means the cache row pointing
       // here is a lie. Collapsing them is what made an outage delete the validators it would need on recovery.
       for {
         (store, _) <- freshStore
@@ -220,7 +220,7 @@ object TestBodyStore extends ZIOSpecDefault {
         _          <- faulty.healReads
         healed     <- BodyStore.read(hash).provideEnvironment(env)
       } yield assertTrue(
-        absent == BodyRead.Missing,
+        absent == BodyRead.NotStored,
         degraded == BodyRead.Unavailable,
         healed.toOption.exists(_.sameElements(bytes))
       )

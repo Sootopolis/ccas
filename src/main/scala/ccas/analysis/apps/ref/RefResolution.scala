@@ -27,7 +27,7 @@ import ccas.api.misc.subtypes.{ClubMatchId, PlayerId, TournamentSlug, Username}
 import ccas.api.player.{ApiPlayer, ApiPlayerMatches, ApiPlayerTournaments}
 import ccas.api.player.ApiPlayerMatches.ApiPlayerMatch
 import ccas.api.tournament.ApiTournamentRound
-import ccas.utils.client.{ChessComClient, NetworkUnavailableException, ReportedNotFound}
+import ccas.utils.client.{ChessComClient, FetchResult, NetworkUnavailableException, ReportedNotFound}
 import ccas.utils.errors.safeMessage
 import ccas.utils.ProgressDisplay
 
@@ -106,7 +106,7 @@ private[ref] object RefResolution {
     player: UnresolvedPlayer,
     countResolved: Boolean
   ): RIO[ProgressDisplay & PostgresClient, ResolveResult] =
-    ctx.client.getCacheable[ApiPlayerMatches](ApiPlayerMatches.getUrl(player.username)).flatMap { result =>
+    ctx.client.getResult[ApiPlayerMatches](ApiPlayerMatches.getUrl(player.username)).flatMap { result =>
       def iterate(playerMatches: ApiPlayerMatches): RIO[ProgressDisplay & PostgresClient, ResolveResult] = {
         val candidates = (playerMatches.finished ++ playerMatches.inProgress).filter(_.board.isDefined)
         if (candidates.isEmpty) {
@@ -179,7 +179,7 @@ private[ref] object RefResolution {
     ctx: RefContext,
     player: UnresolvedPlayer
   ): RIO[ProgressDisplay & PostgresClient, ResolveResult] =
-    ctx.client.getCacheable[ApiPlayerTournaments](ApiPlayerTournaments.getUrl(player.username)).flatMap { result =>
+    ctx.client.getResult[ApiPlayerTournaments](ApiPlayerTournaments.getUrl(player.username)).flatMap { result =>
       def iterate(playerTournaments: ApiPlayerTournaments): RIO[ProgressDisplay & PostgresClient, ResolveResult] = {
         val eligible = (playerTournaments.finished ++ playerTournaments.inProgress)
           .sortBy(_.totalPlayers.getOrElse(Int.MaxValue))
@@ -263,7 +263,7 @@ private[ref] object RefResolution {
             _ <- ZIO.logDebug(s"  ${club.slug}: resolved via DB")
           } yield true
         case None =>
-          ctx.client.getCacheable[ApiClubMatches](ApiClubMatches.getUrl(club.slug)).flatMap { result =>
+          ctx.client.getResult[ApiClubMatches](ApiClubMatches.getUrl(club.slug)).flatMap { result =>
             def iterate(clubMatches: ApiClubMatches): RIO[ProgressDisplay & PostgresClient, Boolean] =
               if (clubMatches.finished.isEmpty) {
                 skipClub(ctx, club, RefSkipReason.NoData).as(false)
@@ -291,9 +291,9 @@ private[ref] object RefResolution {
         for {
           recovered <- ClubSlugRenameResolver.resolveAndPersist(ctx.client, club.slug, Some(club.clubId))
           result <- recovered match {
-            case Some((fresh, _)) =>
-              ZIO.logInfo(s"  ${club.slug}: slug rename recovered → $fresh; retrying resolution") *>
-                resolveClub(ctx, club.copy(slug = fresh))
+            case Some(resolved) =>
+              ZIO.logInfo(s"  ${club.slug}: slug rename recovered → ${resolved.slug}; retrying resolution") *>
+                resolveClub(ctx, club.copy(slug = resolved.slug))
             case None =>
               for {
                 _ <- ZIO.logWarning(s"  ${club.slug}: 404 — ${e.safeMessage}")
@@ -353,29 +353,32 @@ private[ref] object RefResolution {
 
   // --- Unchanged-listing short-circuit helper ---
 
-  /** Branch on [[CacheableResult]]: when the listing body is unchanged *and* there is evidence of a prior failed
+  /** Branch on [[FetchResult]]: when the listing body is unchanged *and* there is evidence of a prior failed
     * resolution attempt for this subject (an expired skip row present in the unresolved pool), run `ifSkipped`
     * without decoding the body. Otherwise decode and run the full `onBody` pipeline.
     *
     * The skip-row existence check guards against a subtle false-positive: a cache entry may have been warmed by an
-    * unrelated app (HistoryApp seeding player matches, say), so `isUnchanged` alone is not sufficient evidence
+    * unrelated app (HistoryApp seeding player matches, say), so an unchanged body alone is not sufficient evidence
     * that *we* have tried and failed before. Only pool members carrying an expired skip row are safe to
     * short-circuit.
+    *
+    * A missing subject is raised as the reported 404 the callers' rename recovery keys on.
     */
   private def unchangedGate[T, A](
-    result: ccas.utils.client.CacheableResult[T],
+    result: FetchResult[T],
     priorSkip: RIO[PostgresClient, Option[?]]
   )(ifSkipped: RIO[ProgressDisplay & PostgresClient, A])(
     onBody: T => RIO[ProgressDisplay & PostgresClient, A]
   ): RIO[ProgressDisplay & PostgresClient, A] =
-    if (result.isUnchanged) {
-      priorSkip.flatMap {
-        case Some(_) => ifSkipped
-        case None    => result.getValue.flatMap(onBody)
-      }
-    } else {
-      result.getValue.flatMap(onBody)
-    }
+    result.foldZIO(
+      ifMissing = missing => ZIO.fail(missing.cause),
+      ifUnchanged = unchanged =>
+        priorSkip.flatMap {
+          case Some(_) => ifSkipped
+          case None    => unchanged.getValue.flatMap(onBody)
+        },
+      ifChanged = changed => onBody(changed.value)
+    )
 
   // --- Match fetching ---
 
@@ -524,23 +527,22 @@ private[ref] object RefResolution {
     t: ApiPlayerTournaments.ApiPlayerTournament
   ): RIO[ProgressDisplay & PostgresClient, Option[Boolean]] = {
     val slug = TournamentSlug.fromUrl(t.`@id`)
-    if (slug == trp.tournamentSlug) { ZIO.succeed(Some(false)) }
+    if (slug == trp.tournamentSlug) { ZIO.some(false) }
     else {
       val roundUrl = ApiTournamentRound.getUrl(slug, 1)
       isFailedUrl(ctx, roundUrl).flatMap {
-        case true => ZIO.succeed(None)
+        case true => ZIO.none
         case false =>
           ctx.client.get[ApiTournamentRound](roundUrl).foldZIO(
             error => recordFailedUrl(ctx, roundUrl, error, "player").as(None),
             round => {
               val playerIdx = round.players.indexWhere(rp => rp.username == trp.username)
-              if (playerIdx < 0) { ZIO.succeed(None) }
-              else {
+              ZIO.when(playerIdx >= 0) {
                 val ref = PlayerTournamentRef(trp.playerId, slug, playerIdx)
                 for {
                   _ <- PlayerTournamentRef.upsert(ref)
                   _ <- ZIO.logDebug(s"  ${trp.username}: tournament ref upgraded to $slug")
-                } yield Some(true)
+                } yield true
               }
             }
           )

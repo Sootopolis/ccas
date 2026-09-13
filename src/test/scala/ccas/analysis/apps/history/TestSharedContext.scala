@@ -48,7 +48,8 @@ object TestSharedContext extends ZIOSpecDefault {
       team1ScoreX2 = 10,
       team2ClubId = Some(clubBId),
       team2ScoreX2 = 10,
-      fetchedAt = Times.t1
+      fetchedAt = Times.t1,
+      processedBodyHash = None
     )
 
   override def spec: Spec[Any, Throwable] = suite("SharedContext")(

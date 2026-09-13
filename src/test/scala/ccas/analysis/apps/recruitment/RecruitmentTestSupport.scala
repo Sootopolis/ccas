@@ -616,7 +616,7 @@ object RecruitmentTestSupport {
           matchId, s"Match ${ClubMatchId.unwrap(matchId)}",
           ccas.api.misc.enums.ClubMatchStatus.Finished, ccas.api.misc.enums.TimeClass.Daily,
           Some(TestTimes.t0), Some(TestTimes.t1), 1,
-          team1ClubId, 20, None, 10, TestTimes.t0
+          team1ClubId, 20, None, 10, TestTimes.t0, None
         )
       )
       _ <- ClubMatchBoard.insertBatch(

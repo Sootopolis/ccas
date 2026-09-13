@@ -62,18 +62,19 @@ object TestHistorySeeding extends ZIOSpecDefault {
   private def seedClubMatch: RIO[PostgresClient, Unit] =
     ClubMatch.upsert(
       ClubMatch(
-        matchId,
-        s"Match ${ClubMatchId.unwrap(matchId)}",
-        ClubMatchStatus.Finished,
-        TimeClass.Daily,
-        Some(t0),
-        Some(t1),
-        1,
-        None,
-        10,
-        None,
-        10,
-        t1
+        matchId = matchId,
+        name = s"Match ${ClubMatchId.unwrap(matchId)}",
+        status = ClubMatchStatus.Finished,
+        timeClass = TimeClass.Daily,
+        startTime = Some(t0),
+        endTime = Some(t1),
+        boards = 1,
+        team1ClubId = None,
+        team1ScoreX2 = 10,
+        team2ClubId = None,
+        team2ScoreX2 = 10,
+        fetchedAt = t1,
+        processedBodyHash = None
       )
     ).unit
 

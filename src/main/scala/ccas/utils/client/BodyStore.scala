@@ -34,7 +34,7 @@ trait BodyStore {
 
 /** Outcome of a [[BodyStore]] read once the store's own failures have been absorbed.
   *
-  * `Missing` and `Unavailable` are one `None` at the trait level but demand different repairs upstream: a missing
+  * `NotStored` and `Unavailable` are one `None` at the trait level but demand different repairs upstream: a missing
   * object means the `api_response_cache` row is a lie and must be dropped; an unavailable store means the row is
   * still good and must be kept. See `docs/adr/0008-body-store-outside-postgres.md` (#215). The backends already
   * draw the line (`NoSuchFileException` / `NoSuchKeyException` map to `None`); this type stops the accessor
@@ -42,12 +42,12 @@ trait BodyStore {
   */
 enum BodyRead[+A] {
   case Found(value: A)
-  case Missing
+  case NotStored
   case Unavailable
 
   def map[B](f: A => B): BodyRead[B] = this match {
     case Found(value) => Found(f(value))
-    case Missing      => Missing
+    case NotStored    => NotStored
     case Unavailable  => Unavailable
   }
 
@@ -56,7 +56,7 @@ enum BodyRead[+A] {
     */
   def toOption: Option[A] = this match {
     case Found(value) => Some(value)
-    case Missing      => None
+    case NotStored    => None
     case Unavailable  => None
   }
 }
@@ -68,7 +68,7 @@ object BodyStore {
   // exposed ONLY in their error-degrading form — there is no raw `get`/`put` accessor to reach for by mistake.
 
   /** Read a body's bytes, absorbing a store error or a [[Deadlines]] breach into [[BodyRead.Unavailable]], kept
-    * distinct from the [[BodyRead.Missing]] a genuinely absent object produces — see [[BodyRead]].
+    * distinct from the [[BodyRead.NotStored]] a genuinely absent object produces — see [[BodyRead]].
     *
     * Interruption still propagates (`catchAll` covers typed failures only), so shutdown is unaffected.
     * Per-operation failures log at DEBUG: an outage fails every read on a fetch-heavy run, and the operator-facing
@@ -79,7 +79,7 @@ object BodyStore {
       .serviceWithZIO[BodyStore](_.get(hash))
       .map {
         case Some(bytes) => BodyRead.Found(bytes)
-        case None        => BodyRead.Missing
+        case None        => BodyRead.NotStored
       }
       .catchAll { e =>
         ZIO

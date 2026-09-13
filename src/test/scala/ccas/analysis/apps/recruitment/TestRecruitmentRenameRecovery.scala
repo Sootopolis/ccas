@@ -75,17 +75,21 @@ object TestRecruitmentRenameRecovery extends ZIOSpecDefault {
       discoveredOpponents <- Ref.make(Set.empty[Username])
       failedAdminSlugs    <- Ref.make(Set.empty[ccas.api.misc.subtypes.ClubSlug])
     } yield RunContext(
-      client,
-      makeCriteria().copy(maxClubs = Some(50), dailyMaxTimeoutPercent = Some(10.0), dailyMinTmGamesFinished = Some(0)),
-      clubId,
-      "default",
-      Set.empty,
-      Set.empty,
-      Set.empty,
-      Set.empty,
-      Instant.now(),
-      discoveredOpponents,
-      failedAdminSlugs
+      client = client,
+      criteria = makeCriteria().copy(
+        maxClubs = Some(50),
+        dailyMaxTimeoutPercent = Some(10.0),
+        dailyMinTmGamesFinished = Some(0)
+      ),
+      clubId = clubId,
+      alias = "default",
+      clubMatchIds = Set.empty,
+      formerMemberIds = Set.empty,
+      adminExcludedPlayerIds = Set.empty,
+      excludedSlugs = Set.empty,
+      now = Instant.now(),
+      discoveredOpponents = discoveredOpponents,
+      failedAdminSlugs = failedAdminSlugs
     )
 
   // --- fetchTmStats ---
@@ -149,7 +153,7 @@ object TestRecruitmentRenameRecovery extends ZIOSpecDefault {
       // No HTTP — recentArchives populated, fetchTmStats should not hit the network.
       client <- fakeChessComClient(Map.empty)
       result <- RecruitmentStatsHelpers.fetchTmStats(
-        client,
+        client = client,
         username = staleU, // pre-rename input — what env.candidate.username carries when CheckTmStats runs
         playerIdHint = pid,
         criteria = criteria,
@@ -260,18 +264,28 @@ object TestRecruitmentRenameRecovery extends ZIOSpecDefault {
       // DB still believes the stale slug — so deriveHint via Club.selectBySlug(stale) finds clubId.
       _ <- Club.upsert(Club(staleClubId, Instant.parse("2020-01-01T00:00:00Z"), staleSlug, "Renamed", Some(5), None, None))
       // ClubMatchRef seeds Tier B's match-endpoint trick.
-      _ <- ClubMatch.upsert(ClubMatch(
-        matchId, "Renamed match", ccas.api.misc.enums.ClubMatchStatus.Finished,
-        ccas.api.misc.enums.TimeClass.Daily,
-        Some(Instant.parse("2020-01-01T00:00:00Z")), Some(Instant.parse("2020-01-02T00:00:00Z")),
-        boards = 1, team1ClubId = Some(staleClubId), team1ScoreX2 = 2,
-        team2ClubId = None, team2ScoreX2 = 0, fetchedAt = Instant.parse("2020-01-01T00:00:00Z")
-      ))
+      _ <- ClubMatch.upsert(
+        ClubMatch(
+          matchId = matchId,
+          name = "Renamed match",
+          status = ccas.api.misc.enums.ClubMatchStatus.Finished,
+          timeClass = ccas.api.misc.enums.TimeClass.Daily,
+          startTime = Some(Instant.parse("2020-01-01T00:00:00Z")),
+          endTime = Some(Instant.parse("2020-01-02T00:00:00Z")),
+          boards = 1,
+          team1ClubId = Some(staleClubId),
+          team1ScoreX2 = 2,
+          team2ClubId = None,
+          team2ScoreX2 = 0,
+          fetchedAt = Instant.parse("2020-01-01T00:00:00Z"),
+          processedBodyHash = None
+        )
+      )
       _      <- ClubMatchRef.upsert(ClubMatchRef(staleClubId, matchId, isLive = false, isTeam1 = true))
       client <- fakeChessComClient(responses, failures = Set(staleSlug.value))
       result <- RecruitmentExplore.gatherClubCandidates(
-        client,
-        staleSlug,
+        client = client,
+        clubSlug = staleSlug,
         excludeSourceAdmins = false,
         existingUsernames = Set.empty,
         evaluatedUsernames = Set.empty

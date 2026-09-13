@@ -107,18 +107,19 @@ object TestClubDataApp extends ZIOSpecDefault {
       _ <- ZIO.whenDiscard(withInferredRef) {
         ClubMatch.upsert(
           ClubMatch(
-            refMatchId,
-            s"Match ${ClubMatchId.unwrap(refMatchId)}",
-            ClubMatchStatus.Finished,
-            TimeClass.Daily,
-            Some(seedMatchStart),
-            Some(seedMatchEnd),
-            1,
-            Some(clubId),
-            20,
-            None,
-            10,
-            seedMatchFetched
+            matchId = refMatchId,
+            name = s"Match ${ClubMatchId.unwrap(refMatchId)}",
+            status = ClubMatchStatus.Finished,
+            timeClass = TimeClass.Daily,
+            startTime = Some(seedMatchStart),
+            endTime = Some(seedMatchEnd),
+            boards = 1,
+            team1ClubId = Some(clubId),
+            team1ScoreX2 = 20,
+            team2ClubId = None,
+            team2ScoreX2 = 10,
+            fetchedAt = seedMatchFetched,
+            processedBodyHash = None
           )
         )
       }

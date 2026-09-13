@@ -317,10 +317,7 @@ private[recruitment] object RecruitmentFilterDefs {
           )
         // Persist the Club row regardless — value for future runs and for ClubDataApp's slug index.
         // `Club.upsert` deliberately preserves an existing latest_match_at, so this doesn't clobber DB state.
-        // After recovery `apiClub.@id`'s last segment is the canonical slug; the resolver already upserted the row,
-        // so passing the canonical slug here keeps subsequent reads consistent.
-        canonicalSlug = ClubSlug.wrap(apiClub.`@id`.path.segments.last)
-        _ <- Club.upsertResolvingSlugConflict(Club.fromApi(apiClub, canonicalSlug), run.client)
+        _ <- Club.upsertResolvingSlugConflict(Club.fromApi(apiClub), run.client)
         rejected <-
           if (!passesGate(apiClub.membersCount, apiClub.admin.size, latestMatchAt, min, cutoff)) ZIO.succeed(false)
           else {

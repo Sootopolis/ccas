@@ -194,7 +194,7 @@ object TestUsernameRenameResolver extends ZIOSpecDefault {
             matchId, "Test Match",
             ccas.api.misc.enums.ClubMatchStatus.Finished, ccas.api.misc.enums.TimeClass.Daily,
             Some(TestTimes.t0), Some(TestTimes.t1), 1,
-            None, 20, None, 10, TestTimes.t0
+            None, 20, None, 10, TestTimes.t0, None
           )
         )
         _ <- ClubMatchBoard.insertBatch(

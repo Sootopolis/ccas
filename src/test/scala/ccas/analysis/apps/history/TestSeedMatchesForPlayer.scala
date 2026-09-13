@@ -91,7 +91,7 @@ object TestSeedMatchesForPlayer extends ZIOSpecDefault {
       )
     }
 
-  /** The `isUnchanged` branch must **skip** the per-player insert pipeline but **still** stamp
+  /** The unchanged branch must **skip** the per-player insert pipeline but **still** stamp
     * `HistoryMemberQuery` — otherwise the wave loop would re-query the player every iteration. This test wipes
     * both side effects after the first call so the second call's behaviour is visible on its own.
     */

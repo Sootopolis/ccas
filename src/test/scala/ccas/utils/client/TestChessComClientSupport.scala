@@ -17,6 +17,16 @@ object TestChessComClientSupport {
   val cfBody: String =
     """<html><head><title>Just a moment...</title></head><body><script src="/cdn-cgi/challenge-platform/scripts/jsd/main.js"></script></body></html>"""
 
+  /** Canonical Chess.com reported-not-found body — classifies as [[ReportedNotFound]]. The subject text is
+    * arbitrary; nothing in these tests asserts on it.
+    */
+  val reportedNotFoundBody: String = """{"code":0,"message":"Match \"1\" not found."}"""
+
+  /** A 404 with an internal-error body — classifies as a bare [[HttpStatusException]], not [[ReportedNotFound]].
+    * Used to assert that this class of 404 stays a failure rather than becoming [[FetchResult.Missing]].
+    */
+  val internalErrorBody: String = """{"code":3024,"message":"An internal error has occurred."}"""
+
   /** Generate doubling recovery tiers up to `max`, e.g. max=20 → Vector(2, 4, 8, 16, 20). */
   def doublingTiers(max: Int): Vector[Int] = {
     val base  = Iterator.iterate(2)(_ * 2).takeWhile(_ < max.max(2)).toVector
@@ -126,6 +136,16 @@ object TestChessComClientSupport {
       maxConnectionRetries = 2,
       permits = 5
     ).map(_._1)
+
+  /** A client whose every request 404s with the given body — [[reportedNotFoundBody]] or [[internalErrorBody]],
+    * typically. Shared by the absence-handling tests in `TestChessComClientThrottling` / `TestChessComClientCaching`.
+    */
+  def notFoundClient(body: String): ZIO[
+    Scope & PostgresClient & BodyStore,
+    Nothing,
+    (ChessComClient, Ref[ChessComClient.ThrottleState], Ref[ClientStatsAccumulator])
+  ] =
+    makeClient(_ => ZIO.succeed(Response.json(body).status(Status.NotFound)))
 
   /** Dummy ChessComClient layer that returns 404 for all requests. Useful for tests that need a ChessComClient in the
     * environment but never actually make HTTP calls.

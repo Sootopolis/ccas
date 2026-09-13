@@ -173,13 +173,14 @@ object Club {
         }.unit
     }
 
-  /** Builds a [[Club]] from an [[ApiClub]] response. The slug is passed separately because callers may have a more
-    * authoritative slug than the URL on the API response (e.g., from a slug conflict resolution). `latestMatchAt` and
-    * `fetchedAt` are left as `None` — they are populated separately by ClubDataApp and preserved by [[upsert]].
+  /** Builds a [[Club]] from an [[ApiClub]] response, reading the slug from `apiClub.canonicalSlug` — the name
+    * Chess.com answers to now, not necessarily the one the caller requested. `latestMatchAt` and `fetchedAt` are
+    * left as `None` — they are populated separately by ClubDataApp and preserved by [[upsert]].
     */
-  def fromApi(apiClub: ApiClub, slug: ClubSlug): Club =
+  def fromApi(apiClub: ApiClub): Club =
     Club(
-      apiClub.clubId, Instant.ofEpochSecond(apiClub.created), slug, apiClub.name, Some(apiClub.membersCount), None, None
+      apiClub.clubId, Instant.ofEpochSecond(apiClub.created), apiClub.canonicalSlug, apiClub.name,
+      Some(apiClub.membersCount), None, None
     )
 
   /** Same `latest_match_at` / `fetched_at` semantics as [[upsert]]: not touched on update — managed by ClubDataApp. */

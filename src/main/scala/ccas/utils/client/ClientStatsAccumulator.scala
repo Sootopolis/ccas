@@ -82,7 +82,8 @@ private[ccas] case class ClientStatsAccumulator(
     )
 
   /** Record a non-rate-limit error. 429s go through `incError429AtTier` and Cloudflare 403s through `incCf403`;
-    * everything else (404, plain 403, 5xx, etc.) is counted here.
+    * everything else (plain 403, 5xx, a 404 carrying an internal-error body) is counted here. A reported-not-found
+    * 404 is not an error at all — it returns `FetchResult.Missing` and counts as a completed exchange (#234).
     */
   def incErrorOther: ClientStatsAccumulator =
     copy(errorsOther = errorsOther + 1)
@@ -187,7 +188,7 @@ private[ccas] object ClientStatsAccumulator {
   private val LatencyBuckets: Array[Long] = Array(50, 100, 200, 500, 1000)
 
   /** Bucket count: one per boundary plus an overflow bucket for values >= the largest boundary. */
-  val LatencyBucketCount: Int = LatencyBuckets.length + 1
+  private val LatencyBucketCount: Int = LatencyBuckets.length + 1
 
   /** Serialize a tier-keyed counter map as a sorted pipe-delimited string: `"tier:count|tier:count|..."`. */
   def serializeTierMap(m: Map[Int, Long]): String =

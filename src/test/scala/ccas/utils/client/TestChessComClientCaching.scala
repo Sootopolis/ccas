@@ -89,13 +89,12 @@ object TestChessComClientCaching extends ZIOSpecDefault {
       ZIO.scoped {
         for {
           (client, _, stats) <- makeClient(_ => ZIO.succeed(cacheable200(jsonBody)))
-          result <- client.getCacheable[Payload](url)
+          result <- client.getResult[Payload](url)
           value  <- result.getValue
           meta   <- ApiResponseCache.lookupMeta(url.encode)
           s      <- stats.get
         } yield assertTrue(
-          result.isInstanceOf[CacheableResult.Changed[?]],
-          !result.isUnchanged,
+          result.isInstanceOf[FetchResult.Changed[?]],
           value.value == "ok",
           meta.exists(_.etag.contains("\"v1\"")),
           meta.exists(_.maxAgeSeconds.contains(300L)),
@@ -114,14 +113,13 @@ object TestChessComClientCaching extends ZIOSpecDefault {
           (client, _, stats) <- makeClient { _ =>
             netCalls.update(_ + 1).as(cacheable200(jsonBody, maxAge = Some(3600)))
           }
-          _      <- client.getCacheable[Payload](url) // populate cache
-          result <- client.getCacheable[Payload](url) // should Fresh
+          _      <- client.getResult[Payload](url) // populate cache
+          result <- client.getResult[Payload](url) // should Fresh
           value  <- result.getValue
           calls  <- netCalls.get
           s      <- stats.get
         } yield assertTrue(
-          result.isInstanceOf[CacheableResult.Fresh[?]],
-          result.isUnchanged,
+          result.isInstanceOf[FetchResult.Fresh[?]],
           value.value == "ok",
           calls == 1, // only the first populate call hit the network
           s.requests == 1L,
@@ -140,16 +138,15 @@ object TestChessComClientCaching extends ZIOSpecDefault {
               else Response(status = Status.NotModified)
             }
           }
-          _         <- client.getCacheable[Payload](url)
+          _         <- client.getResult[Payload](url)
           before    <- ApiResponseCache.lookupMeta(url.encode)
           _         <- ZIO.sleep(20.millis) // ensure touched fetched_at differs
-          result    <- client.getCacheable[Payload](url)
+          result    <- client.getResult[Payload](url)
           value     <- result.getValue
           after     <- ApiResponseCache.lookupMeta(url.encode)
           s         <- stats.get
         } yield assertTrue(
-          result.isInstanceOf[CacheableResult.Revalidated[?]],
-          result.isUnchanged,
+          result.isInstanceOf[FetchResult.Revalidated[?]],
           value.value == "ok",
           before.exists(b => after.exists(_.fetchedAt.isAfter(b.fetchedAt))),
           s.cacheRevalidations == 1L,
@@ -166,13 +163,12 @@ object TestChessComClientCaching extends ZIOSpecDefault {
         for {
           // Always return the same body with a zero max-age so the cache row is always stale
           (client, _, stats) <- makeClient(_ => ZIO.succeed(cacheable200(jsonBody, maxAge = Some(0))))
-          _      <- client.getCacheable[Payload](url) // populate cache
-          result <- client.getCacheable[Payload](url) // server returns identical body
+          _      <- client.getResult[Payload](url) // populate cache
+          result <- client.getResult[Payload](url) // server returns identical body
           value  <- result.getValue
           s      <- stats.get
         } yield assertTrue(
-          result.isInstanceOf[CacheableResult.IdenticalBody[?]],
-          result.isUnchanged,
+          result.isInstanceOf[FetchResult.IdenticalBody[?]],
           value.value == "ok",
           s.requests == 2L,      // both calls hit the network
           s.cacheMisses == 1L,   // first call
@@ -193,15 +189,14 @@ object TestChessComClientCaching extends ZIOSpecDefault {
               else cacheable200(body2, maxAge = Some(0), etag = Some("v2"))
             }
           }
-          _            <- client.getCacheable[Payload](url)
+          _            <- client.getResult[Payload](url)
           firstBodyId  <- ApiResponseCache.lookupMeta(url.encode).map(_.get.bodyId)
-          result       <- client.getCacheable[Payload](url)
+          result       <- client.getResult[Payload](url)
           value        <- result.getValue
           secondBodyId <- ApiResponseCache.lookupMeta(url.encode).map(_.get.bodyId)
           s            <- stats.get
         } yield assertTrue(
-          result.isInstanceOf[CacheableResult.Changed[?]],
-          !result.isUnchanged,
+          result.isInstanceOf[FetchResult.Changed[?]],
           value.value == "second",
           firstBodyId != secondBodyId,
           s.cacheMisses == 2L
@@ -213,11 +208,11 @@ object TestChessComClientCaching extends ZIOSpecDefault {
       ZIO.scoped {
         for {
           (client, _, _) <- makeClient(_ => ZIO.succeed(cacheable200(jsonBody, noStore = true)))
-          result <- client.getCacheable[Payload](url)
+          result <- client.getResult[Payload](url)
           _      <- result.getValue
           meta   <- ApiResponseCache.lookupMeta(url.encode)
         } yield assertTrue(
-          result.isInstanceOf[CacheableResult.Changed[?]],
+          result.isInstanceOf[FetchResult.Changed[?]],
           meta.isEmpty
         )
       }
@@ -230,14 +225,14 @@ object TestChessComClientCaching extends ZIOSpecDefault {
           (client, _, _) <- makeClient { _ =>
             netCalls.update(_ + 1).as(cacheable200(jsonBody, maxAge = None, etag = Some("only-etag")))
           }
-          _      <- client.getCacheable[Payload](url) // populates cache without max-age
-          result <- client.getCacheable[Payload](url) // should NOT be Fresh — server returned 200 with same body
+          _      <- client.getResult[Payload](url) // populates cache without max-age
+          result <- client.getResult[Payload](url) // should NOT be Fresh — server returned 200 with same body
           _      <- result.getValue
           calls  <- netCalls.get
         } yield assertTrue(
           // Without max-age the entry is never fresh; second call hits the network. With the same body returned,
           // ApiResponseBody dedupes by SHA-256 and we get IdenticalBody.
-          result.isInstanceOf[CacheableResult.IdenticalBody[?]],
+          result.isInstanceOf[FetchResult.IdenticalBody[?]],
           calls == 2
         )
       }
@@ -252,14 +247,14 @@ object TestChessComClientCaching extends ZIOSpecDefault {
             // wins: we must revalidate before reuse regardless of the max-age value.
             netCalls.update(_ + 1).as(cacheable200(jsonBody, maxAge = Some(3600), noCache = true))
           }
-          _      <- client.getCacheable[Payload](url) // populates cache
+          _      <- client.getResult[Payload](url) // populates cache
           meta   <- ApiResponseCache.lookupMeta(url.encode)
-          result <- client.getCacheable[Payload](url) // must hit the network despite max-age=3600
+          result <- client.getResult[Payload](url) // must hit the network despite max-age=3600
           _      <- result.getValue
           calls  <- netCalls.get
         } yield assertTrue(
           meta.exists(_.maxAgeSeconds.isEmpty), // no-cache stripped the max-age at persist time
-          !result.isInstanceOf[CacheableResult.Fresh[?]],
+          !result.isInstanceOf[FetchResult.Fresh[?]],
           calls == 2
         )
       }
@@ -272,8 +267,8 @@ object TestChessComClientCaching extends ZIOSpecDefault {
           (client, _, _) <- makeClient { req =>
             lastHeaders.set(req.headers).as(cacheable200(jsonBody, maxAge = Some(0), etag = Some("abc")))
           }
-          _   <- client.getCacheable[Payload](url) // populate cache with etag
-          _   <- client.getCacheable[Payload](url) // second call sends If-None-Match
+          _   <- client.getResult[Payload](url) // populate cache with etag
+          _   <- client.getResult[Payload](url) // second call sends If-None-Match
           hs  <- lastHeaders.get
           inm = hs.rawHeader("If-None-Match")
         } yield assertTrue(
@@ -283,7 +278,7 @@ object TestChessComClientCaching extends ZIOSpecDefault {
       }
     },
     test("Fresh whose body was pruned mid-flight falls through to a network refetch") {
-      // Simulates a retention race: a caller receives CacheableResult.Fresh, holds the lazy load, and between
+      // Simulates a retention race: a caller receives FetchResult.Fresh, holds the lazy load, and between
       // `lookupMeta` and `getValue` the body row gets deleted (e.g. by ApiResponseCache.deleteBefore on another
       // app's startup). loadAndDecode should treat the missing body as a cache miss and fetch fresh data.
       // Use a body that's unique to this test so api_response_body.deleteOrphans can actually remove it —
@@ -296,15 +291,15 @@ object TestChessComClientCaching extends ZIOSpecDefault {
           (client, _, _) <- makeClient { _ =>
             netCalls.update(_ + 1).as(cacheable200(uniqueBody, maxAge = Some(3600)))
           }
-          _     <- client.getCacheable[Payload](url)               // populates cache (network call #1)
-          fresh <- client.getCacheable[Payload](url)               // Fresh hit; body not loaded yet
+          _     <- client.getResult[Payload](url)               // populates cache (network call #1)
+          fresh <- client.getResult[Payload](url)               // Fresh hit; body not loaded yet
           // Simulate the race: cascade-delete the cache row and its body row.
           _     <- ApiResponseCache.invalidate(url.encode)
           _     <- ApiResponseBody.deleteOrphans
           value <- fresh.getValue                                  // must recover via recursive get[T] (network #2)
           calls <- netCalls.get
         } yield assertTrue(
-          fresh.isInstanceOf[CacheableResult.Fresh[?]],
+          fresh.isInstanceOf[FetchResult.Fresh[?]],
           value.value == "race-delete-unique",
           calls == 2
         )
@@ -319,7 +314,7 @@ object TestChessComClientCaching extends ZIOSpecDefault {
           (client, _, _) <- makeClient(_ => ZIO.succeed(
             cacheable200(jsonBody, lastModified = Some(chessComFormat))
           ))
-          _    <- client.getCacheable[Payload](url)
+          _    <- client.getResult[Payload](url)
           meta <- ApiResponseCache.lookupMeta(url.encode)
         } yield assertTrue(meta.exists(_.lastModified.contains(expectedInstant)))
       }
@@ -335,8 +330,8 @@ object TestChessComClientCaching extends ZIOSpecDefault {
               cacheable200(jsonBody, maxAge = Some(0), etag = Some("abc"), lastModified = Some(chessComFormat))
             )
           }
-          _   <- client.getCacheable[Payload](url)
-          _   <- client.getCacheable[Payload](url)
+          _   <- client.getResult[Payload](url)
+          _   <- client.getResult[Payload](url)
           hs  <- lastHeaders.get
           ims = hs.rawHeader("If-Modified-Since")
         } yield assertTrue(
@@ -352,8 +347,8 @@ object TestChessComClientCaching extends ZIOSpecDefault {
           (client, _, _) <- makeClient { req =>
             lastHeaders.set(req.headers).as(cacheable200(jsonBody, maxAge = Some(0), etag = Some("abc")))
           }
-          _    <- client.getCacheable[Payload](url)
-          _    <- client.getCacheable[Payload](url)
+          _    <- client.getResult[Payload](url)
+          _    <- client.getResult[Payload](url)
           meta <- ApiResponseCache.lookupMeta(url.encode)
           hs   <- lastHeaders.get
           ims   = hs.rawHeader("If-Modified-Since")
@@ -374,8 +369,8 @@ object TestChessComClientCaching extends ZIOSpecDefault {
               else notModified304(maxAge = Some(3600), etag = Some("abc"))
             }
           }
-          _    <- client.getCacheable[Payload](url)
-          _    <- client.getCacheable[Payload](url)
+          _    <- client.getResult[Payload](url)
+          _    <- client.getResult[Payload](url)
           meta <- ApiResponseCache.lookupMeta(url.encode)
         } yield assertTrue(meta.exists(_.maxAgeSeconds.contains(3600L)))
       }
@@ -391,8 +386,8 @@ object TestChessComClientCaching extends ZIOSpecDefault {
               else notModified304(maxAge = Some(3600), etag = Some("abc"), noCache = true)
             }
           }
-          _    <- client.getCacheable[Payload](url)
-          _    <- client.getCacheable[Payload](url)
+          _    <- client.getResult[Payload](url)
+          _    <- client.getResult[Payload](url)
           meta <- ApiResponseCache.lookupMeta(url.encode)
         } yield assertTrue(meta.exists(_.maxAgeSeconds.isEmpty))
       }
@@ -410,10 +405,10 @@ object TestChessComClientCaching extends ZIOSpecDefault {
               else Response(status = Status.NotModified)
             }
           }
-          _      <- client.getCacheable[Payload](url)
+          _      <- client.getResult[Payload](url)
           before <- ApiResponseCache.lookupMeta(url.encode)
           _      <- ZIO.sleep(20.millis) // ensure touched fetched_at differs measurably
-          _      <- client.getCacheable[Payload](url)
+          _      <- client.getResult[Payload](url)
           after  <- ApiResponseCache.lookupMeta(url.encode)
         } yield assertTrue(
           before.isDefined,
@@ -452,7 +447,7 @@ object TestChessComClientCaching extends ZIOSpecDefault {
           (client, _, _) <- makeClient { _ =>
             netCalls.update(_ + 1).as(cacheable200(jsonBody, maxAge = Some(3600)))
           }
-          _      <- client.getCacheable[Payload](url) // populate
+          _      <- client.getResult[Payload](url) // populate
           value  <- client.getUncached[Payload](url)  // should serve from Fresh cache
           calls  <- netCalls.get
         } yield assertTrue(
@@ -472,7 +467,7 @@ object TestChessComClientCaching extends ZIOSpecDefault {
               else Response(status = Status.NotModified)
             }
           }
-          _       <- client.getCacheable[Payload](url) // populate
+          _       <- client.getResult[Payload](url) // populate
           before  <- ApiResponseCache.lookupMeta(url.encode)
           _       <- ZIO.sleep(20.millis)              // would surface a touch if it happened
           value   <- client.getUncached[Payload](url)  // 304 path, must NOT touch
@@ -489,7 +484,7 @@ object TestChessComClientCaching extends ZIOSpecDefault {
     test("getUncached recovers from a corrupt cached body without repopulating the cache") {
       // Exercises loadAndDecode's catchSome path under cacheWrites=false: a Fresh hit whose body fails to decode
       // must trigger a refetch that DOES NOT write a new cache row. If `cacheWrites` plumbing through loadAndDecode
-      // is broken, the recovery refetch would silently re-cache via the recursive `getCacheableImpl` call.
+      // is broken, the recovery refetch would silently re-cache via the recursive `getResultImpl` call.
       val url         = URL.decode("http://test.example.com/api/cacheable/uncached-schema-drift").toOption.get
       val refetchBody = """{"value":"uncached-recovered"}"""
       ZIO.scoped {
@@ -498,7 +493,7 @@ object TestChessComClientCaching extends ZIOSpecDefault {
           (client, _, _) <- makeClient { _ =>
             netCalls.update(_ + 1).as(cacheable200(refetchBody, maxAge = Some(3600)))
           }
-          _      <- client.getCacheable[Payload](url) // populate (network #1)
+          _      <- client.getResult[Payload](url) // populate (network #1)
           before <- ApiResponseCache.lookupMeta(url.encode)
           bodyId  = before.get.bodyId
           // Corrupt the cached body so loadAndDecode's decode fails on the next read.
@@ -517,14 +512,14 @@ object TestChessComClientCaching extends ZIOSpecDefault {
         )
       }
     },
-    test("getUncached whose stored object is gone (Missing) drops the cache row") {
+    test("getUncached whose stored object is gone (NotStored) drops the cache row") {
       // #215's other half. `Unavailable` keeps the cache row (TestBodyStoreOutage) because it is still accurate;
-      // `Missing` means it points at nothing, so it must be dropped. Under cacheWrites=true the recovery refetch's
+      // `NotStored` means it points at nothing, so it must be dropped. Under cacheWrites=true the recovery refetch's
       // upsert rewrites the row either way, so `getUncached` is the only shape that can observe the invalidate —
       // without it, collapsing the two arms passes the whole suite.
       //
       // Deleting the object while leaving both the pointer row and the cache row is also the one production shape
-      // that yields `Missing`: the FK is ON DELETE RESTRICT, so in-app pruning can never strand a referenced row.
+      // that yields `NotStored`: the FK is ON DELETE RESTRICT, so in-app pruning can never strand a referenced row.
       // It takes an out-of-band sweep — an R2 lifecycle rule, or someone clearing the fs root.
       val url         = URL.decode("http://test.example.com/api/cacheable/uncached-body-missing").toOption.get
       val refetchBody = """{"value":"body-missing"}""" // unique, so its hash isn't shared with a sibling's row
@@ -534,14 +529,14 @@ object TestChessComClientCaching extends ZIOSpecDefault {
           (client, _, _) <- makeClient { _ =>
             netCalls.update(_ + 1).as(cacheable200(refetchBody, maxAge = Some(3600)))
           }
-          _      <- client.getCacheable[Payload](url) // populate (network #1)
+          _      <- client.getResult[Payload](url) // populate (network #1)
           before <- ApiResponseCache.lookupMeta(url.encode)
           bodyId  = before.get.bodyId
           hash   <- connectZIO(
             sql"SELECT body_hash FROM api_response_body WHERE body_id = ${ApiResponseBodyId.unwrap(bodyId)}".query[String].run().head
           )
           _      <- ZIO.serviceWithZIO[BodyStore](_.delete(hash))
-          value  <- client.getUncached[Payload](url)  // Fresh hit → body Missing → invalidate + refetch (network #2)
+          value  <- client.getUncached[Payload](url)  // Fresh hit → NotStored → invalidate + refetch (network #2)
           calls  <- netCalls.get
           meta   <- ApiResponseCache.lookupMeta(url.encode)
         } yield assertTrue(
@@ -549,6 +544,33 @@ object TestChessComClientCaching extends ZIOSpecDefault {
           calls == 2,
           meta.isEmpty
         )
+      }
+    },
+    test("getOptional yields None when the refetch behind a pruned body finds the resource gone") {
+      // The Missing arm of `optional` cannot cover this: the cache hit takes the present arm, and absence only
+      // appears inside `getValue`'s recovery refetch. Without the catchSome there, getOptional fails instead of
+      // answering None, which is the one contract it has (#234).
+      val url  = URL.decode("http://test.example.com/api/cacheable/optional-gone-on-refetch").toOption.get
+      val body = """{"value":"gone-later"}"""
+      ZIO.scoped {
+        for {
+          netCalls <- Ref.make(0)
+          (client, _, _) <- makeClient { _ =>
+            netCalls.updateAndGet(_ + 1).map { n =>
+              if (n == 1) { cacheable200(body, maxAge = Some(3600)) }
+              else { Response.json(reportedNotFoundBody).status(Status.NotFound) }
+            }
+          }
+          _      <- client.getResult[Payload](url) // populate (network #1)
+          before <- ApiResponseCache.lookupMeta(url.encode)
+          bodyId  = before.get.bodyId
+          hash   <- connectZIO(
+            sql"SELECT body_hash FROM api_response_body WHERE body_id = ${ApiResponseBodyId.unwrap(bodyId)}".query[String].run().head
+          )
+          _      <- ZIO.serviceWithZIO[BodyStore](_.delete(hash))
+          result <- client.getOptional[Payload](url) // Fresh hit → body gone → refetch #2 → reported 404
+          calls  <- netCalls.get
+        } yield assertTrue(result.isEmpty, calls == 2)
       }
     },
     test("loadAndDecode bounds recovery to one refetch — persistently bad JSON propagates without looping") {
@@ -566,7 +588,7 @@ object TestChessComClientCaching extends ZIOSpecDefault {
               else cacheable200("""{"oops":true}""", maxAge = Some(3600)) // refetch returns un-decodable JSON
             }
           }
-          _      <- client.getCacheable[Payload](url) // populate (network #1)
+          _      <- client.getResult[Payload](url) // populate (network #1)
           meta   <- ApiResponseCache.lookupMeta(url.encode)
           bodyId  = meta.get.bodyId
           // Corrupt cached body so the next read triggers loadAndDecode → catchSome → refetch.
@@ -602,9 +624,9 @@ object TestChessComClientCaching extends ZIOSpecDefault {
               )
             }
           }
-          _     <- client.getCacheable[Payload](url)
-          fresh <- client.getCacheable[Payload](url)             // Fresh hit; body not loaded yet
-          bodyId = fresh.asInstanceOf[CacheableResult.Fresh[Payload]].bodyId
+          _     <- client.getResult[Payload](url)
+          fresh <- client.getResult[Payload](url)             // Fresh hit; body not loaded yet
+          bodyId = fresh.asInstanceOf[FetchResult.Fresh[Payload]].bodyId
           // Corrupt the cached body so the next decode throws JsonDecodingException. Unique body content means
           // this UPDATE only affects the row we created for this URL — no other test shares it.
           hash  <- connectZIO(

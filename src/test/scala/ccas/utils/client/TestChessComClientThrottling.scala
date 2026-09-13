@@ -1145,6 +1145,7 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
       }
     },
     suiteTimingStats,
+    suiteAbsence,
     suiteStatsAccumulator
   ).provideShared(
     FreshSchemaLayer("test_client_throttling", Tables.ensureTables)
@@ -1218,6 +1219,87 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
   // ==========================================================================
   // ClientStatsAccumulator (pure)
   // ==========================================================================
+
+  // Absence is an answer (#234): a reported 404 completes the exchange, so it is a value the caller folds on, not
+  // an error. The internal-error 404 is the control — it looks identical at the status line and must stay a failure.
+  // reportedNotFoundBody / internalErrorBody / notFoundClient live in TestChessComClientSupport.
+
+  private def missUrl(path: String): URL = testUrl.addPath(path)
+
+  private def suiteAbsence = suite("absence is an answer")(
+    test("a reported 404 yields Missing and counts as a completed exchange") {
+      ZIO.scoped {
+        for {
+          (client, _, statsRef) <- notFoundClient(reportedNotFoundBody)
+          result <- client.getResult[Payload](missUrl("absent"))
+          stats  <- statsRef.get
+        } yield assertTrue(
+          result.isInstanceOf[FetchResult.Missing],
+          stats.successes == 1L,
+          stats.failures == 0L,
+          stats.errorsOther == 0L
+        )
+      }
+    },
+    test("a reported 404 is still written to api_fetch_failure") {
+      val url = missUrl("absent-recorded")
+      ZIO.scoped {
+        for {
+          (client, _, _) <- notFoundClient(reportedNotFoundBody)
+          _    <- client.getResult[Payload](url)
+          rows <- connectZIO(
+            sql"SELECT error_type FROM api_fetch_failure WHERE url = ${url.encode}".query[String].run()
+          )
+        } yield assertTrue(rows == Vector("ReportedNotFound"))
+      }
+    },
+    test("get still fails on absence, with the reported 404 the recovery combinators match on") {
+      ZIO.scoped {
+        for {
+          (client, _, statsRef) <- notFoundClient(reportedNotFoundBody)
+          error <- client.get[Payload](missUrl("absent-get")).either
+          stats <- statsRef.get
+          // The exchange succeeded; only this caller's policy turned it into a failure, so the counters say so.
+        } yield assertTrue(
+          error.left.exists(_.isInstanceOf[ReportedNotFound]),
+          stats.successes == 1L,
+          stats.failures == 0L
+        )
+      }
+    },
+    test("getOptional yields None on absence") {
+      ZIO.scoped {
+        for {
+          (client, _, statsRef) <- notFoundClient(reportedNotFoundBody)
+          result <- client.getOptional[Payload](missUrl("absent-optional"))
+          stats  <- statsRef.get
+        } yield assertTrue(result.isEmpty, stats.successes == 1L, stats.errorsOther == 0L)
+      }
+    },
+    test("a 404 carrying an internal-error body is a failure, not an absence") {
+      ZIO.scoped {
+        for {
+          (client, _, statsRef) <- notFoundClient(internalErrorBody)
+          error <- client.getResult[Payload](missUrl("broken")).either
+          stats <- statsRef.get
+        } yield assertTrue(
+          error.left.exists(e => e.isInstanceOf[HttpStatusException] && !e.isInstanceOf[ReportedNotFound]),
+          stats.failures == 1L,
+          stats.errorsOther == 1L,
+          stats.successes == 0L
+        )
+      }
+    },
+    test("a 500 is a failure") {
+      ZIO.scoped {
+        for {
+          (client, _, statsRef) <- makeClient(_ => ZIO.succeed(Response(status = Status.InternalServerError)))
+          _     <- client.getResult[Payload](missUrl("server-error")).either
+          stats <- statsRef.get
+        } yield assertTrue(stats.failures == 1L, stats.errorsOther == 1L, stats.successes == 0L)
+      }
+    }
+  )
 
   private def suiteStatsAccumulator = suite("ClientStatsAccumulator")(
     test("incErrorOther increments errorsOther only") {
