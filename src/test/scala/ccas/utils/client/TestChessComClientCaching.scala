@@ -5,9 +5,10 @@ import java.time.Instant
 import com.augustnagro.magnum.sql
 import zio.*
 import zio.http.*
+import zio.json.JsonDecoder
 import zio.test.*
 
-import ccas.analysis.tables.{ApiResponseBody, ApiResponseCache, Tables}
+import ccas.analysis.tables.{ApiFetchFailure, ApiResponseBody, ApiResponseCache, Tables}
 import ccas.analysis.tables.subtypes.ApiResponseBodyId
 import ccas.utils.json.JsonDecodingException
 import ccas.utils.sql.FreshSchemaLayer
@@ -642,6 +643,42 @@ object TestChessComClientCaching extends ZIOSpecDefault {
           meta.isDefined                                         // refetch re-populated the cache
         )
       }
+    },
+    test("a body that fails to decode is recorded in api_fetch_failure with that body") {
+      val url     = URL.decode("http://test.example.com/api/cacheable/undecodable-recorded").toOption.get
+      val badBody = """{"oops":"undecodable-recorded"}"""
+      ZIO.scoped {
+        for {
+          (client, _, _) <- makeClient(_ => ZIO.succeed(cacheable200(badBody)))
+          err  <- client.getUncached[Payload](url).flip
+          rows <- ApiFetchFailure.selectRecent(Instant.EPOCH)
+        } yield assertTrue(
+          err.isInstanceOf[JsonDecodingException],
+          rows.filter(_.url == url.encode).map(r => (r.errorType, r.responseBody)) ==
+            List(("JsonDecodingException", Some(badBody)))
+        )
+      }
+    },
+    test("an identical body that no longer decodes is recorded in api_fetch_failure with that body") {
+      // The cached body decoded fine as `Payload`; `StrictPayload` stands in for a decoder that has since tightened.
+      val url  = URL.decode("http://test.example.com/api/cacheable/identical-undecodable-recorded").toOption.get
+      val body = """{"value":"identical-undecodable-recorded"}"""
+      ZIO.scoped {
+        for {
+          (client, _, _) <- makeClient(_ => ZIO.succeed(cacheable200(body, maxAge = Some(0))))
+          _      <- client.get[Payload](url)
+          result <- client.getResult[StrictPayload](url)
+          err    <- result.getValue.flip
+          rows   <- ApiFetchFailure.selectRecent(Instant.EPOCH)
+        } yield assertTrue(
+          result.isInstanceOf[FetchResult.IdenticalBody[?]],
+          err.isInstanceOf[JsonDecodingException],
+          rows.filter(_.url == url.encode).map(r => (r.errorType, r.responseBody)) ==
+            List(("JsonDecodingException", Some(body)))
+        )
+      }
     }
   )
+
+  private final case class StrictPayload(value: String, extra: Int) derives JsonDecoder
 }

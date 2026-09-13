@@ -18,14 +18,14 @@ final case class ApiClub(
   icon: Option[URL], // (optional) URL of a 200x200 image
   country: URL,      // location of this club's country profile
   location: Option[String],
-  averageDailyRating: Elo,    // average daily rating
-  membersCount: Int,          // total members count
-  created: Long,              // timestamp of creation on Chess.com
-  lastActivity: Long,         // timestamp of the most recent post, match, etc
-  visibility: ClubVisibility, // whether the club is public or private
-  joinRequest: URL,           // location to submit a request to join this club
-  admin: Chunk[URL],          // array of URLs to the player profiles for the admins of this club
-  description: Option[String] // text description of the club
+  averageDailyRating: Option[Elo], // absent on some clubs; can come and go on the same club over time
+  membersCount: Int,               // total members count
+  created: Long,                   // timestamp of creation on Chess.com
+  lastActivity: Long,              // timestamp of the most recent post, match, etc
+  visibility: ClubVisibility,      // whether the club is public or private
+  joinRequest: URL,                // location to submit a request to join this club
+  admin: Chunk[URL],               // array of URLs to the player profiles for the admins of this club
+  description: Option[String]      // text description of the club
 ) derives JsonDecoder {
   /** The slug Chess.com answers to for this club right now, read from the self-referencing `@id` rather than from
     * whatever slug was requested — the two differ after a rename, and only this one is safe to persist.

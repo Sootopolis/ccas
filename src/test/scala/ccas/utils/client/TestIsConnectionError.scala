@@ -44,7 +44,7 @@ object TestIsConnectionError extends ZIOSpecDefault {
       assertTrue(!ConnectionError.isConnectionError(new ReportedNotFound(url, "\"x\" not found.")))
     },
     test("JsonDecodingException is NOT a connection error even if its message looks network-y (type excluded first)") {
-      assertTrue(!ConnectionError.isConnectionError(new JsonDecodingException("Connection reset")))
+      assertTrue(!ConnectionError.isConnectionError(new JsonDecodingException("Connection reset", None)))
     },
     test("NetworkUnavailableException is NOT reclassified (no double-wrap)") {
       assertTrue(!ConnectionError.isConnectionError(new NetworkUnavailableException(new java.io.IOException("down"))))

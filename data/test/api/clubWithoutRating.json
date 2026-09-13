@@ -1,0 +1,31 @@
+{
+  "@id": "https://api.chess.com/pub/club/gothams-mob",
+  "name": "Gotham's Mob",
+  "club_id": 64988,
+  "country": "https://api.chess.com/pub/country/US",
+  "location": "New York, NY",
+  "members_count": 46901,
+  "created": 1528247315,
+  "last_activity": 1765343029,
+  "admin": [
+    "https://api.chess.com/pub/player/levyschair",
+    "https://api.chess.com/pub/player/rainz",
+    "https://api.chess.com/pub/player/calcober",
+    "https://api.chess.com/pub/player/schberg",
+    "https://api.chess.com/pub/player/tackythepenguin",
+    "https://api.chess.com/pub/player/vvlad22",
+    "https://api.chess.com/pub/player/ronnie",
+    "https://api.chess.com/pub/player/lutzisaklutz",
+    "https://api.chess.com/pub/player/theknightbefore",
+    "https://api.chess.com/pub/player/imagreat90",
+    "https://api.chess.com/pub/player/kriegerthecow",
+    "https://api.chess.com/pub/player/gothamchess",
+    "https://api.chess.com/pub/player/thrashix",
+    "https://api.chess.com/pub/player/neondactyl"
+  ],
+  "visibility": "public",
+  "join_request": "https://www.chess.com/club/join/64988",
+  "icon": "https://images.chesscomfiles.com/uploads/v1/group/64988.0269a810.50x50o.143a229b573f.png",
+  "description": "<p>Fans of Levy Rozman who streams at&nbsp;<a href=\"https://www.twitch.tv/gothamchess\" target=\"_blank\" rel=\"noreferrer noopener\">https://www.twitch.tv/gothamchess</a></p>\r\n<p>Openings Courses Link: <a href=\"https://www.chessly.com/\" target=\"_blank\" rel=\"noreferrer noopener\">https://www.chessly.com/</a></p>",
+  "url": "https://www.chess.com/club/gothams-mob"
+}
