@@ -3,6 +3,7 @@ package ccas.utils.sql
 import com.augustnagro.magnum.sql
 import zio.RIO
 
+import ccas.api.misc.subtypes.ClubId
 import ccas.utils.sql.PostgresClient.transactZIO
 
 /** Feature-scoped, FK-aware DELETE helpers for tests. Each helper clears its named feature's tables in
@@ -26,7 +27,7 @@ object TestDbCleanup {
     * `DELETE FROM player` will fail with an FK violation.
     */
   val clearPlayer: RIO[PostgresClient, Unit] = transactZIO {
-    val _ = sql"DELETE FROM player_snapshot".update.run()
+    sql"DELETE FROM player_snapshot".update.run()
     sql"DELETE FROM player".update.run()
   }.unit
 
@@ -34,13 +35,13 @@ object TestDbCleanup {
     * touching `club_match_ref` or `unresolved_match_club` (both FK to `club_match`).
     */
   val clearMatches: RIO[PostgresClient, Unit] = transactZIO {
-    val _ = sql"DELETE FROM club_match_game".update.run()
-    val _ = sql"DELETE FROM club_match_board".update.run()
+    sql"DELETE FROM club_match_game".update.run()
+    sql"DELETE FROM club_match_board".update.run()
     sql"DELETE FROM club_match".update.run()
   }.unit
 
   /** Clears: `club_match_game`, `club_match_board`, `club_match`, `club_admin`, `club_member`, `club_match_ref`,
-    * `unresolved_match_club`, `club`.
+    * `unresolved_match_club`, `club_name`, `club`.
     *
     * Does NOT clear other FK children of `club`: `recruitment_blacklist`, `recruitment_alias`, `recruitment_run`,
     * `membership_run`, `club_ref_skip`, `history_member_query`, `history_pending_match`. If a suite seeds any
@@ -51,14 +52,21 @@ object TestDbCleanup {
     * or after `clearClub` provided no `player`-FK-children survive elsewhere.
     */
   val clearClub: RIO[PostgresClient, Unit] = transactZIO {
-    val _ = sql"DELETE FROM club_match_game".update.run()
-    val _ = sql"DELETE FROM club_match_board".update.run()
-    val _ = sql"DELETE FROM club_match".update.run()
-    val _ = sql"DELETE FROM club_admin".update.run()
-    val _ = sql"DELETE FROM club_member".update.run()
-    val _ = sql"DELETE FROM club_match_ref".update.run()
-    val _ = sql"DELETE FROM unresolved_match_club".update.run()
+    sql"DELETE FROM club_match_game".update.run()
+    sql"DELETE FROM club_match_board".update.run()
+    sql"DELETE FROM club_match".update.run()
+    sql"DELETE FROM club_admin".update.run()
+    sql"DELETE FROM club_member".update.run()
+    sql"DELETE FROM club_match_ref".update.run()
+    sql"DELETE FROM unresolved_match_club".update.run()
+    sql"DELETE FROM club_name".update.run()
     sql"DELETE FROM club".update.run()
+  }.unit
+
+  /** Deletes one club with its `club_name` rows. Its other FK children must already be gone, as for [[clearClub]]. */
+  def deleteClub(clubId: ClubId): RIO[PostgresClient, Unit] = transactZIO {
+    sql"DELETE FROM club_name WHERE club_id = $clubId".update.run()
+    sql"DELETE FROM club WHERE club_id = $clubId".update.run()
   }.unit
 
   /** `recruitment_blacklist`. */
@@ -70,8 +78,8 @@ object TestDbCleanup {
     * `ChessComClient` through 404s or cache misses so subsequent runs start from an empty cache.
     */
   val clearApiCache: RIO[PostgresClient, Unit] = transactZIO {
-    val _ = sql"DELETE FROM api_fetch_failure".update.run()
-    val _ = sql"DELETE FROM api_response_cache".update.run()
+    sql"DELETE FROM api_fetch_failure".update.run()
+    sql"DELETE FROM api_response_cache".update.run()
     sql"DELETE FROM api_response_body".update.run()
   }.unit
 

@@ -1,6 +1,7 @@
 package ccas.cli.config
 
-import ccas.api.misc.subtypes.ClubId
+import ccas.analysis.apps.ClubRef
+import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 
 /** The parsed form of the CLI config's `current_club` value. Stored as `"<id>:<slug>"` when the CLI knows the club's
   * stable Chess.com id, or a bare `"<slug>"` when it doesn't yet (hand-edited config, or a slug set while offline /
@@ -45,7 +46,7 @@ object CurrentClubRef {
     *   - `stored` — the raw `current_club` value at command start (`None` if unset).
     *   - `targetHasId` — whether the slug we submitted already carried an id (a `current_club` in `<id>:<slug>` form).
     *   - `targetSlug` — the slug we submitted.
-    *   - `canonicalId` / `canonicalSlug` — the server-resolved club's stable id and current slug (`None` on a miss).
+    *   - `resolvedOption` — the club the server resolved the submit to (`None` when it did not resolve).
     *
     * Returns the new ref to persist, or `None` to leave `current_club` untouched. It writes only when the submit was
     * FOR the current club AND the canonical differs from what's stored (a Chess.com rename, or an id we didn't have
@@ -57,18 +58,17 @@ object CurrentClubRef {
     stored: Option[String],
     targetHasId: Boolean,
     targetSlug: String,
-    canonicalId: Option[Long],
-    canonicalSlug: Option[String]
+    resolvedOption: Option[ClubRef]
   ): Option[CurrentClubRef] =
-    (stored, canonicalId, canonicalSlug) match {
-      case (Some(raw), Some(id), Some(canon)) =>
-        val ref = parse(raw)
-        val isCurrent =
-          ref.clubId.exists(cur => ClubId.unwrap(cur) == id) || (!targetHasId && sameSlug(ref.slug, targetSlug))
-        val next = CurrentClubRef(Some(ClubId.wrap(id)), canon)
+    (stored, resolvedOption) match {
+      case (Some(raw), Some(resolved)) =>
+        val ref       = parse(raw)
+        val isCurrent = ref.clubId.contains(resolved.clubId) || (!targetHasId && sameSlug(ref.slug, targetSlug))
+        val next      = CurrentClubRef(Some(resolved.clubId), ClubSlug.unwrap(resolved.slug))
         Option.when(isCurrent && next.render != raw.trim)(next)
       case _ => None
     }
 
-  private def sameSlug(a: String, b: String): Boolean = a.trim.equalsIgnoreCase(b.trim)
+  /** Slugs compare case-insensitively and trimmed: `ClubSlug.normalize` lowercases but does not trim. */
+  private[cli] def sameSlug(a: String, b: String): Boolean = a.trim.equalsIgnoreCase(b.trim)
 }

@@ -11,7 +11,7 @@ import ccas.analysis.tables.subtypes.MembershipRunId
 import ccas.api.misc.subtypes.{ClubId, JobRunId}
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient
-import ccas.utils.sql.PostgresClient.connectZIO
+import ccas.utils.sql.PostgresClient.{connectZIO, transactZIO}
 
 final case class MembershipRun(
   runId: MembershipRunId,
@@ -26,7 +26,7 @@ object MembershipRun {
   private val selectCols = SqlLiteral("run_id, club_id, trigger, started_at, completed_at, job_run_id")
 
   def createTable: ZIO[PostgresClient, SQLException, Int] =
-    connectZIO {
+    transactZIO {
       sql"""CREATE TABLE IF NOT EXISTS membership_run (
               run_id       BIGSERIAL PRIMARY KEY,
               club_id      BIGINT NOT NULL,

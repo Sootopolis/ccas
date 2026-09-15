@@ -31,9 +31,9 @@ object TestServerEnvOverlay extends ZIOSpecDefault {
 
   private def write(p: Path, content: String): UIO[Unit] = ZIO.attemptBlocking(Files.writeString(p, content)).unit.orDie
 
-  // Run `zio`, always clearing the given properties (and dropping the systemProperties cache) afterwards.
-  private def withCleanProps[A](keys: String*)(zio: UIO[A]): UIO[A] =
-    zio.ensuring(ZIO.succeed {
+  // Run `effect`, always clearing the given properties (and dropping the systemProperties cache) afterwards.
+  private def withCleanProps[A](keys: String*)(effect: UIO[A]): UIO[A] =
+    effect.ensuring(ZIO.succeed {
       keys.foreach(System.clearProperty)
       ConfigFactory.invalidateCaches()
     })

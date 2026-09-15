@@ -2,6 +2,8 @@ package ccas.cli
 
 import java.nio.file.{Path, Paths}
 
+import ccas.server.config.ServerEnvPaths
+
 /** Resolves the ccas XDG directories and the files within them: the completion cache (matching the exact paths the
   * generated completion scripts read, `${XDG_CACHE_HOME:-$HOME/.cache}/ccas/`), the CLI config file
   * (`${XDG_CONFIG_HOME:-$HOME/.config}/ccas/config.conf`), the server-bootstrap env file (`.../ccas/ccas.env`,
@@ -31,7 +33,7 @@ object XdgPaths {
     * Delegates to `ServerEnvPaths` (in `ccas.server.config`) so the server can resolve the same path without a
     * server→cli package cycle — this accessor is the discoverable CLI-side alias.
     */
-  def serverEnvFile: Path = ccas.server.config.ServerEnvPaths.file
+  def serverEnvFile: Path = ServerEnvPaths.file
 
   /** Pid file written by a detached `ccas serve --detach` server and read by `ccas stop`. */
   def pidFile: Path = stateDir.resolve("ccas.pid")

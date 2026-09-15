@@ -4,7 +4,7 @@ import java.time.Duration
 import java.time.Instant
 import java.time.temporal.ChronoUnit
 
-import zio.{Clock, RIO, Scope, Task, ZLayer}
+import zio.{Clock, RIO, Scope, Task, ZIO, ZLayer}
 import zio.http.*
 import zio.json.DecoderOps
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
@@ -90,11 +90,11 @@ object TestBlacklistRoutes extends ZIOSpecDefault {
     */
   private def parseEntries(response: Response): Task[List[BlacklistEntryResponse]] =
     if (response.status != Status.Ok) {
-      zio.ZIO.fail(new IllegalStateException(s"unexpected status ${response.status}"))
+      ZIO.fail(new IllegalStateException(s"unexpected status ${response.status}"))
     } else {
       for {
         body <- response.body.asString
-        list <- zio.ZIO
+        list <- ZIO
           .fromEither(body.fromJson[List[BlacklistEntryResponse]])
           .mapError(msg => new IllegalStateException(s"JSON decode failed: $msg"))
       } yield list

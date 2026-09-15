@@ -1,7 +1,7 @@
 package ccas.utils.sql
 
 import java.sql.{PreparedStatement, ResultSet, Types}
-import java.time.Instant
+import java.time.{Instant, OffsetDateTime, ZoneOffset}
 
 import com.augustnagro.magnum.DbCodec
 import zio.http.URL
@@ -10,11 +10,11 @@ object DbCodecs {
   given DbCodec[Instant] = new DbCodec[Instant] {
     override def cols: IArray[Int] = IArray(Types.TIMESTAMP_WITH_TIMEZONE)
     override def readSingle(rs: ResultSet, pos: Int): Instant =
-      val odt = rs.getObject(pos, classOf[java.time.OffsetDateTime])
+      val odt = rs.getObject(pos, classOf[OffsetDateTime])
       if (odt == null) { null }
       else { odt.toInstant }
     override def writeSingle(value: Instant, ps: PreparedStatement, pos: Int): Unit =
-      ps.setObject(pos, value.atOffset(java.time.ZoneOffset.UTC))
+      ps.setObject(pos, value.atOffset(ZoneOffset.UTC))
     override def queryRepr: String = "?"
   }
 

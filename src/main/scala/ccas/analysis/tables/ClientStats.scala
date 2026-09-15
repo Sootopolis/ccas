@@ -8,7 +8,7 @@ import zio.ZIO
 
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient
-import ccas.utils.sql.PostgresClient.connectZIO
+import ccas.utils.sql.PostgresClient.{connectZIO, transactZIO}
 
 @Table(PostgresDbType, SqlNameMapper.CamelToSnakeCase)
 final case class ClientStats(
@@ -79,7 +79,7 @@ object ClientStats {
   // sql/2026-04-25-drop-client-stats-cache-defaults.sql); leaving one behind would make raw-SQL inserts look
   // optional about a column `upsert` always writes.
   def createTable: ZIO[PostgresClient, SQLException, Int] =
-    connectZIO {
+    transactZIO {
       sql"""CREATE TABLE IF NOT EXISTS client_stats (
               session_id               TEXT PRIMARY KEY,
               app_label                TEXT NOT NULL,

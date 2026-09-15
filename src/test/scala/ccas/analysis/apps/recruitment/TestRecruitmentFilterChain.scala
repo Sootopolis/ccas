@@ -1,6 +1,6 @@
 package ccas.analysis.apps.recruitment
 
-import java.time.{Duration, Instant}
+import java.time.{Duration, Instant, LocalDate, YearMonth, ZoneOffset}
 
 import ccas.utils.sql.PostgresClient
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
@@ -89,7 +89,7 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
 
   private def testRejectsByMinDaysSinceRegistration = test("rejects by minDaysSinceRegistration") {
     // Player joined 5 days ago, config requires 30 days
-    val recentJoin = Instant.now().minus(java.time.Duration.ofDays(5)).getEpochSecond
+    val recentJoin = Instant.now().minus(Duration.ofDays(5)).getEpochSecond
     val responses  = Map("player/alice" -> apiPlayerJson(200, "alice", joined = recentJoin))
     val criteria   = makeCriteria().copy(minDaysSinceRegistration = Some(30))
     for { outcome <- evalSingle(responses, criteria) } yield assertTrue(outcome == CandidateOutcome.Rejected)
@@ -97,7 +97,7 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
 
   private def testAcceptsPlayerMeetingMinDaysSinceRegistration = test("accepts player meeting minDaysSinceRegistration") {
     // Player joined 60 days ago, config requires 30 days
-    val oldJoin   = Instant.now().minus(java.time.Duration.ofDays(60)).getEpochSecond
+    val oldJoin   = Instant.now().minus(Duration.ofDays(60)).getEpochSecond
     val responses = Map("player/alice" -> apiPlayerJson(200, "alice", joined = oldJoin))
     val criteria  = makeCriteria().copy(minDaysSinceRegistration = Some(30))
     for { outcome <- evalSingle(responses, criteria) } yield assertTrue(outcome == CandidateOutcome.Invited)
@@ -175,8 +175,8 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
   private def testDailyMinGamesFinishedCountsTeamMatchGames = test("dailyMinGamesFinished counts team match games from archives") {
     // Archive has 2 TM games + 1 non-TM game = 3 daily games in 90d window
     val now        = Instant.now()
-    val recent     = now.minus(java.time.Duration.ofDays(10)).getEpochSecond
-    val ym         = java.time.YearMonth.from(java.time.LocalDate.ofInstant(now, java.time.ZoneOffset.UTC))
+    val recent     = now.minus(Duration.ofDays(10)).getEpochSecond
+    val ym         = YearMonth.from(LocalDate.ofInstant(now, ZoneOffset.UTC))
     val archiveKey = s"player/alice/games/${ym.getYear}/${f"${ym.getMonthValue}%02d"}"
     val games = List(
       archiveGameJson("alice", "bob", endTime = recent, matchUrl = Some("https://api.chess.com/pub/match/111")),
@@ -202,8 +202,8 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
 
   private def testDailyMinGamesFinishedExcludesNonDailyGames = test("dailyMinGamesFinished excludes non-daily games from archives") {
     val now        = Instant.now()
-    val recent     = now.minus(java.time.Duration.ofDays(10)).getEpochSecond
-    val ym         = java.time.YearMonth.from(java.time.LocalDate.ofInstant(now, java.time.ZoneOffset.UTC))
+    val recent     = now.minus(Duration.ofDays(10)).getEpochSecond
+    val ym         = YearMonth.from(LocalDate.ofInstant(now, ZoneOffset.UTC))
     val archiveKey = s"player/alice/games/${ym.getYear}/${f"${ym.getMonthValue}%02d"}"
     val games = List(
       archiveGameJson("alice", "bob", endTime = recent, timeClass = "daily"),
@@ -222,7 +222,7 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
 
   private def testArchiveFetchFailureRecordedInApiFetchFailure = test("archive fetch failure is recorded in ApiFetchFailure") {
     val now        = Instant.now()
-    val ym         = java.time.YearMonth.from(java.time.LocalDate.ofInstant(now, java.time.ZoneOffset.UTC))
+    val ym         = YearMonth.from(LocalDate.ofInstant(now, ZoneOffset.UTC))
     val archiveKey = s"player/alice/games/${ym.getYear}/${f"${ym.getMonthValue}%02d"}"
     val responses = Map(
       "player/alice"       -> apiPlayerJson(200, "alice"),
@@ -248,8 +248,8 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
 
   private def testExtractLastDailyTimeoutIgnoresNonDailyGames = test("extractLastDailyTimeout ignores non-daily timeClass games") {
     val now        = Instant.now()
-    val recent     = now.minus(java.time.Duration.ofDays(10)).getEpochSecond
-    val ym         = java.time.YearMonth.from(java.time.LocalDate.ofInstant(now, java.time.ZoneOffset.UTC))
+    val recent     = now.minus(Duration.ofDays(10)).getEpochSecond
+    val ym         = YearMonth.from(LocalDate.ofInstant(now, ZoneOffset.UTC))
     val archiveKey = s"player/alice/games/${ym.getYear}/${f"${ym.getMonthValue}%02d"}"
     val games = List(
       // Blitz timeout — should NOT count as lastDailyTimeoutAt

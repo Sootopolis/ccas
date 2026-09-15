@@ -5,7 +5,7 @@ import java.time.Instant
 
 
 import ccas.utils.sql.PostgresClient
-import zio.{RIO, ZIO}
+import zio.{IO, RIO, ZIO}
 import RecruitmentStatsHelpers.*
 
 import ccas.analysis.apps.{UsernameRenameResolver, withClubSlugRenameRecovery, withPlayerRenameRecovery}
@@ -20,7 +20,7 @@ private[recruitment] object RecruitmentFilterDefs {
 
   // --- Shared helpers ---
 
-  private def requireApiPlayer(env: FilterEnv): zio.IO[NoSuchElementException, ApiPlayer] =
+  private def requireApiPlayer(env: FilterEnv): IO[NoSuchElementException, ApiPlayer] =
     ZIO.fromOption(env.candidate.apiPlayer)
       .orElseFail(new NoSuchElementException("apiPlayer not set — FetchAndCheckPlayer must run first"))
 

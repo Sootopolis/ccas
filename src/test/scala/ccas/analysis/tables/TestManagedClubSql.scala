@@ -31,7 +31,7 @@ object TestManagedClubSql extends ZIOSpecDefault {
   private val staleId = ClubId(402)
 
   private val reset = for {
-    _ <- connectZIO { val _ = sql"DELETE FROM managed_club".update.run() }
+    _ <- connectZIO { sql"DELETE FROM managed_club".update.run() }
     _ <- Club.upsert(Club(clubIdA, Times.t0, ClubSlug("club-a"), "Club A", None, None, None))
     _ <- Club.upsert(Club(clubIdB, Times.t0, ClubSlug("club-b"), "Club B", None, None, None))
     _ <- Club.upsert(Club(staleId, Times.t0, ClubSlug(s"_stale_${ClubId.unwrap(staleId)}"), "Stale", None, None, None))

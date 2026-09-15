@@ -1,15 +1,18 @@
 package ccas.analysis.apps.recruitment
 
+import java.sql.SQLException
 import java.time.{Duration as JDuration, Instant}
 
-import zio.{Clock, ExitCode, RIO, Ref, Scope, Task, ZEnvironment, ZIO, ZIOAppArgs, ZIOAppDefault}
+import scala.io.StdIn
+
+import zio.{durationLong, Clock, ExitCode, RIO, Ref, Scope, Task, ZEnvironment, ZIO, ZIOAppArgs, ZIOAppDefault}
 
 import ccas.analysis.apps.membership.MembershipApp
 import ccas.analysis.apps.ref.RefHelpers
-import ccas.analysis.apps.withClubSlugRenameRecovery
+import ccas.analysis.apps.{ClubSlugRenameResolver, withClubSlugRenameRecovery}
 import ccas.analysis.tables.*
 import ccas.analysis.tables.subtypes.RecruitmentRunId
-import ccas.api.club.{ApiClub, ApiClubMatches, ApiClubMembers}
+import ccas.api.club.{ApiClubMatches, ApiClubMembers}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId, PlayerId, Username}
 import ccas.api.player.ApiPlayer
 import ccas.utils.{display, OutputFile, ProgressDisplay}
@@ -84,8 +87,9 @@ object RecruitmentApp extends ZIOAppDefault {
           val clubSlug = ClubSlug.wrap(clubStr)
           for {
             run <- recruit(
-              clubSlug,
-              parsed.alias,
+              clubSlug = clubSlug,
+              expectedClubId = None,
+              alias = parsed.alias,
               target = parsed.target,
               cumulative = parsed.cumulative,
               sourceClubs = parsed.sourceClubs,
@@ -126,8 +130,12 @@ object RecruitmentApp extends ZIOAppDefault {
 
   // --- Phase 1: Initialize ---
 
+  /** `expectedClubId` guards against `clubSlug` now answering as another club: see
+    * [[ClubSlugRenameResolver.fetchExpecting]].
+    */
   def recruit(
     clubSlug: ClubSlug,
+    expectedClubId: Option[ClubId],
     alias: String,
     target: Option[Int] = None,
     cumulative: Boolean = false,
@@ -143,12 +151,11 @@ object RecruitmentApp extends ZIOAppDefault {
     jobRunId: Option[JobRunId] = None
   ): RIO[ProgressDisplay & ChessComClient & PostgresClient, RecruitmentRun] = ZIO.scoped {
     for {
-      _      <- MembershipApp.reconcile(clubSlug, trackRun = false)
+      _      <- MembershipApp.reconcile(clubSlug, expectedClubId, trackRun = false)
       client <- ZIO.service[ChessComClient]
-      // The club fetch is the FIRST 404-prone hit in the run. With no clubIdHint, the resolver derives the hint from
-      // the `club` table (deriveHint) — matching how MembershipApp's earlier reconcile resolves the slug.
-      apiClub <- ApiClub.get(client, clubSlug)
-        .withClubSlugRenameRecovery(client, clubSlug, clubIdHint = None)(fresh => ApiClub.get(client, fresh))
+      // Without an expected id, the resolver derives the hint from the `club` table (deriveHint) — matching how
+      // MembershipApp's earlier reconcile resolves the slug.
+      apiClub <- ClubSlugRenameResolver.fetchExpecting(client, clubSlug, expectedClubId).map(_.api)
       clubId        = apiClub.clubId
       effectiveSlug = apiClub.canonicalSlug
       club          = Club.fromApi(apiClub)
@@ -242,28 +249,28 @@ object RecruitmentApp extends ZIOAppDefault {
         if (effectiveTarget == 0) {
           ZIO.logInfo("[Cumulative] Target already met, skipping explore") *>
             finalizeRun(
-              ctx,
-              trigger,
-              now,
-              cumulative,
-              alreadyFound,
-              "Recruitment Complete (target already met)",
+              ctx = ctx,
+              trigger = trigger,
+              startedAt = now,
+              cumulative = cumulative,
+              alreadyFound = alreadyFound,
+              label = "Recruitment Complete (target already met)",
               autoConfirm = autoConfirm,
               jobRunId = jobRunId
             )
         } else {
           runExplorePhase(
-            ctx,
-            client,
-            pgClient,
-            sourceClubs,
-            timeLimitMinutes,
-            trigger,
-            now,
-            cumulative,
-            alreadyFound,
-            autoConfirm,
-            jobRunId
+            ctx = ctx,
+            client = client,
+            pgClient = pgClient,
+            sourceClubs = sourceClubs,
+            timeLimitMinutes = timeLimitMinutes,
+            trigger = trigger,
+            startedAt = now,
+            cumulative = cumulative,
+            alreadyFound = alreadyFound,
+            autoConfirm = autoConfirm,
+            jobRunId = jobRunId
           )
         }
     } yield finalRun
@@ -320,16 +327,16 @@ object RecruitmentApp extends ZIOAppDefault {
         roundRobinKeys = Nil
       )
       _ <- (timeLimitMinutes match {
-        case Some(minutes) => loopEffect.timeout(zio.durationLong(minutes.toLong).minutes).unit
+        case Some(minutes) => loopEffect.timeout(minutes.toLong.minutes).unit
         case None          => loopEffect.unit
       }).onInterrupt(
         finalizeRun(
-          ctx,
-          trigger,
-          startedAt,
-          cumulative,
-          alreadyFound,
-          "Recruitment Interrupted",
+          ctx = ctx,
+          trigger = trigger,
+          startedAt = startedAt,
+          cumulative = cumulative,
+          alreadyFound = alreadyFound,
+          label = "Recruitment Interrupted",
           interrupted = true,
           autoConfirm = autoConfirm,
           jobRunId = jobRunId
@@ -340,12 +347,12 @@ object RecruitmentApp extends ZIOAppDefault {
 
       // --- Finalize ---
       finalRun <- finalizeRun(
-        ctx,
-        trigger,
-        startedAt,
-        cumulative,
-        alreadyFound,
-        "Recruitment Complete",
+        ctx = ctx,
+        trigger = trigger,
+        startedAt = startedAt,
+        cumulative = cumulative,
+        alreadyFound = alreadyFound,
+        label = "Recruitment Complete",
         autoConfirm = autoConfirm,
         jobRunId = jobRunId
       )
@@ -392,20 +399,20 @@ object RecruitmentApp extends ZIOAppDefault {
         for {
           _ <- ZIO.foreachDiscard(confirmed) { u =>
             Player.selectByUsername(u)
-              .someOrFail(new java.sql.SQLException(s"No player found for confirmed candidate $u"))
+              .someOrFail(new SQLException(s"No player found for confirmed candidate $u"))
               .flatMap(p => RecruitmentCandidate.updateOutcome(ctx.runId, p.playerId, CandidateOutcome.Invited))
           }
           deferredCount <- RecruitmentCandidate.selectDeferredCountByRun(ctx.runId)
           finalRun = RecruitmentRun(
-            ctx.runId,
-            clubId,
-            ctx.runCtx.criteria.criteriaId,
-            trigger,
-            startedAt,
-            Some(completedAt),
-            confirmed.size,
-            Some(ctx.target),
-            jobRunId
+            runId = ctx.runId,
+            clubId = clubId,
+            criteriaId = ctx.runCtx.criteria.criteriaId,
+            trigger = trigger,
+            startedAt = startedAt,
+            completedAt = Some(completedAt),
+            candidatesFound = confirmed.size,
+            target = Some(ctx.target),
+            jobRunId = jobRunId
           )
           _ <- RecruitmentRun.update(finalRun)
         } yield (finalRun, deferredCount)
@@ -443,7 +450,7 @@ object RecruitmentApp extends ZIOAppDefault {
       _ <- ZIO.logInfo(s"\nFound ${found.size} candidates:")
       _ <- ZIO.foreachDiscard(found)(u => ZIO.logInfo(s"  $u"))
       answer <- ZIO.attemptBlocking(
-        scala.io.StdIn.readLine(s"\nMark all ${found.size} candidates as Invited? [Y/n] ")
+        StdIn.readLine(s"\nMark all ${found.size} candidates as Invited? [Y/n] ")
       ).orElse(ZIO.succeed("n"))
     } yield
       if (answer == null || answer.trim.isEmpty || answer.trim.toLowerCase.startsWith("y")) found
@@ -476,8 +483,7 @@ object RecruitmentApp extends ZIOAppDefault {
       run <- runIdOpt match {
         case Some(id) =>
           ZIO.attempt(id.toLong)
-            .orElseFail(BadRequestException(s"Invalid run ID: '$id' (expected a number)"))
-            .map(RecruitmentRunId.wrap)
+            .mapBoth(_ => BadRequestException(s"Invalid run ID: '$id' (expected a number)"), RecruitmentRunId.wrap)
             .flatMap(RecruitmentRun.selectId)
             .someOrFail(NotFoundException(s"Run $id not found"))
         case None =>

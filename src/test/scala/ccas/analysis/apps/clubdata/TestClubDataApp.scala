@@ -2,8 +2,7 @@ package ccas.analysis.apps.clubdata
 
 import java.time.Instant
 
-import com.augustnagro.magnum.sql
-import zio.{Chunk, RIO, ZIO, ZLayer}
+import zio.{Chunk, RIO, ZEnvironment, ZIO, ZLayer}
 import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
@@ -13,8 +12,7 @@ import ccas.api.misc.enums.{ClubMatchStatus, PlayerStatusCategory, TimeClass}
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username}
 import ccas.utils.ProgressDisplay
 import ccas.utils.client.{BodyStore, ChessComClient, TestChessComClientSupport}
-import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
-import ccas.utils.sql.PostgresClient.connectZIO
+import ccas.utils.sql.{FreshSchemaLayer, PostgresClient, TestDbCleanup}
 
 object TestClubDataApp extends ZIOSpecDefault {
 
@@ -78,14 +76,7 @@ object TestClubDataApp extends ZIOSpecDefault {
     * slate.
     */
   private val clearTables: ZIO[PostgresClient, Throwable, Unit] =
-    for {
-      _ <- connectZIO(sql"DELETE FROM club_admin".update.run())
-      _ <- connectZIO(sql"DELETE FROM club_match_ref".update.run())
-      _ <- connectZIO(sql"DELETE FROM club_match".update.run())
-      _ <- connectZIO(sql"DELETE FROM club".update.run())
-      _ <- connectZIO(sql"DELETE FROM player_snapshot".update.run())
-      _ <- connectZIO(sql"DELETE FROM player".update.run())
-    } yield ()
+    TestDbCleanup.clearClub *> TestDbCleanup.clearPlayer
 
   private val seedCreated  = Instant.parse("2024-01-01T00:00:00Z")
   private val seedMatchStart = Instant.parse("2024-06-01T00:00:00Z")
@@ -164,7 +155,7 @@ object TestClubDataApp extends ZIOSpecDefault {
     for {
       xa     <- ZIO.service[PostgresClient]
       logger <- ZIO.service[ProgressDisplay]
-      result <- ClubDataApp.refresh(None).provideEnvironment(zio.ZEnvironment(client, xa, logger))
+      result <- ClubDataApp.refresh(None).provideEnvironment(ZEnvironment(client, xa, logger))
     } yield result
 
   private def suiteRefreshClub = suite("refreshClub rename-404 recovery")(

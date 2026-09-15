@@ -32,12 +32,18 @@ object MembershipApp extends ZIOAppDefault {
         mode match {
           case ReconcileOnly =>
             for {
-              (result, invitations) <- reconcileAndReport(clubName, trustUsernames = true, RunTrigger.Cli, jobRunId = None)
+              (result, invitations) <- reconcileAndReport(
+                clubSlug = clubName,
+                expectedClubId = None,
+                trustUsernames = true,
+                trigger = RunTrigger.Cli,
+                jobRunId = None
+              )
               _ <- OutputFile.writeAndLog(MEMBERSHIP, clubName, MembershipReport.formatReconciliation(result, invitations))
             } yield ()
           case SinceNow(since) =>
             for {
-              _  <- reconcile(clubName)
+              _  <- reconcile(clubName, expectedClubId = None)
               rr <- MembershipReport.report(clubName, since, Instant.now())
               _  <- OutputFile.writeAndLog(MEMBERSHIP, clubName, MembershipReport.formatReport(rr))
             } yield ()
@@ -110,15 +116,19 @@ object MembershipApp extends ZIOAppDefault {
       case Some(club) =>
         MembershipRun.selectLatest(club.clubId).flatMap {
           case Some(run) if !until.isAfter(run.startedAt) => ZIO.unit
-          case _                                          => reconcile(clubSlug).unit
+          case _                                          => reconcile(clubSlug, expectedClubId = None).unit
         }
-      case None => reconcile(clubSlug).unit
+      case None => reconcile(clubSlug, expectedClubId = None).unit
     }
 
   // --- Phase A: Gather data ---
 
+  /** `expectedClubId` guards against `clubSlug` now answering as another club: see
+    * [[ClubSlugRenameResolver.fetchExpecting]].
+    */
   def reconcile(
     clubSlug: ClubSlug,
+    expectedClubId: Option[ClubId],
     trustUsernames: Boolean = true,
     trackRun: Boolean = true,
     trigger: RunTrigger = RunTrigger.Cli,
@@ -127,7 +137,7 @@ object MembershipApp extends ZIOAppDefault {
     for {
       startedAt <- Clock.instant
       client    <- ZIO.service[ChessComClient]
-      resolved <- ClubSlugRenameResolver.fetchOrRecover(client, clubSlug)
+      resolved  <- ClubSlugRenameResolver.fetchExpecting(client, clubSlug, expectedClubId)
       apiClub   = resolved.api
       clubId    = apiClub.clubId
       club      = Club.fromApi(apiClub)
@@ -174,12 +184,13 @@ object MembershipApp extends ZIOAppDefault {
   // already-committed reconcile to a failed job, so it logs and falls back to no invite annotations.
   def reconcileAndReport(
     clubSlug: ClubSlug,
+    expectedClubId: Option[ClubId],
     trustUsernames: Boolean,
     trigger: RunTrigger,
     jobRunId: Option[JobRunId]
   ): RIO[ProgressDisplay & ChessComClient & PostgresClient, (ReconciliationResult, Map[PlayerId, Instant])] =
     for {
-      result      <- reconcile(clubSlug, trustUsernames, trigger = trigger, jobRunId = jobRunId)
+      result      <- reconcile(clubSlug, expectedClubId, trustUsernames, trigger = trigger, jobRunId = jobRunId)
       invitations <- MembershipReport.lookupJoinInvitations(result.clubId, result.changes.toList)
                        .catchAll(e =>
                          ZIO

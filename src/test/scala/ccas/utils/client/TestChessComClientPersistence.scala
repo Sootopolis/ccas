@@ -1,6 +1,7 @@
 package ccas.utils.client
 
 import java.time.Instant
+import java.util.concurrent.TimeUnit
 
 import ccas.utils.sql.PostgresClient
 import zio.*
@@ -159,7 +160,7 @@ object TestChessComClientPersistence extends ZIOSpecDefault {
         pgClient <- ZIO.service[PostgresClient]
         statsRef <- Ref.make(ClientStatsAccumulator().copy(requests = 5, successes = 5, activeMs = 500))
         ctx      <- makeFlushContext("test-ongoing-throttle", statsRef, pgClient)
-        nowMs <- Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS)
+        nowMs <- Clock.currentTime(TimeUnit.MILLISECONDS)
         _     <- ctx.stateRef.update(_.copy(
           currentMax = 1, coolingDown = true, throttledSince = Some(nowMs - 100_000)
         ))

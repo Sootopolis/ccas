@@ -27,7 +27,7 @@ object ClubMember {
   private val selectCols = SqlLiteral("club_id, player_id, since, until, since_approximate")
 
   def createTable: ZIO[PostgresClient, SQLException, Int] =
-    connectZIO {
+    transactZIO {
       sql"""CREATE TABLE IF NOT EXISTS club_member (
               club_id           BIGINT NOT NULL,
               player_id         BIGINT NOT NULL,

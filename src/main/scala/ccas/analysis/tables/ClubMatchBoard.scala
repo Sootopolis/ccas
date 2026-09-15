@@ -28,7 +28,7 @@ object ClubMatchBoard {
   )
 
   def createTable: ZIO[PostgresClient, SQLException, Int] =
-    connectZIO {
+    transactZIO {
       sql"""CREATE TABLE IF NOT EXISTS club_match_board (
               match_id         BIGINT NOT NULL REFERENCES club_match (match_id) ON DELETE CASCADE,
               board            SMALLINT NOT NULL,

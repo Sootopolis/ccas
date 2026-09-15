@@ -38,6 +38,8 @@ object Tables extends ZIOAppDefault {
       _ <- PlayerTournamentRef.createTable
       _ <- PlayerSnapshot.createTable
       _ <- Club.createTable
+      _ <- ClubName.createTable
+      _ <- ClubName.backfill
       _ <- ClubAdmin.createTable
       _ <- ClubMatchRef.createTable
       _ <- PlayerRefSkip.createTable

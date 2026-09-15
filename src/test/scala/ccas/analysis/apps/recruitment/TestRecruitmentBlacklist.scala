@@ -4,7 +4,7 @@ import java.time.{Duration, Instant}
 
 import ccas.utils.sql.PostgresClient
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
-import zio.{ZIO, ZLayer}
+import zio.{ZEnvironment, ZIO, ZLayer}
 
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.*
 import ccas.analysis.tables.*
@@ -69,7 +69,7 @@ object TestRecruitmentBlacklist extends ZIOSpecDefault {
           clubId,
           pid0,
           Times.t0,
-          expiresAt = Some(now.minus(java.time.Duration.ofDays(1))),
+          expiresAt = Some(now.minus(Duration.ofDays(1))),
           reason = Some("temp ban")
         )
       )
@@ -114,7 +114,7 @@ object TestRecruitmentBlacklist extends ZIOSpecDefault {
         Some("toxic"),
         Some(futureInstant)
       )
-        .provideEnvironment(zio.ZEnvironment(client, pgClient, ProgressDisplay.make(enabled = false)))
+        .provideEnvironment(ZEnvironment(client, pgClient, ProgressDisplay.make(enabled = false)))
       entries <- RecruitmentBlacklist.selectByClub(blacklistClubId)
     } yield assertTrue(
       entries.size == 1,
@@ -134,7 +134,7 @@ object TestRecruitmentBlacklist extends ZIOSpecDefault {
       client <- fakeChessComClient(responses)
       pgClient <- ZIO.service[PostgresClient]
       _ <- BlacklistApp.addToBlacklist(blacklistClubSlug, List(Username("target-player")), None, None)
-        .provideEnvironment(zio.ZEnvironment(client, pgClient, ProgressDisplay.make(enabled = false)))
+        .provideEnvironment(ZEnvironment(client, pgClient, ProgressDisplay.make(enabled = false)))
       entries <- RecruitmentBlacklist.selectByClub(blacklistClubId)
     } yield assertTrue(
       entries.size == 1,
@@ -153,14 +153,14 @@ object TestRecruitmentBlacklist extends ZIOSpecDefault {
       client <- fakeChessComClient(responses)
       pgClient <- ZIO.service[PostgresClient]
       _ <- BlacklistApp.addToBlacklist(blacklistClubSlug, List(Username("target-player")), Some("first"), None)
-        .provideEnvironment(zio.ZEnvironment(client, pgClient, ProgressDisplay.make(enabled = false)))
+        .provideEnvironment(ZEnvironment(client, pgClient, ProgressDisplay.make(enabled = false)))
       _ <- BlacklistApp.addToBlacklist(
         blacklistClubSlug,
         List(Username("target-player")),
         Some("updated"),
         Some(Times.t3)
       )
-        .provideEnvironment(zio.ZEnvironment(client, pgClient, ProgressDisplay.make(enabled = false)))
+        .provideEnvironment(ZEnvironment(client, pgClient, ProgressDisplay.make(enabled = false)))
       entries <- RecruitmentBlacklist.selectByClub(blacklistClubId)
     } yield assertTrue(
       entries.size == 1,
@@ -230,7 +230,7 @@ object TestRecruitmentBlacklist extends ZIOSpecDefault {
         List(Username("alice"), Username("bob"), Username("charlie")),
         Some("batch ban"),
         None
-      ).provideEnvironment(zio.ZEnvironment(client, pgClient, ProgressDisplay.make(enabled = false)))
+      ).provideEnvironment(ZEnvironment(client, pgClient, ProgressDisplay.make(enabled = false)))
       entries <- RecruitmentBlacklist.selectByClub(blacklistClubId)
     } yield assertTrue(
       entries.size == 3,
@@ -253,7 +253,7 @@ object TestRecruitmentBlacklist extends ZIOSpecDefault {
       pgClient <- ZIO.service[PostgresClient]
       before <- Club.selectId(freshClubId)
       _ <- BlacklistApp.addToBlacklist(freshClubSlug, List(Username("target-player")), None, None)
-        .provideEnvironment(zio.ZEnvironment(client, pgClient, ProgressDisplay.make(enabled = false)))
+        .provideEnvironment(ZEnvironment(client, pgClient, ProgressDisplay.make(enabled = false)))
       after <- Club.selectId(freshClubId)
     } yield assertTrue(
       before.isEmpty,
@@ -276,7 +276,7 @@ object TestRecruitmentBlacklist extends ZIOSpecDefault {
         client   <- fakeChessComClient(responses)
         pgClient <- ZIO.service[PostgresClient]
         _ <- BlacklistApp.addToBlacklist(blacklistClubSlug, List(newUsername), None, None)
-          .provideEnvironment(zio.ZEnvironment(client, pgClient, ProgressDisplay.make(enabled = false)))
+          .provideEnvironment(ZEnvironment(client, pgClient, ProgressDisplay.make(enabled = false)))
         row     <- Player.selectId(pid3)
         snaps   <- PlayerSnapshot.selectId(pid3)
         entries <- RecruitmentBlacklist.selectByClub(blacklistClubId)

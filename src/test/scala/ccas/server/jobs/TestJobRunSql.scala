@@ -49,7 +49,7 @@ object TestJobRunSql extends ZIOSpecDefault {
     JobRun(id2, JobKind.MatchRef, None, RunTrigger.Cli, JobRunStatus.Running, Some("params"), Times.t2, None, None)
 
   private val deleteAll = for {
-    _ <- connectZIO { val _ = sql"DELETE FROM job_run".update.run() }
+    _ <- connectZIO { sql"DELETE FROM job_run".update.run() }
     _ <- Club.upsert(Club(clubIdA, Times.t0, ClubSlug("club-a"), "Club A", None, None, None))
     _ <- Club.upsert(Club(clubIdB, Times.t0, ClubSlug("club-b"), "Club B", None, None, None))
   } yield ()

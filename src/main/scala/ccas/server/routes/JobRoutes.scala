@@ -1,16 +1,16 @@
 package ccas.server.routes
 
 import java.nio.charset.StandardCharsets
+import java.time.Instant
 
 import scala.util.chaining.*
 
-import ccas.utils.sql.PostgresClient
-import ccas.utils.sql.PostgresClient.withTransaction
-import zio.{NonEmptyChunk, RIO, ZIO}
+import zio.{IO, NonEmptyChunk, RIO, URIO, ZIO}
 import zio.http.*
 import zio.json.{DeriveJsonCodec, EncoderOps, JsonCodec}
+import zio.stream.ZStream
 
-import ccas.analysis.apps.{ClubResolution, ClubVerdict}
+import ccas.analysis.apps.ClubResolution
 import ccas.analysis.apps.history.HistoryApp
 import ccas.analysis.apps.membership.MembershipApp
 import ccas.analysis.apps.recruitment.RecruitmentApp
@@ -21,9 +21,11 @@ import ccas.analysis.tables.subtypes.RecruitmentRunId
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId, Username}
 import ccas.server.jobs.*
 import ccas.server.routes.RouteHelpers.*
-import ccas.utils.{ProgressDisplay, TimeParser}
+import ccas.utils.TimeParser
 import ccas.utils.client.ChessComClient
-import ccas.utils.errors.{BadRequestException, ClubProblem, ConflictException, ErrorResponse}
+import ccas.utils.errors.{BadRequestException, ConflictException, ErrorResponse}
+import ccas.utils.sql.PostgresClient
+import ccas.utils.sql.PostgresClient.withTransaction
 
 object JobRoutes {
 
@@ -34,8 +36,8 @@ object JobRoutes {
 
   // `clubId` (on every club-scoped request) is the target club's stable Chess.com id, sent by the CLI when it has one
   // cached for the resolved `current_club`. When present the server resolves by id — rename-proof — and runs the job
-  // against the club's canonical slug rather than the (possibly stale) `clubSlug` the CLI echoed; absent, it resolves by
-  // `clubSlug` as before. Optional so an older client / raw API caller still works (#176, #180).
+  // against the club's canonical slug rather than the (possibly stale) `clubSlug` the CLI echoed; absent, it resolves
+  // `clubSlug` as a current or former name (ADR 0016). Optional so a raw API caller still works (#176, #180).
   private[ccas] case class RecruitmentRequest(
     clubSlug: ClubSlug,
     alias: Option[String],
@@ -89,35 +91,27 @@ object JobRoutes {
 
   // --- Response types ---
 
-  // `clubId` / `canonicalSlug` on the two result types report the resolved club's stable id and current canonical slug
-  // (both None on a resolution miss, and clubId None for the club-less matchref job). The CLI uses them to freshen a
-  // `current_club` whose stored display slug has gone stale after a rename, and to backfill an id it didn't have yet.
-
-  // `problem` is the typed reason a club-scoped submit didn't run (`None` when it did), carried alongside the
-  // human-readable `error` so the CLI branches on a value instead of `error.startsWith("Club not found")`.
-
-  /** Result of submitting a single job (recruitment, matchref). */
-  private[ccas] case class JobResult(
-    jobId: Option[String],
-    error: Option[String],
-    clubId: Option[Long] = None,
-    canonicalSlug: Option[String] = None,
-    problem: Option[ClubProblem] = None
-  )
+  /** Result of submitting the club-less matchref job. */
+  private[ccas] case class JobResult(jobId: Option[String], error: Option[String])
   object JobResult {
     given JsonCodec[JobResult] = DeriveJsonCodec.gen
   }
 
-  /** Result of submitting a club-specific job within a batch (membership, history). `clubSlug` echoes the requested slug
-    * (the CLI matches results and invalidates its cache by it); `canonicalSlug` is the server-resolved current slug. */
+  /** Result of submitting a club-scoped job (recruitment, membership, history, stats). `clubSlug` echoes the requested
+    * slug, which the CLI matches results and invalidates its cache by. `resolution` is how that slug resolved: the club
+    * the job runs against, which the CLI reads to freshen a stale `current_club`, or why it did not run. `error`
+    * carries only failures past resolution, such as a job already running.
+    */
   private[ccas] case class ClubJobResult(
     clubSlug: String,
     jobId: Option[String],
     error: Option[String],
-    clubId: Option[Long] = None,
-    canonicalSlug: Option[String] = None,
-    problem: Option[ClubProblem] = None
-  )
+    resolution: ClubResolution
+  ) {
+
+    /** Why the job did not start, if it did not. */
+    def failure: Option[String] = error.orElse(resolution.runnable.left.toOption)
+  }
   object ClubJobResult {
     given JsonCodec[ClubJobResult] = DeriveJsonCodec.gen
   }
@@ -171,271 +165,263 @@ object JobRoutes {
 
   // --- Routes ---
 
-  def routes: Routes[JobRunner & ChessComClient & PostgresClient, Nothing] = Routes(
-    Method.POST / "api" / "jobs" / "recruitment" -> handler { (req: Request) =>
-      (for {
-        body   <- parseJsonBody[RecruitmentRequest](req)
-        runner <- ZIO.service[JobRunner]
-        result <- ClubResolution.resolve(body.clubId, body.clubSlug).flatMap {
-          case other @ (ClubVerdict.NotLocal(_) | ClubVerdict.Problematic(_)) =>
-            ZIO.succeed(JobResult(None, other.message, problem = other.problem))
-          case ClubVerdict.Known(club) =>
-            val cappedTarget       = body.target.map(_ min JobCaps.MaxTarget)
-            val effectiveTimeLimit = body.timeLimitMinutes.map(_ min JobCaps.MaxTimeLimitMinutes)
-            val canonical          = JobResult(None, None, Some(ClubId.unwrap(club.clubId)), Some(ClubSlug.unwrap(club.slug)))
-            val effect = (jobRunId: Option[JobRunId]) =>
-              RecruitmentApp.recruit(
-                club.slug,
-                body.alias.getOrElse("default"),
-                target = cappedTarget,
-                cumulative = body.cumulative.getOrElse(false),
-                sourceClubs = body.sourceClubs.getOrElse(Nil),
-                timeLimitMinutes = effectiveTimeLimit,
-                explore = body.explore.getOrElse(true),
-                trigger = RunTrigger.Api,
-                autoConfirm = body.autoConfirm.getOrElse(true),
-                jobRunId = jobRunId
-              )
-            runner.submit(JobKind.Recruitment, Some(club.clubId), Some(body.toJson), RunTrigger.Api, effect)
-              .map(id => canonical.copy(jobId = Some(JobRunId.unwrap(id))))
-              .catchSome { case e: ConflictException =>
-                ZIO.succeed(canonical.copy(error = Some(e.getMessage)))
-              }
-        }
-      } yield jsonResponse(Status.Ok, result)).pipe(withErrorHandling)
-    },
-    Method.POST / "api" / "jobs" / "membership" -> handler { (req: Request) =>
-      (for {
-        body   <- parseJsonBody[MembershipRequest](req)
-        runner <- ZIO.service[JobRunner]
-        clubIdForSingle = singleClubId(body.clubSlugs, body.clubId)
-        results <- ZIO.foreach(body.clubSlugs.toChunk.toList)(slug =>
-          submitClubJob(
-            runner,
-            JobKind.Membership,
-            clubIdForSingle,
-            slug,
-            Some(body.toJson),
-            club =>
-              jobRunId =>
-                MembershipApp.reconcileAndReport(
-                  club.slug,
-                  body.trustUsernames.getOrElse(true),
-                  RunTrigger.Api,
-                  jobRunId
-                ).unit
-          )
-        )
-      } yield jsonResponse(Status.Ok, results)).pipe(withErrorHandling)
-    },
-    Method.POST / "api" / "jobs" / "matchref" -> handler {
-      (for {
-        runner <- ZIO.service[JobRunner]
-        result <- runner
-          .submit(
-            JobKind.MatchRef,
-            None,
-            None,
-            RunTrigger.Api,
-            _ => RefApp.populate(forceSkipped = false, upgradeRefs = false).unit
-          )
-          .map(id => JobResult(Some(JobRunId.unwrap(id)), None))
-          .catchSome { case e: ConflictException =>
-            ZIO.succeed(JobResult(None, Some(e.getMessage)))
-          }
-      } yield jsonResponse(Status.Ok, result)).pipe(withErrorHandling)
-    },
-    Method.POST / "api" / "jobs" / "history" -> handler { (req: Request) =>
-      (for {
-        body   <- parseJsonBody[HistoryRequest](req)
-        runner <- ZIO.service[JobRunner]
-        effectiveRefresh = body.refreshMinHours.orElse(body.refresh.filter(identity).map(_ => 0))
-        clubIdForSingle  = singleClubId(body.clubSlugs, body.clubId)
-        results <- ZIO.foreach(body.clubSlugs.toChunk.toList)(slug =>
-          submitClubJob(
-            runner,
-            JobKind.History,
-            clubIdForSingle,
-            slug,
-            Some(body.toJson),
-            club =>
-              jobRunId =>
-                HistoryApp.discover(
-                  club.slug,
-                  body.full.getOrElse(false),
-                  body.includeFinished.getOrElse(false),
-                  effectiveRefresh,
-                  RunTrigger.Api,
-                  jobRunId = jobRunId
-                ).unit
-          )
-        )
-      } yield jsonResponse(Status.Ok, results)).pipe(withErrorHandling)
-    },
-    Method.POST / "api" / "jobs" / "stats" -> handler { (req: Request) =>
-      (for {
-        body   <- parseJsonBody[StatsRequest](req)
-        runner <- ZIO.service[JobRunner]
-        parsed <- (body.since, body.until) match {
-          case (Some(sinceStr), Some(untilStr)) =>
-            for {
-              since <- TimeParser.parseInstantZIO(sinceStr)
-                .mapError(e => BadRequestException(s"Invalid 'since': $e"))
-              until <- TimeParser.parseInstantZIO(untilStr)
-                .mapError(e => BadRequestException(s"Invalid 'until': $e"))
-            } yield Some((since, until))
-          case (None, None) => ZIO.none
-          case _ => ZIO.fail(BadRequestException("Both 'since' and 'until' are required for period stats"))
-        }
-        result <- submitClubJob(
-          runner,
-          JobKind.Stats,
-          body.clubId,
-          body.clubSlug,
-          Some(body.toJson),
-          club =>
-            _ =>
-              parsed match {
-                case Some((since, until)) =>
-                  // minGames=1 mirrors the CLI default; StatsRequest carries no min-games field.
-                  StatsApp.playerOfPeriodAndReport(club.slug, since, until, 1).unit
-                case None =>
-                  StatsApp.memberStatsAndReport(club.slug).unit
-              }
-        )
-      } yield jsonResponse(Status.Ok, result)).pipe(withErrorHandling)
-    },
-    Method.GET / "api" / "jobs" -> handler {
-      (for {
-        runner <- ZIO.service[JobRunner]
-        jobs   <- runner.recentJobs(50)
-      } yield jsonResponse(Status.Ok, jobs.map(JobStatusResponse.fromJobRun)))
-        .pipe(withErrorHandling)
-    },
-    Method.GET / "api" / "jobs" / string("jobId") -> handler { (jobId: String, _: Request) =>
-      (for {
-        runner <- ZIO.service[JobRunner]
-        id = JobRunId.wrap(jobId)
-        jobOpt <- runner.status(id)
-      } yield jobOpt match {
-        case Some(job) => jsonResponse(Status.Ok, JobStatusResponse.fromJobRun(job))
-        case None      => jsonResponse(Status.NotFound, ErrorResponse(s"Job $jobId not found"))
-      }).pipe(withErrorHandling)
-    },
-    // Request cancellation of a running job: interrupt its fiber (best-effort, async — the job records `Cancelled`
-    // itself as it unwinds). 200 if a live job fiber was found and interrupted; 404 if the id is unknown, already
-    // terminal, or (unsupported multi-server) owned by another instance. POST, not DELETE: the row is retained, this
-    // is a state transition, not a resource removal.
-    Method.POST / "api" / "jobs" / string("jobId") / "cancel" -> handler { (jobId: String, _: Request) =>
-      (for {
-        runner    <- ZIO.service[JobRunner]
-        cancelled <- runner.cancel(JobRunId.wrap(jobId))
-      } yield
-        if (cancelled) { jsonResponse(Status.Ok, CancelResult(jobId)) }
-        else { jsonResponse(Status.NotFound, ErrorResponse(s"No running job $jobId to cancel")) }
-      ).pipe(withErrorHandling)
-    },
-    // Chunked `text/plain` stream of a job's log lines. Stays open while the job runs (lines arrive as emitted) and
-    // closes once the job is terminal and the tail reaches EOF, so a client can treat body-close as "job finished".
-    Method.GET / "api" / "jobs" / string("jobId") / "logs" -> handler { (jobId: String, _: Request) =>
-      (for {
-        runner    <- ZIO.service[JobRunner]
-        streamOpt <- runner.logStream(JobRunId.wrap(jobId))
-      } yield streamOpt match {
-        case JobLogs.NoSuchJob => Response.text(s"Job $jobId not found").status(Status.NotFound)
-        // 410 rather than 404: the job is real and its row is still queryable, only its log is not. Retention is the
-        // usual cause but not the only one — a sink that never opened writes no file either, so the text hedges.
-        case JobLogs.Expired =>
-          Response
-            .text(s"Job $jobId has no log available — aged out of job_log_retention_days, or never written")
-            .status(Status.Gone)
-        case JobLogs.Streaming(lines) =>
-          Response(
-            status = Status.Ok,
-            headers = Headers(Header.ContentType(MediaType.text.`plain`, charset = Some(StandardCharsets.UTF_8))),
-            // Interleave a keepalive tick so a >50s silent job phase can't idle the follower's connection shut (#150).
-            body = Body.fromCharSequenceStreamChunked(
-              JobLogStream.withKeepAlive(lines).map(_ + "\n"),
-              StandardCharsets.UTF_8
-            )
-          )
-      }).pipe(withErrorHandling)
-    },
-    // Chunked NDJSON stream of a job's live progress: one `ProgressSnapshot` per line (latest-wins), merging the job's
-    // app bars with the shared client's API gauge. Live-only — closes when the job is terminal. The following CLI opens
-    // this only when it wants bars (interactive TTY, not `--no-progress`); it never affects the `/logs` follow.
-    Method.GET / "api" / "jobs" / string("jobId") / "progress" -> handler { (jobId: String, _: Request) =>
-      (for {
-        runner    <- ZIO.service[JobRunner]
-        streamOpt <- runner.progressStream(JobRunId.wrap(jobId))
-      } yield streamOpt match {
-        case None => Response.text(s"Job $jobId not found").status(Status.NotFound)
-        case Some(frames) =>
-          Response(
-            status = Status.Ok,
-            headers = Headers(Header.ContentType(MediaType.text.`plain`, charset = Some(StandardCharsets.UTF_8))),
-            // Same keepalive tick as `/logs`: a job phase with no bar changes for >50s must not idle the follower shut.
-            body = Body.fromCharSequenceStreamChunked(
-              JobLogStream.withKeepAlive(frames).map(_ + "\n"),
-              StandardCharsets.UTF_8
-            )
-          )
-      }).pipe(withErrorHandling)
-    },
-    // Invited usernames for the recruitment run linked to a job — the paste-ready payload the CLI fetches once the
-    // job is terminal (the `ccas recruit --stdout` auto-confirm path). 404 if the job id has no recruitment run.
-    // Scope is THIS run only, deliberately: a `--cumulative` top-up returns just its new invites so the operator
-    // doesn't re-paste players already invited earlier today.
-    Method.GET / "api" / "jobs" / string("jobId") / "recruitment" / "invited" -> handler { (jobId: String, _: Request) =>
-      candidatesByJobResponse(jobId, RecruitmentCandidate.selectInvitedByRun).pipe(withErrorHandling)
-    },
-    // Still-deferred candidates for a job's recruitment run — shown by interactive `ccas recruit` before the operator
-    // confirms (a deferred-confirm run leaves everything Deferred). 404 if the job has no recruitment run.
-    Method.GET / "api" / "jobs" / string("jobId") / "recruitment" / "found" -> handler { (jobId: String, _: Request) =>
-      candidatesByJobResponse(jobId, RecruitmentCandidate.selectDeferredByRun).pipe(withErrorHandling)
-    },
-    // Confirm a deferred-confirm run: flip its Deferred candidates to Invited, record the count, return the confirmed
-    // usernames. A re-POST finds nothing deferred (flipped = 0) and returns the same already-invited list.
-    Method.POST / "api" / "jobs" / string("jobId") / "recruitment" / "confirm" -> handler { (jobId: String, _: Request) =>
-      withRunForJob(jobId) { run =>
-        for {
-          // Flip and count-update share one transaction so a crash can't leave candidates Invited with the run's
-          // candidates_found still 0 (which would make a later --cumulative run undercount and over-invite).
-          flipped <- withTransaction {
-            for {
-              f <- RecruitmentCandidate.confirmDeferredByRun(run.runId)
-              _ <- ZIO.whenDiscard(f > 0)(RecruitmentRun.setCandidatesFound(run.runId, f))
-            } yield f
-          }
-          usernames <- RecruitmentCandidate.selectInvitedByRun(run.runId).flatMap(usernamesFor)
-        } yield jsonResponse(Status.Ok, ConfirmResult(flipped, usernames))
-      }.pipe(withErrorHandling)
-    },
-    // Report the latest recruitment run's invited usernames for a club — `ccas recruit --report`.
-    Method.GET / "api" / "recruitment" / "clubs" / string("slug") / "latest" / "invited" -> handler {
-      (slug: String, _: Request) =>
-        (Club.selectBySlug(ClubSlug.wrap(slug)).flatMap {
-          case None       => ZIO.succeed(jsonResponse(Status.NotFound, ErrorResponse(s"Club not found: $slug")))
-          case Some(club) =>
-            RecruitmentRun.selectLatest(club.clubId).flatMap {
-              case None      => ZIO.succeed(jsonResponse(Status.NotFound, ErrorResponse(s"No recruitment runs for $slug")))
-              case Some(run) => invitedRunResponse(run.runId)
-            }
-        }).pipe(withErrorHandling)
-    },
-    // Report a specific recruitment run's invited usernames — `ccas recruit --report --run N`.
-    Method.GET / "api" / "recruitment" / "runs" / string("runId") / "invited" -> handler { (runId: String, _: Request) =>
-      (runId.toLongOption match {
-        case None     => ZIO.succeed(jsonResponse(Status.BadRequest, ErrorResponse(s"Invalid run id: $runId")))
-        case Some(id) =>
-          val rid = RecruitmentRunId.wrap(id)
-          RecruitmentRun.selectId(rid).flatMap {
-            case None    => ZIO.succeed(jsonResponse(Status.NotFound, ErrorResponse(s"Run $runId not found")))
-            case Some(_) => invitedRunResponse(rid)
-          }
-      }).pipe(withErrorHandling)
-    }
+  val routes: Routes[JobRunner & ChessComClient & PostgresClient, Nothing] = Routes(
+    Method.POST / "api" / "jobs" / "recruitment" ->
+      handler((req: Request) => submitRecruitment(req)),
+    Method.POST / "api" / "jobs" / "membership" ->
+      handler((req: Request) => submitMembership(req)),
+    Method.POST / "api" / "jobs" / "matchref" ->
+      handler(submitMatchRef),
+    Method.POST / "api" / "jobs" / "history" ->
+      handler((req: Request) => submitHistory(req)),
+    Method.POST / "api" / "jobs" / "stats" ->
+      handler((req: Request) => submitStats(req)),
+    Method.GET / "api" / "jobs" ->
+      handler(listJobs),
+    Method.GET / "api" / "jobs" / string("jobId") ->
+      handler((jobId: String, _: Request) => jobStatus(jobId)),
+    Method.POST / "api" / "jobs" / string("jobId") / "cancel" ->
+      handler((jobId: String, _: Request) => cancelJob(jobId)),
+    Method.GET / "api" / "jobs" / string("jobId") / "logs" ->
+      handler((jobId: String, _: Request) => jobLogs(jobId)),
+    Method.GET / "api" / "jobs" / string("jobId") / "progress" ->
+      handler((jobId: String, _: Request) => jobProgress(jobId)),
+    Method.GET / "api" / "jobs" / string("jobId") / "recruitment" / "invited" ->
+      handler((jobId: String, _: Request) => invitedForJob(jobId)),
+    Method.GET / "api" / "jobs" / string("jobId") / "recruitment" / "found" ->
+      handler((jobId: String, _: Request) => foundForJob(jobId)),
+    Method.POST / "api" / "jobs" / string("jobId") / "recruitment" / "confirm" ->
+      handler((jobId: String, _: Request) => confirmForJob(jobId)),
+    Method.GET / "api" / "recruitment" / "clubs" / string("slug") / "latest" / "invited" ->
+      handler((slug: String, _: Request) => latestInvitedForClub(slug)),
+    Method.GET / "api" / "recruitment" / "runs" / string("runId") / "invited" ->
+      handler((runId: String, _: Request) => invitedForRun(runId))
   )
+
+  // --- Job submission ---
+
+  private def submitRecruitment(req: Request): URIO[JobRunner & PostgresClient, Response] =
+    (for {
+      body   <- parseJsonBody[RecruitmentRequest](req)
+      runner <- ZIO.service[JobRunner]
+      result <- submitClubJob(runner, JobKind.Recruitment, body.clubId, body.clubSlug, Some(body.toJson)) {
+        (club, jobRunId) =>
+          RecruitmentApp.recruit(
+            clubSlug = club.slug,
+            expectedClubId = Some(club.clubId),
+            alias = body.alias.getOrElse("default"),
+            target = body.target.map(_ min JobCaps.MaxTarget),
+            cumulative = body.cumulative.getOrElse(false),
+            sourceClubs = body.sourceClubs.getOrElse(Nil),
+            timeLimitMinutes = body.timeLimitMinutes.map(_ min JobCaps.MaxTimeLimitMinutes),
+            explore = body.explore.getOrElse(true),
+            trigger = RunTrigger.Api,
+            autoConfirm = body.autoConfirm.getOrElse(true),
+            jobRunId = jobRunId
+          )
+      }
+    } yield jsonResponse(Status.Ok, result)).pipe(withErrorHandling)
+
+  private def submitMembership(req: Request): URIO[JobRunner & PostgresClient, Response] =
+    (for {
+      body   <- parseJsonBody[MembershipRequest](req)
+      runner <- ZIO.service[JobRunner]
+      results <- submitClubJobs(runner, JobKind.Membership, body.clubSlugs, body.clubId, Some(body.toJson)) {
+        (club, jobRunId) =>
+          MembershipApp.reconcileAndReport(
+            clubSlug = club.slug,
+            expectedClubId = Some(club.clubId),
+            trustUsernames = body.trustUsernames.getOrElse(true),
+            trigger = RunTrigger.Api,
+            jobRunId = jobRunId
+          )
+      }
+    } yield jsonResponse(Status.Ok, results)).pipe(withErrorHandling)
+
+  private def submitMatchRef: URIO[JobRunner & PostgresClient, Response] =
+    (for {
+      runner <- ZIO.service[JobRunner]
+      submitted <- jobIdOrConflict(
+        runner.submit(
+          kind = JobKind.MatchRef,
+          clubId = None,
+          params = None,
+          trigger = RunTrigger.Api,
+          effect = _ => RefApp.populate(forceSkipped = false, upgradeRefs = false)
+        )
+      )
+    } yield jsonResponse(Status.Ok, JobResult(jobId = submitted.toOption, error = submitted.left.toOption)))
+      .pipe(withErrorHandling)
+
+  private def submitHistory(req: Request): URIO[JobRunner & PostgresClient, Response] =
+    (for {
+      body   <- parseJsonBody[HistoryRequest](req)
+      runner <- ZIO.service[JobRunner]
+      refreshMinHours = body.refreshMinHours.orElse(body.refresh.filter(identity).map(_ => 0))
+      results <- submitClubJobs(runner, JobKind.History, body.clubSlugs, body.clubId, Some(body.toJson)) {
+        (club, jobRunId) =>
+          HistoryApp.discover(
+            clubSlug = club.slug,
+            expectedClubId = Some(club.clubId),
+            full = body.full.getOrElse(false),
+            includeFinished = body.includeFinished.getOrElse(false),
+            refreshMinHours = refreshMinHours,
+            trigger = RunTrigger.Api,
+            jobRunId = jobRunId
+          )
+      }
+    } yield jsonResponse(Status.Ok, results)).pipe(withErrorHandling)
+
+  private def submitStats(req: Request): URIO[JobRunner & PostgresClient, Response] =
+    (for {
+      body         <- parseJsonBody[StatsRequest](req)
+      runner       <- ZIO.service[JobRunner]
+      periodOption <- statsPeriod(body)
+      result <- submitClubJob(runner, JobKind.Stats, body.clubId, body.clubSlug, Some(body.toJson)) { (club, _) =>
+        periodOption match {
+          // minGames=1 mirrors the CLI default; StatsRequest carries no min-games field.
+          case Some((since, until)) => StatsApp.playerOfPeriodAndReport(club.clubId, since, until, 1)
+          case None                 => StatsApp.memberStatsAndReport(club.clubId)
+        }
+      }
+    } yield jsonResponse(Status.Ok, result)).pipe(withErrorHandling)
+
+  private def statsPeriod(body: StatsRequest): IO[BadRequestException, Option[(Instant, Instant)]] =
+    (body.since, body.until) match {
+      case (Some(sinceString), Some(untilString)) =>
+        for {
+          since <- TimeParser.parseInstantZIO(sinceString).mapError(e => BadRequestException(s"Invalid 'since': $e"))
+          until <- TimeParser.parseInstantZIO(untilString).mapError(e => BadRequestException(s"Invalid 'until': $e"))
+        } yield Some((since, until))
+      case (None, None) => ZIO.none
+      case _            => ZIO.fail(BadRequestException("Both 'since' and 'until' are required for period stats"))
+    }
+
+  // --- Job inspection ---
+
+  private def listJobs: URIO[JobRunner & PostgresClient, Response] =
+    (for {
+      runner <- ZIO.service[JobRunner]
+      jobs   <- runner.recentJobs(50)
+    } yield jsonResponse(Status.Ok, jobs.map(JobStatusResponse.fromJobRun))).pipe(withErrorHandling)
+
+  private def jobStatus(jobId: String): URIO[JobRunner & PostgresClient, Response] =
+    (for {
+      runner    <- ZIO.service[JobRunner]
+      jobOption <- runner.status(JobRunId.wrap(jobId))
+    } yield jobOption match {
+      case Some(job) => jsonResponse(Status.Ok, JobStatusResponse.fromJobRun(job))
+      case None      => jsonResponse(Status.NotFound, ErrorResponse(s"Job $jobId not found"))
+    }).pipe(withErrorHandling)
+
+  /** Interrupts a running job's fiber (best-effort, async — the job records `Cancelled` itself as it unwinds). 200 if a
+    * live job fiber was found and interrupted; 404 if the id is unknown, already terminal, or (unsupported
+    * multi-server) owned by another instance. POST, not DELETE: the row is retained, this is a state transition.
+    */
+  private def cancelJob(jobId: String): URIO[JobRunner, Response] =
+    (for {
+      runner    <- ZIO.service[JobRunner]
+      cancelled <- runner.cancel(JobRunId.wrap(jobId))
+    } yield
+      if (cancelled) { jsonResponse(Status.Ok, CancelResult(jobId)) }
+      else { jsonResponse(Status.NotFound, ErrorResponse(s"No running job $jobId to cancel")) }
+    ).pipe(withErrorHandling)
+
+  /** Chunked `text/plain` stream of a job's log lines. Stays open while the job runs (lines arrive as emitted) and
+    * closes once the job is terminal and the tail reaches EOF, so a client can treat body-close as "job finished".
+    */
+  private def jobLogs(jobId: String): URIO[JobRunner & PostgresClient, Response] =
+    (for {
+      runner <- ZIO.service[JobRunner]
+      logs   <- runner.logStream(JobRunId.wrap(jobId))
+    } yield logs match {
+      case JobLogs.NoSuchJob => Response.text(s"Job $jobId not found").status(Status.NotFound)
+      // 410 rather than 404: the job is real and its row is still queryable, only its log is not. Retention is the
+      // usual cause but not the only one — a sink that never opened writes no file either, so the text hedges.
+      case JobLogs.Expired =>
+        Response
+          .text(s"Job $jobId has no log available — aged out of job_log_retention_days, or never written")
+          .status(Status.Gone)
+      case JobLogs.Streaming(lines) => lineStream(lines)
+    }).pipe(withErrorHandling)
+
+  /** Chunked NDJSON stream of a job's live progress: one `ProgressSnapshot` per line (latest-wins), merging the job's
+    * app bars with the shared client's API gauge. Live-only — closes when the job is terminal. The following CLI opens
+    * this only when it wants bars (interactive TTY, not `--no-progress`); it never affects the `/logs` follow.
+    */
+  private def jobProgress(jobId: String): URIO[JobRunner & PostgresClient, Response] =
+    (for {
+      runner       <- ZIO.service[JobRunner]
+      framesOption <- runner.progressStream(JobRunId.wrap(jobId))
+    } yield framesOption match {
+      case None         => Response.text(s"Job $jobId not found").status(Status.NotFound)
+      case Some(frames) => lineStream(frames)
+    }).pipe(withErrorHandling)
+
+  // Interleaves a keepalive tick so a job phase silent for >50s can't idle the follower's connection shut (#150).
+  private def lineStream(lines: ZStream[Any, Throwable, String]): Response =
+    Response(
+      status = Status.Ok,
+      headers = Headers(Header.ContentType(MediaType.text.`plain`, charset = Some(StandardCharsets.UTF_8))),
+      body = Body.fromCharSequenceStreamChunked(JobLogStream.withKeepAlive(lines).map(_ + "\n"), StandardCharsets.UTF_8)
+    )
+
+  // --- Recruitment results ---
+
+  /** Invited usernames for the recruitment run linked to a job — the paste-ready payload the CLI fetches once the job
+    * is terminal (the `ccas recruit --stdout` auto-confirm path). 404 if the job id has no recruitment run. Scope is
+    * THIS run only, deliberately: a `--cumulative` top-up returns just its new invites so the operator doesn't
+    * re-paste players already invited earlier today.
+    */
+  private def invitedForJob(jobId: String): URIO[PostgresClient, Response] =
+    candidatesByJobResponse(jobId, RecruitmentCandidate.selectInvitedByRun).pipe(withErrorHandling)
+
+  /** Still-deferred candidates for a job's recruitment run — shown by interactive `ccas recruit` before the operator
+    * confirms (a deferred-confirm run leaves everything Deferred). 404 if the job has no recruitment run.
+    */
+  private def foundForJob(jobId: String): URIO[PostgresClient, Response] =
+    candidatesByJobResponse(jobId, RecruitmentCandidate.selectDeferredByRun).pipe(withErrorHandling)
+
+  /** Confirms a deferred-confirm run: flips its Deferred candidates to Invited, records the count, returns the
+    * confirmed usernames. A re-POST finds nothing deferred (flipped = 0) and returns the same already-invited list.
+    */
+  private def confirmForJob(jobId: String): URIO[PostgresClient, Response] =
+    withRunForJob(jobId) { run =>
+      for {
+        // Flip and count-update share one transaction so a crash can't leave candidates Invited with the run's
+        // candidates_found still 0 (which would make a later --cumulative run undercount and over-invite).
+        flipped <- withTransaction {
+          for {
+            f <- RecruitmentCandidate.confirmDeferredByRun(run.runId)
+            _ <- ZIO.whenDiscard(f > 0)(RecruitmentRun.setCandidatesFound(run.runId, f))
+          } yield f
+        }
+        usernames <- RecruitmentCandidate.selectInvitedByRun(run.runId).flatMap(usernamesFor)
+      } yield jsonResponse(Status.Ok, ConfirmResult(flipped, usernames))
+    }.pipe(withErrorHandling)
+
+  /** The latest recruitment run's invited usernames for a club — `ccas recruit --report`. */
+  private def latestInvitedForClub(slug: String): URIO[PostgresClient, Response] =
+    Club.selectBySlug(ClubSlug.wrap(slug)).flatMap {
+      case None => ZIO.succeed(jsonResponse(Status.NotFound, ErrorResponse(s"Club not found: $slug")))
+      case Some(club) =>
+        RecruitmentRun.selectLatest(club.clubId).flatMap {
+          case None      => ZIO.succeed(jsonResponse(Status.NotFound, ErrorResponse(s"No recruitment runs for $slug")))
+          case Some(run) => invitedRunResponse(run.runId)
+        }
+    }.pipe(withErrorHandling)
+
+  /** A specific recruitment run's invited usernames — `ccas recruit --report --run N`. */
+  private def invitedForRun(runId: String): URIO[PostgresClient, Response] =
+    (runId.toLongOption match {
+      case None => ZIO.succeed(jsonResponse(Status.BadRequest, ErrorResponse(s"Invalid run id: $runId")))
+      case Some(id) =>
+        val rid = RecruitmentRunId.wrap(id)
+        RecruitmentRun.selectId(rid).flatMap {
+          case None    => ZIO.succeed(jsonResponse(Status.NotFound, ErrorResponse(s"Run $runId not found")))
+          case Some(_) => invitedRunResponse(rid)
+        }
+    }).pipe(withErrorHandling)
 
   // --- Recruitment result helpers ---
 
@@ -470,38 +456,48 @@ object JobRoutes {
 
   // --- Helpers ---
 
-  /** The batch request's `clubId` applies only to a single-club submit: for a genuine multi-club batch (which the CLI
-    * never sends) an id can't be shared across slugs, so it's dropped and each club resolves by slug.
+  /** [[submitClubJob]] for each club of a batch request. Its `clubId` applies only to a single-club submit: for a
+    * genuine multi-club batch (which the CLI never sends) an id can't be shared across slugs, so it's dropped and each
+    * club resolves by slug.
     */
-  private def singleClubId(slugs: NonEmptyChunk[ClubSlug], clubId: Option[ClubId]): Option[ClubId] =
-    if (slugs.size == 1) { clubId } else { None }
+  private def submitClubJobs(
+    runner: JobRunner,
+    kind: JobKind,
+    requestedSlugs: NonEmptyChunk[ClubSlug],
+    clubIdOption: Option[ClubId],
+    params: Option[String]
+  )(effect: ClubJobEffect): RIO[PostgresClient, List[ClubJobResult]] = {
+    val singleClubIdOption = clubIdOption.filter(_ => requestedSlugs.size == 1)
+    ZIO.foreach(requestedSlugs.toChunk.toList)(submitClubJob(runner, kind, singleClubIdOption, _, params)(effect))
+  }
 
-  /** Resolve a club (by id when the caller has one, else by the requested slug) and submit a single job. The `effect` is
-    * built from the *resolved* [[Club]], not the requested slug, so a job launched against a renamed `current_club` runs
-    * on the club's canonical slug instead of 404-ing on the stale one the CLI echoed. The [[ClubJobResult]] echoes the
-    * requested slug (for CLI matching / cache invalidation) and carries the canonical id + slug for `current_club`
-    * refresh.
+  /** Resolves a club (by id when the caller has one, else by the requested slug) and submits a single job built from
+    * the *resolved* club, so a job addressed by a former name runs on the club's current slug instead of 404-ing on the
+    * stale one.
     */
   private def submitClubJob(
     runner: JobRunner,
     kind: JobKind,
-    clubId: Option[ClubId],
+    clubIdOption: Option[ClubId],
     requestedSlug: ClubSlug,
-    params: Option[String],
-    effect: Club => Option[JobRunId] => RIO[ProgressDisplay & ChessComClient & PostgresClient, Any]
-  ): RIO[PostgresClient, ClubJobResult] = {
-    val echoed = ClubSlug.unwrap(requestedSlug)
-    ClubResolution.resolve(clubId, requestedSlug).flatMap {
-      case ClubVerdict.Known(club) =>
-        runner.submit(kind, Some(club.clubId), params, RunTrigger.Api, effect(club))
-          .map(id =>
-            ClubJobResult(echoed, Some(JobRunId.unwrap(id)), None, Some(ClubId.unwrap(club.clubId)), Some(ClubSlug.unwrap(club.slug)))
-          )
-          .catchSome { case e: ConflictException =>
-            ZIO.succeed(ClubJobResult(echoed, None, Some(e.getMessage), Some(ClubId.unwrap(club.clubId)), Some(ClubSlug.unwrap(club.slug))))
-          }
-      case other =>
-        ZIO.succeed(ClubJobResult(echoed, None, other.message, problem = other.problem))
+    params: Option[String]
+  )(effect: ClubJobEffect): RIO[PostgresClient, ClubJobResult] =
+    ClubResolution.resolve(clubIdOption, requestedSlug).flatMap { resolution =>
+      val unsubmitted = ClubJobResult(
+        clubSlug = ClubSlug.unwrap(requestedSlug),
+        jobId = None,
+        error = None,
+        resolution = resolution
+      )
+      resolution.runnable match {
+        case Left(_) => ZIO.succeed(unsubmitted)
+        case Right(club) =>
+          jobIdOrConflict(runner.submit(kind, Some(club.clubId), params, RunTrigger.Api, effect(club, _)))
+            .map(submitted => unsubmitted.copy(jobId = submitted.toOption, error = submitted.left.toOption))
+      }
     }
-  }
+
+  // A job already running is an answer for the caller, not a failed request, so its message goes in the result.
+  private def jobIdOrConflict(submit: RIO[PostgresClient, JobRunId]): RIO[PostgresClient, Either[String, String]] =
+    submit.map(id => Right(JobRunId.unwrap(id))).catchSome { case e: ConflictException => ZIO.left(e.getMessage) }
 }

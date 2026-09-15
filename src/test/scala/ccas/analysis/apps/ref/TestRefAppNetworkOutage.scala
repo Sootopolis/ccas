@@ -61,14 +61,15 @@ object TestRefAppNetworkOutage extends ZIOSpecDefault {
   private def testOutageInDeeperFetchAbortsWithoutSkip =
     test("outage in a deeper per-match fetch aborts without skipping the player") {
       val matchJson = apiDailyMatchJson(
-        matchId1,
-        "our-club",
-        "other-club",
+        matchId = matchId1,
+        team1Club = "our-club",
+        team2Club = "other-club",
         team1Players = List(("alice", 3)),
         team2Players = List(("opponent1", 1))
       )
       for {
         _ <- seedDb
+        _ <- connectZIO(sql"DELETE FROM club_name".update.run())
         _ <- connectZIO(sql"DELETE FROM club".update.run())
         client <- chessComClientWithOutage(
           // bob/charlie default to empty matches in refRoutes; only alice's listing + the down match matter here.
@@ -91,9 +92,9 @@ object TestRefAppNetworkOutage extends ZIOSpecDefault {
   private def testNextRunRetriesAfterOutage =
     test("next run after an outage retries the resource (not suppressed)") {
       val matchJson = apiDailyMatchJson(
-        matchId1,
-        "our-club",
-        "other-club",
+        matchId = matchId1,
+        team1Club = "our-club",
+        team2Club = "other-club",
         team1Players = List(("alice", 3)),
         team2Players = List(("opponent1", 1))
       )

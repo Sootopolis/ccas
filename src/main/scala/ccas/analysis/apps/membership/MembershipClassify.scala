@@ -1,5 +1,7 @@
 package ccas.analysis.apps.membership
 
+import java.time.Instant
+
 import ccas.utils.sql.PostgresClient
 import zio.{Chunk, RIO, Ref, ZIO}
 
@@ -7,7 +9,7 @@ import ccas.analysis.apps.UsernameRenameResolver
 import ccas.analysis.apps.membership.MembershipChange.*
 import ccas.analysis.apps.membership.MembershipChange.MemberChange.*
 import ccas.analysis.tables.*
-import ccas.api.misc.enums.PlayerStatusCategory
+import ccas.api.misc.enums.{PlayerStatusCategory, Title}
 import ccas.api.misc.subtypes.{ClubId, PlayerId, Username}
 import ccas.api.player.ApiPlayer
 import ccas.utils.client.{ChessComClient, NetworkUnavailableException}
@@ -43,7 +45,7 @@ private[membership] object MembershipClassify {
     clubId: ClubId,
     apiMap: Map[Username, Long],
     dbState: DbState,
-    now: java.time.Instant,
+    now: Instant,
     trustUsernames: Boolean = true
   ): RIO[ProgressDisplay & PostgresClient, PhaseBResult] = {
     val total = apiMap.size
@@ -73,10 +75,10 @@ private[membership] object MembershipClassify {
     username: Username,
     joinedEpoch: Long,
     dbState: DbState,
-    now: java.time.Instant,
+    now: Instant,
     trustUsernames: Boolean
   ): RIO[PostgresClient, PhaseBMemberResult] = {
-    val since = java.time.Instant.ofEpochSecond(joinedEpoch)
+    val since = Instant.ofEpochSecond(joinedEpoch)
     def resolved(playerId: PlayerId) =
       PhaseBMemberResult(playerId, Chunk.empty, Chunk.empty, Chunk.empty, Chunk.empty, Chunk.empty, Chunk.empty)
 
@@ -158,9 +160,9 @@ private[membership] object MembershipClassify {
     client: ChessComClient,
     clubId: ClubId,
     username: Username,
-    since: java.time.Instant,
+    since: Instant,
     dbState: DbState,
-    now: java.time.Instant
+    now: Instant
   ): RIO[PostgresClient, PhaseBMemberResult] =
     UsernameRenameResolver.fetchOrRecover(client, username).flatMap { apiPlayer =>
       val playerId       = apiPlayer.playerId
@@ -252,7 +254,7 @@ private[membership] object MembershipClassify {
     dbState: DbState,
     resolvedIds: Set[PlayerId],
     apiMap: Map[Username, Long],
-    now: java.time.Instant
+    now: Instant
   ): RIO[ProgressDisplay & PostgresClient, PhaseCResult] = {
     val disappearedList =
       dbState.membersByPlayerId.values.filterNot(s => resolvedIds.contains(s.player.playerId)).toList
@@ -280,7 +282,7 @@ private[membership] object MembershipClassify {
     client: ChessComClient,
     state: MemberState,
     apiMap: Map[Username, Long],
-    now: java.time.Instant
+    now: Instant
   ): RIO[PostgresClient, PhaseCMemberResult] = {
     // Short-circuit already-closed players: status flipped to non-Active via another path (other club's refresh,
     // Recruitment, History) but `ClubMember.until` was left open. Skip the wasted `ApiPlayer` fetch; close the
@@ -309,7 +311,7 @@ private[membership] object MembershipClassify {
     state: MemberState,
     closedMember: ClubMember,
     apiMap: Map[Username, Long],
-    now: java.time.Instant
+    now: Instant
   ): RIO[PostgresClient, PhaseCMemberResult] = {
     val playerId    = state.player.playerId
     val oldUsername = state.player.username
@@ -325,7 +327,7 @@ private[membership] object MembershipClassify {
           // Site 1 short-circuit guarantees `state.player.status == Active`; the original `isFreshClosure` guard
           // collapses to `statusCategory != Active` here.
           val statusCategory    = apiPlayer.status.category
-          val lastOnlineInstant = java.time.Instant.ofEpochSecond(apiPlayer.lastOnline)
+          val lastOnlineInstant = Instant.ofEpochSecond(apiPlayer.lastOnline)
           val change            = playerChanges(state, apiPlayer.username, statusCategory, apiPlayer.title, now)
 
           if (statusCategory == PlayerStatusCategory.Active) {
@@ -371,8 +373,8 @@ private[membership] object MembershipClassify {
     state: MemberState,
     username: Username,
     statusCategory: PlayerStatusCategory,
-    title: Option[ccas.api.misc.enums.Title],
-    now: java.time.Instant
+    title: Option[Title],
+    now: Instant
   ): PlayerChangeResult =
     if (!state.player.stateMatches(username, statusCategory, title)) {
       val archive = state.player.toSnapshot
@@ -388,7 +390,7 @@ private[membership] object MembershipClassify {
     state: MemberState,
     closedMember: ClubMember,
     apiMap: Map[Username, Long],
-    now: java.time.Instant
+    now: Instant
   ): RIO[PostgresClient, PhaseCMemberResult] = {
     val playerId = state.player.playerId
 
@@ -419,14 +421,14 @@ private[membership] object MembershipClassify {
     state: MemberState,
     closedMember: ClubMember,
     apiMap: Map[Username, Long],
-    now: java.time.Instant,
+    now: Instant,
     resolvedUsername: Username,
     resolvedProfile: ApiPlayer
   ): RIO[PostgresClient, PhaseCMemberResult] = {
     val playerId          = state.player.playerId
     val oldUsername       = state.player.username
     val statusCategory    = resolvedProfile.status.category
-    val lastOnlineInstant = java.time.Instant.ofEpochSecond(resolvedProfile.lastOnline)
+    val lastOnlineInstant = Instant.ofEpochSecond(resolvedProfile.lastOnline)
     val archive           = state.player.toSnapshot
     val updated = state.player.copy(
       username = resolvedUsername,

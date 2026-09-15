@@ -1,6 +1,7 @@
 package ccas.analysis.apps
 
 import java.time.Instant
+import java.time.temporal.ChronoUnit
 
 import ccas.utils.sql.PostgresClient
 import zio.{RIO, ZIO}
@@ -77,7 +78,7 @@ object PlayerUpdater {
     val tombstone = UsernameRenameResolver.stalePlaceholder(conflicting.playerId)
     val effectiveSince =
       if (since.isAfter(conflicting.since)) { since }
-      else { conflicting.since.plus(1L, java.time.temporal.ChronoUnit.MICROS) }
+      else { conflicting.since.plus(1L, ChronoUnit.MICROS) }
     PlayerSnapshot.insert(conflicting.toSnapshot) *>
       Player.updateCurrentState(conflicting.copy(username = tombstone, since = effectiveSince)).flatMap { rows =>
         if (rows == 1) { ZIO.succeed(rows) }

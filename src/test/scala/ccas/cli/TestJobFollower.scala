@@ -4,10 +4,17 @@ import zio.*
 import zio.json.*
 import zio.test.{assertTrue, Spec, TestAspect, TestConsole, ZIOSpecDefault}
 
+import ccas.analysis.apps.{ClubRef, ClubResolution}
+import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 import ccas.server.routes.JobRoutes.{ClubJobResult, JobResult, JobStatusResponse}
+import ccas.utils.ProgressSnapshot
 
 /** Exercises log-stream following and submit-result handling against a scripted stub client — no socket, no DB. */
 object TestJobFollower extends ZIOSpecDefault {
+
+  private val submitted =
+    ClubJobResult("team-a", Some("job-1"), None, ClubResolution.Known(ClubRef(ClubId(1), ClubSlug("team-a"))))
+  private val notLocal = ClubJobResult("team-b", None, None, ClubResolution.NotLocal(ClubSlug("team-b")))
 
   /** How the stub's `streamLines` behaves. `Attempts` models the server tail replaying from offset 0 on every
     * (re)connect: each entry is `(lines this attempt replays from the start, whether it then drops)`; the last entry
@@ -60,7 +67,7 @@ object TestJobFollower extends ZIOSpecDefault {
 
     // Rendering is exercised in TestClientProgressRenderer; here `progress` scripts the transport (default ZIO.unit =
     // one clean pass; a Ref-backed effect scripts a drop-then-reconnect). onFrame is unused — no frames are emitted.
-    override def streamProgress(path: String)(onFrame: ccas.utils.ProgressSnapshot => UIO[Unit]): Task[Unit] = progress
+    override def streamProgress(path: String)(onFrame: ProgressSnapshot => UIO[Unit]): Task[Unit] = progress
   }
 
   /** Stub that records every `postEmpty` (the cancel POST) path and drives `streamLines` via `stream`, so an interrupt
@@ -76,7 +83,7 @@ object TestJobFollower extends ZIOSpecDefault {
     override def getJson[Resp: JsonDecoder](path: String): Task[Resp] =
       ZIO.fromEither(statusJson(status, None).fromJson[Resp]).mapError(m => CliError(s"stub decode failed: $m", 1))
     override def streamLines(path: String)(onLine: String => UIO[Unit]): Task[Unit] = stream(onLine)
-    override def streamProgress(path: String)(onFrame: ccas.utils.ProgressSnapshot => UIO[Unit]): Task[Unit] = ZIO.unit
+    override def streamProgress(path: String)(onFrame: ProgressSnapshot => UIO[Unit]): Task[Unit] = ZIO.unit
     override def postEmpty[Resp: JsonDecoder](path: String): Task[Resp] =
       cancelled.update(path :: _) *>
         ZIO.fromEither("""{"jobId":"job-1"}""".fromJson[Resp]).mapError(m => CliError(s"stub decode failed: $m", 1))
@@ -210,7 +217,7 @@ object TestJobFollower extends ZIOSpecDefault {
         // in the `onComplete` (confirm) phase, which is OUTSIDE the follow's cancel-on-interrupt scope. No cancel fires.
         api = new CancelRecordingApi("Completed", cancelled, _ => ZIO.unit)
         fiber <- follower(api, 1.minute)
-          .handleRecruit("recruit", JobResult(Some("job-1"), None), logsToStderr = false, _ => inConfirm.succeed(()) *> ZIO.never)
+          .handleClub(submitted, logsToStderr = false, _ => inConfirm.succeed(()) *> ZIO.never)
           .fork
         _        <- inConfirm.await
         _        <- fiber.interrupt
@@ -220,14 +227,14 @@ object TestJobFollower extends ZIOSpecDefault {
     test("handleSingle short-circuits on a submission error") {
       for {
         follower <- followerWith("Completed", None, Nil)
-        code   <- follower.handleSingle("recruit", JobResult(None, Some("Club not found")))
+        code   <- follower.handleSingle("matchref", JobResult(None, Some("already running")))
       } yield assertTrue(code == 1)
     },
-    test("handleRecruit runs onComplete on success and routes logs to stderr when piping") {
+    test("handleClub runs onComplete on success and routes logs to stderr when piping") {
       for {
         follower <- followerWith("Completed", None, List("hello"))
         ran      <- Ref.make(false)
-        code     <- follower.handleRecruit("recruit", JobResult(Some("job-1"), None), logsToStderr = true, _ => ran.set(true))
+        code     <- follower.handleClub(submitted, logsToStderr = true, _ => ran.set(true))
         didRun   <- ran.get
         out      <- TestConsole.output
         err      <- TestConsole.outputErr
@@ -237,22 +244,22 @@ object TestJobFollower extends ZIOSpecDefault {
         // stdout stays clean for the pipe; the submit notice and log line land on stderr.
         !out.exists(_.contains("hello")),
         err.exists(_.contains("hello")),
-        err.exists(_.contains("recruit submitted: job-1"))
+        err.exists(_.contains("team-a submitted: job-1"))
       )
     },
-    test("handleRecruit skips onComplete when the job fails") {
+    test("handleClub skips onComplete when the job fails") {
       for {
         follower <- followerWith("Failed", Some("boom"), List("partial"))
         ran      <- Ref.make(false)
-        code     <- follower.handleRecruit("recruit", JobResult(Some("job-1"), None), logsToStderr = false, _ => ran.set(true))
+        code     <- follower.handleClub(submitted, logsToStderr = false, _ => ran.set(true))
         didRun   <- ran.get
       } yield assertTrue(code == 1, !didRun)
     },
-    test("handleRecruit short-circuits on a submission error without following") {
+    test("handleClub short-circuits on a submission error without following") {
       for {
         follower <- followerWith("Completed", None, Nil)
         ran      <- Ref.make(false)
-        code     <- follower.handleRecruit("recruit", JobResult(None, Some("Club not found")), logsToStderr = true, _ => ran.set(true))
+        code     <- follower.handleClub(notLocal, logsToStderr = true, _ => ran.set(true))
         didRun   <- ran.get
       } yield assertTrue(code == 1, !didRun)
     },
@@ -261,8 +268,8 @@ object TestJobFollower extends ZIOSpecDefault {
         follower <- followerWith("Completed", None, Nil)
         code <- follower.handleBatch(
           List(
-            ClubJobResult("a", Some("job-1"), None),
-            ClubJobResult("b", None, Some("Club not found"))
+            submitted,
+            notLocal
           )
         )
       } yield assertTrue(code == 1)

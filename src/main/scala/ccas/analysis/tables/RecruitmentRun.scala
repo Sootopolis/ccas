@@ -11,7 +11,7 @@ import ccas.analysis.tables.subtypes.RecruitmentRunId
 import ccas.api.misc.subtypes.{ClubId, JobRunId}
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient
-import ccas.utils.sql.PostgresClient.connectZIO
+import ccas.utils.sql.PostgresClient.{connectZIO, transactZIO}
 
 final case class RecruitmentRun(
   runId: RecruitmentRunId,
@@ -34,7 +34,7 @@ object RecruitmentRun {
   )
 
   def createTable: ZIO[PostgresClient, SQLException, Int] =
-    connectZIO {
+    transactZIO {
       sql"""CREATE TABLE IF NOT EXISTS recruitment_run (
               run_id            BIGSERIAL PRIMARY KEY,
               club_id           BIGINT NOT NULL,

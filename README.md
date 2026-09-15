@@ -360,7 +360,12 @@ CREATE DATABASE ccas OWNER ccas;
 CREATE DATABASE ccas_test OWNER ccas;   -- OWNER matters: Postgres 15+ blocks non-owner writes to public
 \c ccas
 CREATE SCHEMA IF NOT EXISTS test AUTHORIZATION ccas;
+CREATE EXTENSION IF NOT EXISTS btree_gist;
+\c ccas_test
+CREATE EXTENSION IF NOT EXISTS btree_gist;
 ```
+
+**Boot fails with `club_name needs the btree_gist extension`.** Every database CCAS runs against needs `CREATE EXTENSION btree_gist;` once, run by hand — Neon included. The server deliberately never installs extensions itself; the message names the ADR that says why.
 
 **A run hangs with no progress.** Read the client's progress bar first — it prints `API: active/currentMax`, and `active` is only above zero while a fiber holds an HTTP slot. A hang showing **`API: 0/N`** therefore means nothing is in flight over HTTP, so the stuck fiber is in a blocking JDBC call; `API: N/N` stuck at N ≥ 1 points at an HTTP read instead. The JDBC case was the symptom of pgjdbc's `socketTimeout` defaulting to infinite (a silently-dropped connection parks in `socket.read()` forever); that is now bounded by `DB_SOCKET_TIMEOUT_SECONDS` / `DB_CONNECT_TIMEOUT_SECONDS` / `DB_TCP_KEEP_ALIVE`, so raise those before suspecting application code.
 

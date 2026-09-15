@@ -43,6 +43,12 @@ jobs:
 
       - uses: sbt/setup-sbt@v1
 
+      # club_name's exclusion constraint needs btree_gist, which the app never installs itself (ADR 0016).
+      - name: Install btree_gist
+        run: psql -h localhost -U ccas -d ccas_test -c 'CREATE EXTENSION IF NOT EXISTS btree_gist'
+        env:
+          PGPASSWORD: ccas
+
       - name: Run tests
         run: sbt test
         env:

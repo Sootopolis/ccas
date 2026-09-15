@@ -1,7 +1,7 @@
 package ccas.utils.sql
 
 import java.io.PrintWriter
-import java.sql.SQLException
+import java.sql.{Connection, SQLException}
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.logging.Logger as JLogger
 import javax.sql.DataSource
@@ -77,7 +77,7 @@ object TestPostgresClientRetry extends ZIOSpecDefault {
     val attempts                  = new AtomicInteger(0)
     private val failed            = new AtomicInteger(0)
 
-    override def getConnection: java.sql.Connection = {
+    override def getConnection: Connection = {
       attempts.incrementAndGet()
       if (failed.getAndIncrement() == 0) {
         val state = if (transient) "08006" else "23505"
@@ -86,7 +86,7 @@ object TestPostgresClientRetry extends ZIOSpecDefault {
       delegate.getConnection
     }
 
-    override def getConnection(username: String, password: String): java.sql.Connection = getConnection
+    override def getConnection(username: String, password: String): Connection = getConnection
     override def getLogWriter: PrintWriter                                               = delegate.getLogWriter
     override def setLogWriter(out: PrintWriter): Unit                                    = delegate.setLogWriter(out)
     override def setLoginTimeout(seconds: Int): Unit                                     = delegate.setLoginTimeout(seconds)

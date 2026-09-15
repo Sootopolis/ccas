@@ -25,7 +25,7 @@ object PlayerSnapshot {
   private val selectCols = SqlLiteral("player_id, since, username, status, title")
 
   def createTable: ZIO[PostgresClient, SQLException, Int] =
-    connectZIO {
+    transactZIO {
       sql"""CREATE TABLE IF NOT EXISTS player_snapshot (
               player_id BIGINT NOT NULL,
               since     TIMESTAMPTZ NOT NULL,

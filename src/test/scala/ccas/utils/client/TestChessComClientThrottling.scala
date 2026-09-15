@@ -1,5 +1,12 @@
 package ccas.utils.client
 
+import java.io.IOException
+import java.net.UnknownHostException
+import java.util.concurrent.TimeUnit
+
+import scala.util.Try
+
+import com.typesafe.config.ConfigFactory
 import io.netty.handler.codec.PrematureChannelClosureException
 import zio.*
 import zio.http.*
@@ -28,7 +35,7 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
     * boundaries (e.g. between cooldown 1 and cooldown 2 from throttle-down).
     */
   private def advanceTo(targetMs: Long) =
-    Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS).flatMap { now =>
+    Clock.currentTime(TimeUnit.MILLISECONDS).flatMap { now =>
       if (targetMs > now) TestClock.adjust((targetMs - now).millis) else ZIO.unit
     }
 
@@ -327,7 +334,7 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
           counter <- Ref.make(0)
           (client, _, statsRef) <- makeClient { _ =>
             counter.getAndUpdate(_ + 1).flatMap { n =>
-              if (n == 0) ZIO.fail(java.io.IOException("Connection reset"))
+              if (n == 0) ZIO.fail(IOException("Connection reset"))
               else ZIO.succeed(Response.json(jsonBody))
             }
           }
@@ -369,7 +376,7 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
       ZIO.scoped {
         for {
           (client, stateRef, _) <- makeClient(
-            handler = _ => ZIO.fail(java.io.IOException("Connection reset")),
+            handler = _ => ZIO.fail(IOException("Connection reset")),
             permits = 20,
             cooldown = 60.seconds,
             failureThreshold = 0.2
@@ -949,7 +956,7 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
           (client, _, statsRef) <- makeClient(
             handler = _ =>
               for {
-                now <- Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS)
+                now <- Clock.currentTime(TimeUnit.MILLISECONDS)
                 _   <- timestamps.update(now :: _)
                 _   <- ZIO.sleep(2.millis)
               } yield Response.json(jsonBody),
@@ -1098,7 +1105,7 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
     },
     test("connection error surviving the retry schedule surfaces as NetworkUnavailableException") {
       ZIO.scoped {
-        val cause = new java.net.UnknownHostException("api.chess.com: Temporary failure in name resolution")
+        val cause = new UnknownHostException("api.chess.com: Temporary failure in name resolution")
         for {
           (client, _, _) <- makeClient(handler = _ => ZIO.fail(cause))
           fiber <- client.get[Payload](testUrl).exit.fork
@@ -1131,7 +1138,7 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
     test("network-down request logs the raw UnknownHostException in api_fetch_failure, not the wrapper") {
       ZIO.scoped {
         val downUrl = URL.decode("http://test.example.com/dns-down").toOption.get
-        val cause   = new java.net.UnknownHostException("api.chess.com: Temporary failure in name resolution")
+        val cause   = new UnknownHostException("api.chess.com: Temporary failure in name resolution")
         for {
           (client, _, _) <- makeClient(handler = _ => ZIO.fail(cause))
           fiber      <- client.get[Payload](downUrl).exit.fork
@@ -1403,7 +1410,7 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
         Vector(2, 2, 4)            // duplicates
       )
       assertTrue(cases.forall { tiers =>
-        scala.util.Try(
+        Try(
           ChessComClient.ThrottleConfig(
             tiers, 30.seconds, 5.seconds, 1.second, 10.seconds, 1.second, 5, 2, 3, 20, 0.2, 10, 0, Duration.Zero, 500L
           )
@@ -1427,7 +1434,7 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
         minRequestDelayMs: Long = 0,
         minTierObservation: Duration = Duration.Zero,
         emaTauMs: Long = 500
-      ) = scala.util.Try(ChessComClient.ThrottleConfig(
+      ) = Try(ChessComClient.ThrottleConfig(
         tiers, cooldown, cfCooldown, retryBase, cfRetryDelay, connectionRetryBase,
         max429Retries, maxCfRetries, maxConnectionRetries,
         failureWindowSize, failureThreshold, minSampleSize,
@@ -1492,7 +1499,7 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
     },
     test("ChessComClientConfig loads from test application.conf") {
       val provider = TypesafeConfigProvider.fromTypesafeConfig(
-        com.typesafe.config.ConfigFactory.load(), enableCommaSeparatedValueAsList = true
+        ConfigFactory.load(), enableCommaSeparatedValueAsList = true
       )
       for {
         cfg <- provider.load(summon[DeriveConfig[ChessComClientConfig]].desc.nested("chess-com-client"))

@@ -10,7 +10,23 @@ import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.withTransaction
 import zio.json.EncoderOps
 import zio.stream.{SubscriptionRef, ZStream}
-import zio.{Clock, Duration, Fiber, Promise, RIO, RLayer, Ref, Schedule, Scope, UIO, URIO, ZIO, ZLayer, durationInt}
+import zio.{
+  Clock,
+  Duration,
+  Fiber,
+  Promise,
+  RIO,
+  RLayer,
+  Ref,
+  Schedule,
+  Scope,
+  UIO,
+  URIO,
+  ZEnvironment,
+  ZIO,
+  ZLayer,
+  durationInt
+}
 
 import ccas.analysis.tables.{AppSetting, Club, RunTrigger}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId}
@@ -36,15 +52,15 @@ trait JobRunner {
 
   /** Fork a new job and return its ID. Fails with [[ccas.utils.errors.ConflictException]] if a matching job is already running.
     *
-    * The effect receives the job run ID (as a string) so that analysis apps can link their own run records back to the
-    * server-level job.
+    * The effect receives the job run ID so that analysis apps can link their own run records back to the server-level
+    * job.
     */
   def submit(
     kind: JobKind,
     clubId: Option[ClubId],
     params: Option[String],
     trigger: RunTrigger,
-    effect: Option[JobRunId] => RIO[ProgressDisplay & ChessComClient & PostgresClient, Any]
+    effect: JobEffect
   ): RIO[PostgresClient, JobRunId]
 
   /** Look up a job by ID, returning `None` if no such job exists. */
@@ -86,7 +102,7 @@ object JobRunner {
   // 0/negative value from busy-looping the sampler. ~60 fps, far tighter than any sensible configured cap.
   private val MinRefreshInterval: Duration = 16.millis
 
-  val live: RLayer[ProgressDisplay & ChessComClient & PostgresClient, JobRunner] =
+  val live: RLayer[JobEnv, JobRunner] =
     ZLayer.scoped {
       for {
         display     <- ZIO.service[ProgressDisplay]
@@ -118,7 +134,7 @@ object JobRunner {
           dir
         }.orDie
         now <- Clock.instant
-        _   <- JobRun.markOrphansAsFailed(now).provideEnvironment(zio.ZEnvironment(pgClient))
+        _   <- JobRun.markOrphansAsFailed(now).provideEnvironment(ZEnvironment(pgClient))
       } yield new JobRunnerLive(
         display,
         client,
@@ -144,7 +160,7 @@ object JobRunner {
     logDir: Path
   ) extends JobRunner {
 
-    private val env       = zio.ZEnvironment(display, client, pgClient)
+    private val env       = ZEnvironment(display, client, pgClient)
     private val transport = new FileTail(logDir, completions, LogTailPollInterval)
 
     override def submit(
@@ -152,7 +168,7 @@ object JobRunner {
       clubId: Option[ClubId],
       params: Option[String],
       trigger: RunTrigger,
-      effect: Option[JobRunId] => RIO[ProgressDisplay & ChessComClient & PostgresClient, Any]
+      effect: JobEffect
     ): RIO[PostgresClient, JobRunId] = {
       // `cancelling` distinguishes a blocker that an operator has already asked to cancel (its id is in `cancelRequested`)
       // but whose interrupt hasn't landed yet — an in-flight blocking statement runs to completion before the fiber
@@ -249,7 +265,7 @@ object JobRunner {
 
     private def runJob(
       id: JobRunId,
-      effect: RIO[ProgressDisplay & ChessComClient & PostgresClient, Any]
+      effect: RIO[JobEnv, Any]
     ): UIO[Unit] =
       def onFailure(error: Throwable): UIO[Unit] = {
         val msg = error.safeMessage

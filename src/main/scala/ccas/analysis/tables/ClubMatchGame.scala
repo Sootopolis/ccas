@@ -26,7 +26,7 @@ final case class ClubMatchGame(
 object ClubMatchGame {
 
   def createTable: ZIO[PostgresClient, SQLException, Int] =
-    connectZIO {
+    transactZIO {
       sql"""CREATE TABLE IF NOT EXISTS club_match_game (
               match_id         BIGINT NOT NULL,
               board            SMALLINT NOT NULL,

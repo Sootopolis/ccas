@@ -1,12 +1,13 @@
 package ccas.analysis.apps.stats
 
+import ccas.analysis.apps.ClubResolution
 import ccas.analysis.apps.stats.StatsUtils.*
 import ccas.analysis.tables.*
-import ccas.api.misc.subtypes.ClubSlug
+import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 import ccas.utils.errors.{BadRequestException, NotFoundException}
 import ccas.utils.sql.PostgresClient
 import ccas.utils.{OutputFile, ProgressDisplay, TimeParser}
-import zio.{RIO, Scope, Task, ZIO, ZIOAppArgs, ZIOAppDefault}
+import zio.{Chunk, RIO, Scope, Task, ZIO, ZIOAppArgs, ZIOAppDefault}
 
 import java.time.{Duration, Instant}
 
@@ -41,7 +42,7 @@ object StatsApp extends ZIOAppDefault {
     minGames: Option[Int]
   )
 
-  private[stats] def parseArgs(args: zio.Chunk[String]): Task[StatsAppArgs] = {
+  private[stats] def parseArgs(args: Chunk[String]): Task[StatsAppArgs] = {
     val positional = args.filterNot(_.startsWith("--"))
     for {
       slug <- ZIO.fromOption(positional.headOption.map(ClubSlug.wrap)).orElseFail(BadRequestException(help))
@@ -60,17 +61,18 @@ object StatsApp extends ZIOAppDefault {
       _ <- (for {
         args   <- ZIOAppArgs.getArgs
         parsed <- parseArgs(args)
+        clubId <- resolveClub(parsed.slug)
         _ <- (parsed.since, parsed.until) match {
           case (Some(s), Some(u)) =>
             val mg = parsed.minGames.getOrElse(1)
             for {
-              result <- playerOfPeriodAndReport(parsed.slug, s, u, mg)
+              result <- playerOfPeriodAndReport(clubId, s, u, mg)
               content = StatsReport.formatPlayerOfPeriod(result.contributions, mg)
               _ <- OutputFile.writeAndLog("stats", parsed.slug, content, ext = "csv")
             } yield ()
           case (None, None) =>
             for {
-              result <- memberStatsAndReport(parsed.slug)
+              result <- memberStatsAndReport(clubId)
               content = StatsReport.formatContribution(result.contributions)
               _ <- OutputFile.writeAndLog("stats", parsed.slug, content, ext = "csv")
             } yield ()
@@ -79,11 +81,15 @@ object StatsApp extends ZIOAppDefault {
       } yield ()).provideSomeAuto(PostgresClient.live(onInit = Tables.ensureTablesOnInit))
     } yield ()
 
+  /** Resolves a slug the way job submission does, so a club addressed by a former name still resolves. */
+  private[stats] def resolveClub(clubSlug: ClubSlug): RIO[PostgresClient, ClubId] =
+    ClubResolution.resolve(None, clubSlug).flatMap { resolution =>
+      ZIO.fromEither(resolution.runnable).mapBoth(NotFoundException(_), _.clubId)
+    }
+
   /** All-time member contribution summary for a club. */
-  def memberStats(clubSlug: ClubSlug): RIO[PostgresClient, StatsResult] =
+  def memberStats(clubId: ClubId): RIO[PostgresClient, StatsResult] =
     for {
-      club <- Club.selectBySlug(clubSlug).someOrFail(NotFoundException(s"Club '$clubSlug' not found"))
-      clubId = club.clubId
       (rows, matchCount) <- ClubBoard.selectClubBoards(clubId) <&> ClubMatch.countForClub(clubId)
       playerIds = rows.map(_.playerId).distinct
       usernameMap <- Player.resolveUsernames(playerIds)
@@ -92,7 +98,7 @@ object StatsApp extends ZIOAppDefault {
 
   /** Per-member stats for a date range. */
   def playerOfPeriod(
-    clubSlug: ClubSlug,
+    clubId: ClubId,
     since: Instant,
     until: Instant
   ): RIO[PostgresClient, StatsResult] =
@@ -104,8 +110,6 @@ object StatsApp extends ZIOAppDefault {
       _ <- ZIO.whenDiscard(until.isAfter(now.minus(Duration.ofHours(12))))(
         ZIO.fail(BadRequestException(s"--until must be at least 12 hours before now to account for API data lag (earliest allowed: ${now.minus(Duration.ofHours(12))})"))
       )
-      club <- Club.selectBySlug(clubSlug).someOrFail(NotFoundException(s"Club '$clubSlug' not found"))
-      clubId = club.clubId
       (rows, matchCount) <- ClubBoard.selectClubBoardsInPeriod(clubId, since, until) <&> ClubMatch.countForClubInPeriod(clubId, since, until)
       playerIds = rows.map(_.playerId).distinct
       usernameMap <- Player.resolveUsernames(playerIds)
@@ -116,23 +120,23 @@ object StatsApp extends ZIOAppDefault {
   // scheduler-submitted stats jobs surface it in their per-job log (the CLI additionally writes the out/ CSV) — the
   // shared-reporting split membership #130 established. Period eligibility is a presentation threshold (minGames), so
   // it stays a wrapper arg rather than polluting playerOfPeriod's signature.
-  def memberStatsAndReport(clubSlug: ClubSlug): RIO[PostgresClient, StatsResult] =
-    memberStats(clubSlug).tap(r =>
+  def memberStatsAndReport(clubId: ClubId): RIO[PostgresClient, StatsResult] =
+    memberStats(clubId).tap(r =>
       ZIO.logInfo(s"Players: ${r.contributions.size}, Boards: ${r.boardCount}, Matches: ${r.matchCount}")
     )
 
   def playerOfPeriodAndReport(
-    clubSlug: ClubSlug,
+    clubId: ClubId,
     since: Instant,
     until: Instant,
     minGames: Int
   ): RIO[PostgresClient, StatsResult] =
-    playerOfPeriod(clubSlug, since, until).tap { r =>
+    playerOfPeriod(clubId, since, until).tap { r =>
       val eligible = r.contributions.count(_.raw.games >= minGames)
       ZIO.logInfo(s"Players: ${r.contributions.size}, Eligible (>=$minGames games): $eligible")
     }
 
-  private def flagValue(args: zio.Chunk[String], flag: String): Option[String] = {
+  private def flagValue(args: Chunk[String], flag: String): Option[String] = {
     val idx = args.indexOf(flag)
     if (idx >= 0 && idx + 1 < args.size) Some(args(idx + 1))
     else None

@@ -3,57 +3,86 @@ package ccas.analysis.apps
 import java.sql.SQLException
 
 import zio.ZIO
+import zio.json.{jsonDiscriminator, jsonHintNames, DeriveJsonCodec, JsonCodec, SnakeCase}
 
-import ccas.analysis.tables.Club
+import ccas.analysis.tables.{Club, ClubName}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
-import ccas.utils.errors.ClubProblem
 import ccas.utils.sql.PostgresClient
 
-/** The outcome of resolving a single club the CLI is targeting. This slice covers only the verdicts reachable from a
-  * *local* (DB-only) resolution; the Chess.com-hitting verdicts (`Renamed` recovered from a rename, `OnChessComOnly`,
-  * `NotFound`-confirmed-upstream) arrive with the opt-in upstream reach in a later #180 slice.
+/** A club as resolution reports it: its id, and the slug it holds now. */
+final case class ClubRef(clubId: ClubId, slug: ClubSlug)
+
+object ClubRef {
+  given JsonCodec[ClubRef] = DeriveJsonCodec.gen
+
+  def fromClub(club: Club): ClubRef = ClubRef(club.clubId, club.slug)
+}
+
+/** How a club the CLI is targeting resolved, from local data only; Chess.com adjudication of a former or ambiguous
+  * name arrives later (#254). The lookup order and its rationale are in ADR 0016. Club-scoped submit responses carry
+  * it as-is, so the CLI branches on the case rather than on a parallel status field.
   *
-  *   - [[Known]]: found in our DB under a usable slug — the job can run.
-  *   - [[NotLocal]]: no row for this id/slug. Deliberately NOT called `NotFound`: a DB miss is not proof the club is
-  *     gone from Chess.com (it may simply never have been ingested), and only an upstream check could say otherwise.
-  *   - [[Problematic]]: found, but the row is tombstoned (`_stale_<id>`) — its canonical name couldn't be resolved
-  *     (a rename or slug-conflict recovery failed), so it isn't a valid job target until repaired.
-  *
-  * `NotLocal` and `Problematic` carry the *requested* slug (what the caller knows the club as), not the internal
-  * `_stale_<id>` placeholder, so a message built from them names something the user recognises.
+  * [[NotLocal]] is deliberately not `NotFound`: a DB miss is not proof the club is gone from Chess.com, since it may
+  * never have been ingested. Every case but [[Known]] carries the *requested* slug, so a message built from it names
+  * something the user recognises rather than an internal `_stale_<id>` placeholder.
   */
-enum ClubVerdict {
-  case Known(club: Club)
-  case NotLocal(slug: ClubSlug)
-  case Problematic(slug: ClubSlug)
+@jsonDiscriminator("kind")
+@jsonHintNames(SnakeCase)
+enum ClubResolution {
+  case Known(club: ClubRef)
+  case Renamed(club: ClubRef, requested: ClubSlug)
+  case NotLocal(requested: ClubSlug)
+  case Problematic(requested: ClubSlug)
+  case Ambiguous(requested: ClubSlug, holders: List[ClubRef])
 
-  /** The wire discriminant for a non-`Known` verdict; `None` for `Known` (the job runs, so there's no problem). */
-  def problem: Option[ClubProblem] = this match {
-    case Known(_)       => None
-    case NotLocal(_)    => Some(ClubProblem.NotFound)
-    case Problematic(_) => Some(ClubProblem.Problematic)
-  }
-
-  /** Human-readable message paired with [[problem]] for the `error` field CLI/logs display; `None` for `Known`. */
-  def message: Option[String] = this match {
-    case Known(_)    => None
-    case NotLocal(s) => Some(s"Club not found: ${ClubSlug.unwrap(s)}")
-    case Problematic(s) =>
-      Some(s"Club ${ClubSlug.unwrap(s)} is unavailable — its canonical name could not be resolved")
+  /** The club a job should run against, or why the job must not run. */
+  def runnable: Either[String, ClubRef] = this match {
+    case Known(club)         => Right(club)
+    case Renamed(club, _)    => Right(club)
+    case NotLocal(requested) => Left(s"Club not found: ${ClubSlug.unwrap(requested)}")
+    case Problematic(requested) =>
+      Left(s"Club ${ClubSlug.unwrap(requested)} is unavailable — its canonical name could not be resolved")
+    case Ambiguous(requested, holders) =>
+      val candidates = holders.map { club =>
+        val current =
+          if (Club.isTombstoneSlug(club.slug)) { "no known name" }
+          else { s"now ${ClubSlug.unwrap(club.slug)}" }
+        s"#${ClubId.unwrap(club.clubId)} ($current)"
+      }.mkString(", ")
+      Left(
+        s"Club ${ClubSlug.unwrap(requested)} is ambiguous — no club holds that name now, and it was held by $candidates"
+      )
   }
 }
 
 object ClubResolution {
+  given JsonCodec[ClubResolution] = DeriveJsonCodec.gen
 
-  /** Resolve a club by id (rename-proof) when the caller has one, else by slug — then classify the row. Local-only: no
-    * Chess.com request, so the cost profile is one indexed SELECT, unchanged from the bare `Club.selectBySlug` it
-    * supersedes at the submission gate.
+  /** Resolve by id (rename-proof) when the caller has one; otherwise ask who holds the slug now, and only on a miss who
+    * ever held it (ADR 0016). Local-only: no Chess.com request.
     */
-  def resolve(clubId: Option[ClubId], slug: ClubSlug): ZIO[PostgresClient, SQLException, ClubVerdict] =
-    Club.resolveByIdOrSlug(clubId, slug).map {
-      case None                                          => ClubVerdict.NotLocal(slug)
-      // Carry the requested slug, not `club.slug` — the latter is the `_stale_<id>` placeholder the user never sees.
-      case Some(club) if Club.isTombstoneSlug(club.slug) => ClubVerdict.Problematic(slug)
-      case Some(club)                                    => ClubVerdict.Known(club)
+  def resolve(clubIdOption: Option[ClubId], slug: ClubSlug): ZIO[PostgresClient, SQLException, ClubResolution] =
+    clubIdOption match {
+      case Some(clubId) => Club.selectId(clubId).map(fromCurrent(_, slug))
+      case None =>
+        ClubName.selectCurrentHolder(slug).flatMap {
+          case Some(holder) => ZIO.succeed(fromCurrent(Some(holder), slug))
+          case None         => ClubName.selectHolders(slug).map(fromFormer(_, slug))
+        }
+    }
+
+  private def fromCurrent(clubOption: Option[Club], requested: ClubSlug): ClubResolution =
+    clubOption match {
+      case None                            => NotLocal(requested)
+      case Some(club) if club.isTombstoned => Problematic(requested)
+      case Some(club)                      => Known(ClubRef.fromClub(club))
+    }
+
+  private def fromFormer(holders: List[Club], requested: ClubSlug): ClubResolution =
+    holders match {
+      case Nil                              => NotLocal(requested)
+      case club :: Nil if club.isTombstoned => Problematic(requested)
+      case club :: Nil                      => Renamed(ClubRef.fromClub(club), requested)
+      case several                          => Ambiguous(requested, several.map(ClubRef.fromClub))
     }
 }

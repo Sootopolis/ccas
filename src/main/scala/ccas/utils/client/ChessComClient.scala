@@ -1,6 +1,7 @@
 package ccas.utils.client
 
 import java.time.{Instant, ZoneOffset}
+import java.util.concurrent.TimeUnit
 
 import ccas.utils.sql.PostgresClient
 import com.typesafe.config.ConfigFactory
@@ -183,7 +184,7 @@ final class ChessComClient(
 
   // If the origin sends an ETag we couldn't parse, the next request goes out without `If-None-Match`
   // and a 200 comes back instead of a 304. Surfacing a debug log makes the regression visible.
-  private def logEtagParseMiss(response: Response): zio.UIO[Unit] = {
+  private def logEtagParseMiss(response: Response): UIO[Unit] = {
     val raw   = response.rawHeader("ETag")
     val typed = response.header(Header.ETag)
     ZIO.whenDiscard(raw.isDefined && typed.isEmpty)(
@@ -502,11 +503,11 @@ final class ChessComClient(
         ZIO.whenDiscard(state.lastEmaSampleAt > 0L) {
           val targetDelay = math.max((state.responseTimeEma / state.currentMax).toLong, config.minRequestDelayMs)
           for {
-            now <- Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS)
+            now <- Clock.currentTime(TimeUnit.MILLISECONDS)
             last <- lastRequestRef.get
             gap = now - last
             _ <- ZIO.whenDiscard(gap < targetDelay)(ZIO.sleep((targetDelay - gap).millis))
-            _ <- Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS).flatMap(lastRequestRef.set)
+            _ <- Clock.currentTime(TimeUnit.MILLISECONDS).flatMap(lastRequestRef.set)
           } yield ()
         }
       }
@@ -520,7 +521,7 @@ final class ChessComClient(
     * `docs/adr/0006-pacing-ema-measures-the-http-exchange-only.md` (#216).
     */
   private def updateResponseTimeEma(responseMs: Long): UIO[Unit] =
-    Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS).flatMap { now =>
+    Clock.currentTime(TimeUnit.MILLISECONDS).flatMap { now =>
       stateRef.update { state =>
         val newEma =
           if (state.lastEmaSampleAt == 0L) {
@@ -559,7 +560,7 @@ final class ChessComClient(
     */
   private def throttleDown(cooldown: Duration = config.cooldown): Task[Unit] =
     for {
-      now <- Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS)
+      now <- Clock.currentTime(TimeUnit.MILLISECONDS)
       transitionOpt <- stateRef.modify { state =>
         if (state.currentMax <= 1) {
           (None, state)
@@ -605,14 +606,14 @@ final class ChessComClient(
       _ <- stateRef.get.flatMap { state =>
         state.tierEnteredAt match {
           case Some(enteredAt) =>
-            Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS).flatMap { now =>
+            Clock.currentTime(TimeUnit.MILLISECONDS).flatMap { now =>
               val remaining = config.minTierObservation.toMillis - (now - enteredAt)
               ZIO.whenDiscard(remaining > 0)(ZIO.sleep(remaining.millis))
             }
           case None => ZIO.unit
         }
       }
-      now <- Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS)
+      now <- Clock.currentTime(TimeUnit.MILLISECONDS)
       option <- stateRef.modify { state =>
         if (state.generation != generation) (None, state)
         else if (failureRate(state.outcomes) > config.failureThreshold) {

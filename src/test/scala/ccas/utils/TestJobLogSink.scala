@@ -9,8 +9,10 @@ import java.time.temporal.ChronoUnit
 
 import scala.jdk.CollectionConverters.*
 
-import zio.{Chunk, Ref, ZIO}
+import zio.{Chunk, Ref, Runtime, Unsafe, ZIO}
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
+
+import ccas.server.jobs.FileSink
 
 object TestJobLogSink extends ZIOSpecDefault {
 
@@ -56,7 +58,7 @@ object TestJobLogSink extends ZIOSpecDefault {
     captureStdout(
       for {
         dir  <- tempLogDir
-        sink <- ccas.server.jobs.FileSink.make(dir, "job-append")
+        sink <- FileSink.make(dir, "job-append")
         _    <- ZIO.foreachDiscard(List("first", "second"))(sink.write)
         path =  dir.resolve("job-append.log")
         lines <- ZIO.attempt(Files.readAllLines(path).asScala.toList)
@@ -68,7 +70,7 @@ object TestJobLogSink extends ZIOSpecDefault {
     captureStdout(
       for {
         dir  <- tempLogDir
-        sink <- ccas.server.jobs.FileSink.make(dir, "job-ansi-file")
+        sink <- FileSink.make(dir, "job-ansi-file")
         _    <- ZIO.succeed(sink.writeFileSync(AnsiLine))
         path =  dir.resolve("job-ansi-file.log")
         bytes <- ZIO.attempt(Files.readAllBytes(path))
@@ -88,7 +90,7 @@ object TestJobLogSink extends ZIOSpecDefault {
       captureStdout(
         for {
           dir  <- tempLogDir
-          sink <- ccas.server.jobs.FileSink.make(dir, "job-srctag")
+          sink <- FileSink.make(dir, "job-srctag")
           _    <- ZIO.succeed(sink.writeFileSync(TaggedLine))
           _    <- ZIO.succeed(sink.writeConsoleSync(TaggedLine))
           path =  dir.resolve("job-srctag.log")
@@ -107,7 +109,7 @@ object TestJobLogSink extends ZIOSpecDefault {
     captureStdout(
       for {
         dir  <- tempLogDir
-        sink <- ccas.server.jobs.FileSink.make(dir, "job-ansi-stdout")
+        sink <- FileSink.make(dir, "job-ansi-stdout")
         _    <- ZIO.succeed(sink.writeConsoleSync(AnsiLine))
       } yield ()
     ).map { case (_, out) =>
@@ -120,7 +122,7 @@ object TestJobLogSink extends ZIOSpecDefault {
       captureStdout(
         for {
           dir   <- tempLogDir
-          sink  <- ccas.server.jobs.FileSink.make(dir, "job-close")
+          sink  <- FileSink.make(dir, "job-close")
           _     <- ZIO.succeed(sink.writeFileSync("before-close"))
           _     <- sink.close()
           _     <- ZIO.succeed(sink.writeFileSync("after-close")) // closed → no-op, must not throw
@@ -138,7 +140,7 @@ object TestJobLogSink extends ZIOSpecDefault {
         for {
           base       <- tempLogDir
           missing    =  base.resolve("does-not-exist") // parent dir absent → newBufferedWriter(CREATE) fails
-          sink       <- ccas.server.jobs.FileSink.make(missing, "job-nodir")
+          sink       <- FileSink.make(missing, "job-nodir")
           _          <- ZIO.succeed(sink.writeFileSync("dropped"))   // suppressed, gate closed → no-op, must not throw
           _          <- ZIO.succeed(sink.writeConsoleSync("teed"))   // tee still works
           fileAbsent <- ZIO.attempt(!Files.exists(missing.resolve("job-nodir.log")))
@@ -166,7 +168,7 @@ object TestJobLogSink extends ZIOSpecDefault {
           Files.setLastModifiedTime(freshLog, fresh)
           Files.setLastModifiedTime(keepTxt, old)
         }
-        deleted <- ccas.server.jobs.FileSink.sweepBefore(dir, cutoff, live = Set.empty)
+        deleted <- FileSink.sweepBefore(dir, cutoff, live = Set.empty)
       } yield assertTrue(
         deleted == 1,
         !Files.exists(oldLog),
@@ -189,7 +191,7 @@ object TestJobLogSink extends ZIOSpecDefault {
           Files.setLastModifiedTime(liveLog, old)
           Files.setLastModifiedTime(deadLog, old)
         }
-        deleted <- ccas.server.jobs.FileSink.sweepBefore(dir, cutoff, live = Set("live-job"))
+        deleted <- FileSink.sweepBefore(dir, cutoff, live = Set("live-job"))
       } yield assertTrue(
         deleted == 1,
         Files.exists(liveLog),
@@ -209,8 +211,8 @@ object TestJobLogSink extends ZIOSpecDefault {
           // Test-only pattern: drive a ZIO Ref update from inside a sync callback via Runtime.default. Works in tests
           // because no production code is running under Runtime.default; do not reuse for real sinks.
           override def writeConsoleSync(line: String): Unit =
-            zio.Unsafe.unsafe(implicit u =>
-              zio.Runtime.default.unsafe.run(captured.update(_ :+ line)).getOrThrow()
+            Unsafe.unsafe(implicit u =>
+              Runtime.default.unsafe.run(captured.update(_ :+ line)).getOrThrow()
             )
         }
         _ <- ZIO.scoped {

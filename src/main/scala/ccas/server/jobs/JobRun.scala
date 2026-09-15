@@ -13,7 +13,7 @@ import ccas.server.jobs.JobKind.given
 import ccas.server.jobs.JobRunStatus.given
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient
-import ccas.utils.sql.PostgresClient.connectZIO
+import ccas.utils.sql.PostgresClient.{connectZIO, transactZIO}
 
 @Table(PostgresDbType, SqlNameMapper.CamelToSnakeCase)
 final case class JobRun(
@@ -33,7 +33,7 @@ object JobRun {
   private val selectCols = SqlLiteral("id, kind, club_id, trigger, status, params, started_at, completed_at, error")
 
   def createTable: ZIO[PostgresClient, SQLException, Int] =
-    connectZIO {
+    transactZIO {
       sql"""CREATE TABLE IF NOT EXISTS job_run (
               id             TEXT PRIMARY KEY,
               kind           TEXT NOT NULL,

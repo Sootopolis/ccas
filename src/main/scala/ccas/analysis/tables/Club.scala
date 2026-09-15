@@ -3,6 +3,8 @@ package ccas.analysis.tables
 import java.sql.SQLException
 import java.time.Instant
 
+import scala.util.chaining.*
+
 import com.augustnagro.magnum.*
 import zio.{Task, ZIO}
 
@@ -38,7 +40,16 @@ final case class Club(
 object Club {
   private val repo = ImmutableRepo[Club, ClubId]
 
-  private val stalePattern = "^_stale_\\d+$".r
+  private[tables] val selectCols =
+    SqlLiteral("club_id, created, slug, name, members_count, latest_match_at, fetched_at")
+
+  private val staleRegex   = "^_stale_[0-9]+$"
+  private val stalePattern = staleRegex.r
+
+  private def tombstoneSlug(clubId: ClubId): ClubSlug = ClubSlug.wrap(s"_stale_${ClubId.unwrap(clubId)}")
+
+  /** [[isTombstoneSlug]] as a SQL regex literal for a `!~` match, so the tombstone format has one home. */
+  private[tables] val TombstoneSlugRegex: SqlLiteral = SqlLiteral(s"'$staleRegex'")
 
   /** True when the given slug matches the tombstone format set by `Club.resolveStaleSlug`. Useful at display sites
     * that hold a `ClubSlug` value but no full `Club` row.
@@ -46,7 +57,7 @@ object Club {
   def isTombstoneSlug(s: ClubSlug): Boolean = stalePattern.matches(s.value)
 
   def createTable: ZIO[PostgresClient, SQLException, Int] =
-    connectZIO {
+    transactZIO {
       sql"""CREATE TABLE IF NOT EXISTS club (
               club_id          BIGINT PRIMARY KEY,
               created          TIMESTAMPTZ NOT NULL,
@@ -67,19 +78,7 @@ object Club {
 
   def selectBySlug(slug: ClubSlug): ZIO[PostgresClient, SQLException, Option[Club]] =
     connectZIO {
-      sql"""SELECT club_id, created, slug, name, members_count, latest_match_at, fetched_at
-            FROM club WHERE slug = $slug""".query[Club].run().headOption
-    }
-
-  /** Resolve a club the CLI is targeting: by its stable `ClubId` when the caller has one (rename-proof — the id never
-    * moves when Chess.com renames the slug), otherwise by slug. The CLI carries the id for a `current_club`-sourced
-    * submit, so a renamed current club still resolves here instead of 404-ing on its stale slug (#176). Slug remains the
-    * fallback for a freshly-typed `--club <slug>` the CLI has no id for yet.
-    */
-  def resolveByIdOrSlug(clubId: Option[ClubId], slug: ClubSlug): ZIO[PostgresClient, SQLException, Option[Club]] =
-    clubId match {
-      case Some(id) => selectId(id)
-      case None     => selectBySlug(slug)
+      sql"SELECT $selectCols FROM club WHERE slug = $slug".query[Club].run().headOption
     }
 
   /** Returns the subset of `slugs` that exist in the `club` table. One round-trip via `WHERE slug = ANY(...)` —
@@ -99,14 +98,7 @@ object Club {
     * [[updateFetchedAt]] so other callers don't accidentally clobber the cached values with `None`.
     */
   def upsert(club: Club): ZIO[PostgresClient, SQLException, Int] =
-    connectZIO {
-      sql"""INSERT INTO club (club_id, created, slug, name, members_count, latest_match_at, fetched_at)
-            VALUES (${club.clubId}, ${club.created}, ${club.slug}, ${club.name}, ${club.membersCount}, ${club.latestMatchAt}, ${club.fetchedAt})
-            ON CONFLICT (club_id) DO UPDATE SET
-              slug = EXCLUDED.slug,
-              name = EXCLUDED.name,
-              members_count = EXCLUDED.members_count""".update.run()
-    }
+    transactZIO(upsertFrag(club).run().tap(_ => recordName(club)))
 
   /** Updates only the cached match-activity timestamp. Use this from ClubDataApp. */
   def updateLatestMatchAt(clubId: ClubId, latestMatchAt: Option[Instant]): ZIO[PostgresClient, SQLException, Int] =
@@ -132,11 +124,8 @@ object Club {
     withTransaction {
       for {
         existing <- selectBySlug(club.slug)
-        _ <- existing match {
-          case Some(stale) if stale.clubId != club.clubId => resolveStaleSlug(stale, client)
-          case _                                          => ZIO.unit
-        }
-        result <- upsert(club)
+        _        <- ZIO.foreachDiscard(existing.filter(_.clubId != club.clubId))(resolveStaleSlug(_, client))
+        result   <- upsert(club)
       } yield result
     }
 
@@ -172,17 +161,13 @@ object Club {
       ClubSlug.fromUrlOption(team.`@id`)
     })
 
-  private def resolveStaleSlug(stale: Club, client: ChessComClient): ZIO[PostgresClient, Throwable, Unit] =
-    slugFromMatchRef(stale.clubId, client).flatMap {
-      case Some(newSlug) =>
-        connectZIO {
-          sql"UPDATE club SET slug = $newSlug WHERE club_id = ${stale.clubId}".update.run()
-        }.unit
-      case None =>
-        val placeholder = ClubSlug.wrap(s"_stale_${ClubId.unwrap(stale.clubId)}")
-        connectZIO {
-          sql"UPDATE club SET slug = $placeholder WHERE club_id = ${stale.clubId}".update.run()
-        }.unit
+  private def resolveStaleSlug(stale: Club, client: ChessComClient): ZIO[PostgresClient, Throwable, Int] =
+    slugFromMatchRef(stale.clubId, client).flatMap { newSlugOption =>
+      val slug = newSlugOption.getOrElse(tombstoneSlug(stale.clubId))
+      transactZIO {
+        sql"UPDATE club SET slug = $slug WHERE club_id = ${stale.clubId}".update.run()
+          .tap(_ => recordName(stale.copy(slug = slug)))
+      }
     }
 
   /** Builds a [[Club]] from an [[ApiClub]] response, reading the slug from `apiClub.canonicalSlug` — the name
@@ -195,16 +180,15 @@ object Club {
       Some(apiClub.membersCount), None, None
     )
 
-  /** Same `latest_match_at` / `fetched_at` semantics as [[upsert]]: not touched on update — managed by ClubDataApp. */
-  def upsertBatch(clubs: Iterable[Club]): ZIO[PostgresClient, SQLException, BatchUpdateResult] =
-    transactZIO {
-      batchUpdate(clubs) { club =>
-        sql"""INSERT INTO club (club_id, created, slug, name, members_count, latest_match_at, fetched_at)
-              VALUES (${club.clubId}, ${club.created}, ${club.slug}, ${club.name}, ${club.membersCount}, ${club.latestMatchAt}, ${club.fetchedAt})
-              ON CONFLICT (club_id) DO UPDATE SET
-                slug = EXCLUDED.slug,
-                name = EXCLUDED.name,
-                members_count = EXCLUDED.members_count""".update
-      }
-    }
+  private def upsertFrag(club: Club): Update =
+    sql"""INSERT INTO club (club_id, created, slug, name, members_count, latest_match_at, fetched_at)
+          VALUES (${club.clubId}, ${club.created}, ${club.slug}, ${club.name}, ${club.membersCount}, ${club.latestMatchAt}, ${club.fetchedAt})
+          ON CONFLICT (club_id) DO UPDATE SET
+            slug = EXCLUDED.slug,
+            name = EXCLUDED.name,
+            members_count = EXCLUDED.members_count""".update
+
+  // Every write of `club.slug` goes through here, so `club_name` never drifts from it.
+  private def recordName(club: Club)(using DbTx): Int =
+    ClubName.record(club.clubId, Option.unless(isTombstoneSlug(club.slug))(club.slug))
 }

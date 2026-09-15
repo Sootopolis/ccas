@@ -7,6 +7,7 @@ import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 import ccas.analysis.tables.{Club, ClubMatch, ClubMatchBoard, ClubMatchGame, Player, Tables}
 import ccas.api.misc.enums.*
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username}
+import ccas.utils.errors.NotFoundException
 import ccas.utils.sql.FreshSchemaLayer
 
 object TestStatsApp extends ZIOSpecDefault {
@@ -57,7 +58,7 @@ object TestStatsApp extends ZIOSpecDefault {
       _ <- ClubMatchGame.insertBatch(List(
         ClubMatchGame(matchId1, 1, true, None, None, None, Some(BoardGameWinner.Team1), None, None, None)
       ))
-      result <- StatsApp.memberStats(clubSlug)
+      result <- StatsApp.memberStats(clubId)
     } yield assertTrue(
       result.contributions.size == 1,
       result.contributions.head.username == Username.wrap("alice"),
@@ -71,7 +72,7 @@ object TestStatsApp extends ZIOSpecDefault {
     val emptySlug = ClubSlug("empty-club")
     for {
       _ <- Club.upsert(Club(ClubId(300), Times.t0, emptySlug, "Empty Club", None, None, None))
-      result <- StatsApp.memberStats(emptySlug)
+      result <- StatsApp.memberStats(ClubId(300))
     } yield assertTrue(
       result.contributions.isEmpty,
       result.boardCount == 0,
@@ -79,10 +80,10 @@ object TestStatsApp extends ZIOSpecDefault {
     )
   }
 
-  private def testMemberStatsNotFound = test("memberStats fails with NotFoundException for unknown club") {
+  private def testMemberStatsNotFound = test("resolveClub fails with NotFoundException for an unknown slug") {
     for {
-      exit <- StatsApp.memberStats(ClubSlug("nonexistent")).exit
-    } yield assertTrue(exit.isFailure)
+      exit <- StatsApp.resolveClub(ClubSlug("nonexistent")).exit
+    } yield assertTrue(exit.causeOption.flatMap(_.failureOption).exists(_.isInstanceOf[NotFoundException]))
   }
 
   private def testMemberStatsTeam2Perspective = test("memberStats includes boards when club is team2 with winner flipping") {
@@ -106,7 +107,7 @@ object TestStatsApp extends ZIOSpecDefault {
       _ <- ClubMatchGame.insertBatch(List(
         ClubMatchGame(matchId3, 1, true, None, None, None, Some(BoardGameWinner.Team2), None, None, None)
       ))
-      result <- StatsApp.memberStats(team2Slug)
+      result <- StatsApp.memberStats(team2Id)
     } yield assertTrue(
       result.contributions.size == 1,
       result.contributions.head.username == Username.wrap("dave"),
@@ -124,7 +125,7 @@ object TestStatsApp extends ZIOSpecDefault {
         ClubMatch(ClubMatchId(2001L), "Match NB", ClubMatchStatus.Finished, TimeClass.Daily,
           Some(Times.t0), Some(Times.t1), 10, Some(noBoardId), 10, Some(oppId), 10, Times.t1, None)
       )
-      result <- StatsApp.memberStats(noBoardSlug)
+      result <- StatsApp.memberStats(noBoardId)
     } yield assertTrue(
       result.contributions.isEmpty,
       result.boardCount == 0,
@@ -145,7 +146,7 @@ object TestStatsApp extends ZIOSpecDefault {
       _ <- ClubMatchGame.insertBatch(List(
         ClubMatchGame(matchId2, 1, true, None, None, None, Some(BoardGameWinner.Team1), None, None, None)
       ))
-      result <- StatsApp.playerOfPeriod(clubSlug, Times.t0, Times.t2)
+      result <- StatsApp.playerOfPeriod(clubId, Times.t0, Times.t2)
     } yield assertTrue(
       result.contributions.size == 1,
       result.boardCount == 1, // only matchId1 is in range
@@ -155,13 +156,13 @@ object TestStatsApp extends ZIOSpecDefault {
 
   private def testPlayerOfPeriodMatchCount = test("playerOfPeriod returns real matchCount") {
     for {
-      result <- StatsApp.playerOfPeriod(clubSlug, Times.t0, Times.t2)
+      result <- StatsApp.playerOfPeriod(clubId, Times.t0, Times.t2)
     } yield assertTrue(result.matchCount == 2L) // matchId1 + matchId3 (from team2 test) both end in [t0, t2)
   }
 
   private def testPlayerOfPeriodInvertedRange = test("playerOfPeriod fails for inverted date range") {
     for {
-      exit <- StatsApp.playerOfPeriod(clubSlug, Times.t2, Times.t0).exit
+      exit <- StatsApp.playerOfPeriod(clubId, Times.t2, Times.t0).exit
     } yield assertTrue(exit.isFailure)
   }
 }
