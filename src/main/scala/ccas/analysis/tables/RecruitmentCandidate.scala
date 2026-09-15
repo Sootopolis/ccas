@@ -30,7 +30,7 @@ object RecruitmentCandidate {
   )
 
   def createTable: ZIO[PostgresClient, SQLException, Int] =
-    connectZIO {
+    transactZIO {
       sql"""CREATE TABLE IF NOT EXISTS recruitment_candidate (
               run_id            BIGINT NOT NULL,
               player_id         BIGINT NOT NULL,

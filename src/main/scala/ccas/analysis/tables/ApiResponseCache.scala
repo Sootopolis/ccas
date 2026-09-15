@@ -10,7 +10,7 @@ import ccas.analysis.tables.subtypes.{ApiResponseBodyId, ApiResponseCacheId}
 import ccas.utils.client.BodyStore
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient
-import ccas.utils.sql.PostgresClient.{connectZIO, withTransaction}
+import ccas.utils.sql.PostgresClient.{connectZIO, transactZIO, withTransaction}
 
 /** Persistent cache of Chess.com API responses keyed by URL. Holds cache-control metadata (ETag, Last-Modified,
   * max-age) alongside a foreign key into `api_response_body` for the body itself — body storage is deduplicated
@@ -35,7 +35,7 @@ final case class ApiResponseCache(
 object ApiResponseCache {
 
   def createTable: ZIO[PostgresClient, SQLException, Int] =
-    connectZIO {
+    transactZIO {
       sql"""CREATE TABLE IF NOT EXISTS api_response_cache (
               cache_id        BIGSERIAL PRIMARY KEY,
               fetched_at      TIMESTAMPTZ NOT NULL,

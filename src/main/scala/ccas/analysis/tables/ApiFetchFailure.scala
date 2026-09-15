@@ -10,7 +10,7 @@ import zio.ZIO
 import ccas.utils.client.BodyStore
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient
-import ccas.utils.sql.PostgresClient.{connectZIO, withTransaction}
+import ccas.utils.sql.PostgresClient.{connectZIO, transactZIO, withTransaction}
 
 final case class ApiFetchFailure(
   occurredAt: Instant,
@@ -34,7 +34,7 @@ object ApiFetchFailure {
   ) derives DbCodec
 
   def createTable: ZIO[PostgresClient, SQLException, Int] =
-    connectZIO {
+    transactZIO {
       sql"""CREATE TABLE IF NOT EXISTS api_fetch_failure (
               failure_id       BIGSERIAL PRIMARY KEY,
               occurred_at      TIMESTAMPTZ NOT NULL,

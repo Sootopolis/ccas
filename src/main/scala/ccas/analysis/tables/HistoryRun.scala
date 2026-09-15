@@ -11,7 +11,7 @@ import ccas.analysis.tables.subtypes.HistoryRunId
 import ccas.api.misc.subtypes.{ClubId, JobRunId}
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient
-import ccas.utils.sql.PostgresClient.connectZIO
+import ccas.utils.sql.PostgresClient.{connectZIO, transactZIO}
 
 final case class HistoryRun(
   runId: HistoryRunId,
@@ -31,7 +31,7 @@ final case class HistoryRun(
 object HistoryRun {
 
   def createTable: ZIO[PostgresClient, SQLException, Int] =
-    connectZIO {
+    transactZIO {
       sql"""CREATE TABLE IF NOT EXISTS history_run (
               run_id       BIGSERIAL PRIMARY KEY,
               club_id      BIGINT NOT NULL REFERENCES club (club_id) ON DELETE RESTRICT,

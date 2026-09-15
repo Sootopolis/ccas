@@ -46,7 +46,7 @@ object Club {
   def isTombstoneSlug(s: ClubSlug): Boolean = stalePattern.matches(s.value)
 
   def createTable: ZIO[PostgresClient, SQLException, Int] =
-    connectZIO {
+    transactZIO {
       sql"""CREATE TABLE IF NOT EXISTS club (
               club_id          BIGINT PRIMARY KEY,
               created          TIMESTAMPTZ NOT NULL,

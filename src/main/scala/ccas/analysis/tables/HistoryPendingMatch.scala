@@ -20,7 +20,7 @@ final case class HistoryPendingMatch(
 object HistoryPendingMatch {
 
   def createTable: ZIO[PostgresClient, SQLException, Int] =
-    connectZIO {
+    transactZIO {
       // Transient work queue — PK includes is_live to distinguish daily/live match IDs.
       sql"""CREATE TABLE IF NOT EXISTS history_pending_match (
               club_id    BIGINT NOT NULL REFERENCES club (club_id) ON DELETE RESTRICT,
