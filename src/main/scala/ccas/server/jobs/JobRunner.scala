@@ -10,7 +10,23 @@ import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.withTransaction
 import zio.json.EncoderOps
 import zio.stream.{SubscriptionRef, ZStream}
-import zio.{Clock, Duration, Fiber, Promise, RIO, RLayer, Ref, Schedule, Scope, UIO, URIO, ZIO, ZLayer, durationInt}
+import zio.{
+  Clock,
+  Duration,
+  Fiber,
+  Promise,
+  RIO,
+  RLayer,
+  Ref,
+  Schedule,
+  Scope,
+  UIO,
+  URIO,
+  ZEnvironment,
+  ZIO,
+  ZLayer,
+  durationInt
+}
 
 import ccas.analysis.tables.{AppSetting, Club, RunTrigger}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId}
@@ -118,7 +134,7 @@ object JobRunner {
           dir
         }.orDie
         now <- Clock.instant
-        _   <- JobRun.markOrphansAsFailed(now).provideEnvironment(zio.ZEnvironment(pgClient))
+        _   <- JobRun.markOrphansAsFailed(now).provideEnvironment(ZEnvironment(pgClient))
       } yield new JobRunnerLive(
         display,
         client,
@@ -144,7 +160,7 @@ object JobRunner {
     logDir: Path
   ) extends JobRunner {
 
-    private val env       = zio.ZEnvironment(display, client, pgClient)
+    private val env       = ZEnvironment(display, client, pgClient)
     private val transport = new FileTail(logDir, completions, LogTailPollInterval)
 
     override def submit(

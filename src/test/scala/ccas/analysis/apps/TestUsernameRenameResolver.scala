@@ -1,5 +1,7 @@
 package ccas.analysis.apps
 
+import java.time.Instant
+
 import com.augustnagro.magnum.sql
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 import zio.{RIO, ZIO}
@@ -7,7 +9,7 @@ import zio.http.*
 
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.*
 import ccas.analysis.tables.*
-import ccas.api.misc.enums.PlayerStatusCategory
+import ccas.api.misc.enums.{ClubMatchStatus, PlayerStatusCategory, TimeClass}
 import ccas.api.misc.subtypes.{ClubMatchId, PlayerId, Username}
 import ccas.utils.client.{BodyStore, ChessComClient, TestChessComClientSupport}
 import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
@@ -19,10 +21,10 @@ object TestUsernameRenameResolver extends ZIOSpecDefault {
   private val pidB = PlayerId(9102)
 
   private val resetTables = transactZIO {
-    val _ = sql"DELETE FROM player_match_ref".update.run()
-    val _ = sql"DELETE FROM club_match_board".update.run()
-    val _ = sql"DELETE FROM club_match WHERE match_id = 90001".update.run()
-    val _ = sql"DELETE FROM player_snapshot".update.run()
+    sql"DELETE FROM player_match_ref".update.run()
+    sql"DELETE FROM club_match_board".update.run()
+    sql"DELETE FROM club_match WHERE match_id = 90001".update.run()
+    sql"DELETE FROM player_snapshot".update.run()
     sql"DELETE FROM player".update.run()
   }
 
@@ -72,7 +74,7 @@ object TestUsernameRenameResolver extends ZIOSpecDefault {
     TestChessComClientSupport.fakeClient(routes)
   }
 
-  private def insertSnapshot(pid: PlayerId, username: String, since: java.time.Instant) =
+  private def insertSnapshot(pid: PlayerId, username: String, since: Instant) =
     PlayerSnapshot.insert(PlayerSnapshot(pid, since, Username(username), PlayerStatusCategory.Active, None))
 
   private def testTombstoneDetection = test("isTombstone matches _stale_<digits>") {
@@ -193,7 +195,7 @@ object TestUsernameRenameResolver extends ZIOSpecDefault {
         _ <- ClubMatch.upsert(
           ClubMatch(
             matchId, "Test Match",
-            ccas.api.misc.enums.ClubMatchStatus.Finished, ccas.api.misc.enums.TimeClass.Daily,
+            ClubMatchStatus.Finished, TimeClass.Daily,
             Some(TestTimes.t0), Some(TestTimes.t1), 1,
             None, 20, None, 10, TestTimes.t0, None
           )
@@ -228,7 +230,7 @@ object TestUsernameRenameResolver extends ZIOSpecDefault {
         _ <- ClubMatch.upsert(
           ClubMatch(
             matchId, "Test Match",
-            ccas.api.misc.enums.ClubMatchStatus.Finished, ccas.api.misc.enums.TimeClass.Daily,
+            ClubMatchStatus.Finished, TimeClass.Daily,
             Some(TestTimes.t0), Some(TestTimes.t1), 1,
             None, 20, None, 10, TestTimes.t0, None
           )

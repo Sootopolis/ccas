@@ -1,6 +1,7 @@
 package ccas.utils.client
 
 import java.time.Instant
+import java.util.concurrent.TimeUnit
 
 import ccas.analysis.tables.{ClientConfig, ClientStats}
 import ccas.utils.errors.safeMessage
@@ -102,7 +103,7 @@ private[ccas] object ClientStatsPersistence {
   }
 
   private def inProgressThrottleMs(stateRef: Ref[ChessComClient.ThrottleState]): UIO[Long] =
-    Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS).flatMap { now =>
+    Clock.currentTime(TimeUnit.MILLISECONDS).flatMap { now =>
       stateRef.get.map(_.throttledSince.fold(0L)(now - _))
     }
 }

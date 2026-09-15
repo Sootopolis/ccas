@@ -1,6 +1,6 @@
 package ccas.utils.sql
 
-import java.io.PrintWriter
+import java.io.{OutputStream, PrintWriter}
 import java.sql.{Connection, SQLException}
 import java.util.concurrent.{CountDownLatch, TimeUnit}
 import java.util.logging.Logger
@@ -41,7 +41,7 @@ object TestPostgresClientInterrupt extends ZIOSpecDefault {
       throw new SQLException("unreachable")
     }
     override def getConnection(username: String, password: String): Connection = getConnection
-    override def getLogWriter: PrintWriter            = new PrintWriter(java.io.OutputStream.nullOutputStream)
+    override def getLogWriter: PrintWriter            = new PrintWriter(OutputStream.nullOutputStream)
     override def setLogWriter(out: PrintWriter): Unit = ()
     override def setLoginTimeout(seconds: Int): Unit  = ()
     override def getLoginTimeout: Int                 = 0

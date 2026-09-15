@@ -1,15 +1,14 @@
 package ccas.analysis.apps.recruitment
 
-import java.time.Instant
-
+import java.time.{Duration, Instant}
 import com.augustnagro.magnum.sql
-import zio.{durationInt, Fiber, Promise, RIO, Ref, Scope, Semaphore, ZIO}
+import zio.{Fiber, Promise, RIO, Ref, Scope, Semaphore, Trace, ZEnvironment, ZIO, durationInt}
 import zio.http.*
-
 import ccas.analysis.apps.TestTimes
 import ccas.analysis.tables.*
 import ccas.analysis.tables.subtypes.RecruitmentRunId
 import ccas.api.club.ApiClubMatches
+import ccas.api.misc.enums.{ClubMatchStatus, TimeClass}
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username}
 import ccas.utils.client.{BodyStore, ChessComClient, ClientStatsAccumulator, TestChessComClientSupport}
 import ccas.utils.sql.DbCodecs.given
@@ -408,7 +407,7 @@ object RecruitmentTestSupport {
           body: Body,
           sslConfig: Option[ClientSSLConfig],
           proxy: Option[Proxy]
-        )(implicit trace: zio.Trace): ZIO[Scope, Throwable, Response] =
+        )(implicit trace: Trace): ZIO[Scope, Throwable, Response] =
           routes.runZIO(Request(method = method, url = url, headers = headers, body = body))
 
         override def socket[Env1 <: Any](
@@ -417,7 +416,7 @@ object RecruitmentTestSupport {
           headers: Headers,
           app: WebSocketApp[Env1]
         )(implicit
-          trace: zio.Trace,
+          trace: Trace,
           ev: Scope =:= Scope
         ): ZIO[Env1 & Scope, Throwable, Response] =
           ZIO.die(new UnsupportedOperationException)
@@ -436,7 +435,7 @@ object RecruitmentTestSupport {
         refs,
         stats,
         bar,
-        ChessComClient.ThrottleConfig(Vector(2, 5), 30.seconds, 5.seconds, 1.second, 10.seconds, 1.second, 5, 2, 3, 20, 0.2, 10, 0, java.time.Duration.ZERO, 500L),
+        ChessComClient.ThrottleConfig(Vector(2, 5), 30.seconds, 5.seconds, 1.second, 10.seconds, 1.second, 5, 2, 3, 20, 0.2, 10, 0, Duration.ZERO, 500L),
         recoveryFiberRef,
         ZIO.unit
       )
@@ -546,7 +545,7 @@ object RecruitmentTestSupport {
         )
       discoveredOpponents <- Ref.make(Set.empty[Username])
       failedAdminSlugs    <- Ref.make(Set.empty[ClubSlug])
-      excludedSlugs <- ZIO.foreach(criteria.excludeClubs)(Club.selectId(_))
+      excludedSlugs <- ZIO.foreach(criteria.excludeClubs)(Club.selectId)
         .map(_.flatten.map(_.slug).toSet)
       runCtx = RunContext(
         client,
@@ -613,10 +612,19 @@ object RecruitmentTestSupport {
     for {
       _ <- ClubMatch.upsert(
         ClubMatch(
-          matchId, s"Match ${ClubMatchId.unwrap(matchId)}",
-          ccas.api.misc.enums.ClubMatchStatus.Finished, ccas.api.misc.enums.TimeClass.Daily,
-          Some(TestTimes.t0), Some(TestTimes.t1), 1,
-          team1ClubId, 20, None, 10, TestTimes.t0, None
+          matchId = matchId,
+          name = s"Match ${ClubMatchId.unwrap(matchId)}",
+          status = ClubMatchStatus.Finished,
+          timeClass = TimeClass.Daily,
+          startTime = Some(TestTimes.t0),
+          endTime = Some(TestTimes.t1),
+          boards = 1,
+          team1ClubId = team1ClubId,
+          team1ScoreX2 = 20,
+          team2ClubId = None,
+          team2ScoreX2 = 10,
+          fetchedAt = TestTimes.t0,
+          processedBodyHash = None
         )
       )
       _ <- ClubMatchBoard.insertBatch(
@@ -646,6 +654,6 @@ object RecruitmentTestSupport {
           trigger = trigger,
           autoConfirm = autoConfirm
         )
-        .provideEnvironment(zio.ZEnvironment(client, xa, display))
+        .provideEnvironment(ZEnvironment(client, xa, display))
     } yield result
 }

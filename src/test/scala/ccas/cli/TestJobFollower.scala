@@ -5,6 +5,7 @@ import zio.json.*
 import zio.test.{assertTrue, Spec, TestAspect, TestConsole, ZIOSpecDefault}
 
 import ccas.server.routes.JobRoutes.{ClubJobResult, JobResult, JobStatusResponse}
+import ccas.utils.ProgressSnapshot
 
 /** Exercises log-stream following and submit-result handling against a scripted stub client — no socket, no DB. */
 object TestJobFollower extends ZIOSpecDefault {
@@ -60,7 +61,7 @@ object TestJobFollower extends ZIOSpecDefault {
 
     // Rendering is exercised in TestClientProgressRenderer; here `progress` scripts the transport (default ZIO.unit =
     // one clean pass; a Ref-backed effect scripts a drop-then-reconnect). onFrame is unused — no frames are emitted.
-    override def streamProgress(path: String)(onFrame: ccas.utils.ProgressSnapshot => UIO[Unit]): Task[Unit] = progress
+    override def streamProgress(path: String)(onFrame: ProgressSnapshot => UIO[Unit]): Task[Unit] = progress
   }
 
   /** Stub that records every `postEmpty` (the cancel POST) path and drives `streamLines` via `stream`, so an interrupt
@@ -76,7 +77,7 @@ object TestJobFollower extends ZIOSpecDefault {
     override def getJson[Resp: JsonDecoder](path: String): Task[Resp] =
       ZIO.fromEither(statusJson(status, None).fromJson[Resp]).mapError(m => CliError(s"stub decode failed: $m", 1))
     override def streamLines(path: String)(onLine: String => UIO[Unit]): Task[Unit] = stream(onLine)
-    override def streamProgress(path: String)(onFrame: ccas.utils.ProgressSnapshot => UIO[Unit]): Task[Unit] = ZIO.unit
+    override def streamProgress(path: String)(onFrame: ProgressSnapshot => UIO[Unit]): Task[Unit] = ZIO.unit
     override def postEmpty[Resp: JsonDecoder](path: String): Task[Resp] =
       cancelled.update(path :: _) *>
         ZIO.fromEither("""{"jobId":"job-1"}""".fromJson[Resp]).mapError(m => CliError(s"stub decode failed: $m", 1))

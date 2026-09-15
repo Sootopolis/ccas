@@ -1,5 +1,8 @@
 package ccas.utils.client
 
+import java.io.IOException
+import java.net.{ConnectException, SocketException, UnknownHostException}
+
 import io.netty.handler.codec.PrematureChannelClosureException
 import io.netty.handler.timeout.ReadTimeoutException
 import zio.http.URL
@@ -15,12 +18,12 @@ object TestIsConnectionError extends ZIOSpecDefault {
     test("UnknownHostException (DNS 'Temporary failure in name resolution') is a connection error") {
       assertTrue(
         ConnectionError.isConnectionError(
-          new java.net.UnknownHostException("api.chess.com: Temporary failure in name resolution")
+          new UnknownHostException("api.chess.com: Temporary failure in name resolution")
         )
       )
     },
     test("generic IOException (Connection reset) is a connection error") {
-      assertTrue(ConnectionError.isConnectionError(new java.io.IOException("Connection reset")))
+      assertTrue(ConnectionError.isConnectionError(new IOException("Connection reset")))
     },
     test("PrematureChannelClosureException is a connection error") {
       assertTrue(ConnectionError.isConnectionError(new PrematureChannelClosureException()))
@@ -29,10 +32,10 @@ object TestIsConnectionError extends ZIOSpecDefault {
       assertTrue(ConnectionError.isConnectionError(ReadTimeoutException.INSTANCE))
     },
     test("ConnectException (Connection refused) is a connection error (IOException subtype)") {
-      assertTrue(ConnectionError.isConnectionError(new java.net.ConnectException("Connection refused")))
+      assertTrue(ConnectionError.isConnectionError(new ConnectException("Connection refused")))
     },
     test("SocketException (Network is unreachable) is a connection error (IOException subtype)") {
-      assertTrue(ConnectionError.isConnectionError(new java.net.SocketException("Network is unreachable")))
+      assertTrue(ConnectionError.isConnectionError(new SocketException("Network is unreachable")))
     },
     test("non-IOException whose message merely mentions name resolution is NOT a connection error (type-only)") {
       assertTrue(!ConnectionError.isConnectionError(new RuntimeException("Temporary failure in name resolution")))
@@ -47,7 +50,7 @@ object TestIsConnectionError extends ZIOSpecDefault {
       assertTrue(!ConnectionError.isConnectionError(new JsonDecodingException("Connection reset", None)))
     },
     test("NetworkUnavailableException is NOT reclassified (no double-wrap)") {
-      assertTrue(!ConnectionError.isConnectionError(new NetworkUnavailableException(new java.io.IOException("down"))))
+      assertTrue(!ConnectionError.isConnectionError(new NetworkUnavailableException(new IOException("down"))))
     },
     test("generic RuntimeException with unrelated message is NOT a connection error") {
       assertTrue(!ConnectionError.isConnectionError(new RuntimeException("something went wrong")))

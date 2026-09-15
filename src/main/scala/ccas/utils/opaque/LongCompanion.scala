@@ -1,6 +1,7 @@
 package ccas.utils.opaque
 
 import com.augustnagro.magnum.DbCodec
+import zio.Config
 import zio.config.magnolia.DeriveConfig
 import zio.json.JsonCodec
 
@@ -16,7 +17,7 @@ trait LongCompanion extends BaseNumericCompanion[Long] {
   // opaquely, recursing into the lazy val being initialized. See IntCompanion for full context.
   protected def baseJsonCodec: JsonCodec[Long]       = JsonCodec.long
   protected def baseDbCodec: DbCodec[Long]           = DbCodec.LongCodec
-  protected def baseDeriveConfig: DeriveConfig[Long] = DeriveConfig(zio.Config.long)
+  protected def baseDeriveConfig: DeriveConfig[Long] = DeriveConfig(Config.long)
   protected def baseOrdering: Ordering[Long]         = Ordering.Long
 }
 

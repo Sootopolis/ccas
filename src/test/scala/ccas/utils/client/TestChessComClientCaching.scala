@@ -1,5 +1,6 @@
 package ccas.utils.client
 
+import java.nio.charset.StandardCharsets
 import java.time.Instant
 
 import com.augustnagro.magnum.sql
@@ -501,7 +502,7 @@ object TestChessComClientCaching extends ZIOSpecDefault {
           hash   <- connectZIO(
             sql"SELECT body_hash FROM api_response_body WHERE body_id = ${ApiResponseBodyId.unwrap(bodyId)}".query[String].run().head
           )
-          _ <- ZIO.serviceWithZIO[BodyStore](_.put(hash, """{"oops":true}""".getBytes(java.nio.charset.StandardCharsets.UTF_8)))
+          _ <- ZIO.serviceWithZIO[BodyStore](_.put(hash, """{"oops":true}""".getBytes(StandardCharsets.UTF_8)))
           value  <- client.getUncached[Payload](url)  // Fresh hit → decode fails → refetch (network #2)
           calls  <- netCalls.get
           meta   <- ApiResponseCache.lookupMeta(url.encode)
@@ -596,7 +597,7 @@ object TestChessComClientCaching extends ZIOSpecDefault {
           hash   <- connectZIO(
             sql"SELECT body_hash FROM api_response_body WHERE body_id = ${ApiResponseBodyId.unwrap(bodyId)}".query[String].run().head
           )
-          _ <- ZIO.serviceWithZIO[BodyStore](_.put(hash, """{"oops":true}""".getBytes(java.nio.charset.StandardCharsets.UTF_8)))
+          _ <- ZIO.serviceWithZIO[BodyStore](_.put(hash, """{"oops":true}""".getBytes(StandardCharsets.UTF_8)))
           // `get` forces full decode. Refetch returns bad JSON too; without the bounded-catchSome fix this would
           // loop forever and hit the suite-level timeout. With the fix, fails after exactly one refetch.
           err   <- client.get[Payload](url).flip
@@ -633,7 +634,7 @@ object TestChessComClientCaching extends ZIOSpecDefault {
           hash  <- connectZIO(
             sql"SELECT body_hash FROM api_response_body WHERE body_id = ${ApiResponseBodyId.unwrap(bodyId)}".query[String].run().head
           )
-          _ <- ZIO.serviceWithZIO[BodyStore](_.put(hash, """{"oops":true}""".getBytes(java.nio.charset.StandardCharsets.UTF_8)))
+          _ <- ZIO.serviceWithZIO[BodyStore](_.put(hash, """{"oops":true}""".getBytes(StandardCharsets.UTF_8)))
           value <- fresh.getValue                                // decode fails → invalidate + refetch from network
           calls <- netCalls.get
           meta  <- ApiResponseCache.lookupMeta(url.encode)

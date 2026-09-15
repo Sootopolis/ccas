@@ -326,7 +326,7 @@ object TestClubSql extends ZIOSpecDefault {
     val adminA = ClubAdmin(clubA.clubId, player0.playerId)
     val adminB = ClubAdmin(clubB.clubId, player1.playerId)
     val now    = Instant.now()
-    val stale  = now.minus(java.time.Duration.ofDays(400)) // > 1 year
+    val stale  = now.minus(Duration.ofDays(400)) // > 1 year
     for {
       // --- Baseline: active sizable club includes its admin ---
       _           <- Club.upsert(clubA.copy(membersCount = Some(1234)))

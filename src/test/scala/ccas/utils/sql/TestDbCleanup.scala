@@ -26,7 +26,7 @@ object TestDbCleanup {
     * `DELETE FROM player` will fail with an FK violation.
     */
   val clearPlayer: RIO[PostgresClient, Unit] = transactZIO {
-    val _ = sql"DELETE FROM player_snapshot".update.run()
+    sql"DELETE FROM player_snapshot".update.run()
     sql"DELETE FROM player".update.run()
   }.unit
 
@@ -34,8 +34,8 @@ object TestDbCleanup {
     * touching `club_match_ref` or `unresolved_match_club` (both FK to `club_match`).
     */
   val clearMatches: RIO[PostgresClient, Unit] = transactZIO {
-    val _ = sql"DELETE FROM club_match_game".update.run()
-    val _ = sql"DELETE FROM club_match_board".update.run()
+    sql"DELETE FROM club_match_game".update.run()
+    sql"DELETE FROM club_match_board".update.run()
     sql"DELETE FROM club_match".update.run()
   }.unit
 
@@ -70,8 +70,8 @@ object TestDbCleanup {
     * `ChessComClient` through 404s or cache misses so subsequent runs start from an empty cache.
     */
   val clearApiCache: RIO[PostgresClient, Unit] = transactZIO {
-    val _ = sql"DELETE FROM api_fetch_failure".update.run()
-    val _ = sql"DELETE FROM api_response_cache".update.run()
+    sql"DELETE FROM api_fetch_failure".update.run()
+    sql"DELETE FROM api_response_cache".update.run()
     sql"DELETE FROM api_response_body".update.run()
   }.unit
 

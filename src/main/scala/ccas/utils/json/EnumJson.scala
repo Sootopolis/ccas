@@ -1,10 +1,11 @@
 package ccas.utils.json
 
+import scala.reflect.Enum
 import scala.util.Try
 
 import zio.json.{EncoderOps, JsonCodec, PascalCase, SnakeCase}
 
-trait EnumJson[T <: scala.reflect.Enum] {
+trait EnumJson[T <: Enum] {
   protected def valueOf(string: String): T
 
   protected def enumToJson(member: T): String = SnakeCase(member.toString)

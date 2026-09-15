@@ -1,5 +1,7 @@
 package ccas.utils.client
 
+import java.io.IOException
+
 import io.netty.handler.codec.PrematureChannelClosureException
 import io.netty.handler.timeout.ReadTimeoutException
 
@@ -25,7 +27,7 @@ object ConnectionError {
     case _: HttpStatusException              => false // HTTP status codes are an answer from the origin, not a network fault
     case _: JsonDecodingException            => false // we reached the origin; the body just didn't parse
     case _: NetworkUnavailableException      => false // already wrapped — don't reclassify / double-wrap
-    case _: java.io.IOException              => true  // UnknownHostException (DNS), ConnectException, SocketException, …
+    case _: IOException              => true  // UnknownHostException (DNS), ConnectException, SocketException, …
     case _: PrematureChannelClosureException => true  // Netty mid-request channel close (not an IOException)
     case _: ReadTimeoutException             => true  // Netty read-timeout: idleTimeout's ReadTimeoutHandler fired (not an IOException)
     case _                                   => false

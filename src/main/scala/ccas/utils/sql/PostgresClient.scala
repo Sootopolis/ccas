@@ -1,7 +1,9 @@
 package ccas.utils.sql
 
-import java.io.PrintWriter
-import java.lang.reflect.Method
+import java.io.{ByteArrayOutputStream, OutputStream, PrintWriter}
+import java.lang.reflect.{Method, Proxy}
+import java.net.URLDecoder
+import java.nio.charset.StandardCharsets
 import java.sql.{Connection, SQLException, SQLTransientConnectionException}
 import java.util.logging.Logger as JLogger
 import javax.sql.DataSource
@@ -9,7 +11,7 @@ import javax.sql.DataSource
 import com.augustnagro.magnum.{DbCon, DbTx, Transactor}
 import com.typesafe.config.{Config, ConfigFactory}
 import com.zaxxer.hikari.{HikariConfig, HikariDataSource}
-import zio.{durationLong, Duration, IO, RIO, Schedule, TaskLayer, ZIO, ZLayer}
+import zio.{durationLong, Duration, IO, RIO, Schedule, TaskLayer, ZEnvironment, ZIO, ZLayer}
 
 /** Database client for PostgreSQL with connection management and transient-error retry.
   *
@@ -225,7 +227,7 @@ object PostgresClient {
     * mis-decoded characters.
     */
   private def decodePercent(s: String): String = {
-    val bytes = new java.io.ByteArrayOutputStream(s.length)
+    val bytes = new ByteArrayOutputStream(s.length)
     var i     = 0
     while (i < s.length) {
       val isEscape = s.charAt(i) == '%' && i + 2 < s.length && isHex(s.charAt(i + 1)) && isHex(s.charAt(i + 2))
@@ -233,11 +235,11 @@ object PostgresClient {
         bytes.write(Integer.parseInt(s.substring(i + 1, i + 3), 16))
         i += 3
       } else {
-        bytes.write(s.substring(i, i + 1).getBytes(java.nio.charset.StandardCharsets.UTF_8))
+        bytes.write(s.substring(i, i + 1).getBytes(StandardCharsets.UTF_8))
         i += 1
       }
     }
-    new String(bytes.toByteArray, java.nio.charset.StandardCharsets.UTF_8)
+    new String(bytes.toByteArray, StandardCharsets.UTF_8)
   }
 
   private def isHex(c: Char): Boolean =
@@ -245,7 +247,7 @@ object PostgresClient {
 
   /** Query-value decoding, matching what pgjdbc applies to `?user=` / `?password=` (so `+` decodes to a space). */
   private def decodeQuery(s: String): String =
-    java.net.URLDecoder.decode(s, java.nio.charset.StandardCharsets.UTF_8)
+    URLDecoder.decode(s, StandardCharsets.UTF_8)
 
   def live(
     prefix: String = "database",
@@ -315,7 +317,7 @@ object PostgresClient {
         }
         hikariDs <- ZIO.fromAutoCloseable(ZIO.attemptBlocking(new HikariDataSource(hikariConfig)))
         client = new PostgresClient(Transactor(hikariDs), baseDelay.millis, maxRetries)
-        _ <- onInit.provideEnvironment(zio.ZEnvironment(client))
+        _ <- onInit.provideEnvironment(ZEnvironment(client))
       } yield client
     }
 
@@ -371,7 +373,7 @@ object PostgresClient {
     * inside withTransaction cannot break the outer transaction.
     */
   private def transactionProxy(conn: Connection): Connection =
-    java.lang.reflect.Proxy
+    Proxy
       .newProxyInstance(
         conn.getClass.getClassLoader,
         Array(classOf[Connection]),
@@ -389,7 +391,7 @@ object PostgresClient {
   private class SingleConnectionDataSource(conn: Connection) extends DataSource {
     override def getConnection: Connection                                     = conn
     override def getConnection(username: String, password: String): Connection = conn
-    override def getLogWriter: PrintWriter            = new PrintWriter(java.io.OutputStream.nullOutputStream)
+    override def getLogWriter: PrintWriter            = new PrintWriter(OutputStream.nullOutputStream)
     override def setLogWriter(out: PrintWriter): Unit = ()
     override def setLoginTimeout(seconds: Int): Unit  = ()
     override def getLoginTimeout: Int                 = 0

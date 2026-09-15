@@ -3,6 +3,7 @@ package ccas.utils.client
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path, Paths}
 
+import java.util.Comparator
 import java.util.concurrent.ConcurrentLinkedQueue
 
 import scala.jdk.CollectionConverters.*
@@ -27,7 +28,7 @@ object TestBodyStore extends ZIOSpecDefault {
 
   private def deleteRecursively(dir: Path): Unit =
     if (Files.exists(dir)) {
-      Files.walk(dir).sorted(java.util.Comparator.reverseOrder()).forEach(p => { Files.deleteIfExists(p); () })
+      Files.walk(dir).sorted(Comparator.reverseOrder()).forEach(p => { Files.deleteIfExists(p); () })
     }
 
   private val hash   = "a" * 64

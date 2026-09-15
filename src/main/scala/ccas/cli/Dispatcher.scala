@@ -3,6 +3,8 @@ package ccas.cli
 import java.nio.charset.StandardCharsets
 import java.util.Base64
 
+import scala.io.StdIn
+
 import zio.*
 
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, Username}
@@ -42,16 +44,18 @@ object Dispatcher {
   def dispatch(cmd: CliCommand.ServerCommand, currentClub: Option[String]): UIO[ExitCode] =
     CcasApiClient
       .live(cmd.server)
-      .flatMap(api =>
+      .flatMap { api =>
         // Bars render only on an interactive terminal (hasTty) and unless `--no-progress` was passed; piped/redirected
         // output stays plain lines regardless.
-        runCommand(
+        val jobFollower = JobFollower(
           api,
-          JobFollower(api, MaxJobWait, ReconnectBackoff, MaxReconnects, showProgress = hasTty && !noProgressFor(cmd)),
-          cmd,
-          currentClub
-        ).tap(_ => refreshClubsCache(api))
-      )
+          MaxJobWait,
+          ReconnectBackoff,
+          MaxReconnects,
+          showProgress = hasTty && !noProgressFor(cmd)
+        )
+        runCommand(api, jobFollower, cmd, currentClub) <* refreshClubsCache(api)
+      }
       // `HttpClientLayer.live` (not `Client.default`) so every Dispatcher call inherits the shared transport's
       // `connectionTimeout(10s)` — a black-holed server now fails connect natively at 10s instead of parking a fiber on
       // zio-http's unbounded 30s default (#182). Bounding connect at the Netty layer, below ZIO interruption, avoids the
@@ -224,7 +228,7 @@ object Dispatcher {
     // catchAll as "error: …" with exit 1 — so success here means the interrupt was dispatched.
     case CliCommand.Cancel(_, jobId) =>
       api.postEmpty[CancelResult](s"/api/jobs/$jobId/cancel")
-        .flatMap(_ => Console.printLine(s"cancellation requested for job $jobId").orDie.as(0))
+        *> Console.printLine(s"cancellation requested for job $jobId").orDie.as(0)
 
     // Blacklist is slug-keyed and does its own server-side rename recovery, so it uses the target's display slug rather
     // than the id (id-resolution is scoped to job submission for now).
@@ -542,7 +546,7 @@ object Dispatcher {
       _ <- Console.printLine(s"\nFound ${names.size} candidates:").orDie
       _ <- ZIO.foreachDiscard(names)(n => Console.printLine(s"  ${profileUrlLine(n)}").orDie)
       answer <- ZIO.attemptBlocking(
-        scala.io.StdIn.readLine(s"\nMark all ${names.size} as Invited and copy to clipboard? [Y/n] ")
+        StdIn.readLine(s"\nMark all ${names.size} as Invited and copy to clipboard? [Y/n] ")
       )
         .orElseSucceed("n")
       _ <-
@@ -641,15 +645,14 @@ object Dispatcher {
   // remote/SSH session whose *local* terminal implements it — many terminals (notably GNOME Terminal / VTE) silently
   // ignore OSC 52 clipboard writes, which is why the old escape-only path copied nothing.
   private def copyToClipboard(payload: String, summary: String): Task[Unit] =
-    if (payload.isEmpty) { ZIO.unit } // guard: an empty payload would clobber the clipboard and print "Copied 0 …"
-    else {
+    ZIO.whenDiscard(payload.nonEmpty) {
       clipboardCommand match {
+        case None => copyFallback(payload)
         case Some(cmd) =>
           copyViaTool(cmd, payload).flatMap { copied =>
-            if (copied) { Console.printLine(s"Copied $summary.").orDie }
-            else { copyFallback(payload) }
+            if (copied) Console.printLine(s"Copied $summary.").orDie
+            else copyFallback(payload)
           }
-        case None => copyFallback(payload)
       }
     }
 

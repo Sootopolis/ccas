@@ -1,6 +1,7 @@
 package ccas.utils.opaque
 
 import com.augustnagro.magnum.DbCodec
+import zio.Config
 import zio.config.magnolia.DeriveConfig
 import zio.json.JsonCodec
 
@@ -16,6 +17,6 @@ trait DoubleCompanion extends BaseNumericCompanion[Double] {
   // opaquely, recursing into the lazy val being initialized. See IntCompanion for full context.
   protected def baseJsonCodec: JsonCodec[Double]       = JsonCodec.double
   protected def baseDbCodec: DbCodec[Double]           = DbCodec.DoubleCodec
-  protected def baseDeriveConfig: DeriveConfig[Double] = DeriveConfig(zio.Config.double)
+  protected def baseDeriveConfig: DeriveConfig[Double] = DeriveConfig(Config.double)
   protected def baseOrdering: Ordering[Double]         = Ordering.Double.TotalOrdering
 }

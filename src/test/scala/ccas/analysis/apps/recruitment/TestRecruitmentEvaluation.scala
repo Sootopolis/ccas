@@ -170,7 +170,7 @@ object TestRecruitmentEvaluation extends ZIOSpecDefault {
     val now = Instant.now()
     val staleCache = PlayerRecruitmentCache(
       playerId = pid0,
-      fetchedAt = now.minus(java.time.Duration.ofDays(30)), // very old cache
+      fetchedAt = now.minus(Duration.ofDays(30)), // very old cache
       dailyElo = Some(Elo(1500)),
       dailyScoreRate = None,
       dailyTimeoutPct = Some(0.0),
@@ -180,7 +180,7 @@ object TestRecruitmentEvaluation extends ZIOSpecDefault {
       ongoingTeamMatches = Some(2),
       tmGamesFinished90d = Some(10),
       tmTimeoutPct90d = Some(0.0),
-      lastDailyTimeoutAt = Some(now.minus(java.time.Duration.ofDays(100))), // had a timeout once
+      lastDailyTimeoutAt = Some(now.minus(Duration.ofDays(100))), // had a timeout once
       lastTmTimeoutAt = None
     )
     val criteria  = makeCriteria().copy(dailyMaxTimeoutPercent = Some(0.0))
@@ -195,7 +195,7 @@ object TestRecruitmentEvaluation extends ZIOSpecDefault {
     val now = Instant.now()
     val cache48h = PlayerRecruitmentCache(
       playerId = pid0,
-      fetchedAt = now.minus(java.time.Duration.ofHours(48)),
+      fetchedAt = now.minus(Duration.ofHours(48)),
       dailyElo = Some(Elo(1500)),
       dailyScoreRate = None,
       dailyTimeoutPct = Some(0.0),
@@ -220,7 +220,7 @@ object TestRecruitmentEvaluation extends ZIOSpecDefault {
     val now = Instant.now()
     val staleCache = PlayerRecruitmentCache(
       playerId = pid0,
-      fetchedAt = now.minus(java.time.Duration.ofDays(31)),
+      fetchedAt = now.minus(Duration.ofDays(31)),
       dailyElo = Some(Elo(500)),
       dailyScoreRate = None,
       dailyTimeoutPct = Some(50.0),

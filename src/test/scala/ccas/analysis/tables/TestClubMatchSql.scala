@@ -1,12 +1,9 @@
 package ccas.analysis.tables
 
 import java.time.{Duration, Instant, LocalDateTime, ZoneOffset}
-
-import zio.test.{assertCompletes, assertTrue, Spec, TestAspect, ZIOSpecDefault}
-
+import zio.test.{Spec, TestAspect, ZIOSpecDefault, assertCompletes, assertTrue}
 import com.augustnagro.magnum.sql
-
-import ccas.api.misc.enums.{ClubMatchStatus, TimeClass}
+import ccas.api.misc.enums.{ClubMatchStatus, PlayerStatusCategory, TimeClass}
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username}
 import ccas.utils.sql.FreshSchemaLayer
 import ccas.utils.sql.PostgresClient.connectZIO
@@ -69,9 +66,9 @@ object TestClubMatchSql extends ZIOSpecDefault {
   private val clubB = Club(ClubId(301), Times.t0, ClubSlug("club-b"), "Club B", None, None, None)
 
   private val player0 =
-    Player(PlayerId(50), Times.t0, Username("p0"), ccas.api.misc.enums.PlayerStatusCategory.Active, None, Times.t0)
+    Player(PlayerId(50), Times.t0, Username("p0"), PlayerStatusCategory.Active, None, Times.t0)
   private val player1 =
-    Player(PlayerId(51), Times.t0, Username("p1"), ccas.api.misc.enums.PlayerStatusCategory.Active, None, Times.t0)
+    Player(PlayerId(51), Times.t0, Username("p1"), PlayerStatusCategory.Active, None, Times.t0)
 
   private val matchFinished = ClubMatch(
     matchId = ClubMatchId(1001),
@@ -669,14 +666,7 @@ object TestClubMatchSql extends ZIOSpecDefault {
   private def testPlayerMatchRefFindOrInfer =
     test("PlayerMatchRef.findOrInfer prefers explicit, infers and promotes otherwise, returns None when neither") {
       // Fresh player so shared `club_match_board` fixtures for player0/player1 don't leak into the tier-2/miss steps.
-      val player = Player(
-        PlayerId(60),
-        Times.t0,
-        Username("foi-player"),
-        ccas.api.misc.enums.PlayerStatusCategory.Active,
-        None,
-        Times.t0
-      )
+      val player = Player(PlayerId(60), Times.t0, Username("foi-player"), PlayerStatusCategory.Active, None, Times.t0)
       val p           = player.playerId
       val explicitRef = PlayerMatchRef(p, ClubMatchId(2200), isLive = true, isTeam1 = true, boardIdx = 4)
       val parentMatch = matchFinished.copy(
@@ -745,14 +735,7 @@ object TestClubMatchSql extends ZIOSpecDefault {
 
   private def testClubMatchBoardInferPlayerMatchRefIsLive =
     test("inferPlayerMatchRef derives isLive from the parent club_match's time_class") {
-      val player = Player(
-        PlayerId(61),
-        Times.t0,
-        Username("infer-live"),
-        ccas.api.misc.enums.PlayerStatusCategory.Active,
-        None,
-        Times.t0
-      )
+      val player = Player(PlayerId(61), Times.t0, Username("infer-live"), PlayerStatusCategory.Active, None, Times.t0)
       val p = player.playerId
       val dailyMatch = matchFinished.copy(
         matchId = ClubMatchId(2300),

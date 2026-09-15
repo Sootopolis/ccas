@@ -1,5 +1,7 @@
 package ccas.utils.client
 
+import java.net.UnknownHostException
+
 import zio.{Exit, RIO, ZIO}
 import zio.http.URL
 import zio.test.{assertTrue, Spec, ZIOSpecDefault}
@@ -14,7 +16,7 @@ object TestRecoveryErrors extends ZIOSpecDefault {
   override def spec: Spec[Any, Throwable] = suite("TestRecoveryErrors")(
     test("NetworkUnavailableException re-raises (aborts)") {
       val eff: RIO[Any, Option[Int]] =
-        ZIO.fail(new NetworkUnavailableException(new java.net.UnknownHostException("down")))
+        ZIO.fail(new NetworkUnavailableException(new UnknownHostException("down")))
       eff.swallowRecoveryErrors("ctx").exit.map { exit =>
         assertTrue(exit match {
           case Exit.Failure(cause) => cause.failures.exists(_.isInstanceOf[NetworkUnavailableException])

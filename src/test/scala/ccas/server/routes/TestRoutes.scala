@@ -5,7 +5,7 @@ import java.time.{Instant, LocalDateTime, ZoneOffset}
 import com.augustnagro.magnum.sql
 
 import ccas.utils.sql.PostgresClient
-import zio.{LogLevel, RIO, Ref, Scope, UIO, ULayer, URIO, ZIO, ZLayer}
+import zio.{LogLevel, RIO, Ref, Scope, Task, UIO, ULayer, URIO, ZIO, ZLayer}
 import zio.http.*
 import zio.stream.ZStream
 import zio.json.DecoderOps
@@ -592,7 +592,7 @@ object TestRoutes extends ZIOSpecDefault {
 
   private def testInterruptPropagatesWithoutLogging =
     test("interrupted effect propagates and is not logged as a 500") {
-      val interrupted: zio.Task[Response] = ZIO.interrupt
+      val interrupted: Task[Response] = ZIO.interrupt
       for {
         logsBefore <- ZTestLogger.logOutput.map(_.size)
         exit       <- RouteHelpers.withErrorHandling(interrupted).exit

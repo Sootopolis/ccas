@@ -3,7 +3,7 @@ package ccas.analysis.apps.clubdata
 import java.time.Instant
 
 import com.augustnagro.magnum.sql
-import zio.{Chunk, RIO, ZIO, ZLayer}
+import zio.{Chunk, RIO, ZEnvironment, ZIO, ZLayer}
 import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
@@ -164,7 +164,7 @@ object TestClubDataApp extends ZIOSpecDefault {
     for {
       xa     <- ZIO.service[PostgresClient]
       logger <- ZIO.service[ProgressDisplay]
-      result <- ClubDataApp.refresh(None).provideEnvironment(zio.ZEnvironment(client, xa, logger))
+      result <- ClubDataApp.refresh(None).provideEnvironment(ZEnvironment(client, xa, logger))
     } yield result
 
   private def suiteRefreshClub = suite("refreshClub rename-404 recovery")(

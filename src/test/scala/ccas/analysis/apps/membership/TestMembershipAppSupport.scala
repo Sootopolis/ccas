@@ -1,5 +1,6 @@
 package ccas.analysis.apps.membership
 
+import java.sql.SQLException
 import java.time.Instant
 
 import com.augustnagro.magnum.sql
@@ -97,7 +98,7 @@ object TestMembershipAppSupport {
     forClubId: ClubId,
     playerId: PlayerId,
     evaluatedAt: Instant
-  ): ZIO[PostgresClient, java.sql.SQLException, Unit] =
+  ): ZIO[PostgresClient, SQLException, Unit] =
     for {
       criteriaId <- connectZIO {
         sql"""INSERT INTO recruitment_criteria (

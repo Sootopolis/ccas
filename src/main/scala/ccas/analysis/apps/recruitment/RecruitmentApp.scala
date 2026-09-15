@@ -1,8 +1,11 @@
 package ccas.analysis.apps.recruitment
 
+import java.sql.SQLException
 import java.time.{Duration as JDuration, Instant}
 
-import zio.{Clock, ExitCode, RIO, Ref, Scope, Task, ZEnvironment, ZIO, ZIOAppArgs, ZIOAppDefault}
+import scala.io.StdIn
+
+import zio.{durationLong, Clock, ExitCode, RIO, Ref, Scope, Task, ZEnvironment, ZIO, ZIOAppArgs, ZIOAppDefault}
 
 import ccas.analysis.apps.membership.MembershipApp
 import ccas.analysis.apps.ref.RefHelpers
@@ -242,28 +245,28 @@ object RecruitmentApp extends ZIOAppDefault {
         if (effectiveTarget == 0) {
           ZIO.logInfo("[Cumulative] Target already met, skipping explore") *>
             finalizeRun(
-              ctx,
-              trigger,
-              now,
-              cumulative,
-              alreadyFound,
-              "Recruitment Complete (target already met)",
+              ctx = ctx,
+              trigger = trigger,
+              startedAt = now,
+              cumulative = cumulative,
+              alreadyFound = alreadyFound,
+              label = "Recruitment Complete (target already met)",
               autoConfirm = autoConfirm,
               jobRunId = jobRunId
             )
         } else {
           runExplorePhase(
-            ctx,
-            client,
-            pgClient,
-            sourceClubs,
-            timeLimitMinutes,
-            trigger,
-            now,
-            cumulative,
-            alreadyFound,
-            autoConfirm,
-            jobRunId
+            ctx = ctx,
+            client = client,
+            pgClient = pgClient,
+            sourceClubs = sourceClubs,
+            timeLimitMinutes = timeLimitMinutes,
+            trigger = trigger,
+            startedAt = now,
+            cumulative = cumulative,
+            alreadyFound = alreadyFound,
+            autoConfirm = autoConfirm,
+            jobRunId = jobRunId
           )
         }
     } yield finalRun
@@ -320,16 +323,16 @@ object RecruitmentApp extends ZIOAppDefault {
         roundRobinKeys = Nil
       )
       _ <- (timeLimitMinutes match {
-        case Some(minutes) => loopEffect.timeout(zio.durationLong(minutes.toLong).minutes).unit
+        case Some(minutes) => loopEffect.timeout(minutes.toLong.minutes).unit
         case None          => loopEffect.unit
       }).onInterrupt(
         finalizeRun(
-          ctx,
-          trigger,
-          startedAt,
-          cumulative,
-          alreadyFound,
-          "Recruitment Interrupted",
+          ctx = ctx,
+          trigger = trigger,
+          startedAt = startedAt,
+          cumulative = cumulative,
+          alreadyFound = alreadyFound,
+          label = "Recruitment Interrupted",
           interrupted = true,
           autoConfirm = autoConfirm,
           jobRunId = jobRunId
@@ -340,12 +343,12 @@ object RecruitmentApp extends ZIOAppDefault {
 
       // --- Finalize ---
       finalRun <- finalizeRun(
-        ctx,
-        trigger,
-        startedAt,
-        cumulative,
-        alreadyFound,
-        "Recruitment Complete",
+        ctx = ctx,
+        trigger = trigger,
+        startedAt = startedAt,
+        cumulative = cumulative,
+        alreadyFound = alreadyFound,
+        label = "Recruitment Complete",
         autoConfirm = autoConfirm,
         jobRunId = jobRunId
       )
@@ -392,20 +395,20 @@ object RecruitmentApp extends ZIOAppDefault {
         for {
           _ <- ZIO.foreachDiscard(confirmed) { u =>
             Player.selectByUsername(u)
-              .someOrFail(new java.sql.SQLException(s"No player found for confirmed candidate $u"))
+              .someOrFail(new SQLException(s"No player found for confirmed candidate $u"))
               .flatMap(p => RecruitmentCandidate.updateOutcome(ctx.runId, p.playerId, CandidateOutcome.Invited))
           }
           deferredCount <- RecruitmentCandidate.selectDeferredCountByRun(ctx.runId)
           finalRun = RecruitmentRun(
-            ctx.runId,
-            clubId,
-            ctx.runCtx.criteria.criteriaId,
-            trigger,
-            startedAt,
-            Some(completedAt),
-            confirmed.size,
-            Some(ctx.target),
-            jobRunId
+            runId = ctx.runId,
+            clubId = clubId,
+            criteriaId = ctx.runCtx.criteria.criteriaId,
+            trigger = trigger,
+            startedAt = startedAt,
+            completedAt = Some(completedAt),
+            candidatesFound = confirmed.size,
+            target = Some(ctx.target),
+            jobRunId = jobRunId
           )
           _ <- RecruitmentRun.update(finalRun)
         } yield (finalRun, deferredCount)
@@ -443,7 +446,7 @@ object RecruitmentApp extends ZIOAppDefault {
       _ <- ZIO.logInfo(s"\nFound ${found.size} candidates:")
       _ <- ZIO.foreachDiscard(found)(u => ZIO.logInfo(s"  $u"))
       answer <- ZIO.attemptBlocking(
-        scala.io.StdIn.readLine(s"\nMark all ${found.size} candidates as Invited? [Y/n] ")
+        StdIn.readLine(s"\nMark all ${found.size} candidates as Invited? [Y/n] ")
       ).orElse(ZIO.succeed("n"))
     } yield
       if (answer == null || answer.trim.isEmpty || answer.trim.toLowerCase.startsWith("y")) found
@@ -476,8 +479,7 @@ object RecruitmentApp extends ZIOAppDefault {
       run <- runIdOpt match {
         case Some(id) =>
           ZIO.attempt(id.toLong)
-            .orElseFail(BadRequestException(s"Invalid run ID: '$id' (expected a number)"))
-            .map(RecruitmentRunId.wrap)
+            .mapBoth(_ => BadRequestException(s"Invalid run ID: '$id' (expected a number)"), RecruitmentRunId.wrap)
             .flatMap(RecruitmentRun.selectId)
             .someOrFail(NotFoundException(s"Run $id not found"))
         case None =>

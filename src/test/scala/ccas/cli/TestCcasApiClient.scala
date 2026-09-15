@@ -1,5 +1,7 @@
 package ccas.cli
 
+import java.net.ServerSocket
+
 import zio.*
 import zio.http.Client
 import zio.test.{assertTrue, Spec, ZIOSpecDefault}
@@ -9,7 +11,7 @@ object TestCcasApiClient extends ZIOSpecDefault {
 
   /** Bind then immediately close to obtain a port that is guaranteed refused. */
   private val refusedPort: Task[Int] = ZIO.attempt {
-    val socket = new java.net.ServerSocket(0)
+    val socket = new ServerSocket(0)
     try { socket.getLocalPort }
     finally { socket.close() }
   }

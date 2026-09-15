@@ -1,5 +1,6 @@
 package ccas.analysis.apps.ref
 
+import java.net.UnknownHostException
 import java.time.{Instant, LocalDateTime, ZoneOffset}
 
 import com.augustnagro.magnum.sql
@@ -22,14 +23,14 @@ object TestRefAppSupport {
 
   // --- IDs ---
 
-  val pid0 = PlayerId(300)
-  val pid1 = PlayerId(301)
-  val pid2 = PlayerId(302)
+  val pid0: PlayerId = PlayerId(300)
+  val pid1: PlayerId = PlayerId(301)
+  val pid2: PlayerId = PlayerId(302)
 
-  val clubId0   = ClubId(700)
-  val clubId1   = ClubId(701)
-  val clubSlug0 = ClubSlug("our-club")
-  val clubSlug1 = ClubSlug("other-club")
+  val clubId0: ClubId = ClubId(700)
+  val clubId1: ClubId = ClubId(701)
+  val clubSlug0: ClubSlug = ClubSlug("our-club")
+  val clubSlug1: ClubSlug = ClubSlug("other-club")
 
   val matchId1 = 9001L
   val matchId2 = 9002L
@@ -111,7 +112,7 @@ object TestRefAppSupport {
     * real `ChessComClient` wraps this into `NetworkUnavailableException` after its retry schedule exhausts.
     */
   private def networkDownCause: Throwable =
-    new java.net.UnknownHostException("api.chess.com: Temporary failure in name resolution")
+    new UnknownHostException("api.chess.com: Temporary failure in name resolution")
 
   /** A client whose every request fails with a DNS error — simulates a machine-wide network outage. Built on
     * `makeClient` (not the routes-based `fakeClient`) because only a failing `handler` can produce a transport-level

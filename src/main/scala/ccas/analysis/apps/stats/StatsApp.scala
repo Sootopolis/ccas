@@ -6,7 +6,7 @@ import ccas.api.misc.subtypes.ClubSlug
 import ccas.utils.errors.{BadRequestException, NotFoundException}
 import ccas.utils.sql.PostgresClient
 import ccas.utils.{OutputFile, ProgressDisplay, TimeParser}
-import zio.{RIO, Scope, Task, ZIO, ZIOAppArgs, ZIOAppDefault}
+import zio.{Chunk, RIO, Scope, Task, ZIO, ZIOAppArgs, ZIOAppDefault}
 
 import java.time.{Duration, Instant}
 
@@ -41,7 +41,7 @@ object StatsApp extends ZIOAppDefault {
     minGames: Option[Int]
   )
 
-  private[stats] def parseArgs(args: zio.Chunk[String]): Task[StatsAppArgs] = {
+  private[stats] def parseArgs(args: Chunk[String]): Task[StatsAppArgs] = {
     val positional = args.filterNot(_.startsWith("--"))
     for {
       slug <- ZIO.fromOption(positional.headOption.map(ClubSlug.wrap)).orElseFail(BadRequestException(help))
@@ -132,7 +132,7 @@ object StatsApp extends ZIOAppDefault {
       ZIO.logInfo(s"Players: ${r.contributions.size}, Eligible (>=$minGames games): $eligible")
     }
 
-  private def flagValue(args: zio.Chunk[String], flag: String): Option[String] = {
+  private def flagValue(args: Chunk[String], flag: String): Option[String] = {
     val idx = args.indexOf(flag)
     if (idx >= 0 && idx + 1 < args.size) Some(args(idx + 1))
     else None

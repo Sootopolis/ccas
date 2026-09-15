@@ -3,6 +3,7 @@ package ccas.server.routes
 import java.time.Instant
 
 import scala.util.chaining.*
+import scala.util.Try
 
 import ccas.utils.sql.PostgresClient
 import zio.http.*
@@ -86,7 +87,7 @@ object ScheduleRoutes {
   // --- Helpers ---
 
   private def parseJobKind(s: String): Either[String, JobKind] =
-    scala.util.Try(JobKind.valueOf(s)).toEither.left.map(_ =>
+    Try(JobKind.valueOf(s)).toEither.left.map(_ =>
       s"Invalid job kind: $s. Valid: ${JobKind.values.mkString(", ")}"
     )
 

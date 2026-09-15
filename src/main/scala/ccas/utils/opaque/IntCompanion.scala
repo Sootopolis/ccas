@@ -1,6 +1,7 @@
 package ccas.utils.opaque
 
 import com.augustnagro.magnum.DbCodec
+import zio.Config
 import zio.config.magnolia.DeriveConfig
 import zio.json.JsonCodec
 
@@ -15,6 +16,6 @@ trait IntCompanion extends BaseNumericCompanion[Int] {
   // which erases to `DbCodec[Int]` opaquely — that would deadlock the lazy val at class init.
   protected def baseJsonCodec: JsonCodec[Int]       = JsonCodec.int
   protected def baseDbCodec: DbCodec[Int]           = DbCodec.IntCodec
-  protected def baseDeriveConfig: DeriveConfig[Int] = DeriveConfig(zio.Config.int)
+  protected def baseDeriveConfig: DeriveConfig[Int] = DeriveConfig(Config.int)
   protected def baseOrdering: Ordering[Int]         = Ordering.Int
 }

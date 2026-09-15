@@ -11,7 +11,7 @@ import scala.jdk.CollectionConverters.*
 import com.typesafe.config.ConfigFactory
 
 import ccas.utils.sql.PostgresClient
-import zio.{durationInt, Promise, Ref, ZIO, ZLayer}
+import zio.{Duration, durationInt, Promise, Ref, ZIO, ZLayer}
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.analysis.tables.{AppSetting, Club, RunTrigger}
@@ -66,7 +66,7 @@ object TestJobRunner extends ZIOSpecDefault {
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock @@ TestAspect.timeout(30.seconds)
 
   private object Times {
-    val t0: java.time.Instant = java.time.Instant.parse("2025-06-01T00:00:00Z")
+    val t0: Instant = Instant.parse("2025-06-01T00:00:00Z")
   }
 
   private val clubIdA = ClubId(200)
@@ -85,8 +85,8 @@ object TestJobRunner extends ZIOSpecDefault {
   private def awaitStatus(
     runner: JobRunner,
     id: JobRunId,
-    maxWait: zio.Duration = 10.seconds
-  ): ZIO[ccas.utils.sql.PostgresClient, Throwable, JobRun] =
+    maxWait: Duration = 10.seconds
+  ): ZIO[PostgresClient, Throwable, JobRun] =
     runner.status(id).flatMap {
       case Some(job) if job.status != JobRunStatus.Running => ZIO.succeed(job)
       case _                                               => ZIO.sleep(100.millis) *> awaitStatus(runner, id, maxWait)
@@ -166,7 +166,7 @@ object TestJobRunner extends ZIOSpecDefault {
     for {
       _      <- deleteAllJobRuns
       runner <- ZIO.service[JobRunner]
-      gate   <- zio.Promise.make[Nothing, Unit]
+      gate   <- Promise.make[Nothing, Unit]
       fibers <- ZIO.foreach(List.fill(5)(()))(
         _ => (gate.await *> runner.submit(JobKind.Recruitment, Some(ClubId(204)), None, RunTrigger.Cli, _ => ZIO.never).either).fork
       )

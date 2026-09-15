@@ -2,18 +2,17 @@ package ccas.analysis.apps.recruitment
 
 import java.net.URI
 import java.time.Instant
-
 import zio.http.URL
 import zio.json.JsonDecoder
-import zio.Ref
-import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
-
+import zio.{Ref, RIO}
+import zio.test.{Spec, TestAspect, ZIOSpecDefault, assertTrue}
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.*
 import ccas.analysis.tables.*
-import ccas.api.misc.enums.{PlayerStatus, PlayerStatusCategory}
+import ccas.api.misc.enums.{ClubMatchStatus, PlayerStatus, PlayerStatusCategory, TimeClass}
 import ccas.api.misc.subtypes.{ClubMatchId, ClubSlug, Elo, Username}
 import ccas.api.player.{ApiPlayer, ApiPlayerArchive}
-import ccas.utils.sql.FreshSchemaLayer
+import ccas.utils.client.ChessComClient
+import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
 
 /** Exercises rename recovery on the recruitment-side player fetches wired in PR for issue #22.
   *
@@ -39,7 +38,7 @@ object TestRecruitmentRenameRecovery extends ZIOSpecDefault {
   private val pid    = pid0 // PlayerId(200) per RecruitmentTestSupport
 
   /** Inserts the canonical Player row and a snapshot at the stale username so Tier A succeeds. */
-  private def seedRenameHistory: zio.RIO[ccas.utils.sql.PostgresClient, Unit] =
+  private def seedRenameHistory: RIO[PostgresClient, Unit] =
     for {
       _ <- seedDb
       _ <- Player.insertIfNew(Player(pid, Instant.parse("2020-01-01T00:00:00Z"), freshU, PlayerStatusCategory.Active, None, Instant.parse("2020-01-01T00:00:00Z")))
@@ -70,10 +69,10 @@ object TestRecruitmentRenameRecovery extends ZIOSpecDefault {
   private val staleCandidate: CandidateContext =
     CandidateContext(staleU, apiPlayer = Some(staleApiPlayer), isNewPlayer = false, cache = None)
 
-  private def runContext(client: ccas.utils.client.ChessComClient): zio.RIO[Any, RunContext] =
+  private def runContext(client: ChessComClient): RIO[Any, RunContext] =
     for {
       discoveredOpponents <- Ref.make(Set.empty[Username])
-      failedAdminSlugs    <- Ref.make(Set.empty[ccas.api.misc.subtypes.ClubSlug])
+      failedAdminSlugs    <- Ref.make(Set.empty[ClubSlug])
     } yield RunContext(
       client = client,
       criteria = makeCriteria().copy(
@@ -268,8 +267,8 @@ object TestRecruitmentRenameRecovery extends ZIOSpecDefault {
         ClubMatch(
           matchId = matchId,
           name = "Renamed match",
-          status = ccas.api.misc.enums.ClubMatchStatus.Finished,
-          timeClass = ccas.api.misc.enums.TimeClass.Daily,
+          status = ClubMatchStatus.Finished,
+          timeClass = TimeClass.Daily,
           startTime = Some(Instant.parse("2020-01-01T00:00:00Z")),
           endTime = Some(Instant.parse("2020-01-02T00:00:00Z")),
           boards = 1,

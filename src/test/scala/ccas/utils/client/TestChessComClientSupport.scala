@@ -1,7 +1,9 @@
 package ccas.utils.client
 
+import java.net.UnknownHostException
+
 import ccas.utils.sql.PostgresClient
-import zio.{durationInt, Duration, Fiber, RIO, Ref, Scope, Semaphore, Task, URLayer, ZIO, ZLayer}
+import zio.{durationInt, Duration, Fiber, RIO, Ref, Scope, Semaphore, Task, Trace, URLayer, ZIO, ZLayer}
 import zio.http.*
 import zio.json.*
 
@@ -95,7 +97,7 @@ object TestChessComClientSupport {
           body: Body,
           sslConfig: Option[ClientSSLConfig],
           proxy: Option[Proxy]
-        )(implicit trace: zio.Trace): ZIO[Scope, Throwable, Response] =
+        )(implicit trace: Trace): ZIO[Scope, Throwable, Response] =
           handler(Request(method = method, url = url, headers = headers, body = body))
 
         override def socket[Env1 <: Any](
@@ -104,7 +106,7 @@ object TestChessComClientSupport {
           headers: Headers,
           app: WebSocketApp[Env1]
         )(implicit
-          trace: zio.Trace,
+          trace: Trace,
           ev: Scope =:= Scope
         ): ZIO[Env1 & Scope, Throwable, Response] =
           ZIO.die(new UnsupportedOperationException)
@@ -131,7 +133,7 @@ object TestChessComClientSupport {
     */
   def networkDownClient: ZIO[Scope & PostgresClient & BodyStore, Nothing, ChessComClient] =
     makeClient(
-      handler = _ => ZIO.fail(new java.net.UnknownHostException("api.chess.com: Temporary failure in name resolution")),
+      handler = _ => ZIO.fail(new UnknownHostException("api.chess.com: Temporary failure in name resolution")),
       retryBase = 10.millis,
       maxConnectionRetries = 2,
       permits = 5
@@ -192,7 +194,7 @@ object TestChessComClientSupport {
           body: Body,
           sslConfig: Option[ClientSSLConfig],
           proxy: Option[Proxy]
-        )(implicit trace: zio.Trace): ZIO[Scope, Throwable, Response] =
+        )(implicit trace: Trace): ZIO[Scope, Throwable, Response] =
           routes.runZIO(Request(method = method, url = url, headers = headers, body = body))
 
         override def socket[Env1 <: Any](
@@ -201,7 +203,7 @@ object TestChessComClientSupport {
           headers: Headers,
           app: WebSocketApp[Env1]
         )(implicit
-          trace: zio.Trace,
+          trace: Trace,
           ev: Scope =:= Scope
         ): ZIO[Env1 & Scope, Throwable, Response] =
           ZIO.die(new UnsupportedOperationException)
