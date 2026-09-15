@@ -7,9 +7,11 @@ import scala.io.StdIn
 
 import zio.*
 
+import ccas.analysis.apps.ClubResolution
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, Username}
 import ccas.api.player.ApiPlayer
 import ccas.cli.config.{ConfigWriter, CurrentClubRef}
+import ccas.cli.config.CurrentClubRef.sameSlug
 import ccas.server.routes.BlacklistRoutes.{BlacklistEntryResponse, CreateBlacklistRequest}
 import ccas.server.routes.JobRoutes.{
   CancelResult,
@@ -17,7 +19,6 @@ import ccas.server.routes.JobRoutes.{
   ConfirmResult,
   HistoryRequest,
   InvitedUsernames,
-  JobResult,
   JobStatusResponse,
   MembershipRequest,
   RecruitmentRequest,
@@ -27,7 +28,6 @@ import ccas.server.routes.ManagedClubRoutes.{ManagedClubResponse, MarkManagedReq
 import ccas.server.routes.ScheduleRoutes.{CreateScheduleRequest, ScheduleResponse}
 import ccas.server.scheduler.{MisfirePolicy, TriggerType}
 import ccas.utils.client.HttpClientLayer
-import ccas.utils.errors.ClubProblem
 
 /** Maps a parsed [[CliCommand]] to HTTP calls against the local server and renders the result, returning the process
   * exit code. `Serve` is handled in [[Main]] (it boots the server rather than calling it), never here.
@@ -186,7 +186,7 @@ object Dispatcher {
         val interactiveConfirm = !stdout && hasTty
         for {
           clubTarget <- resolveClub(club, currentClub)
-          result <- api.postJson[RecruitmentRequest, JobResult](
+          result <- api.postJson[RecruitmentRequest, ClubJobResult](
             "/api/jobs/recruitment",
             RecruitmentRequest(
               clubTarget.slug,
@@ -200,9 +200,8 @@ object Dispatcher {
               clubTarget.clubId
             )
           )
-          _    <- noteMissingClubs(missingFor(clubTarget.slug, result), currentClub)
-          _    <- maybeRefreshCurrentClub(currentClub, clubTarget, result.clubId, result.canonicalSlug)
-          code <- handleRecruitResult(follower, api, ClubSlug.unwrap(clubTarget.slug), result, stdout, interactiveConfirm)
+          _    <- noteResolutions(currentClub, clubTarget, List(result))
+          code <- handleRecruitResult(follower, api, result, stdout, interactiveConfirm)
         } yield code
       }
 
@@ -213,9 +212,10 @@ object Dispatcher {
           "/api/jobs/stats",
           StatsRequest(target.slug, since, until, target.clubId)
         )
-        _    <- noteMissingClubs(missingFrom(List(result)), currentClub)
-        _    <- refreshFromClubResults(currentClub, target, List(result))
-        code <- if (detach) { reportDetachedClub(result) } else { follower.handleClubSingle(result) }
+        _    <- noteResolutions(currentClub, target, List(result))
+        code <-
+          if (detach) { reportDetachedClub(result) }
+          else { follower.handleClub(result, logsToStderr = false, _ => ZIO.unit) }
       } yield code
 
     case CliCommand.Jobs(_, limit) =>
@@ -230,8 +230,8 @@ object Dispatcher {
       api.postEmpty[CancelResult](s"/api/jobs/$jobId/cancel")
         *> Console.printLine(s"cancellation requested for job $jobId").orDie.as(0)
 
-    // Blacklist is slug-keyed and does its own server-side rename recovery, so it uses the target's display slug rather
-    // than the id (id-resolution is scoped to job submission for now).
+    // Blacklist is slug-keyed, so it uses the target's display slug rather than the id. Only adding recovers a renamed
+    // slug server-side; listing and removing match the current slug alone until #254 step 3.
     case CliCommand.BlacklistAdd(_, club, usernames, reason, months) =>
       resolveClub(club, currentClub).map(_.slug).flatMap(slug =>
         api.postUnit[CreateBlacklistRequest](
@@ -321,8 +321,6 @@ object Dispatcher {
       )
       .orDie
 
-  private def sameSlug(a: String, b: String): Boolean = a.trim.equalsIgnoreCase(b.trim)
-
   // `current_club` is stored as `<id>:<slug>` (or a bare slug), so anything comparing or displaying it must go through
   // the ref rather than treating the raw value as a slug.
   private def currentSlug(currentClub: Option[String]): Option[String] =
@@ -383,56 +381,50 @@ object Dispatcher {
     submitOne: ClubTarget => Task[List[ClubJobResult]]
   ): Task[Int] = {
     val handle: List[ClubJobResult] => Task[Int] =
-      if (detach) { results =>
-        ZIO.foreach(results)(reportDetachedClub).map(codes =>
-          if (codes.forall(_ == 0)) { 0 }
-          else { 1 }
-        )
-      } else { follower.handleBatch }
+      if (detach) { results => ZIO.foreach(results)(reportDetachedClub).map(JobFollower.overallExitCode) }
+      else { follower.handleBatch }
     ZIO
       .foreach(targets.toChunk.toList)(target =>
         (for {
           results <- submitOne(target)
-          _       <- noteMissingClubs(missingFrom(results), currentClub)
-          _       <- refreshFromClubResults(currentClub, target, results)
+          _       <- noteResolutions(currentClub, target, results)
           code    <- handle(results)
         } yield code)
           .catchAll(e => Console.printLineError(s"${ClubSlug.unwrap(target.slug)}: ${rootMessage(e)}").orDie.as(1))
       )
-      .map(codes =>
-        if (codes.forall(_ == 0)) { 0 }
-        else { 1 }
-      )
+      .map(JobFollower.overallExitCode)
   }
 
   // Detached submit of a single club-scoped job (#170): print its id (or its submit error) and DON'T follow. Cache the
   // id for `ccas logs`/`ccas cancel` completion, and note the reattach command. Exit 1 for a per-club submit failure so
-  // a partial `--all --detach` batch still scores as failed overall (mirrors `handleClubSingle`'s error scoring).
+  // a partial `--all --detach` batch still scores as failed overall (mirrors `handleClub`'s error scoring).
   private def reportDetachedClub(result: ClubJobResult): UIO[Int] =
-    (result.error, result.jobId) match {
-      case (Some(err), _) => Console.printLineError(s"${result.clubSlug}: $err").orDie.as(1)
-      case (_, Some(id)) =>
-        CompletionCache.appendJob(id) *>
-          Console.printLine(s"${result.clubSlug} submitted (detached): $id — follow with 'ccas logs $id'").orDie.as(0)
-      case _ => Console.printLineError(s"${result.clubSlug}: server returned no job id").orDie.as(1)
+    JobFollower.whenSubmitted(result.clubSlug, result.failure, result.jobId) { id =>
+      CompletionCache.appendJob(id) *>
+        Console.printLine(s"${result.clubSlug} submitted (detached): $id — follow with 'ccas logs $id'").orDie.as(0)
     }
 
-  // A club-scoped result is "missing" — worth busting the completion cache and hinting a stranded `current_club` — when
-  // the server reports a typed `NotFound` / `Problematic` problem. Named arms rather than `problem.isDefined` so future
-  // arms (`Renamed`, `NotManaged`) that call for different handling don't silently fall in here. The legacy
-  // `error.startsWith("Club not found")` string is retained only as a fallback for a server predating the typed field.
-  private val ClubNotFound = "Club not found"
+  // Every club-scoped submit acts on its resolutions the same way: a missing club busts the cache and may hint, a
+  // former name gets a note, and a resolved current club refreshes `current_club`.
+  private def noteResolutions(
+    currentClub: Option[String],
+    target: ClubTarget,
+    results: List[ClubJobResult]
+  ): UIO[Unit] =
+    noteMissingClubs(missingFrom(results), currentClub) *>
+      noteRenamedClubs(renamedFrom(results)) *>
+      ZIO.foreachDiscard(results.headOption)(r => maybeRefreshCurrentClub(currentClub, target, r.resolution))
 
-  private[cli] def missingClub(problem: Option[ClubProblem], error: Option[String]): Boolean =
-    problem.exists(p => p == ClubProblem.NotFound || p == ClubProblem.Problematic) ||
-      error.exists(_.startsWith(ClubNotFound))
+  // A club-scoped result is "missing" — worth busting the completion cache and hinting a stranded `current_club` — when
+  // the server has no usable club under that name. `Renamed` ran its job and `Ambiguous` needs no hint.
+  private[cli] def missingClub(resolution: ClubResolution): Boolean =
+    resolution match {
+      case ClubResolution.NotLocal(_) | ClubResolution.Problematic(_) => true
+      case _                                                           => false
+    }
 
   private def missingFrom(results: List[ClubJobResult]): List[String] =
-    results.filter(r => missingClub(r.problem, r.error)).map(_.clubSlug)
-
-  private def missingFor(slug: ClubSlug, result: JobResult): List[String] =
-    if (missingClub(result.problem, result.error)) { List(ClubSlug.unwrap(slug)) }
-    else { Nil }
+    results.filter(r => missingClub(r.resolution)).map(_.clubSlug)
 
   // Drop the cache so the post-command refresh repopulates it — the 6h TTL would otherwise re-suggest the same dead
   // slug on an immediate retry — and call out a stranded `current_club`, which nothing else ever repoints.
@@ -440,6 +432,25 @@ object Dispatcher {
     ZIO.whenDiscard(missing.nonEmpty) {
       CompletionCache.invalidate *>
         ZIO.foreachDiscard(currentSlug(currentClub).filter(cur => missing.exists(sameSlug(cur, _))))(staleCurrentClubHint)
+    }
+
+  // (requested, current) for each submitted job whose slug was a former name. A job that didn't start (a conflict)
+  // gets no note, since the note says what the job runs against.
+  private[cli] def renamedFrom(results: List[ClubJobResult]): List[(String, String)] =
+    results.collect {
+      case ClubJobResult(_, Some(_), _, ClubResolution.Renamed(club, requested)) =>
+        ClubSlug.unwrap(requested) -> ClubSlug.unwrap(club.slug)
+    }
+
+  // A former name reaching the server means the completion cache may still be offering it, so drop the cache too.
+  private def noteRenamedClubs(renamed: List[(String, String)]): UIO[Unit] =
+    ZIO.whenDiscard(renamed.nonEmpty) {
+      CompletionCache.invalidate *>
+        ZIO.foreachDiscard(renamed) { case (requested, current) =>
+          Console
+            .printLineError(s"note: '$requested' is a former name of '$current'; running against '$current'")
+            .orDie
+        }
     }
 
   private def staleCurrentClubHint(slug: String): UIO[Unit] =
@@ -474,19 +485,16 @@ object Dispatcher {
   private def maybeRefreshCurrentClub(
     currentClub: Option[String],
     target: ClubTarget,
-    canonicalId: Option[Long],
-    canonicalSlug: Option[String]
-  ): UIO[Unit] =
-    ZIO.foreachDiscard(
-      CurrentClubRef.refreshedRef(currentClub, target.clubId.isDefined, ClubSlug.unwrap(target.slug), canonicalId, canonicalSlug)
-    )(next => ConfigWriter.setCurrentClub(XdgPaths.configFile, next.clubId, next.slug).ignore)
-
-  private def refreshFromClubResults(
-    currentClub: Option[String],
-    target: ClubTarget,
-    results: List[ClubJobResult]
-  ): UIO[Unit] =
-    ZIO.foreachDiscard(results.headOption)(r => maybeRefreshCurrentClub(currentClub, target, r.clubId, r.canonicalSlug))
+    resolution: ClubResolution
+  ): UIO[Unit] = {
+    val next = CurrentClubRef.refreshedRef(
+      currentClub,
+      target.clubId.isDefined,
+      ClubSlug.unwrap(target.slug),
+      resolution.runnable.toOption
+    )
+    ZIO.foreachDiscard(next)(ref => ConfigWriter.setCurrentClub(XdgPaths.configFile, ref.clubId, ref.slug).ignore)
+  }
 
   // Absent flag -> None (server defaults to false); present -> Some(true). Avoids sending a redundant `false`.
   private def flag(b: Boolean): Option[Boolean] = Option.when(b)(true)
@@ -503,14 +511,13 @@ object Dispatcher {
   private def handleRecruitResult(
     follower: JobFollower,
     api: CcasApiClient,
-    label: String,
-    result: JobResult,
+    result: ClubJobResult,
     stdout: Boolean,
     interactiveConfirm: Boolean
   ): Task[Int] =
-    if (stdout) { follower.handleRecruit(label, result, logsToStderr = true, deliverInvited(api, _)) }
-    else if (interactiveConfirm) { follower.handleRecruit(label, result, logsToStderr = false, confirmFlow(api, _)) }
-    else { follower.handleRecruit(label, result, logsToStderr = true, deferReport(api, _)) }
+    if (stdout) { follower.handleClub(result, logsToStderr = true, deliverInvited(api, _)) }
+    else if (interactiveConfirm) { follower.handleClub(result, logsToStderr = false, confirmFlow(api, _)) }
+    else { follower.handleClub(result, logsToStderr = true, deferReport(api, _)) }
 
   // Fetch a completed auto-confirm scout's invited usernames and print them bare to stdout. A fetch/decode failure is
   // not propagated (the scout already succeeded and is persisted): `deliveryFailed` notes it and the command exits 0.

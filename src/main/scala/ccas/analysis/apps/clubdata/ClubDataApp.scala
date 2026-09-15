@@ -9,7 +9,7 @@ import ccas.analysis.tables.{Club, ClubAdmin, ClubMatch, ClubMatchRef, Player, T
 import ccas.api.club.ApiClubMatches
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
 import ccas.utils.{ApiConcurrency, OutputFile, ProgressDisplay}
-import ccas.analysis.apps.{ClubSlugRenameResolver, withClubSlugRenameRecovery}
+import ccas.analysis.apps.{ClubResolution, ClubSlugRenameResolver, withClubSlugRenameRecovery}
 import ccas.utils.client.{BodyStore, ChessComClient, HttpClientLayer}
 import ccas.utils.sql.PostgresClient
 
@@ -65,23 +65,21 @@ object ClubDataApp extends ZIOAppDefault {
   def refresh(minAgeHours: Option[Int]): RIO[ProgressDisplay & ChessComClient & PostgresClient, RefreshResult] =
     Club.selectAll.flatMap(refreshEligible(_, minAgeHours))
 
-  /** Refreshes only the clubs whose slugs match. Unknown slugs are logged and skipped. When `minAgeHours` is set, the
-    * age filter is applied to the resolved clubs (skipped entries logged separately from unknown slugs).
+  /** Refreshes only the clubs whose slugs resolve; the rest are logged with the reason and skipped. When `minAgeHours`
+    * is set, the age filter is applied to the resolved clubs (its skips logged separately).
     */
   private def refreshSlugs(
     slugs: List[ClubSlug],
     minAgeHours: Option[Int]
   ): RIO[ProgressDisplay & ChessComClient & PostgresClient, RefreshResult] =
     for {
-      resolved <- ZIO.foreach(slugs)(slug => Club.selectBySlug(slug).map(slug -> _))
-      (missing, found) = resolved.partitionMap {
-        case (slug, None)    => Left(slug)
-        case (_, Some(club)) => Right(club)
-      }
-      _ <- ZIO.whenDiscard(missing.nonEmpty)(
-        ZIO.logInfo(s"[ClubData] Unknown slugs (skipped): ${missing.mkString(", ")}")
-      )
-      result <- refreshEligible(found, minAgeHours)
+      resolutions <- ZIO.foreach(slugs)(ClubResolution.resolve(None, _))
+      (skipped, found) = resolutions.partitionMap(_.runnable)
+      renamed = resolutions.collect { case ClubResolution.Renamed(club, former) => s"$former is now ${club.slug}" }
+      _      <- ZIO.whenDiscard(skipped.nonEmpty)(ZIO.logInfo(s"[ClubData] Skipped: ${skipped.mkString("; ")}"))
+      _      <- ZIO.whenDiscard(renamed.nonEmpty)(ZIO.logInfo(s"[ClubData] Former names: ${renamed.mkString("; ")}"))
+      clubs  <- ZIO.foreach(found)(club => Club.selectId(club.clubId)).map(_.flatten)
+      result <- refreshEligible(clubs, minAgeHours)
     } yield result
 
   private def refreshEligible(

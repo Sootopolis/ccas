@@ -3,7 +3,7 @@ package ccas.analysis.tables
 import java.time.{Duration, Instant, LocalDateTime, ZoneOffset}
 
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
-import zio.Chunk
+import zio.{Chunk, ZIO}
 import zio.http.*
 
 import com.augustnagro.magnum.sql
@@ -19,8 +19,7 @@ object TestClubSql extends ZIOSpecDefault {
   override def spec: Spec[Any, Throwable] = suite("TestClubSql")(
     testClubUpsert,
     testClubUpsertUpdate,
-    testClubUpsertBatch,
-    testClubResolveByIdOrSlug,
+    testClubSelectId,
     testClubSelect,
     testClubSelectExistingSlugs,
     testClubMembersCount,
@@ -84,9 +83,9 @@ object TestClubSql extends ZIOSpecDefault {
     )
   }
 
-  private def testClubUpsertBatch = test("testClubUpsertBatch") {
+  private def testClubSelectId = test("selectId finds each upserted club and misses an unknown id") {
     for {
-      _        <- Club.upsertBatch(List(clubA, clubB))
+      _        <- ZIO.foreachDiscard(List(clubA, clubB))(Club.upsert)
       a        <- Club.selectId(clubA.clubId)
       b        <- Club.selectId(clubB.clubId)
       notFound <- Club.selectId(ClubId(999))
@@ -94,22 +93,6 @@ object TestClubSql extends ZIOSpecDefault {
       a.contains(clubA),
       b.contains(clubB),
       notFound.isEmpty
-    )
-  }
-
-  private def testClubResolveByIdOrSlug = test("resolveByIdOrSlug: id wins (rename-proof); falls back to slug") {
-    for {
-      _ <- Club.upsert(clubA)
-      // Id resolves even when the slug passed is stale / wrong — the rename-proof path.
-      byStaleSlugWithId <- Club.resolveByIdOrSlug(Some(clubA.clubId), ClubSlug("was-renamed"))
-      // No id: resolve by slug, as before.
-      bySlug <- Club.resolveByIdOrSlug(None, clubA.slug)
-      // A slug that doesn't exist and no id: nothing.
-      miss <- Club.resolveByIdOrSlug(None, ClubSlug("no-such-club"))
-    } yield assertTrue(
-      byStaleSlugWithId.contains(clubA),
-      bySlug.contains(clubA),
-      miss.isEmpty
     )
   }
 

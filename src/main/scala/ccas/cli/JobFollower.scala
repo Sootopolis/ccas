@@ -200,57 +200,51 @@ final class JobFollower(
       }
     }
 
-  /** Single-job submit result (recruit, matchref). The POST returns HTTP 200 even on failure, so branch on the body. */
+  /** Club-less submit result (matchref). The POST returns HTTP 200 even on failure, so branch on the body. */
   def handleSingle(label: String, result: JobResult): Task[Int] =
-    (result.error, result.jobId) match {
-      case (Some(err), _) => Console.printLineError(s"$label: $err").orDie.as(1)
-      case (_, Some(id)) =>
-        CompletionCache.appendJob(id) *> Console.printLine(s"$label submitted: $id").orDie *> followJob(id)
-      case _ => Console.printLineError(s"$label: server returned no job id").orDie.as(1)
+    JobFollower.whenSubmitted(label, result.error, result.jobId) { id =>
+      CompletionCache.appendJob(id) *> Console.printLine(s"$label submitted: $id").orDie *> followJob(id)
     }
 
-  /** Recruit submit + result delivery. When `logsToStderr`, the submit notice and streamed job logs go to stderr so
-    * stdout carries only the bare-username payload (`ccas recruit --stdout | wl-copy`, and the non-interactive
-    * deferred-report path); the interactive confirm flow keeps both on stdout. `onComplete` runs only when the job
-    * reaches `Completed`, receiving the job id so the caller can fetch/confirm and render the usernames; it is
-    * skipped on failure/timeout/no-id.
+  /** Club-scoped submit result. When `logsToStderr`, the submit notice and streamed job logs go to stderr so stdout
+    * carries only a payload `onComplete` prints (`ccas recruit --stdout | wl-copy`, and the non-interactive
+    * deferred-report path). `onComplete` runs only when the job reaches `Completed`, receiving the job id so the caller
+    * can fetch and render what the job produced; it is skipped on failure/timeout/no-id.
     */
-  def handleRecruit(
-    label: String,
-    result: JobResult,
-    logsToStderr: Boolean,
-    onComplete: String => Task[Unit]
-  ): Task[Int] =
-    (result.error, result.jobId) match {
-      case (Some(err), _) => Console.printLineError(s"$label: $err").orDie.as(1)
-      case (_, Some(id)) =>
-        val notice: UIO[Unit] =
-          (if (logsToStderr) { Console.printLineError(s"$label submitted: $id") }
-           else { Console.printLine(s"$label submitted: $id") }).orDie
-        val onLine: String => UIO[Unit] =
-          if (logsToStderr) { line => Console.printLineError(line).orDie }
-          else { line => Console.printLine(line).orDie }
-        // `--stdout` (logsToStderr) keeps stdout clean for the username payload, so no bars there; an interactive run
-        // gets bars when the terminal supports them.
-        for {
-          _    <- CompletionCache.appendJob(id)
-          _    <- notice
-          code <- followWith(id, onLine, bars = showProgress && !logsToStderr)
-          _    <- ZIO.whenDiscard(code == 0)(onComplete(id))
-        } yield code
-      case _ => Console.printLineError(s"$label: server returned no job id").orDie.as(1)
-    }
-
-  /** Club-scoped single-job submit result (stats). */
-  def handleClubSingle(result: ClubJobResult): Task[Int] =
-    (result.error, result.jobId) match {
-      case (Some(err), _) => Console.printLineError(s"${result.clubSlug}: $err").orDie.as(1)
-      case (_, Some(id)) =>
-        CompletionCache.appendJob(id) *> Console.printLine(s"${result.clubSlug} submitted: $id").orDie *> followJob(id)
-      case _ => Console.printLineError(s"${result.clubSlug}: server returned no job id").orDie.as(1)
+  def handleClub(result: ClubJobResult, logsToStderr: Boolean, onComplete: String => Task[Unit]): Task[Int] =
+    JobFollower.whenSubmitted(result.clubSlug, result.failure, result.jobId) { id =>
+      val printLine: String => UIO[Unit] =
+        if (logsToStderr) { line => Console.printLineError(line).orDie }
+        else { line => Console.printLine(line).orDie }
+      // `--stdout` (logsToStderr) keeps stdout clean for the username payload, so no bars there; an interactive run
+      // gets bars when the terminal supports them.
+      for {
+        _    <- CompletionCache.appendJob(id)
+        _    <- printLine(s"${result.clubSlug} submitted: $id")
+        code <- followWith(id, printLine, bars = showProgress && !logsToStderr)
+        _    <- ZIO.whenDiscard(code == 0)(onComplete(id))
+      } yield code
     }
 
   /** Batch submit result (membership, history): follow each club's job in turn, fail overall if any job failed. */
   def handleBatch(results: List[ClubJobResult]): Task[Int] =
-    ZIO.foreach(results)(handleClubSingle).map(codes => if (codes.forall(_ == 0)) { 0 } else { 1 })
+    ZIO.foreach(results)(handleClub(_, logsToStderr = false, _ => ZIO.unit)).map(JobFollower.overallExitCode)
+}
+
+object JobFollower {
+
+  /** Runs `onJob` with the id of a job the server started; otherwise reports why it did not start and exits 1. */
+  private[cli] def whenSubmitted[R, E](label: String, failure: Option[String], jobIdOption: Option[String])(
+    onJob: String => ZIO[R, E, Int]
+  ): ZIO[R, E, Int] =
+    (failure, jobIdOption) match {
+      case (Some(error), _) => Console.printLineError(s"$label: $error").orDie.as(1)
+      case (_, Some(id))    => onJob(id)
+      case _                => Console.printLineError(s"$label: server returned no job id").orDie.as(1)
+    }
+
+  /** 0 only when every job did. */
+  private[cli] def overallExitCode(codes: List[Int]): Int =
+    if (codes.forall(_ == 0)) { 0 }
+    else { 1 }
 }

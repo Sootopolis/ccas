@@ -4,6 +4,7 @@ import java.time.{Instant, LocalDateTime, ZoneOffset}
 
 import com.augustnagro.magnum.sql
 
+import ccas.analysis.apps.{ClubRef, ClubResolution}
 import ccas.utils.sql.PostgresClient
 import zio.{LogLevel, RIO, Ref, Scope, Task, UIO, ULayer, URIO, ZIO, ZLayer}
 import zio.http.*
@@ -20,7 +21,7 @@ import ccas.server.routes.JobRoutes.{ClubJobResult, ConfirmResult, InvitedUserna
 import ccas.server.scheduler.{JobSchedule, ScheduleSeed}
 import ccas.server.ServerTables
 import ccas.utils.client.{ChessComClient, TestChessComClientSupport}
-import ccas.utils.errors.{ClubProblem, ConflictException}
+import ccas.utils.errors.ConflictException
 import ccas.utils.sql.{FreshSchemaLayer, TestDbCleanup}
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.ProgressDisplay
@@ -175,6 +176,7 @@ object TestRoutes extends ZIOSpecDefault {
     testMembershipEmptyClubSlugs,
     testMembershipMultipleClubs,
     testMembershipWithUnknownClub,
+    testMembershipByFormerSlug,
     testHistorySingleClub,
     testMatchrefSuccess,
     testGetJobsReturnsList,
@@ -205,12 +207,14 @@ object TestRoutes extends ZIOSpecDefault {
         jsonRequest(Method.POST, "/api/jobs/recruitment", """{"clubSlug":"test-club"}""")
       )
       body   <- response.body.asString
-      parsed = body.fromJson[JobResult]
+      parsed = body.fromJson[ClubJobResult]
     } yield assertTrue(
       response.status == Status.Ok,
       parsed.isRight,
+      parsed.toOption.get.clubSlug == "test-club",
       parsed.toOption.get.jobId.isDefined,
-      parsed.toOption.get.error.isEmpty
+      parsed.toOption.get.error.isEmpty,
+      parsed.toOption.get.resolution == ClubResolution.Known(ClubRef(ClubId(200), ClubSlug("test-club")))
     )
   }
 
@@ -223,7 +227,7 @@ object TestRoutes extends ZIOSpecDefault {
         jsonRequest(Method.POST, "/api/jobs/recruitment", """{"clubSlug":"test-club"}""")
       )
       body   <- response.body.asString
-      parsed = body.fromJson[JobResult]
+      parsed = body.fromJson[ClubJobResult]
     } yield assertTrue(
       response.status == Status.Ok,
       parsed.isRight,
@@ -309,11 +313,11 @@ object TestRoutes extends ZIOSpecDefault {
         val r = parsed.toOption.get.head
         assertTrue(
           response.status == Status.Ok,
-          r.clubSlug == "renamed-away",         // echoes the requested slug (CLI matches / invalidates by it)
+          r.clubSlug == "renamed-away", // echoes the requested slug (CLI matches / invalidates by it)
           r.jobId.isDefined,
           r.error.isEmpty,
-          r.clubId.contains(200L),              // canonical id
-          r.canonicalSlug.contains("test-club") // canonical current slug, for current_club refresh
+          // the canonical id and current slug, for current_club refresh
+          r.resolution.runnable == Right(ClubRef(ClubId(200), ClubSlug("test-club")))
         )
       }
     }
@@ -338,13 +342,39 @@ object TestRoutes extends ZIOSpecDefault {
         results.size == 2,
         found.jobId.isDefined,
         found.error.isEmpty,
-        found.problem.isEmpty,
+        found.resolution.runnable.isRight,
         notFound.jobId.isEmpty,
-        notFound.error.exists(_.startsWith("Club not found")),
-        notFound.problem.contains(ClubProblem.NotFound)
+        notFound.failure.exists(_.startsWith("Club not found")),
+        notFound.resolution == ClubResolution.NotLocal(ClubSlug("no-such-club"))
       )
     }
   }
+
+  // #254: a slug the club used to hold still submits the job, against the current slug, flagged Renamed.
+  private def testMembershipByFormerSlug =
+    test("POST /api/jobs/membership by a former slug runs the job and reports Renamed with the current slug") {
+      val club = Club(ClubId(210), t0, ClubSlug("route-current"), "Renamed Route Club", None, None, None)
+      for {
+        _    <- Club.upsert(club.copy(slug = ClubSlug("route-former")))
+        _    <- Club.upsert(club)
+        fake <- getFakeRunner
+        _    <- fake.setNextAction(Action.Succeed)
+        response <- JobRoutes.routes.runZIO(
+          jsonRequest(Method.POST, "/api/jobs/membership", """{"clubSlugs":["route-former"]}""")
+        )
+        body   <- response.body.asString
+        parsed = body.fromJson[List[ClubJobResult]]
+      } yield {
+        val r = parsed.toOption.get.head
+        assertTrue(
+          response.status == Status.Ok,
+          r.clubSlug == "route-former",
+          r.jobId.isDefined,
+          r.error.isEmpty,
+          r.resolution == ClubResolution.Renamed(ClubRef.fromClub(club), ClubSlug("route-former"))
+        )
+      }
+    }
 
   private def testHistorySingleClub = test("POST /api/jobs/history single club") {
     for {
@@ -1034,7 +1064,7 @@ object TestRoutes extends ZIOSpecDefault {
         response <- ClubRoutes.routes.runZIO(jsonRequest(Method.GET, "/api/clubs"))
         body     <- response.body.asString
         // Drop the tombstone fixture so it doesn't leak into the shared DB for any later suite.
-        _ <- PostgresClient.connectZIO(sql"DELETE FROM club WHERE club_id = 202".update.run())
+        _ <- TestDbCleanup.deleteClub(ClubId(202))
         parsed = body.fromJson[ClubRoutes.ClubsResponse]
       } yield {
         val clubs = parsed.toOption.get.clubs

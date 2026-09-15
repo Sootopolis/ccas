@@ -3,8 +3,9 @@ package ccas.server.scheduler
 import java.time.Instant
 
 import com.typesafe.config.ConfigFactory
-import zio.{durationLong, Clock, Duration, RIO, Scope, Task, UIO, URIO, URLayer, ZIO, ZLayer}
+import zio.{durationLong, Clock, Duration, Schedule, Scope, Task, UIO, URIO, URLayer, ZEnvironment, ZIO, ZLayer}
 
+import ccas.analysis.apps.ClubRef
 import ccas.analysis.apps.clubdata.ClubDataApp
 import ccas.analysis.apps.history.HistoryApp
 import ccas.analysis.apps.membership.MembershipApp
@@ -12,10 +13,16 @@ import ccas.analysis.apps.recruitment.RecruitmentApp
 import ccas.analysis.apps.ref.RefApp
 import ccas.analysis.apps.stats.StatsApp
 import ccas.analysis.tables.{Club, RunTrigger}
-import ccas.api.misc.subtypes.{ClubSlug, JobRunId}
-import ccas.server.jobs.{JobCaps, JobKind, JobRunner}
+import ccas.server.jobs.{ClubJobEffect, JobCaps, JobEffect, JobKind, JobRunner}
+import ccas.server.scheduler.ScheduleParams.{
+  ClubDataOptions,
+  HistoryOptions,
+  MatchRefOptions,
+  MembershipOptions,
+  RecruitmentOptions,
+  StatsOptions
+}
 import ccas.utils.ProgressDisplay
-import ccas.utils.client.ChessComClient
 import ccas.utils.errors.ConflictException
 import ccas.utils.sql.PostgresClient
 
@@ -39,7 +46,7 @@ object JobScheduler {
   private[scheduler] class JobSchedulerLive(runner: JobRunner, pgClient: PostgresClient, pollInterval: Duration)
       extends JobScheduler {
 
-    private val pgClientEnv = zio.ZEnvironment(pgClient)
+    private val pgClientEnv = ZEnvironment(pgClient)
 
     // Skip lateness ceiling for cron `Skip` schedules: a boundary may land just after a poll (observed up to one
     // pollInterval late) plus headroom for poll execution / DB latency. CatchUp ignores this; Interval is unaffected.
@@ -47,7 +54,7 @@ object JobScheduler {
 
     override def start: URIO[Scope, Unit] =
       pollLoop
-        .repeat(zio.Schedule.fixed(pollInterval))
+        .repeat(Schedule.fixed(pollInterval))
         .forkScoped
         .unit
 
@@ -88,88 +95,90 @@ object JobScheduler {
       } yield ())
         .catchAll(e => ProgressDisplay.sourced("scheduler")(ZIO.logError(s"Poll error: ${e.getMessage}")))
 
-    private def runSchedule(schedule: JobSchedule, now: Instant): Task[Unit] = {
-      def requireClubSlug: Task[ClubSlug] =
-        ZIO.fromOption(schedule.clubId)
-          .orElseFail(new IllegalStateException(s"${schedule.kind} schedule missing clubId"))
-          .flatMap { cid =>
-            Club.selectId(cid).provideEnvironment(pgClientEnv)
-              .someOrFail(new IllegalStateException(s"Club $cid not found in database"))
-              .map(_.slug)
+    private def runSchedule(schedule: JobSchedule, now: Instant): Task[Unit] =
+      (for {
+        effect <- jobEffect(schedule)
+        _      <- runner.submit(schedule.kind, schedule.clubId, schedule.params, RunTrigger.Scheduled, effect)
+        _      <- JobSchedule.updateLastRunAt(schedule.id, now)
+      } yield ()).provideEnvironment(pgClientEnv)
+
+    // Decode `schedule.params` into typed per-kind options and thread them into the app call. Decoding is eager (before
+    // `submit`), so a malformed row fails here — caught by the poll loop's per-schedule guard — without submitting or
+    // advancing `last_run_at`. Absent params decode to the kind's all-`None` defaults.
+    private def jobEffect(schedule: JobSchedule): Task[JobEffect] =
+      schedule.kind match {
+        case JobKind.Recruitment =>
+          ScheduleParams.decode(schedule.params, RecruitmentOptions.Default).map { opts =>
+            clubJob(schedule) { (club, jobRunId) =>
+              RecruitmentApp.recruit(
+                clubSlug = club.slug,
+                expectedClubId = Some(club.clubId),
+                alias = opts.alias.getOrElse("default"),
+                target = opts.target.map(_ min JobCaps.MaxTarget),
+                cumulative = opts.cumulative.getOrElse(false),
+                sourceClubs = opts.sourceClubs.getOrElse(Nil),
+                timeLimitMinutes = opts.timeLimitMinutes.map(_ min JobCaps.MaxTimeLimitMinutes).orElse(Some(30)),
+                explore = opts.explore.getOrElse(true),
+                trigger = RunTrigger.Scheduled,
+                jobRunId = jobRunId
+              )
+            }
           }
-
-      // Decode `schedule.params` into typed per-kind options and thread them into the app call. Decoding is
-      // eager (before `submit`), so a malformed row fails here — caught by the poll loop's per-schedule guard
-      // — without submitting or advancing `last_run_at`. Absent params decode to the kind's all-`None`
-      // defaults, reproducing the previous hardcoded behaviour exactly.
-      val buildEffect: Task[Option[JobRunId] => RIO[ProgressDisplay & ChessComClient & PostgresClient, Any]] =
-        schedule.kind match {
-          case JobKind.Recruitment =>
-            ScheduleParams.decode(schedule.params, ScheduleParams.RecruitmentOptions.Default).map { opts => (jobRunId: Option[JobRunId]) =>
-              requireClubSlug.flatMap(name =>
-                RecruitmentApp.recruit(
-                  name,
-                  opts.alias.getOrElse("default"),
-                  target = opts.target.map(_ min JobCaps.MaxTarget),
-                  cumulative = opts.cumulative.getOrElse(false),
-                  sourceClubs = opts.sourceClubs.getOrElse(Nil),
-                  timeLimitMinutes = opts.timeLimitMinutes.map(_ min JobCaps.MaxTimeLimitMinutes).orElse(Some(30)),
-                  explore = opts.explore.getOrElse(true),
-                  trigger = RunTrigger.Scheduled,
-                  jobRunId = jobRunId
-                ).unit
+        case JobKind.Membership =>
+          ScheduleParams.decode(schedule.params, MembershipOptions.Default).map { opts =>
+            clubJob(schedule) { (club, jobRunId) =>
+              MembershipApp.reconcileAndReport(
+                clubSlug = club.slug,
+                expectedClubId = Some(club.clubId),
+                trustUsernames = opts.trustUsernames.getOrElse(true),
+                trigger = RunTrigger.Scheduled,
+                jobRunId = jobRunId
               )
             }
-          case JobKind.Membership =>
-            ScheduleParams.decode(schedule.params, ScheduleParams.MembershipOptions.Default).map { opts => (jobRunId: Option[JobRunId]) =>
-              requireClubSlug.flatMap(name =>
-                MembershipApp.reconcileAndReport(name, opts.trustUsernames.getOrElse(true), RunTrigger.Scheduled, jobRunId).unit
+          }
+        case JobKind.MatchRef =>
+          ScheduleParams.decode(schedule.params, MatchRefOptions.Default).map { opts => _ =>
+            RefApp.populate(opts.forceSkipped.getOrElse(false), opts.upgradeRefs.getOrElse(false))
+          }
+        case JobKind.History =>
+          ScheduleParams.decode(schedule.params, HistoryOptions.Default).map { opts =>
+            clubJob(schedule) { (club, jobRunId) =>
+              HistoryApp.discover(
+                clubSlug = club.slug,
+                expectedClubId = Some(club.clubId),
+                full = opts.full.getOrElse(false),
+                includeFinished = opts.includeFinished.getOrElse(false),
+                refreshMinHours = HistoryOptions.effectiveRefresh(opts),
+                trigger = RunTrigger.Scheduled,
+                jobRunId = jobRunId
               )
             }
-          case JobKind.MatchRef =>
-            ScheduleParams.decode(schedule.params, ScheduleParams.MatchRefOptions.Default).map { opts => (_: Option[JobRunId]) =>
-              RefApp.populate(opts.forceSkipped.getOrElse(false), opts.upgradeRefs.getOrElse(false)).unit
+          }
+        case JobKind.Stats =>
+          for {
+            opts         <- ScheduleParams.decode(schedule.params, StatsOptions.Default)
+            periodOption <- ScheduleParams.statsPeriod(opts)
+          } yield clubJob(schedule) { (club, _) =>
+            periodOption match {
+              case Some((since, until)) =>
+                StatsApp.playerOfPeriodAndReport(club.clubId, since, until, opts.minGames.getOrElse(1))
+              case None => StatsApp.memberStatsAndReport(club.clubId)
             }
-          case JobKind.History =>
-            ScheduleParams.decode(schedule.params, ScheduleParams.HistoryOptions.Default).map { opts =>
-              val refresh = ScheduleParams.HistoryOptions.effectiveRefresh(opts)
-              (jobRunId: Option[JobRunId]) =>
-                requireClubSlug.flatMap(name =>
-                  HistoryApp.discover(
-                    name,
-                    opts.full.getOrElse(false),
-                    opts.includeFinished.getOrElse(false),
-                    refresh,
-                    RunTrigger.Scheduled,
-                    jobRunId = jobRunId
-                  ).unit
-                )
-            }
-          case JobKind.Stats =>
-            ScheduleParams.decode(schedule.params, ScheduleParams.StatsOptions.Default).flatMap { opts =>
-              ScheduleParams.statsPeriod(opts).map { periodOpt => (_: Option[JobRunId]) =>
-                requireClubSlug.flatMap(name =>
-                  periodOpt match {
-                    case Some((since, until)) =>
-                      StatsApp.playerOfPeriodAndReport(name, since, until, opts.minGames.getOrElse(1)).unit
-                    case None =>
-                      StatsApp.memberStatsAndReport(name).unit
-                  }
-                )
-              }
-            }
-          case JobKind.ClubData =>
-            ScheduleParams.decode(schedule.params, ScheduleParams.ClubDataOptions.Default).map { opts => (_: Option[JobRunId]) =>
-              ClubDataApp.refresh(opts.minAgeHours).unit
-            }
-        }
+          }
+        case JobKind.ClubData =>
+          ScheduleParams.decode(schedule.params, ClubDataOptions.Default).map { opts => _ =>
+            ClubDataApp.refresh(opts.minAgeHours)
+          }
+      }
 
-      for {
-        effect <- buildEffect
-        _ <- runner.submit(schedule.kind, schedule.clubId, schedule.params, RunTrigger.Scheduled, effect)
-               .provideEnvironment(pgClientEnv)
-        _ <- JobSchedule.updateLastRunAt(schedule.id, now).provideEnvironment(pgClientEnv).unit
-      } yield ()
-    }
+    // The schedule's club is looked up when the job starts, not when it is decoded.
+    private def clubJob(schedule: JobSchedule)(effect: ClubJobEffect): JobEffect =
+      jobRunId =>
+        for {
+          clubId <- ZIO.fromOption(schedule.clubId)
+                      .orElseFail(IllegalStateException(s"${schedule.kind} schedule missing clubId"))
+          club   <- Club.selectId(clubId).someOrFail(IllegalStateException(s"Club $clubId not found in database"))
+          result <- effect(ClubRef.fromClub(club), jobRunId)
+        } yield result
   }
 }

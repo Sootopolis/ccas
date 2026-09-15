@@ -58,14 +58,14 @@ object ManagedClub {
 
   /** Club ids of every managed, non-tombstoned club — the non-leaky source for per-managed-club scheduling (#102).
     * Tombstoned (`_stale_<id>`) clubs are excluded: they have no usable slug, so they are not valid job targets and a
-    * consumer (e.g. #102) must never crawl them. The `!~` pattern mirrors [[Club.isTombstoneSlug]] (`^_stale_\d+$`).
+    * consumer (e.g. #102) must never crawl them.
     */
   def selectClubIds: ZIO[PostgresClient, SQLException, List[ClubId]] =
     connectZIO {
       sql"""SELECT c.club_id
             FROM managed_club mc
             JOIN club c ON c.club_id = mc.club_id
-            WHERE c.slug !~ '^_stale_[0-9]+$$'""".query[ClubId].run().toList
+            WHERE c.slug !~ ${Club.TombstoneSlugRegex}""".query[ClubId].run().toList
     }
 
   /** Idempotently marks a club managed. Returns rows inserted (1 first time, 0 if already managed). */

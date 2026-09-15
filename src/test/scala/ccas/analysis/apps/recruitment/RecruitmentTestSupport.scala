@@ -12,7 +12,7 @@ import ccas.api.misc.enums.{ClubMatchStatus, TimeClass}
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username}
 import ccas.utils.client.{BodyStore, ChessComClient, ClientStatsAccumulator, TestChessComClientSupport}
 import ccas.utils.sql.DbCodecs.given
-import ccas.utils.sql.PostgresClient
+import ccas.utils.sql.{PostgresClient, TestDbCleanup}
 import ccas.utils.ProgressDisplay
 
 object RecruitmentTestSupport {
@@ -472,9 +472,7 @@ object RecruitmentTestSupport {
       _ <- PostgresClient.connectZIO(sql"DELETE FROM club_member WHERE club_id = $intSourceClubId".update.run())
       _ <- ZIO.foreachDiscard(
         List(blacklistClubId, sizableClubId, ClubId(701), ClubId(702), ClubId(777), ClubId(801), ClubId(802), intSourceClubId)
-      ) { cid =>
-        PostgresClient.connectZIO(sql"DELETE FROM club WHERE club_id = $cid".update.run())
-      }
+      )(TestDbCleanup.deleteClub)
       _ <- PostgresClient.connectZIO(sql"DELETE FROM club_match_ref WHERE club_id = $clubId".update.run())
       _ <- PostgresClient.connectZIO(sql"DELETE FROM club_match_board WHERE match_id IN (8001, 8002, 9001)".update.run())
       _ <- PostgresClient.connectZIO(sql"DELETE FROM club_match WHERE match_id IN (8001, 8002, 9001)".update.run())
@@ -646,8 +644,9 @@ object RecruitmentTestSupport {
       display <- ZIO.service[ProgressDisplay]
       result <- RecruitmentApp
         .recruit(
-          clubSlug,
-          alias,
+          clubSlug = clubSlug,
+          expectedClubId = None,
+          alias = alias,
           target = target,
           sourceClubs = sourceClubs,
           explore = explore,

@@ -12,7 +12,7 @@ import ccas.api.misc.enums.PlayerStatusCategory.Active
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
 import ccas.utils.ProgressDisplay
 import ccas.utils.client.{BodyStore, ChessComClient, TestChessComClientSupport}
-import ccas.utils.sql.PostgresClient
+import ccas.utils.sql.{PostgresClient, TestDbCleanup}
 import ccas.utils.sql.PostgresClient.connectZIO
 
 object TestRefAppSupport {
@@ -219,9 +219,7 @@ object TestRefAppSupport {
       _ <- ZIO.foreachDiscard(testPlayerIds) { pid =>
         connectZIO(sql"DELETE FROM player WHERE player_id = $pid".update.run())
       }
-      _ <- ZIO.foreachDiscard(testClubIds) { cid =>
-        connectZIO(sql"DELETE FROM club WHERE club_id = $cid".update.run())
-      }
+      _ <- ZIO.foreachDiscard(testClubIds)(TestDbCleanup.deleteClub)
       // Insert test data
       _ <- Player.insert(Player(pid0, t0, Username("alice"), Active, None, t0))
       _ <- Player.insert(Player(pid1, t0, Username("bob"), Active, None, t0))

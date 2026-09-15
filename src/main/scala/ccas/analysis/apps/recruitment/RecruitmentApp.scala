@@ -9,10 +9,10 @@ import zio.{durationLong, Clock, ExitCode, RIO, Ref, Scope, Task, ZEnvironment, 
 
 import ccas.analysis.apps.membership.MembershipApp
 import ccas.analysis.apps.ref.RefHelpers
-import ccas.analysis.apps.withClubSlugRenameRecovery
+import ccas.analysis.apps.{ClubSlugRenameResolver, withClubSlugRenameRecovery}
 import ccas.analysis.tables.*
 import ccas.analysis.tables.subtypes.RecruitmentRunId
-import ccas.api.club.{ApiClub, ApiClubMatches, ApiClubMembers}
+import ccas.api.club.{ApiClubMatches, ApiClubMembers}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId, PlayerId, Username}
 import ccas.api.player.ApiPlayer
 import ccas.utils.{display, OutputFile, ProgressDisplay}
@@ -87,8 +87,9 @@ object RecruitmentApp extends ZIOAppDefault {
           val clubSlug = ClubSlug.wrap(clubStr)
           for {
             run <- recruit(
-              clubSlug,
-              parsed.alias,
+              clubSlug = clubSlug,
+              expectedClubId = None,
+              alias = parsed.alias,
               target = parsed.target,
               cumulative = parsed.cumulative,
               sourceClubs = parsed.sourceClubs,
@@ -129,8 +130,12 @@ object RecruitmentApp extends ZIOAppDefault {
 
   // --- Phase 1: Initialize ---
 
+  /** `expectedClubId` guards against `clubSlug` now answering as another club: see
+    * [[ClubSlugRenameResolver.fetchExpecting]].
+    */
   def recruit(
     clubSlug: ClubSlug,
+    expectedClubId: Option[ClubId],
     alias: String,
     target: Option[Int] = None,
     cumulative: Boolean = false,
@@ -146,12 +151,11 @@ object RecruitmentApp extends ZIOAppDefault {
     jobRunId: Option[JobRunId] = None
   ): RIO[ProgressDisplay & ChessComClient & PostgresClient, RecruitmentRun] = ZIO.scoped {
     for {
-      _      <- MembershipApp.reconcile(clubSlug, trackRun = false)
+      _      <- MembershipApp.reconcile(clubSlug, expectedClubId, trackRun = false)
       client <- ZIO.service[ChessComClient]
-      // The club fetch is the FIRST 404-prone hit in the run. With no clubIdHint, the resolver derives the hint from
-      // the `club` table (deriveHint) — matching how MembershipApp's earlier reconcile resolves the slug.
-      apiClub <- ApiClub.get(client, clubSlug)
-        .withClubSlugRenameRecovery(client, clubSlug, clubIdHint = None)(fresh => ApiClub.get(client, fresh))
+      // Without an expected id, the resolver derives the hint from the `club` table (deriveHint) — matching how
+      // MembershipApp's earlier reconcile resolves the slug.
+      apiClub <- ClubSlugRenameResolver.fetchExpecting(client, clubSlug, expectedClubId).map(_.api)
       clubId        = apiClub.clubId
       effectiveSlug = apiClub.canonicalSlug
       club          = Club.fromApi(apiClub)

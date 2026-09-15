@@ -1,11 +1,12 @@
 package ccas.analysis.tables
 
 import java.time.{Duration, Instant, LocalDateTime, ZoneOffset}
+import zio.ZIO
 import zio.test.{Spec, TestAspect, ZIOSpecDefault, assertCompletes, assertTrue}
 import com.augustnagro.magnum.sql
 import ccas.api.misc.enums.{ClubMatchStatus, PlayerStatusCategory, TimeClass}
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username}
-import ccas.utils.sql.FreshSchemaLayer
+import ccas.utils.sql.{FreshSchemaLayer, TestDbCleanup}
 import ccas.utils.sql.PostgresClient.connectZIO
 
 object TestClubMatchSql extends ZIOSpecDefault {
@@ -106,7 +107,7 @@ object TestClubMatchSql extends ZIOSpecDefault {
 
   private def testCreateTables = test("createTables") {
     for {
-      _ <- Club.upsertBatch(List(clubA, clubB))
+      _ <- ZIO.foreachDiscard(List(clubA, clubB))(Club.upsert)
       _ <- Player.insertBatch(List(player0, player1))
     } yield assertCompletes
   }
@@ -307,7 +308,7 @@ object TestClubMatchSql extends ZIOSpecDefault {
         _        <- ClubMatch.upsert(liveMatch)
         liveRef  <- ClubMatch.inferClubMatchRef(clubRefId)
         _        <- connectZIO(sql"DELETE FROM club_match WHERE match_id = 2002".update.run())
-        _        <- connectZIO(sql"DELETE FROM club WHERE club_id = ${clubRefId}".update.run())
+        _        <- TestDbCleanup.deleteClub(clubRefId)
       } yield assertTrue(
         dailyRef.exists(r => !r.isLive && r.isTeam1 && r.matchId == ClubMatchId(2001)),
         liveRef.exists(r => r.isLive && !r.isTeam1 && r.matchId == ClubMatchId(2002))
@@ -340,7 +341,7 @@ object TestClubMatchSql extends ZIOSpecDefault {
         miss       <- ClubMatchRef.findOrInfer(c)
         stillEmpty <- ClubMatchRef.selectId(c)
 
-        _ <- connectZIO(sql"DELETE FROM club WHERE club_id = $c".update.run())
+        _ <- TestDbCleanup.deleteClub(c)
       } yield assertTrue(
         tier1.contains(explicitRef),
         tier2.exists(r => r.matchId == inferableMatch.matchId && r.isLive && r.isTeam1),

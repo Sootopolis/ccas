@@ -69,6 +69,7 @@ object TestRefAppNetworkOutage extends ZIOSpecDefault {
       )
       for {
         _ <- seedDb
+        _ <- connectZIO(sql"DELETE FROM club_name".update.run())
         _ <- connectZIO(sql"DELETE FROM club".update.run())
         client <- chessComClientWithOutage(
           // bob/charlie default to empty matches in refRoutes; only alice's listing + the down match matter here.

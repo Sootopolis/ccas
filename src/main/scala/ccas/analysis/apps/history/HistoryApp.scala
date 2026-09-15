@@ -102,7 +102,15 @@ object HistoryApp extends ZIOAppDefault {
     includeFinished: Boolean,
     refreshMinHours: Option[Int]
   ): RIO[ProgressDisplay & ChessComClient & PostgresClient, Unit] =
-    if (slugs.size == 1) { discover(slugs.head, full, includeFinished, refreshMinHours).flatMap(outputResult) }
+    if (slugs.size == 1) {
+      discover(
+        clubSlug = slugs.head,
+        expectedClubId = None,
+        full = full,
+        includeFinished = includeFinished,
+        refreshMinHours = refreshMinHours
+      ).flatMap(outputResult)
+    }
     else {
       for {
         client <- ZIO.service[ChessComClient]
@@ -113,8 +121,16 @@ object HistoryApp extends ZIOAppDefault {
         }
         shared <- SharedContext.make
         _ <- ZIO.foreachDiscard(slugs) { slug =>
-          discoverClub(slug, full, includeFinished, refreshMinHours, RunTrigger.Cli, None, Some(shared))
-            .flatMap(outputResult)
+          discoverClub(
+            clubSlug = slug,
+            expectedClubId = None,
+            full = full,
+            includeFinished = includeFinished,
+            refreshMinHours = refreshMinHours,
+            trigger = RunTrigger.Cli,
+            jobRunId = None,
+            shared = Some(shared)
+          ).flatMap(outputResult)
         }
       } yield ()
     }
@@ -126,6 +142,7 @@ object HistoryApp extends ZIOAppDefault {
 
   private def initialize(
     clubSlug: ClubSlug,
+    expectedClubId: Option[ClubId],
     full: Boolean,
     trigger: RunTrigger,
     jobRunId: Option[JobRunId]
@@ -133,9 +150,10 @@ object HistoryApp extends ZIOAppDefault {
     for {
       _ <- ZIO.logInfo(s"=== HistoryApp: $clubSlug ===")
       _ <- ZIO.logInfo("Phase 1: Initializing...")
-      _ <- MembershipApp.reconcile(clubSlug, trackRun = false)
-      club <- Club.selectBySlug(clubSlug)
-        .someOrFail(IllegalStateException(s"Club '$clubSlug' not found after reconcile"))
+      reconciled <- MembershipApp.reconcile(clubSlug, expectedClubId, trackRun = false)
+      // By id: reconcile may have followed a rename, leaving `clubSlug` stale. Everything past here uses `club.slug`.
+      club <- Club.selectId(reconciled.clubId)
+        .someOrFail(IllegalStateException(s"Club #${ClubId.unwrap(reconciled.clubId)} not found after reconcile"))
       clubId = club.clubId
       (allMembers, processedCount, queriedIds) <-
         ClubMember.selectClub(clubId) <&>
@@ -151,7 +169,7 @@ object HistoryApp extends ZIOAppDefault {
       )
       knownPlayersInit = memberPlayers.map(p => p.username.value -> p.playerId).toMap
       client <- ZIO.service[ChessComClient]
-      ctx    <- ProcessingContext.make(client, clubId, clubSlug, knownPlayersInit)
+      ctx    <- ProcessingContext.make(client, clubId, club.slug, knownPlayersInit)
       effectiveQueriedIds =
         if (full) { Set.empty[PlayerId] }
         else { queriedIds }
@@ -165,16 +183,27 @@ object HistoryApp extends ZIOAppDefault {
     */
   def discover(
     clubSlug: ClubSlug,
+    expectedClubId: Option[ClubId],
     full: Boolean = false,
     includeFinished: Boolean = false,
     refreshMinHours: Option[Int] = None,
     trigger: RunTrigger = RunTrigger.Cli,
     jobRunId: Option[JobRunId] = None
   ): RIO[ProgressDisplay & ChessComClient & PostgresClient, HistoryResult] =
-    discoverClub(clubSlug, full, includeFinished, refreshMinHours, trigger, jobRunId, shared = None)
+    discoverClub(
+      clubSlug = clubSlug,
+      expectedClubId = expectedClubId,
+      full = full,
+      includeFinished = includeFinished,
+      refreshMinHours = refreshMinHours,
+      trigger = trigger,
+      jobRunId = jobRunId,
+      shared = None
+    )
 
   private def discoverClub(
     clubSlug: ClubSlug,
+    expectedClubId: Option[ClubId],
     full: Boolean,
     includeFinished: Boolean,
     refreshMinHours: Option[Int],
@@ -189,8 +218,8 @@ object HistoryApp extends ZIOAppDefault {
 
       // === Phase 1: Initialize ===
       InitResult(allMembers, playerById, queriedIds, ctx, startedAt, runId) <-
-        initialize(clubSlug, full, trigger, jobRunId)
-      _ <- ZIO.foreachDiscard(shared)(_.resolvedClubs.update(_ + (clubSlug -> ctx.clubId)))
+        initialize(clubSlug, expectedClubId, full, trigger, jobRunId)
+      _ <- ZIO.foreachDiscard(shared)(_.resolvedClubs.update(_ + (ctx.clubSlug -> ctx.clubId)))
 
       seedClubRef   <- Ref.make(0)
       memberSeedRef <- Ref.make(MemberSeedResult(0, 0, Nil))
@@ -234,7 +263,7 @@ object HistoryApp extends ZIOAppDefault {
             else { ClubMatch.selectMatchIdsForClub(ctx.clubId) }
 
           seedClub <- HistorySeeding.seedFromClubMatches(
-            ctx.client, ctx.clubId, clubSlug, ctx.seedClubMatchesUnchanged
+            ctx.client, ctx.clubId, ctx.clubSlug, ctx.seedClubMatchesUnchanged
           )
           _ <- seedClubRef.set(seedClub)
           _ <- ZIO.logInfo(s"  Club matches endpoint: $seedClub new match IDs")
@@ -243,7 +272,7 @@ object HistoryApp extends ZIOAppDefault {
             HistorySeeding.seedFromMemberMatches(
               ctx.client,
               ctx.clubId,
-              clubSlug,
+              ctx.clubSlug,
               allMembers,
               queriedIds,
               playerById,
@@ -300,7 +329,7 @@ object HistoryApp extends ZIOAppDefault {
             totalStats.refreshMatchUnchanged, totalStats.seedClubMatchesUnchanged, totalStats.seedPlayerMatchesUnchanged,
             totalStats.matchesAborted
           ) *> logSummary(totalStats, startedAt, completedAt) *> finalizedRef.set(true)).uninterruptible
-        } yield HistoryResult(totalStats, clubSlug, startedAt, completedAt)
+        } yield HistoryResult(totalStats, ctx.clubSlug, startedAt, completedAt)
       }.onInterrupt {
         ZIO.unlessZIODiscard(finalizedRef.get) {
           for {
@@ -309,7 +338,7 @@ object HistoryApp extends ZIOAppDefault {
             ss <- seedStaleRef.get
             rf <- refreshedRef.get
             skip = allMembers.size - ms.queried - ms.failed
-            _ <- finalizeInterrupted(ctx, runId, startedAt, clubSlug, ms, skip, sc, ss, rf)
+            _ <- finalizeInterrupted(ctx, runId, startedAt, ctx.clubSlug, ms, skip, sc, ss, rf)
               .provideEnvironment(ZEnvironment(display, pgClient)).orDie
           } yield ()
         }

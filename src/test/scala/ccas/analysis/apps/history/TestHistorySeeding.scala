@@ -18,7 +18,7 @@ import ccas.api.misc.enums.{ClubMatchStatus, PlayerStatusCategory, TimeClass, Ti
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username}
 import ccas.utils.ProgressDisplay
 import ccas.utils.client.{BodyStore, ChessComClient, TestChessComClientSupport}
-import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
+import ccas.utils.sql.{FreshSchemaLayer, PostgresClient, TestDbCleanup}
 import ccas.utils.sql.PostgresClient.connectZIO
 
 object TestHistorySeeding extends ZIOSpecDefault {
@@ -45,18 +45,13 @@ object TestHistorySeeding extends ZIOSpecDefault {
   private val t0           = Instant.parse("2025-01-01T00:00:00Z")
   private val t1           = Instant.parse("2025-06-01T00:00:00Z")
 
-  // FK cascade order matters: child tables (history_member_query, club_member, club_match_board, player_snapshot)
-  // before their parents (club, club_match, player). Reordering will trip ON DELETE RESTRICT.
+  // FK order matters: `unresolved_board_player` and `history_member_query` go before the club and player helpers.
   private val clearTables: ZIO[PostgresClient, Throwable, Unit] =
     for {
       _ <- connectZIO(sql"DELETE FROM unresolved_board_player".update.run())
       _ <- connectZIO(sql"DELETE FROM history_member_query".update.run())
-      _ <- connectZIO(sql"DELETE FROM club_member".update.run())
-      _ <- connectZIO(sql"DELETE FROM club_match_board".update.run())
-      _ <- connectZIO(sql"DELETE FROM club_match".update.run())
-      _ <- connectZIO(sql"DELETE FROM club".update.run())
-      _ <- connectZIO(sql"DELETE FROM player_snapshot".update.run())
-      _ <- connectZIO(sql"DELETE FROM player".update.run())
+      _ <- TestDbCleanup.clearClub
+      _ <- TestDbCleanup.clearPlayer
     } yield ()
 
   private def seedClubMatch: RIO[PostgresClient, Unit] =

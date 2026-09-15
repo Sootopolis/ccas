@@ -39,9 +39,6 @@ object ClubSlugRenameResolver {
   /** Delegates to [[Club.isTombstoneSlug]] — single source of truth for the tombstone format. */
   def isTombstone(s: ClubSlug): Boolean = Club.isTombstoneSlug(s)
 
-  def stalePlaceholder(clubId: ClubId): ClubSlug =
-    ClubSlug.wrap(s"_stale_${ClubId.unwrap(clubId)}")
-
   /** Returns the current canonical slug when `staleSlug` 404s, or `None` if no rename can be inferred. Verifies the
     * candidate via `ApiClub` and does NOT update the `club` table. Use [[resolveAndPersist]] for the side-effecting
     * variant.
@@ -80,6 +77,29 @@ object ClubSlugRenameResolver {
   ): RIO[PostgresClient, ResolvedClub] =
     ApiClub.get(client, slug).map(ResolvedClub.fromApi).catchSome { case e: ReportedNotFound =>
       resolveAndPersist(client, slug, clubIdHint).someOrFail(e)
+    }
+
+  /** Chess.com answered `slug` as a different club from the one the caller resolved it to. */
+  final class ClubMismatchException(slug: ClubSlug, expected: ClubId, actual: ClubId)
+      extends RuntimeException(
+        s"Club '$slug' now answers as club #${ClubId.unwrap(actual)} on Chess.com, not the resolved club " +
+          s"#${ClubId.unwrap(expected)} — not running against a different club"
+      )
+
+  /** [[fetchOrRecover]] for a slug the caller already resolved to `expected`, failing with [[ClubMismatchException]]
+    * if Chess.com answers with a different club. Without the check, a name that has moved to another club silently
+    * retargets the job and the upsert that follows tombstones the club the caller meant (ADR 0016). `None` skips the
+    * check.
+    */
+  def fetchExpecting(
+    client: ChessComClient,
+    slug: ClubSlug,
+    expected: Option[ClubId]
+  ): RIO[PostgresClient, ResolvedClub] =
+    fetchOrRecover(client, slug, expected).tap { resolved =>
+      ZIO.foreachDiscard(expected.filter(_ != resolved.api.clubId)) { id =>
+        ZIO.fail(ClubMismatchException(slug, expected = id, actual = resolved.api.clubId))
+      }
     }
 
   private def tierADb(staleSlug: ClubSlug, clubIdHint: Option[ClubId]): RIO[PostgresClient, Option[ClubSlug]] =

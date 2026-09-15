@@ -5,6 +5,7 @@ import zio.{Chunk, ZLayer}
 import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
+import ccas.analysis.apps.ClubSlugRenameResolver.ClubMismatchException
 import ccas.analysis.apps.membership.MembershipChange.*
 import ccas.analysis.apps.membership.MembershipChange.MemberChange.*
 import ccas.analysis.apps.membership.MembershipClassify.{PhaseBResult, PhaseCResult}
@@ -819,8 +820,30 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
   // ==========================================================================
 
   private def suiteReconcile = suite("reconcile (end-to-end)")(
-    testDeltaReflectsNewJoinAcrossRuns
+    testDeltaReflectsNewJoinAcrossRuns,
+    testAbortsWhenSlugAnswersAsAnotherClub
   )
+
+  private def testAbortsWhenSlugAnswersAsAnotherClub =
+    test("a slug that now answers as a different club aborts before writing anything") {
+      val expected = ClubId(ClubId.unwrap(clubId) + 1000)
+      val routes: Routes[Any, Response] = Routes(
+        Method.GET / "pub" / "club" / string("slug") -> handler { (slug: String, _: Request) =>
+          Response.json(apiClubJson(ClubId.unwrap(clubId), slug))
+        }
+      )
+      for {
+        client <- TestChessComClientSupport.fakeClient(routes)
+        runsBefore <- connectZIO(sql"SELECT COUNT(*)::INT FROM membership_run".query[Int].run().head)
+        exit <- MembershipApp.reconcile(ClubSlug("test-club"), expectedClubId = Some(expected))
+                  .provideSomeLayer[ProgressDisplay & PostgresClient](ZLayer.succeed(client))
+                  .exit
+        runsAfter <- connectZIO(sql"SELECT COUNT(*)::INT FROM membership_run".query[Int].run().head)
+      } yield assertTrue(
+        exit.causeOption.flatMap(_.failureOption).exists(_.isInstanceOf[ClubMismatchException]),
+        runsAfter == runsBefore
+      )
+    }
 
   private def testDeltaReflectsNewJoinAcrossRuns =
     test("previousMemberCount ignores rows this run inserts (regression)") {
@@ -863,7 +886,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
         priorRunId <- MembershipRun.insert(clubId, RunTrigger.Cli, Times.t0, None)
         _          <- MembershipRun.complete(priorRunId, priorCompletedAt)
         client     <- TestChessComClientSupport.fakeClient(routes)
-        result <- MembershipApp.reconcile(ClubSlug("test-club"))
+        result <- MembershipApp.reconcile(ClubSlug("test-club"), expectedClubId = None)
                     .provideSomeLayer[ProgressDisplay & PostgresClient](ZLayer.succeed(client))
       } yield assertTrue(
         result.newMemberships.size == 1,
