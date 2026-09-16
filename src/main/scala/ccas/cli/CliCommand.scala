@@ -47,6 +47,7 @@ object CliCommand {
   final case class Membership(
     server: String,
     clubs: List[String],
+    clubIdOption: Option[Long],
     all: Boolean,
     trustUsernames: Option[Boolean],
     noProgress: Boolean,
@@ -55,6 +56,7 @@ object CliCommand {
   final case class History(
     server: String,
     clubs: List[String],
+    clubIdOption: Option[Long],
     all: Boolean,
     full: Boolean,
     includeFinished: Boolean,
@@ -66,6 +68,7 @@ object CliCommand {
   final case class Recruit(
     server: String,
     club: Option[String],
+    clubIdOption: Option[Long],
     alias: Option[String],
     target: Option[Int],
     cumulative: Boolean,
@@ -80,6 +83,7 @@ object CliCommand {
   final case class Stats(
     server: String,
     club: Option[String],
+    clubIdOption: Option[Long],
     since: Option[String],
     until: Option[String],
     noProgress: Boolean,
@@ -172,6 +176,19 @@ object CliCommand {
   private val allOpt: Options[Boolean] =
     Options.boolean("all") ?? "Run for every managed club (overrides --club and the current club)"
 
+  // Names the club a slug can't: a former name several clubs have held and nobody holds now, which the server refuses
+  // to guess at. It names the club outright, so it replaces `--club` rather than joining it.
+  private val clubIdOpt: Options[Option[Long]] =
+    Options
+      .integer("club-id")
+      .mapOrFail(n =>
+        if (n.isValidLong && n > 0) { Right(n.toLong) }
+        else {
+          Left(ValidationError(ValidationErrorType.InvalidValue, HelpDoc.p(s"--club-id must be a positive club id (got $n)")))
+        }
+      )
+      .optional ?? "Chess.com club id to target instead of a name (settles a name several clubs have held)"
+
   // --- Leaf commands (each typed Command[CliCommand] so subcommands share a uniform type) ---
 
   // NOTE: `Detach.reconstruct`/`fallbackCommand` rebuild the detached child as `... ccas.cli.Main server up`, so
@@ -227,10 +244,13 @@ object CliCommand {
       .map { case (clear, slugs) => Use(slugs, clear) }
 
   private def membership(default: String): Command[CliCommand] =
-    Command("membership", serverOpt(default) ++ trustOpt ++ clubsOpt ++ allOpt ++ noProgressOpt ++ detachOpt)
+    Command(
+      "membership",
+      serverOpt(default) ++ trustOpt ++ clubsOpt ++ clubIdOpt ++ allOpt ++ noProgressOpt ++ detachOpt
+    )
       .withHelp("Submit a membership-sync job (current club, --club a,b, or --all managed clubs)")
-      .map { case (server, trust, clubs, all, noProgress, detach) =>
-        Membership(server, clubs, all, trust, noProgress, detach)
+      .map { case (server, trust, clubs, clubIdOption, all, noProgress, detach) =>
+        Membership(server, clubs, clubIdOption, all, trust, noProgress, detach)
       }
 
   private def history(default: String): Command[CliCommand] =
@@ -241,10 +261,13 @@ object CliCommand {
         (Options.boolean("include-finished") ?? "Re-queue recently finished matches for refresh") ++
         (Options.boolean("refresh") ?? "Refresh already-stored matches, not just newly seen ones") ++
         (intOpt("refresh-min-hours") ?? "Skip refreshing a match seen within the last N hours") ++
-        clubsOpt ++ allOpt ++ noProgressOpt ++ detachOpt
+        clubsOpt ++ clubIdOpt ++ allOpt ++ noProgressOpt ++ detachOpt
     ).withHelp("Submit a match-history crawl job (current club, --club a,b, or --all managed clubs)")
-      .map { case (server, full, includeFinished, refresh, refreshMinHours, clubs, all, noProgress, detach) =>
-        History(server, clubs, all, full, includeFinished, refresh, refreshMinHours, noProgress, detach)
+      .map {
+        case (server, full, includeFinished, refresh, refreshMinHours, clubs, clubIdOption, all, noProgress, detach) =>
+          History(
+            server, clubs, clubIdOption, all, full, includeFinished, refresh, refreshMinHours, noProgress, detach
+          )
       }
 
   private val sourceClubsOpt: Options[List[String]] =
@@ -260,7 +283,7 @@ object CliCommand {
         (Options.boolean("cumulative") ?? "Count candidates already found earlier today toward the target") ++
         sourceClubsOpt ++
         (intOpt("time-limit-minutes") ?? "Stop scouting after roughly N minutes") ++
-        exploreOpt ++ clubOpt ++
+        exploreOpt ++ clubOpt ++ clubIdOpt ++
         (Options.boolean("stdout") ?? "Print invited usernames (bare, newline-separated) to stdout for piping to a clipboard tool (e.g. wl-copy); logs go to stderr. Auto-confirms invites") ++
         (Options.boolean("report") ?? "Show a past run's invited usernames instead of scouting (the club's latest run, or the run id given as an argument)") ++
         noProgressOpt,
@@ -270,8 +293,15 @@ object CliCommand {
     ).withHelp("Submit a recruitment scouting job for a club (interactive runs confirm invites before marking them)")
       // Options and the optional `[run-id]` arg combine as (optionsTuple, argValue), so destructure the two levels.
       .map {
-        case ((server, alias, target, cumulative, sourceClubs, timeLimitMinutes, explore, club, stdout, report, noProgress), runId) =>
-          Recruit(server, club, alias, target, cumulative, sourceClubs, timeLimitMinutes, explore, stdout, report, runId, noProgress)
+        case (
+              (server, alias, target, cumulative, sourceClubs, timeLimitMinutes, explore, club, clubIdOption, stdout,
+                report, noProgress),
+              runId
+            ) =>
+          Recruit(
+            server, club, clubIdOption, alias, target, cumulative, sourceClubs, timeLimitMinutes, explore, stdout,
+            report, runId, noProgress
+          )
       }
 
   private def stats(default: String): Command[CliCommand] =
@@ -280,10 +310,10 @@ object CliCommand {
       serverOpt(default) ++
         (Options.text("since").optional ?? "Start of the date window (ISO-8601 date or instant)") ++
         (Options.text("until").optional ?? "End of the date window (requires --since)") ++
-        clubOpt ++ noProgressOpt ++ detachOpt
+        clubOpt ++ clubIdOpt ++ noProgressOpt ++ detachOpt
     ).withHelp("Submit a club performance-stats job")
-      .map { case (server, since, until, club, noProgress, detach) =>
-        Stats(server, club, since, until, noProgress, detach)
+      .map { case (server, since, until, club, clubIdOption, noProgress, detach) =>
+        Stats(server, club, clubIdOption, since, until, noProgress, detach)
       }
 
   private def jobs(default: String): Command[CliCommand] =

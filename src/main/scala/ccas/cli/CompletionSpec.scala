@@ -42,6 +42,10 @@ object CompletionSpec {
     * value flag on every club command (and on `schedule add`). */
   val clubFlag = "--club"
 
+  /** Names a club outright, in place of [[clubFlag]], which is how a contested name gets settled. A value flag with
+    * nothing to offer — the ids come from the submit error that asked for one, not from any cache. */
+  private val clubIdFlag = "--club-id"
+
   /** Leaves in tree order. `valueFlags` always lists `--server` first to match its position in `flags`. */
   val leaves: List[Leaf] = List(
     Leaf(List("server", "up"), List("--detach", "-d", "--ready-timeout-seconds"), List("--ready-timeout-seconds"), NoArgs),
@@ -50,30 +54,31 @@ object CompletionSpec {
     Leaf(List("use-club"), List("--clear"), Nil, Slug),
     Leaf(
       List("membership"),
-      List(server, "--trust-usernames", "--no-trust-usernames", clubFlag, "--all", "--no-progress", "--detach"),
-      List(server, clubFlag),
+      List(server, "--trust-usernames", "--no-trust-usernames", clubFlag, clubIdFlag, "--all", "--no-progress",
+        "--detach"),
+      List(server, clubFlag, clubIdFlag),
       NoArgs
     ),
     Leaf(
       List("history"),
-      List(server, "--full", "--include-finished", "--refresh", "--refresh-min-hours", clubFlag, "--all",
+      List(server, "--full", "--include-finished", "--refresh", "--refresh-min-hours", clubFlag, clubIdFlag, "--all",
         "--no-progress", "--detach"),
-      List(server, "--refresh-min-hours", clubFlag),
+      List(server, "--refresh-min-hours", clubFlag, clubIdFlag),
       NoArgs
     ),
     Leaf(
       List("recruit"),
       List(server, "--alias", "--target", "--cumulative", "--source-clubs", "--time-limit-minutes", "--explore",
-        "--no-explore", clubFlag, "--stdout", "--report", "--no-progress"),
-      List(server, "--alias", "--target", "--source-clubs", "--time-limit-minutes", clubFlag),
+        "--no-explore", clubFlag, clubIdFlag, "--stdout", "--report", "--no-progress"),
+      List(server, "--alias", "--target", "--source-clubs", "--time-limit-minutes", clubFlag, clubIdFlag),
       // `--report`'s optional `[run-id]` is a bare numeric positional with nothing to complete, so NoArgs (suggest
       // nothing) is the right shell behavior.
       NoArgs
     ),
     Leaf(
       List("stats"),
-      List(server, "--since", "--until", clubFlag, "--no-progress", "--detach"),
-      List(server, "--since", "--until", clubFlag),
+      List(server, "--since", "--until", clubFlag, clubIdFlag, "--no-progress", "--detach"),
+      List(server, "--since", "--until", clubFlag, clubIdFlag),
       NoArgs
     ),
     Leaf(List("jobs"), List(server, "--limit"), List(server, "--limit"), NoArgs),

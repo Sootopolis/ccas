@@ -10,7 +10,7 @@ import zio.http.*
 import zio.json.{jsonField, DeriveJsonCodec, EncoderOps, JsonCodec}
 import zio.stream.ZStream
 
-import ccas.analysis.apps.ClubResolution
+import ccas.analysis.apps.{ClubQuery, ClubResolution}
 import ccas.analysis.apps.history.HistoryApp
 import ccas.analysis.apps.membership.MembershipApp
 import ccas.analysis.apps.recruitment.RecruitmentApp
@@ -34,12 +34,11 @@ object JobRoutes {
   // Recruitment caps (`JobCaps.MaxTarget` / `JobCaps.MaxTimeLimitMinutes`) are shared with the scheduled-job
   // path (`ScheduleParams`) so both submission routes apply identical bounds.
 
-  // `clubId` (on every club-scoped request) is the target club's stable Chess.com id, sent by the CLI when it has one
-  // cached for the resolved `current_club`. When present the server resolves by id — rename-proof — and runs the job
-  // against the club's canonical slug rather than the (possibly stale) `clubSlug` the CLI echoed; absent, it resolves
-  // `clubSlug` as a current or former name (ADR 0016). Optional so a raw API caller still works (#176, #180).
+  // Every club-scoped request names its club as a `ClubQuery` — `{"kind":"by_id","clubId":N}` or
+  // `{"kind":"by_slug","slug":"…"}` — so a caller can send the stable id (rename-proof, what the CLI has cached for
+  // `current_club`) or a name to look up, and cannot send two answers that disagree (ADR 0016, #254).
   private[ccas] case class RecruitmentRequest(
-    clubSlug: ClubSlug,
+    club: ClubQuery,
     alias: Option[String],
     target: Option[Int],
     cumulative: Option[Boolean],
@@ -48,42 +47,37 @@ object JobRoutes {
     explore: Option[Boolean],
     // When Some(false) the scout leaves candidates Deferred for the CLI to confirm; absent/Some(true) auto-confirms
     // (scheduler, raw API, and non-interactive `ccas recruit`). The interactive CLI sends false.
-    autoConfirm: Option[Boolean],
-    @jsonField("clubId") clubIdOption: Option[ClubId] = None
+    autoConfirm: Option[Boolean]
   )
   object RecruitmentRequest {
     given JsonCodec[RecruitmentRequest] = DeriveJsonCodec.gen
   }
 
-  // The batch DTOs carry a slug list, but the CLI always submits ONE club per call, so `clubId` is a scalar honoured
-  // only when `clubSlugs` is single-element (a genuine multi-club batch — which the CLI never sends — leaves it None and
-  // resolves each by slug). See [[RecruitmentRequest]] for the id-vs-slug resolution rationale.
+  // The batch DTOs name each club separately, so a batch can mix ids and names and every element resolves on its own
+  // terms. The CLI always submits ONE club per call regardless. See [[RecruitmentRequest]] for the rationale.
   private[ccas] case class MembershipRequest(
-    clubSlugs: NonEmptyChunk[ClubSlug],
-    trustUsernames: Option[Boolean],
-    @jsonField("clubId") clubIdOption: Option[ClubId] = None
+    clubs: NonEmptyChunk[ClubQuery],
+    trustUsernames: Option[Boolean]
   )
   object MembershipRequest {
     given JsonCodec[MembershipRequest] = DeriveJsonCodec.gen
   }
 
   private[ccas] case class HistoryRequest(
-    clubSlugs: NonEmptyChunk[ClubSlug],
+    clubs: NonEmptyChunk[ClubQuery],
     full: Option[Boolean],
     includeFinished: Option[Boolean],
     refresh: Option[Boolean],
-    refreshMinHours: Option[Int],
-    @jsonField("clubId") clubIdOption: Option[ClubId] = None
+    refreshMinHours: Option[Int]
   )
   object HistoryRequest {
     given JsonCodec[HistoryRequest] = DeriveJsonCodec.gen
   }
 
   private[ccas] case class StatsRequest(
-    clubSlug: ClubSlug,
+    club: ClubQuery,
     since: Option[String],
-    until: Option[String],
-    @jsonField("clubId") clubIdOption: Option[ClubId] = None
+    until: Option[String]
   )
   object StatsRequest {
     given JsonCodec[StatsRequest] = DeriveJsonCodec.gen
@@ -97,13 +91,13 @@ object JobRoutes {
     given JsonCodec[JobResult] = DeriveJsonCodec.gen
   }
 
-  /** Result of submitting a club-scoped job (recruitment, membership, history, stats). `clubSlug` echoes the requested
-    * slug, which the CLI matches results and invalidates its cache by. `resolution` is how that slug resolved: the club
-    * the job runs against, which the CLI reads to freshen a stale `current_club`, or why it did not run. `error`
-    * carries only failures past resolution, such as a job already running.
+  /** Result of submitting a club-scoped job (recruitment, membership, history, stats). `club` labels the result for a
+    * human — the club's name once resolution found one, else the query as it arrived. `resolution` is how the club was
+    * found: the one the job runs against, which the CLI reads to freshen a stale `current_club`, or why it did not run.
+    * `error` carries only failures past resolution, such as a job already running.
     */
   private[ccas] case class ClubJobResult(
-    clubSlug: String,
+    club: String,
     @jsonField("jobId") jobIdOption: Option[String],
     error: Option[String],
     resolution: ClubResolution
@@ -200,11 +194,11 @@ object JobRoutes {
 
   // --- Job submission ---
 
-  private def submitRecruitment(req: Request): URIO[JobRunner & PostgresClient, Response] =
+  private def submitRecruitment(req: Request): URIO[JobRunner & ChessComClient & PostgresClient, Response] =
     (for {
       body   <- parseJsonBody[RecruitmentRequest](req)
       runner <- ZIO.service[JobRunner]
-      result <- submitClubJob(runner, JobKind.Recruitment, body.clubIdOption, body.clubSlug, Some(body.toJson)) {
+      result <- submitClubJob(runner, JobKind.Recruitment, body.club, Some(body.toJson)) {
         (club, jobRunIdOption) =>
           RecruitmentApp.recruit(
             clubSlug = club.slug,
@@ -222,11 +216,11 @@ object JobRoutes {
       }
     } yield jsonResponse(Status.Ok, result)).pipe(withErrorHandling)
 
-  private def submitMembership(req: Request): URIO[JobRunner & PostgresClient, Response] =
+  private def submitMembership(req: Request): URIO[JobRunner & ChessComClient & PostgresClient, Response] =
     (for {
       body   <- parseJsonBody[MembershipRequest](req)
       runner <- ZIO.service[JobRunner]
-      results <- submitClubJobs(runner, JobKind.Membership, body.clubSlugs, body.clubIdOption, Some(body.toJson)) {
+      results <- submitClubJobs(runner, JobKind.Membership, body.clubs, Some(body.toJson)) {
         (club, jobRunIdOption) =>
           MembershipApp.reconcileAndReport(
             clubSlug = club.slug,
@@ -253,12 +247,12 @@ object JobRoutes {
     } yield jsonResponse(Status.Ok, JobResult(jobIdOption = submitted.toOption, error = submitted.left.toOption)))
       .pipe(withErrorHandling)
 
-  private def submitHistory(req: Request): URIO[JobRunner & PostgresClient, Response] =
+  private def submitHistory(req: Request): URIO[JobRunner & ChessComClient & PostgresClient, Response] =
     (for {
       body   <- parseJsonBody[HistoryRequest](req)
       runner <- ZIO.service[JobRunner]
       refreshMinHours = body.refreshMinHours.orElse(body.refresh.filter(identity).map(_ => 0))
-      results <- submitClubJobs(runner, JobKind.History, body.clubSlugs, body.clubIdOption, Some(body.toJson)) {
+      results <- submitClubJobs(runner, JobKind.History, body.clubs, Some(body.toJson)) {
         (club, jobRunIdOption) =>
           HistoryApp.discover(
             clubSlug = club.slug,
@@ -272,12 +266,12 @@ object JobRoutes {
       }
     } yield jsonResponse(Status.Ok, results)).pipe(withErrorHandling)
 
-  private def submitStats(req: Request): URIO[JobRunner & PostgresClient, Response] =
+  private def submitStats(req: Request): URIO[JobRunner & ChessComClient & PostgresClient, Response] =
     (for {
       body         <- parseJsonBody[StatsRequest](req)
       runner       <- ZIO.service[JobRunner]
       periodOption <- statsPeriod(body)
-      result <- submitClubJob(runner, JobKind.Stats, body.clubIdOption, body.clubSlug, Some(body.toJson)) { (club, _) =>
+      result <- submitClubJob(runner, JobKind.Stats, body.club, Some(body.toJson)) { (club, _) =>
         periodOption match {
           // minGames=1 mirrors the CLI default; StatsRequest carries no min-games field.
           case Some((since, until)) => StatsApp.playerOfPeriodAndReport(club.clubId, since, until, 1)
@@ -456,35 +450,28 @@ object JobRoutes {
 
   // --- Helpers ---
 
-  /** [[submitClubJob]] for each club of a batch request. Its `clubIdOption` applies only to a single-club submit: for a
-    * genuine multi-club batch (which the CLI never sends) an id can't be shared across slugs, so it's dropped and each
-    * club resolves by slug.
-    */
+  /** [[submitClubJob]] for each club of a batch request, each resolving on its own terms. */
   private def submitClubJobs(
     runner: JobRunner,
     kind: JobKind,
-    requestedSlugs: NonEmptyChunk[ClubSlug],
-    clubIdOption: Option[ClubId],
+    queries: NonEmptyChunk[ClubQuery],
     params: Option[String]
-  )(effect: ClubJobEffect): RIO[PostgresClient, List[ClubJobResult]] = {
-    val singleClubIdOption = clubIdOption.filter(_ => requestedSlugs.size == 1)
-    ZIO.foreach(requestedSlugs.toChunk.toList)(submitClubJob(runner, kind, singleClubIdOption, _, params)(effect))
-  }
+  )(effect: ClubJobEffect): RIO[ChessComClient & PostgresClient, List[ClubJobResult]] =
+    ZIO.foreach(queries.toChunk.toList)(submitClubJob(runner, kind, _, params)(effect))
 
-  /** Resolves a club (by id when the caller has one, else by the requested slug) and submits a single job built from
-    * the *resolved* club, so a job addressed by a former name runs on the club's current slug instead of 404-ing on the
-    * stale one.
+  /** Resolves the club a request names (straight through for an id, by name otherwise, then upstream when that answer
+    * comes out of local history) and submits a single job built from the *resolved* club, so a job addressed by a
+    * former name runs on the club that holds it now instead of 404-ing on the stale one.
     */
   private def submitClubJob(
     runner: JobRunner,
     kind: JobKind,
-    clubIdOption: Option[ClubId],
-    requestedSlug: ClubSlug,
+    query: ClubQuery,
     params: Option[String]
-  )(effect: ClubJobEffect): RIO[PostgresClient, ClubJobResult] =
-    ClubResolution.resolve(clubIdOption, requestedSlug).flatMap { resolution =>
+  )(effect: ClubJobEffect): RIO[ChessComClient & PostgresClient, ClubJobResult] =
+    resolveClub(query).flatMap { resolution =>
       val unsubmitted = ClubJobResult(
-        clubSlug = ClubSlug.unwrap(requestedSlug),
+        club = resolution.runnable.fold(_ => query.describe, club => ClubSlug.unwrap(club.slug)),
         jobIdOption = None,
         error = None,
         resolution = resolution
@@ -496,6 +483,9 @@ object JobRoutes {
             .map(submitted => unsubmitted.copy(jobIdOption = submitted.toOption, error = submitted.left.toOption))
       }
     }
+
+  private def resolveClub(query: ClubQuery): RIO[ChessComClient & PostgresClient, ClubResolution] =
+    ZIO.serviceWithZIO[ChessComClient](ClubResolution.resolveAndAdjudicate(_, query))
 
   // A job already running is an answer for the caller, not a failed request, so its message goes in the result.
   private def jobIdOrConflict(submit: RIO[PostgresClient, JobRunId]): RIO[PostgresClient, Either[String, String]] =

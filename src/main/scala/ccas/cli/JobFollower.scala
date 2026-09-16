@@ -212,7 +212,7 @@ final class JobFollower(
     * can fetch and render what the job produced; it is skipped on failure/timeout/no-id.
     */
   def handleClub(result: ClubJobResult, logsToStderr: Boolean, onComplete: String => Task[Unit]): Task[Int] =
-    JobFollower.whenSubmitted(result.clubSlug, result.failure, result.jobIdOption) { id =>
+    JobFollower.whenSubmitted(result.club, result.failure, result.jobIdOption) { id =>
       val printLine: String => UIO[Unit] =
         if (logsToStderr) { line => Console.printLineError(line).orDie }
         else { line => Console.printLine(line).orDie }
@@ -220,7 +220,7 @@ final class JobFollower(
       // gets bars when the terminal supports them.
       for {
         _    <- CompletionCache.appendJob(id)
-        _    <- printLine(s"${result.clubSlug} submitted: $id")
+        _    <- printLine(s"${result.club} submitted: $id")
         code <- followWith(id, printLine, bars = showProgress && !logsToStderr)
         _    <- ZIO.whenDiscard(code == 0)(onComplete(id))
       } yield code

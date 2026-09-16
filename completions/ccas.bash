@@ -47,7 +47,7 @@ _ccas() {
   # Right after --club: offer cached club slugs. Right after any other value flag: offer nothing.
   case "$prev" in
     --club) COMPREPLY=( $(compgen -W "$(_ccas_cache clubs.txt)" -- "$cur") ); return ;;
-    --ready-timeout-seconds|--server|--club|--refresh-min-hours|--alias|--target|--source-clubs|--time-limit-minutes|--since|--until|--limit|--reason|--months|--kind|--interval-hours|--cron|--tz|--misfire|--params) return ;;
+    --ready-timeout-seconds|--server|--club|--club-id|--refresh-min-hours|--alias|--target|--source-clubs|--time-limit-minutes|--since|--until|--limit|--reason|--months|--kind|--interval-hours|--cron|--tz|--misfire|--params) return ;;
   esac
 
   local opts="" pos=""
@@ -62,10 +62,10 @@ _ccas() {
         *) COMPREPLY=(); return ;;
       esac ;;
     use-club) opts="--clear"; pos="slug" ;;
-    membership) opts="--server --trust-usernames --no-trust-usernames --club --all --no-progress --detach" ;;
-    history) opts="--server --full --include-finished --refresh --refresh-min-hours --club --all --no-progress --detach" ;;
-    recruit) opts="--server --alias --target --cumulative --source-clubs --time-limit-minutes --explore --no-explore --club --stdout --report --no-progress" ;;
-    stats) opts="--server --since --until --club --no-progress --detach" ;;
+    membership) opts="--server --trust-usernames --no-trust-usernames --club --club-id --all --no-progress --detach" ;;
+    history) opts="--server --full --include-finished --refresh --refresh-min-hours --club --club-id --all --no-progress --detach" ;;
+    recruit) opts="--server --alias --target --cumulative --source-clubs --time-limit-minutes --explore --no-explore --club --club-id --stdout --report --no-progress" ;;
+    stats) opts="--server --since --until --club --club-id --no-progress --detach" ;;
     jobs) opts="--server --limit" ;;
     logs) opts="--server --no-progress"; pos="jobid" ;;
     cancel) opts="--server"; pos="jobid" ;;
@@ -119,7 +119,7 @@ _ccas() {
     w="${words[j]}"
     if (( skip )); then skip=0; continue; fi
     case "$w" in
-      -*) case "$w" in --ready-timeout-seconds|--server|--club|--refresh-min-hours|--alias|--target|--source-clubs|--time-limit-minutes|--since|--until|--limit|--reason|--months|--kind|--interval-hours|--cron|--tz|--misfire|--params) skip=1 ;; esac ;;
+      -*) case "$w" in --ready-timeout-seconds|--server|--club|--club-id|--refresh-min-hours|--alias|--target|--source-clubs|--time-limit-minutes|--since|--until|--limit|--reason|--months|--kind|--interval-hours|--cron|--tz|--misfire|--params) skip=1 ;; esac ;;
       *) (( posn++ )) ;;
     esac
   done

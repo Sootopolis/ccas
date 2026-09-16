@@ -9,7 +9,7 @@ import ccas.analysis.tables.{Club, ClubAdmin, ClubMatch, ClubMatchRef, Player, T
 import ccas.api.club.ApiClubMatches
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
 import ccas.utils.{ApiConcurrency, OutputFile, ProgressDisplay}
-import ccas.analysis.apps.{ClubResolution, ClubSlugRenameResolver, withClubSlugRenameRecovery}
+import ccas.analysis.apps.{ClubQuery, ClubResolution, ClubSlugRenameResolver, withClubSlugRenameRecovery}
 import ccas.utils.client.{BodyStore, ChessComClient, HttpClientLayer}
 import ccas.utils.sql.PostgresClient
 
@@ -73,7 +73,7 @@ object ClubDataApp extends ZIOAppDefault {
     minAgeHours: Option[Int]
   ): RIO[ProgressDisplay & ChessComClient & PostgresClient, RefreshResult] =
     for {
-      resolutions <- ZIO.foreach(slugs)(ClubResolution.resolve(None, _))
+      resolutions <- ZIO.foreach(slugs)(slug => ClubResolution.resolve(ClubQuery.BySlug(slug)))
       (skipped, found) = resolutions.partitionMap(_.runnable)
       renamed = resolutions.collect { case ClubResolution.Renamed(club, former) => s"$former is now ${club.slug}" }
       _      <- ZIO.whenDiscard(skipped.nonEmpty)(ZIO.logInfo(s"[ClubData] Skipped: ${skipped.mkString("; ")}"))

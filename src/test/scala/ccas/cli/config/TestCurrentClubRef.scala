@@ -2,11 +2,13 @@ package ccas.cli.config
 
 import zio.test.{assertTrue, Spec, ZIOSpecDefault}
 
-import ccas.analysis.apps.ClubRef
+import ccas.analysis.apps.{ClubQuery, ClubRef, ClubResolution}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 
-/** Pure tests for the `current_club` value parser/renderer. Pins the id-vs-slug split: an all-digit prefix before the
-  * first colon is the stable id, anything else degrades to a bare slug so legacy and hand-edited values keep working.
+/** Pure tests for the `current_club` pointer: its parser/renderer, and the two decisions a submit's answer feeds —
+  * whether the pointer may be refreshed, and whether a club that came back missing is this one. Pins the id-vs-slug
+  * split: an all-digit prefix before the first colon is the stable id, anything else degrades to a bare slug so
+  * legacy and hand-edited values keep working.
   */
 object TestCurrentClubRef extends ZIOSpecDefault {
 
@@ -79,6 +81,39 @@ object TestCurrentClubRef extends ZIOSpecDefault {
         assertTrue(
           CurrentClubRef.refreshedRef(Some("5:team-a"), targetHasId = true, "team-a", None).isEmpty,
           CurrentClubRef.refreshedRef(None, targetHasId = false, "team-a", resolved(5, "team-a")).isEmpty
+        )
+      },
+      // The pointer must not follow a name that has moved to someone else's club, or it would silently change which
+      // club bare commands mean (#254).
+      test("a Moved club is never a refresh target, though every other club that ran is") {
+        val ours    = ClubRef(ClubId(5), ClubSlug("team-a"))
+        val theirs  = ClubRef(ClubId(9), ClubSlug("team-b"))
+        assertTrue(
+          CurrentClubRef.refreshTarget(ClubResolution.Moved(theirs, ClubSlug("team-a"), List(ours))).isEmpty,
+          CurrentClubRef.refreshTarget(ClubResolution.Known(ours)).contains(ours),
+          CurrentClubRef.refreshTarget(ClubResolution.Renamed(ours, ClubSlug("was-team-a"))).contains(ours),
+          CurrentClubRef.refreshTarget(ClubResolution.NotLocal(ClubQuery.BySlug(ClubSlug("team-a")))).isEmpty
+        )
+      }
+    ),
+    // A pointer with an id is addressed by it, so that is what its miss comes back naming — matching only by slug
+    // would miss exactly when the slug is the stale part. A name the pointer also answers to still counts: an
+    // explicit `--club` naming the current club says as much about the pointer as a bare command does.
+    suite("names (does a missing club mean this pointer?)")(
+      test("a pointer carrying an id is named by that id, and by a name it still answers to") {
+        val pointer = CurrentClubRef(Some(ClubId(42)), "team-alpha")
+        assertTrue(
+          pointer.names(ClubQuery.ById(ClubId(42))),
+          !pointer.names(ClubQuery.ById(ClubId(43))),
+          pointer.names(ClubQuery.BySlug(ClubSlug("team-alpha")))
+        )
+      },
+      test("a bare-slug pointer is named by its slug alone, case-insensitively") {
+        val bare = CurrentClubRef(None, "team-alpha")
+        assertTrue(
+          bare.names(ClubQuery.BySlug(ClubSlug("TEAM-ALPHA"))),
+          !bare.names(ClubQuery.BySlug(ClubSlug("other"))),
+          !bare.names(ClubQuery.ById(ClubId(42)))
         )
       }
     )
