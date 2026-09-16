@@ -79,9 +79,9 @@ object TestClubMatchSql extends ZIOSpecDefault {
     startTime = Some(Times.t0),
     endTime = Some(Times.t1),
     boards = 5,
-    team1ClubId = Some(clubA.clubId),
+    team1ClubIdOption = Some(clubA.clubId),
     team1ScoreX2 = 12,
-    team2ClubId = Some(clubB.clubId),
+    team2ClubIdOption = Some(clubB.clubId),
     team2ScoreX2 = 8,
     fetchedAt = Times.t2,
     processedBodyHash = None
@@ -95,9 +95,9 @@ object TestClubMatchSql extends ZIOSpecDefault {
     startTime = Some(Times.t1),
     endTime = None,
     boards = 3,
-    team1ClubId = Some(clubA.clubId),
+    team1ClubIdOption = Some(clubA.clubId),
     team1ScoreX2 = 4,
-    team2ClubId = None,
+    team2ClubIdOption = None,
     team2ScoreX2 = 2,
     fetchedAt = Times.t2,
     processedBodyHash = None
@@ -155,8 +155,8 @@ object TestClubMatchSql extends ZIOSpecDefault {
         status = ClubMatchStatus.Registration,
         startTime = None,
         endTime = None,
-        team1ClubId = Some(clubB.clubId),
-        team2ClubId = None
+        team1ClubIdOption = Some(clubB.clubId),
+        team2ClubIdOption = None
       )
       val before = Instant.now()
       for {
@@ -274,7 +274,7 @@ object TestClubMatchSql extends ZIOSpecDefault {
         matchId = abortedId,
         status = ClubMatchStatus.Aborted,
         endTime = None,
-        team2ClubId = None,
+        team2ClubIdOption = None,
         fetchedAt = Times.t2
       )
       for {
@@ -291,14 +291,14 @@ object TestClubMatchSql extends ZIOSpecDefault {
       val dailyMatch = matchFinished.copy(
         matchId = ClubMatchId(2001),
         timeClass = TimeClass.Daily,
-        team1ClubId = Some(clubRefId),
-        team2ClubId = None
+        team1ClubIdOption = Some(clubRefId),
+        team2ClubIdOption = None
       )
       val liveMatch = matchFinished.copy(
         matchId = ClubMatchId(2002),
         timeClass = TimeClass.Blitz,
-        team1ClubId = None,
-        team2ClubId = Some(clubRefId)
+        team1ClubIdOption = None,
+        team2ClubIdOption = Some(clubRefId)
       )
       for {
         _        <- Club.upsert(clubRef)
@@ -322,8 +322,8 @@ object TestClubMatchSql extends ZIOSpecDefault {
       val inferableMatch = matchFinished.copy(
         matchId = ClubMatchId(2101),
         timeClass = TimeClass.Blitz,
-        team1ClubId = Some(c),
-        team2ClubId = None
+        team1ClubIdOption = Some(c),
+        team2ClubIdOption = None
       )
       for {
         _ <- Club.upsert(Club(c, Times.t0, ClubSlug("foi-club"), "FoI Club", None, None, None))
@@ -356,9 +356,9 @@ object TestClubMatchSql extends ZIOSpecDefault {
   private val boardA = ClubMatchBoard(
     matchId = matchFinished.matchId,
     board = 1,
-    team1PlayerId = Some(player0.playerId),
+    team1PlayerIdOption = Some(player0.playerId),
     team1FairPlay = false,
-    team2PlayerId = Some(player1.playerId),
+    team2PlayerIdOption = Some(player1.playerId),
     team2FairPlay = false,
     team1ScoreX2 = 2,
     team2ScoreX2 = 2
@@ -367,9 +367,9 @@ object TestClubMatchSql extends ZIOSpecDefault {
   private val boardB = ClubMatchBoard(
     matchId = matchFinished.matchId,
     board = 2,
-    team1PlayerId = Some(player1.playerId),
+    team1PlayerIdOption = Some(player1.playerId),
     team1FairPlay = false,
-    team2PlayerId = None,
+    team2PlayerIdOption = None,
     team2FairPlay = false,
     team1ScoreX2 = 1,
     team2ScoreX2 = 1
@@ -386,9 +386,9 @@ object TestClubMatchSql extends ZIOSpecDefault {
     val noPlayers = ClubMatchBoard(
       matchId = matchFinished.matchId,
       board = 3,
-      team1PlayerId = None,
+      team1PlayerIdOption = None,
       team1FairPlay = true,
-      team2PlayerId = None,
+      team2PlayerIdOption = None,
       team2FairPlay = false,
       team1ScoreX2 = 0,
       team2ScoreX2 = 0
@@ -399,7 +399,7 @@ object TestClubMatchSql extends ZIOSpecDefault {
       board3 = results.find(_.board == 3).get
     } yield assertTrue(
       board3 == noPlayers,
-      board3.team1PlayerId.isEmpty,
+      board3.team1PlayerIdOption.isEmpty,
       board3.team1FairPlay
     )
   }
@@ -631,18 +631,18 @@ object TestClubMatchSql extends ZIOSpecDefault {
   // --- updateTeamClubId / updatePlayerId tests ---
 
   private def testClubMatchUpdateTeamClubId = test("ClubMatch updateTeamClubId patches correct team column") {
-    // matchInProgress has team2ClubId = None
+    // matchInProgress has team2ClubIdOption = None
     for {
       before <- ClubMatch.selectId(matchInProgress.matchId)
-      _ = assert(before.get.team2ClubId.isEmpty)
+      _ = assert(before.get.team2ClubIdOption.isEmpty)
       updated <- ClubMatch.updateTeamClubId(matchInProgress.matchId, isTeam1 = false, clubB.clubId)
       after   <- ClubMatch.selectId(matchInProgress.matchId)
       // team1 unchanged
       noOp <- ClubMatch.updateTeamClubId(ClubMatchId(9999), isTeam1 = true, clubA.clubId)
     } yield assertTrue(
       updated == 1,
-      after.get.team2ClubId.contains(clubB.clubId),
-      after.get.team1ClubId == before.get.team1ClubId,
+      after.get.team2ClubIdOption.contains(clubB.clubId),
+      after.get.team1ClubIdOption == before.get.team1ClubIdOption,
       noOp == 0
     )
   }
@@ -672,15 +672,15 @@ object TestClubMatchSql extends ZIOSpecDefault {
       val explicitRef = PlayerMatchRef(p, ClubMatchId(2200), isLive = true, isTeam1 = true, boardIdx = 4)
       val parentMatch = matchFinished.copy(
         matchId = ClubMatchId(2201),
-        team1ClubId = Some(clubA.clubId),
-        team2ClubId = None
+        team1ClubIdOption = Some(clubA.clubId),
+        team2ClubIdOption = None
       )
       val boardRow = ClubMatchBoard(
         matchId = parentMatch.matchId,
         board = 2,
-        team1PlayerId = Some(p),
+        team1PlayerIdOption = Some(p),
         team1FairPlay = false,
-        team2PlayerId = None,
+        team2PlayerIdOption = None,
         team2FairPlay = false,
         team1ScoreX2 = 0,
         team2ScoreX2 = 0
@@ -718,7 +718,7 @@ object TestClubMatchSql extends ZIOSpecDefault {
     // Re-insert boards since testClubMatchBoardDeleteMatch removed them
     for {
       _ <- ClubMatchBoard.insertBatch(List(boardA, boardB))
-      // boardB has team2PlayerId = None — patch it
+      // boardB has team2PlayerIdOption = None — patch it
       updated <- ClubMatchBoard.updatePlayerId(boardB.matchId, boardB.board, isTeam1 = false, player0.playerId)
       boards  <- ClubMatchBoard.selectMatch(matchFinished.matchId)
       patched  = boards.find(_.board == boardB.board).get
@@ -727,8 +727,8 @@ object TestClubMatchSql extends ZIOSpecDefault {
       noOp <- ClubMatchBoard.updatePlayerId(ClubMatchId(9999), 1, isTeam1 = true, player0.playerId)
     } yield assertTrue(
       updated == 1,
-      patched.team2PlayerId.contains(player0.playerId),
-      patched.team1PlayerId == boardB.team1PlayerId,
+      patched.team2PlayerIdOption.contains(player0.playerId),
+      patched.team1PlayerIdOption == boardB.team1PlayerIdOption,
       original == boardA,
       noOp == 0
     )
@@ -741,21 +741,21 @@ object TestClubMatchSql extends ZIOSpecDefault {
       val dailyMatch = matchFinished.copy(
         matchId = ClubMatchId(2300),
         timeClass = TimeClass.Daily,
-        team1ClubId = Some(clubA.clubId),
-        team2ClubId = None
+        team1ClubIdOption = Some(clubA.clubId),
+        team2ClubIdOption = None
       )
       val liveMatch = matchFinished.copy(
         matchId = ClubMatchId(2301),
         timeClass = TimeClass.Blitz,
-        team1ClubId = Some(clubA.clubId),
-        team2ClubId = None
+        team1ClubIdOption = Some(clubA.clubId),
+        team2ClubIdOption = None
       )
       val dailyBoard = ClubMatchBoard(
         matchId = dailyMatch.matchId,
         board = 1,
-        team1PlayerId = Some(p),
+        team1PlayerIdOption = Some(p),
         team1FairPlay = false,
-        team2PlayerId = None,
+        team2PlayerIdOption = None,
         team2FairPlay = false,
         team1ScoreX2 = 0,
         team2ScoreX2 = 0
@@ -763,9 +763,9 @@ object TestClubMatchSql extends ZIOSpecDefault {
       val liveBoard = ClubMatchBoard(
         matchId = liveMatch.matchId,
         board = 2,
-        team1PlayerId = None,
+        team1PlayerIdOption = None,
         team1FairPlay = false,
-        team2PlayerId = Some(p),
+        team2PlayerIdOption = Some(p),
         team2FairPlay = false,
         team1ScoreX2 = 0,
         team2ScoreX2 = 0

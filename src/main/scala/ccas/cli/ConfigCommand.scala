@@ -113,8 +113,8 @@ object ConfigCommand {
     for {
       email   <- promptRequired("Contact email (CCAS_CONTACT_EMAIL): ")
       dbPairs <- promptDatabase
-      portOpt <- promptOptional("Server port [8080] (Enter to keep the default): ")
-      pairs = ("CCAS_CONTACT_EMAIL" -> email) :: dbPairs ::: portOpt.map("SERVER_PORT" -> _).toList
+      portOption <- promptOptional("Server port [8080] (Enter to keep the default): ")
+      pairs = ("CCAS_CONTACT_EMAIL" -> email) :: dbPairs ::: portOption.map("SERVER_PORT" -> _).toList
       _       <- preview(pairs)
       confirm <- promptConfirm(s"Save to $file? [Y/n]: ")
       code    <- if (confirm) { save(pairs) } else { Console.printLine("aborted").as(ExitCode.success) }

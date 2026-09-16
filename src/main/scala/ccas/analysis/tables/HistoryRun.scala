@@ -21,7 +21,7 @@ final case class HistoryRun(
   completedAt: Option[Instant],
   matchesProcessed: Option[Int],
   playersDiscovered: Option[Int],
-  jobRunId: Option[JobRunId],
+  @SqlName("job_run_id") jobRunIdOption: Option[JobRunId],
   refreshMatchUnchanged: Int,
   seedClubMatchesUnchanged: Int,
   seedPlayerMatchesUnchanged: Int,
@@ -54,11 +54,11 @@ object HistoryRun {
     clubId: ClubId,
     trigger: RunTrigger,
     startedAt: Instant,
-    jobRunId: Option[JobRunId]
+    jobRunIdOption: Option[JobRunId]
   ): ZIO[PostgresClient, SQLException, HistoryRunId] =
     connectZIO {
       sql"""INSERT INTO history_run (club_id, trigger, started_at, job_run_id)
-            VALUES ($clubId, $trigger, $startedAt, $jobRunId)
+            VALUES ($clubId, $trigger, $startedAt, $jobRunIdOption)
             RETURNING run_id""".query[HistoryRunId].run().headOption
     }.someOrFail(new SQLException("INSERT RETURNING produced no rows"))
 

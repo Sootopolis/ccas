@@ -10,7 +10,7 @@ import ccas.utils.TimeParser
 
 /** Typed per-`JobKind` options decoded from a schedule's free-text `params` column so scheduled runs can
   * carry the same tunable knobs an ad-hoc HTTP submission (`JobRoutes`) can. Each DTO mirrors the
-  * corresponding `*Request` type minus the club *target* (a schedule's club comes from `schedule.clubId`,
+  * corresponding `*Request` type minus the club *target* (a schedule's club comes from `schedule.clubIdOption`,
   * not the params JSON). Every field is optional; an absent (or blank) `params` decodes to the kind's
   * all-`None` `Default`, which threads into the app call as today's hardcoded defaults — so existing
   * param-less schedules are unchanged.

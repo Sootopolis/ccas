@@ -220,10 +220,10 @@ object UsernameRenameResolver {
   ): RIO[PostgresClient, Option[Username]] =
     for {
       rows <- ClubMatchBoard.selectMatch(matchId)
-      opposingPidOpt = rows.find(_.board == board).flatMap { row =>
-        if (isTeam1) { row.team2PlayerId } else { row.team1PlayerId }
+      opposingPidOption = rows.find(_.board == board).flatMap { row =>
+        if (isTeam1) { row.team2PlayerIdOption } else { row.team1PlayerIdOption }
       }
-      result <- opposingPidOpt match {
+      result <- opposingPidOption match {
         case Some(pid) => Player.selectId(pid).map(_.map(_.username).filterNot(isTombstone))
         case None      => opposingUsernameFromMatchEndpoint(client, matchId, board, isTeam1, isLive)
       }
@@ -236,8 +236,8 @@ object UsernameRenameResolver {
     isTeam1: Boolean,
     isLive: Boolean
   ): RIO[Any, Option[Username]] =
-    RefHelpers.fetchTeamMatchTeamsOptional(client, matchId, isLive).map { teamsOpt =>
-      teamsOpt.flatMap { teams =>
+    RefHelpers.fetchTeamMatchTeamsOptional(client, matchId, isLive).map { teamsOption =>
+      teamsOption.flatMap { teams =>
         val opposingTeam = if (isTeam1) { teams.team2 } else { teams.team1 }
         opposingTeam.players.collectFirst {
           case p: TeamMatchPlayerStarted if p.board.path.segments.lastOption.exists(_.toShort == board) => p.username
@@ -283,8 +283,8 @@ object UsernameRenameResolver {
     candidate: Username,
     playerIdHint: Option[PlayerId]
   ): RIO[Any, Option[(Username, ApiPlayer)]] =
-    client.getUncachedOptional[ApiPlayer](ApiPlayer.getUrl(candidate)).map { apiPlayerOpt =>
-      apiPlayerOpt.filter(apiPlayer => playerIdHint.forall(_ == apiPlayer.playerId)).map(p => (p.username, p))
+    client.getUncachedOptional[ApiPlayer](ApiPlayer.getUrl(candidate)).map { apiPlayerOption =>
+      apiPlayerOption.filter(apiPlayer => playerIdHint.forall(_ == apiPlayer.playerId)).map(p => (p.username, p))
     }.onNotFound(_ => ZIO.none)
 }
 

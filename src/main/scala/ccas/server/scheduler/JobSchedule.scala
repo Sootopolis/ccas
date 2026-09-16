@@ -31,7 +31,7 @@ import ccas.utils.sql.PostgresClient.connectZIO
 final case class JobSchedule(
   @Id id: Long,
   kind: JobKind,
-  clubId: Option[ClubId],
+  @SqlName("club_id") clubIdOption: Option[ClubId],
   params: Option[String],
   triggerType: TriggerType,
   intervalHours: Option[Short],
@@ -105,13 +105,25 @@ object JobSchedule {
   def interval(
     id: Long,
     kind: JobKind,
-    clubId: Option[ClubId],
+    clubIdOption: Option[ClubId],
     params: Option[String],
     intervalHours: Short,
     enabled: Boolean,
     lastRunAt: Option[Instant]
   ): JobSchedule =
-    JobSchedule(id, kind, clubId, params, TriggerType.Interval, Some(intervalHours), None, None, None, enabled, lastRunAt)
+    JobSchedule(
+      id = id,
+      kind = kind,
+      clubIdOption = clubIdOption,
+      params = params,
+      triggerType = TriggerType.Interval,
+      intervalHours = Some(intervalHours),
+      cronExpr = None,
+      timezone = None,
+      misfirePolicy = None,
+      enabled = enabled,
+      lastRunAt = lastRunAt
+    )
 
   /** Smart constructor for a cron-triggered schedule (`interval_hours` NULL). `cronExpr` must be the
     * NORMALIZED 6-field string from [[ScheduleTrigger.validateCron]].
@@ -119,7 +131,7 @@ object JobSchedule {
   def cron(
     id: Long,
     kind: JobKind,
-    clubId: Option[ClubId],
+    clubIdOption: Option[ClubId],
     params: Option[String],
     cronExpr: String,
     timezone: String,
@@ -128,17 +140,17 @@ object JobSchedule {
     lastRunAt: Option[Instant]
   ): JobSchedule =
     JobSchedule(
-      id,
-      kind,
-      clubId,
-      params,
-      TriggerType.Cron,
-      None,
-      Some(cronExpr),
-      Some(timezone),
-      Some(misfire),
-      enabled,
-      lastRunAt
+      id = id,
+      kind = kind,
+      clubIdOption = clubIdOption,
+      params = params,
+      triggerType = TriggerType.Cron,
+      intervalHours = None,
+      cronExpr = Some(cronExpr),
+      timezone = Some(timezone),
+      misfirePolicy = Some(misfire),
+      enabled = enabled,
+      lastRunAt = lastRunAt
     )
 
   def createTable: ZIO[PostgresClient, SQLException, Int] =
@@ -219,7 +231,7 @@ object JobSchedule {
     connectZIO {
       sql"""INSERT INTO job_schedule
               (kind, club_id, params, trigger_type, interval_hours, cron_expr, timezone, misfire_policy, enabled, last_run_at)
-            VALUES (${schedule.kind}, ${schedule.clubId}, ${schedule.params}, ${schedule.triggerType},
+            VALUES (${schedule.kind}, ${schedule.clubIdOption}, ${schedule.params}, ${schedule.triggerType},
                     ${schedule.intervalHours}, ${schedule.cronExpr}, ${schedule.timezone}, ${schedule.misfirePolicy},
                     ${schedule.enabled}, ${schedule.lastRunAt})
             RETURNING id""".query[Long].run().headOption

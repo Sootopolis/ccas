@@ -603,9 +603,9 @@ object RecruitmentTestSupport {
 
   def seedMatchWithBoard(
     matchId: ClubMatchId,
-    team1ClubId: Option[ClubId],
-    team1PlayerId: PlayerId,
-    team2PlayerId: PlayerId
+    team1ClubIdOption: Option[ClubId],
+    team1PlayerIdOption: PlayerId,
+    team2PlayerIdOption: PlayerId
   ): ZIO[PostgresClient, Throwable, Unit] =
     for {
       _ <- ClubMatch.upsert(
@@ -617,16 +617,16 @@ object RecruitmentTestSupport {
           startTime = Some(TestTimes.t0),
           endTime = Some(TestTimes.t1),
           boards = 1,
-          team1ClubId = team1ClubId,
+          team1ClubIdOption = team1ClubIdOption,
           team1ScoreX2 = 20,
-          team2ClubId = None,
+          team2ClubIdOption = None,
           team2ScoreX2 = 10,
           fetchedAt = TestTimes.t0,
           processedBodyHash = None
         )
       )
       _ <- ClubMatchBoard.insertBatch(
-        List(ClubMatchBoard(matchId, 1, Some(team1PlayerId), false, Some(team2PlayerId), false, 2, 0))
+        List(ClubMatchBoard(matchId, 1, Some(team1PlayerIdOption), false, Some(team2PlayerIdOption), false, 2, 0))
       )
     } yield ()
 
@@ -645,7 +645,7 @@ object RecruitmentTestSupport {
       result <- RecruitmentApp
         .recruit(
           clubSlug = clubSlug,
-          expectedClubId = None,
+          expectedClubIdOption = None,
           alias = alias,
           target = target,
           sourceClubs = sourceClubs,

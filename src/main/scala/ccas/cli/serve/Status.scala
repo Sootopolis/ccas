@@ -16,18 +16,24 @@ object Status {
     *
     * @param ready    `/health/ready` returned 200 (server up AND database reachable)
     * @param up       `/health` returned 200 (server process responding; db state unknown)
-    * @param livePid  the pid from the pid file, only when it maps to a live process
+    * @param livePidOption  the pid from the pid file, only when it maps to a live process
     * @param stalePid the pid file exists but its pid is dead
     */
-  def describe(ready: Boolean, up: Boolean, livePid: Option[Long], stalePid: Boolean, port: Int): (String, ExitCode) = {
+  def describe(
+    ready: Boolean,
+    up: Boolean,
+    livePidOption: Option[Long],
+    stalePid: Boolean,
+    port: Int
+  ): (String, ExitCode) = {
     val addr   = s"127.0.0.1:$port"
-    val pidStr = livePid.map(p => s"pid $p  ").getOrElse("")
+    val pidStr = livePidOption.map(p => s"pid $p  ").getOrElse("")
     if (ready) {
       (s"running (ready)  ${pidStr}${addr}  db ok", ExitCode.success)
     } else if (up) {
       (s"running (db unavailable)  ${pidStr}${addr}", ExitCode(1))
     } else {
-      livePid match {
+      livePidOption match {
         case Some(p) => (s"starting or unhealthy (pid $p, no response on :$port)", ExitCode(1))
         case None    => (if (stalePid) { "not running (stale pid file)" } else { "not running" }, ExitCode(1))
       }

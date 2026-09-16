@@ -44,15 +44,15 @@ object TestClubResolver extends ZIOSpecDefault {
     },
     test("single: an id:slug current_club carries the stable id (rename-proof target)") {
       ClubResolver.single(None, Some("42:team-a")).map(t =>
-        assertTrue(t.clubId.contains(ClubId.wrap(42L)), ClubSlug.unwrap(t.slug) == "team-a")
+        assertTrue(t.clubIdOption.contains(ClubId.wrap(42L)), ClubSlug.unwrap(t.slug) == "team-a")
       )
     },
     test("single: an explicit --club carries no id (freshly-typed slug)") {
-      ClubResolver.single(Some("team-a"), Some("42:current")).map(t => assertTrue(t.clubId.isEmpty))
+      ClubResolver.single(Some("team-a"), Some("42:current")).map(t => assertTrue(t.clubIdOption.isEmpty))
     },
     test("single: a bare-slug current_club carries no id yet") {
       ClubResolver.single(None, Some("team-a")).map(t =>
-        assertTrue(t.clubId.isEmpty, ClubSlug.unwrap(t.slug) == "team-a")
+        assertTrue(t.clubIdOption.isEmpty, ClubSlug.unwrap(t.slug) == "team-a")
       )
     },
     test("multi: an id:slug current_club carries the id; --all clubs carry none") {
@@ -60,9 +60,9 @@ object TestClubResolver extends ZIOSpecDefault {
         current <- ClubResolver.multi(mustNotFetch, Nil, all = false, Some("7:team-a"))
         all     <- ClubResolver.multi(ZIO.succeed(List("m1")), Nil, all = true, None)
       } yield assertTrue(
-        current.head.clubId.contains(ClubId.wrap(7L)),
+        current.head.clubIdOption.contains(ClubId.wrap(7L)),
         ClubSlug.unwrap(current.head.slug) == "team-a",
-        all.head.clubId.isEmpty
+        all.head.clubIdOption.isEmpty
       )
     },
     test("multi: explicit list wins, without fetching managed clubs") {

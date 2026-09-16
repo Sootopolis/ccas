@@ -25,7 +25,7 @@ final case class RecruitmentRun(
   // interactive confirm at target, leaving any chunk-overshoot excess Deferred to carry forward. NULL only for legacy
   // rows created before this column existed (treated as "no cap").
   target: Option[Int],
-  jobRunId: Option[JobRunId]
+  @SqlName("job_run_id") jobRunIdOption: Option[JobRunId]
 ) derives DbCodec
 
 object RecruitmentRun {
@@ -64,9 +64,9 @@ object RecruitmentRun {
     }
 
   // One recruit job inserts exactly one run, so at most one row matches; ORDER BY + LIMIT 1 is defensive belt-and-braces.
-  def selectByJobRunId(jobRunId: JobRunId): ZIO[PostgresClient, SQLException, Option[RecruitmentRun]] =
+  def selectByJobRunId(jobRunIdOption: JobRunId): ZIO[PostgresClient, SQLException, Option[RecruitmentRun]] =
     connectZIO {
-      sql"SELECT $selectCols FROM recruitment_run WHERE job_run_id = $jobRunId ORDER BY started_at DESC LIMIT 1"
+      sql"SELECT $selectCols FROM recruitment_run WHERE job_run_id = $jobRunIdOption ORDER BY started_at DESC LIMIT 1"
         .query[RecruitmentRun].run().headOption
     }
 
@@ -88,11 +88,11 @@ object RecruitmentRun {
     trigger: RunTrigger,
     startedAt: Instant,
     target: Option[Int],
-    jobRunId: Option[JobRunId]
+    jobRunIdOption: Option[JobRunId]
   ): ZIO[PostgresClient, SQLException, RecruitmentRunId] =
     connectZIO {
       sql"""INSERT INTO recruitment_run (club_id, criteria_id, trigger, started_at, candidates_found, target, job_run_id)
-            VALUES ($clubId, $criteriaId, $trigger, $startedAt, 0, $target, $jobRunId)
+            VALUES ($clubId, $criteriaId, $trigger, $startedAt, 0, $target, $jobRunIdOption)
             RETURNING run_id""".query[RecruitmentRunId].run().headOption
     }.someOrFail(new SQLException("INSERT RETURNING produced no rows"))
 

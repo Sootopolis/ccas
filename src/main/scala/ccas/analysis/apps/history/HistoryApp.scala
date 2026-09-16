@@ -71,14 +71,14 @@ object HistoryApp extends ZIOAppDefault {
     val full            = args.contains("--full")
     val includeFinished = args.contains("--include-finished")
     val refreshIdx      = args.indexOf("--refresh")
-    val nextInt         = args.lift(refreshIdx + 1).flatMap(_.toIntOption)
+    val nextIntOption   = args.lift(refreshIdx + 1).flatMap(_.toIntOption)
     val refreshMinHours =
       if (refreshIdx < 0) { None }
-      else if (nextInt.isDefined) { nextInt }
+      else if (nextIntOption.isDefined) { nextIntOption }
       else { Some(0) }
     val refreshStripped =
       if (refreshIdx < 0) { args }
-      else if (nextInt.isDefined) { args.patch(refreshIdx, Chunk.empty, 2) }
+      else if (nextIntOption.isDefined) { args.patch(refreshIdx, Chunk.empty, 2) }
       else { args.patch(refreshIdx, Chunk.empty, 1) }
     val slugChunk = refreshStripped.filterNot(_.startsWith("--")).map(ClubSlug.wrap)
     NonEmptyChunk.fromChunk(slugChunk) match {
@@ -105,7 +105,7 @@ object HistoryApp extends ZIOAppDefault {
     if (slugs.size == 1) {
       discover(
         clubSlug = slugs.head,
-        expectedClubId = None,
+        expectedClubIdOption = None,
         full = full,
         includeFinished = includeFinished,
         refreshMinHours = refreshMinHours
@@ -123,12 +123,12 @@ object HistoryApp extends ZIOAppDefault {
         _ <- ZIO.foreachDiscard(slugs) { slug =>
           discoverClub(
             clubSlug = slug,
-            expectedClubId = None,
+            expectedClubIdOption = None,
             full = full,
             includeFinished = includeFinished,
             refreshMinHours = refreshMinHours,
             trigger = RunTrigger.Cli,
-            jobRunId = None,
+            jobRunIdOption = None,
             shared = Some(shared)
           ).flatMap(outputResult)
         }
@@ -142,15 +142,15 @@ object HistoryApp extends ZIOAppDefault {
 
   private def initialize(
     clubSlug: ClubSlug,
-    expectedClubId: Option[ClubId],
+    expectedClubIdOption: Option[ClubId],
     full: Boolean,
     trigger: RunTrigger,
-    jobRunId: Option[JobRunId]
+    jobRunIdOption: Option[JobRunId]
   ): RIO[ProgressDisplay & ChessComClient & PostgresClient, InitResult] =
     for {
       _ <- ZIO.logInfo(s"=== HistoryApp: $clubSlug ===")
       _ <- ZIO.logInfo("Phase 1: Initializing...")
-      reconciled <- MembershipApp.reconcile(clubSlug, expectedClubId, trackRun = false)
+      reconciled <- MembershipApp.reconcile(clubSlug, expectedClubIdOption, trackRun = false)
       // By id: reconcile may have followed a rename, leaving `clubSlug` stale. Everything past here uses `club.slug`.
       club <- Club.selectId(reconciled.clubId)
         .someOrFail(IllegalStateException(s"Club #${ClubId.unwrap(reconciled.clubId)} not found after reconcile"))
@@ -162,7 +162,7 @@ object HistoryApp extends ZIOAppDefault {
       memberPlayers <- Player.selectByIds(allMembers.map(_.playerId))
       _ <- HistoryPendingMatch.resetStatuses(clubId)
       startedAt = Instant.now()
-      runId <- HistoryRun.insert(clubId, trigger, startedAt, jobRunId)
+      runId <- HistoryRun.insert(clubId, trigger, startedAt, jobRunIdOption)
       playerById = memberPlayers.map(p => p.playerId -> p).toMap
       _ <- ZIO.logInfo(
         s"  Members: ${allMembers.size}, Processed matches: $processedCount, Queried members: ${queriedIds.size}"
@@ -183,32 +183,32 @@ object HistoryApp extends ZIOAppDefault {
     */
   def discover(
     clubSlug: ClubSlug,
-    expectedClubId: Option[ClubId],
+    expectedClubIdOption: Option[ClubId],
     full: Boolean = false,
     includeFinished: Boolean = false,
     refreshMinHours: Option[Int] = None,
     trigger: RunTrigger = RunTrigger.Cli,
-    jobRunId: Option[JobRunId] = None
+    jobRunIdOption: Option[JobRunId] = None
   ): RIO[ProgressDisplay & ChessComClient & PostgresClient, HistoryResult] =
     discoverClub(
       clubSlug = clubSlug,
-      expectedClubId = expectedClubId,
+      expectedClubIdOption = expectedClubIdOption,
       full = full,
       includeFinished = includeFinished,
       refreshMinHours = refreshMinHours,
       trigger = trigger,
-      jobRunId = jobRunId,
+      jobRunIdOption = jobRunIdOption,
       shared = None
     )
 
   private def discoverClub(
     clubSlug: ClubSlug,
-    expectedClubId: Option[ClubId],
+    expectedClubIdOption: Option[ClubId],
     full: Boolean,
     includeFinished: Boolean,
     refreshMinHours: Option[Int],
     trigger: RunTrigger,
-    jobRunId: Option[JobRunId],
+    jobRunIdOption: Option[JobRunId],
     shared: Option[SharedContext]
   ): RIO[ProgressDisplay & ChessComClient & PostgresClient, HistoryResult] = {
     require(shared.isEmpty || trigger == RunTrigger.Cli, "SharedContext requires sequential CLI execution")
@@ -218,7 +218,7 @@ object HistoryApp extends ZIOAppDefault {
 
       // === Phase 1: Initialize ===
       InitResult(allMembers, playerById, queriedIds, ctx, startedAt, runId) <-
-        initialize(clubSlug, expectedClubId, full, trigger, jobRunId)
+        initialize(clubSlug, expectedClubIdOption, full, trigger, jobRunIdOption)
       _ <- ZIO.foreachDiscard(shared)(_.resolvedClubs.update(_ + (ctx.clubSlug -> ctx.clubId)))
 
       seedClubRef   <- Ref.make(0)

@@ -66,7 +66,7 @@ object TestJobRunSql extends ZIOSpecDefault {
       result.get.id == id0,
       result.get.kind == JobKind.Recruitment,
       result.get.status == JobRunStatus.Running,
-      result.get.clubId.contains(clubIdA),
+      result.get.clubIdOption.contains(clubIdA),
       result.get.params.isEmpty,
       result.get.completedAt.isEmpty,
       result.get.error.isEmpty

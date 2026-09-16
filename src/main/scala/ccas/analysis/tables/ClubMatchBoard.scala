@@ -13,9 +13,9 @@ import ccas.utils.sql.PostgresClient.{connectZIO, transactZIO}
 final case class ClubMatchBoard(
   matchId: ClubMatchId,
   board: Short,
-  team1PlayerId: Option[PlayerId],
+  @SqlName("team1_player_id") team1PlayerIdOption: Option[PlayerId],
   team1FairPlay: Boolean,
-  team2PlayerId: Option[PlayerId],
+  @SqlName("team2_player_id") team2PlayerIdOption: Option[PlayerId],
   team2FairPlay: Boolean,
   team1ScoreX2: Short,
   team2ScoreX2: Short
@@ -73,8 +73,8 @@ object ClubMatchBoard {
     connectZIO {
       sql"""INSERT INTO club_match_board (match_id, board, team1_player_id, team1_fair_play,
               team2_player_id, team2_fair_play, team1_score_x2, team2_score_x2)
-            VALUES (${item.matchId}, ${item.board}, ${item.team1PlayerId},
-              ${item.team1FairPlay}, ${item.team2PlayerId}, ${item.team2FairPlay},
+            VALUES (${item.matchId}, ${item.board}, ${item.team1PlayerIdOption},
+              ${item.team1FairPlay}, ${item.team2PlayerIdOption}, ${item.team2FairPlay},
               ${item.team1ScoreX2}, ${item.team2ScoreX2})""".update.run()
     }
 
@@ -83,8 +83,8 @@ object ClubMatchBoard {
       batchUpdate(items) { item =>
         sql"""INSERT INTO club_match_board (match_id, board, team1_player_id, team1_fair_play,
                 team2_player_id, team2_fair_play, team1_score_x2, team2_score_x2)
-              VALUES (${item.matchId}, ${item.board}, ${item.team1PlayerId},
-                ${item.team1FairPlay}, ${item.team2PlayerId}, ${item.team2FairPlay},
+              VALUES (${item.matchId}, ${item.board}, ${item.team1PlayerIdOption},
+                ${item.team1FairPlay}, ${item.team2PlayerIdOption}, ${item.team2FairPlay},
                 ${item.team1ScoreX2}, ${item.team2ScoreX2})""".update
       }
     }

@@ -13,10 +13,10 @@ import ccas.api.misc.subtypes.{ClubId, ClubSlug}
   * and the left side is treated as an id only when it is all digits. Anything else is a bare slug, which keeps existing
   * slug-only configs working unchanged and tolerates a hand-typed value.
   */
-final case class CurrentClubRef(clubId: Option[ClubId], slug: String) {
+final case class CurrentClubRef(clubIdOption: Option[ClubId], slug: String) {
 
   /** Render for storage: `"<id>:<slug>"` when an id is known, else the bare slug. The inverse of [[CurrentClubRef.parse]]. */
-  def render: String = clubId match {
+  def render: String = clubIdOption match {
     case Some(id) => s"${ClubId.unwrap(id)}:$slug"
     case None     => slug
   }
@@ -63,7 +63,7 @@ object CurrentClubRef {
     (stored, resolvedOption) match {
       case (Some(raw), Some(resolved)) =>
         val ref       = parse(raw)
-        val isCurrent = ref.clubId.contains(resolved.clubId) || (!targetHasId && sameSlug(ref.slug, targetSlug))
+        val isCurrent = ref.clubIdOption.contains(resolved.clubId) || (!targetHasId && sameSlug(ref.slug, targetSlug))
         val next      = CurrentClubRef(Some(resolved.clubId), ClubSlug.unwrap(resolved.slug))
         Option.when(isCurrent && next.render != raw.trim)(next)
       case _ => None

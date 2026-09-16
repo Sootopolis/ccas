@@ -202,7 +202,7 @@ final class JobFollower(
 
   /** Club-less submit result (matchref). The POST returns HTTP 200 even on failure, so branch on the body. */
   def handleSingle(label: String, result: JobResult): Task[Int] =
-    JobFollower.whenSubmitted(label, result.error, result.jobId) { id =>
+    JobFollower.whenSubmitted(label, result.error, result.jobIdOption) { id =>
       CompletionCache.appendJob(id) *> Console.printLine(s"$label submitted: $id").orDie *> followJob(id)
     }
 
@@ -212,7 +212,7 @@ final class JobFollower(
     * can fetch and render what the job produced; it is skipped on failure/timeout/no-id.
     */
   def handleClub(result: ClubJobResult, logsToStderr: Boolean, onComplete: String => Task[Unit]): Task[Int] =
-    JobFollower.whenSubmitted(result.clubSlug, result.failure, result.jobId) { id =>
+    JobFollower.whenSubmitted(result.clubSlug, result.failure, result.jobIdOption) { id =>
       val printLine: String => UIO[Unit] =
         if (logsToStderr) { line => Console.printLineError(line).orDie }
         else { line => Console.printLine(line).orDie }

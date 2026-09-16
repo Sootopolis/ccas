@@ -67,14 +67,14 @@ object Main extends ZIOAppDefault {
       // Same server the `--server`-less commands resolve to (config `api_url`, else the built-in default): use-club has
       // no `--server` flag of its own — its network use is a best-effort probe against the configured server, not a
       // server operation — so it inherits the same default the command tree was built with.
-      UseClub.run(slugs, clear, cfg.currentClub, cfg.apiUrl.getOrElse(CliCommand.DefaultServer))
+      UseClub.run(slugs, clear, cfg.currentClubOption, cfg.apiUrl.getOrElse(CliCommand.DefaultServer))
     case CliCommand.ConfigGet(key)       => ConfigCommand.get(key)
     case CliCommand.ConfigSet(key, v)    => ConfigCommand.set(key, v)
     case CliCommand.ConfigUnset(key)     => ConfigCommand.unset(key)
     case CliCommand.ConfigList(secrets)  => ConfigCommand.list(secrets)
     case CliCommand.ConfigPath           => ConfigCommand.path
     case CliCommand.ConfigInit           => ConfigCommand.init
-    case other: CliCommand.ServerCommand => Dispatcher.dispatch(other, cfg.currentClub)
+    case other: CliCommand.ServerCommand => Dispatcher.dispatch(other, cfg.currentClubOption)
   }
 
   // Detached serve: apply the ccas.env overlay first (so a file-only SERVER_PORT is honoured by the readiness probe in

@@ -30,7 +30,7 @@ private[history] object HistoryBoardBuilder {
     boardGame: Option[ApiBoardGame]
   ): Option[ClubMatchGame] =
     Option.unless(winner.isEmpty && boardGame.isEmpty) {
-      val gameId = boardGame.map(g => g.url.path.segments.last.toLong)
+      val gameIdOption = boardGame.map(g => g.url.path.segments.last.toLong)
       val startTime = boardGame.flatMap(_.startTime)
       val endTime = boardGame.flatMap(_.endTime)
 
@@ -46,7 +46,7 @@ private[history] object HistoryBoardBuilder {
         matchId = matchId,
         board = board,
         team1IsWhite = team1IsWhite,
-        gameId = gameId,
+        gameIdOption = gameIdOption,
         startTime = startTime,
         endTime = endTime,
         winner = winner,
@@ -150,8 +150,8 @@ private[history] object HistoryBoardBuilder {
   private[history] def buildClubMatchRow(
     matchId: ClubMatchId,
     dailyMatch: ApiDailyMatch,
-    team1ClubId: Option[ClubId],
-    team2ClubId: Option[ClubId]
+    team1ClubIdOption: Option[ClubId],
+    team2ClubIdOption: Option[ClubId]
   ): ClubMatch = {
     val teams = dailyMatch.teams
     val (startTime, endTime) = dailyMatch match {
@@ -170,9 +170,9 @@ private[history] object HistoryBoardBuilder {
       startTime = startTime,
       endTime = endTime,
       boards = dailyMatch.boards.toShort,
-      team1ClubId = team1ClubId,
+      team1ClubIdOption = team1ClubIdOption,
       team1ScoreX2 = (teams.team1.score * 2).toShort,
-      team2ClubId = team2ClubId,
+      team2ClubIdOption = team2ClubIdOption,
       team2ScoreX2 = (teams.team2.score * 2).toShort,
       fetchedAt = Instant.now(),
       // Only the settled-refresh path (HistoryProcessing.refreshSingleMatchWithBody) knows the fetch's content

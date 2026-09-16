@@ -22,11 +22,11 @@ object ConfigWriter {
   // so user comments survive. The trailing `.*` also drops any inline comment on the old assignment we're replacing.
   private val CurrentClubAssignment: Regex = """^\s*current_club\s*[=:].*$""".r
 
-  /** Set `current_club` to the `<id>:<slug>` form when `clubId` is known, or a bare slug when it isn't (offline set, or
+  /** Set `current_club` to the `<id>:<slug>` form when the id is known, or a bare slug when it isn't (offline set, or
     * a club the server couldn't resolve an id for) — the id is backfilled on the next successful command.
     */
-  def setCurrentClub(file: Path, clubId: Option[ClubId], slug: String): Task[Unit] =
-    rewrite(file, Some(s"""current_club = "${escape(CurrentClubRef(clubId, slug).render)}""""))
+  def setCurrentClub(file: Path, clubIdOption: Option[ClubId], slug: String): Task[Unit] =
+    rewrite(file, Some(s"""current_club = "${escape(CurrentClubRef(clubIdOption, slug).render)}""""))
 
   /** Drop the `current_club` assignment, leaving the rest of the config intact. Used by `ccas use-club --clear` and by
     * `ccas club remove` when it unmanages the club the pointer names.

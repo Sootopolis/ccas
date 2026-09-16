@@ -19,7 +19,7 @@ final case class MembershipRun(
   trigger: RunTrigger,
   startedAt: Instant,
   completedAt: Option[Instant],
-  jobRunId: Option[JobRunId]
+  @SqlName("job_run_id") jobRunIdOption: Option[JobRunId]
 ) derives DbCodec
 
 object MembershipRun {
@@ -58,11 +58,11 @@ object MembershipRun {
     clubId: ClubId,
     trigger: RunTrigger,
     startedAt: Instant,
-    jobRunId: Option[JobRunId]
+    jobRunIdOption: Option[JobRunId]
   ): ZIO[PostgresClient, SQLException, MembershipRunId] =
     connectZIO {
       sql"""INSERT INTO membership_run (club_id, trigger, started_at, job_run_id)
-            VALUES ($clubId, $trigger, $startedAt, $jobRunId)
+            VALUES ($clubId, $trigger, $startedAt, $jobRunIdOption)
             RETURNING run_id""".query[MembershipRunId].run().headOption
     }.someOrFail(new SQLException("INSERT RETURNING produced no rows"))
 

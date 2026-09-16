@@ -56,7 +56,7 @@ object TestJobScheduler extends ZIOSpecDefault {
   private def stubRunner(submissions: Ref[Int]): JobRunner = new JobRunner {
     override def submit(
       kind: JobKind,
-      clubId: Option[ClubId],
+      clubIdOption: Option[ClubId],
       params: Option[String],
       trigger: RunTrigger,
       effect: Option[JobRunId] => RIO[ProgressDisplay & ChessComClient & PostgresClient, Any]
@@ -75,7 +75,7 @@ object TestJobScheduler extends ZIOSpecDefault {
   private def paramsCapturingRunner(captured: Ref[List[Option[String]]]): JobRunner = new JobRunner {
     override def submit(
       kind: JobKind,
-      clubId: Option[ClubId],
+      clubIdOption: Option[ClubId],
       params: Option[String],
       trigger: RunTrigger,
       effect: Option[JobRunId] => RIO[ProgressDisplay & ChessComClient & PostgresClient, Any]
@@ -94,12 +94,12 @@ object TestJobScheduler extends ZIOSpecDefault {
   private def trackingRunner(submitted: Ref[List[Option[ClubId]]]): JobRunner = new JobRunner {
     override def submit(
       kind: JobKind,
-      clubId: Option[ClubId],
+      clubIdOption: Option[ClubId],
       params: Option[String],
       trigger: RunTrigger,
       effect: Option[JobRunId] => RIO[ProgressDisplay & ChessComClient & PostgresClient, Any]
     ): RIO[PostgresClient, JobRunId] =
-      submitted.update(clubId :: _).as(JobRunId.generate())
+      submitted.update(clubIdOption :: _).as(JobRunId.generate())
 
     override def status(id: JobRunId): RIO[PostgresClient, Option[JobRun]] = ZIO.none
     override def cancel(id: JobRunId): UIO[Boolean] = ZIO.succeed(false)
@@ -273,7 +273,7 @@ object TestJobScheduler extends ZIOSpecDefault {
       failingRunner = new JobRunner {
         override def submit(
           kind: JobKind,
-          clubId: Option[ClubId],
+          clubIdOption: Option[ClubId],
           params: Option[String],
           trigger: RunTrigger,
           effect: Option[JobRunId] => RIO[ProgressDisplay & ChessComClient & PostgresClient, Any]
@@ -314,13 +314,13 @@ object TestJobScheduler extends ZIOSpecDefault {
         runner = new JobRunner {
           override def submit(
             kind: JobKind,
-            clubId: Option[ClubId],
+            clubIdOption: Option[ClubId],
             params: Option[String],
             trigger: RunTrigger,
             effect: Option[JobRunId] => RIO[ProgressDisplay & ChessComClient & PostgresClient, Any]
           ): RIO[PostgresClient, JobRunId] =
-            submitted.update(clubId :: _) *>
-              ZIO.when(clubId.contains(failClubId))(ZIO.fail(new RuntimeException("boom"))).as(JobRunId.generate())
+            submitted.update(clubIdOption :: _) *>
+              ZIO.when(clubIdOption.contains(failClubId))(ZIO.fail(new RuntimeException("boom"))).as(JobRunId.generate())
 
           override def status(id: JobRunId): RIO[PostgresClient, Option[JobRun]] = ZIO.none
           override def cancel(id: JobRunId): UIO[Boolean] = ZIO.succeed(false)
@@ -365,7 +365,7 @@ object TestJobScheduler extends ZIOSpecDefault {
         conflictingRunner = new JobRunner {
           override def submit(
             kind: JobKind,
-            clubId: Option[ClubId],
+            clubIdOption: Option[ClubId],
             params: Option[String],
             trigger: RunTrigger,
             effect: Option[JobRunId] => RIO[ProgressDisplay & ChessComClient & PostgresClient, Any]

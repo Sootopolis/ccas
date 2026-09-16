@@ -15,28 +15,28 @@ object TestCurrentClubRef extends ZIOSpecDefault {
   override def spec: Spec[Any, Nothing] = suite("TestCurrentClubRef")(
     test("parses <id>:<slug> into the id and slug") {
       val ref = CurrentClubRef.parse("1234:team-alpha")
-      assertTrue(ref.clubId.contains(ClubId.wrap(1234L)), ref.slug == "team-alpha")
+      assertTrue(ref.clubIdOption.contains(ClubId.wrap(1234L)), ref.slug == "team-alpha")
     },
     test("a bare slug has no id") {
       val ref = CurrentClubRef.parse("team-alpha")
-      assertTrue(ref.clubId.isEmpty, ref.slug == "team-alpha")
+      assertTrue(ref.clubIdOption.isEmpty, ref.slug == "team-alpha")
     },
     test("a non-numeric prefix is treated as a whole slug, not an id") {
       // Slugs never contain a colon, so this only guards hand-edited values; keep the whole thing as the slug.
       val ref = CurrentClubRef.parse("abc:team-alpha")
-      assertTrue(ref.clubId.isEmpty, ref.slug == "abc:team-alpha")
+      assertTrue(ref.clubIdOption.isEmpty, ref.slug == "abc:team-alpha")
     },
     test("a negative prefix is rejected as an id (ClubId is >= 0) and kept as a slug") {
       val ref = CurrentClubRef.parse("-5:team-alpha")
-      assertTrue(ref.clubId.isEmpty, ref.slug == "-5:team-alpha")
+      assertTrue(ref.clubIdOption.isEmpty, ref.slug == "-5:team-alpha")
     },
     test("an empty slug part falls back to the whole value as the slug") {
       val ref = CurrentClubRef.parse("1234:")
-      assertTrue(ref.clubId.isEmpty, ref.slug == "1234:")
+      assertTrue(ref.clubIdOption.isEmpty, ref.slug == "1234:")
     },
     test("surrounding whitespace is trimmed") {
       val ref = CurrentClubRef.parse("  99:team-a  ")
-      assertTrue(ref.clubId.contains(ClubId.wrap(99L)), ref.slug == "team-a")
+      assertTrue(ref.clubIdOption.contains(ClubId.wrap(99L)), ref.slug == "team-a")
     },
     test("render round-trips both forms") {
       assertTrue(

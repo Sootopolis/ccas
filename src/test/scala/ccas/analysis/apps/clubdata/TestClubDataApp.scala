@@ -105,9 +105,9 @@ object TestClubDataApp extends ZIOSpecDefault {
             startTime = Some(seedMatchStart),
             endTime = Some(seedMatchEnd),
             boards = 1,
-            team1ClubId = Some(clubId),
+            team1ClubIdOption = Some(clubId),
             team1ScoreX2 = 20,
-            team2ClubId = None,
+            team2ClubIdOption = None,
             team2ScoreX2 = 10,
             fetchedAt = seedMatchFetched,
             processedBodyHash = None

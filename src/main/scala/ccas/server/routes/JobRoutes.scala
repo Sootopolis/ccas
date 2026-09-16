@@ -7,7 +7,7 @@ import scala.util.chaining.*
 
 import zio.{IO, NonEmptyChunk, RIO, URIO, ZIO}
 import zio.http.*
-import zio.json.{DeriveJsonCodec, EncoderOps, JsonCodec}
+import zio.json.{jsonField, DeriveJsonCodec, EncoderOps, JsonCodec}
 import zio.stream.ZStream
 
 import ccas.analysis.apps.ClubResolution
@@ -49,7 +49,7 @@ object JobRoutes {
     // When Some(false) the scout leaves candidates Deferred for the CLI to confirm; absent/Some(true) auto-confirms
     // (scheduler, raw API, and non-interactive `ccas recruit`). The interactive CLI sends false.
     autoConfirm: Option[Boolean],
-    clubId: Option[ClubId] = None
+    @jsonField("clubId") clubIdOption: Option[ClubId] = None
   )
   object RecruitmentRequest {
     given JsonCodec[RecruitmentRequest] = DeriveJsonCodec.gen
@@ -61,7 +61,7 @@ object JobRoutes {
   private[ccas] case class MembershipRequest(
     clubSlugs: NonEmptyChunk[ClubSlug],
     trustUsernames: Option[Boolean],
-    clubId: Option[ClubId] = None
+    @jsonField("clubId") clubIdOption: Option[ClubId] = None
   )
   object MembershipRequest {
     given JsonCodec[MembershipRequest] = DeriveJsonCodec.gen
@@ -73,7 +73,7 @@ object JobRoutes {
     includeFinished: Option[Boolean],
     refresh: Option[Boolean],
     refreshMinHours: Option[Int],
-    clubId: Option[ClubId] = None
+    @jsonField("clubId") clubIdOption: Option[ClubId] = None
   )
   object HistoryRequest {
     given JsonCodec[HistoryRequest] = DeriveJsonCodec.gen
@@ -83,7 +83,7 @@ object JobRoutes {
     clubSlug: ClubSlug,
     since: Option[String],
     until: Option[String],
-    clubId: Option[ClubId] = None
+    @jsonField("clubId") clubIdOption: Option[ClubId] = None
   )
   object StatsRequest {
     given JsonCodec[StatsRequest] = DeriveJsonCodec.gen
@@ -92,7 +92,7 @@ object JobRoutes {
   // --- Response types ---
 
   /** Result of submitting the club-less matchref job. */
-  private[ccas] case class JobResult(jobId: Option[String], error: Option[String])
+  private[ccas] case class JobResult(@jsonField("jobId") jobIdOption: Option[String], error: Option[String])
   object JobResult {
     given JsonCodec[JobResult] = DeriveJsonCodec.gen
   }
@@ -104,7 +104,7 @@ object JobRoutes {
     */
   private[ccas] case class ClubJobResult(
     clubSlug: String,
-    jobId: Option[String],
+    @jsonField("jobId") jobIdOption: Option[String],
     error: Option[String],
     resolution: ClubResolution
   ) {
@@ -141,7 +141,7 @@ object JobRoutes {
     id: String,
     kind: String,
     status: String,
-    clubId: Option[Long],
+    @jsonField("clubId") clubIdOption: Option[Long],
     startedAt: String,
     completedAt: Option[String],
     error: Option[String],
@@ -155,7 +155,7 @@ object JobRoutes {
         id = JobRunId.unwrap(jr.id),
         kind = jr.kind.toString,
         status = jr.status.toString,
-        clubId = jr.clubId.map(ClubId.unwrap),
+        clubIdOption = jr.clubIdOption.map(ClubId.unwrap),
         startedAt = jr.startedAt.toString,
         completedAt = jr.completedAt.map(_.toString),
         error = jr.error,
@@ -204,11 +204,11 @@ object JobRoutes {
     (for {
       body   <- parseJsonBody[RecruitmentRequest](req)
       runner <- ZIO.service[JobRunner]
-      result <- submitClubJob(runner, JobKind.Recruitment, body.clubId, body.clubSlug, Some(body.toJson)) {
-        (club, jobRunId) =>
+      result <- submitClubJob(runner, JobKind.Recruitment, body.clubIdOption, body.clubSlug, Some(body.toJson)) {
+        (club, jobRunIdOption) =>
           RecruitmentApp.recruit(
             clubSlug = club.slug,
-            expectedClubId = Some(club.clubId),
+            expectedClubIdOption = Some(club.clubId),
             alias = body.alias.getOrElse("default"),
             target = body.target.map(_ min JobCaps.MaxTarget),
             cumulative = body.cumulative.getOrElse(false),
@@ -217,7 +217,7 @@ object JobRoutes {
             explore = body.explore.getOrElse(true),
             trigger = RunTrigger.Api,
             autoConfirm = body.autoConfirm.getOrElse(true),
-            jobRunId = jobRunId
+            jobRunIdOption = jobRunIdOption
           )
       }
     } yield jsonResponse(Status.Ok, result)).pipe(withErrorHandling)
@@ -226,14 +226,14 @@ object JobRoutes {
     (for {
       body   <- parseJsonBody[MembershipRequest](req)
       runner <- ZIO.service[JobRunner]
-      results <- submitClubJobs(runner, JobKind.Membership, body.clubSlugs, body.clubId, Some(body.toJson)) {
-        (club, jobRunId) =>
+      results <- submitClubJobs(runner, JobKind.Membership, body.clubSlugs, body.clubIdOption, Some(body.toJson)) {
+        (club, jobRunIdOption) =>
           MembershipApp.reconcileAndReport(
             clubSlug = club.slug,
-            expectedClubId = Some(club.clubId),
+            expectedClubIdOption = Some(club.clubId),
             trustUsernames = body.trustUsernames.getOrElse(true),
             trigger = RunTrigger.Api,
-            jobRunId = jobRunId
+            jobRunIdOption = jobRunIdOption
           )
       }
     } yield jsonResponse(Status.Ok, results)).pipe(withErrorHandling)
@@ -244,13 +244,13 @@ object JobRoutes {
       submitted <- jobIdOrConflict(
         runner.submit(
           kind = JobKind.MatchRef,
-          clubId = None,
+          clubIdOption = None,
           params = None,
           trigger = RunTrigger.Api,
           effect = _ => RefApp.populate(forceSkipped = false, upgradeRefs = false)
         )
       )
-    } yield jsonResponse(Status.Ok, JobResult(jobId = submitted.toOption, error = submitted.left.toOption)))
+    } yield jsonResponse(Status.Ok, JobResult(jobIdOption = submitted.toOption, error = submitted.left.toOption)))
       .pipe(withErrorHandling)
 
   private def submitHistory(req: Request): URIO[JobRunner & PostgresClient, Response] =
@@ -258,16 +258,16 @@ object JobRoutes {
       body   <- parseJsonBody[HistoryRequest](req)
       runner <- ZIO.service[JobRunner]
       refreshMinHours = body.refreshMinHours.orElse(body.refresh.filter(identity).map(_ => 0))
-      results <- submitClubJobs(runner, JobKind.History, body.clubSlugs, body.clubId, Some(body.toJson)) {
-        (club, jobRunId) =>
+      results <- submitClubJobs(runner, JobKind.History, body.clubSlugs, body.clubIdOption, Some(body.toJson)) {
+        (club, jobRunIdOption) =>
           HistoryApp.discover(
             clubSlug = club.slug,
-            expectedClubId = Some(club.clubId),
+            expectedClubIdOption = Some(club.clubId),
             full = body.full.getOrElse(false),
             includeFinished = body.includeFinished.getOrElse(false),
             refreshMinHours = refreshMinHours,
             trigger = RunTrigger.Api,
-            jobRunId = jobRunId
+            jobRunIdOption = jobRunIdOption
           )
       }
     } yield jsonResponse(Status.Ok, results)).pipe(withErrorHandling)
@@ -277,7 +277,7 @@ object JobRoutes {
       body         <- parseJsonBody[StatsRequest](req)
       runner       <- ZIO.service[JobRunner]
       periodOption <- statsPeriod(body)
-      result <- submitClubJob(runner, JobKind.Stats, body.clubId, body.clubSlug, Some(body.toJson)) { (club, _) =>
+      result <- submitClubJob(runner, JobKind.Stats, body.clubIdOption, body.clubSlug, Some(body.toJson)) { (club, _) =>
         periodOption match {
           // minGames=1 mirrors the CLI default; StatsRequest carries no min-games field.
           case Some((since, until)) => StatsApp.playerOfPeriodAndReport(club.clubId, since, until, 1)
@@ -456,7 +456,7 @@ object JobRoutes {
 
   // --- Helpers ---
 
-  /** [[submitClubJob]] for each club of a batch request. Its `clubId` applies only to a single-club submit: for a
+  /** [[submitClubJob]] for each club of a batch request. Its `clubIdOption` applies only to a single-club submit: for a
     * genuine multi-club batch (which the CLI never sends) an id can't be shared across slugs, so it's dropped and each
     * club resolves by slug.
     */
@@ -485,7 +485,7 @@ object JobRoutes {
     ClubResolution.resolve(clubIdOption, requestedSlug).flatMap { resolution =>
       val unsubmitted = ClubJobResult(
         clubSlug = ClubSlug.unwrap(requestedSlug),
-        jobId = None,
+        jobIdOption = None,
         error = None,
         resolution = resolution
       )
@@ -493,7 +493,7 @@ object JobRoutes {
         case Left(_) => ZIO.succeed(unsubmitted)
         case Right(club) =>
           jobIdOrConflict(runner.submit(kind, Some(club.clubId), params, RunTrigger.Api, effect(club, _)))
-            .map(submitted => unsubmitted.copy(jobId = submitted.toOption, error = submitted.left.toOption))
+            .map(submitted => unsubmitted.copy(jobIdOption = submitted.toOption, error = submitted.left.toOption))
       }
     }
 

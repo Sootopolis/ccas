@@ -21,9 +21,9 @@ final case class ClubMatch(
   startTime: Option[Instant],
   endTime: Option[Instant],
   boards: Short,
-  team1ClubId: Option[ClubId],
+  @SqlName("team1_club_id") team1ClubIdOption: Option[ClubId],
   team1ScoreX2: Short,
-  team2ClubId: Option[ClubId],
+  @SqlName("team2_club_id") team2ClubIdOption: Option[ClubId],
   team2ScoreX2: Short,
   fetchedAt: Instant,
   // SHA-256 of the fetch body last confirmed to have produced this row's `club_match_board` state; `None` always
@@ -152,8 +152,8 @@ object ClubMatch {
               team2_club_id, team2_score_x2, fetched_at, processed_body_hash)
             VALUES (${item.matchId}, ${item.name}, ${item.status}, ${item.timeClass},
               ${item.startTime}, ${item.endTime}, ${item.boards},
-              ${item.team1ClubId}, ${item.team1ScoreX2},
-              ${item.team2ClubId}, ${item.team2ScoreX2},
+              ${item.team1ClubIdOption}, ${item.team1ScoreX2},
+              ${item.team2ClubIdOption}, ${item.team2ScoreX2},
               ${item.fetchedAt}, ${item.processedBodyHash})
             ON CONFLICT (match_id) DO UPDATE SET
               name = EXCLUDED.name, status = EXCLUDED.status,

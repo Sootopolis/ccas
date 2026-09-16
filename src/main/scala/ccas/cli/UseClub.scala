@@ -33,10 +33,10 @@ object UseClub {
     case Managed, Unmanaged, Unverified
   }
 
-  def run(slugs: List[String], clear: Boolean, currentClub: Option[String], server: String): UIO[ExitCode] =
+  def run(slugs: List[String], clear: Boolean, currentClubOption: Option[String], server: String): UIO[ExitCode] =
     slugs match {
-      case Nil if clear       => clearCurrent(currentClub)
-      case Nil                => showCurrent(currentClub)
+      case Nil if clear       => clearCurrent(currentClubOption)
+      case Nil                => showCurrent(currentClubOption)
       case _ :: Nil if clear  => usageError("--clear takes no slug; pass one or the other")
       case single :: Nil      => setCurrent(single, server)
       case extra              => tooManySlugs(extra)
@@ -56,8 +56,8 @@ object UseClub {
 
   // Exit 2 when unset so a script can branch on it, matching `ConfigCommand.printGet`'s convention for a missing key.
   // A pure read — no network, no cache refresh — so it stays instant and offline.
-  private def showCurrent(currentClub: Option[String]): UIO[ExitCode] =
-    currentClub match {
+  private def showCurrent(currentClubOption: Option[String]): UIO[ExitCode] =
+    currentClubOption match {
       // Show the human-readable slug, not the stored `<id>:<slug>` form.
       case Some(s) => Console.printLine(CurrentClubRef.parse(s).slug).orDie.as(ExitCode.success)
       case None =>
@@ -65,8 +65,8 @@ object UseClub {
     }
 
   // Clearing an already-absent value is a success, not an error — `--clear` states a desired end state.
-  private def clearCurrent(currentClub: Option[String]): UIO[ExitCode] =
-    currentClub match {
+  private def clearCurrent(currentClubOption: Option[String]): UIO[ExitCode] =
+    currentClubOption match {
       case None => Console.printLine("no current club set").orDie.as(ExitCode.success)
       case Some(s) =>
         ConfigWriter

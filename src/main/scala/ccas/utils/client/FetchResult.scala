@@ -28,7 +28,8 @@ sealed trait FetchResult[+T] {
     *
     * Dispatched via `final` overrides rather than a pattern match, which avoids an erased
     * `case c: Changed[T @unchecked]` cast and lets the compiler verify each branch end-to-end. `ifChanged` receives
-    * the whole [[FetchResult.Changed]], symmetric with `ifUnchanged`, so a caller needing its `bodyId` never has to
+    * the whole [[FetchResult.Changed]], symmetric with `ifUnchanged`, so a caller needing its `bodyIdOption` never has
+    * to
     * pattern-match `FetchResult` itself to get it.
     */
   def foldZIO[R, E >: Throwable, A](
@@ -117,11 +118,12 @@ object FetchResult {
   }
 
   /** First fetch, or cache was stale and the server returned a new body. Already decoded at construction time so
-    * any decode error surfaces from the fetch path rather than from `getValue`. `bodyId` is `None` when the write
+    * any decode error surfaces from the fetch path rather than from `getValue`. `bodyIdOption` is `None` when the write
     * that would have produced one didn't happen — cache writes disabled, `no-store`, or a body-store outage — mirrors
-    * why `newBodyIdOpt` can be absent in `ChessComClient.handleSuccessBody`.
+    * why `newBodyIdOption` can be absent in `ChessComClient.handleSuccessBody`.
     */
-  final case class Changed[+T] private[client] (value: T, bodyId: Option[ApiResponseBodyId]) extends FetchResult[T] {
+  final case class Changed[+T] private[client] (value: T, bodyIdOption: Option[ApiResponseBodyId])
+      extends FetchResult[T] {
     override val getValue: Task[T] = ZIO.succeed(value)
 
     override def foldZIO[R, E >: Throwable, A](
@@ -130,6 +132,6 @@ object FetchResult {
       ifChanged: Changed[T] => ZIO[R, E, A]
     ): ZIO[R, E, A] = ifChanged(this)
 
-    override def map[B](f: T => B): FetchResult[B] = Changed(f(value), bodyId)
+    override def map[B](f: T => B): FetchResult[B] = Changed(f(value), bodyIdOption)
   }
 }

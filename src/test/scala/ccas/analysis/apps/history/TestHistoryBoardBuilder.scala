@@ -104,7 +104,7 @@ object TestHistoryBoardBuilder extends ZIOSpecDefault {
         r.team2Rating.isEmpty,
         r.startTime.isEmpty,
         r.endTime.isEmpty,
-        r.gameId.isEmpty
+        r.gameIdOption.isEmpty
       )
     },
     test("when team1IsWhite=true ratings come from white→team1, black→team2") {
@@ -123,7 +123,7 @@ object TestHistoryBoardBuilder extends ZIOSpecDefault {
       assertTrue(
         row.team1Rating.contains(elo(1500)),
         row.team2Rating.contains(elo(1300)),
-        row.gameId.contains(100L),
+        row.gameIdOption.contains(100L),
         row.startTime.contains(1000L),
         row.endTime.contains(2000L)
       )
@@ -156,9 +156,9 @@ object TestHistoryBoardBuilder extends ZIOSpecDefault {
     ClubMatchBoard(
       matchId = matchId,
       board = boardNum,
-      team1PlayerId = Some(PlayerId(1)),
+      team1PlayerIdOption = Some(PlayerId(1)),
       team1FairPlay = false,
-      team2PlayerId = Some(PlayerId(2)),
+      team2PlayerIdOption = Some(PlayerId(2)),
       team2FairPlay = false,
       team1ScoreX2 = t1,
       team2ScoreX2 = t2

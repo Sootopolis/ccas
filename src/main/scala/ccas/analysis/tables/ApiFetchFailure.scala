@@ -67,8 +67,11 @@ object ApiFetchFailure {
           // `toOption`: this is an audit-trail display, so "the object is gone" and "the store is down" both mean
           // the same thing to the reader — a row whose body we cannot show. Cache repair is the only caller that
           // needs the distinction (see BodyRead).
-          .foreach(row.bodyHash)(hash => BodyStore.read(hash).map(_.map(new String(_, StandardCharsets.UTF_8)).toOption))
-          .map(bodyOpt => ApiFetchFailure(row.occurredAt, row.url, row.errorType, row.errorMessage, bodyOpt.flatten))
+          .foreach(row.bodyHash) { hash =>
+            BodyStore.read(hash).map(_.map(new String(_, StandardCharsets.UTF_8)).toOption)
+          }
+          .map(_.flatten)
+          .map(ApiFetchFailure(row.occurredAt, row.url, row.errorType, row.errorMessage, _))
       }
     }
 
@@ -78,16 +81,14 @@ object ApiFetchFailure {
   def insert(item: ApiFetchFailure): ZIO[PostgresClient & BodyStore, SQLException, Int] =
     for {
       // Store the body BEFORE opening the transaction so the object-store round-trip never holds a pooled connection.
-      hashOpt <- ZIO
-        .foreach(item.responseBody)(body => ApiResponseBody.putBody(source = item.url, body = body))
-        .map(_.flatten)
+      hashOption <- ZIO.foreach(item.responseBody)(ApiResponseBody.putBody(item.url, _)).map(_.flatten)
       result <- withTransaction {
         for {
-          bodyIdOpt <- ZIO.foreach(hashOpt)(ApiResponseBody.ensureBodyPointer)
+          bodyIdOption <- ZIO.foreach(hashOption)(ApiResponseBody.ensureBodyPointer)
           inserted <- connectZIO {
             sql"""INSERT INTO api_fetch_failure (occurred_at, url, error_type, error_message, response_body_id)
-                  VALUES (${item.occurredAt}, ${item.url}, ${item.errorType}, ${item.errorMessage}, $bodyIdOpt)""".update
-              .run()
+                  VALUES (${item.occurredAt}, ${item.url}, ${item.errorType}, ${item.errorMessage}, $bodyIdOption)"""
+              .update.run()
           }
         } yield inserted
       }

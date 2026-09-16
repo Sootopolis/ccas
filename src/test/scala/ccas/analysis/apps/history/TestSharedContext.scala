@@ -44,9 +44,9 @@ object TestSharedContext extends ZIOSpecDefault {
       startTime = Some(Times.t0),
       endTime = Some(Times.t1),
       boards = 10,
-      team1ClubId = Some(clubAId),
+      team1ClubIdOption = Some(clubAId),
       team1ScoreX2 = 10,
-      team2ClubId = Some(clubBId),
+      team2ClubIdOption = Some(clubBId),
       team2ScoreX2 = 10,
       fetchedAt = Times.t1,
       processedBodyHash = None
@@ -180,7 +180,7 @@ object TestSharedContext extends ZIOSpecDefault {
       // dave (member of club A) has a club-B listing: 8101 already stored as Finished for club B, 8102 brand new.
       // Club A's run fans the listing out to club B; active-only (includeFinished=false) must exclude B's known 8101
       // via fanoutExcludeIds while still seeding the genuinely-new 8102 for B.
-      val knownForB = clubMatchRow(8101).copy(team1ClubId = Some(clubBId), team2ClubId = None)
+      val knownForB = clubMatchRow(8101).copy(team1ClubIdOption = Some(clubBId), team2ClubIdOption = None)
       // Pass the member directly so this test doesn't read accumulated club_member rows from earlier tests.
       val members = List(ClubMember(clubAId, player3Id, Times.t0, None, sinceApproximate = false))
       for {

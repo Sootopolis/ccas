@@ -88,7 +88,7 @@ object RecruitmentApp extends ZIOAppDefault {
           for {
             run <- recruit(
               clubSlug = clubSlug,
-              expectedClubId = None,
+              expectedClubIdOption = None,
               alias = parsed.alias,
               target = parsed.target,
               cumulative = parsed.cumulative,
@@ -130,12 +130,12 @@ object RecruitmentApp extends ZIOAppDefault {
 
   // --- Phase 1: Initialize ---
 
-  /** `expectedClubId` guards against `clubSlug` now answering as another club: see
+  /** `expectedClubIdOption` guards against `clubSlug` now answering as another club: see
     * [[ClubSlugRenameResolver.fetchExpecting]].
     */
   def recruit(
     clubSlug: ClubSlug,
-    expectedClubId: Option[ClubId],
+    expectedClubIdOption: Option[ClubId],
     alias: String,
     target: Option[Int] = None,
     cumulative: Boolean = false,
@@ -148,14 +148,14 @@ object RecruitmentApp extends ZIOAppDefault {
     // them Invited — the CLI confirms them afterwards via the confirm endpoint. Defaults true so the standalone app,
     // the scheduler, and non-interactive API calls keep auto-confirming.
     autoConfirm: Boolean = true,
-    jobRunId: Option[JobRunId] = None
+    jobRunIdOption: Option[JobRunId] = None
   ): RIO[ProgressDisplay & ChessComClient & PostgresClient, RecruitmentRun] = ZIO.scoped {
     for {
-      _      <- MembershipApp.reconcile(clubSlug, expectedClubId, trackRun = false)
+      _      <- MembershipApp.reconcile(clubSlug, expectedClubIdOption, trackRun = false)
       client <- ZIO.service[ChessComClient]
       // Without an expected id, the resolver derives the hint from the `club` table (deriveHint) — matching how
       // MembershipApp's earlier reconcile resolves the slug.
-      apiClub <- ClubSlugRenameResolver.fetchExpecting(client, clubSlug, expectedClubId).map(_.api)
+      apiClub <- ClubSlugRenameResolver.fetchExpecting(client, clubSlug, expectedClubIdOption).map(_.api)
       clubId        = apiClub.clubId
       effectiveSlug = apiClub.canonicalSlug
       club          = Club.fromApi(apiClub)
@@ -172,7 +172,7 @@ object RecruitmentApp extends ZIOAppDefault {
         else ZIO.succeed(0)
       effectiveTarget = (resolvedTarget - alreadyFound) max 0
       now <- Clock.instant
-      runId <- RecruitmentRun.insert(clubId, criteria.criteriaId, trigger, now, Some(effectiveTarget), jobRunId)
+      runId <- RecruitmentRun.insert(clubId, criteria.criteriaId, trigger, now, Some(effectiveTarget), jobRunIdOption)
 
       // --- Shared setup ---
       targetMembers <- ApiClubMembers.get(client, effectiveSlug)
@@ -256,7 +256,7 @@ object RecruitmentApp extends ZIOAppDefault {
               alreadyFound = alreadyFound,
               label = "Recruitment Complete (target already met)",
               autoConfirm = autoConfirm,
-              jobRunId = jobRunId
+              jobRunIdOption = jobRunIdOption
             )
         } else {
           runExplorePhase(
@@ -270,7 +270,7 @@ object RecruitmentApp extends ZIOAppDefault {
             cumulative = cumulative,
             alreadyFound = alreadyFound,
             autoConfirm = autoConfirm,
-            jobRunId = jobRunId
+            jobRunIdOption = jobRunIdOption
           )
         }
     } yield finalRun
@@ -287,7 +287,7 @@ object RecruitmentApp extends ZIOAppDefault {
     cumulative: Boolean,
     alreadyFound: Int,
     autoConfirm: Boolean,
-    jobRunId: Option[JobRunId]
+    jobRunIdOption: Option[JobRunId]
   ): RIO[ChessComClient & PostgresClient, RecruitmentRun] =
     for {
       _ <- ZIO.whenDiscard(ctx.showHints)(
@@ -339,7 +339,7 @@ object RecruitmentApp extends ZIOAppDefault {
           label = "Recruitment Interrupted",
           interrupted = true,
           autoConfirm = autoConfirm,
-          jobRunId = jobRunId
+          jobRunIdOption = jobRunIdOption
         )
           .provideEnvironment(ZEnvironment(pgClient))
           .orDie
@@ -354,7 +354,7 @@ object RecruitmentApp extends ZIOAppDefault {
         alreadyFound = alreadyFound,
         label = "Recruitment Complete",
         autoConfirm = autoConfirm,
-        jobRunId = jobRunId
+        jobRunIdOption = jobRunIdOption
       )
     } yield finalRun
 
@@ -367,7 +367,7 @@ object RecruitmentApp extends ZIOAppDefault {
     label: String,
     interrupted: Boolean = false,
     autoConfirm: Boolean,
-    jobRunId: Option[JobRunId]
+    jobRunIdOption: Option[JobRunId]
   ): RIO[PostgresClient, RecruitmentRun] =
     for {
       _     <- ctx.progressBar.finish
@@ -412,7 +412,7 @@ object RecruitmentApp extends ZIOAppDefault {
             completedAt = Some(completedAt),
             candidatesFound = confirmed.size,
             target = Some(ctx.target),
-            jobRunId = jobRunId
+            jobRunIdOption = jobRunIdOption
           )
           _ <- RecruitmentRun.update(finalRun)
         } yield (finalRun, deferredCount)
@@ -474,13 +474,13 @@ object RecruitmentApp extends ZIOAppDefault {
 
   def showReport(
     clubSlug: ClubSlug,
-    runIdOpt: Option[String]
+    runIdOption: Option[String]
   ): RIO[PostgresClient, RecruitmentReportResult] =
     for {
       club <- Club.selectBySlug(clubSlug)
         .someOrFail(NotFoundException(s"Club '$clubSlug' not found in database"))
       clubId = club.clubId
-      run <- runIdOpt match {
+      run <- runIdOption match {
         case Some(id) =>
           ZIO.attempt(id.toLong)
             .mapBoth(_ => BadRequestException(s"Invalid run ID: '$id' (expected a number)"), RecruitmentRunId.wrap)
@@ -509,8 +509,8 @@ object RecruitmentApp extends ZIOAppDefault {
     ZIO.whenZIODiscard(ClubMatchRef.findOrInfer(clubId).map(_.isEmpty)) {
       ZIO.foreachDiscard(clubMatches.finished.headOption) { m =>
         val parsed = RefHelpers.parseMatchUrl(m.`@id`)
-        RefHelpers.fetchTeamMatchTeamsOptional(client, parsed.matchId, parsed.isLive).flatMap { teamsOpt =>
-          ZIO.foreachDiscard(teamsOpt.flatMap(RefHelpers.findClubIsTeam1(_, clubSlug))) { isTeam1 =>
+        RefHelpers.fetchTeamMatchTeamsOptional(client, parsed.matchId, parsed.isLive).flatMap { teamsOption =>
+          ZIO.foreachDiscard(teamsOption.flatMap(RefHelpers.findClubIsTeam1(_, clubSlug))) { isTeam1 =>
             ClubMatchRef.upsert(ClubMatchRef(clubId, parsed.matchId, parsed.isLive, isTeam1)).unit
           }
         }

@@ -46,9 +46,9 @@ object TestHistoryApp extends ZIOSpecDefault {
   private def testBuildClubMatchRowFinished = test("buildClubMatchRow correctly maps a finished match") {
     matchFixture.map { m =>
       val matchId     = ClubMatchId.fromUrl(m.`@id`)
-      val team1ClubId = Some(ClubId(100))
-      val team2ClubId = Some(ClubId(200))
-      val row         = HistoryBoardBuilder.buildClubMatchRow(matchId, m, team1ClubId, team2ClubId)
+      val team1ClubIdOption = Some(ClubId(100))
+      val team2ClubIdOption = Some(ClubId(200))
+      val row         = HistoryBoardBuilder.buildClubMatchRow(matchId, m, team1ClubIdOption, team2ClubIdOption)
 
       assertTrue(
         row.matchId == ClubMatchId(1650919),
@@ -58,9 +58,9 @@ object TestHistoryApp extends ZIOSpecDefault {
         row.startTime.contains(Instant.ofEpochSecond(1720908242L)),
         row.endTime.contains(Instant.ofEpochSecond(1735309563L)),
         row.boards == 13,
-        row.team1ClubId == team1ClubId,
+        row.team1ClubIdOption == team1ClubIdOption,
         row.team1ScoreX2 == 20,
-        row.team2ClubId == team2ClubId,
+        row.team2ClubIdOption == team2ClubIdOption,
         row.team2ScoreX2 == 32
       )
     }
@@ -73,8 +73,8 @@ object TestHistoryApp extends ZIOSpecDefault {
         val row     = HistoryBoardBuilder.buildClubMatchRow(matchId, m, None, Some(ClubId(200)))
 
         assertTrue(
-          row.team1ClubId.isEmpty,
-          row.team2ClubId.contains(ClubId(200))
+          row.team1ClubIdOption.isEmpty,
+          row.team2ClubIdOption.contains(ClubId(200))
         )
       }
     }

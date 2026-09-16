@@ -34,7 +34,7 @@ object TestHistoryAppRename extends ZIOSpecDefault {
           }
         )
         client <- TestChessComClientSupport.fakeClient(routes)
-        result <- HistoryApp.discover(ClubSlug("former-name"), expectedClubId = None)
+        result <- HistoryApp.discover(ClubSlug("former-name"), expectedClubIdOption = None)
           .provideSomeLayer[ProgressDisplay & PostgresClient](ZLayer.succeed(client))
         paths <- requested.get
       } yield assertTrue(

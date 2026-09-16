@@ -34,7 +34,7 @@ object TestConfigWriter extends ZIOSpecDefault {
         file = dir.resolve("nested/config.conf")
         _   <- ConfigWriter.setCurrentClub(file, None, "team-alpha").orDie
         cfg <- load(file)
-      } yield assertTrue(cfg.currentClub.contains("team-alpha"))
+      } yield assertTrue(cfg.currentClubOption.contains("team-alpha"))
     },
     test("writes the <id>:<slug> form when a club id is known, and it round-trips through CurrentClubRef") {
       for {
@@ -43,10 +43,10 @@ object TestConfigWriter extends ZIOSpecDefault {
         _    <- ConfigWriter.setCurrentClub(file, Some(ClubId.wrap(1234L)), "team-alpha").orDie
         text <- read(file)
         cfg  <- load(file)
-        ref = CurrentClubRef.parse(cfg.currentClub.getOrElse(""))
+        ref = CurrentClubRef.parse(cfg.currentClubOption.getOrElse(""))
       } yield assertTrue(
         text.contains("current_club = \"1234:team-alpha\""),
-        ref.clubId.contains(ClubId.wrap(1234L)),
+        ref.clubIdOption.contains(ClubId.wrap(1234L)),
         ref.slug == "team-alpha"
       )
     },
@@ -68,7 +68,7 @@ object TestConfigWriter extends ZIOSpecDefault {
         text.contains("api_url = \"http://host:9000\""),
         cfg.apiUrl.contains("http://host:9000"),
         cfg.defaultClubs == List("a", "b"),
-        cfg.currentClub.contains("team-beta")
+        cfg.currentClubOption.contains("team-beta")
       )
     },
     test("overwrites an existing current_club rather than duplicating it") {
@@ -80,7 +80,7 @@ object TestConfigWriter extends ZIOSpecDefault {
         text <- read(file)
         cfg  <- load(file)
       } yield assertTrue(
-        cfg.currentClub.contains("second"),
+        cfg.currentClubOption.contains("second"),
         text.linesIterator.count(_.trim.startsWith("current_club")) == 1
       )
     },
@@ -98,7 +98,7 @@ object TestConfigWriter extends ZIOSpecDefault {
         text <- read(file)
         cfg  <- load(file)
       } yield assertTrue(
-        cfg.currentClub.isEmpty,
+        cfg.currentClubOption.isEmpty,
         cfg.apiUrl.contains("http://host:9000"),
         text.contains("# my ccas config"),
         !text.contains("current_club")
@@ -112,7 +112,7 @@ object TestConfigWriter extends ZIOSpecDefault {
         _    <- ConfigWriter.clearCurrentClub(file).orDie
         text <- read(file)
         cfg  <- load(file)
-      } yield assertTrue(text.isEmpty, cfg.currentClub.isEmpty)
+      } yield assertTrue(text.isEmpty, cfg.currentClubOption.isEmpty)
     },
     test("clearCurrentClub does not create a config that was never written") {
       for {
@@ -132,7 +132,7 @@ object TestConfigWriter extends ZIOSpecDefault {
         cfg  <- load(file)
         text <- read(file)
       } yield assertTrue(
-        cfg.currentClub.contains("second"),
+        cfg.currentClubOption.contains("second"),
         text.linesIterator.count(_.trim.startsWith("current_club")) == 1
       )
     }

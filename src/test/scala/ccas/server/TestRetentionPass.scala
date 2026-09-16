@@ -92,7 +92,7 @@ object TestRetentionPass extends ZIOSpecDefault {
 
     override def submit(
       kind: JobKind,
-      clubId: Option[ClubId],
+      clubIdOption: Option[ClubId],
       params: Option[String],
       trigger: RunTrigger,
       effect: Option[JobRunId] => RIO[ProgressDisplay & ChessComClient & PostgresClient, Any]
