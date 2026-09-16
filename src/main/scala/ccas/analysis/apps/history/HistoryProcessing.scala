@@ -175,19 +175,19 @@ private[history] object HistoryProcessing {
       dailyMatch <- fetchMatch(ctx, matchId)
 
       // Resolve both team club IDs symmetrically
-      (team1ClubId, team2ClubId) <-
+      (team1ClubIdOption, team2ClubIdOption) <-
         resolveClubIdFromTeamUrl(ctx, dailyMatch.teams.team1.`@id`) <&>
           resolveClubIdFromTeamUrl(ctx, dailyMatch.teams.team2.`@id`)
 
-      _ <- trackUnresolvedClub(matchId, isTeam1 = true, dailyMatch.teams.team1.`@id`, team1ClubId) <&>
-        trackUnresolvedClub(matchId, isTeam1 = false, dailyMatch.teams.team2.`@id`, team2ClubId)
+      _ <- trackUnresolvedClub(matchId, isTeam1 = true, dailyMatch.teams.team1.`@id`, team1ClubIdOption) <&>
+        trackUnresolvedClub(matchId, isTeam1 = false, dailyMatch.teams.team2.`@id`, team2ClubIdOption)
 
-      clubMatch = HistoryBoardBuilder.buildClubMatchRow(matchId, dailyMatch, team1ClubId, team2ClubId)
+      clubMatch = HistoryBoardBuilder.buildClubMatchRow(matchId, dailyMatch, team1ClubIdOption, team2ClubIdOption)
 
       // Determine our team position from resolved IDs
       weAreTeam1: Option[Boolean] =
-        if (team1ClubId.contains(ctx.clubId)) { Some(true) }
-        else if (team2ClubId.contains(ctx.clubId)) { Some(false) }
+        if (team1ClubIdOption.contains(ctx.clubId)) { Some(true) }
+        else if (team2ClubIdOption.contains(ctx.clubId)) { Some(false) }
         else { None }
 
       // Check if board scores are unchanged — if so, skip board API calls and row rebuild
@@ -357,7 +357,7 @@ private[history] object HistoryProcessing {
               unchanged.getValue.flatMap(refreshSingleMatchWithBody(ctx, matchId, _, hash))
           },
         changed =>
-          changed.bodyId
+          changed.bodyIdOption
             .fold[RIO[PostgresClient, Option[String]]](ZIO.none)(ApiResponseBody.hashById)
             .flatMap(hash => refreshSingleMatchWithBody(ctx, matchId, changed.value, hash))
       )
@@ -370,20 +370,20 @@ private[history] object HistoryProcessing {
     newBodyHash: Option[String]
   ): RIO[ProgressDisplay & PostgresClient, Unit] =
     for {
-      (team1ClubId, team2ClubId) <-
+      (team1ClubIdOption, team2ClubIdOption) <-
         resolveClubIdFromTeamUrl(ctx, dailyMatch.teams.team1.`@id`) <&>
           resolveClubIdFromTeamUrl(ctx, dailyMatch.teams.team2.`@id`)
 
-      _ <- trackUnresolvedClub(matchId, isTeam1 = true, dailyMatch.teams.team1.`@id`, team1ClubId) <&>
-        trackUnresolvedClub(matchId, isTeam1 = false, dailyMatch.teams.team2.`@id`, team2ClubId)
+      _ <- trackUnresolvedClub(matchId, isTeam1 = true, dailyMatch.teams.team1.`@id`, team1ClubIdOption) <&>
+        trackUnresolvedClub(matchId, isTeam1 = false, dailyMatch.teams.team2.`@id`, team2ClubIdOption)
 
       clubMatch =
-        HistoryBoardBuilder.buildClubMatchRow(matchId, dailyMatch, team1ClubId, team2ClubId)
+        HistoryBoardBuilder.buildClubMatchRow(matchId, dailyMatch, team1ClubIdOption, team2ClubIdOption)
           .copy(processedBodyHash = newBodyHash)
 
       weAreTeam1: Option[Boolean] =
-        if (team1ClubId.contains(ctx.clubId)) { Some(true) }
-        else if (team2ClubId.contains(ctx.clubId)) { Some(false) }
+        if (team1ClubIdOption.contains(ctx.clubId)) { Some(true) }
+        else if (team2ClubIdOption.contains(ctx.clubId)) { Some(false) }
         else { None }
 
       expectedScores = HistoryBoardBuilder.computeExpectedScores(dailyMatch)
@@ -450,12 +450,12 @@ private[history] object HistoryProcessing {
             t1FairPlay = team1Fp.contains(t1Username.value)
             t2FairPlay = team2Fp.contains(t2Username.value)
 
-            t1Pid <- resolvePlayerId(ctx, t1Username, isOurTeam = weAreTeam1.contains(true), matchStartTime)
-            t2Pid <- resolvePlayerId(ctx, t2Username, isOurTeam = weAreTeam1.contains(false), matchStartTime)
-            _ <- ZIO.whenDiscard(t1Pid.isEmpty)(
+            t1PidOption <- resolvePlayerId(ctx, t1Username, isOurTeam = weAreTeam1.contains(true), matchStartTime)
+            t2PidOption <- resolvePlayerId(ctx, t2Username, isOurTeam = weAreTeam1.contains(false), matchStartTime)
+            _ <- ZIO.whenDiscard(t1PidOption.isEmpty)(
               UnresolvedBoardPlayer.insert(matchId, boardNum, isTeam1 = true, t1Username).ignore
             )
-            _ <- ZIO.whenDiscard(t2Pid.isEmpty)(
+            _ <- ZIO.whenDiscard(t2PidOption.isEmpty)(
               UnresolvedBoardPlayer.insert(matchId, boardNum, isTeam1 = false, t2Username).ignore
             )
 
@@ -480,9 +480,9 @@ private[history] object HistoryProcessing {
             val board = ClubMatchBoard(
               matchId = matchId,
               board = boardNum,
-              team1PlayerId = t1Pid,
+              team1PlayerIdOption = t1PidOption,
               team1FairPlay = t1FairPlay,
-              team2PlayerId = t2Pid,
+              team2PlayerIdOption = t2PidOption,
               team2FairPlay = t2FairPlay,
               team1ScoreX2 = score.team1,
               team2ScoreX2 = score.team2
@@ -603,8 +603,8 @@ private[history] object HistoryProcessing {
       case false =>
         val fromApi = for {
           playerClubs <- ctx.client.getUncached[ApiPlayerClubs](ApiPlayerClubs.getUrl(apiPlayer.username))
-          clubOpt = playerClubs.clubs.find(_.clubName == ctx.clubSlug)
-          member = clubOpt match {
+          clubOption = playerClubs.clubs.find(_.clubName == ctx.clubSlug)
+          member = clubOption match {
             case Some(apiClub) =>
               val since = Instant.ofEpochSecond(apiClub.joined)
               val until = if (statusCategory == PlayerStatusCategory.Active) { None }
@@ -674,9 +674,9 @@ private[history] object HistoryProcessing {
     matchId: ClubMatchId,
     isTeam1: Boolean,
     teamUrl: URL,
-    resolvedId: Option[ClubId]
+    resolvedIdOption: Option[ClubId]
   ): RIO[PostgresClient, Unit] =
-    ZIO.whenDiscard(resolvedId.isEmpty) {
+    ZIO.whenDiscard(resolvedIdOption.isEmpty) {
       ZIO.foreachDiscard(teamUrl.path.segments.lastOption) { segment =>
         UnresolvedMatchClub.insert(matchId, isTeam1, ClubSlug.wrap(segment)).ignore
       }

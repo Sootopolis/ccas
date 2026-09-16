@@ -195,7 +195,7 @@ private[membership] object MembershipClassify {
               changeChunks += JoinedClub(since)
 
               val needsUpdate = !existing.stateMatches(username, statusCategory, apiPlayer.title)
-              val (updatedOpt, archiveOpt) = if (needsUpdate) {
+              val (updatedOption, archiveOption) = if (needsUpdate) {
                 if (existing.username != username) { changeChunks += UsernameChange(now, existing.username) }
                 if (existing.status != statusCategory) { changeChunks += StatusChange(now, existing.status) }
                 val archive = existing.toSnapshot
@@ -209,8 +209,8 @@ private[membership] object MembershipClassify {
                 resolvedId = playerId,
                 changes = Chunk(summary),
                 newPlayers = Chunk.empty,
-                updatedPlayers = updatedOpt,
-                archivedSnapshots = archiveOpt,
+                updatedPlayers = updatedOption,
+                archivedSnapshots = archiveOption,
                 newMemberships = Chunk(newMember),
                 closedMemberships = Chunk.empty
               )
@@ -437,17 +437,17 @@ private[membership] object MembershipClassify {
       since = now
     )
 
-    // Site 1 short-circuit guarantees `state.player.status == Active`, so the old `statusChangeOpt` and
+    // Site 1 short-circuit guarantees `state.player.status == Active`, so the old `statusChangeOption` and
     // `isFreshClosure` guards (designed for an arbitrary stored status) collapse: any non-Active `statusCategory`
     // is a fresh closure here; a StatusChange would always be redundant with the AccountClosed below.
     val baseChanges = Chunk(UsernameChange(now, oldUsername))
 
     if (statusCategory == PlayerStatusCategory.Active) {
       val stillMember = apiMap.contains(resolvedUsername)
-      val leftOpt     = Option.unless(stillMember)(LeftClub(now))
+      val leftOption     = Option.unless(stillMember)(LeftClub(now))
       ZIO.succeed(
         PhaseCMemberResult(
-          changes = Chunk(MemberChangeSummary(playerId, resolvedUsername, baseChanges ++ leftOpt)),
+          changes = Chunk(MemberChangeSummary(playerId, resolvedUsername, baseChanges ++ leftOption)),
           updatedPlayers = Chunk(updated),
           archivedSnapshots = Chunk(archive),
           closedMemberships = Chunk.fromIterable(Option.unless(stillMember)(closedMember))

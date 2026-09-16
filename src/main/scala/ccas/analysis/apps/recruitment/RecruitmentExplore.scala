@@ -127,15 +127,15 @@ private[recruitment] object RecruitmentExplore {
   private def checkRecentlyRejected(ctx: ExploreContext, username: Username): RIO[PostgresClient, Boolean] =
     ctx.runCtx.criteria.daysSinceRejected.fold(ZIO.succeed(false)) { days =>
       for {
-        playerOpt <- Player.selectByUsername(username)
-        rejectOpt <- ZIO.foreach(playerOpt)(p =>
+        playerOption <- Player.selectByUsername(username)
+        rejectOption <- ZIO.foreach(playerOption)(p =>
           RecruitmentCandidate.selectLatestRejectedByAlias(
             p.playerId,
             ctx.runCtx.clubId,
             ctx.runCtx.alias
           )
         ).map(_.flatten)
-      } yield rejectOpt.exists(c => ChronoUnit.DAYS.between(c.evaluatedAt, ctx.runCtx.now) < days)
+      } yield rejectOption.exists(c => ChronoUnit.DAYS.between(c.evaluatedAt, ctx.runCtx.now) < days)
     }
 
   private def evaluateBatchFromSource(
@@ -418,8 +418,8 @@ private[recruitment] object RecruitmentExplore {
       )
       boards <- ZIO.foreach(matches)(m => ClubMatchBoard.selectMatch(m.matchId))
       opponentIds = matches.zip(boards).flatMap { (m, bs) =>
-        val isTeam1 = m.team1ClubId.contains(clubId)
-        bs.flatMap(b => if (isTeam1) b.team2PlayerId else b.team1PlayerId)
+        val isTeam1 = m.team1ClubIdOption.contains(clubId)
+        bs.flatMap(b => if (isTeam1) b.team2PlayerIdOption else b.team1PlayerIdOption)
       }.toSet
       players <- Player.selectByIds(opponentIds)
       usernames = players.filterNot(_.isTombstoned).map(_.username)

@@ -51,17 +51,17 @@ private[recruitment] case class RunContext(
   */
 private[recruitment] case class CandidateContext(
   username: Username,
-  apiPlayer: Option[ApiPlayer],
+  apiPlayerOption: Option[ApiPlayer],
   isNewPlayer: Boolean,
-  cache: Option[PlayerRecruitmentCache],
-  recentArchives: Option[List[ApiPlayerArchive]] = None,
+  cacheOption: Option[PlayerRecruitmentCache],
+  recentArchivesOption: Option[List[ApiPlayerArchive]] = None,
   cacheRejected: Boolean = false,
-  playerMatches: Option[ApiPlayerMatches] = None,
-  playerClubs: Option[ApiPlayerClubs] = None
+  playerMatchesOption: Option[ApiPlayerMatches] = None,
+  playerClubsOption: Option[ApiPlayerClubs] = None
 )
 private[recruitment] object CandidateContext {
   def initial(username: Username): CandidateContext =
-    CandidateContext(username, apiPlayer = None, isNewPlayer = false, cache = None)
+    CandidateContext(username, apiPlayerOption = None, isNewPlayer = false, cacheOption = None)
 }
 
 /** Groups contexts passed to each filter. */

@@ -25,7 +25,7 @@ private[recruitment] object RecruitmentPersistence {
     errorMessage: Option[String] = None
   ): RIO[PostgresClient, Unit] =
     // No player data (transient API error) — skip persistence, retry next run
-    ZIO.foreachDiscard(candidate.apiPlayer) { ap =>
+    ZIO.foreachDiscard(candidate.apiPlayerOption) { ap =>
       withTransaction {
         for {
           _ <-
@@ -51,7 +51,7 @@ private[recruitment] object RecruitmentPersistence {
                 }
               }
             }
-          _ <- ZIO.foreachDiscard(candidate.cache)(PlayerRecruitmentCache.upsert)
+          _ <- ZIO.foreachDiscard(candidate.cacheOption)(PlayerRecruitmentCache.upsert)
           // Skip candidate row for cache-only rejections so they aren't blocked by daysSinceRejected
           // Passing candidates are written as Deferred; only flipped to Invited after confirmation at finalization
           dbOutcome = if (outcome == CandidateOutcome.Invited) CandidateOutcome.Deferred else outcome
@@ -66,10 +66,10 @@ private[recruitment] object RecruitmentPersistence {
     client: ChessComClient,
     candidate: CandidateContext
   ): RIO[PostgresClient, Unit] =
-    ZIO.foreachDiscard(candidate.apiPlayer) { ap =>
+    ZIO.foreachDiscard(candidate.apiPlayerOption) { ap =>
       val playerId = ap.playerId
       ZIO.whenZIODiscard(PlayerMatchRef.findOrInfer(playerId).map(_.isEmpty)) {
-        ZIO.foreachDiscard(candidate.playerMatches) { playerMatches =>
+        ZIO.foreachDiscard(candidate.playerMatchesOption) { playerMatches =>
           resolvePlayerRefViaApi(client, playerId, candidate.username, playerMatches)
         }
       }
@@ -86,8 +86,8 @@ private[recruitment] object RecruitmentPersistence {
       val parsed   = RefHelpers.parseMatchUrl(m.`@id`)
       val boardIdx = m.board.get.path.segments.lastOption.flatMap(_.toIntOption).map(_.toShort)
       ZIO.foreachDiscard(boardIdx) { idx =>
-        RefHelpers.fetchTeamMatchTeamsOptional(client, parsed.matchId, parsed.isLive).flatMap { teamsOpt =>
-          ZIO.foreachDiscard(teamsOpt.flatMap(RefHelpers.findPlayerIsTeam1(_, username))) { isTeam1 =>
+        RefHelpers.fetchTeamMatchTeamsOptional(client, parsed.matchId, parsed.isLive).flatMap { teamsOption =>
+          ZIO.foreachDiscard(teamsOption.flatMap(RefHelpers.findPlayerIsTeam1(_, username))) { isTeam1 =>
             PlayerMatchRef.upsert(PlayerMatchRef(playerId, parsed.matchId, parsed.isLive, isTeam1, idx)).unit
           }
         }

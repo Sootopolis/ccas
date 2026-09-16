@@ -7,7 +7,7 @@ import scala.util.Try
 
 import ccas.utils.sql.PostgresClient
 import zio.http.*
-import zio.json.{DeriveJsonCodec, JsonCodec, SnakeCase}
+import zio.json.{jsonField, DeriveJsonCodec, JsonCodec, SnakeCase}
 import zio.{Clock, ZIO}
 
 import ccas.analysis.tables.Club
@@ -28,7 +28,7 @@ object ScheduleRoutes {
 
   private[ccas] case class CreateScheduleRequest(
     kind: String,
-    clubSlug: Option[String],
+    @jsonField("clubSlug") clubSlugOption: Option[String],
     params: Option[String],
     triggerType: Option[TriggerType],
     intervalHours: Option[Int],
@@ -55,7 +55,7 @@ object ScheduleRoutes {
   private[ccas] case class ScheduleResponse(
     id: Long,
     kind: String,
-    clubId: Option[Long],
+    @jsonField("clubId") clubIdOption: Option[Long],
     params: Option[String],
     triggerType: String,
     intervalHours: Option[Int],
@@ -72,7 +72,7 @@ object ScheduleRoutes {
       ScheduleResponse(
         id = s.id,
         kind = s.kind.toString,
-        clubId = s.clubId.map(ClubId.unwrap),
+        clubIdOption = s.clubIdOption.map(ClubId.unwrap),
         params = s.params,
         triggerType = SnakeCase(s.triggerType.toString),
         intervalHours = s.intervalHours.map(_.toInt),
@@ -113,12 +113,12 @@ object ScheduleRoutes {
     params: Option[Option[String]]
   )
 
-  /** Pure validation of a create request into a row. clubId is resolved by the caller (DB lookup); `now` stamps
+  /** Pure validation of a create request into a row. The club is resolved by the caller (DB lookup); `now` stamps
     * a cron row's `last_run_at` so its first fire is the next boundary (no backfire).
     */
   private def buildCreate(
     kind: JobKind,
-    clubId: Option[ClubId],
+    clubIdOption: Option[ClubId],
     body: CreateScheduleRequest,
     now: Instant
   ): Either[String, JobSchedule] =
@@ -132,7 +132,7 @@ object ScheduleRoutes {
           )
           ih <- body.intervalHours.toRight("intervalHours is required for an interval trigger")
           _  <- Either.cond(ih > 0 && ih <= Short.MaxValue, (), intervalRangeMsg)
-        } yield JobSchedule.interval(0L, kind, clubId, body.params, ih.toShort, enabled = true, lastRunAt = None)
+        } yield JobSchedule.interval(0L, kind, clubIdOption, body.params, ih.toShort, enabled = true, lastRunAt = None)
 
       case TriggerType.Cron =>
         for {
@@ -141,7 +141,8 @@ object ScheduleRoutes {
           norm <- ScheduleTrigger.validateCron(raw)
           tz   <- ScheduleTrigger.validateZone(body.timezone.getOrElse("UTC"))
           misfire = body.misfire.getOrElse(MisfirePolicy.Skip)
-        } yield JobSchedule.cron(0L, kind, clubId, body.params, norm, tz, misfire, enabled = true, lastRunAt = Some(now))
+        } yield JobSchedule
+          .cron(0L, kind, clubIdOption, body.params, norm, tz, misfire, enabled = true, lastRunAt = Some(now))
     }
 
   /** Pure validation of an update against an existing row's trigger type. Switching trigger type via PUT is out of
@@ -180,13 +181,13 @@ object ScheduleRoutes {
       (for {
         body <- parseJsonBody[CreateScheduleRequest](req)
         kind <- ZIO.fromEither(parseJobKind(body.kind)).mapError(BadRequestException(_))
-        clubId <- ZIO.foreach(body.clubSlug) { slug =>
+        clubIdOption <- ZIO.foreach(body.clubSlugOption) { slug =>
           Club.selectBySlug(ClubSlug.wrap(slug))
             .someOrFail(NotFoundException(s"Club not found: $slug"))
             .map(_.clubId)
         }
         now      <- Clock.instant
-        schedule <- ZIO.fromEither(buildCreate(kind, clubId, body, now)).mapError(BadRequestException(_))
+        schedule <- ZIO.fromEither(buildCreate(kind, clubIdOption, body, now)).mapError(BadRequestException(_))
         id       <- JobSchedule.insert(schedule)
         created  <- JobSchedule.selectId(id).someOrFail(new Exception("Failed to read back schedule"))
       } yield jsonResponse(Status.Created, ScheduleResponse.fromSchedule(created)))

@@ -22,7 +22,7 @@ private[recruitment] object RecruitmentStatsHelpers {
     criteria: RecruitmentCriteria,
     overallTimeoutPct: Double,
     now: Instant,
-    recentArchives: Option[List[ApiPlayerArchive]]
+    recentArchivesOption: Option[List[ApiPlayerArchive]]
   ): RIO[PostgresClient, TmStatsResult] = {
     val needsTmStats = criteria.dailyMinTmGamesFinished.isDefined || criteria.dailyMaxTmTimeoutPercent.isDefined
     if (!needsTmStats) ZIO.succeed(TmStatsResult(0, None, None, Set.empty))
@@ -34,7 +34,7 @@ private[recruitment] object RecruitmentStatsHelpers {
       def fetchMonth(uname: Username, ym: YearMonth): RIO[PostgresClient, ApiPlayerArchive] =
         client.get[ApiPlayerArchive](ApiPlayerArchive.getUrl(uname, ym.getYear, ym.getMonthValue))
 
-      val fetchArchives: RIO[PostgresClient, List[ApiPlayerArchive]] = recentArchives match {
+      val fetchArchives: RIO[PostgresClient, List[ApiPlayerArchive]] = recentArchivesOption match {
         case Some(cached) => ZIO.succeed(cached)
         case None =>
           ZIO.foreachPar(months) { ym =>

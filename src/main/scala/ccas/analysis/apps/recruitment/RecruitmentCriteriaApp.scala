@@ -46,12 +46,12 @@ object RecruitmentCriteriaApp extends ZIOAppDefault {
         case "set" :: clubStr :: alias :: rest =>
           val clubSlug = ClubSlug.wrap(clubStr)
           for {
-            criteriaOpt <- rest match {
+            criteriaOption <- rest match {
               case "--json" :: path :: Nil => loadFromJson(path).map(Some(_))
               case Nil                     => promptCriteria(clubSlug, alias)
               case _                       => ZIO.fail(BadRequestException(help))
             }
-            _ <- criteriaOpt match {
+            _ <- criteriaOption match {
               case Some(c) => set(clubSlug, alias, c).flatMap(id => Console.printLine(s"criteria_id=$id"))
               case None    => Console.printLine("Aborted; no changes.")
             }

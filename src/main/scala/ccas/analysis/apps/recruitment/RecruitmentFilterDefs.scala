@@ -21,14 +21,14 @@ private[recruitment] object RecruitmentFilterDefs {
   // --- Shared helpers ---
 
   private def requireApiPlayer(env: FilterEnv): IO[NoSuchElementException, ApiPlayer] =
-    ZIO.fromOption(env.candidate.apiPlayer)
+    ZIO.fromOption(env.candidate.apiPlayerOption)
       .orElseFail(new NoSuchElementException("apiPlayer not set — FetchAndCheckPlayer must run first"))
 
   private def getOrUpdateCache(
     env: FilterEnv
   )(update: PlayerRecruitmentCache => PlayerRecruitmentCache): PlayerRecruitmentCache = {
-    val playerId = env.candidate.apiPlayer.get.playerId
-    val base = env.candidate.cache.getOrElse(
+    val playerId = env.candidate.apiPlayerOption.get.playerId
+    val base = env.candidate.cacheOption.getOrElse(
       PlayerRecruitmentCache.empty(playerId, env.run.now, None)
     )
     update(base)
@@ -41,9 +41,9 @@ private[recruitment] object RecruitmentFilterDefs {
       for {
         // Use fetchOrRecover (no resolver-side reconcile). RecruitmentPersistence.writeCandidate handles the actual
         // Player table writes based on `isNewPlayer`, so a single transactional write covers both rename archival
-        // (existingPlayer.isDefined) and fresh insert.
+        // (existingPlayerOption.isDefined) and fresh insert.
         apiPlayer      <- UsernameRenameResolver.fetchOrRecover(env.run.client, env.candidate.username)
-        existingPlayer <- Player.selectId(apiPlayer.playerId)
+        existingPlayerOption <- Player.selectId(apiPlayer.playerId)
 
         // Load existing cache
         cached <- PlayerRecruitmentCache.selectId(apiPlayer.playerId)
@@ -57,9 +57,9 @@ private[recruitment] object RecruitmentFilterDefs {
         // treat the returned candidate's username as authoritative.
         val updatedCtx = env.candidate.copy(
           username = apiPlayer.username,
-          apiPlayer = Some(apiPlayer),
-          isNewPlayer = existingPlayer.isEmpty,
-          cache = cached
+          apiPlayerOption = Some(apiPlayer),
+          isNewPlayer = existingPlayerOption.isEmpty,
+          cacheOption = cached
         )
         val rejected =
           statusCat != PlayerStatusCategory.Active
@@ -193,7 +193,7 @@ private[recruitment] object RecruitmentFilterDefs {
   object CheckCacheCriteria extends RecruitmentFilter {
     def apply(env: FilterEnv): RIO[PostgresClient, FilterResult] =
       ZIO.succeed {
-        val rejected = env.candidate.cache.exists(runCacheCriteria(_, env.run.criteria, env.run.now))
+        val rejected = env.candidate.cacheOption.exists(runCacheCriteria(_, env.run.criteria, env.run.now))
         FilterResult(rejected, if (rejected) env.candidate.copy(cacheRejected = true) else env.candidate)
       }
   }
@@ -211,7 +211,7 @@ private[recruitment] object RecruitmentFilterDefs {
           playerMatches.inProgress.map(_.`@id`).toSet
         FilterResult(
           registeredIds.exists(env.run.clubMatchIds.contains),
-          env.candidate.copy(playerMatches = Some(playerMatches))
+          env.candidate.copy(playerMatchesOption = Some(playerMatches))
         )
       }
     }
@@ -233,7 +233,10 @@ private[recruitment] object RecruitmentFilterDefs {
           criteria.maxClubs.exists(clubCount > _)
             || env.run.excludedSlugs.exists(clubNames.contains)
         val updatedCache = getOrUpdateCache(env)(_.copy(clubCount = Some(clubCount)))
-        FilterResult(rejected, env.candidate.copy(cache = Some(updatedCache), playerClubs = Some(playerClubs)))
+        FilterResult(
+          rejected,
+          env.candidate.copy(cacheOption = Some(updatedCache), playerClubsOption = Some(playerClubs))
+        )
       }
     }
   }
@@ -251,7 +254,7 @@ private[recruitment] object RecruitmentFilterDefs {
     def apply(env: FilterEnv): RIO[PostgresClient, FilterResult] =
       for {
         apiPlayer <- requireApiPlayer(env)
-        playerClubs <- ZIO.fromOption(env.candidate.playerClubs)
+        playerClubs <- ZIO.fromOption(env.candidate.playerClubsOption)
           .orElseFail(new NoSuchElementException("playerClubs not set — CheckClubs must run before CheckAdminOfDiscoveredClub"))
         min <- ZIO.fromOption(env.run.criteria.avoidAdminMinClubSize)
           .orElseFail(new IllegalStateException("CheckAdminOfDiscoveredClub should only run when avoidAdminMinClubSize is set"))
@@ -274,11 +277,11 @@ private[recruitment] object RecruitmentFilterDefs {
         if (failed.contains(slug)) ZIO.succeed(false)
         else
           for {
-            existingClub <- Club.selectBySlug(slug)
-            existingAdmins <- existingClub.fold(ZIO.succeed(Set.empty[PlayerId]))(c =>
+            existingClubOption <- Club.selectBySlug(slug)
+            existingAdmins <- existingClubOption.fold(ZIO.succeed(Set.empty[PlayerId]))(c =>
               ClubAdmin.selectPlayerIdsByClub(c.clubId)
             )
-            rejected <- (existingClub, existingAdmins.nonEmpty) match {
+            rejected <- (existingClubOption, existingAdmins.nonEmpty) match {
               case (Some(club), true) =>
                 // Have everything locally — the early prune at run start either evaluated this club already, OR an
                 // earlier candidate's late-confirm pass in this run persisted these rows. In the second case the
@@ -288,7 +291,7 @@ private[recruitment] object RecruitmentFilterDefs {
                 val gateOk = passesGate(membersCount, existingAdmins.size, club.latestMatchAt, min, cutoff)
                 ZIO.succeed(gateOk && existingAdmins.contains(candidatePlayerId))
               case _ =>
-                fetchEvaluatePersist(run, slug, existingClub, candidatePlayerId, min, cutoff)
+                fetchEvaluatePersist(run, slug, existingClubOption, candidatePlayerId, min, cutoff)
             }
           } yield rejected
       }
@@ -296,7 +299,7 @@ private[recruitment] object RecruitmentFilterDefs {
     private def fetchEvaluatePersist(
       run: RunContext,
       slug: ClubSlug,
-      existingClub: Option[Club],
+      existingClubOption: Option[Club],
       candidatePlayerId: PlayerId,
       min: Int,
       cutoff: Instant
@@ -305,14 +308,14 @@ private[recruitment] object RecruitmentFilterDefs {
       // active clubs sometimes report 12-year-old timestamps). For freshly-fetched clubs the DB value is None,
       // which passesGate treats as active by convention (matching the SQL early-prune). ClubDataApp will fill
       // it in later.
-      val latestMatchAt = existingClub.flatMap(_.latestMatchAt)
-      // When `existingClub.isEmpty` the cold-discovery branch can't supply a hint; the resolver's `deriveHint`
+      val latestMatchAt = existingClubOption.flatMap(_.latestMatchAt)
+      // When `existingClubOption.isEmpty` the cold-discovery branch can't supply a hint; the resolver's `deriveHint`
       // SQL lookup also returns None (we just selected by this slug at line ~266 and got nothing), so only Tier B
       // applies — but Tier B itself needs a hint. The wrap is therefore a no-op on the cold-discovery happy-path
       // and only fires on subsequent runs once a Club row has been persisted under the stale slug.
       (for {
         apiClub <- ApiClub.get(run.client, slug)
-          .withClubSlugRenameRecovery(run.client, slug, clubIdHint = existingClub.map(_.clubId))(fresh =>
+          .withClubSlugRenameRecovery(run.client, slug, clubIdHint = existingClubOption.map(_.clubId))(fresh =>
             ApiClub.get(run.client, fresh)
           )
         // Persist the Club row regardless — value for future runs and for ClubDataApp's slug index.
@@ -401,7 +404,7 @@ private[recruitment] object RecruitmentFilterDefs {
         val lastDailyTimeoutAt = archives.flatMap(extractLastDailyTimeout(_, effectiveUname))
         val mergedDailyTimeout = mergeOptionalInstants(
           lastDailyTimeoutAt,
-          env.candidate.cache.flatMap(_.lastDailyTimeoutAt)
+          env.candidate.cacheOption.flatMap(_.lastDailyTimeoutAt)
         )
         val dailyTimePerMove = dailyStats.record.timePerMove
         val criteria         = env.run.criteria
@@ -423,7 +426,7 @@ private[recruitment] object RecruitmentFilterDefs {
             dailyScoreRate = Some(dailyStats.record.scoreRate)
           )
         )
-        FilterResult(rejected, env.candidate.copy(cache = Some(updatedCache), recentArchives = archives))
+        FilterResult(rejected, env.candidate.copy(cacheOption = Some(updatedCache), recentArchivesOption = archives))
       }
     }
   }
@@ -447,7 +450,7 @@ private[recruitment] object RecruitmentFilterDefs {
         val updatedCache = getOrUpdateCache(env)(
           _.copy(ongoingGames = Some(ongoingGames), ongoingTeamMatches = Some(ongoingTeamMatches))
         )
-        FilterResult(rejected, env.candidate.copy(cache = Some(updatedCache)))
+        FilterResult(rejected, env.candidate.copy(cacheOption = Some(updatedCache)))
       }
     }
   }
@@ -456,7 +459,7 @@ private[recruitment] object RecruitmentFilterDefs {
     def apply(env: FilterEnv): RIO[PostgresClient, FilterResult] =
       for {
         apiPlayer <- requireApiPlayer(env)
-        cache <- ZIO.fromOption(env.candidate.cache)
+        cache <- ZIO.fromOption(env.candidate.cacheOption)
           .orElseFail(new NoSuchElementException("cache not set — CheckDailyStats must run before CheckTmStats"))
         tmStats <- fetchTmStats(
           env.run.client,
@@ -465,7 +468,7 @@ private[recruitment] object RecruitmentFilterDefs {
           env.run.criteria,
           cache.dailyTimeoutPct.getOrElse(0.0),
           env.run.now,
-          env.candidate.recentArchives
+          env.candidate.recentArchivesOption
         )
         _ <- env.run.discoveredOpponents.update(_ ++ tmStats.opponentUsernames)
       } yield {
@@ -479,7 +482,7 @@ private[recruitment] object RecruitmentFilterDefs {
         val rejected =
           criteria.dailyMinTmGamesFinished.exists(tmStats.gamesFinished < _)
             || criteria.dailyMaxTmTimeoutPercent.exists(max => tmStats.timeoutPct.exists(_ > max))
-        FilterResult(rejected, env.candidate.copy(cache = Some(updatedCache)))
+        FilterResult(rejected, env.candidate.copy(cacheOption = Some(updatedCache)))
       }
   }
 }

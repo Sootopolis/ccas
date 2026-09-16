@@ -67,7 +67,7 @@ object TestRecruitmentRenameRecovery extends ZIOSpecDefault {
   )
 
   private val staleCandidate: CandidateContext =
-    CandidateContext(staleU, apiPlayer = Some(staleApiPlayer), isNewPlayer = false, cache = None)
+    CandidateContext(staleU, apiPlayerOption = Some(staleApiPlayer), isNewPlayer = false, cacheOption = None)
 
   private def runContext(client: ChessComClient): RIO[Any, RunContext] =
     for {
@@ -114,7 +114,7 @@ object TestRecruitmentRenameRecovery extends ZIOSpecDefault {
     for {
       _      <- seedRenameHistory
       client <- fakeChessComClient(responses, failures = Set("alice-old"))
-      result <- RecruitmentStatsHelpers.fetchTmStats(client, staleU, pid, criteria, overallTimeoutPct = 5.0, now, recentArchives = None)
+      result <- RecruitmentStatsHelpers.fetchTmStats(client, staleU, pid, criteria, overallTimeoutPct = 5.0, now, recentArchivesOption = None)
     } yield assertTrue(
       result.gamesFinished == months.size,
       result.opponentUsernames == Set(Username("opponent")),
@@ -158,7 +158,7 @@ object TestRecruitmentRenameRecovery extends ZIOSpecDefault {
         criteria = criteria,
         overallTimeoutPct = 5.0,
         now = now,
-        recentArchives = Some(List(archive))
+        recentArchivesOption = Some(List(archive))
       )
     } yield assertTrue(
       result.gamesFinished == 1,
@@ -185,7 +185,7 @@ object TestRecruitmentRenameRecovery extends ZIOSpecDefault {
       result <- RecruitmentFilterDefs.CheckOpponentMatch.apply(FilterEnv(runCtx, cand))
     } yield assertTrue(
       !result.rejected,
-      result.candidate.playerMatches.isDefined
+      result.candidate.playerMatchesOption.isDefined
     )
   }
 
@@ -202,7 +202,7 @@ object TestRecruitmentRenameRecovery extends ZIOSpecDefault {
       result <- RecruitmentFilterDefs.CheckClubs.apply(FilterEnv(runCtx, cand))
     } yield assertTrue(
       !result.rejected,
-      result.candidate.playerClubs.isDefined
+      result.candidate.playerClubsOption.isDefined
     )
   }
 
@@ -234,7 +234,7 @@ object TestRecruitmentRenameRecovery extends ZIOSpecDefault {
       result <- RecruitmentFilterDefs.CheckDailyStats.apply(FilterEnv(runCtx, cand))
     } yield assertTrue(
       !result.rejected,
-      result.candidate.cache.exists(_.dailyElo.contains(Elo(1500)))
+      result.candidate.cacheOption.exists(_.dailyElo.contains(Elo(1500)))
     )
   }
 
@@ -272,9 +272,9 @@ object TestRecruitmentRenameRecovery extends ZIOSpecDefault {
           startTime = Some(Instant.parse("2020-01-01T00:00:00Z")),
           endTime = Some(Instant.parse("2020-01-02T00:00:00Z")),
           boards = 1,
-          team1ClubId = Some(staleClubId),
+          team1ClubIdOption = Some(staleClubId),
           team1ScoreX2 = 2,
-          team2ClubId = None,
+          team2ClubIdOption = None,
           team2ScoreX2 = 0,
           fetchedAt = Instant.parse("2020-01-01T00:00:00Z"),
           processedBodyHash = None

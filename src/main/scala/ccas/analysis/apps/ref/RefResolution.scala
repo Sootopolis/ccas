@@ -143,8 +143,8 @@ private[ref] object RefResolution {
     countResolved: Boolean
   ): RIO[ProgressDisplay & PostgresClient, ResolveResult] = {
     val parsed      = parseMatchUrl(m.`@id`)
-    val boardIdxOpt = m.board.get.path.segments.lastOption.flatMap(_.toIntOption).map(_.toShort)
-    boardIdxOpt match {
+    val boardIdxOption = m.board.get.path.segments.lastOption.flatMap(_.toIntOption).map(_.toShort)
+    boardIdxOption match {
       case None =>
         ZIO.logDebug(s"  ${player.username}: malformed board URL ${m.board.get}").as(ResolveResult.NotFound)
       case Some(boardIdx) =>

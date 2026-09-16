@@ -10,7 +10,7 @@ import ccas.cli.config.CurrentClubRef
   * `--all` managed expansion resolve by slug alone, so their id is `None`. Sending the id makes a renamed current club
   * still resolve instead of 404-ing on its stale slug (#176).
   */
-final case class ClubTarget(clubId: Option[ClubId], slug: ClubSlug)
+final case class ClubTarget(clubIdOption: Option[ClubId], slug: ClubSlug)
 
 /** Resolves a command's club target(s) from the parsed request and the config's `current_club`. Kept pure and free of
   * the HTTP client (the `--all` expansion is injected as a `fetchManaged` thunk) so it is unit-testable without a server.
@@ -27,17 +27,17 @@ object ClubResolver {
   val NoManagedError = "no managed clubs; add one with `ccas club add`"
   val BothError      = "--all and --club are mutually exclusive; pass one or the other"
 
-  def single(explicit: Option[String], currentClub: Option[String]): IO[CliError, ClubTarget] =
+  def single(explicit: Option[String], currentClubOption: Option[String]): IO[CliError, ClubTarget] =
     // Clean each source independently before falling back, so a blank explicit `--club` falls back to current_club
     // rather than blanking it out — mirrors how the comma-split multi path drops blank entries.
     blankToNone(explicit) match {
       // An explicit `--club <slug>` is a freshly-typed slug the CLI has no id for.
       case Some(slug) => ZIO.succeed(ClubTarget(None, ClubSlug(slug)))
       case None =>
-        blankToNone(currentClub) match {
+        blankToNone(currentClubOption) match {
           case Some(raw) =>
             val ref = CurrentClubRef.parse(raw)
-            ZIO.succeed(ClubTarget(ref.clubId, ClubSlug(ref.slug.trim)))
+            ZIO.succeed(ClubTarget(ref.clubIdOption, ClubSlug(ref.slug.trim)))
           case None => ZIO.fail(CliError(NoClubError, 2))
         }
     }
@@ -48,18 +48,18 @@ object ClubResolver {
     fetchManaged: => Task[List[String]],
     explicit: List[String],
     all: Boolean,
-    currentClub: Option[String]
+    currentClubOption: Option[String]
   ): Task[NonEmptyChunk[ClubTarget]] =
     if (all && explicit.nonEmpty) { ZIO.fail(CliError(BothError, 2)) }
     else if (all) { fetchManaged.flatMap(slugs => toTargets(slugs.map(idless), CliError(NoManagedError, 2))) }
     else if (explicit.nonEmpty) { toTargets(explicit.map(idless), CliError(NoClubError, 2)) }
-    else { toTargets(currentClub.toList.map(fromCurrent), CliError(NoClubError, 2)) }
+    else { toTargets(currentClubOption.toList.map(fromCurrent), CliError(NoClubError, 2)) }
 
   private def idless(slug: String): (Option[ClubId], String) = (None, slug)
 
   private def fromCurrent(raw: String): (Option[ClubId], String) = {
     val ref = CurrentClubRef.parse(raw)
-    (ref.clubId, ref.slug)
+    (ref.clubIdOption, ref.slug)
   }
 
   // Trim and drop blanks so a padded/empty slug (from --club, current_club, or a hand-edited config) can't reach the
@@ -71,7 +71,10 @@ object ClubResolver {
     ZIO
       .fromOption(
         NonEmptyChunk.fromIterableOption(
-          pairs.map((id, s) => (id, s.trim)).filter((_, s) => s.nonEmpty).map((id, s) => ClubTarget(id, ClubSlug(s)))
+          pairs
+            .map((idOption, s) => (idOption, s.trim))
+            .filter((_, s) => s.nonEmpty)
+            .map((idOption, s) => ClubTarget(idOption, ClubSlug(s)))
         )
       )
       .orElseFail(ifEmpty)

@@ -14,7 +14,7 @@ final case class ClubMatchGame(
   matchId: ClubMatchId,
   board: Short,
   team1IsWhite: Boolean,
-  gameId: Option[Long],
+  @SqlName("game_id") gameIdOption: Option[Long],
   startTime: Option[Long],
   endTime: Option[Long],
   winner: Option[BoardGameWinner],
@@ -50,7 +50,7 @@ object ClubMatchGame {
       batchUpdate(items) { item =>
         sql"""INSERT INTO club_match_game (match_id, board, team1_is_white, game_id,
                 start_time, end_time, winner, detail, team1_rating, team2_rating)
-              VALUES (${item.matchId}, ${item.board}, ${item.team1IsWhite}, ${item.gameId},
+              VALUES (${item.matchId}, ${item.board}, ${item.team1IsWhite}, ${item.gameIdOption},
                 ${item.startTime}, ${item.endTime},
                 ${item.winner}, ${item.detail},
                 ${item.team1Rating}, ${item.team2Rating})""".update

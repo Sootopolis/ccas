@@ -72,7 +72,7 @@ object TestJobScheduleSql extends ZIOSpecDefault {
       result.isDefined,
       result.get.id == id,
       result.get.kind == JobKind.Recruitment,
-      result.get.clubId.contains(clubIdA),
+      result.get.clubIdOption.contains(clubIdA),
       result.get.params.contains("p=1"),
       result.get.intervalHours.contains(24),
       result.get.enabled,
@@ -242,7 +242,7 @@ object TestJobScheduleSql extends ZIOSpecDefault {
     }
 
   private def globalRows(kind: JobKind) =
-    JobSchedule.selectAll.map(_.filter(s => s.kind == kind && s.clubId.isEmpty))
+    JobSchedule.selectAll.map(_.filter(s => s.kind == kind && s.clubIdOption.isEmpty))
 
   private def testSeedGlobalInsertsRow = test("seedGlobalIfAbsent inserts a global (club_id NULL) row") {
     for {
@@ -252,7 +252,7 @@ object TestJobScheduleSql extends ZIOSpecDefault {
     } yield assertTrue(
       inserted == 1,
       rows.size == 1,
-      rows.head.clubId.isEmpty,
+      rows.head.clubIdOption.isEmpty,
       rows.head.intervalHours.contains(24),
       rows.head.enabled,
       rows.head.lastRunAt.isEmpty
@@ -285,7 +285,7 @@ object TestJobScheduleSql extends ZIOSpecDefault {
     }
 
   private def perClubRows(kind: JobKind, clubId: ClubId) =
-    JobSchedule.selectAll.map(_.filter(s => s.kind == kind && s.clubId.contains(clubId)))
+    JobSchedule.selectAll.map(_.filter(s => s.kind == kind && s.clubIdOption.contains(clubId)))
 
   private def testSeedPerClubInsertsRow = test("seedPerClubIfAbsent inserts a per-club (club_id non-NULL) row") {
     for {
@@ -295,7 +295,7 @@ object TestJobScheduleSql extends ZIOSpecDefault {
     } yield assertTrue(
       inserted == 1,
       rows.size == 1,
-      rows.head.clubId.contains(clubIdA),
+      rows.head.clubIdOption.contains(clubIdA),
       rows.head.intervalHours.contains(24),
       rows.head.enabled,
       rows.head.params.isEmpty,
@@ -331,7 +331,7 @@ object TestJobScheduleSql extends ZIOSpecDefault {
     } yield assertTrue(
       rows.size == 1,
       !rows.head.enabled,
-      !en.exists(s => s.kind == JobKind.History && s.clubId.contains(clubIdA))
+      !en.exists(s => s.kind == JobKind.History && s.clubIdOption.contains(clubIdA))
     )
   }
 
@@ -359,7 +359,7 @@ object TestJobScheduleSql extends ZIOSpecDefault {
         _   <- JobSchedule.seedPerClubIfAbsent(clubIdA, ScheduleSeed(JobKind.Membership, 24, enabled = true))
         n   <- JobSchedule.deleteByClub(clubIdA)
         all <- JobSchedule.selectAll
-      } yield assertTrue(n == 2, !all.exists(_.clubId.contains(clubIdA)))
+      } yield assertTrue(n == 2, !all.exists(_.clubIdOption.contains(clubIdA)))
     }
 
   private def testDeleteByClubLeavesOtherClubs =

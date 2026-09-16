@@ -38,8 +38,8 @@ object TestRefAppSupport {
   // --- JSON builders ---
 
   def apiPlayerMatchesJson(finished: List[(Long, Option[Int])]): String = {
-    val items = finished.map { (matchId, boardOpt) =>
-      val boardField = boardOpt.fold("")(b => s""", "board": "https://api.chess.com/pub/match/$matchId/$b"""")
+    val items = finished.map { (matchId, boardOption) =>
+      val boardField = boardOption.fold("")(b => s""", "board": "https://api.chess.com/pub/match/$matchId/$b"""")
       s"""{
         "name": "Match $matchId",
         "url": "https://www.chess.com/club/matches/$matchId",

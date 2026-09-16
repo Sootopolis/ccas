@@ -835,7 +835,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
       for {
         client <- TestChessComClientSupport.fakeClient(routes)
         runsBefore <- connectZIO(sql"SELECT COUNT(*)::INT FROM membership_run".query[Int].run().head)
-        exit <- MembershipApp.reconcile(ClubSlug("test-club"), expectedClubId = Some(expected))
+        exit <- MembershipApp.reconcile(ClubSlug("test-club"), expectedClubIdOption = Some(expected))
                   .provideSomeLayer[ProgressDisplay & PostgresClient](ZLayer.succeed(client))
                   .exit
         runsAfter <- connectZIO(sql"SELECT COUNT(*)::INT FROM membership_run".query[Int].run().head)
@@ -886,7 +886,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
         priorRunId <- MembershipRun.insert(clubId, RunTrigger.Cli, Times.t0, None)
         _          <- MembershipRun.complete(priorRunId, priorCompletedAt)
         client     <- TestChessComClientSupport.fakeClient(routes)
-        result <- MembershipApp.reconcile(ClubSlug("test-club"), expectedClubId = None)
+        result <- MembershipApp.reconcile(ClubSlug("test-club"), expectedClubIdOption = None)
                     .provideSomeLayer[ProgressDisplay & PostgresClient](ZLayer.succeed(client))
       } yield assertTrue(
         result.newMemberships.size == 1,

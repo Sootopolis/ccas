@@ -64,9 +64,9 @@ object TestHistorySeeding extends ZIOSpecDefault {
         startTime = Some(t0),
         endTime = Some(t1),
         boards = 1,
-        team1ClubId = None,
+        team1ClubIdOption = None,
         team1ScoreX2 = 10,
-        team2ClubId = None,
+        team2ClubIdOption = None,
         team2ScoreX2 = 10,
         fetchedAt = t1,
         processedBodyHash = None
@@ -81,9 +81,9 @@ object TestHistorySeeding extends ZIOSpecDefault {
       ClubMatchBoard(
         matchId = matchId,
         board = boardNum,
-        team1PlayerId = team1Pid,
+        team1PlayerIdOption = team1Pid,
         team1FairPlay = false,
-        team2PlayerId = team2Pid,
+        team2PlayerIdOption = team2Pid,
         team2FairPlay = false,
         team1ScoreX2 = 1,
         team2ScoreX2 = 1
@@ -113,7 +113,7 @@ object TestHistorySeeding extends ZIOSpecDefault {
     UnresolvedBoardPlayer.selectAll.map(_.size)
 
   private def boardTeam1Pid: RIO[PostgresClient, Option[PlayerId]] =
-    ClubMatchBoard.selectMatch(matchId).map(_.find(_.board == boardNum).flatMap(_.team1PlayerId))
+    ClubMatchBoard.selectMatch(matchId).map(_.find(_.board == boardNum).flatMap(_.team1PlayerIdOption))
 
   // ==========================================================================
   // Fake HTTP client

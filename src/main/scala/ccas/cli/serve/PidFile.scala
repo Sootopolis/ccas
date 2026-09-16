@@ -26,7 +26,7 @@ object PidFile {
   /** Decide whether a detached server is already running: the recorded pid, only when it maps to a live process.
     * `alive` is injected so the branch logic is unit-testable. Pure.
     */
-  def alreadyRunning(pid: Option[Long], alive: Long => Boolean): Option[Long] = pid.filter(alive)
+  def alreadyRunning(pidOption: Option[Long], alive: Long => Boolean): Option[Long] = pidOption.filter(alive)
 
   /** Best-effort delete; absent file is fine. */
   def remove(p: Path): Unit = { Files.deleteIfExists(p); () }

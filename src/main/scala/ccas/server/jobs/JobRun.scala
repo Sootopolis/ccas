@@ -19,7 +19,7 @@ import ccas.utils.sql.PostgresClient.{connectZIO, transactZIO}
 final case class JobRun(
   @Id id: JobRunId,
   kind: JobKind,
-  clubId: Option[ClubId],
+  @SqlName("club_id") clubIdOption: Option[ClubId],
   trigger: RunTrigger,
   status: JobRunStatus,
   params: Option[String],
@@ -57,10 +57,13 @@ object JobRun {
         .query[JobRun].run().headOption
     }
 
-  def selectRunningForUpdate(kind: JobKind, clubId: Option[ClubId]): ZIO[PostgresClient, SQLException, Option[JobRun]] =
+  def selectRunningForUpdate(
+    kind: JobKind,
+    clubIdOption: Option[ClubId]
+  ): ZIO[PostgresClient, SQLException, Option[JobRun]] =
     connectZIO {
       val running = JobRunStatus.Running
-      clubId match {
+      clubIdOption match {
         case Some(cid) =>
           sql"SELECT $selectCols FROM job_run WHERE kind = $kind AND club_id = $cid AND status = $running FOR UPDATE"
             .query[JobRun].run().headOption
@@ -79,7 +82,7 @@ object JobRun {
   def insert(jobRun: JobRun): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""INSERT INTO job_run (id, kind, club_id, trigger, status, params, started_at, completed_at, error)
-             VALUES (${jobRun.id}, ${jobRun.kind}, ${jobRun.clubId}, ${jobRun.trigger}, ${jobRun.status},
+             VALUES (${jobRun.id}, ${jobRun.kind}, ${jobRun.clubIdOption}, ${jobRun.trigger}, ${jobRun.status},
                      ${jobRun.params}, ${jobRun.startedAt}, ${jobRun.completedAt}, ${jobRun.error})
           """.update.run()
     }

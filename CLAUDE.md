@@ -32,7 +32,7 @@ Rules that aren't derivable from reading the code. Follow them; they exist becau
 
 **Spelling.** British spelling throughout — identifiers, comments, docs, commit messages — except where a third-party name forces American (`zio.Fiber`, not `zio.Fibre`).
 
-**Scala style.** Braces on `match`, parens on `if`/`else`; no Scala 3 braceless (indentation-only) syntax. All imports at the top of the file, never mid-file, and import a name rather than spelling out its package at the use site — unless the short name is shadowed (`java.lang.System` under `zio.*`) or partial qualification is the idiom (`mutable.Map`). Prefer a for-comprehension over a chain of 3+ ZIO combinators, especially inside a `catchAll` body. Don't put large blocks inside `fold` / `foldZIO` / `mapBoth` bodies — extract a named method. Name arguments when a construction is already one field per line, above all for adjacent same-typed `None` / `Some` fields. No default argument values unless a caller genuinely needs them: this is an application, not a library. Never embed a raw control byte (ESC and friends) in a string literal — use `\uXXXX`.
+**Scala style.** Braces on `match`, parens on `if`/`else`; no Scala 3 braceless (indentation-only) syntax. All imports at the top of the file, never mid-file, and import a name rather than spelling out its package at the use site — unless the short name is shadowed (`java.lang.System` under `zio.*`) or partial qualification is the idiom (`mutable.Map`). Prefer a for-comprehension over a chain of 3+ ZIO combinators, especially inside a `catchAll` body. Don't put large blocks inside `fold` / `foldZIO` / `mapBoth` bodies — extract a named method. Name arguments in any call already split one per line, a method as much as a construction — the vertical space is spent, so the names are free, and they matter most for adjacent same-typed `None` / `Some` arguments. Varargs (`assertTrue`, `List`) have no names to give. On a one-line call, name only a bare `true` / `false` / `None`. Suffix an `Option` whose bare name would name the value it holds — an id, a slug, an entity, a row: `clubIdOption`, never `clubId` or `clubIdOpt`, so the unwrapped binding keeps the plain name. A value whose absence is an attribute of the record (`Player.title`) or a default (`misfirePolicy`, `since`) stays bare. A renamed persisted or wire field keeps its column and JSON key with `@SqlName` / `@jsonField`. No default argument values unless a caller genuinely needs them: this is an application, not a library. Never embed a raw control byte (ESC and friends) in a string literal — use `\uXXXX`.
 
 **ZIO idioms.** `ZIO.whenDiscard` when the result is `Unit`. Prefer the `when` variants over the `unless` ones and negate the predicate instead — a reader should be able to follow the condition without mentally inverting it. Prefer `ZIO.whenZIODiscard(effect)(body)` over `effect.flatMap(b => ZIO.whenDiscard(b)(body))` whenever the bound value is used only as the predicate (`.negate` covers the inverted case); keep the `flatMap` only when the body also needs the value. `layer.build *> rest` when a layer is provided purely for its side effect (silences the `ZLayer` macro warning). Note that in ZIO 2.1 `ZIO.logInfo` and friends ignore `currentLogLevel`, so any per-fiber level filter has to live in the `ZLogger` itself.
 
@@ -79,25 +79,25 @@ Rules that aren't derivable from reading the code. Follow them; they exist becau
 
 ### Where the rationale lives
 
-| Area | ADR |
-| --- | --- |
-| Adaptive rate limiting (current design) | [0012](docs/adr/0012-gate-based-adaptive-throttle.md), superseding [0001](docs/adr/0001-adaptive-rate-limiting.md) |
-| Dependency decisions, sbt 2 | [0002](docs/adr/0002-dependency-decisions-2026-08.md), [0003](docs/adr/0003-defer-sbt-2.md) |
-| API fan-out concurrency cap | [0004](docs/adr/0004-api-fan-out-concurrency-cap.md) |
-| The zio-http client layer (gzip, timeouts, pool) | [0005](docs/adr/0005-own-the-http-client-layer.md) |
-| What the pacing EMA measures | [0006](docs/adr/0006-pacing-ema-measures-the-http-exchange-only.md) |
-| Response caching, conditional GETs, retention | [0007](docs/adr/0007-response-caching-in-postgres.md) |
-| Body storage outside Postgres | [0008](docs/adr/0008-body-store-outside-postgres.md) |
-| `BodyStore` deadlines and the S3 budget | [0009](docs/adr/0009-bound-every-body-store-operation.md) |
-| Username / club-slug rename recovery | [0010](docs/adr/0010-rename-recovery-for-usernames-and-club-slugs.md) |
-| CLI locality, `current_club`, config files | [0011](docs/adr/0011-cli-locality-and-the-current-club-pointer.md) |
-| Job-log sink surviving write failures | [0013](docs/adr/0013-job-log-sink-survives-write-failures.md) |
-| Both `DATABASE_URL` forms, credential lifting | [0014](docs/adr/0014-accept-both-database-url-forms.md) |
-| The server read-idle reaper | [0015](docs/adr/0015-server-read-idle-reaper.md) |
-| Ids are identity; names are observations | [0016](docs/adr/0016-identity-is-the-id-names-are-observations.md) |
-| What earns a history table | [0017](docs/adr/0017-what-earns-a-history-table.md) |
-| The two JVM flags, and their three homes | [0018](docs/adr/0018-every-jvm-carries-the-same-two-flags.md) |
-| A reported 404 is an answer, not a failure | [0019](docs/adr/0019-a-reported-404-is-an-answer.md) |
+| Area                                             | ADR                                                                                                                |
+|--------------------------------------------------|--------------------------------------------------------------------------------------------------------------------|
+| Adaptive rate limiting (current design)          | [0012](docs/adr/0012-gate-based-adaptive-throttle.md), superseding [0001](docs/adr/0001-adaptive-rate-limiting.md) |
+| Dependency decisions, sbt 2                      | [0002](docs/adr/0002-dependency-decisions-2026-08.md), [0003](docs/adr/0003-defer-sbt-2.md)                        |
+| API fan-out concurrency cap                      | [0004](docs/adr/0004-api-fan-out-concurrency-cap.md)                                                               |
+| The zio-http client layer (gzip, timeouts, pool) | [0005](docs/adr/0005-own-the-http-client-layer.md)                                                                 |
+| What the pacing EMA measures                     | [0006](docs/adr/0006-pacing-ema-measures-the-http-exchange-only.md)                                                |
+| Response caching, conditional GETs, retention    | [0007](docs/adr/0007-response-caching-in-postgres.md)                                                              |
+| Body storage outside Postgres                    | [0008](docs/adr/0008-body-store-outside-postgres.md)                                                               |
+| `BodyStore` deadlines and the S3 budget          | [0009](docs/adr/0009-bound-every-body-store-operation.md)                                                          |
+| Username / club-slug rename recovery             | [0010](docs/adr/0010-rename-recovery-for-usernames-and-club-slugs.md)                                              |
+| CLI locality, `current_club`, config files       | [0011](docs/adr/0011-cli-locality-and-the-current-club-pointer.md)                                                 |
+| Job-log sink surviving write failures            | [0013](docs/adr/0013-job-log-sink-survives-write-failures.md)                                                      |
+| Both `DATABASE_URL` forms, credential lifting    | [0014](docs/adr/0014-accept-both-database-url-forms.md)                                                            |
+| The server read-idle reaper                      | [0015](docs/adr/0015-server-read-idle-reaper.md)                                                                   |
+| Ids are identity; names are observations         | [0016](docs/adr/0016-identity-is-the-id-names-are-observations.md)                                                 |
+| What earns a history table                       | [0017](docs/adr/0017-what-earns-a-history-table.md)                                                                |
+| The two JVM flags, and their three homes         | [0018](docs/adr/0018-every-jvm-carries-the-same-two-flags.md)                                                      |
+| A reported 404 is an answer, not a failure       | [0019](docs/adr/0019-a-reported-404-is-an-answer.md)                                                               |
 
 Component-level detail — the apps and their run modes, the route surface, `JobRunner` cancellation semantics, the scheduler, `app_setting` — is in [`docs/architecture.md`](docs/architecture.md).
 

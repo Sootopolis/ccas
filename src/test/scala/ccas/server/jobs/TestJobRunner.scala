@@ -426,8 +426,8 @@ object TestJobRunner extends ZIOSpecDefault {
               } yield ()
             }
         )
-        streamOpt <- runner.progressStream(id)
-        stream    <- ZIO.fromOption(streamOpt).orElseFail(new Exception("expected a live progress stream"))
+        streamOption <- runner.progressStream(id)
+        stream    <- ZIO.fromOption(streamOption).orElseFail(new Exception("expected a live progress stream"))
         seen      <- Promise.make[Nothing, Unit]
         framesRef <- Ref.make(List.empty[String])
         collect <- stream

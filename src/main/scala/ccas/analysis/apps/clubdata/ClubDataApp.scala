@@ -216,18 +216,18 @@ object ClubDataApp extends ZIOAppDefault {
         if (dbFreshEnough) Club.updateLatestMatchAt(club.clubId, dbLatest).unit
         else {
           for {
-            matchesOpt <- fetchClubMatches(client, club.slug)
+            matchesOption <- fetchClubMatches(client, club.slug)
               .withClubSlugRenameRecovery(client, club.slug, Some(club.clubId))(fresh => fetchClubMatches(client, fresh))
               .catchAll { error =>
                 ZIO.logInfo(s"[ClubData] Match fetch failed for ${club.slug}: ${error.getMessage}").as(None)
               }
-            // `matchesOpt` is None on an unchanged listing as well as on fetch failure (see `fetchClubMatches`): the
+            // `matchesOption` is None on an unchanged listing as well as on fetch failure (see `fetchClubMatches`): the
             // DB-vs-cached reconciliation below still runs, but the API-derived timestamp and the opportunistic ref
             // population are skipped by design when nothing changed.
-            apiLatest = matchesOpt.flatMap(latestTimestamp(_, now))
+            apiLatest = matchesOption.flatMap(latestTimestamp(_, now))
             combined  = List(club.latestMatchAt, dbLatest, apiLatest).flatten.maxOption
             _ <- ZIO.whenDiscard(combined != club.latestMatchAt)(Club.updateLatestMatchAt(club.clubId, combined))
-            _ <- ZIO.foreachDiscard(matchesOpt)(tryPopulateClubMatchRef(client, club.clubId, club.slug, _))
+            _ <- ZIO.foreachDiscard(matchesOption)(tryPopulateClubMatchRef(client, club.clubId, club.slug, _))
           } yield ()
         }
       }
@@ -273,8 +273,8 @@ object ClubDataApp extends ZIOAppDefault {
         case Some(_) => ZIO.unit
         case None =>
           val parsed = RefHelpers.parseMatchUrl(matches.finished.head.`@id`)
-          RefHelpers.fetchTeamMatchTeamsOptional(client, parsed.matchId, parsed.isLive).flatMap { teamsOpt =>
-            ZIO.foreachDiscard(teamsOpt.flatMap(RefHelpers.findClubIsTeam1(_, slug))) { isTeam1 =>
+          RefHelpers.fetchTeamMatchTeamsOptional(client, parsed.matchId, parsed.isLive).flatMap { teamsOption =>
+            ZIO.foreachDiscard(teamsOption.flatMap(RefHelpers.findClubIsTeam1(_, slug))) { isTeam1 =>
               ClubMatchRef.upsert(ClubMatchRef(clubId, parsed.matchId, parsed.isLive, isTeam1)).unit
             }
           }

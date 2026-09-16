@@ -57,7 +57,7 @@ trait JobRunner {
     */
   def submit(
     kind: JobKind,
-    clubId: Option[ClubId],
+    clubIdOption: Option[ClubId],
     params: Option[String],
     trigger: RunTrigger,
     effect: JobEffect
@@ -165,7 +165,7 @@ object JobRunner {
 
     override def submit(
       kind: JobKind,
-      clubId: Option[ClubId],
+      clubIdOption: Option[ClubId],
       params: Option[String],
       trigger: RunTrigger,
       effect: JobEffect
@@ -176,29 +176,29 @@ object JobRunner {
       // Ctrl-C cancel of the same (kind, club) reads the baffling "already running" for a job the operator just killed;
       // the "finishing cancellation — retry in a moment" wording tells them it is self-resolving. (#170)
       def conflictError(cancelling: Boolean): ConflictException = {
-        val forClub = clubId.fold("")(c => s" for club $c")
+        val forClub = clubIdOption.fold("")(c => s" for club $c")
         if (cancelling) { ConflictException(s"A $kind job$forClub is finishing cancellation — retry in a moment") }
         else { ConflictException(s"A $kind job is already running$forClub") }
       }
       (for {
         id <- withTransaction {
           for {
-            existing <- JobRun.selectRunningForUpdate(kind, clubId)
+            existing <- JobRun.selectRunningForUpdate(kind, clubIdOption)
             _ <- ZIO.foreachDiscard(existing)(job =>
               cancelRequested.get.flatMap(pending => ZIO.fail(conflictError(pending.contains(job.id))))
             )
             id   = JobRunId.generate()
             now <- Clock.instant
-            jobRun = JobRun(id, kind, clubId, trigger, JobRunStatus.Running, params, now, None, None)
+            jobRun = JobRun(id, kind, clubIdOption, trigger, JobRunStatus.Running, params, now, None, None)
             _   <- JobRun.insert(jobRun)
           } yield id
         }
         // Source tag for this job's log lines (`[Kind/slug]`), resolved best-effort — a missing club or read failure
         // degrades to the numeric id, never fails the submit. Resolved before the sink is opened so this interruptible
         // DB read (can block seconds on a Neon cold start) holds no fd: an interrupt here leaks nothing.
-        slugOpt <- ZIO.foreach(clubId)(Club.selectId).map(_.flatten.map(_.slug)).catchAll(_ => ZIO.none)
-        label = clubId.fold(kind.toString)(cid =>
-          s"$kind/${slugOpt.fold(s"#${ClubId.unwrap(cid)}")(ClubSlug.unwrap)}"
+        slugOption <- ZIO.foreach(clubIdOption)(Club.selectId).map(_.flatten.map(_.slug)).catchAll(_ => ZIO.none)
+        label = clubIdOption.fold(kind.toString)(cid =>
+          s"$kind/${slugOption.fold(s"#${ClubId.unwrap(cid)}")(ClubSlug.unwrap)}"
         )
         // `FileSink.make` acquires a held-open fd whose only close path is `release` (the child's `.ensuring`); an
         // interrupt between the open and the `forkIn` would leak it, so open + register + fork sit inside one

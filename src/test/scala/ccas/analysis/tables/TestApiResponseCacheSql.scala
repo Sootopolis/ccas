@@ -84,13 +84,13 @@ object TestApiResponseCacheSql extends ZIOSpecDefault {
 
   private def testLookupMetaReturnsRow = test("lookupMeta returns the upserted metadata without joining the body") {
     for {
-      metaOpt <- ApiResponseCache.lookupMeta(urlA)
+      metaOption <- ApiResponseCache.lookupMeta(urlA)
     } yield assertTrue(
-      metaOpt.isDefined,
-      metaOpt.exists(_.url == urlA),
-      metaOpt.exists(_.etag.contains("\"abc\"")),
-      metaOpt.exists(_.maxAgeSeconds.contains(3600L)),
-      metaOpt.exists(_.contentType.contains("application/json"))
+      metaOption.isDefined,
+      metaOption.exists(_.url == urlA),
+      metaOption.exists(_.etag.contains("\"abc\"")),
+      metaOption.exists(_.maxAgeSeconds.contains(3600L)),
+      metaOption.exists(_.contentType.contains("application/json"))
     )
   }
 

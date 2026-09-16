@@ -249,7 +249,7 @@ final class ChessComClient(
     // by dropping any `max-age` so `isFresh` never returns true — subsequent requests go out as conditional GETs
     // (validated via etag / last-modified) rather than being served locally.
     val effectiveMaxAge = if (directives.noCache) None else directives.maxAgeSeconds
-    // `newBodyIdOpt` is `None` in three cases: the caller opted out of cache writes, the response said `no-store`,
+    // `newBodyIdOption` is `None` in three cases: the caller opted out of cache writes, the response said `no-store`,
     // or the body store rejected the write (outage — `upsertWithBody` then persists nothing at all). All three land
     // on the `Changed` arm below and increment `cacheMisses`, never `IdenticalBody`. That is intentional: hit-vs-miss
     // discrimination requires comparing the new body's `body_id` against the prior one, which only the upsert
@@ -272,14 +272,14 @@ final class ChessComClient(
     val decodeLazy = ZIO.fromEither(jsonDecoder.decodeJson(string)).mapError(JsonDecodingException(_, Some(string)))
     for {
       _            <- logEtagParseMiss(response)
-      newBodyIdOpt <- upsertEffect
-      result <- (newBodyIdOpt, conditional.map(_.bodyId)) match {
+      newBodyIdOption <- upsertEffect
+      result <- (newBodyIdOption, conditional.map(_.bodyId)) match {
         // This decode runs after `rawGet` has returned, beyond its `tapError`, so it records its own failure row.
         case (Some(newBodyId), Some(oldBodyId)) if newBodyId == oldBodyId =>
           val recordedDecode = decodeLazy.tapError(recordFetchFailure(url, _))
           statsRef.update(_.incCacheHit).as(FetchResult.IdenticalBody(newBodyId, recordedDecode))
         case _ =>
-          statsRef.update(_.incCacheMiss) *> decodeLazy.map(FetchResult.Changed(_, newBodyIdOpt))
+          statsRef.update(_.incCacheMiss) *> decodeLazy.map(FetchResult.Changed(_, newBodyIdOption))
       }
     } yield result
   }
@@ -404,8 +404,8 @@ final class ChessComClient(
           statsRef
             .update(_.incCacheHit)
             .as(FetchResult.Fresh(meta.bodyId, loadAndDecode[T](url, meta.bodyId, cacheWrites)))
-        case cachedOpt =>
-          statsRef.update(_.incRequests) *> withRetries(gatedRawGet[T](url, cachedOpt, cacheWrites))
+        case cachedOption =>
+          statsRef.update(_.incRequests) *> withRetries(gatedRawGet[T](url, cachedOption, cacheWrites))
       }
 
   def get[T](url: URL)(using jsonDecoder: JsonDecoder[T]): Task[T] =
@@ -561,7 +561,7 @@ final class ChessComClient(
   private def throttleDown(cooldown: Duration = config.cooldown): Task[Unit] =
     for {
       now <- Clock.currentTime(TimeUnit.MILLISECONDS)
-      transitionOpt <- stateRef.modify { state =>
+      transitionOption <- stateRef.modify { state =>
         if (state.currentMax <= 1) {
           (None, state)
         } else {
@@ -577,7 +577,7 @@ final class ChessComClient(
           (Some((state.currentMax, newGen)), newState)
         }
       }
-      _ <- ZIO.foreachDiscard(transitionOpt) { case (oldMax, gen) => applyThrottle(oldMax, gen, cooldown) }
+      _ <- ZIO.foreachDiscard(transitionOption) { case (oldMax, gen) => applyThrottle(oldMax, gen, cooldown) }
     } yield ()
 
   private def applyThrottle(oldMax: Long, gen: Long, cooldown: Duration): Task[Unit] =

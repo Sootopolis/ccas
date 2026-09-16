@@ -181,7 +181,7 @@ object TestUsernameRenameResolver extends ZIOSpecDefault {
     test("Tier B: board endpoint identifies the renamed player by eliminating opponent") {
       // pidA renamed alpha → newA. Player table doesn't reflect it (tombstoned), no snapshot of "alpha" → Tier A None.
       // PlayerMatchRef(pidA, match=90001, board=1, isTeam1=true) exists. Board endpoint returns newA vs opponent.
-      // Opponent (pidB, "opponent") is resolved via ClubMatchBoard.team2PlayerId.
+      // Opponent (pidB, "opponent") is resolved via ClubMatchBoard.team2PlayerIdOption.
       val matchId = ClubMatchId(90001L)
       val tombstone = UsernameRenameResolver.stalePlaceholder(pidA).value
       val responses = Map(
@@ -208,7 +208,7 @@ object TestUsernameRenameResolver extends ZIOSpecDefault {
       } yield assertTrue(result.contains(Username("newa")))
     }
 
-  // Regression for #258: opposingCurrentUsername prefers the DB link (club_match_board.team2PlayerId), so the
+  // Regression for #258: opposingCurrentUsername prefers the DB link (club_match_board.team2PlayerIdOption), so the
   // above test never actually reaches RefHelpers.fetchTeamMatchTeamsOptional. This forces the opposing side
   // unlinked so the fallback to the full match endpoint is what resolves the rename.
   private def testTierBFallsBackToMatchEndpointWhenOpponentUnlinked =

@@ -24,7 +24,7 @@ final case class CliConfig(
   apiUrl: Option[String],
   defaultClubs: List[String],
   logDir: Option[String],
-  currentClub: Option[String],
+  currentClubOption: Option[String],
   readyTimeoutSeconds: Option[Int]
 )
 
@@ -34,7 +34,7 @@ object CliConfig {
     apiUrl = None,
     defaultClubs = Nil,
     logDir = None,
-    currentClub = None,
+    currentClubOption = None,
     readyTimeoutSeconds = None
   )
 
@@ -44,12 +44,12 @@ object CliConfig {
       Config.string("log_dir").optional.map(blankToNone) ++
       Config.string("current_club").optional.map(blankToNone) ++
       Config.int("ready_timeout_seconds").optional).map {
-      case (apiUrl, defaultClubs, logDir, currentClub, readyTimeoutSeconds) =>
+      case (apiUrl, defaultClubs, logDir, currentClubOption, readyTimeoutSeconds) =>
         CliConfig(
           apiUrl = apiUrl,
           defaultClubs = defaultClubs,
           logDir = logDir.map(expandTilde),
-          currentClub = currentClub,
+          currentClubOption = currentClubOption,
           readyTimeoutSeconds = readyTimeoutSeconds
         )
     }

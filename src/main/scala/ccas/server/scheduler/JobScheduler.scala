@@ -70,7 +70,7 @@ object JobScheduler {
             .catchAll(e =>
               ProgressDisplay
                 .sourced("scheduler")(
-                  ZIO.logError(s"${schedule.kind} (club ${schedule.clubId}): invalid trigger: ${e.getMessage}")
+                  ZIO.logError(s"${schedule.kind} (club ${schedule.clubIdOption}): invalid trigger: ${e.getMessage}")
                 )
                 .as(false)
             )
@@ -82,11 +82,11 @@ object JobScheduler {
                   // the job ends submits promptly. Debug-log instead of ERROR-spamming for the duration.
                   case _: ConflictException =>
                     ProgressDisplay.sourced("scheduler")(
-                      ZIO.logDebug(s"${schedule.kind} (club ${schedule.clubId}): already running, skipping tick")
+                      ZIO.logDebug(s"${schedule.kind} (club ${schedule.clubIdOption}): already running, skipping tick")
                     )
                   case e =>
                     ProgressDisplay.sourced("scheduler")(
-                      ZIO.logError(s"${schedule.kind} (club ${schedule.clubId}): ${e.getMessage}")
+                      ZIO.logError(s"${schedule.kind} (club ${schedule.clubIdOption}): ${e.getMessage}")
                     )
                 }
               }
@@ -98,7 +98,7 @@ object JobScheduler {
     private def runSchedule(schedule: JobSchedule, now: Instant): Task[Unit] =
       (for {
         effect <- jobEffect(schedule)
-        _      <- runner.submit(schedule.kind, schedule.clubId, schedule.params, RunTrigger.Scheduled, effect)
+        _      <- runner.submit(schedule.kind, schedule.clubIdOption, schedule.params, RunTrigger.Scheduled, effect)
         _      <- JobSchedule.updateLastRunAt(schedule.id, now)
       } yield ()).provideEnvironment(pgClientEnv)
 
@@ -109,10 +109,10 @@ object JobScheduler {
       schedule.kind match {
         case JobKind.Recruitment =>
           ScheduleParams.decode(schedule.params, RecruitmentOptions.Default).map { opts =>
-            clubJob(schedule) { (club, jobRunId) =>
+            clubJob(schedule) { (club, jobRunIdOption) =>
               RecruitmentApp.recruit(
                 clubSlug = club.slug,
-                expectedClubId = Some(club.clubId),
+                expectedClubIdOption = Some(club.clubId),
                 alias = opts.alias.getOrElse("default"),
                 target = opts.target.map(_ min JobCaps.MaxTarget),
                 cumulative = opts.cumulative.getOrElse(false),
@@ -120,19 +120,19 @@ object JobScheduler {
                 timeLimitMinutes = opts.timeLimitMinutes.map(_ min JobCaps.MaxTimeLimitMinutes).orElse(Some(30)),
                 explore = opts.explore.getOrElse(true),
                 trigger = RunTrigger.Scheduled,
-                jobRunId = jobRunId
+                jobRunIdOption = jobRunIdOption
               )
             }
           }
         case JobKind.Membership =>
           ScheduleParams.decode(schedule.params, MembershipOptions.Default).map { opts =>
-            clubJob(schedule) { (club, jobRunId) =>
+            clubJob(schedule) { (club, jobRunIdOption) =>
               MembershipApp.reconcileAndReport(
                 clubSlug = club.slug,
-                expectedClubId = Some(club.clubId),
+                expectedClubIdOption = Some(club.clubId),
                 trustUsernames = opts.trustUsernames.getOrElse(true),
                 trigger = RunTrigger.Scheduled,
-                jobRunId = jobRunId
+                jobRunIdOption = jobRunIdOption
               )
             }
           }
@@ -142,15 +142,15 @@ object JobScheduler {
           }
         case JobKind.History =>
           ScheduleParams.decode(schedule.params, HistoryOptions.Default).map { opts =>
-            clubJob(schedule) { (club, jobRunId) =>
+            clubJob(schedule) { (club, jobRunIdOption) =>
               HistoryApp.discover(
                 clubSlug = club.slug,
-                expectedClubId = Some(club.clubId),
+                expectedClubIdOption = Some(club.clubId),
                 full = opts.full.getOrElse(false),
                 includeFinished = opts.includeFinished.getOrElse(false),
                 refreshMinHours = HistoryOptions.effectiveRefresh(opts),
                 trigger = RunTrigger.Scheduled,
-                jobRunId = jobRunId
+                jobRunIdOption = jobRunIdOption
               )
             }
           }
@@ -173,12 +173,12 @@ object JobScheduler {
 
     // The schedule's club is looked up when the job starts, not when it is decoded.
     private def clubJob(schedule: JobSchedule)(effect: ClubJobEffect): JobEffect =
-      jobRunId =>
+      jobRunIdOption =>
         for {
-          clubId <- ZIO.fromOption(schedule.clubId)
+          clubId <- ZIO.fromOption(schedule.clubIdOption)
                       .orElseFail(IllegalStateException(s"${schedule.kind} schedule missing clubId"))
           club   <- Club.selectId(clubId).someOrFail(IllegalStateException(s"Club $clubId not found in database"))
-          result <- effect(ClubRef.fromClub(club), jobRunId)
+          result <- effect(ClubRef.fromClub(club), jobRunIdOption)
         } yield result
   }
 }

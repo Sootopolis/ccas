@@ -36,9 +36,9 @@ object TestSeedFromClubMatches extends ZIOSpecDefault {
       startTime = Some(Times.t0),
       endTime = if (status == ClubMatchStatus.Finished) Some(Times.t1) else None,
       boards = 10,
-      team1ClubId = Some(clubId),
+      team1ClubIdOption = Some(clubId),
       team1ScoreX2 = 10,
-      team2ClubId = Some(ClubId(999)),
+      team2ClubIdOption = Some(ClubId(999)),
       team2ScoreX2 = 10,
       fetchedAt = Times.t1,
       processedBodyHash = None

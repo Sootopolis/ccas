@@ -58,9 +58,9 @@ object TestRefreshSingleMatch extends ZIOSpecDefault {
       startTime         = Some(t0),
       endTime           = Some(t0.plus(Duration.ofDays(7))),
       boards            = 10,
-      team1ClubId       = Some(clubId),
+      team1ClubIdOption       = Some(clubId),
       team1ScoreX2      = 10,
-      team2ClubId       = Some(opponentId),
+      team2ClubIdOption       = Some(opponentId),
       team2ScoreX2      = 10,
       fetchedAt         = initialFetchedAt,
       processedBodyHash = processedBodyHash
@@ -257,8 +257,8 @@ object TestRefreshSingleMatch extends ZIOSpecDefault {
       val settledRow = clubMatchRow(matchId.value, None).copy(
         endTime     = Some(endTime),
         fetchedAt   = fetchedAt,
-        team1ClubId = Some(isolatedClubId),
-        team2ClubId = Some(opponentId)
+        team1ClubIdOption = Some(isolatedClubId),
+        team2ClubIdOption = Some(opponentId)
       )
       val permanentBody = """{"code": 0, "message": "Match \"8500\" not found."}"""
       for {

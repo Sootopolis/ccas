@@ -58,7 +58,7 @@ object TestRoutes extends ZIOSpecDefault {
 
     override def submit(
       kind: JobKind,
-      clubId: Option[ClubId],
+      clubIdOption: Option[ClubId],
       params: Option[String],
       trigger: RunTrigger,
       effect: Option[JobRunId] => RIO[ProgressDisplay & ChessComClient & PostgresClient, Any]
@@ -67,7 +67,7 @@ object TestRoutes extends ZIOSpecDefault {
         case Action.Succeed =>
           val id  = JobRunId.generate()
           val now = Instant.now()
-          val job = JobRun(id, kind, clubId, trigger, JobRunStatus.Running, params, now, None, None)
+          val job = JobRun(id, kind, clubIdOption, trigger, JobRunStatus.Running, params, now, None, None)
           jobs.update(_ + (id -> job)).as(id)
         case Action.Conflict =>
           ZIO.fail(ConflictException(s"A $kind job is already running"))
@@ -212,7 +212,7 @@ object TestRoutes extends ZIOSpecDefault {
       response.status == Status.Ok,
       parsed.isRight,
       parsed.toOption.get.clubSlug == "test-club",
-      parsed.toOption.get.jobId.isDefined,
+      parsed.toOption.get.jobIdOption.isDefined,
       parsed.toOption.get.error.isEmpty,
       parsed.toOption.get.resolution == ClubResolution.Known(ClubRef(ClubId(200), ClubSlug("test-club")))
     )
@@ -231,7 +231,7 @@ object TestRoutes extends ZIOSpecDefault {
     } yield assertTrue(
       response.status == Status.Ok,
       parsed.isRight,
-      parsed.toOption.get.jobId.isEmpty,
+      parsed.toOption.get.jobIdOption.isEmpty,
       parsed.toOption.get.error.exists(_.contains("already running"))
     )
   }
@@ -259,7 +259,7 @@ object TestRoutes extends ZIOSpecDefault {
         parsed.isRight,
         results.size == 1,
         results.head.clubSlug == "test-club",
-        results.head.jobId.isDefined,
+        results.head.jobIdOption.isDefined,
         results.head.error.isEmpty
       )
     }
@@ -290,7 +290,7 @@ object TestRoutes extends ZIOSpecDefault {
         parsed.isRight,
         results.size == 2,
         results.map(_.clubSlug).toSet == Set("test-club", "other-club"),
-        results.forall(r => r.jobId.isDefined && r.error.isEmpty)
+        results.forall(r => r.jobIdOption.isDefined && r.error.isEmpty)
       )
     }
   }
@@ -314,7 +314,7 @@ object TestRoutes extends ZIOSpecDefault {
         assertTrue(
           response.status == Status.Ok,
           r.clubSlug == "renamed-away", // echoes the requested slug (CLI matches / invalidates by it)
-          r.jobId.isDefined,
+          r.jobIdOption.isDefined,
           r.error.isEmpty,
           // the canonical id and current slug, for current_club refresh
           r.resolution.runnable == Right(ClubRef(ClubId(200), ClubSlug("test-club")))
@@ -340,10 +340,10 @@ object TestRoutes extends ZIOSpecDefault {
         response.status == Status.Ok,
         parsed.isRight,
         results.size == 2,
-        found.jobId.isDefined,
+        found.jobIdOption.isDefined,
         found.error.isEmpty,
         found.resolution.runnable.isRight,
-        notFound.jobId.isEmpty,
+        notFound.jobIdOption.isEmpty,
         notFound.failure.exists(_.startsWith("Club not found")),
         notFound.resolution == ClubResolution.NotLocal(ClubSlug("no-such-club"))
       )
@@ -369,7 +369,7 @@ object TestRoutes extends ZIOSpecDefault {
         assertTrue(
           response.status == Status.Ok,
           r.clubSlug == "route-former",
-          r.jobId.isDefined,
+          r.jobIdOption.isDefined,
           r.error.isEmpty,
           r.resolution == ClubResolution.Renamed(ClubRef.fromClub(club), ClubSlug("route-former"))
         )
@@ -393,7 +393,7 @@ object TestRoutes extends ZIOSpecDefault {
         parsed.isRight,
         results.size == 1,
         results.head.clubSlug == "test-club",
-        results.head.jobId.isDefined,
+        results.head.jobIdOption.isDefined,
         results.head.error.isEmpty
       )
     }
@@ -409,7 +409,7 @@ object TestRoutes extends ZIOSpecDefault {
     } yield assertTrue(
       response.status == Status.Ok,
       parsed.isRight,
-      parsed.toOption.get.jobId.isDefined,
+      parsed.toOption.get.jobIdOption.isDefined,
       parsed.toOption.get.error.isEmpty
     )
   }
@@ -474,7 +474,7 @@ object TestRoutes extends ZIOSpecDefault {
     val job = JobRun(
       id = JobRunId.wrap("cancel-id"),
       kind = JobKind.Membership,
-      clubId = None,
+      clubIdOption = None,
       trigger = RunTrigger.Cli,
       status = JobRunStatus.Running,
       params = None,
@@ -506,7 +506,7 @@ object TestRoutes extends ZIOSpecDefault {
     val job = JobRun(
       id = JobRunId.wrap("logs-id"),
       kind = JobKind.Membership,
-      clubId = None,
+      clubIdOption = None,
       trigger = RunTrigger.Cli,
       status = JobRunStatus.Completed,
       params = None,
@@ -534,7 +534,7 @@ object TestRoutes extends ZIOSpecDefault {
       val job = JobRun(
         id = JobRunId.wrap("swept-id"),
         kind = JobKind.Membership,
-        clubId = None,
+        clubIdOption = None,
         trigger = RunTrigger.Cli,
         status = JobRunStatus.Completed,
         params = None,
@@ -567,7 +567,7 @@ object TestRoutes extends ZIOSpecDefault {
       val job = JobRun(
         id = JobRunId.wrap("progress-id"),
         kind = JobKind.Membership,
-        clubId = None,
+        clubIdOption = None,
         trigger = RunTrigger.Cli,
         status = JobRunStatus.Completed,
         params = None,
@@ -1037,8 +1037,8 @@ object TestRoutes extends ZIOSpecDefault {
         all <- JobSchedule.selectAll
       } yield assertTrue(
         del.status == Status.NoContent,
-        !all.exists(_.clubId.contains(ClubId(200))),
-        all.exists(_.clubId.contains(ClubId(201)))
+        !all.exists(_.clubIdOption.contains(ClubId(200))),
+        all.exists(_.clubIdOption.contains(ClubId(201)))
       )
     }
 
