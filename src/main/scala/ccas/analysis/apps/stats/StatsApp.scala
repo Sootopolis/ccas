@@ -1,6 +1,6 @@
 package ccas.analysis.apps.stats
 
-import ccas.analysis.apps.ClubResolution
+import ccas.analysis.apps.{ClubQuery, ClubResolution}
 import ccas.analysis.apps.stats.StatsUtils.*
 import ccas.analysis.tables.*
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
@@ -24,7 +24,7 @@ import java.time.{Duration, Instant}
   * }}}
   *
   * ==API==
-  * `POST /api/jobs/stats` with `{"clubSlug": "...", "since": "...", "until": "..."}`
+  * `POST /api/jobs/stats` with `{"club": {"kind": "by_slug", "slug": "..."}, "since": "...", "until": "..."}`
   */
 object StatsApp extends ZIOAppDefault {
   private val help = "Usage: StatsApp <club-slug> [--since <date-or-instant>] [--until <date-or-instant>] [--min-games N]"
@@ -83,7 +83,7 @@ object StatsApp extends ZIOAppDefault {
 
   /** Resolves a slug the way job submission does, so a club addressed by a former name still resolves. */
   private[stats] def resolveClub(clubSlug: ClubSlug): RIO[PostgresClient, ClubId] =
-    ClubResolution.resolve(None, clubSlug).flatMap { resolution =>
+    ClubResolution.resolve(ClubQuery.BySlug(clubSlug)).flatMap { resolution =>
       ZIO.fromEither(resolution.runnable).mapBoth(NotFoundException(_), _.clubId)
     }
 

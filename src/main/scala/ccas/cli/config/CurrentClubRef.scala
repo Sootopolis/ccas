@@ -1,6 +1,6 @@
 package ccas.cli.config
 
-import ccas.analysis.apps.ClubRef
+import ccas.analysis.apps.{ClubQuery, ClubRef, ClubResolution}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 
 /** The parsed form of the CLI config's `current_club` value. Stored as `"<id>:<slug>"` when the CLI knows the club's
@@ -19,6 +19,15 @@ final case class CurrentClubRef(clubIdOption: Option[ClubId], slug: String) {
   def render: String = clubIdOption match {
     case Some(id) => s"${ClubId.unwrap(id)}:$slug"
     case None     => slug
+  }
+
+  /** Whether a club a submit reported missing is this one, compared by whichever half the submit named it by: a
+    * pointer that knows its id addressed the server with it, and a name this pointer also answers to is worth a word
+    * to whoever typed it. Drives the stranded-`current_club` hint.
+    */
+  def names(query: ClubQuery): Boolean = query match {
+    case ClubQuery.ById(clubId) => clubIdOption.contains(clubId)
+    case ClubQuery.BySlug(slug) => CurrentClubRef.sameSlug(this.slug, ClubSlug.unwrap(slug))
   }
 }
 
@@ -68,6 +77,15 @@ object CurrentClubRef {
         Option.when(isCurrent && next.render != raw.trim)(next)
       case _ => None
     }
+
+  /** The club a submit resolved to, when it is one the pointer may be repointed at. A [[ClubResolution.Moved]] name
+    * now belongs to someone else's club: the job runs there because that is the name that was asked for, but a
+    * pointer stored as a bare slug would otherwise follow the name and silently change which club it means.
+    */
+  def refreshTarget(resolution: ClubResolution): Option[ClubRef] = resolution match {
+    case ClubResolution.Moved(_, _, _) => None
+    case settled                       => settled.runnable.toOption
+  }
 
   /** Slugs compare case-insensitively and trimmed: `ClubSlug.normalize` lowercases but does not trim. */
   private[cli] def sameSlug(a: String, b: String): Boolean = a.trim.equalsIgnoreCase(b.trim)

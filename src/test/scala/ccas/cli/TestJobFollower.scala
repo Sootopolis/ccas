@@ -4,7 +4,7 @@ import zio.*
 import zio.json.*
 import zio.test.{assertTrue, Spec, TestAspect, TestConsole, ZIOSpecDefault}
 
-import ccas.analysis.apps.{ClubRef, ClubResolution}
+import ccas.analysis.apps.{ClubQuery, ClubRef, ClubResolution}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 import ccas.server.routes.JobRoutes.{ClubJobResult, JobResult, JobStatusResponse}
 import ccas.utils.ProgressSnapshot
@@ -14,7 +14,8 @@ object TestJobFollower extends ZIOSpecDefault {
 
   private val submitted =
     ClubJobResult("team-a", Some("job-1"), None, ClubResolution.Known(ClubRef(ClubId(1), ClubSlug("team-a"))))
-  private val notLocal = ClubJobResult("team-b", None, None, ClubResolution.NotLocal(ClubSlug("team-b")))
+  private val notLocal =
+    ClubJobResult("team-b", None, None, ClubResolution.NotLocal(ClubQuery.BySlug(ClubSlug("team-b"))))
 
   /** How the stub's `streamLines` behaves. `Attempts` models the server tail replaying from offset 0 on every
     * (re)connect: each entry is `(lines this attempt replays from the start, whether it then drops)`; the last entry

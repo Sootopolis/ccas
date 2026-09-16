@@ -3,48 +3,57 @@ package ccas.server.routes
 import zio.json.{DecoderOps, EncoderOps}
 import zio.test.{assertTrue, Spec, ZIOSpecDefault}
 
-import ccas.analysis.apps.{ClubRef, ClubResolution}
+import ccas.analysis.apps.{ClubQuery, ClubRef, ClubResolution}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 import ccas.server.routes.JobRoutes.*
 import ccas.server.routes.ScheduleRoutes.{CreateScheduleRequest, ScheduleResponse}
 
-/** Pins the JSON key of every wire field whose Scala name carries the `Option` suffix. The keys are the contract with
-  * clients this repo does not compile — a curl caller, and any CLI older than the running server — so a Scala-side
-  * rename must stay invisible on the wire (`@jsonField`). Both ends of the CLI/server pair share these case classes, so
-  * nothing else in the suite would notice a dropped annotation.
+/** Pins the shape of the submit wire: how a request names its club, and the JSON key of every field whose Scala name
+  * carries the `Option` suffix. These are the contract with clients this repo does not compile — a curl caller, and
+  * any CLI older than the running server — so a Scala-side rename must stay invisible on the wire (`@jsonField`). Both
+  * ends of the CLI/server pair share these case classes, so nothing else in the suite would notice a dropped
+  * annotation.
   */
 object TestWireFieldNames extends ZIOSpecDefault {
 
   private val club = ClubRef(ClubId(42L), ClubSlug("team-alpha"))
 
   override def spec: Spec[Any, Nothing] = suite("TestWireFieldNames")(
-    test("a club-scoped submit request reads its club id from `clubId`") {
-      val body = """{"clubSlug":"team-alpha","clubSlugs":["team-alpha"],"clubId":42}"""
+    test("a club-scoped submit request names its club by id or by slug, and by nothing else") {
+      val byId   = """{"club":{"kind":"by_id","clubId":42},"clubs":[{"kind":"by_id","clubId":42}]}"""
+      val named  = """{"kind":"by_slug","slug":"team-alpha"}"""
+      val bySlug = s"""{"club":$named,"clubs":[$named]}"""
       assertTrue(
-        body.fromJson[RecruitmentRequest].map(_.clubIdOption) == Right(Some(ClubId(42L))),
-        body.fromJson[MembershipRequest].map(_.clubIdOption) == Right(Some(ClubId(42L))),
-        body.fromJson[HistoryRequest].map(_.clubIdOption) == Right(Some(ClubId(42L))),
-        body.fromJson[StatsRequest].map(_.clubIdOption) == Right(Some(ClubId(42L)))
+        byId.fromJson[RecruitmentRequest].map(_.club) == Right(ClubQuery.ById(ClubId(42L))),
+        byId.fromJson[StatsRequest].map(_.club) == Right(ClubQuery.ById(ClubId(42L))),
+        byId.fromJson[MembershipRequest].map(_.clubs.head) == Right(ClubQuery.ById(ClubId(42L))),
+        byId.fromJson[HistoryRequest].map(_.clubs.head) == Right(ClubQuery.ById(ClubId(42L))),
+        bySlug.fromJson[RecruitmentRequest].map(_.club) == Right(ClubQuery.BySlug(ClubSlug("team-alpha"))),
+        bySlug.fromJson[MembershipRequest].map(_.clubs.head) == Right(ClubQuery.BySlug(ClubSlug("team-alpha"))),
+        // One field, and it is a sum: a caller cannot name a club twice over. A stray slug alongside an id is not a
+        // second answer the server has to weigh, it is a key zio-json drops; the old flat pair no longer decodes.
+        """{"club":{"kind":"by_id","clubId":42,"slug":"other"}}""".fromJson[StatsRequest].map(_.club) ==
+          Right(ClubQuery.ById(ClubId(42L))),
+        """{"clubSlug":"team-alpha","clubId":42}""".fromJson[StatsRequest].isLeft
       )
     },
-    test("a submit request re-encodes `clubId`, the form stored in job_run.params") {
+    test("a submit request re-encodes its club the way it arrived, the form stored in job_run.params") {
       val request = RecruitmentRequest(
-        clubSlug = ClubSlug("team-alpha"),
+        club = ClubQuery.ById(ClubId(42L)),
         alias = None,
         target = None,
         cumulative = None,
         sourceClubs = None,
         timeLimitMinutes = None,
         explore = None,
-        autoConfirm = None,
-        clubIdOption = Some(ClubId(42L))
+        autoConfirm = None
       )
-      assertTrue(request.toJson.contains("\"clubId\":42"))
+      assertTrue(request.toJson.contains("\"kind\":\"by_id\""), request.toJson.contains("\"clubId\":42"))
     },
     test("a submit response answers with `jobId`") {
       val single = JobResult(jobIdOption = Some("job-1"), error = None)
       val clubScoped = ClubJobResult(
-        clubSlug = "team-alpha",
+        club = "team-alpha",
         jobIdOption = Some("job-1"),
         error = None,
         resolution = ClubResolution.Known(club)
