@@ -11,11 +11,11 @@ package ccas.cli
 object CompletionSpec {
 
   /** What a command's positional arguments accept, so completion can offer the right cache (or nothing). Note: club
-    * slugs are now targeted by the `--club` option (see [[clubFlag]]), not a positional — the only command left with a
-    * positional club slug is `use-club`.
+    * slugs are now targeted by the `--club` option (see [[clubFlag]]), not a positional — the only commands left with
+    * a positional club slug are `use-club` and `club add` / `remove`.
     */
   enum PositionalKind {
-    case Slug    // a single club slug: use-club
+    case Slug    // a single club slug: use-club, club add/remove
     case JobId   // a single job-run id: logs
     case Shell   // bash | zsh | fish: completion
     case EnvKey  // a server-env var name: config get/set/unset (candidates from ServerEnvKeys.all)
@@ -43,7 +43,7 @@ object CompletionSpec {
   val clubFlag = "--club"
 
   /** Names a club outright, in place of [[clubFlag]], which is how a contested name gets settled. A value flag with
-    * nothing to offer — the ids come from the submit error that asked for one, not from any cache. */
+    * nothing to offer — the ids come from the error that asked for one, not from any cache. */
   private val clubIdFlag = "--club-id"
 
   /** Leaves in tree order. `valueFlags` always lists `--server` first to match its position in `flags`. */
@@ -86,22 +86,22 @@ object CompletionSpec {
     Leaf(List("cancel"), List(server), List(server), JobId),
     Leaf(
       List("blacklist", "add"),
-      List(server, "--reason", "--months", clubFlag),
-      List(server, "--reason", "--months", clubFlag),
+      List(server, "--reason", "--months", clubFlag, clubIdFlag),
+      List(server, "--reason", "--months", clubFlag, clubIdFlag),
       Other
     ),
-    Leaf(List("blacklist", "list"), List(server, clubFlag), List(server, clubFlag), NoArgs),
-    Leaf(List("blacklist", "remove"), List(server, clubFlag), List(server, clubFlag), Other),
+    Leaf(List("blacklist", "list"), List(server, clubFlag, clubIdFlag), List(server, clubFlag, clubIdFlag), NoArgs),
+    Leaf(List("blacklist", "remove"), List(server, clubFlag, clubIdFlag), List(server, clubFlag, clubIdFlag), Other),
     Leaf(List("schedule", "list"), List(server), List(server), NoArgs),
     Leaf(
       List("schedule", "add"),
-      List(server, "--kind", "--interval-hours", "--cron", "--tz", "--misfire", clubFlag, "--params"),
-      List(server, "--kind", "--interval-hours", "--cron", "--tz", "--misfire", clubFlag, "--params"),
+      List(server, "--kind", "--interval-hours", "--cron", "--tz", "--misfire", clubFlag, clubIdFlag, "--params"),
+      List(server, "--kind", "--interval-hours", "--cron", "--tz", "--misfire", clubFlag, clubIdFlag, "--params"),
       Other
     ),
     Leaf(List("schedule", "remove"), List(server), List(server), Other),
-    Leaf(List("club", "add"), List(server), List(server), Slug),
-    Leaf(List("club", "remove"), List(server), List(server), Slug),
+    Leaf(List("club", "add"), List(server, clubIdFlag), List(server, clubIdFlag), Slug),
+    Leaf(List("club", "remove"), List(server, clubIdFlag), List(server, clubIdFlag), Slug),
     Leaf(List("club", "list"), List(server), List(server), NoArgs),
     // `config` is local (no --server): it edits the local ccas.env file. get/set/unset take an env-var-name positional
     // we complete from ServerEnvKeys.all (EnvKey); --show-secrets is a boolean (not a value flag), so list/show keep

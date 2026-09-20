@@ -1,7 +1,7 @@
 package ccas.analysis.apps.membership
 
 import com.augustnagro.magnum.sql
-import zio.{Chunk, ZLayer}
+import zio.{Chunk, ZIO, ZLayer}
 import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
@@ -821,8 +821,37 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
 
   private def suiteReconcile = suite("reconcile (end-to-end)")(
     testDeltaReflectsNewJoinAcrossRuns,
-    testAbortsWhenSlugAnswersAsAnotherClub
+    testAbortsWhenSlugAnswersAsAnotherClub,
+    testReportRefusesAContestedName
   )
+
+  // A name two clubs held and nobody holds now is the one thing resolution won't guess at, so the report must say so
+  // rather than reconcile by name and surface Chess.com's 404 instead.
+  private def testReportRefusesAContestedName =
+    test("a report on a name several clubs held fails with the ambiguity, reconciling nothing") {
+      val gone = """{"code": 0, "message": "Resource \"\" not found."}"""
+      val routes: Routes[Any, Response] = Routes(
+        Method.GET / "pub" / "club" / string("slug") -> handler { (_: String, _: Request) =>
+          Response.json(gone).status(Status.NotFound)
+        }
+      )
+      val holders = List((ClubId(7_801), "report-a-now"), (ClubId(7_802), "report-b-now"))
+      for {
+        _ <- ZIO.foreachDiscard(holders) { case (id, now) =>
+          Club.upsert(Club(id, Times.t0, ClubSlug("contested-report"), "Contested", None, None, None)) *>
+            Club.upsert(Club(id, Times.t0, ClubSlug(now), "Contested", None, None, None))
+        }
+        client     <- TestChessComClientSupport.fakeClient(routes)
+        runsBefore <- connectZIO(sql"SELECT COUNT(*)::INT FROM membership_run".query[Int].run().head)
+        exit <- MembershipApp.reconcileIfStale(ClubSlug("contested-report"), Times.t1)
+                  .provideSomeLayer[ProgressDisplay & PostgresClient](ZLayer.succeed(client))
+                  .exit
+        runsAfter <- connectZIO(sql"SELECT COUNT(*)::INT FROM membership_run".query[Int].run().head)
+      } yield assertTrue(
+        exit.causeOption.flatMap(_.failureOption).exists(_.getMessage.contains("is ambiguous")),
+        runsAfter == runsBefore
+      )
+    }
 
   private def testAbortsWhenSlugAnswersAsAnotherClub =
     test("a slug that now answers as a different club aborts before writing anything") {

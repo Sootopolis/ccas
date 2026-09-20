@@ -5,16 +5,17 @@ import scala.util.chaining.*
 import zio.http.*
 import zio.json.{DeriveJsonCodec, JsonCodec}
 
+import ccas.analysis.apps.ClubQuery
 import ccas.analysis.apps.recruitment.{CriteriaSpec, RecruitmentCriteriaApp}
-import ccas.api.misc.subtypes.ClubSlug
 import ccas.server.routes.RouteHelpers.*
+import ccas.utils.client.ChessComClient
 import ccas.utils.sql.PostgresClient
 
 object RecruitmentCriteriaRoutes {
 
   // --- Request/response types ---
 
-  private[server] case class SetCriteriaRequest(clubSlug: ClubSlug, alias: String, criteria: CriteriaSpec)
+  private[server] case class SetCriteriaRequest(club: ClubQuery, alias: String, criteria: CriteriaSpec)
   object SetCriteriaRequest {
     given JsonCodec[SetCriteriaRequest] = DeriveJsonCodec.gen
   }
@@ -31,25 +32,36 @@ object RecruitmentCriteriaRoutes {
 
   // --- Routes ---
 
-  val routes: Routes[PostgresClient, Nothing] = Routes(
+  // Each answers with a `ClubResult` carrying the new criteria id, the alias's criteria, or the club's aliases.
+  val routes: Routes[ChessComClient & PostgresClient, Nothing] = Routes(
     Method.POST / "api" / "recruitment-criteria" -> handler { (req: Request) =>
       (for {
         body <- parseJsonBody[SetCriteriaRequest](req)
-        id   <- RecruitmentCriteriaApp.set(body.clubSlug, body.alias, body.criteria.toCriteria)
-      } yield jsonResponse(Status.Ok, SetCriteriaResponse(id)))
+        criteria = body.criteria.toCriteria
+        _ <- RecruitmentCriteriaApp.validateSet(body.alias, criteria)
+        result <- ClubRequest.run(body.club) { club =>
+          RecruitmentCriteriaApp.set(club, body.alias, criteria).map(SetCriteriaResponse(_))
+        }
+      } yield jsonResponse(Status.Ok, result))
         .pipe(withErrorHandling)
     },
-    Method.GET / "api" / "recruitment-criteria" / string("clubSlug") / string("alias") -> handler {
-      (clubSlugStr: String, alias: String, _: Request) =>
-        RecruitmentCriteriaApp.show(ClubSlug.wrap(clubSlugStr), alias)
-          .map(criteria => jsonResponse(Status.Ok, CriteriaSpec.fromCriteria(criteria)))
-          .pipe(withErrorHandling)
+    Method.GET / "api" / "recruitment-criteria" / string("alias") -> handler { (alias: String, req: Request) =>
+      (for {
+        query  <- ClubRequest.query(req)
+        result <- ClubRequest.run(query)(RecruitmentCriteriaApp.show(_, alias).map(CriteriaSpec.fromCriteria))
+      } yield jsonResponse(Status.Ok, result))
+        .pipe(withErrorHandling)
     },
-    Method.GET / "api" / "recruitment-criteria" / string("clubSlug") -> handler {
-      (clubSlugStr: String, _: Request) =>
-        RecruitmentCriteriaApp.list(ClubSlug.wrap(clubSlugStr))
-          .map(aliases => jsonResponse(Status.Ok, aliases.map(a => AliasSummary(a.alias, a.since.toString, a.criteriaId))))
-          .pipe(withErrorHandling)
+    Method.GET / "api" / "recruitment-criteria" -> handler { (req: Request) =>
+      (for {
+        query <- ClubRequest.query(req)
+        result <- ClubRequest.run(query) { club =>
+          RecruitmentCriteriaApp
+            .list(club.clubId)
+            .map(_.map(a => AliasSummary(a.alias, a.since.toString, a.criteriaId)))
+        }
+      } yield jsonResponse(Status.Ok, result))
+        .pipe(withErrorHandling)
     }
   )
 }

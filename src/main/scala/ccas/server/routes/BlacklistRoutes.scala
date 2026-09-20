@@ -1,25 +1,26 @@
 package ccas.server.routes
 
 import java.time.{Instant, ZoneOffset}
+
 import scala.util.chaining.*
 
-import ccas.utils.sql.PostgresClient
 import zio.http.*
 import zio.json.{DeriveJsonCodec, JsonCodec}
 
+import ccas.analysis.apps.ClubQuery
 import ccas.analysis.apps.recruitment.BlacklistApp
 import ccas.analysis.tables.*
-import ccas.api.misc.subtypes.{ClubSlug, PlayerId, Username}
+import ccas.api.misc.subtypes.{PlayerId, Username}
 import ccas.server.routes.RouteHelpers.*
 import ccas.utils.client.ChessComClient
-import ccas.utils.errors.NotFoundException
+import ccas.utils.sql.PostgresClient
 
 object BlacklistRoutes {
 
   // --- Request/response types ---
 
   private[ccas] case class CreateBlacklistRequest(
-    clubSlug: ClubSlug,
+    club: ClubQuery,
     usernames: List[Username],
     reason: Option[String],
     months: Option[Int]
@@ -29,7 +30,6 @@ object BlacklistRoutes {
   }
 
   private[ccas] case class BlacklistEntryResponse(
-    clubSlug: String,
     playerId: Long,
     username: Option[String],
     addedAt: String,
@@ -39,9 +39,8 @@ object BlacklistRoutes {
   object BlacklistEntryResponse {
     given JsonCodec[BlacklistEntryResponse] = DeriveJsonCodec.gen
 
-    def fromEntry(entry: BlacklistEntry, clubSlug: ClubSlug): BlacklistEntryResponse =
+    def fromEntry(entry: BlacklistEntry): BlacklistEntryResponse =
       BlacklistEntryResponse(
-        clubSlug = ClubSlug.unwrap(clubSlug),
         playerId = PlayerId.unwrap(entry.playerId),
         username = entry.username.map(Username.unwrap),
         addedAt = entry.addedAt.toString,
@@ -52,30 +51,35 @@ object BlacklistRoutes {
 
   // --- Routes ---
 
+  // Each answers with a `ClubResult`: the entries, the usernames as blacklisted (a renamed one under its current
+  // name), and whether a removal found an entry to remove.
   val routes: Routes[ChessComClient & PostgresClient, Nothing] = Routes(
-    Method.GET / "api" / "blacklist" / string("clubSlug") -> handler { (clubSlugStr: String, _: Request) =>
-      val clubSlug = ClubSlug.wrap(clubSlugStr)
+    Method.GET / "api" / "blacklist" -> handler { (req: Request) =>
       (for {
-        club <- Club.selectBySlug(clubSlug).someOrFail(NotFoundException(s"Club not found: $clubSlugStr"))
+        query <- ClubRequest.query(req)
         now = Instant.now()
-        entries <- RecruitmentBlacklist.selectActiveByClub(club.clubId, now)
-      } yield jsonResponse(Status.Ok, entries.map(BlacklistEntryResponse.fromEntry(_, clubSlug))))
+        result <- ClubRequest.run(query) { club =>
+          RecruitmentBlacklist.selectActiveByClub(club.clubId, now).map(_.map(BlacklistEntryResponse.fromEntry))
+        }
+      } yield jsonResponse(Status.Ok, result))
         .pipe(withErrorHandling)
     },
     Method.POST / "api" / "blacklist" -> handler { (req: Request) =>
       (for {
         body <- parseJsonBody[CreateBlacklistRequest](req)
         expiresAt = body.months.map(m => Instant.now().atZone(ZoneOffset.UTC).plusMonths(m.toLong).toInstant)
-        _ <- BlacklistApp.addToBlacklist(body.clubSlug, body.usernames, body.reason, expiresAt)
-      } yield Response.ok)
+        result <- ClubRequest.run(body.club) { club =>
+          BlacklistApp.addToBlacklist(club, body.usernames, body.reason, expiresAt).map(_.map(Username.unwrap))
+        }
+      } yield jsonResponse(Status.Ok, result))
         .pipe(withErrorHandling)
     },
-    Method.DELETE / "api" / "blacklist" / string("clubSlug") / string("username") -> handler {
-      (clubSlugStr: String, usernameStr: String, _: Request) =>
-        (for {
-          _ <- BlacklistApp.removeFromBlacklist(ClubSlug.wrap(clubSlugStr), Username.wrap(usernameStr))
-        } yield Response(status = Status.NoContent))
-          .pipe(withErrorHandling)
+    Method.DELETE / "api" / "blacklist" / string("username") -> handler { (usernameStr: String, req: Request) =>
+      (for {
+        query  <- ClubRequest.query(req)
+        result <- ClubRequest.run(query)(BlacklistApp.removeFromBlacklist(_, Username.wrap(usernameStr)))
+      } yield jsonResponse(Status.Ok, result))
+        .pipe(withErrorHandling)
     }
   )
 }

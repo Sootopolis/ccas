@@ -16,14 +16,14 @@ import ccas.analysis.apps.membership.MembershipApp
 import ccas.analysis.apps.recruitment.RecruitmentApp
 import ccas.analysis.apps.ref.RefApp
 import ccas.analysis.apps.stats.StatsApp
-import ccas.analysis.tables.{Club, Player, RecruitmentCandidate, RecruitmentRun, RunTrigger}
+import ccas.analysis.tables.{Player, RecruitmentCandidate, RecruitmentRun, RunTrigger}
 import ccas.analysis.tables.subtypes.RecruitmentRunId
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId, Username}
 import ccas.server.jobs.*
 import ccas.server.routes.RouteHelpers.*
 import ccas.utils.TimeParser
 import ccas.utils.client.ChessComClient
-import ccas.utils.errors.{BadRequestException, ConflictException, ErrorResponse}
+import ccas.utils.errors.{BadRequestException, ConflictException, ErrorResponse, NotFoundException}
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.withTransaction
 
@@ -186,8 +186,8 @@ object JobRoutes {
       handler((jobId: String, _: Request) => foundForJob(jobId)),
     Method.POST / "api" / "jobs" / string("jobId") / "recruitment" / "confirm" ->
       handler((jobId: String, _: Request) => confirmForJob(jobId)),
-    Method.GET / "api" / "recruitment" / "clubs" / string("slug") / "latest" / "invited" ->
-      handler((slug: String, _: Request) => latestInvitedForClub(slug)),
+    Method.GET / "api" / "recruitment" / "latest" / "invited" ->
+      handler((req: Request) => latestInvitedForClub(req)),
     Method.GET / "api" / "recruitment" / "runs" / string("runId") / "invited" ->
       handler((runId: String, _: Request) => invitedForRun(runId))
   )
@@ -395,15 +395,18 @@ object JobRoutes {
     }.pipe(withErrorHandling)
 
   /** The latest recruitment run's invited usernames for a club — `ccas recruit --report`. */
-  private def latestInvitedForClub(slug: String): URIO[PostgresClient, Response] =
-    Club.selectBySlug(ClubSlug.wrap(slug)).flatMap {
-      case None => ZIO.succeed(jsonResponse(Status.NotFound, ErrorResponse(s"Club not found: $slug")))
-      case Some(club) =>
-        RecruitmentRun.selectLatest(club.clubId).flatMap {
-          case None      => ZIO.succeed(jsonResponse(Status.NotFound, ErrorResponse(s"No recruitment runs for $slug")))
-          case Some(run) => invitedRunResponse(run.runId)
-        }
-    }.pipe(withErrorHandling)
+  private def latestInvitedForClub(req: Request): URIO[ChessComClient & PostgresClient, Response] =
+    (for {
+      query <- ClubRequest.query(req)
+      // The failure drops the resolution, so it names the club as it was asked for, which the caller recognises.
+      result <- ClubRequest.run(query) { club =>
+        RecruitmentRun
+          .selectLatest(club.clubId)
+          .someOrFail(NotFoundException(s"No recruitment runs for ${query.describe}"))
+          .flatMap(run => RecruitmentCandidate.selectInvitedByRun(run.runId).flatMap(usernamesFor))
+          .map(InvitedUsernames(_))
+      }
+    } yield jsonResponse(Status.Ok, result)).pipe(withErrorHandling)
 
   /** A specific recruitment run's invited usernames — `ccas recruit --report --run N`. */
   private def invitedForRun(runId: String): URIO[PostgresClient, Response] =
@@ -469,9 +472,9 @@ object JobRoutes {
     query: ClubQuery,
     params: Option[String]
   )(effect: ClubJobEffect): RIO[ChessComClient & PostgresClient, ClubJobResult] =
-    resolveClub(query).flatMap { resolution =>
+    ClubRequest.resolve(query).flatMap { resolution =>
       val unsubmitted = ClubJobResult(
-        club = resolution.runnable.fold(_ => query.describe, club => ClubSlug.unwrap(club.slug)),
+        club = ClubRequest.label(query, resolution),
         jobIdOption = None,
         error = None,
         resolution = resolution
@@ -483,9 +486,6 @@ object JobRoutes {
             .map(submitted => unsubmitted.copy(jobIdOption = submitted.toOption, error = submitted.left.toOption))
       }
     }
-
-  private def resolveClub(query: ClubQuery): RIO[ChessComClient & PostgresClient, ClubResolution] =
-    ZIO.serviceWithZIO[ChessComClient](ClubResolution.resolveAndAdjudicate(_, query))
 
   // A job already running is an answer for the caller, not a failed request, so its message goes in the result.
   private def jobIdOrConflict(submit: RIO[PostgresClient, JobRunId]): RIO[PostgresClient, Either[String, String]] =

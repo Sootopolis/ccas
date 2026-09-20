@@ -18,12 +18,6 @@ final case class ClubTarget(query: ClubQuery, label: String) {
     case ClubQuery.ById(_)   => true
     case ClubQuery.BySlug(_) => false
   }
-
-  /** The slug for the commands still keyed by one — blacklist, criteria, `recruit --report` (#254 step 3 retires
-    * them). Every target they can be given carries a name: a typed `--club`, or a pointer whose label is the slug last
-    * seen. Only `--club-id` labels a target with its id, and none of them offers it.
-    */
-  def displaySlug: ClubSlug = ClubSlug(label)
 }
 
 object ClubTarget {
@@ -45,6 +39,9 @@ object ClubTarget {
   *
   * `--club-id <id>` names a club outright, so it is rejected alongside anything else that names one: an id and a name
   * are two answers that can disagree, and the server must never have to pick between them (ADR 0016).
+  *
+  * Two commands name a club without falling back to `current_club`: `schedule add`, whose job kinds don't all take a
+  * club ([[optional]]), and `club add` / `remove`, whose club is the operand ([[operand]]).
   */
 object ClubResolver {
 
@@ -54,6 +51,9 @@ object ClubResolver {
   val BothError      = "--all and --club are mutually exclusive; pass one or the other"
   val ClubIdError    = "--club-id and --club are mutually exclusive; the id already names the club"
   val ClubIdAllError = "--club-id names one club; pass it on its own, not with --all"
+  val BlankClubError = "--club names no club; pass a slug, or leave --club out"
+  val NoOperandError = "no club specified: pass its slug or --club-id <id>"
+  val OperandIdError = "a slug and --club-id are mutually exclusive; the id already names the club"
 
   def single(
     explicit: Option[String],
@@ -62,15 +62,40 @@ object ClubResolver {
   ): IO[CliError, ClubTarget] =
     // Clean each source independently before falling back, so a blank explicit `--club` falls back to current_club
     // rather than blanking it out — mirrors how the comma-split multi path drops blank entries.
-    (blankToNone(explicit), clubIdOption) match {
-      case (Some(_), Some(_)) => ZIO.fail(CliError(ClubIdError, 2))
-      case (Some(slug), None) => ZIO.succeed(bySlug(slug))
-      case (None, Some(id))   => ZIO.succeed(ClubTarget.byId(ClubId(id)))
-      case (None, None) =>
+    named(explicit, clubIdOption).flatMap {
+      case Some(target) => ZIO.succeed(target)
+      case None =>
         blankToNone(currentClubOption) match {
           case Some(raw) => ZIO.succeed(fromCurrent(raw))
           case None      => ZIO.fail(CliError(NoClubError, 2))
         }
+    }
+
+  // With no current_club to fall back to, a blank `--club` is a mistake rather than an absent one: silently dropping it
+  // would schedule a club-scoped kind against no club.
+  def optional(explicit: Option[String], clubIdOption: Option[Long]): IO[CliError, Option[ClubTarget]] =
+    if (explicit.exists(_.trim.isEmpty)) { ZIO.fail(CliError(BlankClubError, 2)) }
+    else { named(explicit, clubIdOption) }
+
+  private def named(explicit: Option[String], clubIdOption: Option[Long]): IO[CliError, Option[ClubTarget]] =
+    (blankToNone(explicit), clubIdOption) match {
+      case (Some(_), Some(_)) => ZIO.fail(CliError(ClubIdError, 2))
+      case (Some(slug), None) => ZIO.some(bySlug(slug))
+      case (None, Some(id))   => ZIO.some(ClubTarget.byId(ClubId(id)))
+      case (None, None)       => ZIO.none
+    }
+
+  // More than one slug is usually an option written after the slug, which zio-cli swallows as another positional, so
+  // the arity is checked here rather than trusted to the parser.
+  def operand(slugs: List[String], clubIdOption: Option[Long]): IO[CliError, ClubTarget] =
+    (slugs.map(_.trim).filter(_.nonEmpty), clubIdOption) match {
+      case (Nil, None)         => ZIO.fail(CliError(NoOperandError, 2))
+      case (Nil, Some(id))     => ZIO.succeed(ClubTarget.byId(ClubId(id)))
+      case (slug :: Nil, None) => ZIO.succeed(bySlug(slug))
+      case (_ :: Nil, Some(_)) => ZIO.fail(CliError(OperandIdError, 2))
+      case (several, _) =>
+        val listed = several.mkString(", ")
+        ZIO.fail(CliError(s"expected one club slug, got ${several.size} ($listed); options go before the slug", 2))
     }
 
   // Labels are the normalised name rather than the text as typed, so a `--club Team-Alpha` reads back the way every

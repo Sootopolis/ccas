@@ -71,6 +71,16 @@ object ClubName {
         .query[Club].run().headOption
     }
 
+  /** The subset of `slugs` some club holds now, in one round trip. */
+  def selectHeldSlugs(slugs: Set[ClubSlug]): ZIO[PostgresClient, SQLException, Set[ClubSlug]] =
+    if (slugs.isEmpty) { ZIO.succeed(Set.empty) }
+    else {
+      connectZIO {
+        val slugList = slugs.toList
+        sql"SELECT slug FROM club_name WHERE until IS NULL AND slug = ANY($slugList)".query[ClubSlug].run().toSet
+      }
+    }
+
   /** Every club that has ever held `slug`, current holder included. Unindexed on purpose — ask
     * [[selectCurrentHolder]] first and come here only on a miss (ADR 0016).
     */

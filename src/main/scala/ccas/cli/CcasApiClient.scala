@@ -16,8 +16,8 @@ trait CcasApiClient {
   def getJson[Resp: JsonDecoder](path: String): Task[Resp]
   def postJson[Req: JsonEncoder, Resp: JsonDecoder](path: String, body: Req): Task[Resp]
   def postEmpty[Resp: JsonDecoder](path: String): Task[Resp]
-  def postUnit[Req: JsonEncoder](path: String, body: Req): Task[Unit]
   def delete(path: String): Task[Unit]
+  def deleteJson[Resp: JsonDecoder](path: String): Task[Resp]
 
   /** Stream a chunked `text/plain` endpoint line by line, invoking `onLine` for each line as it arrives. Used to
     * follow a job's live log output; scoped internally so callers need no `Scope`.
@@ -89,11 +89,11 @@ object CcasApiClient {
     override def postEmpty[Resp: JsonDecoder](path: String): Task[Resp] =
       url(path).flatMap(u => send(jsonRequest(Method.POST, u, None))).flatMap(decode[Resp])
 
-    override def postUnit[Req: JsonEncoder](path: String, body: Req): Task[Unit] =
-      url(path).flatMap(u => send(jsonRequest(Method.POST, u, Some(body.toJson)))).flatMap(ensureSuccess)
-
     override def delete(path: String): Task[Unit] =
       url(path).flatMap(u => send(jsonRequest(Method.DELETE, u, None))).flatMap(ensureSuccess)
+
+    override def deleteJson[Resp: JsonDecoder](path: String): Task[Resp] =
+      url(path).flatMap(u => send(jsonRequest(Method.DELETE, u, None))).flatMap(decode[Resp])
 
     // `client.stream` keeps the connection open and surfaces the chunked body as a live byte stream (unlike `batched`,
     // which buffers the whole response — wrong for following a still-running job). A non-success status fails the

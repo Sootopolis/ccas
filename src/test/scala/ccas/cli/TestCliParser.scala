@@ -120,6 +120,24 @@ object TestCliParser extends ZIOSpecDefault {
         s.contains(CliCommand.Stats(DefaultServer, None, Some(621L), None, None, false, false))
       )
     },
+    test("--club-id parses on every command that names a club, the operand of club add/remove included") {
+      for {
+        list     <- parsed("blacklist", "list", "--club-id", "621")
+        remove   <- parsed("blacklist", "remove", "--club-id", "621", "alice")
+        schedule <- parsed("schedule", "add", "--kind", "Membership", "--interval-hours", "24", "--club-id", "621")
+        add      <- parsed("club", "add", "--club-id", "621")
+        unmanage <- parsed("club", "remove", "--club-id", "621")
+      } yield assertTrue(
+        list.contains(CliCommand.BlacklistList(DefaultServer, None, Some(621L))),
+        remove.contains(CliCommand.BlacklistRemove(DefaultServer, None, Some(621L), "alice")),
+        schedule.exists {
+          case s: CliCommand.ScheduleAdd => s.clubIdOption.contains(621L) && s.club.isEmpty
+          case _                         => false
+        },
+        add.contains(CliCommand.ClubsAdd(DefaultServer, Nil, Some(621L))),
+        unmanage.contains(CliCommand.ClubsRemove(DefaultServer, Nil, Some(621L)))
+      )
+    },
     test("--club-id rejects a value that is not a positive club id") {
       parse("membership", "--club-id", "0").exit.map(e => assertTrue(e.isFailure))
     },
@@ -198,14 +216,35 @@ object TestCliParser extends ZIOSpecDefault {
     },
     test("blacklist add parses usernames and options") {
       parsed("blacklist", "add", "--reason", "spam", "--months", "3", "--club", "team-alpha", "u1", "u2").map(c =>
-        assertTrue(c.contains(CliCommand.BlacklistAdd(DefaultServer, Some("team-alpha"), List("u1", "u2"), Some("spam"), Some(3))))
+        assertTrue(
+          c.contains(
+            CliCommand.BlacklistAdd(
+              server = DefaultServer,
+              club = Some("team-alpha"),
+              clubIdOption = None,
+              usernames = List("u1", "u2"),
+              reason = Some("spam"),
+              months = Some(3)
+            )
+          )
+        )
       )
     },
     test("schedule add parses kind and interval") {
       parsed("schedule", "add", "--kind", "Recruitment", "--interval-hours", "24", "--club", "team-alpha").map(c =>
         assertTrue(
           c.contains(
-            CliCommand.ScheduleAdd(DefaultServer, "Recruitment", Some(24), None, None, None, Some("team-alpha"), None)
+            CliCommand.ScheduleAdd(
+              server = DefaultServer,
+              kind = "Recruitment",
+              intervalHours = Some(24),
+              cron = None,
+              tz = None,
+              misfire = None,
+              club = Some("team-alpha"),
+              clubIdOption = None,
+              params = None
+            )
           )
         )
       )
@@ -217,14 +256,15 @@ object TestCliParser extends ZIOSpecDefault {
         assertTrue(
           c.contains(
             CliCommand.ScheduleAdd(
-              DefaultServer,
-              "ClubData",
-              None,
-              Some("0 9 * * MON"),
-              Some("Europe/London"),
-              Some("catch_up"),
-              None,
-              None
+              server = DefaultServer,
+              kind = "ClubData",
+              intervalHours = None,
+              cron = Some("0 9 * * MON"),
+              tz = Some("Europe/London"),
+              misfire = Some("catch_up"),
+              club = None,
+              clubIdOption = None,
+              params = None
             )
           )
         )
@@ -235,21 +275,21 @@ object TestCliParser extends ZIOSpecDefault {
     },
     test("club add parses the slug positional") {
       parsed("club", "add", "team-alpha").map(c =>
-        assertTrue(c.contains(CliCommand.ClubsAdd(DefaultServer, "team-alpha")))
+        assertTrue(c.contains(CliCommand.ClubsAdd(DefaultServer, List("team-alpha"), None)))
       )
     },
     test("club remove parses the slug positional") {
       parsed("club", "remove", "team-alpha").map(c =>
-        assertTrue(c.contains(CliCommand.ClubsRemove(DefaultServer, "team-alpha")))
+        assertTrue(c.contains(CliCommand.ClubsRemove(DefaultServer, List("team-alpha"), None)))
       )
     },
     test("club list parses with no slug and defaults the server") {
       parsed("club", "list").map(c => assertTrue(c.contains(CliCommand.ClubsList(DefaultServer))))
     },
-    // `club add`/`remove` manage the set, so the slug is a required operand — no slug fails validation (not a
-    // current_club fallback like the operation commands).
-    test("club add with no slug fails validation") {
-      parse("club", "add").exit.map(e => assertTrue(e.isFailure))
+    // `club add`/`remove` manage the set, so the club is a required operand — but a slug or `--club-id` can supply
+    // it, so a bare `club add` parses and `ClubResolver.operand` refuses it (not a current_club fallback).
+    test("club add with no slug parses, leaving the missing operand to ClubResolver") {
+      parsed("club", "add").map(c => assertTrue(c.contains(CliCommand.ClubsAdd(DefaultServer, Nil, None))))
     },
     test("completion parses the shell argument (no server)") {
       parsed("completion", "bash").map(c => assertTrue(c.contains(CliCommand.Completion("bash"))))

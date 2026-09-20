@@ -2,7 +2,6 @@ package ccas.analysis.apps.recruitment
 
 import java.time.{Duration, Instant, LocalDate, YearMonth, ZoneOffset}
 
-import ccas.utils.sql.PostgresClient
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 import zio.{RIO, ZLayer}
 
@@ -11,7 +10,7 @@ import ccas.analysis.tables.*
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, Elo, Username}
 import ccas.utils.ProgressDisplay
 import ccas.utils.client.BodyStore
-import ccas.utils.sql.FreshSchemaLayer
+import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
 
 object TestRecruitmentFilterChain extends ZIOSpecDefault {
 
@@ -553,7 +552,7 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
       client          <- fakeChessComClient(responses)
       _               <- evalCandidates(client, runId, List(Username("alice")), criteria)
       cands           <- RecruitmentCandidate.selectByRun(runId)
-      persistedClub   <- Club.selectBySlug(ClubSlug(mysterySlug))
+      persistedClub   <- ClubName.selectCurrentHolder(ClubSlug(mysterySlug))
       persistedAdmins <- ClubAdmin.selectPlayerIdsByClub(sizableClubId)
     } yield assertTrue(
       cands.head.outcome == CandidateOutcome.Rejected,
@@ -614,7 +613,7 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
       client          <- fakeChessComClient(responses)
       _               <- evalCandidates(client, runId, List(Username("alice")), criteria)
       cands           <- RecruitmentCandidate.selectByRun(runId)
-      persistedClub   <- Club.selectBySlug(ClubSlug(tinySlug))
+      persistedClub   <- ClubName.selectCurrentHolder(ClubSlug(tinySlug))
       persistedAdmins <- ClubAdmin.selectPlayerIdsByClub(sizableClubId)
     } yield assertTrue(
       cands.head.outcome == CandidateOutcome.Deferred,

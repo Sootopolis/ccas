@@ -72,24 +72,24 @@ _ccas() {
     blacklist)
       case "$sub" in
         "") COMPREPLY=( $(compgen -W "add list remove --help" -- "$cur") ); return ;;
-        add) opts="--server --reason --months --club" ;;
-        list) opts="--server --club" ;;
-        remove) opts="--server --club" ;;
+        add) opts="--server --reason --months --club --club-id" ;;
+        list) opts="--server --club --club-id" ;;
+        remove) opts="--server --club --club-id" ;;
         *) COMPREPLY=(); return ;;
       esac ;;
     schedule)
       case "$sub" in
         "") COMPREPLY=( $(compgen -W "list add remove --help" -- "$cur") ); return ;;
         list) opts="--server" ;;
-        add) opts="--server --kind --interval-hours --cron --tz --misfire --club --params" ;;
+        add) opts="--server --kind --interval-hours --cron --tz --misfire --club --club-id --params" ;;
         remove) opts="--server" ;;
         *) COMPREPLY=(); return ;;
       esac ;;
     club)
       case "$sub" in
         "") COMPREPLY=( $(compgen -W "add remove list --help" -- "$cur") ); return ;;
-        add) opts="--server"; pos="slug" ;;
-        remove) opts="--server"; pos="slug" ;;
+        add) opts="--server --club-id"; pos="slug" ;;
+        remove) opts="--server --club-id"; pos="slug" ;;
         list) opts="--server" ;;
         *) COMPREPLY=(); return ;;
       esac ;;

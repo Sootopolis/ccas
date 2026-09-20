@@ -6,7 +6,7 @@ import zio.test.{assertTrue, Spec, ZIOSpecDefault}
 import ccas.analysis.apps.{ClubQuery, ClubRef, ClubResolution}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 import ccas.server.routes.JobRoutes.*
-import ccas.server.routes.ScheduleRoutes.{CreateScheduleRequest, ScheduleResponse}
+import ccas.server.routes.ScheduleRoutes.{CreateScheduleRequest, CreateScheduleResponse, ScheduleResponse}
 
 /** Pins the shape of the submit wire: how a request names its club, and the JSON key of every field whose Scala name
   * carries the `Option` suffix. These are the contract with clients this repo does not compile — a curl caller, and
@@ -86,9 +86,21 @@ object TestWireFieldNames extends ZIOSpecDefault {
       )
       assertTrue(status.toJson.contains("\"clubId\":42"), schedule.toJson.contains("\"clubId\":42"))
     },
-    test("a schedule create request reads its club from `clubSlug`") {
-      val body = """{"kind":"Membership","clubSlug":"team-alpha","intervalHours":24}"""
-      assertTrue(body.fromJson[CreateScheduleRequest].map(_.clubSlugOption) == Right(Some("team-alpha")))
+    test("a schedule create request names its club under `club`, and answers with `schedule` and `resolution`") {
+      val body    = """{"kind":"Membership","club":{"kind":"by_slug","slug":"team-alpha"},"intervalHours":24}"""
+      val created = CreateScheduleResponse(scheduleOption = None, resolutionOption = Some(ClubResolution.Known(club)))
+      assertTrue(
+        body.fromJson[CreateScheduleRequest].map(_.clubOption) == Right(Some(ClubQuery.BySlug(ClubSlug("team-alpha")))),
+        created.toJson.contains("\"resolution\":{"),
+        CreateScheduleResponse(scheduleOption = None, resolutionOption = None).toJson == "{}"
+      )
+    },
+    test("a synchronous club request answers with `club`, `resolution` and `result`") {
+      val answered = ClubResult(club = "team-alpha", resolution = ClubResolution.Known(club), resultOption = Some(true))
+      assertTrue(
+        answered.toJson.contains("\"result\":true"),
+        answered.toJson.fromJson[ClubResult[Boolean]] == Right(answered)
+      )
     }
   )
 }

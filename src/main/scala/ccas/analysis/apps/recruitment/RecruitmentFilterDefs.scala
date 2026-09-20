@@ -3,9 +3,8 @@ package ccas.analysis.apps.recruitment
 import java.time.temporal.ChronoUnit
 import java.time.Instant
 
-
-import ccas.utils.sql.PostgresClient
 import zio.{IO, RIO, ZIO}
+
 import RecruitmentStatsHelpers.*
 
 import ccas.analysis.apps.{UsernameRenameResolver, withClubSlugRenameRecovery, withPlayerRenameRecovery}
@@ -15,6 +14,7 @@ import ccas.api.club.ApiClub
 import ccas.api.misc.enums.PlayerStatusCategory
 import ccas.api.misc.subtypes.{ClubSlug, PlayerId, Username}
 import ccas.api.player.*
+import ccas.utils.sql.PostgresClient
 
 private[recruitment] object RecruitmentFilterDefs {
 
@@ -277,7 +277,7 @@ private[recruitment] object RecruitmentFilterDefs {
         if (failed.contains(slug)) ZIO.succeed(false)
         else
           for {
-            existingClubOption <- Club.selectBySlug(slug)
+            existingClubOption <- ClubName.selectCurrentHolder(slug)
             existingAdmins <- existingClubOption.fold(ZIO.succeed(Set.empty[PlayerId]))(c =>
               ClubAdmin.selectPlayerIdsByClub(c.clubId)
             )

@@ -63,8 +63,9 @@ object TestJobFollower extends ZIOSpecDefault {
       ZIO.die(new UnsupportedOperationException("postJson"))
     override def postEmpty[Resp: JsonDecoder](path: String): Task[Resp] =
       ZIO.die(new UnsupportedOperationException("postEmpty"))
-    override def postUnit[Req: JsonEncoder](path: String, body: Req): Task[Unit] = ZIO.unit
-    override def delete(path: String): Task[Unit]                                = ZIO.unit
+    override def delete(path: String): Task[Unit] = ZIO.unit
+    override def deleteJson[Resp: JsonDecoder](path: String): Task[Resp] =
+      ZIO.die(new UnsupportedOperationException("deleteJson"))
 
     // Rendering is exercised in TestClientProgressRenderer; here `progress` scripts the transport (default ZIO.unit =
     // one clean pass; a Ref-backed effect scripts a drop-then-reconnect). onFrame is unused — no frames are emitted.
@@ -90,8 +91,9 @@ object TestJobFollower extends ZIOSpecDefault {
         ZIO.fromEither("""{"jobId":"job-1"}""".fromJson[Resp]).mapError(m => CliError(s"stub decode failed: $m", 1))
     override def postJson[Req: JsonEncoder, Resp: JsonDecoder](path: String, body: Req): Task[Resp] =
       ZIO.die(new UnsupportedOperationException("postJson"))
-    override def postUnit[Req: JsonEncoder](path: String, body: Req): Task[Unit] = ZIO.unit
-    override def delete(path: String): Task[Unit]                                = ZIO.unit
+    override def delete(path: String): Task[Unit] = ZIO.unit
+    override def deleteJson[Resp: JsonDecoder](path: String): Task[Resp] =
+      ZIO.die(new UnsupportedOperationException("deleteJson"))
   }
 
   private def statusJson(status: String, error: Option[String]): String =

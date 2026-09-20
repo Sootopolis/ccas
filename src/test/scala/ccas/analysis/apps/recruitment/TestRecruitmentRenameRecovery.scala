@@ -260,7 +260,7 @@ object TestRecruitmentRenameRecovery extends ZIOSpecDefault {
     )
     for {
       _ <- seedDb
-      // DB still believes the stale slug — so deriveHint via Club.selectBySlug(stale) finds clubId.
+      // DB still believes the stale slug — so deriveHint, resolving it locally, finds clubId.
       _ <- Club.upsert(Club(staleClubId, Instant.parse("2020-01-01T00:00:00Z"), staleSlug, "Renamed", Some(5), None, None))
       // ClubMatchRef seeds Tier B's match-endpoint trick.
       _ <- ClubMatch.upsert(

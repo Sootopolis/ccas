@@ -11,7 +11,7 @@ import ccas.analysis.apps.recruitment.RecruitmentTestSupport.{
   apiPlayerClubsJson,
   fakeChessComClient
 }
-import ccas.analysis.tables.{Club, ClubAdmin, Player, Tables}
+import ccas.analysis.tables.{Club, ClubAdmin, ClubName, Player, Tables}
 import ccas.api.misc.enums.PlayerStatusCategory
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
 import ccas.utils.sql.{FreshSchemaLayer, PostgresClient, TestDbCleanup}
@@ -24,6 +24,10 @@ object TestClubSlugRenameResolver extends ZIOSpecDefault {
       happyPathLocalHit,
       coldDiscoveryFetchesAndPersists,
       fourOhFourReturnsNone
+    ),
+    suite("resolveAndPersist without a caller's hint")(
+      formerNameRecoversToItsClub,
+      formerNameRefusesAnotherClub
     ),
     suite("resolveAndPersist tier C (admin-clubs lookup)")(
       tierCHitFromAdminClubs,
@@ -53,6 +57,36 @@ object TestClubSlugRenameResolver extends ZIOSpecDefault {
   private def insertAdmin(clubId: ClubId, playerId: PlayerId): RIO[PostgresClient, Unit] =
     ClubAdmin.insertBatch(List(ClubAdmin(clubId, playerId))).unit
 
+  // A club local history knows by `former-f`, now called `current-f`: only `club_name` can derive a hint for it.
+  private val formerId = ClubId(901_010)
+  private val renamedAway = for {
+    _ <- Club.upsert(Club(formerId, t0, ClubSlug("former-f"), "Former", None, None, None))
+    _ <- Club.upsert(Club(formerId, t0, ClubSlug("current-f"), "Former", None, None, None))
+  } yield ()
+
+  private def formerNameRecoversToItsClub =
+    test("a former name derives its club from club_name, so Tier A recovers the name it holds now") {
+      val responses = Map("club/current-f" -> apiClubJson(ClubId.unwrap(formerId), "current-f"))
+      for {
+        _      <- renamedAway
+        client <- fakeChessComClient(responses)
+        result <- ClubSlugRenameResolver.resolveAndPersist(client, ClubSlug("former-f"), None)
+      } yield assertTrue(result.map(_.slug).contains(ClubSlug("current-f")))
+    }
+
+  // The derived hint is what the candidate came from, so it is what the candidate must answer as.
+  private def formerNameRefusesAnotherClub =
+    test("a candidate derived from a former name is refused when another club now answers to it") {
+      val stranger  = ClubId(901_011)
+      val responses = Map("club/current-f" -> apiClubJson(ClubId.unwrap(stranger), "current-f"))
+      for {
+        _         <- renamedAway
+        client    <- fakeChessComClient(responses)
+        result    <- ClubSlugRenameResolver.resolveAndPersist(client, ClubSlug("former-f"), None)
+        persisted <- Club.selectId(stranger)
+      } yield assertTrue(result.isEmpty, persisted.isEmpty)
+    }
+
   private def fetchFailureCountFor(urlSubstring: String): RIO[PostgresClient, Long] =
     connectZIO {
       sql"SELECT COUNT(*) FROM api_fetch_failure WHERE url LIKE ${"%" + urlSubstring + "%"}"
@@ -79,7 +113,7 @@ object TestClubSlugRenameResolver extends ZIOSpecDefault {
     for {
       client    <- fakeChessComClient(responses)
       result    <- ClubSlugRenameResolver.resolveOrFetch(client, slug)
-      persisted <- Club.selectBySlug(slug)
+      persisted <- ClubName.selectCurrentHolder(slug)
     } yield assertTrue(result.contains(clubId), persisted.exists(_.clubId == clubId))
   }
 
@@ -262,7 +296,7 @@ object TestClubSlugRenameResolver extends ZIOSpecDefault {
 
   private def tierCNoOpWithoutHint =
     test("Tier C: no clubIdHint AND stale slug not in Club table → no admin fan-out, returns None") {
-      // deriveHint via Club.selectBySlug fails (no row) → effectiveHint = None → Tier C bails immediately.
+      // deriveHint resolves no club for the slug → effectiveHint = None → Tier C bails immediately.
       val staleSlug = ClubSlug("orphan-stale")
       for {
         client <- fakeChessComClient(Map.empty)

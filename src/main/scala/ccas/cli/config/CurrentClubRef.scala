@@ -29,6 +29,15 @@ final case class CurrentClubRef(clubIdOption: Option[ClubId], slug: String) {
     case ClubQuery.ById(clubId) => clubIdOption.contains(clubId)
     case ClubQuery.BySlug(slug) => CurrentClubRef.sameSlug(this.slug, ClubSlug.unwrap(slug))
   }
+
+  /** Whether this pointer means `club`, which a command reached through `query`. By id when the pointer knows one,
+    * since a name can pass to another club; otherwise by the name it was set with, which is either what was typed or
+    * what the club is called now. Drives clearing the pointer when its club stops being managed.
+    */
+  def means(club: ClubRef, query: ClubQuery): Boolean = clubIdOption match {
+    case Some(clubId) => clubId == club.clubId
+    case None         => CurrentClubRef.sameSlug(slug, ClubSlug.unwrap(club.slug)) || names(query)
+  }
 }
 
 object CurrentClubRef {

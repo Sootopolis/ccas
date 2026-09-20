@@ -4,19 +4,21 @@ import zio.{durationInt, ZIO}
 import zio.json.{EncoderOps, JsonDecoder}
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
+import ccas.analysis.apps.ClubRef
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.*
 import ccas.analysis.tables.*
-import ccas.api.misc.subtypes.{ClubSlug, Elo}
-import ccas.utils.errors.{BadRequestException, NotFoundException}
+import ccas.api.misc.subtypes.Elo
+import ccas.utils.errors.BadRequestException
 import ccas.utils.sql.FreshSchemaLayer
 
 object TestRecruitmentCriteriaApp extends ZIOSpecDefault {
+
+  private val club = ClubRef(clubId, clubSlug)
 
   override def spec: Spec[Any, Throwable] = suite("TestRecruitmentCriteriaApp")(
     testSetInsertsCriteriaAndAlias,
     testSetVersioning,
     testSetDedupUnchanged,
-    testSetUnknownClub,
     testSetRejectsInvalid,
     testSetRejectsLongAlias,
     testValidateRejectsBadRanges,
@@ -30,7 +32,7 @@ object TestRecruitmentCriteriaApp extends ZIOSpecDefault {
     val criteria = makeCriteria(excludeFormerMembers = true)
     for {
       _        <- seedDb
-      id       <- RecruitmentCriteriaApp.set(clubSlug, "default", criteria)
+      id       <- RecruitmentCriteriaApp.set(club, "default", criteria)
       aliasRow <- RecruitmentAlias.selectLatest(clubId, "default")
       stored   <- RecruitmentCriteria.selectId(id)
     } yield assertTrue(
@@ -44,9 +46,9 @@ object TestRecruitmentCriteriaApp extends ZIOSpecDefault {
     test("second set creates a new criteria row; alias resolves to the newest") {
       for {
         _        <- seedDb
-        id1      <- RecruitmentCriteriaApp.set(clubSlug, "default", makeCriteria(daysSinceRejected = Some(10)))
+        id1      <- RecruitmentCriteriaApp.set(club, "default", makeCriteria(daysSinceRejected = Some(10)))
         _        <- ZIO.sleep(5.millis) // distinct `since` so the composite PK doesn't collide
-        id2      <- RecruitmentCriteriaApp.set(clubSlug, "default", makeCriteria(daysSinceRejected = Some(20)))
+        id2      <- RecruitmentCriteriaApp.set(club, "default", makeCriteria(daysSinceRejected = Some(20)))
         latest   <- RecruitmentAlias.selectLatest(clubId, "default")
         distinct <- RecruitmentAlias.countDistinct(clubId)
         criteria <- ZIO.foreach(latest)(row => RecruitmentCriteria.selectId(row.criteriaId)).map(_.flatten)
@@ -63,25 +65,18 @@ object TestRecruitmentCriteriaApp extends ZIOSpecDefault {
       val criteria = makeCriteria(daysSinceRejected = Some(30))
       for {
         _        <- seedDb
-        id1      <- RecruitmentCriteriaApp.set(clubSlug, "default", criteria)
+        id1      <- RecruitmentCriteriaApp.set(club, "default", criteria)
         _        <- ZIO.sleep(5.millis)
-        id2      <- RecruitmentCriteriaApp.set(clubSlug, "default", criteria)
+        id2      <- RecruitmentCriteriaApp.set(club, "default", criteria)
         distinct <- RecruitmentAlias.countDistinct(clubId)
       } yield assertTrue(id1 == id2, distinct == 1)
     }
-
-  private def testSetUnknownClub = test("set on an unknown club fails with NotFoundException") {
-    for {
-      _      <- seedDb
-      result <- RecruitmentCriteriaApp.set(ClubSlug("no-such-club"), "default", makeCriteria()).either
-    } yield assertTrue(result.left.exists(_.isInstanceOf[NotFoundException]))
-  }
 
   private def testSetRejectsInvalid = test("set rejects invalid criteria with BadRequestException") {
     val bad = makeCriteria().copy(dailyMinScoreRate = Some(2.0))
     for {
       _      <- seedDb
-      result <- RecruitmentCriteriaApp.set(clubSlug, "default", bad).either
+      result <- RecruitmentCriteriaApp.set(club, "default", bad).either
     } yield assertTrue(result.left.exists(_.isInstanceOf[BadRequestException]))
   }
 
@@ -102,7 +97,7 @@ object TestRecruitmentCriteriaApp extends ZIOSpecDefault {
     val tooLong = "x" * (RecruitmentCriteriaApp.MaxAliasLength + 1)
     for {
       _      <- seedDb
-      result <- RecruitmentCriteriaApp.set(clubSlug, tooLong, makeCriteria()).either
+      result <- RecruitmentCriteriaApp.set(club, tooLong, makeCriteria()).either
     } yield assertTrue(result.left.exists(_.isInstanceOf[BadRequestException]))
   }
 
