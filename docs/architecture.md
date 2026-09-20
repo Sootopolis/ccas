@@ -36,7 +36,7 @@ When several club slugs are given in one CLI invocation, clubs run sequentially 
 
 Subcommands: `set <club-slug> <alias> [--json <file>]`, `show <club-slug> <alias>`, `list <club-slug>`, `sample`.
 
-A "set" is a **versioned insert**. Criteria rows are immutable and `recruitment_alias`'s primary key is `(club_id, alias, since)`, so the same operation covers first-set and later-change; `RecruitmentApp` reads newest-wins via `selectLatest`. The app skips the insert when the capped incoming criteria equals the latest stored, uses `RecruitmentAlias.upsert` so a same-instant re-set repoints the row rather than colliding on the composite key, requires the club to exist locally (no `ChessComClient` dependency), and logs a per-field diff on every save. Interactive prompts pre-fill from the existing alias — or `RecruitmentCriteria.defaultDaily` for a new one — preview a diff, and require a `Save? [Y/n]` confirmation. The `CriteriaSpec` DTO (`RecruitmentCriteria` minus `criteria_id`) is the shared wire shape for both the `--json` file and the HTTP body.
+A "set" is a **versioned insert**. Criteria rows are immutable and `recruitment_alias`'s primary key is `(club_id, alias, since)`, so the same operation covers first-set and later-change; `RecruitmentApp` reads newest-wins via `selectLatest`. The app skips the insert when the capped incoming criteria equals the latest stored, uses `RecruitmentAlias.upsert` so a same-instant re-set repoints the row rather than colliding on the composite key, requires the club to exist locally (it resolves the club the way a submit does, and never ingests one), and logs a per-field diff on every save. Interactive prompts pre-fill from the existing alias — or `RecruitmentCriteria.defaultDaily` for a new one — preview a diff, and require a `Save? [Y/n]` confirmation. The `CriteriaSpec` DTO (`RecruitmentCriteria` minus `criteria_id`) is the shared wire shape for both the `--json` file and the HTTP body.
 
 ## Server (`ccas.server`)
 
@@ -45,10 +45,12 @@ A "set" is a **versioned insert**. Criteria rows are immutable and `recruitment_
 ### Routes
 
 - `HealthRoutes` — health and readiness.
-- `JobRoutes` — submit, query and cancel jobs, plus recruitment-result delivery: `GET /api/jobs/{jobId}/recruitment/invited` (paste-ready invited usernames), `GET .../recruitment/found` (still-`Deferred` candidates), `POST .../recruitment/confirm` (flips that run's `Deferred` candidates to `Invited` in one transaction, returning `ConfirmResult{marked, usernames}`), and `GET /api/recruitment/clubs/{slug}/latest/invited` + `GET /api/recruitment/runs/{runId}/invited` for reporting a past run. These drive `ccas recruit`'s `--stdout`, interactive-confirm and `--report` modes; an interactive scout sends `autoConfirm=false`, so candidates stay `Deferred` until the operator confirms.
+- `JobRoutes` — submit, query and cancel jobs, plus recruitment-result delivery: `GET /api/jobs/{jobId}/recruitment/invited` (paste-ready invited usernames), `GET .../recruitment/found` (still-`Deferred` candidates), `POST .../recruitment/confirm` (flips that run's `Deferred` candidates to `Invited` in one transaction, returning `ConfirmResult{marked, usernames}`), and `GET /api/recruitment/latest/invited` (for a club) + `GET /api/recruitment/runs/{runId}/invited` for reporting a past run. These drive `ccas recruit`'s `--stdout`, interactive-confirm and `--report` modes; an interactive scout sends `autoConfirm=false`, so candidates stay `Deferred` until the operator confirms.
 - `ScheduleRoutes` — CRUD for scheduled jobs.
 - `BlacklistRoutes` — synchronous CRUD for `RecruitmentBlacklist`, delegating to `BlacklistApp`.
-- `RecruitmentCriteriaRoutes` — synchronous `POST /api/recruitment-criteria`, `GET .../{slug}/{alias}`, `GET .../{slug}`, delegating to `RecruitmentCriteriaApp`.
+- `RecruitmentCriteriaRoutes` — synchronous `POST /api/recruitment-criteria`, `GET .../{alias}`, `GET /api/recruitment-criteria`, delegating to `RecruitmentCriteriaApp`.
+
+Every route that names a club reads it as a `ClubQuery` — in a JSON body, or as exactly one of `?clubId=` / `?slug=` in a URL — and resolves it through `ClubRequest` the way a job submit does, so a former name reaches its club on every route. A synchronous route answers with a `ClubResult`: the resolution, plus its result only when the resolution found a club to act on.
 
 Route handlers use inline JSON codecs. User-facing errors (`BadRequestException`, `NotFoundException`, `ConflictException`) form a sealed `UserFacingError` trait (`ccas.utils.errors`) carrying the HTTP status and a pre-encoded JSON body; `RouteHelpers.withErrorHandling` renders them uniformly (default `{"error": "<message>"}`, with `.of[B: JsonEncoder](body, msg)` for structured payloads). An escaping `HttpStatusException` from the Chess.com client renders as 502. Anything else, defects included, collapses to a generic 500 with the full cause logged via `ZIO.logErrorCause`; pure-interrupt causes are re-propagated so shutdown and client-disconnect noise stays out of the error log.
 
@@ -74,7 +76,7 @@ Magnum (`com.augustnagro.magnum`) over PostgreSQL. `PostgresClient` (`ccas.utils
 
 Custom `DbCodec` instances handle `Instant` (via `TIMESTAMPTZ`), `URL`, and `List[String]` (PostgreSQL arrays). Table names derive from case class names via the `CamelToSnakeCase` naming strategy.
 
-Server tables (`JobRun`, `JobSchedule`) reference clubs by `club_id` FK; route handlers resolve the slug from the request to a `ClubId` before submitting. Analysis run tables (`MembershipRun`, `RecruitmentRun`, `HistoryRun`) carry an optional `job_run_id` linking back to the server-level job.
+Server tables (`JobRun`, `JobSchedule`) reference clubs by `club_id` FK; route handlers resolve the club a request names to a `ClubId` before submitting. Analysis run tables (`MembershipRun`, `RecruitmentRun`, `HistoryRun`) carry an optional `job_run_id` linking back to the server-level job.
 
 `app_setting (key TEXT PK, value TEXT)` is a generic per-key store for DB-owned, app-wide policy — runtime-tunable without a redeploy and consistent across every process on one database, kept orthogonal to `client_config` (per-process `ChessComClient` tuning). Typed access goes through `AppSetting.Key[A]` and the companion registry (`AppSetting.CacheRetentionDays`, `AppSetting.all`), each key carrying its default and string codec, so the stringly-typed table is confined to one place. New keys reuse the shape with no schema churn. There is no CLI or route surface yet — change values with SQL.
 
