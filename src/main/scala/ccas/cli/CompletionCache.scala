@@ -45,7 +45,8 @@ object CompletionCache {
     */
   def readClubs: UIO[Option[List[String]]] = readClubsIn(XdgPaths.clubsFile)
 
-  /** Overwrite the clubs cache with one slug per line (the endpoint already sorts them). `false` means the write failed
+  /** Overwrite the clubs cache with one slug per line (the endpoint already sorts them). Duplicates are dropped:
+    * `club.slug` carries no unique index, so two clubs can answer to one name (#254). `false` means the write failed
     * and the cache is unchanged, so completion won't reflect this list — an unwritable cache directory otherwise leaves
     * completion permanently dead with nothing said. Callers for whom the refresh is incidental should discard the
     * result; a caller acting on an explicit request about club setup should report it. Never fails.
@@ -102,8 +103,9 @@ object CompletionCache {
   private[cli] def writeClubsIn(file: Path, slugs: List[String]): UIO[Boolean] =
     ZIO.attemptBlocking {
       createParent(file)
-      val trailing = if (slugs.isEmpty) { "" } else { "\n" }
-      Files.writeString(file, slugs.mkString("", "\n", trailing))
+      val unique   = slugs.distinct
+      val trailing = if (unique.isEmpty) { "" } else { "\n" }
+      Files.writeString(file, unique.mkString("", "\n", trailing))
     }.isSuccess
 
   /** No-op when the list is empty or the cache already exists (an authoritative refresh must win). The seed file's

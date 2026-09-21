@@ -80,6 +80,15 @@ object TestCompletionCache extends ZIOSpecDefault {
           slugs <- CompletionCache.readClubsIn(f)
         } yield assertTrue(text == "z\n", slugs.contains(List("z")))
       },
+      // Two clubs can answer to one name since #254, and the same name offered twice helps nobody at the prompt.
+      test("a slug two clubs answer to is offered once") {
+        for {
+          f     <- clubsFile
+          _     <- CompletionCache.writeClubsIn(f, List("team-alpha", "team-beta", "team-alpha"))
+          text  <- read(f)
+          slugs <- CompletionCache.readClubsIn(f)
+        } yield assertTrue(text == "team-alpha\nteam-beta\n", slugs.contains(List("team-alpha", "team-beta")))
+      },
       test("an empty list writes an empty file, not a stray newline") {
         for {
           f    <- clubsFile

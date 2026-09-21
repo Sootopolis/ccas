@@ -111,9 +111,10 @@ object UseClub {
     } yield ExitCode.success
 
   // The managed club matching the typed slug (case-insensitive; `ClubSlug.normalize` only lowercases), and its stable
-  // id — the value that upgrades the pointer to rename-proof form.
-  private def matchedId(slug: String, managed: Option[List[ManagedClubResponse]]): Option[ClubId] =
-    managed.flatMap(_.find(_.slug.equalsIgnoreCase(slug))).map(c => ClubId.wrap(c.clubId))
+  // id — the value that upgrades the pointer to rename-proof form. `club.slug` carries no unique index, so two managed
+  // clubs can show one name (#254); an ambiguous name leaves the pointer slug-only, for the next submit to backfill.
+  private[cli] def matchedId(slug: String, managed: Option[List[ManagedClubResponse]]): Option[ClubId] =
+    managed.map(_.filter(_.slug.equalsIgnoreCase(slug))).collect { case List(club) => ClubId.wrap(club.clubId) }
 
   private def upgradePointer(id: ClubId, slug: String): UIO[Unit] =
     ConfigWriter.setCurrentClub(XdgPaths.configFile, Some(id), slug).ignore

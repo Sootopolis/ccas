@@ -3,8 +3,11 @@ package ccas.cli
 import zio.ExitCode
 import zio.test.{assertTrue, Spec, TestConsole, ZIOSpecDefault}
 
+import ccas.api.misc.subtypes.ClubId
+import ccas.server.routes.ManagedClubRoutes.ManagedClubResponse
+
 /** Tests the [[UseClub]] modes and helpers that touch neither the filesystem nor the network: argument validation, the
-  * show/clear paths that short-circuit before any write, the classify/isUnknown predicates, and the advisory messages.
+  * show/clear paths that short-circuit before any write, the classify/matchedId/isUnknown helpers, and the advisories.
   *
   * The `use-club <slug>` *set* path is deliberately not driven here — it resolves through `XdgPaths.configFile` and
   * would clobber the developer's real `~/.config/ccas/config.conf`, and its probe hits a real server. The write
@@ -13,6 +16,9 @@ import zio.test.{assertTrue, Spec, TestConsole, ZIOSpecDefault}
 object TestUseClub extends ZIOSpecDefault {
 
   private val Server = "http://127.0.0.1:8080"
+
+  private def managed(clubId: Long, slug: String): ManagedClubResponse =
+    ManagedClubResponse(clubId = clubId, slug = slug, name = s"Club $clubId", markedAt = "2026-09-21T00:00:00Z")
 
   override def spec: Spec[Any, Any] = suite("TestUseClub")(
     test("blank slug is rejected with exit 2 (no write, no probe)") {
@@ -74,6 +80,22 @@ object TestUseClub extends ZIOSpecDefault {
     },
     test("classify: no usable answer from the server is Unverified") {
       assertTrue(UseClub.classify("team-alpha", None) == UseClub.Verify.Unverified)
+    },
+    // matchedId is what upgrades the pointer to the rename-proof `<id>:<slug>` form. `club.slug` carries no unique
+    // index since #254, so the managed set can show one name twice — and then no id is safe to store.
+    test("matchedId: the one managed club answering to the slug, case-insensitively") {
+      assertTrue(UseClub.matchedId("Team-Alpha", Some(List(managed(7, "team-alpha"), managed(8, "team-beta"))))
+        .contains(ClubId(7)))
+    },
+    test("matchedId: two managed clubs showing one slug upgrade nothing") {
+      val ambiguous = Some(List(managed(7, "team-alpha"), managed(8, "team-alpha")))
+      assertTrue(UseClub.matchedId("team-alpha", ambiguous).isEmpty)
+    },
+    test("matchedId: an unmatched slug, and an unreachable server, upgrade nothing") {
+      assertTrue(
+        UseClub.matchedId("team-gamma", Some(List(managed(7, "team-alpha")))).isEmpty,
+        UseClub.matchedId("team-alpha", None).isEmpty
+      )
     },
     suite("advise")(
       test("Managed says nothing") {

@@ -1,6 +1,6 @@
 # Recover renamed usernames and club slugs instead of treating a 404 as death
 
-**Status:** Accepted, 2026-05-07 (#23). The tombstone consequence is replaced by [0016](0016-identity-is-the-id-names-are-observations.md) once its migration lands; the tier design below stays live.
+**Status:** Accepted, 2026-05-07 (#23); the tombstone consequence superseded in part, 2026-09-21, by [0016](0016-identity-is-the-id-names-are-observations.md) (#254). `club.slug` has lost its unique index, so a club no longer needs a `_stale_<id>` to free a slot — the code still writes one until #254's step 4, and `player.username` keeps its index until step 5. The tier design below stays live for both.
 
 ## Context
 

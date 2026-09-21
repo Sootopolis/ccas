@@ -17,7 +17,7 @@ Write one when the decision is hard to reverse, involves a real trade-off, or ha
 | [0007](0007-response-caching-in-postgres.md) | Cache API responses in Postgres, keyed by URL | Accepted, 2026-04-16 |
 | [0008](0008-body-store-outside-postgres.md) | Keep response bodies out of Postgres | Accepted, 2026-08-07 |
 | [0009](0009-bound-every-body-store-operation.md) | Bound every `BodyStore` operation in time | Accepted, 2026-08-14 |
-| [0010](0010-rename-recovery-for-usernames-and-club-slugs.md) | Username / club-slug rename recovery | Accepted, 2026-05-07 |
+| [0010](0010-rename-recovery-for-usernames-and-club-slugs.md) | Username / club-slug rename recovery | Accepted, 2026-05-07; **tombstones superseded in part by 0016**, 2026-09-21 |
 | [0011](0011-cli-locality-and-the-current-club-pointer.md) | CLI locality, `current_club`, config files | Accepted, 2026-06-25 |
 | [0012](0012-gate-based-adaptive-throttle.md) | Gate-based adaptive throttle for `ChessComClient` | Accepted, 2026-04-01 |
 | [0013](0013-job-log-sink-survives-write-failures.md) | A job's log sink degrades and retries rather than switching off | Accepted, 2026-06-26 |

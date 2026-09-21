@@ -43,7 +43,7 @@ object NetworkUnavailableException {
 
 /** Recovery-internal swallow for tiered rename / slug resolution: a tier's own failure must never replace the
   * caller's original 404, but a systemic outage must still abort the run rather than record a bogus skip (#119).
-  * The tier design is `docs/adr/0010-rename-recovery-for-usernames-and-club-slugs.md`.
+  * The tier design is `docs/adr/0010-rename-recovery-for-usernames-and-club-slugs.md` (tombstones superseded).
   *
   *   - [[NetworkUnavailableException]] — re-raise (systemic outage, abort the run).
   *   - [[HttpStatusException]] — `None`, silently (cancelled match, missing tournament, intermittent 5xx).

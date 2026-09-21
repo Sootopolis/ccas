@@ -89,7 +89,7 @@ Rules that aren't derivable from reading the code. Follow them; they exist becau
 | Response caching, conditional GETs, retention    | [0007](docs/adr/0007-response-caching-in-postgres.md)                                                              |
 | Body storage outside Postgres                    | [0008](docs/adr/0008-body-store-outside-postgres.md)                                                               |
 | `BodyStore` deadlines and the S3 budget          | [0009](docs/adr/0009-bound-every-body-store-operation.md)                                                          |
-| Username / club-slug rename recovery             | [0010](docs/adr/0010-rename-recovery-for-usernames-and-club-slugs.md)                                              |
+| Username / club-slug rename recovery             | [0010](docs/adr/0010-rename-recovery-for-usernames-and-club-slugs.md), tombstones superseded by 0016               |
 | CLI locality, `current_club`, config files       | [0011](docs/adr/0011-cli-locality-and-the-current-club-pointer.md)                                                 |
 | Job-log sink surviving write failures            | [0013](docs/adr/0013-job-log-sink-survives-write-failures.md)                                                      |
 | Both `DATABASE_URL` forms, credential lifting    | [0014](docs/adr/0014-accept-both-database-url-forms.md)                                                            |

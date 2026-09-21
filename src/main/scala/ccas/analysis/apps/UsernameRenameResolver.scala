@@ -28,7 +28,7 @@ import ccas.utils.sql.PostgresClient.withTransaction
   * returned as fresh.
   *
   * Why the entry points gate on [[ccas.utils.client.ReportedNotFound]] rather than any 404, and what a failed
-  * resolution does: `docs/adr/0010-rename-recovery-for-usernames-and-club-slugs.md`.
+  * resolution does: `docs/adr/0010-rename-recovery-for-usernames-and-club-slugs.md` (tombstones superseded).
   */
 object UsernameRenameResolver {
 
