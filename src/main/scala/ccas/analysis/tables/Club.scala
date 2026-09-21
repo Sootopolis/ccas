@@ -67,7 +67,6 @@ object Club {
               latest_match_at  TIMESTAMPTZ,
               fetched_at       TIMESTAMPTZ
             )""".update.run()
-      sql"CREATE UNIQUE INDEX IF NOT EXISTS club_slug_key ON club (slug)".update.run()
     }
 
   def selectAll: ZIO[PostgresClient, SQLException, List[Club]] =
@@ -101,7 +100,8 @@ object Club {
     *
     * When another club already holds the target slug in the database, this method looks up one of the stale club's
     * matches and fetches the team URL from the Chess.com API to discover its current slug. Falls back to a placeholder
-    * if the stale club has no matches.
+    * if the stale club has no matches. `club.slug` carries no unique index, so the conflict is one the tombstones
+    * keep rather than one the database raises (#254).
     */
   def upsertResolvingSlugConflict(club: Club, client: ChessComClient): ZIO[PostgresClient, Throwable, Int] =
     withTransaction {

@@ -23,7 +23,7 @@ import ccas.utils.sql.PostgresClient
   * (`_stale_<clubId>`) are never returned as fresh.
   *
   * Why the entry points gate on [[ccas.utils.client.ReportedNotFound]] rather than any 404 — it is what stops Tier
-  * C's fan-out firing on noise: `docs/adr/0010-rename-recovery-for-usernames-and-club-slugs.md`.
+  * C's fan-out on noise: `docs/adr/0010-rename-recovery-for-usernames-and-club-slugs.md` (tombstones superseded).
   */
 object ClubSlugRenameResolver {
 
@@ -241,8 +241,8 @@ object ClubSlugRenameResolver {
     * supersedes; a systemic [[NetworkUnavailableException]] re-raises so a caller's retry loop aborts cleanly rather
     * than recording a bogus skip (#119). Lives in apps/ rather than tables/ to avoid a cycle with `tables.Club`.
     *
-    * Slug-rename recovery is deliberately not wired here — it could not fire. See
-    * `docs/adr/0010-rename-recovery-for-usernames-and-club-slugs.md`.
+    * Slug-rename recovery is deliberately not wired here — a separate decision since #254 made it reachable. See
+    * `docs/adr/0010-rename-recovery-for-usernames-and-club-slugs.md` (tombstones superseded).
     */
   def resolveOrFetch(
     client: ChessComClient,

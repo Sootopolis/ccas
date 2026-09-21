@@ -31,6 +31,7 @@ object TestClubSql extends ZIOSpecDefault {
     testClubMatchRefDelete,
     testClubMatchRefDeleteAll,
     testUpsertResolvingSlugConflictPropagatesGenuine404,
+    testTwoClubsMayHoldOneSlug,
     testReplaceSinceApproximate,
     testReplaceSinceNonApproximate,
     testClubAdminInsertAndSelect,
@@ -212,6 +213,24 @@ object TestClubSql extends ZIOSpecDefault {
       } yield assertTrue(
         result.left.exists(_.isInstanceOf[ReportedNotFound]),
         slugAfter.contains(staleClub.slug)
+      )
+    }
+
+  // `club.slug` is a display cache with no unique index since #254, and only `club_name` says who holds a name now.
+  // The second upsert here is what a `club_slug_key` still in place would reject.
+  private def testTwoClubsMayHoldOneSlug =
+    test("two clubs may hold one slug in `club`, and `club_name` still names a single current holder") {
+      val slug    = ClubSlug("shared-slug")
+      val former  = Club(ClubId(230), Times.t0, slug, "Former Holder", None, None, None)
+      val current = Club(ClubId(231), Times.t0, slug, "Current Holder", None, None, None)
+      for {
+        _            <- Club.upsert(former)
+        _            <- Club.upsert(current)
+        sharing      <- Club.selectAll.map(_.filter(_.slug == slug).map(_.clubId).toSet)
+        holderOption <- ClubName.selectCurrentHolder(slug)
+      } yield assertTrue(
+        sharing == Set(former.clubId, current.clubId),
+        holderOption.map(_.clubId).contains(current.clubId)
       )
     }
 
