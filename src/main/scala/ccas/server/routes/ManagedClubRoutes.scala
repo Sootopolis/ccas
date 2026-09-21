@@ -5,11 +5,12 @@ import scala.util.chaining.*
 import zio.http.*
 import zio.json.{DeriveJsonCodec, JsonCodec}
 
-import ccas.analysis.apps.ManagedClubApp
+import ccas.analysis.apps.{ClubQuery, ManagedClubApp}
 import ccas.analysis.tables.ManagedClubView
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 import ccas.server.routes.RouteHelpers.*
 import ccas.server.scheduler.JobSchedule
+import ccas.utils.client.ChessComClient
 import ccas.utils.sql.PostgresClient
 
 /** Synchronous CRUD for the managed-club marker (delegates to [[ManagedClubApp]], not `JobRunner`). Mirrors
@@ -19,7 +20,7 @@ object ManagedClubRoutes {
 
   // --- Request/response types ---
 
-  private[ccas] case class MarkManagedRequest(clubSlug: ClubSlug)
+  private[ccas] case class MarkManagedRequest(club: ClubQuery)
   object MarkManagedRequest {
     given JsonCodec[MarkManagedRequest] = DeriveJsonCodec.gen
   }
@@ -39,7 +40,8 @@ object ManagedClubRoutes {
 
   // --- Routes ---
 
-  val routes: Routes[PostgresClient, Nothing] = Routes(
+  // Marking and unmarking answer with a `ClubResult` saying whether the marker changed.
+  val routes: Routes[ChessComClient & PostgresClient, Nothing] = Routes(
     Method.GET / "api" / "managed-clubs" -> handler { (_: Request) =>
       ManagedClubApp.list
         .map(views => jsonResponse(Status.Ok, views.map(ManagedClubResponse.fromView)))
@@ -47,22 +49,20 @@ object ManagedClubRoutes {
     },
     Method.POST / "api" / "managed-clubs" -> handler { (req: Request) =>
       (for {
-        body <- parseJsonBody[MarkManagedRequest](req)
-        _    <- ManagedClubApp.mark(body.clubSlug)
-      } yield Response.ok)
+        body   <- parseJsonBody[MarkManagedRequest](req)
+        result <- ClubRequest.run(body.club)(club => ManagedClubApp.mark(club.clubId))
+      } yield jsonResponse(Status.Ok, result))
         .pipe(withErrorHandling)
     },
-    Method.DELETE / "api" / "managed-clubs" / string("clubSlug") -> handler { (clubSlugStr: String, _: Request) =>
-      // Unmanage + stop the club's per-club schedules atomically (#106): one transaction so a failure leaves
-      // neither the managed_club marker nor the job_schedule rows half-removed.
-      PostgresClient
-        .withTransaction(
-          for {
-            clubId <- ManagedClubApp.unmark(ClubSlug.wrap(clubSlugStr))
-            _      <- JobSchedule.deleteByClub(clubId)
-          } yield ()
-        )
-        .as(Response(status = Status.NoContent))
+    Method.DELETE / "api" / "managed-clubs" -> handler { (req: Request) =>
+      // Unmanage + stop the club's per-club schedules atomically (#106), so a failure leaves neither the managed_club
+      // marker nor the job_schedule rows half-removed. Resolution may ask Chess.com, so it runs before the transaction.
+      (for {
+        query <- ClubRequest.query(req)
+        result <- ClubRequest.run(query) { club =>
+          PostgresClient.withTransaction(ManagedClubApp.unmark(club.clubId) <* JobSchedule.deleteByClub(club.clubId))
+        }
+      } yield jsonResponse(Status.Ok, result))
         .pipe(withErrorHandling)
     }
   )

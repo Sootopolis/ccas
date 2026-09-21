@@ -61,6 +61,15 @@ object TestClubNameSql extends ZIOSpecDefault {
         holders.map(_.clubId) == List(former.clubId, next.clubId)
       )
     },
+    test("selectHeldSlugs answers with the names some club holds now, not the ones given up") {
+      val c = club(160, "held-before")
+      for {
+        _     <- Club.upsert(c)
+        _     <- Club.upsert(c.copy(slug = ClubSlug("held-now")))
+        empty <- ClubName.selectHeldSlugs(Set.empty)
+        held  <- ClubName.selectHeldSlugs(Set(ClubSlug("held-before"), ClubSlug("held-now"), ClubSlug("never-held")))
+      } yield assertTrue(empty.isEmpty, held == Set(ClubSlug("held-now")))
+    },
     test("a tombstone closes the current name and opens none") {
       val c = club(140, "about-to-go-stale")
       for {

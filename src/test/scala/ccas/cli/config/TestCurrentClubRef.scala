@@ -116,6 +116,27 @@ object TestCurrentClubRef extends ZIOSpecDefault {
           !bare.names(ClubQuery.ById(ClubId(42)))
         )
       }
+    ),
+    // Clearing the pointer when its club stops being managed must not follow a name to someone else's club.
+    suite("means (is a removed club this pointer's?)")(
+      test("a pointer carrying an id means that club alone, even when the name it was set with has moved on") {
+        val pointer = CurrentClubRef(Some(ClubId(42)), "team-alpha")
+        val ours    = ClubRef(ClubId(42), ClubSlug("team-alpha-renamed"))
+        val theirs  = ClubRef(ClubId(43), ClubSlug("team-alpha"))
+        assertTrue(
+          pointer.means(ours, ClubQuery.BySlug(ClubSlug("team-alpha-renamed"))),
+          !pointer.means(theirs, ClubQuery.BySlug(ClubSlug("team-alpha")))
+        )
+      },
+      test("a bare-slug pointer means the club it names now, or the one it was reached by") {
+        val bare    = CurrentClubRef(None, "team-alpha")
+        val renamed = ClubRef(ClubId(42), ClubSlug("team-alpha-renamed"))
+        assertTrue(
+          bare.means(ClubRef(ClubId(42), ClubSlug("team-alpha")), ClubQuery.ById(ClubId(42))),
+          bare.means(renamed, ClubQuery.BySlug(ClubSlug("team-alpha"))),
+          !bare.means(renamed, ClubQuery.ById(ClubId(42)))
+        )
+      }
     )
   )
 }

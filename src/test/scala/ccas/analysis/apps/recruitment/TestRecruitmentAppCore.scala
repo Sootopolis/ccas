@@ -6,6 +6,7 @@ import com.augustnagro.magnum.sql
 import zio.{ZIO, ZLayer}
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
+import ccas.analysis.apps.ClubRef
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.*
 import ccas.analysis.tables.*
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, Elo, PlayerId, Username}
@@ -429,7 +430,7 @@ object TestRecruitmentAppCore extends ZIOSpecDefault {
           .insert(
             RecruitmentCandidate(runId, pid1, Times.t0, CandidateOutcome.Invited, None)
           )
-        _ <- RecruitmentApp.showReport(clubSlug, Some(runId.toString))
+        _ <- RecruitmentApp.showReport(ClubRef(clubId, clubSlug), Some(runId.toString))
       } yield assertTrue(true)
     },
     test("showReport with latest run") {
@@ -445,7 +446,7 @@ object TestRecruitmentAppCore extends ZIOSpecDefault {
           .insert(
             RecruitmentCandidate(runId, pid0, Times.t0, CandidateOutcome.Invited, None)
           )
-        _ <- RecruitmentApp.showReport(clubSlug, None)
+        _ <- RecruitmentApp.showReport(ClubRef(clubId, clubSlug), None)
       } yield assertTrue(true)
     }
   )

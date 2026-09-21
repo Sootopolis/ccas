@@ -4,11 +4,16 @@ import java.nio.file.{Files, Path}
 import java.sql.SQLException
 import java.time.Instant
 
-import zio.{Clock, Console, RIO, Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
+import scala.annotation.tailrec
+
+import zio.{Clock, Console, IO, RIO, Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
 import zio.json.{DeriveJsonCodec, EncoderOps, JsonCodec, JsonDecoder}
 
+import ccas.analysis.apps.{ClubQuery, ClubRef, ClubResolution}
 import ccas.analysis.tables.*
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, Elo}
+import ccas.utils.ProgressDisplay
+import ccas.utils.client.{BodyStore, ChessComClient, HttpClientLayer}
 import ccas.utils.errors.{BadRequestException, NotFoundException}
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.withTransaction
@@ -19,8 +24,8 @@ import ccas.utils.sql.PostgresClient.withTransaction
   * A "set" is a versioned insert: criteria rows are immutable and `recruitment_alias` is keyed by
   * `(club_id, alias, since)`, so both first-set and later-change insert a fresh criteria row plus a new alias row
   * pointing at it. `RecruitmentApp` reads newest-wins via `RecruitmentAlias.selectLatest`, so there is no update or
-  * delete path. The club must already exist locally (no network); recruitment config assumes the club has been
-  * ingested.
+  * delete path. Every operation takes a club already resolved, and so already ingested, which recruitment config
+  * assumes anyway.
   */
 object RecruitmentCriteriaApp extends ZIOAppDefault {
   val MaxAliasLength: Int            = 64
@@ -40,61 +45,82 @@ object RecruitmentCriteriaApp extends ZIOAppDefault {
        |Alias must be 1-$MaxAliasLength characters after trimming.""".stripMargin
 
   override def run: RIO[ZIOAppArgs & Scope, Unit] =
-    (for {
-      args <- ZIOAppArgs.getArgs
-      _ <- args.toList match {
-        case "set" :: clubStr :: alias :: rest =>
-          val clubSlug = ClubSlug.wrap(clubStr)
-          for {
-            criteriaOption <- rest match {
-              case "--json" :: path :: Nil => loadFromJson(path).map(Some(_))
-              case Nil                     => promptCriteria(clubSlug, alias)
-              case _                       => ZIO.fail(BadRequestException(help))
-            }
-            _ <- criteriaOption match {
-              case Some(c) => set(clubSlug, alias, c).flatMap(id => Console.printLine(s"criteria_id=$id"))
-              case None    => Console.printLine("Aborted; no changes.")
-            }
-          } yield ()
-        case "show" :: clubStr :: alias :: _ =>
-          show(ClubSlug.wrap(clubStr), alias).flatMap(printCriteria)
-        case "list" :: clubStr :: _ =>
-          list(ClubSlug.wrap(clubStr)).flatMap(printAliases)
-        case "sample" :: _ =>
-          Console.printLine(CriteriaSpec.fromCriteria(RecruitmentCriteria.defaultDaily).toJsonPretty)
-        case _ => ZIO.fail(BadRequestException(help))
-      }
-    } yield ()).provideSomeAuto(
-      PostgresClient.live(onInit = Tables.ensureTablesOnInit)
-    )
+    ZIOAppArgs.getArgs.map(_.toList).flatMap {
+      case "sample" :: _ =>
+        Console.printLine(CriteriaSpec.fromCriteria(RecruitmentCriteria.defaultDaily).toJsonPretty)
+      // Only a command that names a club needs the Chess.com client, which resolving the club may ask.
+      case args @ ("set" | "show" | "list") :: _ =>
+        clubCommand(args).provideSomeAuto(
+          ProgressDisplay.live(showProgress = true),
+          ChessComClient.live("criteria"),
+          HttpClientLayer.live,
+          BodyStore.live,
+          PostgresClient.live(onInit = Tables.ensureTablesOnInit)
+        )
+      case _ => ZIO.fail(BadRequestException(help))
+    }
+
+  private def clubCommand(args: List[String]): RIO[ChessComClient & PostgresClient, Unit] =
+    args match {
+      case "set" :: clubStr :: alias :: rest =>
+        for {
+          club <- resolve(clubStr)
+          criteriaOption <- rest match {
+            case "--json" :: path :: Nil => loadFromJson(path).map(Some(_))
+            case Nil                     => promptCriteria(club, alias)
+            case _                       => ZIO.fail(BadRequestException(help))
+          }
+          _ <- criteriaOption match {
+            case Some(c) => set(club, alias, c).flatMap(id => Console.printLine(s"criteria_id=$id"))
+            case None    => Console.printLine("Aborted; no changes.")
+          }
+        } yield ()
+      case "show" :: clubStr :: alias :: _ =>
+        resolve(clubStr).flatMap(show(_, alias)).flatMap(printCriteria)
+      case "list" :: clubStr :: _ =>
+        resolve(clubStr).flatMap(club => list(club.clubId)).flatMap(printAliases)
+      case _ => ZIO.fail(BadRequestException(help))
+    }
+
+  private def resolve(clubStr: String): RIO[ChessComClient & PostgresClient, ClubRef] =
+    ClubResolution.resolveRunnable(ClubQuery.BySlug(ClubSlug.wrap(clubStr)))
 
   // --- Core (reused by RecruitmentCriteriaRoutes) ---
 
-  def set(clubSlug: ClubSlug, alias: String, criteria: RecruitmentCriteria): RIO[PostgresClient, Long] = {
-    val a      = alias.trim
-    val capped = criteria.capped
+  /** Refuses what [[set]] would, so a route can refuse it before resolving the club, which may ask Chess.com. */
+  def validateSet(alias: String, criteria: RecruitmentCriteria): IO[BadRequestException, Unit] = {
+    val a = alias.trim
     for {
       _ <- ZIO.whenDiscard(a.isEmpty)(ZIO.fail(BadRequestException("alias must not be empty")))
       _ <- ZIO.whenDiscard(a.length > MaxAliasLength)(
         ZIO.fail(BadRequestException(s"alias must be <= $MaxAliasLength chars (got ${a.length})"))
       )
-      _ <- ZIO.fromEither(validate(capped)).mapError(BadRequestException(_))
+      _ <- ZIO.fromEither(validate(criteria.capped)).mapError(BadRequestException(_))
+    } yield ()
+  }
+
+  def set(club: ClubRef, alias: String, criteria: RecruitmentCriteria): RIO[PostgresClient, Long] = {
+    val a      = alias.trim
+    val capped = criteria.capped
+    for {
+      _ <- validateSet(alias, criteria)
       _ <- ZIO.whenDiscard(capped != criteria)(
         ZIO.logInfo(s"Capped lookback fields to ${RecruitmentCriteria.MaxDaysSinceLookback} days for alias '$a'")
       )
-      club    <- Club.selectBySlug(clubSlug).someOrFail(NotFoundException(s"Club not found: $clubSlug"))
       current <- latestCriteria(club.clubId, a)
       criteriaId <- current match {
         // Unchanged re-submit: reuse the existing version instead of growing the append-only tables.
         case Some((id, stored)) if stored.copy(criteriaId = 0) == capped.copy(criteriaId = 0) =>
-          ZIO.logInfo(s"Criteria for alias '$a' of club $clubSlug unchanged (criteria_id=$id); skipping insert").as(id)
+          ZIO
+            .logInfo(s"Criteria for alias '$a' of club ${club.slug} unchanged (criteria_id=$id); skipping insert")
+            .as(id)
         case _ =>
           val changes = diffLines(current.map(_._2), capped)
           for {
             now <- Clock.instant
             id  <- insertWithSinceRetry(club.clubId, a, capped, now, MaxSinceRetries)
             _ <- ZIO.logInfo(
-              s"Set criteria (criteria_id=$id) for alias '$a' of club $clubSlug | ${changes.mkString("; ")}"
+              s"Set criteria (criteria_id=$id) for alias '$a' of club ${club.slug} | ${changes.mkString("; ")}"
             )
           } yield id
       }
@@ -105,6 +131,7 @@ object RecruitmentCriteriaApp extends ZIOAppDefault {
     * Used by both the core save log and the interactive confirmation preview.
     */
   private[recruitment] def diffLines(before: Option[RecruitmentCriteria], after: RecruitmentCriteria): List[String] = {
+    @tailrec
     def disp(x: Any): String = x match {
       case None         => "none"
       case Some(v)      => disp(v)
@@ -174,20 +201,16 @@ object RecruitmentCriteriaApp extends ZIOAppDefault {
         insertWithSinceRetry(clubId, alias, criteria, since.plusNanos(1000), attemptsLeft - 1)
     }
 
-  def show(clubSlug: ClubSlug, alias: String): RIO[PostgresClient, RecruitmentCriteria] =
+  def show(club: ClubRef, alias: String): RIO[PostgresClient, RecruitmentCriteria] =
     for {
-      club <- Club.selectBySlug(clubSlug).someOrFail(NotFoundException(s"Club not found: $clubSlug"))
       aliasRow <- RecruitmentAlias.selectLatest(club.clubId, alias)
-        .someOrFail(NotFoundException(s"No recruitment alias '$alias' found for club '$clubSlug'"))
+        .someOrFail(NotFoundException(s"No recruitment alias '$alias' found for club '${club.slug}'"))
       criteria <- RecruitmentCriteria.selectId(aliasRow.criteriaId)
         .someOrFail(new IllegalStateException(s"Criteria ${aliasRow.criteriaId} referenced by alias '$alias' not found"))
     } yield criteria
 
-  def list(clubSlug: ClubSlug): RIO[PostgresClient, List[RecruitmentAlias]] =
-    for {
-      club    <- Club.selectBySlug(clubSlug).someOrFail(NotFoundException(s"Club not found: $clubSlug"))
-      aliases <- RecruitmentAlias.selectClub(club.clubId)
-    } yield aliases
+  def list(clubId: ClubId): RIO[PostgresClient, List[RecruitmentAlias]] =
+    RecruitmentAlias.selectClub(clubId)
 
   /** Cross-field sanity checks beyond the per-field opaque-type validation. (The 180-day lookback cap is applied by
     * `RecruitmentCriteria.capped` inside `insert`.) Surfaced as a `BadRequestException` by callers.
@@ -268,10 +291,10 @@ object RecruitmentCriteriaApp extends ZIOAppDefault {
     val shown = current.fold("none")(show)
     prompt(s"$label [$shown] (Enter=keep, - =none): ").flatMap {
       case ""  => ZIO.succeed(current)
-      case "-" => ZIO.succeed(None)
+      case "-" => ZIO.none
       case s =>
         parse(s) match {
-          case Right(v)  => ZIO.succeed(Some(v))
+          case Right(v)  => ZIO.some(v)
           case Left(err) => Console.printLine(s"  $err") *> promptOpt(label, current, show, parse)
         }
     }
@@ -329,10 +352,9 @@ object RecruitmentCriteriaApp extends ZIOAppDefault {
     }
   }
 
-  private def promptCriteria(clubSlug: ClubSlug, alias: String): RIO[PostgresClient, Option[RecruitmentCriteria]] = {
+  private def promptCriteria(club: ClubRef, alias: String): RIO[PostgresClient, Option[RecruitmentCriteria]] = {
     val a = alias.trim
     for {
-      club     <- Club.selectBySlug(clubSlug).someOrFail(NotFoundException(s"Club not found: $clubSlug"))
       existing <- latestCriteria(club.clubId, a).map(_.map(_._2))
       base = existing.getOrElse(RecruitmentCriteria.defaultDaily)
       _ <- Console.printLine(

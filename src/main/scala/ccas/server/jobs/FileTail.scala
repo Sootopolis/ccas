@@ -55,20 +55,19 @@ final class FileTail(
   private def tail(path: Path, terminal: UIO[Boolean]): ZStream[Any, Throwable, String] =
     ZStream.unfoldChunkZIO(TailState.initial) { state =>
       def step(s: TailState): ZIO[Any, Throwable, Option[(Chunk[String], TailState)]] =
-        if (s.doneAndDrained) { ZIO.succeed(None) }
+        if (s.doneAndDrained) { ZIO.none }
         else {
           readAppended(path, s).flatMap { case (lines, next) =>
-            if (lines.nonEmpty) { ZIO.succeed(Some(Chunk.fromIterable(lines) -> next)) }
+            if (lines.nonEmpty) { ZIO.some(Chunk.fromIterable(lines) -> next) }
             else {
               terminal.flatMap { done =>
                 if (done) {
                   // The file is flushed + closed, so this final read reaches true EOF.
                   readAppended(path, next).map { case (settled, finalState) =>
-                    if (settled.nonEmpty) { Some(Chunk.fromIterable(settled) -> finalState.copy(doneAndDrained = true)) }
-                    else { None }
+                    Option.when(settled.nonEmpty)(Chunk.fromIterable(settled) -> finalState.copy(doneAndDrained = true))
                   }
                 }
-                else { ZIO.sleep(pollInterval) *> step(next) }
+                else { step(next).delay(pollInterval) }
               }
             }
           }

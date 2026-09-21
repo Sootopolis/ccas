@@ -92,7 +92,7 @@ Commands: `server {up|down|status}`, `use-club`, `membership`, `history`, `recru
 
 **Club targeting.** Slug-requiring commands take the club via `--club <slug>` rather than a positional argument; `membership`/`history` accept a comma-separated `--club a,b` or `--all` (every managed club) — but not both at once (`--all` with `--club` is rejected as a likely mistake). When neither is given, the command falls back to the **current club** set with `ccas use-club <slug>` (stored as `current_club` in the [config file](#cli-config-file)); an explicit `--club`/`--all` always wins. `ccas use-club` is a local config write that always succeeds — even with the server down — so it works offline. When a server *is* reachable it additionally makes a short best-effort check: it refreshes the completion cache and, if the slug isn't one of your managed clubs, notes so (it never rejects — an unmanaged club is a valid target). If the server can't be reached in a second or two it falls back to a cache-based hint and sets the club anyway.
 
-**Clubs rename, and names get recycled.** A slug you type is resolved to a club rather than matched: a name the club no longer holds still reaches it, and if the name has since been taken over, the job runs against whoever holds it now — the CLI says so either way. The one thing it won't guess at is a name nobody holds any more that several clubs held before; it lists them and asks which you meant, or, with output redirected, tells you to name one with `--club-id <id>` (`membership`, `history`, `recruit` and `stats` take it). An id names a club outright, so it replaces `--club` rather than joining it — passing both is a usage error, since two ways of naming one club can disagree.
+**Clubs rename, and names get recycled.** A slug you type is resolved to a club rather than matched: a name the club no longer holds still reaches it, and if the name has since been taken over, the command acts on whoever holds it now — the CLI says so either way. The one thing it won't guess at is a name nobody holds any more that several clubs held before; it lists them and asks which you meant, or, with output redirected, tells you to name one with `--club-id <id>`, which every command that names a club takes (`club add` / `remove` take it in place of the slug). An id names a club outright, so it replaces `--club` rather than joining it — passing both is a usage error, since two ways of naming one club can disagree.
 
 ```bash
 ccas use-club              # print the current club (exit 2 if none is set)
@@ -193,7 +193,7 @@ GET  /api/jobs/:id         Job status by ID
 POST /api/jobs/:id/cancel  Request cancellation of a running job
 ```
 
-`club` — and each element of the batch endpoints' `clubs` — names one club, as either `{"kind": "by_id", "clubId": 123}` or `{"kind": "by_slug", "slug": "team-alpha"}`. One or the other, never both: an id resolves whatever the club has since been renamed to, a name is looked up (current names first, then former ones), and a request carrying both could disagree with itself.
+`club` — and each element of the batch endpoints' `clubs` — names one club, as either `{"kind": "by_id", "clubId": 123}` or `{"kind": "by_slug", "slug": "team-alpha"}`. One or the other, never both: an id resolves whatever the club has since been renamed to, a name is looked up (current names first, then former ones), and a request carrying both could disagree with itself. Every other route that names a club — blacklist, recruitment criteria, managed clubs, schedules, recruitment reports — takes it the same way, or in a URL as exactly one of `?clubId=` / `?slug=`, and answers with how it resolved.
 
 Blacklist entries are **not** jobs — they are synchronous `/api/blacklist` routes. The full route surface, including those, the recruitment-criteria and managed-club routes and the per-run recruitment reporting, is in [`docs/architecture.md`](docs/architecture.md) § Routes.
 
@@ -201,7 +201,7 @@ Blacklist entries are **not** jobs — they are synchronous `/api/blacklist` rou
 
 ```
 GET    /api/schedules          List all schedules
-POST   /api/schedules          { kind, clubSlug?, params?, triggerType?, intervalHours?, cron?, timezone?, misfire? }
+POST   /api/schedules          { kind, club?, params?, triggerType?, intervalHours?, cron?, timezone?, misfire? }
 PUT    /api/schedules/:id      { intervalHours?, cron?, timezone?, misfire?, enabled?, params? }
 DELETE /api/schedules/:id
 ```

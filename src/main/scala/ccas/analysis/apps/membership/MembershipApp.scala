@@ -5,7 +5,7 @@ import scala.annotation.tailrec
 
 import zio.{Chunk, Clock, ExitCode, IO, NonEmptyChunk, RIO, Scope, Task, ZIO, ZIOAppArgs, ZIOAppDefault}
 
-import ccas.analysis.apps.{ClubSlugRenameResolver, withClubSlugRenameRecovery}
+import ccas.analysis.apps.{ClubQuery, ClubRef, ClubResolution, ClubSlugRenameResolver, withClubSlugRenameRecovery}
 import ccas.analysis.apps.membership.MembershipChange.*
 import ccas.analysis.apps.membership.MembershipChange.MemberChange.JoinedClub
 import ccas.analysis.tables.*
@@ -13,7 +13,7 @@ import ccas.api.club.ApiClubMembers
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId, PlayerId}
 import ccas.utils.{OutputFile, ProgressDisplay, TimeParser}
 import ccas.utils.client.{BodyStore, ChessComClient, HttpClientLayer, NetworkUnavailableException}
-import ccas.utils.errors.BadRequestException
+import ccas.utils.errors.{BadRequestException, NotFoundException}
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.withTransaction
 
@@ -43,15 +43,16 @@ object MembershipApp extends ZIOAppDefault {
             } yield ()
           case SinceNow(since) =>
             for {
-              _  <- reconcile(clubName, expectedClubIdOption = None)
-              rr <- MembershipReport.report(clubName, since, Instant.now())
-              _  <- OutputFile.writeAndLog(MEMBERSHIP, clubName, MembershipReport.formatReport(rr))
+              result <- reconcile(clubSlug = clubName, expectedClubIdOption = None)
+              club   <- reconciledClub(result)
+              rr     <- MembershipReport.report(club, since, Instant.now())
+              _      <- OutputFile.writeAndLog(MEMBERSHIP, club.slug, MembershipReport.formatReport(rr))
             } yield ()
           case SinceUntil(since, until) =>
             for {
-              _  <- reconcileIfStale(clubName, until)
-              rr <- MembershipReport.report(clubName, since, until)
-              _  <- OutputFile.writeAndLog(MEMBERSHIP, clubName, MembershipReport.formatReport(rr))
+              club <- reconcileIfStale(clubName, until)
+              rr   <- MembershipReport.report(club, since, until)
+              _    <- OutputFile.writeAndLog(MEMBERSHIP, club.slug, MembershipReport.formatReport(rr))
             } yield ()
         }
       }
@@ -108,18 +109,33 @@ object MembershipApp extends ZIOAppDefault {
   private def parseDateArg(string: String): IO[BadRequestException, Instant] =
     TimeParser.parseInstantZIO(string).mapError(BadRequestException(_))
 
-  private def reconcileIfStale(
+  /** The club to report on, reconciled first unless its latest reconcile already covers `until`. A name no club here
+    * has held is reconciled by name, which is how a club never ingested gets its first run; any other name that
+    * reaches no club fails with why, since Chess.com has already been asked about it.
+    */
+  private[membership] def reconcileIfStale(
     clubSlug: ClubSlug,
     until: Instant
-  ): RIO[ProgressDisplay & ChessComClient & PostgresClient, Unit] =
-    Club.selectBySlug(clubSlug).flatMap {
-      case Some(club) =>
-        MembershipRun.selectLatest(club.clubId).flatMap {
-          case Some(run) if !until.isAfter(run.startedAt) => ZIO.unit
-          case _                                          => reconcile(clubSlug, expectedClubIdOption = None).unit
+  ): RIO[ProgressDisplay & ChessComClient & PostgresClient, ClubRef] =
+    ZIO.serviceWithZIO[ChessComClient](ClubResolution.resolveAndAdjudicate(_, ClubQuery.BySlug(clubSlug))).flatMap {
+      case ClubResolution.NotLocal(_) =>
+        reconcile(clubSlug = clubSlug, expectedClubIdOption = None).flatMap(reconciledClub)
+      case resolution =>
+        ZIO.fromEither(resolution.runnable).mapError(NotFoundException(_)).flatMap { club =>
+          MembershipRun.selectLatest(club.clubId).flatMap {
+            case Some(run) if !until.isAfter(run.startedAt) => ZIO.succeed(club)
+            case _ =>
+              reconcile(clubSlug = club.slug, expectedClubIdOption = Some(club.clubId)).flatMap(reconciledClub)
+          }
         }
-      case None => reconcile(clubSlug, expectedClubIdOption = None).unit
     }
+
+  // Reconciling persists the club under the name Chess.com answered with, which is the one to report under.
+  private def reconciledClub(result: ReconciliationResult): RIO[PostgresClient, ClubRef] =
+    Club
+      .selectId(result.clubId)
+      .someOrFail(NotFoundException(s"Club not found: #${ClubId.unwrap(result.clubId)}"))
+      .map(ClubRef.fromClub)
 
   // --- Phase A: Gather data ---
 

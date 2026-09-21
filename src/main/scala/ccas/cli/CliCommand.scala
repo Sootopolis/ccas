@@ -95,12 +95,18 @@ object CliCommand {
   final case class BlacklistAdd(
     server: String,
     club: Option[String],
+    clubIdOption: Option[Long],
     usernames: List[String],
     reason: Option[String],
     months: Option[Int]
   ) extends ServerCommand
-  final case class BlacklistList(server: String, club: Option[String]) extends ServerCommand
-  final case class BlacklistRemove(server: String, club: Option[String], username: String) extends ServerCommand
+  final case class BlacklistList(server: String, club: Option[String], clubIdOption: Option[Long]) extends ServerCommand
+  final case class BlacklistRemove(
+    server: String,
+    club: Option[String],
+    clubIdOption: Option[Long],
+    username: String
+  ) extends ServerCommand
   final case class ScheduleList(server: String) extends ServerCommand
   final case class ScheduleAdd(
     server: String,
@@ -110,11 +116,12 @@ object CliCommand {
     tz: Option[String],
     misfire: Option[String],
     club: Option[String],
+    clubIdOption: Option[Long],
     params: Option[String]
   ) extends ServerCommand
   final case class ScheduleRemove(server: String, id: Long) extends ServerCommand
-  final case class ClubsAdd(server: String, slug: String) extends ServerCommand
-  final case class ClubsRemove(server: String, slug: String) extends ServerCommand
+  final case class ClubsAdd(server: String, slugs: List[String], clubIdOption: Option[Long]) extends ServerCommand
+  final case class ClubsRemove(server: String, slugs: List[String], clubIdOption: Option[Long]) extends ServerCommand
   final case class ClubsList(server: String) extends ServerCommand
 
   // --- Shared options ---
@@ -336,26 +343,33 @@ object CliCommand {
       "add",
       serverOpt(default) ++
         (Options.text("reason").optional ?? "Reason recorded with the blacklist entry") ++
-        (intOpt("months") ?? "Auto-expire the entry after N months") ++ clubOpt,
+        (intOpt("months") ?? "Auto-expire the entry after N months") ++ clubOpt ++ clubIdOpt,
       Args.text("username").repeat1 ?? "Username(s) to blacklist"
     ).withHelp("Blacklist one or more usernames for a club")
-      .map { case ((server, reason, months, club), usernames) =>
-        BlacklistAdd(server, club, usernames, reason, months)
+      .map { case ((server, reason, months, club, clubIdOption), usernames) =>
+        BlacklistAdd(
+          server = server,
+          club = club,
+          clubIdOption = clubIdOption,
+          usernames = usernames,
+          reason = reason,
+          months = months
+        )
       }
 
   private def blacklistList(default: String): Command[CliCommand] =
-    Command("list", serverOpt(default) ++ clubOpt)
+    Command("list", serverOpt(default) ++ clubOpt ++ clubIdOpt)
       .withHelp("List a club's blacklist entries")
-      .map { case (server, club) => BlacklistList(server, club) }
+      .map { case (server, club, clubIdOption) => BlacklistList(server, club, clubIdOption) }
 
   private def blacklistRemove(default: String): Command[CliCommand] =
     Command(
       "remove",
-      serverOpt(default) ++ clubOpt,
+      serverOpt(default) ++ clubOpt ++ clubIdOpt,
       Args.text("username") ?? "Username to remove"
     ).withHelp("Remove a username from a club's blacklist")
-      .map { case ((server, club), username) =>
-        BlacklistRemove(server, club, username)
+      .map { case ((server, club, clubIdOption), username) =>
+        BlacklistRemove(server, club, clubIdOption, username)
       }
 
   private def blacklist(default: String): Command[CliCommand] =
@@ -377,11 +391,21 @@ object CliCommand {
         (Options.text("cron").optional ?? "Cron trigger: 5-field expression, e.g. '0 9 * * MON'") ++
         (Options.text("tz").optional ?? "Cron timezone (IANA, e.g. Europe/London; default UTC)") ++
         (Options.text("misfire").optional ?? "Cron misfire policy: skip (default) or catch_up") ++
-        (Options.text("club").optional ?? "Club slug the job targets (when the kind needs one)") ++
+        (Options.text("club").optional ?? "Club slug the job targets (when the kind needs one)") ++ clubIdOpt ++
         (Options.text("params").optional ?? "Extra job parameters passed to the run")
     ).withHelp("Create a scheduled job (interval via --interval-hours, or wall-clock via --cron)")
-      .map { case (server, kind, intervalHours, cron, tz, misfire, club, params) =>
-        ScheduleAdd(server, kind, intervalHours, cron, tz, misfire, club, params)
+      .map { case (server, kind, intervalHours, cron, tz, misfire, club, clubIdOption, params) =>
+        ScheduleAdd(
+          server = server,
+          kind = kind,
+          intervalHours = intervalHours,
+          cron = cron,
+          tz = tz,
+          misfire = misfire,
+          club = club,
+          clubIdOption = clubIdOption,
+          params = params
+        )
       }
 
   private def scheduleRemove(default: String): Command[CliCommand] =
@@ -396,17 +420,24 @@ object CliCommand {
       .withHelp("Manage scheduled jobs")
       .subcommands(scheduleList(default), scheduleAdd(default), scheduleRemove(default))
 
-  // `club add`/`remove` manage the membership set itself, so the club is the direct operand — a required positional
-  // slug (like `git remote add <name>`), not the `--club` context option the operation commands use.
+  // `club add`/`remove` manage the membership set itself, so the club is the direct operand — a positional slug (like
+  // `git remote add <name>`) or `--club-id` in its place, not the `--club` context option the operation commands use.
+  // The slug is `repeat` rather than required so the id can stand alone, and `ClubResolver.operand` checks the arity.
   private def clubsAdd(default: String): Command[CliCommand] =
-    Command("add", serverOpt(default), Args.text("slug") ?? "Club slug (URL name) to start managing")
-      .withHelp("Mark a club as one you manage with CCAS")
-      .map { case (server, slug) => ClubsAdd(server, slug) }
+    Command(
+      "add",
+      serverOpt(default) ++ clubIdOpt,
+      (Args.text("slug") ?? "Club slug (URL name) to start managing").repeat
+    ).withHelp("Mark a club as one you manage with CCAS")
+      .map { case ((server, clubIdOption), slugs) => ClubsAdd(server, slugs, clubIdOption) }
 
   private def clubsRemove(default: String): Command[CliCommand] =
-    Command("remove", serverOpt(default), Args.text("slug") ?? "Club slug (URL name) to stop managing")
-      .withHelp("Remove a club from the ones you manage")
-      .map { case (server, slug) => ClubsRemove(server, slug) }
+    Command(
+      "remove",
+      serverOpt(default) ++ clubIdOpt,
+      (Args.text("slug") ?? "Club slug (URL name) to stop managing").repeat
+    ).withHelp("Remove a club from the ones you manage")
+      .map { case ((server, clubIdOption), slugs) => ClubsRemove(server, slugs, clubIdOption) }
 
   private def clubsList(default: String): Command[CliCommand] =
     Command("list", serverOpt(default))

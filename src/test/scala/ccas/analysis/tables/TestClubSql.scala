@@ -21,7 +21,6 @@ object TestClubSql extends ZIOSpecDefault {
     testClubUpsertUpdate,
     testClubSelectId,
     testClubSelect,
-    testClubSelectExistingSlugs,
     testClubMembersCount,
     testMemberInsert,
     testMemberInsertBatch,
@@ -100,21 +99,6 @@ object TestClubSql extends ZIOSpecDefault {
     for {
       all <- Club.selectAll
     } yield assertTrue(Set(clubA, clubB).subsetOf(all.toSet))
-  }
-
-  private def testClubSelectExistingSlugs = test("selectExistingSlugs returns subset present in DB; empty input short-circuits") {
-    val unknown = ClubSlug("never-inserted")
-    for {
-      empty   <- Club.selectExistingSlugs(Set.empty)
-      partial <- Club.selectExistingSlugs(Set(clubA.slug, unknown))
-      all     <- Club.selectExistingSlugs(Set(clubA.slug, clubB.slug))
-      none    <- Club.selectExistingSlugs(Set(unknown))
-    } yield assertTrue(
-      empty.isEmpty,
-      partial == Set(clubA.slug),
-      all == Set(clubA.slug, clubB.slug),
-      none.isEmpty
-    )
   }
 
   // --- ClubMember tests ---
@@ -267,15 +251,12 @@ object TestClubSql extends ZIOSpecDefault {
       _              <- Club.upsert(withCount)
       _              <- Club.updateLatestMatchAt(clubA.clubId, Some(Times.t1))
       result         <- Club.selectId(clubA.clubId)
-      bySlug         <- Club.selectBySlug(clubA.slug)
       // upsert must NOT clobber latest_match_at on subsequent calls
       _              <- Club.upsert(withCount.copy(name = "Renamed"))
       preserved      <- Club.selectId(clubA.clubId)
     } yield assertTrue(
       result.get.membersCount.contains(1234),
       result.get.latestMatchAt.contains(Times.t1),
-      bySlug.get.membersCount.contains(1234),
-      bySlug.get.latestMatchAt.contains(Times.t1),
       preserved.get.name == "Renamed",
       preserved.get.latestMatchAt.contains(Times.t1)
     )

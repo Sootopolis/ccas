@@ -76,23 +76,6 @@ object Club {
   def selectId(clubId: ClubId): ZIO[PostgresClient, SQLException, Option[Club]] =
     connectZIO(repo.findById(clubId))
 
-  def selectBySlug(slug: ClubSlug): ZIO[PostgresClient, SQLException, Option[Club]] =
-    connectZIO {
-      sql"SELECT $selectCols FROM club WHERE slug = $slug".query[Club].run().headOption
-    }
-
-  /** Returns the subset of `slugs` that exist in the `club` table. One round-trip via `WHERE slug = ANY(...)` —
-    * preferred over per-slug `selectBySlug` calls for callers that need bulk membership testing.
-    */
-  def selectExistingSlugs(slugs: Set[ClubSlug]): ZIO[PostgresClient, SQLException, Set[ClubSlug]] =
-    if (slugs.isEmpty) { ZIO.succeed(Set.empty) }
-    else {
-      connectZIO {
-        val slugList = slugs.toList
-        sql"SELECT slug FROM club WHERE slug = ANY($slugList)".query[ClubSlug].run().toSet
-      }
-    }
-
   /** Upserts a club. NB: `latest_match_at` and `fetched_at` are intentionally not updated on conflict — they are
     * managed separately by [[ccas.analysis.apps.clubdata.ClubDataApp]] via [[updateLatestMatchAt]] and
     * [[updateFetchedAt]] so other callers don't accidentally clobber the cached values with `None`.
@@ -123,7 +106,7 @@ object Club {
   def upsertResolvingSlugConflict(club: Club, client: ChessComClient): ZIO[PostgresClient, Throwable, Int] =
     withTransaction {
       for {
-        existing <- selectBySlug(club.slug)
+        existing <- ClubName.selectCurrentHolder(club.slug)
         _        <- ZIO.foreachDiscard(existing.filter(_.clubId != club.clubId))(resolveStaleSlug(_, client))
         result   <- upsert(club)
       } yield result

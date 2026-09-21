@@ -5,13 +5,13 @@ import java.time.{Duration as JDuration, Instant}
 
 import zio.{Chunk, RIO, URIO, ZIO}
 
+import ccas.analysis.apps.ClubRef
 import ccas.analysis.apps.membership.MembershipChange.*
 import ccas.analysis.apps.membership.MembershipChange.MemberChange.*
 import ccas.analysis.tables.*
 import ccas.api.misc.enums.PlayerStatusCategory
-import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
+import ccas.api.misc.subtypes.{ClubId, PlayerId, Username}
 import ccas.utils.{display, ProgressDisplay}
-import ccas.utils.errors.NotFoundException
 import ccas.utils.sql.PostgresClient
 
 private[membership] object MembershipReport {
@@ -23,18 +23,15 @@ private[membership] object MembershipReport {
     invitations: Map[PlayerId, Instant]
   )
 
-  def report(clubSlug: ClubSlug, since: Instant, until: Instant): RIO[ProgressDisplay & PostgresClient, ReportResult] =
+  def report(club: ClubRef, since: Instant, until: Instant): RIO[ProgressDisplay & PostgresClient, ReportResult] =
     for {
-      club <- Club.selectBySlug(clubSlug)
-        .someOrFail(NotFoundException(s"Club '$clubSlug' not found in database"))
-      clubId = club.clubId
-      members <- ClubMember.selectClub(clubId)
+      members <- ClubMember.selectClub(club.clubId)
       snaps   <- PlayerSnapshot.selectSince(since)
-      summaries    = classifyFromDb(clubId, members, snaps, since, until)
-      invitations <- lookupJoinInvitations(clubId, summaries)
-      countAtStart <- ClubMember.countActiveCurrentAt(clubId, since)
-      countAtEnd   <- ClubMember.countActiveCurrentAt(clubId, until)
-      _ <- ZIO.logInfo(s"=== Report for $clubSlug from $since to $until ===")
+      summaries    = classifyFromDb(club.clubId, members, snaps, since, until)
+      invitations  <- lookupJoinInvitations(club.clubId, summaries)
+      countAtStart <- ClubMember.countActiveCurrentAt(club.clubId, since)
+      countAtEnd   <- ClubMember.countActiveCurrentAt(club.clubId, until)
+      _ <- ZIO.logInfo(s"=== Report for ${club.slug} from $since to $until ===")
       _ <- ZIO.logInfo(s"Members: $countAtStart -> $countAtEnd")
       _ <- printChangeSummaries(summaries, invitations)
     } yield ReportResult(summaries, countAtStart, countAtEnd, invitations)

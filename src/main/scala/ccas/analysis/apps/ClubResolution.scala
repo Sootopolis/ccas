@@ -9,6 +9,7 @@ import ccas.analysis.tables.{Club, ClubName}
 import ccas.api.club.ApiClub
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 import ccas.utils.client.ChessComClient
+import ccas.utils.errors.NotFoundException
 import ccas.utils.sql.PostgresClient
 
 /** How a caller named the club it wants. The two are exclusive by construction: an id resolves rename-proof and a name
@@ -150,12 +151,20 @@ object ClubResolution {
           )
     }
 
-  /** The answer a submit acts on: local reach first, then Chess.com for a name only local history knows. The two
-    * halves are separable — `ClubDataApp` and `StatsApp` resolve without asking upstream — but every submit wants
-    * both, so the pairing lives here rather than being re-composed at each gate.
+  /** The answer a request that names a club acts on: local reach first, then Chess.com for a name only local history
+    * knows. The two halves are separable — `ClubDataApp` and `StatsApp` resolve without asking upstream — but every
+    * such request wants both, so the pairing lives here rather than being re-composed at each gate.
     */
   def resolveAndAdjudicate(client: ChessComClient, query: ClubQuery): RIO[PostgresClient, ClubResolution] =
     resolve(query).flatMap(adjudicate(client, _))
+
+  /** [[resolveAndAdjudicate]] for a caller with no way to report a resolution but to fail on it: a standalone app's
+    * command line.
+    */
+  def resolveRunnable(query: ClubQuery): RIO[ChessComClient & PostgresClient, ClubRef] =
+    ZIO
+      .serviceWithZIO[ChessComClient](resolveAndAdjudicate(_, query))
+      .flatMap(resolution => ZIO.fromEither(resolution.runnable).mapError(NotFoundException(_)))
 
   /** The requested name and who local history says held it, for the two answers worth adjudicating. */
   private def historical(resolution: ClubResolution): Option[(ClubSlug, List[ClubRef])] =

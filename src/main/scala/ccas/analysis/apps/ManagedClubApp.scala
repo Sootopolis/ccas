@@ -2,38 +2,26 @@ package ccas.analysis.apps
 
 import zio.{Clock, RIO}
 
-import ccas.analysis.tables.{Club, ManagedClub, ManagedClubView}
-import ccas.api.misc.subtypes.{ClubId, ClubSlug}
-import ccas.utils.errors.NotFoundException
+import ccas.analysis.tables.{ManagedClub, ManagedClubView}
+import ccas.api.misc.subtypes.ClubId
 import ccas.utils.sql.PostgresClient
 
 /** Synchronous CRUD for the [[ManagedClub]] marker — the explicit "I manage this club" act. Invoked from
-  * `ManagedClubRoutes` (and so `ccas club add|remove|list`). No `ChessComClient`: the club must already exist
-  * locally; this never fetches Chess.com.
+  * `ManagedClubRoutes` (and so `ccas club add|remove|list`), which resolves the club first, so managing a club requires
+  * it to already exist locally.
   */
 object ManagedClubApp {
 
-  /** Marks an existing local club managed. Idempotent — re-marking an already-managed club is a no-op. A stale/renamed
-    * slug 404s rather than triggering rename recovery (unlike `BlacklistApp`): managing a club requires it to already
-    * exist locally (#101 scope — no Chess.com fetch), so an unknown slug is a genuine "not found".
-    */
-  def mark(clubSlug: ClubSlug): RIO[PostgresClient, Unit] =
-    for {
-      club <- Club.selectBySlug(clubSlug).someOrFail(NotFoundException(s"Club not found: $clubSlug"))
-      now  <- Clock.instant
-      _    <- ManagedClub.markManaged(club.clubId, now)
-    } yield ()
+  /** Marks a club managed, answering whether it was not already. Idempotent. */
+  def mark(clubId: ClubId): RIO[PostgresClient, Boolean] =
+    Clock.instant.flatMap(ManagedClub.markManaged(clubId, _)).map(_ > 0)
 
-  /** Clears a club's managed marker and returns its `ClubId`. Succeeds whether or not it was managed. Stays
-    * analysis-pure (touches only `managed_club`); the caller (`ManagedClubRoutes`, #106) uses the returned id to
-    * also clear the club's per-club `job_schedule` rows in the same transaction — `job_schedule` is a server-layer
-    * table and `analysis` never imports `server`.
+  /** Clears a club's managed marker, answering whether it had one. Stays analysis-pure (touches only `managed_club`):
+    * the caller (`ManagedClubRoutes`, #106) also clears the club's per-club `job_schedule` rows in the same
+    * transaction, since `job_schedule` is a server-layer table and `analysis` never imports `server`.
     */
-  def unmark(clubSlug: ClubSlug): RIO[PostgresClient, ClubId] =
-    for {
-      club <- Club.selectBySlug(clubSlug).someOrFail(NotFoundException(s"Club not found: $clubSlug"))
-      _    <- ManagedClub.delete(club.clubId)
-    } yield club.clubId
+  def unmark(clubId: ClubId): RIO[PostgresClient, Boolean] =
+    ManagedClub.delete(clubId).map(_ > 0)
 
   def list: RIO[PostgresClient, List[ManagedClubView]] =
     ManagedClub.selectAllWithClub

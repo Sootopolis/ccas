@@ -5,17 +5,18 @@ import java.time.Instant
 import scala.util.chaining.*
 import scala.util.Try
 
-import ccas.utils.sql.PostgresClient
 import zio.http.*
 import zio.json.{jsonField, DeriveJsonCodec, JsonCodec, SnakeCase}
-import zio.{Clock, ZIO}
+import zio.{Clock, RIO, ZIO}
 
-import ccas.analysis.tables.Club
-import ccas.api.misc.subtypes.{ClubId, ClubSlug}
+import ccas.analysis.apps.{ClubQuery, ClubResolution}
+import ccas.api.misc.subtypes.ClubId
 import ccas.server.jobs.JobKind
 import ccas.server.routes.RouteHelpers.*
 import ccas.server.scheduler.{JobSchedule, MisfirePolicy, ScheduleTrigger, TriggerType}
+import ccas.utils.client.ChessComClient
 import ccas.utils.errors.{BadRequestException, NotFoundException}
+import ccas.utils.sql.PostgresClient
 
 object ScheduleRoutes {
 
@@ -28,7 +29,7 @@ object ScheduleRoutes {
 
   private[ccas] case class CreateScheduleRequest(
     kind: String,
-    @jsonField("clubSlug") clubSlugOption: Option[String],
+    @jsonField("club") clubOption: Option[ClubQuery],
     params: Option[String],
     triggerType: Option[TriggerType],
     intervalHours: Option[Int],
@@ -84,6 +85,16 @@ object ScheduleRoutes {
       )
   }
 
+  // A schedule for a named club is created only once that name resolves, the way a submit runs only then; the
+  // resolution comes back either way, and is absent exactly when no club was named.
+  private[ccas] case class CreateScheduleResponse(
+    @jsonField("schedule") scheduleOption: Option[ScheduleResponse],
+    @jsonField("resolution") resolutionOption: Option[ClubResolution]
+  )
+  object CreateScheduleResponse {
+    given JsonCodec[CreateScheduleResponse] = DeriveJsonCodec.gen
+  }
+
   // --- Helpers ---
 
   private def parseJobKind(s: String): Either[String, JobKind] =
@@ -113,15 +124,11 @@ object ScheduleRoutes {
     params: Option[Option[String]]
   )
 
-  /** Pure validation of a create request into a row. The club is resolved by the caller (DB lookup); `now` stamps
-    * a cron row's `last_run_at` so its first fire is the next boundary (no backfire).
+  /** Pure validation of a create request into a row naming no club, which the caller fills in once the request's club
+    * resolves — only after this passes, since resolving may ask Chess.com and record its answer. `now` stamps a cron
+    * row's `last_run_at` so its first fire is the next boundary (no backfire).
     */
-  private def buildCreate(
-    kind: JobKind,
-    clubIdOption: Option[ClubId],
-    body: CreateScheduleRequest,
-    now: Instant
-  ): Either[String, JobSchedule] =
+  private def buildCreate(kind: JobKind, body: CreateScheduleRequest, now: Instant): Either[String, JobSchedule] =
     body.triggerType.getOrElse(TriggerType.Interval) match {
       case TriggerType.Interval =>
         for {
@@ -132,7 +139,15 @@ object ScheduleRoutes {
           )
           ih <- body.intervalHours.toRight("intervalHours is required for an interval trigger")
           _  <- Either.cond(ih > 0 && ih <= Short.MaxValue, (), intervalRangeMsg)
-        } yield JobSchedule.interval(0L, kind, clubIdOption, body.params, ih.toShort, enabled = true, lastRunAt = None)
+        } yield JobSchedule.interval(
+          id = 0L,
+          kind = kind,
+          clubIdOption = None,
+          params = body.params,
+          intervalHours = ih.toShort,
+          enabled = true,
+          lastRunAt = None
+        )
 
       case TriggerType.Cron =>
         for {
@@ -141,8 +156,17 @@ object ScheduleRoutes {
           norm <- ScheduleTrigger.validateCron(raw)
           tz   <- ScheduleTrigger.validateZone(body.timezone.getOrElse("UTC"))
           misfire = body.misfire.getOrElse(MisfirePolicy.Skip)
-        } yield JobSchedule
-          .cron(0L, kind, clubIdOption, body.params, norm, tz, misfire, enabled = true, lastRunAt = Some(now))
+        } yield JobSchedule.cron(
+          id = 0L,
+          kind = kind,
+          clubIdOption = None,
+          params = body.params,
+          cronExpr = norm,
+          timezone = tz,
+          misfire = misfire,
+          enabled = true,
+          lastRunAt = Some(now)
+        )
     }
 
   /** Pure validation of an update against an existing row's trigger type. Switching trigger type via PUT is out of
@@ -169,9 +193,15 @@ object ScheduleRoutes {
         } yield UpdateArgs(None, normCron, tz, body.misfire, body.enabled, body.params.map(Some(_)))
     }
 
+  private def persist(schedule: JobSchedule): RIO[PostgresClient, ScheduleResponse] =
+    for {
+      id      <- JobSchedule.insert(schedule)
+      created <- JobSchedule.selectId(id).someOrFail(new Exception("Failed to read back schedule"))
+    } yield ScheduleResponse.fromSchedule(created)
+
   // --- Routes ---
 
-  val routes: Routes[PostgresClient, Nothing] = Routes(
+  val routes: Routes[ChessComClient & PostgresClient, Nothing] = Routes(
     Method.GET / "api" / "schedules" -> handler {
       JobSchedule.selectAll
         .map(list => jsonResponse(Status.Ok, list.map(ScheduleResponse.fromSchedule)))
@@ -179,18 +209,18 @@ object ScheduleRoutes {
     },
     Method.POST / "api" / "schedules" -> handler { (req: Request) =>
       (for {
-        body <- parseJsonBody[CreateScheduleRequest](req)
-        kind <- ZIO.fromEither(parseJobKind(body.kind)).mapError(BadRequestException(_))
-        clubIdOption <- ZIO.foreach(body.clubSlugOption) { slug =>
-          Club.selectBySlug(ClubSlug.wrap(slug))
-            .someOrFail(NotFoundException(s"Club not found: $slug"))
-            .map(_.clubId)
+        body             <- parseJsonBody[CreateScheduleRequest](req)
+        kind             <- ZIO.fromEither(parseJobKind(body.kind)).mapError(BadRequestException(_))
+        now              <- Clock.instant
+        clubless         <- ZIO.fromEither(buildCreate(kind, body, now)).mapError(BadRequestException(_))
+        resolutionOption <- ZIO.foreach(body.clubOption)(ClubRequest.resolve)
+        scheduleOption <- resolutionOption.map(_.runnable) match {
+          case Some(Left(_))     => ZIO.none
+          case Some(Right(club)) => persist(clubless.copy(clubIdOption = Some(club.clubId))).asSome
+          case None              => persist(clubless).asSome
         }
-        now      <- Clock.instant
-        schedule <- ZIO.fromEither(buildCreate(kind, clubIdOption, body, now)).mapError(BadRequestException(_))
-        id       <- JobSchedule.insert(schedule)
-        created  <- JobSchedule.selectId(id).someOrFail(new Exception("Failed to read back schedule"))
-      } yield jsonResponse(Status.Created, ScheduleResponse.fromSchedule(created)))
+        status = if (scheduleOption.isDefined) { Status.Created } else { Status.Ok }
+      } yield jsonResponse(status, CreateScheduleResponse(scheduleOption, resolutionOption)))
         .pipe(withErrorHandling)
     },
     Method.PUT / "api" / "schedules" / long("id") -> handler { (id: Long, req: Request) =>

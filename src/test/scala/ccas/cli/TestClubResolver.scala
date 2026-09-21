@@ -140,6 +140,45 @@ object TestClubResolver extends ZIOSpecDefault {
         withClub.left.exists(e => isUsageError(e) && e.getMessage == ClubResolver.ClubIdError),
         withAll.left.exists(e => isUsageError(e) && e.getMessage == ClubResolver.ClubIdAllError)
       )
+    },
+    // `schedule add` takes a club only for the kinds that run against one, so no club is an answer, not a usage error.
+    test("optional: names a club by --club or --club-id, and nothing at all is no club rather than current_club") {
+      for {
+        bySlug  <- ClubResolver.optional(explicit = Some(" Team-A "), clubIdOption = None)
+        byId    <- ClubResolver.optional(explicit = None, clubIdOption = Some(621L))
+        neither <- ClubResolver.optional(explicit = None, clubIdOption = None)
+        both    <- ClubResolver.optional(explicit = Some("team-a"), clubIdOption = Some(621L)).either
+      } yield assertTrue(
+        bySlug.map(_.query).contains(ClubQuery.BySlug(ClubSlug("team-a"))),
+        byId.map(_.query).contains(ClubQuery.ById(ClubId(621L))),
+        neither.isEmpty,
+        both.left.exists(e => isUsageError(e) && e.getMessage == ClubResolver.ClubIdError)
+      )
+    },
+    // With no current_club to fall back to, dropping a blank --club would schedule a club-scoped job against no club.
+    test("optional: a blank --club is a usage error, not the absence of one") {
+      ClubResolver.optional(explicit = Some("  "), clubIdOption = None).either.map(r =>
+        assertTrue(r.left.exists(e => isUsageError(e) && e.getMessage == ClubResolver.BlankClubError))
+      )
+    },
+    test("operand: club add/remove take exactly one slug or --club-id, never current_club") {
+      for {
+        bySlug <- ClubResolver.operand(slugs = List("team-a"), clubIdOption = None)
+        byId   <- ClubResolver.operand(slugs = Nil, clubIdOption = Some(621L))
+        none   <- ClubResolver.operand(slugs = List(" "), clubIdOption = None).either
+        both   <- ClubResolver.operand(slugs = List("team-a"), clubIdOption = Some(621L)).either
+      } yield assertTrue(
+        bySlug.query == ClubQuery.BySlug(ClubSlug("team-a")),
+        byId.query == ClubQuery.ById(ClubId(621L)),
+        none.left.exists(e => isUsageError(e) && e.getMessage == ClubResolver.NoOperandError),
+        both.left.exists(e => isUsageError(e) && e.getMessage == ClubResolver.OperandIdError)
+      )
+    },
+    // zio-cli swallows an option written after the slug as another positional, so this is how that mistake arrives.
+    test("operand: more than one slug is a usage error that names what arrived, not a silent pick of the first") {
+      ClubResolver.operand(slugs = List("team-a", "--club-id", "621"), clubIdOption = None).either.map(r =>
+        assertTrue(r.left.exists(e => isUsageError(e) && e.getMessage.contains("team-a, --club-id, 621")))
+      )
     }
   )
 }

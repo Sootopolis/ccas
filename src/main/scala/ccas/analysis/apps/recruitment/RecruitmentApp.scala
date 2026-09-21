@@ -9,7 +9,7 @@ import zio.{durationLong, Clock, ExitCode, RIO, Ref, Scope, Task, ZEnvironment, 
 
 import ccas.analysis.apps.membership.MembershipApp
 import ccas.analysis.apps.ref.RefHelpers
-import ccas.analysis.apps.{ClubSlugRenameResolver, withClubSlugRenameRecovery}
+import ccas.analysis.apps.{ClubQuery, ClubRef, ClubResolution, ClubSlugRenameResolver, withClubSlugRenameRecovery}
 import ccas.analysis.tables.*
 import ccas.analysis.tables.subtypes.RecruitmentRunId
 import ccas.api.club.{ApiClubMatches, ApiClubMembers}
@@ -70,17 +70,17 @@ object RecruitmentApp extends ZIOAppDefault {
       args <- ZIOAppArgs.getArgs
       _ <- (args.toList match {
         case "report" :: clubStr :: rest =>
-          val clubSlug = ClubSlug.wrap(clubStr)
           for {
-            report <- showReport(clubSlug, rest.headOption)
+            club   <- ClubResolution.resolveRunnable(ClubQuery.BySlug(ClubSlug.wrap(clubStr)))
+            report <- showReport(club, rest.headOption)
             now    <- Clock.instant
             completedAt = report.run.completedAt.getOrElse(now)
             // One formatter for both the console echo and the out file, so they can't drift. Echo line-by-line so each
             // report line is its own clean log entry rather than one entry with an embedded multi-line block.
             output = formatRecruitmentOutput(report.usernames, report.evaluatedCount, report.run.startedAt, completedAt)
-            _ <- ZIO.logInfo(s"=== Recruitment Report for $clubSlug (run ${report.run.runId}) ===")
+            _ <- ZIO.logInfo(s"=== Recruitment Report for ${club.slug} (run ${report.run.runId}) ===")
             _ <- ZIO.foreachDiscard(output.linesIterator.toList)(line => ZIO.logInfo(line))
-            _ <- OutputFile.writeAndLog("recruitment", clubSlug, output)
+            _ <- OutputFile.writeAndLog("recruitment", club.slug, output)
           } yield ()
         case clubStr :: rest =>
           val parsed   = parseRecruitArgs(rest)
@@ -472,14 +472,8 @@ object RecruitmentApp extends ZIOAppDefault {
 
   final case class RecruitmentReportResult(usernames: List[Username], evaluatedCount: Int, run: RecruitmentRun)
 
-  def showReport(
-    clubSlug: ClubSlug,
-    runIdOption: Option[String]
-  ): RIO[PostgresClient, RecruitmentReportResult] =
+  def showReport(club: ClubRef, runIdOption: Option[String]): RIO[PostgresClient, RecruitmentReportResult] =
     for {
-      club <- Club.selectBySlug(clubSlug)
-        .someOrFail(NotFoundException(s"Club '$clubSlug' not found in database"))
-      clubId = club.clubId
       run <- runIdOption match {
         case Some(id) =>
           ZIO.attempt(id.toLong)
@@ -487,8 +481,8 @@ object RecruitmentApp extends ZIOAppDefault {
             .flatMap(RecruitmentRun.selectId)
             .someOrFail(NotFoundException(s"Run $id not found"))
         case None =>
-          RecruitmentRun.selectLatest(clubId)
-            .someOrFail(NotFoundException(s"No runs found for club '$clubSlug'"))
+          RecruitmentRun.selectLatest(club.clubId)
+            .someOrFail(NotFoundException(s"No runs found for club '${club.slug}'"))
       }
       invited        <- RecruitmentCandidate.selectInvitedByRun(run.runId)
       evaluatedCount <- RecruitmentCandidate.selectCountByRun(run.runId)

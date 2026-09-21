@@ -4,9 +4,8 @@ import java.time.{Instant, ZoneOffset}
 
 import zio.{Clock, RIO, Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
 
-import ccas.analysis.apps.{PlayerUpdater, UsernameRenameResolver, withClubSlugRenameRecovery}
+import ccas.analysis.apps.{ClubQuery, ClubRef, ClubResolution, PlayerUpdater, UsernameRenameResolver}
 import ccas.analysis.tables.*
-import ccas.api.club.ApiClub
 import ccas.api.misc.subtypes.{ClubSlug, Username}
 import ccas.utils.ProgressDisplay
 import ccas.utils.client.{BodyStore, ChessComClient, HttpClientLayer}
@@ -31,14 +30,15 @@ object BlacklistApp extends ZIOAppDefault {
           val usernames = usernamesStr.split(',').map(s => Username.wrap(s.trim)).toList
           val months    = rest.lift(1).map(_.toInt)
           for {
-            now <- Clock.instant
+            club <- resolve(clubStr)
+            now  <- Clock.instant
             expiresAt = months.map(m => now.atZone(ZoneOffset.UTC).plusMonths(m.toLong).toInstant)
-            _ <- addToBlacklist(ClubSlug.wrap(clubStr), usernames, reason = rest.headOption, expiresAt)
+            _ <- addToBlacklist(club = club, usernames = usernames, reason = rest.headOption, expiresAt = expiresAt)
           } yield ()
         case "list" :: clubStr :: _ =>
-          listBlacklist(ClubSlug.wrap(clubStr))
+          resolve(clubStr).flatMap(listBlacklist)
         case "remove" :: clubStr :: usernameStr :: _ =>
-          removeFromBlacklist(ClubSlug.wrap(clubStr), Username.wrap(usernameStr))
+          resolve(clubStr).flatMap(removeFromBlacklist(_, Username.wrap(usernameStr)))
         case _ => ZIO.fail(BadRequestException(help))
       }
     } yield ()).provideSomeAuto(
@@ -49,24 +49,21 @@ object BlacklistApp extends ZIOAppDefault {
       PostgresClient.live(onInit = Tables.ensureTablesOnInit)
     )
 
+  private def resolve(clubStr: String): RIO[ChessComClient & PostgresClient, ClubRef] =
+    ClubResolution.resolveRunnable(ClubQuery.BySlug(ClubSlug.wrap(clubStr)))
+
+  /** Blacklists each player for a club already resolved, answering with the usernames as blacklisted — a renamed
+    * player under their current name.
+    */
   def addToBlacklist(
-    clubSlug: ClubSlug,
+    club: ClubRef,
     usernames: List[Username],
     reason: Option[String],
     expiresAt: Option[Instant]
-  ): RIO[ChessComClient & PostgresClient, Unit] =
+  ): RIO[ChessComClient & PostgresClient, List[Username]] =
     for {
       client <- ZIO.service[ChessComClient]
-      // Recover the canonical slug if the user typed a stale handle. Tier B works only if a Club row already exists
-      // under the stale slug (resolver derives clubIdHint via DB) — first-time blacklisting against a never-seen
-      // stale slug still 404s, which is the correct behaviour: nothing in our DB knows what they meant.
-      apiClub <- ApiClub.get(client, clubSlug)
-        .withClubSlugRenameRecovery(client, clubSlug, clubIdHint = None)(fresh => ApiClub.get(client, fresh))
-      club = Club.fromApi(apiClub)
-      // On the recovery path the resolver already upserted under the canonical slug; this is an idempotent
-      // reaffirmation. On the no-recovery happy path, this is the source-of-truth write.
-      _ <- Club.upsertResolvingSlugConflict(club, client)
-      _ <- ZIO.foreachDiscard(usernames) { username =>
+      blacklisted <- ZIO.foreach(usernames) { username =>
         for {
           apiPlayer <- UsernameRenameResolver.fetchOrRecover(client, username)
           now       <- Clock.instant
@@ -74,27 +71,26 @@ object BlacklistApp extends ZIOAppDefault {
           // verification fetch already authenticated apiPlayer; we don't double-reconcile.
           _ <- withTransaction {
             PlayerUpdater.reconcile(apiPlayer, client) *> RecruitmentBlacklist.upsert(
-              RecruitmentBlacklist(apiClub.clubId, apiPlayer.playerId, now, expiresAt, reason)
+              RecruitmentBlacklist(club.clubId, apiPlayer.playerId, now, expiresAt, reason)
             )
           }
           _ <- ZIO.whenDiscard(apiPlayer.username != username) {
             ZIO.logInfo(s"  Renamed: input '$username' resolved to '${apiPlayer.username}'")
           }
           _ <- ZIO.logInfo(
-            s"Blacklisted ${apiPlayer.username} (player_id=${apiPlayer.playerId}) for club $clubSlug"
+            s"Blacklisted ${apiPlayer.username} (player_id=${apiPlayer.playerId}) for club ${club.slug}"
           )
-        } yield ()
+        } yield apiPlayer.username
       }
-    } yield ()
+    } yield blacklisted
 
-  private def listBlacklist(clubSlug: ClubSlug): RIO[PostgresClient, Unit] =
+  private def listBlacklist(club: ClubRef): RIO[PostgresClient, Unit] =
     for {
-      club    <- Club.selectBySlug(clubSlug).someOrFail(NotFoundException(s"Club not found: $clubSlug"))
       now     <- Clock.instant
       entries <- RecruitmentBlacklist.selectActiveByClub(club.clubId, now)
       _ <-
         if (entries.isEmpty) {
-          ZIO.logInfo(s"No active blacklist entries for $clubSlug")
+          ZIO.logInfo(s"No active blacklist entries for ${club.slug}")
         } else {
           ZIO.foreachDiscard(entries) { e =>
             val name    = e.username.fold(s"player_id=${e.playerId}")(_.toString)
@@ -105,14 +101,14 @@ object BlacklistApp extends ZIOAppDefault {
         }
     } yield ()
 
-  def removeFromBlacklist(clubSlug: ClubSlug, username: Username): RIO[PostgresClient, Unit] =
+  /** Answers whether the player was blacklisted for the club. */
+  def removeFromBlacklist(club: ClubRef, username: Username): RIO[PostgresClient, Boolean] =
     for {
-      club <- Club.selectBySlug(clubSlug).someOrFail(NotFoundException(s"Club not found: $clubSlug"))
       ps   <- Player.selectByUsername(username).someOrFail(NotFoundException(s"Player not found: $username"))
       rows <- RecruitmentBlacklist.delete(club.clubId, ps.playerId)
       _ <- ZIO.logInfo(
-        if (rows > 0) s"Removed $username from blacklist for $clubSlug"
-        else s"$username was not blacklisted for $clubSlug"
+        if (rows > 0) s"Removed $username from blacklist for ${club.slug}"
+        else s"$username was not blacklisted for ${club.slug}"
       )
-    } yield ()
+    } yield rows > 0
 }
