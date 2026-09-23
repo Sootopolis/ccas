@@ -26,7 +26,7 @@ object SchedulerDefaults {
     SeedDefault(JobKind.ClubData, "clubData", 6)
   )
 
-  // Per-managed-club kinds seeded at boot (#102). Seeded once per managed, non-tombstoned club — never all clubs.
+  // Per-managed-club kinds seeded at boot (#102). Seeded once per managed club that holds a name — never all clubs.
   private val perClubSeedKinds: List[SeedDefault] = List(
     SeedDefault(JobKind.History, "history", 24),
     SeedDefault(JobKind.Membership, "membership", 24)

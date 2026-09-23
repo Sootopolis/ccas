@@ -9,7 +9,7 @@ import scala.annotation.tailrec
 import zio.{Clock, Console, IO, RIO, Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
 import zio.json.{DeriveJsonCodec, EncoderOps, JsonCodec, JsonDecoder}
 
-import ccas.analysis.apps.{ClubQuery, ClubRef, ClubResolution}
+import ccas.analysis.apps.{ClubQuery, ClubResolution, NamedClub}
 import ccas.analysis.tables.*
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, Elo}
 import ccas.utils.ProgressDisplay
@@ -82,7 +82,7 @@ object RecruitmentCriteriaApp extends ZIOAppDefault {
       case _ => ZIO.fail(BadRequestException(help))
     }
 
-  private def resolve(clubStr: String): RIO[ChessComClient & PostgresClient, ClubRef] =
+  private def resolve(clubStr: String): RIO[ChessComClient & PostgresClient, NamedClub] =
     ClubResolution.resolveRunnable(ClubQuery.BySlug(ClubSlug.wrap(clubStr)))
 
   // --- Core (reused by RecruitmentCriteriaRoutes) ---
@@ -99,7 +99,7 @@ object RecruitmentCriteriaApp extends ZIOAppDefault {
     } yield ()
   }
 
-  def set(club: ClubRef, alias: String, criteria: RecruitmentCriteria): RIO[PostgresClient, Long] = {
+  def set(club: NamedClub, alias: String, criteria: RecruitmentCriteria): RIO[PostgresClient, Long] = {
     val a      = alias.trim
     val capped = criteria.capped
     for {
@@ -201,7 +201,7 @@ object RecruitmentCriteriaApp extends ZIOAppDefault {
         insertWithSinceRetry(clubId, alias, criteria, since.plusNanos(1000), attemptsLeft - 1)
     }
 
-  def show(club: ClubRef, alias: String): RIO[PostgresClient, RecruitmentCriteria] =
+  def show(club: NamedClub, alias: String): RIO[PostgresClient, RecruitmentCriteria] =
     for {
       aliasRow <- RecruitmentAlias.selectLatest(club.clubId, alias)
         .someOrFail(NotFoundException(s"No recruitment alias '$alias' found for club '${club.slug}'"))
@@ -352,7 +352,7 @@ object RecruitmentCriteriaApp extends ZIOAppDefault {
     }
   }
 
-  private def promptCriteria(club: ClubRef, alias: String): RIO[PostgresClient, Option[RecruitmentCriteria]] = {
+  private def promptCriteria(club: NamedClub, alias: String): RIO[PostgresClient, Option[RecruitmentCriteria]] = {
     val a = alias.trim
     for {
       existing <- latestCriteria(club.clubId, a).map(_.map(_._2))

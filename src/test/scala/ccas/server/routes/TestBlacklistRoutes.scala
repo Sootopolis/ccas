@@ -9,7 +9,7 @@ import zio.http.*
 import zio.json.{DecoderOps, JsonCodec}
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
-import ccas.analysis.apps.{ClubQuery, ClubRef, ClubResolution}
+import ccas.analysis.apps.{ClubQuery, ClubResolution, NamedClub}
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.apiPlayerJson
 import ccas.analysis.tables.{Club, Player, RecruitmentBlacklist, Tables}
@@ -174,7 +174,7 @@ object TestBlacklistRoutes extends ZIOSpecDefault {
       result   <- parseResult[List[BlacklistEntryResponse]](response)
     } yield assertTrue(
       result.club == renamedSlug.value,
-      result.resolution == ClubResolution.Renamed(ClubRef(testClubId, renamedSlug), testClubSlug),
+      result.resolution == ClubResolution.Renamed(NamedClub(testClubId, renamedSlug), testClubSlug),
       result.resultOption.exists(_.map(_.playerId) == List(pidA.value))
     )
   }

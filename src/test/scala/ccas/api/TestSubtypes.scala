@@ -92,6 +92,18 @@ object TestSubtypes extends ZIOSpecDefault {
     test("JSON roundtrip") {
       val s = ClubSlug("devon-chess")
       assertTrue(s.toJson.fromJson[ClubSlug] == Right(s))
+    },
+    test("fromUrl takes the last path segment, and throws on a URL that names no club") {
+      val named  = URL.decode("https://api.chess.com/pub/club/devon-chess").toOption.get
+      val unnamed = URL.decode("https://api.chess.com").toOption.get
+      assertTrue(
+        ClubSlug.fromUrl(named) == ClubSlug("devon-chess"),
+        scala.util.Try(ClubSlug.fromUrl(unnamed)).isFailure
+      )
+    },
+    test("fromUrlOption answers None for a URL that names no club, rather than an empty slug") {
+      val unnamed = URL.decode("https://api.chess.com").toOption.get
+      assertTrue(ClubSlug.fromUrlOption(unnamed).isEmpty)
     }
   )
 

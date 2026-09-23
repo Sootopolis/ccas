@@ -4,7 +4,7 @@ import zio.{durationInt, ZIO}
 import zio.json.{EncoderOps, JsonDecoder}
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
-import ccas.analysis.apps.ClubRef
+import ccas.analysis.apps.NamedClub
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.*
 import ccas.analysis.tables.*
 import ccas.api.misc.subtypes.Elo
@@ -13,7 +13,7 @@ import ccas.utils.sql.FreshSchemaLayer
 
 object TestRecruitmentCriteriaApp extends ZIOSpecDefault {
 
-  private val club = ClubRef(clubId, clubSlug)
+  private val club = NamedClub(clubId, clubSlug)
 
   override def spec: Spec[Any, Throwable] = suite("TestRecruitmentCriteriaApp")(
     testSetInsertsCriteriaAndAlias,

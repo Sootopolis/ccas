@@ -2,7 +2,7 @@ package ccas.server.jobs
 
 import zio.RIO
 
-import ccas.analysis.apps.ClubRef
+import ccas.analysis.apps.NamedClub
 import ccas.api.misc.subtypes.JobRunId
 import ccas.utils.ProgressDisplay
 import ccas.utils.client.ChessComClient
@@ -15,4 +15,4 @@ type JobEnv = ProgressDisplay & ChessComClient & PostgresClient
 type JobEffect = Option[JobRunId] => RIO[JobEnv, Any]
 
 /** A [[JobEffect]] for a club-scoped job, given the club it was resolved to. */
-type ClubJobEffect = (ClubRef, Option[JobRunId]) => RIO[JobEnv, Any]
+type ClubJobEffect = (NamedClub, Option[JobRunId]) => RIO[JobEnv, Any]

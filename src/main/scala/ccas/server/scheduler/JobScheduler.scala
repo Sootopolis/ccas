@@ -5,14 +5,14 @@ import java.time.Instant
 import com.typesafe.config.ConfigFactory
 import zio.{durationLong, Clock, Duration, Schedule, Scope, Task, UIO, URIO, URLayer, ZEnvironment, ZIO, ZLayer}
 
-import ccas.analysis.apps.ClubRef
+import ccas.analysis.apps.{ClubQuery, ClubResolution}
 import ccas.analysis.apps.clubdata.ClubDataApp
 import ccas.analysis.apps.history.HistoryApp
 import ccas.analysis.apps.membership.MembershipApp
 import ccas.analysis.apps.recruitment.RecruitmentApp
 import ccas.analysis.apps.ref.RefApp
 import ccas.analysis.apps.stats.StatsApp
-import ccas.analysis.tables.{Club, RunTrigger}
+import ccas.analysis.tables.RunTrigger
 import ccas.server.jobs.{ClubJobEffect, JobCaps, JobEffect, JobKind, JobRunner}
 import ccas.server.scheduler.ScheduleParams.{
   ClubDataOptions,
@@ -171,14 +171,16 @@ object JobScheduler {
           }
       }
 
-    // The schedule's club is looked up when the job starts, not when it is decoded.
+    // The schedule's club is resolved when the job starts, not when it is decoded, and by id — so the job runs
+    // against the club that was scheduled whatever it is called now (ADR 0016).
     private def clubJob(schedule: JobSchedule)(effect: ClubJobEffect): JobEffect =
       jobRunIdOption =>
         for {
-          clubId <- ZIO.fromOption(schedule.clubIdOption)
-                      .orElseFail(IllegalStateException(s"${schedule.kind} schedule missing clubId"))
-          club   <- Club.selectId(clubId).someOrFail(IllegalStateException(s"Club $clubId not found in database"))
-          result <- effect(ClubRef.fromClub(club), jobRunIdOption)
+          clubId     <- ZIO.fromOption(schedule.clubIdOption)
+                          .orElseFail(IllegalStateException(s"${schedule.kind} schedule missing clubId"))
+          resolution <- ClubResolution.resolve(ClubQuery.ById(clubId))
+          club       <- ZIO.fromEither(resolution.runnable).mapError(IllegalStateException(_))
+          result     <- effect(club, jobRunIdOption)
         } yield result
   }
 }

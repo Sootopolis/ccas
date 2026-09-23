@@ -9,7 +9,7 @@ import zio.{durationLong, Clock, ExitCode, RIO, Ref, Scope, Task, ZEnvironment, 
 
 import ccas.analysis.apps.membership.MembershipApp
 import ccas.analysis.apps.ref.RefHelpers
-import ccas.analysis.apps.{ClubQuery, ClubRef, ClubResolution, ClubSlugRenameResolver, withClubSlugRenameRecovery}
+import ccas.analysis.apps.{ClubQuery, ClubResolution, ClubSlugRenameResolver, NamedClub, withClubSlugRenameRecovery}
 import ccas.analysis.tables.*
 import ccas.analysis.tables.subtypes.RecruitmentRunId
 import ccas.api.club.{ApiClubMatches, ApiClubMembers}
@@ -161,7 +161,7 @@ object RecruitmentApp extends ZIOAppDefault {
       club          = Club.fromApi(apiClub)
       // On the recovery path the resolver already upserted under the canonical slug, so this is an idempotent
       // reaffirmation; on the happy path it is the source-of-truth write.
-      _ <- Club.upsertResolvingSlugConflict(club, client)
+      _ <- Club.upsert(club)
       aliasRow <- RecruitmentAlias.selectLatest(clubId, alias)
         .someOrFail(NotFoundException(s"No recruitment alias '$alias' found for club '$clubSlug'"))
       criteria <- RecruitmentCriteria.selectId(aliasRow.criteriaId)
@@ -472,7 +472,7 @@ object RecruitmentApp extends ZIOAppDefault {
 
   final case class RecruitmentReportResult(usernames: List[Username], evaluatedCount: Int, run: RecruitmentRun)
 
-  def showReport(club: ClubRef, runIdOption: Option[String]): RIO[PostgresClient, RecruitmentReportResult] =
+  def showReport(club: NamedClub, runIdOption: Option[String]): RIO[PostgresClient, RecruitmentReportResult] =
     for {
       run <- runIdOption match {
         case Some(id) =>

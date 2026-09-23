@@ -1,6 +1,6 @@
 package ccas.cli.config
 
-import ccas.analysis.apps.{ClubQuery, ClubRef, ClubResolution}
+import ccas.analysis.apps.{ClubQuery, ClubResolution, NamedClub}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 
 /** The parsed form of the CLI config's `current_club` value. Stored as `"<id>:<slug>"` when the CLI knows the club's
@@ -34,7 +34,7 @@ final case class CurrentClubRef(clubIdOption: Option[ClubId], slug: String) {
     * since a name can pass to another club; otherwise by the name it was set with, which is either what was typed or
     * what the club is called now. Drives clearing the pointer when its club stops being managed.
     */
-  def means(club: ClubRef, query: ClubQuery): Boolean = clubIdOption match {
+  def means(club: NamedClub, query: ClubQuery): Boolean = clubIdOption match {
     case Some(clubId) => clubId == club.clubId
     case None         => CurrentClubRef.sameSlug(slug, ClubSlug.unwrap(club.slug)) || names(query)
   }
@@ -76,7 +76,7 @@ object CurrentClubRef {
     stored: Option[String],
     targetHasId: Boolean,
     targetSlug: String,
-    resolvedOption: Option[ClubRef]
+    resolvedOption: Option[NamedClub]
   ): Option[CurrentClubRef] =
     (stored, resolvedOption) match {
       case (Some(raw), Some(resolved)) =>
@@ -91,7 +91,7 @@ object CurrentClubRef {
     * now belongs to someone else's club: the job runs there because that is the name that was asked for, but a
     * pointer stored as a bare slug would otherwise follow the name and silently change which club it means.
     */
-  def refreshTarget(resolution: ClubResolution): Option[ClubRef] = resolution match {
+  def refreshTarget(resolution: ClubResolution): Option[NamedClub] = resolution match {
     case ClubResolution.Moved(_, _, _) => None
     case settled                       => settled.runnable.toOption
   }

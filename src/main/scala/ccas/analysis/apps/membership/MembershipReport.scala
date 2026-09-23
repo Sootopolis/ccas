@@ -5,7 +5,7 @@ import java.time.{Duration as JDuration, Instant}
 
 import zio.{Chunk, RIO, URIO, ZIO}
 
-import ccas.analysis.apps.ClubRef
+import ccas.analysis.apps.NamedClub
 import ccas.analysis.apps.membership.MembershipChange.*
 import ccas.analysis.apps.membership.MembershipChange.MemberChange.*
 import ccas.analysis.tables.*
@@ -23,7 +23,7 @@ private[membership] object MembershipReport {
     invitations: Map[PlayerId, Instant]
   )
 
-  def report(club: ClubRef, since: Instant, until: Instant): RIO[ProgressDisplay & PostgresClient, ReportResult] =
+  def report(club: NamedClub, since: Instant, until: Instant): RIO[ProgressDisplay & PostgresClient, ReportResult] =
     for {
       members <- ClubMember.selectClub(club.clubId)
       snaps   <- PlayerSnapshot.selectSince(since)

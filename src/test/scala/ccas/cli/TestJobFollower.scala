@@ -4,7 +4,7 @@ import zio.*
 import zio.json.*
 import zio.test.{assertTrue, Spec, TestAspect, TestConsole, ZIOSpecDefault}
 
-import ccas.analysis.apps.{ClubQuery, ClubRef, ClubResolution}
+import ccas.analysis.apps.{ClubQuery, ClubResolution, NamedClub}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 import ccas.server.routes.JobRoutes.{ClubJobResult, JobResult, JobStatusResponse}
 import ccas.utils.ProgressSnapshot
@@ -13,7 +13,7 @@ import ccas.utils.ProgressSnapshot
 object TestJobFollower extends ZIOSpecDefault {
 
   private val submitted =
-    ClubJobResult("team-a", Some("job-1"), None, ClubResolution.Known(ClubRef(ClubId(1), ClubSlug("team-a"))))
+    ClubJobResult("team-a", Some("job-1"), None, ClubResolution.Known(NamedClub(ClubId(1), ClubSlug("team-a"))))
   private val notLocal =
     ClubJobResult("team-b", None, None, ClubResolution.NotLocal(ClubQuery.BySlug(ClubSlug("team-b"))))
 

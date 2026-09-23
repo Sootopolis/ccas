@@ -26,9 +26,9 @@ object ServerTables extends ZIOAppDefault {
       // as a typed error rather than a ZIO defect.
       seeds <- ZIO.attempt(SchedulerDefaults.fromConfig)
       _     <- ZIO.foreachDiscard(seeds)(JobSchedule.seedGlobalIfAbsent)
-      // Per managed-club seeds (#102): History + Membership for each managed, non-tombstoned club. Never all known
-      // clubs — selectClubIds is the tombstone-excluded managed source, so heavy History crawls never target
-      // scouted/opponent clubs. Fresh DB / no managed clubs → empty list → no-op.
+      // Per managed-club seeds (#102): History + Membership for each managed club that holds a name. Never all
+      // known clubs — selectClubIds is the managed source, so heavy History crawls never target scouted/opponent
+      // clubs. Fresh DB / no managed clubs → empty list → no-op.
       perClubSeeds <- ZIO.attempt(SchedulerDefaults.perClubFromConfig)
       managedIds   <- ManagedClub.selectClubIds
       _ <- ZIO.foreachDiscard(managedIds) { clubId =>

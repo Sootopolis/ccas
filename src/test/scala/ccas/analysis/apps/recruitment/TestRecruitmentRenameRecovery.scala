@@ -245,7 +245,7 @@ object TestRecruitmentRenameRecovery extends ZIOSpecDefault {
     val freshSlug    = ClubSlug("renamed-new")
     val staleClubId  = sourceClubId // ClubId(600) per RecruitmentTestSupport
     val matchId      = ClubMatchId(8001)
-    // Match endpoint exposes team1 URL → we put fresh-slug there so resolveStaleSlug can read it.
+    // Match endpoint exposes team1 URL → we put fresh-slug there so Tier B can read it.
     val matchJson = apiDailyMatchJson(
       matchId = 8001L,
       team1Club = "renamed-new",

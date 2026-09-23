@@ -12,15 +12,15 @@ import ccas.utils.sql.PostgresClient
 
 /** Resolves the current canonical slug for a club whose previously-known slug 404s on Chess.com.
   *
-  *  - **Tier A (DB lookup)** — never fires HTTP: `Club.selectId(hint).slug`, when it differs from the stale input.
-  *    A caller with no hint gets the one `club_name` gives: the club that holds the stale slug, or alone held it.
+  *  - **Tier A (DB lookup)** — never fires HTTP: the name `club_name` says the hinted club holds now, when it
+  *    differs from the stale input. A caller with no hint gets the one `club_name` gives: the club that holds the
+  *    stale slug, or alone held it.
   *  - **Tier B (match-ref endpoint)** — `Club.slugFromMatchRef`, which reads a `ClubMatchRef` board's team URL.
   *  - **Tier C (admin clubs)** — fetches each stored `ClubAdmin`'s `/pub/player/{username}/clubs` and looks for a
   *    slug whose `ApiClub.clubId` matches the hint. Bounded by the admin count, short-circuits on first hit, and
   *    closes the gap for a club that has never played a match.
   *
-  * Verification fetches `ApiClub` for the candidate; on 404 the caller's original 404 propagates. Tombstoned slugs
-  * (`_stale_<clubId>`) are never returned as fresh.
+  * Verification fetches `ApiClub` for the candidate; on 404 the caller's original 404 propagates.
   *
   * Why the entry points gate on [[ccas.utils.client.ReportedNotFound]] rather than any 404 — it is what stops Tier
   * C's fan-out on noise: `docs/adr/0010-rename-recovery-for-usernames-and-club-slugs.md` (tombstones superseded).
@@ -36,9 +36,6 @@ object ClubSlugRenameResolver {
     def fromApi(apiClub: ApiClub): ResolvedClub = ResolvedClub(apiClub.canonicalSlug, apiClub)
   }
 
-  /** Delegates to [[Club.isTombstoneSlug]] — single source of truth for the tombstone format. */
-  def isTombstone(s: ClubSlug): Boolean = Club.isTombstoneSlug(s)
-
   /** Returns the current canonical slug when `staleSlug` 404s, or `None` if no rename can be inferred. Verifies the
     * candidate via `ApiClub` and does NOT update the `club` table. Use [[resolveAndPersist]] for the side-effecting
     * variant.
@@ -50,8 +47,8 @@ object ClubSlugRenameResolver {
   ): RIO[PostgresClient, Option[ClubSlug]] =
     resolveAndPersist(client, staleSlug, clubIdHint).map(_.map(_.slug))
 
-  /** Resolves the current slug AND persists it via `Club.upsertResolvingSlugConflict`. Returns the verified `ApiClub`
-    * so callers don't have to refetch.
+  /** Resolves the current slug AND persists it via `Club.upsert`. Returns the verified `ApiClub` so callers don't
+    * have to refetch.
     */
   def resolveAndPersist(
     client: ChessComClient,
@@ -64,9 +61,7 @@ object ClubSlugRenameResolver {
       effectiveHint   <- deriveHint(staleSlug, clubIdHint).swallowRecoveryErrors(s"slug hint for $staleSlug")
       candidateOption <- resolveCandidate(client, staleSlug, effectiveHint)
       resolvedOption  <- ZIO.foreach(candidateOption)(verify(client, _, effectiveHint)).map(_.flatten)
-      _ <- ZIO.foreachDiscard(resolvedOption) { resolved =>
-        Club.upsertResolvingSlugConflict(Club.fromApi(resolved.api), client)
-      }
+      _ <- ZIO.foreachDiscard(resolvedOption)(resolved => Club.upsert(Club.fromApi(resolved.api)))
     } yield resolvedOption
 
   /** Convenience: fetches `/pub/club/{slug}` and falls back to slug-rename recovery on 404. Returns the verified
@@ -91,8 +86,8 @@ object ClubSlugRenameResolver {
 
   /** [[fetchOrRecover]] for a slug the caller already resolved to `expected`, failing with [[ClubMismatchException]]
     * if Chess.com answers with a different club. Without the check, a name that has moved to another club silently
-    * retargets the job and the upsert that follows tombstones the club the caller meant (ADR 0016). `None` skips the
-    * check.
+    * retargets the job, and the upsert that follows takes the name from the club the caller meant (ADR 0016). `None`
+    * skips the check.
     */
   def fetchExpecting(
     client: ChessComClient,
@@ -107,21 +102,19 @@ object ClubSlugRenameResolver {
 
   private def tierADb(staleSlug: ClubSlug, clubIdHint: Option[ClubId]): RIO[PostgresClient, Option[ClubSlug]] =
     clubIdHint match {
-      case None => ZIO.none
-      case Some(hint) => Club.selectId(hint).map(_.map(_.slug).filter(slug => slug != staleSlug && !isTombstone(slug)))
+      case None       => ZIO.none
+      case Some(hint) => ClubName.selectCurrentName(hint).map(_.filter(_ != staleSlug))
     }
 
   private def tierBMatchRef(
     client: ChessComClient,
     clubIdHint: Option[ClubId],
     staleSlug: ClubSlug
-  ): RIO[PostgresClient, Option[ClubSlug]] = {
-    val effect = for {
-      resultOption <- ZIO.foreach(clubIdHint)(Club.slugFromMatchRefResult(_, client)).map(_.flatten)
-      slugOption <- ZIO.foreach(resultOption)(_.foldZIO(_ => ZIO.none, _.getValue, _.getValue)).map(_.flatten)
-    } yield slugOption.filter(slug => slug != staleSlug && !isTombstone(slug))
-    effect.swallowRecoveryErrors(s"Tier B slug recovery for $staleSlug")
-  }
+  ): RIO[PostgresClient, Option[ClubSlug]] =
+    ZIO
+      .foreach(clubIdHint)(Club.slugFromMatchRef(_, client))
+      .map(_.flatten.filter(_ != staleSlug))
+      .swallowRecoveryErrors(s"Tier B slug recovery for $staleSlug")
 
   /** Resolves a candidate fresh slug. Errors are swallowed (debug-logged when non-HTTP) so the caller's original 404
     * is never replaced with a recovery-internal failure.
@@ -188,7 +181,7 @@ object ClubSlugRenameResolver {
   ): RIO[PostgresClient, Option[ClubSlug]] = {
     val effect = for {
       apiClubs <- client.getUncached[ApiPlayerClubs](ApiPlayerClubs.getUrl(username))
-      candidates = apiClubs.clubs.map(_.clubName).distinct.filter(s => s != staleSlug && !isTombstone(s))
+      candidates = apiClubs.clubs.map(_.clubName).distinct.filter(_ != staleSlug)
       knownSlugs <- ClubName.selectHeldSlugs(candidates.toSet)
       unknown = candidates.filterNot(knownSlugs.contains).toList
       result <- ZIO.collectFirst(unknown)(verifyClubIdMatch(client, _, hint))
@@ -249,11 +242,11 @@ object ClubSlugRenameResolver {
     slug: ClubSlug
   ): RIO[PostgresClient, Option[ClubId]] =
     ClubName.selectCurrentHolder(slug).flatMap {
-      case Some(club) => ZIO.some(club.clubId)
+      case Some(holder) => ZIO.some(holder.clubId)
       case None =>
         (for {
           apiClub <- ApiClub.get(client, slug)
-          _ <- Club.upsertResolvingSlugConflict(Club.fromApi(apiClub), client)
+          _       <- Club.upsert(Club.fromApi(apiClub))
         } yield Option(apiClub.clubId))
           .tapError(e => ZIO.logDebug(s"  ClubSlugRenameResolver.resolveOrFetch $slug failed: ${e.getMessage}"))
           .catchAll(e => NetworkUnavailableException.recoverUnless(e)(ZIO.none))
