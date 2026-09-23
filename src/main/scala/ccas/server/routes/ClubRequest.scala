@@ -7,7 +7,7 @@ import zio.{Chunk, IO, RIO, ZIO}
 import zio.http.Request
 import zio.json.{jsonField, DeriveJsonCodec, JsonCodec}
 
-import ccas.analysis.apps.{ClubQuery, ClubRef, ClubResolution}
+import ccas.analysis.apps.{ClubQuery, ClubResolution, NamedClub}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 import ccas.utils.client.ChessComClient
 import ccas.utils.errors.BadRequestException
@@ -24,7 +24,7 @@ private[ccas] final case class ClubResult[A](
 ) {
 
   /** The club acted on and what came of it, or why nothing was done. */
-  def toEither: Either[String, (ClubRef, A)] =
+  def toEither: Either[String, (NamedClub, A)] =
     resolution.runnable.flatMap(ref => resultOption.map(ref -> _).toRight(s"the server did not act on $club"))
 }
 
@@ -73,7 +73,7 @@ object ClubRequest {
 
   /** Resolves `query` and runs `action` against the club it names, if it names one. */
   def run[R, A](query: ClubQuery)(
-    action: ClubRef => RIO[R, A]
+    action: NamedClub => RIO[R, A]
   ): RIO[R & ChessComClient & PostgresClient, ClubResult[A]] =
     for {
       resolution   <- resolve(query)

@@ -45,27 +45,27 @@ object ManagedClub {
       sql"SELECT club_id, marked_at FROM managed_club WHERE club_id = $clubId".query[ManagedClub].run().headOption
     }
 
-  /** All managed clubs joined to their `club` row, newest-marked first. Tombstoned clubs are excluded — a managed
-    * marker on a club whose slug went stale shouldn't surface a `_stale_<id>` placeholder.
+  /** All managed clubs under the name they hold now, newest-marked first. A managed club that holds none is left out
+    * — naming it would name the club that took it.
     */
   def selectAllWithClub: ZIO[PostgresClient, SQLException, List[ManagedClubView]] =
     connectZIO {
-      sql"""SELECT c.club_id, c.slug, c.name, mc.marked_at
+      sql"""SELECT c.club_id, n.slug, c.name, mc.marked_at
             FROM managed_club mc
             JOIN club c ON c.club_id = mc.club_id
+            JOIN club_name n ON n.club_id = mc.club_id AND n.until IS NULL
             ORDER BY mc.marked_at DESC""".query[ManagedClubView].run().toList
-    }.map(_.filterNot(v => Club.isTombstoneSlug(v.slug)))
+    }
 
-  /** Club ids of every managed, non-tombstoned club — the non-leaky source for per-managed-club scheduling (#102).
-    * Tombstoned (`_stale_<id>`) clubs are excluded: they have no usable slug, so they are not valid job targets and a
-    * consumer (e.g. #102) must never crawl them.
+  /** Club ids of every managed club that holds a name — the non-leaky source for per-managed-club scheduling (#102).
+    * A club holding none has nothing to fetch under, so it is not a valid job target and a consumer (e.g. #102) must
+    * never crawl it.
     */
   def selectClubIds: ZIO[PostgresClient, SQLException, List[ClubId]] =
     connectZIO {
-      sql"""SELECT c.club_id
+      sql"""SELECT mc.club_id
             FROM managed_club mc
-            JOIN club c ON c.club_id = mc.club_id
-            WHERE c.slug !~ ${Club.TombstoneSlugRegex}""".query[ClubId].run().toList
+            JOIN club_name n ON n.club_id = mc.club_id AND n.until IS NULL""".query[ClubId].run().toList
     }
 
   /** Idempotently marks a club managed. Returns rows inserted (1 first time, 0 if already managed). */

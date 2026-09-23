@@ -7,7 +7,7 @@ import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.{apiClubJson, apiDailyMatchJson, apiPlayerJson}
-import ccas.analysis.tables.{Club, ClubAdmin, ClubMatch, ClubMatchRef, Player, PlayerSnapshot, Tables}
+import ccas.analysis.tables.{Club, ClubAdmin, ClubMatch, ClubMatchRef, ClubName, Player, PlayerSnapshot, Tables}
 import ccas.api.misc.enums.{ClubMatchStatus, PlayerStatusCategory, TimeClass}
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username}
 import ccas.utils.ProgressDisplay
@@ -305,6 +305,88 @@ object TestClubDataApp extends ZIOSpecDefault {
         result.clubsFailed == 1,
         unchanged.exists(_.slug == oldSlug),
         unchanged.exists(_.fetchedAt.isEmpty)
+      )
+    },
+    // #254 step 4: what the `_stale_<id>` tombstone used to force. The cached slug now names the club that took it,
+    // so fetching under it would refresh the wrong club and stamp this one as done.
+    test("a club that holds no name goes to the tiers, not to the name another club took") {
+      val takerId = ClubId(9001)
+      val matchJson = apiDailyMatchJson(
+        matchId = ClubMatchId.unwrap(refMatchId),
+        team1Club = newSlug.value,
+        team2Club = "opponent-club",
+        team1Players = List(("alice", 1)),
+        team2Players = List(("bob", 1))
+      )
+      val responses = Map(
+        s"club/${oldSlug.value}"                   -> apiClubJson(ClubId.unwrap(takerId), oldSlug.value),
+        s"club/${newSlug.value}"                   -> apiClubJson(ClubId.unwrap(stuckClubId), newSlug.value),
+        s"match/${ClubMatchId.unwrap(refMatchId)}" -> matchJson
+      )
+      for {
+        _         <- clearTables
+        _         <- seedStaleClub(stuckClubId, oldSlug, withInferredRef = true, withExplicitRef = false)
+        _         <- Club.upsert(Club(takerId, seedCreated, oldSlug, "Taker Club", None, None, None))
+        client    <- fakeClient(responses)
+        result    <- runRefresh(client)
+        recovered <- Club.selectId(stuckClubId)
+        holder    <- ClubName.selectCurrentHolder(oldSlug)
+      } yield assertTrue(
+        result.clubsProcessed == 2,
+        result.clubsFailed == 0,
+        recovered.exists(_.slug == newSlug),
+        recovered.exists(_.fetchedAt.isDefined),
+        holder.map(_.clubId).contains(takerId)
+      )
+    },
+    // The name still resolves here, so it never 404s: without the mismatch fallback this club would fail every sweep.
+    test("a name that answers as another club is recorded there, and this club falls back to the tiers") {
+      val otherId = ClubId(9002)
+      val matchJson = apiDailyMatchJson(
+        matchId = ClubMatchId.unwrap(refMatchId),
+        team1Club = newSlug.value,
+        team2Club = "opponent-club",
+        team1Players = List(("alice", 1)),
+        team2Players = List(("bob", 1))
+      )
+      val responses = Map(
+        s"club/${oldSlug.value}"                   -> apiClubJson(ClubId.unwrap(otherId), oldSlug.value),
+        s"club/${newSlug.value}"                   -> apiClubJson(ClubId.unwrap(stuckClubId), newSlug.value),
+        s"match/${ClubMatchId.unwrap(refMatchId)}" -> matchJson
+      )
+      for {
+        _         <- clearTables
+        _         <- seedStaleClub(stuckClubId, oldSlug, withInferredRef = true, withExplicitRef = false)
+        client    <- fakeClient(responses)
+        result    <- runRefresh(client)
+        recovered <- Club.selectId(stuckClubId)
+        holder    <- ClubName.selectCurrentHolder(oldSlug)
+      } yield assertTrue(
+        result.clubsProcessed == 1,
+        result.clubsFailed == 0,
+        recovered.exists(_.slug == newSlug),
+        recovered.exists(_.fetchedAt.isDefined),
+        holder.map(_.clubId).contains(otherId)
+      )
+    },
+    test("a name that answers as another club with no rename to find fails this club, leaving it holding none") {
+      val otherId   = ClubId(9003)
+      val responses = Map(s"club/${oldSlug.value}" -> apiClubJson(ClubId.unwrap(otherId), oldSlug.value))
+      for {
+        _         <- clearTables
+        _         <- seedStaleClub(stuckClubId, oldSlug, withInferredRef = false, withExplicitRef = false)
+        client    <- fakeClient(responses)
+        result    <- runRefresh(client)
+        unchanged <- Club.selectId(stuckClubId)
+        nameless  <- ClubName.selectCurrentName(stuckClubId)
+        holder    <- ClubName.selectCurrentHolder(oldSlug)
+      } yield assertTrue(
+        result.clubsProcessed == 1,
+        result.clubsFailed == 1,
+        unchanged.exists(_.slug == oldSlug), // the display cache keeps the last name it answered to
+        unchanged.exists(_.fetchedAt.isEmpty),
+        nameless.isEmpty,
+        holder.map(_.clubId).contains(otherId)
       )
     }
   )

@@ -4,7 +4,7 @@ import java.time.{Instant, ZoneOffset}
 
 import zio.{Clock, RIO, Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
 
-import ccas.analysis.apps.{ClubQuery, ClubRef, ClubResolution, PlayerUpdater, UsernameRenameResolver}
+import ccas.analysis.apps.{ClubQuery, ClubResolution, NamedClub, PlayerUpdater, UsernameRenameResolver}
 import ccas.analysis.tables.*
 import ccas.api.misc.subtypes.{ClubSlug, Username}
 import ccas.utils.ProgressDisplay
@@ -49,14 +49,14 @@ object BlacklistApp extends ZIOAppDefault {
       PostgresClient.live(onInit = Tables.ensureTablesOnInit)
     )
 
-  private def resolve(clubStr: String): RIO[ChessComClient & PostgresClient, ClubRef] =
+  private def resolve(clubStr: String): RIO[ChessComClient & PostgresClient, NamedClub] =
     ClubResolution.resolveRunnable(ClubQuery.BySlug(ClubSlug.wrap(clubStr)))
 
   /** Blacklists each player for a club already resolved, answering with the usernames as blacklisted — a renamed
     * player under their current name.
     */
   def addToBlacklist(
-    club: ClubRef,
+    club: NamedClub,
     usernames: List[Username],
     reason: Option[String],
     expiresAt: Option[Instant]
@@ -84,7 +84,7 @@ object BlacklistApp extends ZIOAppDefault {
       }
     } yield blacklisted
 
-  private def listBlacklist(club: ClubRef): RIO[PostgresClient, Unit] =
+  private def listBlacklist(club: NamedClub): RIO[PostgresClient, Unit] =
     for {
       now     <- Clock.instant
       entries <- RecruitmentBlacklist.selectActiveByClub(club.clubId, now)
@@ -102,7 +102,7 @@ object BlacklistApp extends ZIOAppDefault {
     } yield ()
 
   /** Answers whether the player was blacklisted for the club. */
-  def removeFromBlacklist(club: ClubRef, username: Username): RIO[PostgresClient, Boolean] =
+  def removeFromBlacklist(club: NamedClub, username: Username): RIO[PostgresClient, Boolean] =
     for {
       ps   <- Player.selectByUsername(username).someOrFail(NotFoundException(s"Player not found: $username"))
       rows <- RecruitmentBlacklist.delete(club.clubId, ps.playerId)

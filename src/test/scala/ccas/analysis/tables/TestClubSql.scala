@@ -8,10 +8,10 @@ import zio.http.*
 
 import com.augustnagro.magnum.sql
 
-import ccas.analysis.apps.recruitment.RecruitmentTestSupport.notFoundBody
+import ccas.analysis.apps.recruitment.RecruitmentTestSupport.apiDailyMatchJson
 import ccas.api.misc.enums.PlayerStatusCategory.{Active, Closed}
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username}
-import ccas.utils.client.{ReportedNotFound, TestChessComClientSupport}
+import ccas.utils.client.TestChessComClientSupport
 import ccas.utils.sql.FreshSchemaLayer
 import ccas.utils.sql.PostgresClient.connectZIO
 
@@ -30,7 +30,7 @@ object TestClubSql extends ZIOSpecDefault {
     testClubMatchRefUpsert,
     testClubMatchRefDelete,
     testClubMatchRefDeleteAll,
-    testUpsertResolvingSlugConflictPropagatesGenuine404,
+    testSlugFromMatchRefRejectsABoardNamingNoClub,
     testTwoClubsMayHoldOneSlug,
     testReplaceSinceApproximate,
     testReplaceSinceNonApproximate,
@@ -191,29 +191,28 @@ object TestClubSql extends ZIOSpecDefault {
     } yield assertTrue(resultA.isEmpty, resultB.isEmpty)
   }
 
-  // Regression for #258: `slugFromMatchRef`'s answer to a genuine API 404 (as opposed to "no ref in DB", which
-  // falls back to a placeholder slug) must still fail the whole upsert — this is the "must never silently accept
-  // absence" call site `foldPresentZIO` exists for. No prior test exercised this branch at all.
-  private def testUpsertResolvingSlugConflictPropagatesGenuine404 =
-    test("upsertResolvingSlugConflict propagates a genuine 404 on the stale club's match ref, slug untouched") {
-      val staleClub    = Club(ClubId(220), Times.t0, ClubSlug("contested-slug"), "Stale Club", None, None, None)
-      val incomingClub = Club(ClubId(221), Times.t0, ClubSlug("contested-slug"), "Incoming Club", None, None, None)
-      val matchId      = ClubMatchId(9600)
+  // A board that names no club is a malformed response, not "no rename to be had": Tier B must see the difference,
+  // since its answer to absence is to move on quietly (ADR 0019).
+  private def testSlugFromMatchRefRejectsABoardNamingNoClub =
+    test("slugFromMatchRef fails when the board's team URL names no club") {
+      val club    = Club(ClubId(240), Times.t0, ClubSlug("board-says-nothing"), "Boardless", None, None, None)
+      val matchId = ClubMatchId(9610)
+      val matchJson = apiDailyMatchJson(
+        matchId = ClubMatchId.unwrap(matchId),
+        team1Club = "renamed-club",
+        team2Club = "opponent-club",
+        team1Players = List(("p1", 1)),
+        team2Players = List(("p2", 1))
+      ).replace("https://api.chess.com/pub/club/renamed-club", "https://api.chess.com")
       val routes = Routes(
-        Method.GET / "pub" / "match" / long("matchId") -> handler { (_: Long, _: Request) =>
-          Response.json(notFoundBody).status(Status.NotFound)
-        }
+        Method.GET / "pub" / "match" / long("matchId") -> handler((_: Long, _: Request) => Response.json(matchJson))
       )
       for {
-        _        <- Club.upsert(staleClub)
-        _        <- ClubMatchRef.insert(ClubMatchRef(staleClub.clubId, matchId, isLive = false, isTeam1 = true))
-        client   <- TestChessComClientSupport.fakeClient(routes)
-        result   <- Club.upsertResolvingSlugConflict(incomingClub, client).either
-        slugAfter <- Club.selectId(staleClub.clubId).map(_.map(_.slug))
-      } yield assertTrue(
-        result.left.exists(_.isInstanceOf[ReportedNotFound]),
-        slugAfter.contains(staleClub.slug)
-      )
+        _      <- Club.upsert(club)
+        _      <- ClubMatchRef.insert(ClubMatchRef(club.clubId, matchId, isLive = false, isTeam1 = true))
+        client <- TestChessComClientSupport.fakeClient(routes)
+        result <- Club.slugFromMatchRef(club.clubId, client).either
+      } yield assertTrue(result.left.exists(_.isInstanceOf[IllegalArgumentException]))
     }
 
   // `club.slug` is a display cache with no unique index since #254, and only `club_name` says who holds a name now.

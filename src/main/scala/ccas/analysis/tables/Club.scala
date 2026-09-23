@@ -10,11 +10,12 @@ import zio.{Task, ZIO}
 
 import ccas.analysis.apps.ref.RefHelpers
 import ccas.api.club.ApiClub
+import ccas.api.clubmatch.TeamMatchTeams
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
-import ccas.utils.client.{ChessComClient, FetchResult}
+import ccas.utils.client.ChessComClient
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient
-import ccas.utils.sql.PostgresClient.{connectZIO, transactZIO, withTransaction}
+import ccas.utils.sql.PostgresClient.{connectZIO, transactZIO}
 
 @Table(PostgresDbType, SqlNameMapper.CamelToSnakeCase)
 final case class Club(
@@ -25,36 +26,13 @@ final case class Club(
   membersCount: Option[Int],
   latestMatchAt: Option[Instant],
   fetchedAt: Option[Instant]
-) derives DbCodec {
-
-  /** True when the slug is a tombstone placeholder set by `Club.resolveStaleSlug` (for clubs whose fresh slug couldn't
-    * be discovered via match refs). Callers iterating clubs for URL emission or display should filter these out.
-    */
-  def isTombstoned: Boolean = Club.isTombstoneSlug(slug)
-
-  /** Display variant for tombstoned clubs so user-facing output doesn't leak the placeholder. */
-  def displayName: String =
-    if (isTombstoned) { s"<unknown club #${ClubId.unwrap(clubId)}>" } else { name }
-}
+) derives DbCodec
 
 object Club {
   private val repo = ImmutableRepo[Club, ClubId]
 
   private[tables] val selectCols =
     SqlLiteral("club_id, created, slug, name, members_count, latest_match_at, fetched_at")
-
-  private val staleRegex   = "^_stale_[0-9]+$"
-  private val stalePattern = staleRegex.r
-
-  private def tombstoneSlug(clubId: ClubId): ClubSlug = ClubSlug.wrap(s"_stale_${ClubId.unwrap(clubId)}")
-
-  /** [[isTombstoneSlug]] as a SQL regex literal for a `!~` match, so the tombstone format has one home. */
-  private[tables] val TombstoneSlugRegex: SqlLiteral = SqlLiteral(s"'$staleRegex'")
-
-  /** True when the given slug matches the tombstone format set by `Club.resolveStaleSlug`. Useful at display sites
-    * that hold a `ClubSlug` value but no full `Club` row.
-    */
-  def isTombstoneSlug(s: ClubSlug): Boolean = stalePattern.matches(s.value)
 
   def createTable: ZIO[PostgresClient, SQLException, Int] =
     transactZIO {
@@ -74,6 +52,15 @@ object Club {
 
   def selectId(clubId: ClubId): ZIO[PostgresClient, SQLException, Option[Club]] =
     connectZIO(repo.findById(clubId))
+
+  /** Every club that holds a name now — the source the CLI's completion cache is built from (#44). A club whose name
+    * another club took holds none until we observe what it answers to, and offering the name would offer the taker.
+    */
+  def selectNamed: ZIO[PostgresClient, SQLException, List[Club]] =
+    connectZIO {
+      sql"""SELECT $selectCols FROM club
+            WHERE club_id IN (SELECT club_id FROM club_name WHERE until IS NULL)""".query[Club].run().toList
+    }
 
   /** Upserts a club. NB: `latest_match_at` and `fetched_at` are intentionally not updated on conflict — they are
     * managed separately by [[ccas.analysis.apps.clubdata.ClubDataApp]] via [[updateLatestMatchAt]] and
@@ -96,62 +83,26 @@ object Club {
       sql"UPDATE club SET fetched_at = $at WHERE club_id = $clubId".update.run()
     }
 
-  /** Upsert that handles slug conflicts by resolving the stale club's current slug via match ref.
-    *
-    * When another club already holds the target slug in the database, this method looks up one of the stale club's
-    * matches and fetches the team URL from the Chess.com API to discover its current slug. Falls back to a placeholder
-    * if the stale club has no matches. `club.slug` carries no unique index, so the conflict is one the tombstones
-    * keep rather than one the database raises (#254).
+  /** The name the club's own match board reports for it — Tier B of slug-rename recovery. Reads a [[ClubMatchRef]],
+    * explicit row first and otherwise inferred from `club_match` and promoted via [[ClubMatchRef.findOrInfer]], then
+    * takes the slug from that board's team URL. `None` is every way this comes to nothing quietly: no ref to read, or
+    * a match Chess.com reports gone — Tier B's answer to both is "try Tier C" (ADR 0019, #258). A board whose team
+    * URL names no club is a malformed response rather than an absence, so it fails; #275 would have the decoder say
+    * that instead.
     */
-  def upsertResolvingSlugConflict(club: Club, client: ChessComClient): ZIO[PostgresClient, Throwable, Int] =
-    withTransaction {
-      for {
-        existing <- ClubName.selectCurrentHolder(club.slug)
-        _        <- ZIO.foreachDiscard(existing.filter(_.clubId != club.clubId))(resolveStaleSlug(_, client))
-        result   <- upsert(club)
-      } yield result
-    }
-
-  /** Looks up a [[ClubMatchRef]] for the given club — explicit row first, otherwise inferred from `club_match` and
-    * promoted via [[ClubMatchRef.findOrInfer]] — and reads the club's current slug from the corresponding team URL on
-    * the Chess.com match endpoint. Used both to resolve slug collisions ([[resolveStaleSlug]]) and to recover from
-    * rename-404s in ClubDataApp. Returns `None` if neither `club_match_ref` nor `club_match` carries the club.
-    */
-  def slugFromMatchRef(
-    clubId: ClubId,
-    client: ChessComClient
-  ): ZIO[PostgresClient, Throwable, Option[ClubSlug]] =
-    slugFromMatchRefResult(clubId, client).flatMap {
-      case Some(result) => result.foldPresentZIO(_.getValue, _.getValue)
-      case None         => ZIO.none
-    }
-
-  /** [[slugFromMatchRef]], but exposing the fetch outcome as a value instead of committing to "fail on absence" —
-    * used by `ClubSlugRenameResolver.tierBMatchRef`, whose answer to absence is "try Tier C," not "fail."
-    */
-  def slugFromMatchRefResult(
-    clubId: ClubId,
-    client: ChessComClient
-  ): ZIO[PostgresClient, Throwable, Option[FetchResult[Option[ClubSlug]]]] =
+  def slugFromMatchRef(clubId: ClubId, client: ChessComClient): ZIO[PostgresClient, Throwable, Option[ClubSlug]] =
     ClubMatchRef.findOrInfer(clubId).flatMap {
-      case Some(ref) => fetchCurrentSlugResult(ref, client).asSome
       case None      => ZIO.none
+      case Some(ref) => teamsOfMatch(ref, client).flatMap(ZIO.foreach(_)(slugOfTeam(ref, _)))
     }
 
-  private def fetchCurrentSlugResult(ref: ClubMatchRef, client: ChessComClient): Task[FetchResult[Option[ClubSlug]]] =
-    RefHelpers.fetchTeamMatchTeamsResult(client, ref.matchId, ref.isLive).map(_.map { teams =>
-      val team = if (ref.isTeam1) { teams.team1 } else { teams.team2 }
-      ClubSlug.fromUrlOption(team.`@id`)
-    })
+  private def teamsOfMatch(ref: ClubMatchRef, client: ChessComClient): Task[Option[TeamMatchTeams]] =
+    RefHelpers
+      .fetchTeamMatchTeamsResult(client, ref.matchId, ref.isLive)
+      .flatMap(_.foldZIO(_ => ZIO.none, _.getValue.asSome, _.getValue.asSome))
 
-  private def resolveStaleSlug(stale: Club, client: ChessComClient): ZIO[PostgresClient, Throwable, Int] =
-    slugFromMatchRef(stale.clubId, client).flatMap { newSlugOption =>
-      val slug = newSlugOption.getOrElse(tombstoneSlug(stale.clubId))
-      transactZIO {
-        sql"UPDATE club SET slug = $slug WHERE club_id = ${stale.clubId}".update.run()
-          .tap(_ => recordName(stale.copy(slug = slug)))
-      }
-    }
+  private def slugOfTeam(ref: ClubMatchRef, teams: TeamMatchTeams): Task[ClubSlug] =
+    ZIO.attempt(ClubSlug.fromUrl(if (ref.isTeam1) { teams.team1.`@id` } else { teams.team2.`@id` }))
 
   /** Builds a [[Club]] from an [[ApiClub]] response, reading the slug from `apiClub.canonicalSlug` — the name
     * Chess.com answers to now, not necessarily the one the caller requested. `latestMatchAt` and `fetchedAt` are
@@ -173,5 +124,5 @@ object Club {
 
   // Every write of `club.slug` goes through here, so `club_name` never drifts from it.
   private def recordName(club: Club)(using DbTx): Int =
-    ClubName.record(club.clubId, Option.unless(isTombstoneSlug(club.slug))(club.slug))
+    ClubName.record(club.clubId, club.slug)
 }

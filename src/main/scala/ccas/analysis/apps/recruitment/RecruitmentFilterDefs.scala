@@ -320,7 +320,7 @@ private[recruitment] object RecruitmentFilterDefs {
           )
         // Persist the Club row regardless — value for future runs and for ClubDataApp's slug index.
         // `Club.upsert` deliberately preserves an existing latest_match_at, so this doesn't clobber DB state.
-        _ <- Club.upsertResolvingSlugConflict(Club.fromApi(apiClub), run.client)
+        _ <- Club.upsert(Club.fromApi(apiClub))
         rejected <-
           if (!passesGate(apiClub.membersCount, apiClub.admin.size, latestMatchAt, min, cutoff)) ZIO.succeed(false)
           else {

@@ -5,12 +5,9 @@ import java.time.{Instant, LocalDateTime, ZoneOffset}
 
 import com.augustnagro.magnum.sql
 import zio.ZIO
-import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
-import ccas.analysis.apps.recruitment.RecruitmentTestSupport.apiDailyMatchJson
-import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug}
-import ccas.utils.client.TestChessComClientSupport
+import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
 import ccas.utils.sql.PostgresClient.{connectZIO, transactZIO}
@@ -51,14 +48,16 @@ object TestClubNameSql extends ZIOSpecDefault {
       for {
         _          <- Club.upsert(former)
         _          <- Club.upsert(next)
-        _          <- transactZIO(ClubName.record(next.clubId, Some(former.slug)))
+        _          <- transactZIO(ClubName.record(next.clubId, former.slug))
         holder     <- ClubName.selectCurrentHolder(former.slug)
         formerRows <- ClubName.selectClub(former.clubId)
         holders    <- ClubName.selectHolders(former.slug)
+        names      <- ClubName.selectCurrentNames(holders)
       } yield assertTrue(
         holder.map(_.clubId).contains(next.clubId),
         formerRows.forall(_.until.isDefined),
-        holders.map(_.clubId) == List(former.clubId, next.clubId)
+        holders == List(former.clubId, next.clubId),
+        names == Map(next.clubId -> former.slug)
       )
     },
     test("selectHeldSlugs answers with the names some club holds now, not the ones given up") {
@@ -70,13 +69,23 @@ object TestClubNameSql extends ZIOSpecDefault {
         held  <- ClubName.selectHeldSlugs(Set(ClubSlug("held-before"), ClubSlug("held-now"), ClubSlug("never-held")))
       } yield assertTrue(empty.isEmpty, held == Set(ClubSlug("held-now")))
     },
-    test("a tombstone closes the current name and opens none") {
-      val c = club(140, "about-to-go-stale")
+    // What the `_stale_<id>` tombstone used to stand in for (#254 step 4): the loser of a name holds none we know of
+    // until we see the one it answers to, and its `club.slug` keeps the name as the display cache it now is.
+    test("a club whose name another club takes is left holding none") {
+      val losing = club(140, "handed-over")
+      val taking = club(141, "handed-over")
       for {
-        _     <- Club.upsert(c)
-        _     <- Club.upsert(c.copy(slug = ClubSlug("_stale_140")))
-        names <- ClubName.selectClub(c.clubId)
-      } yield assertTrue(names.map(_.slug) == List(c.slug), names.head.until.isDefined)
+        _       <- Club.upsert(losing)
+        _       <- Club.upsert(taking)
+        names   <- ClubName.selectClub(losing.clubId)
+        current <- ClubName.selectCurrentName(losing.clubId)
+        holder  <- ClubName.selectCurrentHolder(losing.slug)
+      } yield assertTrue(
+        names.map(_.slug) == List(losing.slug),
+        names.head.until.isDefined,
+        current.isEmpty,
+        holder.map(_.clubId).contains(taking.clubId)
+      )
     },
     test("a current name dated at or after the observation is dropped, not closed into an empty window") {
       for {
@@ -86,44 +95,54 @@ object TestClubNameSql extends ZIOSpecDefault {
         names <- ClubName.selectClub(ClubId(147))
       } yield assertTrue(names.map(n => (n.slug, n.until)) == List((ClubSlug("observed-now"), None)))
     },
-    test("a slug conflict moves the old holder to the name its match ref reports, and hands the slug on") {
-      val stale    = club(145, "contested")
-      val incoming = club(146, "contested")
-      val matchJson = apiDailyMatchJson(
-        matchId = 9700L,
-        team1Club = "contested-renamed",
-        team2Club = "someone-else",
-        team1Players = List(("p1", 1)),
-        team2Players = List(("p2", 1))
-      )
-      val routes = Routes(
-        Method.GET / "pub" / "match" / long("matchId") -> handler((_: Long, _: Request) => Response.json(matchJson))
-      )
+    test("backfill opens a name for a club written without one, leaves one holding none alone, and is idempotent") {
       for {
-        _        <- Club.upsert(stale)
-        _        <- ClubMatchRef.insert(ClubMatchRef(stale.clubId, ClubMatchId(9700), isLive = false, isTeam1 = true))
-        client   <- TestChessComClientSupport.fakeClient(routes)
-        _        <- Club.upsertResolvingSlugConflict(incoming, client)
-        contested <- ClubName.selectCurrentHolder(ClubSlug("contested"))
-        renamed   <- ClubName.selectCurrentHolder(ClubSlug("contested-renamed"))
-      } yield assertTrue(
-        contested.map(_.clubId).contains(incoming.clubId),
-        renamed.map(_.clubId).contains(stale.clubId)
-      )
-    },
-    test("backfill opens a name for a club written without one, skips tombstones, and is idempotent") {
-      for {
-        _      <- insertRawClub(150, "written-by-old-binary")
-        _      <- insertRawClub(151, "_stale_151")
-        first  <- ClubName.backfill
-        second <- ClubName.backfill
-        live   <- ClubName.selectClub(ClubId(150))
-        stale  <- ClubName.selectClub(ClubId(151))
+        _        <- insertRawClub(150, "written-by-old-binary")
+        first    <- ClubName.backfill
+        second   <- ClubName.backfill
+        live     <- ClubName.selectClub(ClubId(150))
+        nameless <- ClubName.selectCurrentName(ClubId(140))
       } yield assertTrue(
         first == 1,
         second == 0,
         live.map(_.slug) == List(ClubSlug("written-by-old-binary")),
-        stale.isEmpty
+        nameless.isEmpty
+      )
+    },
+    // The migration path itself: `club_name` lands on a database whose `club` rows already exist, and two of those can
+    // share a slug now that `club_slug_key` is gone (#254 step 3b). The partial unique index picks one holder, and the
+    // backfill must skip the other rather than fail the boot it runs in.
+    test("backfill gives a slug two clubs share to one of them, and leaves the other holding none") {
+      val shared = ClubSlug("shared-at-backfill")
+      for {
+        _      <- insertRawClub(190, shared.value)
+        _      <- insertRawClub(191, shared.value)
+        rows   <- ClubName.backfill
+        first  <- ClubName.selectCurrentName(ClubId(190))
+        second <- ClubName.selectCurrentName(ClubId(191))
+        holder <- ClubName.selectCurrentHolder(shared)
+      } yield assertTrue(
+        rows == 1,
+        List(first, second).flatten == List(shared),
+        holder.map(_.clubId).exists(Set(ClubId(190), ClubId(191)).contains)
+      )
+    },
+    // Two clubs are only ever observed holding one name because one observation is stale, so `record` leaves the
+    // database to refuse the loser rather than serialising the two (there is no lock across clubs). Whatever the
+    // interleaving, the name ends with exactly one current holder and any failure names the index that said so.
+    test("two clubs claiming one name at once leave exactly one holder") {
+      val contested = ClubSlug("claimed-at-once")
+      for {
+        _       <- Club.upsert(club(200, "claims-first"))
+        _       <- Club.upsert(club(201, "claims-second"))
+        results <- ZIO.foreachPar(List(200L, 201L))(id => Club.upsert(club(id, contested.value)).either)
+        open    <- openHolders(contested)
+        holder  <- ClubName.selectCurrentHolder(contested)
+      } yield assertTrue(
+        open == 1,
+        results.exists(_.isRight),
+        results.collect { case Left(error) => error }.forall(violatesConstraint(_, "club_name_current")),
+        holder.map(_.clubId).exists(Set(ClubId(200), ClubId(201)).contains)
       )
     },
     test("the exclusion constraint rejects two open names for one club") {
@@ -150,7 +169,15 @@ object TestClubNameSql extends ZIOSpecDefault {
 
   // Names the constraint, so a failure for any other reason (a codec, a missing club row) cannot pass for it.
   private def violates(result: Either[SQLException, Int], constraint: String): Boolean =
-    result.left.exists(e => Option(e.getMessage).exists(_.contains(constraint)))
+    result.left.exists(violatesConstraint(_, constraint))
+
+  private def violatesConstraint(error: SQLException, constraint: String): Boolean =
+    Option(error.getMessage).exists(_.contains(constraint))
+
+  private def openHolders(slug: ClubSlug): ZIO[PostgresClient, SQLException, Int] =
+    connectZIO {
+      sql"SELECT count(*) FROM club_name WHERE slug = $slug AND until IS NULL".query[Int].run().head
+    }
 
   private def insertRawClub(id: Long, slug: String): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {

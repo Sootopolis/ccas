@@ -21,11 +21,12 @@ object TestClubResolution extends ZIOSpecDefault {
 
   private def club(id: Long, slug: String): Club = Club(ClubId(id), t0, ClubSlug(slug), s"Club $id", None, None, None)
 
-  private val realClub   = club(200, "club-a")
-  private val tombstoned = club(500, "_stale_500")
-  private val realRef    = ClubRef.fromClub(realClub)
-  private val otherRef   = ClubRef(ClubId(201), ClubSlug("club-b"))
-  private val byName     = ClubQuery.BySlug(ClubSlug("x"))
+  private val realClub    = club(200, "club-a")
+  private val realNamed   = NamedClub(realClub.clubId, realClub.slug)
+  private val otherNamed  = NamedClub(ClubId(201), ClubSlug("club-b"))
+  private val otherRef    = ClubRef.of(otherNamed)
+  private val namelessRef = ClubRef(ClubId(500), None)
+  private val byName      = ClubQuery.BySlug(ClubSlug("x"))
 
   /** The pair every submit runs, as the submit gate calls it. */
   private def adjudicated(client: ChessComClient, query: ClubQuery) =
@@ -43,30 +44,22 @@ object TestClubResolution extends ZIOSpecDefault {
       for {
         _ <- Club.upsert(realClub)
         v <- ClubResolution.resolve(ClubQuery.BySlug(realClub.slug))
-      } yield assertTrue(v == ClubResolution.Known(realRef))
+      } yield assertTrue(v == ClubResolution.Known(realNamed))
     },
     test("resolving by id ignores a stale slug and still finds the club (Known)") {
       for {
         _ <- Club.upsert(realClub)
         v <- ClubResolution.resolve(ClubQuery.ById(realClub.clubId))
-      } yield assertTrue(v == ClubResolution.Known(realRef))
+      } yield assertTrue(v == ClubResolution.Known(realNamed))
     },
     test("an unknown slug is NotLocal (not NotFound — we never asked upstream)") {
       ClubResolution.resolve(ClubQuery.BySlug(ClubSlug("no-such-club"))).map(v =>
         assertTrue(v == ClubResolution.NotLocal(ClubQuery.BySlug(ClubSlug("no-such-club"))))
       )
     },
-    test("a tombstoned club is Problematic, named as it was asked for rather than by its _stale_ placeholder") {
-      for {
-        _     <- Club.upsert(tombstoned)
-        byId  <- ClubResolution.resolve(ClubQuery.ById(tombstoned.clubId))
-        _     <- Club.upsert(tombstoned.copy(slug = ClubSlug("team-old")))
-        _     <- Club.upsert(tombstoned)
-        bySlug <- ClubResolution.resolve(ClubQuery.BySlug(ClubSlug("team-old")))
-      } yield assertTrue(
-        byId == ClubResolution.Problematic(ClubQuery.ById(tombstoned.clubId)),
-        bySlug == ClubResolution.Problematic(ClubQuery.BySlug(ClubSlug("team-old")))
-      )
+    test("an id we have never ingested is NotLocal") {
+      val query = ClubQuery.ById(ClubId(999))
+      ClubResolution.resolve(query).map(v => assertTrue(v == ClubResolution.NotLocal(query)))
     },
     // #176: before `club_name`, a renamed club did not resolve under its old slug at all.
     test("a former name resolves to the club that held it, as Renamed") {
@@ -75,7 +68,8 @@ object TestClubResolution extends ZIOSpecDefault {
         _ <- Club.upsert(renamed.copy(slug = ClubSlug("renamed-before")))
         _ <- Club.upsert(renamed)
         v <- ClubResolution.resolve(ClubQuery.BySlug(ClubSlug("renamed-before")))
-      } yield assertTrue(v == ClubResolution.Renamed(ClubRef.fromClub(renamed), ClubSlug("renamed-before")))
+        expected = ClubResolution.Renamed(NamedClub(renamed.clubId, renamed.slug), ClubSlug("renamed-before"))
+      } yield assertTrue(v == expected)
     },
     test("the current holder of a name wins over a club that held it before") {
       val before = club(610, "recycled")
@@ -85,7 +79,7 @@ object TestClubResolution extends ZIOSpecDefault {
         _ <- Club.upsert(before.copy(slug = ClubSlug("before-moved-on")))
         _ <- Club.upsert(now)
         v <- ClubResolution.resolve(ClubQuery.BySlug(ClubSlug("recycled")))
-      } yield assertTrue(v == ClubResolution.Known(ClubRef.fromClub(now)))
+      } yield assertTrue(v == ClubResolution.Known(NamedClub(now.clubId, now.slug)))
     },
     test("a name nobody holds now but several clubs held before is Ambiguous") {
       val first  = club(620, "passed-around")
@@ -99,17 +93,27 @@ object TestClubResolution extends ZIOSpecDefault {
       } yield assertTrue(
         v == ClubResolution.Ambiguous(
           ClubSlug("passed-around"),
-          List(ClubRef(first.clubId, ClubSlug("first-now")), ClubRef(second.clubId, ClubSlug("second-now")))
+          List(
+            ClubRef(first.clubId, Some(ClubSlug("first-now"))),
+            ClubRef(second.clubId, Some(ClubSlug("second-now")))
+          )
         )
       )
     },
-    test("a former name whose only holder is now tombstoned is Problematic") {
+    // 630 renames to new-630, 631 then takes that name, and 630 is left holding none we know of (#254 step 4): it
+    // can be named by neither the id nor the name it used to answer to.
+    test("a club whose name another club took holds none, and is Problematic by id and by former name") {
       val gone = club(630, "went-stale")
       for {
-        _ <- Club.upsert(gone)
-        _ <- Club.upsert(gone.copy(slug = ClubSlug("_stale_630")))
-        v <- ClubResolution.resolve(ClubQuery.BySlug(ClubSlug("went-stale")))
-      } yield assertTrue(v == ClubResolution.Problematic(ClubQuery.BySlug(ClubSlug("went-stale"))))
+        _      <- Club.upsert(gone)
+        _      <- Club.upsert(gone.copy(slug = ClubSlug("new-630")))
+        _      <- Club.upsert(club(631, "new-630"))
+        byId   <- ClubResolution.resolve(ClubQuery.ById(gone.clubId))
+        bySlug <- ClubResolution.resolve(ClubQuery.BySlug(ClubSlug("went-stale")))
+      } yield assertTrue(
+        byId == ClubResolution.Problematic(ClubQuery.ById(gone.clubId)),
+        bySlug == ClubResolution.Problematic(ClubQuery.BySlug(ClubSlug("went-stale")))
+      )
     }
   )
 
@@ -124,7 +128,8 @@ object TestClubResolution extends ZIOSpecDefault {
         local      <- ClubResolution.resolve(ClubQuery.BySlug(ClubSlug("old-700")))
         client     <- fakeChessComClient(Map.empty)
         adjudicated <- ClubResolution.adjudicate(client, local)
-      } yield assertTrue(adjudicated == ClubResolution.Renamed(ClubRef.fromClub(club700), ClubSlug("old-700")))
+        expected = ClubResolution.Renamed(NamedClub(club700.clubId, club700.slug), ClubSlug("old-700"))
+      } yield assertTrue(adjudicated == expected)
     },
     test("a former name its own club still holds upstream is Known, and the local record is repaired") {
       val club710 = club(710, "now-710")
@@ -136,8 +141,8 @@ object TestClubResolution extends ZIOSpecDefault {
         adjudicated <- ClubResolution.adjudicate(client, local)
         repaired    <- ClubResolution.resolve(ClubQuery.BySlug(ClubSlug("old-710")))
       } yield assertTrue(
-        adjudicated == ClubResolution.Known(ClubRef(ClubId(710), ClubSlug("old-710"))),
-        repaired == ClubResolution.Known(ClubRef(ClubId(710), ClubSlug("old-710")))
+        adjudicated == ClubResolution.Known(NamedClub(ClubId(710), ClubSlug("old-710"))),
+        repaired == ClubResolution.Known(NamedClub(ClubId(710), ClubSlug("old-710")))
       )
     },
     // Chess.com can answer a request under a name it has normalised away, which is still a former name to whoever
@@ -150,7 +155,8 @@ object TestClubResolution extends ZIOSpecDefault {
         local       <- ClubResolution.resolve(ClubQuery.BySlug(ClubSlug("old-780")))
         client      <- fakeChessComClient(Map("club/old-780" -> apiClubJson(780, "now-780")))
         adjudicated <- ClubResolution.adjudicate(client, local)
-      } yield assertTrue(adjudicated == ClubResolution.Renamed(ClubRef.fromClub(club780), ClubSlug("old-780")))
+        expected = ClubResolution.Renamed(NamedClub(club780.clubId, club780.slug), ClubSlug("old-780"))
+      } yield assertTrue(adjudicated == expected)
     },
     test("a former name another club holds upstream runs against that club, persisted, as Moved") {
       val club720 = club(720, "now-720")
@@ -163,9 +169,9 @@ object TestClubResolution extends ZIOSpecDefault {
         persisted   <- Club.selectId(ClubId(729))
       } yield assertTrue(
         adjudicated == ClubResolution.Moved(
-          club = ClubRef(ClubId(729), ClubSlug("old-720")),
+          club = NamedClub(ClubId(729), ClubSlug("old-720")),
           requested = ClubSlug("old-720"),
-          previous = List(ClubRef.fromClub(club720))
+          previous = List(ClubRef(club720.clubId, Some(club720.slug)))
         ),
         persisted.exists(_.slug == ClubSlug("old-720"))
       )
@@ -178,7 +184,7 @@ object TestClubResolution extends ZIOSpecDefault {
         adjudicated <- ClubResolution.adjudicate(client, local)
       } yield assertTrue(
         local.isInstanceOf[ClubResolution.Ambiguous],
-        adjudicated == ClubResolution.Known(ClubRef(ClubId(731), ClubSlug("shared-730")))
+        adjudicated == ClubResolution.Known(NamedClub(ClubId(731), ClubSlug("shared-730")))
       )
     },
     test("an ambiguous name a third club holds upstream is Moved, naming every former holder") {
@@ -189,9 +195,12 @@ object TestClubResolution extends ZIOSpecDefault {
         adjudicated <- ClubResolution.adjudicate(client, local)
       } yield assertTrue(
         adjudicated == ClubResolution.Moved(
-          club = ClubRef(ClubId(749), ClubSlug("shared-740")),
+          club = NamedClub(ClubId(749), ClubSlug("shared-740")),
           requested = ClubSlug("shared-740"),
-          previous = List(ClubRef(ClubId(740), ClubSlug("was-740")), ClubRef(ClubId(741), ClubSlug("was-741")))
+          previous = List(
+            ClubRef(ClubId(740), Some(ClubSlug("was-740"))),
+            ClubRef(ClubId(741), Some(ClubSlug("was-741")))
+          )
         )
       )
     },
@@ -216,7 +225,7 @@ object TestClubResolution extends ZIOSpecDefault {
         known    <- adjudicated(client, ClubQuery.BySlug(club760.slug))
         notLocal <- adjudicated(client, ClubQuery.BySlug(ClubSlug("never-seen")))
       } yield assertTrue(
-        known == ClubResolution.Known(ClubRef.fromClub(club760)),
+        known == ClubResolution.Known(NamedClub(club760.clubId, club760.slug)),
         notLocal == ClubResolution.NotLocal(ClubQuery.BySlug(ClubSlug("never-seen")))
       )
     },
@@ -243,32 +252,33 @@ object TestClubResolution extends ZIOSpecDefault {
 
   private def pureSuite = suite("runnable / wire")(
     test("Known runs its job") {
-      assertTrue(ClubResolution.Known(realRef).runnable == Right(realRef))
+      assertTrue(ClubResolution.Known(realNamed).runnable == Right(realNamed))
     },
     test("NotLocal does not run, with a 'Club not found' reason") {
       val notLocal = ClubResolution.NotLocal(ClubQuery.BySlug(ClubSlug("x")))
       assertTrue(notLocal.runnable.left.exists(_.startsWith("Club not found")))
     },
     test("Renamed runs its job against the current club") {
-      assertTrue(ClubResolution.Renamed(realRef, ClubSlug("old-name")).runnable == Right(realRef))
+      assertTrue(ClubResolution.Renamed(realNamed, ClubSlug("old-name")).runnable == Right(realNamed))
     },
     test("Moved runs its job against the club that holds the name now") {
-      assertTrue(ClubResolution.Moved(realRef, ClubSlug("changed-hands"), List(otherRef)).runnable == Right(realRef))
+      val moved = ClubResolution.Moved(realNamed, ClubSlug("changed-hands"), List(otherRef))
+      assertTrue(moved.runnable == Right(realNamed))
     },
-    test("Ambiguous does not run, and its reason names every candidate by id, a tombstoned one without a name") {
-      val resolution = ClubResolution.Ambiguous(ClubSlug("shared"), List(realRef, ClubRef.fromClub(tombstoned)))
+    test("Ambiguous does not run, and its reason names every candidate by id, one holding no name without one") {
+      val resolution = ClubResolution.Ambiguous(ClubSlug("shared"), List(ClubRef.of(realNamed), namelessRef))
       assertTrue(
         resolution.runnable.left.exists(m => m.contains("#200 (now club-a)") && m.contains("#500 (no known name)"))
       )
     },
     test("every case survives the JSON round trip, discriminated by a snake_case kind") {
       val all: List[ClubResolution] = List(
-        ClubResolution.Known(realRef),
-        ClubResolution.Renamed(realRef, ClubSlug("old-name")),
+        ClubResolution.Known(realNamed),
+        ClubResolution.Renamed(realNamed, ClubSlug("old-name")),
         ClubResolution.NotLocal(byName),
         ClubResolution.Problematic(ClubQuery.BySlug(ClubSlug("y"))),
-        ClubResolution.Ambiguous(ClubSlug("z"), List(realRef, ClubRef.fromClub(tombstoned))),
-        ClubResolution.Moved(realRef, ClubSlug("changed-hands"), List(otherRef))
+        ClubResolution.Ambiguous(ClubSlug("z"), List(ClubRef.of(realNamed), namelessRef)),
+        ClubResolution.Moved(realNamed, ClubSlug("changed-hands"), List(otherRef))
       )
       assertTrue(
         all.forall(resolution => resolution.toJson.fromJson[ClubResolution] == Right(resolution)),

@@ -7,7 +7,7 @@ import scala.io.StdIn
 
 import zio.*
 
-import ccas.analysis.apps.{ClubQuery, ClubRef, ClubResolution}
+import ccas.analysis.apps.{ClubQuery, ClubRef, ClubResolution, NamedClub}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, Username}
 import ccas.api.player.ApiPlayer
 import ccas.cli.config.{ConfigWriter, CurrentClubRef}
@@ -185,7 +185,7 @@ object Dispatcher {
           val interactiveConfirm = !stdout && hasTty
           for {
             clubTarget <- resolveClub(club, clubIdOption, currentClubOption)
-            result <- sendSettlingAmbiguity(clubTarget, (r: ClubJobResult) => List(r.resolution)) { chosen =>
+            result <- sendSettlingAmbiguity(clubTarget, (r: ClubJobResult) => List(r.resolution), hasTty) { chosen =>
               api.postJson[RecruitmentRequest, ClubJobResult](
                 "/api/jobs/recruitment",
                 RecruitmentRequest(
@@ -208,7 +208,7 @@ object Dispatcher {
     case CliCommand.Stats(_, club, clubIdOption, since, until, _, detach) =>
       for {
         target <- resolveClub(club, clubIdOption, currentClubOption)
-        result <- sendSettlingAmbiguity(target, (r: ClubJobResult) => List(r.resolution)) { chosen =>
+        result <- sendSettlingAmbiguity(target, (r: ClubJobResult) => List(r.resolution), hasTty) { chosen =>
           api.postJson[StatsRequest, ClubJobResult](
             "/api/jobs/stats",
             StatsRequest(chosen.query, since, until)
@@ -337,7 +337,11 @@ object Dispatcher {
   // Unmanaging leaves the `club` row intact and submission gates on that row, not on managed status, so a
   // `current_club` still pointing at the removed club would keep running real jobs against it. Clear it so the next
   // bare command fails loudly with `ClubResolver.NoClubError`.
-  private def clearCurrentIfRemoved(removed: ClubRef, query: ClubQuery, currentClubOption: Option[String]): UIO[Unit] =
+  private def clearCurrentIfRemoved(
+    removed: NamedClub,
+    query: ClubQuery,
+    currentClubOption: Option[String]
+  ): UIO[Unit] =
     ZIO.whenDiscard(currentClubOption.map(CurrentClubRef.parse).exists(_.means(removed, query))) {
       ConfigWriter
         .clearCurrentClub(XdgPaths.configFile)
@@ -422,7 +426,7 @@ object Dispatcher {
     ZIO
       .foreach(targets.toChunk.toList)(target =>
         (for {
-          results <- sendSettlingAmbiguity(target, (rs: List[ClubJobResult]) => rs.map(_.resolution))(submitOne)
+          results <- sendSettlingAmbiguity(target, (rs: List[ClubJobResult]) => rs.map(_.resolution), hasTty)(submitOne)
           _       <- noteResolutions(currentClubOption, target, results.map(jobOutcome))
           code    <- handle(results)
         } yield code)
@@ -445,6 +449,12 @@ object Dispatcher {
     */
   private[cli] final case class ClubOutcome(resolution: ClubResolution, acted: Boolean)
 
+  /** A request that reached its club by a former name: what was typed, and what that club answers to now. */
+  private[cli] final case class RenamedName(requested: String, current: String)
+
+  /** A request whose name Chess.com says belongs to `holder` now, rather than to the clubs that held it here. */
+  private[cli] final case class MovedName(requested: String, holder: NamedClub, previous: List[ClubRef])
+
   private def jobOutcome(result: ClubJobResult): ClubOutcome =
     ClubOutcome(resolution = result.resolution, acted = result.jobIdOption.isDefined)
 
@@ -466,14 +476,14 @@ object Dispatcher {
   // a changed one and refresh the pointer the same way; a club the server could not act on fails the command.
   private def actOnClub[A](currentClubOption: Option[String], target: ClubTarget)(
     send: ClubTarget => Task[ClubResult[A]]
-  ): Task[(ClubRef, A)] =
+  ): Task[(NamedClub, A)] =
     settleAndNote(target, noteResolutions(currentClubOption, target, _))(send)
 
   private def settleAndNote[A](target: ClubTarget, note: List[ClubOutcome] => UIO[Unit])(
     send: ClubTarget => Task[ClubResult[A]]
-  ): Task[(ClubRef, A)] =
+  ): Task[(NamedClub, A)] =
     for {
-      result <- sendSettlingAmbiguity(target, (r: ClubResult[A]) => List(r.resolution))(send)
+      result <- sendSettlingAmbiguity(target, (r: ClubResult[A]) => List(r.resolution), hasTty)(send)
       _      <- note(List(ClubOutcome(resolution = result.resolution, acted = result.resultOption.isDefined)))
       acted  <- ZIO.fromEither(result.toEither).mapError(CliError(_, 1))
     } yield acted
@@ -486,8 +496,8 @@ object Dispatcher {
       case None => send(None).flatMap(scheduleOf)
       case Some(target) =>
         for {
-          created <- sendSettlingAmbiguity(target, (r: CreateScheduleResponse) => r.resolutionOption.toList)(chosen =>
-            send(Some(chosen.query))
+          created <- sendSettlingAmbiguity(target, (r: CreateScheduleResponse) => r.resolutionOption.toList, hasTty)(
+            chosen => send(Some(chosen.query))
           )
           outcomeOption = created.resolutionOption.map(ClubOutcome(_, created.scheduleOption.isDefined))
           _        <- noteResolutions(currentClubOption, target, outcomeOption.toList)
@@ -504,16 +514,18 @@ object Dispatcher {
 
   // Ambiguity is the one resolution the user can settle on the spot, so an interactive run lists the candidates and
   // sends again for the one picked — the same answer `--club-id` gives a headless run (#254). Every other
-  // resolution, and an abort, is returned exactly as it came back.
-  private def sendSettlingAmbiguity[A](
+  // resolution, and an abort, is returned exactly as it came back. `interactive` is passed in rather than read here,
+  // so the resend is exercised with a fake `submit` instead of a terminal.
+  private[cli] def sendSettlingAmbiguity[A](
     target: ClubTarget,
-    resolutionsOf: A => List[ClubResolution]
+    resolutionsOf: A => List[ClubResolution],
+    interactive: Boolean
   )(submit: ClubTarget => Task[A]): Task[A] =
     submit(target).flatMap { result =>
       resolutionsOf(result).collectFirst { case ambiguous: ClubResolution.Ambiguous => ambiguous } match {
         case None => ZIO.succeed(result)
         case Some(ambiguous) =>
-          promptForClub(ambiguous, interactive = hasTty).flatMap {
+          promptForClub(ambiguous, interactive).flatMap {
             case None         => ZIO.succeed(result)
             case Some(clubId) => submit(ClubTarget.byId(clubId))
           }
@@ -522,24 +534,30 @@ object Dispatcher {
 
   // Nothing is prompted without a terminal: the error already names `--club-id`, which is this same choice made
   // up front. The prompt goes to stderr so a piped stdout still carries only the command's own output, and an answer
-  // that isn't one of the offered numbers aborts rather than guessing at a club.
-  private[cli] def promptForClub(ambiguous: ClubResolution.Ambiguous, interactive: Boolean): UIO[Option[ClubId]] =
-    if (!interactive) { ZIO.none }
+  // that isn't one of the offered numbers aborts rather than guessing at a club. Only the candidates that still hold
+  // a name are offered — one holding none resolves `Problematic` by id, so picking it could not run (#254).
+  private[cli] def promptForClub(ambiguous: ClubResolution.Ambiguous, interactive: Boolean): UIO[Option[ClubId]] = {
+    val (offered, nameless) = ambiguous.holders.partition(_.slugOption.isDefined)
+    if (!interactive || offered.isEmpty) { ZIO.none }
     else {
-      val holders = ambiguous.holders
       for {
         _ <- Console.printLineError(
-          s"'${ClubSlug.unwrap(ambiguous.requested)}' was held by ${holders.size} clubs, and nobody holds it now:"
+          s"'${ClubSlug.unwrap(ambiguous.requested)}' was held by ${ambiguous.holders.size} clubs, " +
+            "and nobody holds it now:"
         ).orDie
-        _ <- ZIO.foreachDiscard(holders.zipWithIndex) { case (club, index) =>
+        _ <- ZIO.foreachDiscard(offered.zipWithIndex) { case (club, index) =>
           Console.printLineError(s"  ${index + 1}) ${club.display}").orDie
         }
-        _      <- Console.printError(s"which club did you mean? [1-${holders.size}, blank to abort] ").orDie
+        _ <- ZIO.whenDiscard(nameless.nonEmpty)(
+          Console.printLineError(s"  (${nameless.size} more hold no name we know of, so nothing can run there)").orDie
+        )
+        _      <- Console.printError(s"which club did you mean? [1-${offered.size}, blank to abort] ").orDie
         answer <- Console.readLine.orElseSucceed("")
-        pickedOption = answer.trim.toIntOption.filter(n => n >= 1 && n <= holders.size)
+        pickedOption = answer.trim.toIntOption.filter(n => n >= 1 && n <= offered.size)
         _ <- ZIO.whenDiscard(pickedOption.isEmpty)(Console.printLineError("aborted").orDie)
-      } yield pickedOption.map(n => holders(n - 1).clubId)
+      } yield pickedOption.map(n => offered(n - 1).clubId)
     }
+  }
 
   // A club-scoped result is "missing" — worth busting the completion cache and hinting a stranded `current_club` — when
   // the server has no usable club for what was asked. Answers with what was asked, so the caller can tell whether the
@@ -566,28 +584,24 @@ object Dispatcher {
 
   // (requested, current) for each request that acted on a club it reached by a former name. One that did nothing (a
   // job already running) gets no note, since the note says which club was acted on.
-  private[cli] def renamedFrom(outcomes: List[ClubOutcome]): List[(String, String)] =
+  private[cli] def renamedFrom(outcomes: List[ClubOutcome]): List[RenamedName] =
     outcomes.collect { case ClubOutcome(ClubResolution.Renamed(club, requested), true) =>
-      ClubSlug.unwrap(requested) -> ClubSlug.unwrap(club.slug)
+      RenamedName(requested = ClubSlug.unwrap(requested), current = ClubSlug.unwrap(club.slug))
     }
 
   // (requested, holder, previous holders) for each request that acted on a club whose name was taken from another.
-  private[cli] def movedFrom(outcomes: List[ClubOutcome]): List[(String, ClubRef, List[ClubRef])] =
+  private[cli] def movedFrom(outcomes: List[ClubOutcome]): List[MovedName] =
     outcomes.collect { case ClubOutcome(ClubResolution.Moved(club, requested, previous), true) =>
-      (ClubSlug.unwrap(requested), club, previous)
+      MovedName(requested = ClubSlug.unwrap(requested), holder = club, previous = previous)
     }
 
-  private def renamedNote(renamed: (String, String)): String = {
-    val (requested, current) = renamed
-    s"note: '$requested' is a former name of '$current'; using '$current'"
-  }
+  private def renamedNote(renamed: RenamedName): String =
+    s"note: '${renamed.requested}' is a former name of '${renamed.current}'; using '${renamed.current}'"
 
   // Chess.com's answer wins, so say whose name this was here before acting on another club entirely (#254).
-  private def movedNote(moved: (String, ClubRef, List[ClubRef])): String = {
-    val (requested, holder, previous) = moved
-    s"note: '$requested' now belongs to club ${holder.display} on Chess.com, not to " +
-      s"${previous.map(_.display).mkString(", ")}; using the club that holds it"
-  }
+  private def movedNote(moved: MovedName): String =
+    s"note: '${moved.requested}' now belongs to club ${moved.holder.display} on Chess.com, not to " +
+      s"${moved.previous.map(_.display).mkString(", ")}; using the club that holds it"
 
   // A name that reached the server attached to a different club than it names now means the completion cache may still
   // be offering the old one, so drop the cache alongside the note.

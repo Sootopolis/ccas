@@ -5,7 +5,7 @@ import java.time.{Duration, Instant}
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 import zio.{ZEnvironment, ZIO, ZLayer}
 
-import ccas.analysis.apps.ClubRef
+import ccas.analysis.apps.NamedClub
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.*
 import ccas.analysis.tables.*
 import ccas.api.misc.enums.PlayerStatusCategory.Active
@@ -16,7 +16,7 @@ import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
 object TestRecruitmentBlacklist extends ZIOSpecDefault {
 
   private val blacklistClubSlug = ClubSlug("blacklist-club")
-  private val blacklistClub     = ClubRef(blacklistClubId, blacklistClubSlug)
+  private val blacklistClub     = NamedClub(blacklistClubId, blacklistClubSlug)
 
   // The app takes a club already resolved, so the club row exists before anything is blacklisted against it.
   private val seedBlacklistClub =

@@ -5,7 +5,7 @@ import scala.annotation.tailrec
 
 import zio.{Chunk, Clock, ExitCode, IO, NonEmptyChunk, RIO, Scope, Task, ZIO, ZIOAppArgs, ZIOAppDefault}
 
-import ccas.analysis.apps.{ClubQuery, ClubRef, ClubResolution, ClubSlugRenameResolver, withClubSlugRenameRecovery}
+import ccas.analysis.apps.{ClubQuery, ClubResolution, ClubSlugRenameResolver, NamedClub, withClubSlugRenameRecovery}
 import ccas.analysis.apps.membership.MembershipChange.*
 import ccas.analysis.apps.membership.MembershipChange.MemberChange.JoinedClub
 import ccas.analysis.tables.*
@@ -116,7 +116,7 @@ object MembershipApp extends ZIOAppDefault {
   private[membership] def reconcileIfStale(
     clubSlug: ClubSlug,
     until: Instant
-  ): RIO[ProgressDisplay & ChessComClient & PostgresClient, ClubRef] =
+  ): RIO[ProgressDisplay & ChessComClient & PostgresClient, NamedClub] =
     ZIO.serviceWithZIO[ChessComClient](ClubResolution.resolveAndAdjudicate(_, ClubQuery.BySlug(clubSlug))).flatMap {
       case ClubResolution.NotLocal(_) =>
         reconcile(clubSlug = clubSlug, expectedClubIdOption = None).flatMap(reconciledClub)
@@ -131,11 +131,11 @@ object MembershipApp extends ZIOAppDefault {
     }
 
   // Reconciling persists the club under the name Chess.com answered with, which is the one to report under.
-  private def reconciledClub(result: ReconciliationResult): RIO[PostgresClient, ClubRef] =
-    Club
-      .selectId(result.clubId)
-      .someOrFail(NotFoundException(s"Club not found: #${ClubId.unwrap(result.clubId)}"))
-      .map(ClubRef.fromClub)
+  private def reconciledClub(result: ReconciliationResult): RIO[PostgresClient, NamedClub] =
+    ClubName
+      .selectCurrentName(result.clubId)
+      .someOrFail(NotFoundException(s"Club holds no name: #${ClubId.unwrap(result.clubId)}"))
+      .map(NamedClub(result.clubId, _))
 
   // --- Phase A: Gather data ---
 
@@ -157,7 +157,7 @@ object MembershipApp extends ZIOAppDefault {
       apiClub   = resolved.api
       clubId    = apiClub.clubId
       club      = Club.fromApi(apiClub)
-      _                     <- Club.upsertResolvingSlugConflict(club, client)
+      _                     <- Club.upsert(club)
       runId <- ZIO.when(trackRun)(MembershipRun.insert(clubId, trigger, startedAt, jobRunIdOption))
       // Wrap belt-and-suspenders against a second rename between the `ApiClub.get` recovery above and now.
       (apiMembers, dbState) <- ApiClubMembers.get(client, resolved.slug)

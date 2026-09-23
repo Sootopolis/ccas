@@ -3,7 +3,7 @@ package ccas.server.routes
 import zio.json.{DecoderOps, EncoderOps}
 import zio.test.{assertTrue, Spec, ZIOSpecDefault}
 
-import ccas.analysis.apps.{ClubQuery, ClubRef, ClubResolution}
+import ccas.analysis.apps.{ClubQuery, ClubResolution, NamedClub}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 import ccas.server.routes.JobRoutes.*
 import ccas.server.routes.ScheduleRoutes.{CreateScheduleRequest, CreateScheduleResponse, ScheduleResponse}
@@ -16,7 +16,7 @@ import ccas.server.routes.ScheduleRoutes.{CreateScheduleRequest, CreateScheduleR
   */
 object TestWireFieldNames extends ZIOSpecDefault {
 
-  private val club = ClubRef(ClubId(42L), ClubSlug("team-alpha"))
+  private val club = NamedClub(ClubId(42L), ClubSlug("team-alpha"))
 
   override def spec: Spec[Any, Nothing] = suite("TestWireFieldNames")(
     test("a club-scoped submit request names its club by id or by slug, and by nothing else") {

@@ -2,7 +2,7 @@ package ccas.cli.config
 
 import zio.test.{assertTrue, Spec, ZIOSpecDefault}
 
-import ccas.analysis.apps.{ClubQuery, ClubRef, ClubResolution}
+import ccas.analysis.apps.{ClubQuery, ClubRef, ClubResolution, NamedClub}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 
 /** Pure tests for the `current_club` pointer: its parser/renderer, and the two decisions a submit's answer feeds —
@@ -12,7 +12,7 @@ import ccas.api.misc.subtypes.{ClubId, ClubSlug}
   */
 object TestCurrentClubRef extends ZIOSpecDefault {
 
-  private def resolved(clubId: Long, slug: String): Option[ClubRef] = Some(ClubRef(ClubId(clubId), ClubSlug(slug)))
+  private def resolved(clubId: Long, slug: String): Option[NamedClub] = Some(NamedClub(ClubId(clubId), ClubSlug(slug)))
 
   override def spec: Spec[Any, Nothing] = suite("TestCurrentClubRef")(
     test("parses <id>:<slug> into the id and slug") {
@@ -86,10 +86,11 @@ object TestCurrentClubRef extends ZIOSpecDefault {
       // The pointer must not follow a name that has moved to someone else's club, or it would silently change which
       // club bare commands mean (#254).
       test("a Moved club is never a refresh target, though every other club that ran is") {
-        val ours    = ClubRef(ClubId(5), ClubSlug("team-a"))
-        val theirs  = ClubRef(ClubId(9), ClubSlug("team-b"))
+        val ours    = NamedClub(ClubId(5), ClubSlug("team-a"))
+        val theirs  = NamedClub(ClubId(9), ClubSlug("team-b"))
+        val moved   = ClubResolution.Moved(theirs, ClubSlug("team-a"), List(ClubRef.of(ours)))
         assertTrue(
-          CurrentClubRef.refreshTarget(ClubResolution.Moved(theirs, ClubSlug("team-a"), List(ours))).isEmpty,
+          CurrentClubRef.refreshTarget(moved).isEmpty,
           CurrentClubRef.refreshTarget(ClubResolution.Known(ours)).contains(ours),
           CurrentClubRef.refreshTarget(ClubResolution.Renamed(ours, ClubSlug("was-team-a"))).contains(ours),
           CurrentClubRef.refreshTarget(ClubResolution.NotLocal(ClubQuery.BySlug(ClubSlug("team-a")))).isEmpty
@@ -121,8 +122,8 @@ object TestCurrentClubRef extends ZIOSpecDefault {
     suite("means (is a removed club this pointer's?)")(
       test("a pointer carrying an id means that club alone, even when the name it was set with has moved on") {
         val pointer = CurrentClubRef(Some(ClubId(42)), "team-alpha")
-        val ours    = ClubRef(ClubId(42), ClubSlug("team-alpha-renamed"))
-        val theirs  = ClubRef(ClubId(43), ClubSlug("team-alpha"))
+        val ours    = NamedClub(ClubId(42), ClubSlug("team-alpha-renamed"))
+        val theirs  = NamedClub(ClubId(43), ClubSlug("team-alpha"))
         assertTrue(
           pointer.means(ours, ClubQuery.BySlug(ClubSlug("team-alpha-renamed"))),
           !pointer.means(theirs, ClubQuery.BySlug(ClubSlug("team-alpha")))
@@ -130,9 +131,9 @@ object TestCurrentClubRef extends ZIOSpecDefault {
       },
       test("a bare-slug pointer means the club it names now, or the one it was reached by") {
         val bare    = CurrentClubRef(None, "team-alpha")
-        val renamed = ClubRef(ClubId(42), ClubSlug("team-alpha-renamed"))
+        val renamed = NamedClub(ClubId(42), ClubSlug("team-alpha-renamed"))
         assertTrue(
-          bare.means(ClubRef(ClubId(42), ClubSlug("team-alpha")), ClubQuery.ById(ClubId(42))),
+          bare.means(NamedClub(ClubId(42), ClubSlug("team-alpha")), ClubQuery.ById(ClubId(42))),
           bare.means(renamed, ClubQuery.BySlug(ClubSlug("team-alpha"))),
           !bare.means(renamed, ClubQuery.ById(ClubId(42)))
         )

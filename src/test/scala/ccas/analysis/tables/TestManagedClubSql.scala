@@ -15,7 +15,7 @@ object TestManagedClubSql extends ZIOSpecDefault {
     testMarkInsertsAndIsIdempotent,
     testSelectClubIds,
     testSelectAllWithClubOrdersAndJoins,
-    testSelectAllWithClubExcludesTombstoned,
+    testSelectAllWithClubExcludesNameless,
     testDelete
   ).provideShared(
     FreshSchemaLayer("test_managed_club", onInit = Tables.ensureTables)
@@ -26,15 +26,19 @@ object TestManagedClubSql extends ZIOSpecDefault {
     val t1: Instant = t0.plus(Duration.ofDays(1))
   }
 
-  private val clubIdA = ClubId(400)
-  private val clubIdB = ClubId(401)
-  private val staleId = ClubId(402)
+  private val clubIdA    = ClubId(400)
+  private val clubIdB    = ClubId(401)
+  private val namelessId = ClubId(402)
+  private val takerId    = ClubId(403)
 
+  // 402 ends holding no name because 403 takes the one it held — what the `_stale_<id>` tombstone used to stand in
+  // for (#254 step 4).
   private val reset = for {
     _ <- connectZIO { sql"DELETE FROM managed_club".update.run() }
     _ <- Club.upsert(Club(clubIdA, Times.t0, ClubSlug("club-a"), "Club A", None, None, None))
     _ <- Club.upsert(Club(clubIdB, Times.t0, ClubSlug("club-b"), "Club B", None, None, None))
-    _ <- Club.upsert(Club(staleId, Times.t0, ClubSlug(s"_stale_${ClubId.unwrap(staleId)}"), "Stale", None, None, None))
+    _ <- Club.upsert(Club(namelessId, Times.t0, ClubSlug("club-c"), "Nameless", None, None, None))
+    _ <- Club.upsert(Club(takerId, Times.t0, ClubSlug("club-c"), "Taker", None, None, None))
   } yield ()
 
   private def testMarkInsertsAndIsIdempotent = test("markManaged inserts once, re-mark is a no-op") {
@@ -51,13 +55,13 @@ object TestManagedClubSql extends ZIOSpecDefault {
     )
   }
 
-  private def testSelectClubIds = test("selectClubIds returns managed club ids, excluding tombstoned") {
+  private def testSelectClubIds = test("selectClubIds returns managed club ids, excluding one that holds no name") {
     for {
       _   <- reset
       _   <- ManagedClub.markManaged(clubIdA, Times.t0)
-      _   <- ManagedClub.markManaged(staleId, Times.t0)
+      _   <- ManagedClub.markManaged(namelessId, Times.t0)
       ids <- ManagedClub.selectClubIds
-    } yield assertTrue(ids.toSet == Set(clubIdA)) // staleId excluded: tombstoned clubs are not valid job targets
+    } yield assertTrue(ids.toSet == Set(clubIdA)) // a club with no name to fetch under is not a valid job target
   }
 
   private def testSelectAllWithClubOrdersAndJoins = test("selectAllWithClub joins club and orders newest-first") {
@@ -72,11 +76,11 @@ object TestManagedClubSql extends ZIOSpecDefault {
     )
   }
 
-  private def testSelectAllWithClubExcludesTombstoned = test("selectAllWithClub excludes tombstoned clubs") {
+  private def testSelectAllWithClubExcludesNameless = test("selectAllWithClub excludes a club that holds no name") {
     for {
       _     <- reset
       _     <- ManagedClub.markManaged(clubIdA, Times.t0)
-      _     <- ManagedClub.markManaged(staleId, Times.t1)
+      _     <- ManagedClub.markManaged(namelessId, Times.t1)
       views <- ManagedClub.selectAllWithClub
     } yield assertTrue(views.map(_.slug) == List(ClubSlug("club-a")))
   }

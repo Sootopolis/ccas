@@ -10,7 +10,7 @@ import zio.stream.ZStream
 import zio.json.{DecoderOps, EncoderOps}
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault, ZTestLogger}
 
-import ccas.analysis.apps.{ClubQuery, ClubRef, ClubResolution}
+import ccas.analysis.apps.{ClubQuery, ClubResolution, NamedClub}
 import ccas.analysis.apps.recruitment.{CandidateOutcome, CriteriaSpec}
 import ccas.analysis.tables.{Club, ManagedClub, RecruitmentCandidate, RecruitmentCriteria, RecruitmentRun, RunTrigger}
 import ccas.analysis.tables.subtypes.RecruitmentRunId
@@ -214,7 +214,7 @@ object TestRoutes extends ZIOSpecDefault {
       parsed.toOption.get.club == "test-club",
       parsed.toOption.get.jobIdOption.isDefined,
       parsed.toOption.get.error.isEmpty,
-      parsed.toOption.get.resolution == ClubResolution.Known(ClubRef(ClubId(200), ClubSlug("test-club")))
+      parsed.toOption.get.resolution == ClubResolution.Known(NamedClub(ClubId(200), ClubSlug("test-club")))
     )
   }
 
@@ -317,7 +317,7 @@ object TestRoutes extends ZIOSpecDefault {
           r.jobIdOption.isDefined,
           r.error.isEmpty,
           // the canonical id and current slug, for current_club refresh
-          r.resolution.runnable == Right(ClubRef(ClubId(200), ClubSlug("test-club")))
+          r.resolution.runnable == Right(NamedClub(ClubId(200), ClubSlug("test-club")))
         )
       }
     }
@@ -371,7 +371,7 @@ object TestRoutes extends ZIOSpecDefault {
           r.club == "route-current", // the club the job runs against; the resolution carries what was asked for
           r.jobIdOption.isDefined,
           r.error.isEmpty,
-          r.resolution == ClubResolution.Renamed(ClubRef.fromClub(club), ClubSlug("route-former"))
+          r.resolution == ClubResolution.Renamed(NamedClub(club.clubId, club.slug), ClubSlug("route-former"))
         )
       }
     }
@@ -1054,7 +1054,7 @@ object TestRoutes extends ZIOSpecDefault {
       val criteria = CriteriaSpec.fromCriteria(RecruitmentCriteria.defaultDaily).toJson
       val club     = """{"kind":"by_slug","slug":"renamed-from"}"""
       val body     = s"""{"club":$club,"alias":"across-names","criteria":$criteria}"""
-      val renamed  = ClubResolution.Renamed(ClubRef(renamedClubId, ClubSlug("renamed-to")), ClubSlug("renamed-from"))
+      val renamed  = ClubResolution.Renamed(NamedClub(renamedClubId, ClubSlug("renamed-to")), ClubSlug("renamed-from"))
       for {
         _    <- ensureRenamedClub
         set  <- RecruitmentCriteriaRoutes.routes.runZIO(jsonRequest(Method.POST, "/api/recruitment-criteria", body))
@@ -1091,7 +1091,7 @@ object TestRoutes extends ZIOSpecDefault {
   // ==========================================================================
 
   private def suiteClubRoutes = suite("ClubRoutes")(
-    testClubsListsNonTombstonedSorted,
+    testClubsListsNamedSorted,
     testClubsResponseWireShape
   )
 
@@ -1215,15 +1215,18 @@ object TestRoutes extends ZIOSpecDefault {
     )
   }
 
-  private def testClubsListsNonTombstonedSorted =
-    test("GET /api/clubs lists non-tombstoned clubs sorted by slug, excluding _stale_ rows") {
+  private def testClubsListsNamedSorted =
+    test("GET /api/clubs lists the clubs that hold a name, sorted by slug") {
       for {
-        _        <- ensureClubs
-        _        <- Club.upsert(Club(ClubId(202), t0, ClubSlug("_stale_202"), "Stale Club", None, None, None))
+        _ <- ensureClubs
+        // 203 takes 202's name, so 202 holds none and is not offered — what excluding `_stale_` rows used to do.
+        _        <- Club.upsert(Club(ClubId(202), t0, ClubSlug("contested-club"), "Losing Club", None, None, None))
+        _        <- Club.upsert(Club(ClubId(203), t0, ClubSlug("contested-club"), "Holding Club", None, None, None))
         response <- ClubRoutes.routes.runZIO(jsonRequest(Method.GET, "/api/clubs"))
         body     <- response.body.asString
-        // Drop the tombstone fixture so it doesn't leak into the shared DB for any later suite.
+        // Drop the fixtures so they don't leak into the shared DB for any later suite.
         _ <- TestDbCleanup.deleteClub(ClubId(202))
+        _ <- TestDbCleanup.deleteClub(ClubId(203))
         parsed = body.fromJson[ClubRoutes.ClubsResponse]
       } yield {
         val clubs = parsed.toOption.get.clubs
@@ -1234,7 +1237,8 @@ object TestRoutes extends ZIOSpecDefault {
           slugs == slugs.sorted,
           slugs.contains("other-club"),
           slugs.contains("test-club"),
-          !slugs.contains("_stale_202"),
+          slugs.count(_ == "contested-club") == 1,
+          clubs.find(_.slug.value == "contested-club").exists(_.name == "Holding Club"),
           clubs.find(_.slug.value == "test-club").exists(_.name == "Test Club")
         )
       }
