@@ -320,14 +320,14 @@ object TestHistorySeeding extends ZIOSpecDefault {
   )
 
   // ==========================================================================
-  // Suite: seedFromMemberMatches tombstone skip
+  // Suite: seedFromMemberMatches skips a member holding no name
   //
-  // Regression for issue #22: confirms `seedFromMemberMatches` filters tombstoned Player rows out of the
-  // candidate set so the seeding wave never fires `/pub/player/_stale_<id>/matches` requests, which would
+  // Regression for issue #22, restated for `player_name` (#254): the names come from what members hold now, so a
+  // tombstoned member — one holding no name — is never queried under `/pub/player/_stale_<id>/matches`, which would
   // 404 deterministically with no possible recovery.
   // ==========================================================================
 
-  private def suiteSeedFromMemberMatchesTombstoneSkip = suite("seedFromMemberMatches tombstone skip filter")(
+  private def suiteSeedFromMemberMatchesTombstoneSkip = suite("seedFromMemberMatches skips a member holding no name")(
     test("tombstoned member skipped: no /pub/player/_stale_*/matches fetch") {
       val clubId   = ClubId(900_500)
       val clubSlug = ClubSlug("tomb-test-club")
@@ -342,7 +342,6 @@ object TestHistorySeeding extends ZIOSpecDefault {
       )
       val activePlayer = Player(activePid, t0, activeUsername, PlayerStatusCategory.Active, None, t0)
       val tombPlayer   = Player(tombPid, t0, tombstoneUsername, PlayerStatusCategory.Active, None, t0)
-      val playerById   = Map(activePid -> activePlayer, tombPid -> tombPlayer)
 
       // Request-counting fake: records every URL path. The /pub/player/$user/matches route is the only one
       // seedFromMemberMatches actually fans out across; serve an empty list so seeding completes cleanly.
@@ -351,6 +350,7 @@ object TestHistorySeeding extends ZIOSpecDefault {
         _            <- Club.upsert(Club(clubId, t0, clubSlug, "Tomb test", None, None, None))
         _            <- Player.insertBatch(List(activePlayer, tombPlayer))
         _            <- ClubMember.insertBatch(members)
+        memberNames  <- PlayerName.selectCurrentNames(members.map(_.playerId))
         unchangedRef <- Ref.make(0)
         requested    <- Ref.make(Chunk.empty[String])
         routes: Routes[Any, Response] = Routes(
@@ -369,7 +369,7 @@ object TestHistorySeeding extends ZIOSpecDefault {
           clubSlug,
           allMembers = members,
           queriedIds = Set.empty,
-          playerById = playerById,
+          memberNames = memberNames,
           excludeMatchIds = Set.empty,
           includeFinished = false,
           shared = None,

@@ -17,13 +17,12 @@ object TestPlayerSql extends ZIOSpecDefault {
     testSelect,
     testUpdate,
     testArchiveAndUpdate,
-    testSelectByUsername,
+    testSelectCurrentHolder,
     testSelectByIds,
     testInsertBatchIdempotent,
     testPlayerSnapshotInsertIdempotent,
-    testResolveUsernames,
-    testUpdateCurrentStateOptimistic,
-    testSelectLatestPlayerIdByUsername
+    testSelectDisplayNames,
+    testUpdateCurrentStateOptimistic
   ).provideShared(
     FreshSchemaLayer("test_player_sql", onInit = Tables.ensureTables)
   ) @@ TestAspect.sequential
@@ -97,12 +96,14 @@ object TestPlayerSql extends ZIOSpecDefault {
     )
   }
 
-  private def testSelectByUsername = test("testSelectByUsername") {
+  private def testSelectCurrentHolder = test("testSelectCurrentHolder") {
     for {
-      found    <- Player.selectByUsername(Username("player0_new")) // updated in previous test
-      notFound <- Player.selectByUsername(Username("nonexistent"))
+      found    <- PlayerName.selectCurrentHolder(Username("player0_new")) // updated in previous test
+      former   <- PlayerName.selectCurrentHolder(player0.username)
+      notFound <- PlayerName.selectCurrentHolder(Username("nonexistent"))
     } yield assertTrue(
-      found.exists(_.playerId == player0.playerId),
+      found.contains(player0.playerId),
+      former.isEmpty,
       notFound.isEmpty
     )
   }
@@ -190,37 +191,13 @@ object TestPlayerSql extends ZIOSpecDefault {
     )
   }
 
-  private def testSelectLatestPlayerIdByUsername = test("testSelectLatestPlayerIdByUsername") {
-    // After earlier tests:
-    //   player0 (id=0) snapshots: player0_old @ t0, player0_mid @ t1, player0_0 @ Times.t2 (archived in testArchiveAndUpdate)
-    //   player0 current username: player0_new
-    //   player1 (id=1) current username: player1_D, no snapshots in this test data
+  private def testSelectDisplayNames = test("testSelectDisplayNames") {
     for {
-      // Single match — the snapshot for player0_old maps to player_id = 0
-      old <- PlayerSnapshot.selectLatestPlayerIdByUsername(Username("player0_old"))
-      // No snapshot ever held this username
-      missing <- PlayerSnapshot.selectLatestPlayerIdByUsername(Username("never_existed"))
-      // Synthesize an ambiguous case: insert a snapshot for player1 holding username player0_old
-      _ <- PlayerSnapshot.insert(
-        PlayerSnapshot(player1.playerId, Times.t3.plusSeconds(10), Username("player0_old"), Active, None)
-      )
-      ambiguous <- PlayerSnapshot.selectLatestPlayerIdByUsername(Username("player0_old"))
-    } yield assertTrue(
-      old == List(player0.playerId),
-      missing.isEmpty,
-      ambiguous.size == 2,
-      // Ordered by MAX(since) DESC — player1's snapshot at Times.t3+10s is the most recent
-      ambiguous.head == player1.playerId
-    )
-  }
-
-  private def testResolveUsernames = test("testResolveUsernames") {
-    for {
-      empty       <- Player.resolveUsernames(Nil)
-      single      <- Player.resolveUsernames(List(player1.playerId))
-      both        <- Player.resolveUsernames(List(player0.playerId, player1.playerId))
-      nonExistent <- Player.resolveUsernames(List(PlayerId(999)))
-      mixed       <- Player.resolveUsernames(List(player0.playerId, PlayerId(999)))
+      empty       <- Player.selectDisplayNames(Nil)
+      single      <- Player.selectDisplayNames(List(player1.playerId))
+      both        <- Player.selectDisplayNames(List(player0.playerId, player1.playerId))
+      nonExistent <- Player.selectDisplayNames(List(PlayerId(999)))
+      mixed       <- Player.selectDisplayNames(List(player0.playerId, PlayerId(999)))
     } yield assertTrue(
       empty.isEmpty,
       single == Map(player1.playerId -> player1.username),

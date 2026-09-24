@@ -4,7 +4,7 @@ import java.time.{Instant, ZoneOffset}
 import java.util.concurrent.TimeUnit
 
 import ccas.utils.sql.PostgresClient
-import com.typesafe.config.ConfigFactory
+import com.typesafe.config.{Config, ConfigFactory}
 import zio.*
 import zio.config.derivation.{kebabCase, name}
 import zio.config.magnolia.DeriveConfig
@@ -874,6 +874,17 @@ object ChessComClient {
     }
   }
 
+  /** Loads `chess-com-client` from `config`, refusing a blank contact email here rather than at config load — see the
+    * key's comment in `application.conf`.
+    */
+  private[ccas] def loadConfig(config: Config): Task[ChessComClientConfig] =
+    TypesafeConfigProvider
+      .fromTypesafeConfig(config, enableCommaSeparatedValueAsList = true)
+      .load(summon[DeriveConfig[ChessComClientConfig]].desc.nested("chess-com-client"))
+      .filterOrFail(_.contactEmail.trim.nonEmpty)(
+        IllegalArgumentException("CCAS_CONTACT_EMAIL is not set; Chess.com asks API clients for a contact")
+      )
+
   private def userAgentHeaders(contactEmail: String): Headers =
     Headers(
       Header.Custom("User-Agent", s"${BuildInfo.name.toUpperCase}/${BuildInfo.version} (contact: $contactEmail)"),
@@ -884,11 +895,8 @@ object ChessComClient {
   def live(appLabel: String): RLayer[Client & PostgresClient & ProgressDisplay & BodyStore, ChessComClient] =
     ZLayer.scoped {
       import ChessComClientConfig.*
-      val provider = TypesafeConfigProvider.fromTypesafeConfig(
-        ConfigFactory.load(), enableCommaSeparatedValueAsList = true
-      )
       for {
-        rawConfig      <- provider.load(summon[DeriveConfig[ChessComClientConfig]].desc.nested("chess-com-client"))
+        rawConfig      <- loadConfig(ConfigFactory.load())
         throttleConfig <- ZIO.attempt(rawConfig.toThrottleConfig)
         statsFlushInterval = rawConfig.statsFlushInterval
         _ <- ZIO.attempt(require(

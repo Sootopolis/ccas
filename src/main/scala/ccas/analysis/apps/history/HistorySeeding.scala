@@ -221,7 +221,7 @@ private[history] object HistorySeeding {
     clubSlug: ClubSlug,
     allMembers: List[ClubMember],
     queriedIds: Set[PlayerId],
-    playerById: Map[PlayerId, Player],
+    memberNames: Map[PlayerId, Username],
     excludeMatchIds: Set[ClubMatchId],
     includeFinished: Boolean,
     shared: Option[SharedContext],
@@ -229,14 +229,11 @@ private[history] object HistorySeeding {
   ): RIO[ProgressDisplay & PostgresClient, MemberSeedResult] =
     for {
       sharedQueried <- shared.fold(ZIO.succeed(Set.empty[PlayerId]))(_.queriedPlayers.get)
-      // Tombstoned Player rows have a sentinel `_stale_<playerId>` username — emitting them here would 404 against
-      // Chess.com on every wave with no possible recovery (we have nothing better to query with). Filtering pre-
-      // partition is cheap (in-memory predicate over the playerById map). The renamed player will rejoin the queue
-      // automatically on the next run after some other path (board appearance, club roster refresh) rediscovers the
-      // current handle and replaces the tombstone via PlayerUpdater.reconcile.
+      // A member holding no name has nothing to be queried under — its display cache may name whoever took it. It
+      // rejoins the queue once another path (board appearance, roster refresh) records the name it answers to now.
       candidates = allMembers
         .filterNot(m => queriedIds.contains(m.playerId))
-        .flatMap(m => playerById.get(m.playerId).filterNot(_.isTombstoned).map(s => (m.playerId, s.username)))
+        .flatMap(m => memberNames.get(m.playerId).map(username => (m.playerId, username)))
         .distinctBy(_._1)
       (toQuery, sharedSkipped) = candidates.partition { case (pid, _) => !sharedQueried.contains(pid) }
 

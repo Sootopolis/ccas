@@ -92,7 +92,7 @@ object StatsApp extends ZIOAppDefault {
     for {
       (rows, matchCount) <- ClubBoard.selectClubBoards(clubId) <&> ClubMatch.countForClub(clubId)
       playerIds = rows.map(_.playerId).distinct
-      usernameMap <- Player.resolveUsernames(playerIds)
+      usernameMap <- Player.selectDisplayNames(playerIds)
       contributions = aggregate(rows, usernameMap)
     } yield StatsResult(contributions, rows.size, matchCount)
 
@@ -112,7 +112,7 @@ object StatsApp extends ZIOAppDefault {
       )
       (rows, matchCount) <- ClubBoard.selectClubBoardsInPeriod(clubId, since, until) <&> ClubMatch.countForClubInPeriod(clubId, since, until)
       playerIds = rows.map(_.playerId).distinct
-      usernameMap <- Player.resolveUsernames(playerIds)
+      usernameMap <- Player.selectDisplayNames(playerIds)
       contributions = aggregate(rows, usernameMap)
     } yield StatsResult(contributions, rows.size, matchCount)
 

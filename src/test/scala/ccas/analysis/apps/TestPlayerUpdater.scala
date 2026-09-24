@@ -6,7 +6,7 @@ import java.time.temporal.ChronoUnit
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.*
-import ccas.analysis.tables.{Player, PlayerSnapshot, Tables}
+import ccas.analysis.tables.{Player, PlayerName, PlayerSnapshot, Tables}
 import ccas.api.misc.enums.PlayerStatusCategory
 import ccas.api.misc.subtypes.{PlayerId, Username}
 import ccas.utils.sql.{FreshSchemaLayer, TestDbCleanup}
@@ -117,9 +117,11 @@ object TestPlayerUpdater extends ZIOSpecDefault {
       bobUpdated     <- Player.selectId(pidB).someOrFailException
       aliceSnapshots <- PlayerSnapshot.selectId(pidA)
       bobSnapshots   <- PlayerSnapshot.selectId(pidB)
+      currentNames   <- PlayerName.selectCurrentNames(List(pidA, pidB))
     } yield assertTrue(
       aliceUpdated.username == Username("bob"),
       bobUpdated.username == Username("bob-new"),
+      currentNames == Map(pidA -> Username("bob"), pidB -> Username("bob-new")),
       aliceSnapshots.size == 1,
       aliceSnapshots.head.username == Username("alice"),
       bobSnapshots.size == 1,
@@ -156,10 +158,14 @@ object TestPlayerUpdater extends ZIOSpecDefault {
       bobUpdated     <- Player.selectId(pidB).someOrFailException
       bobSnapshots   <- PlayerSnapshot.selectId(pidB)
       aliceSnapshots <- PlayerSnapshot.selectId(pidA)
+      currentNames   <- PlayerName.selectCurrentNames(List(pidA, pidB))
+      bobNames       <- PlayerName.selectPlayer(pidB)
     } yield assertTrue(
       aliceUpdated.username == Username("bob"),
       bobUpdated.username == Username(s"_stale_${pidB.value}"),
-      bobUpdated.isTombstoned,
+      Player.isTombstoneUsername(bobUpdated.username),
+      currentNames == Map(pidA -> Username("bob")),
+      bobNames.map(n => (n.username, n.until.isDefined)) == List((Username("bob"), true)),
       bobSnapshots.size == 1,
       bobSnapshots.head.username == Username("bob"),
       aliceSnapshots.size == 1,

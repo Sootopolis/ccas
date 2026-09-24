@@ -16,8 +16,8 @@ import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
 
 /** Exercises rename recovery on the recruitment-side player fetches wired in PR for issue #22.
   *
-  * Each test seeds a Player row at the canonical (post-rename) handle plus a PlayerSnapshot at the stale handle so
-  * the resolver's Tier A snapshot lookup can rediscover the canonical name without needing a board endpoint trick.
+  * Each test records the player holding the stale handle and then the canonical (post-rename) one, so the resolver's
+  * Tier A history lookup can rediscover the canonical name without needing a board endpoint trick.
   */
 object TestRecruitmentRenameRecovery extends ZIOSpecDefault {
 
@@ -37,13 +37,17 @@ object TestRecruitmentRenameRecovery extends ZIOSpecDefault {
   private val freshU = Username("alice-new")
   private val pid    = pid0 // PlayerId(200) per RecruitmentTestSupport
 
-  /** Inserts the canonical Player row and a snapshot at the stale username so Tier A succeeds. */
-  private def seedRenameHistory: RIO[PostgresClient, Unit] =
+  /** Records the stale handle and then the canonical one in `player_name`, so Tier A succeeds. */
+  private def seedRenameHistory: RIO[PostgresClient, Unit] = {
+    val joined = Instant.parse("2019-01-01T00:00:00Z")
     for {
       _ <- seedDb
-      _ <- Player.insertIfNew(Player(pid, Instant.parse("2020-01-01T00:00:00Z"), freshU, PlayerStatusCategory.Active, None, Instant.parse("2020-01-01T00:00:00Z")))
-      _ <- PlayerSnapshot.insert(PlayerSnapshot(pid, Instant.parse("2019-01-01T00:00:00Z"), staleU, PlayerStatusCategory.Active, None))
+      _ <- Player.insertIfNew(Player(pid, joined, staleU, PlayerStatusCategory.Active, None, joined))
+      _ <- Player.updateCurrentState(
+        Player(pid, joined, freshU, PlayerStatusCategory.Active, None, Instant.parse("2020-01-01T00:00:00Z"))
+      )
     } yield ()
+  }
 
   /** ApiPlayer pre-set to the stale handle to mimic mid-pipeline state. The filter wrap passes
     * `apiPlayer.playerId` as the resolver hint.

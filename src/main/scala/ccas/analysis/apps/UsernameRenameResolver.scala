@@ -17,23 +17,20 @@ import ccas.utils.sql.PostgresClient.withTransaction
 
 /** Resolves the current canonical username for a player whose previously-known username 404s on Chess.com.
   *
-  *  - **Tier A (DB lookup)** — never fires HTTP: `Player.selectByUsername` plus
-  *    [[PlayerSnapshot.selectLatestPlayerIdByUsername]], for renames our DB already learned by another path.
+  *  - **Tier A (DB lookup)** — never fires HTTP: [[PlayerName.selectCurrentHolder]], then
+  *    [[PlayerName.selectHolders]] on a miss, for renames our DB already learned by another path.
   *  - **Tier B (board endpoint)** — only when Tier A returns `None` and a `playerIdHint` is supplied. Fetches a
   *    `PlayerMatchRef` board and identifies the player by eliminating the opposing side's canonical name, optionally
   *    falling back to `PlayerTournamentRef`.
   *
   * A verification fetch confirms the `playerId` before the name is returned; [[resolveAndReconcile]] also runs
-  * `PlayerUpdater.reconcile` so future lookups skip the resolver. Tombstoned rows (`_stale_<playerId>`) are never
-  * returned as fresh.
+  * `PlayerUpdater.reconcile` so future lookups skip the resolver. Every candidate is a name some player holds now, so
+  * a player holding none yields no candidate from the database.
   *
   * Why the entry points gate on [[ccas.utils.client.ReportedNotFound]] rather than any 404, and what a failed
   * resolution does: `docs/adr/0010-rename-recovery-for-usernames-and-club-slugs.md` (tombstones superseded).
   */
 object UsernameRenameResolver {
-
-  /** Delegates to [[Player.isTombstoneUsername]] — single source of truth for the tombstone format. */
-  def isTombstone(u: Username): Boolean = Player.isTombstoneUsername(u)
 
   def stalePlaceholder(playerId: PlayerId): Username =
     Username.wrap(s"_stale_${PlayerId.unwrap(playerId)}")
@@ -135,27 +132,26 @@ object UsernameRenameResolver {
     staleUsername: Username,
     playerIdHint: Option[PlayerId]
   ): RIO[PostgresClient, Option[Username]] =
-    Player.selectByUsername(staleUsername).flatMap {
+    PlayerName.selectCurrentHolder(staleUsername).flatMap {
       case Some(currentHolder) =>
         playerIdHint match {
           // Hint matches the current holder of the stale username — this is NOT a rename. The 404 is a deletion.
-          case Some(hint) if hint == currentHolder.playerId => ZIO.none
+          case Some(hint) if hint == currentHolder => ZIO.none
           // Hint differs from the current holder: the freed handle has been recycled. Look up our hint's current name.
-          case Some(hint) => Player.selectId(hint).map(_.map(_.username).filterNot(isTombstone))
+          case Some(hint) => PlayerName.selectCurrentName(hint)
           // No hint — can't disambiguate deletion vs recycle, default conservative.
           case None => ZIO.none
         }
       case None =>
-        // No current player holds the stale username; check the snapshot reverse-lookup.
-        PlayerSnapshot.selectLatestPlayerIdByUsername(staleUsername).flatMap { candidates =>
+        // No player holds the stale username now; ask who held it before.
+        PlayerName.selectHolders(staleUsername).flatMap { holders =>
           playerIdHint match {
-            case Some(hint) if candidates.contains(hint) =>
-              Player.selectId(hint).map(_.map(_.username).filterNot(isTombstone))
-            case Some(_) => ZIO.none
+            case Some(hint) if holders.contains(hint) => PlayerName.selectCurrentName(hint)
+            case Some(_)                              => ZIO.none
             case None =>
-              candidates match {
-                case pid :: Nil => Player.selectId(pid).map(_.map(_.username).filterNot(isTombstone))
-                case _          => ZIO.none // ambiguous (multiple historical holders) or empty
+              holders match {
+                case pid :: Nil => PlayerName.selectCurrentName(pid)
+                case _          => ZIO.none // ambiguous (several former holders) or never held
               }
           }
         }
@@ -207,7 +203,7 @@ object UsernameRenameResolver {
     }
 
   /** Finds the opposing player's current username on this board, preferring the DB-first path. If the opposing side
-    * is already linked on `club_match_board`, reads their current username from `player`. Otherwise falls back to
+    * is already linked on `club_match_board`, reads their current username from `player_name`. Otherwise falls back to
     * the match endpoint's match-time username (still authoritative for the common case where only one side was
     * renamed). The fallback dispatches to the daily or live match endpoint via `RefHelpers.fetchTeamMatchTeamsOptional`.
     */
@@ -224,7 +220,7 @@ object UsernameRenameResolver {
         if (isTeam1) { row.team2PlayerIdOption } else { row.team1PlayerIdOption }
       }
       result <- opposingPidOption match {
-        case Some(pid) => Player.selectId(pid).map(_.map(_.username).filterNot(isTombstone))
+        case Some(pid) => PlayerName.selectCurrentName(pid)
         case None      => opposingUsernameFromMatchEndpoint(client, matchId, board, isTeam1, isLive)
       }
     } yield result

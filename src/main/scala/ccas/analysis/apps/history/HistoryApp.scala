@@ -89,7 +89,7 @@ object HistoryApp extends ZIOAppDefault {
 
   private case class InitResult(
     allMembers: List[ClubMember],
-    playerById: Map[PlayerId, Player],
+    memberNames: Map[PlayerId, Username],
     queriedIds: Set[PlayerId],
     ctx: ProcessingContext,
     startedAt: Instant,
@@ -159,21 +159,20 @@ object HistoryApp extends ZIOAppDefault {
         ClubMember.selectClub(clubId) <&>
           ClubMatch.countForClub(clubId) <&>
           HistoryMemberQuery.selectClubPlayerIds(clubId)
-      memberPlayers <- Player.selectByIds(allMembers.map(_.playerId))
+      memberNames <- PlayerName.selectCurrentNames(allMembers.map(_.playerId))
       _ <- HistoryPendingMatch.resetStatuses(clubId)
       startedAt = Instant.now()
       runId <- HistoryRun.insert(clubId, trigger, startedAt, jobRunIdOption)
-      playerById = memberPlayers.map(p => p.playerId -> p).toMap
       _ <- ZIO.logInfo(
         s"  Members: ${allMembers.size}, Processed matches: $processedCount, Queried members: ${queriedIds.size}"
       )
-      knownPlayersInit = memberPlayers.map(p => p.username.value -> p.playerId).toMap
+      knownPlayersInit = memberNames.map((playerId, username) => username.value -> playerId)
       client <- ZIO.service[ChessComClient]
       ctx    <- ProcessingContext.make(client, clubId, club.slug, knownPlayersInit)
       effectiveQueriedIds =
         if (full) { Set.empty[PlayerId] }
         else { queriedIds }
-    } yield InitResult(allMembers, playerById, effectiveQueriedIds, ctx, startedAt, runId)
+    } yield InitResult(allMembers, memberNames, effectiveQueriedIds, ctx, startedAt, runId)
 
   final case class HistoryResult(stats: RunStats, clubSlug: ClubSlug, startedAt: Instant, completedAt: Instant)
 
@@ -217,7 +216,7 @@ object HistoryApp extends ZIOAppDefault {
       display  <- ZIO.service[ProgressDisplay]
 
       // === Phase 1: Initialize ===
-      InitResult(allMembers, playerById, queriedIds, ctx, startedAt, runId) <-
+      InitResult(allMembers, memberNames, queriedIds, ctx, startedAt, runId) <-
         initialize(clubSlug, expectedClubIdOption, full, trigger, jobRunIdOption)
       _ <- ZIO.foreachDiscard(shared)(_.resolvedClubs.update(_ + (ctx.clubSlug -> ctx.clubId)))
 
@@ -275,7 +274,7 @@ object HistoryApp extends ZIOAppDefault {
               ctx.clubSlug,
               allMembers,
               queriedIds,
-              playerById,
+              memberNames,
               excludeMatchIds,
               includeFinished,
               shared,

@@ -28,23 +28,15 @@ final case class Player(
 
   def stateMatches(username: Username, status: PlayerStatusCategory, title: Option[Title]): Boolean =
     this.username == username && this.status == status && this.title == title
-
-  /** True when this row's username is a tombstone placeholder set by `PlayerUpdater.archiveAndUpdate` to free a
-    * UNIQUE-constrained handle. Callers iterating `Player` rows for URL emission or display should filter these out;
-    * the renamed player will be rediscovered organically through any normal-path callsite (HistoryApp, MembershipApp,
-    * RefApp, etc.) once they surface under their new handle.
-    */
-  def isTombstoned: Boolean = Player.isTombstoneUsername(username)
-
-  /** Display variant for tombstoned rows so user-facing output doesn't leak the placeholder. */
-  def displayName: String =
-    if (isTombstoned) { s"<unknown player #${PlayerId.unwrap(playerId)}>" } else { username.value }
 }
 
 object Player {
   private val repo = Repo[Player, Player, PlayerId]
 
-  private val stalePattern = "^_stale_\\d+$".r
+  /** The tombstone format `PlayerUpdater.archiveAndUpdate` writes, bound as a parameter where SQL has to match it. */
+  private[tables] val TombstoneUsernameRegex: String = "^_stale_[0-9]+$"
+
+  private val stalePattern = TombstoneUsernameRegex.r
 
   /** True when the given username matches the tombstone format set by `PlayerUpdater.archiveAndUpdate`. Useful at
     * display sites that hold a `Username` value but no full `Player` row.
@@ -86,7 +78,10 @@ object Player {
       }
     }
 
-  def resolveUsernames(playerIds: Iterable[PlayerId]): ZIO[PostgresClient, SQLException, Map[PlayerId, Username]] =
+  /** The display cache for each of `playerIds`, for output that only shows a name. A name to look up, fetch or invite
+    * comes from [[PlayerName.selectCurrentNames]] instead (ADR 0016).
+    */
+  def selectDisplayNames(playerIds: Iterable[PlayerId]): ZIO[PostgresClient, SQLException, Map[PlayerId, Username]] =
     if (playerIds.isEmpty) { ZIO.succeed(Map.empty) }
     else {
       connectZIO {
@@ -96,47 +91,48 @@ object Player {
       }
     }
 
-  def selectByUsername(username: Username): ZIO[PostgresClient, SQLException, Option[Player]] =
-    connectZIO(
-      sql"SELECT $selectCols FROM player WHERE username = $username".query[Player].run().headOption
-    )
-
-  def selectByUsernames(usernames: Iterable[Username]): ZIO[PostgresClient, SQLException, List[Player]] =
-    if (usernames.isEmpty) ZIO.succeed(Nil)
-    else connectZIO {
-      val names = usernames.toList
-      sql"SELECT $selectCols FROM player WHERE username = ANY($names)".query[Player].run().toList
-    }
-
   def selectIdForUpdate(playerId: PlayerId): ZIO[PostgresClient, SQLException, Option[Player]] =
     connectZIO(
       sql"SELECT $selectCols FROM player WHERE player_id = $playerId FOR UPDATE".query[Player].run().headOption
     )
 
+  /** The row whose display cache holds `username`, which `player_username_unique` still constrains — the conflict
+    * `PlayerUpdater` clears before writing. Not a lookup: a player is found by name through [[PlayerName]].
+    */
   def selectByUsernameForUpdate(username: Username): ZIO[PostgresClient, SQLException, Option[Player]] =
     connectZIO(
       sql"SELECT $selectCols FROM player WHERE username = $username FOR UPDATE".query[Player].run().headOption
     )
 
+  // Every write of `player.username` records the name in the same transaction (`PlayerName.recordStored`), so
+  // `player_name` never drifts from what the row stores.
   def insert(player: Player): ZIO[PostgresClient, SQLException, Unit] =
-    connectZIO(repo.insert(player))
+    transactZIO {
+      repo.insert(player)
+      PlayerName.recordStored(List(player.playerId))
+    }.unit
 
   def insertBatch(players: Iterable[Player]): ZIO[PostgresClient, SQLException, BatchUpdateResult] =
     transactZIO {
-      batchUpdate(players) { player =>
+      val result = batchUpdate(players) { player =>
         sql"""INSERT INTO player (player_id, joined, username, status, title, since)
               VALUES (${player.playerId}, ${player.joined}, ${player.username},
                 ${player.status}, ${player.title}, ${player.since})
               ON CONFLICT (player_id) DO NOTHING""".update
       }
+      PlayerName.recordStored(players.map(_.playerId))
+      result
     }
 
   def insertIfNew(player: Player): ZIO[PostgresClient, SQLException, Int] =
-    connectZIO {
-      sql"""INSERT INTO player (player_id, joined, username, status, title, since)
-            VALUES (${player.playerId}, ${player.joined}, ${player.username},
-              ${player.status}, ${player.title}, ${player.since})
-            ON CONFLICT (player_id) DO NOTHING""".update.run()
+    transactZIO {
+      val rows =
+        sql"""INSERT INTO player (player_id, joined, username, status, title, since)
+              VALUES (${player.playerId}, ${player.joined}, ${player.username},
+                ${player.status}, ${player.title}, ${player.since})
+              ON CONFLICT (player_id) DO NOTHING""".update.run()
+      PlayerName.recordStored(List(player.playerId))
+      rows
     }
 
   // Optimistic update: `AND since < newSince` makes concurrent updates monotonic. If another
@@ -144,21 +140,23 @@ object Player {
   // fresher data. Protects against lost updates when two MembershipApp runs for different clubs
   // both classify a shared player from the same stale state.
   def updateCurrentState(player: Player): ZIO[PostgresClient, SQLException, Int] =
-    connectZIO {
-      sql"""UPDATE player SET username = ${player.username}, status = ${player.status},
-              title = ${player.title}, since = ${player.since}
-            WHERE player_id = ${player.playerId} AND since < ${player.since}""".update.run()
+    transactZIO {
+      val rows =
+        sql"""UPDATE player SET username = ${player.username}, status = ${player.status},
+                title = ${player.title}, since = ${player.since}
+              WHERE player_id = ${player.playerId} AND since < ${player.since}""".update.run()
+      PlayerName.recordStored(List(player.playerId))
+      rows
     }
 
   def updateCurrentStateBatch(players: Iterable[Player]): ZIO[PostgresClient, SQLException, BatchUpdateResult] =
     transactZIO {
-      batchUpdate(players) { player =>
+      val result = batchUpdate(players) { player =>
         sql"""UPDATE player SET username = ${player.username}, status = ${player.status},
                 title = ${player.title}, since = ${player.since}
               WHERE player_id = ${player.playerId} AND since < ${player.since}""".update
       }
+      PlayerName.recordStored(players.map(_.playerId))
+      result
     }
-
-  def deleteId(playerId: PlayerId): ZIO[PostgresClient, SQLException, Unit] =
-    connectZIO(repo.deleteById(playerId))
 }

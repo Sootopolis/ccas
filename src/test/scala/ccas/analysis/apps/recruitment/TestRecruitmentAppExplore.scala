@@ -399,7 +399,7 @@ object TestRecruitmentAppExplore extends ZIOSpecDefault {
           .timeout(30.seconds)
         // cand-x's Player row is upserted by FetchAndCheckPlayer regardless of final candidate outcome, so this
         // confirms the discovery path ran without depending on candidate-row persistence (cacheRejected can skip it).
-        candPlayer <- Player.selectByUsername(Username("cand-x"))
+        candPlayer <- PlayerName.selectCurrentHolder(Username("cand-x"))
       } yield assertTrue(
         result.isDefined,
         candPlayer.isDefined

@@ -2,7 +2,7 @@ package ccas.analysis.apps
 
 import zio.{RIO, ZIO}
 
-import ccas.analysis.tables.{Club, ClubAdmin, ClubName, Player}
+import ccas.analysis.tables.{Club, ClubAdmin, ClubName, Player, PlayerName}
 import ccas.api.club.ApiClub
 import ccas.api.misc.enums.PlayerStatusCategory
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, Username}
@@ -150,16 +150,17 @@ object ClubSlugRenameResolver {
         for {
           adminRows    <- ClubAdmin.selectByClub(hint)
           adminPlayers <- Player.selectByIds(adminRows.map(_.playerId))
+          adminNames   <- PlayerName.selectCurrentNames(adminRows.map(_.playerId))
           // Surface DB drift (admin row references a player_id with no `player` row) so it doesn't masquerade as a
           // silently-shrunken admin set.
           _ <- ZIO.logDebug(
             s"  Tier C: ${adminRows.size - adminPlayers.size} admin row(s) for clubId=$hint had no Player row"
           ).when(adminPlayers.size != adminRows.size)
           // Skip closed/banned admins: their /clubs can't contain `hint`. Their `club_admin` row persists from a prior
-          // refresh; `Player.status` was updated since via another code path (Membership/Recruitment/History).
-          usernames = adminPlayers.collect {
-            case p if !p.isTombstoned && p.status == PlayerStatusCategory.Active => p.username
-          }
+          // refresh; `Player.status` was updated since via another code path (Membership/Recruitment/History). An admin
+          // holding no name has nothing to be looked up under.
+          usernames =
+            adminPlayers.filter(_.status == PlayerStatusCategory.Active).flatMap(p => adminNames.get(p.playerId))
           result <- ZIO.collectFirst(usernames)(adminLookup(client, _, hint, staleSlug))
           _ <- ZIO.foreachDiscard(result)(fresh =>
             ZIO.logInfo(s"  Tier C slug recovery hit via admin lookup: $staleSlug → $fresh")

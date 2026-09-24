@@ -21,19 +21,10 @@ final case class ClubName(clubId: ClubId, slug: ClubSlug, since: Instant, until:
 object ClubName {
   private val selectCols = SqlLiteral("club_id, slug, since, until")
 
-  /** Fails with a pointer to the runbook when `btree_gist` is missing: the exclusion constraint needs it, and the
-    * extension is installed by hand rather than from the boot path (ADR 0016).
-    */
+  /** Fails with a pointer to the runbook when `btree_gist` is missing: see [[BtreeGist]]. */
   def createTable: ZIO[PostgresClient, SQLException, Int] =
     transactZIO {
-      val hasBtreeGist =
-        sql"SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'btree_gist')".query[Boolean].run().head
-      if (!hasBtreeGist) {
-        throw SQLException(
-          "club_name needs the btree_gist extension: run 'CREATE EXTENSION btree_gist;' against this database " +
-            "(docs/adr/0016-identity-is-the-id-names-are-observations.md)"
-        )
-      }
+      BtreeGist.require("club_name")
       sql"""CREATE TABLE IF NOT EXISTS club_name (
               club_id  BIGINT      NOT NULL REFERENCES club (club_id) ON DELETE RESTRICT,
               slug     TEXT        NOT NULL,

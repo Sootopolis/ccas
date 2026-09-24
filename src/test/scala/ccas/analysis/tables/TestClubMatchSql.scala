@@ -703,7 +703,7 @@ object TestClubMatchSql extends ZIOSpecDefault {
         miss       <- PlayerMatchRef.findOrInfer(p)
         stillEmpty <- PlayerMatchRef.selectId(p)
 
-        _ <- connectZIO(sql"DELETE FROM player WHERE player_id = $p".update.run())
+        _ <- TestDbCleanup.deletePlayer(p)
       } yield assertTrue(
         tier1.contains(explicitRef),
         // parentMatch inherits TimeClass.Daily from matchFinished → isLive must be derived as false.
@@ -781,7 +781,7 @@ object TestClubMatchSql extends ZIOSpecDefault {
         _       <- ClubMatchBoard.insert(liveBoard)
         liveRef <- ClubMatchBoard.inferPlayerMatchRef(p)
         _       <- connectZIO(sql"DELETE FROM club_match WHERE match_id = ${liveMatch.matchId}".update.run())
-        _       <- connectZIO(sql"DELETE FROM player WHERE player_id = $p".update.run())
+        _       <- TestDbCleanup.deletePlayer(p)
       } yield assertTrue(
         dailyRef.exists(r => !r.isLive && r.isTeam1 && r.matchId == dailyMatch.matchId && r.boardIdx == 1),
         liveRef.exists(r => r.isLive && !r.isTeam1 && r.matchId == liveMatch.matchId && r.boardIdx == 2)
