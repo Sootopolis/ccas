@@ -1,6 +1,6 @@
 package ccas.utils.sql
 
-import com.typesafe.config.ConfigFactory
+import com.typesafe.config.{ConfigFactory, ConfigResolveOptions}
 import com.zaxxer.hikari.HikariDataSource
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 import zio.ZIO
@@ -19,8 +19,20 @@ object TestPostgresClient extends ZIOSpecDefault {
       FreshSchemaLayer("test_dsl")
     ),
     testResolveSchema,
-    testNormalizeJdbcUrl
+    testNormalizeJdbcUrl,
+    testExportedDatabaseUrlIgnored
   ) @@ TestAspect.sequential
+
+  // A shell that exports DATABASE_URL — the `wip` worktree's direnv does — must not redirect the suite. Merges the
+  // classpath `application.conf` files the way `ConfigFactory.load()` does, with a stand-in for the exported variable.
+  private def testExportedDatabaseUrlIgnored = test("an exported DATABASE_URL does not reach the test config") {
+    val exported = ConfigFactory.parseString("""DATABASE_URL = "jdbc:postgresql://elsewhere:5432/production"""")
+    val resolved = ConfigFactory
+      .parseResources("application.conf")
+      .withFallback(exported)
+      .resolve(ConfigResolveOptions.defaults().setUseSystemEnvironment(false))
+    assertTrue(!resolved.hasPath("database.url"), resolved.getString("database.dataSource.databaseName") == "ccas_test")
+  }
 
   // Pure resolveSchema cases — no DB / PostgresClient service needed. Builds inline dataSource configs to cover the
   // #92 regression: an absent `currentSchema` key must yield None (no ConfigException), not crash.

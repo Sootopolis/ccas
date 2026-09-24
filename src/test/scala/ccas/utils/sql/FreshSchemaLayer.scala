@@ -36,10 +36,9 @@ object FreshSchemaLayer {
           for {
             conn    <- ZIO.fromAutoCloseable(ZIO.attemptBlocking(pgClient.transactor.dataSource.getConnection))
             catalog <- ZIO.attemptBlocking(conn.getCatalog)
-            // Refuse to DROP SCHEMA anywhere but a test database. `ConfigFactory.load()` merges every
-            // `application.conf` on the classpath, and `url = ${?DATABASE_URL}` exists only in the main one — so an
-            // exported DATABASE_URL silently redirects this whole suite, production Neon included. Checked against
-            // the live connection rather than the config, so no future config route can get around it.
+            // Refuse to DROP SCHEMA anywhere but a test database. The test config nulls `database.url` so an exported
+            // DATABASE_URL cannot redirect the suite; this is the second line, checked against the live connection so
+            // that no other config route, present or future, gets around it.
             _    <- ZIO.attempt(require(isTestDatabase(catalog), refusal(schema, catalog)))
             stmt <- ZIO.fromAutoCloseable(ZIO.attemptBlocking(conn.createStatement()))
             _ <- ZIO.attemptBlocking {
