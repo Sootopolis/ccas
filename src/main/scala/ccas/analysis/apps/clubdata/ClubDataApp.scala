@@ -204,7 +204,7 @@ object ClubDataApp extends ZIOAppDefault {
     val removed = existingAdminIds -- allAdminIds
     ZIO.whenDiscard(existingAdminIds.nonEmpty && (added.nonEmpty || removed.nonEmpty)) {
       (for {
-        usernames <- Player.resolveUsernames(added | removed)
+        usernames <- Player.selectDisplayNames(added | removed)
         _         <- ZIO.logInfo(formatAdminDiff(club, added, removed, usernames))
       } yield ()).catchAllCause(ZIO.logWarningCause(s"[ClubData] Admin diff log failed for ${club.slug}", _))
     }

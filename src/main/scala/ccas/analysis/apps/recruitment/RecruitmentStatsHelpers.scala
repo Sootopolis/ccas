@@ -7,7 +7,7 @@ import ccas.utils.sql.PostgresClient
 import zio.{RIO, ZIO}
 
 import ccas.analysis.apps.withPlayerRenameRecovery
-import ccas.analysis.tables.{Player, RecruitmentCriteria}
+import ccas.analysis.tables.{PlayerName, RecruitmentCriteria}
 import ccas.api.misc.enums.GameResultDetail
 import ccas.api.misc.subtypes.{PlayerId, Username}
 import ccas.api.player.ApiPlayerArchive
@@ -45,15 +45,10 @@ private[recruitment] object RecruitmentStatsHelpers {
 
       for {
         archives <- fetchArchives
-        // Always derive the canonical handle from `Player` regardless of which path produced `archives`. The cached
-        // path is reached when an upstream filter (CheckDailyStats) already fetched the archives — possibly under a
-        // post-recovery handle — but `username` may still be the pre-recovery value because `env.candidate.username`
-        // isn't refreshed mid-pipeline. Reading it off the Player row is the only reliable source of the canonical
-        // name. Tombstoned rows are unlikely to surface here in practice (FetchAndCheckPlayer runs first), but the
-        // `.filterNot(_.isTombstoned)` guard exists in case a parallel job tombstones the row mid-evaluation —
-        // without it a `_stale_<id>` placeholder would leak into the per-game predicates and miscount.
-        effectiveUname <- Player.selectId(playerIdHint)
-          .map(_.filterNot(_.isTombstoned).fold(username)(_.username))
+        // Take the handle from `player_name` whichever path produced `archives`: the cached one (CheckDailyStats) may
+        // have fetched under a post-recovery name while `username` is still the stale input. A player holding no name
+        // falls back to the input rather than to a display cache that may name someone else.
+        effectiveUname <- PlayerName.selectCurrentName(playerIdHint).map(_.getOrElse(username))
       } yield {
         val tmGames = archives.flatMap(
           _.games.filter(g => g.timeClass == "daily" && g.`match`.isDefined && g.endTime >= cutoff.getEpochSecond)

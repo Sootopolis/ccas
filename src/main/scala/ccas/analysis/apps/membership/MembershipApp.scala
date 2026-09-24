@@ -222,18 +222,22 @@ object MembershipApp extends ZIOAppDefault {
       _           <- MembershipReport.reportReconciliation(result, invitations)
     } yield (result, invitations)
 
+  // The roster names players by what they hold now, so it is matched against `player_name`: a player holding none is
+  // reachable only by id, and the display cache could name whoever took its name.
   private[membership] def buildDbState(clubId: ClubId): RIO[PostgresClient, DbState] =
     for {
       currentMembers <- ClubMember.selectClubCurrent(clubId)
       allClubMembers <- ClubMember.selectClub(clubId)
-      players        <- Player.selectByIds(allClubMembers.map(_.playerId).distinct)
+      playerIds = allClubMembers.map(_.playerId).distinct
+      players      <- Player.selectByIds(playerIds)
+      currentNames <- PlayerName.selectCurrentNames(playerIds)
     } yield {
       val playerMap = players.map(p => p.playerId -> p).toMap
       val states    = currentMembers.flatMap(m => playerMap.get(m.playerId).map(p => MemberState(p, m)))
       DbState(
         membersByPlayerId = states.map(s => s.player.playerId -> s).toMap,
-        membersByUsername = states.map(s => s.player.username -> s).toMap,
-        knownPlayersByUsername = players.map(p => p.username -> p).toMap
+        membersByUsername = states.flatMap(s => currentNames.get(s.player.playerId).map(_ -> s)).toMap,
+        knownPlayersByUsername = players.flatMap(p => currentNames.get(p.playerId).map(_ -> p)).toMap
       )
     }
 

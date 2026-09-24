@@ -8,7 +8,7 @@ import ccas.analysis.apps.TestTimes
 import ccas.analysis.tables.*
 import ccas.analysis.tables.subtypes.RecruitmentRunId
 import ccas.api.club.ApiClubMatches
-import ccas.api.misc.enums.{ClubMatchStatus, TimeClass}
+import ccas.api.misc.enums.{ClubMatchStatus, PlayerStatusCategory, TimeClass}
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username}
 import ccas.utils.client.{BodyStore, ChessComClient, ClientStatsAccumulator, TestChessComClientSupport}
 import ccas.utils.sql.DbCodecs.given
@@ -506,18 +506,14 @@ object RecruitmentTestSupport {
         ) *>
           PostgresClient.connectZIO(sql"DELETE FROM player_match_ref WHERE player_id = $pid".update.run()) *>
           PostgresClient.connectZIO(sql"DELETE FROM player_snapshot WHERE player_id = $pid".update.run()) *>
-          PostgresClient.connectZIO(sql"DELETE FROM player WHERE player_id = $pid".update.run())
+          TestDbCleanup.deletePlayer(pid)
       }
       _ <- Club.upsert(club)
     } yield ()
 
   def seedPlayer(playerId: PlayerId): RIO[PostgresClient, Unit] = {
     val username = Username.wrap(s"player_${PlayerId.unwrap(playerId)}")
-    PostgresClient.connectZIO {
-      sql"""INSERT INTO player (player_id, joined, username, status, title, since)
-            VALUES ($playerId, ${TestTimes.t0}, $username, 'Active', NULL, ${TestTimes.t0})
-            ON CONFLICT (player_id) DO NOTHING""".update.run()
-    }.unit
+    Player.insertIfNew(Player(playerId, TestTimes.t0, username, PlayerStatusCategory.Active, None, TestTimes.t0)).unit
   }
 
   /** Test-side helper that calls real production code: builds a RunContext, filter chain, and loops evaluateCandidate —

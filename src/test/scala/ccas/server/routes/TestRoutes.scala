@@ -12,8 +12,17 @@ import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault, ZTestLogger}
 
 import ccas.analysis.apps.{ClubQuery, ClubResolution, NamedClub}
 import ccas.analysis.apps.recruitment.{CandidateOutcome, CriteriaSpec}
-import ccas.analysis.tables.{Club, ManagedClub, RecruitmentCandidate, RecruitmentCriteria, RecruitmentRun, RunTrigger}
+import ccas.analysis.tables.{
+  Club,
+  ManagedClub,
+  Player,
+  RecruitmentCandidate,
+  RecruitmentCriteria,
+  RecruitmentRun,
+  RunTrigger
+}
 import ccas.analysis.tables.subtypes.RecruitmentRunId
+import ccas.api.misc.enums.PlayerStatusCategory
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId, PlayerId, Username}
 import ccas.server.jobs.*
 import ccas.server.routes.JobRoutes.{ClubJobResult, ConfirmResult, InvitedUsernames, JobResult}
@@ -22,7 +31,6 @@ import ccas.server.ServerTables
 import ccas.utils.client.{ChessComClient, TestChessComClientSupport}
 import ccas.utils.errors.ConflictException
 import ccas.utils.sql.{FreshSchemaLayer, PostgresClient, TestDbCleanup}
-import ccas.utils.sql.DbCodecs.given
 import ccas.utils.ProgressDisplay
 
 object TestRoutes extends ZIOSpecDefault {
@@ -698,11 +706,7 @@ object TestRoutes extends ZIOSpecDefault {
     } yield runId
 
   private def seedPlayer(pid: Long, name: String): RIO[PostgresClient, Unit] =
-    PostgresClient.connectZIO {
-      sql"""INSERT INTO player (player_id, joined, username, status, title, since)
-            VALUES (${PlayerId(pid)}, $t0, ${Username(name)}, 'Active', NULL, $t0)
-            ON CONFLICT (player_id) DO NOTHING""".update.run()
-    }.unit
+    Player.insertIfNew(Player(PlayerId(pid), t0, Username(name), PlayerStatusCategory.Active, None, t0)).unit
 
   private def testRecruitmentInvitedAndFound = test("GET recruitment invited/found split by outcome; 404 for unknown job") {
     for {

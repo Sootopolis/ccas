@@ -1,7 +1,5 @@
 package ccas.analysis.apps
 
-import java.time.Instant
-
 import com.augustnagro.magnum.sql
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 import zio.{RIO, ZIO}
@@ -24,12 +22,13 @@ object TestUsernameRenameResolver extends ZIOSpecDefault {
     sql"DELETE FROM player_match_ref".update.run()
     sql"DELETE FROM club_match_board".update.run()
     sql"DELETE FROM club_match WHERE match_id = 90001".update.run()
+    sql"DELETE FROM player_name".update.run()
     sql"DELETE FROM player_snapshot".update.run()
     sql"DELETE FROM player".update.run()
   }
 
   override def spec: Spec[Any, Throwable] = (suite("TestUsernameRenameResolver")(
-    testTombstoneDetection,
+    testStalePlaceholderIsATombstone,
     testTierADeletionWhenHintHoldsStale,
     testTierARecycledHandle,
     testTierASnapshotResolves,
@@ -74,18 +73,23 @@ object TestUsernameRenameResolver extends ZIOSpecDefault {
     TestChessComClientSupport.fakeClient(routes)
   }
 
-  private def insertSnapshot(pid: PlayerId, username: String, since: Instant) =
-    PlayerSnapshot.insert(PlayerSnapshot(pid, since, Username(username), PlayerStatusCategory.Active, None))
+  // Holds `former`, then `current` from a later write: the history Tier A reads, recorded the way production does.
+  private def insertRenamed(pid: PlayerId, former: String, current: String) =
+    insertPlayer(pid, former) *>
+      Player.updateCurrentState(
+        Player(pid, TestTimes.t0, Username(current), PlayerStatusCategory.Active, None, TestTimes.t1)
+      )
 
-  private def testTombstoneDetection = test("isTombstone matches _stale_<digits>") {
+  private def testStalePlaceholderIsATombstone = test("stalePlaceholder writes the tombstone format") {
     ZIO.succeed(assertTrue(
-      UsernameRenameResolver.isTombstone(Username("_stale_42")),
-      UsernameRenameResolver.isTombstone(Username("_stale_9999999")),
-      !UsernameRenameResolver.isTombstone(Username("_stale_")),
-      !UsernameRenameResolver.isTombstone(Username("stale_42")),
-      !UsernameRenameResolver.isTombstone(Username("alice")),
-      !UsernameRenameResolver.isTombstone(Username("_stale_42a")),
-      UsernameRenameResolver.stalePlaceholder(pidA) == Username("_stale_9101")
+      Player.isTombstoneUsername(Username("_stale_42")),
+      Player.isTombstoneUsername(Username("_stale_9999999")),
+      !Player.isTombstoneUsername(Username("_stale_")),
+      !Player.isTombstoneUsername(Username("stale_42")),
+      !Player.isTombstoneUsername(Username("alice")),
+      !Player.isTombstoneUsername(Username("_stale_42a")),
+      UsernameRenameResolver.stalePlaceholder(pidA) == Username("_stale_9101"),
+      Player.isTombstoneUsername(UsernameRenameResolver.stalePlaceholder(pidA))
     ))
   }
 
@@ -114,40 +118,36 @@ object TestUsernameRenameResolver extends ZIOSpecDefault {
     }
 
   private def testTierASnapshotResolves =
-    test("Tier A: snapshot reverse-lookup finds rename when current Player.username has moved on") {
-      // pidA renamed: alpha → newA. Snapshot has (pidA, alpha) at t0; current Player(pidA, newA).
+    test("Tier A: a former name no one holds now resolves to its sole former holder's current name") {
+      // pidA renamed: alpha → newA, and nobody has taken alpha since.
       val responses = Map(
         s"player/newa" -> apiPlayerJson(PlayerId.unwrap(pidA), "newa")
       )
       for {
         client <- fakeChessComClient(responses)
-        _      <- insertPlayer(pidA, "newa")
-        _      <- insertSnapshot(pidA, "alpha", TestTimes.t0)
+        _      <- insertRenamed(pidA, "alpha", "newa")
         result <- UsernameRenameResolver.resolveCurrentUsername(client, Username("alpha"), Some(pidA))
       } yield assertTrue(result.contains(Username("newa")))
     }
 
   private def testTierAAmbiguousSnapshotWithoutHint =
-    test("Tier A: snapshot reverse-lookup with no hint AND multiple historical holders → None (ambiguous)") {
+    test("Tier A: no hint AND several former holders of the name → None (ambiguous)") {
       for {
         client <- fakeChessComClient(Map.empty)
-        _      <- insertPlayer(pidA, "currentA")
-        _      <- insertPlayer(pidB, "currentB")
-        _      <- insertSnapshot(pidA, "shared", TestTimes.t0)
-        _      <- insertSnapshot(pidB, "shared", TestTimes.t1)
+        _      <- insertRenamed(pidA, "shared", "currentA")
+        _      <- insertRenamed(pidB, "shared", "currentB")
         result <- UsernameRenameResolver.resolveCurrentUsername(client, Username("shared"), None)
       } yield assertTrue(result.isEmpty)
     }
 
   private def testTierATombstoneSkipped =
-    test("Tier A: skips tombstoned current username, falls through") {
-      // pidA's current row was tombstoned. Snapshot points to pidA. Tier A must NOT return the tombstone.
+    test("Tier A: the sole former holder holds no name now → None, never the tombstone") {
+      // pidA held alpha, then was tombstoned, so it holds no name. Tier A must NOT return the tombstone.
       val tombstone = UsernameRenameResolver.stalePlaceholder(pidA).value
       for {
         client <- fakeChessComClient(Map.empty)
-        _      <- insertPlayer(pidA, tombstone)
-        _      <- insertSnapshot(pidA, "alpha", TestTimes.t0)
-        // No hint, no Tier B. Tier A should refuse to surface the tombstone.
+        _      <- insertRenamed(pidA, "alpha", tombstone)
+        // No hint, no Tier B.
         result <- UsernameRenameResolver.resolveCurrentUsername(client, Username("alpha"), None)
       } yield assertTrue(result.isEmpty)
     }
@@ -157,8 +157,7 @@ object TestUsernameRenameResolver extends ZIOSpecDefault {
       // Tier A finds "newA" candidate from snapshot, but verification fetch 404s.
       for {
         client <- fakeChessComClient(Map.empty, failures = Set("newa"))
-        _      <- insertPlayer(pidA, "newa")
-        _      <- insertSnapshot(pidA, "alpha", TestTimes.t0)
+        _      <- insertRenamed(pidA, "alpha", "newa")
         result <- UsernameRenameResolver.resolveCurrentUsername(client, Username("alpha"), Some(pidA))
       } yield assertTrue(result.isEmpty)
     }
@@ -171,8 +170,7 @@ object TestUsernameRenameResolver extends ZIOSpecDefault {
       )
       for {
         client <- fakeChessComClient(responses)
-        _      <- insertPlayer(pidA, "newa")
-        _      <- insertSnapshot(pidA, "alpha", TestTimes.t0)
+        _      <- insertRenamed(pidA, "alpha", "newa")
         result <- UsernameRenameResolver.resolveCurrentUsername(client, Username("alpha"), Some(pidA))
       } yield assertTrue(result.isEmpty)
     }
@@ -248,7 +246,7 @@ object TestUsernameRenameResolver extends ZIOSpecDefault {
       // Terminal state we want to test against:
       //   pidA: current=newa (already reflects the rename in the DB)
       //   pidB: current=alpha (recycled-handle holder)
-      //   snapshot: (pidA, alpha) at t1 — historical evidence of the rename
+      //   player_name: pidA held alpha before newa — historical evidence of the rename
       // resolveAndReconcile should return Some((newa, ApiPlayer)) and reconcile should be a no-op since
       // Player(pidA).username already matches.
       val responses = Map(
@@ -256,9 +254,8 @@ object TestUsernameRenameResolver extends ZIOSpecDefault {
       )
       for {
         client <- fakeChessComClient(responses)
-        _      <- insertPlayer(pidA, "newa")
+        _      <- insertRenamed(pidA, "alpha", "newa")
         _      <- insertPlayer(pidB, "alpha")
-        _      <- insertSnapshot(pidA, "alpha", TestTimes.t1)
         result <- UsernameRenameResolver.resolveAndReconcile(client, Username("alpha"), Some(pidA))
         post   <- Player.selectId(pidA).someOrFailException
       } yield assertTrue(

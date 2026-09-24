@@ -99,7 +99,7 @@ object RecruitmentApp extends ZIOAppDefault {
             candidates <-
               if (parsed.cumulative) RecruitmentCandidate.selectInvitedToday(run.clubId, parsed.alias)
               else RecruitmentCandidate.selectInvitedByRun(run.runId)
-            resolvedMap <- Player.resolveUsernames(candidates.map(_.playerId))
+            resolvedMap <- PlayerName.selectCurrentNames(candidates.map(_.playerId))
             // Drop any player_id that doesn't resolve to a handle — these lists are paste-ready invite targets, and a
             // `[pid=N]` placeholder isn't invitable. Matches the server's `usernamesFor` so the file and the
             // --report/clipboard output are identical.
@@ -296,7 +296,7 @@ object RecruitmentApp extends ZIOAppDefault {
 
       // --- Load deferred candidates from prior runs as a priority source ---
       deferredCandidates  <- RecruitmentCandidate.selectDeferredByClub(ctx.runCtx.clubId)
-      deferredResolvedMap <- Player.resolveUsernames(deferredCandidates.map(_.playerId))
+      deferredResolvedMap <- PlayerName.selectCurrentNames(deferredCandidates.map(_.playerId))
       deferredUsernames = deferredResolvedMap.values.filterNot(ctx.existingUsernames).toList.distinct
       _ <- ZIO.whenDiscard(deferredUsernames.nonEmpty)(
         ZIO.logInfo(s"[Deferred] Found ${deferredUsernames.size} deferred candidates from prior runs")
@@ -398,9 +398,9 @@ object RecruitmentApp extends ZIOAppDefault {
       (finalRun, deferredCount) <- withTransaction {
         for {
           _ <- ZIO.foreachDiscard(confirmed) { u =>
-            Player.selectByUsername(u)
-              .someOrFail(new SQLException(s"No player found for confirmed candidate $u"))
-              .flatMap(p => RecruitmentCandidate.updateOutcome(ctx.runId, p.playerId, CandidateOutcome.Invited))
+            PlayerName.selectCurrentHolder(u)
+              .someOrFail(new SQLException(s"No player holds confirmed candidate $u"))
+              .flatMap(RecruitmentCandidate.updateOutcome(ctx.runId, _, CandidateOutcome.Invited))
           }
           deferredCount <- RecruitmentCandidate.selectDeferredCountByRun(ctx.runId)
           finalRun = RecruitmentRun(
@@ -434,7 +434,7 @@ object RecruitmentApp extends ZIOAppDefault {
       _ <- ZIO.whenDiscard(cumulative && alreadyFound > 0) {
         for {
           earlierCandidates  <- RecruitmentCandidate.selectInvitedToday(clubId, alias)
-          earlierResolvedMap <- Player.resolveUsernames(earlierCandidates.map(_.playerId))
+          earlierResolvedMap <- PlayerName.selectCurrentNames(earlierCandidates.map(_.playerId))
           earlierUsernames = earlierCandidates.map(c =>
             earlierResolvedMap.getOrElse(c.playerId, Username.wrap(s"[pid=${c.playerId}]"))
           )
@@ -486,7 +486,7 @@ object RecruitmentApp extends ZIOAppDefault {
       }
       invited        <- RecruitmentCandidate.selectInvitedByRun(run.runId)
       evaluatedCount <- RecruitmentCandidate.selectCountByRun(run.runId)
-      resolvedMap    <- Player.resolveUsernames(invited.map(_.playerId))
+      resolvedMap    <- PlayerName.selectCurrentNames(invited.map(_.playerId))
       // Drop unresolved player_ids: paste-ready invite list, identical to the server's `usernamesFor`, so the file
       // matches `--report`/clipboard. Rendering is the caller's job (via `formatRecruitmentOutput`) — no formatting here.
       usernames = invited.flatMap(c => resolvedMap.get(c.playerId))

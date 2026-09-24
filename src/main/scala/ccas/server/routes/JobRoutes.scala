@@ -16,7 +16,7 @@ import ccas.analysis.apps.membership.MembershipApp
 import ccas.analysis.apps.recruitment.RecruitmentApp
 import ccas.analysis.apps.ref.RefApp
 import ccas.analysis.apps.stats.StatsApp
-import ccas.analysis.tables.{Player, RecruitmentCandidate, RecruitmentRun, RunTrigger}
+import ccas.analysis.tables.{PlayerName, RecruitmentCandidate, RecruitmentRun, RunTrigger}
 import ccas.analysis.tables.subtypes.RecruitmentRunId
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId, Username}
 import ccas.server.jobs.*
@@ -426,7 +426,7 @@ object JobRoutes {
     * an invitable Chess.com handle, and these lists are meant to be pasted into invites.
     */
   private def usernamesFor(candidates: List[RecruitmentCandidate]): RIO[PostgresClient, List[String]] =
-    Player.resolveUsernames(candidates.map(_.playerId)).map { resolved =>
+    PlayerName.selectCurrentNames(candidates.map(_.playerId)).map { resolved =>
       candidates.flatMap(c => resolved.get(c.playerId)).map(Username.unwrap)
     }
 

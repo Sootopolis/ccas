@@ -121,7 +121,7 @@ object TestSharedContext extends ZIOSpecDefault {
         _ <- ClubMember.insert(ClubMember(clubAId, player2Id, Times.t0, None, sinceApproximate = false))
 
         allMembers <- ClubMember.selectClub(clubAId)
-        playerById = Map(player1Id -> player1, player2Id -> player2)
+        memberNames = Map(player1Id -> player1.username, player2Id -> player2.username)
 
         // alice was already queried by a prior club
         shared <- SharedContext.make
@@ -132,7 +132,7 @@ object TestSharedContext extends ZIOSpecDefault {
         skipCtr <- Ref.make(0)
         result <- HistorySeeding
           .seedFromMemberMatches(
-            client, clubAId, clubASlug, allMembers, Set.empty, playerById, Set.empty, false, Some(shared), skipCtr
+            client, clubAId, clubASlug, allMembers, Set.empty, memberNames, Set.empty, false, Some(shared), skipCtr
           )
           .provideSomeEnvironment[PostgresClient](_.add[ProgressDisplay](ProgressDisplay.make(enabled = false)))
         _ <- ZIO.foreachDiscard(List(ClubMatchId(6001)))(id =>
@@ -154,7 +154,7 @@ object TestSharedContext extends ZIOSpecDefault {
         _ <- ClubMember.insert(ClubMember(clubBId, player1Id, Times.t0, None, sinceApproximate = false))
 
         allMembers <- ClubMember.selectClub(clubBId)
-        playerById = Map(player1Id -> player1)
+        memberNames = Map(player1Id -> player1.username)
 
         // alice was already queried by club A
         shared <- SharedContext.make
@@ -164,7 +164,7 @@ object TestSharedContext extends ZIOSpecDefault {
         skipCtr <- Ref.make(0)
         _ <- HistorySeeding
           .seedFromMemberMatches(
-            client, clubBId, clubBSlug, allMembers, Set.empty, playerById, Set.empty, false, Some(shared), skipCtr
+            client, clubBId, clubBSlug, allMembers, Set.empty, memberNames, Set.empty, false, Some(shared), skipCtr
           )
           .provideSomeEnvironment[PostgresClient](_.add[ProgressDisplay](ProgressDisplay.make(enabled = false)))
 
@@ -196,7 +196,7 @@ object TestSharedContext extends ZIOSpecDefault {
         skipCtr <- Ref.make(0)
         _ <- HistorySeeding
           .seedFromMemberMatches(
-            client, clubAId, clubASlug, members, Set.empty, Map(player3Id -> player3), Set.empty, false,
+            client, clubAId, clubASlug, members, Set.empty, Map(player3Id -> player3.username), Set.empty, false,
             Some(shared), skipCtr
           )
           .provideSomeEnvironment[PostgresClient](_.add[ProgressDisplay](ProgressDisplay.make(enabled = false)))

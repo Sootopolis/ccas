@@ -190,55 +190,59 @@ object RefApp extends ZIOAppDefault {
   // a shared Frag because Magnum's sql interpolator only splices DbCodec values, not Frags.
   // Keep both queries' OR-chains in lockstep when adding/removing reasons or windows.
 
+  // Both read the name held now, not the display cache: resolution fetches under it and matches the board
+  // by it, and a cached name may belong to whoever took it (ADR 0016). Holding none, a subject waits.
+
   private def selectUnresolvedPlayers(forceSkipped: Boolean): RIO[PostgresClient, List[UnresolvedPlayer]] =
     if (forceSkipped) {
       connectZIO {
-        sql"""SELECT p.player_id, p.username
-              FROM player p
-              LEFT JOIN player_match_ref pmr ON p.player_id = pmr.player_id
-              LEFT JOIN player_tournament_ref ptr ON p.player_id = ptr.player_id
-              WHERE pmr.player_id IS NULL AND ptr.player_id IS NULL""".query[UnresolvedPlayer].run().toList
+        sql"""SELECT n.player_id, n.username
+              FROM player_name n
+              LEFT JOIN player_match_ref pmr ON n.player_id = pmr.player_id
+              LEFT JOIN player_tournament_ref ptr ON n.player_id = ptr.player_id
+              WHERE n.until IS NULL AND pmr.player_id IS NULL AND ptr.player_id IS NULL""".query[UnresolvedPlayer]
+          .run().toList
       }
     } else {
       val c = RetryWindows.allCutoffs(Instant.now())
       connectZIO {
-        sql"""SELECT p.player_id, p.username
-              FROM player p
-              LEFT JOIN player_match_ref pmr ON p.player_id = pmr.player_id
-              LEFT JOIN player_tournament_ref ptr ON p.player_id = ptr.player_id
-              LEFT JOIN player_ref_skip prs ON p.player_id = prs.player_id
+        sql"""SELECT n.player_id, n.username
+              FROM player_name n
+              LEFT JOIN player_match_ref pmr ON n.player_id = pmr.player_id
+              LEFT JOIN player_tournament_ref ptr ON n.player_id = ptr.player_id
+              LEFT JOIN player_ref_skip prs ON n.player_id = prs.player_id
                 AND ((prs.reason = 'NoData'           AND prs.last_attempted > ${c.noData})
                   OR (prs.reason = 'NotFound'         AND prs.last_attempted > ${c.notFound})
                   OR (prs.reason = 'IdMismatch'       AND prs.last_attempted > ${c.idMismatch})
                   OR (prs.reason = 'ResolutionFailed' AND prs.last_attempted > ${c.resolutionFailed})
                   OR (prs.reason = 'ApiError'         AND prs.last_attempted > ${c.apiError}))
-              WHERE pmr.player_id IS NULL AND ptr.player_id IS NULL AND prs.player_id IS NULL""".query[
-          UnresolvedPlayer
-        ].run().toList
+              WHERE n.until IS NULL AND pmr.player_id IS NULL AND ptr.player_id IS NULL
+                AND prs.player_id IS NULL""".query[UnresolvedPlayer].run().toList
       }
     }
 
   private def selectUnresolvedClubs(forceSkipped: Boolean): RIO[PostgresClient, List[UnresolvedClub]] =
     if (forceSkipped) {
       connectZIO {
-        sql"""SELECT c.club_id, c.slug
-              FROM club c
-              LEFT JOIN club_match_ref cmr ON c.club_id = cmr.club_id
-              WHERE cmr.club_id IS NULL""".query[UnresolvedClub].run().toList
+        sql"""SELECT n.club_id, n.slug
+              FROM club_name n
+              LEFT JOIN club_match_ref cmr ON n.club_id = cmr.club_id
+              WHERE n.until IS NULL AND cmr.club_id IS NULL""".query[UnresolvedClub].run().toList
       }
     } else {
       val c = RetryWindows.allCutoffs(Instant.now())
       connectZIO {
-        sql"""SELECT c.club_id, c.slug
-              FROM club c
-              LEFT JOIN club_match_ref cmr ON c.club_id = cmr.club_id
-              LEFT JOIN club_ref_skip crs ON c.club_id = crs.club_id
+        sql"""SELECT n.club_id, n.slug
+              FROM club_name n
+              LEFT JOIN club_match_ref cmr ON n.club_id = cmr.club_id
+              LEFT JOIN club_ref_skip crs ON n.club_id = crs.club_id
                 AND ((crs.reason = 'NoData'           AND crs.last_attempted > ${c.noData})
                   OR (crs.reason = 'NotFound'         AND crs.last_attempted > ${c.notFound})
                   OR (crs.reason = 'IdMismatch'       AND crs.last_attempted > ${c.idMismatch})
                   OR (crs.reason = 'ResolutionFailed' AND crs.last_attempted > ${c.resolutionFailed})
                   OR (crs.reason = 'ApiError'         AND crs.last_attempted > ${c.apiError}))
-              WHERE cmr.club_id IS NULL AND crs.club_id IS NULL""".query[UnresolvedClub].run().toList
+              WHERE n.until IS NULL AND cmr.club_id IS NULL AND crs.club_id IS NULL""".query[UnresolvedClub].run()
+          .toList
       }
     }
 
@@ -291,11 +295,11 @@ object RefApp extends ZIOAppDefault {
 
   private def selectTournamentOnlyPlayersWithSlug: RIO[PostgresClient, List[TournamentRefPlayer]] =
     connectZIO {
-      sql"""SELECT p.player_id, p.username, ptr.tournament_slug
-            FROM player p
-            INNER JOIN player_tournament_ref ptr ON p.player_id = ptr.player_id
-            LEFT JOIN player_match_ref pmr ON p.player_id = pmr.player_id
-            WHERE pmr.player_id IS NULL""".query[TournamentRefPlayer].run().toList
+      sql"""SELECT n.player_id, n.username, ptr.tournament_slug
+            FROM player_name n
+            INNER JOIN player_tournament_ref ptr ON n.player_id = ptr.player_id
+            LEFT JOIN player_match_ref pmr ON n.player_id = pmr.player_id
+            WHERE n.until IS NULL AND pmr.player_id IS NULL""".query[TournamentRefPlayer].run().toList
     }
 
   // --- Report ---

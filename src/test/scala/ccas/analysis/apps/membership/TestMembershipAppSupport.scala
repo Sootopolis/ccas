@@ -13,7 +13,7 @@ import ccas.analysis.tables.{Club, ClubMember, Player, PlayerMatchRef, PlayerSna
 import ccas.analysis.tables.subtypes.RecruitmentRunId
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId}
 import ccas.utils.client.{BodyStore, ChessComClient, TestChessComClientSupport}
-import ccas.utils.sql.PostgresClient
+import ccas.utils.sql.{PostgresClient, TestDbCleanup}
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient.connectZIO
 
@@ -85,7 +85,7 @@ object TestMembershipAppSupport {
         connectZIO(sql"DELETE FROM recruitment_candidate WHERE player_id = $pid".update.run()) *>
           connectZIO(sql"DELETE FROM player_match_ref WHERE player_id = $pid".update.run()) *>
           connectZIO(sql"DELETE FROM player_snapshot WHERE player_id = $pid".update.run()) *>
-          connectZIO(sql"DELETE FROM player WHERE player_id = $pid".update.run())
+          TestDbCleanup.deletePlayer(pid)
       }
       _ <- Club.upsert(club)
       _ <- ZIO.whenDiscard(players.nonEmpty)(Player.insertBatch(players))

@@ -3,7 +3,7 @@ package ccas.analysis.apps.clubdata
 import zio.{RIO, ZIO}
 
 import ccas.analysis.apps.{PlayerUpdater, UsernameRenameResolver}
-import ccas.analysis.tables.{ClubAdmin, Player}
+import ccas.analysis.tables.{ClubAdmin, PlayerName}
 import ccas.api.misc.subtypes.{ClubId, PlayerId, Username}
 import ccas.api.player.ApiPlayer
 
@@ -13,8 +13,8 @@ import ccas.utils.sql.PostgresClient.withTransaction
 
 object ClubAdminResolver {
 
-  /** Resolves admin usernames to player IDs (fetching `ApiPlayer` for any usernames not already known in the `player`
-    * table, archiving prior state to `player_snapshot` when an existing row by `player_id` has drifted, and inserting
+  /** Resolves admin usernames to player IDs (fetching `ApiPlayer` for any usernames no player is known to hold now,
+    * archiving prior state to `player_snapshot` when an existing row by `player_id` has drifted, and inserting
     * new rows otherwise — via [[PlayerUpdater.reconcile]]), then atomically replaces the `club_admin` rows for the
     * club via [[ClubAdmin.replaceForClub]] when the resolved set differs from `existingAdminIds`. Per-username
     * resolution failures are logged and dropped from the result. Returns the resolved set of admin player IDs that
@@ -31,8 +31,7 @@ object ClubAdminResolver {
         .as(Set.empty[PlayerId])
     } else {
       for {
-        knownPlayers <- Player.selectByUsernames(adminUsernames)
-        knownByUsername = knownPlayers.map(p => p.username -> p.playerId).toMap
+        knownByUsername <- PlayerName.selectCurrentHolders(adminUsernames)
         unknownUsernames = adminUsernames -- knownByUsername.keySet
 
         resolvedUnknowns <- ZIO.foreach(unknownUsernames.toList) { username =>

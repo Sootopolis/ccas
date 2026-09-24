@@ -3,7 +3,7 @@ package ccas.utils.sql
 import com.augustnagro.magnum.sql
 import zio.RIO
 
-import ccas.api.misc.subtypes.ClubId
+import ccas.api.misc.subtypes.{ClubId, PlayerId}
 import ccas.utils.sql.PostgresClient.transactZIO
 
 /** Feature-scoped, FK-aware DELETE helpers for tests. Each helper clears its named feature's tables in
@@ -19,7 +19,7 @@ import ccas.utils.sql.PostgresClient.transactZIO
   */
 object TestDbCleanup {
 
-  /** Clears: `player_snapshot`, `player`.
+  /** Clears: `player_name`, `player_snapshot`, `player`.
     *
     * Does NOT clear other FK children of `player`: `player_match_ref`, `player_tournament_ref`, `player_ref_skip`,
     * `player_recruitment_cache`, `recruitment_candidate`, `recruitment_blacklist`, `club_admin`, `club_member`.
@@ -27,6 +27,7 @@ object TestDbCleanup {
     * `DELETE FROM player` will fail with an FK violation.
     */
   val clearPlayer: RIO[PostgresClient, Unit] = transactZIO {
+    sql"DELETE FROM player_name".update.run()
     sql"DELETE FROM player_snapshot".update.run()
     sql"DELETE FROM player".update.run()
   }.unit
@@ -67,6 +68,14 @@ object TestDbCleanup {
   def deleteClub(clubId: ClubId): RIO[PostgresClient, Unit] = transactZIO {
     sql"DELETE FROM club_name WHERE club_id = $clubId".update.run()
     sql"DELETE FROM club WHERE club_id = $clubId".update.run()
+  }.unit
+
+  /** Deletes one player with its `player_name` rows. Its other FK children must already be gone, as for
+    * [[clearPlayer]].
+    */
+  def deletePlayer(playerId: PlayerId): RIO[PostgresClient, Unit] = transactZIO {
+    sql"DELETE FROM player_name WHERE player_id = $playerId".update.run()
+    sql"DELETE FROM player WHERE player_id = $playerId".update.run()
   }.unit
 
   /** `recruitment_blacklist`. */

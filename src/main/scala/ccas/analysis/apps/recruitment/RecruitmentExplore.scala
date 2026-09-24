@@ -127,10 +127,10 @@ private[recruitment] object RecruitmentExplore {
   private def checkRecentlyRejected(ctx: ExploreContext, username: Username): RIO[PostgresClient, Boolean] =
     ctx.runCtx.criteria.daysSinceRejected.fold(ZIO.succeed(false)) { days =>
       for {
-        playerOption <- Player.selectByUsername(username)
-        rejectOption <- ZIO.foreach(playerOption)(p =>
+        playerIdOption <- PlayerName.selectCurrentHolder(username)
+        rejectOption   <- ZIO.foreach(playerIdOption)(playerId =>
           RecruitmentCandidate.selectLatestRejectedByAlias(
-            p.playerId,
+            playerId,
             ctx.runCtx.clubId,
             ctx.runCtx.alias
           )
@@ -381,21 +381,18 @@ private[recruitment] object RecruitmentExplore {
       client.get[ApiPlayerArchive](ApiPlayerArchive.getUrl(uname, ym.getYear, ym.getMonthValue))
 
     for {
-      tmPlayers <- PlayerRecruitmentCache.selectTmActive(20)
-      players   <- Player.selectByIds(tmPlayers.map(_.playerId))
-      activePlayers = players.filterNot(_.isTombstoned).map(p => (p.playerId, p.username))
-      opponentSets <- ZIO.foreachPar(activePlayers) { case (playerId, username) =>
+      tmPlayers   <- PlayerRecruitmentCache.selectTmActive(20)
+      playerNames <- PlayerName.selectCurrentNames(tmPlayers.map(_.playerId))
+      opponentSets <- ZIO.foreachPar(playerNames.toList) { case (playerId, username) =>
         val gather = for {
           archives <- ZIO.foreachPar(months) { ym =>
             fetchMonth(username, ym)
               .withPlayerRenameRecovery(client, username, Some(playerId))(uname => fetchMonth(uname, ym))
           }
-          // Post-recovery the games' username field reflects the canonical handle; using the original `username`
-          // would treat the renamed player AS their own opponent. Re-read off `Player` after the fan-out (rather
-          // than reusing the pre-fetched `players` list) because the wrap may have just reconciled this row with a
-          // fresh name. Tombstoned rows fall back to the input username so a `_stale_<id>` placeholder doesn't
-          // leak into the opponent predicate. N+1 lookup is bounded by `selectTmActive(20)`.
-          effectiveUname <- Player.selectId(playerId).map(_.filterNot(_.isTombstoned).fold(username)(_.username))
+          // Re-read the current name after the fan-out: the wrap may just have recorded a fresh one, and the games name
+          // the canonical handle, so the stale input would count the player as their own opponent. A player holding
+          // none falls back to the input. The N+1 lookup is bounded by `selectTmActive(20)`.
+          effectiveUname <- PlayerName.selectCurrentName(playerId).map(_.getOrElse(username))
         } yield archives.flatMap(
           _.games.filter(g => g.timeClass == "daily" && g.`match`.isDefined && g.endTime >= cutoff.getEpochSecond)
         ).flatMap(nonTimeoutOpponent(_, effectiveUname)).toSet
@@ -421,8 +418,7 @@ private[recruitment] object RecruitmentExplore {
         val isTeam1 = m.team1ClubIdOption.contains(clubId)
         bs.flatMap(b => if (isTeam1) b.team2PlayerIdOption else b.team1PlayerIdOption)
       }.toSet
-      players <- Player.selectByIds(opponentIds)
-      usernames = players.filterNot(_.isTombstoned).map(_.username)
+      usernames <- PlayerName.selectCurrentNames(opponentIds).map(_.values.toList)
       _ <- ZIO.logInfo(s"[Explore] Match board opponents strategy found ${usernames.size} players")
     } yield
       if (usernames.isEmpty) Nil

@@ -216,9 +216,7 @@ object TestRefAppSupport {
       _ <- ZIO.foreachDiscard(testPlayerIds) { pid =>
         connectZIO(sql"DELETE FROM player_snapshot WHERE player_id = $pid".update.run())
       }
-      _ <- ZIO.foreachDiscard(testPlayerIds) { pid =>
-        connectZIO(sql"DELETE FROM player WHERE player_id = $pid".update.run())
-      }
+      _ <- ZIO.foreachDiscard(testPlayerIds)(TestDbCleanup.deletePlayer)
       _ <- ZIO.foreachDiscard(testClubIds)(TestDbCleanup.deleteClub)
       // Insert test data
       _ <- Player.insert(Player(pid0, t0, Username("alice"), Active, None, t0))

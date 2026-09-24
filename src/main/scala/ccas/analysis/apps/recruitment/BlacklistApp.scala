@@ -104,8 +104,8 @@ object BlacklistApp extends ZIOAppDefault {
   /** Answers whether the player was blacklisted for the club. */
   def removeFromBlacklist(club: NamedClub, username: Username): RIO[PostgresClient, Boolean] =
     for {
-      ps   <- Player.selectByUsername(username).someOrFail(NotFoundException(s"Player not found: $username"))
-      rows <- RecruitmentBlacklist.delete(club.clubId, ps.playerId)
+      playerId <- PlayerName.selectCurrentHolder(username).someOrFail(NotFoundException(s"Player not found: $username"))
+      rows     <- RecruitmentBlacklist.delete(club.clubId, playerId)
       _ <- ZIO.logInfo(
         if (rows > 0) s"Removed $username from blacklist for ${club.slug}"
         else s"$username was not blacklisted for ${club.slug}"

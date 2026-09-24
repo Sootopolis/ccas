@@ -53,9 +53,9 @@ object RecruitmentBlacklist {
 
   def selectActiveByClub(clubId: ClubId, now: Instant): ZIO[PostgresClient, SQLException, List[BlacklistEntry]] =
     connectZIO {
-      sql"""SELECT rb.club_id, rb.player_id, p.username, rb.added_at, rb.expires_at, rb.reason
+      sql"""SELECT rb.club_id, rb.player_id, n.username, rb.added_at, rb.expires_at, rb.reason
             FROM recruitment_blacklist rb
-            LEFT JOIN player p ON p.player_id = rb.player_id
+            LEFT JOIN player_name n ON n.player_id = rb.player_id AND n.until IS NULL
             WHERE rb.club_id = $clubId
               AND (rb.expires_at IS NULL OR rb.expires_at > $now)
             ORDER BY rb.added_at DESC"""

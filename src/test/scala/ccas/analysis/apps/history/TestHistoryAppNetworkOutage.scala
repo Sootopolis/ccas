@@ -54,7 +54,7 @@ object TestHistoryAppNetworkOutage extends ZIOSpecDefault {
             clubSlug,
             allMembers = List(member),
             queriedIds = Set.empty,
-            playerById = Map(pid -> player),
+            memberNames = Map(pid -> username),
             excludeMatchIds = Set.empty,
             includeFinished = false,
             shared = None,

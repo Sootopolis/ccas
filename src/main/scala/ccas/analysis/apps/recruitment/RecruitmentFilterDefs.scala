@@ -365,11 +365,9 @@ private[recruitment] object RecruitmentFilterDefs {
         apiPlayer <- requireApiPlayer(env)
         playerStats <- fetch(env.candidate.username)
           .withPlayerRenameRecovery(env.run.client, env.candidate.username, Some(apiPlayer.playerId))(fetch)
-        // After rename recovery the Player row holds the canonical handle; downstream archive fetches and
+        // After rename recovery `player_name` holds the canonical handle; downstream archive fetches and
         // username-keyed predicates in `applyDailyStats` must use that handle, not the stale `env.candidate.username`.
-        // Filter tombstoned rows so a `_stale_<id>` placeholder never leaks into the archive URL or predicates.
-        effectiveUname <- Player.selectId(apiPlayer.playerId)
-          .map(_.filterNot(_.isTombstoned).fold(env.candidate.username)(_.username))
+        effectiveUname <- PlayerName.selectCurrentName(apiPlayer.playerId).map(_.getOrElse(env.candidate.username))
         result <- playerStats.chessDaily match {
           case None             => ZIO.succeed(FilterResult(true, env.candidate))
           case Some(dailyStats) => applyDailyStats(env, dailyStats, effectiveUname)
