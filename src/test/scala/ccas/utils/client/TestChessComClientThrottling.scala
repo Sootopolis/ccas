@@ -1,12 +1,12 @@
 package ccas.utils.client
 
-import java.io.IOException
+import java.io.{File, IOException}
 import java.net.UnknownHostException
 import java.util.concurrent.TimeUnit
 
 import scala.util.Try
 
-import com.typesafe.config.ConfigFactory
+import com.typesafe.config.{ConfigFactory, ConfigResolveOptions, ConfigValueFactory}
 import io.netty.handler.codec.PrematureChannelClosureException
 import zio.*
 import zio.http.*
@@ -20,8 +20,6 @@ import ccas.utils.client.ChessComClient.ChessComClientConfig.*
 import ccas.utils.client.TestChessComClientSupport.*
 import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
 import ccas.utils.sql.PostgresClient.connectZIO
-import zio.config.magnolia.DeriveConfig
-import zio.config.typesafe.TypesafeConfigProvider
 
 object TestChessComClientThrottling extends ZIOSpecDefault {
 
@@ -1153,7 +1151,8 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
     },
     suiteTimingStats,
     suiteAbsence,
-    suiteStatsAccumulator
+    suiteStatsAccumulator,
+    suiteConfig
   ).provideShared(
     FreshSchemaLayer("test_client_throttling", Tables.ensureTables)
   ) @@ TestAspect.timeout(15.seconds)
@@ -1496,13 +1495,13 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
         ClientStatsAccumulator.serializeTierMap(Map(8 -> 5L, 2 -> 3L, 4 -> 1L)) == "2:3|4:1|8:5",
         ClientStatsAccumulator.serializeTierMap(Map.empty) == ""
       )
-    },
+    }
+  )
+
+  private def suiteConfig = suite("ChessComClientConfig")(
     test("ChessComClientConfig loads from test application.conf") {
-      val provider = TypesafeConfigProvider.fromTypesafeConfig(
-        ConfigFactory.load(), enableCommaSeparatedValueAsList = true
-      )
       for {
-        cfg <- provider.load(summon[DeriveConfig[ChessComClientConfig]].desc.nested("chess-com-client"))
+        cfg <- ChessComClient.loadConfig(ConfigFactory.load())
         tc  <- ZIO.attempt(cfg.toThrottleConfig)
       } yield assertTrue(
         cfg.contactEmail == "test@test.com",
@@ -1525,6 +1524,23 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
         tc.cooldown == 1.second,
         tc.retryBase == 1.second
       )
+    },
+    test("ChessComClientConfig refuses a blank contact email") {
+      val blank = ConfigFactory.load().withValue("chess-com-client.contact-email", ConfigValueFactory.fromAnyRef(" "))
+      for {
+        exit <- ChessComClient.loadConfig(blank).exit
+      } yield assertTrue(exit.causeOption.flatMap(_.failureOption).exists(_.getMessage.contains("CCAS_CONTACT_EMAIL")))
+    },
+    // A program that never calls Chess.com (`Tables`) must load config without CCAS_CONTACT_EMAIL. Resolves the shipped
+    // file with no environment at all, so CI's exported CCAS_CONTACT_EMAIL cannot make it pass.
+    test("the shipped application.conf resolves with no environment") {
+      for {
+        resolved <- ZIO.attempt(
+          ConfigFactory
+            .parseFile(new File("src/main/resources/application.conf"))
+            .resolve(ConfigResolveOptions.defaults().setUseSystemEnvironment(false))
+        )
+      } yield assertTrue(resolved.getString("chess-com-client.contact-email").isEmpty)
     },
   )
 }
