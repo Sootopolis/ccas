@@ -63,3 +63,13 @@ jobs:
           # (sbt 2 nests it under `target/out/`), and `if: always()` means a stale glob reports an empty run.
           path: '**/test-reports/TEST-*.xml'
           reporter: java-junit
+
+  # Its own job so a docs failure neither skips the tests nor waits on the JDK and Postgres setup.
+  docs:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Check the documentation standard
+        run: python3 scripts/check-docs.py

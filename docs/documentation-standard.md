@@ -127,7 +127,7 @@ The fourth was not an ADR and was not forced into the numbering: `chess-com-clie
 
 ## 9. Enforcement
 
-`scripts/check-docs.py` runs from `.githooks/pre-push` (enable per clone with `git config core.hooksPath .githooks`). Run it directly with `python3 scripts/check-docs.py`.
+`scripts/check-docs.py` runs from `.githooks/pre-push` (enable per clone with `git config core.hooksPath .githooks`) and as CI's `docs` job, which also catches a push that bypassed the hook. Run it directly with `python3 scripts/check-docs.py`.
 
 1. **Comment-block length** — a block comment over 15 lines, or a run of `//` lines over 8, fails.
 2. **`CLAUDE.md` size** — over the §6 word budget fails.
