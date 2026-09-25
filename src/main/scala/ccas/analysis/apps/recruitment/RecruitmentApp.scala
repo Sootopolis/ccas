@@ -429,17 +429,17 @@ object RecruitmentApp extends ZIOAppDefault {
       _ <- ZIO.whenDiscard(trigger != RunTrigger.Cli)(
         ZIO.foreachDiscard(confirmed)(c => ZIO.logInfo(s"  ${c.username}"))
       )
-      // Cumulative summary: show today's total across all runs
+      // Cumulative summary: show today's total across all runs. This run is already among them — the transaction above
+      // committed its Invited outcomes and its completed_at, which is what `selectInvitedToday` filters on.
       _ <- ZIO.whenDiscard(cumulative && alreadyFound > 0) {
         for {
-          earlierCandidates  <- RecruitmentCandidate.selectInvitedToday(clubId, alias)
-          earlierResolvedMap <- PlayerName.selectCurrentNames(earlierCandidates.map(_.playerId))
-          earlierUsernames = earlierCandidates.map(c =>
-            earlierResolvedMap.getOrElse(c.playerId, Username.wrap(s"[pid=${c.playerId}]"))
+          todayCandidates  <- RecruitmentCandidate.selectInvitedToday(clubId, alias)
+          todayResolvedMap <- PlayerName.selectCurrentNames(todayCandidates.map(_.playerId))
+          todayUsernames = todayCandidates.map(c =>
+            todayResolvedMap.getOrElse(c.playerId, Username.wrap(s"[pid=${c.playerId}]"))
           )
-          allToday = earlierUsernames ++ confirmed.map(_.username)
-          _ <- ZIO.logInfo(s"=== Today's Total: ${allToday.size} ===")
-          _ <- ZIO.foreachDiscard(allToday)(u => ZIO.logInfo(s"  $u"))
+          _ <- ZIO.logInfo(s"=== Today's Total: ${todayUsernames.size} ===")
+          _ <- ZIO.foreachDiscard(todayUsernames)(u => ZIO.logInfo(s"  $u"))
         } yield ()
       }
     } yield finalRun

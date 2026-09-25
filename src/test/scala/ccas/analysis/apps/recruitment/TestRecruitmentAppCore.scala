@@ -4,13 +4,14 @@ import java.time.{Duration, Instant}
 
 import com.augustnagro.magnum.sql
 import zio.{ZIO, ZLayer}
-import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
+import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault, ZTestLogger}
 
 import ccas.analysis.apps.NamedClub
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.*
 import ccas.analysis.tables.*
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, Elo, PlayerId, Username}
-import ccas.utils.sql.FreshSchemaLayer
+import ccas.utils.client.BodyStore
+import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
 import ccas.utils.sql.PostgresClient.connectZIO
 import ccas.utils.ProgressDisplay
 
@@ -405,7 +406,44 @@ object TestRecruitmentAppCore extends ZIOSpecDefault {
         deferredAfter.isEmpty,
         runAfter.get.candidatesFound == 2
       )
-    }
+    },
+    test("--cumulative: Today's Total lists each of today's invites once, this run's included") {
+      def responses(candidate: String, playerId: Long) = Map(
+        s"club/$clubSlug"         -> apiClubJson(clubId.value, clubSlug.value),
+        s"club/$clubSlug/members" -> apiClubMembersJson(List(("existing", Times.t0.getEpochSecond))),
+        "club/source-club"        -> apiClubJson(sourceClubId.value, "source-club"),
+        "club/source-club/members" -> apiClubMembersJson(
+          List(("existing", Times.t0.getEpochSecond), (candidate, Times.t0.getEpochSecond))
+        ),
+        "player/existing"    -> apiPlayerJson(199, "existing"),
+        s"player/$candidate" -> apiPlayerJson(playerId, candidate)
+      )
+      for {
+        _       <- seedDb
+        _       <- seedCriteria(makeCriteria())
+        clientA <- fakeChessComClient(responses("candidate-a", 200))
+        _ <- runRecruit(
+          client = clientA,
+          sourceClubs = List(ClubSlug("source-club")),
+          target = Some(3),
+          cumulative = true
+        )
+        clientB <- fakeChessComClient(responses("candidate-b", 201))
+        runB <- runRecruit(
+          client = clientB,
+          sourceClubs = List(ClubSlug("source-club")),
+          target = Some(3),
+          cumulative = true
+        )
+        logged <- ZTestLogger.logOutput.map(_.map(_.message()))
+        todaysTotal = logged.dropWhile(!_.startsWith("=== Today's Total"))
+      } yield assertTrue(
+        // Run A's find counts toward the target, leaving run B two to find.
+        runB.target.contains(2),
+        todaysTotal.headOption.contains("=== Today's Total: 2 ==="),
+        todaysTotal.drop(1).takeWhile(_.startsWith("  ")) == List("  candidate-a", "  candidate-b")
+      )
+    }.provideSomeLayer[PostgresClient & BodyStore & ProgressDisplay](ZTestLogger.default)
   )
   // ==========================================================================
   // Suite: Report mode

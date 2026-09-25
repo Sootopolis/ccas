@@ -633,7 +633,8 @@ object RecruitmentTestSupport {
     explore: Boolean = false,
     alias: String = "default",
     trigger: RunTrigger = RunTrigger.Api,
-    autoConfirm: Boolean = true
+    autoConfirm: Boolean = true,
+    cumulative: Boolean = false
   ): ZIO[ProgressDisplay & PostgresClient, Throwable, RecruitmentRun] =
     for {
       xa      <- ZIO.service[PostgresClient]
@@ -644,6 +645,7 @@ object RecruitmentTestSupport {
           expectedClubIdOption = None,
           alias = alias,
           target = target,
+          cumulative = cumulative,
           sourceClubs = sourceClubs,
           explore = explore,
           trigger = trigger,
