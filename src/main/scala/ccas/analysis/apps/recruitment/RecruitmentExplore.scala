@@ -17,8 +17,6 @@ import ccas.utils.ApiConcurrency
 
 private[recruitment] object RecruitmentExplore {
 
-  private case class EvaluatedCandidate(username: Username, outcome: CandidateOutcome)
-
   private case class ReplenishResult(
     newSources: List[SourceDescriptor],
     remainingStrategies: List[RIO[PostgresClient, List[SourceDescriptor]]]
@@ -35,8 +33,8 @@ private[recruitment] object RecruitmentExplore {
     roundRobinKeys: List[String]
   ): RIO[PostgresClient, Unit] =
     for {
-      invited <- ctx.invitedRef.get
-      _ <- ZIO.unlessDiscard(invited.size >= ctx.target) {
+      found <- ctx.foundRef.get
+      _ <- ZIO.whenDiscard(found.size < ctx.target) {
         if (activePool.isEmpty && pendingSources.isEmpty)
           tryReplenishAndContinue(ctx, activePool, visitedClubs, staticStrategies, roundRobinKeys)
         else
@@ -161,27 +159,25 @@ private[recruitment] object RecruitmentExplore {
       // Evaluate chunk with bounded parallelism — update refs per-candidate for lively progress
       results <- ZIO.foreachPar(filteredChunk) { u =>
         for {
-          outcome <- RecruitmentFilters.evaluateCandidate(ctx.runId, u, ctx.runCtx, ctx.filters)
-          count   <- ctx.evalCountRef.updateAndGet(_ + 1)
-          _       <- ctx.evaluatedRef.update(_ + u)
-          _       <- ZIO.whenDiscard(outcome == CandidateOutcome.Invited)(ctx.invitedRef.update(u :: _))
-          _       <- ZIO.whenDiscard(count % 4 == 0)(printProgress(ctx, sourceId))
-        } yield EvaluatedCandidate(u, outcome)
+          foundOption <- RecruitmentFilters.evaluateCandidate(ctx.runId, u, ctx.runCtx, ctx.filters)
+          count       <- ctx.evalCountRef.updateAndGet(_ + 1)
+          _           <- ctx.evaluatedRef.update(_ + u)
+          _           <- ZIO.foreachDiscard(foundOption)(found => ctx.foundRef.update(found :: _))
+          _           <- ZIO.whenDiscard(count % 4 == 0)(printProgress(ctx, sourceId))
+        } yield foundOption
       }.withParallelism(ApiConcurrency.fiberCap(ctx.runCtx.client))
       _ <- printProgress(ctx, sourceId) // ensure final state is rendered
 
-      // Batch-level cleanup
-      rejectedInBatch =
-        results.count(r => r.outcome == CandidateOutcome.Rejected || r.outcome == CandidateOutcome.Error)
-      hadInvite = results.exists(_.outcome == CandidateOutcome.Invited)
+      // Batch-level cleanup: every candidate not found was rejected or errored
+      rejectedInBatch = results.count(_.isEmpty)
+      hadInvite       = results.exists(_.isDefined)
       _ <- reclassifyExcessInvited(ctx)
 
       // Compute consecutive rejects: trailing rejects after last invite in chunk
       chunkConsecutiveRejects = {
-        val orderedResults = results.map(_.outcome)
-        val lastInviteIdx  = orderedResults.lastIndexWhere(_ == CandidateOutcome.Invited)
-        if (lastInviteIdx >= 0) orderedResults.drop(lastInviteIdx + 1).size
-        else sourceState.consecutiveRejects + orderedResults.size
+        val lastInviteIdx = results.lastIndexWhere(_.isDefined)
+        if (lastInviteIdx >= 0) results.drop(lastInviteIdx + 1).size
+        else sourceState.consecutiveRejects + results.size
       }
 
       updatedSource = pool3(sourceId).copy(
@@ -208,25 +204,25 @@ private[recruitment] object RecruitmentExplore {
 
   private def printProgress(ctx: ExploreContext, sourceId: String): UIO[Unit] =
     for {
-      invited   <- ctx.invitedRef.get
+      found     <- ctx.foundRef.get
       evalCount <- ctx.evalCountRef.get
       _ <- ctx.progressBar.print(
-        invited.size,
+        found.size,
         ctx.target,
-        s"[Progress] $sourceId | Evaluated: $evalCount | Invited: ${invited.size}/${ctx.target}"
+        s"[Progress] $sourceId | Evaluated: $evalCount | Found: ${found.size}/${ctx.target}"
       )
     } yield ()
 
-  /** When found count exceeds the target, trim the newest excess from invitedRef so the loop stops and the auto-confirm
+  /** When found count exceeds the target, trim the newest excess from foundRef so the loop stops and the auto-confirm
     * `found` list is capped. The excess candidates stay Deferred in the DB (carried to the next run via
     * `selectDeferredByClub`); the interactive confirm path caps its flip at the run's target, so a chunk overshoot never
     * invites beyond target. No DB write is needed here.
     */
   def reclassifyExcessInvited(ctx: ExploreContext): RIO[PostgresClient, Unit] =
-    // invitedRef is prepend-ordered (newest first), so drop excess from the head
-    ctx.invitedRef.update { invited =>
-      val excess = invited.size - ctx.target
-      if (excess > 0) invited.drop(excess) else invited
+    // foundRef is prepend-ordered (newest first), so drop excess from the head
+    ctx.foundRef.update { found =>
+      val excess = found.size - ctx.target
+      if (excess > 0) found.drop(excess) else found
     }
 
   // --- Source activation ---

@@ -64,6 +64,11 @@ private[recruitment] object CandidateContext {
     CandidateContext(username, apiPlayerOption = None, isNewPlayer = false, cacheOption = None)
 }
 
+/** A candidate who passed every filter. `username` is the handle the profile fetch answered with — after a rename
+  * recovery, not the name they were listed under.
+  */
+private[recruitment] case class FoundCandidate(playerId: PlayerId, username: Username)
+
 /** Groups contexts passed to each filter. */
 private[recruitment] case class FilterEnv(run: RunContext, candidate: CandidateContext)
 
@@ -115,7 +120,7 @@ private[recruitment] case class ExploreContext(
   clubSlug: ClubSlug,
   filters: List[RecruitmentFilter],
   runCtx: RunContext,
-  invitedRef: Ref[List[Username]],
+  foundRef: Ref[List[FoundCandidate]],
   evaluatedRef: Ref[Set[Username]],
   evalCountRef: Ref[Int],
   target: Int,

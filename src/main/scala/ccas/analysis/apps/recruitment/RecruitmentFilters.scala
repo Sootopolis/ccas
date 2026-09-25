@@ -16,12 +16,15 @@ private[recruitment] object RecruitmentFilters {
 
   // --- Public API ---
 
+  /** Evaluates the player listed as `username`; `Some` when every filter passed, leaving a `Deferred` row for
+    * confirmation.
+    */
   def evaluateCandidate(
     runId: RecruitmentRunId,
     username: Username,
     runCtx: RunContext,
     filters: List[RecruitmentFilter]
-  ): RIO[PostgresClient, CandidateOutcome] = {
+  ): RIO[PostgresClient, Option[FoundCandidate]] = {
     val candidateCtx = CandidateContext.initial(username)
     for {
       now <- Clock.instant
@@ -31,14 +34,14 @@ private[recruitment] object RecruitmentFilters {
         (outcome, finalCandidate) <- runFilters(env, filters, ctxRef)
         _                         <- persistCandidateResults(runId, now, finalCandidate, outcome, env.run.client)
         _                         <- writePlayerMatchRef(env.run.client, finalCandidate).ignore
-      } yield outcome).catchAll { error =>
+      } yield found(outcome, finalCandidate)).catchAll { error =>
         // A systemic outage hits every in-flight candidate; re-raise so the run aborts rather than persisting an
         // `Error` row for each (which would suppress them as evaluated). Genuine per-candidate errors still record.
         NetworkUnavailableException.recoverUnless(error) {
           for {
             latestCtx <- ctxRef.get
             _         <- persistCandidateResults(runId, now, latestCtx, CandidateOutcome.Error, env.run.client, Some(error.safeMessage))
-          } yield CandidateOutcome.Error
+          } yield None
         }
       }
     } yield result
@@ -78,4 +81,11 @@ private[recruitment] object RecruitmentFilters {
       case (r @ FilterResult(true, _), _)     => ZIO.succeed(r)
       case (FilterResult(false, ctx), filter) => ctxRef.set(ctx) *> filter(env.copy(candidate = ctx))
     }.map(r => (if (r.rejected) CandidateOutcome.Rejected else CandidateOutcome.Invited, r.candidate))
+
+  // Without a profile `persistCandidateResults` wrote no row, so there would be nothing to confirm. The handle is the
+  // one it wrote the player under.
+  private def found(outcome: CandidateOutcome, candidate: CandidateContext): Option[FoundCandidate] =
+    candidate.apiPlayerOption.flatMap { apiPlayer =>
+      Option.when(outcome == CandidateOutcome.Invited)(FoundCandidate(apiPlayer.playerId, candidate.username))
+    }
 }

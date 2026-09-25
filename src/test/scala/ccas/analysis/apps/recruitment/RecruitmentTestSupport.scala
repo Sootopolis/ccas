@@ -558,8 +558,8 @@ object RecruitmentTestSupport {
       revInvited <- ZIO.foldLeft(candidates)(List.empty[Username]) { case (invited, username) =>
         if (invited.size >= target) ZIO.succeed(invited)
         else
-          RecruitmentFilters.evaluateCandidate(runId, username, runCtx, filters).map { outcome =>
-            if (outcome == CandidateOutcome.Invited) username :: invited else invited
+          RecruitmentFilters.evaluateCandidate(runId, username, runCtx, filters).map { foundOption =>
+            foundOption.fold(invited)(_.username :: invited)
           }
       }
     } yield revInvited.reverse
