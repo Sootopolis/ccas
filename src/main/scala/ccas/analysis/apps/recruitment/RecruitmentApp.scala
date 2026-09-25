@@ -199,7 +199,7 @@ object RecruitmentApp extends ZIOAppDefault {
       excludedSlugs       <- ZIO.foreach(criteria.excludeClubs)(Club.selectId).map(_.flatten.map(_.slug).toSet)
       discoveredOpponents <- Ref.make(Set.empty[Username])
       failedAdminSlugs    <- Ref.make(Set.empty[ClubSlug])
-      invitedRef          <- Ref.make(List.empty[Username])
+      foundRef            <- Ref.make(List.empty[FoundCandidate])
       evaluatedRef        <- Ref.make(Set.empty[Username])
       abandonedOpponents  <- Ref.make(Set.empty[Username])
       evalCountRef        <- Ref.make(0)
@@ -226,7 +226,7 @@ object RecruitmentApp extends ZIOAppDefault {
         clubSlug = effectiveSlug,
         filters = filters,
         runCtx = runCtx,
-        invitedRef = invitedRef,
+        foundRef = foundRef,
         evaluatedRef = evaluatedRef,
         evalCountRef = evalCountRef,
         target = effectiveTarget,
@@ -372,7 +372,7 @@ object RecruitmentApp extends ZIOAppDefault {
     for {
       _     <- ctx.progressBar.finish
       _     <- RecruitmentExplore.reclassifyExcessInvited(ctx)
-      found <- ctx.invitedRef.get.map(_.reverse)
+      found <- ctx.foundRef.get.map(_.reverse)
 
       // --- End-of-API-work boundary ---
       // Exploration is done: no further requests will be made. Stamp the completion instant and (for the CLI prompt
@@ -385,11 +385,11 @@ object RecruitmentApp extends ZIOAppDefault {
 
       // --- Confirmation step: Deferred → Invited ---
       confirmed <-
-        if (interrupted || found.isEmpty) ZIO.succeed(List.empty[Username])
+        if (interrupted || found.isEmpty) ZIO.succeed(List.empty[FoundCandidate])
         else if (trigger == RunTrigger.Cli) promptConfirmation(found)
         // Deferred-confirm (interactive `ccas recruit`): leave found candidates Deferred so the CLI can confirm them
         // via the confirm endpoint. Not confirming here means nobody is burned if the operator declines.
-        else if (!autoConfirm) ZIO.succeed(List.empty[Username])
+        else if (!autoConfirm) ZIO.succeed(List.empty[FoundCandidate])
         else ZIO.succeed(found) // auto-confirm: Api/Scheduled default, and non-interactive `ccas recruit`
 
       evalCount <- ctx.evalCountRef.get
@@ -397,10 +397,9 @@ object RecruitmentApp extends ZIOAppDefault {
       alias     = ctx.runCtx.alias
       (finalRun, deferredCount) <- withTransaction {
         for {
-          _ <- ZIO.foreachDiscard(confirmed) { u =>
-            PlayerName.selectCurrentHolder(u)
-              .someOrFail(new SQLException(s"No player holds confirmed candidate $u"))
-              .flatMap(RecruitmentCandidate.updateOutcome(ctx.runId, _, CandidateOutcome.Invited))
+          _ <- ZIO.foreachDiscard(confirmed) { c =>
+            RecruitmentCandidate.updateOutcome(ctx.runId, c.playerId, CandidateOutcome.Invited)
+              .filterOrFail(_ == 1)(new SQLException(s"No candidate row in run ${ctx.runId} for ${c.username}"))
           }
           deferredCount <- RecruitmentCandidate.selectDeferredCountByRun(ctx.runId)
           finalRun = RecruitmentRun(
@@ -428,7 +427,7 @@ object RecruitmentApp extends ZIOAppDefault {
       _ <- ZIO.whenDiscard(deferredCount > 0)(ZIO.logInfo(s"Deferred: $deferredCount"))
       // CLI prompt already displayed candidates; skip redundant listing
       _ <- ZIO.whenDiscard(trigger != RunTrigger.Cli)(
-        ZIO.foreachDiscard(confirmed)(u => ZIO.logInfo(s"  $u"))
+        ZIO.foreachDiscard(confirmed)(c => ZIO.logInfo(s"  ${c.username}"))
       )
       // Cumulative summary: show today's total across all runs
       _ <- ZIO.whenDiscard(cumulative && alreadyFound > 0) {
@@ -438,17 +437,17 @@ object RecruitmentApp extends ZIOAppDefault {
           earlierUsernames = earlierCandidates.map(c =>
             earlierResolvedMap.getOrElse(c.playerId, Username.wrap(s"[pid=${c.playerId}]"))
           )
-          allToday = earlierUsernames ++ confirmed
+          allToday = earlierUsernames ++ confirmed.map(_.username)
           _ <- ZIO.logInfo(s"=== Today's Total: ${allToday.size} ===")
           _ <- ZIO.foreachDiscard(allToday)(u => ZIO.logInfo(s"  $u"))
         } yield ()
       }
     } yield finalRun
 
-  private def promptConfirmation(found: List[Username]): Task[List[Username]] =
+  private def promptConfirmation(found: List[FoundCandidate]): Task[List[FoundCandidate]] =
     for {
       _ <- ZIO.logInfo(s"\nFound ${found.size} candidates:")
-      _ <- ZIO.foreachDiscard(found)(u => ZIO.logInfo(s"  $u"))
+      _ <- ZIO.foreachDiscard(found)(c => ZIO.logInfo(s"  ${c.username}"))
       answer <- ZIO.attemptBlocking(
         StdIn.readLine(s"\nMark all ${found.size} candidates as Invited? [Y/n] ")
       ).orElse(ZIO.succeed("n"))

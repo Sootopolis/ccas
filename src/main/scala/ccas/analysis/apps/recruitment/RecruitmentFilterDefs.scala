@@ -39,9 +39,9 @@ private[recruitment] object RecruitmentFilterDefs {
   object FetchAndCheckPlayer extends RecruitmentFilter {
     def apply(env: FilterEnv): RIO[PostgresClient, FilterResult] =
       for {
-        // Use fetchOrRecover (no resolver-side reconcile). RecruitmentPersistence.writeCandidate handles the actual
-        // Player table writes based on `isNewPlayer`, so a single transactional write covers both rename archival
-        // (existingPlayerOption.isDefined) and fresh insert.
+        // Use fetchOrRecover (no resolver-side reconcile). RecruitmentPersistence.persistCandidateResults handles the
+        // actual Player table writes based on `isNewPlayer`, so a single transactional write covers both rename
+        // archival (existingPlayerOption.isDefined) and fresh insert.
         apiPlayer      <- UsernameRenameResolver.fetchOrRecover(env.run.client, env.candidate.username)
         existingPlayerOption <- Player.selectId(apiPlayer.playerId)
 

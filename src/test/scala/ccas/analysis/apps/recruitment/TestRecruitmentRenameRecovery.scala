@@ -4,14 +4,16 @@ import java.net.URI
 import java.time.Instant
 import zio.http.URL
 import zio.json.JsonDecoder
-import zio.{Ref, RIO}
-import zio.test.{Spec, TestAspect, ZIOSpecDefault, assertTrue}
+import zio.{Ref, RIO, ZLayer}
+import zio.test.{Spec, TestAspect, ZIOSpecDefault, ZTestLogger, assertTrue}
+import ccas.analysis.apps.TestTimes
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.*
 import ccas.analysis.tables.*
 import ccas.api.misc.enums.{ClubMatchStatus, PlayerStatus, PlayerStatusCategory, TimeClass}
 import ccas.api.misc.subtypes.{ClubMatchId, ClubSlug, Elo, Username}
 import ccas.api.player.{ApiPlayer, ApiPlayerArchive}
-import ccas.utils.client.ChessComClient
+import ccas.utils.ProgressDisplay
+import ccas.utils.client.{BodyStore, ChessComClient}
 import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
 
 /** Exercises rename recovery on the recruitment-side player fetches wired in PR for issue #22.
@@ -28,9 +30,11 @@ object TestRecruitmentRenameRecovery extends ZIOSpecDefault {
     checkClubsWrapRecoversFromClubs404,
     checkOngoingGamesWrapRecoversFromGames404,
     checkDailyStatsWrapRecoversFromStats404,
-    gatherClubCandidatesRecoversViaTierBMatchRef
+    gatherClubCandidatesRecoversViaTierBMatchRef,
+    recruitConfirmsRenamedCandidateById
   ).provideShared(
-    FreshSchemaLayer("test_recruitment_rename_recovery", onInit = Tables.ensureTables)
+    FreshSchemaLayer("test_recruitment_rename_recovery", onInit = Tables.ensureTables),
+    ZLayer.succeed(ProgressDisplay.make(enabled = false))
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock
 
   private val staleU = Username("alice-old")
@@ -300,4 +304,31 @@ object TestRecruitmentRenameRecovery extends ZIOSpecDefault {
       updatedClub.exists(_.slug == freshSlug)
     )
   }
+
+  // --- Confirmation ---
+
+  private def recruitConfirmsRenamedCandidateById = test("recruit: a candidate found under a renamed-away handle is confirmed by player id and logged under the verified handle") {
+    val joined = TestTimes.t0.getEpochSecond
+    val responses = Map(
+      s"club/$clubSlug"          -> apiClubJson(clubId.value, clubSlug.value),
+      s"club/$clubSlug/members"  -> apiClubMembersJson(List(("existing", joined))),
+      "club/source-club"         -> apiClubJson(sourceClubId.value, "source-club"),
+      "club/source-club/members" -> apiClubMembersJson(List(("alice-old", joined))),
+      "player/existing"          -> apiPlayerJson(199, "existing"),
+      "player/alice-new"         -> apiPlayerJson(200, "alice-new")
+    )
+    for {
+      _       <- seedRenameHistory
+      _       <- seedCriteria(makeCriteria())
+      client  <- fakeChessComClient(responses, failures = Set("alice-old"))
+      run     <- runRecruit(client, sourceClubs = List(ClubSlug("source-club")))
+      invited <- RecruitmentCandidate.selectInvitedByRun(run.runId)
+      logged  <- ZTestLogger.logOutput.map(_.map(_.message()))
+    } yield assertTrue(
+      run.candidatesFound == 1,
+      invited.map(_.playerId) == List(pid),
+      logged.contains("  alice-new"),
+      !logged.contains("  alice-old")
+    )
+  }.provideSomeLayer[PostgresClient & BodyStore & ProgressDisplay](ZTestLogger.default)
 }
