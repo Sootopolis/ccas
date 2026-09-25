@@ -97,11 +97,11 @@ Because step 1 keeps `wip` free of commits of its own, it can only ever lag the 
 - **If `wip` has somehow acquired an upstream again**, do not force-push it back into line — say so and ask. Getting it republished is the regression; a force-push would just entrench it.
 
 ## 8. Watch main CI
-- `gh run list --branch <base> --limit 1 --json databaseId,headSha` → confirm `headSha` is the merge commit before `gh run watch <id> --interval 20 --exit-status`. The newest run on base is not automatically yours; another PR landing between the merge and this step would have you reporting its result as this ship's. Report green/red.
+- `gh run list --commit <merge-sha> --json databaseId,event,status` → take the `push` run, then `gh run watch <id> --interval 20 --exit-status`. Look the run up by the merge commit, never as the newest run on base: that is not automatically yours — another PR may have landed since the merge, and `--branch <base> --limit 1` has listed a month-old run first with nothing else landing (#282). An empty list means GitHub has not registered the push yet; re-query rather than falling back to the newest run. Report green/red.
 
 ## 9. Update issues
 Backref comments should already be posted (step 3b); this step adds the merge SHA and closes what the PR resolved.
-- Issues the PR *resolves*: comment with the PR link + merge SHA, then close.
+- Issues the PR *resolves*: `gh issue comment` with the PR link + merge SHA, then `gh issue close` if it is still open. A closing keyword in the PR body (`Resolves #N`) closes the issue at merge, and `gh issue close --comment` on a closed issue refuses without posting the comment — so never let it carry the comment.
 - Issues *deferred* or `pending-decision`: comment a backref (PR + SHA), keep open. Never auto-close a `pending-decision` item.
 - If no issue is resolved by the PR, say so explicitly rather than silently skipping the step.
 
