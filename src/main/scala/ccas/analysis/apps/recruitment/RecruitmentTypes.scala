@@ -43,6 +43,9 @@ private[recruitment] case class RunContext(
 
 /** Accumulated per-candidate state — populated as filters run.
   *
+  * @param username
+  *   The handle Chess.com last answered to. A filter whose fetch recovers a rename writes the fresh one back, so later
+  *   filters and persistence never act on the name the player left.
   * @param cacheRejected
   *   Set by [[RecruitmentFilterDefs.CheckCacheCriteria]] when the candidate is rejected purely on cached stats (no
   *   fresh API data fetched beyond the initial player lookup). When true, no
@@ -64,7 +67,7 @@ private[recruitment] object CandidateContext {
     CandidateContext(username, apiPlayerOption = None, isNewPlayer = false, cacheOption = None)
 }
 
-/** A candidate who passed every filter. `username` is the handle the profile fetch answered with — after a rename
+/** A candidate who passed every filter. `username` is the handle Chess.com last answered to — after a rename
   * recovery, not the name they were listed under.
   */
 private[recruitment] case class FoundCandidate(playerId: PlayerId, username: Username)
@@ -90,7 +93,8 @@ private[recruitment] case class TmStatsResult(
   gamesFinished: Int,
   timeoutPct: Option[Double],
   lastTimeoutAt: Option[Instant],
-  opponentUsernames: Set[Username]
+  opponentUsernames: Set[Username],
+  username: Username
 )
 
 private[recruitment] case class ActivationResult(

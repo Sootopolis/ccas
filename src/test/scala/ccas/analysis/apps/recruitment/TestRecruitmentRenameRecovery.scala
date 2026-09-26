@@ -3,35 +3,44 @@ package ccas.analysis.apps.recruitment
 import java.net.URI
 import java.time.Instant
 import zio.http.URL
-import zio.json.JsonDecoder
-import zio.{Ref, RIO, ZLayer}
+import zio.{Ref, RIO, ZIO, ZLayer}
 import zio.test.{Spec, TestAspect, ZIOSpecDefault, ZTestLogger, assertTrue}
 import ccas.analysis.apps.TestTimes
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.*
 import ccas.analysis.tables.*
+import ccas.analysis.tables.subtypes.RecruitmentRunId
 import ccas.api.misc.enums.{ClubMatchStatus, PlayerStatus, PlayerStatusCategory, TimeClass}
 import ccas.api.misc.subtypes.{ClubMatchId, ClubSlug, Elo, Username}
-import ccas.api.player.{ApiPlayer, ApiPlayerArchive}
+import ccas.api.player.ApiPlayer
 import ccas.utils.ProgressDisplay
 import ccas.utils.client.{BodyStore, ChessComClient}
 import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
 
-/** Exercises rename recovery on the recruitment-side player fetches wired in PR for issue #22.
+/** Exercises rename recovery on the recruitment-side player fetches wired in PR for issue #22, and what an evaluation
+  * does with the handle it recovers.
   *
-  * Each test records the player holding the stale handle and then the canonical (post-rename) one, so the resolver's
+  * Most tests record the player holding the stale handle and then the canonical (post-rename) one, so the resolver's
   * Tier A history lookup can rediscover the canonical name without needing a board endpoint trick.
   */
 object TestRecruitmentRenameRecovery extends ZIOSpecDefault {
 
   override def spec: Spec[Any, Throwable] = suite("TestRecruitmentRenameRecovery")(
     fetchTmStatsRecoversFromArchive404,
-    fetchTmStatsCachedPathUsesCanonicalUname,
+    checkTmStatsReadsCachedArchivesUnderRecoveredHandle,
     checkOpponentMatchWrapRecoversFromMatches404,
     checkClubsWrapRecoversFromClubs404,
     checkOngoingGamesWrapRecoversFromGames404,
     checkDailyStatsWrapRecoversFromStats404,
+    checkTmStatsWrapRecoversFromArchive404,
+    statsFiltersReadGamesUnderAnsweredHandle,
+    recoveredHandleIsNotWrittenBack,
+    failedEvaluationLeavesStoredNameAlone,
     gatherClubCandidatesRecoversViaTierBMatchRef,
-    recruitConfirmsRenamedCandidateById
+    recruitConfirmsRenamedCandidateById,
+    twoNamesInTurnWriteAndFindOnce,
+    twoNamesAtOnceWriteAndFindOnce,
+    failedSecondEvaluationKeepsFirstRow,
+    recruitCountsPlayerListedUnderTwoNamesOnce
   ).provideShared(
     FreshSchemaLayer("test_recruitment_rename_recovery", onInit = Tables.ensureTables),
     ZLayer.succeed(ProgressDisplay.make(enabled = false))
@@ -40,6 +49,14 @@ object TestRecruitmentRenameRecovery extends ZIOSpecDefault {
   private val staleU = Username("alice-old")
   private val freshU = Username("alice-new")
   private val pid    = pid0 // PlayerId(200) per RecruitmentTestSupport
+
+  private val freshProfile = Map("player/alice-new" -> apiPlayerJson(200, "alice-new"))
+
+  /** The profile lags the rename and still answers under alice-old, while the endpoints after it have moved on. */
+  private val laggingProfile = Map(
+    "player/alice-old" -> apiPlayerJson(200, "alice-old"),
+    "player/alice-new" -> apiPlayerJson(200, "alice-new")
+  )
 
   /** Records the stale handle and then the canonical one in `player_name`, so Tier A succeeds. */
   private def seedRenameHistory: RIO[PostgresClient, Unit] = {
@@ -52,6 +69,21 @@ object TestRecruitmentRenameRecovery extends ZIOSpecDefault {
       )
     } yield ()
   }
+
+  /** [[seedRenameHistory]], then a run under `makeCriteria()` to evaluate in. */
+  private def seedRenameHistoryAndRun: RIO[PostgresClient, RecruitmentRunId] =
+    for {
+      _          <- seedRenameHistory
+      criteriaId <- seedCriteria(makeCriteria())
+      runId <- RecruitmentRun.insert(
+        clubId = clubId,
+        criteriaId = criteriaId,
+        trigger = RunTrigger.Cli,
+        startedAt = Times.t0,
+        target = None,
+        jobRunIdOption = None
+      )
+    } yield runId
 
   /** ApiPlayer pre-set to the stale handle to mimic mid-pipeline state. The filter wrap passes
     * `apiPlayer.playerId` as the resolver hint.
@@ -99,6 +131,12 @@ object TestRecruitmentRenameRecovery extends ZIOSpecDefault {
       failedAdminSlugs = failedAdminSlugs
     )
 
+  /** Serves `archive` as every month of alice-new's 90-day archive window ending at `now`. */
+  private def freshArchives(now: Instant, archive: String): Map[String, String] =
+    RecruitmentStatsHelpers.recentArchiveMonths(now, 90).map { ym =>
+      s"player/alice-new/games/${ym.getYear}/${"%02d".format(ym.getMonthValue)}" -> archive
+    }.toMap
+
   // --- fetchTmStats ---
 
   private def fetchTmStatsRecoversFromArchive404 = test("fetchTmStats: archive 404 → resolver Tier A → retries with fresh username") {
@@ -113,11 +151,8 @@ object TestRecruitmentRenameRecovery extends ZIOSpecDefault {
       matchUrl = Some("https://www.chess.com/match/9999"),
       timeClass = "daily"
     )
-    val archive = archiveJson(List(game))
-    val months  = RecruitmentStatsHelpers.recentArchiveMonths(now, 90)
-    val responses = Map[String, String](
-      "player/alice-new" -> apiPlayerJson(200, "alice-new")
-    ) ++ months.map(ym => s"player/alice-new/games/${ym.getYear}/${"%02d".format(ym.getMonthValue)}" -> archive).toMap
+    val months    = RecruitmentStatsHelpers.recentArchiveMonths(now, 90)
+    val responses = freshProfile ++ freshArchives(now, archiveJson(List(game)))
     val criteria = makeCriteria().copy(dailyMinTmGamesFinished = Some(0), dailyMaxTmTimeoutPercent = Some(50.0))
     for {
       _      <- seedRenameHistory
@@ -128,19 +163,15 @@ object TestRecruitmentRenameRecovery extends ZIOSpecDefault {
       result.opponentUsernames == Set(Username("opponent")),
       // Predicates must use the post-rename effective username (alice-new), not the stale input. If they used the
       // stale name, `playerResult` would treat alice-new as the "opponent" and miscount.
-      result.timeoutPct.contains(0.0)
+      result.timeoutPct.contains(0.0),
+      result.username == freshU
     )
   }
 
-  private def fetchTmStatsCachedPathUsesCanonicalUname = test("fetchTmStats: cached recentArchives + stale `username` arg → predicates use Player row's canonical handle, not the input") {
-    // Regression for the StatsHelpers cached-path bug: CheckTmStats receives a CandidateContext whose `username`
-    // field was set by FetchAndCheckPlayer and never refreshed; if CheckDailyStats triggered a rename recovery the
-    // cached archives are keyed by the post-rename canonical handle but `env.candidate.username` is still pre-rename.
-    // The predicates must derive the effective username from the Player row, not trust the input.
-    val now = Instant.parse("2026-04-01T00:00:00Z")
-    // Single archive containing one team-match daily timeout — opponent extraction depends on identifying which side
-    // is "us". If predicates use the stale `username` ("alice-old") it'll never match white/black="alice-new", and
-    // the timeout count + opponent set will both be empty.
+  private def checkTmStatsReadsCachedArchivesUnderRecoveredHandle = test("CheckTmStats: archives cached by a recovering CheckDailyStats are read under the recovered handle") {
+    // CheckTmStats reuses CheckDailyStats' archives without fetching, so only the handle CheckDailyStats wrote back
+    // tells it which side of each game is the candidate's. Under the stale one, the timeout counts as the opponent's.
+    val now = Instant.now()
     val game = archiveGameJson(
       white = "alice-new",
       black = "opponent",
@@ -150,37 +181,25 @@ object TestRecruitmentRenameRecovery extends ZIOSpecDefault {
       matchUrl = Some("https://www.chess.com/match/9999"),
       timeClass = "daily"
     )
-    val archive: ApiPlayerArchive = JsonDecoder[ApiPlayerArchive].decodeJson(archiveJson(List(game))).fold(
-      e => throw new RuntimeException(s"Test fixture broke: $e"),
-      identity
-    )
-    val criteria = makeCriteria().copy(dailyMinTmGamesFinished = Some(0), dailyMaxTmTimeoutPercent = Some(50.0))
+    val responses = Map[String, String](
+      "player/alice-new"       -> apiPlayerJson(200, "alice-new"),
+      "player/alice-new/stats" -> apiPlayerStatsJson(timeoutPct = 5.0)
+    ) ++ freshArchives(now, archiveJson(List(game)))
     for {
       _      <- seedRenameHistory
-      // No HTTP — recentArchives populated, fetchTmStats should not hit the network.
-      client <- fakeChessComClient(Map.empty)
-      result <- RecruitmentStatsHelpers.fetchTmStats(
-        client = client,
-        username = staleU, // pre-rename input — what env.candidate.username carries when CheckTmStats runs
-        playerIdHint = pid,
-        criteria = criteria,
-        overallTimeoutPct = 5.0,
-        now = now,
-        recentArchivesOption = Some(List(archive))
-      )
+      client <- fakeChessComClient(responses = responses, failures = Set("alice-old"))
+      runCtx <- runContext(client).map(_.copy(now = now))
+      daily  <- RecruitmentFilterDefs.CheckDailyStats.apply(FilterEnv(runCtx, staleCandidate))
+      tm     <- RecruitmentFilterDefs.CheckTmStats.apply(FilterEnv(runCtx, daily.candidate))
     } yield assertTrue(
-      result.gamesFinished == 1,
-      // Timeout count would be 0 if the predicate compared against the stale `staleU` instead of the canonical
-      // `freshU` from the Player row.
-      result.timeoutPct.contains(100.0),
-      result.lastTimeoutAt.isDefined,
-      result.opponentUsernames == Set(Username("opponent"))
+      daily.candidate.recentArchivesOption.isDefined,
+      tm.candidate.cacheOption.flatMap(_.tmTimeoutPct90d).contains(100.0)
     )
   }
 
   // --- Filter wraps ---
 
-  private def checkOpponentMatchWrapRecoversFromMatches404 = test("CheckOpponentMatch: matches 404 → wrap recovers via Tier A") {
+  private def checkOpponentMatchWrapRecoversFromMatches404 = test("CheckOpponentMatch: matches 404 → wrap recovers via Tier A and carries the fresh handle") {
     val responses = Map(
       "player/alice-new"         -> apiPlayerJson(200, "alice-new"),
       "player/alice-new/matches" -> emptyPlayerMatchesJson
@@ -193,11 +212,12 @@ object TestRecruitmentRenameRecovery extends ZIOSpecDefault {
       result <- RecruitmentFilterDefs.CheckOpponentMatch.apply(FilterEnv(runCtx, cand))
     } yield assertTrue(
       !result.rejected,
-      result.candidate.playerMatchesOption.isDefined
+      result.candidate.playerMatchesOption.isDefined,
+      result.candidate.username == freshU
     )
   }
 
-  private def checkClubsWrapRecoversFromClubs404 = test("CheckClubs: clubs 404 → wrap recovers via Tier A") {
+  private def checkClubsWrapRecoversFromClubs404 = test("CheckClubs: clubs 404 → wrap recovers via Tier A and carries the fresh handle") {
     val responses = Map(
       "player/alice-new"       -> apiPlayerJson(200, "alice-new"),
       "player/alice-new/clubs" -> apiPlayerClubsJson(List("test-club"))
@@ -210,11 +230,12 @@ object TestRecruitmentRenameRecovery extends ZIOSpecDefault {
       result <- RecruitmentFilterDefs.CheckClubs.apply(FilterEnv(runCtx, cand))
     } yield assertTrue(
       !result.rejected,
-      result.candidate.playerClubsOption.isDefined
+      result.candidate.playerClubsOption.isDefined,
+      result.candidate.username == freshU
     )
   }
 
-  private def checkOngoingGamesWrapRecoversFromGames404 = test("CheckOngoingGames: games 404 → wrap recovers via Tier A") {
+  private def checkOngoingGamesWrapRecoversFromGames404 = test("CheckOngoingGames: games 404 → wrap recovers via Tier A and carries the fresh handle") {
     val responses = Map(
       "player/alice-new"       -> apiPlayerJson(200, "alice-new"),
       "player/alice-new/games" -> emptyCurrentGamesJson
@@ -225,10 +246,13 @@ object TestRecruitmentRenameRecovery extends ZIOSpecDefault {
       runCtx <- runContext(client)
       cand   = staleCandidate
       result <- RecruitmentFilterDefs.CheckOngoingGames.apply(FilterEnv(runCtx, cand))
-    } yield assertTrue(!result.rejected)
+    } yield assertTrue(
+      !result.rejected,
+      result.candidate.username == freshU
+    )
   }
 
-  private def checkDailyStatsWrapRecoversFromStats404 = test("CheckDailyStats: stats 404 → wrap recovers + applyDailyStats uses fresh handle for archive URL") {
+  private def checkDailyStatsWrapRecoversFromStats404 = test("CheckDailyStats: stats 404 → wrap recovers and carries the fresh handle") {
     val responses = Map(
       "player/alice-new"       -> apiPlayerJson(200, "alice-new"),
       "player/alice-new/stats" -> apiPlayerStatsJson(dailyElo = 1500, timeoutPct = 0.0),
@@ -242,7 +266,79 @@ object TestRecruitmentRenameRecovery extends ZIOSpecDefault {
       result <- RecruitmentFilterDefs.CheckDailyStats.apply(FilterEnv(runCtx, cand))
     } yield assertTrue(
       !result.rejected,
-      result.candidate.cacheOption.exists(_.dailyElo.contains(Elo(1500)))
+      result.candidate.cacheOption.exists(_.dailyElo.contains(Elo(1500))),
+      result.candidate.username == freshU
+    )
+  }
+
+  private def checkTmStatsWrapRecoversFromArchive404 = test("CheckTmStats: archive 404 → wrap recovers via Tier A and carries the fresh handle") {
+    for {
+      _      <- seedRenameHistory
+      client <- fakeChessComClient(responses = freshProfile, failures = Set("alice-old"))
+      runCtx <- runContext(client)
+      cand = staleCandidate.copy(
+        cacheOption = Some(PlayerRecruitmentCache.empty(playerId = pid, fetchedAt = runCtx.now, clubCount = None))
+      )
+      result <- RecruitmentFilterDefs.CheckTmStats.apply(FilterEnv(runCtx, cand))
+    } yield assertTrue(result.candidate.username == freshU)
+  }
+
+  private def statsFiltersReadGamesUnderAnsweredHandle = test("CheckDailyStats and CheckTmStats: a player renamed since we stored them has their games read under the handle Chess.com answered to, not ours") {
+    val now = Instant.now()
+    def timeoutGame(matchUrl: Option[String]): String = archiveGameJson(
+      white = "alice-new",
+      black = "opponent",
+      whiteResult = "timeout",
+      blackResult = "win",
+      endTime = now.minusSeconds(86400).getEpochSecond,
+      matchUrl = matchUrl
+    )
+    val games     = List(timeoutGame(matchUrl = None), timeoutGame(matchUrl = Some("https://www.chess.com/match/9999")))
+    val responses = Map("player/alice-new/stats" -> apiPlayerStatsJson(timeoutPct = 5.0)) ++
+      freshArchives(now, archiveJson(games))
+    val joined = Instant.parse("2019-01-01T00:00:00Z")
+    for {
+      _ <- seedDb
+      // We still hold the name the player has left. Nothing recovers: the profile already answered under the new one.
+      _      <- Player.insertIfNew(Player(pid, joined, staleU, PlayerStatusCategory.Active, None, joined))
+      client <- fakeChessComClient(responses = responses)
+      runCtx <- runContext(client).map(_.copy(now = now))
+      cand   = staleCandidate.copy(username = freshU, apiPlayerOption = Some(staleApiPlayer.copy(username = freshU)))
+      daily  <- RecruitmentFilterDefs.CheckDailyStats.apply(FilterEnv(runCtx, cand))
+      tm     <- RecruitmentFilterDefs.CheckTmStats.apply(FilterEnv(runCtx, daily.candidate))
+    } yield assertTrue(
+      daily.candidate.cacheOption.exists(_.lastDailyTimeoutAt.isDefined),
+      tm.candidate.cacheOption.flatMap(_.tmTimeoutPct90d).contains(100.0)
+    )
+  }
+
+  private def recoveredHandleIsNotWrittenBack = test("evaluateCandidate: a handle recovered mid-evaluation is not overwritten by the one the profile answered to") {
+    for {
+      runId   <- seedRenameHistoryAndRun
+      client  <- fakeChessComClient(responses = laggingProfile, notFound = Set("player/alice-old/matches"))
+      found   <- evalCandidates(client, runId, List(staleU), makeCriteria())
+      current <- PlayerName.selectCurrentName(pid)
+    } yield assertTrue(
+      found == List(freshU),
+      current.contains(freshU)
+    )
+  }
+
+  private def failedEvaluationLeavesStoredNameAlone = test("evaluateCandidate: an evaluation that fails after recovering a rename leaves the stored name alone") {
+    // CheckDailyStats recovers alice-new for the stats, then fails on the archives, so the `Error` row is written from
+    // the candidate as it entered CheckDailyStats, still under alice-old.
+    val now = Instant.now()
+    val responses = laggingProfile ++ Map("player/alice-new/stats" -> apiPlayerStatsJson(timeoutPct = 5.0)) ++
+      freshArchives(now, "NOT VALID JSON")
+    for {
+      runId   <- seedRenameHistoryAndRun
+      client  <- fakeChessComClient(responses = responses, notFound = Set("player/alice-old/stats"))
+      _       <- evalCandidates(client, runId, List(staleU), makeCriteria())
+      rows    <- RecruitmentCandidate.selectByRun(runId)
+      current <- PlayerName.selectCurrentName(pid)
+    } yield assertTrue(
+      rows.map(_.outcome) == List(CandidateOutcome.Error),
+      current.contains(freshU)
     )
   }
 
@@ -331,4 +427,81 @@ object TestRecruitmentRenameRecovery extends ZIOSpecDefault {
       !logged.contains("  alice-old")
     )
   }.provideSomeLayer[PostgresClient & BodyStore & ProgressDisplay](ZTestLogger.default)
+
+  // --- One player, two names ---
+
+  private def twoNamesInTurnWriteAndFindOnce = test("evaluateCandidate: a player listed under an old and then a current name is written and found once") {
+    for {
+      runId  <- seedRenameHistoryAndRun
+      client <- fakeChessComClient(responses = freshProfile, failures = Set("alice-old"))
+      found  <- evalCandidates(client, runId, List(staleU, freshU), makeCriteria())
+      rows   <- RecruitmentCandidate.selectByRun(runId)
+    } yield assertTrue(
+      found == List(freshU),
+      rows.map(row => (row.playerId, row.outcome)) == List((pid, CandidateOutcome.Deferred))
+    )
+  }
+
+  private def twoNamesAtOnceWriteAndFindOnce = test("evaluateCandidate: a player's two names evaluated at once are written and found once") {
+    for {
+      runId  <- seedRenameHistoryAndRun
+      client <- fakeChessComClient(responses = freshProfile, failures = Set("alice-old"))
+      runCtx <- runContext(client)
+      filters = RecruitmentFilters.buildFilterChain(runCtx.criteria)
+      found <- ZIO.foreachPar(List(staleU, freshU))(RecruitmentFilters.evaluateCandidate(runId, _, runCtx, filters))
+      rows  <- RecruitmentCandidate.selectByRun(runId)
+    } yield assertTrue(
+      found.flatten.map(_.playerId) == List(pid),
+      rows.map(row => (row.playerId, row.outcome)) == List((pid, CandidateOutcome.Deferred))
+    )
+  }
+
+  private def failedSecondEvaluationKeepsFirstRow = test("evaluateCandidate: an evaluation that fails for a player the run already holds keeps the first row and carries on") {
+    for {
+      runId <- seedRenameHistoryAndRun
+      // The row the evaluation under the player's other name already wrote.
+      _ <- RecruitmentCandidate.insert(
+        RecruitmentCandidate(
+          runId = runId,
+          playerId = pid,
+          evaluatedAt = Times.t0,
+          outcome = CandidateOutcome.Deferred,
+          rejectionReason = None
+        )
+      )
+      client <- fakeChessComClient(
+        responses = freshProfile + ("player/alice-new/stats" -> "NOT VALID JSON"),
+        failures = Set("alice-old")
+      )
+      found <- evalCandidates(client, runId, List(staleU), makeCriteria())
+      rows  <- RecruitmentCandidate.selectByRun(runId)
+    } yield assertTrue(
+      found.isEmpty,
+      rows.map(row => (row.playerId, row.outcome)) == List((pid, CandidateOutcome.Deferred))
+    )
+  }
+
+  private def recruitCountsPlayerListedUnderTwoNamesOnce = test("recruit: a player a source lists under two names completes the run and is counted once") {
+    val joined = TestTimes.t0.getEpochSecond
+    // One club listing both names stands in for the usual route in: an old name from our database beside the current
+    // one from Chess.com. Either way both land in one chunk.
+    val responses = Map(
+      s"club/$clubSlug"          -> apiClubJson(clubId.value, clubSlug.value),
+      s"club/$clubSlug/members"  -> apiClubMembersJson(List(("existing", joined))),
+      "club/source-club"         -> apiClubJson(sourceClubId.value, "source-club"),
+      "club/source-club/members" -> apiClubMembersJson(List(("alice-old", joined), ("alice-new", joined))),
+      "player/existing"          -> apiPlayerJson(199, "existing"),
+      "player/alice-new"         -> apiPlayerJson(200, "alice-new")
+    )
+    for {
+      _      <- seedRenameHistory
+      _      <- seedCriteria(makeCriteria())
+      client <- fakeChessComClient(responses = responses, failures = Set("alice-old"))
+      run    <- runRecruit(client = client, sourceClubs = List(ClubSlug("source-club")))
+      rows   <- RecruitmentCandidate.selectByRun(run.runId)
+    } yield assertTrue(
+      run.candidatesFound == 1,
+      rows.map(row => (row.playerId, row.outcome)) == List((pid, CandidateOutcome.Invited))
+    )
+  }
 }

@@ -16,6 +16,9 @@ import ccas.utils.sql.PostgresClient.withTransaction
 
 private[recruitment] object RecruitmentPersistence {
 
+  /** Returns whether the candidate row was written. A player listed under two names is evaluated twice, and
+    * whichever evaluation writes first keeps its result.
+    */
   def persistCandidateResults(
     runId: RecruitmentRunId,
     now: Instant,
@@ -23,9 +26,9 @@ private[recruitment] object RecruitmentPersistence {
     outcome: CandidateOutcome,
     client: ChessComClient,
     errorMessage: Option[String] = None
-  ): RIO[PostgresClient, Unit] =
+  ): RIO[PostgresClient, Boolean] =
     // No player data (transient API error) — skip persistence, retry next run
-    ZIO.foreachDiscard(candidate.apiPlayerOption) { ap =>
+    ZIO.foreach(candidate.apiPlayerOption) { ap =>
       withTransaction {
         for {
           _ <-
@@ -36,17 +39,21 @@ private[recruitment] object RecruitmentPersistence {
                 Player(ap.playerId, ap.joinedAt, candidate.username, ap.status.category, ap.title, now)
               ).unit
             } else {
-              Player.selectIdForUpdate(ap.playerId).flatMap {
-                ZIO.foreachDiscard(_) { existing =>
-                  ZIO.whenDiscard(!existing.stateMatches(candidate.username, ap.status.category, ap.title)) {
-                    PlayerUpdater.archiveAndUpdate(
-                      existing = existing,
-                      newUsername = candidate.username,
-                      newStatus = ap.status.category,
-                      newTitle = ap.title,
-                      since = now,
-                      client = client
-                    ).unit
+              // A failed evaluation leaves a stored player alone: its context is the one entering the failing filter,
+              // which may predate a rename that filter recovered.
+              ZIO.whenDiscard(outcome != CandidateOutcome.Error) {
+                Player.selectIdForUpdate(ap.playerId).flatMap {
+                  ZIO.foreachDiscard(_) { existing =>
+                    ZIO.whenDiscard(!existing.stateMatches(candidate.username, ap.status.category, ap.title)) {
+                      PlayerUpdater.archiveAndUpdate(
+                        existing = existing,
+                        newUsername = candidate.username,
+                        newStatus = ap.status.category,
+                        newTitle = ap.title,
+                        since = now,
+                        client = client
+                      ).unit
+                    }
                   }
                 }
               }
@@ -55,12 +62,15 @@ private[recruitment] object RecruitmentPersistence {
           // Skip candidate row for cache-only rejections so they aren't blocked by daysSinceRejected
           // Passing candidates are written as Deferred; only flipped to Invited after confirmation at finalization
           dbOutcome = if (outcome == CandidateOutcome.Invited) CandidateOutcome.Deferred else outcome
-          _ <- ZIO.unlessDiscard(candidate.cacheRejected)(
-            RecruitmentCandidate.insert(RecruitmentCandidate(runId, ap.playerId, now, dbOutcome, errorMessage))
+          insertedOption <- ZIO.when(!candidate.cacheRejected)(
+            RecruitmentCandidate.insertIfNew(RecruitmentCandidate(runId, ap.playerId, now, dbOutcome, errorMessage))
           )
-        } yield ()
+          _ <- ZIO.whenDiscard(insertedOption.contains(0))(
+            ZIO.logInfo(s"[Recruitment] ${candidate.username} (player ${ap.playerId}) already evaluated in this run")
+          )
+        } yield insertedOption.contains(1)
       }
-    }
+    }.map(_.contains(true))
 
   def writePlayerMatchRef(
     client: ChessComClient,

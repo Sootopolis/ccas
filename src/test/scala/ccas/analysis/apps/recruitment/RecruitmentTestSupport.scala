@@ -299,46 +299,36 @@ object RecruitmentTestSupport {
   private def buildRoutes(
     responses: Map[String, String],
     failures: Set[String] = Set.empty,
+    notFound: Set[String] = Set.empty,
     playerProfileOverride: Option[Route[Any, Response]] = None
   ): Routes[Any, Response] = {
     // Centralised failures gate. Every `/pub/player/$user/*` sub-route 404s when `user ∈ failures`, which keeps the
-    // resolver's onNotFound recovery path live across the whole player namespace.
-    def gateFailures(username: String)(serve: => Response): Response =
-      if (failures.contains(username)) { notFoundResponse } else { serve }
+    // resolver's onNotFound recovery path live across the whole player namespace. `notFound` 404s single paths, keyed
+    // like `responses`, e.g. a sub-route that fails while the profile still answers.
+    def playerRoute(username: String, key: String)(default: => Response): Response =
+      if (failures.contains(username) || notFound.contains(key)) { notFoundResponse }
+      else { responses.get(key).fold(default)(Response.json(_)) }
 
     val defaultPlayerRoute =
       Method.GET / "pub" / "player" / string("username") -> handler { (username: String, _: Request) =>
-        gateFailures(username) {
-          responses.get(s"player/$username").fold(notFoundResponse)(Response.json(_))
-        }
+        playerRoute(username, s"player/$username")(notFoundResponse)
       }
     Routes(
       Method.GET / "pub" / "player" / string("username") / "stats" -> handler { (username: String, _: Request) =>
-        gateFailures(username) {
-          responses.get(s"player/$username/stats").fold(Response.json(apiPlayerStatsJson()))(Response.json(_))
-        }
+        playerRoute(username, s"player/$username/stats")(Response.json(apiPlayerStatsJson()))
       },
       Method.GET / "pub" / "player" / string("username") / "clubs" -> handler { (username: String, _: Request) =>
-        gateFailures(username) {
-          responses.get(s"player/$username/clubs").fold(Response.json(apiPlayerClubsJson()))(Response.json(_))
-        }
+        playerRoute(username, s"player/$username/clubs")(Response.json(apiPlayerClubsJson()))
       },
       Method.GET / "pub" / "player" / string("username") / "matches" -> handler { (username: String, _: Request) =>
-        gateFailures(username) {
-          responses.get(s"player/$username/matches").fold(Response.json(emptyPlayerMatchesJson))(Response.json(_))
-        }
+        playerRoute(username, s"player/$username/matches")(Response.json(emptyPlayerMatchesJson))
       },
       Method.GET / "pub" / "player" / string("username") / "games" -> handler { (username: String, _: Request) =>
-        gateFailures(username) {
-          responses.get(s"player/$username/games").fold(Response.json(emptyCurrentGamesJson))(Response.json(_))
-        }
+        playerRoute(username, s"player/$username/games")(Response.json(emptyCurrentGamesJson))
       },
       Method.GET / "pub" / "player" / string("username") / "games" / string("year") / string("month") -> handler {
         (username: String, year: String, month: String, _: Request) =>
-          gateFailures(username) {
-            responses.get(s"player/$username/games/$year/$month")
-              .fold(Response.json(emptyArchiveJson))(Response.json(_))
-          }
+          playerRoute(username, s"player/$username/games/$year/$month")(Response.json(emptyArchiveJson))
       },
       playerProfileOverride.getOrElse(defaultPlayerRoute),
       Method.GET / "pub" / "club" / string("club") / "matches" -> handler { (clubName: String, _: Request) =>
@@ -358,9 +348,10 @@ object RecruitmentTestSupport {
 
   def fakeChessComClient(
     responses: Map[String, String],
-    failures: Set[String] = Set.empty
+    failures: Set[String] = Set.empty,
+    notFound: Set[String] = Set.empty
   ): RIO[PostgresClient & BodyStore, ChessComClient] =
-    TestChessComClientSupport.fakeClient(buildRoutes(responses, failures))
+    TestChessComClientSupport.fakeClient(buildRoutes(responses, failures, notFound))
 
   /** A variant of fakeChessComClient where the Nth player profile request blocks. After `blockAfterN` successful player
     * profile fetches, the next fetch completes `reached` and then awaits `gate` before responding. This ensures exactly

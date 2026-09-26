@@ -16,8 +16,8 @@ private[recruitment] object RecruitmentFilters {
 
   // --- Public API ---
 
-  /** Evaluates the player listed as `username`; `Some` when every filter passed, leaving a `Deferred` row for
-    * confirmation.
+  /** Evaluates the player listed as `username`; `Some` when every filter passed and this evaluation wrote the run's
+    * `Deferred` row for them, so a player the run already evaluated under another name is not found twice.
     */
   def evaluateCandidate(
     runId: RecruitmentRunId,
@@ -32,9 +32,9 @@ private[recruitment] object RecruitmentFilters {
       ctxRef <- Ref.make(candidateCtx)
       result <- (for {
         (outcome, finalCandidate) <- runFilters(env, filters, ctxRef)
-        _                         <- persistCandidateResults(runId, now, finalCandidate, outcome, env.run.client)
+        written                   <- persistCandidateResults(runId, now, finalCandidate, outcome, env.run.client)
         _                         <- writePlayerMatchRef(env.run.client, finalCandidate).ignore
-      } yield found(outcome, finalCandidate)).catchAll { error =>
+      } yield found(outcome, finalCandidate, written)).catchAll { error =>
         // A systemic outage hits every in-flight candidate; re-raise so the run aborts rather than persisting an
         // `Error` row for each (which would suppress them as evaluated). Genuine per-candidate errors still record.
         NetworkUnavailableException.recoverUnless(error) {
@@ -82,10 +82,12 @@ private[recruitment] object RecruitmentFilters {
       case (FilterResult(false, ctx), filter) => ctxRef.set(ctx) *> filter(env.copy(candidate = ctx))
     }.map(r => (if (r.rejected) CandidateOutcome.Rejected else CandidateOutcome.Invited, r.candidate))
 
-  // Without a profile `persistCandidateResults` wrote no row, so there would be nothing to confirm. The handle is the
-  // one it wrote the player under.
-  private def found(outcome: CandidateOutcome, candidate: CandidateContext): Option[FoundCandidate] =
+  // A find needs this evaluation's own `Deferred` row: without one there is nothing to confirm, and a player listed
+  // under two names would be found twice. The handle is the one the player was written under.
+  private def found(outcome: CandidateOutcome, candidate: CandidateContext, written: Boolean): Option[FoundCandidate] =
     candidate.apiPlayerOption.flatMap { apiPlayer =>
-      Option.when(outcome == CandidateOutcome.Invited)(FoundCandidate(apiPlayer.playerId, candidate.username))
+      Option.when(written && outcome == CandidateOutcome.Invited) {
+        FoundCandidate(apiPlayer.playerId, candidate.username)
+      }
     }
 }

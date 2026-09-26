@@ -188,6 +188,14 @@ object RecruitmentCandidate {
           .rejectionReason})""".update.run()
     }
 
+  /** Writes nothing when the run already holds a row for the player: 0 means another evaluation claimed them first. */
+  def insertIfNew(item: RecruitmentCandidate): ZIO[PostgresClient, SQLException, Int] =
+    connectZIO {
+      sql"""INSERT INTO recruitment_candidate (run_id, player_id, evaluated_at, outcome, rejection_reason)
+            VALUES (${item.runId}, ${item.playerId}, ${item.evaluatedAt}, ${item.outcome}, ${item.rejectionReason})
+            ON CONFLICT (run_id, player_id) DO NOTHING""".update.run()
+    }
+
   def insertBatch(items: Iterable[RecruitmentCandidate]): ZIO[PostgresClient, SQLException, BatchUpdateResult] =
     transactZIO {
       batchUpdate(items) { item =>
@@ -199,7 +207,7 @@ object RecruitmentCandidate {
 
   def updateOutcome(runId: RecruitmentRunId, playerId: PlayerId, outcome: CandidateOutcome): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
-      sql"""UPDATE recruitment_candidate SET outcome = ${outcome}
+      sql"""UPDATE recruitment_candidate SET outcome = $outcome
             WHERE run_id = $runId AND player_id = $playerId""".update.run()
     }
 }

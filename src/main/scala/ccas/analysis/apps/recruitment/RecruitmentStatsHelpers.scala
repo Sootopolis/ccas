@@ -7,7 +7,7 @@ import ccas.utils.sql.PostgresClient
 import zio.{RIO, ZIO}
 
 import ccas.analysis.apps.withPlayerRenameRecovery
-import ccas.analysis.tables.{PlayerName, RecruitmentCriteria}
+import ccas.analysis.tables.RecruitmentCriteria
 import ccas.api.misc.enums.GameResultDetail
 import ccas.api.misc.subtypes.{PlayerId, Username}
 import ccas.api.player.ApiPlayerArchive
@@ -15,6 +15,9 @@ import ccas.utils.client.ChessComClient
 
 private[recruitment] object RecruitmentStatsHelpers {
 
+  /** Reads the games, `recentArchivesOption`'s included, as `username`'s — or as the fresh handle when a month's fetch
+    * recovered a rename — and returns the handle it used.
+    */
   def fetchTmStats(
     client: ChessComClient,
     username: Username,
@@ -25,31 +28,38 @@ private[recruitment] object RecruitmentStatsHelpers {
     recentArchivesOption: Option[List[ApiPlayerArchive]]
   ): RIO[PostgresClient, TmStatsResult] = {
     val needsTmStats = criteria.dailyMinTmGamesFinished.isDefined || criteria.dailyMaxTmTimeoutPercent.isDefined
-    if (!needsTmStats) ZIO.succeed(TmStatsResult(0, None, None, Set.empty))
-    else {
+    if (!needsTmStats) {
+      ZIO.succeed(
+        TmStatsResult(
+          gamesFinished = 0,
+          timeoutPct = None,
+          lastTimeoutAt = None,
+          opponentUsernames = Set.empty,
+          username = username
+        )
+      )
+    } else {
       // Fetch last ~90 days of archives
       val cutoff = now.minus(90, ChronoUnit.DAYS)
       val months = recentArchiveMonths(now, 90)
 
-      def fetchMonth(uname: Username, ym: YearMonth): RIO[PostgresClient, ApiPlayerArchive] =
-        client.get[ApiPlayerArchive](ApiPlayerArchive.getUrl(uname, ym.getYear, ym.getMonthValue))
+      def fetchMonth(uname: Username, ym: YearMonth): RIO[PostgresClient, (Username, ApiPlayerArchive)] =
+        client.get[ApiPlayerArchive](ApiPlayerArchive.getUrl(uname, ym.getYear, ym.getMonthValue)).map((uname, _))
 
-      val fetchArchives: RIO[PostgresClient, List[ApiPlayerArchive]] = recentArchivesOption match {
-        case Some(cached) => ZIO.succeed(cached)
+      val fetchArchives: RIO[PostgresClient, (Username, List[ApiPlayerArchive])] = recentArchivesOption match {
+        case Some(cached) => ZIO.succeed((username, cached))
         case None =>
           ZIO.foreachPar(months) { ym =>
             fetchMonth(username, ym)
               .withPlayerRenameRecovery(client, username, Some(playerIdHint))(uname => fetchMonth(uname, ym))
+          }.map { fetched =>
+            // Each month recovers on its own, so any that did answered under the current handle.
+            val (unames, archives) = fetched.unzip
+            (unames.find(_ != username).getOrElse(username), archives)
           }
       }
 
-      for {
-        archives <- fetchArchives
-        // Take the handle from `player_name` whichever path produced `archives`: the cached one (CheckDailyStats) may
-        // have fetched under a post-recovery name while `username` is still the stale input. A player holding no name
-        // falls back to the input rather than to a display cache that may name someone else.
-        effectiveUname <- PlayerName.selectCurrentName(playerIdHint).map(_.getOrElse(username))
-      } yield {
+      fetchArchives.map { (effectiveUname, archives) =>
         val tmGames = archives.flatMap(
           _.games.filter(g => g.timeClass == "daily" && g.`match`.isDefined && g.endTime >= cutoff.getEpochSecond)
         )
@@ -67,7 +77,7 @@ private[recruitment] object RecruitmentStatsHelpers {
           .headOption
           .map(g => Instant.ofEpochSecond(g.endTime))
         val opponentUsernames = tmGames.flatMap(nonTimeoutOpponent(_, effectiveUname)).toSet
-        TmStatsResult(tmGamesFinished, tmTimeoutPct, lastTmTimeoutAt, opponentUsernames)
+        TmStatsResult(tmGamesFinished, tmTimeoutPct, lastTmTimeoutAt, opponentUsernames, effectiveUname)
       }
     }
   }
