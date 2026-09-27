@@ -1,6 +1,6 @@
 # Identity is the id; a name is an observation over time
 
-**Status:** Accepted, 2026-09-06 (#180). Replaces the tombstone consequence of [0010](0010-rename-recovery-for-usernames-and-club-slugs.md) once the migration below lands; 0010's tier design stays live and this ADR depends on it.
+**Status:** Accepted, 2026-09-06 (#180). Replaces the tombstone consequence of [0010](0010-rename-recovery-for-usernames-and-club-slugs.md) once the migration below lands; 0010's tier design stays live and this ADR depends on it. Amended by #254 step 5b: a pure rename still archives a `player_snapshot` row, because it moves `player.since` and the snapshot is what keeps when the prior status began.
 
 ## Context
 

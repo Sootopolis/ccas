@@ -70,7 +70,7 @@ object BlacklistApp extends ZIOAppDefault {
           // Single transaction: reconcile (handles rename archival or fresh insert) + blacklist upsert. Resolver's
           // verification fetch already authenticated apiPlayer; we don't double-reconcile.
           _ <- withTransaction {
-            PlayerUpdater.reconcile(apiPlayer, client) *> RecruitmentBlacklist.upsert(
+            PlayerUpdater.reconcile(apiPlayer) *> RecruitmentBlacklist.upsert(
               RecruitmentBlacklist(club.clubId, apiPlayer.playerId, now, expiresAt, reason)
             )
           }

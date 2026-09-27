@@ -119,7 +119,7 @@ private[history] object HistorySeeding {
       apiPlayer <- client.getUncached[ApiPlayer](ApiPlayer.getUrl(username))
       playerId = apiPlayer.playerId
       _ <- withTransaction {
-        PlayerUpdater.reconcile(apiPlayer, client) *>
+        PlayerUpdater.reconcile(apiPlayer) *>
           ZIO.foreachDiscard(entries) { entry =>
             ClubMatchBoard.updatePlayerId(entry.matchId, entry.board, entry.isTeam1, playerId) *>
               UnresolvedBoardPlayer.delete(entry.matchId, entry.board, entry.isTeam1)

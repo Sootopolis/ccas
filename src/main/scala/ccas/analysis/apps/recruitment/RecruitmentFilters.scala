@@ -32,7 +32,7 @@ private[recruitment] object RecruitmentFilters {
       ctxRef <- Ref.make(candidateCtx)
       result <- (for {
         (outcome, finalCandidate) <- runFilters(env, filters, ctxRef)
-        written                   <- persistCandidateResults(runId, now, finalCandidate, outcome, env.run.client)
+        written                   <- persistCandidateResults(runId, now, finalCandidate, outcome)
         _                         <- writePlayerMatchRef(env.run.client, finalCandidate).ignore
       } yield found(outcome, finalCandidate, written)).catchAll { error =>
         // A systemic outage hits every in-flight candidate; re-raise so the run aborts rather than persisting an
@@ -40,7 +40,7 @@ private[recruitment] object RecruitmentFilters {
         NetworkUnavailableException.recoverUnless(error) {
           for {
             latestCtx <- ctxRef.get
-            _         <- persistCandidateResults(runId, now, latestCtx, CandidateOutcome.Error, env.run.client, Some(error.safeMessage))
+            _         <- persistCandidateResults(runId, now, latestCtx, CandidateOutcome.Error, Some(error.safeMessage))
           } yield None
         }
       }

@@ -1,7 +1,6 @@
 package ccas.analysis.apps.stats
 
 import ccas.analysis.apps.stats.StatsUtils.{MemberContribution, PlayerBoardStats}
-import ccas.analysis.tables.Player
 
 /** Formats stats results as CSV for output files. */
 object StatsReport {
@@ -11,12 +10,12 @@ object StatsReport {
     val sb = new StringBuilder
     sb.append("#,Username,Boards,Games,W,D,L,Points,Score%,FP_W,FP_D,FP_L,FP_Points,FP_Score%\n")
 
-    val ranked = contributions.sortBy(mc => (-mc.raw.pointsX2, mc.username.value.toLowerCase))
+    val ranked = contributions.sortBy(mc => (-mc.raw.pointsX2, mc.displayName.toLowerCase))
     ranked.zipWithIndex.foreach { case (mc, idx) =>
       val r  = mc.raw
       val fp = mc.fairPlay
       sb.append(csvRow(
-        (idx + 1).toString, Player.displayUsername(mc.username, mc.playerId), r.boards.toString, r.games.toString,
+        (idx + 1).toString, mc.displayName, r.boards.toString, r.games.toString,
         r.wins.toString, r.draws.toString, r.losses.toString,
         formatPoints(r.points), formatPercent(r.scoreRate),
         fp.wins.toString, fp.draws.toString, fp.losses.toString,
@@ -45,12 +44,12 @@ object StatsReport {
     sb.append("#,Username,Games,W,D,L,Points,Score%\n")
 
     val eligible = contributions.filter(_.raw.games >= minGames)
-      .sortBy(mc => (-mc.raw.pointsX2, mc.username.value.toLowerCase))
+      .sortBy(mc => (-mc.raw.pointsX2, mc.displayName.toLowerCase))
 
     eligible.zipWithIndex.foreach { case (mc, idx) =>
       val s = mc.raw
       sb.append(csvRow(
-        (idx + 1).toString, Player.displayUsername(mc.username, mc.playerId), s.games.toString,
+        (idx + 1).toString, mc.displayName, s.games.toString,
         s.wins.toString, s.draws.toString, s.losses.toString,
         formatPoints(s.points), formatPercent(s.scoreRate)
       ))
@@ -59,7 +58,12 @@ object StatsReport {
     sb.toString
   }
 
-  private def csvRow(fields: String*): String = fields.mkString(",") + "\n"
+  private def csvRow(fields: String*): String = fields.map(csvField).mkString(",") + "\n"
+
+  // RFC 4180 quoting: a display name can hold a comma (`Player.selectDisplayNames`, for a player holding no name).
+  private def csvField(field: String): String =
+    if (field.exists(c => c == ',' || c == '"' || c == '\n' || c == '\r')) { "\"" + field.replace("\"", "\"\"") + "\"" }
+    else { field }
 
   private def formatPoints(points: Double): String =
     if (points == points.toLong.toDouble) f"$points%.0f"

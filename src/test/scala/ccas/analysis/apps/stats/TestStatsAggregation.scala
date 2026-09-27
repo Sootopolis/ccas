@@ -6,7 +6,7 @@ import zio.test.{assertTrue, Spec, ZIOSpecDefault}
 
 import ccas.analysis.apps.stats.StatsUtils.PlayerBoardStats
 import ccas.api.misc.enums.BoardGameWinner
-import ccas.api.misc.subtypes.{ClubMatchId, PlayerId, Username}
+import ccas.api.misc.subtypes.{ClubMatchId, PlayerId}
 
 object TestStatsAggregation extends ZIOSpecDefault {
   override def spec: Spec[Any, Nothing] = suite("StatsAggregation")(
@@ -74,9 +74,9 @@ object TestStatsAggregation extends ZIOSpecDefault {
   private val match2  = ClubMatchId.wrap(200L)
   private val now     = Some(Instant.parse("2026-01-15T12:00:00Z"))
 
-  private val usernames = Map(
-    player1 -> Username.wrap("alice"),
-    player2 -> Username.wrap("bob")
+  private val displayNames = Map(
+    player1 -> "alice",
+    player2 -> "bob"
   )
 
   private def board(
@@ -104,17 +104,17 @@ object TestStatsAggregation extends ZIOSpecDefault {
   )
 
   private def testEmptyInput = test("empty input") {
-    val result = StatsUtils.aggregate(Nil, usernames)
+    val result = StatsUtils.aggregate(Nil, displayNames)
     assertTrue(result.isEmpty)
   }
 
   private def testSingleBoardBothGamesNoFairplay = test("single board, both games played, no fairplay") {
     // player1 wins game1 (Team1), loses game2 (Team2)
     val rows   = List(board(player1))
-    val result = StatsUtils.aggregate(rows, usernames)
+    val result = StatsUtils.aggregate(rows, displayNames)
     assertTrue(
       result.size == 1,
-      result.head.username == Username.wrap("alice"),
+      result.head.displayName == "alice",
       result.head.raw.boards == 1,
       result.head.raw.games == 2,
       result.head.raw.wins == 1,
@@ -128,7 +128,7 @@ object TestStatsAggregation extends ZIOSpecDefault {
   private def testRawAndFairplayAgreeWhenNoFairplayFlags =
     test("raw and fairplay agree when no fairplay flags are set") {
       val rows   = List(board(player1, g1 = Some(BoardGameWinner.Team1), g2 = Some(BoardGameWinner.Team1)))
-      val result = StatsUtils.aggregate(rows, usernames)
+      val result = StatsUtils.aggregate(rows, displayNames)
       val mc     = result.head
       assertTrue(
         mc.raw.pointsX2 == mc.fairPlay.pointsX2,
@@ -142,7 +142,7 @@ object TestStatsAggregation extends ZIOSpecDefault {
       // opponent has fairplay flag, both games recorded as Team2 wins
       // raw: 2 losses. fairplay-adjusted: 2 wins (opponent forfeits).
       val rows = List(board(player1, g1 = Some(BoardGameWinner.Team2), g2 = Some(BoardGameWinner.Team2), oppFP = true))
-      val result = StatsUtils.aggregate(rows, usernames)
+      val result = StatsUtils.aggregate(rows, displayNames)
       assertTrue(
         result.head.fairPlay.wins == 2,
         result.head.fairPlay.losses == 0,
@@ -156,7 +156,7 @@ object TestStatsAggregation extends ZIOSpecDefault {
   private def testBothFairplayFlagsDrawsInFairplayView = test("both fairplay flags → draws in fairplay view") {
     val rows = List(board(player1, g1 = Some(BoardGameWinner.Team1), g2 = Some(BoardGameWinner.Team1),
       ourFP = true, oppFP = true))
-    val result = StatsUtils.aggregate(rows, usernames)
+    val result = StatsUtils.aggregate(rows, displayNames)
     assertTrue(
       result.head.fairPlay.draws == 2,
       result.head.fairPlay.wins == 0,
@@ -168,7 +168,7 @@ object TestStatsAggregation extends ZIOSpecDefault {
 
   private def testSingleGameBoard = test("single game board (game2 not played)") {
     val rows   = List(board(player1, g2 = None))
-    val result = StatsUtils.aggregate(rows, usernames)
+    val result = StatsUtils.aggregate(rows, displayNames)
     assertTrue(
       result.head.raw.boards == 1,
       result.head.raw.games == 1,
@@ -179,7 +179,7 @@ object TestStatsAggregation extends ZIOSpecDefault {
 
   private def testNoGamesPlayedOnBoard = test("no games played on board") {
     val rows   = List(board(player1, g1 = None, g2 = None))
-    val result = StatsUtils.aggregate(rows, usernames)
+    val result = StatsUtils.aggregate(rows, displayNames)
     assertTrue(
       result.head.raw.boards == 1,
       result.head.raw.games == 0,
@@ -192,9 +192,9 @@ object TestStatsAggregation extends ZIOSpecDefault {
       board(player1, match1, g1 = Some(BoardGameWinner.Team1), g2 = Some(BoardGameWinner.Team1)),
       board(player2, match1, g1 = Some(BoardGameWinner.Team2), g2 = Some(BoardGameWinner.Draw))
     )
-    val result = StatsUtils.aggregate(rows, usernames)
-    val alice  = result.find(_.username == Username.wrap("alice")).get
-    val bob    = result.find(_.username == Username.wrap("bob")).get
+    val result = StatsUtils.aggregate(rows, displayNames)
+    val alice  = result.find(_.displayName == "alice").get
+    val bob    = result.find(_.displayName == "bob").get
     assertTrue(
       alice.raw.wins == 2,
       alice.raw.losses == 0,
@@ -209,7 +209,7 @@ object TestStatsAggregation extends ZIOSpecDefault {
       board(player1, match1, g1 = Some(BoardGameWinner.Team1), g2 = Some(BoardGameWinner.Team1)),
       board(player1, match2, g1 = Some(BoardGameWinner.Draw), g2 = Some(BoardGameWinner.Team2))
     )
-    val result = StatsUtils.aggregate(rows, usernames)
+    val result = StatsUtils.aggregate(rows, displayNames)
     assertTrue(
       result.head.raw.boards == 2,
       result.head.raw.games == 4,
@@ -224,15 +224,15 @@ object TestStatsAggregation extends ZIOSpecDefault {
     val unknownPlayer = PlayerId.wrap(999L)
     val rows          = List(board(unknownPlayer))
     val result        = StatsUtils.aggregate(rows, Map.empty)
-    assertTrue(result.head.username == Username.wrap("unknown"))
+    assertTrue(result.head.displayName == "unknown")
   }
 
   private def testSortedByUsernameCaseInsensitively = test("sorted by username case-insensitively") {
     val rows = List(board(player2), board(player1))
-    val result = StatsUtils.aggregate(rows, usernames)
+    val result = StatsUtils.aggregate(rows, displayNames)
     assertTrue(
-      result.head.username == Username.wrap("alice"),
-      result.last.username == Username.wrap("bob")
+      result.head.displayName == "alice",
+      result.last.displayName == "bob"
     )
   }
 }

@@ -7,7 +7,7 @@ import zio.{Chunk, RIO, Ref, Scope, Task, URIO, ZIO, ZIOAppArgs, ZIOAppDefault}
 import ccas.analysis.apps.ref.RefHelpers
 import ccas.analysis.tables.{Club, ClubAdmin, ClubMatch, ClubMatchRef, ClubName, Player, Tables}
 import ccas.api.club.ApiClubMatches
-import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
+import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId}
 import ccas.utils.{ApiConcurrency, OutputFile, ProgressDisplay}
 import ccas.analysis.apps.{ClubQuery, ClubResolution, ClubSlugRenameResolver, withClubSlugRenameRecovery}
 import ccas.analysis.apps.ClubSlugRenameResolver.ResolvedClub
@@ -204,8 +204,8 @@ object ClubDataApp extends ZIOAppDefault {
     val removed = existingAdminIds -- allAdminIds
     ZIO.whenDiscard(existingAdminIds.nonEmpty && (added.nonEmpty || removed.nonEmpty)) {
       (for {
-        usernames <- Player.selectDisplayNames(added | removed)
-        _         <- ZIO.logInfo(formatAdminDiff(club, added, removed, usernames))
+        displayNames <- Player.selectDisplayNames(added | removed)
+        _            <- ZIO.logInfo(formatAdminDiff(club, added, removed, displayNames))
       } yield ()).catchAllCause(ZIO.logWarningCause(s"[ClubData] Admin diff log failed for ${club.slug}", _))
     }
   }
@@ -214,15 +214,15 @@ object ClubDataApp extends ZIOAppDefault {
     club: Club,
     added: Set[PlayerId],
     removed: Set[PlayerId],
-    usernames: Map[PlayerId, Username]
+    displayNames: Map[PlayerId, String]
   ): String = {
-    val body = (adminDiffLines(added, "+", usernames) ++ adminDiffLines(removed, "-", usernames)).mkString("\n")
+    val body = (adminDiffLines(added, "+", displayNames) ++ adminDiffLines(removed, "-", displayNames)).mkString("\n")
     s"[ClubData] Admin changes for ${club.slug} (${club.name}):\n$body"
   }
 
-  private def adminDiffLines(ids: Set[PlayerId], prefix: String, usernames: Map[PlayerId, Username]): List[String] =
+  private def adminDiffLines(ids: Set[PlayerId], prefix: String, displayNames: Map[PlayerId, String]): List[String] =
     ids.toList
-      .map(id => usernames.get(id).fold(s"<unknown player #${PlayerId.unwrap(id)}>")(Player.displayUsername(_, id)))
+      .map(id => displayNames.getOrElse(id, s"<unknown player #${PlayerId.unwrap(id)}>"))
       .sorted
       .map(name => s"  $prefix $name")
 

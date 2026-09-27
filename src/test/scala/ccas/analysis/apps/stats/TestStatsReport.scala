@@ -3,7 +3,7 @@ package ccas.analysis.apps.stats
 import zio.test.{assertTrue, Spec, ZIOSpecDefault}
 
 import ccas.analysis.apps.stats.StatsUtils.{MemberContribution, PlayerBoardStats}
-import ccas.api.misc.subtypes.{PlayerId, Username}
+import ccas.api.misc.subtypes.PlayerId
 
 object TestStatsReport extends ZIOSpecDefault {
   override def spec: Spec[Any, Nothing] = suite("StatsReport")(
@@ -20,7 +20,7 @@ object TestStatsReport extends ZIOSpecDefault {
     val fpLosses = games - fpWins - fpDraws
     MemberContribution(
       PlayerId.wrap(name.hashCode.toLong.abs),
-      Username.wrap(name),
+      name,
       PlayerBoardStats(games, games, wins, draws, losses, rawPtsX2),
       PlayerBoardStats(games, games, fpWins, fpDraws, fpLosses, fpPtsX2)
     )
@@ -41,6 +41,7 @@ object TestStatsReport extends ZIOSpecDefault {
     testHeaderRowHasExpectedColumns,
     testRowsOrderedByRawPointsDescending,
     testTiesBrokenByUsername,
+    testNameHoldingACommaIsQuoted,
     testRankColumnIsSequential,
     testTotalRowPresent,
     testPointsFormattedWithoutDecimalWhenWhole,
@@ -75,6 +76,13 @@ object TestStatsReport extends ZIOSpecDefault {
     val dataLines = lines(csv).drop(1).dropRight(1)
     val names = dataLines.map(_.split(",").apply(1))
     assertTrue(names.toList == List("alice", "carol"))
+  }
+
+  // A player holding no name displays as `<unknown player #N, was X>` (#254), so a name can carry a comma.
+  private def testNameHoldingACommaIsQuoted = test("a name holding a comma is quoted, keeping every column in place") {
+    val nameless = mc("<unknown player #2, was carol>", rawPtsX2 = 8, fpPtsX2 = 8)
+    val row      = lines(StatsReport.formatContribution(List(nameless)))(1)
+    assertTrue(row == "1,\"<unknown player #2, was carol>\",4,4,4,0,0,4,100.0%,4,0,0,4,100.0%")
   }
 
   private def testRankColumnIsSequential = test("rank column is sequential") {

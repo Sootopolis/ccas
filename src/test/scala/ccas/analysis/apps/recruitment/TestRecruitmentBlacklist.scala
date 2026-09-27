@@ -257,11 +257,12 @@ object TestRecruitmentBlacklist extends ZIOSpecDefault {
           .provideEnvironment(ZEnvironment(client, pgClient, ProgressDisplay.make(enabled = false)))
         row     <- Player.selectId(pid3)
         snaps   <- PlayerSnapshot.selectId(pid3)
+        names   <- PlayerName.selectPlayer(pid3)
         entries <- RecruitmentBlacklist.selectByClub(blacklistClubId)
       } yield assertTrue(
         row.exists(_.username == newUsername),
         snaps.size == 1,
-        snaps.exists(_.username == oldUsername),
+        names.map(n => (n.username, n.until.isEmpty)) == List((oldUsername, false), (newUsername, true)),
         entries.size == 1,
         entries.head.playerId == pid3
       )

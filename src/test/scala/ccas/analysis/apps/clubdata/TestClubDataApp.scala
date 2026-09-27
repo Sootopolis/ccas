@@ -7,7 +7,17 @@ import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.{apiClubJson, apiDailyMatchJson, apiPlayerJson}
-import ccas.analysis.tables.{Club, ClubAdmin, ClubMatch, ClubMatchRef, ClubName, Player, PlayerSnapshot, Tables}
+import ccas.analysis.tables.{
+  Club,
+  ClubAdmin,
+  ClubMatch,
+  ClubMatchRef,
+  ClubName,
+  Player,
+  PlayerName,
+  PlayerSnapshot,
+  Tables
+}
 import ccas.api.misc.enums.{ClubMatchStatus, PlayerStatusCategory, TimeClass}
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username}
 import ccas.utils.ProgressDisplay
@@ -469,12 +479,13 @@ object TestClubDataApp extends ZIOSpecDefault {
         result <- ClubAdminResolver.resolveAndPersistAdmins(client, adminClubId, Set(newUsername), Set.empty)
         row    <- Player.selectId(adminPlayerId)
         snaps  <- PlayerSnapshot.selectId(adminPlayerId)
+        names  <- PlayerName.selectPlayer(adminPlayerId)
         admins <- ClubAdmin.selectPlayerIdsByClub(adminClubId)
       } yield assertTrue(
         result == Set(adminPlayerId),
         row.exists(_.username == newUsername),
         snaps.size == 1,
-        snaps.exists(_.username == oldUsername),
+        names.map(n => (n.username, n.until.isEmpty)) == List((oldUsername, false), (newUsername, true)),
         admins == Set(adminPlayerId)
       )
     },

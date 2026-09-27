@@ -2,7 +2,7 @@ package ccas.analysis.apps.stats
 
 import ccas.analysis.GameScoring
 import ccas.api.misc.enums.{BoardGameWinner, GameResult}
-import ccas.api.misc.subtypes.{PlayerId, Username}
+import ccas.api.misc.subtypes.PlayerId
 
 object StatsUtils {
 
@@ -48,7 +48,7 @@ object StatsUtils {
     */
   case class MemberContribution(
     playerId: PlayerId,
-    username: Username,
+    displayName: String,
     raw: PlayerBoardStats,
     fairPlay: PlayerBoardStats
   )
@@ -56,15 +56,15 @@ object StatsUtils {
   /** Aggregate normalized board rows into per-player contribution stats with both raw and fairplay-adjusted views. */
   def aggregate(
     rows: List[ClubBoard],
-    usernameMap: Map[PlayerId, Username]
+    displayNames: Map[PlayerId, String]
   ): List[MemberContribution] = {
     val byPlayer = rows.groupBy(_.playerId)
     byPlayer.map { case (playerId, boards) =>
-      val username = usernameMap.getOrElse(playerId, Username.wrap("unknown"))
+      val displayName = displayNames.getOrElse(playerId, "unknown")
       val raw      = computeStats(boards, (_, w) => GameScoring.classifyGameRaw(w))
       val fairPlay = computeStats(boards, (r, w) => GameScoring.classifyGame(w, r.ourFairPlay, r.oppFairPlay))
-      MemberContribution(playerId, username, raw, fairPlay)
-    }.toList.sortBy(_.username.value.toLowerCase)(using Ordering.String)
+      MemberContribution(playerId, displayName, raw, fairPlay)
+    }.toList.sortBy(_.displayName.toLowerCase)(using Ordering.String)
   }
 
   private def computeStats(

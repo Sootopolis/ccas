@@ -58,7 +58,7 @@ object ClubAdminResolver {
         UsernameRenameResolver.resolveAndVerify(client, username, playerIdHint = None).map(_.map(_._2))
     }.flatMap {
       case Some(apiPlayer) =>
-        withTransaction(PlayerUpdater.reconcile(apiPlayer, client))
+        withTransaction(PlayerUpdater.reconcile(apiPlayer))
           .as(Some(apiPlayer.username -> apiPlayer.playerId))
       case None =>
         ZIO.logInfo(s"[ClubAdminResolver] Could not resolve admin '$username' (404, no rename found)").as(None)

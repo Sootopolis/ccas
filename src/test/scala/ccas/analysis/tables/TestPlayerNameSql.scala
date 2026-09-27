@@ -7,16 +7,15 @@ import com.augustnagro.magnum.sql
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 import zio.ZIO
 
-import ccas.analysis.apps.UsernameRenameResolver
 import ccas.api.misc.enums.PlayerStatusCategory.Active
 import ccas.api.misc.subtypes.{PlayerId, Username}
 import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient.connectZIO
 
-/** `player_name` is kept in step with every write of `player.username`, seeded from the history `player_snapshot`
-  * holds, and its constraints hold the current-slice invariants ADR 0016 puts in the database. Each test uses its own
-  * player ids, so the sequential suite shares one schema.
+/** `player_name` is kept in step with every write of `player.username`, backfilled from what `player` stores, and its
+  * constraints hold the current-slice invariants ADR 0016 puts in the database — the only ones left since #254 dropped
+  * `player_username_unique`. Each test uses its own player ids, so the sequential suite shares one schema.
   */
 object TestPlayerNameSql extends ZIOSpecDefault {
 
@@ -60,37 +59,106 @@ object TestPlayerNameSql extends ZIOSpecDefault {
         holder <- PlayerName.selectCurrentHolder(Username("stale-write"))
       } yield assertTrue(rows == 0, names == List((p.username, true)), holder.isEmpty)
     },
-    // The tombstone is what 5a still writes to free `player_username_unique`; it holds no name, and the player that
-    // takes the freed one becomes its only holder.
-    test("a tombstoned player holds no name, and the player taking its name is the only holder") {
+    // What the `_stale_<id>` tombstone used to stand in for (#254 step 5b): the loser of a name holds none we know of,
+    // while its display cache keeps the name it last held.
+    test("a player whose name another takes holds none, and the taker is the only holder") {
       val losing = player(130, "handed-over")
       for {
-        _ <- Player.insert(losing)
-        tomb = UsernameRenameResolver.stalePlaceholder(losing.playerId)
-        _       <- Player.updateCurrentState(losing.copy(username = tomb, since = at(1)))
+        _       <- Player.insert(losing)
         _       <- Player.insert(player(131, "handed-over"))
         names   <- windows(130)
         current <- PlayerName.selectCurrentName(losing.playerId)
         holder  <- PlayerName.selectCurrentHolder(losing.username)
         holders <- PlayerName.selectHolders(losing.username)
+        stored  <- Player.selectId(losing.playerId)
       } yield assertTrue(
         names == List((losing.username, false)),
         current.isEmpty,
         holder.contains(PlayerId(131)),
-        holders == List(PlayerId(130), PlayerId(131))
+        holders == List(PlayerId(130), PlayerId(131)),
+        stored.exists(_.username == losing.username)
       )
     },
-    // MembershipApp persists a roster in one batch, so two players trading names land in one statement batch; the
-    // deferred `player_username_unique` tolerates the intermediate state, and the name tables must as well.
+    // A player holding no name still stores the name it lost, so a write that changes nothing must not read that back
+    // as an observation: an insert that finds the row there, or an update that loses its `since` race.
+    test("a write that lands on nothing gives a player holding no name nothing back") {
+      val losing = player(135, "lost-for-good", since = at(1))
+      for {
+        _        <- Player.insert(losing)
+        _        <- Player.insert(player(136, "lost-for-good"))
+        inserted <- Player.insertIfNew(player(135, "some-other-name", since = at(3)))
+        _        <- Player.insertBatch(List(player(135, "batch-other-name", since = at(3))))
+        // The row's own `since`, as an inactive player's unchanging `lastOnlineAt` gives: the name still differs.
+        sameSince <- Player.insertIfNew(player(135, "same-since-name", since = at(1)))
+        updated  <- Player.updateCurrentState(losing.copy(since = t0))
+        current  <- PlayerName.selectCurrentName(losing.playerId)
+        holder   <- PlayerName.selectCurrentHolder(losing.username)
+      } yield assertTrue(
+        inserted == 0,
+        sameSince == 0,
+        updated == 0,
+        current.isEmpty,
+        holder.contains(PlayerId(136))
+      )
+    },
+    test("a write that lands on a player holding no name records what it stores, even the name it last held") {
+      val losing = player(137, "taken-back")
+      for {
+        _       <- Player.insert(losing)
+        _       <- Player.insert(player(138, "taken-back"))
+        _       <- Player.updateCurrentState(losing.copy(since = at(1)))
+        current <- PlayerName.selectCurrentName(losing.playerId)
+        holder  <- PlayerName.selectCurrentHolder(losing.username)
+      } yield assertTrue(current.contains(losing.username), holder.contains(losing.playerId))
+    },
+    // Nothing locks across players, so two observations of one name for two players race; `player_name_current` is
+    // the only thing refusing the loser now that `player_username_unique` is gone. Whatever the interleaving, the name
+    // ends with exactly one current holder and any failure names the index that said so.
+    test("two players claiming one name at once leave exactly one holder") {
+      val contested = Username("claimed-at-once")
+      for {
+        _       <- Player.insert(player(139, "claims-first"))
+        _       <- Player.insert(player(140, "claims-second"))
+        results <- ZIO.foreachPar(List(139L, 140L))(id =>
+          Player.updateCurrentState(player(id, contested.value, at(1))).either
+        )
+        open   <- openHolders(contested)
+        holder <- PlayerName.selectCurrentHolder(contested)
+      } yield assertTrue(
+        open == 1,
+        results.exists(_.isRight),
+        results.collect { case Left(error) => error }.forall(violatesConstraint(_, "player_name_current")),
+        holder.exists(Set(PlayerId(139), PlayerId(140)).contains)
+      )
+    },
+    // MembershipApp persists a roster in one batch, so two players trading names land in one statement batch, and the
+    // name tables must tolerate the intermediate state.
     test("two players swapping names in one batch each end holding the other's") {
       for {
-        _     <- Player.insertBatch(List(player(140, "swap-a"), player(141, "swap-b")))
-        _     <- Player.updateCurrentStateBatch(List(player(140, "swap-b", at(1)), player(141, "swap-a", at(1))))
-        names <- PlayerName.selectCurrentNames(List(PlayerId(140), PlayerId(141)))
+        _     <- Player.insertBatch(List(player(141, "swap-a"), player(142, "swap-b")))
+        _     <- Player.updateCurrentStateBatch(List(player(141, "swap-b", at(1)), player(142, "swap-a", at(1))))
+        names <- PlayerName.selectCurrentNames(List(PlayerId(141), PlayerId(142)))
         open  <- openHolders(Username("swap-a")) <*> openHolders(Username("swap-b"))
       } yield assertTrue(
-        names == Map(PlayerId(140) -> Username("swap-b"), PlayerId(141) -> Username("swap-a")),
+        names == Map(PlayerId(141) -> Username("swap-b"), PlayerId(142) -> Username("swap-a")),
         open == (1, 1)
+      )
+    },
+    test("selectPlayers returns every window of each asked-for player, in order, and no one else's") {
+      for {
+        _     <- Player.insert(player(145, "windows-first"))
+        _     <- Player.updateCurrentState(player(145, "windows-second", at(1)))
+        _     <- Player.insert(player(146, "windows-other"))
+        _     <- Player.insert(player(147, "windows-unasked"))
+        empty <- PlayerName.selectPlayers(Nil)
+        found <- PlayerName.selectPlayers(List(PlayerId(146), PlayerId(145)))
+      } yield assertTrue(
+        empty.isEmpty,
+        found.map(n => (n.playerId, n.username.value, n.until.isEmpty)) == List(
+          (PlayerId(145), "windows-first", false),
+          (PlayerId(145), "windows-second", true),
+          (PlayerId(146), "windows-other", true)
+        )
       )
     },
     test("selectCurrentHolders answers with the names some player holds now, not the ones given up") {
@@ -110,50 +178,35 @@ object TestPlayerNameSql extends ZIOSpecDefault {
         names <- windows(160)
       } yield assertTrue(names == List((Username("observed-now"), true)))
     },
-    test("backfill turns snapshot history into windows, one per run of a name, and is idempotent") {
+    // From the migration instant, not the row's `since`: nothing observed the name any earlier (ADR 0016).
+    test("backfill opens the stored name, from the migration instant, for a player with none, and is idempotent") {
       for {
-        _ <- insertRawPlayer(170, "third", at(3))
-        _ <- rawSnapshot(170, "first", at(0))
-        _ <- rawSnapshot(170, "first", at(1))
-        _ <- rawSnapshot(170, "second", at(2))
-        // Dated after the row it would precede: the name held now comes from `player`, never from such a snapshot.
-        _      <- rawSnapshot(170, "from-the-future", at(4))
+        _      <- insertRawPlayer(170, "written-by-old-binary", at(3))
         first  <- PlayerName.backfill
         second <- PlayerName.backfill
         names  <- PlayerName.selectPlayer(PlayerId(170))
       } yield assertTrue(
-        first == 3,
+        first == 1,
         second == 0,
-        names.map(n => (n.username.value, n.since, n.until)) == List(
-          ("first", at(0), Some(at(2))),
-          ("second", at(2), Some(at(3))),
-          ("third", at(3), None)
-        )
+        names.map(n => (n.username.value, n.until)) == List(("written-by-old-binary", None)),
+        names.forall(_.since.isAfter(at(3)))
       )
     },
-    // The one tombstone on Neon (2026-09-23) is this shape: its last real name is held by another player now, so
-    // opening it for both — the runbook's first draft — would fail the boot on `player_name_current`.
-    test("backfill closes a tombstoned player's last name at the tombstone, beside the player holding it now") {
-      val tomb = UsernameRenameResolver.stalePlaceholder(PlayerId(180)).value
+    // Two `player` rows can store one name now that `player_username_unique` is gone. The partial unique index picks
+    // one holder, and the backfill must skip the other rather than fail the boot it runs in.
+    test("backfill gives a name two players store to one of them, and leaves the other holding none") {
+      val shared = Username("shared-at-backfill")
       for {
-        _       <- insertRawPlayer(180, tomb, at(5))
-        _       <- rawSnapshot(180, "was-mine", at(1))
-        _       <- rawSnapshot(180, "interim", at(2))
-        _       <- rawSnapshot(180, UsernameRenameResolver.stalePlaceholder(PlayerId(180)).value, at(3))
-        _       <- rawSnapshot(180, "interim", at(4))
-        _       <- insertRawPlayer(181, "was-mine", at(1))
-        _       <- PlayerName.backfill
-        names   <- PlayerName.selectPlayer(PlayerId(180))
-        current <- PlayerName.selectCurrentName(PlayerId(180))
-        holder  <- PlayerName.selectCurrentHolder(Username("was-mine"))
+        _      <- insertRawPlayer(180, shared.value, t0)
+        _      <- insertRawPlayer(181, shared.value, t0)
+        rows   <- PlayerName.backfill
+        first  <- PlayerName.selectCurrentName(PlayerId(180))
+        second <- PlayerName.selectCurrentName(PlayerId(181))
+        holder <- PlayerName.selectCurrentHolder(shared)
       } yield assertTrue(
-        names.map(n => (n.username.value, n.since, n.until)) == List(
-          ("was-mine", at(1), Some(at(2))),
-          ("interim", at(2), Some(at(3))),
-          ("interim", at(4), Some(at(5)))
-        ),
-        current.isEmpty,
-        holder.contains(PlayerId(181))
+        rows == 1,
+        List(first, second).flatten == List(shared),
+        holder.exists(Set(PlayerId(180), PlayerId(181)).contains)
       )
     },
     test("backfill leaves a player holding none when another is already recorded holding its name") {
@@ -191,7 +244,10 @@ object TestPlayerNameSql extends ZIOSpecDefault {
 
   // Names the constraint, so a failure for any other reason (a codec, a missing player row) cannot pass for it.
   private def violates(result: Either[SQLException, Int], constraint: String): Boolean =
-    result.left.exists(error => Option(error.getMessage).exists(_.contains(constraint)))
+    result.left.exists(violatesConstraint(_, constraint))
+
+  private def violatesConstraint(error: SQLException, constraint: String): Boolean =
+    Option(error.getMessage).exists(_.contains(constraint))
 
   private def openHolders(username: Username): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
@@ -207,9 +263,6 @@ object TestPlayerNameSql extends ZIOSpecDefault {
 
   private def rawRename(id: Long, username: String): ZIO[PostgresClient, SQLException, Int] =
     connectZIO(sql"UPDATE player SET username = ${Username(username)} WHERE player_id = ${PlayerId(id)}".update.run())
-
-  private def rawSnapshot(id: Long, username: String, since: Instant): ZIO[PostgresClient, SQLException, Int] =
-    PlayerSnapshot.insert(PlayerSnapshot(PlayerId(id), since, Username(username), Active, None))
 
   private def rawName(
     id: Long,

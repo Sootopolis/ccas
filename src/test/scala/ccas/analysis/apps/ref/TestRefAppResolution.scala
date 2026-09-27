@@ -4,7 +4,6 @@ import zio.Scope
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.apiDailyMatchJson
-import ccas.analysis.apps.UsernameRenameResolver
 import ccas.analysis.tables.{
   Club,
   ClubMatchRef,
@@ -43,7 +42,7 @@ object TestRefAppResolution extends ZIOSpecDefault {
   private def testLeavesPlayerHoldingNoNameAlone = test("leaves a player holding no name alone") {
     for {
       _ <- seedDb
-      _ <- Player.updateCurrentState(Player(pid0, t0, UsernameRenameResolver.stalePlaceholder(pid0), Active, None, t1))
+      // pid1 takes pid0's name, leaving pid0 holding none
       _ <- Player.updateCurrentState(Player(pid1, t0, Username("alice"), Active, None, t1))
       client <- fakeChessComClient(Map.empty)
       _      <- runPopulate(client, forceSkipped = false, upgradeRefs = false)

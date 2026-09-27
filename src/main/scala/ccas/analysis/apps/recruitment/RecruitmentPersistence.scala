@@ -24,7 +24,6 @@ private[recruitment] object RecruitmentPersistence {
     now: Instant,
     candidate: CandidateContext,
     outcome: CandidateOutcome,
-    client: ChessComClient,
     errorMessage: Option[String] = None
   ): RIO[PostgresClient, Boolean] =
     // No player data (transient API error) — skip persistence, retry next run
@@ -44,16 +43,13 @@ private[recruitment] object RecruitmentPersistence {
               ZIO.whenDiscard(outcome != CandidateOutcome.Error) {
                 Player.selectIdForUpdate(ap.playerId).flatMap {
                   ZIO.foreachDiscard(_) { existing =>
-                    ZIO.whenDiscard(!existing.stateMatches(candidate.username, ap.status.category, ap.title)) {
-                      PlayerUpdater.archiveAndUpdate(
-                        existing = existing,
-                        newUsername = candidate.username,
-                        newStatus = ap.status.category,
-                        newTitle = ap.title,
-                        since = now,
-                        client = client
-                      ).unit
-                    }
+                    PlayerUpdater.updateIfDrifted(
+                      existing = existing,
+                      newUsername = candidate.username,
+                      newStatus = ap.status.category,
+                      newTitle = ap.title,
+                      since = now
+                    )
                   }
                 }
               }
