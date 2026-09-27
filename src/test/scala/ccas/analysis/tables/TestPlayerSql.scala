@@ -22,6 +22,8 @@ object TestPlayerSql extends ZIOSpecDefault {
     testInsertBatchIdempotent,
     testPlayerSnapshotInsertIdempotent,
     testSelectDisplayNames,
+    testSelectDisplayNamesHoldingNone,
+    testSelectHistory,
     testUpdateCurrentStateOptimistic
   ).provideShared(
     FreshSchemaLayer("test_player_sql", onInit = Tables.ensureTables)
@@ -38,9 +40,8 @@ object TestPlayerSql extends ZIOSpecDefault {
   private val player1 = Player(PlayerId(1), Times.t1, Username("player1"), Active, Some(CM), Times.t1)
 
   // Historical snapshots — represent past states that were archived
-  private val player0Snapshot0 = PlayerSnapshot(player0.playerId, Times.t0, Username("player0_old"), Active, None)
-  private val player0Snapshot1 =
-    PlayerSnapshot(player0.playerId, Times.t1, Username("player0_mid"), Fairplay, None)
+  private val player0Snapshot0 = PlayerSnapshot(player0.playerId, Times.t0, Active, None)
+  private val player0Snapshot1 = PlayerSnapshot(player0.playerId, Times.t1, Fairplay, None)
 
   private def testInsert = test("testInsert") {
     for {
@@ -81,7 +82,7 @@ object TestPlayerSql extends ZIOSpecDefault {
     for {
       // Archive player0's current state and update to new username
       existing <- Player.selectId(player0.playerId).map(_.get)
-      archive = PlayerSnapshot(existing.playerId, existing.since, existing.username, existing.status, existing.title)
+      archive = PlayerSnapshot(existing.playerId, existing.since, existing.status, existing.title)
       _ <- PlayerSnapshot.insert(archive)
       updated = existing.copy(username = Username("player0_new"), since = Times.t3)
       rows <- Player.updateCurrentState(updated)
@@ -143,20 +144,20 @@ object TestPlayerSql extends ZIOSpecDefault {
   // PK is (player_id, since). Duplicate snapshots must silently no-op so that two concurrent jobs
   // that both observe the same stale (player_id, since) can't crash each other's transaction.
   private def testPlayerSnapshotInsertIdempotent = test("testPlayerSnapshotInsertIdempotent") {
-    val altered = player0Snapshot0.copy(username = Username("player0_altered"))
+    val altered = player0Snapshot0.copy(status = Fairplay)
     for {
       r      <- PlayerSnapshot.insert(altered)
       stored <- PlayerSnapshot.selectId(player0.playerId).map(_.find(_.since == player0Snapshot0.since))
       // insertBatch with one duplicate + one fresh row
       freshSince = Times.t3.plusSeconds(1)
-      fresh      = PlayerSnapshot(player0.playerId, freshSince, Username("player0_future"), Active, None)
+      fresh      = PlayerSnapshot(player0.playerId, freshSince, Active, None)
       _     <- PlayerSnapshot.insertBatch(Chunk(altered, fresh))
       later <- PlayerSnapshot.selectId(player0.playerId)
     } yield assertTrue(
       r == 0, // ON CONFLICT DO NOTHING: 0 rows affected
       // Existing row retained (earlier test already updated title to IM via PlayerSnapshot.update)
       stored.exists(_.title.contains(IM)),
-      stored.exists(_.username == Username("player0_old")), // original username, not "altered"
+      stored.exists(_.status == Active),                    // original status, not "altered"
       later.exists(_.since == freshSince)                   // fresh row was inserted
     )
   }
@@ -200,13 +201,47 @@ object TestPlayerSql extends ZIOSpecDefault {
       mixed       <- Player.selectDisplayNames(List(player0.playerId, PlayerId(999)))
     } yield assertTrue(
       empty.isEmpty,
-      single == Map(player1.playerId -> player1.username),
+      single == Map(player1.playerId -> player1.username.value),
       both.size == 2,
-      both(player0.playerId) == Username("player0_new"), // updated in earlier test
-      both(player1.playerId) == player1.username,
+      both(player0.playerId) == "player0_new", // updated in earlier test
+      both(player1.playerId) == player1.username.value,
       nonExistent.isEmpty,
       mixed.size == 1,
-      mixed(player0.playerId) == Username("player0_new")
+      mixed(player0.playerId) == "player0_new"
+    )
+  }
+
+  private def testSelectHistory = test("selectHistory returns each asked-for player's snapshots and current row") {
+    val watched = Player(PlayerId(4), Times.t0, Username("history_watched"), Fairplay, Some(IM), Times.t2)
+    val other   = Player(PlayerId(5), Times.t0, Username("history_other"), Active, None, Times.t0)
+    for {
+      _     <- Player.insert(watched)
+      _     <- Player.insert(other)
+      _     <- PlayerSnapshot.insertBatch(List(PlayerSnapshot(watched.playerId, Times.t0, Active, None)))
+      _     <- PlayerSnapshot.insertBatch(List(PlayerSnapshot(other.playerId, Times.t1, Active, None)))
+      empty <- PlayerSnapshot.selectHistory(Nil)
+      found <- PlayerSnapshot.selectHistory(List(watched.playerId))
+    } yield assertTrue(
+      empty.isEmpty,
+      found.sortBy(_.since) == List(
+        PlayerSnapshot(watched.playerId, Times.t0, Active, None),
+        PlayerSnapshot(watched.playerId, Times.t2, Fairplay, Some(IM))
+      )
+    )
+  }
+
+  // #254: once another player takes its name, a player shows as its id and the name it last held, so the two never
+  // read as one player.
+  private def testSelectDisplayNamesHoldingNone = test("a player holding no name displays by id and its last name") {
+    val losing = Player(PlayerId(2), Times.t0, Username("shared_name"), Active, None, Times.t0)
+    val taking = Player(PlayerId(3), Times.t0, Username("taker_old"), Active, None, Times.t0)
+    for {
+      _     <- Player.insert(losing)
+      _     <- Player.insert(taking)
+      _     <- Player.updateCurrentState(taking.copy(username = losing.username, since = Times.t1))
+      names <- Player.selectDisplayNames(List(losing.playerId, taking.playerId))
+    } yield assertTrue(
+      names == Map(losing.playerId -> "<unknown player #2, was shared_name>", taking.playerId -> "shared_name")
     )
   }
 }

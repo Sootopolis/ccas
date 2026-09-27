@@ -25,7 +25,7 @@ object TestHistorySeeding extends ZIOSpecDefault {
 
   override def spec: Spec[Any, Throwable] = suite("TestHistorySeeding")(
     suiteRetryUnresolvedPlayers,
-    suiteSeedFromMemberMatchesTombstoneSkip
+    suiteSeedFromMemberMatchesNamelessSkip
   ).provideShared(
     FreshSchemaLayer("test_history_seeding", onInit = Tables.ensureTables),
     ZLayer.succeed(ProgressDisplay.make(enabled = false))
@@ -323,32 +323,34 @@ object TestHistorySeeding extends ZIOSpecDefault {
   // Suite: seedFromMemberMatches skips a member holding no name
   //
   // Regression for issue #22, restated for `player_name` (#254): the names come from what members hold now, so a
-  // tombstoned member — one holding no name — is never queried under `/pub/player/_stale_<id>/matches`, which would
-  // 404 deterministically with no possible recovery.
+  // member holding no name is never queried under the name it still stores, which now answers for another player.
   // ==========================================================================
 
-  private def suiteSeedFromMemberMatchesTombstoneSkip = suite("seedFromMemberMatches skips a member holding no name")(
-    test("tombstoned member skipped: no /pub/player/_stale_*/matches fetch") {
+  private def suiteSeedFromMemberMatchesNamelessSkip = suite("seedFromMemberMatches skips a member holding no name")(
+    test("member holding no name skipped: no fetch under the name it lost") {
       val clubId   = ClubId(900_500)
-      val clubSlug = ClubSlug("tomb-test-club")
-      val activePid = PlayerId(900_001)
-      val tombPid   = PlayerId(900_002)
+      val clubSlug = ClubSlug("nameless-test-club")
+      val activePid   = PlayerId(900_001)
+      val namelessPid = PlayerId(900_002)
+      val takerPid    = PlayerId(900_003)
       val activeUsername = Username("active-member")
-      val tombstoneUsername = Username(s"_stale_${PlayerId.unwrap(tombPid)}")
+      val lostUsername   = Username("lost-member")
 
       val members = List(
         ClubMember(clubId, activePid, t0, None, sinceApproximate = false),
-        ClubMember(clubId, tombPid, t0, None, sinceApproximate = false)
+        ClubMember(clubId, namelessPid, t0, None, sinceApproximate = false)
       )
       val activePlayer = Player(activePid, t0, activeUsername, PlayerStatusCategory.Active, None, t0)
-      val tombPlayer   = Player(tombPid, t0, tombstoneUsername, PlayerStatusCategory.Active, None, t0)
+      val nameless     = Player(namelessPid, t0, lostUsername, PlayerStatusCategory.Active, None, t0)
+      val taker        = Player(takerPid, t0, lostUsername, PlayerStatusCategory.Active, None, t0)
 
       // Request-counting fake: records every URL path. The /pub/player/$user/matches route is the only one
       // seedFromMemberMatches actually fans out across; serve an empty list so seeding completes cleanly.
       for {
         _            <- clearTables
-        _            <- Club.upsert(Club(clubId, t0, clubSlug, "Tomb test", None, None, None))
-        _            <- Player.insertBatch(List(activePlayer, tombPlayer))
+        _            <- Club.upsert(Club(clubId, t0, clubSlug, "Nameless test", None, None, None))
+        _            <- Player.insertBatch(List(activePlayer, nameless))
+        _            <- Player.insert(taker)
         _            <- ClubMember.insertBatch(members)
         memberNames  <- PlayerName.selectCurrentNames(members.map(_.playerId))
         unchangedRef <- Ref.make(0)
@@ -378,7 +380,7 @@ object TestHistorySeeding extends ZIOSpecDefault {
         fetchedUsernames <- requested.get
       } yield assertTrue(
         fetchedUsernames.contains(activeUsername.value),
-        !fetchedUsernames.exists(_.contains("_stale_"))
+        !fetchedUsernames.exists(_.contains(lostUsername.value))
       )
     }
   )

@@ -28,12 +28,11 @@ object TestUsernameRenameResolver extends ZIOSpecDefault {
   }
 
   override def spec: Spec[Any, Throwable] = (suite("TestUsernameRenameResolver")(
-    testStalePlaceholderIsATombstone,
     testTierADeletionWhenHintHoldsStale,
     testTierARecycledHandle,
     testTierASnapshotResolves,
     testTierAAmbiguousSnapshotWithoutHint,
-    testTierATombstoneSkipped,
+    testTierASoleFormerHolderHoldingNoName,
     testVerificationFailureReturnsNone,
     testVerificationPlayerIdMismatchReturnsNone,
     testTierBBoardEndpointResolves,
@@ -79,19 +78,6 @@ object TestUsernameRenameResolver extends ZIOSpecDefault {
       Player.updateCurrentState(
         Player(pid, TestTimes.t0, Username(current), PlayerStatusCategory.Active, None, TestTimes.t1)
       )
-
-  private def testStalePlaceholderIsATombstone = test("stalePlaceholder writes the tombstone format") {
-    ZIO.succeed(assertTrue(
-      Player.isTombstoneUsername(Username("_stale_42")),
-      Player.isTombstoneUsername(Username("_stale_9999999")),
-      !Player.isTombstoneUsername(Username("_stale_")),
-      !Player.isTombstoneUsername(Username("stale_42")),
-      !Player.isTombstoneUsername(Username("alice")),
-      !Player.isTombstoneUsername(Username("_stale_42a")),
-      UsernameRenameResolver.stalePlaceholder(pidA) == Username("_stale_9101"),
-      Player.isTombstoneUsername(UsernameRenameResolver.stalePlaceholder(pidA))
-    ))
-  }
 
   private def testTierADeletionWhenHintHoldsStale =
     test("Tier A: hint matches current holder of stale name → None (deletion, not rename)") {
@@ -140,13 +126,13 @@ object TestUsernameRenameResolver extends ZIOSpecDefault {
       } yield assertTrue(result.isEmpty)
     }
 
-  private def testTierATombstoneSkipped =
-    test("Tier A: the sole former holder holds no name now → None, never the tombstone") {
-      // pidA held alpha, then was tombstoned, so it holds no name. Tier A must NOT return the tombstone.
-      val tombstone = UsernameRenameResolver.stalePlaceholder(pidA).value
+  private def testTierASoleFormerHolderHoldingNoName =
+    test("Tier A: the sole former holder holds no name now → None, never the name it last stored") {
+      // pidA held alpha, then beta, which pidB has since taken, so pidA holds no name while its row still stores beta.
       for {
         client <- fakeChessComClient(Map.empty)
-        _      <- insertRenamed(pidA, "alpha", tombstone)
+        _      <- insertRenamed(pidA, "alpha", "beta")
+        _      <- insertPlayer(pidB, "beta")
         // No hint, no Tier B.
         result <- UsernameRenameResolver.resolveCurrentUsername(client, Username("alpha"), None)
       } yield assertTrue(result.isEmpty)
@@ -177,18 +163,17 @@ object TestUsernameRenameResolver extends ZIOSpecDefault {
 
   private def testTierBBoardEndpointResolves =
     test("Tier B: board endpoint identifies the renamed player by eliminating opponent") {
-      // pidA renamed alpha → newA. Player table doesn't reflect it (tombstoned), no snapshot of "alpha" → Tier A None.
+      // pidA renamed alpha → newA, and the database only ever saw it as older-a, so no one held "alpha" → Tier A None.
       // PlayerMatchRef(pidA, match=90001, board=1, isTeam1=true) exists. Board endpoint returns newA vs opponent.
       // Opponent (pidB, "opponent") is resolved via ClubMatchBoard.team2PlayerIdOption.
       val matchId = ClubMatchId(90001L)
-      val tombstone = UsernameRenameResolver.stalePlaceholder(pidA).value
       val responses = Map(
         s"match/90001/1" -> apiMatchBoardJson(90001L, 1, "newa", "opponent"),
         s"player/newa" -> apiPlayerJson(PlayerId.unwrap(pidA), "newa")
       )
       for {
         client <- fakeClientWithBoard(responses)
-        _      <- insertPlayer(pidA, tombstone)
+        _      <- insertPlayer(pidA, "older-a")
         _      <- insertPlayer(pidB, "opponent")
         _ <- ClubMatch.upsert(
           ClubMatch(
@@ -212,7 +197,6 @@ object TestUsernameRenameResolver extends ZIOSpecDefault {
   private def testTierBFallsBackToMatchEndpointWhenOpponentUnlinked =
     test("Tier B: opposing side not linked in club_match_board falls back to the match endpoint") {
       val matchId   = ClubMatchId(90002L)
-      val tombstone = UsernameRenameResolver.stalePlaceholder(pidA).value
       val responses = Map(
         s"match/90002" -> apiDailyMatchJson(
           90002L, "clubx", "cluby",
@@ -224,7 +208,7 @@ object TestUsernameRenameResolver extends ZIOSpecDefault {
       )
       for {
         client <- fakeClientWithBoard(responses)
-        _      <- insertPlayer(pidA, tombstone)
+        _      <- insertPlayer(pidA, "older-a")
         _ <- ClubMatch.upsert(
           ClubMatch(
             matchId, "Test Match",

@@ -560,7 +560,7 @@ private[history] object HistoryProcessing {
       // Single transaction: reconcile (writes Player table — handles fresh insert OR rename archival) + optional
       // ClubMember creation. Resolver's verification fetch authenticated apiPlayer; no double-reconcile.
       isNew <- withTransaction {
-        PlayerUpdater.reconcile(apiPlayer, ctx.client).tap { fresh =>
+        PlayerUpdater.reconcile(apiPlayer).tap { fresh =>
           ZIO.whenDiscard(fresh && isOurTeam)(createClubMemberForDiscovered(ctx, apiPlayer, matchStartTime))
         }
       }

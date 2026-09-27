@@ -33,7 +33,16 @@ object MembershipChange {
     membersByPlayerId: Map[PlayerId, MemberState],
     membersByUsername: Map[Username, MemberState],
     knownPlayersByUsername: Map[Username, Player] = Map.empty
-  )
+  ) {
+
+    /** The name `state`'s player holds now. `membersByUsername` is keyed by exactly that, so a member absent from it
+      * under the name its row stores holds none: the row keeps a name another player took as a display label.
+      */
+    def heldName(state: MemberState): Option[Username] =
+      Option.when(membersByUsername.get(state.player.username).exists(_.player.playerId == state.player.playerId))(
+        state.player.username
+      )
+  }
 
   final case class ReconciliationResult(
     clubId: ClubId,

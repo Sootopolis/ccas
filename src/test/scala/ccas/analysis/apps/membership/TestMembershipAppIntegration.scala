@@ -5,6 +5,7 @@ import zio.{Chunk, ZIO, ZLayer}
 import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
+import ccas.analysis.apps.{NamedClub, PlayerUpdater}
 import ccas.analysis.apps.ClubSlugRenameResolver.ClubMismatchException
 import ccas.analysis.apps.membership.MembershipChange.*
 import ccas.analysis.apps.membership.MembershipChange.MemberChange.*
@@ -16,13 +17,13 @@ import ccas.analysis.apps.recruitment.RecruitmentTestSupport.{
   apiMatchBoardJson,
   apiPlayerJson
 }
-import ccas.analysis.tables.{Club, ClubMember, MembershipRun, Player, PlayerMatchRef, RunTrigger, Tables}
+import ccas.analysis.tables.{Club, ClubMember, MembershipRun, Player, PlayerMatchRef, PlayerName, RunTrigger, Tables}
 import ccas.api.misc.enums.PlayerStatusCategory.{Active, Closed}
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username}
 import ccas.utils.ProgressDisplay
 import ccas.utils.client.TestChessComClientSupport
 import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
-import ccas.utils.sql.PostgresClient.connectZIO
+import ccas.utils.sql.PostgresClient.{connectZIO, withTransaction}
 
 import TestMembershipAppSupport.*
 
@@ -34,7 +35,8 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
     suiteExternalMemberDetection,
     suiteClassifyApiMembers,
     suiteClassifyDisappeared,
-    suiteReconcile
+    suiteReconcile,
+    suiteReport
   ).provideShared(
     FreshSchemaLayer("test_membership_app_integration", onInit = Tables.ensureTables),
     ZLayer.succeed(ProgressDisplay.make(enabled = false))
@@ -255,11 +257,12 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
     testUnchangedMemberMatchingSince,
     testDifferentSinceRejoined,
     testUsernameChangeSamePlayerId,
+    testMemberHoldingNoNameListedUnderItsLastName,
     testNewPlayerNotInDb,
     testExistingPlayerJoinsClub,
+    testExistingPlayerHoldingNoNameJoinsClub,
     testUsernameChangeAndStatusChange,
     testTrustModeKnownPlayerJoins,
-    testTrustModeUsernameChangeDetected,
     testSinceApproximateReplaceSince,
     testTrustUsernamesFalseBypassesLookup
   )
@@ -328,6 +331,29 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
     )
   }
 
+  // #254 step 5b: a member holding no name is absent from `membersByUsername`, which is keyed by held names, though its
+  // row still stores the name it lost. Listed under that very name, it must be written back, not found unchanged.
+  private def testMemberHoldingNoNameListedUnderItsLastName =
+    test("a member holding no name, listed under the name its row stores, is updated to hold it") {
+      val player = Player(pid2, Times.t0, Username("erin"), Active, None, Times.t0)
+      val mem    = ClubMember(clubId, pid2, Times.t0, None, sinceApproximate = false)
+      val dbState = DbState(
+        membersByPlayerId = Map(pid2 -> MemberState(player, mem)),
+        membersByUsername = Map.empty
+      )
+      val apiMap    = Map(Username("erin") -> Times.t0.getEpochSecond)
+      val responses = Map("erin" -> apiPlayerJson(PlayerId.unwrap(pid2), "erin"))
+
+      for {
+        client <- fakeChessComClient(responses)
+        result <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, dbState, Times.t2)
+      } yield assertTrue(
+        result.resolvedIds.contains(pid2),
+        result.updatedPlayers.map(p => (p.playerId, p.username)) == Chunk((pid2, Username("erin"))),
+        result.changes.forall(_.changes.isEmpty)
+      )
+    }
+
   private def testNewPlayerNotInDb = test("new player — not in DB") {
     val dbState   = DbState(Map.empty, Map.empty)
     val apiMap    = Map(Username("diana") -> Times.t0.getEpochSecond)
@@ -371,6 +397,27 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
       )
     }
   }
+
+  // #254 step 5b: the same as a member holding no name, for a player outside the club, whose held name comes from
+  // `player_name` rather than the roster matching.
+  private def testExistingPlayerHoldingNoNameJoinsClub =
+    test("existing player holding no name joins under the name its row stores, and is updated to hold it") {
+      val nameless  = Player(pid4, Times.t0, Username("gail"), Active, None, Times.t0)
+      val taker     = Player(pid3, Times.t0, Username("gail"), Active, None, Times.t0)
+      val apiMap    = Map(Username("gail") -> Times.t1.getEpochSecond)
+      val responses = Map("gail" -> apiPlayerJson(104, "gail"))
+
+      for {
+        _      <- seedDb(players = List(nameless))
+        _      <- Player.insert(taker)
+        client <- fakeChessComClient(responses)
+        result <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, DbState(Map.empty, Map.empty), Times.t2)
+      } yield assertTrue(
+        result.updatedPlayers.map(p => (p.playerId, p.username)) == Chunk((pid4, Username("gail"))),
+        result.changes.flatMap(_.changes) == Chunk(JoinedClub(Times.t1)),
+        result.newMemberships.map(_.playerId) == Chunk(pid4)
+      )
+    }
 
   private def testUsernameChangeAndStatusChange = test("username change + status change") {
     val player = Player(pid5, Times.t0, Username("frank-old"), Active, None, Times.t0)
@@ -416,28 +463,6 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
         result.updatedPlayers.isEmpty
       )
     }
-  }
-
-  private def testTrustModeUsernameChangeDetected = test("trust-mode: username change detected without API call") {
-    val oldPlayer = Player(pid2, Times.t0, Username("charlie-old"), Active, None, Times.t0)
-    val mem       = ClubMember(clubId, pid2, Times.t0, None, sinceApproximate = false)
-    val newPlayer = Player(pid2, Times.t0, Username("charlie-new"), Active, None, Times.t1)
-    val dbState = DbState(
-      membersByPlayerId = Map(pid2 -> MemberState(oldPlayer, mem)),
-      membersByUsername = Map(Username("charlie-old") -> MemberState(oldPlayer, mem)),
-      knownPlayersByUsername = Map(Username("charlie-new") -> newPlayer)
-    )
-    val apiMap = Map(Username("charlie-new") -> Times.t0.getEpochSecond)
-
-    for {
-      client <- fakeChessComClient(Map.empty)
-      result <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, dbState, Times.t2)
-    } yield assertTrue(
-      result.resolvedIds.contains(pid2),
-      result.changes.size == 1,
-      result.changes.head.changes.exists(_.isInstanceOf[UsernameChange]),
-      result.updatedPlayers.nonEmpty
-    )
   }
 
   private def testSinceApproximateReplaceSince = test("sinceApproximate member → replaceSince, not Rejoined") {
@@ -921,6 +946,40 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
         result.newMemberships.size == 1,
         result.previousMemberCount == 1,
         result.currentMemberCount == 2
+      )
+    }
+
+  // ==========================================================================
+  // Suite: report (DB)
+  // ==========================================================================
+
+  private def suiteReport = suite("report (DB)")(
+    testReportReadsStatusAndNameHistories
+  )
+
+  // The report reads statuses from `player_snapshot` and `player`, and names from `player_name` (#254 step 5b): a
+  // closure followed by a rename keeps the closure's date, and the rename is dated when it was recorded.
+  private def testReportReadsStatusAndNameHistories =
+    test("report dates a status change and a later rename each from its own history") {
+      val member  = Player(pid0, Times.t0, Username("hal-old"), Active, None, Times.t0)
+      val renamed = Username("hal-new")
+      for {
+        _ <- seedDb(
+          players = List(member),
+          members = List(ClubMember(clubId, pid0, Times.t1, None, sinceApproximate = false))
+        )
+        _         <- withTransaction(PlayerUpdater.archiveAndUpdate(member, member.username, Closed, None, Times.t2))
+        closed    <- Player.selectId(pid0).someOrFailException
+        _         <- withTransaction(PlayerUpdater.archiveAndUpdate(closed, renamed, Closed, None, Times.t3))
+        renamedAt <- PlayerName.selectPlayer(pid0).map(_.last.since)
+        result    <- MembershipReport.report(NamedClub(clubId, club.slug), Times.t0, renamedAt.plusSeconds(1))
+      } yield assertTrue(
+        result.summaries.map(_.username) == List(renamed),
+        result.summaries.flatMap(_.changes) == List(
+          JoinedClub(Times.t1),
+          StatusChange(Times.t2, Active),
+          UsernameChange(renamedAt, member.username)
+        )
       )
     }
 }

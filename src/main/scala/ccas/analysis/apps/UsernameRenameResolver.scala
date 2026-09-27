@@ -32,9 +32,6 @@ import ccas.utils.sql.PostgresClient.withTransaction
   */
 object UsernameRenameResolver {
 
-  def stalePlaceholder(playerId: PlayerId): Username =
-    Username.wrap(s"_stale_${PlayerId.unwrap(playerId)}")
-
   /** Returns the current canonical username when `staleUsername` 404s, or `None` if no rename can be inferred.
     * Includes a verification fetch but does NOT update the `player` table. Callers that want the verified
     * `ApiPlayer` and a side-effecting reconcile should use [[resolveAndReconcile]] instead.
@@ -77,7 +74,7 @@ object UsernameRenameResolver {
     tournamentFallback: Boolean = true
   ): RIO[PostgresClient, Option[(Username, ApiPlayer)]] =
     resolveAndVerify(client, staleUsername, playerIdHint, tournamentFallback).tap {
-      case Some((_, apiPlayer)) => withTransaction(PlayerUpdater.reconcile(apiPlayer, client))
+      case Some((_, apiPlayer)) => withTransaction(PlayerUpdater.reconcile(apiPlayer))
       case None                 => ZIO.unit
     }
 

@@ -92,8 +92,8 @@ object StatsApp extends ZIOAppDefault {
     for {
       (rows, matchCount) <- ClubBoard.selectClubBoards(clubId) <&> ClubMatch.countForClub(clubId)
       playerIds = rows.map(_.playerId).distinct
-      usernameMap <- Player.selectDisplayNames(playerIds)
-      contributions = aggregate(rows, usernameMap)
+      displayNames <- Player.selectDisplayNames(playerIds)
+      contributions = aggregate(rows, displayNames)
     } yield StatsResult(contributions, rows.size, matchCount)
 
   /** Per-member stats for a date range. */
@@ -112,8 +112,8 @@ object StatsApp extends ZIOAppDefault {
       )
       (rows, matchCount) <- ClubBoard.selectClubBoardsInPeriod(clubId, since, until) <&> ClubMatch.countForClubInPeriod(clubId, since, until)
       playerIds = rows.map(_.playerId).distinct
-      usernameMap <- Player.selectDisplayNames(playerIds)
-      contributions = aggregate(rows, usernameMap)
+      displayNames <- Player.selectDisplayNames(playerIds)
+      contributions = aggregate(rows, displayNames)
     } yield StatsResult(contributions, rows.size, matchCount)
 
   // The core stats fns are pure DB reads with no logging. These wrappers append the one-line summary so HTTP- and

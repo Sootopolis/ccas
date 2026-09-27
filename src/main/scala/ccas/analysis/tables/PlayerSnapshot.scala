@@ -8,35 +8,30 @@ import zio.ZIO
 
 import ccas.api.misc.enums.PlayerStatusCategory
 import ccas.api.misc.enums.Title
-import ccas.api.misc.subtypes.{PlayerId, Username}
+import ccas.api.misc.subtypes.PlayerId
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.{connectZIO, transactZIO}
 
-final case class PlayerSnapshot(
-  playerId: PlayerId,
-  since: Instant,
-  username: Username,
-  status: PlayerStatusCategory,
-  title: Option[Title]
-) derives DbCodec
+/** A player's status and title from `since` until the next snapshot or the `player` row. Its names are
+  * [[PlayerName]]'s (ADR 0016).
+  */
+final case class PlayerSnapshot(playerId: PlayerId, since: Instant, status: PlayerStatusCategory, title: Option[Title])
+    derives DbCodec
 
 object PlayerSnapshot {
-  private val selectCols = SqlLiteral("player_id, since, username, status, title")
+  private val selectCols = SqlLiteral("player_id, since, status, title")
 
   def createTable: ZIO[PostgresClient, SQLException, Int] =
-    transactZIO {
+    connectZIO {
       sql"""CREATE TABLE IF NOT EXISTS player_snapshot (
               player_id BIGINT NOT NULL,
               since     TIMESTAMPTZ NOT NULL,
-              username  TEXT NOT NULL,
               status    TEXT NOT NULL,
               title     TEXT,
               PRIMARY KEY (player_id, since),
               FOREIGN KEY (player_id) REFERENCES player (player_id) ON DELETE RESTRICT
             )""".update.run()
-      sql"""CREATE INDEX IF NOT EXISTS idx_player_snapshot_username
-            ON player_snapshot (username, since DESC)""".update.run()
     }
 
   /** All historical snapshots for a player. */
@@ -45,42 +40,39 @@ object PlayerSnapshot {
       sql"SELECT $selectCols FROM player_snapshot WHERE player_id = $playerId".query[PlayerSnapshot].run().toList
     )
 
-  /** Historical snapshots plus current player state, for time-range reporting. Returns all snapshots whose `since` is
-    * after the given instant, plus the current state from `player` if its `since` falls after the cutoff.
+  /** Every state each of `playerIds` has been in, unordered: the history `player_snapshot` holds and the current state
+    * `player` holds.
     */
-  def selectSince(since: Instant): ZIO[PostgresClient, SQLException, List[PlayerSnapshot]] =
-    connectZIO(
-      sql"""WITH all_states AS (
-              SELECT $selectCols FROM player_snapshot
+  def selectHistory(playerIds: Iterable[PlayerId]): ZIO[PostgresClient, SQLException, List[PlayerSnapshot]] =
+    if (playerIds.isEmpty) { ZIO.succeed(Nil) }
+    else {
+      connectZIO {
+        val ids = playerIds.toList
+        sql"""SELECT $selectCols FROM player_snapshot WHERE player_id = ANY($ids)
               UNION ALL
-              SELECT player_id, since, username, status, title FROM player
-            )
-            (SELECT DISTINCT ON (player_id) $selectCols FROM all_states
-             WHERE since <= $since ORDER BY player_id, since DESC)
-            UNION ALL
-            SELECT $selectCols FROM all_states WHERE since > $since"""
-        .query[PlayerSnapshot].run().toList
-    )
+              SELECT $selectCols FROM player WHERE player_id = ANY($ids)""".query[PlayerSnapshot].run().toList
+      }
+    }
 
   def insert(item: PlayerSnapshot): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
-      sql"""INSERT INTO player_snapshot (player_id, since, username, status, title)
-            VALUES (${item.playerId}, ${item.since}, ${item.username}, ${item.status}, ${item.title})
+      sql"""INSERT INTO player_snapshot (player_id, since, status, title)
+            VALUES (${item.playerId}, ${item.since}, ${item.status}, ${item.title})
             ON CONFLICT (player_id, since) DO NOTHING""".update.run()
     }
 
   def insertBatch(items: Iterable[PlayerSnapshot]): ZIO[PostgresClient, SQLException, BatchUpdateResult] =
     transactZIO {
       batchUpdate(items) { item =>
-        sql"""INSERT INTO player_snapshot (player_id, since, username, status, title)
-              VALUES (${item.playerId}, ${item.since}, ${item.username}, ${item.status}, ${item.title})
+        sql"""INSERT INTO player_snapshot (player_id, since, status, title)
+              VALUES (${item.playerId}, ${item.since}, ${item.status}, ${item.title})
               ON CONFLICT (player_id, since) DO NOTHING""".update
       }
     }
 
   def update(item: PlayerSnapshot): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
-      sql"""UPDATE player_snapshot SET username = ${item.username}, status = ${item.status}, title = ${item.title}
+      sql"""UPDATE player_snapshot SET status = ${item.status}, title = ${item.title}
             WHERE player_id = ${item.playerId} AND since = ${item.since}""".update.run()
     }
 }

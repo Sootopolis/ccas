@@ -26,8 +26,10 @@ private[membership] object MembershipReport {
   def report(club: NamedClub, since: Instant, until: Instant): RIO[ProgressDisplay & PostgresClient, ReportResult] =
     for {
       members <- ClubMember.selectClub(club.clubId)
-      snaps   <- PlayerSnapshot.selectSince(since)
-      summaries    = classifyFromDb(club.clubId, members, snaps, since, until)
+      playerIds = members.map(_.playerId).distinct
+      states <- PlayerSnapshot.selectHistory(playerIds)
+      names  <- PlayerName.selectPlayers(playerIds)
+      summaries    = classifyFromDb(club.clubId, members, states, names, since, until)
       invitations  <- lookupJoinInvitations(club.clubId, summaries)
       countAtStart <- ClubMember.countActiveCurrentAt(club.clubId, since)
       countAtEnd   <- ClubMember.countActiveCurrentAt(club.clubId, until)
@@ -100,22 +102,22 @@ private[membership] object MembershipReport {
   ): List[(String, List[(String, String)])] = {
     val entries = summaries.flatMap { summary =>
       val lastInvited = invitations.get(summary.playerId)
-      summary.changes.map(change => (change, summary.playerId, summary.username, lastInvited))
+      summary.changes.map(change => (change, summary.username, lastInvited))
     }
     def categoryOrder(change: MemberChange): Int = change match {
       case _: NewMember | _: JoinedClub => 0
       case other                        => other.ordinal
     }
     entries
-      .groupBy { case (change, _, _, _) => categoryOrder(change) }
+      .groupBy { case (change, _, _) => categoryOrder(change) }
       .toList
       .sortBy(_._1)
       .map { case (_, grouped) =>
         val label = categoryLabel(grouped.head._1)
         val items = grouped
           .sortBy(_._1.timestamp)
-          .map { case (change, playerId, username, lastInvited) =>
-            (Player.displayUsername(username, playerId), formatChangeDetail(change, lastInvited))
+          .map { case (change, username, lastInvited) =>
+            (username.value, formatChangeDetail(change, lastInvited))
           }
         (label, items)
       }
@@ -183,35 +185,35 @@ private[membership] object MembershipReport {
 
   // --- Report mode: DB-only ---
 
+  /** Classifies each member whose membership began or ended in `[since, until]`, from the club's memberships, the
+    * states its players have been in (status and title) and the names they have held.
+    */
   def classifyFromDb(
     clubId: ClubId,
     members: List[ClubMember],
-    snaps: List[PlayerSnapshot],
+    states: List[PlayerSnapshot],
+    names: List[PlayerName],
     since: Instant,
     until: Instant
   ): List[MemberChangeSummary] = {
-    val snapsByPlayer = snaps.groupBy(_.playerId)
+    val statesByPlayer = states.groupBy(_.playerId)
+    val namesByPlayer  = names.groupBy(_.playerId)
+    def inRange(t: Instant): Boolean = t.compareTo(since) >= 0 && t.compareTo(until) <= 0
 
     // Find membership changes in the time range
-    val changedMembers = members.filter { m =>
-      (m.since.compareTo(since) >= 0 && m.since.compareTo(until) <= 0) ||
-      m.until.exists(u => u.compareTo(since) >= 0 && u.compareTo(until) <= 0)
-    }
+    val changedMembers = members.filter(m => inRange(m.since) || m.until.exists(inRange))
 
     // Group by player
     val membersByPlayer = changedMembers.groupBy(_.playerId)
 
     membersByPlayer.toList.map { case (playerId, cms) =>
-      // Filter out tombstone snapshots (`_stale_<id>` placeholder) so report renderings never expose the sentinel
-      // username. A tombstoned-only history falls through to the existing "unknown" literal at headOption/lastOption.
-      val playerSnaps = snapsByPlayer.getOrElse(playerId, Nil)
-        .filterNot(s => Player.isTombstoneUsername(s.username))
-        .sortBy(_.since)
-      val changes = Chunk.newBuilder[MemberChange]
+      val playerStates = statesByPlayer.getOrElse(playerId, Nil).sortBy(_.since)
+      val playerNames  = namesByPlayer.getOrElse(playerId, Nil).sortBy(_.since)
+      val changes      = Chunk.newBuilder[MemberChange]
 
       cms.foreach { cm =>
         // New membership in range
-        if (cm.since.compareTo(since) >= 0 && cm.since.compareTo(until) <= 0) {
+        if (inRange(cm.since)) {
           // Check if there's a prior membership for same club+player
           val priorMemberships = members
             .filter(m => m.clubId == clubId && m.playerId == playerId && m.until.isDefined && m.since != cm.since)
@@ -219,41 +221,39 @@ private[membership] object MembershipReport {
             val latestPrior = priorMemberships.maxBy(_.since)
             changes += Rejoined(cm.since, latestPrior.until.getOrElse(latestPrior.since))
           } else {
-            // Check if player has snapshots before this membership — existing player joining club
-            val priorSnaps = playerSnaps.filter(_.since.isBefore(cm.since))
-            if (priorSnaps.nonEmpty) { changes += JoinedClub(cm.since) }
+            // Check if player has states before this membership — existing player joining club
+            if (playerStates.exists(_.since.isBefore(cm.since))) { changes += JoinedClub(cm.since) }
             else { changes += NewMember(cm.since) }
           }
         }
 
         // Closed membership in range
-        cm.until.foreach { u =>
-          if (u.compareTo(since) >= 0 && u.compareTo(until) <= 0) {
-            // Check latest snapshot to determine reason
-            val latestSnap = playerSnaps.filter(s => !s.since.isAfter(u)).lastOption
-            latestSnap match {
-              case Some(snap) if snap.status != PlayerStatusCategory.Active => changes += AccountClosed(u, snap.status)
-              case Some(_)                                                  => changes += LeftClub(u)
-              case None                                                     =>
-                // No snapshot found near the closure — unresolvable
-                val username = playerSnaps.headOption.fold(Username.wrap("unknown"))(_.username)
-                changes += Unresolvable(u, username)
-            }
+        cm.until.filter(inRange).foreach { u =>
+          // Check latest state to determine reason
+          playerStates.filter(s => !s.since.isAfter(u)).lastOption match {
+            case Some(state) if state.status != PlayerStatusCategory.Active => changes += AccountClosed(u, state.status)
+            case Some(_)                                                    => changes += LeftClub(u)
+            case None                                                       =>
+              // No state found near the closure — unresolvable
+              val username = playerNames.headOption.fold(Username.wrap("unknown"))(_.username)
+              changes += Unresolvable(u, username)
           }
         }
       }
 
-      // Detect username and status changes from snapshots in range
-      val snapsInRange = playerSnaps.filter(s => s.since.compareTo(since) >= 0 && s.since.compareTo(until) <= 0)
-      snapsInRange.foreach { snap =>
-        val previousSnap = playerSnaps.filter(_.since.isBefore(snap.since)).lastOption
-        previousSnap.foreach { prev =>
-          if (prev.username != snap.username) { changes += UsernameChange(snap.since, prev.username) }
-          if (prev.status != snap.status) { changes += StatusChange(snap.since, prev.status) }
+      // Two histories now (#254): a status change is read from the states, a rename from the name windows.
+      playerStates.zip(playerStates.drop(1)).foreach { (previous, state) =>
+        if (inRange(state.since) && previous.status != state.status) {
+          changes += StatusChange(state.since, previous.status)
+        }
+      }
+      playerNames.zip(playerNames.drop(1)).foreach { (previous, name) =>
+        if (inRange(name.since) && previous.username != name.username) {
+          changes += UsernameChange(name.since, previous.username)
         }
       }
 
-      val latestUsername = playerSnaps.lastOption.fold(Username.wrap("unknown"))(_.username)
+      val latestUsername = playerNames.lastOption.fold(Username.wrap("unknown"))(_.username)
       MemberChangeSummary(playerId, latestUsername, changes.result())
     }.filter(_.changes.nonEmpty)
   }

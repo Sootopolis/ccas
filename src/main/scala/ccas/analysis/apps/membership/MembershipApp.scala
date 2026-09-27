@@ -289,8 +289,6 @@ object MembershipApp extends ZIOAppDefault {
     val allUpdated      = b.updatedPlayers ++ c.updatedPlayers
     val allArchived     = b.archivedSnapshots ++ c.archivedSnapshots
     val allClosedMships = b.closedMemberships ++ c.closedMemberships
-    // Username swaps within the batch are handled by the DEFERRABLE INITIALLY DEFERRED
-    // constraint, which checks uniqueness at commit time rather than per-statement.
     withTransaction {
       for {
         _ <- ZIO.whenDiscard(b.newPlayers.nonEmpty)(Player.insertBatch(b.newPlayers))

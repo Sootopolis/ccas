@@ -10,7 +10,7 @@ import ccas.analysis.apps.recruitment.RecruitmentTestSupport.*
 import ccas.analysis.tables.*
 import ccas.analysis.tables.subtypes.RecruitmentRunId
 import ccas.api.misc.enums.{ClubMatchStatus, PlayerStatus, PlayerStatusCategory, TimeClass}
-import ccas.api.misc.subtypes.{ClubMatchId, ClubSlug, Elo, Username}
+import ccas.api.misc.subtypes.{ClubMatchId, ClubSlug, Elo, PlayerId, Username}
 import ccas.api.player.ApiPlayer
 import ccas.utils.ProgressDisplay
 import ccas.utils.client.{BodyStore, ChessComClient}
@@ -37,6 +37,7 @@ object TestRecruitmentRenameRecovery extends ZIOSpecDefault {
     failedEvaluationLeavesStoredNameAlone,
     gatherClubCandidatesRecoversViaTierBMatchRef,
     recruitConfirmsRenamedCandidateById,
+    recruitConfirmsCandidatesSharingAHandleById,
     twoNamesInTurnWriteAndFindOnce,
     twoNamesAtOnceWriteAndFindOnce,
     failedSecondEvaluationKeepsFirstRow,
@@ -427,6 +428,29 @@ object TestRecruitmentRenameRecovery extends ZIOSpecDefault {
       !logged.contains("  alice-old")
     )
   }.provideSomeLayer[PostgresClient & BodyStore & ProgressDisplay](ZTestLogger.default)
+
+  // #254 step 5b: a handle can pass from one candidate to another within a run, the second answering under the handle
+  // the first was verified holding. Each is confirmed as the player its profile fetch verified; confirming by handle
+  // would mark whichever holds it last, and never the other.
+  private def recruitConfirmsCandidatesSharingAHandleById = test("recruit: two candidates verified under one handle are each confirmed by player id") {
+    val joined = TestTimes.t0.getEpochSecond
+    val responses = Map(
+      s"club/$clubSlug"          -> apiClubJson(clubId.value, clubSlug.value),
+      s"club/$clubSlug/members"  -> apiClubMembersJson(List(("existing", joined))),
+      "club/source-club"         -> apiClubJson(sourceClubId.value, "source-club"),
+      "club/source-club/members" -> apiClubMembersJson(List(("handed-on", joined), ("took-it", joined))),
+      "player/existing"          -> apiPlayerJson(199, "existing"),
+      "player/handed-on"         -> apiPlayerJson(PlayerId.unwrap(pid0), "handed-on"),
+      "player/took-it"           -> apiPlayerJson(PlayerId.unwrap(pid1), "handed-on")
+    )
+    for {
+      _       <- seedDb
+      _       <- seedCriteria(makeCriteria())
+      client  <- fakeChessComClient(responses)
+      run     <- runRecruit(client, sourceClubs = List(ClubSlug("source-club")))
+      invited <- RecruitmentCandidate.selectInvitedByRun(run.runId)
+    } yield assertTrue(run.candidatesFound == 2, invited.map(_.playerId).toSet == Set(pid0, pid1))
+  }
 
   // --- One player, two names ---
 

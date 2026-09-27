@@ -33,7 +33,7 @@ object TestClubSlugRenameResolver extends ZIOSpecDefault {
       tierCHitFromAdminClubs,
       tierCMissAllAdminsChurned,
       tierCEmptyAdminListReturnsNone,
-      tierCSkipsTombstonedAdminUsername,
+      tierCSkipsAdminHoldingNoName,
       tierCSkipsClosedAdminUsername,
       tierCSkipsSlugsAlreadyKnownToDb,
       tierCAdvancesPastAdminWhose404s,
@@ -184,32 +184,36 @@ object TestClubSlugRenameResolver extends ZIOSpecDefault {
       } yield assertTrue(result.isEmpty)
     }
 
-  private def tierCSkipsTombstonedAdminUsername =
-    test("Tier C: tombstoned admin row is skipped without an HTTP call; another admin still resolves") {
-      val clubId        = ClubId(902_004)
-      val staleSlug     = ClubSlug("tier-c-tombstone")
-      val freshSlug     = ClubSlug("tier-c-tombstone-fresh")
-      val tombstonePid  = PlayerId(902_201)
-      val livePid       = PlayerId(902_202)
-      val livename      = "live-admin"
-      val tombstoneName = s"_stale_${PlayerId.unwrap(tombstonePid)}"
+  // #254 step 5b: an admin holding no name — what the `_stale_<id>` tombstone used to mark — still stores the name it
+  // lost, so asking under it would ask about the player that took it.
+  private def tierCSkipsAdminHoldingNoName =
+    test("Tier C: an admin holding no name is skipped without an HTTP call; another admin still resolves") {
+      val clubId     = ClubId(902_004)
+      val staleSlug  = ClubSlug("tier-c-nameless")
+      val freshSlug  = ClubSlug("tier-c-nameless-fresh")
+      val namelessPid = PlayerId(902_201)
+      val livePid    = PlayerId(902_202)
+      val takerPid   = PlayerId(902_203)
+      val livename   = "live-admin"
+      val lostName   = "lost-admin"
       val responses = Map(
         s"player/$livename/clubs"  -> apiPlayerClubsJson(List(freshSlug.value)),
         s"club/${freshSlug.value}" -> apiClubJson(ClubId.unwrap(clubId), freshSlug.value)
       )
       for {
         _      <- Club.upsert(Club(clubId, t0, staleSlug, "TS Test", None, None, None))
-        _      <- insertPlayer(tombstonePid, tombstoneName)
+        _      <- insertPlayer(namelessPid, lostName)
+        _      <- insertPlayer(takerPid, lostName)
         _      <- insertPlayer(livePid, livename)
-        _      <- insertAdmin(clubId, tombstonePid)
+        _      <- insertAdmin(clubId, namelessPid)
         _      <- insertAdmin(clubId, livePid)
         client <- fakeChessComClient(responses)
         result <- ClubSlugRenameResolver.resolveAndPersist(client, staleSlug, Some(clubId))
-        // No `api_fetch_failure` row should reference the tombstone URL — proves Tier C never hit it.
-        tombstoneFailures <- fetchFailureCountFor(s"player/$tombstoneName")
+        // No `api_fetch_failure` row should reference the lost name's URL — proves Tier C never asked under it.
+        lostNameFailures <- fetchFailureCountFor(s"player/$lostName")
       } yield assertTrue(
         result.exists(_.slug == freshSlug),
-        tombstoneFailures == 0L
+        lostNameFailures == 0L
       )
     }
 

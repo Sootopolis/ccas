@@ -61,7 +61,7 @@ object TestStatsApp extends ZIOSpecDefault {
       result <- StatsApp.memberStats(clubId)
     } yield assertTrue(
       result.contributions.size == 1,
-      result.contributions.head.username == Username.wrap("alice"),
+      result.contributions.head.displayName == "alice",
       result.contributions.head.raw.wins == 1,
       result.boardCount == 1,
       result.matchCount == 1L
@@ -110,7 +110,7 @@ object TestStatsApp extends ZIOSpecDefault {
       result <- StatsApp.memberStats(team2Id)
     } yield assertTrue(
       result.contributions.size == 1,
-      result.contributions.head.username == Username.wrap("dave"),
+      result.contributions.head.displayName == "dave",
       result.contributions.head.raw.wins == 1,
       result.contributions.head.raw.losses == 0
     )

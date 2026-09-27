@@ -24,29 +24,23 @@ final case class Player(
 ) derives DbCodec {
 
   def toSnapshot: PlayerSnapshot =
-    PlayerSnapshot(playerId, since, username, status, title)
+    PlayerSnapshot(playerId, since, status, title)
 
-  def stateMatches(username: Username, status: PlayerStatusCategory, title: Option[Title]): Boolean =
-    this.username == username && this.status == status && this.title == title
+  /** Whether an observation matches this row, given `heldNameOption`: the name the player holds now, from
+    * [[PlayerName]]. Never `username`, which a player holding none keeps as a display label — a re-observation of that
+    * very name would match it and record nothing, leaving the player holding none (ADR 0016).
+    */
+  def stateMatches(
+    heldNameOption: Option[Username],
+    username: Username,
+    status: PlayerStatusCategory,
+    title: Option[Title]
+  ): Boolean =
+    heldNameOption.contains(username) && this.status == status && this.title == title
 }
 
 object Player {
   private val repo = Repo[Player, Player, PlayerId]
-
-  /** The tombstone format `PlayerUpdater.archiveAndUpdate` writes, bound as a parameter where SQL has to match it. */
-  private[tables] val TombstoneUsernameRegex: String = "^_stale_[0-9]+$"
-
-  private val stalePattern = TombstoneUsernameRegex.r
-
-  /** True when the given username matches the tombstone format set by `PlayerUpdater.archiveAndUpdate`. Useful at
-    * display sites that hold a `Username` value but no full `Player` row.
-    */
-  def isTombstoneUsername(u: Username): Boolean = stalePattern.matches(u.value)
-
-  /** Renders a username for user-facing output, replacing tombstone placeholders with `<unknown player #<id>>`. */
-  def displayUsername(username: Username, playerId: PlayerId): String =
-    if (isTombstoneUsername(username)) { s"<unknown player #${PlayerId.unwrap(playerId)}>" }
-    else { username.value }
 
   private val selectCols = SqlLiteral("player_id, joined, username, status, title, since")
 
@@ -58,8 +52,7 @@ object Player {
               username  TEXT NOT NULL,
               status    TEXT NOT NULL,
               title     TEXT,
-              since     TIMESTAMPTZ NOT NULL,
-              CONSTRAINT player_username_unique UNIQUE (username) DEFERRABLE INITIALLY DEFERRED
+              since     TIMESTAMPTZ NOT NULL
             )""".update.run()
     }
 
@@ -78,38 +71,39 @@ object Player {
       }
     }
 
-  /** The display cache for each of `playerIds`, for output that only shows a name. A name to look up, fetch or invite
-    * comes from [[PlayerName.selectCurrentNames]] instead (ADR 0016).
+  /** What output calls each of `playerIds`, through [[displayName]]. A name to look up, fetch or invite comes from
+    * [[PlayerName.selectCurrentNames]] instead (ADR 0016).
     */
-  def selectDisplayNames(playerIds: Iterable[PlayerId]): ZIO[PostgresClient, SQLException, Map[PlayerId, Username]] =
+  def selectDisplayNames(playerIds: Iterable[PlayerId]): ZIO[PostgresClient, SQLException, Map[PlayerId, String]] =
     if (playerIds.isEmpty) { ZIO.succeed(Map.empty) }
     else {
       connectZIO {
         val ids = playerIds.toList
-        sql"SELECT player_id, username FROM player WHERE player_id = ANY($ids)"
-          .query[(PlayerId, Username)].run().map((id, u) => id -> u).toMap
+        sql"""SELECT p.player_id, p.username, n.player_id IS NOT NULL FROM player p
+              LEFT JOIN player_name n ON n.player_id = p.player_id AND n.until IS NULL
+              WHERE p.player_id = ANY($ids)"""
+          .query[(PlayerId, Username, Boolean)].run().map((id, u, holds) => id -> displayName(id, u, holds)).toMap
       }
     }
+
+  /** A player as output shows it: the name it holds, or — once another player has taken that name and we have not seen
+    * the one it moved to — the last it held, marked so the two never read as one player.
+    */
+  private def displayName(playerId: PlayerId, username: Username, holdsName: Boolean): String =
+    if (holdsName) { username.value }
+    else { s"<unknown player #${PlayerId.unwrap(playerId)}, was ${username.value}>" }
 
   def selectIdForUpdate(playerId: PlayerId): ZIO[PostgresClient, SQLException, Option[Player]] =
     connectZIO(
       sql"SELECT $selectCols FROM player WHERE player_id = $playerId FOR UPDATE".query[Player].run().headOption
     )
 
-  /** The row whose display cache holds `username`, which `player_username_unique` still constrains — the conflict
-    * `PlayerUpdater` clears before writing. Not a lookup: a player is found by name through [[PlayerName]].
-    */
-  def selectByUsernameForUpdate(username: Username): ZIO[PostgresClient, SQLException, Option[Player]] =
-    connectZIO(
-      sql"SELECT $selectCols FROM player WHERE username = $username FOR UPDATE".query[Player].run().headOption
-    )
-
-  // Every write of `player.username` records the name in the same transaction (`PlayerName.recordStored`), so
-  // `player_name` never drifts from what the row stores.
+  // Every write of `player.username` records the name in the same transaction (`PlayerName.recordStored`): a row the
+  // write lands on holds the name it stores.
   def insert(player: Player): ZIO[PostgresClient, SQLException, Unit] =
     transactZIO {
       repo.insert(player)
-      PlayerName.recordStored(List(player.playerId))
+      PlayerName.recordStored(List(player))
     }.unit
 
   def insertBatch(players: Iterable[Player]): ZIO[PostgresClient, SQLException, BatchUpdateResult] =
@@ -120,7 +114,7 @@ object Player {
                 ${player.status}, ${player.title}, ${player.since})
               ON CONFLICT (player_id) DO NOTHING""".update
       }
-      PlayerName.recordStored(players.map(_.playerId))
+      PlayerName.recordStored(players)
       result
     }
 
@@ -131,7 +125,7 @@ object Player {
               VALUES (${player.playerId}, ${player.joined}, ${player.username},
                 ${player.status}, ${player.title}, ${player.since})
               ON CONFLICT (player_id) DO NOTHING""".update.run()
-      PlayerName.recordStored(List(player.playerId))
+      PlayerName.recordStored(List(player))
       rows
     }
 
@@ -145,7 +139,7 @@ object Player {
         sql"""UPDATE player SET username = ${player.username}, status = ${player.status},
                 title = ${player.title}, since = ${player.since}
               WHERE player_id = ${player.playerId} AND since < ${player.since}""".update.run()
-      PlayerName.recordStored(List(player.playerId))
+      PlayerName.recordStored(List(player))
       rows
     }
 
@@ -156,7 +150,7 @@ object Player {
                 title = ${player.title}, since = ${player.since}
               WHERE player_id = ${player.playerId} AND since < ${player.since}""".update
       }
-      PlayerName.recordStored(players.map(_.playerId))
+      PlayerName.recordStored(players)
       result
     }
 }

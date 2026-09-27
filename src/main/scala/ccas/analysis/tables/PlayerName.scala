@@ -39,45 +39,32 @@ object PlayerName {
         .update.run()
     }
 
-  /** Seeds every player with no `player_name` row from the history `player_snapshot` and `player` hold: a window per
-    * run of one username, closed where the next state begins and left open for the name held now. A tombstone holds
-    * nothing, so it only closes the name before it. A snapshot dated at or after the row's own `since` is ignored, so
-    * the open name is always the one `player` stores. Idempotent. A name that another player is already recorded
-    * holding is skipped rather than failing the boot, which leaves this player holding none.
+  /** Opens the name `player` stores for every player with no `player_name` row, from the migration instant as
+    * [[ClubName.backfill]] does: nothing observed an earlier start (ADR 0016). Idempotent. A name another player is
+    * already recorded holding is skipped rather than failing the boot, which leaves this player holding none.
     */
   def backfill: ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
-      sql"""INSERT INTO player_name (player_id, username, since, until)
-            WITH fresh AS (
-              SELECT player_id, username, since FROM player p
-              WHERE NOT EXISTS (SELECT 1 FROM player_name n WHERE n.player_id = p.player_id)
-            ),
-            observed AS (
-              SELECT s.player_id, s.username, s.since
-              FROM player_snapshot s JOIN fresh f ON f.player_id = s.player_id
-              WHERE s.since < f.since
-              UNION ALL
-              SELECT player_id, username, since FROM fresh
-            ),
-            marked AS (
-              SELECT player_id, username, since,
-                     lag(username) OVER (PARTITION BY player_id ORDER BY since) AS previous
-              FROM observed
-            ),
-            windows AS (
-              SELECT player_id, username, since,
-                     lead(since) OVER (PARTITION BY player_id ORDER BY since) AS until
-              FROM marked
-              WHERE previous IS DISTINCT FROM username
-            )
-            SELECT player_id, username, since, until FROM windows
-            WHERE username !~ ${Player.TombstoneUsernameRegex}
+      sql"""INSERT INTO player_name (player_id, username, since)
+            SELECT p.player_id, p.username, now() FROM player p
+            WHERE NOT EXISTS (SELECT 1 FROM player_name n WHERE n.player_id = p.player_id)
             ON CONFLICT DO NOTHING""".update.run()
     }
 
   def selectPlayer(playerId: PlayerId): ZIO[PostgresClient, SQLException, List[PlayerName]] =
     connectZIO {
       sql"SELECT $selectCols FROM player_name WHERE player_id = $playerId ORDER BY since".query[PlayerName].run().toList
+    }
+
+  /** Every window each of `playerIds` has held a name over, in one round trip. */
+  def selectPlayers(playerIds: Iterable[PlayerId]): ZIO[PostgresClient, SQLException, List[PlayerName]] =
+    if (playerIds.isEmpty) { ZIO.succeed(Nil) }
+    else {
+      connectZIO {
+        val ids = playerIds.toList
+        sql"SELECT $selectCols FROM player_name WHERE player_id = ANY($ids) ORDER BY player_id, since"
+          .query[PlayerName].run().toList
+      }
     }
 
   /** The player that holds `username` now, if one does. */
@@ -127,27 +114,24 @@ object PlayerName {
       }
     }
 
-  /** Brings the current names of `playerIds` in line with what `player.username` stores after a write in the same
-    * transaction, the way [[ClubName.record]] does for a club: a stored name that does not already stand closes the
-    * player's current name and any other player's hold on it, then opens. A tombstone opens nothing, so its player is
-    * left holding none. Reading what is stored rather than what was written is what makes a guarded update that lost
-    * its race record nothing: it changed no row, and one statement compares a consistent snapshot of both tables.
+  /** Brings the current names of the rows a write in the same transaction landed on in line with what `player.username`
+    * stores, the way [[ClubName.record]] does for a club: a stored name that does not already stand closes the
+    * player's current name and any other player's hold on it, then opens. A row landed on is one storing the `since`
+    * and name the write gave it, so a guarded update that lost its race, or an insert that found the row already
+    * there, records nothing. That matters for a player holding no name, whose display cache still carries the name
+    * another player took: reading it back would take the name from its holder.
     */
-  private[tables] def recordStored(playerIds: Iterable[PlayerId])(using DbTx): Int = {
-    val ids = playerIds.toList.distinct
-    if (ids.isEmpty) { 0 }
-    else {
-      val drifted =
-        sql"""SELECT p.player_id, p.username, clock_timestamp() FROM player p
-              LEFT JOIN player_name n ON n.player_id = p.player_id AND n.until IS NULL
-              WHERE p.player_id = ANY($ids) AND n.username IS DISTINCT FROM p.username
-              ORDER BY p.player_id""".query[(PlayerId, Username, Instant)].run()
-      drifted.map { (playerId, username, at) =>
-        if (Player.isTombstoneUsername(username)) { close(playerId, at) }
-        else { supersede(playerId, username, at) }
-      }.sum
-    }
-  }
+  private[tables] def recordStored(written: Iterable[Player])(using DbTx): Int =
+    written.groupMap(_.since)(p => p.playerId -> p.username).toList.map { (since, writes) =>
+      val writtenNames = writes.toMap
+      val ids          = writtenNames.keys.toList
+      sql"""SELECT p.player_id, p.username, clock_timestamp() FROM player p
+            LEFT JOIN player_name n ON n.player_id = p.player_id AND n.until IS NULL
+            WHERE p.player_id = ANY($ids) AND p.since = $since AND n.username IS DISTINCT FROM p.username
+            ORDER BY p.player_id""".query[(PlayerId, Username, Instant)].run()
+        .filter((playerId, username, _) => writtenNames.get(playerId).contains(username))
+        .map((playerId, username, at) => supersede(playerId, username, at)).sum
+    }.sum
 
   // A row opened at or after `at` would close into an empty window, which the CHECK rejects and which records nothing,
   // so it is dropped instead of closed.
@@ -165,12 +149,5 @@ object PlayerName {
     val opened =
       sql"INSERT INTO player_name (player_id, username, since) VALUES ($playerId, $username, $at)".update.run()
     dropped + closed + opened
-  }
-
-  private def close(playerId: PlayerId, at: Instant)(using DbTx): Int = {
-    val dropped =
-      sql"DELETE FROM player_name WHERE player_id = $playerId AND until IS NULL AND since >= $at".update.run()
-    val closed = sql"UPDATE player_name SET until = $at WHERE player_id = $playerId AND until IS NULL".update.run()
-    dropped + closed
   }
 }
