@@ -90,7 +90,7 @@ object TestBackupNeonScript extends ZIOSpecDefault {
         !result.argv.exists(_.contains("s3cret"))
       )
     },
-    test("pgjdbc parameters with no libpq equivalent are dropped and named") {
+    test("pgjdbc parameters with no libpq equivalent are dropped and counted, never named") {
       val url =
         "jdbc:postgresql://h/ccas?connectTimeout=10&socketTimeout=30&tcpKeepAlive=true&ssl=false&prepareThreshold=0"
       for {
@@ -98,10 +98,19 @@ object TestBackupNeonScript extends ZIOSpecDefault {
       } yield assertTrue(
         result.exitCode == 0,
         result.conninfo == "postgresql://h/ccas?connect_timeout=10",
-        result.output.contains(
-          "dropped URL parameters pg_dump would reject: socketTimeout tcpKeepAlive ssl prepareThreshold"
-        )
+        result.output.contains("dropped 4 URL parameter(s) pg_dump would reject"),
+        !result.output.contains("socketTimeout")
       )
+    },
+    test("a password holding an unescaped & or ? stops the backup before pg_dump, echoing no piece of it") {
+      val urls = List(
+        "jdbc:postgresql://h/ccas?user=u&password=frag1&frag2&sslmode=require",
+        "postgresql://owner:frag3?frag4@h/ccas",
+        "postgresql://owner:frag5?x=frag6@h/ccas"
+      )
+      for {
+        results <- ZIO.foreach(urls)(url => run(env = Map("DATABASE_URL" -> url), envFile = None))
+      } yield assertTrue(results.forall(r => r.exitCode != 0 && r.argv.isEmpty && !r.output.contains("frag")))
     },
     test("ssl=true goes first, so an explicit sslmode still wins over it as it does in pgjdbc") {
       val url = "jdbc:postgresql://h/ccas?sslmode=verify-full&ssl=true"
@@ -123,6 +132,18 @@ object TestBackupNeonScript extends ZIOSpecDefault {
         result.conninfo == "postgresql://owner@h/ccas?sslmode=require&channel_binding=require",
         result.password == "p@ss+1",
         !result.output.contains("dropped")
+      )
+    },
+    test("the output names the host and database dumped, and no credential") {
+      val url = "postgresql://owner:s3cret@db.example:5432/ccas?sslmode=require"
+      for {
+        result <- run(env = Map("DATABASE_URL" -> url), envFile = None)
+        wrote   = result.output.linesIterator.find(_.startsWith("wrote ")).getOrElse("")
+      } yield assertTrue(
+        result.exitCode == 0,
+        wrote.endsWith(" from db.example:5432/ccas"),
+        !result.output.contains("owner"),
+        !result.output.contains("s3cret")
       )
     },
     test("ccas.env supplies DATABASE_URL when the environment has none") {

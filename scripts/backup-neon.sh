@@ -136,6 +136,13 @@ if [[ -r "$ENV_FILE" ]]; then
   done
 fi
 
+# Stops on a DATABASE_URL that would put a piece of the password where something
+# prints it; names only the shape, never a piece of the URL.
+reject_url() {
+  echo "backup-neon.sh: DATABASE_URL has $1; percent-encode any & or ? in the password" >&2
+  exit 1
+}
+
 # Resolve a libpq conninfo string, with the password routed to PGPASSWORD rather
 # than the URI, so it never reaches argv (where `ps` / /proc/<pid>/cmdline would
 # expose it to other local users).
@@ -151,6 +158,9 @@ if [[ -n "${DATABASE_URL:-}" ]]; then
   # Userinfo form: split the authority at its last '@' (a password may contain an
   # unescaped one), keeping the username in the URI and routing the password out.
   authority="${CONN#*://}"
+  # A '?' before the '@' is inside the password: cut there, the rest of it would
+  # land in the host and port, which pg_dump echoes when it rejects them.
+  [[ "${authority%%/*}" == *\?*@* ]] && reject_url "a '?' before its '@'"
   authority="${authority%%\?*}"
   if [[ "$authority" == *@* ]]; then
     scheme="${CONN%%://*}"
@@ -169,14 +179,18 @@ if [[ -n "${DATABASE_URL:-}" ]]; then
     base="${CONN%%\?*}"
     query="${CONN#*\?}"
     kept=()
-    dropped=()
+    dropped=0
     IFS='&' read -ra params <<<"$query"
     # The ${a[@]+…} guard: bash before 4.4 calls an empty array unbound under -u.
     for kv in ${params[@]+"${params[@]}"}; do
+      [[ -n "$kv" ]] || continue
+      # A parameter always has an '='; a part without one is most likely a piece
+      # of a password holding an unescaped '&'.
+      [[ "$kv" == *=* ]] || reject_url "a query part with no '='"
       name="${kv%%=*}"
-      if [[ "$kv" == password=* ]]; then
+      if [[ "$name" == password ]]; then
         export PGPASSWORD="$(urldecode "${kv#password=}")"
-      elif [[ -n "$name" ]]; then
+      else
         libpq_name="$(libpq_key "$name" "${kv#*=}")"
         if [[ "$libpq_name" == ssl ]]; then
           # First: libpq rewrites it to sslmode=require in place, and pgjdbc lets
@@ -185,12 +199,14 @@ if [[ -n "${DATABASE_URL:-}" ]]; then
         elif [[ -n "$libpq_name" ]]; then
           kept+=("$libpq_name${kv#"$name"}")
         else
-          dropped+=("$name")
+          dropped=$((dropped + 1))
         fi
       fi
     done
-    if ((${#dropped[@]})); then
-      echo "backup-neon.sh: dropped URL parameters pg_dump would reject: ${dropped[*]}" >&2
+    # A count, not names: the same malformed password could split into a
+    # name-shaped piece, and anything echoed here reaches the cron log.
+    if ((dropped)); then
+      echo "backup-neon.sh: dropped $dropped URL parameter(s) pg_dump would reject" >&2
     fi
     if ((${#kept[@]})); then
       CONN="$base?$(IFS='&'; echo "${kept[*]}")"
@@ -232,7 +248,12 @@ pg_dump "$CONN" \
 
 mv "$TMP" "$OUT"
 
-echo "wrote $OUT ($(du -h "$OUT" | cut -f1))"
+# Name what was dumped: a shell exporting another DATABASE_URL (direnv, say)
+# beats ccas.env, and a dump of the wrong database looks like any other.
+dumped="${CONN#*://}"
+dumped="${dumped%%\?*}"
+dumped="${dumped##*@}"
+echo "wrote $OUT ($(du -h "$OUT" | cut -f1)) from $dumped"
 
 # Retention: keep the newest $RETAIN dumps, delete the rest.
 while IFS= read -r old; do
