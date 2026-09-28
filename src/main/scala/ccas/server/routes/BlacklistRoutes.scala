@@ -2,8 +2,6 @@ package ccas.server.routes
 
 import java.time.{Instant, ZoneOffset}
 
-import scala.util.chaining.*
-
 import zio.http.*
 import zio.json.{DeriveJsonCodec, JsonCodec}
 
@@ -55,31 +53,28 @@ object BlacklistRoutes {
   // name), and whether a removal found an entry to remove.
   val routes: Routes[ChessComClient & PostgresClient, Nothing] = Routes(
     Method.GET / "api" / "blacklist" -> handler { (req: Request) =>
-      (for {
+      for {
         query <- ClubRequest.query(req)
         now = Instant.now()
         result <- ClubRequest.run(query) { club =>
           RecruitmentBlacklist.selectActiveByClub(club.clubId, now).map(_.map(BlacklistEntryResponse.fromEntry))
         }
-      } yield jsonResponse(Status.Ok, result))
-        .pipe(withErrorHandling)
+      } yield jsonResponse(Status.Ok, result)
     },
     Method.POST / "api" / "blacklist" -> handler { (req: Request) =>
-      (for {
+      for {
         body <- parseJsonBody[CreateBlacklistRequest](req)
         expiresAt = body.months.map(m => Instant.now().atZone(ZoneOffset.UTC).plusMonths(m.toLong).toInstant)
         result <- ClubRequest.run(body.club) { club =>
           BlacklistApp.addToBlacklist(club, body.usernames, body.reason, expiresAt).map(_.map(Username.unwrap))
         }
-      } yield jsonResponse(Status.Ok, result))
-        .pipe(withErrorHandling)
+      } yield jsonResponse(Status.Ok, result)
     },
     Method.DELETE / "api" / "blacklist" / string("username") -> handler { (usernameStr: String, req: Request) =>
-      (for {
+      for {
         query  <- ClubRequest.query(req)
         result <- ClubRequest.run(query)(BlacklistApp.removeFromBlacklist(_, Username.wrap(usernameStr)))
-      } yield jsonResponse(Status.Ok, result))
-        .pipe(withErrorHandling)
+      } yield jsonResponse(Status.Ok, result)
     }
-  )
+  ).handleErrorRequestCauseZIO(renderError)
 }

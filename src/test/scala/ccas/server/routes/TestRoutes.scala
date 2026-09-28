@@ -28,8 +28,8 @@ import ccas.server.jobs.*
 import ccas.server.routes.JobRoutes.{ClubJobResult, ConfirmResult, InvitedUsernames, JobResult}
 import ccas.server.scheduler.{JobSchedule, ScheduleSeed}
 import ccas.server.ServerTables
-import ccas.utils.client.{ChessComClient, TestChessComClientSupport}
-import ccas.utils.errors.ConflictException
+import ccas.utils.client.{ChessComClient, HttpStatusException, TestChessComClientSupport}
+import ccas.utils.errors.{ConflictException, ErrorResponse}
 import ccas.utils.sql.{FreshSchemaLayer, PostgresClient, TestDbCleanup}
 import ccas.utils.ProgressDisplay
 
@@ -38,6 +38,7 @@ object TestRoutes extends ZIOSpecDefault {
   override def spec: Spec[Any, Throwable] = suite("TestRoutes")(
     suiteHealth,
     suiteJobRoutes,
+    suiteRenderError,
     suiteScheduleRoutes,
     suiteClubRoutes,
     suiteManagedClubRoutes,
@@ -202,8 +203,7 @@ object TestRoutes extends ZIOSpecDefault {
     testRecruitmentInvitedAndFound,
     testRecruitmentConfirmFlipsDeferred,
     testRecruitmentReport,
-    testUnhandledErrorReturns500AndLogsCause,
-    testInterruptPropagatesWithoutLogging
+    testUnhandledErrorReturns500AndLogsCause
   )
 
   private def testRecruitmentSuccess = test("POST /api/jobs/recruitment success") {
@@ -628,18 +628,8 @@ object TestRoutes extends ZIOSpecDefault {
     } yield assertTrue(response.status == Status.BadRequest)
   }
 
-  private def testInterruptPropagatesWithoutLogging =
-    test("interrupted effect propagates and is not logged as a 500") {
-      val interrupted: Task[Response] = ZIO.interrupt
-      for {
-        logsBefore <- ZTestLogger.logOutput.map(_.size)
-        exit       <- RouteHelpers.withErrorHandling(interrupted).exit
-        logsAfter  <- ZTestLogger.logOutput.map(_.size)
-      } yield assertTrue(exit.isInterrupted, logsAfter == logsBefore)
-    }
-
   private def testUnhandledErrorReturns500AndLogsCause =
-    test("unhandled non-user-facing error returns generic 500 and logs cause") {
+    test("unhandled non-user-facing error returns generic 500 and logs cause under the route") {
       val msg = "simulated downstream failure for test"
       for {
         _    <- ensureClubs
@@ -655,12 +645,67 @@ object TestRoutes extends ZIOSpecDefault {
         body == """{"error":"Internal server error"}""",
         logs.exists(entry =>
           entry.logLevel == LogLevel.Error &&
+            entry.message() == "Unhandled error in route POST /api/jobs/recruitment" &&
             entry.cause.failures.exists {
               case t: Throwable => Option(t.getMessage).contains(msg)
               case _            => false
             }
         )
       )
+    }
+
+  // ==========================================================================
+  // Suite: renderError
+  // ==========================================================================
+
+  private def suiteRenderError = suite("renderError")(
+    testUpstreamFailureRenders502,
+    testDefectRenders500AndLogsCause,
+    testInterruptPropagatesWithoutLogging
+  )
+
+  private def runFailing(effect: Task[Response]): URIO[Scope, Response] =
+    Routes(Method.GET / "failing" -> handler(effect))
+      .handleErrorRequestCauseZIO(RouteHelpers.renderError)
+      .runZIO(jsonRequest(Method.GET, "/failing"))
+
+  private def testUpstreamFailureRenders502 =
+    test("an escaping HttpStatusException renders as 502 carrying its message") {
+      val upstream = HttpStatusException(503, URL.decode("https://api.chess.com/pub/x").toOption.get, "down")
+      for {
+        response <- runFailing(ZIO.fail(upstream))
+        body     <- response.body.asString
+      } yield assertTrue(
+        response.status == Status.BadGateway,
+        body.fromJson[ErrorResponse] == Right(ErrorResponse(upstream.getMessage))
+      )
+    }
+
+  private def testDefectRenders500AndLogsCause =
+    test("a defect renders as a generic 500 and logs its cause under the route") {
+      val msg = "simulated route defect for test"
+      for {
+        response <- runFailing(ZIO.die(new RuntimeException(msg)))
+        body     <- response.body.asString
+        logs     <- ZTestLogger.logOutput
+      } yield assertTrue(
+        response.status == Status.InternalServerError,
+        body == """{"error":"Internal server error"}""",
+        logs.exists(entry =>
+          entry.logLevel == LogLevel.Error &&
+            entry.message() == "Unhandled error in route GET /failing" &&
+            entry.cause.defects.exists(_.getMessage == msg)
+        )
+      )
+    }
+
+  private def testInterruptPropagatesWithoutLogging =
+    test("an interrupted handler propagates through the route table and is not logged as a 500") {
+      for {
+        logsBefore <- ZTestLogger.logOutput.map(_.size)
+        exit       <- runFailing(ZIO.interrupt).exit
+        logsAfter  <- ZTestLogger.logOutput.map(_.size)
+      } yield assertTrue(exit.isInterrupted, logsAfter == logsBefore)
     }
 
   // ==========================================================================

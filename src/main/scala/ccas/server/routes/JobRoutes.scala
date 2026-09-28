@@ -3,9 +3,7 @@ package ccas.server.routes
 import java.nio.charset.StandardCharsets
 import java.time.Instant
 
-import scala.util.chaining.*
-
-import zio.{IO, NonEmptyChunk, RIO, URIO, ZIO}
+import zio.{IO, NonEmptyChunk, RIO, ZIO}
 import zio.http.*
 import zio.json.{jsonField, DeriveJsonCodec, EncoderOps, JsonCodec}
 import zio.stream.ZStream
@@ -190,12 +188,12 @@ object JobRoutes {
       handler((req: Request) => latestInvitedForClub(req)),
     Method.GET / "api" / "recruitment" / "runs" / string("runId") / "invited" ->
       handler((runId: String, _: Request) => invitedForRun(runId))
-  )
+  ).handleErrorRequestCauseZIO(renderError)
 
   // --- Job submission ---
 
-  private def submitRecruitment(req: Request): URIO[JobRunner & ChessComClient & PostgresClient, Response] =
-    (for {
+  private def submitRecruitment(req: Request): RIO[JobRunner & ChessComClient & PostgresClient, Response] =
+    for {
       body   <- parseJsonBody[RecruitmentRequest](req)
       runner <- ZIO.service[JobRunner]
       result <- submitClubJob(runner, JobKind.Recruitment, body.club, Some(body.toJson)) {
@@ -214,10 +212,10 @@ object JobRoutes {
             jobRunIdOption = jobRunIdOption
           )
       }
-    } yield jsonResponse(Status.Ok, result)).pipe(withErrorHandling)
+    } yield jsonResponse(Status.Ok, result)
 
-  private def submitMembership(req: Request): URIO[JobRunner & ChessComClient & PostgresClient, Response] =
-    (for {
+  private def submitMembership(req: Request): RIO[JobRunner & ChessComClient & PostgresClient, Response] =
+    for {
       body   <- parseJsonBody[MembershipRequest](req)
       runner <- ZIO.service[JobRunner]
       results <- submitClubJobs(runner, JobKind.Membership, body.clubs, Some(body.toJson)) {
@@ -230,10 +228,10 @@ object JobRoutes {
             jobRunIdOption = jobRunIdOption
           )
       }
-    } yield jsonResponse(Status.Ok, results)).pipe(withErrorHandling)
+    } yield jsonResponse(Status.Ok, results)
 
-  private def submitMatchRef: URIO[JobRunner & PostgresClient, Response] =
-    (for {
+  private def submitMatchRef: RIO[JobRunner & PostgresClient, Response] =
+    for {
       runner <- ZIO.service[JobRunner]
       submitted <- jobIdOrConflict(
         runner.submit(
@@ -244,11 +242,10 @@ object JobRoutes {
           effect = _ => RefApp.populate(forceSkipped = false, upgradeRefs = false)
         )
       )
-    } yield jsonResponse(Status.Ok, JobResult(jobIdOption = submitted.toOption, error = submitted.left.toOption)))
-      .pipe(withErrorHandling)
+    } yield jsonResponse(Status.Ok, JobResult(jobIdOption = submitted.toOption, error = submitted.left.toOption))
 
-  private def submitHistory(req: Request): URIO[JobRunner & ChessComClient & PostgresClient, Response] =
-    (for {
+  private def submitHistory(req: Request): RIO[JobRunner & ChessComClient & PostgresClient, Response] =
+    for {
       body   <- parseJsonBody[HistoryRequest](req)
       runner <- ZIO.service[JobRunner]
       refreshMinHours = body.refreshMinHours.orElse(body.refresh.filter(identity).map(_ => 0))
@@ -264,10 +261,10 @@ object JobRoutes {
             jobRunIdOption = jobRunIdOption
           )
       }
-    } yield jsonResponse(Status.Ok, results)).pipe(withErrorHandling)
+    } yield jsonResponse(Status.Ok, results)
 
-  private def submitStats(req: Request): URIO[JobRunner & ChessComClient & PostgresClient, Response] =
-    (for {
+  private def submitStats(req: Request): RIO[JobRunner & ChessComClient & PostgresClient, Response] =
+    for {
       body         <- parseJsonBody[StatsRequest](req)
       runner       <- ZIO.service[JobRunner]
       periodOption <- statsPeriod(body)
@@ -278,7 +275,7 @@ object JobRoutes {
           case None                 => StatsApp.memberStatsAndReport(club.clubId)
         }
       }
-    } yield jsonResponse(Status.Ok, result)).pipe(withErrorHandling)
+    } yield jsonResponse(Status.Ok, result)
 
   private def statsPeriod(body: StatsRequest): IO[BadRequestException, Option[(Instant, Instant)]] =
     (body.since, body.until) match {
@@ -293,39 +290,38 @@ object JobRoutes {
 
   // --- Job inspection ---
 
-  private def listJobs: URIO[JobRunner & PostgresClient, Response] =
-    (for {
+  private def listJobs: RIO[JobRunner & PostgresClient, Response] =
+    for {
       runner <- ZIO.service[JobRunner]
       jobs   <- runner.recentJobs(50)
-    } yield jsonResponse(Status.Ok, jobs.map(JobStatusResponse.fromJobRun))).pipe(withErrorHandling)
+    } yield jsonResponse(Status.Ok, jobs.map(JobStatusResponse.fromJobRun))
 
-  private def jobStatus(jobId: String): URIO[JobRunner & PostgresClient, Response] =
-    (for {
+  private def jobStatus(jobId: String): RIO[JobRunner & PostgresClient, Response] =
+    for {
       runner    <- ZIO.service[JobRunner]
       jobOption <- runner.status(JobRunId.wrap(jobId))
     } yield jobOption match {
       case Some(job) => jsonResponse(Status.Ok, JobStatusResponse.fromJobRun(job))
       case None      => jsonResponse(Status.NotFound, ErrorResponse(s"Job $jobId not found"))
-    }).pipe(withErrorHandling)
+    }
 
   /** Interrupts a running job's fiber (best-effort, async — the job records `Cancelled` itself as it unwinds). 200 if a
     * live job fiber was found and interrupted; 404 if the id is unknown, already terminal, or (unsupported
     * multi-server) owned by another instance. POST, not DELETE: the row is retained, this is a state transition.
     */
-  private def cancelJob(jobId: String): URIO[JobRunner, Response] =
-    (for {
+  private def cancelJob(jobId: String): RIO[JobRunner, Response] =
+    for {
       runner    <- ZIO.service[JobRunner]
       cancelled <- runner.cancel(JobRunId.wrap(jobId))
     } yield
       if (cancelled) { jsonResponse(Status.Ok, CancelResult(jobId)) }
       else { jsonResponse(Status.NotFound, ErrorResponse(s"No running job $jobId to cancel")) }
-    ).pipe(withErrorHandling)
 
   /** Chunked `text/plain` stream of a job's log lines. Stays open while the job runs (lines arrive as emitted) and
     * closes once the job is terminal and the tail reaches EOF, so a client can treat body-close as "job finished".
     */
-  private def jobLogs(jobId: String): URIO[JobRunner & PostgresClient, Response] =
-    (for {
+  private def jobLogs(jobId: String): RIO[JobRunner & PostgresClient, Response] =
+    for {
       runner <- ZIO.service[JobRunner]
       logs   <- runner.logStream(JobRunId.wrap(jobId))
     } yield logs match {
@@ -337,20 +333,20 @@ object JobRoutes {
           .text(s"Job $jobId has no log available — aged out of job_log_retention_days, or never written")
           .status(Status.Gone)
       case JobLogs.Streaming(lines) => lineStream(lines)
-    }).pipe(withErrorHandling)
+    }
 
   /** Chunked NDJSON stream of a job's live progress: one `ProgressSnapshot` per line (latest-wins), merging the job's
     * app bars with the shared client's API gauge. Live-only — closes when the job is terminal. The following CLI opens
     * this only when it wants bars (interactive TTY, not `--no-progress`); it never affects the `/logs` follow.
     */
-  private def jobProgress(jobId: String): URIO[JobRunner & PostgresClient, Response] =
-    (for {
+  private def jobProgress(jobId: String): RIO[JobRunner & PostgresClient, Response] =
+    for {
       runner       <- ZIO.service[JobRunner]
       framesOption <- runner.progressStream(JobRunId.wrap(jobId))
     } yield framesOption match {
       case None         => Response.text(s"Job $jobId not found").status(Status.NotFound)
       case Some(frames) => lineStream(frames)
-    }).pipe(withErrorHandling)
+    }
 
   // Interleaves a keepalive tick so a job phase silent for >50s can't idle the follower's connection shut (#150).
   private def lineStream(lines: ZStream[Any, Throwable, String]): Response =
@@ -367,19 +363,19 @@ object JobRoutes {
     * THIS run only, deliberately: a `--cumulative` top-up returns just its new invites so the operator doesn't
     * re-paste players already invited earlier today.
     */
-  private def invitedForJob(jobId: String): URIO[PostgresClient, Response] =
-    candidatesByJobResponse(jobId, RecruitmentCandidate.selectInvitedByRun).pipe(withErrorHandling)
+  private def invitedForJob(jobId: String): RIO[PostgresClient, Response] =
+    candidatesByJobResponse(jobId, RecruitmentCandidate.selectInvitedByRun)
 
   /** Still-deferred candidates for a job's recruitment run — shown by interactive `ccas recruit` before the operator
     * confirms (a deferred-confirm run leaves everything Deferred). 404 if the job has no recruitment run.
     */
-  private def foundForJob(jobId: String): URIO[PostgresClient, Response] =
-    candidatesByJobResponse(jobId, RecruitmentCandidate.selectDeferredByRun).pipe(withErrorHandling)
+  private def foundForJob(jobId: String): RIO[PostgresClient, Response] =
+    candidatesByJobResponse(jobId, RecruitmentCandidate.selectDeferredByRun)
 
   /** Confirms a deferred-confirm run: flips its Deferred candidates to Invited, records the count, returns the
     * confirmed usernames. A re-POST finds nothing deferred (flipped = 0) and returns the same already-invited list.
     */
-  private def confirmForJob(jobId: String): URIO[PostgresClient, Response] =
+  private def confirmForJob(jobId: String): RIO[PostgresClient, Response] =
     withRunForJob(jobId) { run =>
       for {
         // Flip and count-update share one transaction so a crash can't leave candidates Invited with the run's
@@ -392,11 +388,11 @@ object JobRoutes {
         }
         usernames <- RecruitmentCandidate.selectInvitedByRun(run.runId).flatMap(usernamesFor)
       } yield jsonResponse(Status.Ok, ConfirmResult(flipped, usernames))
-    }.pipe(withErrorHandling)
+    }
 
   /** The latest recruitment run's invited usernames for a club — `ccas recruit --report`. */
-  private def latestInvitedForClub(req: Request): URIO[ChessComClient & PostgresClient, Response] =
-    (for {
+  private def latestInvitedForClub(req: Request): RIO[ChessComClient & PostgresClient, Response] =
+    for {
       query <- ClubRequest.query(req)
       // The failure drops the resolution, so it names the club as it was asked for, which the caller recognises.
       result <- ClubRequest.run(query) { club =>
@@ -406,11 +402,11 @@ object JobRoutes {
           .flatMap(run => RecruitmentCandidate.selectInvitedByRun(run.runId).flatMap(usernamesFor))
           .map(InvitedUsernames(_))
       }
-    } yield jsonResponse(Status.Ok, result)).pipe(withErrorHandling)
+    } yield jsonResponse(Status.Ok, result)
 
   /** A specific recruitment run's invited usernames — `ccas recruit --report --run N`. */
-  private def invitedForRun(runId: String): URIO[PostgresClient, Response] =
-    (runId.toLongOption match {
+  private def invitedForRun(runId: String): RIO[PostgresClient, Response] =
+    runId.toLongOption match {
       case None => ZIO.succeed(jsonResponse(Status.BadRequest, ErrorResponse(s"Invalid run id: $runId")))
       case Some(id) =>
         val rid = RecruitmentRunId.wrap(id)
@@ -418,7 +414,7 @@ object JobRoutes {
           case None    => ZIO.succeed(jsonResponse(Status.NotFound, ErrorResponse(s"Run $runId not found")))
           case Some(_) => invitedRunResponse(rid)
         }
-    }).pipe(withErrorHandling)
+    }
 
   // --- Recruitment result helpers ---
 

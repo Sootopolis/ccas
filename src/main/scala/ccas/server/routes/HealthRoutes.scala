@@ -4,6 +4,7 @@ import com.augustnagro.magnum.sql
 import zio.http.*
 import zio.ZIO
 
+import ccas.server.routes.RouteHelpers.renderError
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.connectZIO
 
@@ -16,5 +17,5 @@ object HealthRoutes {
         .as(Response.ok)
         .orElse(ZIO.succeed(Response(status = Status.ServiceUnavailable)))
     }
-  )
+  ).handleErrorRequestCauseZIO(renderError)
 }

@@ -1,7 +1,5 @@
 package ccas.server.routes
 
-import scala.util.chaining.*
-
 import zio.http.*
 import zio.json.{DeriveJsonCodec, JsonCodec}
 
@@ -43,27 +41,23 @@ object ManagedClubRoutes {
   // Marking and unmarking answer with a `ClubResult` saying whether the marker changed.
   val routes: Routes[ChessComClient & PostgresClient, Nothing] = Routes(
     Method.GET / "api" / "managed-clubs" -> handler { (_: Request) =>
-      ManagedClubApp.list
-        .map(views => jsonResponse(Status.Ok, views.map(ManagedClubResponse.fromView)))
-        .pipe(withErrorHandling)
+      ManagedClubApp.list.map(views => jsonResponse(Status.Ok, views.map(ManagedClubResponse.fromView)))
     },
     Method.POST / "api" / "managed-clubs" -> handler { (req: Request) =>
-      (for {
+      for {
         body   <- parseJsonBody[MarkManagedRequest](req)
         result <- ClubRequest.run(body.club)(club => ManagedClubApp.mark(club.clubId))
-      } yield jsonResponse(Status.Ok, result))
-        .pipe(withErrorHandling)
+      } yield jsonResponse(Status.Ok, result)
     },
     Method.DELETE / "api" / "managed-clubs" -> handler { (req: Request) =>
       // Unmanage + stop the club's per-club schedules atomically (#106), so a failure leaves neither the managed_club
       // marker nor the job_schedule rows half-removed. Resolution may ask Chess.com, so it runs before the transaction.
-      (for {
+      for {
         query <- ClubRequest.query(req)
         result <- ClubRequest.run(query) { club =>
           PostgresClient.withTransaction(ManagedClubApp.unmark(club.clubId) <* JobSchedule.deleteByClub(club.clubId))
         }
-      } yield jsonResponse(Status.Ok, result))
-        .pipe(withErrorHandling)
+      } yield jsonResponse(Status.Ok, result)
     }
-  )
+  ).handleErrorRequestCauseZIO(renderError)
 }
