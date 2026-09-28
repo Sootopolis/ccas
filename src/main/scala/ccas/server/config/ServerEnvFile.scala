@@ -10,7 +10,8 @@ import zio.{Task, ZIO}
   * [[ServerEnvOverlay]] applies at boot.
   *
   * Distinct from `ccas.cli.config.CliConfig`, the HOCON CLI *client* config: this file holds what the *server* needs
-  * to boot, in plain env-var form so it doubles as a systemd `EnvironmentFile` and a shell-sourceable file. It lives
+  * to boot, in plain env-var form so it doubles as a systemd `EnvironmentFile` — though not a shell-sourceable one: a
+  * JDBC URL is written unquoted, and its `&` is a shell control operator. It lives
   * in `ccas.server.config` rather than `ccas.cli` so `CcasServer` can apply it without a server-to-cli package cycle.
   *
   * The line model that makes a one-key edit non-destructive, the first-`=` split, and [[writeAtomic]]'s 0600

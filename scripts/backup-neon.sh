@@ -7,21 +7,18 @@
 # local disk as the disaster-recovery floor. It is read-only (pg_dump only) and
 # excludes the rebuildable cache / diagnostics tables to keep dumps small.
 #
-# Connection: reuses the app's existing config. DATABASE_URL (JDBC form) takes
-# priority; otherwise the DB_* fields are used. No backup-specific secrets. The
-# password is always passed via PGPASSWORD, never in argv (so it can't leak
-# through `ps` / /proc/<pid>/cmdline to other local users).
-#
-# Env knobs:
-#   CCAS_BACKUP_DIR     output directory      (default: ~/ccas-backups)
-#   CCAS_BACKUP_RETAIN  dumps to keep         (default: 6)
+# Connection: the server's own settings, read the way the server reads them, so
+# the dump is of the database the server uses. No backup-specific secrets.
 #
 # Restore a dump with (needs pg_restore >= the pg_dump that wrote it):
 #   pg_restore --no-owner --no-privileges -d <target-conn> ccas-<stamp>.dump
 #
 set -euo pipefail
 
-BACKUP_DIR="${CCAS_BACKUP_DIR:-$HOME/ccas-backups}"
+# A dump is the whole database: owner-only, like the ccas.env it connects with.
+umask 077
+
+BACKUP_DIR="${CCAS_BACKUP_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/ccas/backups}"
 RETAIN="${CCAS_BACKUP_RETAIN:-6}"
 
 # Data excluded from the dump (rebuilt from the Chess.com API on next run).
@@ -61,16 +58,94 @@ urldecode_userinfo() {
   urldecode_pct "$1"
 }
 
-# Resolve a libpq conninfo string from the app's env, with the password routed
-# to PGPASSWORD rather than the URI/argv.
+trim() {
+  local s="$1"
+  s="${s#"${s%%[![:space:]]*}"}"
+  s="${s%"${s##*[![:space:]]}"}"
+  printf '%s' "$s"
+}
+
+# Every occurrence of $2 in $1 becomes $3, left to right. A loop rather than
+# ${1//…/…}, whose handling of backslashes in the replacement varies by bash
+# version, and macOS runs this under 3.2.
+replace_all() {
+  local s="$1" out=""
+  while [[ "$s" == *"$2"* ]]; do
+    out+="${s%%"$2"*}$3"
+    s="${s#*"$2"}"
+  done
+  printf '%s' "$out$s"
+}
+
+# ServerEnvFile.unquote, step for step.
+unquote() {
+  local v="$1"
+  if [[ ${#v} -ge 2 && "$v" == \"*\" ]]; then
+    v="${v:1:${#v}-2}"
+    v="$(replace_all "$v" '\"' '"')"
+    v="$(replace_all "$v" '\\' '\')"
+  elif [[ ${#v} -ge 2 && "$v" == \'*\' ]]; then
+    v="${v:1:${#v}-2}"
+  fi
+  printf '%s' "$v"
+}
+
+# The libpq name for a URL parameter, or nothing to drop it: pg_dump refuses one
+# it does not know, and a JDBC URL may carry pgjdbc's. pgjdbc names libpq has an
+# equivalent for are renamed; libpq's own pass through.
+libpq_key() {
+  case "$1" in
+    channelBinding) echo channel_binding ;;
+    connectTimeout) echo connect_timeout ;;
+    # libpq accepts `ssl=true` in a URI for JDBC's sake, and no other value.
+    ssl) [[ "$2" == true ]] && echo ssl ;;
+    host | hostaddr | port | dbname | user | passfile | require_auth | \
+      channel_binding | connect_timeout | client_encoding | options | \
+      application_name | fallback_application_name | keepalives | \
+      keepalives_idle | keepalives_interval | keepalives_count | \
+      tcp_user_timeout | replication | gssencmode | sslmode | requiressl | \
+      sslnegotiation | sslcompression | sslcert | sslkey | sslpassword | \
+      sslcertmode | sslrootcert | sslcrl | sslcrldir | sslsni | requirepeer | \
+      ssl_min_protocol_version | ssl_max_protocol_version | krbsrvname | \
+      gsslib | gssdelegation | service | target_session_attrs | \
+      load_balance_hosts) echo "$1" ;;
+  esac
+  return 0
+}
+
+# Each connection key the environment leaves blank takes its value from the
+# server's ccas.env: the precedence ServerEnvOverlay gives the server. The file
+# is parsed, never `source`d: the `&` in a JDBC URL is a shell control operator.
+CONN_KEYS=(DATABASE_URL DB_HOST DB_PORT DB_NAME DB_USER DB_PASSWORD)
+ENV_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/ccas/ccas.env"
+if [[ -r "$ENV_FILE" ]]; then
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ "$(trim "$line")" == \#* || "$line" != *=* ]] && continue
+    key="$(trim "${line%%=*}")"
+    [[ "$key" == "export "* ]] && key="$(trim "${key#export }")"
+    # Last assignment wins, as in ServerEnvFile.toMap.
+    if [[ " ${CONN_KEYS[*]} " == *" $key "* ]]; then
+      printf -v "file_$key" '%s' "$(unquote "$(trim "${line#*=}")")"
+    fi
+  done <"$ENV_FILE"
+  for key in "${CONN_KEYS[@]}"; do
+    file_var="file_$key"
+    if [[ -z "$(trim "${!key:-}")" && -n "$(trim "${!file_var:-}")" ]]; then
+      printf -v "$key" '%s' "${!file_var}"
+    fi
+  done
+fi
+
+# Resolve a libpq conninfo string, with the password routed to PGPASSWORD rather
+# than the URI, so it never reaches argv (where `ps` / /proc/<pid>/cmdline would
+# expose it to other local users).
 if [[ -n "${DATABASE_URL:-}" ]]; then
   # DATABASE_URL may be in either accepted form (the app normalises both — see
   # PostgresClient.normalizeJdbcUrl):
   #   jdbc:postgresql://host/db?user=...&password=...&sslmode=require
   #   postgresql://user:pass@host/db?sslmode=require       (what providers hand out)
-  # Stripping the "jdbc:" prefix yields a libpq URI pg_dump accepts. Credentials
-  # are pulled out of whichever position they sit in, into PGPASSWORD, so the
-  # password never reaches argv (where `ps` would expose it to other local users).
+  # Without "jdbc:", either is a libpq URI once its password is lifted out and
+  # its parameters are given libpq's names (below).
   CONN="${DATABASE_URL#jdbc:}"
 
   # Userinfo form: split the authority at its last '@' (a password may contain an
@@ -94,14 +169,29 @@ if [[ -n "${DATABASE_URL:-}" ]]; then
     base="${CONN%%\?*}"
     query="${CONN#*\?}"
     kept=()
+    dropped=()
     IFS='&' read -ra params <<<"$query"
-    for kv in "${params[@]}"; do
+    # The ${a[@]+…} guard: bash before 4.4 calls an empty array unbound under -u.
+    for kv in ${params[@]+"${params[@]}"}; do
+      name="${kv%%=*}"
       if [[ "$kv" == password=* ]]; then
         export PGPASSWORD="$(urldecode "${kv#password=}")"
-      else
-        kept+=("$kv")
+      elif [[ -n "$name" ]]; then
+        libpq_name="$(libpq_key "$name" "${kv#*=}")"
+        if [[ "$libpq_name" == ssl ]]; then
+          # First: libpq rewrites it to sslmode=require in place, and pgjdbc lets
+          # an explicit sslmode win wherever it sits.
+          kept=("ssl=true" ${kept[@]+"${kept[@]}"})
+        elif [[ -n "$libpq_name" ]]; then
+          kept+=("$libpq_name${kv#"$name"}")
+        else
+          dropped+=("$name")
+        fi
       fi
     done
+    if ((${#dropped[@]})); then
+      echo "backup-neon.sh: dropped URL parameters pg_dump would reject: ${dropped[*]}" >&2
+    fi
     if ((${#kept[@]})); then
       CONN="$base?$(IFS='&'; echo "${kept[*]}")"
     else
