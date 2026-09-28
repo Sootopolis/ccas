@@ -325,17 +325,18 @@ This is separate from the server's `application.conf` / environment configuratio
 
 ## Backups
 
-Production data lives on Neon's free plan, which retains only 24h of point-in-time recovery. [`scripts/backup-neon.sh`](scripts/backup-neon.sh) takes a weekly compressed logical dump to local disk as the disaster-recovery floor. It is read-only (`pg_dump` only) and reuses the same connection config as the app — `DATABASE_URL` (JDBC form) takes priority, otherwise the `DB_*` fields. The rebuildable cache / diagnostics tables (`api_response_cache`, `api_response_body`, `api_fetch_failure`) are dumped schema-only (`--exclude-table-data`) to keep dumps small.
+Production data lives on Neon's free plan, which retains only 24h of point-in-time recovery. [`scripts/backup-neon.sh`](scripts/backup-neon.sh) takes a weekly compressed logical dump to local disk as the disaster-recovery floor. It is read-only (`pg_dump` only) and reads the server's connection config the way the server does — `DATABASE_URL` in either form, otherwise the `DB_*` fields, each from the environment and otherwise from `ccas.env` — so it dumps the database the server uses, with nothing to export. The rebuildable cache / diagnostics tables (`api_response_cache`, `api_response_body`, `api_fetch_failure`) are dumped schema-only (`--exclude-table-data`) to keep dumps small.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CCAS_BACKUP_DIR` | `~/ccas-backups` | Output directory for `.dump` files |
+| `CCAS_BACKUP_DIR` | `${XDG_DATA_HOME:-~/.local/share}/ccas/backups` | Output directory for `.dump` files |
 | `CCAS_BACKUP_RETAIN` | 6 | Number of most-recent dumps to keep (older are pruned) |
 
-Run it once manually (with the DB env loaded), then schedule weekly. Sunday 04:00 UTC, sourcing the repo `.env` so the same connection config is reused:
+Run it once manually, then schedule weekly. Sunday 04:00, cron's local time; cron's own `PATH` is `/usr/bin:/bin`, so add the directory holding the `pg_dump` that `command -v pg_dump` finds, and set any `CCAS_BACKUP_*` variable on the crontab line too:
 
 ```cron
-0 4 * * 0 set -a; . /path/to/ccas/.env; set +a; /path/to/ccas/scripts/backup-neon.sh >> ~/ccas-backups/backup.log 2>&1
+PATH=/opt/homebrew/bin:/usr/bin:/bin
+0 4 * * 0 /path/to/ccas/scripts/backup-neon.sh >> ~/.local/share/ccas/backups/backup.log 2>&1
 ```
 
 A weekly cadence is one Neon compute wake per week — negligible against the 192 active-hr/mo free-tier budget. Restore a dump with `pg_restore` (use a version **≥** the `pg_dump` that wrote the file — a custom-format archive can't be read by an older `pg_restore`):
