@@ -36,19 +36,8 @@ object ClubSlugRenameResolver {
     def fromApi(apiClub: ApiClub): ResolvedClub = ResolvedClub(apiClub.canonicalSlug, apiClub)
   }
 
-  /** Returns the current canonical slug when `staleSlug` 404s, or `None` if no rename can be inferred. Verifies the
-    * candidate via `ApiClub` and does NOT update the `club` table. Use [[resolveAndPersist]] for the side-effecting
-    * variant.
-    */
-  def resolveCurrentSlug(
-    client: ChessComClient,
-    staleSlug: ClubSlug,
-    clubIdHint: Option[ClubId]
-  ): RIO[PostgresClient, Option[ClubSlug]] =
-    resolveAndPersist(client, staleSlug, clubIdHint).map(_.map(_.slug))
-
-  /** Resolves the current slug AND persists it via `Club.upsert`. Returns the verified `ApiClub` so callers don't
-    * have to refetch.
+  /** Resolves the current slug for a `staleSlug` that 404s and persists it via `Club.upsert`, or `None` if no rename
+    * can be inferred. The result carries the verified `ApiClub`, so callers don't have to refetch.
     */
   def resolveAndPersist(
     client: ChessComClient,
