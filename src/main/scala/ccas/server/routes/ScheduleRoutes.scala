@@ -2,7 +2,6 @@ package ccas.server.routes
 
 import java.time.Instant
 
-import scala.util.chaining.*
 import scala.util.Try
 
 import zio.http.*
@@ -203,12 +202,10 @@ object ScheduleRoutes {
 
   val routes: Routes[ChessComClient & PostgresClient, Nothing] = Routes(
     Method.GET / "api" / "schedules" -> handler {
-      JobSchedule.selectAll
-        .map(list => jsonResponse(Status.Ok, list.map(ScheduleResponse.fromSchedule)))
-        .pipe(withErrorHandling)
+      JobSchedule.selectAll.map(list => jsonResponse(Status.Ok, list.map(ScheduleResponse.fromSchedule)))
     },
     Method.POST / "api" / "schedules" -> handler { (req: Request) =>
-      (for {
+      for {
         body             <- parseJsonBody[CreateScheduleRequest](req)
         kind             <- ZIO.fromEither(parseJobKind(body.kind)).mapError(BadRequestException(_))
         now              <- Clock.instant
@@ -220,11 +217,10 @@ object ScheduleRoutes {
           case None              => persist(clubless).asSome
         }
         status = if (scheduleOption.isDefined) { Status.Created } else { Status.Ok }
-      } yield jsonResponse(status, CreateScheduleResponse(scheduleOption, resolutionOption)))
-        .pipe(withErrorHandling)
+      } yield jsonResponse(status, CreateScheduleResponse(scheduleOption, resolutionOption))
     },
     Method.PUT / "api" / "schedules" / long("id") -> handler { (id: Long, req: Request) =>
-      (for {
+      for {
         body     <- parseJsonBody[UpdateScheduleRequest](req)
         existing <- JobSchedule.selectId(id).someOrFail(NotFoundException(s"Schedule $id not found"))
         args     <- ZIO.fromEither(buildUpdate(existing, body)).mapError(BadRequestException(_))
@@ -238,13 +234,10 @@ object ScheduleRoutes {
           args.params
         )
         updated <- JobSchedule.selectId(id).someOrFail(NotFoundException(s"Schedule $id not found"))
-      } yield jsonResponse(Status.Ok, ScheduleResponse.fromSchedule(updated)))
-        .pipe(withErrorHandling)
+      } yield jsonResponse(Status.Ok, ScheduleResponse.fromSchedule(updated))
     },
     Method.DELETE / "api" / "schedules" / long("id") -> handler { (id: Long, _: Request) =>
-      JobSchedule.delete(id)
-        .as(Response(status = Status.NoContent))
-        .pipe(withErrorHandling)
+      JobSchedule.delete(id).as(Response(status = Status.NoContent))
     }
-  )
+  ).handleErrorRequestCauseZIO(renderError)
 }

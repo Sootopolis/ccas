@@ -49,10 +49,12 @@ A "set" is a **versioned insert**. Criteria rows are immutable and `recruitment_
 - `ScheduleRoutes` — CRUD for scheduled jobs.
 - `BlacklistRoutes` — synchronous CRUD for `RecruitmentBlacklist`, delegating to `BlacklistApp`.
 - `RecruitmentCriteriaRoutes` — synchronous `POST /api/recruitment-criteria`, `GET .../{alias}`, `GET /api/recruitment-criteria`, delegating to `RecruitmentCriteriaApp`.
+- `ManagedClubRoutes` — synchronous CRUD for the managed-club marker, delegating to `ManagedClubApp`.
+- `ClubRoutes` — `GET /api/clubs`, the named clubs the CLI's completion cache reads.
 
 Every route that names a club reads it as a `ClubQuery` — in a JSON body, or as exactly one of `?clubId=` / `?slug=` in a URL — and resolves it through `ClubRequest` the way a job submit does, so a former name reaches its club on every route. A synchronous route answers with a `ClubResult`: the resolution, plus its result only when the resolution found a club to act on.
 
-Route handlers use inline JSON codecs. User-facing errors (`BadRequestException`, `NotFoundException`, `ConflictException`) form a sealed `UserFacingError` trait (`ccas.utils.errors`) carrying the HTTP status and a pre-encoded JSON body; `RouteHelpers.withErrorHandling` renders them uniformly (default `{"error": "<message>"}`, with `.of[B: JsonEncoder](body, msg)` for structured payloads). An escaping `HttpStatusException` from the Chess.com client renders as 502. Anything else, defects included, collapses to a generic 500 with the full cause logged via `ZIO.logErrorCause`; pure-interrupt causes are re-propagated so shutdown and client-disconnect noise stays out of the error log.
+Route handlers use inline JSON codecs. User-facing errors form a sealed `UserFacingError` trait (`ccas.utils.errors`) carrying the HTTP status and a pre-encoded JSON body (default `{"error": "<message>"}`, with `.of[B: JsonEncoder](body, msg)` for structured payloads). Each route table turns its handlers' failures into responses through `RouteHelpers.renderError`. An error raised inside a streaming body (`/logs`, `/progress`) arrives after the response has started, so it ends the stream instead.
 
 ### `JobRunner`
 

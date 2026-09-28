@@ -1,7 +1,5 @@
 package ccas.server.routes
 
-import scala.util.chaining.*
-
 import zio.http.*
 import zio.json.JsonCodec
 
@@ -28,7 +26,6 @@ object ClubRoutes {
       Club.selectNamed
         .map(_.sortBy(_.slug.value).map(c => ClubInfo(c.slug, c.name)))
         .map(infos => jsonResponse(Status.Ok, ClubsResponse(infos)))
-        .pipe(withErrorHandling)
     }
-  )
+  ).handleErrorRequestCauseZIO(renderError)
 }

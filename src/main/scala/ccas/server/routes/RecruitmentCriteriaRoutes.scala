@@ -1,7 +1,5 @@
 package ccas.server.routes
 
-import scala.util.chaining.*
-
 import zio.http.*
 import zio.json.{DeriveJsonCodec, JsonCodec}
 
@@ -35,33 +33,30 @@ object RecruitmentCriteriaRoutes {
   // Each answers with a `ClubResult` carrying the new criteria id, the alias's criteria, or the club's aliases.
   val routes: Routes[ChessComClient & PostgresClient, Nothing] = Routes(
     Method.POST / "api" / "recruitment-criteria" -> handler { (req: Request) =>
-      (for {
+      for {
         body <- parseJsonBody[SetCriteriaRequest](req)
         criteria = body.criteria.toCriteria
         _ <- RecruitmentCriteriaApp.validateSet(body.alias, criteria)
         result <- ClubRequest.run(body.club) { club =>
           RecruitmentCriteriaApp.set(club, body.alias, criteria).map(SetCriteriaResponse(_))
         }
-      } yield jsonResponse(Status.Ok, result))
-        .pipe(withErrorHandling)
+      } yield jsonResponse(Status.Ok, result)
     },
     Method.GET / "api" / "recruitment-criteria" / string("alias") -> handler { (alias: String, req: Request) =>
-      (for {
+      for {
         query  <- ClubRequest.query(req)
         result <- ClubRequest.run(query)(RecruitmentCriteriaApp.show(_, alias).map(CriteriaSpec.fromCriteria))
-      } yield jsonResponse(Status.Ok, result))
-        .pipe(withErrorHandling)
+      } yield jsonResponse(Status.Ok, result)
     },
     Method.GET / "api" / "recruitment-criteria" -> handler { (req: Request) =>
-      (for {
+      for {
         query <- ClubRequest.query(req)
         result <- ClubRequest.run(query) { club =>
           RecruitmentCriteriaApp
             .list(club.clubId)
             .map(_.map(a => AliasSummary(a.alias, a.since.toString, a.criteriaId)))
         }
-      } yield jsonResponse(Status.Ok, result))
-        .pipe(withErrorHandling)
+      } yield jsonResponse(Status.Ok, result)
     }
-  )
+  ).handleErrorRequestCauseZIO(renderError)
 }

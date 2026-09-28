@@ -1,6 +1,6 @@
 package ccas.server.routes
 
-import zio.{Task, ZIO}
+import zio.{Cause, Task, UIO, ZIO}
 import zio.http.*
 import zio.json.{JsonDecoder, JsonEncoder}
 
@@ -17,23 +17,17 @@ object RouteHelpers {
       ZIO.fromEither(summon[JsonDecoder[T]].decodeJson(s)).mapError(BadRequestException(_))
     )
 
-  /** Route boundary error handler. Expected user-facing errors render directly from the sealed hierarchy. Escaping
-    * `HttpStatusException`s (unhandled upstream Chess.com failures) still render 502 for caller ergonomics. Anything
-    * else — including defects — collapses to a generic 500 with the full cause logged at error level, so operational
-    * visibility isn't lost. Pure interruption causes are re-propagated rather than rendered, matching the old
-    * `catchAll`-based behaviour and keeping shutdown / client-disconnect noise out of the error log.
+  /** Route boundary error renderer; attach it to every route table with `.handleErrorRequestCauseZIO(renderError)`.
+    * The fallback 500 is generic so nothing unvetted reaches the caller, and logs the full cause so nothing is lost to
+    * the operator. A pure interruption never arrives here: zio-http re-propagates it first, keeping shutdown and
+    * client-disconnect noise out of the log.
     */
-  def withErrorHandling[R](effect: ZIO[R, Throwable, Response]): ZIO[R, Nothing, Response] =
-    effect
-      .catchSome {
-        case e: UserFacingError     => ZIO.succeed(Response.json(e.renderBody).status(e.status))
-        case e: HttpStatusException => ZIO.succeed(jsonResponse(Status.BadGateway, ErrorResponse(e.getMessage)))
-      }
-      .catchAllCause { cause =>
-        if (cause.isInterruptedOnly) { ZIO.interrupt }
-        else {
-          ZIO.logErrorCause("Unhandled error in route", cause)
-            .as(jsonResponse(Status.InternalServerError, ErrorResponse("Internal server error")))
-        }
-      }
+  def renderError(request: Request, cause: Cause[Throwable]): UIO[Response] =
+    cause.failureOption match {
+      case Some(e: UserFacingError)     => ZIO.succeed(Response.json(e.renderBody).status(e.status))
+      case Some(e: HttpStatusException) => ZIO.succeed(jsonResponse(Status.BadGateway, ErrorResponse(e.getMessage)))
+      case _ =>
+        ZIO.logErrorCause(s"Unhandled error in route ${request.method.name} ${request.path.encode}", cause)
+          .as(jsonResponse(Status.InternalServerError, ErrorResponse("Internal server error")))
+    }
 }
