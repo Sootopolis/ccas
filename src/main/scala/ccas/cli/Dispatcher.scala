@@ -7,13 +7,14 @@ import scala.io.StdIn
 
 import zio.*
 
-import ccas.analysis.apps.{ClubQuery, ClubRef, ClubResolution, NamedClub}
+import ccas.analysis.apps.{ClubQuery, ClubResolution, NamedClub}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, Username}
 import ccas.api.player.ApiPlayer
 import ccas.cli.config.{ConfigWriter, CurrentClubRef}
 import ccas.cli.config.CurrentClubRef.sameSlug
-import ccas.server.routes.{ClubRequest, ClubResult}
+import ccas.server.routes.{ClubRequest, ClubResult, ClubRoutes}
 import ccas.server.routes.BlacklistRoutes.{BlacklistEntryResponse, CreateBlacklistRequest}
+import ccas.server.routes.ClubRoutes.{ClubInfo, ClubsResponse}
 import ccas.server.routes.JobRoutes.{
   CancelResult,
   ClubJobResult,
@@ -126,7 +127,7 @@ object Dispatcher {
     api.getJson[List[ManagedClubResponse]]("/api/managed-clubs").map(_.map(_.slug))
 
   private def allClubSlugs(api: CcasApiClient): Task[List[String]] =
-    api.getJson[CompletionCache.ClubsDto]("/api/clubs").map(_.clubs.map(_.slug))
+    api.getJson[ClubsResponse]("/api/clubs").map(_.clubs.map(club => ClubSlug.unwrap(club.slug)))
 
   private def runCommand(
     api: CcasApiClient,
@@ -332,6 +333,36 @@ object Dispatcher {
       api
         .getJson[List[ManagedClubResponse]]("/api/managed-clubs")
         .flatMap(clubs => printManagedClubs(clubs, currentClubOption).as(0))
+
+    case CliCommand.ClubsShow(_, slugs, clubIdOption) => showClub(api, slugs, clubIdOption)
+  }
+
+  // A look, not an act: an ambiguous name is listed rather than prompted for, and `current_club` is not rewritten. A
+  // name that reaches no club fails with its reason, so `club show x && …` gates on it.
+  private[cli] def showClub(api: CcasApiClient, slugs: List[String], clubIdOption: Option[Long]): Task[Int] =
+    for {
+      target    <- ClubResolver.operand(slugs, clubIdOption)
+      result    <- api.getJson[ClubResult[ClubInfo]](ClubRoutes.resolvePath(target.query))
+      (_, info) <- ZIO.fromEither(result.toEither).mapError(CliError(_, 1))
+      _         <- ZIO.foreachDiscard(shownClub(result.resolution, info.name))(line => Console.printLine(line).orDie)
+    } yield 0
+
+  // `club show`'s answer: the club a command naming it would act on, then why, when that is not simply the club holding
+  // the name asked for. A resolution with no club to show has already failed the command with its reason.
+  private def shownClub(resolution: ClubResolution, name: String): List[String] = {
+    def line(club: NamedClub) = s"#${ClubId.unwrap(club.clubId)}  ${ClubSlug.unwrap(club.slug)}  $name"
+    resolution match {
+      case ClubResolution.Known(club) => List(line(club))
+      case ClubResolution.Renamed(club, requested) =>
+        List(line(club), s"'${ClubSlug.unwrap(requested)}' is a former name of this club")
+      case ClubResolution.Moved(club, requested, previous) =>
+        List(
+          line(club),
+          s"'${ClubSlug.unwrap(requested)}' now belongs to this club on Chess.com, not to " +
+            previous.map(_.display).mkString(", ")
+        )
+      case _ => Nil
+    }
   }
 
   // Unmanaging leaves the `club` row intact and submission gates on that row, not on managed status, so a
@@ -449,12 +480,6 @@ object Dispatcher {
     */
   private[cli] final case class ClubOutcome(resolution: ClubResolution, acted: Boolean)
 
-  /** A request that reached its club by a former name: what was typed, and what that club answers to now. */
-  private[cli] final case class RenamedName(requested: String, current: String)
-
-  /** A request whose name Chess.com says belongs to `holder` now, rather than to the clubs that held it here. */
-  private[cli] final case class MovedName(requested: String, holder: NamedClub, previous: List[ClubRef])
-
   private def jobOutcome(result: ClubJobResult): ClubOutcome =
     ClubOutcome(resolution = result.resolution, acted = result.jobIdOption.isDefined)
 
@@ -469,8 +494,7 @@ object Dispatcher {
       ZIO.foreachDiscard(outcomes.headOption)(o => maybeRefreshCurrentClub(currentClubOption, target, o.resolution))
 
   private def noteOutcomes(currentClubOption: Option[String], outcomes: List[ClubOutcome]): UIO[Unit] =
-    noteMissingClubs(missingFrom(outcomes), currentClubOption) *>
-      noteNameChanges(renamedFrom(outcomes).map(renamedNote) ++ movedFrom(outcomes).map(movedNote))
+    noteMissingClubs(missingFrom(outcomes), currentClubOption) *> noteNameChanges(nameChangesFrom(outcomes))
 
   // The synchronous club commands resolve on the server just as a submit does, so they settle an ambiguous name, note
   // a changed one and refresh the pointer the same way; a club the server could not act on fails the command.
@@ -582,26 +606,24 @@ object Dispatcher {
       CompletionCache.invalidate *> ZIO.foreachDiscard(pointerOption)(ref => staleCurrentClubHint(ref.slug))
     }
 
-  // (requested, current) for each request that acted on a club it reached by a former name. One that did nothing (a
-  // job already running) gets no note, since the note says which club was acted on.
-  private[cli] def renamedFrom(outcomes: List[ClubOutcome]): List[RenamedName] =
-    outcomes.collect { case ClubOutcome(ClubResolution.Renamed(club, requested), true) =>
-      RenamedName(requested = ClubSlug.unwrap(requested), current = ClubSlug.unwrap(club.slug))
+  // One that did nothing (a job already running) gets no note, since the note says which club was acted on.
+  private[cli] def nameChangesFrom(outcomes: List[ClubOutcome]): List[String] =
+    outcomes.filter(_.acted).flatMap(outcome => nameChangeNote(outcome.resolution))
+
+  /** The note for acting on a club reached by a name it does not hold, or none when the name was its own. */
+  private[cli] def nameChangeNote(resolution: ClubResolution): Option[String] =
+    resolution match {
+      case ClubResolution.Renamed(club, requested) =>
+        val current = ClubSlug.unwrap(club.slug)
+        Some(s"note: '${ClubSlug.unwrap(requested)}' is a former name of '$current'; using '$current'")
+      // Chess.com's answer wins, so say whose name this was here before acting on another club entirely (#254).
+      case ClubResolution.Moved(club, requested, previous) =>
+        Some(
+          s"note: '${ClubSlug.unwrap(requested)}' now belongs to club ${club.display} on Chess.com, not to " +
+            s"${previous.map(_.display).mkString(", ")}; using the club that holds it"
+        )
+      case _ => None
     }
-
-  // (requested, holder, previous holders) for each request that acted on a club whose name was taken from another.
-  private[cli] def movedFrom(outcomes: List[ClubOutcome]): List[MovedName] =
-    outcomes.collect { case ClubOutcome(ClubResolution.Moved(club, requested, previous), true) =>
-      MovedName(requested = ClubSlug.unwrap(requested), holder = club, previous = previous)
-    }
-
-  private def renamedNote(renamed: RenamedName): String =
-    s"note: '${renamed.requested}' is a former name of '${renamed.current}'; using '${renamed.current}'"
-
-  // Chess.com's answer wins, so say whose name this was here before acting on another club entirely (#254).
-  private def movedNote(moved: MovedName): String =
-    s"note: '${moved.requested}' now belongs to club ${moved.holder.display} on Chess.com, not to " +
-      s"${moved.previous.map(_.display).mkString(", ")}; using the club that holds it"
 
   // A name that reached the server attached to a different club than it names now means the completion cache may still
   // be offering the old one, so drop the cache alongside the note.

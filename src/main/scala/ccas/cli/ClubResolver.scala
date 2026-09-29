@@ -40,8 +40,8 @@ object ClubTarget {
   * `--club-id <id>` names a club outright, so it is rejected alongside anything else that names one: an id and a name
   * are two answers that can disagree, and the server must never have to pick between them (ADR 0016).
   *
-  * Two commands name a club without falling back to `current_club`: `schedule add`, whose job kinds don't all take a
-  * club ([[optional]]), and `club add` / `remove`, whose club is the operand ([[operand]]).
+  * Some commands name a club without falling back to `current_club`: `schedule add`, whose job kinds don't all take a
+  * club ([[optional]]), and `club add` / `remove` / `show`, whose club is the operand ([[operand]]).
   */
 object ClubResolver {
 

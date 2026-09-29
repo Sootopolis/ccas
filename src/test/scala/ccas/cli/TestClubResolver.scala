@@ -161,7 +161,7 @@ object TestClubResolver extends ZIOSpecDefault {
         assertTrue(r.left.exists(e => isUsageError(e) && e.getMessage == ClubResolver.BlankClubError))
       )
     },
-    test("operand: club add/remove take exactly one slug or --club-id, never current_club") {
+    test("operand: club add/remove/show take exactly one slug or --club-id, never current_club") {
       for {
         bySlug <- ClubResolver.operand(slugs = List("team-a"), clubIdOption = None)
         byId   <- ClubResolver.operand(slugs = Nil, clubIdOption = Some(621L))
