@@ -6,7 +6,6 @@ import java.nio.file.attribute.FileTime
 import scala.jdk.CollectionConverters.*
 
 import zio.{Clock, UIO, ZIO}
-import zio.json.{DeriveJsonDecoder, JsonDecoder}
 
 /** Maintains the cache files the generated shell completions read — club slugs and recent job ids. Every operation is
   * best-effort: IO errors are swallowed and never change a command's exit code (completion is a convenience, not
@@ -26,24 +25,8 @@ object CompletionCache {
   // Cap on retained recent job ids (newest first).
   private val MaxRecentJobs = 50
 
-  /** Minimal CLI-local mirror of the server's package-private `ClubsResponse` — only the slug is needed downstream. */
-  private[cli] final case class ClubDto(slug: String, name: String)
-  private[cli] object ClubDto {
-    given JsonDecoder[ClubDto] = DeriveJsonDecoder.gen
-  }
-
-  private[cli] final case class ClubsDto(clubs: List[ClubDto])
-  private[cli] object ClubsDto {
-    given JsonDecoder[ClubsDto] = DeriveJsonDecoder.gen
-  }
-
   /** True when the clubs cache is absent or older than the TTL (any IO error is treated as "stale" → refresh). */
   def clubsStale: UIO[Boolean] = clubsStaleIn(XdgPaths.clubsFile)
-
-  /** Read the cached club slugs (one per line). Used by `ccas use-club` for an offline "unknown slug" hint — never a
-    * source of truth. See [[readClubsIn]] for why this is an `Option` rather than a bare list.
-    */
-  def readClubs: UIO[Option[List[String]]] = readClubsIn(XdgPaths.clubsFile)
 
   /** Overwrite the clubs cache with one slug per line (the endpoint already sorts them). Duplicates are dropped:
     * `club.slug` carries no unique index, so two clubs can answer to one name (#254). `false` means the write failed
@@ -80,7 +63,8 @@ object CompletionCache {
       }.orElseSucceed(true)
     )
 
-  /** `Some(slugs)` when the cache was read — an empty list then genuinely means "no clubs cached". `None` when the file
+  /** The cached club slugs, one per line, for `ccas use-club`'s offline typo hint — never a source of truth.
+    * `Some(slugs)` when the cache was read — an empty list then genuinely means "no clubs cached". `None` when the file
     * is there but unreadable (bad permissions, corrupt bytes, not a regular file).
     *
     * The distinction matters: "I know of no clubs" and "I could not find out" are different answers, and collapsing

@@ -94,7 +94,10 @@ enum ClubResolution {
     case Moved(club, _, _)   => Right(club)
     case NotLocal(requested) => Left(s"Club not found: ${requested.describe}")
     case Problematic(requested) =>
-      Left(s"Club ${requested.describe} is unavailable — its canonical name could not be resolved")
+      Left(
+        s"Club ${requested.describe} can't be reached — it has lost its name to another club, and the server hasn't " +
+          "seen what it is called now"
+      )
     case Ambiguous(requested, holders) =>
       val candidates = holders.map(_.display).mkString(", ")
       Left(

@@ -10,8 +10,9 @@ import zio.stream.ZStream
 import zio.json.{DecoderOps, EncoderOps}
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault, ZTestLogger}
 
-import ccas.analysis.apps.{ClubQuery, ClubResolution, NamedClub}
+import ccas.analysis.apps.{ClubQuery, ClubRef, ClubResolution, NamedClub}
 import ccas.analysis.apps.recruitment.{CandidateOutcome, CriteriaSpec}
+import ccas.analysis.apps.recruitment.RecruitmentTestSupport.{apiClubJson, fakeChessComClient}
 import ccas.analysis.tables.{
   Club,
   ManagedClub,
@@ -1141,7 +1142,12 @@ object TestRoutes extends ZIOSpecDefault {
 
   private def suiteClubRoutes = suite("ClubRoutes")(
     testClubsListsNamedSorted,
-    testClubsResponseWireShape
+    testClubsResponseWireShape,
+    testResolveByIdOrName,
+    testResolveFormerName,
+    testResolveAsksChessCom,
+    testResolveUnknownClub,
+    testResolveNeedsOneClub
   )
 
   // ==========================================================================
@@ -1306,6 +1312,73 @@ object TestRoutes extends ZIOSpecDefault {
         body.contains("\"name\"")
       )
     }
+
+  // Through the path the CLI builds, so the two cannot drift apart.
+  private def resolveClub(query: ClubQuery) = resolveAt(ClubRoutes.resolvePath(query))
+
+  private def resolveAt(path: String) =
+    ClubRoutes.routes
+      .runZIO(jsonRequest(Method.GET, path))
+      .flatMap(resp => resp.body.asString.map(body => (resp.status, body.fromJson[ClubResult[ClubRoutes.ClubInfo]])))
+
+  private def testResolveByIdOrName =
+    test("GET /api/clubs/resolve answers the same club by id and by name, with the club itself (#271)") {
+      val known = ClubResolution.Known(NamedClub(ClubId(200), ClubSlug("test-club")))
+      val info  = ClubRoutes.ClubInfo(ClubSlug("test-club"), "Test Club")
+      for {
+        _      <- ensureClubs
+        byId   <- resolveClub(ClubQuery.ById(ClubId(200)))
+        byName <- resolveClub(ClubQuery.BySlug(ClubSlug("test-club")))
+      } yield assertTrue(
+        byId == (Status.Ok, Right(ClubResult("test-club", known, Some(info)))),
+        byName == (Status.Ok, Right(ClubResult("test-club", known, Some(info))))
+      )
+    }
+
+  private def testResolveFormerName = test("GET /api/clubs/resolve reaches a club by a former name and says so") {
+    val renamed = ClubResolution.Renamed(NamedClub(renamedClubId, ClubSlug("renamed-to")), ClubSlug("renamed-from"))
+    for {
+      _                 <- ensureRenamedClub
+      (status, decoded) <- resolveClub(ClubQuery.BySlug(ClubSlug("renamed-from")))
+    } yield assertTrue(
+      status == Status.Ok,
+      decoded.map(r => (r.resolution, r.resultOption.map(_.name))) == Right((renamed, Some("Renamed Club")))
+    )
+  }
+
+  // Local data alone says Renamed here, which would preview a club the next command naming it does not act on.
+  private def testResolveAsksChessCom =
+    test("GET /api/clubs/resolve asks Chess.com who holds a former name now, as a command naming it would") {
+      val formerHolder = ClubId(220)
+      val movedFrom    = ClubQuery.BySlug(ClubSlug("moved-from"))
+      val moved = ClubResolution.Moved(
+        club = NamedClub(ClubId(229), ClubSlug("moved-from")),
+        requested = ClubSlug("moved-from"),
+        previous = List(ClubRef(formerHolder, Some(ClubSlug("moved-to"))))
+      )
+      for {
+        _                 <- Club.upsert(Club(formerHolder, t0, ClubSlug("moved-from"), "Moved Club", None, None, None))
+        _                 <- Club.upsert(Club(formerHolder, t0, ClubSlug("moved-to"), "Moved Club", None, None, None))
+        client            <- fakeChessComClient(Map("club/moved-from" -> apiClubJson(229, "moved-from")))
+        (status, decoded) <- resolveClub(movedFrom).updateService[ChessComClient](_ => client)
+        _                 <- TestDbCleanup.deleteClub(ClubId(229))
+        _                 <- TestDbCleanup.deleteClub(formerHolder)
+      } yield assertTrue(status == Status.Ok, decoded.map(_.resolution) == Right(moved))
+    }
+
+  private def testResolveUnknownClub = test("GET /api/clubs/resolve for a club never ingested answers with no result") {
+    val query = ClubQuery.BySlug(ClubSlug("no-such-club"))
+    resolveClub(query).map(answer =>
+      assertTrue(answer == (Status.Ok, Right(ClubResult("no-such-club", ClubResolution.NotLocal(query), None))))
+    )
+  }
+
+  private def testResolveNeedsOneClub = test("GET /api/clubs/resolve naming no club, or naming it twice, is refused") {
+    for {
+      (none, _) <- resolveAt("/api/clubs/resolve")
+      (both, _) <- resolveAt("/api/clubs/resolve?clubId=200&slug=test-club")
+    } yield assertTrue(none == Status.BadRequest, both == Status.BadRequest)
+  }
 
   /** Extract the first `"id"` value from a JSON array response. */
   private def extractFirstId(json: String): Long = {

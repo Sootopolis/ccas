@@ -123,6 +123,7 @@ object CliCommand {
   final case class ClubsAdd(server: String, slugs: List[String], clubIdOption: Option[Long]) extends ServerCommand
   final case class ClubsRemove(server: String, slugs: List[String], clubIdOption: Option[Long]) extends ServerCommand
   final case class ClubsList(server: String) extends ServerCommand
+  final case class ClubsShow(server: String, slugs: List[String], clubIdOption: Option[Long]) extends ServerCommand
 
   // --- Shared options ---
 
@@ -420,7 +421,7 @@ object CliCommand {
       .withHelp("Manage scheduled jobs")
       .subcommands(scheduleList(default), scheduleAdd(default), scheduleRemove(default))
 
-  // `club add`/`remove` manage the membership set itself, so the club is the direct operand — a positional slug (like
+  // `club add`/`remove`/`show` are about the club itself, so it is the direct operand — a positional slug (like
   // `git remote add <name>`) or `--club-id` in its place, not the `--club` context option the operation commands use.
   // The slug is `repeat` rather than required so the id can stand alone, and `ClubResolver.operand` checks the arity.
   private def clubsAdd(default: String): Command[CliCommand] =
@@ -444,12 +445,20 @@ object CliCommand {
       .withHelp("List the clubs you manage with CCAS")
       .map(ClubsList.apply)
 
+  private def clubsShow(default: String): Command[CliCommand] =
+    Command(
+      "show",
+      serverOpt(default) ++ clubIdOpt,
+      (Args.text("slug") ?? "Club slug (URL name) to look up").repeat
+    ).withHelp("Show which club a name or id reaches, without acting on it")
+      .map { case ((server, clubIdOption), slugs) => ClubsShow(server, slugs, clubIdOption) }
+
   // The group help names `use-club` because the two are easy to confuse and live on opposite sides of the tree: this
   // group edits the server-side managed set, while `use-club` is a local pointer at which of them commands target.
   private def clubs(default: String): Command[CliCommand] =
     Command("club")
       .withHelp("Manage the set of clubs you run CCAS for (pick the one commands target with 'ccas use-club')")
-      .subcommands(clubsAdd(default), clubsRemove(default), clubsList(default))
+      .subcommands(clubsAdd(default), clubsRemove(default), clubsList(default), clubsShow(default))
 
   private val completion: Command[CliCommand] =
     Command("completion", Args.text("shell") ?? "Shell to emit completions for: bash, zsh, or fish")

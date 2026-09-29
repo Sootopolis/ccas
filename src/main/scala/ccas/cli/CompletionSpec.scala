@@ -11,11 +11,11 @@ package ccas.cli
 object CompletionSpec {
 
   /** What a command's positional arguments accept, so completion can offer the right cache (or nothing). Note: club
-    * slugs are now targeted by the `--club` option (see [[clubFlag]]), not a positional — the only commands left with
-    * a positional club slug are `use-club` and `club add` / `remove`.
+    * slugs are now targeted by the `--club` option (see [[clubFlag]]), not a positional — the only commands left with a
+    * positional club slug are `use-club` and `club add` / `remove` / `show`.
     */
   enum PositionalKind {
-    case Slug    // a single club slug: use-club, club add/remove
+    case Slug    // a single club slug: use-club, club add/remove/show
     case JobId   // a single job-run id: logs
     case Shell   // bash | zsh | fish: completion
     case EnvKey  // a server-env var name: config get/set/unset (candidates from ServerEnvKeys.all)
@@ -103,6 +103,7 @@ object CompletionSpec {
     Leaf(List("club", "add"), List(server, clubIdFlag), List(server, clubIdFlag), Slug),
     Leaf(List("club", "remove"), List(server, clubIdFlag), List(server, clubIdFlag), Slug),
     Leaf(List("club", "list"), List(server), List(server), NoArgs),
+    Leaf(List("club", "show"), List(server, clubIdFlag), List(server, clubIdFlag), Slug),
     // `config` is local (no --server): it edits the local ccas.env file. get/set/unset take an env-var-name positional
     // we complete from ServerEnvKeys.all (EnvKey); --show-secrets is a boolean (not a value flag), so list/show keep
     // empty valueFlags.
@@ -120,7 +121,7 @@ object CompletionSpec {
     Group("server", List("up", "down", "status"), "Run and manage the ccas backend HTTP server"),
     Group("blacklist", List("add", "list", "remove"), "Manage a club's recruitment blacklist"),
     Group("schedule", List("list", "add", "remove"), "Manage scheduled jobs"),
-    Group("club", List("add", "remove", "list"),
+    Group("club", List("add", "remove", "list", "show"),
       "Manage the set of clubs you run CCAS for (pick the one commands target with 'ccas use-club')"),
     Group("config", List("get", "set", "unset", "list", "show", "path", "init"),
       "Manage the local server-bootstrap config file (ccas.env)")
@@ -167,6 +168,7 @@ object CompletionSpec {
     List("club", "add")         -> "Mark a club as one you manage with CCAS",
     List("club", "remove")      -> "Remove a club from the ones you manage",
     List("club", "list")        -> "List the clubs you manage with CCAS",
+    List("club", "show")        -> "Show which club a name or id reaches, without acting on it",
     List("blacklist", "add")    -> "Blacklist one or more usernames for a club",
     List("blacklist", "list")   -> "List a club's blacklist entries",
     List("blacklist", "remove") -> "Remove a username from a club's blacklist",

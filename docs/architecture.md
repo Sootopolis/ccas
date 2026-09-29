@@ -50,7 +50,7 @@ A "set" is a **versioned insert**. Criteria rows are immutable and `recruitment_
 - `BlacklistRoutes` — synchronous CRUD for `RecruitmentBlacklist`, delegating to `BlacklistApp`.
 - `RecruitmentCriteriaRoutes` — synchronous `POST /api/recruitment-criteria`, `GET .../{alias}`, `GET /api/recruitment-criteria`, delegating to `RecruitmentCriteriaApp`.
 - `ManagedClubRoutes` — synchronous CRUD for the managed-club marker, delegating to `ManagedClubApp`.
-- `ClubRoutes` — `GET /api/clubs`, the named clubs the CLI's completion cache reads.
+- `ClubRoutes` — `GET /api/clubs`, the named clubs the CLI's completion cache reads, and `GET /api/clubs/resolve`, which club a query names without acting on it (`ccas club show`, and `use-club`'s check).
 
 Every route that names a club reads it as a `ClubQuery` — in a JSON body, or as exactly one of `?clubId=` / `?slug=` in a URL — and resolves it through `ClubRequest` the way a job submit does, so a former name reaches its club on every route. A synchronous route answers with a `ClubResult`: the resolution, plus its result only when the resolution found a club to act on.
 

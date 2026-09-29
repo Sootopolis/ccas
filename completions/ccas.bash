@@ -87,10 +87,11 @@ _ccas() {
       esac ;;
     club)
       case "$sub" in
-        "") COMPREPLY=( $(compgen -W "add remove list --help" -- "$cur") ); return ;;
+        "") COMPREPLY=( $(compgen -W "add remove list show --help" -- "$cur") ); return ;;
         add) opts="--server --club-id"; pos="slug" ;;
         remove) opts="--server --club-id"; pos="slug" ;;
         list) opts="--server" ;;
+        show) opts="--server --club-id"; pos="slug" ;;
         *) COMPREPLY=(); return ;;
       esac ;;
     config)

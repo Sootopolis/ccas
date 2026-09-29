@@ -120,14 +120,16 @@ object TestCliParser extends ZIOSpecDefault {
         s.contains(CliCommand.Stats(DefaultServer, None, Some(621L), None, None, false, false))
       )
     },
-    test("--club-id parses on every command that names a club, the operand of club add/remove included") {
+    test("--club-id parses on every command that names a club, the operand of club add/remove/show included") {
       for {
         list     <- parsed("blacklist", "list", "--club-id", "621")
         remove   <- parsed("blacklist", "remove", "--club-id", "621", "alice")
         schedule <- parsed("schedule", "add", "--kind", "Membership", "--interval-hours", "24", "--club-id", "621")
         add      <- parsed("club", "add", "--club-id", "621")
         unmanage <- parsed("club", "remove", "--club-id", "621")
+        show     <- parsed("club", "show", "--club-id", "621")
       } yield assertTrue(
+        show.contains(CliCommand.ClubsShow(DefaultServer, Nil, Some(621L))),
         list.contains(CliCommand.BlacklistList(DefaultServer, None, Some(621L))),
         remove.contains(CliCommand.BlacklistRemove(DefaultServer, None, Some(621L), "alice")),
         schedule.exists {
@@ -285,6 +287,11 @@ object TestCliParser extends ZIOSpecDefault {
     },
     test("club list parses with no slug and defaults the server") {
       parsed("club", "list").map(c => assertTrue(c.contains(CliCommand.ClubsList(DefaultServer))))
+    },
+    test("club show parses the slug positional") {
+      parsed("club", "show", "team-alpha").map(c =>
+        assertTrue(c.contains(CliCommand.ClubsShow(DefaultServer, List("team-alpha"), None)))
+      )
     },
     // `club add`/`remove` manage the set, so the club is a required operand — but a slug or `--club-id` can supply
     // it, so a bare `club add` parses and `ClubResolver.operand` refuses it (not a current_club fallback).
