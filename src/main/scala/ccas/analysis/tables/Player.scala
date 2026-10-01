@@ -106,51 +106,48 @@ object Player {
       PlayerName.recordStored(List(player))
     }.unit
 
-  def insertBatch(players: Iterable[Player]): ZIO[PostgresClient, SQLException, BatchUpdateResult] =
-    transactZIO {
-      val result = batchUpdate(players) { player =>
-        sql"""INSERT INTO player (player_id, joined, username, status, title, since)
-              VALUES (${player.playerId}, ${player.joined}, ${player.username},
-                ${player.status}, ${player.title}, ${player.since})
-              ON CONFLICT (player_id) DO NOTHING""".update
-      }
-      PlayerName.recordStored(players)
-      result
-    }
-
   def insertIfNew(player: Player): ZIO[PostgresClient, SQLException, Int] =
     transactZIO {
-      val rows =
-        sql"""INSERT INTO player (player_id, joined, username, status, title, since)
-              VALUES (${player.playerId}, ${player.joined}, ${player.username},
-                ${player.status}, ${player.title}, ${player.since})
-              ON CONFLICT (player_id) DO NOTHING""".update.run()
+      val rows = insertIfNewFrag(player).run()
       PlayerName.recordStored(List(player))
       rows
     }
 
-  // Optimistic update: `AND since < newSince` makes concurrent updates monotonic. If another
-  // writer has already advanced `since` past ours, our UPDATE no-ops instead of overwriting their
-  // fresher data. Protects against lost updates when two MembershipApp runs for different clubs
-  // both classify a shared player from the same stale state.
   def updateCurrentState(player: Player): ZIO[PostgresClient, SQLException, Int] =
     transactZIO {
-      val rows =
-        sql"""UPDATE player SET username = ${player.username}, status = ${player.status},
-                title = ${player.title}, since = ${player.since}
-              WHERE player_id = ${player.playerId} AND since < ${player.since}""".update.run()
+      val rows = updateCurrentStateFrag(player).run()
       PlayerName.recordStored(List(player))
       rows
     }
 
-  def updateCurrentStateBatch(players: Iterable[Player]): ZIO[PostgresClient, SQLException, BatchUpdateResult] =
+  /** [[insertIfNew]] for each of `inserted` and [[updateCurrentState]] for each of `updated`, recording the names both
+    * store in one call, since a transaction must record names only once (ADR 0020).
+    */
+  def writeBatch(
+    inserted: Iterable[Player],
+    updated: Iterable[Player]
+  ): ZIO[PostgresClient, SQLException, BatchUpdateResult] =
     transactZIO {
-      val result = batchUpdate(players) { player =>
-        sql"""UPDATE player SET username = ${player.username}, status = ${player.status},
-                title = ${player.title}, since = ${player.since}
-              WHERE player_id = ${player.playerId} AND since < ${player.since}""".update
+      val insertedRows = batchUpdate(inserted)(insertIfNewFrag)
+      val updatedRows  = batchUpdate(updated)(updateCurrentStateFrag)
+      PlayerName.recordStored(inserted ++ updated)
+      (insertedRows, updatedRows) match {
+        case (BatchUpdateResult.Success(i), BatchUpdateResult.Success(u)) => BatchUpdateResult.Success(i + u)
+        case _                                                            => BatchUpdateResult.SuccessNoInfo
       }
-      PlayerName.recordStored(players)
-      result
     }
+
+  private def insertIfNewFrag(player: Player): Update =
+    sql"""INSERT INTO player (player_id, joined, username, status, title, since)
+          VALUES (${player.playerId}, ${player.joined}, ${player.username},
+            ${player.status}, ${player.title}, ${player.since})
+          ON CONFLICT (player_id) DO NOTHING""".update
+
+  // Optimistic update: `AND since < newSince` makes concurrent updates monotonic. If another writer has already
+  // advanced `since` past ours, our UPDATE no-ops instead of overwriting their fresher data. Protects against lost
+  // updates when two MembershipApp runs for different clubs both classify a shared player from the same stale state.
+  private def updateCurrentStateFrag(player: Player): Update =
+    sql"""UPDATE player SET username = ${player.username}, status = ${player.status},
+            title = ${player.title}, since = ${player.since}
+          WHERE player_id = ${player.playerId} AND since < ${player.since}""".update
 }

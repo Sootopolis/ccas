@@ -36,7 +36,7 @@ Rules that aren't derivable from reading the code. Follow them; they exist becau
 
 **ZIO idioms.** `ZIO.whenDiscard` when the result is `Unit`. Prefer the `when` variants over the `unless` ones and negate the predicate instead — a reader should be able to follow the condition without mentally inverting it. Prefer `ZIO.whenZIODiscard(effect)(body)` over `effect.flatMap(b => ZIO.whenDiscard(b)(body))` whenever the bound value is used only as the predicate (`.negate` covers the inverted case); keep the `flatMap` only when the body also needs the value. `layer.build *> rest` when a layer is provided purely for its side effect (silences the `ZLayer` macro warning). Note that in ZIO 2.1 `ZIO.logInfo` and friends ignore `currentLogLevel`, so any per-fiber level filter has to live in the `ZLogger` itself.
 
-**SQL.** Write methods return the number of rows affected, not `Unit`. Prefer `UNION ALL` over `UNION` where deduplication isn't needed. Magnum specifics: a custom `DbCodec` must not throw on `null`, because Magnum's `OptionCodec` reads the value *before* checking `wasNull`; and interpolating a bare enum case (`${TriggerType.Interval}`) into `sql""` emits no placeholder and produces a syntax error — widen the value to the enum type first.
+**SQL.** Write methods return the number of rows affected, not `Unit`. Record names once per transaction (`Player.writeBatch` for batches; [0020](docs/adr/0020-claims-on-one-name-queue.md)). Prefer `UNION ALL` over `UNION` where deduplication isn't needed. Magnum specifics: a custom `DbCodec` must not throw on `null`, because Magnum's `OptionCodec` reads the value *before* checking `wasNull`; and interpolating a bare enum case (`${TriggerType.Interval}`) into `sql""` emits no placeholder and produces a syntax error — widen the value to the enum type first.
 
 **Formatting.** The repo is not scalafmt-clean. Never run `scalafmtAll` / `scalafmtSbt` — it churns ~120 files. Format only the files you touched, and even then check the diff: reformatting a file that was never formatted rewraps comments and reorders imports far beyond your change.
 
@@ -98,6 +98,7 @@ Rules that aren't derivable from reading the code. Follow them; they exist becau
 | What earns a history table                       | [0017](docs/adr/0017-what-earns-a-history-table.md)                                                                |
 | The two JVM flags, and their three homes         | [0018](docs/adr/0018-every-jvm-carries-the-same-two-flags.md)                                                      |
 | A reported 404 is an answer, not a failure       | [0019](docs/adr/0019-a-reported-404-is-an-answer.md)                                                               |
+| Name claims; advisory locks                      | [0020](docs/adr/0020-claims-on-one-name-queue.md)                                                                  |
 
 Component-level detail — the apps and their run modes, the route surface, `JobRunner` cancellation semantics, the scheduler, `app_setting` — is in [`docs/architecture.md`](docs/architecture.md).
 

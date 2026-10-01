@@ -9,7 +9,7 @@ import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 import ccas.utils.sql.DbCodecs.given
-import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
+import ccas.utils.sql.{ForcedOverlap, FreshSchemaLayer, PostgresClient}
 import ccas.utils.sql.PostgresClient.{connectZIO, transactZIO}
 
 /** `club_name` is kept in step with every write of `club.slug`, and its constraints hold the current-slice invariants
@@ -20,6 +20,9 @@ object TestClubNameSql extends ZIOSpecDefault {
   private val t0: Instant = LocalDateTime.of(2025, 6, 1, 0, 0).toInstant(ZoneOffset.UTC)
 
   private def club(id: Long, slug: String): Club = Club(ClubId(id), t0, ClubSlug(slug), s"Club $id", None, None, None)
+
+  private def windows(id: Long): ZIO[PostgresClient, SQLException, List[(ClubSlug, Boolean)]] =
+    ClubName.selectClub(ClubId(id)).map(_.map(n => (n.slug, n.until.isEmpty)))
 
   override def spec: Spec[Any, Throwable] = suite("TestClubNameSql")(
     test("an upsert opens a current name, and re-upserting the same slug opens no second row") {
@@ -127,22 +130,42 @@ object TestClubNameSql extends ZIOSpecDefault {
         holder.map(_.clubId).exists(Set(ClubId(190), ClubId(191)).contains)
       )
     },
-    // Two clubs are only ever observed holding one name because one observation is stale, so `record` leaves the
-    // database to refuse the loser rather than serialising the two (there is no lock across clubs). Whatever the
-    // interleaving, the name ends with exactly one current holder and any failure names the index that said so.
-    test("two clubs claiming one name at once leave exactly one holder") {
+    // #298: `club_name_current` refused whichever of two overlapping claims committed second (ADR 0020).
+    test("a club claiming a name another club is claiming at that moment waits, then takes the name over") {
       val contested = ClubSlug("claimed-at-once")
       for {
-        _       <- Club.upsert(club(200, "claims-first"))
-        _       <- Club.upsert(club(201, "claims-second"))
-        results <- ZIO.foreachPar(List(200L, 201L))(id => Club.upsert(club(id, contested.value)).either)
-        open    <- openHolders(contested)
-        holder  <- ClubName.selectCurrentHolder(contested)
+        _ <- Club.upsert(club(200, "claims-first"))
+        _ <- Club.upsert(club(201, "claims-second"))
+        overlap <- ForcedOverlap.run(
+          first = Club.upsert(club(200, contested.value)),
+          second = Club.upsert(club(201, contested.value))
+        )
+        first  <- windows(200)
+        second <- ClubName.selectClub(ClubId(201))
       } yield assertTrue(
-        open == 1,
-        results.exists(_.isRight),
-        results.collect { case Left(error) => error }.forall(violatesConstraint(_, "club_name_current")),
-        holder.map(_.clubId).exists(Set(ClubId(200), ClubId(201)).contains)
+        overlap.waitedOn == "advisory",
+        first == List((ClubSlug("claims-first"), false), (contested, false)),
+        second.map(n => (n.slug, n.until.isEmpty)) == List((ClubSlug("claims-second"), false), (contested, true)),
+        second.last.since.isAfter(overlap.releasedAt)
+      )
+    },
+    // Unless a club moving off a name queues with a club claiming it, its new window can open before the claim closes
+    // its old one, which `club_name_no_overlap` refuses.
+    test("a club moving off a name another club is claiming at that moment waits, then opens its new one") {
+      for {
+        _ <- Club.upsert(club(202, "given-up"))
+        _ <- Club.upsert(club(203, "taker-before"))
+        overlap <- ForcedOverlap.run(
+          first = Club.upsert(club(203, "given-up")),
+          second = Club.upsert(club(202, "moved-to"))
+        )
+        giver <- ClubName.selectClub(ClubId(202))
+        taker <- windows(203)
+      } yield assertTrue(
+        overlap.waitedOn == "advisory",
+        giver.map(n => (n.slug.value, n.until.isEmpty)) == List(("given-up", false), ("moved-to", true)),
+        taker == List((ClubSlug("taker-before"), false), (ClubSlug("given-up"), true)),
+        giver.last.since.isAfter(overlap.releasedAt)
       )
     },
     test("the exclusion constraint rejects two open names for one club") {
@@ -169,15 +192,7 @@ object TestClubNameSql extends ZIOSpecDefault {
 
   // Names the constraint, so a failure for any other reason (a codec, a missing club row) cannot pass for it.
   private def violates(result: Either[SQLException, Int], constraint: String): Boolean =
-    result.left.exists(violatesConstraint(_, constraint))
-
-  private def violatesConstraint(error: SQLException, constraint: String): Boolean =
-    Option(error.getMessage).exists(_.contains(constraint))
-
-  private def openHolders(slug: ClubSlug): ZIO[PostgresClient, SQLException, Int] =
-    connectZIO {
-      sql"SELECT count(*) FROM club_name WHERE slug = $slug AND until IS NULL".query[Int].run().head
-    }
+    result.left.exists(error => Option(error.getMessage).exists(_.contains(constraint)))
 
   private def insertRawClub(id: Long, slug: String): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {

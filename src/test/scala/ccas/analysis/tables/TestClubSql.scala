@@ -106,7 +106,7 @@ object TestClubSql extends ZIOSpecDefault {
 
   private def testMemberInsert = test("testMemberInsert") {
     for {
-      _   <- Player.insertBatch(Chunk(player0, player1, player2))
+      _   <- Player.writeBatch(inserted = Chunk(player0, player1, player2), updated = Nil)
       _   <- ClubMember.insert(memA0)
       all <- ClubMember.selectAll
     } yield assertTrue(all == List(memA0))

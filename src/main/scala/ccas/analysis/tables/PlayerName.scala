@@ -116,22 +116,29 @@ object PlayerName {
 
   /** Brings the current names of the rows a write in the same transaction landed on in line with what `player.username`
     * stores, the way [[ClubName.record]] does for a club: a stored name that does not already stand closes the
-    * player's current name and any other player's hold on it, then opens. A row landed on is one storing the `since`
-    * and name the write gave it, so a guarded update that lost its race, or an insert that found the row already
-    * there, records nothing. That matters for a player holding no name, whose display cache still carries the name
-    * another player took: reading it back would take the name from its holder.
+    * player's current name and any other player's hold on it, then opens, queueing behind any writer moving the same
+    * names (ADR 0020). A row landed on is one storing the `since` and name the write gave it, so a guarded update that
+    * lost its race, or an insert that found the row already there, records nothing. That matters for a player holding
+    * no name, whose display cache still carries the name another player took: reading it back would take the name from
+    * its holder.
     */
-  private[tables] def recordStored(written: Iterable[Player])(using DbTx): Int =
-    written.groupMap(_.since)(p => p.playerId -> p.username).toList.map { (since, writes) =>
+  private[tables] def recordStored(written: Iterable[Player])(using DbTx): Int = {
+    val moves = written.groupMap(_.since)(p => p.playerId -> p.username).toList.flatMap { (since, writes) =>
       val writtenNames = writes.toMap
       val ids          = writtenNames.keys.toList
-      sql"""SELECT p.player_id, p.username, clock_timestamp() FROM player p
+      sql"""SELECT p.player_id, p.username, n.username FROM player p
             LEFT JOIN player_name n ON n.player_id = p.player_id AND n.until IS NULL
             WHERE p.player_id = ANY($ids) AND p.since = $since AND n.username IS DISTINCT FROM p.username
-            ORDER BY p.player_id""".query[(PlayerId, Username, Instant)].run()
+            ORDER BY p.player_id""".query[(PlayerId, Username, Option[Username])].run()
         .filter((playerId, username, _) => writtenNames.get(playerId).contains(username))
-        .map((playerId, username, at) => supersede(playerId, username, at)).sum
-    }.sum
+    }
+    if (moves.isEmpty) { 0 }
+    else {
+      val names = moves.flatMap((_, claimed, givenUp) => (givenUp.toList :+ claimed).map(_.value))
+      val at    = NameLock.PlayerNames.acquire(names)
+      moves.map((playerId, username, _) => supersede(playerId, username, at)).sum
+    }
+  }
 
   // A row opened at or after `at` would close into an empty window, which the CHECK rejects and which records nothing,
   // so it is dropped instead of closed.
