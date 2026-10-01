@@ -88,7 +88,7 @@ object TestMembershipAppSupport {
           TestDbCleanup.deletePlayer(pid)
       }
       _ <- Club.upsert(club)
-      _ <- ZIO.whenDiscard(players.nonEmpty)(Player.insertBatch(players))
+      _ <- Player.writeBatch(inserted = players, updated = Nil)
       _ <- ZIO.whenDiscard(snapshots.nonEmpty)(PlayerSnapshot.insertBatch(snapshots))
       _ <- ZIO.whenDiscard(members.nonEmpty)(ClubMember.insertBatch(members))
       _ <- ZIO.whenDiscard(matchRefs.nonEmpty)(PlayerMatchRef.insertBatch(matchRefs))

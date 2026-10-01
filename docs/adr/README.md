@@ -26,3 +26,5 @@ Write one when the decision is hard to reverse, involves a real trade-off, or ha
 | [0016](0016-identity-is-the-id-names-are-observations.md) | Identity is the id; a name is an observation over time | Accepted, 2026-09-06 |
 | [0017](0017-what-earns-a-history-table.md) | What earns a history table | Accepted, 2026-09-06 |
 | [0018](0018-every-jvm-carries-the-same-two-flags.md) | Every JVM this project starts carries the same two flags | Accepted, 2026-09-07 |
+| [0019](0019-a-reported-404-is-an-answer.md) | A reported 404 is an answer, not a failure | Accepted, 2026-09-09 |
+| [0020](0020-claims-on-one-name-queue.md) | Claims on one name queue; they are not refused | Accepted, 2026-10-01 |

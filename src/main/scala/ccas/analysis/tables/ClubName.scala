@@ -104,18 +104,18 @@ object ClubName {
     * we see the name it answers to), then opens the new name. Stamped with the database clock, which every writer
     * shares. Takes a `DbTx` so it runs in the transaction of the `club` write it describes — which is also what
     * serialises two writers for one club, since that write locks the `club` row before this read-then-write starts.
-    * Two clubs claiming one name concurrently is left to `club_name_current` to refuse, because one of the two
-    * observations is stale and the loser's next refresh re-reads it.
+    * Two clubs claiming one name queue on it, so the later closes the earlier's hold (ADR 0020).
     */
   private[tables] def record(clubId: ClubId, slug: ClubSlug)(using DbTx): Int = {
     // One round trip in the common case — the name already stands — since every club refresh lands here. The exclusion
-    // constraint allows a club one current name at most, so the subquery is a single slug or NULL.
-    val (at, standing) =
-      sql"""SELECT clock_timestamp(),
-                   (SELECT slug FROM club_name WHERE club_id = $clubId AND until IS NULL)
-                     IS NOT DISTINCT FROM $slug""".query[(Instant, Boolean)].run().head
-    if (standing) { 0 }
-    else { supersede(clubId, slug, at) }
+    // constraint allows a club one current name at most.
+    val current =
+      sql"SELECT slug FROM club_name WHERE club_id = $clubId AND until IS NULL".query[ClubSlug].run().headOption
+    if (current.contains(slug)) { 0 }
+    else {
+      val at = NameLock.ClubNames.acquire((current.toList :+ slug).map(_.value))
+      supersede(clubId, slug, at)
+    }
   }
 
   // A row opened at or after `at` would close into an empty window, which the CHECK rejects and which records nothing,

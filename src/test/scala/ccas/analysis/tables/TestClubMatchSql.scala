@@ -108,7 +108,7 @@ object TestClubMatchSql extends ZIOSpecDefault {
   private def testCreateTables = test("createTables") {
     for {
       _ <- ZIO.foreachDiscard(List(clubA, clubB))(Club.upsert)
-      _ <- Player.insertBatch(List(player0, player1))
+      _ <- Player.writeBatch(inserted = List(player0, player1), updated = Nil)
     } yield assertCompletes
   }
 

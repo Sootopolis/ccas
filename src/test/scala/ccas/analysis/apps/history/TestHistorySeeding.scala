@@ -349,7 +349,7 @@ object TestHistorySeeding extends ZIOSpecDefault {
       for {
         _            <- clearTables
         _            <- Club.upsert(Club(clubId, t0, clubSlug, "Nameless test", None, None, None))
-        _            <- Player.insertBatch(List(activePlayer, nameless))
+        _            <- Player.writeBatch(inserted = List(activePlayer, nameless), updated = Nil)
         _            <- Player.insert(taker)
         _            <- ClubMember.insertBatch(members)
         memberNames  <- PlayerName.selectCurrentNames(members.map(_.playerId))

@@ -2,6 +2,7 @@ package ccas.analysis.tables
 
 import java.time.{Duration, Instant, LocalDateTime, ZoneOffset}
 
+import com.augustnagro.magnum.BatchUpdateResult
 import zio.test.{assertCompletes, assertTrue, Spec, TestAspect, ZIOSpecDefault}
 import zio.Chunk
 
@@ -13,13 +14,13 @@ import ccas.utils.sql.FreshSchemaLayer
 object TestPlayerSql extends ZIOSpecDefault {
   override def spec: Spec[Any, Throwable] = suite("TestPlayerSql")(
     testInsert,
-    testInsertBatch,
+    testWriteBatch,
     testSelect,
     testUpdate,
     testArchiveAndUpdate,
     testSelectCurrentHolder,
     testSelectByIds,
-    testInsertBatchIdempotent,
+    testWriteBatchInsertIdempotent,
     testPlayerSnapshotInsertIdempotent,
     testSelectDisplayNames,
     testSelectDisplayNamesHoldingNone,
@@ -50,11 +51,11 @@ object TestPlayerSql extends ZIOSpecDefault {
     } yield assertCompletes
   }
 
-  private def testInsertBatch = test("testInsertBatch") {
+  private def testWriteBatch = test("testWriteBatch") {
     for {
-      _ <- Player.insertBatch(Chunk(player1))
-      _ <- PlayerSnapshot.insertBatch(Chunk(player0Snapshot1))
-    } yield assertCompletes
+      rows <- Player.writeBatch(inserted = Chunk(player1), updated = Nil)
+      _    <- PlayerSnapshot.insertBatch(Chunk(player0Snapshot1))
+    } yield assertTrue(rows == BatchUpdateResult.Success(1))
   }
 
   private def testSelect = test("testSelect") {
@@ -130,10 +131,10 @@ object TestPlayerSql extends ZIOSpecDefault {
   // Re-inserting a player with the same player_id must silently no-op (ON CONFLICT DO NOTHING),
   // not raise a unique-key violation. Otherwise two concurrent MembershipApp runs against different
   // clubs that share a member would abort their persist transactions.
-  private def testInsertBatchIdempotent = test("testInsertBatchIdempotent") {
+  private def testWriteBatchInsertIdempotent = test("testWriteBatchInsertIdempotent") {
     val altered = player1.copy(username = Username("player1_altered"))
     for {
-      _       <- Player.insertBatch(Chunk(altered))
+      _       <- Player.writeBatch(inserted = Chunk(altered), updated = Nil)
       current <- Player.selectId(player1.playerId)
     } yield assertTrue(
       // First insert wins: the altered row is ignored.

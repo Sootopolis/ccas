@@ -9,9 +9,9 @@ import zio.ZIO
 
 import ccas.api.misc.enums.PlayerStatusCategory.Active
 import ccas.api.misc.subtypes.{PlayerId, Username}
-import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
+import ccas.utils.sql.{ForcedOverlap, FreshSchemaLayer, PostgresClient}
 import ccas.utils.sql.DbCodecs.given
-import ccas.utils.sql.PostgresClient.connectZIO
+import ccas.utils.sql.PostgresClient.{connectZIO, withTransaction}
 
 /** `player_name` is kept in step with every write of `player.username`, backfilled from what `player` stores, and its
   * constraints hold the current-slice invariants ADR 0016 puts in the database — the only ones left since #254 dropped
@@ -87,7 +87,7 @@ object TestPlayerNameSql extends ZIOSpecDefault {
         _        <- Player.insert(losing)
         _        <- Player.insert(player(136, "lost-for-good"))
         inserted <- Player.insertIfNew(player(135, "some-other-name", since = at(3)))
-        _        <- Player.insertBatch(List(player(135, "batch-other-name", since = at(3))))
+        _        <- Player.writeBatch(inserted = List(player(135, "batch-other-name", since = at(3))), updated = Nil)
         // The row's own `since`, as an inactive player's unchanging `lastOnlineAt` gives: the name still differs.
         sameSince <- Player.insertIfNew(player(135, "same-since-name", since = at(1)))
         updated  <- Player.updateCurrentState(losing.copy(since = t0))
@@ -111,32 +111,75 @@ object TestPlayerNameSql extends ZIOSpecDefault {
         holder  <- PlayerName.selectCurrentHolder(losing.username)
       } yield assertTrue(current.contains(losing.username), holder.contains(losing.playerId))
     },
-    // Nothing locks across players, so two observations of one name for two players race; `player_name_current` is
-    // the only thing refusing the loser now that `player_username_unique` is gone. Whatever the interleaving, the name
-    // ends with exactly one current holder and any failure names the index that said so.
-    test("two players claiming one name at once leave exactly one holder") {
+    // #298: `player_name_current` refused whichever of two overlapping claims committed second (ADR 0020).
+    test("a player claiming a name another player is claiming at that moment waits, then takes the name over") {
       val contested = Username("claimed-at-once")
       for {
-        _       <- Player.insert(player(139, "claims-first"))
-        _       <- Player.insert(player(140, "claims-second"))
-        results <- ZIO.foreachPar(List(139L, 140L))(id =>
-          Player.updateCurrentState(player(id, contested.value, at(1))).either
+        _ <- Player.insert(player(139, "claims-first"))
+        _ <- Player.insert(player(140, "claims-second"))
+        overlap <- ForcedOverlap.run(
+          first = Player.updateCurrentState(player(139, contested.value, at(1))),
+          second = Player.updateCurrentState(player(140, contested.value, at(1)))
         )
-        open   <- openHolders(contested)
-        holder <- PlayerName.selectCurrentHolder(contested)
+        first  <- windows(139)
+        second <- PlayerName.selectPlayer(PlayerId(140))
       } yield assertTrue(
-        open == 1,
-        results.exists(_.isRight),
-        results.collect { case Left(error) => error }.forall(violatesConstraint(_, "player_name_current")),
-        holder.exists(Set(PlayerId(139), PlayerId(140)).contains)
+        overlap.waitedOn == "advisory",
+        first == List((Username("claims-first"), false), (contested, false)),
+        second.map(n => (n.username, n.until.isEmpty)) == List((Username("claims-second"), false), (contested, true)),
+        second.last.since.isAfter(overlap.releasedAt)
+      )
+    },
+    // Unless a player moving off a name queues with a player claiming it, its new window can open before the claim
+    // closes its old one, which `player_name_no_overlap` refuses.
+    test("a player moving off a name another player is claiming at that moment waits, then opens its new one") {
+      for {
+        _ <- Player.insert(player(143, "given-up"))
+        _ <- Player.insert(player(144, "taker-before"))
+        overlap <- ForcedOverlap.run(
+          first = Player.updateCurrentState(player(144, "given-up", at(1))),
+          second = Player.updateCurrentState(player(143, "moved-to", at(1)))
+        )
+        giver <- PlayerName.selectPlayer(PlayerId(143))
+        taker <- windows(144)
+      } yield assertTrue(
+        overlap.waitedOn == "advisory",
+        giver.map(n => (n.username.value, n.until.isEmpty)) == List(("given-up", false), ("moved-to", true)),
+        taker == List((Username("taker-before"), false), (Username("given-up"), true)),
+        giver.last.since.isAfter(overlap.releasedAt)
+      )
+    },
+    // A membership batch's first run for a large club moves a name per member.
+    test("a call locks each name up to the bound, and the whole space in one lock past it") {
+      val within = List.tabulate(NameLock.MaxNameKeys)(i => player(300L + i, s"within-bound-$i"))
+      val past   = List.tabulate(NameLock.MaxNameKeys + 1)(i => player(400L + i, s"past-bound-$i"))
+      for {
+        withinLocks <- withTransaction(Player.writeBatch(inserted = within, updated = Nil) *> heldAdvisoryLocks)
+        pastLocks   <- withTransaction(Player.writeBatch(inserted = past, updated = Nil) *> heldAdvisoryLocks)
+      } yield assertTrue(withinLocks == NameLock.MaxNameKeys + 1, pastLocks == 1)
+    },
+    test("a player claiming a name a past-bound batch is moving waits for the batch, then takes the name over") {
+      val batch = List.tabulate(NameLock.MaxNameKeys + 1)(i => player(500L + i, s"escalated-$i"))
+      for {
+        overlap <- ForcedOverlap.run(
+          first = Player.writeBatch(inserted = batch, updated = Nil),
+          second = Player.insert(player(600, "escalated-0"))
+        )
+        batched <- windows(500)
+        holder  <- PlayerName.selectCurrentHolder(Username("escalated-0"))
+      } yield assertTrue(
+        overlap.waitedOn == "advisory",
+        batched == List((Username("escalated-0"), false)),
+        holder.contains(PlayerId(600))
       )
     },
     // MembershipApp persists a roster in one batch, so two players trading names land in one statement batch, and the
     // name tables must tolerate the intermediate state.
     test("two players swapping names in one batch each end holding the other's") {
+      val swapped = List(player(141, "swap-b", at(1)), player(142, "swap-a", at(1)))
       for {
-        _     <- Player.insertBatch(List(player(141, "swap-a"), player(142, "swap-b")))
-        _     <- Player.updateCurrentStateBatch(List(player(141, "swap-b", at(1)), player(142, "swap-a", at(1))))
+        _     <- Player.writeBatch(inserted = List(player(141, "swap-a"), player(142, "swap-b")), updated = Nil)
+        _     <- Player.writeBatch(inserted = Nil, updated = swapped)
         names <- PlayerName.selectCurrentNames(List(PlayerId(141), PlayerId(142)))
         open  <- openHolders(Username("swap-a")) <*> openHolders(Username("swap-b"))
       } yield assertTrue(
@@ -244,14 +287,16 @@ object TestPlayerNameSql extends ZIOSpecDefault {
 
   // Names the constraint, so a failure for any other reason (a codec, a missing player row) cannot pass for it.
   private def violates(result: Either[SQLException, Int], constraint: String): Boolean =
-    result.left.exists(violatesConstraint(_, constraint))
-
-  private def violatesConstraint(error: SQLException, constraint: String): Boolean =
-    Option(error.getMessage).exists(_.contains(constraint))
+    result.left.exists(error => Option(error.getMessage).exists(_.contains(constraint)))
 
   private def openHolders(username: Username): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"SELECT count(*) FROM player_name WHERE username = $username AND until IS NULL".query[Int].run().head
+    }
+
+  private val heldAdvisoryLocks: ZIO[PostgresClient, SQLException, Int] =
+    connectZIO {
+      sql"SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND pid = pg_backend_pid()".query[Int].run().head
     }
 
   // Bypasses the recording writers, as a row written before `player_name` existed would.

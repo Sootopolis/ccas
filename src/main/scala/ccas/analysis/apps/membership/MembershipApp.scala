@@ -291,9 +291,8 @@ object MembershipApp extends ZIOAppDefault {
     val allClosedMships = b.closedMemberships ++ c.closedMemberships
     withTransaction {
       for {
-        _ <- ZIO.whenDiscard(b.newPlayers.nonEmpty)(Player.insertBatch(b.newPlayers))
+        _ <- Player.writeBatch(inserted = b.newPlayers, updated = allUpdated)
         _ <- ZIO.whenDiscard(allArchived.nonEmpty)(PlayerSnapshot.insertBatch(allArchived))
-        _ <- ZIO.whenDiscard(allUpdated.nonEmpty)(Player.updateCurrentStateBatch(allUpdated))
         _ <- ZIO.whenDiscard(b.newMemberships.nonEmpty)(ClubMember.insertBatch(b.newMemberships))
         _ <- ZIO.whenDiscard(allClosedMships.nonEmpty)(ClubMember.updateBatch(allClosedMships))
       } yield ()
