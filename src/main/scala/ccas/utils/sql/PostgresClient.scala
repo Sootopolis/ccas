@@ -5,13 +5,14 @@ import java.lang.reflect.{Method, Proxy}
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 import java.sql.{Connection, SQLException, SQLTransientConnectionException}
+import java.util.concurrent.atomic.AtomicReference
 import java.util.logging.Logger as JLogger
 import javax.sql.DataSource
 
 import com.augustnagro.magnum.{DbCon, DbTx, Transactor}
 import com.typesafe.config.{Config, ConfigFactory}
 import com.zaxxer.hikari.{HikariConfig, HikariDataSource}
-import zio.{durationLong, Duration, FiberRef, IO, RIO, Schedule, TaskLayer, Unsafe, ZEnvironment, ZIO, ZLayer}
+import zio.{durationLong, Duration, FiberRef, IO, RIO, Schedule, Scope, TaskLayer, Unsafe, ZEnvironment, ZIO, ZLayer}
 
 /** Database client for PostgreSQL with connection management and transient-error retry.
   *
@@ -70,10 +71,8 @@ final class PostgresClient private (
   def withTransaction[R, E >: SQLException <: Throwable, A](f: ZIO[R & PostgresClient, E, A]): ZIO[R, E, A] =
     ZIO.scoped[R] {
       for {
-        conn <- ZIO.fromAutoCloseable {
-          ZIO.attemptBlocking(transactor.dataSource.getConnection).refineToOrDie[SQLException]
-        }
-        _ <- ZIO.attemptBlocking(conn.setAutoCommit(false)).refineToOrDie[SQLException]
+        conn <- checkOut
+        _    <- ZIO.attemptBlocking(conn.setAutoCommit(false)).refineToOrDie[SQLException]
         proxy    = transactionProxy(conn)
         scopedXa = transactor.copy(dataSource = SingleConnectionDataSource(proxy))
         txClient = new PostgresClient(scopedXa, retryBaseDelay, retryMaxRetries = 0)
@@ -83,6 +82,21 @@ final class PostgresClient private (
         )
       } yield result
     }.retry(retrySchedule)
+
+  // Interruptible, like `connect` and `transact` (#304). The release reaches the connection through `slot`, not the
+  // acquired value: ZIO discards a connection handed over just as the interrupt lands, and nothing else would return
+  // it to the pool.
+  private def checkOut: ZIO[Scope, SQLException, Connection] =
+    ZIO.suspendSucceed {
+      val slot = new AtomicReference[Connection]
+      ZIO.acquireReleaseInterruptible(
+        ZIO.attemptBlockingInterrupt {
+          val conn = transactor.dataSource.getConnection
+          slot.set(conn)
+          conn
+        }.refineToOrDie[SQLException]
+      )(ZIO.succeedBlocking(Option(slot.get).foreach(_.close())))
+    }
 }
 
 object PostgresClient {
