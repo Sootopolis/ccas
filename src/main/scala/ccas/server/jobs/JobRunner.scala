@@ -11,6 +11,7 @@ import ccas.utils.sql.PostgresClient.withTransaction
 import zio.json.EncoderOps
 import zio.stream.{SubscriptionRef, ZStream}
 import zio.{
+  Cause,
   Clock,
   Duration,
   Fiber,
@@ -298,7 +299,13 @@ object JobRunner {
           )
         )
 
-      effect.provideEnvironment(env).foldZIO(onFailure, _ => onSuccess).onInterrupt(onCancelled)
+      // A defect bypasses `foldZIO` as interruption does, but nothing else records it: the job would stay `Running`,
+      // blocking its kind and club, until the next boot. Log it with its trace, then record it as a failure.
+      effect
+        .provideEnvironment(env)
+        .catchAllDefect(defect => ZIO.logErrorCause("Job died", Cause.die(defect)) *> ZIO.fail(defect))
+        .foldZIO(onFailure, _ => onSuccess)
+        .onInterrupt(onCancelled)
 
     override def status(id: JobRunId): RIO[PostgresClient, Option[JobRun]] =
       JobRun.selectId(id)

@@ -320,10 +320,10 @@ final class ChessComClient(
       .invalidate(url.encode)
       .provideEnvironment(ZEnvironment(pgClient))
       .ignore *> refetch
-    ApiResponseBody
-      .loadById(bodyId)
-      .provideEnvironment(ZEnvironment(pgClient, bodyStore))
-      .flatMap {
+    for {
+      _    <- refuseInsideTransaction(url)
+      read <- ApiResponseBody.loadById(bodyId).provideEnvironment(ZEnvironment(pgClient, bodyStore))
+      value <- read match {
         case BodyRead.Found(body) =>
           ZIO.fromEither(jsonDecoder.decodeJson(body))
             .mapError(JsonDecodingException(_, Some(body)))
@@ -337,7 +337,17 @@ final class ChessComClient(
             s"Body store could not serve the cached body for ${url.encode}; refetching and keeping the cache entry"
           ) *> refetch
       }
+    } yield value
   }
+
+  /** Dies on a fiber inside `withTransaction`, where a fetch, or a cached-body load from the body store, would hold the
+    * transaction's connection and locks open while it waits (#300). A defect rather than a failure, because a caller's
+    * fallback (`catchAll`, `recoverUnless`) would absorb a failure and hide the mistake.
+    */
+  private def refuseInsideTransaction(url: URL): UIO[Unit] =
+    ZIO.whenZIODiscard(PostgresClient.insideTransaction.get)(
+      ZIO.dieMessage(s"ChessComClient used inside withTransaction: ${url.encode}")
+    )
 
   /** True if a cached entry is still within its `Cache-Control: max-age` window. Entries without a `max-age` are
     * never fresh — we always revalidate (via conditional headers, or a full fetch if no validators are available).
@@ -396,17 +406,18 @@ final class ChessComClient(
   private def getResultImpl[T](url: URL, cacheWrites: Boolean)(
     using jsonDecoder: JsonDecoder[T]
   ): Task[FetchResult[T]] =
-    ApiResponseCache
-      .lookupMeta(url.encode)
-      .provideEnvironment(ZEnvironment(pgClient))
-      .flatMap {
+    for {
+      _            <- refuseInsideTransaction(url)
+      cachedOption <- ApiResponseCache.lookupMeta(url.encode).provideEnvironment(ZEnvironment(pgClient))
+      result <- cachedOption match {
         case Some(meta) if isFresh(meta, Instant.now()) =>
           statsRef
             .update(_.incCacheHit)
             .as(FetchResult.Fresh(meta.bodyId, loadAndDecode[T](url, meta.bodyId, cacheWrites)))
-        case cachedOption =>
+        case _ =>
           statsRef.update(_.incRequests) *> withRetries(gatedRawGet[T](url, cachedOption, cacheWrites))
       }
+    } yield result
 
   def get[T](url: URL)(using jsonDecoder: JsonDecoder[T]): Task[T] =
     getResult[T](url).flatMap(_.getValue)

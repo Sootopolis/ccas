@@ -27,6 +27,7 @@ object TestJobRunner extends ZIOSpecDefault {
   override def spec: Spec[Any, Throwable] = suite("TestJobRunner")(
     testSubmitSucceeds,
     testSubmitRecordsFailed,
+    testSubmitRecordsFailedOnDefect,
     testSubmitRejectsDuplicate,
     testConflictWhileCancelInFlight,
     testConcurrentSubmitConflict,
@@ -117,6 +118,17 @@ object TestJobRunner extends ZIOSpecDefault {
       job.error.contains("boom")
     )
   }
+
+  private def testSubmitRecordsFailedOnDefect =
+    test("submit records Failed when the effect dies, so the same job can run again") {
+      for {
+        _      <- deleteAllJobRuns
+        runner <- ZIO.service[JobRunner]
+        id     <- runner.submit(JobKind.MatchRef, None, None, RunTrigger.Cli, _ => ZIO.dieMessage("crash"))
+        job    <- awaitStatus(runner, id)
+        again  <- runner.submit(JobKind.MatchRef, None, None, RunTrigger.Cli, _ => ZIO.unit).either
+      } yield assertTrue(job.status == JobRunStatus.Failed, job.error.contains("crash"), again.isRight)
+    }
 
   private def testSubmitRejectsDuplicate = test("submit rejects duplicate running job") {
     for {

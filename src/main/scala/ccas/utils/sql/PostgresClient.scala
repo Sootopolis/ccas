@@ -11,7 +11,7 @@ import javax.sql.DataSource
 import com.augustnagro.magnum.{DbCon, DbTx, Transactor}
 import com.typesafe.config.{Config, ConfigFactory}
 import com.zaxxer.hikari.{HikariConfig, HikariDataSource}
-import zio.{durationLong, Duration, IO, RIO, Schedule, TaskLayer, ZEnvironment, ZIO, ZLayer}
+import zio.{durationLong, Duration, FiberRef, IO, RIO, Schedule, TaskLayer, Unsafe, ZEnvironment, ZIO, ZLayer}
 
 /** Database client for PostgreSQL with connection management and transient-error retry.
   *
@@ -77,7 +77,7 @@ final class PostgresClient private (
         proxy    = transactionProxy(conn)
         scopedXa = transactor.copy(dataSource = SingleConnectionDataSource(proxy))
         txClient = new PostgresClient(scopedXa, retryBaseDelay, retryMaxRetries = 0)
-        result <- f.provideSomeLayer[R](ZLayer.succeed(txClient)).foldCauseZIO(
+        result <- insideTransaction.locally(true)(f).provideSomeLayer[R](ZLayer.succeed(txClient)).foldCauseZIO(
           failure = cause => ZIO.attemptBlocking(conn.rollback()).ignore *> ZIO.failCause(cause),
           success = a => ZIO.attemptBlocking(conn.commit()).refineToOrDie[SQLException].as(a)
         )
@@ -86,6 +86,12 @@ final class PostgresClient private (
 }
 
 object PostgresClient {
+
+  /** True on a fiber running a [[withTransaction]] body, and on any fiber it forks. For code that must refuse to run
+    * there: a network round trip would hold the transaction's connection and locks open for its whole length (#300).
+    */
+  private[ccas] val insideTransaction: FiberRef[Boolean] =
+    Unsafe.unsafe(implicit u => FiberRef.unsafe.make(false))
 
   /** Run a block of raw SQL with a pooled connection, as a ZIO effect. */
   def connectZIO[A](f: DbCon ?=> A): ZIO[PostgresClient, SQLException, A] =
@@ -96,7 +102,8 @@ object PostgresClient {
     ZIO.serviceWithZIO[PostgresClient](_.transact(f))
 
   /** Run a ZIO effect that uses `connectZIO` calls within a single JDBC transaction. Every `connectZIO` inside `f`
-    * shares the same underlying connection. Commits on success, rolls back on failure or interruption.
+    * shares the same underlying connection. Commits on success, rolls back on failure or interruption. `f` runs with
+    * [[insideTransaction]] set, so `ChessComClient` refuses to be used inside it.
     */
   def withTransaction[R, E >: SQLException <: Throwable, A](
     f: ZIO[R & PostgresClient, E, A]

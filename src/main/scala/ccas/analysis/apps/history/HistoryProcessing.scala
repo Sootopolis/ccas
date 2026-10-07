@@ -116,8 +116,8 @@ private[history] object HistoryProcessing {
     shared: Option[SharedContext]
   ): RIO[ProgressDisplay & PostgresClient, Unit] =
     ZIO.foreachParDiscard(pending) { pm =>
-      processMatch(ctx, pm.matchId, pm.isLive, shared)
-        .catchAll {
+      for {
+        _ <- processMatch(ctx, pm.matchId, pm.isLive, shared).catchAll {
           // Systemic outage — re-raise so the wave aborts instead of marking this match `ApiError` (a bogus skip).
           case e: NetworkUnavailableException => ZIO.fail(e)
           case _: ReportedNotFound =>
@@ -138,9 +138,10 @@ private[history] object HistoryProcessing {
               _ <- HistoryPendingMatch.updateStatus(ctx.clubId, pm.matchId, pm.isLive, PendingMatchStatus.ApiError)
               _ <- ZIO.logWarning(s"    Match ${pm.matchId}${if (pm.isLive) " (live)" else ""}: ${error.getMessage}")
             } yield ()
-        } *> counter.updateAndGet(_ + 1).flatMap { n =>
-        bar.print(n, waveTotal.toInt, s"    Processing matches: $n/$waveTotal")
-      }
+        }
+        n <- counter.updateAndGet(_ + 1)
+        _ <- bar.print(n, waveTotal.toInt, s"    Processing matches: $n/$waveTotal")
+      } yield ()
     }.withParallelism(ApiConcurrency.fiberCap(ctx.client))
 
   private def processMatch(
@@ -307,8 +308,8 @@ private[history] object HistoryProcessing {
       batch <- ClubMatch.selectSettledForRefreshBatch(ctx.clubId, cutoffTime, BatchSize, cursor)
       _ <- ZIO.whenDiscard(batch.nonEmpty) {
         ZIO.foreachParDiscard(batch) { matchId =>
-          refreshSingleMatch(ctx, matchId)
-            .catchAll {
+          for {
+            _ <- refreshSingleMatch(ctx, matchId).catchAll {
               // Systemic outage — re-raise so the refresh aborts instead of counting this match as a one-off failure.
               case e: NetworkUnavailableException => ZIO.fail(e)
               // No transaction needed here: the refresh path has no pending-table row to delete, and
@@ -327,9 +328,10 @@ private[history] object HistoryProcessing {
                   _ <- failed.update(_ + 1)
                   _ <- ZIO.logWarning(s"    Refresh $matchId: ${error.getMessage}")
                 } yield ()
-            } *> counter.updateAndGet(_ + 1).flatMap { n =>
-            bar.print(n, total, s"    Refreshing: $n/$total")
-          }
+            }
+            n <- counter.updateAndGet(_ + 1)
+            _ <- bar.print(n, total, s"    Refreshing: $n/$total")
+          } yield ()
         }.withParallelism(ApiConcurrency.fiberCap(ctx.client)) *>
           refreshLoop(ctx, cutoffTime, bar, counter, failed, total, batch.last)
       }
@@ -510,9 +512,10 @@ private[history] object HistoryProcessing {
   // === Player Resolution ===
 
   /** Resolves a username to a PlayerId, checking the in-memory cache first. If unknown, discovers the player via the
-    * API (creating Player and PlayerSnapshot records). Returns None for unresolvable players (closed/deleted accounts).
+    * API: records them and, for a player on our team, adds the member row they lack. Returns None for unresolvable
+    * players (closed/deleted accounts).
     */
-  private def resolvePlayerId(
+  private[history] def resolvePlayerId(
     ctx: ProcessingContext,
     username: Username,
     isOurTeam: Boolean,
@@ -557,19 +560,15 @@ private[history] object HistoryProcessing {
     val work = for {
       apiPlayer <- UsernameRenameResolver.fetchOrRecover(ctx.client, username)
       playerId = apiPlayer.playerId
-      // Single transaction: reconcile (writes Player table — handles fresh insert OR rename archival) + optional
-      // ClubMember creation. Resolver's verification fetch authenticated apiPlayer; no double-reconcile.
-      isNew <- withTransaction {
-        PlayerUpdater.reconcile(apiPlayer).tap { fresh =>
-          ZIO.whenDiscard(fresh && isOurTeam)(createClubMemberForDiscovered(ctx, apiPlayer, matchStartTime))
-        }
+      memberOption <- ZIO.when(isOurTeam)(missingMembership(ctx, apiPlayer, matchStartTime)).map(_.flatten)
+      // Resolver's verification fetch authenticated apiPlayer; no double-reconcile.
+      (isNew, memberAdded) <- withTransaction {
+        PlayerUpdater.reconcile(apiPlayer) <*> ZIO.foreach(memberOption)(insertIfStillMissing).map(_.contains(true))
       }
-      result <- {
-        ctx.knownPlayers.update(_ + (key -> playerId)) *>
-          ZIO.whenDiscard(isNew && isOurTeam)(ctx.newPlayers.update(_ + DiscoveredPlayer(playerId, apiPlayer.username))) *>
-          ZIO.whenDiscard(isNew)(ctx.playersDiscovered.update(_ + 1))
-      }.as(Some(playerId))
-    } yield result
+      _ <- ctx.knownPlayers.update(_ + (key -> playerId))
+      _ <- ZIO.whenDiscard(memberAdded)(ctx.newPlayers.update(_ + DiscoveredPlayer(playerId, apiPlayer.username)))
+      _ <- ZIO.whenDiscard(isNew)(ctx.playersDiscovered.update(_ + 1))
+    } yield Some(playerId)
 
     // The doer handles success/failure and completes the promise.
     // On a non-network failure: log once, count once, resolve promise to None so awaiting fibers get None (not an
@@ -589,48 +588,57 @@ private[history] object HistoryProcessing {
     )
   }
 
-  private def createClubMemberForDiscovered(
+  /** The member row a player seen on our team lacks, if any. Gated on the row, not on the player being new: one first
+    * recorded as an opponent was still a member when they played for us, and recruitment rules out only the former
+    * members it has rows for. An existing row is left alone even if it misses this match (#302). Call it outside a
+    * transaction: it may ask Chess.com for the player's clubs (#300).
+    */
+  private def missingMembership(
     ctx: ProcessingContext,
     apiPlayer: ApiPlayer,
     matchStartTime: Option[Instant]
-  ): RIO[PostgresClient, Unit] = {
-    val playerId       = apiPlayer.playerId
-    val statusCategory = apiPlayer.status.category
-    val clubId         = ctx.clubId
+  ): RIO[PostgresClient, Option[ClubMember]] = {
+    val approximateSince = matchStartTime.getOrElse(apiPlayer.joinedAt)
 
-    ClubMember.exists(clubId, playerId).flatMap {
-      case true => ZIO.unit
-      case false =>
-        val fromApi = for {
-          playerClubs <- ctx.client.getUncached[ApiPlayerClubs](ApiPlayerClubs.getUrl(apiPlayer.username))
-          clubOption = playerClubs.clubs.find(_.clubName == ctx.clubSlug)
-          member = clubOption match {
-            case Some(apiClub) =>
-              val since = Instant.ofEpochSecond(apiClub.joined)
-              val until = if (statusCategory == PlayerStatusCategory.Active) { None }
-              else { Some(Instant.ofEpochSecond(apiPlayer.lastOnline)) }
-              ClubMember(clubId, playerId, since, until, sinceApproximate = false)
-            case None =>
-              val since = matchStartTime.getOrElse(Instant.ofEpochSecond(apiPlayer.joined))
-              val until = if (statusCategory == PlayerStatusCategory.Active) { matchStartTime }
-              else { Some(Instant.ofEpochSecond(apiPlayer.lastOnline)) }
-              ClubMember(clubId, playerId, since, until, sinceApproximate = true)
-          }
-          _ <- ClubMember.insert(member)
-        } yield ()
-
-        fromApi.catchAll { err =>
-          // The /clubs fetch failing falls back to an approximate membership; a systemic outage re-raises so we
-          // don't persist a bogus approximate row (this runs inside a transaction — re-raise rolls it back).
-          NetworkUnavailableException.recoverUnless(err) {
-            val since = matchStartTime.getOrElse(Instant.ofEpochSecond(apiPlayer.joined))
-            val until = if (statusCategory == PlayerStatusCategory.Active) { None }
-            else { Some(Instant.ofEpochSecond(apiPlayer.lastOnline)) }
-            ClubMember.insert(ClubMember(clubId, playerId, since, until, sinceApproximate = true)).unit
-          }
-        }
+    // An inactive account's membership ends at its last visit at the latest; an active one's is the caller's call.
+    def membership(since: Instant, activeUntil: Option[Instant], sinceApproximate: Boolean): ClubMember = {
+      val until =
+        if (apiPlayer.status.category == PlayerStatusCategory.Active) { activeUntil }
+        else { Some(apiPlayer.lastOnlineAt) }
+      ClubMember(
+        clubId = ctx.clubId,
+        playerId = apiPlayer.playerId,
+        since = since,
+        until = until,
+        sinceApproximate = sinceApproximate
+      )
     }
+
+    val fromApi = ctx.client.getUncached[ApiPlayerClubs](ApiPlayerClubs.getUrl(apiPlayer.username)).map {
+      _.clubs.find(_.clubName == ctx.clubSlug) match {
+        case Some(apiClub) =>
+          membership(since = Instant.ofEpochSecond(apiClub.joined), activeUntil = None, sinceApproximate = false)
+        // No longer listing the club means they left, at some point after this match.
+        case None => membership(since = approximateSince, activeUntil = matchStartTime, sinceApproximate = true)
+      }
+    }
+
+    // A failed fetch falls back to an approximate membership; a systemic outage re-raises instead, before anything is
+    // written, so the next run tries again.
+    val withFallback = fromApi.catchAll { err =>
+      NetworkUnavailableException.recoverUnless(err)(
+        ZIO.succeed(membership(since = approximateSince, activeUntil = None, sinceApproximate = true))
+      )
+    }
+
+    ZIO.whenZIO(ClubMember.exists(ctx.clubId, apiPlayer.playerId).negate)(withFallback)
   }
+
+  /** Inserts `member` unless a row for its club and player appeared since [[missingMembership]] looked, so a row
+    * written meanwhile, by a membership run say, is not joined by a second. True if inserted.
+    */
+  private def insertIfStillMissing(member: ClubMember): RIO[PostgresClient, Boolean] =
+    ZIO.whenZIO(ClubMember.exists(member.clubId, member.playerId).negate)(ClubMember.insert(member)).map(_.isDefined)
 
   // === Caching ===
 
