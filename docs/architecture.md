@@ -2,6 +2,20 @@
 
 What each moving part is and how the pieces connect. Reference, not rationale — the *why* behind a design lives in [`adr/`](adr/), the rules for working in the code live in [`../CLAUDE.md`](../CLAUDE.md), and installation and usage live in [`../README.md`](../README.md).
 
+## Packages
+
+- **`ccas.api`** — Chess.com API models: case classes for the JSON responses (`ApiPlayer`, `ApiClub`, `ApiDailyMatch`, …) that derive `JsonDecoder`, with `JsonDecoding` supplying the shared `URL` decoder. They are read-only DTOs, never written to the database directly. Fixtures live in `data/test/api/*.json`, and `TestApiJsonParsing` asserts they parse.
+- **`ccas.analysis`** — domain tables and business logic. `analysis.tables` holds the persisted entities (core, ref resolution, recruitment, history crawl, run tracking, `AppSetting`, and API diagnostics and caching). `analysis.apps` holds the [applications](#applications-ccasanalysisapps) and shared helpers (`PlayerUpdater`, `UsernameRenameResolver`, `ClubSlugRenameResolver`).
+- **`ccas.server`** — the zio-http backend: `server.jobs` (`JobRunner`, `JobRun`, `JobSchedule`), `server.routes`, `server.scheduler` (`JobScheduler`). Entry point `CcasServer extends ZIOAppDefault`.
+- **`ccas.cli`** — the zio-cli binary, `ccas.cli.Main`. `CliCommand` defines the tree, `Dispatcher` turns each parsed command into HTTP calls against a running server, and `CompletionSpec` / `CompletionEmitter` generate shell completions. Exit codes: 0 success or help, 1 failure (a failed job, a server that is not running), 2 usage error.
+- **`ccas.utils`** — shared infrastructure: the Chess.com HTTP client (`client/`), JSON traits (`json/`), the SQL client and helpers (`sql/`), opaque-type utilities (`opaque/`), pretty-printing.
+
+## Opaque types and enums
+
+**Opaque types.** Domain IDs and constrained values are Scala 3 opaque types whose companions extend the `ccas.utils.opaque` trait for their underlying type (`LongCompanion`, `StringCompanion`, …). The trait supplies the `JsonCodec`, `DbCodec` and `DeriveConfig`, with optional `validateRaw` / `normalize` hooks. Chess.com domain IDs live in `ccas.api.misc.subtypes`; internal surrogate IDs live in `ccas.analysis.tables.subtypes` and extend `PositiveLongCompanion`, since `BIGSERIAL` keys start at 1.
+
+**Enums.** `EnumJson[T]` for JSON (snake_case on the wire, PascalCase in Scala) and/or `EnumSql[T]` for the database; both supply codecs via `given`. Some override `jsonToEnum` for non-standard Chess.com mappings (`"closed:fair_play_violations"` → `Fairplay`).
+
 ## Applications (`ccas.analysis.apps`)
 
 Runnable apps, each invocable from the CLI and most also submittable as a server job.
@@ -74,9 +88,13 @@ A polling daemon on a configurable interval that checks enabled `JobSchedule` en
 
 ## Database
 
-Magnum (`com.augustnagro.magnum`) over PostgreSQL. `PostgresClient` (`ccas.utils.sql`) wraps a Magnum `Transactor` backed by HikariCP, adding connection-pool hardening (keepalive probes, validation queries, lazy initialization) and transient-error retry. `PostgresClient.live` reads config under the `database` prefix; all app and server code depends on `PostgresClient`, never on `Transactor`.
+Magnum (`com.augustnagro.magnum`) over PostgreSQL. `PostgresClient` (`ccas.utils.sql`) wraps a Magnum `Transactor` backed by HikariCP, adding connection-pool hardening (keepalive probes, validation queries, lazy initialisation) and transient-error retry. `PostgresClient.live` reads config under the `database` prefix; all app and server code depends on `PostgresClient`, never on `Transactor`.
 
-Custom `DbCodec` instances handle `Instant` (via `TIMESTAMPTZ`), `URL`, and `List[String]` (PostgreSQL arrays). Table names derive from case class names via the `CamelToSnakeCase` naming strategy.
+Each table is a case class that `derives DbCodec`, with a companion holding its `createTable` and its queries, often built on a `SqlLiteral` column list. Tables backed by Magnum's `Repo` / `ImmutableRepo` are also annotated `@Table(PostgresDbType, SqlNameMapper.CamelToSnakeCase)`, which derives their table and column names from the case class; the rest name them in their SQL.
+
+`connectZIO` and `transactZIO` (on the `PostgresClient` companion) bridge Magnum's context-function API to `ZIO[PostgresClient, SQLException, A]`. A single statement, read or write, runs through `connectZIO`; a block of statements that must commit together uses `transactZIO`; several calls that must commit together use `withTransaction`, which shares one proxied connection between them. `connectZIO` and `transactZIO` run on `attemptBlockingInterrupt`, so a cancel or shutdown aborts a fiber parked on pool checkout; `withTransaction` checks its connection out uninterruptibly. All three retry transient connection errors (SQLState `08xxx`), `withTransaction` by rerunning the whole transaction, except a Hikari pool-checkout timeout, which fails fast rather than blocking for another `connectionTimeout`.
+
+Custom `DbCodec` instances handle `Instant` (via `TIMESTAMPTZ`), `URL`, and `List[String]` (PostgreSQL arrays).
 
 Server tables (`JobRun`, `JobSchedule`) reference clubs by `club_id` FK; route handlers resolve the club a request names to a `ClubId` before submitting. Analysis run tables (`MembershipRun`, `RecruitmentRun`, `HistoryRun`) carry an optional `job_run_id` linking back to the server-level job.
 

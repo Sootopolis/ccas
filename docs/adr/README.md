@@ -28,3 +28,12 @@ Write one when the decision is hard to reverse, involves a real trade-off, or ha
 | [0018](0018-every-jvm-carries-the-same-two-flags.md) | Every JVM this project starts carries the same two flags | Accepted, 2026-09-07 |
 | [0019](0019-a-reported-404-is-an-answer.md) | A reported 404 is an answer, not a failure | Accepted, 2026-09-09 |
 | [0020](0020-claims-on-one-name-queue.md) | Claims on one name queue; they are not refused | Accepted, 2026-10-01 |
+
+## By area
+
+- **`ChessComClient` and its HTTP layer:** 0012 (the throttle; supersedes 0001), 0004 (fan-out cap), 0005 (gzip, timeouts, pool), 0006 (what the pacing EMA measures), 0019 (a reported 404).
+- **Response cache and body store:** 0007 (caching, conditional GETs, retention), 0008 (bodies outside Postgres), 0009 (deadlines, the S3 budget).
+- **Names, renames and identity:** 0010 (rename recovery; its tombstones superseded by 0016), 0016, 0017 (what earns a history table), 0020 (name claims, advisory locks).
+- **CLI:** 0011 (locality, `current_club`, config files).
+- **Server and jobs:** 0013 (the job-log sink), 0015 (the read-idle reaper).
+- **Build, runtime and configuration:** 0002 (dependencies), 0003 (sbt 2), 0014 (both `DATABASE_URL` forms), 0018 (the two JVM flags).

@@ -196,6 +196,7 @@ final class ProgressDisplay private[utils] (
       spans: List[LogSpan],
       annotations: Map[String, String]
     ): Any = {
+      // In ZIO 2.1, `ZIO.logInfo` and friends ignore `currentLogLevel`, so a per-fiber level filter has to live here.
       val threshold = context.getOrDefault(FiberRef.currentLogLevel)
       if (level >= threshold) {
         try {

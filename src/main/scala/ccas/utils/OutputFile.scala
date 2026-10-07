@@ -9,6 +9,11 @@ import zio.{Task, ZIO}
 
 import ccas.api.misc.subtypes.ClubSlug
 
+/** Where an app writes a report. Each write first moves the app's earlier output in that directory into `archive/`.
+  * Club-scoped output (`write`, `writeAndLog`) goes to `out/{clubSlug}/{timestamp}-{appName}.{ext}`, so one club's
+  * history reads in order; output with no single club (`writeGlobal`, `writeAndLogGlobal`) goes to
+  * `out/{subDir}/{timestamp}-{appName}.{ext}`.
+  */
 object OutputFile {
 
   private val dateTimeFormat = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")
