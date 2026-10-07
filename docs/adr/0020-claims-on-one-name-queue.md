@@ -1,6 +1,6 @@
 # Claims on one name queue; they are not refused
 
-**Status:** Accepted, 2026-10-01 (#298). Refines [0016](0016-identity-is-the-id-names-are-observations.md): it changes how its name tables take concurrent writes, not what they hold.
+**Status:** Accepted, 2026-10-01 (#298). Refines [0016](0016-identity-is-the-id-names-are-observations.md): it changes how its name tables take concurrent writes, not what they hold. Amended by #300: no transaction fetches from Chess.com any more, and the client refuses a fetch inside `withTransaction`. The `HistoryProcessing` fetch that two of the rejected alternatives below cite is gone; each still stands on its other ground.
 
 ## Context
 
@@ -36,5 +36,5 @@ Alternatives rejected:
 
 - The concurrency tests force the overlap rather than hoping for it, and assert which lock the second writer queued on and that it stamped later than the first was released.
 - Between two simultaneous observations, the last writer wins, which is arbitrary, just as it already was without overlap. The next observation of either holder corrects it.
-- **A long transaction holds its names for its whole length.** `HistoryProcessing` records a discovered player and then fetches that player's clubs before committing. A writer moving the same name waits for that fetch, as does a batch past the bound, which needs the whole space. Before this change, a writer claiming the same name waited just as long on the unique index, and then failed.
+- **A long transaction holds its names for its whole length.** A writer moving the same name waits for it, as does a batch past the bound, which needs the whole space. Before this change, a writer claiming the same name waited just as long on the unique index, and then failed. A Chess.com fetch inside the transaction would stretch that wait to a network round trip, which is why the client refuses one (#300).
 - `backfill` writes the name tables directly and takes no lock. It runs at boot and uses `ON CONFLICT DO NOTHING`, so it does not need one.

@@ -58,7 +58,7 @@ Route handlers use inline JSON codecs. User-facing errors form a sealed `UserFac
 
 ### `JobRunner`
 
-Trait-based (`JobRunnerLive`) async executor. Forks a fiber per job and tracks state in `JobRun` (ULID IDs via `ulid-creator`). `submit` takes an `Option[JobRunId] => RIO[..., Any]`, passing the generated job run ID so analysis apps can link their run records back via `job_run_id`. `JobRunStatus` is `Running | Completed | Failed | Cancelled`.
+Trait-based (`JobRunnerLive`) async executor. Forks a fiber per job and tracks state in `JobRun` (ULID IDs via `ulid-creator`). `submit` takes an `Option[JobRunId] => RIO[..., Any]`, passing the generated job run ID so analysis apps can link their run records back via `job_run_id`. `JobRunStatus` is `Running | Completed | Failed | Cancelled`; a job that fails or dies records `Failed`.
 
 **Cancellation.** `cancel(id)` interrupts the job's forked fiber. Handles are retained per-process in a `runningFibers` map, registered *before* the fork so de-registration cannot race registration. It adds the id to a `cancelRequested` set and then `interruptFork`s; the job's own `.onInterrupt` records `Cancelled` **only if** its id is in that set. That is what separates an operator cancellation from the `layerScope` interrupt fired at every in-flight job on server **shutdown** — those are left `Running`, so the next boot's `markOrphansAsFailed` records them as `Failed` / "Service restarted", which also covers hard crashes where finalizers never run.
 
