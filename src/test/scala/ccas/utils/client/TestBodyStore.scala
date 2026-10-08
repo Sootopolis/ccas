@@ -433,7 +433,7 @@ object TestBodyStore extends ZIOSpecDefault {
         fiber              <- bounded.get(hash).fork
         _                  <- ZIO.sleep(50.millis)
         (elapsed, exit)    <- fiber.interrupt.timed
-      } yield assertTrue(exit.isInterrupted, elapsed.toMillis < 3000)
+      } yield assertTrue(exit.isInterruptedOnly, elapsed.toMillis < 3000)
     }
   ) @@ TestAspect.withLiveClock
 

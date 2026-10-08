@@ -4,7 +4,7 @@ import java.io.{ByteArrayOutputStream, PrintStream}
 
 import io.netty.handler.timeout.ReadTimeoutException
 import zio.stream.SubscriptionRef
-import zio.{Cause, LogLevel, Promise, Ref, ZIO}
+import zio.{Cause, LogLevel, Promise, ZIO}
 import zio.test.{assertCompletes, assertTrue, Spec, ZIOSpecDefault}
 
 object TestProgressBar extends ZIOSpecDefault {
@@ -120,26 +120,25 @@ object TestProgressBar extends ZIOSpecDefault {
   }
 
   private def testScopedCallsFinishOnClose = test("scoped bar is automatically removed when scope closes") {
-    for {
-      ref <- Ref.make(false)
-      _ <- withCapture(enabled = true) { (display, _) =>
-        ZIO.scoped {
+    withCapture(enabled = true) { (display, _) =>
+      for {
+        during <- ZIO.scoped {
           for {
-            bar <- display.addBarScoped
-            _   <- bar.print(5, 10, "Scoped")
-            _   <- ref.set(true)
-          } yield ()
+            bar    <- display.addBarScoped
+            _      <- bar.print(5, 10, "Scoped")
+            during <- ZIO.succeed(display.barCount)
+          } yield during
         }
-      }
-      completed <- ref.get
-    } yield assertTrue(completed)
+        after <- ZIO.succeed(display.barCount)
+      } yield assertTrue(during == 1, after == 0)
+    }.map(_._1)
   }
 
   private def testScopedCallsFinishOnInterrupt = test("scoped bar is cleaned up on interruption") {
-    for {
-      started <- Promise.make[Nothing, Unit]
-      fiber <- withCapture(enabled = true) { (display, _) =>
-        ZIO.scoped {
+    withCapture(enabled = true) { (display, _) =>
+      for {
+        started <- Promise.make[Nothing, Unit]
+        fiber <- ZIO.scoped {
           for {
             bar <- display.addBarScoped
             _   <- bar.print(1, 10, "Interrupted")
@@ -147,10 +146,12 @@ object TestProgressBar extends ZIOSpecDefault {
             _   <- ZIO.never
           } yield ()
         }.fork
-      }.map(_._1)
-      _      <- started.await
-      result <- fiber.interrupt
-    } yield assertTrue(result.isInterrupted)
+        _      <- started.await
+        during <- ZIO.succeed(display.barCount)
+        result <- fiber.interrupt
+        after  <- ZIO.succeed(display.barCount)
+      } yield assertTrue(during == 1, result.isInterruptedOnly, after == 0)
+    }.map(_._1)
   }
 
   private def testDisplayMultipleBars = test("display supports multiple bars") {
