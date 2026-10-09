@@ -16,6 +16,7 @@ Route by the question the reader is asking. Every fact has exactly one home; eve
 | How do I install / run / configure it? | `README.md` | the feature changes |
 | What does this behaviour guarantee? | the test name and its assertions | the behaviour changes |
 | What must a contributor or agent never do here? | `CLAUDE.md` | rarely |
+| How does Chess.com's API actually behave? | [`docs/chess-com-api.md`](chess-com-api.md) | Chess.com changes, or an observation proves wrong |
 | What is the exact value of a version / default / limit? | the code that defines it | — |
 
 The framework behind the split is [Diátaxis](https://diataxis.fr/): reference (scaladoc, README's API section), how-to (README's task sections), and explanation (ADRs) are different genres with different lifetimes, and mixing them is what makes a document unmaintainable. Decision records use [Nygard's lightweight ADR format](https://cognitect.com/blog/2011/11/15/documenting-architecture-decisions).
@@ -122,6 +123,8 @@ A reference may only replace an explanation when the target actually holds it, s
 Three of the four files originally in `docs/` were ADRs in everything but name — Problem / Options / Decision, dated, immutable — and now live in [`docs/adr/`](adr/) with numbers. Use them as the template for new ones.
 
 The fourth was not an ADR and was not forced into the numbering: `chess-com-client-followups.md` was a list of parked items, not a decision, so it became issues [#233](https://github.com/Sootopolis/ccas/issues/233)–[#236](https://github.com/Sootopolis/ccas/issues/236) and the file was deleted. That is the general rule — a backlog belongs in the tracker, where it can be closed, and `docs/` holds only things that are finished.
+
+[`chess-com-api.md`](chess-com-api.md) is reference rather than decision: observations of a system we do not control, each dated and sourced. It is edited in place when Chess.com changes or an entry proves wrong, which is why it is not an ADR, and why a pointer into it names the entry it means. It was written after a belief about closed accounts sat unchecked in two code comments for months, because nothing gathered such facts where they could be seen together ([#302](https://github.com/Sootopolis/ccas/issues/302)).
 
 **Prose is never hard-wrapped.** One paragraph is one line, in every `.md` here and in commit messages, issue and PR bodies. Editors and GitHub wrap for display, so a fixed column buys nothing and costs a re-flow on every edit: change a clause and the diff shows the five rewrapped lines around it instead of the change. Tables, fenced code and list markers keep their own line structure. Nothing enforces this — `scripts/check-docs.py` measures content, not shape.
 
