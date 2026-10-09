@@ -1,5 +1,7 @@
 package ccas.analysis.apps.membership
 
+import java.time.Instant
+
 import zio.Chunk
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
@@ -29,6 +31,7 @@ object TestMembershipAppPure extends ZIOSpecDefault {
     testMemberSinceInRangeNoSnapshots,
     testMemberSinceInRangeWithSnapshots,
     testMemberSinceInRangeWithClosedMembership,
+    testLaterMembershipIsNotAPriorOne,
     testMemberUntilInRangeActiveSnap,
     testMemberUntilInRangeClosedSnap,
     testMemberUntilInRangeNoSnapshot,
@@ -72,6 +75,21 @@ object TestMembershipAppPure extends ZIOSpecDefault {
       result.head.changes.exists(_.isInstanceOf[Rejoined])
     )
   }
+
+  private def testLaterMembershipIsNotAPriorOne =
+    test("a join is a rejoin only of a membership that started before it") {
+      def closed(since: Instant, until: Instant) = ClubMember(
+        clubId = clubId,
+        playerId = pid0,
+        since = since,
+        until = Some(until),
+        sinceApproximate = false
+      )
+      val members = List(closed(since = Times.t0, until = Times.t1), closed(since = Times.t2, until = Times.t3))
+      val result  = MembershipReport.classifyFromDb(clubId, members, Nil, Nil, Times.t0, Times.t3)
+      val rejoins = result.flatMap(_.changes.toList).collect { case r: Rejoined => r }
+      assertTrue(rejoins == List(Rejoined(Times.t2, Times.t1)))
+    }
 
   private def testMemberUntilInRangeActiveSnap = test("member until in range, latest snap Active → LeftClub") {
     val member = ClubMember(clubId, pid0, Times.t0, Some(Times.t1), sinceApproximate = false)

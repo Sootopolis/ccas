@@ -215,8 +215,9 @@ private[membership] object MembershipReport {
         // New membership in range
         if (inRange(cm.since)) {
           // Check if there's a prior membership for same club+player
-          val priorMemberships = members
-            .filter(m => m.clubId == clubId && m.playerId == playerId && m.until.isDefined && m.since != cm.since)
+          val priorMemberships = members.filter(m =>
+            m.clubId == clubId && m.playerId == playerId && m.until.isDefined && m.since.isBefore(cm.since)
+          )
           if (priorMemberships.nonEmpty) {
             val latestPrior = priorMemberships.maxBy(_.since)
             changes += Rejoined(cm.since, latestPrior.until.getOrElse(latestPrior.since))
