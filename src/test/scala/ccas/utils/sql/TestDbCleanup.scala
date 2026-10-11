@@ -41,8 +41,8 @@ object TestDbCleanup {
     sql"DELETE FROM club_match".update.run()
   }.unit
 
-  /** Clears: `club_match_game`, `club_match_board`, `club_match`, `club_admin`, `club_member`, `club_match_ref`,
-    * `unresolved_match_club`, `club_name`, `club`.
+  /** Clears: `club_match_game`, `club_match_board`, `club_match`, `club_admin`, `club_member`,
+    * `club_roster_coverage`, `club_match_ref`, `unresolved_match_club`, `club_name`, `club`.
     *
     * Does NOT clear other FK children of `club`: `recruitment_blacklist`, `recruitment_alias`, `recruitment_run`,
     * `membership_run`, `club_ref_skip`, `history_member_query`, `history_pending_match`. If a suite seeds any
@@ -58,6 +58,7 @@ object TestDbCleanup {
     sql"DELETE FROM club_match".update.run()
     sql"DELETE FROM club_admin".update.run()
     sql"DELETE FROM club_member".update.run()
+    sql"DELETE FROM club_roster_coverage".update.run()
     sql"DELETE FROM club_match_ref".update.run()
     sql"DELETE FROM unresolved_match_club".update.run()
     sql"DELETE FROM club_name".update.run()

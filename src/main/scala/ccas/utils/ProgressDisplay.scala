@@ -9,7 +9,26 @@ import java.util.regex.Pattern
 
 import io.netty.handler.timeout.ReadTimeoutException
 import zio.stream.SubscriptionRef
-import zio.{Cause, FiberId, FiberRef, FiberRefs, LogLevel, LogSpan, Ref, Runtime, Scope, Trace, UIO, Unsafe, URIO, URLayer, ZIO, ZLayer, ZLogger}
+import zio.{
+  Cause,
+  Chunk,
+  FiberId,
+  FiberRef,
+  FiberRefs,
+  LogLevel,
+  LogSpan,
+  Ref,
+  Runtime,
+  Scope,
+  Trace,
+  UIO,
+  Unsafe,
+  URIO,
+  URLayer,
+  ZIO,
+  ZLayer,
+  ZLogger
+}
 
 /** Manages progress bars rendered one-per-line on stdout; a redraw moves the cursor up over the block and repaints.
   *
@@ -382,20 +401,25 @@ object ProgressDisplay {
   def progressBar: URIO[ProgressDisplay & Scope, ProgressBar] =
     ZIO.serviceWithZIO[ProgressDisplay](_.addBarScoped)
 
-  /** Run `action` on each item in parallel, showing a progress bar. The `label` function receives the current count
-    * and total to produce the bar text (e.g. `(n, total) => s"  Processing: $n/$total"`).
+  /** Run `action` on each item in parallel, showing a progress bar, and return the results in the items' order. The
+    * `label` function receives the current count and total to produce the bar text (e.g.
+    * `(n, total) => s"  Processing: $n/$total"`).
     */
-  def foreachParProgress[R, E, A](items: Iterable[A], parallelism: Int)(label: (Int, Int) => String)(
-    action: A => ZIO[R, E, Any]
-  ): ZIO[R & ProgressDisplay & Scope, E, Unit] = {
+  def foreachParProgress[R, E, A, B](items: Iterable[A], parallelism: Int)(label: (Int, Int) => String)(
+    action: A => ZIO[R, E, B]
+  ): ZIO[R & ProgressDisplay & Scope, E, Chunk[B]] = {
     val total = items.size
     for {
       bar     <- progressBar
       counter <- Ref.make(0)
-      _ <- ZIO.foreachParDiscard(items) { item =>
-        action(item) *> counter.updateAndGet(_ + 1).flatMap(n => bar.print(n, total, label(n, total)))
+      results <- ZIO.foreachPar(Chunk.fromIterable(items)) { item =>
+        for {
+          result <- action(item)
+          n      <- counter.updateAndGet(_ + 1)
+          _      <- bar.print(n, total, label(n, total))
+        } yield result
       }.withParallelism(parallelism)
-    } yield ()
+    } yield results
   }
 
   // ---------------------------------------------------------------------------

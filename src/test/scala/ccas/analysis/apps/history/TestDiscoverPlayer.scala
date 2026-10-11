@@ -21,6 +21,7 @@ object TestDiscoverPlayer extends ZIOSpecDefault {
   override def spec: Spec[Any, Throwable] = suite("TestDiscoverPlayer")(
     testNewTeammateGetsExactMembership,
     testInactiveTeammatesMembershipEndsAtLastVisit,
+    testGuessForAnAccountGoneBeforeTheMatchEndsWhereItStarts,
     testFormerOpponentGetsMembershipOnOurTeam,
     testRowWrittenDuringFetchIsNotDuplicated,
     testClubsFetchErrorFallsBackToApproximate,
@@ -52,6 +53,7 @@ object TestDiscoverPlayer extends ZIOSpecDefault {
         clubId = clubId,
         playerId = playerId,
         since = since,
+        lastSeen = until.map(_ => since),
         until = until,
         sinceApproximate = sinceApproximate
       )
@@ -113,6 +115,28 @@ object TestDiscoverPlayer extends ZIOSpecDefault {
         members <- ClubMember.selectClub(f.clubId)
       } yield assertTrue(
         members == List(f.member(since = joinedClub, until = Some(lastVisit), sinceApproximate = false))
+      )
+    }
+
+  // A closed account can have last visited before a match it was registered for started.
+  private def testGuessForAnAccountGoneBeforeTheMatchEndsWhereItStarts =
+    test("a guessed row for a closed account last online before the match ends where it starts, not before") {
+      val f = Fixture(ClubId(930_700), ClubSlug("discover-gone"), PlayerId(930_701), Username("gone-teammate"))
+      val profile = apiPlayerJson(
+        playerId = f.playerId.value,
+        username = f.username.value,
+        status = "closed",
+        joined = t0.getEpochSecond,
+        country = "US",
+        lastOnline = Some(matchStart.minusSeconds(86_400).getEpochSecond)
+      )
+      for {
+        client  <- playerClient(profile, ZIO.succeed(Response.json(f.clubsJson(listsOurClub = false))))
+        ctx     <- f.context(client)
+        _       <- f.resolve(ctx, isOurTeam = true)
+        members <- ClubMember.selectClub(f.clubId)
+      } yield assertTrue(
+        members == List(f.member(since = matchStart, until = Some(matchStart), sinceApproximate = true))
       )
     }
 

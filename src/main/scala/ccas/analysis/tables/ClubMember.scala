@@ -13,10 +13,14 @@ import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.{connectZIO, transactZIO}
 
+/** One period a player was a member of a club. The player was known to be in at `lastSeen` and known to be out at
+  * `until`; both are empty while they are a member (ADR 0021).
+  */
 final case class ClubMember(
   clubId: ClubId,
   playerId: PlayerId,
   since: Instant,
+  lastSeen: Option[Instant],
   until: Option[Instant],
   sinceApproximate: Boolean
 ) derives DbCodec {
@@ -24,19 +28,37 @@ final case class ClubMember(
 }
 
 object ClubMember {
-  private val selectCols = SqlLiteral("club_id, player_id, since, until, since_approximate")
+  private val selectCols = SqlLiteral("club_id, player_id, since, last_seen, until, since_approximate")
 
+  /** The row of a member who joined at `since`, by Chess.com's account. */
+  def joined(clubId: ClubId, playerId: PlayerId, since: Instant): ClubMember =
+    ClubMember(
+      clubId = clubId,
+      playerId = playerId,
+      since = since,
+      lastSeen = None,
+      until = None,
+      sinceApproximate = false
+    )
+
+  /** Fails with a pointer to the runbook when `btree_gist` is missing: see [[BtreeGist]]. */
   def createTable: ZIO[PostgresClient, SQLException, Int] =
     transactZIO {
+      BtreeGist.require("club_member")
       sql"""CREATE TABLE IF NOT EXISTS club_member (
               club_id           BIGINT NOT NULL,
               player_id         BIGINT NOT NULL,
               since             TIMESTAMPTZ NOT NULL,
+              last_seen         TIMESTAMPTZ,
               until             TIMESTAMPTZ,
               since_approximate BOOLEAN NOT NULL,
               PRIMARY KEY (club_id, player_id, since),
               FOREIGN KEY (club_id) REFERENCES club (club_id) ON DELETE RESTRICT,
-              FOREIGN KEY (player_id) REFERENCES player (player_id) ON DELETE RESTRICT
+              FOREIGN KEY (player_id) REFERENCES player (player_id) ON DELETE RESTRICT,
+              CONSTRAINT club_member_window
+                CHECK ((until IS NULL) = (last_seen IS NULL) AND since <= last_seen AND last_seen <= until),
+              CONSTRAINT club_member_no_overlap
+                EXCLUDE USING gist (club_id WITH =, player_id WITH =, tstzrange(since, until) WITH &&)
             )""".update.run()
       sql"""CREATE INDEX IF NOT EXISTS idx_club_member_player_id
             ON club_member (player_id)""".update.run()
@@ -57,7 +79,7 @@ object ClubMember {
 
   def selectClubActive(clubId: ClubId): ZIO[PostgresClient, SQLException, List[ClubMember]] =
     connectZIO(
-      sql"""SELECT cm.club_id, cm.player_id, cm.since, cm.until, cm.since_approximate FROM club_member cm
+      sql"""SELECT cm.club_id, cm.player_id, cm.since, cm.last_seen, cm.until, cm.since_approximate FROM club_member cm
             JOIN player p ON p.player_id = cm.player_id AND p.status = ${Active: PlayerStatusCategory}
             WHERE cm.club_id = $clubId AND cm.until IS NULL""".query[ClubMember]
         .run().toList
@@ -71,31 +93,45 @@ object ClubMember {
 
   def insert(item: ClubMember): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
-      sql"""INSERT INTO club_member (club_id, player_id, since, until, since_approximate)
-            VALUES (${item.clubId}, ${item.playerId}, ${item.since}, ${item.until},
+      sql"""INSERT INTO club_member (club_id, player_id, since, last_seen, until, since_approximate)
+            VALUES (${item.clubId}, ${item.playerId}, ${item.since}, ${item.lastSeen}, ${item.until},
               ${item.sinceApproximate})""".update.run()
     }
 
   def insertBatch(items: Iterable[ClubMember]): ZIO[PostgresClient, SQLException, BatchUpdateResult] =
     transactZIO {
       batchUpdate(items) { item =>
-        sql"""INSERT INTO club_member (club_id, player_id, since, until, since_approximate)
-              VALUES (${item.clubId}, ${item.playerId}, ${item.since}, ${item.until},
+        sql"""INSERT INTO club_member (club_id, player_id, since, last_seen, until, since_approximate)
+              VALUES (${item.clubId}, ${item.playerId}, ${item.since}, ${item.lastSeen}, ${item.until},
                 ${item.sinceApproximate})""".update
       }
     }
 
   def update(item: ClubMember): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
-      sql"""UPDATE club_member SET until = ${item.until}, since_approximate = ${item.sinceApproximate}
+      sql"""UPDATE club_member
+            SET last_seen = ${item.lastSeen}, until = ${item.until}, since_approximate = ${item.sinceApproximate}
             WHERE club_id = ${item.clubId} AND player_id = ${item.playerId} AND since = ${item.since}""".update.run()
     }
 
   def updateBatch(items: Iterable[ClubMember]): ZIO[PostgresClient, SQLException, BatchUpdateResult] =
     transactZIO {
       batchUpdate(items) { item =>
-        sql"""UPDATE club_member SET until = ${item.until}, since_approximate = ${item.sinceApproximate}
+        sql"""UPDATE club_member
+              SET last_seen = ${item.lastSeen}, until = ${item.until}, since_approximate = ${item.sinceApproximate}
               WHERE club_id = ${item.clubId} AND player_id = ${item.playerId} AND since = ${item.since}""".update
+      }
+    }
+
+  /** Deletes the guessed rows each of `items` overlaps: an observed membership replaces any guess about the same
+    * time, which would otherwise block it.
+    */
+  def deleteGuessesOverlapping(items: Iterable[ClubMember]): ZIO[PostgresClient, SQLException, BatchUpdateResult] =
+    transactZIO {
+      batchUpdate(items) { item =>
+        sql"""DELETE FROM club_member
+              WHERE club_id = ${item.clubId} AND player_id = ${item.playerId} AND since_approximate
+                AND tstzrange(since, until) && tstzrange(${item.since}, ${item.until})""".update
       }
     }
 

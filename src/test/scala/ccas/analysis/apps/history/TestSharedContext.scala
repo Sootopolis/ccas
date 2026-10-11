@@ -117,8 +117,8 @@ object TestSharedContext extends ZIOSpecDefault {
         _ <- Club.upsert(clubB)
         _ <- Player.insertIfNew(player1)
         _ <- Player.insertIfNew(player2)
-        _ <- ClubMember.insert(ClubMember(clubAId, player1Id, Times.t0, None, sinceApproximate = false))
-        _ <- ClubMember.insert(ClubMember(clubAId, player2Id, Times.t0, None, sinceApproximate = false))
+        _ <- ClubMember.insert(ClubMember.joined(clubId = clubAId, playerId = player1Id, since = Times.t0))
+        _ <- ClubMember.insert(ClubMember.joined(clubId = clubAId, playerId = player2Id, since = Times.t0))
 
         allMembers <- ClubMember.selectClub(clubAId)
         memberNames = Map(player1Id -> player1.username, player2Id -> player2.username)
@@ -151,7 +151,7 @@ object TestSharedContext extends ZIOSpecDefault {
         _ <- Club.upsert(clubB)
         _ <- Player.insertIfNew(player1)
         _ <- Player.insertIfNew(player2)
-        _ <- ClubMember.insert(ClubMember(clubBId, player1Id, Times.t0, None, sinceApproximate = false))
+        _ <- ClubMember.insert(ClubMember.joined(clubId = clubBId, playerId = player1Id, since = Times.t0))
 
         allMembers <- ClubMember.selectClub(clubBId)
         memberNames = Map(player1Id -> player1.username)
@@ -182,7 +182,7 @@ object TestSharedContext extends ZIOSpecDefault {
       // via fanoutExcludeIds while still seeding the genuinely-new 8102 for B.
       val knownForB = clubMatchRow(8101).copy(team1ClubIdOption = Some(clubBId), team2ClubIdOption = None)
       // Pass the member directly so this test doesn't read accumulated club_member rows from earlier tests.
-      val members = List(ClubMember(clubAId, player3Id, Times.t0, None, sinceApproximate = false))
+      val members = List(ClubMember.joined(clubId = clubAId, playerId = player3Id, since = Times.t0))
       for {
         _ <- Club.upsert(clubA)
         _ <- Club.upsert(clubB)

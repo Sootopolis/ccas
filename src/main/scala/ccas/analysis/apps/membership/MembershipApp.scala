@@ -45,7 +45,8 @@ object MembershipApp extends ZIOAppDefault {
             for {
               result <- reconcile(clubSlug = clubName, expectedClubIdOption = None)
               club   <- reconciledClub(result)
-              rr     <- MembershipReport.report(club, since, Instant.now())
+              until  <- Clock.instant
+              rr     <- MembershipReport.report(club, since, until)
               _      <- OutputFile.writeAndLog(MEMBERSHIP, club.slug, MembershipReport.formatReport(rr))
             } yield ()
           case SinceUntil(since, until) =>
@@ -109,9 +110,9 @@ object MembershipApp extends ZIOAppDefault {
   private def parseDateArg(string: String): IO[BadRequestException, Instant] =
     TimeParser.parseInstantZIO(string).mapError(BadRequestException(_))
 
-  /** The club to report on, reconciled first unless its latest reconcile already covers `until`. A name no club here
-    * has held is reconciled by name, which is how a club never ingested gets its first run; any other name that
-    * reaches no club fails with why, since Chess.com has already been asked about it.
+  /** The club to report on, reconciled first unless a reconcile that completed, whichever job ran it, already covers
+    * `until`. A name no club here has held is reconciled by name, which is how a club never ingested gets its first
+    * run; any other name that reaches no club fails with why, since Chess.com has already been asked about it.
     */
   private[membership] def reconcileIfStale(
     clubSlug: ClubSlug,
@@ -122,7 +123,7 @@ object MembershipApp extends ZIOAppDefault {
         reconcile(clubSlug = clubSlug, expectedClubIdOption = None).flatMap(reconciledClub)
       case resolution =>
         ZIO.fromEither(resolution.runnable).mapError(NotFoundException(_)).flatMap { club =>
-          MembershipRun.selectLatest(club.clubId).flatMap {
+          MembershipRun.selectLatestCompleted(club.clubId).flatMap {
             case Some(run) if !until.isAfter(run.startedAt) => ZIO.succeed(club)
             case _ =>
               reconcile(clubSlug = club.slug, expectedClubIdOption = Some(club.clubId)).flatMap(reconciledClub)
@@ -140,13 +141,13 @@ object MembershipApp extends ZIOAppDefault {
   // --- Phase A: Gather data ---
 
   /** `expectedClubIdOption` guards against `clubSlug` now answering as another club: see
-    * [[ClubSlugRenameResolver.fetchExpecting]].
+    * [[ClubSlugRenameResolver.fetchExpecting]]. Every reconcile is recorded as a run; another job reconciling as a
+    * step of its own passes [[RunTrigger.Dependency]], so Membership's next report still shows what it saw.
     */
   def reconcile(
     clubSlug: ClubSlug,
     expectedClubIdOption: Option[ClubId],
     trustUsernames: Boolean = true,
-    trackRun: Boolean = true,
     trigger: RunTrigger = RunTrigger.Cli,
     jobRunIdOption: Option[JobRunId] = None
   ): RIO[ProgressDisplay & ChessComClient & PostgresClient, ReconciliationResult] =
@@ -157,35 +158,32 @@ object MembershipApp extends ZIOAppDefault {
       apiClub   = resolved.api
       clubId    = apiClub.clubId
       club      = Club.fromApi(apiClub)
-      _                     <- Club.upsert(club)
-      runId <- ZIO.when(trackRun)(MembershipRun.insert(clubId, trigger, startedAt, jobRunIdOption))
-      // Wrap belt-and-suspenders against a second rename between the `ApiClub.get` recovery above and now.
-      (apiMembers, dbState) <- ApiClubMembers.get(client, resolved.slug)
-        .withClubSlugRenameRecovery(client, resolved.slug, Some(clubId))(fresh => ApiClubMembers.get(client, fresh))
-        .zipPar(buildDbState(clubId))
-      prevMemberIds <- loadPreviousMemberIds(clubId)
-      // Both counts filter on player.status=Active to exclude Closed-but-still-member phantoms.
-      // previousMemberCount MUST be sampled before persist/complete, or selectLatestCompleted returns THIS run.
-      previousMemberCount <- loadPreviousActiveMemberCount(clubId)
+      _         <- Club.upsert(club)
+      runId     <- MembershipRun.insert(clubId, trigger, startedAt, jobRunIdOption)
+      (apiMembers, observedAt, storedRoster) <-
+        fetchRoster(client, resolved.slug, clubId).zipPar(loadStoredRoster(clubId))
+      // Read before this run completes, or it would be its own baseline.
+      (prevMemberIds, previousMemberCount) <- loadPreviousRoster(clubId)
       apiMap = apiMembers.toMap
-      now    = Instant.now()
-      phaseB <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, dbState, now, trustUsernames)
-      phaseC <- MembershipClassify.classifyDisappeared(client, dbState, phaseB.resolvedIds, apiMap, now)
-      _ <- persist(phaseB, phaseC)
-      completedAt = Instant.now()
-      _ <- ZIO.foreachDiscard(runId)(id => MembershipRun.complete(id, completedAt))
+      phaseB <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, storedRoster, observedAt, trustUsernames)
+      phaseC <- MembershipClassify.classifyDisappeared(client, storedRoster, phaseB.resolvedIds, apiMap, observedAt)
+      completedAt <- Clock.instant
+      // A run is complete exactly when what its roster implied is saved, so the stale check and the report's baseline
+      // agree with the rows and `club_roster_coverage`.
+      _ <- withTransaction(persist(clubId, observedAt, phaseB, phaseC) *> MembershipRun.complete(runId, completedAt))
+      // Active accounts only, like the previous count: a closed account stays a member but is not counted.
       currentMemberCount <- ClubMember.selectClubActive(clubId).map(_.size)
-      // Members present in the DB but absent from the previous membership run were added externally
-      // (e.g. by HistoryApp). Report them so joins aren't silently absorbed.
+      // Members present in the DB but absent from the previous reported run joined at a reconcile another job ran as
+      // a step of its own. Report them so joins aren't silently absorbed.
       phaseBJoinIds = phaseB.newMemberships.map(_.playerId).toSet
-      externallyAdded = dbState.membersByPlayerId.keySet -- prevMemberIds -- phaseBJoinIds
+      externallyAdded = storedRoster.membersByPlayerId.keySet -- prevMemberIds -- phaseBJoinIds
       externalChanges = Chunk.from(externallyAdded.flatMap { pid =>
-        dbState.membersByPlayerId.get(pid).map { state =>
+        storedRoster.membersByPlayerId.get(pid).map { state =>
           MemberChangeSummary(pid, state.player.username, Chunk(JoinedClub(state.member.since)))
         }
       })
       externalMemberships = Chunk.from(externallyAdded.flatMap { pid =>
-        dbState.membersByPlayerId.get(pid).map(_.member)
+        storedRoster.membersByPlayerId.get(pid).map(_.member)
       })
     } yield mergeResults(
       clubId, phaseB, phaseC, currentMemberCount, previousMemberCount, startedAt, completedAt,
@@ -222,37 +220,45 @@ object MembershipApp extends ZIOAppDefault {
       _           <- MembershipReport.reportReconciliation(result, invitations)
     } yield (result, invitations)
 
+  // Belt-and-suspenders against a second rename since `fetchExpecting` resolved `slug`. A roster is built for each
+  // request, so it describes the moment it arrived (docs/chess-com-api.md, "A member list is built for each request").
+  private def fetchRoster(
+    client: ChessComClient,
+    slug: ClubSlug,
+    clubId: ClubId
+  ): RIO[PostgresClient, (ApiClubMembers, Instant)] =
+    for {
+      members <- ApiClubMembers.get(client, slug)
+        .withClubSlugRenameRecovery(client, slug, Some(clubId))(fresh => ApiClubMembers.get(client, fresh))
+      observedAt <- Clock.instant
+    } yield (members, observedAt)
+
   // The roster names players by what they hold now, so it is matched against `player_name`: a player holding none is
   // reachable only by id, and the display cache could name whoever took its name.
-  private[membership] def buildDbState(clubId: ClubId): RIO[PostgresClient, DbState] =
+  private[membership] def loadStoredRoster(clubId: ClubId): RIO[PostgresClient, StoredRoster] =
     for {
       currentMembers <- ClubMember.selectClubCurrent(clubId)
       allClubMembers <- ClubMember.selectClub(clubId)
       playerIds = allClubMembers.map(_.playerId).distinct
       players      <- Player.selectByIds(playerIds)
       currentNames <- PlayerName.selectCurrentNames(playerIds)
+      coverage     <- ClubRosterCoverage.select(clubId)
     } yield {
       val playerMap = players.map(p => p.playerId -> p).toMap
       val states    = currentMembers.flatMap(m => playerMap.get(m.playerId).map(p => MemberState(p, m)))
-      DbState(
+      StoredRoster(
         membersByPlayerId = states.map(s => s.player.playerId -> s).toMap,
         membersByUsername = states.flatMap(s => currentNames.get(s.player.playerId).map(_ -> s)).toMap,
+        lastObservedAt = coverage.map(_.lastObservedAt),
         knownPlayersByUsername = players.flatMap(p => currentNames.get(p.playerId).map(_ -> p)).toMap
       )
     }
 
-  private def loadPreviousMemberIds(clubId: ClubId): RIO[PostgresClient, Set[PlayerId]] =
-    MembershipRun.selectLatestCompleted(clubId).flatMap {
-      case Some(run) if run.completedAt.isDefined =>
-        ClubMember.selectPlayerIdsCurrentAt(clubId, run.completedAt.get)
-      case _ => ZIO.succeed(Set.empty)
-    }
-
-  private def loadPreviousActiveMemberCount(clubId: ClubId): RIO[PostgresClient, Int] =
-    MembershipRun.selectLatestCompleted(clubId).flatMap {
-      case Some(run) if run.completedAt.isDefined =>
-        ClubMember.countActiveCurrentAt(clubId, run.completedAt.get)
-      case _ => ZIO.succeed(0)
+  // The roster as the previous reported run left it: who was in, and how many of them had active accounts.
+  private def loadPreviousRoster(clubId: ClubId): RIO[PostgresClient, (Set[PlayerId], Int)] =
+    MembershipRun.selectLatestReported(clubId).map(_.flatMap(_.completedAt)).flatMap {
+      case Some(at) => ClubMember.selectPlayerIdsCurrentAt(clubId, at) <*> ClubMember.countActiveCurrentAt(clubId, at)
+      case None     => ZIO.succeed((Set.empty[PlayerId], 0))
     }
 
   // --- Merge & Persist ---
@@ -282,21 +288,26 @@ object MembershipApp extends ZIOAppDefault {
       completedAt = completedAt
     )
 
+  // Everything the roster implied, `club_roster_coverage` included, for the caller to commit as one.
   private def persist(
+    clubId: ClubId,
+    observedAt: Instant,
     b: MembershipClassify.PhaseBResult,
     c: MembershipClassify.PhaseCResult
   ): RIO[PostgresClient, Unit] = {
     val allUpdated      = b.updatedPlayers ++ c.updatedPlayers
     val allArchived     = b.archivedSnapshots ++ c.archivedSnapshots
     val allClosedMships = b.closedMemberships ++ c.closedMemberships
-    withTransaction {
-      for {
-        _ <- Player.writeBatch(inserted = b.newPlayers, updated = allUpdated)
-        _ <- ZIO.whenDiscard(allArchived.nonEmpty)(PlayerSnapshot.insertBatch(allArchived))
-        _ <- ZIO.whenDiscard(b.newMemberships.nonEmpty)(ClubMember.insertBatch(b.newMemberships))
-        _ <- ZIO.whenDiscard(allClosedMships.nonEmpty)(ClubMember.updateBatch(allClosedMships))
-      } yield ()
-    }
+    for {
+      _ <- Player.writeBatch(inserted = b.newPlayers, updated = allUpdated)
+      _ <- ZIO.whenDiscard(allArchived.nonEmpty)(PlayerSnapshot.insertBatch(allArchived))
+      // Closes first: a rejoin opens a row the old one would overlap while still open.
+      _ <- ZIO.whenDiscard(allClosedMships.nonEmpty)(ClubMember.updateBatch(allClosedMships))
+      _ <- ZIO.whenDiscard(b.newMemberships.nonEmpty)(
+        ClubMember.deleteGuessesOverlapping(b.newMemberships) *> ClubMember.insertBatch(b.newMemberships)
+      )
+      _ <- ClubRosterCoverage.observe(clubId, observedAt)
+    } yield ()
   }
 
 }

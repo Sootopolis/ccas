@@ -150,7 +150,12 @@ object HistoryApp extends ZIOAppDefault {
     for {
       _ <- ZIO.logInfo(s"=== HistoryApp: $clubSlug ===")
       _ <- ZIO.logInfo("Phase 1: Initializing...")
-      reconciled <- MembershipApp.reconcile(clubSlug, expectedClubIdOption, trackRun = false)
+      reconciled <- MembershipApp.reconcile(
+        clubSlug = clubSlug,
+        expectedClubIdOption = expectedClubIdOption,
+        trigger = RunTrigger.Dependency,
+        jobRunIdOption = jobRunIdOption
+      )
       // By id: reconcile may have followed a rename, leaving `clubSlug` stale. Everything past here uses `club.slug`.
       club <- Club.selectId(reconciled.clubId)
         .someOrFail(IllegalStateException(s"Club #${ClubId.unwrap(reconciled.clubId)} not found after reconcile"))

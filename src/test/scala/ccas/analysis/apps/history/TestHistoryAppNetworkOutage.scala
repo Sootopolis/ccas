@@ -39,7 +39,7 @@ object TestHistoryAppNetworkOutage extends ZIOSpecDefault {
       val clubSlug = ClubSlug("outage-test-club")
       val pid      = PlayerId(910_001)
       val username = Username("active-member")
-      val member   = ClubMember(clubId, pid, t0, None, sinceApproximate = false)
+      val member   = ClubMember.joined(clubId = clubId, playerId = pid, since = t0)
       val player   = Player(pid, t0, username, PlayerStatusCategory.Active, None, t0)
       for {
         _            <- Club.upsert(Club(clubId, t0, clubSlug, "Outage test", None, None, None))

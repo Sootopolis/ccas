@@ -151,7 +151,12 @@ object RecruitmentApp extends ZIOAppDefault {
     jobRunIdOption: Option[JobRunId] = None
   ): RIO[ProgressDisplay & ChessComClient & PostgresClient, RecruitmentRun] = ZIO.scoped {
     for {
-      _      <- MembershipApp.reconcile(clubSlug, expectedClubIdOption, trackRun = false)
+      _ <- MembershipApp.reconcile(
+        clubSlug = clubSlug,
+        expectedClubIdOption = expectedClubIdOption,
+        trigger = RunTrigger.Dependency,
+        jobRunIdOption = jobRunIdOption
+      )
       client <- ZIO.service[ChessComClient]
       // Without an expected id, the resolver derives the hint from the `club` table (deriveHint) — matching how
       // MembershipApp's earlier reconcile resolves the slug.

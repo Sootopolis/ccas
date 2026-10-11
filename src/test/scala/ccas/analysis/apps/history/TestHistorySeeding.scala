@@ -337,8 +337,8 @@ object TestHistorySeeding extends ZIOSpecDefault {
       val lostUsername   = Username("lost-member")
 
       val members = List(
-        ClubMember(clubId, activePid, t0, None, sinceApproximate = false),
-        ClubMember(clubId, namelessPid, t0, None, sinceApproximate = false)
+        ClubMember.joined(clubId = clubId, playerId = activePid, since = t0),
+        ClubMember.joined(clubId = clubId, playerId = namelessPid, since = t0)
       )
       val activePlayer = Player(activePid, t0, activeUsername, PlayerStatusCategory.Active, None, t0)
       val nameless     = Player(namelessPid, t0, lostUsername, PlayerStatusCategory.Active, None, t0)
