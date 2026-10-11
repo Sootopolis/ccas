@@ -81,6 +81,7 @@ object TestMembershipAppSupport {
   ): RIO[PostgresClient, Unit] =
     for {
       _ <- connectZIO(sql"DELETE FROM club_member WHERE club_id = $clubId".update.run())
+      _ <- connectZIO(sql"DELETE FROM club_roster_coverage WHERE club_id = $clubId".update.run())
       _ <- ZIO.foreachDiscard(testPlayerIds) { pid =>
         connectZIO(sql"DELETE FROM recruitment_candidate WHERE player_id = $pid".update.run()) *>
           connectZIO(sql"DELETE FROM player_match_ref WHERE player_id = $pid".update.run()) *>

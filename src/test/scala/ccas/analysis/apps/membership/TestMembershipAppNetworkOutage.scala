@@ -3,7 +3,7 @@ package ccas.analysis.apps.membership
 import zio.{Exit, Scope, ZLayer}
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
-import ccas.analysis.apps.membership.MembershipChange.{DbState, MemberState}
+import ccas.analysis.apps.membership.MembershipChange.{StoredRoster, MemberState}
 import ccas.analysis.tables.{ClubMember, Player, Tables}
 import ccas.api.misc.enums.PlayerStatusCategory.Active
 import ccas.api.misc.subtypes.Username
@@ -37,14 +37,15 @@ object TestMembershipAppNetworkOutage extends ZIOSpecDefault {
   private def testClassifyDisappearedOutageReRaises =
     test("outage during classifyDisappeared re-raises instead of misclassifying the member") {
       val player = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0)
-      val mem    = ClubMember(clubId, pid0, Times.t0, None, sinceApproximate = false)
-      val dbState = DbState(
+      val mem    = ClubMember.joined(clubId = clubId, playerId = pid0, since = Times.t0)
+      val storedRoster = StoredRoster(
         membersByPlayerId = Map(pid0 -> MemberState(player, mem)),
-        membersByUsername = Map(Username("alice") -> MemberState(player, mem))
+        membersByUsername = Map(Username("alice") -> MemberState(player, mem)),
+        lastObservedAt = None
       )
       for {
         client <- TestChessComClientSupport.networkDownClient
-        exit   <- MembershipClassify.classifyDisappeared(client, dbState, Set.empty, Map.empty, Times.t2).exit
+        exit   <- MembershipClassify.classifyDisappeared(client, storedRoster, Set.empty, Map.empty, Times.t2).exit
       } yield assertTrue(isNetworkUnavailable(exit))
     }
 }

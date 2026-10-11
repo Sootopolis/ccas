@@ -1,12 +1,13 @@
 package ccas.utils
 
-import zio.{Ref, ZIO, ZLayer}
-import zio.test.{assertTrue, Spec, ZIOSpecDefault}
+import zio.{durationInt, Chunk, Ref, ZIO, ZLayer}
+import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 object TestForeachParProgress extends ZIOSpecDefault {
 
   override def spec: Spec[Any, Throwable] = suite("foreachParProgress")(
     testAllItemsProcessed,
+    testResultsInItemOrder,
     testEmptyIterable,
     testActionFailurePropagated,
     testCounterReachesTotal
@@ -24,6 +25,17 @@ object TestForeachParProgress extends ZIOSpecDefault {
       } yield assertTrue(result == (1 to 10).toSet)
     }
   }
+
+  private def testResultsInItemOrder = test("returns the results in the items' order") {
+    ZIO.scoped {
+      for {
+        // Later items finish first, so the order they complete in is not the order they were given in.
+        results <- ProgressDisplay.foreachParProgress((1 to 8).toList, 4)((n, total) => s"$n/$total") { i =>
+          ZIO.sleep((8 - i).millis).as(i * 10)
+        }
+      } yield assertTrue(results == Chunk.from((1 to 8).map(_ * 10)))
+    }
+  } @@ TestAspect.withLiveClock
 
   private def testEmptyIterable = test("handles empty iterable") {
     ZIO.scoped {

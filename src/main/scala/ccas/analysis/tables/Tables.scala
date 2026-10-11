@@ -47,6 +47,7 @@ object Tables extends ZIOAppDefault {
       _ <- PlayerRefSkip.createTable
       _ <- ClubRefSkip.createTable
       _ <- ClubMember.createTable
+      _ <- ClubRosterCoverage.createTable
       _ <- MembershipRun.createTable
       _ <- RecruitmentCriteria.createTable
       _ <- RecruitmentAlias.createTable

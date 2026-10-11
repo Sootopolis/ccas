@@ -87,7 +87,7 @@ private[membership] object MembershipReport {
     change match {
       case NewMember(ts)                 => s"at $ts$invitedSuffix"
       case JoinedClub(ts)                => s"at $ts$invitedSuffix"
-      case Rejoined(ts, prevUntil)       => s"at $ts — previously left at $prevUntil$invitedSuffix"
+      case Rejoined(ts, lastSeen, until) => s"at $ts — ${previousEnd(lastSeen, until)}$invitedSuffix"
       case LeftClub(ts)                  => s"at $ts"
       case AccountClosed(ts, status)     => s"at $ts — status: $status"
       case Unresolvable(ts, oldUsername) => s"at $ts — old username: $oldUsername"
@@ -95,6 +95,12 @@ private[membership] object MembershipReport {
       case StatusChange(ts, oldStatus)   => s"at $ts — was: $oldStatus"
     }
   }
+
+  // No one is seen in and out at once, so ends that meet hold no sighting of the player gone, only of them in: History
+  // ends a guess at a match they played (#302).
+  private def previousEnd(lastSeen: Instant, until: Instant): String =
+    if (lastSeen == until) s"previous membership last seen at $lastSeen"
+    else s"previous membership ended between $lastSeen and $until"
 
   private def groupByCategory(
     summaries: List[MemberChangeSummary],
@@ -220,7 +226,11 @@ private[membership] object MembershipReport {
           )
           if (priorMemberships.nonEmpty) {
             val latestPrior = priorMemberships.maxBy(_.since)
-            changes += Rejoined(cm.since, latestPrior.until.getOrElse(latestPrior.since))
+            changes += Rejoined(
+              ts = cm.since,
+              previousLastSeen = latestPrior.lastSeen.getOrElse(latestPrior.since),
+              previousUntil = latestPrior.until.getOrElse(latestPrior.since)
+            )
           } else {
             // Check if player has states before this membership — existing player joining club
             if (playerStates.exists(_.since.isBefore(cm.since))) { changes += JoinedClub(cm.since) }

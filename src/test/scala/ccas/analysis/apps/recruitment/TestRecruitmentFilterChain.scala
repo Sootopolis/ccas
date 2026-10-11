@@ -473,7 +473,14 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
       criteriaId <- seedCriteria(criteria)
       // Seed alice as a former member of the club (player row needed for FK)
       _      <- seedPlayer(pid0)
-      _      <- ClubMember.insert(ClubMember(clubId, pid0, Times.t0, Some(Times.t1), sinceApproximate = false))
+      _      <- ClubMember.insert(ClubMember(
+        clubId = clubId,
+        playerId = pid0,
+        since = Times.t0,
+        lastSeen = Some(Times.t0),
+        until = Some(Times.t1),
+        sinceApproximate = false
+      ))
       runId  <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None, None)
       client <- fakeChessComClient(responses)
       _      <- evalCandidates(client, runId, List(Username("alice")), criteria)
@@ -489,7 +496,14 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
       criteriaId <- seedCriteria(criteria)
       // Seed alice as a former member of the club
       _      <- seedPlayer(pid0)
-      _      <- ClubMember.insert(ClubMember(clubId, pid0, Times.t0, Some(Times.t1), sinceApproximate = false))
+      _      <- ClubMember.insert(ClubMember(
+        clubId = clubId,
+        playerId = pid0,
+        since = Times.t0,
+        lastSeen = Some(Times.t0),
+        until = Some(Times.t1),
+        sinceApproximate = false
+      ))
       runId  <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None, None)
       client <- fakeChessComClient(responses)
       _      <- evalCandidates(client, runId, List(Username("alice")), criteria)

@@ -1,5 +1,7 @@
 package ccas.analysis.apps.membership
 
+import java.time.Instant
+
 import com.augustnagro.magnum.sql
 import zio.{Chunk, ZIO, ZLayer}
 import zio.http.*
@@ -17,7 +19,17 @@ import ccas.analysis.apps.recruitment.RecruitmentTestSupport.{
   apiMatchBoardJson,
   apiPlayerJson
 }
-import ccas.analysis.tables.{Club, ClubMember, MembershipRun, Player, PlayerMatchRef, PlayerName, RunTrigger, Tables}
+import ccas.analysis.tables.{
+  Club,
+  ClubMember,
+  ClubRosterCoverage,
+  MembershipRun,
+  Player,
+  PlayerMatchRef,
+  PlayerName,
+  RunTrigger,
+  Tables
+}
 import ccas.api.misc.enums.PlayerStatusCategory.{Active, Closed}
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username}
 import ccas.utils.ProgressDisplay
@@ -31,7 +43,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
 
   override def spec: Spec[Any, Throwable] = suite("TestMembershipAppIntegration")(
     suiteLookupJoinInvitations,
-    suiteBuildDbState,
+    suiteLoadStoredRoster,
     suiteExternalMemberDetection,
     suiteClassifyApiMembers,
     suiteClassifyDisappeared,
@@ -86,55 +98,62 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
   }
 
   // ==========================================================================
-  // Suite E: buildDbState (DB)
+  // Suite E: loadStoredRoster (DB)
   // ==========================================================================
 
-  private def suiteBuildDbState = suite("buildDbState")(
-    testBuildsCorrectDbStateMaps,
+  private def suiteLoadStoredRoster = suite("loadStoredRoster")(
+    testLoadsTheStoredRosterMaps,
     testExcludesFormerMembers
   )
 
-  private def testBuildsCorrectDbStateMaps = test("builds correct DbState maps") {
+  private def testLoadsTheStoredRosterMaps = test("loads the stored roster maps") {
     val player0 = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t1)
     val player1 = Player(pid1, Times.t0, Username("bob"), Active, None, Times.t1)
-    val mem0    = ClubMember(clubId, pid0, Times.t1, None, sinceApproximate = false)
-    val mem1    = ClubMember(clubId, pid1, Times.t1, None, sinceApproximate = false)
+    val mem0    = ClubMember.joined(clubId = clubId, playerId = pid0, since = Times.t1)
+    val mem1    = ClubMember.joined(clubId = clubId, playerId = pid1, since = Times.t1)
 
     for {
       _ <- seedDb(
         players = List(player0, player1),
         members = List(mem0, mem1)
       )
-      dbState <- MembershipApp.buildDbState(clubId)
+      storedRoster <- MembershipApp.loadStoredRoster(clubId)
     } yield assertTrue(
-      dbState.membersByPlayerId.size == 2,
-      dbState.membersByPlayerId.contains(pid0),
-      dbState.membersByPlayerId.contains(pid1),
-      dbState.membersByPlayerId(pid0).player == player0,
-      dbState.membersByPlayerId(pid0).member == mem0,
-      dbState.membersByUsername.size == 2,
-      dbState.membersByUsername.contains(Username("alice")),
-      dbState.membersByUsername.contains(Username("bob")),
-      dbState.knownPlayersByUsername.contains(Username("alice")),
-      dbState.knownPlayersByUsername.contains(Username("bob")),
-      dbState.knownPlayersByUsername(Username("alice")) == player0,
-      dbState.knownPlayersByUsername(Username("bob")) == player1
+      storedRoster.membersByPlayerId.size == 2,
+      storedRoster.membersByPlayerId.contains(pid0),
+      storedRoster.membersByPlayerId.contains(pid1),
+      storedRoster.membersByPlayerId(pid0).player == player0,
+      storedRoster.membersByPlayerId(pid0).member == mem0,
+      storedRoster.membersByUsername.size == 2,
+      storedRoster.membersByUsername.contains(Username("alice")),
+      storedRoster.membersByUsername.contains(Username("bob")),
+      storedRoster.knownPlayersByUsername.contains(Username("alice")),
+      storedRoster.knownPlayersByUsername.contains(Username("bob")),
+      storedRoster.knownPlayersByUsername(Username("alice")) == player0,
+      storedRoster.knownPlayersByUsername(Username("bob")) == player1
     )
   }
 
-  private def testExcludesFormerMembers = test("excludes former members from DbState") {
+  private def testExcludesFormerMembers = test("excludes former members from StoredRoster") {
     val player0   = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t1)
-    val formerMem = ClubMember(clubId, pid0, Times.t0, Some(Times.t1), sinceApproximate = false)
+    val formerMem = ClubMember(
+      clubId = clubId,
+      playerId = pid0,
+      since = Times.t0,
+      lastSeen = Some(Times.t0),
+      until = Some(Times.t1),
+      sinceApproximate = false
+    )
 
     for {
       _ <- seedDb(
         players = List(player0),
         members = List(formerMem)
       )
-      dbState <- MembershipApp.buildDbState(clubId)
+      storedRoster <- MembershipApp.loadStoredRoster(clubId)
     } yield assertTrue(
-      dbState.membersByPlayerId.isEmpty,
-      dbState.knownPlayersByUsername.contains(Username("alice"))
+      storedRoster.membersByPlayerId.isEmpty,
+      storedRoster.knownPlayersByUsername.contains(Username("alice"))
     )
   }
 
@@ -148,14 +167,15 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
     testSelectPlayerIdsCurrentAtExcludesLeftMembers,
     testCountActiveCurrentAtExcludesNonActive,
     testSelectLatestCompletedReturnsCompletedRuns,
-    testSelectLatestCompletedReturnsNoneWhenNoCompletedRuns
+    testSelectLatestCompletedReturnsNoneWhenNoCompletedRuns,
+    testSelectLatestReportedSkipsIncompleteAndDependencyRuns
   )
 
   private def testMergeResultsIncludesExternalChanges = test("mergeResults includes external changes and memberships") {
     val phaseB = PhaseBResult(Set(pid0), Chunk.empty, Chunk.empty, Chunk.empty, Chunk.empty, Chunk.empty, Chunk.empty)
     val phaseC = PhaseCResult(Chunk.empty, Chunk.empty, Chunk.empty, Chunk.empty)
     val extChange = MemberChangeSummary(pid1, Username("bob"), Chunk(JoinedClub(Times.t1)))
-    val extMember = ClubMember(clubId, pid1, Times.t1, None, sinceApproximate = false)
+    val extMember = ClubMember.joined(clubId = clubId, playerId = pid1, since = Times.t1)
     val result = MembershipApp.mergeResults(
       clubId, phaseB, phaseC, 10, 8, Times.t0, Times.t1,
       externalChanges = Chunk(extChange),
@@ -173,9 +193,9 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
     val player0 = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0)
     val player1 = Player(pid1, Times.t0, Username("bob"), Active, None, Times.t0)
     // alice: current member since t0
-    val mem0 = ClubMember(clubId, pid0, Times.t0, None, sinceApproximate = false)
+    val mem0 = ClubMember.joined(clubId = clubId, playerId = pid0, since = Times.t0)
     // bob: joined at t2, so not current at t1
-    val mem1 = ClubMember(clubId, pid1, Times.t2, None, sinceApproximate = false)
+    val mem1 = ClubMember.joined(clubId = clubId, playerId = pid1, since = Times.t2)
 
     for {
       _ <- seedDb(players = List(player0, player1), members = List(mem0, mem1))
@@ -190,7 +210,14 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
   private def testSelectPlayerIdsCurrentAtExcludesLeftMembers = test("selectPlayerIdsCurrentAt excludes members who left before the given time") {
     val player0 = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0)
     // alice: was member from t0 to t1
-    val mem0 = ClubMember(clubId, pid0, Times.t0, Some(Times.t1), sinceApproximate = false)
+    val mem0 = ClubMember(
+      clubId = clubId,
+      playerId = pid0,
+      since = Times.t0,
+      lastSeen = Some(Times.t0),
+      until = Some(Times.t1),
+      sinceApproximate = false
+    )
 
     for {
       _ <- seedDb(players = List(player0), members = List(mem0))
@@ -208,11 +235,18 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
       val bob   = Player(pid1, Times.t0, Username("bob"), Closed, None, Times.t0)
       val carol = Player(pid2, Times.t0, Username("carol"), Active, None, Times.t0)
       // alice: active, current → counted
-      val memAlice = ClubMember(clubId, pid0, Times.t0, None, sinceApproximate = false)
+      val memAlice = ClubMember.joined(clubId = clubId, playerId = pid0, since = Times.t0)
       // bob: closed but still current → excluded by status filter
-      val memBob = ClubMember(clubId, pid1, Times.t0, None, sinceApproximate = false)
+      val memBob = ClubMember.joined(clubId = clubId, playerId = pid1, since = Times.t0)
       // carol: active but left at t1 → excluded by window at t2
-      val memCarol = ClubMember(clubId, pid2, Times.t0, Some(Times.t1), sinceApproximate = false)
+      val memCarol = ClubMember(
+        clubId = clubId,
+        playerId = pid2,
+        since = Times.t0,
+        lastSeen = Some(Times.t0),
+        until = Some(Times.t1),
+        sinceApproximate = false
+      )
 
       for {
         _      <- seedDb(players = List(alice, bob, carol), members = List(memAlice, memBob, memCarol))
@@ -249,6 +283,20 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
     } yield assertTrue(result.isEmpty)
   }
 
+  private def testSelectLatestReportedSkipsIncompleteAndDependencyRuns =
+    test("selectLatestReported skips incomplete runs and runs another job made") {
+      for {
+        _          <- seedDb()
+        _          <- deleteRuns
+        reported   <- MembershipRun.insert(clubId, RunTrigger.Cli, Times.t0, None)
+        _          <- MembershipRun.complete(reported, Times.t1)
+        dependency <- MembershipRun.insert(clubId, RunTrigger.Dependency, Times.t2, None)
+        _          <- MembershipRun.complete(dependency, Times.t2.plusSeconds(60))
+        _          <- MembershipRun.insert(clubId, RunTrigger.Cli, Times.t3, None)
+        result     <- MembershipRun.selectLatestReported(clubId)
+      } yield assertTrue(result.map(_.runId).contains(reported))
+    }
+
   // ==========================================================================
   // Suite G: classifyApiMembers (DB + fake HTTP)
   // ==========================================================================
@@ -269,60 +317,64 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
 
   private def testUnchangedMemberMatchingSince = test("unchanged member — matching since") {
     val player = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t1)
-    val mem    = ClubMember(clubId, pid0, Times.t1, None, sinceApproximate = false)
-    val dbState = DbState(
+    val mem    = ClubMember.joined(clubId = clubId, playerId = pid0, since = Times.t1)
+    val storedRoster = StoredRoster(
       membersByPlayerId = Map(pid0 -> MemberState(player, mem)),
-      membersByUsername = Map(Username("alice") -> MemberState(player, mem))
+      membersByUsername = Map(Username("alice") -> MemberState(player, mem)),
+      lastObservedAt = None
     )
     val apiMap = Map(Username("alice") -> Times.t1.getEpochSecond)
 
     for {
       client <- fakeChessComClient(Map.empty)
-      result <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, dbState, Times.t2)
+      result <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, storedRoster, Times.t2)
     } yield assertTrue(
       result.resolvedIds.contains(pid0),
       result.changes.isEmpty
     )
   }
 
-  private def testDifferentSinceRejoined = test("different since → Rejoined") {
-    val player = Player(pid1, Times.t0, Username("bob"), Active, None, Times.t0)
-    val mem    = ClubMember(clubId, pid1, Times.t0, None, sinceApproximate = false)
-    val dbState = DbState(
+  private def testDifferentSinceRejoined = test("different since → Rejoined, the old row ending at the new join") {
+    val player       = Player(pid1, Times.t0, Username("bob"), Active, None, Times.t0)
+    val mem          = ClubMember.joined(clubId = clubId, playerId = pid1, since = Times.t0)
+    val lastObserved = Times.t0.plusSeconds(3600)
+    val storedRoster = StoredRoster(
       membersByPlayerId = Map(pid1 -> MemberState(player, mem)),
-      membersByUsername = Map(Username("bob") -> MemberState(player, mem))
+      membersByUsername = Map(Username("bob") -> MemberState(player, mem)),
+      lastObservedAt = Some(lastObserved)
     )
     val apiMap = Map(Username("bob") -> Times.t1.getEpochSecond)
 
     for {
       client <- fakeChessComClient(Map.empty)
-      result <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, dbState, Times.t2)
+      result <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, storedRoster, Times.t2)
     } yield {
       val change = result.changes.head.changes.head
       assertTrue(
         result.resolvedIds.contains(pid1),
         result.changes.size == 1,
-        change.isInstanceOf[Rejoined],
-        change.timestamp == Times.t1, // API join time, not reconciliation time
-        result.closedMemberships.nonEmpty,
-        result.newMemberships.nonEmpty
+        // The API's join time, not the reconcile's, ends the old row.
+        change == Rejoined(ts = Times.t1, previousLastSeen = lastObserved, previousUntil = Times.t1),
+        result.closedMemberships == Chunk(mem.copy(lastSeen = Some(lastObserved), until = Some(Times.t1))),
+        result.newMemberships == Chunk(ClubMember.joined(clubId = clubId, playerId = pid1, since = Times.t1))
       )
     }
   }
 
   private def testUsernameChangeSamePlayerId = test("username change — same player ID, different username") {
     val player = Player(pid2, Times.t0, Username("charlie-old"), Active, None, Times.t0)
-    val mem    = ClubMember(clubId, pid2, Times.t0, None, sinceApproximate = false)
-    val dbState = DbState(
+    val mem    = ClubMember.joined(clubId = clubId, playerId = pid2, since = Times.t0)
+    val storedRoster = StoredRoster(
       membersByPlayerId = Map(pid2 -> MemberState(player, mem)),
-      membersByUsername = Map(Username("charlie-old") -> MemberState(player, mem))
+      membersByUsername = Map(Username("charlie-old") -> MemberState(player, mem)),
+      lastObservedAt = None
     )
     val apiMap    = Map(Username("charlie-new") -> Times.t0.getEpochSecond)
     val responses = Map("charlie-new" -> apiPlayerJson(102, "charlie-new"))
 
     for {
       client <- fakeChessComClient(responses)
-      result <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, dbState, Times.t2)
+      result <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, storedRoster, Times.t2)
     } yield assertTrue(
       result.resolvedIds.contains(pid2),
       result.changes.size == 1,
@@ -336,17 +388,18 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
   private def testMemberHoldingNoNameListedUnderItsLastName =
     test("a member holding no name, listed under the name its row stores, is updated to hold it") {
       val player = Player(pid2, Times.t0, Username("erin"), Active, None, Times.t0)
-      val mem    = ClubMember(clubId, pid2, Times.t0, None, sinceApproximate = false)
-      val dbState = DbState(
+      val mem    = ClubMember.joined(clubId = clubId, playerId = pid2, since = Times.t0)
+      val storedRoster = StoredRoster(
         membersByPlayerId = Map(pid2 -> MemberState(player, mem)),
-        membersByUsername = Map.empty
+        membersByUsername = Map.empty,
+        lastObservedAt = None
       )
       val apiMap    = Map(Username("erin") -> Times.t0.getEpochSecond)
       val responses = Map("erin" -> apiPlayerJson(PlayerId.unwrap(pid2), "erin"))
 
       for {
         client <- fakeChessComClient(responses)
-        result <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, dbState, Times.t2)
+        result <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, storedRoster, Times.t2)
       } yield assertTrue(
         result.resolvedIds.contains(pid2),
         result.updatedPlayers.map(p => (p.playerId, p.username)) == Chunk((pid2, Username("erin"))),
@@ -355,14 +408,14 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
     }
 
   private def testNewPlayerNotInDb = test("new player — not in DB") {
-    val dbState   = DbState(Map.empty, Map.empty)
-    val apiMap    = Map(Username("diana") -> Times.t0.getEpochSecond)
-    val responses = Map("diana" -> apiPlayerJson(103, "diana"))
+    val storedRoster = StoredRoster(membersByPlayerId = Map.empty, membersByUsername = Map.empty, lastObservedAt = None)
+    val apiMap       = Map(Username("diana") -> Times.t0.getEpochSecond)
+    val responses    = Map("diana" -> apiPlayerJson(103, "diana"))
 
     for {
       _      <- seedDb()
       client <- fakeChessComClient(responses)
-      result <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, dbState, Times.t2)
+      result <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, storedRoster, Times.t2)
     } yield {
       val change = result.changes.head.changes.head
       assertTrue(
@@ -377,15 +430,15 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
   }
 
   private def testExistingPlayerJoinsClub = test("existing player joins club") {
-    val player4   = Player(pid4, Times.t0, Username("eve"), Active, None, Times.t0)
-    val dbState   = DbState(Map.empty, Map.empty)
-    val apiMap    = Map(Username("eve") -> Times.t1.getEpochSecond)
-    val responses = Map("eve" -> apiPlayerJson(104, "eve"))
+    val player4      = Player(pid4, Times.t0, Username("eve"), Active, None, Times.t0)
+    val storedRoster = StoredRoster(membersByPlayerId = Map.empty, membersByUsername = Map.empty, lastObservedAt = None)
+    val apiMap       = Map(Username("eve") -> Times.t1.getEpochSecond)
+    val responses    = Map("eve" -> apiPlayerJson(104, "eve"))
 
     for {
       _      <- seedDb(players = List(player4))
       client <- fakeChessComClient(responses)
-      result <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, dbState, Times.t2)
+      result <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, storedRoster, Times.t2)
     } yield {
       val change = result.changes.head.changes.head
       assertTrue(
@@ -411,7 +464,11 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
         _      <- seedDb(players = List(nameless))
         _      <- Player.insert(taker)
         client <- fakeChessComClient(responses)
-        result <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, DbState(Map.empty, Map.empty), Times.t2)
+        result <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, StoredRoster(
+          membersByPlayerId = Map.empty,
+          membersByUsername = Map.empty,
+          lastObservedAt = None
+        ), Times.t2)
       } yield assertTrue(
         result.updatedPlayers.map(p => (p.playerId, p.username)) == Chunk((pid4, Username("gail"))),
         result.changes.flatMap(_.changes) == Chunk(JoinedClub(Times.t1)),
@@ -421,17 +478,18 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
 
   private def testUsernameChangeAndStatusChange = test("username change + status change") {
     val player = Player(pid5, Times.t0, Username("frank-old"), Active, None, Times.t0)
-    val mem    = ClubMember(clubId, pid5, Times.t0, None, sinceApproximate = false)
-    val dbState = DbState(
+    val mem    = ClubMember.joined(clubId = clubId, playerId = pid5, since = Times.t0)
+    val storedRoster = StoredRoster(
       membersByPlayerId = Map(pid5 -> MemberState(player, mem)),
-      membersByUsername = Map(Username("frank-old") -> MemberState(player, mem))
+      membersByUsername = Map(Username("frank-old") -> MemberState(player, mem)),
+      lastObservedAt = None
     )
     val apiMap    = Map(Username("frank-new") -> Times.t0.getEpochSecond)
     val responses = Map("frank-new" -> apiPlayerJson(105, "frank-new", status = "closed"))
 
     for {
       client <- fakeChessComClient(responses)
-      result <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, dbState, Times.t2)
+      result <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, storedRoster, Times.t2)
     } yield assertTrue(
       result.resolvedIds.contains(pid5),
       result.changes.size == 1,
@@ -442,16 +500,17 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
 
   private def testTrustModeKnownPlayerJoins = test("trust-mode: known player joins club without API call") {
     val player = Player(pid3, Times.t0, Username("diana"), Active, None, Times.t0)
-    val dbState = DbState(
+    val storedRoster = StoredRoster(
       membersByPlayerId = Map.empty,
       membersByUsername = Map.empty,
+      lastObservedAt = None,
       knownPlayersByUsername = Map(Username("diana") -> player)
     )
     val apiMap = Map(Username("diana") -> Times.t1.getEpochSecond)
 
     for {
       client <- fakeChessComClient(Map.empty)
-      result <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, dbState, Times.t2)
+      result <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, storedRoster, Times.t2)
     } yield {
       val change = result.changes.head.changes.head
       assertTrue(
@@ -467,10 +526,18 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
 
   private def testSinceApproximateReplaceSince = test("sinceApproximate member → replaceSince, not Rejoined") {
     val player = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0)
-    val mem    = ClubMember(clubId, pid0, Times.t0, None, sinceApproximate = true)
-    val dbState = DbState(
+    val mem    = ClubMember(
+      clubId = clubId,
+      playerId = pid0,
+      since = Times.t0,
+      lastSeen = None,
+      until = None,
+      sinceApproximate = true
+    )
+    val storedRoster = StoredRoster(
       membersByPlayerId = Map(pid0 -> MemberState(player, mem)),
-      membersByUsername = Map(Username("alice") -> MemberState(player, mem))
+      membersByUsername = Map(Username("alice") -> MemberState(player, mem)),
+      lastObservedAt = None
     )
     val apiMap = Map(Username("alice") -> Times.t1.getEpochSecond)
 
@@ -480,7 +547,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
         members = List(mem)
       )
       client  <- fakeChessComClient(Map.empty)
-      result  <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, dbState, Times.t2)
+      result  <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, storedRoster, Times.t2)
       members <- ClubMember.selectClub(clubId)
     } yield assertTrue(
       result.resolvedIds.contains(pid0),
@@ -495,9 +562,10 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
 
   private def testTrustUsernamesFalseBypassesLookup = test("trustUsernames=false bypasses known player lookup") {
     val player = Player(pid3, Times.t0, Username("diana"), Active, None, Times.t0)
-    val dbState = DbState(
+    val storedRoster = StoredRoster(
       membersByPlayerId = Map.empty,
       membersByUsername = Map.empty,
+      lastObservedAt = None,
       knownPlayersByUsername = Map(Username("diana") -> player)
     )
     val apiMap = Map(Username("diana") -> Times.t0.getEpochSecond)
@@ -508,7 +576,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
         client,
         clubId,
         apiMap,
-        dbState,
+        storedRoster,
         Times.t2,
         trustUsernames = false
       ).exit
@@ -534,10 +602,11 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
 
   private def testActivePlayerLeftClub = test("active player left club → LeftClub with now timestamp") {
     val player = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0)
-    val mem    = ClubMember(clubId, pid0, Times.t0, None, sinceApproximate = false)
-    val dbState = DbState(
+    val mem    = ClubMember.joined(clubId = clubId, playerId = pid0, since = Times.t0)
+    val storedRoster = StoredRoster(
       membersByPlayerId = Map(pid0 -> MemberState(player, mem)),
-      membersByUsername = Map(Username("alice") -> MemberState(player, mem))
+      membersByUsername = Map(Username("alice") -> MemberState(player, mem)),
+      lastObservedAt = None
     )
     val responses = Map("alice" -> apiPlayerJson(100, "alice"))
 
@@ -545,7 +614,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
       client <- fakeChessComClient(responses)
       result <- MembershipClassify.classifyDisappeared(
         client,
-        dbState,
+        storedRoster,
         Set.empty,
         Map.empty,
         Times.t2
@@ -565,10 +634,11 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
   private def testClosedPlayerAccountClosed =
     test("closed player not in own clubs list → AccountClosed, membership closed at lastOnline") {
       val player = Player(pid1, Times.t0, Username("bob"), Active, None, Times.t0)
-      val mem    = ClubMember(clubId, pid1, Times.t0, None, sinceApproximate = false)
-      val dbState = DbState(
+      val mem    = ClubMember.joined(clubId = clubId, playerId = pid1, since = Times.t0)
+      val storedRoster = StoredRoster(
         membersByPlayerId = Map(pid1 -> MemberState(player, mem)),
-        membersByUsername = Map(Username("bob") -> MemberState(player, mem))
+        membersByUsername = Map(Username("bob") -> MemberState(player, mem)),
+        lastObservedAt = None
       )
       val responses =
         Map("bob" -> apiPlayerJson(101, "bob", status = "closed", lastOnline = Some(Times.t1.getEpochSecond)))
@@ -577,7 +647,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
         client <- fakeChessComClient(responses)
         result <- MembershipClassify.classifyDisappeared(
           client,
-          dbState,
+          storedRoster,
           Set.empty,
           Map.empty,
           Times.t2
@@ -600,10 +670,11 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
   private def testClosedPlayerStillInClub =
     test("fresh closure → AccountClosed and membership closed at lastOnline (no /clubs sanity check)") {
       val player = Player(pid1, Times.t0, Username("bob"), Active, None, Times.t0)
-      val mem    = ClubMember(clubId, pid1, Times.t0, None, sinceApproximate = false)
-      val dbState = DbState(
+      val mem    = ClubMember.joined(clubId = clubId, playerId = pid1, since = Times.t0)
+      val storedRoster = StoredRoster(
         membersByPlayerId = Map(pid1 -> MemberState(player, mem)),
-        membersByUsername = Map(Username("bob") -> MemberState(player, mem))
+        membersByUsername = Map(Username("bob") -> MemberState(player, mem)),
+        lastObservedAt = None
       )
       val responses =
         Map("bob" -> apiPlayerJson(101, "bob", status = "closed", lastOnline = Some(Times.t1.getEpochSecond)))
@@ -612,7 +683,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
         client <- fakeChessComClient(responses)
         result <- MembershipClassify.classifyDisappeared(
           client,
-          dbState,
+          storedRoster,
           Set.empty,
           Map.empty,
           Times.t2
@@ -637,10 +708,11 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
   private def testAlreadyClosedPlayerShortCircuit =
     test("already-closed player → short-circuit, close membership at player.since without API fetch") {
       val player = Player(pid1, Times.t0, Username("bob"), Closed, None, Times.t0)
-      val mem    = ClubMember(clubId, pid1, Times.t0, None, sinceApproximate = false)
-      val dbState = DbState(
+      val mem    = ClubMember.joined(clubId = clubId, playerId = pid1, since = Times.t0)
+      val storedRoster = StoredRoster(
         membersByPlayerId = Map(pid1 -> MemberState(player, mem)),
-        membersByUsername = Map(Username("bob") -> MemberState(player, mem))
+        membersByUsername = Map(Username("bob") -> MemberState(player, mem)),
+        lastObservedAt = None
       )
       // Empty responses map: the discriminator is `until == Times.t0` (player.since). If the short-circuit failed
       // and `classifyOneDisappearedActive` ran, the empty map would 404 → `matchRefFallback` → `unresolvable`
@@ -650,7 +722,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
         client <- fakeChessComClient(Map.empty)
         result <- MembershipClassify.classifyDisappeared(
           client,
-          dbState,
+          storedRoster,
           Set.empty,
           Map.empty,
           Times.t2
@@ -669,17 +741,18 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
       // player.since = t0 (closure observed via another path), member.since = t1 (we joined this club AFTER the
       // closure was already recorded). Without the guard, until=t0 would precede since=t1 → invalid range.
       val player = Player(pid1, Times.t0, Username("bob"), Closed, None, Times.t0)
-      val mem    = ClubMember(clubId, pid1, Times.t1, None, sinceApproximate = false)
-      val dbState = DbState(
+      val mem    = ClubMember.joined(clubId = clubId, playerId = pid1, since = Times.t1)
+      val storedRoster = StoredRoster(
         membersByPlayerId = Map(pid1 -> MemberState(player, mem)),
-        membersByUsername = Map(Username("bob") -> MemberState(player, mem))
+        membersByUsername = Map(Username("bob") -> MemberState(player, mem)),
+        lastObservedAt = None
       )
 
       for {
         client <- fakeChessComClient(Map.empty)
         result <- MembershipClassify.classifyDisappeared(
           client,
-          dbState,
+          storedRoster,
           Set.empty,
           Map.empty,
           Times.t2
@@ -697,11 +770,12 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
   // Caller controls apiMap to simulate "still in club under new name" vs "actually left".
   private def runMatchRefFallbackRenamed(apiMap: Map[Username, Long]) = {
     val player = Player(pid5, Times.t0, Username("ed-old"), Active, None, Times.t0)
-    val mem    = ClubMember(clubId, pid5, Times.t0, None, sinceApproximate = false)
+    val mem    = ClubMember.joined(clubId = clubId, playerId = pid5, since = Times.t0)
     val ref    = PlayerMatchRef(pid5, matchRefId, isLive = false, isTeam1 = true, boardIdx = 1)
-    val dbState = DbState(
+    val storedRoster = StoredRoster(
       membersByPlayerId = Map(pid5 -> MemberState(player, mem)),
-      membersByUsername = Map(Username("ed-old") -> MemberState(player, mem))
+      membersByUsername = Map(Username("ed-old") -> MemberState(player, mem)),
+      lastObservedAt = None
     )
     val responses = Map("ed-new" -> apiPlayerJson(105, "ed-new"))
     val matchJson = apiDailyMatchJson(
@@ -733,7 +807,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
         boardResponses = boardResponses
       )
       result <- MembershipClassify.classifyDisappeared(
-        client, dbState, Set.empty, apiMap, Times.t2
+        client, storedRoster, Set.empty, apiMap, Times.t2
       )
     } yield result
   }
@@ -769,17 +843,18 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
 
   private def testApi404Unresolvable = test("API 404 → Unresolvable") {
     val player = Player(pid2, Times.t0, Username("charlie"), Active, None, Times.t0)
-    val mem    = ClubMember(clubId, pid2, Times.t0, None, sinceApproximate = false)
-    val dbState = DbState(
+    val mem    = ClubMember.joined(clubId = clubId, playerId = pid2, since = Times.t0)
+    val storedRoster = StoredRoster(
       membersByPlayerId = Map(pid2 -> MemberState(player, mem)),
-      membersByUsername = Map(Username("charlie") -> MemberState(player, mem))
+      membersByUsername = Map(Username("charlie") -> MemberState(player, mem)),
+      lastObservedAt = None
     )
 
     for {
       client <- fakeChessComClient(Map.empty, failures = Set("charlie"))
       result <- MembershipClassify.classifyDisappeared(
         client,
-        dbState,
+        storedRoster,
         Set.empty,
         Map.empty,
         Times.t2
@@ -793,10 +868,11 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
 
   private def testDifferentPlayerIdUnresolvable = test("different player ID at same username → Unresolvable") {
     val player = Player(pid3, Times.t0, Username("diana"), Active, None, Times.t0)
-    val mem    = ClubMember(clubId, pid3, Times.t0, None, sinceApproximate = false)
-    val dbState = DbState(
+    val mem    = ClubMember.joined(clubId = clubId, playerId = pid3, since = Times.t0)
+    val storedRoster = StoredRoster(
       membersByPlayerId = Map(pid3 -> MemberState(player, mem)),
-      membersByUsername = Map(Username("diana") -> MemberState(player, mem))
+      membersByUsername = Map(Username("diana") -> MemberState(player, mem)),
+      lastObservedAt = None
     )
     val responses = Map("diana" -> apiPlayerJson(999, "diana"))
 
@@ -804,7 +880,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
       client <- fakeChessComClient(responses)
       result <- MembershipClassify.classifyDisappeared(
         client,
-        dbState,
+        storedRoster,
         Set.empty,
         Map.empty,
         Times.t2
@@ -818,17 +894,18 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
 
   private def testAllResolvedEmptyResults = test("all resolved → empty results") {
     val player = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0)
-    val mem    = ClubMember(clubId, pid0, Times.t0, None, sinceApproximate = false)
-    val dbState = DbState(
+    val mem    = ClubMember.joined(clubId = clubId, playerId = pid0, since = Times.t0)
+    val storedRoster = StoredRoster(
       membersByPlayerId = Map(pid0 -> MemberState(player, mem)),
-      membersByUsername = Map(Username("alice") -> MemberState(player, mem))
+      membersByUsername = Map(Username("alice") -> MemberState(player, mem)),
+      lastObservedAt = None
     )
 
     for {
       client <- fakeChessComClient(Map.empty)
       result <- MembershipClassify.classifyDisappeared(
         client,
-        dbState,
+        storedRoster,
         Set(pid0),
         Map.empty,
         Times.t2
@@ -847,8 +924,174 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
   private def suiteReconcile = suite("reconcile (end-to-end)")(
     testDeltaReflectsNewJoinAcrossRuns,
     testAbortsWhenSlugAnswersAsAnotherClub,
-    testReportRefusesAContestedName
+    testReportRefusesAContestedName,
+    testALeaveEndsBetweenTwoRosters,
+    testRejoinPersistsBothRows,
+    testObservedRowReplacesTheGuessItOverlaps,
+    testJoinsADependencySawAreReportedNext,
+    testStaleCheckIgnoresAFailedRun,
+    testARunThatCannotCompleteSavesNothing
   )
+
+  /** Chess.com for the test club: `roster` as its members with when each joined, and `profiles` as the players it
+    * knows by name.
+    */
+  private def clubRoutes(roster: List[(String, Instant)], profiles: Map[String, String]): Routes[Any, Response] = {
+    val notFound = Response.json("""{"code": 0, "message": "Resource \"\" not found."}""").status(Status.NotFound)
+    Routes(
+      Method.GET / "pub" / "club" / string("slug") / "members" -> handler { (_: String, _: Request) =>
+        Response.json(apiClubMembersJson(roster.map((name, joined) => (name, joined.getEpochSecond))))
+      },
+      Method.GET / "pub" / "club" / string("slug") -> handler { (slug: String, _: Request) =>
+        Response.json(apiClubJson(ClubId.unwrap(clubId), slug))
+      },
+      Method.GET / "pub" / "player" / string("username") -> handler { (username: String, _: Request) =>
+        profiles.get(username).fold(notFound)(Response.json(_))
+      }
+    )
+  }
+
+  private def reconcileWith(routes: Routes[Any, Response], trigger: RunTrigger) =
+    TestChessComClientSupport.fakeClient(routes).flatMap { client =>
+      MembershipApp
+        .reconcile(clubSlug = ClubSlug("test-club"), expectedClubIdOption = None, trigger = trigger)
+        .provideSomeLayer[ProgressDisplay & PostgresClient](ZLayer.succeed(client))
+    }
+
+  private def completedRun(startedAt: Instant, completedAt: Instant) =
+    MembershipRun.insert(clubId, RunTrigger.Cli, startedAt, None).flatMap(MembershipRun.complete(_, completedAt))
+
+  private val deleteRuns = connectZIO(sql"DELETE FROM membership_run WHERE club_id = $clubId".update.run())
+
+  private def testALeaveEndsBetweenTwoRosters =
+    test("a member a roster no longer lists was last seen at the previous roster and gone at this one") {
+      val alice        = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0)
+      val aliceRow     = ClubMember.joined(clubId = clubId, playerId = pid0, since = Times.t0)
+      val lastObserved = Times.t0.plusSeconds(3600)
+      val profiles     = Map("alice" -> apiPlayerJson(playerId = PlayerId.unwrap(pid0), username = "alice"))
+      for {
+        _        <- seedDb(players = List(alice), members = List(aliceRow))
+        _        <- ClubRosterCoverage.observe(clubId, lastObserved)
+        before   <- ZIO.succeed(Instant.now())
+        _        <- reconcileWith(clubRoutes(roster = Nil, profiles = profiles), RunTrigger.Cli)
+        after    <- ZIO.succeed(Instant.now())
+        rows     <- ClubMember.selectClub(clubId)
+        coverage <- ClubRosterCoverage.select(clubId)
+      } yield assertTrue(
+        rows.map(_.lastSeen) == List(Some(lastObserved)),
+        rows.flatMap(_.until).exists(until => !until.isBefore(before) && !until.isAfter(after)),
+        coverage.map(_.firstObservedAt).contains(lastObserved),
+        coverage.map(_.lastObservedAt) == rows.flatMap(_.until).headOption
+      )
+    }
+
+  // The new row would overlap the old one if it opened before the old one closed.
+  private def testRejoinPersistsBothRows =
+    test("a rejoin closes the old row at the new join and opens the new one") {
+      val bob          = Player(pid1, Times.t0, Username("bob"), Active, None, Times.t0)
+      val oldRow       = ClubMember.joined(clubId = clubId, playerId = pid1, since = Times.t0)
+      val lastObserved = Times.t0.plusSeconds(3600)
+      for {
+        _    <- seedDb(players = List(bob), members = List(oldRow))
+        _    <- ClubRosterCoverage.observe(clubId, lastObserved)
+        _    <- reconcileWith(clubRoutes(roster = List("bob" -> Times.t1), profiles = Map.empty), RunTrigger.Cli)
+        rows <- ClubMember.selectClub(clubId)
+      } yield assertTrue(
+        rows.toSet == Set(
+          oldRow.copy(lastSeen = Some(lastObserved), until = Some(Times.t1)),
+          ClubMember.joined(clubId = clubId, playerId = pid1, since = Times.t1)
+        )
+      )
+    }
+
+  // Otherwise a roster listing a player History had guessed a membership for would fail on the overlap, every run.
+  private def testObservedRowReplacesTheGuessItOverlaps =
+    test("a roster row opened over a guessed row deletes the guess rather than failing on the overlap") {
+      val carol = Player(pid2, Times.t0, Username("carol"), Active, None, Times.t0)
+      val guess = ClubMember(
+        clubId = clubId,
+        playerId = pid2,
+        since = Times.t0,
+        lastSeen = Some(Times.t0),
+        until = Some(Times.t2),
+        sinceApproximate = true
+      )
+      for {
+        _    <- seedDb(players = List(carol), members = List(guess))
+        _    <- reconcileWith(clubRoutes(roster = List("carol" -> Times.t1), profiles = Map.empty), RunTrigger.Cli)
+        rows <- ClubMember.selectClub(clubId)
+      } yield assertTrue(rows == List(ClubMember.joined(clubId = clubId, playerId = pid2, since = Times.t1)))
+    }
+
+  private def testJoinsADependencySawAreReportedNext =
+    test("a join a reconcile run by another job saw is reported by the next membership run") {
+      val alice    = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0)
+      val aliceRow = ClubMember.joined(clubId = clubId, playerId = pid0, since = Times.t0)
+      val routes = clubRoutes(
+        roster = List("alice" -> Times.t0, "bob" -> Times.t1),
+        profiles = Map("bob" -> apiPlayerJson(playerId = PlayerId.unwrap(pid1), username = "bob"))
+      )
+      for {
+        _      <- deleteRuns
+        _      <- seedDb(players = List(alice), members = List(aliceRow))
+        _      <- completedRun(startedAt = Times.t0, completedAt = Times.t0.plusSeconds(60))
+        _      <- reconcileWith(routes, RunTrigger.Dependency)
+        result <- reconcileWith(routes, RunTrigger.Cli)
+      } yield assertTrue(
+        result.changes.map(c => (c.playerId, c.changes.toList)) == Chunk((pid1, List(JoinedClub(Times.t1)))),
+        result.previousMemberCount == 1,
+        result.currentMemberCount == 2
+      )
+    }
+
+  private def testStaleCheckIgnoresAFailedRun =
+    test("a report reconciles first when the only run newer than its end failed") {
+      val completedRuns =
+        connectZIO(sql"SELECT COUNT(*)::INT FROM membership_run WHERE completed_at IS NOT NULL".query[Int].run().head)
+      for {
+        _      <- deleteRuns
+        _      <- seedDb()
+        _      <- completedRun(startedAt = Times.t0, completedAt = Times.t0.plusSeconds(60))
+        _      <- MembershipRun.insert(clubId, RunTrigger.Cli, Times.t3, None)
+        before <- completedRuns
+        client <- TestChessComClientSupport.fakeClient(clubRoutes(roster = Nil, profiles = Map.empty))
+        _ <- MembershipApp
+          .reconcileIfStale(clubSlug = ClubSlug("test-club"), until = Times.t2)
+          .provideSomeLayer[ProgressDisplay & PostgresClient](ZLayer.succeed(client))
+        after <- completedRuns
+      } yield assertTrue(after == before + 1)
+    }
+
+  // Otherwise the stale check and the report's baseline would measure from a run older than the rows.
+  private def testARunThatCannotCompleteSavesNothing =
+    test("a reconcile that cannot mark its run complete saves nothing its roster implied") {
+      val alice    = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0)
+      val aliceRow = ClubMember.joined(clubId = clubId, playerId = pid0, since = Times.t0)
+      val profiles = Map("alice" -> apiPlayerJson(playerId = PlayerId.unwrap(pid0), username = "alice"))
+      val refuseCompletion = connectZIO {
+        sql"""CREATE OR REPLACE FUNCTION refuse_completion() RETURNS trigger LANGUAGE plpgsql
+              AS 'BEGIN RAISE EXCEPTION ''completion refused''; END'""".update.run()
+        sql"DROP TRIGGER IF EXISTS refuse_completion ON membership_run".update.run()
+        sql"""CREATE TRIGGER refuse_completion BEFORE UPDATE OF completed_at ON membership_run
+              FOR EACH ROW EXECUTE FUNCTION refuse_completion()""".update.run()
+      }
+      val allowCompletion = connectZIO {
+        sql"DROP TRIGGER IF EXISTS refuse_completion ON membership_run".update.run()
+        sql"DROP FUNCTION IF EXISTS refuse_completion()".update.run()
+      }
+      for {
+        _ <- seedDb(players = List(alice), members = List(aliceRow))
+        exit <- ZIO.acquireReleaseWith(refuseCompletion)(_ => allowCompletion.orDie) { _ =>
+          reconcileWith(clubRoutes(roster = Nil, profiles = profiles), RunTrigger.Cli).exit
+        }
+        rows     <- ClubMember.selectClub(clubId)
+        coverage <- ClubRosterCoverage.select(clubId)
+      } yield assertTrue(
+        exit.causeOption.flatMap(_.failureOption).exists(_.getMessage.contains("completion refused")),
+        rows == List(aliceRow),
+        coverage.isEmpty
+      )
+    }
 
   // A name two clubs held and nobody holds now is the one thing resolution won't guess at, so the report must say so
   // rather than reconcile by name and surface Chess.com's 404 instead.
@@ -903,45 +1146,25 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
     test("previousMemberCount ignores rows this run inserts (regression)") {
       // Regression: previousMemberCount used to be sampled after this run completed itself,
       // so selectLatestCompleted returned THIS run and the delta always collapsed to 0.
-      val priorCompletedAt = Times.t1
-      val bobJoined        = Times.t1.minusSeconds(600) // before the prior run completed
-      val alice            = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0)
-      val aliceMembership  = ClubMember(clubId, pid0, Times.t0, None, sinceApproximate = false)
-      val routes: Routes[Any, Response] = Routes(
-        Method.GET / "pub" / "club" / string("slug") / "members" -> handler {
-          (_: String, _: Request) =>
-            Response.json(
-              apiClubMembersJson(
-                List(
-                  ("alice", Times.t0.getEpochSecond),
-                  ("bob", bobJoined.getEpochSecond)
-                )
-              )
-            )
-        },
-        Method.GET / "pub" / "club" / string("slug") -> handler { (slug: String, _: Request) =>
-          Response.json(apiClubJson(ClubId.unwrap(clubId), slug))
-        },
-        Method.GET / "pub" / "player" / string("username") -> handler {
-          (username: String, _: Request) =>
-            username match {
-              case "alice" => Response.json(apiPlayerJson(PlayerId.unwrap(pid0), "alice"))
-              case "bob" =>
-                Response.json(
-                  apiPlayerJson(PlayerId.unwrap(pid1), "bob", joined = bobJoined.getEpochSecond)
-                )
-              case _ => Response.json("""{"code": 0, "message": "Resource \"\" not found."}""").copy(status = Status.NotFound)
-            }
-        }
+      val bobJoined       = Times.t1.minusSeconds(600) // before the prior run completed
+      val alice           = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0)
+      val aliceMembership = ClubMember.joined(clubId = clubId, playerId = pid0, since = Times.t0)
+      val routes = clubRoutes(
+        roster = List("alice" -> Times.t0, "bob" -> bobJoined),
+        profiles = Map(
+          "alice" -> apiPlayerJson(playerId = PlayerId.unwrap(pid0), username = "alice"),
+          "bob" -> apiPlayerJson(
+            playerId = PlayerId.unwrap(pid1),
+            username = "bob",
+            joined = bobJoined.getEpochSecond
+          )
+        )
       )
       for {
-        _          <- connectZIO(sql"DELETE FROM membership_run WHERE club_id = $clubId".update.run())
-        _          <- seedDb(players = List(alice), members = List(aliceMembership))
-        priorRunId <- MembershipRun.insert(clubId, RunTrigger.Cli, Times.t0, None)
-        _          <- MembershipRun.complete(priorRunId, priorCompletedAt)
-        client     <- TestChessComClientSupport.fakeClient(routes)
-        result <- MembershipApp.reconcile(ClubSlug("test-club"), expectedClubIdOption = None)
-                    .provideSomeLayer[ProgressDisplay & PostgresClient](ZLayer.succeed(client))
+        _      <- deleteRuns
+        _      <- seedDb(players = List(alice), members = List(aliceMembership))
+        _      <- completedRun(startedAt = Times.t0, completedAt = Times.t1)
+        result <- reconcileWith(routes, RunTrigger.Cli)
       } yield assertTrue(
         result.newMemberships.size == 1,
         result.previousMemberCount == 1,
@@ -966,7 +1189,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
       for {
         _ <- seedDb(
           players = List(member),
-          members = List(ClubMember(clubId, pid0, Times.t1, None, sinceApproximate = false))
+          members = List(ClubMember.joined(clubId = clubId, playerId = pid0, since = Times.t1))
         )
         _         <- withTransaction(PlayerUpdater.archiveAndUpdate(member, member.username, Closed, None, Times.t2))
         closed    <- Player.selectId(pid0).someOrFailException

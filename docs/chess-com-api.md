@@ -28,6 +28,12 @@ After a rename the old username 404s, and may later answer for whoever registers
 
 *Operator's account, 2026-10-09 ([#302](https://github.com/Sootopolis/ccas/issues/302)).*
 
+### A member list is built for each request
+
+`/pub/club/{slug}/members` comes back with `cache-control: max-age=5`, a `last-modified` equal to the response time, and a Cloudflare cache miss: the roster is current when it arrives. A reconcile can therefore date what it saw by when the response arrived.
+
+*Measured 2026-10-09 ([#302](https://github.com/Sootopolis/ccas/issues/302)).*
+
 ### Slugs change, and a response can answer under another one
 
 A renamed club's old slug 404s, and may later answer for another club ([0016](adr/0016-identity-is-the-id-names-are-observations.md)). Chess.com can also answer a request under a slug it has normalised away, so take a club's current slug from the `@id` in the response, never from the slug requested.

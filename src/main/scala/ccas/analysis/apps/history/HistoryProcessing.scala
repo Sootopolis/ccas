@@ -600,15 +600,18 @@ private[history] object HistoryProcessing {
   ): RIO[PostgresClient, Option[ClubMember]] = {
     val approximateSince = matchStartTime.getOrElse(apiPlayer.joinedAt)
 
-    // An inactive account's membership ends at its last visit at the latest; an active one's is the caller's call.
+    // An inactive account's membership ends at its last visit at the latest, though not before `since`; an active
+    // one's is the caller's call. `since` is the only time the player is known to have been in (ADR 0021).
     def membership(since: Instant, activeUntil: Option[Instant], sinceApproximate: Boolean): ClubMember = {
-      val until =
+      val endOption =
         if (apiPlayer.status.category == PlayerStatusCategory.Active) { activeUntil }
         else { Some(apiPlayer.lastOnlineAt) }
+      val until = endOption.map(end => if (end.isBefore(since)) since else end)
       ClubMember(
         clubId = ctx.clubId,
         playerId = apiPlayer.playerId,
         since = since,
+        lastSeen = until.map(_ => since),
         until = until,
         sinceApproximate = sinceApproximate
       )
