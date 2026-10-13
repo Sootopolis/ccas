@@ -9,6 +9,7 @@ import ccas.analysis.apps.{ClubQuery, ClubResolution, ClubSlugRenameResolver, Na
 import ccas.analysis.apps.membership.MembershipChange.*
 import ccas.analysis.apps.membership.MembershipChange.MemberChange.JoinedClub
 import ccas.analysis.tables.*
+import ccas.analysis.tables.subtypes.MembershipRunId
 import ccas.api.club.ApiClubMembers
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId, PlayerId}
 import ccas.utils.{OutputFile, ProgressDisplay, TimeParser}
@@ -160,35 +161,127 @@ object MembershipApp extends ZIOAppDefault {
       club      = Club.fromApi(apiClub)
       _         <- Club.upsert(club)
       runId     <- MembershipRun.insert(clubId, trigger, startedAt, jobRunIdOption)
+      saved <- saveRoster(
+        client = client,
+        slug = resolved.slug,
+        clubId = clubId,
+        runId = runId,
+        trustUsernames = trustUsernames,
+        attempt = 1
+      )
+      // Active accounts only, like the previous count: a closed account stays a member but is not counted.
+      currentMemberCount <- ClubMember.selectClubActive(clubId).map(_.size)
+      // Members present in the DB but absent from the previous reported run joined at a reconcile another job ran as
+      // a step of its own. Report them so joins aren't silently absorbed.
+      phaseBJoinIds   = saved.phaseB.newMemberships.map(_.playerId).toSet
+      storedMembers   = saved.storedRoster.membersByPlayerId
+      externallyAdded = storedMembers.keySet -- saved.prevMemberIds -- phaseBJoinIds
+      externalChanges = Chunk.from(externallyAdded.flatMap { pid =>
+        storedMembers.get(pid).map { state =>
+          MemberChangeSummary(pid, state.player.username, Chunk(JoinedClub(state.member.since)))
+        }
+      })
+      externalMemberships = Chunk.from(externallyAdded.flatMap(pid => storedMembers.get(pid).map(_.member)))
+    } yield mergeResults(
+      clubId, saved.phaseB, saved.phaseC, currentMemberCount, saved.previousMemberCount, startedAt, saved.completedAt,
+      externalChanges, externalMemberships
+    )
+
+  // What a saved roster was classified against and implied.
+  private final case class SavedRoster(
+    storedRoster: StoredRoster,
+    prevMemberIds: Set[PlayerId],
+    previousMemberCount: Int,
+    phaseB: MembershipClassify.PhaseBResult,
+    phaseC: MembershipClassify.PhaseCResult,
+    completedAt: Instant
+  )
+
+  // Each retry follows a save by another reconcile of the club, so running out means they start faster than one ends.
+  private val MaxSaveAttempts = 5
+
+  /** Fetches `clubId`'s roster, classifies it and saves what it implied, starting again from the fetch whenever another
+    * reconcile of the club saved after the attempt began. Classified against the rows that save replaced, the roster
+    * would repeat that save's changes, and a roster fetched before that save's would undo them (#312).
+    */
+  private def saveRoster(
+    client: ChessComClient,
+    slug: ClubSlug,
+    clubId: ClubId,
+    runId: MembershipRunId,
+    trustUsernames: Boolean,
+    attempt: Int
+  ): RIO[ProgressDisplay & PostgresClient, SavedRoster] =
+    attemptSave(client, slug, clubId, runId, trustUsernames).flatMap {
+      case Some(saved) => ZIO.succeed(saved)
+      case None if attempt < MaxSaveAttempts =>
+        ZIO.logInfo("Another reconcile saved this club's roster while this one ran; fetching the roster again") *>
+          saveRoster(
+            client = client,
+            slug = slug,
+            clubId = clubId,
+            runId = runId,
+            trustUsernames = trustUsernames,
+            attempt = attempt + 1
+          )
+      case None =>
+        ZIO.fail(
+          IllegalStateException(
+            s"Another reconcile of club #${ClubId.unwrap(clubId)} saved during each of $MaxSaveAttempts attempts"
+          )
+        )
+    }
+
+  private def attemptSave(
+    client: ChessComClient,
+    slug: ClubSlug,
+    clubId: ClubId,
+    runId: MembershipRunId,
+    trustUsernames: Boolean
+  ): RIO[ProgressDisplay & PostgresClient, Option[SavedRoster]] =
+    for {
+      // Read before the fetch and the load: a save before this read is in the rows loaded and came from an older
+      // roster, and a save after it stops this attempt saving.
+      version <- ClubRosterCoverage.selectVersion(clubId)
       (apiMembers, observedAt, storedRoster) <-
-        fetchRoster(client, resolved.slug, clubId).zipPar(loadStoredRoster(clubId))
+        fetchRoster(client, slug, clubId).zipPar(loadStoredRoster(clubId))
       // Read before this run completes, or it would be its own baseline.
       (prevMemberIds, previousMemberCount) <- loadPreviousRoster(clubId)
       apiMap = apiMembers.toMap
       phaseB <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, storedRoster, observedAt, trustUsernames)
       phaseC <- MembershipClassify.classifyDisappeared(client, storedRoster, phaseB.resolvedIds, apiMap, observedAt)
       completedAt <- Clock.instant
-      // A run is complete exactly when what its roster implied is saved, so the stale check and the report's baseline
-      // agree with the rows and `club_roster_coverage`.
-      _ <- withTransaction(persist(clubId, observedAt, phaseB, phaseC) *> MembershipRun.complete(runId, completedAt))
-      // Active accounts only, like the previous count: a closed account stays a member but is not counted.
-      currentMemberCount <- ClubMember.selectClubActive(clubId).map(_.size)
-      // Members present in the DB but absent from the previous reported run joined at a reconcile another job ran as
-      // a step of its own. Report them so joins aren't silently absorbed.
-      phaseBJoinIds = phaseB.newMemberships.map(_.playerId).toSet
-      externallyAdded = storedRoster.membersByPlayerId.keySet -- prevMemberIds -- phaseBJoinIds
-      externalChanges = Chunk.from(externallyAdded.flatMap { pid =>
-        storedRoster.membersByPlayerId.get(pid).map { state =>
-          MemberChangeSummary(pid, state.player.username, Chunk(JoinedClub(state.member.since)))
-        }
-      })
-      externalMemberships = Chunk.from(externallyAdded.flatMap { pid =>
-        storedRoster.membersByPlayerId.get(pid).map(_.member)
-      })
-    } yield mergeResults(
-      clubId, phaseB, phaseC, currentMemberCount, previousMemberCount, startedAt, completedAt,
-      externalChanges, externalMemberships
+      saved <- saveUnlessSuperseded(
+        clubId = clubId,
+        version = version,
+        runId = runId,
+        observedAt = observedAt,
+        completedAt = completedAt,
+        b = phaseB,
+        c = phaseC
+      )
+    } yield Option.when(saved)(
+      SavedRoster(storedRoster, prevMemberIds, previousMemberCount, phaseB, phaseC, completedAt)
     )
+
+  // A run is complete exactly when what its roster implied is saved, so the stale check and the report's baseline
+  // agree with the rows and `club_roster_coverage`. Nothing is saved if another save came after `version`.
+  private def saveUnlessSuperseded(
+    clubId: ClubId,
+    version: Option[Long],
+    runId: MembershipRunId,
+    observedAt: Instant,
+    completedAt: Instant,
+    b: MembershipClassify.PhaseBResult,
+    c: MembershipClassify.PhaseCResult
+  ): RIO[PostgresClient, Boolean] =
+    withTransaction {
+      for {
+        current <- ClubRosterCoverage.lockVersion(clubId)
+        saving = current == version
+        _ <- ZIO.whenDiscard(saving)(persist(clubId, observedAt, b, c) *> MembershipRun.complete(runId, completedAt))
+      } yield saving
+    }
 
   // Shared by the CLI ReconcileOnly path and the server membership job (JobRoutes): reconcile, then emit the
   // reconciliation summary via reportReconciliation so it lands in the per-job log / streams to the CLI. Returns the
@@ -309,5 +402,4 @@ object MembershipApp extends ZIOAppDefault {
       _ <- ClubRosterCoverage.observe(clubId, observedAt)
     } yield ()
   }
-
 }

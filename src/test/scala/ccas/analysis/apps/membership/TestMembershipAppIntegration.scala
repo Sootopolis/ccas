@@ -3,7 +3,7 @@ package ccas.analysis.apps.membership
 import java.time.Instant
 
 import com.augustnagro.magnum.sql
-import zio.{Chunk, ZIO, ZLayer}
+import zio.{Chunk, Promise, Ref, UIO, ZIO, ZLayer}
 import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
@@ -168,7 +168,8 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
     testCountActiveCurrentAtExcludesNonActive,
     testSelectLatestCompletedReturnsCompletedRuns,
     testSelectLatestCompletedReturnsNoneWhenNoCompletedRuns,
-    testSelectLatestReportedSkipsIncompleteAndDependencyRuns
+    testSelectLatestReportedSkipsIncompleteAndDependencyRuns,
+    testSelectLatestReportedTakesTheLastToComplete
   )
 
   private def testMergeResultsIncludesExternalChanges = test("mergeResults includes external changes and memberships") {
@@ -295,6 +296,20 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
         _          <- MembershipRun.insert(clubId, RunTrigger.Cli, Times.t3, None)
         result     <- MembershipRun.selectLatestReported(clubId)
       } yield assertTrue(result.map(_.runId).contains(reported))
+    }
+
+  // Taking the later start, the next report would repeat what the run that saved last reported (#312).
+  private def testSelectLatestReportedTakesTheLastToComplete =
+    test("selectLatestReported returns the run that completed last, not the one that started last") {
+      for {
+        _             <- seedDb()
+        _             <- deleteRuns
+        startedFirst  <- MembershipRun.insert(clubId, RunTrigger.Cli, Times.t0, None)
+        startedSecond <- MembershipRun.insert(clubId, RunTrigger.Cli, Times.t1, None)
+        _             <- MembershipRun.complete(startedSecond, Times.t2)
+        _             <- MembershipRun.complete(startedFirst, Times.t3)
+        result        <- MembershipRun.selectLatestReported(clubId)
+      } yield assertTrue(result.map(_.runId).contains(startedFirst))
     }
 
   // ==========================================================================
@@ -929,6 +944,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
     testRejoinPersistsBothRows,
     testObservedRowReplacesTheGuessItOverlaps,
     testJoinsADependencySawAreReportedNext,
+    testAReconcileOverlappingAnotherBuildsOnItsSave,
     testStaleCheckIgnoresAFailedRun,
     testARunThatCannotCompleteSavesNothing
   )
@@ -936,11 +952,19 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
   /** Chess.com for the test club: `roster` as its members with when each joined, and `profiles` as the players it
     * knows by name.
     */
-  private def clubRoutes(roster: List[(String, Instant)], profiles: Map[String, String]): Routes[Any, Response] = {
+  private def clubRoutes(roster: List[(String, Instant)], profiles: Map[String, String]): Routes[Any, Response] =
+    clubRoutesRunning(roster = roster, profiles = profiles, onRosterFetch = ZIO.unit)
+
+  /** [[clubRoutes]], running `onRosterFetch` before it answers each fetch of the roster. */
+  private def clubRoutesRunning(
+    roster: List[(String, Instant)],
+    profiles: Map[String, String],
+    onRosterFetch: UIO[Any]
+  ): Routes[Any, Response] = {
     val notFound = Response.json("""{"code": 0, "message": "Resource \"\" not found."}""").status(Status.NotFound)
     Routes(
       Method.GET / "pub" / "club" / string("slug") / "members" -> handler { (_: String, _: Request) =>
-        Response.json(apiClubMembersJson(roster.map((name, joined) => (name, joined.getEpochSecond))))
+        onRosterFetch.as(Response.json(apiClubMembersJson(roster.map((name, joined) => (name, joined.getEpochSecond)))))
       },
       Method.GET / "pub" / "club" / string("slug") -> handler { (slug: String, _: Request) =>
         Response.json(apiClubJson(ClubId.unwrap(clubId), slug))
@@ -1041,6 +1065,50 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
         result.changes.map(c => (c.playerId, c.changes.toList)) == Chunk((pid1, List(JoinedClub(Times.t1)))),
         result.previousMemberCount == 1,
         result.currentMemberCount == 2
+      )
+    }
+
+  // #312: the later of two overlapping reconciles inserted the member the earlier had saved, and failed on the key.
+  private def testAReconcileOverlappingAnotherBuildsOnItsSave =
+    test("a reconcile another one saved during fetches the roster again and saves against what that one saved") {
+      val alice    = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0)
+      val aliceRow = ClubMember.joined(clubId = clubId, playerId = pid0, since = Times.t0)
+      val bobRow   = ClubMember.joined(clubId = clubId, playerId = pid1, since = Times.t1)
+      val completedRuns = connectZIO {
+        sql"SELECT COUNT(*)::INT FROM membership_run WHERE club_id = $clubId AND completed_at IS NOT NULL"
+          .query[Int].run().head
+      }
+      for {
+        _             <- deleteRuns
+        _             <- seedDb(players = List(alice), members = List(aliceRow))
+        _             <- ClubRosterCoverage.observe(clubId, Times.t0)
+        _             <- completedRun(startedAt = Times.t0, completedAt = Times.t0.plusSeconds(60))
+        reached       <- Promise.make[Nothing, Unit]
+        gate          <- Promise.make[Nothing, Unit]
+        rosterFetches <- Ref.make(0)
+        // The first fetch answers only after the other reconcile saves, so the version the first read is older than
+        // that save, whether the rows it loaded alongside are or not.
+        holdFirst = rosterFetches.updateAndGet(_ + 1).flatMap { fetches =>
+          ZIO.whenDiscard(fetches == 1)(reached.succeed(()) *> gate.await)
+        }
+        routes = clubRoutesRunning(
+          roster = List("alice" -> Times.t0, "bob" -> Times.t1),
+          profiles = Map("bob" -> apiPlayerJson(playerId = PlayerId.unwrap(pid1), username = "bob")),
+          onRosterFetch = holdFirst
+        )
+        first   <- reconcileWith(routes, RunTrigger.Cli).fork
+        _       <- reached.await
+        _       <- reconcileWith(routes, RunTrigger.Dependency)
+        _       <- gate.succeed(())
+        result  <- first.join
+        rows    <- ClubMember.selectClub(clubId)
+        fetches <- rosterFetches.get
+        runs    <- completedRuns
+      } yield assertTrue(
+        rows.toSet == Set(aliceRow, bobRow),
+        fetches == 3,
+        runs == 3,
+        result.changes.map(c => (c.playerId, c.changes.toList)) == Chunk((pid1, List(JoinedClub(Times.t1))))
       )
     }
 
