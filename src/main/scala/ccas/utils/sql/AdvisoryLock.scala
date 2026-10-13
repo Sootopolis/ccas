@@ -18,6 +18,7 @@ object AdvisoryLock {
     case AllPlayerNames extends Space(0x0CCA0002)
     case ClubName       extends Space(0x0CCA0003)
     case AllClubNames   extends Space(0x0CCA0004)
+    case ClubRoster     extends Space(0x0CCA0005)
   }
 
   /** Locks each of `keys` in `space` exclusively, in key order, so two calls taking overlapping keys never wait on each

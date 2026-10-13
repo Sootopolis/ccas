@@ -3,7 +3,7 @@ package ccas.analysis.tables
 import java.time.{Duration, Instant, LocalDateTime, ZoneOffset}
 
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
-import zio.{Chunk, ZIO}
+import zio.{Chunk, Ref, ZIO}
 import zio.http.*
 
 import com.augustnagro.magnum.sql
@@ -12,7 +12,7 @@ import ccas.analysis.apps.recruitment.RecruitmentTestSupport.apiDailyMatchJson
 import ccas.api.misc.enums.PlayerStatusCategory.{Active, Closed}
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username}
 import ccas.utils.client.TestChessComClientSupport
-import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
+import ccas.utils.sql.{ForcedOverlap, FreshSchemaLayer, PostgresClient}
 import ccas.utils.sql.PostgresClient.connectZIO
 
 object TestClubSql extends ZIOSpecDefault {
@@ -41,7 +41,9 @@ object TestClubSql extends ZIOSpecDefault {
     testAnEndedRowSaysWhenLastKnownIn,
     testOverlappingRowsAreRefused,
     testDeleteGuessesOverlappingSparesTheRest,
-    testCoverageOnlyWidens
+    testCoverageOnlyWidens,
+    testEveryCoverageWriteChangesItsVersion,
+    testASaveQueuesBehindAnotherAndReadsItsVersion
   ).provideShared(
     FreshSchemaLayer("test_club_sql", onInit = Tables.ensureTables)
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock
@@ -427,4 +429,32 @@ object TestClubSql extends ZIOSpecDefault {
       result <- ClubRosterCoverage.select(clubA.clubId)
     } yield assertTrue(result.contains(ClubRosterCoverage(clubA.clubId, Times.t1, Times.t3)))
   }
+
+  // A save its bounds don't move is still a save another reconcile must notice (#312).
+  private def testEveryCoverageWriteChangesItsVersion =
+    test("every write of a club's roster coverage changes its version, even one that moves neither bound") {
+      for {
+        _      <- connectZIO(sql"DELETE FROM club_roster_coverage".update.run())
+        before <- ClubRosterCoverage.selectVersion(clubA.clubId)
+        _      <- ClubRosterCoverage.observe(clubA.clubId, Times.t2)
+        first  <- ClubRosterCoverage.selectVersion(clubA.clubId)
+        _      <- ClubRosterCoverage.observe(clubA.clubId, Times.t2)
+        second <- ClubRosterCoverage.selectVersion(clubA.clubId)
+      } yield assertTrue(before.isEmpty, first.isDefined, second.isDefined, second != first)
+    }
+
+  // #312: two reconciles of one club saving at once would both find the version they read and both save.
+  private def testASaveQueuesBehindAnotherAndReadsItsVersion =
+    test("a save of a club's roster waits for one in progress, then reads the version it left") {
+      for {
+        _    <- connectZIO(sql"DELETE FROM club_roster_coverage".update.run())
+        seen <- Ref.make(Option.empty[Long])
+        overlap <- ForcedOverlap.run(
+          first = ClubRosterCoverage.lockVersion(clubA.clubId) *> ClubRosterCoverage.observe(clubA.clubId, Times.t1),
+          second = ClubRosterCoverage.lockVersion(clubA.clubId).flatMap(seen.set)
+        )
+        left      <- ClubRosterCoverage.selectVersion(clubA.clubId)
+        secondSaw <- seen.get
+      } yield assertTrue(overlap.waitedOn == "advisory", left.isDefined, secondSaw == left)
+    }
 }

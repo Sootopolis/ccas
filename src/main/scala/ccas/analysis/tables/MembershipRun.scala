@@ -40,21 +40,24 @@ object MembershipRun {
             ON membership_run (club_id, started_at DESC)""".update.run()
     }
 
-  /** The latest run that persisted what it saw, whatever started it: a run that failed persisted nothing. */
+  /** The latest run to start of those that persisted what they saw, whatever started them: a run that failed persisted
+    * nothing. Its start is the earliest its roster can have been fetched.
+    */
   def selectLatestCompleted(clubId: ClubId): ZIO[PostgresClient, SQLException, Option[MembershipRun]] =
     connectZIO {
       sql"""SELECT $selectCols FROM membership_run WHERE club_id = $clubId AND completed_at IS NOT NULL
             ORDER BY started_at DESC LIMIT 1""".query[MembershipRun].run().headOption
     }
 
-  /** The latest completed run that reported its changes: one another job ran as a step of its own does not, so the
-    * next report still shows what it saw.
+  /** The completed run that reported its changes last: one another job ran as a step of its own does not, so the next
+    * report still shows what it saw. Last to complete rather than to start, since a run that another saved during
+    * fetches again and saves after it (#312).
     */
   def selectLatestReported(clubId: ClubId): ZIO[PostgresClient, SQLException, Option[MembershipRun]] =
     connectZIO {
       sql"""SELECT $selectCols FROM membership_run
             WHERE club_id = $clubId AND completed_at IS NOT NULL AND trigger <> ${RunTrigger.Dependency: RunTrigger}
-            ORDER BY started_at DESC LIMIT 1"""
+            ORDER BY completed_at DESC LIMIT 1"""
         .query[MembershipRun].run().headOption
     }
 
