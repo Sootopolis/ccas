@@ -10,7 +10,7 @@ Route by the question the reader is asking. Every fact has exactly one home; eve
 
 | Reader's question | Home | Rots when |
 | --- | --- | --- |
-| How do I call this? | Scaladoc on the public member | the signature changes |
+| How do I call this? | Scaladoc on the member | the signature changes |
 | Why is *this line* strange? | `//` at the line | the line changes |
 | Why did we pick X over Y? | `docs/adr/NNNN-slug.md` | never — but see currency, below |
 | How do I install / run / configure it? | `README.md` | the feature changes |
@@ -93,6 +93,8 @@ Do not write:
 - **speculation** — a future plan goes in an issue, where it can be closed; a comment prescribing an implementation that has not happened will be wrong about the shape when it does
 - **history** — "used to", "was reverted", a commit hash. Git and the ADR hold this. The one exception is a regression test, where the rationale is the test's reason to exist: keep it to two lines and name the issue
 - **implementation detail in an interface comment** — a caller needs the contract it must uphold, not the analysis that produced it
+
+**A comment about a member is scaladoc, whatever the member's visibility.** A private or local `def` is read through its call sites like any other, and an IDE shows `/** */` on hover but never `//`. Keep `//` for a line inside a body.
 
 ## 6. Budgets
 

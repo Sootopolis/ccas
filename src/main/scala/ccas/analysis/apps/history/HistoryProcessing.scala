@@ -599,12 +599,23 @@ private[history] object HistoryProcessing {
     matchStartTime: Option[Instant]
   ): RIO[PostgresClient, Option[ClubMember]] = {
     val approximateSince = matchStartTime.getOrElse(apiPlayer.joinedAt)
+    val active           = apiPlayer.status.category == PlayerStatusCategory.Active
 
-    // An inactive account's membership ends at its last visit at the latest, though not before `since`; an active
-    // one's is the caller's call. `since` is the only time the player is known to have been in (ADR 0021).
-    def membership(since: Instant, activeUntil: Option[Instant], sinceApproximate: Boolean): ClubMember = {
+    /** The club on the player's list. A closed account's list is as at closure, which came after the last visit, so the
+      * membership stands, hidden (ADR 0022).
+      */
+    def listed(since: Instant): ClubMember = {
+      val member = ClubMember.joined(clubId = ctx.clubId, playerId = apiPlayer.playerId, since = since)
+      if (active) { member }
+      else { member.hidden(if (apiPlayer.lastOnlineAt.isBefore(since)) since else apiPlayer.lastOnlineAt) }
+    }
+
+    /** An inactive account's guessed membership ends at its last visit at the latest, though not before `since`; an
+      * active one's is the caller's call. `since` is the only time the player is known to have been in (ADR 0021).
+      */
+    def guess(since: Instant, activeUntil: Option[Instant]): ClubMember = {
       val endOption =
-        if (apiPlayer.status.category == PlayerStatusCategory.Active) { activeUntil }
+        if (active) { activeUntil }
         else { Some(apiPlayer.lastOnlineAt) }
       val until = endOption.map(end => if (end.isBefore(since)) since else end)
       ClubMember(
@@ -613,16 +624,15 @@ private[history] object HistoryProcessing {
         since = since,
         lastSeen = until.map(_ => since),
         until = until,
-        sinceApproximate = sinceApproximate
+        sinceApproximate = true
       )
     }
 
     val fromApi = ctx.client.getUncached[ApiPlayerClubs](ApiPlayerClubs.getUrl(apiPlayer.username)).map {
       _.clubs.find(_.clubName == ctx.clubSlug) match {
-        case Some(apiClub) =>
-          membership(since = Instant.ofEpochSecond(apiClub.joined), activeUntil = None, sinceApproximate = false)
+        case Some(apiClub) => listed(Instant.ofEpochSecond(apiClub.joined))
         // No longer listing the club means they left, at some point after this match.
-        case None => membership(since = approximateSince, activeUntil = matchStartTime, sinceApproximate = true)
+        case None => guess(since = approximateSince, activeUntil = matchStartTime)
       }
     }
 
@@ -630,7 +640,7 @@ private[history] object HistoryProcessing {
     // written, so the next run tries again.
     val withFallback = fromApi.catchAll { err =>
       NetworkUnavailableException.recoverUnless(err)(
-        ZIO.succeed(membership(since = approximateSince, activeUntil = None, sinceApproximate = true))
+        ZIO.succeed(guess(since = approximateSince, activeUntil = None))
       )
     }
 

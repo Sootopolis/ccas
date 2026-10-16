@@ -6,7 +6,7 @@ import zio.Chunk
 
 import ccas.analysis.tables.{ClubMember, Player, PlayerSnapshot}
 import ccas.api.misc.enums.PlayerStatusCategory
-import ccas.api.misc.subtypes.{ClubId, PlayerId, Username}
+import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
 
 object MembershipChange {
   final case class MemberChangeSummary(playerId: PlayerId, username: Username, changes: Chunk[MemberChange])
@@ -17,6 +17,9 @@ object MembershipChange {
   }
 
   final case class MemberState(player: Player, member: ClubMember)
+
+  private[membership] def later(a: Instant, b: Instant): Instant   = if (a.isAfter(b)) a else b
+  private[membership] def earlier(a: Instant, b: Instant): Instant = if (a.isBefore(b)) a else b
 
   enum MemberChange(val timestamp: Instant) {
     case NewMember(ts: Instant)                                                   extends MemberChange(ts)
@@ -29,27 +32,37 @@ object MembershipChange {
     case StatusChange(ts: Instant, oldStatus: PlayerStatusCategory)               extends MemberChange(ts)
   }
 
-  /** What we held about a club's membership before a reconcile, which the fetched roster is compared against: its
-    * current members, keyed by id and by the name each holds now, every player it has had, and when its roster was
-    * last fetched.
+  /** What we held about a club's membership before a reconcile, which the fetched roster is compared against: the
+    * members its roster should list, keyed by id and by the name each holds now, every other row by player, every
+    * player it has had, every slug it has held, and when its roster was last fetched.
     */
   final case class StoredRoster(
     membersByPlayerId: Map[PlayerId, MemberState],
     membersByUsername: Map[Username, MemberState],
+    unlistedByPlayerId: Map[PlayerId, List[ClubMember]],
     lastObservedAt: Option[Instant],
+    slugs: Set[ClubSlug],
     knownPlayersByUsername: Map[Username, Player] = Map.empty
   ) {
 
-    /** `member` ended at `at`, or at its start if `at` precedes it. A roster row was last known in at the club's
-      * previous roster, which listed every open roster row, kept within the row, which can start after that roster or
-      * end before it. No roster listed a guessed row, so it was known in only at its start (ADR 0021).
-      */
+    /** `member` ended at `at`, or at its start if `at` precedes it, and was last known in no later than that. */
     def close(member: ClubMember, at: Instant): ClubMember = {
-      val until    = if (at.isBefore(member.since)) member.since else at
-      val listedAt = lastObservedAt.filterNot(observed => member.sinceApproximate || observed.isBefore(member.since))
-      val lastSeen = listedAt.fold(member.since)(observed => if (observed.isAfter(until)) until else observed)
-      member.copy(lastSeen = Some(lastSeen), until = Some(until))
+      val until = later(member.since, at)
+      member.copy(lastSeen = Some(earlier(lastKnownIn(member), until)), until = Some(until))
     }
+
+    /** When `member` was last known in, its account having closed after `lastOnline` with the club on its list. */
+    def hiddenAt(member: ClubMember, lastOnline: Instant): Instant = later(lastKnownIn(member), lastOnline)
+
+    /** The last time `member` is known to have been in, before this roster. A listed row was last listed by the club's
+      * previous roster, kept within the row, which can start after that roster. No roster listed a guessed row, so it
+      * was known in only at its start (ADR 0021).
+      */
+    private def lastKnownIn(member: ClubMember): Instant =
+      member.lastSeen.getOrElse {
+        val listedAt = lastObservedAt.filterNot(observed => member.sinceApproximate || observed.isBefore(member.since))
+        listedAt.getOrElse(member.since)
+      }
 
     /** The name `state`'s player holds now. `membersByUsername` is keyed by exactly that, so a member absent from it
       * under the name its row stores holds none: the row keeps a name another player took as a display label.
@@ -68,6 +81,9 @@ object MembershipChange {
     archivedSnapshots: Chunk[PlayerSnapshot],
     newMemberships: Chunk[ClubMember],
     closedMemberships: Chunk[ClubMember],
+    hiddenMemberships: Chunk[ClubMember],
+    reopenedMemberships: Chunk[ClubMember],
+    unsettledLists: Chunk[ClosedAccountClubs.Unsettled],
     currentMemberCount: Int,
     previousMemberCount: Int,
     startedAt: Instant,

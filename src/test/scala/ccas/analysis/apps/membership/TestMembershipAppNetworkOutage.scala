@@ -41,7 +41,9 @@ object TestMembershipAppNetworkOutage extends ZIOSpecDefault {
       val storedRoster = StoredRoster(
         membersByPlayerId = Map(pid0 -> MemberState(player, mem)),
         membersByUsername = Map(Username("alice") -> MemberState(player, mem)),
-        lastObservedAt = None
+        unlistedByPlayerId = Map.empty,
+        lastObservedAt = None,
+        slugs = Set.empty
       )
       for {
         client <- TestChessComClientSupport.networkDownClient

@@ -36,6 +36,8 @@ object TestMembershipAppPure extends ZIOSpecDefault {
     testMemberUntilInRangeActiveSnap,
     testMemberUntilInRangeClosedSnap,
     testMemberUntilInRangeNoSnapshot,
+    testHiddenRowIsAClosureWhenLastSeen,
+    testHiddenRowOfAReopenedAccountIsNoClosure,
     testTwoSnapsWithDifferentUsernames,
     testTwoSnapsWithDifferentStatuses,
     testStatusChangeThenRename,
@@ -152,6 +154,24 @@ object TestMembershipAppPure extends ZIOSpecDefault {
     )
   }
 
+  /** A closure hides the membership rather than ending it, dated when the player was last known in (ADR 0022). */
+  private def testHiddenRowIsAClosureWhenLastSeen =
+    test("a row a closed account hides, last seen in range → AccountClosed then, not LeftClub") {
+      val member = ClubMember.joined(clubId = clubId, playerId = pid0, since = Times.t0).hidden(Times.t1)
+      val states = List(PlayerSnapshot(pid0, Times.t0, Active, None), PlayerSnapshot(pid0, Times.t2, Closed, None))
+      val result = MembershipReport.classifyFromDb(clubId, List(member), states, Nil, Times.t1, Times.t3)
+      val ends   = result.flatMap(_.changes.toList).collect { case end @ (_: AccountClosed | _: LeftClub) => end }
+      assertTrue(ends == List(AccountClosed(Times.t1, Closed)))
+    }
+
+  private def testHiddenRowOfAReopenedAccountIsNoClosure =
+    test("a row still hidden though its account has reopened reports no closure") {
+      val member = ClubMember.joined(clubId = clubId, playerId = pid0, since = Times.t0).hidden(Times.t1)
+      val states = List(PlayerSnapshot(pid0, Times.t2, Closed, None), PlayerSnapshot(pid0, Times.t3, Active, None))
+      val result = MembershipReport.classifyFromDb(clubId, List(member), states, Nil, Times.t1, Times.t3)
+      assertTrue(!result.flatMap(_.changes).exists(_.isInstanceOf[AccountClosed]))
+    }
+
   private def testTwoSnapsWithDifferentUsernames = test("a rename in range with no status change → UsernameChange") {
     val member = ClubMember.joined(clubId = clubId, playerId = pid0, since = Times.t0)
     val snap   = PlayerSnapshot(pid0, Times.t0, Active, None)
@@ -240,17 +260,36 @@ object TestMembershipAppPure extends ZIOSpecDefault {
       sinceApproximate = false
     )
 
+    val bReopened = ClubMember.joined(clubId = clubId, playerId = pid3, since = Times.t0)
+    val cHidden   = ClubMember.joined(clubId = clubId, playerId = pid4, since = Times.t0).hidden(Times.t1)
+    val settled   = ClubMember.joined(clubId = clubId, playerId = pid5, since = Times.t0).hidden(Times.t1)
+    val unsettled = ClosedAccountClubs.Unsettled(pid5, Username("eve"), "a reason")
+
     val phaseB = PhaseBResult(
-      Set(pid0),
-      Chunk(bChange),
-      Chunk(bPlayer),
-      Chunk(bUpdated),
-      Chunk(bArchived),
-      Chunk(bMember),
-      Chunk(bClosed)
+      resolvedIds = Set(pid0),
+      changes = Chunk(bChange),
+      newPlayers = Chunk(bPlayer),
+      updatedPlayers = Chunk(bUpdated),
+      archivedSnapshots = Chunk(bArchived),
+      newMemberships = Chunk(bMember),
+      closedMemberships = Chunk(bClosed),
+      reopenedMemberships = Chunk(bReopened)
     )
-    val phaseC = PhaseCResult(Chunk(cChange), Chunk(cUpdated), Chunk(cArchived), Chunk(cClosed))
-    val result = MembershipApp.mergeResults(clubId, phaseB, phaseC, 10, 8, Times.t0, Times.t1)
+    val phaseC = PhaseCResult(Chunk(cChange), Chunk(cUpdated), Chunk(cArchived), Chunk(cClosed), Chunk(cHidden))
+    val result = MembershipApp.mergeResults(
+      clubId = clubId,
+      b = phaseB,
+      c = phaseC,
+      settlement = ClosedAccountClubs.Settlement(
+        hidden = Chunk.empty,
+        opened = Chunk(settled),
+        unsettled = Chunk(unsettled)
+      ),
+      currentMemberCount = 10,
+      previousMemberCount = 8,
+      startedAt = Times.t0,
+      completedAt = Times.t1
+    )
 
     assertTrue(
       result.changes == Chunk(bChange, cChange),
@@ -258,7 +297,10 @@ object TestMembershipAppPure extends ZIOSpecDefault {
       result.updatedPlayers == Chunk(bUpdated, cUpdated),
       result.archivedSnapshots == Chunk(bArchived, cArchived),
       result.newMemberships == Chunk(bMember),
-      result.closedMemberships == Chunk(bClosed, cClosed)
+      result.closedMemberships == Chunk(bClosed, cClosed),
+      result.hiddenMemberships == Chunk(cHidden, settled),
+      result.reopenedMemberships == Chunk(bReopened),
+      result.unsettledLists == Chunk(unsettled)
     )
   }
 
@@ -389,7 +431,13 @@ object TestMembershipAppPure extends ZIOSpecDefault {
   private def suiteClose = {
     val row = ClubMember.joined(clubId = clubId, playerId = pid0, since = Times.t1)
     def observedAt(lastObservedAt: Option[Instant]) =
-      StoredRoster(membersByPlayerId = Map.empty, membersByUsername = Map.empty, lastObservedAt = lastObservedAt)
+      StoredRoster(
+        membersByPlayerId = Map.empty,
+        membersByUsername = Map.empty,
+        unlistedByPlayerId = Map.empty,
+        lastObservedAt = lastObservedAt,
+        slugs = Set.empty
+      )
     def ends(closed: ClubMember) = (closed.lastSeen, closed.until)
 
     suite("close")(
@@ -411,6 +459,15 @@ object TestMembershipAppPure extends ZIOSpecDefault {
       test("a guessed row, which no roster listed, was last seen at its start") {
         val guess = row.copy(sinceApproximate = true)
         assertTrue(ends(observedAt(Some(Times.t2)).close(guess, Times.t3)) == (Some(Times.t1), Some(Times.t3)))
+      },
+      test("a hidden row, which no roster listed since, keeps when it was last seen") {
+        assertTrue(
+          ends(observedAt(Some(Times.t3)).close(row.hidden(Times.t2), Times.t3)) == (Some(Times.t2), Some(Times.t3))
+        )
+      },
+      test("a closure hides a row from the later of its last listing and the account's last visit") {
+        val roster = observedAt(Some(Times.t2))
+        assertTrue(roster.hiddenAt(row, Times.t3) == Times.t3, roster.hiddenAt(row, Times.t0) == Times.t2)
       }
     )
   }

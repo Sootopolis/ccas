@@ -43,7 +43,8 @@ object TestClubSql extends ZIOSpecDefault {
     testDeleteGuessesOverlappingSparesTheRest,
     testCoverageOnlyWidens,
     testEveryCoverageWriteChangesItsVersion,
-    testASaveQueuesBehindAnotherAndReadsItsVersion
+    testASaveQueuesBehindAnotherAndReadsItsVersion,
+    testAKeptListSpeaksForAClubUnlessOlderThanItsPlayer
   ).provideShared(
     FreshSchemaLayer("test_club_sql", onInit = Tables.ensureTables)
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock
@@ -136,7 +137,7 @@ object TestClubSql extends ZIOSpecDefault {
     for {
       all       <- ClubMember.selectAll
       clubA_all <- ClubMember.selectClub(clubA.clubId)
-      clubA_cur <- ClubMember.selectClubCurrent(clubA.clubId)
+      clubA_cur <- ClubMember.selectClubListed(clubA.clubId)
       clubA_act <- ClubMember.selectClubActive(clubA.clubId)
       clubA_fmr <- ClubMember.selectClubFormer(clubA.clubId)
       clubB_all <- ClubMember.selectClub(clubB.clubId)
@@ -156,8 +157,8 @@ object TestClubSql extends ZIOSpecDefault {
     for {
       _         <- ClubMember.update(memA0Former)
       _         <- ClubMember.updateBatch(List(memB0Former))
-      clubA_cur <- ClubMember.selectClubCurrent(clubA.clubId)
-      clubB_cur <- ClubMember.selectClubCurrent(clubB.clubId)
+      clubA_cur <- ClubMember.selectClubListed(clubA.clubId)
+      clubB_cur <- ClubMember.selectClubListed(clubB.clubId)
     } yield assertTrue(
       clubA_cur == List(memA1),
       clubB_cur.isEmpty
@@ -382,16 +383,19 @@ object TestClubSql extends ZIOSpecDefault {
   private def refusedBy(constraint: String)(insert: ZIO[PostgresClient, Throwable, Any]) =
     insert.exit.map(_.causeOption.flatMap(_.failureOption).exists(_.getMessage.contains(constraint)))
 
+  /** A row with `last_seen` and no `until` is a membership a closed account hides (ADR 0022). */
   private def testAnEndedRowSaysWhenLastKnownIn =
-    test("an ended row must say when the player was last known in, and inside the row") {
+    test("an ended row must say when the player was last known in, and inside the row; a hidden row only the first") {
       val window = refusedBy("club_member_window")
       for {
-        _        <- connectZIO(sql"DELETE FROM club_member".update.run())
-        noLast   <- window(ClubMember.insert(joinedAtT0.copy(until = Some(Times.t2))))
-        afterEnd <- window(ClubMember.insert(joinedAtT0.copy(lastSeen = Some(Times.t3), until = Some(Times.t2))))
-        openSeen <- window(ClubMember.insert(joinedAtT0.copy(lastSeen = Some(Times.t1))))
-        accepted <- ClubMember.insert(joinedAtT0.copy(lastSeen = Some(Times.t1), until = Some(Times.t2)))
-      } yield assertTrue(noLast, afterEnd, openSeen, accepted == 1)
+        _          <- connectZIO(sql"DELETE FROM club_member".update.run())
+        noLast     <- window(ClubMember.insert(joinedAtT0.copy(until = Some(Times.t2))))
+        afterEnd   <- window(ClubMember.insert(joinedAtT0.copy(lastSeen = Some(Times.t3), until = Some(Times.t2))))
+        beforeOpen <- window(ClubMember.insert(joinedAtT0.copy(since = Times.t2).hidden(Times.t1)))
+        hidden     <- ClubMember.insert(joinedAtT0.hidden(Times.t1))
+        _          <- connectZIO(sql"DELETE FROM club_member".update.run())
+        ended      <- ClubMember.insert(joinedAtT0.copy(lastSeen = Some(Times.t1), until = Some(Times.t2)))
+      } yield assertTrue(noLast, afterEnd, beforeOpen, hidden == 1, ended == 1)
     }
 
   private def testOverlappingRowsAreRefused =
@@ -456,5 +460,24 @@ object TestClubSql extends ZIOSpecDefault {
         left      <- ClubRosterCoverage.selectVersion(clubA.clubId)
         secondSaw <- seen.get
       } yield assertTrue(overlap.waitedOn == "advisory", left.isDefined, secondSaw == left)
+    }
+
+  /** A list kept before its player's latest state may predate the account reopening (ADR 0022). */
+  private def testAKeptListSpeaksForAClubUnlessOlderThanItsPlayer =
+    test("a kept list speaks for a club under any slug it held, unless older than its player's latest state") {
+      def listAt(fetchedAt: Instant) = PlayerClubList(
+        playerId = player2.playerId,
+        fetchedAt = fetchedAt,
+        lastOnlineOption = Some(Times.t0),
+        clubs = Map(clubA.slug -> Times.t1)
+      )
+      for {
+        _     <- Player.writeBatch(inserted = List(player2), updated = Nil)
+        _     <- Club.upsert(clubA.copy(slug = ClubSlug("club-a-renamed")))
+        _     <- PlayerClubList.save(listAt(Times.t0))
+        stale <- PlayerClubList.selectListings(clubA.clubId)
+        _     <- PlayerClubList.save(listAt(Times.t2))
+        fresh <- PlayerClubList.selectListings(clubA.clubId)
+      } yield assertTrue(stale.isEmpty, fresh == List(PlayerClubList.Listing(player2.playerId, Times.t0, Times.t1)))
     }
 }

@@ -59,8 +59,8 @@ object MembershipApp extends ZIOAppDefault {
         }
       }
     } yield ())
-      // A systemic outage aborts: an in-flight reconcile persists nothing (its writes are one terminal transaction),
-      // so the only residue is an incomplete `membership_run` row that `selectLatestCompleted` ignores.
+      // A systemic outage aborts: an in-flight reconcile persists nothing its roster implied (one final transaction),
+      // so the residue is an incomplete `membership_run` row `selectLatestCompleted` ignores, and any club lists kept.
       .catchSome(NetworkUnavailableException.abortRun("MembershipApp", "run left incomplete")(exit(ExitCode.failure)))
       .provideSomeAuto(
         ProgressDisplay.live(showProgress = true),
@@ -183,8 +183,16 @@ object MembershipApp extends ZIOAppDefault {
       })
       externalMemberships = Chunk.from(externallyAdded.flatMap(pid => storedMembers.get(pid).map(_.member)))
     } yield mergeResults(
-      clubId, saved.phaseB, saved.phaseC, currentMemberCount, saved.previousMemberCount, startedAt, saved.completedAt,
-      externalChanges, externalMemberships
+      clubId = clubId,
+      b = saved.phaseB,
+      c = saved.phaseC,
+      settlement = saved.settlement,
+      currentMemberCount = currentMemberCount,
+      previousMemberCount = saved.previousMemberCount,
+      startedAt = startedAt,
+      completedAt = saved.completedAt,
+      externalChanges = externalChanges,
+      externalMemberships = externalMemberships
     )
 
   // What a saved roster was classified against and implied.
@@ -194,6 +202,7 @@ object MembershipApp extends ZIOAppDefault {
     previousMemberCount: Int,
     phaseB: MembershipClassify.PhaseBResult,
     phaseC: MembershipClassify.PhaseCResult,
+    settlement: ClosedAccountClubs.Settlement,
     completedAt: Instant
   )
 
@@ -250,6 +259,14 @@ object MembershipApp extends ZIOAppDefault {
       apiMap = apiMembers.toMap
       phaseB <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, storedRoster, observedAt, trustUsernames)
       phaseC <- MembershipClassify.classifyDisappeared(client, storedRoster, phaseB.resolvedIds, apiMap, observedAt)
+      // Closed accounts neither roster lists: their club lists settle their rows (ADR 0022).
+      rostered = storedRoster.membersByPlayerId.keySet ++ phaseB.resolvedIds
+      settlement <- ClosedAccountClubs.settle(
+        client = client,
+        clubId = clubId,
+        storedRoster = storedRoster,
+        exclude = rostered
+      )
       completedAt <- Clock.instant
       saved <- saveUnlessSuperseded(
         clubId = clubId,
@@ -258,10 +275,11 @@ object MembershipApp extends ZIOAppDefault {
         observedAt = observedAt,
         completedAt = completedAt,
         b = phaseB,
-        c = phaseC
+        c = phaseC,
+        settlement = settlement
       )
     } yield Option.when(saved)(
-      SavedRoster(storedRoster, prevMemberIds, previousMemberCount, phaseB, phaseC, completedAt)
+      SavedRoster(storedRoster, prevMemberIds, previousMemberCount, phaseB, phaseC, settlement, completedAt)
     )
 
   // A run is complete exactly when what its roster implied is saved, so the stale check and the report's baseline
@@ -273,13 +291,16 @@ object MembershipApp extends ZIOAppDefault {
     observedAt: Instant,
     completedAt: Instant,
     b: MembershipClassify.PhaseBResult,
-    c: MembershipClassify.PhaseCResult
+    c: MembershipClassify.PhaseCResult,
+    settlement: ClosedAccountClubs.Settlement
   ): RIO[PostgresClient, Boolean] =
     withTransaction {
       for {
         current <- ClubRosterCoverage.lockVersion(clubId)
         saving = current == version
-        _ <- ZIO.whenDiscard(saving)(persist(clubId, observedAt, b, c) *> MembershipRun.complete(runId, completedAt))
+        _ <- ZIO.whenDiscard(saving)(
+          persist(clubId, observedAt, b, c, settlement) *> MembershipRun.complete(runId, completedAt)
+        )
       } yield saving
     }
 
@@ -330,19 +351,23 @@ object MembershipApp extends ZIOAppDefault {
   // reachable only by id, and the display cache could name whoever took its name.
   private[membership] def loadStoredRoster(clubId: ClubId): RIO[PostgresClient, StoredRoster] =
     for {
-      currentMembers <- ClubMember.selectClubCurrent(clubId)
+      listedMembers  <- ClubMember.selectClubListed(clubId)
       allClubMembers <- ClubMember.selectClub(clubId)
       playerIds = allClubMembers.map(_.playerId).distinct
       players      <- Player.selectByIds(playerIds)
       currentNames <- PlayerName.selectCurrentNames(playerIds)
       coverage     <- ClubRosterCoverage.select(clubId)
+      clubNames    <- ClubName.selectClub(clubId)
     } yield {
       val playerMap = players.map(p => p.playerId -> p).toMap
-      val states    = currentMembers.flatMap(m => playerMap.get(m.playerId).map(p => MemberState(p, m)))
+      val listed    = listedMembers.toSet
+      val states    = listedMembers.flatMap(m => playerMap.get(m.playerId).map(p => MemberState(p, m)))
       StoredRoster(
         membersByPlayerId = states.map(s => s.player.playerId -> s).toMap,
         membersByUsername = states.flatMap(s => currentNames.get(s.player.playerId).map(_ -> s)).toMap,
+        unlistedByPlayerId = allClubMembers.filterNot(listed.contains).groupBy(_.playerId),
         lastObservedAt = coverage.map(_.lastObservedAt),
+        slugs = clubNames.map(_.slug).toSet,
         knownPlayersByUsername = players.flatMap(p => currentNames.get(p.playerId).map(_ -> p)).toMap
       )
     }
@@ -360,6 +385,7 @@ object MembershipApp extends ZIOAppDefault {
     clubId: ClubId,
     b: MembershipClassify.PhaseBResult,
     c: MembershipClassify.PhaseCResult,
+    settlement: ClosedAccountClubs.Settlement,
     currentMemberCount: Int,
     previousMemberCount: Int,
     startedAt: Instant,
@@ -375,30 +401,37 @@ object MembershipApp extends ZIOAppDefault {
       archivedSnapshots = b.archivedSnapshots ++ c.archivedSnapshots,
       newMemberships = b.newMemberships ++ externalMemberships,
       closedMemberships = b.closedMemberships ++ c.closedMemberships,
+      hiddenMemberships = c.hiddenMemberships ++ settlement.hidden ++ settlement.opened,
+      reopenedMemberships = b.reopenedMemberships,
+      unsettledLists = settlement.unsettled,
       currentMemberCount = currentMemberCount,
       previousMemberCount = previousMemberCount,
       startedAt = startedAt,
       completedAt = completedAt
     )
 
-  // Everything the roster implied, `club_roster_coverage` included, for the caller to commit as one.
+  /** What the roster and the club lists implied, `club_roster_coverage` included, for the caller to commit as one. */
   private def persist(
     clubId: ClubId,
     observedAt: Instant,
     b: MembershipClassify.PhaseBResult,
-    c: MembershipClassify.PhaseCResult
+    c: MembershipClassify.PhaseCResult,
+    settlement: ClosedAccountClubs.Settlement
   ): RIO[PostgresClient, Unit] = {
-    val allUpdated      = b.updatedPlayers ++ c.updatedPlayers
-    val allArchived     = b.archivedSnapshots ++ c.archivedSnapshots
-    val allClosedMships = b.closedMemberships ++ c.closedMemberships
+    val allUpdated  = b.updatedPlayers ++ c.updatedPlayers
+    val allArchived = b.archivedSnapshots ++ c.archivedSnapshots
+    val narrowed    = b.closedMemberships ++ c.closedMemberships ++ c.hiddenMemberships
+    val widened     = b.reopenedMemberships ++ settlement.hidden
+    val opened      = b.newMemberships ++ settlement.opened
     for {
       _ <- Player.writeBatch(inserted = b.newPlayers, updated = allUpdated)
       _ <- ZIO.whenDiscard(allArchived.nonEmpty)(PlayerSnapshot.insertBatch(allArchived))
       // Closes first: a rejoin opens a row the old one would overlap while still open.
-      _ <- ZIO.whenDiscard(allClosedMships.nonEmpty)(ClubMember.updateBatch(allClosedMships))
-      _ <- ZIO.whenDiscard(b.newMemberships.nonEmpty)(
-        ClubMember.deleteGuessesOverlapping(b.newMemberships) *> ClubMember.insertBatch(b.newMemberships)
-      )
+      _ <- ZIO.whenDiscard(narrowed.nonEmpty)(ClubMember.updateBatch(narrowed))
+      // A reopened row, like a new one, would overlap any guess about the same time.
+      _ <- ZIO.whenDiscard((widened ++ opened).nonEmpty)(ClubMember.deleteGuessesOverlapping(widened ++ opened))
+      _ <- ZIO.whenDiscard(widened.nonEmpty)(ClubMember.updateBatch(widened))
+      _ <- ZIO.whenDiscard(opened.nonEmpty)(ClubMember.insertBatch(opened))
       _ <- ClubRosterCoverage.observe(clubId, observedAt)
     } yield ()
   }

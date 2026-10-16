@@ -4,10 +4,11 @@ import java.sql.SQLException
 import java.time.Instant
 
 import com.augustnagro.magnum.sql
-import zio.{RIO, ZIO}
+import zio.{Chunk, RIO, ZIO}
 import zio.http.*
 
 import ccas.analysis.apps.TestTimes
+import ccas.analysis.apps.membership.MembershipChange.StoredRoster
 import ccas.analysis.apps.recruitment.CandidateOutcome
 import ccas.analysis.tables.{Club, ClubMember, Player, PlayerMatchRef, PlayerSnapshot, RecruitmentCandidate}
 import ccas.analysis.tables.subtypes.RecruitmentRunId
@@ -39,6 +40,24 @@ object TestMembershipAppSupport {
   val otherClub   = Club(otherClubId, TestTimes.t0, ClubSlug("other-club"), "Other Club", None, None, None)
 
   // --- Helpers ---
+
+  val emptyStoredRoster: StoredRoster = StoredRoster(
+    membersByPlayerId = Map.empty,
+    membersByUsername = Map.empty,
+    unlistedByPlayerId = Map.empty,
+    lastObservedAt = None,
+    slugs = Set.empty
+  )
+
+  val noSettlement: ClosedAccountClubs.Settlement =
+    ClosedAccountClubs.Settlement(hidden = Chunk.empty, opened = Chunk.empty, unsettled = Chunk.empty)
+
+  /** A player's club list: each club by slug, with when they joined it. */
+  def clubListJson(clubs: (String, Instant)*): String =
+    clubs.map { (slug, joined) =>
+      s"""{"name": "Club", "last_activity": 0, "url": "https://www.chess.com/club/$slug",
+         | "joined": ${joined.getEpochSecond}}""".stripMargin
+    }.mkString("""{"clubs": [""", ", ", "]}")
 
   // Mirrors Chess.com's canonical "not found." 404 body so HttpStatusException.classify dispatches to ReportedNotFound.
   private val notFoundBody: String = """{"code": 0, "message": "Resource \"\" not found."}"""
@@ -86,6 +105,7 @@ object TestMembershipAppSupport {
         connectZIO(sql"DELETE FROM recruitment_candidate WHERE player_id = $pid".update.run()) *>
           connectZIO(sql"DELETE FROM player_match_ref WHERE player_id = $pid".update.run()) *>
           connectZIO(sql"DELETE FROM player_snapshot WHERE player_id = $pid".update.run()) *>
+          connectZIO(sql"DELETE FROM player_club_list WHERE player_id = $pid".update.run()) *>
           TestDbCleanup.deletePlayer(pid)
       }
       _ <- Club.upsert(club)

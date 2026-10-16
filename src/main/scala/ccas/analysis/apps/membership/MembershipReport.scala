@@ -47,16 +47,24 @@ private[membership] object MembershipReport {
     val duration = JDuration.between(result.startedAt, result.completedAt)
     for {
       _ <- ZIO.logInfo(s"=== Reconciliation Complete ===")
-      _ <- ZIO.logInfo(s"Duration:           ${duration.display}")
-      _ <- ZIO.logInfo(s"Total members:      ${result.currentMemberCount} ($sign$delta)")
-      _ <- ZIO.logInfo(s"New players:        ${result.newPlayers.size}")
-      _ <- ZIO.logInfo(s"Updated players:    ${result.updatedPlayers.size}")
-      _ <- ZIO.logInfo(s"New memberships:    ${result.newMemberships.size}")
-      _ <- ZIO.logInfo(s"Closed memberships: ${result.closedMemberships.size}")
+      _ <- ZIO.logInfo(s"Duration:             ${duration.display}")
+      _ <- ZIO.logInfo(s"Total members:        ${result.currentMemberCount} ($sign$delta)")
+      _ <- ZIO.logInfo(s"New players:          ${result.newPlayers.size}")
+      _ <- ZIO.logInfo(s"Updated players:      ${result.updatedPlayers.size}")
+      _ <- ZIO.logInfo(s"New memberships:      ${result.newMemberships.size}")
+      _ <- ZIO.logInfo(s"Closed memberships:   ${result.closedMemberships.size}")
+      _ <- ZIO.logInfo(s"Hidden memberships:   ${result.hiddenMemberships.size}")
+      _ <- ZIO.logInfo(s"Reopened memberships: ${result.reopenedMemberships.size}")
       _ <- ZIO.logInfo("")
       _ <- printChangeSummaries(result.changes.toList, invitations)
+      _ <- ZIO.foreachDiscard(unsettledLines(result))(ZIO.logInfo(_))
     } yield ()
   }
+
+  /** Closed accounts whose club list settled nothing, so their rows stay as they were (ADR 0022). */
+  private def unsettledLines(result: ReconciliationResult): List[String] =
+    Option.when(result.unsettledLists.nonEmpty)("[CLUB LIST UNSETTLED]").toList ++
+      result.unsettledLists.map(unsettled => s"  ${unsettled.username} — ${unsettled.reason}")
 
   private def printChangeSummaries(
     summaries: List[MemberChangeSummary],
@@ -89,7 +97,7 @@ private[membership] object MembershipReport {
       case JoinedClub(ts)                => s"at $ts$invitedSuffix"
       case Rejoined(ts, lastSeen, until) => s"at $ts — ${previousEnd(lastSeen, until)}$invitedSuffix"
       case LeftClub(ts)                  => s"at $ts"
-      case AccountClosed(ts, status)     => s"at $ts — status: $status"
+      case AccountClosed(ts, status)     => s"after $ts — status: $status"
       case Unresolvable(ts, oldUsername) => s"at $ts — old username: $oldUsername"
       case UsernameChange(ts, oldName)   => s"at $ts — was: $oldName"
       case StatusChange(ts, oldStatus)   => s"at $ts — was: $oldStatus"
@@ -138,13 +146,16 @@ private[membership] object MembershipReport {
                     |Duration:  ${duration.display}
                     |
                     |=== Reconciliation Complete ===
-                    |Total members:      ${result.currentMemberCount} ($sign$delta)
-                    |New players:        ${result.newPlayers.size}
-                    |Updated players:    ${result.updatedPlayers.size}
-                    |New memberships:    ${result.newMemberships.size}
-                    |Closed memberships: ${result.closedMemberships.size}
+                    |Total members:        ${result.currentMemberCount} ($sign$delta)
+                    |New players:          ${result.newPlayers.size}
+                    |Updated players:      ${result.updatedPlayers.size}
+                    |New memberships:      ${result.newMemberships.size}
+                    |Closed memberships:   ${result.closedMemberships.size}
+                    |Hidden memberships:   ${result.hiddenMemberships.size}
+                    |Reopened memberships: ${result.reopenedMemberships.size}
                     |""".stripMargin
-    header + "\n" + formatChangeSummaries(result.changes.toList, invitations)
+    header + "\n" + formatChangeSummaries(result.changes.toList, invitations) +
+      unsettledLines(result).map(_ + "\n").mkString
   }
 
   def formatReport(rr: ReportResult): String = {
@@ -206,8 +217,11 @@ private[membership] object MembershipReport {
     val namesByPlayer  = names.groupBy(_.playerId)
     def inRange(t: Instant): Boolean = t.compareTo(since) >= 0 && t.compareTo(until) <= 0
 
+    /** A row a closed account hides dates the closure by when the player was last known in (ADR 0022). */
+    def hiddenAt(m: ClubMember): Option[Instant] = m.lastSeen.filter(_ => m.until.isEmpty)
+
     // Find membership changes in the time range
-    val changedMembers = members.filter(m => inRange(m.since) || m.until.exists(inRange))
+    val changedMembers = members.filter(m => inRange(m.since) || m.until.exists(inRange) || hiddenAt(m).exists(inRange))
 
     // Group by player
     val membersByPlayer = changedMembers.groupBy(_.playerId)
@@ -248,6 +262,12 @@ private[membership] object MembershipReport {
               // No state found near the closure — unresolvable
               val username = playerNames.headOption.fold(Username.wrap("unknown"))(_.username)
               changes += Unresolvable(u, username)
+          }
+        }
+
+        hiddenAt(cm).filter(inRange).foreach { lastSeen =>
+          playerStates.lastOption.filter(_.status != PlayerStatusCategory.Active).foreach { state =>
+            changes += AccountClosed(lastSeen, state.status)
           }
         }
       }
