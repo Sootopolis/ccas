@@ -8,11 +8,19 @@ Unlike an ADR, this page describes a system we do not control: edit an entry in 
 
 ### Closing an account does not end its club memberships
 
-A closed account's `status` becomes `closed`, `closed:fair_play_violations` or `closed:abuse`, and it drops out of every club's member list, which shows only active accounts. It is still a member: its own club list keeps showing the clubs it belonged to at closure, and if the account is reopened it reappears in their member lists with its original `joined`. Its profile is still served under its username, with the new `status` and its `last_online`, which precedes the closure. Chess.com is not known to rename an account when closing it.
+A closed account's `status` becomes `closed`, `closed:fair_play_violations` or `closed:abuse`, and it drops out of every club's member list, which shows only active accounts. It is still a member: its own club list keeps showing the clubs it belonged to at closure, and if the account is reopened it reappears in their member lists with its original `joined`. Its profile is still served under its username, with the new `status` and its `last_online`, which precedes the closure, until the account is [renamed](#closed-and-dormant-accounts-are-renamed).
 
 Never read a closed account's absence from a roster as leaving.
 
-*Operator's account, 2026-10-09 ([#302](https://github.com/Sootopolis/ccas/issues/302)); closed profiles served by name since Membership first recorded closures, 2026-03-11.*
+*Operator's account, 2026-10-09 ([#302](https://github.com/Sootopolis/ccas/issues/302)); closed profiles served by name since Membership first recorded closures, 2026-03-11. On 2026-10-14, 211 of 215 closed accounts Membership had ended a row for still listed the club with that row's `joined`, 3 no longer listed it, and 1 no longer answered ([#311](https://github.com/Sootopolis/ccas/issues/311)).*
+
+### Closed and dormant accounts are renamed
+
+Some closed accounts are later renamed to `x-` and ten digits. In the two cases watched closely, that happened about ten days after the last visit, which matches the waiting period of Chess.com's [account deletion](https://support.chess.com/en/articles/9829268-how-can-i-delete-my-account). Fair-play closures, and accounts unused for years, have been given an `-inactive` suffix, and the freed name can go to another account. The old name then 404s or answers for someone else.
+
+Never infer an account's status or history from its name: these patterns are observed, not documented, and an ordinary name can follow them. Fetch what a closed account still shows soon after it closes, under a name its profile has just answered to.
+
+*Five renames recorded in `player_name` since 2026-03; one freed name re-registered within hours, 2026-09-07 ([#311](https://github.com/Sootopolis/ccas/issues/311)).*
 
 ### Usernames change, and a freed one can be taken
 
@@ -42,7 +50,7 @@ A renamed club's old slug 404s, and may later answer for another club ([0016](ad
 
 ### A player's club list names clubs by slug only
 
-`/pub/player/{username}/clubs` gives each club's `name`, `url`, `joined` and `last_activity`, but no id. Match it against every slug a club has held, and resolve an unfamiliar slug before concluding that a club is not on the list ([0016](adr/0016-identity-is-the-id-names-are-observations.md)).
+`/pub/player/{username}/clubs` gives each club's `name`, `url`, `joined` and `last_activity`, but no id, and no id of the player either. Match it against every slug a club has held, and resolve an unfamiliar slug before concluding that a club is not on the list ([0016](adr/0016-identity-is-the-id-names-are-observations.md)). Ask for it under a name the player's profile has just answered to, since a name can [pass to another account](#closed-and-dormant-accounts-are-renamed).
 
 *2026-10-09 ([#302](https://github.com/Sootopolis/ccas/issues/302)).*
 

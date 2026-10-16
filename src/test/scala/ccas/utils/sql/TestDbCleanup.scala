@@ -22,9 +22,9 @@ object TestDbCleanup {
   /** Clears: `player_name`, `player_snapshot`, `player`.
     *
     * Does NOT clear other FK children of `player`: `player_match_ref`, `player_tournament_ref`, `player_ref_skip`,
-    * `player_recruitment_cache`, `recruitment_candidate`, `recruitment_blacklist`, `club_admin`, `club_member`.
-    * If a suite seeds any of those, clear them first (or compose with the relevant helper) — otherwise the
-    * `DELETE FROM player` will fail with an FK violation.
+    * `player_recruitment_cache`, `recruitment_candidate`, `recruitment_blacklist`, `club_admin`, `club_member`,
+    * `player_club_list`. If a suite seeds any of those, clear them first (or compose with the relevant helper) —
+    * otherwise the `DELETE FROM player` will fail with an FK violation.
     */
   val clearPlayer: RIO[PostgresClient, Unit] = transactZIO {
     sql"DELETE FROM player_name".update.run()

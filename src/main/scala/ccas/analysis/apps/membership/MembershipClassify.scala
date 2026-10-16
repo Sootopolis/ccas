@@ -27,7 +27,8 @@ private[membership] object MembershipClassify {
     updatedPlayers: Chunk[Player],
     archivedSnapshots: Chunk[PlayerSnapshot],
     newMemberships: Chunk[ClubMember],
-    closedMemberships: Chunk[ClubMember]
+    closedMemberships: Chunk[ClubMember],
+    reopenedMemberships: Chunk[ClubMember]
   )
 
   private case class PhaseBMemberResult(
@@ -37,7 +38,8 @@ private[membership] object MembershipClassify {
     updatedPlayers: Chunk[Player],
     archivedSnapshots: Chunk[PlayerSnapshot],
     newMemberships: Chunk[ClubMember],
-    closedMemberships: Chunk[ClubMember]
+    closedMemberships: Chunk[ClubMember],
+    reopenedMemberships: Chunk[ClubMember]
   )
 
   def classifyApiMembers(
@@ -62,7 +64,8 @@ private[membership] object MembershipClassify {
         updatedPlayers = results.flatMap(_.updatedPlayers),
         archivedSnapshots = results.flatMap(_.archivedSnapshots),
         newMemberships = results.flatMap(_.newMemberships),
-        closedMemberships = results.flatMap(_.closedMemberships)
+        closedMemberships = results.flatMap(_.closedMemberships),
+        reopenedMemberships = results.flatMap(_.reopenedMemberships)
       )
     }
   }
@@ -77,10 +80,23 @@ private[membership] object MembershipClassify {
     trustUsernames: Boolean
   ): RIO[PostgresClient, PhaseBMemberResult] = {
     val since = Instant.ofEpochSecond(joinedEpoch)
-    def resolved(playerId: PlayerId) =
-      PhaseBMemberResult(playerId, Chunk.empty, Chunk.empty, Chunk.empty, Chunk.empty, Chunk.empty, Chunk.empty)
+    def resolved(playerId: PlayerId) = PhaseBMemberResult(
+      resolvedId = playerId,
+      changes = Chunk.empty,
+      newPlayers = Chunk.empty,
+      updatedPlayers = Chunk.empty,
+      archivedSnapshots = Chunk.empty,
+      newMemberships = Chunk.empty,
+      closedMemberships = Chunk.empty,
+      reopenedMemberships = Chunk.empty
+    )
+    val unchanged = PlayerChangeResult(updated = None, archived = None, changes = Chunk.empty)
 
     storedRoster.membersByUsername.get(username) match {
+      // A row a closed account hid, its account seen active since.
+      case Some(state) if state.member.lastSeen.nonEmpty =>
+        ZIO.succeed(returning(storedRoster, clubId, state.player.playerId, username, since, unchanged))
+
       case Some(state) if state.member.sinceApproximate =>
         // Replace approximate with authoritative timestamp
         ClubMember.replaceSince(clubId, state.player.playerId, state.member.since, since)
@@ -108,7 +124,8 @@ private[membership] object MembershipClassify {
             updatedPlayers = Chunk.empty,
             archivedSnapshots = Chunk.empty,
             newMemberships = Chunk(newMember),
-            closedMemberships = Chunk(closedMember)
+            closedMemberships = Chunk(closedMember),
+            reopenedMemberships = Chunk.empty
           )
         )
 
@@ -117,26 +134,81 @@ private[membership] object MembershipClassify {
         if (!trustUsernames) { fetchAndClassifyNewMember(client, clubId, username, since, storedRoster, now) }
         else {
           storedRoster.knownPlayersByUsername.get(username) match {
-            case None => fetchAndClassifyNewMember(client, clubId, username, since, storedRoster, now)
-            case Some(knownPlayer) =>
-              // A former member joining again. A current one would have matched `membersByUsername` above:
-              // both maps are keyed by the name each player holds now, and only one player holds a name.
-              val playerId  = knownPlayer.playerId
-              val newMember = ClubMember.joined(clubId = clubId, playerId = playerId, since = since)
-              val change    = MemberChangeSummary(playerId, username, Chunk(JoinedClub(since)))
-              ZIO.succeed(
-                PhaseBMemberResult(
-                  resolvedId = playerId,
-                  changes = Chunk(change),
-                  newPlayers = Chunk.empty,
-                  updatedPlayers = Chunk.empty,
-                  archivedSnapshots = Chunk.empty,
-                  newMemberships = Chunk(newMember),
-                  closedMemberships = Chunk.empty
-                )
-              )
+            // A former member joining again. An active account with an open row would have matched `membersByUsername`
+            // above: both maps are keyed by the name each player holds now, and only one holds it.
+            case Some(knownPlayer) if knownPlayer.status == PlayerStatusCategory.Active =>
+              ZIO.succeed(returning(storedRoster, clubId, knownPlayer.playerId, username, since, unchanged))
+            // A closed account listed again has reopened, which only its profile records.
+            case _ => fetchAndClassifyNewMember(client, clubId, username, since, storedRoster, now)
           }
         }
+    }
+  }
+
+  /** A player listed as joined at `since` with no row open to the stored roster, or only one a closed account hid. The
+    * hidden row, or one a closure ended, reopens if it started then: the same `joined` is the same membership.
+    * Otherwise a new row opens, and a hidden row closes at its start, since they had left by then; a hidden guess gives
+    * way to the new row instead.
+    */
+  private def returning(
+    storedRoster: StoredRoster,
+    clubId: ClubId,
+    playerId: PlayerId,
+    username: Username,
+    since: Instant,
+    change: PlayerChangeResult
+  ): PhaseBMemberResult = {
+    val rows =
+      storedRoster.membersByPlayerId.get(playerId).map(_.member).toList ++
+        storedRoster.unlistedByPlayerId.getOrElse(playerId, Nil)
+    val newMember = ClubMember.joined(clubId = clubId, playerId = playerId, since = since)
+    def result(
+      memberChanges: Chunk[MemberChange],
+      newMemberships: Chunk[ClubMember],
+      closedMemberships: Chunk[ClubMember],
+      reopenedMemberships: Chunk[ClubMember]
+    ) = {
+      val changes = memberChanges ++ change.changes
+      PhaseBMemberResult(
+        resolvedId = playerId,
+        changes = Chunk.fromIterable(Option.when(changes.nonEmpty)(MemberChangeSummary(playerId, username, changes))),
+        newPlayers = Chunk.empty,
+        updatedPlayers = Chunk.fromIterable(change.updated),
+        archivedSnapshots = Chunk.fromIterable(change.archived),
+        newMemberships = newMemberships,
+        closedMemberships = closedMemberships,
+        reopenedMemberships = reopenedMemberships
+      )
+    }
+    val observed = rows.filterNot(_.sinceApproximate)
+    (observed.find(_.since == since), observed.find(_.until.isEmpty)) match {
+      case (Some(row), _) =>
+        result(
+          memberChanges = Chunk.empty,
+          newMemberships = Chunk.empty,
+          closedMemberships = Chunk.empty,
+          reopenedMemberships = Chunk(row.copy(lastSeen = None, until = None))
+        )
+      case (None, Some(hidden)) =>
+        val closed = storedRoster.close(member = hidden, at = since)
+        val rejoined = Rejoined(
+          ts = since,
+          previousLastSeen = closed.lastSeen.getOrElse(since),
+          previousUntil = closed.until.getOrElse(since)
+        )
+        result(
+          memberChanges = Chunk(rejoined),
+          newMemberships = Chunk(newMember),
+          closedMemberships = Chunk(closed),
+          reopenedMemberships = Chunk.empty
+        )
+      case (None, None) =>
+        result(
+          memberChanges = Chunk(JoinedClub(since)),
+          newMemberships = Chunk(newMember),
+          closedMemberships = Chunk.empty,
+          reopenedMemberships = Chunk.empty
+        )
     }
   }
 
@@ -154,39 +226,34 @@ private[membership] object MembershipClassify {
 
       storedRoster.membersByPlayerId.get(playerId) match {
         case Some(state) =>
-          // Username change: same player ID, different username
           val change =
             playerChanges(state.player, storedRoster.heldName(state), username, statusCategory, apiPlayer.title, now)
-          val summary = MemberChangeSummary(playerId, username, change.changes)
-          ZIO.succeed(
-            PhaseBMemberResult(
-              resolvedId = playerId,
-              changes = Chunk(summary),
-              newPlayers = Chunk.empty,
-              updatedPlayers = Chunk.fromIterable(change.updated),
-              archivedSnapshots = Chunk.fromIterable(change.archived),
-              newMemberships = Chunk.empty,
-              closedMemberships = Chunk.empty
-            )
-          )
-
-        case None =>
-          // Check if player exists in DB at all
-          (Player.selectId(playerId) <*> PlayerName.selectCurrentName(playerId)).map {
-            case (Some(existing), heldNameOption) =>
-              // Player exists but not current club member — joined club
-              val newMember = ClubMember.joined(clubId = clubId, playerId = playerId, since = since)
-              val change    = playerChanges(existing, heldNameOption, username, statusCategory, apiPlayer.title, now)
-              val summary   = MemberChangeSummary(playerId, username, JoinedClub(since) +: change.changes)
+          // A row a closed account hid, its account seen active since.
+          if (state.member.lastSeen.nonEmpty) {
+            ZIO.succeed(returning(storedRoster, clubId, playerId, username, since, change))
+          } else {
+            // Username change: same player ID, different username
+            val summary = MemberChangeSummary(playerId, username, change.changes)
+            ZIO.succeed(
               PhaseBMemberResult(
                 resolvedId = playerId,
                 changes = Chunk(summary),
                 newPlayers = Chunk.empty,
                 updatedPlayers = Chunk.fromIterable(change.updated),
                 archivedSnapshots = Chunk.fromIterable(change.archived),
-                newMemberships = Chunk(newMember),
-                closedMemberships = Chunk.empty
+                newMemberships = Chunk.empty,
+                closedMemberships = Chunk.empty,
+                reopenedMemberships = Chunk.empty
               )
+            )
+          }
+
+        case None =>
+          // Check if player exists in DB at all
+          (Player.selectId(playerId) <*> PlayerName.selectCurrentName(playerId)).map {
+            case (Some(existing), heldNameOption) =>
+              val change = playerChanges(existing, heldNameOption, username, statusCategory, apiPlayer.title, now)
+              returning(storedRoster, clubId, playerId, username, since, change)
 
             case (None, _) =>
               // Brand new player — create with all fields, no snapshot
@@ -200,7 +267,8 @@ private[membership] object MembershipClassify {
                 updatedPlayers = Chunk.empty,
                 archivedSnapshots = Chunk.empty,
                 newMemberships = Chunk(member),
-                closedMemberships = Chunk.empty
+                closedMemberships = Chunk.empty,
+                reopenedMemberships = Chunk.empty
               )
           }
       }
@@ -212,15 +280,16 @@ private[membership] object MembershipClassify {
     changes: Chunk[MemberChangeSummary],
     updatedPlayers: Chunk[Player],
     archivedSnapshots: Chunk[PlayerSnapshot],
-    closedMemberships: Chunk[ClubMember]
+    closedMemberships: Chunk[ClubMember],
+    hiddenMemberships: Chunk[ClubMember]
   )
 
-  // Says when the membership ended, if it did; `classifyDisappeared` turns that into the closed row.
+  /** The member's row as this roster leaves it, if it changed: ended, or hidden by a closed account. */
   private case class PhaseCMemberResult(
     changes: Chunk[MemberChangeSummary],
     updatedPlayers: Chunk[Player],
     archivedSnapshots: Chunk[PlayerSnapshot],
-    endedAtOption: Option[Instant]
+    rowOption: Option[ClubMember]
   )
 
   def classifyDisappeared(
@@ -235,46 +304,23 @@ private[membership] object MembershipClassify {
     ZIO.scoped {
       for {
         results <- ProgressDisplay.foreachParProgress(disappeared, ApiConcurrency.fiberCap(client))(label) { state =>
-          classifyOneDisappeared(client, state, storedRoster.heldName(state), apiMap, now).map(state.member -> _)
+          classifyOneDisappeared(client, storedRoster, state, apiMap, now)
         }
+        rows = results.flatMap(_.rowOption)
       } yield PhaseCResult(
-        changes = results.flatMap((_, result) => result.changes),
-        updatedPlayers = results.flatMap((_, result) => result.updatedPlayers),
-        archivedSnapshots = results.flatMap((_, result) => result.archivedSnapshots),
-        closedMemberships = results.flatMap((member, result) => result.endedAtOption.map(storedRoster.close(member, _)))
+        changes = results.flatMap(_.changes),
+        updatedPlayers = results.flatMap(_.updatedPlayers),
+        archivedSnapshots = results.flatMap(_.archivedSnapshots),
+        closedMemberships = rows.filter(_.until.nonEmpty),
+        hiddenMemberships = rows.filter(_.until.isEmpty)
       )
     }
   }
 
   private def classifyOneDisappeared(
     client: ChessComClient,
+    storedRoster: StoredRoster,
     state: MemberState,
-    heldNameOption: Option[Username],
-    apiMap: Map[Username, Long],
-    now: Instant
-  ): RIO[PostgresClient, PhaseCMemberResult] = {
-    // Short-circuit already-closed players: status flipped to non-Active via another path (other club's refresh,
-    // Recruitment, History) but `ClubMember.until` was left open. Skip the wasted `ApiPlayer` fetch; close the
-    // membership row at the stored closure timestamp (`player.since`). Tradeoff: misses rare Chess.com reinstatement;
-    // any reopened account that interacts with our tracked clubs is rediscovered via Phase B next run.
-    if (state.player.status != PlayerStatusCategory.Active) {
-      ZIO.succeed(
-        PhaseCMemberResult(
-          changes = Chunk.empty,
-          updatedPlayers = Chunk.empty,
-          archivedSnapshots = Chunk.empty,
-          endedAtOption = Some(state.player.since)
-        )
-      )
-    } else {
-      classifyOneDisappearedActive(client, state, heldNameOption, apiMap, now)
-    }
-  }
-
-  private def classifyOneDisappearedActive(
-    client: ChessComClient,
-    state: MemberState,
-    heldNameOption: Option[Username],
     apiMap: Map[Username, Long],
     now: Instant
   ): RIO[PostgresClient, PhaseCMemberResult] = {
@@ -284,17 +330,21 @@ private[membership] object MembershipClassify {
     client.getUncached[ApiPlayer](ApiPlayer.getUrl(oldUsername)).foldZIO(
       // A systemic outage must not be swallowed into the match-ref fallback (which would misclassify the member as
       // left/closed/unresolvable on incomplete data); re-raise so the run aborts before persist.
-      error => NetworkUnavailableException.recoverUnless(error)(matchRefFallback(client, state, apiMap, now)),
+      error =>
+        NetworkUnavailableException.recoverUnless(error)(matchRefFallback(client, storedRoster, state, apiMap, now)),
       apiPlayer =>
         if (apiPlayer.playerId != playerId) {
-          matchRefFallback(client, state, apiMap, now)
+          matchRefFallback(client, storedRoster, state, apiMap, now)
         } else {
-          // Site 1 short-circuit guarantees `state.player.status == Active`; the original `isFreshClosure` guard
-          // collapses to `statusCategory != Active` here.
-          val statusCategory    = apiPlayer.status.category
-          val lastOnlineInstant = Instant.ofEpochSecond(apiPlayer.lastOnline)
-          val change =
-            playerChanges(state.player, heldNameOption, apiPlayer.username, statusCategory, apiPlayer.title, now)
+          val statusCategory = apiPlayer.status.category
+          val change = playerChanges(
+            player = state.player,
+            heldNameOption = storedRoster.heldName(state),
+            username = apiPlayer.username,
+            statusCategory = statusCategory,
+            title = apiPlayer.title,
+            now = now
+          )
 
           if (statusCategory == PlayerStatusCategory.Active) {
             val allChanges = change.changes :+ LeftClub(now)
@@ -303,27 +353,61 @@ private[membership] object MembershipClassify {
                 changes = Chunk(MemberChangeSummary(playerId, apiPlayer.username, allChanges)),
                 updatedPlayers = Chunk.fromIterable(change.updated),
                 archivedSnapshots = Chunk.fromIterable(change.archived),
-                endedAtOption = Some(now)
+                rowOption = Some(storedRoster.close(member = state.member, at = now))
               )
             )
           } else {
-            // AccountClosed conveys the Active → non-Active transition; drop the redundant StatusChange that
-            // `playerChanges` also emits. Closed account can't be a member, so skip the /pub/player/{u}/clubs
-            // sanity check.
-            val filteredExtra = change.changes.filterNot(_.isInstanceOf[StatusChange])
-            val allChanges    = filteredExtra :+ AccountClosed(lastOnlineInstant, statusCategory)
-            ZIO.succeed(
-              PhaseCMemberResult(
-                changes = Chunk(MemberChangeSummary(playerId, apiPlayer.username, allChanges)),
-                updatedPlayers = Chunk.fromIterable(change.updated),
-                archivedSnapshots = Chunk.fromIterable(change.archived),
-                endedAtOption = Some(lastOnlineInstant)
-              )
+            closedAccount(
+              client = client,
+              storedRoster = storedRoster,
+              state = state,
+              profile = apiPlayer,
+              otherChanges = change.changes.filterNot(_.isInstanceOf[StatusChange]),
+              updatedPlayers = Chunk.fromIterable(change.updated),
+              archivedSnapshots = Chunk.fromIterable(change.archived),
+              now = now
             )
           }
         }
     )
   }
+
+  /** A member the roster dropped because their account closed, with `otherChanges` besides. That ends the membership
+    * only if the account's club list, kept as at closure, leaves the club out; without a list to say so, the membership
+    * stands, hidden (ADR 0022).
+    */
+  private def closedAccount(
+    client: ChessComClient,
+    storedRoster: StoredRoster,
+    state: MemberState,
+    profile: ApiPlayer,
+    otherChanges: Chunk[MemberChange],
+    updatedPlayers: Chunk[Player],
+    archivedSnapshots: Chunk[PlayerSnapshot],
+    now: Instant
+  ): RIO[PostgresClient, PhaseCMemberResult] =
+    ClosedAccountClubs.fetchFor(client, profile).map { listOption =>
+      val statusCategory = profile.status.category
+      // The reconcile has just confirmed the club's slug, which is the one a list fetched now gives it.
+      val leftFirst = listOption.exists { list =>
+        list.lastOnlineOption.nonEmpty && !list.clubs.keySet.exists(storedRoster.slugs.contains)
+      }
+      val (changes, row) =
+        if (leftFirst) {
+          val leaving = otherChanges ++ statusChange(state.player, statusCategory, now) :+ LeftClub(now)
+          (leaving, storedRoster.close(member = state.member, at = now))
+        } else {
+          // AccountClosed conveys the status change, so a StatusChange would repeat it.
+          val lastSeen = storedRoster.hiddenAt(member = state.member, lastOnline = profile.lastOnlineAt)
+          (otherChanges :+ AccountClosed(lastSeen, statusCategory), state.member.hidden(lastSeen))
+        }
+      PhaseCMemberResult(
+        changes = Chunk(MemberChangeSummary(state.player.playerId, profile.username, changes)),
+        updatedPlayers = updatedPlayers,
+        archivedSnapshots = archivedSnapshots,
+        rowOption = Some(row)
+      )
+    }
 
   private case class PlayerChangeResult(
     updated: Option[Player],
@@ -346,13 +430,17 @@ private[membership] object MembershipClassify {
       val archive = player.toSnapshot
       val updated = player.copy(username = username, status = statusCategory, title = title, since = now)
       val changes = Chunk.newBuilder[MemberChange]
-      if (player.status != statusCategory) { changes += StatusChange(now, player.status) }
+      changes ++= statusChange(player, statusCategory, now)
       if (player.username != username) { changes += UsernameChange(now, player.username) }
       PlayerChangeResult(Some(updated), Some(archive), changes.result())
     } else { PlayerChangeResult(None, None, Chunk.empty) }
 
+  private def statusChange(player: Player, statusCategory: PlayerStatusCategory, now: Instant): Option[MemberChange] =
+    Option.when(player.status != statusCategory)(StatusChange(now, player.status))
+
   private def matchRefFallback(
     client: ChessComClient,
+    storedRoster: StoredRoster,
     state: MemberState,
     apiMap: Map[Username, Long],
     now: Instant
@@ -365,7 +453,7 @@ private[membership] object MembershipClassify {
       ),
       updatedPlayers = Chunk.empty,
       archivedSnapshots = Chunk.empty,
-      endedAtOption = Some(now)
+      rowOption = Some(storedRoster.close(member = state.member, at = now))
     )
 
     // The resolver subsumes the prior bespoke `resolveUsernameFromMatchRef` + `resolveUsernameFromTournamentRef`
@@ -378,56 +466,53 @@ private[membership] object MembershipClassify {
       .flatMap {
         case None                                      => ZIO.succeed(unresolvable)
         case Some((resolvedUsername, resolvedProfile)) =>
-          onProfileResolved(state, apiMap, now, resolvedUsername, resolvedProfile)
+          onProfileResolved(client, storedRoster, state, apiMap, now, resolvedUsername, resolvedProfile)
       }
   }
 
   private def onProfileResolved(
+    client: ChessComClient,
+    storedRoster: StoredRoster,
     state: MemberState,
     apiMap: Map[Username, Long],
     now: Instant,
     resolvedUsername: Username,
     resolvedProfile: ApiPlayer
   ): RIO[PostgresClient, PhaseCMemberResult] = {
-    val playerId          = state.player.playerId
-    val oldUsername       = state.player.username
-    val statusCategory    = resolvedProfile.status.category
-    val lastOnlineInstant = Instant.ofEpochSecond(resolvedProfile.lastOnline)
-    val archive           = state.player.toSnapshot
+    val playerId       = state.player.playerId
+    val oldUsername    = state.player.username
+    val statusCategory = resolvedProfile.status.category
+    val archive        = state.player.toSnapshot
     val updated = state.player.copy(
       username = resolvedUsername,
       status = statusCategory,
       title = resolvedProfile.title,
       since = now
     )
-
-    // Site 1 short-circuit guarantees `state.player.status == Active`, so the old `statusChangeOption` and
-    // `isFreshClosure` guards (designed for an arbitrary stored status) collapse: any non-Active `statusCategory`
-    // is a fresh closure here; a StatusChange would always be redundant with the AccountClosed below.
     val baseChanges = Chunk(UsernameChange(now, oldUsername))
 
     if (statusCategory == PlayerStatusCategory.Active) {
       val hasLeft    = !apiMap.contains(resolvedUsername)
       val leftOption = Option.when(hasLeft)(LeftClub(now))
+      val changes    = baseChanges ++ statusChange(state.player, statusCategory, now) ++ leftOption
       ZIO.succeed(
         PhaseCMemberResult(
-          changes = Chunk(MemberChangeSummary(playerId, resolvedUsername, baseChanges ++ leftOption)),
+          changes = Chunk(MemberChangeSummary(playerId, resolvedUsername, changes)),
           updatedPlayers = Chunk(updated),
           archivedSnapshots = Chunk(archive),
-          endedAtOption = Option.when(hasLeft)(now)
+          rowOption = Option.when(hasLeft)(storedRoster.close(member = state.member, at = now))
         )
       )
     } else {
-      // Closed/banned account can't be a club member. Skip the `checkClubMembership` round-trip and close the
-      // membership row at `lastOnline` unconditionally; see the sibling branch in `classifyOneDisappearedActive`.
-      val allChanges = baseChanges :+ AccountClosed(lastOnlineInstant, statusCategory)
-      ZIO.succeed(
-        PhaseCMemberResult(
-          changes = Chunk(MemberChangeSummary(playerId, resolvedUsername, allChanges)),
-          updatedPlayers = Chunk(updated),
-          archivedSnapshots = Chunk(archive),
-          endedAtOption = Some(lastOnlineInstant)
-        )
+      closedAccount(
+        client = client,
+        storedRoster = storedRoster,
+        state = state,
+        profile = resolvedProfile,
+        otherChanges = baseChanges,
+        updatedPlayers = Chunk(updated),
+        archivedSnapshots = Chunk(archive),
+        now = now
       )
     }
   }

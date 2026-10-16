@@ -14,7 +14,8 @@ import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.{connectZIO, transactZIO}
 
 /** One period a player was a member of a club. The player was known to be in at `lastSeen` and known to be out at
-  * `until`; both are empty while they are a member (ADR 0021).
+  * `until` (ADR 0021). Both are empty while the club's roster lists them, and only `until` while a closed account hides
+  * them from it (ADR 0022).
   */
 final case class ClubMember(
   clubId: ClubId,
@@ -24,7 +25,9 @@ final case class ClubMember(
   until: Option[Instant],
   sinceApproximate: Boolean
 ) derives DbCodec {
-  def isCurrent: Boolean = until.isEmpty
+
+  /** This membership hidden by a closed account, last known in at `lastSeen`. */
+  def hidden(lastSeen: Instant): ClubMember = copy(lastSeen = Some(lastSeen), until = None)
 }
 
 object ClubMember {
@@ -56,7 +59,7 @@ object ClubMember {
               FOREIGN KEY (club_id) REFERENCES club (club_id) ON DELETE RESTRICT,
               FOREIGN KEY (player_id) REFERENCES player (player_id) ON DELETE RESTRICT,
               CONSTRAINT club_member_window
-                CHECK ((until IS NULL) = (last_seen IS NULL) AND since <= last_seen AND last_seen <= until),
+                CHECK ((until IS NULL OR last_seen IS NOT NULL) AND since <= last_seen AND last_seen <= until),
               CONSTRAINT club_member_no_overlap
                 EXCLUDE USING gist (club_id WITH =, player_id WITH =, tstzrange(since, until) WITH &&)
             )""".update.run()
@@ -72,9 +75,13 @@ object ClubMember {
   def selectClub(clubId: ClubId): ZIO[PostgresClient, SQLException, List[ClubMember]] =
     connectZIO(sql"SELECT $selectCols FROM club_member WHERE club_id = $clubId".query[ClubMember].run().toList)
 
-  def selectClubCurrent(clubId: ClubId): ZIO[PostgresClient, SQLException, List[ClubMember]] =
+  /** The rows the club's roster should list: every open one but those a closure hid while the account stays closed. */
+  def selectClubListed(clubId: ClubId): ZIO[PostgresClient, SQLException, List[ClubMember]] =
     connectZIO(
-      sql"SELECT $selectCols FROM club_member WHERE club_id = $clubId AND until IS NULL".query[ClubMember].run().toList
+      sql"""SELECT cm.club_id, cm.player_id, cm.since, cm.last_seen, cm.until, cm.since_approximate FROM club_member cm
+            JOIN player p ON p.player_id = cm.player_id
+            WHERE cm.club_id = $clubId AND cm.until IS NULL
+              AND (cm.last_seen IS NULL OR p.status = ${Active: PlayerStatusCategory})""".query[ClubMember].run().toList
     )
 
   def selectClubActive(clubId: ClubId): ZIO[PostgresClient, SQLException, List[ClubMember]] =

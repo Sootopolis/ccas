@@ -20,7 +20,7 @@ object TestDiscoverPlayer extends ZIOSpecDefault {
 
   override def spec: Spec[Any, Throwable] = suite("TestDiscoverPlayer")(
     testNewTeammateGetsExactMembership,
-    testInactiveTeammatesMembershipEndsAtLastVisit,
+    testClosedTeammatesListedMembershipIsHidden,
     testGuessForAnAccountGoneBeforeTheMatchEndsWhereItStarts,
     testFormerOpponentGetsMembershipOnOurTeam,
     testRowWrittenDuringFetchIsNotDuplicated,
@@ -97,8 +97,9 @@ object TestDiscoverPlayer extends ZIOSpecDefault {
       )
     }
 
-  private def testInactiveTeammatesMembershipEndsAtLastVisit =
-    test("a closed account's member row ends when it was last online") {
+  /** Its list is as at closure, which came after the last visit (ADR 0022). */
+  private def testClosedTeammatesListedMembershipIsHidden =
+    test("a closed account whose list names the club gets a row hidden since it was last online, not ended") {
       val f = Fixture(ClubId(930_600), ClubSlug("discover-closed"), PlayerId(930_601), Username("closed-teammate"))
       val profile = apiPlayerJson(
         playerId = f.playerId.value,
@@ -114,7 +115,7 @@ object TestDiscoverPlayer extends ZIOSpecDefault {
         _       <- f.resolve(ctx, isOurTeam = true)
         members <- ClubMember.selectClub(f.clubId)
       } yield assertTrue(
-        members == List(f.member(since = joinedClub, until = Some(lastVisit), sinceApproximate = false))
+        members == List(f.member(since = joinedClub, until = None, sinceApproximate = false).hidden(lastVisit))
       )
     }
 
