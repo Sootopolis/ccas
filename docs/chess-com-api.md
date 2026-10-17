@@ -80,6 +80,12 @@ A cancelled match that still answers has `status: finished`, so `finished` does 
 
 *Shape 2026-03-24; 404s recorded by 2026-08-12 ([#208](https://github.com/Sootopolis/ccas/pull/208)).*
 
+### A club's match list holds only its latest 500 finished daily matches
+
+`/pub/club/{slug}/matches` lists every match in progress or registering, but under `finished` only the 500 most recent daily matches, plus its live ones. For a club playing a few dozen matches a year that reaches back to its founding; for one playing hundreds it reaches back a year or so. Players' own match lists reach years further, so a busy club's older matches are found only through them.
+
+*Observed 2026-10-17: devon-chess's 500 reached 2009, the-great-british-empire's only January 2025, against 11,021 of its matches found through players' lists back to its founding in 2013.*
+
 ## Tournaments
 
 ### `status` is unreliable
