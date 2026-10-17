@@ -12,6 +12,7 @@ import ccas.analysis.apps.ClubSlugRenameResolver.ClubMismatchException
 import ccas.analysis.apps.membership.MembershipChange.*
 import ccas.analysis.apps.membership.MembershipChange.MemberChange.*
 import ccas.analysis.apps.membership.MembershipClassify.{PhaseBResult, PhaseCResult}
+import ccas.analysis.apps.membership.MembershipReport.InferredMember
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.{
   apiClubJson,
   apiClubMembersJson,
@@ -1585,11 +1586,14 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
         val previous = PreviousMembership.Inferred(firstMatch = played.head, lastMatch = played.last)
         assertTrue(
           result.inferred == List(
-            Username("kim") -> InferredMembership(
-              playerId = pid1,
-              firstMatch = played.head,
-              lastMatch = played.last,
-              matches = 2
+            InferredMember(
+              username = Username("kim"),
+              membership = InferredMembership(
+                playerId = pid1,
+                firstMatch = played.head,
+                lastMatch = played.last,
+                matches = 2
+              )
             )
           ),
           result.summaries.flatMap(_.changes).toSet ==

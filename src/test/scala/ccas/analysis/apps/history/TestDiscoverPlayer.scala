@@ -164,12 +164,12 @@ object TestDiscoverPlayer extends ZIOSpecDefault {
     test("a network outage on the profile fetch re-raises, recording and crawling no one") {
       val f = Fixture(ClubId(930_700), ClubSlug("discover-outage"), PlayerId(930_701), Username("outage-teammate"))
       for {
-        clientAndRefs <- TestChessComClientSupport.makeClient(
+        (client, _, _) <- TestChessComClientSupport.makeClient(
           handler = _ => ZIO.fail(UnknownHostException("api.chess.com: Temporary failure in name resolution")),
           retryBase = 10.millis,
           maxConnectionRetries = 2
         )
-        ctx        <- f.context(clientAndRefs._1)
+        ctx        <- f.context(client)
         exit       <- f.resolve(ctx, isOurTeam = true).exit
         player     <- Player.selectId(f.playerId)
         newPlayers <- ctx.newPlayers.get

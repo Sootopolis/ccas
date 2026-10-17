@@ -16,10 +16,13 @@ import ccas.utils.sql.PostgresClient
 
 private[membership] object MembershipReport {
 
-  /** `inferred` holds the memberships inferred from matches that overlap the range, under each player's name now. */
+  /** A membership inferred from matches, under its player's name now. */
+  final case class InferredMember(username: Username, membership: InferredMembership)
+
+  /** `inferred` holds the memberships inferred from matches that overlap the range. */
   case class ReportResult(
     summaries: List[MemberChangeSummary],
-    inferred: List[(Username, InferredMembership)],
+    inferred: List[InferredMember],
     memberCountAtStart: Int,
     memberCountAtEnd: Int,
     invitations: Map[PlayerId, Instant]
@@ -53,23 +56,30 @@ private[membership] object MembershipReport {
     names: List[PlayerName],
     since: Instant,
     until: Instant
-  ): List[(Username, InferredMembership)] = {
+  ): List[InferredMember] = {
     val namesByPlayer = names.groupBy(_.playerId)
     inferred
       .filter(membership => !membership.firstMatch.isAfter(until) && !membership.lastMatch.isBefore(since))
       .sortBy(_.firstMatch)
-      .map(membership => latestName(namesByPlayer.getOrElse(membership.playerId, Nil)) -> membership)
+      .map { membership =>
+        InferredMember(
+          username = latestName(namesByPlayer.getOrElse(membership.playerId, Nil)),
+          membership = membership
+        )
+      }
   }
 
   private def latestName(names: List[PlayerName]): Username =
     names.maxByOption(_.since).fold(Username.wrap("unknown"))(_.username)
 
   /** Memberships no roster recorded, which the club's matches show (ADR 0023). */
-  private def inferredLines(inferred: List[(Username, InferredMembership)]): List[String] =
-    Option.when(inferred.nonEmpty)("[INFERRED FROM MATCHES]").toList ++ inferred.map { (username, membership) =>
+  private def inferredLines(inferred: List[InferredMember]): List[String] = {
+    val lines = inferred.map { case InferredMember(username, membership) =>
       s"  $username — played for the club from ${membership.firstMatch} to ${membership.lastMatch}, " +
         s"${membership.matches} ${if (membership.matches == 1) "match" else "matches"}"
     }
+    Option.when(lines.nonEmpty)("[INFERRED FROM MATCHES]").toList ++ lines
+  }
 
   def reportReconciliation(
     result: ReconciliationResult,
@@ -142,9 +152,9 @@ private[membership] object MembershipReport {
     */
   private def previousMembership(previous: PreviousMembership): String =
     previous match {
-      case PreviousMembership.Recorded(lastSeen, until) if lastSeen == until =>
-        s"previous membership last seen at $lastSeen"
-      case PreviousMembership.Recorded(lastSeen, until) => s"previous membership ended between $lastSeen and $until"
+      case PreviousMembership.Recorded(lastSeen, until) =>
+        if (lastSeen == until) s"previous membership last seen at $lastSeen"
+        else s"previous membership ended between $lastSeen and $until"
       case PreviousMembership.Inferred(firstMatch, lastMatch) =>
         s"previously played for the club from $firstMatch to $lastMatch"
     }
@@ -275,7 +285,7 @@ private[membership] object MembershipReport {
         case membership if membership.lastMatch.isBefore(start) =>
           membership.firstMatch -> PreviousMembership.Inferred(membership.firstMatch, membership.lastMatch)
       }
-      (recorded ++ fromMatches).maxByOption(_._1).map(_._2)
+      (recorded ++ fromMatches).maxByOption((began, _) => began).map((_, previous) => previous)
     }
 
     // Find membership changes in the time range
@@ -294,9 +304,10 @@ private[membership] object MembershipReport {
         if (inRange(cm.since)) {
           previousTo(playerId, cm.since) match {
             case Some(previous) => changes += Rejoined(ts = cm.since, previous = previous)
-            // Check if player has states before this membership — existing player joining club
-            case None if playerStates.exists(_.since.isBefore(cm.since)) => changes += JoinedClub(cm.since)
-            case None                                                    => changes += NewMember(cm.since)
+            case None           =>
+              // Check if player has states before this membership — existing player joining club
+              if (playerStates.exists(_.since.isBefore(cm.since))) { changes += JoinedClub(cm.since) }
+              else { changes += NewMember(cm.since) }
           }
         }
 

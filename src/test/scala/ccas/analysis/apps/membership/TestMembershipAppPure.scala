@@ -8,6 +8,7 @@ import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 import ccas.analysis.apps.membership.MembershipChange.*
 import ccas.analysis.apps.membership.MembershipChange.MemberChange.*
 import ccas.analysis.apps.membership.MembershipClassify.{PhaseBResult, PhaseCResult}
+import ccas.analysis.apps.membership.MembershipReport.InferredMember
 import ccas.analysis.tables.{ClubMember, Player, PlayerName, PlayerSnapshot}
 import ccas.api.misc.enums.PlayerStatusCategory.{Active, Closed}
 import ccas.api.misc.subtypes.Username
@@ -469,7 +470,7 @@ object TestMembershipAppPure extends ZIOSpecDefault {
       val summaries = List(MemberChangeSummary(pid1, Username("bob"), Chunk(NewMember(Times.t2))))
       val alice     = InferredMembership(playerId = pid0, firstMatch = Times.t0, lastMatch = Times.t1, matches = 2)
       val carol     = InferredMembership(playerId = pid2, firstMatch = Times.t1, lastMatch = Times.t1, matches = 1)
-      val inferred  = List(Username("alice") -> alice, Username("carol") -> carol)
+      val inferred  = List(InferredMember(Username("alice"), alice), InferredMember(Username("carol"), carol))
       val output = MembershipReport.formatReport(MembershipReport.ReportResult(summaries, inferred, 9, 10, Map.empty))
       assertTrue(
         output.endsWith(
@@ -485,7 +486,7 @@ object TestMembershipAppPure extends ZIOSpecDefault {
   private def testInferredMembershipsAloneAreNotNoChanges =
     test("a range with inferred memberships and no changes lists them rather than 'No changes'") {
       val alice    = InferredMembership(playerId = pid0, firstMatch = Times.t0, lastMatch = Times.t1, matches = 2)
-      val inferred = List(Username("alice") -> alice)
+      val inferred = List(InferredMember(Username("alice"), alice))
       val output   = MembershipReport.formatReport(MembershipReport.ReportResult(Nil, inferred, 10, 10, Map.empty))
       assertTrue(!output.contains("No changes"), output.contains("[INFERRED FROM MATCHES]\n  alice"))
     }
