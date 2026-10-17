@@ -16,8 +16,9 @@ import ccas.utils.sql.PostgresClient
 
 /** Discovers and persists a chess club's match history by crawling the Chess.com API.
   *
-  * Starting from a club's known members it collects match IDs, fetches match data, and follows links to newly
-  * discovered players in breadth-first waves until no new matches remain.
+  * Starting from every player who was ever a member, on its roster or on its side of a board, it collects match IDs,
+  * fetches match data, and follows links to players newly met on its side in breadth-first waves until no new matches
+  * remain.
   *
   * Run modes, the four phases, how unresolved clubs and board players are recorded, and what the shared multi-club
   * context deduplicates: `docs/architecture.md`, under "Applications" → "`HistoryApp` run modes".
@@ -88,7 +89,7 @@ object HistoryApp extends ZIOAppDefault {
   }
 
   private case class InitResult(
-    allMembers: List[ClubMember],
+    memberIds: Set[PlayerId],
     memberNames: Map[PlayerId, Username],
     queriedIds: Set[PlayerId],
     ctx: ProcessingContext,
@@ -160,24 +161,28 @@ object HistoryApp extends ZIOAppDefault {
       club <- Club.selectId(reconciled.clubId)
         .someOrFail(IllegalStateException(s"Club #${ClubId.unwrap(reconciled.clubId)} not found after reconcile"))
       clubId = club.clubId
-      (allMembers, processedCount, queriedIds) <-
+      (rows, playedForClub, processedCount, queriedIds) <-
         ClubMember.selectClub(clubId) <&>
+          ClubMatchBoard.selectPlayerIdsForClub(clubId) <&>
           ClubMatch.countForClub(clubId) <&>
           HistoryMemberQuery.selectClubPlayerIds(clubId)
-      memberNames <- PlayerName.selectCurrentNames(allMembers.map(_.playerId))
+      // A player on the club's side of a board was a member when the match started (ADR 0023).
+      memberIds = rows.map(_.playerId).toSet ++ playedForClub
+      memberNames <- PlayerName.selectCurrentNames(memberIds)
       _ <- HistoryPendingMatch.resetStatuses(clubId)
       startedAt = Instant.now()
       runId <- HistoryRun.insert(clubId, trigger, startedAt, jobRunIdOption)
       _ <- ZIO.logInfo(
-        s"  Members: ${allMembers.size}, Processed matches: $processedCount, Queried members: ${queriedIds.size}"
+        s"  Members: ${memberIds.size}, Processed matches: $processedCount, Queried members: ${queriedIds.size}"
       )
       knownPlayersInit = memberNames.map((playerId, username) => username.value -> playerId)
-      client <- ZIO.service[ChessComClient]
-      ctx    <- ProcessingContext.make(client, clubId, club.slug, knownPlayersInit)
       effectiveQueriedIds =
         if (full) { Set.empty[PlayerId] }
         else { queriedIds }
-    } yield InitResult(allMembers, memberNames, effectiveQueriedIds, ctx, startedAt, runId)
+      client <- ZIO.service[ChessComClient]
+      // Phase 2 crawls every member not queried already, so a member met on a board needs no crawl of its own.
+      ctx <- ProcessingContext.make(client, clubId, club.slug, knownPlayersInit, memberIds ++ effectiveQueriedIds)
+    } yield InitResult(memberIds, memberNames, effectiveQueriedIds, ctx, startedAt, runId)
 
   final case class HistoryResult(stats: RunStats, clubSlug: ClubSlug, startedAt: Instant, completedAt: Instant)
 
@@ -221,7 +226,7 @@ object HistoryApp extends ZIOAppDefault {
       display  <- ZIO.service[ProgressDisplay]
 
       // === Phase 1: Initialize ===
-      InitResult(allMembers, memberNames, queriedIds, ctx, startedAt, runId) <-
+      InitResult(memberIds, memberNames, queriedIds, ctx, startedAt, runId) <-
         initialize(clubSlug, expectedClubIdOption, full, trigger, jobRunIdOption)
       _ <- ZIO.foreachDiscard(shared)(_.resolvedClubs.update(_ + (ctx.clubSlug -> ctx.clubId)))
 
@@ -277,7 +282,7 @@ object HistoryApp extends ZIOAppDefault {
               ctx.client,
               ctx.clubId,
               ctx.clubSlug,
-              allMembers,
+              memberIds,
               queriedIds,
               memberNames,
               excludeMatchIds,
@@ -286,7 +291,7 @@ object HistoryApp extends ZIOAppDefault {
               ctx.seedPlayerMatchesUnchanged
             )
           _ <- memberSeedRef.set(memberSeed)
-          membersSkipped = allMembers.size - memberSeed.queried - memberSeed.failed
+          membersSkipped = memberIds.size - memberSeed.queried - memberSeed.failed
           _ <- ZIO.logInfo(
             s"  Member match lists: ${memberSeed.seeded} new IDs (queried: ${memberSeed.queried}, skipped: $membersSkipped, failed: ${memberSeed.failed})"
           )
@@ -316,7 +321,7 @@ object HistoryApp extends ZIOAppDefault {
           seedClub   <- seedClubRef.get
           memberSeed <- memberSeedRef.get
           seedStale  <- seedStaleRef.get
-          membersSkipped = allMembers.size - memberSeed.queried - memberSeed.failed
+          membersSkipped = memberIds.size - memberSeed.queried - memberSeed.failed
           completedAt    = Instant.now()
           totalStats = waveStats.copy(
             membersQueried = memberSeed.queried,
@@ -341,7 +346,7 @@ object HistoryApp extends ZIOAppDefault {
             ms <- memberSeedRef.get
             ss <- seedStaleRef.get
             rf <- refreshedRef.get
-            skip = allMembers.size - ms.queried - ms.failed
+            skip = memberIds.size - ms.queried - ms.failed
             _ <- finalizeInterrupted(ctx, runId, startedAt, ctx.clubSlug, ms, skip, sc, ss, rf)
               .provideEnvironment(ZEnvironment(display, pgClient)).orDie
           } yield ()

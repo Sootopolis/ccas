@@ -369,7 +369,7 @@ object TestHistorySeeding extends ZIOSpecDefault {
           client,
           clubId,
           clubSlug,
-          allMembers = members,
+          memberIds = members.map(_.playerId).toSet,
           queriedIds = Set.empty,
           memberNames = memberNames,
           excludeMatchIds = Set.empty,

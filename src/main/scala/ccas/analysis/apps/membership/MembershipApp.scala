@@ -428,8 +428,6 @@ object MembershipApp extends ZIOAppDefault {
       _ <- ZIO.whenDiscard(allArchived.nonEmpty)(PlayerSnapshot.insertBatch(allArchived))
       // Closes first: a rejoin opens a row the old one would overlap while still open.
       _ <- ZIO.whenDiscard(narrowed.nonEmpty)(ClubMember.updateBatch(narrowed))
-      // A reopened row, like a new one, would overlap any guess about the same time.
-      _ <- ZIO.whenDiscard((widened ++ opened).nonEmpty)(ClubMember.deleteGuessesOverlapping(widened ++ opened))
       _ <- ZIO.whenDiscard(widened.nonEmpty)(ClubMember.updateBatch(widened))
       _ <- ZIO.whenDiscard(opened.nonEmpty)(ClubMember.insertBatch(opened))
       _ <- ClubRosterCoverage.observe(clubId, observedAt)

@@ -192,8 +192,7 @@ object RecruitmentApp extends ZIOAppDefault {
       _ <- writeClubMatchRef(client, clubId, effectiveSlug, clubMatches).ignore
 
       formerMemberIds <-
-        if (criteria.excludeFormerMembers)
-          ClubMember.selectClubFormer(clubId).map(_.map(_.playerId).toSet)
+        if (criteria.excludeFormerMembers) formerMembersOf(clubId)
         else ZIO.succeed(Set.empty[PlayerId])
 
       adminExcludedPlayerIds <-
@@ -280,6 +279,14 @@ object RecruitmentApp extends ZIOAppDefault {
         }
     } yield finalRun
   }
+
+  /** The players `excludeFormerMembers` rules out: those with an ended row, and those who sat on the club's side of a
+    * board, a membership no row may record (ADR 0023). Its current members among them are not candidates anyway.
+    */
+  private[recruitment] def formerMembersOf(clubId: ClubId): RIO[PostgresClient, Set[PlayerId]] =
+    (ClubMember.selectClubFormer(clubId) <&> ClubMatchBoard.selectPlayerIdsForClub(clubId)).map {
+      (ended, playedForClub) => ended.map(_.playerId).toSet ++ playedForClub
+    }
 
   private def runExplorePhase(
     ctx: ExploreContext,

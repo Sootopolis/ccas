@@ -22,14 +22,24 @@ object MembershipChange {
   private[membership] def earlier(a: Instant, b: Instant): Instant = if (a.isBefore(b)) a else b
 
   enum MemberChange(val timestamp: Instant) {
-    case NewMember(ts: Instant)                                                   extends MemberChange(ts)
-    case JoinedClub(ts: Instant)                                                  extends MemberChange(ts)
-    case Rejoined(ts: Instant, previousLastSeen: Instant, previousUntil: Instant) extends MemberChange(ts)
-    case LeftClub(ts: Instant)                                                    extends MemberChange(ts)
-    case AccountClosed(ts: Instant, newStatus: PlayerStatusCategory)              extends MemberChange(ts)
-    case Unresolvable(ts: Instant, oldUsername: Username)                         extends MemberChange(ts)
-    case UsernameChange(ts: Instant, oldUsername: Username)                       extends MemberChange(ts)
-    case StatusChange(ts: Instant, oldStatus: PlayerStatusCategory)               extends MemberChange(ts)
+    case NewMember(ts: Instant)                                      extends MemberChange(ts)
+    case JoinedClub(ts: Instant)                                     extends MemberChange(ts)
+    case Rejoined(ts: Instant, previous: PreviousMembership)         extends MemberChange(ts)
+    case LeftClub(ts: Instant)                                       extends MemberChange(ts)
+    case AccountClosed(ts: Instant, newStatus: PlayerStatusCategory) extends MemberChange(ts)
+    case Unresolvable(ts: Instant, oldUsername: Username)            extends MemberChange(ts)
+    case UsernameChange(ts: Instant, oldUsername: Username)          extends MemberChange(ts)
+    case StatusChange(ts: Instant, oldStatus: PlayerStatusCategory)  extends MemberChange(ts)
+  }
+
+  /** The membership a rejoin follows. */
+  enum PreviousMembership {
+
+    /** One a roster recorded, which ended between `lastSeen` and `until`. */
+    case Recorded(lastSeen: Instant, until: Instant)
+
+    /** One inferred from the matches the player played for the club (ADR 0023). */
+    case Inferred(firstMatch: Instant, lastMatch: Instant)
   }
 
   /** What we held about a club's membership before a reconcile, which the fetched roster is compared against: the
@@ -54,15 +64,11 @@ object MembershipChange {
     /** When `member` was last known in, its account having closed after `lastOnline` with the club on its list. */
     def hiddenAt(member: ClubMember, lastOnline: Instant): Instant = later(lastKnownIn(member), lastOnline)
 
-    /** The last time `member` is known to have been in, before this roster. A listed row was last listed by the club's
-      * previous roster, kept within the row, which can start after that roster. No roster listed a guessed row, so it
-      * was known in only at its start (ADR 0021).
+    /** The last time `member` is known to have been in, before this roster: the club's previous roster, which listed
+      * it, or its start if it began after that roster (ADR 0021).
       */
     private def lastKnownIn(member: ClubMember): Instant =
-      member.lastSeen.getOrElse {
-        val listedAt = lastObservedAt.filterNot(observed => member.sinceApproximate || observed.isBefore(member.since))
-        listedAt.getOrElse(member.since)
-      }
+      member.lastSeen.getOrElse(lastObservedAt.filterNot(_.isBefore(member.since)).getOrElse(member.since))
 
     /** The name `state`'s player holds now. `membersByUsername` is keyed by exactly that, so a member absent from it
       * under the name its row stores holds none: the row keeps a name another player took as a display label.

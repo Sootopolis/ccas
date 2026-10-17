@@ -97,11 +97,6 @@ private[membership] object MembershipClassify {
       case Some(state) if state.member.lastSeen.nonEmpty =>
         ZIO.succeed(returning(storedRoster, clubId, state.player.playerId, username, since, unchanged))
 
-      case Some(state) if state.member.sinceApproximate =>
-        // Replace approximate with authoritative timestamp
-        ClubMember.replaceSince(clubId, state.player.playerId, state.member.since, since)
-          .as(resolved(state.player.playerId))
-
       case Some(state) if state.member.since == since =>
         // Unchanged member
         ZIO.succeed(resolved(state.player.playerId))
@@ -110,12 +105,8 @@ private[membership] object MembershipClassify {
         // Rejoin: a different `since`. The old membership had ended by the time the new one began.
         val closedMember = storedRoster.close(member = state.member, at = since)
         val newMember    = ClubMember.joined(clubId = clubId, playerId = state.player.playerId, since = since)
-        val rejoined = Rejoined(
-          ts = since,
-          previousLastSeen = closedMember.lastSeen.getOrElse(since),
-          previousUntil = closedMember.until.getOrElse(since)
-        )
-        val change = MemberChangeSummary(state.player.playerId, username, Chunk(rejoined))
+        val rejoined     = Rejoined(ts = since, previous = recorded(closedMember, since))
+        val change       = MemberChangeSummary(state.player.playerId, username, Chunk(rejoined))
         ZIO.succeed(
           PhaseBMemberResult(
             resolvedId = state.player.playerId,
@@ -147,8 +138,7 @@ private[membership] object MembershipClassify {
 
   /** A player listed as joined at `since` with no row open to the stored roster, or only one a closed account hid. The
     * hidden row, or one a closure ended, reopens if it started then: the same `joined` is the same membership.
-    * Otherwise a new row opens, and a hidden row closes at its start, since they had left by then; a hidden guess gives
-    * way to the new row instead.
+    * Otherwise a new row opens, and a hidden row closes at its start, since they had left by then.
     */
   private def returning(
     storedRoster: StoredRoster,
@@ -180,8 +170,7 @@ private[membership] object MembershipClassify {
         reopenedMemberships = reopenedMemberships
       )
     }
-    val observed = rows.filterNot(_.sinceApproximate)
-    (observed.find(_.since == since), observed.find(_.until.isEmpty)) match {
+    (rows.find(_.since == since), rows.find(_.until.isEmpty)) match {
       case (Some(row), _) =>
         result(
           memberChanges = Chunk.empty,
@@ -191,13 +180,8 @@ private[membership] object MembershipClassify {
         )
       case (None, Some(hidden)) =>
         val closed = storedRoster.close(member = hidden, at = since)
-        val rejoined = Rejoined(
-          ts = since,
-          previousLastSeen = closed.lastSeen.getOrElse(since),
-          previousUntil = closed.until.getOrElse(since)
-        )
         result(
-          memberChanges = Chunk(rejoined),
+          memberChanges = Chunk(Rejoined(ts = since, previous = recorded(closed, since))),
           newMemberships = Chunk(newMember),
           closedMemberships = Chunk(closed),
           reopenedMemberships = Chunk.empty
@@ -211,6 +195,10 @@ private[membership] object MembershipClassify {
         )
     }
   }
+
+  /** `closed`, the membership a rejoin at `since` ended. */
+  private def recorded(closed: ClubMember, since: Instant): PreviousMembership =
+    PreviousMembership.Recorded(lastSeen = closed.lastSeen.getOrElse(since), until = closed.until.getOrElse(since))
 
   private def fetchAndClassifyNewMember(
     client: ChessComClient,

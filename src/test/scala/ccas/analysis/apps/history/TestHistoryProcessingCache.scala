@@ -46,7 +46,7 @@ object TestHistoryProcessingCache extends ZIOSpecDefault {
           }
         )
         client <- TestChessComClientSupport.fakeClient(routes)
-        ctx    <- ProcessingContext.make(client, clubId, clubSlug, Map.empty)
+        ctx    <- ProcessingContext.make(client, clubId, clubSlug, Map.empty, Set.empty)
 
         _                 <- runWave(ctx)
         callsAfterFirst   <- netCalls.get

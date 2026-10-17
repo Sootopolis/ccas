@@ -8,6 +8,7 @@ import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 import ccas.analysis.apps.membership.MembershipChange.*
 import ccas.analysis.apps.membership.MembershipChange.MemberChange.*
 import ccas.analysis.apps.membership.MembershipClassify.{PhaseBResult, PhaseCResult}
+import ccas.analysis.apps.membership.MembershipReport.InferredMember
 import ccas.analysis.tables.{ClubMember, Player, PlayerName, PlayerSnapshot}
 import ccas.api.misc.enums.PlayerStatusCategory.{Active, Closed}
 import ccas.api.misc.subtypes.Username
@@ -33,11 +34,13 @@ object TestMembershipAppPure extends ZIOSpecDefault {
     testMemberSinceInRangeWithSnapshots,
     testMemberSinceInRangeWithClosedMembership,
     testLaterMembershipIsNotAPriorOne,
+    testJoinAfterAnInferredMembershipIsARejoin,
+    testRejoinNamesTheLatestPreviousMembership,
     testMemberUntilInRangeActiveSnap,
     testMemberUntilInRangeClosedSnap,
     testMemberUntilInRangeNoSnapshot,
     testHiddenRowIsAClosureWhenLastSeen,
-    testHiddenRowOfAReopenedAccountIsNoClosure,
+    testHiddenRowOfAReopenedAccountIsStillAClosure,
     testTwoSnapsWithDifferentUsernames,
     testTwoSnapsWithDifferentStatuses,
     testStatusChangeThenRename,
@@ -45,13 +48,13 @@ object TestMembershipAppPure extends ZIOSpecDefault {
   )
 
   private def testEmptyInputs = test("empty inputs") {
-    val result = MembershipReport.classifyFromDb(clubId, Nil, Nil, Nil, Times.t0, Times.t2)
+    val result = MembershipReport.classifyFromDb(clubId, Nil, Nil, Nil, Nil, Times.t0, Times.t2)
     assertTrue(result.isEmpty)
   }
 
   private def testMemberSinceInRangeNoSnapshots = test("member since in range, no prior snaps → NewMember") {
     val member = ClubMember.joined(clubId = clubId, playerId = pid0, since = Times.t1)
-    val result = MembershipReport.classifyFromDb(clubId, List(member), Nil, Nil, Times.t0, Times.t2)
+    val result = MembershipReport.classifyFromDb(clubId, List(member), Nil, Nil, Nil, Times.t0, Times.t2)
     assertTrue(
       result.size == 1,
       result.head.playerId == pid0,
@@ -62,7 +65,7 @@ object TestMembershipAppPure extends ZIOSpecDefault {
   private def testMemberSinceInRangeWithSnapshots = test("member since in range, prior snaps exist → JoinedClub") {
     val member = ClubMember.joined(clubId = clubId, playerId = pid0, since = Times.t1)
     val snap   = PlayerSnapshot(pid0, Times.t0, Active, None)
-    val result = MembershipReport.classifyFromDb(clubId, List(member), List(snap), Nil, Times.t0, Times.t2)
+    val result = MembershipReport.classifyFromDb(clubId, List(member), Nil, List(snap), Nil, Times.t0, Times.t2)
     assertTrue(
       result.size == 1,
       result.head.changes.exists(_.isInstanceOf[JoinedClub])
@@ -77,15 +80,13 @@ object TestMembershipAppPure extends ZIOSpecDefault {
         playerId = pid0,
         since = Times.t0,
         lastSeen = Some(lastSeen),
-        until = Some(Times.t1),
-        sinceApproximate = false
+        until = Some(Times.t1)
       )
       val newMember = ClubMember.joined(clubId = clubId, playerId = pid0, since = Times.t2)
-      val result    = MembershipReport.classifyFromDb(clubId, List(oldMember, newMember), Nil, Nil, Times.t1, Times.t3)
-      assertTrue(
-        result.size == 1,
-        result.head.changes.contains(Rejoined(ts = Times.t2, previousLastSeen = lastSeen, previousUntil = Times.t1))
-      )
+      val members   = List(oldMember, newMember)
+      val result    = MembershipReport.classifyFromDb(clubId, members, Nil, Nil, Nil, Times.t1, Times.t3)
+      val previous  = PreviousMembership.Recorded(lastSeen = lastSeen, until = Times.t1)
+      assertTrue(result.size == 1, result.head.changes.contains(Rejoined(ts = Times.t2, previous = previous)))
     }
 
   private def testLaterMembershipIsNotAPriorOne =
@@ -95,13 +96,41 @@ object TestMembershipAppPure extends ZIOSpecDefault {
         playerId = pid0,
         since = since,
         lastSeen = Some(since),
-        until = Some(until),
-        sinceApproximate = false
+        until = Some(until)
       )
-      val members = List(closed(since = Times.t0, until = Times.t1), closed(since = Times.t2, until = Times.t3))
-      val result  = MembershipReport.classifyFromDb(clubId, members, Nil, Nil, Times.t0, Times.t3)
-      val rejoins = result.flatMap(_.changes.toList).collect { case r: Rejoined => r }
-      assertTrue(rejoins == List(Rejoined(ts = Times.t2, previousLastSeen = Times.t0, previousUntil = Times.t1)))
+      val members  = List(closed(since = Times.t0, until = Times.t1), closed(since = Times.t2, until = Times.t3))
+      val result   = MembershipReport.classifyFromDb(clubId, members, Nil, Nil, Nil, Times.t0, Times.t3)
+      val rejoins  = result.flatMap(_.changes.toList).collect { case r: Rejoined => r }
+      val previous = PreviousMembership.Recorded(lastSeen = Times.t0, until = Times.t1)
+      assertTrue(rejoins == List(Rejoined(ts = Times.t2, previous = previous)))
+    }
+
+  private def testJoinAfterAnInferredMembershipIsARejoin =
+    test("a join after a membership inferred from matches → Rejoined, with when those matches were played") {
+      val inferred = InferredMembership(playerId = pid0, firstMatch = Times.t0, lastMatch = Times.t1, matches = 3)
+      val member   = ClubMember.joined(clubId = clubId, playerId = pid0, since = Times.t2)
+      val result   = MembershipReport.classifyFromDb(clubId, List(member), List(inferred), Nil, Nil, Times.t1, Times.t3)
+      val previous = PreviousMembership.Inferred(firstMatch = Times.t0, lastMatch = Times.t1)
+      assertTrue(result.flatMap(_.changes) == List(Rejoined(ts = Times.t2, previous = previous)))
+    }
+
+  private def testRejoinNamesTheLatestPreviousMembership =
+    test("a rejoin names the latest membership before it, recorded or inferred, and none after it") {
+      val recorded = ClubMember(
+        clubId = clubId,
+        playerId = pid0,
+        since = Times.t0,
+        lastSeen = Some(Times.t0),
+        until = Some(Times.t0.plusSeconds(3600))
+      )
+      val earlier  = InferredMembership(playerId = pid0, firstMatch = Times.t1, lastMatch = Times.t1, matches = 1)
+      val later    = InferredMembership(playerId = pid0, firstMatch = Times.t3, lastMatch = Times.t3, matches = 1)
+      val member   = ClubMember.joined(clubId = clubId, playerId = pid0, since = Times.t2)
+      val members  = List(recorded, member)
+      val inferred = List(earlier, later)
+      val result   = MembershipReport.classifyFromDb(clubId, members, inferred, Nil, Nil, Times.t2, Times.t2)
+      val previous = PreviousMembership.Inferred(firstMatch = Times.t1, lastMatch = Times.t1)
+      assertTrue(result.flatMap(_.changes) == List(Rejoined(ts = Times.t2, previous = previous)))
     }
 
   private def testMemberUntilInRangeActiveSnap = test("member until in range, latest snap Active → LeftClub") {
@@ -110,11 +139,10 @@ object TestMembershipAppPure extends ZIOSpecDefault {
       playerId = pid0,
       since = Times.t0,
       lastSeen = Some(Times.t0),
-      until = Some(Times.t1),
-      sinceApproximate = false
+      until = Some(Times.t1)
     )
     val snap   = PlayerSnapshot(pid0, Times.t0, Active, None)
-    val result = MembershipReport.classifyFromDb(clubId, List(member), List(snap), Nil, Times.t0, Times.t2)
+    val result = MembershipReport.classifyFromDb(clubId, List(member), Nil, List(snap), Nil, Times.t0, Times.t2)
     assertTrue(
       result.size == 1,
       result.head.changes.exists(_.isInstanceOf[LeftClub])
@@ -127,11 +155,10 @@ object TestMembershipAppPure extends ZIOSpecDefault {
       playerId = pid0,
       since = Times.t0,
       lastSeen = Some(Times.t0),
-      until = Some(Times.t1),
-      sinceApproximate = false
+      until = Some(Times.t1)
     )
     val snap   = PlayerSnapshot(pid0, Times.t0, Closed, None)
-    val result = MembershipReport.classifyFromDb(clubId, List(member), List(snap), Nil, Times.t0, Times.t2)
+    val result = MembershipReport.classifyFromDb(clubId, List(member), Nil, List(snap), Nil, Times.t0, Times.t2)
     assertTrue(
       result.size == 1,
       result.head.changes.exists(_.isInstanceOf[AccountClosed])
@@ -144,10 +171,9 @@ object TestMembershipAppPure extends ZIOSpecDefault {
       playerId = pid0,
       since = Times.t0,
       lastSeen = Some(Times.t0),
-      until = Some(Times.t1),
-      sinceApproximate = false
+      until = Some(Times.t1)
     )
-    val result = MembershipReport.classifyFromDb(clubId, List(member), Nil, Nil, Times.t0, Times.t2)
+    val result = MembershipReport.classifyFromDb(clubId, List(member), Nil, Nil, Nil, Times.t0, Times.t2)
     assertTrue(
       result.size == 1,
       result.head.changes.exists(_.isInstanceOf[Unresolvable])
@@ -159,17 +185,19 @@ object TestMembershipAppPure extends ZIOSpecDefault {
     test("a row a closed account hides, last seen in range → AccountClosed then, not LeftClub") {
       val member = ClubMember.joined(clubId = clubId, playerId = pid0, since = Times.t0).hidden(Times.t1)
       val states = List(PlayerSnapshot(pid0, Times.t0, Active, None), PlayerSnapshot(pid0, Times.t2, Closed, None))
-      val result = MembershipReport.classifyFromDb(clubId, List(member), states, Nil, Times.t1, Times.t3)
+      val result = MembershipReport.classifyFromDb(clubId, List(member), Nil, states, Nil, Times.t1, Times.t3)
       val ends   = result.flatMap(_.changes.toList).collect { case end @ (_: AccountClosed | _: LeftClub) => end }
       assertTrue(ends == List(AccountClosed(Times.t1, Closed)))
     }
 
-  private def testHiddenRowOfAReopenedAccountIsNoClosure =
-    test("a row still hidden though its account has reopened reports no closure") {
-      val member = ClubMember.joined(clubId = clubId, playerId = pid0, since = Times.t0).hidden(Times.t1)
-      val states = List(PlayerSnapshot(pid0, Times.t2, Closed, None), PlayerSnapshot(pid0, Times.t3, Active, None))
-      val result = MembershipReport.classifyFromDb(clubId, List(member), states, Nil, Times.t1, Times.t3)
-      assertTrue(!result.flatMap(_.changes).exists(_.isInstanceOf[AccountClosed]))
+  /** The count drops at the row's `lastSeen` until a roster reopens it, so the closure stays reported until then. */
+  private def testHiddenRowOfAReopenedAccountIsStillAClosure =
+    test("a row still hidden though its account has reopened still reports the closure that hid it") {
+      val member   = ClubMember.joined(clubId = clubId, playerId = pid0, since = Times.t0).hidden(Times.t1)
+      val states   = List(PlayerSnapshot(pid0, Times.t2, Closed, None), PlayerSnapshot(pid0, Times.t3, Active, None))
+      val result   = MembershipReport.classifyFromDb(clubId, List(member), Nil, states, Nil, Times.t1, Times.t3)
+      val closures = result.flatMap(_.changes).collect { case closure: AccountClosed => closure }
+      assertTrue(closures == List(AccountClosed(Times.t1, Closed)))
     }
 
   private def testTwoSnapsWithDifferentUsernames = test("a rename in range with no status change → UsernameChange") {
@@ -179,7 +207,7 @@ object TestMembershipAppPure extends ZIOSpecDefault {
       PlayerName(pid0, Username("alice-old"), Times.t0, Some(Times.t1)),
       PlayerName(pid0, Username("alice-new"), Times.t1, None)
     )
-    val result = MembershipReport.classifyFromDb(clubId, List(member), List(snap), names, Times.t0, Times.t2)
+    val result = MembershipReport.classifyFromDb(clubId, List(member), Nil, List(snap), names, Times.t0, Times.t2)
     assertTrue(
       result.size == 1,
       result.head.username == Username("alice-new"),
@@ -191,7 +219,7 @@ object TestMembershipAppPure extends ZIOSpecDefault {
     val member = ClubMember.joined(clubId = clubId, playerId = pid0, since = Times.t0)
     val snap1  = PlayerSnapshot(pid0, Times.t0, Active, None)
     val snap2  = PlayerSnapshot(pid0, Times.t1, Closed, None)
-    val result = MembershipReport.classifyFromDb(clubId, List(member), List(snap1, snap2), Nil, Times.t0, Times.t2)
+    val result = MembershipReport.classifyFromDb(clubId, List(member), Nil, List(snap1, snap2), Nil, Times.t0, Times.t2)
     assertTrue(
       result.size == 1,
       result.head.changes.exists(_.isInstanceOf[StatusChange])
@@ -211,7 +239,7 @@ object TestMembershipAppPure extends ZIOSpecDefault {
       PlayerName(pid0, Username("before"), Times.t0, Some(Times.t2)),
       PlayerName(pid0, Username("after"), Times.t2, None)
     )
-    val result = MembershipReport.classifyFromDb(clubId, List(member), states, names, Times.t0, Times.t3)
+    val result = MembershipReport.classifyFromDb(clubId, List(member), Nil, states, names, Times.t0, Times.t3)
     assertTrue(
       result.map(_.changes) == List(
         Chunk(NewMember(Times.t0), StatusChange(Times.t1, Active), UsernameChange(Times.t2, Username("before")))
@@ -222,7 +250,7 @@ object TestMembershipAppPure extends ZIOSpecDefault {
   private def testAllDatesOutsideRange = test("all dates outside range → empty list") {
     val member = ClubMember.joined(clubId = clubId, playerId = pid0, since = Times.t0)
     val snap   = PlayerSnapshot(pid0, Times.t0, Active, None)
-    val result = MembershipReport.classifyFromDb(clubId, List(member), List(snap), Nil, Times.t2, Times.t3)
+    val result = MembershipReport.classifyFromDb(clubId, List(member), Nil, List(snap), Nil, Times.t2, Times.t3)
     assertTrue(result.isEmpty)
   }
 
@@ -248,16 +276,14 @@ object TestMembershipAppPure extends ZIOSpecDefault {
       playerId = pid2,
       since = Times.t0,
       lastSeen = Some(Times.t0),
-      until = Some(Times.t1),
-      sinceApproximate = false
+      until = Some(Times.t1)
     )
     val cClosed   = ClubMember(
       clubId = clubId,
       playerId = pid1,
       since = Times.t0,
       lastSeen = Some(Times.t0),
-      until = Some(Times.t1),
-      sinceApproximate = false
+      until = Some(Times.t1)
     )
 
     val bReopened = ClubMember.joined(clubId = clubId, playerId = pid3, since = Times.t0)
@@ -316,11 +342,14 @@ object TestMembershipAppPure extends ZIOSpecDefault {
     testShowsMemberCountDelta,
     testShowsInvitationDateOnJoinChanges,
     testShowsInvitationDateOnRejoinedChanges,
-    testRejoinAfterEndsThatMeet
+    testRejoinAfterEndsThatMeet,
+    testRejoinAfterAnInferredMembership,
+    testListsInferredMemberships,
+    testInferredMembershipsAloneAreNotNoChanges
   )
 
   private def testEmptySummariesNoChanges = test("empty summaries → 'No changes'") {
-    val rr     = MembershipReport.ReportResult(Nil, 10, 10, Map.empty)
+    val rr     = MembershipReport.ReportResult(Nil, Nil, 10, 10, Map.empty)
     val output = MembershipReport.formatReport(rr)
     assertTrue(
       output.contains("Total members: 10 (+0)"),
@@ -337,7 +366,7 @@ object TestMembershipAppPure extends ZIOSpecDefault {
       ),
       MemberChangeSummary(pid1, Username("bob"), Chunk(NewMember(Times.t1)))
     )
-    val rr     = MembershipReport.ReportResult(summaries, 8, 10, Map.empty)
+    val rr     = MembershipReport.ReportResult(summaries, Nil, 8, 10, Map.empty)
     val output = MembershipReport.formatReport(rr)
     assertTrue(
       output.contains("[JOINED]\n  alice"),
@@ -351,7 +380,7 @@ object TestMembershipAppPure extends ZIOSpecDefault {
       MemberChangeSummary(pid0, Username("alice"), Chunk(UsernameChange(Times.t2, Username("old")))),
       MemberChangeSummary(pid1, Username("bob"), Chunk(NewMember(Times.t1)))
     )
-    val rr     = MembershipReport.ReportResult(summaries, 8, 9, Map.empty)
+    val rr     = MembershipReport.ReportResult(summaries, Nil, 8, 9, Map.empty)
     val output = MembershipReport.formatReport(rr)
     val newIdx = output.indexOf("[JOINED]")
     val usrIdx = output.indexOf("[USERNAME CHANGE]")
@@ -367,7 +396,7 @@ object TestMembershipAppPure extends ZIOSpecDefault {
       MemberChangeSummary(pid0, Username("bob"), Chunk(NewMember(Times.t2))),
       MemberChangeSummary(pid1, Username("alice"), Chunk(NewMember(Times.t1)))
     )
-    val rr       = MembershipReport.ReportResult(summaries, 8, 10, Map.empty)
+    val rr       = MembershipReport.ReportResult(summaries, Nil, 8, 10, Map.empty)
     val output   = MembershipReport.formatReport(rr)
     val aliceIdx = output.indexOf("alice")
     val bobIdx   = output.indexOf("bob")
@@ -375,7 +404,7 @@ object TestMembershipAppPure extends ZIOSpecDefault {
   }
 
   private def testShowsMemberCountDelta = test("shows member count delta") {
-    val rr     = MembershipReport.ReportResult(Nil, 12, 10, Map.empty)
+    val rr     = MembershipReport.ReportResult(Nil, Nil, 12, 10, Map.empty)
     val output = MembershipReport.formatReport(rr)
     assertTrue(output.contains("Total members: 10 (-2)"))
   }
@@ -391,7 +420,7 @@ object TestMembershipAppPure extends ZIOSpecDefault {
       MemberChangeSummary(pid1, Username("bob"), Chunk(JoinedClub(Times.t1)))
     )
     val invitations = Map(pid0 -> invitedAt)
-    val rr          = MembershipReport.ReportResult(summaries, 8, 10, invitations)
+    val rr          = MembershipReport.ReportResult(summaries, Nil, 8, 10, invitations)
     val output      = MembershipReport.formatReport(rr)
     val joinedSection = output.substring(output.indexOf("[JOINED]"), output.indexOf("[USERNAME CHANGE]"))
     val usernameSection = output.substring(output.indexOf("[USERNAME CHANGE]"))
@@ -404,10 +433,11 @@ object TestMembershipAppPure extends ZIOSpecDefault {
 
   private def testShowsInvitationDateOnRejoinedChanges = test("shows invitation date on rejoined changes") {
     val invitedAt   = Times.t1
-    val rejoined    = Rejoined(ts = Times.t2, previousLastSeen = Times.t0, previousUntil = Times.t1)
+    val previous    = PreviousMembership.Recorded(lastSeen = Times.t0, until = Times.t1)
+    val rejoined    = Rejoined(ts = Times.t2, previous = previous)
     val summaries   = List(MemberChangeSummary(pid0, Username("alice"), Chunk(rejoined)))
     val invitations = Map(pid0 -> invitedAt)
-    val rr          = MembershipReport.ReportResult(summaries, 10, 10, invitations)
+    val rr          = MembershipReport.ReportResult(summaries, Nil, 10, 10, invitations)
     val output      = MembershipReport.formatReport(rr)
     assertTrue(
       output.contains(
@@ -418,10 +448,47 @@ object TestMembershipAppPure extends ZIOSpecDefault {
 
   private def testRejoinAfterEndsThatMeet =
     test("a previous membership whose ends meet gives only when the player was last seen") {
-      val rejoined  = Rejoined(ts = Times.t2, previousLastSeen = Times.t1, previousUntil = Times.t1)
+      val previous  = PreviousMembership.Recorded(lastSeen = Times.t1, until = Times.t1)
+      val rejoined  = Rejoined(ts = Times.t2, previous = previous)
       val summaries = List(MemberChangeSummary(pid0, Username("alice"), Chunk(rejoined)))
-      val output    = MembershipReport.formatReport(MembershipReport.ReportResult(summaries, 10, 10, Map.empty))
+      val output    = MembershipReport.formatReport(MembershipReport.ReportResult(summaries, Nil, 10, 10, Map.empty))
       assertTrue(output.contains(s"alice — at ${Times.t2} — previous membership last seen at ${Times.t1}\n"))
+    }
+
+  private def testRejoinAfterAnInferredMembership =
+    test("a rejoin after an inferred membership gives when the player played for the club") {
+      val previous  = PreviousMembership.Inferred(firstMatch = Times.t0, lastMatch = Times.t1)
+      val rejoined  = Rejoined(ts = Times.t2, previous = previous)
+      val summaries = List(MemberChangeSummary(pid0, Username("alice"), Chunk(rejoined)))
+      val output    = MembershipReport.formatReport(MembershipReport.ReportResult(summaries, Nil, 10, 10, Map.empty))
+      val played    = s"previously played for the club from ${Times.t0} to ${Times.t1}"
+      assertTrue(output.contains(s"alice — at ${Times.t2} — $played\n"))
+    }
+
+  private def testListsInferredMemberships =
+    test("inferred memberships are listed in a section of their own, after the changes") {
+      val summaries = List(MemberChangeSummary(pid1, Username("bob"), Chunk(NewMember(Times.t2))))
+      val alice     = InferredMembership(playerId = pid0, firstMatch = Times.t0, lastMatch = Times.t1, matches = 2)
+      val carol     = InferredMembership(playerId = pid2, firstMatch = Times.t1, lastMatch = Times.t1, matches = 1)
+      val inferred  = List(InferredMember(Username("alice"), alice), InferredMember(Username("carol"), carol))
+      val output = MembershipReport.formatReport(MembershipReport.ReportResult(summaries, inferred, 9, 10, Map.empty))
+      assertTrue(
+        output.endsWith(
+          s"""[INFERRED FROM MATCHES]
+             |  alice — played for the club from ${Times.t0} to ${Times.t1}, 2 matches
+             |  carol — played for the club from ${Times.t1} to ${Times.t1}, 1 match
+             |""".stripMargin
+        ),
+        output.indexOf("[JOINED]") < output.indexOf("[INFERRED FROM MATCHES]")
+      )
+    }
+
+  private def testInferredMembershipsAloneAreNotNoChanges =
+    test("a range with inferred memberships and no changes lists them rather than 'No changes'") {
+      val alice    = InferredMembership(playerId = pid0, firstMatch = Times.t0, lastMatch = Times.t1, matches = 2)
+      val inferred = List(InferredMember(Username("alice"), alice))
+      val output   = MembershipReport.formatReport(MembershipReport.ReportResult(Nil, inferred, 10, 10, Map.empty))
+      assertTrue(!output.contains("No changes"), output.contains("[INFERRED FROM MATCHES]\n  alice"))
     }
 
   // ==========================================================================
@@ -455,10 +522,6 @@ object TestMembershipAppPure extends ZIOSpecDefault {
       },
       test("an end before the start becomes the start") {
         assertTrue(ends(observedAt(Some(Times.t2)).close(row, Times.t0)) == (Some(Times.t1), Some(Times.t1)))
-      },
-      test("a guessed row, which no roster listed, was last seen at its start") {
-        val guess = row.copy(sinceApproximate = true)
-        assertTrue(ends(observedAt(Some(Times.t2)).close(guess, Times.t3)) == (Some(Times.t1), Some(Times.t3)))
       },
       test("a hidden row, which no roster listed since, keeps when it was last seen") {
         assertTrue(
