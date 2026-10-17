@@ -521,8 +521,7 @@ object RecruitmentTestSupport {
       clubMatches <- client.get[ApiClubMatches](ApiClubMatches.getUrl(clubSlug))
       targetMatchIds = (clubMatches.registered.map(_.`@id`) ++ clubMatches.inProgress.map(_.`@id`)).toSet
       formerMemberIds <-
-        if (criteria.excludeFormerMembers)
-          ClubMember.selectClubFormer(clubId).map(_.map(_.playerId).toSet)
+        if (criteria.excludeFormerMembers) RecruitmentApp.formerMembersOf(clubId)
         else ZIO.succeed(Set.empty[PlayerId])
       adminExcludedPlayerIds <-
         criteria.avoidAdminMinClubSize.fold(ZIO.succeed(Set.empty[PlayerId]))(

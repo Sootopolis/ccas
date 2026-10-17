@@ -103,9 +103,9 @@ private[membership] object ClosedAccountClubs {
     case Unchanged
   }
 
-  /** `rows` are the player's rows the roster does not list. A guess gives way to the membership the list shows. */
+  /** `rows` are the player's rows the roster does not list. */
   private def outcome(clubId: ClubId, rows: List[ClubMember], listing: Listing): Outcome = {
-    val (matching, others) = rows.filterNot(_.sinceApproximate).partition(_.since == listing.joined)
+    val (matching, others) = rows.partition(_.since == listing.joined)
     val lastSeen           = later(listing.joined, listing.lastOnline)
     if (others.exists(_.until.forall(_.isAfter(listing.joined)))) { Outcome.Overlaps }
     else {

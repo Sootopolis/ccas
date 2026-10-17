@@ -1,6 +1,6 @@
 # A closure hides a membership, and the account's club list settles it
 
-**Status:** Accepted, 2026-10-14 (#311). Builds on [0021](0021-membership-ends-are-windows.md), whose `club_member_window` it relaxes.
+**Status:** Accepted, 2026-10-14 (#311). Builds on [0021](0021-membership-ends-are-windows.md), whose `club_member_window` it relaxes. Amended by [0023](0023-inferred-memberships-are-computed-not-stored.md) (#302): History neither guesses memberships nor fetches club lists, so a closed account it finds on a board is settled by Membership's kept lists alone.
 
 ## Context
 

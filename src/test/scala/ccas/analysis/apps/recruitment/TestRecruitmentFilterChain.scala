@@ -2,6 +2,7 @@ package ccas.analysis.apps.recruitment
 
 import java.time.{Duration, Instant, LocalDate, YearMonth, ZoneOffset}
 
+import com.augustnagro.magnum.sql
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 import zio.{RIO, ZLayer}
 
@@ -10,7 +11,9 @@ import ccas.analysis.tables.*
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, Elo, Username}
 import ccas.utils.ProgressDisplay
 import ccas.utils.client.BodyStore
-import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
+import ccas.utils.sql.{FreshSchemaLayer, PostgresClient, TestDbCleanup}
+import ccas.utils.sql.DbCodecs.given
+import ccas.utils.sql.PostgresClient.connectZIO
 
 object TestRecruitmentFilterChain extends ZIOSpecDefault {
 
@@ -74,6 +77,7 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
     testCacheIsPopulatedAfterEvaluation,
     testFormerMemberRejectedWhenExcludeFormerMembersTrue,
     testFormerMemberAcceptedWhenExcludeFormerMembersFalse,
+    testPlayerOnTheClubsSideOfABoardIsAFormerMember,
     testAdminOfSizableClubRejected,
     testAdminOfSmallClubAccepted,
     testAdminOfNewlyDiscoveredSizableClubRejected,
@@ -478,8 +482,7 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
         playerId = pid0,
         since = Times.t0,
         lastSeen = Some(Times.t0),
-        until = Some(Times.t1),
-        sinceApproximate = false
+        until = Some(Times.t1)
       ))
       runId  <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None, None)
       client <- fakeChessComClient(responses)
@@ -501,8 +504,7 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
         playerId = pid0,
         since = Times.t0,
         lastSeen = Some(Times.t0),
-        until = Some(Times.t1),
-        sinceApproximate = false
+        until = Some(Times.t1)
       ))
       runId  <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None, None)
       client <- fakeChessComClient(responses)
@@ -510,6 +512,31 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
       cands  <- RecruitmentCandidate.selectByRun(runId)
     } yield assertTrue(cands.head.outcome == CandidateOutcome.Deferred)
   }
+
+  /** History records no row for a membership only a match shows (ADR 0023). */
+  private def testPlayerOnTheClubsSideOfABoardIsAFormerMember =
+    test("a player who sat on the club's side of a board, with no row, is rejected as a former member") {
+      val responses = Map("player/alice" -> apiPlayerJson(200, "alice"))
+      val criteria  = makeCriteria(excludeFormerMembers = true)
+      val board = connectZIO {
+        sql"""INSERT INTO club_match (match_id, name, status, time_class, start_time, boards, team1_club_id,
+                team1_score_x2, team2_club_id, team2_score_x2, fetched_at)
+              VALUES (941001, 'A match', 'Finished', 'Daily', ${Times.t0}, 1, NULL, 2, $clubId, 2, now())""".update.run()
+        sql"""INSERT INTO club_match_board (match_id, board, team1_player_id, team1_fair_play, team2_player_id,
+                team2_fair_play, team1_score_x2, team2_score_x2)
+              VALUES (941001, 1, NULL, false, $pid0, false, 2, 2)""".update.run()
+      }
+      (for {
+        _          <- seedDb
+        criteriaId <- seedCriteria(criteria)
+        _          <- seedPlayer(pid0)
+        _          <- board
+        runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None, None)
+        client     <- fakeChessComClient(responses)
+        _          <- evalCandidates(client, runId, List(Username("alice")), criteria)
+        cands      <- RecruitmentCandidate.selectByRun(runId)
+      } yield assertTrue(cands.head.outcome == CandidateOutcome.Rejected)).ensuring(TestDbCleanup.clearMatches.orDie)
+    }
 
   private def testAdminOfSizableClubRejected = test("admin of sizable club rejected when avoidAdminMinClubSize is set") {
     val responses = Map("player/alice" -> apiPlayerJson(200, "alice"))

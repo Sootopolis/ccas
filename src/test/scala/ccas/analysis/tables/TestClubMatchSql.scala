@@ -27,6 +27,7 @@ object TestClubMatchSql extends ZIOSpecDefault {
     testClubMatchBoardInsertAndSelect,
     testClubMatchBoardNullableGameFields,
     testClubMatchBoardDeleteMatch,
+    testSightingsOfAClubsMatches,
     testHistoryPendingMatchInsert,
     testHistoryPendingMatchCount,
     testHistoryPendingMatchBatch,
@@ -413,6 +414,67 @@ object TestClubMatchSql extends ZIOSpecDefault {
       results.isEmpty
     )
   }
+
+  /** A match not yet started has no sighting, the other team's club can be unresolved, and a player only ever met
+    * against the club has none.
+    */
+  private def testSightingsOfAClubsMatches =
+    test("sightings are the started boards of each player on the club's side of one, and its players are those") {
+      val opponent =
+        Player(PlayerId(62), Times.t0, Username("only-against"), PlayerStatusCategory.Active, None, Times.t0)
+      def clubMatch(id: Long, team1: Option[Club], team2: Option[Club], startTime: Option[Instant]) =
+        matchFinished.copy(
+          matchId = ClubMatchId(id),
+          startTime = startTime,
+          team1ClubIdOption = team1.map(_.clubId),
+          team2ClubIdOption = team2.map(_.clubId)
+        )
+      def board(id: Long, number: Short, team1: Option[Player], team2: Option[Player]) =
+        boardA.copy(
+          matchId = ClubMatchId(id),
+          board = number,
+          team1PlayerIdOption = team1.map(_.playerId),
+          team2PlayerIdOption = team2.map(_.playerId)
+        )
+      val matches = List(
+        clubMatch(id = 1501, team1 = Some(clubA), team2 = Some(clubB), startTime = Some(Times.t0)),
+        clubMatch(id = 1502, team1 = None, team2 = Some(clubA), startTime = Some(Times.t1)),
+        clubMatch(id = 1503, team1 = Some(clubA), team2 = Some(clubB), startTime = None),
+        clubMatch(id = 1504, team1 = Some(clubB), team2 = None, startTime = Some(Times.t2)),
+        clubMatch(id = 1505, team1 = Some(clubA), team2 = Some(clubB), startTime = Some(Times.t3))
+      )
+      val boards = List(
+        board(id = 1501, number = 1, team1 = Some(player0), team2 = Some(player1)),
+        board(id = 1501, number = 2, team1 = None, team2 = Some(player1)),
+        board(id = 1502, number = 1, team1 = Some(player1), team2 = Some(player0)),
+        board(id = 1503, number = 1, team1 = Some(player1), team2 = Some(player0)),
+        board(id = 1504, number = 1, team1 = Some(player0), team2 = Some(player1)),
+        board(id = 1505, number = 1, team1 = Some(player1), team2 = Some(opponent))
+      )
+      def sighting(player: Player, at: Instant, forClub: Boolean) =
+        ClubMatchBoard.Sighting(playerId = player.playerId, startTime = at, forClub = forClub)
+      val cleanUp = connectZIO {
+        sql"DELETE FROM club_match_board WHERE match_id BETWEEN 1501 AND 1505".update.run()
+        sql"DELETE FROM club_match WHERE match_id BETWEEN 1501 AND 1505".update.run()
+      }
+      (for {
+        _         <- Player.insert(opponent)
+        _         <- ZIO.foreachDiscard(matches)(ClubMatch.upsert)
+        _         <- ClubMatchBoard.insertBatch(boards)
+        sightings <- ClubMatchBoard.selectSightings(clubA.clubId)
+        ownIds    <- ClubMatchBoard.selectPlayerIdsForClub(clubA.clubId)
+      } yield assertTrue(
+        sightings.sortBy(s => (s.startTime, s.playerId.value)) == List(
+          sighting(player0, Times.t0, forClub = true),
+          sighting(player1, Times.t0, forClub = false),
+          sighting(player1, Times.t0, forClub = false),
+          sighting(player0, Times.t1, forClub = true),
+          sighting(player1, Times.t1, forClub = false),
+          sighting(player1, Times.t3, forClub = true)
+        ),
+        ownIds == Set(player0.playerId, player1.playerId)
+      )).ensuring(cleanUp.orDie)
+    }
 
   // --- HistoryPendingMatch tests ---
 

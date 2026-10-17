@@ -1,6 +1,6 @@
 # A membership's ends are windows, taken from when the roster was seen
 
-**Status:** Accepted, 2026-10-10 (#302). Builds on [0017](0017-what-earns-a-history-table.md), which gave `club_member` its two ends and asked for overlap between them to be excluded. Amended by [0022](0022-a-closure-hides-a-membership.md) (#311): a row a closed account hides has a `last_seen` and no `until`, so `club_member_window` asks only that `until` come with `last_seen`, and a closed account's row no longer ends at its last visit.
+**Status:** Accepted, 2026-10-10 (#302). Builds on [0017](0017-what-earns-a-history-table.md), which gave `club_member` its two ends and asked for overlap between them to be excluded. Amended by [0022](0022-a-closure-hides-a-membership.md) (#311): a row a closed account hides has a `last_seen` and no `until`, so `club_member_window` asks only that `until` come with `last_seen`, and a closed account's row no longer ends at its last visit. Amended by [0023](0023-inferred-memberships-are-computed-not-stored.md) (#302): History no longer guesses memberships, so no observed row replaces one.
 
 ## Context
 
