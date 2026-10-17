@@ -315,9 +315,10 @@ private[membership] object MembershipReport {
         cm.until.filter(inRange).foreach { u =>
           // Check latest state to determine reason
           playerStates.filter(s => !s.since.isAfter(u)).lastOption match {
-            case Some(state) if state.status != PlayerStatusCategory.Active => changes += AccountClosed(u, state.status)
-            case Some(_)                                                    => changes += LeftClub(u)
-            case None                                                       =>
+            case Some(state) =>
+              if (state.status == PlayerStatusCategory.Active) { changes += LeftClub(u) }
+              else { changes += AccountClosed(u, state.status) }
+            case None =>
               // No state found near the closure — unresolvable
               val username = playerNames.headOption.fold(Username.wrap("unknown"))(_.username)
               changes += Unresolvable(u, username)
