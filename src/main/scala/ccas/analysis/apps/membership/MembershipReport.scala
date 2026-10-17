@@ -16,27 +16,60 @@ import ccas.utils.sql.PostgresClient
 
 private[membership] object MembershipReport {
 
+  /** `inferred` holds the memberships inferred from matches that overlap the range, under each player's name now. */
   case class ReportResult(
     summaries: List[MemberChangeSummary],
+    inferred: List[(Username, InferredMembership)],
     memberCountAtStart: Int,
     memberCountAtEnd: Int,
     invitations: Map[PlayerId, Instant]
   )
 
+  /** Counts come from the rows alone, so each change in them has an event in `summaries` behind it. */
   def report(club: NamedClub, since: Instant, until: Instant): RIO[ProgressDisplay & PostgresClient, ReportResult] =
     for {
-      members <- ClubMember.selectClub(club.clubId)
-      playerIds = members.map(_.playerId).distinct
-      states <- PlayerSnapshot.selectHistory(playerIds)
-      names  <- PlayerName.selectPlayers(playerIds)
-      summaries    = classifyFromDb(club.clubId, members, states, names, since, until)
+      members   <- ClubMember.selectClub(club.clubId)
+      sightings <- ClubMatchBoard.selectSightings(club.clubId)
+      coverage  <- ClubRosterCoverage.select(club.clubId)
+      inferred  = InferredMembership.infer(members, sightings, coverage.map(_.firstObservedAt))
+      memberIds = members.map(_.playerId).distinct
+      // Only rows are classified, so only their players' states are read; an inferred membership needs just a name.
+      states <- PlayerSnapshot.selectHistory(memberIds)
+      names  <- PlayerName.selectPlayers((memberIds ++ inferred.map(_.playerId)).distinct)
+      summaries   = classifyFromDb(club.clubId, members, inferred, states, names, since, until)
+      overlapping = inferredOverlapping(inferred, names, since, until)
       invitations  <- lookupJoinInvitations(club.clubId, summaries)
-      countAtStart <- ClubMember.countActiveCurrentAt(club.clubId, since)
-      countAtEnd   <- ClubMember.countActiveCurrentAt(club.clubId, until)
+      countAtStart <- ClubMember.countAt(club.clubId, since)
+      countAtEnd   <- ClubMember.countAt(club.clubId, until)
       _ <- ZIO.logInfo(s"=== Report for ${club.slug} from $since to $until ===")
       _ <- ZIO.logInfo(s"Members: $countAtStart -> $countAtEnd")
       _ <- printChangeSummaries(summaries, invitations)
-    } yield ReportResult(summaries, countAtStart, countAtEnd, invitations)
+      _ <- ZIO.foreachDiscard(inferredLines(overlapping))(ZIO.logInfo(_))
+    } yield ReportResult(summaries, overlapping, countAtStart, countAtEnd, invitations)
+
+  /** Each of `inferred` that overlaps `[since, until]`, under its player's name now, earliest first. */
+  private def inferredOverlapping(
+    inferred: List[InferredMembership],
+    names: List[PlayerName],
+    since: Instant,
+    until: Instant
+  ): List[(Username, InferredMembership)] = {
+    val namesByPlayer = names.groupBy(_.playerId)
+    inferred
+      .filter(membership => !membership.firstMatch.isAfter(until) && !membership.lastMatch.isBefore(since))
+      .sortBy(_.firstMatch)
+      .map(membership => latestName(namesByPlayer.getOrElse(membership.playerId, Nil)) -> membership)
+  }
+
+  private def latestName(names: List[PlayerName]): Username =
+    names.maxByOption(_.since).fold(Username.wrap("unknown"))(_.username)
+
+  /** Memberships no roster recorded, which the club's matches show (ADR 0023). */
+  private def inferredLines(inferred: List[(Username, InferredMembership)]): List[String] =
+    Option.when(inferred.nonEmpty)("[INFERRED FROM MATCHES]").toList ++ inferred.map { (username, membership) =>
+      s"  $username — played for the club from ${membership.firstMatch} to ${membership.lastMatch}, " +
+        s"${membership.matches} ${if (membership.matches == 1) "match" else "matches"}"
+    }
 
   def reportReconciliation(
     result: ReconciliationResult,
@@ -95,7 +128,7 @@ private[membership] object MembershipReport {
     change match {
       case NewMember(ts)                 => s"at $ts$invitedSuffix"
       case JoinedClub(ts)                => s"at $ts$invitedSuffix"
-      case Rejoined(ts, lastSeen, until) => s"at $ts — ${previousEnd(lastSeen, until)}$invitedSuffix"
+      case Rejoined(ts, previous)        => s"at $ts — ${previousMembership(previous)}$invitedSuffix"
       case LeftClub(ts)                  => s"at $ts"
       case AccountClosed(ts, status)     => s"after $ts — status: $status"
       case Unresolvable(ts, oldUsername) => s"at $ts — old username: $oldUsername"
@@ -104,11 +137,17 @@ private[membership] object MembershipReport {
     }
   }
 
-  // No one is seen in and out at once, so ends that meet hold no sighting of the player gone, only of them in: History
-  // ends a guess at a match they played (#302).
-  private def previousEnd(lastSeen: Instant, until: Instant): String =
-    if (lastSeen == until) s"previous membership last seen at $lastSeen"
-    else s"previous membership ended between $lastSeen and $until"
+  /** No one is seen in and out at once, so recorded ends that meet hold no sighting of the player gone, only of them
+    * in.
+    */
+  private def previousMembership(previous: PreviousMembership): String =
+    previous match {
+      case PreviousMembership.Recorded(lastSeen, until) if lastSeen == until =>
+        s"previous membership last seen at $lastSeen"
+      case PreviousMembership.Recorded(lastSeen, until) => s"previous membership ended between $lastSeen and $until"
+      case PreviousMembership.Inferred(firstMatch, lastMatch) =>
+        s"previously played for the club from $firstMatch to $lastMatch"
+    }
 
   private def groupByCategory(
     summaries: List[MemberChangeSummary],
@@ -159,11 +198,12 @@ private[membership] object MembershipReport {
   }
 
   def formatReport(rr: ReportResult): String = {
-    val delta  = rr.memberCountAtEnd - rr.memberCountAtStart
-    val sign   = if (delta >= 0) "+" else ""
-    val header = s"Total members: ${rr.memberCountAtEnd} ($sign$delta)\n\n"
-    if (rr.summaries.isEmpty) { header + "No changes\n" }
-    else { header + formatChangeSummaries(rr.summaries, rr.invitations) }
+    val delta    = rr.memberCountAtEnd - rr.memberCountAtStart
+    val sign     = if (delta >= 0) "+" else ""
+    val header   = s"Total members: ${rr.memberCountAtEnd} ($sign$delta)\n\n"
+    val inferred = inferredLines(rr.inferred)
+    if (rr.summaries.isEmpty && inferred.isEmpty) { header + "No changes\n" }
+    else { header + formatChangeSummaries(rr.summaries, rr.invitations) + inferred.map(_ + "\n").mkString }
   }
 
   private def formatChangeSummaries(
@@ -202,23 +242,41 @@ private[membership] object MembershipReport {
 
   // --- Report mode: DB-only ---
 
-  /** Classifies each member whose membership began or ended in `[since, until]`, from the club's memberships, the
-    * states its players have been in (status and title) and the names they have held.
+  /** Classifies each member whose membership began or ended in `[since, until]`, from the club's memberships, those
+    * `inferred` from its matches, the states its players have been in (status and title) and the names they have held.
     */
   def classifyFromDb(
     clubId: ClubId,
     members: List[ClubMember],
+    inferred: List[InferredMembership],
     states: List[PlayerSnapshot],
     names: List[PlayerName],
     since: Instant,
     until: Instant
   ): List[MemberChangeSummary] = {
-    val statesByPlayer = states.groupBy(_.playerId)
-    val namesByPlayer  = names.groupBy(_.playerId)
+    val statesByPlayer   = states.groupBy(_.playerId)
+    val namesByPlayer    = names.groupBy(_.playerId)
+    val inferredByPlayer = inferred.groupBy(_.playerId)
     def inRange(t: Instant): Boolean = t.compareTo(since) >= 0 && t.compareTo(until) <= 0
 
     /** A row a closed account hides dates the closure by when the player was last known in (ADR 0022). */
     def hiddenAt(m: ClubMember): Option[Instant] = m.lastSeen.filter(_ => m.until.isEmpty)
+
+    /** The membership `playerId` had before the one starting at `start`, recorded or inferred, by when it started. */
+    def previousTo(playerId: PlayerId, start: Instant): Option[PreviousMembership] = {
+      val recorded = members.collect {
+        case m if m.clubId == clubId && m.playerId == playerId && m.until.isDefined && m.since.isBefore(start) =>
+          m.since -> PreviousMembership.Recorded(
+            lastSeen = m.lastSeen.getOrElse(m.since),
+            until = m.until.getOrElse(m.since)
+          )
+      }
+      val fromMatches = inferredByPlayer.getOrElse(playerId, Nil).collect {
+        case membership if membership.lastMatch.isBefore(start) =>
+          membership.firstMatch -> PreviousMembership.Inferred(membership.firstMatch, membership.lastMatch)
+      }
+      (recorded ++ fromMatches).maxByOption(_._1).map(_._2)
+    }
 
     // Find membership changes in the time range
     val changedMembers = members.filter(m => inRange(m.since) || m.until.exists(inRange) || hiddenAt(m).exists(inRange))
@@ -234,21 +292,11 @@ private[membership] object MembershipReport {
       cms.foreach { cm =>
         // New membership in range
         if (inRange(cm.since)) {
-          // Check if there's a prior membership for same club+player
-          val priorMemberships = members.filter(m =>
-            m.clubId == clubId && m.playerId == playerId && m.until.isDefined && m.since.isBefore(cm.since)
-          )
-          if (priorMemberships.nonEmpty) {
-            val latestPrior = priorMemberships.maxBy(_.since)
-            changes += Rejoined(
-              ts = cm.since,
-              previousLastSeen = latestPrior.lastSeen.getOrElse(latestPrior.since),
-              previousUntil = latestPrior.until.getOrElse(latestPrior.since)
-            )
-          } else {
+          previousTo(playerId, cm.since) match {
+            case Some(previous) => changes += Rejoined(ts = cm.since, previous = previous)
             // Check if player has states before this membership — existing player joining club
-            if (playerStates.exists(_.since.isBefore(cm.since))) { changes += JoinedClub(cm.since) }
-            else { changes += NewMember(cm.since) }
+            case None if playerStates.exists(_.since.isBefore(cm.since)) => changes += JoinedClub(cm.since)
+            case None                                                    => changes += NewMember(cm.since)
           }
         }
 
@@ -265,8 +313,9 @@ private[membership] object MembershipReport {
           }
         }
 
+        // Whatever the account's status now: History can see it active again before a roster reopens the row.
         hiddenAt(cm).filter(inRange).foreach { lastSeen =>
-          playerStates.lastOption.filter(_.status != PlayerStatusCategory.Active).foreach { state =>
+          playerStates.findLast(_.status != PlayerStatusCategory.Active).foreach { state =>
             changes += AccountClosed(lastSeen, state.status)
           }
         }
@@ -284,8 +333,7 @@ private[membership] object MembershipReport {
         }
       }
 
-      val latestUsername = playerNames.lastOption.fold(Username.wrap("unknown"))(_.username)
-      MemberChangeSummary(playerId, latestUsername, changes.result())
+      MemberChangeSummary(playerId, latestName(playerNames), changes.result())
     }.filter(_.changes.nonEmpty)
   }
 }

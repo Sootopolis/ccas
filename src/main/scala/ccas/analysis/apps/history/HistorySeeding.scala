@@ -219,7 +219,7 @@ private[history] object HistorySeeding {
     client: ChessComClient,
     clubId: ClubId,
     clubSlug: ClubSlug,
-    allMembers: List[ClubMember],
+    memberIds: Set[PlayerId],
     queriedIds: Set[PlayerId],
     memberNames: Map[PlayerId, Username],
     excludeMatchIds: Set[ClubMatchId],
@@ -231,10 +231,9 @@ private[history] object HistorySeeding {
       sharedQueried <- shared.fold(ZIO.succeed(Set.empty[PlayerId]))(_.queriedPlayers.get)
       // A member holding no name has nothing to be queried under — its display cache may name whoever took it. It
       // rejoins the queue once another path (board appearance, roster refresh) records the name it answers to now.
-      candidates = allMembers
-        .filterNot(m => queriedIds.contains(m.playerId))
-        .flatMap(m => memberNames.get(m.playerId).map(username => (m.playerId, username)))
-        .distinctBy(_._1)
+      candidates = memberIds.toList
+        .filterNot(queriedIds.contains)
+        .flatMap(playerId => memberNames.get(playerId).map(username => (playerId, username)))
       (toQuery, sharedSkipped) = candidates.partition { case (pid, _) => !sharedQueried.contains(pid) }
 
       // For members skipped via shared dedup, still record HistoryMemberQuery for this club

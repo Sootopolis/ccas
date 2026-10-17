@@ -32,15 +32,13 @@ object TestClubSql extends ZIOSpecDefault {
     testClubMatchRefDeleteAll,
     testSlugFromMatchRefRejectsABoardNamingNoClub,
     testTwoClubsMayHoldOneSlug,
-    testReplaceSinceApproximate,
-    testReplaceSinceNonApproximate,
     testClubAdminInsertAndSelect,
     testClubAdminDeleteByClub,
     testClubAdminSelectPlayerIdsForSizableClubs,
     testClubAdminReplaceForClub,
     testAnEndedRowSaysWhenLastKnownIn,
     testOverlappingRowsAreRefused,
-    testDeleteGuessesOverlappingSparesTheRest,
+    testACountAtAMomentReadsTheRowsAlone,
     testCoverageOnlyWidens,
     testEveryCoverageWriteChangesItsVersion,
     testASaveQueuesBehindAnotherAndReadsItsVersion,
@@ -72,8 +70,7 @@ object TestClubSql extends ZIOSpecDefault {
     playerId = player2.playerId,
     since = Times.t1,
     lastSeen = Some(Times.t1),
-    until = Some(Times.t2),
-    sinceApproximate = false
+    until = Some(Times.t2)
   )
   private val memB0 = ClubMember.joined(clubId = clubB.clubId, playerId = player0.playerId, since = Times.t1)
 
@@ -247,41 +244,6 @@ object TestClubSql extends ZIOSpecDefault {
       )
     }
 
-  // --- ClubMember.replaceSince tests ---
-
-  private def testReplaceSinceApproximate =
-    test("ClubMember.replaceSince replaces approximate since with authoritative") {
-      val approxMember = ClubMember(
-        clubId = clubA.clubId,
-        playerId = player0.playerId,
-        since = Times.t0,
-        lastSeen = None,
-        until = None,
-        sinceApproximate = true
-      )
-      val newSince     = Times.t1
-      for {
-        _       <- connectZIO(sql"DELETE FROM club_member".update.run())
-        _       <- ClubMember.insert(approxMember)
-        updated <- ClubMember.replaceSince(clubA.clubId, player0.playerId, Times.t0, newSince)
-        result  <- ClubMember.selectClub(clubA.clubId)
-      } yield assertTrue(
-        updated == 1,
-        result.size == 1,
-        result.head.since == newSince,
-        !result.head.sinceApproximate
-      )
-    }
-
-  private def testReplaceSinceNonApproximate =
-    test("ClubMember.replaceSince does not replace non-approximate") {
-      for {
-        _ <- connectZIO(sql"DELETE FROM club_member".update.run())
-        _ <- ClubMember.insert(ClubMember.joined(clubId = clubA.clubId, playerId = player0.playerId, since = Times.t0))
-        notUpdated <- ClubMember.replaceSince(clubA.clubId, player0.playerId, Times.t0, Times.t1)
-      } yield assertTrue(notUpdated == 0)
-    }
-
   // --- Club.membersCount / latestMatchAt tests ---
 
   private def testClubMembersCount = test("upsert stores membersCount; updateLatestMatchAt stores latestMatchAt") {
@@ -409,18 +371,19 @@ object TestClubSql extends ZIOSpecDefault {
       } yield assertTrue(overlap, adjacent == 1)
     }
 
-  private def testDeleteGuessesOverlappingSparesTheRest =
-    test("deleteGuessesOverlapping deletes only the player's guesses the new row overlaps") {
-      val guess    = joinedAtT0.copy(lastSeen = Some(Times.t0), until = Some(Times.t2), sinceApproximate = true)
-      val after    = guess.copy(since = Times.t2, lastSeen = Some(Times.t2), until = Some(Times.t3))
-      val other    = guess.copy(playerId = player0.playerId)
-      val observed = joinedAtT0.copy(since = Times.t1, lastSeen = Some(Times.t1), until = Some(Times.t2))
+  /** A closed account's row counts until it was last seen, when the report dates its closure (ADR 0022). */
+  private def testACountAtAMomentReadsTheRowsAlone =
+    test("a count at a moment takes an ended row until it ended, a hidden one until last seen, whatever the status") {
+      def joined(player: Player, since: Instant) =
+        ClubMember.joined(clubId = clubA.clubId, playerId = player.playerId, since = since)
+      val ended  = joinedAtT0.copy(lastSeen = Some(Times.t1), until = Some(Times.t2))
+      val hidden = joined(player2, Times.t0).hidden(Times.t1)
+      val open   = joined(player0, Times.t1)
       for {
-        _    <- connectZIO(sql"DELETE FROM club_member".update.run())
-        _    <- ClubMember.insertBatch(List(guess, after, other))
-        _    <- ClubMember.deleteGuessesOverlapping(List(observed))
-        rows <- ClubMember.selectClub(clubA.clubId)
-      } yield assertTrue(rows.toSet == Set(after, other))
+        _      <- connectZIO(sql"DELETE FROM club_member".update.run())
+        _      <- ClubMember.insertBatch(List(ended, hidden, open))
+        counts <- ZIO.foreach(List(Times.t0, Times.t1, Times.t2, Times.t3))(ClubMember.countAt(clubA.clubId, _))
+      } yield assertTrue(counts == List(2, 2, 1, 1))
     }
 
   private def testCoverageOnlyWidens = test("a club's roster coverage only ever widens") {

@@ -120,7 +120,7 @@ object TestSharedContext extends ZIOSpecDefault {
         _ <- ClubMember.insert(ClubMember.joined(clubId = clubAId, playerId = player1Id, since = Times.t0))
         _ <- ClubMember.insert(ClubMember.joined(clubId = clubAId, playerId = player2Id, since = Times.t0))
 
-        allMembers <- ClubMember.selectClub(clubAId)
+        memberIds <- ClubMember.selectClub(clubAId).map(_.map(_.playerId).toSet)
         memberNames = Map(player1Id -> player1.username, player2Id -> player2.username)
 
         // alice was already queried by a prior club
@@ -132,7 +132,7 @@ object TestSharedContext extends ZIOSpecDefault {
         skipCtr <- Ref.make(0)
         result <- HistorySeeding
           .seedFromMemberMatches(
-            client, clubAId, clubASlug, allMembers, Set.empty, memberNames, Set.empty, false, Some(shared), skipCtr
+            client, clubAId, clubASlug, memberIds, Set.empty, memberNames, Set.empty, false, Some(shared), skipCtr
           )
           .provideSomeEnvironment[PostgresClient](_.add[ProgressDisplay](ProgressDisplay.make(enabled = false)))
         _ <- ZIO.foreachDiscard(List(ClubMatchId(6001)))(id =>
@@ -153,7 +153,7 @@ object TestSharedContext extends ZIOSpecDefault {
         _ <- Player.insertIfNew(player2)
         _ <- ClubMember.insert(ClubMember.joined(clubId = clubBId, playerId = player1Id, since = Times.t0))
 
-        allMembers <- ClubMember.selectClub(clubBId)
+        memberIds <- ClubMember.selectClub(clubBId).map(_.map(_.playerId).toSet)
         memberNames = Map(player1Id -> player1.username)
 
         // alice was already queried by club A
@@ -164,7 +164,7 @@ object TestSharedContext extends ZIOSpecDefault {
         skipCtr <- Ref.make(0)
         _ <- HistorySeeding
           .seedFromMemberMatches(
-            client, clubBId, clubBSlug, allMembers, Set.empty, memberNames, Set.empty, false, Some(shared), skipCtr
+            client, clubBId, clubBSlug, memberIds, Set.empty, memberNames, Set.empty, false, Some(shared), skipCtr
           )
           .provideSomeEnvironment[PostgresClient](_.add[ProgressDisplay](ProgressDisplay.make(enabled = false)))
 
@@ -182,7 +182,6 @@ object TestSharedContext extends ZIOSpecDefault {
       // via fanoutExcludeIds while still seeding the genuinely-new 8102 for B.
       val knownForB = clubMatchRow(8101).copy(team1ClubIdOption = Some(clubBId), team2ClubIdOption = None)
       // Pass the member directly so this test doesn't read accumulated club_member rows from earlier tests.
-      val members = List(ClubMember.joined(clubId = clubAId, playerId = player3Id, since = Times.t0))
       for {
         _ <- Club.upsert(clubA)
         _ <- Club.upsert(clubB)
@@ -196,7 +195,7 @@ object TestSharedContext extends ZIOSpecDefault {
         skipCtr <- Ref.make(0)
         _ <- HistorySeeding
           .seedFromMemberMatches(
-            client, clubAId, clubASlug, members, Set.empty, Map(player3Id -> player3.username), Set.empty, false,
+            client, clubAId, clubASlug, Set(player3Id), Set.empty, Map(player3Id -> player3.username), Set.empty, false,
             Some(shared), skipCtr
           )
           .provideSomeEnvironment[PostgresClient](_.add[ProgressDisplay](ProgressDisplay.make(enabled = false)))

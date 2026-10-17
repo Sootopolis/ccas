@@ -72,7 +72,8 @@ private[history] object HistoryUtils {
   }
 
   /** Shared mutable state for concurrent Phase 3 processing: API response caches (deduplicated via Promises), a player
-    * lookup map, counters for statistics, and error tracking.
+    * lookup map, the players whose match lists need no crawl from the waves (the run's starting set, those earlier runs
+    * queried, and those queued), counters for statistics, and error tracking.
     */
   class ProcessingContext(
     val client: ChessComClient,
@@ -80,9 +81,10 @@ private[history] object HistoryUtils {
     val clubSlug: ClubSlug,
     val matchCache: Ref[Map[ClubMatchId, Promise[Throwable, ApiDailyMatch]]],
     val liveMatchCache: Ref[Map[ClubMatchId, Promise[Throwable, ApiLiveMatch]]],
-    val discoveryCache: Ref[Map[String, Promise[Throwable, Option[PlayerId]]]],
+    val discoveryCache: Ref[Map[String, Promise[Throwable, Option[DiscoveredPlayer]]]],
     val clubCache: Ref[Map[String, Promise[Throwable, Option[ClubId]]]],
     val knownPlayers: Ref[Map[String, PlayerId]],
+    val crawledPlayers: Ref[Set[PlayerId]],
     val newPlayers: Ref[Set[DiscoveredPlayer]],
     val matchesProcessed: Ref[Int],
     val matchesFailed: Ref[Int],
@@ -104,14 +106,16 @@ private[history] object HistoryUtils {
       client: ChessComClient,
       clubId: ClubId,
       clubSlug: ClubSlug,
-      initialKnownPlayers: Map[String, PlayerId]
+      initialKnownPlayers: Map[String, PlayerId],
+      initialCrawledPlayers: Set[PlayerId]
     ): ZIO[Any, Nothing, ProcessingContext] =
       for {
         matchCache          <- Ref.make(Map.empty[ClubMatchId, Promise[Throwable, ApiDailyMatch]])
         liveMatchCache      <- Ref.make(Map.empty[ClubMatchId, Promise[Throwable, ApiLiveMatch]])
-        discoveryCache      <- Ref.make(Map.empty[String, Promise[Throwable, Option[PlayerId]]])
+        discoveryCache      <- Ref.make(Map.empty[String, Promise[Throwable, Option[DiscoveredPlayer]]])
         clubCache           <- Ref.make(Map.empty[String, Promise[Throwable, Option[ClubId]]])
         knownPlayers        <- Ref.make(initialKnownPlayers)
+        crawledPlayers      <- Ref.make(initialCrawledPlayers)
         newPlayers          <- Ref.make(Set.empty[DiscoveredPlayer])
         matchesProcessed    <- Ref.make(0)
         matchesFailed       <- Ref.make(0)
@@ -135,6 +139,7 @@ private[history] object HistoryUtils {
         discoveryCache,
         clubCache,
         knownPlayers,
+        crawledPlayers,
         newPlayers,
         matchesProcessed,
         matchesFailed,

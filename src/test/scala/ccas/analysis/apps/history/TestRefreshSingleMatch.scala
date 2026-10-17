@@ -125,7 +125,7 @@ object TestRefreshSingleMatch extends ZIOSpecDefault {
         }
       )
       client <- TestChessComClientSupport.fakeClient(routes)
-      ctx    <- ProcessingContext.make(client, clubId, clubSlug, Map.empty)
+      ctx    <- ProcessingContext.make(client, clubId, clubSlug, Map.empty, Set.empty)
       _      <- runRefresh(ctx, matchId)
 
       calls          <- netCalls.get
@@ -271,7 +271,7 @@ object TestRefreshSingleMatch extends ZIOSpecDefault {
           }
         )
         client    <- TestChessComClientSupport.fakeClient(routes)
-        ctx       <- ProcessingContext.make(client, isolatedClubId, isolatedClubSlug, Map.empty)
+        ctx       <- ProcessingContext.make(client, isolatedClubId, isolatedClubSlug, Map.empty, Set.empty)
         refreshed <- HistoryProcessing.refreshSettledMatches(ctx, minAgeHours = 0)
                        .provideSomeEnvironment[PostgresClient](_.add[ProgressDisplay](ProgressDisplay.make(enabled = false)))
         rowAfter  <- ClubMatch.selectId(matchId)
@@ -309,7 +309,7 @@ object TestRefreshSingleMatch extends ZIOSpecDefault {
           }
         )
         client         <- TestChessComClientSupport.fakeClient(routes)
-        ctx            <- ProcessingContext.make(client, clubId, clubSlug, Map.empty)
+        ctx            <- ProcessingContext.make(client, clubId, clubSlug, Map.empty, Set.empty)
         result         <- runRefresh(ctx, matchId).either
         unchangedCount <- ctx.refreshMatchUnchanged.get
         rowAfter       <- ClubMatch.selectId(matchId)
@@ -340,7 +340,7 @@ object TestRefreshSingleMatch extends ZIOSpecDefault {
           }
         )
         client <- TestChessComClientSupport.fakeClient(routes)
-        ctx    <- ProcessingContext.make(client, clubId, clubSlug, Map.empty)
+        ctx    <- ProcessingContext.make(client, clubId, clubSlug, Map.empty, Set.empty)
 
         _            <- runRefresh(ctx, matchId) // Changed: writes club_match with the fetch's content hash as the marker
         afterFirst   <- ClubMatch.selectId(matchId)
