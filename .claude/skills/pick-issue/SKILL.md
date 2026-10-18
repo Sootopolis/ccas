@@ -33,13 +33,19 @@ Two to four sentences each:
 - what breaks or is missing, described as a symptom rather than a component
 - what it costs today — the reason it is worth doing at all
 - the fix in one sentence, **plus its hidden cost** where there is one: a schema change needs a hand-written `ALTER` against every existing database, a CLI tree change needs `completions/ccas.bash` regenerated, some areas need an ADR read first
+- **plan first, or straight in**: straight in only when the fix is one obvious change, with no design choice and none of the areas CLAUDE.md's Workflow names
 
 Mention a label only where it changes the work: `pending-decision` means the deliverable is the user's call, not code.
 
 ## 5. Recommend, then ask
 
-Recommend one with the reason in a clause (self-contained, no migration, they hit it last week). Then put the shortlist through `AskUserQuestion` so the pick is one keystroke, and wait — do not start work on the recommendation before the answer comes back.
+Recommend one with the reason in a clause (self-contained, no migration, they hit it last week). Then ask both questions in one `AskUserQuestion` call, so each answer is one keystroke and both come back in the same turn:
+
+- which issue: the tool takes four options, so offer the four strongest; "Other" still reaches the rest
+- whether to plan first: "As recapped" (recommended), "Plan first", "Straight in". For an issue picked through "Other" that the recap did not cover, "As recapped" means plan first.
+
+Wait — do not start work on the recommendation before the answers come back.
 
 ## After the pick
 
-Read whatever the issue names — the ADRs in particular — before editing `ccas.utils.client`, the cache tables, or the CLI command tree. Design thinking that comes out of the work belongs back in the issue, not only in the chat.
+Read whatever the issue names — the ADRs in particular — before editing `ccas.utils.client`, the cache tables, or the CLI command tree. Then plan or build, as answered, and follow CLAUDE.md's Workflow from there. Design thinking that comes out of the work belongs back in the issue, not only in the chat.
