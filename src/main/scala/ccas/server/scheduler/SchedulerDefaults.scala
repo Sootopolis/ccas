@@ -10,7 +10,7 @@ final case class ScheduleSeed(kind: JobKind, intervalHours: Short, enabled: Bool
 /** Reads the boot-seed defaults from the `scheduler.defaults` HOCON block: the global server-internal maintenance
   * jobs (`MatchRef`, `ClubData`) via [[fromConfig]], and the per-managed-club jobs (`History`, `Membership`, #102)
   * via [[perClubFromConfig]]. Mirrors the inline `ConfigFactory.load()` + `hasPath` pattern in [[JobScheduler.live]].
-  * Values are seed-only: applied once on first boot ([[JobSchedule.seedGlobalIfAbsent]] /
+  * Values are seed-only: applied at boot to a schedule that does not exist yet ([[JobSchedule.seedGlobalIfAbsent]] /
   * [[JobSchedule.seedPerClubIfAbsent]]) and thereafter superseded by the live `job_schedule` row.
   */
 object SchedulerDefaults {

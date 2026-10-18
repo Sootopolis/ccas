@@ -10,8 +10,7 @@
 # Connection: the server's own settings, read the way the server reads them, so
 # the dump is of the database the server uses. No backup-specific secrets.
 #
-# Restore a dump with (needs pg_restore >= the pg_dump that wrote it):
-#   pg_restore --no-owner --no-privileges -d <target-conn> ccas-<stamp>.dump
+# Restoring a dump: see README.md, section Backups.
 #
 set -euo pipefail
 

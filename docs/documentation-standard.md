@@ -16,6 +16,7 @@ Route by the question the reader is asking. Every fact has exactly one home; eve
 | How do I install / run / configure it? | `README.md` | the feature changes |
 | What does this behaviour guarantee? | the test name and its assertions | the behaviour changes |
 | What must a contributor or agent never do here? | `CLAUDE.md` | rarely |
+| How does an agent carry out a recurring procedure here? | `.claude/skills/<name>/SKILL.md` | the procedure changes |
 | How does Chess.com's API actually behave? | [`docs/chess-com-api.md`](chess-com-api.md) | Chess.com changes, or an observation proves wrong |
 | What is the exact value of a version / default / limit? | the code that defines it | — |
 
@@ -94,7 +95,7 @@ Do not write:
 - **history** — "used to", "was reverted", a commit hash. Git and the ADR hold this. The one exception is a regression test, where the rationale is the test's reason to exist: keep it to two lines and name the issue
 - **implementation detail in an interface comment** — a caller needs the contract it must uphold, not the analysis that produced it
 
-**A comment about a member is scaladoc, whatever the member's visibility.** A private or local `def` is read through its call sites like any other, and an IDE shows `/** */` on hover but never `//`. Keep `//` for a line inside a body.
+**A comment about a member is scaladoc, whatever the member's visibility.** A private or local `def` is read through its call sites like any other, and an IDE shows `/** */` on hover but never `//`. Keep `//` for a line inside a body. Older `//` member comments predate this rule: convert one in code you are already changing, not in a sweep.
 
 ## 6. Budgets
 
@@ -128,7 +129,7 @@ The fourth was not an ADR and was not forced into the numbering: `chess-com-clie
 
 [`chess-com-api.md`](chess-com-api.md) is reference rather than decision: observations of a system we do not control, each dated and sourced. It is edited in place when Chess.com changes or an entry proves wrong, which is why it is not an ADR, and why a pointer into it names the entry it means. It was written after a belief about closed accounts sat unchecked in two code comments for months, because nothing gathered such facts where they could be seen together ([#302](https://github.com/Sootopolis/ccas/issues/302)).
 
-**Prose is never hard-wrapped.** One paragraph is one line, in every `.md` here and in commit messages, issue and PR bodies. Editors and GitHub wrap for display, so a fixed column buys nothing and costs a re-flow on every edit: change a clause and the diff shows the five rewrapped lines around it instead of the change. Tables, fenced code and list markers keep their own line structure. Nothing enforces this — `scripts/check-docs.py` measures content, not shape.
+**Prose is never hard-wrapped.** One paragraph is one line, in every `.md` here and in commit messages, issue and PR bodies. Editors and GitHub wrap for display, so a fixed column buys nothing and costs a re-flow on every edit: change a clause and the diff shows the five rewrapped lines around it instead of the change. Tables, fenced code and list markers keep their own line structure. Unwrap a hard-wrapped paragraph you edit, but do not reflow a file you are not otherwise changing: that buries the change the same way. Nothing enforces this — `scripts/check-docs.py` measures content, not shape.
 
 ## 9. Enforcement
 

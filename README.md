@@ -225,7 +225,7 @@ Optional overrides with defaults:
 | `SERVER_PORT` | 8080 | HTTP server port |
 | `SERVER_HOST` | 127.0.0.1 | Bind address. Loopback by default (single-user, no-auth local model); set `0.0.0.0` for hosted deploys |
 | `SCHEDULER_POLL_MINUTES` | 15 | How often the scheduler checks for due jobs. Keep ≥ 15 against Neon so polls don't keep the compute always-warm (it auto-suspends after ~5 min idle, budget is 192 active-hr/mo on free tier) |
-| `SCHEDULER_<JOB>_INTERVAL_HOURS` / `SCHEDULER_<JOB>_ENABLED` | — | Boot-seed cadence/enable, per job, defaults in `application.conf`. Two groups: the global sweeps `MATCHREF` and `CLUBDATA`, seeded once; and `HISTORY` and `MEMBERSHIP`, seeded once **per managed club**. Seed-only: applied on a fresh DB; once the row exists, edit it via `ccas schedule` instead |
+| `SCHEDULER_<JOB>_INTERVAL_HOURS` / `SCHEDULER_<JOB>_ENABLED` | — | Boot-seed cadence/enable, per job, defaults in `application.conf`. Two groups: the global sweeps `MATCHREF` and `CLUBDATA`, seeded once; and `HISTORY` and `MEMBERSHIP`, seeded once **per managed club**. Seed-only: at every boot, a schedule of that kind that does not exist yet (for each managed club, in the second group) is created with these values, and one that exists keeps its own. So a seeded schedule removed with `ccas schedule remove` returns at the next boot; to stop one, disable it (`PUT /api/schedules/:id` with `{"enabled": false}`) |
 | `DB_POOL_MAX` / `DB_POOL_MIN_IDLE` | 20 / 2 | HikariCP pool sizing (set `MIN_IDLE=0` for Neon scale-to-zero) |
 | `DB_POOL_CONNECTION_TIMEOUT` / `DB_POOL_IDLE_TIMEOUT` / `DB_POOL_MAX_LIFETIME` / `DB_POOL_KEEPALIVE_TIME` | 30 000 / 600 000 / 1 800 000 / 120 000 ms | HikariCP timeouts |
 | `CHESS_COM_API_COOLDOWN_SECONDS` | 15 | Backoff cooldown after rate limiting (Cloudflare has its own, `CHESS_COM_API_CF_COOLDOWN_SECONDS`) |
@@ -340,11 +340,14 @@ PATH=/opt/homebrew/bin:/usr/bin:/bin
 0 4 * * 0 /path/to/ccas/scripts/backup-neon.sh >> ~/.local/share/ccas/backups/backup.log 2>&1
 ```
 
-A weekly cadence is one Neon compute wake per week — negligible against the 192 active-hr/mo free-tier budget. Restore a dump with `pg_restore` (use a version **≥** the `pg_dump` that wrote the file — a custom-format archive can't be read by an older `pg_restore`):
+A weekly cadence is one Neon compute wake per week — negligible against the 192 active-hr/mo free-tier budget. Restore a dump with `pg_restore` (use a version **≥** the `pg_dump` that wrote the file — a custom-format archive can't be read by an older `pg_restore`), as the role the app connects with. Restored as anyone else, the objects belong to that user, and the app fails on them with permission errors. Into a fresh local database:
 
 ```bash
-pg_restore --no-owner --no-privileges -d <target-conn> ccas-<stamp>.dump
+createdb -O ccas <db>
+pg_restore --no-owner --no-privileges --role=ccas -d <db> ccas-<stamp>.dump   # errors about pg_stat_statements are harmless
 ```
+
+`--role` needs a superuser or a member of `ccas`. Into any other database, connect as the app's role instead and drop `--role`: `pg_restore --no-owner --no-privileges -d <conn-as-app-role> ccas-<stamp>.dump`.
 
 ## Project Structure
 
@@ -375,9 +378,13 @@ CREATE EXTENSION IF NOT EXISTS btree_gist;
 
 **A run hangs with no progress.** Read the client's progress bar first — it prints `API: active/currentMax`, and `active` is only above zero while a fiber holds an HTTP slot. A hang showing **`API: 0/N`** therefore means nothing is in flight over HTTP, so the stuck fiber is in a blocking JDBC call; `API: N/N` stuck at N ≥ 1 points at an HTTP read instead. The JDBC case was the symptom of pgjdbc's `socketTimeout` defaulting to infinite (a silently-dropped connection parks in `socket.read()` forever); that is now bounded by `DB_SOCKET_TIMEOUT_SECONDS` / `DB_CONNECT_TIMEOUT_SECONDS` / `DB_TCP_KEEP_ALIVE`, so raise those before suspecting application code.
 
+**A scheduled job fires late, or not at all.** The scheduler polls every `SCHEDULER_POLL_MINUTES` of *awake* time: its timer stops while the machine sleeps, so on a laptop a due job waits until the machine has been awake that long. On a Mac, `pmset -g log` shows the sleeps, and `caffeinate -i -w <server pid>` keeps the machine from idle-sleeping while the server runs (closing a laptop's lid still sleeps it). A server suspended with Ctrl-Z runs nothing until it is resumed; `ps -o stat= -p <pid>` starts with `T`.
+
+The first poll runs at boot, and fires every schedule that came due while the server was down: an interval schedule past its interval, a cron schedule set to catch up, and one set to skip whose boundary passed only shortly before boot. To hold one back, disable it before the restart: `PUT /api/schedules/:id` with `{"enabled": false}` while the server runs, or `UPDATE job_schedule SET enabled = false WHERE id = …` once it is down. That postpones the run rather than skipping it: once re-enabled, the schedule is still overdue and fires at the next poll. The CLI cannot disable a schedule, and the `SCHEDULER_*_ENABLED` settings apply only when a schedule is seeded.
+
 **Any build fails with `Unable to locate a Java Runtime`.** Check `java -version` before suspecting anything else. This has happened via a stale SDKMAN candidate: an entry installed from Homebrew (`21.0.12-brew`) is a symlink into the Homebrew keg, so removing or upgrading that formula leaves the candidate dangling and every `java` invocation fails. `sdk env` in the repo root selects the pinned Temurin build; `sdk uninstall java <dangling-candidate>` clears the stale entry.
 
-**Phantom `X is not a member of ccas` compile errors.** IntelliJ's sbt shell and a terminal `sbt` share `target/`, and concurrent use corrupts the Zinc incremental-compilation state. Run one at a time; `sbt clean` recovers.
+**Phantom `X is not a member of ccas` compile errors, or tests failing with `error while loading …tasty` or `relation … does not exist`.** IntelliJ's sbt shell and a terminal `sbt` share `target/`, and concurrent use corrupts the Zinc incremental-compilation state; IntelliJ's own compile server and test runs share `target/` and the `ccas_test` database too. Run one at a time; `sbt clean` recovers. A failure that repeats with IntelliJ closed is real.
 
 **Tests are order-dependent or flaky.** `Test/parallelExecution := false` is set deliberately — several suites touch process-global state (stdout capture, config caches) or a shared schema. Within a suite, ZIO Test still runs tests in parallel, so a suite sharing mutable schema or filesystem state needs `@@ TestAspect.sequential`. Fix races at the root; do not paper over them with `@@ TestAspect.flaky`.
 

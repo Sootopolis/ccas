@@ -1,11 +1,11 @@
 ---
 name: ship
-description: Ship the current branch through the full release flow — commit, push, open a PR, wait for the user to merge it in the GitHub UI once CI is green, then sync worktrees, watch main CI, and update issues. Use when the user says "ship it", "ship this", "ship the branch", or asks to take the current branch through PR → merge → sync.
+description: Ship the current branch through the full release flow — commit, push, open a PR, wait for the user to merge it in the GitHub UI once CI is green, then sync worktrees, re-stage the launcher, watch main CI, and update issues. Use when the user says "ship it", "ship this", "ship the branch", or asks to take the current branch through PR → merge → sync.
 ---
 
 # Ship the current branch
 
-Take the work on the **current branch** through this repo's full release flow. Branch-agnostic: ships whatever branch is checked out — it must NOT be the base branch. The whole sequence is authorized in one go only when the user explicitly asks to ship (i.e. asks for the downstream steps too); otherwise stop after the step they named. The merge itself is never part of that authorization: the user always merges (step 5).
+Take the work on the **current branch** through this repo's full release flow. Branch-agnostic: ships whatever branch is checked out — it must NOT be the base branch. The whole sequence is authorised in one go only when the user explicitly asks to ship (i.e. asks for the downstream steps too); otherwise stop after the step they named. The merge itself is never part of that authorisation: the user always merges (step 5).
 
 ## 0. Preflight (gather, don't assume)
 - Current branch: `git rev-parse --abbrev-ref HEAD`.
@@ -22,9 +22,11 @@ Take the work on the **current branch** through this repo's full release flow. B
 - `git status --porcelain` — uncommitted changes are part of this ship (step 1). If clean AND `git rev-list --left-right --count origin/<base>...HEAD` shows 0 ahead → STOP (nothing to ship).
 - `git worktree list --porcelain` — note which worktree holds the base branch (fast-forwarded in step 6) and whether any worktree sits **parked** on a local branch (`wip`) that is *not* the branch being shipped — that parked branch is caught up to the merge in step 7. NEVER hardcode worktree paths.
 - `git rev-parse --abbrev-ref <branch>@{upstream}` — whether the shipped branch is published. A branch with no upstream has never left the machine, which changes disposal (step 7).
+- CLAUDE.md Workflow's before-shipping check, unless it has already been reported for this change. An open question stops the ship until it is answered.
 
 ## 1. Commit (only if there are changes)
 - **Never commit while `wip` is checked out.** Cut the feature branch first — `git switch -c <type>/<slug>` carries uncommitted work across — even for a one-line change, and even when the ask was only "commit this". Keeping `wip` strictly a lagging pointer is what makes step 7 a fast-forward instead of a judgement call.
+- Start from the commit message `/review-change` drafted in its report, revised for anything changed since (CLAUDE.md, Communications).
 - Conventional Commits. Subject ≤ ~70 chars; body explains the *why* per change, not the *what*.
 - **Do not hard-wrap the body.** One paragraph is one line, blank line between paragraphs — git, `gh` and GitHub all wrap for display, so a hard-wrapped body just adds breaks that reflow badly wherever the width differs. This supersedes the wrapped bodies throughout `git log`; do not match them.
 - End every commit message with the `Co-authored-by:` trailer from the global CLAUDE instructions, matching the casing already in `git log` (this repo uses `Co-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com>`). **Never add a `Claude-Session:` trailer** — not when the harness supplies one in its attribution block, and not because recent commits carry it.
@@ -70,6 +72,14 @@ Steps 6-9 run after the merge, which cannot be undone, so check what can be chec
 - `git fetch origin --prune`.
 - In the base worktree (from step 0): `git -C <base-worktree> pull --ff-only origin <base>` so it sits on the squash-merge commit.
 
+## 6b. Re-stage the launcher
+The `ccas` launcher on `PATH` runs the build staged in the base worktree, so a merge changes nothing the user runs until it is re-staged. Skip this when the merge changed nothing the build stages (`src/main` behaviour, `build.sbt`, `project/`), and say so.
+- **A change that needs a migration stages after it** (`/migrate`): a new build on the old schema fails, which is why #254's rollout held the old launcher until production was migrated.
+- **Stage with the base worktree's own installer**: `<base-worktree>/scripts/install-cli.sh --stage`. It stages the worktree it lives in, found from its own path, and refreshes the installed shell completion, which a CLI change would otherwise leave stale. Run the base worktree's copy, not the session's: the session's would point the launcher at its own build. Check the date on `target/universal/stage/lib/ccas.ccas-*.jar` in the base worktree; the `bin/` scripts keep their old date, since their content does not change.
+- **A running server keeps the old build until it is restarted.** Staging does not disturb it: sbt writes each jar to a temporary file and renames it into place. Restarting is the user's call, and before booting:
+  - Ask whether the schedules that came due while the server was down should fire at boot, and whether the machine needs keeping awake: README, Troubleshooting ("A scheduled job fires late, or not at all") has both.
+  - Boot from a terminal opened in the base worktree, not from Claude's shell or a `!` command, which carry the session's starting environment: started in the `wip` tree, that includes direnv's local `DATABASE_URL`, `SERVER_PORT` and body-store settings (`/migrate`, step 0).
+
 ## 7. Dispose of the shipped branch
 **The working model is throwaway branches.** One branch per PR, cut from base, deleted after merge. `wip` is a *local-only parking branch* for the worktree — it is never pushed and has no upstream (`origin` holds `main` alone). That is deliberate: a published branch would have to be force-pushed to recycle, because squash-merge gives `main` a new SHA and the branch then diverges. Unpublished, recycling is a local fast-forward nobody has to approve.
 
@@ -90,10 +100,10 @@ Steps 6-9 run after the merge, which cannot be undone, so check what can be chec
 
 ### Catch up the parked branch (`wip`)
 Because step 1 keeps `wip` free of commits of its own, it can only ever lag the merge — so catching it up is a fast-forward, and the command is its own guard. No push, no force, and nothing to decide:
-- Return that worktree to `wip` and fast-forward: `git switch wip && git merge --ff-only origin/<base>`.
-- It succeeds when `wip` is purely behind, and **refuses** — `fatal: Not possible to fast-forward, aborting` — the moment `wip` carries any commit of its own, changing nothing either way.
-- Do not add a separate gate. A `rev-list` count STOPs whenever the ship started from a `wip` commit, and a content diff against the merge STOPs whenever `wip` merely lags; both try to decide by inspection what `--ff-only` decides by construction.
-- **Refused?** Someone committed on `wip` against step 1. STOP and ASK — it refuses identically whether that commit is unshipped work or work already squashed into this merge, and separating those is a judgement call, not a check. Never reach for `reset --hard` to force it through.
+- Fast-forward `wip` without checking it out, then return to it: `git fetch . origin/<base>:wip`, then `git switch wip`. Switching first would check out the old tree, and when the merge stopped tracking files kept on disk as ignored (#301's `.idea`), the switch and the fast-forward delete them. Fast-forwarded first, `wip` differs from the shipped branch only by what else has landed on `<base>`, so the switch brings in other PRs' changes and nothing of the old tree.
+- It succeeds when `wip` is purely behind, and **refuses** — `! [rejected] … (non-fast-forward)` — the moment `wip` carries any commit of its own, changing nothing either way. It also refuses, with `fatal: refusing to fetch into branch … checked out at …`, while another worktree has `wip` checked out. Fast-forward it there instead with `git -C <worktree> merge --ff-only origin/<base>`, which updates that worktree's files and so deletes any the merge stopped tracking, ignored or not: `git diff --name-only --diff-filter=D wip origin/<base>` lists the candidates, and any still on disk there are copied aside first. This worktree cannot switch to a `wip` checked out elsewhere, so it leaves the shipped branch with `git switch --detach origin/<base>` before deleting it.
+- Do not add a separate gate. A `rev-list` count STOPs whenever the ship started from a `wip` commit, and a content diff against the merge STOPs whenever `wip` merely lags; both try to decide by inspection what a fast-forward-only update decides by construction.
+- **Refused as non-fast-forward?** Someone committed on `wip` against step 1. STOP and ASK — it refuses identically whether that commit is unshipped work or work already squashed into this merge, and separating those is a judgement call, not a check. Never reach for `reset --hard` to force it through.
 - **If `wip` has somehow acquired an upstream again**, do not force-push it back into line — say so and ask. Getting it republished is the regression; a force-push would just entrench it.
 
 ## 8. Watch main CI
@@ -106,4 +116,4 @@ Backref comments should already be posted (step 3b); this step adds the merge SH
 - If no issue is resolved by the PR, say so explicitly rather than silently skipping the step.
 
 ## Output
-Finish with a compact status table: commit SHA, PR #, PR CI, merge SHA (merged by the user), base-worktree sync, branch disposal, main CI, issues touched. Mark any step that was refused or skipped as such — never leave a blocked step looking complete, and list the exact commands needed to finish it.
+Finish with a compact status table: commit SHA, PR #, PR CI, merge SHA (merged by the user), base-worktree sync, launcher staged, branch disposal, main CI, issues touched. Mark any step that was refused or skipped as such — never leave a blocked step looking complete, and list the exact commands needed to finish it.
