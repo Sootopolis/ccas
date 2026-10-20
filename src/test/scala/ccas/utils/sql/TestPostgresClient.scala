@@ -14,12 +14,14 @@ object TestPostgresClient extends ZIOSpecDefault {
       testSchemaOverride,
       testPoolClosesOnScopeExit,
       testInvalidSchemaRejected,
-      testLiveBuildsWithoutSchema
+      testLiveBuildsWithoutSchema,
+      testConfiguredAddressIsLiveAddress
     ).provideShared(
       FreshSchemaLayer("test_dsl")
     ),
     testResolveSchema,
     testNormalizeJdbcUrl,
+    testDatabaseAddress,
     testExportedDatabaseUrlIgnored
   ) @@ TestAspect.sequential
 
@@ -185,6 +187,69 @@ object TestPostgresClient extends ZIOSpecDefault {
       assertTrue(resolved.map(_.jdbcUrl).contains("jdbc:postgresql://host/db?sslmode=require"))
     }
   )
+
+  // Through `normalizeJdbcUrl` first, as `live` does: the address is read from the URL Hikari is handed, never the raw
+  // config value. A rendered address is printed and logged, so no credential may survive into it.
+  private def addressOf(raw: String): Option[DatabaseAddress] =
+    PostgresClient.normalizeJdbcUrl(raw).toOption.flatMap(resolved => PostgresClient.databaseAddress(resolved.jdbcUrl))
+
+  private def testDatabaseAddress = suite("databaseAddress")(
+    test("a libpq URI's address is host, port and database, without its userinfo credentials") {
+      val rendered = addressOf("postgresql://alice:hunter2@ep-x.neon.tech:5432/neondb?sslmode=require").map(_.render)
+      assertTrue(
+        rendered.contains("ep-x.neon.tech:5432/neondb"),
+        !rendered.exists(_.contains("alice")),
+        !rendered.exists(_.contains("hunter2"))
+      )
+    },
+    test("a JDBC URL's address carries none of its query parameters, credentials included") {
+      val rendered =
+        addressOf("jdbc:postgresql://localhost:5432/ccas?user=alice&password=hunter2&sslmode=disable").map(_.render)
+      assertTrue(rendered.contains("localhost:5432/ccas"))
+    },
+    test("the address shows a port only where the URL gives one") {
+      assertTrue(addressOf("postgresql://u:p@ep-x.neon.tech/neondb").map(_.render).contains("ep-x.neon.tech/neondb"))
+    },
+    test("a host-less JDBC URL has no address, even with credentials in its userinfo") {
+      // The one form `normalizeJdbcUrl` passes through untouched, so its userinfo is still in the URL Hikari gets. A
+      // password of `12/34` would otherwise read as host `alice`, port 12.
+      assertTrue(
+        addressOf("jdbc:postgresql:///ccas").isEmpty,
+        addressOf("jdbc:postgresql://alice:hunter2@/ccas").isEmpty,
+        addressOf("jdbc:postgresql://alice:12/34@/ccas").isEmpty
+      )
+    },
+    test("a non-Postgres JDBC URL has no address") {
+      assertTrue(addressOf("jdbc:h2:mem:test").isEmpty, addressOf("jdbc:mysql://host:3306/db").isEmpty)
+    },
+    test("a URL whose host part is not a host has no address, rather than a fragment of a password") {
+      // An unescaped '?' in a password ends the authority early, leaving `alice:hun` where the host should be.
+      assertTrue(addressOf("postgresql://alice:hun?ter2@host/db").isEmpty)
+    },
+    test("localhost, 127.x and ::1 are loopback; a remote or multi-host address is not") {
+      def loopback(hostPort: String) = DatabaseAddress(hostPort, "/ccas").isLoopback
+      assertTrue(
+        loopback("localhost:5432"),
+        loopback("LOCALHOST"),
+        loopback("127.0.0.1"),
+        loopback("127.1.2.3:5433"),
+        loopback("[::1]:5432"),
+        loopback("[0:0:0:0:0:0:0:1]"),
+        !loopback("ep-x.neon.tech"),
+        !loopback("127.example.com"),
+        !loopback("192.168.1.10:5432"),
+        !loopback("localhost:5432,ep-x.neon.tech:5432")
+      )
+    }
+  )
+
+  // The premise of the boot prompt: what it resolves before the pool exists is where the pool then connects.
+  private def testConfiguredAddressIsLiveAddress = test("the configured address is the one a live client connects to") {
+    for {
+      configured <- PostgresClient.configuredAddress
+      live       <- ZIO.serviceWith[PostgresClient](_.addressOption)
+    } yield assertTrue(configured.isDefined, configured == live, configured.exists(_.render.endsWith("/ccas_test")))
+  }
 
   private def testIsHikariDataSource = test("underlying DataSource is HikariDataSource") {
     for {

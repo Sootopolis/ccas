@@ -5,9 +5,12 @@ import java.nio.file.{Files, Path}
 import zio.{durationInt, ExitCode, ZIO}
 import zio.test.{assertTrue, Spec, TestConsole, ZIOSpecDefault}
 
+import ccas.cli.serve.HealthProbe.Readiness
+
 /** Deterministic, DB-free unit tests for the `ccas serve --detach` / `ccas stop` lifecycle. The pure decision logic
   * ([[Detach.reconstruct]], [[Detach.resolveDeadline]], [[Detach.timeoutMessage]], [[Detach.diedMessage]],
-  * [[PidFile.parse]], [[PidFile.alreadyRunning]]) is tested directly; the effectful pid-file
+  * [[Detach.startedMessage]], [[PidFile.parse]], [[PidFile.alreadyRunning]], [[Status.describe]],
+  * [[HealthProbe.classify]]) is tested directly; the effectful pid-file
   * paths are exercised against an explicit temp path (the `XdgPaths`-backed default reads `System.getenv`, which can't
   * be set in-process). The full spawn/health-poll round-trip is covered by manual e2e, not here.
   */
@@ -188,29 +191,139 @@ object TestServeLifecycle extends ZIOSpecDefault {
       }
     ),
     suite("Status.describe")(
-      test("ready with a live pid -> success, shows pid + db ok") {
-        val (msg, code) = Status.describe(ready = true, up = true, livePidOption = Some(48213L), stalePid = false, port = 8080)
-        assertTrue(code == ExitCode.success, msg == "running (ready)  pid 48213  127.0.0.1:8080  db ok")
+      test("ready with a live pid -> success, shows pid and the database the server names") {
+        val (msg, code) = Status.describe(
+          readiness = Readiness.Ready(Some("localhost:5432/ccas")),
+          up = true,
+          livePidOption = Some(48213L),
+          stalePid = false,
+          port = 8080
+        )
+        assertTrue(
+          code == ExitCode.success,
+          msg == "running (ready)  pid 48213  127.0.0.1:8080  db ok (localhost:5432/ccas)"
+        )
       },
       test("ready with no pid file (foreground server) -> success, no pid shown") {
-        val (msg, code) = Status.describe(ready = true, up = true, livePidOption = None, stalePid = false, port = 9000)
-        assertTrue(code == ExitCode.success, msg == "running (ready)  127.0.0.1:9000  db ok")
+        val (msg, code) = Status.describe(
+          readiness = Readiness.Ready(Some("localhost:5432/ccas")),
+          up = true,
+          livePidOption = None,
+          stalePid = false,
+          port = 9000
+        )
+        assertTrue(code == ExitCode.success, msg == "running (ready)  127.0.0.1:9000  db ok (localhost:5432/ccas)")
       },
-      test("up but db unavailable -> non-zero") {
-        val (msg, code) = Status.describe(ready = false, up = true, livePidOption = Some(7L), stalePid = false, port = 8080)
+      test("a server that names no database says so rather than printing a bare db ok") {
+        val (msg, code) = Status.describe(
+          readiness = Readiness.Ready(None),
+          up = true,
+          livePidOption = None,
+          stalePid = false,
+          port = 9000
+        )
+        assertTrue(code == ExitCode.success, msg == "running (ready)  127.0.0.1:9000  db ok (database not reported)")
+      },
+      test("db unavailable names the database the server could not reach") {
+        val (msg, code) = Status.describe(
+          readiness = Readiness.Unready(Some("ep-x.neon.tech/neondb")),
+          up = true,
+          livePidOption = Some(7L),
+          stalePid = false,
+          port = 8080
+        )
+        assertTrue(
+          code == ExitCode(1),
+          msg == "running (db unavailable)  pid 7  127.0.0.1:8080  db down (ep-x.neon.tech/neondb)"
+        )
+      },
+      test("readiness unanswered but /health up -> db unavailable, non-zero") {
+        val (msg, code) = Status.describe(
+          readiness = Readiness.NoAnswer,
+          up = true,
+          livePidOption = Some(7L),
+          stalePid = false,
+          port = 8080
+        )
         assertTrue(code == ExitCode(1), msg == "running (db unavailable)  pid 7  127.0.0.1:8080")
       },
       test("not responding but pid alive -> starting/unhealthy, non-zero") {
-        val (msg, code) = Status.describe(ready = false, up = false, livePidOption = Some(7L), stalePid = false, port = 8080)
+        val (msg, code) = Status.describe(
+          readiness = Readiness.NoAnswer,
+          up = false,
+          livePidOption = Some(7L),
+          stalePid = false,
+          port = 8080
+        )
         assertTrue(code == ExitCode(1), msg == "starting or unhealthy (pid 7, no response on :8080)")
       },
       test("not responding, no pid -> not running, non-zero") {
-        val (msg, code) = Status.describe(ready = false, up = false, livePidOption = None, stalePid = false, port = 8080)
+        val (msg, code) = Status.describe(
+          readiness = Readiness.NoAnswer,
+          up = false,
+          livePidOption = None,
+          stalePid = false,
+          port = 8080
+        )
         assertTrue(code == ExitCode(1), msg == "not running")
       },
       test("not responding, stale pid file -> not running (stale pid file), non-zero") {
-        val (msg, code) = Status.describe(ready = false, up = false, livePidOption = None, stalePid = true, port = 8080)
+        val (msg, code) = Status.describe(
+          readiness = Readiness.NoAnswer,
+          up = false,
+          livePidOption = None,
+          stalePid = true,
+          port = 8080
+        )
         assertTrue(code == ExitCode(1), msg == "not running (stale pid file)")
+      }
+    ),
+    suite("HealthProbe.classify")(
+      test("a 200 naming the database reads as ready with that database") {
+        assertTrue(
+          HealthProbe.classify(200, """{"database":"localhost:5432/ccas"}""") ==
+            Readiness.Ready(Some("localhost:5432/ccas"))
+        )
+      },
+      test("a 503 naming the database reads as unready with that database") {
+        assertTrue(
+          HealthProbe.classify(503, """{"database":"ep-x.neon.tech/neondb"}""") ==
+            Readiness.Unready(Some("ep-x.neon.tech/neondb"))
+        )
+      },
+      test("an empty 200 body, as an older server sends, reads as ready with no database named") {
+        assertTrue(HealthProbe.classify(200, "") == Readiness.Ready(None))
+      },
+      test("any other status reads as no answer") {
+        assertTrue(
+          HealthProbe.classify(500, """{"database":"localhost:5432/ccas"}""") == Readiness.NoAnswer,
+          HealthProbe.classify(404, "") == Readiness.NoAnswer
+        )
+      }
+    ),
+    suite("Detach.startedMessage")(
+      test("the started line names the database the server reports") {
+        val pidPath = Path.of("/state/ccas.pid")
+        val logFile = Path.of("/state/server.log")
+        val started = Detach.startedMessage(
+          pidOption = Some(4821L),
+          databaseOption = Some("localhost:5432/ccas"),
+          pidPath = pidPath,
+          logFile = logFile
+        )
+        val pidUnread = Detach.startedMessage(
+          pidOption = None,
+          databaseOption = Some("localhost:5432/ccas"),
+          pidPath = pidPath,
+          logFile = logFile
+        )
+        val unnamed =
+          Detach.startedMessage(pidOption = Some(4821L), databaseOption = None, pidPath = pidPath, logFile = logFile)
+        assertTrue(
+          started == "ccas server started, pid=4821, db localhost:5432/ccas (logs: /state/server.log)",
+          pidUnread.contains("db localhost:5432/ccas"),
+          unnamed.contains("database not reported")
+        )
       }
     )
   )

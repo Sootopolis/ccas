@@ -3,13 +3,13 @@ package ccas.cli
 import java.nio.file.Paths
 
 import zio.cli.{CliApp, CliError, HelpDoc}
-import zio.{Console, ExitCode, Scope, UIO, URIO, ZIO, ZIOAppArgs, ZIOAppDefault}
+import zio.{Cause, Console, ExitCode, Scope, UIO, URIO, ZIO, ZIOAppArgs, ZIOAppDefault}
 
 import ccas.cli.config.CliConfig
 import ccas.server.config.ServerEnvOverlay
 import ccas.cli.serve.{Detach, PidFile, Status, Stop}
 import ccas.info.BuildInfo
-import ccas.server.CcasServer
+import ccas.server.{BootGuard, CcasServer}
 
 /** Single entry point for the `ccas` binary.
   *
@@ -117,12 +117,19 @@ object Main extends ZIOAppDefault {
         // logs nothing itself, so map via foldCauseZIO and log the cause — else an unexpected crash exits with no diagnostic.
         case None =>
           ZIO
-            .scoped(CcasServer.run)
+            .scoped(CcasServer.serve)
             .foldCauseZIO(
-              cause => ZIO.logErrorCause("ccas server exited abnormally", cause).as(ExitCode.failure),
+              cause => serverExit(cause),
               _ => ZIO.succeed(ExitCode.success)
             )
       }
+    }
+
+  // A declined boot prompt is the operator's answer, already acknowledged on the terminal, not a crash to log.
+  private def serverExit(cause: Cause[Any]): UIO[ExitCode] =
+    cause.failureOption match {
+      case Some(BootGuard.Declined) => ZIO.succeed(ExitCode(1))
+      case _                        => ZIO.logErrorCause("ccas server exited abnormally", cause).as(ExitCode.failure)
     }
 
   // Mandatory server config resolves from the process env OR the ccas.env overlay (applied as system properties by

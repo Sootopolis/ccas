@@ -26,6 +26,7 @@ import ccas.analysis.tables.subtypes.RecruitmentRunId
 import ccas.api.misc.enums.PlayerStatusCategory
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId, PlayerId, Username}
 import ccas.server.jobs.*
+import ccas.server.routes.HealthRoutes.ReadyResponse
 import ccas.server.routes.JobRoutes.{ClubJobResult, ConfirmResult, InvitedUsernames, JobResult}
 import ccas.server.scheduler.{JobSchedule, ScheduleSeed}
 import ccas.server.ServerTables
@@ -158,7 +159,8 @@ object TestRoutes extends ZIOSpecDefault {
 
   private def suiteHealth = suite("HealthRoutes")(
     testHealthReturns200,
-    testHealthReadyReturns200
+    testHealthReadyReturns200,
+    testHealthReadyNamesUnreachableDatabase
   )
 
   private def testHealthReturns200 = test("GET /health returns 200") {
@@ -167,11 +169,30 @@ object TestRoutes extends ZIOSpecDefault {
     } yield assertTrue(response.status == Status.Ok)
   }
 
-  private def testHealthReadyReturns200 = test("GET /health/ready returns 200 when DB is up") {
+  private def testHealthReadyReturns200 = test("GET /health/ready returns 200 and names the database when DB is up") {
     for {
-      response <- HealthRoutes.routes.runZIO(jsonRequest(Method.GET, "/health/ready"))
-    } yield assertTrue(response.status == Status.Ok)
+      addressOption <- ZIO.serviceWith[PostgresClient](_.addressOption)
+      response      <- HealthRoutes.routes.runZIO(jsonRequest(Method.GET, "/health/ready"))
+      body          <- response.body.asString
+    } yield assertTrue(
+      response.status == Status.Ok,
+      addressOption.isDefined,
+      body.fromJson[ReadyResponse].toOption.flatMap(_.databaseOption) == addressOption.map(_.render)
+    )
   }
+
+  private def testHealthReadyNamesUnreachableDatabase =
+    test("GET /health/ready returns 503 naming the unreachable database, without its credentials") {
+      for {
+        response <- HealthRoutes.routes.runZIO(jsonRequest(Method.GET, "/health/ready"))
+        body     <- response.body.asString
+      } yield assertTrue(
+        response.status == Status.ServiceUnavailable,
+        body.fromJson[ReadyResponse].toOption.flatMap(_.databaseOption).contains("127.0.0.1:1/nowhere"),
+        !body.contains("alice"),
+        !body.contains("hunter2")
+      )
+    }.provideSomeLayer[Scope](PostgresClient.live(prefix = "databaseUnreachable"))
 
   // ==========================================================================
   // Suite: JobRoutes

@@ -12,7 +12,21 @@ import javax.sql.DataSource
 import com.augustnagro.magnum.{DbCon, DbTx, Transactor}
 import com.typesafe.config.{Config, ConfigFactory}
 import com.zaxxer.hikari.{HikariConfig, HikariDataSource}
-import zio.{durationLong, Duration, FiberRef, IO, RIO, Schedule, Scope, TaskLayer, Unsafe, ZEnvironment, ZIO, ZLayer}
+import zio.{
+  durationLong,
+  Duration,
+  FiberRef,
+  IO,
+  RIO,
+  Schedule,
+  Scope,
+  Task,
+  TaskLayer,
+  Unsafe,
+  ZEnvironment,
+  ZIO,
+  ZLayer
+}
 
 /** Database client for PostgreSQL with connection management and transient-error retry.
   *
@@ -26,9 +40,12 @@ import zio.{durationLong, Duration, FiberRef, IO, RIO, Schedule, Scope, TaskLaye
   *
   * Constructed via the `PostgresClient.live` ZLayer which reads configuration from `application.conf` under a
   * configurable prefix (default `"database"`).
+  *
+  * @param addressOption where the pool connects, for naming it to an operator; see [[PostgresClient.databaseAddress]]
   */
 final class PostgresClient private (
   private[sql] val transactor: Transactor,
+  val addressOption: Option[DatabaseAddress],
   private val retryBaseDelay: Duration,
   private val retryMaxRetries: Int
 ) {
@@ -75,7 +92,12 @@ final class PostgresClient private (
         _    <- ZIO.attemptBlocking(conn.setAutoCommit(false)).refineToOrDie[SQLException]
         proxy    = transactionProxy(conn)
         scopedXa = transactor.copy(dataSource = SingleConnectionDataSource(proxy))
-        txClient = new PostgresClient(scopedXa, retryBaseDelay, retryMaxRetries = 0)
+        txClient = new PostgresClient(
+          transactor = scopedXa,
+          addressOption = addressOption,
+          retryBaseDelay = retryBaseDelay,
+          retryMaxRetries = 0
+        )
         result <- insideTransaction.locally(true)(f).provideSomeLayer[R](ZLayer.succeed(txClient)).foldCauseZIO(
           failure = cause => ZIO.attemptBlocking(conn.rollback()).ignore *> ZIO.failCause(cause),
           success = a => ZIO.attemptBlocking(conn.commit()).refineToOrDie[SQLException].as(a)
@@ -270,35 +292,75 @@ object PostgresClient {
   private def decodeQuery(s: String): String =
     URLDecoder.decode(s, StandardCharsets.UTF_8)
 
+  /** The JDBC URL and credentials a pool configured under `config` connects with: `url` when set, else the
+    * `dataSource` keys. Throws `ConfigException` on a missing `dataSource` key, as [[live]] always has.
+    */
+  private[ccas] def resolveConnection(config: Config): Either[String, ResolvedJdbcUrl] =
+    if (config.hasPath("url")) { normalizeJdbcUrl(config.getString("url")) }
+    else {
+      val dsConfig = config.getConfig("dataSource")
+      val server   = s"${dsConfig.getString("serverName")}:${dsConfig.getInt("portNumber")}"
+      Right(
+        ResolvedJdbcUrl(
+          jdbcUrl = s"jdbc:postgresql://$server/${dsConfig.getString("databaseName")}",
+          user = Some(dsConfig.getString("user")),
+          password = Some(dsConfig.getString("password"))
+        )
+      )
+    }
+
+  // One host, or a bracketed IPv6 literal, with an optional numeric port. Anything else in that position is a URL this
+  // cannot read, and showing it might show part of a password that was never percent-encoded. One such password still
+  // passes: `u:1234?x@host` has an unescaped `?`, which `normalizeJdbcUrl` has split as host `u`, port `1234` (#327).
+  private val HostPort = """(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9._-]+)(:\d+)?""".r
+
+  /** The address of a resolved `jdbc:postgresql://` URL, without its query string or any userinfo. `None` for a
+    * non-Postgres or host-less URL, or one whose host part is not a host.
+    */
+  private[ccas] def databaseAddress(jdbcUrl: String): Option[DatabaseAddress] = {
+    // Parsed by hand, not by pgjdbc's `Driver.parseURL`: given a URL without a password, as every resolved one is, that
+    // reads `~/.pgpass` and `pg_service.conf` and puts the password it finds there into its result.
+    val prefix = "jdbc:postgresql://"
+    Option.when(jdbcUrl.toLowerCase.startsWith(prefix))(jdbcUrl.drop(prefix.length)).flatMap { rest =>
+      // Userinfo ends at the last '@', as in `rewrite`: a password may hold an unescaped '@' or '/'.
+      val beforeQuery      = rest.takeWhile(_ != '?')
+      val (hostPort, path) = beforeQuery.drop(beforeQuery.lastIndexOf('@') + 1).span(_ != '/')
+      Option.when(hostPort.nonEmpty && hostPort.split(',').forall(HostPort.matches))(DatabaseAddress(hostPort, path))
+    }
+  }
+
+  private val DefaultPrefix = "database"
+
+  /** The address [[live]] connects to under the default config, resolved without building a pool: for asking before
+    * a boot whether it is the right database. Fails where `live` would before connecting, in both of the ways
+    * [[resolveConnection]] can: a `database.url` that doesn't parse is its `Left`, and config Typesafe Config can't
+    * read throws, such as the `dataSource` keys that are missing when neither `DATABASE_URL` nor `DB_*` is set.
+    */
+  def configuredAddress: Task[Option[DatabaseAddress]] =
+    for {
+      resolution <- ZIO.attempt(resolveConnection(ConfigFactory.load().getConfig(DefaultPrefix)))
+      resolved   <- ZIO.fromEither(resolution).mapError(new IllegalArgumentException(_))
+    } yield databaseAddress(resolved.jdbcUrl)
+
   def live(
-    prefix: String = "database",
+    prefix: String = DefaultPrefix,
     schema: Option[String] = None,
     onInit: RIO[PostgresClient, Unit] = ZIO.unit
   ): TaskLayer[PostgresClient] =
     ZLayer.scoped {
       for {
-        (hikariConfig, baseDelay, maxRetries) <- ZIO.attemptBlocking {
+        (hikariConfig, addressOption, baseDelay, maxRetries) <- ZIO.attemptBlocking {
           val config       = ConfigFactory.load().getConfig(prefix)
           val hikariConfig = new HikariConfig()
 
-          if (config.hasPath("url")) {
-            // Accepts both the JDBC and libpq URL forms, and carries any embedded credentials separately so they never
-            // reach Hikari's `jdbcUrl` (which it echoes into driver-level failure messages). See `normalizeJdbcUrl`.
-            val resolved = normalizeJdbcUrl(config.getString("url")).fold(
-              msg => throw new IllegalArgumentException(msg),
-              identity
-            )
-            hikariConfig.setJdbcUrl(resolved.jdbcUrl)
-            resolved.user.foreach(hikariConfig.setUsername)
-            resolved.password.foreach(hikariConfig.setPassword)
-          } else {
-            val dsConfig = config.getConfig("dataSource")
-            hikariConfig.setJdbcUrl(
-              s"jdbc:postgresql://${dsConfig.getString("serverName")}:${dsConfig.getInt("portNumber")}/${dsConfig.getString("databaseName")}"
-            )
-            hikariConfig.setUsername(dsConfig.getString("user"))
-            hikariConfig.setPassword(dsConfig.getString("password"))
-            resolveSchema(schema, dsConfig).foreach(hikariConfig.setSchema)
+          // Accepts both the JDBC and libpq URL forms, and carries any embedded credentials separately so they never
+          // reach Hikari's `jdbcUrl` (which it echoes into driver-level failure messages). See `normalizeJdbcUrl`.
+          val resolved = resolveConnection(config).fold(msg => throw new IllegalArgumentException(msg), identity)
+          hikariConfig.setJdbcUrl(resolved.jdbcUrl)
+          resolved.user.foreach(hikariConfig.setUsername)
+          resolved.password.foreach(hikariConfig.setPassword)
+          if (!config.hasPath("url")) {
+            resolveSchema(schema, config.getConfig("dataSource")).foreach(hikariConfig.setSchema)
           }
 
           if (config.hasPath("pool")) {
@@ -334,10 +396,15 @@ object PostgresClient {
           val baseDelay  = if (config.hasPath("retry.baseDelayMs")) config.getLong("retry.baseDelayMs") else 100L
           val maxRetries = if (config.hasPath("retry.maxRetries")) config.getInt("retry.maxRetries") else 3
 
-          (hikariConfig, baseDelay, maxRetries)
+          (hikariConfig, databaseAddress(resolved.jdbcUrl), baseDelay, maxRetries)
         }
         hikariDs <- ZIO.fromAutoCloseable(ZIO.attemptBlocking(new HikariDataSource(hikariConfig)))
-        client = new PostgresClient(Transactor(hikariDs), baseDelay.millis, maxRetries)
+        client = new PostgresClient(
+          transactor = Transactor(hikariDs),
+          addressOption = addressOption,
+          retryBaseDelay = baseDelay.millis,
+          retryMaxRetries = maxRetries
+        )
         _ <- onInit.provideEnvironment(ZEnvironment(client))
       } yield client
     }
@@ -351,7 +418,12 @@ object PostgresClient {
     retryBaseDelay: Duration = 100.millis,
     retryMaxRetries: Int = 3
   ): PostgresClient =
-    new PostgresClient(Transactor(dataSource), retryBaseDelay, retryMaxRetries)
+    new PostgresClient(
+      transactor = Transactor(dataSource),
+      addressOption = None,
+      retryBaseDelay = retryBaseDelay,
+      retryMaxRetries = retryMaxRetries
+    )
 
   // --- Exception unwrapping ---
 
