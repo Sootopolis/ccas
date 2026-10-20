@@ -115,12 +115,14 @@ The server URL resolves in order: a global `--server <url>` flag, else `api_url`
 `ccas server up` runs in the foreground (logs to stdout, Ctrl-C to stop). To background it:
 
 ```bash
-ccas server up --detach      # (or -d) spawns a detached server, waits for /health/ready, prints "started, pid=<n>"
-ccas server status           # "running (ready)  pid <n>  127.0.0.1:8080  db ok" (exit 0), else "not running" (exit 1)
+ccas server up --detach      # (or -d) spawns a detached server, waits for /health/ready, prints "started, pid=<n>, db <host>/<db>"
+ccas server status           # "running (ready)  pid <n>  127.0.0.1:8080  db ok (<host>/<db>)" (exit 0), else "not running" (exit 1)
 ccas server down             # reads the pid file, sends SIGTERM, waits for a clean shutdown
 ```
 
-`server status` probes the loopback `/health/ready` endpoint (so it also detects a foreground server, which writes no pid file) and augments that with the pid file; it exits 0 only when the server is up **and** the database is reachable.
+`server status` probes the loopback `/health/ready` endpoint (so it also detects a foreground server, which writes no pid file) and augments that with the pid file; it exits 0 only when the server is up **and** the database is reachable. The database it names is the one the server reports, not this shell's configuration.
+
+Every boot (`ccas server up`, detached or not, and `ccas-server`) asks `Boot against <host>/<db>? [y/N]` on the terminal unless the database's address is `localhost` or a loopback IP, because a boot writes to its database before it serves anything. Only the address is checked: a tunnel to a remote database through `localhost` never asks, and an address that can't be read from the configuration does. Redirecting the server's output doesn't skip the question, and a server started in the background from a shell (`ccas-server &`) stops at it until brought back with `fg`. With no terminal at all (systemd, cron) nothing asks.
 
 The detached server writes its pid to `${XDG_STATE_HOME:-~/.local/state}/ccas/ccas.pid` and its stdout/stderr to `<log_dir>/server.log` (`log_dir` from the [config file](#cli-config-file), default `~/.local/state/ccas/logs`). A second `ccas server up --detach` while one is running exits with `already running, pid=<n>`. It waits 30s for the server to report ready before giving up and stopping it — raise that with `--ready-timeout-seconds <n>` or the config file's `ready_timeout_seconds` when the database is slow to wake (a suspended serverless compute can take longer than the default). For a supervised/long-lived server (systemd, Docker, Render) run the foreground `ccas-server` binary instead.
 
@@ -168,7 +170,7 @@ Jobs can be submitted via the REST API or run on a schedule.
 
 ```
 GET  /health          200 (liveness)
-GET  /health/ready    200 | 503 (checks DB connectivity)
+GET  /health/ready    200 | 503 (checks DB connectivity); body {"database": "<host>[:port]/<db>"}, no credentials
 ```
 
 ### Jobs

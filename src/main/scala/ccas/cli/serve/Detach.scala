@@ -2,8 +2,6 @@ package ccas.cli.serve
 
 import java.io.File
 import java.lang.ProcessBuilder.Redirect
-import java.net.URI
-import java.net.http.{HttpClient, HttpRequest, HttpResponse}
 import java.nio.file.{Files, Path, Paths}
 import java.time.{Duration => JDuration}
 
@@ -11,6 +9,9 @@ import scala.jdk.CollectionConverters.*
 import scala.jdk.OptionConverters.*
 
 import zio.{Console, Duration, durationInt, ExitCode, UIO, ZIO}
+
+import ccas.cli.serve.HealthProbe.Readiness
+import ccas.server.{BootGuard, CcasServer}
 
 /** Parent side of `ccas server up --detach`: spawn the server as a background process, wait for it to become ready,
   * then return to the shell with the pid printed. The JVM can't `fork()`, so we re-exec this same binary's
@@ -83,7 +84,12 @@ object Detach {
         running <- ZIO.attemptBlocking(PidFile.alreadyRunning(PidFile.read(pidPath), PidFile.isAlive))
         code <- running match {
           case Some(pid) => Console.printLineError(s"already running, pid=$pid").orDie.as(ExitCode(1))
-          case None      => start(logDir, pidPath, readyDeadline)
+          // Asked here, in the parent: the child may still hold the terminal (macOS has no `setsid`), so it skips.
+          case None =>
+            ZIO.ifZIO(BootGuard.confirmed(detachedChild = false))(
+              onTrue = start(logDir, pidPath, readyDeadline),
+              onFalse = ZIO.succeed(ExitCode(1))
+            )
         }
       } yield code
 
@@ -114,7 +120,7 @@ object Detach {
         // (the alreadyRunning guard means we never reach here while a server is live writing to it).
         pb.redirectOutput(Redirect.to(logFile.toFile))
         pb.redirectInput(Redirect.from(new File("/dev/null"))) // Linux-only sink; matches the loopback-local model
-        pb.environment().put("CCAS_PID_FILE", pidPath.toString)
+        pb.environment().put(CcasServer.PidFileEnv, pidPath.toString)
         pb.start()
       }
     attempt(List("setsid")).orElse(attempt(List("nohup"))).orElse(attempt(Nil))
@@ -127,14 +133,7 @@ object Detach {
     pidPath: Path,
     readyDeadline: Duration
   ): UIO[ExitCode] = {
-    val client    = HttpClient.newBuilder().connectTimeout(HttpTimeout).build()
-    val readyUri  = URI.create(s"http://127.0.0.1:$port/health/ready")
-    val pollReady = ZIO
-      .attemptBlocking {
-        val req = HttpRequest.newBuilder(readyUri).timeout(HttpTimeout).GET().build()
-        client.send(req, HttpResponse.BodyHandlers.discarding()).statusCode() == 200
-      }
-      .orElseSucceed(false)
+    val pollReady = HealthProbe.readinessWithin(port, HttpTimeout)
 
     // Liveness is the spawn process OR a live pid in the pid file. The pid-file signal makes this independent of
     // whether `setsid` exec-replaced in place (pid preserved → `process` is the server) or forked (the spawn process
@@ -145,11 +144,12 @@ object Detach {
     // crash report; the timeout message keeps the unknown instead of reporting the assumption as fact.
     val serverAlive = liveness.map(_.getOrElse(true))
 
-    // Succeeds when the server reports ready; fails (ProcessDied) after DeadStreakLimit consecutive not-alive polls.
-    def waitLoop(deadStreak: Int): ZIO[Any, ProcessDied.type, Unit] =
+    // Succeeds with the database the server names once it reports ready; fails (ProcessDied) after DeadStreakLimit
+    // consecutive not-alive polls.
+    def waitLoop(deadStreak: Int): ZIO[Any, ProcessDied.type, Option[String]] =
       pollReady.flatMap {
-        case true => ZIO.unit
-        case false =>
+        case Readiness.Ready(databaseOption) => ZIO.succeed(databaseOption)
+        case _ =>
           serverAlive.flatMap {
             case true                                   => ZIO.sleep(PollInterval) *> waitLoop(0)
             case false if deadStreak + 1 >= DeadStreakLimit => ZIO.fail(ProcessDied)
@@ -170,20 +170,27 @@ object Detach {
     waitLoop(0).timeout(readyDeadline).foldZIO(
       _ => childDied(logFile),
       {
-        case Some(_) => ready(pidPath, logFile)
-        case None    => onTimeout
+        case Some(databaseOption) => ready(pidPath, logFile, databaseOption)
+        case None                 => onTimeout
       }
     )
   }
 
-  private def ready(pidPath: Path, logFile: Path): UIO[ExitCode] =
-    readPid(pidPath, 3).flatMap {
-      case Some(pid) =>
-        Console.printLine(s"ccas server started, pid=$pid (logs: $logFile)").orDie.as(ExitCode.success)
-      case None =>
-        Console.printLine(s"ccas server started (pid file not yet readable at $pidPath; logs: $logFile)").orDie
-          .as(ExitCode.success)
+  private def ready(pidPath: Path, logFile: Path, databaseOption: Option[String]): UIO[ExitCode] =
+    readPid(pidPath, 3).flatMap(pidOption =>
+      Console.printLine(startedMessage(pidOption, databaseOption, pidPath, logFile)).orDie.as(ExitCode.success)
+    )
+
+  /** The line a detached start ends on. It names the database the server reports, since the server's own boot line
+    * goes to a log nobody is watching (#320). Pure.
+    */
+  def startedMessage(pidOption: Option[Long], databaseOption: Option[String], pidPath: Path, logFile: Path): String = {
+    val database = databaseOption.fold("database not reported")(d => s"db $d")
+    pidOption match {
+      case Some(pid) => s"ccas server started, pid=$pid, $database (logs: $logFile)"
+      case None      => s"ccas server started, $database (pid file not yet readable at $pidPath; logs: $logFile)"
     }
+  }
 
   private def childDied(logFile: Path): UIO[ExitCode] =
     tailLog(logFile).flatMap(tail => fail(diedMessage(logFile, tail)))
