@@ -24,14 +24,14 @@ Tests use ZIO Test (`ZIOSpecDefault`). SQL tests require a running PostgreSQL in
 
 Every piece of work runs the same sequence. Take each step unprompted; the developer should not have to ask for any of them. These steps and the skills' checklists are a floor, not a ceiling: anything else that looks wrong is worth raising.
 
-1. **Plan** before writing code for an issue, or for any request that involves a design choice. Show it in the chat, since the developer does not always read GitHub, and in plain terms:
+1. **Plan**, in plan mode, before writing code for an issue, or for any request that involves a design choice. Show it in the chat, since the developer does not always read GitHub, and in plain terms:
    - the problem as the operator meets it, and its cause
    - the change, and what else it touches
    - the tests by name: a test's name is the guarantee it documents
    - where the schema or stored data change, the way back
    - for a bug that reached stored data, which step of this workflow should have caught it, and the change to that step
 
-   Propose the correct fix over a workaround: with one operator and two databases, migration cost is no reason to defer it. Show each design choice as a worked example with a recommendation, and check the plan's own blast radius before showing it. Wait for agreement, then post the plan to the issue as the record. A plan waived at `/pick-issue` was judged from the issue alone: if the code reveals a design choice, or reaches the schema, `ccas.utils.client`, the cache tables, the CLI tree or what a Chess.com response means, show one after all.
+   Propose the correct fix over a workaround: with one operator and two databases, migration cost is no reason to defer it. Show each design choice as a worked example with a recommendation, and check the plan's own blast radius before showing it. Wait for agreement (`ExitPlanMode`'s approval; a rejection's notes are the next round), then post the plan to the issue as the record. A plan waived at `/pick-issue` was judged from the issue alone: if the code reveals a design choice, or reaches the schema, `ccas.utils.client`, the cache tables, the CLI tree or what a Chess.com response means, show one after all.
 2. **Build.**
 3. **Review** with `/review-change`, which fixes what it finds and hands over a report. Then stop (see Git).
 4. **Before shipping**: open questions, follow-ups worth an issue, and anything the plan promised that has not landed.
