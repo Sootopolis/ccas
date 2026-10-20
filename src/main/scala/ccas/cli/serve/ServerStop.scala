@@ -18,7 +18,7 @@ import zio.{Console, durationInt, ExitCode, UIO, ZIO}
   * signal" branches additionally probe the port themselves and, when a server still answers, point the user at the
   * likely foreground instance the pid file can't reach (see [[foregroundHint]]).
   */
-object Stop {
+object ServerStop {
 
   private val TermTimeout = 20.seconds
   private val KillTimeout = 5.seconds
@@ -26,7 +26,7 @@ object Stop {
   /** The line printed when `down` has no detached server to stop yet a server is still answering `port` — almost
     * always a foreground `ccas server up`, which writes no pid file and so can't be reached via the pid file. Points at
     * the pid to inspect rather than a blind `kill $(…)`, since `lsof` can list more than the one process. Pure so the
-    * wording is unit-testable without a live server (same split as [[Status.describe]]). */
+    * wording is unit-testable without a live server (same split as [[ServerStatus.describe]]). */
   def foregroundHint(port: Int): String =
     s"note: a server is still responding on 127.0.0.1:$port but is not a detached instance this CLI manages " +
       s"(no pid file) — likely a foreground `ccas server up`. Stop it with Ctrl-C in its terminal, or find its pid " +

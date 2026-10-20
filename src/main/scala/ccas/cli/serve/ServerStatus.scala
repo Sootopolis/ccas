@@ -11,7 +11,7 @@ import ccas.cli.serve.HealthProbe.Readiness
   * pid file (adds the detached server's pid). The decision logic lives in the pure [[describe]] so it is unit-testable
   * without a real server or process (same pattern as [[PidFile.alreadyRunning]]); [[run]] only wires the effects.
   */
-object Status {
+object ServerStatus {
 
   /** Map the probe + pid signals to a one-line message and exit code. Exit 0 only when the server is ready (db ok);
     * every other state (degraded, starting, down) is exit 1, so `ccas server status && …` gates on a healthy server.

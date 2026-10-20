@@ -9,7 +9,7 @@ import ccas.cli.serve.HealthProbe.Readiness
 
 /** Deterministic, DB-free unit tests for the `ccas serve --detach` / `ccas stop` lifecycle. The pure decision logic
   * ([[Detach.reconstruct]], [[Detach.resolveDeadline]], [[Detach.timeoutMessage]], [[Detach.diedMessage]],
-  * [[Detach.startedMessage]], [[PidFile.parse]], [[PidFile.alreadyRunning]], [[Status.describe]],
+  * [[Detach.startedMessage]], [[PidFile.parse]], [[PidFile.alreadyRunning]], [[ServerStatus.describe]],
   * [[HealthProbe.classify]]) is tested directly; the effectful pid-file
   * paths are exercised against an explicit temp path (the `XdgPaths`-backed default reads `System.getenv`, which can't
   * be set in-process). The full spawn/health-poll round-trip is covered by manual e2e, not here.
@@ -147,13 +147,13 @@ object TestServeLifecycle extends ZIOSpecDefault {
         assertTrue(msg.contains("Caused by: ConnectException"), !msg.contains("in the foreground"))
       }
     ),
-    suite("Stop.run")(
+    suite("ServerStop.run")(
       // The `liveServerPort` seam is injected (ZIO.succeed) so these exercise the pid-file branches without touching
       // the network — no dependence on whether anything happens to be listening on the resolved port.
       test("no pid file, no live server -> non-zero, clear message, no foreground hint") {
         withTempDir { dir =>
           for {
-            code <- Stop.run(dir.resolve("absent.pid"), ZIO.succeed(Option.empty[Int]))
+            code <- ServerStop.run(dir.resolve("absent.pid"), ZIO.succeed(Option.empty[Int]))
             err  <- TestConsole.outputErr
           } yield assertTrue(
             code == ExitCode(1),
@@ -167,7 +167,7 @@ object TestServeLifecycle extends ZIOSpecDefault {
           val stale = dir.resolve("stale.pid")
           for {
             _       <- ZIO.attempt(Files.writeString(stale, deadPid().toString + "\n"))
-            code    <- Stop.run(stale, ZIO.succeed(Option.empty[Int]))
+            code    <- ServerStop.run(stale, ZIO.succeed(Option.empty[Int]))
             err     <- TestConsole.outputErr
             removed <- ZIO.attempt(!Files.exists(stale))
           } yield assertTrue(code == ExitCode(1), err.exists(_.contains("stale pid file")), removed)
@@ -176,13 +176,13 @@ object TestServeLifecycle extends ZIOSpecDefault {
       test("no detached pid but a server is still up -> appends the foreground hint naming its port") {
         withTempDir { dir =>
           for {
-            code <- Stop.run(dir.resolve("absent.pid"), ZIO.succeed(Option(9137)))
+            code <- ServerStop.run(dir.resolve("absent.pid"), ZIO.succeed(Option(9137)))
             err  <- TestConsole.outputErr
           } yield assertTrue(code == ExitCode(1), err.exists(_.contains("still responding on 127.0.0.1:9137")))
         }
       },
       test("foregroundHint names the probed port and both ways to stop a foreground server") {
-        val hint = Stop.foregroundHint(9137)
+        val hint = ServerStop.foregroundHint(9137)
         assertTrue(
           hint.contains("127.0.0.1:9137"),
           hint.contains("Ctrl-C"),
@@ -190,9 +190,9 @@ object TestServeLifecycle extends ZIOSpecDefault {
         )
       }
     ),
-    suite("Status.describe")(
+    suite("ServerStatus.describe")(
       test("ready with a live pid -> success, shows pid and the database the server names") {
-        val (msg, code) = Status.describe(
+        val (msg, code) = ServerStatus.describe(
           readiness = Readiness.Ready(Some("localhost:5432/ccas")),
           up = true,
           livePidOption = Some(48213L),
@@ -205,7 +205,7 @@ object TestServeLifecycle extends ZIOSpecDefault {
         )
       },
       test("ready with no pid file (foreground server) -> success, no pid shown") {
-        val (msg, code) = Status.describe(
+        val (msg, code) = ServerStatus.describe(
           readiness = Readiness.Ready(Some("localhost:5432/ccas")),
           up = true,
           livePidOption = None,
@@ -215,7 +215,7 @@ object TestServeLifecycle extends ZIOSpecDefault {
         assertTrue(code == ExitCode.success, msg == "running (ready)  127.0.0.1:9000  db ok (localhost:5432/ccas)")
       },
       test("a server that names no database says so rather than printing a bare db ok") {
-        val (msg, code) = Status.describe(
+        val (msg, code) = ServerStatus.describe(
           readiness = Readiness.Ready(None),
           up = true,
           livePidOption = None,
@@ -225,7 +225,7 @@ object TestServeLifecycle extends ZIOSpecDefault {
         assertTrue(code == ExitCode.success, msg == "running (ready)  127.0.0.1:9000  db ok (database not reported)")
       },
       test("db unavailable names the database the server could not reach") {
-        val (msg, code) = Status.describe(
+        val (msg, code) = ServerStatus.describe(
           readiness = Readiness.Unready(Some("ep-x.neon.tech/neondb")),
           up = true,
           livePidOption = Some(7L),
@@ -238,7 +238,7 @@ object TestServeLifecycle extends ZIOSpecDefault {
         )
       },
       test("readiness unanswered but /health up -> db unavailable, non-zero") {
-        val (msg, code) = Status.describe(
+        val (msg, code) = ServerStatus.describe(
           readiness = Readiness.NoAnswer,
           up = true,
           livePidOption = Some(7L),
@@ -248,7 +248,7 @@ object TestServeLifecycle extends ZIOSpecDefault {
         assertTrue(code == ExitCode(1), msg == "running (db unavailable)  pid 7  127.0.0.1:8080")
       },
       test("not responding but pid alive -> starting/unhealthy, non-zero") {
-        val (msg, code) = Status.describe(
+        val (msg, code) = ServerStatus.describe(
           readiness = Readiness.NoAnswer,
           up = false,
           livePidOption = Some(7L),
@@ -258,7 +258,7 @@ object TestServeLifecycle extends ZIOSpecDefault {
         assertTrue(code == ExitCode(1), msg == "starting or unhealthy (pid 7, no response on :8080)")
       },
       test("not responding, no pid -> not running, non-zero") {
-        val (msg, code) = Status.describe(
+        val (msg, code) = ServerStatus.describe(
           readiness = Readiness.NoAnswer,
           up = false,
           livePidOption = None,
@@ -268,7 +268,7 @@ object TestServeLifecycle extends ZIOSpecDefault {
         assertTrue(code == ExitCode(1), msg == "not running")
       },
       test("not responding, stale pid file -> not running (stale pid file), non-zero") {
-        val (msg, code) = Status.describe(
+        val (msg, code) = ServerStatus.describe(
           readiness = Readiness.NoAnswer,
           up = false,
           livePidOption = None,

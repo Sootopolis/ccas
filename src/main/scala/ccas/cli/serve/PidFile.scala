@@ -4,7 +4,7 @@ import java.nio.file.{Files, Path}
 
 import ccas.cli.XdgPaths
 
-/** Pid-file helpers shared by the detached-serve parent ([[Detach]]) and [[Stop]]. The pure pieces ([[parse]],
+/** Pid-file helpers shared by the detached-serve parent ([[Detach]]) and [[ServerStop]]. The pure pieces ([[parse]],
   * [[alreadyRunning]]) carry the decision logic so they can be unit-tested without a real process or filesystem; the
   * effectful reads/writes are wrapped in `ZIO.attemptBlocking` at the call sites.
   */
