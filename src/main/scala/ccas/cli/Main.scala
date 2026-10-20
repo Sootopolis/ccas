@@ -7,7 +7,7 @@ import zio.{Cause, Console, ExitCode, Scope, UIO, URIO, ZIO, ZIOAppArgs, ZIOAppD
 
 import ccas.cli.config.CliConfig
 import ccas.server.config.ServerEnvOverlay
-import ccas.cli.serve.{Detach, PidFile, Status, Stop}
+import ccas.cli.serve.{Detach, PidFile, ServerStatus, ServerStop}
 import ccas.info.BuildInfo
 import ccas.server.{BootGuard, CcasServer}
 
@@ -93,17 +93,17 @@ object Main extends ZIOAppDefault {
       }
     }
 
-  // `server status`: apply the ccas.env overlay first so a file-only SERVER_PORT is honoured when `Status` reads
+  // `server status`: apply the ccas.env overlay first so a file-only SERVER_PORT is honoured when `ServerStatus` reads
   // `server.port` via ConfigFactory.load. Unlike `serve`, no mandatory-config precheck — status only needs the port,
   // not CCAS_CONTACT_EMAIL / a database.
   private def statusServe: URIO[ZIOAppArgs, ExitCode] =
-    ServerEnvOverlay(XdgPaths.serverEnvFile) *> Status.run(PidFile.path)
+    ServerEnvOverlay(XdgPaths.serverEnvFile) *> ServerStatus.run(PidFile.path)
 
-  // `server down`: apply the ccas.env overlay first so the "still responding?" port hint (Stop.foregroundHint) probes
-  // the same file-only SERVER_PORT that `Status` reads — otherwise the hint could probe the wrong port and miss a live
-  // foreground server. Stopping the detached pid itself needs no config.
+  // `server down`: apply the ccas.env overlay first so the "still responding?" port hint (ServerStop.foregroundHint)
+  // probes the same file-only SERVER_PORT that `ServerStatus` reads — otherwise the hint could probe the wrong port and
+  // miss a live foreground server. Stopping the detached pid itself needs no config.
   private def stopServe: URIO[ZIOAppArgs, ExitCode] =
-    ServerEnvOverlay(XdgPaths.serverEnvFile) *> Stop.run(PidFile.path)
+    ServerEnvOverlay(XdgPaths.serverEnvFile) *> ServerStop.run(PidFile.path)
 
   // Apply the ccas.env overlay (file → system properties for any env var not already set) BEFORE checking mandatory
   // config or booting CcasServer, so the server can boot from `ccas config`'s file without hand-exported env vars.

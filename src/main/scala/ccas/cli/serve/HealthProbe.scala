@@ -10,11 +10,11 @@ import zio.json.DecoderOps
 
 import ccas.server.routes.HealthRoutes.ReadyResponse
 
-/** Shared loopback health-probe used by [[Status]] (to report running/ready), [[Detach]] (to wait for the child to be
-  * ready) and [[Stop]] (to warn that a foreground server is still up after `down` finds no detached pid). Centralising
-  * the port resolution and the `/health` liveness probe makes the "`down`'s hint fires exactly when `status` says
-  * running" invariant structural rather than a copy-paste promise — change the config key or a timeout here and every
-  * caller moves with it.
+/** Shared loopback health-probe used by [[ServerStatus]] (to report running/ready), [[Detach]] (to wait for the child
+  * to be ready) and [[ServerStop]] (to warn that a foreground server is still up after `down` finds no detached pid).
+  * Centralising the port resolution and the `/health` liveness probe makes the "`down`'s hint fires exactly when
+  * `status` says running" invariant structural rather than a copy-paste promise — change the config key or a timeout
+  * here and every caller moves with it.
   */
 object HealthProbe {
 
