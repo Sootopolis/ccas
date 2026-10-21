@@ -46,15 +46,14 @@ object ServerStatus {
 
   private def named(databaseOption: Option[String]): String = databaseOption.getOrElse("database not reported")
 
-  def run(pidPath: Path): UIO[ExitCode] =
+  def run(stateDir: Path, port: Int): UIO[ExitCode] =
     for {
-      port      <- HealthProbe.resolvePort
       readiness <- HealthProbe.readiness(port)
       up <- readiness match {
         case Readiness.NoAnswer => HealthProbe.isUp(port)
         case _                  => ZIO.succeed(true)
       }
-      pidRead     <- ZIO.attemptBlocking(PidFile.read(pidPath)).orElseSucceed(Option.empty[Long])
+      pidRead     <- ZIO.attemptBlocking(PidFile.read(PidFile.path(stateDir, port))).orElseSucceed(Option.empty[Long])
       alive        = pidRead.exists(PidFile.isAlive)
       (msg, code)  = describe(readiness, up, pidRead.filter(_ => alive), pidRead.isDefined && !alive, port)
       _           <- Console.printLine(msg).orDie

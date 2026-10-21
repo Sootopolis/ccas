@@ -4,14 +4,17 @@ import java.net.URI
 import java.net.http.{HttpClient, HttpRequest, HttpResponse}
 import java.time.{Duration => JDuration}
 
-import com.typesafe.config.ConfigFactory
-import zio.{UIO, ZIO}
+import scala.util.Try
+
+import com.typesafe.config.{Config, ConfigFactory}
+import zio.{IO, UIO, ZIO}
 import zio.json.DecoderOps
 
 import ccas.server.routes.HealthRoutes.ReadyResponse
 
-/** Shared loopback health-probe used by [[ServerStatus]] (to report running/ready), [[Detach]] (to wait for the child
-  * to be ready) and [[ServerStop]] (to warn that a foreground server is still up after `down` finds no detached pid).
+/** Shared loopback health-probe used by [[ServerStatus]] (to report running/ready), [[Detach]] (to refuse a port
+  * already answering, then wait for the child to be ready) and [[ServerStop]] (to warn that a foreground server is
+  * still up after `down` finds no detached pid).
   * Centralising the port resolution and the `/health` liveness probe makes the "`down`'s hint fires exactly when
   * `status` says running" invariant structural rather than a copy-paste promise — change the config key or a timeout
   * here and every caller moves with it.
@@ -27,7 +30,6 @@ object HealthProbe {
     case NoAnswer
   }
 
-  private val DefaultPort    = 8080
   private val ConnectTimeout = JDuration.ofSeconds(2)
   private val LiveTimeout    = JDuration.ofSeconds(2)
   // `/health/ready` runs a `SELECT 1`; on a scale-to-zero database (Neon) the first query wakes the compute and can
@@ -37,10 +39,20 @@ object HealthProbe {
   // One reusable client (thread-safe, designed for reuse) rather than one per probe; `status` makes two probes.
   private val client = HttpClient.newBuilder().connectTimeout(ConnectTimeout).build()
 
-  /** The server's bound port from `server.port`, falling back to [[DefaultPort]] when the key is absent/unreadable.
-    * Relies on the caller having applied the ccas.env overlay first so a file-only `SERVER_PORT` is honoured. */
-  def resolvePort: UIO[Int] =
-    ZIO.attemptBlocking(ConfigFactory.load().getInt("server.port")).orElseSucceed(DefaultPort)
+  /** The server's bound port from `server.port`. Relies on the caller having applied the ccas.env overlay first so a
+    * file-only `SERVER_PORT` is honoured. A value that isn't a port fails rather than falling back to the default,
+    * since the port picks which server's pid file `down` signals (#326).
+    */
+  def resolvePort: IO[String, Int] =
+    ZIO.attemptBlocking(ConfigFactory.load()).mapError(messageOf).flatMap(config => ZIO.fromEither(portIn(config)))
+
+  /** `server.port` from `config`, or why it isn't a port. Pure. */
+  private[serve] def portIn(config: Config): Either[String, Int] =
+    Try(config.getInt("server.port")).toEither.left
+      .map(e => s"cannot read server.port (SERVER_PORT): ${messageOf(e)}")
+      .filterOrElse(port => port >= 1 && port <= 65535, "server.port (SERVER_PORT) must be a port from 1 to 65535")
+
+  private def messageOf(t: Throwable): String = Option(t.getMessage).getOrElse(t.getClass.getSimpleName)
 
   /** A GET of `path` on the loopback `port`. Probes 127.0.0.1: the server's default bind is loopback, and even a
     * `SERVER_HOST=0.0.0.0` bind answers on loopback; a non-loopback-only bind would false-negative here, acceptable

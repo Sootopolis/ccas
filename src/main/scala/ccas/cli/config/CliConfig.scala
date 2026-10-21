@@ -14,7 +14,7 @@ import zio.config.typesafe.TypesafeConfigProvider
   * All keys are optional: a missing file (or a file missing a key) yields the corresponding empty value, so the CLI
   * always has working defaults. `default_clubs` feeds shell completions; `api_url` is the resolved server URL's
   * config-level default (overridden by `--server`, falling back to the built-in default). `log_dir` sets where a
-  * detached `ccas serve --detach` server writes `server.log` (default `${XDG_STATE_HOME:-~/.local/state}/ccas/logs`).
+  * `ccas server up --detach` server writes `server-<port>.log` (default `${XDG_STATE_HOME:-~/.local/state}/ccas/logs`).
   * `current_club` is the club a slug-requiring command targets when neither `--club` nor `--all` is given (set with
   * `ccas use-club <slug>`, written by [[ConfigWriter]]). `ready_timeout_seconds` is how long `ccas server up --detach`
   * waits for readiness before giving up — the right value depends on the database (a suspended serverless compute wakes

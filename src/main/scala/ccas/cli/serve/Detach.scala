@@ -78,35 +78,58 @@ object Detach {
     if (seconds > 0) { Right(seconds.seconds) }
     else { Left(s"$source must be a positive number of seconds (got $seconds)") }
 
-  def run(logDir: Path, pidPath: Path, readyDeadline: Duration): UIO[ExitCode] = {
+  def run(logDir: Path, stateDir: Path, port: Int, readyDeadline: Duration): UIO[ExitCode] = {
+    val pidPath = PidFile.path(stateDir, port)
     val program =
-      for {
-        running <- ZIO.attemptBlocking(PidFile.alreadyRunning(PidFile.read(pidPath), PidFile.isAlive))
-        code <- running match {
-          case Some(pid) => Console.printLineError(s"already running, pid=$pid").orDie.as(ExitCode(1))
-          // Asked here, in the parent: the child may still hold the terminal (macOS has no `setsid`), so it skips.
-          case None =>
-            ZIO.ifZIO(BootGuard.confirmed(detachedChild = false))(
-              onTrue = start(logDir, pidPath, readyDeadline),
-              onFalse = ZIO.succeed(ExitCode(1))
-            )
-        }
-      } yield code
+      startRefusal(pidPath, port, HealthProbe.isUp(port)).flatMap {
+        case Some(refusal) => Console.printLineError(refusal).orDie.as(ExitCode(1))
+        // Asked here, in the parent: the child may still hold the terminal (macOS has no `setsid`), so it skips.
+        case None =>
+          ZIO.ifZIO(BootGuard.confirmed(detachedChild = false))(
+            onTrue = start(logDir, port, pidPath, readyDeadline),
+            onFalse = ZIO.succeed(ExitCode(1))
+          )
+      }
 
-    program.catchAllCause(c =>
+    program.catchAllCause { c =>
       Console.printLineError(s"error: ${rootMessage(c.squash)}").orDie.as(ExitCode(1))
-    )
+    }
   }
 
-  private def start(logDir: Path, pidPath: Path, readyDeadline: Duration): ZIO[Any, Throwable, ExitCode] =
+  /** Why a server can't start on `port`, if it can't. One that answers with no live pid file (a foreground server, or
+    * one an older CLI started under another pid-file name) is refused too: the readiness wait would take its answer for
+    * the new server's, and report a start that never happened.
+    *
+    * @param portAnswering whether a server answers on `port`; injected so tests need no network
+    */
+  private[serve] def startRefusal(
+    pidPath: Path,
+    port: Int,
+    portAnswering: UIO[Boolean]
+  ): ZIO[Any, Throwable, Option[String]] =
+    ZIO.attemptBlocking(PidFile.alreadyRunning(PidFile.read(pidPath), PidFile.isAlive)).flatMap {
+      case Some(pid) => ZIO.some(s"already running on 127.0.0.1:$port, pid=$pid")
+      case None =>
+        portAnswering.map { answering =>
+          Option.when(answering)(
+            s"a server is already answering on 127.0.0.1:$port, but not one this CLI started (no pid file for that " +
+              "port); stop it first, or start this one on another port with SERVER_PORT"
+          )
+        }
+    }
+
+  /** The detached server's stdout/stderr, one file per port so two servers on one machine never share one (#326). */
+  def serverLog(logDir: Path, port: Int): Path = logDir.resolve(s"server-$port.log")
+
+  private def start(logDir: Path, port: Int, pidPath: Path, readyDeadline: Duration): ZIO[Any, Throwable, ExitCode] = {
+    val logFile = serverLog(logDir, port)
     for {
-      port    <- HealthProbe.resolvePort
-      logFile  = logDir.resolve("server.log")
       _       <- ZIO.attemptBlocking(Files.createDirectories(logDir))
       cmd     <- ZIO.attempt(baseCommand)
       process <- spawn(cmd, logFile, pidPath)
       code    <- awaitReady(process, port, logFile, pidPath, readyDeadline)
     } yield code
+  }
 
   // Try setsid (new session — full terminal detach), then nohup (SIGHUP-immune), then bare. Each prefix is only
   // retried when the launcher itself is missing (ProcessBuilder.start throws); a child that starts but then crashes
@@ -117,7 +140,7 @@ object Detach {
         val pb = new ProcessBuilder((prefix ++ base)*)
         pb.redirectErrorStream(true)
         // Truncate per run: each detached start gets a fresh log, so the file can't grow unbounded across restarts
-        // (the alreadyRunning guard means we never reach here while a server is live writing to it).
+        // (`startRefusal` means we never reach here while a server on this port is live writing to it).
         pb.redirectOutput(Redirect.to(logFile.toFile))
         pb.redirectInput(Redirect.from(new File("/dev/null"))) // Linux-only sink; matches the loopback-local model
         pb.environment().put(CcasServer.PidFileEnv, pidPath.toString)

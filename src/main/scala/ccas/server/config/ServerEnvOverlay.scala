@@ -14,7 +14,7 @@ import zio.{UIO, ZIO}
   *
   * `ConfigFactory.invalidateCaches()` is called (only if at least one property was set) so the system-properties layer
   * is re-read by the next `ConfigFactory.load()`. MUST run before the first `ConfigFactory.load()` in the JVM — wired
-  * into both `Main` (the `serve`/`serve --detach` paths) and `CcasServer.run` (the standalone `ccas-server` binary). It
+  * into `Main` (every `server` subcommand) and `CcasServer.serve` (which the standalone `ccas-server` runs). It
   * never fails the boot: a missing or unreadable file logs a warning and applies nothing. Idempotent (the only-if-absent
   * guard makes a second call a no-op).
   */

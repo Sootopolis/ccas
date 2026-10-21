@@ -117,14 +117,16 @@ The server URL resolves in order: a global `--server <url>` flag, else `api_url`
 ```bash
 ccas server up --detach      # (or -d) spawns a detached server, waits for /health/ready, prints "started, pid=<n>, db <host>/<db>"
 ccas server status           # "running (ready)  pid <n>  127.0.0.1:8080  db ok (<host>/<db>)" (exit 0), else "not running" (exit 1)
-ccas server down             # reads the pid file, sends SIGTERM, waits for a clean shutdown
+ccas server down             # reads this port's pid file, asks first unless the server's database is local, sends SIGTERM, waits for a clean shutdown
 ```
 
 `server status` probes the loopback `/health/ready` endpoint (so it also detects a foreground server, which writes no pid file) and augments that with the pid file; it exits 0 only when the server is up **and** the database is reachable. The database it names is the one the server reports, not this shell's configuration.
 
 Every boot (`ccas server up`, detached or not, and `ccas-server`) asks `Boot against <host>/<db>? [y/N]` on the terminal unless the database's address is `localhost` or a loopback IP, because a boot writes to its database before it serves anything. Only the address is checked: a tunnel to a remote database through `localhost` never asks, and an address that can't be read from the configuration does. Redirecting the server's output doesn't skip the question, and a server started in the background from a shell (`ccas-server &`) stops at it until brought back with `fg`. With no terminal at all (systemd, cron) nothing asks.
 
-The detached server writes its pid to `${XDG_STATE_HOME:-~/.local/state}/ccas/ccas.pid` and its stdout/stderr to `<log_dir>/server.log` (`log_dir` from the [config file](#cli-config-file), default `~/.local/state/ccas/logs`). A second `ccas server up --detach` while one is running exits with `already running, pid=<n>`. It waits 30s for the server to report ready before giving up and stopping it — raise that with `--ready-timeout-seconds <n>` or the config file's `ready_timeout_seconds` when the database is slow to wake (a suspended serverless compute can take longer than the default). For a supervised/long-lived server (systemd, Docker, Render) run the foreground `ccas-server` binary instead.
+`ccas server down` asks the same way, `Stop the server on 127.0.0.1:<port> (pid <n>, db <host>/<db>)? [y/N]`, unless the database the server reports is local, since a shell for the wrong worktree reaches the other server through its port. A server that reports no database is asked about too. With no terminal to ask on (a script, an agent's shell) such a server is not stopped. Its `stopped` line names the same port, pid and database.
+
+The detached server writes its pid to `${XDG_STATE_HOME:-~/.local/state}/ccas/ccas-<port>.pid` and its stdout/stderr to `<log_dir>/server-<port>.log` (`log_dir` from the [config file](#cli-config-file), default `~/.local/state/ccas/logs`). Both are named by the port, so two servers on one machine (one per worktree, say, each with its own `SERVER_PORT` and database) keep apart, and `status` and `down` act only on the server at this shell's port. `ccas server up --detach` refuses a port where a server already answers: `already running on 127.0.0.1:<port>, pid=<n>` for one it started, and a note to stop it first for one it didn't. It waits 30s for the server to report ready before giving up and stopping it — raise that with `--ready-timeout-seconds <n>` or the config file's `ready_timeout_seconds` when the database is slow to wake (a suspended serverless compute can take longer than the default). For a supervised/long-lived server (systemd, Docker, Render) run the foreground `ccas-server` binary instead.
 
 > **Two gotchas.** The parser (zio-cli) expects options **before** positional arguments — `ccas blacklist add --club team-alpha alice bob`, not `… alice bob --club team-alpha` (a misplaced flag is silently swallowed as a username). And the staged binary reads configuration from the **process environment only** — it does not load `.env` (that is auto-sourced for `sbt run` / `sbt runMain`).
 
@@ -313,7 +315,7 @@ The `ccas` CLI (the client, not the server) reads optional settings from `${XDG_
 ```hocon
 api_url               = "http://127.0.0.1:8080"     # default server URL
 default_clubs         = ["team-alpha", "team-beta"] # seed shell-completion suggestions
-log_dir               = "~/.local/state/ccas/logs"  # where `ccas server up --detach` writes server.log
+log_dir               = "~/.local/state/ccas/logs"  # where `ccas server up --detach` writes server-<port>.log
 current_club          = "team-alpha"                # default club when a command omits --club (via `ccas use-club`)
 ready_timeout_seconds = 90                          # readiness wait for `ccas server up --detach` (default 30)
 ```

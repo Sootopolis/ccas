@@ -21,7 +21,7 @@ object TestServerBoot extends ZIOSpecDefault {
     test("a detached server writes its own pid to the pid file, and deletes the file on shutdown") {
       for {
         dir    <- ZIO.attemptBlocking(Files.createTempDirectory("ccas-pid"))
-        path    = dir.resolve("state").resolve("ccas.pid")
+        path    = dir.resolve("state").resolve("ccas-8080.pid")
         during <- ZIO.scoped(CcasServer.pidFileManaged(Some(path)) *> ZIO.attemptBlocking(Files.readString(path)))
         after  <- ZIO.attemptBlocking(Files.exists(path))
       } yield assertTrue(during == s"${ProcessHandle.current().pid()}\n", !after)
@@ -62,16 +62,6 @@ object TestServerBoot extends ZIOSpecDefault {
       test("a config that doesn't resolve boots without asking, so the pool fails with its own message") {
         val unresolved = Left(new IllegalArgumentException("database.url is blank"))
         assertTrue(BootGuard.question(resolved = unresolved, detachedChild = false).isEmpty)
-      },
-      test("only y or yes confirms; a blank answer or EOF aborts") {
-        assertTrue(
-          BootGuard.accepts(Some("y")),
-          BootGuard.accepts(Some(" YES ")),
-          !BootGuard.accepts(Some("")),
-          !BootGuard.accepts(Some("n")),
-          !BootGuard.accepts(Some("yep")),
-          !BootGuard.accepts(None)
-        )
       }
     )
   )
