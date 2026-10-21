@@ -1,19 +1,15 @@
 package ccas.server
 
-import java.io.RandomAccessFile
-import java.nio.charset.StandardCharsets
-
-import scala.util.{Try, Using}
-
 import zio.{UIO, ZIO}
 
+import ccas.utils.TerminalQuestion
 import ccas.utils.sql.{DatabaseAddress, PostgresClient}
 
 /** Asks before a boot against a database whose address isn't loopback. A boot's first effects — `ensureTables`, then
   * marking every `Running` job Failed — land before the port binds, so a server started from the wrong shell has done
   * its damage before any status line could be read (#320). Local boots never ask, which keeps a question rare enough
-  * to be read. It asks on the controlling terminal, as `sudo` does, so redirecting a server's output can't switch it
-  * off; with no terminal (systemd, cron) there is nobody to ask.
+  * to be read. It asks on the terminal ([[TerminalQuestion]]); with none (systemd, cron) a boot goes ahead, since a
+  * supervised boot must not wait on an answer nobody can give.
   */
 object BootGuard {
 
@@ -28,9 +24,9 @@ object BootGuard {
     * @param detachedChild this process is a `--detach` child, whose parent already asked
     */
   def confirmed(detachedChild: Boolean): UIO[Boolean] =
-    PostgresClient.configuredAddress.either.flatMap(resolved =>
-      question(resolved, detachedChild).fold(ZIO.succeed(true))(ask)
-    )
+    PostgresClient.configuredAddress.either.flatMap { resolved =>
+      question(resolved, detachedChild).fold(ZIO.succeed(true))(TerminalQuestion.ask(_).map(_.getOrElse(true)))
+    }
 
   /** What to ask before booting, if anything: any address but a loopback one asks, an unreadable one included, unless a
     * parent already asked. Pure.
@@ -48,33 +44,4 @@ object BootGuard {
         }
     }
 
-  /** Only `y` or `yes` boots; a blank answer does not, nor does EOF (`None`). Pure. */
-  def accepts(answerOption: Option[String]): Boolean =
-    answerOption.exists(answer => Set("y", "yes").contains(answer.trim.toLowerCase))
-
-  // On a daemon thread of its own: a blocked terminal read ignores interruption, and at exit ZIOApp waits for every
-  // interrupted fiber, so a fiber parked in the read would turn Ctrl-C at the prompt into a hang until Enter.
-  private def ask(question: String): UIO[Boolean] =
-    ZIO
-      .async[Any, Nothing, Option[Boolean]] { callback =>
-        val asker = new Thread(() => {
-          val answer = askOnTerminal(question)
-          callback(ZIO.succeed(answer))
-        })
-        asker.setDaemon(true)
-        asker.start()
-      }
-      .map(_.getOrElse(true))
-
-  // `None` when there is no controlling terminal to open. Never throws, since the asking thread must always call back;
-  // a terminal that fails mid-question is a no.
-  private def askOnTerminal(question: String): Option[Boolean] =
-    Try(new RandomAccessFile("/dev/tty", "rw")).toOption.map { terminal =>
-      Using(terminal) { tty =>
-        tty.write(question.getBytes(StandardCharsets.UTF_8))
-        val yes = accepts(Option(tty.readLine()))
-        if (!yes) { tty.write("aborted\n".getBytes(StandardCharsets.UTF_8)) }
-        yes
-      }.getOrElse(false)
-    }
 }

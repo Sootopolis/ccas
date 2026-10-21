@@ -2,15 +2,16 @@ package ccas.cli.serve
 
 import java.nio.file.{Files, Path}
 
-import zio.{durationInt, ExitCode, ZIO}
+import com.typesafe.config.ConfigFactory
+import zio.{durationInt, ExitCode, Ref, Scope, UIO, ZIO}
 import zio.test.{assertTrue, Spec, TestConsole, ZIOSpecDefault}
 
 import ccas.cli.serve.HealthProbe.Readiness
 
-/** Deterministic, DB-free unit tests for the `ccas serve --detach` / `ccas stop` lifecycle. The pure decision logic
-  * ([[Detach.reconstruct]], [[Detach.resolveDeadline]], [[Detach.timeoutMessage]], [[Detach.diedMessage]],
+/** Deterministic, DB-free unit tests for the `ccas server up --detach` / `status` / `down` lifecycle. The pure decision
+  * logic ([[Detach.reconstruct]], [[Detach.resolveDeadline]], [[Detach.timeoutMessage]], [[Detach.diedMessage]],
   * [[Detach.startedMessage]], [[PidFile.parse]], [[PidFile.alreadyRunning]], [[ServerStatus.describe]],
-  * [[HealthProbe.classify]]) is tested directly; the effectful pid-file
+  * [[HealthProbe.portIn]], [[HealthProbe.classify]]) is tested directly; the effectful pid-file
   * paths are exercised against an explicit temp path (the `XdgPaths`-backed default reads `System.getenv`, which can't
   * be set in-process). The full spawn/health-poll round-trip is covered by manual e2e, not here.
   */
@@ -28,6 +29,16 @@ object TestServeLifecycle extends ZIOSpecDefault {
     p.waitFor()
     p.pid()
   }
+
+  // A live process to stand in for a running server: a harmless one, should a test wrongly signal it.
+  private val liveProcess: ZIO[Scope, Throwable, Process] =
+    ZIO.acquireRelease(ZIO.attempt(new ProcessBuilder("sleep", "60").start())) { p =>
+      ZIO.succeed(p.destroyForcibly()).unit
+    }
+
+  // `down`'s probes for a server that is local: nothing to ask, and any question answered yes.
+  private val localDatabase: UIO[Option[String]]        = ZIO.some("localhost:5432/ccas")
+  private val answerYes: String => UIO[Option[Boolean]] = _ => ZIO.some(true)
 
   override def spec: Spec[Any, Any] = suite("TestServeLifecycle")(
     suite("PidFile.parse")(
@@ -55,10 +66,19 @@ object TestServeLifecycle extends ZIOSpecDefault {
         assertTrue(PidFile.alreadyRunning(Some(5L), _ => true).contains(5L))
       }
     ),
+    suite("PidFile.path")(
+      test("two ports never share a pid file") {
+        withTempDir { dir =>
+          val main = PidFile.path(dir, 8080)
+          val wip  = PidFile.path(dir, 8081)
+          assertTrue(main != wip, main.getParent == dir, wip.getParent == dir)
+        }
+      }
+    ),
     suite("PidFile.read")(
       test("reads a written pid and returns None for an absent file") {
         withTempDir { dir =>
-          val present = dir.resolve("ccas.pid")
+          val present = dir.resolve("ccas-8080.pid")
           Files.writeString(present, "4242\n")
           assertTrue(PidFile.read(present).contains(4242L), PidFile.read(dir.resolve("absent.pid")).isEmpty)
         }
@@ -98,22 +118,62 @@ object TestServeLifecycle extends ZIOSpecDefault {
         assertTrue(left.exists(_.contains("ready_timeout_seconds")), left.exists(_.contains("(got -5)")))
       }
     ),
+    suite("Detach.startRefusal")(
+      test("a live pid file for this port refuses the start, naming the pid and port") {
+        withTempDir { dir =>
+          val pidPath = PidFile.path(dir, 8081)
+          ZIO.scoped {
+            for {
+              server  <- liveProcess
+              _       <- ZIO.attempt(Files.writeString(pidPath, server.pid().toString + "\n"))
+              refusal <- Detach.startRefusal(pidPath = pidPath, port = 8081, portAnswering = ZIO.succeed(false))
+            } yield assertTrue(refusal.contains(s"already running on 127.0.0.1:8081, pid=${server.pid()}"))
+          }
+        }
+      },
+      test("a server answering this port with no pid file refuses the start instead of passing as the new one") {
+        withTempDir { dir =>
+          val pidPath = PidFile.path(dir, 8080)
+          Detach.startRefusal(pidPath = pidPath, port = 8080, portAnswering = ZIO.succeed(true)).map { refusal =>
+            assertTrue(
+              refusal.exists(_.contains("already answering on 127.0.0.1:8080")),
+              refusal.exists(_.contains("SERVER_PORT"))
+            )
+          }
+        }
+      },
+      test("a free port with no live pid file starts") {
+        withTempDir { dir =>
+          val pidPath = PidFile.path(dir, 8080)
+          for {
+            _       <- ZIO.attempt(Files.writeString(pidPath, deadPid().toString + "\n"))
+            refusal <- Detach.startRefusal(pidPath = pidPath, port = 8080, portAnswering = ZIO.succeed(false))
+          } yield assertTrue(refusal.isEmpty)
+        }
+      }
+    ),
+    suite("Detach.serverLog")(
+      test("two ports never share a server log") {
+        val logDir = Path.of("/state/logs")
+        assertTrue(Detach.serverLog(logDir, 8080) != Detach.serverLog(logDir, 8081))
+      }
+    ),
     suite("Detach failure messages")(
       // The regression this guards: an empty tail used to render as "Last log lines:" followed by nothing, which
       // promised evidence the CLI did not have and left the operator with no next move.
       test("an empty log names the file instead of an empty 'last log lines' section") {
-        val msg = Detach.timeoutMessage(30.seconds, Some(true), Path.of("/state/server.log"), "")
+        val msg = Detach.timeoutMessage(30.seconds, Some(true), Path.of("/state/server-8080.log"), "")
         assertTrue(
-          msg.contains("Nothing has been written to /state/server.log yet."),
+          msg.contains("Nothing has been written to /state/server-8080.log yet."),
           !msg.contains("Last log lines")
         )
       },
       test("a non-empty log is quoted and attributed to the file") {
-        val msg = Detach.timeoutMessage(30.seconds, Some(false), Path.of("/state/server.log"), "boom")
-        assertTrue(msg.contains("Last log lines from /state/server.log:\nboom"))
+        val msg = Detach.timeoutMessage(30.seconds, Some(false), Path.of("/state/server-8080.log"), "boom")
+        assertTrue(msg.contains("Last log lines from /state/server-8080.log:\nboom"))
       },
       test("a still-running server is told the deadline is raisable, with a concrete larger value") {
-        val msg = Detach.timeoutMessage(45.seconds, Some(true), Path.of("/state/server.log"), "")
+        val msg = Detach.timeoutMessage(45.seconds, Some(true), Path.of("/state/server-8080.log"), "")
         assertTrue(
           msg.contains("did not become ready within 45s"),
           msg.contains("still running"),
@@ -123,7 +183,7 @@ object TestServeLifecycle extends ZIOSpecDefault {
         )
       },
       test("a failed liveness read says so rather than claiming the server was up") {
-        val msg = Detach.timeoutMessage(30.seconds, None, Path.of("/state/server.log"), "")
+        val msg = Detach.timeoutMessage(30.seconds, None, Path.of("/state/server-8080.log"), "")
         assertTrue(
           msg.contains("state could not be read"),
           !msg.contains("was still running"),
@@ -131,7 +191,7 @@ object TestServeLifecycle extends ZIOSpecDefault {
         )
       },
       test("a dead server is told a longer deadline will not help") {
-        val msg = Detach.timeoutMessage(30.seconds, Some(false), Path.of("/state/server.log"), "")
+        val msg = Detach.timeoutMessage(30.seconds, Some(false), Path.of("/state/server-8080.log"), "")
         assertTrue(
           msg.contains("already gone"),
           msg.contains("longer deadline will not help"),
@@ -139,22 +199,48 @@ object TestServeLifecycle extends ZIOSpecDefault {
         )
       },
       test("an exit during startup with no log suggests the foreground run") {
-        val msg = Detach.diedMessage(Path.of("/state/server.log"), "")
+        val msg = Detach.diedMessage(Path.of("/state/server-8080.log"), "")
         assertTrue(msg.contains("Nothing has been written"), msg.contains("in the foreground"))
       },
       test("an exit during startup with a log leaves the log to speak") {
-        val msg = Detach.diedMessage(Path.of("/state/server.log"), "Caused by: ConnectException")
+        val msg = Detach.diedMessage(Path.of("/state/server-8080.log"), "Caused by: ConnectException")
         assertTrue(msg.contains("Caused by: ConnectException"), !msg.contains("in the foreground"))
       }
     ),
+    suite("ServerStop.stopQuestion")(
+      test("a server on a loopback database stops without asking") {
+        assertTrue(
+          ServerStop.stopQuestion(port = 8081, pid = 4821L, databaseOption = Some("localhost:5432/ccas")).isEmpty,
+          ServerStop.stopQuestion(port = 8081, pid = 4821L, databaseOption = Some("127.0.0.1:5432/ccas")).isEmpty
+        )
+      },
+      test("a server on any other database asks, naming its port, pid and database") {
+        assertTrue(
+          ServerStop.stopQuestion(port = 8080, pid = 4821L, databaseOption = Some("ep-x.neon.tech/neondb")).contains(
+            "Stop the server on 127.0.0.1:8080 (pid 4821, db ep-x.neon.tech/neondb)? [y/N] "
+          )
+        )
+      },
+      test("a server that names no database asks") {
+        val question = ServerStop.stopQuestion(port = 8080, pid = 4821L, databaseOption = None)
+        assertTrue(question.exists(_.contains("database not reported")))
+      }
+    ),
     suite("ServerStop.run")(
-      // The `liveServerPort` seam is injected (ZIO.succeed) so these exercise the pid-file branches without touching
-      // the network — no dependence on whether anything happens to be listening on the resolved port.
+      // The probes are injected so these exercise every branch without touching the network or a terminal — no
+      // dependence on whether anything happens to be listening on the port. Where a test is about the pid file, the
+      // server is local and the answer yes, so nothing but the pid file stands between a bug and the signal.
       test("no pid file, no live server -> non-zero, clear message, no foreground hint") {
         withTempDir { dir =>
           for {
-            code <- ServerStop.run(dir.resolve("absent.pid"), ZIO.succeed(Option.empty[Int]))
-            err  <- TestConsole.outputErr
+            code <- ServerStop.run(
+              stateDir = dir,
+              port = 8080,
+              serverAnswering = ZIO.succeed(false),
+              serverDatabase = localDatabase,
+              ask = answerYes
+            )
+            err <- TestConsole.outputErr
           } yield assertTrue(
             code == ExitCode(1),
             err.exists(_.contains("no detached server running")),
@@ -164,10 +250,16 @@ object TestServeLifecycle extends ZIOSpecDefault {
       },
       test("stale pid file, no live server -> non-zero, message, and the file is removed") {
         withTempDir { dir =>
-          val stale = dir.resolve("stale.pid")
+          val stale = PidFile.path(dir, 8080)
           for {
-            _       <- ZIO.attempt(Files.writeString(stale, deadPid().toString + "\n"))
-            code    <- ServerStop.run(stale, ZIO.succeed(Option.empty[Int]))
+            _ <- ZIO.attempt(Files.writeString(stale, deadPid().toString + "\n"))
+            code <- ServerStop.run(
+              stateDir = dir,
+              port = 8080,
+              serverAnswering = ZIO.succeed(false),
+              serverDatabase = localDatabase,
+              ask = answerYes
+            )
             err     <- TestConsole.outputErr
             removed <- ZIO.attempt(!Files.exists(stale))
           } yield assertTrue(code == ExitCode(1), err.exists(_.contains("stale pid file")), removed)
@@ -176,9 +268,118 @@ object TestServeLifecycle extends ZIOSpecDefault {
       test("no detached pid but a server is still up -> appends the foreground hint naming its port") {
         withTempDir { dir =>
           for {
-            code <- ServerStop.run(dir.resolve("absent.pid"), ZIO.succeed(Option(9137)))
-            err  <- TestConsole.outputErr
+            code <- ServerStop.run(
+              stateDir = dir,
+              port = 9137,
+              serverAnswering = ZIO.succeed(true),
+              serverDatabase = localDatabase,
+              ask = answerYes
+            )
+            err <- TestConsole.outputErr
           } yield assertTrue(code == ExitCode(1), err.exists(_.contains("still responding on 127.0.0.1:9137")))
+        }
+      },
+      // The bug in #326: one shared pid file let `down` in the 8081 shell stop the 8080 server, possibly production.
+      test("down for one port leaves another port's server and pid file alone") {
+        withTempDir { dir =>
+          val otherPidFile = PidFile.path(dir, 8080)
+          ZIO.scoped {
+            for {
+              server <- liveProcess
+              _      <- ZIO.attempt(Files.writeString(otherPidFile, server.pid().toString + "\n"))
+              code <- ServerStop.run(
+                stateDir = dir,
+                port = 8081,
+                serverAnswering = ZIO.succeed(false),
+                serverDatabase = localDatabase,
+                ask = answerYes
+              )
+              err      <- TestConsole.outputErr
+              alive    <- ZIO.attempt(server.isAlive)
+              fileKept <- ZIO.attempt(Files.exists(otherPidFile))
+            } yield assertTrue(
+              code == ExitCode(1),
+              err.exists(_.contains("no detached server running")),
+              alive,
+              fileKept
+            )
+          }
+        }
+      },
+      test("a declined stop leaves the server running and its pid file in place") {
+        withTempDir { dir =>
+          val pidPath = PidFile.path(dir, 8080)
+          ZIO.scoped {
+            for {
+              asked  <- Ref.make(Option.empty[String])
+              server <- liveProcess
+              _      <- ZIO.attempt(Files.writeString(pidPath, server.pid().toString + "\n"))
+              code <- ServerStop.run(
+                stateDir = dir,
+                port = 8080,
+                serverAnswering = ZIO.succeed(false),
+                serverDatabase = ZIO.some("ep-x.neon.tech/neondb"),
+                ask = question => asked.set(Some(question)).as(Some(false))
+              )
+              question <- asked.get
+              out      <- TestConsole.output
+              err      <- TestConsole.outputErr
+              alive    <- ZIO.attempt(server.isAlive)
+              fileKept <- ZIO.attempt(Files.exists(pidPath))
+            } yield assertTrue(
+              code == ExitCode(1),
+              question.exists(_.contains("db ep-x.neon.tech/neondb")),
+              err.exists(_.contains("not stopped")),
+              !out.exists(_.contains("stopped")),
+              alive,
+              fileKept
+            )
+          }
+        }
+      },
+      test("with no terminal to ask on, a server on another database is not stopped") {
+        withTempDir { dir =>
+          val pidPath = PidFile.path(dir, 8080)
+          ZIO.scoped {
+            for {
+              server <- liveProcess
+              _      <- ZIO.attempt(Files.writeString(pidPath, server.pid().toString + "\n"))
+              code <- ServerStop.run(
+                stateDir = dir,
+                port = 8080,
+                serverAnswering = ZIO.succeed(false),
+                serverDatabase = ZIO.some("ep-x.neon.tech/neondb"),
+                ask = _ => ZIO.none
+              )
+              err      <- TestConsole.outputErr
+              alive    <- ZIO.attempt(server.isAlive)
+              fileKept <- ZIO.attempt(Files.exists(pidPath))
+            } yield assertTrue(code == ExitCode(1), err.exists(_.contains("no terminal to ask on")), alive, fileKept)
+          }
+        }
+      },
+      test("a confirmed stop signals the server and names the port and database it stopped") {
+        withTempDir { dir =>
+          val pidPath = PidFile.path(dir, 8080)
+          ZIO.scoped {
+            for {
+              asked  <- Ref.make(Option.empty[String])
+              server <- liveProcess
+              _      <- ZIO.attempt(Files.writeString(pidPath, server.pid().toString + "\n"))
+              code <- ServerStop.run(
+                stateDir = dir,
+                port = 8080,
+                serverAnswering = ZIO.succeed(false),
+                serverDatabase = ZIO.some("ep-x.neon.tech/neondb"),
+                ask = question => asked.set(Some(question)).as(Some(true))
+              )
+              question <- asked.get
+              out      <- TestConsole.output
+              alive    <- ZIO.attempt(server.isAlive)
+              removed  <- ZIO.attempt(!Files.exists(pidPath))
+              stopped   = s"stopped the server on 127.0.0.1:8080 (pid ${server.pid()}, db ep-x.neon.tech/neondb)"
+            } yield assertTrue(code == ExitCode.success, question.isDefined, out.exists(_.contains(stopped)), !alive, removed)
+          }
         }
       },
       test("foregroundHint names the probed port and both ways to stop a foreground server") {
@@ -278,6 +479,17 @@ object TestServeLifecycle extends ZIOSpecDefault {
         assertTrue(code == ExitCode(1), msg == "not running (stale pid file)")
       }
     ),
+    suite("HealthProbe.portIn")(
+      test("a port that isn't 1 to 65535 is an error, never the default port") {
+        def portIn(value: String) = HealthProbe.portIn(ConfigFactory.parseString(s"server.port = $value"))
+        assertTrue(
+          portIn("808l").left.exists(_.contains("server.port")),
+          portIn("0").isLeft,
+          portIn("70000").isLeft,
+          portIn("8081") == Right(8081)
+        )
+      }
+    ),
     suite("HealthProbe.classify")(
       test("a 200 naming the database reads as ready with that database") {
         assertTrue(
@@ -303,8 +515,8 @@ object TestServeLifecycle extends ZIOSpecDefault {
     ),
     suite("Detach.startedMessage")(
       test("the started line names the database the server reports") {
-        val pidPath = Path.of("/state/ccas.pid")
-        val logFile = Path.of("/state/server.log")
+        val pidPath = Path.of("/state/ccas-8080.pid")
+        val logFile = Path.of("/state/server-8080.log")
         val started = Detach.startedMessage(
           pidOption = Some(4821L),
           databaseOption = Some("localhost:5432/ccas"),
@@ -320,7 +532,7 @@ object TestServeLifecycle extends ZIOSpecDefault {
         val unnamed =
           Detach.startedMessage(pidOption = Some(4821L), databaseOption = None, pidPath = pidPath, logFile = logFile)
         assertTrue(
-          started == "ccas server started, pid=4821, db localhost:5432/ccas (logs: /state/server.log)",
+          started == "ccas server started, pid=4821, db localhost:5432/ccas (logs: /state/server-8080.log)",
           pidUnread.contains("db localhost:5432/ccas"),
           unnamed.contains("database not reported")
         )

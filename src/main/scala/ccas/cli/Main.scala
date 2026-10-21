@@ -7,7 +7,7 @@ import zio.{Cause, Console, ExitCode, Scope, UIO, URIO, ZIO, ZIOAppArgs, ZIOAppD
 
 import ccas.cli.config.CliConfig
 import ccas.server.config.ServerEnvOverlay
-import ccas.cli.serve.{Detach, PidFile, ServerStatus, ServerStop}
+import ccas.cli.serve.{Detach, HealthProbe, ServerStatus, ServerStop}
 import ccas.info.BuildInfo
 import ccas.server.{BootGuard, CcasServer}
 
@@ -77,10 +77,9 @@ object Main extends ZIOAppDefault {
     case other: CliCommand.ServerCommand => Dispatcher.dispatch(other, cfg.currentClubOption)
   }
 
-  // Detached serve: apply the ccas.env overlay first (so a file-only SERVER_PORT is honoured by the readiness probe in
-  // `Detach`, which reads `server.port` via ConfigFactory.load in THIS parent JVM), then the same mandatory-config
-  // precheck as foreground, then hand off to the spawner. `log_dir` from the CLI config sets the server's log location,
-  // defaulting to `${XDG_STATE_HOME:-~/.local/state}/ccas/logs`. The detached child re-runs the overlay in its own JVM.
+  // Detached serve: apply the ccas.env overlay first, so a file-only SERVER_PORT reaches the port this parent JVM
+  // resolves (it picks the pid file, the log and the readiness probe), then the foreground's mandatory-config precheck.
+  // The detached child re-runs the overlay in its own JVM.
   private def detachServe(cfg: CliConfig, readyTimeoutSeconds: Option[Int]): URIO[ZIOAppArgs, ExitCode] =
     ServerEnvOverlay(XdgPaths.serverEnvFile) *> ZIO.suspendSucceed {
       (missingServeEnv, Detach.resolveDeadline(readyTimeoutSeconds, cfg.readyTimeoutSeconds)) match {
@@ -89,21 +88,24 @@ object Main extends ZIOAppDefault {
         case (None, Left(msg)) => Console.printLineError(s"error: $msg").orDie.as(ExitCode(2))
         case (None, Right(deadline)) =>
           val logDir = cfg.logDir.fold(XdgPaths.stateDir.resolve("logs"))(Paths.get(_))
-          Detach.run(logDir, PidFile.path, deadline)
+          onServerPort(port => Detach.run(logDir, XdgPaths.stateDir, port, deadline))
       }
     }
 
-  // `server status`: apply the ccas.env overlay first so a file-only SERVER_PORT is honoured when `ServerStatus` reads
-  // `server.port` via ConfigFactory.load. Unlike `serve`, no mandatory-config precheck — status only needs the port,
-  // not CCAS_CONTACT_EMAIL / a database.
+  // `server status`: apply the ccas.env overlay first so a file-only SERVER_PORT is honoured when resolving the port,
+  // which picks both the probe and the pid file. Unlike `serve`, no mandatory-config precheck — status only needs the
+  // port, not CCAS_CONTACT_EMAIL / a database.
   private def statusServe: URIO[ZIOAppArgs, ExitCode] =
-    ServerEnvOverlay(XdgPaths.serverEnvFile) *> ServerStatus.run(PidFile.path)
+    ServerEnvOverlay(XdgPaths.serverEnvFile) *> onServerPort(port => ServerStatus.run(XdgPaths.stateDir, port))
 
-  // `server down`: apply the ccas.env overlay first so the "still responding?" port hint (ServerStop.foregroundHint)
-  // probes the same file-only SERVER_PORT that `ServerStatus` reads — otherwise the hint could probe the wrong port and
-  // miss a live foreground server. Stopping the detached pid itself needs no config.
+  // `server down`: apply the ccas.env overlay first so a file-only SERVER_PORT picks the pid file, and the port the
+  // "still responding?" hint (ServerStop.foregroundHint) probes — otherwise `down` could stop another port's server.
   private def stopServe: URIO[ZIOAppArgs, ExitCode] =
-    ServerEnvOverlay(XdgPaths.serverEnvFile) *> ServerStop.run(PidFile.path)
+    ServerEnvOverlay(XdgPaths.serverEnvFile) *> onServerPort(port => ServerStop.run(XdgPaths.stateDir, port))
+
+  // An unreadable port is a usage error, never the default's: the port picks which server's pid file is used (#326).
+  private def onServerPort(withPort: Int => UIO[ExitCode]): UIO[ExitCode] =
+    HealthProbe.resolvePort.foldZIO(msg => Console.printLineError(s"error: $msg").orDie.as(ExitCode(2)), withPort)
 
   // Apply the ccas.env overlay (file → system properties for any env var not already set) BEFORE checking mandatory
   // config or booting CcasServer, so the server can boot from `ccas config`'s file without hand-exported env vars.

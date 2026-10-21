@@ -2,16 +2,16 @@ package ccas.cli.serve
 
 import java.nio.file.{Files, Path}
 
-import ccas.cli.XdgPaths
-
-/** Pid-file helpers shared by the detached-serve parent ([[Detach]]) and [[ServerStop]]. The pure pieces ([[parse]],
+/** Pid-file helpers shared by the detached-serve parent ([[Detach]]), [[ServerStatus]] and [[ServerStop]]. The pure pieces ([[parse]],
   * [[alreadyRunning]]) carry the decision logic so they can be unit-tested without a real process or filesystem; the
   * effectful reads/writes are wrapped in `ZIO.attemptBlocking` at the call sites.
   */
 object PidFile {
 
-  /** Default location: `${XDG_STATE_HOME:-~/.local/state}/ccas/ccas.pid`. Callers may pass an explicit path (tests). */
-  def path: Path = XdgPaths.pidFile
+  /** The pid file of the server on `port`, in `stateDir` (`XdgPaths.stateDir` outside tests). Keyed by port, since
+    * that is what tells two servers on one machine apart (#326).
+    */
+  def path(stateDir: Path, port: Int): Path = stateDir.resolve(s"ccas-$port.pid")
 
   /** Parse pid-file content to a positive pid; `None` for blank or non-numeric content. Pure. */
   def parse(content: String): Option[Long] = content.trim.toLongOption.filter(_ > 0)

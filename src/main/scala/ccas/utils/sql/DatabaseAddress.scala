@@ -25,3 +25,14 @@ final case class DatabaseAddress(hostPort: String, path: String) {
       host.equalsIgnoreCase("localhost") || Try(InetAddress.ofLiteral(host)).toOption.exists(_.isLoopbackAddress)
     }
 }
+
+object DatabaseAddress {
+
+  /** Reads back what [[DatabaseAddress.render]] wrote, such as the database a server reports on `/health/ready`. A host
+    * part never holds a `/`, so the path starts at the first one.
+    */
+  def fromRendered(rendered: String): Option[DatabaseAddress] = {
+    val (hostPort, path) = rendered.span(_ != '/')
+    Option.when(hostPort.nonEmpty)(DatabaseAddress(hostPort, path))
+  }
+}

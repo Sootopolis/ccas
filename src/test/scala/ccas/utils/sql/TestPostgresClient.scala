@@ -240,6 +240,19 @@ object TestPostgresClient extends ZIOSpecDefault {
         !loopback("192.168.1.10:5432"),
         !loopback("localhost:5432,ep-x.neon.tech:5432")
       )
+    },
+    // `server down` decides whether to ask from what the server reports, so the two must agree on "loopback".
+    test("a rendered address reads back as the address that rendered it") {
+      val addresses = List(
+        DatabaseAddress("ep-x.neon.tech:5432", "/neondb"),
+        DatabaseAddress("[::1]:5432", "/ccas"),
+        DatabaseAddress("localhost", "")
+      )
+      assertTrue(
+        addresses.forall(address => DatabaseAddress.fromRendered(address.render).contains(address)),
+        DatabaseAddress.fromRendered("").isEmpty,
+        DatabaseAddress.fromRendered("/ccas").isEmpty
+      )
     }
   )
 

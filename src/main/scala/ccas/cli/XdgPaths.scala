@@ -7,9 +7,9 @@ import ccas.server.config.ServerEnvPaths
 /** Resolves the ccas XDG directories and the files within them: the completion cache (matching the exact paths the
   * generated completion scripts read, `${XDG_CACHE_HOME:-$HOME/.cache}/ccas/`), the CLI config file
   * (`${XDG_CONFIG_HOME:-$HOME/.config}/ccas/config.conf`), the server-bootstrap env file (`.../ccas/ccas.env`,
-  * managed by `ccas config`), and the runtime state dir / pid file used by
-  * `ccas server up --detach` / `ccas server down` (`${XDG_STATE_HOME:-$HOME/.local/state}/ccas/ccas.pid`). Kept in lock-step with
-  * [[CompletionEmitter]]'s shell helpers.
+  * managed by `ccas config`), and the runtime state dir holding the pid files of `ccas server up --detach` /
+  * `ccas server down` (`${XDG_STATE_HOME:-$HOME/.local/state}/ccas/`). Kept in lock-step with [[CompletionEmitter]]'s
+  * shell helpers.
   */
 object XdgPaths {
 
@@ -34,9 +34,6 @@ object XdgPaths {
     * server→cli package cycle — this accessor is the discoverable CLI-side alias.
     */
   def serverEnvFile: Path = ServerEnvPaths.file
-
-  /** Pid file written by a detached `ccas serve --detach` server and read by `ccas stop`. */
-  def pidFile: Path = stateDir.resolve("ccas.pid")
 
   private def xdgDir(envVar: String, homeRelative: String): Path = {
     val xdg = Option(System.getenv(envVar)).map(_.trim).filter(_.nonEmpty)
