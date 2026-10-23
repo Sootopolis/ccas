@@ -3,7 +3,7 @@ package ccas.server
 import java.nio.file.{Files, Path, Paths}
 
 import com.typesafe.config.ConfigFactory
-import zio.{durationInt, ExitCode, RIO, Schedule, Scope, URIO, ZIO, ZIOAppArgs, ZIOAppDefault}
+import zio.{durationInt, ExitCode, RIO, Schedule, Scope, URIO, ZIO, ZIOAppArgs, ZIOAppDefault, ZLayer}
 import zio.http.{Routes, Server}
 
 import ccas.analysis.tables.Tables
@@ -36,7 +36,7 @@ object CcasServer extends ZIOAppDefault {
   // file without hand-exported env. `suspendSucceed` defers the config read until the overlay effect has run.
   // Foreground `ccas server up` already runs the overlay in `Main` before this; the only-if-absent guard makes this call
   // idempotent.
-  private[ccas] def serve: ZIO[Scope, Any, Any] =
+  private[ccas] def serve: ZIO[Scope, Throwable, Unit] =
     ServerEnvOverlay(ServerEnvPaths.file) *>
       ZIO.ifZIO(BootGuard.confirmed(detachedChild = detachedPidFileOption.isDefined))(
         onTrue = boot,
@@ -45,44 +45,69 @@ object CcasServer extends ZIOAppDefault {
 
   // Behind the guard in `run`, since building these layers writes to the database: the pool's `onInit`, then
   // `JobRunner.live`.
-  private def boot: ZIO[Scope, Any, Any] =
+  private def boot: ZIO[Scope, Throwable, Unit] =
     ZIO.suspendSucceed {
       val config = ConfigFactory.load()
       val host   = config.getString("server.host")
       val port   = config.getInt("server.port")
 
-      val routes: Routes[JobRunner & ChessComClient & PostgresClient, Nothing] =
-        List(
-          HealthRoutes.routes,
-          JobRoutes.routes,
-          ScheduleRoutes.routes,
-          BlacklistRoutes.routes,
-          RecruitmentCriteriaRoutes.routes,
-          ManagedClubRoutes.routes,
-          ClubRoutes.routes
-        ).reduce(_ ++ _)
-
-      (for {
-        _         <- pidFileManaged(detachedPidFileOption)
-        scheduler <- ZIO.service[JobScheduler]
-        _         <- scheduler.start
-        _         <- retentionSweepForked
-        _         <- Server.serve(routes)
-      } yield ()).provideSome[Scope](
-        ProgressDisplay.live(showProgress = false),
-        ChessComClient.live("server"),
-        HttpClientLayer.live,
-        BodyStore.live,
-        PostgresClient.live(onInit = poolInit),
-        JobRunner.live,
-        JobScheduler.live,
+      serveWith(
+        pidFileOption = detachedPidFileOption,
+        services = ZLayer.makeSome[Scope, Served](
+          ProgressDisplay.live(showProgress = false),
+          ChessComClient.live("server"),
+          HttpClientLayer.live,
+          BodyStore.live,
+          PostgresClient.live(onInit = poolInit),
+          JobRunner.live,
+          JobScheduler.live
+        ),
         // Read-idle reaper: zio-http leaves `idleTimeout=None`, so a client that vanishes without FIN/RST would pin
         // a Netty channel and fd forever. Read-only, so it never resets on writes — which means every live log/progress
         // follow is reaped on this schedule and reconnects transparently (#161).
         // See docs/adr/0015-server-read-idle-reaper.md before changing the duration.
-        Server.defaultWith(_.binding(host, port).idleTimeout(60.seconds))
+        server = Server.defaultWith(_.binding(host, port).idleTimeout(60.seconds))
       )
     }
+
+  /** The services [[boot]] builds for the HTTP server and the loops to run on. */
+  private[server] type Served = JobScheduler & JobRunner & PostgresClient & BodyStore & ChessComClient
+
+  // The pid file stays in the caller's scope, so it outlives the services. The rest gets a scope of its own, closed
+  // before the services' one (#334), and acquired so that shutdown stops the loops, then the jobs, which ends their
+  // followers' requests, then the HTTP server, whose drain would otherwise wait on those requests.
+  private[server] def serveWith(
+    pidFileOption: Option[Path],
+    services: ZLayer[Scope, Throwable, Served],
+    server: ZLayer[Any, Throwable, Server]
+  ): ZIO[Scope, Throwable, Unit] =
+    (pidFileManaged(pidFileOption) *> ZIO.scoped {
+      for {
+        serverEnv <- server.build
+        _         <- ZIO.addFinalizer(ZIO.serviceWithZIO[JobRunner](_.interruptAll))
+        _         <- running.provideSomeEnvironment[Scope & Served](_ ++ serverEnv)
+      } yield ()
+    }).provideSomeLayer[Scope](services)
+
+  private def running: URIO[Scope & Served & Server, Unit] = {
+    val routes: Routes[JobRunner & ChessComClient & PostgresClient, Nothing] =
+      List(
+        HealthRoutes.routes,
+        JobRoutes.routes,
+        ScheduleRoutes.routes,
+        BlacklistRoutes.routes,
+        RecruitmentCriteriaRoutes.routes,
+        ManagedClubRoutes.routes,
+        ClubRoutes.routes
+      ).reduce(_ ++ _)
+
+    for {
+      scheduler <- ZIO.service[JobScheduler]
+      _         <- scheduler.start
+      _         <- retentionSweepForked
+      _         <- Server.serve(routes)
+    } yield ()
+  }
 
   /** The pool's `onInit`: names the database, then applies the tables. The pool is lazy by default
     * (`initializationFailTimeout = -1`), so naming it first means even a boot that then fails to connect says where it

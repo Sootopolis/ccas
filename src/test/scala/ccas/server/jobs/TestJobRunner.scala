@@ -37,6 +37,8 @@ object TestJobRunner extends ZIOSpecDefault {
     testCancelInterruptsRunningJob,
     testCancelUnknownReturnsFalse,
     testNonOperatorInterruptDoesNotMarkCancelled,
+    testInterruptAllEndsFollowsAndLeavesRunning,
+    testInterruptAllCatchesAJobSubmittedWhileItWaits,
     testRecentJobsOrdered,
     testSubmitWritesJobLog,
     testLogStreamReplaysCompletedJob,
@@ -58,7 +60,7 @@ object TestJobRunner extends ZIOSpecDefault {
     // #132 regression seam: provide ProgressDisplay as a plain *service* with NO ambient ZLogger. `ProgressDisplay.live`
     // would install `asZLogger` into `currentLoggers` for the whole suite fiber tree, so every `submit` would inherit it
     // and fill the per-job file even on the unfixed code — masking the bug. `make` installs no logger, so each `submit`
-    // here runs from the same default-logger context as a zio-http request handler (the condition #132 fails under).
+    // here runs without `asZLogger`, as a zio-http request handler did until #334 (the condition #132 fails under).
     // The fix wraps each job in `display.installLogger`, so the per-job-log assertions (testSubmitWritesJobLog,
     // testLogStreamReplaysCompletedJob, testLogStreamTailsLiveJob) pass only with the fix applied. Caveat: without
     // `live`'s suite-wide default-logger removal, a test that logs at the test-fiber level (outside a job) hits the
@@ -242,10 +244,10 @@ object TestJobRunner extends ZIOSpecDefault {
     } yield assertTrue(!result)
   }
 
-  // Guards the cancel-vs-shutdown distinction: the job interrupts ITSELF (stands in for the `layerScope` interrupt fired
-  // at every in-flight job on server shutdown), so no operator `cancel` ran and no id is in `cancelRequested`. The
-  // onInterrupt hook must therefore NOT write Cancelled — the row stays Running for the next boot's orphan sweep. Were
-  // the gate absent, this would flip to Cancelled/"Cancelled by operator", mislabeling a shutdown as an operator cancel.
+  // Guards the cancel-vs-shutdown distinction: the job interrupts ITSELF (stands in for a shutdown's interrupt of every
+  // in-flight job), so no operator `cancel` ran and no id is in `cancelRequested`. The onInterrupt hook must therefore
+  // NOT write Cancelled — the row stays Running for the next boot's orphan sweep. Were the gate absent, this would flip
+  // to Cancelled/"Cancelled by operator", mislabelling a shutdown as an operator cancel.
   private def testNonOperatorInterruptDoesNotMarkCancelled =
     test("a job interrupted without an operator cancel is left Running, not marked Cancelled") {
       for {
@@ -256,6 +258,67 @@ object TestJobRunner extends ZIOSpecDefault {
         _   <- ZIO.sleep(300.millis)
         job <- runner.status(id)
       } yield assertTrue(job.exists(j => j.status == JobRunStatus.Running && j.completedAt.isEmpty))
+    }
+
+  // What a shutdown relies on before it stops the HTTP server: the follower's stream ends, so the server's drain has
+  // nothing to wait for (#334), and the row stays Running for the next boot's orphan sweep.
+  private def testInterruptAllEndsFollowsAndLeavesRunning =
+    test("interruptAll ends a running job's log stream and leaves its row Running for the next boot") {
+      for {
+        _       <- deleteAllJobRuns
+        runner  <- ZIO.service[JobRunner]
+        started <- Promise.make[Nothing, Unit]
+        id <- runner.submit(
+          kind = JobKind.MatchRef,
+          clubIdOption = None,
+          params = None,
+          trigger = RunTrigger.Cli,
+          effect = _ => started.succeed(()) *> ZIO.never
+        )
+        _      <- started.await
+        logs   <- runner.logStream(id)
+        stream <- streamingLines(logs)
+        follow <- stream.runCollect.fork
+        _      <- runner.interruptAll
+        ended  <- follow.join.timeout(5.seconds)
+        job    <- runner.status(id)
+      } yield assertTrue(ended.isDefined, job.exists(j => j.status == JobRunStatus.Running && j.completedAt.isEmpty))
+    }
+
+  // A shutdown runs `interruptAll` while the HTTP server still takes requests, so a job can arrive while it waits on
+  // another's unwinding. Missed, that job's follower would hold the server's drain after all (#334).
+  private def testInterruptAllCatchesAJobSubmittedWhileItWaits =
+    test("interruptAll also interrupts a job submitted while it waits for another to unwind") {
+      for {
+        _         <- deleteAllJobRuns
+        runner    <- ZIO.service[JobRunner]
+        running   <- Promise.make[Nothing, Unit]
+        unwinding <- Promise.make[Nothing, Unit]
+        hold      <- Promise.make[Nothing, Unit]
+        _ <- runner.submit(
+          kind = JobKind.MatchRef,
+          clubIdOption = None,
+          params = None,
+          trigger = RunTrigger.Cli,
+          effect = _ => (running.succeed(()) *> ZIO.never).onInterrupt(unwinding.succeed(()) *> hold.await)
+        )
+        _        <- running.await
+        stopping <- runner.interruptAll.fork
+        _        <- unwinding.await
+        started  <- Promise.make[Nothing, Unit]
+        late <- runner.submit(
+          kind = JobKind.MatchRef,
+          clubIdOption = Some(clubIdA),
+          params = None,
+          trigger = RunTrigger.Cli,
+          effect = _ => started.succeed(()) *> ZIO.never
+        )
+        _       <- started.await
+        _       <- hold.succeed(())
+        stopped <- stopping.join.timeout(5.seconds)
+        // `cancel` finds no live fiber for a job that has already been interrupted and released.
+        missed <- runner.cancel(late)
+      } yield assertTrue(stopped.isDefined, !missed)
     }
 
   private def testSubmitWritesJobLog = test("submit routes job log lines into the per-job file") {

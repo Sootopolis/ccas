@@ -100,6 +100,8 @@ object TestRoutes extends ZIOSpecDefault {
         }
       }
 
+    override def interruptAll: UIO[Unit] = ZIO.unit
+
     override def recentJobs(limit: Int): RIO[PostgresClient, List[JobRun]] =
       jobs.get.map(_.values.toList.sortBy(_.startedAt)(using Ordering[Instant].reverse).take(limit))
 

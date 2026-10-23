@@ -100,6 +100,7 @@ object TestRetentionPass extends ZIOSpecDefault {
 
     override def status(id: JobRunId): RIO[PostgresClient, Option[JobRun]] = unused
     override def cancel(id: JobRunId): UIO[Boolean]                        = unused
+    override def interruptAll: UIO[Unit]                                   = unused
     override def recentJobs(limit: Int): RIO[PostgresClient, List[JobRun]] = unused
 
     override def logStream(id: JobRunId): RIO[PostgresClient, JobLogs] = unused

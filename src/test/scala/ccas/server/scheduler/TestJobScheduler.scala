@@ -65,6 +65,7 @@ object TestJobScheduler extends ZIOSpecDefault {
 
     override def status(id: JobRunId): RIO[PostgresClient, Option[JobRun]] = ZIO.none
     override def cancel(id: JobRunId): UIO[Boolean] = ZIO.succeed(false)
+    override def interruptAll: UIO[Unit] = ZIO.unit
     override def recentJobs(limit: Int): RIO[PostgresClient, List[JobRun]] = ZIO.succeed(Nil)
     override def logStream(id: JobRunId): RIO[PostgresClient, JobLogs] = ZIO.succeed(JobLogs.NoSuchJob)
     override def progressStream(id: JobRunId): RIO[PostgresClient, Option[ZStream[Any, Throwable, String]]] = ZIO.none
@@ -84,6 +85,7 @@ object TestJobScheduler extends ZIOSpecDefault {
 
     override def status(id: JobRunId): RIO[PostgresClient, Option[JobRun]] = ZIO.none
     override def cancel(id: JobRunId): UIO[Boolean] = ZIO.succeed(false)
+    override def interruptAll: UIO[Unit] = ZIO.unit
     override def recentJobs(limit: Int): RIO[PostgresClient, List[JobRun]] = ZIO.succeed(Nil)
     override def logStream(id: JobRunId): RIO[PostgresClient, JobLogs] = ZIO.succeed(JobLogs.NoSuchJob)
     override def progressStream(id: JobRunId): RIO[PostgresClient, Option[ZStream[Any, Throwable, String]]] = ZIO.none
@@ -103,6 +105,7 @@ object TestJobScheduler extends ZIOSpecDefault {
 
     override def status(id: JobRunId): RIO[PostgresClient, Option[JobRun]] = ZIO.none
     override def cancel(id: JobRunId): UIO[Boolean] = ZIO.succeed(false)
+    override def interruptAll: UIO[Unit] = ZIO.unit
     override def recentJobs(limit: Int): RIO[PostgresClient, List[JobRun]] = ZIO.succeed(Nil)
     override def logStream(id: JobRunId): RIO[PostgresClient, JobLogs] = ZIO.succeed(JobLogs.NoSuchJob)
     override def progressStream(id: JobRunId): RIO[PostgresClient, Option[ZStream[Any, Throwable, String]]] = ZIO.none
@@ -282,6 +285,7 @@ object TestJobScheduler extends ZIOSpecDefault {
 
         override def status(id: JobRunId): RIO[PostgresClient, Option[JobRun]] = ZIO.none
         override def cancel(id: JobRunId): UIO[Boolean] = ZIO.succeed(false)
+        override def interruptAll: UIO[Unit] = ZIO.unit
         override def recentJobs(limit: Int): RIO[PostgresClient, List[JobRun]] = ZIO.succeed(Nil)
         override def logStream(id: JobRunId): RIO[PostgresClient, JobLogs] = ZIO.succeed(JobLogs.NoSuchJob)
         override def progressStream(id: JobRunId): RIO[PostgresClient, Option[ZStream[Any, Throwable, String]]] = ZIO.none
@@ -324,6 +328,7 @@ object TestJobScheduler extends ZIOSpecDefault {
 
           override def status(id: JobRunId): RIO[PostgresClient, Option[JobRun]] = ZIO.none
           override def cancel(id: JobRunId): UIO[Boolean] = ZIO.succeed(false)
+          override def interruptAll: UIO[Unit] = ZIO.unit
           override def recentJobs(limit: Int): RIO[PostgresClient, List[JobRun]] = ZIO.succeed(Nil)
           override def logStream(id: JobRunId): RIO[PostgresClient, JobLogs] = ZIO.succeed(JobLogs.NoSuchJob)
           override def progressStream(id: JobRunId): RIO[PostgresClient, Option[ZStream[Any, Throwable, String]]] = ZIO.none
@@ -374,6 +379,7 @@ object TestJobScheduler extends ZIOSpecDefault {
 
           override def status(id: JobRunId): RIO[PostgresClient, Option[JobRun]] = ZIO.none
           override def cancel(id: JobRunId): UIO[Boolean] = ZIO.succeed(false)
+          override def interruptAll: UIO[Unit] = ZIO.unit
           override def recentJobs(limit: Int): RIO[PostgresClient, List[JobRun]] = ZIO.succeed(Nil)
           override def logStream(id: JobRunId): RIO[PostgresClient, JobLogs] = ZIO.succeed(JobLogs.NoSuchJob)
           override def progressStream(id: JobRunId): RIO[PostgresClient, Option[ZStream[Any, Throwable, String]]] = ZIO.none
