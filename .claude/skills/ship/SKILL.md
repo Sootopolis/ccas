@@ -85,16 +85,16 @@ The `ccas` launcher on `PATH` runs the build staged in the base worktree, so a m
 
 - **The shipped branch** — delete it: `git push origin --delete <branch>` (only if it was published and the user did not already press **Delete branch**), then catch `wip` up (below) and delete the local branch from there. That order is forced: git refuses to delete the branch you are standing on, and step 0 left you on it. No confirmation needed for a throwaway branch this flow cut in step 0, once the equality check below passes. A remote deleted from the UI before that check loses nothing — the local branch still holds the work until the check clears it.
 - **A delete denied by the classifier** ("Git Destructive") is handed over, not worked around: give the exact `git push origin --delete` / `git branch -D` commands for the user to run with `!`.
-- **Before deleting anything published, prove it holds nothing unique.** Compare the branch against the commit the merge actually produced, which is the only reference point that cannot move:
+- **Before deleting anything published, prove it holds nothing unique.** Compare each file the branch changed against the commit the merge actually produced, which is the only reference point that cannot move:
 
   ```
   MERGED=$(gh pr view <n> --json mergeCommit -q .mergeCommit.oid)   # resolves for a squash merge too
-  git diff $MERGED <branch>                                          # empty -> the squash captured the branch exactly
+  git diff $MERGED <branch> -- $(git diff --no-renames --name-only $(git merge-base $MERGED <branch>) <branch>)
   ```
 
-  Empty means every byte of the branch is in that commit, so deletion loses nothing no matter what has landed since. Non-empty means STOP and ASK — including when the user picked a merge method other than squash, which can make it non-empty by itself. Cross-check with `gh pr list --state all --head <branch>`.
+  Empty means everything the branch changed is in that commit, so deletion loses nothing no matter what has landed since. Diff only those files: a PR merged between the branch's cut and its own merge is in `$MERGED` but not in the branch, so a whole-tree diff lists its files too (#339, merged 16 s after #338). Non-empty means STOP and ASK, whether the branch holds work the merge lacks or another PR changed one of its files. Cross-check with `gh pr list --state all --head <branch>`.
 - **`git branch -d` will refuse; that refusal is noise.** It tests commit reachability, which squash-merge always breaks. That empty diff is the proof `-d` wanted — use `git branch -D` once it is clean, never before. The remote delete fires `pre-push`, which self-skips on a delete-only push; nothing to bypass. It can instead fail with `remote ref does not exist` when the branch was already deleted from the UI — harmless, the branch is already gone.
-- **Do not compare against `<base>` instead.** A concurrent PR landing on base makes `git diff <base> <branch>` non-empty by reporting the other PR's files as deletions, and nothing then distinguishes "branch has unique work" from "base has newer work". The merge commit above is immune; base is not.
+- **Do not compare against `<base>` instead.** A PR landing on base after this merge makes the diff non-empty wherever it touched one of the branch's files, and nothing then distinguishes "branch has unique work" from "base has newer work". The merge commit stays put; base does not.
 - **Never use `git rev-list` counts or `git cherry` for this.** They compare commits rather than content, and squash-merge guarantees the two disagree: `rev-list` reads the branch as ahead because the squash is a new SHA, and `git cherry` compares *patch-ids*, so an N-commit branch collapsed into one squash commit yields N patch-ids matching nothing in base. `git cherry` is trustworthy only when the branch had exactly one commit, which is not the normal case here.
 - **Ambiguous, or the user calls a branch long-lived?** ASK before deleting. Deletion is irreversible from here.
 
