@@ -1,6 +1,6 @@
 # A membership only matches show is inferred when asked for, not stored
 
-**Status:** Accepted, 2026-10-17 (#302). Amends [0021](0021-membership-ends-are-windows.md) and [0022](0022-a-closure-hides-a-membership.md): History no longer guesses memberships or reads club lists, so no observed row replaces a guess.
+**Status:** Accepted, 2026-10-17 (#302). Amends [0021](0021-membership-ends-are-windows.md) and [0022](0022-a-closure-hides-a-membership.md): History no longer guesses memberships or reads club lists, so no observed row replaces a guess. Amended by #341: Recruitment's `excludeFormerMembers` rules out a player with any row in the club, a hidden one included, not only an ended one, so it reads the same players History starts from.
 
 ## Context
 

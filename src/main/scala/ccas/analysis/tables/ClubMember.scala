@@ -89,12 +89,6 @@ object ClubMember {
         .run().toList
     )
 
-  def selectClubFormer(clubId: ClubId): ZIO[PostgresClient, SQLException, List[ClubMember]] =
-    connectZIO(
-      sql"SELECT $selectCols FROM club_member WHERE club_id = $clubId AND until IS NOT NULL".query[ClubMember].run()
-        .toList
-    )
-
   def insert(item: ClubMember): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""INSERT INTO club_member (club_id, player_id, since, last_seen, until)

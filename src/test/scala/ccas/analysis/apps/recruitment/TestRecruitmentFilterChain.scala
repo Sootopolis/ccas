@@ -8,6 +8,7 @@ import zio.{RIO, ZLayer}
 
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.*
 import ccas.analysis.tables.*
+import ccas.api.misc.enums.PlayerStatusCategory
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, Elo, Username}
 import ccas.utils.ProgressDisplay
 import ccas.utils.client.BodyStore
@@ -78,6 +79,8 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
     testFormerMemberRejectedWhenExcludeFormerMembersTrue,
     testFormerMemberAcceptedWhenExcludeFormerMembersFalse,
     testPlayerOnTheClubsSideOfABoardIsAFormerMember,
+    testHiddenMemberActiveAgainIsAFormerMember,
+    testOpenRowIsAFormerMember,
     testAdminOfSizableClubRejected,
     testAdminOfSmallClubAccepted,
     testAdminOfNewlyDiscoveredSizableClubRejected,
@@ -536,6 +539,66 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
         _          <- evalCandidates(client, runId, List(Username("alice")), criteria)
         cands      <- RecruitmentCandidate.selectByRun(runId)
       } yield assertTrue(cands.head.outcome == CandidateOutcome.Rejected)).ensuring(TestDbCleanup.clearMatches.orDie)
+    }
+
+  /** A player whose account reopened, and who left the club before any reconcile saw them back, keeps the row the
+    * closure hid (ADR 0022).
+    */
+  private def testHiddenMemberActiveAgainIsAFormerMember =
+    test("a player a closed account hid is rejected as a former member once the account is active again") {
+      val responses = Map("player/alice" -> apiPlayerJson(200, "alice"))
+      val criteria  = makeCriteria(excludeFormerMembers = true)
+      val closed = Player(
+        playerId = pid0,
+        joined = Times.t0,
+        username = Username("alice"),
+        status = PlayerStatusCategory.Closed,
+        title = None,
+        since = Times.t1
+      )
+      val hidden = ClubMember.joined(clubId = clubId, playerId = pid0, since = Times.t0).hidden(Times.t1)
+      for {
+        _          <- seedDb
+        criteriaId <- seedCriteria(criteria)
+        _          <- Player.insertIfNew(closed)
+        _          <- ClubMember.insert(hidden)
+        runId <- RecruitmentRun.insert(
+          clubId = clubId,
+          criteriaId = criteriaId,
+          trigger = RunTrigger.Cli,
+          startedAt = Times.t0,
+          target = None,
+          jobRunIdOption = None
+        )
+        former <- RecruitmentApp.formerMembersOf(clubId)
+        client <- fakeChessComClient(responses)
+        _      <- evalCandidates(client, runId, List(Username("alice")), criteria)
+        cands  <- RecruitmentCandidate.selectByRun(runId)
+      } yield assertTrue(former.contains(pid0), cands.head.outcome == CandidateOutcome.Rejected)
+    }
+
+  private def testOpenRowIsAFormerMember =
+    test("a player with an open row in the club is rejected as a former member") {
+      val responses = Map("player/alice" -> apiPlayerJson(200, "alice"))
+      val criteria  = makeCriteria(excludeFormerMembers = true)
+      for {
+        _          <- seedDb
+        criteriaId <- seedCriteria(criteria)
+        _          <- seedPlayer(pid0)
+        _          <- ClubMember.insert(ClubMember.joined(clubId = clubId, playerId = pid0, since = Times.t0))
+        runId <- RecruitmentRun.insert(
+          clubId = clubId,
+          criteriaId = criteriaId,
+          trigger = RunTrigger.Cli,
+          startedAt = Times.t0,
+          target = None,
+          jobRunIdOption = None
+        )
+        former <- RecruitmentApp.formerMembersOf(clubId)
+        client <- fakeChessComClient(responses)
+        _      <- evalCandidates(client, runId, List(Username("alice")), criteria)
+        cands  <- RecruitmentCandidate.selectByRun(runId)
+      } yield assertTrue(former.contains(pid0), cands.head.outcome == CandidateOutcome.Rejected)
     }
 
   private def testAdminOfSizableClubRejected = test("admin of sizable club rejected when avoidAdminMinClubSize is set") {

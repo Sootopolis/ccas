@@ -280,12 +280,13 @@ object RecruitmentApp extends ZIOAppDefault {
     } yield finalRun
   }
 
-  /** The players `excludeFormerMembers` rules out: those with an ended row, and those who sat on the club's side of a
-    * board, a membership no row may record (ADR 0023). Its current members among them are not candidates anyway.
+  /** The players `excludeFormerMembers` rules out, the same ones History starts from: those with any row, whether
+    * ended, hidden or open, and those who sat on the club's side of a board, a membership no row may record (ADR 0023).
+    * The club's current members among them are not candidates anyway.
     */
   private[recruitment] def formerMembersOf(clubId: ClubId): RIO[PostgresClient, Set[PlayerId]] =
-    (ClubMember.selectClubFormer(clubId) <&> ClubMatchBoard.selectPlayerIdsForClub(clubId)).map {
-      (ended, playedForClub) => ended.map(_.playerId).toSet ++ playedForClub
+    (ClubMember.selectClub(clubId) <&> ClubMatchBoard.selectPlayerIdsForClub(clubId)).map {
+      (rows, playedForClub) => rows.map(_.playerId).toSet ++ playedForClub
     }
 
   private def runExplorePhase(
