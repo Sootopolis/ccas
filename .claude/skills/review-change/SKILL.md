@@ -27,7 +27,7 @@ For every symbol, setting, column, JSON field, CLI option and behaviour the chan
 
 ## 3. Check
 
-Start the bug hunt with the built-in `/code-review`, at an effort level scaled to the change. It runs in the background, so carry on meanwhile. Verify each finding it returns before acting on it: a wrong one is rejected in the report with its reason, and the rest are fixed in step 4 like any other. It knows nothing of this repo beyond what it reads, so then check the change and everything step 2 found for at least:
+Start the bug hunt with the built-in `/code-review`, at an effort level scaled to the change. It runs in the background, so carry on meanwhile, but don't inject faults then: it reads the working tree, and would review the broken copy. Verify each finding it returns before acting on it: a wrong one is rejected in the report with its reason, and the rest are fixed in step 4 like any other. It knows nothing of this repo beyond what it reads, so then check the change and everything step 2 found for at least:
 
 - bugs, including the edge cases no test reaches
 - security, when the change alters the server's HTTP routes, the handling of a secret, or what a shell script does: run the built-in `/security-review` as well
