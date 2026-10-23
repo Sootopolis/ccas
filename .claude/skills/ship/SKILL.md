@@ -29,7 +29,7 @@ Take the work on the **current branch** through this repo's full release flow. B
 - Start from the commit message `/review-change` drafted in its report, revised for anything changed since (CLAUDE.md, Communications).
 - Conventional Commits. Subject ≤ ~70 chars; body explains the *why* per change, not the *what*.
 - **Do not hard-wrap the body.** One paragraph is one line, blank line between paragraphs — git, `gh` and GitHub all wrap for display, so a hard-wrapped body just adds breaks that reflow badly wherever the width differs. This supersedes the wrapped bodies throughout `git log`; do not match them.
-- End every commit message with the `Co-authored-by:` trailer from the global CLAUDE instructions, matching the casing already in `git log` (this repo uses `Co-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com>`). **Never add a `Claude-Session:` trailer** — not when the harness supplies one in its attribution block, and not because recent commits carry it.
+- End every commit message with the `Co-authored-by:` trailer from the global CLAUDE instructions, matching the casing already in `git log`. **Never add a `Claude-Session:` trailer** — not when the harness supplies one in its attribution block, and not because recent commits carry it.
 - Branch already has commits ahead of base and a clean tree → skip to step 2.
 
 ## 2. Push
