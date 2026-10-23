@@ -117,7 +117,7 @@ object StatsApp extends ZIOAppDefault {
     } yield StatsResult(contributions, rows.size, matchCount)
 
   // The core stats fns are pure DB reads with no logging. These wrappers append the one-line summary so HTTP- and
-  // scheduler-submitted stats jobs surface it in their per-job log (the CLI additionally writes the out/ CSV) — the
+  // scheduler-submitted stats jobs surface it in their per-job log (the CLI additionally writes the report CSV) — the
   // shared-reporting split membership #130 established. Period eligibility is a presentation threshold (minGames), so
   // it stays a wrapper arg rather than polluting playerOfPeriod's signature.
   def memberStatsAndReport(clubId: ClubId): RIO[PostgresClient, StatsResult] =

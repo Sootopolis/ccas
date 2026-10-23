@@ -1,10 +1,9 @@
 package ccas.server.jobs
 
-import java.nio.file.{Files, Path, Paths}
+import java.io.IOException
+import java.nio.file.{Files, Path}
 import java.sql.SQLException
 import java.time.temporal.ChronoUnit
-
-import com.typesafe.config.ConfigFactory
 
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.withTransaction
@@ -21,6 +20,7 @@ import zio.{
   Ref,
   Schedule,
   Scope,
+  Task,
   UIO,
   URIO,
   ZEnvironment,
@@ -33,7 +33,7 @@ import ccas.analysis.tables.{AppSetting, Club, RunTrigger}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId}
 import ccas.utils.client.ChessComClient
 import ccas.utils.errors.{ConflictException, safeMessage}
-import ccas.utils.{BarSnapshot, JobLogSink, ProgressDisplay, ProgressSnapshot}
+import ccas.utils.{AppDir, BarSnapshot, JobLogSink, ProgressDisplay, ProgressSnapshot}
 
 /** Why a job's logs might not stream, so the route can tell an unknown job from one whose log has aged out instead of
   * answering both with an empty success (#244).
@@ -110,6 +110,28 @@ object JobRunner {
   // 0/negative value from busy-looping the sampler. ~60 fps, far tighter than any sensible configured cap.
   private val MinRefreshInterval: Duration = 16.millis
 
+  /** Where job logs go: `job-logs.directory` (`JOB_LOGS_DIR`), else `$XDG_STATE_HOME/ccas/job-logs`. */
+  val LogDir: AppDir = AppDir(
+    configKey = "job-logs.directory",
+    overrideVar = "JOB_LOGS_DIR",
+    base = AppDir.XdgBase.State,
+    leaf = "job-logs"
+  )
+
+  // A relative setting is honoured, but pinned once at boot and named in a warning: a boot from another directory puts
+  // its logs somewhere else, and this says where.
+  private[jobs] def prepareLogDir(configured: Path): Task[Path] = {
+    val dir = configured.toAbsolutePath
+    for {
+      _ <- ZIO.whenDiscard(!configured.isAbsolute)(
+        ZIO.logWarning(s"job-logs.directory '$configured' is relative; resolved against the launch directory to $dir")
+      )
+      _ <- ZIO
+        .attemptBlocking(Files.createDirectories(dir))
+        .mapError(e => new IOException(s"Cannot create job-log directory $dir; set JOB_LOGS_DIR to a writable one", e))
+    } yield dir
+  }
+
   val live: RLayer[JobEnv, JobRunner] =
     ZLayer.scoped {
       for {
@@ -136,11 +158,7 @@ object JobRunner {
         // and interrupts any still in flight when the layer is released, normally none after `interruptAll`. `forkIn`
         // self-cleans — a job's child scope closes when its fiber exits — so completed jobs don't accumulate.
         layerScope <- ZIO.scope
-        logDir <- ZIO.attempt {
-          val dir = Paths.get(ConfigFactory.load().getString("job-logs.directory"))
-          Files.createDirectories(dir)
-          dir
-        }.orDie
+        logDir <- AppDir.fromConfig(LogDir).flatMap(prepareLogDir)
         now <- Clock.instant
         _   <- JobRun.markOrphansAsFailed(now).provideEnvironment(ZEnvironment(pgClient))
       } yield new JobRunnerLive(

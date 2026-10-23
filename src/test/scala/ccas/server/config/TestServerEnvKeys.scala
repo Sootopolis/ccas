@@ -24,6 +24,7 @@ object TestServerEnvKeys extends ZIOSpecDefault {
         ServerEnvKeys.byName("DATABASE_URL").map(_.domain) == Some(Database),
         ServerEnvKeys.byName("SERVER_PORT").map(_.domain) == Some(Server),
         ServerEnvKeys.byName("JOB_LOGS_DIR").map(_.domain) == Some(Server),
+        ServerEnvKeys.byName("CCAS_OUTPUT_DIR").map(_.domain) == Some(Server),
         ServerEnvKeys.byName("SCHEDULER_POLL_MINUTES").map(_.domain) == Some(Scheduler),
         ServerEnvKeys.byName("CHESS_COM_API_COOLDOWN_SECONDS").map(_.domain) == Some(ChessComClient),
         ServerEnvKeys.byName("CCAS_R2_ENDPOINT").map(_.domain) == Some(BodyStore)
