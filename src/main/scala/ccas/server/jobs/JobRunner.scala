@@ -76,6 +76,13 @@ trait JobRunner {
     */
   def cancel(id: JobRunId): UIO[Boolean]
 
+  /** Interrupt every job running in THIS process, as a shutdown does, including any submitted while it waits, and wait
+    * for each to unwind, which ends its `logStream` and `progressStream` followers. Unlike [[cancel]], it marks no job
+    * as cancelled by the operator, so each row stays `Running` for the next boot's `markOrphansAsFailed`. `CcasServer`
+    * calls it before stopping the HTTP server, whose drain would otherwise wait on those followers (#334).
+    */
+  def interruptAll: UIO[Unit]
+
   /** Return the most recent jobs ordered by start time descending, up to `limit`. */
   def recentJobs(limit: Int): RIO[PostgresClient, List[JobRun]]
 
@@ -120,14 +127,14 @@ object JobRunner {
         // Promise. The map is per-process, so `cancel` only reaches fibers in THIS server (see the trait doc / #110).
         runningFibers <- Ref.make(Map.empty[JobRunId, Promise[Nothing, Fiber.Runtime[Throwable, Unit]]])
         // Ids for which an operator `cancel` has been requested. `cancel` adds an id before interrupting its fiber; the
-        // job's `onInterrupt` writes `Cancelled` ONLY if its id is here. This distinguishes an operator cancel from the
-        // shutdown interrupt `layerScope` fires at every in-flight job on server stop — the latter must leave the row
-        // `Running` so the next boot's `markOrphansAsFailed` records it as `Failed`/"Service restarted", not a spurious
-        // "Cancelled by operator". `release` clears the id, so the set only ever holds live-and-cancelling jobs.
+        // job's `onInterrupt` writes `Cancelled` ONLY if its id is here. This tells an operator cancel from a
+        // shutdown's interrupt (`interruptAll`, or `layerScope`'s close), which must leave the row `Running` so the
+        // next boot's `markOrphansAsFailed` records it as `Failed`/"Service restarted", not a spurious "Cancelled by
+        // operator". `release` clears the id, so the set only ever holds live-and-cancelling jobs.
         cancelRequested <- Ref.make(Set.empty[JobRunId])
-        // The layer's own scope owns the job fibers (see `submit`): forking into it detaches each job from the
-        // short-lived request fiber that submitted it, and interrupts any still in flight when the server shuts down.
-        // `forkIn` self-cleans — a job's child scope closes when its fiber exits — so completed jobs don't accumulate.
+        // The layer's own scope owns the job fibers (see `submit`), detaching each from the request that submitted it,
+        // and interrupts any still in flight when the layer is released, normally none after `interruptAll`. `forkIn`
+        // self-cleans — a job's child scope closes when its fiber exits — so completed jobs don't accumulate.
         layerScope <- ZIO.scope
         logDir <- ZIO.attempt {
           val dir = Paths.get(ConfigFactory.load().getString("job-logs.directory"))
@@ -237,9 +244,9 @@ object JobRunner {
             _ <- runningFibers.update(_ + (id -> fiberSlot))
             fiber <- restore(
               // `installLogger` forces ProgressDisplay's ZLogger onto the job fiber itself, so the per-job FileSink is
-              // written regardless of which fiber submitted the job. `forkIn` inherits the submitter's loggers, and an
-              // HTTP request handler carries only the default logger (not the app-scoped ProgressDisplay one) — so
-              // without this, HTTP-submitted jobs logged to the default logger and their per-job file stayed empty (#132).
+              // written regardless of which fiber submitted the job. `forkIn` inherits the submitter's loggers, which
+              // needn't include it: an HTTP request handler's didn't until #334, and HTTP-submitted jobs' per-job
+              // files stayed empty (#132).
               // `currentChannel.locally` scopes bar publishing to this job's channel for the whole run (forked children
               // inherit the FiberRef), mirroring `currentSink` for log lines.
               display.installLogger(
@@ -286,8 +293,8 @@ object JobRunner {
 
       // Interruption is a `Cause`, not a typed error, so it bypasses `foldZIO`'s branches entirely. This hook fires on
       // ANY interruption — but only an operator `cancel` (which registers the id in `cancelRequested` before
-      // interrupting) should record `Cancelled`. The other interrupt source is `layerScope` tearing down every in-flight
-      // job on server shutdown; those must be left `Running` so the next boot's `markOrphansAsFailed` records them as
+      // interrupting) should record `Cancelled`. The other source is a shutdown (`interruptAll`, or `layerScope`'s
+      // close), whose jobs must be left `Running` so the next boot's `markOrphansAsFailed` records them as
       // `Failed`/"Service restarted", not "Cancelled by operator". The finalizer runs uninterruptibly so the write lands;
       // `markCancelled`'s `WHERE status = Running` guard makes it a no-op if the job reached a terminal state first.
       def onCancelled: UIO[Unit] =
@@ -327,6 +334,19 @@ object JobRunner {
             }
           )
       }
+
+    // Leaves `cancelRequested` alone, so `onCancelled` writes nothing. `interrupt`, unlike `cancel`'s `interruptFork`,
+    // waits for the job to unwind. Goes round again for jobs submitted meanwhile, since the HTTP server still takes
+    // requests. Skips ids already interrupted, since a job interrupted before `release` was in place never leaves.
+    override def interruptAll: UIO[Unit] = {
+      def interruptNew(done: Set[JobRunId]): UIO[Unit] =
+        runningFibers.get.map(_.removedAll(done)).flatMap { fresh =>
+          ZIO.whenDiscard(fresh.nonEmpty)(
+            ZIO.foreachParDiscard(fresh.values)(_.await.flatMap(_.interrupt)) *> interruptNew(done ++ fresh.keySet)
+          )
+        }
+      interruptNew(Set.empty)
+    }
 
     override def recentJobs(limit: Int): RIO[PostgresClient, List[JobRun]] =
       JobRun.selectRecent(limit)
