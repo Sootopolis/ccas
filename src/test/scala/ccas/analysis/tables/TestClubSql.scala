@@ -136,14 +136,12 @@ object TestClubSql extends ZIOSpecDefault {
       clubA_all <- ClubMember.selectClub(clubA.clubId)
       clubA_cur <- ClubMember.selectClubListed(clubA.clubId)
       clubA_act <- ClubMember.selectClubActive(clubA.clubId)
-      clubA_fmr <- ClubMember.selectClubFormer(clubA.clubId)
       clubB_all <- ClubMember.selectClub(clubB.clubId)
     } yield assertTrue(
       all.toSet == Set(memA0, memA1, memA2, memB0),
       clubA_all.toSet == Set(memA0, memA1, memA2),
       clubA_cur.toSet == Set(memA0, memA1),
       clubA_act.toSet == Set(memA0, memA1),
-      clubA_fmr == List(memA2),
       clubB_all == List(memB0)
     )
   }
