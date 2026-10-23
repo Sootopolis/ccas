@@ -15,7 +15,7 @@ The diff is where a review starts, not where it ends. The defects this review ex
 
 For every symbol, setting, column, JSON field, CLI option and behaviour the change touches, find what depends on it. Search; don't reason from memory.
 
-- **Callers and readers**, tests included.
+- **Callers and readers**, tests included. When a row can take a new state, or a column a new value, that means every query filtering on those columns, which may now leave the new rows on the wrong side.
 - **Prose describing the old behaviour**: scaladoc, `README.md`, `docs/architecture.md`, `docs/chess-com-api.md`, `CLAUDE.md`, the skills, the ADRs. A reversed decision gets a superseding ADR, not an edit to the old one.
 - **Tests whose names state the old guarantee.**
 - **Build and CI**: `.github/workflows/`, `.githooks/`, `scripts/`, `build.sbt`, `project/`.
@@ -56,7 +56,7 @@ Label every finding **blocking**, **non-blocking**, **nit** or **question**, so 
 - what was run, and the result
 - for each new test, the fault injected into the code it guards and the failure that followed, so the user can trust a test by its name
 - the few places worth the user's own reading, as `file:line`
-- a draft commit message, so the user has read it before shipping
+- a draft commit message, to `/ship`'s rules for one (step 1), so the user has read it before shipping
 - for a large change, an offer of a second review by a fresh agent that sees only the diff, the issue and the plan, since this review shares the author's blind spots. It costs more, so the user decides each time.
 
 Leave the changes uncommitted (CLAUDE.md, Git).
