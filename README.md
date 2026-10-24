@@ -154,8 +154,6 @@ For zsh, prefer generating the script once to a file and sourcing that (`ccas co
 
 Dynamic candidates come from `${XDG_CACHE_HOME:-~/.cache}/ccas/clubs.txt` and `recent-jobs.txt`, refreshed automatically as you run normal commands (the club list is fetched from `GET /api/managed-clubs` at most every few hours — falling back to `GET /api/clubs` only while you manage no clubs yet; each submitted job id is recorded). On a fresh install these are empty, so only subcommands and flags complete until the first command populates them — unless `default_clubs` is set in the [config file](#cli-config-file), which seeds the club list so completion works immediately.
 
-The committed `completions/ccas.bash` is the generated output of `ccas completion bash`; `TestCcasCompletion` fails if it drifts from the emitter or if a new subcommand/flag isn't covered. Regenerate it with `ccas completion bash > completions/ccas.bash`.
-
 ## Applications
 
 Jobs can be submitted via the REST API or run on a schedule.
@@ -392,8 +390,6 @@ The first poll runs at boot, and fires every schedule that came due while the se
 **Any build fails with `Unable to locate a Java Runtime`.** Check `java -version` before suspecting anything else. This has happened via a stale SDKMAN candidate: an entry installed from Homebrew (`21.0.12-brew`) is a symlink into the Homebrew keg, so removing or upgrading that formula leaves the candidate dangling and every `java` invocation fails. `sdk env` in the repo root selects the pinned Temurin build; `sdk uninstall java <dangling-candidate>` clears the stale entry.
 
 **Phantom `X is not a member of ccas` compile errors, or tests failing with `error while loading …tasty` or `relation … does not exist`.** IntelliJ's sbt shell and a terminal `sbt` share `target/`, and concurrent use corrupts the Zinc incremental-compilation state; IntelliJ's own compile server and test runs share `target/` and the `ccas_test` database too. Run one at a time; `sbt clean` recovers. A failure that repeats with IntelliJ closed is real.
-
-**Tests are order-dependent or flaky.** `Test/parallelExecution := false` is set deliberately — several suites touch process-global state (stdout capture, config caches) or a shared schema. Within a suite, ZIO Test still runs tests in parallel, so a suite sharing mutable schema or filesystem state needs `@@ TestAspect.sequential`. Fix races at the root; do not paper over them with `@@ TestAspect.flaky`.
 
 ## Further Reading
 

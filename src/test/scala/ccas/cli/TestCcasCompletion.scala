@@ -9,8 +9,8 @@ import zio.test.{assertCompletes, assertTrue, Spec, TestAspect, TestResult, ZIOS
 import ccas.cli.CompletionSpec.PositionalKind
 
 /** Guards the generated shell completions ([[CompletionEmitter]]). Three concerns:
-  *   1. the committed `completions/ccas.bash` equals the bash emitter output (regenerate with
-  *      `ccas completion bash > completions/ccas.bash`);
+  *   1. the committed `completions/ccas.bash` equals the bash emitter output (regenerate it as
+  *      `.claude/rules/cli.md` says);
   *   2. every emitted script is valid for its shell (`<shell> -n`, skipped when that shell isn't installed);
   *   3. [[CompletionSpec]] still covers every command and flag in the [[CliCommand]] tree, so a newly added
   *      subcommand or flag can't silently go uncompleted.
@@ -61,7 +61,7 @@ object TestCcasCompletion extends ZIOSpecDefault {
   override def spec: Spec[Any, Any] = suite("TestCcasCompletion")(
     test(s"$BashScriptPath equals the bash emitter output") {
       val committed = Files.readString(Paths.get(BashScriptPath))
-      // On failure: regenerate with `ccas completion bash > completions/ccas.bash`.
+      // On failure: regenerate it as `.claude/rules/cli.md` says.
       assertTrue(committed == CompletionEmitter.bash)
     },
     // These three checks spawn `<shell> -n` subprocesses. They previously carried `@@ TestAspect.flaky` to absorb

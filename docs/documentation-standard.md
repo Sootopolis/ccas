@@ -16,11 +16,14 @@ Route by the question the reader is asking. Every fact has exactly one home; eve
 | How do I install / run / configure it? | `README.md` | the feature changes |
 | What does this behaviour guarantee? | the test name and its assertions | the behaviour changes |
 | What must a contributor or agent never do here? | `CLAUDE.md` | rarely |
+| What must they never do in this kind of file? | `.claude/rules/<topic>.md`, scoped by its `paths:` header | the files it covers move |
 | How does an agent carry out a recurring procedure here? | `.claude/skills/<name>/SKILL.md` | the procedure changes |
 | How does Chess.com's API actually behave? | [`docs/chess-com-api.md`](chess-com-api.md) | Chess.com changes, or an observation proves wrong |
 | What is the exact value of a version / default / limit? | the code that defines it | — |
 
 The framework behind the split is [Diátaxis](https://diataxis.fr/): reference (scaladoc, README's API section), how-to (README's task sections), and explanation (ADRs) are different genres with different lifetimes, and mixing them is what makes a document unmaintainable. Decision records use [Nygard's lightweight ADR format](https://cognitect.com/blog/2011/11/15/documenting-architecture-decisions).
+
+A rule belongs in `.claude/rules/` rather than `CLAUDE.md` only when it matters solely while a file it covers is open, because Claude Code loads it only when Claude reads, writes or edits such a file ([path-specific rules](https://code.claude.com/docs/en/memory#path-specific-rules)). A rule needed at design time, such as no `ChessComClient` call inside `withTransaction`, or for a command run alone, such as never `scalafmtAll`, stays in `CLAUDE.md`.
 
 **Never write the same fact twice.** If a rationale is worth a paragraph, it is worth an ADR — and then the code carries a pointer, not a copy:
 
@@ -107,6 +110,7 @@ A comment over budget signals that the knowledge belongs somewhere else, not tha
 | Scaladoc on a member | 10 lines | ADR + one-line pointer |
 | Scaladoc on a class / object | 15 lines | ADR, or a `docs/` explanation page |
 | `CLAUDE.md` | 2,500 words | move to `docs/`, link from `CLAUDE.md` |
+| a `.claude/rules/` file | 750 words | split it by path, or move what is not a rule to `docs/` |
 | ADR | 2 pages | the decision is really several decisions |
 
 Budgets count every line of the comment, delimiters included, so a 10-line scaladoc is `/**`, eight lines of text and `*/`. `@param` / `@return` lines and their continuations do not count — per-field reference material is exempt on the **shape** of the comment, one line per field with no prose beyond it, never on what its author calls the class. A category like "DTO" is not marked in Scala and nothing adjudicates it, so any class could be argued into it after the fact.
@@ -114,6 +118,8 @@ Budgets count every line of the comment, delimiters included, so a 10-line scala
 **§9's gate deliberately allows more than this table does**, and the gap is the point rather than an inconsistency — read §9 before concluding a green check means a comment is the right length.
 
 `CLAUDE.md` is loaded into every agent session, so its cost is paid on every task, and long instruction files measurably degrade adherence to the instructions already in them ([Claude Code best practices](https://code.claude.com/docs/en/best-practices)). The budget is 2,500 rather than a rounder 2,000 because the file sat at 1,994 after its first pass: a budget the next edit breaches teaches the reader that the numbers are aspirational. 2,500 leaves room for a rule or two without a rewrite, and the checker asserts it so it cannot drift the way the count in §2 did. Treat the file as a rules file, not an architecture manual: build commands, conventions a linter cannot enforce, and links.
+
+A `.claude/rules/` file has a budget of its own because its cost is paid only in sessions that open a file it covers. The Scala rules were about 500 words when they moved there from `CLAUDE.md` (#321), and 750 leaves them room for a rule or two on the same reasoning.
 
 ## 7. References are the compression mechanism
 
@@ -133,14 +139,14 @@ The fourth was not an ADR and was not forced into the numbering: `chess-com-clie
 
 ## 9. Enforcement
 
-`scripts/check-docs.py` runs from `.githooks/pre-push` (enable per clone with `git config core.hooksPath .githooks`) and as CI's `docs` job, which also catches a push that bypassed the hook. Run it directly with `python3 scripts/check-docs.py`.
+`scripts/check-docs.py` runs from `.githooks/pre-push` (enable per clone with `git config core.hooksPath .githooks`) and as CI's `docs` job, which also catches a push that bypassed the hook. Run it directly with `python3 scripts/check-docs.py`. Its own tests, `scripts/test_check_docs.py`, run in the same two places.
 
 1. **Comment-block length** — a block comment over 15 lines, or a run of `//` lines over 8, fails.
-2. **`CLAUDE.md` size** — over the §6 word budget fails.
-3. **Pointer resolution** — a markdown link, or a `docs/...` path cited from Scala, that does not resolve fails.
+2. **Instruction-file size** — `CLAUDE.md`, or a `.claude/rules/` file, over its §6 word budget fails.
+3. **Pointer resolution** — a markdown link, or a `docs/...` path cited from Scala, that does not resolve fails. So does a `.claude/rules/` file whose header is not a `paths:` list of double-quoted patterns, one per line and without braces (the check cannot expand them), or holds a pattern that matches no file: YAML that does not parse makes Claude Code load the rule in every session, and a dead pattern means it never loads.
 4. **ADR currency** — a superseded ADR whose status line has no forward link fails, as does a citation of one from code or from a doc outside `docs/adr/` that does not say it is superseded.
 
-Rules 1 and 2 are judgement calls; 3 and 4 are correctness. Only rule 1 takes an inline waiver — `CLAUDE.md`'s budget is one global number rather than a per-case call, so it is changed in the script deliberately, not waived in passing. See §10.
+Rules 1 and 2 are judgement calls; 3 and 4 are correctness. Only rule 1 takes an inline waiver — the instruction-file budgets are global numbers rather than per-case calls, so they are changed in the script deliberately, not waived in passing. See §10.
 
 **The gate is looser than §6 on purpose, and the gap is the point.** A regex cannot tell a member scaladoc from a class one, and it cannot judge whether five lines of `//` earn their place — so the ceilings catch essays while §6's numbers stay review rules. They are set off this repo's own distribution rather than taste (see [Baseline](#baseline-august-2026)), so a failure means something genuinely new rather than pre-existing debt.
 

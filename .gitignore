@@ -45,8 +45,9 @@ build/
 
 ### Claude Code ###
 .claude/*
-# Track shared project skills; keep local settings (settings.local.json, locks) ignored.
+# Track shared project skills and path-scoped rules; keep local settings (settings.local.json, locks) ignored.
 !.claude/skills/
+!.claude/rules/
 
 ### Environment ###
 .env

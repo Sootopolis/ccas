@@ -18,7 +18,8 @@ if [ "$saw_any" = 1 ] && [ "$all_deletes" = 1 ]; then
 fi
 
 if command -v python3 >/dev/null 2>&1; then
-  echo "Checking the documentation standard..."
+  echo "Testing the documentation checker, then checking the documentation standard..."
+  python3 scripts/test_check_docs.py || exit 1
   python3 scripts/check-docs.py || exit 1
 else
   echo "Pre-push: python3 not found, skipping the documentation check."

@@ -11,7 +11,7 @@ import ccas.utils.sql.PostgresClient.connectZIO
 /** Generic single-row-per-key store (`app_setting (key TEXT PK, value TEXT)`) for DB-owned app-level settings: values
   * tunable at runtime without a config-file edit or redeploy, and consistent across every process sharing one DB (the
   * server plus any CLI invocation that boots `Tables.ensureTables`). A single server is the supported deployment model
-  * (see CLAUDE.md "Deployment model"). Kept orthogonal to `client_config`, which holds per-process `ChessComClient`
+  * (see CLAUDE.md, Deployment). Kept orthogonal to `client_config`, which holds per-process `ChessComClient`
   * tuning.
   *
   * Typed access goes through [[AppSetting.Key]] and the registry in the companion (`CacheRetentionDays`, `all`) so the
