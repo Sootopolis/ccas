@@ -1,3 +1,4 @@
+import _root_.scalafix.sbt.{BuildInfo => ScalafixBuildInfo}
 import Versions.*
 
 ThisBuild / version      := vCcas
@@ -105,6 +106,13 @@ lazy val root = (project in file("."))
     Compile / packageSrc / publishArtifact := false,
     buildInfoKeys                   := Seq(name, version, scalaVersion, sbtVersion),
     buildInfoPackage                := "ccas.info",
+    // Local scalafix rules (src/scalafix), compiled against scalafix-core's Scala 2.13 build. See
+    // docs/adr/0025-conventions-checked-by-scalafix.md.
+    libraryDependencies ++= Seq(
+      ("ch.epfl.scala" %% "scalafix-core" % ScalafixBuildInfo.scalafixVersion).cross(CrossVersion.for3Use2_13) %
+        ScalafixConfig,
+      "org.scala-lang" %% "scala3-library" % scalaVersion.value % ScalafixConfig
+    ),
     // The launcher's copy of the two flags, and the only one that probes the JDK — it can meet a version neither
     // `.sdkmanrc` nor CI pins. See docs/adr/0018-every-jvm-carries-the-same-two-flags.md (#231).
     bashScriptExtraDefines ++= Seq(

@@ -25,7 +25,7 @@ docker compose up -d
 # Configure environment
 cp .env.example .env   # edit with your values
 
-# Enable the tracked git hooks (pre-push runs the full test suite)
+# Enable the tracked git hooks (pre-push runs the docs and scalafix checks, then the full test suite)
 git config core.hooksPath .githooks
 
 # Run the server (default port 8080)
@@ -33,6 +33,9 @@ sbt "runMain ccas.cli.Main server up"
 
 # Run tests (requires ccas_test database from docker compose)
 sbt test
+
+# Check the coding conventions scalafix enforces; without --check it applies its fixes
+sbt "scalafixAll --check"
 ```
 
 `core.hooksPath` is per-clone and not carried by `git clone`, so set it once on every machine you work from — otherwise pushes skip the pre-push test run silently.
