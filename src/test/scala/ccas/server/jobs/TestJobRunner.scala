@@ -5,13 +5,14 @@ import java.nio.file.{Files, Path, Paths, StandardOpenOption}
 import java.nio.file.attribute.FileTime
 import java.time.Instant
 import java.time.temporal.ChronoUnit
+import java.util.concurrent.Executors
 
 import scala.jdk.CollectionConverters.*
 
 import com.typesafe.config.ConfigFactory
 
 import ccas.utils.sql.PostgresClient
-import zio.{Duration, durationInt, Promise, Ref, ZIO, ZLayer}
+import zio.{Duration, durationInt, Executor, Promise, Ref, UIO, ZIO, ZLayer}
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.analysis.tables.{AppSetting, Club, RunTrigger}
@@ -39,6 +40,9 @@ object TestJobRunner extends ZIOSpecDefault {
     testNonOperatorInterruptDoesNotMarkCancelled,
     testInterruptAllEndsFollowsAndLeavesRunning,
     testInterruptAllCatchesAJobSubmittedWhileItWaits,
+    testCancelBeforeFirstRunEndsFollow,
+    testCancelBeforeFirstRunIsRecorded,
+    testInterruptAllBeforeFirstRun,
     testRecentJobsOrdered,
     testSubmitWritesJobLog,
     testLogStreamReplaysCompletedJob,
@@ -319,6 +323,75 @@ object TestJobRunner extends ZIOSpecDefault {
         // `cancel` finds no live fiber for a job that has already been interrupted and released.
         missed <- runner.cancel(late)
       } yield assertTrue(stopped.isDefined, !missed)
+    }
+
+  private def testCancelBeforeFirstRunEndsFollow =
+    test("a job cancelled before its fiber first runs still ends its log follow") {
+      for {
+        _      <- deleteAllJobRuns
+        runner <- ZIO.service[JobRunner]
+        early  <- interruptBeforeFirstRun(runner, runner.cancel)
+      } yield assertTrue(!early.ran, early.followEnded)
+    }
+
+  private def testCancelBeforeFirstRunIsRecorded =
+    test("a job cancelled before its fiber first runs is recorded Cancelled, so it can run again") {
+      for {
+        _      <- deleteAllJobRuns
+        runner <- ZIO.service[JobRunner]
+        early  <- interruptBeforeFirstRun(runner, runner.cancel)
+        job    <- awaitStatus(runner, early.id)
+        again  <- runner.submit(JobKind.MatchRef, None, None, RunTrigger.Cli, _ => ZIO.unit)
+        rerun  <- awaitStatus(runner, again)
+      } yield assertTrue(!early.ran, job.status == JobRunStatus.Cancelled, rerun.status == JobRunStatus.Completed)
+    }
+
+  // A shutdown can land just as the scheduler or a request submits a job, and `interruptAll` waits for each job to
+  // unwind, so a job whose cleanup never ran would hold the shutdown up.
+  private def testInterruptAllBeforeFirstRun =
+    test("interruptAll ends the follow of a job interrupted before its fiber first runs, and leaves it Running") {
+      for {
+        _      <- deleteAllJobRuns
+        runner <- ZIO.service[JobRunner]
+        // Clears the jobs earlier tests left running, so the one below is the only job `interruptAll` finds.
+        _      <- runner.interruptAll
+        early  <- interruptBeforeFirstRun(runner, _ => runner.interruptAll)
+        job    <- runner.status(early.id)
+      } yield assertTrue(
+        !early.ran,
+        early.followEnded,
+        job.exists(j => j.status == JobRunStatus.Running && j.completedAt.isEmpty)
+      )
+    }
+
+  private final case class EarlyInterrupt(id: JobRunId, ran: Boolean, followEnded: Boolean)
+
+  // On one thread, a forked job can't start until its submitter lets go of the thread. `cancel`, and `interruptAll` on
+  // a lone job, queue the interrupt before letting go, so it is pending before the job's first step (#335). The follow
+  // runs to its end before the thread shuts down, since the job unwinds there.
+  private def interruptBeforeFirstRun(
+    runner: JobRunner,
+    interrupt: JobRunId => UIO[Any]
+  ): ZIO[PostgresClient, Throwable, EarlyInterrupt] =
+    ZIO.scoped {
+      for {
+        pool    <- ZIO.acquireRelease(ZIO.succeed(Executors.newSingleThreadExecutor()))(p => ZIO.succeed(p.shutdown()))
+        started <- Ref.make(false)
+        id <- runner
+          .submit(
+            kind = JobKind.MatchRef,
+            clubIdOption = None,
+            params = None,
+            trigger = RunTrigger.Cli,
+            effect = _ => started.set(true) *> ZIO.never
+          )
+          .tap(interrupt)
+          .onExecutor(Executor.fromJavaExecutor(pool))
+        logs   <- runner.logStream(id)
+        stream <- streamingLines(logs)
+        ended  <- stream.runDrain.timeout(5.seconds)
+        ran    <- started.get
+      } yield EarlyInterrupt(id = id, ran = ran, followEnded = ended.isDefined)
     }
 
   private def testSubmitWritesJobLog = test("submit routes job log lines into the per-job file") {
