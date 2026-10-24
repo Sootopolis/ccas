@@ -76,7 +76,11 @@ Steps 6-9 run after the merge, which cannot be undone, so check what can be chec
 The `ccas` launcher on `PATH` runs the build staged in the base worktree, so a merge changes nothing the user runs until it is re-staged. Skip this when the merge changed nothing the build stages (`src/main` behaviour, `build.sbt`, `project/`), and say so.
 - **A change that needs a migration stages after it** (`/migrate`): a new build on the old schema fails, which is why #254's rollout held the old launcher until production was migrated.
 - **Stage with the base worktree's own installer**: `<base-worktree>/scripts/install-cli.sh --stage`. It stages the worktree it lives in, found from its own path, and refreshes the installed shell completion, which a CLI change would otherwise leave stale. Run the base worktree's copy, not the session's: the session's would point the launcher at its own build. Check the date on `target/universal/stage/lib/ccas.ccas-*.jar` in the base worktree; the `bin/` scripts keep their old date, since their content does not change.
-- **A running server keeps the old build until it is restarted.** Staging does not disturb it: sbt writes each jar to a temporary file and renames it into place. Restarting is the user's call, and before booting:
+- **A running server keeps the old build until it is restarted.** Staging does not disturb it: sbt writes each jar to a temporary file and renames it into place. Find each such server rather than assume one (#346), and report it by port and database, or say that none is running:
+  - `pgrep -f <base-worktree>/target/universal/stage/lib/` lists every process running the staged build, a running `ccas` CLI command included;
+  - the ones listening are servers: `lsof -nP -a -p <pid> -iTCP -sTCP:LISTEN` gives each one's port, and `curl -s http://127.0.0.1:<port>/health/ready` the database it serves;
+  - not `SERVER_PORT`, which Claude's shell may have inherited from the `wip` tree, where it names the local server's port.
+- **Restarting is the user's call**, and before booting:
   - Ask whether the schedules that came due while the server was down should fire at boot, and whether the machine needs keeping awake: README, Troubleshooting ("A scheduled job fires late, or not at all") has both.
   - Boot from a terminal opened in the base worktree, not from Claude's shell or a `!` command, which carry the session's starting environment: started in the `wip` tree, that includes direnv's local `DATABASE_URL`, `SERVER_PORT` and body-store settings (`/migrate`, step 0).
 
