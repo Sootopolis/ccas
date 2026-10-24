@@ -227,14 +227,9 @@ object JobRunner {
         label = clubIdOption.fold(kind.toString) { cid =>
           s"$kind/${slugOption.fold(s"#${ClubId.unwrap(cid)}")(ClubSlug.unwrap)}"
         }
-        // `FileSink.make` acquires a held-open fd whose only close path is `release` (the child's `.ensuring`); an
-        // interrupt between the open and the `forkIn` would leak it, so open + register + fork sit inside one
-        // `uninterruptibleMask` (`restore` keeps only the forked job interruptible). `forkIn(layerScope)` — not
-        // `.fork` — so the job outlives the submitting request and is interrupted on server shutdown. The completion
-        // promise is registered before forking so a log-tail subscribe sees it the instant submit returns; `release`
-        // completes + de-registers it in the CHILD fiber, so a single `acquireRelease` bracket doesn't fit.
-        // `currentSink.locally` wraps the whole `runJob` so the success/failure handlers' own logs also land in the
-        // per-job file; forked children inherit the FiberRef, so parallel work shares the sink.
+        // `FileSink.make` opens an fd whose only close path is `release`, so open, register and fork share one mask.
+        // The child inherits it, so `release`, `onCancelled` and the logging context are in place before `restore` lets
+        // the job's own work be interrupted: a fiber interrupted as it turns interruptible runs nothing inside (#335).
         _ <- ZIO.uninterruptibleMask { restore =>
           for {
             sink    <- FileSink.make(logDir, JobRunId.unwrap(id))
@@ -258,27 +253,28 @@ object JobRunner {
               _ <- runningFibers.update(_ - id)
               _ <- cancelRequested.update(_ - id)
             } yield ()
+            // Before the fork, so a log-tail subscribe sees the promise the instant submit returns. `release` completes
+            // and de-registers it in the child, which is why a single `acquireRelease` doesn't fit.
             _ <- completions.update(_ + (id -> promise))
             _ <- jobChannels.update(_ + (id -> channel))
             _ <- runningFibers.update(_ + (id -> fiberSlot))
-            fiber <- restore(
-              // `installLogger` forces ProgressDisplay's ZLogger onto the job fiber itself, so the per-job FileSink is
-              // written regardless of which fiber submitted the job. `forkIn` inherits the submitter's loggers, which
-              // needn't include it: an HTTP request handler's didn't until #334, and HTTP-submitted jobs' per-job
-              // files stayed empty (#132).
-              // `currentChannel.locally` scopes bar publishing to this job's channel for the whole run (forked children
-              // inherit the FiberRef), mirroring `currentSink` for log lines.
-              display.installLogger(
-                ProgressDisplay.sourced(label)(
-                  ProgressDisplay.currentChannel.locally(Some(channel))(
-                    JobLogSink.currentSink
-                      .locally(sink)(
-                        runJob(id, effect(Some(id))).ensuring(release)
-                      )
-                  )
+            // `installLogger` forces ProgressDisplay's ZLogger onto the job fiber itself, so the per-job FileSink is
+            // written regardless of which fiber submitted the job. `forkIn` inherits the submitter's loggers, which
+            // needn't include it: an HTTP request handler's didn't until #334, and HTTP-submitted jobs' per-job
+            // files stayed empty (#132).
+            // `currentChannel.locally` scopes bar publishing to this job's channel for the whole run (forked children
+            // inherit the FiberRef), mirroring `currentSink` for log lines.
+            fiber <- display.installLogger(
+              ProgressDisplay.sourced(label)(
+                ProgressDisplay.currentChannel.locally(Some(channel))(
+                  // Wraps the handlers too, so their lines land in the per-job file; forked children inherit it.
+                  JobLogSink.currentSink
+                    .locally(sink)(
+                      restore(runJob(id, effect(Some(id)))).onInterrupt(onCancelled(id))
+                    )
                 )
               )
-            ).forkIn(layerScope)
+            ).ensuring(release).forkIn(layerScope)
             _ <- fiberSlot.succeed(fiber)
           } yield ()
         }
@@ -310,28 +306,27 @@ object JobRunner {
             .unit.catchAll(e => ZIO.logError(s"Failed to record job completion: ${e.safeMessage}"))
         }
 
-      // Interruption is a `Cause`, not a typed error, so it bypasses `foldZIO`'s branches entirely. This hook fires on
-      // ANY interruption — but only an operator `cancel` (which registers the id in `cancelRequested` before
-      // interrupting) should record `Cancelled`. The other source is a shutdown (`interruptAll`, or `layerScope`'s
-      // close), whose jobs must be left `Running` so the next boot's `markOrphansAsFailed` records them as
-      // `Failed`/"Service restarted", not "Cancelled by operator". The finalizer runs uninterruptibly so the write lands;
-      // `markCancelled`'s `WHERE status = Running` guard makes it a no-op if the job reached a terminal state first.
-      def onCancelled: UIO[Unit] =
-        ZIO.whenZIODiscard(cancelRequested.get.map(_.contains(id))) {
-          Clock.instant.flatMap { now =>
-            JobRun.markCancelled(id, now)
-              .provideEnvironment(env)
-              .unit.catchAll(e => ZIO.logError(s"Failed to record job cancellation: ${e.safeMessage}"))
-          }
-        }
-
       // A defect bypasses `foldZIO` as interruption does, but nothing else records it: the job would stay `Running`,
       // blocking its kind and club, until the next boot. Log it with its trace, then record it as a failure.
       effect
         .provideEnvironment(env)
         .catchAllDefect(defect => ZIO.logErrorCause("Job died", Cause.die(defect)) *> ZIO.fail(defect))
         .foldZIO(onFailure, _ => onSuccess)
-        .onInterrupt(onCancelled)
+
+    // Interruption is a `Cause`, not a typed error, so it bypasses `runJob`'s `foldZIO` entirely. This hook fires on
+    // ANY interruption — but only an operator `cancel` (which registers the id in `cancelRequested` before
+    // interrupting) should record `Cancelled`. The other source is a shutdown (`interruptAll`, or `layerScope`'s
+    // close), whose jobs must be left `Running` so the next boot's `markOrphansAsFailed` records them as
+    // `Failed`/"Service restarted", not "Cancelled by operator". The finalizer runs uninterruptibly so the write lands;
+    // `markCancelled`'s `WHERE status = Running` guard makes it a no-op if the job reached a terminal state first.
+    private def onCancelled(id: JobRunId): UIO[Unit] =
+      ZIO.whenZIODiscard(cancelRequested.get.map(_.contains(id))) {
+        Clock.instant.flatMap { now =>
+          JobRun.markCancelled(id, now)
+            .provideEnvironment(env)
+            .unit.catchAll(e => ZIO.logError(s"Failed to record job cancellation: ${e.safeMessage}"))
+        }
+      }
 
     override def status(id: JobRunId): RIO[PostgresClient, Option[JobRun]] =
       JobRun.selectId(id)
@@ -355,17 +350,14 @@ object JobRunner {
       }
 
     // Leaves `cancelRequested` alone, so `onCancelled` writes nothing. `interrupt`, unlike `cancel`'s `interruptFork`,
-    // waits for the job to unwind. Goes round again for jobs submitted meanwhile, since the HTTP server still takes
-    // requests. Skips ids already interrupted, since a job interrupted before `release` was in place never leaves.
-    override def interruptAll: UIO[Unit] = {
-      def interruptNew(done: Set[JobRunId]): UIO[Unit] =
-        runningFibers.get.map(_.removedAll(done)).flatMap { fresh =>
-          ZIO.whenDiscard(fresh.nonEmpty) {
-            ZIO.foreachParDiscard(fresh.values)(_.await.flatMap(_.interrupt)) *> interruptNew(done ++ fresh.keySet)
-          }
+    // waits for the job to unwind, by which time `release` has de-registered it. So going round again finds only jobs
+    // submitted meanwhile, which can still arrive: the HTTP server is taking requests.
+    override def interruptAll: UIO[Unit] =
+      runningFibers.get.flatMap { running =>
+        ZIO.whenDiscard(running.nonEmpty) {
+          ZIO.foreachParDiscard(running.values)(_.await.flatMap(_.interrupt)) *> interruptAll
         }
-      interruptNew(Set.empty)
-    }
+      }
 
     override def recentJobs(limit: Int): RIO[PostgresClient, List[JobRun]] =
       JobRun.selectRecent(limit)
