@@ -9,8 +9,9 @@ import ccas.server.jobs.JobLogStream
 import ccas.utils.ProgressSnapshot
 import ccas.utils.errors.ErrorResponse
 
-/** Thin HTTP client to a local `CcasServer`. Every method fails with [[CliError]] (carrying an exit code) so the
-  * dispatcher can render a single message and exit cleanly. JSON bodies use the server's own wire DTOs.
+/** Thin HTTP client to a local `CcasServer`. Methods fail with [[ServerUnreachable]] when no response arrived,
+  * [[StreamDropped]] when a stream breaks after its response began, and otherwise [[CliError]] (carrying an exit code),
+  * so the dispatcher can render a single message and exit cleanly. JSON bodies use the server's own wire DTOs.
   */
 trait CcasApiClient {
   def getJson[Resp: JsonDecoder](path: String): Task[Resp]
@@ -47,11 +48,12 @@ object CcasApiClient {
       ZIO.fromEither(URL.decode(baseUrl + path))
         .mapError(e => CliError(s"invalid server URL '$baseUrl$path': ${rootMessage(e)}", 2))
 
+    private def unreachable(e: Throwable): ServerUnreachable =
+      ServerUnreachable(s"cannot reach $baseUrl — start a server with 'ccas server up'. (${rootMessage(e)})")
+
     /** Any transport-level failure means the server isn't reachable — non-2xx responses come back as a `Response`. */
     private def send(req: Request): Task[Response] =
-      http(req).mapError { e =>
-        CliError(s"cannot reach $baseUrl — start a server with 'ccas server up'. (${rootMessage(e)})", 1)
-      }
+      http(req).mapError(unreachable)
 
     private def errorMessage(body: String, status: Status): String =
       body.fromJson[ErrorResponse].map(_.error).getOrElse {
@@ -100,7 +102,7 @@ object CcasApiClient {
     // stream with the server's error message. `KeepAliveLine` frames (interleaved by the server so a silent job can't
     // idle the connection shut, #150) are filtered out here so callers only see real log lines. A transport failure is
     // split on the `connected` flag: if a 200 already reached us the stream dropped mid-follow (the job keeps running
-    // server-side) → `StreamDropped`; otherwise we never reached the server → an unreachable `CliError`.
+    // server-side) → `StreamDropped`; otherwise we never reached the server → `ServerUnreachable`.
     override def streamLines(path: String)(onLine: String => UIO[Unit]): Task[Unit] =
       for {
         u         <- url(path)
@@ -122,9 +124,7 @@ object CcasApiClient {
             case e =>
               connected.get.flatMap { wasConnected =>
                 if (wasConnected) { ZIO.fail(StreamDropped(rootMessage(e))) }
-                else {
-                  ZIO.fail(CliError(s"cannot reach $baseUrl — start a server with 'ccas server up'. (${rootMessage(e)})", 1))
-                }
+                else { ZIO.fail(unreachable(e)) }
               }
           }
       } yield ()

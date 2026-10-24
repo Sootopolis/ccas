@@ -64,14 +64,18 @@ object Dispatcher {
       // uninterruptible-unwind problem a ZIO-level `.timeout` hits, and — unlike a blanket request timeout — leaves
       // legitimately-slow synchronous calls (e.g. a large `blacklist` add) and the streaming follows untouched.
       .provide(HttpClientLayer.live)
-      .catchAll {
-        case e: CliError  => Console.printLineError(s"error: ${e.message}").orDie.as(e.exitCode)
-        case e: Throwable => Console.printLineError(s"error: ${rootMessage(e)}").orDie.as(1)
-      }
+      .catchAll(reportFailure)
       // Last-resort net for unexpected defects (e.g. an invalid opaque-type construction) so the binary prints a
       // clean message instead of dumping a fiber stack trace.
       .catchAllDefect(d => Console.printLineError(s"error: ${rootMessage(d)}").orDie.as(1))
       .map(ExitCode(_))
+
+  /** Prints a failed command's error and returns its exit code: a [[CliError]]'s own, otherwise 1. */
+  private[cli] def reportFailure(failure: Throwable): UIO[Int] =
+    failure match {
+      case e: CliError  => Console.printLineError(s"error: ${e.message}").orDie.as(e.exitCode)
+      case e: Throwable => Console.printLineError(s"error: ${rootMessage(e)}").orDie.as(1)
+    }
 
   private def rootMessage(e: Throwable): String =
     Option(e.getMessage).getOrElse(e.getClass.getSimpleName)
