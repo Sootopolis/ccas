@@ -72,6 +72,9 @@ scalacOptions ++= Seq(
   "-Wunused:all",
   "-Wshadow:all",
   "-Wvalue-discard",
+  // In every build, not only CI's: one set of flags keeps the pre-push hook and CI in agreement, and changing the flags
+  // recompiles everything.
+  "-Werror",
   "-Xmax-inlines:64"
 )
 

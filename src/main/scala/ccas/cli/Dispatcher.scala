@@ -139,89 +139,81 @@ object Dispatcher {
     cmd: CliCommand.ServerCommand,
     currentClubOption: Option[String]
   ): Task[Int] = cmd match {
-    case CliCommand.Membership(_, clubs, clubIdOption, all, trust, _, detach) =>
-      resolveClubs(api, clubs, clubIdOption, all, currentClubOption).flatMap { targets =>
-        followEachClub(follower, targets, detach, currentClubOption) { target =>
+    case membership: CliCommand.Membership =>
+      for {
+        targets <- resolveClubs(api, membership.clubs, membership.clubIdOption, membership.all, currentClubOption)
+        code <- followEachClub(follower, targets, membership.detach, currentClubOption) { target =>
           api.postJson[MembershipRequest, List[ClubJobResult]](
             "/api/jobs/membership",
-            MembershipRequest(NonEmptyChunk.single(target.query), trust)
+            MembershipRequest(NonEmptyChunk.single(target.query), membership.trustUsernames)
           )
         }
-      }
+      } yield code
 
-    case CliCommand.History(_, clubs, clubIdOption, all, full, includeFinished, refresh, refreshMinHours, _, detach) =>
-      resolveClubs(api, clubs, clubIdOption, all, currentClubOption).flatMap { targets =>
-        followEachClub(follower, targets, detach, currentClubOption) { target =>
+    case history: CliCommand.History =>
+      for {
+        targets <- resolveClubs(api, history.clubs, history.clubIdOption, history.all, currentClubOption)
+        code <- followEachClub(follower, targets, history.detach, currentClubOption) { target =>
           api.postJson[HistoryRequest, List[ClubJobResult]](
             "/api/jobs/history",
             HistoryRequest(
-              NonEmptyChunk.single(target.query),
-              flag(full),
-              flag(includeFinished),
-              flag(refresh),
-              refreshMinHours            )
+              clubs = NonEmptyChunk.single(target.query),
+              full = flag(history.full),
+              includeFinished = flag(history.includeFinished),
+              refresh = flag(history.refresh),
+              refreshMinHours = history.refreshMinHours
+            )
           )
         }
-      }
+      } yield code
 
-    case CliCommand.Recruit(
-          _,
-          club,
-          clubIdOption,
-          alias,
-          target,
-          cumulative,
-          sourceClubs,
-          timeLimitMinutes,
-          explore,
-          stdout,
-          report,
-          runId,
-          _
-        ) =>
-      recruitUsageError(report, runId, club, clubIdOption) match {
-        case Some(message)  => ZIO.fail(CliError(message, 2))
-        case None if report => reportInvited(api, club, clubIdOption, currentClubOption, runId, stdout)
+    case recruit: CliCommand.Recruit =>
+      recruitUsageError(recruit.report, recruit.runId, recruit.club, recruit.clubIdOption) match {
+        case Some(message) => ZIO.fail(CliError(message, 2))
         case None =>
-          // Marking Invited is destructive (a forgotten invite burns the candidate for the cooldown), so it needs
-          // positive intent: only `--stdout` (programmatic consumption) auto-confirms from the CLI. An interactive
-          // run prompts; any other non-interactive run (e.g. stdout redirected to a file) defers rather than silently
-          // inviting: `autoConfirm = Some(false)` for all but `--stdout` has the server leave them Deferred.
-          val interactiveConfirm = !stdout && hasTty
-          for {
-            clubTarget <- resolveClub(club, clubIdOption, currentClubOption)
-            result <- sendSettlingAmbiguity(clubTarget, (r: ClubJobResult) => List(r.resolution), hasTty) { chosen =>
-              api.postJson[RecruitmentRequest, ClubJobResult](
-                "/api/jobs/recruitment",
-                RecruitmentRequest(
-                  club = chosen.query,
-                  alias = alias,
-                  target = target,
-                  cumulative = flag(cumulative),
-                  sourceClubs = Option.when(sourceClubs.nonEmpty)(sourceClubs.map(ClubSlug(_))),
-                  timeLimitMinutes = timeLimitMinutes,
-                  explore = explore,
-                  autoConfirm = Option.unless(stdout)(false)
+          if (recruit.report) {
+            reportInvited(api, recruit.club, recruit.clubIdOption, currentClubOption, recruit.runId, recruit.stdout)
+          } else {
+            // Marking Invited is destructive (a forgotten invite burns the candidate for the cooldown), so it needs
+            // positive intent: only `--stdout` (programmatic consumption) auto-confirms from the CLI. An interactive
+            // run prompts; any other non-interactive run (e.g. stdout redirected to a file) defers rather than
+            // silently inviting: `autoConfirm = Some(false)` for all but `--stdout` has the server leave them Deferred.
+            val interactiveConfirm = !recruit.stdout && hasTty
+            for {
+              clubTarget <- resolveClub(recruit.club, recruit.clubIdOption, currentClubOption)
+              result <- sendSettlingAmbiguity(clubTarget, (r: ClubJobResult) => List(r.resolution), hasTty) { chosen =>
+                api.postJson[RecruitmentRequest, ClubJobResult](
+                  "/api/jobs/recruitment",
+                  RecruitmentRequest(
+                    club = chosen.query,
+                    alias = recruit.alias,
+                    target = recruit.target,
+                    cumulative = flag(recruit.cumulative),
+                    sourceClubs = Option.when(recruit.sourceClubs.nonEmpty)(recruit.sourceClubs.map(ClubSlug(_))),
+                    timeLimitMinutes = recruit.timeLimitMinutes,
+                    explore = recruit.explore,
+                    autoConfirm = Option.unless(recruit.stdout)(false)
+                  )
                 )
-              )
-            }
-            _    <- noteResolutions(currentClubOption, clubTarget, List(jobOutcome(result)))
-            code <- handleRecruitResult(follower, api, result, stdout, interactiveConfirm)
-          } yield code
+              }
+              _    <- noteResolutions(currentClubOption, clubTarget, List(jobOutcome(result)))
+              code <- handleRecruitResult(follower, api, result, recruit.stdout, interactiveConfirm)
+            } yield code
+          }
       }
 
-    case CliCommand.Stats(_, club, clubIdOption, since, until, _, detach) =>
+    case stats: CliCommand.Stats =>
       for {
-        target <- resolveClub(club, clubIdOption, currentClubOption)
+        target <- resolveClub(stats.club, stats.clubIdOption, currentClubOption)
         result <- sendSettlingAmbiguity(target, (r: ClubJobResult) => List(r.resolution), hasTty) { chosen =>
           api.postJson[StatsRequest, ClubJobResult](
             "/api/jobs/stats",
-            StatsRequest(chosen.query, since, until)
+            StatsRequest(chosen.query, stats.since, stats.until)
           )
         }
         _    <- noteResolutions(currentClubOption, target, List(jobOutcome(result)))
         code <-
-          if (detach) { reportDetachedClub(result) }
+          if (stats.detach) { reportDetachedClub(result) }
           else { follower.handleClub(result, logsToStderr = false, _ => ZIO.unit) }
       } yield code
 
@@ -237,13 +229,13 @@ object Dispatcher {
       api.postEmpty[CancelResult](s"/api/jobs/$jobId/cancel")
         *> Console.printLine(s"cancellation requested for job $jobId").orDie.as(0)
 
-    case CliCommand.BlacklistAdd(_, club, clubIdOption, usernames, reason, months) =>
+    case add: CliCommand.BlacklistAdd =>
       for {
-        target <- resolveClub(club, clubIdOption, currentClubOption)
+        target <- resolveClub(add.club, add.clubIdOption, currentClubOption)
         (resolved, blacklisted) <- actOnClub(currentClubOption, target) { chosen =>
           api.postJson[CreateBlacklistRequest, ClubResult[List[String]]](
             "/api/blacklist",
-            CreateBlacklistRequest(chosen.query, usernames.map(Username(_)), reason, months)
+            CreateBlacklistRequest(chosen.query, add.usernames.map(Username(_)), add.reason, add.months)
           )
         }
         _ <- Console.printLine(s"blacklisted ${blacklisted.mkString(", ")} for ${ClubSlug.unwrap(resolved.slug)}").orDie
@@ -260,9 +252,10 @@ object Dispatcher {
         _ <- printBlacklist(entries)
       } yield 0
 
-    case CliCommand.BlacklistRemove(_, club, clubIdOption, username) =>
+    case remove: CliCommand.BlacklistRemove =>
+      val username = remove.username
       for {
-        target <- resolveClub(club, clubIdOption, currentClubOption)
+        target <- resolveClub(remove.club, remove.clubIdOption, currentClubOption)
         (resolved, removed) <- actOnClub(currentClubOption, target) { chosen =>
           api.deleteJson[ClubResult[Boolean]](s"/api/blacklist/$username?${ClubRequest.queryString(chosen.query)}")
         }
@@ -275,24 +268,24 @@ object Dispatcher {
     case CliCommand.ScheduleList(_) =>
       api.getJson[List[ScheduleResponse]]("/api/schedules").flatMap(schedules => printSchedules(schedules).as(0))
 
-    case CliCommand.ScheduleAdd(_, kind, intervalHours, cron, tz, misfire, club, clubIdOption, params) =>
+    case add: CliCommand.ScheduleAdd =>
       // --interval-hours and --cron are mutually exclusive (exactly one required); the server enforces the XOR
       // and returns a clean 400 if both/neither are given. triggerType follows whether --cron is present.
       for {
-        mp <- ZIO.foreach(misfire)(parseMisfire)
-        triggerType = if (cron.isDefined) TriggerType.Cron else TriggerType.Interval
-        targetOption <- ClubResolver.optional(club, clubIdOption)
+        mp <- ZIO.foreach(add.misfire)(parseMisfire)
+        triggerType = if (add.cron.isDefined) TriggerType.Cron else TriggerType.Interval
+        targetOption <- ClubResolver.optional(add.club, add.clubIdOption)
         s <- createSchedule(currentClubOption, targetOption) { clubOption =>
           api.postJson[CreateScheduleRequest, CreateScheduleResponse](
             "/api/schedules",
             CreateScheduleRequest(
-              kind = kind,
+              kind = add.kind,
               clubOption = clubOption,
-              params = params,
+              params = add.params,
               triggerType = Some(triggerType),
-              intervalHours = intervalHours,
-              cron = cron,
-              timezone = tz,
+              intervalHours = add.intervalHours,
+              cron = add.cron,
+              timezone = add.tz,
               misfire = mp
             )
           )

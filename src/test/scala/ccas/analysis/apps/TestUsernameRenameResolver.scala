@@ -2,7 +2,7 @@ package ccas.analysis.apps
 
 import com.augustnagro.magnum.sql
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
-import zio.{RIO, ZIO}
+import zio.RIO
 import zio.http.*
 
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.*

@@ -417,9 +417,9 @@ private[ref] object RefResolution {
   ): Task[Either[ReportedNotFound, TeamMatchTeams]] =
     RefHelpers.fetchTeamMatchTeamsResult(client, matchId, isLive).flatMap {
       _.foldZIO(
-        ifMissing = missing => ZIO.succeed(Left(missing.cause)),
+        ifMissing = missing => ZIO.left(missing.cause),
         ifUnchanged = _.getValue.map(Right(_)),
-        ifChanged = changed => ZIO.succeed(Right(changed.value))
+        ifChanged = changed => ZIO.right(changed.value)
       )
     }.tapBoth(promise.fail, promise.succeed)
 
