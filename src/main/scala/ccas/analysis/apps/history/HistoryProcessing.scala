@@ -44,9 +44,9 @@ private[history] object HistoryProcessing {
 
               waveCounter <- Ref.make(0)
               _ <- ZIO.scoped {
-                ProgressDisplay.progressBar.flatMap(waveBar =>
+                ProgressDisplay.progressBar.flatMap { waveBar =>
                   processAllPending(ctx, waveBar, waveCounter, pendingCount, shared)
-                )
+                }
               }
 
               afterCount  <- ctx.matchesProcessed.get
@@ -65,11 +65,11 @@ private[history] object HistoryProcessing {
                         ctx.seedPlayerMatchesUnchanged
                       )
                       .zipLeft(ZIO.foreachDiscard(shared)(_.queriedPlayers.update(_ + dp.playerId)))
-                      .catchAll(error =>
+                      .catchAll { error =>
                         NetworkUnavailableException.recoverUnless(error)(
                           ZIO.logWarning(s"  ${dp.username}: failed to seed — ${error.getMessage}")
                         )
-                      )
+                      }
                   }.withParallelism(ApiConcurrency.fiberCap(ctx.client))
               }
 
@@ -450,12 +450,12 @@ private[history] object HistoryProcessing {
 
             t1PidOption <- resolvePlayerId(ctx, t1Username, isOurTeam = weAreTeam1.contains(true))
             t2PidOption <- resolvePlayerId(ctx, t2Username, isOurTeam = weAreTeam1.contains(false))
-            _ <- ZIO.whenDiscard(t1PidOption.isEmpty)(
+            _ <- ZIO.whenDiscard(t1PidOption.isEmpty) {
               UnresolvedBoardPlayer.insert(matchId, boardNum, isTeam1 = true, t1Username).ignore
-            )
-            _ <- ZIO.whenDiscard(t2PidOption.isEmpty)(
+            }
+            _ <- ZIO.whenDiscard(t2PidOption.isEmpty) {
               UnresolvedBoardPlayer.insert(matchId, boardNum, isTeam1 = false, t2Username).ignore
-            )
+            }
 
             // Per-board fetch failures degrade to a board row with no API data; a systemic outage re-raises so the
             // match isn't persisted with dataless boards.
@@ -531,9 +531,9 @@ private[history] object HistoryProcessing {
     * queried it, or it is queued already.
     */
   private def crawlOnce(ctx: ProcessingContext, player: DiscoveredPlayer): UIO[Unit] =
-    ZIO.whenZIODiscard(ctx.crawledPlayers.modify(crawled => (!crawled(player.playerId), crawled + player.playerId)))(
+    ZIO.whenZIODiscard(ctx.crawledPlayers.modify(crawled => (!crawled(player.playerId), crawled + player.playerId))) {
       ctx.newPlayers.update(_ + player)
-    )
+    }
 
   /** Gates the full discovery flow (API fetch + DB insert) behind a Promise so that concurrent fibers resolving the
     * same unknown player share a single API call and a single DB insert.

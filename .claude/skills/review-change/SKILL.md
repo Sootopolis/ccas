@@ -37,7 +37,7 @@ Start the bug hunt with the built-in `/code-review`, at an effort level scaled t
 - inefficiencies: extra queries, extra round trips to Chess.com, work repeated per row
 - test coverage: every test the plan named exists, every behaviour change has a test, and each new test is shown to fail when the code it guards is broken. Read each new test against its name: the assertions check what the name promises, the effect under test actually runs, and the case that must not happen is covered. Close a gap with a unit test, refactoring production code if that is what makes it reachable, never with a manual check.
 - documentation and comments up to date and to `docs/documentation-standard.md`; `python3 scripts/check-docs.py` covers the mechanical half
-- the conventions in `CLAUDE.md`, and whether each method lives where a caller would look for it
+- the conventions in `CLAUDE.md`, and whether each method lives where a caller would look for it; `sbt "scalafixAll --check"` covers the ones scalafix enforces
 
 Then run the affected suites, or the full suite when the change is wide.
 

@@ -142,9 +142,9 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
             cooldown = 60.seconds,
             failureThreshold = 0.2
           )
-          fiber <- ZIO.foreachParDiscard(1 to 5)(i =>
+          fiber <- ZIO.foreachParDiscard(1 to 5) { i =>
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get).exit
-          ).fork
+          }.fork
           // Adjust covers retry tail (~310ms cumulative) and throttle activation; well under
           // cooldown=60s so the daemon stays stalled in cooldown.
           _     <- TestClock.adjust(1.second)
@@ -172,9 +172,9 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
           )
           // Phase 1: trigger throttle-down. Adjust < cooldown so the daemon's first transition
           // hasn't fired by the time we observe `throttled`.
-          fiber1 <- ZIO.foreachParDiscard(1 to 5)(i =>
+          fiber1 <- ZIO.foreachParDiscard(1 to 5) { i =>
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get).exit
-          ).fork
+          }.fork
           _ <- TestClock.adjust(500.millis)
           _ <- fiber1.join
           throttled <- stateRef.get
@@ -182,9 +182,9 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
           // Phase 2: switch to success and flush the outcome window. Adjust just enough for the
           // requests to drain; daemon still mid-cooldown.
           _ <- shouldFail.set(false)
-          fiber2 <- ZIO.foreachDiscard(6 to 35)(i =>
+          fiber2 <- ZIO.foreachDiscard(6 to 35) { i =>
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get)
-          ).fork
+          }.fork
           _ <- TestClock.adjust(200.millis)
           _ <- fiber2.join
           // Phase 3: advance to throttleDownAt + 1500ms — past the first transition (cooldown=1s)
@@ -217,9 +217,9 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
           // would step up on empty outcomes once the foreachPar finishes — capture state at 400ms,
           // before that "step-up on empty" can fire (which happens after the foreachPar's last
           // outcome ages out of the window).
-          fiber1 <- ZIO.foreachParDiscard(1 to 5)(i =>
+          fiber1 <- ZIO.foreachParDiscard(1 to 5) { i =>
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get).exit
-          ).fork
+          }.fork
           _ <- TestClock.adjust(400.millis)
           _ <- fiber1.join
           throttledState <- stateRef.get
@@ -227,9 +227,9 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
           // Phase 2: switch to success, fill outcome window. Generous adjust drives the daemon
           // through the recovery ladder; we only care that `currentMax > throttledMax`.
           _ <- shouldFail.set(false)
-          fiber2 <- ZIO.foreachDiscard(6 to 30)(i =>
+          fiber2 <- ZIO.foreachDiscard(6 to 30) { i =>
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get)
-          ).fork
+          }.fork
           _ <- TestClock.adjust(advanceWindow)
           _ <- fiber2.join
           finalState <- stateRef.get
@@ -277,9 +277,9 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
             cooldown = 60.seconds,
             failureThreshold = 0.2
           )
-          fiber <- ZIO.foreachParDiscard(1 to 5)(i =>
+          fiber <- ZIO.foreachParDiscard(1 to 5) { i =>
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get).exit
-          ).fork
+          }.fork
           // Adjust covers CF retries (cfRetryDelay=10ms × 2 = ~20ms cumulative) plus throttle
           // activation; well under cfCooldown=60s so the daemon stays stalled in cooldown.
           _     <- TestClock.adjust(1.second)
@@ -379,9 +379,9 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
             cooldown = 60.seconds,
             failureThreshold = 0.2
           )
-          fiber <- ZIO.foreachParDiscard(1 to 5)(i =>
+          fiber <- ZIO.foreachParDiscard(1 to 5) { i =>
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get).exit
-          ).fork
+          }.fork
           _     <- TestClock.adjust(advanceWindow)
           _     <- fiber.join
           state <- stateRef.get
@@ -428,9 +428,9 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
               cooldown = 30.seconds,
               failureThreshold = 0.2
             )
-            fiber <- ZIO.foreachParDiscard(1 to 5)(i =>
+            fiber <- ZIO.foreachParDiscard(1 to 5) { i =>
               client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get).exit
-            ).fork
+            }.fork
             _ <- TestClock.adjust(10.seconds) // drains retries; < cooldown so daemon stalls in cooldown
             _ <- fiber.join
             insideState <- stateRef.get
@@ -512,18 +512,18 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
             minTierObservation = 3.seconds
           )
           // Phase 1: trigger failure-rate throttle → 1. Adjust < cooldown.
-          fiber1 <- ZIO.foreachParDiscard(1 to 5)(i =>
+          fiber1 <- ZIO.foreachParDiscard(1 to 5) { i =>
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get).exit
-          ).fork
+          }.fork
           _ <- TestClock.adjust(500.millis)
           _ <- fiber1.join
           throttled <- stateRef.get
           throttleDownAt = throttled.throttledSince.getOrElse(0L)
           // Phase 2: switch to success, flush window
           _ <- mode.set("ok")
-          fiber2 <- ZIO.foreachDiscard(6 to 35)(i =>
+          fiber2 <- ZIO.foreachDiscard(6 to 35) { i =>
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get)
-          ).fork
+          }.fork
           _ <- TestClock.adjust(200.millis)
           _ <- fiber2.join
           // Advance past the 1st recovery transition (cooldown=1s + observation=3s = 3s gap)
@@ -566,18 +566,18 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
             minTierObservation = 500.millis
           )
           // Phase 1: throttle-down. Adjust < cooldown.
-          fiber1 <- ZIO.foreachParDiscard(1 to 5)(i =>
+          fiber1 <- ZIO.foreachParDiscard(1 to 5) { i =>
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get).exit
-          ).fork
+          }.fork
           _ <- TestClock.adjust(500.millis)
           _ <- fiber1.join
           throttled <- stateRef.get
           throttleDownAt = throttled.throttledSince.getOrElse(0L)
           // Phase 2: success, flush window
           _ <- shouldFail.set(false)
-          fiber2 <- ZIO.foreachDiscard(6 to 35)(i =>
+          fiber2 <- ZIO.foreachDiscard(6 to 35) { i =>
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get)
-          ).fork
+          }.fork
           _ <- TestClock.adjust(200.millis)
           _ <- fiber2.join
           // Advance past 1st transition (cooldown=1s, observation=500ms — cooldown dominates,
@@ -615,18 +615,18 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
           // Phase 1: trigger throttle-down. max429Retries=0 means each request is one instant
           // 429; need >= minSampleSize=10 outcomes, 12 requests cover that. Adjust modestly so
           // the daemon hasn't reached full recovery.
-          fiber1 <- ZIO.foreachParDiscard(1 to 12)(i =>
+          fiber1 <- ZIO.foreachParDiscard(1 to 12) { i =>
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get).exit
-          ).fork
+          }.fork
           _ <- TestClock.adjust(200.millis)
           _ <- fiber1.join
           throttled <- stateRef.get
           // Phase 2: switch to success, build up EMA via 5ms-per-request handler. Adjust just
           // enough for the requests to drain (18 × 5ms = 90ms virtual + small overhead).
           _ <- shouldFail.set(false)
-          fiber2 <- ZIO.foreachDiscard(13 to 30)(i =>
+          fiber2 <- ZIO.foreachDiscard(13 to 30) { i =>
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get)
-          ).fork
+          }.fork
           _ <- TestClock.adjust(200.millis)
           _ <- fiber2.join
           // Capture EMA mid-recovery (before full-recovery resets it). Even if the daemon has
@@ -661,9 +661,9 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
           // widened by emaDelay because lastRequestRef is still 0); r2 sees emaDelay enforce a
           // target ~= ema/4 sleep, making dt large enough that alpha ≈ 1 and EMA collapses to
           // the fast-sample value.
-          fiber <- ZIO.foreachDiscard(1 to 3)(i =>
+          fiber <- ZIO.foreachDiscard(1 to 3) { i =>
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get)
-          ).fork
+          }.fork
           _ <- TestClock.adjust(advanceWindow)
           _ <- fiber.join
           finalState <- stateRef.get
@@ -684,9 +684,9 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
           )
           // After many ~50 ms samples, EMA must converge close to 50 ms regardless of starting
           // value (which is 0 → seeded to first sample = 50).
-          fiber <- ZIO.foreachDiscard(1 to 20)(i =>
+          fiber <- ZIO.foreachDiscard(1 to 20) { i =>
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get)
-          ).fork
+          }.fork
           _ <- TestClock.adjust(advanceWindow)
           _ <- fiber.join
           finalState <- stateRef.get
@@ -714,16 +714,16 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
             emaTauMs = 500L
           )
           // Drive throttle-down (12 × 429 → minSampleSize satisfied).
-          fiber1 <- ZIO.foreachParDiscard(1 to 12)(i =>
+          fiber1 <- ZIO.foreachParDiscard(1 to 12) { i =>
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get).exit
-          ).fork
+          }.fork
           _ <- TestClock.adjust(200.millis)
           _ <- fiber1.join
           // Switch to success + drive past recovery ladder to full.
           _ <- shouldFail.set(false)
-          fiber2 <- ZIO.foreachDiscard(13 to 30)(i =>
+          fiber2 <- ZIO.foreachDiscard(13 to 30) { i =>
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get)
-          ).fork
+          }.fork
           _ <- TestClock.adjust(advanceWindow)
           _ <- fiber2.join
           recovered <- stateRef.get
@@ -809,9 +809,9 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
             permits = 4,
             minRequestDelayMs = 50
           )
-          fiber <- ZIO.foreachDiscard(1 to 4)(i =>
+          fiber <- ZIO.foreachDiscard(1 to 4) { i =>
             client.get[Payload](URL.decode(s"http://test.example.com/api/floor-$i").toOption.get)
-          ).fork
+          }.fork
           _          <- TestClock.adjust(advanceWindow)
           _          <- fiber.join
           finalState <- stateRef.get
@@ -870,18 +870,18 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
           // Phase 1: throttle-down. Retry tail (~310ms cumulative) needs to drain before fiber1
           // can join. Adjust 400ms covers it but stays below cooldown=500ms so the daemon's first
           // recovery transition hasn't fired.
-          fiber1 <- ZIO.foreachParDiscard(1 to 5)(i =>
+          fiber1 <- ZIO.foreachParDiscard(1 to 5) { i =>
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get).exit
-          ).fork
+          }.fork
           _ <- TestClock.adjust(400.millis)
           _ <- fiber1.join
           s1 <- stateRef.get
           throttleDownAt = s1.throttledSince.getOrElse(0L)
           // Phase 2: successes at tier 1
           _ <- phase.set(2)
-          fiber2 <- ZIO.foreachDiscard(6 to 25)(i =>
+          fiber2 <- ZIO.foreachDiscard(6 to 25) { i =>
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get)
-          ).fork
+          }.fork
           _ <- TestClock.adjust(100.millis)
           _ <- fiber2.join
           // Advance past 1st transition (cooldown=500ms past throttleDown) but before 2nd (1s).
@@ -893,9 +893,9 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
           // max429Retries=5, giving 12 outcomes — past minSampleSize=10. Advance precisely past
           // the daemon's drop-back fire (tier2EnteredAt + cooldown=500ms ≈ throttleDownAt+1010ms).
           _ <- phase.set(3)
-          fiber3 <- ZIO.foreachParDiscard(26 to 27)(i =>
+          fiber3 <- ZIO.foreachParDiscard(26 to 27) { i =>
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get).exit
-          ).fork
+          }.fork
           _ <- advanceTo(throttleDownAt + 1100)
           _ <- fiber3.interrupt
           finalState <- stateRef.get
@@ -926,16 +926,16 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
             recoveryTiers = Some(Vector(2, 4, 8))
           )
           // Phase 1: trigger throttle-down
-          fiber1 <- ZIO.foreachParDiscard(1 to 5)(i =>
+          fiber1 <- ZIO.foreachParDiscard(1 to 5) { i =>
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get).exit
-          ).fork
+          }.fork
           _ <- TestClock.adjust(advanceWindow)
           _ <- fiber1.join
           s1 <- statsRef.get
           // Phase 2: successes with some 429s mixed in during recovery
-          fiber2 <- ZIO.foreachDiscard(16 to 40)(i =>
+          fiber2 <- ZIO.foreachDiscard(16 to 40) { i =>
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get).catchAll(_ => ZIO.unit)
-          ).fork
+          }.fork
           _ <- TestClock.adjust(advanceWindow)
           _ <- fiber2.join
           s2 <- statsRef.get
@@ -962,9 +962,9 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
             minRequestDelayMs = 50
           )
           // Sequential so every request after the first goes through the floor check.
-          fiber <- ZIO.foreachDiscard(1 to 10)(i =>
+          fiber <- ZIO.foreachDiscard(1 to 10) { i =>
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get)
-          ).fork
+          }.fork
           _   <- TestClock.adjust(advanceWindow)
           _   <- fiber.join
           s   <- statsRef.get
@@ -1023,9 +1023,9 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
             minTierObservation = 2.seconds
           )
           // Phase 1: throttle-down
-          fiber1 <- ZIO.foreachParDiscard(1 to 5)(i =>
+          fiber1 <- ZIO.foreachParDiscard(1 to 5) { i =>
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get).exit
-          ).fork
+          }.fork
           _ <- TestClock.adjust(1.second) // generous; daemon schedules cooldown(50)+observation(1950)
                                           // wait, won't fire until throttleDownAt + 2000ms.
           _ <- fiber1.join
@@ -1033,9 +1033,9 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
           throttleDownAt = throttled.throttledSince.getOrElse(0L)
           // Phase 2: switch to success, flush outcome window
           _ <- shouldFail.set(false)
-          fiber2 <- ZIO.foreachDiscard(6 to 30)(i =>
+          fiber2 <- ZIO.foreachDiscard(6 to 30) { i =>
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get)
-          ).fork
+          }.fork
           _ <- TestClock.adjust(500.millis)
           _ <- fiber2.join
           // Advance past first step-up: cooldown=50ms + observation=2000ms = 2000ms gap (observation
@@ -1068,18 +1068,18 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
             minTierObservation = 1.second
           )
           // Phase 1: throttle-down
-          fiber1 <- ZIO.foreachParDiscard(1 to 5)(i =>
+          fiber1 <- ZIO.foreachParDiscard(1 to 5) { i =>
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get).exit
-          ).fork
+          }.fork
           _ <- TestClock.adjust(500.millis)
           _ <- fiber1.join
           throttled <- stateRef.get
           throttleDownAt = throttled.throttledSince.getOrElse(0L)
           // Phase 2: successes
           _ <- shouldFail.set(false)
-          fiber2 <- ZIO.foreachDiscard(6 to 30)(i =>
+          fiber2 <- ZIO.foreachDiscard(6 to 30) { i =>
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get)
-          ).fork
+          }.fork
           _ <- TestClock.adjust(200.millis)
           _ <- fiber2.join
           // Advance to throttleDownAt + 1100ms — past first step-up (gap = observation = 1000ms).
@@ -1199,14 +1199,14 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
             failureThreshold = 0.2
           )
           // Trigger throttle-down
-          _ <- ZIO.foreachParDiscard(1 to 5)(i =>
+          _ <- ZIO.foreachParDiscard(1 to 5) { i =>
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get).exit
-          )
+          }
           // Switch to success and drive recovery
           _ <- shouldFail.set(false)
-          _ <- ZIO.foreachDiscard(6 to 30)(i =>
+          _ <- ZIO.foreachDiscard(6 to 30) { i =>
             client.get[Payload](URL.decode(s"http://test.example.com/api/$i").toOption.get)
-          )
+          }
           // Poll until full recovery, which flushes throttledMs. Live-clock (see suite comment): the budget must
           // absorb CI-runner scheduling jitter over the 100ms cooldown. 12s sits deliberately UNDER the suite's
           // `@@ timeout(15.seconds)` so this specific "recovery did not complete" message fires first, instead of a
@@ -1535,11 +1535,11 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
     // file with no environment at all, so CI's exported CCAS_CONTACT_EMAIL cannot make it pass.
     test("the shipped application.conf resolves with no environment") {
       for {
-        resolved <- ZIO.attempt(
+        resolved <- ZIO.attempt {
           ConfigFactory
             .parseFile(new File("src/main/resources/application.conf"))
             .resolve(ConfigResolveOptions.defaults().setUseSystemEnvironment(false))
-        )
+        }
       } yield assertTrue(resolved.getString("chess-com-client.contact-email").isEmpty)
     },
   )

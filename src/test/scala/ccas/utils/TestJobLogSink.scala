@@ -211,9 +211,9 @@ object TestJobLogSink extends ZIOSpecDefault {
           // Test-only pattern: drive a ZIO Ref update from inside a sync callback via Runtime.default. Works in tests
           // because no production code is running under Runtime.default; do not reuse for real sinks.
           override def writeConsoleSync(line: String): Unit =
-            Unsafe.unsafe(implicit u =>
+            Unsafe.unsafe { implicit u =>
               Runtime.default.unsafe.run(captured.update(_ :+ line)).getOrThrow()
-            )
+            }
         }
         _ <- ZIO.scoped {
           ProgressDisplay.live(showProgress = false).build *>

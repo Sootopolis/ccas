@@ -13,9 +13,9 @@ object RouteHelpers {
     Response.json(summon[JsonEncoder[A]].encodeJson(body, None).toString).status(status)
 
   def parseJsonBody[T: JsonDecoder](req: Request): Task[T] =
-    req.body.asString.flatMap(s =>
+    req.body.asString.flatMap { s =>
       ZIO.fromEither(summon[JsonDecoder[T]].decodeJson(s)).mapError(BadRequestException(_))
-    )
+    }
 
   /** Route boundary error renderer; attach it to every route table with `.handleErrorRequestCauseZIO(renderError)`.
     * The fallback 500 is generic so nothing unvetted reaches the caller, and logs the full cause so nothing is lost to

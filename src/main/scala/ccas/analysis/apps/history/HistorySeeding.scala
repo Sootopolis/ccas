@@ -178,12 +178,12 @@ private[history] object HistorySeeding {
   ): RIO[ProgressDisplay & PostgresClient, Int] = {
     def fetch(slug: ClubSlug): RIO[PostgresClient, Int] =
       client.getResult[ApiClubMatches](ApiClubMatches.getUrl(slug))
-        .flatMap(
+        .flatMap {
           _.foldPresentZIO(
             _ => unchangedCounter.update(_ + 1).as(0),
             changed => insertPendingFromClubMatches(clubId, changed.value)
           )
-        )
+        }
     fetch(clubSlug)
       .withClubSlugRenameRecovery(client, clubSlug, Some(clubId))(fetch)
       .catchAll { error =>

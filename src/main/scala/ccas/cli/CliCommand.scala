@@ -164,12 +164,12 @@ object CliCommand {
   private def intOpt(name: String): Options[Option[Int]] =
     Options
       .integer(name)
-      .mapOrFail(n =>
+      .mapOrFail { n =>
         if (n.isValidInt) { Right(n.toInt) }
         else {
           Left(ValidationError(ValidationErrorType.InvalidValue, HelpDoc.p(s"--$name must fit in a 32-bit integer (got $n)")))
         }
-      )
+      }
       .optional
 
   // Single-club target. Absent → Dispatcher falls back to the config's `current_club`.
@@ -189,12 +189,12 @@ object CliCommand {
   private val clubIdOpt: Options[Option[Long]] =
     Options
       .integer("club-id")
-      .mapOrFail(n =>
+      .mapOrFail { n =>
         if (n.isValidLong && n > 0) { Right(n.toLong) }
         else {
           Left(ValidationError(ValidationErrorType.InvalidValue, HelpDoc.p(s"--club-id must be a positive club id (got $n)")))
         }
-      )
+      }
       .optional ?? "Chess.com club id to target instead of a name (settles a name several clubs have held)"
 
   // --- Leaf commands (each typed Command[CliCommand] so subcommands share a uniform type) ---

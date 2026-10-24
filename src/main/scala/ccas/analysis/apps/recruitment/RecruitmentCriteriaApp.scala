@@ -92,9 +92,9 @@ object RecruitmentCriteriaApp extends ZIOAppDefault {
     val a = alias.trim
     for {
       _ <- ZIO.whenDiscard(a.isEmpty)(ZIO.fail(BadRequestException("alias must not be empty")))
-      _ <- ZIO.whenDiscard(a.length > MaxAliasLength)(
+      _ <- ZIO.whenDiscard(a.length > MaxAliasLength) {
         ZIO.fail(BadRequestException(s"alias must be <= $MaxAliasLength chars (got ${a.length})"))
-      )
+      }
       _ <- ZIO.fromEither(validate(criteria.capped)).mapError(BadRequestException(_))
     } yield ()
   }
@@ -104,9 +104,9 @@ object RecruitmentCriteriaApp extends ZIOAppDefault {
     val capped = criteria.capped
     for {
       _ <- validateSet(alias, criteria)
-      _ <- ZIO.whenDiscard(capped != criteria)(
+      _ <- ZIO.whenDiscard(capped != criteria) {
         ZIO.logInfo(s"Capped lookback fields to ${RecruitmentCriteria.MaxDaysSinceLookback} days for alias '$a'")
-      )
+      }
       current <- latestCriteria(club.clubId, a)
       criteriaId <- current match {
         // Unchanged re-submit: reuse the existing version instead of growing the append-only tables.
@@ -256,9 +256,9 @@ object RecruitmentCriteriaApp extends ZIOAppDefault {
     for {
       size <- ZIO.attemptBlocking(Files.size(Path.of(path)))
         .mapError(e => BadRequestException(s"cannot read $path: ${e.getMessage}"))
-      _ <- ZIO.whenDiscard(size > MaxJsonBytes)(
+      _ <- ZIO.whenDiscard(size > MaxJsonBytes) {
         ZIO.fail(BadRequestException(s"JSON file too large: $size bytes (max $MaxJsonBytes)"))
-      )
+      }
       content <- ZIO.attemptBlocking(Files.readString(Path.of(path)))
         .mapError(e => BadRequestException(s"cannot read $path: ${e.getMessage}"))
       spec <- ZIO.fromEither(JsonDecoder[CriteriaSpec].decodeJson(content)).mapError(BadRequestException(_))
@@ -272,9 +272,9 @@ object RecruitmentCriteriaApp extends ZIOAppDefault {
   private def printAliases(aliases: List[RecruitmentAlias]): RIO[Any, Unit] =
     if (aliases.isEmpty) { Console.printLine("No aliases set.") }
     else {
-      ZIO.foreachDiscard(aliases)(a =>
+      ZIO.foreachDiscard(aliases) { a =>
         Console.printLine(s"  ${a.alias}  (since ${a.since}, criteria_id=${a.criteriaId})")
-      )
+      }
     }
 
   // --- Interactive prompts ---

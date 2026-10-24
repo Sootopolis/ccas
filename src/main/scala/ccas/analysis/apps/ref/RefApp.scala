@@ -137,9 +137,9 @@ object RefApp extends ZIOAppDefault {
       _ <- ZIO.logInfo(
         s"Clubs resolved: $db (DB) + $api (API) = ${db + api} / ${clubs.size}, skipped: $skippedNew new"
       )
-      _ <- ZIO.whenDiscard(unchanged > 0)(
+      _ <- ZIO.whenDiscard(unchanged > 0) {
         ZIO.logInfo(s"Club-matches listings unchanged (skipped candidate iteration): $unchanged")
-      )
+      }
     } yield RefAppResolutionStats(clubs.size, db, api, skippedNew)
   }
 
@@ -172,14 +172,14 @@ object RefApp extends ZIOAppDefault {
       _ <- ZIO.logInfo(
         s"Players resolved: $db (DB) + $api (API) = ${db + api} / ${players.size}, skipped: $skippedNew new"
       )
-      _ <- ZIO.whenDiscard(matchesUnchanged > 0 || tournamentsUnchanged > 0)(
+      _ <- ZIO.whenDiscard(matchesUnchanged > 0 || tournamentsUnchanged > 0) {
         ZIO.logInfo(
           s"Player listings unchanged (skipped candidate iteration): matches=$matchesUnchanged, tournaments=$tournamentsUnchanged"
         )
-      )
-      _ <- ZIO.whenDiscard(skipped.nonEmpty)(
+      }
+      _ <- ZIO.whenDiscard(skipped.nonEmpty) {
         ZIO.logWarning(s"Players skipped (ID mismatch): ${skipped.size}")
-      )
+      }
     } yield RefAppResolutionStats(players.size, db, api, skippedNew)
   }
 

@@ -171,15 +171,15 @@ object TestServerBoot extends ZIOSpecDefault {
     Runtime.addLogger(ZLogger.simple[String, Any](serviceLog.add)) ++ ZLayer.make[CcasServer.Served](
       ZLayer.succeed[JobScheduler](new LoopingScheduler(schedulerStarted, record("scheduler loop interrupted"))),
       ZLayer.scoped(
-        ZIO.acquireRelease(ZIO.succeed[JobRunner](new StubJobRunner(record, sweepStarted, jobsInterrupted)))(_ =>
+        ZIO.acquireRelease(ZIO.succeed[JobRunner](new StubJobRunner(record, sweepStarted, jobsInterrupted))) { _ =>
           record("job runner released")
-        )
+        }
       ),
       // A data source that is never asked for a connection, so the pool's release is all the test sees of it.
       ZLayer.scoped(
-        ZIO.acquireRelease(ZIO.succeed(PostgresClient.fromDataSource(new PGSimpleDataSource())))(_ =>
+        ZIO.acquireRelease(ZIO.succeed(PostgresClient.fromDataSource(new PGSimpleDataSource()))) { _ =>
           pidFileAtPoolClose *> record("pool closed")
-        )
+        }
       ),
       ZLayer.succeed[BodyStore](new FsBodyStore(Paths.get("target/test-bodies"))),
       TestChessComClientSupport.dummyLayer

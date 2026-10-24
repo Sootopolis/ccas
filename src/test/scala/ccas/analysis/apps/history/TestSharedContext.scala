@@ -135,9 +135,9 @@ object TestSharedContext extends ZIOSpecDefault {
             client, clubAId, clubASlug, memberIds, Set.empty, memberNames, Set.empty, false, Some(shared), skipCtr
           )
           .provideSomeEnvironment[PostgresClient](_.add[ProgressDisplay](ProgressDisplay.make(enabled = false)))
-        _ <- ZIO.foreachDiscard(List(ClubMatchId(6001)))(id =>
+        _ <- ZIO.foreachDiscard(List(ClubMatchId(6001))) { id =>
           HistoryPendingMatch.delete(clubAId, id, isLive = false)
-        )
+        }
       } yield assertTrue(
         result.queried == 1,
         result.seeded == 1

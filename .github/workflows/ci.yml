@@ -73,3 +73,21 @@ jobs:
 
       - name: Check the documentation standard
         run: python3 scripts/check-docs.py
+
+  # Its own job for the same reason as docs: a flagged convention neither skips the tests nor waits on Postgres.
+  lint:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 25
+          cache: sbt
+
+      - uses: sbt/setup-sbt@v1
+
+      - name: Check the coding conventions scalafix enforces
+        run: sbt "scalafixAll --check"

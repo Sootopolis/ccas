@@ -126,13 +126,13 @@ private[recruitment] object RecruitmentExplore {
     ctx.runCtx.criteria.daysSinceRejected.fold(ZIO.succeed(false)) { days =>
       for {
         playerIdOption <- PlayerName.selectCurrentHolder(username)
-        rejectOption   <- ZIO.foreach(playerIdOption)(playerId =>
+        rejectOption   <- ZIO.foreach(playerIdOption) { playerId =>
           RecruitmentCandidate.selectLatestRejectedByAlias(
             playerId,
             ctx.runCtx.clubId,
             ctx.runCtx.alias
           )
-        ).map(_.flatten)
+        }.map(_.flatten)
       } yield rejectOption.exists(c => ChronoUnit.DAYS.between(c.evaluatedAt, ctx.runCtx.now) < days)
     }
 

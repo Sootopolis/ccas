@@ -32,6 +32,7 @@ Write one when the decision is hard to reverse, involves a real trade-off, or ha
 | [0022](0022-a-closure-hides-a-membership.md) | A closure hides a membership, and the account's club list settles it | Accepted, 2026-10-14 |
 | [0023](0023-inferred-memberships-are-computed-not-stored.md) | A membership only matches show is inferred when asked for, not stored | Accepted, 2026-10-17 |
 | [0024](0024-one-directory-per-machine.md) | Job logs and reports live in one directory per machine | Accepted, 2026-10-23 |
+| [0025](0025-conventions-checked-by-scalafix.md) | Coding conventions are checked by scalafix local rules | Accepted, 2026-10-24 |
 
 ## By area
 
@@ -41,4 +42,4 @@ Write one when the decision is hard to reverse, involves a real trade-off, or ha
 - **Club membership:** 0017 (a relationship's two ends), 0021 (the ends as windows, roster coverage), 0022 (closed accounts, their club lists), 0023 (memberships inferred from matches).
 - **CLI:** 0011 (locality, `current_club`, config files).
 - **Server and jobs:** 0013 (the job-log sink), 0015 (the read-idle reaper), 0024 (where job logs and reports live).
-- **Build, runtime and configuration:** 0002 (dependencies), 0003 (sbt 2), 0014 (both `DATABASE_URL` forms), 0018 (the two JVM flags).
+- **Build, runtime and configuration:** 0002 (dependencies), 0003 (sbt 2), 0014 (both `DATABASE_URL` forms), 0018 (the two JVM flags), 0025 (conventions scalafix checks).

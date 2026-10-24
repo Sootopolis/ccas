@@ -49,9 +49,9 @@ object CcasApiClient {
 
     /** Any transport-level failure means the server isn't reachable — non-2xx responses come back as a `Response`. */
     private def send(req: Request): Task[Response] =
-      http(req).mapError(e =>
+      http(req).mapError { e =>
         CliError(s"cannot reach $baseUrl — start a server with 'ccas server up'. (${rootMessage(e)})", 1)
-      )
+      }
 
     private def errorMessage(body: String, status: Status): String =
       body.fromJson[ErrorResponse].map(_.error).getOrElse {

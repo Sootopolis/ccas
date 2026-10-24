@@ -54,14 +54,14 @@ object CompletionCache {
   /** Reads the time via `Clock.instant` rather than `Instant.now()` so the TTL boundary is testable under `TestClock`.
     */
   private[cli] def clubsStaleIn(file: Path): UIO[Boolean] =
-    Clock.instant.flatMap(now =>
+    Clock.instant.flatMap { now =>
       ZIO.attemptBlocking {
         !Files.exists(file) || {
           val ageMillis = now.toEpochMilli - Files.getLastModifiedTime(file).toInstant.toEpochMilli
           ageMillis > ClubsTtlMillis
         }
       }.orElseSucceed(true)
-    )
+    }
 
   /** The cached club slugs, one per line, for `ccas use-club`'s offline typo hint — never a source of truth.
     * `Some(slugs)` when the cache was read — an empty list then genuinely means "no clubs cached". `None` when the file

@@ -109,10 +109,10 @@ final class ProgressDisplay private[utils] (
     ZIO.succeed {
       lock.synchronized {
         val target = bars.find(_.id == barId).flatMap(_.target)
-        bars = bars.map(b =>
+        bars = bars.map { b =>
           if (b.id == barId) b.copy(lineCount = lineCount, lastOutput = output, current = current, total = total, text = text)
           else b
-        )
+        }
         clearBlockSync()
         drawAllSync()
         target

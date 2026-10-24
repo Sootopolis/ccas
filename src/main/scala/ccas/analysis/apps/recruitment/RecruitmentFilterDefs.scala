@@ -287,9 +287,9 @@ private[recruitment] object RecruitmentFilterDefs {
         else
           for {
             existingClubOption <- ClubName.selectCurrentHolder(slug)
-            existingAdmins <- existingClubOption.fold(ZIO.succeed(Set.empty[PlayerId]))(c =>
+            existingAdmins <- existingClubOption.fold(ZIO.succeed(Set.empty[PlayerId])) { c =>
               ClubAdmin.selectPlayerIdsByClub(c.clubId)
-            )
+            }
             rejected <- (existingClubOption, existingAdmins.nonEmpty) match {
               case (Some(club), true) =>
                 // Have everything locally — the early prune at run start either evaluated this club already, OR an
@@ -324,9 +324,9 @@ private[recruitment] object RecruitmentFilterDefs {
       // and only fires on subsequent runs once a Club row has been persisted under the stale slug.
       (for {
         apiClub <- ApiClub.get(run.client, slug)
-          .withClubSlugRenameRecovery(run.client, slug, clubIdHint = existingClubOption.map(_.clubId))(fresh =>
+          .withClubSlugRenameRecovery(run.client, slug, clubIdHint = existingClubOption.map(_.clubId)) { fresh =>
             ApiClub.get(run.client, fresh)
-          )
+          }
         // Persist the Club row regardless — value for future runs and for ClubDataApp's slug index.
         // `Club.upsert` deliberately preserves an existing latest_match_at, so this doesn't clobber DB state.
         _ <- Club.upsert(Club.fromApi(apiClub))
@@ -419,7 +419,7 @@ private[recruitment] object RecruitmentFilterDefs {
             || criteria.dailyMaxTimeoutPercent.exists(dailyTimeoutPct > _)
             || criteria.dailyMinGamesFinished.exists(min => dailyGamesFinished90d.getOrElse(dailyGamesFinished) < min)
             || criteria.dailyMaxHoursPerMove.exists(maxHours => dailyTimePerMove > maxHours * 3600)
-        val updatedCache = getOrUpdateCache(env)(
+        val updatedCache = getOrUpdateCache(env) {
           _.copy(
             fetchedAt = env.run.now,
             dailyElo = Some(dailyElo),
@@ -428,7 +428,7 @@ private[recruitment] object RecruitmentFilterDefs {
             lastDailyTimeoutAt = mergedDailyTimeout,
             dailyScoreRate = Some(dailyStats.record.scoreRate)
           )
-        )
+        }
         FilterResult(rejected, env.candidate.copy(cacheOption = Some(updatedCache), recentArchivesOption = archives))
       }
     }

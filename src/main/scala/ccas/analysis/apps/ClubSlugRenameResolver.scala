@@ -151,9 +151,9 @@ object ClubSlugRenameResolver {
           usernames =
             adminPlayers.filter(_.status == PlayerStatusCategory.Active).flatMap(p => adminNames.get(p.playerId))
           result <- ZIO.collectFirst(usernames)(adminLookup(client, _, hint, staleSlug))
-          _ <- ZIO.foreachDiscard(result)(fresh =>
+          _ <- ZIO.foreachDiscard(result) { fresh =>
             ZIO.logInfo(s"  Tier C slug recovery hit via admin lookup: $staleSlug → $fresh")
-          )
+          }
         } yield result
     }
     effect.swallowRecoveryErrors(s"Tier C slug recovery for $staleSlug")

@@ -97,9 +97,9 @@ object ScheduleRoutes {
   // --- Helpers ---
 
   private def parseJobKind(s: String): Either[String, JobKind] =
-    Try(JobKind.valueOf(s)).toEither.left.map(_ =>
+    Try(JobKind.valueOf(s)).toEither.left.map { _ =>
       s"Invalid job kind: $s. Valid: ${JobKind.values.mkString(", ")}"
-    )
+    }
 
   /** Render the stored 6-field cron back toward the user's 5-field input: drop the leading seconds field and map the
     * injected `?` day-field back to `*` (the form they typed). `?` and `*` are equivalent once the other day field

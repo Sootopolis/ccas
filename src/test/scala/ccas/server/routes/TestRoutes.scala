@@ -667,14 +667,14 @@ object TestRoutes extends ZIOSpecDefault {
       } yield assertTrue(
         response.status == Status.InternalServerError,
         body == """{"error":"Internal server error"}""",
-        logs.exists(entry =>
+        logs.exists { entry =>
           entry.logLevel == LogLevel.Error &&
             entry.message() == "Unhandled error in route POST /api/jobs/recruitment" &&
             entry.cause.failures.exists {
               case t: Throwable => Option(t.getMessage).contains(msg)
               case _            => false
             }
-        )
+        }
       )
     }
 
@@ -715,11 +715,11 @@ object TestRoutes extends ZIOSpecDefault {
       } yield assertTrue(
         response.status == Status.InternalServerError,
         body == """{"error":"Internal server error"}""",
-        logs.exists(entry =>
+        logs.exists { entry =>
           entry.logLevel == LogLevel.Error &&
             entry.message() == "Unhandled error in route GET /failing" &&
             entry.cause.defects.exists(_.getMessage == msg)
-        )
+        }
       )
     }
 
@@ -1391,9 +1391,9 @@ object TestRoutes extends ZIOSpecDefault {
 
   private def testResolveUnknownClub = test("GET /api/clubs/resolve for a club never ingested answers with no result") {
     val query = ClubQuery.BySlug(ClubSlug("no-such-club"))
-    resolveClub(query).map(answer =>
+    resolveClub(query).map { answer =>
       assertTrue(answer == (Status.Ok, Right(ClubResult("no-such-club", ClubResolution.NotLocal(query), None))))
-    )
+    }
   }
 
   private def testResolveNeedsOneClub = test("GET /api/clubs/resolve naming no club, or naming it twice, is refused") {

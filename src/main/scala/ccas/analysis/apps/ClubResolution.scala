@@ -162,10 +162,10 @@ object ClubResolution {
             case Some(apiClub) =>
               Club.upsert(Club.fromApi(apiClub)).as(fromHolder(apiClub, requested, previous))
           }
-          .catchAll(e =>
+          .catchAll { e =>
             ZIO.logWarning(s"  Upstream check for '$requested' failed, keeping the local answer: ${e.getMessage}")
               .as(resolution)
-          )
+          }
     }
 
   /** The answer a request that names a club acts on: local reach first, then Chess.com for a name only local history

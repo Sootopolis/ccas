@@ -80,9 +80,9 @@ final class JobFollower(
     onLine: String => UIO[Unit],
     notice: String => UIO[Unit]
   ): Task[Option[Either[String, Unit]]] =
-    Ref.make(0).flatMap(printed =>
+    Ref.make(0).flatMap { printed =>
       follow(jobId, onLine, printed, notice).timeout(maxWait).onInterrupt(cancelOnInterrupt(jobId, notice))
-    )
+    }
 
   // Best-effort cancel of the followed job when the follow is interrupted (Ctrl-C). The notice routes through the
   // follow's `notice` sink — the render-lock-safe `renderer.logLine` in bars mode, stderr otherwise — so it can't tear a

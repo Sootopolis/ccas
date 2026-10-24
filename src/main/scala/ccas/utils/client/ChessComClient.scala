@@ -187,9 +187,9 @@ final class ChessComClient(
   private def logEtagParseMiss(response: Response): UIO[Unit] = {
     val raw   = response.rawHeader("ETag")
     val typed = response.header(Header.ETag)
-    ZIO.whenDiscard(raw.isDefined && typed.isEmpty)(
+    ZIO.whenDiscard(raw.isDefined && typed.isEmpty) {
       ZIO.logDebug(s"ETag header present but unparseable by zio-http: ${raw.getOrElse("")}")
-    )
+    }
   }
 
   /** 304 path: bump `fetched_at` and merge any fresh validators or cache-control value from the response.
@@ -345,9 +345,9 @@ final class ChessComClient(
     * fallback (`catchAll`, `recoverUnless`) would absorb a failure and hide the mistake.
     */
   private def refuseInsideTransaction(url: URL): UIO[Unit] =
-    ZIO.whenZIODiscard(PostgresClient.insideTransaction.get)(
+    ZIO.whenZIODiscard(PostgresClient.insideTransaction.get) {
       ZIO.dieMessage(s"ChessComClient used inside withTransaction: ${url.encode}")
-    )
+    }
 
   /** True if a cached entry is still within its `Cache-Control: max-age` window. Entries without a `max-age` are
     * never fresh — we always revalidate (via conditional headers, or a full fetch if no validators are available).
@@ -939,9 +939,9 @@ object ChessComClient {
         // a periodic flush that may be parked in a blocking checkout — matching endSession's rationale), then a
         // disconnected 5s timeout so the doomed write unwinds in the background instead of blocking shutdown for the
         // full connectionTimeout x retry cycle.
-        _ <- ZIO.addFinalizer(
+        _ <- ZIO.addFinalizer {
           flushFiber.interruptFork *> ClientStatsPersistence.finalFlush(flushCtx).disconnect.timeout(5.seconds)
-        )
+        }
         _ <- ZIO.addFinalizer(recoveryFiberRef.get.flatMap(ZIO.foreachDiscard(_)(_.interrupt)))
       } yield ChessComClient(
         client,

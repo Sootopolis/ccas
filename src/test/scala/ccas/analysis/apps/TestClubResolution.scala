@@ -53,9 +53,9 @@ object TestClubResolution extends ZIOSpecDefault {
       } yield assertTrue(v == ClubResolution.Known(realNamed))
     },
     test("an unknown slug is NotLocal (not NotFound — we never asked upstream)") {
-      ClubResolution.resolve(ClubQuery.BySlug(ClubSlug("no-such-club"))).map(v =>
+      ClubResolution.resolve(ClubQuery.BySlug(ClubSlug("no-such-club"))).map { v =>
         assertTrue(v == ClubResolution.NotLocal(ClubQuery.BySlug(ClubSlug("no-such-club"))))
-      )
+      }
     },
     test("an id we have never ingested is NotLocal") {
       val query = ClubQuery.ById(ClubId(999))

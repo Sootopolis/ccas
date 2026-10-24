@@ -95,9 +95,9 @@ object ClubDataApp extends ZIOAppDefault {
         clubs.filter(_.fetchedAt.forall(_.isBefore(cutoff)))
     }
     val skipped = clubs.size - eligible.size
-    ZIO.whenDiscard(skipped > 0)(
+    ZIO.whenDiscard(skipped > 0) {
       ZIO.logInfo(s"[ClubData] --min-age filter: skipping $skipped recently-refreshed clubs")
-    ) *> refreshClubs(eligible)
+    } *> refreshClubs(eligible)
   }
 
   private def refreshClubs(clubs: List[Club]): RIO[ProgressDisplay & ChessComClient & PostgresClient, RefreshResult] =
@@ -113,14 +113,14 @@ object ClubDataApp extends ZIOAppDefault {
             r <- refreshClub(client, club).catchAll { error =>
               ZIO.logInfo(s"[ClubData] Failed to refresh ${club.slug}: ${error.getMessage}").as(ClubFailed)
             }
-            updated <- resultRef.updateAndGet(acc =>
+            updated <- resultRef.updateAndGet { acc =>
               acc.copy(
                 clubsProcessed = acc.clubsProcessed + 1,
                 clubsFailed = acc.clubsFailed + (if (r.failed) 1 else 0),
                 clubsAdminChanged = acc.clubsAdminChanged + (if (r.adminChanged) 1 else 0),
                 totalAdmins = acc.totalAdmins + r.adminCount
               )
-            )
+            }
             _ <- bar.print(updated.clubsProcessed, total, s"Refreshing clubs: ${updated.clubsProcessed}/$total")
           } yield ()
         }.withParallelism(ApiConcurrency.fiberCap(client)).onInterrupt {

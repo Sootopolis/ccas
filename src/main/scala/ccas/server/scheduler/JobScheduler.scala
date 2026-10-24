@@ -67,13 +67,13 @@ object JobScheduler {
           // bad row logs and is treated as not-due rather than aborting the whole poll iteration.
           ZIO
             .attempt(schedule.isDue(now, grace))
-            .catchAll(e =>
+            .catchAll { e =>
               ProgressDisplay
                 .sourced("scheduler")(
                   ZIO.logError(s"${schedule.kind} (club ${schedule.clubIdOption}): invalid trigger: ${e.getMessage}")
                 )
                 .as(false)
-            )
+            }
             .flatMap { due =>
               ZIO.whenDiscard(due) {
                 runSchedule(schedule, now).catchAll {

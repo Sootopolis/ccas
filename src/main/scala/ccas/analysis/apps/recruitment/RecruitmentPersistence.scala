@@ -58,12 +58,12 @@ private[recruitment] object RecruitmentPersistence {
           // Skip candidate row for cache-only rejections so they aren't blocked by daysSinceRejected
           // Passing candidates are written as Deferred; only flipped to Invited after confirmation at finalization
           dbOutcome = if (outcome == CandidateOutcome.Invited) CandidateOutcome.Deferred else outcome
-          insertedOption <- ZIO.when(!candidate.cacheRejected)(
+          insertedOption <- ZIO.when(!candidate.cacheRejected) {
             RecruitmentCandidate.insertIfNew(RecruitmentCandidate(runId, ap.playerId, now, dbOutcome, errorMessage))
-          )
-          _ <- ZIO.whenDiscard(insertedOption.contains(0))(
+          }
+          _ <- ZIO.whenDiscard(insertedOption.contains(0)) {
             ZIO.logInfo(s"[Recruitment] ${candidate.username} (player ${ap.playerId}) already evaluated in this run")
-          )
+          }
         } yield insertedOption.contains(1)
       }
     }.map(_.contains(true))
