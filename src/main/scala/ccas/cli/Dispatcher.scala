@@ -109,10 +109,10 @@ object Dispatcher {
   // it, and return whether the write landed. Fails only if the *fetch* fails; `writeClubs` itself never fails.
   private def writeClubsCacheResult(api: CcasApiClient): Task[Boolean] =
     managedSlugs(api)
-      .flatMap(slugs =>
+      .flatMap { slugs =>
         if (slugs.nonEmpty) { ZIO.succeed(slugs) }
         else { allClubSlugs(api) }
-      )
+      }
       .flatMap(CompletionCache.writeClubs)
 
   private def cacheWriteFailed: UIO[Unit] =
@@ -136,18 +136,18 @@ object Dispatcher {
     currentClubOption: Option[String]
   ): Task[Int] = cmd match {
     case CliCommand.Membership(_, clubs, clubIdOption, all, trust, _, detach) =>
-      resolveClubs(api, clubs, clubIdOption, all, currentClubOption).flatMap(targets =>
-        followEachClub(follower, targets, detach, currentClubOption)(target =>
+      resolveClubs(api, clubs, clubIdOption, all, currentClubOption).flatMap { targets =>
+        followEachClub(follower, targets, detach, currentClubOption) { target =>
           api.postJson[MembershipRequest, List[ClubJobResult]](
             "/api/jobs/membership",
             MembershipRequest(NonEmptyChunk.single(target.query), trust)
           )
-        )
-      )
+        }
+      }
 
     case CliCommand.History(_, clubs, clubIdOption, all, full, includeFinished, refresh, refreshMinHours, _, detach) =>
-      resolveClubs(api, clubs, clubIdOption, all, currentClubOption).flatMap(targets =>
-        followEachClub(follower, targets, detach, currentClubOption)(target =>
+      resolveClubs(api, clubs, clubIdOption, all, currentClubOption).flatMap { targets =>
+        followEachClub(follower, targets, detach, currentClubOption) { target =>
           api.postJson[HistoryRequest, List[ClubJobResult]](
             "/api/jobs/history",
             HistoryRequest(
@@ -157,8 +157,8 @@ object Dispatcher {
               flag(refresh),
               refreshMinHours            )
           )
-        )
-      )
+        }
+      }
 
     case CliCommand.Recruit(
           _,
@@ -427,14 +427,14 @@ object Dispatcher {
     ZIO.foreachDiscard(
       currentSlug(currentClubOption)
         .filterNot(_ => clubs.exists(c => currentMatches(currentClubOption, c.clubId, c.slug)))
-    )(cur =>
+    ) { cur =>
       Console
         .printLineError(
           s"warning: current club '$cur' is not in this list; add it with 'ccas club add $cur' " +
             "or switch with 'ccas use-club <slug>'"
         )
         .orDie
-    )
+    }
 
   // Run each club through submit-then-follow ONE at a time: the next club isn't submitted until the current one's
   // follow completes, and overall exit is 0 only if every club succeeded. Each `submitOne` posts a single-club job
@@ -455,14 +455,14 @@ object Dispatcher {
       if (detach) { results => ZIO.foreach(results)(reportDetachedClub).map(JobFollower.overallExitCode) }
       else { follower.handleBatch }
     ZIO
-      .foreach(targets.toChunk.toList)(target =>
+      .foreach(targets.toChunk.toList) { target =>
         (for {
           results <- sendSettlingAmbiguity(target, (rs: List[ClubJobResult]) => rs.map(_.resolution), hasTty)(submitOne)
           _       <- noteResolutions(currentClubOption, target, results.map(jobOutcome))
           code    <- handle(results)
         } yield code)
           .catchAll(e => Console.printLineError(s"${target.label}: ${rootMessage(e)}").orDie.as(1))
-      )
+      }
       .map(JobFollower.overallExitCode)
   }
 
@@ -572,9 +572,9 @@ object Dispatcher {
         _ <- ZIO.foreachDiscard(offered.zipWithIndex) { case (club, index) =>
           Console.printLineError(s"  ${index + 1}) ${club.display}").orDie
         }
-        _ <- ZIO.whenDiscard(nameless.nonEmpty)(
+        _ <- ZIO.whenDiscard(nameless.nonEmpty) {
           Console.printLineError(s"  (${nameless.size} more hold no name we know of, so nothing can run there)").orDie
-        )
+        }
         _      <- Console.printError(s"which club did you mean? [1-${offered.size}, blank to abort] ").orDie
         answer <- Console.readLine.orElseSucceed("")
         pickedOption = answer.trim.toIntOption.filter(n => n >= 1 && n <= offered.size)
@@ -737,9 +737,9 @@ object Dispatcher {
     for {
       _ <- Console.printLine(s"\nFound ${names.size} candidates:").orDie
       _ <- ZIO.foreachDiscard(names)(n => Console.printLine(s"  ${profileUrlLine(n)}").orDie)
-      answer <- ZIO.attemptBlocking(
+      answer <- ZIO.attemptBlocking {
         StdIn.readLine(s"\nMark all ${names.size} as Invited and copy to clipboard? [Y/n] ")
-      )
+      }
         .orElseSucceed("n")
       _ <-
         if (isYes(answer)) { confirmAndCopy(api, jobId) }
@@ -932,36 +932,36 @@ object Dispatcher {
   private def printJobs(jobs: List[JobStatusResponse]): UIO[Unit] =
     if (jobs.isEmpty) { Console.printLine("no jobs").orDie }
     else {
-      ZIO.foreachDiscard(jobs)(j =>
+      ZIO.foreachDiscard(jobs) { j =>
         Console
           .printLine(s"${j.id}  ${j.kind}  ${j.status}  started=${j.startedAt}${j.error.fold("")(e => s"  error=$e")}")
           .orDie
-      )
+      }
     }
 
   private def printSchedules(schedules: List[ScheduleResponse]): UIO[Unit] =
     if (schedules.isEmpty) { Console.printLine("no schedules").orDie }
     else {
-      ZIO.foreachDiscard(schedules)(s =>
+      ZIO.foreachDiscard(schedules) { s =>
         Console
           .printLine(
             s"#${s.id}  ${s.kind}  ${triggerSummary(s)}  enabled=${s.enabled}" +
               s.clubIdOption.fold("")(c => s"  club=$c")
           )
           .orDie
-      )
+      }
     }
 
   private def printBlacklist(entries: List[BlacklistEntryResponse]): UIO[Unit] =
     if (entries.isEmpty) { Console.printLine("blacklist is empty").orDie }
     else {
-      ZIO.foreachDiscard(entries)(e =>
+      ZIO.foreachDiscard(entries) { e =>
         Console
           .printLine(
             s"${e.username.getOrElse(s"player#${e.playerId}")}  added=${e.addedAt}" +
               s"${e.expiresAt.fold("")(x => s"  expires=$x")}${e.reason.fold("")(r => s"  reason=$r")}"
           )
           .orDie
-      )
+      }
     }
 }

@@ -114,9 +114,9 @@ object CcasServer extends ZIOAppDefault {
     * tried (#320).
     */
   private[server] val poolInit: RIO[PostgresClient, Unit] =
-    ZIO.serviceWithZIO[PostgresClient](client =>
+    ZIO.serviceWithZIO[PostgresClient] { client =>
       ZIO.logInfo(s"Database: ${client.addressOption.fold("address not readable from the configuration")(_.render)}")
-    ) *> ServerTables.ensureTables
+    } *> ServerTables.ensureTables
 
   /** One pass of every retention sweep this server runs: the job-log files, then the two API-diagnostics tables.
     * Each half is caught on its own — one bad pass must not end the loop, and neither half's failure may skip the

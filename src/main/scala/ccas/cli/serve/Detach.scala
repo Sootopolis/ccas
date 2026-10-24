@@ -200,9 +200,9 @@ object Detach {
   }
 
   private def ready(pidPath: Path, logFile: Path, databaseOption: Option[String]): UIO[ExitCode] =
-    readPid(pidPath, 3).flatMap(pidOption =>
+    readPid(pidPath, 3).flatMap { pidOption =>
       Console.printLine(startedMessage(pidOption, databaseOption, pidPath, logFile)).orDie.as(ExitCode.success)
-    )
+    }
 
   /** The line a detached start ends on. It names the database the server reports, since the server's own boot line
     * goes to a log nobody is watching (#320). Pure.

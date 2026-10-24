@@ -185,9 +185,9 @@ object RecruitmentApp extends ZIOAppDefault {
       existingUsernames = targetMembers.toMap.keySet
 
       clubMatches <- client.get[ApiClubMatches](ApiClubMatches.getUrl(effectiveSlug))
-        .withClubSlugRenameRecovery(client, effectiveSlug, Some(clubId))(fresh =>
+        .withClubSlugRenameRecovery(client, effectiveSlug, Some(clubId)) { fresh =>
           client.get[ApiClubMatches](ApiClubMatches.getUrl(fresh))
-        )
+        }
       targetMatchIds = (clubMatches.registered.map(_.`@id`) ++ clubMatches.inProgress.map(_.`@id`)).toSet
       _ <- writeClubMatchRef(client, clubId, effectiveSlug, clubMatches).ignore
 
@@ -245,9 +245,9 @@ object RecruitmentApp extends ZIOAppDefault {
 
       pgClient <- ZIO.service[PostgresClient]
 
-      _ <- ZIO.whenDiscard(cumulative && alreadyFound > 0)(
+      _ <- ZIO.whenDiscard(cumulative && alreadyFound > 0) {
         ZIO.logInfo(s"[Cumulative] Already found $alreadyFound today, effective target: $effectiveTarget")
-      )
+      }
 
       finalRun <-
         if (effectiveTarget == 0) {
@@ -303,17 +303,17 @@ object RecruitmentApp extends ZIOAppDefault {
     jobRunIdOption: Option[JobRunId]
   ): RIO[ChessComClient & PostgresClient, RecruitmentRun] =
     for {
-      _ <- ZIO.whenDiscard(ctx.showHints)(
+      _ <- ZIO.whenDiscard(ctx.showHints) {
         ZIO.logInfo("[Hint] Press Ctrl+C to stop gracefully (candidates found so far will be listed)")
-      )
+      }
 
       // --- Load deferred candidates from prior runs as a priority source ---
       deferredCandidates  <- RecruitmentCandidate.selectDeferredByClub(ctx.runCtx.clubId)
       deferredResolvedMap <- PlayerName.selectCurrentNames(deferredCandidates.map(_.playerId))
       deferredUsernames = deferredResolvedMap.values.filterNot(ctx.existingUsernames).toList.distinct
-      _ <- ZIO.whenDiscard(deferredUsernames.nonEmpty)(
+      _ <- ZIO.whenDiscard(deferredUsernames.nonEmpty) {
         ZIO.logInfo(s"[Deferred] Found ${deferredUsernames.size} deferred candidates from prior runs")
-      )
+      }
 
       // --- Build initial sources from provided source clubs ---
       deferredSource = Option.when(deferredUsernames.nonEmpty)(
@@ -434,23 +434,23 @@ object RecruitmentApp extends ZIOAppDefault {
       _ <- ZIO.logInfo(s"Duration: ${duration.display}")
       _ <- ZIO.logInfo(s"Candidates evaluated: $evalCount")
       _ <- ZIO.logInfo(s"Invited: ${confirmed.size}")
-      _ <- ZIO.whenDiscard(found.nonEmpty && confirmed.isEmpty)(
+      _ <- ZIO.whenDiscard(found.nonEmpty && confirmed.isEmpty) {
         ZIO.logInfo(s"Found (not confirmed): ${found.size}")
-      )
+      }
       _ <- ZIO.whenDiscard(deferredCount > 0)(ZIO.logInfo(s"Deferred: $deferredCount"))
       // CLI prompt already displayed candidates; skip redundant listing
-      _ <- ZIO.whenDiscard(trigger != RunTrigger.Cli)(
+      _ <- ZIO.whenDiscard(trigger != RunTrigger.Cli) {
         ZIO.foreachDiscard(confirmed)(c => ZIO.logInfo(s"  ${c.username}"))
-      )
+      }
       // Cumulative summary: show today's total across all runs. This run is already among them — the transaction above
       // committed its Invited outcomes and its completed_at, which is what `selectInvitedToday` filters on.
       _ <- ZIO.whenDiscard(cumulative && alreadyFound > 0) {
         for {
           todayCandidates  <- RecruitmentCandidate.selectInvitedToday(clubId, alias)
           todayResolvedMap <- PlayerName.selectCurrentNames(todayCandidates.map(_.playerId))
-          todayUsernames = todayCandidates.map(c =>
+          todayUsernames = todayCandidates.map { c =>
             todayResolvedMap.getOrElse(c.playerId, Username.wrap(s"[pid=${c.playerId}]"))
-          )
+          }
           _ <- ZIO.logInfo(s"=== Today's Total: ${todayUsernames.size} ===")
           _ <- ZIO.foreachDiscard(todayUsernames)(u => ZIO.logInfo(s"  $u"))
         } yield ()
@@ -461,9 +461,9 @@ object RecruitmentApp extends ZIOAppDefault {
     for {
       _ <- ZIO.logInfo(s"\nFound ${found.size} candidates:")
       _ <- ZIO.foreachDiscard(found)(c => ZIO.logInfo(s"  ${c.username}"))
-      answer <- ZIO.attemptBlocking(
+      answer <- ZIO.attemptBlocking {
         StdIn.readLine(s"\nMark all ${found.size} candidates as Invited? [Y/n] ")
-      ).orElse(ZIO.succeed("n"))
+      }.orElse(ZIO.succeed("n"))
     } yield
       if (answer == null || answer.trim.isEmpty || answer.trim.toLowerCase.startsWith("y")) found
       else Nil

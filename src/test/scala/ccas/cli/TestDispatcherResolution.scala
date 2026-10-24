@@ -113,9 +113,9 @@ object TestDispatcherResolution extends ZIOSpecDefault {
     // `club show` (#271): the club first, on a line of its own, then why it is that club when the name was not its own.
     suite("club show")(
       test("prints the club a name reaches on one line") {
-        showing(slug = "new-name", resolution = ClubResolution.Known(club)).map((result, out, err) =>
+        showing(slug = "new-name", resolution = ClubResolution.Known(club)).map { (result, out, err) =>
           assertTrue(result == Right(0), out == Vector("#1  new-name  New Name Club\n"), err.isEmpty)
-        )
+        }
       },
       test("--club-id asks by id") {
         show(
@@ -126,35 +126,35 @@ object TestDispatcherResolution extends ZIOSpecDefault {
         ).map((result, out, _) => assertTrue(result == Right(0), out == Vector("#1  new-name  New Name Club\n")))
       },
       test("says when the name is a former one of the club") {
-        showing(slug = "old-name", resolution = ClubResolution.Renamed(club, ClubSlug("old-name"))).map((_, out, _) =>
+        showing(slug = "old-name", resolution = ClubResolution.Renamed(club, ClubSlug("old-name"))).map { (_, out, _) =>
           assertTrue(out == Vector("#1  new-name  New Name Club\n", "'old-name' is a former name of this club\n"))
-        )
+        }
       },
       test("says whose name a moved one was") {
         showing(slug = "was-shared", resolution = ClubResolution.Moved(club, ClubSlug("was-shared"), List(otherRef)))
-          .map((_, out, _) =>
+          .map { (_, out, _) =>
             assertTrue(
               out == Vector(
                 "#1  new-name  New Name Club\n",
                 "'was-shared' now belongs to this club on Chess.com, not to #2 (now other-name)\n"
               )
             )
-          )
+          }
       },
       test("a name that reaches no club fails with the server's reason, and prints no club") {
-        showing(slug = "x", resolution = ClubResolution.NotLocal(byName)).map((result, out, _) =>
+        showing(slug = "x", resolution = ClubResolution.NotLocal(byName)).map { (result, out, _) =>
           assertTrue(result == Left(CliError("Club not found: x", 1)), out.isEmpty)
-        )
+        }
       },
       // A look acts on nothing, so there is nothing to pick a club for: the holders are the answer.
       test("an ambiguous name fails listing its holders, and prompts for nothing") {
-        showing(slug = "was-shared", resolution = contested).map((result, out, err) =>
+        showing(slug = "was-shared", resolution = contested).map { (result, out, err) =>
           assertTrue(
             result.left.exists(_.getMessage.contains("#1 (now new-name), #2 (now other-name)")),
             out.isEmpty,
             err.isEmpty
           )
-        )
+        }
       }
     ),
     test("the prompt answers with the club at the number picked") {
@@ -194,12 +194,12 @@ object TestDispatcherResolution extends ZIOSpecDefault {
     // The resend loop itself: what the prompt's answer is actually used for (#254).
     test("an ambiguous answer is settled by resending for the club picked at the prompt") {
       settling(answer = Some("2"), responses = List(contested, ClubResolution.Known(other)), interactive = true)
-        .map((result, targets) =>
+        .map { (result, targets) =>
           assertTrue(
             result == ClubResolution.Known(other),
             targets.map(_.query) == List(ClubQuery.ById(ClubId(7)), ClubQuery.ById(ClubId(2)))
           )
-        )
+        }
     },
     test("an aborted prompt keeps the ambiguous answer, and sends nothing a second time") {
       settling(answer = Some(""), responses = List(contested, ClubResolution.Known(other)), interactive = true)

@@ -48,9 +48,9 @@ object TestUseClub extends ZIOSpecDefault {
     val managedClubs = Method.GET / "api" / "managed-clubs" ->
       handler(managedOption.fold(Response.status(Status.InternalServerError))(FakeCcasServer.json(_)))
     val asked = ClubQuery.BySlug(ClubSlug(slug))
-    resolutionOption.fold(Routes(managedClubs))(resolution =>
+    resolutionOption.fold(Routes(managedClubs)) { resolution =>
       Routes(FakeCcasServer.resolving(asked, resolution, "Some Club"), managedClubs)
-    )
+    }
   }
 
   /** What a set left behind: its exit code, what it printed, the pointer it stored and the club list it cached. */
@@ -158,7 +158,7 @@ object TestUseClub extends ZIOSpecDefault {
     suite("set")(
       test("a former name of a managed club is stored as that club, with a note, and caches the managed list") {
         val renamed = ClubResolution.Renamed(beta, alpha)
-        setAgainst(server("team-alpha", Some(renamed), Some(List(managed(7, "team-beta")))), "team-alpha").map(set =>
+        setAgainst(server("team-alpha", Some(renamed), Some(List(managed(7, "team-beta")))), "team-alpha").map { set =>
           assertTrue(
             set.code == ExitCode.success,
             set.storedOption.contains("7:team-beta"),
@@ -166,11 +166,11 @@ object TestUseClub extends ZIOSpecDefault {
             set.out == Vector("current club set to team-beta\n"),
             set.cachedOption.contains(List("team-beta"))
           )
-        )
+        }
       },
       test("a club you don't manage is stored by id, with a warning saying how to manage it") {
         val gamma = ClubResolution.Known(NamedClub(ClubId(9), ClubSlug("team-gamma")))
-        setAgainst(server("team-gamma", Some(gamma), Some(List(managed(7, "team-beta")))), "team-gamma").map(set =>
+        setAgainst(server("team-gamma", Some(gamma), Some(List(managed(7, "team-beta")))), "team-gamma").map { set =>
           assertTrue(
             set.storedOption.contains("9:team-gamma"),
             set.err == Vector(
@@ -178,7 +178,7 @@ object TestUseClub extends ZIOSpecDefault {
                 "manage it with 'ccas club add team-gamma'\n"
             )
           )
-        )
+        }
       },
       // A managed club can still show a name it has lost, since `club.slug` is not unique (#254).
       test("a name that moved to another club is not managed because a managed club still shows it") {
@@ -187,26 +187,26 @@ object TestUseClub extends ZIOSpecDefault {
           requested = alpha,
           previous = List(ClubRef.of(beta))
         )
-        setAgainst(server("team-alpha", Some(moved), Some(List(managed(7, "team-alpha")))), "team-alpha").map(set =>
+        setAgainst(server("team-alpha", Some(moved), Some(List(managed(7, "team-alpha")))), "team-alpha").map { set =>
           assertTrue(
             set.storedOption.contains("8:team-alpha"),
             set.err.size == 2,
             set.err.head.contains("now belongs to club #8"),
             set.err.last.contains("'team-alpha' is not one of your managed clubs")
           )
-        )
+        }
       },
       // The case that used to read "the server did not answer": the club is confirmed, so an unanswered managed list is
       // no reason to warn.
       test("a club the server names raises no warning when the managed list goes unanswered") {
         val known = ClubResolution.Known(NamedClub(ClubId(7), alpha))
-        setAgainst(server("team-alpha", Some(known), None), "team-alpha").map(set =>
+        setAgainst(server("team-alpha", Some(known), None), "team-alpha").map { set =>
           assertTrue(set.storedOption.contains("7:team-alpha"), set.err.isEmpty)
-        )
+        }
       },
       test("a name the server doesn't know is set anyway, with a warning to check the spelling") {
         val notLocal = ClubResolution.NotLocal(ClubQuery.BySlug(ClubSlug("team-alpah")))
-        setAgainst(server("team-alpah", Some(notLocal), Some(Nil)), "team-alpah").map(set =>
+        setAgainst(server("team-alpah", Some(notLocal), Some(Nil)), "team-alpah").map { set =>
           assertTrue(
             set.code == ExitCode.success,
             set.storedOption.contains("team-alpah"),
@@ -216,46 +216,46 @@ object TestUseClub extends ZIOSpecDefault {
             ),
             set.out == Vector("current club set to team-alpah\n")
           )
-        )
+        }
       },
       test("a former name of a club that has since lost its name says commands can't reach it") {
         val problematic = ClubResolution.Problematic(ClubQuery.BySlug(alpha))
-        setAgainst(server("team-alpha", Some(problematic), Some(Nil)), "team-alpha").map(set =>
+        setAgainst(server("team-alpha", Some(problematic), Some(Nil)), "team-alpha").map { set =>
           assertTrue(
             set.storedOption.contains("team-alpha"),
             set.err.size == 1,
             set.err.head.contains("the club once named 'team-alpha' has lost its name to another club")
           )
-        )
+        }
       },
       // The server's own reason for an ambiguous name suggests `--club-id`, which `use-club` would reject.
       test("an ambiguous name lists its holders by current name, without pointing at a flag use-club lacks") {
         val gamma     = ClubRef(ClubId(8), Some(ClubSlug("team-gamma")))
         val ambiguous = ClubResolution.Ambiguous(alpha, List(ClubRef.of(beta), gamma))
-        setAgainst(server("team-alpha", Some(ambiguous), Some(Nil)), "team-alpha").map(set =>
+        setAgainst(server("team-alpha", Some(ambiguous), Some(Nil)), "team-alpha").map { set =>
           assertTrue(
             set.storedOption.contains("team-alpha"),
             set.err.size == 1,
             set.err.head.contains("#7 (now team-beta), #8 (now team-gamma)"),
             !set.err.head.contains("--club-id")
           )
-        )
+        }
       },
       test("a server without the resolve route falls back to the managed clubs' names") {
-        setAgainst(server("team-alpha", None, Some(List(managed(7, "team-alpha")))), "team-alpha").map(set =>
+        setAgainst(server("team-alpha", None, Some(List(managed(7, "team-alpha")))), "team-alpha").map { set =>
           assertTrue(set.storedOption.contains("7:team-alpha"), set.err.isEmpty)
-        )
+        }
       },
       // By name alone a former name of a managed club looks unmanaged too, so the warning claims no more than that.
       test("the fallback says only that no managed club has the name now") {
-        setAgainst(server("team-alpha", None, Some(List(managed(7, "team-beta")))), "team-alpha").map(set =>
+        setAgainst(server("team-alpha", None, Some(List(managed(7, "team-beta")))), "team-alpha").map { set =>
           assertTrue(
             set.storedOption.contains("team-alpha"),
             set.err == Vector(
               "warning: no club you manage is named 'team-alpha' now — commands without --club still target it\n"
             )
           )
-        )
+        }
       },
       test("with no answer at all, the cached club list is the only check") {
         for {

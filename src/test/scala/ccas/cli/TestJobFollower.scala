@@ -147,10 +147,10 @@ object TestJobFollower extends ZIOSpecDefault {
       for {
         reconnected  <- Promise.make[Nothing, Unit]
         progressCall <- Ref.make(0)
-        progress = progressCall.updateAndGet(_ + 1).flatMap(n =>
+        progress = progressCall.updateAndGet(_ + 1).flatMap { n =>
           if (n == 1) { ZIO.fail(StreamDropped("read-idle reap")) }
           else { reconnected.succeed(()).unit }
-        )
+        }
         ref   <- Ref.make(List(statusJson("Completed", None)))
         code  <- barsFollower(new StubApi(ref, AwaitThenComplete(reconnected), progress), 1.minute).followJob("job-1")
         calls <- progressCall.get

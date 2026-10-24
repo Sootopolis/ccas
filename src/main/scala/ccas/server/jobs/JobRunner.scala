@@ -211,9 +211,9 @@ object JobRunner {
         id <- withTransaction {
           for {
             existing <- JobRun.selectRunningForUpdate(kind, clubIdOption)
-            _ <- ZIO.foreachDiscard(existing)(job =>
+            _ <- ZIO.foreachDiscard(existing) { job =>
               cancelRequested.get.flatMap(pending => ZIO.fail(conflictError(pending.contains(job.id))))
-            )
+            }
             id   = JobRunId.generate()
             now <- Clock.instant
             jobRun = JobRun(id, kind, clubIdOption, trigger, JobRunStatus.Running, params, now, None, None)
@@ -224,9 +224,9 @@ object JobRunner {
         // degrades to the numeric id, never fails the submit. Resolved before the sink is opened so this interruptible
         // DB read (can block seconds on a Neon cold start) holds no fd: an interrupt here leaks nothing.
         slugOption <- ZIO.foreach(clubIdOption)(Club.selectId).map(_.flatten.map(_.slug)).catchAll(_ => ZIO.none)
-        label = clubIdOption.fold(kind.toString)(cid =>
+        label = clubIdOption.fold(kind.toString) { cid =>
           s"$kind/${slugOption.fold(s"#${ClubId.unwrap(cid)}")(ClubSlug.unwrap)}"
-        )
+        }
         // `FileSink.make` acquires a held-open fd whose only close path is `release` (the child's `.ensuring`); an
         // interrupt between the open and the `forkIn` would leak it, so open + register + fork sit inside one
         // `uninterruptibleMask` (`restore` keeps only the forked job interruptible). `forkIn(layerScope)` — not
@@ -296,19 +296,19 @@ object JobRunner {
     ): UIO[Unit] =
       def onFailure(error: Throwable): UIO[Unit] = {
         val msg = error.safeMessage
-        Clock.instant.flatMap(now =>
+        Clock.instant.flatMap { now =>
           JobRun.updateStatus(id, JobRunStatus.Failed, Some(now), Some(msg))
             .provideEnvironment(env)
             .unit.catchAll(e => ZIO.logError(s"Failed to record job failure: ${e.safeMessage}"))
-        )
+        }
       }
 
       def onSuccess: UIO[Unit] =
-        Clock.instant.flatMap(now =>
+        Clock.instant.flatMap { now =>
           JobRun.updateStatus(id, JobRunStatus.Completed, Some(now), None)
             .provideEnvironment(env)
             .unit.catchAll(e => ZIO.logError(s"Failed to record job completion: ${e.safeMessage}"))
-        )
+        }
 
       // Interruption is a `Cause`, not a typed error, so it bypasses `foldZIO`'s branches entirely. This hook fires on
       // ANY interruption — but only an operator `cancel` (which registers the id in `cancelRequested` before
@@ -317,13 +317,13 @@ object JobRunner {
       // `Failed`/"Service restarted", not "Cancelled by operator". The finalizer runs uninterruptibly so the write lands;
       // `markCancelled`'s `WHERE status = Running` guard makes it a no-op if the job reached a terminal state first.
       def onCancelled: UIO[Unit] =
-        ZIO.whenZIODiscard(cancelRequested.get.map(_.contains(id)))(
-          Clock.instant.flatMap(now =>
+        ZIO.whenZIODiscard(cancelRequested.get.map(_.contains(id))) {
+          Clock.instant.flatMap { now =>
             JobRun.markCancelled(id, now)
               .provideEnvironment(env)
               .unit.catchAll(e => ZIO.logError(s"Failed to record job cancellation: ${e.safeMessage}"))
-          )
-        )
+          }
+        }
 
       // A defect bypasses `foldZIO` as interruption does, but nothing else records it: the job would stay `Running`,
       // blocking its kind and club, until the next boot. Log it with its trace, then record it as a failure.
@@ -346,12 +346,12 @@ object JobRunner {
       runningFibers.get.map(_.get(id)).flatMap {
         case None => ZIO.succeed(false)
         case Some(slot) =>
-          slot.await.flatMap(fiber =>
+          slot.await.flatMap { fiber =>
             fiber.poll.flatMap {
               case Some(_) => ZIO.succeed(false) // already terminal — release just hasn't cleared the slot yet
               case None    => (cancelRequested.update(_ + id) *> fiber.interruptFork).as(true)
             }
-          )
+          }
       }
 
     // Leaves `cancelRequested` alone, so `onCancelled` writes nothing. `interrupt`, unlike `cancel`'s `interruptFork`,
@@ -360,9 +360,9 @@ object JobRunner {
     override def interruptAll: UIO[Unit] = {
       def interruptNew(done: Set[JobRunId]): UIO[Unit] =
         runningFibers.get.map(_.removedAll(done)).flatMap { fresh =>
-          ZIO.whenDiscard(fresh.nonEmpty)(
+          ZIO.whenDiscard(fresh.nonEmpty) {
             ZIO.foreachParDiscard(fresh.values)(_.await.flatMap(_.interrupt)) *> interruptNew(done ++ fresh.keySet)
-          )
+          }
         }
       interruptNew(Set.empty)
     }

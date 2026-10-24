@@ -39,14 +39,14 @@ object TestCliParser extends ZIOSpecDefault {
 
   override def spec: Spec[Any, Any] = suite("TestCliParser")(
     test("membership parses comma-separated --club and defaults the server") {
-      parsed("membership", "--club", "team-alpha,team-beta").map(c =>
+      parsed("membership", "--club", "team-alpha,team-beta").map { c =>
         assertTrue(c.contains(CliCommand.Membership(DefaultServer, List("team-alpha", "team-beta"), None, false, None, false, false)))
-      )
+      }
     },
     test("membership --all parses with no explicit clubs") {
-      parsed("membership", "--all").map(c =>
+      parsed("membership", "--all").map { c =>
         assertTrue(c.contains(CliCommand.Membership(DefaultServer, Nil, None, true, None, false, false)))
-      )
+      }
     },
     test("use-club parses the slug (local, no server)") {
       parsed("use-club", "team-alpha").map(c => assertTrue(c.contains(CliCommand.Use(List("team-alpha"), false))))
@@ -61,19 +61,19 @@ object TestCliParser extends ZIOSpecDefault {
     // which (with zio-cli swallowing a trailing option as a positional) made `use-club <slug> --clear` a silent SET of
     // the club the user asked to clear.
     test("use-club keeps extra positionals so the arity can be rejected downstream") {
-      parsed("use-club", "team-a", "team-b").map(c =>
+      parsed("use-club", "team-a", "team-b").map { c =>
         assertTrue(c.contains(CliCommand.Use(List("team-a", "team-b"), false)))
-      )
+      }
     },
     test("use-club with --clear AFTER the slug keeps the flag as a positional (zio-cli ordering bug)") {
-      parsed("use-club", "team-alpha", "--clear").map(c =>
+      parsed("use-club", "team-alpha", "--clear").map { c =>
         assertTrue(c.contains(CliCommand.Use(List("team-alpha", "--clear"), false)))
-      )
+      }
     },
     test("config set parses key and value (local, no server)") {
-      parsed("config", "set", "DB_HOST", "localhost").map(c =>
+      parsed("config", "set", "DB_HOST", "localhost").map { c =>
         assertTrue(c.contains(CliCommand.ConfigSet("DB_HOST", "localhost")))
-      )
+      }
     },
     test("config get parses the key") {
       parsed("config", "get", "DATABASE_URL").map(c => assertTrue(c.contains(CliCommand.ConfigGet("DATABASE_URL"))))
@@ -88,22 +88,22 @@ object TestCliParser extends ZIOSpecDefault {
       parsed("config", "init").map(c => assertTrue(c.contains(CliCommand.ConfigInit)))
     },
     test("--server overrides the default") {
-      parsed("jobs", "--server", "http://example:9000").map(c =>
+      parsed("jobs", "--server", "http://example:9000").map { c =>
         assertTrue(c.contains(CliCommand.Jobs("http://example:9000", None)))
-      )
+      }
     },
     test("cancel parses the jobId (options before the positional)") {
-      parsed("cancel", "--server", "http://example:9000", "job-123").map(c =>
+      parsed("cancel", "--server", "http://example:9000", "job-123").map { c =>
         assertTrue(c.contains(CliCommand.Cancel("http://example:9000", "job-123")))
-      )
+      }
     },
     test("config api_url becomes the default when --server is absent") {
       serverOf("http://config:1234")("jobs").map(s => assertTrue(s.contains("http://config:1234")))
     },
     test("--server overrides the config-resolved default") {
-      serverOf("http://config:1234")("jobs", "--server", "http://flag:9999").map(s =>
+      serverOf("http://config:1234")("jobs", "--server", "http://flag:9999").map { s =>
         assertTrue(s.contains("http://flag:9999"))
-      )
+      }
     },
     // No slug and no --club/--all now PARSES (empty clubs); the "no club" error is raised later by the Dispatcher
     // against the config's current_club, not at parse time.
@@ -144,14 +144,14 @@ object TestCliParser extends ZIOSpecDefault {
       parse("membership", "--club-id", "0").exit.map(e => assertTrue(e.isFailure))
     },
     test("--no-trust-usernames maps to Some(false)") {
-      parsed("membership", "--no-trust-usernames", "--club", "team-alpha").map(c =>
+      parsed("membership", "--no-trust-usernames", "--club", "team-alpha").map { c =>
         assertTrue(c.contains(CliCommand.Membership(DefaultServer, List("team-alpha"), None, false, Some(false), false, false)))
-      )
+      }
     },
     test("--no-progress sets the flag on a follow command") {
-      parsed("membership", "--no-progress", "--club", "team-alpha").map(c =>
+      parsed("membership", "--no-progress", "--club", "team-alpha").map { c =>
         assertTrue(c.contains(CliCommand.Membership(DefaultServer, List("team-alpha"), None, false, None, true, false)))
-      )
+      }
     },
     test("--detach sets the flag on membership/history/stats (#170)") {
       for {
@@ -165,12 +165,12 @@ object TestCliParser extends ZIOSpecDefault {
       )
     },
     test("stats defaults --detach to false") {
-      parsed("stats", "--club", "team-alpha").map(c =>
+      parsed("stats", "--club", "team-alpha").map { c =>
         assertTrue(c.contains(CliCommand.Stats(DefaultServer, Some("team-alpha"), None, None, None, false, false)))
-      )
+      }
     },
     test("recruit parses options, comma-separated source-clubs, and --club") {
-      parsed("recruit", "--target", "5", "--no-explore", "--source-clubs", "x,y", "--club", "team-alpha").map(c =>
+      parsed("recruit", "--target", "5", "--no-explore", "--source-clubs", "x,y", "--club", "team-alpha").map { c =>
         assertTrue(
           c.contains(
             CliCommand.Recruit(
@@ -190,17 +190,17 @@ object TestCliParser extends ZIOSpecDefault {
             )
           )
         )
-      )
+      }
     },
     test("recruit with no --club parses to None") {
-      parsed("recruit").map(c =>
+      parsed("recruit").map { c =>
         assertTrue(c.contains(CliCommand.Recruit(DefaultServer, None, None, None, None, false, Nil, None, None, false, false, None, false)))
-      )
+      }
     },
     test("recruit --stdout sets stdout") {
-      parsed("recruit", "--stdout").map(c =>
+      parsed("recruit", "--stdout").map { c =>
         assertTrue(c.contains(CliCommand.Recruit(DefaultServer, None, None, None, None, false, Nil, None, None, true, false, None, false)))
-      )
+      }
     },
     test("recruit --report parses, with an optional run-id argument") {
       for {
@@ -212,12 +212,12 @@ object TestCliParser extends ZIOSpecDefault {
       )
     },
     test("history flags parse") {
-      parsed("history", "--full", "--include-finished", "--club", "team-alpha").map(c =>
+      parsed("history", "--full", "--include-finished", "--club", "team-alpha").map { c =>
         assertTrue(c.contains(CliCommand.History(DefaultServer, List("team-alpha"), None, false, true, true, false, None, false, false)))
-      )
+      }
     },
     test("blacklist add parses usernames and options") {
-      parsed("blacklist", "add", "--reason", "spam", "--months", "3", "--club", "team-alpha", "u1", "u2").map(c =>
+      parsed("blacklist", "add", "--reason", "spam", "--months", "3", "--club", "team-alpha", "u1", "u2").map { c =>
         assertTrue(
           c.contains(
             CliCommand.BlacklistAdd(
@@ -230,10 +230,10 @@ object TestCliParser extends ZIOSpecDefault {
             )
           )
         )
-      )
+      }
     },
     test("schedule add parses kind and interval") {
-      parsed("schedule", "add", "--kind", "Recruitment", "--interval-hours", "24", "--club", "team-alpha").map(c =>
+      parsed("schedule", "add", "--kind", "Recruitment", "--interval-hours", "24", "--club", "team-alpha").map { c =>
         assertTrue(
           c.contains(
             CliCommand.ScheduleAdd(
@@ -249,12 +249,12 @@ object TestCliParser extends ZIOSpecDefault {
             )
           )
         )
-      )
+      }
     },
     test("schedule add parses cron, tz and misfire") {
       parsed(
         "schedule", "add", "--kind", "ClubData", "--cron", "0 9 * * MON", "--tz", "Europe/London", "--misfire", "catch_up"
-      ).map(c =>
+      ).map { c =>
         assertTrue(
           c.contains(
             CliCommand.ScheduleAdd(
@@ -270,28 +270,28 @@ object TestCliParser extends ZIOSpecDefault {
             )
           )
         )
-      )
+      }
     },
     test("schedule remove parses the id") {
       parsed("schedule", "remove", "7").map(c => assertTrue(c.contains(CliCommand.ScheduleRemove(DefaultServer, 7L))))
     },
     test("club add parses the slug positional") {
-      parsed("club", "add", "team-alpha").map(c =>
+      parsed("club", "add", "team-alpha").map { c =>
         assertTrue(c.contains(CliCommand.ClubsAdd(DefaultServer, List("team-alpha"), None)))
-      )
+      }
     },
     test("club remove parses the slug positional") {
-      parsed("club", "remove", "team-alpha").map(c =>
+      parsed("club", "remove", "team-alpha").map { c =>
         assertTrue(c.contains(CliCommand.ClubsRemove(DefaultServer, List("team-alpha"), None)))
-      )
+      }
     },
     test("club list parses with no slug and defaults the server") {
       parsed("club", "list").map(c => assertTrue(c.contains(CliCommand.ClubsList(DefaultServer))))
     },
     test("club show parses the slug positional") {
-      parsed("club", "show", "team-alpha").map(c =>
+      parsed("club", "show", "team-alpha").map { c =>
         assertTrue(c.contains(CliCommand.ClubsShow(DefaultServer, List("team-alpha"), None)))
-      )
+      }
     },
     // `club add`/`remove` manage the set, so the club is a required operand — but a slug or `--club-id` can supply
     // it, so a bare `club add` parses and `ClubResolver.operand` refuses it (not a current_club fallback).
@@ -342,9 +342,9 @@ object TestCliParser extends ZIOSpecDefault {
     // Regression: zio-cli 0.8.1 routed every `<sub> --help` to the FIRST subcommand (now `server`). With
     // CliCommand.config (finalCheckBuiltIn = false), each --help must render its own command's help.
     test("membership --help renders membership help, not the first subcommand") {
-      helpText("membership", "--help").map(t =>
+      helpText("membership", "--help").map { t =>
         assertTrue(t.exists(_.contains("trust-usernames"))) // membership-only option; absent from serve
-      )
+      }
     },
     test("recruit --help renders recruit help") {
       helpText("recruit", "--help").map(t => assertTrue(t.exists(_.contains("source-clubs"))))
@@ -352,16 +352,16 @@ object TestCliParser extends ZIOSpecDefault {
     // Match child help sentences, not bare names: "blacklist" contains the substring "list", which would
     // false-positive a `contains("list")` check.
     test("blacklist --help lists the child subcommands") {
-      helpText("blacklist", "--help").map(t =>
+      helpText("blacklist", "--help").map { t =>
         assertTrue(t.exists(s => s.contains("List a club's blacklist entries") && s.contains("Remove a username")))
-      )
+      }
     },
     // `remove` is NOT the first child of `blacklist`, so this catches the routing bug — the bug rendered the
     // first child (add), whose `--months` help "Auto-expire" must be absent here.
     test("blacklist remove --help renders remove, not the first child") {
-      helpText("blacklist", "remove", "--help").map(t =>
+      helpText("blacklist", "remove", "--help").map { t =>
         assertTrue(t.exists(s => s.contains("Username to remove") && !s.contains("Auto-expire")))
-      )
+      }
     }
   )
 }

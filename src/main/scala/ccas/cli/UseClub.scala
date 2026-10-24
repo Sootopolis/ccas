@@ -258,12 +258,12 @@ object UseClub {
       case None =>
         note(s"warning: couldn't check '$slug': the server didn't answer, and the club cache couldn't be read")
       case Some(known) =>
-        ZIO.whenDiscard(isUnknown(slug, known))(
+        ZIO.whenDiscard(isUnknown(slug, known)) {
           note(
             s"warning: the server didn't answer to check '$slug', and it isn't in the cached club list — " +
               "check the spelling"
           )
-        )
+        }
     }
 
   // Naming the path is the actionable part: an unwritable cache directory (a root-owned one left by a `sudo ccas` run

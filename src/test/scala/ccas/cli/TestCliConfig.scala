@@ -24,14 +24,14 @@ object TestCliConfig extends ZIOSpecDefault {
     }.orDie
 
   private def writeConfig(content: String): UIO[Path] =
-    tempDir.flatMap(dir =>
+    tempDir.flatMap { dir =>
       ZIO.attemptBlocking {
         val f = dir.resolve("config.conf")
         Files.writeString(f, content)
         f.toFile.deleteOnExit()
         f
       }.orDie
-    )
+    }
 
   override def spec: Spec[Any, Any] = suite("TestCliConfig")(
     test("missing file resolves to the empty config") {
@@ -71,9 +71,9 @@ object TestCliConfig extends ZIOSpecDefault {
     },
     test("malformed config fails with a message naming the file") {
       writeConfig("api_url = \"unterminated\n").flatMap { f =>
-        CliConfig.load(f).either.map(res =>
+        CliConfig.load(f).either.map { res =>
           assertTrue(res.left.exists(m => m.contains("invalid config file") && m.contains(f.toString)))
-        )
+        }
       }
     }
   )

@@ -298,9 +298,9 @@ object MembershipApp extends ZIOAppDefault {
       for {
         current <- ClubRosterCoverage.lockVersion(clubId)
         saving = current == version
-        _ <- ZIO.whenDiscard(saving)(
+        _ <- ZIO.whenDiscard(saving) {
           persist(clubId, observedAt, b, c, settlement) *> MembershipRun.complete(runId, completedAt)
-        )
+        }
       } yield saving
     }
 
@@ -326,11 +326,11 @@ object MembershipApp extends ZIOAppDefault {
         jobRunIdOption = jobRunIdOption
       )
       invitations <- MembershipReport.lookupJoinInvitations(result.clubId, result.changes.toList)
-                       .catchAll(e =>
+                       .catchAll { e =>
                          ZIO
                            .logWarning(s"Join-invitation lookup failed for club ${result.clubId}: ${e.getMessage}")
                            .as(Map.empty[PlayerId, Instant])
-                       )
+                       }
       _           <- MembershipReport.reportReconciliation(result, invitations)
     } yield (result, invitations)
 

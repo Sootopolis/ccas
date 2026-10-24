@@ -266,9 +266,9 @@ object BodyStore {
       // CWD-dependence this issue removed from the *default*. Pin it at startup, log where it actually landed, and
       // say so, so nobody discovers it by finding blobs in two places.
       root = configured.toAbsolutePath
-      _ <- ZIO.whenDiscard(!configured.isAbsolute)(
+      _ <- ZIO.whenDiscard(!configured.isAbsolute) {
         ZIO.logWarning(s"body-store.fs-root '$configured' is relative; resolved against the launch directory to $root")
-      )
+      }
       _ <- ZIO.logDebug(s"BodyStore: fs backend rooted at $root")
     } yield new FsBodyStore(root)
 
@@ -404,12 +404,12 @@ object BodyStore {
     // getAndSet, so only the fiber that observes the flag still clear emits the WARN — concurrent failures during
     // one outage can't each announce it.
     private def recordFailure(op: String, error: Throwable): UIO[Unit] =
-      ZIO.whenZIODiscard(degraded.getAndSet(true).negate)(
+      ZIO.whenZIODiscard(degraded.getAndSet(true).negate) {
         ZIO.logWarning(
           s"BodyStore unavailable (first failure on $op): ${error.safeMessage}. Response-body caching is " +
             "degraded to no-cache until it recovers; requests continue, uncached."
         )
-      )
+      }
 
     // Must stay above `recordSuccess`, which reads it: a `val` initialiser that reads a later `val` sees null.
     private val clearDegraded: UIO[Unit] =

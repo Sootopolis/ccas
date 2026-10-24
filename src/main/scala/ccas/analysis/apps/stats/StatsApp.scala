@@ -104,12 +104,12 @@ object StatsApp extends ZIOAppDefault {
   ): RIO[PostgresClient, StatsResult] =
     for {
       now = Instant.now()
-      _ <- ZIO.whenDiscard(!since.isBefore(until))(
+      _ <- ZIO.whenDiscard(!since.isBefore(until)) {
         ZIO.fail(BadRequestException(s"--since must be before --until (got $since .. $until)"))
-      )
-      _ <- ZIO.whenDiscard(until.isAfter(now.minus(Duration.ofHours(12))))(
+      }
+      _ <- ZIO.whenDiscard(until.isAfter(now.minus(Duration.ofHours(12)))) {
         ZIO.fail(BadRequestException(s"--until must be at least 12 hours before now to account for API data lag (earliest allowed: ${now.minus(Duration.ofHours(12))})"))
-      )
+      }
       (rows, matchCount) <- ClubBoard.selectClubBoardsInPeriod(clubId, since, until) <&> ClubMatch.countForClubInPeriod(clubId, since, until)
       playerIds = rows.map(_.playerId).distinct
       displayNames <- Player.selectDisplayNames(playerIds)
@@ -121,9 +121,9 @@ object StatsApp extends ZIOAppDefault {
   // shared-reporting split membership #130 established. Period eligibility is a presentation threshold (minGames), so
   // it stays a wrapper arg rather than polluting playerOfPeriod's signature.
   def memberStatsAndReport(clubId: ClubId): RIO[PostgresClient, StatsResult] =
-    memberStats(clubId).tap(r =>
+    memberStats(clubId).tap { r =>
       ZIO.logInfo(s"Players: ${r.contributions.size}, Boards: ${r.boardCount}, Matches: ${r.matchCount}")
-    )
+    }
 
   def playerOfPeriodAndReport(
     clubId: ClubId,

@@ -542,7 +542,7 @@ object TestBodyStore extends ZIOSpecDefault {
         apiCall = 8.seconds
       )
       ZIO.acquireReleaseWith(
-        ZIO.attempt(
+        ZIO.attempt {
           BodyStore.buildS3Client(
             endpoint = "https://example.invalid",
             region = "auto",
@@ -550,7 +550,7 @@ object TestBodyStore extends ZIOSpecDefault {
             secretKey = "test-secret-key",
             timeouts = timeouts
           )
-        )
+        }
       )(client => ZIO.attempt(client.close()).ignore) { client =>
         val applied = client.serviceClientConfiguration.overrideConfiguration
         ZIO.succeed(
