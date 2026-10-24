@@ -67,7 +67,8 @@ project/metals.sbt
 .scala-build/
 
 ### Runtime ###
-# Server per-job logs (job-logs.directory = logs/jobs in application.conf)
+# Per-job logs from before #344, when job-logs.directory defaulted to logs/jobs. They now go under
+# ${XDG_STATE_HOME:-~/.local/state}/ccas/job-logs, so a `logs/` directory here is a leftover, safe to delete once moved.
 logs/
 # No entry for the local-filesystem BodyStore: since #200 its root defaults to ${XDG_CACHE_HOME:-~/.cache}/ccas/bodies,
 # outside the repo. A `cache/` directory here is a leftover from the pre-#200 default and is safe to delete.

@@ -1,6 +1,6 @@
 package ccas.utils
 
-import java.nio.file.{Files, NoSuchFileException, Path, Paths}
+import java.nio.file.{Files, NoSuchFileException, Path}
 import java.time.format.DateTimeFormatter
 import java.time.LocalDateTime
 import scala.util.Using
@@ -10,30 +10,41 @@ import zio.{Task, ZIO}
 import ccas.api.misc.subtypes.ClubSlug
 
 /** Where an app writes a report. Each write first moves the app's earlier output in that directory into `archive/`.
-  * Club-scoped output (`write`, `writeAndLog`) goes to `out/{clubSlug}/{timestamp}-{appName}.{ext}`, so one club's
+  * Club-scoped output (`write`, `writeAndLog`) goes to `<Root>/{clubSlug}/{timestamp}-{appName}.{ext}`, so one club's
   * history reads in order; output with no single club (`writeGlobal`, `writeAndLogGlobal`) goes to
-  * `out/{subDir}/{timestamp}-{appName}.{ext}`.
+  * `<Root>/{subDir}/{timestamp}-{appName}.{ext}`.
   */
 object OutputFile {
+
+  /** Where reports go: `output.directory` (`CCAS_OUTPUT_DIR`), else `$XDG_DATA_HOME/ccas/output`. */
+  val Root: AppDir = AppDir(
+    configKey = "output.directory",
+    overrideVar = "CCAS_OUTPUT_DIR",
+    base = AppDir.XdgBase.Data,
+    leaf = "output"
+  )
 
   private val dateTimeFormat = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")
 
   def write(appName: String, clubSlug: ClubSlug, content: String, ext: String = "txt"): Task[Path] =
-    writeInternal(Paths.get("out", ClubSlug.unwrap(clubSlug)), appName, content, ext)
+    writeInternal(ClubSlug.unwrap(clubSlug), appName, content, ext)
 
   def writeAndLog(appName: String, clubSlug: ClubSlug, content: String, ext: String = "txt"): Task[Unit] =
     write(appName, clubSlug, content, ext).flatMap(path => ZIO.logInfo(s"Output written to $path"))
 
   def writeGlobal(appName: String, content: String, subDir: String, ext: String = "txt"): Task[Path] =
-    writeInternal(Paths.get("out", subDir), appName, content, ext)
+    writeInternal(subDir, appName, content, ext)
 
-  private def writeInternal(dir: Path, appName: String, content: String, ext: String): Task[Path] = {
-    val date = LocalDateTime.now().format(dateTimeFormat)
-    val path = dir.resolve(s"$date-$appName.$ext")
-    ZIO.attemptBlocking(Files.createDirectories(dir)) *>
-      ZIO.attemptBlocking(archiveExisting(dir, appName, ext)) *>
-      ZIO.writeFile(path.toString, content).as(path)
-  }
+  // No warning for a relative root, unlike the job-log directory: the `writeAndLog` variants log each absolute path.
+  private def writeInternal(subDir: String, appName: String, content: String, ext: String): Task[Path] =
+    for {
+      root <- AppDir.fromConfig(Root)
+      dir  = root.toAbsolutePath.resolve(subDir)
+      path = dir.resolve(s"${LocalDateTime.now().format(dateTimeFormat)}-$appName.$ext")
+      _ <- ZIO.attemptBlocking(Files.createDirectories(dir))
+      _ <- ZIO.attemptBlocking(archiveExisting(dir, appName, ext))
+      _ <- ZIO.writeFile(path.toString, content)
+    } yield path
 
   def writeAndLogGlobal(appName: String, content: String, subDir: String, ext: String = "txt"): Task[Unit] =
     writeGlobal(appName, content, subDir, ext).flatMap(path => ZIO.logInfo(s"Output written to $path"))

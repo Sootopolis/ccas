@@ -137,7 +137,7 @@ object HistoryApp extends ZIOAppDefault {
     }
 
   // Summary logging now happens inside discoverClub (shared by CLI + server + scheduler); the CLI additionally writes
-  // the out/ report file here.
+  // the report file (OutputFile) here.
   private def outputResult(r: HistoryResult): Task[Unit] =
     OutputFile.writeAndLog("history", r.clubSlug, formatReport(r.stats, r.clubSlug, r.startedAt, r.completedAt))
 

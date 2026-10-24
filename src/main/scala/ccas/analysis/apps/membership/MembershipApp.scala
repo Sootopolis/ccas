@@ -306,7 +306,7 @@ object MembershipApp extends ZIOAppDefault {
 
   // Shared by the CLI ReconcileOnly path and the server membership job (JobRoutes): reconcile, then emit the
   // reconciliation summary via reportReconciliation so it lands in the per-job log / streams to the CLI. Returns the
-  // result and join invitations so the CLI can additionally write its out/ report (the server discards the tuple — its
+  // result and join invitations so the CLI can additionally write its report file (the server discards the tuple — its
   // summary is already logged). Uses result.clubId rather than re-selecting by clubSlug, which would 404 a club whose
   // slug reconcile resolved through a rename. The invitation lookup is best-effort: a DB hiccup there must not flip an
   // already-committed reconcile to a failed job, so it logs and falls back to no invite annotations.

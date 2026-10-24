@@ -47,6 +47,7 @@ object ServerEnvKeys {
     ServerEnvKey("SERVER_PORT", "HTTP server port (default 8080)", Server, essential = false, secret = false),
     ServerEnvKey("SERVER_HOST", "Bind address (default 127.0.0.1; 0.0.0.0 for hosted)", Server, essential = false, secret = false),
     ServerEnvKey("JOB_LOGS_DIR", "Directory for per-job log files", Server, essential = false, secret = false),
+    ServerEnvKey("CCAS_OUTPUT_DIR", "Directory for app reports", Server, essential = false, secret = false),
     ServerEnvKey("SCHEDULER_POLL_MINUTES", "Scheduler poll interval (default 15)", Scheduler, essential = false, secret = false),
     ServerEnvKey("SCHEDULER_MATCHREF_INTERVAL_HOURS", "MatchRef maintenance cadence (default 24)", Scheduler, essential = false, secret = false),
     ServerEnvKey("SCHEDULER_MATCHREF_ENABLED", "Seed MatchRef schedule enabled (default true)", Scheduler, essential = false, secret = false),
