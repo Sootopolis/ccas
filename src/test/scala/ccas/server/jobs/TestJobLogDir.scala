@@ -30,7 +30,8 @@ object TestJobLogDir extends ZIOSpecDefault {
       val blocker = Paths.get("target/test-job-log-dir/blocker").toAbsolutePath
       for {
         _    <- ZIO.attemptBlocking(Files.createDirectories(blocker.getParent))
-        _    <- ZIO.attemptBlocking(Files.deleteIfExists(blocker)) *> ZIO.attemptBlocking(Files.createFile(blocker))
+        _    <- ZIO.attemptBlocking(Files.deleteIfExists(blocker))
+        _    <- ZIO.attemptBlocking(Files.createFile(blocker))
         exit <- JobRunner.prepareLogDir(blocker.resolve("job-logs")).exit
       } yield assertTrue(exit.causeOption.flatMap(_.failureOption).exists(_.getMessage.contains("JOB_LOGS_DIR")))
     }

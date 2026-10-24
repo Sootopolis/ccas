@@ -123,9 +123,9 @@ object JobRunner {
   private[jobs] def prepareLogDir(configured: Path): Task[Path] = {
     val dir = configured.toAbsolutePath
     for {
-      _ <- ZIO.whenDiscard(!configured.isAbsolute)(
+      _ <- ZIO.whenDiscard(!configured.isAbsolute) {
         ZIO.logWarning(s"job-logs.directory '$configured' is relative; resolved against the launch directory to $dir")
-      )
+      }
       _ <- ZIO
         .attemptBlocking(Files.createDirectories(dir))
         .mapError(e => new IOException(s"Cannot create job-log directory $dir; set JOB_LOGS_DIR to a writable one", e))
@@ -158,7 +158,8 @@ object JobRunner {
         // and interrupts any still in flight when the layer is released, normally none after `interruptAll`. `forkIn`
         // self-cleans — a job's child scope closes when its fiber exits — so completed jobs don't accumulate.
         layerScope <- ZIO.scope
-        logDir <- AppDir.fromConfig(LogDir).flatMap(prepareLogDir)
+        configuredLogDir <- AppDir.fromConfig(LogDir)
+        logDir           <- prepareLogDir(configuredLogDir)
         now <- Clock.instant
         _   <- JobRun.markOrphansAsFailed(now).provideEnvironment(ZEnvironment(pgClient))
       } yield new JobRunnerLive(

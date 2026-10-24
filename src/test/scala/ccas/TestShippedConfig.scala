@@ -24,11 +24,11 @@ object TestShippedConfig extends ZIOSpecDefault {
   override def spec: Spec[Any, Throwable] = suite("ShippedConfig")(
     test("no path setting in the shipped application.conf has a literal default, so none resolves against the launch directory") {
       for {
-        resolved <- ZIO.attempt(
+        resolved <- ZIO.attempt {
           ConfigFactory
             .parseFile(Shipped, MustExist)
             .resolve(ConfigResolveOptions.defaults().setUseSystemEnvironment(false))
-        )
+        }
         literals = resolved.entrySet.asScala.map(_.getKey).filter(key => PathSetting.matches(key.split('.').last))
       } yield assertTrue(literals.isEmpty)
     }
