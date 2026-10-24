@@ -4,20 +4,12 @@ import zio.test.{assertTrue, Spec, ZIOSpecDefault}
 
 import ServerEnvKey.Domain.*
 
-/** Tests the [[ServerEnvKeys]] registry: the essential bootstrap set, the per-key display domains, the secret flags
-  * that drive redaction, and the `byName` / `redact` / `grouped` helpers. Pure, no IO.
+/** Tests the [[ServerEnvKeys]] registry: the per-key display domains, the secret keys that drive redaction, and the
+  * `byName` / `redact` / `grouped` helpers. Pure, no IO.
   */
 object TestServerEnvKeys extends ZIOSpecDefault {
 
   override def spec: Spec[Any, Any] = suite("TestServerEnvKeys")(
-    test("essential is exactly the contact email plus the 8-key DB bootstrap set") {
-      // `essential` is otherwise only read by this test — `init` and `Main.missingServeEnv` hardcode the same names —
-      // so pin the full set: a mis-flagged `essential =` boolean (extra or dropped key) would otherwise go uncaught.
-      assertTrue(
-        ServerEnvKeys.essential.map(_.name).toSet ==
-          Set("CCAS_CONTACT_EMAIL", "DATABASE_URL", "DB_HOST", "DB_PORT", "DB_NAME", "DB_USER", "DB_PASSWORD", "DB_SCHEMA")
-      )
-    },
     test("domain maps each key, including the non-DB_-prefixed cases") {
       assertTrue(
         ServerEnvKeys.byName("CCAS_CONTACT_EMAIL").map(_.domain) == Some(Contact),
@@ -36,19 +28,10 @@ object TestServerEnvKeys extends ZIOSpecDefault {
         ServerEnvKeys.grouped.find(_._1 == Database).map(_._2.head.name) == Some("DATABASE_URL")
       )
     },
-    test("DATABASE_URL and DB_PASSWORD are secret; CCAS_CONTACT_EMAIL is not") {
+    test("exactly DATABASE_URL, DB_PASSWORD and the two R2 credentials are secret") {
       assertTrue(
-        ServerEnvKeys.isSecret("DATABASE_URL"),
-        ServerEnvKeys.isSecret("DB_PASSWORD"),
-        !ServerEnvKeys.isSecret("CCAS_CONTACT_EMAIL")
-      )
-    },
-    test("R2 credential keys are secret (redacted); the R2 endpoint/bucket are not") {
-      assertTrue(
-        ServerEnvKeys.isSecret("CCAS_R2_SECRET_KEY"),
-        ServerEnvKeys.isSecret("CCAS_R2_ACCESS_KEY"),
-        !ServerEnvKeys.isSecret("CCAS_R2_ENDPOINT"),
-        !ServerEnvKeys.isSecret("CCAS_R2_BUCKET")
+        ServerEnvKeys.all.filter(key => ServerEnvKeys.isSecret(key.name)).map(_.name).toSet ==
+          Set("DATABASE_URL", "DB_PASSWORD", "CCAS_R2_ACCESS_KEY", "CCAS_R2_SECRET_KEY")
       )
     },
     test("redact masks secret values, passes non-secrets and blanks through") {
