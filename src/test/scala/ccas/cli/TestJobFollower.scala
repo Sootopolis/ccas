@@ -96,6 +96,22 @@ object TestJobFollower extends ZIOSpecDefault {
       ZIO.die(new UnsupportedOperationException("deleteJson"))
   }
 
+  /** Stub whose log stream ends at once and whose status request then fails with `error`: a server that stopped, or
+    * answered with an error, between the end of the log and the status read (#336).
+    */
+  private final class StatusFailsApi(error: Throwable) extends CcasApiClient {
+    override def getJson[Resp: JsonDecoder](path: String): Task[Resp]                           = ZIO.fail(error)
+    override def streamLines(path: String)(onLine: String => UIO[Unit]): Task[Unit]                = ZIO.unit
+    override def streamProgress(path: String)(onFrame: ProgressSnapshot => UIO[Unit]): Task[Unit] = ZIO.unit
+    override def postJson[Req: JsonEncoder, Resp: JsonDecoder](path: String, body: Req): Task[Resp] =
+      ZIO.die(new UnsupportedOperationException("postJson"))
+    override def postEmpty[Resp: JsonDecoder](path: String): Task[Resp] =
+      ZIO.die(new UnsupportedOperationException("postEmpty"))
+    override def delete(path: String): Task[Unit] = ZIO.unit
+    override def deleteJson[Resp: JsonDecoder](path: String): Task[Resp] =
+      ZIO.die(new UnsupportedOperationException("deleteJson"))
+  }
+
   private def statusJson(status: String, error: Option[String]): String =
     JobStatusResponse("job-1", "Membership", status, None, "2026-01-01T00:00:00Z", None, error, "Cli").toJson
 
@@ -130,6 +146,38 @@ object TestJobFollower extends ZIOSpecDefault {
         follower <- followerWith("Cancelled", Some("Cancelled by operator"), List("partial output"))
         code     <- follower.followJob("job-1")
       } yield assertTrue(code == 1)
+    },
+    test("a log that ends on a Running job exits 1 and names a shutdown or a lost outcome, not an unexpected status") {
+      for {
+        follower <- followerWith("Running", None, List("partial output"))
+        code     <- follower.followJob("job-1")
+        err      <- TestConsole.outputErr
+      } yield assertTrue(
+        code == 1,
+        err.exists(line => line.contains("server is stopping") && line.contains("could not record")),
+        err.exists(_.contains("ccas jobs")),
+        !err.exists(_.contains("unexpected status"))
+      )
+    },
+    test("a status this CLI doesn't know exits 1 and names it") {
+      for {
+        follower <- followerWith("Paused", None, Nil)
+        code     <- follower.followJob("job-1")
+        err      <- TestConsole.outputErr
+      } yield assertTrue(code == 1, err.exists(_.contains("unexpected status 'Paused'")))
+    },
+    test("a server unreachable once the log ends exits 1 and says it stopped mid-job") {
+      // The follow returns its own exit code instead of failing, so the dispatcher prints no "error: cannot reach".
+      for {
+        code <- follower(new StatusFailsApi(ServerUnreachable("cannot reach")), 1.minute).followJob("job-1")
+        err  <- TestConsole.outputErr
+      } yield assertTrue(code == 1, err.exists(line => line.contains("stopped mid-job") && line.contains("ccas jobs")))
+    },
+    test("a status request that fails some other way still fails the follow") {
+      val serverError = CliError("Database unavailable", 1)
+      for {
+        result <- follower(new StatusFailsApi(serverError), 1.minute).followJob("job-1").either
+      } yield assertTrue(result == Left(serverError))
     },
     test("followJob with progress bars on forks the progress consumer, follows, and completes cleanly") {
       // showProgress = true takes the bars branch: build a client ProgressDisplay, fork the (empty) /progress consumer,

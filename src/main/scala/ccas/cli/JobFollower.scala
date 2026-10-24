@@ -1,7 +1,10 @@
 package ccas.cli
 
+import scala.util.Try
+
 import zio.*
 
+import ccas.server.jobs.JobRunStatus
 import ccas.server.routes.JobRoutes.{CancelResult, ClubJobResult, JobResult, JobStatusResponse}
 
 /** Drives a submitted job to completion by **following its log stream** (`GET /api/jobs/{id}/logs`), printing each
@@ -15,8 +18,9 @@ import ccas.server.routes.JobRoutes.{CancelResult, ClubJobResult, JobResult, Job
   * back to the "reattach with `ccas logs`" hint.
   *
   * `maxWait`, `reconnectBackoff`, and `maxReconnects` are injected (no defaults) so tests run fast; production wires
-  * generous values. Exit codes: 0 when the job reaches `Completed`, 1 when it reaches `Failed`, could not be submitted,
-  * did not finish within `maxWait`, or the follow was lost past `maxReconnects` reconnects.
+  * generous values. Exit codes: 0 when the job reaches `Completed`, 1 when it reaches `Failed` or `Cancelled`, could
+  * not be submitted, did not finish within `maxWait`, was cut short by a server shutdown, or the follow was lost past
+  * `maxReconnects` reconnects.
   */
 final class JobFollower(
   api: CcasApiClient,
@@ -128,7 +132,7 @@ final class JobFollower(
               case StreamDropped(cause) => afterDrop(jobId, cause, reconnects, notice, () => attempt(reconnects + 1))
               case other                => ZIO.fail(other)
             },
-            _ => ZIO.succeed(Right(()))
+            _ => ZIO.right(())
           )
       } yield result
     attempt(0)
@@ -161,7 +165,7 @@ final class JobFollower(
     retry: () => Task[Either[String, Unit]]
   ): Task[Either[String, Unit]] =
     if (reconnects >= maxReconnects) {
-      ZIO.succeed(Left(cause))
+      ZIO.left(cause)
     } else {
       for {
         _      <- ZIO.whenDiscard(reconnects == 0)(notice(reconnectMessage(jobId)))
@@ -187,18 +191,42 @@ final class JobFollower(
       .orDie
 
   // The stream closing tells us the job finished but not whether it succeeded; read the terminal status once to decide.
-  // An unexpected status (server adds a new terminal kind, or a stale Running) exits non-zero rather than passing.
+  // A shutdown ends the follows before it stops the HTTP server, so the status request can lose that race and find no
+  // server (#336).
   private def finalExitCode(jobId: String): Task[Int] =
     api.getJson[JobStatusResponse](s"/api/jobs/$jobId").flatMap { job =>
-      job.status match {
-        case "Completed" => ZIO.succeed(0)
-        case "Failed"    => Console.printLineError(s"$jobId failed: ${job.error.getOrElse("unknown error")}").orDie.as(1)
-        // A followed job cancelled out from under us (e.g. `ccas cancel` from another terminal): a clean terminal
-        // outcome, not an "unexpected status". Non-zero — the job did not complete.
-        case "Cancelled" => Console.printLineError(s"$jobId was cancelled").orDie.as(1)
-        case other       => Console.printLineError(s"$jobId: unexpected status '$other'").orDie.as(1)
+      Try(JobRunStatus.valueOf(job.status)).toOption match {
+        case Some(status) =>
+          status match {
+            case JobRunStatus.Completed => ZIO.succeed(0)
+            case JobRunStatus.Failed =>
+              Console.printLineError(s"$jobId failed: ${job.error.getOrElse("unknown error")}").orDie.as(1)
+            // A followed job cancelled out from under us (e.g. `ccas cancel` from another terminal): a clean terminal
+            // outcome, not an "unexpected status". Non-zero — the job did not complete.
+            case JobRunStatus.Cancelled => Console.printLineError(s"$jobId was cancelled").orDie.as(1)
+            // Outcomes are recorded before the log ends: this is a shutdown, which records none, or a failed write.
+            case JobRunStatus.Running => endedRunning(jobId).as(1)
+          }
+        // A server built from a newer version can report a status this CLI doesn't know.
+        case None => Console.printLineError(s"$jobId: unexpected status '${job.status}'").orDie.as(1)
       }
-    }
+    }.catchSome { case _: ServerUnreachable => serverGone(jobId).as(1) }
+
+  private def endedRunning(jobId: String): UIO[Unit] =
+    Console
+      .printLineError(
+        s"$jobId: the log ended with the job still Running — the server is stopping, and its next start will mark " +
+          "the job Failed, or it could not record how the job ended (see its log). Check 'ccas jobs'."
+      )
+      .orDie
+
+  private def serverGone(jobId: String): UIO[Unit] =
+    Console
+      .printLineError(
+        s"$jobId: the log ended and the server can no longer be reached — it stopped mid-job, and its next start " +
+          "will mark the job Failed. Check 'ccas jobs' once it is back up."
+      )
+      .orDie
 
   /** Club-less submit result (matchref). The POST returns HTTP 200 even on failure, so branch on the body. */
   def handleSingle(label: String, result: JobResult): Task[Int] =
