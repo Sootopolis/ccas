@@ -21,11 +21,14 @@ Baseline, every waiver with its reason, and which rules currently have no tensio
 all -- a rule that never fires and is never waived costs reading attention and buys
 nothing, so the review should consider deleting it.
 """
-import os, re, sys
+import glob, os, re, sys
 
 MAX_LINE_BLOCK = 8       # consecutive `//` lines
 MAX_DOC_BLOCK = 15       # scaladoc / block comment
 MAX_CLAUDE_WORDS = 2500  # section 6
+MAX_RULE_WORDS = 750     # section 6, for each file under .claude/rules/
+RULES_DIR = os.path.join('.', '.claude', 'rules')
+RULE_PATTERN = re.compile(r'\s*-\s+"([^"]+)"(?:\s+#.*)?')   # one `paths:` entry, double-quoted
 SKIP_DIRS = {'.git', 'target', '.bloop', '.metals', '.idea', 'out', 'logs'}
 LINK = re.compile(r'\[[^\]]*\]\(([^)#\s]+)(?:#[^)\s]*)?(?:\s+"[^"]*")?\)')
 DOC_PATH = re.compile(r'docs/[A-Za-z0-9._/-]+\.md')
@@ -126,13 +129,57 @@ def check_pointers():
                 fired.add('pointer'); failures.append(f'{path}: unresolved doc pointer -> {m.group(0)}')
 
 
-def check_claude_size():
-    if not os.path.exists('CLAUDE.md'):
-        return
-    words = len(open('CLAUDE.md').read().split())
-    if words > MAX_CLAUDE_WORDS:
-        fired.add('claude-size'); failures.append(f'CLAUDE.md: {words} words (max {MAX_CLAUDE_WORDS}). '
-                        f'Move architecture prose to docs/ and link to it.')
+def rule_files():
+    for root, dirs, files in os.walk(RULES_DIR):
+        dirs.sort()
+        for fn in sorted(files):
+            if fn.endswith('.md'):
+                yield os.path.join(root, fn)
+
+
+def word_count(path):
+    return len(open(path).read().split())
+
+
+def check_instruction_size():
+    budgets = [('CLAUDE.md', MAX_CLAUDE_WORDS, 'Move architecture prose to docs/ and link to it.')] \
+        if os.path.exists('CLAUDE.md') else []
+    budgets += [(p, MAX_RULE_WORDS, 'Split it by path, or move what is not a rule to docs/ and link to it.')
+                for p in rule_files()]
+    for path, budget, advice in budgets:
+        words = word_count(path)
+        if words > budget:
+            fired.add('claude-size'); failures.append(f'{path}: {words} words (max {budget}). {advice}')
+
+
+def matches_a_file(pattern):
+    """A file, not any match: `missing/**` yields `missing/` even when it does not exist. Build output is skipped
+    because CI's fresh checkout has none, so a pattern alive only under target/ must fail here too."""
+    return any(os.path.isfile(p) and not SKIP_DIRS.intersection(p.split(os.sep))
+               for p in glob.iglob(pattern, recursive=True))
+
+
+def check_rule_paths():
+    """A rule's header fails silently both ways: YAML that does not parse makes Claude Code load the rule in
+    every session, and a pattern that matches nothing means it never loads. So the header must be a `paths:`
+    list of double-quoted patterns (unquoted, a leading `*` starts a YAML alias), each matching a file."""
+    for path in rule_files():
+        lines = [l.rstrip() for l in open(path).read().split('\n')]
+        header = lines[1:lines.index('---', 1)] if lines[0] == '---' and '---' in lines[1:] else []
+        header = [h for h in header if h and not h.lstrip().startswith('#')]   # YAML blank and comment lines
+        entries = [RULE_PATTERN.fullmatch(h) for h in header[1:]]
+        if header[:1] != ['paths:'] or not entries or not all(entries):
+            unscoped = '' if header[:1] == ['paths:'] else \
+                ' A rule without `paths:` loads in every session: put it in CLAUDE.md.'
+            fired.add('pointer'); failures.append(f'{path}: the header must be a `paths:` list, one double-quoted '
+                            f'pattern per line.{unscoped}')
+            continue
+        for pattern in (e.group(1) for e in entries):
+            if '{' in pattern:
+                fired.add('pointer'); failures.append(f'{path}: "{pattern}" — write one pattern per line; '
+                                f'this check does not expand braces.')
+            elif not matches_a_file(pattern):
+                fired.add('pointer'); failures.append(f'{path}: "{pattern}" matches no file, so the rule never loads.')
 
 
 def status_line(path):
@@ -183,8 +230,8 @@ def check_adr_currency():
 
 ALL_RULES = {
     'long-block':   'judgement — comment-block ceilings',
-    'claude-size':  'judgement — CLAUDE.md word budget',
-    'pointer':      'correctness — links and cited doc paths resolve',
+    'claude-size':  'judgement — CLAUDE.md and .claude/rules word budgets',
+    'pointer':      'correctness — links, cited doc paths and rule patterns resolve',
     'adr-currency': 'correctness — superseded ADRs are marked and linked forward',
 }
 
@@ -222,12 +269,14 @@ def measure():
         return 100 * sum(1 for x in sizes if x <= n) // len(sizes) if sizes else 100
 
     share = f'{100 * comment // total}%' if total else 'n/a (no src/main)'
-    claude = (f'{len(open("CLAUDE.md").read().split())}' if os.path.exists('CLAUDE.md') else 'n/a')
+    claude = (f'{word_count("CLAUDE.md")}' if os.path.exists('CLAUDE.md') else 'n/a')
+    rules = ', '.join(f'{os.path.relpath(p, RULES_DIR)} {word_count(p)}' for p in rule_files())
     return {
         'comment share of src/main': f'{share}  (Baseline: 16%; 1% in March 2026)',
         'src // blocks within the review budget of 3': f'{within(3)}%  (Baseline: 88%)',
         f'src // blocks within the gate ceiling of {MAX_LINE_BLOCK}': f'{within(MAX_LINE_BLOCK)}%  (Baseline: 99%)',
         'CLAUDE.md words': f'{claude}  (budget: {MAX_CLAUDE_WORDS})',
+        '.claude/rules words': f'{rules or "none"}  (budget: {MAX_RULE_WORDS} each)',
     }
 
 
@@ -270,7 +319,8 @@ def report():
 
 check_blocks()
 check_pointers()
-check_claude_size()
+check_rule_paths()
+check_instruction_size()
 check_adr_currency()
 
 if '--report' in sys.argv:

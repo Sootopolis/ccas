@@ -7,7 +7,7 @@ import scala.meta.tokens.Token
 import scalafix.v1.*
 
 /** A call's only argument goes in braces, not parens, when it is a lambda whose body spans lines, or a multi-line body
-  * passed to a ZIO combinator that runs code later (CLAUDE.md, Scala style). Rewrites `.map(x =>` to `.map { x =>` and
+  * passed to a ZIO combinator that runs code later (.claude/rules/scala.md). Rewrites `.map(x =>` to `.map { x =>` and
   * `ZIO.whenDiscard(c)(` to `ZIO.whenDiscard(c) {`, and reports the shapes a swap would get wrong for a hand edit. An
   * argument that hugs the parens, as in `f(_.copy(` … `))`, is not a block and is left alone, as is any other by-name
   * argument: a log message or a `ZIO.succeed` result is a value. See docs/adr/0025-conventions-checked-by-scalafix.md.
@@ -124,7 +124,7 @@ class MultilineBlockBraces extends SyntacticRule("MultilineBlockBraces") {
   private def braces(clause: Term.ArgClause)(implicit doc: SyntacticDocument): Patch =
     byHand(clause) match {
       case Some(reason) =>
-        val message = s"Put this argument in braces by hand (CLAUDE.md, Scala style): $reason."
+        val message = s"Put this argument in braces by hand (.claude/rules/scala.md): $reason."
         Patch.lint(Diagnostic(id = "", message = message, position = clause.pos))
       case None =>
         val tokens  = clause.tokens.toVector

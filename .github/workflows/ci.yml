@@ -71,6 +71,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Test the documentation checker
+        run: python3 scripts/test_check_docs.py
+
       - name: Check the documentation standard
         run: python3 scripts/check-docs.py
 

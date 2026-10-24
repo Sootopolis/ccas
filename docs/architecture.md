@@ -1,6 +1,6 @@
 # Architecture reference
 
-What each moving part is and how the pieces connect. Reference, not rationale — the *why* behind a design lives in [`adr/`](adr/), the rules for working in the code live in [`../CLAUDE.md`](../CLAUDE.md), and installation and usage live in [`../README.md`](../README.md).
+What each moving part is and how the pieces connect. Reference, not rationale — the *why* behind a design lives in [`adr/`](adr/), the rules for working in the code live in [`../CLAUDE.md`](../CLAUDE.md) and [`../.claude/rules/`](../.claude/rules/), and installation and usage live in [`../README.md`](../README.md).
 
 ## Packages
 
