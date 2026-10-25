@@ -2,14 +2,13 @@ package ccas.analysis.apps.ref
 
 import java.time.Instant
 
-import ccas.utils.sql.PostgresClient
-import ccas.utils.sql.PostgresClient.withTransaction
 import zio.{Promise, RIO, Task, ZIO}
 import zio.http.URL
+
 import RefUtils.*
 
-import ccas.analysis.apps.ref.RefHelpers.parseMatchUrl
 import ccas.analysis.apps.{ClubSlugRenameResolver, UsernameRenameResolver}
+import ccas.analysis.apps.ref.RefHelpers.parseMatchUrl
 import ccas.analysis.tables.{
   ClubMatch,
   ClubMatchBoard,
@@ -27,9 +26,11 @@ import ccas.api.misc.subtypes.{ClubMatchId, PlayerId, TournamentSlug, Username}
 import ccas.api.player.{ApiPlayer, ApiPlayerMatches, ApiPlayerTournaments}
 import ccas.api.player.ApiPlayerMatches.ApiPlayerMatch
 import ccas.api.tournament.ApiTournamentRound
+import ccas.utils.ProgressDisplay
 import ccas.utils.client.{ChessComClient, FetchResult, NetworkUnavailableException, ReportedNotFound}
 import ccas.utils.errors.safeMessage
-import ccas.utils.ProgressDisplay
+import ccas.utils.sql.PostgresClient
+import ccas.utils.sql.PostgresClient.withTransaction
 
 private[ref] object RefResolution {
 
@@ -142,7 +143,7 @@ private[ref] object RefResolution {
     m: ApiPlayerMatch,
     countResolved: Boolean
   ): RIO[ProgressDisplay & PostgresClient, ResolveResult] = {
-    val parsed      = parseMatchUrl(m.`@id`)
+    val parsed         = parseMatchUrl(m.`@id`)
     val boardIdxOption = m.board.get.path.segments.lastOption.flatMap(_.toIntOption).map(_.toShort)
     boardIdxOption match {
       case None =>

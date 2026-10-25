@@ -8,7 +8,7 @@ import java.time.{Duration => JDuration}
 import scala.jdk.CollectionConverters.*
 import scala.jdk.OptionConverters.*
 
-import zio.{Console, Duration, durationInt, ExitCode, UIO, ZIO}
+import zio.{durationInt, Console, Duration, ExitCode, UIO, ZIO}
 
 import ccas.cli.serve.HealthProbe.Readiness
 import ccas.server.{BootGuard, CcasServer}
@@ -174,9 +174,9 @@ object Detach {
         case Readiness.Ready(databaseOption) => ZIO.succeed(databaseOption)
         case _ =>
           serverAlive.flatMap {
-            case true                                   => ZIO.sleep(PollInterval) *> waitLoop(0)
+            case true                                       => ZIO.sleep(PollInterval) *> waitLoop(0)
             case false if deadStreak + 1 >= DeadStreakLimit => ZIO.fail(ProcessDied)
-            case false                                  => ZIO.sleep(PollInterval) *> waitLoop(deadStreak + 1)
+            case false                                      => ZIO.sleep(PollInterval) *> waitLoop(deadStreak + 1)
           }
       }
 

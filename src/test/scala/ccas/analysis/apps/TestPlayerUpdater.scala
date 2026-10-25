@@ -36,7 +36,7 @@ object TestPlayerUpdater extends ZIOSpecDefault {
   private def testNoUsernameChange = test("status change without rename: snapshot prior state, update player") {
     val now = nowMicros
     for {
-      _ <- Player.insert(Player(pidA, Times.t0, Username("alice"), PlayerStatusCategory.Active, None, Times.t0))
+      _        <- Player.insert(Player(pidA, Times.t0, Username("alice"), PlayerStatusCategory.Active, None, Times.t0))
       existing <- Player.selectId(pidA).someOrFailException
       _ <- withTransaction {
         PlayerUpdater.archiveAndUpdate(existing, Username("alice"), PlayerStatusCategory.Closed, None, now)
@@ -58,7 +58,7 @@ object TestPlayerUpdater extends ZIOSpecDefault {
   private def testUsernameRenameNoConflict = test("rename with no other player at the new username") {
     val now = nowMicros
     for {
-      _ <- Player.insert(Player(pidA, Times.t0, Username("alice"), PlayerStatusCategory.Active, None, Times.t0))
+      _        <- Player.insert(Player(pidA, Times.t0, Username("alice"), PlayerStatusCategory.Active, None, Times.t0))
       existing <- Player.selectId(pidA).someOrFailException
       _ <- withTransaction {
         PlayerUpdater.archiveAndUpdate(existing, Username("alice-renamed"), PlayerStatusCategory.Active, None, now)

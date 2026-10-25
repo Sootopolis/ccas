@@ -27,20 +27,20 @@ object TestEnumCodecs extends ZIOSpecDefault {
     },
     test("all values decode from API lowercase format") {
       val cases = List(
-        "win"                  -> GameResultDetail.Win,
-        "stalemate"            -> GameResultDetail.Stalemate,
-        "agreed"               -> GameResultDetail.Agreed,
-        "repetition"           -> GameResultDetail.Repetition,
-        "insufficient"         -> GameResultDetail.Insufficient,
-        "timevsinsufficient"   -> GameResultDetail.TimeVsInsufficient,
-        "checkmated"           -> GameResultDetail.Checkmated,
-        "resigned"             -> GameResultDetail.Resigned,
-        "timeout"              -> GameResultDetail.Timeout,
-        "lose"                 -> GameResultDetail.Lose,
-        "abandoned"            -> GameResultDetail.Abandoned,
-        "kingofthehill"        -> GameResultDetail.KingOfTheHill,
-        "threecheck"           -> GameResultDetail.ThreeCheck,
-        "bughousepartnerlose"  -> GameResultDetail.BughousePartnerLose
+        "win"                 -> GameResultDetail.Win,
+        "stalemate"           -> GameResultDetail.Stalemate,
+        "agreed"              -> GameResultDetail.Agreed,
+        "repetition"          -> GameResultDetail.Repetition,
+        "insufficient"        -> GameResultDetail.Insufficient,
+        "timevsinsufficient"  -> GameResultDetail.TimeVsInsufficient,
+        "checkmated"          -> GameResultDetail.Checkmated,
+        "resigned"            -> GameResultDetail.Resigned,
+        "timeout"             -> GameResultDetail.Timeout,
+        "lose"                -> GameResultDetail.Lose,
+        "abandoned"           -> GameResultDetail.Abandoned,
+        "kingofthehill"       -> GameResultDetail.KingOfTheHill,
+        "threecheck"          -> GameResultDetail.ThreeCheck,
+        "bughousepartnerlose" -> GameResultDetail.BughousePartnerLose
       )
       assertTrue(cases.forall { (jsonStr, expected) =>
         s"\"$jsonStr\"".fromJson[GameResultDetail] == Right(expected)

@@ -2,7 +2,6 @@ package ccas.analysis.apps.history
 
 import java.time.{Duration, Instant, LocalDateTime, ZoneOffset}
 
-import ccas.utils.sql.PostgresClient
 import zio.{Ref, RIO, ZIO}
 import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
@@ -13,6 +12,7 @@ import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug}
 import ccas.utils.ProgressDisplay
 import ccas.utils.client.{BodyStore, ChessComClient, TestChessComClientSupport}
 import ccas.utils.sql.FreshSchemaLayer
+import ccas.utils.sql.PostgresClient
 
 object TestSeedFromClubMatches extends ZIOSpecDefault {
 
@@ -98,12 +98,12 @@ object TestSeedFromClubMatches extends ZIOSpecDefault {
   private def testSkipsKnownMatches = test("returns 0 and seeds nothing when all matches are already known") {
     val json = apiClubMatchesJson(List(1001, 1002))
     for {
-      _        <- Club.upsert(club)
-      _        <- Club.upsert(opponentClub)
-      _        <- ClubMatch.upsert(clubMatchRow(1001))
-      _        <- ClubMatch.upsert(clubMatchRow(1002))
-      client   <- fakeChessComClient(json)
-      skipCtr  <- Ref.make(0)
+      _       <- Club.upsert(club)
+      _       <- Club.upsert(opponentClub)
+      _       <- ClubMatch.upsert(clubMatchRow(1001))
+      _       <- ClubMatch.upsert(clubMatchRow(1002))
+      client  <- fakeChessComClient(json)
+      skipCtr <- Ref.make(0)
       count <- HistorySeeding.seedFromClubMatches(client, clubId, clubSlug, skipCtr)
         .provideSomeEnvironment[PostgresClient](_.add[ProgressDisplay](ProgressDisplay.make(enabled = false)))
       pending <- HistoryPendingMatch.selectClub(clubId)

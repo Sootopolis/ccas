@@ -37,8 +37,8 @@ object TestApiResponseCacheSql extends ZIOSpecDefault {
     val t2: Instant = t0.plus(Duration.ofHours(1))
   }
 
-  private val urlA = "https://api.chess.com/pub/club/devon-chess"
-  private val urlB = "https://api.chess.com/pub/club/devon-chess/members"
+  private val urlA  = "https://api.chess.com/pub/club/devon-chess"
+  private val urlB  = "https://api.chess.com/pub/club/devon-chess/members"
   private val bodyA = """{"@id":"...","name":"Devon Chess"}"""
   private val bodyB = """{"weekly":[],"monthly":[],"all_time":[]}"""
 
@@ -61,8 +61,8 @@ object TestApiResponseCacheSql extends ZIOSpecDefault {
 
   private def testUpsertInserts = test("upsertWithBody inserts a new row and dedupes body storage") {
     for {
-      _        <- wipeCache
-      bodyId   <- ApiResponseCache.upsertWithBody(
+      _ <- wipeCache
+      bodyId <- ApiResponseCache.upsertWithBody(
         url = urlA,
         body = bodyA,
         etag = Some("\"abc\""),
@@ -71,9 +71,9 @@ object TestApiResponseCacheSql extends ZIOSpecDefault {
         contentType = Some("application/json"),
         fetchedAt = Times.t0
       )
-      rawId    = bodyId.map(ApiResponseBodyId.unwrap)
-      cache    <- countCache
-      bodies   <- countBodies
+      rawId = bodyId.map(ApiResponseBodyId.unwrap)
+      cache  <- countCache
+      bodies <- countBodies
     } yield assertTrue(
       cache == 1,
       bodies == 1,
@@ -109,7 +109,7 @@ object TestApiResponseCacheSql extends ZIOSpecDefault {
       bodies <- countBodies
       meta   <- ApiResponseCache.lookupMeta(urlA)
     } yield assertTrue(
-      cache == 1, // still one row, was updated in place
+      cache == 1,  // still one row, was updated in place
       bodies == 2, // original body and new body both present
       meta.exists(_.etag.contains("\"def\"")),
       meta.exists(_.maxAgeSeconds.contains(7200L)),
@@ -148,30 +148,38 @@ object TestApiResponseCacheSql extends ZIOSpecDefault {
       )
     }
 
-  private def testTouchUpdatesFetchedAtOnly = test("touch with MaxAgeUpdate.Preserve bumps fetched_at and preserves validators") {
-    for {
-      before  <- ApiResponseCache.lookupMeta(urlA)
-      // Passing None for each optional field exercises the COALESCE path in `touch`: stored validators and
-      // max_age_seconds must survive unchanged when the 304 response carried none of those headers.
-      touched <- ApiResponseCache.touch(urlA, Times.t2, None, None, ApiResponseCache.MaxAgeUpdate.Preserve, None)
-      after   <- ApiResponseCache.lookupMeta(urlA)
-    } yield assertTrue(
-      touched == 1,
-      before.exists(_.fetchedAt == Times.t1),
-      after.exists(_.fetchedAt == Times.t2),
-      before.flatMap(_.etag) == after.flatMap(_.etag),
-      before.flatMap(_.maxAgeSeconds) == after.flatMap(_.maxAgeSeconds),
-      before.flatMap(_.lastModified) == after.flatMap(_.lastModified),
-      before.flatMap(_.contentType) == after.flatMap(_.contentType),
-      before.map(_.bodyId) == after.map(_.bodyId)
-    )
-  }
+  private def testTouchUpdatesFetchedAtOnly =
+    test("touch with MaxAgeUpdate.Preserve bumps fetched_at and preserves validators") {
+      for {
+        before <- ApiResponseCache.lookupMeta(urlA)
+        // Passing None for each optional field exercises the COALESCE path in `touch`: stored validators and
+        // max_age_seconds must survive unchanged when the 304 response carried none of those headers.
+        touched <- ApiResponseCache.touch(urlA, Times.t2, None, None, ApiResponseCache.MaxAgeUpdate.Preserve, None)
+        after   <- ApiResponseCache.lookupMeta(urlA)
+      } yield assertTrue(
+        touched == 1,
+        before.exists(_.fetchedAt == Times.t1),
+        after.exists(_.fetchedAt == Times.t2),
+        before.flatMap(_.etag) == after.flatMap(_.etag),
+        before.flatMap(_.maxAgeSeconds) == after.flatMap(_.maxAgeSeconds),
+        before.flatMap(_.lastModified) == after.flatMap(_.lastModified),
+        before.flatMap(_.contentType) == after.flatMap(_.contentType),
+        before.map(_.bodyId) == after.map(_.bodyId)
+      )
+    }
 
   private def testTouchOverwritesMaxAgeWhenUpdateProvided =
     test("touch with MaxAgeUpdate.Overwrite overwrites stored max_age_seconds") {
       for {
-        touched <- ApiResponseCache.touch(urlA, Times.t2, None, None, ApiResponseCache.MaxAgeUpdate.Overwrite(9999L), None)
-        after   <- ApiResponseCache.lookupMeta(urlA)
+        touched <- ApiResponseCache.touch(
+          urlA,
+          Times.t2,
+          None,
+          None,
+          ApiResponseCache.MaxAgeUpdate.Overwrite(9999L),
+          None
+        )
+        after <- ApiResponseCache.lookupMeta(urlA)
       } yield assertTrue(
         touched == 1,
         after.exists(_.maxAgeSeconds.contains(9999L))
@@ -263,14 +271,24 @@ object TestApiResponseCacheSql extends ZIOSpecDefault {
       val freshAt = Times.t0.plus(Duration.ofDays(2))
       val cutoff  = Times.t0.plus(Duration.ofDays(1))
       for {
-        _           <- wipeCache
-        _           <- ApiResponseCache.upsertWithBody(
-          url = urlOld, body = bodyOld, etag = None, lastModified = None,
-          maxAgeSeconds = None, contentType = None, fetchedAt = Times.t0
+        _ <- wipeCache
+        _ <- ApiResponseCache.upsertWithBody(
+          url = urlOld,
+          body = bodyOld,
+          etag = None,
+          lastModified = None,
+          maxAgeSeconds = None,
+          contentType = None,
+          fetchedAt = Times.t0
         )
         freshBodyId <- ApiResponseCache.upsertWithBody(
-          url = urlFresh, body = bodyFresh, etag = None, lastModified = None,
-          maxAgeSeconds = None, contentType = None, fetchedAt = freshAt
+          url = urlFresh,
+          body = bodyFresh,
+          etag = None,
+          lastModified = None,
+          maxAgeSeconds = None,
+          contentType = None,
+          fetchedAt = freshAt
         )
         bodiesBefore <- countBodies
         cacheBefore  <- countCache
@@ -280,11 +298,11 @@ object TestApiResponseCacheSql extends ZIOSpecDefault {
         freshStill   <- ApiResponseCache.lookupMeta(urlFresh)
         oldGone      <- ApiResponseCache.lookupMeta(urlOld)
       } yield assertTrue(
-        deleted == 1,              // only the old row deleted
+        deleted == 1, // only the old row deleted
         cacheBefore == 2,
         cacheAfter == 1,
-        bodiesBefore == 2,         // bodyOld + bodyFresh
-        bodiesAfter == 1,          // bodyOld was orphaned and swept; bodyFresh is still referenced
+        bodiesBefore == 2, // bodyOld + bodyFresh
+        bodiesAfter == 1,  // bodyOld was orphaned and swept; bodyFresh is still referenced
         freshBodyId.exists(id => freshStill.exists(_.bodyId == id)),
         oldGone.isEmpty
       )

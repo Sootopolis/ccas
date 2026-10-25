@@ -3,15 +3,15 @@ package ccas.analysis.apps.membership
 import zio.{Exit, Scope, ZLayer}
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
-import ccas.analysis.apps.membership.MembershipChange.{StoredRoster, MemberState}
+import TestMembershipAppSupport.*
+
+import ccas.analysis.apps.membership.MembershipChange.{MemberState, StoredRoster}
 import ccas.analysis.tables.{ClubMember, Player, Tables}
 import ccas.api.misc.enums.PlayerStatusCategory.Active
 import ccas.api.misc.subtypes.Username
 import ccas.utils.ProgressDisplay
 import ccas.utils.client.{NetworkUnavailableException, TestChessComClientSupport}
 import ccas.utils.sql.FreshSchemaLayer
-
-import TestMembershipAppSupport.*
 
 /** A systemic network outage during membership classification must abort, not be swallowed into a member
   * classification. A disappeared *active* member routes through `classifyOneDisappearedActive`, whose `ApiPlayer.get`

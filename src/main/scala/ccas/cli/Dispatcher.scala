@@ -211,7 +211,7 @@ object Dispatcher {
             StatsRequest(chosen.query, stats.since, stats.until)
           )
         }
-        _    <- noteResolutions(currentClubOption, target, List(jobOutcome(result)))
+        _ <- noteResolutions(currentClubOption, target, List(jobOutcome(result)))
         code <-
           if (stats.detach) { reportDetachedClub(result) }
           else { follower.handleClub(result, logsToStderr = false, _ => ZIO.unit) }
@@ -261,7 +261,8 @@ object Dispatcher {
         }
         name = ClubSlug.unwrap(resolved.slug)
         _ <- Console.printLine(
-          if (removed) { s"removed $username from $name blacklist" } else { s"$username was not blacklisted for $name" }
+          if (removed) { s"removed $username from $name blacklist" }
+          else { s"$username was not blacklisted for $name" }
         ).orDie
       } yield 0
 
@@ -309,7 +310,9 @@ object Dispatcher {
           api.postJson[MarkManagedRequest, ClubResult[Boolean]]("/api/managed-clubs", MarkManagedRequest(chosen.query))
         }
         name = ClubSlug.unwrap(club.slug)
-        _ <- Console.printLine(if (added) { s"now managing $name" } else { s"already managing $name" }).orDie
+        _ <- Console.printLine(if (added) {
+          s"now managing $name"
+        } else { s"already managing $name" }).orDie
         _ <- writeClubsCacheReporting(api)
       } yield 0
 
@@ -321,7 +324,9 @@ object Dispatcher {
           api.deleteJson[ClubResult[Boolean]](s"/api/managed-clubs?${ClubRequest.queryString(chosen.query)}")
         }
         name = ClubSlug.unwrap(club.slug)
-        _ <- Console.printLine(if (removed) { s"stopped managing $name" } else { s"$name was not managed" }).orDie
+        _ <- Console.printLine(if (removed) {
+          s"stopped managing $name"
+        } else { s"$name was not managed" }).orDie
         _ <- clearCurrentIfRemoved(club, target.query, currentClubOption)
         _ <- writeClubsCacheReporting(api)
       } yield 0

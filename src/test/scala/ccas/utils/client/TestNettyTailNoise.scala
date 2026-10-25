@@ -1,12 +1,12 @@
 package ccas.utils.client
 
-import java.util.logging.{Level, LogRecord, Logger as JLogger}
+import java.util.logging.{Level, Logger as JLogger, LogRecord}
 
 import io.netty.channel.DefaultChannelPipeline
 import io.netty.handler.codec.PrematureChannelClosureException
 import io.netty.util.internal.logging.{InternalLoggerFactory, JdkLoggerFactory}
-import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 import zio.ZIO
+import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 object TestNettyTailNoise extends ZIOSpecDefault {
 

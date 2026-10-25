@@ -56,7 +56,8 @@ object HealthProbe {
 
   /** A GET of `path` on the loopback `port`. Probes 127.0.0.1: the server's default bind is loopback, and even a
     * `SERVER_HOST=0.0.0.0` bind answers on loopback; a non-loopback-only bind would false-negative here, acceptable
-    * under the single-user local model. */
+    * under the single-user local model.
+    */
   private def request(port: Int, path: String, timeout: JDuration): HttpRequest =
     HttpRequest.newBuilder(URI.create(s"http://127.0.0.1:$port$path")).timeout(timeout).GET().build()
 
@@ -64,7 +65,8 @@ object HealthProbe {
   def readiness(port: Int): UIO[Readiness] = readinessWithin(port, ReadyTimeout)
 
   /** `/health/ready` with a caller-chosen timeout, for a caller that polls. A transport error (connection refused,
-    * timeout) is [[Readiness.NoAnswer]] — a down or unreachable server. */
+    * timeout) is [[Readiness.NoAnswer]] — a down or unreachable server.
+    */
   def readinessWithin(port: Int, timeout: JDuration): UIO[Readiness] =
     ZIO
       .attemptBlocking {
@@ -74,7 +76,8 @@ object HealthProbe {
       .orElseSucceed(Readiness.NoAnswer)
 
   /** Read a `/health/ready` response. A body that does not decode names no database: an older server sends none.
-    * Pure. */
+    * Pure.
+    */
   def classify(status: Int, body: String): Readiness = {
     val databaseOption = body.fromJson[ReadyResponse].toOption.flatMap(_.databaseOption)
     status match {

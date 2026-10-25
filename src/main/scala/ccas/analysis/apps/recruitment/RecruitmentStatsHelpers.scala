@@ -3,7 +3,6 @@ package ccas.analysis.apps.recruitment
 import java.time.{Instant, LocalDate, YearMonth, ZoneOffset}
 import java.time.temporal.ChronoUnit
 
-import ccas.utils.sql.PostgresClient
 import zio.{RIO, ZIO}
 
 import ccas.analysis.apps.withPlayerRenameRecovery
@@ -12,6 +11,7 @@ import ccas.api.misc.enums.GameResultDetail
 import ccas.api.misc.subtypes.{PlayerId, Username}
 import ccas.api.player.ApiPlayerArchive
 import ccas.utils.client.ChessComClient
+import ccas.utils.sql.PostgresClient
 
 private[recruitment] object RecruitmentStatsHelpers {
 

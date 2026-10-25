@@ -79,8 +79,9 @@ object ClientConfig {
         .query[Long].run().headOption
     }.flatMap {
       case Some(id) => ZIO.succeed(id)
-      case None => connectZIO {
-        sql"""INSERT INTO client_config (
+      case None =>
+        connectZIO {
+          sql"""INSERT INTO client_config (
                 config_hash, recovery_tiers, min_request_delay_ms, ema_tau_ms,
                 cooldown_secs, cf_cooldown_secs, min_tier_observation_secs,
                 failure_window_size, failure_threshold, min_sample_size,
@@ -93,8 +94,8 @@ object ClientConfig {
                 ${item.retryBaseSecs}, ${item.cfRetrySecs}, ${item.connectionRetryBaseSecs},
                 ${item.max429Retries}, ${item.maxCfRetries}, ${item.maxConnectionRetries}
               ) ON CONFLICT (config_hash) DO NOTHING""".update.run()
-        sql"SELECT config_id FROM client_config WHERE config_hash = $hash".query[Long].run().head
-      }
+          sql"SELECT config_id FROM client_config WHERE config_hash = $hash".query[Long].run().head
+        }
     }
   }
 }

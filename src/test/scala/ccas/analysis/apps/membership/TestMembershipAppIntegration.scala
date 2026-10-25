@@ -7,6 +7,8 @@ import zio.{Chunk, Promise, Ref, UIO, ZIO, ZLayer}
 import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
+import TestMembershipAppSupport.*
+
 import ccas.analysis.apps.{NamedClub, PlayerUpdater}
 import ccas.analysis.apps.ClubSlugRenameResolver.ClubMismatchException
 import ccas.analysis.apps.membership.MembershipChange.*
@@ -41,8 +43,6 @@ import ccas.utils.sql.{FreshSchemaLayer, PostgresClient, TestDbCleanup}
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient.{connectZIO, withTransaction}
 
-import TestMembershipAppSupport.*
-
 object TestMembershipAppIntegration extends ZIOSpecDefault {
 
   override def spec: Spec[Any, Throwable] = suite("TestMembershipAppIntegration")(
@@ -69,11 +69,11 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
   )
 
   private def testReturnsInvitationForOurClub = test("returns invitation for player invited by our club") {
-    val player = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0)
+    val player    = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0)
     val summaries = List(MemberChangeSummary(pid0, Username("alice"), Chunk(NewMember(Times.t2))))
     for {
-      _ <- seedDb(players = List(player))
-      _ <- seedRecruitmentInvitation(clubId, pid0, Times.t1)
+      _      <- seedDb(players = List(player))
+      _      <- seedRecruitmentInvitation(clubId, pid0, Times.t1)
       result <- MembershipReport.lookupJoinInvitations(clubId, summaries)
     } yield assertTrue(
       result.size == 1,
@@ -82,12 +82,12 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
   }
 
   private def testDoesNotReturnInvitationFromDifferentClub = test("does NOT return invitation from a different club") {
-    val player = Player(pid1, Times.t0, Username("bob"), Active, None, Times.t0)
+    val player    = Player(pid1, Times.t0, Username("bob"), Active, None, Times.t0)
     val summaries = List(MemberChangeSummary(pid1, Username("bob"), Chunk(NewMember(Times.t2))))
     for {
-      _ <- seedDb(players = List(player))
-      _ <- Club.upsert(otherClub)
-      _ <- seedRecruitmentInvitation(otherClubId, pid1, Times.t1)
+      _      <- seedDb(players = List(player))
+      _      <- Club.upsert(otherClub)
+      _      <- seedRecruitmentInvitation(otherClubId, pid1, Times.t1)
       result <- MembershipReport.lookupJoinInvitations(clubId, summaries)
     } yield assertTrue(result.isEmpty)
   }
@@ -139,7 +139,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
   }
 
   private def testExcludesFormerMembers = test("excludes former members from StoredRoster") {
-    val player0   = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t1)
+    val player0 = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t1)
     val formerMem = ClubMember(
       clubId = clubId,
       playerId = pid0,
@@ -209,44 +209,46 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
     )
   }
 
-  private def testSelectPlayerIdsCurrentAtReturnsCurrentMembers = test("selectPlayerIdsCurrentAt returns members current at given time") {
-    val player0 = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0)
-    val player1 = Player(pid1, Times.t0, Username("bob"), Active, None, Times.t0)
-    // alice: current member since t0
-    val mem0 = ClubMember.joined(clubId = clubId, playerId = pid0, since = Times.t0)
-    // bob: joined at t2, so not current at t1
-    val mem1 = ClubMember.joined(clubId = clubId, playerId = pid1, since = Times.t2)
+  private def testSelectPlayerIdsCurrentAtReturnsCurrentMembers =
+    test("selectPlayerIdsCurrentAt returns members current at given time") {
+      val player0 = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0)
+      val player1 = Player(pid1, Times.t0, Username("bob"), Active, None, Times.t0)
+      // alice: current member since t0
+      val mem0 = ClubMember.joined(clubId = clubId, playerId = pid0, since = Times.t0)
+      // bob: joined at t2, so not current at t1
+      val mem1 = ClubMember.joined(clubId = clubId, playerId = pid1, since = Times.t2)
 
-    for {
-      _ <- seedDb(players = List(player0, player1), members = List(mem0, mem1))
-      atT1 <- ClubMember.selectPlayerIdsCurrentAt(clubId, Times.t1)
-      atT3 <- ClubMember.selectPlayerIdsCurrentAt(clubId, Times.t3)
-    } yield assertTrue(
-      atT1 == Set(pid0),
-      atT3 == Set(pid0, pid1)
-    )
-  }
+      for {
+        _    <- seedDb(players = List(player0, player1), members = List(mem0, mem1))
+        atT1 <- ClubMember.selectPlayerIdsCurrentAt(clubId, Times.t1)
+        atT3 <- ClubMember.selectPlayerIdsCurrentAt(clubId, Times.t3)
+      } yield assertTrue(
+        atT1 == Set(pid0),
+        atT3 == Set(pid0, pid1)
+      )
+    }
 
-  private def testSelectPlayerIdsCurrentAtExcludesLeftMembers = test("selectPlayerIdsCurrentAt excludes members who left before the given time") {
-    val player0 = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0)
-    // alice: was member from t0 to t1
-    val mem0 = ClubMember(
-      clubId = clubId,
-      playerId = pid0,
-      since = Times.t0,
-      lastSeen = Some(Times.t0),
-      until = Some(Times.t1)
-    )
+  private def testSelectPlayerIdsCurrentAtExcludesLeftMembers =
+    test("selectPlayerIdsCurrentAt excludes members who left before the given time") {
+      val player0 = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0)
+      // alice: was member from t0 to t1
+      val mem0 = ClubMember(
+        clubId = clubId,
+        playerId = pid0,
+        since = Times.t0,
+        lastSeen = Some(Times.t0),
+        until = Some(Times.t1)
+      )
 
-    for {
-      _ <- seedDb(players = List(player0), members = List(mem0))
-      atT0 <- ClubMember.selectPlayerIdsCurrentAt(clubId, Times.t0)
-      atT2 <- ClubMember.selectPlayerIdsCurrentAt(clubId, Times.t2)
-    } yield assertTrue(
-      atT0 == Set(pid0),
-      atT2.isEmpty
-    )
-  }
+      for {
+        _    <- seedDb(players = List(player0), members = List(mem0))
+        atT0 <- ClubMember.selectPlayerIdsCurrentAt(clubId, Times.t0)
+        atT2 <- ClubMember.selectPlayerIdsCurrentAt(clubId, Times.t2)
+      } yield assertTrue(
+        atT0 == Set(pid0),
+        atT2.isEmpty
+      )
+    }
 
   private def testCountActiveCurrentAtExcludesNonActive =
     test("countActiveCurrentAt excludes non-Active players and players outside the window") {
@@ -283,7 +285,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
       runId1 <- MembershipRun.insert(clubId, RunTrigger.Cli, Times.t0, None)
       _      <- MembershipRun.complete(runId1, Times.t1)
       // Insert an incomplete run (no completedAt)
-      _ <- MembershipRun.insert(clubId, RunTrigger.Cli, Times.t2, None)
+      _      <- MembershipRun.insert(clubId, RunTrigger.Cli, Times.t2, None)
       result <- MembershipRun.selectLatestCompleted(clubId)
     } yield assertTrue(
       result.isDefined,
@@ -292,14 +294,15 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
     )
   }
 
-  private def testSelectLatestCompletedReturnsNoneWhenNoCompletedRuns = test("selectLatestCompleted returns None when no completed runs exist") {
-    for {
-      _ <- seedDb()
-      _ <- connectZIO(sql"DELETE FROM membership_run WHERE club_id = $clubId".update.run())
-      _ <- MembershipRun.insert(clubId, RunTrigger.Cli, Times.t0, None)
-      result <- MembershipRun.selectLatestCompleted(clubId)
-    } yield assertTrue(result.isEmpty)
-  }
+  private def testSelectLatestCompletedReturnsNoneWhenNoCompletedRuns =
+    test("selectLatestCompleted returns None when no completed runs exist") {
+      for {
+        _      <- seedDb()
+        _      <- connectZIO(sql"DELETE FROM membership_run WHERE club_id = $clubId".update.run())
+        _      <- MembershipRun.insert(clubId, RunTrigger.Cli, Times.t0, None)
+        result <- MembershipRun.selectLatestCompleted(clubId)
+      } yield assertTrue(result.isEmpty)
+    }
 
   private def testSelectLatestReportedSkipsIncompleteAndDependencyRuns =
     test("selectLatestReported skips incomplete runs and runs another job made") {
@@ -775,7 +778,11 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
         boardResponses = boardResponses
       )
       result <- MembershipClassify.classifyDisappeared(
-        client, storedRoster, Set.empty, apiMap, Times.t2
+        client,
+        storedRoster,
+        Set.empty,
+        apiMap,
+        Times.t2
       )
     } yield result
   }
@@ -1197,8 +1204,8 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
         client     <- TestChessComClientSupport.fakeClient(routes)
         runsBefore <- connectZIO(sql"SELECT COUNT(*)::INT FROM membership_run".query[Int].run().head)
         exit <- MembershipApp.reconcileIfStale(ClubSlug("contested-report"), Times.t1)
-                  .provideSomeLayer[ProgressDisplay & PostgresClient](ZLayer.succeed(client))
-                  .exit
+          .provideSomeLayer[ProgressDisplay & PostgresClient](ZLayer.succeed(client))
+          .exit
         runsAfter <- connectZIO(sql"SELECT COUNT(*)::INT FROM membership_run".query[Int].run().head)
       } yield assertTrue(
         exit.causeOption.flatMap(_.failureOption).exists(_.getMessage.contains("is ambiguous")),
@@ -1215,11 +1222,11 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
         }
       )
       for {
-        client <- TestChessComClientSupport.fakeClient(routes)
+        client     <- TestChessComClientSupport.fakeClient(routes)
         runsBefore <- connectZIO(sql"SELECT COUNT(*)::INT FROM membership_run".query[Int].run().head)
         exit <- MembershipApp.reconcile(ClubSlug("test-club"), expectedClubIdOption = Some(expected))
-                  .provideSomeLayer[ProgressDisplay & PostgresClient](ZLayer.succeed(client))
-                  .exit
+          .provideSomeLayer[ProgressDisplay & PostgresClient](ZLayer.succeed(client))
+          .exit
         runsAfter <- connectZIO(sql"SELECT COUNT(*)::INT FROM membership_run".query[Int].run().head)
       } yield assertTrue(
         exit.causeOption.flatMap(_.failureOption).exists(_.isInstanceOf[ClubMismatchException]),

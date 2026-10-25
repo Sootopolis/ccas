@@ -2,14 +2,29 @@ package ccas.utils.client
 
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path, Paths}
-
 import java.util.Comparator
 import java.util.concurrent.ConcurrentLinkedQueue
 
 import scala.jdk.CollectionConverters.*
 
 import com.typesafe.config.ConfigFactory
-import zio.{Cause, Chunk, Exit, FiberId, FiberRefs, LogLevel, LogSpan, Ref, Scope, Trace, UIO, ZEnvironment, ZIO, ZLogger, durationInt}
+import zio.{
+  durationInt,
+  Cause,
+  Chunk,
+  Exit,
+  FiberId,
+  FiberRefs,
+  LogLevel,
+  LogSpan,
+  Ref,
+  Scope,
+  Trace,
+  UIO,
+  ZEnvironment,
+  ZIO,
+  ZLogger
+}
 import zio.config.magnolia.DeriveConfig
 import zio.config.typesafe.TypesafeConfigProvider
 import zio.test.*
@@ -213,13 +228,13 @@ object TestBodyStore extends ZIOSpecDefault {
       for {
         (store, _) <- freshStore
         faulty     <- FaultyBodyStore.make(store)
-        env         = ZEnvironment[BodyStore](faulty)
-        absent     <- BodyStore.read(hash).provideEnvironment(env)
-        _          <- store.put(hash, bytes)
-        _          <- faulty.breakReads
-        degraded   <- BodyStore.read(hash).provideEnvironment(env)
-        _          <- faulty.healReads
-        healed     <- BodyStore.read(hash).provideEnvironment(env)
+        env = ZEnvironment[BodyStore](faulty)
+        absent   <- BodyStore.read(hash).provideEnvironment(env)
+        _        <- store.put(hash, bytes)
+        _        <- faulty.breakReads
+        degraded <- BodyStore.read(hash).provideEnvironment(env)
+        _        <- faulty.healReads
+        healed   <- BodyStore.read(hash).provideEnvironment(env)
       } yield assertTrue(
         absent == BodyRead.NotStored,
         degraded == BodyRead.Unavailable,
@@ -244,9 +259,9 @@ object TestBodyStore extends ZIOSpecDefault {
         faulty     <- FaultyBodyStore.make(store)
         _          <- faulty.breakReads
         _          <- faulty.breakWrites
-        env        = ZEnvironment[BodyStore](faulty)
-        readExit   <- BodyStore.read(hash).provideEnvironment(env).exit
-        writeExit  <- BodyStore.putOrSkip(hash, bytes, source).provideEnvironment(env).exit
+        env = ZEnvironment[BodyStore](faulty)
+        readExit  <- BodyStore.read(hash).provideEnvironment(env).exit
+        writeExit <- BodyStore.putOrSkip(hash, bytes, source).provideEnvironment(env).exit
       } yield assertTrue(readExit.isSuccess, writeExit.isSuccess)
     },
     test("an outage logs one warning however long it lasts, and one info on recovery") {
@@ -258,17 +273,17 @@ object TestBodyStore extends ZIOSpecDefault {
           (store, _) <- freshStore
           faulty     <- FaultyBodyStore.make(store)
           degraded   <- Ref.make(false)
-          monitored   = new BodyStore.HealthLogging(faulty, degraded)
-          _          <- faulty.breakReads
-          _          <- faulty.breakWrites
-          _          <- ZIO.foreachDiscard(1 to 3)(_ => monitored.get(hash).ignore)
-          _          <- ZIO.foreachDiscard(1 to 2)(_ => monitored.put(hash, bytes).ignore)
-          _          <- faulty.healReads
-          _          <- faulty.healWrites
-          _          <- ZIO.foreachDiscard(1 to 3)(_ => monitored.get(hash).ignore)
-          entries    <- sink
-          warnings    = entries.count((level, msg) => level == LogLevel.Warning && msg.contains("BodyStore unavailable"))
-          recoveries  = entries.count((level, msg) => level == LogLevel.Info && msg.contains("BodyStore recovered"))
+          monitored = new BodyStore.HealthLogging(faulty, degraded)
+          _       <- faulty.breakReads
+          _       <- faulty.breakWrites
+          _       <- ZIO.foreachDiscard(1 to 3)(_ => monitored.get(hash).ignore)
+          _       <- ZIO.foreachDiscard(1 to 2)(_ => monitored.put(hash, bytes).ignore)
+          _       <- faulty.healReads
+          _       <- faulty.healWrites
+          _       <- ZIO.foreachDiscard(1 to 3)(_ => monitored.get(hash).ignore)
+          entries <- sink
+          warnings   = entries.count((level, msg) => level == LogLevel.Warning && msg.contains("BodyStore unavailable"))
+          recoveries = entries.count((level, msg) => level == LogLevel.Info && msg.contains("BodyStore recovered"))
         } yield assertTrue(warnings == 1, recoveries == 1)
       }
     },
@@ -279,9 +294,9 @@ object TestBodyStore extends ZIOSpecDefault {
         (store, _) <- freshStore
         faulty     <- FaultyBodyStore.make(store)
         degraded   <- Ref.make(false)
-        monitored   = new BodyStore.HealthLogging(faulty, degraded)
-        _          <- faulty.breakReads
-        exit       <- monitored.get(hash).exit
+        monitored = new BodyStore.HealthLogging(faulty, degraded)
+        _    <- faulty.breakReads
+        exit <- monitored.get(hash).exit
       } yield assertTrue(exit.isFailure)
     }
   )
@@ -304,11 +319,11 @@ object TestBodyStore extends ZIOSpecDefault {
       val breach = (exit: Exit[Throwable, Any]) =>
         exit.causeOption.flatMap(_.failureOption).collect { case t: BodyStore.BodyStoreTimeoutException => t }
       for {
-        (store, _)      <- freshStore
-        faulty          <- FaultyBodyStore.make(store)
-        _               <- faulty.stallReads(5.seconds)
-        _               <- faulty.stallWrites(5.seconds)
-        bounded          = new BodyStore.Deadlines(faulty, limits)
+        (store, _) <- freshStore
+        faulty     <- FaultyBodyStore.make(store)
+        _          <- faulty.stallReads(5.seconds)
+        _          <- faulty.stallWrites(5.seconds)
+        bounded = new BodyStore.Deadlines(faulty, limits)
         (elapsed, exit) <- bounded.get(hash).exit.timed
         putExit         <- bounded.put(hash, bytes).exit
         deleteExit      <- bounded.delete(hash).exit
@@ -335,7 +350,7 @@ object TestBodyStore extends ZIOSpecDefault {
         faulty     <- FaultyBodyStore.make(store)
         _          <- faulty.stallReads(5.seconds)
         _          <- faulty.stallWrites(5.seconds)
-        bounded     = new BodyStore.Deadlines(faulty, limits)
+        bounded = new BodyStore.Deadlines(faulty, limits)
         putExit    <- bounded.put(hash, bytes).exit
         readExit   <- bounded.get(hash).exit
         deleteExit <- bounded.delete(hash).exit
@@ -357,10 +372,10 @@ object TestBodyStore extends ZIOSpecDefault {
           faulty     <- FaultyBodyStore.make(store)
           degraded   <- Ref.make(false)
           _          <- faulty.stallWrites(5.seconds)
-          monitored   = new BodyStore.HealthLogging(new BodyStore.Deadlines(faulty, limits), degraded)
-          _          <- monitored.put(hash, bytes).ignore
-          entries    <- sink
-          warnings    = entries.collect { case (LogLevel.Warning, msg) => msg }
+          monitored = new BodyStore.HealthLogging(new BodyStore.Deadlines(faulty, limits), degraded)
+          _       <- monitored.put(hash, bytes).ignore
+          entries <- sink
+          warnings = entries.collect { case (LogLevel.Warning, msg) => msg }
         } yield assertTrue(warnings.exists(_.contains(s"write of ${bytes.length} bytes")))
       }
     },
@@ -373,10 +388,10 @@ object TestBodyStore extends ZIOSpecDefault {
         faulty     <- FaultyBodyStore.make(store)
         _          <- faulty.stallReads(5.seconds)
         _          <- faulty.stallWrites(5.seconds)
-        env         = ZEnvironment[BodyStore](new BodyStore.Deadlines(faulty, limits))
-        read       <- BodyStore.read(hash).provideEnvironment(env)
-        wrote      <- BodyStore.putOrSkip(hash, bytes, source).provideEnvironment(env)
-        stored     <- store.get(hash)
+        env = ZEnvironment[BodyStore](new BodyStore.Deadlines(faulty, limits))
+        read   <- BodyStore.read(hash).provideEnvironment(env)
+        wrote  <- BodyStore.putOrSkip(hash, bytes, source).provideEnvironment(env)
+        stored <- store.get(hash)
       } yield assertTrue(read == BodyRead.Unavailable, !wrote, stored.isEmpty)
     },
     test("a stall trips the degraded flag only when the deadline nests inside the health decorator") {
@@ -392,14 +407,14 @@ object TestBodyStore extends ZIOSpecDefault {
           _           <- faulty.stallReads(3.seconds)
           insideFlag  <- Ref.make(false)
           outsideFlag <- Ref.make(false)
-          inside       = new BodyStore.HealthLogging(new BodyStore.Deadlines(faulty, limits), insideFlag)
-          outside      = new BodyStore.Deadlines(new BodyStore.HealthLogging(faulty, outsideFlag), limits)
-          _           <- inside.get(hash).ignore
-          _           <- outside.get(hash).ignore
-          insideSaw   <- insideFlag.get
-          outsideSaw  <- outsideFlag.get
-          entries     <- sink
-          warnings     = entries.count((level, msg) => level == LogLevel.Warning && msg.contains("BodyStore unavailable"))
+          inside  = new BodyStore.HealthLogging(new BodyStore.Deadlines(faulty, limits), insideFlag)
+          outside = new BodyStore.Deadlines(new BodyStore.HealthLogging(faulty, outsideFlag), limits)
+          _          <- inside.get(hash).ignore
+          _          <- outside.get(hash).ignore
+          insideSaw  <- insideFlag.get
+          outsideSaw <- outsideFlag.get
+          entries    <- sink
+          warnings = entries.count((level, msg) => level == LogLevel.Warning && msg.contains("BodyStore unavailable"))
         } yield assertTrue(insideSaw, !outsideSaw, warnings == 1)
       }
     },
@@ -408,10 +423,10 @@ object TestBodyStore extends ZIOSpecDefault {
       // retention fiber until the next restart rather than for one pass.
       val limits = BodyStore.BodyStoreLimits(read = 150.millis, write = 150.millis)
       for {
-        (store, _)      <- freshStore
-        faulty          <- FaultyBodyStore.make(store)
-        _               <- faulty.stallWrites(5.seconds)
-        bounded          = new BodyStore.Deadlines(faulty, limits)
+        (store, _) <- freshStore
+        faulty     <- FaultyBodyStore.make(store)
+        _          <- faulty.stallWrites(5.seconds)
+        bounded = new BodyStore.Deadlines(faulty, limits)
         (elapsed, exit) <- bounded.delete(hash).exit.timed
       } yield assertTrue(exit.isFailure, elapsed.toMillis < 3000)
     },
@@ -426,13 +441,13 @@ object TestBodyStore extends ZIOSpecDefault {
       // `.disconnect` must not cost us shutdown: a fiber parked on a stalled store has to die when the scope does.
       val limits = BodyStore.BodyStoreLimits(read = 30.seconds, write = 30.seconds)
       for {
-        (store, _)         <- freshStore
-        faulty             <- FaultyBodyStore.make(store)
-        _                  <- faulty.stallReads(30.seconds)
-        bounded             = new BodyStore.Deadlines(faulty, limits)
-        fiber              <- bounded.get(hash).fork
-        _                  <- ZIO.sleep(50.millis)
-        (elapsed, exit)    <- fiber.interrupt.timed
+        (store, _) <- freshStore
+        faulty     <- FaultyBodyStore.make(store)
+        _          <- faulty.stallReads(30.seconds)
+        bounded = new BodyStore.Deadlines(faulty, limits)
+        fiber           <- bounded.get(hash).fork
+        _               <- ZIO.sleep(50.millis)
+        (elapsed, exit) <- fiber.interrupt.timed
       } yield assertTrue(exit.isInterruptedOnly, elapsed.toMillis < 3000)
     }
   ) @@ TestAspect.withLiveClock

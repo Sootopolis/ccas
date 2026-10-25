@@ -3,7 +3,7 @@ package ccas.analysis.apps.history
 import java.net.UnknownHostException
 import java.time.Instant
 
-import zio.{durationInt, Exit, Promise, RIO, Ref, Scope, ZIO, ZLayer}
+import zio.{durationInt, Exit, Promise, Ref, RIO, Scope, ZIO, ZLayer}
 import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
@@ -11,9 +11,9 @@ import ccas.analysis.apps.history.HistoryUtils.{DiscoveredPlayer, ProcessingCont
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.apiPlayerJson
 import ccas.analysis.tables.{Club, ClubMember, Player, Tables}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
+import ccas.utils.ProgressDisplay
 import ccas.utils.client.{BodyStore, ChessComClient, NetworkUnavailableException, TestChessComClientSupport}
 import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
-import ccas.utils.ProgressDisplay
 
 /** What History records for a player it finds on a match board, and whose match lists it crawls. */
 object TestDiscoverPlayer extends ZIOSpecDefault {

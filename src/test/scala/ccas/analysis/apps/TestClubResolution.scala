@@ -123,10 +123,10 @@ object TestClubResolution extends ZIOSpecDefault {
     test("a former name nobody holds upstream leaves the local answer standing") {
       val club700 = club(700, "now-700")
       for {
-        _          <- Club.upsert(club700.copy(slug = ClubSlug("old-700")))
-        _          <- Club.upsert(club700)
-        local      <- ClubResolution.resolve(ClubQuery.BySlug(ClubSlug("old-700")))
-        client     <- fakeChessComClient(Map.empty)
+        _           <- Club.upsert(club700.copy(slug = ClubSlug("old-700")))
+        _           <- Club.upsert(club700)
+        local       <- ClubResolution.resolve(ClubQuery.BySlug(ClubSlug("old-700")))
+        client      <- fakeChessComClient(Map.empty)
         adjudicated <- ClubResolution.adjudicate(client, local)
         expected = ClubResolution.Renamed(NamedClub(club700.clubId, club700.slug), ClubSlug("old-700"))
       } yield assertTrue(adjudicated == expected)
@@ -220,8 +220,8 @@ object TestClubResolution extends ZIOSpecDefault {
         "club/never-seen"  -> apiClubJson(769, "never-seen")
       )
       for {
-        _         <- Club.upsert(club760)
-        client    <- fakeChessComClient(responses)
+        _        <- Club.upsert(club760)
+        client   <- fakeChessComClient(responses)
         known    <- adjudicated(client, ClubQuery.BySlug(club760.slug))
         notLocal <- adjudicated(client, ClubQuery.BySlug(ClubSlug("never-seen")))
       } yield assertTrue(

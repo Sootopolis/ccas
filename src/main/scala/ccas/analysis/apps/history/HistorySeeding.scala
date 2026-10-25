@@ -2,25 +2,26 @@ package ccas.analysis.apps.history
 
 import java.time.Instant
 
-import ccas.utils.sql.PostgresClient
-import ccas.utils.sql.PostgresClient.withTransaction
-import zio.{Chunk, RIO, Ref, ZIO}
+import zio.{Chunk, Ref, RIO, ZIO}
+
 import HistoryUtils.*
 
 import ccas.analysis.apps.{
+  withClubSlugRenameRecovery,
+  withPlayerRenameRecovery,
   ClubSlugRenameResolver,
   PlayerUpdater,
-  UsernameRenameResolver,
-  withClubSlugRenameRecovery,
-  withPlayerRenameRecovery
+  UsernameRenameResolver
 }
 import ccas.analysis.tables.*
 import ccas.api.club.ApiClubMatches
 import ccas.api.misc.subtypes.*
 import ccas.api.player.{ApiPlayer, ApiPlayerMatches}
-import ccas.utils.client.{ChessComClient, NetworkUnavailableException, onNotFound}
 import ccas.utils.ApiConcurrency
 import ccas.utils.ProgressDisplay
+import ccas.utils.client.{onNotFound, ChessComClient, NetworkUnavailableException}
+import ccas.utils.sql.PostgresClient
+import ccas.utils.sql.PostgresClient.withTransaction
 
 private[history] object HistorySeeding {
 
@@ -163,7 +164,12 @@ private[history] object HistorySeeding {
     entry: UnresolvedBoardPlayer
   ): RIO[PostgresClient, Option[Username]] =
     UsernameRenameResolver.resolveFromBoard(
-      client, entry.username, entry.matchId, entry.board, entry.isTeam1, isLive = false
+      client,
+      entry.username,
+      entry.matchId,
+      entry.board,
+      entry.isTeam1,
+      isLive = false
     )
 
   /** Fetches the club's match listing endpoint and inserts any not-yet-known match IDs as pending. Unchanged
@@ -250,7 +256,14 @@ private[history] object HistorySeeding {
           bar <- ProgressDisplay.progressBar
           _ <- ZIO.foreachParDiscard(toQuery) { case (playerId, username) =>
             seedMatchesForPlayerAllClubs(
-              client, clubId, clubSlug, playerId, username, excludeMatchIds, includeFinished, shared,
+              client,
+              clubId,
+              clubSlug,
+              playerId,
+              username,
+              excludeMatchIds,
+              includeFinished,
+              shared,
               unchangedPlayerCounter
             )
               .foldZIO(
@@ -310,7 +323,14 @@ private[history] object HistorySeeding {
               _ => unchangedCounter.update(_ + 1) *> stampQueriedAllClubs(clubId, otherClubs, playerId).as(0),
               changed =>
                 seedAndStampAllClubs(
-                  clubId, clubSlug, excludeMatchIds, includeFinished, sc, otherClubs, playerId, changed.value
+                  clubId,
+                  clubSlug,
+                  excludeMatchIds,
+                  includeFinished,
+                  sc,
+                  otherClubs,
+                  playerId,
+                  changed.value
                 )
             )
             _ <- sc.queriedPlayers.update(_ + playerId)

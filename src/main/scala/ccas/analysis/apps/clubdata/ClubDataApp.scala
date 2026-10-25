@@ -2,15 +2,15 @@ package ccas.analysis.apps.clubdata
 
 import java.time.{Duration, Instant}
 
-import zio.{Chunk, RIO, Ref, Scope, Task, URIO, ZIO, ZIOAppArgs, ZIOAppDefault}
+import zio.{Chunk, Ref, RIO, Scope, Task, URIO, ZIO, ZIOAppArgs, ZIOAppDefault}
 
+import ccas.analysis.apps.{withClubSlugRenameRecovery, ClubQuery, ClubResolution, ClubSlugRenameResolver}
+import ccas.analysis.apps.ClubSlugRenameResolver.ResolvedClub
 import ccas.analysis.apps.ref.RefHelpers
 import ccas.analysis.tables.{Club, ClubAdmin, ClubMatch, ClubMatchRef, ClubName, Player, Tables}
 import ccas.api.club.ApiClubMatches
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId}
 import ccas.utils.{ApiConcurrency, OutputFile, ProgressDisplay}
-import ccas.analysis.apps.{ClubQuery, ClubResolution, ClubSlugRenameResolver, withClubSlugRenameRecovery}
-import ccas.analysis.apps.ClubSlugRenameResolver.ResolvedClub
 import ccas.utils.client.{BodyStore, ChessComClient, HttpClientLayer}
 import ccas.utils.errors.NotFoundException
 import ccas.utils.sql.PostgresClient
@@ -103,8 +103,8 @@ object ClubDataApp extends ZIOAppDefault {
   private def refreshClubs(clubs: List[Club]): RIO[ProgressDisplay & ChessComClient & PostgresClient, RefreshResult] =
     ZIO.scoped {
       for {
-        client    <- ZIO.service[ChessComClient]
-        total     = clubs.size
+        client <- ZIO.service[ChessComClient]
+        total = clubs.size
         _         <- ZIO.logInfo(s"[ClubData] Refreshing $total clubs")
         bar       <- ProgressDisplay.progressBar
         resultRef <- Ref.make(RefreshResult(0, 0, 0, 0))
@@ -153,10 +153,10 @@ object ClubDataApp extends ZIOAppDefault {
       apiClub = resolved.api
       _ <- Club.upsert(Club.fromApi(apiClub))
 
-      adminUsernames   = apiClub.adminUsernames
+      adminUsernames = apiClub.adminUsernames
       existingAdminIds <- ClubAdmin.selectPlayerIdsByClub(club.clubId)
-      allAdminIds      <- ClubAdminResolver.resolveAndPersistAdmins(client, club.clubId, adminUsernames, existingAdminIds)
-      _                <- logAdminDiff(club, existingAdminIds, allAdminIds)
+      allAdminIds <- ClubAdminResolver.resolveAndPersistAdmins(client, club.clubId, adminUsernames, existingAdminIds)
+      _           <- logAdminDiff(club, existingAdminIds, allAdminIds)
       // Must remain the last step: --min-age relies on fetched_at being stamped only on full success.
       _ <- Club.updateFetchedAt(club.clubId, Instant.now())
     } yield ClubResult(allAdminIds.size, failed = false, adminChanged = allAdminIds != existingAdminIds)
@@ -240,8 +240,8 @@ object ClubDataApp extends ZIOAppDefault {
     club: Club,
     currentNameOption: Option[ClubSlug]
   ): RIO[ProgressDisplay & PostgresClient, Unit] = {
-    val now             = Instant.now()
-    val skipCutoff      = now.minus(ClubAdmin.ApiSkipThreshold)
+    val now               = Instant.now()
+    val skipCutoff        = now.minus(ClubAdmin.ApiSkipThreshold)
     val cachedFreshEnough = club.latestMatchAt.exists(_.isAfter(skipCutoff))
     ZIO.unlessDiscard(cachedFreshEnough) {
       ClubMatch.selectLatestActivityForClub(club.clubId).flatMap { dbLatest =>
@@ -298,8 +298,9 @@ object ClubDataApp extends ZIOAppDefault {
     */
   private def latestTimestamp(matches: ApiClubMatches, now: Instant): Option[Instant] =
     if (matches.registered.nonEmpty) Some(now)
-    else (matches.inProgress.map(_.startTime) ++ matches.finished.map(_.startTime))
-      .map(Instant.ofEpochSecond).maxOption
+    else
+      (matches.inProgress.map(_.startTime) ++ matches.finished.map(_.startTime))
+        .map(Instant.ofEpochSecond).maxOption
 
   /** Opportunistically populates a `ClubMatchRef` for a club that doesn't have one yet, using already-fetched
     * `ApiClubMatches` data. Failures are silently caught — RefApp will pick up any missed clubs on its next run.

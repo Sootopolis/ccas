@@ -7,8 +7,8 @@ import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.analysis.tables.{Club, ManagedClub}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
-import ccas.server.jobs.JobKind
 import ccas.server.ServerTables
+import ccas.server.jobs.JobKind
 import ccas.utils.sql.FreshSchemaLayer
 import ccas.utils.sql.PostgresClient.connectZIO
 
@@ -52,8 +52,8 @@ object TestJobScheduleSql extends ZIOSpecDefault {
   private val clubIdB = ClubId(201)
 
   private val deleteAll = for {
-    _ <- connectZIO { sql"DELETE FROM managed_club".update.run() }
-    _ <- connectZIO { sql"DELETE FROM job_schedule".update.run() }
+    _ <- connectZIO(sql"DELETE FROM managed_club".update.run())
+    _ <- connectZIO(sql"DELETE FROM job_schedule".update.run())
     _ <- Club.upsert(Club(clubIdA, Times.t0, ClubSlug("club-a"), "Club A", None, None, None))
     _ <- Club.upsert(Club(clubIdB, Times.t0, ClubSlug("club-b"), "Club B", None, None, None))
   } yield ()
@@ -261,10 +261,10 @@ object TestJobScheduleSql extends ZIOSpecDefault {
 
   private def testSeedGlobalIdempotent = test("seedGlobalIfAbsent is a no-op on re-seed") {
     for {
-      _       <- deleteAll
-      first   <- JobSchedule.seedGlobalIfAbsent(ScheduleSeed(JobKind.ClubData, 6, enabled = true))
-      second  <- JobSchedule.seedGlobalIfAbsent(ScheduleSeed(JobKind.ClubData, 6, enabled = true))
-      rows    <- globalRows(JobKind.ClubData)
+      _      <- deleteAll
+      first  <- JobSchedule.seedGlobalIfAbsent(ScheduleSeed(JobKind.ClubData, 6, enabled = true))
+      second <- JobSchedule.seedGlobalIfAbsent(ScheduleSeed(JobKind.ClubData, 6, enabled = true))
+      rows   <- globalRows(JobKind.ClubData)
     } yield assertTrue(first == 1, second == 0, rows.size == 1)
   }
 

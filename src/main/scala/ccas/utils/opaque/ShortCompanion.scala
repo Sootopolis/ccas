@@ -1,10 +1,10 @@
 package ccas.utils.opaque
 
 import com.augustnagro.magnum.DbCodec
-import zio.config.magnolia.DeriveConfig
-import zio.json.JsonCodec
 import zio.{Chunk, Config}
 import zio.Config.Error.InvalidData
+import zio.config.magnolia.DeriveConfig
+import zio.json.JsonCodec
 
 trait ShortCompanion extends BaseNumericCompanion[Short] {
   opaque type Type = Short

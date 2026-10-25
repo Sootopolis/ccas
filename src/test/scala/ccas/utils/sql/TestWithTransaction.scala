@@ -3,13 +3,13 @@ package ccas.utils.sql
 import java.sql.SQLException
 import java.time.{Instant, LocalDateTime, ZoneOffset}
 
-import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 import zio.ZIO
+import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.analysis.tables.RunTrigger
 import ccas.api.misc.subtypes.JobRunId
-import ccas.server.jobs.{JobKind, JobRun, JobRunStatus}
 import ccas.server.ServerTables
+import ccas.server.jobs.{JobKind, JobRun, JobRunStatus}
 import ccas.utils.sql.PostgresClient.withTransaction
 
 object TestWithTransaction extends ZIOSpecDefault {

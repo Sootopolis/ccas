@@ -5,11 +5,11 @@ import java.time.{Duration as JDuration, Instant}
 
 import scala.io.StdIn
 
-import zio.{durationLong, Clock, ExitCode, RIO, Ref, Scope, Task, ZEnvironment, ZIO, ZIOAppArgs, ZIOAppDefault}
+import zio.{durationLong, Clock, ExitCode, Ref, RIO, Scope, Task, ZEnvironment, ZIO, ZIOAppArgs, ZIOAppDefault}
 
+import ccas.analysis.apps.{withClubSlugRenameRecovery, ClubQuery, ClubResolution, ClubSlugRenameResolver, NamedClub}
 import ccas.analysis.apps.membership.MembershipApp
 import ccas.analysis.apps.ref.RefHelpers
-import ccas.analysis.apps.{ClubQuery, ClubResolution, ClubSlugRenameResolver, NamedClub, withClubSlugRenameRecovery}
 import ccas.analysis.tables.*
 import ccas.analysis.tables.subtypes.RecruitmentRunId
 import ccas.api.club.{ApiClubMatches, ApiClubMembers}
@@ -118,7 +118,9 @@ object RecruitmentApp extends ZIOAppDefault {
       })
         // A systemic outage aborts instead of mass-marking candidates `Error`; the in-flight `recruitment_run` row
         // stays incomplete (ignored downstream) and the next run retries.
-        .catchSome(NetworkUnavailableException.abortRun("RecruitmentApp", "run left incomplete")(exit(ExitCode.failure)))
+        .catchSome(
+          NetworkUnavailableException.abortRun("RecruitmentApp", "run left incomplete")(exit(ExitCode.failure))
+        )
         .provideSome[Scope](
           ProgressDisplay.live(showProgress = true),
           ChessComClient.live("recruitment"),
@@ -176,7 +178,7 @@ object RecruitmentApp extends ZIOAppDefault {
         if (cumulative) RecruitmentRun.sumCandidatesFoundToday(clubId, alias)
         else ZIO.succeed(0)
       effectiveTarget = (resolvedTarget - alreadyFound) max 0
-      now <- Clock.instant
+      now   <- Clock.instant
       runId <- RecruitmentRun.insert(clubId, criteria.criteriaId, trigger, now, Some(effectiveTarget), jobRunIdOption)
 
       // --- Shared setup ---
@@ -285,8 +287,8 @@ object RecruitmentApp extends ZIOAppDefault {
     * The club's current members among them are not candidates anyway.
     */
   private[recruitment] def formerMembersOf(clubId: ClubId): RIO[PostgresClient, Set[PlayerId]] =
-    (ClubMember.selectClub(clubId) <&> ClubMatchBoard.selectPlayerIdsForClub(clubId)).map {
-      (rows, playedForClub) => rows.map(_.playerId).toSet ++ playedForClub
+    (ClubMember.selectClub(clubId) <&> ClubMatchBoard.selectPlayerIdsForClub(clubId)).map { (rows, playedForClub) =>
+      rows.map(_.playerId).toSet ++ playedForClub
     }
 
   private def runExplorePhase(
@@ -406,8 +408,8 @@ object RecruitmentApp extends ZIOAppDefault {
         else ZIO.succeed(found) // auto-confirm: Api/Scheduled default, and non-interactive `ccas recruit`
 
       evalCount <- ctx.evalCountRef.get
-      clubId    = ctx.runCtx.clubId
-      alias     = ctx.runCtx.alias
+      clubId = ctx.runCtx.clubId
+      alias  = ctx.runCtx.alias
       (finalRun, deferredCount) <- withTransaction {
         for {
           _ <- ZIO.foreachDiscard(confirmed) { c =>

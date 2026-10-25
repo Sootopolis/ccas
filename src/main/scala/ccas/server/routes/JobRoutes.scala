@@ -109,21 +109,24 @@ object JobRoutes {
   }
 
   /** Paste-ready invited usernames for a completed recruitment job (drives `ccas recruit --stdout` and the interactive
-    * confirm/report flows). */
+    * confirm/report flows).
+    */
   private[ccas] case class InvitedUsernames(usernames: List[String])
   object InvitedUsernames {
     given JsonCodec[InvitedUsernames] = DeriveJsonCodec.gen
   }
 
   /** Confirm-endpoint result: `marked` is the actual number of rows flipped Deferred→Invited (may exceed `usernames`
-    * if some invited player id doesn't resolve to a handle), `usernames` is the paste-ready resolved subset. */
+    * if some invited player id doesn't resolve to a handle), `usernames` is the paste-ready resolved subset.
+    */
   private[ccas] case class ConfirmResult(marked: Int, usernames: List[String])
   object ConfirmResult {
     given JsonCodec[ConfirmResult] = DeriveJsonCodec.gen
   }
 
   /** Result of a cancel request: `jobId` echoed back. A 200 means the interrupt was dispatched to a live job fiber
-    * ("cancellation requested"); a missing / already-terminal job is a 404 instead. */
+    * ("cancellation requested"); a missing / already-terminal job is a 404 instead.
+    */
   private[ccas] case class CancelResult(jobId: String)
   object CancelResult {
     given JsonCodec[CancelResult] = DeriveJsonCodec.gen
@@ -196,21 +199,20 @@ object JobRoutes {
     for {
       body   <- parseJsonBody[RecruitmentRequest](req)
       runner <- ZIO.service[JobRunner]
-      result <- submitClubJob(runner, JobKind.Recruitment, body.club, Some(body.toJson)) {
-        (club, jobRunIdOption) =>
-          RecruitmentApp.recruit(
-            clubSlug = club.slug,
-            expectedClubIdOption = Some(club.clubId),
-            alias = body.alias.getOrElse("default"),
-            target = body.target.map(_ min JobCaps.MaxTarget),
-            cumulative = body.cumulative.getOrElse(false),
-            sourceClubs = body.sourceClubs.getOrElse(Nil),
-            timeLimitMinutes = body.timeLimitMinutes.map(_ min JobCaps.MaxTimeLimitMinutes),
-            explore = body.explore.getOrElse(true),
-            trigger = RunTrigger.Api,
-            autoConfirm = body.autoConfirm.getOrElse(true),
-            jobRunIdOption = jobRunIdOption
-          )
+      result <- submitClubJob(runner, JobKind.Recruitment, body.club, Some(body.toJson)) { (club, jobRunIdOption) =>
+        RecruitmentApp.recruit(
+          clubSlug = club.slug,
+          expectedClubIdOption = Some(club.clubId),
+          alias = body.alias.getOrElse("default"),
+          target = body.target.map(_ min JobCaps.MaxTarget),
+          cumulative = body.cumulative.getOrElse(false),
+          sourceClubs = body.sourceClubs.getOrElse(Nil),
+          timeLimitMinutes = body.timeLimitMinutes.map(_ min JobCaps.MaxTimeLimitMinutes),
+          explore = body.explore.getOrElse(true),
+          trigger = RunTrigger.Api,
+          autoConfirm = body.autoConfirm.getOrElse(true),
+          jobRunIdOption = jobRunIdOption
+        )
       }
     } yield jsonResponse(Status.Ok, result)
 
@@ -218,15 +220,14 @@ object JobRoutes {
     for {
       body   <- parseJsonBody[MembershipRequest](req)
       runner <- ZIO.service[JobRunner]
-      results <- submitClubJobs(runner, JobKind.Membership, body.clubs, Some(body.toJson)) {
-        (club, jobRunIdOption) =>
-          MembershipApp.reconcileAndReport(
-            clubSlug = club.slug,
-            expectedClubIdOption = Some(club.clubId),
-            trustUsernames = body.trustUsernames.getOrElse(true),
-            trigger = RunTrigger.Api,
-            jobRunIdOption = jobRunIdOption
-          )
+      results <- submitClubJobs(runner, JobKind.Membership, body.clubs, Some(body.toJson)) { (club, jobRunIdOption) =>
+        MembershipApp.reconcileAndReport(
+          clubSlug = club.slug,
+          expectedClubIdOption = Some(club.clubId),
+          trustUsernames = body.trustUsernames.getOrElse(true),
+          trigger = RunTrigger.Api,
+          jobRunIdOption = jobRunIdOption
+        )
       }
     } yield jsonResponse(Status.Ok, results)
 
@@ -249,17 +250,16 @@ object JobRoutes {
       body   <- parseJsonBody[HistoryRequest](req)
       runner <- ZIO.service[JobRunner]
       refreshMinHours = body.refreshMinHours.orElse(body.refresh.filter(identity).map(_ => 0))
-      results <- submitClubJobs(runner, JobKind.History, body.clubs, Some(body.toJson)) {
-        (club, jobRunIdOption) =>
-          HistoryApp.discover(
-            clubSlug = club.slug,
-            expectedClubIdOption = Some(club.clubId),
-            full = body.full.getOrElse(false),
-            includeFinished = body.includeFinished.getOrElse(false),
-            refreshMinHours = refreshMinHours,
-            trigger = RunTrigger.Api,
-            jobRunIdOption = jobRunIdOption
-          )
+      results <- submitClubJobs(runner, JobKind.History, body.clubs, Some(body.toJson)) { (club, jobRunIdOption) =>
+        HistoryApp.discover(
+          clubSlug = club.slug,
+          expectedClubIdOption = Some(club.clubId),
+          full = body.full.getOrElse(false),
+          includeFinished = body.includeFinished.getOrElse(false),
+          refreshMinHours = refreshMinHours,
+          trigger = RunTrigger.Api,
+          jobRunIdOption = jobRunIdOption
+        )
       }
     } yield jsonResponse(Status.Ok, results)
 
@@ -427,14 +427,18 @@ object JobRoutes {
     }
 
   /** Resolve the recruitment run linked to a job, or 404. Shared by the invited/found/confirm job-scoped endpoints. */
-  private def withRunForJob(jobId: String)(f: RecruitmentRun => RIO[PostgresClient, Response]): RIO[PostgresClient, Response] =
+  private def withRunForJob(
+    jobId: String
+  )(f: RecruitmentRun => RIO[PostgresClient, Response]): RIO[PostgresClient, Response] =
     RecruitmentRun.selectByJobRunId(JobRunId.wrap(jobId)).flatMap {
       case None      => ZIO.succeed(jsonResponse(Status.NotFound, ErrorResponse(s"No recruitment run for job $jobId")))
       case Some(run) => f(run)
     }
 
   /** Wrap a candidate selection as a 200 response of bare resolved usernames. */
-  private def usernamesResponse(select: RIO[PostgresClient, List[RecruitmentCandidate]]): RIO[PostgresClient, Response] =
+  private def usernamesResponse(
+    select: RIO[PostgresClient, List[RecruitmentCandidate]]
+  ): RIO[PostgresClient, Response] =
     select.flatMap(usernamesFor).map(u => jsonResponse(Status.Ok, InvitedUsernames(u)))
 
   /** 404-or-usernames for a job-linked run, selecting candidate rows with `select` (invited or deferred). */

@@ -51,18 +51,18 @@ object TestRefreshSingleMatch extends ZIOSpecDefault {
 
   private def clubMatchRow(matchId: Long, processedBodyHash: Option[String]): ClubMatch =
     ClubMatch(
-      matchId           = ClubMatchId(matchId),
-      name              = s"Match $matchId",
-      status            = ClubMatchStatus.Finished,
-      timeClass         = TimeClass.Daily,
-      startTime         = Some(t0),
-      endTime           = Some(t0.plus(Duration.ofDays(7))),
-      boards            = 10,
-      team1ClubIdOption       = Some(clubId),
-      team1ScoreX2      = 10,
-      team2ClubIdOption       = Some(opponentId),
-      team2ScoreX2      = 10,
-      fetchedAt         = initialFetchedAt,
+      matchId = ClubMatchId(matchId),
+      name = s"Match $matchId",
+      status = ClubMatchStatus.Finished,
+      timeClass = TimeClass.Daily,
+      startTime = Some(t0),
+      endTime = Some(t0.plus(Duration.ofDays(7))),
+      boards = 10,
+      team1ClubIdOption = Some(clubId),
+      team1ScoreX2 = 10,
+      team2ClubIdOption = Some(opponentId),
+      team2ScoreX2 = 10,
+      fetchedAt = initialFetchedAt,
       processedBodyHash = processedBodyHash
     )
 
@@ -108,16 +108,16 @@ object TestRefreshSingleMatch extends ZIOSpecDefault {
     for {
       _ <- Club.upsert(club) *> Club.upsert(opponentClub)
       bodyId <- ApiResponseCache.upsertWithBody(
-        url           = url,
-        body          = cannedBody,
-        etag          = Some("\"v1\""),
-        lastModified  = None,
+        url = url,
+        body = cannedBody,
+        etag = Some("\"v1\""),
+        lastModified = None,
         maxAgeSeconds = Some(cacheMaxAge),
-        contentType   = Some("application/json"),
-        fetchedAt     = cacheFetchedAt
+        contentType = Some("application/json"),
+        fetchedAt = cacheFetchedAt
       )
-      hash <- bodyId.fold[RIO[PostgresClient, Option[String]]](ZIO.none)(ApiResponseBody.hashById)
-      _    <- ClubMatch.upsert(clubMatchRow(matchId.value, hash))
+      hash     <- bodyId.fold[RIO[PostgresClient, Option[String]]](ZIO.none)(ApiResponseBody.hashById)
+      _        <- ClubMatch.upsert(clubMatchRow(matchId.value, hash))
       netCalls <- Ref.make(0)
       routes = Routes(
         Method.GET / "pub" / "match" / long("matchId") -> handler { (_: Long, _: Request) =>
@@ -199,10 +199,10 @@ object TestRefreshSingleMatch extends ZIOSpecDefault {
       // Cache row is within max-age, so the route should never be reached. Returning a normal 200 keeps the failure
       // mode a missed `calls == 0` assertion rather than a propagated HTTP exception.
       runUnchangedCase(
-        matchId        = ClubMatchId(8001),
-        cacheMaxAge    = 3600,
+        matchId = ClubMatchId(8001),
+        cacheMaxAge = 3600,
         cacheFetchedAt = Instant.now(),
-        expectedCalls  = 0
+        expectedCalls = 0
       ) {
         Response.json(cannedBody)
           .addHeader(Header.CacheControl.MaxAge(3600))
@@ -213,10 +213,10 @@ object TestRefreshSingleMatch extends ZIOSpecDefault {
   private def testRevalidatedSkipsPipeline =
     test("Revalidated: stale entry + 304 response skips pipeline, bumps counter and fetched_at") {
       runUnchangedCase(
-        matchId        = ClubMatchId(8002),
-        cacheMaxAge    = 0,
+        matchId = ClubMatchId(8002),
+        cacheMaxAge = 0,
         cacheFetchedAt = Instant.now().minus(Duration.ofHours(1)),
-        expectedCalls  = 1
+        expectedCalls = 1
       ) {
         Response(status = Status.NotModified)
       }
@@ -227,10 +227,10 @@ object TestRefreshSingleMatch extends ZIOSpecDefault {
       // Distinct ETag so the route doesn't coincidentally match a 304 path; identical body bytes so SHA-256 dedupe
       // in `ApiResponseBody.putBody`/`ensureBodyPointer` returns the same `body_id`, yielding `IdenticalBody`.
       runUnchangedCase(
-        matchId        = ClubMatchId(8003),
-        cacheMaxAge    = 0,
+        matchId = ClubMatchId(8003),
+        cacheMaxAge = 0,
         cacheFetchedAt = Instant.now().minus(Duration.ofHours(1)),
-        expectedCalls  = 1
+        expectedCalls = 1
       ) {
         Response.json(cannedBody)
           .addHeader(Header.CacheControl.MaxAge(3600))
@@ -252,11 +252,11 @@ object TestRefreshSingleMatch extends ZIOSpecDefault {
       val matchId          = ClubMatchId(8500)
       // Settled = Finished + fetched_at >= end_time + 90d, and fetched_at < cutoffTime (Instant.now()).
       // Use t0-based offsets (t0 = 2025-06-01) for deterministic dates regardless of suite run-time.
-      val endTime    = t0.plus(Duration.ofDays(7))   // 2025-06-08
-      val fetchedAt  = endTime.plus(Duration.ofDays(95)) // 2025-09-11; past stale window, before "now"
+      val endTime   = t0.plus(Duration.ofDays(7))       // 2025-06-08
+      val fetchedAt = endTime.plus(Duration.ofDays(95)) // 2025-09-11; past stale window, before "now"
       val settledRow = clubMatchRow(matchId.value, None).copy(
-        endTime     = Some(endTime),
-        fetchedAt   = fetchedAt,
+        endTime = Some(endTime),
+        fetchedAt = fetchedAt,
         team1ClubIdOption = Some(isolatedClubId),
         team2ClubIdOption = Some(opponentId)
       )
@@ -270,12 +270,12 @@ object TestRefreshSingleMatch extends ZIOSpecDefault {
             Response.json(permanentBody).status(Status.NotFound)
           }
         )
-        client    <- TestChessComClientSupport.fakeClient(routes)
-        ctx       <- ProcessingContext.make(client, isolatedClubId, isolatedClubSlug, Map.empty, Set.empty)
+        client <- TestChessComClientSupport.fakeClient(routes)
+        ctx    <- ProcessingContext.make(client, isolatedClubId, isolatedClubSlug, Map.empty, Set.empty)
         refreshed <- HistoryProcessing.refreshSettledMatches(ctx, minAgeHours = 0)
-                       .provideSomeEnvironment[PostgresClient](_.add[ProgressDisplay](ProgressDisplay.make(enabled = false)))
-        rowAfter  <- ClubMatch.selectId(matchId)
-        aborted   <- ctx.matchesAborted.get
+          .provideSomeEnvironment[PostgresClient](_.add[ProgressDisplay](ProgressDisplay.make(enabled = false)))
+        rowAfter <- ClubMatch.selectId(matchId)
+        aborted  <- ctx.matchesAborted.get
       } yield assertTrue(
         rowAfter.exists(_.status == ClubMatchStatus.Aborted),
         rowAfter.exists(_.fetchedAt.isAfter(fetchedAt)),
@@ -295,13 +295,13 @@ object TestRefreshSingleMatch extends ZIOSpecDefault {
       for {
         _ <- seedFixtures(matchId.value, None)
         _ <- ApiResponseCache.upsertWithBody(
-          url           = url,
-          body          = cannedBody,
-          etag          = Some("\"v1\""),
-          lastModified  = None,
+          url = url,
+          body = cannedBody,
+          etag = Some("\"v1\""),
+          lastModified = None,
           maxAgeSeconds = Some(3600), // within max-age: would be `Fresh` and skip the network entirely
-          contentType   = Some("application/json"),
-          fetchedAt     = Instant.now()
+          contentType = Some("application/json"),
+          fetchedAt = Instant.now()
         )
         routes = Routes(
           Method.GET / "pub" / "match" / long("matchId") -> handler { (_: Long, _: Request) =>
@@ -315,7 +315,7 @@ object TestRefreshSingleMatch extends ZIOSpecDefault {
         rowAfter       <- ClubMatch.selectId(matchId)
       } yield assertTrue(
         result.left.exists(_.isInstanceOf[JsonDecodingException]),
-        unchangedCount == 0, // never reached the trusted-skip branch
+        unchangedCount == 0,                             // never reached the trusted-skip branch
         rowAfter.exists(_.fetchedAt == initialFetchedAt) // no updateFetchedAt on the failed-decode path
       )
     }
@@ -328,7 +328,7 @@ object TestRefreshSingleMatch extends ZIOSpecDefault {
       val matchId = ClubMatchId(8006)
       val body    = minimalFinishedMatchBody(matchId.value)
       for {
-        _ <- seedFixtures(matchId.value, None)
+        _        <- seedFixtures(matchId.value, None)
         netCalls <- Ref.make(0)
         routes = Routes(
           Method.GET / "pub" / "match" / long("matchId") -> handler { (_: Long, _: Request) =>
@@ -342,11 +342,11 @@ object TestRefreshSingleMatch extends ZIOSpecDefault {
         client <- TestChessComClientSupport.fakeClient(routes)
         ctx    <- ProcessingContext.make(client, clubId, clubSlug, Map.empty, Set.empty)
 
-        _            <- runRefresh(ctx, matchId) // Changed: writes club_match with the fetch's content hash as the marker
-        afterFirst   <- ClubMatch.selectId(matchId)
+        _          <- runRefresh(ctx, matchId) // Changed: writes club_match with the fetch's content hash as the marker
+        afterFirst <- ClubMatch.selectId(matchId)
         markerAfterFirst = afterFirst.flatMap(_.processedBodyHash)
 
-        _             <- runRefresh(ctx, matchId) // Fresh (within max-age): marker matches -> trusted skip
+        _              <- runRefresh(ctx, matchId) // Fresh (within max-age): marker matches -> trusted skip
         callsAfterBoth <- netCalls.get
         unchangedCount <- ctx.refreshMatchUnchanged.get
         afterSecond    <- ClubMatch.selectId(matchId)

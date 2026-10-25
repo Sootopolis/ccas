@@ -47,8 +47,8 @@ object CompletionEmitter {
     ).flatten.mkString("; ")
   }
 
-  private val top: String     = CompletionSpec.topLevel.mkString(" ")
-  private val global: String  = CompletionSpec.globalFlags.mkString(" ")
+  private val top: String        = CompletionSpec.topLevel.mkString(" ")
+  private val global: String     = CompletionSpec.globalFlags.mkString(" ")
   private val valueGuard: String = CompletionSpec.valueFlags.mkString("|")
 
   // Group commands consume two leading words (group + subcommand) before positionals, so their positional `base` is 2.
@@ -68,7 +68,7 @@ object CompletionEmitter {
       "        \"\") COMPREPLY=( $(compgen -W \"" + group.children.mkString(" ") + " --help\" -- \"$cur\") ); return ;;"
     )
     val childArms = CompletionSpec.leavesOf(group.name).map(l => "        " + l.name + ") " + assigns(l) + " ;;")
-    val footer = List("        *) COMPREPLY=(); return ;;", "      esac ;;")
+    val footer    = List("        *) COMPREPLY=(); return ;;", "      esac ;;")
     (header ++ childArms ++ footer).mkString("\n")
   }
 
@@ -179,7 +179,7 @@ object CompletionEmitter {
       "        \"\") compadd -- " + group.children.mkString(" ") + " --help; return ;;"
     )
     val childArms = CompletionSpec.leavesOf(group.name).map(l => "        " + l.name + ") " + assigns(l) + " ;;")
-    val footer = List("        *) return ;;", "      esac ;;")
+    val footer    = List("        *) return ;;", "      esac ;;")
     (header ++ childArms ++ footer).mkString("\n")
   }
 

@@ -5,6 +5,8 @@ import java.time.Instant
 import zio.Chunk
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
+import TestMembershipAppSupport.*
+
 import ccas.analysis.apps.membership.MembershipChange.*
 import ccas.analysis.apps.membership.MembershipChange.MemberChange.*
 import ccas.analysis.apps.membership.MembershipClassify.{PhaseBResult, PhaseCResult}
@@ -12,8 +14,6 @@ import ccas.analysis.apps.membership.MembershipReport.InferredMember
 import ccas.analysis.tables.{ClubMember, Player, PlayerName, PlayerSnapshot}
 import ccas.api.misc.enums.PlayerStatusCategory.{Active, Closed}
 import ccas.api.misc.subtypes.Username
-
-import TestMembershipAppSupport.*
 
 object TestMembershipAppPure extends ZIOSpecDefault {
 
@@ -271,14 +271,14 @@ object TestMembershipAppPure extends ZIOSpecDefault {
     val cUpdated  = Player(pid1, Times.t0, Username("bob"), Closed, None, Times.t1)
     val cArchived = PlayerSnapshot(pid1, Times.t0, Active, None)
     val bMember   = ClubMember.joined(clubId = clubId, playerId = pid0, since = Times.t1)
-    val bClosed   = ClubMember(
+    val bClosed = ClubMember(
       clubId = clubId,
       playerId = pid2,
       since = Times.t0,
       lastSeen = Some(Times.t0),
       until = Some(Times.t1)
     )
-    val cClosed   = ClubMember(
+    val cClosed = ClubMember(
       clubId = clubId,
       playerId = pid1,
       since = Times.t0,
@@ -409,27 +409,28 @@ object TestMembershipAppPure extends ZIOSpecDefault {
     assertTrue(output.contains("Total members: 10 (-2)"))
   }
 
-  private def testShowsInvitationDateOnJoinChanges = test("shows invitation date on join changes but not on other changes") {
-    val invitedAt = Times.t0
-    val summaries = List(
-      MemberChangeSummary(
-        pid0,
-        Username("alice"),
-        Chunk(NewMember(Times.t1), UsernameChange(Times.t2, Username("alice-old")))
-      ),
-      MemberChangeSummary(pid1, Username("bob"), Chunk(JoinedClub(Times.t1)))
-    )
-    val invitations = Map(pid0 -> invitedAt)
-    val rr          = MembershipReport.ReportResult(summaries, Nil, 8, 10, invitations)
-    val output      = MembershipReport.formatReport(rr)
-    val joinedSection = output.substring(output.indexOf("[JOINED]"), output.indexOf("[USERNAME CHANGE]"))
-    val usernameSection = output.substring(output.indexOf("[USERNAME CHANGE]"))
-    assertTrue(
-      joinedSection.contains(s"alice — at ${Times.t1} — invited at $invitedAt"),
-      !joinedSection.contains("bob — at ${Times.t1} — invited"),
-      !usernameSection.contains("invited")
-    )
-  }
+  private def testShowsInvitationDateOnJoinChanges =
+    test("shows invitation date on join changes but not on other changes") {
+      val invitedAt = Times.t0
+      val summaries = List(
+        MemberChangeSummary(
+          pid0,
+          Username("alice"),
+          Chunk(NewMember(Times.t1), UsernameChange(Times.t2, Username("alice-old")))
+        ),
+        MemberChangeSummary(pid1, Username("bob"), Chunk(JoinedClub(Times.t1)))
+      )
+      val invitations     = Map(pid0 -> invitedAt)
+      val rr              = MembershipReport.ReportResult(summaries, Nil, 8, 10, invitations)
+      val output          = MembershipReport.formatReport(rr)
+      val joinedSection   = output.substring(output.indexOf("[JOINED]"), output.indexOf("[USERNAME CHANGE]"))
+      val usernameSection = output.substring(output.indexOf("[USERNAME CHANGE]"))
+      assertTrue(
+        joinedSection.contains(s"alice — at ${Times.t1} — invited at $invitedAt"),
+        !joinedSection.contains("bob — at ${Times.t1} — invited"),
+        !usernameSection.contains("invited")
+      )
+    }
 
   private def testShowsInvitationDateOnRejoinedChanges = test("shows invitation date on rejoined changes") {
     val invitedAt   = Times.t1

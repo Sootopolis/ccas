@@ -3,8 +3,8 @@ package ccas.utils
 import java.io.{ByteArrayOutputStream, PrintStream}
 
 import io.netty.handler.timeout.ReadTimeoutException
-import zio.stream.SubscriptionRef
 import zio.{Cause, LogLevel, Promise, ZIO}
+import zio.stream.SubscriptionRef
 import zio.test.{assertCompletes, assertTrue, Spec, ZIOSpecDefault}
 
 object TestProgressBar extends ZIOSpecDefault {
@@ -239,7 +239,7 @@ object TestProgressBar extends ZIOSpecDefault {
           b1 <- display.addBarScoped
           b2 <- display.addBarScoped
           _  <- b1.print(1, 10, "Alpha")
-          _  <- b2.print(2, 10, "Beta") // now a two-line block
+          _  <- b2.print(2, 10, "Beta")  // now a two-line block
           _  <- b1.print(3, 10, "Alpha") // redraw => cursor up over the two lines
         } yield ()
       }
@@ -248,8 +248,8 @@ object TestProgressBar extends ZIOSpecDefault {
       assertTrue(
         out.contains("Alpha"),
         out.contains("Beta"),
-        out.contains("\n"),          // bars occupy their own lines
-        out.contains(s"$esc[1A")     // moved up one row to repaint the two-line block
+        out.contains("\n"),      // bars occupy their own lines
+        out.contains(s"$esc[1A") // moved up one row to repaint the two-line block
       )
     }
   }
@@ -333,19 +333,20 @@ object TestProgressBar extends ZIOSpecDefault {
     * emitted each line. Any other co-present annotation still renders as trailing `k=v`, and `src` itself is not
     * duplicated there.
     */
-  private def testSourcedRendersPrefixTag = test("sourced renders a bracketed prefix; other annotations stay trailing") {
-    val effect = ProgressDisplay.sourced("membership/london-cc")(
-      ZIO.logAnnotate("run", "abc123")(ZIO.logInfo("reconciled"))
-    )
-    withLogCapture(effect).map { case (_, out) =>
-      val clean = stripAnsi(out)
-      assertTrue(
-        clean.contains("] [membership/london-cc] reconciled"),
-        clean.contains("run=abc123"),
-        !clean.contains("src=")
+  private def testSourcedRendersPrefixTag =
+    test("sourced renders a bracketed prefix; other annotations stay trailing") {
+      val effect = ProgressDisplay.sourced("membership/london-cc")(
+        ZIO.logAnnotate("run", "abc123")(ZIO.logInfo("reconciled"))
       )
+      withLogCapture(effect).map { case (_, out) =>
+        val clean = stripAnsi(out)
+        assertTrue(
+          clean.contains("] [membership/london-cc] reconciled"),
+          clean.contains("run=abc123"),
+          !clean.contains("src=")
+        )
+      }
     }
-  }
 
   /** `stripSourceTag` (used by the per-job file sink) removes only the source prefix directly abutting the level
     * bracket, leaving a message that itself starts with a `[...]` token — e.g. the reconciliation `[LEFT CLUB]`
@@ -353,7 +354,9 @@ object TestProgressBar extends ZIOSpecDefault {
     */
   private def testStripSourceTag = test("stripSourceTag removes the source prefix and preserves a bracketed message") {
     assertTrue(
-      ProgressDisplay.stripSourceTag("[INFO 00:00:00] [Membership/london-cc] reconciled") == "[INFO 00:00:00] reconciled",
+      ProgressDisplay.stripSourceTag(
+        "[INFO 00:00:00] [Membership/london-cc] reconciled"
+      ) == "[INFO 00:00:00] reconciled",
       ProgressDisplay.stripSourceTag("[INFO 00:00:00] [Membership/x] [LEFT CLUB]") == "[INFO 00:00:00] [LEFT CLUB]",
       ProgressDisplay.stripSourceTag("[INFO 00:00:00] no tag here") == "[INFO 00:00:00] no tag here"
     )

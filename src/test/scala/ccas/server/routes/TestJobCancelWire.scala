@@ -7,12 +7,12 @@ import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 import ccas.analysis.tables.RunTrigger
 import ccas.api.misc.subtypes.JobRunId
 import ccas.cli.{CcasApiClient, CliError, JobFollower}
+import ccas.server.ServerTables
 import ccas.server.jobs.{JobKind, JobRun, JobRunner, JobRunStatus}
 import ccas.server.routes.JobRoutes.CancelResult
-import ccas.server.ServerTables
+import ccas.utils.ProgressDisplay
 import ccas.utils.client.TestChessComClientSupport
 import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
-import ccas.utils.ProgressDisplay
 
 /** End-to-end wire smoke for job cancellation: a REAL zio-http server bound to an ephemeral port serving the REAL
   * `JobRoutes`, driven by the REAL `CcasApiClient` (the CLI's HTTP client) over the loopback, backed by the REAL
@@ -91,7 +91,13 @@ object TestJobCancelWire extends ZIOSpecDefault {
         started <- Promise.make[Nothing, Unit]
         id      <- runner.submit(JobKind.MatchRef, None, None, RunTrigger.Cli, _ => started.succeed(()) *> ZIO.never)
         _       <- started.await
-        follower = JobFollower(api, maxWait = 60.seconds, reconnectBackoff = 1.second, maxReconnects = 1000, showProgress = false)
+        follower = JobFollower(
+          api,
+          maxWait = 60.seconds,
+          reconnectBackoff = 1.second,
+          maxReconnects = 1000,
+          showProgress = false
+        )
         fiber <- follower.followJob(JobRunId.unwrap(id)).fork
         _ <- (ZIO.sleep(20.millis) *> fiber.status)
           .repeatUntil { case _: Fiber.Status.Suspended => true; case _ => false }

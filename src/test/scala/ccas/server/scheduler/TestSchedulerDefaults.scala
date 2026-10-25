@@ -17,7 +17,7 @@ object TestSchedulerDefaults extends ZIOSpecDefault {
 
   override def spec: Spec[Any, Throwable] = suite("TestSchedulerDefaults")(
     test("fromConfig returns the shipped defaults") {
-      val seeds = SchedulerDefaults.fromConfig(shipped)
+      val seeds  = SchedulerDefaults.fromConfig(shipped)
       val byKind = seeds.map(s => s.kind -> s).toMap
       assertTrue(
         seeds.size == 2,

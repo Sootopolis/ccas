@@ -32,14 +32,14 @@ private[ccas] case class ClientStatsAccumulator(
   cacheMisses: Long = 0,
   cacheUnserved: Long = 0
 ) {
-  def incRequests: ClientStatsAccumulator           = copy(requests = requests + 1)
-  def incSuccesses: ClientStatsAccumulator          = copy(successes = successes + 1)
-  def incFailures: ClientStatsAccumulator           = copy(failures = failures + 1)
-  def incConnectionErrors: ClientStatsAccumulator   = copy(connectionErrors = connectionErrors + 1)
-  def incThrottleDowns: ClientStatsAccumulator      = copy(throttleDowns = throttleDowns + 1)
-  def incCacheHit: ClientStatsAccumulator           = copy(cacheHits = cacheHits + 1)
-  def incCacheRevalidation: ClientStatsAccumulator  = copy(cacheRevalidations = cacheRevalidations + 1)
-  def incCacheMiss: ClientStatsAccumulator          = copy(cacheMisses = cacheMisses + 1)
+  def incRequests: ClientStatsAccumulator          = copy(requests = requests + 1)
+  def incSuccesses: ClientStatsAccumulator         = copy(successes = successes + 1)
+  def incFailures: ClientStatsAccumulator          = copy(failures = failures + 1)
+  def incConnectionErrors: ClientStatsAccumulator  = copy(connectionErrors = connectionErrors + 1)
+  def incThrottleDowns: ClientStatsAccumulator     = copy(throttleDowns = throttleDowns + 1)
+  def incCacheHit: ClientStatsAccumulator          = copy(cacheHits = cacheHits + 1)
+  def incCacheRevalidation: ClientStatsAccumulator = copy(cacheRevalidations = cacheRevalidations + 1)
+  def incCacheMiss: ClientStatsAccumulator         = copy(cacheMisses = cacheMisses + 1)
 
   /** A cache entry already counted as served could not actually be served, forcing a network refetch.
     *
@@ -48,23 +48,24 @@ private[ccas] case class ClientStatsAccumulator(
     * which nothing enforces. Read it as an estimate, not an identity — and see
     * `docs/adr/0007-response-caching-in-postgres.md` for why the counter stays additive rather than retracting.
     */
-  def incCacheUnserved: ClientStatsAccumulator      = copy(cacheUnserved = cacheUnserved + 1)
+  def incCacheUnserved: ClientStatsAccumulator = copy(cacheUnserved = cacheUnserved + 1)
 
   /** True if this session did anything worth persisting. `requests` covers every network request
     * (cacheMisses and cacheRevalidations both ride along with `incRequests`); `cacheHits` catches the one case
     * where a session did only Fresh max-age hits and never touched the network.
     */
   def hasActivity: Boolean = requests > 0 || cacheHits > 0
+
   /** Record a Cloudflare challenge 403 at the given permit tier, incrementing both the total and per-tier counters. */
   def incCf403AtTier(tier: Int): ClientStatsAccumulator =
     copy(
       errorsCf403 = errorsCf403 + 1,
       errorsCf403ByTier = errorsCf403ByTier.updated(tier, errorsCf403ByTier.getOrElse(tier, 0L) + 1)
     )
-  def updatePeak(n: Int): ClientStatsAccumulator  = copy(peakConcurrent = peakConcurrent.max(n))
-  def addGateWait(ms: Long): ClientStatsAccumulator = copy(gateWaitMs = gateWaitMs + ms)
-  def addEmaDelay(ms: Long): ClientStatsAccumulator = copy(emaDelayMs = emaDelayMs + ms)
-  def addActiveMs(ms: Long): ClientStatsAccumulator = copy(activeMs = activeMs + ms)
+  def updatePeak(n: Int): ClientStatsAccumulator     = copy(peakConcurrent = peakConcurrent.max(n))
+  def addGateWait(ms: Long): ClientStatsAccumulator  = copy(gateWaitMs = gateWaitMs + ms)
+  def addEmaDelay(ms: Long): ClientStatsAccumulator  = copy(emaDelayMs = emaDelayMs + ms)
+  def addActiveMs(ms: Long): ClientStatsAccumulator  = copy(activeMs = activeMs + ms)
   def addThrottled(ms: Long): ClientStatsAccumulator = copy(throttledMs = throttledMs + ms)
 
   /** Increment the attempts counter AND the per-tier attempts counter for the current permit level. */
@@ -182,6 +183,7 @@ private[ccas] case class ClientStatsAccumulator(
 }
 
 private[ccas] object ClientStatsAccumulator {
+
   /** Upper-exclusive boundaries for latency histogram buckets, in milliseconds. A latency < 50 lands in bucket 0, a
     * latency in [50, 100) lands in bucket 1, etc. Values >= 1000 land in the final overflow bucket.
     */

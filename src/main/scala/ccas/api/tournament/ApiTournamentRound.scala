@@ -1,11 +1,11 @@
 package ccas.api.tournament
 
+import zio.Chunk
 import zio.http.URL
 import zio.json.{jsonMemberNames, JsonDecoder, SnakeCase}
-import zio.Chunk
 
-import ccas.api.misc.subtypes.{TournamentSlug, Username}
 import ccas.api.misc.Hosts
+import ccas.api.misc.subtypes.{TournamentSlug, Username}
 
 @jsonMemberNames(SnakeCase)
 final case class ApiTournamentRound(

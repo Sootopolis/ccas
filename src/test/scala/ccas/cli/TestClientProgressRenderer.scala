@@ -40,11 +40,11 @@ object TestClientProgressRenderer extends ZIOSpecDefault {
         } yield afterAdd
       }.map { case (afterAdd, out) =>
         assertTrue(
-          afterAdd.keySet == Set(0),        // tracked under the server-assigned bar id
+          afterAdd.keySet == Set(0), // tracked under the server-assigned bar id
           out.contains("Working"),
-          out.contains("50.0%"),            // 5/10 rendered client-side
-          out.contains("80.0%"),            // updated to 8/10
-          out.contains("█"),                // block bar drawn locally from raw current/total
+          out.contains("50.0%"), // 5/10 rendered client-side
+          out.contains("80.0%"), // updated to 8/10
+          out.contains("█"),     // block bar drawn locally from raw current/total
           out.contains("░")
         )
       }
@@ -67,8 +67,8 @@ object TestClientProgressRenderer extends ZIOSpecDefault {
     test("clear finishes every remaining bar and forgets them") {
       withRenderer { (renderer, ref) =>
         for {
-          _         <- renderer.render(frame(BarSnapshot(0, 1, 10, "A"), BarSnapshot(1, 2, 10, "B")))
-          _         <- renderer.clear
+          _          <- renderer.render(frame(BarSnapshot(0, 1, 10, "A"), BarSnapshot(1, 2, 10, "B")))
+          _          <- renderer.clear
           afterClear <- ref.get
         } yield afterClear
       }.map { case (afterClear, _) =>

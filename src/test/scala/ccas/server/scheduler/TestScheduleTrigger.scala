@@ -8,7 +8,7 @@ object TestScheduleTrigger extends ZIOSpecDefault {
   override def spec: Spec[Any, Any] = suite("TestScheduleTrigger")(
     test("normalize prepends a seconds field and maps unix day wildcards onto cron4s's `?` rule") {
       assertTrue(
-        ScheduleTrigger.normalize("0 9 * * *") == Right("0 0 9 * * ?"),    // every day  -> blank the dow
+        ScheduleTrigger.normalize("0 9 * * *") == Right("0 0 9 * * ?"),       // every day  -> blank the dow
         ScheduleTrigger.normalize("0 15 * * MON") == Right("0 0 15 ? * MON"), // weekday    -> blank the dom
         ScheduleTrigger.normalize("0 9 1 * *") == Right("0 0 9 1 * ?")        // day-of-month -> blank the dow
       )

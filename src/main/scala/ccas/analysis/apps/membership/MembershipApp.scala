@@ -1,11 +1,12 @@
 package ccas.analysis.apps.membership
 
 import java.time.Instant
+
 import scala.annotation.tailrec
 
 import zio.{Chunk, Clock, ExitCode, IO, NonEmptyChunk, RIO, Scope, Task, ZIO, ZIOAppArgs, ZIOAppDefault}
 
-import ccas.analysis.apps.{ClubQuery, ClubResolution, ClubSlugRenameResolver, NamedClub, withClubSlugRenameRecovery}
+import ccas.analysis.apps.{withClubSlugRenameRecovery, ClubQuery, ClubResolution, ClubSlugRenameResolver, NamedClub}
 import ccas.analysis.apps.membership.MembershipChange.*
 import ccas.analysis.apps.membership.MembershipChange.MemberChange.JoinedClub
 import ccas.analysis.tables.*
@@ -19,9 +20,9 @@ import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.withTransaction
 
 object MembershipApp extends ZIOAppDefault {
-  private val SINCE = "--since"
-  private val UNTIL = "--until"
-  private val help = s"Usage: MembershipApp <club-slug> [club-slug ...] [$SINCE <date>] [$UNTIL <date>]"
+  private val SINCE      = "--since"
+  private val UNTIL      = "--until"
+  private val help       = s"Usage: MembershipApp <club-slug> [club-slug ...] [$SINCE <date>] [$UNTIL <date>]"
   private val MEMBERSHIP = "membership"
 
   override def run: RIO[ZIOAppArgs & Scope, Unit] =
@@ -40,7 +41,11 @@ object MembershipApp extends ZIOAppDefault {
                 trigger = RunTrigger.Cli,
                 jobRunIdOption = None
               )
-              _ <- OutputFile.writeAndLog(MEMBERSHIP, clubName, MembershipReport.formatReconciliation(result, invitations))
+              _ <- OutputFile.writeAndLog(
+                MEMBERSHIP,
+                clubName,
+                MembershipReport.formatReconciliation(result, invitations)
+              )
             } yield ()
           case SinceNow(since) =>
             for {
@@ -84,11 +89,11 @@ object MembershipApp extends ZIOAppDefault {
       slugs: List[ClubSlug],
       flags: Map[String, String]
     ): Either[String, (List[ClubSlug], Map[String, String])] = remaining match {
-      case Nil                                      => Right((slugs.reverse, flags))
-      case (SINCE | UNTIL) :: value :: rest => loop(rest, slugs, flags + (remaining.head -> value))
-      case (SINCE | UNTIL) :: Nil           => Left(s"${remaining.head} requires a value")
-      case flag :: _ if flag.startsWith("--")       => Left(s"Unknown flag: $flag")
-      case slug :: rest                             => loop(rest, ClubSlug.wrap(slug) :: slugs, flags)
+      case Nil                                => Right((slugs.reverse, flags))
+      case (SINCE | UNTIL) :: value :: rest   => loop(rest, slugs, flags + (remaining.head -> value))
+      case (SINCE | UNTIL) :: Nil             => Left(s"${remaining.head} requires a value")
+      case flag :: _ if flag.startsWith("--") => Left(s"Unknown flag: $flag")
+      case slug :: rest                       => loop(rest, ClubSlug.wrap(slug) :: slugs, flags)
     }
     ZIO.fromEither(loop(args.toList, Nil, Map.empty))
       .mapError(BadRequestException(_))
@@ -102,9 +107,9 @@ object MembershipApp extends ZIOAppDefault {
 
   private def parseRunMode(flags: Map[String, String]): Task[RunMode] =
     (flags.get(SINCE), flags.get(UNTIL)) match {
-      case (None, None) => ZIO.succeed(ReconcileOnly)
-      case (None, Some(_)) => ZIO.fail(BadRequestException("--until requires --since"))
-      case (Some(sinceStr), None) => parseDateArg(sinceStr).map(SinceNow(_))
+      case (None, None)                     => ZIO.succeed(ReconcileOnly)
+      case (None, Some(_))                  => ZIO.fail(BadRequestException("--until requires --since"))
+      case (Some(sinceStr), None)           => parseDateArg(sinceStr).map(SinceNow(_))
       case (Some(sinceStr), Some(untilStr)) => parseDateArg(sinceStr).zip(parseDateArg(untilStr)).map(SinceUntil(_, _))
     }
 
@@ -156,11 +161,11 @@ object MembershipApp extends ZIOAppDefault {
       startedAt <- Clock.instant
       client    <- ZIO.service[ChessComClient]
       resolved  <- ClubSlugRenameResolver.fetchExpecting(client, clubSlug, expectedClubIdOption)
-      apiClub   = resolved.api
-      clubId    = apiClub.clubId
-      club      = Club.fromApi(apiClub)
-      _         <- Club.upsert(club)
-      runId     <- MembershipRun.insert(clubId, trigger, startedAt, jobRunIdOption)
+      apiClub = resolved.api
+      clubId  = apiClub.clubId
+      club    = Club.fromApi(apiClub)
+      _     <- Club.upsert(club)
+      runId <- MembershipRun.insert(clubId, trigger, startedAt, jobRunIdOption)
       saved <- saveRoster(
         client = client,
         slug = resolved.slug,
@@ -326,12 +331,12 @@ object MembershipApp extends ZIOAppDefault {
         jobRunIdOption = jobRunIdOption
       )
       invitations <- MembershipReport.lookupJoinInvitations(result.clubId, result.changes.toList)
-                       .catchAll { e =>
-                         ZIO
-                           .logWarning(s"Join-invitation lookup failed for club ${result.clubId}: ${e.getMessage}")
-                           .as(Map.empty[PlayerId, Instant])
-                       }
-      _           <- MembershipReport.reportReconciliation(result, invitations)
+        .catchAll { e =>
+          ZIO
+            .logWarning(s"Join-invitation lookup failed for club ${result.clubId}: ${e.getMessage}")
+            .as(Map.empty[PlayerId, Instant])
+        }
+      _ <- MembershipReport.reportReconciliation(result, invitations)
     } yield (result, invitations)
 
   // Belt-and-suspenders against a second rename since `fetchExpecting` resolved `slug`. A roster is built for each

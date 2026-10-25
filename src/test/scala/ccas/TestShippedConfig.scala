@@ -22,7 +22,9 @@ object TestShippedConfig extends ZIOSpecDefault {
   private val MustExist = ConfigParseOptions.defaults().setAllowMissing(false)
 
   override def spec: Spec[Any, Throwable] = suite("ShippedConfig")(
-    test("no path setting in the shipped application.conf has a literal default, so none resolves against the launch directory") {
+    test(
+      "no path setting in the shipped application.conf has a literal default, so none resolves against the launch directory"
+    ) {
       for {
         resolved <- ZIO.attempt {
           ConfigFactory

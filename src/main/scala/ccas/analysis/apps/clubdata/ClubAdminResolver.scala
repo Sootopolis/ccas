@@ -6,7 +6,6 @@ import ccas.analysis.apps.{PlayerUpdater, UsernameRenameResolver}
 import ccas.analysis.tables.{ClubAdmin, PlayerName}
 import ccas.api.misc.subtypes.{ClubId, PlayerId, Username}
 import ccas.api.player.ApiPlayer
-
 import ccas.utils.client.{ChessComClient, HttpStatusException}
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.withTransaction

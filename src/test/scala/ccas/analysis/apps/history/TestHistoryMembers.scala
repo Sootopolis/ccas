@@ -11,10 +11,10 @@ import ccas.analysis.apps.recruitment.RecruitmentTestSupport.{apiClubJson, apiCl
 import ccas.analysis.tables.{Club, ClubMember, Player, Tables}
 import ccas.api.misc.enums.PlayerStatusCategory
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
+import ccas.utils.ProgressDisplay
 import ccas.utils.client.TestChessComClientSupport
 import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
 import ccas.utils.sql.PostgresClient.connectZIO
-import ccas.utils.ProgressDisplay
 
 /** The players a History run starts from, whose match lists it queries. */
 object TestHistoryMembers extends ZIOSpecDefault {

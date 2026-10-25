@@ -5,19 +5,16 @@ import java.nio.file.{Files, Path}
 import java.sql.SQLException
 import java.time.temporal.ChronoUnit
 
-import ccas.utils.sql.PostgresClient
-import ccas.utils.sql.PostgresClient.withTransaction
-import zio.json.EncoderOps
-import zio.stream.{SubscriptionRef, ZStream}
 import zio.{
+  durationInt,
   Cause,
   Clock,
   Duration,
   Fiber,
   Promise,
+  Ref,
   RIO,
   RLayer,
-  Ref,
   Schedule,
   Scope,
   Task,
@@ -25,15 +22,18 @@ import zio.{
   URIO,
   ZEnvironment,
   ZIO,
-  ZLayer,
-  durationInt
+  ZLayer
 }
+import zio.json.EncoderOps
+import zio.stream.{SubscriptionRef, ZStream}
 
 import ccas.analysis.tables.{AppSetting, Club, RunTrigger}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId}
-import ccas.utils.client.ChessComClient
-import ccas.utils.errors.{ConflictException, safeMessage}
 import ccas.utils.{AppDir, BarSnapshot, JobLogSink, ProgressDisplay, ProgressSnapshot}
+import ccas.utils.client.ChessComClient
+import ccas.utils.errors.{safeMessage, ConflictException}
+import ccas.utils.sql.PostgresClient
+import ccas.utils.sql.PostgresClient.withTransaction
 
 /** Why a job's logs might not stream, so the route can tell an unknown job from one whose log has aged out instead of
   * answering both with an empty success (#244).
@@ -157,11 +157,11 @@ object JobRunner {
         // The layer's own scope owns the job fibers (see `submit`), detaching each from the request that submitted it,
         // and interrupts any still in flight when the layer is released, normally none after `interruptAll`. `forkIn`
         // self-cleans — a job's child scope closes when its fiber exits — so completed jobs don't accumulate.
-        layerScope <- ZIO.scope
+        layerScope       <- ZIO.scope
         configuredLogDir <- LogDir.fromConfig
         logDir           <- prepareLogDir(configuredLogDir)
-        now <- Clock.instant
-        _   <- JobRun.markOrphansAsFailed(now).provideEnvironment(ZEnvironment(pgClient))
+        now              <- Clock.instant
+        _                <- JobRun.markOrphansAsFailed(now).provideEnvironment(ZEnvironment(pgClient))
       } yield new JobRunnerLive(
         display,
         client,
@@ -214,10 +214,10 @@ object JobRunner {
             _ <- ZIO.foreachDiscard(existing) { job =>
               cancelRequested.get.flatMap(pending => ZIO.fail(conflictError(pending.contains(job.id))))
             }
-            id   = JobRunId.generate()
+            id = JobRunId.generate()
             now <- Clock.instant
             jobRun = JobRun(id, kind, clubIdOption, trigger, JobRunStatus.Running, params, now, None, None)
-            _   <- JobRun.insert(jobRun)
+            _ <- JobRun.insert(jobRun)
           } yield id
         }
         // Source tag for this job's log lines (`[Kind/slug]`), resolved best-effort — a missing club or read failure
@@ -387,9 +387,9 @@ object JobRunner {
           now    <- Clock.instant
           // `completions` and not `runningFibers`: `release` closes the sink before de-registering (see `submit`),
           // so an id is present here for at least as long as its log file is open.
-          live <- completions.get.map(_.keySet.map(JobRunId.unwrap))
-          swept  <- FileSink.sweepBefore(logDir, now.minus(window.toLong, ChronoUnit.DAYS), live)
-          _      <- ZIO.logInfo(s"Retention sweep: $swept job log(s) (>${window}d) from $logDir")
+          live  <- completions.get.map(_.keySet.map(JobRunId.unwrap))
+          swept <- FileSink.sweepBefore(logDir, now.minus(window.toLong, ChronoUnit.DAYS), live)
+          _     <- ZIO.logInfo(s"Retention sweep: $swept job log(s) (>${window}d) from $logDir")
         } yield swept)
           .tapError(t => ZIO.logWarning(s"Job-log retention sweep failed: ${t.safeMessage}"))
           .orElseSucceed(0)
@@ -440,7 +440,8 @@ object JobRunner {
           job    <- jobChannel.fold(ZIO.succeed(Map.empty[Int, BarSnapshot]))(_.get)
         } yield global ++ job
       // Floor the interval so a mis-set 0/negative can't busy-loop the sampler.
-      val interval = if (refreshInterval.toNanos > MinRefreshInterval.toNanos) { refreshInterval } else { MinRefreshInterval }
+      val interval = if (refreshInterval.toNanos > MinRefreshInterval.toNanos) { refreshInterval }
+      else { MinRefreshInterval }
       val frames =
         ZStream
           .fromZIO(readState)

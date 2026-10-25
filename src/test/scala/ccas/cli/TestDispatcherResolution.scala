@@ -68,10 +68,10 @@ object TestDispatcherResolution extends ZIOSpecDefault {
     interactive: Boolean
   ): Task[(ClubResolution, List[ClubTarget])] =
     for {
-      queued  <- Ref.make(responses)
-      seen    <- Ref.make(List.empty[ClubTarget])
-      _       <- ZIO.foreachDiscard(answer)(TestConsole.feedLines(_))
-      result  <- Dispatcher.sendSettlingAmbiguity(
+      queued <- Ref.make(responses)
+      seen   <- Ref.make(List.empty[ClubTarget])
+      _      <- ZIO.foreachDiscard(answer)(TestConsole.feedLines(_))
+      result <- Dispatcher.sendSettlingAmbiguity(
         target = ClubTarget.byId(ClubId(7)),
         resolutionsOf = (resolution: ClubResolution) => List(resolution),
         interactive = interactive

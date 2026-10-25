@@ -154,8 +154,9 @@ object TestStatsAggregation extends ZIOSpecDefault {
     }
 
   private def testBothFairplayFlagsDrawsInFairplayView = test("both fairplay flags → draws in fairplay view") {
-    val rows = List(board(player1, g1 = Some(BoardGameWinner.Team1), g2 = Some(BoardGameWinner.Team1),
-      ourFP = true, oppFP = true))
+    val rows = List(
+      board(player1, g1 = Some(BoardGameWinner.Team1), g2 = Some(BoardGameWinner.Team1), ourFP = true, oppFP = true)
+    )
     val result = StatsUtils.aggregate(rows, displayNames)
     assertTrue(
       result.head.fairPlay.draws == 2,
@@ -228,7 +229,7 @@ object TestStatsAggregation extends ZIOSpecDefault {
   }
 
   private def testSortedByUsernameCaseInsensitively = test("sorted by username case-insensitively") {
-    val rows = List(board(player2), board(player1))
+    val rows   = List(board(player2), board(player1))
     val result = StatsUtils.aggregate(rows, displayNames)
     assertTrue(
       result.head.displayName == "alice",

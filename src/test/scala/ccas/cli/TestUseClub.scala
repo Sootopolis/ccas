@@ -147,7 +147,7 @@ object TestUseClub extends ZIOSpecDefault {
           currentClubOption = None,
           server = Server
         )
-        err  <- TestConsole.outputErr
+        err <- TestConsole.outputErr
       } yield assertTrue(
         code == ExitCode(2),
         err.exists(_.contains("ccas use-club --clear team-alpha"))
@@ -275,8 +275,10 @@ object TestUseClub extends ZIOSpecDefault {
     // matchedId is the fallback's id. `club.slug` carries no unique index since #254, so the managed set can show one
     // name twice — and then no id is safe to store.
     test("matchedId: the one managed club answering to the slug, case-insensitively") {
-      assertTrue(UseClub.matchedId("Team-Alpha", Some(List(managed(7, "team-alpha"), managed(8, "team-beta"))))
-        .contains(ClubId(7)))
+      assertTrue(
+        UseClub.matchedId("Team-Alpha", Some(List(managed(7, "team-alpha"), managed(8, "team-beta"))))
+          .contains(ClubId(7))
+      )
     },
     test("matchedId: two managed clubs showing one slug upgrade nothing") {
       val ambiguous = Some(List(managed(7, "team-alpha"), managed(8, "team-alpha")))

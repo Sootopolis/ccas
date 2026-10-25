@@ -1,9 +1,9 @@
 package ccas.api.clubmatch
 
+import zio.Chunk
 import zio.http.URL
 import zio.json.{jsonDiscriminator, jsonHint, jsonMemberNames, DeriveJsonDecoder, JsonDecoder, SnakeCase}
 import zio.json.ast.Json
-import zio.Chunk
 
 import ccas.api.clubmatch.ApiDailyMatch.{ApiDailyMatchSettings, ApiDailyMatchTeams}
 import ccas.api.misc.*

@@ -2,19 +2,19 @@ package ccas.utils.client
 
 import java.net.UnknownHostException
 
-import ccas.utils.sql.PostgresClient
-import zio.{durationInt, Duration, Fiber, RIO, Ref, Scope, Semaphore, Task, Trace, URLayer, ZIO, ZLayer}
+import zio.{durationInt, Duration, Fiber, Ref, RIO, Scope, Semaphore, Task, Trace, URLayer, ZIO, ZLayer}
 import zio.http.*
 import zio.json.*
 
 import ccas.utils.ProgressDisplay
+import ccas.utils.sql.PostgresClient
 
 object TestChessComClientSupport {
 
   case class Payload(value: String)
   given JsonDecoder[Payload] = DeriveJsonDecoder.gen[Payload]
 
-  val testUrl: URL  = URL.decode("http://test.example.com/api").toOption.get
+  val testUrl: URL     = URL.decode("http://test.example.com/api").toOption.get
   val jsonBody: String = """{"value":"ok"}"""
   val cfBody: String =
     """<html><head><title>Just a moment...</title></head><body><script src="/cdn-cgi/challenge-platform/scripts/jsd/main.js"></script></body></html>"""
@@ -50,20 +50,24 @@ object TestChessComClientSupport {
     minRequestDelayMs: Long = 0,
     minTierObservation: Duration = Duration.Zero,
     emaTauMs: Long = 500
-  ): ZIO[Scope & PostgresClient & BodyStore, Nothing, (ChessComClient, Ref[ChessComClient.ThrottleState], Ref[ClientStatsAccumulator])] =
+  ): ZIO[
+    Scope & PostgresClient & BodyStore,
+    Nothing,
+    (ChessComClient, Ref[ChessComClient.ThrottleState], Ref[ClientStatsAccumulator])
+  ] =
     for {
-      pgClient      <- ZIO.service[PostgresClient]
-      bodyStore     <- ZIO.service[BodyStore]
-      stateRef      <- Ref.make(ChessComClient.ThrottleState(permits, 0, Vector.empty))
-      activeRef     <- Ref.make(0)
-      rateLimitGate <- Semaphore.make(1)
-      lastReqRef    <- Ref.make(0L)
-      recoveryFiberRef    <- Ref.make(Option.empty[Fiber.Runtime[Throwable, Unit]])
+      pgClient         <- ZIO.service[PostgresClient]
+      bodyStore        <- ZIO.service[BodyStore]
+      stateRef         <- Ref.make(ChessComClient.ThrottleState(permits, 0, Vector.empty))
+      activeRef        <- Ref.make(0)
+      rateLimitGate    <- Semaphore.make(1)
+      lastReqRef       <- Ref.make(0L)
+      recoveryFiberRef <- Ref.make(Option.empty[Fiber.Runtime[Throwable, Unit]])
       // Mirror `ChessComClient.live`: interrupt the in-flight recovery fiber when the scope closes, so a throttled
       // client doesn't leak its recovery daemon past the test scope.
-      _ <- ZIO.addFinalizer(recoveryFiberRef.get.flatMap(ZIO.foreachDiscard(_)(_.interrupt)))
-      bar                 <- ProgressDisplay.make(enabled = false).addBar
-      stats               <- Ref.make(ClientStatsAccumulator())
+      _     <- ZIO.addFinalizer(recoveryFiberRef.get.flatMap(ZIO.foreachDiscard(_)(_.interrupt)))
+      bar   <- ProgressDisplay.make(enabled = false).addBar
+      stats <- Ref.make(ClientStatsAccumulator())
       config = ChessComClient.ThrottleConfig(
         recoveryTiers.getOrElse(doublingTiers(permits.toInt)),
         cooldown,
@@ -181,9 +185,9 @@ object TestChessComClientSupport {
       // because it never drives a throttle-down — default `permits = 1` keeps `currentMax` at 1 (throttle-down needs
       // `currentMax > 1`) and route fakes return no 429s, so no recovery fiber is ever forked. Use `makeClient` for
       // tests that need throttling with cleanup.
-      recoveryFiberRef    <- Ref.make(Option.empty[Fiber.Runtime[Throwable, Unit]])
-      bar                 <- ProgressDisplay.make(enabled = false).addBar
-      stats               <- Ref.make(ClientStatsAccumulator())
+      recoveryFiberRef <- Ref.make(Option.empty[Fiber.Runtime[Throwable, Unit]])
+      bar              <- ProgressDisplay.make(enabled = false).addBar
+      stats            <- Ref.make(ClientStatsAccumulator())
     } yield {
       val driver = new ZClient.Driver[Any, Scope, Throwable] {
         override def request(
@@ -222,7 +226,23 @@ object TestChessComClientSupport {
         refs,
         stats,
         bar,
-        ChessComClient.ThrottleConfig(Vector(2, permits.toInt.max(2)).distinct, 30.seconds, 5.seconds, 1.second, 10.seconds, 1.second, 5, 2, 3, 20, 0.2, 10, 0, Duration.Zero, 500L),
+        ChessComClient.ThrottleConfig(
+          Vector(2, permits.toInt.max(2)).distinct,
+          30.seconds,
+          5.seconds,
+          1.second,
+          10.seconds,
+          1.second,
+          5,
+          2,
+          3,
+          20,
+          0.2,
+          10,
+          0,
+          Duration.Zero,
+          500L
+        ),
         recoveryFiberRef,
         ZIO.unit
       )

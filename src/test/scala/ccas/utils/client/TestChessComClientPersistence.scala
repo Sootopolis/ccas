@@ -3,12 +3,12 @@ package ccas.utils.client
 import java.time.Instant
 import java.util.concurrent.TimeUnit
 
-import ccas.utils.sql.PostgresClient
 import zio.*
 import zio.test.*
 
 import ccas.analysis.tables.{ClientConfig, ClientStats, Tables}
 import ccas.utils.sql.FreshSchemaLayer
+import ccas.utils.sql.PostgresClient
 
 object TestChessComClientPersistence extends ZIOSpecDefault {
 
@@ -28,9 +28,33 @@ object TestChessComClientPersistence extends ZIOSpecDefault {
       stateRef    <- Ref.make(ChessComClient.ThrottleState(8, 0, Vector.empty))
       endedAtRef  <- Ref.make(Option.empty[Instant])
       startedAt   <- ZIO.succeed(Instant.now())
-      config = ChessComClient.ThrottleConfig(Vector(2, 4, 8), 30.seconds, 5.seconds, 1.second, 10.seconds, 1.second, 5, 2, 3, 20, 0.2, 10, 0, Duration.Zero, 500L)
+      config = ChessComClient.ThrottleConfig(
+        Vector(2, 4, 8),
+        30.seconds,
+        5.seconds,
+        1.second,
+        10.seconds,
+        1.second,
+        5,
+        2,
+        3,
+        20,
+        0.2,
+        10,
+        0,
+        Duration.Zero,
+        500L
+      )
     } yield ClientStatsFlushContext(
-      s"test-$appLabel", appLabel, startedAt, statsRef, configIdRef, config, stateRef, pgClient, endedAtRef
+      s"test-$appLabel",
+      appLabel,
+      startedAt,
+      statsRef,
+      configIdRef,
+      config,
+      stateRef,
+      pgClient,
+      endedAtRef
     )
 
   private def suitePersistStats = suite("persistStats")(
@@ -39,24 +63,31 @@ object TestChessComClientPersistence extends ZIOSpecDefault {
         pgClient <- ZIO.service[PostgresClient]
         statsRef <- Ref.make(
           ClientStatsAccumulator().copy(
-            requests = 5, successes = 4, failures = 1, activeMs = 500,
+            requests = 5,
+            successes = 4,
+            failures = 1,
+            activeMs = 500,
             attemptsByTier = Map(8 -> 6L, 4 -> 2L),
             errors429ByTier = Map(8 -> 1L)
           )
         )
-        ctx      <- makeFlushContext("test-upsert", statsRef, pgClient)
+        ctx       <- makeFlushContext("test-upsert", statsRef, pgClient)
         _         <- ClientStatsPersistence.persistStats(ctx)
         configId1 <- ctx.configIdRef.get
         // Second flush after more requests: should UPDATE the same row
-        _         <- statsRef.update(_.copy(
-          requests = 12, successes = 11, activeMs = 1200,
-          attemptsByTier = Map(8 -> 10L, 4 -> 5L),
-          errors429ByTier = Map(8 -> 2L, 4 -> 1L)
-        ))
+        _ <- statsRef.update {
+          _.copy(
+            requests = 12,
+            successes = 11,
+            activeMs = 1200,
+            attemptsByTier = Map(8 -> 10L, 4 -> 5L),
+            errors429ByTier = Map(8 -> 2L, 4 -> 1L)
+          )
+        }
         _         <- ClientStatsPersistence.persistStats(ctx)
         configId2 <- ctx.configIdRef.get
         recent    <- ClientStats.selectRecent(ctx.startedAt.minusSeconds(60))
-        rows       = recent.filter(_.appLabel == "test-upsert")
+        rows = recent.filter(_.appLabel == "test-upsert")
       } yield assertTrue(
         configId1.isDefined,
         configId2 == configId1,
@@ -97,13 +128,13 @@ object TestChessComClientPersistence extends ZIOSpecDefault {
         // raw Clock.instant carries ns that get rounded), differs from the live flush clock so it proves the pin is
         // used, and stays within the selectRecent cutoff regardless of which column that query filters on.
         pinnedAt = Instant.ofEpochMilli(ctx.startedAt.toEpochMilli)
-        _        <- ctx.endedAtRef.set(Some(pinnedAt))
-        _        <- ClientStatsPersistence.persistStats(ctx)
+        _ <- ctx.endedAtRef.set(Some(pinnedAt))
+        _ <- ClientStatsPersistence.persistStats(ctx)
         // New activity after the pin: the window-end must NOT advance to the live clock.
         _      <- statsRef.update(_.copy(requests = 50))
         _      <- ClientStatsPersistence.persistStats(ctx)
         recent <- ClientStats.selectRecent(ctx.startedAt.minusSeconds(60))
-        row     = recent.find(_.appLabel == "test-pinned")
+        row = recent.find(_.appLabel == "test-pinned")
       } yield assertTrue(
         row.isDefined,
         row.get.completedAt == pinnedAt,
@@ -174,14 +205,18 @@ object TestChessComClientPersistence extends ZIOSpecDefault {
         pgClient <- ZIO.service[PostgresClient]
         statsRef <- Ref.make(ClientStatsAccumulator().copy(requests = 5, successes = 5, activeMs = 500))
         ctx      <- makeFlushContext("test-ongoing-throttle", statsRef, pgClient)
-        nowMs <- Clock.currentTime(TimeUnit.MILLISECONDS)
-        _     <- ctx.stateRef.update(_.copy(
-          currentMax = 1, coolingDown = true, throttledSince = Some(nowMs - 100_000)
-        ))
-        _ <- ClientStatsPersistence.persistStats(ctx)
+        nowMs    <- Clock.currentTime(TimeUnit.MILLISECONDS)
+        _ <- ctx.stateRef.update {
+          _.copy(
+            currentMax = 1,
+            coolingDown = true,
+            throttledSince = Some(nowMs - 100_000)
+          )
+        }
+        _      <- ClientStatsPersistence.persistStats(ctx)
         recent <- ClientStats.selectRecent(ctx.startedAt.minusSeconds(60))
-        row     = recent.filter(_.appLabel == "test-ongoing-throttle").head
-        s      <- statsRef.get
+        row = recent.filter(_.appLabel == "test-ongoing-throttle").head
+        s <- statsRef.get
       } yield assertTrue(
         // Row includes ~100s of in-progress throttle
         row.throttledMs >= 95_000L && row.throttledMs <= 105_000L,
@@ -194,8 +229,8 @@ object TestChessComClientPersistence extends ZIOSpecDefault {
         pgClient <- ZIO.service[PostgresClient]
         statsRef <- Ref.make(ClientStatsAccumulator())
         ctx      <- makeFlushContext("test-noop", statsRef, pgClient)
-        _      <- ClientStatsPersistence.persistStats(ctx)
-        recent <- ClientStats.selectRecent(ctx.startedAt.minusSeconds(60))
+        _        <- ClientStatsPersistence.persistStats(ctx)
+        recent   <- ClientStats.selectRecent(ctx.startedAt.minusSeconds(60))
       } yield assertTrue(
         recent.count(_.appLabel == "test-noop") == 0
       )
@@ -205,9 +240,9 @@ object TestChessComClientPersistence extends ZIOSpecDefault {
         pgClient <- ZIO.service[PostgresClient]
         statsRef <- Ref.make(ClientStatsAccumulator().copy(cacheHits = 3))
         ctx      <- makeFlushContext("test-cache-only", statsRef, pgClient)
-        _      <- ClientStatsPersistence.persistStats(ctx)
-        recent <- ClientStats.selectRecent(ctx.startedAt.minusSeconds(60))
-        row     = recent.find(_.appLabel == "test-cache-only")
+        _        <- ClientStatsPersistence.persistStats(ctx)
+        recent   <- ClientStats.selectRecent(ctx.startedAt.minusSeconds(60))
+        row = recent.find(_.appLabel == "test-cache-only")
       } yield assertTrue(
         row.exists(_.requests == 0L),
         row.exists(_.cacheHits == 3L)

@@ -45,13 +45,12 @@ object TestSeedMatchesForPlayer extends ZIOSpecDefault {
     counter: Ref[Int]
   ): RIO[PostgresClient & BodyStore, ChessComClient] = {
     val routes: Routes[Any, Response] = Routes(
-      Method.GET / "pub" / "player" / string("username") / "matches" -> handler {
-        (_: String, _: Request) =>
-          counter.update(_ + 1).as(
-            Response.json(json)
-              .addHeader(Header.CacheControl.MaxAge(3600))
-              .addHeader(Header.ETag.Strong("v1"))
-          )
+      Method.GET / "pub" / "player" / string("username") / "matches" -> handler { (_: String, _: Request) =>
+        counter.update(_ + 1).as(
+          Response.json(json)
+            .addHeader(Header.CacheControl.MaxAge(3600))
+            .addHeader(Header.ETag.Strong("v1"))
+        )
       }
     )
     TestChessComClientSupport.fakeClient(routes)
@@ -80,14 +79,20 @@ object TestSeedMatchesForPlayer extends ZIOSpecDefault {
         skipCtr <- Ref.make(0)
         client  <- fakeChessComClientCounting(json, counter)
         seeded <- HistorySeeding.seedMatchesForPlayer(
-          client, clubId, clubSlug, playerId2, username2, Set(knownId), skipCtr
+          client,
+          clubId,
+          clubSlug,
+          playerId2,
+          username2,
+          Set(knownId),
+          skipCtr
         )
         pending <- HistoryPendingMatch.selectClub(clubId)
         _       <- ZIO.foreachDiscard(pending)(p => HistoryPendingMatch.delete(clubId, p.matchId, p.isLive))
         _       <- HistoryMemberQuery.deleteClub(clubId)
       } yield assertTrue(
-        seeded == 1,                                       // only the new finished match seeded
-        pending.map(_.matchId) == List(ClubMatchId(8002))  // known 8001 excluded; new 8002 ingested
+        seeded == 1,                                      // only the new finished match seeded
+        pending.map(_.matchId) == List(ClubMatchId(8002)) // known 8001 excluded; new 8002 ingested
       )
     }
 
@@ -105,14 +110,26 @@ object TestSeedMatchesForPlayer extends ZIOSpecDefault {
         skipCtr <- Ref.make(0)
         client  <- fakeChessComClientCounting(json, counter)
         first <- HistorySeeding.seedMatchesForPlayer(
-          client, clubId, clubSlug, playerId, username, Set.empty, skipCtr
+          client,
+          clubId,
+          clubSlug,
+          playerId,
+          username,
+          Set.empty,
+          skipCtr
         )
         pendingAfterFirst <- HistoryPendingMatch.selectClub(clubId)
         // Clear both side effects so the second call has to re-materialise anything it does.
         _ <- ZIO.foreachDiscard(pendingAfterFirst)(p => HistoryPendingMatch.delete(clubId, p.matchId, p.isLive))
         _ <- HistoryMemberQuery.deleteClub(clubId)
         second <- HistorySeeding.seedMatchesForPlayer(
-          client, clubId, clubSlug, playerId, username, Set.empty, skipCtr
+          client,
+          clubId,
+          clubSlug,
+          playerId,
+          username,
+          Set.empty,
+          skipCtr
         )
         pendingAfterSecond <- HistoryPendingMatch.selectClub(clubId)
         queriedAfterSecond <- HistoryMemberQuery.selectClubPlayerIds(clubId)

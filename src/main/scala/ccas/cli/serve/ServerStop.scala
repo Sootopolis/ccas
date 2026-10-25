@@ -4,7 +4,7 @@ import java.nio.file.{Files, Path}
 
 import scala.jdk.OptionConverters.*
 
-import zio.{Console, durationInt, ExitCode, UIO, ZIO}
+import zio.{durationInt, Console, ExitCode, UIO, ZIO}
 
 import ccas.cli.serve.HealthProbe.Readiness
 import ccas.utils.TerminalQuestion
@@ -30,7 +30,8 @@ object ServerStop {
   /** The line printed when `down` has no detached server to stop yet a server is still answering `port` — almost
     * always a foreground `ccas server up`, which writes no pid file and so can't be reached via the pid file. Points at
     * the pid to inspect rather than a blind `kill $(…)`, since `lsof` can list more than the one process. Pure so the
-    * wording is unit-testable without a live server (same split as [[ServerStatus.describe]]). */
+    * wording is unit-testable without a live server (same split as [[ServerStatus.describe]]).
+    */
   def foregroundHint(port: Int): String =
     s"note: a server is still responding on 127.0.0.1:$port but is not a detached instance this CLI manages " +
       s"(no pid file) — likely a foreground `ccas server up`. Stop it with Ctrl-C in its terminal, or find its pid " +
@@ -128,7 +129,8 @@ object ServerStop {
 
   /** Common tail for the three "no live detached server to signal" cases: print the reason, optionally clear the pid
     * file, then — if a server is still answering the port — append [[foregroundHint]]. Always exits 1: `down` stopped
-    * nothing it manages, even when a foreground server is up. */
+    * nothing it manages, even when a foreground server is up.
+    */
   private def nothingToStop(
     message: String,
     removeFile: Boolean,
@@ -157,7 +159,9 @@ object ServerStop {
         case Some(_) => removePid *> Console.printLine(s"stopped $server").orDie.as(ExitCode.success)
         case None =>
           for {
-            _ <- Console.printLineError(s"pid $pid did not exit within ${TermTimeout.getSeconds}s; sending SIGKILL").orDie
+            _ <- Console.printLineError(
+              s"pid $pid did not exit within ${TermTimeout.getSeconds}s; sending SIGKILL"
+            ).orDie
             _ <- ZIO.attemptBlocking(handle.destroyForcibly())
             _ <- ZIO.fromCompletableFuture(handle.onExit()).timeout(KillTimeout).ignore
             _ <- removePid

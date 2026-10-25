@@ -52,7 +52,7 @@ class MultilineBlockBraces extends SyntacticRule("MultilineBlockBraces") {
     clause.values match {
       case List(arg) =>
         clause.mod.isEmpty && inParens(clause) && !hugs(clause) &&
-          ((isLambda(arg) && spansLines(arg)) || (body && spansLines(clause)))
+        ((isLambda(arg) && spansLines(arg)) || (body && spansLines(clause)))
       case _ => false
     }
 
@@ -92,8 +92,8 @@ class MultilineBlockBraces extends SyntacticRule("MultilineBlockBraces") {
   // Only an inner call spans lines: the bracket closing just before `)` opens an argument list on the line of `(`, as
   // in `f(_.copy(` … `))`. A block, `if` or tuple closing there is not a call.
   private def hugs(clause: Term.ArgClause): Boolean = {
-    val tokens   = clause.tokens.toVector
-    val inner    = tokens.length - 2
+    val tokens = clause.tokens.toVector
+    val inner  = tokens.length - 2
     val argLists = clause.values.head.collect {
       case args: Term.ArgClause  => args.pos.start
       case types: Type.ArgClause => types.pos.start
@@ -109,8 +109,11 @@ class MultilineBlockBraces extends SyntacticRule("MultilineBlockBraces") {
     if (at < 0) { None }
     else {
       val token = tokens(at)
-      val next  = if (isCloser(token)) { depth + 1 } else if (isOpener(token)) { depth - 1 } else { depth }
-      if (next == 0) { Some(token) } else { opener(tokens = tokens, at = at - 1, depth = next) }
+      val next = if (isCloser(token)) { depth + 1 }
+      else if (isOpener(token)) { depth - 1 }
+      else { depth }
+      if (next == 0) { Some(token) }
+      else { opener(tokens = tokens, at = at - 1, depth = next) }
     }
 
   private def isOpener(token: Token): Boolean =
@@ -127,14 +130,17 @@ class MultilineBlockBraces extends SyntacticRule("MultilineBlockBraces") {
         val message = s"Put this argument in braces by hand (.claude/rules/scala.md): $reason."
         Patch.lint(Diagnostic(id = "", message = message, position = clause.pos))
       case None =>
-        val tokens  = clause.tokens.toVector
-        val inside  = tokens.slice(1, tokens.length - 1)
-        val before  = if (isBlank(doc.tokenList.prev(tokens.head))) { "" } else { " " }
-        val after   = if (inside.headOption.exists(isBlank)) { "" } else { " " }
+        val tokens = clause.tokens.toVector
+        val inside = tokens.slice(1, tokens.length - 1)
+        val before = if (isBlank(doc.tokenList.prev(tokens.head))) { "" }
+        else { " " }
+        val after = if (inside.headOption.exists(isBlank)) { "" }
+        else { " " }
         val opening = s"$before{$after"
-        val closing = if (inside.lastOption.exists(isBlank)) { "}" } else { " }" }
-        val last    = inside.reverse.find(token => !isBlank(token) && !token.is[Token.Comment])
-        val comma   = last.filter(_.is[Token.Comma])
+        val closing = if (inside.lastOption.exists(isBlank)) { "}" }
+        else { " }" }
+        val last  = inside.reverse.find(token => !isBlank(token) && !token.is[Token.Comment])
+        val comma = last.filter(_.is[Token.Comma])
         Patch.replaceToken(tokens.head, opening) + Patch.replaceToken(tokens.last, closing) +
           comma.fold(Patch.empty)(Patch.removeToken)
     }

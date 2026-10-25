@@ -15,12 +15,12 @@ object CompletionSpec {
     * positional club slug are `use-club` and `club add` / `remove` / `show`.
     */
   enum PositionalKind {
-    case Slug    // a single club slug: use-club, club add/remove/show
-    case JobId   // a single job-run id: logs
-    case Shell   // bash | zsh | fish: completion
-    case EnvKey  // a server-env var name: config get/set/unset (candidates from ServerEnvKeys.all)
-    case Other   // an opaque value we don't complete: schedule add/remove, blacklist usernames
-    case NoArgs  // no positional (club, if any, comes via --club): serve, membership, jobs, …
+    case Slug   // a single club slug: use-club, club add/remove/show
+    case JobId  // a single job-run id: logs
+    case Shell  // bash | zsh | fish: completion
+    case EnvKey // a server-env var name: config get/set/unset (candidates from ServerEnvKeys.all)
+    case Other  // an opaque value we don't complete: schedule add/remove, blacklist usernames
+    case NoArgs // no positional (club, if any, comes via --club): serve, membership, jobs, …
   }
 
   import PositionalKind.*
@@ -29,7 +29,7 @@ object CompletionSpec {
     * inherited `--server`; `valueFlags` is the subset that takes an argument; `positional` is its first positional kind.
     */
   final case class Leaf(path: List[String], flags: List[String], valueFlags: List[String], positional: PositionalKind) {
-    def name: String = path.last
+    def name: String    = path.last
     def summary: String = CompletionSpec.summaries.getOrElse(path, "")
   }
 
@@ -39,37 +39,75 @@ object CompletionSpec {
   private val server = "--server"
 
   /** The club-targeting option. Completion offers cached club slugs as its value wherever it appears, so it is a
-    * value flag on every club command (and on `schedule add`). */
+    * value flag on every club command (and on `schedule add`).
+    */
   val clubFlag = "--club"
 
   /** Names a club outright, in place of [[clubFlag]], which is how a contested name gets settled. A value flag with
-    * nothing to offer — the ids come from the error that asked for one, not from any cache. */
+    * nothing to offer — the ids come from the error that asked for one, not from any cache.
+    */
   private val clubIdFlag = "--club-id"
 
   /** Leaves in tree order. `valueFlags` always lists `--server` first to match its position in `flags`. */
   val leaves: List[Leaf] = List(
-    Leaf(List("server", "up"), List("--detach", "-d", "--ready-timeout-seconds"), List("--ready-timeout-seconds"), NoArgs),
+    Leaf(
+      List("server", "up"),
+      List("--detach", "-d", "--ready-timeout-seconds"),
+      List("--ready-timeout-seconds"),
+      NoArgs
+    ),
     Leaf(List("server", "down"), Nil, Nil, NoArgs),
     Leaf(List("server", "status"), Nil, Nil, NoArgs),
     Leaf(List("use-club"), List("--clear"), Nil, Slug),
     Leaf(
       List("membership"),
-      List(server, "--trust-usernames", "--no-trust-usernames", clubFlag, clubIdFlag, "--all", "--no-progress",
-        "--detach"),
+      List(
+        server,
+        "--trust-usernames",
+        "--no-trust-usernames",
+        clubFlag,
+        clubIdFlag,
+        "--all",
+        "--no-progress",
+        "--detach"
+      ),
       List(server, clubFlag, clubIdFlag),
       NoArgs
     ),
     Leaf(
       List("history"),
-      List(server, "--full", "--include-finished", "--refresh", "--refresh-min-hours", clubFlag, clubIdFlag, "--all",
-        "--no-progress", "--detach"),
+      List(
+        server,
+        "--full",
+        "--include-finished",
+        "--refresh",
+        "--refresh-min-hours",
+        clubFlag,
+        clubIdFlag,
+        "--all",
+        "--no-progress",
+        "--detach"
+      ),
       List(server, "--refresh-min-hours", clubFlag, clubIdFlag),
       NoArgs
     ),
     Leaf(
       List("recruit"),
-      List(server, "--alias", "--target", "--cumulative", "--source-clubs", "--time-limit-minutes", "--explore",
-        "--no-explore", clubFlag, clubIdFlag, "--stdout", "--report", "--no-progress"),
+      List(
+        server,
+        "--alias",
+        "--target",
+        "--cumulative",
+        "--source-clubs",
+        "--time-limit-minutes",
+        "--explore",
+        "--no-explore",
+        clubFlag,
+        clubIdFlag,
+        "--stdout",
+        "--report",
+        "--no-progress"
+      ),
       List(server, "--alias", "--target", "--source-clubs", "--time-limit-minutes", clubFlag, clubIdFlag),
       // `--report`'s optional `[run-id]` is a bare numeric positional with nothing to complete, so NoArgs (suggest
       // nothing) is the right shell behavior.
@@ -121,16 +159,36 @@ object CompletionSpec {
     Group("server", List("up", "down", "status"), "Run and manage the ccas backend HTTP server"),
     Group("blacklist", List("add", "list", "remove"), "Manage a club's recruitment blacklist"),
     Group("schedule", List("list", "add", "remove"), "Manage scheduled jobs"),
-    Group("club", List("add", "remove", "list", "show"),
-      "Manage the set of clubs you run CCAS for (pick the one commands target with 'ccas use-club')"),
-    Group("config", List("get", "set", "unset", "list", "show", "path", "init"),
-      "Manage the local server-bootstrap config file (ccas.env)")
+    Group(
+      "club",
+      List("add", "remove", "list", "show"),
+      "Manage the set of clubs you run CCAS for (pick the one commands target with 'ccas use-club')"
+    ),
+    Group(
+      "config",
+      List("get", "set", "unset", "list", "show", "path", "init"),
+      "Manage the local server-bootstrap config file (ccas.env)"
+    )
   )
 
   /** Top-level subcommand names, in tree order (matches `CliCommand.command(...).subcommands`). */
   val topLevel: List[String] =
-    List("server", "use-club", "membership", "history", "recruit", "stats", "jobs", "logs", "cancel",
-      "blacklist", "schedule", "club", "config", "completion")
+    List(
+      "server",
+      "use-club",
+      "membership",
+      "history",
+      "recruit",
+      "stats",
+      "jobs",
+      "logs",
+      "cancel",
+      "blacklist",
+      "schedule",
+      "club",
+      "config",
+      "completion"
+    )
 
   /** Flags available on every command. */
   val globalFlags: List[String] = List("--help", "--version")
@@ -151,6 +209,8 @@ object CompletionSpec {
   /** Every long flag used anywhere — for the drift guard (`treeFlags ⊆ this`). */
   val allFlags: Set[String] = (globalFlags ++ leaves.flatMap(_.flags)).toSet
 
+  // One row per command: scalafmt would wrap the longest rows, which run past 120 columns.
+  // format: off
   /** One-line help per command path, mirroring the `withHelp(...)` strings in [[CliCommand]]; used as fish `-d` text. */
   private[cli] val summaries: Map[List[String], String] = Map(
     List("server", "up")        -> "Run the ccas backend HTTP server (foreground by default; --detach/-d to background it)",
@@ -183,4 +243,5 @@ object CompletionSpec {
     List("config", "path")      -> "Print the server config file path",
     List("config", "init")      -> "Interactive wizard to create the server config file (ccas.env)"
   )
+  // format: on
 }

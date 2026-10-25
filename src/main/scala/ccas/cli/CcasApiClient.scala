@@ -60,7 +60,8 @@ object CcasApiClient {
         // Plain-text error bodies (e.g. the /logs 404) aren't JSON — surface the message itself, capped so a stray
         // HTML error page can't flood the terminal.
         val trimmed = body.trim
-        if (trimmed.nonEmpty && trimmed.length <= 200) { trimmed } else { s"HTTP ${status.code}" }
+        if (trimmed.nonEmpty && trimmed.length <= 200) { trimmed }
+        else { s"HTTP ${status.code}" }
       }
 
     private def decode[Resp: JsonDecoder](resp: Response): Task[Resp] =

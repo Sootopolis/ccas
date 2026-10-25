@@ -6,8 +6,8 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path, StandardOpenOption}
 import java.util.Arrays
 
-import zio.stream.ZStream
 import zio.{Chunk, Duration, Promise, Ref, UIO, ZIO}
+import zio.stream.ZStream
 
 import ccas.api.misc.subtypes.JobRunId
 
@@ -66,8 +66,7 @@ final class FileTail(
                   readAppended(path, next).map { case (settled, finalState) =>
                     Option.when(settled.nonEmpty)(Chunk.fromIterable(settled) -> finalState.copy(doneAndDrained = true))
                   }
-                }
-                else { step(next).delay(pollInterval) }
+                } else { step(next).delay(pollInterval) }
               }
             }
           }
@@ -106,8 +105,7 @@ final class FileTail(
               (lines, TailState(newOffset, remainder, state.doneAndDrained))
             }
           }
-        }
-        finally { channel.close() }
+        } finally { channel.close() }
       }
     }
 }

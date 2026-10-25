@@ -176,8 +176,8 @@ object JobScheduler {
     private def clubJob(schedule: JobSchedule)(effect: ClubJobEffect): JobEffect =
       jobRunIdOption =>
         for {
-          clubId     <- ZIO.fromOption(schedule.clubIdOption)
-                          .orElseFail(IllegalStateException(s"${schedule.kind} schedule missing clubId"))
+          clubId <- ZIO.fromOption(schedule.clubIdOption)
+            .orElseFail(IllegalStateException(s"${schedule.kind} schedule missing clubId"))
           resolution <- ClubResolution.resolve(ClubQuery.ById(clubId))
           club       <- ZIO.fromEither(resolution.runnable).mapError(IllegalStateException(_))
           result     <- effect(club, jobRunIdOption)

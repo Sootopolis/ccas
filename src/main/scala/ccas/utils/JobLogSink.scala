@@ -59,7 +59,7 @@ object JobLogSink {
 
   // CSI escape: ESC `[` <params> <final letter>. Built programmatically (Pattern.quote on a char-from-int) to avoid
   // embedding a raw ESC byte in the source file (see feedback_scala_esc_in_strings).
-  private val Esc: String     = Character.toString(0x1B)
+  private val Esc: String      = Character.toString(0x1B)
   private val AnsiCsi: Pattern = Pattern.compile(Pattern.quote(Esc) + "\\[[0-9;]*[a-zA-Z]")
 
   /** Remove ANSI CSI escapes from `s`. Used by file-backed sinks so `cat job.log` is readable. */

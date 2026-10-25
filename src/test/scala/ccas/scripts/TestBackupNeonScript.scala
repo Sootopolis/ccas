@@ -138,7 +138,7 @@ object TestBackupNeonScript extends ZIOSpecDefault {
       val url = "postgresql://owner:s3cret@db.example:5432/ccas?sslmode=require"
       for {
         result <- run(env = Map("DATABASE_URL" -> url), envFile = None)
-        wrote   = result.output.linesIterator.find(_.startsWith("wrote ")).getOrElse("")
+        wrote = result.output.linesIterator.find(_.startsWith("wrote ")).getOrElse("")
       } yield assertTrue(
         result.exitCode == 0,
         wrote.endsWith(" from db.example:5432/ccas"),
@@ -194,8 +194,8 @@ object TestBackupNeonScript extends ZIOSpecDefault {
     },
     test("dumps land owner-only under ~/.local/share/ccas/backups by default") {
       for {
-        result   <- run(env = Map("DATABASE_URL" -> "jdbc:postgresql://h/ccas"), envFile = None)
-        dir       = result.home.resolve(".local/share/ccas/backups")
+        result <- run(env = Map("DATABASE_URL" -> "jdbc:postgresql://h/ccas"), envFile = None)
+        dir = result.home.resolve(".local/share/ccas/backups")
         dumps    <- ZIO.attemptBlocking(dir.toFile.listFiles().toList.map(_.toPath))
         dirPerms <- permissions(dir)
         perms    <- ZIO.foreach(dumps)(permissions)

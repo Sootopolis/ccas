@@ -16,8 +16,7 @@ import ccas.utils.sql.PostgresClient.{connectZIO, transactZIO}
 /** When a club's full roster was first and last fetched. Membership writes it with the member rows the roster implied,
   * so the two never disagree; it is what a member row's ends are taken from (ADR 0021).
   */
-final case class ClubRosterCoverage(clubId: ClubId, firstObservedAt: Instant, lastObservedAt: Instant)
-    derives DbCodec
+final case class ClubRosterCoverage(clubId: ClubId, firstObservedAt: Instant, lastObservedAt: Instant) derives DbCodec
 
 object ClubRosterCoverage {
 

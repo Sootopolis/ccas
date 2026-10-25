@@ -1,13 +1,13 @@
 package ccas.analysis.apps.recruitment
 
-import java.time.temporal.ChronoUnit
 import java.time.Instant
+import java.time.temporal.ChronoUnit
 
 import zio.{IO, RIO, ZIO}
 
 import RecruitmentStatsHelpers.*
 
-import ccas.analysis.apps.{UsernameRenameResolver, withClubSlugRenameRecovery, withPlayerRenameRecovery}
+import ccas.analysis.apps.{withClubSlugRenameRecovery, withPlayerRenameRecovery, UsernameRenameResolver}
 import ccas.analysis.apps.clubdata.ClubAdminResolver
 import ccas.analysis.tables.*
 import ccas.api.club.ApiClub
@@ -53,7 +53,7 @@ private[recruitment] object RecruitmentFilterDefs {
         // Use fetchOrRecover (no resolver-side reconcile). RecruitmentPersistence.persistCandidateResults handles the
         // actual Player table writes based on `isNewPlayer`, so a single transactional write covers both rename
         // archival (existingPlayerOption.isDefined) and fresh insert.
-        apiPlayer      <- UsernameRenameResolver.fetchOrRecover(env.run.client, env.candidate.username)
+        apiPlayer            <- UsernameRenameResolver.fetchOrRecover(env.run.client, env.candidate.username)
         existingPlayerOption <- Player.selectId(apiPlayer.playerId)
 
         // Load existing cache
@@ -138,9 +138,15 @@ private[recruitment] object RecruitmentFilterDefs {
     // Max clubs (30d)
     CacheCriterion(30L, (cache, criteria) => criteria.maxClubs.exists(max => cache.clubCount.exists(_ > max))),
     // Min daily ELO (30d)
-    CacheCriterion(30L, (cache, criteria) => criteria.dailyMinElo.exists(min => cache.dailyElo.exists(_.value < min.value))),
+    CacheCriterion(
+      30L,
+      (cache, criteria) => criteria.dailyMinElo.exists(min => cache.dailyElo.exists(_.value < min.value))
+    ),
     // Max daily ELO (30d)
-    CacheCriterion(30L, (cache, criteria) => criteria.dailyMaxElo.exists(max => cache.dailyElo.exists(_.value > max.value))),
+    CacheCriterion(
+      30L,
+      (cache, criteria) => criteria.dailyMaxElo.exists(max => cache.dailyElo.exists(_.value > max.value))
+    ),
     // Min daily score rate (30d)
     CacheCriterion(
       30L,
@@ -264,9 +270,13 @@ private[recruitment] object RecruitmentFilterDefs {
       for {
         apiPlayer <- requireApiPlayer(env)
         playerClubs <- ZIO.fromOption(env.candidate.playerClubsOption)
-          .orElseFail(new NoSuchElementException("playerClubs not set — CheckClubs must run before CheckAdminOfDiscoveredClub"))
+          .orElseFail(
+            new NoSuchElementException("playerClubs not set — CheckClubs must run before CheckAdminOfDiscoveredClub")
+          )
         min <- ZIO.fromOption(env.run.criteria.avoidAdminMinClubSize)
-          .orElseFail(new IllegalStateException("CheckAdminOfDiscoveredClub should only run when avoidAdminMinClubSize is set"))
+          .orElseFail(
+            new IllegalStateException("CheckAdminOfDiscoveredClub should only run when avoidAdminMinClubSize is set")
+          )
         cutoff = env.run.now.minus(ClubAdmin.MaxInactivity)
         // foldLeft short-circuits via the boolean accumulator: once rejected, no further API work.
         rejected <- ZIO.foldLeft(playerClubs.clubs)(false) { (rejected, playerClub) =>
@@ -297,7 +307,7 @@ private[recruitment] object RecruitmentFilterDefs {
                 // early prune missed them, so re-apply the gate predicate against current local data and check the
                 // candidate's membership directly. Skips the API call.
                 val membersCount = club.membersCount.getOrElse(0)
-                val gateOk = passesGate(membersCount, existingAdmins.size, club.latestMatchAt, min, cutoff)
+                val gateOk       = passesGate(membersCount, existingAdmins.size, club.latestMatchAt, min, cutoff)
                 ZIO.succeed(gateOk && existingAdmins.contains(candidatePlayerId))
               case _ =>
                 fetchEvaluatePersist(run, slug, existingClubOption, candidatePlayerId, min, cutoff)

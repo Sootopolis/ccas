@@ -26,12 +26,12 @@ import ccas.utils.{JobLogSink, ProgressDisplay}
   * that are out of scope by construction: `docs/adr/0013-job-log-sink-survives-write-failures.md` (#52).
   */
 final class FileSink private[jobs] (
-    path: Path,
-    openWriter: () => BufferedWriter,
-    initialWriter: Option[BufferedWriter],
-    nowNanos: () => Long,
-    retryAfterLines: Long,
-    retryAfterNanos: Long
+  path: Path,
+  openWriter: () => BufferedWriter,
+  initialWriter: Option[BufferedWriter],
+  nowNanos: () => Long,
+  retryAfterLines: Long,
+  retryAfterNanos: Long
 ) extends JobLogSink {
 
   // Serialises access to the non-thread-safe BufferedWriter — and to every `var` below — across the job's concurrent
@@ -41,13 +41,13 @@ final class FileSink private[jobs] (
   private val fileLock = new Object
 
   // All mutable state lives under `fileLock`. `writer` is None while suppressed (a failed open/write) or never opened.
-  private var writer: Option[BufferedWriter]    = initialWriter
-  private var closed: Boolean                   = false
-  private var droppedLines: Long                = 0L                    // lifetime total → accessor + final summary
-  private var suppressedDrops: Long             = 0L                    // gap of the current episode → resume marker
-  private var linesSinceLastAttempt: Long       = 0L                    // count-gate; reset on every reopen attempt
-  private var lastAttemptNanos: Long            = nowNanos()           // time-gate anchor; init so it can't trip line 1
-  private var failureLogged: Boolean            = initialWriter.isEmpty // stderr once per episode (make already logged)
+  private var writer: Option[BufferedWriter] = initialWriter
+  private var closed: Boolean                = false
+  private var droppedLines: Long             = 0L                    // lifetime total → accessor + final summary
+  private var suppressedDrops: Long          = 0L                    // gap of the current episode → resume marker
+  private var linesSinceLastAttempt: Long    = 0L                    // count-gate; reset on every reopen attempt
+  private var lastAttemptNanos: Long         = nowNanos()            // time-gate anchor; init so it can't trip line 1
+  private var failureLogged: Boolean         = initialWriter.isEmpty // stderr once per episode (make already logged)
 
   /** Lifetime count of log lines dropped because the file could not be written. Read under the lock. */
   private[jobs] def droppedLineCount: Long = fileLock.synchronized(droppedLines)
@@ -83,7 +83,9 @@ final class FileSink private[jobs] (
         linesSinceLastAttempt = 0
         lastAttemptNanos = nowNanos()
         if (!failureLogged) {
-          System.err.println(s"[FileSink] write to $path failed; retrying periodically, suppressing further errors until it recovers.")
+          System.err.println(
+            s"[FileSink] write to $path failed; retrying periodically, suppressing further errors until it recovers."
+          )
           t.printStackTrace(System.err)
           failureLogged = true
         }
@@ -130,9 +132,9 @@ final class FileSink private[jobs] (
         if (!closed) {
           closed = true
           writer match {
-            case Some(w)                       => closeWithSummary(w)
-            case None if droppedLines > 0      => recordSummaryWhileSuppressed()
-            case None                          => ()
+            case Some(w)                  => closeWithSummary(w)
+            case None if droppedLines > 0 => recordSummaryWhileSuppressed()
+            case None                     => ()
           }
           writer = None
         }

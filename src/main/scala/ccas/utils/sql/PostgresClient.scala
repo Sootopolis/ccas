@@ -183,8 +183,8 @@ object PostgresClient {
     * through untouched: `docs/adr/0014-accept-both-database-url-forms.md`.
     */
   private[ccas] def normalizeJdbcUrl(raw: String): Either[String, ResolvedJdbcUrl] = {
-    val url       = raw.trim
-    val lowered   = url.toLowerCase
+    val url     = raw.trim
+    val lowered = url.toLowerCase
     val shapeHint =
       "expected a JDBC URL (jdbc:postgresql://host[:port]/db?user=…&password=…) " +
         "or a libpq URI (postgresql://user:pass@host[:port]/db)"
@@ -452,11 +452,11 @@ object PostgresClient {
     case _: SQLTransientConnectionException => false
     case sql: SQLException =>
       Option(sql.getSQLState).exists(_.startsWith("08")) ||
-        Option(sql.getMessage).exists { msg =>
-          msg.contains("terminating connection") ||
-          msg.contains("Connection is closed") ||
-          msg.contains("This connection has been closed")
-        }
+      Option(sql.getMessage).exists { msg =>
+        msg.contains("terminating connection") ||
+        msg.contains("Connection is closed") ||
+        msg.contains("This connection has been closed")
+      }
     case _ => false
   }
 

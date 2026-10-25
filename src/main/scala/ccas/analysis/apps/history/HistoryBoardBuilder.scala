@@ -31,8 +31,8 @@ private[history] object HistoryBoardBuilder {
   ): Option[ClubMatchGame] =
     Option.unless(winner.isEmpty && boardGame.isEmpty) {
       val gameIdOption = boardGame.map(g => g.url.path.segments.last.toLong)
-      val startTime = boardGame.flatMap(_.startTime)
-      val endTime = boardGame.flatMap(_.endTime)
+      val startTime    = boardGame.flatMap(_.startTime)
+      val endTime      = boardGame.flatMap(_.endTime)
 
       // team1 is white when team1IsWhite=true, so white=team1, black=team2
       // team1 is black when team1IsWhite=false, so white=team2, black=team1
@@ -131,8 +131,8 @@ private[history] object HistoryBoardBuilder {
           } yield {
             val t1FairPlay = team1Fp.contains(t1.username.value)
             val t2FairPlay = team2Fp.contains(t2.username.value)
-            val g1 = normalizeGameOutcome(t1.playedAsWhite, t2.playedAsBlack, whiteTeamIsTeam1 = true)
-            val g2 = normalizeGameOutcome(t2.playedAsWhite, t1.playedAsBlack, whiteTeamIsTeam1 = false)
+            val g1         = normalizeGameOutcome(t1.playedAsWhite, t2.playedAsBlack, whiteTeamIsTeam1 = true)
+            val g2         = normalizeGameOutcome(t2.playedAsWhite, t1.playedAsBlack, whiteTeamIsTeam1 = false)
             boardNum -> computeScoreX2(g1.winner, g2.winner, t1FairPlay, t2FairPlay)
           }
         }.toMap

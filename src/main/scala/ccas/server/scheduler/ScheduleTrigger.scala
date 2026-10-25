@@ -33,7 +33,7 @@ object MisfirePolicy extends EnumJson[MisfirePolicy] with EnumSql[MisfirePolicy]
   */
 sealed trait ScheduleTrigger
 object ScheduleTrigger {
-  final case class Interval(hours: Short) extends ScheduleTrigger
+  final case class Interval(hours: Short)                                     extends ScheduleTrigger
   final case class Cron(expr: CronExpr, zone: ZoneId, misfire: MisfirePolicy) extends ScheduleTrigger
 
   /** Translate a 5-field unix cron (`min hour day-of-month month day-of-week`) into the 6-field cron4s form
@@ -57,12 +57,12 @@ object ScheduleTrigger {
     } else {
       val Vector(min, hour, dom, mon, dow) = fields
       val days: Either[String, (String, String)] =
-        if (dom == "?" || dow == "?") { Right((dom, dow)) }       // user already disambiguated
+        if (dom == "?" || dow == "?") { Right((dom, dow)) } // user already disambiguated
         else {
           (dom, dow) match {
-            case (_, "*")   => Right((dom, "?")) // dow wildcard (incl. both wildcard) -> blank the dow
-            case ("*", _)   => Right(("?", dow)) // dom wildcard, dow restricted -> blank the dom
-            case _          => Left("cron4s cannot restrict both day-of-month and day-of-week; set one to '*'")
+            case (_, "*") => Right((dom, "?")) // dow wildcard (incl. both wildcard) -> blank the dow
+            case ("*", _) => Right(("?", dow)) // dom wildcard, dow restricted -> blank the dom
+            case _        => Left("cron4s cannot restrict both day-of-month and day-of-week; set one to '*'")
           }
         }
       days.map { case (d, w) => s"0 $min $hour $d $mon $w" }

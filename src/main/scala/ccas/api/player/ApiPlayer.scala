@@ -5,9 +5,9 @@ import java.time.Instant
 import zio.http.URL
 import zio.json.{jsonMemberNames, JsonDecoder, SnakeCase}
 
+import ccas.api.misc.Hosts
 import ccas.api.misc.enums.{League, PlayerStatus, Title}
 import ccas.api.misc.subtypes.{Elo, PlayerId, Username}
-import ccas.api.misc.Hosts
 import ccas.utils.json.JsonDecoding.given
 
 @jsonMemberNames(SnakeCase)

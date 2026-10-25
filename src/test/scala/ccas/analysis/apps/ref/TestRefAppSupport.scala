@@ -27,8 +27,8 @@ object TestRefAppSupport {
   val pid1: PlayerId = PlayerId(301)
   val pid2: PlayerId = PlayerId(302)
 
-  val clubId0: ClubId = ClubId(700)
-  val clubId1: ClubId = ClubId(701)
+  val clubId0: ClubId     = ClubId(700)
+  val clubId1: ClubId     = ClubId(701)
   val clubSlug0: ClubSlug = ClubSlug("our-club")
   val clubSlug1: ClubSlug = ClubSlug("other-club")
 
@@ -120,7 +120,12 @@ object TestRefAppSupport {
     */
   def networkDownChessComClient: RIO[Scope & PostgresClient & BodyStore, ChessComClient] =
     TestChessComClientSupport
-      .makeClient(handler = _ => ZIO.fail(networkDownCause), retryBase = 10.millis, maxConnectionRetries = 2, permits = 5)
+      .makeClient(
+        handler = _ => ZIO.fail(networkDownCause),
+        retryBase = 10.millis,
+        maxConnectionRetries = 2,
+        permits = 5
+      )
       .map(_._1)
 
   /** A client that serves `responses` normally but fails the requests matching `isDown` with a DNS error. Lets a test
@@ -153,24 +158,27 @@ object TestRefAppSupport {
     Routes(
       Method.GET / "pub" / "player" / string("username") / "tournaments" -> handler { (username: String, _: Request) =>
         if (failures.contains(username)) Response(status = Status.InternalServerError)
-        else maybeNotFound(s"player/$username/tournaments").getOrElse(
-          responses.get(s"player/$username/tournaments").fold(Response.json(emptyPlayerTournamentsJson))(
-            Response.json(_)
+        else
+          maybeNotFound(s"player/$username/tournaments").getOrElse(
+            responses.get(s"player/$username/tournaments").fold(Response.json(emptyPlayerTournamentsJson))(
+              Response.json(_)
+            )
           )
-        )
       },
       Method.GET / "pub" / "player" / string("username") / "matches" -> handler { (username: String, _: Request) =>
         if (failures.contains(username)) Response(status = Status.InternalServerError)
-        else maybeNotFound(s"player/$username/matches").getOrElse(
-          responses.get(s"player/$username/matches").fold(Response.json(emptyPlayerMatchesJson))(Response.json(_))
-        )
+        else
+          maybeNotFound(s"player/$username/matches").getOrElse(
+            responses.get(s"player/$username/matches").fold(Response.json(emptyPlayerMatchesJson))(Response.json(_))
+          )
       },
       Method.GET / "pub" / "player" / string("username") -> handler { (username: String, _: Request) =>
         if (failures.contains(username)) Response(status = Status.InternalServerError)
-        else maybeNotFound(s"player/$username").getOrElse {
-          val pid = playerIdByUsername.getOrElse(username.toLowerCase, 0L)
-          Response.json(apiPlayerJson(username, pid))
-        }
+        else
+          maybeNotFound(s"player/$username").getOrElse {
+            val pid = playerIdByUsername.getOrElse(username.toLowerCase, 0L)
+            Response.json(apiPlayerJson(username, pid))
+          }
       },
       Method.GET / "pub" / "club" / string("club") / "matches" -> handler { (clubName: String, _: Request) =>
         maybeNotFound(s"club/$clubName/matches").getOrElse(
@@ -178,11 +186,15 @@ object TestRefAppSupport {
         )
       },
       Method.GET / "pub" / "match" / long("matchId") -> handler { (matchId: Long, _: Request) =>
-        responses.get(s"match/$matchId").fold(Response.json("""{"code": 0, "message": "Resource \"\" not found."}""").copy(status = Status.NotFound))(Response.json(_))
+        responses.get(s"match/$matchId").fold(
+          Response.json("""{"code": 0, "message": "Resource \"\" not found."}""").copy(status = Status.NotFound)
+        )(Response.json(_))
       },
       Method.GET / "pub" / "tournament" / string("slug") / int("round") -> handler {
         (slug: String, round: Int, _: Request) =>
-          responses.get(s"tournament/$slug/$round").fold(Response.json("""{"code": 0, "message": "Resource \"\" not found."}""").copy(status = Status.NotFound))(Response.json(_))
+          responses.get(s"tournament/$slug/$round").fold(
+            Response.json("""{"code": 0, "message": "Resource \"\" not found."}""").copy(status = Status.NotFound)
+          )(Response.json(_))
       }
     )
   }

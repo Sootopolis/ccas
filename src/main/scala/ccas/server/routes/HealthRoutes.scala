@@ -1,9 +1,9 @@
 package ccas.server.routes
 
 import com.augustnagro.magnum.sql
+import zio.ZIO
 import zio.http.*
 import zio.json.{jsonField, DeriveJsonCodec, JsonCodec}
-import zio.ZIO
 
 import ccas.server.routes.RouteHelpers.{jsonResponse, renderError}
 import ccas.utils.sql.PostgresClient
@@ -25,8 +25,8 @@ object HealthRoutes {
       for {
         addressOption <- ZIO.serviceWith[PostgresClient](_.addressOption)
         status <- connectZIO(sql"SELECT 1".query[Int].run())
-                    .as(Status.Ok)
-                    .orElseSucceed(Status.ServiceUnavailable)
+          .as(Status.Ok)
+          .orElseSucceed(Status.ServiceUnavailable)
       } yield jsonResponse(status, ReadyResponse(databaseOption = addressOption.map(_.render)))
     }
   ).handleErrorRequestCauseZIO(renderError)

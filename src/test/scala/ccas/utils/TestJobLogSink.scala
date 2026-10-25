@@ -60,7 +60,7 @@ object TestJobLogSink extends ZIOSpecDefault {
         dir  <- tempLogDir
         sink <- FileSink.make(dir, "job-append")
         _    <- ZIO.foreachDiscard(List("first", "second"))(sink.write)
-        path =  dir.resolve("job-append.log")
+        path = dir.resolve("job-append.log")
         lines <- ZIO.attempt(Files.readAllLines(path).asScala.toList)
       } yield assertTrue(lines == List("first", "second"))
     ).map(_._1)
@@ -72,9 +72,9 @@ object TestJobLogSink extends ZIOSpecDefault {
         dir  <- tempLogDir
         sink <- FileSink.make(dir, "job-ansi-file")
         _    <- ZIO.succeed(sink.writeFileSync(AnsiLine))
-        path =  dir.resolve("job-ansi-file.log")
+        path = dir.resolve("job-ansi-file.log")
         bytes <- ZIO.attempt(Files.readAllBytes(path))
-        text  =  new String(bytes, StandardCharsets.UTF_8)
+        text = new String(bytes, StandardCharsets.UTF_8)
       } yield assertTrue(
         !bytes.contains(0x1B.toByte),
         text.trim == "[INFO 00:00:00] hi"
@@ -93,7 +93,7 @@ object TestJobLogSink extends ZIOSpecDefault {
           sink <- FileSink.make(dir, "job-srctag")
           _    <- ZIO.succeed(sink.writeFileSync(TaggedLine))
           _    <- ZIO.succeed(sink.writeConsoleSync(TaggedLine))
-          path =  dir.resolve("job-srctag.log")
+          path = dir.resolve("job-srctag.log")
           text <- ZIO.attempt(new String(Files.readAllBytes(path), StandardCharsets.UTF_8))
         } yield text.trim
       ).map { case (fileText, out) =>
@@ -121,12 +121,12 @@ object TestJobLogSink extends ZIOSpecDefault {
     test("close flushes buffered content and a post-close writeFileSync is a no-op") {
       captureStdout(
         for {
-          dir   <- tempLogDir
-          sink  <- FileSink.make(dir, "job-close")
-          _     <- ZIO.succeed(sink.writeFileSync("before-close"))
-          _     <- sink.close()
-          _     <- ZIO.succeed(sink.writeFileSync("after-close")) // closed → no-op, must not throw
-          path  =  dir.resolve("job-close.log")
+          dir  <- tempLogDir
+          sink <- FileSink.make(dir, "job-close")
+          _    <- ZIO.succeed(sink.writeFileSync("before-close"))
+          _    <- sink.close()
+          _    <- ZIO.succeed(sink.writeFileSync("after-close")) // closed → no-op, must not throw
+          path = dir.resolve("job-close.log")
           lines <- ZIO.attempt(Files.readAllLines(path).asScala.toList)
         } yield assertTrue(lines == List("before-close"))
       ).map(_._1)
@@ -138,11 +138,11 @@ object TestJobLogSink extends ZIOSpecDefault {
     test("make tolerates an open failure: file logging suppressed, stdout tee still works, no throw") {
       captureStdout(
         for {
-          base       <- tempLogDir
-          missing    =  base.resolve("does-not-exist") // parent dir absent → newBufferedWriter(CREATE) fails
+          base <- tempLogDir
+          missing = base.resolve("does-not-exist") // parent dir absent → newBufferedWriter(CREATE) fails
           sink       <- FileSink.make(missing, "job-nodir")
-          _          <- ZIO.succeed(sink.writeFileSync("dropped"))   // suppressed, gate closed → no-op, must not throw
-          _          <- ZIO.succeed(sink.writeConsoleSync("teed"))   // tee still works
+          _          <- ZIO.succeed(sink.writeFileSync("dropped")) // suppressed, gate closed → no-op, must not throw
+          _          <- ZIO.succeed(sink.writeConsoleSync("teed")) // tee still works
           fileAbsent <- ZIO.attempt(!Files.exists(missing.resolve("job-nodir.log")))
         } yield fileAbsent
       ).map { case (fileAbsent, out) =>
@@ -153,13 +153,13 @@ object TestJobLogSink extends ZIOSpecDefault {
   private def testSweepBeforeDeletesOldLogsOnly =
     test("sweepBefore deletes *.log files older than cutoff, keeps fresh logs and non-log files") {
       for {
-        dir     <- tempLogDir
+        dir <- tempLogDir
         oldLog   = dir.resolve("old.log")
         freshLog = dir.resolve("fresh.log")
         keepTxt  = dir.resolve("keep.txt") // old, but not a *.log → must survive the glob
         cutoff   = Instant.now()
         old      = FileTime.from(cutoff.minus(2, ChronoUnit.DAYS))
-        fresh    = FileTime.from(cutoff.plus(1, ChronoUnit.DAYS)) // pin ahead of cutoff so mtime granularity can't flip it
+        fresh = FileTime.from(cutoff.plus(1, ChronoUnit.DAYS)) // pin ahead of cutoff so mtime granularity can't flip it
         _ <- ZIO.attempt {
           Files.write(oldLog, "old".getBytes(StandardCharsets.UTF_8))
           Files.write(freshLog, "fresh".getBytes(StandardCharsets.UTF_8))
@@ -180,11 +180,11 @@ object TestJobLogSink extends ZIOSpecDefault {
   private def testSweepBeforeSkipsLiveJobLogs =
     test("sweepBefore leaves a live job's log alone even when it is older than the cutoff") {
       for {
-        dir     <- tempLogDir
-        liveLog  = dir.resolve("live-job.log")
-        deadLog  = dir.resolve("dead-job.log")
-        cutoff   = Instant.now()
-        old      = FileTime.from(cutoff.minus(2, ChronoUnit.DAYS))
+        dir <- tempLogDir
+        liveLog = dir.resolve("live-job.log")
+        deadLog = dir.resolve("dead-job.log")
+        cutoff  = Instant.now()
+        old     = FileTime.from(cutoff.minus(2, ChronoUnit.DAYS))
         _ <- ZIO.attempt {
           Files.write(liveLog, "live".getBytes(StandardCharsets.UTF_8))
           Files.write(deadLog, "dead".getBytes(StandardCharsets.UTF_8))

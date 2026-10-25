@@ -47,7 +47,9 @@ object TestAppDir extends ZIOSpecDefault {
         reports == Right(Paths.get("/xdg-data/ccas/output"))
       )
     },
-    test("with the XDG variable unset, each falls back under $HOME: .local/state for job logs, .local/share for reports") {
+    test(
+      "with the XDG variable unset, each falls back under $HOME: .local/state for job logs, .local/share for reports"
+    ) {
       val jobLogs = JobLogs.resolve(configured = None, xdgHome = None, userHome = Some("/home/u"))
       val reports = Reports.resolve(configured = None, xdgHome = None, userHome = Some("/home/u"))
       assertTrue(
@@ -55,7 +57,9 @@ object TestAppDir extends ZIOSpecDefault {
         reports == Right(Paths.get("/home/u/.local/share/ccas/output"))
       )
     },
-    test("a relative XDG variable is ignored, as the XDG spec requires, rather than resolved against the launch directory") {
+    test(
+      "a relative XDG variable is ignored, as the XDG spec requires, rather than resolved against the launch directory"
+    ) {
       val resolved = Reports.resolve(
         configured = None,
         xdgHome = Some("share"),

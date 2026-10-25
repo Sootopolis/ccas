@@ -72,18 +72,19 @@ object TestScheduleParams extends ZIOSpecDefault {
     }
   }
 
-  private def testHistoryEffectiveRefresh = test("History refresh coalesce: hours wins, else bare flag means 0, else None") {
-    val explicitHours = HistoryOptions(None, None, Some(true), Some(5))
-    val bareFlag      = HistoryOptions(None, None, Some(true), None)
-    val neither       = HistoryOptions(None, None, None, None)
-    ZIO.succeed(
-      assertTrue(
-        explicitHours.effectiveRefresh.contains(5),
-        bareFlag.effectiveRefresh.contains(0),
-        neither.effectiveRefresh.isEmpty
+  private def testHistoryEffectiveRefresh =
+    test("History refresh coalesce: hours wins, else bare flag means 0, else None") {
+      val explicitHours = HistoryOptions(None, None, Some(true), Some(5))
+      val bareFlag      = HistoryOptions(None, None, Some(true), None)
+      val neither       = HistoryOptions(None, None, None, None)
+      ZIO.succeed(
+        assertTrue(
+          explicitHours.effectiveRefresh.contains(5),
+          bareFlag.effectiveRefresh.contains(0),
+          neither.effectiveRefresh.isEmpty
+        )
       )
-    )
-  }
+    }
 
   private def testStatsPeriodBothPresent = test("StatsOptions.period parses both since and until into a period") {
     StatsOptions(Some("2026-01-01"), Some("2026-02-01T00:00:00Z"), None).period.map { period =>

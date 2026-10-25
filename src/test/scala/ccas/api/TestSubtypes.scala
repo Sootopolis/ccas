@@ -94,7 +94,7 @@ object TestSubtypes extends ZIOSpecDefault {
       assertTrue(s.toJson.fromJson[ClubSlug] == Right(s))
     },
     test("fromUrl takes the last path segment, and throws on a URL that names no club") {
-      val named  = URL.decode("https://api.chess.com/pub/club/devon-chess").toOption.get
+      val named   = URL.decode("https://api.chess.com/pub/club/devon-chess").toOption.get
       val unnamed = URL.decode("https://api.chess.com").toOption.get
       assertTrue(
         ClubSlug.fromUrl(named) == ClubSlug("devon-chess"),

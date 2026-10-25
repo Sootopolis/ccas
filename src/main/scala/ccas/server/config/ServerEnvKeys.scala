@@ -9,10 +9,10 @@ package ccas.server.config
   * accepts any key (env vars are open-ended) and only *warns* on one not listed here.
   */
 final case class ServerEnvKey(
-    name: String,
-    description: String,
-    domain: ServerEnvKey.Domain,
-    sensitivity: ServerEnvKey.Sensitivity
+  name: String,
+  description: String,
+  domain: ServerEnvKey.Domain,
+  sensitivity: ServerEnvKey.Sensitivity
 )
 
 object ServerEnvKey {
@@ -118,5 +118,6 @@ object ServerEnvKeys {
 
   /** Mask a secret value for display; pass non-secret values through unchanged. A blank value is shown verbatim. */
   def redact(name: String, value: String): String =
-    if (isSecret(name) && value.nonEmpty) { "****" } else { value }
+    if (isSecret(name) && value.nonEmpty) { "****" }
+    else { value }
 }

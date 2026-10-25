@@ -49,7 +49,7 @@ object TestJobRunSql extends ZIOSpecDefault {
     JobRun(id2, JobKind.MatchRef, None, RunTrigger.Cli, JobRunStatus.Running, Some("params"), Times.t2, None, None)
 
   private val deleteAll = for {
-    _ <- connectZIO { sql"DELETE FROM job_run".update.run() }
+    _ <- connectZIO(sql"DELETE FROM job_run".update.run())
     _ <- Club.upsert(Club(clubIdA, Times.t0, ClubSlug("club-a"), "Club A", None, None, None))
     _ <- Club.upsert(Club(clubIdB, Times.t0, ClubSlug("club-b"), "Club B", None, None, None))
   } yield ()
@@ -194,24 +194,35 @@ object TestJobRunSql extends ZIOSpecDefault {
     )
   }
 
-  private def testMarkCancelledFlipsRunning = test("markCancelled marks a Running job Cancelled with completedAt + error") {
-    for {
-      _      <- deleteAll
-      _      <- JobRun.insert(run0) // Running
-      count  <- JobRun.markCancelled(id0, Times.t1)
-      result <- JobRun.selectId(id0)
-    } yield assertTrue(
-      count == 1,
-      result.get.status == JobRunStatus.Cancelled,
-      result.get.completedAt.contains(Times.t1),
-      result.get.error.contains("Cancelled by operator")
-    )
-  }
+  private def testMarkCancelledFlipsRunning =
+    test("markCancelled marks a Running job Cancelled with completedAt + error") {
+      for {
+        _      <- deleteAll
+        _      <- JobRun.insert(run0) // Running
+        count  <- JobRun.markCancelled(id0, Times.t1)
+        result <- JobRun.selectId(id0)
+      } yield assertTrue(
+        count == 1,
+        result.get.status == JobRunStatus.Cancelled,
+        result.get.completedAt.contains(Times.t1),
+        result.get.error.contains("Cancelled by operator")
+      )
+    }
 
   private def testMarkCancelledIgnoresTerminal =
     test("markCancelled is a no-op on an already-terminal job (guards against clobbering Completed/Failed)") {
       val completed =
-        JobRun(id0, JobKind.Recruitment, None, RunTrigger.Cli, JobRunStatus.Completed, None, Times.t0, Some(Times.t1), None)
+        JobRun(
+          id0,
+          JobKind.Recruitment,
+          None,
+          RunTrigger.Cli,
+          JobRunStatus.Completed,
+          None,
+          Times.t0,
+          Some(Times.t1),
+          None
+        )
       for {
         _      <- deleteAll
         _      <- JobRun.insert(completed)

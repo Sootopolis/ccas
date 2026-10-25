@@ -98,8 +98,8 @@ object ScheduleParams {
     */
   def decode[A](params: Option[String], default: A)(using codec: JsonCodec[A]): Task[A] =
     params match {
-      case None                          => ZIO.succeed(default)
-      case Some(s) if s.trim.isEmpty     => ZIO.succeed(default)
+      case None                      => ZIO.succeed(default)
+      case Some(s) if s.trim.isEmpty => ZIO.succeed(default)
       case Some(s) =>
         ZIO
           .fromEither(codec.decoder.decodeJson(s))

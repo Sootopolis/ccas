@@ -124,9 +124,8 @@ object ClubMatch {
       sql"""SELECT match_id, (time_class != $daily) AS is_live, (team1_club_id = $clubId) AS is_team1
             FROM club_match
             WHERE team1_club_id = $clubId OR team2_club_id = $clubId
-            LIMIT 1""".query[(ClubMatchId, Boolean, Boolean)].run().headOption.map {
-        case (matchId, isLive, isTeam1) =>
-          ClubMatchRef(clubId, matchId, isLive, isTeam1)
+            LIMIT 1""".query[(ClubMatchId, Boolean, Boolean)].run().headOption.map { case (matchId, isLive, isTeam1) =>
+        ClubMatchRef(clubId, matchId, isLive, isTeam1)
       }
     }
 

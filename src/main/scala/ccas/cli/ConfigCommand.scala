@@ -37,7 +37,10 @@ object ConfigCommand {
     } else {
       warnIfUnknown(k) *> warnIfUnusableDatabaseUrl(k, value) *> ServerEnvFile
         .set(file, k, value)
-        .foldZIO(ioError, _ => Console.printLine(s"set $k = ${ServerEnvKeys.redact(k, value)}").orDie.as(ExitCode.success))
+        .foldZIO(
+          ioError,
+          _ => Console.printLine(s"set $k = ${ServerEnvKeys.redact(k, value)}").orDie.as(ExitCode.success)
+        )
     }
   }
 
@@ -86,16 +89,20 @@ object ConfigCommand {
     }
 
   private def printList(map: Map[String, String], showSecrets: Boolean): UIO[ExitCode] = {
-    def display(name: String, v: String): String = if (showSecrets) { v } else { ServerEnvKeys.redact(name, v) }
+    def display(name: String, v: String): String = if (showSecrets) { v }
+    else { ServerEnvKeys.redact(name, v) }
     def line(name: String): String = s"$name=${map.get(name).fold("(unset)")(display(name, _))}"
     // Known keys grouped under a `# <domain>` header (registry order within each domain); domains separated by a blank.
     val knownSections = ServerEnvKeys.grouped.map { case (domain, keys) =>
       (s"# ${domain.label}" :: keys.map(k => line(k.name))).mkString("\n")
     }
     val knownNames = ServerEnvKeys.all.map(_.name).toSet
-    val otherLines = map.view.filterKeys(!knownNames(_)).toList.sortBy(_._1).map { case (name, v) => s"$name=${display(name, v)}" }
+    val otherLines = map.view.filterKeys(!knownNames(_)).toList.sortBy(_._1).map { case (name, v) =>
+      s"$name=${display(name, v)}"
+    }
     val otherSection =
-      if (otherLines.nonEmpty) { List(("# Other keys set in the file:" :: otherLines).mkString("\n")) } else { Nil }
+      if (otherLines.nonEmpty) { List(("# Other keys set in the file:" :: otherLines).mkString("\n")) }
+      else { Nil }
     val output = (knownSections ::: otherSection).mkString("\n\n")
     Console.printLine(output).orDie.as(ExitCode.success)
   }
@@ -104,27 +111,35 @@ object ConfigCommand {
 
   private def initProgram: Task[ExitCode] =
     for {
-      exists  <- ZIO.attemptBlocking(Files.exists(file))
-      proceed <- if (exists) { confirmOverwrite } else { ZIO.succeed(true) }
-      code    <- if (proceed) { runWizard } else { Console.printLine("aborted").as(ExitCode.success) }
+      exists <- ZIO.attemptBlocking(Files.exists(file))
+      proceed <-
+        if (exists) { confirmOverwrite }
+        else { ZIO.succeed(true) }
+      code <-
+        if (proceed) { runWizard }
+        else { Console.printLine("aborted").as(ExitCode.success) }
     } yield code
 
   private def runWizard: Task[ExitCode] =
     for {
-      email   <- promptRequired("Contact email (CCAS_CONTACT_EMAIL): ")
-      dbPairs <- promptDatabase
+      email      <- promptRequired("Contact email (CCAS_CONTACT_EMAIL): ")
+      dbPairs    <- promptDatabase
       portOption <- promptOptional("Server port [8080] (Enter to keep the default): ")
       pairs = ("CCAS_CONTACT_EMAIL" -> email) :: dbPairs ::: portOption.map("SERVER_PORT" -> _).toList
       _       <- preview(pairs)
       confirm <- promptConfirm(s"Save to $file? [Y/n]: ")
-      code    <- if (confirm) { save(pairs) } else { Console.printLine("aborted").as(ExitCode.success) }
+      code <-
+        if (confirm) { save(pairs) }
+        else { Console.printLine("aborted").as(ExitCode.success) }
     } yield code
 
   private def save(pairs: List[(String, String)]): Task[ExitCode] =
     ServerEnvFile.setAll(file, pairs) *> Console.printLine(s"wrote $file").as(ExitCode.success)
 
   private def promptDatabase: Task[List[(String, String)]] =
-    prompt("Database connection: [1] full JDBC URL  [2] separate host/port/name/user/password — choose [1/2]: ").flatMap {
+    prompt(
+      "Database connection: [1] full JDBC URL  [2] separate host/port/name/user/password — choose [1/2]: "
+    ).flatMap {
       case "1" | "" => promptDbUrl
       case "2"      => promptDbFields
       case _        => Console.printLine("  enter 1 or 2") *> promptDatabase
@@ -157,22 +172,32 @@ object ConfigCommand {
   private def prompt(label: String): Task[String] =
     (Console.print(label) *> Console.readLine)
       .map(_.trim)
-      .catchSome { case _: EOFException => ZIO.fail(new RuntimeException("'ccas config init' requires an interactive terminal")) }
+      .catchSome { case _: EOFException =>
+        ZIO.fail(new RuntimeException("'ccas config init' requires an interactive terminal"))
+      }
 
   private def promptRequired(label: String): Task[String] =
-    prompt(label).flatMap(s => if (s.nonEmpty) { ZIO.succeed(s) } else { Console.printLine("  value is required") *> promptRequired(label) })
+    prompt(label).flatMap { s =>
+      if (s.nonEmpty) { ZIO.succeed(s) }
+      else { Console.printLine("  value is required") *> promptRequired(label) }
+    }
 
   private def promptOptional(label: String): Task[Option[String]] =
     prompt(label).map(s => Option(s).filter(_.nonEmpty))
 
   private def promptDefault(label: String, default: String): Task[String] =
-    prompt(label).map(s => if (s.nonEmpty) { s } else { default })
+    prompt(label).map { s =>
+      if (s.nonEmpty) { s }
+      else { default }
+    }
 
   private def promptConfirm(label: String): Task[Boolean] =
     prompt(label).map(_.toLowerCase).map(s => s.isEmpty || s == "y" || s == "yes")
 
   private def confirmOverwrite: Task[Boolean] =
-    prompt(s"$file already exists — update it with these values? [y/N]: ").map(_.toLowerCase).map(s => s == "y" || s == "yes")
+    prompt(s"$file already exists — update it with these values? [y/N]: ").map(_.toLowerCase).map { s =>
+      s == "y" || s == "yes"
+    }
 
   // --- shared ---
 

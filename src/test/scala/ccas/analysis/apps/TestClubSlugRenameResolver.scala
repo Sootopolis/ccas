@@ -3,14 +3,10 @@ package ccas.analysis.apps
 import java.time.Instant
 
 import com.augustnagro.magnum.sql
-import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 import zio.RIO
+import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
-import ccas.analysis.apps.recruitment.RecruitmentTestSupport.{
-  apiClubJson,
-  apiPlayerClubsJson,
-  fakeChessComClient
-}
+import ccas.analysis.apps.recruitment.RecruitmentTestSupport.{apiClubJson, apiPlayerClubsJson, fakeChessComClient}
 import ccas.analysis.tables.{Club, ClubAdmin, ClubName, Player, Tables}
 import ccas.api.misc.enums.PlayerStatusCategory
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
@@ -107,8 +103,8 @@ object TestClubSlugRenameResolver extends ZIOSpecDefault {
   }
 
   private def coldDiscoveryFetchesAndPersists = test("cold discovery: fetches, persists, returns clubId") {
-    val clubId = ClubId(901_002)
-    val slug   = ClubSlug("first-time")
+    val clubId    = ClubId(901_002)
+    val slug      = ClubSlug("first-time")
     val responses = Map(s"club/${slug.value}" -> apiClubJson(ClubId.unwrap(clubId), slug.value))
     for {
       client    <- fakeChessComClient(responses)
@@ -117,13 +113,14 @@ object TestClubSlugRenameResolver extends ZIOSpecDefault {
     } yield assertTrue(result.contains(clubId), persisted.exists(_.clubId == clubId))
   }
 
-  private def fourOhFourReturnsNone = test("404 + no Club row: returns None (recovery not wired through this entry point)") {
-    val slug = ClubSlug("never-existed")
-    for {
-      client <- fakeChessComClient(Map.empty)
-      result <- ClubSlugRenameResolver.resolveOrFetch(client, slug)
-    } yield assertTrue(result.isEmpty)
-  }
+  private def fourOhFourReturnsNone =
+    test("404 + no Club row: returns None (recovery not wired through this entry point)") {
+      val slug = ClubSlug("never-existed")
+      for {
+        client <- fakeChessComClient(Map.empty)
+        result <- ClubSlugRenameResolver.resolveOrFetch(client, slug)
+      } yield assertTrue(result.isEmpty)
+    }
 
   // --- Tier C suite ---
 
@@ -135,15 +132,15 @@ object TestClubSlugRenameResolver extends ZIOSpecDefault {
       val adminPid  = PlayerId(902_101)
       val adminName = "tier-c-admin"
       val responses = Map(
-        s"player/$adminName/clubs"  -> apiPlayerClubsJson(List(freshSlug.value)),
-        s"club/${freshSlug.value}"  -> apiClubJson(ClubId.unwrap(clubId), freshSlug.value)
+        s"player/$adminName/clubs" -> apiPlayerClubsJson(List(freshSlug.value)),
+        s"club/${freshSlug.value}" -> apiClubJson(ClubId.unwrap(clubId), freshSlug.value)
       )
       for {
-        _      <- Club.upsert(Club(clubId, t0, staleSlug, "Old Name", None, None, None))
-        _      <- insertPlayer(adminPid, adminName)
-        _      <- insertAdmin(clubId, adminPid)
-        client <- fakeChessComClient(responses)
-        result <- ClubSlugRenameResolver.resolveAndPersist(client, staleSlug, Some(clubId))
+        _       <- Club.upsert(Club(clubId, t0, staleSlug, "Old Name", None, None, None))
+        _       <- insertPlayer(adminPid, adminName)
+        _       <- insertAdmin(clubId, adminPid)
+        client  <- fakeChessComClient(responses)
+        result  <- ClubSlugRenameResolver.resolveAndPersist(client, staleSlug, Some(clubId))
         updated <- Club.selectId(clubId)
       } yield assertTrue(
         result.exists(r => r.slug == freshSlug && r.api.clubId == clubId),
@@ -188,14 +185,14 @@ object TestClubSlugRenameResolver extends ZIOSpecDefault {
   // lost, so asking under it would ask about the player that took it.
   private def tierCSkipsAdminHoldingNoName =
     test("Tier C: an admin holding no name is skipped without an HTTP call; another admin still resolves") {
-      val clubId     = ClubId(902_004)
-      val staleSlug  = ClubSlug("tier-c-nameless")
-      val freshSlug  = ClubSlug("tier-c-nameless-fresh")
+      val clubId      = ClubId(902_004)
+      val staleSlug   = ClubSlug("tier-c-nameless")
+      val freshSlug   = ClubSlug("tier-c-nameless-fresh")
       val namelessPid = PlayerId(902_201)
-      val livePid    = PlayerId(902_202)
-      val takerPid   = PlayerId(902_203)
-      val livename   = "live-admin"
-      val lostName   = "lost-admin"
+      val livePid     = PlayerId(902_202)
+      val takerPid    = PlayerId(902_203)
+      val livename    = "live-admin"
+      val lostName    = "lost-admin"
       val responses = Map(
         s"player/$livename/clubs"  -> apiPlayerClubsJson(List(freshSlug.value)),
         s"club/${freshSlug.value}" -> apiClubJson(ClubId.unwrap(clubId), freshSlug.value)
@@ -246,21 +243,23 @@ object TestClubSlugRenameResolver extends ZIOSpecDefault {
     }
 
   private def tierCSkipsSlugsAlreadyKnownToDb =
-    test("Tier C: candidate slugs already present in the Club table are skipped (would otherwise verify an unrelated club)") {
-      val targetClubId  = ClubId(902_005)
-      val knownClubId   = ClubId(902_006)
-      val staleSlug     = ClubSlug("tier-c-known-skip")
-      val knownSlug     = ClubSlug("admin-other-known-club")
-      val freshSlug     = ClubSlug("tier-c-known-skip-fresh")
-      val adminPid      = PlayerId(902_301)
-      val adminName     = "shared-admin"
+    test(
+      "Tier C: candidate slugs already present in the Club table are skipped (would otherwise verify an unrelated club)"
+    ) {
+      val targetClubId = ClubId(902_005)
+      val knownClubId  = ClubId(902_006)
+      val staleSlug    = ClubSlug("tier-c-known-skip")
+      val knownSlug    = ClubSlug("admin-other-known-club")
+      val freshSlug    = ClubSlug("tier-c-known-skip-fresh")
+      val adminPid     = PlayerId(902_301)
+      val adminName    = "shared-admin"
       // Admin belongs to BOTH the known-club (already in DB; should be skipped) AND the renamed club (freshSlug).
       // If the resolver fetched the known slug, no `api_fetch_failure` row would still appear (200 OK), but the
       // primary correctness signal is that the result is the rename, not a false None.
       val responses = Map(
-        s"player/$adminName/clubs"  -> apiPlayerClubsJson(List(knownSlug.value, freshSlug.value)),
-        s"club/${knownSlug.value}"  -> apiClubJson(ClubId.unwrap(knownClubId), knownSlug.value),
-        s"club/${freshSlug.value}"  -> apiClubJson(ClubId.unwrap(targetClubId), freshSlug.value)
+        s"player/$adminName/clubs" -> apiPlayerClubsJson(List(knownSlug.value, freshSlug.value)),
+        s"club/${knownSlug.value}" -> apiClubJson(ClubId.unwrap(knownClubId), knownSlug.value),
+        s"club/${freshSlug.value}" -> apiClubJson(ClubId.unwrap(targetClubId), freshSlug.value)
       )
       for {
         _      <- Club.upsert(Club(targetClubId, t0, staleSlug, "Stale", None, None, None))
@@ -274,24 +273,24 @@ object TestClubSlugRenameResolver extends ZIOSpecDefault {
 
   private def tierCAdvancesPastAdminWhose404s =
     test("Tier C: first admin's /clubs 404s → moves to next admin and resolves") {
-      val clubId      = ClubId(902_007)
-      val staleSlug   = ClubSlug("tier-c-skip-404")
-      val freshSlug   = ClubSlug("tier-c-skip-404-fresh")
-      val gonePid     = PlayerId(902_401)
-      val livePid     = PlayerId(902_402)
-      val goneName    = "gone-admin"
-      val liveName    = "still-here-admin"
+      val clubId    = ClubId(902_007)
+      val staleSlug = ClubSlug("tier-c-skip-404")
+      val freshSlug = ClubSlug("tier-c-skip-404-fresh")
+      val gonePid   = PlayerId(902_401)
+      val livePid   = PlayerId(902_402)
+      val goneName  = "gone-admin"
+      val liveName  = "still-here-admin"
       // gone-admin gets no /clubs route → 404. live-admin returns the rename.
       val responses = Map(
         s"player/$liveName/clubs"  -> apiPlayerClubsJson(List(freshSlug.value)),
         s"club/${freshSlug.value}" -> apiClubJson(ClubId.unwrap(clubId), freshSlug.value)
       )
       for {
-        _      <- Club.upsert(Club(clubId, t0, staleSlug, "Stale", None, None, None))
-        _      <- insertPlayer(gonePid, goneName)
-        _      <- insertPlayer(livePid, liveName)
-        _      <- insertAdmin(clubId, gonePid)
-        _      <- insertAdmin(clubId, livePid)
+        _ <- Club.upsert(Club(clubId, t0, staleSlug, "Stale", None, None, None))
+        _ <- insertPlayer(gonePid, goneName)
+        _ <- insertPlayer(livePid, liveName)
+        _ <- insertAdmin(clubId, gonePid)
+        _ <- insertAdmin(clubId, livePid)
         // failures gates `/pub/player/$user/*` to 404 unconditionally.
         client <- fakeChessComClient(responses, failures = Set(goneName))
         result <- ClubSlugRenameResolver.resolveAndPersist(client, staleSlug, Some(clubId))

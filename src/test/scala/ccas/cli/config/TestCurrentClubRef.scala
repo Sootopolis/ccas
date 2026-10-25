@@ -86,9 +86,9 @@ object TestCurrentClubRef extends ZIOSpecDefault {
       // The pointer must not follow a name that has moved to someone else's club, or it would silently change which
       // club bare commands mean (#254).
       test("a Moved club is never a refresh target, though every other club that ran is") {
-        val ours    = NamedClub(ClubId(5), ClubSlug("team-a"))
-        val theirs  = NamedClub(ClubId(9), ClubSlug("team-b"))
-        val moved   = ClubResolution.Moved(theirs, ClubSlug("team-a"), List(ClubRef.of(ours)))
+        val ours   = NamedClub(ClubId(5), ClubSlug("team-a"))
+        val theirs = NamedClub(ClubId(9), ClubSlug("team-b"))
+        val moved  = ClubResolution.Moved(theirs, ClubSlug("team-a"), List(ClubRef.of(ours)))
         assertTrue(
           CurrentClubRef.refreshTarget(moved).isEmpty,
           CurrentClubRef.refreshTarget(ClubResolution.Known(ours)).contains(ours),

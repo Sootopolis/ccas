@@ -10,18 +10,17 @@ import java.util.concurrent.Executors
 import scala.jdk.CollectionConverters.*
 
 import com.typesafe.config.ConfigFactory
-
-import ccas.utils.sql.PostgresClient
-import zio.{Duration, durationInt, Executor, Promise, Ref, UIO, ZIO, ZLayer}
+import zio.{durationInt, Duration, Executor, Promise, Ref, UIO, ZIO, ZLayer}
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.analysis.tables.{AppSetting, Club, RunTrigger}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId}
 import ccas.server.ServerTables
+import ccas.utils.ProgressDisplay
 import ccas.utils.client.TestChessComClientSupport
 import ccas.utils.errors.ConflictException
 import ccas.utils.sql.{FreshSchemaLayer, TestDbCleanup}
-import ccas.utils.ProgressDisplay
+import ccas.utils.sql.PostgresClient
 
 object TestJobRunner extends ZIOSpecDefault {
 
@@ -167,8 +166,8 @@ object TestJobRunner extends ZIOSpecDefault {
           RunTrigger.Cli,
           _ => (started.succeed(()) *> gate.await).uninterruptible
         )
-        _      <- started.await
-        _      <- runner.cancel(id) // registers id in cancelRequested; the forked interrupt can't land (uninterruptible)
+        _ <- started.await
+        _ <- runner.cancel(id) // registers id in cancelRequested; the forked interrupt can't land (uninterruptible)
         result <- runner.submit(JobKind.Membership, Some(clubIdA), None, RunTrigger.Cli, _ => ZIO.unit).either
         _      <- gate.succeed(()) // release the await → pending interrupt lands → job settles Cancelled
         _      <- awaitStatus(runner, id)
@@ -185,9 +184,15 @@ object TestJobRunner extends ZIOSpecDefault {
       _      <- deleteAllJobRuns
       runner <- ZIO.service[JobRunner]
       gate   <- Promise.make[Nothing, Unit]
-      fibers <- ZIO.foreach(List.fill(5)(()))(
-        _ => (gate.await *> runner.submit(JobKind.Recruitment, Some(ClubId(204)), None, RunTrigger.Cli, _ => ZIO.never).either).fork
-      )
+      fibers <- ZIO.foreach(List.fill(5)(())) { _ =>
+        (gate.await *> runner.submit(
+          JobKind.Recruitment,
+          Some(ClubId(204)),
+          None,
+          RunTrigger.Cli,
+          _ => ZIO.never
+        ).either).fork
+      }
       _       <- gate.succeed(())
       results <- ZIO.foreach(fibers)(_.join)
       successes = results.count(_.isRight)
@@ -229,8 +234,8 @@ object TestJobRunner extends ZIOSpecDefault {
       runner  <- ZIO.service[JobRunner]
       started <- Promise.make[Nothing, Unit]
       // The job announces it is running, then blocks forever — so it is unambiguously live when we cancel.
-      id  <- runner.submit(JobKind.MatchRef, None, None, RunTrigger.Cli, _ => started.succeed(()) *> ZIO.never)
-      _   <- started.await
+      id        <- runner.submit(JobKind.MatchRef, None, None, RunTrigger.Cli, _ => started.succeed(()) *> ZIO.never)
+      _         <- started.await
       cancelled <- runner.cancel(id)
       job       <- awaitStatus(runner, id) // returns once the job leaves Running (here: Cancelled via onInterrupt)
     } yield assertTrue(
@@ -354,9 +359,9 @@ object TestJobRunner extends ZIOSpecDefault {
         _      <- deleteAllJobRuns
         runner <- ZIO.service[JobRunner]
         // Clears the jobs earlier tests left running, so the one below is the only job `interruptAll` finds.
-        _      <- runner.interruptAll
-        early  <- interruptBeforeFirstRun(runner, _ => runner.interruptAll)
-        job    <- runner.status(early.id)
+        _     <- runner.interruptAll
+        early <- interruptBeforeFirstRun(runner, _ => runner.interruptAll)
+        job   <- runner.status(early.id)
       } yield assertTrue(
         !early.ran,
         early.followEnded,
@@ -401,8 +406,8 @@ object TestJobRunner extends ZIOSpecDefault {
       runner <- ZIO.service[JobRunner]
       id     <- runner.submit(JobKind.MatchRef, None, None, RunTrigger.Cli, _ => ZIO.logInfo("hello from job"))
       _      <- awaitStatus(runner, id)
-      path   =  logDir.resolve(s"${JobRunId.unwrap(id)}.log")
-      lines  <- ZIO.attempt(Files.readAllLines(path).asScala.toList)
+      path = logDir.resolve(s"${JobRunId.unwrap(id)}.log")
+      lines <- ZIO.attempt(Files.readAllLines(path).asScala.toList)
     } yield assertTrue(
       lines.exists(_.contains("hello from job")),
       // ANSI stripped — file should be readable. The formatter emits at least one ESC byte; stripped output has none.
@@ -418,7 +423,7 @@ object TestJobRunner extends ZIOSpecDefault {
       val logDir = Paths.get(ConfigFactory.load().getString("job-logs.directory"))
       val aged   = logDir.resolve("aged-by-test.log")
       (for {
-        _       <- deleteAllJobRuns
+        _ <- deleteAllJobRuns
         // A window shorter than the compiled default, so a two-day-old log is swept only if this pass re-read the row.
         _       <- AppSetting.set(AppSetting.JobLogRetentionDays, 1)
         runner  <- ZIO.service[JobRunner]
@@ -431,7 +436,7 @@ object TestJobRunner extends ZIOSpecDefault {
           RunTrigger.Cli,
           _ => ZIO.logInfo("still running") *> started.succeed(()) *> release.await
         )
-        _       <- started.await
+        _ <- started.await
         liveLog = logDir.resolve(s"${JobRunId.unwrap(id)}.log")
         _ <- ZIO.attempt {
           Files.write(aged, "aged".getBytes(StandardCharsets.UTF_8))
@@ -476,17 +481,17 @@ object TestJobRunner extends ZIOSpecDefault {
     for {
       _      <- deleteAllJobRuns
       runner <- ZIO.service[JobRunner]
-      id     <- runner.submit(
+      id <- runner.submit(
         JobKind.MatchRef,
         None,
         None,
         RunTrigger.Cli,
         _ => ZIO.logInfo("line one") *> ZIO.logInfo("line two")
       )
-      _         <- awaitStatus(runner, id)
-      logs      <- runner.logStream(id)
-      stream    <- streamingLines(logs)
-      lines     <- stream.runCollect.map(_.toList)
+      _      <- awaitStatus(runner, id)
+      logs   <- runner.logStream(id)
+      stream <- streamingLines(logs)
+      lines  <- stream.runCollect.map(_.toList)
     } yield assertTrue(
       lines.exists(_.contains("line one")),
       lines.exists(_.contains("line two"))
@@ -528,7 +533,7 @@ object TestJobRunner extends ZIOSpecDefault {
         runner  <- ZIO.service[JobRunner]
         started <- Promise.make[Nothing, Unit]
         release <- Promise.make[Nothing, Unit]
-        id      <- runner.submit(
+        id <- runner.submit(
           JobKind.MatchRef,
           None,
           None,
@@ -575,9 +580,9 @@ object TestJobRunner extends ZIOSpecDefault {
             }
         )
         streamOption <- runner.progressStream(id)
-        stream    <- ZIO.fromOption(streamOption).orElseFail(new Exception("expected a live progress stream"))
-        seen      <- Promise.make[Nothing, Unit]
-        framesRef <- Ref.make(List.empty[String])
+        stream       <- ZIO.fromOption(streamOption).orElseFail(new Exception("expected a live progress stream"))
+        seen         <- Promise.make[Nothing, Unit]
+        framesRef    <- Ref.make(List.empty[String])
         collect <- stream
           .runForeach(f => framesRef.update(f :: _) *> ZIO.whenDiscard(f.contains("working"))(seen.succeed(()).unit))
           .fork
@@ -602,13 +607,19 @@ object TestJobRunner extends ZIOSpecDefault {
       runner <- ZIO.service[JobRunner]
       gate   <- Promise.make[Nothing, Unit]
       // The job logs a line, then blocks on the gate so it stays Running while we subscribe.
-      id        <- runner.submit(JobKind.MatchRef, None, None, RunTrigger.Cli, _ => ZIO.logInfo("streaming line") *> gate.await)
-      logs      <- runner.logStream(id)
-      stream    <- streamingLines(logs)
-      collect   <- stream.runCollect.fork
-      _         <- gate.succeed(())
-      _         <- awaitStatus(runner, id)
-      lines     <- collect.join.map(_.toList)
+      id <- runner.submit(
+        JobKind.MatchRef,
+        None,
+        None,
+        RunTrigger.Cli,
+        _ => ZIO.logInfo("streaming line") *> gate.await
+      )
+      logs    <- runner.logStream(id)
+      stream  <- streamingLines(logs)
+      collect <- stream.runCollect.fork
+      _       <- gate.succeed(())
+      _       <- awaitStatus(runner, id)
+      lines   <- collect.join.map(_.toList)
     } yield assertTrue(lines.exists(_.contains("streaming line")))
   }
 
@@ -618,19 +629,19 @@ object TestJobRunner extends ZIOSpecDefault {
   private def testLogStreamCarriesPartialLineAcrossTicks =
     test("FileTail buffers a line split across two appends and emits it exactly once") {
       for {
-        dir     <- ZIO.attempt(Files.createTempDirectory("ccas-filetail-partial"))
-        jobId    = JobRunId.wrap("partial-line-job")
-        path     = dir.resolve(s"${JobRunId.unwrap(jobId)}.log")
+        dir <- ZIO.attempt(Files.createTempDirectory("ccas-filetail-partial"))
+        jobId = JobRunId.wrap("partial-line-job")
+        path  = dir.resolve(s"${JobRunId.unwrap(jobId)}.log")
         promise <- Promise.make[Nothing, Unit]
         ref     <- Ref.make(Map(jobId -> promise)) // present + uncompleted => treated as live
-        tail     = new FileTail(dir, ref, 20.millis) // small poll interval for a fast, deterministic test
+        tail = new FileTail(dir, ref, 20.millis) // small poll interval for a fast, deterministic test
         collect <- tail.subscribe(jobId).runCollect.fork
         _       <- appendBytes(path, "hello".getBytes(StandardCharsets.UTF_8)) // no trailing newline: stays buffered
-        _       <- ZIO.sleep(200.millis)                                       // > pollInterval: a tick observes the partial
-        _       <- appendBytes(path, " world\n".getBytes(StandardCharsets.UTF_8))
-        _       <- ZIO.sleep(200.millis)  // let a live tick emit the joined line before we flip terminal
-        _       <- promise.succeed(())    // job now terminal => stream drains and ends
-        lines   <- collect.join.map(_.toList)
+        _     <- ZIO.sleep(200.millis) // > pollInterval: a tick observes the partial
+        _     <- appendBytes(path, " world\n".getBytes(StandardCharsets.UTF_8))
+        _     <- ZIO.sleep(200.millis) // let a live tick emit the joined line before we flip terminal
+        _     <- promise.succeed(())   // job now terminal => stream drains and ends
+        lines <- collect.join.map(_.toList)
       } yield assertTrue(lines == List("hello world"))
     }
 
@@ -640,14 +651,14 @@ object TestJobRunner extends ZIOSpecDefault {
   private def testLogStreamJoinsMultibyteCharAcrossTicks =
     test("FileTail joins a multibyte UTF-8 char split across two appends") {
       for {
-        dir     <- ZIO.attempt(Files.createTempDirectory("ccas-filetail-multibyte"))
-        jobId    = JobRunId.wrap("multibyte-line-job")
-        path     = dir.resolve(s"${JobRunId.unwrap(jobId)}.log")
+        dir <- ZIO.attempt(Files.createTempDirectory("ccas-filetail-multibyte"))
+        jobId = JobRunId.wrap("multibyte-line-job")
+        path  = dir.resolve(s"${JobRunId.unwrap(jobId)}.log")
         promise <- Promise.make[Nothing, Unit]
         ref     <- Ref.make(Map(jobId -> promise))
-        tail     = new FileTail(dir, ref, 20.millis)
+        tail = new FileTail(dir, ref, 20.millis)
         collect <- tail.subscribe(jobId).runCollect.fork
-        _       <- appendBytes(path, Array[Byte]('x'.toByte, 0xC3.toByte)) // "x" + lead byte of é, no newline
+        _       <- appendBytes(path, Array[Byte]('x'.toByte, 0xC3.toByte))  // "x" + lead byte of é, no newline
         _       <- ZIO.sleep(200.millis)
         _       <- appendBytes(path, Array[Byte](0xA9.toByte, '\n'.toByte)) // trailing byte of é + newline
         _       <- ZIO.sleep(200.millis)
@@ -662,22 +673,23 @@ object TestJobRunner extends ZIOSpecDefault {
   // \u00e9 case and the break lands deep inside the sequence.
   private def testLogStreamReassemblesCjkAndEmojiTornMidChar =
     test("FileTail reassembles a Chinese + emoji line torn mid-emoji across appends") {
-      val line  = "\u4e2d\u6587\ud83d\ude00" // U+4E2D U+6587 (3-byte CJK each) + grinning-face emoji U+1F600 (4-byte / surrogate pair)
+      val line =
+        "\u4e2d\u6587\ud83d\ude00" // U+4E2D U+6587 (3-byte CJK each) + grinning-face emoji U+1F600 (4-byte / surrogate pair)
       val bytes = line.getBytes(StandardCharsets.UTF_8) // 10 bytes total: 3 + 3 + 4
       for {
-        dir     <- ZIO.attempt(Files.createTempDirectory("ccas-filetail-cjk"))
-        jobId    = JobRunId.wrap("cjk-emoji-job")
-        path     = dir.resolve(s"${JobRunId.unwrap(jobId)}.log")
+        dir <- ZIO.attempt(Files.createTempDirectory("ccas-filetail-cjk"))
+        jobId = JobRunId.wrap("cjk-emoji-job")
+        path  = dir.resolve(s"${JobRunId.unwrap(jobId)}.log")
         promise <- Promise.make[Nothing, Unit]
         ref     <- Ref.make(Map(jobId -> promise))
-        tail     = new FileTail(dir, ref, 20.millis)
+        tail = new FileTail(dir, ref, 20.millis)
         collect <- tail.subscribe(jobId).runCollect.fork
         _       <- appendBytes(path, bytes.slice(0, 8)) // \u4e2d\u6587 + first 2 of the emoji's 4 bytes, no newline
         _       <- ZIO.sleep(200.millis)
-        _       <- appendBytes(path, bytes.slice(8, bytes.length) ++ Array('\n'.toByte)) // last 2 emoji bytes + newline
-        _       <- ZIO.sleep(200.millis)
-        _       <- promise.succeed(())
-        lines   <- collect.join.map(_.toList)
+        _     <- appendBytes(path, bytes.slice(8, bytes.length) ++ Array('\n'.toByte)) // last 2 emoji bytes + newline
+        _     <- ZIO.sleep(200.millis)
+        _     <- promise.succeed(())
+        lines <- collect.join.map(_.toList)
       } yield assertTrue(lines == List(line))
     }
 

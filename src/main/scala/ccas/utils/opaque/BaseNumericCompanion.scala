@@ -1,10 +1,10 @@
 package ccas.utils.opaque
 
 import com.augustnagro.magnum.DbCodec
-import zio.config.magnolia.DeriveConfig
-import zio.json.{JsonCodec, JsonDecoder, JsonEncoder}
 import zio.Chunk
 import zio.Config.Error.InvalidData
+import zio.config.magnolia.DeriveConfig
+import zio.json.{JsonCodec, JsonDecoder, JsonEncoder}
 
 import ccas.utils.opaque.OpaqueHelpers.orThrowDbRead
 
@@ -25,7 +25,7 @@ trait BaseNumericCompanion[T] {
   // null-`name` race if a `given` body somehow gets resolved during init.
   protected def name: String = getClass.getSimpleName.stripSuffix("$")
 
-  protected def validateRaw(raw: T): Either[String, T] = Right(raw)
+  protected def validateRaw(raw: T): Either[String, T]  = Right(raw)
   protected def validated(raw: T): Either[String, Type] = validateRaw(raw).map(wrap)
 
   protected def baseJsonCodec: JsonCodec[T]

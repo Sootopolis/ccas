@@ -14,25 +14,47 @@ object StatsReport {
     ranked.zipWithIndex.foreach { case (mc, idx) =>
       val r  = mc.raw
       val fp = mc.fairPlay
-      sb.append(csvRow(
-        (idx + 1).toString, mc.displayName, r.boards.toString, r.games.toString,
-        r.wins.toString, r.draws.toString, r.losses.toString,
-        formatPoints(r.points), formatPercent(r.scoreRate),
-        fp.wins.toString, fp.draws.toString, fp.losses.toString,
-        formatPoints(fp.points), formatPercent(fp.scoreRate)
-      ))
+      sb.append(
+        csvRow(
+          (idx + 1).toString,
+          mc.displayName,
+          r.boards.toString,
+          r.games.toString,
+          r.wins.toString,
+          r.draws.toString,
+          r.losses.toString,
+          formatPoints(r.points),
+          formatPercent(r.scoreRate),
+          fp.wins.toString,
+          fp.draws.toString,
+          fp.losses.toString,
+          formatPoints(fp.points),
+          formatPercent(fp.scoreRate)
+        )
+      )
     }
 
     if (contributions.nonEmpty) {
       val rawTotal = contributions.map(_.raw).foldLeft(PlayerBoardStats.empty)(_ + _)
       val fpTotal  = contributions.map(_.fairPlay).foldLeft(PlayerBoardStats.empty)(_ + _)
-      sb.append(csvRow(
-        "", "TOTAL", rawTotal.boards.toString, rawTotal.games.toString,
-        rawTotal.wins.toString, rawTotal.draws.toString, rawTotal.losses.toString,
-        formatPoints(rawTotal.points), formatPercent(rawTotal.scoreRate),
-        fpTotal.wins.toString, fpTotal.draws.toString, fpTotal.losses.toString,
-        formatPoints(fpTotal.points), formatPercent(fpTotal.scoreRate)
-      ))
+      sb.append(
+        csvRow(
+          "",
+          "TOTAL",
+          rawTotal.boards.toString,
+          rawTotal.games.toString,
+          rawTotal.wins.toString,
+          rawTotal.draws.toString,
+          rawTotal.losses.toString,
+          formatPoints(rawTotal.points),
+          formatPercent(rawTotal.scoreRate),
+          fpTotal.wins.toString,
+          fpTotal.draws.toString,
+          fpTotal.losses.toString,
+          formatPoints(fpTotal.points),
+          formatPercent(fpTotal.scoreRate)
+        )
+      )
     }
 
     sb.toString
@@ -48,11 +70,18 @@ object StatsReport {
 
     eligible.zipWithIndex.foreach { case (mc, idx) =>
       val s = mc.raw
-      sb.append(csvRow(
-        (idx + 1).toString, mc.displayName, s.games.toString,
-        s.wins.toString, s.draws.toString, s.losses.toString,
-        formatPoints(s.points), formatPercent(s.scoreRate)
-      ))
+      sb.append(
+        csvRow(
+          (idx + 1).toString,
+          mc.displayName,
+          s.games.toString,
+          s.wins.toString,
+          s.draws.toString,
+          s.losses.toString,
+          formatPoints(s.points),
+          formatPercent(s.scoreRate)
+        )
+      )
     }
 
     sb.toString

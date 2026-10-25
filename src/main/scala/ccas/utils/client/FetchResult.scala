@@ -15,6 +15,7 @@ import ccas.analysis.tables.subtypes.ApiResponseBodyId
   * `docs/adr/0007-response-caching-in-postgres.md`.
   */
 sealed trait FetchResult[+T] {
+
   /** Load and decode the value, failing with the reported 404 when the resource is [[FetchResult.Missing]].
     *
     * Cheap for [[FetchResult.Changed]] (value is already in memory). For [[FetchResult.Fresh]] and

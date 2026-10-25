@@ -3,10 +3,11 @@ package ccas.utils.client
 import java.time.Instant
 import java.util.concurrent.TimeUnit
 
+import zio.{Clock, Fiber, Ref, UIO, ZEnvironment, ZIO}
+
 import ccas.analysis.tables.{ClientConfig, ClientStats}
 import ccas.utils.errors.safeMessage
 import ccas.utils.sql.PostgresClient
-import zio.{Clock, Fiber, Ref, UIO, ZEnvironment, ZIO}
 
 /** Bundles the refs and config needed by periodic and final stats flushes. Created once in `ChessComClient.live` and
   * passed to `persistStats` / `finalFlush`.

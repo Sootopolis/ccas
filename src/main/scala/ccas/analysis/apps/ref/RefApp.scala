@@ -3,7 +3,8 @@ package ccas.analysis.apps.ref
 import java.time.{Duration as JDuration, Instant}
 
 import com.augustnagro.magnum.sql
-import zio.{Clock, ExitCode, RIO, Ref, Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
+import zio.{Clock, ExitCode, Ref, RIO, Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
+
 import RefUtils.*
 
 import ccas.analysis.tables.{ClubRefSkip, PlayerRefSkip, PlayerTournamentRef, SkipCount, Tables}
@@ -52,12 +53,12 @@ object RefApp extends ZIOAppDefault {
       // scope; `ZIO.fail` would double-report the cause through ZIOAppDefault once it escaped the layer scope.
       .catchSome(NetworkUnavailableException.abortRun("RefApp", "no skips recorded")(exit(ExitCode.failure)))
       .provideSome[ZIOAppArgs & Scope](
-      ProgressDisplay.live(showProgress = true),
-      ChessComClient.live("ref"),
-      HttpClientLayer.live,
-      BodyStore.live,
-      PostgresClient.live(onInit = Tables.ensureTablesOnInit)
-    )
+        ProgressDisplay.live(showProgress = true),
+        ChessComClient.live("ref"),
+        HttpClientLayer.live,
+        BodyStore.live,
+        PostgresClient.live(onInit = Tables.ensureTablesOnInit)
+      )
 
   private case class RefAppResolutionStats(total: Int, resolvedDb: Int, resolvedApi: Int, skippedNew: Int)
   private case class RefAppUpgradeStats(
@@ -83,7 +84,7 @@ object RefApp extends ZIOAppDefault {
       skipped     <- ctx.skippedPlayers.get
       completedAt = Instant.now()
       duration    = JDuration.between(startedAt, completedAt)
-      _ <- ZIO.logInfo(s"Duration: ${duration.display}")
+      _                   <- ZIO.logInfo(s"Duration: ${duration.display}")
       failed              <- ctx.failedUrls.get
       failedSrc           <- ctx.failedUrlSource.get
       playerSkipsByReason <- PlayerRefSkip.countByReason
@@ -133,7 +134,7 @@ object RefApp extends ZIOAppDefault {
       db         <- ctx.clubsResolvedDb.get
       api        <- ctx.clubsResolvedApi.get
       skippedNew <- ctx.clubsSkippedNew.get
-      unchanged <- ctx.clubMatchesUnchanged.get
+      unchanged  <- ctx.clubMatchesUnchanged.get
       _ <- ZIO.logInfo(
         s"Clubs resolved: $db (DB) + $api (API) = ${db + api} / ${clubs.size}, skipped: $skippedNew new"
       )
@@ -152,21 +153,22 @@ object RefApp extends ZIOAppDefault {
       players <- selectUnresolvedPlayers(forceSkipped)
       _       <- ZIO.logInfo(s"Players without match ref: ${players.size}")
       _ <- ZIO.scoped {
-        ProgressDisplay.foreachParProgress(players, parallelism)((n, total) => s"  Resolving players: $n/$total") { player =>
-          RefResolution.resolvePlayer(ctx, player)
+        ProgressDisplay.foreachParProgress(players, parallelism)((n, total) => s"  Resolving players: $n/$total") {
+          player =>
+            RefResolution.resolvePlayer(ctx, player)
         }
       }.onInterrupt {
         for {
           db  <- ctx.playersResolvedDb.get
           api <- ctx.playersResolvedApi.get
           sk  <- ctx.playersSkippedNew.get
-          _   <- ZIO.logInfo(s"Interrupted resolvePlayers: $db (DB) + $api (API) resolved, $sk skipped / ${players.size}")
+          _ <- ZIO.logInfo(s"Interrupted resolvePlayers: $db (DB) + $api (API) resolved, $sk skipped / ${players.size}")
         } yield ()
       }
-      db         <- ctx.playersResolvedDb.get
-      api        <- ctx.playersResolvedApi.get
-      skippedNew <- ctx.playersSkippedNew.get
-      skipped    <- ctx.skippedPlayers.get
+      db                   <- ctx.playersResolvedDb.get
+      api                  <- ctx.playersResolvedApi.get
+      skippedNew           <- ctx.playersSkippedNew.get
+      skipped              <- ctx.skippedPlayers.get
       matchesUnchanged     <- ctx.playerMatchesUnchanged.get
       tournamentsUnchanged <- ctx.playerTournamentsUnchanged.get
       _ <- ZIO.logInfo(
@@ -258,8 +260,8 @@ object RefApp extends ZIOAppDefault {
       for {
         allPlayers   <- selectTournamentOnlyPlayersWithSlug
         newTournRefs <- ctx.newTournamentRefPlayerIds.get
-        players       = allPlayers.filterNot(trp => newTournRefs.contains(trp.playerId))
-        skipped       = allPlayers.size - players.size
+        players = allPlayers.filterNot(trp => newTournRefs.contains(trp.playerId))
+        skipped = allPlayers.size - players.size
         _ <- ZIO.logInfo(
           s"Tournament-only players eligible for upgrade: ${players.size}" +
             (if (skipped > 0) s" ($skipped skipped, created this run)" else "")
@@ -267,22 +269,25 @@ object RefApp extends ZIOAppDefault {
         matchUpgraded <- Ref.make(0)
         tournUpgraded <- Ref.make(0)
         _ <- ZIO.scoped {
-          ProgressDisplay.foreachParProgress(players, parallelism)((n, total) => s"  Upgrading refs: $n/$total") { trp =>
-            val player = UnresolvedPlayer(trp.playerId, trp.username)
-            RefResolution.tryUpgradeToMatchRef(ctx, player).flatMap {
-              case true =>
-                PlayerTournamentRef.deleteId(trp.playerId) *> matchUpgraded.update(_ + 1)
-              case false =>
-                RefResolution.tryUpgradeTournamentRef(ctx, trp).flatMap { success =>
-                  ZIO.whenDiscard(success)(tournUpgraded.update(_ + 1))
-                }
-            }
+          ProgressDisplay.foreachParProgress(players, parallelism)((n, total) => s"  Upgrading refs: $n/$total") {
+            trp =>
+              val player = UnresolvedPlayer(trp.playerId, trp.username)
+              RefResolution.tryUpgradeToMatchRef(ctx, player).flatMap {
+                case true =>
+                  PlayerTournamentRef.deleteId(trp.playerId) *> matchUpgraded.update(_ + 1)
+                case false =>
+                  RefResolution.tryUpgradeTournamentRef(ctx, trp).flatMap { success =>
+                    ZIO.whenDiscard(success)(tournUpgraded.update(_ + 1))
+                  }
+              }
           }
         }.onInterrupt {
           for {
             mc <- matchUpgraded.get
             tc <- tournUpgraded.get
-            _  <- ZIO.logInfo(s"Interrupted upgradeTournamentPlayers: $mc match, $tc tournament upgrades / ${players.size}")
+            _ <- ZIO.logInfo(
+              s"Interrupted upgradeTournamentPlayers: $mc match, $tc tournament upgrades / ${players.size}"
+            )
           } yield ()
         }
         matchCount <- matchUpgraded.get

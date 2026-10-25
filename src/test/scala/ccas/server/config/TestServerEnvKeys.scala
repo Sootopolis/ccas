@@ -43,7 +43,10 @@ object TestServerEnvKeys extends ZIOSpecDefault {
       )
     },
     test("byName resolves a known key and rejects an unknown one") {
-      assertTrue(ServerEnvKeys.byName("SERVER_PORT").exists(_.name == "SERVER_PORT"), ServerEnvKeys.byName("NOPE").isEmpty)
+      assertTrue(
+        ServerEnvKeys.byName("SERVER_PORT").exists(_.name == "SERVER_PORT"),
+        ServerEnvKeys.byName("NOPE").isEmpty
+      )
     }
   )
 }

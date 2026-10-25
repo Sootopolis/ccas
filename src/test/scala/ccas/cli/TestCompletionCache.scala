@@ -16,7 +16,7 @@ import zio.test.{assertTrue, Spec, TestClock, ZIOSpecDefault}
   */
 object TestCompletionCache extends ZIOSpecDefault {
 
-  private val Base: Instant = Instant.parse("2026-01-01T00:00:00Z")
+  private val Base: Instant  = Instant.parse("2026-01-01T00:00:00Z")
   private val SixHours: Long = 6L * 60 * 60 * 1000
 
   // deleteOnExit is LIFO (same reasoning as TestCliConfig): register the dir first, then the leaves it will come to
@@ -53,19 +53,19 @@ object TestCompletionCache extends ZIOSpecDefault {
       },
       test("a file written just inside the TTL is fresh") {
         for {
-          f <- clubsFile
-          _ <- CompletionCache.writeClubsIn(f, List("team-alpha"))
-          _ <- setMtime(f, Base)
-          _ <- TestClock.setTime(Base.plusMillis(SixHours - 1))
+          f     <- clubsFile
+          _     <- CompletionCache.writeClubsIn(f, List("team-alpha"))
+          _     <- setMtime(f, Base)
+          _     <- TestClock.setTime(Base.plusMillis(SixHours - 1))
           stale <- CompletionCache.clubsStaleIn(f)
         } yield assertTrue(!stale)
       },
       test("a file older than the TTL is stale") {
         for {
-          f <- clubsFile
-          _ <- CompletionCache.writeClubsIn(f, List("team-alpha"))
-          _ <- setMtime(f, Base)
-          _ <- TestClock.setTime(Base.plusMillis(SixHours + 1))
+          f     <- clubsFile
+          _     <- CompletionCache.writeClubsIn(f, List("team-alpha"))
+          _     <- setMtime(f, Base)
+          _     <- TestClock.setTime(Base.plusMillis(SixHours + 1))
           stale <- CompletionCache.clubsStaleIn(f)
         } yield assertTrue(stale)
       }
@@ -73,9 +73,9 @@ object TestCompletionCache extends ZIOSpecDefault {
     suite("writeClubs / readClubs")(
       test("round-trips slugs one per line and truncates a longer previous list") {
         for {
-          f <- clubsFile
-          _ <- CompletionCache.writeClubsIn(f, List("a", "b", "c"))
-          _ <- CompletionCache.writeClubsIn(f, List("z"))
+          f     <- clubsFile
+          _     <- CompletionCache.writeClubsIn(f, List("a", "b", "c"))
+          _     <- CompletionCache.writeClubsIn(f, List("z"))
           text  <- read(f)
           slugs <- CompletionCache.readClubsIn(f)
         } yield assertTrue(text == "z\n", slugs.contains(List("z")))
@@ -91,9 +91,9 @@ object TestCompletionCache extends ZIOSpecDefault {
       },
       test("an empty list writes an empty file, not a stray newline") {
         for {
-          f    <- clubsFile
-          _    <- CompletionCache.writeClubsIn(f, Nil)
-          text <- read(f)
+          f     <- clubsFile
+          _     <- CompletionCache.writeClubsIn(f, Nil)
+          text  <- read(f)
           slugs <- CompletionCache.readClubsIn(f)
         } yield assertTrue(text.isEmpty, slugs.contains(Nil))
       },
@@ -125,8 +125,8 @@ object TestCompletionCache extends ZIOSpecDefault {
     suite("seedClubs")(
       test("seeds an absent file and stamps its mtime to the epoch so it still reads as stale") {
         for {
-          f <- clubsFile
-          _ <- CompletionCache.seedClubsIn(f, List("team-alpha", "team-beta"))
+          f     <- clubsFile
+          _     <- CompletionCache.seedClubsIn(f, List("team-alpha", "team-beta"))
           slugs <- CompletionCache.readClubsIn(f)
           mtime <- mtimeMillis(f)
           _     <- TestClock.setTime(Base)
@@ -135,9 +135,9 @@ object TestCompletionCache extends ZIOSpecDefault {
       },
       test("does not overwrite an existing cache") {
         for {
-          f <- clubsFile
-          _ <- CompletionCache.writeClubsIn(f, List("real"))
-          _ <- CompletionCache.seedClubsIn(f, List("seed"))
+          f     <- clubsFile
+          _     <- CompletionCache.writeClubsIn(f, List("real"))
+          _     <- CompletionCache.seedClubsIn(f, List("seed"))
           slugs <- CompletionCache.readClubsIn(f)
         } yield assertTrue(slugs.contains(List("real")))
       },
@@ -152,10 +152,10 @@ object TestCompletionCache extends ZIOSpecDefault {
     suite("invalidate")(
       test("deletes the cache so the next staleness check refreshes regardless of the TTL") {
         for {
-          f <- clubsFile
-          _ <- CompletionCache.writeClubsIn(f, List("team-alpha"))
-          _ <- setMtime(f, Base)
-          _ <- TestClock.setTime(Base) // well inside the TTL: only the delete can make this stale
+          f           <- clubsFile
+          _           <- CompletionCache.writeClubsIn(f, List("team-alpha"))
+          _           <- setMtime(f, Base)
+          _           <- TestClock.setTime(Base) // well inside the TTL: only the delete can make this stale
           freshBefore <- CompletionCache.clubsStaleIn(f)
           _           <- CompletionCache.invalidateIn(f)
           ex          <- exists(f)
@@ -178,9 +178,9 @@ object TestCompletionCache extends ZIOSpecDefault {
         for {
           dir <- tempDir
           f = dir.resolve("recent-jobs.txt")
-          _ <- CompletionCache.appendJobIn(f, "one")
-          _ <- CompletionCache.appendJobIn(f, "two")
-          _ <- CompletionCache.appendJobIn(f, "one")
+          _    <- CompletionCache.appendJobIn(f, "one")
+          _    <- CompletionCache.appendJobIn(f, "two")
+          _    <- CompletionCache.appendJobIn(f, "one")
           text <- read(f)
         } yield assertTrue(text == "one\ntwo\n")
       },

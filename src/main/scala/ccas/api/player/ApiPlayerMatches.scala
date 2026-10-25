@@ -1,8 +1,8 @@
 package ccas.api.player
 
+import zio.Chunk
 import zio.http.URL
 import zio.json.{jsonMemberNames, JsonDecoder, SnakeCase}
-import zio.Chunk
 
 import ccas.api.misc.enums.GameResultDetail
 import ccas.api.misc.subtypes.Username

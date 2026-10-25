@@ -9,8 +9,8 @@ import ccas.analysis.apps.recruitment.RecruitmentTestSupport.*
 import ccas.analysis.tables.*
 import ccas.api.misc.enums.PlayerStatusCategory.Active
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username}
-import ccas.utils.sql.FreshSchemaLayer
 import ccas.utils.ProgressDisplay
+import ccas.utils.sql.FreshSchemaLayer
 
 object TestRecruitmentAppExplore extends ZIOSpecDefault {
 
@@ -52,11 +52,13 @@ object TestRecruitmentAppExplore extends ZIOSpecDefault {
       val criteria = makeCriteria()
 
       for {
-        _      <- seedDb
-        _      <- Club.upsert(Club(discoverableClubId, Times.t0, discoverableClubSlug, "Discoverable Club", None, None, None))
-        _      <- seedCriteria(criteria)
-        client <- fakeChessComClient(responses)
-        result <- runRecruit(client, explore = false)
+        _ <- seedDb
+        _ <- Club.upsert(
+          Club(discoverableClubId, Times.t0, discoverableClubSlug, "Discoverable Club", None, None, None)
+        )
+        _          <- seedCriteria(criteria)
+        client     <- fakeChessComClient(responses)
+        result     <- runRecruit(client, explore = false)
         candidates <- RecruitmentCandidate.selectByRun(result.runId)
       } yield assertTrue(
         candidates.isEmpty
@@ -72,13 +74,13 @@ object TestRecruitmentAppExplore extends ZIOSpecDefault {
         "player/opp-player"       -> apiPlayerJson(oppPlayerId.value, "opp-player")
       )
       for {
-        _      <- seedDb
-        _      <- seedCriteria(makeCriteria())
-        _      <- Player.insert(Player(oppPlayerId, Times.t0, Username("opp-player"), Active, None, Times.t0))
-        _      <- seedPlayer(PlayerId(999))
-        _      <- seedMatchWithBoard(matchId, Some(clubId), PlayerId(999), oppPlayerId)
-        client <- fakeChessComClient(responses)
-        result <- runRecruit(client, explore = true)
+        _          <- seedDb
+        _          <- seedCriteria(makeCriteria())
+        _          <- Player.insert(Player(oppPlayerId, Times.t0, Username("opp-player"), Active, None, Times.t0))
+        _          <- seedPlayer(PlayerId(999))
+        _          <- seedMatchWithBoard(matchId, Some(clubId), PlayerId(999), oppPlayerId)
+        client     <- fakeChessComClient(responses)
+        result     <- runRecruit(client, explore = true)
         candidates <- RecruitmentCandidate.selectByRun(result.runId)
       } yield assertTrue(
         candidates.size == 1,
@@ -108,10 +110,10 @@ object TestRecruitmentAppExplore extends ZIOSpecDefault {
       val criteria = makeCriteria()
 
       for {
-        _      <- seedDb
-        _      <- seedCriteria(criteria)
-        client <- fakeChessComClient(responses)
-        result <- runRecruit(client, target = Some(3), sourceClubs = List(source1, source2))
+        _          <- seedDb
+        _          <- seedCriteria(criteria)
+        client     <- fakeChessComClient(responses)
+        result     <- runRecruit(client, target = Some(3), sourceClubs = List(source1, source2))
         candidates <- RecruitmentCandidate.selectByRun(result.runId)
         invited  = candidates.filter(_.outcome == CandidateOutcome.Invited)
         deferred = candidates.filter(_.outcome == CandidateOutcome.Deferred)
@@ -143,14 +145,14 @@ object TestRecruitmentAppExplore extends ZIOSpecDefault {
         reached <- Promise.make[Nothing, Unit]
         gate    <- Promise.make[Nothing, Unit]
         client  <- fakeChessComClientWithBlock(responses, blockAfterN = 4, reached, gate)
-        fiber <- runRecruit(client, sourceClubs = List(intSource)).fork
-        _      <- reached.await
+        fiber   <- runRecruit(client, sourceClubs = List(intSource)).fork
+        _       <- reached.await
         // Anchor the interrupt on a persisted candidate row, not a fixed sleep. The 5th-profile
         // block pins how many profiles have been fetched, but a candidate is only written by
         // persistCandidateResults once its full filter chain (stats / clubs / etc.) completes,
         // and that finishing time is what flakes under load. The run row is inserted before any
         // API call, so selectLatest is Some by the time reached.await returns.
-        runId  <- RecruitmentRun.selectLatest(clubId).map(_.get.runId)
+        runId <- RecruitmentRun.selectLatest(clubId).map(_.get.runId)
         _ <- RecruitmentCandidate.selectByRun(runId)
           .repeat(Schedule.spaced(20.millis) && Schedule.recurUntil[List[RecruitmentCandidate]](_.nonEmpty))
           .timeoutFail(new RuntimeException("no candidate persisted before interrupt"))(5.seconds)
@@ -183,10 +185,10 @@ object TestRecruitmentAppExplore extends ZIOSpecDefault {
       val criteria = makeCriteria()
 
       for {
-        _      <- seedDb
-        _      <- seedCriteria(criteria)
-        client <- fakeChessComClient(responses)
-        result <- runRecruit(client, target = Some(2), sourceClubs = List(source))
+        _          <- seedDb
+        _          <- seedCriteria(criteria)
+        client     <- fakeChessComClient(responses)
+        result     <- runRecruit(client, target = Some(2), sourceClubs = List(source))
         candidates <- RecruitmentCandidate.selectByRun(result.runId)
         invited  = candidates.filter(_.outcome == CandidateOutcome.Invited)
         deferred = candidates.filter(_.outcome == CandidateOutcome.Deferred)
@@ -215,21 +217,21 @@ object TestRecruitmentAppExplore extends ZIOSpecDefault {
       val criteria = makeCriteria()
 
       for {
-        _      <- seedDb
-        _      <- seedCriteria(criteria)
-        client <- fakeChessComClient(responses)
-        result <- runRecruit(client, target = Some(2), sourceClubs = List(source), autoConfirm = false)
-        allBefore         <- RecruitmentCandidate.selectByRun(result.runId)
+        _         <- seedDb
+        _         <- seedCriteria(criteria)
+        client    <- fakeChessComClient(responses)
+        result    <- runRecruit(client, target = Some(2), sourceClubs = List(source), autoConfirm = false)
+        allBefore <- RecruitmentCandidate.selectByRun(result.runId)
         allDeferredBefore = allBefore.filter(_.outcome == CandidateOutcome.Deferred)
-        foundBefore       <- RecruitmentCandidate.selectDeferredByRun(result.runId)
-        firstFlip         <- RecruitmentCandidate.confirmDeferredByRun(result.runId)
-        invited           <- RecruitmentCandidate.selectInvitedByRun(result.runId)
+        foundBefore <- RecruitmentCandidate.selectDeferredByRun(result.runId)
+        firstFlip   <- RecruitmentCandidate.confirmDeferredByRun(result.runId)
+        invited     <- RecruitmentCandidate.selectInvitedByRun(result.runId)
         // Re-POST must be idempotent (JobRoutes contract): flip 0, invited stays at target — it must NOT sweep up the
         // still-Deferred overshoot.
-        secondFlip        <- RecruitmentCandidate.confirmDeferredByRun(result.runId)
+        secondFlip         <- RecruitmentCandidate.confirmDeferredByRun(result.runId)
         invitedAfterRepost <- RecruitmentCandidate.selectInvitedByRun(result.runId)
-        allAfter          <- RecruitmentCandidate.selectByRun(result.runId)
-        deferredAfter     = allAfter.filter(_.outcome == CandidateOutcome.Deferred)
+        allAfter           <- RecruitmentCandidate.selectByRun(result.runId)
+        deferredAfter = allAfter.filter(_.outcome == CandidateOutcome.Deferred)
       } yield assertTrue(
         allDeferredBefore.size == candidateNames.size, // all 6 evaluated, nothing deleted
         foundBefore.size == 2,                         // /found capped at target
@@ -332,15 +334,15 @@ object TestRecruitmentAppExplore extends ZIOSpecDefault {
       val responses = Map(
         s"club/$clubSlug" -> apiClubJson(clubId.value, clubSlug.value),
         // "shared-member" is already a member of the target club → it lands in existingUsernames
-        s"club/$clubSlug/members"    -> apiClubMembersJson(List(("shared-member", Times.t0.getEpochSecond))),
-        s"club/$emptySource"         -> apiClubJson(ClubId(801).value, emptySource.value),
+        s"club/$clubSlug/members" -> apiClubMembersJson(List(("shared-member", Times.t0.getEpochSecond))),
+        s"club/$emptySource"      -> apiClubJson(ClubId(801).value, emptySource.value),
         // emptySource's only member is an existing target member → 0 candidates after exclusion
         s"club/$emptySource/members" -> apiClubMembersJson(List(("shared-member", Times.t0.getEpochSecond))),
         s"club/$liveSource"          -> apiClubJson(ClubId(802).value, liveSource.value),
         s"club/$liveSource/members"  -> apiClubMembersJson(List(("fresh-cand", Times.t0.getEpochSecond))),
         // membership reconcile fetches each target-club member's profile
-        "player/shared-member"       -> apiPlayerJson(sharedMemberPid.value, "shared-member"),
-        "player/fresh-cand"          -> apiPlayerJson(freshPid.value, "fresh-cand")
+        "player/shared-member" -> apiPlayerJson(sharedMemberPid.value, "shared-member"),
+        "player/fresh-cand"    -> apiPlayerJson(freshPid.value, "fresh-cand")
       )
       for {
         _      <- seedDb
@@ -382,8 +384,8 @@ object TestRecruitmentAppExplore extends ZIOSpecDefault {
         s"club/$tmSource"         -> apiClubJson(ClubId(801).value, tmSource.value),
         s"club/$tmSource/members" -> apiClubMembersJson(List(("cand-x", Times.t0.getEpochSecond))),
         // membership reconcile fetches each target-club member's profile
-        "player/shared-member"    -> apiPlayerJson(sharedMemberPid.value, "shared-member"),
-        "player/cand-x"           -> apiPlayerJson(candPid.value, "cand-x"),
+        "player/shared-member" -> apiPlayerJson(sharedMemberPid.value, "shared-member"),
+        "player/cand-x"        -> apiPlayerJson(candPid.value, "cand-x"),
         s"player/cand-x/games/${ym0.getYear}/${ym0.getMonthValue}" -> archive,
         s"player/cand-x/games/${ym1.getYear}/${ym1.getMonthValue}" -> archive
       )

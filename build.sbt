@@ -1,4 +1,5 @@
 import _root_.scalafix.sbt.{BuildInfo => ScalafixBuildInfo}
+
 import Versions.*
 
 ThisBuild / version      := vCcas
@@ -88,7 +89,7 @@ Test / parallelExecution := false
 
 // The test JVM is the one `.jvmopts` cannot reach, and `run` is deliberately not forked. See
 // docs/adr/0018-every-jvm-carries-the-same-two-flags.md (#231).
-Test / fork        := true
+Test / fork := true
 Test / javaOptions ++= Seq("--sun-misc-unsafe-memory-access=allow", "--enable-native-access=ALL-UNNAMED")
 
 lazy val root = (project in file("."))
@@ -107,8 +108,8 @@ lazy val root = (project in file("."))
     // that don't resolve on a JVM classpath). Nothing consumes these jars; skip them.
     Compile / packageDoc / publishArtifact := false,
     Compile / packageSrc / publishArtifact := false,
-    buildInfoKeys                   := Seq(name, version, scalaVersion, sbtVersion),
-    buildInfoPackage                := "ccas.info",
+    buildInfoKeys                          := Seq(name, version, scalaVersion, sbtVersion),
+    buildInfoPackage                       := "ccas.info",
     // Local scalafix rules (src/scalafix), compiled against scalafix-core's Scala 2.13 build. See
     // docs/adr/0025-conventions-checked-by-scalafix.md.
     libraryDependencies ++= Seq(

@@ -3,7 +3,6 @@ package ccas.utils.client
 import java.time.{Instant, ZoneOffset}
 import java.util.concurrent.TimeUnit
 
-import ccas.utils.sql.PostgresClient
 import com.typesafe.config.{Config, ConfigFactory}
 import zio.*
 import zio.config.derivation.{kebabCase, name}
@@ -19,6 +18,7 @@ import ccas.info.BuildInfo
 import ccas.utils.{HttpDate, ProgressBar, ProgressDisplay}
 import ccas.utils.errors.safeMessage
 import ccas.utils.json.JsonDecodingException
+import ccas.utils.sql.PostgresClient
 
 /** HTTP client for the Chess.com public API with adaptive rate limiting and response caching.
   *
@@ -75,8 +75,8 @@ final class ChessComClient(
     * `response.body.asString` is an in-memory operation and everything below the exchange — the cache upsert, the
     * body-store put, the `tapError` failure row — is our own storage I/O.
     */
-  private def rawGet[T](url: URL, conditional: Option[ApiResponseCache], cacheWrites: Boolean)(
-    using jsonDecoder: JsonDecoder[T]
+  private def rawGet[T](url: URL, conditional: Option[ApiResponseCache], cacheWrites: Boolean)(using
+    jsonDecoder: JsonDecoder[T]
   ): Task[ChessComClient.TimedFetch[T]] = {
     val request = buildRequest(url, conditional)
     (for {
@@ -208,14 +208,22 @@ final class ChessComClient(
     val maxAgeUpdate: ApiResponseCache.MaxAgeUpdate =
       if (response.header(Header.CacheControl).isEmpty) ApiResponseCache.MaxAgeUpdate.Preserve
       else if (directives.noCache) ApiResponseCache.MaxAgeUpdate.Clear
-      else directives.maxAgeSeconds.fold[ApiResponseCache.MaxAgeUpdate](ApiResponseCache.MaxAgeUpdate.Clear)(
-        ApiResponseCache.MaxAgeUpdate.Overwrite(_)
-      )
+      else
+        directives.maxAgeSeconds.fold[ApiResponseCache.MaxAgeUpdate](ApiResponseCache.MaxAgeUpdate.Clear)(
+          ApiResponseCache.MaxAgeUpdate.Overwrite(_)
+        )
     val validators = extractValidators(response)
     val touchEffect =
       ZIO.whenDiscard(cacheWrites) {
         ApiResponseCache
-          .touch(url.encode, Instant.now(), validators.etag, validators.lastModified, maxAgeUpdate, validators.contentType)
+          .touch(
+            url.encode,
+            Instant.now(),
+            validators.etag,
+            validators.lastModified,
+            maxAgeUpdate,
+            validators.contentType
+          )
           .provideEnvironment(ZEnvironment(pgClient))
           .unit
       }
@@ -271,7 +279,7 @@ final class ChessComClient(
           .provideEnvironment(ZEnvironment(pgClient, bodyStore))
     val decodeLazy = ZIO.fromEither(jsonDecoder.decodeJson(string)).mapError(JsonDecodingException(_, Some(string)))
     for {
-      _            <- logEtagParseMiss(response)
+      _               <- logEtagParseMiss(response)
       newBodyIdOption <- upsertEffect
       result <- (newBodyIdOption, conditional.map(_.bodyId)) match {
         // This decode runs after `rawGet` has returned, beyond its `tapError`, so it records its own failure row.
@@ -307,8 +315,8 @@ final class ChessComClient(
     *
     * Every path records `cacheUnserved` — see [[ClientStatsAccumulator.cacheUnserved]].
     */
-  private def loadAndDecode[T](url: URL, bodyId: ApiResponseBodyId, cacheWrites: Boolean)(
-    using jsonDecoder: JsonDecoder[T]
+  private def loadAndDecode[T](url: URL, bodyId: ApiResponseBodyId, cacheWrites: Boolean)(using
+    jsonDecoder: JsonDecoder[T]
   ): Task[T] = {
     // No `lookupMeta` round-trip on the way back in: the row was either just deleted or is deliberately being
     // preserved, and in both cases the next step is the same unconditional GET the miss arm of `getResultImpl`
@@ -363,8 +371,8 @@ final class ChessComClient(
     * Why they must not be the same, and why a 404 feeds neither:
     * `docs/adr/0006-pacing-ema-measures-the-http-exchange-only.md` (#216).
     */
-  private def gatedRawGet[T](url: URL, conditional: Option[ApiResponseCache], cacheWrites: Boolean)(
-    using jsonDecoder: JsonDecoder[T]
+  private def gatedRawGet[T](url: URL, conditional: Option[ApiResponseCache], cacheWrites: Boolean)(using
+    jsonDecoder: JsonDecoder[T]
   ): Task[FetchResult[T]] =
     ZIO.scoped {
       for {
@@ -403,8 +411,8 @@ final class ChessComClient(
     * `api_response_body`, and a 304 does not bump `fetched_at` on any pre-existing cache row. The read path is
     * unchanged: a `Fresh` row from another caller is still served without a network call.
     */
-  private def getResultImpl[T](url: URL, cacheWrites: Boolean)(
-    using jsonDecoder: JsonDecoder[T]
+  private def getResultImpl[T](url: URL, cacheWrites: Boolean)(using
+    jsonDecoder: JsonDecoder[T]
   ): Task[FetchResult[T]] =
     for {
       _            <- refuseInsideTransaction(url)
@@ -514,7 +522,7 @@ final class ChessComClient(
         ZIO.whenDiscard(state.lastEmaSampleAt > 0L) {
           val targetDelay = math.max((state.responseTimeEma / state.currentMax).toLong, config.minRequestDelayMs)
           for {
-            now <- Clock.currentTime(TimeUnit.MILLISECONDS)
+            now  <- Clock.currentTime(TimeUnit.MILLISECONDS)
             last <- lastRequestRef.get
             gap = now - last
             _ <- ZIO.whenDiscard(gap < targetDelay)(ZIO.sleep((targetDelay - gap).millis))
@@ -600,8 +608,8 @@ final class ChessComClient(
       // in-flight recovery (the older one is already a generation-stale no-op — see the `generation` guard in
       // `scheduleRecovery`). A single scope finalizer (in `live`) interrupts whatever fiber remains at shutdown.
       // `interruptFork` so this response-path effect never blocks awaiting the superseded fiber's teardown.
-      prev  <- recoveryFiberRef.getAndSet(Some(fiber))
-      _     <- ZIO.foreachDiscard(prev)(_.interruptFork)
+      prev <- recoveryFiberRef.getAndSet(Some(fiber))
+      _    <- ZIO.foreachDiscard(prev)(_.interruptFork)
     } yield ()
 
   /** Drain in-flight requests, sleep for the cooldown, then step `currentMax` up one recovery tier — or back down
@@ -628,7 +636,7 @@ final class ChessComClient(
       option <- stateRef.modify { state =>
         if (state.generation != generation) (None, state)
         else if (failureRate(state.outcomes) > config.failureThreshold) {
-          val dropTo = config.previousTier(state.currentMax)
+          val dropTo   = config.previousTier(state.currentMax)
           val newState = state.copy(currentMax = dropTo, outcomes = Vector.empty, tierEnteredAt = Some(now))
           (Some((state.currentMax, dropTo, generation, 0L)), newState)
         } else {
@@ -651,21 +659,21 @@ final class ChessComClient(
       }
       _ <- ZIO.foreachDiscard(option) { case (oldMax, newMax, gen, throttleDuration) =>
         ZIO.whenDiscard(throttleDuration > 0)(statsRef.update(_.addThrottled(throttleDuration))) *> {
-            if (newMax == oldMax) {
+          if (newMax == oldMax) {
+            scheduleRecovery(gen, cooldown)
+          } else if (newMax < oldMax) {
+            ProgressDisplay.sourced("rate-limit")(
+              ZIO.logWarning(s"Rate limit dropping back: $oldMax \u2192 $newMax permit(s)")
+            ) *>
               scheduleRecovery(gen, cooldown)
-            } else if (newMax < oldMax) {
-              ProgressDisplay.sourced("rate-limit")(
-                ZIO.logWarning(s"Rate limit dropping back: $oldMax \u2192 $newMax permit(s)")
-              ) *>
-                scheduleRecovery(gen, cooldown)
-            } else {
-              val msg =
-                if (newMax == config.maxPermits) "Rate limit throttle lifted"
-                else s"Rate limit easing: $oldMax \u2192 $newMax permits"
-              ProgressDisplay.sourced("rate-limit")(ZIO.logInfo(msg)) *>
-                ZIO.unlessDiscard(newMax == config.maxPermits)(scheduleRecovery(gen, cooldown))
-            }
+          } else {
+            val msg =
+              if (newMax == config.maxPermits) "Rate limit throttle lifted"
+              else s"Rate limit easing: $oldMax \u2192 $newMax permits"
+            ProgressDisplay.sourced("rate-limit")(ZIO.logInfo(msg)) *>
+              ZIO.unlessDiscard(newMax == config.maxPermits)(scheduleRecovery(gen, cooldown))
           }
+        }
       }
     } yield ()
 
@@ -678,7 +686,9 @@ final class ChessComClient(
     if (outcomes.isEmpty) 0.0 else outcomes.count(!_).toDouble / outcomes.size
 
   private val retry429Schedule: Schedule[Any, Throwable, Any] =
-    Schedule.exponential(config.retryBase).jittered && Schedule.recurs(config.max429Retries) && Schedule.recurWhile[Throwable] {
+    Schedule.exponential(config.retryBase).jittered && Schedule.recurs(config.max429Retries) && Schedule.recurWhile[
+      Throwable
+    ] {
       case e: HttpStatusException => e.statusCode == 429
       case _                      => false
     }
@@ -931,10 +941,12 @@ object ChessComClient {
         rawConfig      <- loadConfig(ConfigFactory.load())
         throttleConfig <- ZIO.attempt(rawConfig.toThrottleConfig)
         statsFlushInterval = rawConfig.statsFlushInterval
-        _ <- ZIO.attempt(require(
-          !statsFlushInterval.isNegative && !statsFlushInterval.isZero,
-          s"stats-flush-interval-seconds must be positive, got: $statsFlushInterval"
-        ))
+        _ <- ZIO.attempt {
+          require(
+            !statsFlushInterval.isNegative && !statsFlushInterval.isZero,
+            s"stats-flush-interval-seconds must be positive, got: $statsFlushInterval"
+          )
+        }
         client        <- ZIO.service[Client]
         pgClient      <- ZIO.service[PostgresClient]
         bodyStore     <- ZIO.service[BodyStore]
@@ -946,16 +958,28 @@ object ChessComClient {
         // Holds the single in-flight rate-limit recovery fiber (interrupt-and-replaced per throttle in `applyThrottle`);
         // the finalizer below interrupts whatever remains at shutdown.
         recoveryFiberRef <- Ref.make(Option.empty[Fiber.Runtime[Throwable, Unit]])
-        startedAt     <- Clock.instant
-        sessionId      = startedAt.toString.replace(":", "").replace("-", "")
-        stats               <- Ref.make(ClientStatsAccumulator())
-        configIdRef         <- Ref.make(Option.empty[Long])
-        endedAtRef          <- Ref.make(Option.empty[Instant])
-        bar                 <- display.addBarScoped
+        startedAt        <- Clock.instant
+        sessionId = startedAt.toString.replace(":", "").replace("-", "")
+        stats       <- Ref.make(ClientStatsAccumulator())
+        configIdRef <- Ref.make(Option.empty[Long])
+        endedAtRef  <- Ref.make(Option.empty[Instant])
+        bar         <- display.addBarScoped
         refs = ThrottleRefs(stateRef, activeRef, rateLimitGate, lastReqRef)
         flushCtx =
-          ClientStatsFlushContext(sessionId, appLabel, startedAt, stats, configIdRef, throttleConfig, stateRef, pgClient, endedAtRef)
-        flushFiber <- ClientStatsPersistence.persistStats(flushCtx).repeat(Schedule.fixed(statsFlushInterval)).forkDaemon
+          ClientStatsFlushContext(
+            sessionId,
+            appLabel,
+            startedAt,
+            stats,
+            configIdRef,
+            throttleConfig,
+            stateRef,
+            pgClient,
+            endedAtRef
+          )
+        flushFiber <- ClientStatsPersistence.persistStats(flushCtx).repeat(
+          Schedule.fixed(statsFlushInterval)
+        ).forkDaemon
         // Bounded, best-effort final flush so a dead DB pool can't wedge scope-close (#193): interruptFork (don't await
         // a periodic flush that may be parked in a blocking checkout — matching endSession's rationale), then a
         // disconnected 5s timeout so the doomed write unwinds in the background instead of blocking shutdown for the

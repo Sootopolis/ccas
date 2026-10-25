@@ -44,10 +44,10 @@ private[membership] object MembershipReport {
       invitations  <- lookupJoinInvitations(club.clubId, summaries)
       countAtStart <- ClubMember.countAt(club.clubId, since)
       countAtEnd   <- ClubMember.countAt(club.clubId, until)
-      _ <- ZIO.logInfo(s"=== Report for ${club.slug} from $since to $until ===")
-      _ <- ZIO.logInfo(s"Members: $countAtStart -> $countAtEnd")
-      _ <- printChangeSummaries(summaries, invitations)
-      _ <- ZIO.foreachDiscard(inferredLines(overlapping))(ZIO.logInfo(_))
+      _            <- ZIO.logInfo(s"=== Report for ${club.slug} from $since to $until ===")
+      _            <- ZIO.logInfo(s"Members: $countAtStart -> $countAtEnd")
+      _            <- printChangeSummaries(summaries, invitations)
+      _            <- ZIO.foreachDiscard(inferredLines(overlapping))(ZIO.logInfo(_))
     } yield ReportResult(summaries, overlapping, countAtStart, countAtEnd, invitations)
 
   /** Each of `inferred` that overlaps `[since, until]`, under its player's name now, earliest first. */
@@ -264,9 +264,9 @@ private[membership] object MembershipReport {
     since: Instant,
     until: Instant
   ): List[MemberChangeSummary] = {
-    val statesByPlayer   = states.groupBy(_.playerId)
-    val namesByPlayer    = names.groupBy(_.playerId)
-    val inferredByPlayer = inferred.groupBy(_.playerId)
+    val statesByPlayer               = states.groupBy(_.playerId)
+    val namesByPlayer                = names.groupBy(_.playerId)
+    val inferredByPlayer             = inferred.groupBy(_.playerId)
     def inRange(t: Instant): Boolean = t.compareTo(since) >= 0 && t.compareTo(until) <= 0
 
     /** The membership `playerId` had before the one starting at `start`, recorded or inferred, by when it started. */

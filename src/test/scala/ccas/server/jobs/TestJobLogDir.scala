@@ -2,8 +2,8 @@ package ccas.server.jobs
 
 import java.nio.file.{Files, Paths}
 
-import zio.test.{assertTrue, Spec, ZIOSpecDefault, ZTestLogger}
 import zio.{LogLevel, ZIO}
+import zio.test.{assertTrue, Spec, ZIOSpecDefault, ZTestLogger}
 
 /** `JobRunner.prepareLogDir` alone, without the database `TestJobRunner` needs to build the whole layer. */
 object TestJobLogDir extends ZIOSpecDefault {

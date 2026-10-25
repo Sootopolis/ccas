@@ -102,7 +102,9 @@ object Club {
       .flatMap(_.foldZIO(_ => ZIO.none, _.getValue.asSome, _.getValue.asSome))
 
   private def slugOfTeam(ref: ClubMatchRef, teams: TeamMatchTeams): Task[ClubSlug] =
-    ZIO.attempt(ClubSlug.fromUrl(if (ref.isTeam1) { teams.team1.`@id` } else { teams.team2.`@id` }))
+    ZIO.attempt(ClubSlug.fromUrl(if (ref.isTeam1) {
+      teams.team1.`@id`
+    } else { teams.team2.`@id` }))
 
   /** Builds a [[Club]] from an [[ApiClub]] response, reading the slug from `apiClub.canonicalSlug` — the name
     * Chess.com answers to now, not necessarily the one the caller requested. `latestMatchAt` and `fetchedAt` are
@@ -110,8 +112,13 @@ object Club {
     */
   def fromApi(apiClub: ApiClub): Club =
     Club(
-      apiClub.clubId, Instant.ofEpochSecond(apiClub.created), apiClub.canonicalSlug, apiClub.name,
-      Some(apiClub.membersCount), None, None
+      apiClub.clubId,
+      Instant.ofEpochSecond(apiClub.created),
+      apiClub.canonicalSlug,
+      apiClub.name,
+      Some(apiClub.membersCount),
+      None,
+      None
     )
 
   private def upsertFrag(club: Club): Update =

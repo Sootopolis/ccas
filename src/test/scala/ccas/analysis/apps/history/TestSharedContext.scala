@@ -77,9 +77,9 @@ object TestSharedContext extends ZIOSpecDefault {
 
         // Stale seeding re-queues stale matches for club A; shared should filter out 5001 and 5003.
         // includeFinished = true so the recently-Finished fixture rows are in scope for the processedMatches filter.
-        count <- HistorySeeding.seedStaleMatches(clubAId, includeFinished = true, Some(shared))
+        count   <- HistorySeeding.seedStaleMatches(clubAId, includeFinished = true, Some(shared))
         pending <- HistoryPendingMatch.selectClub(clubAId)
-        _ <- ZIO.foreachDiscard(pending)(p => HistoryPendingMatch.delete(clubAId, p.matchId, p.isLive))
+        _       <- ZIO.foreachDiscard(pending)(p => HistoryPendingMatch.delete(clubAId, p.matchId, p.isLive))
       } yield assertTrue(
         count == 1,
         pending.map(_.matchId) == List(ClubMatchId(5002))
@@ -92,12 +92,12 @@ object TestSharedContext extends ZIOSpecDefault {
     playerMatchJson: Map[String, String]
   ): RIO[PostgresClient & BodyStore, ChessComClient] = {
     val routes: Routes[Any, Response] = Routes(
-      Method.GET / "pub" / "player" / string("username") / "matches" -> handler {
-        (username: String, _: Request) =>
-          playerMatchJson.get(username) match {
-            case Some(json) => Response.json(json)
-            case None       => Response.json("""{"code": 0, "message": "Resource \"\" not found."}""").copy(status = Status.NotFound)
-          }
+      Method.GET / "pub" / "player" / string("username") / "matches" -> handler { (username: String, _: Request) =>
+        playerMatchJson.get(username) match {
+          case Some(json) => Response.json(json)
+          case None =>
+            Response.json("""{"code": 0, "message": "Resource \"\" not found."}""").copy(status = Status.NotFound)
+        }
       }
     )
     TestChessComClientSupport.fakeClient(routes)
@@ -132,7 +132,16 @@ object TestSharedContext extends ZIOSpecDefault {
         skipCtr <- Ref.make(0)
         result <- HistorySeeding
           .seedFromMemberMatches(
-            client, clubAId, clubASlug, memberIds, Set.empty, memberNames, Set.empty, false, Some(shared), skipCtr
+            client,
+            clubAId,
+            clubASlug,
+            memberIds,
+            Set.empty,
+            memberNames,
+            Set.empty,
+            false,
+            Some(shared),
+            skipCtr
           )
           .provideSomeEnvironment[PostgresClient](_.add[ProgressDisplay](ProgressDisplay.make(enabled = false)))
         _ <- ZIO.foreachDiscard(List(ClubMatchId(6001))) { id =>
@@ -164,7 +173,16 @@ object TestSharedContext extends ZIOSpecDefault {
         skipCtr <- Ref.make(0)
         _ <- HistorySeeding
           .seedFromMemberMatches(
-            client, clubBId, clubBSlug, memberIds, Set.empty, memberNames, Set.empty, false, Some(shared), skipCtr
+            client,
+            clubBId,
+            clubBSlug,
+            memberIds,
+            Set.empty,
+            memberNames,
+            Set.empty,
+            false,
+            Some(shared),
+            skipCtr
           )
           .provideSomeEnvironment[PostgresClient](_.add[ProgressDisplay](ProgressDisplay.make(enabled = false)))
 
@@ -195,8 +213,16 @@ object TestSharedContext extends ZIOSpecDefault {
         skipCtr <- Ref.make(0)
         _ <- HistorySeeding
           .seedFromMemberMatches(
-            client, clubAId, clubASlug, Set(player3Id), Set.empty, Map(player3Id -> player3.username), Set.empty, false,
-            Some(shared), skipCtr
+            client,
+            clubAId,
+            clubASlug,
+            Set(player3Id),
+            Set.empty,
+            Map(player3Id -> player3.username),
+            Set.empty,
+            false,
+            Some(shared),
+            skipCtr
           )
           .provideSomeEnvironment[PostgresClient](_.add[ProgressDisplay](ProgressDisplay.make(enabled = false)))
 
@@ -204,8 +230,8 @@ object TestSharedContext extends ZIOSpecDefault {
         queriedForB <- HistoryMemberQuery.selectClubPlayerIds(clubBId)
         cached      <- shared.knownMatchIdsByClub.get
       } yield assertTrue(
-        pendingB.map(_.matchId) == List(ClubMatchId(8102)),     // known 8101 excluded; new 8102 ingested
-        queriedForB.contains(player3Id),                        // fan-out stamped HistoryMemberQuery for club B
+        pendingB.map(_.matchId) == List(ClubMatchId(8102)),       // known 8101 excluded; new 8102 ingested
+        queriedForB.contains(player3Id),                          // fan-out stamped HistoryMemberQuery for club B
         cached.get(clubBId).exists(_.contains(ClubMatchId(8101))) // memo populated with the other club's known ids
       )
     }

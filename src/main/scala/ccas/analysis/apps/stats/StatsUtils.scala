@@ -61,8 +61,8 @@ object StatsUtils {
     val byPlayer = rows.groupBy(_.playerId)
     byPlayer.map { case (playerId, boards) =>
       val displayName = displayNames.getOrElse(playerId, "unknown")
-      val raw      = computeStats(boards, (_, w) => GameScoring.classifyGameRaw(w))
-      val fairPlay = computeStats(boards, (r, w) => GameScoring.classifyGame(w, r.ourFairPlay, r.oppFairPlay))
+      val raw         = computeStats(boards, (_, w) => GameScoring.classifyGameRaw(w))
+      val fairPlay    = computeStats(boards, (r, w) => GameScoring.classifyGame(w, r.ourFairPlay, r.oppFairPlay))
       MemberContribution(playerId, displayName, raw, fairPlay)
     }.toList.sortBy(_.displayName.toLowerCase)(using Ordering.String)
   }

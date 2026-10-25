@@ -22,9 +22,9 @@ object TestJobFollower extends ZIOSpecDefault {
     * should have `drop = false` so the follow finishes at EOF.
     */
   private sealed trait StreamBehaviour
-  private final case class ReplayOnce(lines: List[String])                extends StreamBehaviour
-  private case object Hang                                                extends StreamBehaviour
-  private final case class AlwaysFail(err: Throwable)                       extends StreamBehaviour
+  private final case class ReplayOnce(lines: List[String])                   extends StreamBehaviour
+  private case object Hang                                                   extends StreamBehaviour
+  private final case class AlwaysFail(err: Throwable)                        extends StreamBehaviour
   private final case class Attempts(ref: Ref[List[(List[String], Boolean)]]) extends StreamBehaviour
   // Stay open until `gate` completes (a progress-reconnect signal), then reach EOF — models a /logs stream that
   // outlives the /progress reconnect so the test can observe it.
@@ -43,9 +43,9 @@ object TestJobFollower extends ZIOSpecDefault {
 
     override def streamLines(path: String)(onLine: String => UIO[Unit]): Task[Unit] =
       behaviour match {
-        case ReplayOnce(lines) => ZIO.foreachDiscard(lines)(onLine)
-        case Hang              => ZIO.never
-        case AlwaysFail(err)     => ZIO.fail(err)
+        case ReplayOnce(lines)       => ZIO.foreachDiscard(lines)(onLine)
+        case Hang                    => ZIO.never
+        case AlwaysFail(err)         => ZIO.fail(err)
         case AwaitThenComplete(gate) => gate.await
         case Attempts(ref) =>
           ref.modify {
@@ -54,7 +54,8 @@ object TestJobFollower extends ZIOSpecDefault {
           }.flatMap {
             case Some((lines, drop)) =>
               ZIO.foreachDiscard(lines)(onLine) *>
-                (if (drop) { ZIO.fail(StreamDropped("idle timeout")) } else { ZIO.unit })
+                (if (drop) { ZIO.fail(StreamDropped("idle timeout")) }
+                 else { ZIO.unit })
             case None => ZIO.unit // ran out of scripted attempts → clean EOF
           }
       }
@@ -84,7 +85,7 @@ object TestJobFollower extends ZIOSpecDefault {
   ) extends CcasApiClient {
     override def getJson[Resp: JsonDecoder](path: String): Task[Resp] =
       ZIO.fromEither(statusJson(status, None).fromJson[Resp]).mapError(m => CliError(s"stub decode failed: $m", 1))
-    override def streamLines(path: String)(onLine: String => UIO[Unit]): Task[Unit] = stream(onLine)
+    override def streamLines(path: String)(onLine: String => UIO[Unit]): Task[Unit]               = stream(onLine)
     override def streamProgress(path: String)(onFrame: ProgressSnapshot => UIO[Unit]): Task[Unit] = ZIO.unit
     override def postEmpty[Resp: JsonDecoder](path: String): Task[Resp] =
       cancelled.update(path :: _) *>
@@ -100,8 +101,8 @@ object TestJobFollower extends ZIOSpecDefault {
     * answered with an error, between the end of the log and the status read (#336).
     */
   private final class StatusFailsApi(error: Throwable) extends CcasApiClient {
-    override def getJson[Resp: JsonDecoder](path: String): Task[Resp]                           = ZIO.fail(error)
-    override def streamLines(path: String)(onLine: String => UIO[Unit]): Task[Unit]                = ZIO.unit
+    override def getJson[Resp: JsonDecoder](path: String): Task[Resp]                             = ZIO.fail(error)
+    override def streamLines(path: String)(onLine: String => UIO[Unit]): Task[Unit]               = ZIO.unit
     override def streamProgress(path: String)(onFrame: ProgressSnapshot => UIO[Unit]): Task[Unit] = ZIO.unit
     override def postJson[Req: JsonEncoder, Resp: JsonDecoder](path: String, body: Req): Task[Resp] =
       ZIO.die(new UnsupportedOperationException("postJson"))
@@ -132,13 +133,13 @@ object TestJobFollower extends ZIOSpecDefault {
     test("followJob streams the log lines and returns 0 when the job completes") {
       for {
         follower <- followerWith("Completed", None, List("hello", "world"))
-        code   <- follower.followJob("job-1")
+        code     <- follower.followJob("job-1")
       } yield assertTrue(code == 0)
     },
     test("followJob returns 1 when the job fails") {
       for {
         follower <- followerWith("Failed", Some("boom"), List("partial output"))
-        code   <- follower.followJob("job-1")
+        code     <- follower.followJob("job-1")
       } yield assertTrue(code == 1)
     },
     test("followJob returns 1 when the job was cancelled") {
@@ -215,7 +216,7 @@ object TestJobFollower extends ZIOSpecDefault {
     },
     test("followJob times out when the log stream never ends") {
       for {
-        ref <- Ref.make(List(statusJson("Running", None)))
+        ref  <- Ref.make(List(statusJson("Running", None)))
         code <- follower(new StubApi(ref, Hang, ZIO.unit), 30.millis).followJob("job-1")
       } yield assertTrue(code == 1)
     },
@@ -240,8 +241,10 @@ object TestJobFollower extends ZIOSpecDefault {
       for {
         ref <- Ref.make(List(statusJson("Running", None)))
         // Always drops → never reaches EOF → give up after maxReconnects and surface the reattach hint.
-        code <- follower(new StubApi(ref, AlwaysFail(StreamDropped("idle timeout")), ZIO.unit), 1.minute).followJob("job-1")
-        err  <- TestConsole.outputErr
+        code <- follower(new StubApi(ref, AlwaysFail(StreamDropped("idle timeout")), ZIO.unit), 1.minute).followJob(
+          "job-1"
+        )
+        err <- TestConsole.outputErr
       } yield assertTrue(
         code == 1,
         err.exists(line => line.contains("ccas logs job-1") && line.contains("keeps running"))
@@ -254,10 +257,10 @@ object TestJobFollower extends ZIOSpecDefault {
         // The stream signals it is live, then hangs — so the follow is unambiguously inside `streamLines` (its
         // onInterrupt installed) when we interrupt. `Running` status is irrelevant; interpret never runs.
         api = new CancelRecordingApi("Running", cancelled, _ => started.succeed(()) *> ZIO.never)
-        fiber     <- follower(api, 1.minute).followJob("job-1").fork
-        _         <- started.await
-        _         <- fiber.interrupt
-        recorded  <- cancelled.get
+        fiber    <- follower(api, 1.minute).followJob("job-1").fork
+        _        <- started.await
+        _        <- fiber.interrupt
+        recorded <- cancelled.get
       } yield assertTrue(recorded.exists(p => p.contains("job-1") && p.contains("cancel")))
     },
     test("an interrupt during the post-follow recruit confirm does not cancel (#170)") {
@@ -278,7 +281,7 @@ object TestJobFollower extends ZIOSpecDefault {
     test("handleSingle short-circuits on a submission error") {
       for {
         follower <- followerWith("Completed", None, Nil)
-        code   <- follower.handleSingle("matchref", JobResult(None, Some("already running")))
+        code     <- follower.handleSingle("matchref", JobResult(None, Some("already running")))
       } yield assertTrue(code == 1)
     },
     test("handleClub runs onComplete on success and routes logs to stderr when piping") {

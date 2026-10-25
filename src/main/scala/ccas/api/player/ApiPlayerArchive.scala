@@ -3,13 +3,13 @@ package ccas.api.player
 import java.time.{Month, Year}
 import java.util.UUID
 
+import zio.Chunk
 import zio.http.URL
 import zio.json.{jsonMemberNames, JsonDecoder, SnakeCase}
-import zio.Chunk
 
+import ccas.api.misc.Accuracies
 import ccas.api.misc.enums.{GameResultDetail, GameRule}
 import ccas.api.misc.subtypes.{Elo, Username}
-import ccas.api.misc.Accuracies
 import ccas.api.player.ApiPlayerArchive.ApiPlayerArchiveGame
 import ccas.utils.json.JsonDecoding.given
 

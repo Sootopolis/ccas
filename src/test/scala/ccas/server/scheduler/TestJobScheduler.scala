@@ -10,10 +10,10 @@ import ccas.analysis.tables.{Club, RunTrigger}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId}
 import ccas.server.ServerTables
 import ccas.server.jobs.{JobKind, JobLogs, JobRun, JobRunner}
+import ccas.utils.ProgressDisplay
 import ccas.utils.client.ChessComClient
 import ccas.utils.errors.ConflictException
 import ccas.utils.sql.{FreshSchemaLayer, PostgresClient, TestDbCleanup}
-import ccas.utils.ProgressDisplay
 
 object TestJobScheduler extends ZIOSpecDefault {
 
@@ -64,10 +64,10 @@ object TestJobScheduler extends ZIOSpecDefault {
       submissions.update(_ + 1).as(JobRunId.generate())
 
     override def status(id: JobRunId): RIO[PostgresClient, Option[JobRun]] = ZIO.none
-    override def cancel(id: JobRunId): UIO[Boolean] = ZIO.succeed(false)
-    override def interruptAll: UIO[Unit] = ZIO.unit
+    override def cancel(id: JobRunId): UIO[Boolean]                        = ZIO.succeed(false)
+    override def interruptAll: UIO[Unit]                                   = ZIO.unit
     override def recentJobs(limit: Int): RIO[PostgresClient, List[JobRun]] = ZIO.succeed(Nil)
-    override def logStream(id: JobRunId): RIO[PostgresClient, JobLogs] = ZIO.succeed(JobLogs.NoSuchJob)
+    override def logStream(id: JobRunId): RIO[PostgresClient, JobLogs]     = ZIO.succeed(JobLogs.NoSuchJob)
     override def progressStream(id: JobRunId): RIO[PostgresClient, Option[ZStream[Any, Throwable, String]]] = ZIO.none
     override def sweepLogs: URIO[PostgresClient, Int] = ZIO.succeed(0)
   }
@@ -84,10 +84,10 @@ object TestJobScheduler extends ZIOSpecDefault {
       captured.update(params :: _).as(JobRunId.generate())
 
     override def status(id: JobRunId): RIO[PostgresClient, Option[JobRun]] = ZIO.none
-    override def cancel(id: JobRunId): UIO[Boolean] = ZIO.succeed(false)
-    override def interruptAll: UIO[Unit] = ZIO.unit
+    override def cancel(id: JobRunId): UIO[Boolean]                        = ZIO.succeed(false)
+    override def interruptAll: UIO[Unit]                                   = ZIO.unit
     override def recentJobs(limit: Int): RIO[PostgresClient, List[JobRun]] = ZIO.succeed(Nil)
-    override def logStream(id: JobRunId): RIO[PostgresClient, JobLogs] = ZIO.succeed(JobLogs.NoSuchJob)
+    override def logStream(id: JobRunId): RIO[PostgresClient, JobLogs]     = ZIO.succeed(JobLogs.NoSuchJob)
     override def progressStream(id: JobRunId): RIO[PostgresClient, Option[ZStream[Any, Throwable, String]]] = ZIO.none
     override def sweepLogs: URIO[PostgresClient, Int] = ZIO.succeed(0)
   }
@@ -104,10 +104,10 @@ object TestJobScheduler extends ZIOSpecDefault {
       submitted.update(clubIdOption :: _).as(JobRunId.generate())
 
     override def status(id: JobRunId): RIO[PostgresClient, Option[JobRun]] = ZIO.none
-    override def cancel(id: JobRunId): UIO[Boolean] = ZIO.succeed(false)
-    override def interruptAll: UIO[Unit] = ZIO.unit
+    override def cancel(id: JobRunId): UIO[Boolean]                        = ZIO.succeed(false)
+    override def interruptAll: UIO[Unit]                                   = ZIO.unit
     override def recentJobs(limit: Int): RIO[PostgresClient, List[JobRun]] = ZIO.succeed(Nil)
-    override def logStream(id: JobRunId): RIO[PostgresClient, JobLogs] = ZIO.succeed(JobLogs.NoSuchJob)
+    override def logStream(id: JobRunId): RIO[PostgresClient, JobLogs]     = ZIO.succeed(JobLogs.NoSuchJob)
     override def progressStream(id: JobRunId): RIO[PostgresClient, Option[ZStream[Any, Throwable, String]]] = ZIO.none
     override def sweepLogs: URIO[PostgresClient, Int] = ZIO.succeed(0)
   }
@@ -117,14 +117,22 @@ object TestJobScheduler extends ZIOSpecDefault {
     for {
       pgClient    <- ZIO.service[PostgresClient]
       submissions <- Ref.make(0)
-      runner = stubRunner(submissions)
+      runner    = stubRunner(submissions)
       scheduler = new JobScheduler.JobSchedulerLive(runner, pgClient, pollInterval)
 
       // Always-due schedule: every poll triggers a submission.
       now <- Clock.instant
-      _ <- Club.upsert(Club(schedClubId, now, ClubSlug("sched-test"), "Sched Test", None, None, None))
+      _   <- Club.upsert(Club(schedClubId, now, ClubSlug("sched-test"), "Sched Test", None, None, None))
       _ <- JobSchedule.insert(
-        JobSchedule.interval(0L, JobKind.Membership, Some(schedClubId), None, intervalHours = 0, enabled = true, lastRunAt = None)
+        JobSchedule.interval(
+          0L,
+          JobKind.Membership,
+          Some(schedClubId),
+          None,
+          intervalHours = 0,
+          enabled = true,
+          lastRunAt = None
+        )
       )
 
       _ <- ZIO.scoped {
@@ -137,8 +145,8 @@ object TestJobScheduler extends ZIOSpecDefault {
 
       // Scope closed → daemon interrupted. Further clock advancement must not produce polls.
       countAtClose <- submissions.get
-      _ <- TestClock.adjust(advanceWindow)
-      countAfter <- submissions.get
+      _            <- TestClock.adjust(advanceWindow)
+      countAfter   <- submissions.get
     } yield assertTrue(
       countAtClose >= 2,
       countAfter == countAtClose
@@ -150,14 +158,22 @@ object TestJobScheduler extends ZIOSpecDefault {
     for {
       pgClient  <- ZIO.service[PostgresClient]
       submitted <- Ref.make(List.empty[Option[ClubId]])
-      runner = trackingRunner(submitted)
+      runner    = trackingRunner(submitted)
       scheduler = new JobScheduler.JobSchedulerLive(runner, pgClient, pollInterval)
 
       now <- Clock.instant
       twoHoursAgo = now.minus(2, ChronoUnit.HOURS)
       _ <- Club.upsert(Club(dueClubId, twoHoursAgo, ClubSlug("due-test"), "Due Test", None, None, None))
       _ <- JobSchedule.insert(
-        JobSchedule.interval(0L, JobKind.Membership, Some(dueClubId), None, intervalHours = 1, enabled = true, lastRunAt = Some(twoHoursAgo))
+        JobSchedule.interval(
+          0L,
+          JobKind.Membership,
+          Some(dueClubId),
+          None,
+          intervalHours = 1,
+          enabled = true,
+          lastRunAt = Some(twoHoursAgo)
+        )
       )
       _ <- ZIO.scoped {
         for {
@@ -174,11 +190,11 @@ object TestJobScheduler extends ZIOSpecDefault {
     for {
       pgClient  <- ZIO.service[PostgresClient]
       submitted <- Ref.make(List.empty[Option[ClubId]])
-      runner = trackingRunner(submitted)
+      runner    = trackingRunner(submitted)
       scheduler = new JobScheduler.JobSchedulerLive(runner, pgClient, pollInterval)
 
       now <- Clock.instant
-      _ <- Club.upsert(Club(cronClubId, now, ClubSlug("cron-test"), "Cron Test", None, None, None))
+      _   <- Club.upsert(Club(cronClubId, now, ClubSlug("cron-test"), "Cron Test", None, None, None))
       // Fires every minute (normalized 6-field, dow blanked to `?`); CatchUp sidesteps grace timing under the
       // virtual clock. lastRunAt = now ⇒ the first boundary crossed by advancing the clock is due.
       _ <- JobSchedule.insert(
@@ -210,20 +226,36 @@ object TestJobScheduler extends ZIOSpecDefault {
     for {
       pgClient  <- ZIO.service[PostgresClient]
       submitted <- Ref.make(List.empty[Option[ClubId]])
-      runner = trackingRunner(submitted)
+      runner    = trackingRunner(submitted)
       scheduler = new JobScheduler.JobSchedulerLive(runner, pgClient, pollInterval)
 
       now <- Clock.instant
-      _ <- Club.upsert(Club(notDueClubId, now, ClubSlug("notdue-test"), "Not Due Test", None, None, None))
-      _ <- Club.upsert(Club(ctrlClubId, now, ClubSlug("notdue-ctrl"), "Ctrl Always-Due", None, None, None))
+      _   <- Club.upsert(Club(notDueClubId, now, ClubSlug("notdue-test"), "Not Due Test", None, None, None))
+      _   <- Club.upsert(Club(ctrlClubId, now, ClubSlug("notdue-ctrl"), "Ctrl Always-Due", None, None, None))
       _ <- JobSchedule.insert(
-        JobSchedule.interval(0L, JobKind.Membership, Some(notDueClubId), None, intervalHours = 24, enabled = true, lastRunAt = Some(now))
+        JobSchedule.interval(
+          0L,
+          JobKind.Membership,
+          Some(notDueClubId),
+          None,
+          intervalHours = 24,
+          enabled = true,
+          lastRunAt = Some(now)
+        )
       )
       // Always-due control: its submission proves a full pollLoop iteration ran (and thus the
       // not-due schedule was evaluated and rejected). Originally introduced to replace a
       // `ZIO.sleep(200.millis)` race; now still useful as a sync signal under sequential execution.
       _ <- JobSchedule.insert(
-        JobSchedule.interval(0L, JobKind.Membership, Some(ctrlClubId), None, intervalHours = 0, enabled = true, lastRunAt = None)
+        JobSchedule.interval(
+          0L,
+          JobKind.Membership,
+          Some(ctrlClubId),
+          None,
+          intervalHours = 0,
+          enabled = true,
+          lastRunAt = None
+        )
       )
       _ <- ZIO.scoped {
         for {
@@ -243,18 +275,34 @@ object TestJobScheduler extends ZIOSpecDefault {
     for {
       pgClient  <- ZIO.service[PostgresClient]
       submitted <- Ref.make(List.empty[Option[ClubId]])
-      runner = trackingRunner(submitted)
+      runner    = trackingRunner(submitted)
       scheduler = new JobScheduler.JobSchedulerLive(runner, pgClient, pollInterval)
 
       now <- Clock.instant
-      _ <- Club.upsert(Club(disabledClubId, now, ClubSlug("disabled-test"), "Disabled Test", None, None, None))
-      _ <- Club.upsert(Club(ctrlClubId, now, ClubSlug("disabled-ctrl"), "Ctrl Always-Due", None, None, None))
+      _   <- Club.upsert(Club(disabledClubId, now, ClubSlug("disabled-test"), "Disabled Test", None, None, None))
+      _   <- Club.upsert(Club(ctrlClubId, now, ClubSlug("disabled-ctrl"), "Ctrl Always-Due", None, None, None))
       _ <- JobSchedule.insert(
-        JobSchedule.interval(0L, JobKind.Membership, Some(disabledClubId), None, intervalHours = 0, enabled = false, lastRunAt = None)
+        JobSchedule.interval(
+          0L,
+          JobKind.Membership,
+          Some(disabledClubId),
+          None,
+          intervalHours = 0,
+          enabled = false,
+          lastRunAt = None
+        )
       )
       // Always-due control to anchor the assertion on a full pollLoop iteration completing.
       _ <- JobSchedule.insert(
-        JobSchedule.interval(0L, JobKind.Membership, Some(ctrlClubId), None, intervalHours = 0, enabled = true, lastRunAt = None)
+        JobSchedule.interval(
+          0L,
+          JobKind.Membership,
+          Some(ctrlClubId),
+          None,
+          intervalHours = 0,
+          enabled = true,
+          lastRunAt = None
+        )
       )
       _ <- ZIO.scoped {
         for {
@@ -271,7 +319,7 @@ object TestJobScheduler extends ZIOSpecDefault {
   private def testErrorDoesNotCrashScheduler = test("error in submission does not crash scheduler") {
     val errorClubId = ClubId(304)
     for {
-      pgClient <- ZIO.service[PostgresClient]
+      pgClient  <- ZIO.service[PostgresClient]
       callCount <- Ref.make(0)
       failingRunner = new JobRunner {
         override def submit(
@@ -284,19 +332,28 @@ object TestJobScheduler extends ZIOSpecDefault {
           callCount.update(_ + 1) *> ZIO.fail(new RuntimeException("boom"))
 
         override def status(id: JobRunId): RIO[PostgresClient, Option[JobRun]] = ZIO.none
-        override def cancel(id: JobRunId): UIO[Boolean] = ZIO.succeed(false)
-        override def interruptAll: UIO[Unit] = ZIO.unit
+        override def cancel(id: JobRunId): UIO[Boolean]                        = ZIO.succeed(false)
+        override def interruptAll: UIO[Unit]                                   = ZIO.unit
         override def recentJobs(limit: Int): RIO[PostgresClient, List[JobRun]] = ZIO.succeed(Nil)
-        override def logStream(id: JobRunId): RIO[PostgresClient, JobLogs] = ZIO.succeed(JobLogs.NoSuchJob)
-        override def progressStream(id: JobRunId): RIO[PostgresClient, Option[ZStream[Any, Throwable, String]]] = ZIO.none
+        override def logStream(id: JobRunId): RIO[PostgresClient, JobLogs]     = ZIO.succeed(JobLogs.NoSuchJob)
+        override def progressStream(id: JobRunId): RIO[PostgresClient, Option[ZStream[Any, Throwable, String]]] =
+          ZIO.none
         override def sweepLogs: URIO[PostgresClient, Int] = ZIO.succeed(0)
       }
       scheduler = new JobScheduler.JobSchedulerLive(failingRunner, pgClient, pollInterval)
 
       now <- Clock.instant
-      _ <- Club.upsert(Club(errorClubId, now, ClubSlug("error-test"), "Error Test", None, None, None))
+      _   <- Club.upsert(Club(errorClubId, now, ClubSlug("error-test"), "Error Test", None, None, None))
       _ <- JobSchedule.insert(
-        JobSchedule.interval(0L, JobKind.Membership, Some(errorClubId), None, intervalHours = 0, enabled = true, lastRunAt = None)
+        JobSchedule.interval(
+          0L,
+          JobKind.Membership,
+          Some(errorClubId),
+          None,
+          intervalHours = 0,
+          enabled = true,
+          lastRunAt = None
+        )
       )
       _ <- ZIO.scoped {
         for {
@@ -324,26 +381,45 @@ object TestJobScheduler extends ZIOSpecDefault {
             effect: Option[JobRunId] => RIO[ProgressDisplay & ChessComClient & PostgresClient, Any]
           ): RIO[PostgresClient, JobRunId] =
             submitted.update(clubIdOption :: _) *>
-              ZIO.when(clubIdOption.contains(failClubId))(ZIO.fail(new RuntimeException("boom"))).as(JobRunId.generate())
+              ZIO.when(clubIdOption.contains(failClubId))(ZIO.fail(new RuntimeException("boom"))).as(
+                JobRunId.generate()
+              )
 
           override def status(id: JobRunId): RIO[PostgresClient, Option[JobRun]] = ZIO.none
-          override def cancel(id: JobRunId): UIO[Boolean] = ZIO.succeed(false)
-          override def interruptAll: UIO[Unit] = ZIO.unit
+          override def cancel(id: JobRunId): UIO[Boolean]                        = ZIO.succeed(false)
+          override def interruptAll: UIO[Unit]                                   = ZIO.unit
           override def recentJobs(limit: Int): RIO[PostgresClient, List[JobRun]] = ZIO.succeed(Nil)
-          override def logStream(id: JobRunId): RIO[PostgresClient, JobLogs] = ZIO.succeed(JobLogs.NoSuchJob)
-          override def progressStream(id: JobRunId): RIO[PostgresClient, Option[ZStream[Any, Throwable, String]]] = ZIO.none
+          override def logStream(id: JobRunId): RIO[PostgresClient, JobLogs]     = ZIO.succeed(JobLogs.NoSuchJob)
+          override def progressStream(id: JobRunId): RIO[PostgresClient, Option[ZStream[Any, Throwable, String]]] =
+            ZIO.none
           override def sweepLogs: URIO[PostgresClient, Int] = ZIO.succeed(0)
         }
         scheduler = new JobScheduler.JobSchedulerLive(runner, pgClient, pollInterval)
 
         now <- Clock.instant
-        _ <- Club.upsert(Club(failClubId, now, ClubSlug("fail-sched"), "Fail", None, None, None))
-        _ <- Club.upsert(Club(goodClubId, now, ClubSlug("good-sched"), "Good", None, None, None))
+        _   <- Club.upsert(Club(failClubId, now, ClubSlug("fail-sched"), "Fail", None, None, None))
+        _   <- Club.upsert(Club(goodClubId, now, ClubSlug("good-sched"), "Good", None, None, None))
         _ <- JobSchedule.insert(
-          JobSchedule.interval(0L, JobKind.Membership, Some(failClubId), None, intervalHours = 0, enabled = true, lastRunAt = None)
+          JobSchedule.interval(
+            0L,
+            JobKind.Membership,
+            Some(failClubId),
+            None,
+            intervalHours = 0,
+            enabled = true,
+            lastRunAt = None
+          )
         )
         _ <- JobSchedule.insert(
-          JobSchedule.interval(0L, JobKind.History, Some(goodClubId), None, intervalHours = 0, enabled = true, lastRunAt = None)
+          JobSchedule.interval(
+            0L,
+            JobKind.History,
+            Some(goodClubId),
+            None,
+            intervalHours = 0,
+            enabled = true,
+            lastRunAt = None
+          )
         )
         _ <- ZIO.scoped {
           for {
@@ -378,21 +454,32 @@ object TestJobScheduler extends ZIOSpecDefault {
             callCount.update(_ + 1) *> ZIO.fail(ConflictException(s"A $kind job is already running"))
 
           override def status(id: JobRunId): RIO[PostgresClient, Option[JobRun]] = ZIO.none
-          override def cancel(id: JobRunId): UIO[Boolean] = ZIO.succeed(false)
-          override def interruptAll: UIO[Unit] = ZIO.unit
+          override def cancel(id: JobRunId): UIO[Boolean]                        = ZIO.succeed(false)
+          override def interruptAll: UIO[Unit]                                   = ZIO.unit
           override def recentJobs(limit: Int): RIO[PostgresClient, List[JobRun]] = ZIO.succeed(Nil)
-          override def logStream(id: JobRunId): RIO[PostgresClient, JobLogs] = ZIO.succeed(JobLogs.NoSuchJob)
-          override def progressStream(id: JobRunId): RIO[PostgresClient, Option[ZStream[Any, Throwable, String]]] = ZIO.none
+          override def logStream(id: JobRunId): RIO[PostgresClient, JobLogs]     = ZIO.succeed(JobLogs.NoSuchJob)
+          override def progressStream(id: JobRunId): RIO[PostgresClient, Option[ZStream[Any, Throwable, String]]] =
+            ZIO.none
           override def sweepLogs: URIO[PostgresClient, Int] = ZIO.succeed(0)
         }
         scheduler = new JobScheduler.JobSchedulerLive(conflictingRunner, pgClient, pollInterval)
 
         now <- Clock.instant
         twoHoursAgo = now.minus(2, ChronoUnit.HOURS)
-        _ <- Club.upsert(Club(conflictClubId, twoHoursAgo, ClubSlug("conflict-test"), "Conflict Test", None, None, None))
+        _ <- Club.upsert(
+          Club(conflictClubId, twoHoursAgo, ClubSlug("conflict-test"), "Conflict Test", None, None, None)
+        )
         // Due (last run 2h ago, 1h interval). Each tick re-selects it; submit always conflicts.
         scheduleId <- JobSchedule.insert(
-          JobSchedule.interval(0L, JobKind.Membership, Some(conflictClubId), None, intervalHours = 1, enabled = true, lastRunAt = Some(twoHoursAgo))
+          JobSchedule.interval(
+            0L,
+            JobKind.Membership,
+            Some(conflictClubId),
+            None,
+            intervalHours = 1,
+            enabled = true,
+            lastRunAt = Some(twoHoursAgo)
+          )
         )
         _ <- ZIO.scoped {
           for {
@@ -418,10 +505,18 @@ object TestJobScheduler extends ZIOSpecDefault {
       for {
         pgClient <- ZIO.service[PostgresClient]
         captured <- Ref.make(List.empty[Option[String]])
-        runner = paramsCapturingRunner(captured)
+        runner    = paramsCapturingRunner(captured)
         scheduler = new JobScheduler.JobSchedulerLive(runner, pgClient, pollInterval)
         _ <- JobSchedule.insert(
-          JobSchedule.interval(0L, JobKind.ClubData, None, Some(paramsJson), intervalHours = 0, enabled = true, lastRunAt = None)
+          JobSchedule.interval(
+            0L,
+            JobKind.ClubData,
+            None,
+            Some(paramsJson),
+            intervalHours = 0,
+            enabled = true,
+            lastRunAt = None
+          )
         )
         _ <- ZIO.scoped {
           for {
@@ -443,17 +538,33 @@ object TestJobScheduler extends ZIOSpecDefault {
       for {
         pgClient  <- ZIO.service[PostgresClient]
         submitted <- Ref.make(List.empty[Option[ClubId]])
-        runner = trackingRunner(submitted)
+        runner    = trackingRunner(submitted)
         scheduler = new JobScheduler.JobSchedulerLive(runner, pgClient, pollInterval)
 
         now <- Clock.instant
-        _ <- Club.upsert(Club(ctrlClubId, now, ClubSlug("badparams-ctrl"), "Ctrl Always-Due", None, None, None))
+        _   <- Club.upsert(Club(ctrlClubId, now, ClubSlug("badparams-ctrl"), "Ctrl Always-Due", None, None, None))
         // Malformed-params global job: decode fails before submit and must not block the control.
         _ <- JobSchedule.insert(
-          JobSchedule.interval(0L, JobKind.ClubData, None, Some("{not-json"), intervalHours = 0, enabled = true, lastRunAt = None)
+          JobSchedule.interval(
+            0L,
+            JobKind.ClubData,
+            None,
+            Some("{not-json"),
+            intervalHours = 0,
+            enabled = true,
+            lastRunAt = None
+          )
         )
         _ <- JobSchedule.insert(
-          JobSchedule.interval(0L, JobKind.Membership, Some(ctrlClubId), None, intervalHours = 0, enabled = true, lastRunAt = None)
+          JobSchedule.interval(
+            0L,
+            JobKind.Membership,
+            Some(ctrlClubId),
+            None,
+            intervalHours = 0,
+            enabled = true,
+            lastRunAt = None
+          )
         )
         _ <- ZIO.scoped {
           for {

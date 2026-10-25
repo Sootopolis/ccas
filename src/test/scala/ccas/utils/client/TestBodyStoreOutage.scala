@@ -6,9 +6,9 @@ import zio.http.*
 import zio.test.*
 
 import ccas.analysis.tables.{ApiFetchFailure, ApiResponseBody, ApiResponseCache, Tables}
+import ccas.utils.client.TestChessComClientSupport.*
 import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
 import ccas.utils.sql.PostgresClient.connectZIO
-import ccas.utils.client.TestChessComClientSupport.*
 
 /** #200: an object-store outage must take the *cache* offline, not the app. The body cache is not source of truth —
   * a lost body just re-fetches from Chess.com — so a [[BodyStore]] error has to degrade to a cache miss (read) or a
@@ -25,8 +25,8 @@ object TestBodyStoreOutage extends ZIOSpecDefault {
     suiteStartup
   ).provideShared(
     FreshSchemaLayer("test_body_store_outage", Tables.ensureTables)
-  // `sequential` for the same reason as TestChessComClientCaching: one shared schema + one shared fs store, so
-  // parallel siblings would race each other's cache rows and body objects.
+    // `sequential` for the same reason as TestChessComClientCaching: one shared schema + one shared fs store, so
+    // parallel siblings would race each other's cache rows and body objects.
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock @@ TestAspect.timeout(15.seconds)
 
   private def cacheable200(body: String, maxAge: Int): Response =
@@ -88,7 +88,7 @@ object TestBodyStoreOutage extends ZIOSpecDefault {
           _                     <- client.getResult[Payload](url) // populate while healthy (network #1)
           _                     <- faulty.breakReads
           fresh                 <- client.getResult[Payload](url) // metadata-only hit; body not loaded yet
-          value                 <- fresh.getValue                    // body unreadable → refetch (network #2)
+          value                 <- fresh.getValue                 // body unreadable → refetch (network #2)
           calls                 <- netCalls.get
           meta                  <- ApiResponseCache.lookupMeta(url.encode)
           stats                 <- sts.get
@@ -169,10 +169,10 @@ object TestBodyStoreOutage extends ZIOSpecDefault {
         working  <- ZIO.service[BodyStore]
         faulty   <- FaultyBodyStore.make(working)
         now      <- Clock.instant
-        failure   = ApiFetchFailure(now, url, "HttpStatusException", Some("404"), Some("""{"code":0}"""))
-        _        <- ApiFetchFailure.insert(failure).provideEnvironment(ZEnvironment(pgClient, faulty))
-        _        <- faulty.breakReads
-        rows     <- ApiFetchFailure.selectRecent(now).provideEnvironment(ZEnvironment(pgClient, faulty))
+        failure = ApiFetchFailure(now, url, "HttpStatusException", Some("404"), Some("""{"code":0}"""))
+        _    <- ApiFetchFailure.insert(failure).provideEnvironment(ZEnvironment(pgClient, faulty))
+        _    <- faulty.breakReads
+        rows <- ApiFetchFailure.selectRecent(now).provideEnvironment(ZEnvironment(pgClient, faulty))
       } yield assertTrue(
         rows.exists(r => r.url == url && r.responseBody.isEmpty)
       )
@@ -248,7 +248,7 @@ object TestBodyStoreOutage extends ZIOSpecDefault {
         faulty   <- FaultyBodyStore.make(working)
         now      <- Clock.instant
         _        <- faulty.breakWrites
-        failure   = ApiFetchFailure(now, url, "HttpStatusException", Some("429"), Some("rate limited"))
+        failure = ApiFetchFailure(now, url, "HttpStatusException", Some("429"), Some("rate limited"))
         inserted <- ApiFetchFailure.insert(failure).provideEnvironment(ZEnvironment(pgClient, faulty))
         _        <- faulty.healWrites
         rows     <- ApiFetchFailure.selectRecent(now).provideEnvironment(ZEnvironment(pgClient, faulty))
@@ -267,10 +267,10 @@ object TestBodyStoreOutage extends ZIOSpecDefault {
       // order this suite's suites run in. (A future sibling that referenced the CF body would fail the DELETE on
       // the FK, loudly, rather than silently invert the assertions.)
       for {
-        pgClient  <- ZIO.service[PostgresClient]
-        working   <- ZIO.service[BodyStore]
-        faulty    <- FaultyBodyStore.make(working)
-        env        = ZEnvironment(pgClient, faulty)
+        pgClient <- ZIO.service[PostgresClient]
+        working  <- ZIO.service[BodyStore]
+        faulty   <- FaultyBodyStore.make(working)
+        env = ZEnvironment(pgClient, faulty)
         _         <- deleteCfPointer
         _         <- faulty.breakWrites
         skipped   <- ApiResponseBody.normalizeCfBodies.provideEnvironment(env)

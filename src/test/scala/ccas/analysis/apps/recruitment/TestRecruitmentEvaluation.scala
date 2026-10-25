@@ -2,9 +2,8 @@ package ccas.analysis.apps.recruitment
 
 import java.time.{Duration, Instant}
 
-import ccas.utils.sql.PostgresClient
-import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 import zio.{RIO, ZLayer}
+import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.*
 import ccas.analysis.tables.*
@@ -12,6 +11,7 @@ import ccas.api.misc.subtypes.{Elo, Username}
 import ccas.utils.ProgressDisplay
 import ccas.utils.client.BodyStore
 import ccas.utils.sql.FreshSchemaLayer
+import ccas.utils.sql.PostgresClient
 
 object TestRecruitmentEvaluation extends ZIOSpecDefault {
 
@@ -34,35 +34,36 @@ object TestRecruitmentEvaluation extends ZIOSpecDefault {
     testMidPipelineErrorPersistsCandidateWithErrorOutcome
   )
 
-  private def testPersistsPlayerSnapshotAndCandidate = test("persists Player, PlayerSnapshot, and RecruitmentCandidate") {
-    val responses = Map(
-      "player/alice" -> apiPlayerJson(200, "alice"),
-      "player/bob"   -> apiPlayerJson(201, "bob")
-    )
-    val criteria = makeCriteria()
+  private def testPersistsPlayerSnapshotAndCandidate =
+    test("persists Player, PlayerSnapshot, and RecruitmentCandidate") {
+      val responses = Map(
+        "player/alice" -> apiPlayerJson(200, "alice"),
+        "player/bob"   -> apiPlayerJson(201, "bob")
+      )
+      val criteria = makeCriteria()
 
-    for {
-      _          <- seedDb
-      criteriaId <- seedCriteria(criteria)
-      runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None, None)
-      client     <- fakeChessComClient(responses)
-      invited    <- evalCandidates(client, runId, List(Username("alice"), Username("bob")), criteria)
-      // Check invited list
-      _ = assertTrue(invited.size == 2)
-      // Check Player table (now includes current username/status/title)
-      playerA <- Player.selectId(pid0)
-      playerB <- Player.selectId(pid1)
-      // Check RecruitmentCandidate table
-      candidates <- RecruitmentCandidate.selectByRun(runId)
-    } yield assertTrue(
-      playerA.isDefined,
-      playerB.isDefined,
-      playerA.get.username == Username("alice"),
-      playerB.get.username == Username("bob"),
-      candidates.size == 2,
-      candidates.forall(_.outcome == CandidateOutcome.Deferred)
-    )
-  }
+      for {
+        _          <- seedDb
+        criteriaId <- seedCriteria(criteria)
+        runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None, None)
+        client     <- fakeChessComClient(responses)
+        invited    <- evalCandidates(client, runId, List(Username("alice"), Username("bob")), criteria)
+        // Check invited list
+        _ = assertTrue(invited.size == 2)
+        // Check Player table (now includes current username/status/title)
+        playerA <- Player.selectId(pid0)
+        playerB <- Player.selectId(pid1)
+        // Check RecruitmentCandidate table
+        candidates <- RecruitmentCandidate.selectByRun(runId)
+      } yield assertTrue(
+        playerA.isDefined,
+        playerB.isDefined,
+        playerA.get.username == Username("alice"),
+        playerB.get.username == Username("bob"),
+        candidates.size == 2,
+        candidates.forall(_.outcome == CandidateOutcome.Deferred)
+      )
+    }
 
   private def testRespectsTargetLimit = test("respects target limit") {
     val responses = Map(
@@ -112,29 +113,29 @@ object TestRecruitmentEvaluation extends ZIOSpecDefault {
     )
   }
 
-  private def testMidPipelineErrorPersistsCandidateWithErrorOutcome = test("mid-pipeline error persists candidate with Error outcome") {
-    // Player profile fetches OK (apiPlayer set), but stats returns invalid JSON
-    val responses = Map(
-      "player/alice"       -> apiPlayerJson(200, "alice"),
-      "player/alice/stats" -> "NOT VALID JSON"
-    )
-    val criteria = makeCriteria()
+  private def testMidPipelineErrorPersistsCandidateWithErrorOutcome =
+    test("mid-pipeline error persists candidate with Error outcome") {
+      // Player profile fetches OK (apiPlayer set), but stats returns invalid JSON
+      val responses = Map(
+        "player/alice"       -> apiPlayerJson(200, "alice"),
+        "player/alice/stats" -> "NOT VALID JSON"
+      )
+      val criteria = makeCriteria()
 
-    for {
-      _          <- seedDb
-      criteriaId <- seedCriteria(criteria)
-      runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None, None)
-      client     <- fakeChessComClient(responses)
-      _          <- evalCandidates(client, runId, List(Username("alice")), criteria)
-      candidates <- RecruitmentCandidate.selectByRun(runId)
-    } yield assertTrue(
-      candidates.size == 1,
-      candidates.head.outcome == CandidateOutcome.Error,
-      candidates.head.playerId == pid0,
-      candidates.head.rejectionReason.isDefined
-    )
-  }
-
+      for {
+        _          <- seedDb
+        criteriaId <- seedCriteria(criteria)
+        runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None, None)
+        client     <- fakeChessComClient(responses)
+        _          <- evalCandidates(client, runId, List(Username("alice")), criteria)
+        candidates <- RecruitmentCandidate.selectByRun(runId)
+      } yield assertTrue(
+        candidates.size == 1,
+        candidates.head.outcome == CandidateOutcome.Error,
+        candidates.head.playerId == pid0,
+        candidates.head.rejectionReason.isDefined
+      )
+    }
 
   // ==========================================================================
   // Suite: Cache-aware filters
@@ -249,34 +250,35 @@ object TestRecruitmentEvaluation extends ZIOSpecDefault {
     } yield assertTrue(outcome.contains(CandidateOutcome.Deferred))
   }
 
-  private def testCacheOnlyRejectionDoesNotBlockReEvaluation = test("cache-only rejection does not block re-evaluation via daysSinceRejected") {
-    val now = Instant.now()
-    val cache = PlayerRecruitmentCache(
-      playerId = pid0,
-      fetchedAt = now.minus(Duration.ofHours(12)),
-      dailyElo = Some(Elo(1500)),
-      dailyScoreRate = None,
-      dailyTimeoutPct = Some(0.0),
-      dailyGamesFinished = Some(200),
-      clubCount = Some(120), // over limit
-      ongoingGames = Some(3),
-      ongoingTeamMatches = Some(2),
-      tmGamesFinished90d = Some(10),
-      tmTimeoutPct90d = Some(0.0),
-      lastDailyTimeoutAt = None,
-      lastTmTimeoutAt = None
-    )
-    val criteria  = makeCriteria(daysSinceRejected = Some(30)).copy(maxClubs = Some(50))
-    val responses = Map("player/alice" -> apiPlayerJson(200, "alice"))
+  private def testCacheOnlyRejectionDoesNotBlockReEvaluation =
+    test("cache-only rejection does not block re-evaluation via daysSinceRejected") {
+      val now = Instant.now()
+      val cache = PlayerRecruitmentCache(
+        playerId = pid0,
+        fetchedAt = now.minus(Duration.ofHours(12)),
+        dailyElo = Some(Elo(1500)),
+        dailyScoreRate = None,
+        dailyTimeoutPct = Some(0.0),
+        dailyGamesFinished = Some(200),
+        clubCount = Some(120), // over limit
+        ongoingGames = Some(3),
+        ongoingTeamMatches = Some(2),
+        tmGamesFinished90d = Some(10),
+        tmTimeoutPct90d = Some(0.0),
+        lastDailyTimeoutAt = None,
+        lastTmTimeoutAt = None
+      )
+      val criteria  = makeCriteria(daysSinceRejected = Some(30)).copy(maxClubs = Some(50))
+      val responses = Map("player/alice" -> apiPlayerJson(200, "alice"))
 
-    for {
-      // First run: cache-only rejection (no candidate row written)
-      outcome1 <- evalSingleWithCache(responses, criteria, cache)
-      // Verify no Rejected row exists for daysSinceRejected to find
-      rejected <- RecruitmentCandidate.selectLatestRejectedByAlias(pid0, clubId, "default")
-    } yield assertTrue(
-      outcome1.isEmpty,
-      rejected.isEmpty
-    )
-  }
+      for {
+        // First run: cache-only rejection (no candidate row written)
+        outcome1 <- evalSingleWithCache(responses, criteria, cache)
+        // Verify no Rejected row exists for daysSinceRejected to find
+        rejected <- RecruitmentCandidate.selectLatestRejectedByAlias(pid0, clubId, "default")
+      } yield assertTrue(
+        outcome1.isEmpty,
+        rejected.isEmpty
+      )
+    }
 }

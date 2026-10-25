@@ -196,7 +196,11 @@ object RecruitmentCandidate {
             ON CONFLICT (run_id, player_id) DO NOTHING""".update.run()
     }
 
-  def updateOutcome(runId: RecruitmentRunId, playerId: PlayerId, outcome: CandidateOutcome): ZIO[PostgresClient, SQLException, Int] =
+  def updateOutcome(
+    runId: RecruitmentRunId,
+    playerId: PlayerId,
+    outcome: CandidateOutcome
+  ): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""UPDATE recruitment_candidate SET outcome = $outcome
             WHERE run_id = $runId AND player_id = $playerId""".update.run()
