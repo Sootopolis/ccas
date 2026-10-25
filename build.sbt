@@ -92,6 +92,11 @@ Test / parallelExecution := false
 Test / fork := true
 Test / javaOptions ++= Seq("--sun-misc-unsafe-memory-access=allow", "--enable-native-access=ALL-UNNAMED")
 
+// scalafmt runs before scalafix: a wrap can leave a multi-line lambda in parens, which `MultilineBlockBraces` flags,
+// and scalafix's output is already formatted (#214).
+addCommandAlias("lint", "scalafmtCheckAll; scalafmtSbtCheck; scalafixAll --check")
+addCommandAlias("lintFix", "scalafmtAll; scalafmtSbt; scalafixAll")
+
 lazy val root = (project in file("."))
   .enablePlugins(BuildInfoPlugin, JavaAppPackaging)
   .settings(
@@ -117,6 +122,8 @@ lazy val root = (project in file("."))
         ScalafixConfig,
       "org.scala-lang" %% "scala3-library" % scalaVersion.value % ScalafixConfig
     ),
+    // Without this, scalafmt checks the Compile and Test sources but not these rules.
+    ScalafmtPlugin.scalafmtConfigSettings(ScalafixConfig),
     // The launcher's copy of the two flags, and the only one that probes the JDK — it can meet a version neither
     // `.sdkmanrc` nor CI pins. See docs/adr/0018-every-jvm-carries-the-same-two-flags.md (#231).
     bashScriptExtraDefines ++= Seq(

@@ -33,7 +33,7 @@ Take the work on the **current branch** through this repo's full release flow. B
 - Branch already has commits ahead of base and a clean tree → skip to step 2.
 
 ## 2. Push
-- `git push -u origin <branch>`. This fires the pre-push hook: the docs and scalafix checks, then the full `sbt test`.
+- `git push -u origin <branch>`. This fires the pre-push hook: the docs check and `sbt lint`, then the full `sbt test`.
 - Any REAL failure, of a check or a test → stop and fix. **Never `--no-verify` past a real failure.**
 - `Failed to get driver instance for ...ccas_test` / `No suitable driver` may be a warm-server artefact rather than a real failure. Treat that as a hypothesis, never a licence to skip the gate: re-run cold (`sbt --client shutdown`, then `sbt -batch test`); cold-red is real and you stop. Only once it is cold-green:
   1. re-prove the touched code forked — `sbt ';set Test/fork := true ;testOnly <touched suites>'`;

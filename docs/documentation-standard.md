@@ -23,7 +23,7 @@ Route by the question the reader is asking. Every fact has exactly one home; eve
 
 The framework behind the split is [Diátaxis](https://diataxis.fr/): reference (scaladoc, README's API section), how-to (README's task sections), and explanation (ADRs) are different genres with different lifetimes, and mixing them is what makes a document unmaintainable. Decision records use [Nygard's lightweight ADR format](https://cognitect.com/blog/2011/11/15/documenting-architecture-decisions).
 
-A rule belongs in `.claude/rules/` rather than `CLAUDE.md` only when it matters solely while a file it covers is open, because Claude Code loads it only when Claude reads, writes or edits such a file ([path-specific rules](https://code.claude.com/docs/en/memory#path-specific-rules)). A rule needed at design time, such as no `ChessComClient` call inside `withTransaction`, or for a command run alone, such as never `scalafmtAll`, stays in `CLAUDE.md`.
+A rule belongs in `.claude/rules/` rather than `CLAUDE.md` only when it matters solely while a file it covers is open, because Claude Code loads it only when Claude reads, writes or edits such a file ([path-specific rules](https://code.claude.com/docs/en/memory#path-specific-rules)). A rule needed at design time, such as no `ChessComClient` call inside `withTransaction`, or for a command run alone, such as never committing on `wip`, stays in `CLAUDE.md`.
 
 **Never write the same fact twice.** If a rationale is worth a paragraph, it is worth an ADR — and then the code carries a pointer, not a copy:
 
