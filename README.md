@@ -25,8 +25,11 @@ docker compose up -d
 # Configure environment
 cp .env.example .env   # edit with your values
 
-# Enable the tracked git hooks (pre-push runs the docs and scalafix checks, then the full test suite)
+# Enable the tracked git hooks (pre-push runs the docs check and `sbt lint`, then the full test suite)
 git config core.hooksPath .githooks
+
+# Have git blame skip the commits that only reformatted the tree
+git config blame.ignoreRevsFile .git-blame-ignore-revs
 
 # Run the server (default port 8080)
 sbt "runMain ccas.cli.Main server up"
@@ -34,11 +37,16 @@ sbt "runMain ccas.cli.Main server up"
 # Run tests (requires ccas_test database from docker compose)
 sbt test
 
-# Check the coding conventions scalafix enforces; without --check it applies its fixes
-sbt "scalafixAll --check"
+# Check formatting (scalafmt) and the coding conventions (scalafix), as CI does
+sbt lint
+
+# Apply both tools' fixes
+sbt lintFix
 ```
 
-`core.hooksPath` is per-clone and not carried by `git clone`, so set it once on every machine you work from — otherwise pushes skip the pre-push test run silently.
+`core.hooksPath` and `blame.ignoreRevsFile` are per-clone and not carried by `git clone`, so set them once on every machine you work from — otherwise pushes skip the pre-push test run silently, and `git blame` credits every reformatted line to the reformat.
+
+In IntelliJ, set the Scala code style's formatter to Scalafmt (Settings → Editor → Code Style → Scala), so that Reformat Code runs scalafmt with `.scalafmt.conf`. Optimize Imports is IntelliJ's own and may order imports differently; `sbt lint` catches any it leaves.
 
 ## Install the `ccas` CLI
 

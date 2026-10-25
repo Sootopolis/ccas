@@ -92,5 +92,5 @@ jobs:
 
       - uses: sbt/setup-sbt@v1
 
-      - name: Check the coding conventions scalafix enforces
-        run: sbt "scalafixAll --check"
+      - name: Check formatting and the coding conventions
+        run: sbt lint

@@ -1,0 +1,4 @@
+# Commits that only reformatted the tree. `git blame` skips them once `blame.ignoreRevsFile` points here (README).
+
+# Reformat the tree with scalafmt, its config corrected first (#214, #358)
+e0e33870963207699fb2707733113c4f199972ef

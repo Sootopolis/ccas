@@ -17,7 +17,7 @@ The JDK is pinned in `.sdkmanrc`: run `sdk env` in the repo root, or `sdk env in
 - **Compile:** `sbt compile`
 - **Run all tests:** `sbt test`
 - **Run a single test suite:** `sbt "testOnly ccas.api.TestApiJsonParsing"` (fully qualified object name)
-- **Check the conventions scalafix enforces:** `sbt "scalafixAll --check"`; drop `--check` to apply its fixes
+- **Check formatting and the conventions scalafix enforces:** `sbt lint`; `sbt lintFix` applies both tools' fixes
 - **Test the docs checker:** `python3 scripts/test_check_docs.py`
 
 Tests use ZIO Test (`ZIOSpecDefault`). SQL tests require a running PostgreSQL instance with a `ccas_test` database, and use it even with `DATABASE_URL` exported: `src/test/resources/application.conf` nulls `database.url`, and `FreshSchemaLayer` still refuses to reset a schema in any database not named `*_test`, in case another route reaches production. A tracked `pre-push` hook runs the full suite before every push — enable it per clone with `git config core.hooksPath .githooks`.
@@ -62,8 +62,6 @@ Rules that aren't derivable from reading the code. Follow them; they exist becau
 **Rules by location.** Scala style and ZIO idioms ([`scala.md`](.claude/rules/scala.md)), tests ([`tests.md`](.claude/rules/tests.md)) and the CLI ([`cli.md`](.claude/rules/cli.md)) live in `.claude/rules/`, each loaded when you touch a file its `paths:` header covers. Read the matching one first when you create a covered file before opening any, or edit one after a compaction.
 
 **SQL.** Write methods return the number of rows affected, not `Unit`. Record names once per transaction (`Player.writeBatch` for batches; [0020](docs/adr/0020-claims-on-one-name-queue.md)). Never use `ChessComClient` inside `withTransaction`: the connection and locks would stay held across the round trip, and the client dies if you try (#300). Prefer `UNION ALL` over `UNION` where deduplication isn't needed. Magnum specifics: a custom `DbCodec` must not throw on `null`, because Magnum's `OptionCodec` reads the value *before* checking `wasNull`; and interpolating a bare enum case (`${TriggerType.Interval}`) into `sql""` emits no placeholder and produces a syntax error — widen the value to the enum type first.
-
-**Formatting.** The repo is not scalafmt-clean. Never run `scalafmtAll` / `scalafmtSbt` — it churns ~120 files. Format only the files you touched, and even then check the diff: reformatting a file that was never formatted rewraps comments and reorders imports far beyond your change.
 
 **Output files.** Apps that write reports go through `OutputFile` (`ccas.utils`), which owns the layout and archives earlier output. Don't hand-roll paths.
 

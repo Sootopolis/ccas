@@ -18,6 +18,7 @@ paths:
 
 ## Calls and patterns
 
+- When long arguments that compute something (a nested call, an interpolated string) are all that push a call past the line, consider binding them to values so it fits on one line; otherwise split it, named.
 - Name arguments in any call already split one per line, a method as much as a construction — the vertical space is spent, so the names are free, and they matter most for adjacent same-typed `None` / `Some` arguments. Varargs (`assertTrue`, `List`) have no names to give.
 - Name every argument of a call or none of them, never a mix — a half-named call reads as if the named ones were the only ones that mattered, while the reader still counts positions for the rest (Python rejects that order outright). So when a bare `true` / `false` / `None` wants a label on a one-line call, name the whole call, splitting one argument per line if it no longer fits.
 - A case-class pattern that would list more than three fields, wildcards included, binds the value instead (`case recruit: CliCommand.Recruit =>`) and reads its fields by name: positions break silently when two same-typed fields swap, and the reader counts commas, as in an unnamed call.
