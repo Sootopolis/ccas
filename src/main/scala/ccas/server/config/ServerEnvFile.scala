@@ -30,7 +30,7 @@ object ServerEnvFile {
   }
   object Line {
     final case class Pair(key: String, value: String, raw: String) extends Line
-    final case class Other(raw: String) extends Line
+    final case class Other(raw: String)                            extends Line
   }
 
   /** Parse `content` into ordered lines. Never fails: a line without `=` becomes [[Line.Other]]. */
@@ -56,7 +56,8 @@ object ServerEnvFile {
         // `export DB_HOST`. Env var names never contain a space, so the prefix is unambiguous. `raw` keeps the
         // original text, so an untouched `export …` line is rendered verbatim.
         val rawKey = line.substring(0, idx).trim
-        val key    = if (rawKey.startsWith("export ")) { rawKey.drop("export ".length).trim } else { rawKey }
+        val key = if (rawKey.startsWith("export ")) { rawKey.drop("export ".length).trim }
+        else { rawKey }
         if (key.isEmpty) { Line.Other(line) }
         else { Line.Pair(key, unquote(line.substring(idx + 1).trim), line) }
       }
@@ -72,7 +73,7 @@ object ServerEnvFile {
 
   /** Replace the first `Pair` for `key` in place (dropping any later duplicates), or append a new line. */
   def setValue(lines: List[Line], key: String, value: String): List[Line] = {
-    val rendered          = Line.Pair(key, value, renderPair(key, value))
+    val rendered               = Line.Pair(key, value, renderPair(key, value))
     val isKey: Line => Boolean = { case Line.Pair(k, _, _) => k == key; case _ => false }
     if (lines.exists(isKey)) {
       // Replace the first occurrence in place; drop any later duplicates so exactly one assignment of `key` remains.

@@ -4,7 +4,7 @@ import java.nio.file.{Files, Path, Paths}
 import java.util.concurrent.ConcurrentLinkedQueue
 
 import org.postgresql.ds.PGSimpleDataSource
-import zio.{Exit, Fiber, Promise, RIO, Ref, Runtime, Scope, Task, UIO, URIO, ZIO, ZLayer, ZLogger}
+import zio.{Exit, Fiber, Promise, Ref, RIO, Runtime, Scope, Task, UIO, URIO, ZIO, ZLayer, ZLogger}
 import zio.http.{Client, Server}
 import zio.http.netty.NettyConfig
 import zio.stream.ZStream
@@ -32,8 +32,8 @@ object TestServerBoot extends ZIOSpecDefault {
   override def spec: Spec[Any, Throwable] = suite("TestServerBoot")(
     test("a detached server writes its own pid to the pid file, and deletes the file on shutdown") {
       for {
-        dir    <- ZIO.attemptBlocking(Files.createTempDirectory("ccas-pid"))
-        path    = dir.resolve("state").resolve("ccas-8080.pid")
+        dir <- ZIO.attemptBlocking(Files.createTempDirectory("ccas-pid"))
+        path = dir.resolve("state").resolve("ccas-8080.pid")
         during <- ZIO.scoped(CcasServer.pidFileManaged(Some(path)) *> ZIO.attemptBlocking(Files.readString(path)))
         after  <- ZIO.attemptBlocking(Files.exists(path))
       } yield assertTrue(during == s"${ProcessHandle.current().pid()}\n", !after)
@@ -53,19 +53,19 @@ object TestServerBoot extends ZIOSpecDefault {
     },
     test("a detached server's pid file outlives the services it owns") {
       for {
-        dir            <- ZIO.attemptBlocking(Files.createTempDirectory("ccas-pid"))
-        path            = dir.resolve("ccas-8080.pid")
+        dir <- ZIO.attemptBlocking(Files.createTempDirectory("ccas-pid"))
+        path = dir.resolve("ccas-8080.pid")
         (exit, events) <- serveThenInterrupt(pidFileOption = Some(path))
         after          <- ZIO.attemptBlocking(Files.exists(path))
       } yield assertTrue(exit.isInterruptedOnly, events.contains("pid file present at pool close"), !after)
     },
     test("a client following a running job doesn't hold shutdown for the HTTP server's drain") {
       for {
-        booted          <- boot(pidFileOption = None)
-        api             <- CcasApiClient.live(s"http://127.0.0.1:${booted.port}")
-        following       <- Promise.make[Nothing, Unit]
-        follow          <- api.streamLines("/api/jobs/job-1/logs")(_ => following.succeed(()).unit).fork
-        _               <- following.await.raceFirst(follow.join *> ZIO.never)
+        booted    <- boot(pidFileOption = None)
+        api       <- CcasApiClient.live(s"http://127.0.0.1:${booted.port}")
+        following <- Promise.make[Nothing, Unit]
+        follow    <- api.streamLines("/api/jobs/job-1/logs")(_ => following.succeed(()).unit).fork
+        _         <- following.await.raceFirst(follow.join *> ZIO.never)
         // zio-http's drain gives up after 10 s, so a follow that held it would take at least that.
         (elapsed, exit) <- booted.fiber.interrupt.timed
         followed        <- follow.join.exit

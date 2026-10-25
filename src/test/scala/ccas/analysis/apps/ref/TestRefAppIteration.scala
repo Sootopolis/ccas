@@ -4,13 +4,13 @@ import zio.Scope
 import zio.http.URL
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
+import TestRefAppSupport.*
+
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.apiDailyMatchJson
 import ccas.analysis.apps.ref.RefUtils.RefContext
 import ccas.analysis.tables.{ClubMatchRef, PlayerMatchRef, PlayerTournamentRef, Tables}
 import ccas.api.misc.subtypes.{ClubMatchId, TournamentSlug}
 import ccas.utils.sql.FreshSchemaLayer
-
-import TestRefAppSupport.*
 
 object TestRefAppIteration extends ZIOSpecDefault {
 
@@ -93,56 +93,58 @@ object TestRefAppIteration extends ZIOSpecDefault {
     )
   }
 
-  private def testFallsBackToSecondTournamentWhenFirstTournamentRound404s = test("falls back to second tournament when first tournament round 404s") {
-    for {
-      _ <- seedDb
-      client <- fakeChessComClient(
-        Map(
-          s"player/alice/matches"       -> emptyPlayerMatchesJson,
-          s"player/bob/matches"         -> emptyPlayerMatchesJson,
-          s"player/charlie/matches"     -> emptyPlayerMatchesJson,
-          s"player/alice/tournaments"   -> apiPlayerTournamentsJson(List(("bad-tourney", 5), ("good-tourney", 5))),
-          s"player/bob/tournaments"     -> emptyPlayerTournamentsJson,
-          s"player/charlie/tournaments" -> emptyPlayerTournamentsJson,
-          // bad-tourney/1 not present -> 404
-          s"tournament/good-tourney/1" -> apiTournamentRoundJson(List("alice", "someone"))
+  private def testFallsBackToSecondTournamentWhenFirstTournamentRound404s =
+    test("falls back to second tournament when first tournament round 404s") {
+      for {
+        _ <- seedDb
+        client <- fakeChessComClient(
+          Map(
+            s"player/alice/matches"       -> emptyPlayerMatchesJson,
+            s"player/bob/matches"         -> emptyPlayerMatchesJson,
+            s"player/charlie/matches"     -> emptyPlayerMatchesJson,
+            s"player/alice/tournaments"   -> apiPlayerTournamentsJson(List(("bad-tourney", 5), ("good-tourney", 5))),
+            s"player/bob/tournaments"     -> emptyPlayerTournamentsJson,
+            s"player/charlie/tournaments" -> emptyPlayerTournamentsJson,
+            // bad-tourney/1 not present -> 404
+            s"tournament/good-tourney/1" -> apiTournamentRoundJson(List("alice", "someone"))
+          )
         )
+        _   <- runPopulate(client, forceSkipped = false, upgradeRefs = false)
+        ref <- PlayerTournamentRef.selectId(pid0)
+      } yield assertTrue(
+        ref.isDefined,
+        ref.get.tournamentSlug == TournamentSlug("good-tourney"),
+        ref.get.playerIdx == 0
       )
-      _   <- runPopulate(client, forceSkipped = false, upgradeRefs = false)
-      ref <- PlayerTournamentRef.selectId(pid0)
-    } yield assertTrue(
-      ref.isDefined,
-      ref.get.tournamentSlug == TournamentSlug("good-tourney"),
-      ref.get.playerIdx == 0
-    )
-  }
+    }
 
-  private def testFailedTournamentUrlIsNotRetriedForAnotherPlayer = test("failed tournament URL is not retried for another player") {
-    // Both alice and bob share bad-tourney (which 404s) and good-tourney
-    for {
-      _ <- seedDb
-      client <- fakeChessComClient(
-        Map(
-          s"player/alice/matches"       -> emptyPlayerMatchesJson,
-          s"player/bob/matches"         -> emptyPlayerMatchesJson,
-          s"player/charlie/matches"     -> emptyPlayerMatchesJson,
-          s"player/alice/tournaments"   -> apiPlayerTournamentsJson(List(("bad-tourney", 5), ("good-tourney", 5))),
-          s"player/bob/tournaments"     -> apiPlayerTournamentsJson(List(("bad-tourney", 5), ("good-tourney", 5))),
-          s"player/charlie/tournaments" -> emptyPlayerTournamentsJson,
-          // bad-tourney/1 not present -> 404 (should only be tried once across both players)
-          s"tournament/good-tourney/1" -> apiTournamentRoundJson(List("alice", "bob", "someone"))
+  private def testFailedTournamentUrlIsNotRetriedForAnotherPlayer =
+    test("failed tournament URL is not retried for another player") {
+      // Both alice and bob share bad-tourney (which 404s) and good-tourney
+      for {
+        _ <- seedDb
+        client <- fakeChessComClient(
+          Map(
+            s"player/alice/matches"       -> emptyPlayerMatchesJson,
+            s"player/bob/matches"         -> emptyPlayerMatchesJson,
+            s"player/charlie/matches"     -> emptyPlayerMatchesJson,
+            s"player/alice/tournaments"   -> apiPlayerTournamentsJson(List(("bad-tourney", 5), ("good-tourney", 5))),
+            s"player/bob/tournaments"     -> apiPlayerTournamentsJson(List(("bad-tourney", 5), ("good-tourney", 5))),
+            s"player/charlie/tournaments" -> emptyPlayerTournamentsJson,
+            // bad-tourney/1 not present -> 404 (should only be tried once across both players)
+            s"tournament/good-tourney/1" -> apiTournamentRoundJson(List("alice", "bob", "someone"))
+          )
         )
+        _        <- runPopulate(client, forceSkipped = false, upgradeRefs = false)
+        aliceRef <- PlayerTournamentRef.selectId(pid0)
+        bobRef   <- PlayerTournamentRef.selectId(pid1)
+      } yield assertTrue(
+        aliceRef.isDefined,
+        aliceRef.get.tournamentSlug == TournamentSlug("good-tourney"),
+        bobRef.isDefined,
+        bobRef.get.tournamentSlug == TournamentSlug("good-tourney")
       )
-      _        <- runPopulate(client, forceSkipped = false, upgradeRefs = false)
-      aliceRef <- PlayerTournamentRef.selectId(pid0)
-      bobRef   <- PlayerTournamentRef.selectId(pid1)
-    } yield assertTrue(
-      aliceRef.isDefined,
-      aliceRef.get.tournamentSlug == TournamentSlug("good-tourney"),
-      bobRef.isDefined,
-      bobRef.get.tournamentSlug == TournamentSlug("good-tourney")
-    )
-  }
+    }
 
   private def testRecordedFailedUrlReadsAsFailed =
     test("a URL recorded as failed reads as failed, under the source it failed for") {

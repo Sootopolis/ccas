@@ -1,8 +1,8 @@
 package ccas.server.scheduler
 
 import java.sql.SQLException
-import java.time.temporal.ChronoUnit
 import java.time.{Duration, Instant, ZoneId}
+import java.time.temporal.ChronoUnit
 
 import com.augustnagro.magnum.*
 import cron4s.lib.javatime.*
@@ -77,8 +77,8 @@ final case class JobSchedule(
         expr.prev(now.atZone(zone)) match {
           case None => false
           case Some(prevZdt) =>
-            val prevFire          = prevZdt.toInstant
-            val boundaryAfterRun  = lastRunAt.forall(prevFire.isAfter)
+            val prevFire         = prevZdt.toInstant
+            val boundaryAfterRun = lastRunAt.forall(prevFire.isAfter)
             if (!boundaryAfterRun) { false }
             else {
               misfire match {

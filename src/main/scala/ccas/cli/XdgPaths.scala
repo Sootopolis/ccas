@@ -36,7 +36,7 @@ object XdgPaths {
   def serverEnvFile: Path = ServerEnvPaths.file
 
   private def xdgDir(envVar: String, homeRelative: String): Path = {
-    val xdg = Option(System.getenv(envVar)).map(_.trim).filter(_.nonEmpty)
+    val xdg  = Option(System.getenv(envVar)).map(_.trim).filter(_.nonEmpty)
     val base = xdg.getOrElse(System.getProperty("user.home") + homeRelative)
     Paths.get(base, "ccas")
   }

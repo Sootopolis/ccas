@@ -1,7 +1,7 @@
 package ccas.server.jobs
 
+import zio.{durationInt, Duration, Schedule}
 import zio.stream.ZStream
-import zio.{Duration, Schedule, durationInt}
 
 /** Wire protocol for the `GET /api/jobs/{id}/logs` chunked follow stream.
   *

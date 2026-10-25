@@ -4,8 +4,8 @@ import java.sql.SQLException
 import java.time.{Instant, LocalDateTime, ZoneOffset}
 
 import com.augustnagro.magnum.sql
-import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 import zio.ZIO
+import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.api.misc.enums.PlayerStatusCategory.Active
 import ccas.api.misc.subtypes.{PlayerId, Username}
@@ -90,9 +90,9 @@ object TestPlayerNameSql extends ZIOSpecDefault {
         _        <- Player.writeBatch(inserted = List(player(135, "batch-other-name", since = at(3))), updated = Nil)
         // The row's own `since`, as an inactive player's unchanging `lastOnlineAt` gives: the name still differs.
         sameSince <- Player.insertIfNew(player(135, "same-since-name", since = at(1)))
-        updated  <- Player.updateCurrentState(losing.copy(since = t0))
-        current  <- PlayerName.selectCurrentName(losing.playerId)
-        holder   <- PlayerName.selectCurrentHolder(losing.username)
+        updated   <- Player.updateCurrentState(losing.copy(since = t0))
+        current   <- PlayerName.selectCurrentName(losing.playerId)
+        holder    <- PlayerName.selectCurrentHolder(losing.username)
       } yield assertTrue(
         inserted == 0,
         sameSince == 0,

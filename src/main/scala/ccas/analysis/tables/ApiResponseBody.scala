@@ -128,11 +128,11 @@ object ApiResponseBody {
   ): ZIO[PostgresClient & BodyStore, SQLException, Int] =
     for {
       (count, hashes) <- withTransaction {
-                           for {
-                             count  <- deleteRows
-                             hashes <- deleteOrphanRows
-                           } yield (count, hashes)
-                         }
+        for {
+          count  <- deleteRows
+          hashes <- deleteOrphanRows
+        } yield (count, hashes)
+      }
       _ <- deleteFreedObjects(hashes)
     } yield count
 

@@ -4,13 +4,13 @@ import com.augustnagro.magnum.sql
 import zio.{Exit, Scope}
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
+import TestRefAppSupport.*
+
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.apiDailyMatchJson
 import ccas.analysis.tables.{ClubRefSkip, PlayerMatchRef, PlayerRefSkip, Tables}
 import ccas.utils.client.NetworkUnavailableException
 import ccas.utils.sql.FreshSchemaLayer
 import ccas.utils.sql.PostgresClient.connectZIO
-
-import TestRefAppSupport.*
 
 /** A systemic network/DNS outage must abort the run and record NO skip rows — a local blip should not poison
   * resources for the 3-day `ApiError` retry window. The client surfaces the outage as `NetworkUnavailableException`
@@ -84,8 +84,8 @@ object TestRefAppNetworkOutage extends ZIOSpecDefault {
         skip0 <- PlayerRefSkip.selectId(pid0)
       } yield assertTrue(
         isNetworkUnavailable(exit),
-        ref.isEmpty,   // never resolved (aborted)
-        skip0.isEmpty  // and crucially never skipped
+        ref.isEmpty,  // never resolved (aborted)
+        skip0.isEmpty // and crucially never skipped
       )
     }
 

@@ -9,7 +9,7 @@ import ccas.api.clubmatch.TeamMatchPlayerStarted
 import ccas.api.misc.subtypes.{ClubMatchId, PlayerId, Username}
 import ccas.api.player.ApiPlayer
 import ccas.api.tournament.ApiTournament
-import ccas.utils.client.{ChessComClient, HttpStatusException, ReportedNotFound, onNotFound, swallowRecoveryErrors}
+import ccas.utils.client.{onNotFound, swallowRecoveryErrors, ChessComClient, HttpStatusException, ReportedNotFound}
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.withTransaction
 
@@ -41,7 +41,7 @@ object UsernameRenameResolver {
     tournamentFallback: Boolean = true
   ): RIO[PostgresClient, Option[Username]] =
     resolveCandidate(staleUsername, playerIdHint, client, tournamentFallback).flatMap {
-      case None => ZIO.none
+      case None            => ZIO.none
       case Some(candidate) => verify(client, candidate, playerIdHint).map(_.map(_._1))
     }
 
@@ -85,12 +85,11 @@ object UsernameRenameResolver {
     username: Username,
     playerIdHint: Option[PlayerId] = None
   ): RIO[PostgresClient, ApiPlayer] =
-    client.getUncached[ApiPlayer](ApiPlayer.getUrl(username)).catchSome {
-      case e: ReportedNotFound =>
-        resolveAndVerify(client, username, playerIdHint).flatMap {
-          case Some((_, apiPlayer)) => ZIO.succeed(apiPlayer)
-          case None                 => ZIO.fail(e)
-        }
+    client.getUncached[ApiPlayer](ApiPlayer.getUrl(username)).catchSome { case e: ReportedNotFound =>
+      resolveAndVerify(client, username, playerIdHint).flatMap {
+        case Some((_, apiPlayer)) => ZIO.succeed(apiPlayer)
+        case None                 => ZIO.fail(e)
+      }
     }
 
   /** Board-keyed entry point used by `HistorySeeding.retryUnresolvedPlayers`. Given a stale username plus the board
@@ -197,7 +196,8 @@ object UsernameRenameResolver {
     for {
       rows <- ClubMatchBoard.selectMatch(matchId)
       opposingPidOption = rows.find(_.board == board).flatMap { row =>
-        if (isTeam1) { row.team2PlayerIdOption } else { row.team1PlayerIdOption }
+        if (isTeam1) { row.team2PlayerIdOption }
+        else { row.team1PlayerIdOption }
       }
       result <- opposingPidOption match {
         case Some(pid) => PlayerName.selectCurrentName(pid)
@@ -214,7 +214,8 @@ object UsernameRenameResolver {
   ): RIO[Any, Option[Username]] =
     RefHelpers.fetchTeamMatchTeamsOptional(client, matchId, isLive).map { teamsOption =>
       teamsOption.flatMap { teams =>
-        val opposingTeam = if (isTeam1) { teams.team2 } else { teams.team1 }
+        val opposingTeam = if (isTeam1) { teams.team2 }
+        else { teams.team1 }
         opposingTeam.players.collectFirst {
           case p: TeamMatchPlayerStarted if p.board.path.segments.lastOption.exists(_.toShort == board) => p.username
         }
@@ -274,8 +275,7 @@ extension [R, A](self: ZIO[R, Throwable, A])
     client: ChessComClient,
     stale: Username,
     playerIdHint: Option[PlayerId]
-  )(retryWith: Username => ZIO[R, Throwable, A])
-    : ZIO[R & PostgresClient, Throwable, A] =
+  )(retryWith: Username => ZIO[R, Throwable, A]): ZIO[R & PostgresClient, Throwable, A] =
     self.catchSome { case e: ReportedNotFound =>
       UsernameRenameResolver.resolveAndReconcile(client, stale, playerIdHint).flatMap {
         case Some((fresh, _)) =>

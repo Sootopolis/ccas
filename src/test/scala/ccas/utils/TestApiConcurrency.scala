@@ -7,7 +7,7 @@ import zio.test.{assertTrue, Spec, ZIOSpecDefault}
   */
 object TestApiConcurrency extends ZIOSpecDefault {
 
-  import ApiConcurrency.{PoolReserve, cappedFor}
+  import ApiConcurrency.{cappedFor, PoolReserve}
 
   override def spec: Spec[Any, Throwable] = suite("TestApiConcurrency")(
     test("prod config: pool is the binding ceiling, reserve is held back (20 → 18)") {

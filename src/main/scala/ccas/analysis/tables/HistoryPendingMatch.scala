@@ -4,6 +4,7 @@ import java.sql.SQLException
 
 import com.augustnagro.magnum.*
 import zio.ZIO
+
 import PendingMatchStatus.given
 
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId}

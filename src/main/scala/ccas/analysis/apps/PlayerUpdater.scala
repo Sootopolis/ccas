@@ -57,7 +57,8 @@ object PlayerUpdater {
         updateIfDrifted(existing, apiPlayer.username, statusCategory, apiPlayer.title, now).as(false)
 
       case None =>
-        val since = if (statusCategory == PlayerStatusCategory.Active) { now } else { apiPlayer.lastOnlineAt }
+        val since = if (statusCategory == PlayerStatusCategory.Active) { now }
+        else { apiPlayer.lastOnlineAt }
         Player.insertIfNew(
           Player(apiPlayer.playerId, apiPlayer.joinedAt, apiPlayer.username, statusCategory, apiPlayer.title, since)
         ).map(_ > 0)

@@ -2,14 +2,14 @@ package ccas.cli
 
 import java.nio.file.Paths
 
-import zio.cli.{CliApp, CliError, HelpDoc}
 import zio.{Cause, Console, ExitCode, Scope, UIO, URIO, ZIO, ZIOAppArgs, ZIOAppDefault}
+import zio.cli.{CliApp, CliError, HelpDoc}
 
 import ccas.cli.config.CliConfig
-import ccas.server.config.ServerEnvOverlay
 import ccas.cli.serve.{Detach, HealthProbe, ServerStatus, ServerStop}
 import ccas.info.BuildInfo
 import ccas.server.{BootGuard, CcasServer}
+import ccas.server.config.ServerEnvOverlay
 
 /** Single entry point for the `ccas` binary.
   *
@@ -47,7 +47,7 @@ object Main extends ZIOAppDefault {
       cliApp.run(argList).foldZIO(
         {
           case _: CliError.BuiltIn => exit(ExitCode.success) // --help / completions, already rendered
-          case _                   => exit(ExitCode(2))       // parse/validation error, usage already rendered
+          case _                   => exit(ExitCode(2))      // parse/validation error, usage already rendered
         },
         {
           case Some(code) => exit(code)
@@ -158,7 +158,7 @@ object Main extends ZIOAppDefault {
   // Pure, offline: emit the script to stdout (so `eval "$(ccas completion bash)"` works), errors to stderr. No server.
   private def printCompletion(shell: String): UIO[ExitCode] =
     CompletionEmitter.render(shell) match {
-      case Right(script)  => Console.print(script).orDie.as(ExitCode.success)
-      case Left(message)  => Console.printLineError(s"error: $message").orDie.as(ExitCode(2))
+      case Right(script) => Console.print(script).orDie.as(ExitCode.success)
+      case Left(message) => Console.printLineError(s"error: $message").orDie.as(ExitCode(2))
     }
 }

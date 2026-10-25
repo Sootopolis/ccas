@@ -1,8 +1,7 @@
 package ccas.analysis.apps.recruitment
 
+import zio.{Clock, Ref, RIO, ZIO}
 
-import ccas.utils.sql.PostgresClient
-import zio.{Clock, RIO, Ref, ZIO}
 import RecruitmentFilterDefs.*
 import RecruitmentPersistence.*
 
@@ -11,6 +10,7 @@ import ccas.analysis.tables.subtypes.RecruitmentRunId
 import ccas.api.misc.subtypes.Username
 import ccas.utils.client.NetworkUnavailableException
 import ccas.utils.errors.safeMessage
+import ccas.utils.sql.PostgresClient
 
 private[recruitment] object RecruitmentFilters {
 
@@ -28,7 +28,7 @@ private[recruitment] object RecruitmentFilters {
     val candidateCtx = CandidateContext.initial(username)
     for {
       now <- Clock.instant
-      env    = FilterEnv(runCtx.copy(now = now), candidateCtx)
+      env = FilterEnv(runCtx.copy(now = now), candidateCtx)
       ctxRef <- Ref.make(candidateCtx)
       result <- (for {
         (outcome, finalCandidate) <- runFilters(env, filters, ctxRef)

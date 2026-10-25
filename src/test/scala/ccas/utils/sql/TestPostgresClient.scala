@@ -2,8 +2,8 @@ package ccas.utils.sql
 
 import com.typesafe.config.{ConfigFactory, ConfigResolveOptions}
 import com.zaxxer.hikari.HikariDataSource
-import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 import zio.ZIO
+import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 object TestPostgresClient extends ZIOSpecDefault {
   override def spec: Spec[Any, Throwable] = suite("TestPostgresClient")(

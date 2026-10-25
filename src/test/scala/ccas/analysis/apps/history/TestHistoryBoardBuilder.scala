@@ -4,12 +4,12 @@ import zio.http.URL
 import zio.json.readJsonLinesAs
 import zio.test.{assertTrue, Spec, ZIOSpecDefault}
 
+import ccas.analysis.apps.history.HistoryBoardBuilder.ScoreX2
 import ccas.analysis.tables.ClubMatchBoard
 import ccas.api.clubmatch.ApiDailyMatch
 import ccas.api.clubmatch.ApiMatchBoard.{ApiBoardGame, ApiBoardPlayer}
 import ccas.api.misc.enums.{BoardGameWinner, GameResultDetail, GameRule, TimeClass}
 import ccas.api.misc.subtypes.{ClubMatchId, Elo, PlayerId, Username}
-import ccas.analysis.apps.history.HistoryBoardBuilder.ScoreX2
 
 object TestHistoryBoardBuilder extends ZIOSpecDefault {
 
@@ -206,7 +206,7 @@ object TestHistoryBoardBuilder extends ZIOSpecDefault {
     },
     test("Finished match returns one entry per board with totals summing to 4") {
       matchFinishedFixture.map { m =>
-        val scores = HistoryBoardBuilder.computeExpectedScores(m)
+        val scores           = HistoryBoardBuilder.computeExpectedScores(m)
         val allTotalsAreFour = scores.values.forall(s => (s.team1 + s.team2) == 4)
         // matchFinished.json has 13 boards
         assertTrue(

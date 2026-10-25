@@ -102,11 +102,11 @@ object TestRecruitmentCriteriaApp extends ZIOSpecDefault {
   }
 
   private def testDiffLinesNewAndChanges = test("diffLines: (new alias) when no prior; labeled lines when changed") {
-    val before = makeCriteria(daysSinceRejected = Some(10), excludeFormerMembers = false)
-    val after  = makeCriteria(daysSinceRejected = Some(20), excludeFormerMembers = true)
-    val newLines     = RecruitmentCriteriaApp.diffLines(None, after)
-    val changeLines  = RecruitmentCriteriaApp.diffLines(Some(before), after)
-    val unchanged    = RecruitmentCriteriaApp.diffLines(Some(after), after)
+    val before      = makeCriteria(daysSinceRejected = Some(10), excludeFormerMembers = false)
+    val after       = makeCriteria(daysSinceRejected = Some(20), excludeFormerMembers = true)
+    val newLines    = RecruitmentCriteriaApp.diffLines(None, after)
+    val changeLines = RecruitmentCriteriaApp.diffLines(Some(before), after)
+    val unchanged   = RecruitmentCriteriaApp.diffLines(Some(after), after)
     assertTrue(
       newLines == List("(new alias)"),
       changeLines.exists(_.startsWith("daysSinceRejected: 10 → 20")),
@@ -116,13 +116,14 @@ object TestRecruitmentCriteriaApp extends ZIOSpecDefault {
     )
   }
 
-  private def testCriteriaSpecRoundTrip = test("CriteriaSpec round-trips JSON and is identity over RecruitmentCriteria") {
-    val criteria = RecruitmentCriteria.defaultDaily
-    val spec     = CriteriaSpec.fromCriteria(criteria)
-    val decoded  = JsonDecoder[CriteriaSpec].decodeJson(spec.toJson)
-    assertTrue(
-      decoded == Right(spec),
-      spec.toCriteria == criteria
-    )
-  }
+  private def testCriteriaSpecRoundTrip =
+    test("CriteriaSpec round-trips JSON and is identity over RecruitmentCriteria") {
+      val criteria = RecruitmentCriteria.defaultDaily
+      val spec     = CriteriaSpec.fromCriteria(criteria)
+      val decoded  = JsonDecoder[CriteriaSpec].decodeJson(spec.toJson)
+      assertTrue(
+        decoded == Right(spec),
+        spec.toCriteria == criteria
+      )
+    }
 }

@@ -2,8 +2,7 @@ package ccas.analysis.apps.recruitment
 
 import java.time.Instant
 
-import ccas.utils.sql.PostgresClient
-import zio.{RIO, Ref}
+import zio.{Ref, RIO}
 import zio.http.URL
 
 import ccas.analysis.tables.{PlayerRecruitmentCache, RecruitmentCriteria}
@@ -12,9 +11,9 @@ import ccas.api.misc.enums.GameResultDetail
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
 import ccas.api.player.{ApiPlayer, ApiPlayerArchive, ApiPlayerClubs, ApiPlayerMatches}
 import ccas.api.player.ApiPlayerArchive.ApiPlayerArchiveGame
-
-import ccas.utils.client.ChessComClient
 import ccas.utils.ProgressBar
+import ccas.utils.client.ChessComClient
+import ccas.utils.sql.PostgresClient
 
 // --- Filter pipeline types ---
 
@@ -130,7 +129,8 @@ private[recruitment] case class ExploreContext(
   target: Int,
   existingUsernames: Set[Username],
   /** Un-evaluated usernames from grim-abandoned explore sources. `replenish` subtracts these so an abandoned
-    * candidate-opponents source is not rediscovered from the (never-cleared) `discoveredOpponents` accumulator. */
+    * candidate-opponents source is not rediscovered from the (never-cleared) `discoveredOpponents` accumulator.
+    */
   abandonedOpponents: Ref[Set[Username]],
   exploreConcurrency: Int,
   evalChunkSize: Int,

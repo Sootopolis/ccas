@@ -111,7 +111,10 @@ object TestServerEnvFile extends ZIOSpecDefault {
         _    <- ServerEnvFile.set(file, "SERVER_PORT", "9090").orDie
         text <- read(file)
         m    <- ServerEnvFile.readMap(file).orDie
-      } yield assertTrue(m.get("SERVER_PORT").contains("9090"), text.linesIterator.count(_.startsWith("SERVER_PORT")) == 1)
+      } yield assertTrue(
+        m.get("SERVER_PORT").contains("9090"),
+        text.linesIterator.count(_.startsWith("SERVER_PORT")) == 1
+      )
     },
     test("unset removes a present key (true) and is a no-op for an absent one (false)") {
       for {

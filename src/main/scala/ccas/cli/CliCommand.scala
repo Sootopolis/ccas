@@ -31,16 +31,16 @@ object CliCommand {
 
   // Local commands — handled in `Main`, no client HTTP, no `--server`.
   final case class Serve(detach: Boolean, readyTimeoutSeconds: Option[Int]) extends CliCommand
-  case object Stop extends CliCommand
-  case object ServerStatus extends CliCommand
-  final case class Completion(shell: String) extends CliCommand
-  final case class Use(slugs: List[String], clear: Boolean) extends CliCommand
-  final case class ConfigGet(key: String) extends CliCommand
-  final case class ConfigSet(key: String, value: String) extends CliCommand
-  final case class ConfigUnset(key: String) extends CliCommand
-  final case class ConfigList(showSecrets: Boolean) extends CliCommand
-  case object ConfigPath extends CliCommand
-  case object ConfigInit extends CliCommand
+  case object Stop                                                          extends CliCommand
+  case object ServerStatus                                                  extends CliCommand
+  final case class Completion(shell: String)                                extends CliCommand
+  final case class Use(slugs: List[String], clear: Boolean)                 extends CliCommand
+  final case class ConfigGet(key: String)                                   extends CliCommand
+  final case class ConfigSet(key: String, value: String)                    extends CliCommand
+  final case class ConfigUnset(key: String)                                 extends CliCommand
+  final case class ConfigList(showSecrets: Boolean)                         extends CliCommand
+  case object ConfigPath                                                    extends CliCommand
+  case object ConfigInit                                                    extends CliCommand
 
   // Server commands — dispatched as HTTP calls by `Dispatcher`. Club-targeting fields hold the *parsed* request
   // (`clubs`/`club` may be empty/None); `Dispatcher` resolves them against `--all` and the config's `current_club`.
@@ -89,9 +89,9 @@ object CliCommand {
     noProgress: Boolean,
     detach: Boolean
   ) extends ServerCommand
-  final case class Jobs(server: String, limit: Option[Int]) extends ServerCommand
+  final case class Jobs(server: String, limit: Option[Int])                 extends ServerCommand
   final case class Logs(server: String, jobId: String, noProgress: Boolean) extends ServerCommand
-  final case class Cancel(server: String, jobId: String) extends ServerCommand
+  final case class Cancel(server: String, jobId: String)                    extends ServerCommand
   final case class BlacklistAdd(
     server: String,
     club: Option[String],
@@ -119,11 +119,11 @@ object CliCommand {
     clubIdOption: Option[Long],
     params: Option[String]
   ) extends ServerCommand
-  final case class ScheduleRemove(server: String, id: Long) extends ServerCommand
-  final case class ClubsAdd(server: String, slugs: List[String], clubIdOption: Option[Long]) extends ServerCommand
+  final case class ScheduleRemove(server: String, id: Long)                                     extends ServerCommand
+  final case class ClubsAdd(server: String, slugs: List[String], clubIdOption: Option[Long])    extends ServerCommand
   final case class ClubsRemove(server: String, slugs: List[String], clubIdOption: Option[Long]) extends ServerCommand
-  final case class ClubsList(server: String) extends ServerCommand
-  final case class ClubsShow(server: String, slugs: List[String], clubIdOption: Option[Long]) extends ServerCommand
+  final case class ClubsList(server: String)                                                    extends ServerCommand
+  final case class ClubsShow(server: String, slugs: List[String], clubIdOption: Option[Long])   extends ServerCommand
 
   // --- Shared options ---
 
@@ -157,7 +157,8 @@ object CliCommand {
   // Fire-and-forget: submit the job and return immediately without following it. Reattach later with `ccas logs <id>`.
   // Not offered on `recruit` (its result delivery / invite confirmation needs the follow) or `logs` (which IS the follow).
   private val detachOpt: Options[Boolean] =
-    Options.boolean("detach") ?? "Submit the job and return immediately without following it (reattach with 'ccas logs <id>')"
+    Options.boolean("detach") ??
+      "Submit the job and return immediately without following it (reattach with 'ccas logs <id>')"
 
   // `Options.integer` yields a BigInt and a bare `.toInt` WRAPS, so `--limit 4294967297` would silently become 1 —
   // a different request, not a rejected one. Out-of-range values fail as usage errors instead.
@@ -167,7 +168,12 @@ object CliCommand {
       .mapOrFail { n =>
         if (n.isValidInt) { Right(n.toInt) }
         else {
-          Left(ValidationError(ValidationErrorType.InvalidValue, HelpDoc.p(s"--$name must fit in a 32-bit integer (got $n)")))
+          Left(
+            ValidationError(
+              ValidationErrorType.InvalidValue,
+              HelpDoc.p(s"--$name must fit in a 32-bit integer (got $n)")
+            )
+          )
         }
       }
       .optional
@@ -178,7 +184,8 @@ object CliCommand {
 
   // Multi-club target: comma-separated slugs. Absent (and without --all) → Dispatcher falls back to `current_club`.
   private val clubsOpt: Options[List[String]] =
-    (Options.text("club").optional ?? "Comma-separated club slugs; falls back to the current club (set with 'ccas use-club')")
+    (Options.text("club").optional ??
+      "Comma-separated club slugs; falls back to the current club (set with 'ccas use-club')")
       .map(_.fold(List.empty[String])(_.split(",").toList.map(_.trim).filter(_.nonEmpty)))
 
   private val allOpt: Options[Boolean] =
@@ -192,7 +199,12 @@ object CliCommand {
       .mapOrFail { n =>
         if (n.isValidLong && n > 0) { Right(n.toLong) }
         else {
-          Left(ValidationError(ValidationErrorType.InvalidValue, HelpDoc.p(s"--club-id must be a positive club id (got $n)")))
+          Left(
+            ValidationError(
+              ValidationErrorType.InvalidValue,
+              HelpDoc.p(s"--club-id must be a positive club id (got $n)")
+            )
+          )
         }
       }
       .optional ?? "Chess.com club id to target instead of a name (settles a name several clubs have held)"
@@ -204,8 +216,10 @@ object CliCommand {
   // The readiness deadline is meaningless without a `--detach` to wait, so the pair is rejected here rather than
   // silently dropped — the same stance `--all` with `--club` takes, and it keeps `Main` free of parse rules.
   private val serverUpOptions: Options[(Boolean, Option[Int])] =
-    ((Options.boolean("detach").alias("d") ?? "Run the server as a detached background process (writes a pid file; stop with 'ccas server down')") ++
-      (intOpt("ready-timeout-seconds") ?? "How long --detach waits for readiness (default 30; overrides the config file's ready_timeout_seconds)"))
+    ((Options.boolean("detach").alias("d") ??
+      "Run the server as a detached background process (writes a pid file; stop with 'ccas server down')") ++
+      (intOpt("ready-timeout-seconds") ??
+        "How long --detach waits for readiness (default 30; overrides the config file's ready_timeout_seconds)"))
       .mapOrFail {
         case (false, Some(_)) =>
           Left(
@@ -274,7 +288,16 @@ object CliCommand {
       .map {
         case (server, full, includeFinished, refresh, refreshMinHours, clubs, clubIdOption, all, noProgress, detach) =>
           History(
-            server, clubs, clubIdOption, all, full, includeFinished, refresh, refreshMinHours, noProgress, detach
+            server,
+            clubs,
+            clubIdOption,
+            all,
+            full,
+            includeFinished,
+            refresh,
+            refreshMinHours,
+            noProgress,
+            detach
           )
       }
 
@@ -292,8 +315,12 @@ object CliCommand {
         sourceClubsOpt ++
         (intOpt("time-limit-minutes") ?? "Stop scouting after roughly N minutes") ++
         exploreOpt ++ clubOpt ++ clubIdOpt ++
-        (Options.boolean("stdout") ?? "Print invited usernames (bare, newline-separated) to stdout for piping to a clipboard tool (e.g. wl-copy); logs go to stderr. Auto-confirms invites") ++
-        (Options.boolean("report") ?? "Show a past run's invited usernames instead of scouting (the club's latest run, or the run id given as an argument)") ++
+        (Options.boolean("stdout") ??
+          ("Print invited usernames (bare, newline-separated) to stdout for piping to a clipboard tool " +
+            "(e.g. wl-copy); logs go to stderr. Auto-confirms invites")) ++
+        (Options.boolean("report") ??
+          ("Show a past run's invited usernames instead of scouting " +
+            "(the club's latest run, or the run id given as an argument)")) ++
         noProgressOpt,
       (Args.integer("run-id") ?? "With --report, the run id to show (default: the club's latest run)")
         .atMost(1)
@@ -302,13 +329,36 @@ object CliCommand {
       // Options and the optional `[run-id]` arg combine as (optionsTuple, argValue), so destructure the two levels.
       .map {
         case (
-              (server, alias, target, cumulative, sourceClubs, timeLimitMinutes, explore, club, clubIdOption, stdout,
-                report, noProgress),
+              (
+                server,
+                alias,
+                target,
+                cumulative,
+                sourceClubs,
+                timeLimitMinutes,
+                explore,
+                club,
+                clubIdOption,
+                stdout,
+                report,
+                noProgress
+              ),
               runId
             ) =>
           Recruit(
-            server, club, clubIdOption, alias, target, cumulative, sourceClubs, timeLimitMinutes, explore, stdout,
-            report, runId, noProgress
+            server,
+            club,
+            clubIdOption,
+            alias,
+            target,
+            cumulative,
+            sourceClubs,
+            timeLimitMinutes,
+            explore,
+            stdout,
+            report,
+            runId,
+            noProgress
           )
       }
 

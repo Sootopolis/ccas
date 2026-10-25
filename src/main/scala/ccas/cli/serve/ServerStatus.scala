@@ -39,7 +39,12 @@ object ServerStatus {
       case Readiness.NoAnswer =>
         livePidOption match {
           case Some(p) => (s"starting or unhealthy (pid $p, no response on :$port)", ExitCode(1))
-          case None    => (if (stalePid) { "not running (stale pid file)" } else { "not running" }, ExitCode(1))
+          case None =>
+            (
+              if (stalePid) { "not running (stale pid file)" }
+              else { "not running" },
+              ExitCode(1)
+            )
         }
     }
   }
@@ -53,9 +58,9 @@ object ServerStatus {
         case Readiness.NoAnswer => HealthProbe.isUp(port)
         case _                  => ZIO.succeed(true)
       }
-      pidRead     <- ZIO.attemptBlocking(PidFile.read(PidFile.path(stateDir, port))).orElseSucceed(Option.empty[Long])
-      alive        = pidRead.exists(PidFile.isAlive)
-      (msg, code)  = describe(readiness, up, pidRead.filter(_ => alive), pidRead.isDefined && !alive, port)
-      _           <- Console.printLine(msg).orDie
+      pidRead <- ZIO.attemptBlocking(PidFile.read(PidFile.path(stateDir, port))).orElseSucceed(Option.empty[Long])
+      alive       = pidRead.exists(PidFile.isAlive)
+      (msg, code) = describe(readiness, up, pidRead.filter(_ => alive), pidRead.isDefined && !alive, port)
+      _ <- Console.printLine(msg).orDie
     } yield code
 }

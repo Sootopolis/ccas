@@ -4,9 +4,9 @@ import zio.{Chunk, Task}
 import zio.http.URL
 import zio.json.{jsonMemberNames, JsonDecoder, SnakeCase}
 
+import ccas.api.misc.Hosts
 import ccas.api.misc.enums.ClubVisibility
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, Elo, Username}
-import ccas.api.misc.Hosts
 import ccas.utils.client.ChessComClient
 import ccas.utils.json.JsonDecoding.given
 
@@ -27,6 +27,7 @@ final case class ApiClub(
   admin: Chunk[URL],               // array of URLs to the player profiles for the admins of this club
   description: Option[String]      // text description of the club
 ) derives JsonDecoder {
+
   /** The slug Chess.com answers to for this club right now, read from the self-referencing `@id` rather than from
     * whatever slug was requested — the two differ after a rename, and only this one is safe to persist.
     */

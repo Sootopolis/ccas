@@ -87,11 +87,26 @@ object TestServeLifecycle extends ZIOSpecDefault {
     suite("Detach.reconstruct")(
       test("truncates at ccas.cli.Main, drops trailing CLI args, appends server up") {
         val args =
-          List("--enable-native-access=ALL-UNNAMED", "-cp", "/a.jar:/b.jar", "ccas.cli.Main", "server", "up", "--detach")
+          List(
+            "--enable-native-access=ALL-UNNAMED",
+            "-cp",
+            "/a.jar:/b.jar",
+            "ccas.cli.Main",
+            "server",
+            "up",
+            "--detach"
+          )
         assertTrue(
           Detach.reconstruct("/usr/bin/java", args).contains(
-            List("/usr/bin/java", "--enable-native-access=ALL-UNNAMED", "-cp", "/a.jar:/b.jar", "ccas.cli.Main", "server",
-              "up")
+            List(
+              "/usr/bin/java",
+              "--enable-native-access=ALL-UNNAMED",
+              "-cp",
+              "/a.jar:/b.jar",
+              "ccas.cli.Main",
+              "server",
+              "up"
+            )
           )
         )
       },
@@ -377,8 +392,14 @@ object TestServeLifecycle extends ZIOSpecDefault {
               out      <- TestConsole.output
               alive    <- ZIO.attempt(server.isAlive)
               removed  <- ZIO.attempt(!Files.exists(pidPath))
-              stopped   = s"stopped the server on 127.0.0.1:8080 (pid ${server.pid()}, db ep-x.neon.tech/neondb)"
-            } yield assertTrue(code == ExitCode.success, question.isDefined, out.exists(_.contains(stopped)), !alive, removed)
+              stopped = s"stopped the server on 127.0.0.1:8080 (pid ${server.pid()}, db ep-x.neon.tech/neondb)"
+            } yield assertTrue(
+              code == ExitCode.success,
+              question.isDefined,
+              out.exists(_.contains(stopped)),
+              !alive,
+              removed
+            )
           }
         }
       },

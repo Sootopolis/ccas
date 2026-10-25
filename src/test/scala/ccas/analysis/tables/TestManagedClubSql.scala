@@ -34,7 +34,7 @@ object TestManagedClubSql extends ZIOSpecDefault {
   // 402 ends holding no name because 403 takes the one it held — what the `_stale_<id>` tombstone used to stand in
   // for (#254 step 4).
   private val reset = for {
-    _ <- connectZIO { sql"DELETE FROM managed_club".update.run() }
+    _ <- connectZIO(sql"DELETE FROM managed_club".update.run())
     _ <- Club.upsert(Club(clubIdA, Times.t0, ClubSlug("club-a"), "Club A", None, None, None))
     _ <- Club.upsert(Club(clubIdB, Times.t0, ClubSlug("club-b"), "Club B", None, None, None))
     _ <- Club.upsert(Club(namelessId, Times.t0, ClubSlug("club-c"), "Nameless", None, None, None))

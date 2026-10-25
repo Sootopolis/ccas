@@ -2,8 +2,8 @@ package ccas.analysis.apps.recruitment
 
 import java.time.{Duration, Instant}
 
-import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 import zio.{ZEnvironment, ZIO, ZLayer}
+import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.analysis.apps.NamedClub
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.*
@@ -106,9 +106,9 @@ object TestRecruitmentBlacklist extends ZIOSpecDefault {
     val futureInstant = Times.t3
     val responses     = Map("player/target-player" -> apiPlayerJson(203, "target-player"))
     for {
-      _      <- seedDb
-      _      <- seedBlacklistClub
-      client <- fakeChessComClient(responses)
+      _        <- seedDb
+      _        <- seedBlacklistClub
+      client   <- fakeChessComClient(responses)
       pgClient <- ZIO.service[PostgresClient]
       _ <- BlacklistApp.addToBlacklist(
         blacklistClub,
@@ -129,9 +129,9 @@ object TestRecruitmentBlacklist extends ZIOSpecDefault {
   private def testInsertWithoutOptionalFields = test("inserts blacklist entry without optional fields") {
     val responses = Map("player/target-player" -> apiPlayerJson(203, "target-player"))
     for {
-      _      <- seedDb
-      _      <- seedBlacklistClub
-      client <- fakeChessComClient(responses)
+      _        <- seedDb
+      _        <- seedBlacklistClub
+      client   <- fakeChessComClient(responses)
       pgClient <- ZIO.service[PostgresClient]
       _ <- BlacklistApp.addToBlacklist(blacklistClub, List(Username("target-player")), None, None)
         .provideEnvironment(ZEnvironment(client, pgClient, ProgressDisplay.make(enabled = false)))
@@ -146,9 +146,9 @@ object TestRecruitmentBlacklist extends ZIOSpecDefault {
   private def testUpsertExistingEntry = test("upserts existing blacklist entry instead of failing on duplicate") {
     val responses = Map("player/target-player" -> apiPlayerJson(203, "target-player"))
     for {
-      _      <- seedDb
-      _      <- seedBlacklistClub
-      client <- fakeChessComClient(responses)
+      _        <- seedDb
+      _        <- seedBlacklistClub
+      client   <- fakeChessComClient(responses)
       pgClient <- ZIO.service[PostgresClient]
       _ <- BlacklistApp.addToBlacklist(blacklistClub, List(Username("target-player")), Some("first"), None)
         .provideEnvironment(ZEnvironment(client, pgClient, ProgressDisplay.make(enabled = false)))
@@ -222,9 +222,9 @@ object TestRecruitmentBlacklist extends ZIOSpecDefault {
       "player/charlie" -> apiPlayerJson(202, "charlie")
     )
     for {
-      _      <- seedDb
-      _      <- seedBlacklistClub
-      client <- fakeChessComClient(responses)
+      _        <- seedDb
+      _        <- seedBlacklistClub
+      client   <- fakeChessComClient(responses)
       pgClient <- ZIO.service[PostgresClient]
       blacklisted <- BlacklistApp.addToBlacklist(
         blacklistClub,

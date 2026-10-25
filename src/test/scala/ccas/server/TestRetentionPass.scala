@@ -25,8 +25,8 @@ object TestRetentionPass extends ZIOSpecDefault {
   private def testPassRunsBothHalvesFileSweepFirst =
     test("one pass sweeps job logs and then the API-diagnostics tables") {
       for {
-        _       <- CcasServer.retentionPass
-        logs    <- sweepLines
+        _    <- CcasServer.retentionPass
+        logs <- sweepLines
         fileIdx  = logs.indexWhere(_.contains("job log(s)"))
         tableIdx = logs.indexWhere(_.contains("cache rows"))
       } yield assertTrue(fileIdx >= 0, tableIdx >= 0, fileIdx < tableIdx)

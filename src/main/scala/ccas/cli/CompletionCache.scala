@@ -87,8 +87,9 @@ object CompletionCache {
   private[cli] def writeClubsIn(file: Path, slugs: List[String]): UIO[Boolean] =
     ZIO.attemptBlocking {
       createParent(file)
-      val unique   = slugs.distinct
-      val trailing = if (unique.isEmpty) { "" } else { "\n" }
+      val unique = slugs.distinct
+      val trailing = if (unique.isEmpty) { "" }
+      else { "\n" }
       Files.writeString(file, unique.mkString("", "\n", trailing))
     }.isSuccess
 
@@ -113,7 +114,8 @@ object CompletionCache {
     ZIO.attemptBlocking {
       createParent(file)
       val existing =
-        if (Files.exists(file)) { Files.readAllLines(file).asScala.toList.filter(_.nonEmpty) } else { Nil }
+        if (Files.exists(file)) { Files.readAllLines(file).asScala.toList.filter(_.nonEmpty) }
+        else { Nil }
       val updated = (jobId :: existing.filterNot(_ == jobId)).take(MaxRecentJobs)
       Files.writeString(file, updated.mkString("", "\n", "\n"))
     }.ignore

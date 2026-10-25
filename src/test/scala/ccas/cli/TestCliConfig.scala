@@ -67,7 +67,9 @@ object TestCliConfig extends ZIOSpecDefault {
       }
     },
     test("blank current_club is treated as unset") {
-      writeConfig("current_club = \"  \"\n").flatMap(CliConfig.load).map(cfg => assertTrue(cfg.currentClubOption.isEmpty))
+      writeConfig("current_club = \"  \"\n").flatMap(CliConfig.load).map { cfg =>
+        assertTrue(cfg.currentClubOption.isEmpty)
+      }
     },
     test("malformed config fails with a message naming the file") {
       writeConfig("api_url = \"unterminated\n").flatMap { f =>

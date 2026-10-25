@@ -1,9 +1,8 @@
 package ccas.utils.client
 
 import zio.*
-import zio.test.*
-
 import zio.http.URL
+import zio.test.*
 
 import ccas.analysis.tables.subtypes.ApiResponseBodyId
 import ccas.utils.client.TestChessComClientSupport.reportedNotFoundBody

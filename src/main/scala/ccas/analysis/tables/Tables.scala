@@ -89,9 +89,9 @@ object Tables extends ZIOAppDefault {
         timed <- sweep(cacheCutoff, failureCutoff).timed
         (elapsed, (cacheRows, failureRows)) = timed
         _ <- ZIO.logInfo(
-               s"Retention sweep: $cacheRows cache rows (>${days}d), $failureRows fetch-failure rows " +
-                 s"(>${failureDays}d) in ${elapsed.render}"
-             )
+          s"Retention sweep: $cacheRows cache rows (>${days}d), $failureRows fetch-failure rows " +
+            s"(>${failureDays}d) in ${elapsed.render}"
+        )
       } yield ()
     }
 

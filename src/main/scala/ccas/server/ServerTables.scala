@@ -32,7 +32,7 @@ object ServerTables extends ZIOAppDefault {
       perClubSeeds <- ZIO.attempt(SchedulerDefaults.perClubFromConfig)
       managedIds   <- ManagedClub.selectClubIds
       _ <- ZIO.foreachDiscard(managedIds) { clubId =>
-             ZIO.foreachDiscard(perClubSeeds)(seed => JobSchedule.seedPerClubIfAbsent(clubId, seed))
-           }
+        ZIO.foreachDiscard(perClubSeeds)(seed => JobSchedule.seedPerClubIfAbsent(clubId, seed))
+      }
     } yield ()
 }

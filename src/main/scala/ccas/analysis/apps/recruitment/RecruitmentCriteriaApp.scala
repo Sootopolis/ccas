@@ -28,9 +28,9 @@ import ccas.utils.sql.PostgresClient.withTransaction
   * assumes anyway.
   */
 object RecruitmentCriteriaApp extends ZIOAppDefault {
-  val MaxAliasLength: Int            = 64
-  private val MaxJsonBytes: Long     = 1L * 1024 * 1024
-  private val MaxSinceRetries: Int   = 5
+  val MaxAliasLength: Int               = 64
+  private val MaxJsonBytes: Long        = 1L * 1024 * 1024
+  private val MaxSinceRetries: Int      = 5
   private val PgUniqueViolation: String = "23505"
 
   private val help =
@@ -139,7 +139,8 @@ object RecruitmentCriteriaApp extends ZIOAppDefault {
       case other        => other.toString
     }
     def line[A](label: String, b: A, a: A): Option[String] =
-      if (b == a) { None } else { Some(s"$label: ${disp(b)} → ${disp(a)}") }
+      if (b == a) { None }
+      else { Some(s"$label: ${disp(b)} → ${disp(a)}") }
     before match {
       case None => List("(new alias)")
       case Some(b) =>
@@ -206,7 +207,9 @@ object RecruitmentCriteriaApp extends ZIOAppDefault {
       aliasRow <- RecruitmentAlias.selectLatest(club.clubId, alias)
         .someOrFail(NotFoundException(s"No recruitment alias '$alias' found for club '${club.slug}'"))
       criteria <- RecruitmentCriteria.selectId(aliasRow.criteriaId)
-        .someOrFail(new IllegalStateException(s"Criteria ${aliasRow.criteriaId} referenced by alias '$alias' not found"))
+        .someOrFail(
+          new IllegalStateException(s"Criteria ${aliasRow.criteriaId} referenced by alias '$alias' not found")
+        )
     } yield criteria
 
   def list(clubId: ClubId): RIO[PostgresClient, List[RecruitmentAlias]] =
@@ -283,10 +286,10 @@ object RecruitmentCriteriaApp extends ZIOAppDefault {
   private def promptBool(label: String, current: Boolean): RIO[Any, Boolean] =
     prompt(s"$label [$current] (y/n, Enter=keep): ").flatMap { s =>
       s.toLowerCase match {
-        case ""                                 => ZIO.succeed(current)
-        case "y" | "yes" | "true" | "t"         => ZIO.succeed(true)
-        case "n" | "no" | "false" | "f"         => ZIO.succeed(false)
-        case _ => Console.printLine("  enter y or n") *> promptBool(label, current)
+        case ""                         => ZIO.succeed(current)
+        case "y" | "yes" | "true" | "t" => ZIO.succeed(true)
+        case "n" | "no" | "false" | "f" => ZIO.succeed(false)
+        case _                          => Console.printLine("  enter y or n") *> promptBool(label, current)
       }
     }
 
@@ -371,14 +374,16 @@ object RecruitmentCriteriaApp extends ZIOAppDefault {
         dailyMinOngoingTeamMatches = dailyMinOngoingTeamMatches
       )
       ds = diffLines(existing, candidate.capped)
-      _  <- Console.printLine("")
-      _  <- Console.printLine("--- Changes ---")
+      _ <- Console.printLine("")
+      _ <- Console.printLine("--- Changes ---")
       _ <- {
         if (ds.isEmpty) { Console.printLine("  (no changes)") }
         else { ZIO.foreachDiscard(ds)(d => Console.printLine(s"  $d")) }
       }
       confirm <- prompt("Save? [Y/n]: ").map(_.toLowerCase).map(s => s.isEmpty || s == "y" || s == "yes")
-    } yield if (confirm) { Some(candidate) } else { None }
+    } yield
+      if (confirm) { Some(candidate) }
+      else { None }
   }
 }
 

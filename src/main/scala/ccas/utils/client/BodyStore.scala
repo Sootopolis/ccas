@@ -4,16 +4,15 @@ import java.net.URI
 import java.nio.file.{Path, Paths}
 
 import com.typesafe.config.ConfigFactory
-import zio.{Duration, Ref, RLayer, Scope, Task, UIO, URIO, ZIO, ZLayer}
-import zio.config.derivation.kebabCase
-import zio.config.magnolia.DeriveConfig
-import zio.config.typesafe.TypesafeConfigProvider
-
 import software.amazon.awssdk.auth.credentials.{AwsBasicCredentials, StaticCredentialsProvider}
 import software.amazon.awssdk.core.client.config.ClientOverrideConfiguration
 import software.amazon.awssdk.http.urlconnection.UrlConnectionHttpClient
 import software.amazon.awssdk.regions.Region
 import software.amazon.awssdk.services.s3.S3Client
+import zio.{Duration, Ref, RLayer, Scope, Task, UIO, URIO, ZIO, ZLayer}
+import zio.config.derivation.kebabCase
+import zio.config.magnolia.DeriveConfig
+import zio.config.typesafe.TypesafeConfigProvider
 
 import ccas.utils.errors.safeMessage
 
@@ -203,7 +202,8 @@ object BodyStore {
       } yield BodyStoreLimits(read, write)
 
     def s3Timeouts(deadlines: BodyStoreLimits): Either[String, S3Timeouts] = {
-      val widest = if (deadlines.read.compareTo(deadlines.write) >= 0) { deadlines.read } else { deadlines.write }
+      val widest = if (deadlines.read.compareTo(deadlines.write) >= 0) { deadlines.read }
+      else { deadlines.write }
       for {
         connect <- positiveMs(s3ConnectTimeoutMs, DefaultS3ConnectTimeoutMs, "body-store.s3-connect-timeout-ms")
         socket  <- positiveMs(s3SocketTimeoutMs, DefaultS3SocketTimeoutMs, "body-store.s3-socket-timeout-ms")
@@ -232,7 +232,8 @@ object BodyStore {
   val live: RLayer[Any, BodyStore] =
     ZLayer.scoped {
       val provider = TypesafeConfigProvider.fromTypesafeConfig(
-        ConfigFactory.load(), enableCommaSeparatedValueAsList = true
+        ConfigFactory.load(),
+        enableCommaSeparatedValueAsList = true
       )
       for {
         config   <- provider.load(summon[DeriveConfig[BodyStoreConfig]].desc.nested("body-store"))

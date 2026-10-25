@@ -1,8 +1,8 @@
 package ccas.utils.client
 
-import zio.{ZIO, ZLayer, durationInt}
-import zio.http.netty.NettyConfig
+import zio.{durationInt, ZIO, ZLayer}
 import zio.http.{Client, ConnectionPoolConfig, Decompression, DnsResolver, ZClient}
+import zio.http.netty.NettyConfig
 
 /** The zio-http `Client` layer every CCAS app and the server builds, in place of `Client.default`, so that
   * transport-level configuration lives in exactly one place.
@@ -18,7 +18,9 @@ object HttpClientLayer {
   // A layer rather than an object-init side effect, so the install is tied to building a client; `ZIO.attempt` because
   // a log filter must never be able to fail the `Client` layer. Ordering is not load-bearing (see `install`).
   private val silenceTailNoise: ZLayer[Any, Nothing, Unit] =
-    ZLayer(ZIO.attempt(NettyTailNoise.install()).catchAll(e => ZIO.logDebug(s"Netty tail-noise filter not installed: $e")))
+    ZLayer(
+      ZIO.attempt(NettyTailNoise.install()).catchAll(e => ZIO.logDebug(s"Netty tail-noise filter not installed: $e"))
+    )
 
   private val nettyClient: ZLayer[Any, Throwable, Client] = {
     val config = ZClient.Config.default

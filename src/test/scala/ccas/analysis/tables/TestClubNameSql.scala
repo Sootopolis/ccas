@@ -8,8 +8,8 @@ import zio.ZIO
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
-import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.{ForcedOverlap, FreshSchemaLayer, PostgresClient}
+import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient.{connectZIO, transactZIO}
 
 /** `club_name` is kept in step with every write of `club.slug`, and its constraints hold the current-slice invariants

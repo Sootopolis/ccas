@@ -4,9 +4,9 @@ import java.time.Instant
 
 import scala.util.Try
 
+import zio.{Clock, RIO, ZIO}
 import zio.http.*
 import zio.json.{jsonField, DeriveJsonCodec, JsonCodec, SnakeCase}
-import zio.{Clock, RIO, ZIO}
 
 import ccas.analysis.apps.{ClubQuery, ClubResolution}
 import ccas.api.misc.subtypes.ClubId
@@ -186,9 +186,13 @@ object ScheduleRoutes {
 
       case TriggerType.Cron =>
         for {
-          _        <- Either.cond(body.intervalHours.isEmpty, (), "cannot set intervalHours on a cron schedule")
-          normCron <- body.cron.fold[Either[String, Option[String]]](Right(None))(c => ScheduleTrigger.validateCron(c).map(Some(_)))
-          tz       <- body.timezone.fold[Either[String, Option[String]]](Right(None))(z => ScheduleTrigger.validateZone(z).map(Some(_)))
+          _ <- Either.cond(body.intervalHours.isEmpty, (), "cannot set intervalHours on a cron schedule")
+          normCron <- body.cron.fold[Either[String, Option[String]]](Right(None)) { c =>
+            ScheduleTrigger.validateCron(c).map(Some(_))
+          }
+          tz <- body.timezone.fold[Either[String, Option[String]]](Right(None)) { z =>
+            ScheduleTrigger.validateZone(z).map(Some(_))
+          }
         } yield UpdateArgs(None, normCron, tz, body.misfire, body.enabled, body.params.map(Some(_)))
     }
 
@@ -216,7 +220,9 @@ object ScheduleRoutes {
           case Some(Right(club)) => persist(clubless.copy(clubIdOption = Some(club.clubId))).asSome
           case None              => persist(clubless).asSome
         }
-        status = if (scheduleOption.isDefined) { Status.Created } else { Status.Ok }
+        status =
+          if (scheduleOption.isDefined) { Status.Created }
+          else { Status.Ok }
       } yield jsonResponse(status, CreateScheduleResponse(scheduleOption, resolutionOption))
     },
     Method.PUT / "api" / "schedules" / long("id") -> handler { (id: Long, req: Request) =>

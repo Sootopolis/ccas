@@ -1,18 +1,17 @@
 package ccas.api.clubmatch
 
+import zio.Chunk
 import zio.http.URL
 import zio.json.{jsonMemberNames, JsonDecoder, SnakeCase}
-import zio.Chunk
 
 import ccas.api.clubmatch.ApiMatchBoard.ApiBoardGame
+import ccas.api.misc.Accuracies
 import ccas.api.misc.enums.{GameResultDetail, GameRule, TimeClass}
 import ccas.api.misc.subtypes.{ClubMatchId, Elo, Username}
-import ccas.api.misc.Accuracies
 import ccas.utils.json.JsonDecoding.given
 
 @jsonMemberNames(SnakeCase)
-final case class ApiMatchBoard(boardScores: Map[Username, Double], games: Chunk[ApiBoardGame])
-    derives JsonDecoder {
+final case class ApiMatchBoard(boardScores: Map[Username, Double], games: Chunk[ApiBoardGame]) derives JsonDecoder {
   require(games.nonEmpty && games.length <= 2, s"A board can only have 1 or 2 games:\n$this")
 
   /** Every player on the board, once each. */

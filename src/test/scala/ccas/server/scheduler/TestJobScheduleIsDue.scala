@@ -1,6 +1,6 @@
 package ccas.server.scheduler
 
-import java.time.{Duration, Instant, ZoneOffset, ZonedDateTime}
+import java.time.{Duration, Instant, ZonedDateTime, ZoneOffset}
 
 import zio.test.{assertTrue, Spec, ZIOSpecDefault}
 

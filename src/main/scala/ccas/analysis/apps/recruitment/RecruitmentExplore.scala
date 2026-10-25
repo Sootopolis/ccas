@@ -1,19 +1,19 @@
 package ccas.analysis.apps.recruitment
 
-import java.time.temporal.ChronoUnit
 import java.time.{Instant, YearMonth}
+import java.time.temporal.ChronoUnit
 
-import ccas.utils.sql.PostgresClient
 import zio.{RIO, Task, UIO, ZIO}
 
-import ccas.analysis.apps.{ClubSlugRenameResolver, withPlayerRenameRecovery}
+import ccas.analysis.apps.{withPlayerRenameRecovery, ClubSlugRenameResolver}
 import ccas.analysis.tables.*
 import ccas.api.club.{ApiClub, ApiClubMembers}
 import ccas.api.misc.enums.ClubMatchStatus
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, Username}
 import ccas.api.player.*
-import ccas.utils.client.{ChessComClient, NetworkUnavailableException, onNotFound}
 import ccas.utils.ApiConcurrency
+import ccas.utils.client.{onNotFound, ChessComClient, NetworkUnavailableException}
+import ccas.utils.sql.PostgresClient
 
 private[recruitment] object RecruitmentExplore {
 
@@ -126,7 +126,7 @@ private[recruitment] object RecruitmentExplore {
     ctx.runCtx.criteria.daysSinceRejected.fold(ZIO.succeed(false)) { days =>
       for {
         playerIdOption <- PlayerName.selectCurrentHolder(username)
-        rejectOption   <- ZIO.foreach(playerIdOption) { playerId =>
+        rejectOption <- ZIO.foreach(playerIdOption) { playerId =>
           RecruitmentCandidate.selectLatestRejectedByAlias(
             playerId,
             ctx.runCtx.clubId,
@@ -415,7 +415,7 @@ private[recruitment] object RecruitmentExplore {
         bs.flatMap(b => if (isTeam1) b.team2PlayerIdOption else b.team1PlayerIdOption)
       }.toSet
       usernames <- PlayerName.selectCurrentNames(opponentIds).map(_.values.toList)
-      _ <- ZIO.logInfo(s"[Explore] Match board opponents strategy found ${usernames.size} players")
+      _         <- ZIO.logInfo(s"[Explore] Match board opponents strategy found ${usernames.size} players")
     } yield
       if (usernames.isEmpty) Nil
       else List(UsernameSource("match-board-opponents", usernames))

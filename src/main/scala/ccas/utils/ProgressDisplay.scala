@@ -2,13 +2,12 @@ package ccas.utils
 
 import java.io.PrintStream
 import java.nio.charset.StandardCharsets
-import java.time.format.DateTimeFormatter
 import java.time.{Instant, ZoneId}
+import java.time.format.DateTimeFormatter
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.regex.Pattern
 
 import io.netty.handler.timeout.ReadTimeoutException
-import zio.stream.SubscriptionRef
 import zio.{
   Cause,
   Chunk,
@@ -29,6 +28,7 @@ import zio.{
   ZLayer,
   ZLogger
 }
+import zio.stream.SubscriptionRef
 
 /** Manages progress bars rendered one-per-line on stdout; a redraw moves the cursor up over the block and repaints.
   *
@@ -52,9 +52,9 @@ final class ProgressDisplay private[utils] (
   private val globalChannel: Option[ProgressDisplay.BarChannel]
 ) {
 
-  private val lock                                  = new Object
-  private var bars: List[ProgressDisplay.BarState]  = Nil
-  private val idGen                                 = new AtomicInteger(0)
+  private val lock                                 = new Object
+  private var bars: List[ProgressDisplay.BarState] = Nil
+  private val idGen                                = new AtomicInteger(0)
   // Physical terminal lines the last draw occupied — so a redraw moves the cursor back to the top of the bar block and
   // repaints it. Only touched inside `lock.synchronized`.
   private var lastDrawnLines: Int = 0
@@ -105,12 +105,20 @@ final class ProgressDisplay private[utils] (
     * CLI re-renders it at its own width). Publishing runs outside the terminal lock (a `SubscriptionRef` write is an
     * effect) but re-reads `bars` under the lock at publish time, so it can't diverge from local state.
     */
-  private[utils] def render(barId: Int, output: String, lineCount: Int, current: Int, total: Int, text: String): UIO[Unit] =
+  private[utils] def render(
+    barId: Int,
+    output: String,
+    lineCount: Int,
+    current: Int,
+    total: Int,
+    text: String
+  ): UIO[Unit] =
     ZIO.succeed {
       lock.synchronized {
         val target = bars.find(_.id == barId).flatMap(_.target)
         bars = bars.map { b =>
-          if (b.id == barId) b.copy(lineCount = lineCount, lastOutput = output, current = current, total = total, text = text)
+          if (b.id == barId)
+            b.copy(lineCount = lineCount, lastOutput = output, current = current, total = total, text = text)
           else b
         }
         clearBlockSync()
@@ -298,8 +306,9 @@ final class ProgressDisplay private[utils] (
   // eagerly (not lazily on first draw) so the `sttyCols` sub-process spawn runs here, off the render lock, rather than
   // inside `lock.synchronized` on the first bar. Only an `enabled` display probes; the server / non-TTY path stays at 80.
   private val terminalWidth: Int =
-    if (enabled) { Option(System.getenv("COLUMNS")).flatMap(_.toIntOption).filter(_ > 0).orElse(sttyCols).getOrElse(80) }
-    else { 80 }
+    if (enabled) {
+      Option(System.getenv("COLUMNS")).flatMap(_.toIntOption).filter(_ > 0).orElse(sttyCols).getOrElse(80)
+    } else { 80 }
 
   // The controlling terminal's column count via `stty size` (prints "<rows> <cols>"), reading /dev/tty so it reflects
   // the real window even when this process's stdin/stdout are redirected. Any failure (no tty, stty absent) yields None.
@@ -313,7 +322,8 @@ final class ProgressDisplay private[utils] (
 
   // Truncate a bar line to the detected width so it can't wrap onto a second physical row and desync the cursor-up count.
   private def truncateToWidth(line: String): String =
-    if (line.length <= terminalWidth) { line } else { line.take(terminalWidth - 1) } // leave the last column, avoid wrap
+    if (line.length <= terminalWidth) { line }
+    else { line.take(terminalWidth - 1) } // leave the last column, avoid wrap
 }
 
 object ProgressDisplay {
@@ -383,7 +393,11 @@ object ProgressDisplay {
     * exercise the installed `ZLogger` (e.g. a throwing message thunk routed to `err`) can capture without swapping
     * process-global streams.
     */
-  private[utils] def liveWith(showProgress: Boolean, out: PrintStream, err: PrintStream): URLayer[Scope, ProgressDisplay] =
+  private[utils] def liveWith(
+    showProgress: Boolean,
+    out: PrintStream,
+    err: PrintStream
+  ): URLayer[Scope, ProgressDisplay] =
     Runtime.removeDefaultLoggers ++ ZLayer.scoped {
       for {
         channel <- SubscriptionRef.make(Map.empty[Int, BarSnapshot])

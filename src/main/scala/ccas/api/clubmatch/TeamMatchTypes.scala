@@ -1,7 +1,7 @@
 package ccas.api.clubmatch
 
-import zio.http.URL
 import zio.Chunk
+import zio.http.URL
 
 import ccas.api.misc.enums.{GameResultDetail, PlayerStatus}
 import ccas.api.misc.subtypes.{ClubSlug, Username}

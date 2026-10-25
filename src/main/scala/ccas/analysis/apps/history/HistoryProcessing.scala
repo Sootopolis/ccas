@@ -2,8 +2,9 @@ package ccas.analysis.apps.history
 
 import java.time.{Duration as JDuration, Instant}
 
-import zio.{Promise, RIO, Ref, Task, UIO, ZIO}
+import zio.{Promise, Ref, RIO, Task, UIO, ZIO}
 import zio.http.URL
+
 import HistoryUtils.*
 
 import ccas.analysis.apps.{ClubSlugRenameResolver, PlayerUpdater, UsernameRenameResolver}
@@ -61,7 +62,12 @@ private[history] object HistoryProcessing {
                   ZIO.foreachParDiscard(newPlayers) { dp =>
                     HistorySeeding
                       .seedMatchesForPlayer(
-                        ctx.client, ctx.clubId, ctx.clubSlug, dp.playerId, dp.username, excludeMatchIds,
+                        ctx.client,
+                        ctx.clubId,
+                        ctx.clubSlug,
+                        dp.playerId,
+                        dp.username,
+                        excludeMatchIds,
                         ctx.seedPlayerMatchesUnchanged
                       )
                       .zipLeft(ZIO.foreachDiscard(shared)(_.queriedPlayers.update(_ + dp.playerId)))
@@ -127,7 +133,9 @@ private[history] object HistoryProcessing {
                 ClubMatch.markAborted(pm.matchId, Instant.now()) *>
                   HistoryPendingMatch.delete(ctx.clubId, pm.matchId, pm.isLive)
               }
-              _ <- ZIO.logWarning(s"    Match ${pm.matchId}${if (pm.isLive) " (live)" else ""}: aborted (reported not found)")
+              _ <- ZIO.logWarning(
+                s"    Match ${pm.matchId}${if (pm.isLive) " (live)" else ""}: aborted (reported not found)"
+              )
             } yield ()
           case error =>
             for {
@@ -194,29 +202,11 @@ private[history] object HistoryProcessing {
       existingBoards <- ClubMatchBoard.selectMatch(matchId)
       boardSkip = HistoryBoardBuilder.scoresMatch(expectedScores, existingBoards)
 
-      _ <- if (boardSkip) {
-        withTransaction {
-          for {
-            _ <- ClubMatch.upsert(clubMatch)
-            _ <-
-              if (weAreTeam1.isDefined) {
-                HistoryPendingMatch.delete(ctx.clubId, matchId, isLive = false)
-              } else {
-                HistoryPendingMatch.updateStatus(ctx.clubId, matchId, false, PendingMatchStatus.Unidentified)
-              }
-          } yield ()
-        }
-      } else {
-        for {
-          boardAndGames <- buildBoardAndGameRows(ctx, matchId, dailyMatch, weAreTeam1)
-          (boardRows, gameRowLists) = boardAndGames.unzip
-          gameRows = gameRowLists.flatten
-          _ <- withTransaction {
+      _ <-
+        if (boardSkip) {
+          withTransaction {
             for {
               _ <- ClubMatch.upsert(clubMatch)
-              _ <- ClubMatchBoard.deleteMatch(matchId)
-              _ <- ClubMatchBoard.insertBatch(boardRows)
-              _ <- ClubMatchGame.insertBatch(gameRows)
               _ <-
                 if (weAreTeam1.isDefined) {
                   HistoryPendingMatch.delete(ctx.clubId, matchId, isLive = false)
@@ -225,9 +215,28 @@ private[history] object HistoryProcessing {
                 }
             } yield ()
           }
-          _ <- ctx.matchesBoardsUpdated.update(_ + 1)
-        } yield ()
-      }
+        } else {
+          for {
+            boardAndGames <- buildBoardAndGameRows(ctx, matchId, dailyMatch, weAreTeam1)
+            (boardRows, gameRowLists) = boardAndGames.unzip
+            gameRows                  = gameRowLists.flatten
+            _ <- withTransaction {
+              for {
+                _ <- ClubMatch.upsert(clubMatch)
+                _ <- ClubMatchBoard.deleteMatch(matchId)
+                _ <- ClubMatchBoard.insertBatch(boardRows)
+                _ <- ClubMatchGame.insertBatch(gameRows)
+                _ <-
+                  if (weAreTeam1.isDefined) {
+                    HistoryPendingMatch.delete(ctx.clubId, matchId, isLive = false)
+                  } else {
+                    HistoryPendingMatch.updateStatus(ctx.clubId, matchId, false, PendingMatchStatus.Unidentified)
+                  }
+              } yield ()
+            }
+            _ <- ctx.matchesBoardsUpdated.update(_ + 1)
+          } yield ()
+        }
       _ <- ZIO.whenDiscard(weAreTeam1.isEmpty) {
         ctx.matchesUnidentified.update(_ + 1) *>
           ZIO.logWarning(s"    Match $matchId: club ${ctx.clubId} not found in either team (data saved, BFS skipped)")
@@ -316,8 +325,9 @@ private[history] object HistoryProcessing {
                 for {
                   _    <- ctx.matchesAborted.update(_ + 1)
                   rows <- ClubMatch.markAborted(matchId, Instant.now())
-                  msg = if (rows == 0) s"    Refresh $matchId: reported not found but row vanished (no Aborted write)"
-                        else s"    Refresh $matchId: aborted (reported not found)"
+                  msg =
+                    if (rows == 0) s"    Refresh $matchId: reported not found but row vanished (no Aborted write)"
+                    else s"    Refresh $matchId: aborted (reported not found)"
                   _ <- ZIO.logWarning(msg)
                 } yield ()
               case error =>
@@ -389,23 +399,24 @@ private[history] object HistoryProcessing {
       existingBoards <- ClubMatchBoard.selectMatch(matchId)
       boardSkip = HistoryBoardBuilder.scoresMatch(expectedScores, existingBoards)
 
-      _ <- if (boardSkip) {
-        ClubMatch.upsert(clubMatch)
-      } else {
-        for {
-          boardAndGames <- buildBoardAndGameRows(ctx, matchId, dailyMatch, weAreTeam1)
-          (boardRows, gameRowLists) = boardAndGames.unzip
-          _ <- withTransaction {
-            for {
-              _ <- ClubMatch.upsert(clubMatch)
-              _ <- ClubMatchBoard.deleteMatch(matchId)
-              _ <- ClubMatchBoard.insertBatch(boardRows)
-              _ <- ClubMatchGame.insertBatch(gameRowLists.flatten)
-            } yield ()
-          }
-          _ <- ctx.matchesBoardsUpdated.update(_ + 1)
-        } yield ()
-      }
+      _ <-
+        if (boardSkip) {
+          ClubMatch.upsert(clubMatch)
+        } else {
+          for {
+            boardAndGames <- buildBoardAndGameRows(ctx, matchId, dailyMatch, weAreTeam1)
+            (boardRows, gameRowLists) = boardAndGames.unzip
+            _ <- withTransaction {
+              for {
+                _ <- ClubMatch.upsert(clubMatch)
+                _ <- ClubMatchBoard.deleteMatch(matchId)
+                _ <- ClubMatchBoard.insertBatch(boardRows)
+                _ <- ClubMatchGame.insertBatch(gameRowLists.flatten)
+              } yield ()
+            }
+            _ <- ctx.matchesBoardsUpdated.update(_ + 1)
+          } yield ()
+        }
     } yield ()
 
   // === Board Row Construction ===
@@ -460,8 +471,8 @@ private[history] object HistoryProcessing {
             // Per-board fetch failures degrade to a board row with no API data; a systemic outage re-raises so the
             // match isn't persisted with dataless boards.
             boardData <- ctx.client.get[ApiMatchBoard](ApiMatchBoard.dailyUrl(matchId, boardNum))
-                           .map(Option(_))
-                           .catchAll(err => NetworkUnavailableException.recoverUnless(err)(ZIO.none))
+              .map(Option(_))
+              .catchAll(err => NetworkUnavailableException.recoverUnless(err)(ZIO.none))
           } yield {
             val g1 = HistoryBoardBuilder.normalizeGameOutcome(
               t1Player.playedAsWhite,
@@ -503,7 +514,6 @@ private[history] object HistoryProcessing {
           }
         }
     }
-
 
   // === Player Resolution ===
 
@@ -600,7 +610,8 @@ private[history] object HistoryProcessing {
         m.get(matchId) match {
           case Some(existing) => (existing.await, m)
           case None =>
-            val fetch = ctx.client.get[ApiDailyMatch](ApiDailyMatch.getUrl(matchId)).tapBoth(promise.fail, promise.succeed)
+            val fetch =
+              ctx.client.get[ApiDailyMatch](ApiDailyMatch.getUrl(matchId)).tapBoth(promise.fail, promise.succeed)
             (fetch, m + (matchId -> promise))
         }
       }
@@ -614,7 +625,8 @@ private[history] object HistoryProcessing {
         m.get(matchId) match {
           case Some(existing) => (existing.await, m)
           case None =>
-            val fetch = ctx.client.get[ApiLiveMatch](ApiLiveMatch.getUrl(matchId)).tapBoth(promise.fail, promise.succeed)
+            val fetch =
+              ctx.client.get[ApiLiveMatch](ApiLiveMatch.getUrl(matchId)).tapBoth(promise.fail, promise.succeed)
             (fetch, m + (matchId -> promise))
         }
       }
@@ -657,7 +669,6 @@ private[history] object HistoryProcessing {
           result <- action
         } yield result
     }
-
 
   // === Stats ===
 

@@ -2,7 +2,6 @@ package ccas.analysis.apps.membership
 
 import java.time.Instant
 
-import ccas.utils.sql.PostgresClient
 import zio.{Chunk, RIO, ZIO}
 
 import ccas.analysis.apps.UsernameRenameResolver
@@ -12,9 +11,9 @@ import ccas.analysis.tables.*
 import ccas.api.misc.enums.{PlayerStatusCategory, Title}
 import ccas.api.misc.subtypes.{ClubId, PlayerId, Username}
 import ccas.api.player.ApiPlayer
-import ccas.utils.client.{ChessComClient, NetworkUnavailableException}
 import ccas.utils.{ApiConcurrency, ProgressDisplay}
-
+import ccas.utils.client.{ChessComClient, NetworkUnavailableException}
+import ccas.utils.sql.PostgresClient
 
 private[membership] object MembershipClassify {
 
@@ -241,7 +240,7 @@ private[membership] object MembershipClassify {
 
             case (None, _) =>
               // Brand new player — create with all fields, no snapshot
-              val player = Player(playerId, apiPlayer.joinedAt, username, statusCategory, apiPlayer.title, now)
+              val player  = Player(playerId, apiPlayer.joinedAt, username, statusCategory, apiPlayer.title, now)
               val member  = ClubMember.joined(clubId = clubId, playerId = playerId, since = since)
               val summary = MemberChangeSummary(playerId, username, Chunk(NewMember(since)))
               PhaseBMemberResult(
@@ -448,7 +447,7 @@ private[membership] object MembershipClassify {
     UsernameRenameResolver
       .resolveAndVerify(client, state.player.username, Some(playerId), tournamentFallback = true)
       .flatMap {
-        case None                                      => ZIO.succeed(unresolvable)
+        case None => ZIO.succeed(unresolvable)
         case Some((resolvedUsername, resolvedProfile)) =>
           onProfileResolved(client, storedRoster, state, apiMap, now, resolvedUsername, resolvedProfile)
       }

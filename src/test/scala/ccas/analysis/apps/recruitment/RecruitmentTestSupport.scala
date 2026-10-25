@@ -1,19 +1,21 @@
 package ccas.analysis.apps.recruitment
 
 import java.time.{Duration, Instant}
+
 import com.augustnagro.magnum.sql
-import zio.{Fiber, Promise, RIO, Ref, Scope, Semaphore, Trace, ZEnvironment, ZIO, durationInt}
+import zio.{durationInt, Fiber, Promise, Ref, RIO, Scope, Semaphore, Trace, ZEnvironment, ZIO}
 import zio.http.*
+
 import ccas.analysis.apps.TestTimes
 import ccas.analysis.tables.*
 import ccas.analysis.tables.subtypes.RecruitmentRunId
 import ccas.api.club.ApiClubMatches
 import ccas.api.misc.enums.{ClubMatchStatus, PlayerStatusCategory, TimeClass}
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username}
-import ccas.utils.client.{BodyStore, ChessComClient, ClientStatsAccumulator, TestChessComClientSupport}
-import ccas.utils.sql.DbCodecs.given
-import ccas.utils.sql.{PostgresClient, TestDbCleanup}
 import ccas.utils.ProgressDisplay
+import ccas.utils.client.{BodyStore, ChessComClient, ClientStatsAccumulator, TestChessComClientSupport}
+import ccas.utils.sql.{PostgresClient, TestDbCleanup}
+import ccas.utils.sql.DbCodecs.given
 
 object RecruitmentTestSupport {
 
@@ -30,8 +32,8 @@ object RecruitmentTestSupport {
   val sourceClubId    = ClubId(600)
   val intSourceClubId = ClubId(901)
 
-  val blacklistClubId  = ClubId(700)
-  val sizableClubId    = ClubId(800)
+  val blacklistClubId = ClubId(700)
+  val sizableClubId   = ClubId(800)
 
   val pid0 = PlayerId(200)
   val pid1 = PlayerId(201)
@@ -293,7 +295,7 @@ object RecruitmentTestSupport {
   // Mirrors Chess.com's canonical "X \"id\" not found." 404 body. Tests that rely on rename recovery firing on a
   // 404 need this body shape so the throw site dispatches to `ReportedNotFound` rather than the base
   // HttpStatusException. Substring match in HttpStatusException.classify keys on "not found.".
-  val notFoundBody: String = """{"code": 0, "message": "Resource \"\" not found."}"""
+  val notFoundBody: String       = """{"code": 0, "message": "Resource \"\" not found."}"""
   val notFoundResponse: Response = Response.json(notFoundBody).copy(status = Status.NotFound)
 
   private def buildRoutes(
@@ -373,10 +375,10 @@ object RecruitmentTestSupport {
       lastReqRef    <- Ref.make(0L)
       // No scope finalizer for this ref (this factory isn't scoped): the block/JSON route fakes return no 429s, so the
       // failure window never triggers a throttle-down and no recovery fiber is ever forked. See `fakeClient`.
-      recoveryFiberRef    <- Ref.make(Option.empty[Fiber.Runtime[Throwable, Unit]])
-      bar                 <- ProgressDisplay.make(enabled = false).addBar
-      stats               <- Ref.make(ClientStatsAccumulator())
-      playerCount         <- Ref.make(0)
+      recoveryFiberRef <- Ref.make(Option.empty[Fiber.Runtime[Throwable, Unit]])
+      bar              <- ProgressDisplay.make(enabled = false).addBar
+      stats            <- Ref.make(ClientStatsAccumulator())
+      playerCount      <- Ref.make(0)
     } yield {
       val blockingPlayerRoute =
         Method.GET / "pub" / "player" / string("username") -> handler { (username: String, _: Request) =>
@@ -426,7 +428,23 @@ object RecruitmentTestSupport {
         refs,
         stats,
         bar,
-        ChessComClient.ThrottleConfig(Vector(2, 5), 30.seconds, 5.seconds, 1.second, 10.seconds, 1.second, 5, 2, 3, 20, 0.2, 10, 0, Duration.ZERO, 500L),
+        ChessComClient.ThrottleConfig(
+          Vector(2, 5),
+          30.seconds,
+          5.seconds,
+          1.second,
+          10.seconds,
+          1.second,
+          5,
+          2,
+          3,
+          20,
+          0.2,
+          10,
+          0,
+          Duration.ZERO,
+          500L
+        ),
         recoveryFiberRef,
         ZIO.unit
       )
@@ -441,7 +459,8 @@ object RecruitmentTestSupport {
     } yield criteriaId
 
   /** The database's clock. Use this (not `Instant.now()`) to stamp rows a `NOW()`-windowed query must match, so the
-    * row timestamp and the query predicate share one clock rather than risking JVM/DB skew at a day boundary. */
+    * row timestamp and the query predicate share one clock rather than risking JVM/DB skew at a day boundary.
+    */
   def dbNow: RIO[PostgresClient, Instant] =
     PostgresClient.connectZIO(sql"SELECT NOW()".query[Instant].run().head)
 
@@ -462,10 +481,21 @@ object RecruitmentTestSupport {
       _ <- PostgresClient.connectZIO(sql"DELETE FROM club_member WHERE club_id = $sourceClubId".update.run())
       _ <- PostgresClient.connectZIO(sql"DELETE FROM club_member WHERE club_id = $intSourceClubId".update.run())
       _ <- ZIO.foreachDiscard(
-        List(blacklistClubId, sizableClubId, ClubId(701), ClubId(702), ClubId(777), ClubId(801), ClubId(802), intSourceClubId)
+        List(
+          blacklistClubId,
+          sizableClubId,
+          ClubId(701),
+          ClubId(702),
+          ClubId(777),
+          ClubId(801),
+          ClubId(802),
+          intSourceClubId
+        )
       )(TestDbCleanup.deleteClub)
       _ <- PostgresClient.connectZIO(sql"DELETE FROM club_match_ref WHERE club_id = $clubId".update.run())
-      _ <- PostgresClient.connectZIO(sql"DELETE FROM club_match_board WHERE match_id IN (8001, 8002, 9001)".update.run())
+      _ <- PostgresClient.connectZIO(
+        sql"DELETE FROM club_match_board WHERE match_id IN (8001, 8002, 9001)".update.run()
+      )
       _ <- PostgresClient.connectZIO(sql"DELETE FROM club_match WHERE match_id IN (8001, 8002, 9001)".update.run())
       _ <- ZIO.foreachDiscard(
         List(

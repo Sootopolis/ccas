@@ -1,15 +1,16 @@
 package ccas.analysis.apps.stats
 
+import java.time.{Duration, Instant}
+
+import zio.{Chunk, RIO, Scope, Task, ZIO, ZIOAppArgs, ZIOAppDefault}
+
 import ccas.analysis.apps.{ClubQuery, ClubResolution}
 import ccas.analysis.apps.stats.StatsUtils.*
 import ccas.analysis.tables.*
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
+import ccas.utils.{OutputFile, ProgressDisplay, TimeParser}
 import ccas.utils.errors.{BadRequestException, NotFoundException}
 import ccas.utils.sql.PostgresClient
-import ccas.utils.{OutputFile, ProgressDisplay, TimeParser}
-import zio.{Chunk, RIO, Scope, Task, ZIO, ZIOAppArgs, ZIOAppDefault}
-
-import java.time.{Duration, Instant}
 
 /** Generates club member contribution stats from stored match history.
   *
@@ -27,7 +28,8 @@ import java.time.{Duration, Instant}
   * `POST /api/jobs/stats` with `{"club": {"kind": "by_slug", "slug": "..."}, "since": "...", "until": "..."}`
   */
 object StatsApp extends ZIOAppDefault {
-  private val help = "Usage: StatsApp <club-slug> [--since <date-or-instant>] [--until <date-or-instant>] [--min-games N]"
+  private val help =
+    "Usage: StatsApp <club-slug> [--since <date-or-instant>] [--until <date-or-instant>] [--min-games N]"
 
   final case class StatsResult(
     contributions: List[MemberContribution],
@@ -46,8 +48,12 @@ object StatsApp extends ZIOAppDefault {
     val positional = args.filterNot(_.startsWith("--"))
     for {
       slug <- ZIO.fromOption(positional.headOption.map(ClubSlug.wrap)).orElseFail(BadRequestException(help))
-      since <- ZIO.foreach(flagValue(args, "--since"))(s => TimeParser.parseInstantZIO(s).mapError(BadRequestException(_)))
-      until <- ZIO.foreach(flagValue(args, "--until"))(s => TimeParser.parseInstantZIO(s).mapError(BadRequestException(_)))
+      since <- ZIO.foreach(flagValue(args, "--since")) { s =>
+        TimeParser.parseInstantZIO(s).mapError(BadRequestException(_))
+      }
+      until <- ZIO.foreach(flagValue(args, "--until")) { s =>
+        TimeParser.parseInstantZIO(s).mapError(BadRequestException(_))
+      }
       minGames <- ZIO.foreach(flagValue(args, "--min-games")) { s =>
         ZIO.fromOption(s.toIntOption)
           .orElseFail(BadRequestException(s"--min-games requires an integer (got '$s')"))
@@ -108,9 +114,17 @@ object StatsApp extends ZIOAppDefault {
         ZIO.fail(BadRequestException(s"--since must be before --until (got $since .. $until)"))
       }
       _ <- ZIO.whenDiscard(until.isAfter(now.minus(Duration.ofHours(12)))) {
-        ZIO.fail(BadRequestException(s"--until must be at least 12 hours before now to account for API data lag (earliest allowed: ${now.minus(Duration.ofHours(12))})"))
+        ZIO.fail(
+          BadRequestException(
+            s"--until must be at least 12 hours before now to account for API data lag (earliest allowed: ${now.minus(Duration.ofHours(12))})"
+          )
+        )
       }
-      (rows, matchCount) <- ClubBoard.selectClubBoardsInPeriod(clubId, since, until) <&> ClubMatch.countForClubInPeriod(clubId, since, until)
+      (rows, matchCount) <- ClubBoard.selectClubBoardsInPeriod(clubId, since, until) <&> ClubMatch.countForClubInPeriod(
+        clubId,
+        since,
+        until
+      )
       playerIds = rows.map(_.playerId).distinct
       displayNames <- Player.selectDisplayNames(playerIds)
       contributions = aggregate(rows, displayNames)

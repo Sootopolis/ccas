@@ -1,9 +1,11 @@
 package ccas.analysis.tables
 
 import java.time.{Duration, Instant, LocalDateTime, ZoneOffset}
-import zio.ZIO
-import zio.test.{Spec, TestAspect, ZIOSpecDefault, assertCompletes, assertTrue}
+
 import com.augustnagro.magnum.sql
+import zio.ZIO
+import zio.test.{assertCompletes, assertTrue, Spec, TestAspect, ZIOSpecDefault}
+
 import ccas.api.misc.enums.{ClubMatchStatus, PlayerStatusCategory, TimeClass}
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username}
 import ccas.utils.sql.{FreshSchemaLayer, TestDbCleanup}
@@ -165,10 +167,10 @@ object TestClubMatchSql extends ZIOSpecDefault {
         latestANoReg <- ClubMatch.selectLatestActivityForClub(clubA.clubId)
         latestBNoReg <- ClubMatch.selectLatestActivityForClub(clubB.clubId)
         // With a registration match for clubB: should jump to ~now
-        _            <- ClubMatch.upsert(matchRegistered)
-        latestBReg   <- ClubMatch.selectLatestActivityForClub(clubB.clubId)
+        _          <- ClubMatch.upsert(matchRegistered)
+        latestBReg <- ClubMatch.selectLatestActivityForClub(clubB.clubId)
         // Unknown club returns None
-        latestNone   <- ClubMatch.selectLatestActivityForClub(ClubId(999))
+        latestNone <- ClubMatch.selectLatestActivityForClub(ClubId(999))
         // Cleanup
         _ <- connectZIO(sql"DELETE FROM club_match WHERE match_id = 1003".update.run())
       } yield assertTrue(
@@ -229,20 +231,20 @@ object TestClubMatchSql extends ZIOSpecDefault {
   private def testClubMatchSelectSettledForRefresh =
     test("selectSettledForRefreshBatch and countSettledForRefresh filter by cutoffTime") {
       // Make matchFinished settled: fetchedAt=t4 (day 120) >= endTime(day 1) + 90 days
-      val settled = matchFinished.copy(fetchedAt = Times.t4)
+      val settled     = matchFinished.copy(fetchedAt = Times.t4)
       val cutoffAfter = Times.t4.plus(Duration.ofSeconds(1))
       for {
         _ <- ClubMatch.upsert(settled)
         // cutoffTime after fetchedAt → match is included
-        count    <- ClubMatch.countSettledForRefresh(clubA.clubId, cutoffAfter)
-        batch    <- ClubMatch.selectSettledForRefreshBatch(clubA.clubId, cutoffAfter, 100, ClubMatchId(0))
+        count <- ClubMatch.countSettledForRefresh(clubA.clubId, cutoffAfter)
+        batch <- ClubMatch.selectSettledForRefreshBatch(clubA.clubId, cutoffAfter, 100, ClubMatchId(0))
         // cutoffTime equal to fetchedAt → match is NOT included (fetchedAt < cutoffTime is false)
         countExact <- ClubMatch.countSettledForRefresh(clubA.clubId, Times.t4)
         batchExact <- ClubMatch.selectSettledForRefreshBatch(clubA.clubId, Times.t4, 100, ClubMatchId(0))
         // matchInProgress is not settled → never included
         // Cursor advancement: afterMatchId = 1001 should exclude match 1001
         batchCursor <- ClubMatch.selectSettledForRefreshBatch(clubA.clubId, cutoffAfter, 100, ClubMatchId(1001))
-        _ <- ClubMatch.upsert(matchFinished) // restore
+        _           <- ClubMatch.upsert(matchFinished) // restore
       } yield assertTrue(
         count == 1L,
         batch == List(ClubMatchId(1001)),
@@ -256,10 +258,10 @@ object TestClubMatchSql extends ZIOSpecDefault {
     val target = matchInProgress.matchId
     val now    = Instant.parse("2026-05-07T10:00:00Z")
     for {
-      hit       <- ClubMatch.markAborted(target, now)
-      after     <- ClubMatch.selectId(target)
-      miss      <- ClubMatch.markAborted(ClubMatchId(99_999), now)
-      _         <- ClubMatch.upsert(matchInProgress) // restore for downstream tests
+      hit   <- ClubMatch.markAborted(target, now)
+      after <- ClubMatch.selectId(target)
+      miss  <- ClubMatch.markAborted(ClubMatchId(99_999), now)
+      _     <- ClubMatch.upsert(matchInProgress) // restore for downstream tests
     } yield assertTrue(
       hit == 1,
       after.exists(_.status == ClubMatchStatus.Aborted),
@@ -287,8 +289,8 @@ object TestClubMatchSql extends ZIOSpecDefault {
 
   private def testClubMatchInferClubMatchRefIsLive =
     test("inferClubMatchRef derives isLive from time_class") {
-      val clubRefId   = ClubId(310)
-      val clubRef     = Club(clubRefId, Times.t0, ClubSlug("club-ref-test"), "Club Ref Test", None, None, None)
+      val clubRefId = ClubId(310)
+      val clubRef   = Club(clubRefId, Times.t0, ClubSlug("club-ref-test"), "Club Ref Test", None, None, None)
       val dailyMatch = matchFinished.copy(
         matchId = ClubMatchId(2001),
         timeClass = TimeClass.Daily,
@@ -318,8 +320,8 @@ object TestClubMatchSql extends ZIOSpecDefault {
 
   private def testClubMatchRefFindOrInfer =
     test("ClubMatchRef.findOrInfer prefers explicit, infers and promotes otherwise, returns None when neither") {
-      val c             = ClubId(311)
-      val explicitRef   = ClubMatchRef(c, ClubMatchId(2100), isLive = true, isTeam1 = false)
+      val c           = ClubId(311)
+      val explicitRef = ClubMatchRef(c, ClubMatchId(2100), isLive = true, isTeam1 = false)
       val inferableMatch = matchFinished.copy(
         matchId = ClubMatchId(2101),
         timeClass = TimeClass.Blitz,
@@ -329,9 +331,9 @@ object TestClubMatchSql extends ZIOSpecDefault {
       for {
         _ <- Club.upsert(Club(c, Times.t0, ClubSlug("foi-club"), "FoI Club", None, None, None))
 
-        _      <- ClubMatchRef.upsert(explicitRef)
-        tier1  <- ClubMatchRef.findOrInfer(c)
-        _      <- connectZIO(sql"DELETE FROM club_match_ref WHERE club_id = $c".update.run())
+        _     <- ClubMatchRef.upsert(explicitRef)
+        tier1 <- ClubMatchRef.findOrInfer(c)
+        _     <- connectZIO(sql"DELETE FROM club_match_ref WHERE club_id = $c".update.run())
 
         _        <- ClubMatch.upsert(inferableMatch)
         tier2    <- ClubMatchRef.findOrInfer(c)
@@ -620,9 +622,13 @@ object TestClubMatchSql extends ZIOSpecDefault {
     for {
       runId <- HistoryRun.insert(clubA.clubId, RunTrigger.Cli, Times.t0, None)
       _ <- HistoryRun.complete(
-        runId, Times.t1,
-        matchesProcessed = 42, playersDiscovered = 7,
-        refreshMatchUnchanged = 3, seedClubMatchesUnchanged = 1, seedPlayerMatchesUnchanged = 5,
+        runId,
+        Times.t1,
+        matchesProcessed = 42,
+        playersDiscovered = 7,
+        refreshMatchUnchanged = 3,
+        seedClubMatchesUnchanged = 1,
+        seedPlayerMatchesUnchanged = 5,
         abortedMatches = 2
       )
     } yield assertTrue(runId.value > 0L)
@@ -730,7 +736,7 @@ object TestClubMatchSql extends ZIOSpecDefault {
     test("PlayerMatchRef.findOrInfer prefers explicit, infers and promotes otherwise, returns None when neither") {
       // Fresh player so shared `club_match_board` fixtures for player0/player1 don't leak into the tier-2/miss steps.
       val player = Player(PlayerId(60), Times.t0, Username("foi-player"), PlayerStatusCategory.Active, None, Times.t0)
-      val p           = player.playerId
+      val p      = player.playerId
       val explicitRef = PlayerMatchRef(p, ClubMatchId(2200), isLive = true, isTeam1 = true, boardIdx = 4)
       val parentMatch = matchFinished.copy(
         matchId = ClubMatchId(2201),
@@ -799,7 +805,7 @@ object TestClubMatchSql extends ZIOSpecDefault {
   private def testClubMatchBoardInferPlayerMatchRefIsLive =
     test("inferPlayerMatchRef derives isLive from the parent club_match's time_class") {
       val player = Player(PlayerId(61), Times.t0, Username("infer-live"), PlayerStatusCategory.Active, None, Times.t0)
-      val p = player.playerId
+      val p      = player.playerId
       val dailyMatch = matchFinished.copy(
         matchId = ClubMatchId(2300),
         timeClass = TimeClass.Daily,
@@ -858,7 +864,7 @@ object TestClubMatchSql extends ZIOSpecDefault {
         _       <- ClubMatch.upsert(withMarker)
         set     <- ClubMatch.selectProcessedBodyHash(matchFinished.matchId)
         unknown <- ClubMatch.selectProcessedBodyHash(ClubMatchId(99_999))
-        _       <- ClubMatch.upsert(matchFinished) // restore for downstream tests
+        _       <- ClubMatch.upsert(matchFinished)                          // restore for downstream tests
       } yield assertTrue(
         unset.isEmpty,
         set.contains("deadbeef"),

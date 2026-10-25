@@ -1,9 +1,9 @@
 package ccas.analysis.apps
 
 import com.augustnagro.magnum.sql
-import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 import zio.RIO
 import zio.http.*
+import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.*
 import ccas.analysis.tables.*
@@ -42,7 +42,11 @@ object TestUsernameRenameResolver extends ZIOSpecDefault {
     FreshSchemaLayer("test_username_rename_resolver", onInit = Tables.ensureTables)
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock
 
-  private def insertPlayer(pid: PlayerId, username: String, status: PlayerStatusCategory = PlayerStatusCategory.Active) =
+  private def insertPlayer(
+    pid: PlayerId,
+    username: String,
+    status: PlayerStatusCategory = PlayerStatusCategory.Active
+  ) =
     Player.insert(Player(pid, TestTimes.t0, Username(username), status, None, TestTimes.t0))
 
   /** Local fake client that adds a `/pub/match/{id}/{board}` route on top of the shared `RecruitmentTestSupport`
@@ -89,7 +93,9 @@ object TestUsernameRenameResolver extends ZIOSpecDefault {
     }
 
   private def testTierARecycledHandle =
-    test("Tier A: stale name now held by different player AND hint exists with new name → returns hint's current name") {
+    test(
+      "Tier A: stale name now held by different player AND hint exists with new name → returns hint's current name"
+    ) {
       // Player A renamed: alpha → newA. Player B took the freed handle: ??? → alpha.
       // DB state: pidA=newA (verified ApiPlayer matches hint), pidB=alpha.
       val responses = Map(
@@ -169,7 +175,7 @@ object TestUsernameRenameResolver extends ZIOSpecDefault {
       val matchId = ClubMatchId(90001L)
       val responses = Map(
         s"match/90001/1" -> apiMatchBoardJson(90001L, 1, "newa", "opponent"),
-        s"player/newa" -> apiPlayerJson(PlayerId.unwrap(pidA), "newa")
+        s"player/newa"   -> apiPlayerJson(PlayerId.unwrap(pidA), "newa")
       )
       for {
         client <- fakeClientWithBoard(responses)
@@ -177,16 +183,25 @@ object TestUsernameRenameResolver extends ZIOSpecDefault {
         _      <- insertPlayer(pidB, "opponent")
         _ <- ClubMatch.upsert(
           ClubMatch(
-            matchId, "Test Match",
-            ClubMatchStatus.Finished, TimeClass.Daily,
-            Some(TestTimes.t0), Some(TestTimes.t1), 1,
-            None, 20, None, 10, TestTimes.t0, None
+            matchId,
+            "Test Match",
+            ClubMatchStatus.Finished,
+            TimeClass.Daily,
+            Some(TestTimes.t0),
+            Some(TestTimes.t1),
+            1,
+            None,
+            20,
+            None,
+            10,
+            TestTimes.t0,
+            None
           )
         )
         _ <- ClubMatchBoard.insertBatch(
           List(ClubMatchBoard(matchId, 1, Some(pidA), false, Some(pidB), false, 2, 0))
         )
-        _ <- PlayerMatchRef.insert(PlayerMatchRef(pidA, matchId, isLive = false, isTeam1 = true, boardIdx = 1))
+        _      <- PlayerMatchRef.insert(PlayerMatchRef(pidA, matchId, isLive = false, isTeam1 = true, boardIdx = 1))
         result <- UsernameRenameResolver.resolveCurrentUsername(client, Username("alpha"), Some(pidA))
       } yield assertTrue(result.contains(Username("newa")))
     }
@@ -196,31 +211,42 @@ object TestUsernameRenameResolver extends ZIOSpecDefault {
   // unlinked so the fallback to the full match endpoint is what resolves the rename.
   private def testTierBFallsBackToMatchEndpointWhenOpponentUnlinked =
     test("Tier B: opposing side not linked in club_match_board falls back to the match endpoint") {
-      val matchId   = ClubMatchId(90002L)
+      val matchId = ClubMatchId(90002L)
       val responses = Map(
         s"match/90002" -> apiDailyMatchJson(
-          90002L, "clubx", "cluby",
+          90002L,
+          "clubx",
+          "cluby",
           team1Players = List(("newa", 1)),
           team2Players = List(("opponent", 1))
         ),
         s"match/90002/1" -> apiMatchBoardJson(90002L, 1, "newa", "opponent"),
-        s"player/newa" -> apiPlayerJson(PlayerId.unwrap(pidA), "newa")
+        s"player/newa"   -> apiPlayerJson(PlayerId.unwrap(pidA), "newa")
       )
       for {
         client <- fakeClientWithBoard(responses)
         _      <- insertPlayer(pidA, "older-a")
         _ <- ClubMatch.upsert(
           ClubMatch(
-            matchId, "Test Match",
-            ClubMatchStatus.Finished, TimeClass.Daily,
-            Some(TestTimes.t0), Some(TestTimes.t1), 1,
-            None, 20, None, 10, TestTimes.t0, None
+            matchId,
+            "Test Match",
+            ClubMatchStatus.Finished,
+            TimeClass.Daily,
+            Some(TestTimes.t0),
+            Some(TestTimes.t1),
+            1,
+            None,
+            20,
+            None,
+            10,
+            TestTimes.t0,
+            None
           )
         )
         _ <- ClubMatchBoard.insertBatch(
           List(ClubMatchBoard(matchId, 1, Some(pidA), false, None, false, 2, 0))
         )
-        _ <- PlayerMatchRef.insert(PlayerMatchRef(pidA, matchId, isLive = false, isTeam1 = true, boardIdx = 1))
+        _      <- PlayerMatchRef.insert(PlayerMatchRef(pidA, matchId, isLive = false, isTeam1 = true, boardIdx = 1))
         result <- UsernameRenameResolver.resolveCurrentUsername(client, Username("alpha"), Some(pidA))
       } yield assertTrue(result.contains(Username("newa")))
     }

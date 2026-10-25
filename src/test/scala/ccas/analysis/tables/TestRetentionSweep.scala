@@ -28,9 +28,14 @@ object TestRetentionSweep extends ZIOSpecDefault {
     test("ensureTables leaves expired rows alone; retentionSweep removes them") {
       for {
         _ <- ApiResponseCache.upsertWithBody(
-               url = url, body = body, etag = None, lastModified = None,
-               maxAgeSeconds = None, contentType = None, fetchedAt = staleAt
-             )
+          url = url,
+          body = body,
+          etag = None,
+          lastModified = None,
+          maxAgeSeconds = None,
+          contentType = None,
+          fetchedAt = staleAt
+        )
         _           <- Tables.ensureTables
         afterEnsure <- ApiResponseCache.lookupMeta(url)
         _           <- Tables.retentionSweep

@@ -1,6 +1,6 @@
 package ccas.utils.client
 
-import java.util.logging.{Filter, Level, LogRecord, Logger as JLogger}
+import java.util.logging.{Filter, Level, Logger as JLogger, LogRecord}
 
 import io.netty.channel.DefaultChannelPipeline
 import io.netty.handler.codec.PrematureChannelClosureException

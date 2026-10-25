@@ -3,6 +3,8 @@ package ccas.analysis.apps.ref
 import zio.Scope
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
+import TestRefAppSupport.*
+
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.apiDailyMatchJson
 import ccas.analysis.tables.{
   Club,
@@ -17,8 +19,6 @@ import ccas.analysis.tables.{
 import ccas.api.misc.enums.PlayerStatusCategory.Active
 import ccas.api.misc.subtypes.{ClubMatchId, TournamentSlug, Username}
 import ccas.utils.sql.FreshSchemaLayer
-
-import TestRefAppSupport.*
 
 object TestRefAppResolution extends ZIOSpecDefault {
 
@@ -43,7 +43,7 @@ object TestRefAppResolution extends ZIOSpecDefault {
     for {
       _ <- seedDb
       // pid1 takes pid0's name, leaving pid0 holding none
-      _ <- Player.updateCurrentState(Player(pid1, t0, Username("alice"), Active, None, t1))
+      _      <- Player.updateCurrentState(Player(pid1, t0, Username("alice"), Active, None, t1))
       client <- fakeChessComClient(Map.empty)
       _      <- runPopulate(client, forceSkipped = false, upgradeRefs = false)
       ref    <- PlayerMatchRef.selectId(pid0)
@@ -352,22 +352,23 @@ object TestRefAppResolution extends ZIOSpecDefault {
     )
   }
 
-  private def testSkipsTournamentWherePlayerNotFoundInRound1 = test("skips tournament where player not found in round 1") {
-    for {
-      _ <- seedDb
-      client <- fakeChessComClient(
-        Map(
-          s"player/alice/matches"       -> emptyPlayerMatchesJson,
-          s"player/bob/matches"         -> emptyPlayerMatchesJson,
-          s"player/charlie/matches"     -> emptyPlayerMatchesJson,
-          s"player/alice/tournaments"   -> apiPlayerTournamentsJson(List(("tourney-1", 5))),
-          s"player/bob/tournaments"     -> emptyPlayerTournamentsJson,
-          s"player/charlie/tournaments" -> emptyPlayerTournamentsJson,
-          s"tournament/tourney-1/1"     -> apiTournamentRoundJson(List("stranger1", "stranger2"))
+  private def testSkipsTournamentWherePlayerNotFoundInRound1 =
+    test("skips tournament where player not found in round 1") {
+      for {
+        _ <- seedDb
+        client <- fakeChessComClient(
+          Map(
+            s"player/alice/matches"       -> emptyPlayerMatchesJson,
+            s"player/bob/matches"         -> emptyPlayerMatchesJson,
+            s"player/charlie/matches"     -> emptyPlayerMatchesJson,
+            s"player/alice/tournaments"   -> apiPlayerTournamentsJson(List(("tourney-1", 5))),
+            s"player/bob/tournaments"     -> emptyPlayerTournamentsJson,
+            s"player/charlie/tournaments" -> emptyPlayerTournamentsJson,
+            s"tournament/tourney-1/1"     -> apiTournamentRoundJson(List("stranger1", "stranger2"))
+          )
         )
-      )
-      _   <- runPopulate(client, forceSkipped = false, upgradeRefs = false)
-      ref <- PlayerTournamentRef.selectId(pid0)
-    } yield assertTrue(ref.isEmpty)
-  }
+        _   <- runPopulate(client, forceSkipped = false, upgradeRefs = false)
+        ref <- PlayerTournamentRef.selectId(pid0)
+      } yield assertTrue(ref.isEmpty)
+    }
 }

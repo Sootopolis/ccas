@@ -2,7 +2,8 @@ package ccas.analysis.apps.history
 
 import java.time.{Duration as JDuration, Instant}
 
-import zio.{Chunk, ExitCode, NonEmptyChunk, RIO, Ref, Scope, Task, URIO, ZEnvironment, ZIO, ZIOAppArgs, ZIOAppDefault}
+import zio.{Chunk, ExitCode, NonEmptyChunk, Ref, RIO, Scope, Task, URIO, ZEnvironment, ZIO, ZIOAppArgs, ZIOAppDefault}
+
 import HistoryUtils.*
 
 import ccas.analysis.apps.membership.MembershipApp
@@ -111,8 +112,7 @@ object HistoryApp extends ZIOAppDefault {
         includeFinished = includeFinished,
         refreshMinHours = refreshMinHours
       ).flatMap(outputResult)
-    }
-    else {
+    } else {
       for {
         client <- ZIO.service[ChessComClient]
         (resolvedClubs, resolvedPlayers) <-
@@ -169,7 +169,7 @@ object HistoryApp extends ZIOAppDefault {
       // A player on the club's side of a board was a member when the match started (ADR 0023).
       memberIds = rows.map(_.playerId).toSet ++ playedForClub
       memberNames <- PlayerName.selectCurrentNames(memberIds)
-      _ <- HistoryPendingMatch.resetStatuses(clubId)
+      _           <- HistoryPendingMatch.resetStatuses(clubId)
       startedAt = Instant.now()
       runId <- HistoryRun.insert(clubId, trigger, startedAt, jobRunIdOption)
       _ <- ZIO.logInfo(
@@ -236,7 +236,7 @@ object HistoryApp extends ZIOAppDefault {
       refreshedRef  <- Ref.make(0)
       // Flipped once the success-path finalizer commits, so the onInterrupt finalizer below skips a second
       // (partial-stats) finalize on a late interrupt — see #137.
-      finalizedRef  <- Ref.make(false)
+      finalizedRef <- Ref.make(false)
 
       // === Phases 2-4: Seed + Process + Finalize (interrupt-safe as a whole) ===
       // The guard spans Phase 4 too, so an interrupt landing in finalization no longer escapes between the old
@@ -249,7 +249,8 @@ object HistoryApp extends ZIOAppDefault {
           // Phase 2: Seed match IDs
           _ <- ZIO.logInfo(
             "Phase 2: Seeding match IDs " +
-              (if (includeFinished) { "(incl. recently-finished)..." } else { "(active-only)..." })
+              (if (includeFinished) { "(incl. recently-finished)..." }
+               else { "(active-only)..." })
           )
           _ <- ZIO.whenDiscard(shared.isEmpty) {
             for {
@@ -272,7 +273,10 @@ object HistoryApp extends ZIOAppDefault {
             else { ClubMatch.selectMatchIdsForClub(ctx.clubId) }
 
           seedClub <- HistorySeeding.seedFromClubMatches(
-            ctx.client, ctx.clubId, ctx.clubSlug, ctx.seedClubMatchesUnchanged
+            ctx.client,
+            ctx.clubId,
+            ctx.clubSlug,
+            ctx.seedClubMatchesUnchanged
           )
           _ <- seedClubRef.set(seedClub)
           _ <- ZIO.logInfo(s"  Club matches endpoint: $seedClub new match IDs")
@@ -334,8 +338,13 @@ object HistoryApp extends ZIOAppDefault {
           // but unlogged, or finalizedRef unset). logSummary lands the completion summary in the per-job log for HTTP-
           // and scheduler-submitted jobs too — the silent-tail gap membership #130 closed for reconcile.
           _ <- (HistoryRun.complete(
-            runId, completedAt, totalStats.matchesProcessed + totalStats.matchesSharedSkip, totalStats.playersDiscovered,
-            totalStats.refreshMatchUnchanged, totalStats.seedClubMatchesUnchanged, totalStats.seedPlayerMatchesUnchanged,
+            runId,
+            completedAt,
+            totalStats.matchesProcessed + totalStats.matchesSharedSkip,
+            totalStats.playersDiscovered,
+            totalStats.refreshMatchUnchanged,
+            totalStats.seedClubMatchesUnchanged,
+            totalStats.seedPlayerMatchesUnchanged,
             totalStats.matchesAborted
           ) *> logSummary(totalStats, startedAt, completedAt) *> finalizedRef.set(true)).uninterruptible
         } yield HistoryResult(totalStats, ctx.clubSlug, startedAt, completedAt)
@@ -382,8 +391,13 @@ object HistoryApp extends ZIOAppDefault {
         pendingRemaining = pendingRemaining.toInt
       )
       _ <- HistoryRun.complete(
-        runId, completedAt, totalStats.matchesProcessed + totalStats.matchesSharedSkip, totalStats.playersDiscovered,
-        totalStats.refreshMatchUnchanged, totalStats.seedClubMatchesUnchanged, totalStats.seedPlayerMatchesUnchanged,
+        runId,
+        completedAt,
+        totalStats.matchesProcessed + totalStats.matchesSharedSkip,
+        totalStats.playersDiscovered,
+        totalStats.refreshMatchUnchanged,
+        totalStats.seedClubMatchesUnchanged,
+        totalStats.seedPlayerMatchesUnchanged,
         totalStats.matchesAborted
       )
       _ <- logSummary(totalStats, startedAt, completedAt)
@@ -401,7 +415,8 @@ object HistoryApp extends ZIOAppDefault {
       _ <- ZIO.logInfo(s"Matches seeded: ${stats.matchesSeeded}")
       _ <- ZIO.logInfo(
         s"Matches processed: ${stats.matchesProcessed} | boards updated: ${stats.matchesBoardsUpdated} | failed: ${stats.matchesFailed} | aborted: ${stats.matchesAborted} | unidentified: ${stats.matchesUnidentified} | shared skip: ${stats.matchesSharedSkip}" +
-          (if (stats.matchesRefreshed > 0) { s" | refreshed: ${stats.matchesRefreshed}" } else { "" })
+          (if (stats.matchesRefreshed > 0) { s" | refreshed: ${stats.matchesRefreshed}" }
+           else { "" })
       )
       _ <- ZIO.logInfo(
         s"Players discovered: ${stats.playersDiscovered} | known: ${stats.playersKnown} | failed: ${stats.playersFailed}"

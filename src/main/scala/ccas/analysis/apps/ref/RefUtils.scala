@@ -1,7 +1,7 @@
 package ccas.analysis.apps.ref
 
-import java.time.temporal.ChronoUnit
 import java.time.Instant
+import java.time.temporal.ChronoUnit
 
 import zio.{Promise, Ref, UIO}
 import zio.http.URL
@@ -87,20 +87,20 @@ private[ref] object RefUtils {
   object RefContext {
     def make(client: ChessComClient): UIO[RefContext] =
       for {
-        cache              <- Ref.make(Map.empty[MatchKey, Promise[Throwable, Either[ReportedNotFound, TeamMatchTeams]]])
-        failedUrls         <- Ref.make(Map.empty[String, String])
-        failedUrlSource    <- Ref.make(Map.empty[String, String])
-        clubsResolvedDb    <- Ref.make(0)
-        clubsResolvedApi   <- Ref.make(0)
-        playersResolvedDb  <- Ref.make(0)
-        playersResolvedApi <- Ref.make(0)
-        skippedPlayers     <- Ref.make(List.empty[SkippedPlayer])
-        playersSkippedNew  <- Ref.make(0)
-        clubsSkippedNew    <- Ref.make(0)
-        newTournamentRefPlayerIds <- Ref.make(Set.empty[PlayerId])
-        playerMatchesUnchanged    <- Ref.make(0)
+        cache             <- Ref.make(Map.empty[MatchKey, Promise[Throwable, Either[ReportedNotFound, TeamMatchTeams]]])
+        failedUrls        <- Ref.make(Map.empty[String, String])
+        failedUrlSource   <- Ref.make(Map.empty[String, String])
+        clubsResolvedDb   <- Ref.make(0)
+        clubsResolvedApi  <- Ref.make(0)
+        playersResolvedDb <- Ref.make(0)
+        playersResolvedApi         <- Ref.make(0)
+        skippedPlayers             <- Ref.make(List.empty[SkippedPlayer])
+        playersSkippedNew          <- Ref.make(0)
+        clubsSkippedNew            <- Ref.make(0)
+        newTournamentRefPlayerIds  <- Ref.make(Set.empty[PlayerId])
+        playerMatchesUnchanged     <- Ref.make(0)
         playerTournamentsUnchanged <- Ref.make(0)
-        clubMatchesUnchanged      <- Ref.make(0)
+        clubMatchesUnchanged       <- Ref.make(0)
       } yield new RefContext(
         client = client,
         cache = cache,

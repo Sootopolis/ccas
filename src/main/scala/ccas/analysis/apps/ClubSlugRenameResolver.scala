@@ -7,7 +7,13 @@ import ccas.api.club.ApiClub
 import ccas.api.misc.enums.PlayerStatusCategory
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, Username}
 import ccas.api.player.ApiPlayerClubs
-import ccas.utils.client.{ChessComClient, NetworkUnavailableException, ReportedNotFound, onNotFound, swallowRecoveryErrors}
+import ccas.utils.client.{
+  onNotFound,
+  swallowRecoveryErrors,
+  ChessComClient,
+  NetworkUnavailableException,
+  ReportedNotFound
+}
 import ccas.utils.sql.PostgresClient
 
 /** Resolves the current canonical slug for a club whose previously-known slug 404s on Chess.com.
@@ -50,7 +56,7 @@ object ClubSlugRenameResolver {
       effectiveHint   <- deriveHint(staleSlug, clubIdHint).swallowRecoveryErrors(s"slug hint for $staleSlug")
       candidateOption <- resolveCandidate(client, staleSlug, effectiveHint)
       resolvedOption  <- ZIO.foreach(candidateOption)(verify(client, _, effectiveHint)).map(_.flatten)
-      _ <- ZIO.foreachDiscard(resolvedOption)(resolved => Club.upsert(Club.fromApi(resolved.api)))
+      _               <- ZIO.foreachDiscard(resolvedOption)(resolved => Club.upsert(Club.fromApi(resolved.api)))
     } yield resolvedOption
 
   /** Convenience: fetches `/pub/club/{slug}` and falls back to slug-rename recovery on 404. Returns the verified
@@ -203,7 +209,7 @@ object ClubSlugRenameResolver {
   ): RIO[PostgresClient, Option[ClubId]] =
     clubIdHint match {
       case some @ Some(_) => ZIO.succeed(some)
-      case None => ClubResolution.resolve(ClubQuery.BySlug(staleSlug)).map(_.runnable.toOption.map(_.clubId))
+      case None           => ClubResolution.resolve(ClubQuery.BySlug(staleSlug)).map(_.runnable.toOption.map(_.clubId))
     }
 
   private def verify(
@@ -251,8 +257,7 @@ extension [R, A](self: ZIO[R, Throwable, A])
     client: ChessComClient,
     stale: ClubSlug,
     clubIdHint: Option[ClubId]
-  )(retryWith: ClubSlug => ZIO[R, Throwable, A])
-    : ZIO[R & PostgresClient, Throwable, A] =
+  )(retryWith: ClubSlug => ZIO[R, Throwable, A]): ZIO[R & PostgresClient, Throwable, A] =
     self.catchSome { case e: ReportedNotFound =>
       ClubSlugRenameResolver.resolveAndPersist(client, stale, clubIdHint).flatMap {
         case Some(resolved) =>

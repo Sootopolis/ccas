@@ -10,10 +10,10 @@ import ccas.analysis.apps.NamedClub
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.*
 import ccas.analysis.tables.*
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, Elo, PlayerId, Username}
+import ccas.utils.ProgressDisplay
 import ccas.utils.client.BodyStore
 import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
 import ccas.utils.sql.PostgresClient.connectZIO
-import ccas.utils.ProgressDisplay
 
 object TestRecruitmentAppCore extends ZIOSpecDefault {
 
@@ -186,13 +186,17 @@ object TestRecruitmentAppCore extends ZIOSpecDefault {
         criteriaId <- seedCriteria(makeCriteria()) // seeds alias "default" -> criteriaId
         // Today-window query stamps runs off the DB clock (not Instant.now()) so the row timestamps and the NOW()
         // predicate share one clock.
-        nowT    <- dbNow
+        nowT <- dbNow
         earlier = nowT.minusSeconds(120)
         // Two completed runs today for the same club/alias.
         runA <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, nowT, None, None)
-        _    <- RecruitmentRun.update(RecruitmentRun(runA, clubId, criteriaId, RunTrigger.Cli, nowT, Some(nowT), 0, None, None))
+        _ <- RecruitmentRun.update(
+          RecruitmentRun(runA, clubId, criteriaId, RunTrigger.Cli, nowT, Some(nowT), 0, None, None)
+        )
         runB <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, nowT, None, None)
-        _    <- RecruitmentRun.update(RecruitmentRun(runB, clubId, criteriaId, RunTrigger.Cli, nowT, Some(nowT), 0, None, None))
+        _ <- RecruitmentRun.update(
+          RecruitmentRun(runB, clubId, criteriaId, RunTrigger.Cli, nowT, Some(nowT), 0, None, None)
+        )
         // pid0 invited in BOTH runs (the duplicate); pid1 only in A; pid2 only in B.
         _ <- RecruitmentCandidate.insert(RecruitmentCandidate(runA, pid0, earlier, CandidateOutcome.Invited, None))
         _ <- RecruitmentCandidate.insert(RecruitmentCandidate(runB, pid0, nowT, CandidateOutcome.Invited, None))
@@ -303,8 +307,10 @@ object TestRecruitmentAppCore extends ZIOSpecDefault {
     test("ApiFetchFailure deduplicates response bodies") {
       val now  = Instant.now()
       val body = """{"code":3024,"message":"An internal error has occurred."}"""
-      val failure1 = ApiFetchFailure(now, "https://api.chess.com/pub/match/1", "HttpStatusException", Some("404"), Some(body))
-      val failure2 = ApiFetchFailure(now, "https://api.chess.com/pub/match/2", "HttpStatusException", Some("404"), Some(body))
+      val failure1 =
+        ApiFetchFailure(now, "https://api.chess.com/pub/match/1", "HttpStatusException", Some("404"), Some(body))
+      val failure2 =
+        ApiFetchFailure(now, "https://api.chess.com/pub/match/2", "HttpStatusException", Some("404"), Some(body))
       for {
         _       <- seedDb
         _       <- ApiFetchFailure.insert(failure1)
@@ -368,9 +374,9 @@ object TestRecruitmentAppCore extends ZIOSpecDefault {
     },
     test("autoConfirm=false leaves candidates Deferred until confirmDeferredByRun flips them") {
       val responses = Map(
-        s"club/$clubSlug"          -> apiClubJson(clubId.value, clubSlug.value),
-        s"club/$clubSlug/members"  -> apiClubMembersJson(List(("existing", Times.t0.getEpochSecond))),
-        "club/source-club"         -> apiClubJson(sourceClubId.value, "source-club"),
+        s"club/$clubSlug"         -> apiClubJson(clubId.value, clubSlug.value),
+        s"club/$clubSlug/members" -> apiClubMembersJson(List(("existing", Times.t0.getEpochSecond))),
+        "club/source-club"        -> apiClubJson(sourceClubId.value, "source-club"),
         "club/source-club/members" -> apiClubMembersJson(
           List(
             ("existing", Times.t0.getEpochSecond),
@@ -506,13 +512,13 @@ object TestRecruitmentAppCore extends ZIOSpecDefault {
       for {
         _          <- seedDb
         criteriaId <- seedCriteria(criteria)
-        _ <- seedPlayer(candidatePid)
-        _ <- seedPlayer(PlayerId(999))
-        _ <- seedMatchWithBoard(refMatchId, Some(clubId), candidatePid, PlayerId(999))
-        client <- fakeChessComClient(responses)
-        runId  <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Instant.now(), None, None)
-        _      <- evalCandidates(client, runId, List(Username("ref-db-player")), criteria)
-        ref    <- PlayerMatchRef.selectId(candidatePid)
+        _          <- seedPlayer(candidatePid)
+        _          <- seedPlayer(PlayerId(999))
+        _          <- seedMatchWithBoard(refMatchId, Some(clubId), candidatePid, PlayerId(999))
+        client     <- fakeChessComClient(responses)
+        runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Instant.now(), None, None)
+        _          <- evalCandidates(client, runId, List(Username("ref-db-player")), criteria)
+        ref        <- PlayerMatchRef.selectId(candidatePid)
       } yield assertTrue(
         ref.isDefined,
         ref.get.matchId == refMatchId,

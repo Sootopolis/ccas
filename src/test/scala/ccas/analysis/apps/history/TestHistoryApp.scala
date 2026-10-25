@@ -45,10 +45,10 @@ object TestHistoryApp extends ZIOSpecDefault {
 
   private def testBuildClubMatchRowFinished = test("buildClubMatchRow correctly maps a finished match") {
     matchFixture.map { m =>
-      val matchId     = ClubMatchId.fromUrl(m.`@id`)
+      val matchId           = ClubMatchId.fromUrl(m.`@id`)
       val team1ClubIdOption = Some(ClubId(100))
       val team2ClubIdOption = Some(ClubId(200))
-      val row         = HistoryBoardBuilder.buildClubMatchRow(matchId, m, team1ClubIdOption, team2ClubIdOption)
+      val row               = HistoryBoardBuilder.buildClubMatchRow(matchId, m, team1ClubIdOption, team2ClubIdOption)
 
       assertTrue(
         row.matchId == ClubMatchId(1650919),
@@ -335,7 +335,7 @@ object TestHistoryApp extends ZIOSpecDefault {
       val parsed = HistoryApp.parseArgs(Chunk("club-a", "club-b"))
       assertTrue(parsed.exists { p =>
         p.slugs.toList == List(ClubSlug("club-a"), ClubSlug("club-b")) &&
-          !p.full && !p.includeFinished && p.refreshMinHours.isEmpty
+        !p.full && !p.includeFinished && p.refreshMinHours.isEmpty
       })
     },
     test("--include-finished sets includeFinished and is stripped from slugs") {

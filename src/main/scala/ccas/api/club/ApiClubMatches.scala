@@ -1,8 +1,8 @@
 package ccas.api.club
 
+import zio.Chunk
 import zio.http.URL
 import zio.json.{jsonMemberNames, JsonDecoder, SnakeCase}
-import zio.Chunk
 
 import ccas.api.club.ApiClubMatches.{ApiClubMatchFinished, ApiClubMatchInProgress, ApiClubMatchRegistered}
 import ccas.api.misc.enums.{ClubMatchResult, TimeClass}

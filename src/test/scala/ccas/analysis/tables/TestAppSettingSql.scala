@@ -64,8 +64,8 @@ object TestAppSettingSql extends ZIOSpecDefault {
 
   private def testSelectAllReflectsWrites = test("selectAll returns the stored rows") {
     for {
-      _ <- wipe
-      _ <- AppSetting.set(CacheRetentionDays, 9)
+      _   <- wipe
+      _   <- AppSetting.set(CacheRetentionDays, 9)
       all <- AppSetting.selectAll
     } yield assertTrue(all.exists(r => r.key == CacheRetentionDays.key && r.value == "9"))
   }

@@ -1,7 +1,5 @@
 package ccas.utils.client
 
-import zio.{Task, ZIO}
-
 import software.amazon.awssdk.core.sync.RequestBody
 import software.amazon.awssdk.services.s3.S3Client
 import software.amazon.awssdk.services.s3.model.{
@@ -10,6 +8,7 @@ import software.amazon.awssdk.services.s3.model.{
   NoSuchKeyException,
   PutObjectRequest
 }
+import zio.{Task, ZIO}
 
 /** S3-API [[BodyStore]] pointed at Cloudflare R2 via an endpoint override (also covers B2 / MinIO / S3). The object
   * key is the SHA-256 hash, so `put` is idempotent. Uses the AWS SDK v2 synchronous client wrapped in

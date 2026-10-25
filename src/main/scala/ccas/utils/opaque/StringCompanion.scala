@@ -1,10 +1,10 @@
 package ccas.utils.opaque
 
 import com.augustnagro.magnum.DbCodec
-import zio.config.magnolia.DeriveConfig
-import zio.json.{JsonCodec, JsonDecoder, JsonEncoder}
 import zio.Chunk
 import zio.Config.Error.InvalidData
+import zio.config.magnolia.DeriveConfig
+import zio.json.{JsonCodec, JsonDecoder, JsonEncoder}
 
 import ccas.utils.opaque.OpaqueHelpers.orThrowDbRead
 
@@ -26,9 +26,9 @@ trait StringCompanion {
     validateRaw(n).map(_ => n)
   }
 
-  given JsonCodec[Type]    = JsonCodec.string.transformOrFail(validated, unwrap)
-  given JsonDecoder[Type]  = summon[JsonCodec[Type]].decoder
-  given JsonEncoder[Type]  = summon[JsonCodec[Type]].encoder
+  given JsonCodec[Type]   = JsonCodec.string.transformOrFail(validated, unwrap)
+  given JsonDecoder[Type] = summon[JsonCodec[Type]].decoder
+  given JsonEncoder[Type] = summon[JsonCodec[Type]].encoder
   // Null passthrough is required: Magnum's OptionCodec calls the inner readSingle
   // *before* checking rs.wasNull, so returning null here lets Option[Type] columns work.
   given DbCodec[Type] = DbCodec[String].biMap(

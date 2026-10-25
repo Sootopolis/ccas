@@ -49,15 +49,30 @@ object TestStatsApp extends ZIOSpecDefault {
         Player(pid1, Times.t0, Username.wrap("alice"), PlayerStatusCategory.Active, None, Times.t0)
       )
       _ <- ClubMatch.upsert(
-        ClubMatch(matchId1, "Match 1", ClubMatchStatus.Finished, TimeClass.Daily,
-          Some(Times.t0), Some(Times.t1), 10, Some(clubId), 10, Some(oppId), 10, Times.t1, None)
+        ClubMatch(
+          matchId1,
+          "Match 1",
+          ClubMatchStatus.Finished,
+          TimeClass.Daily,
+          Some(Times.t0),
+          Some(Times.t1),
+          10,
+          Some(clubId),
+          10,
+          Some(oppId),
+          10,
+          Times.t1,
+          None
+        )
       )
       _ <- ClubMatchBoard.insert(
         ClubMatchBoard(matchId1, 1, Some(pid1), false, None, false, 1, 1)
       )
-      _ <- ClubMatchGame.insertBatch(List(
-        ClubMatchGame(matchId1, 1, true, None, None, None, Some(BoardGameWinner.Team1), None, None, None)
-      ))
+      _ <- ClubMatchGame.insertBatch(
+        List(
+          ClubMatchGame(matchId1, 1, true, None, None, None, Some(BoardGameWinner.Team1), None, None, None)
+        )
+      )
       result <- StatsApp.memberStats(clubId)
     } yield assertTrue(
       result.contributions.size == 1,
@@ -71,7 +86,7 @@ object TestStatsApp extends ZIOSpecDefault {
   private def testMemberStatsEmptyClub = test("memberStats returns empty result for club with no matches") {
     val emptySlug = ClubSlug("empty-club")
     for {
-      _ <- Club.upsert(Club(ClubId(300), Times.t0, emptySlug, "Empty Club", None, None, None))
+      _      <- Club.upsert(Club(ClubId(300), Times.t0, emptySlug, "Empty Club", None, None, None))
       result <- StatsApp.memberStats(ClubId(300))
     } yield assertTrue(
       result.contributions.isEmpty,
@@ -86,66 +101,111 @@ object TestStatsApp extends ZIOSpecDefault {
     } yield assertTrue(exit.causeOption.flatMap(_.failureOption).exists(_.isInstanceOf[NotFoundException]))
   }
 
-  private def testMemberStatsTeam2Perspective = test("memberStats includes boards when club is team2 with winner flipping") {
-    val team2Slug = ClubSlug("team2-club")
-    val team2Id   = ClubId(400)
-    for {
-      _ <- Club.upsert(Club(team2Id, Times.t0, team2Slug, "Team2 Club", None, None, None))
-      _ <- Player.insertIfNew(
-        Player(pid2, Times.t0, Username.wrap("dave"), PlayerStatusCategory.Active, None, Times.t0)
+  private def testMemberStatsTeam2Perspective =
+    test("memberStats includes boards when club is team2 with winner flipping") {
+      val team2Slug = ClubSlug("team2-club")
+      val team2Id   = ClubId(400)
+      for {
+        _ <- Club.upsert(Club(team2Id, Times.t0, team2Slug, "Team2 Club", None, None, None))
+        _ <- Player.insertIfNew(
+          Player(pid2, Times.t0, Username.wrap("dave"), PlayerStatusCategory.Active, None, Times.t0)
+        )
+        // Match where team2-club is team2; opponent (clubId=100) wins as Team1
+        _ <- ClubMatch.upsert(
+          ClubMatch(
+            matchId3,
+            "Match 3",
+            ClubMatchStatus.Finished,
+            TimeClass.Daily,
+            Some(Times.t0),
+            Some(Times.t1),
+            10,
+            Some(clubId),
+            10,
+            Some(team2Id),
+            10,
+            Times.t1,
+            None
+          )
+        )
+        // dave is on team2 side
+        _ <- ClubMatchBoard.insert(
+          ClubMatchBoard(matchId3, 1, None, false, Some(pid2), false, 1, 1)
+        )
+        // game1: Team2 wins (from match perspective). After flip for team2-club, this becomes Team1 = win for dave.
+        _ <- ClubMatchGame.insertBatch(
+          List(
+            ClubMatchGame(matchId3, 1, true, None, None, None, Some(BoardGameWinner.Team2), None, None, None)
+          )
+        )
+        result <- StatsApp.memberStats(team2Id)
+      } yield assertTrue(
+        result.contributions.size == 1,
+        result.contributions.head.displayName == "dave",
+        result.contributions.head.raw.wins == 1,
+        result.contributions.head.raw.losses == 0
       )
-      // Match where team2-club is team2; opponent (clubId=100) wins as Team1
-      _ <- ClubMatch.upsert(
-        ClubMatch(matchId3, "Match 3", ClubMatchStatus.Finished, TimeClass.Daily,
-          Some(Times.t0), Some(Times.t1), 10, Some(clubId), 10, Some(team2Id), 10, Times.t1, None)
-      )
-      // dave is on team2 side
-      _ <- ClubMatchBoard.insert(
-        ClubMatchBoard(matchId3, 1, None, false, Some(pid2), false, 1, 1)
-      )
-      // game1: Team2 wins (from match perspective). After flip for team2-club, this becomes Team1 = win for dave.
-      _ <- ClubMatchGame.insertBatch(List(
-        ClubMatchGame(matchId3, 1, true, None, None, None, Some(BoardGameWinner.Team2), None, None, None)
-      ))
-      result <- StatsApp.memberStats(team2Id)
-    } yield assertTrue(
-      result.contributions.size == 1,
-      result.contributions.head.displayName == "dave",
-      result.contributions.head.raw.wins == 1,
-      result.contributions.head.raw.losses == 0
-    )
-  }
+    }
 
-  private def testMemberStatsMatchesButNoBoards = test("memberStats returns empty contributions when matches exist but no boards") {
-    val noBoardSlug = ClubSlug("noboard-club")
-    val noBoardId   = ClubId(500)
-    for {
-      _ <- Club.upsert(Club(noBoardId, Times.t0, noBoardSlug, "No Board Club", None, None, None))
-      _ <- ClubMatch.upsert(
-        ClubMatch(ClubMatchId(2001L), "Match NB", ClubMatchStatus.Finished, TimeClass.Daily,
-          Some(Times.t0), Some(Times.t1), 10, Some(noBoardId), 10, Some(oppId), 10, Times.t1, None)
+  private def testMemberStatsMatchesButNoBoards =
+    test("memberStats returns empty contributions when matches exist but no boards") {
+      val noBoardSlug = ClubSlug("noboard-club")
+      val noBoardId   = ClubId(500)
+      for {
+        _ <- Club.upsert(Club(noBoardId, Times.t0, noBoardSlug, "No Board Club", None, None, None))
+        _ <- ClubMatch.upsert(
+          ClubMatch(
+            ClubMatchId(2001L),
+            "Match NB",
+            ClubMatchStatus.Finished,
+            TimeClass.Daily,
+            Some(Times.t0),
+            Some(Times.t1),
+            10,
+            Some(noBoardId),
+            10,
+            Some(oppId),
+            10,
+            Times.t1,
+            None
+          )
+        )
+        result <- StatsApp.memberStats(noBoardId)
+      } yield assertTrue(
+        result.contributions.isEmpty,
+        result.boardCount == 0,
+        result.matchCount == 1L
       )
-      result <- StatsApp.memberStats(noBoardId)
-    } yield assertTrue(
-      result.contributions.isEmpty,
-      result.boardCount == 0,
-      result.matchCount == 1L
-    )
-  }
+    }
 
   private def testPlayerOfPeriodFilters = test("playerOfPeriod respects time boundaries") {
     for {
       // matchId1 ends at t1 (within [t0, t2)), matchId2 ends at t3 (outside)
       _ <- ClubMatch.upsert(
-        ClubMatch(matchId2, "Match 2", ClubMatchStatus.Finished, TimeClass.Daily,
-          Some(Times.t2), Some(Times.t3), 10, Some(clubId), 10, Some(oppId), 10, Times.t3, None)
+        ClubMatch(
+          matchId2,
+          "Match 2",
+          ClubMatchStatus.Finished,
+          TimeClass.Daily,
+          Some(Times.t2),
+          Some(Times.t3),
+          10,
+          Some(clubId),
+          10,
+          Some(oppId),
+          10,
+          Times.t3,
+          None
+        )
       )
       _ <- ClubMatchBoard.insert(
         ClubMatchBoard(matchId2, 1, Some(pid1), false, None, false, 1, 1)
       )
-      _ <- ClubMatchGame.insertBatch(List(
-        ClubMatchGame(matchId2, 1, true, None, None, None, Some(BoardGameWinner.Team1), None, None, None)
-      ))
+      _ <- ClubMatchGame.insertBatch(
+        List(
+          ClubMatchGame(matchId2, 1, true, None, None, None, Some(BoardGameWinner.Team1), None, None, None)
+        )
+      )
       result <- StatsApp.playerOfPeriod(clubId, Times.t0, Times.t2)
     } yield assertTrue(
       result.contributions.size == 1,
