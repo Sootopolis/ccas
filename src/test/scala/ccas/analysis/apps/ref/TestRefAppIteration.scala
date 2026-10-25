@@ -1,9 +1,11 @@
 package ccas.analysis.apps.ref
 
 import zio.Scope
+import zio.http.URL
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.apiDailyMatchJson
+import ccas.analysis.apps.ref.RefUtils.RefContext
 import ccas.analysis.tables.{ClubMatchRef, PlayerMatchRef, PlayerTournamentRef, Tables}
 import ccas.api.misc.subtypes.{ClubMatchId, TournamentSlug}
 import ccas.utils.sql.FreshSchemaLayer
@@ -31,6 +33,7 @@ object TestRefAppIteration extends ZIOSpecDefault {
     testFallsBackToTournamentWhenAllMatchesFail,
     testFallsBackToSecondTournamentWhenFirstTournamentRound404s,
     testFailedTournamentUrlIsNotRetriedForAnotherPlayer,
+    testRecordedFailedUrlReadsAsFailed,
     testClubResolutionIteratesPastFailedMatch
   )
 
@@ -140,6 +143,19 @@ object TestRefAppIteration extends ZIOSpecDefault {
       bobRef.get.tournamentSlug == TournamentSlug("good-tourney")
     )
   }
+
+  private def testRecordedFailedUrlReadsAsFailed =
+    test("a URL recorded as failed reads as failed, under the source it failed for") {
+      val url = URL.decode("https://api.chess.com/pub/tournament/bad-tourney/1").toOption.get
+      for {
+        client  <- fakeChessComClient(Map.empty)
+        ctx     <- RefContext.make(client)
+        before  <- ctx.isFailedUrl(url)
+        _       <- ctx.recordFailedUrl(url, new RuntimeException("not found"), "player")
+        after   <- ctx.isFailedUrl(url)
+        sources <- ctx.failedUrlSource.get
+      } yield assertTrue(!before, after, sources.get(url.encode).contains("player"))
+    }
 
   private def testClubResolutionIteratesPastFailedMatch = test("club resolution iterates past failed match") {
     val matchJson3 = apiDailyMatchJson(

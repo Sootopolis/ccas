@@ -13,7 +13,7 @@ import zio.http.*
 import zio.http.Method.GET
 import zio.json.JsonDecoder
 
-import ccas.analysis.tables.{ApiFetchFailure, ApiResponseBody, ApiResponseCache}
+import ccas.analysis.tables.{ApiFetchFailure, ApiResponseBody, ApiResponseCache, ClientConfig}
 import ccas.analysis.tables.subtypes.ApiResponseBodyId
 import ccas.info.BuildInfo
 import ccas.utils.{HttpDate, ProgressBar, ProgressDisplay}
@@ -832,6 +832,30 @@ object ChessComClient {
     /** Return the previous tier strictly less than `currentMax`, or 1 if already at or below the first tier. */
     def previousTier(currentMax: Long): Long =
       recoveryTiers.findLast(_.toLong < currentMax).fold(1L)(_.toLong)
+
+    /** This config as a `client_config` row, carrying the hash [[ClientConfig.ensureConfig]] looks it up by. */
+    def toClientConfig: ClientConfig = {
+      val cc = ClientConfig(
+        configId = 0,
+        configHash = "",
+        recoveryTiers = recoveryTiers.toList,
+        minRequestDelayMs = minRequestDelayMs,
+        emaTauMs = emaTauMs,
+        cooldownSecs = cooldown.getSeconds.toInt,
+        cfCooldownSecs = cfCooldown.getSeconds.toInt,
+        minTierObservationSecs = minTierObservation.getSeconds.toInt,
+        failureWindowSize = failureWindowSize,
+        failureThreshold = failureThreshold,
+        minSampleSize = minSampleSize,
+        retryBaseSecs = retryBase.getSeconds.toInt,
+        cfRetrySecs = cfRetryDelay.getSeconds.toInt,
+        connectionRetryBaseSecs = connectionRetryBase.getSeconds.toInt,
+        max429Retries = max429Retries,
+        maxCfRetries = maxCfRetries,
+        maxConnectionRetries = maxConnectionRetries
+      )
+      cc.copy(configHash = cc.computeHash)
+    }
   }
 
   /** Raw config case class mapping 1:1 to HOCON keys under `chess-com-client`. Seconds fields are kept as Long to match
@@ -857,32 +881,30 @@ object ChessComClient {
     maxCfRetries: Int,
     maxConnectionRetries: Int,
     statsFlushIntervalSeconds: Long
-  )
+  ) {
+    def toThrottleConfig: ThrottleConfig = ThrottleConfig(
+      recoveryTiers = recoveryTiers,
+      cooldown = cooldownSeconds.seconds,
+      cfCooldown = cfCooldownSeconds.seconds,
+      retryBase = retryBaseSeconds.seconds,
+      cfRetryDelay = cfRetryDelaySeconds.seconds,
+      connectionRetryBase = connectionRetryBaseSeconds.seconds,
+      max429Retries = max429Retries,
+      maxCfRetries = maxCfRetries,
+      maxConnectionRetries = maxConnectionRetries,
+      failureWindowSize = failureWindowSize,
+      failureThreshold = failureThreshold,
+      minSampleSize = minSampleSize,
+      minRequestDelayMs = minRequestDelayMs,
+      minTierObservation = minTierObservationSeconds.seconds,
+      emaTauMs = emaTauMs
+    )
+
+    def statsFlushInterval: Duration = statsFlushIntervalSeconds.seconds
+  }
 
   private[ccas] object ChessComClientConfig {
     given DeriveConfig[ChessComClientConfig] = DeriveConfig.derived
-
-    extension (c: ChessComClientConfig) {
-      def toThrottleConfig: ThrottleConfig = ThrottleConfig(
-        recoveryTiers = c.recoveryTiers,
-        cooldown = c.cooldownSeconds.seconds,
-        cfCooldown = c.cfCooldownSeconds.seconds,
-        retryBase = c.retryBaseSeconds.seconds,
-        cfRetryDelay = c.cfRetryDelaySeconds.seconds,
-        connectionRetryBase = c.connectionRetryBaseSeconds.seconds,
-        max429Retries = c.max429Retries,
-        maxCfRetries = c.maxCfRetries,
-        maxConnectionRetries = c.maxConnectionRetries,
-        failureWindowSize = c.failureWindowSize,
-        failureThreshold = c.failureThreshold,
-        minSampleSize = c.minSampleSize,
-        minRequestDelayMs = c.minRequestDelayMs,
-        minTierObservation = c.minTierObservationSeconds.seconds,
-        emaTauMs = c.emaTauMs
-      )
-
-      def statsFlushInterval: Duration = c.statsFlushIntervalSeconds.seconds
-    }
   }
 
   /** Loads `chess-com-client` from `config`, refusing a blank contact email here rather than at config load — see the
@@ -905,7 +927,6 @@ object ChessComClient {
 
   def live(appLabel: String): RLayer[Client & PostgresClient & ProgressDisplay & BodyStore, ChessComClient] =
     ZLayer.scoped {
-      import ChessComClientConfig.*
       for {
         rawConfig      <- loadConfig(ConfigFactory.load())
         throttleConfig <- ZIO.attempt(rawConfig.toThrottleConfig)

@@ -150,12 +150,6 @@ object BodyStore {
     */
   private[ccas] final case class BodyStoreLimits(read: Duration, write: Duration)
 
-  private[ccas] def limitsFrom(config: BodyStoreConfig): Either[String, BodyStoreLimits] =
-    for {
-      read  <- positiveMs(config.readTimeoutMs, DefaultReadTimeoutMs, "body-store.read-timeout-ms")
-      write <- positiveMs(config.writeTimeoutMs, DefaultWriteTimeoutMs, "body-store.write-timeout-ms")
-    } yield BodyStoreLimits(read, write)
-
   /** The S3 transport's own budget, derived from the accessor deadlines: `apiCall` = `apiCallAttempt` = the widest
     * accessor deadline, with `socket` its own knob underneath.
     *
@@ -172,20 +166,6 @@ object BodyStore {
     apiCallAttempt: Duration,
     apiCall: Duration
   )
-
-  private[ccas] def s3Timeouts(config: BodyStoreConfig, limits: BodyStoreLimits): Either[String, S3Timeouts] = {
-    val widest = if (limits.read.compareTo(limits.write) >= 0) { limits.read } else { limits.write }
-    for {
-      connect <- positiveMs(config.s3ConnectTimeoutMs, DefaultS3ConnectTimeoutMs, "body-store.s3-connect-timeout-ms")
-      socket  <- positiveMs(config.s3SocketTimeoutMs, DefaultS3SocketTimeoutMs, "body-store.s3-socket-timeout-ms")
-      _ <- Either.cond(
-        socket.compareTo(widest) <= 0,
-        (),
-        s"body-store.s3-socket-timeout-ms (${socket.toMillis}) must not exceed the widest accessor deadline " +
-          s"(${widest.toMillis}ms): the transport would outlive the operation it serves."
-      )
-    } yield S3Timeouts(connect = connect, socket = socket, apiCallAttempt = widest, apiCall = widest)
-  }
 
   private def positiveMs(configured: Option[Int], default: Int, key: String): Either[String, Duration] =
     configured.getOrElse(default) match {
@@ -215,7 +195,27 @@ object BodyStore {
     s3SecretKey: Option[String],
     s3ConnectTimeoutMs: Option[Int],
     s3SocketTimeoutMs: Option[Int]
-  )
+  ) {
+    def limits: Either[String, BodyStoreLimits] =
+      for {
+        read  <- positiveMs(readTimeoutMs, DefaultReadTimeoutMs, "body-store.read-timeout-ms")
+        write <- positiveMs(writeTimeoutMs, DefaultWriteTimeoutMs, "body-store.write-timeout-ms")
+      } yield BodyStoreLimits(read, write)
+
+    def s3Timeouts(deadlines: BodyStoreLimits): Either[String, S3Timeouts] = {
+      val widest = if (deadlines.read.compareTo(deadlines.write) >= 0) { deadlines.read } else { deadlines.write }
+      for {
+        connect <- positiveMs(s3ConnectTimeoutMs, DefaultS3ConnectTimeoutMs, "body-store.s3-connect-timeout-ms")
+        socket  <- positiveMs(s3SocketTimeoutMs, DefaultS3SocketTimeoutMs, "body-store.s3-socket-timeout-ms")
+        _ <- Either.cond(
+          socket.compareTo(widest) <= 0,
+          (),
+          s"body-store.s3-socket-timeout-ms (${socket.toMillis}) must not exceed the widest accessor deadline " +
+            s"(${widest.toMillis}ms): the transport would outlive the operation it serves."
+        )
+      } yield S3Timeouts(connect = connect, socket = socket, apiCallAttempt = widest, apiCall = widest)
+    }
+  }
 
   private[ccas] object BodyStoreConfig {
     given DeriveConfig[BodyStoreConfig] = DeriveConfig.derived
@@ -236,7 +236,7 @@ object BodyStore {
       )
       for {
         config   <- provider.load(summon[DeriveConfig[BodyStoreConfig]].desc.nested("body-store"))
-        limits   <- ZIO.fromEither(limitsFrom(config)).mapError(new IllegalArgumentException(_))
+        limits   <- ZIO.fromEither(config.limits).mapError(new IllegalArgumentException(_))
         store    <- build(config, limits)
         degraded <- Ref.make(false)
       } yield new HealthLogging(new Deadlines(store, limits), degraded)
@@ -305,7 +305,7 @@ object BodyStore {
       bucket    <- required(config.s3Bucket, "body-store.s3-bucket")
       accessKey <- required(config.s3AccessKey, "body-store.s3-access-key")
       secretKey <- required(config.s3SecretKey, "body-store.s3-secret-key")
-      timeouts  <- ZIO.fromEither(s3Timeouts(config, limits)).mapError(new IllegalArgumentException(_))
+      timeouts  <- ZIO.fromEither(config.s3Timeouts(limits)).mapError(new IllegalArgumentException(_))
       region = config.s3Region.getOrElse("auto")
       client <- ZIO.acquireRelease(
         ZIO.attemptBlocking(buildS3Client(endpoint, region, accessKey, secretKey, timeouts))

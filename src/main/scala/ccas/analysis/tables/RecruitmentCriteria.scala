@@ -39,6 +39,44 @@ final case class RecruitmentCriteria(
     daysSinceLastInvited = daysSinceLastInvited.map(_.min(RecruitmentCriteria.MaxDaysSinceLookback)),
     daysSinceRejected = daysSinceRejected.map(_.min(RecruitmentCriteria.MaxDaysSinceLookback))
   )
+
+  /** Cross-field sanity checks beyond the per-field opaque-type validation. ([[capped]] applies the 180-day lookback
+    * cap, inside `insert`.) Surfaced as a `BadRequestException` by callers.
+    */
+  def validate: Either[String, Unit] = {
+    def nonNeg(label: String, v: Option[Int]): Option[String] =
+      v.filter(_ < 0).map(x => s"$label must be >= 0 (got $x)")
+    def inUnit(label: String, v: Option[Double]): Option[String] =
+      v.filter(d => d < 0.0 || d > 1.0).map(x => s"$label must be in [0, 1] (got $x)")
+    def inPercent(label: String, v: Option[Double]): Option[String] =
+      v.filter(d => d < 0.0 || d > 100.0).map(x => s"$label must be in [0, 100] (got $x)")
+    def ordered[A](label: String, lo: Option[A], hi: Option[A])(using ord: Ordering[A]): Option[String] =
+      (lo, hi) match {
+        case (Some(l), Some(h)) if ord.gt(l, h) => Some(s"$label min ($l) must be <= max ($h)")
+        case _                                  => None
+      }
+    val errors = List(
+      nonNeg("minDaysSinceRegistration", minDaysSinceRegistration),
+      nonNeg("daysSinceLastInvited", daysSinceLastInvited),
+      nonNeg("daysSinceRejected", daysSinceRejected),
+      nonNeg("maxClubs", maxClubs),
+      nonNeg("avoidAdminMinClubSize", avoidAdminMinClubSize),
+      nonNeg("dailyMinGamesFinished", dailyMinGamesFinished),
+      nonNeg("dailyMinTmGamesFinished", dailyMinTmGamesFinished),
+      nonNeg("dailyMaxHoursPerMove", dailyMaxHoursPerMove),
+      nonNeg("dailyMinOngoingGames", dailyMinOngoingGames),
+      nonNeg("dailyMaxOngoingGames", dailyMaxOngoingGames),
+      nonNeg("dailyMinOngoingTeamMatches", dailyMinOngoingTeamMatches),
+      inUnit("dailyMinScoreRate", dailyMinScoreRate),
+      inUnit("dailyMaxScoreRate", dailyMaxScoreRate),
+      inPercent("dailyMaxTimeoutPercent", dailyMaxTimeoutPercent),
+      inPercent("dailyMaxTmTimeoutPercent", dailyMaxTmTimeoutPercent),
+      ordered("dailyElo", dailyMinElo, dailyMaxElo),
+      ordered("dailyScoreRate", dailyMinScoreRate, dailyMaxScoreRate),
+      ordered("dailyOngoingGames", dailyMinOngoingGames, dailyMaxOngoingGames)
+    ).flatten
+    if (errors.isEmpty) Right(()) else Left(errors.mkString("; "))
+  }
 }
 
 object RecruitmentCriteria {

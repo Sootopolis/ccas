@@ -5,7 +5,7 @@ import zio.http.URL
 import zio.json.{jsonMemberNames, JsonDecoder, SnakeCase}
 
 import ccas.api.misc.enums.ClubVisibility
-import ccas.api.misc.subtypes.{ClubId, ClubSlug, Elo}
+import ccas.api.misc.subtypes.{ClubId, ClubSlug, Elo, Username}
 import ccas.api.misc.Hosts
 import ccas.utils.client.ChessComClient
 import ccas.utils.json.JsonDecoding.given
@@ -31,6 +31,9 @@ final case class ApiClub(
     * whatever slug was requested — the two differ after a rename, and only this one is safe to persist.
     */
   def canonicalSlug: ClubSlug = ClubSlug.wrap(`@id`.path.segments.last)
+
+  /** The admins' usernames, read from their profile URLs in `admin`. */
+  def adminUsernames: Set[Username] = admin.map(url => Username.wrap(url.path.segments.last)).toSet
 }
 
 object ApiClub {

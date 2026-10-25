@@ -27,6 +27,11 @@ final case class ClubMember(
 
   /** This membership hidden by a closed account, last known in at `lastSeen`. */
   def hidden(lastSeen: Instant): ClubMember = copy(lastSeen = Some(lastSeen), until = None)
+
+  /** When a closed account hid this membership, dated by when it was last known in; `None` while a roster lists it or
+    * once it has ended (ADR 0022).
+    */
+  def hiddenAt: Option[Instant] = lastSeen.filter(_ => until.isEmpty)
 }
 
 object ClubMember {

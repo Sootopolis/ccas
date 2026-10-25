@@ -148,7 +148,7 @@ object JobScheduler {
                 expectedClubIdOption = Some(club.clubId),
                 full = opts.full.getOrElse(false),
                 includeFinished = opts.includeFinished.getOrElse(false),
-                refreshMinHours = HistoryOptions.effectiveRefresh(opts),
+                refreshMinHours = opts.effectiveRefresh,
                 trigger = RunTrigger.Scheduled,
                 jobRunIdOption = jobRunIdOption
               )
@@ -157,7 +157,7 @@ object JobScheduler {
         case JobKind.Stats =>
           for {
             opts         <- ScheduleParams.decode(schedule.params, StatsOptions.Default)
-            periodOption <- ScheduleParams.statsPeriod(opts)
+            periodOption <- opts.period
           } yield clubJob(schedule) { (club, _) =>
             periodOption match {
               case Some((since, until)) =>

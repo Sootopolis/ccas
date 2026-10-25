@@ -90,13 +90,13 @@ object TestGameScoring extends ZIOSpecDefault {
 
   private def suiteScoreX2 = suite("scoreX2")(
     test("Win → 2") {
-      assertTrue(GameScoring.scoreX2(GameResult.Win) == 2)
+      assertTrue(GameResult.Win.scoreX2 == 2)
     },
     test("Draw → 1") {
-      assertTrue(GameScoring.scoreX2(GameResult.Draw) == 1)
+      assertTrue(GameResult.Draw.scoreX2 == 1)
     },
     test("Loss → 0") {
-      assertTrue(GameScoring.scoreX2(GameResult.Loss) == 0)
+      assertTrue(GameResult.Loss.scoreX2 == 0)
     }
   )
 }

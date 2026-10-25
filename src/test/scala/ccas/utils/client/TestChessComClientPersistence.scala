@@ -155,6 +155,20 @@ object TestChessComClientPersistence extends ZIOSpecDefault {
         cid2 == cid1
       )
     },
+    test("a session with a different config gets a config row of its own") {
+      for {
+        pgClient <- ZIO.service[PostgresClient]
+        stats1   <- Ref.make(ClientStatsAccumulator().copy(requests = 3, successes = 3, activeMs = 300))
+        ctx1     <- makeFlushContext("test-distinct-1", stats1, pgClient)
+        _        <- ClientStatsPersistence.persistStats(ctx1)
+        cid1     <- ctx1.configIdRef.get
+        stats2   <- Ref.make(ClientStatsAccumulator().copy(requests = 7, successes = 7, activeMs = 700))
+        base     <- makeFlushContext("test-distinct-2", stats2, pgClient)
+        ctx2 = base.copy(config = base.config.copy(maxCfRetries = 7))
+        _    <- ClientStatsPersistence.persistStats(ctx2)
+        cid2 <- ctx2.configIdRef.get
+      } yield assertTrue(cid1.isDefined, cid2.isDefined, cid2 != cid1)
+    },
     test("in-progress throttle is included without mutating accumulator") {
       for {
         pgClient <- ZIO.service[PostgresClient]

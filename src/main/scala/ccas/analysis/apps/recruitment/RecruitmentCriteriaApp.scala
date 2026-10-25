@@ -95,7 +95,7 @@ object RecruitmentCriteriaApp extends ZIOAppDefault {
       _ <- ZIO.whenDiscard(a.length > MaxAliasLength) {
         ZIO.fail(BadRequestException(s"alias must be <= $MaxAliasLength chars (got ${a.length})"))
       }
-      _ <- ZIO.fromEither(validate(criteria.capped)).mapError(BadRequestException(_))
+      _ <- ZIO.fromEither(criteria.capped.validate).mapError(BadRequestException(_))
     } yield ()
   }
 
@@ -211,44 +211,6 @@ object RecruitmentCriteriaApp extends ZIOAppDefault {
 
   def list(clubId: ClubId): RIO[PostgresClient, List[RecruitmentAlias]] =
     RecruitmentAlias.selectClub(clubId)
-
-  /** Cross-field sanity checks beyond the per-field opaque-type validation. (The 180-day lookback cap is applied by
-    * `RecruitmentCriteria.capped` inside `insert`.) Surfaced as a `BadRequestException` by callers.
-    */
-  def validate(c: RecruitmentCriteria): Either[String, Unit] = {
-    def nonNeg(label: String, v: Option[Int]): Option[String] =
-      v.filter(_ < 0).map(x => s"$label must be >= 0 (got $x)")
-    def inUnit(label: String, v: Option[Double]): Option[String] =
-      v.filter(d => d < 0.0 || d > 1.0).map(x => s"$label must be in [0, 1] (got $x)")
-    def inPercent(label: String, v: Option[Double]): Option[String] =
-      v.filter(d => d < 0.0 || d > 100.0).map(x => s"$label must be in [0, 100] (got $x)")
-    def ordered[A](label: String, lo: Option[A], hi: Option[A])(using ord: Ordering[A]): Option[String] =
-      (lo, hi) match {
-        case (Some(l), Some(h)) if ord.gt(l, h) => Some(s"$label min ($l) must be <= max ($h)")
-        case _                                  => None
-      }
-    val errors = List(
-      nonNeg("minDaysSinceRegistration", c.minDaysSinceRegistration),
-      nonNeg("daysSinceLastInvited", c.daysSinceLastInvited),
-      nonNeg("daysSinceRejected", c.daysSinceRejected),
-      nonNeg("maxClubs", c.maxClubs),
-      nonNeg("avoidAdminMinClubSize", c.avoidAdminMinClubSize),
-      nonNeg("dailyMinGamesFinished", c.dailyMinGamesFinished),
-      nonNeg("dailyMinTmGamesFinished", c.dailyMinTmGamesFinished),
-      nonNeg("dailyMaxHoursPerMove", c.dailyMaxHoursPerMove),
-      nonNeg("dailyMinOngoingGames", c.dailyMinOngoingGames),
-      nonNeg("dailyMaxOngoingGames", c.dailyMaxOngoingGames),
-      nonNeg("dailyMinOngoingTeamMatches", c.dailyMinOngoingTeamMatches),
-      inUnit("dailyMinScoreRate", c.dailyMinScoreRate),
-      inUnit("dailyMaxScoreRate", c.dailyMaxScoreRate),
-      inPercent("dailyMaxTimeoutPercent", c.dailyMaxTimeoutPercent),
-      inPercent("dailyMaxTmTimeoutPercent", c.dailyMaxTmTimeoutPercent),
-      ordered("dailyElo", c.dailyMinElo, c.dailyMaxElo),
-      ordered("dailyScoreRate", c.dailyMinScoreRate, c.dailyMaxScoreRate),
-      ordered("dailyOngoingGames", c.dailyMinOngoingGames, c.dailyMaxOngoingGames)
-    ).flatten
-    if (errors.isEmpty) Right(()) else Left(errors.mkString("; "))
-  }
 
   // --- JSON input ---
 

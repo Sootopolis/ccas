@@ -153,7 +153,7 @@ object ClubDataApp extends ZIOAppDefault {
       apiClub = resolved.api
       _ <- Club.upsert(Club.fromApi(apiClub))
 
-      adminUsernames   = ClubAdmin.extractAdminUsernames(apiClub)
+      adminUsernames   = apiClub.adminUsernames
       existingAdminIds <- ClubAdmin.selectPlayerIdsByClub(club.clubId)
       allAdminIds      <- ClubAdminResolver.resolveAndPersistAdmins(client, club.clubId, adminUsernames, existingAdminIds)
       _                <- logAdminDiff(club, existingAdminIds, allAdminIds)
@@ -316,7 +316,7 @@ object ClubDataApp extends ZIOAppDefault {
         case None =>
           val parsed = RefHelpers.parseMatchUrl(matches.finished.head.`@id`)
           RefHelpers.fetchTeamMatchTeamsOptional(client, parsed.matchId, parsed.isLive).flatMap { teamsOption =>
-            ZIO.foreachDiscard(teamsOption.flatMap(RefHelpers.findClubIsTeam1(_, slug))) { isTeam1 =>
+            ZIO.foreachDiscard(teamsOption.flatMap(_.findClubIsTeam1(slug))) { isTeam1 =>
               ClubMatchRef.upsert(ClubMatchRef(clubId, parsed.matchId, parsed.isLive, isTeam1)).unit
             }
           }

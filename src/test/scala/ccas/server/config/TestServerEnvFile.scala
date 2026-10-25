@@ -59,6 +59,15 @@ object TestServerEnvFile extends ZIOSpecDefault {
         m.get("SERVER_PORT").contains("8080")
       )
     },
+    test("setting a new key appends it after the last non-blank line, keeping the blank lines between entries") {
+      for {
+        dir <- tempDir
+        file = dir.resolve("ccas.env")
+        _    <- write(file, "DB_HOST=localhost\n\nDB_PORT=5432\n\n   \n")
+        _    <- ServerEnvFile.set(file, "SERVER_PORT", "8080").orDie
+        text <- read(file)
+      } yield assertTrue(text == "DB_HOST=localhost\n\nDB_PORT=5432\nSERVER_PORT=8080\n")
+    },
     test("a JDBC URL with & ? = : survives set/read unchanged") {
       val url = "jdbc:postgresql://h:5432/db?user=x&password=y&sslmode=require"
       for {

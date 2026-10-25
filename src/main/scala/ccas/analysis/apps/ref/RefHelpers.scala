@@ -4,7 +4,7 @@ import zio.http.URL
 import zio.Task
 
 import ccas.api.clubmatch.{ApiDailyMatch, ApiLiveMatch, TeamMatchTeams}
-import ccas.api.misc.subtypes.{ClubMatchId, ClubSlug, Username}
+import ccas.api.misc.subtypes.ClubMatchId
 import ccas.utils.client.{ChessComClient, FetchResult}
 
 /** Shared helpers for match-ref resolution, used by RefApp, RecruitmentApp, and Club slug conflict resolution. */
@@ -39,14 +39,4 @@ private[analysis] object RefHelpers {
   ): Task[Option[TeamMatchTeams]] =
     if (isLive) { client.getOptional[ApiLiveMatch](ApiLiveMatch.getUrl(matchId)).map(_.map(_.teams)) }
     else { client.getOptional[ApiDailyMatch](ApiDailyMatch.getUrl(matchId)).map(_.map(_.teams)) }
-
-  def findPlayerIsTeam1(teams: TeamMatchTeams, username: Username): Option[Boolean] =
-    if (teams.team1.players.exists(_.username == username)) { Some(true) }
-    else if (teams.team2.players.exists(_.username == username)) { Some(false) }
-    else { None }
-
-  def findClubIsTeam1(teams: TeamMatchTeams, slug: ClubSlug): Option[Boolean] =
-    if (ClubSlug.fromUrlOption(teams.team1.`@id`).contains(slug)) { Some(true) }
-    else if (ClubSlug.fromUrlOption(teams.team2.`@id`).contains(slug)) { Some(false) }
-    else { None }
 }

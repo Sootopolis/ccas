@@ -7,7 +7,7 @@ paths:
 ## Syntax
 
 - Braces on `match`.
-- Braces, not parens, around a call's only argument when it is a multi-line lambda, or a multi-line body for a ZIO combinator that runs code later (`.map { x =>`, `ZIO.whenDiscard(c) {`), unless it hugs the parens (`f(_.copy(` … `))`). scalafix's `MultilineBlockBraces` enforces this one and names the combinators.
+- Braces, not parens, around a multi-line lambda or deferred ZIO body that is a call's only argument, unless it hugs the parens (`f(_.copy(` … `))`). scalafix's `MultilineBlockBraces` checks it.
 - Parens on `if`/`else`; no Scala 3 braceless (indentation-only) syntax.
 - Never embed a raw control byte (ESC and friends) in a string literal — use `\uXXXX`.
 
@@ -28,6 +28,10 @@ paths:
 
 - Suffix an `Option` whose bare name would name the value it holds — an id, a slug, an entity, a row: `clubIdOption`, never `clubId` or `clubIdOpt`, so the unwrapped binding keeps the plain name. A value whose absence is an attribute of the record (`Player.title`) or a default (`misfirePolicy`, `since`) stays bare.
 - A renamed persisted or wire field keeps its column and JSON key with `@SqlName` / `@jsonField`.
+
+## Placement
+
+- A method that answers a question about one value goes on that value's type when we own it: `apiClub.adminUsernames`, not `ClubAdmin.extractAdminUsernames(apiClub)`. A helper elsewhere can't be found from the type, so the next caller writes it again. An extension in a class's own companion is a member written the long way (an opaque type has no other way). Exempt: a table's SQL, which its companion holds; a conversion across layers, which goes on the side allowed to know the other (`Club.fromApi`); and a choice one caller makes, such as a report's labels or which cases an algorithm acts on.
 
 ## Values
 

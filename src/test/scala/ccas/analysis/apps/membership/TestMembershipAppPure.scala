@@ -531,6 +531,10 @@ object TestMembershipAppPure extends ZIOSpecDefault {
       test("a closure hides a row from the later of its last listing and the account's last visit") {
         val roster = observedAt(Some(Times.t2))
         assertTrue(roster.hiddenAt(row, Times.t3) == Times.t3, roster.hiddenAt(row, Times.t0) == Times.t2)
+      },
+      test("a membership is hidden at its last sighting only while no until has ended it") {
+        val closed = observedAt(Some(Times.t2)).close(row, Times.t3)
+        assertTrue(row.hiddenAt.isEmpty, row.hidden(Times.t2).hiddenAt.contains(Times.t2), closed.hiddenAt.isEmpty)
       }
     )
   }

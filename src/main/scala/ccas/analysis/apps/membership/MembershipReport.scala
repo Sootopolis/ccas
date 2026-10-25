@@ -269,17 +269,11 @@ private[membership] object MembershipReport {
     val inferredByPlayer = inferred.groupBy(_.playerId)
     def inRange(t: Instant): Boolean = t.compareTo(since) >= 0 && t.compareTo(until) <= 0
 
-    /** A row a closed account hides dates the closure by when the player was last known in (ADR 0022). */
-    def hiddenAt(m: ClubMember): Option[Instant] = m.lastSeen.filter(_ => m.until.isEmpty)
-
     /** The membership `playerId` had before the one starting at `start`, recorded or inferred, by when it started. */
     def previousTo(playerId: PlayerId, start: Instant): Option[PreviousMembership] = {
       val recorded = members.collect {
         case m if m.clubId == clubId && m.playerId == playerId && m.until.isDefined && m.since.isBefore(start) =>
-          m.since -> PreviousMembership.Recorded(
-            lastSeen = m.lastSeen.getOrElse(m.since),
-            until = m.until.getOrElse(m.since)
-          )
+          m.since -> PreviousMembership.of(m)
       }
       val fromMatches = inferredByPlayer.getOrElse(playerId, Nil).collect {
         case membership if membership.lastMatch.isBefore(start) =>
@@ -289,7 +283,7 @@ private[membership] object MembershipReport {
     }
 
     // Find membership changes in the time range
-    val changedMembers = members.filter(m => inRange(m.since) || m.until.exists(inRange) || hiddenAt(m).exists(inRange))
+    val changedMembers = members.filter(m => inRange(m.since) || m.until.exists(inRange) || m.hiddenAt.exists(inRange))
 
     // Group by player
     val membersByPlayer = changedMembers.groupBy(_.playerId)
@@ -326,7 +320,7 @@ private[membership] object MembershipReport {
         }
 
         // Whatever the account's status now: History can see it active again before a roster reopens the row.
-        hiddenAt(cm).filter(inRange).foreach { lastSeen =>
+        cm.hiddenAt.filter(inRange).foreach { lastSeen =>
           playerStates.findLast(_.status != PlayerStatusCategory.Active).foreach { state =>
             changes += AccountClosed(lastSeen, state.status)
           }

@@ -158,7 +158,7 @@ object JobRunner {
         // and interrupts any still in flight when the layer is released, normally none after `interruptAll`. `forkIn`
         // self-cleans — a job's child scope closes when its fiber exits — so completed jobs don't accumulate.
         layerScope <- ZIO.scope
-        configuredLogDir <- AppDir.fromConfig(LogDir)
+        configuredLogDir <- LogDir.fromConfig
         logDir           <- prepareLogDir(configuredLogDir)
         now <- Clock.instant
         _   <- JobRun.markOrphansAsFailed(now).provideEnvironment(ZEnvironment(pgClient))

@@ -38,7 +38,7 @@ object OutputFile {
   // No warning for a relative root, unlike the job-log directory: the `writeAndLog` variants log each absolute path.
   private def writeInternal(subDir: String, appName: String, content: String, ext: String): Task[Path] =
     for {
-      root <- AppDir.fromConfig(Root)
+      root <- Root.fromConfig
       dir  = root.toAbsolutePath.resolve(subDir)
       path = dir.resolve(s"${LocalDateTime.now().format(dateTimeFormat)}-$appName.$ext")
       _ <- ZIO.attemptBlocking(Files.createDirectories(dir))

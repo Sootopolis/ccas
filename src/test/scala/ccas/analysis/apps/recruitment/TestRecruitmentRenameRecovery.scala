@@ -163,7 +163,7 @@ object TestRecruitmentRenameRecovery extends ZIOSpecDefault {
       result.gamesFinished == months.size,
       result.opponentUsernames == Set(Username("opponent")),
       // Predicates must use the post-rename effective username (alice-new), not the stale input. If they used the
-      // stale name, `playerResult` would treat alice-new as the "opponent" and miscount.
+      // stale name, `sideOf` would treat alice-new as the "opponent" and miscount.
       result.timeoutPct.contains(0.0),
       result.username == freshU
     )

@@ -275,7 +275,7 @@ private[recruitment] object RecruitmentExplore {
     def fetchMembers(slug: ClubSlug): Task[List[Username]] =
       ApiClubMembers.get(client, slug).map(_.all.map(_.username).toList)
     def fetchAdmins(slug: ClubSlug): Task[Set[Username]] =
-      ApiClub.get(client, slug).map(ClubAdmin.extractAdminUsernames)
+      ApiClub.get(client, slug).map(_.adminUsernames)
     def fetchBoth(slug: ClubSlug): Task[(List[Username], Set[Username])] =
       if (excludeSourceAdmins) { fetchMembers(slug).zipPar(fetchAdmins(slug)) }
       else { fetchMembers(slug).map(m => (m, Set.empty[Username])) }
@@ -286,7 +286,7 @@ private[recruitment] object RecruitmentExplore {
           case Some(resolved) =>
             // Reuse the resolver's verified ApiClub to skip a duplicate `ApiClub.get(fresh)` on the admins leg.
             // Members still need a fresh fetch (different endpoint).
-            val adminsCached = ZIO.succeed(ClubAdmin.extractAdminUsernames(resolved.api))
+            val adminsCached = ZIO.succeed(resolved.api.adminUsernames)
             val membersFresh = fetchMembers(resolved.slug)
             val retried =
               if (excludeSourceAdmins) { membersFresh.zipPar(adminsCached) }

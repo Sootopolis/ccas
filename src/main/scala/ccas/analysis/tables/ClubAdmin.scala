@@ -6,8 +6,7 @@ import java.time.{Duration, Instant}
 import com.augustnagro.magnum.*
 import zio.ZIO
 
-import ccas.api.club.ApiClub
-import ccas.api.misc.subtypes.{ClubId, PlayerId, Username}
+import ccas.api.misc.subtypes.{ClubId, PlayerId}
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.{connectZIO, transactZIO, withTransaction}
@@ -104,8 +103,4 @@ object ClubAdmin {
         .query[PlayerId].run().toSet
     }
   }
-
-  /** Extracts admin usernames from the admin profile URLs in an [[ApiClub]] response. */
-  def extractAdminUsernames(apiClub: ApiClub): Set[Username] =
-    apiClub.admin.map(url => Username.wrap(url.path.segments.last)).toSet
 }

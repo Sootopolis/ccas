@@ -4,11 +4,13 @@ import java.time.temporal.ChronoUnit
 import java.time.Instant
 
 import zio.{Promise, Ref, UIO}
+import zio.http.URL
 
 import ccas.analysis.tables.{MatchKey, RefSkipReason}
 import ccas.api.clubmatch.TeamMatchTeams
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, TournamentSlug, Username}
 import ccas.utils.client.{ChessComClient, ReportedNotFound}
+import ccas.utils.errors.safeMessage
 
 private[ref] object RefUtils {
 
@@ -75,7 +77,12 @@ private[ref] object RefUtils {
     val playerMatchesUnchanged: Ref[Int],
     val playerTournamentsUnchanged: Ref[Int],
     val clubMatchesUnchanged: Ref[Int]
-  )
+  ) {
+    def isFailedUrl(url: URL): UIO[Boolean] = failedUrls.get.map(_.contains(url.encode))
+
+    def recordFailedUrl(url: URL, error: Throwable, source: String): UIO[Unit] =
+      failedUrls.update(_ + (url.encode -> error.safeMessage)) *> failedUrlSource.update(_ + (url.encode -> source))
+  }
 
   object RefContext {
     def make(client: ChessComClient): UIO[RefContext] =

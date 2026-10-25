@@ -11,11 +11,7 @@ object GameScoring {
 
   /** Classify a game outcome ignoring fairplay flags — the raw result based solely on who won. */
   def classifyGameRaw(winner: Option[BoardGameWinner]): Option[GameResult] =
-    winner.map {
-      case BoardGameWinner.Team1 => GameResult.Win
-      case BoardGameWinner.Team2 => GameResult.Loss
-      case BoardGameWinner.Draw  => GameResult.Draw
-    }
+    winner.map(_.team1Result)
 
   /** Classify a game outcome applying fairplay rules:
     *   - Both flagged: Draw (each side scores 0.5)
@@ -33,19 +29,7 @@ object GameScoring {
         case (true, true)   => GameResult.Draw
         case (true, false)  => GameResult.Loss
         case (false, true)  => GameResult.Win
-        case (false, false) =>
-          w match {
-            case BoardGameWinner.Team1 => GameResult.Win
-            case BoardGameWinner.Team2 => GameResult.Loss
-            case BoardGameWinner.Draw  => GameResult.Draw
-          }
+        case (false, false) => w.team1Result
       }
     }
-
-  /** Score a single game result in the x2 scale (Win=2, Draw=1, Loss=0). */
-  def scoreX2(result: GameResult): Int = result match {
-    case GameResult.Win  => 2
-    case GameResult.Draw => 1
-    case GameResult.Loss => 0
-  }
 }

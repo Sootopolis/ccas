@@ -86,10 +86,10 @@ object TestRecruitmentCriteriaApp extends ZIOSpecDefault {
     val badOngoing = makeCriteria().copy(dailyMinOngoingGames = Some(10), dailyMaxOngoingGames = Some(5))
     val good       = makeCriteria().copy(dailyMinElo = Some(Elo(1000)), dailyMaxElo = Some(Elo(2000)))
     assertTrue(
-      RecruitmentCriteriaApp.validate(badElo).isLeft,
-      RecruitmentCriteriaApp.validate(badRate).isLeft,
-      RecruitmentCriteriaApp.validate(badOngoing).isLeft,
-      RecruitmentCriteriaApp.validate(good).isRight
+      badElo.validate.isLeft,
+      badRate.validate.isLeft,
+      badOngoing.validate.isLeft,
+      good.validate.isRight
     )
   }
 

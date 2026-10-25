@@ -22,7 +22,12 @@ object ServerEnvFile {
   /** One parsed line. `Pair.raw` is the exact text to emit on render (original text for untouched lines; a freshly
     * rendered `KEY=VALUE` for ones `set` produced), while `Pair.value` is the parsed (unquoted) value used by reads.
     */
-  sealed trait Line
+  sealed trait Line {
+    def isBlank: Boolean = this match {
+      case Line.Other(raw) => raw.trim.isEmpty
+      case _               => false
+    }
+  }
   object Line {
     final case class Pair(key: String, value: String, raw: String) extends Line
     final case class Other(raw: String) extends Line
@@ -75,7 +80,7 @@ object ServerEnvFile {
       before ::: rendered :: rest.tail.filterNot(isKey)
     } else {
       // Append after trimming trailing blank lines, mirroring ConfigWriter so re-runs don't accrue blanks.
-      val kept = lines.reverse.dropWhile(isBlankOther).reverse
+      val kept = lines.reverse.dropWhile(_.isBlank).reverse
       kept :+ rendered
     }
   }
@@ -142,12 +147,6 @@ object ServerEnvFile {
           throw e
       }
       ()
-    }
-
-  private def isBlankOther(line: Line): Boolean =
-    line match {
-      case Line.Other(raw) => raw.trim.isEmpty
-      case _               => false
     }
 
   private def renderPair(key: String, value: String): String = s"$key=${quoteIfNeeded(value)}"

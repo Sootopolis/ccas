@@ -47,20 +47,40 @@ object ScheduleParams {
     includeFinished: Option[Boolean],
     refresh: Option[Boolean],
     refreshMinHours: Option[Int]
-  )
-  object HistoryOptions {
-    given JsonCodec[HistoryOptions] = DeriveJsonCodec.gen
-    val Default: HistoryOptions     = HistoryOptions(None, None, None, None)
+  ) {
 
     /** Coalesce the `refresh` flag and `refreshMinHours` into `HistoryApp.discover`'s `refreshMinHours`
       * argument, mirroring `JobRoutes`: an explicit hours value wins, else a bare `refresh: true` means
       * "always refresh" (0 hours), else `None`.
       */
-    def effectiveRefresh(opts: HistoryOptions): Option[Int] =
-      opts.refreshMinHours.orElse(opts.refresh.filter(identity).map(_ => 0))
+    def effectiveRefresh: Option[Int] = refreshMinHours.orElse(refresh.filter(identity).map(_ => 0))
+  }
+  object HistoryOptions {
+    given JsonCodec[HistoryOptions] = DeriveJsonCodec.gen
+    val Default: HistoryOptions     = HistoryOptions(None, None, None, None)
   }
 
-  final case class StatsOptions(since: Option[String], until: Option[String], minGames: Option[Int])
+  final case class StatsOptions(since: Option[String], until: Option[String], minGames: Option[Int]) {
+
+    /** Resolve the optional stats period, enforcing the same both-or-neither rule as `JobRoutes`. `None` →
+      * all-time member stats; `Some((since, until))` → player-of-period; only one supplied → error.
+      */
+    def period: Task[Option[(Instant, Instant)]] =
+      (since, until) match {
+        case (Some(sinceStr), Some(untilStr)) =>
+          for {
+            start <- TimeParser
+              .parseInstantZIO(sinceStr)
+              .mapError(e => new IllegalArgumentException(s"invalid 'since': $e"))
+            end <- TimeParser
+              .parseInstantZIO(untilStr)
+              .mapError(e => new IllegalArgumentException(s"invalid 'until': $e"))
+          } yield Some((start, end))
+        case (None, None) => ZIO.none
+        case _ =>
+          ZIO.fail(new IllegalArgumentException("both 'since' and 'until' are required for period stats"))
+      }
+  }
   object StatsOptions {
     given JsonCodec[StatsOptions] = DeriveJsonCodec.gen
     val Default: StatsOptions     = StatsOptions(None, None, None)
@@ -84,19 +104,5 @@ object ScheduleParams {
         ZIO
           .fromEither(codec.decoder.decodeJson(s))
           .mapError(err => new IllegalArgumentException(s"invalid params JSON: $err"))
-    }
-
-  /** Resolve the optional stats period, enforcing the same both-or-neither rule as `JobRoutes`. `None` →
-    * all-time member stats; `Some((since, until))` → player-of-period; only one supplied → error.
-    */
-  def statsPeriod(opts: StatsOptions): Task[Option[(Instant, Instant)]] =
-    (opts.since, opts.until) match {
-      case (Some(sinceStr), Some(untilStr)) =>
-        for {
-          since <- TimeParser.parseInstantZIO(sinceStr).mapError(e => new IllegalArgumentException(s"invalid 'since': $e"))
-          until <- TimeParser.parseInstantZIO(untilStr).mapError(e => new IllegalArgumentException(s"invalid 'until': $e"))
-        } yield Some((since, until))
-      case (None, None) => ZIO.none
-      case _            => ZIO.fail(new IllegalArgumentException("both 'since' and 'until' are required for period stats"))
     }
 }
