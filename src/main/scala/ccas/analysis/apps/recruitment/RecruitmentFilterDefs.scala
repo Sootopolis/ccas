@@ -336,7 +336,7 @@ private[recruitment] object RecruitmentFilterDefs {
             // Resolve + persist admin rows. The returned set is the canonical admin set for this club —
             // we both store it (for future early-prune runs) and consume it for the rejection check.
             // We only reach here from the empty-admin-rows branch, so existingAdminIds is always empty.
-            val adminUsernames = ClubAdmin.extractAdminUsernames(apiClub)
+            val adminUsernames = apiClub.adminUsernames
             ClubAdminResolver
               .resolveAndPersistAdmins(run.client, apiClub.clubId, adminUsernames, existingAdminIds = Set.empty)
               .map(_.contains(candidatePlayerId))

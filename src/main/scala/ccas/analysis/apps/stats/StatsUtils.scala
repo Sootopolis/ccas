@@ -82,7 +82,7 @@ object StatsUtils {
             case GameResult.Draw => nDraws += 1
             case GameResult.Loss => nLosses += 1
           }
-          ptsX2 += GameScoring.scoreX2(result)
+          ptsX2 += result.scoreX2
         }
       }
     }

@@ -4,7 +4,7 @@ import java.time.Instant
 
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.withTransaction
-import zio.{Promise, RIO, Task, UIO, ZIO}
+import zio.{Promise, RIO, Task, ZIO}
 import zio.http.URL
 import RefUtils.*
 
@@ -148,17 +148,17 @@ private[ref] object RefResolution {
       case None =>
         ZIO.logDebug(s"  ${player.username}: malformed board URL ${m.board.get}").as(ResolveResult.NotFound)
       case Some(boardIdx) =>
-        isFailedUrl(ctx, parsed.matchUrl).flatMap {
+        ctx.isFailedUrl(parsed.matchUrl).flatMap {
           case true => ZIO.succeed(ResolveResult.NotFound)
           case false =>
             fetchMatch(ctx, parsed.matchId, parsed.isLive).foldZIO(
               error =>
                 NetworkUnavailableException.recoverUnless(error)(
-                  recordFailedUrl(ctx, parsed.matchUrl, error, "player").as(ResolveResult.NotFound)
+                  ctx.recordFailedUrl(parsed.matchUrl, error, "player").as(ResolveResult.NotFound)
                 ),
               result =>
                 onTeamMatchTeams(ctx, parsed.matchUrl, "player", result, ResolveResult.NotFound) { teams =>
-                  RefHelpers.findPlayerIsTeam1(teams, player.username) match {
+                  teams.findPlayerIsTeam1(player.username) match {
                     case None => ZIO.succeed(ResolveResult.NotFound)
                     case Some(isTeam1) =>
                       handleVerification(ctx, player) {
@@ -218,13 +218,13 @@ private[ref] object RefResolution {
   ): RIO[ProgressDisplay & PostgresClient, ResolveResult] = {
     val slug     = TournamentSlug.fromUrl(t.`@id`)
     val roundUrl = ApiTournamentRound.getUrl(slug, 1)
-    isFailedUrl(ctx, roundUrl).flatMap {
+    ctx.isFailedUrl(roundUrl).flatMap {
       case true => ZIO.succeed(ResolveResult.NotFound)
       case false =>
         ctx.client.get[ApiTournamentRound](roundUrl).foldZIO(
           error =>
             NetworkUnavailableException.recoverUnless(error)(
-              recordFailedUrl(ctx, roundUrl, error, "player").as(ResolveResult.NotFound)
+              ctx.recordFailedUrl(roundUrl, error, "player").as(ResolveResult.NotFound)
             ),
           round => {
             val playerIdx = round.players.indexWhere(rp => rp.username == player.username)
@@ -329,17 +329,17 @@ private[ref] object RefResolution {
     m: ApiClubMatches.ApiClubMatchFinished
   ): RIO[PostgresClient, Boolean] = {
     val parsed = parseMatchUrl(m.`@id`)
-    isFailedUrl(ctx, parsed.matchUrl).flatMap {
+    ctx.isFailedUrl(parsed.matchUrl).flatMap {
       case true => ZIO.succeed(false)
       case false =>
         fetchMatch(ctx, parsed.matchId, parsed.isLive).foldZIO(
           error =>
             NetworkUnavailableException.recoverUnless(error)(
-              recordFailedUrl(ctx, parsed.matchUrl, error, "club").as(false)
+              ctx.recordFailedUrl(parsed.matchUrl, error, "club").as(false)
             ),
           result =>
             onTeamMatchTeams(ctx, parsed.matchUrl, "club", result, false) { teams =>
-              RefHelpers.findClubIsTeam1(teams, club.slug) match {
+              teams.findClubIsTeam1(club.slug) match {
                 case None => ZIO.succeed(false)
                 case Some(isTeam1) =>
                   val ref = ClubMatchRef(club.clubId, parsed.matchId, parsed.isLive, isTeam1)
@@ -436,7 +436,7 @@ private[ref] object RefResolution {
     ifMissing: A
   )(onTeams: TeamMatchTeams => RIO[R, A]): RIO[R, A] =
     result match {
-      case Left(cause)  => recordFailedUrl(ctx, matchUrl, cause, source).as(ifMissing)
+      case Left(cause)  => ctx.recordFailedUrl(matchUrl, cause, source).as(ifMissing)
       case Right(teams) => onTeams(teams)
     }
 
@@ -472,13 +472,6 @@ private[ref] object RefResolution {
         case Right(()) => onVerified
       }
     )
-
-  private def isFailedUrl(ctx: RefContext, url: URL): UIO[Boolean] =
-    ctx.failedUrls.get.map(_.contains(url.encode))
-
-  private def recordFailedUrl(ctx: RefContext, url: URL, error: Throwable, source: String): UIO[Unit] =
-    ctx.failedUrls.update(_ + (url.encode -> error.safeMessage)) *>
-      ctx.failedUrlSource.update(_ + (url.encode -> source))
 
   private def skipPlayer(
     ctx: RefContext,
@@ -563,11 +556,11 @@ private[ref] object RefResolution {
     if (slug == trp.tournamentSlug) { ZIO.some(false) }
     else {
       val roundUrl = ApiTournamentRound.getUrl(slug, 1)
-      isFailedUrl(ctx, roundUrl).flatMap {
+      ctx.isFailedUrl(roundUrl).flatMap {
         case true => ZIO.none
         case false =>
           ctx.client.get[ApiTournamentRound](roundUrl).foldZIO(
-            error => recordFailedUrl(ctx, roundUrl, error, "player").as(None),
+            error => ctx.recordFailedUrl(roundUrl, error, "player").as(None),
             round => {
               val playerIdx = round.players.indexWhere(rp => rp.username == trp.username)
               ZIO.when(playerIdx >= 0) {

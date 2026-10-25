@@ -97,7 +97,7 @@ private[history] object HistoryBoardBuilder {
     team2FairPlay: Boolean
   ): ScoreX2 = {
     def gameScore(winner: Option[BoardGameWinner]): ScoreX2 = {
-      val t1 = GameScoring.classifyGame(winner, team1FairPlay, team2FairPlay).fold(0)(GameScoring.scoreX2)
+      val t1 = GameScoring.classifyGame(winner, team1FairPlay, team2FairPlay).fold(0)(_.scoreX2)
       val t2 = winner.fold(0)(_ => 2 - t1)
       ScoreX2(t1.toShort, t2.toShort)
     }

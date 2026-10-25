@@ -105,7 +105,7 @@ private[membership] object MembershipClassify {
         // Rejoin: a different `since`. The old membership had ended by the time the new one began.
         val closedMember = storedRoster.close(member = state.member, at = since)
         val newMember    = ClubMember.joined(clubId = clubId, playerId = state.player.playerId, since = since)
-        val rejoined     = Rejoined(ts = since, previous = recorded(closedMember, since))
+        val rejoined     = Rejoined(ts = since, previous = PreviousMembership.of(closedMember))
         val change       = MemberChangeSummary(state.player.playerId, username, Chunk(rejoined))
         ZIO.succeed(
           PhaseBMemberResult(
@@ -181,7 +181,7 @@ private[membership] object MembershipClassify {
       case (None, Some(hidden)) =>
         val closed = storedRoster.close(member = hidden, at = since)
         result(
-          memberChanges = Chunk(Rejoined(ts = since, previous = recorded(closed, since))),
+          memberChanges = Chunk(Rejoined(ts = since, previous = PreviousMembership.of(closed))),
           newMemberships = Chunk(newMember),
           closedMemberships = Chunk(closed),
           reopenedMemberships = Chunk.empty
@@ -195,10 +195,6 @@ private[membership] object MembershipClassify {
         )
     }
   }
-
-  /** `closed`, the membership a rejoin at `since` ended. */
-  private def recorded(closed: ClubMember, since: Instant): PreviousMembership =
-    PreviousMembership.Recorded(lastSeen = closed.lastSeen.getOrElse(since), until = closed.until.getOrElse(since))
 
   private def fetchAndClassifyNewMember(
     client: ChessComClient,

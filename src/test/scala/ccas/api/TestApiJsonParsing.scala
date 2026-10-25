@@ -44,6 +44,18 @@ object TestApiJsonParsing extends ZIOSpecDefault {
         rated   <- readJsonLinesAs[ApiClub](getFileName("club")).runHead.someOrFailException
         unrated <- readJsonLinesAs[ApiClub](getFileName("clubWithoutRating")).runHead.someOrFailException
       } yield assertTrue(rated.averageDailyRating.contains(Elo.wrap(925)), unrated.averageDailyRating.isEmpty)
+    },
+    test("ApiMatchBoard.usernames names each player once, a side given as a bare URL by its last path segment") {
+      val profile = URL.decode("https://api.chess.com/pub/player/gone-player").toOption.get
+      val noPath  = URL.decode("https://api.chess.com").toOption.get
+      for {
+        board <- readJsonLinesAs[ApiMatchBoard](getFileName("matchBoard")).runHead.someOrFailException
+        game = board.games.head
+      } yield assertTrue(
+        board.usernames == List(Username("wonderfolly"), Username("Melayev_77")),
+        game.copy(black = Left(profile)).usernames == List(Username("wonderfolly"), Username("gone-player")),
+        game.copy(black = Left(noPath)).usernames == List(Username("wonderfolly"))
+      )
     }
   )
 

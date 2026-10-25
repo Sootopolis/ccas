@@ -68,11 +68,11 @@ private[recruitment] object RecruitmentStatsHelpers {
           if (tmGamesFinished == 0) None
           else if (criteria.dailyMaxTmTimeoutPercent.isDefined && overallTimeoutPct == 0.0) Some(0.0)
           else {
-            val timeouts = tmGames.count(g => playerResult(g, effectiveUname) == GameResultDetail.Timeout)
+            val timeouts = tmGames.count(g => g.sideOf(effectiveUname).result == GameResultDetail.Timeout)
             Some(timeouts.toDouble / tmGamesFinished * 100.0)
           }
         val lastTmTimeoutAt = tmGames
-          .filter(g => playerResult(g, effectiveUname) == GameResultDetail.Timeout)
+          .filter(g => g.sideOf(effectiveUname).result == GameResultDetail.Timeout)
           .sortBy(_.endTime)(using Ordering[Long].reverse)
           .headOption
           .map(g => Instant.ofEpochSecond(g.endTime))
@@ -85,7 +85,7 @@ private[recruitment] object RecruitmentStatsHelpers {
   def extractLastDailyTimeout(archives: List[ApiPlayerArchive], username: Username): Option[Instant] =
     archives.flatMap(_.games)
       .filter(g => g.timeClass == "daily" && g.`match`.isEmpty) // non-match daily games
-      .filter(g => playerResult(g, username) == GameResultDetail.Timeout)
+      .filter(g => g.sideOf(username).result == GameResultDetail.Timeout)
       .sortBy(_.endTime)(using Ordering[Long].reverse)
       .headOption
       .map(g => Instant.ofEpochSecond(g.endTime))

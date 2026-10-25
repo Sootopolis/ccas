@@ -38,7 +38,14 @@ object ApiPlayerArchive {
     tournament: Option[URL],
     `match`: Option[URL],
     timeClass: String
-  ) derives JsonDecoder
+  ) derives JsonDecoder {
+
+    /** The side `username` played: white if it is white's username, else black. */
+    def sideOf(username: Username): ApiPlayerArchiveGamePlayer = if (white.username == username) white else black
+
+    /** The side `username` played against: black if it is white's username, else white. */
+    def opponentOf(username: Username): ApiPlayerArchiveGamePlayer = if (white.username == username) black else white
+  }
 
   @jsonMemberNames(SnakeCase)
   final case class ApiPlayerArchiveGamePlayer(

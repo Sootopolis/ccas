@@ -42,6 +42,13 @@ object MembershipChange {
     case Inferred(firstMatch: Instant, lastMatch: Instant)
   }
 
+  object PreviousMembership {
+
+    /** The membership the row `ended` recorded, taking its start for an end the row lacks. */
+    def of(ended: ClubMember): PreviousMembership =
+      Recorded(lastSeen = ended.lastSeen.getOrElse(ended.since), until = ended.until.getOrElse(ended.since))
+  }
+
   /** What we held about a club's membership before a reconcile, which the fetched roster is compared against: the
     * members its roster should list, keyed by id and by the name each holds now, every other row by player, every
     * player it has had, every slug it has held, and when its roster was last fetched.

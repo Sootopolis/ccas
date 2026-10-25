@@ -15,6 +15,9 @@ enum GameResult(val score: Double) {
   case Win  extends GameResult(1.0)
   case Draw extends GameResult(0.5)
   case Loss extends GameResult(0.0)
+
+  /** [[score]] doubled, so a match's points stay whole. */
+  def scoreX2: Int = (score * 2).toInt
 }
 
 object GameResult extends EnumJson[GameResult]
@@ -169,6 +172,13 @@ object ClubVisibility extends EnumJson[ClubVisibility]
 
 enum BoardGameWinner {
   case Team1, Team2, Draw
+
+  /** The game's result for team 1. */
+  def team1Result: GameResult = this match {
+    case Team1 => GameResult.Win
+    case Team2 => GameResult.Loss
+    case Draw  => GameResult.Draw
+  }
 }
 
 object BoardGameWinner extends EnumSql[BoardGameWinner]

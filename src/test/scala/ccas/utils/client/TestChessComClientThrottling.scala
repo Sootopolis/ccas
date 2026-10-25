@@ -16,7 +16,6 @@ import com.augustnagro.magnum.sql
 
 import ccas.analysis.tables.Tables
 import ccas.utils.client.ChessComClient.ChessComClientConfig
-import ccas.utils.client.ChessComClient.ChessComClientConfig.*
 import ccas.utils.client.TestChessComClientSupport.*
 import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
 import ccas.utils.sql.PostgresClient.connectZIO

@@ -93,7 +93,7 @@ private[recruitment] object RecruitmentPersistence {
       val boardIdx = m.board.get.path.segments.lastOption.flatMap(_.toIntOption).map(_.toShort)
       ZIO.foreachDiscard(boardIdx) { idx =>
         RefHelpers.fetchTeamMatchTeamsOptional(client, parsed.matchId, parsed.isLive).flatMap { teamsOption =>
-          ZIO.foreachDiscard(teamsOption.flatMap(RefHelpers.findPlayerIsTeam1(_, username))) { isTeam1 =>
+          ZIO.foreachDiscard(teamsOption.flatMap(_.findPlayerIsTeam1(username))) { isTeam1 =>
             PlayerMatchRef.upsert(PlayerMatchRef(playerId, parsed.matchId, parsed.isLive, isTeam1, idx)).unit
           }
         }

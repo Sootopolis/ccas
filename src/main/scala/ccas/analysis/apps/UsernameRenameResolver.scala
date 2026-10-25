@@ -1,12 +1,10 @@
 package ccas.analysis.apps
 
-import zio.http.URL
 import zio.{RIO, ZIO}
 
 import ccas.analysis.apps.ref.RefHelpers
 import ccas.analysis.tables.*
 import ccas.api.clubmatch.ApiMatchBoard
-import ccas.api.clubmatch.ApiMatchBoard.ApiBoardPlayer
 import ccas.api.clubmatch.TeamMatchPlayerStarted
 import ccas.api.misc.subtypes.{ClubMatchId, PlayerId, Username}
 import ccas.api.player.ApiPlayer
@@ -110,7 +108,7 @@ object UsernameRenameResolver {
   ): RIO[PostgresClient, Option[Username]] =
     for {
       boardData <- fetchBoard(client, matchId, board, isLive)
-      usernames = extractBoardUsernames(boardData)
+      usernames = boardData.usernames
       result <-
         if (usernames.size != 2) { ZIO.none }
         else {
@@ -183,21 +181,6 @@ object UsernameRenameResolver {
     else { ApiMatchBoard.dailyUrl(matchId, board.toInt) }
     client.get[ApiMatchBoard](url)
   }
-
-  private[apps] def extractBoardUsernames(boardData: ApiMatchBoard): List[Username] =
-    boardData.games.toList.flatMap { game =>
-      List(extractSideUsername(game.white), extractSideUsername(game.black)).flatten
-    }.distinct
-
-  /** Returns the side's username, or `None` for closed-account placeholders that decode as a bare URL with an empty
-    * path (defensive against Chess.com edge cases — every observed URL has a `/pub/player/<name>` shape, but the
-    * resolver should not throw if the API ever ships an unusual response).
-    */
-  private[apps] def extractSideUsername(side: Either[URL, ApiBoardPlayer]): Option[Username] =
-    side match {
-      case Right(player) => Some(player.username)
-      case Left(url)     => url.path.segments.lastOption.map(Username.wrap)
-    }
 
   /** Finds the opposing player's current username on this board, preferring the DB-first path. If the opposing side
     * is already linked on `club_match_board`, reads their current username from `player_name`. Otherwise falls back to

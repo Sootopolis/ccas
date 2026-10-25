@@ -14,6 +14,9 @@ import ccas.utils.json.JsonDecoding.given
 final case class ApiMatchBoard(boardScores: Map[Username, Double], games: Chunk[ApiBoardGame])
     derives JsonDecoder {
   require(games.nonEmpty && games.length <= 2, s"A board can only have 1 or 2 games:\n$this")
+
+  /** Every player on the board, once each. */
+  def usernames: List[Username] = games.toList.flatMap(_.usernames).distinct
 }
 
 object ApiMatchBoard {
@@ -42,7 +45,17 @@ object ApiMatchBoard {
     rated: Boolean,
     eco: Option[URL],
     `match`: Option[URL]
-  ) derives JsonDecoder
+  ) derives JsonDecoder {
+
+    /** Both sides' usernames. A side that decodes as a bare URL is named by its last path segment, and dropped for a
+      * closed-account placeholder with an empty path (defensive against Chess.com edge cases — every observed URL has
+      * a `/pub/player/<name>` shape, but a caller should not throw if the API ever ships an unusual response).
+      */
+    def usernames: List[Username] = List(white, black).flatMap {
+      case Right(player) => Some(player.username)
+      case Left(url)     => url.path.segments.lastOption.map(Username.wrap)
+    }
+  }
 
   @jsonMemberNames(SnakeCase)
   final case class ApiBoardPlayer(username: Username, rating: Elo, result: Option[GameResultDetail], `@id`: URL)

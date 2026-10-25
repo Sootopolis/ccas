@@ -78,29 +78,30 @@ object TestScheduleParams extends ZIOSpecDefault {
     val neither       = HistoryOptions(None, None, None, None)
     ZIO.succeed(
       assertTrue(
-        HistoryOptions.effectiveRefresh(explicitHours).contains(5),
-        HistoryOptions.effectiveRefresh(bareFlag).contains(0),
-        HistoryOptions.effectiveRefresh(neither).isEmpty
+        explicitHours.effectiveRefresh.contains(5),
+        bareFlag.effectiveRefresh.contains(0),
+        neither.effectiveRefresh.isEmpty
       )
     )
   }
 
-  private def testStatsPeriodBothPresent = test("statsPeriod parses both since and until into a period") {
-    ScheduleParams.statsPeriod(StatsOptions(Some("2026-01-01"), Some("2026-02-01T00:00:00Z"), None)).map { period =>
+  private def testStatsPeriodBothPresent = test("StatsOptions.period parses both since and until into a period") {
+    StatsOptions(Some("2026-01-01"), Some("2026-02-01T00:00:00Z"), None).period.map { period =>
       assertTrue(
         period.contains((Instant.parse("2026-01-01T00:00:00Z"), Instant.parse("2026-02-01T00:00:00Z")))
       )
     }
   }
 
-  private def testStatsPeriodNeitherIsNone = test("statsPeriod with neither since nor until is None (all-time)") {
-    ScheduleParams.statsPeriod(StatsOptions(None, None, None)).map { period =>
-      assertTrue(period.isEmpty)
+  private def testStatsPeriodNeitherIsNone =
+    test("StatsOptions.period with neither since nor until is None (all-time)") {
+      StatsOptions(None, None, None).period.map { period =>
+        assertTrue(period.isEmpty)
+      }
     }
-  }
 
-  private def testStatsPeriodOnlyOneFails = test("statsPeriod with only one of since/until fails") {
-    ScheduleParams.statsPeriod(StatsOptions(Some("2026-01-01"), None, None)).exit.map { exit =>
+  private def testStatsPeriodOnlyOneFails = test("StatsOptions.period with only one of since/until fails") {
+    StatsOptions(Some("2026-01-01"), None, None).period.exit.map { exit =>
       assertTrue(exit.isFailure)
     }
   }

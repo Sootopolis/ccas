@@ -443,16 +443,16 @@ object TestBodyStore extends ZIOSpecDefault {
     */
   private def suiteTimeoutConfig = suite("timeout config")(
     test("absent keys fall back to the compiled defaults") {
-      val resolved = BodyStore.limitsFrom(storeConfig(None, None, None, None))
+      val resolved = storeConfig(None, None, None, None).limits
       assertTrue(
         resolved.map(_.read.toMillis) == Right(BodyStore.DefaultReadTimeoutMs.toLong),
         resolved.map(_.write.toMillis) == Right(BodyStore.DefaultWriteTimeoutMs.toLong)
       )
     },
     test("explicit values win, and a non-positive one fails the layer with an actionable message") {
-      val explicit = BodyStore.limitsFrom(storeConfig(Some(1500), Some(2500), None, None))
-      val zero     = BodyStore.limitsFrom(storeConfig(Some(0), None, None, None))
-      val negative = BodyStore.limitsFrom(storeConfig(None, Some(-1), None, None))
+      val explicit = storeConfig(Some(1500), Some(2500), None, None).limits
+      val zero     = storeConfig(Some(0), None, None, None).limits
+      val negative = storeConfig(None, Some(-1), None, None).limits
       assertTrue(
         explicit.map(_.read.toMillis) == Right(1500L),
         explicit.map(_.write.toMillis) == Right(2500L),
@@ -462,7 +462,7 @@ object TestBodyStore extends ZIOSpecDefault {
     },
     test("the SDK budget is derived from the accessor deadlines, never configured independently") {
       val limits  = BodyStore.BodyStoreLimits(read = 3.seconds, write = 9.seconds)
-      val derived = BodyStore.s3Timeouts(storeConfig(None, None, None, None), limits)
+      val derived = storeConfig(None, None, None, None).s3Timeouts(limits)
       assertTrue(
         derived.map(_.connect.toMillis) == Right(BodyStore.DefaultS3ConnectTimeoutMs.toLong),
         derived.map(_.socket.toMillis) == Right(BodyStore.DefaultS3SocketTimeoutMs.toLong),
@@ -475,7 +475,7 @@ object TestBodyStore extends ZIOSpecDefault {
       // Both derived values now come from `widest`, so a mutation to `limits.write` would survive every other case
       // in this suite — all of which happen to have write >= read.
       val readWidest = BodyStore.BodyStoreLimits(read = 9.seconds, write = 3.seconds)
-      val derived    = BodyStore.s3Timeouts(storeConfig(None, None, None, None), readWidest)
+      val derived    = storeConfig(None, None, None, None).s3Timeouts(readWidest)
       assertTrue(
         derived.map(_.apiCall.toMillis) == Right(9000L),
         derived.map(_.apiCallAttempt.toMillis) == Right(9000L)
@@ -490,8 +490,8 @@ object TestBodyStore extends ZIOSpecDefault {
         read = BodyStore.DefaultReadTimeoutMs.millis,
         write = BodyStore.DefaultWriteTimeoutMs.millis
       )
-      val widerSocket = BodyStore.s3Timeouts(storeConfig(None, None, None, Some(9000)), defaults)
-      val derived     = BodyStore.s3Timeouts(storeConfig(None, None, None, None), defaults)
+      val widerSocket = storeConfig(None, None, None, Some(9000)).s3Timeouts(defaults)
+      val derived     = storeConfig(None, None, None, None).s3Timeouts(defaults)
       assertTrue(
         derived.map(t => t.apiCallAttempt == t.apiCall) == Right(true),
         // The socket timeout must no longer bound an attempt: at the shipped defaults it is strictly smaller...
@@ -505,12 +505,12 @@ object TestBodyStore extends ZIOSpecDefault {
       // status code, in place of `BodyStoreTimeoutException`, which names the operation, budget and size. See
       // `BodyStore.S3Timeouts`.
       val limits  = BodyStore.BodyStoreLimits(read = 5.seconds, write = 10.seconds)
-      val derived = BodyStore.s3Timeouts(storeConfig(None, None, None, None), limits)
+      val derived = storeConfig(None, None, None, None).s3Timeouts(limits)
       assertTrue(derived.map(_.apiCall) == Right(limits.write))
     },
     test("a socket timeout wider than the widest accessor deadline is rejected") {
       val limits = BodyStore.BodyStoreLimits(read = 1.second, write = 2.seconds)
-      val bad    = BodyStore.s3Timeouts(storeConfig(None, None, None, Some(30000)), limits)
+      val bad    = storeConfig(None, None, None, Some(30000)).s3Timeouts(limits)
       assertTrue(bad.left.exists(_.contains("must not exceed the widest accessor deadline")))
     },
     test("the derived durations actually reach the SDK's override configuration") {

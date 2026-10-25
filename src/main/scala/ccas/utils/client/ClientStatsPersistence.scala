@@ -44,7 +44,7 @@ private[ccas] object ClientStatsPersistence {
           configId <- ctx.configIdRef.get.flatMap {
             case Some(id) => ZIO.succeed(id)
             case None =>
-              ClientConfig.ensureConfig(toClientConfig(ctx.config))
+              ClientConfig.ensureConfig(ctx.config.toClientConfig)
                 .provideEnvironment(ZEnvironment(ctx.pgClient))
                 .tap(id => ctx.configIdRef.set(Some(id)))
           }
@@ -78,29 +78,6 @@ private[ccas] object ClientStatsPersistence {
       persistStats(ctx) *>
         ZIO.whenDiscard(cumulative.hasActivity)(ZIO.logInfo(cumulative.summary))
     }
-
-  private def toClientConfig(config: ChessComClient.ThrottleConfig): ClientConfig = {
-    val cc = ClientConfig(
-      configId = 0,
-      configHash = "",
-      recoveryTiers = config.recoveryTiers.toList,
-      minRequestDelayMs = config.minRequestDelayMs,
-      emaTauMs = config.emaTauMs,
-      cooldownSecs = config.cooldown.getSeconds.toInt,
-      cfCooldownSecs = config.cfCooldown.getSeconds.toInt,
-      minTierObservationSecs = config.minTierObservation.getSeconds.toInt,
-      failureWindowSize = config.failureWindowSize,
-      failureThreshold = config.failureThreshold,
-      minSampleSize = config.minSampleSize,
-      retryBaseSecs = config.retryBase.getSeconds.toInt,
-      cfRetrySecs = config.cfRetryDelay.getSeconds.toInt,
-      connectionRetryBaseSecs = config.connectionRetryBase.getSeconds.toInt,
-      max429Retries = config.max429Retries,
-      maxCfRetries = config.maxCfRetries,
-      maxConnectionRetries = config.maxConnectionRetries
-    )
-    cc.copy(configHash = cc.computeHash)
-  }
 
   private def inProgressThrottleMs(stateRef: Ref[ChessComClient.ThrottleState]): UIO[Long] =
     Clock.currentTime(TimeUnit.MILLISECONDS).flatMap { now =>
