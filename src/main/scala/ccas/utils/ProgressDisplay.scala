@@ -21,9 +21,9 @@ import zio.{
   Scope,
   Trace,
   UIO,
+  ULayer,
   Unsafe,
   URIO,
-  URLayer,
   ZIO,
   ZLayer,
   ZLogger
@@ -354,8 +354,8 @@ object ProgressDisplay {
     target: Option[BarChannel]
   )
 
-  /** Synchronous factory — no IO, just allocates the lock + state. Use `live` instead in production code; `make` is
-    * intended for tests that need a noop / quiet display without spinning up the layer machinery.
+  /** Synchronous factory — no IO, just allocates the lock + state. Use [[installed]] instead in production code;
+    * `make` is intended for tests that need a noop / quiet display without spinning up the layer machinery.
     *
     * @param enabled
     *   `true` for stdout rendering. `false` suppresses every stdout side-effect — bar lifecycle (`addBar`/`removeBar`)
@@ -365,7 +365,7 @@ object ProgressDisplay {
 
   /** Test-only factory that injects the bar-redraw (`out`) and defect (`err`) streams so suites can capture output
     * without mutating process-global `System.out` / `System.err`, and the optional global bar channel. Production code
-    * uses [[make]] / [[live]].
+    * uses [[make]] / [[installed]].
     */
   private[ccas] def makeWith(
     enabled: Boolean,
@@ -375,18 +375,27 @@ object ProgressDisplay {
   ): ProgressDisplay =
     new ProgressDisplay(enabled, out, err, globalChannel)
 
-  /** Provides a `ProgressDisplay` service AND replaces ZIO's default console logger with the progress-display
-    * `ZLogger` for the layer's scope. ZIO's default console logger is therefore inactive while this layer is alive —
-    * no double output, no need for a separate `bootstrap = Runtime.removeDefaultLoggers` override.
-    *
-    * On scope close, the default-logger removal and the custom-logger registration are both reverted (both helpers
-    * are scope-bound under the hood) and `acquireRelease` runs `finishAllSync()` to wipe any remaining bars.
+  /** Runs `zio` with a display provided and its logger installed before `zio` builds any layer of its own, so what
+    * those layers log while they're built comes out in this format. A layer built beside the display instead logs
+    * through ZIO's default logger until the build ends, as the server's pool did (#337); the way in from outside
+    * `ccas.utils` is therefore this, not [[live]].
     *
     * @param showProgress
     *   `true` for interactive CLI use (renders bars + log lines on stdout). `false` for server / non-interactive mode
     *   (suppresses bar rendering; `ZIO.log*` still fires through the custom formatter, just without bar dance).
     */
-  def live(showProgress: Boolean): URLayer[Scope, ProgressDisplay] =
+  def installed[R, E, A](showProgress: Boolean)(zio: ZIO[R & ProgressDisplay, E, A]): ZIO[R, E, A] =
+    zio.provideSomeLayer[R](live(showProgress))
+
+  /** Provides a `ProgressDisplay` service AND replaces ZIO's default console logger with the progress-display
+    * `ZLogger` for the layer's scope. ZIO's default console logger is therefore inactive while this layer is alive —
+    * no double output, no need for a separate `bootstrap = Runtime.removeDefaultLoggers` override.
+    *
+    * On scope close, the default-logger removal and the custom-logger registration are both reverted (both helpers
+    * are scope-bound under the hood) and `acquireRelease` runs `finishAllSync()` to wipe any remaining bars. Private to
+    * `ccas.utils`, so that no app lists it beside the layers whose logging it should carry: see [[installed]].
+    */
+  private[utils] def live(showProgress: Boolean): ULayer[ProgressDisplay] =
     liveWith(showProgress, System.out, System.err)
 
   /** Test-only variant of [[live]] that injects the bar-redraw (`out`) and defect (`err`) streams, so suites that
@@ -397,7 +406,7 @@ object ProgressDisplay {
     showProgress: Boolean,
     out: PrintStream,
     err: PrintStream
-  ): URLayer[Scope, ProgressDisplay] =
+  ): ULayer[ProgressDisplay] =
     Runtime.removeDefaultLoggers ++ ZLayer.scoped {
       for {
         channel <- SubscriptionRef.make(Map.empty[Int, BarSnapshot])

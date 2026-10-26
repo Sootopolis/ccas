@@ -53,8 +53,7 @@ object CcasServer extends ZIOAppDefault {
 
       serveWith(
         pidFileOption = detachedPidFileOption,
-        services = ZLayer.makeSome[Scope, Served](
-          ProgressDisplay.live(showProgress = false),
+        services = ZLayer.makeSome[ProgressDisplay, Served](
           ChessComClient.live("server"),
           HttpClientLayer.live,
           BodyStore.live,
@@ -78,16 +77,18 @@ object CcasServer extends ZIOAppDefault {
   // followers' requests, then the HTTP server, whose drain would otherwise wait on those requests.
   private[server] def serveWith(
     pidFileOption: Option[Path],
-    services: ZLayer[Scope, Throwable, Served],
+    services: ZLayer[ProgressDisplay, Throwable, Served],
     server: ZLayer[Any, Throwable, Server]
   ): ZIO[Scope, Throwable, Unit] =
-    (pidFileManaged(pidFileOption) *> ZIO.scoped {
-      for {
-        serverEnv <- server.build
-        _         <- ZIO.addFinalizer(ZIO.serviceWithZIO[JobRunner](_.interruptAll))
-        _         <- running.provideSomeEnvironment[Scope & Served](_ ++ serverEnv)
-      } yield ()
-    }).provideSomeLayer[Scope](services)
+    ProgressDisplay.installed(showProgress = false) {
+      (pidFileManaged(pidFileOption) *> ZIO.scoped {
+        for {
+          serverEnv <- server.build
+          _         <- ZIO.addFinalizer(ZIO.serviceWithZIO[JobRunner](_.interruptAll))
+          _         <- running.provideSomeEnvironment[Scope & Served](_ ++ serverEnv)
+        } yield ()
+      }).provideSomeLayer[Scope & ProgressDisplay](services)
+    }
 
   private def running: URIO[Scope & Served & Server, Unit] = {
     val routes: Routes[JobRunner & ChessComClient & PostgresClient, Nothing] =

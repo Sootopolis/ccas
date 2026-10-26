@@ -26,54 +26,55 @@ object MembershipApp extends ZIOAppDefault {
   private val MEMBERSHIP = "membership"
 
   override def run: RIO[ZIOAppArgs & Scope, Unit] =
-    (for {
-      args   <- ZIOAppArgs.getArgs
-      parsed <- parseArgs(args)
-      mode   <- parseRunMode(parsed.flags)
-      _ <- ZIO.foreachDiscard(parsed.slugs) { clubName =>
-        mode match {
-          case ReconcileOnly =>
-            for {
-              (result, invitations) <- reconcileAndReport(
-                clubSlug = clubName,
-                expectedClubIdOption = None,
-                trustUsernames = true,
-                trigger = RunTrigger.Cli,
-                jobRunIdOption = None
-              )
-              _ <- OutputFile.writeAndLog(
-                MEMBERSHIP,
-                clubName,
-                MembershipReport.formatReconciliation(result, invitations)
-              )
-            } yield ()
-          case SinceNow(since) =>
-            for {
-              result <- reconcile(clubSlug = clubName, expectedClubIdOption = None)
-              club   <- reconciledClub(result)
-              until  <- Clock.instant
-              rr     <- MembershipReport.report(club, since, until)
-              _      <- OutputFile.writeAndLog(MEMBERSHIP, club.slug, MembershipReport.formatReport(rr))
-            } yield ()
-          case SinceUntil(since, until) =>
-            for {
-              club <- reconcileIfStale(clubName, until)
-              rr   <- MembershipReport.report(club, since, until)
-              _    <- OutputFile.writeAndLog(MEMBERSHIP, club.slug, MembershipReport.formatReport(rr))
-            } yield ()
+    ProgressDisplay.installed(showProgress = true) {
+      (for {
+        args   <- ZIOAppArgs.getArgs
+        parsed <- parseArgs(args)
+        mode   <- parseRunMode(parsed.flags)
+        _ <- ZIO.foreachDiscard(parsed.slugs) { clubName =>
+          mode match {
+            case ReconcileOnly =>
+              for {
+                (result, invitations) <- reconcileAndReport(
+                  clubSlug = clubName,
+                  expectedClubIdOption = None,
+                  trustUsernames = true,
+                  trigger = RunTrigger.Cli,
+                  jobRunIdOption = None
+                )
+                _ <- OutputFile.writeAndLog(
+                  MEMBERSHIP,
+                  clubName,
+                  MembershipReport.formatReconciliation(result, invitations)
+                )
+              } yield ()
+            case SinceNow(since) =>
+              for {
+                result <- reconcile(clubSlug = clubName, expectedClubIdOption = None)
+                club   <- reconciledClub(result)
+                until  <- Clock.instant
+                rr     <- MembershipReport.report(club, since, until)
+                _      <- OutputFile.writeAndLog(MEMBERSHIP, club.slug, MembershipReport.formatReport(rr))
+              } yield ()
+            case SinceUntil(since, until) =>
+              for {
+                club <- reconcileIfStale(clubName, until)
+                rr   <- MembershipReport.report(club, since, until)
+                _    <- OutputFile.writeAndLog(MEMBERSHIP, club.slug, MembershipReport.formatReport(rr))
+              } yield ()
+          }
         }
-      }
-    } yield ())
-      // A systemic outage aborts: an in-flight reconcile persists nothing its roster implied (one final transaction),
-      // so the residue is an incomplete `membership_run` row `selectLatestCompleted` ignores, and any club lists kept.
-      .catchSome(NetworkUnavailableException.abortRun("MembershipApp", "run left incomplete")(exit(ExitCode.failure)))
-      .provideSomeAuto(
-        ProgressDisplay.live(showProgress = true),
-        ChessComClient.live(MEMBERSHIP),
-        HttpClientLayer.live,
-        BodyStore.live,
-        PostgresClient.live(onInit = Tables.ensureTablesOnInit)
-      )
+      } yield ())
+        // A systemic outage aborts: an in-flight reconcile persists nothing its roster implied (one final transaction),
+        // so the residue is an incomplete `membership_run` row `selectLatestCompleted` ignores, and any club lists kept.
+        .catchSome(NetworkUnavailableException.abortRun("MembershipApp", "run left incomplete")(exit(ExitCode.failure)))
+        .provideSomeAuto(
+          ChessComClient.live(MEMBERSHIP),
+          HttpClientLayer.live,
+          BodyStore.live,
+          PostgresClient.live(onInit = Tables.ensureTablesOnInit)
+        )
+    }
 
   private sealed trait RunMode
   private case object ReconcileOnly                             extends RunMode

@@ -11,11 +11,12 @@ import ccas.utils.sql.PostgresClient
 object ServerTables extends ZIOAppDefault {
 
   override def run: RIO[Scope, Unit] =
-    for {
-      _ <- ProgressDisplay.live(showProgress = false).build
-      _ <- ensureTables.provide(PostgresClient.live())
-      _ <- ZIO.logInfo("All tables ensured")
-    } yield ()
+    ProgressDisplay.installed(showProgress = false) {
+      for {
+        _ <- ensureTables.provide(PostgresClient.live())
+        _ <- ZIO.logInfo("All tables ensured")
+      } yield ()
+    }
 
   def ensureTables: RIO[PostgresClient, Unit] =
     for {

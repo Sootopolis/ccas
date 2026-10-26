@@ -35,27 +35,28 @@ object HistoryApp extends ZIOAppDefault {
   // --- CLI entry point ---
 
   override def run: RIO[ZIOAppArgs & Scope, Unit] =
-    (for {
-      rawArgs <- ZIOAppArgs.getArgs
-      parsed  <- ZIO.fromEither(parseArgs(rawArgs)).mapError(BadRequestException(_))
-      _ <- discoverBatch(
-        parsed.slugs,
-        full = parsed.full,
-        includeFinished = parsed.includeFinished,
-        refreshMinHours = parsed.refreshMinHours
-      )
-    } yield ())
-      // A systemic outage aborts rather than marking matches `ApiError`, building dataless boards, or persisting
-      // misleading run counters. Committed per-match work stays; pending matches re-process next run; the
-      // `history_run` row stays incomplete (a failure doesn't run the interrupt-finalizer).
-      .catchSome(NetworkUnavailableException.abortRun("HistoryApp", "run left incomplete")(exit(ExitCode.failure)))
-      .provideSomeAuto(
-        ProgressDisplay.live(showProgress = true),
-        ChessComClient.live("history"),
-        HttpClientLayer.live,
-        BodyStore.live,
-        PostgresClient.live(onInit = Tables.ensureTablesOnInit)
-      )
+    ProgressDisplay.installed(showProgress = true) {
+      (for {
+        rawArgs <- ZIOAppArgs.getArgs
+        parsed  <- ZIO.fromEither(parseArgs(rawArgs)).mapError(BadRequestException(_))
+        _ <- discoverBatch(
+          parsed.slugs,
+          full = parsed.full,
+          includeFinished = parsed.includeFinished,
+          refreshMinHours = parsed.refreshMinHours
+        )
+      } yield ())
+        // A systemic outage aborts rather than marking matches `ApiError`, building dataless boards, or persisting
+        // misleading run counters. Committed per-match work stays; pending matches re-process next run; the
+        // `history_run` row stays incomplete (a failure doesn't run the interrupt-finalizer).
+        .catchSome(NetworkUnavailableException.abortRun("HistoryApp", "run left incomplete")(exit(ExitCode.failure)))
+        .provideSomeAuto(
+          ChessComClient.live("history"),
+          HttpClientLayer.live,
+          BodyStore.live,
+          PostgresClient.live(onInit = Tables.ensureTablesOnInit)
+        )
+    }
 
   private[history] case class HistoryAppArgs(
     slugs: NonEmptyChunk[ClubSlug],

@@ -41,24 +41,25 @@ object RefApp extends ZIOAppDefault {
   )
 
   override def run: RIO[ZIOAppArgs & Scope, Unit] =
-    (for {
-      args <- ZIOAppArgs.getArgs
-      _    <- ZIO.whenDiscard(args.contains("--help"))(ZIO.fail(BadRequestException(help)))
-      forceSkipped = args.contains("--force-skipped")
-      upgradeRefs  = args.contains("--upgrade-refs")
-      data <- populate(forceSkipped = forceSkipped, upgradeRefs = upgradeRefs)
-      _    <- OutputFile.writeAndLogGlobal("ref", formatReport(data), "_ccas")
-    } yield ())
-      // A systemic outage aborted the run (no skips recorded). `exit` keeps it inside the ProgressDisplay logger
-      // scope; `ZIO.fail` would double-report the cause through ZIOAppDefault once it escaped the layer scope.
-      .catchSome(NetworkUnavailableException.abortRun("RefApp", "no skips recorded")(exit(ExitCode.failure)))
-      .provideSome[ZIOAppArgs & Scope](
-        ProgressDisplay.live(showProgress = true),
-        ChessComClient.live("ref"),
-        HttpClientLayer.live,
-        BodyStore.live,
-        PostgresClient.live(onInit = Tables.ensureTablesOnInit)
-      )
+    ProgressDisplay.installed(showProgress = true) {
+      (for {
+        args <- ZIOAppArgs.getArgs
+        _    <- ZIO.whenDiscard(args.contains("--help"))(ZIO.fail(BadRequestException(help)))
+        forceSkipped = args.contains("--force-skipped")
+        upgradeRefs  = args.contains("--upgrade-refs")
+        data <- populate(forceSkipped = forceSkipped, upgradeRefs = upgradeRefs)
+        _    <- OutputFile.writeAndLogGlobal("ref", formatReport(data), "_ccas")
+      } yield ())
+        // A systemic outage aborted the run (no skips recorded). `exit` keeps it inside the ProgressDisplay logger
+        // scope; `ZIO.fail` would double-report the cause through ZIOAppDefault once it escaped the layer scope.
+        .catchSome(NetworkUnavailableException.abortRun("RefApp", "no skips recorded")(exit(ExitCode.failure)))
+        .provideSome[ZIOAppArgs & ProgressDisplay](
+          ChessComClient.live("ref"),
+          HttpClientLayer.live,
+          BodyStore.live,
+          PostgresClient.live(onInit = Tables.ensureTablesOnInit)
+        )
+    }
 
   private case class RefAppResolutionStats(total: Int, resolvedDb: Int, resolvedApi: Int, skippedNew: Int)
   private case class RefAppUpgradeStats(
