@@ -1,10 +1,11 @@
 package ccas.server
 
+import java.io.{ByteArrayOutputStream, PrintStream}
+import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path, Paths}
-import java.util.concurrent.ConcurrentLinkedQueue
 
 import org.postgresql.ds.PGSimpleDataSource
-import zio.{Exit, Fiber, Promise, Ref, RIO, Runtime, Scope, Task, UIO, URIO, ZIO, ZLayer, ZLogger}
+import zio.{Exit, Fiber, Promise, Ref, RIO, Scope, Task, UIO, URIO, ZIO, ZLayer}
 import zio.http.{Client, Server}
 import zio.http.netty.NettyConfig
 import zio.stream.ZStream
@@ -16,13 +17,15 @@ import ccas.cli.CcasApiClient
 import ccas.server.jobs.{JobEffect, JobKind, JobLogs, JobRun, JobRunner}
 import ccas.server.routes.JobRoutes.JobStatusResponse
 import ccas.server.scheduler.JobScheduler
+import ccas.utils.JobLogSink
 import ccas.utils.client.{BodyStore, FsBodyStore, TestChessComClientSupport}
 import ccas.utils.sql.{DatabaseAddress, PostgresClient}
 
 /** What `CcasServer` does at boot: the pid file a detached server owns, what it says and asks about its database
-  * (#320), the order it shuts down in and the logger its HTTP server inherits (#334). The boot line's client never
-  * connects: the line has to come out before the first connection, so a boot that fails to connect still names where
-  * it tried. The terminal conversation itself is not reachable from a test; [[BootGuard]]'s decisions are.
+  * (#320), the order it shuts down in and the logger its services and HTTP server inherit (#334, #337). The boot
+  * line's client never connects: the line has to come out before the first connection, so a boot that fails to
+  * connect still names where it tried. The terminal conversation itself is not reachable from a test;
+  * [[BootGuard]]'s decisions are.
   */
 object TestServerBoot extends ZIOSpecDefault {
 
@@ -72,13 +75,13 @@ object TestServerBoot extends ZIOSpecDefault {
       } yield assertTrue(exit.isInterruptedOnly, followed.isSuccess, elapsed.toMillis < 5000)
     }.provide(Client.default) @@ TestAspect.withLiveClock,
     // So the server's log keeps one format, and zio-http's warning for a read-idle reap meets ADR 0015's filter.
-    test("the HTTP server logs through the logger the services install, as the loops and jobs do") {
+    test("the HTTP server logs through the server's display, as the loops and jobs do") {
       for {
         booted <- boot(pidFileOption = None)
         api    <- CcasApiClient.live(s"http://127.0.0.1:${booted.port}")
         _      <- api.getJson[JobStatusResponse]("/api/jobs/job-1").exit
         _      <- booted.fiber.interrupt
-      } yield assertTrue(booted.serviceLog.contains("status of job-1 requested"))
+      } yield assertTrue(booted.logged.contains("status of job-1 requested"))
     }.provide(Client.default) @@ TestAspect.withLiveClock,
     test("a boot names its database before it connects, so a boot that can't connect still says where it tried") {
       for {
@@ -92,6 +95,22 @@ object TestServerBoot extends ZIOSpecDefault {
         !messages.exists(_.contains("hunter2"))
       )
     }.provide(ZTestLogger.default),
+    // Only the pool is real, and its init fails the boot once it has named the database, so neither the other services
+    // nor the HTTP server are ever built.
+    test("a boot names its database in the server's format, as it logs every line after it") {
+      val pool = PostgresClient.live(prefix = "databaseUnreachable", onInit = CcasServer.poolInit)
+      val rest = ZLayer.fail(new IllegalStateException("not reached: the pool fails first"))
+      for {
+        log <- ZIO.succeed(new ByteArrayOutputStream())
+        exit <- JobLogSink.currentSink.locally(capturing(log)) {
+          ZIO.scoped(CcasServer.serveWith(pidFileOption = None, services = pool >>> rest, server = unbuiltServer)).exit
+        }
+        lines = JobLogSink.stripAnsi(log.toString(StandardCharsets.UTF_8)).linesIterator.toList
+      } yield assertTrue(
+        exit.isFailure,
+        lines.exists(_.matches("""\[INFO \d{2}:\d{2}:\d{2}\] Database: 127\.0\.0\.1:1/nowhere"""))
+      )
+    },
     suite("BootGuard")(
       test("a loopback database boots without asking") {
         assertTrue(BootGuard.question(resolved = Right(local), detachedChild = false).isEmpty)
@@ -121,30 +140,43 @@ object TestServerBoot extends ZIOSpecDefault {
   )
 
   /** A `CcasServer.serveWith` running in the background over stub services, with both loops started and the HTTP
-    * server listening on `port`. `events` is what the stubs have recorded, in order, and `serviceLog` every message
-    * logged through the logger the stub services install, as `ProgressDisplay.live` installs its own.
+    * server listening on `port`. `events` is what the stubs have recorded, in order, and `logged` every line the
+    * server's display has written outside a job, which logs to its own sink, as the console would show them.
     */
   private final case class Booted(
     fiber: Fiber[Throwable, Unit],
     port: Int,
     events: Ref[Vector[String]],
-    serviceLog: ConcurrentLinkedQueue[String]
-  )
+    log: ByteArrayOutputStream
+  ) {
+    def logged: String = log.toString(StandardCharsets.UTF_8)
+  }
 
   private def boot(pidFileOption: Option[Path]): Task[Booted] =
     for {
       events           <- Ref.make(Vector.empty[String])
-      serviceLog       <- ZIO.succeed(new ConcurrentLinkedQueue[String]())
+      log              <- ZIO.succeed(new ByteArrayOutputStream())
       schedulerStarted <- Promise.make[Nothing, Unit]
       sweepStarted     <- Promise.make[Nothing, Unit]
       jobsInterrupted  <- Promise.make[Nothing, Unit]
       built            <- Promise.make[Nothing, Server]
-      services = stubServices(events, serviceLog, schedulerStarted, sweepStarted, jobsInterrupted, pidFileOption)
-      fiber <- ZIO.scoped(CcasServer.serveWith(pidFileOption, services, markedServer(events, built))).fork
+      services = stubServices(events, schedulerStarted, sweepStarted, jobsInterrupted, pidFileOption)
+      // The display writes each line to the sink the logging fiber carries, and the server's fibers inherit this one.
+      fiber <- JobLogSink.currentSink.locally(capturing(log)) {
+        ZIO.scoped(CcasServer.serveWith(pidFileOption, services, markedServer(events, built))).fork
+      }
       ready = schedulerStarted.await *> sweepStarted.await *> built.await.flatMap(_.port)
       // Racing the join turns a boot that fails before it is ready into a failure rather than a hang.
       port <- ready.raceFirst(fiber.join *> ZIO.never)
-    } yield Booted(fiber, port, events, serviceLog)
+    } yield Booted(fiber, port, events, log)
+
+  private def capturing(log: ByteArrayOutputStream): JobLogSink = {
+    val out = new PrintStream(log, true, StandardCharsets.UTF_8)
+    new JobLogSink { override def writeConsoleSync(line: String): Unit = out.println(line) }
+  }
+
+  // Port 0, so a change that built it after all could never take a real server's port.
+  private val unbuiltServer = Server.defaultWith(_.binding("127.0.0.1", 0))
 
   /** Boots, then interrupts the server as a SIGTERM would. Returns its exit and the events the stubs recorded. */
   private def serveThenInterrupt(
@@ -158,7 +190,6 @@ object TestServerBoot extends ZIOSpecDefault {
 
   private def stubServices(
     events: Ref[Vector[String]],
-    serviceLog: ConcurrentLinkedQueue[String],
     schedulerStarted: Promise[Nothing, Unit],
     sweepStarted: Promise[Nothing, Unit],
     jobsInterrupted: Promise[Nothing, Unit],
@@ -168,7 +199,7 @@ object TestServerBoot extends ZIOSpecDefault {
     val pidFileAtPoolClose = ZIO.foreachDiscard(pidFileOption) { path =>
       ZIO.whenZIODiscard(ZIO.attemptBlocking(Files.exists(path)).orDie)(record("pid file present at pool close"))
     }
-    Runtime.addLogger(ZLogger.simple[String, Any](serviceLog.add)) ++ ZLayer.make[CcasServer.Served](
+    ZLayer.make[CcasServer.Served](
       ZLayer.succeed[JobScheduler](new LoopingScheduler(schedulerStarted, record("scheduler loop interrupted"))),
       ZLayer.scoped(
         ZIO.acquireRelease(ZIO.succeed[JobRunner](new StubJobRunner(record, sweepStarted, jobsInterrupted))) { _ =>
