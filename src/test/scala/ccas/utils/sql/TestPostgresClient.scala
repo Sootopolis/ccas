@@ -166,19 +166,55 @@ object TestPostgresClient extends ZIOSpecDefault {
       val err = PostgresClient.normalizeJdbcUrl("postgresql:///db").left.toOption.getOrElse("")
       assertTrue(err.contains("no host"), err.contains("local-socket"))
     },
-    test("a host-less JDBC URL passes through, since pgjdbc accepts it") {
-      // pgjdbc parses `jdbc:postgresql:///ccas` (PGHOST empty, port and database from its defaults), so rejecting it
-      // would break an existing working configuration that this change never needed to touch.
-      val resolved = PostgresClient.normalizeJdbcUrl("jdbc:postgresql:///ccas?user=u")
-      assertTrue(resolved.map(_.jdbcUrl).contains("jdbc:postgresql:///ccas?user=u"))
+    test("a host-less JDBC URL keeps its empty host, with its query credentials lifted out") {
+      val resolved =
+        PostgresClient.normalizeJdbcUrl("jdbc:postgresql:///ccas?user=alice&password=hunter2&sslmode=disable")
+      assertTrue(
+        resolved.map(_.jdbcUrl).contains("jdbc:postgresql:///ccas?sslmode=disable"),
+        resolved.flatMap(_.user.toRight("")).contains("alice"),
+        resolved.flatMap(_.password.toRight("")).contains("hunter2")
+      )
+    },
+    test("a host-less JDBC URL has its userinfo credentials lifted out") {
+      // pgjdbc rejects this shape as written, and logs the rejection with the password in it as the port.
+      val resolved = PostgresClient.normalizeJdbcUrl("jdbc:postgresql://alice:hunter2@/ccas")
+      assertTrue(
+        resolved.map(_.jdbcUrl).contains("jdbc:postgresql:///ccas"),
+        resolved.flatMap(_.user.toRight("")).contains("alice"),
+        resolved.flatMap(_.password.toRight("")).contains("hunter2")
+      )
+    },
+    test("a JDBC URL with no '//' has its query credentials lifted out") {
+      val resolved =
+        PostgresClient.normalizeJdbcUrl("jdbc:postgresql:ccas?user=alice&password=hunter2&sslmode=disable")
+      assertTrue(
+        resolved.map(_.jdbcUrl).contains("jdbc:postgresql:ccas?sslmode=disable"),
+        resolved.flatMap(_.user.toRight("")).contains("alice"),
+        resolved.flatMap(_.password.toRight("")).contains("hunter2")
+      )
+    },
+    test("a '?' before the '@' is rejected without echoing the URL") {
+      val errors = List(
+        "postgresql://alice:1234?x9@host/db",
+        "jdbc:postgresql://alice:1234?x9@host/db",
+        "jdbc:postgresql://alice:1234?x9@/db"
+      ).map(PostgresClient.normalizeJdbcUrl(_).left.toOption.getOrElse(""))
+      assertTrue(
+        errors.forall(_.contains("percent-encode")),
+        !errors.exists(err => err.contains("alice") || err.contains("1234") || err.contains("x9"))
+      )
     },
     test("a repeated credential parameter takes the last, as pgjdbc does") {
       val resolved = PostgresClient.normalizeJdbcUrl("jdbc:postgresql://host/db?user=first&user=second")
       assertTrue(resolved.flatMap(_.user.toRight("")).contains("second"))
     },
     test("scheme matching is case-insensitive") {
-      val resolved = PostgresClient.normalizeJdbcUrl("PostgreSQL://u:p@Host/db?sslmode=require")
-      assertTrue(resolved.map(_.jdbcUrl).contains("jdbc:postgresql://Host/db?sslmode=require"))
+      val resolved  = PostgresClient.normalizeJdbcUrl("PostgreSQL://u:p@Host/db?sslmode=require")
+      val shorthand = PostgresClient.normalizeJdbcUrl("JDBC:PostgreSQL:Ccas")
+      assertTrue(
+        resolved.map(_.jdbcUrl).contains("jdbc:postgresql://Host/db?sslmode=require"),
+        shorthand.map(_.jdbcUrl).contains("jdbc:postgresql:Ccas")
+      )
     },
     test("further libpq-only parameters are dropped") {
       val resolved = PostgresClient.normalizeJdbcUrl(
@@ -211,8 +247,7 @@ object TestPostgresClient extends ZIOSpecDefault {
       assertTrue(addressOf("postgresql://u:p@ep-x.neon.tech/neondb").map(_.render).contains("ep-x.neon.tech/neondb"))
     },
     test("a host-less JDBC URL has no address, even with credentials in its userinfo") {
-      // The one form `normalizeJdbcUrl` passes through untouched, so its userinfo is still in the URL Hikari gets. A
-      // password of `12/34` would otherwise read as host `alice`, port 12.
+      // Its userinfo is lifted out first, so a password of `12/34` can't read as host `alice`, port 12.
       assertTrue(
         addressOf("jdbc:postgresql:///ccas").isEmpty,
         addressOf("jdbc:postgresql://alice:hunter2@/ccas").isEmpty,
@@ -223,8 +258,8 @@ object TestPostgresClient extends ZIOSpecDefault {
       assertTrue(addressOf("jdbc:h2:mem:test").isEmpty, addressOf("jdbc:mysql://host:3306/db").isEmpty)
     },
     test("a URL whose host part is not a host has no address, rather than a fragment of a password") {
-      // An unescaped '?' in a password ends the authority early, leaving `alice:hun` where the host should be.
-      assertTrue(addressOf("postgresql://alice:hun?ter2@host/db").isEmpty)
+      // An unescaped '/' then '?' in a password end the authority early, leaving `alice:hun` as the host.
+      assertTrue(addressOf("postgresql://alice:hun/ter?2@host/db").isEmpty)
     },
     test("localhost, 127.x and ::1 are loopback; a remote or multi-host address is not") {
       def loopback(hostPort: String) = DatabaseAddress(hostPort, "/ccas").isLoopback

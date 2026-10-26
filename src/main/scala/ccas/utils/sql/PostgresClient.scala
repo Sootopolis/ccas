@@ -192,24 +192,24 @@ object PostgresClient {
     def after(prefix: String): String = url.drop(prefix.length)
 
     if (url.isEmpty) Left(s"database.url is blank — $shapeHint")
-    else if (lowered.startsWith("jdbc:postgresql://")) rewrite(after("jdbc:postgresql://"), url, alreadyJdbc = true)
-    else if (lowered.startsWith("jdbc:")) Right(ResolvedJdbcUrl(url, None, None))
-    else if (lowered.startsWith("postgresql://")) rewrite(after("postgresql://"), url, alreadyJdbc = false)
-    else if (lowered.startsWith("postgres://")) rewrite(after("postgres://"), url, alreadyJdbc = false)
+    else if (lowered.startsWith("jdbc:postgresql://")) rewrite(after("jdbc:postgresql://"), alreadyJdbc = true)
+    else if (lowered.startsWith("jdbc:postgresql:")) {
+      // pgjdbc's shorthand for a local database, `jdbc:postgresql:db`: no authority, but its query can carry a login.
+      val (database, query) = splitQuery(after("jdbc:postgresql:"))
+      Right(liftQueryCredentials(s"jdbc:postgresql:$database", query))
+    } else if (lowered.startsWith("jdbc:")) Right(ResolvedJdbcUrl(url, None, None))
+    else if (lowered.startsWith("postgresql://")) rewrite(after("postgresql://"), alreadyJdbc = false)
+    else if (lowered.startsWith("postgres://")) rewrite(after("postgres://"), alreadyJdbc = false)
     else Left(s"database.url has an unrecognised scheme — $shapeHint")
   }
 
   /** Rebuild `<authority>[/db][?query]` (everything after `://`) as a credential-free `jdbc:postgresql://` URL.
-    * `original` is the URL `rest` came from, and `alreadyJdbc` says whether it was already in JDBC form — together they
-    * let an input pgjdbc can handle but this cannot improve on pass through unchanged rather than be rejected.
+    * `alreadyJdbc` says whether `rest` came from a JDBC URL, whose empty host pgjdbc accepts.
     */
-  private def rewrite(rest: String, original: String, alreadyJdbc: Boolean): Either[String, ResolvedJdbcUrl] = {
+  private def rewrite(rest: String, alreadyJdbc: Boolean): Either[String, ResolvedJdbcUrl] = {
     // Split the query off first: a password may legitimately contain '@' or '/', so searching the whole string for the
     // userinfo/host boundary would mis-split a URL whose query carries the credentials.
-    val (beforeQuery, query) = rest.indexOf('?') match {
-      case -1 => (rest, "")
-      case i  => (rest.take(i), rest.drop(i + 1))
-    }
+    val (beforeQuery, query) = splitQuery(rest)
 
     // Last '@', not first: an unescaped '@' inside a password is common enough that libpq documents percent-encoding
     // it, and splitting at the last one keeps such a URL working instead of producing a nonsense host.
@@ -223,12 +223,17 @@ object PostgresClient {
       case i  => (hostAndPath.take(i), hostAndPath.drop(i))
     }
 
-    // An empty host is meaningful to pgjdbc — `jdbc:postgresql:///db` parses, taking host and port from its own
-    // defaults — so an already-JDBC URL passes through untouched rather than being rejected for a shape the driver
-    // accepts. The libpq spelling of the same thing means a local Unix-socket connection, which a JDBC URL cannot
-    // express at all, so that one is worth failing on with a message that says so.
-    if (hostPort.isEmpty && alreadyJdbc) Right(ResolvedJdbcUrl(original, None, None))
-    else if (hostPort.isEmpty) {
+    // A '?' then an '@' before the path read two ways, as a password holding a '?' or as a path-less URL with an '@' in
+    // a query value, and the wrong reading puts part of the password in the URL. libpq takes the first; this refuses
+    // both, as `backup-neon.sh` does, so neither leaks.
+    if (rest.takeWhile(_ != '/').dropWhile(_ != '?').contains('@')) {
+      Left(
+        "database.url has a '?' before an '@', which reads two ways — " +
+          "percent-encode a '?' in the password (%3F) or an '@' in a query value (%40)"
+      )
+    } else if (hostPort.isEmpty && !alreadyJdbc) {
+      // pgjdbc parses an empty host (`jdbc:postgresql:///db`), so a JDBC URL keeps one. In a libpq URI it means a local
+      // Unix socket, which a JDBC URL cannot express, so that one fails with a message that says so.
       Left(
         "database.url has no host — a local-socket libpq URI (postgresql:///db) has no JDBC equivalent; " +
           "give a host, as in postgresql://user:pass@host[:port]/db"
@@ -243,26 +248,38 @@ object PostgresClient {
           }
       }
 
-      val params = query.split('&').toList.filter(_.nonEmpty).map { param =>
-        param.indexOf('=') match {
-          case -1 => (param, "")
-          case i  => (param.take(i), param.drop(i + 1))
-        }
-      }
-
       // An explicit query parameter wins over userinfo: that is the value pgjdbc would have used for an already-working
-      // `jdbc:` URL, so lifting it preserves the existing behaviour of every configuration that has one. Last
-      // occurrence wins for the same reason — pgjdbc puts each token into a `Properties`, so a repeated key overwrites.
-      val queryUser     = params.collect { case ("user", v) => decodeQuery(v) }.lastOption
-      val queryPassword = params.collect { case ("password", v) => decodeQuery(v) }.lastOption
-
-      val kept = params.collect {
-        case (k, v) if k != "user" && k != "password" && !LibpqOnlyParams.contains(k) => s"$k=$v"
-      }
-
-      val jdbcUrl = s"jdbc:postgresql://$hostPort$path" + (if (kept.isEmpty) "" else kept.mkString("?", "&", ""))
-      Right(ResolvedJdbcUrl(jdbcUrl, queryUser.orElse(userInfoUser), queryPassword.orElse(userInfoPassword)))
+      // `jdbc:` URL, so lifting it preserves the existing behaviour of every configuration that has one.
+      val lifted = liftQueryCredentials(s"jdbc:postgresql://$hostPort$path", query)
+      Right(lifted.copy(user = lifted.user.orElse(userInfoUser), password = lifted.password.orElse(userInfoPassword)))
     }
+  }
+
+  /** `s` split at its first `?`, into what precedes it and the query after it. */
+  private def splitQuery(s: String): (String, String) =
+    s.indexOf('?') match {
+      case -1 => (s, "")
+      case i  => (s.take(i), s.drop(i + 1))
+    }
+
+  /** `base` with `query`'s parameters appended, less [[LibpqOnlyParams]] and the credentials, which it returns apart. */
+  private def liftQueryCredentials(base: String, query: String): ResolvedJdbcUrl = {
+    val params = query.split('&').toList.filter(_.nonEmpty).map { param =>
+      param.indexOf('=') match {
+        case -1 => (param, "")
+        case i  => (param.take(i), param.drop(i + 1))
+      }
+    }
+
+    // Last occurrence wins, as in pgjdbc, which puts each token into a `Properties`, so a repeated key overwrites.
+    val user     = params.collect { case ("user", v) => decodeQuery(v) }.lastOption
+    val password = params.collect { case ("password", v) => decodeQuery(v) }.lastOption
+
+    val kept = params.collect {
+      case (k, v) if k != "user" && k != "password" && !LibpqOnlyParams.contains(k) => s"$k=$v"
+    }
+
+    ResolvedJdbcUrl(base + (if (kept.isEmpty) "" else kept.mkString("?", "&", "")), user, password)
   }
 
   /** RFC 3986 percent-decoding for userinfo — `+` is a literal plus, unlike in a query string. Decodes to bytes first
@@ -311,7 +328,7 @@ object PostgresClient {
 
   // One host, or a bracketed IPv6 literal, with an optional numeric port. Anything else in that position is a URL this
   // cannot read, and showing it might show part of a password that was never percent-encoded. One such password still
-  // passes: `u:1234?x@host` has an unescaped `?`, which `normalizeJdbcUrl` has split as host `u`, port `1234` (#327).
+  // passes: `u:12/34?x@host/db` has an unescaped `/` before its `?`, so `normalizeJdbcUrl` reads host `u`, port `12`.
   private val HostPort = """(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9._-]+)(:\d+)?""".r
 
   /** The address of a resolved `jdbc:postgresql://` URL, without its query string or any userinfo. `None` for a
