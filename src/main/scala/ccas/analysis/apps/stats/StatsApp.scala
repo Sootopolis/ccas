@@ -62,9 +62,8 @@ object StatsApp extends ZIOAppDefault {
   }
 
   override def run: RIO[ZIOAppArgs & Scope, Unit] =
-    for {
-      _ <- ProgressDisplay.live(showProgress = false).build
-      _ <- (for {
+    ProgressDisplay.installed(showProgress = false) {
+      (for {
         args   <- ZIOAppArgs.getArgs
         parsed <- parseArgs(args)
         clubId <- resolveClub(parsed.slug)
@@ -85,7 +84,7 @@ object StatsApp extends ZIOAppDefault {
           case _ => ZIO.fail(BadRequestException("Both --since and --until are required for period stats"))
         }
       } yield ()).provideSomeAuto(PostgresClient.live(onInit = Tables.ensureTablesOnInit))
-    } yield ()
+    }
 
   /** Resolves a slug the way job submission does, so a club addressed by a former name still resolves. */
   private[stats] def resolveClub(clubSlug: ClubSlug): RIO[PostgresClient, ClubId] =

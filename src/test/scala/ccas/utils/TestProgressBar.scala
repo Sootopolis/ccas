@@ -3,7 +3,7 @@ package ccas.utils
 import java.io.{ByteArrayOutputStream, PrintStream}
 
 import io.netty.handler.timeout.ReadTimeoutException
-import zio.{Cause, LogLevel, Promise, ZIO}
+import zio.{Cause, LogLevel, Promise, ZIO, ZLayer}
 import zio.stream.SubscriptionRef
 import zio.test.{assertCompletes, assertTrue, Spec, ZIOSpecDefault}
 
@@ -22,6 +22,7 @@ object TestProgressBar extends ZIOSpecDefault {
     testMultiLineBarsUseCursorUp,
     testLogAboveBarsRoutesThroughDisplay,
     testZioLogInfoRoutesThroughLiveLogger,
+    testInstalledPrecedesTheEffectsLayers,
     testCurrentLogLevelFiltersDebug,
     testCurrentLogLevelEnablesDebug,
     testLoggerSwallowsThrow,
@@ -56,20 +57,18 @@ object TestProgressBar extends ZIOSpecDefault {
       }
     }
 
-  /** Run `effect` under `ProgressDisplay.live` (so its `ZLogger` is installed) with the log sink overridden to capture
-    * formatted lines into a buffer — mirrors the `JobRunner` wiring (`currentSink.locally`) and `TestJobLogSink`'s
-    * capture idiom. The captured string is the formatter output (`[LEVEL HH:mm:ss] msg`, ANSI-coloured); a line only
-    * lands here if the live `ZLogger` actually routed it. No process-global stream is mutated.
+  /** Run `effect` under `ProgressDisplay.installed` (so its `ZLogger` is installed) with the log sink overridden to
+    * capture formatted lines into a buffer — mirrors the `JobRunner` wiring (`currentSink.locally`) and
+    * `TestJobLogSink`'s capture idiom. The captured string is the formatter output (`[LEVEL HH:mm:ss] msg`,
+    * ANSI-coloured); a line only lands here if the live `ZLogger` actually routed it. No process-global stream is
+    * mutated.
     */
   private def withLogCapture[A](effect: ZIO[Any, Throwable, A]): ZIO[Any, Throwable, (A, String)] =
     ZIO.suspendSucceed {
       val baos    = new ByteArrayOutputStream
       val ps      = new PrintStream(baos, true, "UTF-8")
       val capture = new JobLogSink { override def writeConsoleSync(line: String): Unit = ps.println(line) }
-      ZIO.scoped {
-        ProgressDisplay.live(showProgress = false).build *>
-          JobLogSink.currentSink.locally(capture)(effect)
-      }.map { a =>
+      ProgressDisplay.installed(showProgress = false)(JobLogSink.currentSink.locally(capture)(effect)).map { a =>
         ps.flush()
         (a, baos.toString("UTF-8"))
       }
@@ -299,6 +298,18 @@ object TestProgressBar extends ZIOSpecDefault {
       )
     }
   }
+
+  /** `installed`'s contract: an app's layers are built inside the effect it runs, so they log through the display even
+    * while built. A layer built beside the display logged through ZIO's default logger instead (#337); what stops an
+    * app building one that way is `live`'s visibility, not this test.
+    */
+  private def testInstalledPrecedesTheEffectsLayers =
+    test("a layer the effect builds logs through the display while it is built") {
+      val logsWhileBuilt = ZLayer(ZIO.logInfo("layer built"))
+      withLogCapture(ZIO.unit.provideLayer(logsWhileBuilt)).map { case (_, out) =>
+        assertTrue(stripAnsi(out).linesIterator.exists(_.matches("""\[INFO \d{2}:\d{2}:\d{2}\] layer built""")))
+      }
+    }
 
   /** `ZIO.logDebug` should be filtered when `currentLogLevel` is at the default `Info`. */
   private def testCurrentLogLevelFiltersDebug = test("ZIO.logDebug is suppressed when currentLogLevel is Info") {

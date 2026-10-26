@@ -18,21 +18,22 @@ import ccas.utils.sql.PostgresClient
 object ClubDataApp extends ZIOAppDefault {
 
   override def run: RIO[ZIOAppArgs & Scope, Unit] =
-    (for {
-      rawArgs <- ZIOAppArgs.getArgs
-      parsed  <- ZIO.fromEither(parseArgs(rawArgs)).mapError(new IllegalArgumentException(_))
-      data <- parsed.slugs match {
-        case Nil   => refresh(parsed.minAgeHours)
-        case slugs => refreshSlugs(slugs, parsed.minAgeHours)
-      }
-      _ <- OutputFile.writeAndLogGlobal("clubdata", formatReport(data), "_ccas")
-    } yield ()).provideSome[ZIOAppArgs & Scope](
-      ProgressDisplay.live(showProgress = true),
-      ChessComClient.live("clubdata"),
-      HttpClientLayer.live,
-      BodyStore.live,
-      PostgresClient.live(onInit = Tables.ensureTablesOnInit)
-    )
+    ProgressDisplay.installed(showProgress = true) {
+      (for {
+        rawArgs <- ZIOAppArgs.getArgs
+        parsed  <- ZIO.fromEither(parseArgs(rawArgs)).mapError(new IllegalArgumentException(_))
+        data <- parsed.slugs match {
+          case Nil   => refresh(parsed.minAgeHours)
+          case slugs => refreshSlugs(slugs, parsed.minAgeHours)
+        }
+        _ <- OutputFile.writeAndLogGlobal("clubdata", formatReport(data), "_ccas")
+      } yield ()).provideSome[ZIOAppArgs & ProgressDisplay](
+        ChessComClient.live("clubdata"),
+        HttpClientLayer.live,
+        BodyStore.live,
+        PostgresClient.live(onInit = Tables.ensureTablesOnInit)
+      )
+    }
 
   /** @param slugs empty list means "refresh all known clubs" — see `run`'s `Nil` branch. */
   private[clubdata] case class ClubDataAppArgs(minAgeHours: Option[Int], slugs: List[ClubSlug])

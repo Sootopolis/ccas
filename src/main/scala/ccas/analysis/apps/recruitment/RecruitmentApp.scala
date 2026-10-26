@@ -68,66 +68,72 @@ object RecruitmentApp extends ZIOAppDefault {
   override def run: RIO[ZIOAppArgs & Scope, Unit] =
     for {
       args <- ZIOAppArgs.getArgs
-      _ <- (args.toList match {
-        case "report" :: clubStr :: rest =>
-          for {
-            club   <- ClubResolution.resolveRunnable(ClubQuery.BySlug(ClubSlug.wrap(clubStr)))
-            report <- showReport(club, rest.headOption)
-            now    <- Clock.instant
-            completedAt = report.run.completedAt.getOrElse(now)
-            // One formatter for both the console echo and the out file, so they can't drift. Echo line-by-line so each
-            // report line is its own clean log entry rather than one entry with an embedded multi-line block.
-            output = formatRecruitmentOutput(report.usernames, report.evaluatedCount, report.run.startedAt, completedAt)
-            _ <- ZIO.logInfo(s"=== Recruitment Report for ${club.slug} (run ${report.run.runId}) ===")
-            _ <- ZIO.foreachDiscard(output.linesIterator.toList)(line => ZIO.logInfo(line))
-            _ <- OutputFile.writeAndLog("recruitment", club.slug, output)
-          } yield ()
-        case clubStr :: rest =>
-          val parsed   = parseRecruitArgs(rest)
-          val clubSlug = ClubSlug.wrap(clubStr)
-          for {
-            run <- recruit(
-              clubSlug = clubSlug,
-              expectedClubIdOption = None,
-              alias = parsed.alias,
-              target = parsed.target,
-              cumulative = parsed.cumulative,
-              sourceClubs = parsed.sourceClubs,
-              explore = parsed.sourceClubs.isEmpty || !parsed.focus,
-              showHints = true
-            )
-            candidates <-
-              if (parsed.cumulative) RecruitmentCandidate.selectInvitedToday(run.clubId, parsed.alias)
-              else RecruitmentCandidate.selectInvitedByRun(run.runId)
-            resolvedMap <- PlayerName.selectCurrentNames(candidates.map(_.playerId))
-            // Drop any player_id that doesn't resolve to a handle — these lists are paste-ready invite targets, and a
-            // `[pid=N]` placeholder isn't invitable. Matches the server's `usernamesFor` so the file and the
-            // --report/clipboard output are identical.
-            usernames = candidates.flatMap(c => resolvedMap.get(c.playerId))
-            evaluatedCount <- RecruitmentCandidate.selectCountByRun(run.runId)
-            now            <- Clock.instant
-            output = formatRecruitmentOutput(
-              usernames,
-              evaluatedCount,
-              run.startedAt,
-              run.completedAt.getOrElse(now)
-            )
-            _ <- OutputFile.writeAndLog("recruitment", clubSlug, output)
-          } yield ()
-        case _ => ZIO.fail(BadRequestException(help))
-      })
-        // A systemic outage aborts instead of mass-marking candidates `Error`; the in-flight `recruitment_run` row
-        // stays incomplete (ignored downstream) and the next run retries.
-        .catchSome(
-          NetworkUnavailableException.abortRun("RecruitmentApp", "run left incomplete")(exit(ExitCode.failure))
-        )
-        .provideSome[Scope](
-          ProgressDisplay.live(showProgress = true),
-          ChessComClient.live("recruitment"),
-          HttpClientLayer.live,
-          BodyStore.live,
-          PostgresClient.live(onInit = Tables.ensureTablesOnInit)
-        )
+      _ <- ProgressDisplay.installed(showProgress = true) {
+        (args.toList match {
+          case "report" :: clubStr :: rest =>
+            for {
+              club   <- ClubResolution.resolveRunnable(ClubQuery.BySlug(ClubSlug.wrap(clubStr)))
+              report <- showReport(club, rest.headOption)
+              now    <- Clock.instant
+              completedAt = report.run.completedAt.getOrElse(now)
+              // One formatter for both the console echo and the out file, so they can't drift. Echo line-by-line so each
+              // report line is its own clean log entry rather than one entry with an embedded multi-line block.
+              output = formatRecruitmentOutput(
+                usernames = report.usernames,
+                evaluatedCount = report.evaluatedCount,
+                startedAt = report.run.startedAt,
+                completedAt = completedAt
+              )
+              _ <- ZIO.logInfo(s"=== Recruitment Report for ${club.slug} (run ${report.run.runId}) ===")
+              _ <- ZIO.foreachDiscard(output.linesIterator.toList)(line => ZIO.logInfo(line))
+              _ <- OutputFile.writeAndLog("recruitment", club.slug, output)
+            } yield ()
+          case clubStr :: rest =>
+            val parsed   = parseRecruitArgs(rest)
+            val clubSlug = ClubSlug.wrap(clubStr)
+            for {
+              run <- recruit(
+                clubSlug = clubSlug,
+                expectedClubIdOption = None,
+                alias = parsed.alias,
+                target = parsed.target,
+                cumulative = parsed.cumulative,
+                sourceClubs = parsed.sourceClubs,
+                explore = parsed.sourceClubs.isEmpty || !parsed.focus,
+                showHints = true
+              )
+              candidates <-
+                if (parsed.cumulative) RecruitmentCandidate.selectInvitedToday(run.clubId, parsed.alias)
+                else RecruitmentCandidate.selectInvitedByRun(run.runId)
+              resolvedMap <- PlayerName.selectCurrentNames(candidates.map(_.playerId))
+              // Drop any player_id that doesn't resolve to a handle — these lists are paste-ready invite targets, and a
+              // `[pid=N]` placeholder isn't invitable. Matches the server's `usernamesFor` so the file and the
+              // --report/clipboard output are identical.
+              usernames = candidates.flatMap(c => resolvedMap.get(c.playerId))
+              evaluatedCount <- RecruitmentCandidate.selectCountByRun(run.runId)
+              now            <- Clock.instant
+              output = formatRecruitmentOutput(
+                usernames = usernames,
+                evaluatedCount = evaluatedCount,
+                startedAt = run.startedAt,
+                completedAt = run.completedAt.getOrElse(now)
+              )
+              _ <- OutputFile.writeAndLog("recruitment", clubSlug, output)
+            } yield ()
+          case _ => ZIO.fail(BadRequestException(help))
+        })
+          // A systemic outage aborts instead of mass-marking candidates `Error`; the in-flight `recruitment_run` row
+          // stays incomplete (ignored downstream) and the next run retries.
+          .catchSome(
+            NetworkUnavailableException.abortRun("RecruitmentApp", "run left incomplete")(exit(ExitCode.failure))
+          )
+          .provideSome[ProgressDisplay](
+            ChessComClient.live("recruitment"),
+            HttpClientLayer.live,
+            BodyStore.live,
+            PostgresClient.live(onInit = Tables.ensureTablesOnInit)
+          )
+      }
     } yield ()
 
   // --- Phase 1: Initialize ---

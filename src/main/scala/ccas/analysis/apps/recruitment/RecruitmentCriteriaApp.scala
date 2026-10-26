@@ -50,13 +50,14 @@ object RecruitmentCriteriaApp extends ZIOAppDefault {
         Console.printLine(CriteriaSpec.fromCriteria(RecruitmentCriteria.defaultDaily).toJsonPretty)
       // Only a command that names a club needs the Chess.com client, which resolving the club may ask.
       case args @ ("set" | "show" | "list") :: _ =>
-        clubCommand(args).provideSomeAuto(
-          ProgressDisplay.live(showProgress = true),
-          ChessComClient.live("criteria"),
-          HttpClientLayer.live,
-          BodyStore.live,
-          PostgresClient.live(onInit = Tables.ensureTablesOnInit)
-        )
+        ProgressDisplay.installed(showProgress = true) {
+          clubCommand(args).provideSomeAuto(
+            ChessComClient.live("criteria"),
+            HttpClientLayer.live,
+            BodyStore.live,
+            PostgresClient.live(onInit = Tables.ensureTablesOnInit)
+          )
+        }
       case _ => ZIO.fail(BadRequestException(help))
     }
 

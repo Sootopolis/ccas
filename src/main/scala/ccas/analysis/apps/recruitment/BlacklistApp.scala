@@ -23,31 +23,32 @@ object BlacklistApp extends ZIOAppDefault {
       |  remove <club-slug> <username>                          Remove player from blacklist""".stripMargin
 
   override def run: RIO[ZIOAppArgs & Scope, Unit] =
-    (for {
-      args <- ZIOAppArgs.getArgs
-      _ <- args.toList match {
-        case "add" :: clubStr :: usernamesStr :: rest =>
-          val usernames = usernamesStr.split(',').map(s => Username.wrap(s.trim)).toList
-          val months    = rest.lift(1).map(_.toInt)
-          for {
-            club <- resolve(clubStr)
-            now  <- Clock.instant
-            expiresAt = months.map(m => now.atZone(ZoneOffset.UTC).plusMonths(m.toLong).toInstant)
-            _ <- addToBlacklist(club = club, usernames = usernames, reason = rest.headOption, expiresAt = expiresAt)
-          } yield ()
-        case "list" :: clubStr :: _ =>
-          resolve(clubStr).flatMap(listBlacklist)
-        case "remove" :: clubStr :: usernameStr :: _ =>
-          resolve(clubStr).flatMap(removeFromBlacklist(_, Username.wrap(usernameStr)))
-        case _ => ZIO.fail(BadRequestException(help))
-      }
-    } yield ()).provideSomeAuto(
-      ProgressDisplay.live(showProgress = true),
-      ChessComClient.live("blacklist"),
-      HttpClientLayer.live,
-      BodyStore.live,
-      PostgresClient.live(onInit = Tables.ensureTablesOnInit)
-    )
+    ProgressDisplay.installed(showProgress = true) {
+      (for {
+        args <- ZIOAppArgs.getArgs
+        _ <- args.toList match {
+          case "add" :: clubStr :: usernamesStr :: rest =>
+            val usernames = usernamesStr.split(',').map(s => Username.wrap(s.trim)).toList
+            val months    = rest.lift(1).map(_.toInt)
+            for {
+              club <- resolve(clubStr)
+              now  <- Clock.instant
+              expiresAt = months.map(m => now.atZone(ZoneOffset.UTC).plusMonths(m.toLong).toInstant)
+              _ <- addToBlacklist(club = club, usernames = usernames, reason = rest.headOption, expiresAt = expiresAt)
+            } yield ()
+          case "list" :: clubStr :: _ =>
+            resolve(clubStr).flatMap(listBlacklist)
+          case "remove" :: clubStr :: usernameStr :: _ =>
+            resolve(clubStr).flatMap(removeFromBlacklist(_, Username.wrap(usernameStr)))
+          case _ => ZIO.fail(BadRequestException(help))
+        }
+      } yield ()).provideSomeAuto(
+        ChessComClient.live("blacklist"),
+        HttpClientLayer.live,
+        BodyStore.live,
+        PostgresClient.live(onInit = Tables.ensureTablesOnInit)
+      )
+    }
 
   private def resolve(clubStr: String): RIO[ChessComClient & PostgresClient, NamedClub] =
     ClubResolution.resolveRunnable(ClubQuery.BySlug(ClubSlug.wrap(clubStr)))

@@ -80,17 +80,15 @@ object CcasServer extends ZIOAppDefault {
     services: ZLayer[ProgressDisplay, Throwable, Served],
     server: ZLayer[Any, Throwable, Server]
   ): ZIO[Scope, Throwable, Unit] =
-    (pidFileManaged(pidFileOption) *> ZIO.scoped {
-      for {
-        serverEnv <- server.build
-        _         <- ZIO.addFinalizer(ZIO.serviceWithZIO[JobRunner](_.interruptAll))
-        _         <- running.provideSomeEnvironment[Scope & Served](_ ++ serverEnv)
-      } yield ()
-    }).provideSomeLayer[Scope](
-      // Before the services, not beside them: a layer built beside the display logs through ZIO's default logger, as
-      // the pool's `Database:` line did (#337).
-      ProgressDisplay.live(showProgress = false) >>> services
-    )
+    ProgressDisplay.installed(showProgress = false) {
+      (pidFileManaged(pidFileOption) *> ZIO.scoped {
+        for {
+          serverEnv <- server.build
+          _         <- ZIO.addFinalizer(ZIO.serviceWithZIO[JobRunner](_.interruptAll))
+          _         <- running.provideSomeEnvironment[Scope & Served](_ ++ serverEnv)
+        } yield ()
+      }).provideSomeLayer[Scope & ProgressDisplay](services)
+    }
 
   private def running: URIO[Scope & Served & Server, Unit] = {
     val routes: Routes[JobRunner & ChessComClient & PostgresClient, Nothing] =
