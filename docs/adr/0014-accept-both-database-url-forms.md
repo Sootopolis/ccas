@@ -1,6 +1,6 @@
 # Accept both database URL forms, and lift credentials out of either
 
-**Status:** Accepted, 2026-08-13 (#210).
+**Status:** Accepted, 2026-08-13 (#210). Amended by #327: no Postgres `jdbc:` URL passes through untouched any more, so a host-less one and pgjdbc's `jdbc:postgresql:db` shorthand have their credentials lifted out too; and a `?` followed by an `@` before the path is refused. That text reads two ways, as a password holding a `?` or as a path-less URL with an `@` in a query value, and the wrong reading puts part of the password in the URL. libpq takes the first reading; refusing is stricter than libpq, and leaks under neither.
 
 ## Context
 
