@@ -37,7 +37,7 @@ paths:
 ## Values
 
 - `Option.when(cond)(value)`, not `if (cond) Some(value) else None`; when the value is itself an `Option`, put the `Option.when` inside a `flatMap` over it rather than trailing `.flatten`.
-- Discard a value mid-block with a bare statement, never `val _ =` or `expr: Unit`: the build does not enable `-Wnonunit-statement`.
+- Discard with a bare statement (`()` ends a `Unit` block); never `val _ =`, `expr: Unit` or a discarded `Try` (#347).
 
 ## ZIO idioms
 
