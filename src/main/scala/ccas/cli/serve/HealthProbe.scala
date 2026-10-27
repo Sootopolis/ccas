@@ -11,6 +11,7 @@ import zio.{IO, UIO, ZIO}
 import zio.json.DecoderOps
 
 import ccas.server.routes.HealthRoutes.ReadyResponse
+import ccas.utils.errors.safeMessage
 
 /** Shared loopback health-probe used by [[ServerStatus]] (to report running/ready), [[Detach]] (to refuse a port
   * already answering, then wait for the child to be ready) and [[ServerStop]] (to warn that a foreground server is
@@ -44,15 +45,13 @@ object HealthProbe {
     * since the port picks which server's pid file `down` signals (#326).
     */
   def resolvePort: IO[String, Int] =
-    ZIO.attemptBlocking(ConfigFactory.load()).mapError(messageOf).flatMap(config => ZIO.fromEither(portIn(config)))
+    ZIO.attemptBlocking(ConfigFactory.load()).mapError(_.safeMessage).flatMap(config => ZIO.fromEither(portIn(config)))
 
   /** `server.port` from `config`, or why it isn't a port. Pure. */
   private[serve] def portIn(config: Config): Either[String, Int] =
     Try(config.getInt("server.port")).toEither.left
-      .map(e => s"cannot read server.port (SERVER_PORT): ${messageOf(e)}")
+      .map(e => s"cannot read server.port (SERVER_PORT): ${e.safeMessage}")
       .filterOrElse(port => port >= 1 && port <= 65535, "server.port (SERVER_PORT) must be a port from 1 to 65535")
-
-  private def messageOf(t: Throwable): String = Option(t.getMessage).getOrElse(t.getClass.getSimpleName)
 
   /** A GET of `path` on the loopback `port`. Probes 127.0.0.1: the server's default bind is loopback, and even a
     * `SERVER_HOST=0.0.0.0` bind answers on loopback; a non-loopback-only bind would false-negative here, acceptable

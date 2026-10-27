@@ -54,5 +54,3 @@ object ConflictException {
   def of[B: JsonEncoder](body: B, msg: String): ConflictException =
     new ConflictException(msg, body.toJson)
 }
-
-extension (error: Throwable) def safeMessage: String = Option(error.getMessage).getOrElse(error.getClass.getSimpleName)

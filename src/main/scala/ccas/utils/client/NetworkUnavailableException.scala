@@ -54,5 +54,5 @@ extension [R, A](self: RIO[R, Option[A]])
     self.catchAll {
       case e: NetworkUnavailableException => ZIO.fail(e)
       case _: HttpStatusException         => ZIO.none
-      case e => ZIO.logDebug(s"  recovery internal error ($context): ${e.getMessage}").as(None)
+      case e => ZIO.logDebug(s"  recovery internal error ($context): ${e.safeMessage}").as(None)
     }

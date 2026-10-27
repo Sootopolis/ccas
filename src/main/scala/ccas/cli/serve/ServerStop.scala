@@ -8,6 +8,7 @@ import zio.{durationInt, Console, ExitCode, UIO, ZIO}
 
 import ccas.cli.serve.HealthProbe.Readiness
 import ccas.utils.TerminalQuestion
+import ccas.utils.errors.safeMessage
 import ccas.utils.sql.DatabaseAddress
 
 /** `ccas server down`: read the pid file written by a detached server, send SIGTERM, wait for a clean exit. The
@@ -104,7 +105,7 @@ object ServerStop {
               }
           }
       }
-    program.catchAllCause(c => Console.printLineError(s"error: ${rootMessage(c.squash)}").orDie.as(ExitCode(1)))
+    program.catchAllCause(c => Console.printLineError(s"error: ${c.squash.safeMessage}").orDie.as(ExitCode(1)))
   }
 
   // A question nobody is there to answer is a no: a `down` run with no terminal (a script, an agent's shell) is the
@@ -170,6 +171,4 @@ object ServerStop {
       }
     } yield code
   }
-
-  private def rootMessage(t: Throwable): String = Option(t.getMessage).getOrElse(t.getClass.getSimpleName)
 }

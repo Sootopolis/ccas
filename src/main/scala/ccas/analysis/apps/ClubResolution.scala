@@ -9,7 +9,7 @@ import ccas.analysis.tables.{Club, ClubName}
 import ccas.api.club.ApiClub
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 import ccas.utils.client.ChessComClient
-import ccas.utils.errors.NotFoundException
+import ccas.utils.errors.{safeMessage, NotFoundException}
 import ccas.utils.sql.PostgresClient
 
 /** How a caller named the club it wants. The two are exclusive by construction: an id resolves rename-proof and a name
@@ -163,7 +163,7 @@ object ClubResolution {
               Club.upsert(Club.fromApi(apiClub)).as(fromHolder(apiClub, requested, previous))
           }
           .catchAll { e =>
-            ZIO.logWarning(s"  Upstream check for '$requested' failed, keeping the local answer: ${e.getMessage}")
+            ZIO.logWarning(s"  Upstream check for '$requested' failed, keeping the local answer: ${e.safeMessage}")
               .as(resolution)
           }
     }

@@ -1,11 +1,12 @@
 package ccas.cli
 
+import java.io.{EOFException, IOException}
 import java.nio.file.{Files, Path}
 import java.nio.file.attribute.FileTime
 import java.time.Instant
 
-import zio.{UIO, ZIO}
-import zio.test.{assertTrue, Spec, TestClock, ZIOSpecDefault}
+import zio.{Console, IO, Trace, UIO, ZIO}
+import zio.test.{assertTrue, Spec, TestClock, TestConsole, ZIOSpecDefault}
 
 /** Tests [[CompletionCache]] against temp files via its path-explicit `…In` forms — the public no-arg entry points
   * resolve through [[XdgPaths]], whose environment-variable lookups a JVM can't rebind, so driving those would write to
@@ -37,6 +38,16 @@ object TestCompletionCache extends ZIOSpecDefault {
     ZIO.attemptBlocking(Files.setLastModifiedTime(file, FileTime.from(at))).unit.orDie
 
   private def read(file: Path): UIO[String] = ZIO.attemptBlocking(Files.readString(file)).orDie
+
+  // A console whose stderr is gone, as under `ccas … 2>&-`.
+  private val closedStderr: Console = new Console {
+    private def closed(using Trace): IO[IOException, Unit]           = ZIO.fail(new IOException("Bad file descriptor"))
+    def print(line: => Any)(using Trace): IO[IOException, Unit]      = ZIO.unit
+    def printError(line: => Any)(using Trace): IO[IOException, Unit] = closed
+    def printLine(line: => Any)(using Trace): IO[IOException, Unit]  = ZIO.unit
+    def printLineError(line: => Any)(using Trace): IO[IOException, Unit] = closed
+    def readLine(using Trace): IO[IOException, String]                   = ZIO.fail(new EOFException)
+  }
 
   private def exists(file: Path): UIO[Boolean] = ZIO.attemptBlocking(Files.exists(file)).orDie
 
@@ -120,6 +131,21 @@ object TestCompletionCache extends ZIOSpecDefault {
           _  <- ZIO.attemptBlocking(Files.createDirectories(f)).orDie
           ok <- CompletionCache.writeClubsIn(f, List("a"))
         } yield assertTrue(!ok)
+      }
+    ),
+    suite("reportClubsWriteFailed")(
+      test("names the cache file in a warning on stderr") {
+        for {
+          file   <- clubsFile
+          _      <- CompletionCache.reportClubsWriteFailed(file)
+          stderr <- TestConsole.outputErr
+        } yield assertTrue(stderr.mkString.contains(s"could not update the club cache at $file"))
+      },
+      test("never fails, even when stderr can't be written") {
+        for {
+          file <- clubsFile
+          exit <- ZIO.withConsole(closedStderr)(CompletionCache.reportClubsWriteFailed(file)).exit
+        } yield assertTrue(exit.isSuccess)
       }
     ),
     suite("seedClubs")(

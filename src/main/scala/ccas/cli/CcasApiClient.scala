@@ -7,7 +7,7 @@ import zio.stream.{ZPipeline, ZStream}
 
 import ccas.server.jobs.JobLogStream
 import ccas.utils.ProgressSnapshot
-import ccas.utils.errors.ErrorResponse
+import ccas.utils.errors.{safeMessage, ErrorResponse}
 
 /** Thin HTTP client to a local `CcasServer`. Methods fail with [[ServerUnreachable]] when no response arrived,
   * [[StreamDropped]] when a stream breaks after its response began, and otherwise [[CliError]] (carrying an exit code),
@@ -41,15 +41,12 @@ object CcasApiClient {
     // `batched` reads the full response body and manages its own connection scope, so callers need no Scope.
     private val http = client.batched
 
-    private def rootMessage(e: Throwable): String =
-      Option(e.getMessage).getOrElse(e.getClass.getSimpleName)
-
     private def url(path: String): Task[URL] =
       ZIO.fromEither(URL.decode(baseUrl + path))
-        .mapError(e => CliError(s"invalid server URL '$baseUrl$path': ${rootMessage(e)}", 2))
+        .mapError(e => CliError(s"invalid server URL '$baseUrl$path': ${e.safeMessage}", 2))
 
     private def unreachable(e: Throwable): ServerUnreachable =
-      ServerUnreachable(s"cannot reach $baseUrl — start a server with 'ccas server up'. (${rootMessage(e)})")
+      ServerUnreachable(s"cannot reach $baseUrl — start a server with 'ccas server up'. (${e.safeMessage})")
 
     /** Any transport-level failure means the server isn't reachable — non-2xx responses come back as a `Response`. */
     private def send(req: Request): Task[Response] =
@@ -124,7 +121,7 @@ object CcasApiClient {
             case e: CliError => ZIO.fail(e)
             case e =>
               connected.get.flatMap { wasConnected =>
-                if (wasConnected) { ZIO.fail(StreamDropped(rootMessage(e))) }
+                if (wasConnected) { ZIO.fail(StreamDropped(e.safeMessage)) }
                 else { ZIO.fail(unreachable(e)) }
               }
           }

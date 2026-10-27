@@ -14,6 +14,7 @@ import ccas.utils.client.{
   NetworkUnavailableException,
   ReportedNotFound
 }
+import ccas.utils.errors.safeMessage
 import ccas.utils.sql.PostgresClient
 
 /** Resolves the current canonical slug for a club whose previously-known slug 404s on Chess.com.
@@ -244,7 +245,7 @@ object ClubSlugRenameResolver {
           apiClub <- ApiClub.get(client, slug)
           _       <- Club.upsert(Club.fromApi(apiClub))
         } yield Option(apiClub.clubId))
-          .tapError(e => ZIO.logDebug(s"  ClubSlugRenameResolver.resolveOrFetch $slug failed: ${e.getMessage}"))
+          .tapError(e => ZIO.logDebug(s"  ClubSlugRenameResolver.resolveOrFetch $slug failed: ${e.safeMessage}"))
           .catchAll(e => NetworkUnavailableException.recoverUnless(e)(ZIO.none))
     }
 }

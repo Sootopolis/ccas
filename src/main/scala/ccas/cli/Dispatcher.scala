@@ -30,6 +30,7 @@ import ccas.server.routes.ManagedClubRoutes.{ManagedClubResponse, MarkManagedReq
 import ccas.server.routes.ScheduleRoutes.{CreateScheduleRequest, CreateScheduleResponse, ScheduleResponse}
 import ccas.server.scheduler.{MisfirePolicy, TriggerType}
 import ccas.utils.client.HttpClientLayer
+import ccas.utils.errors.safeMessage
 
 /** Maps a parsed [[CliCommand]] to HTTP calls against the local server and renders the result, returning the process
   * exit code. `Serve` is handled in [[Main]] (it boots the server rather than calling it), never here.
@@ -67,18 +68,15 @@ object Dispatcher {
       .catchAll(reportFailure)
       // Last-resort net for unexpected defects (e.g. an invalid opaque-type construction) so the binary prints a
       // clean message instead of dumping a fiber stack trace.
-      .catchAllDefect(d => Console.printLineError(s"error: ${rootMessage(d)}").orDie.as(1))
+      .catchAllDefect(d => Console.printLineError(s"error: ${d.safeMessage}").orDie.as(1))
       .map(ExitCode(_))
 
   /** Prints a failed command's error and returns its exit code: a [[CliError]]'s own, otherwise 1. */
   private[cli] def reportFailure(failure: Throwable): UIO[Int] =
     failure match {
       case e: CliError  => Console.printLineError(s"error: ${e.message}").orDie.as(e.exitCode)
-      case e: Throwable => Console.printLineError(s"error: ${rootMessage(e)}").orDie.as(1)
+      case e: Throwable => Console.printLineError(s"error: ${e.safeMessage}").orDie.as(1)
     }
-
-  private def rootMessage(e: Throwable): String =
-    Option(e.getMessage).getOrElse(e.getClass.getSimpleName)
 
   // Whether `--no-progress` was set — only the job-following commands carry the flag; the rest never draw bars.
   private def noProgressFor(cmd: CliCommand.ServerCommand): Boolean = cmd match {
@@ -107,7 +105,10 @@ object Dispatcher {
   // so a subsequent managed-set fetch failing is a transient blip, not a cache-dir problem, and blaming the cache would
   // misdirect. Never fails and never changes the exit code: a broken completion cache is not a failed command (#181).
   private def writeClubsCacheReporting(api: CcasApiClient): UIO[Unit] =
-    writeClubsCacheResult(api).foldZIO(_ => ZIO.unit, wrote => ZIO.unlessDiscard(wrote)(cacheWriteFailed))
+    writeClubsCacheResult(api).foldZIO(
+      failure = _ => ZIO.unit,
+      success = wrote => ZIO.whenDiscard(!wrote)(CompletionCache.reportClubsWriteFailed(XdgPaths.clubsFile))
+    )
 
   // Shared core: pick the managed set (falling back to all clubs only for a fresh install with nothing managed), write
   // it, and return whether the write landed. Fails only if the *fetch* fails; `writeClubs` itself never fails.
@@ -118,14 +119,6 @@ object Dispatcher {
         else { allClubSlugs(api) }
       }
       .flatMap(CompletionCache.writeClubs)
-
-  private def cacheWriteFailed: UIO[Unit] =
-    Console
-      .printLineError(
-        s"warning: could not update the club cache at ${XdgPaths.clubsFile} — " +
-          "shell completion won't reflect your managed clubs until that is writable"
-      )
-      .orDie
 
   private def managedSlugs(api: CcasApiClient): Task[List[String]] =
     api.getJson[List[ManagedClubResponse]]("/api/managed-clubs").map(_.map(_.slug))
@@ -388,7 +381,7 @@ object Dispatcher {
   private def clearFailed(e: Throwable): UIO[Unit] =
     Console
       .printLineError(
-        s"warning: that was your current club, but clearing it failed (${rootMessage(e)}); " +
+        s"warning: that was your current club, but clearing it failed (${e.safeMessage}); " +
           "clear it with 'ccas use-club --clear'"
       )
       .orDie
@@ -463,7 +456,7 @@ object Dispatcher {
           _       <- noteResolutions(currentClubOption, target, results.map(jobOutcome))
           code    <- handle(results)
         } yield code)
-          .catchAll(e => Console.printLineError(s"${target.label}: ${rootMessage(e)}").orDie.as(1))
+          .catchAll(e => Console.printLineError(s"${target.label}: ${e.safeMessage}").orDie.as(1))
       }
       .map(JobFollower.overallExitCode)
   }
@@ -784,7 +777,7 @@ object Dispatcher {
   // assert an outcome — point the operator at --report to check. Anything genuinely unconfirmed stays Deferred (safe).
   private def confirmFailed(e: Throwable): UIO[Unit] =
     Console.printLineError(
-      s"note: confirmation may not have completed (${rootMessage(e)}); check with 'ccas recruit --report'. " +
+      s"note: confirmation may not have completed (${e.safeMessage}); check with 'ccas recruit --report'. " +
         "Any unconfirmed candidates stay deferred and resurface on the next run."
     ).orDie
 
@@ -849,7 +842,7 @@ object Dispatcher {
   // log above, so point the operator there and let the command exit 0.
   private def deliveryFailed(e: Throwable): UIO[Unit] =
     Console.printLineError(
-      s"note: recruit completed but fetching the invited usernames failed (${rootMessage(e)}); " +
+      s"note: recruit completed but fetching the invited usernames failed (${e.safeMessage}); " +
         "they are listed in the job log above."
     ).orDie
 

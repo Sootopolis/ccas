@@ -5,6 +5,8 @@ import java.nio.file.Path
 import com.typesafe.config.ConfigFactory
 import zio.{UIO, ZIO}
 
+import ccas.utils.errors.safeMessage
+
 /** Applies the [[ServerEnvFile]] to the JVM at boot so the server can read its settings from `ccas.env` instead of
   * hand-exported env vars. For each `KEY=VALUE`, sets a JVM system property `KEY` — but ONLY when the process env var
   * `KEY` is unset/blank and no system property `KEY` already exists. Because Typesafe Config resolves `${?KEY}`
@@ -25,7 +27,7 @@ object ServerEnvOverlay {
     ServerEnvFile
       .readMap(file)
       .foldZIO(
-        err => ZIO.logWarning(s"could not read server config $file: ${rootMessage(err)}").as(Nil),
+        err => ZIO.logWarning(s"could not read server config $file: ${err.safeMessage}").as(Nil),
         applyMap
       )
 
@@ -44,6 +46,4 @@ object ServerEnvOverlay {
       if (applied.nonEmpty) { ConfigFactory.invalidateCaches() }
       applied
     }.orElseSucceed(Nil)
-
-  private def rootMessage(e: Throwable): String = Option(e.getMessage).getOrElse(e.getClass.getSimpleName)
 }

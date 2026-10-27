@@ -4,6 +4,8 @@ import java.time.{Instant, LocalDate, ZoneOffset}
 
 import zio.{IO, ZIO}
 
+import ccas.utils.errors.safeMessage
+
 object TimeParser {
 
   /** Parse a date or instant string into an [[Instant]].
@@ -15,10 +17,10 @@ object TimeParser {
   def parseInstant(s: String): Either[String, Instant] =
     if (s.contains("T")) {
       try Right(Instant.parse(s))
-      catch { case e: Exception => Left(s"Invalid instant: $s (${e.getMessage})") }
+      catch { case e: Exception => Left(s"Invalid instant: $s (${e.safeMessage})") }
     } else {
       try Right(LocalDate.parse(s).atStartOfDay().toInstant(ZoneOffset.UTC))
-      catch { case e: Exception => Left(s"Invalid date: $s (${e.getMessage})") }
+      catch { case e: Exception => Left(s"Invalid date: $s (${e.safeMessage})") }
     }
 
   /** ZIO variant of [[parseInstant]], failing with the error string. */

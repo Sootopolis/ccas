@@ -20,6 +20,7 @@ import ccas.api.player.{ApiPlayer, ApiPlayerMatches}
 import ccas.utils.ApiConcurrency
 import ccas.utils.ProgressDisplay
 import ccas.utils.client.{onNotFound, ChessComClient, NetworkUnavailableException}
+import ccas.utils.errors.safeMessage
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.withTransaction
 
@@ -93,7 +94,7 @@ private[history] object HistorySeeding {
                     }
                     .catchAll { error =>
                       NetworkUnavailableException.recoverUnless(error)(
-                        ZIO.logWarning(s"  Retry $username: ${error.getMessage}").as(0)
+                        ZIO.logWarning(s"  Retry $username: ${error.safeMessage}").as(0)
                       )
                     }
                     .flatMap(n => resolvedRef.update(_ + n)) *>
@@ -150,7 +151,7 @@ private[history] object HistorySeeding {
       }.catchAll { error =>
         NetworkUnavailableException.recoverUnless(error)(
           ZIO.logWarning(
-            s"  Rename recovery errored for $staleUsername (match ${entry.matchId} board ${entry.board}): ${error.getMessage}"
+            s"  Rename recovery errored for $staleUsername (match ${entry.matchId} board ${entry.board}): ${error.safeMessage}"
           ).as(0)
         )
       }.map(acc + _)
@@ -194,7 +195,7 @@ private[history] object HistorySeeding {
       .withClubSlugRenameRecovery(client, clubSlug, Some(clubId))(fetch)
       .catchAll { error =>
         NetworkUnavailableException.recoverUnless(error)(
-          ZIO.logWarning(s"  Failed to fetch club matches: ${error.getMessage}").as(0)
+          ZIO.logWarning(s"  Failed to fetch club matches: ${error.safeMessage}").as(0)
         )
       }
   }
@@ -269,8 +270,8 @@ private[history] object HistorySeeding {
               .foldZIO(
                 error =>
                   NetworkUnavailableException.recoverUnless(error)(
-                    failedMembersRef.update(_ :+ FailedMember(username, error.getMessage))
-                      *> ZIO.logWarning(s"  $username: failed — ${error.getMessage}")
+                    failedMembersRef.update(_ :+ FailedMember(username, error.safeMessage))
+                      *> ZIO.logWarning(s"  $username: failed — ${error.safeMessage}")
                   ),
                 count =>
                   seedRef.update(_ + count) *> counterRef.updateAndGet(_ + 1).flatMap { n =>
