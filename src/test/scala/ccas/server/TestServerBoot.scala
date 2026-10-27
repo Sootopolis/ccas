@@ -7,7 +7,6 @@ import java.nio.file.{Files, Path, Paths}
 import org.postgresql.ds.PGSimpleDataSource
 import zio.{durationInt, Chunk, Exit, Fiber, Promise, Ref, RIO, Scope, Task, UIO, URIO, ZIO, ZLayer}
 import zio.http.{Client, Server}
-import zio.http.netty.NettyConfig
 import zio.stream.ZStream
 import zio.test.{assertTrue, Spec, TestAspect, TestClock, ZIOSpecDefault, ZTestLogger}
 
@@ -58,7 +57,7 @@ object TestServerBoot extends ZIOSpecDefault {
       for {
         booted <- boot(pidFileOption = None)
         exit   <- booted.fiber.interrupt
-        lines = JobLogSink.stripAnsi(booted.logged).linesIterator.toVector.collect { case ShutdownLine(line) => line }
+        lines = booted.shutdownLines
       } yield assertTrue(
         exit.isInterruptedOnly,
         lines.headOption.contains("Shutting down"),
@@ -77,6 +76,14 @@ object TestServerBoot extends ZIOSpecDefault {
         lines.lastOption.exists(_.startsWith("Stopped in "))
       )
     },
+    test("the HTTP server stops without waiting out Netty's default 2 s quiet period") {
+      val HttpServerStopped = """Stopped the HTTP server in (\d+) ms""".r
+      for {
+        booted <- boot(pidFileOption = None)
+        _      <- booted.fiber.interrupt
+        stopMillisOption = booted.shutdownLines.collectFirst { case HttpServerStopped(millis) => millis.toLong }
+      } yield assertTrue(stopMillisOption.exists(_ < 2000))
+    } @@ TestAspect.withLiveClock,
     test("a layer's release is logged as a step, around the release the layer itself registered") {
       val pool = ZLayer.scoped(ZIO.acquireRelease(ZIO.unit)(_ => ZIO.logInfo("pool closed")))
       for {
@@ -200,6 +207,9 @@ object TestServerBoot extends ZIOSpecDefault {
     log: ByteArrayOutputStream
   ) {
     def logged: String = log.toString(StandardCharsets.UTF_8)
+
+    def shutdownLines: Vector[String] =
+      JobLogSink.stripAnsi(logged).linesIterator.toVector.collect { case ShutdownLine(line) => line }
   }
 
   private def boot(pidFileOption: Option[Path]): Task[Booted] =
@@ -270,18 +280,16 @@ object TestServerBoot extends ZIOSpecDefault {
     )
   }
 
-  // The marker is built first, so its finalizer runs once the server's own release has finished. Netty's fast shutdown
-  // skips the default 2 s quiet period, so a healthy stop takes milliseconds and the follow test's bound has room.
+  // The server `CcasServer` boots, on a free port. The marker is built first, so its finalizer runs once the server's own
+  // release has finished.
   private def markedServer(
     events: Ref[Vector[String]],
     built: Promise[Nothing, Server]
-  ): ZLayer[Any, Throwable, Server] = {
-    val config = ZLayer.succeed(Server.Config.default.binding("127.0.0.1", 0))
+  ): ZLayer[Any, Throwable, Server] =
     ZLayer
       .scoped(ZIO.addFinalizer(events.update(_ :+ "server stopped")))
-      .flatMap(_ => (config ++ ZLayer.succeed(NettyConfig.defaultWithFastShutdown)) >>> Server.customized)
+      .flatMap(_ => CcasServer.httpServer(host = "127.0.0.1", port = 0))
       .tap(env => built.succeed(env.get[Server]))
-  }
 
   private final class LoopingScheduler(started: Promise[Nothing, Unit], interrupted: UIO[Unit]) extends JobScheduler {
     override def start: URIO[Scope, Unit] = (started.succeed(()) *> ZIO.never).onInterrupt(interrupted).forkScoped.unit
