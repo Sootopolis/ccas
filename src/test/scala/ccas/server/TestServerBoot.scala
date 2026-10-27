@@ -5,11 +5,11 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path, Paths}
 
 import org.postgresql.ds.PGSimpleDataSource
-import zio.{Exit, Fiber, Promise, Ref, RIO, Scope, Task, UIO, URIO, ZIO, ZLayer}
+import zio.{durationInt, Chunk, Exit, Fiber, Promise, Ref, RIO, Scope, Task, UIO, URIO, ZIO, ZLayer}
 import zio.http.{Client, Server}
 import zio.http.netty.NettyConfig
 import zio.stream.ZStream
-import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault, ZTestLogger}
+import zio.test.{assertTrue, Spec, TestAspect, TestClock, ZIOSpecDefault, ZTestLogger}
 
 import ccas.analysis.tables.RunTrigger
 import ccas.api.misc.subtypes.{ClubId, JobRunId}
@@ -22,10 +22,10 @@ import ccas.utils.client.{BodyStore, FsBodyStore, TestChessComClientSupport}
 import ccas.utils.sql.{DatabaseAddress, PostgresClient}
 
 /** What `CcasServer` does at boot: the pid file a detached server owns, what it says and asks about its database
-  * (#320), the order it shuts down in and the logger its services and HTTP server inherit (#334, #337). The boot
-  * line's client never connects: the line has to come out before the first connection, so a boot that fails to
-  * connect still names where it tried. The terminal conversation itself is not reachable from a test;
-  * [[BootGuard]]'s decisions are.
+  * (#320), the order it shuts down in and what it logs as it does (#316), and the logger its services and HTTP server
+  * inherit (#334, #337). The boot line's client never connects: the line has to come out before the first connection,
+  * so a boot that fails to connect still names where it tried. The terminal conversation itself is not reachable from
+  * a test; [[BootGuard]]'s decisions are.
   */
 object TestServerBoot extends ZIOSpecDefault {
 
@@ -54,6 +54,56 @@ object TestServerBoot extends ZIOSpecDefault {
         events.drop(4).toSet == Set("job runner released", "pool closed")
       )
     },
+    test("shutdown logs that it has begun, each step in the order it stops them, and when it has stopped") {
+      for {
+        booted <- boot(pidFileOption = None)
+        exit   <- booted.fiber.interrupt
+        lines = JobLogSink.stripAnsi(booted.logged).linesIterator.toVector.collect { case ShutdownLine(line) => line }
+      } yield assertTrue(
+        exit.isInterruptedOnly,
+        lines.headOption.contains("Shutting down"),
+        lines.filter(_.startsWith("Stopping ")) == Vector(
+          "Stopping the retention sweep",
+          "Stopping the scheduler",
+          "Stopping the running jobs",
+          "Stopping the HTTP server"
+        ),
+        lines.filter(_.startsWith("Stopped the ")).map(_.replaceFirst(""" in \d+ ms$""", "")) == Vector(
+          "Stopped the retention sweep",
+          "Stopped the scheduler",
+          "Stopped the running jobs",
+          "Stopped the HTTP server"
+        ),
+        lines.lastOption.exists(_.startsWith("Stopped in "))
+      )
+    },
+    test("a layer's release is logged as a step, around the release the layer itself registered") {
+      val pool = ZLayer.scoped(ZIO.acquireRelease(ZIO.unit)(_ => ZIO.logInfo("pool closed")))
+      for {
+        _    <- ZIO.scoped(ShutdownLog.layer("the pool")(pool).build)
+        logs <- ZTestLogger.logOutput
+      } yield assertTrue(logs.map(_.message()) == Chunk("Stopping the pool", "pool closed", "Stopped the pool in 0 ms"))
+    }.provide(ZTestLogger.default),
+    test("a step's release is logged as it starts and as it ends, with how long it took") {
+      for {
+        closing <- ZIO.scoped(ShutdownLog.step("the pool")(ZIO.addFinalizer(ZIO.sleep(2.seconds)))).fork
+        _       <- TestClock.adjust(2.seconds)
+        _       <- closing.join
+        logs    <- ZTestLogger.logOutput
+      } yield assertTrue(logs.map(_.message()) == Chunk("Stopping the pool", "Stopped the pool in 2000 ms"))
+    }.provide(ZTestLogger.default),
+    test("a step whose release hasn't ended has logged that it is stopping but not that it stopped") {
+      for {
+        releasing <- Promise.make[Nothing, Unit]
+        released  <- Promise.make[Nothing, Unit]
+        release = releasing.succeed(()) *> released.await
+        closing <- ZIO.scoped(ShutdownLog.step("the pool")(ZIO.addFinalizer(release))).fork
+        _       <- releasing.await
+        during  <- ZTestLogger.logOutput
+        _       <- released.succeed(())
+        _       <- closing.join
+      } yield assertTrue(during.map(_.message()) == Chunk("Stopping the pool"))
+    }.provide(ZTestLogger.default),
     test("a detached server's pid file outlives the services it owns") {
       for {
         dir <- ZIO.attemptBlocking(Files.createTempDirectory("ccas-pid"))
@@ -174,6 +224,9 @@ object TestServerBoot extends ZIOSpecDefault {
     val out = new PrintStream(log, true, StandardCharsets.UTF_8)
     new JobLogSink { override def writeConsoleSync(line: String): Unit = out.println(line) }
   }
+
+  // A line `ShutdownLog` wrote, as the console shows it, less its level, time and source.
+  private val ShutdownLine = """\[INFO \d{2}:\d{2}:\d{2}\] \[shutdown\] (.*)""".r
 
   // Port 0, so a change that built it after all could never take a real server's port.
   private val unbuiltServer = Server.defaultWith(_.binding("127.0.0.1", 0))

@@ -3,10 +3,12 @@ package ccas.cli.serve
 import java.nio.file.{Files, Path}
 
 import com.typesafe.config.ConfigFactory
-import zio.{durationInt, ExitCode, Ref, Scope, UIO, ZIO}
+import zio.{duration2DurationOps, durationInt, ExitCode, Ref, Scope, UIO, ZIO}
 import zio.test.{assertTrue, Spec, TestConsole, ZIOSpecDefault}
 
+import ccas.cli.Main
 import ccas.cli.serve.HealthProbe.Readiness
+import ccas.server.CcasServer
 
 /** Deterministic, DB-free unit tests for the `ccas server up --detach` / `status` / `down` lifecycle. The pure decision
   * logic ([[Detach.reconstruct]], [[Detach.resolveDeadline]], [[Detach.timeoutMessage]], [[Detach.diedMessage]],
@@ -220,6 +222,14 @@ object TestServeLifecycle extends ZIOSpecDefault {
       test("an exit during startup with a log leaves the log to speak") {
         val msg = Detach.diedMessage(Path.of("/state/server-8080.log"), "Caused by: ConnectException")
         assertTrue(msg.contains("Caused by: ConnectException"), !msg.contains("in the foreground"))
+      }
+    ),
+    suite("the shutdown time limit")(
+      test("ccas server up and ccas-server give up on a stuck shutdown before ccas server down would SIGKILL them") {
+        assertTrue(
+          Main.gracefulShutdownTimeout == CcasServer.gracefulShutdownTimeout,
+          CcasServer.gracefulShutdownTimeout < ServerStop.TermTimeout
+        )
       }
     ),
     suite("ServerStop.stopQuestion")(
