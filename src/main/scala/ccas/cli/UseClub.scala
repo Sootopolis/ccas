@@ -12,6 +12,7 @@ import ccas.server.routes.{ClubResult, ClubRoutes}
 import ccas.server.routes.ClubRoutes.ClubInfo
 import ccas.server.routes.ManagedClubRoutes.ManagedClubResponse
 import ccas.utils.client.HttpClientLayer
+import ccas.utils.errors.safeMessage
 
 /** `ccas use-club [slug] [--clear]` — a per-machine pointer at the club that commands target when they omit `--club`.
   *
@@ -118,7 +119,7 @@ object UseClub {
       // steps aside.
       managedSlugs = managed.map(_.map(_.slug)).filter(_.nonEmpty)
       written <- ZIO.foreach(managedSlugs)(CompletionCache.writeClubsIn(wiring.clubsFile, _))
-      _       <- ZIO.whenDiscard(written.contains(false))(cacheWriteFailed(wiring.clubsFile))
+      _       <- ZIO.whenDiscard(written.contains(false))(CompletionCache.reportClubsWriteFailed(wiring.clubsFile))
       settled = settlement(slug, resolutionOption, managed)
       // Best-effort: the slug-only pointer already landed, so a failed upgrade doesn't fail the command.
       _ <- ZIO.foreachDiscard(settled.clubIdOption)(id => upgradePointer(wiring, id, settled.current))
@@ -266,15 +267,6 @@ object UseClub {
         }
     }
 
-  // Naming the path is the actionable part: an unwritable cache directory (a root-owned one left by a `sudo ccas` run
-  // is the usual cause) otherwise leaves tab-completion silently dead with nothing to pull on. Advisory only — the
-  // pointer is already written and the command still succeeds.
-  private def cacheWriteFailed(clubsFile: Path): UIO[Unit] =
-    note(
-      s"warning: could not update the club cache at $clubsFile — " +
-        "shell completion won't reflect your managed clubs until that is writable"
-    )
-
   private def cleared(previous: String): UIO[ExitCode] =
     Console.printLine(s"current club cleared (was $previous)").orDie.as(ExitCode.success)
 
@@ -289,7 +281,5 @@ object UseClub {
     Console.printLineError(s"error: $message").orDie.as(ExitCode(2))
 
   private def saveFailed(action: String)(e: Throwable): UIO[ExitCode] =
-    Console.printLineError(s"error: failed to $action: ${rootMessage(e)}").orDie.as(ExitCode(1))
-
-  private def rootMessage(e: Throwable): String = Option(e.getMessage).getOrElse(e.getClass.getSimpleName)
+    Console.printLineError(s"error: failed to $action: ${e.safeMessage}").orDie.as(ExitCode(1))
 }

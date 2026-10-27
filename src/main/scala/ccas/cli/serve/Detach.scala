@@ -12,6 +12,7 @@ import zio.{durationInt, Console, Duration, ExitCode, UIO, ZIO}
 
 import ccas.cli.serve.HealthProbe.Readiness
 import ccas.server.{BootGuard, CcasServer}
+import ccas.utils.errors.safeMessage
 
 /** Parent side of `ccas server up --detach`: spawn the server as a background process, wait for it to become ready,
   * then return to the shell with the pid printed. The JVM can't `fork()`, so we re-exec this same binary's
@@ -92,7 +93,7 @@ object Detach {
       }
 
     program.catchAllCause { c =>
-      Console.printLineError(s"error: ${rootMessage(c.squash)}").orDie.as(ExitCode(1))
+      Console.printLineError(s"error: ${c.squash.safeMessage}").orDie.as(ExitCode(1))
     }
   }
 
@@ -282,8 +283,6 @@ object Detach {
         else { "" }
       }
       .orElseSucceed("")
-
-  private def rootMessage(t: Throwable): String = Option(t.getMessage).getOrElse(t.getClass.getSimpleName)
 
   private case object ProcessDied
 }

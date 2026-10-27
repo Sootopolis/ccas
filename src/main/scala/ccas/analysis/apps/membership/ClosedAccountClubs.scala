@@ -11,6 +11,7 @@ import ccas.api.misc.subtypes.{ClubId, PlayerId, Username}
 import ccas.api.player.{ApiPlayer, ApiPlayerClubs}
 import ccas.utils.{ApiConcurrency, ProgressDisplay}
 import ccas.utils.client.{ChessComClient, NetworkUnavailableException}
+import ccas.utils.errors.safeMessage
 import ccas.utils.sql.PostgresClient
 
 /** Closed accounts' club lists, which keep the memberships a club's roster drops when an account closes (ADR 0022). A
@@ -145,7 +146,7 @@ private[membership] object ClosedAccountClubs {
     fetch.foldZIO(
       error =>
         NetworkUnavailableException.recoverUnless(error)(
-          ZIO.logWarning(s"Cannot fetch the club list of $username: ${error.getMessage}").as(None)
+          ZIO.logWarning(s"Cannot fetch the club list of $username: ${error.safeMessage}").as(None)
         ),
       list => PlayerClubList.save(list).as(Some(list))
     )

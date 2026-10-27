@@ -14,6 +14,7 @@ import ccas.api.club.ApiClub
 import ccas.api.misc.enums.PlayerStatusCategory
 import ccas.api.misc.subtypes.{ClubSlug, PlayerId, Username}
 import ccas.api.player.*
+import ccas.utils.errors.safeMessage
 import ccas.utils.sql.PostgresClient
 
 private[recruitment] object RecruitmentFilterDefs {
@@ -353,7 +354,7 @@ private[recruitment] object RecruitmentFilterDefs {
           }
       } yield rejected).catchAll { error =>
         run.failedAdminSlugs.update(_ + slug) *>
-          ZIO.logInfo(s"[Recruitment] Admin late-check failed for $slug: ${error.getMessage}").as(false)
+          ZIO.logInfo(s"[Recruitment] Admin late-check failed for $slug: ${error.safeMessage}").as(false)
       }
     }
 

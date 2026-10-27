@@ -6,6 +6,7 @@ import scala.util.Try
 
 import cron4s.CronExpr
 
+import ccas.utils.errors.safeMessage
 import ccas.utils.json.EnumJson
 import ccas.utils.sql.EnumSql
 
@@ -75,7 +76,7 @@ object ScheduleTrigger {
       // Fully-qualified: the nested `ScheduleTrigger.Cron` case class shadows the bare name in this scope.
       cron4s.Cron.parse(norm) match {
         case Right(_)  => Right(norm)
-        case Left(err) => Left(s"invalid cron '${unix5.trim}': ${Option(err.getMessage).getOrElse(err.toString)}")
+        case Left(err) => Left(s"invalid cron '${unix5.trim}': ${err.safeMessage}")
       }
     }
 

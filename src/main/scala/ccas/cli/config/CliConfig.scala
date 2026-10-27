@@ -5,6 +5,8 @@ import java.nio.file.Path
 import zio.{Config, IO}
 import zio.config.typesafe.TypesafeConfigProvider
 
+import ccas.utils.errors.safeMessage
+
 /** User-facing CLI settings, read from `${XDG_CONFIG_HOME:-~/.config}/ccas/config.conf` (HOCON).
   *
   * This is the CLI *client* config and is deliberately separate from the server's classpath `application.conf` (DB,
@@ -68,9 +70,7 @@ object CliConfig {
     TypesafeConfigProvider
       .fromHoconFileZIO(file.toFile)
       .flatMap(_.load(descriptor))
-      .mapError(e => s"invalid config file $file: ${rootMessage(e)}")
-
-  private def rootMessage(e: Throwable): String = Option(e.getMessage).getOrElse(e.getClass.getSimpleName)
+      .mapError(e => s"invalid config file $file: ${e.safeMessage}")
 
   // HOCON has no `~` expansion; do it ourselves so `log_dir = "~/.local/state/ccas/logs"` resolves to an absolute path.
   private def expandTilde(p: String): String = {

@@ -12,7 +12,7 @@ import ccas.api.club.ApiClubMatches
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId}
 import ccas.utils.{ApiConcurrency, OutputFile, ProgressDisplay}
 import ccas.utils.client.{BodyStore, ChessComClient, HttpClientLayer}
-import ccas.utils.errors.NotFoundException
+import ccas.utils.errors.{safeMessage, NotFoundException}
 import ccas.utils.sql.PostgresClient
 
 object ClubDataApp extends ZIOAppDefault {
@@ -112,7 +112,7 @@ object ClubDataApp extends ZIOAppDefault {
         _ <- ZIO.foreachPar(clubs) { club =>
           for {
             r <- refreshClub(client, club).catchAll { error =>
-              ZIO.logInfo(s"[ClubData] Failed to refresh ${club.slug}: ${error.getMessage}").as(ClubFailed)
+              ZIO.logInfo(s"[ClubData] Failed to refresh ${club.slug}: ${error.safeMessage}").as(ClubFailed)
             }
             updated <- resultRef.updateAndGet { acc =>
               acc.copy(
@@ -275,7 +275,7 @@ object ClubDataApp extends ZIOAppDefault {
   ): RIO[PostgresClient, Option[ApiClubMatches]] =
     fetchClubMatches(client, slug)
       .withClubSlugRenameRecovery(client, slug, Some(clubId))(fresh => fetchClubMatches(client, fresh))
-      .catchAll(error => ZIO.logInfo(s"[ClubData] Match fetch failed for $slug: ${error.getMessage}").as(None))
+      .catchAll(error => ZIO.logInfo(s"[ClubData] Match fetch failed for $slug: ${error.safeMessage}").as(None))
 
   /** Fetches the club's `/matches` listing, folding an unchanged cache result (Fresh / 304-revalidated / byte-identical
     * 200) to `None` so the caller skips the `SELECT body` Neon read — the #190 egress cut. The row stays cached, so the
@@ -324,7 +324,7 @@ object ClubDataApp extends ZIOAppDefault {
           }
       }
     }.catchAll { error =>
-      ZIO.logDebug(s"[ClubData] Opportunistic ref failed for $slug: ${error.getMessage}")
+      ZIO.logDebug(s"[ClubData] Opportunistic ref failed for $slug: ${error.safeMessage}")
     }
 
   private def formatReport(data: RefreshResult): String =

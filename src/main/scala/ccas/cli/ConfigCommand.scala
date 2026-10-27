@@ -6,6 +6,7 @@ import java.nio.file.{Files, Path}
 import zio.{Console, ExitCode, Task, UIO, ZIO}
 
 import ccas.server.config.{ServerEnvFile, ServerEnvKeys}
+import ccas.utils.errors.safeMessage
 import ccas.utils.sql.PostgresClient
 
 /** Handlers for `ccas config` — a purely local command (no server, no DB) that manages the server-bootstrap env file
@@ -205,7 +206,5 @@ object ConfigCommand {
     Console.printLineError("error: key must not be blank").orDie.as(ExitCode(2))
 
   private def ioError(e: Throwable): UIO[ExitCode] =
-    Console.printLineError(s"error: ${rootMessage(e)}").orDie.as(ExitCode(1))
-
-  private def rootMessage(e: Throwable): String = Option(e.getMessage).getOrElse(e.getClass.getSimpleName)
+    Console.printLineError(s"error: ${e.safeMessage}").orDie.as(ExitCode(1))
 }

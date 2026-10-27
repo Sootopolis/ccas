@@ -23,7 +23,7 @@ import ccas.server.scheduler.ScheduleParams.{
   StatsOptions
 }
 import ccas.utils.ProgressDisplay
-import ccas.utils.errors.ConflictException
+import ccas.utils.errors.{safeMessage, ConflictException}
 import ccas.utils.sql.PostgresClient
 
 trait JobScheduler {
@@ -70,7 +70,7 @@ object JobScheduler {
             .catchAll { e =>
               ProgressDisplay
                 .sourced("scheduler")(
-                  ZIO.logError(s"${schedule.kind} (club ${schedule.clubIdOption}): invalid trigger: ${e.getMessage}")
+                  ZIO.logError(s"${schedule.kind} (club ${schedule.clubIdOption}): invalid trigger: ${e.safeMessage}")
                 )
                 .as(false)
             }
@@ -86,14 +86,14 @@ object JobScheduler {
                     )
                   case e =>
                     ProgressDisplay.sourced("scheduler")(
-                      ZIO.logError(s"${schedule.kind} (club ${schedule.clubIdOption}): ${e.getMessage}")
+                      ZIO.logError(s"${schedule.kind} (club ${schedule.clubIdOption}): ${e.safeMessage}")
                     )
                 }
               }
             }
         }
       } yield ())
-        .catchAll(e => ProgressDisplay.sourced("scheduler")(ZIO.logError(s"Poll error: ${e.getMessage}")))
+        .catchAll(e => ProgressDisplay.sourced("scheduler")(ZIO.logError(s"Poll error: ${e.safeMessage}")))
 
     private def runSchedule(schedule: JobSchedule, now: Instant): Task[Unit] =
       (for {

@@ -7,6 +7,7 @@ import ccas.analysis.tables.{ClubAdmin, PlayerName}
 import ccas.api.misc.subtypes.{ClubId, PlayerId, Username}
 import ccas.api.player.ApiPlayer
 import ccas.utils.client.{ChessComClient, HttpStatusException}
+import ccas.utils.errors.safeMessage
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.withTransaction
 
@@ -35,7 +36,7 @@ object ClubAdminResolver {
 
         resolvedUnknowns <- ZIO.foreach(unknownUsernames.toList) { username =>
           resolveAndReconcileAdmin(client, username).catchAll { error =>
-            ZIO.logInfo(s"[ClubAdminResolver] Could not resolve admin '$username': ${error.getMessage}").as(None)
+            ZIO.logInfo(s"[ClubAdminResolver] Could not resolve admin '$username': ${error.safeMessage}").as(None)
           }
         }.map(_.flatten.toMap)
 

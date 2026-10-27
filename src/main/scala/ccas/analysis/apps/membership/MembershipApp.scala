@@ -15,7 +15,7 @@ import ccas.api.club.ApiClubMembers
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId, PlayerId}
 import ccas.utils.{OutputFile, ProgressDisplay, TimeParser}
 import ccas.utils.client.{BodyStore, ChessComClient, HttpClientLayer, NetworkUnavailableException}
-import ccas.utils.errors.{BadRequestException, NotFoundException}
+import ccas.utils.errors.{safeMessage, BadRequestException, NotFoundException}
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.withTransaction
 
@@ -334,7 +334,7 @@ object MembershipApp extends ZIOAppDefault {
       invitations <- MembershipReport.lookupJoinInvitations(result.clubId, result.changes.toList)
         .catchAll { e =>
           ZIO
-            .logWarning(s"Join-invitation lookup failed for club ${result.clubId}: ${e.getMessage}")
+            .logWarning(s"Join-invitation lookup failed for club ${result.clubId}: ${e.safeMessage}")
             .as(Map.empty[PlayerId, Instant])
         }
       _ <- MembershipReport.reportReconciliation(result, invitations)

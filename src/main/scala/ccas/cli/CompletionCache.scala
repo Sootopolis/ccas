@@ -5,7 +5,7 @@ import java.nio.file.attribute.FileTime
 
 import scala.jdk.CollectionConverters.*
 
-import zio.{Clock, UIO, ZIO}
+import zio.{Clock, Console, UIO, ZIO}
 
 /** Maintains the cache files the generated shell completions read — club slugs and recent job ids. Every operation is
   * best-effort: IO errors are swallowed and never change a command's exit code (completion is a convenience, not
@@ -35,6 +35,18 @@ object CompletionCache {
     * result; a caller acting on an explicit request about club setup should report it. Never fails.
     */
   def writeClubs(slugs: List[String]): UIO[Boolean] = writeClubsIn(XdgPaths.clubsFile, slugs)
+
+  /** Warn that a clubs-cache write to `file` failed. Naming the path is the actionable part: an unwritable cache
+    * directory (a root-owned one left by a `sudo ccas` run is the usual cause) otherwise leaves tab-completion silently
+    * dead with nothing to pull on. Advisory only: the command still succeeds.
+    */
+  def reportClubsWriteFailed(file: Path): UIO[Unit] =
+    Console
+      .printLineError(
+        s"warning: could not update the club cache at $file — " +
+          "shell completion won't reflect your managed clubs until that is writable"
+      )
+      .ignore
 
   /** Seed the clubs cache from the config's `default_clubs` so completion has suggestions before any server round-trip.
     */

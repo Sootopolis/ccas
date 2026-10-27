@@ -14,6 +14,7 @@ import ccas.api.clubmatch.ApiDailyMatch.*
 import ccas.api.misc.subtypes.*
 import ccas.utils.{ApiConcurrency, ProgressBar, ProgressDisplay}
 import ccas.utils.client.{NetworkUnavailableException, ReportedNotFound}
+import ccas.utils.errors.safeMessage
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.withTransaction
 
@@ -73,7 +74,7 @@ private[history] object HistoryProcessing {
                       .zipLeft(ZIO.foreachDiscard(shared)(_.queriedPlayers.update(_ + dp.playerId)))
                       .catchAll { error =>
                         NetworkUnavailableException.recoverUnless(error)(
-                          ZIO.logWarning(s"  ${dp.username}: failed to seed — ${error.getMessage}")
+                          ZIO.logWarning(s"  ${dp.username}: failed to seed — ${error.safeMessage}")
                         )
                       }
                   }.withParallelism(ApiConcurrency.fiberCap(ctx.client))
@@ -140,9 +141,9 @@ private[history] object HistoryProcessing {
           case error =>
             for {
               _ <- ctx.matchesFailed.update(_ + 1)
-              _ <- ctx.failedMatches.update(_ :+ FailedMatch(MatchKey(pm.matchId, pm.isLive), error.getMessage))
+              _ <- ctx.failedMatches.update(_ :+ FailedMatch(MatchKey(pm.matchId, pm.isLive), error.safeMessage))
               _ <- HistoryPendingMatch.updateStatus(ctx.clubId, pm.matchId, pm.isLive, PendingMatchStatus.ApiError)
-              _ <- ZIO.logWarning(s"    Match ${pm.matchId}${if (pm.isLive) " (live)" else ""}: ${error.getMessage}")
+              _ <- ZIO.logWarning(s"    Match ${pm.matchId}${if (pm.isLive) " (live)" else ""}: ${error.safeMessage}")
             } yield ()
         }
         n <- counter.updateAndGet(_ + 1)
@@ -333,7 +334,7 @@ private[history] object HistoryProcessing {
               case error =>
                 for {
                   _ <- failed.update(_ + 1)
-                  _ <- ZIO.logWarning(s"    Refresh $matchId: ${error.getMessage}")
+                  _ <- ZIO.logWarning(s"    Refresh $matchId: ${error.safeMessage}")
                 } yield ()
             }
             n <- counter.updateAndGet(_ + 1)
@@ -588,7 +589,7 @@ private[history] object HistoryProcessing {
         NetworkUnavailableException.recoverUnless(error) {
           for {
             _ <- ctx.playersFailed.update(_ + 1)
-            _ <- ZIO.logWarning(s"    Cannot resolve player $username: ${error.getMessage}")
+            _ <- ZIO.logWarning(s"    Cannot resolve player $username: ${error.safeMessage}")
             _ <- promise.succeed(None)
           } yield None
         },

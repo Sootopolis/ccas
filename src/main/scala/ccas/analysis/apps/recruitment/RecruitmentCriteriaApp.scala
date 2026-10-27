@@ -14,7 +14,7 @@ import ccas.analysis.tables.*
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, Elo}
 import ccas.utils.ProgressDisplay
 import ccas.utils.client.{BodyStore, ChessComClient, HttpClientLayer}
-import ccas.utils.errors.{BadRequestException, NotFoundException}
+import ccas.utils.errors.{safeMessage, BadRequestException, NotFoundException}
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.withTransaction
 
@@ -221,12 +221,12 @@ object RecruitmentCriteriaApp extends ZIOAppDefault {
   private def loadFromJson(path: String): RIO[Any, RecruitmentCriteria] =
     for {
       size <- ZIO.attemptBlocking(Files.size(Path.of(path)))
-        .mapError(e => BadRequestException(s"cannot read $path: ${e.getMessage}"))
+        .mapError(e => BadRequestException(s"cannot read $path: ${e.safeMessage}"))
       _ <- ZIO.whenDiscard(size > MaxJsonBytes) {
         ZIO.fail(BadRequestException(s"JSON file too large: $size bytes (max $MaxJsonBytes)"))
       }
       content <- ZIO.attemptBlocking(Files.readString(Path.of(path)))
-        .mapError(e => BadRequestException(s"cannot read $path: ${e.getMessage}"))
+        .mapError(e => BadRequestException(s"cannot read $path: ${e.safeMessage}"))
       spec <- ZIO.fromEither(JsonDecoder[CriteriaSpec].decodeJson(content)).mapError(BadRequestException(_))
     } yield spec.toCriteria
 
