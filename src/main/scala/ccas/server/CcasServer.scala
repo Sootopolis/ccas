@@ -5,6 +5,7 @@ import java.nio.file.{Files, Path, Paths}
 import com.typesafe.config.ConfigFactory
 import zio.{durationInt, Duration, ExitCode, RIO, Schedule, Scope, URIO, ZIO, ZIOAppArgs, ZIOAppDefault, ZLayer}
 import zio.http.{Routes, Server}
+import zio.http.netty.NettyConfig
 
 import ccas.analysis.tables.Tables
 import ccas.server.config.{ServerEnvOverlay, ServerEnvPaths}
@@ -65,13 +66,21 @@ object CcasServer extends ZIOAppDefault {
           ShutdownLog.layer("the job runner")(JobRunner.live),
           JobScheduler.live
         ),
-        // Read-idle reaper: zio-http leaves `idleTimeout=None`, so a client that vanishes without FIN/RST would pin
-        // a Netty channel and fd forever. Read-only, so it never resets on writes — which means every live log/progress
-        // follow is reaped on this schedule and reconnects transparently (#161).
-        // See docs/adr/0015-server-read-idle-reaper.md before changing the duration.
-        server = Server.defaultWith(_.binding(host, port).idleTimeout(60.seconds))
+        server = httpServer(host, port)
       )
     }
+
+  /** The HTTP server [[boot]] listens with. */
+  private[server] def httpServer(host: String, port: Int): ZLayer[Any, Throwable, Server] = {
+    // Read-idle reaper: zio-http leaves `idleTimeout=None`, so a client that vanishes without FIN/RST would pin
+    // a Netty channel and fd forever. Read-only, so it never resets on writes — which means every live log/progress
+    // follow is reaped on this schedule and reconnects transparently (#161).
+    // See docs/adr/0015-server-read-idle-reaper.md before changing the duration.
+    val config = Server.Config.default.binding(host, port).idleTimeout(60.seconds)
+    // Netty's default makes every stop wait out a 2 s quiet period (#366). The drain of in-flight requests is
+    // zio-http's own finalizer, bounded by `config`'s `gracefulShutdownTimeout`, and runs before Netty's shutdown.
+    (ZLayer.succeed(config) ++ ZLayer.succeed(NettyConfig.defaultWithFastShutdown)) >>> Server.customized
+  }
 
   /** The services [[boot]] builds for the HTTP server and the loops to run on. */
   private[server] type Served = JobScheduler & JobRunner & PostgresClient & BodyStore & ChessComClient
