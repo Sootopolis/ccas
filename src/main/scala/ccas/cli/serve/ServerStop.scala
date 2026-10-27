@@ -24,8 +24,8 @@ import ccas.utils.sql.DatabaseAddress
   */
 object ServerStop {
 
-  private val TermTimeout = 20.seconds
-  private val KillTimeout = 5.seconds
+  private[cli] val TermTimeout = 20.seconds
+  private val KillTimeout      = 5.seconds
 
   /** The line printed when `down` has no detached server to stop yet a server is still answering `port` — almost
     * always a foreground `ccas server up`, which writes no pid file and so can't be reached via the pid file. Points at

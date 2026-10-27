@@ -3,7 +3,7 @@ package ccas.server
 import java.nio.file.{Files, Path, Paths}
 
 import com.typesafe.config.ConfigFactory
-import zio.{durationInt, ExitCode, RIO, Schedule, Scope, URIO, ZIO, ZIOAppArgs, ZIOAppDefault, ZLayer}
+import zio.{durationInt, Duration, ExitCode, RIO, Schedule, Scope, URIO, ZIO, ZIOAppArgs, ZIOAppDefault, ZLayer}
 import zio.http.{Routes, Server}
 
 import ccas.analysis.tables.Tables
@@ -31,6 +31,10 @@ object CcasServer extends ZIOAppDefault {
   override def run: ZIO[Any & ZIOAppArgs & Scope, Any, Any] =
     serve.catchSome { case BootGuard.Declined => exit(ExitCode(1)) }
 
+  // ZIO's default waits forever (#316). Shorter than `ccas server down`'s wait before SIGKILL, so a stuck server exits
+  // on its own, having logged the step it waits on (`ShutdownLog`). `ccas.cli.Main` uses the same limit.
+  override def gracefulShutdownTimeout: Duration = 15.seconds
+
   // Apply the ccas.env overlay (file → system properties for any env var not already set) BEFORE the first
   // ConfigFactory.load below, so the standalone `ccas-server` binary (and the systemd unit) boot from `ccas config`'s
   // file without hand-exported env. `suspendSucceed` defers the config read until the overlay effect has run.
@@ -54,11 +58,11 @@ object CcasServer extends ZIOAppDefault {
       serveWith(
         pidFileOption = detachedPidFileOption,
         services = ZLayer.makeSome[ProgressDisplay, Served](
-          ChessComClient.live("server"),
-          HttpClientLayer.live,
-          BodyStore.live,
-          PostgresClient.live(onInit = poolInit),
-          JobRunner.live,
+          ShutdownLog.layer("the Chess.com client")(ChessComClient.live("server")),
+          ShutdownLog.layer("the HTTP client")(HttpClientLayer.live),
+          ShutdownLog.layer("the body store")(BodyStore.live),
+          ShutdownLog.layer("the database pool")(PostgresClient.live(onInit = poolInit)),
+          ShutdownLog.layer("the job runner")(JobRunner.live),
           JobScheduler.live
         ),
         // Read-idle reaper: zio-http leaves `idleTimeout=None`, so a client that vanishes without FIN/RST would pin
@@ -81,13 +85,18 @@ object CcasServer extends ZIOAppDefault {
     server: ZLayer[Any, Throwable, Server]
   ): ZIO[Scope, Throwable, Unit] =
     ProgressDisplay.installed(showProgress = false) {
-      (pidFileManaged(pidFileOption) *> ZIO.scoped {
-        for {
-          serverEnv <- server.build
-          _         <- ZIO.addFinalizer(ZIO.serviceWithZIO[JobRunner](_.interruptAll))
-          _         <- running.provideSomeEnvironment[Scope & Served](_ ++ serverEnv)
-        } yield ()
-      }).provideSomeLayer[Scope & ProgressDisplay](services)
+      ShutdownLog.Stopwatch.make.flatMap { shutdown =>
+        (pidFileManaged(pidFileOption) *> ZIO.scoped {
+          for {
+            serverEnv <- ShutdownLog.step("the HTTP server")(server.build)
+            _ <- ShutdownLog.step("the running jobs")(ZIO.addFinalizer(ZIO.serviceWithZIO[JobRunner](_.interruptAll)))
+            _ <- running
+              .onInterrupt(shutdown.start("Shutting down"))
+              .provideSomeEnvironment[Scope & Served](_ ++ serverEnv)
+          } yield ()
+        }).provideSomeLayer[Scope & ProgressDisplay](services)
+          .ensuring(shutdown.stop("Stopped"))
+      }
     }
 
   private def running: URIO[Scope & Served & Server, Unit] = {
@@ -104,8 +113,8 @@ object CcasServer extends ZIOAppDefault {
 
     for {
       scheduler <- ZIO.service[JobScheduler]
-      _         <- scheduler.start
-      _         <- retentionSweepForked
+      _         <- ShutdownLog.step("the scheduler")(scheduler.start)
+      _         <- ShutdownLog.step("the retention sweep")(retentionSweepForked)
       _         <- Server.serve(routes)
     } yield ()
   }

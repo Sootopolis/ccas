@@ -2,7 +2,7 @@ package ccas.cli
 
 import java.nio.file.Paths
 
-import zio.{Cause, Console, ExitCode, Scope, UIO, URIO, ZIO, ZIOAppArgs, ZIOAppDefault}
+import zio.{Cause, Console, Duration, ExitCode, Scope, UIO, URIO, ZIO, ZIOAppArgs, ZIOAppDefault}
 import zio.cli.{CliApp, CliError, HelpDoc}
 
 import ccas.cli.config.CliConfig
@@ -31,6 +31,10 @@ object Main extends ZIOAppDefault {
         CliConfig.load(XdgPaths.configFile).foldZIO(configLoadFailed, runResolved(args.toList, _))
       }
     }
+
+  // `server up` runs the server in this JVM, a `--detach` child included, so its limit is the server's; `CcasServer`'s
+  // override says why. Every other command shares it: a client stuck on exit gives up too, instead of waiting forever.
+  override def gracefulShutdownTimeout: Duration = CcasServer.gracefulShutdownTimeout
 
   private def configLoadFailed(message: String): UIO[Unit] =
     Console.printLineError(s"error: $message").orDie *> exit(ExitCode(2))
