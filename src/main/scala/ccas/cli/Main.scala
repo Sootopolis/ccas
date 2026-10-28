@@ -1,6 +1,6 @@
 package ccas.cli
 
-import java.nio.file.Paths
+import java.nio.file.{Path, Paths}
 
 import zio.{Cause, Console, Duration, ExitCode, Scope, UIO, URIO, ZIO, ZIOAppArgs, ZIOAppDefault}
 import zio.cli.{CliApp, CliError, HelpDoc}
@@ -85,7 +85,7 @@ object Main extends ZIOAppDefault {
   // resolves (it picks the pid file, the log and the readiness probe), then the foreground's mandatory-config precheck.
   // The detached child re-runs the overlay in its own JVM.
   private def detachServe(cfg: CliConfig, readyTimeoutSeconds: Option[Int]): URIO[ZIOAppArgs, ExitCode] =
-    ServerEnvOverlay(XdgPaths.serverEnvFile) *> ZIO.suspendSucceed {
+    applyServerEnv(XdgPaths.serverEnvFile) *> ZIO.suspendSucceed {
       (missingServeEnv, Detach.resolveDeadline(readyTimeoutSeconds, cfg.readyTimeoutSeconds)) match {
         case (Some(msg), _) => Console.printLineError(s"error: $msg").orDie.as(ExitCode(2))
         // A non-positive deadline is a usage error (exit 2), from the flag or the config file alike — not a failed boot.
@@ -100,12 +100,17 @@ object Main extends ZIOAppDefault {
   // which picks both the probe and the pid file. Unlike `serve`, no mandatory-config precheck — status only needs the
   // port, not CCAS_CONTACT_EMAIL / a database.
   private def statusServe: URIO[ZIOAppArgs, ExitCode] =
-    ServerEnvOverlay(XdgPaths.serverEnvFile) *> onServerPort(port => ServerStatus.run(XdgPaths.stateDir, port))
+    applyServerEnv(XdgPaths.serverEnvFile) *> onServerPort(port => ServerStatus.run(XdgPaths.stateDir, port))
 
   // `server down`: apply the ccas.env overlay first so a file-only SERVER_PORT picks the pid file, and the port the
   // "still responding?" hint (ServerStop.foregroundHint) probes — otherwise `down` could stop another port's server.
   private def stopServe: URIO[ZIOAppArgs, ExitCode] =
-    ServerEnvOverlay(XdgPaths.serverEnvFile) *> onServerPort(port => ServerStop.run(XdgPaths.stateDir, port))
+    applyServerEnv(XdgPaths.serverEnvFile) *> onServerPort(port => ServerStop.run(XdgPaths.stateDir, port))
+
+  // For the commands above, which don't run the server in this JVM: a file that can't be read is a CLI warning, on
+  // stderr like every other. `serve` logs it through the server's display instead.
+  private[cli] def applyServerEnv(file: Path): UIO[Unit] =
+    ServerEnvOverlay(file).unit.catchAll(message => Console.printLineError(s"warning: $message").orDie)
 
   // An unreadable port is a usage error, never the default's: the port picks which server's pid file is used (#326).
   private def onServerPort(withPort: Int => UIO[ExitCode]): UIO[ExitCode] =
@@ -115,21 +120,20 @@ object Main extends ZIOAppDefault {
   // config or booting CcasServer, so the server can boot from `ccas config`'s file without hand-exported env vars.
   // `suspendSucceed` defers `missingServeEnv` until after the overlay has run (it reads the system properties just set).
   private def serve: URIO[ZIOAppArgs, ExitCode] =
-    ServerEnvOverlay(XdgPaths.serverEnvFile) *> ZIO.suspendSucceed {
-      missingServeEnv match {
-        // Known missing config → a one-line message, not the raw ConfigException stack from ConfigFactory.load.
-        case Some(msg) => Console.printLineError(s"error: $msg").orDie.as(ExitCode(2))
-        // `.fold(_ => failure, _ => success)` would be the deprecated `ZIO#exitCode`, which swallows the cause; CcasServer
-        // logs nothing itself, so map via foldCauseZIO and log the cause — else an unexpected crash exits with no diagnostic.
-        case None =>
-          ZIO
-            .scoped(CcasServer.serve)
-            .foldCauseZIO(
-              cause => serverExit(cause),
-              _ => ZIO.succeed(ExitCode.success)
-            )
+    CcasServer
+      .withServerEnv(XdgPaths.serverEnvFile) {
+        ZIO.suspendSucceed {
+          missingServeEnv match {
+            // Known missing config → a one-line message, not the raw ConfigException stack from ConfigFactory.load.
+            case Some(msg) => Console.printLineError(s"error: $msg").orDie.as(ExitCode(2))
+            case None      => ZIO.scoped(CcasServer.serve).as(ExitCode.success)
+          }
+        }
       }
-    }
+      // `.fold(_ => failure, _ => success)` would be the deprecated `ZIO#exitCode`, which swallows the cause; CcasServer
+      // logs nothing itself, so `serverExit` does. Outside the display, since a crash's cause is the diagnostic and the
+      // display truncates causes.
+      .foldCauseZIO(serverExit, ZIO.succeed(_))
 
   // A declined boot prompt is the operator's answer, already acknowledged on the terminal, not a crash to log.
   private def serverExit(cause: Cause[Any]): UIO[ExitCode] =
