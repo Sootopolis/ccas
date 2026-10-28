@@ -16,7 +16,7 @@ import ccas.cli.CcasApiClient
 import ccas.server.jobs.{JobEffect, JobKind, JobLogs, JobRun, JobRunner}
 import ccas.server.routes.JobRoutes.JobStatusResponse
 import ccas.server.scheduler.JobScheduler
-import ccas.utils.JobLogSink
+import ccas.utils.{JobLogSink, ProgressDisplay}
 import ccas.utils.client.{BodyStore, FsBodyStore, TestChessComClientSupport}
 import ccas.utils.sql.{DatabaseAddress, PostgresClient}
 
@@ -160,12 +160,34 @@ object TestServerBoot extends ZIOSpecDefault {
       for {
         log <- ZIO.succeed(new ByteArrayOutputStream())
         exit <- JobLogSink.currentSink.locally(capturing(log)) {
-          ZIO.scoped(CcasServer.serveWith(pidFileOption = None, services = pool >>> rest, server = unbuiltServer)).exit
+          serving(pidFileOption = None, services = pool >>> rest, server = unbuiltServer).exit
         }
         lines = JobLogSink.stripAnsi(log.toString(StandardCharsets.UTF_8)).linesIterator.toList
       } yield assertTrue(
         exit.isFailure,
         lines.exists(_.matches("""\[INFO \d{2}:\d{2}:\d{2}\] Database: 127\.0\.0\.1:1/nowhere"""))
+      )
+    },
+    // A directory at the file's path, which no reader can read, root included.
+    test("an unreadable ccas.env is logged once, in the server's format, before anything the server logs after it") {
+      for {
+        dir <- ZIO.attemptBlocking(Files.createTempDirectory("ccas-env"))
+        file = dir.resolve("ccas.env")
+        // Deleted on exit in reverse order, the child first, so the parent is empty by its turn.
+        _ <- ZIO.attemptBlocking {
+          dir.toFile.deleteOnExit()
+          Files.createDirectory(file).toFile.deleteOnExit()
+        }
+        log <- ZIO.succeed(new ByteArrayOutputStream())
+        _ <- JobLogSink.currentSink.locally(capturing(log)) {
+          CcasServer.withServerEnv(file)(ZIO.logInfo("Starting the server..."))
+        }
+        lines = JobLogSink.stripAnsi(log.toString(StandardCharsets.UTF_8)).linesIterator.toList
+      } yield assertTrue(
+        lines.size == 2,
+        lines.head.matches("""\[WARN \d{2}:\d{2}:\d{2}\] could not read server config .+"""),
+        lines.head.contains(file.toString),
+        lines(1).matches("""\[INFO \d{2}:\d{2}:\d{2}\] Starting the server\.\.\.""")
       )
     },
     suite("BootGuard")(
@@ -223,12 +245,22 @@ object TestServerBoot extends ZIOSpecDefault {
       services = stubServices(events, schedulerStarted, sweepStarted, jobsInterrupted, pidFileOption)
       // The display writes each line to the sink the logging fiber carries, and the server's fibers inherit this one.
       fiber <- JobLogSink.currentSink.locally(capturing(log)) {
-        ZIO.scoped(CcasServer.serveWith(pidFileOption, services, markedServer(events, built))).fork
+        serving(pidFileOption, services, markedServer(events, built)).fork
       }
       ready = schedulerStarted.await *> sweepStarted.await *> built.await.flatMap(_.port)
       // Racing the join turns a boot that fails before it is ready into a failure rather than a hang.
       port <- ready.raceFirst(fiber.join *> ZIO.never)
     } yield Booted(fiber, port, events, log)
+
+  // Through the wrapper both entry points use, with a ccas.env path no file can exist at, so it applies nothing.
+  private def serving(
+    pidFileOption: Option[Path],
+    services: ZLayer[ProgressDisplay, Throwable, CcasServer.Served],
+    server: ZLayer[Any, Throwable, Server]
+  ): Task[Unit] =
+    CcasServer.withServerEnv(Paths.get("/dev/null/ccas.env")) {
+      ZIO.scoped[ProgressDisplay](CcasServer.serveWith(pidFileOption, services, server))
+    }
 
   private def capturing(log: ByteArrayOutputStream): JobLogSink = {
     val out = new PrintStream(log, true, StandardCharsets.UTF_8)

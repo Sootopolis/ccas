@@ -30,27 +30,32 @@ object CcasServer extends ZIOAppDefault {
   // with a stack trace. `exit` is safe only in the app that owns the JVM: called under `ccas.cli.Main`, it would
   // deadlock with Main's shutdown hook, so `ccas server up` runs [[serve]] and handles `Declined` itself.
   override def run: ZIO[Any & ZIOAppArgs & Scope, Any, Any] =
-    serve.catchSome { case BootGuard.Declined => exit(ExitCode(1)) }
+    withServerEnv(ServerEnvPaths.file)(serve).catchSome { case BootGuard.Declined => exit(ExitCode(1)) }
 
   // ZIO's default waits forever (#316). Shorter than `ccas server down`'s wait before SIGKILL, so a stuck server exits
   // on its own, having logged the step it waits on (`ShutdownLog`). `ccas.cli.Main` uses the same limit.
   override def gracefulShutdownTimeout: Duration = 15.seconds
 
-  // Apply the ccas.env overlay (file → system properties for any env var not already set) BEFORE the first
-  // ConfigFactory.load below, so the standalone `ccas-server` binary (and the systemd unit) boot from `ccas config`'s
-  // file without hand-exported env. `suspendSucceed` defers the config read until the overlay effect has run.
-  // Foreground `ccas server up` already runs the overlay in `Main` before this; the only-if-absent guard makes this call
-  // idempotent.
-  private[ccas] def serve: ZIO[Scope, Throwable, Unit] =
-    ServerEnvOverlay(ServerEnvPaths.file) *>
-      ZIO.ifZIO(BootGuard.confirmed(detachedChild = detachedPidFileOption.isDefined))(
-        onTrue = boot,
-        onFalse = ZIO.fail(BootGuard.Declined)
-      )
+  /** Runs `zio` under the server's display, with `file` applied by [[ServerEnvOverlay]] first. Every process that runs
+    * the server starts here, `ccas server up` included, so the file is applied once and a file that can't be read is
+    * logged in the format of every line after it (#363). Nothing `zio` runs may install a display of its own: a second
+    * one would add a second logger, and every line would print twice.
+    */
+  private[ccas] def withServerEnv[R, E, A](file: Path)(zio: ZIO[R & ProgressDisplay, E, A]): ZIO[R, E, A] =
+    ProgressDisplay.installed(showProgress = false) {
+      ServerEnvOverlay(file).unit.catchAll(message => ZIO.logWarning(message)) *> zio
+    }
+
+  /** Boots the server, once [[withServerEnv]] has applied the ccas.env file. */
+  private[ccas] def serve: ZIO[Scope & ProgressDisplay, Throwable, Unit] =
+    ZIO.ifZIO(BootGuard.confirmed(detachedChild = detachedPidFileOption.isDefined))(
+      onTrue = boot,
+      onFalse = ZIO.fail(BootGuard.Declined)
+    )
 
   // Behind the guard in `run`, since building these layers writes to the database: the pool's `onInit`, then
   // `JobRunner.live`.
-  private def boot: ZIO[Scope, Throwable, Unit] =
+  private def boot: ZIO[Scope & ProgressDisplay, Throwable, Unit] =
     ZIO.suspendSucceed {
       val config = ConfigFactory.load()
       val host   = config.getString("server.host")
@@ -92,20 +97,18 @@ object CcasServer extends ZIOAppDefault {
     pidFileOption: Option[Path],
     services: ZLayer[ProgressDisplay, Throwable, Served],
     server: ZLayer[Any, Throwable, Server]
-  ): ZIO[Scope, Throwable, Unit] =
-    ProgressDisplay.installed(showProgress = false) {
-      ShutdownLog.Stopwatch.make.flatMap { shutdown =>
-        (pidFileManaged(pidFileOption) *> ZIO.scoped {
-          for {
-            serverEnv <- ShutdownLog.step("the HTTP server")(server.build)
-            _ <- ShutdownLog.step("the running jobs")(ZIO.addFinalizer(ZIO.serviceWithZIO[JobRunner](_.interruptAll)))
-            _ <- running
-              .onInterrupt(shutdown.start("Shutting down"))
-              .provideSomeEnvironment[Scope & Served](_ ++ serverEnv)
-          } yield ()
-        }).provideSomeLayer[Scope & ProgressDisplay](services)
-          .ensuring(shutdown.stop("Stopped"))
-      }
+  ): ZIO[Scope & ProgressDisplay, Throwable, Unit] =
+    ShutdownLog.Stopwatch.make.flatMap { shutdown =>
+      (pidFileManaged(pidFileOption) *> ZIO.scoped {
+        for {
+          serverEnv <- ShutdownLog.step("the HTTP server")(server.build)
+          _ <- ShutdownLog.step("the running jobs")(ZIO.addFinalizer(ZIO.serviceWithZIO[JobRunner](_.interruptAll)))
+          _ <- running
+            .onInterrupt(shutdown.start("Shutting down"))
+            .provideSomeEnvironment[Scope & Served](_ ++ serverEnv)
+        } yield ()
+      }).provideSomeLayer[Scope & ProgressDisplay](services)
+        .ensuring(shutdown.stop("Stopped"))
     }
 
   private def running: URIO[Scope & Served & Server, Unit] = {

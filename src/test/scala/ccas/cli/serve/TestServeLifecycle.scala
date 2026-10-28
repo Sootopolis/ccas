@@ -232,6 +232,20 @@ object TestServeLifecycle extends ZIOSpecDefault {
         )
       }
     ),
+    suite("Main.applyServerEnv")(
+      // A directory at the file's path, which no reader can read, root included.
+      test("a server command that only reads the port warns of an unreadable ccas.env on stderr, in the CLI's form") {
+        withTempDir { dir =>
+          val file = dir.resolve("ccas.env")
+          for {
+            // Registered after `dir`, so it is deleted first and `dir` is empty by its turn.
+            _   <- ZIO.attemptBlocking(Files.createDirectory(file).toFile.deleteOnExit())
+            _   <- Main.applyServerEnv(file)
+            err <- TestConsole.outputErr
+          } yield assertTrue(err.size == 1, err.head.startsWith(s"warning: could not read server config $file: "))
+        }
+      }
+    ),
     suite("ServerStop.stopQuestion")(
       test("a server on a loopback database stops without asking") {
         assertTrue(

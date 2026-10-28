@@ -3,7 +3,7 @@ package ccas.server.config
 import java.nio.file.Path
 
 import com.typesafe.config.ConfigFactory
-import zio.{UIO, ZIO}
+import zio.{IO, UIO, ZIO}
 
 import ccas.utils.errors.safeMessage
 
@@ -15,21 +15,21 @@ import ccas.utils.errors.safeMessage
   * env var, when present, is left untouched and wins; otherwise the file value fills in over the compiled default.
   *
   * `ConfigFactory.invalidateCaches()` is called (only if at least one property was set) so the system-properties layer
-  * is re-read by the next `ConfigFactory.load()`. MUST run before the first `ConfigFactory.load()` in the JVM — wired
-  * into `Main` (every `server` subcommand) and `CcasServer.serve` (which the standalone `ccas-server` runs). It
-  * never fails the boot: a missing or unreadable file logs a warning and applies nothing. Idempotent (the only-if-absent
-  * guard makes a second call a no-op).
+  * is re-read by the next `ConfigFactory.load()`. MUST run before the first `ConfigFactory.load()` in the JVM — applied
+  * once per process, by `Main` (every `server` subcommand) or by `CcasServer.run` (the standalone `ccas-server`).
+  * Idempotent (the only-if-absent guard makes a second call a no-op).
   */
 object ServerEnvOverlay {
 
-  /** Apply `file` and return the keys whose values were promoted to system properties (for an optional debug log). */
-  def apply(file: Path): UIO[List[String]] =
+  /** Apply `file` and return the keys whose values were promoted to system properties. Fails with a ready-to-print
+    * reason when the file exists but can't be read, having applied nothing; a missing file applies nothing and succeeds.
+    * The caller reports the reason, since the server logs it and a CLI command prints it.
+    */
+  def apply(file: Path): IO[String, List[String]] =
     ServerEnvFile
       .readMap(file)
-      .foldZIO(
-        err => ZIO.logWarning(s"could not read server config $file: ${err.safeMessage}").as(Nil),
-        applyMap
-      )
+      .mapError(err => s"could not read server config $file: ${err.safeMessage}")
+      .flatMap(applyMap)
 
   // `ZIO.attempt(...).orElseSucceed(Nil)`: a `setProperty` SecurityException must not become an uncaught defect that
   // crashes the boot — the overlay is best-effort, so swallow it and apply nothing.

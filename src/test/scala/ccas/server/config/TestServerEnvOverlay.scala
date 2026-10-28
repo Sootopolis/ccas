@@ -3,7 +3,7 @@ package ccas.server.config
 import java.nio.file.{Files, Path}
 
 import com.typesafe.config.ConfigFactory
-import zio.{UIO, ZIO}
+import zio.{IO, UIO, ZIO}
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 /** Tests [[ServerEnvOverlay]]: a file value is promoted to a JVM system property only when the env var and property are
@@ -32,7 +32,7 @@ object TestServerEnvOverlay extends ZIOSpecDefault {
   private def write(p: Path, content: String): UIO[Unit] = ZIO.attemptBlocking(Files.writeString(p, content)).unit.orDie
 
   // Run `effect`, always clearing the given properties (and dropping the systemProperties cache) afterwards.
-  private def withCleanProps[A](keys: String*)(effect: UIO[A]): UIO[A] =
+  private def withCleanProps[E, A](keys: String*)(effect: IO[E, A]): IO[E, A] =
     effect.ensuring(ZIO.succeed {
       keys.foreach(System.clearProperty)
       ConfigFactory.invalidateCaches()
@@ -128,6 +128,15 @@ object TestServerEnvOverlay extends ZIOSpecDefault {
         dir     <- tempDir
         applied <- ServerEnvOverlay(dir.resolve("does-not-exist.env"))
       } yield assertTrue(applied.isEmpty)
+    },
+    // A directory rather than a mode-000 file, which root could still read.
+    test("a file that exists but can't be read fails with a message naming it") {
+      for {
+        dir <- tempDir
+        file = dir.resolve("ccas.env")
+        _       <- ZIO.attemptBlocking(Files.createDirectory(file).toFile.deleteOnExit()).orDie
+        message <- ServerEnvOverlay(file).flip
+      } yield assertTrue(message.startsWith(s"could not read server config $file: "))
     }
   ) @@ TestAspect.sequential
 }
