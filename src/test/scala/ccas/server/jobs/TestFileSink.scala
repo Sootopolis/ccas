@@ -23,7 +23,8 @@ object TestFileSink extends ZIOSpecDefault {
     testCounterCountsEveryDropOnce,
     testFinalSummaryWhenReopenSucceeds,
     testFinalSummaryToStderrWhenReopenFails,
-    testNoReopenOrWriteAfterClose
+    testNoReopenOrWriteAfterClose,
+    testOpenFailureNamesTheFileOnce
   ) @@ TestAspect.sequential
 
   private val NoTimeGate: Long = Long.MaxValue // retryAfterNanos so high the time-gate never fires
@@ -66,6 +67,21 @@ object TestFileSink extends ZIOSpecDefault {
     }
     override def close(): Unit = ()
   }
+
+  // A missing log directory: the JDK's NoSuchFileException carries only the path, so the reason comes from safeMessage.
+  private def testOpenFailureNamesTheFileOnce =
+    test("an open failure names the log file once, with the OS's reason") {
+      for {
+        base <- tempDir
+        dir = base.resolve("missing")
+        (_, err) <- captureStderr(FileSink.make(dir, "job-1"))
+        path = dir.resolve("job-1.log")
+      } yield assertTrue(
+        err.linesIterator.toList == List(
+          s"[FileSink] could not open $path: No such file or directory; file logging suppressed, will retry."
+        )
+      )
+    }
 
   private def testTransientOpenFailureRecovers =
     test("an initial open failure is suppressed, then recovers once the dir reappears (resume marker + count)") {

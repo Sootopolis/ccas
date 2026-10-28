@@ -1,5 +1,7 @@
 package ccas.analysis.apps.recruitment
 
+import java.nio.file.Files
+
 import zio.{durationInt, ZIO}
 import zio.json.{EncoderOps, JsonDecoder}
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
@@ -23,7 +25,9 @@ object TestRecruitmentCriteriaApp extends ZIOSpecDefault {
     testSetRejectsLongAlias,
     testValidateRejectsBadRanges,
     testDiffLinesNewAndChanges,
-    testCriteriaSpecRoundTrip
+    testCriteriaSpecRoundTrip,
+    testLoadFromJsonMissingFile,
+    testLoadFromJsonInvalidPath
   ).provideShared(
     FreshSchemaLayer("test_recruitment_criteria", onInit = Tables.ensureTables)
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock
@@ -125,5 +129,24 @@ object TestRecruitmentCriteriaApp extends ZIOSpecDefault {
         decoded == Right(spec),
         spec.toCriteria == criteria
       )
+    }
+
+  // A real NoSuchFileException, whose message is only the path, whoever runs the tests.
+  private def testLoadFromJsonMissingFile =
+    test("a criteria file that doesn't exist is named once in the error") {
+      for {
+        dir <- ZIO.attemptBlocking(Files.createTempDirectory("ccas-criteria"))
+        path = dir.resolve("crit.json")
+        loaded <- RecruitmentCriteriaApp.loadFromJson(path.toString).either
+        _      <- ZIO.attemptBlocking(Files.delete(dir))
+      } yield assertTrue(loaded.left.map(_.getMessage) == Left(s"cannot read $path: No such file or directory"))
+    }
+
+  // A NUL is the one character a Unix path can't hold, so `Path.of` itself fails.
+  private def testLoadFromJsonInvalidPath =
+    test("a criteria path the OS can't name is a bad request, not a crash") {
+      RecruitmentCriteriaApp.loadFromJson("crit\u0000.json").either.map { loaded =>
+        assertTrue(loaded.left.exists(_.isInstanceOf[BadRequestException]))
+      }
     }
 }
