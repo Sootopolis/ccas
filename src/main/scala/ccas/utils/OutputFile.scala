@@ -11,6 +11,7 @@ import scala.util.Using
 import zio.{Clock, Task, UIO, ZIO}
 
 import ccas.api.misc.subtypes.ClubSlug
+import ccas.utils.errors.safeMessage
 
 /** Where an app writes a report. Each write first moves the app's earlier output in that directory into `archive/`.
   * Club-scoped output (`write`, `writeAndLog`) goes to `<Root>/{clubSlug}/{timestamp}-{appName}.{ext}`, so one club's
@@ -54,13 +55,12 @@ object OutputFile {
   def writeAndLogGlobal(appName: String, content: String, subDir: String, ext: String = "txt"): Task[Unit] =
     writeGlobal(appName, content, subDir, ext).flatMap(path => ZIO.logInfo(s"Output written to $path"))
 
-  // A report that can't be archived is left in place with a warning: the write that follows takes a free name. Both
-  // warnings log `$e`, not its message: an NIO exception's message is often just the path, and its class says why.
+  // A report that can't be archived is left in place with a warning: the write that follows takes a free name.
   private def archiveExisting(dir: Path, suffix: String): UIO[Unit] =
     ZIO
       .attemptBlocking(Using.resource(Files.list(dir))(_.iterator().asScala.filter(isReport(_, suffix)).toList))
       .foldZIO(
-        failure = e => ZIO.logWarning(s"could not list earlier reports in $dir: $e"),
+        failure = e => ZIO.logWarning(s"could not list earlier reports in $dir: ${e.safeMessage}"),
         success = reports => ZIO.foreachDiscard(reports)(archive(dir, suffix, _))
       )
 
@@ -79,7 +79,7 @@ object OutputFile {
       .catchAll {
         // A concurrent write to the same directory may have already moved it.
         case _: NoSuchFileException => ZIO.unit
-        case e                      => ZIO.logWarning(s"could not archive $report: $e")
+        case e                      => ZIO.logWarning(s"could not archive $report: ${e.safeMessage}")
       }
   }
 
