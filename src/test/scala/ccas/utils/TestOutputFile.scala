@@ -77,7 +77,9 @@ object TestOutputFile extends ZIOSpecDefault {
         archived == Map("20261027-203357-history.txt" -> "first", "20261027-203357.1-history.txt" -> "second")
       )
     },
-    test("a report whose archive step fails is still written beside the earlier one, with a warning naming it") {
+    test(
+      "a report whose archive step fails is still written beside the earlier one, with a warning naming it and why"
+    ) {
       val club = ClubSlug("output-file-archive-fails")
       for {
         dir   <- clear(club)
@@ -95,7 +97,7 @@ object TestOutputFile extends ZIOSpecDefault {
           "20261027-203357.1-history.txt" -> "second"
         ),
         warnings.size == 1,
-        warnings.exists(_.contains(first.toString))
+        warnings.exists(w => w.contains(first.toString) && w.contains(s"${dir.resolve("archive")}: File exists"))
       )
     }.provide(ZTestLogger.default)
   ) @@ TestAspect.sequential
