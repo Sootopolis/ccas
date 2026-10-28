@@ -5,7 +5,7 @@ import java.nio.file.Path
 import com.typesafe.config.ConfigFactory
 import zio.{IO, UIO, ZIO}
 
-import ccas.utils.errors.safeMessage
+import ccas.utils.errors.safeMessageNaming
 
 /** Applies the [[ServerEnvFile]] to the JVM at boot so the server can read its settings from `ccas.env` instead of
   * hand-exported env vars. For each `KEY=VALUE`, sets a JVM system property `KEY` — but ONLY when the process env var
@@ -28,7 +28,7 @@ object ServerEnvOverlay {
   def apply(file: Path): IO[String, List[String]] =
     ServerEnvFile
       .readMap(file)
-      .mapError(err => s"could not read server config $file: ${err.safeMessage}")
+      .mapError(err => s"could not read server config ${err.safeMessageNaming(file)}")
       .flatMap(applyMap)
 
   // `ZIO.attempt(...).orElseSucceed(Nil)`: a `setProperty` SecurityException must not become an uncaught defect that

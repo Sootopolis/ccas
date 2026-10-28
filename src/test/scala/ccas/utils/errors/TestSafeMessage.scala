@@ -1,5 +1,6 @@
 package ccas.utils.errors
 
+import java.io.IOException
 import java.nio.file.{
   AccessDeniedException,
   DirectoryNotEmptyException,
@@ -8,7 +9,8 @@ import java.nio.file.{
   FileSystemException,
   NoSuchFileException,
   NotDirectoryException,
-  NotLinkException
+  NotLinkException,
+  Path
 }
 
 import zio.ZIO
@@ -48,6 +50,22 @@ object TestSafeMessage extends ZIOSpecDefault {
         read <- ZIO.attemptBlocking(Files.readString(path)).either
         _    <- ZIO.attemptBlocking(Files.delete(dir))
       } yield assertTrue(read.left.map(_.safeMessage) == Left(s"$path: No such file or directory"))
+    },
+    test("a message naming a file error's own path names it once") {
+      assertTrue(
+        new AccessDeniedException("/r/x.txt").safeMessageNaming(Path.of("/r/x.txt")) == "/r/x.txt: Permission denied"
+      )
+    },
+    test("a message naming a path the error doesn't carry puts it first") {
+      assertTrue(
+        new IOException("Is a directory").safeMessageNaming(Path.of("/r/ccas.env")) == "/r/ccas.env: Is a directory",
+        new FileAlreadyExistsException("/r/archive").safeMessageNaming(Path.of("/r/x.txt")) ==
+          "/r/x.txt: /r/archive: File exists"
+      )
+    },
+    test("a move refused names its source once, then its target") {
+      val refused = new AccessDeniedException("/r/x.txt", "/r/archive/x.txt", null)
+      assertTrue(refused.safeMessageNaming(Path.of("/r/x.txt")) == "/r/x.txt -> /r/archive/x.txt: Permission denied")
     }
   )
 }

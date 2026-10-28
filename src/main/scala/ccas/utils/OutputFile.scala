@@ -11,7 +11,7 @@ import scala.util.Using
 import zio.{Clock, Task, UIO, ZIO}
 
 import ccas.api.misc.subtypes.ClubSlug
-import ccas.utils.errors.safeMessage
+import ccas.utils.errors.safeMessageNaming
 
 /** Where an app writes a report. Each write first moves the app's earlier output in that directory into `archive/`.
   * Club-scoped output (`write`, `writeAndLog`) goes to `<Root>/{clubSlug}/{timestamp}-{appName}.{ext}`, so one club's
@@ -60,7 +60,7 @@ object OutputFile {
     ZIO
       .attemptBlocking(Using.resource(Files.list(dir))(_.iterator().asScala.filter(isReport(_, suffix)).toList))
       .foldZIO(
-        failure = e => ZIO.logWarning(s"could not list earlier reports in $dir: ${e.safeMessage}"),
+        failure = e => ZIO.logWarning(s"could not list earlier reports in ${e.safeMessageNaming(dir)}"),
         success = reports => ZIO.foreachDiscard(reports)(archive(dir, suffix, _))
       )
 
@@ -79,7 +79,7 @@ object OutputFile {
       .catchAll {
         // A concurrent write to the same directory may have already moved it.
         case _: NoSuchFileException => ZIO.unit
-        case e                      => ZIO.logWarning(s"could not archive $report: ${e.safeMessage}")
+        case e                      => ZIO.logWarning(s"could not archive ${e.safeMessageNaming(report)}")
       }
   }
 

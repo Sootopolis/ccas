@@ -11,6 +11,7 @@ import scala.util.control.NonFatal
 import zio.{UIO, ZIO}
 
 import ccas.utils.{JobLogSink, ProgressDisplay}
+import ccas.utils.errors.safeMessageNaming
 
 /** Per-job file-backed sink. `writeConsoleSync` tees the formatted line to `System.out` so the server console keeps
   * showing every job's output; `writeFileSync` appends the same line, ANSI stripped, to `${logDir}/<jobId>.log`.
@@ -213,7 +214,7 @@ object FileSink {
 
   private def suppressedSink(path: Path, open: () => BufferedWriter, cause: Throwable): FileSink = {
     System.err.println(
-      s"[FileSink] open $path failed; file logging suppressed, will retry. (${cause.getClass.getSimpleName}: ${cause.getMessage})"
+      s"[FileSink] could not open ${cause.safeMessageNaming(path)}; file logging suppressed, will retry."
     )
     // A missing logDir is the expected benign case — the message above is enough. Reserve the stack trace for the
     // genuinely unexpected (perms revoked, IO errors).
