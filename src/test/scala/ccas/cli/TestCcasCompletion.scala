@@ -8,12 +8,13 @@ import zio.test.{assertCompletes, assertTrue, Spec, TestAspect, TestResult, ZIOS
 
 import ccas.cli.CompletionSpec.PositionalKind
 
-/** Guards the generated shell completions ([[CompletionEmitter]]). Three concerns:
+/** Guards the generated shell completions ([[CompletionEmitter]]). Four concerns:
   *   1. the committed `completions/ccas.bash` equals the bash emitter output (regenerate it as
   *      `.claude/rules/cli.md` says);
   *   2. every emitted script is valid for its shell (`<shell> -n`, skipped when that shell isn't installed);
   *   3. [[CompletionSpec]] still covers every command and flag in the [[CliCommand]] tree, so a newly added
-  *      subcommand or flag can't silently go uncompleted.
+  *      subcommand or flag can't silently go uncompleted;
+  *   4. README's `Commands:` line lists what [[CompletionSpec]] does.
   *
   * The command tree is read by rendering the root help in-process (no JVM spawn). Paths are relative to the repo root
   * (sbt's test cwd).
@@ -21,6 +22,19 @@ import ccas.cli.CompletionSpec.PositionalKind
 object TestCcasCompletion extends ZIOSpecDefault {
 
   private val BashScriptPath = "completions/ccas.bash"
+
+  private val ReadmePath = "README.md"
+
+  /** README's `Commands:` line as [[CompletionSpec]] gives it: each top-level command in tree order, a group followed
+    * by its subcommands.
+    */
+  private val commandsLine: String = {
+    val children = CompletionSpec.groups.map(group => group.name -> group.children).toMap
+    val commands = CompletionSpec.topLevel.map { name =>
+      children.get(name).fold(name)(subcommands => s"$name {${subcommands.mkString("|")}}")
+    }
+    commands.map(command => s"`$command`").mkString("Commands: ", ", ", ".")
+  }
 
   // Full-tree help: the COMMANDS enumeration lists every command path with its complete option synopsis.
   private val help = CliCommand.command(CliCommand.DefaultServer).helpDoc.toPlaintext(1000, color = false)
@@ -63,6 +77,11 @@ object TestCcasCompletion extends ZIOSpecDefault {
       val committed = Files.readString(Paths.get(BashScriptPath))
       // On failure: regenerate it as `.claude/rules/cli.md` says.
       assertTrue(committed == CompletionEmitter.bash)
+    },
+    test(s"$ReadmePath's command list is CompletionSpec's top-level commands and groups, in order") {
+      val readmeLine = Files.readString(Paths.get(ReadmePath)).linesIterator.find(_.startsWith("Commands: "))
+      // On failure: put the expected line in README.
+      assertTrue(readmeLine == Some(commandsLine))
     },
     // These three checks spawn `<shell> -n` subprocesses. They previously carried `@@ TestAspect.flaky` to absorb
     // transient fork failures under parallel-suite memory pressure; that band-aid is gone now that suites run
@@ -115,6 +134,12 @@ object TestCcasCompletion extends ZIOSpecDefault {
         CompletionSpec.leavesOf(g.name).map(_.name).toSet != g.children.toSet
       }
       assertTrue(mismatches.isEmpty)
+    },
+    // `topLevel` drives top-level completion and README's command list, so a command left out of it would be neither
+    // offered nor listed, with every check above still passing.
+    test("CompletionSpec.topLevel is every leaf's top-level command, once each, in tree order") {
+      val leafCommands = CompletionSpec.leaves.map(_.path.head).distinct
+      assertTrue(leafCommands == CompletionSpec.topLevel)
     }
   ) @@ TestAspect.sequential
 }
