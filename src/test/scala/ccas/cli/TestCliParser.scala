@@ -371,10 +371,38 @@ object TestCliParser extends ZIOSpecDefault {
       parse("server", "up", "--ready-timeout-seconds", "120").exit.map(e => assertTrue(e.isFailure))
     },
     test("server down parses to Stop (no server)") {
-      parsed("server", "down").map(c => assertTrue(c.contains(CliCommand.Stop)))
+      parsed("server", "down").map(c => assertTrue(c.contains(CliCommand.Stop(None))))
     },
     test("server status parses (no server)") {
-      parsed("server", "status").map(c => assertTrue(c.contains(CliCommand.ServerStatus)))
+      parsed("server", "status").map(c => assertTrue(c.contains(CliCommand.ServerStatus(None))))
+    },
+    test("server list parses (no server)") {
+      parsed("server", "list").map(c => assertTrue(c.contains(CliCommand.ServerList)))
+    },
+    test("server status --port and server down --port parse the port") {
+      for {
+        status <- parsed("server", "status", "--port", "8080")
+        down   <- parsed("server", "down", "--port", "8081")
+      } yield assertTrue(
+        status.contains(CliCommand.ServerStatus(Some(8080))),
+        down.contains(CliCommand.Stop(Some(8081)))
+      )
+    },
+    // 4294967297 is the one that matters: a bare `.toInt` wraps it to 1, which is a port.
+    test("--port takes 1 to 65535 inclusive, and anything outside is rejected, not wrapped") {
+      for {
+        lowest   <- parsed("server", "status", "--port", "1")
+        highest  <- parsed("server", "status", "--port", "65535")
+        zero     <- parse("server", "status", "--port", "0").exit.map(_.isFailure)
+        tooHigh  <- parse("server", "status", "--port", "65536").exit.map(_.isFailure)
+        wrapping <- parse("server", "down", "--port", "4294967297").exit.map(_.isFailure)
+      } yield assertTrue(
+        lowest.contains(CliCommand.ServerStatus(Some(1))),
+        highest.contains(CliCommand.ServerStatus(Some(65535))),
+        zero,
+        tooHigh,
+        wrapping
+      )
     },
     test("top-level serve and stop no longer parse (grouped under server)") {
       for {

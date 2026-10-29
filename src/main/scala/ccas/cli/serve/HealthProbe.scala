@@ -13,9 +13,9 @@ import zio.json.DecoderOps
 import ccas.server.routes.HealthRoutes.ReadyResponse
 import ccas.utils.errors.safeMessage
 
-/** Shared loopback health-probe used by [[ServerStatus]] (to report running/ready), [[Detach]] (to refuse a port
-  * already answering, then wait for the child to be ready) and [[ServerStop]] (to warn that a foreground server is
-  * still up after `down` finds no detached pid).
+/** Shared loopback health-probe used by [[ServerStatus]] and [[ServerList]] (to report running/ready), [[Detach]] (to
+  * refuse a port already answering, then wait for the child to be ready) and [[ServerStop]] (to warn that a foreground
+  * server is still up after `down` finds no detached pid).
   * Centralising the port resolution and the `/health` liveness probe makes the "`down`'s hint fires exactly when
   * `status` says running" invariant structural rather than a copy-paste promise — change the config key or a timeout
   * here and every caller moves with it.
@@ -26,10 +26,17 @@ object HealthProbe {
     * to name one or one that can't read its own address.
     */
   enum Readiness {
-    case Ready(databaseOption: Option[String])
-    case Unready(databaseOption: Option[String])
+    case Ready(override val databaseOption: Option[String])
+    case Unready(override val databaseOption: Option[String])
     case NoAnswer
+
+    /** The database the server named, ready or not; a server that didn't answer named none. */
+    def databaseOption: Option[String] = None
   }
+
+  /** The database a server named, as `down`, `up --detach` and `list` print it. Pure. */
+  def databaseLabel(databaseOption: Option[String]): String =
+    databaseOption.fold("database not reported")(database => s"db $database")
 
   private val ConnectTimeout = JDuration.ofSeconds(2)
   private val LiveTimeout    = JDuration.ofSeconds(2)
@@ -51,7 +58,10 @@ object HealthProbe {
   private[serve] def portIn(config: Config): Either[String, Int] =
     Try(config.getInt("server.port")).toEither.left
       .map(e => s"cannot read server.port (SERVER_PORT): ${e.safeMessage}")
-      .filterOrElse(port => port >= 1 && port <= 65535, "server.port (SERVER_PORT) must be a port from 1 to 65535")
+      .filterOrElse(isPort, "server.port (SERVER_PORT) must be a port from 1 to 65535")
+
+  /** A TCP port a server can bind: `SERVER_PORT`, `--port` and a pid file's name are all held to it. */
+  def isPort(n: Int): Boolean = n >= 1 && n <= 65535
 
   /** A GET of `path` on the loopback `port`. Probes 127.0.0.1: the server's default bind is loopback, and even a
     * `SERVER_HOST=0.0.0.0` bind answers on loopback; a non-loopback-only bind would false-negative here, acceptable
@@ -85,6 +95,15 @@ object HealthProbe {
       case _   => Readiness.NoAnswer
     }
   }
+
+  /** What `status` and `list` report a server by: `/health/ready`, and only when that has no answer, whether `/health`
+    * returned 200 — a server whose database check hangs, told apart from no server at all.
+    */
+  def probe(port: Int): UIO[(Readiness, Boolean)] =
+    readiness(port).flatMap {
+      case Readiness.NoAnswer => isUp(port).map(up => (Readiness.NoAnswer, up))
+      case answered           => ZIO.succeed((answered, true))
+    }
 
   /** `/health` returned 200 — server process responding, database state unknown. Any transport error is "not 200". */
   def isUp(port: Int): UIO[Boolean] =

@@ -2,6 +2,8 @@ package ccas.cli
 
 import zio.cli.*
 
+import ccas.cli.serve.HealthProbe
+
 /** Parsed `ccas` subcommand. Each variant carries the resolved server URL plus its already-validated arguments, so
   * the dispatcher only translates these into HTTP calls; zio-cli does all parsing and validation.
   *
@@ -31,8 +33,9 @@ object CliCommand {
 
   // Local commands — handled in `Main`, no client HTTP, no `--server`.
   final case class Serve(detach: Boolean, readyTimeoutSeconds: Option[Int]) extends CliCommand
-  case object Stop                                                          extends CliCommand
-  case object ServerStatus                                                  extends CliCommand
+  final case class Stop(portOption: Option[Int])                            extends CliCommand
+  final case class ServerStatus(portOption: Option[Int])                    extends CliCommand
+  case object ServerList                                                    extends CliCommand
   final case class Completion(shell: String)                                extends CliCommand
   final case class Use(slugs: List[String], clear: Boolean)                 extends CliCommand
   final case class ConfigGet(key: String)                                   extends CliCommand
@@ -236,20 +239,44 @@ object CliCommand {
       .withHelp("Run the ccas backend HTTP server (foreground by default; --detach/-d to background it)")
       .map { case (detach, readyTimeout) => Serve(detach, readyTimeout) }
 
+  /** Reaches a server other than the one this shell's SERVER_PORT picks, so it is held to the same range. Like
+    * `intOpt`, it rejects a value past `Int` rather than letting `.toInt` wrap it onto some other port.
+    */
+  private val portOpt: Options[Option[Int]] =
+    Options
+      .integer("port")
+      .mapOrFail { n =>
+        if (n.isValidInt && HealthProbe.isPort(n.toInt)) { Right(n.toInt) }
+        else {
+          Left(
+            ValidationError(
+              ValidationErrorType.InvalidValue,
+              HelpDoc.p(s"--port must be a port from 1 to 65535 (got $n)")
+            )
+          )
+        }
+      }
+      .optional ?? "Port of the server to act on, instead of this shell's (SERVER_PORT, from the environment or ccas.env)"
+
   private val serverDown: Command[CliCommand] =
-    Command("down")
+    Command("down", portOpt)
       .withHelp("Stop a detached ccas server (reads the pid file and sends SIGTERM)")
-      .map(_ => Stop)
+      .map(Stop.apply)
 
   private val serverStatus: Command[CliCommand] =
-    Command("status")
+    Command("status", portOpt)
       .withHelp("Report whether the local ccas server is running and ready")
-      .map(_ => ServerStatus)
+      .map(ServerStatus.apply)
+
+  private val serverList: Command[CliCommand] =
+    Command("list")
+      .withHelp("List the detached ccas servers on this machine, and this shell's port")
+      .map(_ => ServerList)
 
   private val serverGroup: Command[CliCommand] =
     Command("server")
       .withHelp("Run and manage the ccas backend HTTP server")
-      .subcommands(serverUp, serverDown, serverStatus)
+      .subcommands(serverUp, serverDown, serverStatus, serverList)
 
   // The slug is optional so a bare `ccas use-club` PRINTS the current club rather than erroring — the only read path
   // for an otherwise write-only value. `--clear` drops it; passing both is rejected as conflicting intent.
