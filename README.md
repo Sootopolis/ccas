@@ -97,7 +97,7 @@ ccas --help              # full command tree
 ccas <command> --help    # per-command flags
 ```
 
-Commands: `server {up|down|status|list}`, `use-club`, `membership`, `history`, `recruit`, `stats`, `jobs`, `logs`, `cancel`, `blacklist {add|list|remove}`, `schedule {list|add|remove}`, `club {add|remove|list|show}`, `config {init|get|set|unset|list|path}`, `completion`.
+Commands: `server {up|down|status|list}`, `use-club`, `membership`, `history`, `recruit`, `stats`, `jobs`, `logs`, `cancel`, `blacklist {add|list|remove}`, `schedule {list|add|remove}`, `club {add|remove|list|show}`, `config {get|set|unset|list|show|path|init}`, `completion`.
 
 **Cancelling a job.** `ccas cancel <job-id>` requests cancellation of a running job — it interrupts the job's fiber on the server, which records the run as `Cancelled`. Cancellation is best-effort: an in-flight blocking database statement runs to completion first, so the job stops at its next interruptible point rather than instantly. A cancelled recruitment run leaves the candidates it found so far as **deferred** (nothing invited), so you can review and confirm them afterwards. Cancel is single-server-scoped — it reaches jobs running on the server it is sent to.
 
