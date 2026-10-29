@@ -6,7 +6,6 @@ import scala.jdk.OptionConverters.*
 
 import zio.{durationInt, Console, ExitCode, UIO, ZIO}
 
-import ccas.cli.serve.HealthProbe.Readiness
 import ccas.utils.TerminalQuestion
 import ccas.utils.errors.safeMessage
 import ccas.utils.sql.DatabaseAddress
@@ -38,13 +37,8 @@ object ServerStop {
       s"(no pid file) — likely a foreground `ccas server up`. Stop it with Ctrl-C in its terminal, or find its pid " +
       s"with `lsof -ti tcp:$port` and kill that."
 
-  // The database the server on `port` names, by the probe `status` uses. A server that doesn't answer names none.
-  private def serverDatabase(port: Int): UIO[Option[String]] =
-    HealthProbe.readiness(port).map {
-      case Readiness.Ready(databaseOption)   => databaseOption
-      case Readiness.Unready(databaseOption) => databaseOption
-      case Readiness.NoAnswer                => None
-    }
+  /** The database the server on `port` names, by the probe `status` uses. A server that doesn't answer names none. */
+  private def serverDatabase(port: Int): UIO[Option[String]] = HealthProbe.readiness(port).map(_.databaseOption)
 
   /** What to ask before stopping the server on `port`, if anything: any database but a loopback one asks, one the
     * server doesn't name included, as at boot (`BootGuard.question`). A wrong shell's `down` would otherwise stop the
@@ -56,7 +50,7 @@ object ServerStop {
     }
 
   private def describeServer(port: Int, pid: Long, databaseOption: Option[String]): String =
-    s"the server on 127.0.0.1:$port (pid $pid, ${databaseOption.fold("database not reported")(d => s"db $d")})"
+    s"the server on 127.0.0.1:$port (pid $pid, ${HealthProbe.databaseLabel(databaseOption)})"
 
   def run(stateDir: Path, port: Int): UIO[ExitCode] =
     run(

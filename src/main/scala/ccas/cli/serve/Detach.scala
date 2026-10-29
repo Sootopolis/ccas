@@ -209,7 +209,7 @@ object Detach {
     * goes to a log nobody is watching (#320). Pure.
     */
   def startedMessage(pidOption: Option[Long], databaseOption: Option[String], pidPath: Path, logFile: Path): String = {
-    val database = databaseOption.fold("database not reported")(d => s"db $d")
+    val database = HealthProbe.databaseLabel(databaseOption)
     pidOption match {
       case Some(pid) => s"ccas server started, pid=$pid, $database (logs: $logFile)"
       case None      => s"ccas server started, $database (pid file not yet readable at $pidPath; logs: $logFile)"

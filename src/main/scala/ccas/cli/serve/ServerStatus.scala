@@ -53,11 +53,7 @@ object ServerStatus {
 
   def run(stateDir: Path, port: Int): UIO[ExitCode] =
     for {
-      readiness <- HealthProbe.readiness(port)
-      up <- readiness match {
-        case Readiness.NoAnswer => HealthProbe.isUp(port)
-        case _                  => ZIO.succeed(true)
-      }
+      (readiness, up) <- HealthProbe.probe(port)
       pidRead <- ZIO.attemptBlocking(PidFile.read(PidFile.path(stateDir, port))).orElseSucceed(Option.empty[Long])
       alive       = pidRead.exists(PidFile.isAlive)
       (msg, code) = describe(readiness, up, pidRead.filter(_ => alive), pidRead.isDefined && !alive, port)

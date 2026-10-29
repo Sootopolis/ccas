@@ -56,8 +56,9 @@ object CompletionSpec {
       List("--ready-timeout-seconds"),
       NoArgs
     ),
-    Leaf(List("server", "down"), Nil, Nil, NoArgs),
-    Leaf(List("server", "status"), Nil, Nil, NoArgs),
+    Leaf(List("server", "down"), List("--port"), List("--port"), NoArgs),
+    Leaf(List("server", "status"), List("--port"), List("--port"), NoArgs),
+    Leaf(List("server", "list"), Nil, Nil, NoArgs),
     Leaf(List("use-club"), List("--clear"), Nil, Slug),
     Leaf(
       List("membership"),
@@ -156,7 +157,7 @@ object CompletionSpec {
   )
 
   val groups: List[Group] = List(
-    Group("server", List("up", "down", "status"), "Run and manage the ccas backend HTTP server"),
+    Group("server", List("up", "down", "status", "list"), "Run and manage the ccas backend HTTP server"),
     Group("blacklist", List("add", "list", "remove"), "Manage a club's recruitment blacklist"),
     Group("schedule", List("list", "add", "remove"), "Manage scheduled jobs"),
     Group(
@@ -216,6 +217,7 @@ object CompletionSpec {
     List("server", "up")        -> "Run the ccas backend HTTP server (foreground by default; --detach/-d to background it)",
     List("server", "down")      -> "Stop a detached ccas server (reads the pid file and sends SIGTERM)",
     List("server", "status")    -> "Report whether the local ccas server is running and ready",
+    List("server", "list")      -> "List the detached ccas servers on this machine, and this shell's port",
     List("use-club")            -> "Show, set, or clear the current club used by commands that omit --club",
     List("membership")          -> "Submit a membership-sync job (current club, --club a,b, or --all managed clubs)",
     List("history")             -> "Submit a match-history crawl job (current club, --club a,b, or --all managed clubs)",

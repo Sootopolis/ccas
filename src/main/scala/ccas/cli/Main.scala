@@ -2,11 +2,11 @@ package ccas.cli
 
 import java.nio.file.{Path, Paths}
 
-import zio.{Cause, Console, Duration, ExitCode, Scope, UIO, URIO, ZIO, ZIOAppArgs, ZIOAppDefault}
+import zio.{Cause, Console, Duration, ExitCode, IO, Scope, UIO, URIO, ZIO, ZIOAppArgs, ZIOAppDefault}
 import zio.cli.{CliApp, CliError, HelpDoc}
 
 import ccas.cli.config.CliConfig
-import ccas.cli.serve.{Detach, HealthProbe, ServerStatus, ServerStop}
+import ccas.cli.serve.{Detach, HealthProbe, ServerList, ServerStatus, ServerStop}
 import ccas.info.BuildInfo
 import ccas.server.{BootGuard, CcasServer}
 import ccas.server.config.ServerEnvOverlay
@@ -62,12 +62,13 @@ object Main extends ZIOAppDefault {
 
   private def execute(cfg: CliConfig)(cmd: CliCommand): URIO[ZIOAppArgs, ExitCode] = cmd match {
     // `Serve(false, Some(_))` never reaches here: `CliCommand.serverUpOptions` rejects it at parse time.
-    case CliCommand.Serve(false, _)      => serve
-    case CliCommand.Serve(true, timeout) => detachServe(cfg, timeout)
-    case CliCommand.Stop                 => stopServe
-    case CliCommand.ServerStatus         => statusServe
-    case CliCommand.Completion(shell)    => printCompletion(shell)
-    case CliCommand.Use(slugs, clear)    =>
+    case CliCommand.Serve(false, _)          => serve
+    case CliCommand.Serve(true, timeout)     => detachServe(cfg, timeout)
+    case CliCommand.Stop(portOption)         => stopServe(portOption)
+    case CliCommand.ServerStatus(portOption) => statusServe(portOption)
+    case CliCommand.ServerList               => listServe
+    case CliCommand.Completion(shell)        => printCompletion(shell)
+    case CliCommand.Use(slugs, clear)        =>
       // Same server the `--server`-less commands resolve to (config `api_url`, else the built-in default): use-club has
       // no `--server` flag of its own — its network use is a best-effort probe against the configured server, not a
       // server operation — so it inherits the same default the command tree was built with.
@@ -92,29 +93,41 @@ object Main extends ZIOAppDefault {
         case (None, Left(msg)) => Console.printLineError(s"error: $msg").orDie.as(ExitCode(2))
         case (None, Right(deadline)) =>
           val logDir = cfg.logDir.fold(XdgPaths.stateDir.resolve("logs"))(Paths.get(_))
-          onServerPort(port => Detach.run(logDir, XdgPaths.stateDir, port, deadline))
+          onServerPort(HealthProbe.resolvePort)(port => Detach.run(logDir, XdgPaths.stateDir, port, deadline))
       }
     }
 
-  // `server status`: apply the ccas.env overlay first so a file-only SERVER_PORT is honoured when resolving the port,
-  // which picks both the probe and the pid file. Unlike `serve`, no mandatory-config precheck — status only needs the
-  // port, not CCAS_CONTACT_EMAIL / a database.
-  private def statusServe: URIO[ZIOAppArgs, ExitCode] =
-    applyServerEnv(XdgPaths.serverEnvFile) *> onServerPort(port => ServerStatus.run(XdgPaths.stateDir, port))
+  /** `server status`: the port picks both the probe and the pid file. Unlike `serve`, no mandatory-config precheck —
+    * status only needs the port, not CCAS_CONTACT_EMAIL / a database.
+    */
+  private def statusServe(portOption: Option[Int]): URIO[ZIOAppArgs, ExitCode] =
+    onServerPort(serverPort(portOption, XdgPaths.serverEnvFile))(port => ServerStatus.run(XdgPaths.stateDir, port))
 
-  // `server down`: apply the ccas.env overlay first so a file-only SERVER_PORT picks the pid file, and the port the
-  // "still responding?" hint (ServerStop.foregroundHint) probes — otherwise `down` could stop another port's server.
-  private def stopServe: URIO[ZIOAppArgs, ExitCode] =
-    applyServerEnv(XdgPaths.serverEnvFile) *> onServerPort(port => ServerStop.run(XdgPaths.stateDir, port))
+  /** `server down`: the port picks the pid file, and the port the "still responding?" hint
+    * (ServerStop.foregroundHint) probes — a wrong one could stop another port's server.
+    */
+  private def stopServe(portOption: Option[Int]): URIO[ZIOAppArgs, ExitCode] =
+    onServerPort(serverPort(portOption, XdgPaths.serverEnvFile))(port => ServerStop.run(XdgPaths.stateDir, port))
+
+  /** `server list`: the shell's port is the row it marks, and listed even with no pid file. */
+  private def listServe: URIO[ZIOAppArgs, ExitCode] =
+    onServerPort(serverPort(None, XdgPaths.serverEnvFile))(port => ServerList.run(XdgPaths.stateDir, port))
 
   // For the commands above, which don't run the server in this JVM: a file that can't be read is a CLI warning, on
   // stderr like every other. `serve` logs it through the server's display instead.
   private[cli] def applyServerEnv(file: Path): UIO[Unit] =
     ServerEnvOverlay(file).unit.catchAll(message => Console.printLineError(s"warning: $message").orDie)
 
-  // An unreadable port is a usage error, never the default's: the port picks which server's pid file is used (#326).
-  private def onServerPort(withPort: Int => UIO[ExitCode]): UIO[ExitCode] =
-    HealthProbe.resolvePort.foldZIO(msg => Console.printLineError(s"error: $msg").orDie.as(ExitCode(2)), withPort)
+  /** The port `server status`, `down` and `list` act on: `--port` as given, else this shell's, with the ccas.env
+    * overlay applied first so a file-only `SERVER_PORT` counts. With `--port`, `envFile` isn't read: these commands
+    * consult it for the port alone.
+    */
+  private[cli] def serverPort(portOption: Option[Int], envFile: Path): IO[String, Int] =
+    portOption.fold(applyServerEnv(envFile) *> HealthProbe.resolvePort)(ZIO.succeed(_))
+
+  /** An unreadable port is a usage error, never the default's: the port picks which server's pid file is used (#326). */
+  private def onServerPort(port: IO[String, Int])(withPort: Int => UIO[ExitCode]): UIO[ExitCode] =
+    port.foldZIO(msg => Console.printLineError(s"error: $msg").orDie.as(ExitCode(2)), withPort)
 
   // Apply the ccas.env overlay (file → system properties for any env var not already set) BEFORE checking mandatory
   // config or booting CcasServer, so the server can boot from `ccas config`'s file without hand-exported env vars.

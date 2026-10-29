@@ -4,18 +4,21 @@ import java.nio.file.{Files, Path}
 
 import com.typesafe.config.ConfigFactory
 import zio.{duration2DurationOps, durationInt, ExitCode, Ref, Scope, UIO, ZIO}
-import zio.test.{assertTrue, Spec, TestConsole, ZIOSpecDefault}
+import zio.test.{assertTrue, Spec, TestAspect, TestClock, TestConsole, ZIOSpecDefault}
 
 import ccas.cli.Main
 import ccas.cli.serve.HealthProbe.Readiness
+import ccas.cli.serve.PidFile.State
+import ccas.cli.serve.ServerList.Row
 import ccas.server.CcasServer
 
-/** Deterministic, DB-free unit tests for the `ccas server up --detach` / `status` / `down` lifecycle. The pure decision
-  * logic ([[Detach.reconstruct]], [[Detach.resolveDeadline]], [[Detach.timeoutMessage]], [[Detach.diedMessage]],
-  * [[Detach.startedMessage]], [[PidFile.parse]], [[PidFile.alreadyRunning]], [[ServerStatus.describe]],
-  * [[HealthProbe.portIn]], [[HealthProbe.classify]]) is tested directly; the effectful pid-file
-  * paths are exercised against an explicit temp path (the `XdgPaths`-backed default reads `System.getenv`, which can't
-  * be set in-process). The full spawn/health-poll round-trip is covered by manual e2e, not here.
+/** Deterministic, DB-free unit tests for the `ccas server up --detach` / `status` / `down` / `list` lifecycle. The pure
+  * decision logic ([[Detach.reconstruct]], [[Detach.resolveDeadline]], [[Detach.timeoutMessage]],
+  * [[Detach.diedMessage]], [[Detach.startedMessage]], [[PidFile.parse]], [[PidFile.portOf]], [[PidFile.alreadyRunning]],
+  * [[ServerStatus.describe]], [[ServerList.render]], [[HealthProbe.portIn]], [[HealthProbe.classify]]) is tested
+  * directly; the effectful pid-file paths are exercised against an explicit temp path (the `XdgPaths`-backed default
+  * reads `System.getenv`, which can't be set in-process). The full spawn/health-poll round-trip is covered by manual
+  * e2e, not here.
   */
 object TestServeLifecycle extends ZIOSpecDefault {
 
@@ -41,6 +44,12 @@ object TestServeLifecycle extends ZIOSpecDefault {
   // `down`'s probes for a server that is local: nothing to ask, and any question answered yes.
   private val localDatabase: UIO[Option[String]]        = ZIO.some("localhost:5432/ccas")
   private val answerYes: String => UIO[Option[Boolean]] = _ => ZIO.some(true)
+
+  /** `list`'s probe for a machine where no server answers on any port. */
+  private val nothingAnswers: Int => UIO[(Readiness, Boolean)] = _ => ZIO.succeed((Readiness.NoAnswer, false))
+
+  /** The port column of a `list` line, after the two-character marker. */
+  private def portOfLine(line: String): String = line.drop(2).trim.takeWhile(_.isDigit)
 
   override def spec: Spec[Any, Any] = suite("TestServeLifecycle")(
     suite("PidFile.parse")(
@@ -74,6 +83,54 @@ object TestServeLifecycle extends ZIOSpecDefault {
           val main = PidFile.path(dir, 8080)
           val wip  = PidFile.path(dir, 8081)
           assertTrue(main != wip, main.getParent == dir, wip.getParent == dir)
+        }
+      }
+    ),
+    suite("PidFile.portOf")(
+      test("a pid file's name gives back its port, and no other file in the state directory does") {
+        withTempDir { dir =>
+          assertTrue(
+            PidFile.portOf(PidFile.path(dir, 8081).getFileName.toString).contains(8081),
+            PidFile.portOf("ccas.pid").isEmpty,
+            PidFile.portOf("ccas-abc.pid").isEmpty,
+            PidFile.portOf("ccas-0.pid").isEmpty,
+            PidFile.portOf("ccas-08080.pid").isEmpty,
+            PidFile.portOf("ccas-70000.pid").isEmpty,
+            PidFile.portOf("server-8080.log").isEmpty
+          )
+        }
+      }
+    ),
+    suite("PidFile.state")(
+      // A directory at the pid file's path, which no reader can read, root included.
+      test(
+        "a pid file says live, dead, corrupt (bytes that aren't text included), unreadable or absent, without throwing"
+      ) {
+        withTempDir { dir =>
+          ZIO.scoped {
+            for {
+              server <- liveProcess
+              dead = deadPid()
+              _ <- ZIO.attempt(Files.writeString(PidFile.path(dir, 8080), server.pid().toString + "\n"))
+              _ <- ZIO.attempt(Files.writeString(PidFile.path(dir, 8081), dead.toString + "\n"))
+              _ <- ZIO.attempt(Files.writeString(PidFile.path(dir, 8082), "not a pid\n"))
+              _ <- ZIO.attempt(Files.createDirectory(PidFile.path(dir, 8083)).toFile.deleteOnExit())
+              _ <- ZIO.attempt(Files.write(PidFile.path(dir, 8085), Array(0xFF.toByte, 0xFE.toByte)))
+              // Read here, while `server` is in scope: `assertTrue` evaluates its arguments after the scope closes.
+              states <- ZIO.attemptBlocking {
+                List(8080, 8081, 8082, 8083, 8084, 8085).map(p => PidFile.state(PidFile.path(dir, p)))
+              }
+            } yield assertTrue(
+              states == List(
+                State.Live(server.pid()),
+                State.Dead(dead),
+                State.Corrupt,
+                State.Unreadable,
+                State.Absent,
+                State.Corrupt
+              )
+            )
+          }
         }
       }
     ),
@@ -245,6 +302,167 @@ object TestServeLifecycle extends ZIOSpecDefault {
           } yield assertTrue(err.size == 1, err.head.startsWith(s"warning: could not read server config $file: "))
         }
       }
+    ),
+    suite("Main.serverPort")(
+      test("an explicit --port is used as given, without reading ccas.env") {
+        withTempDir { dir =>
+          val file = dir.resolve("ccas.env")
+          for {
+            _    <- ZIO.attemptBlocking(Files.createDirectory(file).toFile.deleteOnExit())
+            port <- Main.serverPort(Some(9137), file)
+            err  <- TestConsole.outputErr
+          } yield assertTrue(port == 9137, err.isEmpty)
+        }
+      },
+      // The guard #326 needs: a SERVER_PORT set only in ccas.env still picks the port. The warning shows it was read.
+      test("without --port, ccas.env is read before the port is resolved") {
+        withTempDir { dir =>
+          val file = dir.resolve("ccas.env")
+          for {
+            _   <- ZIO.attemptBlocking(Files.createDirectory(file).toFile.deleteOnExit())
+            _   <- Main.serverPort(None, file)
+            err <- TestConsole.outputErr
+          } yield assertTrue(err.exists(_.startsWith(s"warning: could not read server config $file: ")))
+        }
+      }
+    ),
+    suite("ServerList.render")(
+      test("a row names the port, the pid file, the probe's answer and the database the server reports") {
+        def line(row: Row) = ServerList.render(List(row), 9999).head
+        val live           = State.Live(4821L)
+        assertTrue(
+          line(
+            Row(port = 8080, pidFile = live, readiness = Readiness.Ready(Some("localhost:5432/ccas")), up = true)
+          ) ==
+            "  8080  pid 4821  ready  db localhost:5432/ccas",
+          line(Row(port = 8080, pidFile = State.Absent, readiness = Readiness.Ready(None), up = true)) ==
+            "  8080  no pid file  ready  database not reported",
+          line(
+            Row(port = 8080, pidFile = live, readiness = Readiness.Unready(Some("ep-x.neon.tech/neondb")), up = true)
+          ) ==
+            "  8080  pid 4821  db unavailable  db ep-x.neon.tech/neondb",
+          line(Row(port = 8080, pidFile = live, readiness = Readiness.NoAnswer, up = true)) ==
+            "  8080  pid 4821  db unavailable",
+          line(Row(port = 8080, pidFile = State.Dead(70114L), readiness = Readiness.NoAnswer, up = false)) ==
+            "  8080  pid 70114 dead  not answering",
+          line(Row(port = 8080, pidFile = State.Corrupt, readiness = Readiness.NoAnswer, up = false)) ==
+            "  8080  corrupt pid file  not answering",
+          line(Row(port = 8080, pidFile = State.Unreadable, readiness = Readiness.NoAnswer, up = false)) ==
+            "  8080  unreadable pid file  not answering"
+        )
+      },
+      test("this shell's port is marked, and columns line up across rows") {
+        val rows = List(
+          Row(
+            port = 8080,
+            pidFile = State.Live(4821L),
+            readiness = Readiness.Ready(Some("ep-x.neon.tech/neondb")),
+            up = true
+          ),
+          Row(
+            port = 8081,
+            pidFile = State.Live(66382L),
+            readiness = Readiness.Ready(Some("localhost:5432/ccas")),
+            up = true
+          ),
+          Row(port = 8082, pidFile = State.Dead(70114L), readiness = Readiness.NoAnswer, up = false)
+        )
+        assertTrue(
+          ServerList.render(rows, 8081) == List(
+            "  8080  pid 4821        ready          db ep-x.neon.tech/neondb",
+            "* 8081  pid 66382       ready          db localhost:5432/ccas",
+            "  8082  pid 70114 dead  not answering"
+          )
+        )
+      }
+    ),
+    suite("ServerList.run")(
+      test("lists every pid file's server, sorted by port") {
+        withTempDir { dir =>
+          for {
+            _    <- ZIO.attempt(Files.writeString(PidFile.path(dir, 8082), deadPid().toString + "\n"))
+            _    <- ZIO.attempt(Files.writeString(PidFile.path(dir, 8080), deadPid().toString + "\n"))
+            _    <- ZIO.attempt(Files.writeString(dir.resolve("server-8083.log"), "booting\n"))
+            code <- ServerList.run(stateDir = dir, shellPort = 8081, probe = nothingAnswers)
+            out  <- TestConsole.output
+          } yield assertTrue(code == ExitCode.success, out.map(portOfLine) == Vector("8080", "8081", "8082"))
+        }
+      },
+      test("a stale pid file is listed as dead and left in place") {
+        withTempDir { dir =>
+          val stale = PidFile.path(dir, 8082)
+          val pid   = deadPid()
+          for {
+            _    <- ZIO.attempt(Files.writeString(stale, pid.toString + "\n"))
+            _    <- ServerList.run(stateDir = dir, shellPort = 8081, probe = nothingAnswers)
+            out  <- TestConsole.output
+            kept <- ZIO.attempt(Files.exists(stale))
+          } yield assertTrue(out.exists(_.contains(s"pid $pid dead")), kept)
+        }
+      },
+      test("an unreadable pid file is listed as such and doesn't hide the other servers") {
+        withTempDir { dir =>
+          for {
+            _    <- ZIO.attempt(Files.writeString(PidFile.path(dir, 8080), deadPid().toString + "\n"))
+            _    <- ZIO.attempt(Files.createDirectory(PidFile.path(dir, 8082)).toFile.deleteOnExit())
+            code <- ServerList.run(stateDir = dir, shellPort = 8081, probe = nothingAnswers)
+            out  <- TestConsole.output
+          } yield assertTrue(
+            code == ExitCode.success,
+            out.map(portOfLine) == Vector("8080", "8081", "8082"),
+            out.last.contains("unreadable pid file")
+          )
+        }
+      },
+      test("this shell's port is listed even with no pid file, so a foreground server shows") {
+        withTempDir { dir =>
+          val foreground: Int => UIO[(Readiness, Boolean)] = {
+            case 8081 => ZIO.succeed((Readiness.Ready(Some("localhost:5432/ccas")), true))
+            case _    => nothingAnswers(0)
+          }
+          for {
+            _   <- ServerList.run(stateDir = dir, shellPort = 8081, probe = foreground)
+            out <- TestConsole.output
+          } yield assertTrue(out == Vector("* 8081  no pid file  ready  db localhost:5432/ccas\n"))
+        }
+      },
+      test("an empty or absent state directory lists only this shell's port") {
+        withTempDir { dir =>
+          for {
+            empty  <- ServerList.run(stateDir = dir, shellPort = 8081, probe = nothingAnswers)
+            absent <- ServerList.run(stateDir = dir.resolve("absent"), shellPort = 8081, probe = nothingAnswers)
+            out    <- TestConsole.output
+          } yield assertTrue(
+            empty == ExitCode.success,
+            absent == ExitCode.success,
+            out == Vector.fill(2)("* 8081  no pid file  not answering\n")
+          )
+        }
+      },
+      test("a state directory that can't be listed fails with exit 1 and says why") {
+        withTempDir { dir =>
+          val notADirectory = dir.resolve("state")
+          for {
+            _    <- ZIO.attempt(Files.writeString(notADirectory, "a file, not a directory\n"))
+            code <- ServerList.run(stateDir = notADirectory, shellPort = 8081, probe = nothingAnswers)
+            out  <- TestConsole.output
+            err  <- TestConsole.outputErr
+          } yield assertTrue(code == ExitCode(1), out.isEmpty, err.exists(_.contains(notADirectory.toString)))
+        }
+      },
+      test("probes every server at once, so a cold database delays the list by one timeout, not one per server") {
+        withTempDir { dir =>
+          val cold: Int => UIO[(Readiness, Boolean)] = _ => ZIO.sleep(10.seconds).as((Readiness.NoAnswer, false))
+          def stale(port: Int) = Files.writeString(PidFile.path(dir, port), deadPid().toString + "\n")
+          for {
+            _      <- ZIO.foreachDiscard(List(8080, 8082, 8083))(port => ZIO.attempt(stale(port)))
+            listed <- ServerList.run(stateDir = dir, shellPort = 8081, probe = cold).fork
+            _      <- TestClock.adjust(10.seconds)
+            code   <- listed.join
+            out    <- TestConsole.output
+          } yield assertTrue(code == ExitCode.success, out.size == 4)
+        }
+      } @@ TestAspect.timeout(30.seconds)
     ),
     suite("ServerStop.stopQuestion")(
       test("a server on a loopback database stops without asking") {
@@ -532,6 +750,16 @@ object TestServeLifecycle extends ZIOSpecDefault {
           portIn("0").isLeft,
           portIn("70000").isLeft,
           portIn("8081") == Right(8081)
+        )
+      }
+    ),
+    suite("Readiness.databaseOption")(
+      test("a server names its database whether ready or not, and one that didn't answer names none") {
+        assertTrue(
+          Readiness.Ready(Some("localhost:5432/ccas")).databaseOption.contains("localhost:5432/ccas"),
+          Readiness.Unready(Some("ep-x.neon.tech/neondb")).databaseOption.contains("ep-x.neon.tech/neondb"),
+          Readiness.Ready(None).databaseOption.isEmpty,
+          Readiness.NoAnswer.databaseOption.isEmpty
         )
       }
     ),
