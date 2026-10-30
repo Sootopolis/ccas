@@ -329,10 +329,9 @@ private[recruitment] object RecruitmentFilterDefs {
       // which passesGate treats as active by convention (matching the SQL early-prune). ClubDataApp will fill
       // it in later.
       val latestMatchAt = existingClubOption.flatMap(_.latestMatchAt)
-      // When `existingClubOption.isEmpty` the cold-discovery branch can't supply a hint; the resolver's `deriveHint`
-      // SQL lookup also returns None (we just selected by this slug at line ~266 and got nothing), so only Tier B
-      // applies — but Tier B itself needs a hint. The wrap is therefore a no-op on the cold-discovery happy-path
-      // and only fires on subsequent runs once a Club row has been persisted under the stale slug.
+      // With no club holding the slug now, the resolver can derive a hint only from a club that held it before
+      // (`deriveHint`). Every tier needs one, so for a slug never seen the wrap is a no-op until a later run has
+      // persisted it.
       (for {
         apiClub <- ApiClub.get(run.client, slug)
           .withClubSlugRenameRecovery(run.client, slug, clubIdHint = existingClubOption.map(_.clubId)) { fresh =>

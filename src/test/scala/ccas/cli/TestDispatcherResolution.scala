@@ -80,10 +80,11 @@ object TestDispatcherResolution extends ZIOSpecDefault {
     } yield (result, targets)
 
   override def spec: Spec[Any, Throwable] = suite("TestDispatcherResolution")(
-    test("NotLocal and Problematic are missing, and answer with what was asked for") {
+    test("NotLocal, Nameless and NamelessHolder are missing, and answer with what was asked for") {
       assertTrue(
         Dispatcher.missingQuery(ClubResolution.NotLocal(byName)).contains(byName),
-        Dispatcher.missingQuery(ClubResolution.Problematic(byId)).contains(byId)
+        Dispatcher.missingQuery(ClubResolution.Nameless(ClubId(9))).contains(byId),
+        Dispatcher.missingQuery(ClubResolution.NamelessHolder(ClubSlug("x"), ClubId(3))).contains(byName)
       )
     },
     test("Known, Renamed and Ambiguous are not missing") {
@@ -109,6 +110,13 @@ object TestDispatcherResolution extends ZIOSpecDefault {
       val note = "note: 'was-shared' now belongs to club #1 (now new-name) on Chess.com, not to #2 (now other-name); " +
         "using the club that holds it"
       assertTrue(Dispatcher.nameChangesFrom(outcomes) == List(note))
+    },
+    // #274: a club holding no name has no name to be noted by, so the note must not run its own words together.
+    test("a name moved from a club holding none is noted naming that club by id") {
+      val moved = ClubResolution.Moved(club, ClubSlug("went-stale"), List(ClubRef(ClubId(3), None)))
+      val note = "note: 'went-stale' now belongs to club #1 (now new-name) on Chess.com, not to #3 (no known name); " +
+        "using the club that holds it"
+      assertTrue(Dispatcher.nameChangeNote(moved).contains(note))
     },
     // `club show` (#271): the club first, on a line of its own, then why it is that club when the name was not its own.
     suite("club show")(
@@ -168,7 +176,7 @@ object TestDispatcherResolution extends ZIOSpecDefault {
         text       <- answering("other-name")
       } yield assertTrue(blank.isEmpty, outOfRange.isEmpty, zero.isEmpty, text.isEmpty)
     },
-    // A candidate holding no name resolves `Problematic` by id, so offering it would offer a command that fails.
+    // A candidate holding no name resolves `Nameless` by id, so offering it would offer a command that fails.
     test("a candidate holding no name is not offered, and the numbering skips it") {
       val nameless = ClubRef(ClubId(3), None)
       val mixed: ClubResolution.Ambiguous =

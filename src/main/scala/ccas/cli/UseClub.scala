@@ -154,7 +154,8 @@ object UseClub {
           case ClubResolution.Renamed(club, _)      => reached(club, resolution, managed)
           case ClubResolution.Moved(club, _, _)     => reached(club, resolution, managed)
           case ClubResolution.NotLocal(_)           => unreached(slug, notLocalWarning(slug))
-          case ClubResolution.Problematic(_)        => unreached(slug, problematicWarning(slug))
+          case ClubResolution.Nameless(_)           => unreached(slug, namelessWarning(slug))
+          case ClubResolution.NamelessHolder(_, _)  => unreached(slug, namelessWarning(slug))
           case ClubResolution.Ambiguous(_, holders) => unreached(slug, ambiguousWarning(slug, holders))
         }
     }
@@ -203,7 +204,7 @@ object UseClub {
     s"warning: the server knows no club named '$slug' — check the spelling; commands without --club will fail " +
       "until it does"
 
-  private def problematicWarning(slug: String): String =
+  private def namelessWarning(slug: String): String =
     s"warning: the club once named '$slug' has lost its name to another club, and the server hasn't seen what it is " +
       "called now — commands without --club can't reach it until it has"
 

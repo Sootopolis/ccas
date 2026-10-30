@@ -70,8 +70,8 @@ object ClubRef {
   *
   * [[NotLocal]] is deliberately not `NotFound`: a DB miss is not proof the club is gone from Chess.com, since it may
   * never have been ingested. Every case but [[Known]] says what was asked for, so a message built from it names
-  * something the user recognises rather than whatever the club answers to now — as a [[ClubQuery]] for the two misses
-  * either lookup can end in, and as the slug itself for the three only a name can reach.
+  * something the user recognises rather than whatever the club answers to now — as a [[ClubQuery]] for the miss either
+  * lookup can end in, as the id for the one only an id can reach, and as the slug itself for the four only a name can.
   */
 @jsonDiscriminator("kind")
 @jsonHintNames(SnakeCase)
@@ -79,7 +79,14 @@ enum ClubResolution {
   case Known(club: NamedClub)
   case Renamed(club: NamedClub, requested: ClubSlug)
   case NotLocal(requested: ClubQuery)
-  case Problematic(requested: ClubQuery)
+
+  /** The club the id names holds no name we know of — another club took it, and we have not seen what this one
+    * answers to now. Chess.com reaches a club by name alone, so there is nothing to ask it.
+    */
+  case Nameless(clubId: ClubId)
+
+  /** Nobody here holds the requested name, and the one club that held it holds none now ([[Nameless]]). */
+  case NamelessHolder(requested: ClubSlug, holder: ClubId)
   case Ambiguous(requested: ClubSlug, holders: List[ClubRef])
 
   /** Chess.com says `club` holds the requested name now, and it is not a club local history pointed at — the name
@@ -93,10 +100,15 @@ enum ClubResolution {
     case Renamed(club, _)    => Right(club)
     case Moved(club, _, _)   => Right(club)
     case NotLocal(requested) => Left(s"Club not found: ${requested.describe}")
-    case Problematic(requested) =>
+    case Nameless(clubId) =>
       Left(
-        s"Club ${requested.describe} can't be reached — it has lost its name to another club, and the server hasn't " +
-          "seen what it is called now"
+        s"Club #${ClubId.unwrap(clubId)} can't be reached — it has lost its name to another club, and the server " +
+          "hasn't seen what it is called now"
+      )
+    case NamelessHolder(requested, holder) =>
+      Left(
+        s"Club ${ClubSlug.unwrap(requested)} can't be reached — #${ClubId.unwrap(holder)}, the club that held that " +
+          "name, has since lost its name to another club, and the server hasn't seen what it is called now"
       )
     case Ambiguous(requested, holders) =>
       val candidates = holders.map(_.display).mkString(", ")
@@ -118,7 +130,7 @@ object ClubResolution {
       case ClubQuery.ById(clubId) =>
         ClubName.selectCurrentName(clubId).flatMap {
           case Some(slug) => ZIO.succeed(Known(NamedClub(clubId, slug)))
-          case None       => Club.selectId(clubId).map(_.fold(NotLocal(query))(_ => Problematic(query)))
+          case None       => Club.selectId(clubId).map(_.fold(NotLocal(query))(_ => Nameless(clubId)))
         }
       case ClubQuery.BySlug(slug) =>
         ClubName.selectCurrentHolder(slug).flatMap {
@@ -136,17 +148,17 @@ object ClubResolution {
       holders = clubIds.map(clubId => ClubRef(clubId, names.get(clubId)))
     } yield holders match {
       case Nil           => NotLocal(ClubQuery.BySlug(requested))
-      case holder :: Nil => holder.namedOption.fold(Problematic(ClubQuery.BySlug(requested)))(Renamed(_, requested))
+      case holder :: Nil => holder.namedOption.fold(NamelessHolder(requested, holder.clubId))(Renamed(_, requested))
       case several       => Ambiguous(requested, several)
     }
 
   /** Asks Chess.com who holds the requested name when [[resolve]] answered out of history — one former holder
-    * ([[Renamed]]) or several ([[Ambiguous]]). Whoever holds it now wins, known to us or not, and is persisted, so the
-    * name resolves locally from here on; a reported 404 means nobody holds it and the local answer stands (#254).
+    * ([[Renamed]], [[NamelessHolder]]) or several ([[Ambiguous]]). Whoever holds it now wins, known to us or not, and
+    * is persisted, so the name resolves locally from here on; a reported 404 means nobody holds it and the local
+    * answer stands (#254, #274).
     *
     * Every other case is returned untouched and fires no request: [[Known]] is already current, [[NotLocal]] is a name
-    * we have never seen, and a [[Problematic]] club holds no name of its own — asking about the one that reached it
-    * is #274.
+    * we have never seen, and a [[Nameless]] club was named by an id, which Chess.com cannot be asked about.
     *
     * A failed request degrades to the local answer: adjudication refines a usable answer rather than producing one, so
     * an unreachable Chess.com must not fail the submit.
@@ -183,12 +195,13 @@ object ClubResolution {
       .serviceWithZIO[ChessComClient](resolveAndAdjudicate(_, query))
       .flatMap(resolution => ZIO.fromEither(resolution.runnable).mapError(NotFoundException(_)))
 
-  /** The requested name and who local history says held it, for the two answers worth adjudicating. */
+  /** The requested name and who local history says held it, for the three answers worth adjudicating. */
   private def historical(resolution: ClubResolution): Option[(ClubSlug, List[ClubRef])] =
     resolution match {
-      case Renamed(club, requested)      => Some((requested, List(ClubRef.of(club))))
-      case Ambiguous(requested, holders) => Some((requested, holders))
-      case _                             => None
+      case Renamed(club, requested)          => Some((requested, List(ClubRef.of(club))))
+      case NamelessHolder(requested, holder) => Some((requested, List(ClubRef(holder, None))))
+      case Ambiguous(requested, holders)     => Some((requested, holders))
+      case _                                 => None
     }
 
   // A holder local history passed over is `Moved` — the same job, but the CLI says the name changed hands. The rest is

@@ -201,8 +201,9 @@ object ClubSlugRenameResolver {
       .onNotFound(_ => ZIO.none)
 
   /** Derives a `clubIdHint` from the stale slug when the caller didn't supply one, by resolving it locally: if the
-    * slug names one club, current or former, we know which club_id this rename is about. Eliminates per-callsite
-    * boilerplate (callers can pass `None` and let the resolver discover the hint).
+    * slug names one club, current or former, we know which club_id this rename is about — a club holding no name
+    * included, which only Tiers B and C can find a name for. Eliminates per-callsite boilerplate (callers can pass
+    * `None` and let the resolver discover the hint).
     */
   private def deriveHint(
     staleSlug: ClubSlug,
@@ -210,7 +211,11 @@ object ClubSlugRenameResolver {
   ): RIO[PostgresClient, Option[ClubId]] =
     clubIdHint match {
       case some @ Some(_) => ZIO.succeed(some)
-      case None           => ClubResolution.resolve(ClubQuery.BySlug(staleSlug)).map(_.runnable.toOption.map(_.clubId))
+      case None =>
+        ClubResolution.resolve(ClubQuery.BySlug(staleSlug)).map {
+          case ClubResolution.NamelessHolder(_, holder) => Some(holder)
+          case resolution                               => resolution.runnable.toOption.map(_.clubId)
+        }
     }
 
   private def verify(
