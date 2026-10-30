@@ -407,9 +407,9 @@ object MembershipApp extends ZIOAppDefault {
       archivedSnapshots = b.archivedSnapshots ++ c.archivedSnapshots,
       newMemberships = b.newMemberships ++ externalMemberships,
       closedMemberships = b.closedMemberships ++ c.closedMemberships,
-      hiddenMemberships = c.hiddenMemberships ++ settlement.hidden ++ settlement.opened,
+      hiddenMemberships = c.hiddenMemberships,
       reopenedMemberships = b.reopenedMemberships,
-      unsettledLists = settlement.unsettled,
+      settlement = settlement,
       currentMemberCount = currentMemberCount,
       previousMemberCount = previousMemberCount,
       startedAt = startedAt,
@@ -427,8 +427,8 @@ object MembershipApp extends ZIOAppDefault {
     val allUpdated  = b.updatedPlayers ++ c.updatedPlayers
     val allArchived = b.archivedSnapshots ++ c.archivedSnapshots
     val narrowed    = b.closedMemberships ++ c.closedMemberships ++ c.hiddenMemberships
-    val widened     = b.reopenedMemberships ++ settlement.hidden
-    val opened      = b.newMemberships ++ settlement.opened
+    val widened     = b.reopenedMemberships ++ settlement.hidden.map(_.row)
+    val opened      = b.newMemberships ++ settlement.opened.map(_.row)
     for {
       _ <- Player.writeBatch(inserted = b.newPlayers, updated = allUpdated)
       _ <- ZIO.whenDiscard(allArchived.nonEmpty)(PlayerSnapshot.insertBatch(allArchived))

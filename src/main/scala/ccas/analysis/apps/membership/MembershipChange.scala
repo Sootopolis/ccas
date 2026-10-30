@@ -96,7 +96,7 @@ object MembershipChange {
     closedMemberships: Chunk[ClubMember],
     hiddenMemberships: Chunk[ClubMember],
     reopenedMemberships: Chunk[ClubMember],
-    unsettledLists: Chunk[ClosedAccountClubs.Unsettled],
+    settlement: ClosedAccountClubs.Settlement,
     currentMemberCount: Int,
     previousMemberCount: Int,
     startedAt: Instant,

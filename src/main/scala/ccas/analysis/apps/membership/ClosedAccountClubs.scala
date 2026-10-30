@@ -5,7 +5,7 @@ import java.time.Instant
 import zio.{Chunk, Clock, RIO, Task, ZIO}
 
 import ccas.analysis.apps.membership.MembershipChange.{later, StoredRoster}
-import ccas.analysis.tables.{ClubMember, PlayerClubList}
+import ccas.analysis.tables.{ClubMember, PlayerClubList, PlayerName}
 import ccas.analysis.tables.PlayerClubList.Listing
 import ccas.api.misc.subtypes.{ClubId, PlayerId, Username}
 import ccas.api.player.{ApiPlayer, ApiPlayerClubs}
@@ -22,10 +22,18 @@ private[membership] object ClosedAccountClubs {
   /** A closed account whose list settled nothing about the club, and why. */
   final case class Unsettled(playerId: PlayerId, username: Username, reason: String)
 
-  /** What the kept lists change about a club's rows: ended rows they show were hidden instead, and memberships they
-    * show that no row records, opened hidden.
-    */
-  final case class Settlement(hidden: Chunk[ClubMember], opened: Chunk[ClubMember], unsettled: Chunk[Unsettled])
+  /** An ended row a kept list showed, hidden instead of ending at `undoneUntil`. */
+  final case class Hidden(username: Username, row: ClubMember, undoneUntil: Instant)
+
+  /** A membership a kept list showed that no row recorded, opened hidden. */
+  final case class Opened(username: Username, row: ClubMember)
+
+  /** What the kept lists change about a club's rows, each under the name its player last held. */
+  final case class Settlement(hidden: Chunk[Hidden], opened: Chunk[Opened], unsettled: Chunk[Unsettled]) {
+
+    /** How many rows the lists hid or opened. */
+    def settledCount: Int = hidden.size + opened.size
+  }
 
   /** Two requests each: enough to work through a club's closed accounts within weeks without lengthening a run much. */
   private val ListsPerRun = 50
@@ -46,12 +54,12 @@ private[membership] object ClosedAccountClubs {
     for {
       fetched  <- gather(client = client, clubId = clubId, exclude = exclude)
       listings <- PlayerClubList.selectListings(clubId)
-    } yield settlement(
-      clubId = clubId,
-      storedRoster = storedRoster,
-      listings = listings.filterNot(listing => exclude.contains(listing.playerId)),
-      fetched = fetched
-    )
+      outcomes = Chunk.from(listings).filterNot(listing => exclude.contains(listing.playerId)).map { listing =>
+        listing.playerId -> outcome(clubId, storedRoster.unlistedByPlayerId.getOrElse(listing.playerId, Nil), listing)
+      }
+      settledIds = outcomes.collect { case (playerId, Outcome.Hide(_, _) | Outcome.Open(_)) => playerId }
+      names <- PlayerName.selectPlayers(settledIds)
+    } yield settlement(outcomes = outcomes, fetched = fetched, names = names)
 
   /** Fetches and keeps the lists of up to [[ListsPerRun]] of `clubId`'s closed accounts, other than `exclude`, that
     * have none kept since their state last changed. A name that now answers for nobody, or for another player, is kept
@@ -73,16 +81,15 @@ private[membership] object ClosedAccountClubs {
     }
   }
 
+  /** `names` are those the settled rows' players have held, by which each row is reported. */
   private def settlement(
-    clubId: ClubId,
-    storedRoster: StoredRoster,
-    listings: List[Listing],
-    fetched: Chunk[(Username, PlayerClubList)]
+    outcomes: Chunk[(PlayerId, Outcome)],
+    fetched: Chunk[(Username, PlayerClubList)],
+    names: List[PlayerName]
   ): Settlement = {
-    val fetchedNames = fetched.map((username, list) => list.playerId -> username).toMap
-    val outcomes = Chunk.from(listings).map { listing =>
-      listing.playerId -> outcome(clubId, storedRoster.unlistedByPlayerId.getOrElse(listing.playerId, Nil), listing)
-    }
+    val fetchedNames                         = fetched.map((username, list) => list.playerId -> username).toMap
+    val namesByPlayer                        = names.groupBy(_.playerId)
+    def nameOf(playerId: PlayerId): Username = MembershipReport.latestName(namesByPlayer.getOrElse(playerId, Nil))
     val nameless = fetched.collect {
       case (username, list) if list.lastOnlineOption.isEmpty =>
         Unsettled(list.playerId, username, "no list answers for it under the name we hold")
@@ -91,14 +98,14 @@ private[membership] object ClosedAccountClubs {
       fetchedNames.get(playerId).map(Unsettled(playerId, _, "its list's join date overlaps a recorded membership"))
     }
     Settlement(
-      hidden = outcomes.collect { case (_, Outcome.Hide(row)) => row },
-      opened = outcomes.collect { case (_, Outcome.Open(row)) => row },
+      hidden = outcomes.collect { case (playerId, Outcome.Hide(row, until)) => Hidden(nameOf(playerId), row, until) },
+      opened = outcomes.collect { case (playerId, Outcome.Open(row)) => Opened(nameOf(playerId), row) },
       unsettled = nameless ++ overlapping
     )
   }
 
   private enum Outcome {
-    case Hide(row: ClubMember)
+    case Hide(row: ClubMember, undoneUntil: Instant)
     case Open(row: ClubMember)
     case Overlaps
     case Unchanged
@@ -111,8 +118,11 @@ private[membership] object ClosedAccountClubs {
     if (others.exists(_.until.forall(_.isAfter(listing.joined)))) { Outcome.Overlaps }
     else {
       matching.headOption match {
-        case Some(row) if row.until.isEmpty => Outcome.Unchanged
-        case Some(row) => Outcome.Hide(row.hidden(later(row.lastSeen.getOrElse(row.since), lastSeen)))
+        case Some(row) =>
+          row.until match {
+            case None        => Outcome.Unchanged
+            case Some(until) => Outcome.Hide(row.hidden(later(row.lastSeen.getOrElse(row.since), lastSeen)), until)
+          }
         case None =>
           val row = ClubMember.joined(clubId = clubId, playerId = listing.playerId, since = listing.joined)
           Outcome.Open(row.hidden(lastSeen))

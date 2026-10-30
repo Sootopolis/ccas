@@ -970,6 +970,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
     testAHiddenMemberWhoRejoinedHadLeft,
     testAClosedAccountsListHidesItsEndedRow,
     testAClosedAccountsListOpensTheMembershipItShows,
+    testAListKeptEarlierNamesItsRowByTheLatestName,
     testANameThatNoLongerAnswersIsReportedOnce,
     testAListOverlappingARecordedMembershipSettlesNothing,
     testAClosedAccountThatPlayedForTheClubIsAsked,
@@ -1363,8 +1364,11 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
         rows   <- ClubMember.selectClub(clubId)
       } yield assertTrue(
         rows == List(ended.hidden(Times.t2)),
-        result.hiddenMemberships == Chunk(ended.hidden(Times.t2)),
-        result.unsettledLists.isEmpty
+        result.settlement.hidden == Chunk(
+          ClosedAccountClubs.Hidden(Username("erin"), ended.hidden(Times.t2), Times.t1)
+        ),
+        result.hiddenMemberships.isEmpty,
+        result.settlement.unsettled.isEmpty
       )
     }
 
@@ -1378,13 +1382,42 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
         clubLists = Map("finn" -> clubListJson("test-club" -> Times.t0, "other-club" -> Times.t1))
       )
       for {
-        _    <- seedDb(players = List(finn), members = List(earlier))
-        _    <- reconcileWith(routes, RunTrigger.Cli)
-        rows <- ClubMember.selectClub(clubId)
+        _      <- seedDb(players = List(finn), members = List(earlier))
+        result <- reconcileWith(routes, RunTrigger.Cli)
+        rows   <- ClubMember.selectClub(clubId)
       } yield {
         val listed = ClubMember.joined(clubId = clubId, playerId = pid5, since = Times.t0).hidden(Times.t3)
-        assertTrue(rows.toSet == Set(earlier, listed))
+        assertTrue(
+          rows.toSet == Set(earlier, listed),
+          result.settlement.opened == Chunk(ClosedAccountClubs.Opened(Username("finn"), listed))
+        )
       }
+    }
+
+  /** Not fetched this run, so the name comes from the names the player has held, not from a fetch. */
+  private def testAListKeptEarlierNamesItsRowByTheLatestName =
+    test("a row settled by a list kept on an earlier run is named by its player's latest name") {
+      val kara  = Player(pid2, Times.t0, Username("kara"), Closed, None, Times.t1)
+      val ended = endedRow(playerId = pid2, since = Times.t0, until = Times.t1)
+      val kept = PlayerClubList(
+        playerId = pid2,
+        fetchedAt = Times.t3,
+        lastOnlineOption = Some(Times.t2),
+        clubs = Map(ClubSlug("test-club") -> Times.t0)
+      )
+      val routes = clubRoutesListing(roster = Nil, profiles = Map.empty, clubLists = Map.empty)
+      for {
+        _ <- seedDb(players = List(kara), members = List(ended))
+        _ <- Player.writeBatch(
+          inserted = Nil,
+          updated = List(kara.copy(username = Username("kara-now"), since = Times.t2))
+        )
+        _      <- PlayerClubList.save(kept)
+        result <- reconcileWith(routes, RunTrigger.Cli)
+      } yield assertTrue(
+        result.settlement.hidden.map(_.username) == Chunk(Username("kara-now")),
+        result.settlement.unsettled.isEmpty
+      )
     }
 
   private def testANameThatNoLongerAnswersIsReportedOnce =
@@ -1398,8 +1431,8 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
         second <- reconcileWith(routes, RunTrigger.Cli)
         rows   <- ClubMember.selectClub(clubId)
       } yield assertTrue(
-        first.unsettledLists.map(_.username) == Chunk(Username("gina")),
-        second.unsettledLists.isEmpty,
+        first.settlement.unsettled.map(_.username) == Chunk(Username("gina")),
+        second.settlement.unsettled.isEmpty,
         rows == List(ended)
       )
     }
@@ -1417,7 +1450,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
         _      <- seedDb(players = List(hank), members = List(ended))
         result <- reconcileWith(routes, RunTrigger.Cli)
         rows   <- ClubMember.selectClub(clubId)
-      } yield assertTrue(result.unsettledLists.map(_.username) == Chunk(Username("hank")), rows == List(ended))
+      } yield assertTrue(result.settlement.unsettled.map(_.username) == Chunk(Username("hank")), rows == List(ended))
     }
 
   /** A closed account linked by a board alone is asked only if it played on the club's side. */
@@ -1470,7 +1503,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
         _      <- seedDb(players = List(nora), members = List(ended))
         result <- reconcileWith(routes, RunTrigger.Cli)
         rows   <- ClubMember.selectClub(clubId)
-      } yield assertTrue(result.unsettledLists.map(_.username) == Chunk(Username("nora")), rows == List(ended))
+      } yield assertTrue(result.settlement.unsettled.map(_.username) == Chunk(Username("nora")), rows == List(ended))
     }
 
   /** Another job saw the account active again, so the roster should list the row its closure hid. */

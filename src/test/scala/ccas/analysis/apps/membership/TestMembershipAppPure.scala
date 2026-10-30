@@ -20,6 +20,7 @@ object TestMembershipAppPure extends ZIOSpecDefault {
   override def spec: Spec[Any, Throwable] = suite("TestMembershipAppPure")(
     suiteClassifyFromDb,
     suiteMergeResults,
+    suiteFormatReconciliation,
     suiteFormatReport,
     suiteClose
   ) @@ TestAspect.sequential
@@ -259,7 +260,8 @@ object TestMembershipAppPure extends ZIOSpecDefault {
   // ==========================================================================
 
   private def suiteMergeResults = suite("mergeResults")(
-    testConcatenatesPhaseBAndPhaseCFields
+    testConcatenatesPhaseBAndPhaseCFields,
+    testSettledRowsStayApartFromHidden
   )
 
   private def testConcatenatesPhaseBAndPhaseCFields = test("concatenates PhaseBResult and PhaseCResult fields") {
@@ -288,8 +290,6 @@ object TestMembershipAppPure extends ZIOSpecDefault {
 
     val bReopened = ClubMember.joined(clubId = clubId, playerId = pid3, since = Times.t0)
     val cHidden   = ClubMember.joined(clubId = clubId, playerId = pid4, since = Times.t0).hidden(Times.t1)
-    val settled   = ClubMember.joined(clubId = clubId, playerId = pid5, since = Times.t0).hidden(Times.t1)
-    val unsettled = ClosedAccountClubs.Unsettled(pid5, Username("eve"), "a reason")
 
     val phaseB = PhaseBResult(
       resolvedIds = Set(pid0),
@@ -306,11 +306,7 @@ object TestMembershipAppPure extends ZIOSpecDefault {
       clubId = clubId,
       b = phaseB,
       c = phaseC,
-      settlement = ClosedAccountClubs.Settlement(
-        hidden = Chunk.empty,
-        opened = Chunk(settled),
-        unsettled = Chunk(unsettled)
-      ),
+      settlement = noSettlement,
       currentMemberCount = 10,
       previousMemberCount = 8,
       startedAt = Times.t0,
@@ -324,11 +320,131 @@ object TestMembershipAppPure extends ZIOSpecDefault {
       result.archivedSnapshots == Chunk(bArchived, cArchived),
       result.newMemberships == Chunk(bMember),
       result.closedMemberships == Chunk(bClosed, cClosed),
-      result.hiddenMemberships == Chunk(cHidden, settled),
-      result.reopenedMemberships == Chunk(bReopened),
-      result.unsettledLists == Chunk(unsettled)
+      result.hiddenMemberships == Chunk(cHidden),
+      result.reopenedMemberships == Chunk(bReopened)
     )
   }
+
+  private def testSettledRowsStayApartFromHidden =
+    test("the rows the club lists settled stay apart from the closures this run hid") {
+      val cHidden = ClubMember.joined(clubId = clubId, playerId = pid0, since = Times.t0).hidden(Times.t2)
+      val phaseB = PhaseBResult(
+        resolvedIds = Set.empty,
+        changes = Chunk.empty,
+        newPlayers = Chunk.empty,
+        updatedPlayers = Chunk.empty,
+        archivedSnapshots = Chunk.empty,
+        newMemberships = Chunk.empty,
+        closedMemberships = Chunk.empty,
+        reopenedMemberships = Chunk.empty
+      )
+      val phaseC = PhaseCResult(Chunk.empty, Chunk.empty, Chunk.empty, Chunk.empty, Chunk(cHidden))
+      val result = MembershipApp.mergeResults(
+        clubId = clubId,
+        b = phaseB,
+        c = phaseC,
+        settlement = settlement,
+        currentMemberCount = 10,
+        previousMemberCount = 10,
+        startedAt = Times.t0,
+        completedAt = Times.t1
+      )
+      assertTrue(result.hiddenMemberships == Chunk(cHidden), result.settlement == settlement)
+    }
+
+  // ==========================================================================
+  // formatReconciliation (pure)
+  // ==========================================================================
+
+  /** erin's ended row hidden at t2, its end at t1 undone; finn's membership opened hidden at t1; gina unsettled. */
+  private val settlement = ClosedAccountClubs.Settlement(
+    hidden = Chunk(
+      ClosedAccountClubs.Hidden(
+        username = Username("erin"),
+        row = ClubMember.joined(clubId = clubId, playerId = pid1, since = Times.t0).hidden(Times.t2),
+        undoneUntil = Times.t1
+      )
+    ),
+    opened = Chunk(
+      ClosedAccountClubs.Opened(
+        username = Username("finn"),
+        row = ClubMember.joined(clubId = clubId, playerId = pid2, since = Times.t0).hidden(Times.t1)
+      )
+    ),
+    unsettled = Chunk(ClosedAccountClubs.Unsettled(pid3, Username("gina"), "a reason"))
+  )
+
+  private def reconciliation(
+    changes: Chunk[MemberChangeSummary],
+    hiddenMemberships: Chunk[ClubMember],
+    settlement: ClosedAccountClubs.Settlement
+  ) = ReconciliationResult(
+    clubId = clubId,
+    changes = changes,
+    newPlayers = Chunk.empty,
+    updatedPlayers = Chunk.empty,
+    archivedSnapshots = Chunk.empty,
+    newMemberships = Chunk.empty,
+    closedMemberships = Chunk.empty,
+    hiddenMemberships = hiddenMemberships,
+    reopenedMemberships = Chunk.empty,
+    settlement = settlement,
+    currentMemberCount = 10,
+    previousMemberCount = 10,
+    startedAt = Times.t0,
+    completedAt = Times.t1
+  )
+
+  private def suiteFormatReconciliation = suite("formatReconciliation")(
+    testNamesTheSettledRows,
+    testEachCountHasItsSection,
+    testNoSettledSectionWhenNothingSettled
+  )
+
+  private def testNamesTheSettledRows =
+    test(
+      "the rows a club list settled are named under [CLUB LIST SETTLED], each saying whether its end was undone or " +
+        "its membership opened"
+    ) {
+      val output =
+        MembershipReport.formatReconciliation(reconciliation(Chunk.empty, Chunk.empty, settlement), Map.empty)
+      assertTrue(
+        output.endsWith(
+          s"""[CLUB LIST SETTLED]
+             |  finn — joined at ${Times.t0}, closed after ${Times.t1} — opened
+             |  erin — joined at ${Times.t0}, closed after ${Times.t2} — end undone, was: ${Times.t1}
+             |
+             |[CLUB LIST UNSETTLED]
+             |  gina — a reason
+             |""".stripMargin
+        )
+      )
+    }
+
+  private def testEachCountHasItsSection =
+    test(
+      "the hidden count is the closures named under [ACCOUNT CLOSED], and the settled count the rows under " +
+        "[CLUB LIST SETTLED]"
+    ) {
+      val closed  = MemberChangeSummary(pid0, Username("alice"), Chunk(AccountClosed(Times.t2, Closed)))
+      val hidden  = ClubMember.joined(clubId = clubId, playerId = pid0, since = Times.t0).hidden(Times.t2)
+      val result  = reconciliation(Chunk(closed), Chunk(hidden), settlement)
+      val output  = MembershipReport.formatReconciliation(result, Map.empty)
+      val section = output.substring(output.indexOf("[CLUB LIST SETTLED]"), output.indexOf("[CLUB LIST UNSETTLED]"))
+      assertTrue(
+        output.contains("Hidden memberships:   1\n"),
+        output.contains("[ACCOUNT CLOSED]\n  alice — "),
+        output.contains("Settled memberships:  2\n"),
+        section.linesIterator.count(_.startsWith("  ")) == 2
+      )
+    }
+
+  private def testNoSettledSectionWhenNothingSettled =
+    test("a run whose club lists settled nothing prints no [CLUB LIST SETTLED] section") {
+      val output =
+        MembershipReport.formatReconciliation(reconciliation(Chunk.empty, Chunk.empty, noSettlement), Map.empty)
+      assertTrue(output.contains("Settled memberships:  0\n"), !output.contains("[CLUB LIST SETTLED]"))
+    }
 
   // ==========================================================================
   // Suite C: formatReport (pure)
