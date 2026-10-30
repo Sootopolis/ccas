@@ -69,7 +69,7 @@ private[membership] object MembershipReport {
       }
   }
 
-  private def latestName(names: List[PlayerName]): Username =
+  private[membership] def latestName(names: List[PlayerName]): Username =
     names.maxByOption(_.since).fold(Username.wrap("unknown"))(_.username)
 
   /** Memberships no roster recorded, which the club's matches show (ADR 0023). */
@@ -97,17 +97,31 @@ private[membership] object MembershipReport {
       _ <- ZIO.logInfo(s"New memberships:      ${result.newMemberships.size}")
       _ <- ZIO.logInfo(s"Closed memberships:   ${result.closedMemberships.size}")
       _ <- ZIO.logInfo(s"Hidden memberships:   ${result.hiddenMemberships.size}")
+      _ <- ZIO.logInfo(s"Settled memberships:  ${result.settlement.settledCount}")
       _ <- ZIO.logInfo(s"Reopened memberships: ${result.reopenedMemberships.size}")
       _ <- ZIO.logInfo("")
       _ <- printChangeSummaries(result.changes.toList, invitations)
-      _ <- ZIO.foreachDiscard(unsettledLines(result))(ZIO.logInfo(_))
+      _ <- ZIO.foreachDiscard(settledLines(result.settlement) ++ unsettledLines(result.settlement))(ZIO.logInfo(_))
     } yield ()
   }
 
+  /** The rows closed accounts' kept club lists hid or opened, by when each account closed (ADR 0022). */
+  private def settledLines(settlement: ClosedAccountClubs.Settlement): List[String] = {
+    val hidden = settlement.hidden.map { hidden =>
+      (hidden.username, hidden.row, s"end undone, was: ${hidden.undoneUntil}")
+    }
+    val opened = settlement.opened.map(opened => (opened.username, opened.row, "opened"))
+    val lines = (hidden ++ opened).sortBy((_, row, _) => row.hiddenAt).map { (username, row, outcome) =>
+      val closed = row.hiddenAt.fold("")(at => s", closed after $at")
+      s"  $username — joined at ${row.since}$closed — $outcome"
+    }
+    Option.when(lines.nonEmpty)("[CLUB LIST SETTLED]").toList ++ lines
+  }
+
   /** Closed accounts whose club list settled nothing, so their rows stay as they were (ADR 0022). */
-  private def unsettledLines(result: ReconciliationResult): List[String] =
-    Option.when(result.unsettledLists.nonEmpty)("[CLUB LIST UNSETTLED]").toList ++
-      result.unsettledLists.map(unsettled => s"  ${unsettled.username} — ${unsettled.reason}")
+  private def unsettledLines(settlement: ClosedAccountClubs.Settlement): List[String] =
+    Option.when(settlement.unsettled.nonEmpty)("[CLUB LIST UNSETTLED]").toList ++
+      settlement.unsettled.map(unsettled => s"  ${unsettled.username} — ${unsettled.reason}")
 
   private def printChangeSummaries(
     summaries: List[MemberChangeSummary],
@@ -201,10 +215,12 @@ private[membership] object MembershipReport {
                     |New memberships:      ${result.newMemberships.size}
                     |Closed memberships:   ${result.closedMemberships.size}
                     |Hidden memberships:   ${result.hiddenMemberships.size}
+                    |Settled memberships:  ${result.settlement.settledCount}
                     |Reopened memberships: ${result.reopenedMemberships.size}
                     |""".stripMargin
+    val listSections = List(settledLines(result.settlement), unsettledLines(result.settlement)).filter(_.nonEmpty)
     header + "\n" + formatChangeSummaries(result.changes.toList, invitations) +
-      unsettledLines(result).map(_ + "\n").mkString
+      listSections.map(_.map(_ + "\n").mkString).mkString("\n")
   }
 
   def formatReport(rr: ReportResult): String = {
