@@ -1,6 +1,7 @@
 package ccas.cli
 
 import java.nio.charset.StandardCharsets
+import java.nio.file.Path
 import java.util.Base64
 
 import scala.io.StdIn
@@ -681,21 +682,56 @@ object Dispatcher {
       currentClubOption = currentClubOption
     )
 
-  // Freshen `current_club` after a submit whose resolved club is the current one — the decision (is-it-current + a real
-  // change) lives in the pure, tested `CurrentClubRef.refreshedRef`; here we just persist its verdict. Best-effort
-  // (`.ignore`): keeping names fresh must never fail a command.
   private def maybeRefreshCurrentClub(
     currentClubOption: Option[String],
     target: ClubTarget,
     resolution: ClubResolution
-  ): UIO[Unit] = {
-    val next = CurrentClubRef.refreshedRef(
-      stored = currentClubOption,
+  ): UIO[Unit] =
+    refreshCurrentClubIn(
+      configFile = XdgPaths.configFile,
+      currentClubOption = currentClubOption,
       query = target.query,
-      resolvedOption = CurrentClubRef.refreshTarget(resolution)
+      resolution = resolution
     )
-    ZIO.foreachDiscard(next)(ref => ConfigWriter.setCurrentClub(XdgPaths.configFile, ref.clubIdOption, ref.slug).ignore)
+
+  /** Freshens `current_club` in `configFile` after a command that sent `query` was answered with `resolution`, as
+    * [[CurrentClubRef.refreshedRef]] decides. Takes the path because [[XdgPaths]] reads environment variables a test
+    * cannot rebind. Best-effort: keeping the pointer fresh never fails a command, and a failed write gets no note.
+    */
+  private[cli] def refreshCurrentClubIn(
+    configFile: Path,
+    currentClubOption: Option[String],
+    query: ClubQuery,
+    resolution: ClubResolution
+  ): UIO[Unit] = {
+    val next       = CurrentClubRef.refreshedRef(stored = currentClubOption, query = query, resolution = resolution)
+    val noteOption = followedNameNote(currentClubOption, resolution)
+    ZIO.foreachDiscard(next) { ref =>
+      ConfigWriter
+        .setCurrentClub(configFile, ref.clubIdOption, ref.slug)
+        .foldZIO(
+          failure = _ => ZIO.unit,
+          success = _ => ZIO.foreachDiscard(noteOption)(Console.printLineError(_).orDie)
+        )
+    }
   }
+
+  /** The note for a bare `current_club` whose own name has just [[ClubResolution.Moved]], taking the pointer with it,
+    * or none when the pointer still means the club it did. It stands alone, since the move's own note is printed only
+    * when the server acted on the club.
+    */
+  private[cli] def followedNameNote(stored: Option[String], resolution: ClubResolution): Option[String] =
+    resolution match {
+      case ClubResolution.Moved(club, requested, _) =>
+        stored
+          .map(CurrentClubRef.parse)
+          .filter(pointer => pointer.clubIdOption.isEmpty && pointer.names(ClubQuery.BySlug(requested)))
+          .map { pointer =>
+            s"note: your current club, '${pointer.slug}', now means club ${club.display}, which holds that name on " +
+              "Chess.com — to point it at another club, run 'ccas use-club <slug>'"
+          }
+      case _ => None
+    }
 
   // Absent flag -> None (server defaults to false); present -> Some(true). Avoids sending a redundant `false`.
   private def flag(b: Boolean): Option[Boolean] = Option.when(b)(true)

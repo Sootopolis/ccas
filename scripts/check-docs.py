@@ -198,7 +198,7 @@ def status_line(path):
 
 
 def check_adr_currency():
-    """Immutability is not currency: a superseded ADR still resolves, so a bare pointer into one
+    """Permanence is not currency: a superseded ADR still resolves, so a bare pointer into one
     hands the reader a decision that no longer holds. Require a forward link on the ADR, and require
     every citation from outside docs/adr/ to say the target is superseded."""
     if not os.path.isdir(ADR_DIR):

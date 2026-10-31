@@ -1,6 +1,6 @@
 # CLI commands are either wholly local or wholly server-backed
 
-**Status:** Accepted, 2026-06-25 (#86, #123). Club-pointer half amended by #176, #254, #255, #271, #274 and #385.
+**Status:** Accepted, 2026-06-25 (#86, #123). Club-pointer half amended by #176, #254, #255, #271, #274, #385 and #386.
 
 ## Context
 
@@ -26,7 +26,9 @@ It is stored as `<id>:<slug>` (parsed and rendered by `CurrentClubRef`) once the
 
 `ClubResolver.single` / `multi` return a `ClubTarget(query, label)`. Every request that names a club carries the `ClubQuery`, and the server resolves it through `ClubResolution` (`ccas.analysis.apps`) — by id when one is sent, otherwise by the club holding the slug now and, only on a miss, by the clubs that held it before (`club_name`, [0016](0016-identity-is-the-id-names-are-observations.md)) — into a `ClubResolution`, which the response carries as-is (`resolution` on the wire), a job submit's and a synchronous command's alike. A resolved case names the club by id and current slug (`ClubRef`), not the whole row. The CLI branches on the case and renders why nothing was done; `Renamed` and `Moved` are the cases besides `Known` that still act on a club.
 
-This is what makes a renamed `current_club` still resolve: the id never moves when Chess.com renames the slug, so the stale slug the CLI echoed no longer 404s at submission (#176). The submit response's resolution names the club the job ran against. When that is the club the pointer means, and the name did not just move to it from another club (`Moved`), the CLI rewrites `current_club` if its id or slug differs from what is stored, so display names self-heal. "The club the pointer means" is one test, `CurrentClubRef.means`, which `club remove` clears by too. It is decided from the club the server answered with and the query the command named it by, never from the target's display label.
+This is what makes a renamed `current_club` still resolve: the id never moves when Chess.com renames the slug, so the stale slug the CLI echoed no longer 404s at submission (#176). The submit response's resolution names the club the job ran against. When that is the club the pointer means, the CLI rewrites `current_club` if its id or slug differs from what is stored, so display names self-heal. "The club the pointer means" is one test, `CurrentClubRef.means`, which `club remove` clears by too. It is decided from the club the server answered with and the query the command named it by, never from the target's display label.
+
+A bare pointer is a name, so it follows one that has `Moved` to whichever club Chess.com says holds it now, and the CLI says that the pointer now means that club. Holding the pointer back once did not keep it: adjudication records the new holder, so the next command resolved the name as `Known` and repointed it without a word (#386). An id pointer is never moved this way, since `means` matches it by id alone.
 
 ## Consequences
 

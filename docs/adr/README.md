@@ -2,7 +2,7 @@
 
 Why a thing is the way it is, in the [Nygard lightweight format](https://cognitect.com/blog/2011/11/15/documenting-architecture-decisions): title, status, context, decision, consequences. One decision per file, numbered in the order they were taken.
 
-**ADRs are immutable.** A decision that is later reversed is not edited — it gets a new ADR, and the old one's status becomes `Superseded by NNNN`. That is what makes an ADR safe to link to from a comment: the target cannot quietly change out from under the pointer.
+**An ADR is reversed by a new one, and amended in place.** The test is whether its title still holds. When it no longer does, the decision is not edited — it gets a new ADR, and the old one's status becomes `Superseded by NNNN`. When it still does, a later change to a consequence or a detail edits the ADR, so it states the decision as it now stands, and names the change on the status line (`Amended by #NNN`), from which git finds the text before it. That is what makes an ADR safe to link to from a comment: the decision a pointer names cannot quietly change out from under it.
 
 Write one when the decision is hard to reverse, involves a real trade-off, or has been argued twice. Not for routine changes — git and the commit message already hold those. Date the status from git (`git log -S<symbol> --reverse`), never from memory. See [`../documentation-standard.md`](../documentation-standard.md) for how ADRs relate to comments, scaladoc and the README.
 
