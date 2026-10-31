@@ -94,6 +94,46 @@ object TestDispatcherResolution extends ZIOSpecDefault {
         Dispatcher.missingQuery(ClubResolution.Ambiguous(ClubSlug("x"), List(clubRef))).isEmpty
       )
     },
+    test("a current club this server has no record of is noted by how it was asked for, never as renamed") {
+      val byIdNote = "note: 'old-slug' is your current club, #9, which this server has no record of. If it was set " +
+        "against another server, reach that one with --server; otherwise point at another club with " +
+        "'ccas use-club <slug>', or drop it with 'ccas use-club --clear'."
+      val bySlugNote =
+        "note: 'old-slug' is your current club, but this server knows no club by that name — misspelt, " +
+          "or one it hasn't seen yet. Point at another club with 'ccas use-club <slug>', or drop it with " +
+          "'ccas use-club --clear'."
+      assertTrue(
+        Dispatcher.staleCurrentClubHint(Some("9:old-slug"), List(ClubResolution.NotLocal(byId))).contains(byIdNote),
+        Dispatcher
+          .staleCurrentClubHint(Some("old-slug"), List(ClubResolution.NotLocal(ClubQuery.BySlug(ClubSlug("old-slug")))))
+          .contains(bySlugNote)
+      )
+    },
+    // Repointing by a new name could not help: had the server seen one, the id would have resolved.
+    test(
+      "a current club the server holds but can't name is noted as waiting for its new name, with no new slug to point at"
+    ) {
+      val waiting = "which the server holds but can't name now. It will reach the club again once the server sees " +
+        "its new name; meanwhile, point at another club with 'ccas use-club <slug>', or drop it with " +
+        "'ccas use-club --clear'."
+      val nameless        = ClubResolution.Nameless(ClubId(9))
+      val renamedNameless = ClubResolution.RenamedNameless(ClubId(3), ClubSlug("old-slug"))
+      assertTrue(
+        Dispatcher
+          .staleCurrentClubHint(Some("9:old-slug"), List(nameless))
+          .contains(s"note: 'old-slug' is your current club, #9, $waiting"),
+        Dispatcher
+          .staleCurrentClubHint(Some("old-slug"), List(renamedNameless))
+          .contains(s"note: 'old-slug' is your current club, a former name of #3, $waiting")
+      )
+    },
+    test("a missing club that is not the current one gets no note") {
+      val missing = List(ClubResolution.Nameless(ClubId(9)), ClubResolution.NotLocal(byName))
+      assertTrue(
+        Dispatcher.staleCurrentClubHint(Some("4:elsewhere"), missing).isEmpty,
+        Dispatcher.staleCurrentClubHint(None, missing).isEmpty
+      )
+    },
     test("a former name is noted with the name its club holds now, only for requests that acted") {
       val renamed  = ClubResolution.Renamed(club, ClubSlug("old-name"))
       val outcomes = List(acted(renamed), acted(ClubResolution.Known(club)), didNothing(renamed))
