@@ -5,14 +5,18 @@ import zio.test.{assertTrue, Spec, ZIOSpecDefault}
 import ccas.analysis.apps.{ClubQuery, ClubRef, ClubResolution, NamedClub}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 
-/** Pure tests for the `current_club` pointer: its parser/renderer, and the two decisions a submit's answer feeds —
-  * whether the pointer may be refreshed, and whether a club that came back missing is this one. Pins the id-vs-slug
-  * split: an all-digit prefix before the first colon is the stable id, anything else degrades to a bare slug so
-  * legacy and hand-edited values keep working.
+/** Pure tests for the `current_club` pointer: its parser/renderer, and the decisions a command's answer feeds — whether
+  * a club it reached is this pointer's, to refresh or clear it, and whether a club that came back missing is. Pins the
+  * id-vs-slug split: an all-digit prefix before the first colon is the stable id, anything else degrades to a bare slug
+  * so legacy and hand-edited values keep working.
   */
 object TestCurrentClubRef extends ZIOSpecDefault {
 
   private def resolved(clubId: Long, slug: String): Option[NamedClub] = Some(NamedClub(ClubId(clubId), ClubSlug(slug)))
+
+  private def byId(clubId: Long): ClubQuery = ClubQuery.ById(ClubId(clubId))
+
+  private def bySlug(slug: String): ClubQuery = ClubQuery.BySlug(ClubSlug(slug))
 
   override def spec: Spec[Any, Nothing] = suite("TestCurrentClubRef")(
     test("parses <id>:<slug> into the id and slug") {
@@ -46,41 +50,36 @@ object TestCurrentClubRef extends ZIOSpecDefault {
         CurrentClubRef(None, "team-a").render == "team-a"
       )
     },
+    // Which club the pointer means is `means`'s question, pinned in its own suite; these pin what is written once it
+    // has answered.
     suite("refreshedRef (the write-back decision)")(
-      test("id match + renamed slug rewrites to the canonical <id>:<slug>") {
-        // current_club is 5:team-a; server says id 5 is now team-a-new (a rename). Target carried the id.
-        val next =
-          CurrentClubRef.refreshedRef(Some("5:team-a"), targetHasId = true, "team-a", resolved(5, "team-a-new"))
+      test("an id pointer takes its club's new name") {
+        val next = CurrentClubRef.refreshedRef(Some("5:team-a"), byId(5), resolved(5, "team-a-new"))
         assertTrue(next.contains(CurrentClubRef(Some(ClubId.wrap(5L)), "team-a-new")))
       },
-      test("slug-only current_club submitted bare backfills the id") {
-        // current_club is a bare slug; a bare command resolved it by slug to id 5. Target carried no id.
-        val next = CurrentClubRef.refreshedRef(Some("team-a"), targetHasId = false, "team-a", resolved(5, "team-a"))
-        assertTrue(next.contains(CurrentClubRef(Some(ClubId.wrap(5L)), "team-a")))
-      },
-      test("an explicit --club naming the current slug still backfills (intended)") {
-        // Explicit --club team-a (no id) matches the slug-only current_club; it names the same club, so refresh it.
-        val next = CurrentClubRef.refreshedRef(Some("team-a"), targetHasId = false, "team-a", resolved(5, "team-a"))
-        assertTrue(next.isDefined)
+      test("a bare-slug pointer takes the id, and the name now, of the club it means") {
+        val backfilled = CurrentClubRef.refreshedRef(Some("team-a"), bySlug("team-a"), resolved(5, "team-a"))
+        val healed     = CurrentClubRef.refreshedRef(Some("team-a"), bySlug("team-a"), resolved(5, "team-a-new"))
+        assertTrue(
+          backfilled.contains(CurrentClubRef(Some(ClubId.wrap(5L)), "team-a")),
+          healed.contains(CurrentClubRef(Some(ClubId.wrap(5L)), "team-a-new"))
+        )
       },
       test("no change when already canonical") {
-        val next = CurrentClubRef.refreshedRef(Some("5:team-a"), targetHasId = true, "team-a", resolved(5, "team-a"))
+        val next = CurrentClubRef.refreshedRef(Some("5:team-a"), byId(5), resolved(5, "team-a"))
         assertTrue(next.isEmpty)
       },
-      test("a different club (id and slug both differ) does not touch current_club") {
-        // current_club is 5:team-a; we submitted an explicit --club team-b (id 9). Not the current club.
-        val next = CurrentClubRef.refreshedRef(Some("5:team-a"), targetHasId = false, "team-b", resolved(9, "team-b"))
-        assertTrue(next.isEmpty)
-      },
-      test("a same-slug id-carrying target for a DIFFERENT id does not match via slug") {
-        // Target carried an id (from a different current-club form), so the slug branch is off; ids differ → no write.
-        val next = CurrentClubRef.refreshedRef(Some("5:team-a"), targetHasId = true, "team-a", resolved(9, "team-a"))
-        assertTrue(next.isEmpty)
+      // An id pointer's slug is only a label, which can lag: a name it still shows may have passed to another club.
+      test("a club the pointer does not mean never touches current_club, even one holding the name it shows") {
+        assertTrue(
+          CurrentClubRef.refreshedRef(Some("5:team-a"), bySlug("team-a"), resolved(9, "team-a")).isEmpty,
+          CurrentClubRef.refreshedRef(Some("team-a"), byId(5), resolved(5, "team-x")).isEmpty
+        )
       },
       test("an unresolved submit or an unset current_club never writes") {
         assertTrue(
-          CurrentClubRef.refreshedRef(Some("5:team-a"), targetHasId = true, "team-a", None).isEmpty,
-          CurrentClubRef.refreshedRef(None, targetHasId = false, "team-a", resolved(5, "team-a")).isEmpty
+          CurrentClubRef.refreshedRef(Some("5:team-a"), byId(5), None).isEmpty,
+          CurrentClubRef.refreshedRef(None, bySlug("team-a"), resolved(5, "team-a")).isEmpty
         )
       },
       // The pointer must not follow a name that has moved to someone else's club, or it would silently change which
@@ -118,25 +117,40 @@ object TestCurrentClubRef extends ZIOSpecDefault {
         )
       }
     ),
-    // Clearing the pointer when its club stops being managed must not follow a name to someone else's club.
-    suite("means (is a removed club this pointer's?)")(
-      test("a pointer carrying an id means that club alone, even when the name it was set with has moved on") {
+    // Clearing the pointer when its club stops being managed, and refreshing it when a command reaches its club, must
+    // not follow a name to someone else's club.
+    suite("means (is a removed or refreshed club this pointer's?)")(
+      test("a pointer carrying an id means that club alone, however a command named it") {
         val pointer = CurrentClubRef(Some(ClubId(42)), "team-alpha")
         val ours    = NamedClub(ClubId(42), ClubSlug("team-alpha-renamed"))
         val theirs  = NamedClub(ClubId(43), ClubSlug("team-alpha"))
         assertTrue(
-          pointer.means(ours, ClubQuery.BySlug(ClubSlug("team-alpha-renamed"))),
-          !pointer.means(theirs, ClubQuery.BySlug(ClubSlug("team-alpha")))
+          pointer.means(ours, byId(42)),
+          pointer.means(ours, bySlug("team-alpha-renamed")),
+          !pointer.means(theirs, bySlug("team-alpha")),
+          !pointer.means(theirs, byId(43))
         )
       },
-      test("a bare-slug pointer means the club it names now, or the one it was reached by") {
+      // A bare pointer sends its name, so it reaches whichever club holds that name now. An `--all` run names each
+      // club by id, and from cron it may be the only command that ever backfills the pointer.
+      test("a bare-slug pointer means the club holding its name now, however a command named it") {
+        val bare   = CurrentClubRef(None, "team-alpha")
+        val holder = NamedClub(ClubId(42), ClubSlug("team-alpha"))
+        assertTrue(
+          bare.means(holder, bySlug("team-alpha")),
+          bare.means(holder, byId(42)),
+          bare.means(holder, bySlug("team-alpha-old"))
+        )
+      },
+      test("a bare-slug pointer that is a former name means the club a command reached by it") {
+        val bare = CurrentClubRef(None, "team-alpha")
+        assertTrue(bare.means(NamedClub(ClubId(42), ClubSlug("team-alpha-renamed")), bySlug("team-alpha")))
+      },
+      // Once the club holds another name, the pointer's name may reach another club, so this one is not provably it.
+      test("a bare-slug pointer does not mean a club holding another name that a command named some other way") {
         val bare    = CurrentClubRef(None, "team-alpha")
         val renamed = NamedClub(ClubId(42), ClubSlug("team-alpha-renamed"))
-        assertTrue(
-          bare.means(NamedClub(ClubId(42), ClubSlug("team-alpha")), ClubQuery.ById(ClubId(42))),
-          bare.means(renamed, ClubQuery.BySlug(ClubSlug("team-alpha"))),
-          !bare.means(renamed, ClubQuery.ById(ClubId(42)))
-        )
+        assertTrue(!bare.means(renamed, byId(42)), !bare.means(renamed, bySlug("team-beta")))
       }
     )
   )
