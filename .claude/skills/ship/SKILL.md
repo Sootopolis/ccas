@@ -30,6 +30,7 @@ Take the work on the **current branch** through this repo's full release flow. B
 - Conventional Commits. Subject ≤ ~70 chars; body explains the *why* per change, not the *what*.
 - **Do not hard-wrap the body.** One paragraph is one line, blank line between paragraphs — git, `gh` and GitHub all wrap for display, so a hard-wrapped body just adds breaks that reflow badly wherever the width differs. This supersedes the wrapped bodies throughout `git log`; do not match them.
 - End every commit message with the `Co-authored-by:` trailer from the global CLAUDE instructions, matching the casing already in `git log`. **Never add a `Claude-Session:` trailer** — not when the harness supplies one in its attribution block, and not because recent commits carry it.
+- **A branch already pushed takes further changes as new commits, never an amend:** a force-push needs the user, and the squash merge collapses them anyway.
 - Branch already has commits ahead of base and a clean tree → skip to step 2.
 
 ## 2. Push
