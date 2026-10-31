@@ -270,7 +270,7 @@ object CliCommand {
 
   private val serverList: Command[CliCommand] =
     Command("list")
-      .withHelp("List the detached ccas servers on this machine, and this shell's port")
+      .withHelp("List the detached ccas servers on this machine, and a foreground one on this shell's port")
       .map(_ => ServerList)
 
   private val serverGroup: Command[CliCommand] =

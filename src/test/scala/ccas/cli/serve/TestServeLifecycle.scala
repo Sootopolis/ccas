@@ -15,10 +15,10 @@ import ccas.server.CcasServer
 /** Deterministic, DB-free unit tests for the `ccas server up --detach` / `status` / `down` / `list` lifecycle. The pure
   * decision logic ([[Detach.reconstruct]], [[Detach.resolveDeadline]], [[Detach.timeoutMessage]],
   * [[Detach.diedMessage]], [[Detach.startedMessage]], [[PidFile.parse]], [[PidFile.portOf]], [[PidFile.alreadyRunning]],
-  * [[ServerStatus.describe]], [[ServerList.render]], [[HealthProbe.portIn]], [[HealthProbe.classify]]) is tested
-  * directly; the effectful pid-file paths are exercised against an explicit temp path (the `XdgPaths`-backed default
-  * reads `System.getenv`, which can't be set in-process). The full spawn/health-poll round-trip is covered by manual
-  * e2e, not here.
+  * [[ServerStatus.describe]], [[ServerList.Row.vacant]], [[ServerList.render]], [[HealthProbe.portIn]],
+  * [[HealthProbe.classify]]) is tested directly; the effectful pid-file paths are exercised against an explicit temp
+  * path (the `XdgPaths`-backed default reads `System.getenv`, which can't be set in-process). The full
+  * spawn/health-poll round-trip is covered by manual e2e, not here.
   */
 object TestServeLifecycle extends ZIOSpecDefault {
 
@@ -326,6 +326,20 @@ object TestServeLifecycle extends ZIOSpecDefault {
         }
       }
     ),
+    suite("ServerList.Row.vacant")(
+      test("a row is vacant only with no pid file and no answer from either probe") {
+        def row(pidFile: State, readiness: Readiness, up: Boolean) =
+          Row(port = 8080, pidFile = pidFile, readiness = readiness, up = up)
+        assertTrue(
+          row(pidFile = State.Absent, readiness = Readiness.NoAnswer, up = false).vacant,
+          !row(pidFile = State.Absent, readiness = Readiness.NoAnswer, up = true).vacant,
+          !row(pidFile = State.Absent, readiness = Readiness.Ready(None), up = true).vacant,
+          !row(pidFile = State.Dead(70114L), readiness = Readiness.NoAnswer, up = false).vacant,
+          !row(pidFile = State.Corrupt, readiness = Readiness.NoAnswer, up = false).vacant,
+          !row(pidFile = State.Unreadable, readiness = Readiness.NoAnswer, up = false).vacant
+        )
+      }
+    ),
     suite("ServerList.render")(
       test("a row names the port, the pid file, the probe's answer and the database the server reports") {
         def line(row: Row) = ServerList.render(List(row), 9999).head
@@ -385,7 +399,7 @@ object TestServeLifecycle extends ZIOSpecDefault {
             _    <- ZIO.attempt(Files.writeString(dir.resolve("server-8083.log"), "booting\n"))
             code <- ServerList.run(stateDir = dir, shellPort = 8081, probe = nothingAnswers)
             out  <- TestConsole.output
-          } yield assertTrue(code == ExitCode.success, out.map(portOfLine) == Vector("8080", "8081", "8082"))
+          } yield assertTrue(code == ExitCode.success, out.map(portOfLine) == Vector("8080", "8082"))
         }
       },
       test("a stale pid file is listed as dead and left in place") {
@@ -409,7 +423,7 @@ object TestServeLifecycle extends ZIOSpecDefault {
             out  <- TestConsole.output
           } yield assertTrue(
             code == ExitCode.success,
-            out.map(portOfLine) == Vector("8080", "8081", "8082"),
+            out.map(portOfLine) == Vector("8080", "8082"),
             out.last.contains("unreadable pid file")
           )
         }
@@ -426,16 +440,28 @@ object TestServeLifecycle extends ZIOSpecDefault {
           } yield assertTrue(out == Vector("* 8081  no pid file  ready  db localhost:5432/ccas\n"))
         }
       },
-      test("an empty or absent state directory lists only this shell's port") {
+      test("this shell's port is left out when it has no pid file and nothing answers there") {
+        withTempDir { dir =>
+          for {
+            _   <- ZIO.attempt(Files.writeString(PidFile.path(dir, 8082), deadPid().toString + "\n"))
+            _   <- ServerList.run(stateDir = dir, shellPort = 8081, probe = nothingAnswers)
+            out <- TestConsole.output
+            err <- TestConsole.outputErr
+          } yield assertTrue(out.map(portOfLine) == Vector("8082"), err.isEmpty)
+        }
+      },
+      test("with no pid files and nothing on this shell's port, no rows are printed and stderr names the port") {
         withTempDir { dir =>
           for {
             empty  <- ServerList.run(stateDir = dir, shellPort = 8081, probe = nothingAnswers)
             absent <- ServerList.run(stateDir = dir.resolve("absent"), shellPort = 8081, probe = nothingAnswers)
             out    <- TestConsole.output
+            err    <- TestConsole.outputErr
           } yield assertTrue(
             empty == ExitCode.success,
             absent == ExitCode.success,
-            out == Vector.fill(2)("* 8081  no pid file  not answering\n")
+            out.isEmpty,
+            err == Vector.fill(2)("no servers: no pid files, and nothing answers on this shell's port (8081)\n")
           )
         }
       },
@@ -460,7 +486,7 @@ object TestServeLifecycle extends ZIOSpecDefault {
             _      <- TestClock.adjust(10.seconds)
             code   <- listed.join
             out    <- TestConsole.output
-          } yield assertTrue(code == ExitCode.success, out.size == 4)
+          } yield assertTrue(code == ExitCode.success, out.size == 3)
         }
       } @@ TestAspect.timeout(30.seconds)
     ),

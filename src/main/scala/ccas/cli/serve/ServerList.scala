@@ -1,21 +1,26 @@
 package ccas.cli.serve
 
+import java.io.IOException
 import java.nio.file.Path
 
-import zio.{Console, ExitCode, UIO, ZIO}
+import zio.{Console, ExitCode, IO, UIO, ZIO}
 
 import ccas.cli.serve.HealthProbe.Readiness
 import ccas.utils.errors.safeMessage
 
-/** `ccas server list`: a row for each port with a pid file in the state directory, plus this shell's port, so that a
-  * foreground server there shows too. Every port is probed as `status` probes one, all at once, since a cold database
+/** `ccas server list`: a row for each port with a pid file in the state directory, plus this shell's port when a
+  * foreground server answers there. Every port is probed as `status` probes one, all at once, since a cold database
   * can take the whole readiness timeout. It only reads: a stale pid file is listed, not removed. The rows are laid out
   * by the pure [[render]]; [[run]] only wires the effects, as in [[ServerStatus]].
   */
 object ServerList {
 
   /** One port's row: its pid file, and what [[HealthProbe.probe]] got. */
-  final case class Row(port: Int, pidFile: PidFile.State, readiness: Readiness, up: Boolean)
+  final case class Row(port: Int, pidFile: PidFile.State, readiness: Readiness, up: Boolean) {
+
+    /** Nothing is there: no pid file, and neither probe answered. Such a row isn't listed. */
+    def vacant: Boolean = pidFile == PidFile.State.Absent && readiness == Readiness.NoAnswer && !up
+  }
 
   private final case class Line(marked: Boolean, port: String, pid: String, state: String, database: String)
 
@@ -79,10 +84,16 @@ object ServerList {
       for {
         ports <- ZIO.attemptBlocking(PidFile.ports(stateDir))
         rows  <- ZIO.foreachPar((shellPort :: ports).distinct.sorted)(port => row(stateDir, port, probe))
-        _     <- ZIO.foreachDiscard(render(rows, shellPort))(Console.printLine(_))
+        _     <- report(rows.filterNot(_.vacant), shellPort)
       } yield ExitCode.success
     program.catchAllCause(c => Console.printLineError(s"error: ${c.squash.safeMessage}").orDie.as(ExitCode(1)))
   }
+
+  // With no rows, the note goes to stderr so that stdout stays one line per server, as `down`'s "nothing to stop" does.
+  private def report(rows: List[Row], shellPort: Int): IO[IOException, Unit] =
+    if (rows.isEmpty) {
+      Console.printLineError(s"no servers: no pid files, and nothing answers on this shell's port ($shellPort)")
+    } else { ZIO.foreachDiscard(render(rows, shellPort))(Console.printLine(_)) }
 
   private def row(stateDir: Path, port: Int, probe: Int => UIO[(Readiness, Boolean)]): UIO[Row] =
     ZIO.succeedBlocking(PidFile.state(PidFile.path(stateDir, port))).zipPar(probe(port)).map {
