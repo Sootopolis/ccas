@@ -16,7 +16,7 @@ The diff is where a review starts, not where it ends. The defects this review ex
 For every symbol, setting, column, JSON field, CLI option and behaviour the change touches, find what depends on it. Search; don't reason from memory.
 
 - **Callers and readers**, tests included. When a row can take a new state, or a column a new value, that means every query filtering on those columns, which may now leave the new rows on the wrong side.
-- **Prose describing the old behaviour**: scaladoc, `README.md`, `docs/architecture.md`, `docs/chess-com-api.md`, `CLAUDE.md`, the skills, the ADRs. A reversed decision gets a superseding ADR, not an edit to the old one.
+- **Prose describing the old behaviour**: scaladoc, `README.md`, `docs/architecture.md`, `docs/chess-com-api.md`, `CLAUDE.md`, the skills, the ADRs. An ADR the change contradicts is superseded or amended in place, as `docs/adr/README.md` says.
 - **Tests whose names state the old guarantee.**
 - **Build and CI**: `.github/workflows/`, `.githooks/`, `scripts/`, `build.sbt`, `project/`.
 - **Schema**: an edited `createTable` needs a hand-written `ALTER` for every existing database (`/migrate`). Name each one in the report.

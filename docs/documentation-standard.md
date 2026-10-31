@@ -31,9 +31,9 @@ A rule belongs in `.claude/rules/` rather than `CLAUDE.md` only when it matters 
 // Attempt budget == total budget, deliberately. See docs/adr/0009-bound-every-body-store-operation.md (#222).
 ```
 
-**Only an ADR is a safe unqualified pointer target**, because only an ADR is immutable: what the pointer promised is still there. Everything else moves, so a pointer into `README.md` or `docs/architecture.md` must name the section it means — then a reader who lands on a rewritten page can tell the target is gone instead of reading the wrong thing.
+**Only an ADR is a safe unqualified pointer target**, because only an ADR keeps the decision its title names: a reversal gets a new ADR, and an amendment in place must leave the title true ([`adr/README.md`](adr/README.md)). Everything else moves, so a pointer into `README.md` or `docs/architecture.md` must name the section it means — then a reader who lands on a rewritten page can tell the target is gone instead of reading the wrong thing.
 
-**Immutability is not currency, and the difference bites.** A superseded ADR still exists, still resolves, and still reads as a decision, so a bare path into one hands the reader a wrong answer delivered with confidence — worse than a dead link, because nothing signals the failure. Two rules close it:
+**Permanence is not currency, and the difference bites.** A superseded ADR still exists, still resolves, and still reads as a decision, so a bare path into one hands the reader a wrong answer delivered with confidence — worse than a dead link, because nothing signals the failure. Two rules close it:
 
 - A superseded ADR's status line must link forward to its successor, and the successor must link back. A reader who lands on a dead decision can then always walk to the live one.
 - A citation of a superseded ADR from code or from any doc outside `docs/adr/` must say so on the citing line. `scripts/check-docs.py` enforces both.
@@ -129,7 +129,7 @@ A reference may only replace an explanation when the target actually holds it, s
 
 ## 8. Where the `docs/` files fit
 
-Three of the four files originally in `docs/` were ADRs in everything but name — Problem / Options / Decision, dated, immutable — and now live in [`docs/adr/`](adr/) with numbers. Use them as the template for new ones.
+Three of the four files originally in `docs/` were ADRs in everything but name — Problem / Options / Decision, dated, kept once decided — and now live in [`docs/adr/`](adr/) with numbers. Use them as the template for new ones.
 
 The fourth was not an ADR and was not forced into the numbering: `chess-com-client-followups.md` was a list of parked items, not a decision, so it became issues [#233](https://github.com/Sootopolis/ccas/issues/233)–[#236](https://github.com/Sootopolis/ccas/issues/236) and the file was deleted. That is the general rule — a backlog belongs in the tracker, where it can be closed, and `docs/` holds only things that are finished.
 
