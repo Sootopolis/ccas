@@ -23,7 +23,8 @@ object TestClubSlugRenameResolver extends ZIOSpecDefault {
     ),
     suite("resolveAndPersist without a caller's hint")(
       formerNameRecoversToItsClub,
-      formerNameRefusesAnotherClub
+      formerNameRefusesAnotherClub,
+      formerNameOfNamelessClubRecovers
     ),
     suite("resolveAndPersist tier C (admin-clubs lookup)")(
       tierCHitFromAdminClubs,
@@ -81,6 +82,28 @@ object TestClubSlugRenameResolver extends ZIOSpecDefault {
         result    <- ClubSlugRenameResolver.resolveAndPersist(client, ClubSlug("former-f"), None)
         persisted <- Club.selectId(stranger)
       } yield assertTrue(result.isEmpty, persisted.isEmpty)
+    }
+
+  // Tier A has no name to offer for a club holding none, so the hint matters only for the tiers that ask Chess.com.
+  private def formerNameOfNamelessClubRecovers =
+    test("a former name of a club holding none derives that club, so Tier C recovers the name it answers to now") {
+      val namelessId = ClubId(901_020)
+      val adminPid   = PlayerId(901_120)
+      val adminName  = "nameless-admin"
+      val responses = Map(
+        s"player/$adminName/clubs" -> apiPlayerClubsJson(List("fresh-n")),
+        "club/fresh-n"             -> apiClubJson(ClubId.unwrap(namelessId), "fresh-n")
+      )
+      for {
+        _       <- Club.upsert(Club(namelessId, t0, ClubSlug("former-n"), "Nameless", None, None, None))
+        _       <- Club.upsert(Club(namelessId, t0, ClubSlug("taken-n"), "Nameless", None, None, None))
+        _       <- Club.upsert(Club(ClubId(901_021), t0, ClubSlug("taken-n"), "Taker", None, None, None))
+        _       <- insertPlayer(adminPid, adminName)
+        _       <- insertAdmin(namelessId, adminPid)
+        client  <- fakeChessComClient(responses)
+        result  <- ClubSlugRenameResolver.resolveAndPersist(client, ClubSlug("former-n"), None)
+        current <- ClubName.selectCurrentName(namelessId)
+      } yield assertTrue(result.map(_.slug).contains(ClubSlug("fresh-n")), current.contains(ClubSlug("fresh-n")))
     }
 
   private def fetchFailureCountFor(urlSubstring: String): RIO[PostgresClient, Long] =
