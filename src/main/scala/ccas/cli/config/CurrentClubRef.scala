@@ -1,6 +1,6 @@
 package ccas.cli.config
 
-import ccas.analysis.apps.{ClubQuery, ClubRef, ClubResolution, NamedClub}
+import ccas.analysis.apps.{ClubQuery, ClubRef, ClubResolution}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 
 /** The parsed form of the CLI config's `current_club` value. Stored as `"<id>:<slug>"` when the CLI knows the club's
@@ -65,31 +65,23 @@ object CurrentClubRef {
     }
   }
 
-  /** The pointer to persist after a command sent `query` and the server resolved it to `resolvedOption`, given the
-    * raw `current_club` it started with: the club's `<id>:<slug>`, when that is the club the pointer
+  /** The pointer to persist after a command sent `query` and the server answered `resolution`, given the raw
+    * `current_club` it started with: the `<id>:<slug>` of the club acted on, when that is the club the pointer
     * [[CurrentClubRef.means]] and it differs from what is stored — a Chess.com rename, or an id a bare pointer lacked.
-    * `None` leaves `current_club` untouched. Pure so the write-back is testable without the dispatcher.
+    * A bare pointer is a name, so it follows one that has [[ClubResolution.Moved]]: the server has already recorded
+    * the new holder, and the next command would follow it anyway (#386). `None` leaves `current_club` untouched.
     */
   def refreshedRef(
     stored: Option[String],
     query: ClubQuery,
-    resolvedOption: Option[NamedClub]
+    resolution: ClubResolution
   ): Option[CurrentClubRef] =
-    (stored, resolvedOption) match {
+    (stored, resolution.runnable.toOption) match {
       case (Some(raw), Some(resolved)) =>
         val next = CurrentClubRef(Some(resolved.clubId), ClubSlug.unwrap(resolved.slug))
         Option.when(parse(raw).means(ClubRef.of(resolved), query) && next.render != raw.trim)(next)
       case _ => None
     }
-
-  /** The club a submit resolved to, when it is one the pointer may be repointed at. A [[ClubResolution.Moved]] name
-    * now belongs to someone else's club: the job runs there because that is the name that was asked for, but a
-    * pointer stored as a bare slug would otherwise follow the name and silently change which club it means.
-    */
-  def refreshTarget(resolution: ClubResolution): Option[NamedClub] = resolution match {
-    case ClubResolution.Moved(_, _, _) => None
-    case settled                       => settled.runnable.toOption
-  }
 
   /** Slugs compare case-insensitively and trimmed: `ClubSlug.normalize` lowercases but does not trim. */
   private[cli] def sameSlug(a: String, b: String): Boolean = a.trim.equalsIgnoreCase(b.trim)

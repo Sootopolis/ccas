@@ -1,16 +1,20 @@
 package ccas.cli
 
+import java.nio.file.{Files, Path}
+
 import zio.{Ref, Task, UIO, ZIO}
 import zio.http.Routes
 import zio.test.{assertTrue, Spec, TestConsole, ZIOSpecDefault}
 
 import ccas.analysis.apps.{ClubQuery, ClubRef, ClubResolution, NamedClub}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
+import ccas.cli.config.{CliConfig, ConfigWriter}
 import ccas.server.routes.ClubResult
 import ccas.server.routes.ManagedClubRoutes.ManagedClubResponse
 
 /** Pins how the CLI reads a request's [[ClubResolution]]: which outcomes bust the completion cache and hint a stale
-  * `current_club`, which get a note, how an ambiguous name is settled at the prompt, and what `club show` prints.
+  * `current_club`, which get a note, how `current_club` is refreshed, how an ambiguous name is settled at the prompt,
+  * and what `club show` prints.
   */
 object TestDispatcherResolution extends ZIOSpecDefault {
 
@@ -21,6 +25,19 @@ object TestDispatcherResolution extends ZIOSpecDefault {
 
   private val byName: ClubQuery = ClubQuery.BySlug(ClubSlug("x"))
   private val byId: ClubQuery   = ClubQuery.ById(ClubId(9))
+
+  // `was-shared` was `other`'s here; Chess.com says `club` holds it now.
+  private val wasShared: ClubQuery = ClubQuery.BySlug(ClubSlug("was-shared"))
+  private val movedAway            = ClubResolution.Moved(club, ClubSlug("was-shared"), List(otherRef))
+  private val followedNote = "note: your current club, 'was-shared', now means club #1 (now new-name), which holds " +
+    "that name on Chess.com — to point it at another club, run 'ccas use-club <slug>'"
+
+  private def tempDir: UIO[Path] =
+    ZIO.attemptBlocking {
+      val dir = Files.createTempDirectory("ccas-dispatcher-resolution")
+      dir.toFile.deleteOnExit()
+      dir
+    }.orDie
 
   private val contested: ClubResolution.Ambiguous =
     ClubResolution.Ambiguous(ClubSlug("was-shared"), List(clubRef, otherRef))
@@ -188,6 +205,39 @@ object TestDispatcherResolution extends ZIOSpecDefault {
         "using the club that holds it"
       assertTrue(Dispatcher.nameChangesFrom(outcomes) == List(note))
     },
+    // #386: the move's own note is printed only when the server acted, so this one must say why on its own.
+    test("a bare current_club that follows a moved name says which club it now means, and why") {
+      assertTrue(Dispatcher.followedNameNote(Some("was-shared"), movedAway).contains(followedNote))
+    },
+    // A bare pointer can also mean the holder by the name it holds now, which is not the name that moved.
+    test("no follow note for a pointer carrying an id, for one that is not the moved name, or for an unmoved name") {
+      assertTrue(
+        Dispatcher.followedNameNote(Some("1:old-name"), movedAway).isEmpty,
+        Dispatcher.followedNameNote(Some("new-name"), movedAway).isEmpty,
+        Dispatcher.followedNameNote(Some("new-name"), ClubResolution.Known(club)).isEmpty,
+        Dispatcher.followedNameNote(Some("old-name"), ClubResolution.Renamed(club, ClubSlug("old-name"))).isEmpty
+      )
+    },
+    suite("refreshing current_club")(
+      test("a bare current_club that follows a moved name is rewritten to the club holding it, then noted") {
+        for {
+          configFile <- tempDir.map(_.resolve("config.conf"))
+          _          <- ConfigWriter.setCurrentClub(configFile, None, "was-shared")
+          _          <- Dispatcher.refreshCurrentClubIn(configFile, Some("was-shared"), wasShared, movedAway)
+          config     <- CliConfig.load(configFile).mapError(new RuntimeException(_))
+          err        <- TestConsole.outputErr
+        } yield assertTrue(config.currentClubOption.contains("1:new-name"), err == Vector(s"$followedNote\n"))
+      },
+      test("a rewrite that fails is not noted as having happened") {
+        for {
+          // A regular file where the config's directory should be, so the write cannot land.
+          blocker <- tempDir.map(_.resolve("not-a-dir"))
+          _       <- ZIO.attemptBlocking(Files.writeString(blocker, ""))
+          _ <- Dispatcher.refreshCurrentClubIn(blocker.resolve("config.conf"), Some("was-shared"), wasShared, movedAway)
+          err <- TestConsole.outputErr
+        } yield assertTrue(err.isEmpty)
+      }
+    ),
     // #274: a club holding no name has no name to be noted by, so the note must not run its own words together.
     test("a name moved from a club holding none is noted naming that club by id") {
       val moved = ClubResolution.Moved(club, ClubSlug("went-stale"), List(ClubRef(ClubId(3), None)))

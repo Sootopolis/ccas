@@ -12,7 +12,14 @@ import ccas.api.misc.subtypes.{ClubId, ClubSlug}
   */
 object TestCurrentClubRef extends ZIOSpecDefault {
 
-  private def resolved(clubId: Long, slug: String): Option[NamedClub] = Some(NamedClub(ClubId(clubId), ClubSlug(slug)))
+  private def resolved(clubId: Long, slug: String): ClubResolution =
+    ClubResolution.Known(NamedClub(ClubId(clubId), ClubSlug(slug)))
+
+  // `team-a` was club 5's here; Chess.com says `holder` holds it now.
+  private def movedTo(holder: Long): ClubResolution = {
+    val club = NamedClub(ClubId(holder), ClubSlug("team-a"))
+    ClubResolution.Moved(club = club, requested = ClubSlug("team-a"), previous = List(named(5, "team-a-old")))
+  }
 
   private def byId(clubId: Long): ClubQuery = ClubQuery.ById(ClubId(clubId))
 
@@ -80,21 +87,21 @@ object TestCurrentClubRef extends ZIOSpecDefault {
       },
       test("an unresolved submit or an unset current_club never writes") {
         assertTrue(
-          CurrentClubRef.refreshedRef(Some("5:team-a"), byId(5), None).isEmpty,
+          CurrentClubRef.refreshedRef(Some("5:team-a"), byId(5), ClubResolution.NotLocal(byId(5))).isEmpty,
           CurrentClubRef.refreshedRef(None, bySlug("team-a"), resolved(5, "team-a")).isEmpty
         )
       },
-      // The pointer must not follow a name that has moved to someone else's club, or it would silently change which
-      // club bare commands mean (#254).
-      test("a Moved club is never a refresh target, though every other club that ran is") {
-        val ours   = NamedClub(ClubId(5), ClubSlug("team-a"))
-        val theirs = NamedClub(ClubId(9), ClubSlug("team-b"))
-        val moved  = ClubResolution.Moved(theirs, ClubSlug("team-a"), List(ClubRef.of(ours)))
+      // The server has already recorded the name's new holder, so holding back only defers the switch to the next
+      // command, which would make it without a word (#386).
+      test("a bare-slug pointer follows its name to the club Chess.com says holds it now, as the command just did") {
+        val next = CurrentClubRef.refreshedRef(Some("team-a"), bySlug("team-a"), movedTo(9))
+        assertTrue(next.contains(CurrentClubRef(Some(ClubId.wrap(9L)), "team-a")))
+      },
+      test("a name that moved never repoints a pointer carrying an id, only relabels the club it already names") {
+        val relabelled = CurrentClubRef.refreshedRef(Some("9:team-b"), bySlug("team-a"), movedTo(9))
         assertTrue(
-          CurrentClubRef.refreshTarget(moved).isEmpty,
-          CurrentClubRef.refreshTarget(ClubResolution.Known(ours)).contains(ours),
-          CurrentClubRef.refreshTarget(ClubResolution.Renamed(ours, ClubSlug("was-team-a"))).contains(ours),
-          CurrentClubRef.refreshTarget(ClubResolution.NotLocal(ClubQuery.BySlug(ClubSlug("team-a")))).isEmpty
+          CurrentClubRef.refreshedRef(Some("5:team-a"), bySlug("team-a"), movedTo(9)).isEmpty,
+          relabelled.contains(CurrentClubRef(Some(ClubId.wrap(9L)), "team-a"))
         )
       }
     ),
