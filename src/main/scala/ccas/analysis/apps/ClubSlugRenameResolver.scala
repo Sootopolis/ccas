@@ -213,8 +213,8 @@ object ClubSlugRenameResolver {
       case some @ Some(_) => ZIO.succeed(some)
       case None =>
         ClubResolution.resolve(ClubQuery.BySlug(staleSlug)).map {
-          case ClubResolution.NamelessHolder(_, holder) => Some(holder)
-          case resolution                               => resolution.runnable.toOption.map(_.clubId)
+          case ClubResolution.RenamedNameless(clubId, _) => Some(clubId)
+          case resolution                                => resolution.runnable.toOption.map(_.clubId)
         }
     }
 

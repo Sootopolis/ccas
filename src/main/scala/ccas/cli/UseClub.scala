@@ -155,7 +155,7 @@ object UseClub {
           case ClubResolution.Moved(club, _, _)     => reached(club, resolution, managed)
           case ClubResolution.NotLocal(_)           => unreached(slug, notLocalWarning(slug))
           case ClubResolution.Nameless(_)           => unreached(slug, namelessWarning(slug))
-          case ClubResolution.NamelessHolder(_, _)  => unreached(slug, namelessWarning(slug))
+          case ClubResolution.RenamedNameless(_, _) => unreached(slug, namelessWarning(slug))
           case ClubResolution.Ambiguous(_, holders) => unreached(slug, ambiguousWarning(slug, holders))
         }
     }

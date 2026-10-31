@@ -102,14 +102,14 @@ object TestClubResolution extends ZIOSpecDefault {
     },
     // 630 renames to new-630, 631 then takes that name, and 630 is left holding none we know of (#254 step 4): it
     // can be named by neither the id nor the name it used to answer to.
-    test("a club whose name another club took holds none: Nameless by id, and a NamelessHolder by its former name") {
+    test("a club whose name another club took holds none: Nameless by id, and RenamedNameless by its former name") {
       for {
         _      <- seedNameless(630, "went-stale")
         byId   <- ClubResolution.resolve(ClubQuery.ById(ClubId(630)))
         bySlug <- ClubResolution.resolve(ClubQuery.BySlug(ClubSlug("went-stale")))
       } yield assertTrue(
         byId == ClubResolution.Nameless(ClubId(630)),
-        bySlug == ClubResolution.NamelessHolder(ClubSlug("went-stale"), ClubId(630))
+        bySlug == ClubResolution.RenamedNameless(ClubId(630), ClubSlug("went-stale"))
       )
     }
   )
@@ -266,13 +266,13 @@ object TestClubResolution extends ZIOSpecDefault {
           byId == ClubResolution.Known(NamedClub(ClubId(800), ClubSlug("gone-800")))
         )
       },
-      test("held by nobody upstream, stays a NamelessHolder") {
+      test("held by nobody upstream, stays RenamedNameless") {
         for {
           _           <- seedNameless(810, "gone-810")
           local       <- ClubResolution.resolve(ClubQuery.BySlug(ClubSlug("gone-810")))
           client      <- fakeChessComClient(Map.empty)
           adjudicated <- ClubResolution.adjudicate(client, local)
-        } yield assertTrue(adjudicated == ClubResolution.NamelessHolder(ClubSlug("gone-810"), ClubId(810)))
+        } yield assertTrue(adjudicated == ClubResolution.RenamedNameless(ClubId(810), ClubSlug("gone-810")))
       }
     ),
     // The fake client answers the club's former name with another club, so an unchanged answer is proof none was asked.
@@ -320,8 +320,8 @@ object TestClubResolution extends ZIOSpecDefault {
     test("Nameless does not run, and its reason names the club by id") {
       assertTrue(ClubResolution.Nameless(ClubId(630)).runnable.left.exists(_.startsWith("Club #630 can't be reached")))
     },
-    test("NamelessHolder does not run, and its reason names the name asked for and the club that held it") {
-      val resolution = ClubResolution.NamelessHolder(ClubSlug("went-stale"), ClubId(630))
+    test("RenamedNameless does not run, and its reason names the name asked for and the club that held it") {
+      val resolution = ClubResolution.RenamedNameless(ClubId(630), ClubSlug("went-stale"))
       assertTrue(
         resolution.runnable.left.exists(m => m.startsWith("Club went-stale can't be reached") && m.contains("#630"))
       )
@@ -338,7 +338,7 @@ object TestClubResolution extends ZIOSpecDefault {
         ClubResolution.Renamed(realNamed, ClubSlug("old-name")),
         ClubResolution.NotLocal(byName),
         ClubResolution.Nameless(ClubId(9)),
-        ClubResolution.NamelessHolder(ClubSlug("y"), ClubId(9)),
+        ClubResolution.RenamedNameless(ClubId(9), ClubSlug("y")),
         ClubResolution.Ambiguous(ClubSlug("z"), List(ClubRef.of(realNamed), namelessRef)),
         ClubResolution.Moved(realNamed, ClubSlug("changed-hands"), List(otherRef))
       )

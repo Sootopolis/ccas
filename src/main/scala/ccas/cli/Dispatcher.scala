@@ -583,10 +583,10 @@ object Dispatcher {
   // club that went missing was the current one. `Renamed` ran its job and `Ambiguous` needs no hint.
   private[cli] def missingQuery(resolution: ClubResolution): Option[ClubQuery] =
     resolution match {
-      case ClubResolution.NotLocal(requested)          => Some(requested)
-      case ClubResolution.Nameless(clubId)             => Some(ClubQuery.ById(clubId))
-      case ClubResolution.NamelessHolder(requested, _) => Some(ClubQuery.BySlug(requested))
-      case _                                           => None
+      case ClubResolution.NotLocal(requested)           => Some(requested)
+      case ClubResolution.Nameless(clubId)              => Some(ClubQuery.ById(clubId))
+      case ClubResolution.RenamedNameless(_, requested) => Some(ClubQuery.BySlug(requested))
+      case _                                            => None
     }
 
   private def missingFrom(outcomes: List[ClubOutcome]): List[ClubQuery] =

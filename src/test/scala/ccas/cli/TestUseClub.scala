@@ -219,7 +219,7 @@ object TestUseClub extends ZIOSpecDefault {
         }
       },
       test("a former name of a club that has since lost its name says commands can't reach it") {
-        val nameless = ClubResolution.NamelessHolder(alpha, ClubId(9))
+        val nameless = ClubResolution.RenamedNameless(ClubId(9), alpha)
         setAgainst(server("team-alpha", Some(nameless), Some(Nil)), "team-alpha").map { set =>
           assertTrue(
             set.storedOption.contains("team-alpha"),

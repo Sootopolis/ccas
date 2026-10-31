@@ -80,11 +80,11 @@ object TestDispatcherResolution extends ZIOSpecDefault {
     } yield (result, targets)
 
   override def spec: Spec[Any, Throwable] = suite("TestDispatcherResolution")(
-    test("NotLocal, Nameless and NamelessHolder are missing, and answer with what was asked for") {
+    test("NotLocal, Nameless and RenamedNameless are missing, and answer with what was asked for") {
       assertTrue(
         Dispatcher.missingQuery(ClubResolution.NotLocal(byName)).contains(byName),
         Dispatcher.missingQuery(ClubResolution.Nameless(ClubId(9))).contains(byId),
-        Dispatcher.missingQuery(ClubResolution.NamelessHolder(ClubSlug("x"), ClubId(3))).contains(byName)
+        Dispatcher.missingQuery(ClubResolution.RenamedNameless(ClubId(3), ClubSlug("x"))).contains(byName)
       )
     },
     test("Known, Renamed and Ambiguous are not missing") {

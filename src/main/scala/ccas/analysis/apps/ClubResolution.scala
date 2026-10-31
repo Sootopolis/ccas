@@ -85,8 +85,8 @@ enum ClubResolution {
     */
   case Nameless(clubId: ClubId)
 
-  /** Nobody here holds the requested name, and the one club that held it holds none now ([[Nameless]]). */
-  case NamelessHolder(requested: ClubSlug, holder: ClubId)
+  /** A former name of the one club that held it ([[Renamed]]), which holds no name now ([[Nameless]]). */
+  case RenamedNameless(clubId: ClubId, requested: ClubSlug)
   case Ambiguous(requested: ClubSlug, holders: List[ClubRef])
 
   /** Chess.com says `club` holds the requested name now, and it is not a club local history pointed at — the name
@@ -105,9 +105,9 @@ enum ClubResolution {
         s"Club #${ClubId.unwrap(clubId)} can't be reached — it has lost its name to another club, and the server " +
           "hasn't seen what it is called now"
       )
-    case NamelessHolder(requested, holder) =>
+    case RenamedNameless(clubId, requested) =>
       Left(
-        s"Club ${ClubSlug.unwrap(requested)} can't be reached — #${ClubId.unwrap(holder)}, the club that held that " +
+        s"Club ${ClubSlug.unwrap(requested)} can't be reached — #${ClubId.unwrap(clubId)}, the club that held that " +
           "name, has since lost its name to another club, and the server hasn't seen what it is called now"
       )
     case Ambiguous(requested, holders) =>
@@ -148,12 +148,12 @@ object ClubResolution {
       holders = clubIds.map(clubId => ClubRef(clubId, names.get(clubId)))
     } yield holders match {
       case Nil           => NotLocal(ClubQuery.BySlug(requested))
-      case holder :: Nil => holder.namedOption.fold(NamelessHolder(requested, holder.clubId))(Renamed(_, requested))
+      case holder :: Nil => holder.namedOption.fold(RenamedNameless(holder.clubId, requested))(Renamed(_, requested))
       case several       => Ambiguous(requested, several)
     }
 
   /** Asks Chess.com who holds the requested name when [[resolve]] answered out of history — one former holder
-    * ([[Renamed]], [[NamelessHolder]]) or several ([[Ambiguous]]). Whoever holds it now wins, known to us or not, and
+    * ([[Renamed]], [[RenamedNameless]]) or several ([[Ambiguous]]). Whoever holds it now wins, known to us or not, and
     * is persisted, so the name resolves locally from here on; a reported 404 means nobody holds it and the local
     * answer stands (#254, #274).
     *
@@ -198,10 +198,10 @@ object ClubResolution {
   /** The requested name and who local history says held it, for the three answers worth adjudicating. */
   private def historical(resolution: ClubResolution): Option[(ClubSlug, List[ClubRef])] =
     resolution match {
-      case Renamed(club, requested)          => Some((requested, List(ClubRef.of(club))))
-      case NamelessHolder(requested, holder) => Some((requested, List(ClubRef(holder, None))))
-      case Ambiguous(requested, holders)     => Some((requested, holders))
-      case _                                 => None
+      case Renamed(club, requested)           => Some((requested, List(ClubRef.of(club))))
+      case RenamedNameless(clubId, requested) => Some((requested, List(ClubRef(clubId, None))))
+      case Ambiguous(requested, holders)      => Some((requested, holders))
+      case _                                  => None
     }
 
   // A holder local history passed over is `Moved` — the same job, but the CLI says the name changed hands. The rest is
