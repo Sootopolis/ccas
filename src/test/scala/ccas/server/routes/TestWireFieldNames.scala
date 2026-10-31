@@ -6,6 +6,7 @@ import zio.test.{assertTrue, Spec, ZIOSpecDefault}
 import ccas.analysis.apps.{ClubQuery, ClubResolution, NamedClub}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 import ccas.server.routes.JobRoutes.*
+import ccas.server.routes.ManagedClubRoutes.ManagedClubResponse
 import ccas.server.routes.ScheduleRoutes.{CreateScheduleRequest, CreateScheduleResponse, ScheduleResponse}
 
 /** Pins the shape of the submit wire: how a request names its club, and the JSON key of every field whose Scala name
@@ -100,6 +101,15 @@ object TestWireFieldNames extends ZIOSpecDefault {
       assertTrue(
         answered.toJson.contains("\"result\":true"),
         answered.toJson.fromJson[ClubResult[Boolean]] == Right(answered)
+      )
+    },
+    test("a managed-club listing answers with `slug`, and a club holding no name with `clubId` and no `slug`") {
+      val named    = ManagedClubResponse(clubId = 42L, slugOption = Some("team-alpha"), name = "A", markedAt = "t")
+      val nameless = named.copy(clubId = 43L, slugOption = None)
+      assertTrue(
+        named.toJson.contains("\"slug\":\"team-alpha\""),
+        nameless.toJson == """{"clubId":43,"name":"A","markedAt":"t"}""",
+        nameless.toJson.fromJson[ManagedClubResponse] == Right(nameless)
       )
     }
   )

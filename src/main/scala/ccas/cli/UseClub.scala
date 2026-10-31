@@ -117,7 +117,7 @@ object UseClub {
       // and its `/api/clubs` fallback for the whole TTL, while `seedClubs` no-ops because the file now exists. That
       // fallback policy is `Dispatcher`'s to apply; this opportunistic write deliberately owns none of it and just
       // steps aside.
-      managedSlugs = managed.map(_.map(_.slug)).filter(_.nonEmpty)
+      managedSlugs = managed.map(_.flatMap(_.slugOption)).filter(_.nonEmpty)
       written <- ZIO.foreach(managedSlugs)(CompletionCache.writeClubsIn(wiring.clubsFile, _))
       _       <- ZIO.whenDiscard(written.contains(false))(CompletionCache.reportClubsWriteFailed(wiring.clubsFile))
       settled = settlement(slug, resolutionOption, managed)
@@ -213,13 +213,14 @@ object UseClub {
     s"warning: '$slug' was held by ${holders.map(_.display).mkString(", ")}, and nobody holds it now — " +
       "set the one you mean by its current name"
 
-  // The fallback's id: the one managed club showing the typed name. `club.slug` carries no unique index, so two managed
-  // clubs can show one name (#254); an ambiguous name leaves the pointer slug-only, for the next submit to backfill.
+  // The fallback's id: the one managed club showing the typed name. No two clubs hold a name at once, but a server older
+  // than #276 listed `club.slug`, which can repeat; a repeated name leaves the pointer slug-only, for a submit to backfill.
   private[cli] def matchedId(slug: String, managed: Option[List[ManagedClubResponse]]): Option[ClubId] =
     managed.map(_.filter(namedAs(slug))).collect { case List(club) => ClubId.wrap(club.clubId) }
 
   // Case-insensitive, since `ClubSlug.normalize` only lowercases: `Team-Alpha` reaches the server as `team-alpha`.
-  private def namedAs(slug: String)(club: ManagedClubResponse): Boolean = club.slug.equalsIgnoreCase(slug)
+  private def namedAs(slug: String)(club: ManagedClubResponse): Boolean =
+    club.slugOption.exists(_.equalsIgnoreCase(slug))
 
   private def upgradePointer(wiring: Wiring, id: ClubId, slug: String): UIO[Unit] =
     ConfigWriter.setCurrentClub(wiring.configFile, Some(id), slug).ignore

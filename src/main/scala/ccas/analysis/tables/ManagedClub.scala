@@ -21,10 +21,12 @@ final case class ManagedClub(
   markedAt: Instant
 ) derives DbCodec
 
-/** A managed club joined to its `club` row for display (slug + name) and stable-id targeting (`clubId`). */
+/** A managed club joined to its `club` row for display (current slug, if it holds one, and name) and stable-id
+  * targeting (`clubId`).
+  */
 final case class ManagedClubView(
   clubId: ClubId,
-  slug: ClubSlug,
+  slugOption: Option[ClubSlug],
   name: String,
   markedAt: Instant
 ) derives DbCodec
@@ -45,15 +47,15 @@ object ManagedClub {
       sql"SELECT club_id, marked_at FROM managed_club WHERE club_id = $clubId".query[ManagedClub].run().headOption
     }
 
-  /** All managed clubs under the name they hold now, newest-marked first. A managed club that holds none is left out
-    * — naming it would name the club that took it.
+  /** Every managed club, newest-marked first, with the name it holds now. A club that has lost its name to another is
+    * listed without one, so a caller can still reach it by id and say why it can't run (#385).
     */
   def selectAllWithClub: ZIO[PostgresClient, SQLException, List[ManagedClubView]] =
     connectZIO {
       sql"""SELECT c.club_id, n.slug, c.name, mc.marked_at
             FROM managed_club mc
             JOIN club c ON c.club_id = mc.club_id
-            JOIN club_name n ON n.club_id = mc.club_id AND n.until IS NULL
+            LEFT JOIN club_name n ON n.club_id = mc.club_id AND n.until IS NULL
             ORDER BY mc.marked_at DESC""".query[ManagedClubView].run().toList
     }
 

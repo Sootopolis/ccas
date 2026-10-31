@@ -18,6 +18,8 @@ object TestCurrentClubRef extends ZIOSpecDefault {
 
   private def bySlug(slug: String): ClubQuery = ClubQuery.BySlug(ClubSlug(slug))
 
+  private def named(clubId: Long, slug: String): ClubRef = ClubRef(ClubId(clubId), Some(ClubSlug(slug)))
+
   override def spec: Spec[Any, Nothing] = suite("TestCurrentClubRef")(
     test("parses <id>:<slug> into the id and slug") {
       val ref = CurrentClubRef.parse("1234:team-alpha")
@@ -122,8 +124,8 @@ object TestCurrentClubRef extends ZIOSpecDefault {
     suite("means (is a removed or refreshed club this pointer's?)")(
       test("a pointer carrying an id means that club alone, however a command named it") {
         val pointer = CurrentClubRef(Some(ClubId(42)), "team-alpha")
-        val ours    = NamedClub(ClubId(42), ClubSlug("team-alpha-renamed"))
-        val theirs  = NamedClub(ClubId(43), ClubSlug("team-alpha"))
+        val ours    = named(42, "team-alpha-renamed")
+        val theirs  = named(43, "team-alpha")
         assertTrue(
           pointer.means(ours, byId(42)),
           pointer.means(ours, bySlug("team-alpha-renamed")),
@@ -135,7 +137,7 @@ object TestCurrentClubRef extends ZIOSpecDefault {
       // club by id, and from cron it may be the only command that ever backfills the pointer.
       test("a bare-slug pointer means the club holding its name now, however a command named it") {
         val bare   = CurrentClubRef(None, "team-alpha")
-        val holder = NamedClub(ClubId(42), ClubSlug("team-alpha"))
+        val holder = named(42, "team-alpha")
         assertTrue(
           bare.means(holder, bySlug("team-alpha")),
           bare.means(holder, byId(42)),
@@ -144,13 +146,42 @@ object TestCurrentClubRef extends ZIOSpecDefault {
       },
       test("a bare-slug pointer that is a former name means the club a command reached by it") {
         val bare = CurrentClubRef(None, "team-alpha")
-        assertTrue(bare.means(NamedClub(ClubId(42), ClubSlug("team-alpha-renamed")), bySlug("team-alpha")))
+        assertTrue(bare.means(named(42, "team-alpha-renamed"), bySlug("team-alpha")))
       },
       // Once the club holds another name, the pointer's name may reach another club, so this one is not provably it.
       test("a bare-slug pointer does not mean a club holding another name that a command named some other way") {
         val bare    = CurrentClubRef(None, "team-alpha")
-        val renamed = NamedClub(ClubId(42), ClubSlug("team-alpha-renamed"))
+        val renamed = named(42, "team-alpha-renamed")
         assertTrue(!bare.means(renamed, byId(42)), !bare.means(renamed, bySlug("team-beta")))
+      },
+      // `club remove` can unmanage a club that has lost its name, so clearing the pointer must still recognise it (#385).
+      test("a pointer carrying an id means its club even when that club holds no name") {
+        val pointer = CurrentClubRef(Some(ClubId(42)), "team-alpha")
+        assertTrue(pointer.means(ClubRef(ClubId(42), None), byId(42)))
+      },
+      test("a bare-slug pointer does not mean a club holding no name that a command named by id") {
+        assertTrue(!CurrentClubRef(None, "team-alpha").means(ClubRef(ClubId(42), None), byId(42)))
+      }
+    ),
+    // `club list` has no query to go by, only the club as listed.
+    suite("pointsAt (which listed club is this pointer?)")(
+      test("a pointer carrying an id points at that club alone, not at another holding the name it shows") {
+        val pointer = CurrentClubRef(Some(ClubId(42)), "team-alpha")
+        assertTrue(
+          pointer.pointsAt(named(42, "team-alpha-renamed")),
+          pointer.pointsAt(ClubRef(ClubId(42), None)),
+          !pointer.pointsAt(named(43, "team-alpha"))
+        )
+      },
+      test(
+        "a bare-slug pointer points at the club holding its name, case-insensitively, and never at one holding none"
+      ) {
+        val bare = CurrentClubRef(None, "team-alpha")
+        assertTrue(
+          bare.pointsAt(named(42, "TEAM-ALPHA")),
+          !bare.pointsAt(named(42, "team-beta")),
+          !bare.pointsAt(ClubRef(ClubId(42), None))
+        )
       }
     )
   )

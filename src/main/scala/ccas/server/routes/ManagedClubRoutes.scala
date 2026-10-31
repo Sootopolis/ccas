@@ -1,9 +1,9 @@
 package ccas.server.routes
 
 import zio.http.*
-import zio.json.{DeriveJsonCodec, JsonCodec}
+import zio.json.{jsonField, DeriveJsonCodec, JsonCodec}
 
-import ccas.analysis.apps.{ClubQuery, ManagedClubApp, NamedClub}
+import ccas.analysis.apps.{ClubQuery, ClubRef, ManagedClubApp}
 import ccas.analysis.tables.ManagedClubView
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 import ccas.server.routes.RouteHelpers.*
@@ -23,10 +23,16 @@ object ManagedClubRoutes {
     given JsonCodec[MarkManagedRequest] = DeriveJsonCodec.gen
   }
 
-  private[ccas] case class ManagedClubResponse(clubId: Long, slug: String, name: String, markedAt: String) {
+  // `slug` is absent for a managed club that has lost its name to another, which can still be reached by id (#385).
+  private[ccas] case class ManagedClubResponse(
+    clubId: Long,
+    @jsonField("slug") slugOption: Option[String],
+    name: String,
+    markedAt: String
+  ) {
 
-    /** The club this row names, by its id and the name it holds now. */
-    def namedClub: NamedClub = NamedClub(ClubId(clubId), ClubSlug(slug))
+    /** The club this row names, by its id and the name it holds now, if any. */
+    def ref: ClubRef = ClubRef(ClubId(clubId), slugOption.map(ClubSlug(_)))
   }
   object ManagedClubResponse {
     given JsonCodec[ManagedClubResponse] = DeriveJsonCodec.gen
@@ -34,7 +40,7 @@ object ManagedClubRoutes {
     def fromView(v: ManagedClubView): ManagedClubResponse =
       ManagedClubResponse(
         clubId = ClubId.unwrap(v.clubId),
-        slug = ClubSlug.unwrap(v.slug),
+        slugOption = v.slugOption.map(ClubSlug.unwrap),
         name = v.name,
         markedAt = v.markedAt.toString
       )
@@ -56,10 +62,11 @@ object ManagedClubRoutes {
     Method.DELETE / "api" / "managed-clubs" -> handler { (req: Request) =>
       // Unmanage + stop the club's per-club schedules atomically (#106), so a failure leaves neither the managed_club
       // marker nor the job_schedule rows half-removed. Resolution may ask Chess.com, so it runs before the transaction.
+      // Both need only the id, so a club that has lost its name can still be unmanaged (#385).
       for {
         query <- ClubRequest.query(req)
-        result <- ClubRequest.run(query) { club =>
-          PostgresClient.withTransaction(ManagedClubApp.unmark(club.clubId) <* JobSchedule.deleteByClub(club.clubId))
+        result <- ClubRequest.runOnReached(query) { clubId =>
+          PostgresClient.withTransaction(ManagedClubApp.unmark(clubId) <* JobSchedule.deleteByClub(clubId))
         }
       } yield jsonResponse(Status.Ok, result)
     }

@@ -2,7 +2,7 @@ package ccas.cli
 
 import zio.*
 
-import ccas.analysis.apps.{ClubQuery, NamedClub}
+import ccas.analysis.apps.{ClubQuery, ClubRef}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 import ccas.cli.config.CurrentClubRef
 
@@ -21,10 +21,10 @@ object ClubTarget {
     ClubTarget(query, query.describe)
   }
 
-  /** A club the server has just named, addressed by its id so a name that changes hands before the submit can't
-    * redirect it, and labelled by the name it held then.
+  /** A club the server has just listed, addressed by its id so a name that changes hands before the submit can't
+    * redirect it, and labelled as `club list` shows it.
     */
-  def of(club: NamedClub): ClubTarget = ClubTarget(ClubQuery.ById(club.clubId), ClubSlug.unwrap(club.slug))
+  def of(club: ClubRef): ClubTarget = ClubTarget(ClubQuery.ById(club.clubId), club.label)
 }
 
 /** Resolves a command's club target(s) from the parsed request and the config's `current_club`. Kept pure and free of
@@ -116,7 +116,7 @@ object ClubResolver {
   private def blankToNone(o: Option[String]): Option[String] = o.map(_.trim).filter(_.nonEmpty)
 
   def multi(
-    fetchManaged: => Task[List[NamedClub]],
+    fetchManaged: => Task[List[ClubRef]],
     explicit: List[String],
     clubIdOption: Option[Long],
     all: Boolean,
@@ -139,7 +139,7 @@ object ClubResolver {
       case None      => ZIO.fail(CliError(NoClubError, 2))
     }
 
-  private def managedTargets(clubs: List[NamedClub]): IO[CliError, NonEmptyChunk[ClubTarget]] =
+  private def managedTargets(clubs: List[ClubRef]): IO[CliError, NonEmptyChunk[ClubTarget]] =
     ZIO.fromOption(NonEmptyChunk.fromIterableOption(clubs.map(ClubTarget.of))).orElseFail(CliError(NoManagedError, 2))
 
   // Trim and drop blanks so a padded/empty `--club` slug can't reach the API path verbatim — `ClubSlug.normalize` only

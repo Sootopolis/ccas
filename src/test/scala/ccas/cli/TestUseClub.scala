@@ -21,7 +21,12 @@ object TestUseClub extends ZIOSpecDefault {
   private val Server = "http://127.0.0.1:8080"
 
   private def managed(clubId: Long, slug: String): ManagedClubResponse =
-    ManagedClubResponse(clubId = clubId, slug = slug, name = s"Club $clubId", markedAt = "2026-09-21T00:00:00Z")
+    ManagedClubResponse(
+      clubId = clubId,
+      slugOption = Some(slug),
+      name = s"Club $clubId",
+      markedAt = "2026-09-21T00:00:00Z"
+    )
 
   private def tempDir: UIO[Path] =
     ZIO.attemptBlocking {
@@ -272,8 +277,8 @@ object TestUseClub extends ZIOSpecDefault {
         )
       }
     ),
-    // matchedId is the fallback's id. `club.slug` carries no unique index since #254, so the managed set can show one
-    // name twice — and then no id is safe to store.
+    // matchedId is the fallback's id. A server older than #276 listed `club.slug`, which can show one name twice — and
+    // then no id is safe to store.
     test("matchedId: the one managed club answering to the slug, case-insensitively") {
       assertTrue(
         UseClub.matchedId("Team-Alpha", Some(List(managed(7, "team-alpha"), managed(8, "team-beta"))))
@@ -289,6 +294,10 @@ object TestUseClub extends ZIOSpecDefault {
         UseClub.matchedId("team-gamma", Some(List(managed(7, "team-alpha")))).isEmpty,
         UseClub.matchedId("team-alpha", None).isEmpty
       )
+    },
+    test("matchedId: a managed club holding no name answers to no slug") {
+      val nameless = managed(9, "unused").copy(slugOption = None)
+      assertTrue(UseClub.matchedId("team-alpha", Some(List(nameless, managed(7, "team-alpha")))).contains(ClubId(7)))
     },
     // offlineHint's `None` branch is the only consumer of the Option `readClubsIn` returns — without it, collapsing that
     // back to a bare list would compile and break nothing.

@@ -7,11 +7,10 @@ import scala.io.StdIn
 
 import zio.*
 
-import ccas.analysis.apps.{ClubQuery, ClubResolution, NamedClub}
+import ccas.analysis.apps.{ClubQuery, ClubRef, ClubResolution, NamedClub}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, Username}
 import ccas.api.player.ApiPlayer
 import ccas.cli.config.{ConfigWriter, CurrentClubRef}
-import ccas.cli.config.CurrentClubRef.sameSlug
 import ccas.server.routes.{ClubRequest, ClubResult, ClubRoutes}
 import ccas.server.routes.BlacklistRoutes.{BlacklistEntryResponse, CreateBlacklistRequest}
 import ccas.server.routes.ClubRoutes.{ClubInfo, ClubsResponse}
@@ -121,7 +120,7 @@ object Dispatcher {
       .flatMap(CompletionCache.writeClubs)
 
   private def managedSlugs(api: CcasApiClient): Task[List[String]] =
-    api.getJson[List[ManagedClubResponse]]("/api/managed-clubs").map(_.map(_.slug))
+    api.getJson[List[ManagedClubResponse]]("/api/managed-clubs").map(_.flatMap(_.slugOption))
 
   private def allClubSlugs(api: CcasApiClient): Task[List[String]] =
     api.getJson[ClubsResponse]("/api/clubs").map(_.clubs.map(club => ClubSlug.unwrap(club.slug)))
@@ -313,10 +312,12 @@ object Dispatcher {
       for {
         target <- ClubResolver.operand(slugs, clubIdOption)
         // No pointer refresh: it only ever rewrites a `current_club` naming this club, which the removal then clears.
-        (club, removed) <- settleAndNote(target, noteOutcomes(currentClubOption, _)) { chosen =>
+        result <- settleAndNote(target, noteOutcomes(currentClubOption, _)) { chosen =>
           api.deleteJson[ClubResult[Boolean]](s"/api/managed-clubs?${ClubRequest.queryString(chosen.query)}")
         }
-        name = ClubSlug.unwrap(club.slug)
+        // Unmanaging needs only the id, so the server also acts on a club that has lost its name (#385).
+        (club, removed) <- ZIO.fromEither(result.reachedEither).mapError(CliError(_, 1))
+        name = club.label
         _ <- Console.printLine(if (removed) {
           s"stopped managing $name"
         } else { s"$name was not managed" }).orDie
@@ -364,7 +365,7 @@ object Dispatcher {
   // `current_club` still pointing at the removed club would keep running real jobs against it. Clear it so the next
   // bare command fails loudly with `ClubResolver.NoClubError`.
   private def clearCurrentIfRemoved(
-    removed: NamedClub,
+    removed: ClubRef,
     query: ClubQuery,
     currentClubOption: Option[String]
   ): UIO[Unit] =
@@ -386,46 +387,34 @@ object Dispatcher {
       )
       .orDie
 
-  // `current_club` is stored as `<id>:<slug>` (or a bare slug), so anything comparing or displaying it must go through
-  // the ref rather than treating the raw value as a slug.
-  private def currentSlug(currentClubOption: Option[String]): Option[String] =
-    currentClubOption.map(raw => CurrentClubRef.parse(raw).slug)
-
-  // Does `current_club` name this club? By id when the pointer carries one (rename-proof), else by slug.
-  private def currentMatches(currentClubOption: Option[String], clubId: Long, slug: String): Boolean =
-    currentClubOption.exists { raw =>
-      val ref = CurrentClubRef.parse(raw)
-      ref.clubIdOption.exists(id => ClubId.unwrap(id) == clubId) || sameSlug(ref.slug, slug)
-    }
-
   // The warning is deliberately outside the branch: an empty managed set is precisely when "your current club isn't
   // managed" is *certainly* true, so suppressing it there hid the clearest case (and disagreed with `use-club`, which
   // warns in that same server state).
-  private def printManagedClubs(clubs: List[ManagedClubResponse], currentClubOption: Option[String]): UIO[Unit] = {
+  private[cli] def printManagedClubs(clubs: List[ManagedClubResponse], currentClubOption: Option[String]): UIO[Unit] = {
+    val pointerOption = currentClubOption.map(CurrentClubRef.parse)
     val listing =
       if (clubs.isEmpty) { Console.printLine("no managed clubs").orDie }
-      else { ZIO.foreachDiscard(clubs)(c => Console.printLine(clubLine(c, currentClubOption)).orDie) }
-    listing *> warnUnmanagedCurrent(clubs, currentClubOption)
+      else { ZIO.foreachDiscard(clubs)(c => Console.printLine(clubLine(c, pointerOption)).orDie) }
+    listing *> warnUnmanagedCurrent(clubs, pointerOption)
   }
 
   // `*` marks the club bare commands target, so `club list` answers "which one am I on?" as well as "which do I have?".
   // Matches by id when `current_club` carries one, so a renamed current club is still marked against its new slug.
-  private def clubLine(c: ManagedClubResponse, currentClubOption: Option[String]): String = {
-    val marker = if (currentMatches(currentClubOption, c.clubId, c.slug)) { "*" }
+  private def clubLine(c: ManagedClubResponse, pointerOption: Option[CurrentClubRef]): String = {
+    val marker = if (pointerOption.exists(_.pointsAt(c.ref))) { "*" }
     else { " " }
-    s"$marker ${c.slug}  ${c.name}  marked=${c.markedAt}"
+    s"$marker ${c.ref.label}  ${c.name}  marked=${c.markedAt}"
   }
 
   // A current club outside the managed set still resolves today, so it can't be silently omitted from the listing
-  // without leaving the user wondering which club their bare commands actually hit.
-  private def warnUnmanagedCurrent(clubs: List[ManagedClubResponse], currentClubOption: Option[String]): UIO[Unit] =
-    ZIO.foreachDiscard(
-      currentSlug(currentClubOption)
-        .filterNot(_ => clubs.exists(c => currentMatches(currentClubOption, c.clubId, c.slug)))
-    ) { cur =>
+  // without leaving the user wondering which club their bare commands actually hit. The `club add` it suggests names
+  // the club the way the pointer does, since the name an id pointer shows may since have passed to another club.
+  private def warnUnmanagedCurrent(clubs: List[ManagedClubResponse], pointerOption: Option[CurrentClubRef]): UIO[Unit] =
+    ZIO.foreachDiscard(pointerOption.filterNot(pointer => clubs.exists(c => pointer.pointsAt(c.ref)))) { pointer =>
+      val operand = pointer.clubIdOption.fold(pointer.slug)(clubId => s"--club-id ${ClubId.unwrap(clubId)}")
       Console
         .printLineError(
-          s"warning: current club '$cur' is not in this list; add it with 'ccas club add $cur' " +
+          s"warning: current club '${pointer.slug}' is not in this list; add it with 'ccas club add $operand' " +
             "or switch with 'ccas use-club <slug>'"
         )
         .orDie
@@ -497,15 +486,15 @@ object Dispatcher {
     send: ClubTarget => Task[ClubResult[A]]
   ): Task[(NamedClub, A)] =
     settleAndNote(target, noteResolutions(currentClubOption, target, _))(send)
+      .flatMap(result => ZIO.fromEither(result.toEither).mapError(CliError(_, 1)))
 
+  // Answers with the whole result, since what counts as a club acted on depends on what the route needed of it.
   private def settleAndNote[A](target: ClubTarget, note: List[ClubOutcome] => UIO[Unit])(
     send: ClubTarget => Task[ClubResult[A]]
-  ): Task[(NamedClub, A)] =
-    for {
-      result <- sendSettlingAmbiguity(target, (r: ClubResult[A]) => List(r.resolution), hasTty)(send)
-      _      <- note(List(ClubOutcome(resolution = result.resolution, acted = result.resultOption.isDefined)))
-      acted  <- ZIO.fromEither(result.toEither).mapError(CliError(_, 1))
-    } yield acted
+  ): Task[ClubResult[A]] =
+    sendSettlingAmbiguity(target, (r: ClubResult[A]) => List(r.resolution), hasTty)(send).tap { result =>
+      note(List(ClubOutcome(resolution = result.resolution, acted = result.resultOption.isDefined)))
+    }
 
   // A schedule names a club only for the kinds that take one, and without one there is nothing to settle or note.
   private def createSchedule(currentClubOption: Option[String], targetOption: Option[ClubTarget])(
@@ -589,8 +578,9 @@ object Dispatcher {
       case _                                            => None
     }
 
-  private def missingFrom(outcomes: List[ClubOutcome]): List[ClubResolution] =
-    outcomes.map(_.resolution).filter(missingQuery(_).isDefined)
+  // A club the server acted on is not missing, even one it can't name: unmanaging needs only the id (#385).
+  private[cli] def missingFrom(outcomes: List[ClubOutcome]): List[ClubResolution] =
+    outcomes.filterNot(_.acted).map(_.resolution).filter(missingQuery(_).isDefined)
 
   // Drop the cache so the post-command refresh repopulates it — the 6h TTL would otherwise re-suggest the same dead
   // slug on an immediate retry — and call out a stranded `current_club`.
@@ -652,6 +642,11 @@ object Dispatcher {
           s"note: '${ClubSlug.unwrap(requested)}' now belongs to club ${club.display} on Chess.com, not to " +
             s"${previous.map(_.display).mkString(", ")}; using the club that holds it"
         )
+      // Only `club remove` can act on it (#385), and it names the club by id, which the operator did not type.
+      case ClubResolution.RenamedNameless(clubId, requested) =>
+        Some(
+          s"note: '${ClubSlug.unwrap(requested)}' is a former name of club #${ClubId.unwrap(clubId)}, which holds none now"
+        )
       case _ => None
     }
 
@@ -679,7 +674,7 @@ object Dispatcher {
     currentClubOption: Option[String]
   ): Task[NonEmptyChunk[ClubTarget]] =
     ClubResolver.multi(
-      fetchManaged = api.getJson[List[ManagedClubResponse]]("/api/managed-clubs").map(_.map(_.namedClub)),
+      fetchManaged = api.getJson[List[ManagedClubResponse]]("/api/managed-clubs").map(_.map(_.ref)),
       explicit = explicit,
       clubIdOption = clubIdOption,
       all = all,

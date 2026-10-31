@@ -6,6 +6,8 @@ import zio.test.{assertTrue, Spec, TestConsole, ZIOSpecDefault}
 
 import ccas.analysis.apps.{ClubQuery, ClubRef, ClubResolution, NamedClub}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
+import ccas.server.routes.ClubResult
+import ccas.server.routes.ManagedClubRoutes.ManagedClubResponse
 
 /** Pins how the CLI reads a request's [[ClubResolution]]: which outcomes bust the completion cache and hint a stale
   * `current_club`, which get a note, how an ambiguous name is settled at the prompt, and what `club show` prints.
@@ -44,6 +46,16 @@ object TestDispatcherResolution extends ZIOSpecDefault {
       out    <- TestConsole.output
       err    <- TestConsole.outputErr
     } yield (result, out, err)
+
+  private def listed(clubId: Long, slugOption: Option[String]): ManagedClubResponse =
+    ManagedClubResponse(clubId = clubId, slugOption = slugOption, name = s"Club $clubId", markedAt = "t")
+
+  /** What `club list` printed to stdout and stderr for `clubs`, with `current_club` set to `currentClubOption`. */
+  private def listing(
+    clubs: List[ManagedClubResponse],
+    currentClubOption: Option[String]
+  ): UIO[(Vector[String], Vector[String])] =
+    Dispatcher.printManagedClubs(clubs, currentClubOption) *> TestConsole.output.zip(TestConsole.outputErr)
 
   private def showing(slug: String, resolution: ClubResolution) =
     show(slugs = List(slug), clubIdOption = None, asked = ClubQuery.BySlug(ClubSlug(slug)), resolution = resolution)
@@ -94,6 +106,25 @@ object TestDispatcherResolution extends ZIOSpecDefault {
         Dispatcher.missingQuery(ClubResolution.Ambiguous(ClubSlug("x"), List(clubRef))).isEmpty
       )
     },
+    // `club remove` reads its answer this way, since unmanaging needs only the id (#385).
+    // A server older than #385 answers a nameless club with no result, so its reason is the one worth showing.
+    test("a removal's answer names a club holding no name that the server acted on, and otherwise why it did nothing") {
+      val nameless = ClubResolution.Nameless(ClubId(9))
+      assertTrue(
+        ClubResult("#9", nameless, Some(true)).reachedEither == Right((ClubRef(ClubId(9), None), true)),
+        ClubResult("#9", nameless, Some(true)).toEither.isLeft,
+        ClubResult("x", ClubResolution.NotLocal(byName), None).reachedEither == Left("Club not found: x"),
+        ClubResult("#9", nameless, None).reachedEither.left.exists(_.startsWith("Club #9 can't be reached")),
+        ClubResult("new-name", ClubResolution.Known(club), None).reachedEither == Left(
+          "the server did not act on new-name"
+        )
+      )
+    },
+    // `club remove` unmanages a club holding no name by its id (#385); it was found, so no hint says it is stranded.
+    test("a club the request acted on is not missing, so removing it gets no stranded-club note") {
+      val nameless = ClubResolution.Nameless(ClubId(9))
+      assertTrue(Dispatcher.missingFrom(List(acted(nameless), didNothing(nameless))) == List(nameless))
+    },
     test("a current club this server has no record of is noted by how it was asked for, never as renamed") {
       val byIdNote = "note: 'old-slug' is your current club, #9, which this server has no record of. If it was set " +
         "against another server, reach that one with --server; otherwise point at another club with " +
@@ -139,6 +170,12 @@ object TestDispatcherResolution extends ZIOSpecDefault {
       val outcomes = List(acted(renamed), acted(ClubResolution.Known(club)), didNothing(renamed))
       val note     = "note: 'old-name' is a former name of 'new-name'; using 'new-name'"
       assertTrue(Dispatcher.nameChangesFrom(outcomes) == List(note))
+    },
+    // `club remove old-name` names the club it unmanaged by id, so the note ties that id to the name typed (#385).
+    test("a former name of a club holding none is noted with its id, only for requests that acted") {
+      val stranded = ClubResolution.RenamedNameless(ClubId(202), ClubSlug("old-name"))
+      val note     = "note: 'old-name' is a former name of club #202, which holds none now"
+      assertTrue(Dispatcher.nameChangesFrom(List(acted(stranded), didNothing(stranded))) == List(note))
     },
     test("Moved is not missing — the job ran, just against the club that holds the name now") {
       val moved = ClubResolution.Moved(club, ClubSlug("was-shared"), List(otherRef))
@@ -202,6 +239,36 @@ object TestDispatcherResolution extends ZIOSpecDefault {
             out.isEmpty,
             err.isEmpty
           )
+        }
+      }
+    ),
+    // `club list` (#385): every managed club, a club holding no name by its id, with `*` on the club the pointer means.
+    suite("club list")(
+      test("shows a managed club that holds no name by its id") {
+        listing(clubs = List(listed(1, Some("new-name")), listed(4123, None)), currentClubOption = None).map {
+          (out, err) =>
+            assertTrue(
+              out == Vector("  new-name  Club 1  marked=t\n", "  #4123 (no known name)  Club 4123  marked=t\n"),
+              err.isEmpty
+            )
+        }
+      },
+      // The name an id pointer shows can since have passed to another club, which must not be marked as current.
+      test("marks the club an id pointer means, not another club holding the name it shows") {
+        listing(List(listed(1, Some("new-name")), listed(4123, None)), Some("4123:new-name")).map { (out, err) =>
+          assertTrue(
+            out == Vector("  new-name  Club 1  marked=t\n", "* #4123 (no known name)  Club 4123  marked=t\n"),
+            err.isEmpty
+          )
+        }
+      },
+      test("does not call an id pointer's nameless club unmanaged") {
+        listing(List(listed(4123, None)), Some("4123:old-name")).map((_, err) => assertTrue(err.isEmpty))
+      },
+      // `club add old-name` would add whichever club holds that name now, which may not be the pointer's.
+      test("tells an id pointer whose club is unmanaged to add it by id") {
+        listing(List(listed(1, Some("new-name"))), Some("4123:old-name")).map { (_, err) =>
+          assertTrue(err.exists(_.contains("add it with 'ccas club add --club-id 4123'")))
         }
       }
     ),

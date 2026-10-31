@@ -15,7 +15,7 @@ object TestManagedClubSql extends ZIOSpecDefault {
     testMarkInsertsAndIsIdempotent,
     testSelectClubIds,
     testSelectAllWithClubOrdersAndJoins,
-    testSelectAllWithClubExcludesNameless,
+    testSelectAllWithClubListsNameless,
     testDelete
   ).provideShared(
     FreshSchemaLayer("test_managed_club", onInit = Tables.ensureTables)
@@ -71,19 +71,23 @@ object TestManagedClubSql extends ZIOSpecDefault {
       _     <- ManagedClub.markManaged(clubIdB, Times.t1)
       views <- ManagedClub.selectAllWithClub
     } yield assertTrue(
-      views.map(_.slug) == List(ClubSlug("club-b"), ClubSlug("club-a")), // t1 before t0
+      views.map(_.slugOption) == List(Some(ClubSlug("club-b")), Some(ClubSlug("club-a"))), // t1 before t0
       views.head.name == "Club B"
     )
   }
 
-  private def testSelectAllWithClubExcludesNameless = test("selectAllWithClub excludes a club that holds no name") {
-    for {
-      _     <- reset
-      _     <- ManagedClub.markManaged(clubIdA, Times.t0)
-      _     <- ManagedClub.markManaged(namelessId, Times.t1)
-      views <- ManagedClub.selectAllWithClub
-    } yield assertTrue(views.map(_.slug) == List(ClubSlug("club-a")))
-  }
+  private def testSelectAllWithClubListsNameless =
+    test("selectAllWithClub lists a club that holds no name, with no slug") {
+      for {
+        _     <- reset
+        _     <- ManagedClub.markManaged(clubIdA, Times.t0)
+        _     <- ManagedClub.markManaged(namelessId, Times.t1)
+        views <- ManagedClub.selectAllWithClub
+      } yield assertTrue(
+        views.map(v => (v.clubId, v.slugOption)) == List((namelessId, None), (clubIdA, Some(ClubSlug("club-a")))),
+        views.head.name == "Nameless"
+      )
+    }
 
   private def testDelete = test("delete clears the marker") {
     for {
