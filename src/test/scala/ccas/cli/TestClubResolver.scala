@@ -3,7 +3,7 @@ package ccas.cli
 import zio.{Task, ZIO}
 import zio.test.{assertTrue, Spec, ZIOSpecDefault}
 
-import ccas.analysis.apps.{ClubQuery, NamedClub}
+import ccas.analysis.apps.{ClubQuery, ClubRef}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 
 /** Tests the pure club-target resolution ([[ClubResolver]]): explicit `--club` / `--club-id` / `--all` wins, then the
@@ -14,9 +14,9 @@ import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 object TestClubResolver extends ZIOSpecDefault {
 
   // A fetch thunk that fails if it is ever evaluated — used to prove the non-`--all` branches never touch the network.
-  private def mustNotFetch: Task[List[NamedClub]] = ZIO.fail(new RuntimeException("managed-club fetch should not run"))
+  private def mustNotFetch: Task[List[ClubRef]] = ZIO.fail(new RuntimeException("managed-club fetch should not run"))
 
-  private def managed(clubId: Long, slug: String): NamedClub = NamedClub(ClubId(clubId), ClubSlug(slug))
+  private def managed(clubId: Long, slug: String): ClubRef = ClubRef(ClubId(clubId), Some(ClubSlug(slug)))
 
   private def isUsageError(e: Throwable): Boolean = e match {
     case c: CliError => c.exitCode == 2
@@ -94,6 +94,19 @@ object TestClubResolver extends ZIOSpecDefault {
             )
           )
         }
+    },
+    // Left out, it would be skipped without a word; sent, the server says why it can't run (#385).
+    test("multi: --all targets a managed club that holds no name by its id, labelled as club list shows it") {
+      val fetched = ZIO.succeed(List(managed(11L, "m1"), ClubRef(ClubId(13L), None)))
+      ClubResolver
+        .multi(
+          fetchManaged = fetched,
+          explicit = Nil,
+          clubIdOption = None,
+          all = true,
+          currentClubOption = None
+        )
+        .map(cs => assertTrue(cs.toList.last == ClubTarget(ClubQuery.ById(ClubId(13L)), "#13 (no known name)")))
     },
     test("multi: explicit list wins, without fetching managed clubs") {
       ClubResolver.multi(mustNotFetch, List("a", "b"), clubIdOption = None, all = false, Some("current")).map { cs =>

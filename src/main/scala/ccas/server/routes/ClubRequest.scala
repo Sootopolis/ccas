@@ -7,7 +7,7 @@ import zio.{Chunk, IO, RIO, ZIO}
 import zio.http.Request
 import zio.json.{jsonField, DeriveJsonCodec, JsonCodec}
 
-import ccas.analysis.apps.{ClubQuery, ClubResolution, NamedClub}
+import ccas.analysis.apps.{ClubQuery, ClubRef, ClubResolution, NamedClub}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 import ccas.utils.client.ChessComClient
 import ccas.utils.errors.BadRequestException
@@ -25,7 +25,19 @@ private[ccas] final case class ClubResult[A](
 
   /** The club acted on and what came of it, or why nothing was done. */
   def toEither: Either[String, (NamedClub, A)] =
-    resolution.runnable.flatMap(ref => resultOption.map(ref -> _).toRight(s"the server did not act on $club"))
+    resolution.runnable.flatMap(ref => resultOption.map(ref -> _).toRight(notActed))
+
+  /** [[toEither]] for a request answered by [[ClubRequest.runOnReached]], which may act on a club holding no name. When
+    * nothing was done, the reason is the resolution's own where it has one — a server that answered through
+    * [[ClubRequest.run]] leaves a nameless club untouched for that reason.
+    */
+  def reachedEither: Either[String, (ClubRef, A)] =
+    (resolution.reachedOption, resultOption) match {
+      case (Some(ref), Some(result)) => Right((ref, result))
+      case _                         => Left(resolution.runnable.swap.getOrElse(notActed))
+    }
+
+  private def notActed: String = s"the server did not act on $club"
 }
 
 object ClubResult {
@@ -75,8 +87,19 @@ object ClubRequest {
   def run[R, A](query: ClubQuery)(
     action: NamedClub => RIO[R, A]
   ): RIO[R & ChessComClient & PostgresClient, ClubResult[A]] =
+    runOn(query, _.runnable.toOption)(action)
+
+  /** [[run]] for an action that needs only the club's id, so it acts on a club holding no name as well. */
+  def runOnReached[R, A](query: ClubQuery)(
+    action: ClubId => RIO[R, A]
+  ): RIO[R & ChessComClient & PostgresClient, ClubResult[A]] =
+    runOn(query, _.reachedOption.map(_.clubId))(action)
+
+  private def runOn[R, C, A](query: ClubQuery, actsOn: ClubResolution => Option[C])(
+    action: C => RIO[R, A]
+  ): RIO[R & ChessComClient & PostgresClient, ClubResult[A]] =
     for {
       resolution   <- resolve(query)
-      resultOption <- ZIO.foreach(resolution.runnable.toOption)(action)
+      resultOption <- ZIO.foreach(actsOn(resolution))(action)
     } yield ClubResult(club = label(query, resolution), resolution = resolution, resultOption = resultOption)
 }

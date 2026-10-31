@@ -55,6 +55,9 @@ final case class ClubRef(clubId: ClubId, @jsonField("slug") slugOption: Option[C
     s"#${ClubId.unwrap(clubId)} ($current)"
   }
 
+  /** How to name this club on its own: the name it holds now, or its [[display]] when it holds none. */
+  def label: String = slugOption.fold(display)(ClubSlug.unwrap)
+
   /** The club to act on, when it is one we can still name. */
   def namedOption: Option[NamedClub] = slugOption.map(NamedClub(clubId, _))
 }
@@ -93,6 +96,19 @@ enum ClubResolution {
     * moved. The job runs against the holder; `previous` is who held it locally, which the CLI names in its note.
     */
   case Moved(club: NamedClub, requested: ClubSlug, previous: List[ClubRef])
+
+  /** The one club this reached, whether or not it holds a name: enough for an action that needs only its id, such as
+    * unmanaging it, where [[runnable]] needs a name to fetch under.
+    */
+  def reachedOption: Option[ClubRef] = this match {
+    case Known(club)                => Some(ClubRef.of(club))
+    case Renamed(club, _)           => Some(ClubRef.of(club))
+    case Moved(club, _, _)          => Some(ClubRef.of(club))
+    case Nameless(clubId)           => Some(ClubRef(clubId, None))
+    case RenamedNameless(clubId, _) => Some(ClubRef(clubId, None))
+    case NotLocal(_)                => None
+    case Ambiguous(_, _)            => None
+  }
 
   /** The club a job should run against, or why the job must not run. */
   def runnable: Either[String, NamedClub] = this match {

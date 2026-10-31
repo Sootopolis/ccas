@@ -332,6 +332,21 @@ object TestClubResolution extends ZIOSpecDefault {
         resolution.runnable.left.exists(m => m.contains("#200 (now club-a)") && m.contains("#500 (no known name)"))
       )
     },
+    test("reachedOption names the one club a resolution reached, named or not, and none for NotLocal or Ambiguous") {
+      val realRef = ClubRef.of(realNamed)
+      assertTrue(
+        ClubResolution.Known(realNamed).reachedOption.contains(realRef),
+        ClubResolution.Renamed(realNamed, ClubSlug("old-name")).reachedOption.contains(realRef),
+        ClubResolution.Moved(realNamed, ClubSlug("x"), List(otherRef)).reachedOption.contains(realRef),
+        ClubResolution.Nameless(ClubId(500)).reachedOption.contains(namelessRef),
+        ClubResolution.RenamedNameless(ClubId(500), ClubSlug("y")).reachedOption.contains(namelessRef),
+        ClubResolution.NotLocal(byName).reachedOption.isEmpty,
+        ClubResolution.Ambiguous(ClubSlug("z"), List(realRef, otherRef)).reachedOption.isEmpty
+      )
+    },
+    test("a club holding no name is labelled by its id; one holding a name, by that name") {
+      assertTrue(namelessRef.label == "#500 (no known name)", otherRef.label == "club-b")
+    },
     test("every case survives the JSON round trip, discriminated by a snake_case kind") {
       val all: List[ClubResolution] = List(
         ClubResolution.Known(realNamed),

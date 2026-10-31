@@ -1202,11 +1202,26 @@ object TestRoutes extends ZIOSpecDefault {
   private val markTestClub = s"""{"club":$testClub}"""
   private val noSuchClub   = """{"club":{"kind":"by_slug","slug":"no-such-club"}}"""
 
+  // 203 takes 202's name, so 202 holds none — what the `_stale_` tombstones used to stand in for.
+  private val contestName =
+    Club.upsert(Club(ClubId(202), t0, ClubSlug("contested-club"), "Losing Club", None, None, None)) *>
+      Club.upsert(Club(ClubId(203), t0, ClubSlug("contested-club"), "Holding Club", None, None, None))
+
+  // Drops the contest's clubs, so they don't leak into the shared schema for any later test.
+  private val dropContest = TestDbCleanup.deleteClub(ClubId(202)) *> TestDbCleanup.deleteClub(ClubId(203))
+
+  private val markNamelessManaged = resetManaged *> contestName *> ManagedClub.markManaged(ClubId(202), t0)
+
+  // A finaliser, so a failed step leaks nothing. `managed_club` restricts deleting its club, so the markers go first.
+  private val dropNameless = (resetManaged *> dropContest).orDie
+
   private def suiteManagedClubRoutes = suite("ManagedClubRoutes")(
     testMarkAndList,
+    testListNameless,
     testMarkUnknownClub,
     testMarkByFormerName,
     testUnmarkRemoves,
+    testUnmarkNameless,
     testUnmarkUnknownClub,
     testUnmarkClearsSchedules,
     testManagedListWireShape
@@ -1222,9 +1237,40 @@ object TestRoutes extends ZIOSpecDefault {
     } yield assertTrue(
       mark.status == Status.Ok,
       list.status == Status.Ok,
-      parsed.toOption.exists(_.exists(_.slug == "test-club"))
+      parsed.toOption.exists(_.exists(_.slugOption.contains("test-club")))
     )
   }
+
+  private def testListNameless = test("GET lists a managed club that holds no name by its id") {
+    (for {
+      _    <- markNamelessManaged
+      list <- ManagedClubRoutes.routes.runZIO(jsonRequest(Method.GET, "/api/managed-clubs"))
+      body <- list.body.asString
+      parsed = body.fromJson[List[ManagedClubRoutes.ManagedClubResponse]]
+    } yield assertTrue(
+      list.status == Status.Ok,
+      parsed.map(_.map(c => (c.clubId, c.slugOption, c.name))) == Right(List((202L, None, "Losing Club")))
+    )).ensuring(dropNameless)
+  }
+
+  private def testUnmarkNameless =
+    test("DELETE unmanages a club that holds no name, by its id, and clears its schedules") {
+      (for {
+        _    <- markNamelessManaged
+        _    <- TestDbCleanup.clearJobSchedules
+        _    <- JobSchedule.seedPerClubIfAbsent(ClubId(202), ScheduleSeed(JobKind.Membership, 24, enabled = true))
+        del  <- ManagedClubRoutes.routes.runZIO(jsonRequest(Method.DELETE, "/api/managed-clubs?clubId=202"))
+        body <- del.body.asString
+        list <- ManagedClub.selectAllWithClub
+        all  <- JobSchedule.selectAll
+      } yield assertTrue(
+        del.status == Status.Ok,
+        body.fromJson[ClubResult[Boolean]] ==
+          Right(ClubResult("#202", ClubResolution.Nameless(ClubId(202)), Some(true))),
+        list.isEmpty,
+        !all.exists(_.clubIdOption.contains(ClubId(202)))
+      )).ensuring(TestDbCleanup.clearJobSchedules.orDie *> dropNameless)
+    }
 
   private def testMarkUnknownClub = test("POST for a club never ingested marks nothing") {
     for {
@@ -1316,14 +1362,11 @@ object TestRoutes extends ZIOSpecDefault {
     test("GET /api/clubs lists the clubs that hold a name, sorted by slug") {
       for {
         _ <- ensureClubs
-        // 203 takes 202's name, so 202 holds none and is not offered — what excluding `_stale_` rows used to do.
-        _        <- Club.upsert(Club(ClubId(202), t0, ClubSlug("contested-club"), "Losing Club", None, None, None))
-        _        <- Club.upsert(Club(ClubId(203), t0, ClubSlug("contested-club"), "Holding Club", None, None, None))
+        // 202 holds no name, so it is not offered.
+        _        <- contestName
         response <- ClubRoutes.routes.runZIO(jsonRequest(Method.GET, "/api/clubs"))
         body     <- response.body.asString
-        // Drop the fixtures so they don't leak into the shared DB for any later suite.
-        _ <- TestDbCleanup.deleteClub(ClubId(202))
-        _ <- TestDbCleanup.deleteClub(ClubId(203))
+        _        <- dropContest
         parsed = body.fromJson[ClubRoutes.ClubsResponse]
       } yield {
         val clubs = parsed.toOption.get.clubs

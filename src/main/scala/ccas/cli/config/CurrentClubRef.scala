@@ -1,6 +1,6 @@
 package ccas.cli.config
 
-import ccas.analysis.apps.{ClubQuery, ClubResolution, NamedClub}
+import ccas.analysis.apps.{ClubQuery, ClubRef, ClubResolution, NamedClub}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 
 /** The parsed form of the CLI config's `current_club` value. Stored as `"<id>:<slug>"` when the CLI knows the club's
@@ -30,15 +30,21 @@ final case class CurrentClubRef(clubIdOption: Option[ClubId], slug: String) {
     case ClubQuery.BySlug(slug) => CurrentClubRef.sameSlug(this.slug, ClubSlug.unwrap(slug))
   }
 
-  /** Whether this pointer means `club`, which a command reached through `query`. By id when the pointer knows one,
-    * since a name can pass to another club; otherwise by the name it was set with, which is either what was typed or
-    * what the club is called now. Clearing the pointer when its club stops being managed and refreshing it when a
-    * command reaches its club both ask this, so they agree on which club that is.
+  /** Whether this pointer is `club`: by id when the pointer knows one, since a name can pass to another club; otherwise
+    * by the name the club holds now, so a club holding none is never a bare pointer's. Marks the current club in
+    * `club list`.
     */
-  def means(club: NamedClub, query: ClubQuery): Boolean = clubIdOption match {
+  def pointsAt(club: ClubRef): Boolean = clubIdOption match {
     case Some(clubId) => clubId == club.clubId
-    case None         => CurrentClubRef.sameSlug(slug, ClubSlug.unwrap(club.slug)) || names(query)
+    case None         => club.slugOption.exists(held => CurrentClubRef.sameSlug(slug, ClubSlug.unwrap(held)))
   }
+
+  /** Whether this pointer means `club`, which a command reached through `query`: the club it [[pointsAt]], or for a
+    * bare pointer, the club reached by the name it was set with. Clearing the pointer when its club stops being managed
+    * and refreshing it when a command reaches its club both ask this, so they agree on which club that is.
+    */
+  def means(club: ClubRef, query: ClubQuery): Boolean =
+    pointsAt(club) || (clubIdOption.isEmpty && names(query))
 }
 
 object CurrentClubRef {
@@ -72,7 +78,7 @@ object CurrentClubRef {
     (stored, resolvedOption) match {
       case (Some(raw), Some(resolved)) =>
         val next = CurrentClubRef(Some(resolved.clubId), ClubSlug.unwrap(resolved.slug))
-        Option.when(parse(raw).means(resolved, query) && next.render != raw.trim)(next)
+        Option.when(parse(raw).means(ClubRef.of(resolved), query) && next.render != raw.trim)(next)
       case _ => None
     }
 
