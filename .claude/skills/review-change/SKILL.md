@@ -43,7 +43,7 @@ Then run the affected suites, or the full suite when the change is wide.
 
 ## 4. Fix, then ask
 
-Fix findings inside the change straight away, then review what the fixes touched: a fix has a blast radius too.
+Fix findings inside the change straight away, then review what the fixes touched: a fix has a blast radius too. A fix that changes the design rather than patching a finding goes back through step 3, `/code-review` included.
 
 Ask before acting on anything you are unsure of, any judgement call, and anything that reaches beyond the change, such as a codebase-wide sweep, a refactor of untouched code or an audit. Those are often deferred to an issue.
 
