@@ -663,7 +663,7 @@ object Dispatcher {
     }
 
   // Resolution lives in the pure, testable `ClubResolver`; the `--all` expansion's network call is injected here. A
-  // `ClubTarget` carries the slug plus, when sourced from `current_club`, the stable id to resolve by (rename-proof).
+  // `ClubTarget` names its club by the stable id wherever one is known (`current_club`, `--club-id`, `--all`).
   private def resolveClub(
     explicit: Option[String],
     clubIdOption: Option[Long],
@@ -679,7 +679,7 @@ object Dispatcher {
     currentClubOption: Option[String]
   ): Task[NonEmptyChunk[ClubTarget]] =
     ClubResolver.multi(
-      fetchManaged = api.getJson[List[ManagedClubResponse]]("/api/managed-clubs").map(_.map(_.slug)),
+      fetchManaged = api.getJson[List[ManagedClubResponse]]("/api/managed-clubs").map(_.map(_.namedClub)),
       explicit = explicit,
       clubIdOption = clubIdOption,
       all = all,
@@ -696,8 +696,7 @@ object Dispatcher {
   ): UIO[Unit] = {
     val next = CurrentClubRef.refreshedRef(
       stored = currentClubOption,
-      targetHasId = target.addressedById,
-      targetSlug = target.label,
+      query = target.query,
       resolvedOption = CurrentClubRef.refreshTarget(resolution)
     )
     ZIO.foreachDiscard(next)(ref => ConfigWriter.setCurrentClub(XdgPaths.configFile, ref.clubIdOption, ref.slug).ignore)

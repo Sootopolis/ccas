@@ -3,7 +3,7 @@ package ccas.server.routes
 import zio.http.*
 import zio.json.{DeriveJsonCodec, JsonCodec}
 
-import ccas.analysis.apps.{ClubQuery, ManagedClubApp}
+import ccas.analysis.apps.{ClubQuery, ManagedClubApp, NamedClub}
 import ccas.analysis.tables.ManagedClubView
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 import ccas.server.routes.RouteHelpers.*
@@ -23,7 +23,11 @@ object ManagedClubRoutes {
     given JsonCodec[MarkManagedRequest] = DeriveJsonCodec.gen
   }
 
-  private[ccas] case class ManagedClubResponse(clubId: Long, slug: String, name: String, markedAt: String)
+  private[ccas] case class ManagedClubResponse(clubId: Long, slug: String, name: String, markedAt: String) {
+
+    /** The club this row names, by its id and the name it holds now. */
+    def namedClub: NamedClub = NamedClub(ClubId(clubId), ClubSlug(slug))
+  }
   object ManagedClubResponse {
     given JsonCodec[ManagedClubResponse] = DeriveJsonCodec.gen
 

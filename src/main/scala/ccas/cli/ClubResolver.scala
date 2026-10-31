@@ -2,23 +2,16 @@ package ccas.cli
 
 import zio.*
 
-import ccas.analysis.apps.ClubQuery
+import ccas.analysis.apps.{ClubQuery, NamedClub}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 import ccas.cli.config.CurrentClubRef
 
-/** A club a command is targeting: how the server should look it up, and what to call it until it answers. A
-  * `current_club` pointer and `--club-id` send the stable id, which resolves whatever the club has since been renamed
-  * to (#176); a typed `--club <slug>` and the `--all` managed expansion send the name. The label is only ever for
-  * display — for an id from `current_club` it is the slug last seen, which is friendlier than the number.
+/** A club a command is targeting: how the server should look it up, and what to call it until it answers. `--club-id`,
+  * a `current_club` that knows its club's id and the `--all` managed expansion send the stable id, which resolves
+  * whatever the club has since been renamed to (#176, #255); a typed `--club <slug>` and a bare-slug `current_club` send
+  * the name. The label is only ever for display: the name last seen where there is one, being friendlier than `#<id>`.
   */
-final case class ClubTarget(query: ClubQuery, label: String) {
-
-  /** Whether the server is being asked by id, which decides if a slug it answers with may refresh the pointer. */
-  def addressedById: Boolean = query match {
-    case ClubQuery.ById(_)   => true
-    case ClubQuery.BySlug(_) => false
-  }
-}
+final case class ClubTarget(query: ClubQuery, label: String)
 
 object ClubTarget {
 
@@ -27,6 +20,11 @@ object ClubTarget {
     val query = ClubQuery.ById(clubId)
     ClubTarget(query, query.describe)
   }
+
+  /** A club the server has just named, addressed by its id so a name that changes hands before the submit can't
+    * redirect it, and labelled by the name it held then.
+    */
+  def of(club: NamedClub): ClubTarget = ClubTarget(ClubQuery.ById(club.clubId), ClubSlug.unwrap(club.slug))
 }
 
 /** Resolves a command's club target(s) from the parsed request and the config's `current_club`. Kept pure and free of
@@ -118,7 +116,7 @@ object ClubResolver {
   private def blankToNone(o: Option[String]): Option[String] = o.map(_.trim).filter(_.nonEmpty)
 
   def multi(
-    fetchManaged: => Task[List[String]],
+    fetchManaged: => Task[List[NamedClub]],
     explicit: List[String],
     clubIdOption: Option[Long],
     all: Boolean,
@@ -129,8 +127,8 @@ object ClubResolver {
       case Some(_) if explicit.nonEmpty     => ZIO.fail(CliError(ClubIdError, 2))
       case Some(clubId)                     => ZIO.succeed(NonEmptyChunk.single(ClubTarget.byId(ClubId(clubId))))
       case None if all && explicit.nonEmpty => ZIO.fail(CliError(BothError, 2))
-      case None if all                      => fetchManaged.flatMap(toTargets(_, CliError(NoManagedError, 2)))
-      case None if explicit.nonEmpty        => toTargets(explicit, CliError(NoClubError, 2))
+      case None if all                      => fetchManaged.flatMap(managedTargets)
+      case None if explicit.nonEmpty        => toTargets(explicit)
       case None                             => currentTargets(currentClubOption)
     }
 
@@ -141,10 +139,13 @@ object ClubResolver {
       case None      => ZIO.fail(CliError(NoClubError, 2))
     }
 
-  // Trim and drop blanks so a padded/empty slug (from --club or the managed listing) can't reach the API path
-  // verbatim — `ClubSlug.normalize` only lowercases.
-  private def toTargets(slugs: List[String], ifEmpty: => CliError): IO[CliError, NonEmptyChunk[ClubTarget]] =
+  private def managedTargets(clubs: List[NamedClub]): IO[CliError, NonEmptyChunk[ClubTarget]] =
+    ZIO.fromOption(NonEmptyChunk.fromIterableOption(clubs.map(ClubTarget.of))).orElseFail(CliError(NoManagedError, 2))
+
+  // Trim and drop blanks so a padded/empty `--club` slug can't reach the API path verbatim — `ClubSlug.normalize` only
+  // lowercases.
+  private def toTargets(slugs: List[String]): IO[CliError, NonEmptyChunk[ClubTarget]] =
     ZIO
       .fromOption(NonEmptyChunk.fromIterableOption(slugs.map(_.trim).filter(_.nonEmpty).map(bySlug)))
-      .orElseFail(ifEmpty)
+      .orElseFail(CliError(NoClubError, 2))
 }

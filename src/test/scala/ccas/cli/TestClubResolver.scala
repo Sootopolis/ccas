@@ -3,7 +3,7 @@ package ccas.cli
 import zio.{Task, ZIO}
 import zio.test.{assertTrue, Spec, ZIOSpecDefault}
 
-import ccas.analysis.apps.ClubQuery
+import ccas.analysis.apps.{ClubQuery, NamedClub}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 
 /** Tests the pure club-target resolution ([[ClubResolver]]): explicit `--club` / `--club-id` / `--all` wins, then the
@@ -14,7 +14,9 @@ import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 object TestClubResolver extends ZIOSpecDefault {
 
   // A fetch thunk that fails if it is ever evaluated — used to prove the non-`--all` branches never touch the network.
-  private def mustNotFetch: Task[List[String]] = ZIO.fail(new RuntimeException("managed-club fetch should not run"))
+  private def mustNotFetch: Task[List[NamedClub]] = ZIO.fail(new RuntimeException("managed-club fetch should not run"))
+
+  private def managed(clubId: Long, slug: String): NamedClub = NamedClub(ClubId(clubId), ClubSlug(slug))
 
   private def isUsageError(e: Throwable): Boolean = e match {
     case c: CliError => c.exitCode == 2
@@ -69,15 +71,29 @@ object TestClubResolver extends ZIOSpecDefault {
         assertTrue(t.query == ClubQuery.BySlug(ClubSlug(t.label)), t.label == "team-a")
       }
     },
-    test("multi: an id:slug current_club carries the id; --all clubs carry none") {
-      for {
-        current <- ClubResolver.multi(mustNotFetch, Nil, clubIdOption = None, all = false, Some("7:team-a"))
-        all     <- ClubResolver.multi(ZIO.succeed(List("m1")), Nil, clubIdOption = None, all = true, None)
-      } yield assertTrue(
-        current.head.query == ClubQuery.ById(ClubId(7L)),
-        current.head.label == "team-a",
-        all.head.query == ClubQuery.BySlug(ClubSlug(all.head.label))
-      )
+    test("multi: an id:slug current_club carries the id") {
+      ClubResolver.multi(mustNotFetch, Nil, clubIdOption = None, all = false, Some("7:team-a")).map { cs =>
+        assertTrue(cs.head.query == ClubQuery.ById(ClubId(7L)), cs.head.label == "team-a")
+      }
+    },
+    test("multi: --all targets each managed club by its id, labelled by the name it holds now") {
+      val fetched = ZIO.succeed(List(managed(11L, "m1"), managed(12L, "m2")))
+      ClubResolver
+        .multi(
+          fetchManaged = fetched,
+          explicit = Nil,
+          clubIdOption = None,
+          all = true,
+          currentClubOption = Some("current")
+        )
+        .map { cs =>
+          assertTrue(
+            cs.toList == List(
+              ClubTarget(ClubQuery.ById(ClubId(11L)), "m1"),
+              ClubTarget(ClubQuery.ById(ClubId(12L)), "m2")
+            )
+          )
+        }
     },
     test("multi: explicit list wins, without fetching managed clubs") {
       ClubResolver.multi(mustNotFetch, List("a", "b"), clubIdOption = None, all = false, Some("current")).map { cs =>
@@ -94,11 +110,6 @@ object TestClubResolver extends ZIOSpecDefault {
         assertTrue(cs.map(t => t.label).toList == List("a", "b"))
       }
     },
-    test("multi: --all expands to the fetched managed clubs") {
-      ClubResolver.multi(ZIO.succeed(List("m1", "m2")), Nil, clubIdOption = None, all = true, None).map { cs =>
-        assertTrue(cs.map(t => t.label).toList == List("m1", "m2"))
-      }
-    },
     // The guard fires before the fetch: `mustNotFetch` proves --all+--club is rejected without a network call.
     test("multi: --all together with explicit --club is rejected with exit 2") {
       ClubResolver.multi(mustNotFetch, List("a"), clubIdOption = None, all = true, Some("current")).either.map { r =>
@@ -107,7 +118,7 @@ object TestClubResolver extends ZIOSpecDefault {
     },
     test("multi: --all with no managed clubs fails with exit 2") {
       ClubResolver.multi(ZIO.succeed(Nil), Nil, clubIdOption = None, all = true, Some("ignored")).either.map { r =>
-        assertTrue(r.left.exists(isUsageError))
+        assertTrue(r.left.exists(e => isUsageError(e) && e.getMessage == ClubResolver.NoManagedError))
       }
     },
     test("multi: fails with exit 2 when nothing is resolvable") {

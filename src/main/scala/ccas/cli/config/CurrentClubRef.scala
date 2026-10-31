@@ -32,7 +32,8 @@ final case class CurrentClubRef(clubIdOption: Option[ClubId], slug: String) {
 
   /** Whether this pointer means `club`, which a command reached through `query`. By id when the pointer knows one,
     * since a name can pass to another club; otherwise by the name it was set with, which is either what was typed or
-    * what the club is called now. Drives clearing the pointer when its club stops being managed.
+    * what the club is called now. Clearing the pointer when its club stops being managed and refreshing it when a
+    * command reaches its club both ask this, so they agree on which club that is.
     */
   def means(club: NamedClub, query: ClubQuery): Boolean = clubIdOption match {
     case Some(clubId) => clubId == club.clubId
@@ -58,32 +59,20 @@ object CurrentClubRef {
     }
   }
 
-  /** Decide how (if at all) to refresh `current_club` after a job submit resolved a club server-side. Pure so the
-    * write-back heuristic is testable without the dispatcher.
-    *
-    *   - `stored` — the raw `current_club` value at command start (`None` if unset).
-    *   - `targetHasId` — whether the slug we submitted already carried an id (a `current_club` in `<id>:<slug>` form).
-    *   - `targetSlug` — the slug we submitted.
-    *   - `resolvedOption` — the club the server resolved the submit to (`None` when it did not resolve).
-    *
-    * Returns the new ref to persist, or `None` to leave `current_club` untouched. It writes only when the submit was
-    * FOR the current club AND the canonical differs from what's stored (a Chess.com rename, or an id we didn't have
-    * yet). "For the current club" is decided by id when the pointer carries one (rename-proof), else by matching the
-    * submitted slug — so a bare command or an explicit `--club` naming the current club's slug both refresh it (the
-    * latter is an intended id backfill, not an accident: it still names the same club).
+  /** The pointer to persist after a command sent `query` and the server resolved it to `resolvedOption`, given the
+    * raw `current_club` it started with: the club's `<id>:<slug>`, when that is the club the pointer
+    * [[CurrentClubRef.means]] and it differs from what is stored — a Chess.com rename, or an id a bare pointer lacked.
+    * `None` leaves `current_club` untouched. Pure so the write-back is testable without the dispatcher.
     */
   def refreshedRef(
     stored: Option[String],
-    targetHasId: Boolean,
-    targetSlug: String,
+    query: ClubQuery,
     resolvedOption: Option[NamedClub]
   ): Option[CurrentClubRef] =
     (stored, resolvedOption) match {
       case (Some(raw), Some(resolved)) =>
-        val ref       = parse(raw)
-        val isCurrent = ref.clubIdOption.contains(resolved.clubId) || (!targetHasId && sameSlug(ref.slug, targetSlug))
-        val next      = CurrentClubRef(Some(resolved.clubId), ClubSlug.unwrap(resolved.slug))
-        Option.when(isCurrent && next.render != raw.trim)(next)
+        val next = CurrentClubRef(Some(resolved.clubId), ClubSlug.unwrap(resolved.slug))
+        Option.when(parse(raw).means(resolved, query) && next.render != raw.trim)(next)
       case _ => None
     }
 
