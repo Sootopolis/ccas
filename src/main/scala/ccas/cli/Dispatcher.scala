@@ -589,18 +589,52 @@ object Dispatcher {
       case _                                            => None
     }
 
-  private def missingFrom(outcomes: List[ClubOutcome]): List[ClubQuery] =
-    outcomes.flatMap(o => missingQuery(o.resolution))
+  private def missingFrom(outcomes: List[ClubOutcome]): List[ClubResolution] =
+    outcomes.map(_.resolution).filter(missingQuery(_).isDefined)
 
   // Drop the cache so the post-command refresh repopulates it — the 6h TTL would otherwise re-suggest the same dead
-  // slug on an immediate retry — and call out a stranded `current_club`, which nothing else ever repoints.
-  private def noteMissingClubs(missing: List[ClubQuery], currentClubOption: Option[String]): UIO[Unit] =
+  // slug on an immediate retry — and call out a stranded `current_club`.
+  private def noteMissingClubs(missing: List[ClubResolution], currentClubOption: Option[String]): UIO[Unit] =
     ZIO.whenDiscard(missing.nonEmpty) {
-      val pointerOption = currentClubOption
-        .map(CurrentClubRef.parse)
-        .filter(ref => missing.exists(ref.names))
-      CompletionCache.invalidate *> ZIO.foreachDiscard(pointerOption)(ref => staleCurrentClubHint(ref.slug))
+      CompletionCache.invalidate *>
+        ZIO.foreachDiscard(staleCurrentClubHint(currentClubOption, missing))(Console.printLineError(_).orDie)
     }
+
+  /** The hint for a `current_club` among the `missing` clubs, worded for why the server could not act on it, or none
+    * when the pointer is unset or names none of them.
+    */
+  private[cli] def staleCurrentClubHint(
+    currentClubOption: Option[String],
+    missing: List[ClubResolution]
+  ): Option[String] =
+    currentClubOption.map(CurrentClubRef.parse).flatMap { ref =>
+      missing.find(missingQuery(_).exists(ref.names)).flatMap(strandedHint(ref.slug, _))
+    }
+
+  // A name the server has seen resolves through its name history, never as a miss, so no hint blames a rename. A club
+  // held without a name needs no repointing: the pointer refreshes once the server sees what it is called now.
+  private def strandedHint(slug: String, resolution: ClubResolution): Option[String] = {
+    val elsewhere = "point at another club with 'ccas use-club <slug>', or drop it with 'ccas use-club --clear'."
+    val waiting = "which the server holds but can't name now. It will reach the club again once the server sees its " +
+      s"new name; meanwhile, $elsewhere"
+    resolution match {
+      case ClubResolution.NotLocal(ClubQuery.ById(clubId)) =>
+        Some(
+          s"note: '$slug' is your current club, #${ClubId.unwrap(clubId)}, which this server has no record of. If it " +
+            s"was set against another server, reach that one with --server; otherwise $elsewhere"
+        )
+      case ClubResolution.NotLocal(ClubQuery.BySlug(_)) =>
+        Some(
+          s"note: '$slug' is your current club, but this server knows no club by that name — misspelt, or one it " +
+            s"hasn't seen yet. ${elsewhere.capitalize}"
+        )
+      case ClubResolution.Nameless(clubId) =>
+        Some(s"note: '$slug' is your current club, #${ClubId.unwrap(clubId)}, $waiting")
+      case ClubResolution.RenamedNameless(clubId, _) =>
+        Some(s"note: '$slug' is your current club, a former name of #${ClubId.unwrap(clubId)}, $waiting")
+      case _ => None
+    }
+  }
 
   // One that did nothing (a job already running) gets no note, since the note says which club was acted on.
   private[cli] def nameChangesFrom(outcomes: List[ClubOutcome]): List[String] =
@@ -627,14 +661,6 @@ object Dispatcher {
     ZIO.whenDiscard(notes.nonEmpty) {
       CompletionCache.invalidate *> ZIO.foreachDiscard(notes)(note => Console.printLineError(note).orDie)
     }
-
-  private def staleCurrentClubHint(slug: String): UIO[Unit] =
-    Console
-      .printLineError(
-        s"note: '$slug' is your current club but the server doesn't know it — it may have been renamed on Chess.com. " +
-          "Point at the new slug with 'ccas use-club <slug>', or drop it with 'ccas use-club --clear'."
-      )
-      .orDie
 
   // Resolution lives in the pure, testable `ClubResolver`; the `--all` expansion's network call is injected here. A
   // `ClubTarget` carries the slug plus, when sourced from `current_club`, the stable id to resolve by (rename-proof).
