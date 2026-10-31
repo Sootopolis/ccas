@@ -109,7 +109,7 @@ object Main extends ZIOAppDefault {
   private def stopServe(portOption: Option[Int]): URIO[ZIOAppArgs, ExitCode] =
     onServerPort(serverPort(portOption, XdgPaths.serverEnvFile))(port => ServerStop.run(XdgPaths.stateDir, port))
 
-  /** `server list`: the shell's port is the row it marks, and listed even with no pid file. */
+  /** `server list`: the shell's port is the row it marks, and listed with no pid file when a server answers there. */
   private def listServe: URIO[ZIOAppArgs, ExitCode] =
     onServerPort(serverPort(None, XdgPaths.serverEnvFile))(port => ServerList.run(XdgPaths.stateDir, port))
 

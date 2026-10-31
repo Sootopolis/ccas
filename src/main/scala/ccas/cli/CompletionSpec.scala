@@ -217,7 +217,7 @@ object CompletionSpec {
     List("server", "up")        -> "Run the ccas backend HTTP server (foreground by default; --detach/-d to background it)",
     List("server", "down")      -> "Stop a detached ccas server (reads the pid file and sends SIGTERM)",
     List("server", "status")    -> "Report whether the local ccas server is running and ready",
-    List("server", "list")      -> "List the detached ccas servers on this machine, and this shell's port",
+    List("server", "list")      -> "List the detached ccas servers on this machine, and a foreground one on this shell's port",
     List("use-club")            -> "Show, set, or clear the current club used by commands that omit --club",
     List("membership")          -> "Submit a membership-sync job (current club, --club a,b, or --all managed clubs)",
     List("history")             -> "Submit a match-history crawl job (current club, --club a,b, or --all managed clubs)",
