@@ -38,7 +38,8 @@ private[membership] object MembershipClassify {
     archivedSnapshots: Chunk[PlayerSnapshot],
     newMemberships: Chunk[ClubMember],
     closedMemberships: Chunk[ClubMember],
-    reopenedMemberships: Chunk[ClubMember]
+    reopenedMemberships: Chunk[ClubMember],
+    matchedByProfile: Boolean
   )
 
   def classifyApiMembers(
@@ -56,17 +57,27 @@ private[membership] object MembershipClassify {
           case (username, joinedEpoch) =>
             classifyOneMember(client, clubId, username, joinedEpoch, storedRoster, now, trustUsernames)
         }
+        kept = withoutNamesGivenUp(results)
       } yield PhaseBResult(
-        resolvedIds = results.map(_.resolvedId).toSet,
-        changes = results.flatMap(_.changes),
-        newPlayers = results.flatMap(_.newPlayers),
-        updatedPlayers = results.flatMap(_.updatedPlayers),
-        archivedSnapshots = results.flatMap(_.archivedSnapshots),
-        newMemberships = results.flatMap(_.newMemberships),
-        closedMemberships = results.flatMap(_.closedMemberships),
-        reopenedMemberships = results.flatMap(_.reopenedMemberships)
+        resolvedIds = kept.map(_.resolvedId).toSet,
+        changes = kept.flatMap(_.changes),
+        newPlayers = kept.flatMap(_.newPlayers),
+        updatedPlayers = kept.flatMap(_.updatedPlayers),
+        archivedSnapshots = kept.flatMap(_.archivedSnapshots),
+        newMemberships = kept.flatMap(_.newMemberships),
+        closedMemberships = kept.flatMap(_.closedMemberships),
+        reopenedMemberships = kept.flatMap(_.reopenedMemberships)
       )
     }
+  }
+
+  /** A name a member gave up can be listed for whoever took it, and still reach that member by the name we hold
+    * (docs/chess-com-api.md, "Usernames change, and a freed one can be taken"). The entry their profile answered for is
+    * theirs, and the other is read on the next reconcile, once the rename is saved.
+    */
+  private def withoutNamesGivenUp(results: Chunk[PhaseBMemberResult]): Chunk[PhaseBMemberResult] = {
+    val answered = results.filter(_.matchedByProfile).map(_.resolvedId).toSet
+    results.filter(result => result.matchedByProfile || !answered.contains(result.resolvedId))
   }
 
   private def classifyOneMember(
@@ -78,46 +89,12 @@ private[membership] object MembershipClassify {
     now: Instant,
     trustUsernames: Boolean
   ): RIO[PostgresClient, PhaseBMemberResult] = {
-    val since = Instant.ofEpochSecond(joinedEpoch)
-    def resolved(playerId: PlayerId) = PhaseBMemberResult(
-      resolvedId = playerId,
-      changes = Chunk.empty,
-      newPlayers = Chunk.empty,
-      updatedPlayers = Chunk.empty,
-      archivedSnapshots = Chunk.empty,
-      newMemberships = Chunk.empty,
-      closedMemberships = Chunk.empty,
-      reopenedMemberships = Chunk.empty
-    )
+    val since     = Instant.ofEpochSecond(joinedEpoch)
     val unchanged = PlayerChangeResult(updated = None, archived = None, changes = Chunk.empty)
 
     storedRoster.membersByUsername.get(username) match {
-      // A row a closed account hid, its account seen active since.
-      case Some(state) if state.member.lastSeen.nonEmpty =>
-        ZIO.succeed(returning(storedRoster, clubId, state.player.playerId, username, since, unchanged))
-
-      case Some(state) if state.member.since == since =>
-        // Unchanged member
-        ZIO.succeed(resolved(state.player.playerId))
-
       case Some(state) =>
-        // Rejoin: a different `since`. The old membership had ended by the time the new one began.
-        val closedMember = storedRoster.close(member = state.member, at = since)
-        val newMember    = ClubMember.joined(clubId = clubId, playerId = state.player.playerId, since = since)
-        val rejoined     = Rejoined(ts = since, previous = PreviousMembership.of(closedMember))
-        val change       = MemberChangeSummary(state.player.playerId, username, Chunk(rejoined))
-        ZIO.succeed(
-          PhaseBMemberResult(
-            resolvedId = state.player.playerId,
-            changes = Chunk(change),
-            newPlayers = Chunk.empty,
-            updatedPlayers = Chunk.empty,
-            archivedSnapshots = Chunk.empty,
-            newMemberships = Chunk(newMember),
-            closedMemberships = Chunk(closedMember),
-            reopenedMemberships = Chunk.empty
-          )
-        )
+        ZIO.succeed(classifyListedJoin(storedRoster, clubId, state.player.playerId, username, since, unchanged))
 
       case None =>
         // Unknown by username — check the club's former members first, then fall back to API
@@ -127,7 +104,7 @@ private[membership] object MembershipClassify {
             // A former member joining again. An active account with an open row would have matched `membersByUsername`
             // above: both maps are keyed by the name each player holds now, and only one holds it.
             case Some(knownPlayer) if knownPlayer.status == PlayerStatusCategory.Active =>
-              ZIO.succeed(returning(storedRoster, clubId, knownPlayer.playerId, username, since, unchanged))
+              ZIO.succeed(classifyListedJoin(storedRoster, clubId, knownPlayer.playerId, username, since, unchanged))
             // A closed account listed again has reopened, which only its profile records.
             case _ => fetchAndClassifyNewMember(client, clubId, username, since, storedRoster, now)
           }
@@ -135,11 +112,12 @@ private[membership] object MembershipClassify {
     }
   }
 
-  /** A player listed as joined at `since` with no row open to the stored roster, or only one a closed account hid. The
-    * hidden row, or one a closure ended, reopens if it started then: the same `joined` is the same membership.
-    * Otherwise a new row opens, and a hidden row closes at its start, since they had left by then.
+  /** A player listed as joined at `since`, whose latest row decides (ADR 0026). If it started then, it is the same
+    * membership, and the row reopens unless it is open already. A join before its start, or one an ended row was last
+    * seen after, cannot be placed, so it changes no row and is reported. Any other join opens a new row, and the latest
+    * row ends at that join if it was still running then, since they had left by then.
     */
-  private def returning(
+  private def classifyListedJoin(
     storedRoster: StoredRoster,
     clubId: ClubId,
     playerId: PlayerId,
@@ -150,7 +128,6 @@ private[membership] object MembershipClassify {
     val rows =
       storedRoster.membersByPlayerId.get(playerId).map(_.member).toList ++
         storedRoster.unlistedByPlayerId.getOrElse(playerId, Nil)
-    val newMember = ClubMember.joined(clubId = clubId, playerId = playerId, since = since)
     def result(
       memberChanges: Chunk[MemberChange],
       newMemberships: Chunk[ClubMember],
@@ -166,32 +143,42 @@ private[membership] object MembershipClassify {
         archivedSnapshots = Chunk.fromIterable(change.archived),
         newMemberships = newMemberships,
         closedMemberships = closedMemberships,
-        reopenedMemberships = reopenedMemberships
+        reopenedMemberships = reopenedMemberships,
+        matchedByProfile = false
       )
     }
-    (rows.find(_.since == since), rows.find(_.until.isEmpty)) match {
-      case (Some(row), _) =>
-        result(
-          memberChanges = Chunk.empty,
-          newMemberships = Chunk.empty,
-          closedMemberships = Chunk.empty,
-          reopenedMemberships = Chunk(row.copy(lastSeen = None, until = None))
-        )
-      case (None, Some(hidden)) =>
-        val closed = storedRoster.close(member = hidden, at = since)
-        result(
-          memberChanges = Chunk(Rejoined(ts = since, previous = PreviousMembership.of(closed))),
-          newMemberships = Chunk(newMember),
-          closedMemberships = Chunk(closed),
-          reopenedMemberships = Chunk.empty
-        )
-      case (None, None) =>
-        result(
-          memberChanges = Chunk(JoinedClub(since)),
-          newMemberships = Chunk(newMember),
-          closedMemberships = Chunk.empty,
-          reopenedMemberships = Chunk.empty
-        )
+    def opening(memberChange: MemberChange, closedMemberships: Chunk[ClubMember]) =
+      result(
+        memberChanges = Chunk(memberChange),
+        newMemberships = Chunk(ClubMember.joined(clubId = clubId, playerId = playerId, since = since)),
+        closedMemberships = closedMemberships,
+        reopenedMemberships = Chunk.empty
+      )
+    rows.maxByOption(_.since) match {
+      case None         => opening(JoinedClub(since), Chunk.empty)
+      case Some(latest) =>
+        // An ended row's last sighting is normally a roster listing it under its old join, so a fresh join should not
+        // come before then. A hidden row's can be only its account's last visit, which does not show membership.
+        val seenSince = latest.until.exists(_.isAfter(since)) && latest.lastSeen.exists(!_.isBefore(since))
+        if (latest.since == since) {
+          val reopened = latest.copy(lastSeen = None, until = None)
+          result(
+            memberChanges = Chunk.empty,
+            newMemberships = Chunk.empty,
+            closedMemberships = Chunk.empty,
+            reopenedMemberships = Chunk(reopened).filter(_ != latest)
+          )
+        } else if (latest.since.isAfter(since) || seenSince) {
+          result(
+            memberChanges = Chunk(UnsettledJoin(since, latest)),
+            newMemberships = Chunk.empty,
+            closedMemberships = Chunk.empty,
+            reopenedMemberships = Chunk.empty
+          )
+        } else if (latest.until.forall(_.isAfter(since))) {
+          val closed = storedRoster.close(member = latest, at = since)
+          opening(Rejoined(ts = since, previous = PreviousMembership.of(closed)), Chunk(closed))
+        } else { opening(JoinedClub(since), Chunk.empty) }
     }
   }
 
@@ -211,32 +198,14 @@ private[membership] object MembershipClassify {
         case Some(state) =>
           val change =
             playerChanges(state.player, storedRoster.heldName(state), username, statusCategory, apiPlayer.title, now)
-          // A row a closed account hid, its account seen active since.
-          if (state.member.lastSeen.nonEmpty) {
-            ZIO.succeed(returning(storedRoster, clubId, playerId, username, since, change))
-          } else {
-            // Username change: same player ID, different username
-            val summary = MemberChangeSummary(playerId, username, change.changes)
-            ZIO.succeed(
-              PhaseBMemberResult(
-                resolvedId = playerId,
-                changes = Chunk(summary),
-                newPlayers = Chunk.empty,
-                updatedPlayers = Chunk.fromIterable(change.updated),
-                archivedSnapshots = Chunk.fromIterable(change.archived),
-                newMemberships = Chunk.empty,
-                closedMemberships = Chunk.empty,
-                reopenedMemberships = Chunk.empty
-              )
-            )
-          }
+          ZIO.succeed(classifyListedJoin(storedRoster, clubId, playerId, username, since, change))
 
         case None =>
           // Check if player exists in DB at all
           (Player.selectId(playerId) <*> PlayerName.selectCurrentName(playerId)).map {
             case (Some(existing), heldNameOption) =>
               val change = playerChanges(existing, heldNameOption, username, statusCategory, apiPlayer.title, now)
-              returning(storedRoster, clubId, playerId, username, since, change)
+              classifyListedJoin(storedRoster, clubId, playerId, username, since, change)
 
             case (None, _) =>
               // Brand new player — create with all fields, no snapshot
@@ -251,11 +220,12 @@ private[membership] object MembershipClassify {
                 archivedSnapshots = Chunk.empty,
                 newMemberships = Chunk(member),
                 closedMemberships = Chunk.empty,
-                reopenedMemberships = Chunk.empty
+                reopenedMemberships = Chunk.empty,
+                matchedByProfile = false
               )
           }
       }
-    }
+    }.map(_.copy(matchedByProfile = true))
 
   // --- Phase C: Classify disappeared members ---
 

@@ -30,6 +30,7 @@ object MembershipChange {
     case Unresolvable(ts: Instant, oldUsername: Username)            extends MemberChange(ts)
     case UsernameChange(ts: Instant, oldUsername: Username)          extends MemberChange(ts)
     case StatusChange(ts: Instant, oldStatus: PlayerStatusCategory)  extends MemberChange(ts)
+    case UnsettledJoin(ts: Instant, latest: ClubMember)              extends MemberChange(ts)
   }
 
   /** The membership a rejoin follows. */

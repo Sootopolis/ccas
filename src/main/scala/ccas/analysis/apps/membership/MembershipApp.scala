@@ -149,7 +149,8 @@ object MembershipApp extends ZIOAppDefault {
 
   /** `expectedClubIdOption` guards against `clubSlug` now answering as another club: see
     * [[ClubSlugRenameResolver.fetchExpecting]]. Every reconcile is recorded as a run; another job reconciling as a
-    * step of its own passes [[RunTrigger.Dependency]], so Membership's next report still shows what it saw.
+    * step of its own passes [[RunTrigger.Dependency]], so Membership's next report still shows what it saw. It prints
+    * no report, so it warns of any join the rows could not place (ADR 0026).
     */
   def reconcile(
     clubSlug: ClubSlug,
@@ -157,6 +158,21 @@ object MembershipApp extends ZIOAppDefault {
     trustUsernames: Boolean = true,
     trigger: RunTrigger = RunTrigger.Cli,
     jobRunIdOption: Option[JobRunId] = None
+  ): RIO[ProgressDisplay & ChessComClient & PostgresClient, ReconciliationResult] =
+    reconcileUnreported(
+      clubSlug = clubSlug,
+      expectedClubIdOption = expectedClubIdOption,
+      trustUsernames = trustUsernames,
+      trigger = trigger,
+      jobRunIdOption = jobRunIdOption
+    ).tap(result => MembershipReport.warnOfUnsettledJoins(result.changes))
+
+  private def reconcileUnreported(
+    clubSlug: ClubSlug,
+    expectedClubIdOption: Option[ClubId],
+    trustUsernames: Boolean,
+    trigger: RunTrigger,
+    jobRunIdOption: Option[JobRunId]
   ): RIO[ProgressDisplay & ChessComClient & PostgresClient, ReconciliationResult] =
     for {
       startedAt <- Clock.instant
@@ -324,7 +340,7 @@ object MembershipApp extends ZIOAppDefault {
     jobRunIdOption: Option[JobRunId]
   ): RIO[ProgressDisplay & ChessComClient & PostgresClient, (ReconciliationResult, Map[PlayerId, Instant])] =
     for {
-      result <- reconcile(
+      result <- reconcileUnreported(
         clubSlug = clubSlug,
         expectedClubIdOption = expectedClubIdOption,
         trustUsernames = trustUsernames,

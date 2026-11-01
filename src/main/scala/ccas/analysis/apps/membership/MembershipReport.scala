@@ -3,7 +3,7 @@ package ccas.analysis.apps.membership
 import java.sql.SQLException
 import java.time.{Duration as JDuration, Instant}
 
-import zio.{Chunk, RIO, URIO, ZIO}
+import zio.{Chunk, RIO, UIO, URIO, ZIO}
 
 import ccas.analysis.apps.NamedClub
 import ccas.analysis.apps.membership.MembershipChange.*
@@ -99,6 +99,7 @@ private[membership] object MembershipReport {
       _ <- ZIO.logInfo(s"Hidden memberships:   ${result.hiddenMemberships.size}")
       _ <- ZIO.logInfo(s"Settled memberships:  ${result.settlement.settledCount}")
       _ <- ZIO.logInfo(s"Reopened memberships: ${result.reopenedMemberships.size}")
+      _ <- ZIO.logInfo(s"Unsettled joins:      ${unsettledJoinCount(result)}")
       _ <- ZIO.logInfo("")
       _ <- printChangeSummaries(result.changes.toList, invitations)
       _ <- ZIO.foreachDiscard(settledLines(result.settlement) ++ unsettledLines(result.settlement))(ZIO.logInfo(_))
@@ -145,6 +146,7 @@ private[membership] object MembershipReport {
     case _: Unresolvable   => "[UNRESOLVABLE]"
     case _: UsernameChange => "[USERNAME CHANGE]"
     case _: StatusChange   => "[STATUS CHANGE]"
+    case _: UnsettledJoin  => UnsettledJoinLabel
   }
 
   private def formatChangeDetail(change: MemberChange, lastInvited: Option[Instant]): String = {
@@ -158,8 +160,35 @@ private[membership] object MembershipReport {
       case Unresolvable(ts, oldUsername) => s"at $ts — old username: $oldUsername"
       case UsernameChange(ts, oldName)   => s"at $ts — was: $oldName"
       case StatusChange(ts, oldStatus)   => s"at $ts — was: $oldStatus"
+      case join: UnsettledJoin           => unsettledJoin(join)
     }
   }
+
+  private val UnsettledJoinLabel = "[ROSTER JOIN UNSETTLED]"
+
+  private def unsettledJoinCount(result: ReconciliationResult): Int =
+    result.changes.flatMap(_.changes).count(_.isInstanceOf[UnsettledJoin])
+
+  /** When an ended row was last seen is why a join inside it was refused, and only that row leaves the total short. */
+  private def unsettledJoin(join: UnsettledJoin): String = {
+    val latest   = join.latest
+    val ended    = latest.until.map(until => s" to $until, last seen ${latest.lastSeen.getOrElse(latest.since)}")
+    val hidden   = latest.hiddenAt.map(at => s", hidden after $at")
+    val standing = ended.orElse(hidden).getOrElse("")
+    val outcome =
+      if (latest.until.nonEmpty) "left as recorded, not counted as a member" else "left as recorded"
+    s"listed as joined at ${join.ts}, latest recorded membership from ${latest.since}$standing — $outcome"
+  }
+
+  /** Warns of each join among `summaries` the player's rows cannot place (ADR 0026). Only a Membership reconcile prints
+    * its changes, so without this another job's reconcile, or one a report runs first, would say nothing of them.
+    */
+  def warnOfUnsettledJoins(summaries: Chunk[MemberChangeSummary]): UIO[Unit] =
+    ZIO.foreachDiscard(summaries) { summary =>
+      ZIO.foreachDiscard(summary.changes.collect { case join: UnsettledJoin => join }) { join =>
+        ZIO.logWarning(s"$UnsettledJoinLabel ${summary.username} — ${unsettledJoin(join)}")
+      }
+    }
 
   /** No one is seen in and out at once, so recorded ends that meet hold no sighting of the player gone, only of them
     * in.
@@ -217,6 +246,7 @@ private[membership] object MembershipReport {
                     |Hidden memberships:   ${result.hiddenMemberships.size}
                     |Settled memberships:  ${result.settlement.settledCount}
                     |Reopened memberships: ${result.reopenedMemberships.size}
+                    |Unsettled joins:      ${unsettledJoinCount(result)}
                     |""".stripMargin
     val listSections = List(settledLines(result.settlement), unsettledLines(result.settlement)).filter(_.nonEmpty)
     header + "\n" + formatChangeSummaries(result.changes.toList, invitations) +
