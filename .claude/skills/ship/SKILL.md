@@ -33,6 +33,13 @@ Take the work on the **current branch** through this repo's full release flow. B
 - **A branch already pushed takes further changes as new commits, never an amend:** a force-push needs the user, and the squash merge collapses them anyway.
 - Branch already has commits ahead of base and a clean tree → skip to step 2.
 
+### Splitting one working tree into several PRs
+When changes must reach `<base>` as separate PRs (CLAUDE.md, Git):
+- Cut each extra branch in a temporary worktree off `origin/<base>`, in the scratchpad: `git worktree add <dir> -b <type>/<slug> origin/<base>`. Apply its part there, then commit and push from there with `git -C <dir>`; remove the worktree once its PR has merged and step 7's diff is empty.
+- Push one at a time: every pre-push suite resets the shared `ccas_test` database.
+- A branch whose changes touch the same or neighbouring lines as another's waits, committed but unpushed, in this worktree until that one merges, then rebases onto `origin/<base>` — unpublished, so no force-push.
+- Each PR takes steps 2-5 and 7-9 on its own; steps 6 and 6b can wait for the last merge.
+
 ## 2. Push
 - `git push -u origin <branch>`. This fires the pre-push hook: the docs check and `sbt lint`, then the full `sbt test`.
 - Any REAL failure, of a check or a test → stop and fix. **Never `--no-verify` past a real failure.**
