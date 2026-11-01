@@ -17,7 +17,7 @@ The JDK is pinned in `.sdkmanrc`: run `sdk env` in the repo root, or `sdk env in
 - **Compile:** `sbt compile`
 - **Run all tests:** `sbt test`
 - **Run a single test suite:** `sbt "testOnly ccas.api.TestApiJsonParsing"` (fully qualified object name)
-- **Check formatting and the conventions scalafix enforces:** `sbt lint`; `sbt lintFix` applies both tools' fixes
+- **Check formatting and the conventions scalafix enforces:** `sbt lint`; `sbt lintFix` applies both tools' fixes. scalafmt skips files git does not track (`project.git`), so `git add -N` a new file first
 - **Test the docs checker:** `python3 scripts/test_check_docs.py`
 
 Tests use ZIO Test (`ZIOSpecDefault`). SQL tests require a running PostgreSQL instance with a `ccas_test` database, and use it even with `DATABASE_URL` exported: `src/test/resources/application.conf` nulls `database.url`, and `FreshSchemaLayer` still refuses to reset a schema in any database not named `*_test`, in case another route reaches production. A tracked `pre-push` hook runs the full suite before every push — enable it per clone with `git config core.hooksPath .githooks`.
