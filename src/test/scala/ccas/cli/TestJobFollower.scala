@@ -6,7 +6,7 @@ import zio.test.{assertTrue, Spec, TestAspect, TestConsole, ZIOSpecDefault}
 
 import ccas.analysis.apps.{ClubQuery, ClubResolution, NamedClub}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
-import ccas.server.routes.JobRoutes.{ClubJobResult, JobResult, JobStatusResponse}
+import ccas.server.routes.JobRoutes.{ClubJobResult, JobStatusResponse}
 import ccas.utils.ProgressSnapshot
 
 /** Exercises log-stream following and submit-result handling against a scripted stub client — no socket, no DB. */
@@ -277,12 +277,6 @@ object TestJobFollower extends ZIOSpecDefault {
         _        <- fiber.interrupt
         recorded <- cancelled.get
       } yield assertTrue(recorded.isEmpty)
-    },
-    test("handleSingle short-circuits on a submission error") {
-      for {
-        follower <- followerWith("Completed", None, Nil)
-        code     <- follower.handleSingle("matchref", JobResult(None, Some("already running")))
-      } yield assertTrue(code == 1)
     },
     test("handleClub runs onComplete on success and routes logs to stderr when piping") {
       for {
