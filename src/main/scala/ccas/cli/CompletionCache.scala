@@ -9,14 +9,10 @@ import zio.{Clock, Console, UIO, ZIO}
 
 /** Maintains the cache files the generated shell completions read — club slugs and recent job ids. Every operation is
   * best-effort: IO errors are swallowed and never change a command's exit code (completion is a convenience, not
-  * correctness). Files live under [[XdgPaths.cacheDir]], matching the paths the emitted scripts read.
-  *
-  * Each operation has a package-private `…In` variant taking the target file explicitly. [[XdgPaths]] resolves its
-  * directories from environment variables, which a JVM can't rebind at runtime, so the public no-arg entry points would
-  * otherwise only be exercisable against the developer's real `~/.cache/ccas` — the parameterised forms are what the
-  * tests drive.
+  * correctness). Each takes the file it works on: outside tests, a [[CliWiring]]'s, under [[XdgPaths.cacheDir]],
+  * matching the paths the emitted scripts read.
   */
-object CompletionCache {
+private[cli] object CompletionCache {
 
   // Refresh the clubs cache only when missing or older than this, so a /api/managed-clubs round-trip isn't added to
   // every command — just an occasional one.
@@ -25,47 +21,10 @@ object CompletionCache {
   // Cap on retained recent job ids (newest first).
   private val MaxRecentJobs = 50
 
-  /** True when the clubs cache is absent or older than the TTL (any IO error is treated as "stale" → refresh). */
-  def clubsStale: UIO[Boolean] = clubsStaleIn(XdgPaths.clubsFile)
-
-  /** Overwrite the clubs cache with one slug per line (the endpoint already sorts them). Duplicates are dropped:
-    * `club.slug` carries no unique index, so two clubs can answer to one name (#254). `false` means the write failed
-    * and the cache is unchanged, so completion won't reflect this list — an unwritable cache directory otherwise leaves
-    * completion permanently dead with nothing said. Callers for whom the refresh is incidental should discard the
-    * result; a caller acting on an explicit request about club setup should report it. Never fails.
+  /** True when the clubs cache is absent or older than the TTL (any IO error is treated as "stale" → refresh). Reads
+    * the time via `Clock.instant` rather than `Instant.now()` so the TTL boundary is testable under `TestClock`.
     */
-  def writeClubs(slugs: List[String]): UIO[Boolean] = writeClubsIn(XdgPaths.clubsFile, slugs)
-
-  /** Warn that a clubs-cache write to `file` failed. Naming the path is the actionable part: an unwritable cache
-    * directory (a root-owned one left by a `sudo ccas` run is the usual cause) otherwise leaves tab-completion silently
-    * dead with nothing to pull on. Advisory only: the command still succeeds.
-    */
-  def reportClubsWriteFailed(file: Path): UIO[Unit] =
-    Console
-      .printLineError(
-        s"warning: could not update the club cache at $file — " +
-          "shell completion won't reflect your managed clubs until that is writable"
-      )
-      .ignore
-
-  /** Seed the clubs cache from the config's `default_clubs` so completion has suggestions before any server round-trip.
-    */
-  def seedClubs(clubs: List[String]): UIO[Unit] = seedClubsIn(XdgPaths.clubsFile, clubs)
-
-  /** Delete the clubs cache so the next [[clubsStale]] check refreshes it, bypassing the TTL. Called when the managed
-    * set changes under us (`club add`/`remove`) and when a submit fails with "Club not found" — the cached slug the
-    * user just tab-completed is very likely the stale one, and waiting out the 6h TTL would re-suggest it on retry.
-    */
-  def invalidate: UIO[Unit] = invalidateIn(XdgPaths.clubsFile)
-
-  /** Prepend a job id (newest first), dropping any earlier duplicate and capping the list at [[MaxRecentJobs]]. */
-  def appendJob(jobId: String): UIO[Unit] = appendJobIn(XdgPaths.recentJobsFile, jobId)
-
-  // --- Path-explicit forms (see the object scaladoc) ---
-
-  /** Reads the time via `Clock.instant` rather than `Instant.now()` so the TTL boundary is testable under `TestClock`.
-    */
-  private[cli] def clubsStaleIn(file: Path): UIO[Boolean] =
+  def clubsStale(file: Path): UIO[Boolean] =
     Clock.instant.flatMap { now =>
       ZIO.attemptBlocking {
         !Files.exists(file) || {
@@ -86,7 +45,7 @@ object CompletionCache {
     * fails: a broken cache must not change any command's exit code. A file that vanishes mid-read counts as absent, not
     * unreadable — that is a benign race with `invalidate`, not a misconfiguration.
     */
-  private[cli] def readClubsIn(file: Path): UIO[Option[List[String]]] =
+  def readClubs(file: Path): UIO[Option[List[String]]] =
     ZIO
       .attemptBlocking {
         if (Files.exists(file)) { Files.readAllLines(file).asScala.toList.map(_.trim).filter(_.nonEmpty) }
@@ -96,7 +55,13 @@ object CompletionCache {
       .catchSome { case _: NoSuchFileException => ZIO.some(Nil) }
       .orElseSucceed(None)
 
-  private[cli] def writeClubsIn(file: Path, slugs: List[String]): UIO[Boolean] =
+  /** Overwrite the clubs cache with one slug per line (the endpoint already sorts them). Duplicates are dropped:
+    * `club.slug` carries no unique index, so two clubs can answer to one name (#254). `false` means the write failed
+    * and the cache is unchanged, so completion won't reflect this list — an unwritable cache directory otherwise leaves
+    * completion permanently dead with nothing said. Callers for whom the refresh is incidental should discard the
+    * result; a caller acting on an explicit request about club setup should report it. Never fails.
+    */
+  def writeClubs(file: Path, slugs: List[String]): UIO[Boolean] =
     ZIO.attemptBlocking {
       createParent(file)
       val unique = slugs.distinct
@@ -105,11 +70,24 @@ object CompletionCache {
       Files.writeString(file, unique.mkString("", "\n", trailing))
     }.isSuccess
 
-  /** No-op when the list is empty or the cache already exists (an authoritative refresh must win). The seed file's
-    * mtime is stamped to the epoch so [[clubsStaleIn]] still treats it as stale — the next server-touching command
+  /** Warn that a clubs-cache write to `file` failed. Naming the path is the actionable part: an unwritable cache
+    * directory (a root-owned one left by a `sudo ccas` run is the usual cause) otherwise leaves tab-completion silently
+    * dead with nothing to pull on. Advisory only: the command still succeeds.
+    */
+  def reportClubsWriteFailed(file: Path): UIO[Unit] =
+    Console
+      .printLineError(
+        s"warning: could not update the club cache at $file — " +
+          "shell completion won't reflect your managed clubs until that is writable"
+      )
+      .ignore
+
+  /** Seed the clubs cache from the config's `default_clubs` so completion has suggestions before any server round-trip.
+    * No-op when the list is empty or the cache already exists (an authoritative refresh must win). The seed file's
+    * mtime is stamped to the epoch so [[clubsStale]] still treats it as stale — the next server-touching command
     * replaces it with real slugs rather than trusting the seed for the full TTL.
     */
-  private[cli] def seedClubsIn(file: Path, clubs: List[String]): UIO[Unit] =
+  def seedClubs(file: Path, clubs: List[String]): UIO[Unit] =
     ZIO.attemptBlocking {
       if (clubs.nonEmpty && !Files.exists(file)) {
         createParent(file)
@@ -119,10 +97,14 @@ object CompletionCache {
       }
     }.ignore
 
-  private[cli] def invalidateIn(file: Path): UIO[Unit] =
+  /** Delete the clubs cache so the next [[clubsStale]] check refreshes it, bypassing the TTL: for a caller that has
+    * learnt a cached name may be wrong, which waiting out the 6h TTL would re-suggest on retry.
+    */
+  def invalidate(file: Path): UIO[Unit] =
     ZIO.attemptBlocking(Files.deleteIfExists(file)).unit.ignore
 
-  private[cli] def appendJobIn(file: Path, jobId: String): UIO[Unit] =
+  /** Prepend a job id (newest first), dropping any earlier duplicate and capping the list at [[MaxRecentJobs]]. */
+  def appendJob(file: Path, jobId: String): UIO[Unit] =
     ZIO.attemptBlocking {
       createParent(file)
       val existing =

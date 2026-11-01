@@ -1,5 +1,7 @@
 package ccas.cli
 
+import java.nio.file.Path
+
 import scala.util.Try
 
 import zio.*
@@ -27,7 +29,8 @@ final class JobFollower(
   maxWait: Duration,
   reconnectBackoff: Duration,
   maxReconnects: Int,
-  showProgress: Boolean
+  showProgress: Boolean,
+  recentJobsFile: Path
 ) {
 
   def followJob(jobId: String): Task[Int] =
@@ -241,7 +244,7 @@ final class JobFollower(
       // `--stdout` (logsToStderr) keeps stdout clean for the username payload, so no bars there; an interactive run
       // gets bars when the terminal supports them.
       for {
-        _    <- CompletionCache.appendJob(id)
+        _    <- CompletionCache.appendJob(recentJobsFile, id)
         _    <- printLine(s"${result.club} submitted: $id")
         code <- followWith(id, printLine, bars = showProgress && !logsToStderr)
         _    <- ZIO.whenDiscard(code == 0)(onComplete(id))

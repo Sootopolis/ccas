@@ -6,7 +6,7 @@ import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.analysis.tables.RunTrigger
 import ccas.api.misc.subtypes.JobRunId
-import ccas.cli.{CcasApiClient, CliError, JobFollower}
+import ccas.cli.{CcasApiClient, CliError, JobFollower, TempWiring}
 import ccas.server.ServerTables
 import ccas.server.jobs.{JobKind, JobRun, JobRunner, JobRunStatus}
 import ccas.server.routes.JobRoutes.CancelResult
@@ -91,12 +91,14 @@ object TestJobCancelWire extends ZIOSpecDefault {
         started <- Promise.make[Nothing, Unit]
         id      <- runner.submit(JobKind.MatchRef, None, None, RunTrigger.Cli, _ => started.succeed(()) *> ZIO.never)
         _       <- started.await
+        dir     <- TempWiring.tempDir
         follower = JobFollower(
-          api,
+          api = api,
           maxWait = 60.seconds,
           reconnectBackoff = 1.second,
           maxReconnects = 1000,
-          showProgress = false
+          showProgress = false,
+          recentJobsFile = dir.resolve("recent-jobs.txt")
         )
         fiber <- follower.followJob(JobRunId.unwrap(id)).fork
         _ <- (ZIO.sleep(20.millis) *> fiber.status)

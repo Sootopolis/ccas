@@ -1,9 +1,6 @@
 package ccas.cli
 
-import java.nio.file.Path
-
-import zio.{Console, Duration, ExitCode, Task, UIO, ZIO, ZLayer}
-import zio.http.Client
+import zio.{Console, Duration, ExitCode, Task, UIO, ZIO}
 
 import ccas.analysis.apps.{ClubQuery, ClubRef, ClubResolution, NamedClub}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
@@ -11,7 +8,6 @@ import ccas.cli.config.{ConfigWriter, CurrentClubRef}
 import ccas.server.routes.{ClubResult, ClubRoutes}
 import ccas.server.routes.ClubRoutes.ClubInfo
 import ccas.server.routes.ManagedClubRoutes.ManagedClubResponse
-import ccas.utils.client.HttpClientLayer
 import ccas.utils.errors.safeMessage
 
 /** `ccas use-club [slug] [--clear]` — a per-machine pointer at the club that commands target when they omit `--club`.
@@ -32,21 +28,7 @@ object UseClub {
   // simply treated as "couldn't verify" and the offline path takes over.
   private val VerifyTimeout: Duration = Duration.fromSeconds(2)
 
-  /** Where a set reaches outside the process: the config file holding `current_club`, the completion cache's club list,
-    * and the client it asks the server with. Explicit, like `CompletionCache`'s `…In` forms, because [[XdgPaths]] reads
-    * environment variables a running JVM cannot rebind — so a test hands it a temp directory and a fake server.
-    */
-  private[cli] final case class Wiring(configFile: Path, clubsFile: Path, clientLayer: ZLayer[Any, Throwable, Client])
-
-  private[cli] object Wiring {
-    def live: Wiring =
-      Wiring(configFile = XdgPaths.configFile, clubsFile = XdgPaths.clubsFile, clientLayer = HttpClientLayer.live)
-  }
-
-  def run(slugs: List[String], clear: Boolean, currentClubOption: Option[String], server: String): UIO[ExitCode] =
-    runWith(Wiring.live)(slugs = slugs, clear = clear, currentClubOption = currentClubOption, server = server)
-
-  private[cli] def runWith(wiring: Wiring)(
+  private[cli] def run(wiring: CliWiring)(
     slugs: List[String],
     clear: Boolean,
     currentClubOption: Option[String],
@@ -83,7 +65,7 @@ object UseClub {
     }
 
   // Clearing an already-absent value is a success, not an error — `--clear` states a desired end state.
-  private def clearCurrent(wiring: Wiring, currentClubOption: Option[String]): UIO[ExitCode] =
+  private def clearCurrent(wiring: CliWiring, currentClubOption: Option[String]): UIO[ExitCode] =
     currentClubOption match {
       case None => Console.printLine("no current club set").orDie.as(ExitCode.success)
       case Some(s) =>
@@ -92,7 +74,7 @@ object UseClub {
           .foldZIO(saveFailed("clear current club"), _ => cleared(CurrentClubRef.parse(s).slug))
     }
 
-  private def setCurrent(wiring: Wiring, slug: String, server: String): UIO[ExitCode] = {
+  private def setCurrent(wiring: CliWiring, slug: String, server: String): UIO[ExitCode] = {
     // Trim before storing: a slug never has surrounding whitespace, and `ClubSlug.normalize` only lowercases (no trim),
     // so a padded value would otherwise persist and later reach the API path verbatim.
     val s = slug.trim
@@ -107,7 +89,7 @@ object UseClub {
     }
   }
 
-  private def verifyThenConfirm(wiring: Wiring, slug: String, server: String): UIO[ExitCode] =
+  private def verifyThenConfirm(wiring: CliWiring, slug: String, server: String): UIO[ExitCode] =
     for {
       (resolutionOption, managed) <- resolveName(wiring, server, slug).zipPar(fetchManaged(wiring, server))
       // A live list means the cache is now authoritative for this club too — write it so the false-alarm case (a
@@ -118,13 +100,13 @@ object UseClub {
       // fallback policy is `Dispatcher`'s to apply; this opportunistic write deliberately owns none of it and just
       // steps aside.
       managedSlugs = managed.map(_.flatMap(_.slugOption)).filter(_.nonEmpty)
-      written <- ZIO.foreach(managedSlugs)(CompletionCache.writeClubsIn(wiring.clubsFile, _))
+      written <- ZIO.foreach(managedSlugs)(CompletionCache.writeClubs(wiring.clubsFile, _))
       _       <- ZIO.whenDiscard(written.contains(false))(CompletionCache.reportClubsWriteFailed(wiring.clubsFile))
       settled = settlement(slug, resolutionOption, managed)
       // Best-effort: the slug-only pointer already landed, so a failed upgrade doesn't fail the command.
       _ <- ZIO.foreachDiscard(settled.clubIdOption)(id => upgradePointer(wiring, id, settled.current))
       _ <- ZIO.foreachDiscard(settled.notes)(note)
-      _ <- ZIO.whenDiscard(settled.offline)(CompletionCache.readClubsIn(wiring.clubsFile).flatMap(offlineHint(slug, _)))
+      _ <- ZIO.whenDiscard(settled.offline)(CompletionCache.readClubs(wiring.clubsFile).flatMap(offlineHint(slug, _)))
       _ <- Console.printLine(s"current club set to ${settled.current}").orDie
     } yield ExitCode.success
 
@@ -222,14 +204,14 @@ object UseClub {
   private def namedAs(slug: String)(club: ManagedClubResponse): Boolean =
     club.slugOption.exists(_.equalsIgnoreCase(slug))
 
-  private def upgradePointer(wiring: Wiring, id: ClubId, slug: String): UIO[Unit] =
+  private def upgradePointer(wiring: CliWiring, id: ClubId, slug: String): UIO[Unit] =
     ConfigWriter.setCurrentClub(wiring.configFile, Some(id), slug).ignore
 
-  private def resolveName(wiring: Wiring, server: String, slug: String): UIO[Option[ClubResolution]] =
+  private def resolveName(wiring: CliWiring, server: String, slug: String): UIO[Option[ClubResolution]] =
     probe(wiring, server)(_.getJson[ClubResult[ClubInfo]](ClubRoutes.resolvePath(ClubQuery.BySlug(ClubSlug(slug)))))
       .map(_.map(_.resolution))
 
-  private def fetchManaged(wiring: Wiring, server: String): UIO[Option[List[ManagedClubResponse]]] =
+  private def fetchManaged(wiring: CliWiring, server: String): UIO[Option[List[ManagedClubResponse]]] =
     probe(wiring, server)(_.getJson[List[ManagedClubResponse]]("/api/managed-clubs"))
 
   // Best-effort: build a client, make one call, bound it, and collapse every failure to None so the caller falls back
@@ -240,7 +222,7 @@ object UseClub {
   // `NettyConnectionPool.createChannel` is uninterruptible — against a black-holed host the "2s" bound measured 31s
   // without it. Same hazard as BodyStore's deadlines, docs/adr/0009-bound-every-body-store-operation.md.
   // `HttpClientLayer` caps connect at 10s (#182), but this probe wants a far tighter interactive cutoff.
-  private def probe[A](wiring: Wiring, server: String)(call: CcasApiClient => Task[A]): UIO[Option[A]] =
+  private def probe[A](wiring: CliWiring, server: String)(call: CcasApiClient => Task[A]): UIO[Option[A]] =
     CcasApiClient
       .live(server)
       .flatMap(call)

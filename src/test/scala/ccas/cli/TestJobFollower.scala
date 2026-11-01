@@ -1,5 +1,7 @@
 package ccas.cli
 
+import java.nio.file.{Files, Path}
+
 import zio.*
 import zio.json.*
 import zio.test.{assertTrue, Spec, TestAspect, TestConsole, ZIOSpecDefault}
@@ -116,13 +118,40 @@ object TestJobFollower extends ZIOSpecDefault {
   private def statusJson(status: String, error: Option[String]): String =
     JobStatusResponse("job-1", "Membership", status, None, "2026-01-01T00:00:00Z", None, error, "Cli").toJson
 
+  // Where the followers here record the ids they submit, so none reaches the developer's own completion cache. The
+  // test that reads the file back has one of its own, since this suite's tests run in parallel.
+  private val sharedRecentJobsFile: Path = {
+    val dir = Files.createTempDirectory("ccas-job-follower")
+    dir.toFile.deleteOnExit()
+    val file = dir.resolve("recent-jobs.txt")
+    file.toFile.deleteOnExit()
+    file
+  }
+
   // Fast reconnect tuning for tests: negligible backoff, tiny cap so the give-up path resolves quickly. Bars off by
   // default (plain log lines, asserted via TestConsole); `barsFollower` flips `showProgress` on for the bars-path test.
   private def follower(api: CcasApiClient, maxWait: Duration): JobFollower =
-    JobFollower(api, maxWait, reconnectBackoff = 1.milli, maxReconnects = 3, showProgress = false)
+    followerRecordingIn(sharedRecentJobsFile, api, maxWait)
+
+  private def followerRecordingIn(recentJobsFile: Path, api: CcasApiClient, maxWait: Duration): JobFollower =
+    JobFollower(
+      api = api,
+      maxWait = maxWait,
+      reconnectBackoff = 1.milli,
+      maxReconnects = 3,
+      showProgress = false,
+      recentJobsFile = recentJobsFile
+    )
 
   private def barsFollower(api: CcasApiClient, maxWait: Duration): JobFollower =
-    JobFollower(api, maxWait, reconnectBackoff = 1.milli, maxReconnects = 3, showProgress = true)
+    JobFollower(
+      api = api,
+      maxWait = maxWait,
+      reconnectBackoff = 1.milli,
+      maxReconnects = 3,
+      showProgress = true,
+      recentJobsFile = sharedRecentJobsFile
+    )
 
   private def followerWith(status: String, error: Option[String], logLines: List[String]): UIO[JobFollower] =
     Ref
@@ -294,6 +323,19 @@ object TestJobFollower extends ZIOSpecDefault {
         err.exists(_.contains("hello")),
         err.exists(_.contains("team-a submitted: job-1"))
       )
+    },
+    test("handleClub records the submitted job id in the recent-jobs file") {
+      for {
+        recentJobsFile <- TempWiring.tempDir.map(_.resolve("recent-jobs.txt"))
+        script         <- Ref.make(List(statusJson("Completed", None)))
+        api = new StubApi(script, ReplayOnce(Nil), ZIO.unit)
+        code <- followerRecordingIn(recentJobsFile, api, 1.minute).handleClub(
+          result = submitted,
+          logsToStderr = false,
+          onComplete = _ => ZIO.unit
+        )
+        recorded <- ZIO.attemptBlocking(Files.readString(recentJobsFile))
+      } yield assertTrue(code == 0, recorded == "job-1\n")
     },
     test("handleClub skips onComplete when the job fails") {
       for {
