@@ -39,7 +39,7 @@ Every piece of work runs the same sequence. Take each step unprompted; the devel
 4. **Before shipping**: open questions, follow-ups worth an issue, and anything the plan promised that has not landed.
 5. **Before the session ends**: stop background tasks, post the agreed issues and comments, save what a future session needs, and say whether the standards should change.
 
-When unsure of anything — a finding, a design choice, what the developer meant — ask rather than guess.
+When unsure of anything — a finding, a design choice, what the developer meant — ask rather than guess. Put every question for the developer through `AskUserQuestion`, recommendation first, never as prose at the end of a report, where it gets missed.
 
 **Say how you know.** A claim about the code, the data or an outside system rests on something read or run in this session — a `file:line`, a command's output, a test name — cited when the developer will act on it; anything unchecked says so. Memory, of the code or of an earlier session, is a lead to check, not a source.
 
