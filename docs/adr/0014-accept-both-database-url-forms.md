@@ -1,6 +1,6 @@
 # Accept both database URL forms, and lift credentials out of either
 
-**Status:** Accepted, 2026-08-13 (#210). Amended by #327: no Postgres `jdbc:` URL passes through untouched any more, so a host-less one and pgjdbc's `jdbc:postgresql:db` shorthand have their credentials lifted out too; and a `?` followed by an `@` before the path is refused. That text reads two ways, as a password holding a `?` or as a path-less URL with an `@` in a query value, and the wrong reading puts part of the password in the URL. libpq takes the first reading; refusing is stricter than libpq, and leaks under neither.
+**Status:** Accepted, 2026-08-13 (#210). Amended by #327: no Postgres `jdbc:` URL passes through untouched any more, so a host-less one and pgjdbc's `jdbc:postgresql:db` shorthand have their credentials lifted out too; and a `?` followed by an `@` before the path is refused. That text reads two ways, as a password holding a `?` or as a path-less URL with an `@` in a query value, and the wrong reading puts part of the password in the URL. libpq takes the first reading; refusing is stricter than libpq, and leaks under neither. Amended by #398: `channel_binding` is translated, not dropped.
 
 ## Context
 
@@ -23,3 +23,4 @@ Scheme matching is case-insensitive (RFC 3986 §3.1); the rest of the URL keeps 
 - Non-Postgres `jdbc:` URLs pass through untouched, as does any `jdbc:` URL this cannot improve on. Anything that is neither form returns `Left` with an actionable, credential-free message.
 - `ccas config set DATABASE_URL` warns — and still writes — when the value is neither form.
 - `scripts/backup-neon.sh` parses both forms too, routing the password through `PGPASSWORD` so it never reaches `argv`.
+- libpq's `channel_binding` becomes pgjdbc's `channelBinding`, in place. Under `sslmode=require` pgjdbc checks no certificate, so channel binding — which ties the SCRAM login to the certificate the client saw — is all that authenticates the server a provider's string names. Checking the certificate instead (`sslmode=verify-full`) was not taken: it rests on the JDK's CA list, which CVE-2026-91403 showed can be wrong (#397), and a pasted provider string would need parameters it does not carry. Channel binding rests on the password, and works as pasted.
