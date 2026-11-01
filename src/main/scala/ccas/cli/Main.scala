@@ -63,11 +63,11 @@ object Main extends ZIOAppDefault {
 
   private def execute(wiring: CliWiring, cfg: CliConfig)(cmd: CliCommand): URIO[ZIOAppArgs, ExitCode] = cmd match {
     // `Serve(false, Some(_))` never reaches here: `CliCommand.serverUpOptions` rejects it at parse time.
-    case CliCommand.Serve(false, _)          => serve
-    case CliCommand.Serve(true, timeout)     => detachServe(cfg, timeout)
-    case CliCommand.Stop(portOption)         => stopServe(portOption)
-    case CliCommand.ServerStatus(portOption) => statusServe(portOption)
-    case CliCommand.ServerList               => listServe
+    case CliCommand.Serve(false, _)          => serve(wiring.serverEnvFile)
+    case CliCommand.Serve(true, timeout)     => detachServe(wiring.serverEnvFile, cfg, timeout)
+    case CliCommand.Stop(portOption)         => stopServe(wiring.serverEnvFile, portOption)
+    case CliCommand.ServerStatus(portOption) => statusServe(wiring.serverEnvFile, portOption)
+    case CliCommand.ServerList               => listServe(wiring.serverEnvFile)
     case CliCommand.Completion(shell)        => printCompletion(shell)
     case CliCommand.Use(slugs, clear)        =>
       // Same server the `--server`-less commands resolve to (config `api_url`, else the built-in default): use-club has
@@ -79,20 +79,20 @@ object Main extends ZIOAppDefault {
         currentClubOption = cfg.currentClubOption,
         server = cfg.apiUrl.getOrElse(CliCommand.DefaultServer)
       )
-    case CliCommand.ConfigGet(key)       => ConfigCommand.get(key)
-    case CliCommand.ConfigSet(key, v)    => ConfigCommand.set(key, v)
-    case CliCommand.ConfigUnset(key)     => ConfigCommand.unset(key)
-    case CliCommand.ConfigList(secrets)  => ConfigCommand.list(secrets)
-    case CliCommand.ConfigPath           => ConfigCommand.path
-    case CliCommand.ConfigInit           => ConfigCommand.init
+    case CliCommand.ConfigGet(key)       => ConfigCommand.get(wiring.serverEnvFile)(key)
+    case CliCommand.ConfigSet(key, v)    => ConfigCommand.set(wiring.serverEnvFile)(key, v)
+    case CliCommand.ConfigUnset(key)     => ConfigCommand.unset(wiring.serverEnvFile)(key)
+    case CliCommand.ConfigList(secrets)  => ConfigCommand.list(wiring.serverEnvFile)(secrets)
+    case CliCommand.ConfigPath           => ConfigCommand.path(wiring.serverEnvFile)
+    case CliCommand.ConfigInit           => ConfigCommand.init(wiring.serverEnvFile)
     case other: CliCommand.ServerCommand => Dispatcher.dispatch(wiring)(other, cfg.currentClubOption)
   }
 
   // Detached serve: apply the ccas.env overlay first, so a file-only SERVER_PORT reaches the port this parent JVM
   // resolves (it picks the pid file, the log and the readiness probe), then the foreground's mandatory-config precheck.
   // The detached child re-runs the overlay in its own JVM.
-  private def detachServe(cfg: CliConfig, readyTimeoutSeconds: Option[Int]): URIO[ZIOAppArgs, ExitCode] =
-    applyServerEnv(XdgPaths.serverEnvFile) *> ZIO.suspendSucceed {
+  private def detachServe(envFile: Path, cfg: CliConfig, readyTimeoutSeconds: Option[Int]): URIO[ZIOAppArgs, ExitCode] =
+    applyServerEnv(envFile) *> ZIO.suspendSucceed {
       (missingServeEnv, Detach.resolveDeadline(readyTimeoutSeconds, cfg.readyTimeoutSeconds)) match {
         case (Some(msg), _) => Console.printLineError(s"error: $msg").orDie.as(ExitCode(2))
         // A non-positive deadline is a usage error (exit 2), from the flag or the config file alike — not a failed boot.
@@ -106,18 +106,18 @@ object Main extends ZIOAppDefault {
   /** `server status`: the port picks both the probe and the pid file. Unlike `serve`, no mandatory-config precheck —
     * status only needs the port, not CCAS_CONTACT_EMAIL / a database.
     */
-  private def statusServe(portOption: Option[Int]): URIO[ZIOAppArgs, ExitCode] =
-    onServerPort(serverPort(portOption, XdgPaths.serverEnvFile))(port => ServerStatus.run(XdgPaths.stateDir, port))
+  private def statusServe(envFile: Path, portOption: Option[Int]): URIO[ZIOAppArgs, ExitCode] =
+    onServerPort(serverPort(portOption, envFile))(port => ServerStatus.run(XdgPaths.stateDir, port))
 
   /** `server down`: the port picks the pid file, and the port the "still responding?" hint
     * (ServerStop.foregroundHint) probes — a wrong one could stop another port's server.
     */
-  private def stopServe(portOption: Option[Int]): URIO[ZIOAppArgs, ExitCode] =
-    onServerPort(serverPort(portOption, XdgPaths.serverEnvFile))(port => ServerStop.run(XdgPaths.stateDir, port))
+  private def stopServe(envFile: Path, portOption: Option[Int]): URIO[ZIOAppArgs, ExitCode] =
+    onServerPort(serverPort(portOption, envFile))(port => ServerStop.run(XdgPaths.stateDir, port))
 
   /** `server list`: the shell's port is the row it marks, and listed with no pid file when a server answers there. */
-  private def listServe: URIO[ZIOAppArgs, ExitCode] =
-    onServerPort(serverPort(None, XdgPaths.serverEnvFile))(port => ServerList.run(XdgPaths.stateDir, port))
+  private def listServe(envFile: Path): URIO[ZIOAppArgs, ExitCode] =
+    onServerPort(serverPort(None, envFile))(port => ServerList.run(XdgPaths.stateDir, port))
 
   // For the commands above, which don't run the server in this JVM: a file that can't be read is a CLI warning, on
   // stderr like every other. `serve` logs it through the server's display instead.
@@ -138,9 +138,9 @@ object Main extends ZIOAppDefault {
   // Apply the ccas.env overlay (file → system properties for any env var not already set) BEFORE checking mandatory
   // config or booting CcasServer, so the server can boot from `ccas config`'s file without hand-exported env vars.
   // `suspendSucceed` defers `missingServeEnv` until after the overlay has run (it reads the system properties just set).
-  private def serve: URIO[ZIOAppArgs, ExitCode] =
+  private def serve(envFile: Path): URIO[ZIOAppArgs, ExitCode] =
     CcasServer
-      .withServerEnv(XdgPaths.serverEnvFile) {
+      .withServerEnv(envFile) {
         ZIO.suspendSucceed {
           missingServeEnv match {
             // Known missing config → a one-line message, not the raw ConfigException stack from ConfigFactory.load.

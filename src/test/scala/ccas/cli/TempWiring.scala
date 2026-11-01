@@ -6,7 +6,7 @@ import zio.{UIO, ZIO}
 import zio.http.{Response, Routes}
 
 /** A [[CliWiring]] whose files sit in a fresh temp directory and whose client answers from a [[FakeCcasServer]], so a
-  * command run by a test stores what it stores there, never in the developer's own config and cache.
+  * command run by a test stores what it stores there, never in the developer's own config, cache and `ccas.env`.
   */
 object TempWiring {
 
@@ -17,6 +17,7 @@ object TempWiring {
       configFile = dir.resolve(ConfigFile),
       clubsFile = dir.resolve(ClubsFile),
       recentJobsFile = dir.resolve(RecentJobsFile),
+      serverEnvFile = dir.resolve(ServerEnvFile),
       clientLayer = FakeCcasServer.layer(routes)
     )
 
@@ -25,7 +26,9 @@ object TempWiring {
     ZIO.attemptBlocking {
       val dir = Files.createTempDirectory("ccas-cli")
       dir.toFile.deleteOnExit()
-      List(ConfigFile, ClubsFile, RecentJobsFile).foreach(leaf => dir.resolve(leaf).toFile.deleteOnExit())
+      List(ConfigFile, ClubsFile, RecentJobsFile, ServerEnvFile).foreach { leaf =>
+        dir.resolve(leaf).toFile.deleteOnExit()
+      }
       dir
     }.orDie
 
@@ -40,4 +43,5 @@ object TempWiring {
   private val ConfigFile     = "config.conf"
   private val ClubsFile      = "clubs.txt"
   private val RecentJobsFile = "recent-jobs.txt"
+  private val ServerEnvFile  = "ccas.env"
 }

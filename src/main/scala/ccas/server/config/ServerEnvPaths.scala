@@ -4,7 +4,7 @@ import java.nio.file.{Path, Paths}
 
 /** Resolves the server-bootstrap env file path (`${XDG_CONFIG_HOME:-~/.config}/ccas/ccas.env`) without depending on the
   * `ccas.cli` package, so `CcasServer` (the standalone `ccas-server` entry point) can apply [[ServerEnvOverlay]] at boot
-  * without a server→cli package cycle. `ccas.cli.XdgPaths.serverEnvFile` delegates here, keeping one source of truth and
+  * without a server→cli package cycle. `ccas.cli.CliWiring.live` resolves it here too, keeping one source of truth and
   * the same XDG resolution as the CLI's other paths.
   */
 object ServerEnvPaths {
