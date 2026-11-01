@@ -29,7 +29,6 @@ import ccas.server.routes.JobRoutes.{
 import ccas.server.routes.ManagedClubRoutes.{ManagedClubResponse, MarkManagedRequest}
 import ccas.server.routes.ScheduleRoutes.{CreateScheduleRequest, CreateScheduleResponse, ScheduleResponse}
 import ccas.server.scheduler.{MisfirePolicy, TriggerType}
-import ccas.utils.client.HttpClientLayer
 import ccas.utils.errors.safeMessage
 
 /** Maps a parsed [[CliCommand]] to HTTP calls against the local server and renders the result, returning the process
@@ -44,27 +43,26 @@ object Dispatcher {
   private val ReconnectBackoff: Duration = 2.seconds
   private val MaxReconnects: Int         = 1000
 
-  def dispatch(cmd: CliCommand.ServerCommand, currentClubOption: Option[String]): UIO[ExitCode] =
+  private[cli] def dispatch(wiring: CliWiring)(
+    cmd: CliCommand.ServerCommand,
+    currentClubOption: Option[String]
+  ): UIO[ExitCode] =
     CcasApiClient
       .live(cmd.server)
       .flatMap { api =>
         // Bars render only on an interactive terminal (hasTty) and unless `--no-progress` was passed; piped/redirected
         // output stays plain lines regardless.
         val jobFollower = JobFollower(
-          api,
-          MaxJobWait,
-          ReconnectBackoff,
-          MaxReconnects,
-          showProgress = hasTty && !noProgressFor(cmd)
+          api = api,
+          maxWait = MaxJobWait,
+          reconnectBackoff = ReconnectBackoff,
+          maxReconnects = MaxReconnects,
+          showProgress = hasTty && !noProgressFor(cmd),
+          recentJobsFile = wiring.recentJobsFile
         )
-        runCommand(api, jobFollower, cmd, currentClubOption) <* refreshClubsCache(api)
+        runCommand(wiring, api, jobFollower, cmd, currentClubOption) <* refreshClubsCache(wiring, api)
       }
-      // `HttpClientLayer.live` (not `Client.default`) so every Dispatcher call inherits the shared transport's
-      // `connectionTimeout(10s)` — a black-holed server now fails connect natively at 10s instead of parking a fiber on
-      // zio-http's unbounded 30s default (#182). Bounding connect at the Netty layer, below ZIO interruption, avoids the
-      // uninterruptible-unwind problem a ZIO-level `.timeout` hits, and — unlike a blanket request timeout — leaves
-      // legitimately-slow synchronous calls (e.g. a large `blacklist` add) and the streaming follows untouched.
-      .provide(HttpClientLayer.live)
+      .provide(wiring.clientLayer)
       .catchAll(reportFailure)
       // Last-resort net for unexpected defects (e.g. an invalid opaque-type construction) so the binary prints a
       // clean message instead of dumping a fiber stack trace.
@@ -89,36 +87,36 @@ object Dispatcher {
   }
 
   // Best-effort, staleness-gated refresh of the completion club-slug cache after a successful command. Fully ignored:
-  // it never blocks the result or alters the exit code (the `.tap` runs only on the success channel).
-  private def refreshClubsCache(api: CcasApiClient): UIO[Unit] =
-    CompletionCache.clubsStale.flatMap(stale => ZIO.whenDiscard(stale)(writeClubsCache(api)))
+  // it never blocks the result or alters the exit code (`dispatch`'s `<*` runs it only on the success channel).
+  private def refreshClubsCache(wiring: CliWiring, api: CcasApiClient): UIO[Unit] =
+    ZIO.whenZIODiscard(CompletionCache.clubsStale(wiring.clubsFile))(writeClubsCache(wiring, api))
 
   // Prefer the managed set: those are the only clubs `--all` expands to and the only ones that keep scheduled jobs, so
   // they're what `--club` completion should offer. `/api/clubs` is every club ever ingested — a few history crawls put
   // it in the thousands, almost all opponents and scouted clubs — so it serves only as a fallback for a fresh install
   // with nothing managed yet, leaving completion useful before the first `club add`.
-  private def writeClubsCache(api: CcasApiClient): UIO[Unit] =
-    writeClubsCacheResult(api).ignore
+  private def writeClubsCache(wiring: CliWiring, api: CcasApiClient): UIO[Unit] =
+    writeClubsCacheResult(wiring, api).ignore
 
   // Reporting variant for the `club add`/`remove` handlers: a *write* failure (cache dir unwritable) is named on stderr,
   // while a *fetch* failure stays silent. The distinction matters — the server call that preceded this just succeeded,
   // so a subsequent managed-set fetch failing is a transient blip, not a cache-dir problem, and blaming the cache would
   // misdirect. Never fails and never changes the exit code: a broken completion cache is not a failed command (#181).
-  private def writeClubsCacheReporting(api: CcasApiClient): UIO[Unit] =
-    writeClubsCacheResult(api).foldZIO(
+  private def writeClubsCacheReporting(wiring: CliWiring, api: CcasApiClient): UIO[Unit] =
+    writeClubsCacheResult(wiring, api).foldZIO(
       failure = _ => ZIO.unit,
-      success = wrote => ZIO.whenDiscard(!wrote)(CompletionCache.reportClubsWriteFailed(XdgPaths.clubsFile))
+      success = wrote => ZIO.whenDiscard(!wrote)(CompletionCache.reportClubsWriteFailed(wiring.clubsFile))
     )
 
   // Shared core: pick the managed set (falling back to all clubs only for a fresh install with nothing managed), write
   // it, and return whether the write landed. Fails only if the *fetch* fails; `writeClubs` itself never fails.
-  private def writeClubsCacheResult(api: CcasApiClient): Task[Boolean] =
+  private def writeClubsCacheResult(wiring: CliWiring, api: CcasApiClient): Task[Boolean] =
     managedSlugs(api)
       .flatMap { slugs =>
         if (slugs.nonEmpty) { ZIO.succeed(slugs) }
         else { allClubSlugs(api) }
       }
-      .flatMap(CompletionCache.writeClubs)
+      .flatMap(CompletionCache.writeClubs(wiring.clubsFile, _))
 
   private def managedSlugs(api: CcasApiClient): Task[List[String]] =
     api.getJson[List[ManagedClubResponse]]("/api/managed-clubs").map(_.flatMap(_.slugOption))
@@ -127,6 +125,7 @@ object Dispatcher {
     api.getJson[ClubsResponse]("/api/clubs").map(_.clubs.map(club => ClubSlug.unwrap(club.slug)))
 
   private def runCommand(
+    wiring: CliWiring,
     api: CcasApiClient,
     follower: JobFollower,
     cmd: CliCommand.ServerCommand,
@@ -135,7 +134,7 @@ object Dispatcher {
     case membership: CliCommand.Membership =>
       for {
         targets <- resolveClubs(api, membership.clubs, membership.clubIdOption, membership.all, currentClubOption)
-        code <- followEachClub(follower, targets, membership.detach, currentClubOption) { target =>
+        code <- followEachClub(wiring, follower, targets, membership.detach, currentClubOption) { target =>
           api.postJson[MembershipRequest, List[ClubJobResult]](
             "/api/jobs/membership",
             MembershipRequest(NonEmptyChunk.single(target.query), membership.trustUsernames)
@@ -146,7 +145,7 @@ object Dispatcher {
     case history: CliCommand.History =>
       for {
         targets <- resolveClubs(api, history.clubs, history.clubIdOption, history.all, currentClubOption)
-        code <- followEachClub(follower, targets, history.detach, currentClubOption) { target =>
+        code <- followEachClub(wiring, follower, targets, history.detach, currentClubOption) { target =>
           api.postJson[HistoryRequest, List[ClubJobResult]](
             "/api/jobs/history",
             HistoryRequest(
@@ -165,7 +164,15 @@ object Dispatcher {
         case Some(message) => ZIO.fail(CliError(message, 2))
         case None =>
           if (recruit.report) {
-            reportInvited(api, recruit.club, recruit.clubIdOption, currentClubOption, recruit.runId, recruit.stdout)
+            reportInvited(
+              wiring = wiring,
+              api = api,
+              club = recruit.club,
+              clubIdOption = recruit.clubIdOption,
+              currentClubOption = currentClubOption,
+              runId = recruit.runId,
+              stdout = recruit.stdout
+            )
           } else {
             // Marking Invited is destructive (a forgotten invite burns the candidate for the cooldown), so it needs
             // positive intent: only `--stdout` (programmatic consumption) auto-confirms from the CLI. An interactive
@@ -189,7 +196,7 @@ object Dispatcher {
                   )
                 )
               }
-              _    <- noteResolutions(currentClubOption, clubTarget, List(jobOutcome(result)))
+              _    <- noteResolutions(wiring, currentClubOption, clubTarget, List(jobOutcome(result)))
               code <- handleRecruitResult(follower, api, result, recruit.stdout, interactiveConfirm)
             } yield code
           }
@@ -204,9 +211,9 @@ object Dispatcher {
             StatsRequest(chosen.query, stats.since, stats.until)
           )
         }
-        _ <- noteResolutions(currentClubOption, target, List(jobOutcome(result)))
+        _ <- noteResolutions(wiring, currentClubOption, target, List(jobOutcome(result)))
         code <-
-          if (stats.detach) { reportDetachedClub(result) }
+          if (stats.detach) { reportDetachedClub(wiring, result) }
           else { follower.handleClub(result, logsToStderr = false, _ => ZIO.unit) }
       } yield code
 
@@ -225,7 +232,7 @@ object Dispatcher {
     case add: CliCommand.BlacklistAdd =>
       for {
         target <- resolveClub(add.club, add.clubIdOption, currentClubOption)
-        (resolved, blacklisted) <- actOnClub(currentClubOption, target) { chosen =>
+        (resolved, blacklisted) <- actOnClub(wiring, currentClubOption, target) { chosen =>
           api.postJson[CreateBlacklistRequest, ClubResult[List[String]]](
             "/api/blacklist",
             CreateBlacklistRequest(chosen.query, add.usernames.map(Username(_)), add.reason, add.months)
@@ -237,7 +244,7 @@ object Dispatcher {
     case CliCommand.BlacklistList(_, club, clubIdOption) =>
       for {
         target <- resolveClub(club, clubIdOption, currentClubOption)
-        (_, entries) <- actOnClub(currentClubOption, target) { chosen =>
+        (_, entries) <- actOnClub(wiring, currentClubOption, target) { chosen =>
           api.getJson[ClubResult[List[BlacklistEntryResponse]]](
             s"/api/blacklist?${ClubRequest.queryString(chosen.query)}"
           )
@@ -249,7 +256,7 @@ object Dispatcher {
       val username = remove.username
       for {
         target <- resolveClub(remove.club, remove.clubIdOption, currentClubOption)
-        (resolved, removed) <- actOnClub(currentClubOption, target) { chosen =>
+        (resolved, removed) <- actOnClub(wiring, currentClubOption, target) { chosen =>
           api.deleteJson[ClubResult[Boolean]](s"/api/blacklist/$username?${ClubRequest.queryString(chosen.query)}")
         }
         name = ClubSlug.unwrap(resolved.slug)
@@ -269,7 +276,7 @@ object Dispatcher {
         mp <- ZIO.foreach(add.misfire)(parseMisfire)
         triggerType = if (add.cron.isDefined) TriggerType.Cron else TriggerType.Interval
         targetOption <- ClubResolver.optional(add.club, add.clubIdOption)
-        s <- createSchedule(currentClubOption, targetOption) { clubOption =>
+        s <- createSchedule(wiring, currentClubOption, targetOption) { clubOption =>
           api.postJson[CreateScheduleRequest, CreateScheduleResponse](
             "/api/schedules",
             CreateScheduleRequest(
@@ -290,30 +297,27 @@ object Dispatcher {
     case CliCommand.ScheduleRemove(_, id) =>
       api.delete(s"/api/schedules/$id") *> Console.printLine(s"deleted schedule $id").orDie.as(0)
 
-    // Both mutate the managed set, which IS the completion cache's source, so they repopulate it right here rather than
-    // leaning on the post-command `.tap` refresh. The explicit write is REPORTED: a failure to write is surfaced on
-    // stderr (#181), because setting up club context is exactly when a broken cache dir should be named instead of
-    // leaving completion silently dead. The direct overwrite supersedes the old `invalidate`-then-tap-repopulate — a
-    // failed *delete* is a poor signal for an unwritable dir (deleting an absent file succeeds), whereas the write is
-    // the operation that actually fails. The trailing `.tap` then no-ops on the now-fresh file.
+    // Both change the managed set, the cache's source, so they rewrite the cache here — the post-command refresh then
+    // no-ops on the fresh file — and report a failed write (#181): setting up club context is when a broken cache dir
+    // should be named, and the write, not a delete, is what fails on an unwritable dir.
     case CliCommand.ClubsAdd(_, slugs, clubIdOption) =>
       for {
         target <- ClubResolver.operand(slugs, clubIdOption)
-        (club, added) <- actOnClub(currentClubOption, target) { chosen =>
+        (club, added) <- actOnClub(wiring, currentClubOption, target) { chosen =>
           api.postJson[MarkManagedRequest, ClubResult[Boolean]]("/api/managed-clubs", MarkManagedRequest(chosen.query))
         }
         name = ClubSlug.unwrap(club.slug)
         _ <- Console.printLine(if (added) {
           s"now managing $name"
         } else { s"already managing $name" }).orDie
-        _ <- writeClubsCacheReporting(api)
+        _ <- writeClubsCacheReporting(wiring, api)
       } yield 0
 
     case CliCommand.ClubsRemove(_, slugs, clubIdOption) =>
       for {
         target <- ClubResolver.operand(slugs, clubIdOption)
         // No pointer refresh: it only ever rewrites a `current_club` naming this club, which the removal then clears.
-        result <- settleAndNote(target, noteOutcomes(currentClubOption, _)) { chosen =>
+        result <- settleAndNote(target, noteOutcomes(wiring, currentClubOption, _)) { chosen =>
           api.deleteJson[ClubResult[Boolean]](s"/api/managed-clubs?${ClubRequest.queryString(chosen.query)}")
         }
         // Unmanaging needs only the id, so the server also acts on a club that has lost its name (#385).
@@ -322,8 +326,8 @@ object Dispatcher {
         _ <- Console.printLine(if (removed) {
           s"stopped managing $name"
         } else { s"$name was not managed" }).orDie
-        _ <- clearCurrentIfRemoved(club, target.query, currentClubOption)
-        _ <- writeClubsCacheReporting(api)
+        _ <- clearCurrentIfRemoved(wiring, club, target.query, currentClubOption)
+        _ <- writeClubsCacheReporting(wiring, api)
       } yield 0
 
     case CliCommand.ClubsList(_) =>
@@ -366,13 +370,14 @@ object Dispatcher {
   // `current_club` still pointing at the removed club would keep running real jobs against it. Clear it so the next
   // bare command fails loudly with `ClubResolver.NoClubError`.
   private def clearCurrentIfRemoved(
+    wiring: CliWiring,
     removed: ClubRef,
     query: ClubQuery,
     currentClubOption: Option[String]
   ): UIO[Unit] =
     ZIO.whenDiscard(currentClubOption.map(CurrentClubRef.parse).exists(_.means(removed, query))) {
       ConfigWriter
-        .clearCurrentClub(XdgPaths.configFile)
+        .clearCurrentClub(wiring.configFile)
         .foldZIO(clearFailed, _ => currentClubCleared)
     }
 
@@ -429,6 +434,7 @@ object Dispatcher {
   // Why serialized rather than concurrent, and why each club is best-effort:
   // docs/adr/0011-cli-locality-and-the-current-club-pointer.md.
   private def followEachClub(
+    wiring: CliWiring,
     follower: JobFollower,
     targets: NonEmptyChunk[ClubTarget],
     detach: Boolean,
@@ -437,13 +443,13 @@ object Dispatcher {
     submitOne: ClubTarget => Task[List[ClubJobResult]]
   ): Task[Int] = {
     val handle: List[ClubJobResult] => Task[Int] =
-      if (detach) { results => ZIO.foreach(results)(reportDetachedClub).map(JobFollower.overallExitCode) }
+      if (detach) { results => ZIO.foreach(results)(reportDetachedClub(wiring, _)).map(JobFollower.overallExitCode) }
       else { follower.handleBatch }
     ZIO
       .foreach(targets.toChunk.toList) { target =>
         (for {
           results <- sendSettlingAmbiguity(target, (rs: List[ClubJobResult]) => rs.map(_.resolution), hasTty)(submitOne)
-          _       <- noteResolutions(currentClubOption, target, results.map(jobOutcome))
+          _       <- noteResolutions(wiring, currentClubOption, target, results.map(jobOutcome))
           code    <- handle(results)
         } yield code)
           .catchAll(e => Console.printLineError(s"${target.label}: ${e.safeMessage}").orDie.as(1))
@@ -454,9 +460,9 @@ object Dispatcher {
   // Detached submit of a single club-scoped job (#170): print its id (or its submit error) and DON'T follow. Cache the
   // id for `ccas logs`/`ccas cancel` completion, and note the reattach command. Exit 1 for a per-club submit failure so
   // a partial `--all --detach` batch still scores as failed overall (mirrors `handleClub`'s error scoring).
-  private def reportDetachedClub(result: ClubJobResult): UIO[Int] =
+  private def reportDetachedClub(wiring: CliWiring, result: ClubJobResult): UIO[Int] =
     JobFollower.whenSubmitted(result.club, result.failure, result.jobIdOption) { id =>
-      CompletionCache.appendJob(id) *>
+      CompletionCache.appendJob(wiring.recentJobsFile, id) *>
         Console.printLine(s"${result.club} submitted (detached): $id — follow with 'ccas logs $id'").orDie.as(0)
     }
 
@@ -471,22 +477,35 @@ object Dispatcher {
   // Every request that names a club acts on its resolutions the same way: a missing club busts the cache and may hint,
   // a former name gets a note, and a resolved current club refreshes `current_club`.
   private def noteResolutions(
+    wiring: CliWiring,
     currentClubOption: Option[String],
     target: ClubTarget,
     outcomes: List[ClubOutcome]
   ): UIO[Unit] =
-    noteOutcomes(currentClubOption, outcomes) *>
-      ZIO.foreachDiscard(outcomes.headOption)(o => maybeRefreshCurrentClub(currentClubOption, target, o.resolution))
+    noteOutcomes(wiring, currentClubOption, outcomes) *>
+      ZIO.foreachDiscard(outcomes.headOption) { outcome =>
+        refreshCurrentClub(
+          configFile = wiring.configFile,
+          currentClubOption = currentClubOption,
+          query = target.query,
+          resolution = outcome.resolution
+        )
+      }
 
-  private def noteOutcomes(currentClubOption: Option[String], outcomes: List[ClubOutcome]): UIO[Unit] =
-    noteMissingClubs(missingFrom(outcomes), currentClubOption) *> noteNameChanges(nameChangesFrom(outcomes))
+  private def noteOutcomes(
+    wiring: CliWiring,
+    currentClubOption: Option[String],
+    outcomes: List[ClubOutcome]
+  ): UIO[Unit] =
+    noteMissingClubs(wiring, missingFrom(outcomes), currentClubOption) *>
+      noteNameChanges(wiring, nameChangesFrom(outcomes))
 
   // The synchronous club commands resolve on the server just as a submit does, so they settle an ambiguous name, note
   // a changed one and refresh the pointer the same way; a club the server could not act on fails the command.
-  private def actOnClub[A](currentClubOption: Option[String], target: ClubTarget)(
+  private def actOnClub[A](wiring: CliWiring, currentClubOption: Option[String], target: ClubTarget)(
     send: ClubTarget => Task[ClubResult[A]]
   ): Task[(NamedClub, A)] =
-    settleAndNote(target, noteResolutions(currentClubOption, target, _))(send)
+    settleAndNote(target, noteResolutions(wiring, currentClubOption, target, _))(send)
       .flatMap(result => ZIO.fromEither(result.toEither).mapError(CliError(_, 1)))
 
   // Answers with the whole result, since what counts as a club acted on depends on what the route needed of it.
@@ -498,7 +517,7 @@ object Dispatcher {
     }
 
   // A schedule names a club only for the kinds that take one, and without one there is nothing to settle or note.
-  private def createSchedule(currentClubOption: Option[String], targetOption: Option[ClubTarget])(
+  private def createSchedule(wiring: CliWiring, currentClubOption: Option[String], targetOption: Option[ClubTarget])(
     send: Option[ClubQuery] => Task[CreateScheduleResponse]
   ): Task[ScheduleResponse] =
     targetOption match {
@@ -509,7 +528,7 @@ object Dispatcher {
             chosen => send(Some(chosen.query))
           )
           outcomeOption = created.resolutionOption.map(ClubOutcome(_, created.scheduleOption.isDefined))
-          _        <- noteResolutions(currentClubOption, target, outcomeOption.toList)
+          _        <- noteResolutions(wiring, currentClubOption, target, outcomeOption.toList)
           schedule <- scheduleOf(created)
         } yield schedule
     }
@@ -583,11 +602,15 @@ object Dispatcher {
   private[cli] def missingFrom(outcomes: List[ClubOutcome]): List[ClubResolution] =
     outcomes.filterNot(_.acted).map(_.resolution).filter(missingQuery(_).isDefined)
 
-  // Drop the cache so the post-command refresh repopulates it — the 6h TTL would otherwise re-suggest the same dead
-  // slug on an immediate retry — and call out a stranded `current_club`.
-  private def noteMissingClubs(missing: List[ClubResolution], currentClubOption: Option[String]): UIO[Unit] =
+  // Drop the cache so the next refresh repopulates it — this command's own, unless the miss failed it — since the 6h
+  // TTL would otherwise re-suggest the same dead slug on an immediate retry; and call out a stranded `current_club`.
+  private def noteMissingClubs(
+    wiring: CliWiring,
+    missing: List[ClubResolution],
+    currentClubOption: Option[String]
+  ): UIO[Unit] =
     ZIO.whenDiscard(missing.nonEmpty) {
-      CompletionCache.invalidate *>
+      CompletionCache.invalidate(wiring.clubsFile) *>
         ZIO.foreachDiscard(staleCurrentClubHint(currentClubOption, missing))(Console.printLineError(_).orDie)
     }
 
@@ -653,9 +676,10 @@ object Dispatcher {
 
   // A name that reached the server attached to a different club than it names now means the completion cache may still
   // be offering the old one, so drop the cache alongside the note.
-  private def noteNameChanges(notes: List[String]): UIO[Unit] =
+  private def noteNameChanges(wiring: CliWiring, notes: List[String]): UIO[Unit] =
     ZIO.whenDiscard(notes.nonEmpty) {
-      CompletionCache.invalidate *> ZIO.foreachDiscard(notes)(note => Console.printLineError(note).orDie)
+      CompletionCache.invalidate(wiring.clubsFile) *>
+        ZIO.foreachDiscard(notes)(note => Console.printLineError(note).orDie)
     }
 
   // Resolution lives in the pure, testable `ClubResolver`; the `--all` expansion's network call is injected here. A
@@ -682,23 +706,11 @@ object Dispatcher {
       currentClubOption = currentClubOption
     )
 
-  private def maybeRefreshCurrentClub(
-    currentClubOption: Option[String],
-    target: ClubTarget,
-    resolution: ClubResolution
-  ): UIO[Unit] =
-    refreshCurrentClubIn(
-      configFile = XdgPaths.configFile,
-      currentClubOption = currentClubOption,
-      query = target.query,
-      resolution = resolution
-    )
-
   /** Freshens `current_club` in `configFile` after a command that sent `query` was answered with `resolution`, as
-    * [[CurrentClubRef.refreshedRef]] decides. Takes the path because [[XdgPaths]] reads environment variables a test
-    * cannot rebind. Best-effort: keeping the pointer fresh never fails a command, and a failed write gets no note.
+    * [[CurrentClubRef.refreshedRef]] decides. Best-effort: keeping the pointer fresh never fails a command, and a failed
+    * write gets no note.
     */
-  private[cli] def refreshCurrentClubIn(
+  private[cli] def refreshCurrentClub(
     configFile: Path,
     currentClubOption: Option[String],
     query: ClubQuery,
@@ -856,6 +868,7 @@ object Dispatcher {
   // latest. `--stdout` prints a bare list for piping; otherwise it prints `<username> <profile-url>` per line (so the
   // operator can vet players) and, on an interactive terminal, copies the bare usernames (paste-ready for invites).
   private def reportInvited(
+    wiring: CliWiring,
     api: CcasApiClient,
     club: Option[String],
     clubIdOption: Option[Long],
@@ -869,7 +882,7 @@ object Dispatcher {
         case None =>
           for {
             target <- resolveClub(club, clubIdOption, currentClubOption)
-            (_, latest) <- actOnClub(currentClubOption, target) { chosen =>
+            (_, latest) <- actOnClub(wiring, currentClubOption, target) { chosen =>
               api.getJson[ClubResult[InvitedUsernames]](
                 s"/api/recruitment/latest/invited?${ClubRequest.queryString(chosen.query)}"
               )

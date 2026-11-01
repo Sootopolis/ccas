@@ -2,7 +2,7 @@ package ccas.cli
 
 import java.nio.file.{Files, Path}
 
-import zio.{ExitCode, Task, UIO, ZIO}
+import zio.{ExitCode, Ref, Task, ZIO}
 import zio.http.{handler, Method, Response, Routes, Status}
 import zio.test.{assertTrue, Spec, TestConsole, ZIOSpecDefault}
 
@@ -17,9 +17,6 @@ import ccas.server.routes.ManagedClubRoutes.ManagedClubResponse
   */
 object TestUseClub extends ZIOSpecDefault {
 
-  // Validation cases return before any write or request, so they can go through `run` and its real wiring.
-  private val Server = "http://127.0.0.1:8080"
-
   private def managed(clubId: Long, slug: String): ManagedClubResponse =
     ManagedClubResponse(
       clubId = clubId,
@@ -28,19 +25,28 @@ object TestUseClub extends ZIOSpecDefault {
       markedAt = "2026-09-21T00:00:00Z"
     )
 
-  private def tempDir: UIO[Path] =
-    ZIO.attemptBlocking {
-      val dir = Files.createTempDirectory("ccas-use-club")
-      dir.toFile.deleteOnExit()
-      dir
-    }.orDie
+  /** How a `use-club` that should end before asking the server ended: its exit code, whether it left a config file
+    * behind, and whether it asked the server anything anyway.
+    */
+  private final case class Offline(code: ExitCode, wrote: Boolean, asked: Boolean)
 
-  private def wiringIn(dir: Path, server: Routes[Any, Response]): UseClub.Wiring =
-    UseClub.Wiring(
-      configFile = dir.resolve("config.conf"),
-      clubsFile = dir.resolve("clubs.txt"),
-      clientLayer = FakeCcasServer.layer(server)
-    )
+  /** `use-club` against a server that only records being asked, for the cases that return before asking one. */
+  private def offline(slugs: List[String], clear: Boolean, currentClubOption: Option[String]): Task[Offline] =
+    for {
+      askedRef <- Ref.make(false)
+      recording = handler(askedRef.set(true).as(Response.status(Status.InternalServerError)))
+      wiring <- TempWiring(
+        Routes(Method.GET / "api" / "clubs" / "resolve" -> recording, Method.GET / "api" / "managed-clubs" -> recording)
+      )
+      code <- UseClub.run(wiring)(
+        slugs = slugs,
+        clear = clear,
+        currentClubOption = currentClubOption,
+        server = FakeCcasServer.Url
+      )
+      wrote <- ZIO.attemptBlocking(Files.exists(wiring.configFile))
+      asked <- askedRef.get
+    } yield Offline(code = code, wrote = wrote, asked = asked)
 
   /** A server that answers `resolution` when asked about `slug` — or lacks the route, as one older than it does — and
     * lists `managedOption` as the managed clubs, failing that request when there is none.
@@ -68,12 +74,12 @@ object TestUseClub extends ZIOSpecDefault {
   )
 
   private def setAgainst(server: Routes[Any, Response], slug: String): Task[SetResult] =
-    tempDir.flatMap(setIn(_, server, slug))
+    TempWiring.tempDir.flatMap(setIn(_, server, slug))
 
   private def setIn(dir: Path, server: Routes[Any, Response], slug: String): Task[SetResult] = {
-    val wiring = wiringIn(dir, server)
+    val wiring = TempWiring.in(dir, server)
     for {
-      code <- UseClub.runWith(wiring)(
+      code <- UseClub.run(wiring)(
         slugs = List(slug),
         clear = false,
         currentClubOption = None,
@@ -82,7 +88,7 @@ object TestUseClub extends ZIOSpecDefault {
       out    <- TestConsole.output
       err    <- TestConsole.outputErr
       config <- CliConfig.load(wiring.configFile).mapError(new RuntimeException(_))
-      cached <- CompletionCache.readClubsIn(wiring.clubsFile)
+      cached <- CompletionCache.readClubs(wiring.clubsFile)
     } yield SetResult(code = code, out = out, err = err, storedOption = config.currentClubOption, cachedOption = cached)
   }
 
@@ -91,37 +97,36 @@ object TestUseClub extends ZIOSpecDefault {
 
   override def spec: Spec[Any, Any] = suite("TestUseClub")(
     test("blank slug is rejected with exit 2 (no write, no probe)") {
-      UseClub.run(slugs = List("   "), clear = false, currentClubOption = None, server = Server)
-        .map(code => assertTrue(code == ExitCode(2)))
+      offline(slugs = List("   "), clear = false, currentClubOption = None)
+        .map(ran => assertTrue(ran.code == ExitCode(2), !ran.wrote, !ran.asked))
     },
     test("a slug together with --clear is rejected with exit 2 (conflicting intent)") {
-      UseClub.run(slugs = List("team-alpha"), clear = true, currentClubOption = Some("team-beta"), server = Server)
-        .map(code => assertTrue(code == ExitCode(2)))
+      offline(slugs = List("team-alpha"), clear = true, currentClubOption = Some("team-beta"))
+        .map(ran => assertTrue(ran.code == ExitCode(2)))
     },
     test("no slug prints the current club") {
       for {
-        code <- UseClub.run(slugs = Nil, clear = false, currentClubOption = Some("team-alpha"), server = Server)
-        out  <- TestConsole.output
-      } yield assertTrue(code == ExitCode.success, out == Vector("team-alpha\n"))
+        ran <- offline(slugs = Nil, clear = false, currentClubOption = Some("team-alpha"))
+        out <- TestConsole.output
+      } yield assertTrue(ran.code == ExitCode.success, out == Vector("team-alpha\n"))
     },
     test("no slug with no current club exits 2 and says how to set one") {
       for {
-        code <- UseClub.run(slugs = Nil, clear = false, currentClubOption = None, server = Server)
-        err  <- TestConsole.outputErr
-      } yield assertTrue(code == ExitCode(2), err.exists(_.contains("ccas use-club <slug>")))
+        ran <- offline(slugs = Nil, clear = false, currentClubOption = None)
+        err <- TestConsole.outputErr
+      } yield assertTrue(ran.code == ExitCode(2), err.exists(_.contains("ccas use-club <slug>")))
     },
     test("--clear with nothing set succeeds without writing") {
       for {
-        code <- UseClub.run(slugs = Nil, clear = true, currentClubOption = None, server = Server)
-        out  <- TestConsole.output
-      } yield assertTrue(code == ExitCode.success, out == Vector("no current club set\n"))
+        ran <- offline(slugs = Nil, clear = true, currentClubOption = None)
+        out <- TestConsole.output
+      } yield assertTrue(ran.code == ExitCode.success, out == Vector("no current club set\n"), !ran.wrote)
     },
     test("--clear drops the pointer and names the club it pointed at") {
       for {
-        dir <- tempDir
-        wiring = wiringIn(dir, Routes.empty)
-        _ <- ConfigWriter.setCurrentClub(wiring.configFile, Some(ClubId(7)), "team-beta")
-        code <- UseClub.runWith(wiring)(
+        wiring <- TempWiring(Routes.empty)
+        _      <- ConfigWriter.setCurrentClub(wiring.configFile, Some(ClubId(7)), "team-beta")
+        code <- UseClub.run(wiring)(
           slugs = Nil,
           clear = true,
           currentClubOption = Some("7:team-beta"),
@@ -138,23 +143,18 @@ object TestUseClub extends ZIOSpecDefault {
     // Arity rejection — without it these silently set the first slug and discard the rest.
     test("two slugs are rejected with exit 2, naming both") {
       for {
-        code <- UseClub.run(slugs = List("team-a", "team-b"), clear = false, currentClubOption = None, server = Server)
-        err  <- TestConsole.outputErr
-      } yield assertTrue(code == ExitCode(2), err.exists(e => e.contains("team-a") && e.contains("team-b")))
+        ran <- offline(slugs = List("team-a", "team-b"), clear = false, currentClubOption = None)
+        err <- TestConsole.outputErr
+      } yield assertTrue(ran.code == ExitCode(2), err.exists(e => e.contains("team-a") && e.contains("team-b")))
     },
     // The case that used to silently SET the club the user asked to clear: zio-cli swallows an option written after a
     // positional, so `--clear` arrives as a second slug. The message must point at the working ordering.
     test("a flag swallowed as a second positional is rejected with the correct ordering hinted") {
       for {
-        code <- UseClub.run(
-          slugs = List("team-alpha", "--clear"),
-          clear = false,
-          currentClubOption = None,
-          server = Server
-        )
+        ran <- offline(slugs = List("team-alpha", "--clear"), clear = false, currentClubOption = None)
         err <- TestConsole.outputErr
       } yield assertTrue(
-        code == ExitCode(2),
+        ran.code == ExitCode(2),
         err.exists(_.contains("ccas use-club --clear team-alpha"))
       )
     },
@@ -264,8 +264,8 @@ object TestUseClub extends ZIOSpecDefault {
       },
       test("with no answer at all, the cached club list is the only check") {
         for {
-          dir <- tempDir
-          _   <- CompletionCache.writeClubsIn(dir.resolve("clubs.txt"), List("team-beta"))
+          dir <- TempWiring.tempDir
+          _   <- CompletionCache.writeClubs(TempWiring.in(dir, Routes.empty).clubsFile, List("team-beta"))
           set <- setIn(dir, server("team-alpha", None, None), "team-alpha")
         } yield assertTrue(
           set.code == ExitCode.success,
@@ -299,7 +299,7 @@ object TestUseClub extends ZIOSpecDefault {
       val nameless = managed(9, "unused").copy(slugOption = None)
       assertTrue(UseClub.matchedId("team-alpha", Some(List(nameless, managed(7, "team-alpha")))).contains(ClubId(7)))
     },
-    // offlineHint's `None` branch is the only consumer of the Option `readClubsIn` returns — without it, collapsing that
+    // offlineHint's `None` branch is the only consumer of the Option `readClubs` returns — without it, collapsing that
     // back to a bare list would compile and break nothing.
     suite("offlineHint")(
       test("an unreadable cache is reported, not treated as empty") {

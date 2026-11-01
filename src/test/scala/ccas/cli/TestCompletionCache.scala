@@ -8,31 +8,16 @@ import java.time.Instant
 import zio.{Console, IO, Trace, UIO, ZIO}
 import zio.test.{assertTrue, Spec, TestClock, TestConsole, ZIOSpecDefault}
 
-/** Tests [[CompletionCache]] against temp files via its path-explicit `…In` forms — the public no-arg entry points
-  * resolve through [[XdgPaths]], whose environment-variable lookups a JVM can't rebind, so driving those would write to
-  * the developer's real `~/.cache/ccas`.
-  *
-  * The TTL boundary runs under `TestClock` (the reason `clubsStaleIn` reads `Clock.instant` rather than
-  * `Instant.now()`): mtime is pinned to a fixed epoch and the clock is moved to either side of the 6h window.
+/** Tests [[CompletionCache]] against temp files. The TTL boundary runs under `TestClock` (the reason `clubsStale`
+  * reads `Clock.instant` rather than `Instant.now()`): mtime is pinned to a fixed epoch and the clock is moved to either
+  * side of the 6h window.
   */
 object TestCompletionCache extends ZIOSpecDefault {
 
   private val Base: Instant  = Instant.parse("2026-01-01T00:00:00Z")
   private val SixHours: Long = 6L * 60 * 60 * 1000
 
-  // deleteOnExit is LIFO (same reasoning as TestCliConfig): register the dir first, then the leaves it will come to
-  // contain, so at JVM exit the leaves are removed before the dir's turn and it is empty by then. Registering the dir
-  // alone leaves it populated and the delete silently fails, littering /tmp with a tree per test.
-  private def tempDir: UIO[Path] =
-    ZIO.attemptBlocking {
-      val dir = Files.createTempDirectory("ccas-completion-cache")
-      dir.toFile.deleteOnExit()
-      dir.resolve("clubs.txt").toFile.deleteOnExit()
-      dir.resolve("recent-jobs.txt").toFile.deleteOnExit()
-      dir
-    }.orDie
-
-  private def clubsFile: UIO[Path] = tempDir.map(_.resolve("clubs.txt"))
+  private def clubsFile: UIO[Path] = TempWiring.tempDir.map(_.resolve("clubs.txt"))
 
   private def setMtime(file: Path, at: Instant): UIO[Unit] =
     ZIO.attemptBlocking(Files.setLastModifiedTime(file, FileTime.from(at))).unit.orDie
@@ -59,25 +44,25 @@ object TestCompletionCache extends ZIOSpecDefault {
       test("an absent file is stale") {
         for {
           f     <- clubsFile
-          stale <- CompletionCache.clubsStaleIn(f)
+          stale <- CompletionCache.clubsStale(f)
         } yield assertTrue(stale)
       },
       test("a file written just inside the TTL is fresh") {
         for {
           f     <- clubsFile
-          _     <- CompletionCache.writeClubsIn(f, List("team-alpha"))
+          _     <- CompletionCache.writeClubs(f, List("team-alpha"))
           _     <- setMtime(f, Base)
           _     <- TestClock.setTime(Base.plusMillis(SixHours - 1))
-          stale <- CompletionCache.clubsStaleIn(f)
+          stale <- CompletionCache.clubsStale(f)
         } yield assertTrue(!stale)
       },
       test("a file older than the TTL is stale") {
         for {
           f     <- clubsFile
-          _     <- CompletionCache.writeClubsIn(f, List("team-alpha"))
+          _     <- CompletionCache.writeClubs(f, List("team-alpha"))
           _     <- setMtime(f, Base)
           _     <- TestClock.setTime(Base.plusMillis(SixHours + 1))
-          stale <- CompletionCache.clubsStaleIn(f)
+          stale <- CompletionCache.clubsStale(f)
         } yield assertTrue(stale)
       }
     ),
@@ -85,32 +70,32 @@ object TestCompletionCache extends ZIOSpecDefault {
       test("round-trips slugs one per line and truncates a longer previous list") {
         for {
           f     <- clubsFile
-          _     <- CompletionCache.writeClubsIn(f, List("a", "b", "c"))
-          _     <- CompletionCache.writeClubsIn(f, List("z"))
+          _     <- CompletionCache.writeClubs(f, List("a", "b", "c"))
+          _     <- CompletionCache.writeClubs(f, List("z"))
           text  <- read(f)
-          slugs <- CompletionCache.readClubsIn(f)
+          slugs <- CompletionCache.readClubs(f)
         } yield assertTrue(text == "z\n", slugs.contains(List("z")))
       },
       // Two clubs can answer to one name since #254, and the same name offered twice helps nobody at the prompt.
       test("a slug two clubs answer to is offered once") {
         for {
           f     <- clubsFile
-          _     <- CompletionCache.writeClubsIn(f, List("team-alpha", "team-beta", "team-alpha"))
+          _     <- CompletionCache.writeClubs(f, List("team-alpha", "team-beta", "team-alpha"))
           text  <- read(f)
-          slugs <- CompletionCache.readClubsIn(f)
+          slugs <- CompletionCache.readClubs(f)
         } yield assertTrue(text == "team-alpha\nteam-beta\n", slugs.contains(List("team-alpha", "team-beta")))
       },
       test("an empty list writes an empty file, not a stray newline") {
         for {
           f     <- clubsFile
-          _     <- CompletionCache.writeClubsIn(f, Nil)
+          _     <- CompletionCache.writeClubs(f, Nil)
           text  <- read(f)
-          slugs <- CompletionCache.readClubsIn(f)
+          slugs <- CompletionCache.readClubs(f)
         } yield assertTrue(text.isEmpty, slugs.contains(Nil))
       },
       // Absent is a normal state, not a failure: Some(Nil) = "read it, nothing cached".
       test("readClubs yields Some(Nil) for a missing file") {
-        clubsFile.flatMap(CompletionCache.readClubsIn).map(slugs => assertTrue(slugs.contains(Nil)))
+        clubsFile.flatMap(CompletionCache.readClubs).map(slugs => assertTrue(slugs.contains(Nil)))
       },
       // The distinction the Option exists for: an unreadable cache must NOT masquerade as an empty one. A directory at
       // the cache path forces a genuine read error portably, without chmod games that a root test runner would defeat.
@@ -118,18 +103,18 @@ object TestCompletionCache extends ZIOSpecDefault {
         for {
           f     <- clubsFile
           _     <- ZIO.attemptBlocking(Files.createDirectories(f)).orDie
-          slugs <- CompletionCache.readClubsIn(f)
+          slugs <- CompletionCache.readClubs(f)
         } yield assertTrue(slugs.isEmpty)
       },
       test("writeClubs reports true on success") {
-        clubsFile.flatMap(CompletionCache.writeClubsIn(_, List("a"))).map(ok => assertTrue(ok))
+        clubsFile.flatMap(CompletionCache.writeClubs(_, List("a"))).map(ok => assertTrue(ok))
       },
       // The write signal exists so an unwritable cache can't kill completion silently; same directory trick.
       test("writeClubs reports false when the target cannot be written") {
         for {
           f  <- clubsFile
           _  <- ZIO.attemptBlocking(Files.createDirectories(f)).orDie
-          ok <- CompletionCache.writeClubsIn(f, List("a"))
+          ok <- CompletionCache.writeClubs(f, List("a"))
         } yield assertTrue(!ok)
       }
     ),
@@ -152,25 +137,25 @@ object TestCompletionCache extends ZIOSpecDefault {
       test("seeds an absent file and stamps its mtime to the epoch so it still reads as stale") {
         for {
           f     <- clubsFile
-          _     <- CompletionCache.seedClubsIn(f, List("team-alpha", "team-beta"))
-          slugs <- CompletionCache.readClubsIn(f)
+          _     <- CompletionCache.seedClubs(f, List("team-alpha", "team-beta"))
+          slugs <- CompletionCache.readClubs(f)
           mtime <- mtimeMillis(f)
           _     <- TestClock.setTime(Base)
-          stale <- CompletionCache.clubsStaleIn(f)
+          stale <- CompletionCache.clubsStale(f)
         } yield assertTrue(slugs.contains(List("team-alpha", "team-beta")), mtime == 0L, stale)
       },
       test("does not overwrite an existing cache") {
         for {
           f     <- clubsFile
-          _     <- CompletionCache.writeClubsIn(f, List("real"))
-          _     <- CompletionCache.seedClubsIn(f, List("seed"))
-          slugs <- CompletionCache.readClubsIn(f)
+          _     <- CompletionCache.writeClubs(f, List("real"))
+          _     <- CompletionCache.seedClubs(f, List("seed"))
+          slugs <- CompletionCache.readClubs(f)
         } yield assertTrue(slugs.contains(List("real")))
       },
       test("an empty seed list creates no file") {
         for {
           f  <- clubsFile
-          _  <- CompletionCache.seedClubsIn(f, Nil)
+          _  <- CompletionCache.seedClubs(f, Nil)
           ex <- exists(f)
         } yield assertTrue(!ex)
       }
@@ -179,13 +164,13 @@ object TestCompletionCache extends ZIOSpecDefault {
       test("deletes the cache so the next staleness check refreshes regardless of the TTL") {
         for {
           f           <- clubsFile
-          _           <- CompletionCache.writeClubsIn(f, List("team-alpha"))
+          _           <- CompletionCache.writeClubs(f, List("team-alpha"))
           _           <- setMtime(f, Base)
           _           <- TestClock.setTime(Base) // well inside the TTL: only the delete can make this stale
-          freshBefore <- CompletionCache.clubsStaleIn(f)
-          _           <- CompletionCache.invalidateIn(f)
+          freshBefore <- CompletionCache.clubsStale(f)
+          _           <- CompletionCache.invalidate(f)
           ex          <- exists(f)
-          staleAfter  <- CompletionCache.clubsStaleIn(f)
+          staleAfter  <- CompletionCache.clubsStale(f)
         } yield assertTrue(!freshBefore, !ex, staleAfter)
       },
       // Pins the load-bearing property: invalidate must DELETE the file (so `clubsStale` refreshes), not blank it —
@@ -193,7 +178,7 @@ object TestCompletionCache extends ZIOSpecDefault {
       test("is a no-op on an absent file, and leaves the cache directory intact") {
         for {
           f      <- clubsFile
-          _      <- CompletionCache.invalidateIn(f)
+          _      <- CompletionCache.invalidate(f)
           gone   <- exists(f)
           parent <- exists(f.getParent)
         } yield assertTrue(!gone, parent)
@@ -202,19 +187,19 @@ object TestCompletionCache extends ZIOSpecDefault {
     suite("appendJob")(
       test("prepends newest-first and drops an earlier duplicate") {
         for {
-          dir <- tempDir
+          dir <- TempWiring.tempDir
           f = dir.resolve("recent-jobs.txt")
-          _    <- CompletionCache.appendJobIn(f, "one")
-          _    <- CompletionCache.appendJobIn(f, "two")
-          _    <- CompletionCache.appendJobIn(f, "one")
+          _    <- CompletionCache.appendJob(f, "one")
+          _    <- CompletionCache.appendJob(f, "two")
+          _    <- CompletionCache.appendJob(f, "one")
           text <- read(f)
         } yield assertTrue(text == "one\ntwo\n")
       },
       test("caps the retained list at 50") {
         for {
-          dir <- tempDir
+          dir <- TempWiring.tempDir
           f = dir.resolve("recent-jobs.txt")
-          _    <- ZIO.foreachDiscard(1 to 60)(i => CompletionCache.appendJobIn(f, s"job-$i"))
+          _    <- ZIO.foreachDiscard(1 to 60)(i => CompletionCache.appendJob(f, s"job-$i"))
           text <- read(f)
           lines = text.linesIterator.toList
         } yield assertTrue(lines.size == 50, lines.head == "job-60", lines.last == "job-11")

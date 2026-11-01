@@ -28,7 +28,8 @@ object Main extends ZIOAppDefault {
       } else {
         // Resolve the CLI config first: its `api_url` becomes the `--server` default (built-in fallback if absent), and
         // `default_clubs` seeds completion. A malformed file fails fast with a message pointing at it (exit 2).
-        CliConfig.load(XdgPaths.configFile).foldZIO(configLoadFailed, runResolved(args.toList, _))
+        val wiring = CliWiring.live
+        CliConfig.load(wiring.configFile).foldZIO(configLoadFailed, runResolved(wiring, args.toList, _))
       }
     }
 
@@ -39,15 +40,15 @@ object Main extends ZIOAppDefault {
   private def configLoadFailed(message: String): UIO[Unit] =
     Console.printLineError(s"error: $message").orDie *> exit(ExitCode(2))
 
-  private def runResolved(argList: List[String], cfg: CliConfig): URIO[ZIOAppArgs, Unit] = {
+  private def runResolved(wiring: CliWiring, argList: List[String], cfg: CliConfig): URIO[ZIOAppArgs, Unit] = {
     val cliApp = CliApp.make(
       name = "ccas",
       version = BuildInfo.version,
       summary = HelpDoc.Span.text("Chess Club Admin System"),
       command = CliCommand.command(cfg.apiUrl.getOrElse(CliCommand.DefaultServer)),
       config = CliCommand.config
-    )(execute(cfg))
-    CompletionCache.seedClubs(cfg.defaultClubs) *>
+    )(execute(wiring, cfg))
+    CompletionCache.seedClubs(wiring.clubsFile, cfg.defaultClubs) *>
       cliApp.run(argList).foldZIO(
         {
           case _: CliError.BuiltIn => exit(ExitCode.success) // --help / completions, already rendered
@@ -60,7 +61,7 @@ object Main extends ZIOAppDefault {
       )
   }
 
-  private def execute(cfg: CliConfig)(cmd: CliCommand): URIO[ZIOAppArgs, ExitCode] = cmd match {
+  private def execute(wiring: CliWiring, cfg: CliConfig)(cmd: CliCommand): URIO[ZIOAppArgs, ExitCode] = cmd match {
     // `Serve(false, Some(_))` never reaches here: `CliCommand.serverUpOptions` rejects it at parse time.
     case CliCommand.Serve(false, _)          => serve
     case CliCommand.Serve(true, timeout)     => detachServe(cfg, timeout)
@@ -72,14 +73,19 @@ object Main extends ZIOAppDefault {
       // Same server the `--server`-less commands resolve to (config `api_url`, else the built-in default): use-club has
       // no `--server` flag of its own — its network use is a best-effort probe against the configured server, not a
       // server operation — so it inherits the same default the command tree was built with.
-      UseClub.run(slugs, clear, cfg.currentClubOption, cfg.apiUrl.getOrElse(CliCommand.DefaultServer))
+      UseClub.run(wiring)(
+        slugs = slugs,
+        clear = clear,
+        currentClubOption = cfg.currentClubOption,
+        server = cfg.apiUrl.getOrElse(CliCommand.DefaultServer)
+      )
     case CliCommand.ConfigGet(key)       => ConfigCommand.get(key)
     case CliCommand.ConfigSet(key, v)    => ConfigCommand.set(key, v)
     case CliCommand.ConfigUnset(key)     => ConfigCommand.unset(key)
     case CliCommand.ConfigList(secrets)  => ConfigCommand.list(secrets)
     case CliCommand.ConfigPath           => ConfigCommand.path
     case CliCommand.ConfigInit           => ConfigCommand.init
-    case other: CliCommand.ServerCommand => Dispatcher.dispatch(other, cfg.currentClubOption)
+    case other: CliCommand.ServerCommand => Dispatcher.dispatch(wiring)(other, cfg.currentClubOption)
   }
 
   // Detached serve: apply the ccas.env overlay first, so a file-only SERVER_PORT reaches the port this parent JVM
