@@ -10,22 +10,21 @@ import ccas.utils.errors.safeMessage
 import ccas.utils.sql.PostgresClient
 
 /** Handlers for `ccas config` — a purely local command (no server, no DB) that manages the server-bootstrap env file
-  * (`~/.config/ccas/ccas.env`, [[XdgPaths.serverEnvFile]]) which [[ccas.server.config.ServerEnvOverlay]] applies at boot.
-  * Modeled on [[UseClub]]: each entry point returns a `UIO[ExitCode]` (0 ok / 2 usage error / 1 I/O failure), prints
-  * results to stdout and errors to stderr. Secrets (DATABASE_URL, DB_PASSWORD) are redacted by `list`/`show` and in the
-  * `set` echo unless `--show-secrets`; `get` of a single explicitly-named key prints the raw value.
+  * which [[ccas.server.config.ServerEnvOverlay]] applies at boot: the one each is handed, a [[CliWiring]]'s
+  * `serverEnvFile` (`~/.config/ccas/ccas.env` outside tests). Modelled on [[UseClub]]: each entry point returns a
+  * `UIO[ExitCode]` (0 ok / 2 usage error / 1 I/O failure), prints results to stdout and errors to stderr. Secrets
+  * (DATABASE_URL, DB_PASSWORD) are redacted by `list`/`show` and in the `set` echo unless `--show-secrets`; `get` of a
+  * single explicitly-named key prints the raw value.
   */
 object ConfigCommand {
 
-  private def file: Path = XdgPaths.serverEnvFile
-
-  def get(key: String): UIO[ExitCode] = {
+  def get(file: Path)(key: String): UIO[ExitCode] = {
     val k = key.trim
     if (k.isEmpty) { blankKeyError }
     else { ServerEnvFile.get(file, k).foldZIO(ioError, printGet(k, _)) }
   }
 
-  def set(key: String, value: String): UIO[ExitCode] = {
+  def set(file: Path)(key: String, value: String): UIO[ExitCode] = {
     val k = key.trim
     if (k.isEmpty) { blankKeyError }
     // A blank value is useless (the boot overlay skips blanks) and would render as "set" in `list`, so reject it
@@ -45,18 +44,18 @@ object ConfigCommand {
     }
   }
 
-  def unset(key: String): UIO[ExitCode] = {
+  def unset(file: Path)(key: String): UIO[ExitCode] = {
     val k = key.trim
     if (k.isEmpty) { blankKeyError }
     else { ServerEnvFile.unset(file, k).foldZIO(ioError, printUnset(k, _)) }
   }
 
-  def list(showSecrets: Boolean): UIO[ExitCode] =
+  def list(file: Path)(showSecrets: Boolean): UIO[ExitCode] =
     ServerEnvFile.readMap(file).foldZIO(ioError, printList(_, showSecrets))
 
-  def path: UIO[ExitCode] = Console.printLine(file.toString).orDie.as(ExitCode.success)
+  def path(file: Path): UIO[ExitCode] = Console.printLine(file.toString).orDie.as(ExitCode.success)
 
-  def init: UIO[ExitCode] = initProgram.foldZIO(ioError, ZIO.succeed(_))
+  def init(file: Path): UIO[ExitCode] = initProgram(file).foldZIO(ioError, ZIO.succeed(_))
 
   // --- single-key handlers ---
 
@@ -110,18 +109,18 @@ object ConfigCommand {
 
   // --- init wizard ---
 
-  private def initProgram: Task[ExitCode] =
+  private def initProgram(file: Path): Task[ExitCode] =
     for {
       exists <- ZIO.attemptBlocking(Files.exists(file))
       proceed <-
-        if (exists) { confirmOverwrite }
+        if (exists) { confirmOverwrite(file) }
         else { ZIO.succeed(true) }
       code <-
-        if (proceed) { runWizard }
+        if (proceed) { runWizard(file) }
         else { Console.printLine("aborted").as(ExitCode.success) }
     } yield code
 
-  private def runWizard: Task[ExitCode] =
+  private def runWizard(file: Path): Task[ExitCode] =
     for {
       email      <- promptRequired("Contact email (CCAS_CONTACT_EMAIL): ")
       dbPairs    <- promptDatabase
@@ -130,11 +129,11 @@ object ConfigCommand {
       _       <- preview(pairs)
       confirm <- promptConfirm(s"Save to $file? [Y/n]: ")
       code <-
-        if (confirm) { save(pairs) }
+        if (confirm) { save(file, pairs) }
         else { Console.printLine("aborted").as(ExitCode.success) }
     } yield code
 
-  private def save(pairs: List[(String, String)]): Task[ExitCode] =
+  private def save(file: Path, pairs: List[(String, String)]): Task[ExitCode] =
     ServerEnvFile.setAll(file, pairs) *> Console.printLine(s"wrote $file").as(ExitCode.success)
 
   private def promptDatabase: Task[List[(String, String)]] =
@@ -195,7 +194,7 @@ object ConfigCommand {
   private def promptConfirm(label: String): Task[Boolean] =
     prompt(label).map(_.toLowerCase).map(s => s.isEmpty || s == "y" || s == "yes")
 
-  private def confirmOverwrite: Task[Boolean] =
+  private def confirmOverwrite(file: Path): Task[Boolean] =
     prompt(s"$file already exists — update it with these values? [y/N]: ").map(_.toLowerCase).map { s =>
       s == "y" || s == "yes"
     }
