@@ -8,7 +8,6 @@ import zio.{Chunk, Clock, ExitCode, IO, NonEmptyChunk, RIO, Scope, Task, ZIO, ZI
 
 import ccas.analysis.apps.{withClubSlugRenameRecovery, ClubQuery, ClubResolution, ClubSlugRenameResolver, NamedClub}
 import ccas.analysis.apps.membership.MembershipChange.*
-import ccas.analysis.apps.membership.MembershipChange.MemberChange.JoinedClub
 import ccas.analysis.tables.*
 import ccas.analysis.tables.subtypes.MembershipRunId
 import ccas.api.club.ApiClubMembers
@@ -150,7 +149,7 @@ object MembershipApp extends ZIOAppDefault {
   /** `expectedClubIdOption` guards against `clubSlug` now answering as another club: see
     * [[ClubSlugRenameResolver.fetchExpecting]]. Every reconcile is recorded as a run; another job reconciling as a
     * step of its own passes [[RunTrigger.Dependency]], so Membership's next report still shows what it saw. It prints
-    * no report, so it warns of any join the rows could not place (ADR 0026).
+    * no report, so it warns of what it could not record (ADRs 0026, 0027).
     */
   def reconcile(
     clubSlug: ClubSlug,
@@ -165,7 +164,7 @@ object MembershipApp extends ZIOAppDefault {
       trustUsernames = trustUsernames,
       trigger = trigger,
       jobRunIdOption = jobRunIdOption
-    ).tap(result => MembershipReport.warnOfUnsettledJoins(result.changes))
+    ).tap(MembershipReport.warnOfWhatWasNotRecorded)
 
   private def reconcileUnreported(
     clubSlug: ClubSlug,
@@ -200,7 +199,9 @@ object MembershipApp extends ZIOAppDefault {
       externallyAdded = storedMembers.keySet -- saved.prevMemberIds -- phaseBJoinIds
       externalChanges = Chunk.from(externallyAdded.flatMap { pid =>
         storedMembers.get(pid).map { state =>
-          MemberChangeSummary(pid, state.player.username, Chunk(JoinedClub(state.member.since)))
+          val since          = state.member.since
+          val previousOption = saved.storedRoster.rowsOf(pid).latestBefore(since)
+          MemberChangeSummary(pid, state.player.username, Chunk(MemberChange.join(since, previousOption)))
         }
       })
       externalMemberships = Chunk.from(externallyAdded.flatMap(pid => storedMembers.get(pid).map(_.member)))
@@ -209,6 +210,7 @@ object MembershipApp extends ZIOAppDefault {
       b = saved.phaseB,
       c = saved.phaseC,
       settlement = saved.settlement,
+      refused = saved.refused,
       currentMemberCount = currentMemberCount,
       previousMemberCount = saved.previousMemberCount,
       startedAt = startedAt,
@@ -225,6 +227,7 @@ object MembershipApp extends ZIOAppDefault {
     phaseB: MembershipClassify.PhaseBResult,
     phaseC: MembershipClassify.PhaseCResult,
     settlement: ClosedAccountClubs.Settlement,
+    refused: Chunk[RefusedMembershipVerdict],
     completedAt: Instant
   )
 
@@ -289,6 +292,7 @@ object MembershipApp extends ZIOAppDefault {
         storedRoster = storedRoster,
         exclude = rostered
       )
+      checked = MembershipVerdictCheck(storedRoster, phaseB, phaseC, settlement)
       completedAt <- Clock.instant
       saved <- saveUnlessSuperseded(
         clubId = clubId,
@@ -296,16 +300,26 @@ object MembershipApp extends ZIOAppDefault {
         runId = runId,
         observedAt = observedAt,
         completedAt = completedAt,
-        b = phaseB,
-        c = phaseC,
-        settlement = settlement
+        b = checked.b,
+        c = checked.c,
+        settlement = checked.settlement
       )
     } yield Option.when(saved)(
-      SavedRoster(storedRoster, prevMemberIds, previousMemberCount, phaseB, phaseC, settlement, completedAt)
+      SavedRoster(
+        storedRoster = storedRoster,
+        prevMemberIds = prevMemberIds,
+        previousMemberCount = previousMemberCount,
+        phaseB = checked.b,
+        phaseC = checked.c,
+        settlement = checked.settlement,
+        refused = checked.refused,
+        completedAt = completedAt
+      )
     )
 
-  // A run is complete exactly when what its roster implied is saved, so the stale check and the report's baseline
-  // agree with the rows and `club_roster_coverage`. Nothing is saved if another save came after `version`.
+  // A run is complete exactly when what its roster implied is saved, less any verdict refused (ADR 0027), so the stale
+  // check and the report's baseline agree with the rows and `club_roster_coverage`. Nothing is saved if another save
+  // came after `version`.
   private def saveUnlessSuperseded(
     clubId: ClubId,
     version: Option[Long],
@@ -408,6 +422,7 @@ object MembershipApp extends ZIOAppDefault {
     b: MembershipClassify.PhaseBResult,
     c: MembershipClassify.PhaseCResult,
     settlement: ClosedAccountClubs.Settlement,
+    refused: Chunk[RefusedMembershipVerdict],
     currentMemberCount: Int,
     previousMemberCount: Int,
     startedAt: Instant,
@@ -425,6 +440,8 @@ object MembershipApp extends ZIOAppDefault {
       closedMemberships = b.closedMemberships ++ c.closedMemberships,
       hiddenMemberships = c.hiddenMemberships,
       reopenedMemberships = b.reopenedMemberships,
+      unsettledJoins = b.unsettledJoins,
+      refused = refused,
       settlement = settlement,
       currentMemberCount = currentMemberCount,
       previousMemberCount = previousMemberCount,
@@ -442,16 +459,13 @@ object MembershipApp extends ZIOAppDefault {
   ): RIO[PostgresClient, Unit] = {
     val allUpdated  = b.updatedPlayers ++ c.updatedPlayers
     val allArchived = b.archivedSnapshots ++ c.archivedSnapshots
-    val narrowed    = b.closedMemberships ++ c.closedMemberships ++ c.hiddenMemberships
-    val widened     = b.reopenedMemberships ++ settlement.hidden.map(_.row)
-    val opened      = b.newMemberships ++ settlement.opened.map(_.row)
+    val rows        = MemberRowChanges.of(b, c, settlement)
     for {
       _ <- Player.writeBatch(inserted = b.newPlayers, updated = allUpdated)
       _ <- ZIO.whenDiscard(allArchived.nonEmpty)(PlayerSnapshot.insertBatch(allArchived))
-      // Closes first: a rejoin opens a row the old one would overlap while still open.
-      _ <- ZIO.whenDiscard(narrowed.nonEmpty)(ClubMember.updateBatch(narrowed))
-      _ <- ZIO.whenDiscard(widened.nonEmpty)(ClubMember.updateBatch(widened))
-      _ <- ZIO.whenDiscard(opened.nonEmpty)(ClubMember.insertBatch(opened))
+      _ <- ZIO.whenDiscard(rows.narrowed.nonEmpty)(ClubMember.updateBatch(rows.narrowed))
+      _ <- ZIO.whenDiscard(rows.widened.nonEmpty)(ClubMember.updateBatch(rows.widened))
+      _ <- ZIO.whenDiscard(rows.opened.nonEmpty)(ClubMember.insertBatch(rows.opened))
       _ <- ClubRosterCoverage.observe(clubId, observedAt)
     } yield ()
   }

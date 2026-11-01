@@ -1,6 +1,7 @@
 package ccas.analysis.apps.membership
 
 import java.time.{Duration, Instant}
+import java.time.temporal.ChronoUnit
 
 import com.augustnagro.magnum.sql
 import zio.{Chunk, LogLevel, Promise, Ref, UIO, ZIO, ZLayer}
@@ -13,7 +14,6 @@ import ccas.analysis.apps.{NamedClub, PlayerUpdater}
 import ccas.analysis.apps.ClubSlugRenameResolver.ClubMismatchException
 import ccas.analysis.apps.membership.MembershipChange.*
 import ccas.analysis.apps.membership.MembershipChange.MemberChange.*
-import ccas.analysis.apps.membership.MembershipClassify.{PhaseBResult, PhaseCResult}
 import ccas.analysis.apps.membership.MembershipReport.InferredMember
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.{
   apiClubJson,
@@ -27,6 +27,7 @@ import ccas.analysis.tables.{
   ClubMember,
   ClubRosterCoverage,
   MembershipRun,
+  MembershipStanding,
   Player,
   PlayerClubList,
   PlayerMatchRef,
@@ -52,6 +53,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
     suiteClassifyApiMembers,
     suiteClassifyDisappeared,
     suiteReconcile,
+    suiteRowRules,
     suiteReport
   ).provideShared(
     FreshSchemaLayer("test_membership_app_integration", onInit = Tables.ensureTables),
@@ -176,24 +178,14 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
   )
 
   private def testMergeResultsIncludesExternalChanges = test("mergeResults includes external changes and memberships") {
-    val phaseB = PhaseBResult(
-      resolvedIds = Set(pid0),
-      changes = Chunk.empty,
-      newPlayers = Chunk.empty,
-      updatedPlayers = Chunk.empty,
-      archivedSnapshots = Chunk.empty,
-      newMemberships = Chunk.empty,
-      closedMemberships = Chunk.empty,
-      reopenedMemberships = Chunk.empty
-    )
-    val phaseC    = PhaseCResult(Chunk.empty, Chunk.empty, Chunk.empty, Chunk.empty, Chunk.empty)
     val extChange = MemberChangeSummary(pid1, Username("bob"), Chunk(JoinedClub(Times.t1)))
     val extMember = ClubMember.joined(clubId = clubId, playerId = pid1, since = Times.t1)
     val result = MembershipApp.mergeResults(
       clubId = clubId,
-      b = phaseB,
-      c = phaseC,
+      b = nothingListed,
+      c = nothingDisappeared,
       settlement = noSettlement,
+      refused = Chunk.empty,
       currentMemberCount = 10,
       previousMemberCount = 8,
       startedAt = Times.t0,
@@ -347,7 +339,8 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
     testUsernameChangeAndStatusChange,
     testTrustModeKnownPlayerJoins,
     testTrustUsernamesFalseBypassesLookup,
-    testAnyListedJoinLeavesRowsValidAndApart
+    testAnyListedJoinLeavesRowsValidAndApart,
+    testAnyPlacedJoinPassesTheCheck
   )
 
   /** A member a roster lists since some join, and whether Chess.com is documented to list it (docs/chess-com-api.md, "A
@@ -367,48 +360,66 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
     lastObservedAt <- Gen.option(MembershipGen.instant)
   } yield (rows, join, join == rows.last.since || !join.isBefore(rejoinFrom), lastObservedAt)
 
+  private val listedAlice = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0)
+
+  /** What a reconcile holds for [[listedAlice]] with `rows`, the latest of which the roster should list if it is open. */
+  private def storedRosterOfAlice(rows: List[ClubMember], lastObservedAt: Option[Instant]) = {
+    val listedOption = rows.lastOption.filter(_.until.isEmpty)
+    StoredRoster(
+      membersByPlayerId = listedOption.map(listed => pid0 -> MemberState(listedAlice, listed)).toMap,
+      membersByUsername = listedOption.map(listed => listedAlice.username -> MemberState(listedAlice, listed)).toMap,
+      unlistedByPlayerId = Map(pid0 -> rows.filterNot(listedOption.contains)),
+      lastObservedAt = lastObservedAt,
+      slugs = Set.empty,
+      knownPlayersByUsername = Map(listedAlice.username -> listedAlice)
+    )
+  }
+
   private def testAnyListedJoinLeavesRowsValidAndApart =
     test(
       "whatever join a roster lists for a returning member, their rows stay valid and apart: one open at it if they " +
         "can place it, else untouched and reported"
     ) {
-      val alice                = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0)
       def key(row: ClubMember) = (row.clubId, row.playerId, row.since)
       fakeChessComClient(Map.empty).flatMap { client =>
         check(listedAgain) { (rows, join, documented, lastObservedAt) =>
-          val listedOption = rows.lastOption.filter(_.until.isEmpty)
-          val storedRoster = StoredRoster(
-            membersByPlayerId = listedOption.map(listed => pid0 -> MemberState(alice, listed)).toMap,
-            membersByUsername = listedOption.map(listed => alice.username -> MemberState(alice, listed)).toMap,
-            unlistedByPlayerId = Map(pid0 -> rows.filterNot(listedOption.contains)),
-            lastObservedAt = lastObservedAt,
-            slugs = Set.empty,
-            knownPlayersByUsername = Map(alice.username -> alice)
-          )
-          val apiMap = Map(alice.username -> join.getEpochSecond)
+          val storedRoster = storedRosterOfAlice(rows, lastObservedAt)
+          val apiMap       = Map(listedAlice.username -> join.getEpochSecond)
           MembershipClassify.classifyApiMembers(client, clubId, apiMap, storedRoster, Times.t2).map { result =>
-            val changed     = result.closedMemberships ++ result.reopenedMemberships
-            val after       = rows.map(row => changed.find(key(_) == key(row)).getOrElse(row)) ++ result.newMemberships
-            val overlapping = after.combinations(2).filter(pair => MembershipGen.overlap(pair.head, pair.last)).toList
-            val reported    = result.changes.flatMap(_.changes).collect { case unsettled: UnsettledJoin => unsettled }
+            val changed  = result.closedMemberships ++ result.reopenedMemberships
+            val after    = rows.map(row => changed.find(key(_) == key(row)).getOrElse(row)) ++ result.newMemberships
+            val reported = result.unsettledJoins
             val opened = reported.isEmpty &&
               after.filter(_.until.isEmpty) == List(ClubMember.joined(clubId = clubId, playerId = pid0, since = join))
-            val untouched = after == rows && reported == Chunk(UnsettledJoin(join, rows.last))
+            val untouched = after == rows && reported == Chunk(
+              UnsettledJoin(playerId = pid0, username = listedAlice.username, joinedAt = join, latest = rows.last)
+            )
             val closedRunning = result.closedMemberships.forall { closed =>
               rows.exists(row => key(row) == key(closed) && row.until.forall(_.isAfter(join)))
             }
             assertTrue(
               changed.forall(row => rows.exists(key(_) == key(row))),
               closedRunning,
-              after.forall(MembershipGen.valid),
-              after.map(key).distinct.size == after.size,
-              overlapping.isEmpty,
+              MemberRows(after).conflict.isEmpty,
               result.resolvedIds == Set(pid0),
               opened || untouched,
               !documented || opened,
               // Which joins inside an ended row can be placed is left to the examples, so as not to restate the rule.
               !join.isBefore(rows.last.since) || untouched
             )
+          }
+        }
+      }
+    }
+
+  private def testAnyPlacedJoinPassesTheCheck =
+    test("whatever the valid history and join, the changes a join's placement leads to pass the check") {
+      fakeChessComClient(Map.empty).flatMap { client =>
+        check(listedAgain) { (rows, join, _, lastObservedAt) =>
+          val storedRoster = storedRosterOfAlice(rows, lastObservedAt)
+          val apiMap       = Map(listedAlice.username -> join.getEpochSecond)
+          MembershipClassify.classifyApiMembers(client, clubId, apiMap, storedRoster, Times.t2).map { result =>
+            assertTrue(MembershipVerdictCheck(storedRoster, result, nothingDisappeared, noSettlement).refused.isEmpty)
           }
         }
       }
@@ -1055,7 +1066,16 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
     testAnotherJobsReconcileWarnsOfAnUnsettledJoin,
     testAMembershipReconcileLogsAnUnsettledJoinOnce,
     testAClosedAccountListedAtAnOlderRowsJoin,
-    testANameGivenUpIsReadForItsNewHolder
+    testANameGivenUpIsReadForItsNewHolder,
+    testOnlyAnUnsettledJoinNamesNoChange,
+    testARefusedPlayerKeepsTheirRows,
+    testARefusedPlayerStillSavesARenameAndStatus,
+    testTwoEntriesReachingOnePlayerAreReadOnce,
+    testARosterBeforeAJoinIsRefusedThenTheNextEndsIt,
+    testAnotherJobsReconcileWarnsOfARefusedPlayer,
+    testAMembershipReconcileListsARefusedPlayerOnce,
+    testARejoinReadsTheSameInBothReports,
+    testARejoinADependencySawIsReportedAsARejoin
   )
 
   /** Chess.com for the test club: `roster` as its members with when each joined, and `profiles` as the players it
@@ -1378,6 +1398,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
         rows == List(ClubMember.joined(clubId = clubId, playerId = pid1, since = Times.t0)),
         result.reopenedMemberships.size == 1,
         result.newMemberships.isEmpty,
+        result.changes.flatMap(_.changes).contains(Reopened(Times.t0, MembershipStanding.Hidden(Times.t1))),
         player.map(_.status).contains(Active)
       )
     }
@@ -1640,7 +1661,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
   private val rita = Player(pid5, Times.t0, Username("rita"), Active, None, Times.t0)
 
   private def unsettledJoins(result: ReconciliationResult) =
-    result.changes.flatMap(_.changes).collect { case join: UnsettledJoin => join }
+    result.unsettledJoins.map(join => (join.joinedAt, join.latest))
 
   /** The new row would share the older row's key, which failed every reconcile of the club (#401). */
   private def testAnOlderRowsJoinLeavesTheRowsAlone =
@@ -1657,7 +1678,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
         rows   <- ClubMember.selectClub(clubId)
       } yield assertTrue(
         rows.toSet == Set(ended, open, ClubMember.joined(clubId = clubId, playerId = pid1, since = Times.t3)),
-        unsettledJoins(result) == Chunk(UnsettledJoin(Times.t0, open))
+        unsettledJoins(result) == Chunk((Times.t0, open))
       )
     }
 
@@ -1674,7 +1695,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
         rows   <- ClubMember.selectClub(clubId)
       } yield assertTrue(
         rows.toSet == Set(ended, hidden),
-        unsettledJoins(result) == Chunk(UnsettledJoin(Times.t0, hidden))
+        unsettledJoins(result) == Chunk((Times.t0, hidden))
       )
     }
 
@@ -1689,7 +1710,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
         rows   <- ClubMember.selectClub(clubId)
       } yield assertTrue(
         rows.toSet == Set(ended, open),
-        unsettledJoins(result) == Chunk(UnsettledJoin(Times.t2, open))
+        unsettledJoins(result) == Chunk((Times.t2, open))
       )
     }
 
@@ -1724,8 +1745,8 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
         before <- listedAt(Times.t1)
         at     <- listedAt(Times.t2)
       } yield assertTrue(
-        before == (List(ended), Chunk(UnsettledJoin(Times.t1, ended))),
-        at == (List(ended), Chunk(UnsettledJoin(Times.t2, ended)))
+        before == (List(ended), Chunk((Times.t1, ended))),
+        at == (List(ended), Chunk((Times.t2, ended)))
       )
     }
 
@@ -1742,8 +1763,8 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
         third  <- reconcileWith(latest, RunTrigger.Cli)
         rows   <- ClubMember.selectClub(clubId)
       } yield assertTrue(
-        unsettledJoins(first) == Chunk(UnsettledJoin(Times.t0, open)),
-        unsettledJoins(second) == Chunk(UnsettledJoin(Times.t0, open)),
+        unsettledJoins(first) == Chunk((Times.t0, open)),
+        unsettledJoins(second) == Chunk((Times.t0, open)),
         unsettledJoins(third).isEmpty,
         rows.toSet == Set(
           ended,
@@ -1771,7 +1792,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
       } yield assertTrue(
         rows.toSet == Set(ended, open),
         player.map(_.username).contains(Username("rita-new")),
-        unsettledJoins(result) == Chunk(UnsettledJoin(Times.t0, open)),
+        unsettledJoins(result) == Chunk((Times.t0, open)),
         result.changes.flatMap(_.changes).exists(_.isInstanceOf[UsernameChange])
       )
     }
@@ -1851,7 +1872,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
       } yield assertTrue(
         rows.toSet == Set(ended, hidden),
         player.map(_.status).contains(Active),
-        unsettledJoins(result) == Chunk(UnsettledJoin(Times.t0, hidden)),
+        unsettledJoins(result) == Chunk((Times.t0, hidden)),
         result.changes.flatMap(_.changes).exists(_.isInstanceOf[StatusChange])
       )
     }
@@ -1879,6 +1900,220 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
         second.toSet == rejoined + ClubMember.joined(clubId = clubId, playerId = pid4, since = Times.t2)
       )
     }
+
+  private def testOnlyAnUnsettledJoinNamesNoChange =
+    test("a member with only an unsettled join has no entry among the changes") {
+      val open = ClubMember.joined(clubId = clubId, playerId = pid5, since = Times.t2)
+      for {
+        _      <- deleteRuns
+        _      <- seedDb(players = List(rita), members = List(open))
+        _      <- completedRun(startedAt = Times.t3, completedAt = Times.t3.plusSeconds(60))
+        result <- reconcileWith(clubRoutes(roster = List("rita" -> Times.t1), profiles = Map.empty), RunTrigger.Cli)
+      } yield assertTrue(result.changes.isEmpty, unsettledJoins(result) == Chunk((Times.t1, open)))
+    }
+
+  // --- Refused verdicts (ADR 0027) ---
+
+  /** An open row with an empty one after it, which older code could leave (#404). The empty row reads as the latest, so
+    * a later join opens a row the open one overlaps.
+    */
+  private val ritaOpen   = ClubMember.joined(clubId = clubId, playerId = pid5, since = Times.t0)
+  private val ritaEmpty  = endedRow(playerId = pid5, since = Times.t1, until = Times.t1)
+  private val ritaJoined = ClubMember.joined(clubId = clubId, playerId = pid5, since = Times.t2)
+
+  /** Seeds those rows behind a report run that had them, so that only this run can name the player among the changes. */
+  private def seedRitasOverlap(player: Player) =
+    deleteRuns *>
+      seedDb(players = List(player), members = List(ritaOpen, ritaEmpty)) *>
+      completedRun(startedAt = Times.t1, completedAt = Times.t1.plusSeconds(60))
+
+  private def testARefusedPlayerKeepsTheirRows =
+    test("a player the check refuses keeps their rows and is reported, and the rest of the club saves") {
+      val routes = clubRoutes(
+        roster = List("rita" -> Times.t2, "bob" -> Times.t3),
+        profiles = Map("bob" -> apiPlayerJson(playerId = PlayerId.unwrap(pid1), username = "bob"))
+      )
+      val refused = RefusedMembershipVerdict(
+        playerId = pid5,
+        username = Username("rita"),
+        conflict = MemberRowConflict.Overlap(ritaOpen, ritaJoined)
+      )
+      for {
+        _      <- seedRitasOverlap(rita)
+        result <- reconcileWith(routes, RunTrigger.Cli)
+        rows   <- ClubMember.selectClub(clubId)
+      } yield assertTrue(
+        rows.toSet == Set(ritaOpen, ritaEmpty, ClubMember.joined(clubId = clubId, playerId = pid1, since = Times.t3)),
+        result.refused == Chunk(refused),
+        result.changes.map(_.playerId) == Chunk(pid1),
+        result.newMemberships.map(_.playerId) == Chunk(pid1)
+      )
+    }
+
+  private def testARefusedPlayerStillSavesARenameAndStatus =
+    test("a refused player's rename and status change still save") {
+      val routes = clubRoutes(roster = List("rita-new" -> Times.t2), profiles = ritaRenamed)
+      for {
+        _      <- seedRitasOverlap(rita.copy(status = Closed))
+        result <- reconcileWith(routes, RunTrigger.Cli)
+        rows   <- ClubMember.selectClub(clubId)
+        player <- Player.selectId(pid5)
+        changes = result.changes.flatMap(_.changes)
+      } yield assertTrue(
+        rows.toSet == Set(ritaOpen, ritaEmpty),
+        player.map(_.username).contains(Username("rita-new")),
+        player.map(_.status).contains(Active),
+        result.refused.map(_.playerId) == Chunk(pid5),
+        changes.exists(_.isInstanceOf[UsernameChange]),
+        changes.exists(_.isInstanceOf[StatusChange]),
+        !changes.exists(_.changesRows)
+      )
+    }
+
+  /** Reading both would write the player twice, and the second write leaves them holding no current name. The next run
+    * holds the name read, so its entry has to go on outranking the other, or the name would flip with every run.
+    */
+  private def testTwoEntriesReachingOnePlayerAreReadOnce =
+    test(
+      "of two roster entries that reach one player, only the one under the name their profile gives is read, on this " +
+        "run and the next"
+    ) {
+      val profile = apiPlayerJson(playerId = PlayerId.unwrap(pid5), username = "rita-b")
+      val routes = clubRoutes(
+        roster = List("rita-a" -> Times.t1, "rita-b" -> Times.t2),
+        profiles = Map("rita-a" -> profile, "rita-b" -> profile)
+      )
+      for {
+        _      <- deleteRuns
+        _      <- seedDb()
+        first  <- reconcileWith(routes, RunTrigger.Cli)
+        second <- reconcileWith(routes, RunTrigger.Cli)
+        rows   <- ClubMember.selectClub(clubId)
+        player <- Player.selectId(pid5)
+        name   <- PlayerName.selectCurrentName(pid5)
+      } yield assertTrue(
+        rows == List(ClubMember.joined(clubId = clubId, playerId = pid5, since = Times.t2)),
+        first.refused.isEmpty,
+        second.changes.isEmpty,
+        second.unsettledJoins.isEmpty,
+        player.map(_.username).contains(Username("rita-b")),
+        name.contains(Username("rita-b"))
+      )
+    }
+
+  /** A reconcile reads its own clock, so the next roster is the phase it runs, given a time after the join. */
+  private def testARosterBeforeAJoinIsRefusedThenTheNextEndsIt =
+    test(
+      "a member a roster seen before their join no longer lists keeps their row, is reported, and ends at the next " +
+        "roster"
+    ) {
+      val join     = Instant.now().truncatedTo(ChronoUnit.SECONDS).plus(Duration.ofDays(1))
+      val row      = ClubMember.joined(clubId = clubId, playerId = pid5, since = join)
+      val profile  = apiPlayerJson(playerId = PlayerId.unwrap(pid5), username = "rita")
+      val nextSeen = join.plusSeconds(60)
+      for {
+        _      <- seedDb(players = List(rita), members = List(row))
+        result <- reconcileWith(clubRoutes(roster = Nil, profiles = Map("rita" -> profile)), RunTrigger.Cli)
+        rows   <- ClubMember.selectClub(clubId)
+        stored <- MembershipApp.loadStoredRoster(clubId)
+        client <- fakeChessComClient(Map("rita" -> profile))
+        next   <- MembershipClassify.classifyDisappeared(client, stored, Set.empty, Map.empty, nextSeen)
+        checked = MembershipVerdictCheck(stored, nothingListed, next, noSettlement)
+      } yield assertTrue(
+        rows == List(row),
+        result.refused.map(_.playerId) == Chunk(pid5),
+        !result.changes.flatMap(_.changes).exists(_.isInstanceOf[LeftClub]),
+        checked.refused.isEmpty,
+        checked.c.closedMemberships.flatMap(_.until) == Chunk(nextSeen)
+      )
+    }
+
+  private def testAnotherJobsReconcileWarnsOfARefusedPlayer =
+    test("a reconcile another job runs warns of a refused player, naming them and why") {
+      for {
+        _ <- seedRitasOverlap(rita)
+        _ <- reconcileWith(clubRoutes(roster = List("rita" -> Times.t2), profiles = Map.empty), RunTrigger.Dependency)
+        logged <- ZTestLogger.logOutput
+      } yield assertTrue(
+        logged.filter(_.logLevel == LogLevel.Warning).map(_.message()) == List(
+          s"[MEMBERSHIP NOT RECORDED] rita — memberships from ${Times.t0} and from ${Times.t2} would overlap — " +
+            "left as recorded until the roster changes or someone corrects the rows by hand; worth an issue if it persists"
+        )
+      )
+    }.provideSomeLayer[PostgresClient & BodyStore & ProgressDisplay](ZTestLogger.default)
+
+  private def testAMembershipReconcileListsARefusedPlayerOnce =
+    test("a Membership reconcile counts a refused player and lists them once, under their section") {
+      val routes = clubRoutes(roster = List("rita" -> Times.t2), profiles = Map.empty)
+      for {
+        _      <- seedRitasOverlap(rita)
+        client <- TestChessComClientSupport.fakeClient(routes)
+        _ <- MembershipApp
+          .reconcileAndReport(
+            clubSlug = ClubSlug("test-club"),
+            expectedClubIdOption = None,
+            trustUsernames = true,
+            trigger = RunTrigger.Cli,
+            jobRunIdOption = None
+          )
+          .provideSomeLayer[ProgressDisplay & PostgresClient](ZLayer.succeed(client))
+        logged <- ZTestLogger.logOutput.map(_.map(_.message()))
+      } yield assertTrue(
+        logged.contains("Not recorded:         1"),
+        logged.contains("[MEMBERSHIP NOT RECORDED]"),
+        logged.count(_.contains("rita — memberships from")) == 1
+      )
+    }.provideSomeLayer[PostgresClient & BodyStore & ProgressDisplay](ZTestLogger.default)
+
+  // --- A former member's join, in each report ---
+
+  private val ritasRejoin = Rejoined(
+    ts = Times.t2,
+    previous = PreviousMembership.Recorded(lastSeen = Times.t0, until = Times.t1)
+  )
+
+  private def testARejoinReadsTheSameInBothReports =
+    test("a former member who rejoins is [REJOINED] in a reconcile's report as in the date-range report") {
+      val ended  = endedRow(playerId = pid5, since = Times.t0, until = Times.t1)
+      val routes = clubRoutes(roster = List("rita" -> Times.t2), profiles = Map.empty)
+      for {
+        _      <- seedDb(players = List(rita), members = List(ended))
+        result <- reconcileWith(routes, RunTrigger.Cli)
+        report <- MembershipReport.report(NamedClub(clubId, club.slug), Times.t2, Times.t3)
+      } yield assertTrue(
+        result.changes.flatMap(_.changes) == Chunk(ritasRejoin),
+        report.summaries.flatMap(_.changes) == List(ritasRejoin)
+      )
+    }
+
+  private def testARejoinADependencySawIsReportedAsARejoin =
+    test("a former member's rejoin another job's reconcile saw is reported as a rejoin by the next membership run") {
+      val ended  = endedRow(playerId = pid5, since = Times.t0, until = Times.t1)
+      val routes = clubRoutes(roster = List("rita" -> Times.t2), profiles = Map.empty)
+      for {
+        _      <- deleteRuns
+        _      <- seedDb(players = List(rita), members = List(ended))
+        _      <- completedRun(startedAt = Times.t1, completedAt = Times.t1.plusSeconds(60))
+        _      <- reconcileWith(routes, RunTrigger.Dependency)
+        result <- reconcileWith(routes, RunTrigger.Cli)
+      } yield assertTrue(result.changes.flatMap(_.changes) == Chunk(ritasRejoin))
+    }
+
+  // ==========================================================================
+  // Suite: the rules on a player's rows (DB)
+  // ==========================================================================
+
+  private def suiteRowRules = suite("the rules on a player's rows (DB)")(
+    test("the row rules refuse exactly what the database refuses, whatever rows are drawn") {
+      seedDb(players = List(listedAlice)) *>
+        check(MembershipGen.anyRows(clubId = clubId, playerId = pid0)) { rows =>
+          for {
+            _     <- connectZIO(sql"DELETE FROM club_member WHERE club_id = $clubId".update.run())
+            saved <- ClubMember.insertBatch(rows).exit
+          } yield assertTrue(saved.isSuccess == MemberRows(rows).conflict.isEmpty)
+        }
+    }
+  )
 
   // ==========================================================================
   // Suite: report (DB)

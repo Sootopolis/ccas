@@ -13,6 +13,19 @@ import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.{connectZIO, transactZIO}
 
+/** Where a membership stands: on the roster, off it behind a closed account (ADR 0022), or over (ADR 0021). */
+sealed trait MembershipStanding
+
+object MembershipStanding {
+  case object Open extends MembershipStanding
+
+  /** A membership no roster is listing, which the same join seen again reopens. */
+  sealed trait OffRoster extends MembershipStanding
+
+  final case class Hidden(lastSeen: Instant)                extends OffRoster
+  final case class Ended(lastSeen: Instant, until: Instant) extends OffRoster
+}
+
 /** One period a player was a member of a club. The player was known to be in at `lastSeen` and known to be out at
   * `until` (ADR 0021). Both are empty while the club's roster lists them, and only `until` while a closed account hides
   * them from it (ADR 0022).
@@ -32,6 +45,28 @@ final case class ClubMember(
     * once it has ended (ADR 0022).
     */
   def hiddenAt: Option[Instant] = lastSeen.filter(_ => until.isEmpty)
+
+  /** `club_member_window` ties `until` to `lastSeen`, so a row lacking its sighting reads as last seen at its start. */
+  def standing: MembershipStanding =
+    (lastSeen, until) match {
+      case (_, Some(until))       => MembershipStanding.Ended(lastSeen.getOrElse(since), until)
+      case (Some(lastSeen), None) => MembershipStanding.Hidden(lastSeen)
+      case (None, None)           => MembershipStanding.Open
+    }
+
+  /** Whether `club_member_window` passes this row, as SQL reads the `CHECK`, where a comparison with null passes. */
+  def windowHolds: Boolean =
+    (until.isEmpty || lastSeen.nonEmpty) &&
+      lastSeen.forall(seen => !seen.isBefore(since) && until.forall(!seen.isAfter(_)))
+
+  /** Whether `club_member_no_overlap` refuses this row and `other` together. Each is `[since, until)`: unbounded without
+    * an `until`, and empty, overlapping nothing, when its ends meet.
+    */
+  def overlaps(other: ClubMember): Boolean = {
+    def nonEmpty(row: ClubMember) = row.until.forall(row.since.isBefore)
+    clubId == other.clubId && playerId == other.playerId && nonEmpty(this) && nonEmpty(other) &&
+    until.forall(other.since.isBefore) && other.until.forall(since.isBefore)
+  }
 }
 
 object ClubMember {

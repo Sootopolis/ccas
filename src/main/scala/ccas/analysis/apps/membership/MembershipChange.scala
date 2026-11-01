@@ -4,7 +4,7 @@ import java.time.Instant
 
 import zio.Chunk
 
-import ccas.analysis.tables.{ClubMember, Player, PlayerSnapshot}
+import ccas.analysis.tables.{ClubMember, MembershipStanding, Player, PlayerSnapshot}
 import ccas.api.misc.enums.PlayerStatusCategory
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
 
@@ -25,12 +25,25 @@ object MembershipChange {
     case NewMember(ts: Instant)                                      extends MemberChange(ts)
     case JoinedClub(ts: Instant)                                     extends MemberChange(ts)
     case Rejoined(ts: Instant, previous: PreviousMembership)         extends MemberChange(ts)
+    case Reopened(ts: Instant, was: MembershipStanding.OffRoster)    extends MemberChange(ts)
     case LeftClub(ts: Instant)                                       extends MemberChange(ts)
     case AccountClosed(ts: Instant, newStatus: PlayerStatusCategory) extends MemberChange(ts)
     case Unresolvable(ts: Instant, oldUsername: Username)            extends MemberChange(ts)
     case UsernameChange(ts: Instant, oldUsername: Username)          extends MemberChange(ts)
     case StatusChange(ts: Instant, oldStatus: PlayerStatusCategory)  extends MemberChange(ts)
-    case UnsettledJoin(ts: Instant, latest: ClubMember)              extends MemberChange(ts)
+
+    /** Whether this only happened if the player's rows changed, so a refused verdict takes it back (ADR 0027). */
+    def changesRows: Boolean = this match {
+      case _: NewMember | _: JoinedClub | _: Rejoined | _: Reopened | _: LeftClub | _: Unresolvable => true
+      case _: AccountClosed | _: UsernameChange | _: StatusChange                                   => false
+    }
+  }
+
+  object MemberChange {
+
+    /** A join at `ts` following the row `previousOption`: a rejoin if that row has ended. */
+    def join(ts: Instant, previousOption: Option[ClubMember]): MemberChange =
+      previousOption.flatMap(PreviousMembership.of).fold[MemberChange](JoinedClub(ts))(Rejoined(ts, _))
   }
 
   /** The membership a rejoin follows. */
@@ -45,10 +58,19 @@ object MembershipChange {
 
   object PreviousMembership {
 
-    /** The membership the row `ended` recorded, taking its start for an end the row lacks. */
-    def of(ended: ClubMember): PreviousMembership =
-      Recorded(lastSeen = ended.lastSeen.getOrElse(ended.since), until = ended.until.getOrElse(ended.since))
+    /** The membership `row` recorded, once it has ended. */
+    def of(row: ClubMember): Option[PreviousMembership] =
+      row.standing match {
+        case MembershipStanding.Ended(lastSeen, until)              => Some(Recorded(lastSeen, until))
+        case MembershipStanding.Open | _: MembershipStanding.Hidden => None
+      }
   }
+
+  /** A join a player's rows cannot place, which changes none of them (ADR 0026). */
+  final case class UnsettledJoin(playerId: PlayerId, username: Username, joinedAt: Instant, latest: ClubMember)
+
+  /** A player whose rows, as this reconcile would leave them, the database would refuse (ADR 0027). */
+  final case class RefusedMembershipVerdict(playerId: PlayerId, username: Username, conflict: MemberRowConflict)
 
   /** What we held about a club's membership before a reconcile, which the fetched roster is compared against: the
     * members its roster should list, keyed by id and by the name each holds now, every other row by player, every
@@ -63,11 +85,15 @@ object MembershipChange {
     knownPlayersByUsername: Map[Username, Player] = Map.empty
   ) {
 
-    /** `member` ended at `at`, or at its start if `at` precedes it, and was last known in no later than that. */
-    def close(member: ClubMember, at: Instant): ClubMember = {
-      val until = later(member.since, at)
-      member.copy(lastSeen = Some(earlier(lastKnownIn(member), until)), until = Some(until))
-    }
+    /** All `playerId`'s rows in the club, listed or not. */
+    def rowsOf(playerId: PlayerId): MemberRows =
+      MemberRows(membersByPlayerId.get(playerId).map(_.member).toList ++ unlistedByPlayerId.getOrElse(playerId, Nil))
+
+    /** `member` ended at `at`, and was last known in no later than that. An `at` before its start is kept, so the row
+      * fails [[MembershipVerdictCheck]] and is reported, rather than given an end nothing observed (ADR 0027).
+      */
+    def close(member: ClubMember, at: Instant): ClubMember =
+      member.copy(lastSeen = Some(earlier(lastKnownIn(member), at)), until = Some(at))
 
     /** When `member` was last known in, its account having closed after `lastOnline` with the club on its list. */
     def hiddenAt(member: ClubMember, lastOnline: Instant): Instant = later(lastKnownIn(member), lastOnline)
@@ -97,6 +123,8 @@ object MembershipChange {
     closedMemberships: Chunk[ClubMember],
     hiddenMemberships: Chunk[ClubMember],
     reopenedMemberships: Chunk[ClubMember],
+    unsettledJoins: Chunk[UnsettledJoin],
+    refused: Chunk[RefusedMembershipVerdict],
     settlement: ClosedAccountClubs.Settlement,
     currentMemberCount: Int,
     previousMemberCount: Int,

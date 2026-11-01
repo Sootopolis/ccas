@@ -99,12 +99,22 @@ private[membership] object MembershipReport {
       _ <- ZIO.logInfo(s"Hidden memberships:   ${result.hiddenMemberships.size}")
       _ <- ZIO.logInfo(s"Settled memberships:  ${result.settlement.settledCount}")
       _ <- ZIO.logInfo(s"Reopened memberships: ${result.reopenedMemberships.size}")
-      _ <- ZIO.logInfo(s"Unsettled joins:      ${unsettledJoinCount(result)}")
+      _ <- ZIO.logInfo(s"Unsettled joins:      ${result.unsettledJoins.size}")
+      _ <- ZIO.logInfo(s"Not recorded:         ${result.refused.size}")
       _ <- ZIO.logInfo("")
       _ <- printChangeSummaries(result.changes.toList, invitations)
-      _ <- ZIO.foreachDiscard(settledLines(result.settlement) ++ unsettledLines(result.settlement))(ZIO.logInfo(_))
+      _ <- ZIO.foreachDiscard(listSections(result).flatten)(ZIO.logInfo(_))
     } yield ()
   }
+
+  /** The sections of a reconciliation's report that are not changes to a member, those with anything to say. */
+  private def listSections(result: ReconciliationResult): List[List[String]] =
+    List(
+      unsettledJoinLines(result.unsettledJoins),
+      refusedLines(result.refused),
+      settledLines(result.settlement),
+      unsettledLines(result.settlement)
+    ).filter(_.nonEmpty)
 
   /** The rows closed accounts' kept club lists hid or opened, by when each account closed (ADR 0022). */
   private def settledLines(settlement: ClosedAccountClubs.Settlement): List[String] = {
@@ -141,12 +151,12 @@ private[membership] object MembershipReport {
     case _: NewMember      => "[JOINED]"
     case _: JoinedClub     => "[JOINED]"
     case _: Rejoined       => "[REJOINED]"
+    case _: Reopened       => "[REOPENED]"
     case _: LeftClub       => "[LEFT CLUB]"
     case _: AccountClosed  => "[ACCOUNT CLOSED]"
     case _: Unresolvable   => "[UNRESOLVABLE]"
     case _: UsernameChange => "[USERNAME CHANGE]"
     case _: StatusChange   => "[STATUS CHANGE]"
-    case _: UnsettledJoin  => UnsettledJoinLabel
   }
 
   private def formatChangeDetail(change: MemberChange, lastInvited: Option[Instant]): String = {
@@ -155,49 +165,76 @@ private[membership] object MembershipReport {
       case NewMember(ts)                 => s"at $ts$invitedSuffix"
       case JoinedClub(ts)                => s"at $ts$invitedSuffix"
       case Rejoined(ts, previous)        => s"at $ts — ${previousMembership(previous)}$invitedSuffix"
+      case Reopened(ts, was)             => s"joined at $ts — was: ${reopenedFrom(was)}"
       case LeftClub(ts)                  => s"at $ts"
       case AccountClosed(ts, status)     => s"after $ts — status: $status"
       case Unresolvable(ts, oldUsername) => s"at $ts — old username: $oldUsername"
       case UsernameChange(ts, oldName)   => s"at $ts — was: $oldName"
       case StatusChange(ts, oldStatus)   => s"at $ts — was: $oldStatus"
-      case join: UnsettledJoin           => unsettledJoin(join)
     }
   }
 
-  private val UnsettledJoinLabel = "[ROSTER JOIN UNSETTLED]"
+  private def reopenedFrom(was: MembershipStanding.OffRoster): String =
+    was match {
+      case MembershipStanding.Hidden(lastSeen)       => s"hidden after $lastSeen"
+      case MembershipStanding.Ended(lastSeen, until) => howItEnded(lastSeen, until)
+    }
 
-  private def unsettledJoinCount(result: ReconciliationResult): Int =
-    result.changes.flatMap(_.changes).count(_.isInstanceOf[UnsettledJoin])
+  private val UnsettledJoinLabel = "[ROSTER JOIN UNSETTLED]"
+  private val RefusedLabel       = "[MEMBERSHIP NOT RECORDED]"
+
+  private def unsettledJoinLines(joins: Chunk[UnsettledJoin]): List[String] =
+    Option.when(joins.nonEmpty)(UnsettledJoinLabel).toList ++
+      joins.sortBy(_.joinedAt).map(join => s"  ${join.username} — ${unsettledJoin(join)}")
 
   /** When an ended row was last seen is why a join inside it was refused, and only that row leaves the total short. */
   private def unsettledJoin(join: UnsettledJoin): String = {
-    val latest   = join.latest
-    val ended    = latest.until.map(until => s" to $until, last seen ${latest.lastSeen.getOrElse(latest.since)}")
-    val hidden   = latest.hiddenAt.map(at => s", hidden after $at")
-    val standing = ended.orElse(hidden).getOrElse("")
-    val outcome =
-      if (latest.until.nonEmpty) "left as recorded, not counted as a member" else "left as recorded"
-    s"listed as joined at ${join.ts}, latest recorded membership from ${latest.since}$standing — $outcome"
+    val latest = join.latest
+    val (standing, outcome) = latest.standing match {
+      case MembershipStanding.Open       => ("", "left as recorded")
+      case MembershipStanding.Hidden(at) => (s", hidden after $at", "left as recorded")
+      case MembershipStanding.Ended(lastSeen, until) =>
+        (s" to $until, last seen $lastSeen", "left as recorded, not counted as a member")
+    }
+    s"listed as joined at ${join.joinedAt}, latest recorded membership from ${latest.since}$standing — $outcome"
   }
 
-  /** Warns of each join among `summaries` the player's rows cannot place (ADR 0026). Only a Membership reconcile prints
-    * its changes, so without this another job's reconcile, or one a report runs first, would say nothing of them.
+  private def refusedLines(refused: Chunk[RefusedMembershipVerdict]): List[String] =
+    Option.when(refused.nonEmpty)(RefusedLabel).toList ++
+      refused.map(verdict => s"  ${verdict.username} — ${refusal(verdict)}")
+
+  private def refusal(verdict: RefusedMembershipVerdict): String = {
+    val why = verdict.conflict match {
+      case MemberRowConflict.Overlap(earlier, later) =>
+        s"memberships from ${earlier.since} and from ${later.since} would overlap"
+      case MemberRowConflict.SameStart(row) => s"two memberships would both start at ${row.since}"
+      case MemberRowConflict.OutOfOrder(row) =>
+        val lastSeen = row.lastSeen.fold("never")(_.toString)
+        val until    = row.until.fold("not ended")(_.toString)
+        s"the membership from ${row.since} would have its dates out of order: last seen $lastSeen, ended $until"
+    }
+    s"$why — left as recorded until the roster changes or someone corrects the rows by hand; worth an issue if it persists"
+  }
+
+  /** Warns of each join the player's rows cannot place (ADR 0026) and each verdict refused (ADR 0027). Only a Membership
+    * reconcile prints its report, so without this another job's reconcile, or one a report runs first, would not say.
     */
-  def warnOfUnsettledJoins(summaries: Chunk[MemberChangeSummary]): UIO[Unit] =
-    ZIO.foreachDiscard(summaries) { summary =>
-      ZIO.foreachDiscard(summary.changes.collect { case join: UnsettledJoin => join }) { join =>
-        ZIO.logWarning(s"$UnsettledJoinLabel ${summary.username} — ${unsettledJoin(join)}")
-      }
+  def warnOfWhatWasNotRecorded(result: ReconciliationResult): UIO[Unit] =
+    ZIO.foreachDiscard(result.unsettledJoins) { join =>
+      ZIO.logWarning(s"$UnsettledJoinLabel ${join.username} — ${unsettledJoin(join)}")
+    } *> ZIO.foreachDiscard(result.refused) { verdict =>
+      ZIO.logWarning(s"$RefusedLabel ${verdict.username} — ${refusal(verdict)}")
     }
 
   /** No one is seen in and out at once, so recorded ends that meet hold no sighting of the player gone, only of them
     * in.
     */
+  private def howItEnded(lastSeen: Instant, until: Instant): String =
+    if (lastSeen == until) s"last seen at $lastSeen" else s"ended between $lastSeen and $until"
+
   private def previousMembership(previous: PreviousMembership): String =
     previous match {
-      case PreviousMembership.Recorded(lastSeen, until) =>
-        if (lastSeen == until) s"previous membership last seen at $lastSeen"
-        else s"previous membership ended between $lastSeen and $until"
+      case PreviousMembership.Recorded(lastSeen, until) => s"previous membership ${howItEnded(lastSeen, until)}"
       case PreviousMembership.Inferred(firstMatch, lastMatch) =>
         s"previously played for the club from $firstMatch to $lastMatch"
     }
@@ -246,11 +283,11 @@ private[membership] object MembershipReport {
                     |Hidden memberships:   ${result.hiddenMemberships.size}
                     |Settled memberships:  ${result.settlement.settledCount}
                     |Reopened memberships: ${result.reopenedMemberships.size}
-                    |Unsettled joins:      ${unsettledJoinCount(result)}
+                    |Unsettled joins:      ${result.unsettledJoins.size}
+                    |Not recorded:         ${result.refused.size}
                     |""".stripMargin
-    val listSections = List(settledLines(result.settlement), unsettledLines(result.settlement)).filter(_.nonEmpty)
     header + "\n" + formatChangeSummaries(result.changes.toList, invitations) +
-      listSections.map(_.map(_ + "\n").mkString).mkString("\n")
+      listSections(result).map(_.map(_ + "\n").mkString).mkString("\n")
   }
 
   def formatReport(rr: ReportResult): String = {
@@ -317,10 +354,9 @@ private[membership] object MembershipReport {
 
     /** The membership `playerId` had before the one starting at `start`, recorded or inferred, by when it started. */
     def previousTo(playerId: PlayerId, start: Instant): Option[PreviousMembership] = {
-      val recorded = members.collect {
-        case m if m.clubId == clubId && m.playerId == playerId && m.until.isDefined && m.since.isBefore(start) =>
-          m.since -> PreviousMembership.of(m)
-      }
+      val recorded = members
+        .filter(m => m.clubId == clubId && m.playerId == playerId && m.since.isBefore(start))
+        .flatMap(m => PreviousMembership.of(m).map(m.since -> _))
       val fromMatches = inferredByPlayer.getOrElse(playerId, Nil).collect {
         case membership if membership.lastMatch.isBefore(start) =>
           membership.firstMatch -> PreviousMembership.Inferred(membership.firstMatch, membership.lastMatch)
@@ -351,25 +387,28 @@ private[membership] object MembershipReport {
           }
         }
 
-        // Closed membership in range
-        cm.until.filter(inRange).foreach { u =>
-          // Check latest state to determine reason
-          playerStates.filter(s => !s.since.isAfter(u)).lastOption match {
-            case Some(state) =>
-              if (state.status == PlayerStatusCategory.Active) { changes += LeftClub(u) }
-              else { changes += AccountClosed(u, state.status) }
-            case None =>
-              // No state found near the closure — unresolvable
-              val username = playerNames.headOption.fold(Username.wrap("unknown"))(_.username)
-              changes += Unresolvable(u, username)
-          }
-        }
-
-        // Whatever the account's status now: History can see it active again before a roster reopens the row.
-        cm.hiddenAt.filter(inRange).foreach { lastSeen =>
-          playerStates.findLast(_.status != PlayerStatusCategory.Active).foreach { state =>
-            changes += AccountClosed(lastSeen, state.status)
-          }
+        cm.standing match {
+          case MembershipStanding.Open => ()
+          case MembershipStanding.Ended(_, until) =>
+            if (inRange(until)) {
+              // Check latest state to determine reason
+              playerStates.filter(s => !s.since.isAfter(until)).lastOption match {
+                case Some(state) =>
+                  if (state.status == PlayerStatusCategory.Active) { changes += LeftClub(until) }
+                  else { changes += AccountClosed(until, state.status) }
+                case None =>
+                  // No state found near the closure — unresolvable
+                  val username = playerNames.headOption.fold(Username.wrap("unknown"))(_.username)
+                  changes += Unresolvable(until, username)
+              }
+            }
+          case MembershipStanding.Hidden(lastSeen) =>
+            // Whatever the account's status now: History can see it active again before a roster reopens the row.
+            if (inRange(lastSeen)) {
+              playerStates.findLast(_.status != PlayerStatusCategory.Active).foreach { state =>
+                changes += AccountClosed(lastSeen, state.status)
+              }
+            }
         }
       }
 
