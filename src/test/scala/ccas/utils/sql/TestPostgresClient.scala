@@ -1,7 +1,10 @@
 package ccas.utils.sql
 
+import java.sql.DriverManager
+
 import com.typesafe.config.{ConfigFactory, ConfigResolveOptions}
 import com.zaxxer.hikari.HikariDataSource
+import org.postgresql.util.PSQLException
 import zio.ZIO
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
@@ -19,11 +22,33 @@ object TestPostgresClient extends ZIOSpecDefault {
     ).provideShared(
       FreshSchemaLayer("test_dsl")
     ),
+    testChannelBindingReachesDriver,
     testResolveSchema,
     testNormalizeJdbcUrl,
     testDatabaseAddress,
     testExportedDatabaseUrlIgnored
   ) @@ TestAspect.sequential
+
+  // pgjdbc ignores a parameter it does not know, so a misspelt rename would pass every string test and protect nothing.
+  // Without TLS, pgjdbc refuses `channelBinding=require` whichever way the server asks to authenticate (trust, md5,
+  // SCRAM), so the refusal shows the parameter arrived. No schema is touched, so no `FreshSchemaLayer`.
+  private def testChannelBindingReachesDriver =
+    test("channel_binding=require reaches pgjdbc, which refuses a login it cannot bind") {
+      val ds = ConfigFactory.load().getConfig("database.dataSource")
+      val url = s"postgresql://${ds.getString("serverName")}:${ds.getInt("portNumber")}/" +
+        s"${ds.getString("databaseName")}?sslmode=disable&channel_binding=require"
+      for {
+        resolved <- ZIO.fromEither(PostgresClient.normalizeJdbcUrl(url)).mapError(new IllegalArgumentException(_))
+        exit <- ZIO.attemptBlocking {
+          DriverManager.getConnection(resolved.jdbcUrl, ds.getString("user"), ds.getString("password")).close()
+        }.exit
+      } yield assertTrue(
+        exit.causeOption.flatMap(_.failureOption).exists {
+          case e: PSQLException => e.getMessage.toLowerCase.contains("channel binding")
+          case _                => false
+        }
+      )
+    }
 
   // A shell that exports DATABASE_URL — the `wip` worktree's direnv does — must not redirect the suite. Merges the
   // classpath `application.conf` files the way `ConfigFactory.load()` does, with a stand-in for the exported variable.
@@ -83,11 +108,20 @@ object TestPostgresClient extends ZIOSpecDefault {
       val resolved = PostgresClient.normalizeJdbcUrl("postgres://u:p@host:5433/db")
       assertTrue(resolved.map(_.jdbcUrl).contains("jdbc:postgresql://host:5433/db"))
     },
-    test("libpq-only parameters are dropped, others preserved in order") {
+    test("channel_binding becomes pgjdbc's channelBinding in place, others preserved in order") {
       val resolved = PostgresClient.normalizeJdbcUrl(
         "postgresql://u:p@host/db?sslmode=require&channel_binding=require&ApplicationName=ccas"
       )
-      assertTrue(resolved.map(_.jdbcUrl).contains("jdbc:postgresql://host/db?sslmode=require&ApplicationName=ccas"))
+      assertTrue(
+        resolved
+          .map(_.jdbcUrl)
+          .contains("jdbc:postgresql://host/db?sslmode=require&channelBinding=require&ApplicationName=ccas")
+      )
+    },
+    test("a JDBC URL's channelBinding passes through") {
+      val resolved =
+        PostgresClient.normalizeJdbcUrl("jdbc:postgresql://host/db?user=u&password=p&channelBinding=require")
+      assertTrue(resolved.map(_.jdbcUrl).contains("jdbc:postgresql://host/db?channelBinding=require"))
     },
     test("query credentials are lifted out of an existing JDBC URL") {
       val resolved = PostgresClient.normalizeJdbcUrl("jdbc:postgresql://host/db?user=u&password=p&sslmode=require")

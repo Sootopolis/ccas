@@ -162,15 +162,18 @@ object PostgresClient {
   /** A JDBC URL with any embedded credentials lifted out of it, ready to hand to Hikari. */
   private[ccas] final case class ResolvedJdbcUrl(jdbcUrl: String, user: Option[String], password: Option[String])
 
-  /** libpq-only connection parameters that pgjdbc has no equivalent for. pgjdbc keeps unrecognised query parameters in
-    * its `Properties` and ignores them, so leaving them in would not break a connection — they are dropped so the URL
+  /** libpq-only connection parameters this does not carry over. pgjdbc keeps unrecognised query parameters in its
+    * `Properties` and ignores them, so leaving them in would not break a connection — they are dropped so the URL
     * stays honest about what is actually in effect. Not exhaustive: libpq has many more parameters, and any of them
     * that pgjdbc does not recognise is silently inert whether or not it is listed here. These are the ones that appear
     * in the connection strings providers hand out. Note `connect_timeout` is libpq's spelling; pgjdbc's own equivalent
     * is `connectTimeout` (set from `pool.connectTimeoutSeconds`) and is unaffected.
     */
-  private val LibpqOnlyParams =
-    Set("channel_binding", "connect_timeout", "target_session_attrs", "passfile", "gssencmode", "service")
+  private val LibpqOnlyParams = Set("connect_timeout", "target_session_attrs", "passfile", "gssencmode", "service")
+
+  // libpq parameters carried over under pgjdbc's name, in place. Under `sslmode=require` pgjdbc checks no certificate,
+  // so `channel_binding` is all that authenticates the server a provider's string names: ADR 0014.
+  private val LibpqRenamedParams = Map("channel_binding" -> "channelBinding")
 
   /** Normalise a configured `database.url` into a JDBC URL plus separately-carried credentials.
     *
@@ -262,13 +265,16 @@ object PostgresClient {
       case i  => (s.take(i), s.drop(i + 1))
     }
 
-  /** `base` with `query`'s parameters appended, less [[LibpqOnlyParams]] and the credentials, which it returns apart. */
+  /** `base` with `query`'s parameters appended, [[LibpqRenamedParams]] renamed, less [[LibpqOnlyParams]] and the
+    * credentials, which it returns apart.
+    */
   private def liftQueryCredentials(base: String, query: String): ResolvedJdbcUrl = {
     val params = query.split('&').toList.filter(_.nonEmpty).map { param =>
-      param.indexOf('=') match {
+      val (key, value) = param.indexOf('=') match {
         case -1 => (param, "")
         case i  => (param.take(i), param.drop(i + 1))
       }
+      (LibpqRenamedParams.getOrElse(key, key), value)
     }
 
     // Last occurrence wins, as in pgjdbc, which puts each token into a `Properties`, so a repeated key overwrites.
