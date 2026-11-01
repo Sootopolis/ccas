@@ -1,11 +1,11 @@
 package ccas.analysis.apps.membership
 
-import java.time.Instant
+import java.time.{Duration, Instant}
 
 import com.augustnagro.magnum.sql
 import zio.{Chunk, Promise, Ref, UIO, ZIO, ZLayer}
 import zio.http.*
-import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
+import zio.test.{assertTrue, check, Gen, Spec, TestAspect, ZIOSpecDefault}
 
 import TestMembershipAppSupport.*
 
@@ -346,8 +346,57 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
     testExistingPlayerHoldingNoNameJoinsClub,
     testUsernameChangeAndStatusChange,
     testTrustModeKnownPlayerJoins,
-    testTrustUsernamesFalseBypassesLookup
+    testTrustUsernamesFalseBypassesLookup,
+    testAReturningMembersRowsStayValidAndApart
   )
+
+  /** A member the roster lists as Chess.com lists one (docs/chess-com-api.md, "A member list shows each active member's
+    * current membership"): since their latest row's start, or since a join after every row's start and no row's end.
+    * That row is one the roster should list if it is open, or hidden while the account is active; else they are known
+    * by name.
+    */
+  private val listedAgain = for {
+    rows           <- MembershipGen.history(clubId = clubId, playerId = pid0, minRows = 1)
+    rejoined       <- Gen.boolean
+    daysLater      <- Gen.int(0, 2)
+    lastObservedAt <- Gen.option(MembershipGen.instant)
+  } yield {
+    val rejoinFrom = (rows.map(_.since.plus(Duration.ofDays(1))) ++ rows.flatMap(_.until)).max
+    val join       = if (rejoined) rejoinFrom.plus(Duration.ofDays(daysLater)) else rows.last.since
+    (rows, join, lastObservedAt)
+  }
+
+  private def testAReturningMembersRowsStayValidAndApart =
+    test("a roster's verdict on a returning member leaves its rows valid and apart, one open at the join listed") {
+      val alice                = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0)
+      def key(row: ClubMember) = (row.clubId, row.playerId, row.since)
+      fakeChessComClient(Map.empty).flatMap { client =>
+        check(listedAgain) { (rows, join, lastObservedAt) =>
+          val listedOption = rows.lastOption.filter(_.until.isEmpty)
+          val storedRoster = StoredRoster(
+            membersByPlayerId = listedOption.map(listed => pid0 -> MemberState(alice, listed)).toMap,
+            membersByUsername = listedOption.map(listed => alice.username -> MemberState(alice, listed)).toMap,
+            unlistedByPlayerId = Map(pid0 -> rows.filterNot(listedOption.contains)),
+            lastObservedAt = lastObservedAt,
+            slugs = Set.empty,
+            knownPlayersByUsername = Map(alice.username -> alice)
+          )
+          val apiMap = Map(alice.username -> join.getEpochSecond)
+          MembershipClassify.classifyApiMembers(client, clubId, apiMap, storedRoster, Times.t2).map { result =>
+            val changed     = result.closedMemberships ++ result.reopenedMemberships
+            val after       = rows.map(row => changed.find(key(_) == key(row)).getOrElse(row)) ++ result.newMemberships
+            val overlapping = after.combinations(2).filter(pair => MembershipGen.overlap(pair.head, pair.last)).toList
+            assertTrue(
+              changed.forall(row => rows.exists(key(_) == key(row))),
+              after.forall(MembershipGen.valid),
+              after.map(key).distinct.size == after.size,
+              overlapping.isEmpty,
+              after.filter(_.until.isEmpty) == List(ClubMember.joined(clubId = clubId, playerId = pid0, since = join))
+            )
+          }
+        }
+      }
+    }
 
   private def testUnchangedMemberMatchingSince = test("unchanged member — matching since") {
     val player = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t1)
