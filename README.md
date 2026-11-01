@@ -145,7 +145,7 @@ The detached server writes its pid to `${XDG_STATE_HOME:-~/.local/state}/ccas/cc
 
 ### Shell completion
 
-`ccas completion <bash|zsh|fish>` prints a self-contained, **pure-shell** completion script. It boots the JVM once when you install it; afterwards every `<TAB>` runs entirely in the shell (no JVM, no network), so completion is instant. The scripts complete subcommands and flags, plus **club slugs** (after `--club`, and for the `ccas use-club` argument) and **recent job ids** (for `ccas logs` and `ccas cancel`) read from cache files.
+`ccas completion <bash|zsh|fish>` prints a self-contained, **pure-shell** completion script. It boots the JVM once when you install it; afterwards every `<TAB>` runs entirely in the shell (no JVM, no network), so completion is instant. The scripts complete subcommands and flags, plus **club slugs** (after `--club`, and for the `ccas use-club` argument) and **recent job ids** (for `ccas logs` and `ccas cancel`) read from cache files, and the **settings `ccas config` knows**, with the values of those that take a fixed set (`ccas config set CCAS_BODY_STORE_BACKEND <TAB>` offers `fs s3`).
 
 [`scripts/install-cli.sh`](#install-the-ccas-cli) installs it for you; the manual equivalents are:
 

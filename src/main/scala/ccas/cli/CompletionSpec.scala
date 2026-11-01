@@ -15,12 +15,13 @@ object CompletionSpec {
     * positional club slug are `use-club` and `club add` / `remove` / `show`.
     */
   enum PositionalKind {
-    case Slug   // a single club slug: use-club, club add/remove/show
-    case JobId  // a single job-run id: logs
-    case Shell  // bash | zsh | fish: completion
-    case EnvKey // a server-env var name: config get/set/unset (candidates from ServerEnvKeys.all)
-    case Other  // an opaque value we don't complete: schedule add/remove, blacklist usernames
-    case NoArgs // no positional (club, if any, comes via --club): serve, membership, jobs, …
+    case Slug       // a single club slug: use-club, club add/remove/show
+    case JobId      // a single job-run id: logs
+    case Shell      // bash | zsh | fish: completion
+    case EnvKey     // a server-env var name: config get/unset (candidates from ServerEnvKeys.all)
+    case EnvSetting // a server-env var name, then the values that key takes: config set
+    case Other      // an opaque value we don't complete: schedule add/remove, blacklist usernames
+    case NoArgs     // no positional (club, if any, comes via --club): serve, membership, jobs, …
   }
 
   import PositionalKind.*
@@ -144,10 +145,10 @@ object CompletionSpec {
     Leaf(List("club", "list"), List(server), List(server), NoArgs),
     Leaf(List("club", "show"), List(server, clubIdFlag), List(server, clubIdFlag), Slug),
     // `config` is local (no --server): it edits the local ccas.env file. get/set/unset take an env-var-name positional
-    // we complete from ServerEnvKeys.all (EnvKey); --show-secrets is a boolean (not a value flag), so list/show keep
-    // empty valueFlags.
+    // we complete from ServerEnvKeys.all, and set a value after it; --show-secrets is a boolean (not a value flag), so
+    // list/show keep empty valueFlags.
     Leaf(List("config", "get"), Nil, Nil, EnvKey),
-    Leaf(List("config", "set"), Nil, Nil, EnvKey),
+    Leaf(List("config", "set"), Nil, Nil, EnvSetting),
     Leaf(List("config", "unset"), Nil, Nil, EnvKey),
     Leaf(List("config", "list"), List("--show-secrets"), Nil, NoArgs),
     Leaf(List("config", "show"), List("--show-secrets"), Nil, NoArgs),

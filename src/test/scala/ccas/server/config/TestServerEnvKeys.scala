@@ -1,13 +1,22 @@
 package ccas.server.config
 
+import scala.util.Try
+
+import com.typesafe.config.ConfigFactory
 import zio.test.{assertTrue, Spec, ZIOSpecDefault}
 
 import ServerEnvKey.Domain.*
+import ServerEnvKey.Values.Toggle
 
-/** Tests the [[ServerEnvKeys]] registry: the per-key display domains, the secret keys that drive redaction, and the
-  * `byName` / `redact` / `grouped` helpers. Pure, no IO.
+/** Tests the [[ServerEnvKeys]] registry: the per-key display domains, the secret keys that drive redaction, the words a
+  * toggle takes, and the `byName` / `redact` / `grouped` helpers. Pure, no IO. Which keys are toggles is checked
+  * against the shipped config by `ccas.TestShippedConfig`.
   */
 object TestServerEnvKeys extends ZIOSpecDefault {
+
+  // Quoted, as an env substitution arrives: a string that getBoolean, as the server calls it, converts or rejects.
+  private def readsAsBoolean(word: String): Boolean =
+    Try(ConfigFactory.parseString(s"k = \"$word\"").getBoolean("k")).isSuccess
 
   override def spec: Spec[Any, Any] = suite("TestServerEnvKeys")(
     test("domain maps each key, including the non-DB_-prefixed cases") {
@@ -41,6 +50,11 @@ object TestServerEnvKeys extends ZIOSpecDefault {
         ServerEnvKeys.redact("DB_PASSWORD", "") == "",
         ServerEnvKeys.redact("UNKNOWN_KEY", "v") == "v"
       )
+    },
+    test("a toggle accepts exactly the words Typesafe Config reads as a boolean") {
+      val words         = List("true", "yes", "on", "false", "no", "off", "True", "TRUE", "ture", "1", "0")
+      val disagreements = words.filter(word => Toggle.accepts(word) != readsAsBoolean(word))
+      assertTrue(words.exists(readsAsBoolean), words.exists(!readsAsBoolean(_)), disagreements.isEmpty)
     },
     test("byName resolves a known key and rejects an unknown one") {
       assertTrue(

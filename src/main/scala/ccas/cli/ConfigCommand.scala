@@ -35,7 +35,7 @@ object ConfigCommand {
         .orDie
         .as(ExitCode(2))
     } else {
-      warnIfUnknown(k) *> warnIfUnusableDatabaseUrl(k, value) *> ServerEnvFile
+      warnIfUnknown(k) *> warnIfNotTaken(k, value) *> warnIfUnusableDatabaseUrl(k, value) *> ServerEnvFile
         .set(file, k, value)
         .foldZIO(
           ioError,
@@ -72,6 +72,14 @@ object ConfigCommand {
   private def warnIfUnknown(key: String): UIO[Unit] =
     ZIO.whenDiscard(ServerEnvKeys.byName(key).isEmpty) {
       Console.printLineError(s"warning: '$key' is not a known ccas setting (writing anyway)").orDie
+    }
+
+  /** A value its key doesn't take is otherwise first noticed when the server boots on it; writes anyway, as above. */
+  private def warnIfNotTaken(key: String, value: String): UIO[Unit] =
+    ServerEnvKeys.byName(key).map(_.values).filterNot(_.accepts(value)).fold(ZIO.unit) { values =>
+      val taken = values.candidates.mkString(" or ")
+      val shown = ServerEnvKeys.redact(key, value)
+      Console.printLineError(s"warning: $key takes $taken, not '$shown' (writing anyway)").orDie
     }
 
   /** Surface an unusable `DATABASE_URL` here rather than at the next `ccas server up`. Both the JDBC and libpq forms are

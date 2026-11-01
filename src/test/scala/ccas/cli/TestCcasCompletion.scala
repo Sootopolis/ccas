@@ -7,14 +7,16 @@ import zio.ZIO
 import zio.test.{assertCompletes, assertTrue, Spec, TestAspect, TestResult, ZIOSpecDefault}
 
 import ccas.cli.CompletionSpec.PositionalKind
+import ccas.server.config.ServerEnvKeys
 
-/** Guards the generated shell completions ([[CompletionEmitter]]). Four concerns:
+/** Guards the generated shell completions ([[CompletionEmitter]]). Five concerns:
   *   1. the committed `completions/ccas.bash` equals the bash emitter output (regenerate it as
   *      `.claude/rules/cli.md` says);
   *   2. every emitted script is valid for its shell (`<shell> -n`, skipped when that shell isn't installed);
-  *   3. [[CompletionSpec]] still covers every command and flag in the [[CliCommand]] tree, so a newly added
+  *   3. what the bash script offers for `config set`, whose second positional depends on its first;
+  *   4. [[CompletionSpec]] still covers every command and flag in the [[CliCommand]] tree, so a newly added
   *      subcommand or flag can't silently go uncompleted;
-  *   4. README's `Commands:` line lists what [[CompletionSpec]] does.
+  *   5. README's `Commands:` line lists what [[CompletionSpec]] does.
   *
   * The command tree is read by rendering the root help in-process (no JVM spawn). Paths are relative to the repo root
   * (sbt's test cwd).
@@ -55,9 +57,13 @@ object TestCcasCompletion extends ZIOSpecDefault {
       .flatMap(_.group(1).trim.split(" "))
       .toSet
 
-  // Run `<shell> -n <file>` on the emitted script (parse-only, no execution). Skip (pass) if the shell isn't on PATH.
-  private def syntaxCheck(shell: String, script: String): ZIO[Any, Throwable, TestResult] = {
-    val run =
+  // A check that spawns a shell passes when that shell isn't on PATH.
+  private def unlessNoShell(check: ZIO[Any, Throwable, TestResult]): ZIO[Any, Throwable, TestResult] =
+    check.catchSome { case _: IOException => ZIO.succeed(assertCompletes) }
+
+  // Run `<shell> -n <file>` on the emitted script (parse-only, no execution).
+  private def syntaxCheck(shell: String, script: String): ZIO[Any, Throwable, TestResult] =
+    unlessNoShell {
       for {
         tmp    <- ZIO.attempt(Files.createTempFile("ccas-completion-", s".$shell"))
         _      <- ZIO.attempt(Files.writeString(tmp, script))
@@ -66,7 +72,29 @@ object TestCcasCompletion extends ZIOSpecDefault {
         code   <- ZIO.attemptBlocking(proc.waitFor())
         _      <- ZIO.attempt(Files.deleteIfExists(tmp))
       } yield assertTrue(code == 0, output.isEmpty)
-    run.catchSome { case _: IOException => ZIO.succeed(assertCompletes) }
+    }
+
+  /** What the emitted bash completion offers for `words`, the last being the one under the cursor. bash runs without
+    * rc files, so bash-completion isn't loaded and the script reads `COMP_WORDS` itself. stderr joins the offers, so a
+    * script that fails to load can't pass for one that offers nothing.
+    */
+  private def bashOffers(words: String*): ZIO[Any, Throwable, List[String]] = {
+    val line = words.map(word => "'" + word + "'").mkString(" ")
+    val script =
+      "source \"$1\"; COMP_WORDS=(" + line + "); COMP_CWORD=" + (words.size - 1) + "; _ccas; " +
+        "printf '%s\\n' \"${COMPREPLY[@]}\""
+    for {
+      tmp <- ZIO.attempt(Files.createTempFile("ccas-completion-", ".bash"))
+      _   <- ZIO.attempt(Files.writeString(tmp, CompletionEmitter.bash))
+      proc <- ZIO.attempt {
+        new ProcessBuilder("bash", "--noprofile", "--norc", "-c", script, "bash", tmp.toString)
+          .redirectErrorStream(true)
+          .start()
+      }
+      output <- ZIO.attempt(new String(proc.getInputStream.readAllBytes()))
+      _      <- ZIO.attemptBlocking(proc.waitFor())
+      _      <- ZIO.attempt(Files.deleteIfExists(tmp))
+    } yield output.linesIterator.filter(_.nonEmpty).toList
   }
 
   private def positionalOf(path: String*): PositionalKind =
@@ -97,6 +125,23 @@ object TestCcasCompletion extends ZIOSpecDefault {
     test("emitted fish is syntactically valid (skipped if fish absent)") {
       syntaxCheck("fish", CompletionEmitter.fish)
     },
+    test("bash offers a fixed-value key's values after 'config set <key>'") {
+      unlessNoShell {
+        for {
+          backend <- bashOffers("ccas", "config", "set", "CCAS_BODY_STORE_BACKEND", "")
+          toggle  <- bashOffers("ccas", "config", "set", "SCHEDULER_HISTORY_ENABLED", "")
+          typed   <- bashOffers("ccas", "config", "set", "SCHEDULER_HISTORY_ENABLED", "t")
+        } yield assertTrue(backend == List("fs", "s3"), toggle == List("true", "false"), typed == List("true"))
+      }
+    },
+    test("bash offers nothing after 'config set' on a free-form key") {
+      unlessNoShell(bashOffers("ccas", "config", "set", "SERVER_PORT", "").map(offered => assertTrue(offered.isEmpty)))
+    },
+    test("bash offers key names, not values, at 'config set <TAB>'") {
+      unlessNoShell {
+        bashOffers("ccas", "config", "set", "").map(offered => assertTrue(offered == ServerEnvKeys.all.map(_.name)))
+      }
+    },
     test("CompletionSpec covers every flag in the command tree") {
       val missing = treeFlags -- CompletionSpec.allFlags
       assertTrue(treeFlags.nonEmpty, missing.isEmpty)
@@ -122,7 +167,7 @@ object TestCcasCompletion extends ZIOSpecDefault {
         positionalOf("completion") == PositionalKind.Shell,
         positionalOf("blacklist", "add") == PositionalKind.Other,
         positionalOf("config", "get") == PositionalKind.EnvKey,
-        positionalOf("config", "set") == PositionalKind.EnvKey,
+        positionalOf("config", "set") == PositionalKind.EnvSetting,
         positionalOf("config", "unset") == PositionalKind.EnvKey
       )
     },

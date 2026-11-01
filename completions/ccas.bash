@@ -20,6 +20,13 @@ _ccas_cache() {
   [[ -r $f ]] && cat -- "$f"
 }
 
+_ccas_env_values() {
+  case "$1" in
+    SCHEDULER_MATCHREF_ENABLED|SCHEDULER_CLUBDATA_ENABLED|SCHEDULER_HISTORY_ENABLED|SCHEDULER_MEMBERSHIP_ENABLED|DB_TCP_KEEP_ALIVE) echo "true false" ;;
+    CCAS_BODY_STORE_BACKEND) echo "fs s3" ;;
+  esac
+}
+
 _ccas() {
   local cur prev words cword
   if declare -F _init_completion >/dev/null 2>&1; then
@@ -99,7 +106,7 @@ _ccas() {
       case "$sub" in
         "") COMPREPLY=( $(compgen -W "get set unset list show path init --help" -- "$cur") ); return ;;
         get) pos="envkey" ;;
-        set) pos="envkey" ;;
+        set) pos="envset" ;;
         unset) pos="envkey" ;;
         list) opts="--show-secrets" ;;
         show) opts="--show-secrets" ;;
@@ -133,6 +140,8 @@ _ccas() {
     jobid)  (( posIndex == 0 )) && COMPREPLY=( $(compgen -W "$(_ccas_cache recent-jobs.txt)" -- "$cur") ) ;;
     shell)  (( posIndex == 0 )) && COMPREPLY=( $(compgen -W "bash zsh fish" -- "$cur") ) ;;
     envkey) (( posIndex == 0 )) && COMPREPLY=( $(compgen -W "$envkeys" -- "$cur") ) ;;
+    envset) (( posIndex == 0 )) && COMPREPLY=( $(compgen -W "$envkeys" -- "$cur") )
+            (( posIndex == 1 )) && COMPREPLY=( $(compgen -W "$(_ccas_env_values "$prev")" -- "$cur") ) ;;
     *) COMPREPLY=( $(compgen -W "$opts --help" -- "$cur") ) ;;
   esac
 }
