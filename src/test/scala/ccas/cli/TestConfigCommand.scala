@@ -101,6 +101,30 @@ object TestConfigCommand extends ZIOSpecDefault {
           stored.contains("x")
         )
       },
+      test("a value its key doesn't take is written, with a warning naming the ones it does") {
+        for {
+          file    <- envFile
+          backend <- ConfigCommand.set(file)("CCAS_BODY_STORE_BACKEND", "S3")
+          toggle  <- ConfigCommand.set(file)("SCHEDULER_HISTORY_ENABLED", "ture")
+          err     <- TestConsole.outputErr
+          stored  <- ServerEnvFile.readMap(file)
+        } yield assertTrue(
+          backend == ExitCode.success,
+          toggle == ExitCode.success,
+          err == Vector(
+            "warning: CCAS_BODY_STORE_BACKEND takes fs or s3, not 'S3' (writing anyway)\n",
+            "warning: SCHEDULER_HISTORY_ENABLED takes true or false, not 'ture' (writing anyway)\n"
+          ),
+          stored == Map("CCAS_BODY_STORE_BACKEND" -> "S3", "SCHEDULER_HISTORY_ENABLED" -> "ture")
+        )
+      },
+      test("yes, on, no and off raise no warning on a toggle key") {
+        for {
+          file  <- envFile
+          codes <- ZIO.foreach(List("yes", "on", "no", "off"))(ConfigCommand.set(file)("DB_TCP_KEEP_ALIVE", _))
+          err   <- TestConsole.outputErr
+        } yield assertTrue(codes.forall(_ == ExitCode.success), err.isEmpty)
+      },
       test("an unusable DATABASE_URL is written, with a warning that never echoes it") {
         val unusable = "mysql://admin:hunter2@db.example/ccas"
         for {

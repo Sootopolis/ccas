@@ -23,16 +23,31 @@ object CompletionEmitter {
   // --- shared spec-derived fragments ---
 
   private def posTag(k: PositionalKind): String = k match {
-    case PositionalKind.Slug   => "slug"
-    case PositionalKind.JobId  => "jobid"
-    case PositionalKind.Shell  => "shell"
-    case PositionalKind.EnvKey => "envkey"
-    case _                     => ""
+    case PositionalKind.Slug       => "slug"
+    case PositionalKind.JobId      => "jobid"
+    case PositionalKind.Shell      => "shell"
+    case PositionalKind.EnvKey     => "envkey"
+    case PositionalKind.EnvSetting => "envset"
+    case _                         => ""
   }
 
   // Static, compile-time candidate list for the `config get/set/unset` env-var-name positional. The completion scripts
   // are pure-shell (no JVM callback), so the names are embedded directly. Registry order → byte-stable output.
   private val envKeys: String = ServerEnvKeys.all.map(_.name).mkString(" ")
+
+  /** The keys `config set <key> <TAB>` offers values for, grouped by those values, in registry order. */
+  private val envValueGroups: List[(String, List[String])] = {
+    val offering = ServerEnvKeys.all.filter(_.values.candidates.nonEmpty)
+    offering.map(_.values).distinct.map { values =>
+      values.candidates.mkString(" ") -> offering.filter(_.values == values).map(_.name)
+    }
+  }
+
+  // bash and zsh both: `_ccas_env_values KEY` prints the values `config set KEY` offers, or nothing for a free-form key.
+  private val envValuesFunction: List[String] =
+    List("_ccas_env_values() {", "  case \"$1\" in") ++
+      envValueGroups.map { case (values, keys) => "    " + keys.mkString("|") + ") echo \"" + values + "\" ;;" } ++
+      List("  esac", "}")
 
   // `--help` is appended by the emitted scripts themselves, so it is dropped from the per-command option list here.
   private def optsOf(leaf: Leaf): String = leaf.flags.filterNot(_ == "--help").mkString(" ")
@@ -99,6 +114,8 @@ object CompletionEmitter {
       "  local f=\"${XDG_CACHE_HOME:-$HOME/.cache}/ccas/$1\"",
       "  [[ -r $f ]] && cat -- \"$f\"",
       "}",
+      ""
+    ) ++ envValuesFunction ++ List(
       "",
       "_ccas() {",
       "  local cur prev words cword",
@@ -159,6 +176,9 @@ object CompletionEmitter {
       "    jobid)  (( posIndex == 0 )) && COMPREPLY=( $(compgen -W \"$(_ccas_cache recent-jobs.txt)\" -- \"$cur\") ) ;;",
       "    shell)  (( posIndex == 0 )) && COMPREPLY=( $(compgen -W \"bash zsh fish\" -- \"$cur\") ) ;;",
       "    envkey) (( posIndex == 0 )) && COMPREPLY=( $(compgen -W \"$envkeys\" -- \"$cur\") ) ;;",
+      // `config set` takes no flags, so the word before its value is always the key.
+      "    envset) (( posIndex == 0 )) && COMPREPLY=( $(compgen -W \"$envkeys\" -- \"$cur\") )",
+      "            (( posIndex == 1 )) && COMPREPLY=( $(compgen -W \"$(_ccas_env_values \"$prev\")\" -- \"$cur\") ) ;;",
       "    *) COMPREPLY=( $(compgen -W \"$opts --help\" -- \"$cur\") ) ;;",
       "  esac",
       "}",
@@ -196,6 +216,8 @@ object CompletionEmitter {
       "  local f=\"${XDG_CACHE_HOME:-$HOME/.cache}/ccas/$1\"",
       "  [[ -r $f ]] && cat -- \"$f\"",
       "}",
+      ""
+    ) ++ envValuesFunction ++ List(
       "",
       "_ccas() {",
       "  local top=\"" + top + "\"",
@@ -242,6 +264,8 @@ object CompletionEmitter {
       "    jobid)  (( posIndex == 0 )) && compadd -- ${(f)\"$(_ccas_cache recent-jobs.txt)\"} ;;",
       "    shell)  (( posIndex == 0 )) && compadd -- bash zsh fish ;;",
       "    envkey) (( posIndex == 0 )) && compadd -- ${=envkeys} ;;",
+      "    envset) (( posIndex == 0 )) && compadd -- ${=envkeys}",
+      "            (( posIndex == 1 )) && compadd -- ${=$(_ccas_env_values \"$prev\")} ;;",
       "    *) compadd -- ${=opts} --help ;;",
       "  esac",
       "}",
@@ -273,19 +297,25 @@ object CompletionEmitter {
   }
 
   // NOTE: fish offers a command's positional candidates (club slugs for `use-club`, job ids for `logs`, shells for
-  // `completion`) without a positional-count guard — fish has no portable positional primitive. Harmless: each such
-  // command takes exactly one positional, and the candidates are prefix-filtered by what's typed.
-  private def fishPosLine(leaf: Leaf): Option[String] = {
+  // `completion`) without a positional-count guard — fish has no portable positional primitive. Harmless: they are
+  // prefix-filtered. `config set` offers key names until a key is typed, then its values, even after a value.
+  private def fishPosLines(leaf: Leaf): List[String] = {
     val cond = fishCond(leaf)
-    val cache = leaf.positional match {
-      case PositionalKind.Slug   => Some("(__fish_ccas_cache clubs.txt)")
-      case PositionalKind.JobId  => Some("(__fish_ccas_cache recent-jobs.txt)")
-      case PositionalKind.Shell  => Some("bash zsh fish")
-      case PositionalKind.EnvKey => Some(envKeys)
-      case _                     => None
+    leaf.positional match {
+      case PositionalKind.Slug   => List(fishArgLine(cond, "(__fish_ccas_cache clubs.txt)"))
+      case PositionalKind.JobId  => List(fishArgLine(cond, "(__fish_ccas_cache recent-jobs.txt)"))
+      case PositionalKind.Shell  => List(fishArgLine(cond, "bash zsh fish"))
+      case PositionalKind.EnvKey => List(fishArgLine(cond, envKeys))
+      case PositionalKind.EnvSetting =>
+        fishArgLine(cond + "; and not __fish_seen_subcommand_from " + envKeys, envKeys) :: envValueGroups.map {
+          case (values, keys) => fishArgLine(cond + "; and __fish_seen_subcommand_from " + keys.mkString(" "), values)
+        }
+      case _ => Nil
     }
-    cache.map(a => "complete -c ccas -n '" + cond + "' -f -a '" + a + "'")
   }
+
+  private def fishArgLine(when: String, offered: String): String =
+    "complete -c ccas -n '" + when + "' -f -a '" + offered + "'"
 
   val fish: String = {
     val header = List(
@@ -318,7 +348,7 @@ object CompletionEmitter {
     }
     val flagLines = CompletionSpec.leaves.flatMap(fishFlagLines) ++
       List("complete -c ccas -n '__fish_use_subcommand' -l version")
-    val posLines = CompletionSpec.leaves.flatMap(fishPosLine)
+    val posLines = CompletionSpec.leaves.flatMap(fishPosLines)
     (header ++ List("") ++ topSubs ++ List("") ++ groupChildren ++ List("") ++ flagLines ++ List("") ++ posLines)
       .mkString("\n") + "\n"
   }
