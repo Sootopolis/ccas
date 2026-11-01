@@ -1,6 +1,6 @@
 # A closure hides a membership, and the account's club list settles it
 
-**Status:** Accepted, 2026-10-14 (#311). Builds on [0021](0021-membership-ends-are-windows.md), whose `club_member_window` it relaxes. Amended by [0023](0023-inferred-memberships-are-computed-not-stored.md) (#302): History neither guesses memberships nor fetches club lists, so a closed account it finds on a board is settled by Membership's kept lists alone.
+**Status:** Accepted, 2026-10-14 (#311). Builds on [0021](0021-membership-ends-are-windows.md), whose `club_member_window` it relaxes. Amended by [0023](0023-inferred-memberships-are-computed-not-stored.md) (#302): History neither guesses memberships nor fetches club lists, so a closed account it finds on a board is settled by Membership's kept lists alone. Amended by #401: a `joined` seen again reopens the player's latest row only ([0026](0026-a-join-the-rows-cannot-place-changes-no-row.md)).
 
 ## Context
 
@@ -18,7 +18,7 @@ Ending the row also left a wedge. A reopened account listed again with its origi
 
 **Kept lists settle the rows closures ended before this.** Each Membership reconcile fetches the lists of up to 50 of the club's closed accounts, linked to it by a row or by a board on its side, that have none kept since their state last changed. It then applies every kept list: an ended row starting at the listed `joined` is hidden instead, and a listed membership no row records opens hidden, replacing any guess it overlaps. A list whose `joined` would overlap a recorded membership changes nothing, and is reported, as is a name that no longer answers.
 
-**The same `joined` seen again reopens the row.** A roster listing a player with the `joined` of a hidden row, or of a row a closure ended, clears its `last_seen` and `until` instead of inserting a new row. A hidden row with an earlier `joined` closes at the new one, as a rejoin, and a hidden guess gives way to the new row. Once any job has seen the account active again, its hidden row is one the roster should list, and an absence from the roster is checked like any member's.
+**The same `joined` seen again reopens the row.** A roster listing a player with the `joined` of their latest row, hidden or ended, clears its `last_seen` and `until` instead of inserting a new row. A hidden row with an earlier `joined` closes at the new one, as a rejoin. Once any job has seen the account active again, its hidden row is one the roster should list, and an absence from the roster is checked like any member's.
 
 ## Alternatives rejected
 

@@ -34,6 +34,8 @@ After a rename the old username 404s, and may later answer for whoever registers
 
 `/pub/club/{slug}/members` lists active accounts only (see [closed accounts](#closing-an-account-does-not-end-its-club-memberships)), each with the `joined` of its current membership. A member who leaves and comes back gets a new `joined`; a reopened account keeps its original one. The same `joined` seen again is therefore the same membership.
 
+Never let a save depend on this ([0026](adr/0026-a-join-the-rows-cannot-place-changes-no-row.md)).
+
 *Operator's account, 2026-10-09 ([#302](https://github.com/Sootopolis/ccas/issues/302)).*
 
 ### A member list is built for each request

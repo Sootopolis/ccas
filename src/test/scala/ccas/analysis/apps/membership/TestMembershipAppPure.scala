@@ -398,7 +398,8 @@ object TestMembershipAppPure extends ZIOSpecDefault {
   private def suiteFormatReconciliation = suite("formatReconciliation")(
     testNamesTheSettledRows,
     testEachCountHasItsSection,
-    testNoSettledSectionWhenNothingSettled
+    testNoSettledSectionWhenNothingSettled,
+    testAnUnsettledJoinHasItsSection
   )
 
   private def testNamesTheSettledRows =
@@ -444,6 +445,32 @@ object TestMembershipAppPure extends ZIOSpecDefault {
       val output =
         MembershipReport.formatReconciliation(reconciliation(Chunk.empty, Chunk.empty, noSettlement), Map.empty)
       assertTrue(output.contains("Settled memberships:  0\n"), !output.contains("[CLUB LIST SETTLED]"))
+    }
+
+  private def testAnUnsettledJoinHasItsSection =
+    test(
+      "a join the rows cannot place is counted in the header and listed under [ROSTER JOIN UNSETTLED] with both " +
+        "dates, and whether the latest membership has ended, leaving the total short, or is hidden"
+    ) {
+      val open   = ClubMember.joined(clubId = clubId, playerId = pid0, since = Times.t2)
+      val ended  = open.copy(playerId = pid1, since = Times.t2, lastSeen = Some(Times.t2), until = Some(Times.t3))
+      val hidden = ClubMember.joined(clubId = clubId, playerId = pid2, since = Times.t3).hidden(Times.t3)
+      val changes = Chunk(
+        MemberChangeSummary(pid0, Username("alice"), Chunk(UnsettledJoin(Times.t0, open))),
+        MemberChangeSummary(pid1, Username("bob"), Chunk(UnsettledJoin(Times.t1, ended))),
+        MemberChangeSummary(pid2, Username("carol"), Chunk(UnsettledJoin(Times.t2, hidden)))
+      )
+      val output = MembershipReport.formatReconciliation(reconciliation(changes, Chunk.empty, noSettlement), Map.empty)
+      assertTrue(
+        output.contains("Unsettled joins:      3\n"),
+        output.contains(
+          s"""[ROSTER JOIN UNSETTLED]
+             |  alice — listed as joined at ${Times.t0}, latest recorded membership from ${Times.t2} — left as recorded
+             |  bob — listed as joined at ${Times.t1}, latest recorded membership from ${Times.t2} to ${Times.t3}, last seen ${Times.t2} — left as recorded, not counted as a member
+             |  carol — listed as joined at ${Times.t2}, latest recorded membership from ${Times.t3}, hidden after ${Times.t3} — left as recorded
+             |""".stripMargin
+        )
+      )
     }
 
   // ==========================================================================
