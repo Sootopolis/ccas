@@ -9,6 +9,7 @@ import zio.http.*
 
 import ccas.analysis.apps.TestTimes
 import ccas.analysis.apps.membership.MembershipChange.StoredRoster
+import ccas.analysis.apps.membership.MembershipClassify.{PhaseBResult, PhaseCResult}
 import ccas.analysis.apps.recruitment.CandidateOutcome
 import ccas.analysis.tables.{Club, ClubMember, Player, PlayerMatchRef, PlayerSnapshot, RecruitmentCandidate}
 import ccas.analysis.tables.subtypes.RecruitmentRunId
@@ -51,6 +52,26 @@ object TestMembershipAppSupport {
 
   val noSettlement: ClosedAccountClubs.Settlement =
     ClosedAccountClubs.Settlement(hidden = Chunk.empty, opened = Chunk.empty, unsettled = Chunk.empty)
+
+  val nothingListed: PhaseBResult = PhaseBResult(
+    resolvedIds = Set.empty,
+    changes = Chunk.empty,
+    newPlayers = Chunk.empty,
+    updatedPlayers = Chunk.empty,
+    archivedSnapshots = Chunk.empty,
+    newMemberships = Chunk.empty,
+    closedMemberships = Chunk.empty,
+    reopenedMemberships = Chunk.empty,
+    unsettledJoins = Chunk.empty
+  )
+
+  val nothingDisappeared: PhaseCResult = PhaseCResult(
+    changes = Chunk.empty,
+    updatedPlayers = Chunk.empty,
+    archivedSnapshots = Chunk.empty,
+    closedMemberships = Chunk.empty,
+    hiddenMemberships = Chunk.empty
+  )
 
   /** A player's club list: each club by slug, with when they joined it. */
   def clubListJson(clubs: (String, Instant)*): String =

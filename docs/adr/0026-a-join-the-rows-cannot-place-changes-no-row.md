@@ -1,6 +1,6 @@
 # A join a member's rows cannot place changes no row, and is reported
 
-**Status:** Accepted, 2026-11-01 (#401). Narrows [0022](0022-a-closure-hides-a-membership.md)'s rule that the same `joined` seen again reopens a row: it now holds for a player's latest row only.
+**Status:** Accepted, 2026-11-01 (#401). Narrows [0022](0022-a-closure-hides-a-membership.md)'s rule that the same `joined` seen again reopens a row: it now holds for a player's latest row only. Extended by [0027](0027-a-verdict-the-rows-cannot-hold-is-refused.md) (#403): a verdict the rows cannot hold, whatever produced it, is refused before the save.
 
 ## Context
 

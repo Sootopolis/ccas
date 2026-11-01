@@ -7,9 +7,9 @@ import zio.test.Gen
 import ccas.analysis.tables.ClubMember
 import ccas.api.misc.subtypes.{ClubId, PlayerId}
 
-/** Generators of a club's membership rows, and the rules the database holds them to, for properties. Every instant is
-  * a day on a grid of [[Days]], so that two often coincide: the boundaries these rules turn on, which instants drawn
-  * from the whole timeline would all but never reach.
+/** Generators of a club's membership rows, for properties. Every instant is a day on a grid of [[Days]], so that two
+  * often coincide: the boundaries the rules on these rows turn on, which instants drawn from the whole timeline would
+  * all but never reach.
   */
 object MembershipGen {
 
@@ -65,18 +65,21 @@ object MembershipGen {
     }
   }
 
-  /** Whether `row` passes `club_member_window` as SQL reads the `CHECK`, where a comparison with null passes. */
-  def valid(row: ClubMember): Boolean =
-    (row.until.isEmpty || row.lastSeen.nonEmpty) &&
-      row.lastSeen.forall(lastSeen => !lastSeen.isBefore(row.since) && row.until.forall(!lastSeen.isAfter(_)))
-
-  /** Whether `club_member_no_overlap` refuses `a` and `b` together. Each is `[since, until)`: unbounded without an
-    * `until`, and empty, overlapping nothing, when its ends meet.
+  /** Any one to three of `playerId`'s rows in `clubId`, whatever their dates, on a grid small enough that their ends
+    * often meet: rows the database may or may not take.
     */
-  def overlap(a: ClubMember, b: ClubMember): Boolean = {
-    def nonEmpty(row: ClubMember) = row.until.forall(row.since.isBefore)
-    a.clubId == b.clubId && a.playerId == b.playerId && nonEmpty(a) && nonEmpty(b) &&
-    a.until.forall(b.since.isBefore) && b.until.forall(a.since.isBefore)
+  def anyRows(clubId: ClubId, playerId: PlayerId): Gen[Any, List[ClubMember]] = {
+    val nearby = Gen.int(0, 5).map(day)
+    val row = for {
+      since    <- nearby
+      lastSeen <- Gen.option(nearby)
+      until    <- Gen.option(nearby)
+    } yield ClubMember(clubId = clubId, playerId = playerId, since = since, lastSeen = lastSeen, until = until)
+    // Two empty rows with one start break only the key, which rows drawn at random would all but never show.
+    val empty = nearby.map { at =>
+      ClubMember(clubId = clubId, playerId = playerId, since = at, lastSeen = Some(at), until = Some(at))
+    }
+    Gen.listOfBounded(1, 3)(Gen.oneOf(row, empty))
   }
 
   /** Whether `row`'s `[since, until)` holds `at`. */

@@ -5,7 +5,7 @@ import java.time.Instant
 import zio.{Chunk, Clock, RIO, Task, ZIO}
 
 import ccas.analysis.apps.membership.MembershipChange.{later, StoredRoster}
-import ccas.analysis.tables.{ClubMember, PlayerClubList, PlayerName}
+import ccas.analysis.tables.{ClubMember, MembershipStanding, PlayerClubList, PlayerName}
 import ccas.analysis.tables.PlayerClubList.Listing
 import ccas.api.misc.subtypes.{ClubId, PlayerId, Username}
 import ccas.api.player.{ApiPlayer, ApiPlayerClubs}
@@ -55,7 +55,7 @@ private[membership] object ClosedAccountClubs {
       fetched  <- gather(client = client, clubId = clubId, exclude = exclude)
       listings <- PlayerClubList.selectListings(clubId)
       outcomes = Chunk.from(listings).filterNot(listing => exclude.contains(listing.playerId)).map { listing =>
-        listing.playerId -> outcome(clubId, storedRoster.unlistedByPlayerId.getOrElse(listing.playerId, Nil), listing)
+        listing.playerId -> outcome(clubId, storedRoster.rowsOf(listing.playerId), listing)
       }
       settledIds = outcomes.collect { case (playerId, Outcome.Hide(_, _) | Outcome.Open(_)) => playerId }
       names <- PlayerName.selectPlayers(settledIds)
@@ -104,29 +104,29 @@ private[membership] object ClosedAccountClubs {
     )
   }
 
-  private enum Outcome {
+  private[membership] enum Outcome {
     case Hide(row: ClubMember, undoneUntil: Instant)
     case Open(row: ClubMember)
     case Overlaps
     case Unchanged
   }
 
-  /** `rows` are the player's rows the roster does not list. */
-  private def outcome(clubId: ClubId, rows: List[ClubMember], listing: Listing): Outcome = {
-    val (matching, others) = rows.partition(_.since == listing.joined)
-    val lastSeen           = later(listing.joined, listing.lastOnline)
-    if (others.exists(_.until.forall(_.isAfter(listing.joined)))) { Outcome.Overlaps }
-    else {
-      matching.headOption match {
-        case Some(row) =>
-          row.until match {
-            case None        => Outcome.Unchanged
-            case Some(until) => Outcome.Hide(row.hidden(later(row.lastSeen.getOrElse(row.since), lastSeen)), until)
-          }
-        case None =>
-          val row = ClubMember.joined(clubId = clubId, playerId = listing.playerId, since = listing.joined)
-          Outcome.Open(row.hidden(lastSeen))
-      }
+  /** `rows` are the player's, none of which the roster lists. */
+  private[membership] def outcome(clubId: ClubId, rows: MemberRows, listing: Listing): Outcome = {
+    val lastSeen = later(listing.joined, listing.lastOnline)
+    def opened = {
+      val row = ClubMember.joined(clubId = clubId, playerId = listing.playerId, since = listing.joined)
+      Outcome.Open(row.hidden(lastSeen))
+    }
+    rows.place(listing.joined) match {
+      case JoinPlacement.First | _: JoinPlacement.FollowsLatest        => opened
+      case _: JoinPlacement.Contradicted | _: JoinPlacement.EndsLatest => Outcome.Overlaps
+      case JoinPlacement.SameMembership(row) =>
+        row.standing match {
+          case MembershipStanding.Open | _: MembershipStanding.Hidden => Outcome.Unchanged
+          case MembershipStanding.Ended(rowLastSeen, until) =>
+            Outcome.Hide(row.hidden(later(rowLastSeen, lastSeen)), until)
+        }
     }
   }
 
