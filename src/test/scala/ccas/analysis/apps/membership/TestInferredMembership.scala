@@ -2,8 +2,10 @@ package ccas.analysis.apps.membership
 
 import java.time.Instant
 
-import zio.test.{assertTrue, Spec, ZIOSpecDefault}
+import zio.Random
+import zio.test.{assertTrue, check, Gen, Spec, ZIOSpecDefault}
 
+import ccas.analysis.apps.membership.MembershipGen.day
 import ccas.analysis.tables.ClubMatchBoard.Sighting
 import ccas.analysis.tables.ClubMember
 import ccas.api.misc.subtypes.{ClubId, PlayerId}
@@ -18,14 +20,13 @@ object TestInferredMembership extends ZIOSpecDefault {
     testTheWorkedExampleFromIssue302,
     testEachMatchFromTheFirstRosterOnStandsAlone,
     testMatchesStartingAtOnceAreOneMembership,
-    testOnlyAPlayersOwnRowsAndMatchesForTheClubCount
+    testOnlyAPlayersOwnRowsAndMatchesForTheClubCount,
+    suiteProperties
   )
 
   private val clubId = ClubId(1)
   private val alice  = PlayerId(10)
   private val bob    = PlayerId(11)
-
-  private def day(n: Int): Instant = Instant.parse("2020-01-01T00:00:00Z").plusSeconds(n * 86_400L)
 
   private def forClub(playerId: PlayerId, at: Instant) = Sighting(playerId = playerId, startTime = at, forClub = true)
   private def against(playerId: PlayerId, at: Instant) = Sighting(playerId = playerId, startTime = at, forClub = false)
@@ -130,4 +131,159 @@ object TestInferredMembership extends ZIOSpecDefault {
           List(membership(alice, day(1), day(4), 3))
       )
     }
+
+  // ==========================================================================
+  // Properties: the rule, against generated rows and matches
+  // ==========================================================================
+
+  private def suiteProperties = suite("properties")(
+    testNoInferredMembershipOverlapsARow,
+    testEachMatchOutsideEveryRowIsInOneMembership,
+    testNothingThatPartsMembershipsComesBetweenTheirMatches,
+    testConsecutiveMembershipsArePartedForAReason,
+    testFromTheFirstRosterOnAMembershipSpansOneInstant,
+    testInferenceReadsEachPlayerAloneInAnyOrder
+  )
+
+  /** What [[InferredMembership.infer]] reads of one club. */
+  private final case class Evidence(
+    rows: List[ClubMember],
+    sightings: List[Sighting],
+    firstRosterOption: Option[Instant]
+  ) {
+    lazy val inferred: List[InferredMembership] =
+      InferredMembership.infer(rows = rows, sightings = sightings, firstRosterOption = firstRosterOption)
+
+    private lazy val rowsByPlayer = rows.groupBy(_.playerId)
+
+    def rowsOf(playerId: PlayerId): List[ClubMember] = rowsByPlayer.getOrElse(playerId, Nil)
+
+    /** The matches for the club that no row of the player's holds: those memberships are inferred from. */
+    lazy val unrecorded: List[Sighting] =
+      sightings.filter(s => s.forClub && !rowsOf(s.playerId).exists(MembershipGen.covers(_, s.startTime)))
+
+    def matchesOf(membership: InferredMembership): List[Instant] =
+      unrecorded.collect {
+        case s if s.playerId == membership.playerId && holds(membership, s.startTime) => s.startTime
+      }
+
+    /** When something that parts two of `playerId`'s matches for the club happened: a match against it, a row's start. */
+    def partings(playerId: PlayerId): List[Instant] = {
+      val matchesAgainst = sightings.collect { case s if s.playerId == playerId && !s.forClub => s.startTime }
+      matchesAgainst ++ rowsOf(playerId).map(_.since)
+    }
+  }
+
+  private def holds(membership: InferredMembership, at: Instant): Boolean =
+    !at.isBefore(membership.firstMatch) && !at.isAfter(membership.lastMatch)
+
+  private val sighting = for {
+    playerId <- Gen.elements(alice, bob)
+    at       <- MembershipGen.instant
+    forClub  <- Gen.boolean
+  } yield Sighting(playerId = playerId, startTime = at, forClub = forClub)
+
+  private val clubEvidence = for {
+    alicesRows        <- MembershipGen.history(clubId = clubId, playerId = alice, minRows = 0)
+    bobsRows          <- MembershipGen.history(clubId = clubId, playerId = bob, minRows = 0)
+    sightings         <- Gen.listOfBounded(0, 12)(sighting)
+    firstRosterOption <- Gen.option(MembershipGen.instant)
+  } yield Evidence(rows = alicesRows ++ bobsRows, sightings = sightings, firstRosterOption = firstRosterOption)
+
+  /** A membership spans `[firstMatch, lastMatch]`, and a row `[since, until)`. */
+  private def testNoInferredMembershipOverlapsARow =
+    test("an inferred membership never overlaps a row of its player") {
+      check(clubEvidence) { evidence =>
+        val overlapping = for {
+          membership <- evidence.inferred
+          row        <- evidence.rowsOf(membership.playerId)
+          if row.until.forall(row.since.isBefore) && !row.since.isAfter(membership.lastMatch) &&
+            row.until.forall(membership.firstMatch.isBefore)
+        } yield (membership, row)
+        assertTrue(overlapping.isEmpty)
+      }
+    }
+
+  /** And its first and last match are among those it counts. */
+  private def testEachMatchOutsideEveryRowIsInOneMembership =
+    test("each match for the club outside every row is in exactly one inferred membership, which counts it") {
+      check(clubEvidence) { evidence =>
+        val inferred = evidence.inferred
+        val homes = evidence.unrecorded.map(s => inferred.count(m => m.playerId == s.playerId && holds(m, s.startTime)))
+        val miscounted = inferred.filterNot { membership =>
+          val matches = evidence.matchesOf(membership)
+          membership.matches == matches.size && matches.contains(membership.firstMatch) &&
+          matches.contains(membership.lastMatch)
+        }
+        assertTrue(homes.forall(_ == 1), miscounted.isEmpty)
+      }
+    }
+
+  /** Between two matches, not at one: what happens at the instant a membership's match started does not part it. */
+  private def testNothingThatPartsMembershipsComesBetweenTheirMatches =
+    test("no match against the club, nor a row's start, comes between two matches of one inferred membership") {
+      check(clubEvidence) { evidence =>
+        val inside = for {
+          membership <- evidence.inferred
+          at         <- evidence.partings(membership.playerId)
+          if at.isAfter(membership.firstMatch) && at.isBefore(membership.lastMatch) &&
+            !evidence.matchesOf(membership).contains(at)
+        } yield (membership, at)
+        assertTrue(inside.isEmpty)
+      }
+    }
+
+  /** The converse of the test above. The others pass a rule that parts every two matches not started at once. */
+  private def testConsecutiveMembershipsArePartedForAReason =
+    test("consecutive inferred memberships are parted by a match against the club or a row's start, or a full roster") {
+      check(clubEvidence) { evidence =>
+        val unexplained = evidence.inferred.groupBy(_.playerId).toList.flatMap { (playerId, memberships) =>
+          val inOrder = memberships.sortBy(_.firstMatch)
+          inOrder.zip(inOrder.drop(1)).filterNot { (earlier, later) =>
+            def between(at: Instant) = at.isAfter(earlier.lastMatch) && at.isBefore(later.firstMatch)
+            later.firstMatch.isAfter(earlier.lastMatch) && (
+              evidence.partings(playerId).exists(between) ||
+                evidence.firstRosterOption.exists(roster => !later.firstMatch.isBefore(roster))
+            )
+          }
+        }
+        assertTrue(unexplained.isEmpty)
+      }
+    }
+
+  private def testFromTheFirstRosterOnAMembershipSpansOneInstant =
+    test("from the club's first full roster on, an inferred membership spans one instant") {
+      check(clubEvidence) { evidence =>
+        val spanning = evidence.inferred.filter { membership =>
+          evidence.firstRosterOption.exists(roster => !membership.lastMatch.isBefore(roster)) &&
+          membership.firstMatch != membership.lastMatch
+        }
+        assertTrue(spanning.isEmpty)
+      }
+    }
+
+  private def testInferenceReadsEachPlayerAloneInAnyOrder = {
+    val reordered = for {
+      evidence  <- clubEvidence
+      sightings <- Gen.fromZIO(Random.shuffle(evidence.sightings))
+    } yield (evidence, evidence.copy(sightings = sightings))
+    def inOrder(memberships: List[InferredMembership]) =
+      memberships.sortBy(membership => (PlayerId.unwrap(membership.playerId), membership.firstMatch))
+
+    test("inference reads each player alone, whatever order the sightings come in") {
+      check(reordered) { (evidence, shuffled) =>
+        val alone = List(alice, bob).flatMap { playerId =>
+          Evidence(
+            rows = evidence.rowsOf(playerId),
+            sightings = evidence.sightings.filter(_.playerId == playerId),
+            firstRosterOption = evidence.firstRosterOption
+          ).inferred
+        }
+        assertTrue(
+          inOrder(shuffled.inferred) == inOrder(evidence.inferred),
+          inOrder(alone) == inOrder(evidence.inferred)
+        )
+      }
+    }
+  }
 }

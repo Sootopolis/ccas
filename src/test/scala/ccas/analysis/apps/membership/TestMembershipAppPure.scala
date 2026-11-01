@@ -3,7 +3,7 @@ package ccas.analysis.apps.membership
 import java.time.Instant
 
 import zio.Chunk
-import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
+import zio.test.{assertTrue, check, Gen, Spec, TestAspect, ZIOSpecDefault}
 
 import TestMembershipAppSupport.*
 
@@ -624,6 +624,9 @@ object TestMembershipAppPure extends ZIOSpecDefault {
       )
     def ends(closed: ClubMember) = (closed.lastSeen, closed.until)
 
+    val currentRow     = MembershipGen.current(clubId = clubId, playerId = pid0)
+    val previousRoster = Gen.option(MembershipGen.instant)
+
     suite("close")(
       test("last seen at the previous roster, which listed the row") {
         assertTrue(ends(observedAt(Some(Times.t2)).close(row, Times.t3)) == (Some(Times.t2), Some(Times.t3)))
@@ -652,6 +655,22 @@ object TestMembershipAppPure extends ZIOSpecDefault {
       test("a membership is hidden at its last sighting only while no until has ended it") {
         val closed = observedAt(Some(Times.t2)).close(row, Times.t3)
         assertTrue(row.hiddenAt.isEmpty, row.hidden(Times.t2).hiddenAt.contains(Times.t2), closed.hiddenAt.isEmpty)
+      },
+      test("closing a valid row at any time leaves a valid ended row, ending at the later of its start and the close") {
+        check(currentRow, MembershipGen.instant, previousRoster) { (member, at, lastObservedAt) =>
+          val closed = observedAt(lastObservedAt).close(member, at)
+          assertTrue(MembershipGen.valid(closed), closed.until.contains(List(member.since, at).max))
+        }
+      },
+      test("hiding a valid row leaves a valid hidden row, last seen no earlier than before") {
+        check(currentRow, MembershipGen.instant, previousRoster) { (member, lastOnline, lastObservedAt) =>
+          val hidden = member.hidden(observedAt(lastObservedAt).hiddenAt(member, lastOnline))
+          assertTrue(
+            MembershipGen.valid(hidden),
+            hidden.hiddenAt.nonEmpty,
+            member.lastSeen.forall(before => hidden.lastSeen.exists(!_.isBefore(before)))
+          )
+        }
       }
     )
   }
