@@ -5,4 +5,4 @@
 # Pinned because the JDK was previously unpinned and drifted: a Homebrew-backed
 # SDKMAN candidate (21.0.12-brew) dangled when Homebrew removed the keg it
 # symlinked into, which broke every build with "Unable to locate a Java Runtime".
-java=25.0.4-tem
+java=25.0.5.0+8-tem
