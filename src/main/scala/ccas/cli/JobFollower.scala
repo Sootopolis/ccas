@@ -5,7 +5,7 @@ import scala.util.Try
 import zio.*
 
 import ccas.server.jobs.JobRunStatus
-import ccas.server.routes.JobRoutes.{CancelResult, ClubJobResult, JobResult, JobStatusResponse}
+import ccas.server.routes.JobRoutes.{CancelResult, ClubJobResult, JobStatusResponse}
 
 /** Drives a submitted job to completion by **following its log stream** (`GET /api/jobs/{id}/logs`), printing each
   * line as it arrives. The server holds the response open until the job is terminal and the tail reaches EOF, so the
@@ -227,12 +227,6 @@ final class JobFollower(
           "will mark the job Failed. Check 'ccas jobs' once it is back up."
       )
       .orDie
-
-  /** Club-less submit result (matchref). The POST returns HTTP 200 even on failure, so branch on the body. */
-  def handleSingle(label: String, result: JobResult): Task[Int] =
-    JobFollower.whenSubmitted(label, result.error, result.jobIdOption) { id =>
-      CompletionCache.appendJob(id) *> Console.printLine(s"$label submitted: $id").orDie *> followJob(id)
-    }
 
   /** Club-scoped submit result. When `logsToStderr`, the submit notice and streamed job logs go to stderr so stdout
     * carries only a payload `onComplete` prints (`ccas recruit --stdout | wl-copy`, and the non-interactive
