@@ -8,10 +8,10 @@ import ccas.analysis.apps.{withClubSlugRenameRecovery, ClubQuery, ClubResolution
 import ccas.analysis.apps.ClubSlugRenameResolver.ResolvedClub
 import ccas.analysis.apps.ref.RefHelpers
 import ccas.analysis.tables.{Club, ClubAdmin, ClubMatch, ClubMatchRef, ClubName, Player, Tables}
-import ccas.api.club.ApiClubMatches
+import ccas.api.club.{ApiClub, ApiClubMatches}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId}
 import ccas.utils.{ApiConcurrency, OutputFile, ProgressDisplay}
-import ccas.utils.client.{BodyStore, ChessComClient, HttpClientLayer}
+import ccas.utils.client.{BodyStore, ChessComClient, HttpClientLayer, ReportedNotFound}
 import ccas.utils.errors.{safeMessage, NotFoundException}
 import ccas.utils.sql.PostgresClient
 
@@ -56,10 +56,17 @@ object ClubDataApp extends ZIOAppDefault {
     }
   }
 
-  case class RefreshResult(clubsProcessed: Int, clubsFailed: Int, clubsAdminChanged: Int, totalAdmins: Int)
+  case class RefreshResult(
+    clubsProcessed: Int,
+    clubsFailed: Int,
+    clubsNotFound: Int,
+    clubsAdminChanged: Int,
+    totalAdmins: Int
+  )
 
-  private case class ClubResult(adminCount: Int, failed: Boolean, adminChanged: Boolean)
-  private val ClubFailed = ClubResult(0, failed = true, adminChanged = false)
+  private case class ClubResult(adminCount: Int, failed: Boolean, notFound: Boolean, adminChanged: Boolean)
+  private val ClubFailed   = ClubResult(adminCount = 0, failed = true, notFound = false, adminChanged = false)
+  private val ClubNotFound = ClubResult(adminCount = 0, failed = false, notFound = true, adminChanged = false)
 
   /** Refreshes club profile data (admins, member count, slug, latest_match_at, fetched_at) for all known clubs. When
     * `minAgeHours` is set, clubs refreshed within the last N hours are skipped; clubs with a null `fetched_at` (never
@@ -108,7 +115,7 @@ object ClubDataApp extends ZIOAppDefault {
         total = clubs.size
         _         <- ZIO.logInfo(s"[ClubData] Refreshing $total clubs")
         bar       <- ProgressDisplay.progressBar
-        resultRef <- Ref.make(RefreshResult(0, 0, 0, 0))
+        resultRef <- Ref.make(RefreshResult(0, 0, 0, 0, 0))
         _ <- ZIO.foreachPar(clubs) { club =>
           for {
             r <- refreshClub(client, club).catchAll { error =>
@@ -118,6 +125,7 @@ object ClubDataApp extends ZIOAppDefault {
               acc.copy(
                 clubsProcessed = acc.clubsProcessed + 1,
                 clubsFailed = acc.clubsFailed + (if (r.failed) 1 else 0),
+                clubsNotFound = acc.clubsNotFound + (if (r.notFound) 1 else 0),
                 clubsAdminChanged = acc.clubsAdminChanged + (if (r.adminChanged) 1 else 0),
                 totalAdmins = acc.totalAdmins + r.adminCount
               )
@@ -137,7 +145,7 @@ object ClubDataApp extends ZIOAppDefault {
 
   private def logSummary(label: String, r: RefreshResult, total: Int): RIO[ProgressDisplay, Unit] =
     ZIO.logInfo(
-      s"[ClubData] $label: ${r.clubsProcessed}/$total clubs, ${r.clubsFailed} failed, " +
+      s"[ClubData] $label: ${r.clubsProcessed}/$total clubs, ${r.clubsFailed} failed, ${r.clubsNotFound} not found, " +
         s"${r.clubsAdminChanged} admin changes, ${r.totalAdmins} total admins"
     )
 
@@ -150,8 +158,20 @@ object ClubDataApp extends ZIOAppDefault {
       // renamed club pays for both steps resolving the rename — bounded, since the second reads what the first wrote.
       _ <- refreshLatestMatchAt(client, club, currentNameOption)
 
-      resolved <- fetchProfile(client, club, currentNameOption)
-      apiClub = resolved.api
+      // Absence is an answer, not a failure (ADR 0019). Caught around this step alone: the next one fetches players,
+      // whose 404 says nothing about the club.
+      resolvedOption <- fetchProfile(client, club, currentNameOption).asSome.catchSome {
+        case _: ReportedNotFound | _: NotFoundException => ZIO.none
+      }
+      result <- resolvedOption match {
+        case Some(resolved) => storeProfile(client, club, resolved.api)
+        case None =>
+          ZIO.logInfo(s"[ClubData] Not found: ${club.slug} (club #${ClubId.unwrap(club.clubId)})").as(ClubNotFound)
+      }
+    } yield result
+
+  private def storeProfile(client: ChessComClient, club: Club, apiClub: ApiClub): RIO[PostgresClient, ClubResult] =
+    for {
       _ <- Club.upsert(Club.fromApi(apiClub))
 
       adminUsernames = apiClub.adminUsernames
@@ -160,7 +180,12 @@ object ClubDataApp extends ZIOAppDefault {
       _           <- logAdminDiff(club, existingAdminIds, allAdminIds)
       // Must remain the last step: --min-age relies on fetched_at being stamped only on full success.
       _ <- Club.updateFetchedAt(club.clubId, Instant.now())
-    } yield ClubResult(allAdminIds.size, failed = false, adminChanged = allAdminIds != existingAdminIds)
+    } yield ClubResult(
+      adminCount = allAdminIds.size,
+      failed = false,
+      notFound = false,
+      adminChanged = allAdminIds != existingAdminIds
+    )
 
   /** Fetches the club's profile under the name it holds now. Both ways of losing a name land on the rename tiers,
     * which verify their candidate against the id (ADR 0016): a name another club took here, so this club holds none
@@ -275,7 +300,10 @@ object ClubDataApp extends ZIOAppDefault {
   ): RIO[PostgresClient, Option[ApiClubMatches]] =
     fetchClubMatches(client, slug)
       .withClubSlugRenameRecovery(client, slug, Some(clubId))(fresh => fetchClubMatches(client, fresh))
-      .catchAll(error => ZIO.logInfo(s"[ClubData] Match fetch failed for $slug: ${error.safeMessage}").as(None))
+      .catchAll {
+        case _: ReportedNotFound => ZIO.none // the profile step that follows reports a club that has gone
+        case error => ZIO.logInfo(s"[ClubData] Match fetch failed for $slug: ${error.safeMessage}").as(None)
+      }
 
   /** Fetches the club's `/matches` listing, folding an unchanged cache result (Fresh / 304-revalidated / byte-identical
     * 200) to `None` so the caller skips the `SELECT body` Neon read — the #190 egress cut. The row stays cached, so the
@@ -327,9 +355,10 @@ object ClubDataApp extends ZIOAppDefault {
       ZIO.logDebug(s"[ClubData] Opportunistic ref failed for $slug: ${error.safeMessage}")
     }
 
-  private def formatReport(data: RefreshResult): String =
+  private[clubdata] def formatReport(data: RefreshResult): String =
     s"""Clubs processed: ${data.clubsProcessed}
        |Clubs failed: ${data.clubsFailed}
+       |Clubs not found: ${data.clubsNotFound}
        |Clubs with admin changes: ${data.clubsAdminChanged}
        |Total admins stored: ${data.totalAdmins}
        |""".stripMargin

@@ -62,6 +62,18 @@ Active clubs have reported timestamps more than twelve years old. Use the latest
 
 *2026-04-11.*
 
+### A club can be reported missing for months
+
+`/pub/club/{slug}` and `/pub/club/{slug}/matches` can both answer `Club "…" not found.` for months with rename recovery finding nothing, while the admins we hold for the club are still recorded as active. A renamed club answers the same way, so this does not prove the club closed. Count it apart from failures, and keep asking: [a 404 is not permanent](#a-404-is-not-permanent).
+
+*2026-11-02 ([#236](https://github.com/Sootopolis/ccas/issues/236)): four clubs, last fully refreshed between 2026-05-30 and 2026-07-31 or never, on nearly every sweep since at least 2026-10-12.*
+
+### A club's match list can fail while its profile answers
+
+`/pub/club/{slug}/matches` can return 500 for weeks while the club's profile works, so one failing endpoint says nothing about the other. Do not expect a JSON body: on 2026-11-02 the 500 carried an HTML page from Cloudflare headed `421 Misdirected Request`.
+
+*`botvinnik-chess-school`, on nearly every sweep since at least 2026-10-12 ([#236](https://github.com/Sootopolis/ccas/issues/236)).*
+
 ## Club matches
 
 ### Registration follows membership
