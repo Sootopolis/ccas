@@ -9,7 +9,7 @@ import zio.{Clock, Console, UIO, ZIO}
 
 /** Maintains the cache files the generated shell completions read — club slugs and recent job ids. Every operation is
   * best-effort: IO errors are swallowed and never change a command's exit code (completion is a convenience, not
-  * correctness). Each takes the file it works on: outside tests, a [[CliWiring]]'s, under [[XdgPaths.cacheDir]],
+  * correctness). Each takes the file it works on: outside tests, a [[CliWiring]]'s, under the XDG cache directory,
   * matching the paths the emitted scripts read.
   */
 private[cli] object CompletionCache {

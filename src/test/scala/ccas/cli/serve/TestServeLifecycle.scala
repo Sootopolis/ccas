@@ -17,7 +17,7 @@ import ccas.server.CcasServer
   * [[Detach.diedMessage]], [[Detach.startedMessage]], [[PidFile.parse]], [[PidFile.portOf]], [[PidFile.alreadyRunning]],
   * [[ServerStatus.describe]], [[ServerList.Row.vacant]], [[ServerList.render]], [[HealthProbe.portIn]],
   * [[HealthProbe.classify]]) is tested directly; the effectful pid-file paths are exercised against an explicit temp
-  * path (the `XdgPaths`-backed default reads `System.getenv`, which can't be set in-process). The full
+  * path (the `CliWiring.live` default reads `System.getenv`, which can't be set in-process). The full
   * spawn/health-poll round-trip is covered by manual e2e, not here.
   */
 object TestServeLifecycle extends ZIOSpecDefault {

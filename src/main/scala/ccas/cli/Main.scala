@@ -27,9 +27,13 @@ object Main extends ZIOAppDefault {
         Console.printLine(s"ccas ${BuildInfo.version}").orDie *> exit(ExitCode.success)
       } else {
         // Resolve the CLI config first: its `api_url` becomes the `--server` default (built-in fallback if absent), and
-        // `default_clubs` seeds completion. A malformed file fails fast with a message pointing at it (exit 2).
-        val wiring = CliWiring.live
-        CliConfig.load(wiring.configFile).foldZIO(configLoadFailed, runResolved(wiring, args.toList, _))
+        // `default_clubs` seeds completion. A malformed file, or no directory to find it in, fails fast with a message
+        // saying what to fix (exit 2).
+        val resolved = for {
+          wiring <- ZIO.fromEither(CliWiring.live)
+          cfg    <- CliConfig.load(wiring.configFile)
+        } yield (wiring, cfg)
+        resolved.foldZIO(configLoadFailed, (wiring, cfg) => runResolved(wiring, args.toList, cfg))
       }
     }
 
@@ -64,10 +68,10 @@ object Main extends ZIOAppDefault {
   private def execute(wiring: CliWiring, cfg: CliConfig)(cmd: CliCommand): URIO[ZIOAppArgs, ExitCode] = cmd match {
     // `Serve(false, Some(_))` never reaches here: `CliCommand.serverUpOptions` rejects it at parse time.
     case CliCommand.Serve(false, _)          => serve(wiring.serverEnvFile)
-    case CliCommand.Serve(true, timeout)     => detachServe(wiring.serverEnvFile, cfg, timeout)
-    case CliCommand.Stop(portOption)         => stopServe(wiring.serverEnvFile, portOption)
-    case CliCommand.ServerStatus(portOption) => statusServe(wiring.serverEnvFile, portOption)
-    case CliCommand.ServerList               => listServe(wiring.serverEnvFile)
+    case CliCommand.Serve(true, timeout)     => detachServe(wiring, cfg, timeout)
+    case CliCommand.Stop(portOption)         => stopServe(wiring, portOption)
+    case CliCommand.ServerStatus(portOption) => statusServe(wiring, portOption)
+    case CliCommand.ServerList               => listServe(wiring)
     case CliCommand.Completion(shell)        => printCompletion(shell)
     case CliCommand.Use(slugs, clear)        =>
       // Same server the `--server`-less commands resolve to (config `api_url`, else the built-in default): use-club has
@@ -91,33 +95,37 @@ object Main extends ZIOAppDefault {
   // Detached serve: apply the ccas.env overlay first, so a file-only SERVER_PORT reaches the port this parent JVM
   // resolves (it picks the pid file, the log and the readiness probe), then the foreground's mandatory-config precheck.
   // The detached child re-runs the overlay in its own JVM.
-  private def detachServe(envFile: Path, cfg: CliConfig, readyTimeoutSeconds: Option[Int]): URIO[ZIOAppArgs, ExitCode] =
-    applyServerEnv(envFile) *> ZIO.suspendSucceed {
+  private def detachServe(
+    wiring: CliWiring,
+    cfg: CliConfig,
+    readyTimeoutSeconds: Option[Int]
+  ): URIO[ZIOAppArgs, ExitCode] =
+    applyServerEnv(wiring.serverEnvFile) *> ZIO.suspendSucceed {
       (missingServeEnv, Detach.resolveDeadline(readyTimeoutSeconds, cfg.readyTimeoutSeconds)) match {
         case (Some(msg), _) => Console.printLineError(s"error: $msg").orDie.as(ExitCode(2))
         // A non-positive deadline is a usage error (exit 2), from the flag or the config file alike — not a failed boot.
         case (None, Left(msg)) => Console.printLineError(s"error: $msg").orDie.as(ExitCode(2))
         case (None, Right(deadline)) =>
-          val logDir = cfg.logDir.fold(XdgPaths.stateDir.resolve("logs"))(Paths.get(_))
-          onServerPort(HealthProbe.resolvePort)(port => Detach.run(logDir, XdgPaths.stateDir, port, deadline))
+          val logDir = cfg.logDir.fold(wiring.stateDir.resolve("logs"))(Paths.get(_))
+          onServerPort(HealthProbe.resolvePort)(port => Detach.run(logDir, wiring.stateDir, port, deadline))
       }
     }
 
   /** `server status`: the port picks both the probe and the pid file. Unlike `serve`, no mandatory-config precheck —
     * status only needs the port, not CCAS_CONTACT_EMAIL / a database.
     */
-  private def statusServe(envFile: Path, portOption: Option[Int]): URIO[ZIOAppArgs, ExitCode] =
-    onServerPort(serverPort(portOption, envFile))(port => ServerStatus.run(XdgPaths.stateDir, port))
+  private def statusServe(wiring: CliWiring, portOption: Option[Int]): URIO[ZIOAppArgs, ExitCode] =
+    onServerPort(serverPort(portOption, wiring.serverEnvFile))(port => ServerStatus.run(wiring.stateDir, port))
 
   /** `server down`: the port picks the pid file, and the port the "still responding?" hint
     * (ServerStop.foregroundHint) probes — a wrong one could stop another port's server.
     */
-  private def stopServe(envFile: Path, portOption: Option[Int]): URIO[ZIOAppArgs, ExitCode] =
-    onServerPort(serverPort(portOption, envFile))(port => ServerStop.run(XdgPaths.stateDir, port))
+  private def stopServe(wiring: CliWiring, portOption: Option[Int]): URIO[ZIOAppArgs, ExitCode] =
+    onServerPort(serverPort(portOption, wiring.serverEnvFile))(port => ServerStop.run(wiring.stateDir, port))
 
   /** `server list`: the shell's port is the row it marks, and listed with no pid file when a server answers there. */
-  private def listServe(envFile: Path): URIO[ZIOAppArgs, ExitCode] =
-    onServerPort(serverPort(None, envFile))(port => ServerList.run(XdgPaths.stateDir, port))
+  private def listServe(wiring: CliWiring): URIO[ZIOAppArgs, ExitCode] =
+    onServerPort(serverPort(None, wiring.serverEnvFile))(port => ServerList.run(wiring.stateDir, port))
 
   // For the commands above, which don't run the server in this JVM: a file that can't be read is a CLI warning, on
   // stderr like every other. `serve` logs it through the server's display instead.
@@ -140,7 +148,7 @@ object Main extends ZIOAppDefault {
   // `suspendSucceed` defers `missingServeEnv` until after the overlay has run (it reads the system properties just set).
   private def serve(envFile: Path): URIO[ZIOAppArgs, ExitCode] =
     CcasServer
-      .withServerEnv(envFile) {
+      .withServerEnv(Right(envFile)) {
         ZIO.suspendSucceed {
           missingServeEnv match {
             // Known missing config → a one-line message, not the raw ConfigException stack from ConfigFactory.load.

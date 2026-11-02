@@ -1,7 +1,6 @@
 package ccas.utils.client
 
 import java.net.URI
-import java.nio.file.{Path, Paths}
 
 import com.typesafe.config.ConfigFactory
 import software.amazon.awssdk.auth.credentials.{AwsBasicCredentials, StaticCredentialsProvider}
@@ -14,6 +13,7 @@ import zio.config.derivation.kebabCase
 import zio.config.magnolia.DeriveConfig
 import zio.config.typesafe.TypesafeConfigProvider
 
+import ccas.utils.AppDir
 import ccas.utils.errors.safeMessage
 
 /** Content-addressed store for cached Chess.com response bodies, keyed by the hex SHA-256 already computed in
@@ -173,7 +173,7 @@ object BodyStore {
     }
 
   /** Raw config mapping 1:1 to HOCON keys under `body-store`. `backend` selects the impl; `fsRoot` overrides the
-    * local filesystem root for `fs` (absent = [[resolveFsRoot]]'s XDG default); the `s3*` fields are only required
+    * local filesystem root for `fs` (absent = [[FsRoot]]'s XDG default); the `s3*` fields are only required
     * when `backend = "s3"` and are validated at layer-build time. S3 fields are `Option` so the `fs` path (and CI,
     * which has no R2 creds) loads cleanly.
     *
@@ -253,15 +253,7 @@ object BodyStore {
 
   private def buildFs(config: BodyStoreConfig): ZIO[Any, Throwable, BodyStore] =
     for {
-      configured <- ZIO
-        .fromEither(
-          resolveFsRoot(
-            configured = config.fsRoot,
-            xdgCacheHome = Option(System.getenv("XDG_CACHE_HOME")),
-            userHome = Option(System.getProperty("user.home"))
-          )
-        )
-        .mapError(new IllegalArgumentException(_))
+      configured <- ZIO.fromEither(FsRoot.fromEnvironment(config.fsRoot)).mapError(new IllegalArgumentException(_))
       // Absolutised once here rather than left relative: an explicitly-configured relative `fs-root` is honoured
       // (it was deliberate) but it resolves against whatever directory the process was launched from — the
       // CWD-dependence this issue removed from the *default*. Pin it at startup, log where it actually landed, and
@@ -273,30 +265,15 @@ object BodyStore {
       _ <- ZIO.logDebug(s"BodyStore: fs backend rooted at $root")
     } yield new FsBodyStore(root)
 
-  /** Resolve the `fs` backend's root: an explicit, non-blank `body-store.fs-root` wins, else
-    * `${XDG_CACHE_HOME:-$HOME/.cache}/ccas/bodies`.
-    *
-    * Resolved in code rather than as a HOCON literal, and every fallback blank-checked, so an unresolvable root
-    * returns `Left` instead of a CWD-relative best guess. The XDG lookup is inlined rather than reusing
-    * `ccas.cli.XdgPaths` because this package must not depend on `ccas.cli` — keep the two in step. Why each of
-    * those: `docs/adr/0008-body-store-outside-postgres.md`.
+  /** The `fs` backend's root: `body-store.fs-root` (`CCAS_BODY_STORE_FS_ROOT`), else `$XDG_CACHE_HOME/ccas/bodies`.
+    * Resolved in code rather than as a HOCON literal: `docs/adr/0008-body-store-outside-postgres.md`.
     */
-  private[ccas] def resolveFsRoot(
-    configured: Option[String],
-    xdgCacheHome: Option[String],
-    userHome: Option[String]
-  ): Either[String, Path] =
-    nonBlank(configured) match {
-      case Some(root) => Right(Paths.get(root))
-      case None =>
-        nonBlank(xdgCacheHome)
-          .orElse(nonBlank(userHome).map(home => s"$home/.cache"))
-          .toRight(
-            "Cannot resolve body-store.fs-root: neither XDG_CACHE_HOME nor the user.home JVM property is set. " +
-              "Set CCAS_BODY_STORE_FS_ROOT to an absolute path."
-          )
-          .map(base => Paths.get(base, "ccas", "bodies"))
-    }
+  val FsRoot: AppDir = AppDir(
+    configKey = "body-store.fs-root",
+    overrideVar = "CCAS_BODY_STORE_FS_ROOT",
+    base = AppDir.XdgBase.Cache,
+    leaf = "bodies"
+  )
 
   private def nonBlank(value: Option[String]): Option[String] = value.map(_.trim).filter(_.nonEmpty)
 

@@ -6,8 +6,9 @@ import zio.test.{assertTrue, Spec, ZIOSpecDefault}
 
 import ccas.server.jobs.JobRunner
 
-/** `AppDir#resolve` with the two real directories as subjects, its inputs passed in so no environment rebinding is
-  * needed; the last test reads this process's config through `fromConfig`.
+/** `AppDir#resolve` with the two real directories as subjects and `XdgBase#ccasDir` with the bases only the CLI and body
+  * store use, their inputs passed in so no environment rebinding is needed; the last test reads this process's config
+  * through `fromConfig`.
   */
 object TestAppDir extends ZIOSpecDefault {
 
@@ -88,6 +89,28 @@ object TestAppDir extends ZIOSpecDefault {
         missing.left.exists(_.contains("JOB_LOGS_DIR")),
         blank.left.exists(_.contains("CCAS_OUTPUT_DIR")),
         relativeHome.left.exists(_.contains("JOB_LOGS_DIR"))
+      )
+    },
+    test(
+      "the cache and config bases default to $XDG_CACHE_HOME/ccas and $XDG_CONFIG_HOME/ccas, else .cache and .config under $HOME"
+    ) {
+      assertTrue(
+        AppDir.XdgBase.Cache.ccasDir(Some("/xdg-cache"), Some("/home/u")).contains(Paths.get("/xdg-cache/ccas")),
+        AppDir.XdgBase.Config.ccasDir(Some("/xdg-config"), Some("/home/u")).contains(Paths.get("/xdg-config/ccas")),
+        AppDir.XdgBase.Cache.ccasDir(None, Some("/home/u")).contains(Paths.get("/home/u/.cache/ccas")),
+        AppDir.XdgBase.Config.ccasDir(None, Some("/home/u")).contains(Paths.get("/home/u/.config/ccas"))
+      )
+    },
+    test(
+      "a base with no absolute XDG variable and no absolute home is no directory, never null/.config/ccas or ?/.config/ccas"
+    ) {
+      val config = AppDir.XdgBase.Config
+      assertTrue(
+        config.ccasDir(None, None).isEmpty,
+        config.ccasDir(None, Some("?")).isEmpty,
+        config.ccasDir(None, Some("null")).isEmpty,
+        config.ccasDir(Some("relative"), Some("?")).isEmpty,
+        config.ccasDir(Some(" "), Some(" ")).isEmpty
       )
     },
     test("an unset key resolves to the XDG default instead of failing, as on every default install") {

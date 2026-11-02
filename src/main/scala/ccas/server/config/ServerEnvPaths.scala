@@ -1,17 +1,19 @@
 package ccas.server.config
 
-import java.nio.file.{Path, Paths}
+import java.nio.file.Path
 
-/** Resolves the server-bootstrap env file path (`${XDG_CONFIG_HOME:-~/.config}/ccas/ccas.env`) without depending on the
-  * `ccas.cli` package, so `CcasServer` (the standalone `ccas-server` entry point) can apply [[ServerEnvOverlay]] at boot
-  * without a server→cli package cycle. `ccas.cli.CliWiring.live` resolves it here too, keeping one source of truth and
-  * the same XDG resolution as the CLI's other paths.
+import ccas.utils.AppDir.XdgBase
+
+/** Where the server-bootstrap env file lives (`${XDG_CONFIG_HOME:-~/.config}/ccas/ccas.env`), for `CcasServer` (the
+  * standalone `ccas-server` entry point) to apply [[ServerEnvOverlay]] at boot and for `ccas.cli.CliWiring`, keeping one
+  * source of truth without a server→cli package cycle.
   */
 object ServerEnvPaths {
 
-  def file: Path = {
-    val xdg  = Option(System.getenv("XDG_CONFIG_HOME")).map(_.trim).filter(_.nonEmpty)
-    val base = xdg.getOrElse(System.getProperty("user.home") + "/.config")
-    Paths.get(base, "ccas", "ccas.env")
-  }
+  /** The file in `configDir`, the directory [[XdgBase.Config]] resolves to. */
+  def in(configDir: Path): Path = configDir.resolve("ccas.env")
+
+  /** The file on this machine, or why there is nowhere to look for it. */
+  def file: Either[String, Path] =
+    XdgBase.Config.ccasDirHere.map(in).left.map(reason => s"could not look for server config ccas.env: $reason")
 }
