@@ -163,14 +163,14 @@ object TestBodyStore extends ZIOSpecDefault {
 
   /** #200: the `fs` root must not be a CWD-relative literal (the old `cache/bodies` dropped runtime blobs into
     * whatever directory the process started in, usually the repo). Tests the pure resolution so no environment
-    * rebinding is needed — the env read itself is a one-liner at the callsite.
+    * rebinding is needed — the env read itself is `AppDir#fromEnvironment`.
     */
   private def suiteFsRootResolution = suite("fs-root resolution")(
     test("an explicit fs-root wins over the XDG default, relative or not") {
       // A relative override is honoured rather than rejected — it was deliberate. `buildFs` is what absolutises it
       // against the launch directory and warns, so this stays a pure, CWD-independent function.
-      val absolute = BodyStore.resolveFsRoot(Some("/srv/ccas-bodies"), Some("/xdg-cache"), Some("/home/u"))
-      val relative = BodyStore.resolveFsRoot(Some("cache/bodies"), Some("/xdg-cache"), Some("/home/u"))
+      val absolute = BodyStore.FsRoot.resolve(Some("/srv/ccas-bodies"), Some("/xdg-cache"), Some("/home/u"))
+      val relative = BodyStore.FsRoot.resolve(Some("cache/bodies"), Some("/xdg-cache"), Some("/home/u"))
       assertTrue(
         absolute == Right(Paths.get("/srv/ccas-bodies")),
         relative == Right(Paths.get("cache/bodies")),
@@ -178,18 +178,24 @@ object TestBodyStore extends ZIOSpecDefault {
       )
     },
     test("absent fs-root falls back to $XDG_CACHE_HOME/ccas/bodies") {
-      val resolved = BodyStore.resolveFsRoot(None, Some("/xdg-cache"), Some("/home/u"))
+      val resolved = BodyStore.FsRoot.resolve(None, Some("/xdg-cache"), Some("/home/u"))
       assertTrue(resolved == Right(Paths.get("/xdg-cache", "ccas", "bodies")))
     },
     test("absent fs-root and absent XDG_CACHE_HOME fall back to $HOME/.cache/ccas/bodies") {
-      val resolved = BodyStore.resolveFsRoot(None, None, Some("/home/u"))
+      val resolved = BodyStore.FsRoot.resolve(None, None, Some("/home/u"))
+      assertTrue(resolved == Right(Paths.get("/home/u/.cache", "ccas", "bodies")))
+    },
+    test(
+      "a relative XDG_CACHE_HOME is ignored, as the XDG spec requires, rather than resolved against the launch directory"
+    ) {
+      val resolved = BodyStore.FsRoot.resolve(None, Some("cache"), Some("/home/u"))
       assertTrue(resolved == Right(Paths.get("/home/u/.cache", "ccas", "bodies")))
     },
     test("no configured root and no resolvable home is a Left, never a relative guess") {
       // A null `user.home` would interpolate to a directory literally named "null", relative to the CWD — the very
       // CWD-dependence #200 removes. Fail the layer with an actionable message instead of guessing.
-      val missing = BodyStore.resolveFsRoot(None, None, None)
-      val blank   = BodyStore.resolveFsRoot(Some("  "), Some(""), Some(" "))
+      val missing = BodyStore.FsRoot.resolve(None, None, None)
+      val blank   = BodyStore.FsRoot.resolve(Some("  "), Some(""), Some(" "))
       assertTrue(
         missing.left.exists(_.contains("CCAS_BODY_STORE_FS_ROOT")),
         blank.isLeft
@@ -207,8 +213,8 @@ object TestBodyStore extends ZIOSpecDefault {
     test("blank values are treated as absent, never as the CWD") {
       // `Paths.get("")` resolves to the current directory — exactly the CWD-dependence #200 removes — so an
       // exported-but-empty CCAS_BODY_STORE_FS_ROOT must fall through to the default rather than be honoured.
-      val blankRoot = BodyStore.resolveFsRoot(Some("   "), Some("/xdg-cache"), Some("/home/u"))
-      val blankXdg  = BodyStore.resolveFsRoot(None, Some(""), Some("/home/u"))
+      val blankRoot = BodyStore.FsRoot.resolve(Some("   "), Some("/xdg-cache"), Some("/home/u"))
+      val blankXdg  = BodyStore.FsRoot.resolve(None, Some(""), Some("/home/u"))
       assertTrue(
         blankRoot == Right(Paths.get("/xdg-cache", "ccas", "bodies")),
         blankXdg == Right(Paths.get("/home/u/.cache", "ccas", "bodies")),

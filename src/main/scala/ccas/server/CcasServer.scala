@@ -38,12 +38,15 @@ object CcasServer extends ZIOAppDefault {
 
   /** Runs `zio` under the server's display, with `file` applied by [[ServerEnvOverlay]] first. Every process that runs
     * the server starts here, `ccas server up` included, so the file is applied once and a file that can't be read is
-    * logged in the format of every line after it (#363). Nothing `zio` runs may install a display of its own: a second
-    * one would add a second logger, and every line would print twice.
+    * logged in the format of every line after it (#363). So is having nowhere to look for it (`Left`): a `ccas-server`
+    * with no home directory boots from its environment alone. Nothing `zio` runs may install a display of its own: a
+    * second one would add a second logger, and every line would print twice.
     */
-  private[ccas] def withServerEnv[R, E, A](file: Path)(zio: ZIO[R & ProgressDisplay, E, A]): ZIO[R, E, A] =
+  private[ccas] def withServerEnv[R, E, A](
+    file: Either[String, Path]
+  )(zio: ZIO[R & ProgressDisplay, E, A]): ZIO[R, E, A] =
     ProgressDisplay.installed(showProgress = false) {
-      ServerEnvOverlay(file).unit.catchAll(message => ZIO.logWarning(message)) *> zio
+      ZIO.fromEither(file).flatMap(ServerEnvOverlay(_).unit).catchAll(message => ZIO.logWarning(message)) *> zio
     }
 
   /** Boots the server, once [[withServerEnv]] has applied the ccas.env file. */

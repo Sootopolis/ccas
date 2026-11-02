@@ -1,7 +1,7 @@
 package ccas.cli
 
 import java.io.IOException
-import java.nio.file.{Files, Paths}
+import java.nio.file.{Files, Path, Paths}
 
 import zio.ZIO
 import zio.test.{assertCompletes, assertTrue, Spec, TestAspect, TestResult, ZIOSpecDefault}
@@ -9,14 +9,15 @@ import zio.test.{assertCompletes, assertTrue, Spec, TestAspect, TestResult, ZIOS
 import ccas.cli.CompletionSpec.PositionalKind
 import ccas.server.config.ServerEnvKeys
 
-/** Guards the generated shell completions ([[CompletionEmitter]]). Five concerns:
+/** Guards the generated shell completions ([[CompletionEmitter]]). Six concerns:
   *   1. the committed `completions/ccas.bash` equals the bash emitter output (regenerate it as
   *      `.claude/rules/cli.md` says);
   *   2. every emitted script is valid for its shell (`<shell> -n`, skipped when that shell isn't installed);
   *   3. what the bash script offers for `config set`, whose second positional depends on its first;
   *   4. [[CompletionSpec]] still covers every command and flag in the [[CliCommand]] tree, so a newly added
   *      subcommand or flag can't silently go uncompleted;
-  *   5. README's `Commands:` line lists what [[CompletionSpec]] does.
+  *   5. README's `Commands:` line lists what [[CompletionSpec]] does;
+  *   6. each script reads the completion cache from where the CLI writes it (skipped when that shell isn't installed).
   *
   * The command tree is read by rendering the root help in-process (no JVM spawn). Paths are relative to the repo root
   * (sbt's test cwd).
@@ -97,6 +98,76 @@ object TestCcasCompletion extends ZIOSpecDefault {
     } yield output.linesIterator.filter(_.nonEmpty).toList
   }
 
+  /** A shell, its emitted script, and the command line that sources a script and reads `clubs.txt` through its helper. */
+  private final case class CacheReader(shell: String, script: String, argv: Path => List[String])
+
+  private val PosixRead = "source \"$1\"; _ccas_cache clubs.txt"
+
+  private val CacheReaders = List(
+    CacheReader(
+      shell = "bash",
+      script = CompletionEmitter.bash,
+      argv = s => List("bash", "--noprofile", "--norc", "-c", PosixRead, "bash", s.toString)
+    ),
+    CacheReader(
+      shell = "zsh",
+      script = CompletionEmitter.zsh,
+      argv = s => List("zsh", "-f", "-c", PosixRead, "zsh", s.toString)
+    ),
+    CacheReader(
+      shell = "fish",
+      script = CompletionEmitter.fish,
+      argv = s => List("fish", "--no-config", "-c", "source $argv[1]; __fish_ccas_cache clubs.txt", s.toString)
+    )
+  )
+
+  /** That `reader`'s helper prints `expected` with `XDG_CACHE_HOME` as `xdgCacheHome` gives it, launched from a directory
+    * where `$HOME/.cache`, an absolute `xdg` and a relative `relative` each hold a club list naming itself, so the output
+    * says which was read: an unguarded helper would find `relative` from here. Only the spawn may count as no shell.
+    */
+  private def readsClubs(
+    reader: CacheReader,
+    xdgCacheHome: Path => String,
+    expected: String
+  ): ZIO[Any, Throwable, TestResult] =
+    TempWiring.withTempDir { root =>
+      for {
+        script <- ZIO.attemptBlocking {
+          List(".home/.cache" -> "home", "xdg" -> "xdg", "relative" -> "relative").foreach { case (base, name) =>
+            val file = root.resolve(base).resolve("ccas/clubs.txt")
+            Files.createDirectories(file.getParent)
+            Files.writeString(file, name + "\n")
+          }
+          Files.writeString(root.resolve("completion-script"), reader.script)
+        }
+        result <- unlessNoShell {
+          for {
+            proc <- ZIO.attempt {
+              val builder = new ProcessBuilder(reader.argv(script)*)
+                .directory(root.toFile)
+                .redirectError(ProcessBuilder.Redirect.DISCARD)
+              builder.environment().put("HOME", root.resolve(".home").toString)
+              builder.environment().put("XDG_CACHE_HOME", xdgCacheHome(root))
+              builder.start()
+            }
+            output <- ZIO.attemptBlocking(new String(proc.getInputStream.readAllBytes()))
+            _      <- ZIO.attemptBlocking(proc.waitFor())
+          } yield assertTrue(output.trim == expected)
+        }
+      } yield result
+    }
+
+  private val cacheLocationTests = CacheReaders.flatMap { reader =>
+    List(
+      test(s"${reader.shell} reads the completion cache under an absolute XDG_CACHE_HOME") {
+        readsClubs(reader = reader, xdgCacheHome = _.resolve("xdg").toString, expected = "xdg")
+      },
+      test(s"${reader.shell} ignores a relative XDG_CACHE_HOME and reads under $$HOME/.cache, where the CLI writes it") {
+        readsClubs(reader = reader, xdgCacheHome = _ => "relative", expected = "home")
+      }
+    )
+  }
+
   private def positionalOf(path: String*): PositionalKind =
     CompletionSpec.leaves.find(_.path == path.toList).map(_.positional).getOrElse(PositionalKind.Other)
 
@@ -125,6 +196,7 @@ object TestCcasCompletion extends ZIOSpecDefault {
     test("emitted fish is syntactically valid (skipped if fish absent)") {
       syntaxCheck("fish", CompletionEmitter.fish)
     },
+    suite("the completion cache")(cacheLocationTests*),
     test("bash offers a fixed-value key's values after 'config set <key>'") {
       unlessNoShell {
         for {

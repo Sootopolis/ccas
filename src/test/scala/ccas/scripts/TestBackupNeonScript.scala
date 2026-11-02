@@ -159,6 +159,16 @@ object TestBackupNeonScript extends ZIOSpecDefault {
         result.password == "file-password"
       )
     },
+    test("a relative XDG_CONFIG_HOME is ignored, as the server ignores it: ccas.env comes from $HOME/.config") {
+      val file = "DATABASE_URL=jdbc:postgresql://file-host/ccas?user=owner&password=file-password\n"
+      for {
+        result <- run(env = Map("XDG_CONFIG_HOME" -> "relative-config"), envFile = Some(file))
+      } yield assertTrue(
+        result.exitCode == 0,
+        result.conninfo == "postgresql://file-host/ccas?user=owner",
+        result.password == "file-password"
+      )
+    },
     test("the environment's DATABASE_URL beats ccas.env's") {
       for {
         result <- run(

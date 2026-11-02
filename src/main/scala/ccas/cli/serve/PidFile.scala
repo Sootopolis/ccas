@@ -13,7 +13,7 @@ import scala.util.{Failure, Success, Try, Using}
   */
 object PidFile {
 
-  /** The pid file of the server on `port`, in `stateDir` (`XdgPaths.stateDir` outside tests). Keyed by port, since
+  /** The pid file of the server on `port`, in `stateDir` (the `CliWiring`'s outside tests). Keyed by port, since
     * that is what tells two servers on one machine apart (#326).
     */
   def path(stateDir: Path, port: Int): Path = stateDir.resolve(s"ccas-$port.pid")

@@ -116,7 +116,10 @@ libpq_key() {
 # server's ccas.env: the precedence ServerEnvOverlay gives the server. The file
 # is parsed, never `source`d: the `&` in a JDBC URL is a shell control operator.
 CONN_KEYS=(DATABASE_URL DB_HOST DB_PORT DB_NAME DB_USER DB_PASSWORD)
-ENV_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/ccas/ccas.env"
+# A relative XDG_CONFIG_HOME is ignored, as the server ignores it (AppDir.XdgBase).
+CONFIG_HOME="${XDG_CONFIG_HOME:-}"
+[[ "$CONFIG_HOME" == /* ]] || CONFIG_HOME="$HOME/.config"
+ENV_FILE="$CONFIG_HOME/ccas/ccas.env"
 if [[ -r "$ENV_FILE" ]]; then
   while IFS= read -r line || [[ -n "$line" ]]; do
     [[ "$(trim "$line")" == \#* || "$line" != *=* ]] && continue

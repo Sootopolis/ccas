@@ -1,6 +1,6 @@
 # Keep response bodies out of Postgres, in a content-addressed store
 
-**Status:** Accepted, 2026-08-07 (#191, #200). Amended by #211 (deadlines), #215 (three-valued read), #222 (attempt budget).
+**Status:** Accepted, 2026-08-07 (#191, #200). Amended by #211 (deadlines), #215 (three-valued read), #222 (attempt budget), #348 (the fs root resolves through `AppDir`).
 
 ## Context
 
@@ -15,7 +15,7 @@ Bodies live in a content-addressed `BodyStore` (`ccas.utils.client`), keyed by t
 
 Only the blobs move. The metadata index, the within-`max-age` short-circuit and ETag/304 revalidation all stay in Postgres — see [0007](0007-response-caching-in-postgres.md).
 
-**The fs root defaults in code** (`BodyStore.resolveFsRoot`) to `${XDG_CACHE_HOME:-$HOME/.cache}/ccas/bodies`, not as a HOCON literal: a relative literal is CWD-dependent and dropped runtime blobs into whatever directory the process happened to start in. The XDG resolution is inlined rather than reusing `ccas.cli.XdgPaths`, because `ccas.utils.client` must not depend on `ccas.cli` — keep the two in step. It returns `Either` and blank-checks every fallback, so an unresolvable root fails the layer with an actionable message: `Paths.get("")` is the CWD, and a null `user.home` interpolates to a *relative* directory named `null`, either of which would silently reinstate the CWD-dependence.
+**The fs root defaults in code** (`BodyStore.FsRoot`) to `${XDG_CACHE_HOME:-$HOME/.cache}/ccas/bodies`, not as a HOCON literal: a relative literal is CWD-dependent and dropped runtime blobs into whatever directory the process happened to start in. It resolves through `ccas.utils.AppDir`, so an unresolvable root fails the layer with an actionable message: `Paths.get("")` is the CWD, and a null `user.home` interpolates to a *relative* directory named `null`, either of which would silently reinstate the CWD-dependence.
 
 ### The degradation invariant
 

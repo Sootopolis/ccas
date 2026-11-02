@@ -180,13 +180,28 @@ object TestServerBoot extends ZIOSpecDefault {
         }
         log <- ZIO.succeed(new ByteArrayOutputStream())
         _ <- JobLogSink.currentSink.locally(capturing(log)) {
-          CcasServer.withServerEnv(file)(ZIO.logInfo("Starting the server..."))
+          CcasServer.withServerEnv(Right(file))(ZIO.logInfo("Starting the server..."))
         }
         lines = JobLogSink.stripAnsi(log.toString(StandardCharsets.UTF_8)).linesIterator.toList
       } yield assertTrue(
         lines.size == 2,
         lines.head.matches("""\[WARN \d{2}:\d{2}:\d{2}\] could not read server config .+"""),
         lines.head.contains(file.toString),
+        lines(1).matches("""\[INFO \d{2}:\d{2}:\d{2}\] Starting the server\.\.\.""")
+      )
+    },
+    test(
+      "with nowhere to look for ccas.env, the server warns once, in its format, and carries on from its environment"
+    ) {
+      for {
+        log <- ZIO.succeed(new ByteArrayOutputStream())
+        _ <- JobLogSink.currentSink.locally(capturing(log)) {
+          CcasServer.withServerEnv(Left("no directory for ccas.env"))(ZIO.logInfo("Starting the server..."))
+        }
+        lines = JobLogSink.stripAnsi(log.toString(StandardCharsets.UTF_8)).linesIterator.toList
+      } yield assertTrue(
+        lines.size == 2,
+        lines.head.matches("""\[WARN \d{2}:\d{2}:\d{2}\] no directory for ccas\.env"""),
         lines(1).matches("""\[INFO \d{2}:\d{2}:\d{2}\] Starting the server\.\.\.""")
       )
     },
@@ -258,7 +273,7 @@ object TestServerBoot extends ZIOSpecDefault {
     services: ZLayer[ProgressDisplay, Throwable, CcasServer.Served],
     server: ZLayer[Any, Throwable, Server]
   ): Task[Unit] =
-    CcasServer.withServerEnv(Paths.get("/dev/null/ccas.env")) {
+    CcasServer.withServerEnv(Right(Paths.get("/dev/null/ccas.env"))) {
       ZIO.scoped[ProgressDisplay](CcasServer.serveWith(pidFileOption, services, server))
     }
 

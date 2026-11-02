@@ -16,7 +16,9 @@
 # shellcheck disable=SC2207
 
 _ccas_cache() {
-  local f="${XDG_CACHE_HOME:-$HOME/.cache}/ccas/$1"
+  local base="${XDG_CACHE_HOME:-}"
+  [[ $base == /* ]] || base="$HOME/.cache"
+  local f="$base/ccas/$1"
   [[ -r $f ]] && cat -- "$f"
 }
 

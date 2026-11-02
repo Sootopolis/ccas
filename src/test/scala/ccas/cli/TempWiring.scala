@@ -1,8 +1,12 @@
 package ccas.cli
 
 import java.nio.file.{Files, Path}
+import java.util.Comparator
 
-import zio.{UIO, ZIO}
+import scala.jdk.CollectionConverters.*
+import scala.util.Using
+
+import zio.{Task, UIO, ZIO}
 import zio.http.{Response, Routes}
 
 /** A [[CliWiring]] whose files sit in a fresh temp directory and whose client answers from a [[FakeCcasServer]], so a
@@ -18,6 +22,7 @@ object TempWiring {
       clubsFile = dir.resolve(ClubsFile),
       recentJobsFile = dir.resolve(RecentJobsFile),
       serverEnvFile = dir.resolve(ServerEnvFile),
+      stateDir = dir,
       clientLayer = FakeCcasServer.layer(routes)
     )
 
@@ -31,6 +36,14 @@ object TempWiring {
       }
       dir
     }.orDie
+
+  /** `use` with a fresh directory, removed afterwards with whatever was left in it. */
+  def withTempDir[A](use: Path => Task[A]): Task[A] =
+    ZIO.acquireReleaseWith(ZIO.attemptBlocking(Files.createTempDirectory("ccas-cli"))) { dir =>
+      ZIO.attemptBlocking {
+        Using.resource(Files.walk(dir))(_.sorted(Comparator.reverseOrder()).iterator().asScala.foreach(Files.delete))
+      }.ignore
+    }(use)
 
   /** A regular file in `dir` where a test needs a directory, so that a write beneath it cannot land. */
   def blocker(dir: Path): UIO[Path] =

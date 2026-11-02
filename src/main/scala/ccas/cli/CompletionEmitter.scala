@@ -49,6 +49,17 @@ object CompletionEmitter {
       envValueGroups.map { case (values, keys) => "    " + keys.mkString("|") + ") echo \"" + values + "\" ;;" } ++
       List("  esac", "}")
 
+  // bash and zsh both: `_ccas_cache FILE` prints a cache file, a relative XDG_CACHE_HOME ignored as `AppDir.XdgBase` does.
+  private val posixCacheFunction: List[String] =
+    List(
+      "_ccas_cache() {",
+      "  local base=\"${XDG_CACHE_HOME:-}\"",
+      "  [[ $base == /* ]] || base=\"$HOME/.cache\"",
+      "  local f=\"$base/ccas/$1\"",
+      "  [[ -r $f ]] && cat -- \"$f\"",
+      "}"
+    )
+
   // `--help` is appended by the emitted scripts themselves, so it is dropped from the per-command option list here.
   private def optsOf(leaf: Leaf): String = leaf.flags.filterNot(_ == "--help").mkString(" ")
 
@@ -109,11 +120,8 @@ object CompletionEmitter {
       "# COMPREPLY=( $(compgen ...) ) is the standard, bash-3.2/macOS-safe completion idiom; the word-splitting is",
       "# intentional (compgen yields newline-separated, space-free candidates). mapfile is the SC2207 fix but is bash 4+.",
       "# shellcheck disable=SC2207",
-      "",
-      "_ccas_cache() {",
-      "  local f=\"${XDG_CACHE_HOME:-$HOME/.cache}/ccas/$1\"",
-      "  [[ -r $f ]] && cat -- \"$f\"",
-      "}",
+      ""
+    ) ++ posixCacheFunction ++ List(
       ""
     ) ++ envValuesFunction ++ List(
       "",
@@ -211,11 +219,8 @@ object CompletionEmitter {
     val lines = List(
       "# zsh completion for ccas — generated, pure-shell (JVM-free). See Sootopolis/ccas#49.",
       "# Enable:  eval \"$(ccas completion zsh)\"   (add to ~/.zshrc, after `autoload -Uz compinit && compinit`).",
-      "",
-      "_ccas_cache() {",
-      "  local f=\"${XDG_CACHE_HOME:-$HOME/.cache}/ccas/$1\"",
-      "  [[ -r $f ]] && cat -- \"$f\"",
-      "}",
+      ""
+    ) ++ posixCacheFunction ++ List(
       ""
     ) ++ envValuesFunction ++ List(
       "",
@@ -324,7 +329,7 @@ object CompletionEmitter {
       "",
       "function __fish_ccas_cache",
       "  set -l base \"$XDG_CACHE_HOME\"",
-      "  test -z \"$base\"; and set base \"$HOME/.cache\"",
+      "  string match -q -- '/*' \"$base\"; or set base \"$HOME/.cache\"",
       "  set -l f \"$base/ccas/$argv[1]\"",
       "  test -r \"$f\"; and cat -- \"$f\"",
       "end",

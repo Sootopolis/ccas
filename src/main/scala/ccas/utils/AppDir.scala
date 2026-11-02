@@ -11,11 +11,9 @@ import zio.{Task, ZIO}
   */
 final case class AppDir(configKey: String, overrideVar: String, base: AppDir.XdgBase, leaf: String) {
 
-  /** `configured` when non-blank, else `$<base.envVar>/ccas/<leaf>`, else `$HOME/<base.homeRelative>/ccas/<leaf>`. A
-    * blank counts as absent, since `Paths.get("")` is the launch directory, and so does a relative base: an XDG
-    * variable (as the XDG spec requires) or a `user.home` such as the JDK's `?` for a user with no home. With no base
-    * to resolve against it is a `Left` naming the variable to set, never a guess. A configured relative path is
-    * returned as given.
+  /** `configured` when non-blank, since `Paths.get("")` is the launch directory, else `<leaf>` under
+    * [[AppDir.XdgBase.ccasDir]]. With no base to resolve against it is a `Left` naming the variable to set, never a
+    * guess. A configured relative path is returned as given.
     */
   def resolve(
     configured: Option[String],
@@ -25,15 +23,15 @@ final case class AppDir(configKey: String, overrideVar: String, base: AppDir.Xdg
     AppDir.nonBlank(configured) match {
       case Some(path) => Right(Paths.get(path))
       case None =>
-        AppDir
-          .absolute(xdgHome)
-          .orElse(AppDir.absolute(userHome).map(home => s"$home/${base.homeRelative}"))
-          .toRight(
-            s"Cannot resolve $configKey: neither ${base.envVar} nor the user.home JVM property is an " +
-              s"absolute path. Set $overrideVar to an absolute path."
-          )
-          .map(root => Paths.get(root, "ccas", leaf))
+        base
+          .ccasDir(xdgHome, userHome)
+          .toRight(s"Cannot resolve $configKey: ${base.noAbsolutePath}. Set $overrideVar to an absolute path.")
+          .map(_.resolve(leaf))
     }
+
+  /** [[resolve]] of `configured` against this process's environment. */
+  def fromEnvironment(configured: Option[String]): Either[String, Path] =
+    resolve(configured = configured, xdgHome = base.xdgHomeHere, userHome = AppDir.userHomeHere)
 
   /** [[resolve]] against this process's config and environment. Not absolutised, so a caller can tell a relative
     * setting from the default.
@@ -42,11 +40,7 @@ final case class AppDir(configKey: String, overrideVar: String, base: AppDir.Xdg
     ZIO
       .attempt {
         val config = ConfigFactory.load()
-        resolve(
-          configured = Option.when(config.hasPath(configKey))(config.getString(configKey)),
-          xdgHome = Option(System.getenv(base.envVar)),
-          userHome = Option(System.getProperty("user.home"))
-        )
+        fromEnvironment(Option.when(config.hasPath(configKey))(config.getString(configKey)))
       }
       .flatMap(resolved => ZIO.fromEither(resolved).mapError(new IllegalArgumentException(_)))
 }
@@ -54,9 +48,32 @@ final case class AppDir(configKey: String, overrideVar: String, base: AppDir.Xdg
 object AppDir {
 
   enum XdgBase(val envVar: String, val homeRelative: String) {
-    case Data  extends XdgBase("XDG_DATA_HOME", ".local/share")
-    case State extends XdgBase("XDG_STATE_HOME", ".local/state")
+    case Cache  extends XdgBase("XDG_CACHE_HOME", ".cache")
+    case Config extends XdgBase("XDG_CONFIG_HOME", ".config")
+    case Data   extends XdgBase("XDG_DATA_HOME", ".local/share")
+    case State  extends XdgBase("XDG_STATE_HOME", ".local/state")
+
+    /** `$<envVar>/ccas`, else `$HOME/<homeRelative>/ccas`. A blank counts as absent, and so does a relative base: an XDG
+      * variable (as the XDG spec requires) or a `user.home` such as the JDK's `?` for a user with no home.
+      * `CompletionEmitter`'s helpers and `scripts/backup-neon.sh` repeat this for the files they read: change them too.
+      */
+    def ccasDir(xdgHome: Option[String], userHome: Option[String]): Option[Path] =
+      absolute(xdgHome)
+        .orElse(absolute(userHome).map(home => s"$home/$homeRelative"))
+        .map(root => Paths.get(root, "ccas"))
+
+    /** [[ccasDir]] against this process's environment, a `Left` naming the variable to set. */
+    def ccasDirHere: Either[String, Path] =
+      ccasDir(xdgHome = xdgHomeHere, userHome = userHomeHere)
+        .toRight(s"$noAbsolutePath. Set $envVar to an absolute path.")
+
+    private[AppDir] def noAbsolutePath: String =
+      s"neither $envVar nor the user.home JVM property is an absolute path"
+
+    private[AppDir] def xdgHomeHere: Option[String] = Option(System.getenv(envVar))
   }
+
+  private def userHomeHere: Option[String] = Option(System.getProperty("user.home"))
 
   private def nonBlank(value: Option[String]): Option[String] = value.map(_.trim).filter(_.nonEmpty)
 
