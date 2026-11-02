@@ -27,7 +27,7 @@ Tests use ZIO Test (`ZIOSpecDefault`). SQL tests require a running PostgreSQL in
 Every piece of work runs the same sequence. Take each step unprompted; the developer should not have to ask for any of them. These steps and the skills' checklists are a floor, not a ceiling: anything else that looks wrong is worth raising.
 
 1. **Plan**, in plan mode, before writing code for an issue, or for any request that involves a design choice. Show it in the chat, since the developer does not always read GitHub, and in plain terms:
-   - the problem as the operator meets it, and its cause
+   - the problem as the operator meets it, its cause, and what leaving it costs, measured, allowing for bias in our data: a club-specific job has only seen the clubs it was run on
    - the change, and what else it touches
    - the tests by name: a test's name is the guarantee it documents
    - where the schema or stored data change, the way back
