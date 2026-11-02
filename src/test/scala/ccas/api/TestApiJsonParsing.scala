@@ -1,9 +1,11 @@
 package ccas.api
 
 import java.net.URI
+import java.nio.file.{Files, Path}
 
+import zio.ZIO
 import zio.http.URL
-import zio.json.{readJsonLinesAs, JsonDecoder}
+import zio.json.{readJsonLinesAs, DecoderOps, JsonDecoder}
 import zio.test.{assertCompletes, assertTrue, Spec, ZIOSpecDefault}
 
 import ccas.api.club.{ApiClub, ApiClubMatches, ApiClubMembers}
@@ -35,6 +37,12 @@ object TestApiJsonParsing extends ZIOSpecDefault {
     generateTest[ApiPlayerTournaments]("playerTournaments"),
     generateTest[ApiTournament]("tournament"),
     generateTest[ApiTournamentRound]("tournamentRound"),
+    test("an unknown league fails the whole profile, and the error names the field") {
+      ZIO.attemptBlocking(Files.readString(Path.of(getFileName("player")))).map { body =>
+        val decoded = body.replace("\"Silver\"", "\"Mythic\"").fromJson[ApiPlayer]
+        assertTrue(decoded.swap.exists(_.contains(".league")))
+      }
+    },
     test("ApiClub.canonicalSlug reads the slug Chess.com answers to, from `@id`") {
       readJsonLinesAs[ApiClub](getFileName("club")).runHead.someOrFailException
         .map(club => assertTrue(club.canonicalSlug == ClubSlug.wrap("chess-com-developer-community")))

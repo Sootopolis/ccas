@@ -4,6 +4,7 @@ import zio.json.{DecoderOps, EncoderOps}
 import zio.test.{assertTrue, Spec, ZIOSpecDefault}
 
 import ccas.api.misc.enums.*
+import ccas.server.scheduler.{MisfirePolicy, TriggerType}
 
 object TestEnumCodecs extends ZIOSpecDefault {
   override def spec: Spec[Any, Nothing] = suite("TestEnumCodecs")(
@@ -16,10 +17,12 @@ object TestEnumCodecs extends ZIOSpecDefault {
     suiteClubMatchStatus,
     suiteTimeClass,
     suiteTitle,
-    suiteClubVisibility
+    suiteClubVisibility,
+    suiteTriggerType,
+    suiteMisfirePolicy
   )
 
-  // --- GameResultDetail: custom lookup, one-way decode from API format ---
+  // --- GameResultDetail ---
 
   private def suiteGameResultDetail = suite("GameResultDetail")(
     test("50move decodes to FiftyMove") {
@@ -59,7 +62,7 @@ object TestEnumCodecs extends ZIOSpecDefault {
     }
   )
 
-  // --- GameRule: custom lookup, one-way decode from API format ---
+  // --- GameRule ---
 
   private def suiteGameRule = suite("GameRule")(
     test("all values decode from API lowercase format") {
@@ -81,7 +84,7 @@ object TestEnumCodecs extends ZIOSpecDefault {
     }
   )
 
-  // --- PlayerStatus: dual-layer fallback (PascalCase first, then custom lookup) ---
+  // --- PlayerStatus ---
 
   private def suitePlayerStatus = suite("PlayerStatus")(
     test("standard lowercase values") {
@@ -102,17 +105,18 @@ object TestEnumCodecs extends ZIOSpecDefault {
     test("closed:abuse → Abuse") {
       assertTrue("\"closed:abuse\"".fromJson[PlayerStatus] == Right(PlayerStatus.Abuse))
     },
-    test("roundtrip through encode then decode") {
-      assertTrue(PlayerStatus.values.forall { v =>
-        v.toJson.fromJson[PlayerStatus] == Right(v)
-      })
+    test("the bare names fairplay and abuse are refused") {
+      assertTrue(
+        "\"fairplay\"".fromJson[PlayerStatus].isLeft,
+        "\"abuse\"".fromJson[PlayerStatus].isLeft
+      )
     },
     test("invalid value produces error") {
       assertTrue("\"banned\"".fromJson[PlayerStatus].isLeft)
     }
   )
 
-  // --- Colour: default PascalCase via EnumJson ---
+  // --- Colour ---
 
   private def suiteColour = suite("Colour")(
     test("decodes from snake_case") {
@@ -120,36 +124,29 @@ object TestEnumCodecs extends ZIOSpecDefault {
         "\"white\"".fromJson[Colour] == Right(Colour.White),
         "\"black\"".fromJson[Colour] == Right(Colour.Black)
       )
-    },
-    test("roundtrip") {
-      assertTrue(Colour.values.forall { v =>
-        v.toJson.fromJson[Colour] == Right(v)
-      })
     }
   )
 
-  // --- League: default PascalCase ---
+  // --- League ---
 
   private def suiteLeague = suite("League")(
-    test("all values decode") {
+    test("all eight leagues decode from the capitalised spelling Chess.com sends") {
       val cases = List(
-        "wood"     -> League.Wood,
-        "stone"    -> League.Stone,
-        "bronze"   -> League.Bronze,
-        "silver"   -> League.Silver,
-        "crystal"  -> League.Crystal,
-        "elite"    -> League.Elite,
-        "champion" -> League.Champion,
-        "legend"   -> League.Legend
+        "Wood"     -> League.Wood,
+        "Stone"    -> League.Stone,
+        "Bronze"   -> League.Bronze,
+        "Silver"   -> League.Silver,
+        "Crystal"  -> League.Crystal,
+        "Elite"    -> League.Elite,
+        "Champion" -> League.Champion,
+        "Legend"   -> League.Legend
       )
       assertTrue(cases.forall { (jsonStr, expected) =>
         s"\"$jsonStr\"".fromJson[League] == Right(expected)
       })
     },
-    test("roundtrip") {
-      assertTrue(League.values.forall { v =>
-        v.toJson.fromJson[League] == Right(v)
-      })
+    test("a lower-case league is refused") {
+      assertTrue("\"wood\"".fromJson[League].isLeft)
     }
   )
 
@@ -162,11 +159,6 @@ object TestEnumCodecs extends ZIOSpecDefault {
         "\"draw\"".fromJson[ClubMatchResult] == Right(ClubMatchResult.Draw),
         "\"lose\"".fromJson[ClubMatchResult] == Right(ClubMatchResult.Lose)
       )
-    },
-    test("roundtrip") {
-      assertTrue(ClubMatchResult.values.forall { v =>
-        v.toJson.fromJson[ClubMatchResult] == Right(v)
-      })
     }
   )
 
@@ -177,13 +169,12 @@ object TestEnumCodecs extends ZIOSpecDefault {
       assertTrue(
         "\"finished\"".fromJson[ClubMatchStatus] == Right(ClubMatchStatus.Finished),
         "\"in_progress\"".fromJson[ClubMatchStatus] == Right(ClubMatchStatus.InProgress),
-        "\"registration\"".fromJson[ClubMatchStatus] == Right(ClubMatchStatus.Registration)
+        "\"registration\"".fromJson[ClubMatchStatus] == Right(ClubMatchStatus.Registration),
+        "\"aborted\"".fromJson[ClubMatchStatus] == Right(ClubMatchStatus.Aborted)
       )
     },
-    test("roundtrip") {
-      assertTrue(ClubMatchStatus.values.forall { v =>
-        v.toJson.fromJson[ClubMatchStatus] == Right(v)
-      })
+    test("a Scala-cased match status is refused") {
+      assertTrue("\"InProgress\"".fromJson[ClubMatchStatus].isLeft)
     }
   )
 
@@ -202,19 +193,13 @@ object TestEnumCodecs extends ZIOSpecDefault {
       assertTrue(cases.forall { (jsonStr, expected) =>
         s"\"$jsonStr\"".fromJson[TimeClass] == Right(expected)
       })
-    },
-    test("roundtrip") {
-      assertTrue(TimeClass.values.forall { v =>
-        v.toJson.fromJson[TimeClass] == Right(v)
-      })
     }
   )
 
-  // --- Title: all-caps values, API sends as-is ("GM", "WGM" etc.) ---
+  // --- Title ---
 
   private def suiteTitle = suite("Title")(
-    test("all values decode from PascalCase/uppercase") {
-      // Chess.com API sends titles as uppercase abbreviations; PascalCase is identity for these
+    test("all titles decode from the upper-case spelling Chess.com sends") {
       assertTrue(
         Title.values.forall { t =>
           s"\"${t.toString}\"".fromJson[Title] == Right(t)
@@ -238,11 +223,34 @@ object TestEnumCodecs extends ZIOSpecDefault {
         "\"public\"".fromJson[ClubVisibility] == Right(ClubVisibility.Public),
         "\"private\"".fromJson[ClubVisibility] == Right(ClubVisibility.Private)
       )
-    },
-    test("roundtrip") {
-      assertTrue(ClubVisibility.values.forall { v =>
-        v.toJson.fromJson[ClubVisibility] == Right(v)
+    }
+  )
+
+  // --- TriggerType ---
+
+  private def suiteTriggerType = suite("TriggerType")(
+    test("interval and cron round-trip in snake_case") {
+      val cases = List("interval" -> TriggerType.Interval, "cron" -> TriggerType.Cron)
+      assertTrue(cases.forall { (wire, value) =>
+        value.toJson == s"\"$wire\"" && s"\"$wire\"".fromJson[TriggerType] == Right(value)
       })
+    },
+    test("a PascalCase trigger type is refused") {
+      assertTrue("\"Cron\"".fromJson[TriggerType].isLeft)
+    }
+  )
+
+  // --- MisfirePolicy ---
+
+  private def suiteMisfirePolicy = suite("MisfirePolicy")(
+    test("skip and catch_up round-trip in snake_case") {
+      val cases = List("skip" -> MisfirePolicy.Skip, "catch_up" -> MisfirePolicy.CatchUp)
+      assertTrue(cases.forall { (wire, value) =>
+        value.toJson == s"\"$wire\"" && s"\"$wire\"".fromJson[MisfirePolicy] == Right(value)
+      })
+    },
+    test("a PascalCase misfire policy is refused") {
+      assertTrue("\"CatchUp\"".fromJson[MisfirePolicy].isLeft)
     }
   )
 }

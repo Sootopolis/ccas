@@ -14,7 +14,7 @@ What each moving part is and how the pieces connect. Reference, not rationale �
 
 **Opaque types.** Domain IDs and constrained values are Scala 3 opaque types whose companions extend the `ccas.utils.opaque` trait for their underlying type (`LongCompanion`, `StringCompanion`, …). The trait supplies the `JsonCodec`, `DbCodec` and `DeriveConfig`, with optional `validateRaw` / `normalize` hooks. Chess.com domain IDs live in `ccas.api.misc.subtypes`; internal surrogate IDs live in `ccas.analysis.tables.subtypes` and extend `PositiveLongCompanion`, since `BIGSERIAL` keys start at 1.
 
-**Enums.** `EnumJson[T]` for JSON (snake_case on the wire, PascalCase in Scala) and/or `EnumSql[T]` for the database; both supply codecs via `given`. Some override `jsonToEnum` for non-standard Chess.com mappings (`"closed:fair_play_violations"` → `Fairplay`).
+**Enums.** An enum read from JSON derives zio-json's `JsonDecoder`, or `JsonCodec` if we write it too; `EnumSql[T]` supplies the database codec. `@jsonHintNames` and `@jsonHint` declare the wire spelling, and decoding matches it exactly, so a Chess.com enum follows [what the API sends](chess-com-api.md#enum-fields-are-not-spelt-alike) (`"closed:fair_play_violations"` → `Fairplay`).
 
 ## Applications (`ccas.analysis.apps`)
 

@@ -108,6 +108,14 @@ Do not branch on a tournament's `status`.
 
 *Recorded by 2026-08-12 ([#208](https://github.com/Sootopolis/ccas/pull/208)).*
 
+## Field values
+
+### Enum fields are not spelt alike
+
+`league` is capitalised (`Wood`, `Legend`) and `title` is upper case (`GM`), while `status`, `time_class`, `rules`, `result`, `turn` and `visibility` are lower case, with their own oddities: `50move`, `timevsinsufficient`, `closed:fair_play_violations`. Our decoders match exactly, so take a new value's spelling from a real response rather than from a sibling field, and expect a value we do not know to fail the whole response.
+
+*Observed 2026-11-02 in 389 live responses, in `data/test/api/`, and in other projects' captured profiles up to June 2026 ([#264](https://github.com/Sootopolis/ccas/issues/264)); `50move` and the variant results carry over from the decoders before that. Not in those samples, and assumed to match their siblings: the titles `WIM`, `WCM`, `WNM` and `M`, and `aborted`, `bullet` and `mod`.*
+
 ## Errors and limits
 
 ### A 404 can mean absent or broken

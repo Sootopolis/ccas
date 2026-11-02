@@ -36,7 +36,7 @@ object ApiDailyMatch {
 
   def getUrl(clubMatchId: ClubMatchId): URL = host.addPath(clubMatchId.toString)
 
-  @jsonMemberNames(SnakeCase) @jsonHint(ClubMatchStatus.Registration.encodeJson.replace("\"", ""))
+  @jsonMemberNames(SnakeCase) @jsonHint("registration")
   final case class ApiDailyMatchRegistered(
     `@id`: URL,
     name: String,
@@ -50,7 +50,7 @@ object ApiDailyMatch {
     require(status == ClubMatchStatus.Registration)
   }
 
-  @jsonMemberNames(SnakeCase) @jsonHint(ClubMatchStatus.InProgress.encodeJson.replace("\"", ""))
+  @jsonMemberNames(SnakeCase) @jsonHint("in_progress")
   final case class ApiDailyMatchInProgress(
     `@id`: URL,
     name: String,
@@ -64,7 +64,7 @@ object ApiDailyMatch {
     require(status == ClubMatchStatus.InProgress)
   }
 
-  @jsonMemberNames(SnakeCase) @jsonHint(ClubMatchStatus.Finished.encodeJson.replace("\"", ""))
+  @jsonMemberNames(SnakeCase) @jsonHint("finished")
   final case class ApiDailyMatchFinished(
     `@id`: URL,
     name: String,
