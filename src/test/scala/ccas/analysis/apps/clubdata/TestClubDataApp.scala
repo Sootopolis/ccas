@@ -4,7 +4,7 @@ import java.time.Instant
 
 import zio.{Chunk, RIO, ZEnvironment, ZIO, ZLayer}
 import zio.http.*
-import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
+import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault, ZTestLogger}
 
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.{apiClubJson, apiDailyMatchJson, apiPlayerJson}
 import ccas.analysis.tables.{
@@ -133,12 +133,16 @@ object TestClubDataApp extends ZIOSpecDefault {
   private def fakeClient(
     responses: Map[String, String],
     profileFailureStatus: Status = Status.NotFound,
-    profileFailureBody: String = reportedNotFoundBody
+    profileFailureBody: String = reportedNotFoundBody,
+    matchesFailure: Option[(Status, String)] = None
   ): RIO[PostgresClient & BodyStore, ChessComClient] = {
     val emptyClubMatches = """{"finished": [], "in_progress": [], "registered": []}"""
     val routes: Routes[Any, Response] = Routes(
       Method.GET / "pub" / "club" / string("slug") / "matches" -> handler { (_: String, _: Request) =>
-        Response.json(emptyClubMatches)
+        matchesFailure match {
+          case Some((status, body)) => Response.json(body).copy(status = status)
+          case None                 => Response.json(emptyClubMatches)
+        }
       },
       Method.GET / "pub" / "club" / string("slug") -> handler { (slug: String, _: Request) =>
         responses.get(s"club/$slug") match {
@@ -228,7 +232,7 @@ object TestClubDataApp extends ZIOSpecDefault {
         updated.exists(_.fetchedAt.isDefined)
       )
     },
-    test("404 + no match ref → still fails, fetched_at untouched") {
+    test("404 + no match ref → counted as not found, fetched_at untouched") {
       for {
         _         <- clearTables
         _         <- seedStaleClub(stuckClubId, oldSlug, withInferredRef = false, withExplicitRef = false)
@@ -237,12 +241,13 @@ object TestClubDataApp extends ZIOSpecDefault {
         unchanged <- Club.selectId(stuckClubId)
       } yield assertTrue(
         result.clubsProcessed == 1,
-        result.clubsFailed == 1,
+        result.clubsFailed == 0,
+        result.clubsNotFound == 1,
         unchanged.exists(_.slug == oldSlug),
         unchanged.exists(_.fetchedAt.isEmpty)
       )
     },
-    test("404 + match ref returns same slug → no retry, still fails") {
+    test("404 + match ref returns same slug → no retry, counted as not found") {
       val matchJson = apiDailyMatchJson(
         matchId = ClubMatchId.unwrap(refMatchId),
         team1Club = oldSlug.value, // ref points back at the same stale slug
@@ -261,7 +266,8 @@ object TestClubDataApp extends ZIOSpecDefault {
         unchanged <- Club.selectId(stuckClubId)
       } yield assertTrue(
         result.clubsProcessed == 1,
-        result.clubsFailed == 1,
+        result.clubsFailed == 0,
+        result.clubsNotFound == 1,
         unchanged.exists(_.slug == oldSlug),
         unchanged.exists(_.fetchedAt.isEmpty)
       )
@@ -289,6 +295,7 @@ object TestClubDataApp extends ZIOSpecDefault {
       } yield assertTrue(
         result.clubsProcessed == 1,
         result.clubsFailed == 1,
+        result.clubsNotFound == 0,
         unchanged.exists(_.slug == oldSlug),
         unchanged.exists(_.fetchedAt.isEmpty)
       )
@@ -316,6 +323,7 @@ object TestClubDataApp extends ZIOSpecDefault {
       } yield assertTrue(
         result.clubsProcessed == 1,
         result.clubsFailed == 1,
+        result.clubsNotFound == 0,
         unchanged.exists(_.slug == oldSlug),
         unchanged.exists(_.fetchedAt.isEmpty)
       )
@@ -382,7 +390,9 @@ object TestClubDataApp extends ZIOSpecDefault {
         holder.map(_.clubId).contains(otherId)
       )
     },
-    test("a name that answers as another club with no rename to find fails this club, leaving it holding none") {
+    test(
+      "a name that answers as another club with no rename to find counts this club as not found, leaving it holding none"
+    ) {
       val otherId   = ClubId(9003)
       val responses = Map(s"club/${oldSlug.value}" -> apiClubJson(ClubId.unwrap(otherId), oldSlug.value))
       for {
@@ -395,14 +405,77 @@ object TestClubDataApp extends ZIOSpecDefault {
         holder    <- ClubName.selectCurrentHolder(oldSlug)
       } yield assertTrue(
         result.clubsProcessed == 1,
-        result.clubsFailed == 1,
+        result.clubsFailed == 0,
+        result.clubsNotFound == 1,
         unchanged.exists(_.slug == oldSlug), // the display cache keeps the last name it answered to
         unchanged.exists(_.fetchedAt.isEmpty),
         nameless.isEmpty,
         holder.map(_.clubId).contains(otherId)
       )
+    },
+    test("a club holding no name, with no rename to find, is counted as not found") {
+      val takerId   = ClubId(9004)
+      val responses = Map(s"club/${oldSlug.value}" -> apiClubJson(ClubId.unwrap(takerId), oldSlug.value))
+      for {
+        _        <- clearTables
+        _        <- seedStaleClub(stuckClubId, oldSlug, withInferredRef = false, withExplicitRef = false)
+        _        <- Club.upsert(Club(takerId, seedCreated, oldSlug, "Taker Club", None, None, None))
+        client   <- fakeClient(responses)
+        result   <- runRefresh(client)
+        stuck    <- Club.selectId(stuckClubId)
+        nameless <- ClubName.selectCurrentName(stuckClubId)
+      } yield assertTrue(
+        result.clubsProcessed == 2, // the taker refreshes as usual
+        result.clubsFailed == 0,
+        result.clubsNotFound == 1,
+        stuck.exists(_.fetchedAt.isEmpty),
+        nameless.isEmpty
+      )
+    },
+    test("a club reported missing is logged once, as not found") {
+      for {
+        _      <- clearTables
+        _      <- seedStaleClub(stuckClubId, oldSlug, withInferredRef = false, withExplicitRef = false)
+        client <- fakeClient(responses = Map.empty, matchesFailure = Some((Status.NotFound, reportedNotFoundBody)))
+        result <- runRefresh(client)
+        logged <- ZTestLogger.logOutput.map(_.map(_.message()))
+      } yield assertTrue(
+        result.clubsFailed == 0,
+        result.clubsNotFound == 1,
+        logged.filter(_.startsWith("[ClubData]")).count(_.contains(oldSlug.value)) == 1,
+        logged.contains(s"[ClubData] Not found: ${oldSlug.value} (club #${ClubId.unwrap(stuckClubId)})")
+      )
+    },
+    test("a match list that returns 500 stays a log line, and the profile still refreshes") {
+      val responses = Map(s"club/${oldSlug.value}" -> apiClubJson(ClubId.unwrap(stuckClubId), oldSlug.value))
+      for {
+        _       <- clearTables
+        _       <- seedStaleClub(stuckClubId, oldSlug, withInferredRef = false, withExplicitRef = false)
+        client  <- fakeClient(responses, matchesFailure = Some((Status.InternalServerError, "<html>421</html>")))
+        result  <- runRefresh(client)
+        updated <- Club.selectId(stuckClubId)
+        logged  <- ZTestLogger.logOutput.map(_.map(_.message()))
+      } yield assertTrue(
+        result.clubsFailed == 0,
+        result.clubsNotFound == 0,
+        updated.exists(_.fetchedAt.isDefined),
+        logged.exists(_.startsWith(s"[ClubData] Match fetch failed for ${oldSlug.value}"))
+      )
+    },
+    test("the report counts clubs not found apart from failed ones") {
+      val report = ClubDataApp.formatReport(
+        ClubDataApp.RefreshResult(
+          clubsProcessed = 10,
+          clubsFailed = 1,
+          clubsNotFound = 4,
+          clubsAdminChanged = 2,
+          totalAdmins = 30
+        )
+      )
+      assertTrue(report.contains("Clubs failed: 1\n"), report.contains("Clubs not found: 4\n"))
     }
-  )
+    // Built afresh for each test, so a test reading the log sees only its own lines.
+  ).provideSomeLayer[PostgresClient & BodyStore & ProgressDisplay](ZTestLogger.default)
 
   // ==========================================================================
   // Suite: ClubAdminResolver.resolveAndPersistAdmins

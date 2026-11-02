@@ -90,8 +90,8 @@ final class ChessComClient(
   }
 
   /** Record the forensic row for a fetch that yielded no value. Also called for a [[FetchResult.Missing]], which is
-    * not an error and so never reaches a `tapError` — until the negative fact has a home with a TTL (#236), this
-    * table is the only place an absence is written down.
+    * not an error and so never reaches a `tapError`: this table is the only place an absence is written down (ADR
+    * 0019).
     */
   private def recordFetchFailure(url: URL, error: Throwable): UIO[Unit] = {
     val (errorType, msg, body) = error match {

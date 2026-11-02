@@ -1,6 +1,6 @@
 # A reported 404 is an answer, not a failure
 
-**Status:** Accepted, 2026-09-09 (#234). Extends [0007](0007-response-caching-in-postgres.md), whose result type this renames and adds a variant to.
+**Status:** Accepted, 2026-09-09 (#234). Extends [0007](0007-response-caching-in-postgres.md), whose result type this renames and adds a variant to. Amended by #236 (2026-11-02): the back-off it anticipated was measured and declined.
 
 ## Context
 
@@ -25,7 +25,7 @@ Alternatives rejected: `Task[Either[ReportedNotFound, T]]` (a second vocabulary 
 ## Consequences
 
 - **The counters change meaning at this commit,** and nothing in `client_stats` marks the boundary — the same hazard [0006](0006-pacing-ema-measures-the-http-exchange-only.md) records for `latency_*`. Rows before it count a reported 404 in `failures` and `errors_other`; rows after it count it in `successes`.
-- **`api_fetch_failure` is written explicitly for a `Missing`.** The row used to come from `rawGet`'s `tapError`, which no longer fires for an absence. It is kept deliberately: on 2026-09-08 that table was the only evidence that 71 club slugs return a `code: 3024` internal-error 404 every day. The negative fact's proper home is a cache entry with a TTL — the back-off in #236 — and until that exists this table is it.
+- **`api_fetch_failure` is written explicitly for a `Missing`.** The row used to come from `rawGet`'s `tapError`, which no longer fires for an absence. It is kept deliberately: on 2026-09-08 that table was the only evidence that 71 club slugs return a `code: 3024` internal-error 404 every day. It stays the only place an absence is written down. A back-off was measured and declined on 2026-11-02 (#236): four clubs reported missing and one failing match list cost about 160 requests a `ClubData` sweep, about 1%, most of them rename recovery's look-ups, and asking again is what finds a club that returns. `ClubDataApp`'s report counts those clubs as not found rather than failed, the same correction this record made to the client's counters.
 - **The classification is now load-bearing.** Before, misclassifying an absence as an error cost an inflated counter; now it decides which channel the outcome leaves by, and so which branch an app takes. The rule is still a substring match on the message, which #3 replaces with a parsed body and an explicit code table. What that issue must add is an `Unknown` state that is counted, so upstream rewording surfaces as a number moving rather than as behaviour silently changing.
 - **A cache hit still hides absence, and that is the first thing negative caching must reconcile.** `getResult` serves a `Fresh` entry within `max-age` without asking Chess.com, so a resource that has since gone keeps returning its cached body until the entry ages out; `Missing` is only ever produced by a request that actually left the process. That was equally true when absence was an error, but it is worth stating now that apps branch on the outcome.
 - **Absence is cacheable, and this shape leaves room for it.** `Missing` sitting beside `Fresh` means "we knew it was missing without asking" is expressible later as a variant property rather than a parallel mechanism, which is also where the previous point gets resolved.
