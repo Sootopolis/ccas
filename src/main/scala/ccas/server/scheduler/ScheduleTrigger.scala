@@ -5,18 +5,19 @@ import java.time.ZoneId
 import scala.util.Try
 
 import cron4s.CronExpr
+import zio.json.{jsonHintNames, JsonCodec, SnakeCase}
 
 import ccas.utils.errors.safeMessage
-import ccas.utils.json.EnumJson
 import ccas.utils.sql.EnumSql
 
 /** Which kind of trigger a [[JobSchedule]] uses. Stored in `trigger_type` (PascalCase via EnumSql) and
-  * carried on the wire snake_case via EnumJson (`interval` / `cron`).
+  * carried on the wire snake_case (`interval` / `cron`).
   */
-enum TriggerType {
+@jsonHintNames(SnakeCase)
+enum TriggerType derives JsonCodec {
   case Interval, Cron
 }
-object TriggerType extends EnumJson[TriggerType] with EnumSql[TriggerType]
+object TriggerType extends EnumSql[TriggerType]
 
 /** What a cron schedule does when the server was down across one or more fire-times.
   *   - [[Skip]]: do not fire a boundary that elapsed more than the scheduler's grace window ago; resume on
@@ -24,10 +25,11 @@ object TriggerType extends EnumJson[TriggerType] with EnumSql[TriggerType]
   *   - [[CatchUp]]: on recovery, fire the most recent missed boundary exactly once, then resume. Right when a
   *     missed run still wants to happen on stale-but-acceptable data (e.g. a weekly Stats roll-up).
   */
-enum MisfirePolicy {
+@jsonHintNames(SnakeCase)
+enum MisfirePolicy derives JsonCodec {
   case Skip, CatchUp
 }
-object MisfirePolicy extends EnumJson[MisfirePolicy] with EnumSql[MisfirePolicy]
+object MisfirePolicy extends EnumSql[MisfirePolicy]
 
 /** Decoded trigger of a [[JobSchedule]] — the typed view of the flat `trigger_type` / `interval_hours` /
   * `cron_expr` / `timezone` / `misfire_policy` columns.

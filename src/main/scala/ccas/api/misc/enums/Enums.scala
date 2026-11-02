@@ -1,14 +1,14 @@
 package ccas.api.misc.enums
 
-import ccas.utils.json.EnumJson
+import zio.json.{jsonHint, jsonHintNames, JsonDecoder, SnakeCase}
+
 import ccas.utils.sql.EnumSql
 
-enum Colour {
+@jsonHintNames(SnakeCase)
+enum Colour derives JsonDecoder {
   case White
   case Black
 }
-
-object Colour extends EnumJson[Colour]
 
 // Not associated with the Chess.com public api.
 enum GameResult(val score: Double) {
@@ -20,57 +20,44 @@ enum GameResult(val score: Double) {
   def scoreX2: Int = (score * 2).toInt
 }
 
-object GameResult extends EnumJson[GameResult]
-
-enum GameResultDetail(val category: GameResult) {
+// Chess.com runs multi-word values together, so a multi-word case needs a hint.
+@jsonHintNames(SnakeCase)
+enum GameResultDetail(val category: GameResult) derives JsonDecoder {
   val score: Double = category.score
 
-  case Win                 extends GameResultDetail(GameResult.Win)
-  case Stalemate           extends GameResultDetail(GameResult.Draw)
-  case Agreed              extends GameResultDetail(GameResult.Draw)
-  case Repetition          extends GameResultDetail(GameResult.Draw)
-  case FiftyMove           extends GameResultDetail(GameResult.Draw)
-  case Insufficient        extends GameResultDetail(GameResult.Draw)
-  case TimeVsInsufficient  extends GameResultDetail(GameResult.Draw)
-  case Checkmated          extends GameResultDetail(GameResult.Loss)
-  case Resigned            extends GameResultDetail(GameResult.Loss)
-  case Timeout             extends GameResultDetail(GameResult.Loss)
-  case Lose                extends GameResultDetail(GameResult.Loss)
-  case Abandoned           extends GameResultDetail(GameResult.Loss)
-  case KingOfTheHill       extends GameResultDetail(GameResult.Loss)
-  case ThreeCheck          extends GameResultDetail(GameResult.Loss)
-  case BughousePartnerLose extends GameResultDetail(GameResult.Loss)
+  case Win                                                  extends GameResultDetail(GameResult.Win)
+  case Stalemate                                            extends GameResultDetail(GameResult.Draw)
+  case Agreed                                               extends GameResultDetail(GameResult.Draw)
+  case Repetition                                           extends GameResultDetail(GameResult.Draw)
+  @jsonHint("50move") case FiftyMove                        extends GameResultDetail(GameResult.Draw)
+  case Insufficient                                         extends GameResultDetail(GameResult.Draw)
+  @jsonHint("timevsinsufficient") case TimeVsInsufficient   extends GameResultDetail(GameResult.Draw)
+  case Checkmated                                           extends GameResultDetail(GameResult.Loss)
+  case Resigned                                             extends GameResultDetail(GameResult.Loss)
+  case Timeout                                              extends GameResultDetail(GameResult.Loss)
+  case Lose                                                 extends GameResultDetail(GameResult.Loss)
+  case Abandoned                                            extends GameResultDetail(GameResult.Loss)
+  @jsonHint("kingofthehill") case KingOfTheHill             extends GameResultDetail(GameResult.Loss)
+  @jsonHint("threecheck") case ThreeCheck                   extends GameResultDetail(GameResult.Loss)
+  @jsonHint("bughousepartnerlose") case BughousePartnerLose extends GameResultDetail(GameResult.Loss)
 }
 
-object GameResultDetail extends EnumJson[GameResultDetail] with EnumSql[GameResultDetail] {
-  private val lookup = lookupJson(GameResultDetail.values.map { member =>
-    val apiString = member match {
-      case FiftyMove => "50move"
-      case other     => other.toString.toLowerCase
-    }
-    apiString -> member
-  }.toMap)
+object GameResultDetail extends EnumSql[GameResultDetail]
 
-  override protected def jsonToEnum(string: String) = lookup(string)
-}
-
-enum GameRule {
+// Chess.com runs multi-word values together, so a multi-word case needs a hint.
+@jsonHintNames(SnakeCase)
+enum GameRule derives JsonDecoder {
   case Chess
   case Chess960
   case Bughouse
-  case KingOfTheHill
-  case ThreeCheck
-  case CrazyHouse
-  case OddsChess
+  @jsonHint("kingofthehill") case KingOfTheHill
+  @jsonHint("threecheck") case ThreeCheck
+  @jsonHint("crazyhouse") case CrazyHouse
+  @jsonHint("oddschess") case OddsChess
 }
 
-object GameRule extends EnumJson[GameRule] {
-  private val lookup = lookupJson(values.map(member => member.toString.toLowerCase -> member).toMap)
-
-  override protected def jsonToEnum(string: String) = lookup(string)
-}
-
-enum League {
+// Capitalised on the wire, unlike most of Chess.com's enums: docs/chess-com-api.md, "Enum fields are not spelt alike".
+enum League derives JsonDecoder {
   case Wood
   case Stone
   case Bronze
@@ -81,9 +68,8 @@ enum League {
   case Legend
 }
 
-object League extends EnumJson[League]
-
-enum ClubMatchResult(val scorePerPlayer: Double) {
+@jsonHintNames(SnakeCase)
+enum ClubMatchResult(val scorePerPlayer: Double) derives JsonDecoder {
   def totalScore(nPlayers: Int): Double = scorePerPlayer * nPlayers
 
   case Win  extends ClubMatchResult(5.0)
@@ -91,16 +77,17 @@ enum ClubMatchResult(val scorePerPlayer: Double) {
   case Lose extends ClubMatchResult(0.0)
 }
 
-object ClubMatchResult extends EnumJson[ClubMatchResult] with EnumSql[ClubMatchResult]
+object ClubMatchResult extends EnumSql[ClubMatchResult]
 
-enum ClubMatchStatus {
+@jsonHintNames(SnakeCase)
+enum ClubMatchStatus derives JsonDecoder {
   case Finished
   case InProgress
   case Registration
   case Aborted
 }
 
-object ClubMatchStatus extends EnumJson[ClubMatchStatus] with EnumSql[ClubMatchStatus]
+object ClubMatchStatus extends EnumSql[ClubMatchStatus]
 
 enum PlayerStatusCategory {
   case Active
@@ -112,31 +99,19 @@ enum PlayerStatusCategory {
 
 object PlayerStatusCategory extends EnumSql[PlayerStatusCategory]
 
-enum PlayerStatus(val category: PlayerStatusCategory) {
-  case Basic    extends PlayerStatus(PlayerStatusCategory.Active)
-  case Premium  extends PlayerStatus(PlayerStatusCategory.Active)
-  case Mod      extends PlayerStatus(PlayerStatusCategory.Active)
-  case Staff    extends PlayerStatus(PlayerStatusCategory.Active)
-  case Closed   extends PlayerStatus(PlayerStatusCategory.Closed)
-  case Fairplay extends PlayerStatus(PlayerStatusCategory.Fairplay)
-  case Abuse    extends PlayerStatus(PlayerStatusCategory.Abuse)
+@jsonHintNames(SnakeCase)
+enum PlayerStatus(val category: PlayerStatusCategory) derives JsonDecoder {
+  case Basic                                             extends PlayerStatus(PlayerStatusCategory.Active)
+  case Premium                                           extends PlayerStatus(PlayerStatusCategory.Active)
+  case Mod                                               extends PlayerStatus(PlayerStatusCategory.Active)
+  case Staff                                             extends PlayerStatus(PlayerStatusCategory.Active)
+  case Closed                                            extends PlayerStatus(PlayerStatusCategory.Closed)
+  @jsonHint("closed:fair_play_violations") case Fairplay extends PlayerStatus(PlayerStatusCategory.Fairplay)
+  @jsonHint("closed:abuse") case Abuse                   extends PlayerStatus(PlayerStatusCategory.Abuse)
 }
 
-object PlayerStatus extends EnumJson[PlayerStatus] {
-  private val lookup = lookupJson(values.map { member =>
-    val apiString = member match {
-      case Fairplay => "closed:fair_play_violations"
-      case Abuse    => "closed:abuse"
-      case other    => other.toString.toLowerCase
-    }
-    apiString -> member
-  }.toMap)
-
-  override protected def jsonToEnum(string: String) =
-    super.jsonToEnum(string).orElse(lookup(string))
-}
-
-enum TimeClass(val isDaily: Boolean) {
+@jsonHintNames(SnakeCase)
+enum TimeClass(val isDaily: Boolean) derives JsonDecoder {
   case Daily     extends TimeClass(true)
   case Rapid     extends TimeClass(false)
   case Standard  extends TimeClass(false)
@@ -145,9 +120,9 @@ enum TimeClass(val isDaily: Boolean) {
   case Bullet    extends TimeClass(false)
 }
 
-object TimeClass extends EnumJson[TimeClass] with EnumSql[TimeClass]
+object TimeClass extends EnumSql[TimeClass]
 
-enum Title {
+enum Title derives JsonDecoder {
   case GM
   case IM
   case FM
@@ -161,14 +136,13 @@ enum Title {
   case M
 }
 
-object Title extends EnumJson[Title] with EnumSql[Title]
+object Title extends EnumSql[Title]
 
-enum ClubVisibility {
+@jsonHintNames(SnakeCase)
+enum ClubVisibility derives JsonDecoder {
   case Public
   case Private
 }
-
-object ClubVisibility extends EnumJson[ClubVisibility]
 
 enum BoardGameWinner {
   case Team1, Team2, Draw

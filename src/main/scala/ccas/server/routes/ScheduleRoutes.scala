@@ -23,8 +23,8 @@ object ScheduleRoutes {
   //
   // A schedule is either interval- or cron-triggered. The request is backward compatible: a legacy body with
   // only `intervalHours` (no `triggerType`) decodes the new Option fields as None and defaults to Interval.
-  // `triggerType`/`misfire` are typed enums decoded snake_case via their EnumJson codecs (`interval`/`cron`,
-  // `skip`/`catch_up`); `cron` is the 5-field unix expression users type.
+  // `triggerType`/`misfire` are typed enums decoded snake_case (`interval`/`cron`, `skip`/`catch_up`); `cron` is the
+  // 5-field unix expression users type.
 
   private[ccas] case class CreateScheduleRequest(
     kind: String,

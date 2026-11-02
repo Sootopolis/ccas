@@ -61,7 +61,7 @@ object RecruitmentTestSupport {
       s""""followers": 0""",
       s""""is_streamer": false""",
       s""""verified": false""",
-      s""""league": "wood""""
+      s""""league": "Wood""""
     )
     fields.mkString("{\n", ",\n", "\n}")
   }
