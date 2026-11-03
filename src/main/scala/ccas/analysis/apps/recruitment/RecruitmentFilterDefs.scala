@@ -125,16 +125,21 @@ private[recruitment] object RecruitmentFilterDefs {
     shouldReject: (PlayerRecruitmentCache, RecruitmentCriteria) => Boolean
   )
 
-  private val cacheCriteria: List[CacheCriterion] = List(
-    // Zero-tolerance daily timeout (90d — matches API stats window)
+  private def timeoutInWindow(timeoutAtOption: Option[Instant], now: Instant): Boolean =
+    timeoutAtOption.exists(!_.isBefore(now.minus(StatsWindowDays, ChronoUnit.DAYS)))
+
+  private def cacheCriteria(now: Instant): List[CacheCriterion] = List(
+    // Zero-tolerance timeouts go by the timeout's own age: the row keeps one after it leaves the window a full evaluation
+    // counts. A timeout is never newer than its row, so the row-age test on these two never decides anything.
     CacheCriterion(
-      90L,
-      (cache, criteria) => criteria.dailyMaxTimeoutPercent.contains(0.0) && cache.lastDailyTimeoutAt.isDefined
+      StatsWindowDays,
+      (cache, criteria) =>
+        criteria.dailyMaxTimeoutPercent.contains(0.0) && timeoutInWindow(cache.lastDailyTimeoutAt, now)
     ),
-    // Zero-tolerance TM timeout (90d — matches API stats window)
     CacheCriterion(
-      90L,
-      (cache, criteria) => criteria.dailyMaxTmTimeoutPercent.contains(0.0) && cache.lastTmTimeoutAt.isDefined
+      StatsWindowDays,
+      (cache, criteria) =>
+        criteria.dailyMaxTmTimeoutPercent.contains(0.0) && timeoutInWindow(cache.lastTmTimeoutAt, now)
     ),
     // Max clubs (30d)
     CacheCriterion(30L, (cache, criteria) => criteria.maxClubs.exists(max => cache.clubCount.exists(_ > max))),
@@ -201,7 +206,7 @@ private[recruitment] object RecruitmentFilterDefs {
     now: Instant
   ): Boolean = {
     val ageDays = ChronoUnit.DAYS.between(cache.fetchedAt, now)
-    cacheCriteria.exists(c => c.stalenessDays > ageDays && c.shouldReject(cache, criteria))
+    cacheCriteria(now).exists(c => c.stalenessDays > ageDays && c.shouldReject(cache, criteria))
   }
 
   object CheckCacheCriteria extends RecruitmentFilter {
@@ -402,7 +407,7 @@ private[recruitment] object RecruitmentFilterDefs {
         // Fetch 90-day archives only when player has timed out before (timeoutPct > 0)
         archives <-
           ZIO.when(dailyTimeoutPct > 0 || env.run.criteria.dailyMinGamesFinished.isDefined) {
-            val months = recentArchiveMonths(env.run.now, 90)
+            val months = recentArchiveMonths(env.run.now, StatsWindowDays)
             ZIO.foreachPar(months) { ym =>
               val url = ApiPlayerArchive.getUrl(env.candidate.username, ym.getYear, ym.getMonthValue)
               env.run.client.getUncached[ApiPlayerArchive](url)
@@ -410,7 +415,7 @@ private[recruitment] object RecruitmentFilterDefs {
           }
         _ <- requireApiPlayer(env)
       } yield {
-        val cutoff90d = env.run.now.minus(90, ChronoUnit.DAYS)
+        val cutoff90d = env.run.now.minus(StatsWindowDays, ChronoUnit.DAYS)
         val dailyGamesFinished90d = archives.map(
           _.flatMap(_.games.filter(g => g.timeClass == "daily" && g.endTime >= cutoff90d.getEpochSecond)).size
         )

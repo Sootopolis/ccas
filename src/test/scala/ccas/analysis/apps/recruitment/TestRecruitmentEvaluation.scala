@@ -162,17 +162,24 @@ object TestRecruitmentEvaluation extends ZIOSpecDefault {
     } yield cands.headOption.map(_.outcome)
 
   private def suiteCacheFilters = suite("cache-aware filters")(
-    testZeroToleranceDailyTimeoutRejectsFromCache,
+    testDailyTimeoutInsideWindowRejectsFromCache,
+    testDailyTimeoutOutsideWindowDoesNotRejectFromCache,
+    testTmTimeoutInsideWindowRejectsFromCache,
+    testTmTimeoutOutsideWindowDoesNotRejectFromCache,
     testMaxClubsCacheRejectionAt48hOldCache,
     testStaleCacheFallsThroughToApiChecks,
     testCacheOnlyRejectionDoesNotBlockReEvaluation
   )
 
-  private def testZeroToleranceDailyTimeoutRejectsFromCache = test("zero-tolerance daily timeout rejects from cache") {
+  /** A 30-day-old row whose figures are all clean, so only the timeouts given can reject from cache. */
+  private def cacheWithTimeouts(
+    dailyTimeoutAgeDaysOption: Option[Long],
+    tmTimeoutAgeDaysOption: Option[Long]
+  ): PlayerRecruitmentCache = {
     val now = Instant.now()
-    val staleCache = PlayerRecruitmentCache(
+    PlayerRecruitmentCache(
       playerId = pid0,
-      fetchedAt = now.minus(Duration.ofDays(30)), // very old cache
+      fetchedAt = now.minus(Duration.ofDays(30)),
       dailyElo = Some(Elo(1500)),
       dailyScoreRate = None,
       dailyTimeoutPct = Some(0.0),
@@ -182,16 +189,52 @@ object TestRecruitmentEvaluation extends ZIOSpecDefault {
       ongoingTeamMatches = Some(2),
       tmGamesFinished90d = Some(10),
       tmTimeoutPct90d = Some(0.0),
-      lastDailyTimeoutAt = Some(now.minus(Duration.ofDays(100))), // had a timeout once
-      lastTmTimeoutAt = None
+      lastDailyTimeoutAt = dailyTimeoutAgeDaysOption.map(days => now.minus(Duration.ofDays(days))),
+      lastTmTimeoutAt = tmTimeoutAgeDaysOption.map(days => now.minus(Duration.ofDays(days)))
     )
-    val criteria  = makeCriteria().copy(dailyMaxTimeoutPercent = Some(0.0))
-    val responses = Map("player/alice" -> apiPlayerJson(200, "alice"))
-
-    for {
-      outcome <- evalSingleWithCache(responses, criteria, staleCache)
-    } yield assertTrue(outcome.isEmpty) // cache-only rejection: no candidate row persisted
   }
+
+  /** Everything a full evaluation reads, all clean: a candidate that reaches it passes. */
+  private def cleanEvaluationResponses: Map[String, String] =
+    archivesInWindow("alice", Instant.now(), archiveJson(Nil)) ++ Map(
+      "player/alice"       -> apiPlayerJson(200, "alice"),
+      "player/alice/stats" -> apiPlayerStatsJson(timeoutPct = 0.0)
+    )
+
+  private val zeroDailyTolerance = makeCriteria().copy(dailyMaxTimeoutPercent = Some(0.0))
+  private val zeroTmTolerance    = makeCriteria().copy(dailyMaxTmTimeoutPercent = Some(0.0))
+
+  private def testDailyTimeoutInsideWindowRejectsFromCache =
+    test("a zero-tolerance daily timeout inside the 90-day window rejects from cache") {
+      val cache = cacheWithTimeouts(dailyTimeoutAgeDaysOption = Some(89), tmTimeoutAgeDaysOption = None)
+      for {
+        outcome <- evalSingleWithCache(cleanEvaluationResponses, zeroDailyTolerance, cache)
+      } yield assertTrue(outcome.isEmpty) // cache-only rejection: no candidate row persisted
+    }
+
+  private def testDailyTimeoutOutsideWindowDoesNotRejectFromCache =
+    test("a zero-tolerance daily timeout older than 90 days does not reject from cache") {
+      val cache = cacheWithTimeouts(dailyTimeoutAgeDaysOption = Some(91), tmTimeoutAgeDaysOption = None)
+      for {
+        outcome <- evalSingleWithCache(cleanEvaluationResponses, zeroDailyTolerance, cache)
+      } yield assertTrue(outcome.contains(CandidateOutcome.Deferred))
+    }
+
+  private def testTmTimeoutInsideWindowRejectsFromCache =
+    test("a zero-tolerance team-match timeout inside the 90-day window rejects from cache") {
+      val cache = cacheWithTimeouts(dailyTimeoutAgeDaysOption = None, tmTimeoutAgeDaysOption = Some(89))
+      for {
+        outcome <- evalSingleWithCache(cleanEvaluationResponses, zeroTmTolerance, cache)
+      } yield assertTrue(outcome.isEmpty) // cache-only rejection: no candidate row persisted
+    }
+
+  private def testTmTimeoutOutsideWindowDoesNotRejectFromCache =
+    test("a zero-tolerance team-match timeout older than 90 days does not reject from cache") {
+      val cache = cacheWithTimeouts(dailyTimeoutAgeDaysOption = None, tmTimeoutAgeDaysOption = Some(91))
+      for {
+        outcome <- evalSingleWithCache(cleanEvaluationResponses, zeroTmTolerance, cache)
+      } yield assertTrue(outcome.contains(CandidateOutcome.Deferred))
+    }
 
   private def testMaxClubsCacheRejectionAt48hOldCache = test("maxClubs cache rejection at 48h old cache") {
     val now = Instant.now()
