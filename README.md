@@ -239,7 +239,7 @@ Optional overrides with defaults:
 |----------|---------|-------------|
 | `SERVER_PORT` | 8080 | HTTP server port |
 | `SERVER_HOST` | 127.0.0.1 | Bind address. Loopback by default (single-user, no-auth local model); set `0.0.0.0` for hosted deploys |
-| `SCHEDULER_POLL_MINUTES` | 15 | How often the scheduler checks for due jobs. Keep ≥ 15 against Neon so polls don't keep the compute always-warm (it auto-suspends after ~5 min idle, budget is 192 active-hr/mo on free tier) |
+| `SCHEDULER_POLL_MINUTES` | 15 | How often the scheduler checks for due jobs. Keep ≥ 15 against Neon so polls don't keep the compute always-warm (it auto-suspends after ~5 min idle, and the free plan allows 100 CU-hours a month, ~400 hours at 0.25 CU) |
 | `SCHEDULER_<JOB>_INTERVAL_HOURS` / `SCHEDULER_<JOB>_ENABLED` | — | Boot-seed cadence/enable, per job, defaults in `application.conf`. Two groups: the global sweeps `MATCHREF` and `CLUBDATA`, seeded once; and `HISTORY` and `MEMBERSHIP`, seeded once **per managed club**. Seed-only: at every boot, a schedule of that kind that does not exist yet (for each managed club, in the second group) is created with these values, and one that exists keeps its own. So a seeded schedule removed with `ccas schedule remove` returns at the next boot; to stop one, disable it (`PUT /api/schedules/:id` with `{"enabled": false}`) |
 | `DB_POOL_MAX` / `DB_POOL_MIN_IDLE` | 20 / 2 | HikariCP pool sizing (set `MIN_IDLE=0` for Neon scale-to-zero) |
 | `DB_POOL_CONNECTION_TIMEOUT` / `DB_POOL_IDLE_TIMEOUT` / `DB_POOL_MAX_LIFETIME` / `DB_POOL_KEEPALIVE_TIME` | 30 000 / 600 000 / 1 800 000 / 120 000 ms | HikariCP timeouts |
@@ -355,7 +355,7 @@ PATH=/opt/homebrew/bin:/usr/bin:/bin
 0 4 * * 0 /path/to/ccas/scripts/backup-neon.sh >> ~/.local/share/ccas/backups/backup.log 2>&1
 ```
 
-A weekly cadence is one Neon compute wake per week — negligible against the 192 active-hr/mo free-tier budget. Restore a dump with `pg_restore` (use a version **≥** the `pg_dump` that wrote the file — a custom-format archive can't be read by an older `pg_restore`), as the role the app connects with. Restored as anyone else, the objects belong to that user, and the app fails on them with permission errors. Into a fresh local database:
+A weekly cadence is one Neon compute wake per week — negligible against the free plan's monthly compute allowance. Restore a dump with `pg_restore` (use a version **≥** the `pg_dump` that wrote the file — a custom-format archive can't be read by an older `pg_restore`), as the role the app connects with. Restored as anyone else, the objects belong to that user, and the app fails on them with permission errors. Into a fresh local database:
 
 ```bash
 createdb -O ccas <db>

@@ -7,8 +7,7 @@ import zio.*
 import zio.test.*
 
 import ccas.analysis.tables.{ClientConfig, ClientStats, Tables}
-import ccas.utils.sql.FreshSchemaLayer
-import ccas.utils.sql.PostgresClient
+import ccas.utils.sql.{FailOnceDataSource, FreshSchemaLayer, PostgresClient}
 
 object TestChessComClientPersistence extends ZIOSpecDefault {
 
@@ -24,10 +23,11 @@ object TestChessComClientPersistence extends ZIOSpecDefault {
     pgClient: PostgresClient
   ): ZIO[Any, Nothing, ClientStatsFlushContext] =
     for {
-      configIdRef <- Ref.make(Option.empty[Long])
-      stateRef    <- Ref.make(ChessComClient.ThrottleState(8, 0, Vector.empty))
-      endedAtRef  <- Ref.make(Option.empty[Instant])
-      startedAt   <- ZIO.succeed(Instant.now())
+      configIdRef    <- Ref.make(Option.empty[Long])
+      stateRef       <- Ref.make(ChessComClient.ThrottleState(8, 0, Vector.empty))
+      endedAtRef     <- Ref.make(Option.empty[Instant])
+      lastFlushedRef <- Ref.make(ClientStatsAccumulator())
+      startedAt      <- ZIO.succeed(Instant.now())
       config = ChessComClient.ThrottleConfig(
         Vector(2, 4, 8),
         30.seconds,
@@ -46,18 +46,136 @@ object TestChessComClientPersistence extends ZIOSpecDefault {
         500L
       )
     } yield ClientStatsFlushContext(
-      s"test-$appLabel",
-      appLabel,
-      startedAt,
-      statsRef,
-      configIdRef,
-      config,
-      stateRef,
-      pgClient,
-      endedAtRef
+      sessionId = s"test-$appLabel",
+      appLabel = appLabel,
+      startedAt = startedAt,
+      statsRef = statsRef,
+      configIdRef = configIdRef,
+      config = config,
+      stateRef = stateRef,
+      pgClient = pgClient,
+      endedAtRef = endedAtRef,
+      lastFlushedRef = lastFlushedRef
     )
 
+  private def rowOf(ctx: ClientStatsFlushContext): ZIO[PostgresClient, Throwable, Option[ClientStats]] =
+    ClientStats.selectRecent(ctx.startedAt.minusSeconds(60)).map(_.find(_.appLabel == ctx.appLabel))
+
+  // Longer than `completed_at`'s resolution, so a second write would show in it.
+  private val pause = ZIO.sleep(5.millis)
+
   private def suitePersistStats = suite("persistStats")(
+    test("a flush with unchanged totals writes nothing, so completed_at stays put") {
+      for {
+        pgClient <- ZIO.service[PostgresClient]
+        statsRef <- Ref.make(ClientStatsAccumulator().copy(requests = 2, successes = 2, activeMs = 200))
+        ctx      <- makeFlushContext("test-unchanged", statsRef, pgClient)
+        _        <- ClientStatsPersistence.persistStats(ctx)
+        first    <- rowOf(ctx)
+        _        <- pause
+        _        <- ClientStatsPersistence.persistStats(ctx)
+        second   <- rowOf(ctx)
+      } yield assertTrue(
+        first.isDefined,
+        second.map(_.completedAt) == first.map(_.completedAt)
+      )
+    },
+    test("a change after a skipped flush is written") {
+      for {
+        pgClient <- ZIO.service[PostgresClient]
+        statsRef <- Ref.make(ClientStatsAccumulator().copy(requests = 2, successes = 2, activeMs = 200))
+        ctx      <- makeFlushContext("test-change-after-skip", statsRef, pgClient)
+        _        <- ClientStatsPersistence.persistStats(ctx)
+        first    <- rowOf(ctx)
+        _        <- ClientStatsPersistence.persistStats(ctx)
+        _        <- pause
+        _        <- statsRef.update(_.copy(requests = 3))
+        _        <- ClientStatsPersistence.persistStats(ctx)
+        second   <- rowOf(ctx)
+      } yield assertTrue(
+        second.exists(_.requests == 3L),
+        second.map(_.completedAt) != first.map(_.completedAt)
+      )
+    },
+    test("the final flush writes nothing when the totals are unchanged") {
+      for {
+        pgClient <- ZIO.service[PostgresClient]
+        statsRef <- Ref.make(ClientStatsAccumulator().copy(requests = 2, successes = 2, activeMs = 200))
+        ctx      <- makeFlushContext("test-final-unchanged", statsRef, pgClient)
+        _        <- ClientStatsPersistence.persistStats(ctx)
+        first    <- rowOf(ctx)
+        _        <- pause
+        _        <- ClientStatsPersistence.finalFlush(ctx)
+        second   <- rowOf(ctx)
+      } yield assertTrue(
+        first.isDefined,
+        second.map(_.completedAt) == first.map(_.completedAt)
+      )
+    },
+    test("the final flush writes totals that changed since the last flush") {
+      for {
+        pgClient <- ZIO.service[PostgresClient]
+        statsRef <- Ref.make(ClientStatsAccumulator().copy(requests = 2, successes = 2, activeMs = 200))
+        ctx      <- makeFlushContext("test-final-changed", statsRef, pgClient)
+        _        <- ClientStatsPersistence.persistStats(ctx)
+        _        <- statsRef.update(_.copy(requests = 9))
+        _        <- ClientStatsPersistence.finalFlush(ctx)
+        row      <- rowOf(ctx)
+      } yield assertTrue(row.exists(_.requests == 9L))
+    },
+    test("endSession with unchanged totals writes nothing, so completed_at stays before the pin") {
+      for {
+        pgClient <- ZIO.service[PostgresClient]
+        statsRef <- Ref.make(ClientStatsAccumulator().copy(requests = 2, successes = 2, activeMs = 200))
+        ctx      <- makeFlushContext("test-endsession-unchanged", statsRef, pgClient)
+        _        <- ClientStatsPersistence.persistStats(ctx)
+        first    <- rowOf(ctx)
+        _        <- pause
+        fiber    <- ZIO.never.forkDaemon
+        _        <- ClientStatsPersistence.endSession(ctx, fiber)
+        pinned   <- ctx.endedAtRef.get
+        second   <- rowOf(ctx)
+      } yield assertTrue(
+        second.map(_.completedAt) == first.map(_.completedAt),
+        second.exists(row => pinned.exists(row.completedAt.isBefore))
+      )
+    },
+    test("a failed write is retried on the next flush though nothing changed") {
+      for {
+        pgClient <- ZIO.service[PostgresClient]
+        statsRef <- Ref.make(ClientStatsAccumulator().copy(requests = 2, successes = 2, activeMs = 200))
+        ctx      <- makeFlushContext("test-failed-write", statsRef, pgClient)
+        // The first flush also resolves the config, so the rigged connection below fails the upsert itself.
+        _ <- ClientStatsPersistence.persistStats(ctx)
+        _ <- statsRef.update(_.copy(requests = 3))
+        rigged = ctx.copy(pgClient = FailOnceDataSource.rig(base = pgClient, transient = false)._1)
+        _           <- ClientStatsPersistence.persistStats(rigged)
+        afterFailed <- rowOf(ctx)
+        _           <- ClientStatsPersistence.persistStats(rigged)
+        afterRetry  <- rowOf(ctx)
+      } yield assertTrue(
+        afterFailed.exists(_.requests == 2L),
+        afterRetry.exists(_.requests == 3L)
+      )
+    },
+    test("an open throttle alone writes nothing, so one that never closes cannot keep the compute awake") {
+      for {
+        pgClient <- ZIO.service[PostgresClient]
+        statsRef <- Ref.make(ClientStatsAccumulator().copy(requests = 2, successes = 2, activeMs = 200))
+        ctx      <- makeFlushContext("test-open-throttle", statsRef, pgClient)
+        _        <- ClientStatsPersistence.persistStats(ctx)
+        first    <- rowOf(ctx)
+        nowMs    <- Clock.currentTime(TimeUnit.MILLISECONDS)
+        _        <- ctx.stateRef.update(_.copy(coolingDown = true, throttledSince = Some(nowMs - 100_000)))
+        _        <- pause
+        _        <- ClientStatsPersistence.persistStats(ctx)
+        second   <- rowOf(ctx)
+      } yield assertTrue(
+        first.isDefined,
+        second.map(_.completedAt) == first.map(_.completedAt),
+        second.exists(_.throttledMs == 0L)
+      )
+    },
     test("repeated flushes upsert a single cumulative row") {
       for {
         pgClient <- ZIO.service[PostgresClient]

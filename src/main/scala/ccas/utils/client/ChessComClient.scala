@@ -28,7 +28,7 @@ import ccas.utils.sql.PostgresClient
   * a generation-gated ladder walking permits back up; separate retry schedules for 429, Cloudflare 403 and
   * connection errors, with non-Cloudflare 403 and 404 never retried; response caching via [[getResult]], which
   * returns a [[FetchResult]] and defers body load and decode; and a daemon fiber flushing cumulative
-  * `client_stats`, with a final flush in the scope finalizer.
+  * `client_stats` whenever they change, with a final flush in the scope finaliser.
   *
   * Rationale: `docs/adr/0012-gate-based-adaptive-throttle.md` (throttle),
   * `docs/adr/0006-pacing-ema-measures-the-http-exchange-only.md` (what the EMA measures),
@@ -960,22 +960,24 @@ object ChessComClient {
         recoveryFiberRef <- Ref.make(Option.empty[Fiber.Runtime[Throwable, Unit]])
         startedAt        <- Clock.instant
         sessionId = startedAt.toString.replace(":", "").replace("-", "")
-        stats       <- Ref.make(ClientStatsAccumulator())
-        configIdRef <- Ref.make(Option.empty[Long])
-        endedAtRef  <- Ref.make(Option.empty[Instant])
-        bar         <- display.addBarScoped
+        stats          <- Ref.make(ClientStatsAccumulator())
+        configIdRef    <- Ref.make(Option.empty[Long])
+        endedAtRef     <- Ref.make(Option.empty[Instant])
+        lastFlushedRef <- Ref.make(ClientStatsAccumulator())
+        bar            <- display.addBarScoped
         refs = ThrottleRefs(stateRef, activeRef, rateLimitGate, lastReqRef)
         flushCtx =
           ClientStatsFlushContext(
-            sessionId,
-            appLabel,
-            startedAt,
-            stats,
-            configIdRef,
-            throttleConfig,
-            stateRef,
-            pgClient,
-            endedAtRef
+            sessionId = sessionId,
+            appLabel = appLabel,
+            startedAt = startedAt,
+            statsRef = stats,
+            configIdRef = configIdRef,
+            config = throttleConfig,
+            stateRef = stateRef,
+            pgClient = pgClient,
+            endedAtRef = endedAtRef,
+            lastFlushedRef = lastFlushedRef
           )
         flushFiber <- ClientStatsPersistence.persistStats(flushCtx).repeat(
           Schedule.fixed(statsFlushInterval)
