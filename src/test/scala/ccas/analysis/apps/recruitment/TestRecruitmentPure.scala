@@ -15,7 +15,7 @@ object TestRecruitmentPure extends ZIOSpecDefault {
   override def spec: Spec[Any, Throwable] = suite("TestRecruitmentPure")(
     suiteParseRecruitArgs,
     suiteCriteriaHelpers,
-    suite("cached criteria")(cacheCriterionRows.flatMap(cacheCriterionTests)*)
+    suite("cached criteria")(cachedCriteriaTests*)
   )
 
   // ==========================================================================
@@ -112,15 +112,16 @@ object TestRecruitmentPure extends ZIOSpecDefault {
   )
 
   // ==========================================================================
-  // Suite: Cached criteria (pure), one row per entry in `cacheCriteria`
+  // Suite: Cached criteria (pure), one row per `CacheCriterion`
   // ==========================================================================
 
   private case class CacheCriterionRow(
     name: String,
+    entry: CacheCriterion,
     stalenessDays: Long,
     criteria: RecruitmentCriteria,
     pastLimit: PlayerRecruitmentCache => PlayerRecruitmentCache,
-    atLimit: PlayerRecruitmentCache => PlayerRecruitmentCache
+    notPastLimit: PlayerRecruitmentCache => PlayerRecruitmentCache
   )
 
   private val now: Instant = TestTimes.t0
@@ -128,22 +129,70 @@ object TestRecruitmentPure extends ZIOSpecDefault {
   private def cacheAged(days: Long): PlayerRecruitmentCache =
     PlayerRecruitmentCache.empty(PlayerId(1), now.minus(days, ChronoUnit.DAYS), None)
 
-  // Slightly older than its row, as a timeout normally is, so it leaves the window as the row reaches the limit.
-  private def justBeforeFetch(cache: PlayerRecruitmentCache): Option[Instant] =
-    Some(cache.fetchedAt.minusSeconds(1))
+  // A timeout from during the run, newer than its row: still inside the window at the limit, so the row's age decides.
+  private def duringRun(cache: PlayerRecruitmentCache): Option[Instant] =
+    Some(cache.fetchedAt.plusSeconds(1))
+
+  private val onWindowEdge: Instant = now.minus(90, ChronoUnit.DAYS)
+
+  private val justOutsideWindow: Option[Instant] = Some(onWindowEdge.minusSeconds(1))
+
+  private def firingUnder(criteria: RecruitmentCriteria, cache: PlayerRecruitmentCache): List[CacheCriterion] =
+    CacheCriterion.values.toList.filter(_.fires(CacheCheck(cache, criteria, now)))
+
+  private def cachedCriteriaTests =
+    testEveryCriterionHasARow :: testsTimeoutOnWindowEdgeFires ++ testsRateFiresAtALimitOfZero ++
+      cacheCriterionRows.flatMap(cacheCriterionTests)
+
+  private def testEveryCriterionHasARow = test("every cached criterion has a row") {
+    assertTrue(CacheCriterion.values.toList.diff(cacheCriterionRows.map(_.entry)).isEmpty)
+  }
+
+  private def testsTimeoutOnWindowEdgeFires = List(
+    test("zero-tolerance daily timeout: a timeout exactly 90 days old fires") {
+      val cache    = cacheAged(0).copy(lastDailyTimeoutAt = Some(onWindowEdge))
+      val criteria = makeCriteria().copy(dailyMaxTimeoutPercent = Some(0.0))
+      assertTrue(CacheCriterion.ZeroToleranceDailyTimeout.fires(CacheCheck(cache, criteria, now)))
+    },
+    test("zero-tolerance team-match timeout: a timeout exactly 90 days old fires") {
+      val cache    = cacheAged(0).copy(lastTmTimeoutAt = Some(onWindowEdge))
+      val criteria = makeCriteria().copy(dailyMaxTmTimeoutPercent = Some(0.0))
+      assertTrue(CacheCriterion.ZeroToleranceTmTimeout.fires(CacheCheck(cache, criteria, now)))
+    }
+  )
+
+  private def testsRateFiresAtALimitOfZero = List(
+    test("max daily timeout %: at a limit of 0, a rate above it fires alone once its timeout has left the window") {
+      val cache    = cacheAged(0).copy(dailyTimeoutPct = Some(25.0), lastDailyTimeoutAt = justOutsideWindow)
+      val criteria = makeCriteria().copy(dailyMaxTimeoutPercent = Some(0.0))
+      assertTrue(firingUnder(criteria, cache) == List(CacheCriterion.MaxDailyTimeoutPercent))
+    },
+    test(
+      "max team-match timeout %: at a limit of 0, a rate above it fires alone once its timeout has left the window"
+    ) {
+      val cache    = cacheAged(0).copy(tmTimeoutPct90d = Some(25.0), lastTmTimeoutAt = justOutsideWindow)
+      val criteria = makeCriteria().copy(dailyMaxTmTimeoutPercent = Some(0.0))
+      assertTrue(firingUnder(criteria, cache) == List(CacheCriterion.MaxTmTimeoutPercent))
+    }
+  )
 
   private def cacheCriterionTests(row: CacheCriterionRow) = {
-    def rejects(cache: PlayerRecruitmentCache): Boolean =
-      RecruitmentFilterDefs.runCacheCriteria(cache, row.criteria, now)
+    def firing(cache: PlayerRecruitmentCache): List[CacheCriterion] = firingUnder(row.criteria, cache)
     List(
-      test(s"${row.name}: a figure past the limit rejects until the row is ${row.stalenessDays} days old") {
+      test(
+        s"${row.name}: a figure past the limit fires only this criterion until the row is ${row.stalenessDays} days old"
+      ) {
         assertTrue(
-          rejects(row.pastLimit(cacheAged(row.stalenessDays - 1))),
-          !rejects(row.pastLimit(cacheAged(row.stalenessDays)))
+          firing(row.pastLimit(cacheAged(0))) == List(row.entry),
+          firing(row.pastLimit(cacheAged(row.stalenessDays - 1))) == List(row.entry),
+          firing(row.pastLimit(cacheAged(row.stalenessDays))).isEmpty
         )
       },
-      test(s"${row.name}: a figure at the limit does not reject") {
-        assertTrue(!rejects(row.atLimit(cacheAged(0))))
+      test(s"${row.name}: a figure not past the limit fires nothing") {
+        assertTrue(firing(row.notPastLimit(cacheAged(0))).isEmpty)
+      },
+      test(s"${row.name}: an absent figure fires nothing") {
+        assertTrue(firing(cacheAged(0)).isEmpty)
       }
     )
   }
@@ -151,101 +200,115 @@ object TestRecruitmentPure extends ZIOSpecDefault {
   private val cacheCriterionRows: List[CacheCriterionRow] = List(
     CacheCriterionRow(
       name = "zero-tolerance daily timeout",
+      entry = CacheCriterion.ZeroToleranceDailyTimeout,
       stalenessDays = 90,
       criteria = makeCriteria().copy(dailyMaxTimeoutPercent = Some(0.0)),
-      pastLimit = cache => cache.copy(lastDailyTimeoutAt = justBeforeFetch(cache)),
-      atLimit = identity
+      pastLimit = cache => cache.copy(lastDailyTimeoutAt = duringRun(cache)),
+      notPastLimit = _.copy(lastDailyTimeoutAt = justOutsideWindow)
     ),
     CacheCriterionRow(
       name = "zero-tolerance team-match timeout",
+      entry = CacheCriterion.ZeroToleranceTmTimeout,
       stalenessDays = 90,
       criteria = makeCriteria().copy(dailyMaxTmTimeoutPercent = Some(0.0)),
-      pastLimit = cache => cache.copy(lastTmTimeoutAt = justBeforeFetch(cache)),
-      atLimit = identity
+      pastLimit = cache => cache.copy(lastTmTimeoutAt = duringRun(cache)),
+      notPastLimit = _.copy(lastTmTimeoutAt = justOutsideWindow)
     ),
     CacheCriterionRow(
       name = "max clubs",
+      entry = CacheCriterion.MaxClubs,
       stalenessDays = 30,
       criteria = makeCriteria().copy(maxClubs = Some(50)),
       pastLimit = _.copy(clubCount = Some(51)),
-      atLimit = _.copy(clubCount = Some(50))
+      notPastLimit = _.copy(clubCount = Some(50))
     ),
     CacheCriterionRow(
       name = "min daily Elo",
+      entry = CacheCriterion.MinDailyElo,
       stalenessDays = 30,
       criteria = makeCriteria().copy(dailyMinElo = Some(Elo(1000))),
       pastLimit = _.copy(dailyElo = Some(Elo(999))),
-      atLimit = _.copy(dailyElo = Some(Elo(1000)))
+      notPastLimit = _.copy(dailyElo = Some(Elo(1000)))
     ),
     CacheCriterionRow(
       name = "max daily Elo",
+      entry = CacheCriterion.MaxDailyElo,
       stalenessDays = 30,
       criteria = makeCriteria().copy(dailyMaxElo = Some(Elo(2000))),
       pastLimit = _.copy(dailyElo = Some(Elo(2001))),
-      atLimit = _.copy(dailyElo = Some(Elo(2000)))
+      notPastLimit = _.copy(dailyElo = Some(Elo(2000)))
     ),
     CacheCriterionRow(
       name = "min daily score rate",
+      entry = CacheCriterion.MinDailyScoreRate,
       stalenessDays = 30,
       criteria = makeCriteria().copy(dailyMinScoreRate = Some(0.5)),
       pastLimit = _.copy(dailyScoreRate = Some(0.49)),
-      atLimit = _.copy(dailyScoreRate = Some(0.5))
+      notPastLimit = _.copy(dailyScoreRate = Some(0.5))
     ),
     CacheCriterionRow(
       name = "max daily score rate",
+      entry = CacheCriterion.MaxDailyScoreRate,
       stalenessDays = 30,
       criteria = makeCriteria().copy(dailyMaxScoreRate = Some(0.8)),
       pastLimit = _.copy(dailyScoreRate = Some(0.81)),
-      atLimit = _.copy(dailyScoreRate = Some(0.8))
+      notPastLimit = _.copy(dailyScoreRate = Some(0.8))
     ),
     CacheCriterionRow(
       name = "max daily timeout %",
+      entry = CacheCriterion.MaxDailyTimeoutPercent,
       stalenessDays = 30,
       criteria = makeCriteria().copy(dailyMaxTimeoutPercent = Some(10.0)),
       pastLimit = _.copy(dailyTimeoutPct = Some(10.5)),
-      atLimit = _.copy(dailyTimeoutPct = Some(10.0))
+      notPastLimit = _.copy(dailyTimeoutPct = Some(10.0))
     ),
     CacheCriterionRow(
       name = "min daily games finished",
+      entry = CacheCriterion.MinDailyGamesFinished,
       stalenessDays = 30,
       criteria = makeCriteria().copy(dailyMinGamesFinished = Some(50)),
       pastLimit = _.copy(dailyGamesFinished = Some(49)),
-      atLimit = _.copy(dailyGamesFinished = Some(50))
+      notPastLimit = _.copy(dailyGamesFinished = Some(50))
     ),
     CacheCriterionRow(
       name = "min ongoing games",
+      entry = CacheCriterion.MinOngoingGames,
       stalenessDays = 30,
       criteria = makeCriteria().copy(dailyMinOngoingGames = Some(5)),
       pastLimit = _.copy(ongoingGames = Some(4)),
-      atLimit = _.copy(ongoingGames = Some(5))
+      notPastLimit = _.copy(ongoingGames = Some(5))
     ),
     CacheCriterionRow(
       name = "max ongoing games",
+      entry = CacheCriterion.MaxOngoingGames,
       stalenessDays = 30,
       criteria = makeCriteria().copy(dailyMaxOngoingGames = Some(10)),
       pastLimit = _.copy(ongoingGames = Some(11)),
-      atLimit = _.copy(ongoingGames = Some(10))
+      notPastLimit = _.copy(ongoingGames = Some(10))
     ),
     CacheCriterionRow(
       name = "min ongoing team matches",
+      entry = CacheCriterion.MinOngoingTeamMatches,
       stalenessDays = 30,
       criteria = makeCriteria().copy(dailyMinOngoingTeamMatches = Some(2)),
       pastLimit = _.copy(ongoingTeamMatches = Some(1)),
-      atLimit = _.copy(ongoingTeamMatches = Some(2))
+      notPastLimit = _.copy(ongoingTeamMatches = Some(2))
     ),
     CacheCriterionRow(
       name = "min team-match games finished",
+      entry = CacheCriterion.MinTmGamesFinished,
       stalenessDays = 30,
       criteria = makeCriteria().copy(dailyMinTmGamesFinished = Some(5)),
       pastLimit = _.copy(tmGamesFinished90d = Some(4)),
-      atLimit = _.copy(tmGamesFinished90d = Some(5))
+      notPastLimit = _.copy(tmGamesFinished90d = Some(5))
     ),
     CacheCriterionRow(
       name = "max team-match timeout %",
+      entry = CacheCriterion.MaxTmTimeoutPercent,
       stalenessDays = 30,
       criteria = makeCriteria().copy(dailyMaxTmTimeoutPercent = Some(10.0)),
       pastLimit = _.copy(tmTimeoutPct90d = Some(10.5)),
-      atLimit = _.copy(tmTimeoutPct90d = Some(10.0))
+      notPastLimit = _.copy(tmTimeoutPct90d = Some(10.0))
     )
   )
 }

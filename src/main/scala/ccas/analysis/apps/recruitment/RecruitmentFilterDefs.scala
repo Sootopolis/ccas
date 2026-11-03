@@ -118,95 +118,13 @@ private[recruitment] object RecruitmentFilterDefs {
       }
   }
 
-  // --- Per-criterion cache checks ---
-
-  private case class CacheCriterion(
-    stalenessDays: Long,
-    shouldReject: (PlayerRecruitmentCache, RecruitmentCriteria) => Boolean
-  )
-
-  private def timeoutInWindow(timeoutAtOption: Option[Instant], now: Instant): Boolean =
-    timeoutAtOption.exists(!_.isBefore(now.minus(StatsWindowDays, ChronoUnit.DAYS)))
-
-  private def cacheCriteria(now: Instant): List[CacheCriterion] = List(
-    // Zero-tolerance timeouts go by the timeout's own age: the row keeps one after it leaves the window a full evaluation
-    // counts. A timeout is newer than its row only if it came during the run, so the row-age test here rarely decides.
-    CacheCriterion(
-      StatsWindowDays,
-      (cache, criteria) =>
-        criteria.dailyMaxTimeoutPercent.contains(0.0) && timeoutInWindow(cache.lastDailyTimeoutAt, now)
-    ),
-    CacheCriterion(
-      StatsWindowDays,
-      (cache, criteria) =>
-        criteria.dailyMaxTmTimeoutPercent.contains(0.0) && timeoutInWindow(cache.lastTmTimeoutAt, now)
-    ),
-    // Max clubs (30d)
-    CacheCriterion(30L, (cache, criteria) => criteria.maxClubs.exists(max => cache.clubCount.exists(_ > max))),
-    // Min daily ELO (30d)
-    CacheCriterion(
-      30L,
-      (cache, criteria) => criteria.dailyMinElo.exists(min => cache.dailyElo.exists(_.value < min.value))
-    ),
-    // Max daily ELO (30d)
-    CacheCriterion(
-      30L,
-      (cache, criteria) => criteria.dailyMaxElo.exists(max => cache.dailyElo.exists(_.value > max.value))
-    ),
-    // Min daily score rate (30d)
-    CacheCriterion(
-      30L,
-      (cache, criteria) => criteria.dailyMinScoreRate.exists(min => cache.dailyScoreRate.exists(_ < min))
-    ),
-    // Max daily score rate (30d)
-    CacheCriterion(
-      30L,
-      (cache, criteria) => criteria.dailyMaxScoreRate.exists(max => cache.dailyScoreRate.exists(_ > max))
-    ),
-    // Max daily timeout % (30d)
-    CacheCriterion(
-      30L,
-      (cache, criteria) => criteria.dailyMaxTimeoutPercent.exists(max => cache.dailyTimeoutPct.exists(_ > max))
-    ),
-    // Min daily games finished (30d)
-    CacheCriterion(
-      30L,
-      (cache, criteria) => criteria.dailyMinGamesFinished.exists(min => cache.dailyGamesFinished.exists(_ < min))
-    ),
-    // Min ongoing games (30d)
-    CacheCriterion(
-      30L,
-      (cache, criteria) => criteria.dailyMinOngoingGames.exists(min => cache.ongoingGames.exists(_ < min))
-    ),
-    // Max ongoing games (30d)
-    CacheCriterion(
-      30L,
-      (cache, criteria) => criteria.dailyMaxOngoingGames.exists(max => cache.ongoingGames.exists(_ > max))
-    ),
-    // Min ongoing team matches (30d)
-    CacheCriterion(
-      30L,
-      (cache, criteria) => criteria.dailyMinOngoingTeamMatches.exists(min => cache.ongoingTeamMatches.exists(_ < min))
-    ),
-    // Min TM games finished 90d (30d)
-    CacheCriterion(
-      30L,
-      (cache, criteria) => criteria.dailyMinTmGamesFinished.exists(min => cache.tmGamesFinished90d.exists(_ < min))
-    ),
-    // Max TM timeout % 90d (30d)
-    CacheCriterion(
-      30L,
-      (cache, criteria) => criteria.dailyMaxTmTimeoutPercent.exists(max => cache.tmTimeoutPct90d.exists(_ > max))
-    )
-  )
-
-  private[recruitment] def runCacheCriteria(
+  private def runCacheCriteria(
     cache: PlayerRecruitmentCache,
     criteria: RecruitmentCriteria,
     now: Instant
   ): Boolean = {
-    val ageDays = ChronoUnit.DAYS.between(cache.fetchedAt, now)
-    cacheCriteria(now).exists(c => c.stalenessDays > ageDays && c.shouldReject(cache, criteria))
+    val check = CacheCheck(cache, criteria, now)
+    CacheCriterion.values.exists(_.fires(check))
   }
 
   object CheckCacheCriteria extends RecruitmentFilter {
