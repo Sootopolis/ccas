@@ -15,6 +15,8 @@ import ccas.utils.sql.PostgresClient
 
 private[recruitment] object RecruitmentStatsHelpers {
 
+  val StatsWindowDays = 90
+
   /** Reads the games, `recentArchivesOption`'s included, as `username`'s — or as the fresh handle when a month's fetch
     * recovered a rename — and returns the handle it used.
     */
@@ -39,8 +41,8 @@ private[recruitment] object RecruitmentStatsHelpers {
       )
     } else {
       // Fetch last ~90 days of archives
-      val cutoff = now.minus(90, ChronoUnit.DAYS)
-      val months = recentArchiveMonths(now, 90)
+      val cutoff = now.minus(StatsWindowDays, ChronoUnit.DAYS)
+      val months = recentArchiveMonths(now, StatsWindowDays)
 
       def fetchMonth(uname: Username, ym: YearMonth): RIO[PostgresClient, (Username, ApiPlayerArchive)] =
         client.get[ApiPlayerArchive](ApiPlayerArchive.getUrl(uname, ym.getYear, ym.getMonthValue)).map((uname, _))
