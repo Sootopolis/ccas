@@ -6,7 +6,6 @@ import zio.json.{jsonMemberNames, JsonDecoder, SnakeCase}
 import ccas.api.clubmatch.ApiDailyMatch.MatchTeamFinished
 import ccas.api.clubmatch.ApiLiveMatch.{ApiLiveMatchSettings, ApiLiveMatchTeams}
 import ccas.api.misc.*
-import ccas.api.misc.enums.*
 import ccas.api.misc.subtypes.ClubMatchId
 import ccas.utils.json.JsonDecoding.given
 
@@ -32,8 +31,7 @@ object ApiLiveMatch {
 
   @jsonMemberNames(SnakeCase)
   final case class ApiLiveMatchSettings(
-    rules: GameRule,
-    timeClass: TimeClass,
+    rules: Option[String],
     timeControl: String,
     timeIncrement: Option[Int],
     minTeamPlayers: Option[Int],

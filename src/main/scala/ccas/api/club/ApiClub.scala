@@ -5,7 +5,6 @@ import zio.http.URL
 import zio.json.{jsonMemberNames, JsonDecoder, SnakeCase}
 
 import ccas.api.misc.Hosts
-import ccas.api.misc.enums.ClubVisibility
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, Elo, Username}
 import ccas.utils.client.ChessComClient
 import ccas.utils.json.JsonDecoding.given
@@ -22,7 +21,7 @@ final case class ApiClub(
   membersCount: Int,               // total members count
   created: Long,                   // timestamp of creation on Chess.com
   lastActivity: Long,              // timestamp of the most recent post, match, etc
-  visibility: ClubVisibility,      // whether the club is public or private
+  visibility: Option[String],      // "public" or "private"
   joinRequest: URL,                // location to submit a request to join this club
   admin: Chunk[URL],               // array of URLs to the player profiles for the admins of this club
   description: Option[String]      // text description of the club

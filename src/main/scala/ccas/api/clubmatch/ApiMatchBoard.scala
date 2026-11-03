@@ -6,7 +6,7 @@ import zio.json.{jsonMemberNames, JsonDecoder, SnakeCase}
 
 import ccas.api.clubmatch.ApiMatchBoard.ApiBoardGame
 import ccas.api.misc.Accuracies
-import ccas.api.misc.enums.{GameResultDetail, GameRule, TimeClass}
+import ccas.api.misc.enums.GameResultDetail
 import ccas.api.misc.subtypes.{ClubMatchId, Elo, Username}
 import ccas.utils.json.JsonDecoding.given
 
@@ -39,8 +39,7 @@ object ApiMatchBoard {
     startTime: Option[Long],
     endTime: Option[Long],
     timeControl: String,
-    timeClass: TimeClass,
-    rules: GameRule,
+    rules: Option[String],
     rated: Boolean,
     eco: Option[URL],
     `match`: Option[URL]

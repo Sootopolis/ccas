@@ -105,7 +105,6 @@ object TestRecruitmentRenameRecovery extends ZIOSpecDefault {
     followers = 0,
     isStreamer = false,
     verified = false,
-    league = None,
     fide = None
   )
 

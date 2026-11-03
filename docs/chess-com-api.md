@@ -100,6 +100,12 @@ A cancelled match that still answers has `status: finished`, so `finished` does 
 
 *Observed 2026-10-17: devon-chess's 500 reached 2009, the-great-british-empire's only January 2025, against 11,021 of its matches found through players' lists back to its founding in 2013.*
 
+### A player's match list has no dates
+
+`/pub/player/{username}/matches` gives each match's `name`, `url`, `@id`, `club` and `board`, and the player's `results`, but no start or end time. It cannot say what happened in a period; the player's game archives can.
+
+*Seen in the one response at `data/test/api/playerMatches.json`, 2026-11-03 ([#414](https://github.com/Sootopolis/ccas/issues/414)).*
+
 ## Tournaments
 
 ### `status` is unreliable
@@ -112,7 +118,7 @@ Do not branch on a tournament's `status`.
 
 ### Enum fields are not spelt alike
 
-`league` is capitalised (`Wood`, `Legend`) and `title` is upper case (`GM`), while `status`, `time_class`, `rules`, `result`, `turn` and `visibility` are lower case, with their own oddities: `50move`, `timevsinsufficient`, `closed:fair_play_violations`. Our decoders match exactly, so take a new value's spelling from a real response rather than from a sibling field, and expect a value we do not know to fail the whole response.
+`league` is capitalised (`Wood`, `Legend`) and `title` is upper case (`GM`), while `status`, `time_class`, `rules`, `result`, `turn` and `visibility` are lower case, with their own oddities: `50move`, `timevsinsufficient`, `closed:fair_play_violations`. Our decoders match exactly, so take a new value's spelling from a real response rather than from a sibling field, and expect a value we do not know to fail the whole response. The exception, for now, is a game result on a finished daily match: the match then decodes as cancelled, without an error ([#416](https://github.com/Sootopolis/ccas/issues/416)). Decode a field as an enum only where something reads it, so a value it gains costs nothing: `league` and `turn` stay out of our decoders, and `rules` and `visibility` are kept as plain text for later use ([#414](https://github.com/Sootopolis/ccas/issues/414)).
 
 *Observed 2026-11-02 in 389 live responses, in `data/test/api/`, and in other projects' captured profiles up to June 2026 ([#264](https://github.com/Sootopolis/ccas/issues/264)); `50move` and the variant results carry over from the decoders before that. Not in those samples, and assumed to match their siblings: the titles `WIM`, `WCM`, `WNM` and `M`, and `aborted`, `bullet` and `mod`.*
 

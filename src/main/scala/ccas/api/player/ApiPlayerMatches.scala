@@ -4,7 +4,6 @@ import zio.Chunk
 import zio.http.URL
 import zio.json.{jsonMemberNames, JsonDecoder, SnakeCase}
 
-import ccas.api.misc.enums.GameResultDetail
 import ccas.api.misc.subtypes.Username
 import ccas.api.player.ApiPlayerMatches.ApiPlayerMatch
 import ccas.utils.json.JsonDecoding.given
@@ -25,13 +24,6 @@ object ApiPlayerMatches {
     url: URL,
     `@id`: URL,
     club: URL,
-    results: Option[ApiPlayerMatchResults],
     board: Option[URL]
-  ) derives JsonDecoder
-
-  @jsonMemberNames(SnakeCase)
-  final case class ApiPlayerMatchResults(
-    playedAsWhite: Option[GameResultDetail],
-    playedAsBlack: Option[GameResultDetail]
   ) derives JsonDecoder
 }
