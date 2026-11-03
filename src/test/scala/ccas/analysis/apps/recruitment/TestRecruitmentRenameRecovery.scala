@@ -133,11 +133,8 @@ object TestRecruitmentRenameRecovery extends ZIOSpecDefault {
       failedAdminSlugs = failedAdminSlugs
     )
 
-  /** Serves `archive` as every month of alice-new's 90-day archive window ending at `now`. */
   private def freshArchives(now: Instant, archive: String): Map[String, String] =
-    RecruitmentStatsHelpers.recentArchiveMonths(now, 90).map { ym =>
-      s"player/alice-new/games/${ym.getYear}/${"%02d".format(ym.getMonthValue)}" -> archive
-    }.toMap
+    archivesInWindow("alice-new", now, archive)
 
   // --- fetchTmStats ---
 
@@ -161,12 +158,11 @@ object TestRecruitmentRenameRecovery extends ZIOSpecDefault {
         _      <- seedRenameHistory
         client <- fakeChessComClient(responses, failures = Set("alice-old"))
         result <- RecruitmentStatsHelpers.fetchTmStats(
-          client,
-          staleU,
-          pid,
-          criteria,
-          overallTimeoutPct = 5.0,
-          now,
+          client = client,
+          username = staleU,
+          playerIdHint = pid,
+          criteria = criteria,
+          now = now,
           recentArchivesOption = None
         )
       } yield assertTrue(

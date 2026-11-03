@@ -7,7 +7,7 @@ import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.*
 import ccas.analysis.tables.*
-import ccas.api.misc.subtypes.{Elo, Username}
+import ccas.api.misc.subtypes.{Elo, PlayerId, Username}
 import ccas.utils.ProgressDisplay
 import ccas.utils.client.BodyStore
 import ccas.utils.sql.FreshSchemaLayer
@@ -17,7 +17,8 @@ object TestRecruitmentEvaluation extends ZIOSpecDefault {
 
   override def spec: Spec[Any, Throwable] = suite("TestRecruitmentEvaluation")(
     suiteEvaluateCandidates,
-    suiteCacheFilters
+    suiteCacheFilters,
+    suiteTmTimeouts
   ).provideShared(
     FreshSchemaLayer("test_recruitment_evaluation", onInit = Tables.ensureTables),
     ZLayer.succeed(ProgressDisplay.make(enabled = false))
@@ -279,6 +280,78 @@ object TestRecruitmentEvaluation extends ZIOSpecDefault {
       } yield assertTrue(
         outcome1.isEmpty,
         rejected.isEmpty
+      )
+    }
+
+  // ==========================================================================
+  // Suite: Team-match timeouts
+  // ==========================================================================
+
+  private def tmGame(white: String, whiteResult: String, blackResult: String): String =
+    archiveGameJson(
+      white = white,
+      black = "opponent",
+      whiteResult = whiteResult,
+      blackResult = blackResult,
+      endTime = Instant.now().minus(Duration.ofHours(9)).getEpochSecond,
+      matchUrl = Some("https://www.chess.com/match/9999")
+    )
+
+  /** Evaluates `username` at zero tolerance for team-match timeouts, with Chess.com reporting an overall rate of 0. */
+  private def evalTmGames(
+    playerId: PlayerId,
+    username: String,
+    games: List[String]
+  ): RIO[ProgressDisplay & PostgresClient & BodyStore, (Option[CandidateOutcome], Option[PlayerRecruitmentCache])] = {
+    // Every month of the window serves the games, so a month rolling over mid-test cannot lose them.
+    val responses = archivesInWindow(username, Instant.now(), archiveJson(games)) ++ Map(
+      s"player/$username"       -> apiPlayerJson(PlayerId.unwrap(playerId), username),
+      s"player/$username/stats" -> apiPlayerStatsJson(timeoutPct = 0.0)
+    )
+    val criteria = makeCriteria().copy(dailyMaxTmTimeoutPercent = Some(0.0))
+    for {
+      _          <- seedDb
+      criteriaId <- seedCriteria(criteria)
+      runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None, None)
+      client     <- fakeChessComClient(responses)
+      _          <- evalCandidates(client, runId, List(Username.wrap(username)), criteria)
+      candidates <- RecruitmentCandidate.selectByRun(runId)
+      cache      <- PlayerRecruitmentCache.selectId(playerId)
+    } yield (candidates.headOption.map(_.outcome), cache)
+  }
+
+  private def suiteTmTimeouts = suite("team-match timeouts")(
+    testTmTimeoutRejectsWhenOverallRateReadsZero,
+    testCleanTmGamesPassAtZeroTolerance
+  )
+
+  private def testTmTimeoutRejectsWhenOverallRateReadsZero =
+    test("a recent team-match timeout rejects the candidate and is counted, though the overall timeout rate reads 0") {
+      val games = List(
+        tmGame("alice", "timeout", "win"),
+        tmGame("alice", "win", "checkmated"),
+        tmGame("alice", "win", "checkmated"),
+        tmGame("alice", "win", "checkmated")
+      )
+      for {
+        (outcome, cache) <- evalTmGames(pid0, "alice", games)
+      } yield assertTrue(
+        outcome.contains(CandidateOutcome.Rejected),
+        cache.flatMap(_.tmTimeoutPct90d).contains(25.0)
+      )
+    }
+
+  private def testCleanTmGamesPassAtZeroTolerance =
+    test("team-match games with no timeout pass at zero tolerance") {
+      val games = List(
+        tmGame("bob", "win", "checkmated"),
+        tmGame("bob", "checkmated", "win")
+      )
+      for {
+        (outcome, cache) <- evalTmGames(pid1, "bob", games)
+      } yield assertTrue(
+        outcome.contains(CandidateOutcome.Deferred),
+        cache.flatMap(_.tmTimeoutPct90d).contains(0.0)
       )
     }
 }

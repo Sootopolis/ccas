@@ -122,6 +122,12 @@ Do not branch on a tournament's `status`.
 
 *Observed 2026-11-02 in 389 live responses, in `data/test/api/`, and in other projects' captured profiles up to June 2026 ([#264](https://github.com/Sootopolis/ccas/issues/264)); `50move` and the variant results carry over from the decoders before that. Not in those samples, and assumed to match their siblings: the titles `WIM`, `WCM`, `WNM` and `M`, and `aborted`, `bullet` and `mod`.*
 
+### `timeout_percent` can read 0 after a recent timeout
+
+A player's daily `timeout_percent` can read 0 while their game archives hold a team-match timeout from the last 90 days. Do not take 0 to mean no recent timeouts: count them in the archives. Whether this is lag, rounding or something else has not been checked.
+
+*Observed 2026-11-03 in production's `player_recruitment_cache`: 56 of 13,521 rows, against 216 rows with a non-zero team-match rate. One player was invited about 9 hours after the timeout, on 2026-10-27 ([#417](https://github.com/Sootopolis/ccas/issues/417)).*
+
 ## Errors and limits
 
 ### A 404 can mean absent or broken

@@ -23,7 +23,6 @@ private[recruitment] object RecruitmentStatsHelpers {
     username: Username,
     playerIdHint: PlayerId,
     criteria: RecruitmentCriteria,
-    overallTimeoutPct: Double,
     now: Instant,
     recentArchivesOption: Option[List[ApiPlayerArchive]]
   ): RIO[PostgresClient, TmStatsResult] = {
@@ -64,15 +63,9 @@ private[recruitment] object RecruitmentStatsHelpers {
           _.games.filter(g => g.timeClass == "daily" && g.`match`.isDefined && g.endTime >= cutoff.getEpochSecond)
         )
         val tmGamesFinished = tmGames.size
-        val tmTimeoutPct =
-          if (tmGamesFinished == 0) None
-          else if (criteria.dailyMaxTmTimeoutPercent.isDefined && overallTimeoutPct == 0.0) Some(0.0)
-          else {
-            val timeouts = tmGames.count(g => g.sideOf(effectiveUname).result == GameResultDetail.Timeout)
-            Some(timeouts.toDouble / tmGamesFinished * 100.0)
-          }
-        val lastTmTimeoutAt = tmGames
-          .filter(g => g.sideOf(effectiveUname).result == GameResultDetail.Timeout)
+        val tmTimeouts      = tmGames.filter(g => g.sideOf(effectiveUname).result == GameResultDetail.Timeout)
+        val tmTimeoutPct    = Option.when(tmGamesFinished > 0)(tmTimeouts.size.toDouble / tmGamesFinished * 100.0)
+        val lastTmTimeoutAt = tmTimeouts
           .sortBy(_.endTime)(using Ordering[Long].reverse)
           .headOption
           .map(g => Instant.ofEpochSecond(g.endTime))

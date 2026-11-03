@@ -474,13 +474,12 @@ private[recruitment] object RecruitmentFilterDefs {
         cache <- ZIO.fromOption(env.candidate.cacheOption)
           .orElseFail(new NoSuchElementException("cache not set — CheckDailyStats must run before CheckTmStats"))
         tmStats <- fetchTmStats(
-          env.run.client,
-          env.candidate.username,
-          apiPlayer.playerId,
-          env.run.criteria,
-          cache.dailyTimeoutPct.getOrElse(0.0),
-          env.run.now,
-          env.candidate.recentArchivesOption
+          client = env.run.client,
+          username = env.candidate.username,
+          playerIdHint = apiPlayer.playerId,
+          criteria = env.run.criteria,
+          now = env.run.now,
+          recentArchivesOption = env.candidate.recentArchivesOption
         )
         _ <- env.run.discoveredOpponents.update(_ ++ tmStats.opponentUsernames)
       } yield {
