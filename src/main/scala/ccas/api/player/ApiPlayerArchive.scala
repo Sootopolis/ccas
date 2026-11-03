@@ -8,7 +8,7 @@ import zio.http.URL
 import zio.json.{jsonMemberNames, JsonDecoder, SnakeCase}
 
 import ccas.api.misc.Accuracies
-import ccas.api.misc.enums.{GameResultDetail, GameRule}
+import ccas.api.misc.enums.GameResultDetail
 import ccas.api.misc.subtypes.{Elo, Username}
 import ccas.api.player.ApiPlayerArchive.ApiPlayerArchiveGame
 import ccas.utils.json.JsonDecoding.given
@@ -33,7 +33,7 @@ object ApiPlayerArchive {
     startTime: Option[Long],
     endTime: Long,
     timeControl: String,
-    rules: GameRule,
+    rules: Option[String],
     eco: Option[URL],
     tournament: Option[URL],
     `match`: Option[URL],

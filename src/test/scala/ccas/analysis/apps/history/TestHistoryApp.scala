@@ -119,7 +119,6 @@ object TestHistoryApp extends ZIOSpecDefault {
       url = url("https://www.chess.com/club/matches/123"),
       `@id` = url(idUrl),
       club = url(clubUrl),
-      results = None,
       board = None
     )
 

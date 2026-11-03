@@ -3,7 +3,7 @@ package ccas.api.clubmatch
 import zio.Chunk
 import zio.http.URL
 
-import ccas.api.misc.enums.{GameResultDetail, PlayerStatus}
+import ccas.api.misc.enums.GameResultDetail
 import ccas.api.misc.subtypes.{ClubSlug, Username}
 
 /** Shared traits for team match structures (daily and live). */
@@ -38,7 +38,6 @@ trait TeamMatchPlayer {
 
 trait TeamMatchPlayerStarted extends TeamMatchPlayer {
   val stats: URL
-  val status: PlayerStatus
   val playedAsWhite: Option[GameResultDetail]
   val playedAsBlack: Option[GameResultDetail]
   val board: URL

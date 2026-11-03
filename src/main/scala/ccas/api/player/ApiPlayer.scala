@@ -6,7 +6,7 @@ import zio.http.URL
 import zio.json.{jsonMemberNames, JsonDecoder, SnakeCase}
 
 import ccas.api.misc.Hosts
-import ccas.api.misc.enums.{League, PlayerStatus, Title}
+import ccas.api.misc.enums.{PlayerStatus, Title}
 import ccas.api.misc.subtypes.{Elo, PlayerId, Username}
 import ccas.utils.json.JsonDecoding.given
 
@@ -25,7 +25,6 @@ final case class ApiPlayer(
   followers: Int,           // the number of players tracking this player's activity
   isStreamer: Boolean,      // if the member is a Chess.com streamer
   verified: Boolean,
-  league: Option[League],
   fide: Option[Elo] // FIDE rating
 ) derives JsonDecoder {
   val joinedAt: Instant     = Instant.ofEpochSecond(joined)

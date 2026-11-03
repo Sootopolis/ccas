@@ -4,7 +4,6 @@ import zio.Chunk
 import zio.http.URL
 import zio.json.{jsonMemberNames, JsonDecoder, SnakeCase}
 
-import ccas.api.misc.enums.{Colour, GameRule, TimeClass}
 import ccas.api.misc.subtypes.Username
 import ccas.api.player.ApiPlayerGamesCurrent.ApiPlayerCurrentDailyGame
 import ccas.utils.json.JsonDecoding.given
@@ -21,14 +20,11 @@ object ApiPlayerGamesCurrent {
     url: URL,
     fen: String,
     pgn: String,
-    turn: Colour,
     moveBy: Long, // timestamp of when the next move must be made. 0 if the player-to-move is on vacation.
-    drawOffer: Option[Colour],
     lastActivity: Long,
     startTime: Long,
     timeControl: String,
-    timeClass: TimeClass,
-    rules: GameRule,
+    rules: Option[String],
     rated: Boolean,
     tournament: Option[URL],
     `match`: Option[URL]

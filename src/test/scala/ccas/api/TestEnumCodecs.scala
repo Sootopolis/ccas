@@ -9,15 +9,10 @@ import ccas.server.scheduler.{MisfirePolicy, TriggerType}
 object TestEnumCodecs extends ZIOSpecDefault {
   override def spec: Spec[Any, Nothing] = suite("TestEnumCodecs")(
     suiteGameResultDetail,
-    suiteGameRule,
     suitePlayerStatus,
-    suiteColour,
-    suiteLeague,
-    suiteClubMatchResult,
     suiteClubMatchStatus,
     suiteTimeClass,
     suiteTitle,
-    suiteClubVisibility,
     suiteTriggerType,
     suiteMisfirePolicy
   )
@@ -62,28 +57,6 @@ object TestEnumCodecs extends ZIOSpecDefault {
     }
   )
 
-  // --- GameRule ---
-
-  private def suiteGameRule = suite("GameRule")(
-    test("all values decode from API lowercase format") {
-      val cases = List(
-        "chess"         -> GameRule.Chess,
-        "chess960"      -> GameRule.Chess960,
-        "bughouse"      -> GameRule.Bughouse,
-        "kingofthehill" -> GameRule.KingOfTheHill,
-        "threecheck"    -> GameRule.ThreeCheck,
-        "crazyhouse"    -> GameRule.CrazyHouse,
-        "oddschess"     -> GameRule.OddsChess
-      )
-      assertTrue(cases.forall { (jsonStr, expected) =>
-        s"\"$jsonStr\"".fromJson[GameRule] == Right(expected)
-      })
-    },
-    test("invalid value produces error") {
-      assertTrue("\"checkers\"".fromJson[GameRule].isLeft)
-    }
-  )
-
   // --- PlayerStatus ---
 
   private def suitePlayerStatus = suite("PlayerStatus")(
@@ -113,52 +86,6 @@ object TestEnumCodecs extends ZIOSpecDefault {
     },
     test("invalid value produces error") {
       assertTrue("\"banned\"".fromJson[PlayerStatus].isLeft)
-    }
-  )
-
-  // --- Colour ---
-
-  private def suiteColour = suite("Colour")(
-    test("decodes from snake_case") {
-      assertTrue(
-        "\"white\"".fromJson[Colour] == Right(Colour.White),
-        "\"black\"".fromJson[Colour] == Right(Colour.Black)
-      )
-    }
-  )
-
-  // --- League ---
-
-  private def suiteLeague = suite("League")(
-    test("all eight leagues decode from the capitalised spelling Chess.com sends") {
-      val cases = List(
-        "Wood"     -> League.Wood,
-        "Stone"    -> League.Stone,
-        "Bronze"   -> League.Bronze,
-        "Silver"   -> League.Silver,
-        "Crystal"  -> League.Crystal,
-        "Elite"    -> League.Elite,
-        "Champion" -> League.Champion,
-        "Legend"   -> League.Legend
-      )
-      assertTrue(cases.forall { (jsonStr, expected) =>
-        s"\"$jsonStr\"".fromJson[League] == Right(expected)
-      })
-    },
-    test("a lower-case league is refused") {
-      assertTrue("\"wood\"".fromJson[League].isLeft)
-    }
-  )
-
-  // --- ClubMatchResult ---
-
-  private def suiteClubMatchResult = suite("ClubMatchResult")(
-    test("decodes from snake_case") {
-      assertTrue(
-        "\"win\"".fromJson[ClubMatchResult] == Right(ClubMatchResult.Win),
-        "\"draw\"".fromJson[ClubMatchResult] == Right(ClubMatchResult.Draw),
-        "\"lose\"".fromJson[ClubMatchResult] == Right(ClubMatchResult.Lose)
-      )
     }
   )
 
@@ -211,17 +138,6 @@ object TestEnumCodecs extends ZIOSpecDefault {
         "\"GM\"".fromJson[Title] == Right(Title.GM),
         "\"WGM\"".fromJson[Title] == Right(Title.WGM),
         "\"NM\"".fromJson[Title] == Right(Title.NM)
-      )
-    }
-  )
-
-  // --- ClubVisibility ---
-
-  private def suiteClubVisibility = suite("ClubVisibility")(
-    test("decodes from snake_case") {
-      assertTrue(
-        "\"public\"".fromJson[ClubVisibility] == Right(ClubVisibility.Public),
-        "\"private\"".fromJson[ClubVisibility] == Right(ClubVisibility.Private)
       )
     }
   )

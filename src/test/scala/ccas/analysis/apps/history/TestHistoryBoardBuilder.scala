@@ -8,7 +8,7 @@ import ccas.analysis.apps.history.HistoryBoardBuilder.ScoreX2
 import ccas.analysis.tables.ClubMatchBoard
 import ccas.api.clubmatch.ApiDailyMatch
 import ccas.api.clubmatch.ApiMatchBoard.{ApiBoardGame, ApiBoardPlayer}
-import ccas.api.misc.enums.{BoardGameWinner, GameResultDetail, GameRule, TimeClass}
+import ccas.api.misc.enums.{BoardGameWinner, GameResultDetail}
 import ccas.api.misc.subtypes.{ClubMatchId, Elo, PlayerId, Username}
 
 object TestHistoryBoardBuilder extends ZIOSpecDefault {
@@ -47,8 +47,7 @@ object TestHistoryBoardBuilder extends ZIOSpecDefault {
     startTime = startTime,
     endTime = endTime,
     timeControl = "1/259200",
-    timeClass = TimeClass.Daily,
-    rules = GameRule.Chess,
+    rules = Some("chess"),
     rated = true,
     eco = None,
     `match` = None

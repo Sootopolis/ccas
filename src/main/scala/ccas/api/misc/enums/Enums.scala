@@ -4,11 +4,8 @@ import zio.json.{jsonHint, jsonHintNames, JsonDecoder, SnakeCase}
 
 import ccas.utils.sql.EnumSql
 
-@jsonHintNames(SnakeCase)
-enum Colour derives JsonDecoder {
-  case White
-  case Black
-}
+// A value an enum doesn't know can fail the whole response, so decode a field as an enum only where something reads it:
+// docs/chess-com-api.md, "Enum fields are not spelt alike".
 
 // Not associated with the Chess.com public api.
 enum GameResult(val score: Double) {
@@ -43,41 +40,6 @@ enum GameResultDetail(val category: GameResult) derives JsonDecoder {
 }
 
 object GameResultDetail extends EnumSql[GameResultDetail]
-
-// Chess.com runs multi-word values together, so a multi-word case needs a hint.
-@jsonHintNames(SnakeCase)
-enum GameRule derives JsonDecoder {
-  case Chess
-  case Chess960
-  case Bughouse
-  @jsonHint("kingofthehill") case KingOfTheHill
-  @jsonHint("threecheck") case ThreeCheck
-  @jsonHint("crazyhouse") case CrazyHouse
-  @jsonHint("oddschess") case OddsChess
-}
-
-// Capitalised on the wire, unlike most of Chess.com's enums: docs/chess-com-api.md, "Enum fields are not spelt alike".
-enum League derives JsonDecoder {
-  case Wood
-  case Stone
-  case Bronze
-  case Silver
-  case Crystal
-  case Elite
-  case Champion
-  case Legend
-}
-
-@jsonHintNames(SnakeCase)
-enum ClubMatchResult(val scorePerPlayer: Double) derives JsonDecoder {
-  def totalScore(nPlayers: Int): Double = scorePerPlayer * nPlayers
-
-  case Win  extends ClubMatchResult(5.0)
-  case Draw extends ClubMatchResult(2.0)
-  case Lose extends ClubMatchResult(0.0)
-}
-
-object ClubMatchResult extends EnumSql[ClubMatchResult]
 
 @jsonHintNames(SnakeCase)
 enum ClubMatchStatus derives JsonDecoder {
@@ -137,12 +99,6 @@ enum Title derives JsonDecoder {
 }
 
 object Title extends EnumSql[Title]
-
-@jsonHintNames(SnakeCase)
-enum ClubVisibility derives JsonDecoder {
-  case Public
-  case Private
-}
 
 enum BoardGameWinner {
   case Team1, Team2, Draw

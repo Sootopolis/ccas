@@ -10,7 +10,8 @@ import zio.test.{assertCompletes, assertTrue, Spec, ZIOSpecDefault}
 
 import ccas.api.club.{ApiClub, ApiClubMatches, ApiClubMembers}
 import ccas.api.clubmatch.{ApiDailyMatch, ApiLiveMatch, ApiMatchBoard}
-import ccas.api.misc.enums.{League, PlayerStatus}
+import ccas.api.clubmatch.ApiDailyMatch.{ApiDailyMatchCancelled, ApiDailyMatchFinished}
+import ccas.api.misc.enums.PlayerStatus
 import ccas.api.misc.subtypes.{ClubSlug, Elo, PlayerId, Username}
 import ccas.api.player.*
 import ccas.api.tournament.{ApiTournament, ApiTournamentRound}
@@ -37,11 +38,45 @@ object TestApiJsonParsing extends ZIOSpecDefault {
     generateTest[ApiPlayerTournaments]("playerTournaments"),
     generateTest[ApiTournament]("tournament"),
     generateTest[ApiTournamentRound]("tournamentRound"),
-    test("an unknown league fails the whole profile, and the error names the field") {
-      ZIO.attemptBlocking(Files.readString(Path.of(getFileName("player")))).map { body =>
-        val decoded = body.replace("\"Silver\"", "\"Mythic\"").fromJson[ApiPlayer]
-        assertTrue(decoded.swap.exists(_.contains(".league")))
+    test("an unknown status fails the whole profile, and the error names the field") {
+      readFixture("player").map { body =>
+        val decoded = body.replace("\"staff\"", "\"mythic\"").fromJson[ApiPlayer]
+        assertTrue(decoded.swap.exists(_.contains(".status")))
       }
+    },
+    suite("a value we do not know, in a field nothing reads, does not fail the response")(
+      ignoresValuesOf[ApiPlayer]("player")("league"),
+      ignoresValuesOf[ApiClub]("club")("visibility"),
+      ignoresValuesOf[ApiClubMatches]("clubMatches")("result"),
+      ignoresValuesOf[ApiPlayerGamesCurrent]("playerGames")("turn", "time_class", "rules"),
+      ignoresValuesOf[ApiPlayerArchive]("playerArchive")("rules"),
+      ignoresValuesOf[ApiPlayerMatches]("playerMatches")("played_as_white", "played_as_black"),
+      ignoresValuesOf[ApiMatchBoard]("matchBoard")("time_class", "rules"),
+      ignoresValuesOf[ApiDailyMatch]("matchRegistered")("rules", "status"),
+      ignoresValuesOf[ApiDailyMatch]("matchInProgress")("rules", "status"),
+      ignoresValuesOf[ApiDailyMatch]("matchFinished")("rules", "result", "status"),
+      ignoresValuesOf[ApiDailyMatch]("matchCancelled")("rules", "result", "status"),
+      ignoresValuesOf[ApiLiveMatch]("liveMatchFinished")("time_class", "rules", "result", "status")
+    ),
+    test("rules and visibility come through as Chess.com sends them") {
+      for {
+        club       <- readJsonLinesAs[ApiClub](getFileName("club")).runHead.someOrFailException
+        dailyMatch <- readJsonLinesAs[ApiDailyMatch](getFileName("matchFinished")).runHead.someOrFailException
+      } yield assertTrue(club.visibility.contains("public"), dailyMatch.settings.rules.contains("chess"))
+    },
+    suite("a response without rules or visibility still decodes")(
+      decodesWithout[ApiClub]("club", "visibility"),
+      decodesWithout[ApiPlayerGamesCurrent]("playerGames", "rules"),
+      decodesWithout[ApiPlayerArchive]("playerArchive", "rules"),
+      decodesWithout[ApiMatchBoard]("matchBoard", "rules"),
+      decodesWithout[ApiDailyMatch]("matchFinished", "rules"),
+      decodesWithout[ApiLiveMatch]("liveMatchFinished", "rules")
+    ),
+    test("a match decodes to its own variant, though a cancelled one reports itself finished") {
+      for {
+        finished  <- readJsonLinesAs[ApiDailyMatch](getFileName("matchFinished")).runHead.someOrFailException
+        cancelled <- readJsonLinesAs[ApiDailyMatch](getFileName("matchCancelled")).runHead.someOrFailException
+      } yield assertTrue(finished.isInstanceOf[ApiDailyMatchFinished], cancelled.isInstanceOf[ApiDailyMatchCancelled])
     },
     test("ApiClub.canonicalSlug reads the slug Chess.com answers to, from `@id`") {
       readJsonLinesAs[ApiClub](getFileName("club")).runHead.someOrFailException
@@ -69,6 +104,35 @@ object TestApiJsonParsing extends ZIOSpecDefault {
 
   private def getFileName(label: String) = s"data/test/api/$label.json"
 
+  private def readFixture(label: String) = ZIO.attemptBlocking(Files.readString(Path.of(getFileName(label))))
+
+  // Spares a match's own `status`, which is read: it picks the variant. A field the fixture lacks would prove nothing,
+  // so the test also fails if a field's values did not change.
+  private def ignoresValuesOf[T: JsonDecoder](label: String)(fields: String*) =
+    test(s"$label: ${fields.mkString(", ")}") {
+      readFixture(label).map { body =>
+        val changed = fields.map { field =>
+          val value = s""""$field"\\s*:\\s*"(?!(?:finished|in_progress|registration)")[^"]*""""
+          value.r.replaceAllIn(_: String, s""""$field":"no-such-value"""")
+        }
+        val eachChangesBody = changed.forall(change => change(body) != body)
+        assertTrue(eachChangesBody) && decodesAsBefore[T](body, changed.reduce(_ andThen _)(body))
+      }
+    }
+
+  private def decodesWithout[T: JsonDecoder](label: String, field: String) = test(s"$label: $field") {
+    readFixture(label).map { body =>
+      val without = body.replaceAll(s""""$field"\\s*:\\s*"[^"]*"\\s*,""", "")
+      assertTrue(without != body) && decodesAsBefore[T](body, without)
+    }
+  }
+
+  // Compares the classes because a match that fails its own decoder can still pass as cancelled.
+  private def decodesAsBefore[T: JsonDecoder](body: String, changed: String) = {
+    val decoded = changed.fromJson[T]
+    assertTrue(decoded.isRight, decoded.map(_.getClass) == body.fromJson[T].map(_.getClass))
+  }
+
   private def generateTest[T](label: String)(expected: => T)(using decoder: JsonDecoder[T]) = test(label) {
     readJsonLinesAs(getFileName(label)).runHead.someOrFailException.map(x => assertTrue(x == expected))
   }
@@ -94,7 +158,6 @@ object TestApiJsonParsing extends ZIOSpecDefault {
     followers = 7930,
     isStreamer = false,
     verified = false,
-    league = Some(League.Silver),
     fide = None
   )
 }

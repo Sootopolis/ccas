@@ -96,7 +96,7 @@ object ApiDailyMatch {
 
   @jsonMemberNames(SnakeCase)
   final case class ApiDailyMatchSettings(
-    rules: GameRule,
+    rules: Option[String],
     timeClass: TimeClass,
     timeControl: String,
     initialSetup: Option[String],
@@ -169,7 +169,6 @@ object ApiDailyMatch {
     name: String,
     url: URL,
     score: Double,
-    result: ClubMatchResult,
     players: Chunk[MatchPlayerStarted],
     fairPlayRemovals: Set[Username]
   ) extends ApiDailyMatchTeam derives JsonDecoder
@@ -180,7 +179,6 @@ object ApiDailyMatch {
     name: String,
     url: URL,
     score: Double,
-    result: ClubMatchResult,
     players: Chunk[ApiDailyMatchPlayerCancelled],
     fairPlayRemovals: Set[Username]
   ) extends ApiDailyMatchTeam derives JsonDecoder
@@ -196,15 +194,13 @@ object ApiDailyMatch {
     username: Username,
     rating: Option[Elo],
     timeoutPercent: Double,
-    rd: Double,
-    status: PlayerStatus
+    rd: Double
   ) extends ApiDailyMatchPlayer derives JsonDecoder
 
   @jsonMemberNames(SnakeCase)
   final case class MatchPlayerStarted(
     username: Username,
     stats: URL,
-    status: PlayerStatus,
     playedAsWhite: Option[GameResultDetail],
     playedAsBlack: Option[GameResultDetail],
     board: URL
@@ -214,7 +210,6 @@ object ApiDailyMatch {
   @jsonMemberNames(SnakeCase)
   final case class ApiDailyMatchPlayerCancelled(
     username: Username,
-    stats: URL,
-    status: PlayerStatus
+    stats: URL
   ) extends ApiDailyMatchPlayer derives JsonDecoder
 }
