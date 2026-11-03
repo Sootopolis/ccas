@@ -200,6 +200,12 @@ object RecruitmentTestSupport {
   def archiveJson(games: List[String]): String =
     s"""{"games": [${games.mkString(",")}]}"""
 
+  /** Serves `archive` as every month of `username`'s 90-day archive window ending at `now`. */
+  def archivesInWindow(username: String, now: Instant, archive: String): Map[String, String] =
+    RecruitmentStatsHelpers.recentArchiveMonths(now, 90).map { ym =>
+      s"player/$username/games/${ym.getYear}/${"%02d".format(ym.getMonthValue)}" -> archive
+    }.toMap
+
   def apiPlayerMatchesJsonWithFinished(
     finishedMatches: List[(Long, Int)] = Nil,
     registeredIds: List[String] = Nil
