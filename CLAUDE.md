@@ -33,7 +33,7 @@ Every piece of work runs the same sequence. Take each step unprompted; the devel
    - where the schema or stored data change, the way back
    - for a bug that reached stored data, which step of this workflow should have caught it, and the change to that step
 
-   Propose the correct fix over a workaround: with one operator and two databases, migration cost is no reason to defer it. Show each design choice as a worked example with a recommendation, and check the plan's own blast radius before showing it. Wait for agreement (`ExitPlanMode`'s approval; a rejection's notes are the next round), then post the plan to the issue as the record. A plan waived at `/pick-issue` was judged from the issue alone: if the code reveals a design choice, or reaches the schema, `ccas.utils.client`, the cache tables, the CLI tree or what a Chess.com response means, show one after all.
+   Propose the correct fix over a workaround: with one operator and two databases, migration cost is no reason to defer it. Show each design choice as a worked example with a recommendation, and check the plan's own blast radius before showing it. Wait for agreement (`ExitPlanMode`'s approval; a rejection's notes are the next round), then post the plan to the issue as the record. A plan waived at `/pick-issue` was judged from the issue alone: if the code reveals a design choice, grows the work well past the recap, or reaches the schema, `ccas.utils.client`, the cache tables, the CLI tree or what a Chess.com response means, show one after all.
 2. **Build.**
 3. **Review** with `/review-change`, which fixes what it finds and hands over a report. Then stop (see Git).
 4. **Before shipping**: open questions, follow-ups worth an issue, and anything the plan promised that has not landed.
