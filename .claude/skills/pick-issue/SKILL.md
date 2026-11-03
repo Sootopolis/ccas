@@ -22,9 +22,9 @@ Four to six, spanning different shapes of work — a small self-contained bug, s
 
 Skip anything labelled `blocked`, epics, and issues gated on another open issue (#60 waits on #110 + #111).
 
-## 3. Read the bodies
+## 3. Read the issues
 
-`gh issue view <n> --repo Sootopolis/ccas --json title,body` for every shortlisted issue. Never recap from the title.
+`gh issue view <n> --repo Sootopolis/ccas --json title,body,comments` for every shortlisted issue. Never recap from the title. A later comment can replace the body's fix (#426), so recap the issue's latest state.
 
 ## 4. Recap
 

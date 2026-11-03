@@ -9,7 +9,7 @@ The diff is where a review starts, not where it ends. The defects this review ex
 
 ## 1. Read the change
 
-`git status`, then `git merge-base origin/main HEAD` and `git diff <that commit>`, plus the untracked files, which a diff never shows: `git ls-files --others --exclude-standard`. Diffing against `origin/main` itself would show anything merged since the branch was cut as reversed in this change. Read the issue and the agreed plan too: the change is checked against what was promised, not only against itself.
+`git status`, then `git merge-base origin/main HEAD` and `git diff <that commit>`, plus the untracked files, which a diff never shows: `git ls-files --others --exclude-standard`. Diffing against `origin/main` itself would show anything merged since the branch was cut as reversed in this change. Read the issue with its comments, and the agreed plan: the change is checked against what was promised, not only against itself.
 
 ## 2. Map the blast radius
 
