@@ -130,7 +130,7 @@ private[recruitment] object RecruitmentFilterDefs {
 
   private def cacheCriteria(now: Instant): List[CacheCriterion] = List(
     // Zero-tolerance timeouts go by the timeout's own age: the row keeps one after it leaves the window a full evaluation
-    // counts. A timeout is never newer than its row, so the row-age test on these two never decides anything.
+    // counts. A timeout is newer than its row only if it came during the run, so the row-age test here rarely decides.
     CacheCriterion(
       StatsWindowDays,
       (cache, criteria) =>
@@ -200,7 +200,7 @@ private[recruitment] object RecruitmentFilterDefs {
     )
   )
 
-  private def runCacheCriteria(
+  private[recruitment] def runCacheCriteria(
     cache: PlayerRecruitmentCache,
     criteria: RecruitmentCriteria,
     now: Instant
