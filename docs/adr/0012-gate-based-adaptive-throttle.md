@@ -1,6 +1,6 @@
 # Gate-based adaptive throttle for `ChessComClient`
 
-**Status:** Accepted, 2026-04-01, with the recovery ladder following on 2026-04-05. Supersedes [0001](0001-adaptive-rate-limiting.md). Refined by [0006](0006-pacing-ema-measures-the-http-exchange-only.md) (#216).
+**Status:** Accepted, 2026-04-01, with the recovery ladder following on 2026-04-05. Supersedes [0001](0001-adaptive-rate-limiting.md). Refined by [0006](0006-pacing-ema-measures-the-http-exchange-only.md) (#216). Amended by #420.
 
 ## Context
 
@@ -22,7 +22,7 @@ Replace the semaphore pair with a gate the client controls, and give throttle-do
 
 **Separate retry schedules,** each with its own budget: 429 (exponential backoff, `max-429-retries`), Cloudflare 403 (fixed delay, `max-cf-retries`), transient connection errors (exponential backoff, `max-connection-retries`). Non-Cloudflare 403 and 404 are permanent and never retried.
 
-**Cumulative stats flushing.** A daemon fiber upserts one `client_stats` row per session every `stats-flush-interval-seconds`, overwriting the previous snapshot with cumulative totals. The throttle configuration is inserted once into `client_config` on first flush and referenced by FK. A final flush runs in the scope finaliser, so stats survive a non-graceful shutdown with at most one interval's loss.
+**Cumulative stats flushing.** Every `stats-flush-interval-seconds` a daemon fiber upserts one `client_stats` row per session, overwriting the previous snapshot with cumulative totals, unless the totals match the last successful write. An open throttle does not count as a change: its duration reaches the totals when it closes, so a throttle that never closes cannot keep the writes going, at the cost of a stop mid-recovery losing the open part if nothing else changed since the last write. The throttle configuration is inserted once into `client_config` on first flush and referenced by FK. A final flush runs in the scope finaliser under the same rule, so stats survive a non-graceful shutdown with at most one interval's loss. An idle server has to skip those writes for its Neon compute to suspend, which takes 5 quiet minutes: a write on every tick would hold it awake indefinitely (#420).
 
 Configuration is read from `application.conf` under the `chess-com-client` prefix by `ChessComClient.live`.
 
@@ -32,4 +32,5 @@ Configuration is read from `application.conf` under the `chess-com-client` prefi
 - `getAll[T](urls)` batches via `ZIO.foreachPar` capped at `maxPermits`. Network-bound fibers already bottleneck at the gate, so the cap is really there to bound cache-warm fan-outs against the Hikari pool — see [0004](0004-api-fan-out-concurrency-cap.md).
 - The `followRedirects(3)` aspect's error handler returns 304 responses as-is rather than failing on the missing `Location` header, which is what lets the conditional-GET path in [0007](0007-response-caching-in-postgres.md) work at all.
 - Every failed attempt is recorded per-attempt in `api_fetch_failure`, with response bodies deduped through `api_response_body`.
+- **`client_stats.completed_at` changes meaning at #420,** and nothing in the table marks the boundary. Earlier rows hold the session's end, so a long-lived server's window includes its idle time and understates throughput. Later rows hold the last write: about one flush interval after the last API work, or after a throttle that outlasted it closes. That drops the idle time after a session's last job, but a long-lived server's window still spans the idle time between its jobs. No row records when the server stopped.
 - `CCAS_CONTACT_EMAIL` is required for the `User-Agent` header; the client will not build without it.

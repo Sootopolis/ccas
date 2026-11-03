@@ -17,6 +17,8 @@ final case class ClientStats(
   appLabel: String,
   configId: Long,
   startedAt: Instant,
+  // Changes meaning at #420: earlier rows hold the session's end, later ones the last write, and a flush with nothing
+  // new writes nothing (ADR 0012).
   completedAt: Instant,
   // throughput
   requests: Long,
