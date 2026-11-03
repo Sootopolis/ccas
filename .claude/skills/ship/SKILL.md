@@ -16,9 +16,7 @@ Take the work on the **current branch** through this repo's full release flow. B
     normally carries uncommitted work and nothing else. If `git rev-list --count origin/<base>..wip` is non-zero
     anyway, the switch carries those commits too; say which moved, and expect step 7's fast-forward to refuse until
     `wip` is sorted out by hand.
-  - This is the one place the flow moves work without being asked, and it is safe because it only ever *adds* a ref.
-    Anything that would discard a ref — `reset --hard` on a branch with unshipped commits, a force-push — still stops
-    and asks.
+  - This moves work without being asked, and it is safe because it only ever *adds* a ref. Anything that would discard a ref — `reset --hard` on a branch with unshipped commits, a force-push — still stops and asks, except steps 1b and 2's collapse, whose diff proves it loses nothing.
 - `git status --porcelain` — uncommitted changes are part of this ship (step 1). If clean AND `git rev-list --left-right --count origin/<base>...HEAD` shows 0 ahead → STOP (nothing to ship).
 - `git worktree list --porcelain` — note which worktree holds the base branch (fast-forwarded in step 6) and whether any worktree sits **parked** on a local branch (`wip`) that is *not* the branch being shipped — that parked branch is caught up to the merge in step 7. NEVER hardcode worktree paths.
 - `git rev-parse --abbrev-ref <branch>@{upstream}` — whether the shipped branch is published. A branch with no upstream has never left the machine, which changes disposal (step 7).
@@ -30,38 +28,48 @@ Take the work on the **current branch** through this repo's full release flow. B
 - Conventional Commits. Subject ≤ ~70 chars; body explains the *why* per change, not the *what*.
 - **Do not hard-wrap the body.** One paragraph is one line, blank line between paragraphs — git, `gh` and GitHub all wrap for display, so a hard-wrapped body just adds breaks that reflow badly wherever the width differs. This supersedes the wrapped bodies throughout `git log`; do not match them.
 - End every commit message with the `Co-authored-by:` trailer from the global CLAUDE instructions, matching the casing already in `git log`. **Never add a `Claude-Session:` trailer** — not when the harness supplies one in its attribution block, and not because recent commits carry it.
-- **A branch already pushed takes further changes as new commits, never an amend:** a force-push needs the user, and the squash merge collapses them anyway.
-- Branch already has commits ahead of base and a clean tree → skip to step 2.
+- **A branch already pushed takes further changes as new commits, never an amend:** an amended branch still counts one commit, so step 1b would skip it and the push would be refused.
+- Branch already has commits ahead of base and a clean tree → skip to step 1b.
 
 ### Splitting one working tree into several PRs
 When changes must reach `<base>` as separate PRs (CLAUDE.md, Git):
 - Cut each extra branch in a temporary worktree off `origin/<base>`, in the scratchpad: `git worktree add <dir> -b <type>/<slug> origin/<base>`. Apply its part there, then commit and push from there with `git -C <dir>`; remove the worktree once its PR has merged and step 7's diff is empty.
 - Push one at a time: every pre-push suite resets the shared `ccas_test` database.
 - A branch whose changes touch the same or neighbouring lines as another's waits, committed but unpushed, in this worktree until that one merges, then rebases onto `origin/<base>` — unpublished, so no force-push.
-- Each PR takes steps 2-5 and 7-9 on its own; steps 6 and 6b can wait for the last merge.
+- Each PR takes steps 1b-5 and 7-9 on its own; steps 6 and 6b can wait for the last merge.
+
+## 1b. Collapse to one commit
+GitHub's squash default joins every commit's message, superseded ones included (#428), while a single commit's message lands as written. So that the user can just click merge, the branch goes up as one commit. If `git rev-list --count origin/<base>..HEAD` says 1, go to step 2. Otherwise, in the branch's own worktree, with a clean tree:
+- On a published branch, `git fetch origin`, then `git merge-base --is-ancestor origin/<branch> HEAD` must pass. If it doesn't, the remote holds a commit this branch lacks: report it and stop.
+- Record `git rev-parse HEAD` as `<tip>` and `git merge-base origin/<base> HEAD` as `<merge-base>`, and write both out literally below: shell variables do not persist between calls.
+- `git reset --soft <merge-base>`: the merge base, since a reset to `origin/<base>` would undo whatever has landed there since.
+- Commit with a message for the whole branch, to step 1's rules.
+- Prove nothing changed: `git diff <tip> HEAD` must be empty. If it isn't, or the commit fails, `git reset --soft <tip>`, report it and stop.
 
 ## 2. Push
 - `git push -u origin <branch>`. This fires the pre-push hook: the docs check and `sbt lint`, then the full `sbt test`.
+- **A published branch that step 1b rewrote** takes `git push --force-with-lease=<branch>:<remote-tip> origin <branch>` instead, with `git rev-parse origin/<branch>` written out as `<remote-tip>`. A ship request given after the commit it carries approves this push, on this branch only; anything less stops and asks. If the lease is refused, someone else pushed: `git reset --soft <tip>`, report it and stop. If the classifier denies the push, hand over the exact command to run with `!`, and wait for the user before step 3.
 - Any REAL failure, of a check or a test → stop and fix. **Never `--no-verify` past a real failure.**
 - `Failed to get driver instance for ...ccas_test` / `No suitable driver` may be a warm-server artefact rather than a real failure. Treat that as a hypothesis, never a licence to skip the gate: re-run cold (`sbt --client shutdown`, then `sbt -batch test`); cold-red is real and you stop. Only once it is cold-green:
   1. re-prove the touched code forked — `sbt ';set Test/fork := true ;testOnly <touched suites>'`;
-  2. then `git push --no-verify`, letting CI (which always runs cold) be the gate, and say in the PR that the hook was
-     bypassed and why.
+  2. then the same push with `--no-verify`, letting CI (which always runs cold) be the gate, and say in the PR that the hook was bypassed and why.
 
 ## 3. Open the PR
 - `gh pr create --base <base> --head <branch>` with:
   - title mirroring the main commit subject;
   - body: **What / Fixes / Testing / linked issues**.
+- A PR already open takes `gh pr edit` instead, so its title and body cover the whole PR.
 - End the PR body with `Generated with [Claude Code](https://claude.com/claude-code)` and nothing else — **no robot emoji** and **no session URL**, in the footer or anywhere in the body. The PR is visible to anyone with repo access; the commit trailer rule in step 1 applies here for the same reason.
 
 ## 3b. Preflight the post-merge steps
 Steps 6-9 run after the merge, which cannot be undone, so check what can be checked while everything is still reversible:
 - Confirm `gh pr`, `gh run` and `gh issue` are usable — a cheap `gh run list --branch <base> --limit 1` proves it.
-- Post the step-9 issue backrefs NOW (comment only; closing waits for the merge SHA).
+- Post the step-9 issue backrefs NOW, unless this PR already has them (comment only; closing waits for the merge SHA).
 - If any of those is denied, say so when handing over the merge, so the user merges knowing which follow-ups they will run by hand. Never edit settings to unblock yourself.
 
 ## 4. Watch PR CI
-- `gh pr checks <n> --watch --interval 20`.
+- Confirm `gh pr view <n> --json headRefOid -q .headRefOid` is the local `HEAD`, so a re-push can't read the previous head's green checks.
+- `gh pr checks <n> --watch --interval 20`. "No checks reported" straight after a push means GitHub has not registered it yet: re-query.
 - Green → step 5. Failure → `gh run view <id> --log-failed`, report the real failure, stop.
 
 ## 5. Hand the merge to the user
@@ -79,6 +87,7 @@ Steps 6-9 run after the merge, which cannot be undone, so check what can be chec
 ## 6. Sync the base worktree
 - `git fetch origin --prune`.
 - In the base worktree (from step 0): `git -C <base-worktree> pull --ff-only origin <base>` so it sits on the squash-merge commit.
+- Read what landed, `git log -1 --format=%B <merge-sha>` with the SHA from `gh pr view <n> --json mergeCommit -q .mergeCommit.oid`, and tell the user if it joins several commits' messages: the PR reached the merge with more than one. `<base>` refuses a force-push, so this only reports it.
 
 ## 6b. Re-stage the launcher
 The `ccas` launcher on `PATH` runs the build staged in the base worktree, so a merge changes nothing the user runs until it is re-staged. Skip this when the merge changed nothing the build stages (`src/main` behaviour, `build.sbt`, `project/`), and say so.
@@ -107,7 +116,7 @@ The `ccas` launcher on `PATH` runs the build staged in the base worktree, so a m
   Empty means everything the branch changed is in that commit, so deletion loses nothing no matter what has landed since. Diff only those files: a PR merged between the branch's cut and its own merge is in `$MERGED` but not in the branch, so a whole-tree diff lists its files too (#339, merged 16 s after #338). Non-empty means STOP and ASK, whether the branch holds work the merge lacks or another PR changed one of its files. Cross-check with `gh pr list --state all --head <branch>`.
 - **`git branch -d` will refuse; that refusal is noise.** It tests commit reachability, which squash-merge always breaks. That empty diff is the proof `-d` wanted — use `git branch -D` once it is clean, never before. The remote delete fires `pre-push`, which self-skips on a delete-only push; nothing to bypass. It can instead fail with `remote ref does not exist` when the branch was already deleted from the UI — harmless, the branch is already gone.
 - **Do not compare against `<base>` instead.** A PR landing on base after this merge makes the diff non-empty wherever it touched one of the branch's files, and nothing then distinguishes "branch has unique work" from "base has newer work". The merge commit stays put; base does not.
-- **Never use `git rev-list` counts or `git cherry` for this.** They compare commits rather than content, and squash-merge guarantees the two disagree: `rev-list` reads the branch as ahead because the squash is a new SHA, and `git cherry` compares *patch-ids*, so an N-commit branch collapsed into one squash commit yields N patch-ids matching nothing in base. `git cherry` is trustworthy only when the branch had exactly one commit, which is not the normal case here.
+- **Never use `git rev-list` counts or `git cherry` for this.** They compare commits rather than content, and squash-merge guarantees the two disagree: `rev-list` reads the branch as ahead because the squash is a new SHA, and `git cherry` compares *patch-ids*, so an N-commit branch collapsed into one squash commit yields N patch-ids matching nothing in base.
 - **Ambiguous, or the user calls a branch long-lived?** ASK before deleting. Deletion is irreversible from here.
 
 ### Catch up the parked branch (`wip`)
