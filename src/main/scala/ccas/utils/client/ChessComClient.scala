@@ -91,20 +91,30 @@ final class ChessComClient(
 
   /** Record the forensic row for a fetch that yielded no value. Also called for a [[FetchResult.Missing]], which is
     * not an error and so never reaches a `tapError`: this table is the only place an absence is written down (ADR
-    * 0019).
+    * 0019). A response we can't read also logs an error: Chess.com may have sent something new, and a best-effort
+    * caller would otherwise hide that.
     */
   private def recordFetchFailure(url: URL, error: Throwable): UIO[Unit] = {
-    val (errorType, msg, body) = error match {
-      case e: HttpStatusException   => (e.getClass.getSimpleName, Some(e.statusCode.toString), Some(e.responseBody))
-      case e: JsonDecodingException => (e.getClass.getSimpleName, Option(e.getMessage), e.responseBody)
-      case other                    => (other.getClass.getSimpleName, Option(other.getMessage), None)
+    val (errorType, msg, body, logIt) = error match {
+      case e: HttpStatusException =>
+        (e.getClass.getSimpleName, Some(e.statusCode.toString), Some(e.responseBody), ZIO.unit)
+      case e: JsonDecodingException =>
+        (e.getClass.getSimpleName, Option(e.getMessage), e.responseBody, logUnreadable(url, e))
+      case other => (other.getClass.getSimpleName, Option(other.getMessage), None, ZIO.unit)
     }
-    ApiFetchFailure
+    logIt *> ApiFetchFailure
       .insert(ApiFetchFailure(Instant.now(), url.encode, errorType, msg, body))
       .provideEnvironment(ZEnvironment(pgClient, bodyStore))
       .tapError(dbErr => ZIO.logWarning(s"Failed to record api_fetch_failure for ${url.encode}: ${dbErr.safeMessage}"))
       .ignore
   }
+
+  private def logUnreadable(url: URL, error: JsonDecodingException): UIO[Unit] =
+    ZIO.logError(
+      s"Chess.com sent a response we can't read: ${url.encode}: ${error.safeMessage}. A one-off may be a maintenance " +
+        "page; otherwise it has probably added a value or changed a field, and the decoder needs updating. The " +
+        "failure is recorded in api_fetch_failure."
+    )
 
   /** Build the outgoing request, attaching `If-None-Match` and `If-Modified-Since` when a prior cache entry exists.
     *

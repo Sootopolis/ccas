@@ -78,6 +78,64 @@ object TestApiJsonParsing extends ZIOSpecDefault {
         cancelled <- readJsonLinesAs[ApiDailyMatch](getFileName("matchCancelled")).runHead.someOrFailException
       } yield assertTrue(finished.isInstanceOf[ApiDailyMatchFinished], cancelled.isInstanceOf[ApiDailyMatchCancelled])
     },
+    suite("only a match nobody played reads as cancelled")(
+      test("an unknown game result fails a finished match, and the error names the field") {
+        readFixture("matchFinished").map { body =>
+          val decoded = withUnknownResult(body).fromJson[ApiDailyMatch]
+          assertTrue(decoded.swap.exists(_.contains("played_as_white")))
+        }
+      },
+      test("an unknown game result fails a match in progress, and the error names the field") {
+        readFixture("matchInProgress").map { body =>
+          val decoded = withUnknownResult(body).fromJson[ApiDailyMatch]
+          assertTrue(decoded.swap.exists(_.contains("played_as_white")))
+        }
+      },
+      test("one player without a board fails a finished match, and the error names the field") {
+        readFixture("matchFinished").map { body =>
+          val decoded = body.replaceFirst(boardField, "").fromJson[ApiDailyMatch]
+          assertTrue(decoded.swap.exists(_.contains(".board(missing)")))
+        }
+      },
+      test("no boards or game results with a non-zero score fails rather than passing as cancelled") {
+        readFixture("matchFinished").map { body =>
+          val decoded = body.replaceAll(boardField, "").replaceAll(resultField, "").fromJson[ApiDailyMatch]
+          assertTrue(decoded.swap.exists(_.contains(".board(missing)")))
+        }
+      },
+      test("game results with no boards and a 0-0 score fail rather than passing as cancelled") {
+        readFixture("matchFinished").map { body =>
+          val decoded = withNoScore(body.replaceAll(boardField, "")).fromJson[ApiDailyMatch]
+          assertTrue(decoded.swap.exists(_.contains(".board(missing)")))
+        }
+      },
+      test("one side that never played, beside one that did, fails rather than passing as cancelled") {
+        readFixture("matchFinished").map { body =>
+          val (team1, team2) = body.splitAt(body.indexOf("\"team2\""))
+          val neverPlayed    = withNoScore(team1.replaceAll(boardField, "").replaceAll(resultField, ""))
+          val decoded        = (neverPlayed + team2).fromJson[ApiDailyMatch]
+          assertTrue(decoded.swap.exists(_.contains(".board(missing)")))
+        }
+      },
+      test("boards with a 0-0 score stay a finished match") {
+        readFixture("matchFinished").map { body =>
+          val changed = withNoScore(body)
+          assertTrue(changed != body, changed.fromJson[ApiDailyMatch].exists(_.isInstanceOf[ApiDailyMatchFinished]))
+        }
+      },
+      test("no players on either side decodes as cancelled") {
+        readFixture("matchCancelled").map { body =>
+          val changed = body.replaceAll(""""players"\s*:\s*\[[^\]]*\]""", """"players":[]""")
+          assertTrue(changed != body, changed.fromJson[ApiDailyMatch].exists(_.isInstanceOf[ApiDailyMatchCancelled]))
+        }
+      },
+      test("an aborted status returns a failure instead of throwing") {
+        readFixture("matchCancelled").map { body =>
+          val decoded = body.replace(""""status":"finished"""", """"status":"aborted"""").fromJson[ApiDailyMatch]
+          assertTrue(decoded.isLeft)
+        }
+      }
+    ),
     test("ApiClub.canonicalSlug reads the slug Chess.com answers to, from `@id`") {
       readJsonLinesAs[ApiClub](getFileName("club")).runHead.someOrFailException
         .map(club => assertTrue(club.canonicalSlug == ClubSlug.wrap("chess-com-developer-community")))
@@ -106,6 +164,15 @@ object TestApiJsonParsing extends ZIOSpecDefault {
 
   private def readFixture(label: String) = ZIO.attemptBlocking(Files.readString(Path.of(getFileName(label))))
 
+  private def withUnknownResult(body: String) =
+    body.replaceFirst(""""played_as_white"\s*:\s*"[^"]*"""", """"played_as_white":"no-such-result"""")
+
+  private def withNoScore(body: String) = body.replaceAll(""""score"\s*:\s*[0-9.]+""", """"score":0""")
+
+  // A player's `board` and game results, with the comma before each: `username` always comes first.
+  private val boardField  = """,\s*"board"\s*:\s*"[^"]*""""
+  private val resultField = """,\s*"played_as_(?:white|black)"\s*:\s*"[^"]*""""
+
   // Spares a match's own `status`, which is read: it picks the variant. A field the fixture lacks would prove nothing,
   // so the test also fails if a field's values did not change.
   private def ignoresValuesOf[T: JsonDecoder](label: String)(fields: String*) =
@@ -127,7 +194,7 @@ object TestApiJsonParsing extends ZIOSpecDefault {
     }
   }
 
-  // Compares the classes because a match that fails its own decoder can still pass as cancelled.
+  // Compares the classes because a change that moved a match to another variant would still decode.
   private def decodesAsBefore[T: JsonDecoder](body: String, changed: String) = {
     val decoded = changed.fromJson[T]
     assertTrue(decoded.isRight, decoded.map(_.getClass) == body.fromJson[T].map(_.getClass))

@@ -1,5 +1,6 @@
 package ccas.utils.client
 
+import java.net.UnknownHostException
 import java.nio.charset.StandardCharsets
 import java.time.Instant
 
@@ -13,13 +14,14 @@ import ccas.analysis.tables.{ApiFetchFailure, ApiResponseBody, ApiResponseCache,
 import ccas.analysis.tables.subtypes.ApiResponseBodyId
 import ccas.utils.client.TestChessComClientSupport.*
 import ccas.utils.json.JsonDecodingException
-import ccas.utils.sql.FreshSchemaLayer
+import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
 import ccas.utils.sql.PostgresClient.connectZIO
 
 object TestChessComClientCaching extends ZIOSpecDefault {
 
   override def spec: Spec[TestEnvironment, Any] = suite("TestChessComClientCaching")(
-    suiteCacheable
+    suiteCacheable,
+    suiteUnreadableResponseLog
   ).provideShared(
     FreshSchemaLayer("test_client_caching", Tables.ensureTables)
     // `sequential`: these tests share one schema + one per-suite fs body-store, and most reuse `jsonBody` (so one
@@ -693,6 +695,84 @@ object TestChessComClientCaching extends ZIOSpecDefault {
       }
     }
   )
+
+  private val loggedErrors = ZTestLogger.logOutput.map(_.filter(_.logLevel == LogLevel.Error).map(_.message()))
+
+  private def suiteUnreadableResponseLog = suite("a response we can't read reaches the log at error level")(
+    test("a body that fails to decode logs one error naming the URL and the field") {
+      val url = URL.decode("http://test.example.com/api/cacheable/unreadable-logged").toOption.get
+      ZIO.scoped {
+        for {
+          (client, _, _) <- makeClient(_ => ZIO.succeed(cacheable200("""{"oops":"unreadable-logged"}""")))
+          _              <- client.get[Payload](url).either
+          errors         <- loggedErrors
+        } yield assertTrue(
+          errors.size == 1,
+          errors.exists(_.contains(url.encode)),
+          errors.exists(_.contains(".value(missing)"))
+        )
+      }
+    },
+    test("an identical body that no longer decodes logs one error naming the URL and the field") {
+      val url  = URL.decode("http://test.example.com/api/cacheable/identical-unreadable-logged").toOption.get
+      val body = """{"value":"identical-unreadable-logged"}"""
+      ZIO.scoped {
+        for {
+          (client, _, _) <- makeClient(_ => ZIO.succeed(cacheable200(body, maxAge = Some(0))))
+          _              <- client.get[Payload](url)
+          result         <- client.getResult[StrictPayload](url)
+          _              <- result.getValue.either
+          errors         <- loggedErrors
+        } yield assertTrue(
+          result.isInstanceOf[FetchResult.IdenticalBody[?]],
+          errors.size == 1,
+          errors.exists(_.contains(url.encode)),
+          errors.exists(_.contains(".extra(missing)"))
+        )
+      }
+    },
+    test("a cached body that no longer decodes but refetches cleanly logs no error") {
+      val url = URL.decode("http://test.example.com/api/cacheable/unreadable-then-clean").toOption.get
+      ZIO.scoped {
+        for {
+          netCalls <- Ref.make(0)
+          (client, _, _) <- makeClient { _ =>
+            netCalls.getAndUpdate(_ + 1).map { n =>
+              val extra = if (n == 0) { "" }
+              else { ""","extra":1""" }
+              cacheable200(s"""{"value":"unreadable-then-clean"$extra}""", maxAge = Some(3600))
+            }
+          }
+          _      <- client.get[Payload](url)
+          value  <- client.get[StrictPayload](url)
+          calls  <- netCalls.get
+          errors <- loggedErrors
+        } yield assertTrue(value.extra == 1, calls == 2, errors.isEmpty)
+      }
+    },
+    test("a reported 404 logs no error") {
+      val url = URL.decode("http://test.example.com/api/cacheable/reported-missing-not-logged").toOption.get
+      ZIO.scoped {
+        for {
+          (client, _, _) <- makeClient { _ =>
+            ZIO.succeed(Response.json(reportedNotFoundBody).status(Status.NotFound))
+          }
+          result <- client.getResult[Payload](url)
+          errors <- loggedErrors
+        } yield assertTrue(result.isInstanceOf[FetchResult.Missing], errors.isEmpty)
+      }
+    },
+    test("a connection failure logs no error") {
+      val url = URL.decode("http://test.example.com/api/cacheable/connection-failure-not-logged").toOption.get
+      ZIO.scoped {
+        for {
+          (client, _, _) <- makeClient(_ => ZIO.fail(new UnknownHostException("test.example.com")))
+          result         <- client.get[Payload](url).either
+          errors         <- loggedErrors
+        } yield assertTrue(result.isLeft, errors.isEmpty)
+      }
+    }
+  ).provideSomeLayer[PostgresClient & BodyStore](ZTestLogger.default)
 
   private final case class StrictPayload(value: String, extra: Int) derives JsonDecoder
 }
