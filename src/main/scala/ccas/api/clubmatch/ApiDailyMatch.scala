@@ -28,8 +28,23 @@ object ApiDailyMatch {
     val gen       = DeriveJsonDecoder.gen[ApiDailyMatch]
     val cancelled = JsonDecoder[ApiDailyMatchCancelled]
     JsonDecoder[Json].mapOrFail { json =>
-      gen.fromJsonAST(json).orElse(cancelled.fromJsonAST(json).map(_.asInstanceOf[ApiDailyMatch]))
+      if (isCancelled(json)) { cancelled.fromJsonAST(json) }
+      else { gen.fromJsonAST(json) }
     }
+  }
+
+  /** A cancelled match reports itself finished, so this asks whether anyone played: `docs/chess-com-api.md`, "A
+    * cancelled match reports itself finished". Anything else must pass the decoder of its own status or fail: a body
+    * read as cancelled by mistake loses its stored boards.
+    */
+  private def isCancelled(json: Json): Boolean = {
+    def field(parent: Json, name: String) = parent.asObject.flatMap(_.get(name))
+    def neverPlayed(player: Json) = List("board", "played_as_white", "played_as_black").forall(field(player, _).isEmpty)
+    def nobodyPlayed(team: Json) =
+      field(team, "score").flatMap(_.asNumber).exists(_.value.signum == 0) &&
+        field(team, "players").flatMap(_.asArray).exists(_.forall(neverPlayed))
+    field(json, "status").flatMap(_.asString).contains("finished") &&
+    List("team1", "team2").forall(name => field(json, "teams").flatMap(field(_, name)).exists(nobodyPlayed))
   }
 
   val host: URL = Hosts.api.addPath("match")

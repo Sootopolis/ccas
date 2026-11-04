@@ -141,12 +141,12 @@ object TestRefreshSingleMatch extends ZIOSpecDefault {
     ) && downstream
   }
 
-  /** Minimal decodable `ApiDailyMatchFinished` body: 0 boards, no players on either team, so `computeExpectedScores`
+  /** Minimal decodable body, read as cancelled: 0 boards, no players on either team, so `computeExpectedScores`
     * is empty and `scoresMatch` trivially holds — `refreshSingleMatchWithBody` takes its cheap `boardSkip` branch
     * (a plain `ClubMatch.upsert`) without exercising board/player resolution. Team `@id`s match `club`/`opponentClub`'s
     * slugs so `resolveClubIdFromTeamUrl` resolves locally, no network round trip.
     */
-  private def minimalFinishedMatchBody(matchId: Long): String =
+  private def minimalMatchBodyWithNoPlayers(matchId: Long): String =
     s"""{
       "@id": "https://api.chess.com/pub/match/$matchId",
       "name": "Match $matchId",
@@ -326,7 +326,7 @@ object TestRefreshSingleMatch extends ZIOSpecDefault {
   private def testChangedRecordsMarkerTrustedByLaterUnchanged =
     test("Changed records processedBodyHash; a later Unchanged fetch with the same content hash is trusted") {
       val matchId = ClubMatchId(8006)
-      val body    = minimalFinishedMatchBody(matchId.value)
+      val body    = minimalMatchBodyWithNoPlayers(matchId.value)
       for {
         _        <- seedFixtures(matchId.value, None)
         netCalls <- Ref.make(0)

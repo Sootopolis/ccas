@@ -90,9 +90,9 @@ For a match's games and results, prefer the players' game archives.
 
 ### A cancelled match reports itself finished
 
-A cancelled match that still answers has `status: finished`, so `finished` does not mean the match was played. Many cancelled matches 404 instead, and a high count of those is expected noise, not an outage.
+A cancelled match that still answers has `status: finished`, so `finished` does not mean the match was played. What marks one is that nobody did: no player on either side has a `board` or a game result, and both teams score 0. Either of those alone is too little to act on, since reading a played match as cancelled deletes its boards. Many cancelled matches 404 instead, and a high count of those is expected noise, not an outage.
 
-*Shape 2026-03-24; 404s recorded by 2026-08-12 ([#208](https://github.com/Sootopolis/ccas/pull/208)).*
+*Shape 2026-03-24; 404s recorded by 2026-08-12 ([#208](https://github.com/Sootopolis/ccas/pull/208)). Marker measured 2026-11-03 ([#416](https://github.com/Sootopolis/ccas/issues/416)): all 172 finished daily matches stored without boards answered this way, one with no players at all, and none of 100 random matches stored with boards did.*
 
 ### A club's match list holds only its latest 500 finished daily matches
 
@@ -118,7 +118,7 @@ Do not branch on a tournament's `status`.
 
 ### Enum fields are not spelt alike
 
-`league` is capitalised (`Wood`, `Legend`) and `title` is upper case (`GM`), while `status`, `time_class`, `rules`, `result`, `turn` and `visibility` are lower case, with their own oddities: `50move`, `timevsinsufficient`, `closed:fair_play_violations`. Our decoders match exactly, so take a new value's spelling from a real response rather than from a sibling field, and expect a value we do not know to fail the whole response. The exception, for now, is a game result on a finished daily match: the match then decodes as cancelled, without an error ([#416](https://github.com/Sootopolis/ccas/issues/416)). Decode a field as an enum only where something reads it, so a value it gains costs nothing: `league` and `turn` stay out of our decoders, and `rules` and `visibility` are kept as plain text for later use ([#414](https://github.com/Sootopolis/ccas/issues/414)).
+`league` is capitalised (`Wood`, `Legend`) and `title` is upper case (`GM`), while `status`, `time_class`, `rules`, `result`, `turn` and `visibility` are lower case, with their own oddities: `50move`, `timevsinsufficient`, `closed:fair_play_violations`. Our decoders match exactly, so take a new value's spelling from a real response rather than from a sibling field, and expect a value we do not know to fail the whole response. Decode a field as an enum only where something reads it, so a value it gains costs nothing: `league` and `turn` stay out of our decoders, and `rules` and `visibility` are kept as plain text for later use ([#414](https://github.com/Sootopolis/ccas/issues/414)).
 
 *Observed 2026-11-02 in 389 live responses, in `data/test/api/`, and in other projects' captured profiles up to June 2026 ([#264](https://github.com/Sootopolis/ccas/issues/264)); `50move` and the variant results carry over from the decoders before that. Not in those samples, and assumed to match their siblings: the titles `WIM`, `WCM`, `WNM` and `M`, and `aborted`, `bullet` and `mod`.*
 
