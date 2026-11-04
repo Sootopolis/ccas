@@ -39,7 +39,7 @@ When changes must reach `<base>` as separate PRs (CLAUDE.md, Git):
 - Each PR takes steps 1b-5 and 7-9 on its own; steps 6 and 6b can wait for the last merge.
 
 ## 1b. Collapse to one commit
-GitHub's squash default joins every commit's message, superseded ones included (#428), while a single commit's message lands as written. So that the user can just click merge, the branch goes up as one commit. If `git rev-list --count origin/<base>..HEAD` says 1, go to step 2. Otherwise, in the branch's own worktree, with a clean tree:
+GitHub's squash default joins every commit's message, superseded ones included (#428), while a single commit's message normally lands as written (#433's lost its body, cause unknown, so step 6 checks). So that the user can just click merge, the branch goes up as one commit. If `git rev-list --count origin/<base>..HEAD` says 1, go to step 2. Otherwise, in the branch's own worktree, with a clean tree:
 - On a published branch, `git fetch origin`, then `git merge-base --is-ancestor origin/<branch> HEAD` must pass. If it doesn't, the remote holds a commit this branch lacks: report it and stop.
 - Record `git rev-parse HEAD` as `<tip>` and `git merge-base origin/<base> HEAD` as `<merge-base>`, and write both out literally below: shell variables do not persist between calls.
 - `git reset --soft <merge-base>`: the merge base, since a reset to `origin/<base>` would undo whatever has landed there since.
@@ -87,7 +87,7 @@ Steps 6-9 run after the merge, which cannot be undone, so check what can be chec
 ## 6. Sync the base worktree
 - `git fetch origin --prune`.
 - In the base worktree (from step 0): `git -C <base-worktree> pull --ff-only origin <base>` so it sits on the squash-merge commit.
-- Read what landed, `git log -1 --format=%B <merge-sha>` with the SHA from `gh pr view <n> --json mergeCommit -q .mergeCommit.oid`, and tell the user if it joins several commits' messages: the PR reached the merge with more than one. `<base>` refuses a force-push, so this only reports it.
+- Read what landed, `git log -1 --format=%B <merge-sha>` with the SHA from `gh pr view <n> --json mergeCommit -q .mergeCommit.oid`, and tell the user if it joins several commits' messages, which means the PR reached the merge with more than one, or has lost the body the branch's commit carried. `<base>` refuses a force-push, so this only reports it.
 
 ## 6b. Re-stage the launcher
 The `ccas` launcher on `PATH` runs the build staged in the base worktree, so a merge changes nothing the user runs until it is re-staged. Skip this when the merge changed nothing the build stages (`src/main` behaviour, `build.sbt`, `project/`), and say so.

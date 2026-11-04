@@ -35,7 +35,7 @@ Start the bug hunt with the built-in `/code-review`, at an effort level scaled t
 - inconsistencies: names, behaviour or prose that disagree with the code around them
 - duplications and redundancies, in tests as much as in main code
 - inefficiencies: extra queries, extra round trips to Chess.com, work repeated per row
-- test coverage: every test the plan named exists, every behaviour change has a test, and each new test is shown to fail when the code it guards is broken. Read each new test against its name: the assertions check what the name promises, the effect under test actually runs, and the case that must not happen is covered. Close a gap with a unit test, refactoring production code if that is what makes it reachable, never with a manual check.
+- test coverage: every test the plan named exists, every behaviour change has a test, and each new test is shown to fail when the code it guards is broken, on the final code, after every fix. Read each new test against its name: the assertions check what the name promises, the effect under test actually runs, and the case that must not happen is covered. Close a gap with a unit test, refactoring production code if that is what makes it reachable, never with a manual check.
 - operator-facing output: report lines, logs and errors the change adds read in the operator's terms, not the schema's or the code's, and appear once per path
 - documentation and comments up to date and to `docs/documentation-standard.md`; `python3 scripts/check-docs.py` covers the mechanical half
 - the conventions in `CLAUDE.md` and in each `.claude/rules/` file whose `paths` cover a changed file — read those, since a diff does not load them — and whether each method lives where a caller would look for it; `sbt lint` covers formatting and the ones scalafix enforces
@@ -44,7 +44,7 @@ Then run the affected suites, or the full suite when the change is wide.
 
 ## 4. Fix, then ask
 
-Fix findings inside the change straight away, then review what the fixes touched: a fix has a blast radius too. A fix that changes the design rather than patching a finding goes back through step 3, `/code-review` included.
+Fix findings inside the change straight away, then review what the fixes touched: a fix has a blast radius too. When fixes changed production code, run `/code-review` once more over the whole diff. If that pass changes production code again, say so and ask rather than going round again.
 
 Ask before acting on anything you are unsure of, any judgement call, and anything that reaches beyond the change, such as a codebase-wide sweep, a refactor of untouched code or an audit. Those are often deferred to an issue.
 
@@ -52,6 +52,7 @@ Ask before acting on anything you are unsure of, any judgement call, and anythin
 
 Label every finding **blocking**, **non-blocking**, **nit** or **question**, so the report can be skimmed for what matters.
 
+- the change as it now stands, before anything about the review: what the operator will see differ, what changed and where, and each way it departs from the agreed plan, including departures the review itself made
 - what was found and fixed, one line each
 - judgement calls and questions, each in plain terms with a recommendation
 - what was run, and the result
