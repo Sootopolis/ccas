@@ -3,7 +3,20 @@ package ccas.server
 import java.nio.file.{Files, Path, Paths}
 
 import com.typesafe.config.ConfigFactory
-import zio.{durationInt, Duration, ExitCode, RIO, Schedule, Scope, URIO, ZIO, ZIOAppArgs, ZIOAppDefault, ZLayer}
+import zio.{
+  duration2DurationOps,
+  durationInt,
+  Duration,
+  ExitCode,
+  RIO,
+  Schedule,
+  Scope,
+  URIO,
+  ZIO,
+  ZIOAppArgs,
+  ZIOAppDefault,
+  ZLayer
+}
 import zio.http.{Routes, Server}
 import zio.http.netty.NettyConfig
 
@@ -134,14 +147,21 @@ object CcasServer extends ZIOAppDefault {
     } yield ()
   }
 
-  /** The pool's `onInit`: names the database, then applies the tables. The pool is lazy by default
-    * (`initializationFailTimeout = -1`), so naming it first means even a boot that then fails to connect says where it
-    * tried (#320).
+  /** The pool's `onInit`: names the database, then applies the tables and reports how long setup takes. The pool is
+    * lazy by default (`initializationFailTimeout = -1`), so naming it first means even a boot that then fails to connect
+    * says where it tried (#320).
     */
   private[server] val poolInit: RIO[PostgresClient, Unit] =
     ZIO.serviceWithZIO[PostgresClient] { client =>
-      ZIO.logInfo(s"Database: ${client.addressOption.fold("address not readable from the configuration")(_.render)}")
-    } *> ServerTables.ensureTables
+      for {
+        _ <- ZIO.logInfo(
+          s"Database: ${client.addressOption.fold("address not readable from the configuration")(_.render)}"
+        )
+        _            <- ZIO.logInfo("Preparing application and scheduler tables")
+        (elapsed, _) <- ServerTables.ensureTables.timed
+        _            <- ZIO.logInfo(s"Application and scheduler tables ready in ${elapsed.render}")
+      } yield ()
+    }
 
   /** One pass of every retention sweep this server runs: the job-log files, then the two API-diagnostics tables.
     * Each half is caught on its own — one bad pass must not end the loop, and neither half's failure may skip the
