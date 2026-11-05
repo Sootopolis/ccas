@@ -2,7 +2,7 @@ package ccas.utils.client
 
 import java.io.{File, IOException}
 import java.net.UnknownHostException
-import java.util.concurrent.TimeUnit
+import java.util.concurrent.{CountDownLatch, TimeUnit}
 
 import scala.util.Try
 
@@ -33,6 +33,27 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
   private def advanceTo(targetMs: Long) =
     Clock.currentTime(TimeUnit.MILLISECONDS).flatMap { now =>
       if (targetMs > now) TestClock.adjust((targetMs - now).millis) else ZIO.unit
+    }
+
+  private def blockingRateLimitLogger(entered: CountDownLatch, release: CountDownLatch): ZLogger[String, Unit] =
+    new ZLogger[String, Unit] {
+      def apply(
+        trace: Trace,
+        fiberId: FiberId,
+        logLevel: LogLevel,
+        message: () => String,
+        cause: Cause[Any],
+        context: FiberRefs,
+        spans: List[LogSpan],
+        annotations: Map[String, String]
+      ): Unit = {
+        if (message().contains("Rate limit throttle:")) {
+          entered.countDown()
+          if (!release.await(10, TimeUnit.SECONDS)) {
+            throw new IllegalStateException("test did not release the rate-limit warning")
+          }
+        }
+      }
     }
 
   /** A [[BodyStore]] whose writes consume a fixed amount of '''virtual''' time.
@@ -462,6 +483,36 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
         insideState.currentMax == 1L, // Phase 1 actually triggered throttle-down
         afterState.currentMax == 1L   // no post-scope step-up → fiber was interrupted
       )
+    },
+    test("request interruption during throttle-down still recovers permits") {
+      val entered = new CountDownLatch(1)
+      val release = new CountDownLatch(1)
+      ZIO.scoped {
+        ZIO.withLoggerScoped(blockingRateLimitLogger(entered, release)) *>
+          (for {
+            (client, stateRef, _) <- makeClient(
+              handler = _ => ZIO.succeed(Response(status = Status.Forbidden, body = Body.fromString(cfBody))),
+              permits = 4,
+              cooldown = 50.millis,
+              maxCfRetries = 0
+            )
+            request <- client.get[Payload](testUrl).fork
+            _       <- ZIO.addFinalizer(ZIO.succeed(release.countDown()))
+            reached <- ZIO.attemptBlocking(entered.await(10, TimeUnit.SECONDS)).orDie
+            _       <- ZIO.whenDiscard(!reached)(ZIO.dieMessage("rate-limit warning was not reached"))
+            _       <- request.interruptFork
+            _       <- ZIO.succeed(release.countDown())
+            exit    <- request.await
+            states <- ZIO.foreach(1 to 5) { _ =>
+              TestClock.adjust(advanceWindow) *> stateRef.get
+            }
+            recovered = states.last
+          } yield assertTrue(
+            exit.isInterruptedOnly,
+            recovered.currentMax == 4L,
+            !recovered.coolingDown
+          ))
+      }
     },
     test("sequential ordering when throttled to 1 permit") {
       ZIO.scoped {

@@ -588,32 +588,42 @@ final class ChessComClient(
     * requests have drained before attempting recovery.
     */
   private def throttleDown(cooldown: Duration = config.cooldown): Task[Unit] =
-    for {
-      now <- Clock.currentTime(TimeUnit.MILLISECONDS)
-      transitionOption <- stateRef.modify { state =>
-        if (state.currentMax <= 1) {
-          (None, state)
-        } else {
-          val newGen = state.generation + 1
-          val newState = state.copy(
-            currentMax = 1,
-            generation = newGen,
-            outcomes = Vector.empty,
-            coolingDown = true,
-            throttledSince = Some(now),
-            tierEnteredAt = Some(now)
-          )
-          (Some((state.currentMax, newGen)), newState)
-        }
+    Clock.currentTime(TimeUnit.MILLISECONDS).flatMap { now =>
+      ZIO.uninterruptibleMask { restore =>
+        for {
+          transitionOption <- stateRef.modify { state =>
+            if (state.currentMax <= 1) {
+              (None, state)
+            } else {
+              val newGen = state.generation + 1
+              val newState = state.copy(
+                currentMax = 1,
+                generation = newGen,
+                outcomes = Vector.empty,
+                coolingDown = true,
+                throttledSince = Some(now),
+                tierEnteredAt = Some(now)
+              )
+              (Some((state.currentMax, newGen)), newState)
+            }
+          }
+          _ <- ZIO.foreachDiscard(transitionOption) { case (oldMax, gen) =>
+            applyThrottle(oldMax, gen, cooldown, restore)
+          }
+        } yield ()
       }
-      _ <- ZIO.foreachDiscard(transitionOption) { case (oldMax, gen) => applyThrottle(oldMax, gen, cooldown) }
-    } yield ()
+    }
 
-  private def applyThrottle(oldMax: Long, gen: Long, cooldown: Duration): Task[Unit] =
+  private def applyThrottle(
+    oldMax: Long,
+    gen: Long,
+    cooldown: Duration,
+    restore: ZIO.InterruptibilityRestorer
+  ): Task[Unit] =
     for {
       _     <- statsRef.update(_.incThrottleDowns)
       _     <- ProgressDisplay.sourced("rate-limit")(ZIO.logWarning(s"Rate limit throttle: $oldMax \u2192 1 permit"))
-      fiber <- scheduleRecovery(gen, cooldown).forkDaemon
+      fiber <- restore(scheduleRecovery(gen, cooldown)).forkDaemon
       // Interrupt-and-replace so at most one recovery fiber is ever retained: a fresh throttle-down supersedes any
       // in-flight recovery (the older one is already a generation-stale no-op — see the `generation` guard in
       // `scheduleRecovery`). A single scope finalizer (in `live`) interrupts whatever fiber remains at shutdown.
