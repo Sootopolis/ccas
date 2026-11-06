@@ -37,7 +37,7 @@ object TestClubSlugRenameResolver extends ZIOSpecDefault {
       tierCNoOpWithoutHint
     )
   ) @@ TestAspect.before(resetTables)).provideShared(
-    FreshSchemaLayer("test_club_slug_rename_resolver", onInit = Tables.ensureTables)
+    FreshSchemaLayer(schema = "test_club_slug_rename_resolver", onInit = Tables.ensureTables)
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock
 
   private val resetTables: RIO[PostgresClient, Unit] =
@@ -315,7 +315,7 @@ object TestClubSlugRenameResolver extends ZIOSpecDefault {
         _ <- insertAdmin(clubId, gonePid)
         _ <- insertAdmin(clubId, livePid)
         // failures gates `/pub/player/$user/*` to 404 unconditionally.
-        client <- fakeChessComClient(responses, failures = Set(goneName))
+        client <- fakeChessComClient(responses = responses, failures = Set(goneName))
         result <- ClubSlugRenameResolver.resolveAndPersist(client, staleSlug, Some(clubId))
       } yield assertTrue(result.exists(_.slug == freshSlug))
     }

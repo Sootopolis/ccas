@@ -23,7 +23,7 @@ object TestRefAppNetworkOutage extends ZIOSpecDefault {
     testOutageInDeeperFetchAbortsWithoutSkip,
     testNextRunRetriesAfterOutage
   ).provideShared(
-    FreshSchemaLayer("test_ref_app_network_outage", onInit = Tables.ensureTables),
+    FreshSchemaLayer(schema = "test_ref_app_network_outage", onInit = Tables.ensureTables),
     Scope.default
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock
 
@@ -38,7 +38,7 @@ object TestRefAppNetworkOutage extends ZIOSpecDefault {
       for {
         _      <- seedDb
         client <- networkDownChessComClient
-        exit   <- runPopulate(client, forceSkipped = false, upgradeRefs = false).exit
+        exit   <- runPopulate(client = client, forceSkipped = false, upgradeRefs = false).exit
         p0     <- PlayerRefSkip.selectId(pid0)
         p1     <- PlayerRefSkip.selectId(pid1)
         p2     <- PlayerRefSkip.selectId(pid2)
@@ -79,7 +79,7 @@ object TestRefAppNetworkOutage extends ZIOSpecDefault {
           ),
           isDown = _.url.encode.contains(s"/match/$matchId1")
         )
-        exit  <- runPopulate(client, forceSkipped = false, upgradeRefs = false).exit
+        exit  <- runPopulate(client = client, forceSkipped = false, upgradeRefs = false).exit
         ref   <- PlayerMatchRef.selectId(pid0)
         skip0 <- PlayerRefSkip.selectId(pid0)
       } yield assertTrue(
@@ -101,7 +101,7 @@ object TestRefAppNetworkOutage extends ZIOSpecDefault {
       for {
         _          <- seedDb
         downClient <- networkDownChessComClient
-        exit1      <- runPopulate(downClient, forceSkipped = false, upgradeRefs = false).exit
+        exit1      <- runPopulate(client = downClient, forceSkipped = false, upgradeRefs = false).exit
         skip0After <- PlayerRefSkip.selectId(pid0)
         okClient <- fakeChessComClient(
           Map(
@@ -111,7 +111,7 @@ object TestRefAppNetworkOutage extends ZIOSpecDefault {
             s"match/$matchId1"        -> matchJson
           )
         )
-        _   <- runPopulate(okClient, forceSkipped = false, upgradeRefs = false)
+        _   <- runPopulate(client = okClient, forceSkipped = false, upgradeRefs = false)
         ref <- PlayerMatchRef.selectId(pid0)
       } yield assertTrue(
         isNetworkUnavailable(exit1),

@@ -56,7 +56,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
     suiteRowRules,
     suiteReport
   ).provideShared(
-    FreshSchemaLayer("test_membership_app_integration", onInit = Tables.ensureTables),
+    FreshSchemaLayer(schema = "test_membership_app_integration", onInit = Tables.ensureTables),
     ZLayer.succeed(ProgressDisplay.make(enabled = false))
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock
 
@@ -603,7 +603,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
       slugs = Set.empty
     )
     val apiMap    = Map(Username("frank-new") -> Times.t0.getEpochSecond)
-    val responses = Map("frank-new" -> apiPlayerJson(105, "frank-new", status = "closed"))
+    val responses = Map("frank-new" -> apiPlayerJson(playerId = 105, username = "frank-new", status = "closed"))
 
     for {
       client <- fakeChessComClient(responses)
@@ -659,11 +659,11 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
     for {
       client <- fakeChessComClient(Map.empty)
       result <- MembershipClassify.classifyApiMembers(
-        client,
-        clubId,
-        apiMap,
-        storedRoster,
-        Times.t2,
+        client = client,
+        clubId = clubId,
+        apiMap = apiMap,
+        storedRoster = storedRoster,
+        now = Times.t2,
         trustUsernames = false
       ).exit
     } yield assertTrue(result.isFailure)
@@ -703,11 +703,11 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
     for {
       client <- fakeChessComClient(responses)
       result <- MembershipClassify.classifyDisappeared(
-        client,
-        storedRoster,
-        Set.empty,
-        Map.empty,
-        Times.t2
+        client = client,
+        storedRoster = storedRoster,
+        resolvedIds = Set.empty,
+        apiMap = Map.empty,
+        now = Times.t2
       )
     } yield {
       val change = result.changes.head.changes.head
@@ -816,7 +816,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
   ) = {
     val player = Player(pid5, Times.t0, Username("ed-old"), storedStatus, None, Times.t0)
     val mem    = ClubMember.joined(clubId = clubId, playerId = pid5, since = Times.t0)
-    val ref    = PlayerMatchRef(pid5, matchRefId, isLive = false, isTeam1 = true, boardIdx = 1)
+    val ref    = PlayerMatchRef(playerId = pid5, matchId = matchRefId, isLive = false, isTeam1 = true, boardIdx = 1)
     val storedRoster = StoredRoster(
       membersByPlayerId = Map(pid5 -> MemberState(player, mem)),
       membersByUsername = Map(Username("ed-old") -> MemberState(player, mem)),
@@ -855,11 +855,11 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
         boardResponses = boardResponses
       )
       result <- MembershipClassify.classifyDisappeared(
-        client,
-        storedRoster,
-        Set.empty,
-        apiMap,
-        Times.t2
+        client = client,
+        storedRoster = storedRoster,
+        resolvedIds = Set.empty,
+        apiMap = apiMap,
+        now = Times.t2
       )
     } yield result
   }
@@ -958,13 +958,13 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
     )
 
     for {
-      client <- fakeChessComClient(Map.empty, failures = Set("charlie"))
+      client <- fakeChessComClient(responses = Map.empty, failures = Set("charlie"))
       result <- MembershipClassify.classifyDisappeared(
-        client,
-        storedRoster,
-        Set.empty,
-        Map.empty,
-        Times.t2
+        client = client,
+        storedRoster = storedRoster,
+        resolvedIds = Set.empty,
+        apiMap = Map.empty,
+        now = Times.t2
       )
     } yield assertTrue(
       result.changes.size == 1,
@@ -988,11 +988,11 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
     for {
       client <- fakeChessComClient(responses)
       result <- MembershipClassify.classifyDisappeared(
-        client,
-        storedRoster,
-        Set.empty,
-        Map.empty,
-        Times.t2
+        client = client,
+        storedRoster = storedRoster,
+        resolvedIds = Set.empty,
+        apiMap = Map.empty,
+        now = Times.t2
       )
     } yield assertTrue(
       result.changes.size == 1,
@@ -1015,11 +1015,11 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
     for {
       client <- fakeChessComClient(Map.empty)
       result <- MembershipClassify.classifyDisappeared(
-        client,
-        storedRoster,
-        Set(pid0),
-        Map.empty,
-        Times.t2
+        client = client,
+        storedRoster = storedRoster,
+        resolvedIds = Set(pid0),
+        apiMap = Map.empty,
+        now = Times.t2
       )
     } yield assertTrue(
       result.changes.isEmpty,
@@ -1323,7 +1323,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
       for {
         client     <- TestChessComClientSupport.fakeClient(routes)
         runsBefore <- connectZIO(sql"SELECT COUNT(*)::INT FROM membership_run".query[Int].run().head)
-        exit <- MembershipApp.reconcile(ClubSlug("test-club"), expectedClubIdOption = Some(expected))
+        exit <- MembershipApp.reconcile(clubSlug = ClubSlug("test-club"), expectedClubIdOption = Some(expected))
           .provideSomeLayer[ProgressDisplay & PostgresClient](ZLayer.succeed(client))
           .exit
         runsAfter <- connectZIO(sql"SELECT COUNT(*)::INT FROM membership_run".query[Int].run().head)

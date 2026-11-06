@@ -43,7 +43,7 @@ object TestClubSql extends ZIOSpecDefault {
     testASaveQueuesBehindAnotherAndReadsItsVersion,
     testAKeptListSpeaksForAClubUnlessOlderThanItsPlayer
   ).provideShared(
-    FreshSchemaLayer("test_club_sql", onInit = Tables.ensureTables)
+    FreshSchemaLayer(schema = "test_club_sql", onInit = Tables.ensureTables)
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock
 
   private object Times {
@@ -161,8 +161,8 @@ object TestClubSql extends ZIOSpecDefault {
 
   // --- ClubMatchRef tests ---
 
-  private val refA = ClubMatchRef(clubA.clubId, ClubMatchId(9001), isLive = false, isTeam1 = true)
-  private val refB = ClubMatchRef(clubB.clubId, ClubMatchId(9002), isLive = false, isTeam1 = false)
+  private val refA = ClubMatchRef(clubId = clubA.clubId, matchId = ClubMatchId(9001), isLive = false, isTeam1 = true)
+  private val refB = ClubMatchRef(clubId = clubB.clubId, matchId = ClubMatchId(9002), isLive = false, isTeam1 = false)
 
   private def testClubMatchRefInsert = test("testClubMatchRefInsert") {
     for {
@@ -216,8 +216,8 @@ object TestClubSql extends ZIOSpecDefault {
         Method.GET / "pub" / "match" / long("matchId") -> handler((_: Long, _: Request) => Response.json(matchJson))
       )
       for {
-        _      <- Club.upsert(club)
-        _      <- ClubMatchRef.insert(ClubMatchRef(club.clubId, matchId, isLive = false, isTeam1 = true))
+        _ <- Club.upsert(club)
+        _ <- ClubMatchRef.insert(ClubMatchRef(clubId = club.clubId, matchId = matchId, isLive = false, isTeam1 = true))
         client <- TestChessComClientSupport.fakeClient(routes)
         result <- Club.slugFromMatchRef(club.clubId, client).either
       } yield assertTrue(result.left.exists(_.isInstanceOf[IllegalArgumentException]))

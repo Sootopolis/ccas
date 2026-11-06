@@ -11,9 +11,9 @@ trait EnumSql[T <: reflect.Enum] {
   // null.asInstanceOf[T] is safe here: JDBC returns null for SQL NULL columns,
   // and Magnum's DbCodec protocol expects null passthrough for nullable fields.
   given DbCodec[T] = DbCodec[String].biMap(
-    string =>
+    to = string =>
       if (string == null) { null.asInstanceOf[T] }
       else { valueOf(decodingNaming(string)) },
-    member => encodingNaming(member.toString)
+    from = member => encodingNaming(member.toString)
   )
 }

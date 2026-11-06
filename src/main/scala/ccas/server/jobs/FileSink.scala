@@ -204,8 +204,8 @@ object FileSink {
     ZIO
       .attemptBlocking(open())
       .fold(
-        t => suppressedSink(path, open, t),
-        w => build(path, open, Some(w))
+        failure = t => suppressedSink(path, open, t),
+        success = w => build(path, open, Some(w))
       )
   }
 

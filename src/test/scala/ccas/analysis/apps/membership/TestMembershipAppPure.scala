@@ -511,14 +511,14 @@ object TestMembershipAppPure extends ZIOSpecDefault {
       val summaries = List(
         MemberChangeSummary(pid0, Username("alice"), Chunk(Reopened(Times.t0, MembershipStanding.Hidden(Times.t1)))),
         MemberChangeSummary(
-          pid1,
-          Username("bob"),
-          Chunk(Reopened(Times.t1, MembershipStanding.Ended(Times.t1, Times.t2)))
+          playerId = pid1,
+          username = Username("bob"),
+          changes = Chunk(Reopened(Times.t1, MembershipStanding.Ended(Times.t1, Times.t2)))
         ),
         MemberChangeSummary(
-          pid2,
-          Username("carol"),
-          Chunk(Reopened(Times.t2, MembershipStanding.Ended(Times.t3, Times.t3)))
+          playerId = pid2,
+          username = Username("carol"),
+          changes = Chunk(Reopened(Times.t2, MembershipStanding.Ended(Times.t3, Times.t3)))
         )
       )
       val output = MembershipReport.formatReport(MembershipReport.ReportResult(summaries, Nil, 10, 10, Map.empty))
@@ -576,9 +576,9 @@ object TestMembershipAppPure extends ZIOSpecDefault {
   private def testGroupsChangesByCategory = test("groups changes by category, not by player") {
     val summaries = List(
       MemberChangeSummary(
-        pid0,
-        Username("alice"),
-        Chunk(NewMember(Times.t1), UsernameChange(Times.t2, Username("alice-old")))
+        playerId = pid0,
+        username = Username("alice"),
+        changes = Chunk(NewMember(Times.t1), UsernameChange(Times.t2, Username("alice-old")))
       ),
       MemberChangeSummary(pid1, Username("bob"), Chunk(NewMember(Times.t1)))
     )
@@ -630,9 +630,9 @@ object TestMembershipAppPure extends ZIOSpecDefault {
       val invitedAt = Times.t0
       val summaries = List(
         MemberChangeSummary(
-          pid0,
-          Username("alice"),
-          Chunk(NewMember(Times.t1), UsernameChange(Times.t2, Username("alice-old")))
+          playerId = pid0,
+          username = Username("alice"),
+          changes = Chunk(NewMember(Times.t1), UsernameChange(Times.t2, Username("alice-old")))
         ),
         MemberChangeSummary(pid1, Username("bob"), Chunk(JoinedClub(Times.t1)))
       )

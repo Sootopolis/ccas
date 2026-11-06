@@ -23,7 +23,7 @@ object TestMembershipAppNetworkOutage extends ZIOSpecDefault {
   override def spec: Spec[Any, Throwable] = suite("TestMembershipAppNetworkOutage")(
     testClassifyDisappearedOutageReRaises
   ).provideShared(
-    FreshSchemaLayer("test_membership_app_network_outage", onInit = Tables.ensureTables),
+    FreshSchemaLayer(schema = "test_membership_app_network_outage", onInit = Tables.ensureTables),
     ZLayer.succeed(ProgressDisplay.make(enabled = false)),
     Scope.default
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock

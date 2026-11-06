@@ -31,8 +31,8 @@ object FakeCcasServer {
       ClubRequest
         .query(req)
         .fold(
-          _ => Response.status(Status.BadRequest),
-          asked =>
+          failure = _ => Response.status(Status.BadRequest),
+          success = asked =>
             if (asked == query) { json(ClubResult(query.describe, resolution, info)) }
             else { Response.status(Status.BadRequest) }
         )

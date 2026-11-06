@@ -27,7 +27,7 @@ object TestDiscoverPlayer extends ZIOSpecDefault {
     testAMemberTheRunStartsFromIsNotCrawledAgain,
     testProfileOutageWritesNothing
   ).provideShared(
-    FreshSchemaLayer("test_discover_player", onInit = Tables.ensureTables),
+    FreshSchemaLayer(schema = "test_discover_player", onInit = Tables.ensureTables),
     ZLayer.succeed(ProgressDisplay.make(enabled = false)),
     Scope.default
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock

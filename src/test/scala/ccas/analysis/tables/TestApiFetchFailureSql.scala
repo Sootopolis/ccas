@@ -20,7 +20,7 @@ object TestApiFetchFailureSql extends ZIOSpecDefault {
     testDeleteBeforeCleansOrphans,
     testDeleteAllCleansOrphans
   ).provideShared(
-    FreshSchemaLayer("test_api_fetch_failure", onInit = Tables.ensureTables)
+    FreshSchemaLayer(schema = "test_api_fetch_failure", onInit = Tables.ensureTables)
   ) @@ TestAspect.sequential
 
   private object Times {

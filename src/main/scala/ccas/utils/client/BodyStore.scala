@@ -208,9 +208,9 @@ object BodyStore {
         connect <- positiveMs(s3ConnectTimeoutMs, DefaultS3ConnectTimeoutMs, "body-store.s3-connect-timeout-ms")
         socket  <- positiveMs(s3SocketTimeoutMs, DefaultS3SocketTimeoutMs, "body-store.s3-socket-timeout-ms")
         _ <- Either.cond(
-          socket.compareTo(widest) <= 0,
-          (),
-          s"body-store.s3-socket-timeout-ms (${socket.toMillis}) must not exceed the widest accessor deadline " +
+          test = socket.compareTo(widest) <= 0,
+          right = (),
+          left = s"body-store.s3-socket-timeout-ms (${socket.toMillis}) must not exceed the widest accessor deadline " +
             s"(${widest.toMillis}ms): the transport would outlive the operation it serves."
         )
       } yield S3Timeouts(connect = connect, socket = socket, apiCallAttempt = widest, apiCall = widest)

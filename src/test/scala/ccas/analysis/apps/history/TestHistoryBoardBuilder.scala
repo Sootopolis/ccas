@@ -26,10 +26,10 @@ object TestHistoryBoardBuilder extends ZIOSpecDefault {
 
   private def boardPlayer(username: String, rating: Int, result: Option[GameResultDetail]): ApiBoardPlayer =
     ApiBoardPlayer(
-      Username(username),
-      elo(rating),
-      result,
-      url(s"https://api.chess.com/pub/player/$username")
+      username = Username(username),
+      rating = elo(rating),
+      result = result,
+      `@id` = url(s"https://api.chess.com/pub/player/$username")
     )
 
   private def boardGame(
@@ -80,12 +80,19 @@ object TestHistoryBoardBuilder extends ZIOSpecDefault {
 
   private def suiteBuildGameRow = suite("buildGameRow")(
     test("returns None when winner and boardGame are both absent") {
-      val row = HistoryBoardBuilder.buildGameRow(matchId, board = 1, team1IsWhite = true, None, None, None)
+      val row = HistoryBoardBuilder.buildGameRow(
+        matchId = matchId,
+        board = 1,
+        team1IsWhite = true,
+        winner = None,
+        detail = None,
+        boardGame = None
+      )
       assertTrue(row.isEmpty)
     },
     test("returns row with no ratings when boardGame is absent") {
       val row = HistoryBoardBuilder.buildGameRow(
-        matchId,
+        matchId = matchId,
         board = 1,
         team1IsWhite = true,
         winner = Some(BoardGameWinner.Team1),
@@ -112,7 +119,7 @@ object TestHistoryBoardBuilder extends ZIOSpecDefault {
         black = Right(boardPlayer("bob", 1300, Some(GameResultDetail.Checkmated)))
       )
       val row = HistoryBoardBuilder.buildGameRow(
-        matchId,
+        matchId = matchId,
         board = 1,
         team1IsWhite = true,
         winner = Some(BoardGameWinner.Team1),
@@ -133,7 +140,7 @@ object TestHistoryBoardBuilder extends ZIOSpecDefault {
         black = Right(boardPlayer("dave", 1400, Some(GameResultDetail.Resigned)))
       )
       val row = HistoryBoardBuilder.buildGameRow(
-        matchId,
+        matchId = matchId,
         board = 2,
         team1IsWhite = false,
         winner = Some(BoardGameWinner.Team2),

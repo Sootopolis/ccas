@@ -1448,21 +1448,21 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
     },
     test("ThrottleConfig.nextTier walks up the recovery ladder") {
       val cfg = ChessComClient.ThrottleConfig(
-        Vector(2, 4, 6, 8),
-        30.seconds,
-        5.seconds,
-        1.second,
-        10.seconds,
-        1.second,
-        5,
-        2,
-        3,
-        20,
-        0.2,
-        10,
-        0,
-        Duration.Zero,
-        500L
+        recoveryTiers = Vector(2, 4, 6, 8),
+        cooldown = 30.seconds,
+        cfCooldown = 5.seconds,
+        retryBase = 1.second,
+        cfRetryDelay = 10.seconds,
+        connectionRetryBase = 1.second,
+        max429Retries = 5,
+        maxCfRetries = 2,
+        maxConnectionRetries = 3,
+        failureWindowSize = 20,
+        failureThreshold = 0.2,
+        minSampleSize = 10,
+        minRequestDelayMs = 0,
+        minTierObservation = Duration.Zero,
+        emaTauMs = 500L
       )
       assertTrue(
         cfg.maxPermits == 8L,
@@ -1476,21 +1476,21 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
     },
     test("ThrottleConfig.previousTier walks down the recovery ladder") {
       val cfg = ChessComClient.ThrottleConfig(
-        Vector(2, 4, 6, 8),
-        30.seconds,
-        5.seconds,
-        1.second,
-        10.seconds,
-        1.second,
-        5,
-        2,
-        3,
-        20,
-        0.2,
-        10,
-        0,
-        Duration.Zero,
-        500L
+        recoveryTiers = Vector(2, 4, 6, 8),
+        cooldown = 30.seconds,
+        cfCooldown = 5.seconds,
+        retryBase = 1.second,
+        cfRetryDelay = 10.seconds,
+        connectionRetryBase = 1.second,
+        max429Retries = 5,
+        maxCfRetries = 2,
+        maxConnectionRetries = 3,
+        failureWindowSize = 20,
+        failureThreshold = 0.2,
+        minSampleSize = 10,
+        minRequestDelayMs = 0,
+        minTierObservation = Duration.Zero,
+        emaTauMs = 500L
       )
       assertTrue(
         cfg.previousTier(8) == 6L,
@@ -1511,21 +1511,21 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
       assertTrue(cases.forall { tiers =>
         Try(
           ChessComClient.ThrottleConfig(
-            tiers,
-            30.seconds,
-            5.seconds,
-            1.second,
-            10.seconds,
-            1.second,
-            5,
-            2,
-            3,
-            20,
-            0.2,
-            10,
-            0,
-            Duration.Zero,
-            500L
+            recoveryTiers = tiers,
+            cooldown = 30.seconds,
+            cfCooldown = 5.seconds,
+            retryBase = 1.second,
+            cfRetryDelay = 10.seconds,
+            connectionRetryBase = 1.second,
+            max429Retries = 5,
+            maxCfRetries = 2,
+            maxConnectionRetries = 3,
+            failureWindowSize = 20,
+            failureThreshold = 0.2,
+            minSampleSize = 10,
+            minRequestDelayMs = 0,
+            minTierObservation = Duration.Zero,
+            emaTauMs = 500L
           )
         ).isFailure
       })
@@ -1549,21 +1549,21 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
         emaTauMs: Long = 500
       ) = Try(
         ChessComClient.ThrottleConfig(
-          tiers,
-          cooldown,
-          cfCooldown,
-          retryBase,
-          cfRetryDelay,
-          connectionRetryBase,
-          max429Retries,
-          maxCfRetries,
-          maxConnectionRetries,
-          failureWindowSize,
-          failureThreshold,
-          minSampleSize,
-          minRequestDelayMs,
-          minTierObservation,
-          emaTauMs
+          recoveryTiers = tiers,
+          cooldown = cooldown,
+          cfCooldown = cfCooldown,
+          retryBase = retryBase,
+          cfRetryDelay = cfRetryDelay,
+          connectionRetryBase = connectionRetryBase,
+          max429Retries = max429Retries,
+          maxCfRetries = maxCfRetries,
+          maxConnectionRetries = maxConnectionRetries,
+          failureWindowSize = failureWindowSize,
+          failureThreshold = failureThreshold,
+          minSampleSize = minSampleSize,
+          minRequestDelayMs = minRequestDelayMs,
+          minTierObservation = minTierObservation,
+          emaTauMs = emaTauMs
         )
       )
       assertTrue(

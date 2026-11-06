@@ -31,7 +31,7 @@ object TestRetentionPass extends ZIOSpecDefault {
         tableIdx = logs.indexWhere(_.contains("cache rows"))
       } yield assertTrue(fileIdx >= 0, tableIdx >= 0, fileIdx < tableIdx)
     }.provide(
-      FreshSchemaLayer("test_retention_pass_both", onInit = ServerTables.ensureTables),
+      FreshSchemaLayer(schema = "test_retention_pass_both", onInit = ServerTables.ensureTables),
       liveJobRunner,
       ZTestLogger.default
     )
@@ -48,7 +48,7 @@ object TestRetentionPass extends ZIOSpecDefault {
       } yield assertTrue(exit.isSuccess, logs.exists(_.contains("job log(s)")), errs.nonEmpty)
     }.provide(
       FreshSchemaLayer(
-        "test_retention_pass_broken",
+        schema = "test_retention_pass_broken",
         onInit = (Club.createTable *> JobRun.createTable *> AppSetting.createTable).unit
       ),
       liveJobRunner,
@@ -66,7 +66,7 @@ object TestRetentionPass extends ZIOSpecDefault {
         errs <- loggedMessages("Job-log sweep failed")
       } yield assertTrue(exit.isSuccess, logs.exists(_.contains("cache rows")), errs.nonEmpty)
     }.provide(
-      FreshSchemaLayer("test_retention_pass_dying", onInit = ServerTables.ensureTables),
+      FreshSchemaLayer(schema = "test_retention_pass_dying", onInit = ServerTables.ensureTables),
       ZLayer.succeed[JobRunner](DyingJobRunner),
       ZTestLogger.default
     )

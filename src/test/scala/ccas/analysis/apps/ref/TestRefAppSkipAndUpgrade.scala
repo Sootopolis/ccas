@@ -21,7 +21,7 @@ object TestRefAppSkipAndUpgrade extends ZIOSpecDefault {
     suiteTournamentSorting,
     suiteUpgrade
   ).provideShared(
-    FreshSchemaLayer("test_ref_app_skip_upgrade", onInit = Tables.ensureTables),
+    FreshSchemaLayer(schema = "test_ref_app_skip_upgrade", onInit = Tables.ensureTables),
     Scope.default
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock
 
@@ -55,7 +55,7 @@ object TestRefAppSkipAndUpgrade extends ZIOSpecDefault {
             s"club/other-club/matches" -> emptyClubMatchesJson
           )
         )
-        _     <- runPopulate(client, forceSkipped = false, upgradeRefs = false)
+        _     <- runPopulate(client = client, forceSkipped = false, upgradeRefs = false)
         skip0 <- PlayerRefSkip.selectId(pid0)
         skip1 <- PlayerRefSkip.selectId(pid1)
         skip2 <- PlayerRefSkip.selectId(pid2)
@@ -82,7 +82,7 @@ object TestRefAppSkipAndUpgrade extends ZIOSpecDefault {
             s"club/other-club/matches" -> emptyClubMatchesJson
           )
         )
-        _     <- runPopulate(client, forceSkipped = false, upgradeRefs = false)
+        _     <- runPopulate(client = client, forceSkipped = false, upgradeRefs = false)
         skip0 <- ClubRefSkip.selectId(clubId0)
         skip1 <- ClubRefSkip.selectId(clubId1)
       } yield assertTrue(
@@ -105,7 +105,7 @@ object TestRefAppSkipAndUpgrade extends ZIOSpecDefault {
         ),
         failures = Set("charlie")
       )
-      _    <- runPopulate(client, forceSkipped = false, upgradeRefs = false)
+      _    <- runPopulate(client = client, forceSkipped = false, upgradeRefs = false)
       skip <- PlayerRefSkip.selectId(pid2)
     } yield assertTrue(
       skip.isDefined,
@@ -116,9 +116,9 @@ object TestRefAppSkipAndUpgrade extends ZIOSpecDefault {
   private def testWritesResolutionFailedSkipWhenPlayerHasMatchesButNotInRoster =
     test("writes ResolutionFailed skip when player has matches but is not in roster") {
       val matchJson = apiDailyMatchJson(
-        matchId1,
-        "club-x",
-        "club-y",
+        matchId = matchId1,
+        team1Club = "club-x",
+        team2Club = "club-y",
         team1Players = List(("stranger1", 1)),
         team2Players = List(("stranger2", 2))
       )
@@ -134,7 +134,7 @@ object TestRefAppSkipAndUpgrade extends ZIOSpecDefault {
             s"match/$matchId1"         -> matchJson
           )
         )
-        _    <- runPopulate(client, forceSkipped = false, upgradeRefs = false)
+        _    <- runPopulate(client = client, forceSkipped = false, upgradeRefs = false)
         skip <- PlayerRefSkip.selectId(pid0)
       } yield assertTrue(
         skip.isDefined,
@@ -155,13 +155,13 @@ object TestRefAppSkipAndUpgrade extends ZIOSpecDefault {
           s"club/other-club/matches" -> emptyClubMatchesJson
         )
       )
-      _             <- runPopulate(client1, forceSkipped = false, upgradeRefs = false)
+      _             <- runPopulate(client = client1, forceSkipped = false, upgradeRefs = false)
       skipAfterRun1 <- PlayerRefSkip.selectId(pid0)
       // Run 2: provide data that WOULD resolve alice -- but she should be skipped
       matchJson = apiDailyMatchJson(
-        matchId1,
-        "our-club",
-        "other-club",
+        matchId = matchId1,
+        team1Club = "our-club",
+        team2Club = "other-club",
         team1Players = List(("alice", 3)),
         team2Players = List(("opponent1", 1))
       )
@@ -175,7 +175,7 @@ object TestRefAppSkipAndUpgrade extends ZIOSpecDefault {
           s"match/$matchId1"         -> matchJson
         )
       )
-      _             <- runPopulate(client2, forceSkipped = false, upgradeRefs = false)
+      _             <- runPopulate(client = client2, forceSkipped = false, upgradeRefs = false)
       ref           <- PlayerMatchRef.selectId(pid0)
       skipAfterRun2 <- PlayerRefSkip.selectId(pid0)
     } yield assertTrue(
@@ -199,7 +199,7 @@ object TestRefAppSkipAndUpgrade extends ZIOSpecDefault {
           ),
           notFound = Map(s"player/alice/matches" -> reportedNotFoundBody("Player", "alice"))
         )
-        _    <- runPopulate(client, forceSkipped = false, upgradeRefs = false)
+        _    <- runPopulate(client = client, forceSkipped = false, upgradeRefs = false)
         skip <- PlayerRefSkip.selectId(pid0)
       } yield assertTrue(
         skip.isDefined,
@@ -220,7 +220,7 @@ object TestRefAppSkipAndUpgrade extends ZIOSpecDefault {
           ),
           notFound = Map(s"player/alice/matches" -> transientInternalErrorBody)
         )
-        _    <- runPopulate(client, forceSkipped = false, upgradeRefs = false)
+        _    <- runPopulate(client = client, forceSkipped = false, upgradeRefs = false)
         skip <- PlayerRefSkip.selectId(pid0)
       } yield assertTrue(
         skip.isDefined,
@@ -241,7 +241,7 @@ object TestRefAppSkipAndUpgrade extends ZIOSpecDefault {
           ),
           notFound = Map(s"club/our-club/matches" -> reportedNotFoundBody("Club", "our-club"))
         )
-        _    <- runPopulate(client, forceSkipped = false, upgradeRefs = false)
+        _    <- runPopulate(client = client, forceSkipped = false, upgradeRefs = false)
         skip <- ClubRefSkip.selectId(clubId0)
       } yield assertTrue(
         skip.isDefined,
@@ -262,7 +262,7 @@ object TestRefAppSkipAndUpgrade extends ZIOSpecDefault {
           ),
           notFound = Map(s"club/our-club/matches" -> transientInternalErrorBody)
         )
-        _    <- runPopulate(client, forceSkipped = false, upgradeRefs = false)
+        _    <- runPopulate(client = client, forceSkipped = false, upgradeRefs = false)
         skip <- ClubRefSkip.selectId(clubId0)
       } yield assertTrue(
         skip.isDefined,
@@ -273,9 +273,9 @@ object TestRefAppSkipAndUpgrade extends ZIOSpecDefault {
   private def testExpiredSkipAllowsRetryAndSkipRowDeletedOnResolution =
     test("expired skip allows retry and skip row is deleted on resolution") {
       val matchJson = apiDailyMatchJson(
-        matchId1,
-        "our-club",
-        "other-club",
+        matchId = matchId1,
+        team1Club = "our-club",
+        team2Club = "other-club",
         team1Players = List(("alice", 3)),
         team2Players = List(("opponent1", 1))
       )
@@ -294,7 +294,7 @@ object TestRefAppSkipAndUpgrade extends ZIOSpecDefault {
             s"match/$matchId1"         -> matchJson
           )
         )
-        _    <- runPopulate(client, forceSkipped = false, upgradeRefs = false)
+        _    <- runPopulate(client = client, forceSkipped = false, upgradeRefs = false)
         ref  <- PlayerMatchRef.selectId(pid0)
         skip <- PlayerRefSkip.selectId(pid0)
       } yield assertTrue(
@@ -316,9 +316,9 @@ object TestRefAppSkipAndUpgrade extends ZIOSpecDefault {
   private def testForceSkippedReProcessesPlayersWithActiveSkipRecords =
     test("forceSkipped re-processes players with active skip records") {
       val matchJson = apiDailyMatchJson(
-        matchId1,
-        "our-club",
-        "other-club",
+        matchId = matchId1,
+        team1Club = "our-club",
+        team2Club = "other-club",
         team1Players = List(("alice", 3)),
         team2Players = List(("opponent1", 1))
       )
@@ -337,10 +337,10 @@ object TestRefAppSkipAndUpgrade extends ZIOSpecDefault {
             s"match/$matchId1"         -> matchJson
           )
         )
-        _         <- runPopulate(client, forceSkipped = false, upgradeRefs = false)
+        _         <- runPopulate(client = client, forceSkipped = false, upgradeRefs = false)
         refBefore <- PlayerMatchRef.selectId(pid0)
         // Force run: alice should be re-processed and resolved
-        _         <- runPopulate(client, forceSkipped = true, upgradeRefs = false)
+        _         <- runPopulate(client = client, forceSkipped = true, upgradeRefs = false)
         refAfter  <- PlayerMatchRef.selectId(pid0)
         skipAfter <- PlayerRefSkip.selectId(pid0)
       } yield assertTrue(
@@ -354,9 +354,9 @@ object TestRefAppSkipAndUpgrade extends ZIOSpecDefault {
   private def testForceSkippedReProcessesClubsWithActiveSkipRecords =
     test("forceSkipped re-processes clubs with active skip records") {
       val matchJson = apiDailyMatchJson(
-        matchId1,
-        "our-club",
-        "other-club",
+        matchId = matchId1,
+        team1Club = "our-club",
+        team2Club = "other-club",
         team1Players = List(("player1", 1)),
         team2Players = List(("player2", 2))
       )
@@ -375,10 +375,10 @@ object TestRefAppSkipAndUpgrade extends ZIOSpecDefault {
           )
         )
         // Normal run: club should be skipped
-        _         <- runPopulate(client, forceSkipped = false, upgradeRefs = false)
+        _         <- runPopulate(client = client, forceSkipped = false, upgradeRefs = false)
         refBefore <- ClubMatchRef.selectId(clubId0)
         // Force run: club should be re-processed and resolved
-        _         <- runPopulate(client, forceSkipped = true, upgradeRefs = false)
+        _         <- runPopulate(client = client, forceSkipped = true, upgradeRefs = false)
         refAfter  <- ClubMatchRef.selectId(clubId0)
         skipAfter <- ClubRefSkip.selectId(clubId0)
       } yield assertTrue(
@@ -414,7 +414,7 @@ object TestRefAppSkipAndUpgrade extends ZIOSpecDefault {
             s"tournament/small-tourney/1" -> apiTournamentRoundJson(List("other3", "alice"))
           )
         )
-        _   <- runPopulate(client, forceSkipped = false, upgradeRefs = false)
+        _   <- runPopulate(client = client, forceSkipped = false, upgradeRefs = false)
         ref <- PlayerTournamentRef.selectId(pid0)
       } yield assertTrue(
         ref.isDefined,
@@ -439,9 +439,9 @@ object TestRefAppSkipAndUpgrade extends ZIOSpecDefault {
   private def testUpgradesTournamentRefToMatchRef =
     test("upgrades tournament ref to match ref when match data is available") {
       val matchJson = apiDailyMatchJson(
-        matchId1,
-        "our-club",
-        "other-club",
+        matchId = matchId1,
+        team1Club = "our-club",
+        team2Club = "other-club",
         team1Players = List(("alice", 3)),
         team2Players = List(("opponent1", 1))
       )
@@ -459,7 +459,7 @@ object TestRefAppSkipAndUpgrade extends ZIOSpecDefault {
             s"match/$matchId1"         -> matchJson
           )
         )
-        _        <- runPopulate(client, forceSkipped = false, upgradeRefs = true)
+        _        <- runPopulate(client = client, forceSkipped = false, upgradeRefs = true)
         matchRef <- PlayerMatchRef.selectId(pid0)
         tournRef <- PlayerTournamentRef.selectId(pid0)
       } yield assertTrue(
@@ -485,7 +485,7 @@ object TestRefAppSkipAndUpgrade extends ZIOSpecDefault {
             s"club/other-club/matches" -> emptyClubMatchesJson
           )
         )
-        _        <- runPopulate(client, forceSkipped = false, upgradeRefs = true)
+        _        <- runPopulate(client = client, forceSkipped = false, upgradeRefs = true)
         matchRef <- PlayerMatchRef.selectId(pid0)
         tournRef <- PlayerTournamentRef.selectId(pid0)
       } yield assertTrue(
@@ -511,7 +511,7 @@ object TestRefAppSkipAndUpgrade extends ZIOSpecDefault {
             s"tournament/tourney-small/1" -> apiTournamentRoundJson(List("someone", "alice", "other"))
           )
         )
-        _        <- runPopulate(client, forceSkipped = false, upgradeRefs = true)
+        _        <- runPopulate(client = client, forceSkipped = false, upgradeRefs = true)
         matchRef <- PlayerMatchRef.selectId(pid0)
         tournRef <- PlayerTournamentRef.selectId(pid0)
       } yield assertTrue(
@@ -538,7 +538,7 @@ object TestRefAppSkipAndUpgrade extends ZIOSpecDefault {
             s"tournament/tourney-small/1" -> apiTournamentRoundJson(List("someone", "alice"))
           )
         )
-        _        <- runPopulate(client, forceSkipped = false, upgradeRefs = true)
+        _        <- runPopulate(client = client, forceSkipped = false, upgradeRefs = true)
         tournRef <- PlayerTournamentRef.selectId(pid0)
       } yield assertTrue(
         tournRef.isDefined,
@@ -564,7 +564,7 @@ object TestRefAppSkipAndUpgrade extends ZIOSpecDefault {
             // tourney-tiny/1 not provided -> 404
           )
         )
-        _        <- runPopulate(client, forceSkipped = false, upgradeRefs = true)
+        _        <- runPopulate(client = client, forceSkipped = false, upgradeRefs = true)
         tournRef <- PlayerTournamentRef.selectId(pid0)
       } yield assertTrue(
         tournRef.isDefined,
@@ -580,9 +580,9 @@ object TestRefAppSkipAndUpgrade extends ZIOSpecDefault {
         // Pre-seed a tournament ref for alice
         _ <- PlayerTournamentRef.insert(PlayerTournamentRef(pid0, TournamentSlug("tourney-1"), 1))
         matchJson = apiDailyMatchJson(
-          matchId1,
-          "our-club",
-          "other-club",
+          matchId = matchId1,
+          team1Club = "our-club",
+          team2Club = "other-club",
           team1Players = List(("alice", 3)),
           team2Players = List(("opponent1", 1))
         )
@@ -596,7 +596,7 @@ object TestRefAppSkipAndUpgrade extends ZIOSpecDefault {
             s"match/$matchId1"         -> matchJson
           )
         )
-        _        <- runPopulate(client, forceSkipped = false, upgradeRefs = false)
+        _        <- runPopulate(client = client, forceSkipped = false, upgradeRefs = false)
         matchRef <- PlayerMatchRef.selectId(pid0)
         tournRef <- PlayerTournamentRef.selectId(pid0)
       } yield assertTrue(

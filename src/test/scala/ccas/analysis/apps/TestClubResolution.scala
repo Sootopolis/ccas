@@ -34,7 +34,7 @@ object TestClubResolution extends ZIOSpecDefault {
 
   override def spec: Spec[Any, Throwable] = suite("TestClubResolution")(
     suite("against the database")(resolveSuite, adjudicateSuite)
-      .provideShared(FreshSchemaLayer("test_club_resolution", onInit = Tables.ensureTables)) @@
+      .provideShared(FreshSchemaLayer(schema = "test_club_resolution", onInit = Tables.ensureTables)) @@
       TestAspect.sequential,
     pureSuite
   )
@@ -92,8 +92,8 @@ object TestClubResolution extends ZIOSpecDefault {
         v <- ClubResolution.resolve(ClubQuery.BySlug(ClubSlug("passed-around")))
       } yield assertTrue(
         v == ClubResolution.Ambiguous(
-          ClubSlug("passed-around"),
-          List(
+          requested = ClubSlug("passed-around"),
+          holders = List(
             ClubRef(first.clubId, Some(ClubSlug("first-now"))),
             ClubRef(second.clubId, Some(ClubSlug("second-now")))
           )

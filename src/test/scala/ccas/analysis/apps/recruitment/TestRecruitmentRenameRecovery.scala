@@ -45,7 +45,7 @@ object TestRecruitmentRenameRecovery extends ZIOSpecDefault {
     failedSecondEvaluationKeepsFirstRow,
     recruitCountsPlayerListedUnderTwoNamesOnce
   ).provideShared(
-    FreshSchemaLayer("test_recruitment_rename_recovery", onInit = Tables.ensureTables),
+    FreshSchemaLayer(schema = "test_recruitment_rename_recovery", onInit = Tables.ensureTables),
     ZLayer.succeed(ProgressDisplay.make(enabled = false))
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock
 
@@ -109,7 +109,7 @@ object TestRecruitmentRenameRecovery extends ZIOSpecDefault {
   )
 
   private val staleCandidate: CandidateContext =
-    CandidateContext(staleU, apiPlayerOption = Some(staleApiPlayer), isNewPlayer = false, cacheOption = None)
+    CandidateContext(username = staleU, apiPlayerOption = Some(staleApiPlayer), isNewPlayer = false, cacheOption = None)
 
   private def runContext(client: ChessComClient): RIO[Any, RunContext] =
     for {
@@ -156,7 +156,7 @@ object TestRecruitmentRenameRecovery extends ZIOSpecDefault {
       val criteria  = makeCriteria().copy(dailyMinTmGamesFinished = Some(0), dailyMaxTmTimeoutPercent = Some(50.0))
       for {
         _      <- seedRenameHistory
-        client <- fakeChessComClient(responses, failures = Set("alice-old"))
+        client <- fakeChessComClient(responses = responses, failures = Set("alice-old"))
         result <- RecruitmentStatsHelpers.fetchTmStats(
           client = client,
           username = staleU,
@@ -215,7 +215,7 @@ object TestRecruitmentRenameRecovery extends ZIOSpecDefault {
       )
       for {
         _      <- seedRenameHistory
-        client <- fakeChessComClient(responses, failures = Set("alice-old"))
+        client <- fakeChessComClient(responses = responses, failures = Set("alice-old"))
         runCtx <- runContext(client)
         cand = staleCandidate
         result <- RecruitmentFilterDefs.CheckOpponentMatch.apply(FilterEnv(runCtx, cand))
@@ -234,7 +234,7 @@ object TestRecruitmentRenameRecovery extends ZIOSpecDefault {
       )
       for {
         _      <- seedRenameHistory
-        client <- fakeChessComClient(responses, failures = Set("alice-old"))
+        client <- fakeChessComClient(responses = responses, failures = Set("alice-old"))
         runCtx <- runContext(client)
         cand = staleCandidate
         result <- RecruitmentFilterDefs.CheckClubs.apply(FilterEnv(runCtx, cand))
@@ -253,7 +253,7 @@ object TestRecruitmentRenameRecovery extends ZIOSpecDefault {
       )
       for {
         _      <- seedRenameHistory
-        client <- fakeChessComClient(responses, failures = Set("alice-old"))
+        client <- fakeChessComClient(responses = responses, failures = Set("alice-old"))
         runCtx <- runContext(client)
         cand = staleCandidate
         result <- RecruitmentFilterDefs.CheckOngoingGames.apply(FilterEnv(runCtx, cand))
@@ -272,7 +272,7 @@ object TestRecruitmentRenameRecovery extends ZIOSpecDefault {
       )
       for {
         _      <- seedRenameHistory
-        client <- fakeChessComClient(responses, failures = Set("alice-old"))
+        client <- fakeChessComClient(responses = responses, failures = Set("alice-old"))
         runCtx <- runContext(client)
         cand = staleCandidate
         result <- RecruitmentFilterDefs.CheckDailyStats.apply(FilterEnv(runCtx, cand))
@@ -376,7 +376,12 @@ object TestRecruitmentRenameRecovery extends ZIOSpecDefault {
         team2Players = List(("p2", 1))
       )
       val responses = Map(
-        s"club/${freshSlug.value}"         -> apiClubJson(600L, freshSlug.value, admins = Nil, membersCount = 5),
+        s"club/${freshSlug.value}" -> apiClubJson(
+          clubId = 600L,
+          slug = freshSlug.value,
+          admins = Nil,
+          membersCount = 5
+        ),
         s"club/${freshSlug.value}/members" -> apiClubMembersJson(List(("memberA", 0L), ("memberB", 0L))),
         s"match/8001"                      -> matchJson
       )
@@ -404,8 +409,8 @@ object TestRecruitmentRenameRecovery extends ZIOSpecDefault {
             processedBodyHash = None
           )
         )
-        _      <- ClubMatchRef.upsert(ClubMatchRef(staleClubId, matchId, isLive = false, isTeam1 = true))
-        client <- fakeChessComClient(responses, failures = Set(staleSlug.value))
+        _ <- ClubMatchRef.upsert(ClubMatchRef(clubId = staleClubId, matchId = matchId, isLive = false, isTeam1 = true))
+        client <- fakeChessComClient(responses = responses, failures = Set(staleSlug.value))
         result <- RecruitmentExplore.gatherClubCandidates(
           client = client,
           clubSlug = staleSlug,
@@ -438,7 +443,7 @@ object TestRecruitmentRenameRecovery extends ZIOSpecDefault {
     for {
       _       <- seedRenameHistory
       _       <- seedCriteria(makeCriteria())
-      client  <- fakeChessComClient(responses, failures = Set("alice-old"))
+      client  <- fakeChessComClient(responses = responses, failures = Set("alice-old"))
       run     <- runRecruit(client, sourceClubs = List(ClubSlug("source-club")))
       invited <- RecruitmentCandidate.selectInvitedByRun(run.runId)
       logged  <- ZTestLogger.logOutput.map(_.map(_.message()))
@@ -548,7 +553,7 @@ object TestRecruitmentRenameRecovery extends ZIOSpecDefault {
         _      <- seedRenameHistory
         _      <- seedCriteria(makeCriteria())
         client <- fakeChessComClient(responses = responses, failures = Set("alice-old"))
-        run    <- runRecruit(client = client, sourceClubs = List(ClubSlug("source-club")))
+        run    <- runRecruit(client, sourceClubs = List(ClubSlug("source-club")))
         rows   <- RecruitmentCandidate.selectByRun(run.runId)
       } yield assertTrue(
         run.candidatesFound == 1,

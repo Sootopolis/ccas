@@ -20,7 +20,7 @@ object TestRecruitmentEvaluation extends ZIOSpecDefault {
     suiteCacheFilters,
     suiteTmTimeouts
   ).provideShared(
-    FreshSchemaLayer("test_recruitment_evaluation", onInit = Tables.ensureTables),
+    FreshSchemaLayer(schema = "test_recruitment_evaluation", onInit = Tables.ensureTables),
     ZLayer.succeed(ProgressDisplay.make(enabled = false))
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock
 
@@ -80,10 +80,10 @@ object TestRecruitmentEvaluation extends ZIOSpecDefault {
       runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None, None)
       client     <- fakeChessComClient(responses)
       invited <- evalCandidates(
-        client,
-        runId,
-        List(Username("alice"), Username("bob"), Username("charlie")),
-        criteria,
+        client = client,
+        runId = runId,
+        candidates = List(Username("alice"), Username("bob"), Username("charlie")),
+        criteria = criteria,
         target = 2
       )
       candidates <- RecruitmentCandidate.selectByRun(runId)
@@ -103,7 +103,7 @@ object TestRecruitmentEvaluation extends ZIOSpecDefault {
       _          <- seedDb
       criteriaId <- seedCriteria(criteria)
       runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None, None)
-      client     <- fakeChessComClient(responses, failures = Set("bob"))
+      client     <- fakeChessComClient(responses = responses, failures = Set("bob"))
       invited    <- evalCandidates(client, runId, List(Username("alice"), Username("bob")), criteria)
       candidates <- RecruitmentCandidate.selectByRun(runId)
     } yield assertTrue(

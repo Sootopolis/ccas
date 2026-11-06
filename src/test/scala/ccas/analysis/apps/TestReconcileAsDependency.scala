@@ -39,7 +39,7 @@ object TestReconcileAsDependency extends ZIOSpecDefault {
       } yield assertTrue(exit.isFailure, runs == List(RunTrigger.Dependency.toString -> true))
     }
   ).provideShared(
-    FreshSchemaLayer("test_reconcile_as_dependency", onInit = Tables.ensureTables),
+    FreshSchemaLayer(schema = "test_reconcile_as_dependency", onInit = Tables.ensureTables),
     ZLayer.succeed(ProgressDisplay.make(enabled = false))
   ) @@ TestAspect.withLiveClock @@ TestAspect.sequential
 

@@ -146,8 +146,8 @@ private[recruitment] object RecruitmentFilterDefs {
         val registeredIds = playerMatches.registered.map(_.`@id`).toSet ++
           playerMatches.inProgress.map(_.`@id`).toSet
         FilterResult(
-          registeredIds.exists(env.run.clubMatchIds.contains),
-          env.candidate.copy(username = username, playerMatchesOption = Some(playerMatches))
+          rejected = registeredIds.exists(env.run.clubMatchIds.contains),
+          candidate = env.candidate.copy(username = username, playerMatchesOption = Some(playerMatches))
         )
       }
     }
@@ -169,8 +169,8 @@ private[recruitment] object RecruitmentFilterDefs {
             || env.run.excludedSlugs.exists(clubNames.contains)
         val updatedCache = getOrUpdateCache(env)(_.copy(clubCount = Some(clubCount)))
         FilterResult(
-          rejected,
-          env.candidate.copy(
+          rejected = rejected,
+          candidate = env.candidate.copy(
             username = username,
             cacheOption = Some(updatedCache),
             playerClubsOption = Some(playerClubs)
@@ -257,8 +257,9 @@ private[recruitment] object RecruitmentFilterDefs {
       // persisted it.
       (for {
         apiClub <- ApiClub.get(run.client, slug)
-          .withClubSlugRenameRecovery(run.client, slug, clubIdHint = existingClubOption.map(_.clubId)) { fresh =>
-            ApiClub.get(run.client, fresh)
+          .withClubSlugRenameRecovery(client = run.client, stale = slug, clubIdHint = existingClubOption.map(_.clubId)) {
+            fresh =>
+              ApiClub.get(run.client, fresh)
           }
         // Persist the Club row regardless — value for future runs and for ClubDataApp's slug index.
         // `Club.upsert` deliberately preserves an existing latest_match_at, so this doesn't clobber DB state.
@@ -271,7 +272,12 @@ private[recruitment] object RecruitmentFilterDefs {
             // We only reach here from the empty-admin-rows branch, so existingAdminIds is always empty.
             val adminUsernames = apiClub.adminUsernames
             ClubAdminResolver
-              .resolveAndPersistAdmins(run.client, apiClub.clubId, adminUsernames, existingAdminIds = Set.empty)
+              .resolveAndPersistAdmins(
+                client = run.client,
+                clubId = apiClub.clubId,
+                adminUsernames = adminUsernames,
+                existingAdminIds = Set.empty
+              )
               .map(_.contains(candidatePlayerId))
           }
       } yield rejected).catchAll { error =>
@@ -339,8 +345,8 @@ private[recruitment] object RecruitmentFilterDefs {
         )
         val lastDailyTimeoutAt = archives.flatMap(extractLastDailyTimeout(_, env.candidate.username))
         val mergedDailyTimeout = mergeOptionalInstants(
-          lastDailyTimeoutAt,
-          env.candidate.cacheOption.flatMap(_.lastDailyTimeoutAt)
+          a = lastDailyTimeoutAt,
+          b = env.candidate.cacheOption.flatMap(_.lastDailyTimeoutAt)
         )
         val dailyTimePerMove = dailyStats.record.timePerMove
         val criteria         = env.run.criteria

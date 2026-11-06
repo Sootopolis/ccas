@@ -29,7 +29,7 @@ object TestJobCancelWire extends ZIOSpecDefault {
     testCancelUnknownJobOverHttp,
     testCancelViaFollowInterrupt
   ).provideShared(
-    FreshSchemaLayer("test_cancel_wire", onInit = ServerTables.ensureTables),
+    FreshSchemaLayer(schema = "test_cancel_wire", onInit = ServerTables.ensureTables),
     TestChessComClientSupport.dummyLayer,
     JobRunner.live,
     ZLayer.succeed(ProgressDisplay.make(enabled = false)),

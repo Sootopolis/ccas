@@ -20,7 +20,7 @@ object TestHistoryAppNetworkOutage extends ZIOSpecDefault {
   override def spec: Spec[Any, Throwable] = suite("TestHistoryAppNetworkOutage")(
     testSeedFromMemberMatchesOutageReRaises
   ).provideShared(
-    FreshSchemaLayer("test_history_app_network_outage", onInit = Tables.ensureTables),
+    FreshSchemaLayer(schema = "test_history_app_network_outage", onInit = Tables.ensureTables),
     ZLayer.succeed(ProgressDisplay.make(enabled = false)),
     Scope.default
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock
@@ -49,9 +49,9 @@ object TestHistoryAppNetworkOutage extends ZIOSpecDefault {
         client       <- TestChessComClientSupport.networkDownClient
         exit <- HistorySeeding
           .seedFromMemberMatches(
-            client,
-            clubId,
-            clubSlug,
+            client = client,
+            clubId = clubId,
+            clubSlug = clubSlug,
             memberIds = Set(pid),
             queriedIds = Set.empty,
             memberNames = Map(pid -> username),

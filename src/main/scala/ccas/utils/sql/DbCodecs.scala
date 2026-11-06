@@ -19,7 +19,7 @@ object DbCodecs {
   }
 
   given DbCodec[URL] = DbCodec[String].biMap(
-    string =>
+    to = string =>
       if (string == null) { null }
       else {
         URL.decode(string).fold(
@@ -27,7 +27,7 @@ object DbCodecs {
           identity
         )
       },
-    url =>
+    from = url =>
       if (url == null) { null }
       else { url.encode }
   )

@@ -48,4 +48,4 @@ Wait — do not start work on the recommendation before the answers come back.
 
 ## After the pick
 
-Read whatever the issue names — the ADRs in particular — before editing `ccas.utils.client`, the cache tables, or the CLI command tree. Then plan or build, as answered, and follow CLAUDE.md's Workflow from there. Design thinking that comes out of the work belongs back in the issue, not only in the chat.
+Before planning or editing, fetch the selected issue and its full comment history again. Reconcile any changed scope, dependencies, or completed work with the shortlist recap; the recap is not the working brief. Then read whatever the issue names — the ADRs in particular — before editing `ccas.utils.client`, the cache tables, or the CLI command tree. Plan or build, as answered, and follow CLAUDE.md's Workflow from there. Design thinking that comes out of the work belongs back in the issue, not only in the chat.

@@ -29,21 +29,21 @@ object TestChessComClientPersistence extends ZIOSpecDefault {
       lastFlushedRef <- Ref.make(ClientStatsAccumulator())
       startedAt      <- ZIO.succeed(Instant.now())
       config = ChessComClient.ThrottleConfig(
-        Vector(2, 4, 8),
-        30.seconds,
-        5.seconds,
-        1.second,
-        10.seconds,
-        1.second,
-        5,
-        2,
-        3,
-        20,
-        0.2,
-        10,
-        0,
-        Duration.Zero,
-        500L
+        recoveryTiers = Vector(2, 4, 8),
+        cooldown = 30.seconds,
+        cfCooldown = 5.seconds,
+        retryBase = 1.second,
+        cfRetryDelay = 10.seconds,
+        connectionRetryBase = 1.second,
+        max429Retries = 5,
+        maxCfRetries = 2,
+        maxConnectionRetries = 3,
+        failureWindowSize = 20,
+        failureThreshold = 0.2,
+        minSampleSize = 10,
+        minRequestDelayMs = 0,
+        minTierObservation = Duration.Zero,
+        emaTauMs = 500L
       )
     } yield ClientStatsFlushContext(
       sessionId = s"test-$appLabel",

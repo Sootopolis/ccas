@@ -26,12 +26,12 @@ object StatsUtils {
 
     def +(other: PlayerBoardStats): PlayerBoardStats =
       PlayerBoardStats(
-        boards + other.boards,
-        games + other.games,
-        wins + other.wins,
-        draws + other.draws,
-        losses + other.losses,
-        pointsX2 + other.pointsX2
+        boards = boards + other.boards,
+        games = games + other.games,
+        wins = wins + other.wins,
+        draws = draws + other.draws,
+        losses = losses + other.losses,
+        pointsX2 = pointsX2 + other.pointsX2
       )
   }
 

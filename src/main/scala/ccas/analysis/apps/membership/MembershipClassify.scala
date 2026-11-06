@@ -298,9 +298,9 @@ private[membership] object MembershipClassify {
     client.getUncached[ApiPlayer](ApiPlayer.getUrl(oldUsername)).foldZIO(
       // A systemic outage must not be swallowed into the match-ref fallback (which would misclassify the member as
       // left/closed/unresolvable on incomplete data); re-raise so the run aborts before persist.
-      error =>
+      failure = error =>
         NetworkUnavailableException.recoverUnless(error)(matchRefFallback(client, storedRoster, state, apiMap, now)),
-      apiPlayer =>
+      success = apiPlayer =>
         if (apiPlayer.playerId != playerId) {
           matchRefFallback(client, storedRoster, state, apiMap, now)
         } else {
@@ -430,7 +430,12 @@ private[membership] object MembershipClassify {
     // NOT auto-reconcile: the caller propagates the rename through `updatedPlayers` so the membership reconcile
     // transaction commits the rename alongside membership changes.
     UsernameRenameResolver
-      .resolveAndVerify(client, state.player.username, Some(playerId), tournamentFallback = true)
+      .resolveAndVerify(
+        client = client,
+        staleUsername = state.player.username,
+        playerIdHint = Some(playerId),
+        tournamentFallback = true
+      )
       .flatMap {
         case None => ZIO.succeed(unresolvable)
         case Some((resolvedUsername, resolvedProfile)) =>

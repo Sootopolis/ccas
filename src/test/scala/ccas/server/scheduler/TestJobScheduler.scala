@@ -41,7 +41,7 @@ object TestJobScheduler extends ZIOSpecDefault {
       @@ TestAspect.sequential
       @@ TestAspect.timeout(30.seconds)
   ).provideShared(
-    FreshSchemaLayer("test_scheduler", onInit = ServerTables.ensureTables)
+    FreshSchemaLayer(schema = "test_scheduler", onInit = ServerTables.ensureTables)
   )
 
   // Virtual poll interval driven by TestClock; no wall-clock dependency. Each test advances by
@@ -125,10 +125,10 @@ object TestJobScheduler extends ZIOSpecDefault {
       _   <- Club.upsert(Club(schedClubId, now, ClubSlug("sched-test"), "Sched Test", None, None, None))
       _ <- JobSchedule.insert(
         JobSchedule.interval(
-          0L,
-          JobKind.Membership,
-          Some(schedClubId),
-          None,
+          id = 0L,
+          kind = JobKind.Membership,
+          clubIdOption = Some(schedClubId),
+          params = None,
           intervalHours = 0,
           enabled = true,
           lastRunAt = None
@@ -166,10 +166,10 @@ object TestJobScheduler extends ZIOSpecDefault {
       _ <- Club.upsert(Club(dueClubId, twoHoursAgo, ClubSlug("due-test"), "Due Test", None, None, None))
       _ <- JobSchedule.insert(
         JobSchedule.interval(
-          0L,
-          JobKind.Membership,
-          Some(dueClubId),
-          None,
+          id = 0L,
+          kind = JobKind.Membership,
+          clubIdOption = Some(dueClubId),
+          params = None,
           intervalHours = 1,
           enabled = true,
           lastRunAt = Some(twoHoursAgo)
@@ -199,13 +199,13 @@ object TestJobScheduler extends ZIOSpecDefault {
       // virtual clock. lastRunAt = now ⇒ the first boundary crossed by advancing the clock is due.
       _ <- JobSchedule.insert(
         JobSchedule.cron(
-          0L,
-          JobKind.Membership,
-          Some(cronClubId),
-          None,
-          "0 * * * * ?",
-          "UTC",
-          MisfirePolicy.CatchUp,
+          id = 0L,
+          kind = JobKind.Membership,
+          clubIdOption = Some(cronClubId),
+          params = None,
+          cronExpr = "0 * * * * ?",
+          timezone = "UTC",
+          misfire = MisfirePolicy.CatchUp,
           enabled = true,
           lastRunAt = Some(now)
         )
@@ -234,10 +234,10 @@ object TestJobScheduler extends ZIOSpecDefault {
       _   <- Club.upsert(Club(ctrlClubId, now, ClubSlug("notdue-ctrl"), "Ctrl Always-Due", None, None, None))
       _ <- JobSchedule.insert(
         JobSchedule.interval(
-          0L,
-          JobKind.Membership,
-          Some(notDueClubId),
-          None,
+          id = 0L,
+          kind = JobKind.Membership,
+          clubIdOption = Some(notDueClubId),
+          params = None,
           intervalHours = 24,
           enabled = true,
           lastRunAt = Some(now)
@@ -248,10 +248,10 @@ object TestJobScheduler extends ZIOSpecDefault {
       // `ZIO.sleep(200.millis)` race; now still useful as a sync signal under sequential execution.
       _ <- JobSchedule.insert(
         JobSchedule.interval(
-          0L,
-          JobKind.Membership,
-          Some(ctrlClubId),
-          None,
+          id = 0L,
+          kind = JobKind.Membership,
+          clubIdOption = Some(ctrlClubId),
+          params = None,
           intervalHours = 0,
           enabled = true,
           lastRunAt = None
@@ -283,10 +283,10 @@ object TestJobScheduler extends ZIOSpecDefault {
       _   <- Club.upsert(Club(ctrlClubId, now, ClubSlug("disabled-ctrl"), "Ctrl Always-Due", None, None, None))
       _ <- JobSchedule.insert(
         JobSchedule.interval(
-          0L,
-          JobKind.Membership,
-          Some(disabledClubId),
-          None,
+          id = 0L,
+          kind = JobKind.Membership,
+          clubIdOption = Some(disabledClubId),
+          params = None,
           intervalHours = 0,
           enabled = false,
           lastRunAt = None
@@ -295,10 +295,10 @@ object TestJobScheduler extends ZIOSpecDefault {
       // Always-due control to anchor the assertion on a full pollLoop iteration completing.
       _ <- JobSchedule.insert(
         JobSchedule.interval(
-          0L,
-          JobKind.Membership,
-          Some(ctrlClubId),
-          None,
+          id = 0L,
+          kind = JobKind.Membership,
+          clubIdOption = Some(ctrlClubId),
+          params = None,
           intervalHours = 0,
           enabled = true,
           lastRunAt = None
@@ -346,10 +346,10 @@ object TestJobScheduler extends ZIOSpecDefault {
       _   <- Club.upsert(Club(errorClubId, now, ClubSlug("error-test"), "Error Test", None, None, None))
       _ <- JobSchedule.insert(
         JobSchedule.interval(
-          0L,
-          JobKind.Membership,
-          Some(errorClubId),
-          None,
+          id = 0L,
+          kind = JobKind.Membership,
+          clubIdOption = Some(errorClubId),
+          params = None,
           intervalHours = 0,
           enabled = true,
           lastRunAt = None
@@ -401,10 +401,10 @@ object TestJobScheduler extends ZIOSpecDefault {
         _   <- Club.upsert(Club(goodClubId, now, ClubSlug("good-sched"), "Good", None, None, None))
         _ <- JobSchedule.insert(
           JobSchedule.interval(
-            0L,
-            JobKind.Membership,
-            Some(failClubId),
-            None,
+            id = 0L,
+            kind = JobKind.Membership,
+            clubIdOption = Some(failClubId),
+            params = None,
             intervalHours = 0,
             enabled = true,
             lastRunAt = None
@@ -412,10 +412,10 @@ object TestJobScheduler extends ZIOSpecDefault {
         )
         _ <- JobSchedule.insert(
           JobSchedule.interval(
-            0L,
-            JobKind.History,
-            Some(goodClubId),
-            None,
+            id = 0L,
+            kind = JobKind.History,
+            clubIdOption = Some(goodClubId),
+            params = None,
             intervalHours = 0,
             enabled = true,
             lastRunAt = None
@@ -472,10 +472,10 @@ object TestJobScheduler extends ZIOSpecDefault {
         // Due (last run 2h ago, 1h interval). Each tick re-selects it; submit always conflicts.
         scheduleId <- JobSchedule.insert(
           JobSchedule.interval(
-            0L,
-            JobKind.Membership,
-            Some(conflictClubId),
-            None,
+            id = 0L,
+            kind = JobKind.Membership,
+            clubIdOption = Some(conflictClubId),
+            params = None,
             intervalHours = 1,
             enabled = true,
             lastRunAt = Some(twoHoursAgo)
@@ -509,10 +509,10 @@ object TestJobScheduler extends ZIOSpecDefault {
         scheduler = new JobScheduler.JobSchedulerLive(runner, pgClient, pollInterval)
         _ <- JobSchedule.insert(
           JobSchedule.interval(
-            0L,
-            JobKind.ClubData,
-            None,
-            Some(paramsJson),
+            id = 0L,
+            kind = JobKind.ClubData,
+            clubIdOption = None,
+            params = Some(paramsJson),
             intervalHours = 0,
             enabled = true,
             lastRunAt = None
@@ -546,10 +546,10 @@ object TestJobScheduler extends ZIOSpecDefault {
         // Malformed-params global job: decode fails before submit and must not block the control.
         _ <- JobSchedule.insert(
           JobSchedule.interval(
-            0L,
-            JobKind.ClubData,
-            None,
-            Some("{not-json"),
+            id = 0L,
+            kind = JobKind.ClubData,
+            clubIdOption = None,
+            params = Some("{not-json"),
             intervalHours = 0,
             enabled = true,
             lastRunAt = None
@@ -557,10 +557,10 @@ object TestJobScheduler extends ZIOSpecDefault {
         )
         _ <- JobSchedule.insert(
           JobSchedule.interval(
-            0L,
-            JobKind.Membership,
-            Some(ctrlClubId),
-            None,
+            id = 0L,
+            kind = JobKind.Membership,
+            clubIdOption = Some(ctrlClubId),
+            params = None,
             intervalHours = 0,
             enabled = true,
             lastRunAt = None

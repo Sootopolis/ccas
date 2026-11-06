@@ -132,9 +132,9 @@ object ScheduleRoutes {
       case TriggerType.Interval =>
         for {
           _ <- Either.cond(
-            body.cron.isEmpty && body.timezone.isEmpty && body.misfire.isEmpty,
-            (),
-            "interval trigger takes only intervalHours, not cron/timezone/misfire"
+            test = body.cron.isEmpty && body.timezone.isEmpty && body.misfire.isEmpty,
+            right = (),
+            left = "interval trigger takes only intervalHours, not cron/timezone/misfire"
           )
           ih <- body.intervalHours.toRight("intervalHours is required for an interval trigger")
           _  <- Either.cond(ih > 0 && ih <= Short.MaxValue, (), intervalRangeMsg)
@@ -177,9 +177,9 @@ object ScheduleRoutes {
       case TriggerType.Interval =>
         for {
           _ <- Either.cond(
-            body.cron.isEmpty && body.timezone.isEmpty && body.misfire.isEmpty,
-            (),
-            "cannot set cron/timezone/misfire on an interval schedule"
+            test = body.cron.isEmpty && body.timezone.isEmpty && body.misfire.isEmpty,
+            right = (),
+            left = "cannot set cron/timezone/misfire on an interval schedule"
           )
           _ <- Either.cond(body.intervalHours.forall(h => h > 0 && h <= Short.MaxValue), (), intervalRangeMsg)
         } yield UpdateArgs(body.intervalHours.map(_.toShort), None, None, None, body.enabled, body.params.map(Some(_)))
@@ -231,13 +231,13 @@ object ScheduleRoutes {
         existing <- JobSchedule.selectId(id).someOrFail(NotFoundException(s"Schedule $id not found"))
         args     <- ZIO.fromEither(buildUpdate(existing, body)).mapError(BadRequestException(_))
         _ <- JobSchedule.update(
-          id,
-          args.intervalHours,
-          args.cronExpr,
-          args.timezone,
-          args.misfirePolicy,
-          args.enabled,
-          args.params
+          id = id,
+          intervalHours = args.intervalHours,
+          cronExpr = args.cronExpr,
+          timezone = args.timezone,
+          misfirePolicy = args.misfirePolicy,
+          enabled = args.enabled,
+          params = args.params
         )
         updated <- JobSchedule.selectId(id).someOrFail(NotFoundException(s"Schedule $id not found"))
       } yield jsonResponse(Status.Ok, ScheduleResponse.fromSchedule(updated))

@@ -61,7 +61,7 @@ object TestHistoryMembers extends ZIOSpecDefault {
       } yield assertTrue(names == Chunk(player.username.value), members.isEmpty)
     }
   ).provideShared(
-    FreshSchemaLayer("test_history_members", onInit = Tables.ensureTables),
+    FreshSchemaLayer(schema = "test_history_members", onInit = Tables.ensureTables),
     ZLayer.succeed(ProgressDisplay.make(enabled = false))
   ) @@ TestAspect.withLiveClock
 

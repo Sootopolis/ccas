@@ -30,8 +30,8 @@ final case class PlayerRecruitmentCache(
 object PlayerRecruitmentCache {
   def empty(playerId: PlayerId, fetchedAt: Instant, clubCount: Option[Int]): PlayerRecruitmentCache =
     PlayerRecruitmentCache(
-      playerId,
-      fetchedAt,
+      playerId = playerId,
+      fetchedAt = fetchedAt,
       dailyElo = None,
       dailyScoreRate = None,
       dailyTimeoutPct = None,

@@ -92,7 +92,7 @@ object ClubSlugRenameResolver {
   ): RIO[PostgresClient, ResolvedClub] =
     fetchOrRecover(client, slug, expected).tap { resolved =>
       ZIO.foreachDiscard(expected.filter(_ != resolved.api.clubId)) { id =>
-        ZIO.fail(ClubMismatchException(slug, expected = id, actual = resolved.api.clubId))
+        ZIO.fail(ClubMismatchException(slug = slug, expected = id, actual = resolved.api.clubId))
       }
     }
 

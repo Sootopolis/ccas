@@ -25,7 +25,7 @@ object TestRecruitmentAppCore extends ZIOSpecDefault {
     suiteReport,
     suiteMatchRefWriting
   ).provideShared(
-    FreshSchemaLayer("test_recruitment_app_core", onInit = Tables.ensureTables),
+    FreshSchemaLayer(schema = "test_recruitment_app_core", onInit = Tables.ensureTables),
     ZLayer.succeed(ProgressDisplay.make(enabled = false))
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock
 
@@ -429,14 +429,14 @@ object TestRecruitmentAppCore extends ZIOSpecDefault {
         _       <- seedCriteria(makeCriteria())
         clientA <- fakeChessComClient(responses("candidate-a", 200))
         _ <- runRecruit(
-          client = clientA,
+          clientA,
           sourceClubs = List(ClubSlug("source-club")),
           target = Some(3),
           cumulative = true
         )
         clientB <- fakeChessComClient(responses("candidate-b", 201))
         runB <- runRecruit(
-          client = clientB,
+          clientB,
           sourceClubs = List(ClubSlug("source-club")),
           target = Some(3),
           cumulative = true
@@ -537,7 +537,7 @@ object TestRecruitmentAppCore extends ZIOSpecDefault {
           finishedMatches = List((matchId, 3))
         ),
         s"match/$matchId" -> apiDailyMatchJson(
-          matchId,
+          matchId = matchId,
           team1Club = "alpha-club",
           team2Club = "beta-club",
           team1Players = List(("ref-api-player", 3)),
@@ -566,7 +566,7 @@ object TestRecruitmentAppCore extends ZIOSpecDefault {
         s"club/$clubSlug/members" -> apiClubMembersJson(Nil),
         s"club/$clubSlug/matches" -> apiClubMatchesJson(finishedIds = List(matchId)),
         s"match/$matchId" -> apiDailyMatchJson(
-          matchId,
+          matchId = matchId,
           team1Club = clubSlug.value,
           team2Club = "opponent-club",
           team1Players = List(("player-a", 1)),

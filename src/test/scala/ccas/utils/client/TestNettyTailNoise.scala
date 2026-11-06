@@ -22,8 +22,8 @@ object TestNettyTailNoise extends ZIOSpecDefault {
 
   private def nettyMissingResponse: LogRecord =
     record(
-      Level.WARNING,
-      Some(new PrematureChannelClosureException("channel gone inactive with 1 missing response(s)"))
+      level = Level.WARNING,
+      thrown = Some(new PrematureChannelClosureException("channel gone inactive with 1 missing response(s)"))
     )
 
   override def spec: Spec[Any, Throwable] = suite("NettyTailNoise")(
@@ -32,8 +32,8 @@ object TestNettyTailNoise extends ZIOSpecDefault {
     },
     test("keeps zio-http's own PrematureChannelClosureException — that one names a request that really failed") {
       val r = record(
-        Level.WARNING,
-        Some(
+        level = Level.WARNING,
+        thrown = Some(
           new PrematureChannelClosureException(
             "Channel closed while executing the request. This is likely caused due to a client connection misconfiguration"
           )
@@ -49,8 +49,8 @@ object TestNettyTailNoise extends ZIOSpecDefault {
     // is new information rather than the echo this filter exists to drop.
     test("keeps a count above one") {
       val r = record(
-        Level.WARNING,
-        Some(new PrematureChannelClosureException("channel gone inactive with 2 missing response(s)"))
+        level = Level.WARNING,
+        thrown = Some(new PrematureChannelClosureException("channel gone inactive with 2 missing response(s)"))
       )
       assertTrue(!NettyTailNoise.isMissingResponseNoise(r))
     },
@@ -63,8 +63,8 @@ object TestNettyTailNoise extends ZIOSpecDefault {
     },
     test("keeps the same throwable logged below WARNING") {
       val r = record(
-        Level.FINE,
-        Some(new PrematureChannelClosureException("channel gone inactive with 1 missing response(s)"))
+        level = Level.FINE,
+        thrown = Some(new PrematureChannelClosureException("channel gone inactive with 1 missing response(s)"))
       )
       assertTrue(!NettyTailNoise.isMissingResponseNoise(r))
     },

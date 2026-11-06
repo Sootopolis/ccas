@@ -230,19 +230,19 @@ object TestCliParser extends ZIOSpecDefault {
         ),
         n.contains(
           CliCommand.Recruit(
-            DefaultServer,
-            None,
-            None,
-            None,
-            None,
-            false,
-            Nil,
-            None,
-            None,
-            false,
-            true,
-            Some(42),
-            false
+            server = DefaultServer,
+            club = None,
+            clubIdOption = None,
+            alias = None,
+            target = None,
+            cumulative = false,
+            sourceClubs = Nil,
+            timeLimitMinutes = None,
+            explore = None,
+            stdout = false,
+            report = true,
+            runId = Some(42),
+            noProgress = false
           )
         )
       )

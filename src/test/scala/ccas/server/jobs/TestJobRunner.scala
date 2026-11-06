@@ -57,7 +57,7 @@ object TestJobRunner extends ZIOSpecDefault {
     testSweepLogsRemovesAgedLogsAndSparesLiveJobs,
     testSweepLogsIgnoresANonPositiveRetentionWindow
   ).provideShared(
-    FreshSchemaLayer("test_job_runner", onInit = ServerTables.ensureTables),
+    FreshSchemaLayer(schema = "test_job_runner", onInit = ServerTables.ensureTables),
     TestChessComClientSupport.dummyLayer,
     JobRunner.live,
     // #132 regression seam: provide ProgressDisplay as a plain *service* with NO ambient ZLogger. `ProgressDisplay.live`
@@ -160,11 +160,11 @@ object TestJobRunner extends ZIOSpecDefault {
         started <- Promise.make[Nothing, Unit]
         gate    <- Promise.make[Nothing, Unit]
         id <- runner.submit(
-          JobKind.Membership,
-          Some(clubIdA),
-          None,
-          RunTrigger.Cli,
-          _ => (started.succeed(()) *> gate.await).uninterruptible
+          kind = JobKind.Membership,
+          clubIdOption = Some(clubIdA),
+          params = None,
+          trigger = RunTrigger.Cli,
+          effect = _ => (started.succeed(()) *> gate.await).uninterruptible
         )
         _ <- started.await
         _ <- runner.cancel(id) // registers id in cancelRequested; the forked interrupt can't land (uninterruptible)
@@ -186,11 +186,11 @@ object TestJobRunner extends ZIOSpecDefault {
       gate   <- Promise.make[Nothing, Unit]
       fibers <- ZIO.foreach(List.fill(5)(())) { _ =>
         (gate.await *> runner.submit(
-          JobKind.Recruitment,
-          Some(ClubId(204)),
-          None,
-          RunTrigger.Cli,
-          _ => ZIO.never
+          kind = JobKind.Recruitment,
+          clubIdOption = Some(ClubId(204)),
+          params = None,
+          trigger = RunTrigger.Cli,
+          effect = _ => ZIO.never
         ).either).fork
       }
       _       <- gate.succeed(())
@@ -430,11 +430,11 @@ object TestJobRunner extends ZIOSpecDefault {
         started <- Promise.make[Nothing, Unit]
         release <- Promise.make[Nothing, Unit]
         id <- runner.submit(
-          JobKind.MatchRef,
-          None,
-          None,
-          RunTrigger.Cli,
-          _ => ZIO.logInfo("still running") *> started.succeed(()) *> release.await
+          kind = JobKind.MatchRef,
+          clubIdOption = None,
+          params = None,
+          trigger = RunTrigger.Cli,
+          effect = _ => ZIO.logInfo("still running") *> started.succeed(()) *> release.await
         )
         _ <- started.await
         liveLog = logDir.resolve(s"${JobRunId.unwrap(id)}.log")
@@ -482,11 +482,11 @@ object TestJobRunner extends ZIOSpecDefault {
       _      <- deleteAllJobRuns
       runner <- ZIO.service[JobRunner]
       id <- runner.submit(
-        JobKind.MatchRef,
-        None,
-        None,
-        RunTrigger.Cli,
-        _ => ZIO.logInfo("line one") *> ZIO.logInfo("line two")
+        kind = JobKind.MatchRef,
+        clubIdOption = None,
+        params = None,
+        trigger = RunTrigger.Cli,
+        effect = _ => ZIO.logInfo("line one") *> ZIO.logInfo("line two")
       )
       _      <- awaitStatus(runner, id)
       logs   <- runner.logStream(id)
@@ -534,11 +534,11 @@ object TestJobRunner extends ZIOSpecDefault {
         started <- Promise.make[Nothing, Unit]
         release <- Promise.make[Nothing, Unit]
         id <- runner.submit(
-          JobKind.MatchRef,
-          None,
-          None,
-          RunTrigger.Cli,
-          _ => started.succeed(()) *> release.await
+          kind = JobKind.MatchRef,
+          clubIdOption = None,
+          params = None,
+          trigger = RunTrigger.Cli,
+          effect = _ => started.succeed(()) *> release.await
         )
         _      <- started.await
         _      <- ZIO.attempt(Files.deleteIfExists(logDir.resolve(s"${JobRunId.unwrap(id)}.log")))
@@ -566,11 +566,11 @@ object TestJobRunner extends ZIOSpecDefault {
         runner <- ZIO.service[JobRunner]
         gate   <- Promise.make[Nothing, Unit]
         id <- runner.submit(
-          JobKind.MatchRef,
-          None,
-          None,
-          RunTrigger.Cli,
-          _ =>
+          kind = JobKind.MatchRef,
+          clubIdOption = None,
+          params = None,
+          trigger = RunTrigger.Cli,
+          effect = _ =>
             ZIO.scoped {
               for {
                 bar <- ProgressDisplay.progressBar
@@ -608,11 +608,11 @@ object TestJobRunner extends ZIOSpecDefault {
       gate   <- Promise.make[Nothing, Unit]
       // The job logs a line, then blocks on the gate so it stays Running while we subscribe.
       id <- runner.submit(
-        JobKind.MatchRef,
-        None,
-        None,
-        RunTrigger.Cli,
-        _ => ZIO.logInfo("streaming line") *> gate.await
+        kind = JobKind.MatchRef,
+        clubIdOption = None,
+        params = None,
+        trigger = RunTrigger.Cli,
+        effect = _ => ZIO.logInfo("streaming line") *> gate.await
       )
       logs    <- runner.logStream(id)
       stream  <- streamingLines(logs)

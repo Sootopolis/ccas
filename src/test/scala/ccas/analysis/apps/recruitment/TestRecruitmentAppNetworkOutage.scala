@@ -20,7 +20,7 @@ object TestRecruitmentAppNetworkOutage extends ZIOSpecDefault {
   override def spec: Spec[Any, Throwable] = suite("TestRecruitmentAppNetworkOutage")(
     testEvaluateCandidateOutageReRaises
   ).provideShared(
-    FreshSchemaLayer("test_recruitment_app_network_outage", onInit = Tables.ensureTables),
+    FreshSchemaLayer(schema = "test_recruitment_app_network_outage", onInit = Tables.ensureTables),
     Scope.default
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock
 
@@ -41,17 +41,17 @@ object TestRecruitmentAppNetworkOutage extends ZIOSpecDefault {
         discovered <- Ref.make(Set.empty[Username])
         failed     <- Ref.make(Set.empty[ClubSlug])
         runCtx = RunContext(
-          client,
-          criteria,
-          clubId,
-          "default",
-          Set.empty,
-          Set.empty,
-          Set.empty,
-          Set.empty,
-          Instant.now(),
-          discovered,
-          failed
+          client = client,
+          criteria = criteria,
+          clubId = clubId,
+          alias = "default",
+          clubMatchIds = Set.empty,
+          formerMemberIds = Set.empty,
+          adminExcludedPlayerIds = Set.empty,
+          excludedSlugs = Set.empty,
+          now = Instant.now(),
+          discoveredOpponents = discovered,
+          failedAdminSlugs = failed
         )
         filters = RecruitmentFilters.buildFilterChain(criteria)
         exit       <- RecruitmentFilters.evaluateCandidate(runId, Username("bob"), runCtx, filters).exit

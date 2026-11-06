@@ -27,7 +27,7 @@ object TestPlayerSql extends ZIOSpecDefault {
     testSelectHistory,
     testUpdateCurrentStateOptimistic
   ).provideShared(
-    FreshSchemaLayer("test_player_sql", onInit = Tables.ensureTables)
+    FreshSchemaLayer(schema = "test_player_sql", onInit = Tables.ensureTables)
   ) @@ TestAspect.sequential
 
   private object Times {

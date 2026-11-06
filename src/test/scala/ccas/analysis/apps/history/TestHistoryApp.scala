@@ -124,32 +124,32 @@ object TestHistoryApp extends ZIOSpecDefault {
 
   private def testIsClubDailyMatchAcceptsOwnClub = test("isClubDailyMatch accepts match for target club") {
     val m = makePlayerMatch(
-      "https://api.chess.com/pub/club/devon-chess",
-      "https://api.chess.com/pub/match/1597947"
+      clubUrl = "https://api.chess.com/pub/club/devon-chess",
+      idUrl = "https://api.chess.com/pub/match/1597947"
     )
     assertTrue(HistorySeeding.isClubDailyMatch(m, ClubSlug("devon-chess")))
   }
 
   private def testIsClubDailyMatchRejectsOtherClub = test("isClubDailyMatch rejects match for different club") {
     val m = makePlayerMatch(
-      "https://api.chess.com/pub/club/other-club",
-      "https://api.chess.com/pub/match/1597947"
+      clubUrl = "https://api.chess.com/pub/club/other-club",
+      idUrl = "https://api.chess.com/pub/match/1597947"
     )
     assertTrue(!HistorySeeding.isClubDailyMatch(m, ClubSlug("devon-chess")))
   }
 
   private def testIsClubDailyMatchRejectsLiveMatch = test("isClubDailyMatch rejects live match") {
     val m = makePlayerMatch(
-      "https://api.chess.com/pub/club/devon-chess",
-      "https://api.chess.com/pub/match/live/1597947"
+      clubUrl = "https://api.chess.com/pub/club/devon-chess",
+      idUrl = "https://api.chess.com/pub/match/live/1597947"
     )
     assertTrue(!HistorySeeding.isClubDailyMatch(m, ClubSlug("devon-chess")))
   }
 
   private def testIsClubDailyMatchCaseInsensitive = test("isClubDailyMatch is case-insensitive on club name") {
     val m = makePlayerMatch(
-      "https://api.chess.com/pub/club/Devon-Chess",
-      "https://api.chess.com/pub/match/1597947"
+      clubUrl = "https://api.chess.com/pub/club/Devon-Chess",
+      idUrl = "https://api.chess.com/pub/match/1597947"
     )
     assertTrue(HistorySeeding.isClubDailyMatch(m, ClubSlug("devon-chess")))
   }
@@ -169,8 +169,8 @@ object TestHistoryApp extends ZIOSpecDefault {
 
   private def testWhiteWinsWinnerIsWhitesTeam = test("white wins → winner is white's team, detail is loss reason") {
     val outcome = HistoryBoardBuilder.normalizeGameOutcome(
-      Some(GameResultDetail.Win),
-      Some(GameResultDetail.Checkmated),
+      whiteResult = Some(GameResultDetail.Win),
+      blackResult = Some(GameResultDetail.Checkmated),
       whiteTeamIsTeam1 = true
     )
     assertTrue(
@@ -181,8 +181,8 @@ object TestHistoryApp extends ZIOSpecDefault {
 
   private def testBlackWinsWinnerIsBlacksTeam = test("black wins → winner is black's team, detail is loss reason") {
     val outcome = HistoryBoardBuilder.normalizeGameOutcome(
-      Some(GameResultDetail.Resigned),
-      Some(GameResultDetail.Win),
+      whiteResult = Some(GameResultDetail.Resigned),
+      blackResult = Some(GameResultDetail.Win),
       whiteTeamIsTeam1 = true
     )
     assertTrue(
@@ -193,8 +193,8 @@ object TestHistoryApp extends ZIOSpecDefault {
 
   private def testDrawWinnerIsDraw = test("draw → winner is Draw, detail is draw reason") {
     val outcome = HistoryBoardBuilder.normalizeGameOutcome(
-      Some(GameResultDetail.Stalemate),
-      Some(GameResultDetail.Stalemate),
+      whiteResult = Some(GameResultDetail.Stalemate),
+      blackResult = Some(GameResultDetail.Stalemate),
       whiteTeamIsTeam1 = true
     )
     assertTrue(
@@ -204,14 +204,15 @@ object TestHistoryApp extends ZIOSpecDefault {
   }
 
   private def testNotPlayedBothNone = test("not played → both None") {
-    val outcome = HistoryBoardBuilder.normalizeGameOutcome(None, None, whiteTeamIsTeam1 = true)
+    val outcome =
+      HistoryBoardBuilder.normalizeGameOutcome(whiteResult = None, blackResult = None, whiteTeamIsTeam1 = true)
     assertTrue(outcome.winner.isEmpty, outcome.detail.isEmpty)
   }
 
   private def testFalseFlipsWinnerMapping = test("whiteTeamIsTeam1=false flips winner mapping") {
     val outcome = HistoryBoardBuilder.normalizeGameOutcome(
-      Some(GameResultDetail.Win),
-      Some(GameResultDetail.Timeout),
+      whiteResult = Some(GameResultDetail.Win),
+      blackResult = Some(GameResultDetail.Timeout),
       whiteTeamIsTeam1 = false
     )
     assertTrue(
@@ -222,8 +223,8 @@ object TestHistoryApp extends ZIOSpecDefault {
 
   private def testFalseBlackWinsTeam1 = test("whiteTeamIsTeam1=false black wins → Team1") {
     val outcome = HistoryBoardBuilder.normalizeGameOutcome(
-      Some(GameResultDetail.Resigned),
-      Some(GameResultDetail.Win),
+      whiteResult = Some(GameResultDetail.Resigned),
+      blackResult = Some(GameResultDetail.Win),
       whiteTeamIsTeam1 = false
     )
     assertTrue(
@@ -249,8 +250,8 @@ object TestHistoryApp extends ZIOSpecDefault {
 
   private def testTeam1WinsBothGames = test("normal scoring: team1 wins both games") {
     val score = HistoryBoardBuilder.computeScoreX2(
-      Some(BoardGameWinner.Team1),
-      Some(BoardGameWinner.Team1),
+      game1Winner = Some(BoardGameWinner.Team1),
+      game2Winner = Some(BoardGameWinner.Team1),
       team1FairPlay = false,
       team2FairPlay = false
     )
@@ -259,8 +260,8 @@ object TestHistoryApp extends ZIOSpecDefault {
 
   private def testSplitResults = test("normal scoring: split results") {
     val score = HistoryBoardBuilder.computeScoreX2(
-      Some(BoardGameWinner.Team1),
-      Some(BoardGameWinner.Team2),
+      game1Winner = Some(BoardGameWinner.Team1),
+      game2Winner = Some(BoardGameWinner.Team2),
       team1FairPlay = false,
       team2FairPlay = false
     )
@@ -269,8 +270,8 @@ object TestHistoryApp extends ZIOSpecDefault {
 
   private def testBothDraws = test("normal scoring: both draws") {
     val score = HistoryBoardBuilder.computeScoreX2(
-      Some(BoardGameWinner.Draw),
-      Some(BoardGameWinner.Draw),
+      game1Winner = Some(BoardGameWinner.Draw),
+      game2Winner = Some(BoardGameWinner.Draw),
       team1FairPlay = false,
       team2FairPlay = false
     )
@@ -279,8 +280,8 @@ object TestHistoryApp extends ZIOSpecDefault {
 
   private def testTeam1BannedTeam2Gets2PerGame = test("team1 banned: team2 gets 2 per game") {
     val score = HistoryBoardBuilder.computeScoreX2(
-      Some(BoardGameWinner.Team2),
-      Some(BoardGameWinner.Team2),
+      game1Winner = Some(BoardGameWinner.Team2),
+      game2Winner = Some(BoardGameWinner.Team2),
       team1FairPlay = true,
       team2FairPlay = false
     )
@@ -289,8 +290,8 @@ object TestHistoryApp extends ZIOSpecDefault {
 
   private def testTeam2BannedTeam1Gets2PerGame = test("team2 banned: team1 gets 2 per game") {
     val score = HistoryBoardBuilder.computeScoreX2(
-      Some(BoardGameWinner.Team2),
-      Some(BoardGameWinner.Team2),
+      game1Winner = Some(BoardGameWinner.Team2),
+      game2Winner = Some(BoardGameWinner.Team2),
       team1FairPlay = false,
       team2FairPlay = true
     )
@@ -299,8 +300,8 @@ object TestHistoryApp extends ZIOSpecDefault {
 
   private def testBothBannedEachGets1PerGame = test("both players banned: each gets 1 per game") {
     val score = HistoryBoardBuilder.computeScoreX2(
-      Some(BoardGameWinner.Team1),
-      Some(BoardGameWinner.Team1),
+      game1Winner = Some(BoardGameWinner.Team1),
+      game2Winner = Some(BoardGameWinner.Team1),
       team1FairPlay = true,
       team2FairPlay = true
     )
@@ -309,8 +310,8 @@ object TestHistoryApp extends ZIOSpecDefault {
 
   private def testGameNotPlayedBothGet0 = test("game not played: both get 0") {
     val score = HistoryBoardBuilder.computeScoreX2(
-      None,
-      None,
+      game1Winner = None,
+      game2Winner = None,
       team1FairPlay = false,
       team2FairPlay = false
     )
@@ -319,8 +320,8 @@ object TestHistoryApp extends ZIOSpecDefault {
 
   private def testOneGamePlayedOneNot = test("one game played, one not") {
     val score = HistoryBoardBuilder.computeScoreX2(
-      Some(BoardGameWinner.Team1),
-      None,
+      game1Winner = Some(BoardGameWinner.Team1),
+      game2Winner = None,
       team1FairPlay = false,
       team2FairPlay = false
     )

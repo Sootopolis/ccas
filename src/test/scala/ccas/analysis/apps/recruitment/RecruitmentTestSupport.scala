@@ -233,9 +233,9 @@ object RecruitmentTestSupport {
       s"""{"@id": "https://api.chess.com/pub/club/$club", "name": "${club.capitalize}", "url": "https://www.chess.com/club/$club", "score": 10.0, "result": "$result", "players": [$playersStr], "fair_play_removals": []}"""
     }
     s"""{"@id": "https://api.chess.com/pub/match/$matchId", "name": "Match $matchId", "url": "https://www.chess.com/club/matches/$matchId", "status": "finished", "start_time": ${TestTimes.t0.getEpochSecond}, "end_time": ${TestTimes.t1.getEpochSecond}, "boards": ${(team1Players ++ team2Players).size}, "settings": {"rules": "chess", "time_class": "daily", "time_control": "1/259200", "min_required_games": 0}, "teams": {"team1": ${teamJson(
-        team1Club,
-        team1Players,
-        "win"
+        club = team1Club,
+        players = team1Players,
+        result = "win"
       )}, "team2": ${teamJson(team2Club, team2Players, "lose")}}}"""
   }
 
@@ -396,7 +396,7 @@ object RecruitmentTestSupport {
               ZIO.succeed(resp)
           }
         }.sandbox
-      val routes = buildRoutes(responses, playerProfileOverride = Some(blockingPlayerRoute))
+      val routes = buildRoutes(responses = responses, playerProfileOverride = Some(blockingPlayerRoute))
       val driver = new ZClient.Driver[Any, Scope, Throwable] {
         override def request(
           version: Version,
@@ -421,38 +421,38 @@ object RecruitmentTestSupport {
           ZIO.die(new UnsupportedOperationException)
       }
       val refs = ChessComClient.ThrottleRefs(
-        stateRef,
-        activeRef,
-        rateLimitGate,
-        lastReqRef
+        stateRef = stateRef,
+        activeRef = activeRef,
+        rateLimitGate = rateLimitGate,
+        lastRequestRef = lastReqRef
       )
       ChessComClient(
-        ZClient.fromDriver(driver),
-        pgClient,
-        bodyStore,
-        Headers.empty,
-        refs,
-        stats,
-        bar,
-        ChessComClient.ThrottleConfig(
-          Vector(2, 5),
-          30.seconds,
-          5.seconds,
-          1.second,
-          10.seconds,
-          1.second,
-          5,
-          2,
-          3,
-          20,
-          0.2,
-          10,
-          0,
-          Duration.ZERO,
-          500L
+        client = ZClient.fromDriver(driver),
+        pgClient = pgClient,
+        bodyStore = bodyStore,
+        headers = Headers.empty,
+        throttle = refs,
+        statsRef = stats,
+        progressBar = bar,
+        config = ChessComClient.ThrottleConfig(
+          recoveryTiers = Vector(2, 5),
+          cooldown = 30.seconds,
+          cfCooldown = 5.seconds,
+          retryBase = 1.second,
+          cfRetryDelay = 10.seconds,
+          connectionRetryBase = 1.second,
+          max429Retries = 5,
+          maxCfRetries = 2,
+          maxConnectionRetries = 3,
+          failureWindowSize = 20,
+          failureThreshold = 0.2,
+          minSampleSize = 10,
+          minRequestDelayMs = 0,
+          minTierObservation = Duration.ZERO,
+          emaTauMs = 500L
         ),
-        recoveryFiberRef,
-        ZIO.unit
+        recoveryFiberRef = recoveryFiberRef,
+        endSessionEffect = ZIO.unit
       )
     }
 
@@ -568,17 +568,17 @@ object RecruitmentTestSupport {
       excludedSlugs <- ZIO.foreach(criteria.excludeClubs)(Club.selectId)
         .map(_.flatten.map(_.slug).toSet)
       runCtx = RunContext(
-        client,
-        criteria,
-        clubId,
-        "default",
-        targetMatchIds,
-        formerMemberIds,
-        adminExcludedPlayerIds,
-        excludedSlugs,
-        Instant.now(),
-        discoveredOpponents,
-        failedAdminSlugs
+        client = client,
+        criteria = criteria,
+        clubId = clubId,
+        alias = "default",
+        clubMatchIds = targetMatchIds,
+        formerMemberIds = formerMemberIds,
+        adminExcludedPlayerIds = adminExcludedPlayerIds,
+        excludedSlugs = excludedSlugs,
+        now = Instant.now(),
+        discoveredOpponents = discoveredOpponents,
+        failedAdminSlugs = failedAdminSlugs
       )
       filters = RecruitmentFilters.buildFilterChain(criteria)
       revInvited <- ZIO.foldLeft(candidates)(List.empty[Username]) { case (invited, username) =>

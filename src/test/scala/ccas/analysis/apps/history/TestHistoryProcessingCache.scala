@@ -38,7 +38,7 @@ object TestHistoryProcessingCache extends ZIOSpecDefault {
     test("a match re-queued later in the same run reuses the first fetch's outcome, not a second network call") {
       for {
         _        <- Club.upsert(club)
-        _        <- HistoryPendingMatch.insert(HistoryPendingMatch(clubId, matchId, isLive = false))
+        _        <- HistoryPendingMatch.insert(HistoryPendingMatch(clubId = clubId, matchId = matchId, isLive = false))
         netCalls <- Ref.make(0)
         routes = Routes(
           Method.GET / "pub" / "match" / long("matchId") -> handler { (_: Long, _: Request) =>
@@ -55,8 +55,8 @@ object TestHistoryProcessingCache extends ZIOSpecDefault {
 
         // Simulate the match resurfacing as pending later in the same club run (e.g. re-discovered via another
         // club's match list) — same clubId, same matchId, fresh row since the first wave deleted it on abort.
-        _                  <- HistoryPendingMatch.insert(HistoryPendingMatch(clubId, matchId, isLive = false))
-        _                  <- runWave(ctx)
+        _ <- HistoryPendingMatch.insert(HistoryPendingMatch(clubId = clubId, matchId = matchId, isLive = false))
+        _ <- runWave(ctx)
         callsAfterSecond   <- netCalls.get
         abortedAfterSecond <- ctx.matchesAborted.get
         pendingAfterSecond <- HistoryPendingMatch.selectClub(clubId)

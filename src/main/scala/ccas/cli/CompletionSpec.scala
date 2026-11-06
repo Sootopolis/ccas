@@ -52,18 +52,18 @@ object CompletionSpec {
   /** Leaves in tree order. `valueFlags` always lists `--server` first to match its position in `flags`. */
   val leaves: List[Leaf] = List(
     Leaf(
-      List("server", "up"),
-      List("--detach", "-d", "--ready-timeout-seconds"),
-      List("--ready-timeout-seconds"),
-      NoArgs
+      path = List("server", "up"),
+      flags = List("--detach", "-d", "--ready-timeout-seconds"),
+      valueFlags = List("--ready-timeout-seconds"),
+      positional = NoArgs
     ),
     Leaf(List("server", "down"), List("--port"), List("--port"), NoArgs),
     Leaf(List("server", "status"), List("--port"), List("--port"), NoArgs),
     Leaf(List("server", "list"), Nil, Nil, NoArgs),
     Leaf(List("use-club"), List("--clear"), Nil, Slug),
     Leaf(
-      List("membership"),
-      List(
+      path = List("membership"),
+      flags = List(
         server,
         "--trust-usernames",
         "--no-trust-usernames",
@@ -73,12 +73,12 @@ object CompletionSpec {
         "--no-progress",
         "--detach"
       ),
-      List(server, clubFlag, clubIdFlag),
-      NoArgs
+      valueFlags = List(server, clubFlag, clubIdFlag),
+      positional = NoArgs
     ),
     Leaf(
-      List("history"),
-      List(
+      path = List("history"),
+      flags = List(
         server,
         "--full",
         "--include-finished",
@@ -90,12 +90,12 @@ object CompletionSpec {
         "--no-progress",
         "--detach"
       ),
-      List(server, "--refresh-min-hours", clubFlag, clubIdFlag),
-      NoArgs
+      valueFlags = List(server, "--refresh-min-hours", clubFlag, clubIdFlag),
+      positional = NoArgs
     ),
     Leaf(
-      List("recruit"),
-      List(
+      path = List("recruit"),
+      flags = List(
         server,
         "--alias",
         "--target",
@@ -110,34 +110,36 @@ object CompletionSpec {
         "--report",
         "--no-progress"
       ),
-      List(server, "--alias", "--target", "--source-clubs", "--time-limit-minutes", clubFlag, clubIdFlag),
+      valueFlags = List(server, "--alias", "--target", "--source-clubs", "--time-limit-minutes", clubFlag, clubIdFlag),
       // `--report`'s optional `[run-id]` is a bare numeric positional with nothing to complete, so NoArgs (suggest
       // nothing) is the right shell behavior.
-      NoArgs
+      positional = NoArgs
     ),
     Leaf(
-      List("stats"),
-      List(server, "--since", "--until", clubFlag, clubIdFlag, "--no-progress", "--detach"),
-      List(server, "--since", "--until", clubFlag, clubIdFlag),
-      NoArgs
+      path = List("stats"),
+      flags = List(server, "--since", "--until", clubFlag, clubIdFlag, "--no-progress", "--detach"),
+      valueFlags = List(server, "--since", "--until", clubFlag, clubIdFlag),
+      positional = NoArgs
     ),
     Leaf(List("jobs"), List(server, "--limit"), List(server, "--limit"), NoArgs),
     Leaf(List("logs"), List(server, "--no-progress"), List(server), JobId),
     Leaf(List("cancel"), List(server), List(server), JobId),
     Leaf(
-      List("blacklist", "add"),
-      List(server, "--reason", "--months", clubFlag, clubIdFlag),
-      List(server, "--reason", "--months", clubFlag, clubIdFlag),
-      Other
+      path = List("blacklist", "add"),
+      flags = List(server, "--reason", "--months", clubFlag, clubIdFlag),
+      valueFlags = List(server, "--reason", "--months", clubFlag, clubIdFlag),
+      positional = Other
     ),
     Leaf(List("blacklist", "list"), List(server, clubFlag, clubIdFlag), List(server, clubFlag, clubIdFlag), NoArgs),
     Leaf(List("blacklist", "remove"), List(server, clubFlag, clubIdFlag), List(server, clubFlag, clubIdFlag), Other),
     Leaf(List("schedule", "list"), List(server), List(server), NoArgs),
     Leaf(
-      List("schedule", "add"),
-      List(server, "--kind", "--interval-hours", "--cron", "--tz", "--misfire", clubFlag, clubIdFlag, "--params"),
-      List(server, "--kind", "--interval-hours", "--cron", "--tz", "--misfire", clubFlag, clubIdFlag, "--params"),
-      Other
+      path = List("schedule", "add"),
+      flags =
+        List(server, "--kind", "--interval-hours", "--cron", "--tz", "--misfire", clubFlag, clubIdFlag, "--params"),
+      valueFlags =
+        List(server, "--kind", "--interval-hours", "--cron", "--tz", "--misfire", clubFlag, clubIdFlag, "--params"),
+      positional = Other
     ),
     Leaf(List("schedule", "remove"), List(server), List(server), Other),
     Leaf(List("club", "add"), List(server, clubIdFlag), List(server, clubIdFlag), Slug),
@@ -162,14 +164,14 @@ object CompletionSpec {
     Group("blacklist", List("add", "list", "remove"), "Manage a club's recruitment blacklist"),
     Group("schedule", List("list", "add", "remove"), "Manage scheduled jobs"),
     Group(
-      "club",
-      List("add", "remove", "list", "show"),
-      "Manage the set of clubs you run CCAS for (pick the one commands target with 'ccas use-club')"
+      name = "club",
+      children = List("add", "remove", "list", "show"),
+      summary = "Manage the set of clubs you run CCAS for (pick the one commands target with 'ccas use-club')"
     ),
     Group(
-      "config",
-      List("get", "set", "unset", "list", "show", "path", "init"),
-      "Manage the local server-bootstrap config file (ccas.env)"
+      name = "config",
+      children = List("get", "set", "unset", "list", "show", "path", "init"),
+      summary = "Manage the local server-bootstrap config file (ccas.env)"
     )
   )
 

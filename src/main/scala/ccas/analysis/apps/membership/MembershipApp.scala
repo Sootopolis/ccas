@@ -42,9 +42,9 @@ object MembershipApp extends ZIOAppDefault {
                   jobRunIdOption = None
                 )
                 _ <- OutputFile.writeAndLog(
-                  MEMBERSHIP,
-                  clubName,
-                  MembershipReport.formatReconciliation(result, invitations)
+                  appName = MEMBERSHIP,
+                  clubSlug = clubName,
+                  content = MembershipReport.formatReconciliation(result, invitations)
                 )
               } yield ()
             case SinceNow(since) =>

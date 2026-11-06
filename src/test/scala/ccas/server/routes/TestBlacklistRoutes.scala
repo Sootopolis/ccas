@@ -32,7 +32,7 @@ object TestBlacklistRoutes extends ZIOSpecDefault {
     suitePost,
     suiteDelete
   ) @@ TestAspect.before(resetTables)).provideShared(
-    FreshSchemaLayer("test_blacklist_routes", onInit = Tables.ensureTables),
+    FreshSchemaLayer(schema = "test_blacklist_routes", onInit = Tables.ensureTables),
     ZLayer.succeed[ProgressDisplay](ProgressDisplay.make(enabled = false)),
     Scope.default
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock
@@ -93,7 +93,7 @@ object TestBlacklistRoutes extends ZIOSpecDefault {
     method: Method,
     path: String
   ): RIO[Scope & ProgressDisplay & PostgresClient & BodyStore, Response] =
-    runReq(method, path, body = "", responses = Map.empty)
+    runReq(method = method, path = path, body = "", responses = Map.empty)
 
   /** Decode a 200 response as the [[ClubResult]] every blacklist route answers with. Fails loudly on any other status
     * so a 5xx with a JSON error envelope surfaces the status rather than a cryptic decode error.
@@ -153,7 +153,13 @@ object TestBlacklistRoutes extends ZIOSpecDefault {
       _ <- ensureClub
       _ <- ensurePlayer(pidA, "blacklisted-user")
       _ <- RecruitmentBlacklist.upsert(
-        RecruitmentBlacklist(testClubId, pidA, addedAt, expiresAt = None, reason = Some("spam"))
+        RecruitmentBlacklist(
+          clubId = testClubId,
+          playerId = pidA,
+          addedAt = addedAt,
+          expiresAt = None,
+          reason = Some("spam")
+        )
       )
       response <- runNoBody(Method.GET, s"/api/blacklist?clubId=$testClubId")
       result   <- parseResult[List[BlacklistEntryResponse]](response)
@@ -172,7 +178,9 @@ object TestBlacklistRoutes extends ZIOSpecDefault {
       _ <- ensureClub
       _ <- renameClub
       _ <- ensurePlayer(pidA, "blacklisted-user")
-      _ <- RecruitmentBlacklist.upsert(RecruitmentBlacklist(testClubId, pidA, seedAt, expiresAt = None, reason = None))
+      _ <- RecruitmentBlacklist.upsert(
+        RecruitmentBlacklist(clubId = testClubId, playerId = pidA, addedAt = seedAt, expiresAt = None, reason = None)
+      )
       response <- runNoBody(Method.GET, s"/api/blacklist?slug=$testClubSlug")
       result   <- parseResult[List[BlacklistEntryResponse]](response)
     } yield assertTrue(
@@ -300,7 +308,7 @@ object TestBlacklistRoutes extends ZIOSpecDefault {
       _ <- ensureClub
       _ <- ensurePlayer(pidB, "removable-user")
       _ <- RecruitmentBlacklist.upsert(
-        RecruitmentBlacklist(testClubId, pidB, addedAt, expiresAt = None, reason = None)
+        RecruitmentBlacklist(clubId = testClubId, playerId = pidB, addedAt = addedAt, expiresAt = None, reason = None)
       )
       before <- RecruitmentBlacklist.selectByClub(testClubId)
       first  <- remove

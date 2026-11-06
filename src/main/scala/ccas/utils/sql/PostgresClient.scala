@@ -195,14 +195,14 @@ object PostgresClient {
     def after(prefix: String): String = url.drop(prefix.length)
 
     if (url.isEmpty) Left(s"database.url is blank — $shapeHint")
-    else if (lowered.startsWith("jdbc:postgresql://")) rewrite(after("jdbc:postgresql://"), alreadyJdbc = true)
+    else if (lowered.startsWith("jdbc:postgresql://")) rewrite(rest = after("jdbc:postgresql://"), alreadyJdbc = true)
     else if (lowered.startsWith("jdbc:postgresql:")) {
       // pgjdbc's shorthand for a local database, `jdbc:postgresql:db`: no authority, but its query can carry a login.
       val (database, query) = splitQuery(after("jdbc:postgresql:"))
       Right(liftQueryCredentials(s"jdbc:postgresql:$database", query))
     } else if (lowered.startsWith("jdbc:")) Right(ResolvedJdbcUrl(url, None, None))
-    else if (lowered.startsWith("postgresql://")) rewrite(after("postgresql://"), alreadyJdbc = false)
-    else if (lowered.startsWith("postgres://")) rewrite(after("postgres://"), alreadyJdbc = false)
+    else if (lowered.startsWith("postgresql://")) rewrite(rest = after("postgresql://"), alreadyJdbc = false)
+    else if (lowered.startsWith("postgres://")) rewrite(rest = after("postgres://"), alreadyJdbc = false)
     else Left(s"database.url has an unrecognised scheme — $shapeHint")
   }
 

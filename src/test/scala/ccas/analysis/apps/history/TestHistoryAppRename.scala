@@ -34,7 +34,7 @@ object TestHistoryAppRename extends ZIOSpecDefault {
           }
         )
         client <- TestChessComClientSupport.fakeClient(routes)
-        result <- HistoryApp.discover(ClubSlug("former-name"), expectedClubIdOption = None)
+        result <- HistoryApp.discover(clubSlug = ClubSlug("former-name"), expectedClubIdOption = None)
           .provideSomeLayer[ProgressDisplay & PostgresClient](ZLayer.succeed(client))
         paths <- requested.get
       } yield assertTrue(
@@ -44,7 +44,7 @@ object TestHistoryAppRename extends ZIOSpecDefault {
       )
     }
   ).provideShared(
-    FreshSchemaLayer("test_history_app_rename", onInit = Tables.ensureTables),
+    FreshSchemaLayer(schema = "test_history_app_rename", onInit = Tables.ensureTables),
     ZLayer.succeed(ProgressDisplay.make(enabled = false))
   ) @@ TestAspect.withLiveClock
 

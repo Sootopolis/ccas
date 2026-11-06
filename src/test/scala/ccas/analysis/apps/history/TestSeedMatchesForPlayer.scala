@@ -79,13 +79,13 @@ object TestSeedMatchesForPlayer extends ZIOSpecDefault {
         skipCtr <- Ref.make(0)
         client  <- fakeChessComClientCounting(json, counter)
         seeded <- HistorySeeding.seedMatchesForPlayer(
-          client,
-          clubId,
-          clubSlug,
-          playerId2,
-          username2,
-          Set(knownId),
-          skipCtr
+          client = client,
+          clubId = clubId,
+          clubSlug = clubSlug,
+          playerId = playerId2,
+          username = username2,
+          excludeMatchIds = Set(knownId),
+          unchangedCounter = skipCtr
         )
         pending <- HistoryPendingMatch.selectClub(clubId)
         _       <- ZIO.foreachDiscard(pending)(p => HistoryPendingMatch.delete(clubId, p.matchId, p.isLive))
@@ -110,26 +110,26 @@ object TestSeedMatchesForPlayer extends ZIOSpecDefault {
         skipCtr <- Ref.make(0)
         client  <- fakeChessComClientCounting(json, counter)
         first <- HistorySeeding.seedMatchesForPlayer(
-          client,
-          clubId,
-          clubSlug,
-          playerId,
-          username,
-          Set.empty,
-          skipCtr
+          client = client,
+          clubId = clubId,
+          clubSlug = clubSlug,
+          playerId = playerId,
+          username = username,
+          excludeMatchIds = Set.empty,
+          unchangedCounter = skipCtr
         )
         pendingAfterFirst <- HistoryPendingMatch.selectClub(clubId)
         // Clear both side effects so the second call has to re-materialise anything it does.
         _ <- ZIO.foreachDiscard(pendingAfterFirst)(p => HistoryPendingMatch.delete(clubId, p.matchId, p.isLive))
         _ <- HistoryMemberQuery.deleteClub(clubId)
         second <- HistorySeeding.seedMatchesForPlayer(
-          client,
-          clubId,
-          clubSlug,
-          playerId,
-          username,
-          Set.empty,
-          skipCtr
+          client = client,
+          clubId = clubId,
+          clubSlug = clubSlug,
+          playerId = playerId,
+          username = username,
+          excludeMatchIds = Set.empty,
+          unchangedCounter = skipCtr
         )
         pendingAfterSecond <- HistoryPendingMatch.selectClub(clubId)
         queriedAfterSecond <- HistoryMemberQuery.selectClubPlayerIds(clubId)

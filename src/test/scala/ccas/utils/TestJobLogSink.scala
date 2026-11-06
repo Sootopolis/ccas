@@ -168,7 +168,7 @@ object TestJobLogSink extends ZIOSpecDefault {
           Files.setLastModifiedTime(freshLog, fresh)
           Files.setLastModifiedTime(keepTxt, old)
         }
-        deleted <- FileSink.sweepBefore(dir, cutoff, live = Set.empty)
+        deleted <- FileSink.sweepBefore(logDir = dir, cutoff = cutoff, live = Set.empty)
       } yield assertTrue(
         deleted == 1,
         !Files.exists(oldLog),
@@ -191,7 +191,7 @@ object TestJobLogSink extends ZIOSpecDefault {
           Files.setLastModifiedTime(liveLog, old)
           Files.setLastModifiedTime(deadLog, old)
         }
-        deleted <- FileSink.sweepBefore(dir, cutoff, live = Set("live-job"))
+        deleted <- FileSink.sweepBefore(logDir = dir, cutoff = cutoff, live = Set("live-job"))
       } yield assertTrue(
         deleted == 1,
         Files.exists(liveLog),
