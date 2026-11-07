@@ -18,7 +18,7 @@ object TestManagedClubSql extends ZIOSpecDefault {
     testSelectAllWithClubListsNameless,
     testDelete
   ).provideShared(
-    FreshSchemaLayer("test_managed_club", onInit = Tables.ensureTables)
+    FreshSchemaLayer(schema = "test_managed_club", onInit = Tables.ensureTables)
   ) @@ TestAspect.sequential
 
   private object Times {

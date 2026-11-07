@@ -21,7 +21,7 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
   override def spec: Spec[Any, Throwable] = suite("TestRecruitmentFilterChain")(
     suiteFilterChain
   ).provideShared(
-    FreshSchemaLayer("test_recruitment_filter_chain", onInit = Tables.ensureTables),
+    FreshSchemaLayer(schema = "test_recruitment_filter_chain", onInit = Tables.ensureTables),
     ZLayer.succeed(ProgressDisplay.make(enabled = false))
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock
 
@@ -89,14 +89,14 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
   )
 
   private def testRejectsClosedAccount = test("rejects closed account") {
-    val responses = Map("player/alice" -> apiPlayerJson(200, "alice", status = "closed"))
+    val responses = Map("player/alice" -> apiPlayerJson(playerId = 200, username = "alice", status = "closed"))
     for { outcome <- evalSingle(responses, makeCriteria()) } yield assertTrue(outcome == CandidateOutcome.Rejected)
   }
 
   private def testRejectsByMinDaysSinceRegistration = test("rejects by minDaysSinceRegistration") {
     // Player joined 5 days ago, config requires 30 days
     val recentJoin = Instant.now().minus(Duration.ofDays(5)).getEpochSecond
-    val responses  = Map("player/alice" -> apiPlayerJson(200, "alice", joined = recentJoin))
+    val responses  = Map("player/alice" -> apiPlayerJson(playerId = 200, username = "alice", joined = recentJoin))
     val criteria   = makeCriteria().copy(minDaysSinceRegistration = Some(30))
     for { outcome <- evalSingle(responses, criteria) } yield assertTrue(outcome == CandidateOutcome.Rejected)
   }
@@ -105,32 +105,32 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
     test("accepts player meeting minDaysSinceRegistration") {
       // Player joined 60 days ago, config requires 30 days
       val oldJoin   = Instant.now().minus(Duration.ofDays(60)).getEpochSecond
-      val responses = Map("player/alice" -> apiPlayerJson(200, "alice", joined = oldJoin))
+      val responses = Map("player/alice" -> apiPlayerJson(playerId = 200, username = "alice", joined = oldJoin))
       val criteria  = makeCriteria().copy(minDaysSinceRegistration = Some(30))
       for { outcome <- evalSingle(responses, criteria) } yield assertTrue(outcome == CandidateOutcome.Invited)
     }
 
   private def testRejectsByNationalityExcludeMode = test("rejects by nationality exclude mode") {
-    val responses = Map("player/alice" -> apiPlayerJson(200, "alice", country = "XX"))
+    val responses = Map("player/alice" -> apiPlayerJson(playerId = 200, username = "alice", country = "XX"))
     val criteria  = makeCriteria().copy(nationalityExclude = true, nationalityCountries = List("XX", "YY"))
     for { outcome <- evalSingle(responses, criteria) } yield assertTrue(outcome == CandidateOutcome.Rejected)
   }
 
   private def testAcceptsPlayerNotInNationalityExcludeList = test("accepts player not in nationality exclude list") {
-    val responses = Map("player/alice" -> apiPlayerJson(200, "alice", country = "ZZ"))
+    val responses = Map("player/alice" -> apiPlayerJson(playerId = 200, username = "alice", country = "ZZ"))
     val criteria  = makeCriteria().copy(nationalityExclude = true, nationalityCountries = List("XX", "YY"))
     for { outcome <- evalSingle(responses, criteria) } yield assertTrue(outcome == CandidateOutcome.Invited)
   }
 
   private def testRejectsByNationalityIncludeModeWhenNotInList =
     test("rejects by nationality include mode when not in list") {
-      val responses = Map("player/alice" -> apiPlayerJson(200, "alice", country = "ZZ"))
+      val responses = Map("player/alice" -> apiPlayerJson(playerId = 200, username = "alice", country = "ZZ"))
       val criteria  = makeCriteria().copy(nationalityExclude = false, nationalityCountries = List("XX", "YY"))
       for { outcome <- evalSingle(responses, criteria) } yield assertTrue(outcome == CandidateOutcome.Rejected)
     }
 
   private def testAcceptsPlayerInNationalityIncludeList = test("accepts player in nationality include list") {
-    val responses = Map("player/alice" -> apiPlayerJson(200, "alice", country = "YY"))
+    val responses = Map("player/alice" -> apiPlayerJson(playerId = 200, username = "alice", country = "YY"))
     val criteria  = makeCriteria().copy(nationalityExclude = false, nationalityCountries = List("XX", "YY"))
     for { outcome <- evalSingle(responses, criteria) } yield assertTrue(outcome == CandidateOutcome.Invited)
   }
@@ -188,16 +188,21 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
       val ym         = YearMonth.from(LocalDate.ofInstant(now, ZoneOffset.UTC))
       val archiveKey = s"player/alice/games/${ym.getYear}/${f"${ym.getMonthValue}%02d"}"
       val games = List(
-        archiveGameJson("alice", "bob", endTime = recent, matchUrl = Some("https://api.chess.com/pub/match/111")),
         archiveGameJson(
-          "carol",
-          "alice",
+          white = "alice",
+          black = "bob",
+          endTime = recent,
+          matchUrl = Some("https://api.chess.com/pub/match/111")
+        ),
+        archiveGameJson(
+          white = "carol",
+          black = "alice",
           whiteResult = "checkmated",
           blackResult = "win",
           endTime = recent,
           matchUrl = Some("https://api.chess.com/pub/match/222")
         ),
-        archiveGameJson("alice", "dave", endTime = recent)
+        archiveGameJson(white = "alice", black = "dave", endTime = recent)
       )
       val responses = Map(
         "player/alice"       -> apiPlayerJson(200, "alice"),
@@ -216,9 +221,9 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
       val ym         = YearMonth.from(LocalDate.ofInstant(now, ZoneOffset.UTC))
       val archiveKey = s"player/alice/games/${ym.getYear}/${f"${ym.getMonthValue}%02d"}"
       val games = List(
-        archiveGameJson("alice", "bob", endTime = recent, timeClass = "daily"),
-        archiveGameJson("alice", "carol", endTime = recent, timeClass = "blitz"),
-        archiveGameJson("alice", "dave", endTime = recent, timeClass = "rapid")
+        archiveGameJson(white = "alice", black = "bob", endTime = recent, timeClass = "daily"),
+        archiveGameJson(white = "alice", black = "carol", endTime = recent, timeClass = "blitz"),
+        archiveGameJson(white = "alice", black = "dave", endTime = recent, timeClass = "rapid")
       )
       val responses = Map(
         "player/alice"       -> apiPlayerJson(200, "alice"),
@@ -266,15 +271,15 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
       val games = List(
         // Blitz timeout — should NOT count as lastDailyTimeoutAt
         archiveGameJson(
-          "alice",
-          "bob",
+          white = "alice",
+          black = "bob",
           whiteResult = "timeout",
           blackResult = "win",
           endTime = recent,
           timeClass = "blitz"
         ),
         // Daily win — no timeout
-        archiveGameJson("alice", "carol", endTime = recent, timeClass = "daily")
+        archiveGameJson(white = "alice", black = "carol", endTime = recent, timeClass = "daily")
       )
       val responses = Map(
         "player/alice"       -> apiPlayerJson(200, "alice"),
@@ -398,8 +403,8 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
       for {
         client <- fakeChessComClient(responses)
         candidates <- RecruitmentExplore.gatherClubCandidates(
-          client,
-          ClubSlug("source-club"),
+          client = client,
+          clubSlug = ClubSlug("source-club"),
           excludeSourceAdmins = false,
           existingUsernames = Set(Username("existing-member")),
           evaluatedUsernames = Set(Username("already-evaluated"))
@@ -412,7 +417,11 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
   private def testGatherClubCandidatesExcludesAdminsWhenEnabled =
     test("gatherClubCandidates excludes admins when enabled") {
       val responses = Map(
-        "club/source-club" -> apiClubJson(sourceClubId.value, "source-club", admins = List("admin-user")),
+        "club/source-club" -> apiClubJson(
+          clubId = sourceClubId.value,
+          slug = "source-club",
+          admins = List("admin-user")
+        ),
         "club/source-club/members" -> apiClubMembersJson(
           List(
             ("admin-user", Times.t0.getEpochSecond),
@@ -424,8 +433,8 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
       for {
         client <- fakeChessComClient(responses)
         candidates <- RecruitmentExplore.gatherClubCandidates(
-          client,
-          ClubSlug("source-club"),
+          client = client,
+          clubSlug = ClubSlug("source-club"),
           excludeSourceAdmins = true,
           existingUsernames = Set.empty,
           evaluatedUsernames = Set.empty
@@ -439,7 +448,11 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
   private def testGatherClubCandidatesKeepsAdminsWhenDisabled =
     test("gatherClubCandidates keeps admins when disabled") {
       val responses = Map(
-        "club/source-club" -> apiClubJson(sourceClubId.value, "source-club", admins = List("admin-user")),
+        "club/source-club" -> apiClubJson(
+          clubId = sourceClubId.value,
+          slug = "source-club",
+          admins = List("admin-user")
+        ),
         "club/source-club/members" -> apiClubMembersJson(
           List(
             ("admin-user", Times.t0.getEpochSecond),
@@ -451,8 +464,8 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
       for {
         client <- fakeChessComClient(responses)
         candidates <- RecruitmentExplore.gatherClubCandidates(
-          client,
-          ClubSlug("source-club"),
+          client = client,
+          clubSlug = ClubSlug("source-club"),
           excludeSourceAdmins = false,
           existingUsernames = Set.empty,
           evaluatedUsernames = Set.empty
@@ -664,7 +677,12 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
     val responses = Map(
       "player/alice"       -> apiPlayerJson(200, "alice"),
       "player/alice/clubs" -> apiPlayerClubsJson(List(mysterySlug)),
-      s"club/$mysterySlug" -> apiClubJson(sizableClubId.value, mysterySlug, admins = List("alice"), membersCount = 500)
+      s"club/$mysterySlug" -> apiClubJson(
+        clubId = sizableClubId.value,
+        slug = mysterySlug,
+        admins = List("alice"),
+        membersCount = 500
+      )
     )
     val criteria = makeCriteria().copy(avoidAdminMinClubSize = Some(100))
     for {
@@ -698,7 +716,7 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
       "player/alice/clubs" -> apiPlayerClubsJson(List(mysterySlug)),
       "player/bob/clubs"   -> apiPlayerClubsJson(List(mysterySlug)),
       s"club/$mysterySlug" ->
-        apiClubJson(sizableClubId.value, mysterySlug, admins = List("alice", "bob"), membersCount = 500)
+        apiClubJson(clubId = sizableClubId.value, slug = mysterySlug, admins = List("alice", "bob"), membersCount = 500)
     )
     val criteria = makeCriteria().copy(avoidAdminMinClubSize = Some(100))
     for {
@@ -725,7 +743,12 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
     val responses = Map(
       "player/alice"       -> apiPlayerJson(200, "alice"),
       "player/alice/clubs" -> apiPlayerClubsJson(List(tinySlug)),
-      s"club/$tinySlug"    -> apiClubJson(sizableClubId.value, tinySlug, admins = List("alice"), membersCount = 50)
+      s"club/$tinySlug" -> apiClubJson(
+        clubId = sizableClubId.value,
+        slug = tinySlug,
+        admins = List("alice"),
+        membersCount = 50
+      )
     )
     val criteria = makeCriteria().copy(avoidAdminMinClubSize = Some(100))
     for {

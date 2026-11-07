@@ -22,7 +22,7 @@ object TestStatsApp extends ZIOSpecDefault {
     testPlayerOfPeriodMatchCount,
     testPlayerOfPeriodInvertedRange
   ).provideShared(
-    FreshSchemaLayer("test_stats_app", onInit = Tables.ensureTables)
+    FreshSchemaLayer(schema = "test_stats_app", onInit = Tables.ensureTables)
   ) @@ TestAspect.sequential
 
   private object Times {
@@ -50,19 +50,19 @@ object TestStatsApp extends ZIOSpecDefault {
       )
       _ <- ClubMatch.upsert(
         ClubMatch(
-          matchId1,
-          "Match 1",
-          ClubMatchStatus.Finished,
-          TimeClass.Daily,
-          Some(Times.t0),
-          Some(Times.t1),
-          10,
-          Some(clubId),
-          10,
-          Some(oppId),
-          10,
-          Times.t1,
-          None
+          matchId = matchId1,
+          name = "Match 1",
+          status = ClubMatchStatus.Finished,
+          timeClass = TimeClass.Daily,
+          startTime = Some(Times.t0),
+          endTime = Some(Times.t1),
+          boards = 10,
+          team1ClubIdOption = Some(clubId),
+          team1ScoreX2 = 10,
+          team2ClubIdOption = Some(oppId),
+          team2ScoreX2 = 10,
+          fetchedAt = Times.t1,
+          processedBodyHash = None
         )
       )
       _ <- ClubMatchBoard.insert(
@@ -113,19 +113,19 @@ object TestStatsApp extends ZIOSpecDefault {
         // Match where team2-club is team2; opponent (clubId=100) wins as Team1
         _ <- ClubMatch.upsert(
           ClubMatch(
-            matchId3,
-            "Match 3",
-            ClubMatchStatus.Finished,
-            TimeClass.Daily,
-            Some(Times.t0),
-            Some(Times.t1),
-            10,
-            Some(clubId),
-            10,
-            Some(team2Id),
-            10,
-            Times.t1,
-            None
+            matchId = matchId3,
+            name = "Match 3",
+            status = ClubMatchStatus.Finished,
+            timeClass = TimeClass.Daily,
+            startTime = Some(Times.t0),
+            endTime = Some(Times.t1),
+            boards = 10,
+            team1ClubIdOption = Some(clubId),
+            team1ScoreX2 = 10,
+            team2ClubIdOption = Some(team2Id),
+            team2ScoreX2 = 10,
+            fetchedAt = Times.t1,
+            processedBodyHash = None
           )
         )
         // dave is on team2 side
@@ -155,19 +155,19 @@ object TestStatsApp extends ZIOSpecDefault {
         _ <- Club.upsert(Club(noBoardId, Times.t0, noBoardSlug, "No Board Club", None, None, None))
         _ <- ClubMatch.upsert(
           ClubMatch(
-            ClubMatchId(2001L),
-            "Match NB",
-            ClubMatchStatus.Finished,
-            TimeClass.Daily,
-            Some(Times.t0),
-            Some(Times.t1),
-            10,
-            Some(noBoardId),
-            10,
-            Some(oppId),
-            10,
-            Times.t1,
-            None
+            matchId = ClubMatchId(2001L),
+            name = "Match NB",
+            status = ClubMatchStatus.Finished,
+            timeClass = TimeClass.Daily,
+            startTime = Some(Times.t0),
+            endTime = Some(Times.t1),
+            boards = 10,
+            team1ClubIdOption = Some(noBoardId),
+            team1ScoreX2 = 10,
+            team2ClubIdOption = Some(oppId),
+            team2ScoreX2 = 10,
+            fetchedAt = Times.t1,
+            processedBodyHash = None
           )
         )
         result <- StatsApp.memberStats(noBoardId)
@@ -183,19 +183,19 @@ object TestStatsApp extends ZIOSpecDefault {
       // matchId1 ends at t1 (within [t0, t2)), matchId2 ends at t3 (outside)
       _ <- ClubMatch.upsert(
         ClubMatch(
-          matchId2,
-          "Match 2",
-          ClubMatchStatus.Finished,
-          TimeClass.Daily,
-          Some(Times.t2),
-          Some(Times.t3),
-          10,
-          Some(clubId),
-          10,
-          Some(oppId),
-          10,
-          Times.t3,
-          None
+          matchId = matchId2,
+          name = "Match 2",
+          status = ClubMatchStatus.Finished,
+          timeClass = TimeClass.Daily,
+          startTime = Some(Times.t2),
+          endTime = Some(Times.t3),
+          boards = 10,
+          team1ClubIdOption = Some(clubId),
+          team1ScoreX2 = 10,
+          team2ClubIdOption = Some(oppId),
+          team2ScoreX2 = 10,
+          fetchedAt = Times.t3,
+          processedBodyHash = None
         )
       )
       _ <- ClubMatchBoard.insert(

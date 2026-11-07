@@ -173,8 +173,8 @@ object CliCommand {
         else {
           Left(
             ValidationError(
-              ValidationErrorType.InvalidValue,
-              HelpDoc.p(s"--$name must fit in a 32-bit integer (got $n)")
+              validationErrorType = ValidationErrorType.InvalidValue,
+              error = HelpDoc.p(s"--$name must fit in a 32-bit integer (got $n)")
             )
           )
         }
@@ -204,8 +204,8 @@ object CliCommand {
         else {
           Left(
             ValidationError(
-              ValidationErrorType.InvalidValue,
-              HelpDoc.p(s"--club-id must be a positive club id (got $n)")
+              validationErrorType = ValidationErrorType.InvalidValue,
+              error = HelpDoc.p(s"--club-id must be a positive club id (got $n)")
             )
           )
         }
@@ -227,8 +227,8 @@ object CliCommand {
         case (false, Some(_)) =>
           Left(
             ValidationError(
-              ValidationErrorType.InvalidValue,
-              HelpDoc.p("--ready-timeout-seconds applies only to a detached server; add --detach")
+              validationErrorType = ValidationErrorType.InvalidValue,
+              error = HelpDoc.p("--ready-timeout-seconds applies only to a detached server; add --detach")
             )
           )
         case parsed => Right(parsed)
@@ -250,8 +250,8 @@ object CliCommand {
         else {
           Left(
             ValidationError(
-              ValidationErrorType.InvalidValue,
-              HelpDoc.p(s"--port must be a port from 1 to 65535 (got $n)")
+              validationErrorType = ValidationErrorType.InvalidValue,
+              error = HelpDoc.p(s"--port must be a port from 1 to 65535 (got $n)")
             )
           )
         }
@@ -286,16 +286,17 @@ object CliCommand {
   // club the user asked to clear. Capturing every positional lets `UseClub` reject the arity instead.
   private val useClub: Command[CliCommand] =
     Command(
-      "use-club",
-      Options.boolean("clear") ?? "Clear the current club instead of setting one",
-      (Args.text("slug") ?? "Club slug (URL name) to set as the current club; omit to print the current one").repeat
+      name = "use-club",
+      options = Options.boolean("clear") ?? "Clear the current club instead of setting one",
+      args =
+        (Args.text("slug") ?? "Club slug (URL name) to set as the current club; omit to print the current one").repeat
     ).withHelp("Show, set, or clear the current club used by commands that omit --club")
       .map { case (clear, slugs) => Use(slugs, clear) }
 
   private def membership(default: String): Command[CliCommand] =
     Command(
-      "membership",
-      serverOpt(default) ++ trustOpt ++ clubsOpt ++ clubIdOpt ++ allOpt ++ noProgressOpt ++ detachOpt
+      name = "membership",
+      options = serverOpt(default) ++ trustOpt ++ clubsOpt ++ clubIdOpt ++ allOpt ++ noProgressOpt ++ detachOpt
     )
       .withHelp("Submit a membership-sync job (current club, --club a,b, or --all managed clubs)")
       .map { case (server, trust, clubs, clubIdOption, all, noProgress, detach) =>
@@ -304,8 +305,8 @@ object CliCommand {
 
   private def history(default: String): Command[CliCommand] =
     Command(
-      "history",
-      serverOpt(default) ++
+      name = "history",
+      options = serverOpt(default) ++
         (Options.boolean("full") ?? "Clear member-query history and re-crawl all members") ++
         (Options.boolean("include-finished") ?? "Re-queue recently finished matches for refresh") ++
         (Options.boolean("refresh") ?? "Refresh already-stored matches, not just newly seen ones") ++
@@ -315,16 +316,16 @@ object CliCommand {
       .map {
         case (server, full, includeFinished, refresh, refreshMinHours, clubs, clubIdOption, all, noProgress, detach) =>
           History(
-            server,
-            clubs,
-            clubIdOption,
-            all,
-            full,
-            includeFinished,
-            refresh,
-            refreshMinHours,
-            noProgress,
-            detach
+            server = server,
+            clubs = clubs,
+            clubIdOption = clubIdOption,
+            all = all,
+            full = full,
+            includeFinished = includeFinished,
+            refresh = refresh,
+            refreshMinHours = refreshMinHours,
+            noProgress = noProgress,
+            detach = detach
           )
       }
 
@@ -334,8 +335,8 @@ object CliCommand {
 
   private def recruit(default: String): Command[CliCommand] =
     Command(
-      "recruit",
-      serverOpt(default) ++
+      name = "recruit",
+      options = serverOpt(default) ++
         (Options.text("alias").optional ?? "Recruitment-criteria alias to use (default: the club's default)") ++
         (intOpt("target") ?? "Stop once N candidates have been found") ++
         (Options.boolean("cumulative") ?? "Count candidates already found earlier today toward the target") ++
@@ -349,7 +350,7 @@ object CliCommand {
           ("Show a past run's invited usernames instead of scouting " +
             "(the club's latest run, or the run id given as an argument)")) ++
         noProgressOpt,
-      (Args.integer("run-id") ?? "With --report, the run id to show (default: the club's latest run)")
+      args = (Args.integer("run-id") ?? "With --report, the run id to show (default: the club's latest run)")
         .atMost(1)
         .map(_.headOption.map(_.toInt))
     ).withHelp("Submit a recruitment scouting job for a club (interactive runs confirm invites before marking them)")
@@ -373,26 +374,26 @@ object CliCommand {
               runId
             ) =>
           Recruit(
-            server,
-            club,
-            clubIdOption,
-            alias,
-            target,
-            cumulative,
-            sourceClubs,
-            timeLimitMinutes,
-            explore,
-            stdout,
-            report,
-            runId,
-            noProgress
+            server = server,
+            club = club,
+            clubIdOption = clubIdOption,
+            alias = alias,
+            target = target,
+            cumulative = cumulative,
+            sourceClubs = sourceClubs,
+            timeLimitMinutes = timeLimitMinutes,
+            explore = explore,
+            stdout = stdout,
+            report = report,
+            runId = runId,
+            noProgress = noProgress
           )
       }
 
   private def stats(default: String): Command[CliCommand] =
     Command(
-      "stats",
-      serverOpt(default) ++
+      name = "stats",
+      options = serverOpt(default) ++
         (Options.text("since").optional ?? "Start of the date window (ISO-8601 date or instant)") ++
         (Options.text("until").optional ?? "End of the date window (requires --since)") ++
         clubOpt ++ clubIdOpt ++ noProgressOpt ++ detachOpt
@@ -418,11 +419,11 @@ object CliCommand {
 
   private def blacklistAdd(default: String): Command[CliCommand] =
     Command(
-      "add",
-      serverOpt(default) ++
+      name = "add",
+      options = serverOpt(default) ++
         (Options.text("reason").optional ?? "Reason recorded with the blacklist entry") ++
         (intOpt("months") ?? "Auto-expire the entry after N months") ++ clubOpt ++ clubIdOpt,
-      Args.text("username").repeat1 ?? "Username(s) to blacklist"
+      args = Args.text("username").repeat1 ?? "Username(s) to blacklist"
     ).withHelp("Blacklist one or more usernames for a club")
       .map { case ((server, reason, months, club, clubIdOption), usernames) =>
         BlacklistAdd(
@@ -442,9 +443,9 @@ object CliCommand {
 
   private def blacklistRemove(default: String): Command[CliCommand] =
     Command(
-      "remove",
-      serverOpt(default) ++ clubOpt ++ clubIdOpt,
-      Args.text("username") ?? "Username to remove"
+      name = "remove",
+      options = serverOpt(default) ++ clubOpt ++ clubIdOpt,
+      args = Args.text("username") ?? "Username to remove"
     ).withHelp("Remove a username from a club's blacklist")
       .map { case ((server, club, clubIdOption), username) =>
         BlacklistRemove(server, club, clubIdOption, username)
@@ -462,8 +463,8 @@ object CliCommand {
 
   private def scheduleAdd(default: String): Command[CliCommand] =
     Command(
-      "add",
-      serverOpt(default) ++
+      name = "add",
+      options = serverOpt(default) ++
         (Options.text("kind") ?? "Job kind: Recruitment, Membership, MatchRef, History, Stats, or ClubData") ++
         (intOpt("interval-hours") ?? "Interval trigger: run the job every N hours") ++
         (Options.text("cron").optional ?? "Cron trigger: 5-field expression, e.g. '0 9 * * MON'") ++
@@ -503,17 +504,17 @@ object CliCommand {
   // The slug is `repeat` rather than required so the id can stand alone, and `ClubResolver.operand` checks the arity.
   private def clubsAdd(default: String): Command[CliCommand] =
     Command(
-      "add",
-      serverOpt(default) ++ clubIdOpt,
-      (Args.text("slug") ?? "Club slug (URL name) to start managing").repeat
+      name = "add",
+      options = serverOpt(default) ++ clubIdOpt,
+      args = (Args.text("slug") ?? "Club slug (URL name) to start managing").repeat
     ).withHelp("Mark a club as one you manage with CCAS")
       .map { case ((server, clubIdOption), slugs) => ClubsAdd(server, slugs, clubIdOption) }
 
   private def clubsRemove(default: String): Command[CliCommand] =
     Command(
-      "remove",
-      serverOpt(default) ++ clubIdOpt,
-      (Args.text("slug") ?? "Club slug (URL name) to stop managing").repeat
+      name = "remove",
+      options = serverOpt(default) ++ clubIdOpt,
+      args = (Args.text("slug") ?? "Club slug (URL name) to stop managing").repeat
     ).withHelp("Remove a club from the ones you manage")
       .map { case ((server, clubIdOption), slugs) => ClubsRemove(server, slugs, clubIdOption) }
 
@@ -524,9 +525,9 @@ object CliCommand {
 
   private def clubsShow(default: String): Command[CliCommand] =
     Command(
-      "show",
-      serverOpt(default) ++ clubIdOpt,
-      (Args.text("slug") ?? "Club slug (URL name) to look up").repeat
+      name = "show",
+      options = serverOpt(default) ++ clubIdOpt,
+      args = (Args.text("slug") ?? "Club slug (URL name) to look up").repeat
     ).withHelp("Show which club a name or id reaches, without acting on it")
       .map { case ((server, clubIdOption), slugs) => ClubsShow(server, slugs, clubIdOption) }
 

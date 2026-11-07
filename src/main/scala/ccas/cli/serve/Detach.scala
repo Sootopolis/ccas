@@ -192,8 +192,8 @@ object Detach {
       } yield code
 
     waitLoop(0).timeout(readyDeadline).foldZIO(
-      _ => childDied(logFile),
-      {
+      failure = _ => childDied(logFile),
+      success = {
         case Some(databaseOption) => ready(pidPath, logFile, databaseOption)
         case None                 => onTimeout
       }

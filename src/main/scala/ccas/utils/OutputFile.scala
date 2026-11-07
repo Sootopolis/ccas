@@ -60,8 +60,8 @@ object OutputFile {
     ZIO
       .attemptBlocking(Using.resource(Files.list(dir))(_.iterator().asScala.filter(isReport(_, suffix)).toList))
       .foldZIO(
-        failure = e => ZIO.logWarning(s"could not list earlier reports in ${e.safeMessageNaming(dir)}"),
-        success = reports => ZIO.foreachDiscard(reports)(archive(dir, suffix, _))
+        error => ZIO.logWarning(s"could not list earlier reports in ${error.safeMessageNaming(dir)}"),
+        reports => ZIO.foreachDiscard(reports)(archive(dir, suffix, _))
       )
 
   private def isReport(path: Path, suffix: String): Boolean =

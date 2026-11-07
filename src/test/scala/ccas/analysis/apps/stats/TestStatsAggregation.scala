@@ -190,8 +190,8 @@ object TestStatsAggregation extends ZIOSpecDefault {
 
   private def testMultiplePlayersAggregatedSeparately = test("multiple players aggregated separately") {
     val rows = List(
-      board(player1, match1, g1 = Some(BoardGameWinner.Team1), g2 = Some(BoardGameWinner.Team1)),
-      board(player2, match1, g1 = Some(BoardGameWinner.Team2), g2 = Some(BoardGameWinner.Draw))
+      board(player1, matchId = match1, g1 = Some(BoardGameWinner.Team1), g2 = Some(BoardGameWinner.Team1)),
+      board(player2, matchId = match1, g1 = Some(BoardGameWinner.Team2), g2 = Some(BoardGameWinner.Draw))
     )
     val result = StatsUtils.aggregate(rows, displayNames)
     val alice  = result.find(_.displayName == "alice").get
@@ -207,8 +207,8 @@ object TestStatsAggregation extends ZIOSpecDefault {
 
   private def testMultipleBoardsForSamePlayerSummed = test("multiple boards for same player are summed") {
     val rows = List(
-      board(player1, match1, g1 = Some(BoardGameWinner.Team1), g2 = Some(BoardGameWinner.Team1)),
-      board(player1, match2, g1 = Some(BoardGameWinner.Draw), g2 = Some(BoardGameWinner.Team2))
+      board(player1, matchId = match1, g1 = Some(BoardGameWinner.Team1), g2 = Some(BoardGameWinner.Team1)),
+      board(player1, matchId = match2, g1 = Some(BoardGameWinner.Draw), g2 = Some(BoardGameWinner.Team2))
     )
     val result = StatsUtils.aggregate(rows, displayNames)
     assertTrue(

@@ -22,7 +22,7 @@ object TestRecruitmentAppExplore extends ZIOSpecDefault {
   override def spec: Spec[Any, Throwable] = suite("TestRecruitmentAppExplore")(
     suiteExploreMode
   ).provideShared(
-    FreshSchemaLayer("test_recruitment_app_explore", onInit = Tables.ensureTables),
+    FreshSchemaLayer(schema = "test_recruitment_app_explore", onInit = Tables.ensureTables),
     ZLayer.succeed(ProgressDisplay.make(enabled = false))
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock
 
@@ -144,7 +144,7 @@ object TestRecruitmentAppExplore extends ZIOSpecDefault {
         _       <- seedCriteria(criteria)
         reached <- Promise.make[Nothing, Unit]
         gate    <- Promise.make[Nothing, Unit]
-        client  <- fakeChessComClientWithBlock(responses, blockAfterN = 4, reached, gate)
+        client  <- fakeChessComClientWithBlock(responses = responses, blockAfterN = 4, reached = reached, gate = gate)
         fiber   <- runRecruit(client, sourceClubs = List(intSource)).fork
         _       <- reached.await
         // Anchor the interrupt on a persisted candidate row, not a fixed sleep. The 5th-profile

@@ -23,7 +23,7 @@ object TestRefAppNetworkOutage extends ZIOSpecDefault {
     testOutageInDeeperFetchAbortsWithoutSkip,
     testNextRunRetriesAfterOutage
   ).provideShared(
-    FreshSchemaLayer("test_ref_app_network_outage", onInit = Tables.ensureTables),
+    FreshSchemaLayer(schema = "test_ref_app_network_outage", onInit = Tables.ensureTables),
     Scope.default
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock
 

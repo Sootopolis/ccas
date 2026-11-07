@@ -63,7 +63,7 @@ private[recruitment] case class CandidateContext(
 )
 private[recruitment] object CandidateContext {
   def initial(username: Username): CandidateContext =
-    CandidateContext(username, apiPlayerOption = None, isNewPlayer = false, cacheOption = None)
+    CandidateContext(username = username, apiPlayerOption = None, isNewPlayer = false, cacheOption = None)
 }
 
 /** A candidate who passed every filter. `username` is the handle Chess.com last answered to — after a rename

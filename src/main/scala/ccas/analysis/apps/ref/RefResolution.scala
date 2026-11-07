@@ -462,7 +462,7 @@ private[ref] object RefResolution {
         NetworkUnavailableException.recoverUnless(error)(
           ZIO.logWarning(s"  ${player.username}: verification error — ${error.safeMessage}").as(ResolveResult.NotFound)
         ),
-      {
+      success = {
         case Left(actualId) =>
           for {
             _ <- ZIO.logWarning(

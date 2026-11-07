@@ -69,27 +69,27 @@ object TestChessComClientSupport {
       bar   <- ProgressDisplay.make(enabled = false).addBar
       stats <- Ref.make(ClientStatsAccumulator())
       config = ChessComClient.ThrottleConfig(
-        recoveryTiers.getOrElse(doublingTiers(permits.toInt)),
-        cooldown,
-        cooldown,
-        retryBase,
-        10.millis,
-        retryBase,
-        max429Retries,
-        maxCfRetries,
-        maxConnectionRetries,
-        failureWindowSize,
-        failureThreshold,
-        10,
-        minRequestDelayMs,
-        minTierObservation,
-        emaTauMs
+        recoveryTiers = recoveryTiers.getOrElse(doublingTiers(permits.toInt)),
+        cooldown = cooldown,
+        cfCooldown = cooldown,
+        retryBase = retryBase,
+        cfRetryDelay = 10.millis,
+        connectionRetryBase = retryBase,
+        max429Retries = max429Retries,
+        maxCfRetries = maxCfRetries,
+        maxConnectionRetries = maxConnectionRetries,
+        failureWindowSize = failureWindowSize,
+        failureThreshold = failureThreshold,
+        minSampleSize = 10,
+        minRequestDelayMs = minRequestDelayMs,
+        minTierObservation = minTierObservation,
+        emaTauMs = emaTauMs
       )
       refs = ChessComClient.ThrottleRefs(
-        stateRef,
-        activeRef,
-        rateLimitGate,
-        lastReqRef
+        stateRef = stateRef,
+        activeRef = activeRef,
+        rateLimitGate = rateLimitGate,
+        lastRequestRef = lastReqRef
       )
     } yield {
       val driver = new ZClient.Driver[Any, Scope, Throwable] {
@@ -116,16 +116,16 @@ object TestChessComClientSupport {
           ZIO.die(new UnsupportedOperationException)
       }
       val client = ChessComClient(
-        ZClient.fromDriver(driver),
-        pgClient,
-        bodyStore,
-        Headers.empty,
-        refs,
-        stats,
-        bar,
-        config,
-        recoveryFiberRef,
-        ZIO.unit
+        client = ZClient.fromDriver(driver),
+        pgClient = pgClient,
+        bodyStore = bodyStore,
+        headers = Headers.empty,
+        throttle = refs,
+        statsRef = stats,
+        progressBar = bar,
+        config = config,
+        recoveryFiberRef = recoveryFiberRef,
+        endSessionEffect = ZIO.unit
       )
       (client, stateRef, stats)
     }
@@ -213,38 +213,38 @@ object TestChessComClientSupport {
           ZIO.die(new UnsupportedOperationException)
       }
       val refs = ChessComClient.ThrottleRefs(
-        stateRef,
-        activeRef,
-        rateLimitGate,
-        lastReqRef
+        stateRef = stateRef,
+        activeRef = activeRef,
+        rateLimitGate = rateLimitGate,
+        lastRequestRef = lastReqRef
       )
       ChessComClient(
-        ZClient.fromDriver(driver),
-        pgClient,
-        bodyStore,
-        Headers.empty,
-        refs,
-        stats,
-        bar,
-        ChessComClient.ThrottleConfig(
-          Vector(2, permits.toInt.max(2)).distinct,
-          30.seconds,
-          5.seconds,
-          1.second,
-          10.seconds,
-          1.second,
-          5,
-          2,
-          3,
-          20,
-          0.2,
-          10,
-          0,
-          Duration.Zero,
-          500L
+        client = ZClient.fromDriver(driver),
+        pgClient = pgClient,
+        bodyStore = bodyStore,
+        headers = Headers.empty,
+        throttle = refs,
+        statsRef = stats,
+        progressBar = bar,
+        config = ChessComClient.ThrottleConfig(
+          recoveryTiers = Vector(2, permits.toInt.max(2)).distinct,
+          cooldown = 30.seconds,
+          cfCooldown = 5.seconds,
+          retryBase = 1.second,
+          cfRetryDelay = 10.seconds,
+          connectionRetryBase = 1.second,
+          max429Retries = 5,
+          maxCfRetries = 2,
+          maxConnectionRetries = 3,
+          failureWindowSize = 20,
+          failureThreshold = 0.2,
+          minSampleSize = 10,
+          minRequestDelayMs = 0,
+          minTierObservation = Duration.Zero,
+          emaTauMs = 500L
         ),
-        recoveryFiberRef,
-        ZIO.unit
+        recoveryFiberRef = recoveryFiberRef,
+        endSessionEffect = ZIO.unit
       )
     }
 }

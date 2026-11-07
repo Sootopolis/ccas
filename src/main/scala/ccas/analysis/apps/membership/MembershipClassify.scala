@@ -326,7 +326,7 @@ private[membership] object MembershipClassify {
             )
           } else {
             closedAccount(
-              client = client,
+              client,
               storedRoster = storedRoster,
               state = state,
               profile = apiPlayer,
@@ -430,7 +430,12 @@ private[membership] object MembershipClassify {
     // NOT auto-reconcile: the caller propagates the rename through `updatedPlayers` so the membership reconcile
     // transaction commits the rename alongside membership changes.
     UsernameRenameResolver
-      .resolveAndVerify(client, state.player.username, Some(playerId), tournamentFallback = true)
+      .resolveAndVerify(
+        client,
+        staleUsername = state.player.username,
+        playerIdHint = Some(playerId),
+        tournamentFallback = true
+      )
       .flatMap {
         case None => ZIO.succeed(unresolvable)
         case Some((resolvedUsername, resolvedProfile)) =>
@@ -473,7 +478,7 @@ private[membership] object MembershipClassify {
       )
     } else {
       closedAccount(
-        client = client,
+        client,
         storedRoster = storedRoster,
         state = state,
         profile = resolvedProfile,

@@ -14,7 +14,7 @@ object TestRetentionSweep extends ZIOSpecDefault {
   override def spec: Spec[Any, Throwable] = suite("TestRetentionSweep")(
     testEnsureTablesLeavesRetentionToTheSweep
   ).provideShared(
-    FreshSchemaLayer("test_retention_sweep", onInit = Tables.ensureTables)
+    FreshSchemaLayer(schema = "test_retention_sweep", onInit = Tables.ensureTables)
   ) @@ TestAspect.sequential
 
   private val url  = "https://api.chess.com/pub/club/stale-test"

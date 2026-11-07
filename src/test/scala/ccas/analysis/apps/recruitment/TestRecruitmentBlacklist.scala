@@ -26,7 +26,7 @@ object TestRecruitmentBlacklist extends ZIOSpecDefault {
     suiteBlacklist,
     suiteBlacklistApp
   ).provideShared(
-    FreshSchemaLayer("test_recruitment_blacklist", onInit = Tables.ensureTables),
+    FreshSchemaLayer(schema = "test_recruitment_blacklist", onInit = Tables.ensureTables),
     ZLayer.succeed(ProgressDisplay.make(enabled = false))
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock
 
@@ -48,7 +48,13 @@ object TestRecruitmentBlacklist extends ZIOSpecDefault {
       criteriaId <- seedCriteria(criteria)
       // Blacklist alice (indefinite)
       _ <- RecruitmentBlacklist.insert(
-        RecruitmentBlacklist(clubId, pid0, Times.t0, expiresAt = None, reason = Some("banned"))
+        RecruitmentBlacklist(
+          clubId = clubId,
+          playerId = pid0,
+          addedAt = Times.t0,
+          expiresAt = None,
+          reason = Some("banned")
+        )
       )
       runId  <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None, None)
       client <- fakeChessComClient(responses)
@@ -71,9 +77,9 @@ object TestRecruitmentBlacklist extends ZIOSpecDefault {
       // Blacklist alice with an already-expired entry
       _ <- RecruitmentBlacklist.insert(
         RecruitmentBlacklist(
-          clubId,
-          pid0,
-          Times.t0,
+          clubId = clubId,
+          playerId = pid0,
+          addedAt = Times.t0,
           expiresAt = Some(now.minus(Duration.ofDays(1))),
           reason = Some("temp ban")
         )
@@ -111,10 +117,10 @@ object TestRecruitmentBlacklist extends ZIOSpecDefault {
       client   <- fakeChessComClient(responses)
       pgClient <- ZIO.service[PostgresClient]
       _ <- BlacklistApp.addToBlacklist(
-        blacklistClub,
-        List(Username("target-player")),
-        Some("toxic"),
-        Some(futureInstant)
+        club = blacklistClub,
+        usernames = List(Username("target-player")),
+        reason = Some("toxic"),
+        expiresAt = Some(futureInstant)
       )
         .provideEnvironment(ZEnvironment(client, pgClient, ProgressDisplay.make(enabled = false)))
       entries <- RecruitmentBlacklist.selectByClub(blacklistClubId)
@@ -153,10 +159,10 @@ object TestRecruitmentBlacklist extends ZIOSpecDefault {
       _ <- BlacklistApp.addToBlacklist(blacklistClub, List(Username("target-player")), Some("first"), None)
         .provideEnvironment(ZEnvironment(client, pgClient, ProgressDisplay.make(enabled = false)))
       _ <- BlacklistApp.addToBlacklist(
-        blacklistClub,
-        List(Username("target-player")),
-        Some("updated"),
-        Some(Times.t3)
+        club = blacklistClub,
+        usernames = List(Username("target-player")),
+        reason = Some("updated"),
+        expiresAt = Some(Times.t3)
       )
         .provideEnvironment(ZEnvironment(client, pgClient, ProgressDisplay.make(enabled = false)))
       entries <- RecruitmentBlacklist.selectByClub(blacklistClubId)
@@ -179,11 +185,11 @@ object TestRecruitmentBlacklist extends ZIOSpecDefault {
       _ <- seedPlayer(pid1)
       _ <- RecruitmentBlacklist.insert(
         RecruitmentBlacklist(
-          blacklistClubId,
-          pid1,
-          Times.t0,
-          Some(Instant.now().minus(Duration.ofDays(1))),
-          Some("expired")
+          clubId = blacklistClubId,
+          playerId = pid1,
+          addedAt = Times.t0,
+          expiresAt = Some(Instant.now().minus(Duration.ofDays(1))),
+          reason = Some("expired")
         )
       )
       entries <- RecruitmentBlacklist.selectActiveByClub(blacklistClubId, Instant.now())
@@ -227,10 +233,10 @@ object TestRecruitmentBlacklist extends ZIOSpecDefault {
       client   <- fakeChessComClient(responses)
       pgClient <- ZIO.service[PostgresClient]
       blacklisted <- BlacklistApp.addToBlacklist(
-        blacklistClub,
-        List(Username("alice"), Username("bob"), Username("charlie")),
-        Some("batch ban"),
-        None
+        club = blacklistClub,
+        usernames = List(Username("alice"), Username("bob"), Username("charlie")),
+        reason = Some("batch ban"),
+        expiresAt = None
       ).provideEnvironment(ZEnvironment(client, pgClient, ProgressDisplay.make(enabled = false)))
       entries <- RecruitmentBlacklist.selectByClub(blacklistClubId)
     } yield assertTrue(

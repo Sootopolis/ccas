@@ -21,7 +21,7 @@ object TestRefAppSkipAndUpgrade extends ZIOSpecDefault {
     suiteTournamentSorting,
     suiteUpgrade
   ).provideShared(
-    FreshSchemaLayer("test_ref_app_skip_upgrade", onInit = Tables.ensureTables),
+    FreshSchemaLayer(schema = "test_ref_app_skip_upgrade", onInit = Tables.ensureTables),
     Scope.default
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock
 
@@ -116,9 +116,9 @@ object TestRefAppSkipAndUpgrade extends ZIOSpecDefault {
   private def testWritesResolutionFailedSkipWhenPlayerHasMatchesButNotInRoster =
     test("writes ResolutionFailed skip when player has matches but is not in roster") {
       val matchJson = apiDailyMatchJson(
-        matchId1,
-        "club-x",
-        "club-y",
+        matchId = matchId1,
+        team1Club = "club-x",
+        team2Club = "club-y",
         team1Players = List(("stranger1", 1)),
         team2Players = List(("stranger2", 2))
       )
@@ -159,9 +159,9 @@ object TestRefAppSkipAndUpgrade extends ZIOSpecDefault {
       skipAfterRun1 <- PlayerRefSkip.selectId(pid0)
       // Run 2: provide data that WOULD resolve alice -- but she should be skipped
       matchJson = apiDailyMatchJson(
-        matchId1,
-        "our-club",
-        "other-club",
+        matchId = matchId1,
+        team1Club = "our-club",
+        team2Club = "other-club",
         team1Players = List(("alice", 3)),
         team2Players = List(("opponent1", 1))
       )
@@ -273,9 +273,9 @@ object TestRefAppSkipAndUpgrade extends ZIOSpecDefault {
   private def testExpiredSkipAllowsRetryAndSkipRowDeletedOnResolution =
     test("expired skip allows retry and skip row is deleted on resolution") {
       val matchJson = apiDailyMatchJson(
-        matchId1,
-        "our-club",
-        "other-club",
+        matchId = matchId1,
+        team1Club = "our-club",
+        team2Club = "other-club",
         team1Players = List(("alice", 3)),
         team2Players = List(("opponent1", 1))
       )
@@ -316,9 +316,9 @@ object TestRefAppSkipAndUpgrade extends ZIOSpecDefault {
   private def testForceSkippedReProcessesPlayersWithActiveSkipRecords =
     test("forceSkipped re-processes players with active skip records") {
       val matchJson = apiDailyMatchJson(
-        matchId1,
-        "our-club",
-        "other-club",
+        matchId = matchId1,
+        team1Club = "our-club",
+        team2Club = "other-club",
         team1Players = List(("alice", 3)),
         team2Players = List(("opponent1", 1))
       )
@@ -354,9 +354,9 @@ object TestRefAppSkipAndUpgrade extends ZIOSpecDefault {
   private def testForceSkippedReProcessesClubsWithActiveSkipRecords =
     test("forceSkipped re-processes clubs with active skip records") {
       val matchJson = apiDailyMatchJson(
-        matchId1,
-        "our-club",
-        "other-club",
+        matchId = matchId1,
+        team1Club = "our-club",
+        team2Club = "other-club",
         team1Players = List(("player1", 1)),
         team2Players = List(("player2", 2))
       )
@@ -439,9 +439,9 @@ object TestRefAppSkipAndUpgrade extends ZIOSpecDefault {
   private def testUpgradesTournamentRefToMatchRef =
     test("upgrades tournament ref to match ref when match data is available") {
       val matchJson = apiDailyMatchJson(
-        matchId1,
-        "our-club",
-        "other-club",
+        matchId = matchId1,
+        team1Club = "our-club",
+        team2Club = "other-club",
         team1Players = List(("alice", 3)),
         team2Players = List(("opponent1", 1))
       )
@@ -580,9 +580,9 @@ object TestRefAppSkipAndUpgrade extends ZIOSpecDefault {
         // Pre-seed a tournament ref for alice
         _ <- PlayerTournamentRef.insert(PlayerTournamentRef(pid0, TournamentSlug("tourney-1"), 1))
         matchJson = apiDailyMatchJson(
-          matchId1,
-          "our-club",
-          "other-club",
+          matchId = matchId1,
+          team1Club = "our-club",
+          team2Club = "other-club",
           team1Players = List(("alice", 3)),
           team2Players = List(("opponent1", 1))
         )

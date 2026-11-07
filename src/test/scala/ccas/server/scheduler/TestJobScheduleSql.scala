@@ -40,7 +40,7 @@ object TestJobScheduleSql extends ZIOSpecDefault {
     testDeleteByClubLeavesOtherClubs,
     testDeleteByClubLeavesGlobalRows
   ).provideShared(
-    FreshSchemaLayer("test_job_schedule", onInit = ServerTables.ensureTables)
+    FreshSchemaLayer(schema = "test_job_schedule", onInit = ServerTables.ensureTables)
   ) @@ TestAspect.sequential
 
   private object Times {
@@ -62,7 +62,15 @@ object TestJobScheduleSql extends ZIOSpecDefault {
 
   private def testInsertAndSelectId = test("insert returns generated id and selectId retrieves") {
     val schedule =
-      JobSchedule.interval(0L, JobKind.Recruitment, Some(clubIdA), Some("p=1"), 24, enabled = true, None)
+      JobSchedule.interval(
+        id = 0L,
+        kind = JobKind.Recruitment,
+        clubIdOption = Some(clubIdA),
+        params = Some("p=1"),
+        intervalHours = 24,
+        enabled = true,
+        lastRunAt = None
+      )
     for {
       _      <- deleteAll
       id     <- JobSchedule.insert(schedule)
@@ -81,8 +89,24 @@ object TestJobScheduleSql extends ZIOSpecDefault {
   }
 
   private def testSelectAll = test("selectAll returns all schedules") {
-    val s1 = JobSchedule.interval(0L, JobKind.Recruitment, Some(clubIdA), None, 12, enabled = true, None)
-    val s2 = JobSchedule.interval(0L, JobKind.Membership, Some(clubIdB), None, 24, enabled = true, None)
+    val s1 = JobSchedule.interval(
+      id = 0L,
+      kind = JobKind.Recruitment,
+      clubIdOption = Some(clubIdA),
+      params = None,
+      intervalHours = 12,
+      enabled = true,
+      lastRunAt = None
+    )
+    val s2 = JobSchedule.interval(
+      id = 0L,
+      kind = JobKind.Membership,
+      clubIdOption = Some(clubIdB),
+      params = None,
+      intervalHours = 24,
+      enabled = true,
+      lastRunAt = None
+    )
     for {
       _   <- deleteAll
       _   <- JobSchedule.insert(s1)
@@ -92,8 +116,24 @@ object TestJobScheduleSql extends ZIOSpecDefault {
   }
 
   private def testSelectEnabledFiltersDisabled = test("selectEnabled filters disabled") {
-    val enabled  = JobSchedule.interval(0L, JobKind.Recruitment, Some(clubIdA), None, 12, enabled = true, None)
-    val disabled = JobSchedule.interval(0L, JobKind.Membership, Some(clubIdB), None, 24, enabled = false, None)
+    val enabled = JobSchedule.interval(
+      id = 0L,
+      kind = JobKind.Recruitment,
+      clubIdOption = Some(clubIdA),
+      params = None,
+      intervalHours = 12,
+      enabled = true,
+      lastRunAt = None
+    )
+    val disabled = JobSchedule.interval(
+      id = 0L,
+      kind = JobKind.Membership,
+      clubIdOption = Some(clubIdB),
+      params = None,
+      intervalHours = 24,
+      enabled = false,
+      lastRunAt = None
+    )
     for {
       _      <- deleteAll
       _      <- JobSchedule.insert(enabled)
@@ -106,7 +146,15 @@ object TestJobScheduleSql extends ZIOSpecDefault {
   }
 
   private def testUpdateLastRunAt = test("updateLastRunAt sets timestamp") {
-    val schedule = JobSchedule.interval(0L, JobKind.Recruitment, Some(clubIdA), None, 12, enabled = true, None)
+    val schedule = JobSchedule.interval(
+      id = 0L,
+      kind = JobKind.Recruitment,
+      clubIdOption = Some(clubIdA),
+      params = None,
+      intervalHours = 12,
+      enabled = true,
+      lastRunAt = None
+    )
     for {
       _      <- deleteAll
       id     <- JobSchedule.insert(schedule)
@@ -116,7 +164,15 @@ object TestJobScheduleSql extends ZIOSpecDefault {
   }
 
   private def testUpdateAllFields = test("update with all optional fields") {
-    val schedule = JobSchedule.interval(0L, JobKind.Recruitment, Some(clubIdA), None, 12, enabled = true, None)
+    val schedule = JobSchedule.interval(
+      id = 0L,
+      kind = JobKind.Recruitment,
+      clubIdOption = Some(clubIdA),
+      params = None,
+      intervalHours = 12,
+      enabled = true,
+      lastRunAt = None
+    )
     for {
       _      <- deleteAll
       id     <- JobSchedule.insert(schedule)
@@ -131,7 +187,15 @@ object TestJobScheduleSql extends ZIOSpecDefault {
 
   private def testUpdatePartialFields = test("update with partial fields") {
     val schedule =
-      JobSchedule.interval(0L, JobKind.Recruitment, Some(clubIdA), Some("original"), 12, enabled = true, None)
+      JobSchedule.interval(
+        id = 0L,
+        kind = JobKind.Recruitment,
+        clubIdOption = Some(clubIdA),
+        params = Some("original"),
+        intervalHours = 12,
+        enabled = true,
+        lastRunAt = None
+      )
     for {
       _      <- deleteAll
       id     <- JobSchedule.insert(schedule)
@@ -145,7 +209,15 @@ object TestJobScheduleSql extends ZIOSpecDefault {
   }
 
   private def testUpdateNoFields = test("update with no fields is a no-op") {
-    val schedule = JobSchedule.interval(0L, JobKind.Recruitment, Some(clubIdA), None, 12, enabled = true, None)
+    val schedule = JobSchedule.interval(
+      id = 0L,
+      kind = JobKind.Recruitment,
+      clubIdOption = Some(clubIdA),
+      params = None,
+      intervalHours = 12,
+      enabled = true,
+      lastRunAt = None
+    )
     for {
       _      <- deleteAll
       id     <- JobSchedule.insert(schedule)
@@ -159,7 +231,15 @@ object TestJobScheduleSql extends ZIOSpecDefault {
 
   private def testUpdateSetParamsToNull = test("update can set params to null via Some(None)") {
     val schedule =
-      JobSchedule.interval(0L, JobKind.Recruitment, Some(clubIdA), Some("original"), 12, enabled = true, None)
+      JobSchedule.interval(
+        id = 0L,
+        kind = JobKind.Recruitment,
+        clubIdOption = Some(clubIdA),
+        params = Some("original"),
+        intervalHours = 12,
+        enabled = true,
+        lastRunAt = None
+      )
     for {
       _      <- deleteAll
       id     <- JobSchedule.insert(schedule)
@@ -173,7 +253,15 @@ object TestJobScheduleSql extends ZIOSpecDefault {
   }
 
   private def testDelete = test("delete removes the schedule") {
-    val schedule = JobSchedule.interval(0L, JobKind.Recruitment, Some(clubIdA), None, 12, enabled = true, None)
+    val schedule = JobSchedule.interval(
+      id = 0L,
+      kind = JobKind.Recruitment,
+      clubIdOption = Some(clubIdA),
+      params = None,
+      intervalHours = 12,
+      enabled = true,
+      lastRunAt = None
+    )
     for {
       _      <- deleteAll
       id     <- JobSchedule.insert(schedule)
@@ -183,8 +271,24 @@ object TestJobScheduleSql extends ZIOSpecDefault {
   }
 
   private def testUniqueConstraint = test("unique constraint on (kind, club_id)") {
-    val s1 = JobSchedule.interval(0L, JobKind.Recruitment, Some(clubIdA), None, 12, enabled = true, None)
-    val s2 = JobSchedule.interval(0L, JobKind.Recruitment, Some(clubIdA), None, 24, enabled = false, None)
+    val s1 = JobSchedule.interval(
+      id = 0L,
+      kind = JobKind.Recruitment,
+      clubIdOption = Some(clubIdA),
+      params = None,
+      intervalHours = 12,
+      enabled = true,
+      lastRunAt = None
+    )
+    val s2 = JobSchedule.interval(
+      id = 0L,
+      kind = JobKind.Recruitment,
+      clubIdOption = Some(clubIdA),
+      params = None,
+      intervalHours = 24,
+      enabled = false,
+      lastRunAt = None
+    )
     for {
       _      <- deleteAll
       _      <- JobSchedule.insert(s1)
@@ -194,15 +298,15 @@ object TestJobScheduleSql extends ZIOSpecDefault {
 
   private def testCronRoundTrip = test("cron schedule round-trips through insert/selectId and decodes its trigger") {
     val sched = JobSchedule.cron(
-      0L,
-      JobKind.MatchRef,
-      None,
-      None,
-      "0 0 9 ? * MON",
-      "Europe/London",
-      MisfirePolicy.CatchUp,
+      id = 0L,
+      kind = JobKind.MatchRef,
+      clubIdOption = None,
+      params = None,
+      cronExpr = "0 0 9 ? * MON",
+      timezone = "Europe/London",
+      misfire = MisfirePolicy.CatchUp,
       enabled = true,
-      Some(Times.t0)
+      lastRunAt = Some(Times.t0)
     )
     for {
       _      <- deleteAll
@@ -223,17 +327,17 @@ object TestJobScheduleSql extends ZIOSpecDefault {
     test("trigger-shape CHECK rejects an interval row carrying cron columns") {
       // Raw apply (not the smart ctors) deliberately violates the trigger-shape invariant.
       val bad = JobSchedule(
-        0L,
-        JobKind.MatchRef,
-        None,
-        None,
-        TriggerType.Interval,
-        Some[Short](24),
-        Some("0 0 9 ? * MON"),
-        Some("UTC"),
-        Some(MisfirePolicy.Skip),
+        id = 0L,
+        kind = JobKind.MatchRef,
+        clubIdOption = None,
+        params = None,
+        triggerType = TriggerType.Interval,
+        intervalHours = Some[Short](24),
+        cronExpr = Some("0 0 9 ? * MON"),
+        timezone = Some("UTC"),
+        misfirePolicy = Some(MisfirePolicy.Skip),
         enabled = true,
-        None
+        lastRunAt = None
       )
       for {
         _      <- deleteAll
@@ -246,9 +350,11 @@ object TestJobScheduleSql extends ZIOSpecDefault {
 
   private def testSeedGlobalInsertsRow = test("seedGlobalIfAbsent inserts a global (club_id NULL) row") {
     for {
-      _        <- deleteAll
-      inserted <- JobSchedule.seedGlobalIfAbsent(ScheduleSeed(JobKind.MatchRef, 24, enabled = true))
-      rows     <- globalRows(JobKind.MatchRef)
+      _ <- deleteAll
+      inserted <- JobSchedule.seedGlobalIfAbsent(
+        ScheduleSeed(kind = JobKind.MatchRef, intervalHours = 24, enabled = true)
+      )
+      rows <- globalRows(JobKind.MatchRef)
     } yield assertTrue(
       inserted == 1,
       rows.size == 1,
@@ -262,19 +368,27 @@ object TestJobScheduleSql extends ZIOSpecDefault {
   private def testSeedGlobalIdempotent = test("seedGlobalIfAbsent is a no-op on re-seed") {
     for {
       _      <- deleteAll
-      first  <- JobSchedule.seedGlobalIfAbsent(ScheduleSeed(JobKind.ClubData, 6, enabled = true))
-      second <- JobSchedule.seedGlobalIfAbsent(ScheduleSeed(JobKind.ClubData, 6, enabled = true))
+      first  <- JobSchedule.seedGlobalIfAbsent(ScheduleSeed(kind = JobKind.ClubData, intervalHours = 6, enabled = true))
+      second <- JobSchedule.seedGlobalIfAbsent(ScheduleSeed(kind = JobKind.ClubData, intervalHours = 6, enabled = true))
       rows   <- globalRows(JobKind.ClubData)
     } yield assertTrue(first == 1, second == 0, rows.size == 1)
   }
 
   private def testSeedGlobalPreservesExisting =
     test("seedGlobalIfAbsent leaves a hand-disabled global row untouched") {
-      val existing = JobSchedule.interval(0L, JobKind.MatchRef, None, None, 99, enabled = false, None)
+      val existing = JobSchedule.interval(
+        id = 0L,
+        kind = JobKind.MatchRef,
+        clubIdOption = None,
+        params = None,
+        intervalHours = 99,
+        enabled = false,
+        lastRunAt = None
+      )
       for {
-        _    <- deleteAll
-        _    <- JobSchedule.insert(existing)
-        n    <- JobSchedule.seedGlobalIfAbsent(ScheduleSeed(JobKind.MatchRef, 24, enabled = true))
+        _ <- deleteAll
+        _ <- JobSchedule.insert(existing)
+        n <- JobSchedule.seedGlobalIfAbsent(ScheduleSeed(kind = JobKind.MatchRef, intervalHours = 24, enabled = true))
         rows <- globalRows(JobKind.MatchRef)
       } yield assertTrue(
         n == 0,
@@ -289,9 +403,12 @@ object TestJobScheduleSql extends ZIOSpecDefault {
 
   private def testSeedPerClubInsertsRow = test("seedPerClubIfAbsent inserts a per-club (club_id non-NULL) row") {
     for {
-      _        <- deleteAll
-      inserted <- JobSchedule.seedPerClubIfAbsent(clubIdA, ScheduleSeed(JobKind.History, 24, enabled = true))
-      rows     <- perClubRows(JobKind.History, clubIdA)
+      _ <- deleteAll
+      inserted <- JobSchedule.seedPerClubIfAbsent(
+        clubIdA,
+        ScheduleSeed(kind = JobKind.History, intervalHours = 24, enabled = true)
+      )
+      rows <- perClubRows(JobKind.History, clubIdA)
     } yield assertTrue(
       inserted == 1,
       rows.size == 1,
@@ -305,18 +422,30 @@ object TestJobScheduleSql extends ZIOSpecDefault {
 
   private def testSeedPerClubIdempotent = test("seedPerClubIfAbsent is a no-op on re-seed") {
     for {
-      _      <- deleteAll
-      first  <- JobSchedule.seedPerClubIfAbsent(clubIdA, ScheduleSeed(JobKind.History, 24, enabled = true))
-      second <- JobSchedule.seedPerClubIfAbsent(clubIdA, ScheduleSeed(JobKind.History, 24, enabled = true))
-      rows   <- perClubRows(JobKind.History, clubIdA)
+      _ <- deleteAll
+      first <- JobSchedule.seedPerClubIfAbsent(
+        clubIdA,
+        ScheduleSeed(kind = JobKind.History, intervalHours = 24, enabled = true)
+      )
+      second <- JobSchedule.seedPerClubIfAbsent(
+        clubIdA,
+        ScheduleSeed(kind = JobKind.History, intervalHours = 24, enabled = true)
+      )
+      rows <- perClubRows(JobKind.History, clubIdA)
     } yield assertTrue(first == 1, second == 0, rows.size == 1)
   }
 
   private def testSeedPerClubDistinctClubs = test("seedPerClubIfAbsent seeds one row per club, not globally") {
     for {
-      _  <- deleteAll
-      a  <- JobSchedule.seedPerClubIfAbsent(clubIdA, ScheduleSeed(JobKind.History, 24, enabled = true))
-      b  <- JobSchedule.seedPerClubIfAbsent(clubIdB, ScheduleSeed(JobKind.History, 24, enabled = true))
+      _ <- deleteAll
+      a <- JobSchedule.seedPerClubIfAbsent(
+        clubIdA,
+        ScheduleSeed(kind = JobKind.History, intervalHours = 24, enabled = true)
+      )
+      b <- JobSchedule.seedPerClubIfAbsent(
+        clubIdB,
+        ScheduleSeed(kind = JobKind.History, intervalHours = 24, enabled = true)
+      )
       ra <- perClubRows(JobKind.History, clubIdA)
       rb <- perClubRows(JobKind.History, clubIdB)
     } yield assertTrue(a == 1, b == 1, ra.size == 1, rb.size == 1)
@@ -324,8 +453,11 @@ object TestJobScheduleSql extends ZIOSpecDefault {
 
   private def testSeedPerClubRespectsEnabled = test("seedPerClubIfAbsent honours the enabled flag") {
     for {
-      _    <- deleteAll
-      _    <- JobSchedule.seedPerClubIfAbsent(clubIdA, ScheduleSeed(JobKind.History, 24, enabled = false))
+      _ <- deleteAll
+      _ <- JobSchedule.seedPerClubIfAbsent(
+        clubIdA,
+        ScheduleSeed(kind = JobKind.History, intervalHours = 24, enabled = false)
+      )
       rows <- perClubRows(JobKind.History, clubIdA)
       en   <- JobSchedule.selectEnabled
     } yield assertTrue(
@@ -337,11 +469,22 @@ object TestJobScheduleSql extends ZIOSpecDefault {
 
   private def testSeedPerClubPreservesExisting =
     test("seedPerClubIfAbsent leaves an existing edited per-club row untouched") {
-      val existing = JobSchedule.interval(0L, JobKind.History, Some(clubIdA), None, 99, enabled = false, None)
+      val existing = JobSchedule.interval(
+        id = 0L,
+        kind = JobKind.History,
+        clubIdOption = Some(clubIdA),
+        params = None,
+        intervalHours = 99,
+        enabled = false,
+        lastRunAt = None
+      )
       for {
-        _    <- deleteAll
-        _    <- JobSchedule.insert(existing)
-        n    <- JobSchedule.seedPerClubIfAbsent(clubIdA, ScheduleSeed(JobKind.History, 24, enabled = true))
+        _ <- deleteAll
+        _ <- JobSchedule.insert(existing)
+        n <- JobSchedule.seedPerClubIfAbsent(
+          clubIdA,
+          ScheduleSeed(kind = JobKind.History, intervalHours = 24, enabled = true)
+        )
         rows <- perClubRows(JobKind.History, clubIdA)
       } yield assertTrue(
         n == 0,
@@ -354,9 +497,15 @@ object TestJobScheduleSql extends ZIOSpecDefault {
   private def testDeleteByClubRemovesAllKinds =
     test("deleteByClub removes all per-club rows for the club (any kind)") {
       for {
-        _   <- deleteAll
-        _   <- JobSchedule.seedPerClubIfAbsent(clubIdA, ScheduleSeed(JobKind.History, 24, enabled = true))
-        _   <- JobSchedule.seedPerClubIfAbsent(clubIdA, ScheduleSeed(JobKind.Membership, 24, enabled = true))
+        _ <- deleteAll
+        _ <- JobSchedule.seedPerClubIfAbsent(
+          clubIdA,
+          ScheduleSeed(kind = JobKind.History, intervalHours = 24, enabled = true)
+        )
+        _ <- JobSchedule.seedPerClubIfAbsent(
+          clubIdA,
+          ScheduleSeed(kind = JobKind.Membership, intervalHours = 24, enabled = true)
+        )
         n   <- JobSchedule.deleteByClub(clubIdA)
         all <- JobSchedule.selectAll
       } yield assertTrue(n == 2, !all.exists(_.clubIdOption.contains(clubIdA)))
@@ -365,9 +514,15 @@ object TestJobScheduleSql extends ZIOSpecDefault {
   private def testDeleteByClubLeavesOtherClubs =
     test("deleteByClub leaves other clubs' rows untouched") {
       for {
-        _  <- deleteAll
-        _  <- JobSchedule.seedPerClubIfAbsent(clubIdA, ScheduleSeed(JobKind.History, 24, enabled = true))
-        _  <- JobSchedule.seedPerClubIfAbsent(clubIdB, ScheduleSeed(JobKind.History, 24, enabled = true))
+        _ <- deleteAll
+        _ <- JobSchedule.seedPerClubIfAbsent(
+          clubIdA,
+          ScheduleSeed(kind = JobKind.History, intervalHours = 24, enabled = true)
+        )
+        _ <- JobSchedule.seedPerClubIfAbsent(
+          clubIdB,
+          ScheduleSeed(kind = JobKind.History, intervalHours = 24, enabled = true)
+        )
         n  <- JobSchedule.deleteByClub(clubIdA)
         ra <- perClubRows(JobKind.History, clubIdA)
         rb <- perClubRows(JobKind.History, clubIdB)
@@ -377,11 +532,14 @@ object TestJobScheduleSql extends ZIOSpecDefault {
   private def testDeleteByClubLeavesGlobalRows =
     test("deleteByClub leaves global (club_id NULL) rows untouched") {
       for {
-        _    <- deleteAll
-        _    <- JobSchedule.seedPerClubIfAbsent(clubIdA, ScheduleSeed(JobKind.History, 24, enabled = true))
-        _    <- JobSchedule.seedGlobalIfAbsent(ScheduleSeed(JobKind.MatchRef, 24, enabled = true))
-        n    <- JobSchedule.deleteByClub(clubIdA)
-        ra   <- perClubRows(JobKind.History, clubIdA)
+        _ <- deleteAll
+        _ <- JobSchedule.seedPerClubIfAbsent(
+          clubIdA,
+          ScheduleSeed(kind = JobKind.History, intervalHours = 24, enabled = true)
+        )
+        _  <- JobSchedule.seedGlobalIfAbsent(ScheduleSeed(kind = JobKind.MatchRef, intervalHours = 24, enabled = true))
+        n  <- JobSchedule.deleteByClub(clubIdA)
+        ra <- perClubRows(JobKind.History, clubIdA)
         glob <- globalRows(JobKind.MatchRef)
       } yield assertTrue(n == 1, ra.isEmpty, glob.size == 1)
     }

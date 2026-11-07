@@ -131,8 +131,16 @@ private[history] object HistoryBoardBuilder {
           } yield {
             val t1FairPlay = team1Fp.contains(t1.username.value)
             val t2FairPlay = team2Fp.contains(t2.username.value)
-            val g1         = normalizeGameOutcome(t1.playedAsWhite, t2.playedAsBlack, whiteTeamIsTeam1 = true)
-            val g2         = normalizeGameOutcome(t2.playedAsWhite, t1.playedAsBlack, whiteTeamIsTeam1 = false)
+            val g1 = normalizeGameOutcome(
+              whiteResult = t1.playedAsWhite,
+              blackResult = t2.playedAsBlack,
+              whiteTeamIsTeam1 = true
+            )
+            val g2 = normalizeGameOutcome(
+              whiteResult = t2.playedAsWhite,
+              blackResult = t1.playedAsBlack,
+              whiteTeamIsTeam1 = false
+            )
             boardNum -> computeScoreX2(g1.winner, g2.winner, t1FairPlay, t2FairPlay)
           }
         }.toMap

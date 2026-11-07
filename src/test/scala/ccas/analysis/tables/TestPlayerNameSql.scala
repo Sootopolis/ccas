@@ -51,7 +51,7 @@ object TestPlayerNameSql extends ZIOSpecDefault {
       )
     },
     test("an update that loses the since guard records nothing, so the name the row still stores stands") {
-      val p = player(120, "kept-name", since = at(5))
+      val p = player(id = 120, username = "kept-name", since = at(5))
       for {
         _      <- Player.insert(p)
         rows   <- Player.updateCurrentState(p.copy(username = Username("stale-write"), since = at(1)))
@@ -82,14 +82,17 @@ object TestPlayerNameSql extends ZIOSpecDefault {
     // A player holding no name still stores the name it lost, so a write that changes nothing must not read that back
     // as an observation: an insert that finds the row there, or an update that loses its `since` race.
     test("a write that lands on nothing gives a player holding no name nothing back") {
-      val losing = player(135, "lost-for-good", since = at(1))
+      val losing = player(id = 135, username = "lost-for-good", since = at(1))
       for {
         _        <- Player.insert(losing)
         _        <- Player.insert(player(136, "lost-for-good"))
-        inserted <- Player.insertIfNew(player(135, "some-other-name", since = at(3)))
-        _        <- Player.writeBatch(inserted = List(player(135, "batch-other-name", since = at(3))), updated = Nil)
+        inserted <- Player.insertIfNew(player(id = 135, username = "some-other-name", since = at(3)))
+        _ <- Player.writeBatch(
+          inserted = List(player(id = 135, username = "batch-other-name", since = at(3))),
+          updated = Nil
+        )
         // The row's own `since`, as an inactive player's unchanging `lastOnlineAt` gives: the name still differs.
-        sameSince <- Player.insertIfNew(player(135, "same-since-name", since = at(1)))
+        sameSince <- Player.insertIfNew(player(id = 135, username = "same-since-name", since = at(1)))
         updated   <- Player.updateCurrentState(losing.copy(since = t0))
         current   <- PlayerName.selectCurrentName(losing.playerId)
         holder    <- PlayerName.selectCurrentHolder(losing.username)
@@ -283,7 +286,9 @@ object TestPlayerNameSql extends ZIOSpecDefault {
         exit <- rawName(220, "empty-window", "2030-01-01T00:00:00Z", Some("2030-01-01T00:00:00Z")).either
       } yield assertTrue(violates(exit, "player_name_window"))
     }
-  ).provideShared(FreshSchemaLayer("test_player_name_sql", onInit = Tables.ensureTables)) @@ TestAspect.sequential
+  ).provideShared(
+    FreshSchemaLayer(schema = "test_player_name_sql", onInit = Tables.ensureTables)
+  ) @@ TestAspect.sequential
 
   // Names the constraint, so a failure for any other reason (a codec, a missing player row) cannot pass for it.
   private def violates(result: Either[SQLException, Int], constraint: String): Boolean =

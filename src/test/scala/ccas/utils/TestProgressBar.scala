@@ -207,7 +207,7 @@ object TestProgressBar extends ZIOSpecDefault {
     */
   private def testRenderPublishesRawSnapshotToChannel =
     test("bar print publishes a raw snapshot to the active channel; finish drops it") {
-      val display = ProgressDisplay.makeWith(enabled = false, System.out, System.err, None)
+      val display = ProgressDisplay.makeWith(enabled = false, out = System.out, err = System.err, globalChannel = None)
       for {
         channel <- SubscriptionRef.make(Map.empty[Int, BarSnapshot])
         afterPrint <- ProgressDisplay.currentChannel.locally(Some(channel)) {
@@ -406,7 +406,7 @@ object TestProgressBar extends ZIOSpecDefault {
       val errPs   = new PrintStream(errBaos, true, "UTF-8")
       val capture = new JobLogSink { override def writeConsoleSync(line: String): Unit = outPs.println(line) }
       ZIO.scoped {
-        ProgressDisplay.liveWith(showProgress = false, outPs, errPs).build *>
+        ProgressDisplay.liveWith(showProgress = false, out = outPs, err = errPs).build *>
           JobLogSink.currentSink.locally(capture)(
             ZIO.logInfo {
               throw new RuntimeException("boom from message thunk")

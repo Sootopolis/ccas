@@ -34,7 +34,7 @@ final class JobFollower(
 ) {
 
   def followJob(jobId: String): Task[Int] =
-    followWith(jobId, line => Console.printLine(line).orDie, bars = showProgress)
+    followWith(jobId, sink = line => Console.printLine(line).orDie, bars = showProgress)
 
   // Follow a job, optionally rendering its live progress bars above the streamed log lines. When not `bars`, log lines
   // go straight to `sink` (the pre-bars behaviour: `--stdout` routes to stderr, everything else stdout) and the reconnect
@@ -246,7 +246,7 @@ final class JobFollower(
       for {
         _    <- CompletionCache.appendJob(recentJobsFile, id)
         _    <- printLine(s"${result.club} submitted: $id")
-        code <- followWith(id, printLine, bars = showProgress && !logsToStderr)
+        code <- followWith(jobId = id, sink = printLine, bars = showProgress && !logsToStderr)
         _    <- ZIO.whenDiscard(code == 0)(onComplete(id))
       } yield code
     }

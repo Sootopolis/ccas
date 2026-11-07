@@ -73,13 +73,13 @@ object StatsApp extends ZIOAppDefault {
             for {
               result <- playerOfPeriodAndReport(clubId, s, u, mg)
               content = StatsReport.formatPlayerOfPeriod(result.contributions, mg)
-              _ <- OutputFile.writeAndLog("stats", parsed.slug, content, ext = "csv")
+              _ <- OutputFile.writeAndLog(appName = "stats", clubSlug = parsed.slug, content = content, ext = "csv")
             } yield ()
           case (None, None) =>
             for {
               result <- memberStatsAndReport(clubId)
               content = StatsReport.formatContribution(result.contributions)
-              _ <- OutputFile.writeAndLog("stats", parsed.slug, content, ext = "csv")
+              _ <- OutputFile.writeAndLog(appName = "stats", clubSlug = parsed.slug, content = content, ext = "csv")
             } yield ()
           case _ => ZIO.fail(BadRequestException("Both --since and --until are required for period stats"))
         }
@@ -120,9 +120,9 @@ object StatsApp extends ZIOAppDefault {
         )
       }
       (rows, matchCount) <- ClubBoard.selectClubBoardsInPeriod(clubId, since, until) <&> ClubMatch.countForClubInPeriod(
-        clubId,
-        since,
-        until
+        clubId = clubId,
+        since = since,
+        until = until
       )
       playerIds = rows.map(_.playerId).distinct
       displayNames <- Player.selectDisplayNames(playerIds)

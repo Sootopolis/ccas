@@ -7,7 +7,7 @@ paths:
 ## Syntax
 
 - Braces on `match`.
-- Braces, not parens, around a multi-line lambda or deferred ZIO body that is a call's only argument, unless it hugs the parens (`f(_.copy(` … `))`). scalafix's `MultilineBlockBraces` checks it.
+- Use braces for a multi-line lambda or deferred effect body that is the call's only argument, e.g. `f { value => ... }` or `ZIO.suspendSucceed { ... }`. A one-argument lambda can stay in parens when it closes the call, as in `f(_.copy(...))`. scalafix's `MultilineBlockBraces` checks this.
 - Parens on `if`/`else`; no Scala 3 braceless (indentation-only) syntax.
 - Never embed a raw control byte (ESC and friends) in a string literal — use `\uXXXX`.
 
@@ -18,10 +18,9 @@ paths:
 
 ## Calls and patterns
 
-- When long arguments that compute something (a nested call, an interpolated string) are all that push a call past the line, consider binding them to values so it fits on one line; otherwise split it, named.
-- Name arguments in any call already split one per line, a method as much as a construction — the vertical space is spent, so the names are free, and they matter most for adjacent same-typed `None` / `Some` arguments. Varargs (`assertTrue`, `List`) have no names to give.
-- Name every argument of a call or none of them, never a mix — a half-named call reads as if the named ones were the only ones that mattered, while the reader still counts positions for the rest (Python rejects that order outright). So when a bare `true` / `false` / `None` wants a label on a one-line call, name the whole call, splitting one argument per line if it no longer fits.
-- A case-class pattern that would list more than three fields, wildcards included, binds the value instead (`case recruit: CliCommand.Recruit =>`) and reads its fields by name: positions break silently when two same-typed fields swap, and the reader counts commas, as in an unnamed call.
+- If long expressions alone push a call past the line, bind them to values when that improves clarity; otherwise split the call.
+- Prefer positional arguments when the method, value expressions, and order make the call easy to read. Use labels to clarify roles that would otherwise be ambiguous, especially for bare booleans, adjacent same-typed values, and record-like constructors. Check identifiers and lambda patterns too: `ctx.clubId`, `unchanged => ...`, or `changed => ...` may already make a role clear. Familiar calls (`require(condition, message)`) and self-describing folds (`foldZIO(error => ..., value => ...)`) are often clearest positionally when their order is conventional. Mix named and positional arguments when only some labels help. A long or multiline call alone is not a reason to add labels; if wrapping hurts readability, consider breaking before the method selection. Varargs have no parameter names.
+- Treat a case-class pattern with more than three fields as a prompt to bind the value (`case recruit: CliCommand.Recruit =>`) and read fields by name. Do the same with fewer fields when positions are easy to confuse, especially same-typed fields.
 - Match each question once. When cases repeat an outer pattern — `Some(a)` / `Some(b)`, or one pattern with and without a guard — because they answer a second question, match it once and branch inside. Rows that are peers of one decision, like `ClubResolver.multi`'s table, stay flat.
 - No default argument values unless a caller genuinely needs them: this is an application, not a library.
 

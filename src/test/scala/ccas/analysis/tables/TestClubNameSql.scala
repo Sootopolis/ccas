@@ -188,7 +188,9 @@ object TestClubNameSql extends ZIOSpecDefault {
         exit <- rawName(180, "empty-window", "2030-01-01T00:00:00Z", Some("2030-01-01T00:00:00Z")).either
       } yield assertTrue(violates(exit, "club_name_window"))
     }
-  ).provideShared(FreshSchemaLayer("test_club_name_sql", onInit = Tables.ensureTables)) @@ TestAspect.sequential
+  ).provideShared(
+    FreshSchemaLayer(schema = "test_club_name_sql", onInit = Tables.ensureTables)
+  ) @@ TestAspect.sequential
 
   // Names the constraint, so a failure for any other reason (a codec, a missing club row) cannot pass for it.
   private def violates(result: Either[SQLException, Int], constraint: String): Boolean =

@@ -40,7 +40,7 @@ object HistoryApp extends ZIOAppDefault {
         rawArgs <- ZIOAppArgs.getArgs
         parsed  <- ZIO.fromEither(parseArgs(rawArgs)).mapError(BadRequestException(_))
         _ <- discoverBatch(
-          parsed.slugs,
+          slugs = parsed.slugs,
           full = parsed.full,
           includeFinished = parsed.includeFinished,
           refreshMinHours = parsed.refreshMinHours
@@ -273,27 +273,29 @@ object HistoryApp extends ZIOAppDefault {
             if (includeFinished) { ClubMatch.selectSettledMatchIdsForClub(ctx.clubId) }
             else { ClubMatch.selectMatchIdsForClub(ctx.clubId) }
 
-          seedClub <- HistorySeeding.seedFromClubMatches(
-            ctx.client,
-            ctx.clubId,
-            ctx.clubSlug,
-            ctx.seedClubMatchesUnchanged
-          )
+          seedClub <-
+            HistorySeeding
+              .seedFromClubMatches(
+                ctx.client,
+                ctx.clubId,
+                ctx.clubSlug,
+                ctx.seedClubMatchesUnchanged
+              )
           _ <- seedClubRef.set(seedClub)
           _ <- ZIO.logInfo(s"  Club matches endpoint: $seedClub new match IDs")
 
           memberSeed <-
             HistorySeeding.seedFromMemberMatches(
-              ctx.client,
-              ctx.clubId,
-              ctx.clubSlug,
-              memberIds,
-              queriedIds,
-              memberNames,
-              excludeMatchIds,
-              includeFinished,
-              shared,
-              ctx.seedPlayerMatchesUnchanged
+              client = ctx.client,
+              clubId = ctx.clubId,
+              clubSlug = ctx.clubSlug,
+              memberIds = memberIds,
+              queriedIds = queriedIds,
+              memberNames = memberNames,
+              excludeMatchIds = excludeMatchIds,
+              includeFinished = includeFinished,
+              shared = shared,
+              unchangedPlayerCounter = ctx.seedPlayerMatchesUnchanged
             )
           _ <- memberSeedRef.set(memberSeed)
           membersSkipped = memberIds.size - memberSeed.queried - memberSeed.failed
@@ -339,14 +341,14 @@ object HistoryApp extends ZIOAppDefault {
           // but unlogged, or finalizedRef unset). logSummary lands the completion summary in the per-job log for HTTP-
           // and scheduler-submitted jobs too — the silent-tail gap membership #130 closed for reconcile.
           _ <- (HistoryRun.complete(
-            runId,
-            completedAt,
-            totalStats.matchesProcessed + totalStats.matchesSharedSkip,
-            totalStats.playersDiscovered,
-            totalStats.refreshMatchUnchanged,
-            totalStats.seedClubMatchesUnchanged,
-            totalStats.seedPlayerMatchesUnchanged,
-            totalStats.matchesAborted
+            runId = runId,
+            completedAt = completedAt,
+            matchesProcessed = totalStats.matchesProcessed + totalStats.matchesSharedSkip,
+            playersDiscovered = totalStats.playersDiscovered,
+            refreshMatchUnchanged = totalStats.refreshMatchUnchanged,
+            seedClubMatchesUnchanged = totalStats.seedClubMatchesUnchanged,
+            seedPlayerMatchesUnchanged = totalStats.seedPlayerMatchesUnchanged,
+            abortedMatches = totalStats.matchesAborted
           ) *> logSummary(totalStats, startedAt, completedAt) *> finalizedRef.set(true)).uninterruptible
         } yield HistoryResult(totalStats, ctx.clubSlug, startedAt, completedAt)
       }.onInterrupt {
@@ -392,14 +394,14 @@ object HistoryApp extends ZIOAppDefault {
         pendingRemaining = pendingRemaining.toInt
       )
       _ <- HistoryRun.complete(
-        runId,
-        completedAt,
-        totalStats.matchesProcessed + totalStats.matchesSharedSkip,
-        totalStats.playersDiscovered,
-        totalStats.refreshMatchUnchanged,
-        totalStats.seedClubMatchesUnchanged,
-        totalStats.seedPlayerMatchesUnchanged,
-        totalStats.matchesAborted
+        runId = runId,
+        completedAt = completedAt,
+        matchesProcessed = totalStats.matchesProcessed + totalStats.matchesSharedSkip,
+        playersDiscovered = totalStats.playersDiscovered,
+        refreshMatchUnchanged = totalStats.refreshMatchUnchanged,
+        seedClubMatchesUnchanged = totalStats.seedClubMatchesUnchanged,
+        seedPlayerMatchesUnchanged = totalStats.seedPlayerMatchesUnchanged,
+        abortedMatches = totalStats.matchesAborted
       )
       _ <- logSummary(totalStats, startedAt, completedAt)
       _ <- OutputFile.writeAndLog("history", clubSlug, formatReport(totalStats, clubSlug, startedAt, completedAt))

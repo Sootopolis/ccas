@@ -28,7 +28,7 @@ object TestApiResponseCacheSql extends ZIOSpecDefault {
     testNoStoreHeaderUpsertStillWorksWhenCallerPassesItExplicitly,
     testDeleteBeforeRetainsFreshAndCleansOrphans
   ).provideShared(
-    FreshSchemaLayer("test_api_response_cache", onInit = Tables.ensureTables)
+    FreshSchemaLayer(schema = "test_api_response_cache", onInit = Tables.ensureTables)
   ) @@ TestAspect.sequential
 
   private object Times {
@@ -172,12 +172,12 @@ object TestApiResponseCacheSql extends ZIOSpecDefault {
     test("touch with MaxAgeUpdate.Overwrite overwrites stored max_age_seconds") {
       for {
         touched <- ApiResponseCache.touch(
-          urlA,
-          Times.t2,
-          None,
-          None,
-          ApiResponseCache.MaxAgeUpdate.Overwrite(9999L),
-          None
+          url = urlA,
+          fetchedAt = Times.t2,
+          etag = None,
+          lastModified = None,
+          maxAgeUpdate = ApiResponseCache.MaxAgeUpdate.Overwrite(9999L),
+          contentType = None
         )
         after <- ApiResponseCache.lookupMeta(urlA)
       } yield assertTrue(

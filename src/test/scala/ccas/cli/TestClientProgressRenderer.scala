@@ -19,7 +19,7 @@ object TestClientProgressRenderer extends ZIOSpecDefault {
     ZIO.suspendSucceed {
       val baos    = new ByteArrayOutputStream
       val ps      = new PrintStream(baos, true, "UTF-8")
-      val display = ProgressDisplay.makeWith(enabled = true, ps, ps, None)
+      val display = ProgressDisplay.makeWith(enabled = true, out = ps, err = ps, globalChannel = None)
       Ref.make(Map.empty[Int, ClientProgressRenderer.Tracked]).flatMap { ref =>
         use(new ClientProgressRenderer(display, ref), ref).map { a =>
           ps.flush()
@@ -86,7 +86,7 @@ object TestClientProgressRenderer extends ZIOSpecDefault {
       ZIO.suspendSucceed {
         val baos    = new ByteArrayOutputStream
         val ps      = new PrintStream(baos, true, "UTF-8")
-        val display = ProgressDisplay.makeWith(enabled = true, ps, ps, None)
+        val display = ProgressDisplay.makeWith(enabled = true, out = ps, err = ps, globalChannel = None)
         for {
           ref <- Ref.make(Map.empty[Int, ClientProgressRenderer.Tracked])
           renderer = new ClientProgressRenderer(display, ref)

@@ -29,7 +29,7 @@ object TestRecruitmentCriteriaApp extends ZIOSpecDefault {
     testLoadFromJsonMissingFile,
     testLoadFromJsonInvalidPath
   ).provideShared(
-    FreshSchemaLayer("test_recruitment_criteria", onInit = Tables.ensureTables)
+    FreshSchemaLayer(schema = "test_recruitment_criteria", onInit = Tables.ensureTables)
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock
 
   private def testSetInsertsCriteriaAndAlias = test("set inserts criteria and a newest-wins alias row") {

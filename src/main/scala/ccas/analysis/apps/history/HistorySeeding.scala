@@ -166,10 +166,10 @@ private[history] object HistorySeeding {
   ): RIO[PostgresClient, Option[Username]] =
     UsernameRenameResolver.resolveFromBoard(
       client,
-      entry.username,
-      entry.matchId,
-      entry.board,
-      entry.isTeam1,
+      staleUsername = entry.username,
+      matchId = entry.matchId,
+      board = entry.board,
+      isTeam1 = entry.isTeam1,
       isLive = false
     )
 
@@ -187,8 +187,8 @@ private[history] object HistorySeeding {
       client.getResult[ApiClubMatches](ApiClubMatches.getUrl(slug))
         .flatMap {
           _.foldPresentZIO(
-            _ => unchangedCounter.update(_ + 1).as(0),
-            changed => insertPendingFromClubMatches(clubId, changed.value)
+            ifUnchanged = _ => unchangedCounter.update(_ + 1).as(0),
+            ifChanged = changed => insertPendingFromClubMatches(clubId, changed.value)
           )
         }
     fetch(clubSlug)
@@ -204,13 +204,15 @@ private[history] object HistorySeeding {
     clubId: ClubId,
     clubMatches: ApiClubMatches
   ): RIO[PostgresClient, Int] = {
-    val allDaily     = clubMatches.dailyFinished ++ clubMatches.dailyInProgress ++ clubMatches.dailyRegistered
-    val dailyPending = allDaily.map(m => HistoryPendingMatch(clubId, ClubMatchId.fromUrl(m.`@id`), isLive = false))
+    val allDaily = clubMatches.dailyFinished ++ clubMatches.dailyInProgress ++ clubMatches.dailyRegistered
+    val dailyPending =
+      allDaily.map(m => HistoryPendingMatch(clubId = clubId, matchId = ClubMatchId.fromUrl(m.`@id`), isLive = false))
     val nonDaily = clubMatches.finished.filterNot(_.timeClass.isDaily) ++
       clubMatches.inProgress.filterNot(_.timeClass.isDaily) ++
       clubMatches.registered.filterNot(_.timeClass.isDaily)
-    val livePending = nonDaily.map(m => HistoryPendingMatch(clubId, ClubMatchId.fromUrl(m.`@id`), isLive = true))
-    val all         = dailyPending ++ livePending
+    val livePending =
+      nonDaily.map(m => HistoryPendingMatch(clubId = clubId, matchId = ClubMatchId.fromUrl(m.`@id`), isLive = true))
+    val all = dailyPending ++ livePending
     for {
       knownIds <- ClubMatch.selectMatchIdsForClub(clubId)
       newOnly = all.filterNot(p => knownIds.contains(p.matchId))
@@ -258,14 +260,14 @@ private[history] object HistorySeeding {
           _ <- ZIO.foreachParDiscard(toQuery) { case (playerId, username) =>
             seedMatchesForPlayerAllClubs(
               client,
-              clubId,
-              clubSlug,
-              playerId,
-              username,
-              excludeMatchIds,
-              includeFinished,
-              shared,
-              unchangedPlayerCounter
+              clubId = clubId,
+              clubSlug = clubSlug,
+              playerId = playerId,
+              username = username,
+              excludeMatchIds = excludeMatchIds,
+              includeFinished = includeFinished,
+              shared = shared,
+              unchangedCounter = unchangedPlayerCounter
             )
               .foldZIO(
                 error =>
@@ -321,17 +323,18 @@ private[history] object HistorySeeding {
             result     <- client.getResult[ApiPlayerMatches](ApiPlayerMatches.getUrl(uname))
             otherClubs <- sc.resolvedClubs.get.map(_.removed(clubSlug).toList)
             primaryCount <- result.foldPresentZIO(
-              _ => unchangedCounter.update(_ + 1) *> stampQueriedAllClubs(clubId, otherClubs, playerId).as(0),
-              changed =>
+              ifUnchanged =
+                _ => unchangedCounter.update(_ + 1) *> stampQueriedAllClubs(clubId, otherClubs, playerId).as(0),
+              ifChanged = changed =>
                 seedAndStampAllClubs(
-                  clubId,
-                  clubSlug,
-                  excludeMatchIds,
-                  includeFinished,
-                  sc,
-                  otherClubs,
-                  playerId,
-                  changed.value
+                  primaryClubId = clubId,
+                  primarySlug = clubSlug,
+                  primaryExcludeMatchIds = excludeMatchIds,
+                  includeFinished = includeFinished,
+                  sc = sc,
+                  otherClubs = otherClubs,
+                  playerId = playerId,
+                  playerMatches = changed.value
                 )
             )
             _ <- sc.queriedPlayers.update(_ + playerId)
@@ -407,11 +410,11 @@ private[history] object HistorySeeding {
   ): RIO[PostgresClient, Int] = {
     val dailyPending = allMatches.collect {
       case m if isClubDailyMatch(m, clubSlug) =>
-        HistoryPendingMatch(clubId, ClubMatchId.fromUrl(m.`@id`), isLive = false)
+        HistoryPendingMatch(clubId = clubId, matchId = ClubMatchId.fromUrl(m.`@id`), isLive = false)
     }
     val livePending = allMatches.collect {
       case m if isClubLiveMatch(m, clubSlug) =>
-        HistoryPendingMatch(clubId, ClubMatchId.fromUrl(m.`@id`), isLive = true)
+        HistoryPendingMatch(clubId = clubId, matchId = ClubMatchId.fromUrl(m.`@id`), isLive = true)
     }
     val all = (dailyPending ++ livePending).filterNot(p => excludeMatchIds.contains(p.matchId))
     insertPendingMatches(all).as(all.size)
@@ -432,8 +435,9 @@ private[history] object HistorySeeding {
     def fetch(uname: Username): RIO[PostgresClient, Int] =
       client.getResult[ApiPlayerMatches](ApiPlayerMatches.getUrl(uname)).flatMap {
         _.foldPresentZIO(
-          _ => unchangedCounter.update(_ + 1) *> stamp.as(0),
-          changed => seedMatchesFromPlayerMatches(clubId, clubSlug, excludeMatchIds, changed.value).zipLeft(stamp)
+          ifUnchanged = _ => unchangedCounter.update(_ + 1) *> stamp.as(0),
+          ifChanged =
+            changed => seedMatchesFromPlayerMatches(clubId, clubSlug, excludeMatchIds, changed.value).zipLeft(stamp)
         )
       }
     fetch(username).withPlayerRenameRecovery(client, username, Some(playerId))(fetch)
@@ -469,6 +473,6 @@ private[history] object HistorySeeding {
         else { ClubMatch.selectActiveForClub(clubId) }
       alreadyProcessed <- shared.fold(ZIO.succeed(Set.empty[ClubMatchId]))(_.processedMatches.get)
       filtered = ids.filterNot(alreadyProcessed.contains)
-      _ <- insertPendingMatches(filtered.map(id => HistoryPendingMatch(clubId, id, isLive = false)))
+      _ <- insertPendingMatches(filtered.map(id => HistoryPendingMatch(clubId = clubId, matchId = id, isLive = false)))
     } yield filtered.size
 }

@@ -106,7 +106,7 @@ object TestRefAppSupport {
     failures: Set[String] = Set.empty,
     notFound: Map[String, String] = Map.empty
   ): RIO[PostgresClient & BodyStore, ChessComClient] =
-    TestChessComClientSupport.fakeClient(refRoutes(responses, failures, notFound), permits = 5)
+    TestChessComClientSupport.fakeClient(routes = refRoutes(responses, failures, notFound), permits = 5)
 
   /** DNS/network failure as it surfaces from the JVM resolver (`UnknownHostException`, the exact prod message). The
     * real `ChessComClient` wraps this into `NetworkUnavailableException` after its retry schedule exhausts.

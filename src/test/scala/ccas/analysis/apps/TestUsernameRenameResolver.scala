@@ -39,7 +39,7 @@ object TestUsernameRenameResolver extends ZIOSpecDefault {
     testTierBFallsBackToMatchEndpointWhenOpponentUnlinked,
     testResolveAndReconcileUpdatesPlayer
   ) @@ TestAspect.before(resetTables)).provideShared(
-    FreshSchemaLayer("test_username_rename_resolver", onInit = Tables.ensureTables)
+    FreshSchemaLayer(schema = "test_username_rename_resolver", onInit = Tables.ensureTables)
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock
 
   private def insertPlayer(
@@ -148,7 +148,7 @@ object TestUsernameRenameResolver extends ZIOSpecDefault {
     test("Verification: 404 on candidate → resolver returns None and original error propagates") {
       // Tier A finds "newA" candidate from snapshot, but verification fetch 404s.
       for {
-        client <- fakeChessComClient(Map.empty, failures = Set("newa"))
+        client <- fakeChessComClient(responses = Map.empty, failures = Set("newa"))
         _      <- insertRenamed(pidA, "alpha", "newa")
         result <- UsernameRenameResolver.resolveCurrentUsername(client, Username("alpha"), Some(pidA))
       } yield assertTrue(result.isEmpty)
@@ -183,25 +183,27 @@ object TestUsernameRenameResolver extends ZIOSpecDefault {
         _      <- insertPlayer(pidB, "opponent")
         _ <- ClubMatch.upsert(
           ClubMatch(
-            matchId,
-            "Test Match",
-            ClubMatchStatus.Finished,
-            TimeClass.Daily,
-            Some(TestTimes.t0),
-            Some(TestTimes.t1),
-            1,
-            None,
-            20,
-            None,
-            10,
-            TestTimes.t0,
-            None
+            matchId = matchId,
+            name = "Test Match",
+            status = ClubMatchStatus.Finished,
+            timeClass = TimeClass.Daily,
+            startTime = Some(TestTimes.t0),
+            endTime = Some(TestTimes.t1),
+            boards = 1,
+            team1ClubIdOption = None,
+            team1ScoreX2 = 20,
+            team2ClubIdOption = None,
+            team2ScoreX2 = 10,
+            fetchedAt = TestTimes.t0,
+            processedBodyHash = None
           )
         )
         _ <- ClubMatchBoard.insertBatch(
           List(ClubMatchBoard(matchId, 1, Some(pidA), false, Some(pidB), false, 2, 0))
         )
-        _      <- PlayerMatchRef.insert(PlayerMatchRef(pidA, matchId, isLive = false, isTeam1 = true, boardIdx = 1))
+        _ <- PlayerMatchRef.insert(
+          PlayerMatchRef(playerId = pidA, matchId = matchId, isLive = false, isTeam1 = true, boardIdx = 1)
+        )
         result <- UsernameRenameResolver.resolveCurrentUsername(client, Username("alpha"), Some(pidA))
       } yield assertTrue(result.contains(Username("newa")))
     }
@@ -214,9 +216,9 @@ object TestUsernameRenameResolver extends ZIOSpecDefault {
       val matchId = ClubMatchId(90002L)
       val responses = Map(
         s"match/90002" -> apiDailyMatchJson(
-          90002L,
-          "clubx",
-          "cluby",
+          matchId = 90002L,
+          team1Club = "clubx",
+          team2Club = "cluby",
           team1Players = List(("newa", 1)),
           team2Players = List(("opponent", 1))
         ),
@@ -228,25 +230,27 @@ object TestUsernameRenameResolver extends ZIOSpecDefault {
         _      <- insertPlayer(pidA, "older-a")
         _ <- ClubMatch.upsert(
           ClubMatch(
-            matchId,
-            "Test Match",
-            ClubMatchStatus.Finished,
-            TimeClass.Daily,
-            Some(TestTimes.t0),
-            Some(TestTimes.t1),
-            1,
-            None,
-            20,
-            None,
-            10,
-            TestTimes.t0,
-            None
+            matchId = matchId,
+            name = "Test Match",
+            status = ClubMatchStatus.Finished,
+            timeClass = TimeClass.Daily,
+            startTime = Some(TestTimes.t0),
+            endTime = Some(TestTimes.t1),
+            boards = 1,
+            team1ClubIdOption = None,
+            team1ScoreX2 = 20,
+            team2ClubIdOption = None,
+            team2ScoreX2 = 10,
+            fetchedAt = TestTimes.t0,
+            processedBodyHash = None
           )
         )
         _ <- ClubMatchBoard.insertBatch(
           List(ClubMatchBoard(matchId, 1, Some(pidA), false, None, false, 2, 0))
         )
-        _      <- PlayerMatchRef.insert(PlayerMatchRef(pidA, matchId, isLive = false, isTeam1 = true, boardIdx = 1))
+        _ <- PlayerMatchRef.insert(
+          PlayerMatchRef(playerId = pidA, matchId = matchId, isLive = false, isTeam1 = true, boardIdx = 1)
+        )
         result <- UsernameRenameResolver.resolveCurrentUsername(client, Username("alpha"), Some(pidA))
       } yield assertTrue(result.contains(Username("newa")))
     }

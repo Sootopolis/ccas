@@ -30,7 +30,7 @@ object TestPlayerUpdater extends ZIOSpecDefault {
     testRenameOntoAnotherPlayersStoredName,
     testReconcileTakesBackLastName
   ) @@ TestAspect.before(TestDbCleanup.clearPlayer)).provideShared(
-    FreshSchemaLayer("test_player_updater", onInit = Tables.ensureTables)
+    FreshSchemaLayer(schema = "test_player_updater", onInit = Tables.ensureTables)
   ) @@ TestAspect.sequential
 
   private def testNoUsernameChange = test("status change without rename: snapshot prior state, update player") {

@@ -32,8 +32,8 @@ trait StringCompanion {
   // Null passthrough is required: Magnum's OptionCodec calls the inner readSingle
   // *before* checking rs.wasNull, so returning null here lets Option[Type] columns work.
   given DbCodec[Type] = DbCodec[String].biMap(
-    raw => if (raw == null) raw else validated(raw).orThrowDbRead(name),
-    unwrap
+    to = raw => if (raw == null) raw else validated(raw).orThrowDbRead(name),
+    from = unwrap
   )
   given DeriveConfig[Type] = DeriveConfig[String].mapOrFail(validated(_).left.map(InvalidData(Chunk.empty, _)))
   given Ordering[Type]     = Ordering.by(unwrap)

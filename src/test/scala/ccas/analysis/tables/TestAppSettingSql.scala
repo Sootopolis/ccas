@@ -19,7 +19,7 @@ object TestAppSettingSql extends ZIOSpecDefault {
     testGetUnparseableFallsBackToDefault,
     testSelectAllReflectsWrites
   ).provideShared(
-    FreshSchemaLayer("test_app_setting", onInit = AppSetting.createTable.unit)
+    FreshSchemaLayer(schema = "test_app_setting", onInit = AppSetting.createTable.unit)
   ) @@ TestAspect.sequential
 
   // Pure guard (no DB): the registry must have unique keys, and every key's codec must round-trip its own default —

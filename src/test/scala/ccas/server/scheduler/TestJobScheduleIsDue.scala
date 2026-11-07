@@ -18,10 +18,28 @@ object TestJobScheduleIsDue extends ZIOSpecDefault {
 
   // A cron that fires daily at 09:00 UTC (stored in normalized 6-field form).
   private def daily9(lastRunAt: Option[Instant], misfire: MisfirePolicy): JobSchedule =
-    JobSchedule.cron(1L, JobKind.MatchRef, None, None, "0 0 9 * * ?", "UTC", misfire, enabled = true, lastRunAt)
+    JobSchedule.cron(
+      id = 1L,
+      kind = JobKind.MatchRef,
+      clubIdOption = None,
+      params = None,
+      cronExpr = "0 0 9 * * ?",
+      timezone = "UTC",
+      misfire = misfire,
+      enabled = true,
+      lastRunAt = lastRunAt
+    )
 
   private def interval(hours: Short, lastRunAt: Option[Instant]): JobSchedule =
-    JobSchedule.interval(1L, JobKind.MatchRef, None, None, hours, enabled = true, lastRunAt)
+    JobSchedule.interval(
+      id = 1L,
+      kind = JobKind.MatchRef,
+      clubIdOption = None,
+      params = None,
+      intervalHours = hours,
+      enabled = true,
+      lastRunAt = lastRunAt
+    )
 
   override def spec: Spec[Any, Any] = suite("TestJobScheduleIsDue")(
     // --- Interval ---

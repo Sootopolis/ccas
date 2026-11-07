@@ -45,7 +45,7 @@ object TestRoutes extends ZIOSpecDefault {
     suiteManagedClubRoutes,
     suiteRecruitmentCriteriaRoutes
   ).provideShared(
-    FreshSchemaLayer("test_routes", onInit = ServerTables.ensureTables),
+    FreshSchemaLayer(schema = "test_routes", onInit = ServerTables.ensureTables),
     fakeJobRunnerLayer,
     TestChessComClientSupport.dummyLayer,
     ZTestLogger.default,
@@ -311,9 +311,9 @@ object TestRoutes extends ZIOSpecDefault {
       _    <- fake.setNextAction(Action.Succeed)
       response <- JobRoutes.routes.runZIO(
         jsonRequest(
-          Method.POST,
-          "/api/jobs/membership",
-          """{"clubs":[{"kind":"by_slug","slug":"test-club"},{"kind":"by_slug","slug":"other-club"}]}"""
+          method = Method.POST,
+          path = "/api/jobs/membership",
+          body = """{"clubs":[{"kind":"by_slug","slug":"test-club"},{"kind":"by_slug","slug":"other-club"}]}"""
         )
       )
       body <- response.body.asString
@@ -364,9 +364,9 @@ object TestRoutes extends ZIOSpecDefault {
       _    <- fake.setNextAction(Action.Succeed)
       response <- JobRoutes.routes.runZIO(
         jsonRequest(
-          Method.POST,
-          "/api/jobs/membership",
-          """{"clubs":[{"kind":"by_slug","slug":"test-club"},{"kind":"by_slug","slug":"no-such-club"}]}"""
+          method = Method.POST,
+          path = "/api/jobs/membership",
+          body = """{"clubs":[{"kind":"by_slug","slug":"test-club"},{"kind":"by_slug","slug":"no-such-club"}]}"""
         )
       )
       body <- response.body.asString
@@ -456,15 +456,15 @@ object TestRoutes extends ZIOSpecDefault {
   private def testGetJobsReturnsList = test("GET /api/jobs returns list") {
     val t0 = LocalDateTime.of(2025, 6, 1, 0, 0).toInstant(ZoneOffset.UTC)
     val job = JobRun(
-      JobRunId.wrap("list-id"),
-      JobKind.Recruitment,
-      Some(ClubId(200)),
-      RunTrigger.Cli,
-      JobRunStatus.Completed,
-      None,
-      t0,
-      Some(t0),
-      None
+      id = JobRunId.wrap("list-id"),
+      kind = JobKind.Recruitment,
+      clubIdOption = Some(ClubId(200)),
+      trigger = RunTrigger.Cli,
+      status = JobRunStatus.Completed,
+      params = None,
+      startedAt = t0,
+      completedAt = Some(t0),
+      error = None
     )
     for {
       fake     <- getFakeRunner
@@ -480,15 +480,15 @@ object TestRoutes extends ZIOSpecDefault {
   private def testGetJobByIdReturns200 = test("GET /api/jobs/:id returns 200 for existing") {
     val t0 = LocalDateTime.of(2025, 6, 1, 0, 0).toInstant(ZoneOffset.UTC)
     val job = JobRun(
-      JobRunId.wrap("detail-id"),
-      JobKind.Membership,
-      None,
-      RunTrigger.Cli,
-      JobRunStatus.Running,
-      None,
-      t0,
-      None,
-      None
+      id = JobRunId.wrap("detail-id"),
+      kind = JobKind.Membership,
+      clubIdOption = None,
+      trigger = RunTrigger.Cli,
+      status = JobRunStatus.Running,
+      params = None,
+      startedAt = t0,
+      completedAt = None,
+      error = None
     )
     for {
       fake     <- getFakeRunner
@@ -921,9 +921,9 @@ object TestRoutes extends ZIOSpecDefault {
       _ <- deleteAllSchedules
       response <- ScheduleRoutes.routes.runZIO(
         jsonRequest(
-          Method.POST,
-          "/api/schedules",
-          s"""{"kind":"Recruitment","club":$testClub,"intervalHours":24}"""
+          method = Method.POST,
+          path = "/api/schedules",
+          body = s"""{"kind":"Recruitment","club":$testClub,"intervalHours":24}"""
         )
       )
       body <- response.body.asString
@@ -1053,9 +1053,10 @@ object TestRoutes extends ZIOSpecDefault {
       _ <- deleteAllSchedules
       response <- ScheduleRoutes.routes.runZIO(
         jsonRequest(
-          Method.POST,
-          "/api/schedules",
-          """{"kind":"ClubData","triggerType":"cron","cron":"0 9 * * MON","timezone":"Europe/London","misfire":"catch_up"}"""
+          method = Method.POST,
+          path = "/api/schedules",
+          body =
+            """{"kind":"ClubData","triggerType":"cron","cron":"0 9 * * MON","timezone":"Europe/London","misfire":"catch_up"}"""
         )
       )
       body <- response.body.asString
@@ -1080,9 +1081,9 @@ object TestRoutes extends ZIOSpecDefault {
     for {
       response <- ScheduleRoutes.routes.runZIO(
         jsonRequest(
-          Method.POST,
-          "/api/schedules",
-          """{"kind":"ClubData","triggerType":"cron","cron":"0 9 * * *","timezone":"Mars/Phobos"}"""
+          method = Method.POST,
+          path = "/api/schedules",
+          body = """{"kind":"ClubData","triggerType":"cron","cron":"0 9 * * *","timezone":"Mars/Phobos"}"""
         )
       )
     } yield assertTrue(response.status == Status.BadRequest)
@@ -1092,9 +1093,9 @@ object TestRoutes extends ZIOSpecDefault {
     for {
       response <- ScheduleRoutes.routes.runZIO(
         jsonRequest(
-          Method.POST,
-          "/api/schedules",
-          """{"kind":"ClubData","triggerType":"cron","intervalHours":24,"cron":"0 9 * * *"}"""
+          method = Method.POST,
+          path = "/api/schedules",
+          body = """{"kind":"ClubData","triggerType":"cron","intervalHours":24,"cron":"0 9 * * *"}"""
         )
       )
     } yield assertTrue(response.status == Status.BadRequest)
@@ -1114,9 +1115,9 @@ object TestRoutes extends ZIOSpecDefault {
       for {
         response <- ScheduleRoutes.routes.runZIO(
           jsonRequest(
-            Method.POST,
-            "/api/schedules",
-            s"""{"kind":"Recruitment","club":$testClub,"intervalHours":40000}"""
+            method = Method.POST,
+            path = "/api/schedules",
+            body = s"""{"kind":"Recruitment","club":$testClub,"intervalHours":40000}"""
           )
         )
       } yield assertTrue(response.status == Status.BadRequest)
@@ -1256,9 +1257,12 @@ object TestRoutes extends ZIOSpecDefault {
   private def testUnmarkNameless =
     test("DELETE unmanages a club that holds no name, by its id, and clears its schedules") {
       (for {
-        _    <- markNamelessManaged
-        _    <- TestDbCleanup.clearJobSchedules
-        _    <- JobSchedule.seedPerClubIfAbsent(ClubId(202), ScheduleSeed(JobKind.Membership, 24, enabled = true))
+        _ <- markNamelessManaged
+        _ <- TestDbCleanup.clearJobSchedules
+        _ <- JobSchedule.seedPerClubIfAbsent(
+          ClubId(202),
+          ScheduleSeed(kind = JobKind.Membership, intervalHours = 24, enabled = true)
+        )
         del  <- ManagedClubRoutes.routes.runZIO(jsonRequest(Method.DELETE, "/api/managed-clubs?clubId=202"))
         body <- del.body.asString
         list <- ManagedClub.selectAllWithClub
@@ -1321,10 +1325,19 @@ object TestRoutes extends ZIOSpecDefault {
         _ <- resetManaged
         _ <- TestDbCleanup.clearJobSchedules
         _ <- ManagedClubRoutes.routes.runZIO(jsonRequest(Method.POST, "/api/managed-clubs", markTestClub))
-        _ <- JobSchedule.seedPerClubIfAbsent(ClubId(200), ScheduleSeed(JobKind.History, 24, enabled = true))
-        _ <- JobSchedule.seedPerClubIfAbsent(ClubId(200), ScheduleSeed(JobKind.Membership, 24, enabled = true))
+        _ <- JobSchedule.seedPerClubIfAbsent(
+          ClubId(200),
+          ScheduleSeed(kind = JobKind.History, intervalHours = 24, enabled = true)
+        )
+        _ <- JobSchedule.seedPerClubIfAbsent(
+          ClubId(200),
+          ScheduleSeed(kind = JobKind.Membership, intervalHours = 24, enabled = true)
+        )
         // club 201 is never managed — proves deleteByClub keys on club_id, not managed status (peer isolation).
-        _   <- JobSchedule.seedPerClubIfAbsent(ClubId(201), ScheduleSeed(JobKind.History, 24, enabled = true))
+        _ <- JobSchedule.seedPerClubIfAbsent(
+          ClubId(201),
+          ScheduleSeed(kind = JobKind.History, intervalHours = 24, enabled = true)
+        )
         del <- ManagedClubRoutes.routes.runZIO(jsonRequest(Method.DELETE, "/api/managed-clubs?slug=test-club"))
         all <- JobSchedule.selectAll
       } yield assertTrue(

@@ -77,7 +77,7 @@ object TestSharedContext extends ZIOSpecDefault {
 
         // Stale seeding re-queues stale matches for club A; shared should filter out 5001 and 5003.
         // includeFinished = true so the recently-Finished fixture rows are in scope for the processedMatches filter.
-        count   <- HistorySeeding.seedStaleMatches(clubAId, includeFinished = true, Some(shared))
+        count   <- HistorySeeding.seedStaleMatches(clubId = clubAId, includeFinished = true, shared = Some(shared))
         pending <- HistoryPendingMatch.selectClub(clubAId)
         _       <- ZIO.foreachDiscard(pending)(p => HistoryPendingMatch.delete(clubAId, p.matchId, p.isLive))
       } yield assertTrue(
@@ -132,20 +132,20 @@ object TestSharedContext extends ZIOSpecDefault {
         skipCtr <- Ref.make(0)
         result <- HistorySeeding
           .seedFromMemberMatches(
-            client,
-            clubAId,
-            clubASlug,
-            memberIds,
-            Set.empty,
-            memberNames,
-            Set.empty,
-            false,
-            Some(shared),
-            skipCtr
+            client = client,
+            clubId = clubAId,
+            clubSlug = clubASlug,
+            memberIds = memberIds,
+            queriedIds = Set.empty,
+            memberNames = memberNames,
+            excludeMatchIds = Set.empty,
+            includeFinished = false,
+            shared = Some(shared),
+            unchangedPlayerCounter = skipCtr
           )
           .provideSomeEnvironment[PostgresClient](_.add[ProgressDisplay](ProgressDisplay.make(enabled = false)))
         _ <- ZIO.foreachDiscard(List(ClubMatchId(6001))) { id =>
-          HistoryPendingMatch.delete(clubAId, id, isLive = false)
+          HistoryPendingMatch.delete(clubId = clubAId, matchId = id, isLive = false)
         }
       } yield assertTrue(
         result.queried == 1,
@@ -173,16 +173,16 @@ object TestSharedContext extends ZIOSpecDefault {
         skipCtr <- Ref.make(0)
         _ <- HistorySeeding
           .seedFromMemberMatches(
-            client,
-            clubBId,
-            clubBSlug,
-            memberIds,
-            Set.empty,
-            memberNames,
-            Set.empty,
-            false,
-            Some(shared),
-            skipCtr
+            client = client,
+            clubId = clubBId,
+            clubSlug = clubBSlug,
+            memberIds = memberIds,
+            queriedIds = Set.empty,
+            memberNames = memberNames,
+            excludeMatchIds = Set.empty,
+            includeFinished = false,
+            shared = Some(shared),
+            unchangedPlayerCounter = skipCtr
           )
           .provideSomeEnvironment[PostgresClient](_.add[ProgressDisplay](ProgressDisplay.make(enabled = false)))
 
@@ -213,16 +213,16 @@ object TestSharedContext extends ZIOSpecDefault {
         skipCtr <- Ref.make(0)
         _ <- HistorySeeding
           .seedFromMemberMatches(
-            client,
-            clubAId,
-            clubASlug,
-            Set(player3Id),
-            Set.empty,
-            Map(player3Id -> player3.username),
-            Set.empty,
-            false,
-            Some(shared),
-            skipCtr
+            client = client,
+            clubId = clubAId,
+            clubSlug = clubASlug,
+            memberIds = Set(player3Id),
+            queriedIds = Set.empty,
+            memberNames = Map(player3Id -> player3.username),
+            excludeMatchIds = Set.empty,
+            includeFinished = false,
+            shared = Some(shared),
+            unchangedPlayerCounter = skipCtr
           )
           .provideSomeEnvironment[PostgresClient](_.add[ProgressDisplay](ProgressDisplay.make(enabled = false)))
 

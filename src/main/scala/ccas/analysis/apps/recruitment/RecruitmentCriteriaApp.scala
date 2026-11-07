@@ -275,10 +275,10 @@ object RecruitmentCriteriaApp extends ZIOAppDefault {
 
   private def promptOptElo(label: String, current: Option[Elo]): RIO[Any, Option[Elo]] =
     promptOpt(
-      label,
-      current,
-      e => Elo.unwrap(e).toString,
-      s =>
+      label = label,
+      current = current,
+      show = e => Elo.unwrap(e).toString,
+      parse = s =>
         s.toIntOption.toRight(s"'$s' is not an integer").flatMap { i =>
           if (i < 0 || i > Short.MaxValue) Left(s"must be in [0, ${Short.MaxValue}] (got $i)")
           else Right(Elo(i.toShort))

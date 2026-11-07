@@ -54,11 +54,11 @@ object Main extends ZIOAppDefault {
     )(execute(wiring, cfg))
     CompletionCache.seedClubs(wiring.clubsFile, cfg.defaultClubs) *>
       cliApp.run(argList).foldZIO(
-        {
+        failure = {
           case _: CliError.BuiltIn => exit(ExitCode.success) // --help / completions, already rendered
           case _                   => exit(ExitCode(2))      // parse/validation error, usage already rendered
         },
-        {
+        success = {
           case Some(code) => exit(code)
           case None       => exit(ExitCode.success)
         }

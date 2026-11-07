@@ -300,7 +300,7 @@ object TestJobFollower extends ZIOSpecDefault {
         // in the `onComplete` (confirm) phase, which is OUTSIDE the follow's cancel-on-interrupt scope. No cancel fires.
         api = new CancelRecordingApi("Completed", cancelled, _ => ZIO.unit)
         fiber <- follower(api, 1.minute)
-          .handleClub(submitted, logsToStderr = false, _ => inConfirm.succeed(()) *> ZIO.never)
+          .handleClub(submitted, logsToStderr = false, onComplete = _ => inConfirm.succeed(()) *> ZIO.never)
           .fork
         _        <- inConfirm.await
         _        <- fiber.interrupt
@@ -311,7 +311,7 @@ object TestJobFollower extends ZIOSpecDefault {
       for {
         follower <- followerWith("Completed", None, List("hello"))
         ran      <- Ref.make(false)
-        code     <- follower.handleClub(submitted, logsToStderr = true, _ => ran.set(true))
+        code     <- follower.handleClub(submitted, logsToStderr = true, onComplete = _ => ran.set(true))
         didRun   <- ran.get
         out      <- TestConsole.output
         err      <- TestConsole.outputErr
@@ -330,7 +330,7 @@ object TestJobFollower extends ZIOSpecDefault {
         script         <- Ref.make(List(statusJson("Completed", None)))
         api = new StubApi(script, ReplayOnce(Nil), ZIO.unit)
         code <- followerRecordingIn(recentJobsFile, api, 1.minute).handleClub(
-          result = submitted,
+          submitted,
           logsToStderr = false,
           onComplete = _ => ZIO.unit
         )
@@ -341,7 +341,7 @@ object TestJobFollower extends ZIOSpecDefault {
       for {
         follower <- followerWith("Failed", Some("boom"), List("partial"))
         ran      <- Ref.make(false)
-        code     <- follower.handleClub(submitted, logsToStderr = false, _ => ran.set(true))
+        code     <- follower.handleClub(submitted, logsToStderr = false, onComplete = _ => ran.set(true))
         didRun   <- ran.get
       } yield assertTrue(code == 1, !didRun)
     },
@@ -349,7 +349,7 @@ object TestJobFollower extends ZIOSpecDefault {
       for {
         follower <- followerWith("Completed", None, Nil)
         ran      <- Ref.make(false)
-        code     <- follower.handleClub(notLocal, logsToStderr = true, _ => ran.set(true))
+        code     <- follower.handleClub(notLocal, logsToStderr = true, onComplete = _ => ran.set(true))
         didRun   <- ran.get
       } yield assertTrue(code == 1, !didRun)
     },

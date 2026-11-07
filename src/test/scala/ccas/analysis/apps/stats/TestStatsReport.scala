@@ -19,16 +19,16 @@ object TestStatsReport extends ZIOSpecDefault {
     val fpDraws  = fpPtsX2  % 2
     val fpLosses = games - fpWins - fpDraws
     MemberContribution(
-      PlayerId.wrap(name.hashCode.toLong.abs),
-      name,
-      PlayerBoardStats(games, games, wins, draws, losses, rawPtsX2),
-      PlayerBoardStats(games, games, fpWins, fpDraws, fpLosses, fpPtsX2)
+      playerId = PlayerId.wrap(name.hashCode.toLong.abs),
+      displayName = name,
+      raw = PlayerBoardStats(games, games, wins, draws, losses, rawPtsX2),
+      fairPlay = PlayerBoardStats(games, games, fpWins, fpDraws, fpLosses, fpPtsX2)
     )
   }
 
-  private val alice = mc("alice", rawPtsX2 = 6, fpPtsX2 = 4)
-  private val bob   = mc("bob", rawPtsX2 = 8, fpPtsX2 = 8)
-  private val carol = mc("carol", rawPtsX2 = 6, fpPtsX2 = 6)
+  private val alice = mc(name = "alice", rawPtsX2 = 6, fpPtsX2 = 4)
+  private val bob   = mc(name = "bob", rawPtsX2 = 8, fpPtsX2 = 8)
+  private val carol = mc(name = "carol", rawPtsX2 = 6, fpPtsX2 = 6)
 
   private def lines(csv: String): Array[String] = csv.split("\n")
 
@@ -80,7 +80,7 @@ object TestStatsReport extends ZIOSpecDefault {
 
   // A player holding no name displays as `<unknown player #N, was X>` (#254), so a name can carry a comma.
   private def testNameHoldingACommaIsQuoted = test("a name holding a comma is quoted, keeping every column in place") {
-    val nameless = mc("<unknown player #2, was carol>", rawPtsX2 = 8, fpPtsX2 = 8)
+    val nameless = mc(name = "<unknown player #2, was carol>", rawPtsX2 = 8, fpPtsX2 = 8)
     val row      = lines(StatsReport.formatContribution(List(nameless)))(1)
     assertTrue(row == "1,\"<unknown player #2, was carol>\",4,4,4,0,0,4,100.0%,4,0,0,4,100.0%")
   }
@@ -100,7 +100,7 @@ object TestStatsReport extends ZIOSpecDefault {
   }
 
   private def testPointsFormattedWithoutDecimalWhenWhole = test("points formatted without decimal when whole") {
-    val whole    = mc("dave", rawPtsX2 = 4, fpPtsX2 = 4, games = 2) // 2.0 points
+    val whole    = mc(name = "dave", rawPtsX2 = 4, fpPtsX2 = 4, games = 2) // 2.0 points
     val csv      = StatsReport.formatContribution(List(whole))
     val dataLine = lines(csv)(1)
     val points   = dataLine.split(",").apply(7)
@@ -108,7 +108,7 @@ object TestStatsReport extends ZIOSpecDefault {
   }
 
   private def testPointsFormattedWithOneDecimalWhenHalf = test("points formatted with one decimal when half") {
-    val half     = mc("eve", rawPtsX2 = 5, fpPtsX2 = 5, games = 4) // 2.5 points
+    val half     = mc(name = "eve", rawPtsX2 = 5, fpPtsX2 = 5, games = 4) // 2.5 points
     val csv      = StatsReport.formatContribution(List(half))
     val dataLine = lines(csv)(1)
     val points   = dataLine.split(",").apply(7)
@@ -128,7 +128,7 @@ object TestStatsReport extends ZIOSpecDefault {
   }
 
   private def testScorePercentShowsZeroForAllLosses = test("score% shows 0.0% for all losses") {
-    val allLosses = mc("loser", rawPtsX2 = 0, fpPtsX2 = 0, games = 4)
+    val allLosses = mc(name = "loser", rawPtsX2 = 0, fpPtsX2 = 0, games = 4)
     val csv       = StatsReport.formatContribution(List(allLosses))
     val dataLine  = lines(csv)(1)
     val scoreRate = dataLine.split(",").apply(8)
@@ -136,7 +136,7 @@ object TestStatsReport extends ZIOSpecDefault {
   }
 
   private def testScorePercentShowsHundredForAllWins = test("score% shows 100.0% for all wins") {
-    val allWins   = mc("winner", rawPtsX2 = 8, fpPtsX2 = 8, games = 4) // 4/4 = 100%
+    val allWins   = mc(name = "winner", rawPtsX2 = 8, fpPtsX2 = 8, games = 4) // 4/4 = 100%
     val csv       = StatsReport.formatContribution(List(allWins))
     val dataLine  = lines(csv)(1)
     val scoreRate = dataLine.split(",").apply(8)
@@ -144,7 +144,7 @@ object TestStatsReport extends ZIOSpecDefault {
   }
 
   private def testScorePercentShowsFiftyForHalfWins = test("score% shows 50.0% for half wins") {
-    val half      = mc("half", rawPtsX2 = 4, fpPtsX2 = 4, games = 4) // 2/4 = 50%
+    val half      = mc(name = "half", rawPtsX2 = 4, fpPtsX2 = 4, games = 4) // 2/4 = 50%
     val csv       = StatsReport.formatContribution(List(half))
     val dataLine  = lines(csv)(1)
     val scoreRate = dataLine.split(",").apply(8)
@@ -164,7 +164,7 @@ object TestStatsReport extends ZIOSpecDefault {
   )
 
   private def testFiltersByMinGames = test("filters by minGames") {
-    val few = mc("fay", rawPtsX2 = 4, fpPtsX2 = 4, games = 2)
+    val few = mc(name = "fay", rawPtsX2 = 4, fpPtsX2 = 4, games = 2)
     val csv = StatsReport.formatPlayerOfPeriod(List(alice, few), minGames = 3)
     assertTrue(lines(csv).length == 2) // header + alice only
   }

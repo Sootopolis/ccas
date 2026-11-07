@@ -18,7 +18,7 @@ object TestRefAppIteration extends ZIOSpecDefault {
     suiteIteration,
     suiteFullPopulate
   ).provideShared(
-    FreshSchemaLayer("test_ref_app_iteration", onInit = Tables.ensureTables),
+    FreshSchemaLayer(schema = "test_ref_app_iteration", onInit = Tables.ensureTables),
     Scope.default
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock
 
@@ -39,9 +39,9 @@ object TestRefAppIteration extends ZIOSpecDefault {
 
   private def testFallsBackToSecondMatchWhenFirstMatch404s = test("falls back to second match when first match 404s") {
     val matchJson2 = apiDailyMatchJson(
-      matchId2,
-      "our-club",
-      "other-club",
+      matchId = matchId2,
+      team1Club = "our-club",
+      team2Club = "other-club",
       team1Players = List(("alice", 5)),
       team2Players = List(("opponent1", 1))
     )
@@ -161,9 +161,9 @@ object TestRefAppIteration extends ZIOSpecDefault {
 
   private def testClubResolutionIteratesPastFailedMatch = test("club resolution iterates past failed match") {
     val matchJson3 = apiDailyMatchJson(
-      matchId3,
-      "our-club",
-      "other-club",
+      matchId = matchId3,
+      team1Club = "our-club",
+      team2Club = "other-club",
       team1Players = List(("player1", 1)),
       team2Players = List(("player2", 2))
     )
@@ -200,9 +200,9 @@ object TestRefAppIteration extends ZIOSpecDefault {
 
   private def testResolvesBothPlayersAndClubsInOneRun = test("resolves both players and clubs in one run") {
     val matchJson = apiDailyMatchJson(
-      matchId1,
-      "our-club",
-      "other-club",
+      matchId = matchId1,
+      team1Club = "our-club",
+      team2Club = "other-club",
       team1Players = List(("alice", 3)),
       team2Players = List(("opponent1", 1))
     )
@@ -233,8 +233,18 @@ object TestRefAppIteration extends ZIOSpecDefault {
     for {
       _ <- seedDb
       // Pre-seed match refs
-      _ <- PlayerMatchRef.insert(PlayerMatchRef(pid0, ClubMatchId.wrap(matchId1), isLive = false, true, 3))
-      _ <- ClubMatchRef.insert(ClubMatchRef(clubId0, ClubMatchId.wrap(matchId1), isLive = false, true))
+      _ <- PlayerMatchRef.insert(
+        PlayerMatchRef(
+          playerId = pid0,
+          matchId = ClubMatchId.wrap(matchId1),
+          isLive = false,
+          isTeam1 = true,
+          boardIdx = 3
+        )
+      )
+      _ <- ClubMatchRef.insert(
+        ClubMatchRef(clubId = clubId0, matchId = ClubMatchId.wrap(matchId1), isLive = false, isTeam1 = true)
+      )
       // Provide no API responses -- if populate tries to fetch, it would get empty/404
       client <- fakeChessComClient(
         Map(

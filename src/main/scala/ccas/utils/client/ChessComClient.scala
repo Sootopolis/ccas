@@ -227,12 +227,12 @@ final class ChessComClient(
       ZIO.whenDiscard(cacheWrites) {
         ApiResponseCache
           .touch(
-            url.encode,
-            Instant.now(),
-            validators.etag,
-            validators.lastModified,
-            maxAgeUpdate,
-            validators.contentType
+            url = url.encode,
+            fetchedAt = Instant.now(),
+            etag = validators.etag,
+            lastModified = validators.lastModified,
+            maxAgeUpdate = maxAgeUpdate,
+            contentType = validators.contentType
           )
           .provideEnvironment(ZEnvironment(pgClient))
           .unit
@@ -333,7 +333,7 @@ final class ChessComClient(
     // would have dispatched.
     val refetch =
       statsRef.update(_.incCacheUnserved.incRequests) *>
-        withRetries(gatedRawGet[T](url, conditional = None, cacheWrites)).flatMap(_.getValue)
+        withRetries(gatedRawGet[T](url, conditional = None, cacheWrites = cacheWrites)).flatMap(_.getValue)
     val invalidateAndRefetch = ApiResponseCache
       .invalidate(url.encode)
       .provideEnvironment(ZEnvironment(pgClient))
@@ -1011,16 +1011,16 @@ object ChessComClient {
         }
         _ <- ZIO.addFinalizer(recoveryFiberRef.get.flatMap(ZIO.foreachDiscard(_)(_.interrupt)))
       } yield ChessComClient(
-        client,
-        pgClient,
-        bodyStore,
-        userAgentHeaders(rawConfig.contactEmail),
-        refs,
-        stats,
-        bar,
-        throttleConfig,
-        recoveryFiberRef,
-        ClientStatsPersistence.endSession(flushCtx, flushFiber)
+        client = client,
+        pgClient = pgClient,
+        bodyStore = bodyStore,
+        headers = userAgentHeaders(rawConfig.contactEmail),
+        throttle = refs,
+        statsRef = stats,
+        progressBar = bar,
+        config = throttleConfig,
+        recoveryFiberRef = recoveryFiberRef,
+        endSessionEffect = ClientStatsPersistence.endSession(flushCtx, flushFiber)
       )
     }
 }

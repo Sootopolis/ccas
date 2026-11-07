@@ -112,13 +112,13 @@ object Club {
     */
   def fromApi(apiClub: ApiClub): Club =
     Club(
-      apiClub.clubId,
-      Instant.ofEpochSecond(apiClub.created),
-      apiClub.canonicalSlug,
-      apiClub.name,
-      Some(apiClub.membersCount),
-      None,
-      None
+      clubId = apiClub.clubId,
+      created = Instant.ofEpochSecond(apiClub.created),
+      slug = apiClub.canonicalSlug,
+      name = apiClub.name,
+      membersCount = Some(apiClub.membersCount),
+      latestMatchAt = None,
+      fetchedAt = None
     )
 
   private def upsertFrag(club: Club): Update =

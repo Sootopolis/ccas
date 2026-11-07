@@ -36,7 +36,7 @@ final class FileTail(
   // next iteration ends instead of re-reading (avoids a redundant read / empty-chunk stall).
   private final case class TailState(offset: Long, partial: Chunk[Byte], doneAndDrained: Boolean)
   private object TailState {
-    val initial: TailState = TailState(0L, Chunk.empty, doneAndDrained = false)
+    val initial: TailState = TailState(offset = 0L, partial = Chunk.empty, doneAndDrained = false)
   }
 
   def subscribe(jobId: JobRunId): ZStream[Any, Throwable, String] =

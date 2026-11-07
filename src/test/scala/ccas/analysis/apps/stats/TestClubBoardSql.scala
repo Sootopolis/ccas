@@ -21,7 +21,7 @@ object TestClubBoardSql extends ZIOSpecDefault {
     testSelectClubBoardsInPeriodFilters,
     testSelectClubBoardsBothSides
   ).provideShared(
-    FreshSchemaLayer("test_club_board_sql", onInit = Tables.ensureTables)
+    FreshSchemaLayer(schema = "test_club_board_sql", onInit = Tables.ensureTables)
   ) @@ TestAspect.sequential
 
   private object Times {
@@ -61,19 +61,19 @@ object TestClubBoardSql extends ZIOSpecDefault {
     endTime: Option[Instant] = Some(Times.t1)
   ): ClubMatch =
     ClubMatch(
-      matchId,
-      s"Match ${ClubMatchId.unwrap(matchId)}",
-      status,
-      TimeClass.Daily,
-      Some(Times.t0),
-      endTime,
-      10,
-      Some(team1Club),
-      10,
-      Some(team2Club),
-      10,
-      Times.t1,
-      None
+      matchId = matchId,
+      name = s"Match ${ClubMatchId.unwrap(matchId)}",
+      status = status,
+      timeClass = TimeClass.Daily,
+      startTime = Some(Times.t0),
+      endTime = endTime,
+      boards = 10,
+      team1ClubIdOption = Some(team1Club),
+      team1ScoreX2 = 10,
+      team2ClubIdOption = Some(team2Club),
+      team2ScoreX2 = 10,
+      fetchedAt = Times.t1,
+      processedBodyHash = None
     )
 
   private def boardRow(
@@ -109,8 +109,8 @@ object TestClubBoardSql extends ZIOSpecDefault {
     _ <- ClubMatchBoard.insert(boardRow(matchId, board, team1Player, team2Player, team1FP, team2FP))
     _ <- ClubMatchGame.insertBatch(
       List(
-        g1.map(w => gameRow(matchId, board, team1IsWhite = true, Some(w))),
-        g2.map(w => gameRow(matchId, board, team1IsWhite = false, Some(w)))
+        g1.map(w => gameRow(matchId = matchId, board = board, team1IsWhite = true, winner = Some(w))),
+        g2.map(w => gameRow(matchId = matchId, board = board, team1IsWhite = false, winner = Some(w)))
       ).flatten
     )
   } yield ()
@@ -138,10 +138,10 @@ object TestClubBoardSql extends ZIOSpecDefault {
       _ <- seedAll
       _ <- ClubMatch.upsert(matchRow(matchId1, oppClubId, ourClubId))
       _ <- insertBoardWithGames(
-        matchId1,
-        1,
-        Some(player2),
-        Some(player1),
+        matchId = matchId1,
+        board = 1,
+        team1Player = Some(player2),
+        team2Player = Some(player1),
         g1 = Some(BoardGameWinner.Team1),
         g2 = Some(BoardGameWinner.Team2),
         team1FP = false,
@@ -163,10 +163,10 @@ object TestClubBoardSql extends ZIOSpecDefault {
       _ <- seedAll
       _ <- ClubMatch.upsert(matchRow(matchId1, oppClubId, ourClubId))
       _ <- insertBoardWithGames(
-        matchId1,
-        1,
-        Some(player2),
-        Some(player1),
+        matchId = matchId1,
+        board = 1,
+        team1Player = Some(player2),
+        team2Player = Some(player1),
         g1 = Some(BoardGameWinner.Draw),
         g2 = Some(BoardGameWinner.Draw)
       )
@@ -196,7 +196,13 @@ object TestClubBoardSql extends ZIOSpecDefault {
     for {
       _ <- seedAll
       _ <- ClubMatch.upsert(
-        matchRow(matchId1, ourClubId, oppClubId, status = ClubMatchStatus.InProgress, endTime = None)
+        matchRow(
+          matchId = matchId1,
+          team1Club = ourClubId,
+          team2Club = oppClubId,
+          status = ClubMatchStatus.InProgress,
+          endTime = None
+        )
       )
       _      <- insertBoardWithGames(matchId1, 1, Some(player1), Some(player2))
       boards <- ClubBoard.selectClubBoards(ourClubId)
@@ -215,9 +221,15 @@ object TestClubBoardSql extends ZIOSpecDefault {
   private def testSelectClubBoardsInPeriodFilters = test("period query filters by end_time range") {
     for {
       _ <- seedAll
-      _ <- ClubMatch.upsert(matchRow(matchId1, ourClubId, oppClubId, endTime = Some(Times.t1)))
-      _ <- ClubMatch.upsert(matchRow(matchId2, ourClubId, oppClubId, endTime = Some(Times.t2)))
-      _ <- ClubMatch.upsert(matchRow(matchId3, ourClubId, oppClubId, endTime = Some(Times.t3)))
+      _ <- ClubMatch.upsert(
+        matchRow(matchId = matchId1, team1Club = ourClubId, team2Club = oppClubId, endTime = Some(Times.t1))
+      )
+      _ <- ClubMatch.upsert(
+        matchRow(matchId = matchId2, team1Club = ourClubId, team2Club = oppClubId, endTime = Some(Times.t2))
+      )
+      _ <- ClubMatch.upsert(
+        matchRow(matchId = matchId3, team1Club = ourClubId, team2Club = oppClubId, endTime = Some(Times.t3))
+      )
       _ <- insertBoardWithGames(matchId1, 1, Some(player1), Some(player2))
       _ <- insertBoardWithGames(matchId2, 1, Some(player1), Some(player2))
       _ <- insertBoardWithGames(matchId3, 1, Some(player1), Some(player2))

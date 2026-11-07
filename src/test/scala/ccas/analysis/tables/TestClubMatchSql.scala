@@ -55,7 +55,7 @@ object TestClubMatchSql extends ZIOSpecDefault {
     testPlayerMatchRefFindOrInfer,
     testClubMatchSelectProcessedBodyHash
   ).provideShared(
-    FreshSchemaLayer("test_club_match_sql", onInit = Tables.ensureTables)
+    FreshSchemaLayer(schema = "test_club_match_sql", onInit = Tables.ensureTables)
   ) @@ TestAspect.sequential
 
   private object Times {
@@ -321,7 +321,7 @@ object TestClubMatchSql extends ZIOSpecDefault {
   private def testClubMatchRefFindOrInfer =
     test("ClubMatchRef.findOrInfer prefers explicit, infers and promotes otherwise, returns None when neither") {
       val c           = ClubId(311)
-      val explicitRef = ClubMatchRef(c, ClubMatchId(2100), isLive = true, isTeam1 = false)
+      val explicitRef = ClubMatchRef(clubId = c, matchId = ClubMatchId(2100), isLive = true, isTeam1 = false)
       val inferableMatch = matchFinished.copy(
         matchId = ClubMatchId(2101),
         timeClass = TimeClass.Blitz,
@@ -467,12 +467,12 @@ object TestClubMatchSql extends ZIOSpecDefault {
         ownIds    <- ClubMatchBoard.selectPlayerIdsForClub(clubA.clubId)
       } yield assertTrue(
         sightings.sortBy(s => (s.startTime, s.playerId.value)) == List(
-          sighting(player0, Times.t0, forClub = true),
-          sighting(player1, Times.t0, forClub = false),
-          sighting(player1, Times.t0, forClub = false),
-          sighting(player0, Times.t1, forClub = true),
-          sighting(player1, Times.t1, forClub = false),
-          sighting(player1, Times.t3, forClub = true)
+          sighting(player = player0, at = Times.t0, forClub = true),
+          sighting(player = player1, at = Times.t0, forClub = false),
+          sighting(player = player1, at = Times.t0, forClub = false),
+          sighting(player = player0, at = Times.t1, forClub = true),
+          sighting(player = player1, at = Times.t1, forClub = false),
+          sighting(player = player1, at = Times.t3, forClub = true)
         ),
         ownIds == Set(player0.playerId, player1.playerId)
       )).ensuring(cleanUp.orDie)
@@ -482,15 +482,24 @@ object TestClubMatchSql extends ZIOSpecDefault {
 
   private def testHistoryPendingMatchInsert = test("HistoryPendingMatch insert with ON CONFLICT DO NOTHING") {
     for {
-      r1 <- HistoryPendingMatch.insert(HistoryPendingMatch(clubA.clubId, ClubMatchId(2001), isLive = false))
+      r1 <- HistoryPendingMatch.insert(
+        HistoryPendingMatch(clubId = clubA.clubId, matchId = ClubMatchId(2001), isLive = false)
+      )
       r2 <- HistoryPendingMatch.insert(
-        HistoryPendingMatch(clubA.clubId, ClubMatchId(2001), isLive = false)
+        HistoryPendingMatch(clubId = clubA.clubId, matchId = ClubMatchId(2001), isLive = false)
       ) // duplicate
       ids <- HistoryPendingMatch.selectClub(clubA.clubId)
     } yield assertTrue(
       r1 == 1,
       r2 == 0,
-      ids == List(HistoryPendingMatch(clubA.clubId, ClubMatchId(2001), isLive = false, PendingMatchStatus.New))
+      ids == List(
+        HistoryPendingMatch(
+          clubId = clubA.clubId,
+          matchId = ClubMatchId(2001),
+          isLive = false,
+          status = PendingMatchStatus.New
+        )
+      )
     )
   }
 
@@ -504,9 +513,13 @@ object TestClubMatchSql extends ZIOSpecDefault {
     for {
       _ <- HistoryPendingMatch.insertBatch(
         List(
-          HistoryPendingMatch(clubA.clubId, ClubMatchId(2002), isLive = false),
-          HistoryPendingMatch(clubA.clubId, ClubMatchId(2003), isLive = false),
-          HistoryPendingMatch(clubA.clubId, ClubMatchId(2001), isLive = false) // duplicate, should be ignored
+          HistoryPendingMatch(clubId = clubA.clubId, matchId = ClubMatchId(2002), isLive = false),
+          HistoryPendingMatch(clubId = clubA.clubId, matchId = ClubMatchId(2003), isLive = false),
+          HistoryPendingMatch(
+            clubId = clubA.clubId,
+            matchId = ClubMatchId(2001),
+            isLive = false
+          ) // duplicate, should be ignored
         )
       )
       count <- HistoryPendingMatch.count(clubA.clubId)
@@ -525,7 +538,7 @@ object TestClubMatchSql extends ZIOSpecDefault {
 
   private def testHistoryPendingMatchDelete = test("HistoryPendingMatch delete") {
     for {
-      deleted   <- HistoryPendingMatch.delete(clubA.clubId, ClubMatchId(2001), isLive = false)
+      deleted   <- HistoryPendingMatch.delete(clubId = clubA.clubId, matchId = ClubMatchId(2001), isLive = false)
       remaining <- HistoryPendingMatch.count(clubA.clubId)
     } yield assertTrue(
       deleted == 1,
@@ -538,10 +551,10 @@ object TestClubMatchSql extends ZIOSpecDefault {
   private def testHistoryPendingMatchUpdateStatus = test("HistoryPendingMatch updateStatus") {
     for {
       updated <- HistoryPendingMatch.updateStatus(
-        clubA.clubId,
-        ClubMatchId(2002),
+        clubId = clubA.clubId,
+        matchId = ClubMatchId(2002),
         isLive = false,
-        PendingMatchStatus.ApiError
+        status = PendingMatchStatus.ApiError
       )
       entries <- HistoryPendingMatch.selectClub(clubA.clubId)
       statuses = entries.map(e => (e.matchId, e.status)).toMap
@@ -575,10 +588,10 @@ object TestClubMatchSql extends ZIOSpecDefault {
   private def testHistoryPendingMatchResetStatuses = test("HistoryPendingMatch resetStatuses resets all to New") {
     for {
       _ <- HistoryPendingMatch.updateStatus(
-        clubA.clubId,
-        ClubMatchId(2003),
+        clubId = clubA.clubId,
+        matchId = ClubMatchId(2003),
         isLive = false,
-        PendingMatchStatus.Unidentified
+        status = PendingMatchStatus.Unidentified
       )
       beforeNew <- HistoryPendingMatch.countNew(clubA.clubId)
       reset     <- HistoryPendingMatch.resetStatuses(clubA.clubId)
@@ -622,8 +635,8 @@ object TestClubMatchSql extends ZIOSpecDefault {
     for {
       runId <- HistoryRun.insert(clubA.clubId, RunTrigger.Cli, Times.t0, None)
       _ <- HistoryRun.complete(
-        runId,
-        Times.t1,
+        runId = runId,
+        completedAt = Times.t1,
         matchesProcessed = 42,
         playersDiscovered = 7,
         refreshMatchUnchanged = 3,
@@ -638,8 +651,18 @@ object TestClubMatchSql extends ZIOSpecDefault {
 
   private def testUnresolvedBoardPlayerInsertAndSelect = test("UnresolvedBoardPlayer insert and selectAll") {
     for {
-      r1  <- UnresolvedBoardPlayer.insert(ClubMatchId(1001), 1, isTeam1 = false, Username("opp1"))
-      r2  <- UnresolvedBoardPlayer.insert(ClubMatchId(1001), 2, isTeam1 = true, Username("opp2"))
+      r1 <- UnresolvedBoardPlayer.insert(
+        matchId = ClubMatchId(1001),
+        board = 1,
+        isTeam1 = false,
+        username = Username("opp1")
+      )
+      r2 <- UnresolvedBoardPlayer.insert(
+        matchId = ClubMatchId(1001),
+        board = 2,
+        isTeam1 = true,
+        username = Username("opp2")
+      )
       all <- UnresolvedBoardPlayer.selectAll
     } yield assertTrue(
       r1 == 1,
@@ -652,13 +675,18 @@ object TestClubMatchSql extends ZIOSpecDefault {
 
   private def testUnresolvedBoardPlayerDoNothing = test("UnresolvedBoardPlayer ON CONFLICT DO NOTHING") {
     for {
-      r <- UnresolvedBoardPlayer.insert(ClubMatchId(1001), 1, isTeam1 = false, Username("opp1-updated"))
+      r <- UnresolvedBoardPlayer.insert(
+        matchId = ClubMatchId(1001),
+        board = 1,
+        isTeam1 = false,
+        username = Username("opp1-updated")
+      )
     } yield assertTrue(r == 0)
   }
 
   private def testUnresolvedBoardPlayerDelete = test("UnresolvedBoardPlayer delete") {
     for {
-      deleted   <- UnresolvedBoardPlayer.delete(ClubMatchId(1001), 1, isTeam1 = false)
+      deleted   <- UnresolvedBoardPlayer.delete(ClubMatchId(1001), board = 1, isTeam1 = false)
       remaining <- UnresolvedBoardPlayer.selectAll
     } yield assertTrue(
       deleted == 1,
@@ -671,7 +699,7 @@ object TestClubMatchSql extends ZIOSpecDefault {
 
   private def testUnresolvedMatchClubInsertAndSelect = test("UnresolvedMatchClub insert and selectAll") {
     for {
-      r1  <- UnresolvedMatchClub.insert(ClubMatchId(1001), isTeam1 = false, ClubSlug("unknown-club"))
+      r1  <- UnresolvedMatchClub.insert(matchId = ClubMatchId(1001), isTeam1 = false, slug = ClubSlug("unknown-club"))
       all <- UnresolvedMatchClub.selectAll
     } yield assertTrue(
       r1 == 1,
@@ -682,7 +710,7 @@ object TestClubMatchSql extends ZIOSpecDefault {
 
   private def testUnresolvedMatchClubDoNothing = test("UnresolvedMatchClub ON CONFLICT DO NOTHING") {
     for {
-      r <- UnresolvedMatchClub.insert(ClubMatchId(1001), isTeam1 = false, ClubSlug("different-slug"))
+      r <- UnresolvedMatchClub.insert(matchId = ClubMatchId(1001), isTeam1 = false, slug = ClubSlug("different-slug"))
     } yield assertTrue(r == 0)
   }
 
@@ -703,10 +731,10 @@ object TestClubMatchSql extends ZIOSpecDefault {
     for {
       before <- ClubMatch.selectId(matchInProgress.matchId)
       _ = assert(before.get.team2ClubIdOption.isEmpty)
-      updated <- ClubMatch.updateTeamClubId(matchInProgress.matchId, isTeam1 = false, clubB.clubId)
+      updated <- ClubMatch.updateTeamClubId(matchId = matchInProgress.matchId, isTeam1 = false, clubId = clubB.clubId)
       after   <- ClubMatch.selectId(matchInProgress.matchId)
       // team1 unchanged
-      noOp <- ClubMatch.updateTeamClubId(ClubMatchId(9999), isTeam1 = true, clubA.clubId)
+      noOp <- ClubMatch.updateTeamClubId(matchId = ClubMatchId(9999), isTeam1 = true, clubId = clubA.clubId)
     } yield assertTrue(
       updated == 1,
       after.get.team2ClubIdOption.contains(clubB.clubId),
@@ -719,7 +747,13 @@ object TestClubMatchSql extends ZIOSpecDefault {
   // parallel resolution/recruitment fibers writing a ref for the same player don't crash with a
   // duplicate-key error, and the most recent successful resolution wins.
   private def testPlayerMatchRefUpsert = test("PlayerMatchRef upsert refreshes on conflict") {
-    val initial   = PlayerMatchRef(player0.playerId, ClubMatchId(1001), isLive = false, isTeam1 = true, 1)
+    val initial = PlayerMatchRef(
+      playerId = player0.playerId,
+      matchId = ClubMatchId(1001),
+      isLive = false,
+      isTeam1 = true,
+      boardIdx = 1
+    )
     val refreshed = initial.copy(matchId = ClubMatchId(1002), isLive = true, isTeam1 = false, boardIdx = 3)
     for {
       _     <- PlayerMatchRef.upsert(initial)
@@ -737,7 +771,8 @@ object TestClubMatchSql extends ZIOSpecDefault {
       // Fresh player so shared `club_match_board` fixtures for player0/player1 don't leak into the tier-2/miss steps.
       val player = Player(PlayerId(60), Times.t0, Username("foi-player"), PlayerStatusCategory.Active, None, Times.t0)
       val p      = player.playerId
-      val explicitRef = PlayerMatchRef(p, ClubMatchId(2200), isLive = true, isTeam1 = true, boardIdx = 4)
+      val explicitRef =
+        PlayerMatchRef(playerId = p, matchId = ClubMatchId(2200), isLive = true, isTeam1 = true, boardIdx = 4)
       val parentMatch = matchFinished.copy(
         matchId = ClubMatchId(2201),
         team1ClubIdOption = Some(clubA.clubId),
@@ -787,12 +822,22 @@ object TestClubMatchSql extends ZIOSpecDefault {
     for {
       _ <- ClubMatchBoard.insertBatch(List(boardA, boardB))
       // boardB has team2PlayerIdOption = None — patch it
-      updated <- ClubMatchBoard.updatePlayerId(boardB.matchId, boardB.board, isTeam1 = false, player0.playerId)
-      boards  <- ClubMatchBoard.selectMatch(matchFinished.matchId)
+      updated <- ClubMatchBoard.updatePlayerId(
+        matchId = boardB.matchId,
+        board = boardB.board,
+        isTeam1 = false,
+        playerId = player0.playerId
+      )
+      boards <- ClubMatchBoard.selectMatch(matchFinished.matchId)
       patched  = boards.find(_.board == boardB.board).get
       original = boards.find(_.board == boardA.board).get
       // non-existent board returns 0
-      noOp <- ClubMatchBoard.updatePlayerId(ClubMatchId(9999), 1, isTeam1 = true, player0.playerId)
+      noOp <- ClubMatchBoard.updatePlayerId(
+        matchId = ClubMatchId(9999),
+        board = 1,
+        isTeam1 = true,
+        playerId = player0.playerId
+      )
     } yield assertTrue(
       updated == 1,
       patched.team2PlayerIdOption.contains(player0.playerId),

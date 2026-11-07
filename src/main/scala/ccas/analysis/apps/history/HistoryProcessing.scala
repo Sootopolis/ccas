@@ -63,13 +63,13 @@ private[history] object HistoryProcessing {
                   ZIO.foreachParDiscard(newPlayers) { dp =>
                     HistorySeeding
                       .seedMatchesForPlayer(
-                        ctx.client,
-                        ctx.clubId,
-                        ctx.clubSlug,
-                        dp.playerId,
-                        dp.username,
-                        excludeMatchIds,
-                        ctx.seedPlayerMatchesUnchanged
+                        client = ctx.client,
+                        clubId = ctx.clubId,
+                        clubSlug = ctx.clubSlug,
+                        playerId = dp.playerId,
+                        username = dp.username,
+                        excludeMatchIds = excludeMatchIds,
+                        unchangedCounter = ctx.seedPlayerMatchesUnchanged
                       )
                       .zipLeft(ZIO.foreachDiscard(shared)(_.queriedPlayers.update(_ + dp.playerId)))
                       .catchAll { error =>
@@ -187,8 +187,18 @@ private[history] object HistoryProcessing {
         resolveClubIdFromTeamUrl(ctx, dailyMatch.teams.team1.`@id`) <&>
           resolveClubIdFromTeamUrl(ctx, dailyMatch.teams.team2.`@id`)
 
-      _ <- trackUnresolvedClub(matchId, isTeam1 = true, dailyMatch.teams.team1.`@id`, team1ClubIdOption) <&>
-        trackUnresolvedClub(matchId, isTeam1 = false, dailyMatch.teams.team2.`@id`, team2ClubIdOption)
+      _ <- trackUnresolvedClub(
+        matchId = matchId,
+        isTeam1 = true,
+        teamUrl = dailyMatch.teams.team1.`@id`,
+        resolvedIdOption = team1ClubIdOption
+      ) <&>
+        trackUnresolvedClub(
+          matchId = matchId,
+          isTeam1 = false,
+          teamUrl = dailyMatch.teams.team2.`@id`,
+          resolvedIdOption = team2ClubIdOption
+        )
 
       clubMatch = HistoryBoardBuilder.buildClubMatchRow(matchId, dailyMatch, team1ClubIdOption, team2ClubIdOption)
 
@@ -210,7 +220,7 @@ private[history] object HistoryProcessing {
               _ <- ClubMatch.upsert(clubMatch)
               _ <-
                 if (weAreTeam1.isDefined) {
-                  HistoryPendingMatch.delete(ctx.clubId, matchId, isLive = false)
+                  HistoryPendingMatch.delete(clubId = ctx.clubId, matchId = matchId, isLive = false)
                 } else {
                   HistoryPendingMatch.updateStatus(ctx.clubId, matchId, false, PendingMatchStatus.Unidentified)
                 }
@@ -229,7 +239,7 @@ private[history] object HistoryProcessing {
                 _ <- ClubMatchGame.insertBatch(gameRows)
                 _ <-
                   if (weAreTeam1.isDefined) {
-                    HistoryPendingMatch.delete(ctx.clubId, matchId, isLive = false)
+                    HistoryPendingMatch.delete(clubId = ctx.clubId, matchId = matchId, isLive = false)
                   } else {
                     HistoryPendingMatch.updateStatus(ctx.clubId, matchId, false, PendingMatchStatus.Unidentified)
                   }
@@ -263,7 +273,7 @@ private[history] object HistoryProcessing {
         resolvePlayerId(ctx, p.username, isOurTeam = false)
       }
 
-      _ <- HistoryPendingMatch.delete(ctx.clubId, matchId, isLive = true)
+      _ <- HistoryPendingMatch.delete(clubId = ctx.clubId, matchId = matchId, isLive = true)
       _ <- ZIO.foreachDiscard(shared)(_.processedMatches.update(_ + matchId))
     } yield ()
 
@@ -384,8 +394,18 @@ private[history] object HistoryProcessing {
         resolveClubIdFromTeamUrl(ctx, dailyMatch.teams.team1.`@id`) <&>
           resolveClubIdFromTeamUrl(ctx, dailyMatch.teams.team2.`@id`)
 
-      _ <- trackUnresolvedClub(matchId, isTeam1 = true, dailyMatch.teams.team1.`@id`, team1ClubIdOption) <&>
-        trackUnresolvedClub(matchId, isTeam1 = false, dailyMatch.teams.team2.`@id`, team2ClubIdOption)
+      _ <- trackUnresolvedClub(
+        matchId = matchId,
+        isTeam1 = true,
+        teamUrl = dailyMatch.teams.team1.`@id`,
+        resolvedIdOption = team1ClubIdOption
+      ) <&>
+        trackUnresolvedClub(
+          matchId = matchId,
+          isTeam1 = false,
+          teamUrl = dailyMatch.teams.team2.`@id`,
+          resolvedIdOption = team2ClubIdOption
+        )
 
       clubMatch =
         HistoryBoardBuilder.buildClubMatchRow(matchId, dailyMatch, team1ClubIdOption, team2ClubIdOption)
@@ -463,10 +483,20 @@ private[history] object HistoryProcessing {
             t1PidOption <- resolvePlayerId(ctx, t1Username, isOurTeam = weAreTeam1.contains(true))
             t2PidOption <- resolvePlayerId(ctx, t2Username, isOurTeam = weAreTeam1.contains(false))
             _ <- ZIO.whenDiscard(t1PidOption.isEmpty) {
-              UnresolvedBoardPlayer.insert(matchId, boardNum, isTeam1 = true, t1Username).ignore
+              UnresolvedBoardPlayer.insert(
+                matchId = matchId,
+                board = boardNum,
+                isTeam1 = true,
+                username = t1Username
+              ).ignore
             }
             _ <- ZIO.whenDiscard(t2PidOption.isEmpty) {
-              UnresolvedBoardPlayer.insert(matchId, boardNum, isTeam1 = false, t2Username).ignore
+              UnresolvedBoardPlayer.insert(
+                matchId = matchId,
+                board = boardNum,
+                isTeam1 = false,
+                username = t2Username
+              ).ignore
             }
 
             // Per-board fetch failures degrade to a board row with no API data; a systemic outage re-raises so the
@@ -476,13 +506,13 @@ private[history] object HistoryProcessing {
               .catchAll(err => NetworkUnavailableException.recoverUnless(err)(ZIO.none))
           } yield {
             val g1 = HistoryBoardBuilder.normalizeGameOutcome(
-              t1Player.playedAsWhite,
-              t2Player.playedAsBlack,
+              whiteResult = t1Player.playedAsWhite,
+              blackResult = t2Player.playedAsBlack,
               whiteTeamIsTeam1 = true
             )
             val g2 = HistoryBoardBuilder.normalizeGameOutcome(
-              t2Player.playedAsWhite,
-              t1Player.playedAsBlack,
+              whiteResult = t2Player.playedAsWhite,
+              blackResult = t1Player.playedAsBlack,
               whiteTeamIsTeam1 = false
             )
             val score = HistoryBoardBuilder.computeScoreX2(g1.winner, g2.winner, t1FairPlay, t2FairPlay)
@@ -507,8 +537,22 @@ private[history] object HistoryProcessing {
             }
 
             val games = List(
-              HistoryBoardBuilder.buildGameRow(matchId, boardNum, team1IsWhite = true, g1.winner, g1.detail, game1Data),
-              HistoryBoardBuilder.buildGameRow(matchId, boardNum, team1IsWhite = false, g2.winner, g2.detail, game2Data)
+              HistoryBoardBuilder.buildGameRow(
+                matchId = matchId,
+                board = boardNum,
+                team1IsWhite = true,
+                winner = g1.winner,
+                detail = g1.detail,
+                boardGame = game1Data
+              ),
+              HistoryBoardBuilder.buildGameRow(
+                matchId = matchId,
+                board = boardNum,
+                team1IsWhite = false,
+                winner = g2.winner,
+                detail = g2.detail,
+                boardGame = game2Data
+              )
             ).flatten
 
             (board, games)

@@ -27,7 +27,7 @@ object TestHistorySeeding extends ZIOSpecDefault {
     suiteRetryUnresolvedPlayers,
     suiteSeedFromMemberMatchesNamelessSkip
   ).provideShared(
-    FreshSchemaLayer("test_history_seeding", onInit = Tables.ensureTables),
+    FreshSchemaLayer(schema = "test_history_seeding", onInit = Tables.ensureTables),
     ZLayer.succeed(ProgressDisplay.make(enabled = false))
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock
 
@@ -91,7 +91,7 @@ object TestHistorySeeding extends ZIOSpecDefault {
     ).unit
 
   private def seedUnresolved(username: Username): RIO[PostgresClient, Unit] =
-    UnresolvedBoardPlayer.insert(matchId, boardNum, isTeam1 = true, username).unit
+    UnresolvedBoardPlayer.insert(matchId = matchId, board = boardNum, isTeam1 = true, username = username).unit
 
   private def seedPlayer(
     playerId: PlayerId,
@@ -198,7 +198,7 @@ object TestHistorySeeding extends ZIOSpecDefault {
         _          <- seedPlayer(oppPlayerId, oppUsername)
         _          <- seedBoardRow(team1Pid = None, team2Pid = Some(oppPlayerId))
         _          <- seedUnresolved(oldUsername)
-        client     <- fakeClient(responses, playerErrors = Map(oldUsername.value -> Status.NotFound))
+        client     <- fakeClient(responses = responses, playerErrors = Map(oldUsername.value -> Status.NotFound))
         resolved   <- runRetry(client)
         unresolved <- unresolvedCount
         team1Pid   <- boardTeam1Pid
@@ -222,7 +222,7 @@ object TestHistorySeeding extends ZIOSpecDefault {
         _      <- seedPlayer(ourPlayerId, oldUsername) // known with old username
         _      <- seedBoardRow(team1Pid = None, team2Pid = Some(oppPlayerId))
         _      <- seedUnresolved(oldUsername)
-        client <- fakeClient(responses, playerErrors = Map(oldUsername.value -> Status.NotFound))
+        client <- fakeClient(responses = responses, playerErrors = Map(oldUsername.value -> Status.NotFound))
         // First retry: does the recovery + archive-and-update
         _           <- runRetry(client)
         snapsAfter1 <- snapshotCount(ourPlayerId)
@@ -248,7 +248,7 @@ object TestHistorySeeding extends ZIOSpecDefault {
         _          <- seedClubMatch
         _          <- seedBoardRow(team1Pid = None, team2Pid = None) // both sides unresolved
         _          <- seedUnresolved(oldUsername)
-        client     <- fakeClient(responses, playerErrors = Map(oldUsername.value -> Status.NotFound))
+        client     <- fakeClient(responses = responses, playerErrors = Map(oldUsername.value -> Status.NotFound))
         resolved   <- runRetry(client)
         unresolved <- unresolvedCount
         team1Pid   <- boardTeam1Pid
@@ -269,7 +269,7 @@ object TestHistorySeeding extends ZIOSpecDefault {
         _          <- seedPlayer(oppPlayerId, oppUsername)
         _          <- seedBoardRow(team1Pid = None, team2Pid = Some(oppPlayerId))
         _          <- seedUnresolved(oldUsername)
-        client     <- fakeClient(responses, playerErrors = Map(oldUsername.value -> Status.NotFound))
+        client     <- fakeClient(responses = responses, playerErrors = Map(oldUsername.value -> Status.NotFound))
         resolved   <- runRetry(client)
         unresolved <- unresolvedCount
         team1Pid   <- boardTeam1Pid
@@ -304,7 +304,7 @@ object TestHistorySeeding extends ZIOSpecDefault {
       for {
         _      <- clearTables
         _      <- seedClubMatch
-        _      <- seedPlayer(ourPlayerId, oldUsername, title = Some(Title.FM))
+        _      <- seedPlayer(playerId = ourPlayerId, username = oldUsername, title = Some(Title.FM))
         _      <- seedBoardRow(team1Pid = None, team2Pid = None)
         _      <- seedUnresolved(oldUsername)
         client <- fakeClient(responses)
@@ -364,9 +364,9 @@ object TestHistorySeeding extends ZIOSpecDefault {
         )
         client <- TestChessComClientSupport.fakeClient(routes)
         _ <- HistorySeeding.seedFromMemberMatches(
-          client,
-          clubId,
-          clubSlug,
+          client = client,
+          clubId = clubId,
+          clubSlug = clubSlug,
           memberIds = members.map(_.playerId).toSet,
           queriedIds = Set.empty,
           memberNames = memberNames,

@@ -25,7 +25,7 @@ object TestJobRunSql extends ZIOSpecDefault {
     testMarkCancelledFlipsRunning,
     testMarkCancelledIgnoresTerminal
   ).provideShared(
-    FreshSchemaLayer("test_job_run", onInit = ServerTables.ensureTables)
+    FreshSchemaLayer(schema = "test_job_run", onInit = ServerTables.ensureTables)
   ) @@ TestAspect.sequential
 
   private object Times {
@@ -125,26 +125,26 @@ object TestJobRunSql extends ZIOSpecDefault {
   private def testSelectRunningForUpdateIgnoresNonRunning =
     test("selectRunningForUpdate ignores non-Running rows") {
       val completed = JobRun(
-        id0,
-        JobKind.Recruitment,
-        Some(clubIdA),
-        RunTrigger.Cli,
-        JobRunStatus.Completed,
-        None,
-        Times.t0,
-        Some(Times.t1),
-        None
+        id = id0,
+        kind = JobKind.Recruitment,
+        clubIdOption = Some(clubIdA),
+        trigger = RunTrigger.Cli,
+        status = JobRunStatus.Completed,
+        params = None,
+        startedAt = Times.t0,
+        completedAt = Some(Times.t1),
+        error = None
       )
       val failed = JobRun(
-        id1,
-        JobKind.Recruitment,
-        Some(clubIdA),
-        RunTrigger.Cli,
-        JobRunStatus.Failed,
-        None,
-        Times.t0,
-        Some(Times.t1),
-        Some("err")
+        id = id1,
+        kind = JobKind.Recruitment,
+        clubIdOption = Some(clubIdA),
+        trigger = RunTrigger.Cli,
+        status = JobRunStatus.Failed,
+        params = None,
+        startedAt = Times.t0,
+        completedAt = Some(Times.t1),
+        error = Some("err")
       )
       for {
         _      <- deleteAll
@@ -213,15 +213,15 @@ object TestJobRunSql extends ZIOSpecDefault {
     test("markCancelled is a no-op on an already-terminal job (guards against clobbering Completed/Failed)") {
       val completed =
         JobRun(
-          id0,
-          JobKind.Recruitment,
-          None,
-          RunTrigger.Cli,
-          JobRunStatus.Completed,
-          None,
-          Times.t0,
-          Some(Times.t1),
-          None
+          id = id0,
+          kind = JobKind.Recruitment,
+          clubIdOption = None,
+          trigger = RunTrigger.Cli,
+          status = JobRunStatus.Completed,
+          params = None,
+          startedAt = Times.t0,
+          completedAt = Some(Times.t1),
+          error = None
         )
       for {
         _      <- deleteAll

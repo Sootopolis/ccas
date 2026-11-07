@@ -55,11 +55,11 @@ private[recruitment] object RecruitmentExplore {
       _ <- ZIO.unlessDiscard(replenished.newSources.isEmpty && replenished.remainingStrategies.isEmpty) {
         exploreLoop(
           ctx,
-          activePool,
-          replenished.newSources,
-          replenished.remainingStrategies,
-          visitedClubs,
-          roundRobinKeys
+          activePool = activePool,
+          pendingSources = replenished.newSources,
+          staticStrategies = replenished.remainingStrategies,
+          visitedClubs = visitedClubs,
+          roundRobinKeys = roundRobinKeys
         )
       }
     } yield ()
@@ -100,22 +100,22 @@ private[recruitment] object RecruitmentExplore {
                 val pool3 = activation.pool - sourceId
                 exploreLoop(
                   ctx,
-                  pool3,
-                  activation.pending,
-                  staticStrategies,
-                  activation.visited,
-                  nextKeys.filter(_ != sourceId)
+                  activePool = pool3,
+                  pendingSources = activation.pending,
+                  staticStrategies = staticStrategies,
+                  visitedClubs = activation.visited,
+                  roundRobinKeys = nextKeys.filter(_ != sourceId)
                 )
               } else {
                 evaluateBatchFromSource(
                   ctx,
-                  activation.pool,
-                  sourceState,
-                  sourceId,
-                  activation.pending,
-                  staticStrategies,
-                  activation.visited,
-                  nextKeys
+                  pool = activation.pool,
+                  sourceState = sourceState,
+                  sourceId = sourceId,
+                  pendingSources = activation.pending,
+                  staticStrategies = staticStrategies,
+                  visitedClubs = activation.visited,
+                  nextKeys = nextKeys
                 )
               }
           } yield ()
@@ -128,9 +128,9 @@ private[recruitment] object RecruitmentExplore {
         playerIdOption <- PlayerName.selectCurrentHolder(username)
         rejectOption <- ZIO.foreach(playerIdOption) { playerId =>
           RecruitmentCandidate.selectLatestRejectedByAlias(
-            playerId,
-            ctx.runCtx.clubId,
-            ctx.runCtx.alias
+            playerId = playerId,
+            clubId = ctx.runCtx.clubId,
+            alias = ctx.runCtx.alias
           )
         }.map(_.flatten)
       } yield rejectOption.exists(c => ChronoUnit.DAYS.between(c.evaluatedAt, ctx.runCtx.now) < days)
@@ -207,9 +207,9 @@ private[recruitment] object RecruitmentExplore {
       found     <- ctx.foundRef.get
       evalCount <- ctx.evalCountRef.get
       _ <- ctx.progressBar.print(
-        found.size,
-        ctx.target,
-        s"[Progress] $sourceId | Evaluated: $evalCount | Found: ${found.size}/${ctx.target}"
+        current = found.size,
+        total = ctx.target,
+        text = s"[Progress] $sourceId | Evaluated: $evalCount | Found: ${found.size}/${ctx.target}"
       )
     } yield ()
 
@@ -282,7 +282,7 @@ private[recruitment] object RecruitmentExplore {
 
     val combined: RIO[PostgresClient, (List[Username], Set[Username])] =
       fetchBoth(clubSlug).onNotFound { e =>
-        ClubSlugRenameResolver.resolveAndPersist(client, clubSlug, clubIdHint = None).flatMap {
+        ClubSlugRenameResolver.resolveAndPersist(client, staleSlug = clubSlug, clubIdHint = None).flatMap {
           case Some(resolved) =>
             // Reuse the resolver's verified ApiClub to skip a duplicate `ApiClub.get(fresh)` on the admins leg.
             // Members still need a fresh fetch (different endpoint).
@@ -312,11 +312,11 @@ private[recruitment] object RecruitmentExplore {
       case ClubSource(clubSlug) =>
         for {
           filtered <- gatherClubCandidates(
-            ctx.runCtx.client,
-            clubSlug,
-            ctx.runCtx.criteria.excludeSourceAdmins,
-            ctx.existingUsernames,
-            evaluatedUsernames
+            client = ctx.runCtx.client,
+            clubSlug = clubSlug,
+            excludeSourceAdmins = ctx.runCtx.criteria.excludeSourceAdmins,
+            existingUsernames = ctx.existingUsernames,
+            evaluatedUsernames = evaluatedUsernames
           )
           _ <- ZIO.logInfo(
             s"[Explore] Activated club source: ${ClubSlug.unwrap(clubSlug)} (${filtered.size} candidates)"

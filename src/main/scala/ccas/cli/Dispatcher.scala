@@ -136,8 +136,8 @@ object Dispatcher {
         targets <- resolveClubs(api, membership.clubs, membership.clubIdOption, membership.all, currentClubOption)
         code <- followEachClub(wiring, follower, targets, membership.detach, currentClubOption) { target =>
           api.postJson[MembershipRequest, List[ClubJobResult]](
-            "/api/jobs/membership",
-            MembershipRequest(NonEmptyChunk.single(target.query), membership.trustUsernames)
+            path = "/api/jobs/membership",
+            body = MembershipRequest(NonEmptyChunk.single(target.query), membership.trustUsernames)
           )
         }
       } yield code
@@ -147,8 +147,8 @@ object Dispatcher {
         targets <- resolveClubs(api, history.clubs, history.clubIdOption, history.all, currentClubOption)
         code <- followEachClub(wiring, follower, targets, history.detach, currentClubOption) { target =>
           api.postJson[HistoryRequest, List[ClubJobResult]](
-            "/api/jobs/history",
-            HistoryRequest(
+            path = "/api/jobs/history",
+            body = HistoryRequest(
               clubs = NonEmptyChunk.single(target.query),
               full = flag(history.full),
               includeFinished = flag(history.includeFinished),
@@ -183,8 +183,8 @@ object Dispatcher {
               clubTarget <- resolveClub(recruit.club, recruit.clubIdOption, currentClubOption)
               result <- sendSettlingAmbiguity(clubTarget, (r: ClubJobResult) => List(r.resolution), hasTty) { chosen =>
                 api.postJson[RecruitmentRequest, ClubJobResult](
-                  "/api/jobs/recruitment",
-                  RecruitmentRequest(
+                  path = "/api/jobs/recruitment",
+                  body = RecruitmentRequest(
                     club = chosen.query,
                     alias = recruit.alias,
                     target = recruit.target,
@@ -207,14 +207,14 @@ object Dispatcher {
         target <- resolveClub(stats.club, stats.clubIdOption, currentClubOption)
         result <- sendSettlingAmbiguity(target, (r: ClubJobResult) => List(r.resolution), hasTty) { chosen =>
           api.postJson[StatsRequest, ClubJobResult](
-            "/api/jobs/stats",
-            StatsRequest(chosen.query, stats.since, stats.until)
+            path = "/api/jobs/stats",
+            body = StatsRequest(chosen.query, stats.since, stats.until)
           )
         }
         _ <- noteResolutions(wiring, currentClubOption, target, List(jobOutcome(result)))
         code <-
           if (stats.detach) { reportDetachedClub(wiring, result) }
-          else { follower.handleClub(result, logsToStderr = false, _ => ZIO.unit) }
+          else { follower.handleClub(result, logsToStderr = false, onComplete = _ => ZIO.unit) }
       } yield code
 
     case CliCommand.Jobs(_, limit) =>
@@ -234,8 +234,8 @@ object Dispatcher {
         target <- resolveClub(add.club, add.clubIdOption, currentClubOption)
         (resolved, blacklisted) <- actOnClub(wiring, currentClubOption, target) { chosen =>
           api.postJson[CreateBlacklistRequest, ClubResult[List[String]]](
-            "/api/blacklist",
-            CreateBlacklistRequest(chosen.query, add.usernames.map(Username(_)), add.reason, add.months)
+            path = "/api/blacklist",
+            body = CreateBlacklistRequest(chosen.query, add.usernames.map(Username(_)), add.reason, add.months)
           )
         }
         _ <- Console.printLine(s"blacklisted ${blacklisted.mkString(", ")} for ${ClubSlug.unwrap(resolved.slug)}").orDie
@@ -278,8 +278,8 @@ object Dispatcher {
         targetOption <- ClubResolver.optional(add.club, add.clubIdOption)
         s <- createSchedule(wiring, currentClubOption, targetOption) { clubOption =>
           api.postJson[CreateScheduleRequest, CreateScheduleResponse](
-            "/api/schedules",
-            CreateScheduleRequest(
+            path = "/api/schedules",
+            body = CreateScheduleRequest(
               kind = add.kind,
               clubOption = clubOption,
               params = add.params,
@@ -764,9 +764,10 @@ object Dispatcher {
     stdout: Boolean,
     interactiveConfirm: Boolean
   ): Task[Int] =
-    if (stdout) { follower.handleClub(result, logsToStderr = true, deliverInvited(api, _)) }
-    else if (interactiveConfirm) { follower.handleClub(result, logsToStderr = false, confirmFlow(api, _)) }
-    else { follower.handleClub(result, logsToStderr = true, deferReport(api, _)) }
+    if (stdout) { follower.handleClub(result, logsToStderr = true, onComplete = deliverInvited(api, _)) }
+    else if (interactiveConfirm) {
+      follower.handleClub(result, logsToStderr = false, onComplete = confirmFlow(api, _))
+    } else { follower.handleClub(result, logsToStderr = true, onComplete = deferReport(api, _)) }
 
   // Fetch a completed auto-confirm scout's invited usernames and print them bare to stdout. A fetch/decode failure is
   // not propagated (the scout already succeeded and is persisted): `deliveryFailed` notes it and the command exits 0.

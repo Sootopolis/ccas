@@ -31,7 +31,7 @@ object TestClubDataApp extends ZIOSpecDefault {
     suiteRefreshClub,
     suiteResolveAndPersistAdmins
   ).provideShared(
-    FreshSchemaLayer("test_club_data_app", onInit = Tables.ensureTables),
+    FreshSchemaLayer(schema = "test_club_data_app", onInit = Tables.ensureTables),
     ZLayer.succeed(ProgressDisplay.make(enabled = false))
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock
 
@@ -126,7 +126,7 @@ object TestClubDataApp extends ZIOSpecDefault {
         )
       }
       _ <- ZIO.whenDiscard(withExplicitRef) {
-        ClubMatchRef.upsert(ClubMatchRef(clubId, refMatchId, isLive = false, isTeam1 = true))
+        ClubMatchRef.upsert(ClubMatchRef(clubId = clubId, matchId = refMatchId, isLive = false, isTeam1 = true))
       }
     } yield ()
 
@@ -188,7 +188,7 @@ object TestClubDataApp extends ZIOSpecDefault {
       )
       for {
         _       <- clearTables
-        _       <- seedStaleClub(stuckClubId, oldSlug, withInferredRef = true, withExplicitRef = false)
+        _       <- seedStaleClub(clubId = stuckClubId, slug = oldSlug, withInferredRef = true, withExplicitRef = false)
         client  <- fakeClient(responses)
         result  <- runRefresh(client)
         updated <- Club.selectId(stuckClubId)
@@ -221,7 +221,7 @@ object TestClubDataApp extends ZIOSpecDefault {
       )
       for {
         _       <- clearTables
-        _       <- seedStaleClub(stuckClubId, oldSlug, withInferredRef = false, withExplicitRef = true)
+        _       <- seedStaleClub(clubId = stuckClubId, slug = oldSlug, withInferredRef = false, withExplicitRef = true)
         client  <- fakeClient(responses)
         result  <- runRefresh(client)
         updated <- Club.selectId(stuckClubId)
@@ -234,10 +234,10 @@ object TestClubDataApp extends ZIOSpecDefault {
     },
     test("404 + no match ref → counted as not found, fetched_at untouched") {
       for {
-        _         <- clearTables
-        _         <- seedStaleClub(stuckClubId, oldSlug, withInferredRef = false, withExplicitRef = false)
-        client    <- fakeClient(Map.empty) // old-slug 404s, no match ref to recover
-        result    <- runRefresh(client)
+        _      <- clearTables
+        _      <- seedStaleClub(clubId = stuckClubId, slug = oldSlug, withInferredRef = false, withExplicitRef = false)
+        client <- fakeClient(Map.empty) // old-slug 404s, no match ref to recover
+        result <- runRefresh(client)
         unchanged <- Club.selectId(stuckClubId)
       } yield assertTrue(
         result.clubsProcessed == 1,
@@ -259,10 +259,10 @@ object TestClubDataApp extends ZIOSpecDefault {
         s"match/${ClubMatchId.unwrap(refMatchId)}" -> matchJson
       )
       for {
-        _         <- clearTables
-        _         <- seedStaleClub(stuckClubId, oldSlug, withInferredRef = true, withExplicitRef = false)
-        client    <- fakeClient(responses)
-        result    <- runRefresh(client)
+        _      <- clearTables
+        _      <- seedStaleClub(clubId = stuckClubId, slug = oldSlug, withInferredRef = true, withExplicitRef = false)
+        client <- fakeClient(responses)
+        result <- runRefresh(client)
         unchanged <- Club.selectId(stuckClubId)
       } yield assertTrue(
         result.clubsProcessed == 1,
@@ -287,10 +287,10 @@ object TestClubDataApp extends ZIOSpecDefault {
         s"match/${ClubMatchId.unwrap(refMatchId)}" -> matchJson
       )
       for {
-        _         <- clearTables
-        _         <- seedStaleClub(stuckClubId, oldSlug, withInferredRef = true, withExplicitRef = false)
-        client    <- fakeClient(responses, profileFailureBody = transientNotFoundBody)
-        result    <- runRefresh(client)
+        _      <- clearTables
+        _      <- seedStaleClub(clubId = stuckClubId, slug = oldSlug, withInferredRef = true, withExplicitRef = false)
+        client <- fakeClient(responses = responses, profileFailureBody = transientNotFoundBody)
+        result <- runRefresh(client)
         unchanged <- Club.selectId(stuckClubId)
       } yield assertTrue(
         result.clubsProcessed == 1,
@@ -315,10 +315,10 @@ object TestClubDataApp extends ZIOSpecDefault {
         s"match/${ClubMatchId.unwrap(refMatchId)}" -> matchJson
       )
       for {
-        _         <- clearTables
-        _         <- seedStaleClub(stuckClubId, oldSlug, withInferredRef = true, withExplicitRef = false)
-        client    <- fakeClient(responses, profileFailureStatus = Status.InternalServerError)
-        result    <- runRefresh(client)
+        _      <- clearTables
+        _      <- seedStaleClub(clubId = stuckClubId, slug = oldSlug, withInferredRef = true, withExplicitRef = false)
+        client <- fakeClient(responses = responses, profileFailureStatus = Status.InternalServerError)
+        result <- runRefresh(client)
         unchanged <- Club.selectId(stuckClubId)
       } yield assertTrue(
         result.clubsProcessed == 1,
@@ -345,11 +345,11 @@ object TestClubDataApp extends ZIOSpecDefault {
         s"match/${ClubMatchId.unwrap(refMatchId)}" -> matchJson
       )
       for {
-        _         <- clearTables
-        _         <- seedStaleClub(stuckClubId, oldSlug, withInferredRef = true, withExplicitRef = false)
-        _         <- Club.upsert(Club(takerId, seedCreated, oldSlug, "Taker Club", None, None, None))
-        client    <- fakeClient(responses)
-        result    <- runRefresh(client)
+        _      <- clearTables
+        _      <- seedStaleClub(clubId = stuckClubId, slug = oldSlug, withInferredRef = true, withExplicitRef = false)
+        _      <- Club.upsert(Club(takerId, seedCreated, oldSlug, "Taker Club", None, None, None))
+        client <- fakeClient(responses)
+        result <- runRefresh(client)
         recovered <- Club.selectId(stuckClubId)
         holder    <- ClubName.selectCurrentHolder(oldSlug)
       } yield assertTrue(
@@ -376,10 +376,10 @@ object TestClubDataApp extends ZIOSpecDefault {
         s"match/${ClubMatchId.unwrap(refMatchId)}" -> matchJson
       )
       for {
-        _         <- clearTables
-        _         <- seedStaleClub(stuckClubId, oldSlug, withInferredRef = true, withExplicitRef = false)
-        client    <- fakeClient(responses)
-        result    <- runRefresh(client)
+        _      <- clearTables
+        _      <- seedStaleClub(clubId = stuckClubId, slug = oldSlug, withInferredRef = true, withExplicitRef = false)
+        client <- fakeClient(responses)
+        result <- runRefresh(client)
         recovered <- Club.selectId(stuckClubId)
         holder    <- ClubName.selectCurrentHolder(oldSlug)
       } yield assertTrue(
@@ -396,10 +396,10 @@ object TestClubDataApp extends ZIOSpecDefault {
       val otherId   = ClubId(9003)
       val responses = Map(s"club/${oldSlug.value}" -> apiClubJson(ClubId.unwrap(otherId), oldSlug.value))
       for {
-        _         <- clearTables
-        _         <- seedStaleClub(stuckClubId, oldSlug, withInferredRef = false, withExplicitRef = false)
-        client    <- fakeClient(responses)
-        result    <- runRefresh(client)
+        _      <- clearTables
+        _      <- seedStaleClub(clubId = stuckClubId, slug = oldSlug, withInferredRef = false, withExplicitRef = false)
+        client <- fakeClient(responses)
+        result <- runRefresh(client)
         unchanged <- Club.selectId(stuckClubId)
         nameless  <- ClubName.selectCurrentName(stuckClubId)
         holder    <- ClubName.selectCurrentHolder(oldSlug)
@@ -417,12 +417,12 @@ object TestClubDataApp extends ZIOSpecDefault {
       val takerId   = ClubId(9004)
       val responses = Map(s"club/${oldSlug.value}" -> apiClubJson(ClubId.unwrap(takerId), oldSlug.value))
       for {
-        _        <- clearTables
-        _        <- seedStaleClub(stuckClubId, oldSlug, withInferredRef = false, withExplicitRef = false)
-        _        <- Club.upsert(Club(takerId, seedCreated, oldSlug, "Taker Club", None, None, None))
-        client   <- fakeClient(responses)
-        result   <- runRefresh(client)
-        stuck    <- Club.selectId(stuckClubId)
+        _      <- clearTables
+        _      <- seedStaleClub(clubId = stuckClubId, slug = oldSlug, withInferredRef = false, withExplicitRef = false)
+        _      <- Club.upsert(Club(takerId, seedCreated, oldSlug, "Taker Club", None, None, None))
+        client <- fakeClient(responses)
+        result <- runRefresh(client)
+        stuck  <- Club.selectId(stuckClubId)
         nameless <- ClubName.selectCurrentName(stuckClubId)
       } yield assertTrue(
         result.clubsProcessed == 2, // the taker refreshes as usual
@@ -435,7 +435,7 @@ object TestClubDataApp extends ZIOSpecDefault {
     test("a club reported missing is logged once, as not found") {
       for {
         _      <- clearTables
-        _      <- seedStaleClub(stuckClubId, oldSlug, withInferredRef = false, withExplicitRef = false)
+        _      <- seedStaleClub(clubId = stuckClubId, slug = oldSlug, withInferredRef = false, withExplicitRef = false)
         client <- fakeClient(responses = Map.empty, matchesFailure = Some((Status.NotFound, reportedNotFoundBody)))
         result <- runRefresh(client)
         logged <- ZTestLogger.logOutput.map(_.map(_.message()))
@@ -449,9 +449,12 @@ object TestClubDataApp extends ZIOSpecDefault {
     test("a match list that returns 500 stays a log line, and the profile still refreshes") {
       val responses = Map(s"club/${oldSlug.value}" -> apiClubJson(ClubId.unwrap(stuckClubId), oldSlug.value))
       for {
-        _       <- clearTables
-        _       <- seedStaleClub(stuckClubId, oldSlug, withInferredRef = false, withExplicitRef = false)
-        client  <- fakeClient(responses, matchesFailure = Some((Status.InternalServerError, "<html>421</html>")))
+        _ <- clearTables
+        _ <- seedStaleClub(clubId = stuckClubId, slug = oldSlug, withInferredRef = false, withExplicitRef = false)
+        client <- fakeClient(
+          responses = responses,
+          matchesFailure = Some((Status.InternalServerError, "<html>421</html>"))
+        )
         result  <- runRefresh(client)
         updated <- Club.selectId(stuckClubId)
         logged  <- ZTestLogger.logOutput.map(_.map(_.message()))
