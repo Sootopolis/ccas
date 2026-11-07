@@ -273,12 +273,14 @@ object HistoryApp extends ZIOAppDefault {
             if (includeFinished) { ClubMatch.selectSettledMatchIdsForClub(ctx.clubId) }
             else { ClubMatch.selectMatchIdsForClub(ctx.clubId) }
 
-          seedClub <- HistorySeeding.seedFromClubMatches(
-            client = ctx.client,
-            clubId = ctx.clubId,
-            clubSlug = ctx.clubSlug,
-            unchangedCounter = ctx.seedClubMatchesUnchanged
-          )
+          seedClub <-
+            HistorySeeding
+              .seedFromClubMatches(
+                ctx.client,
+                ctx.clubId,
+                ctx.clubSlug,
+                ctx.seedClubMatchesUnchanged
+              )
           _ <- seedClubRef.set(seedClub)
           _ <- ZIO.logInfo(s"  Club matches endpoint: $seedClub new match IDs")
 

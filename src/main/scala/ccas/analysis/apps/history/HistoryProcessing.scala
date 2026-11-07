@@ -368,7 +368,7 @@ private[history] object HistoryProcessing {
   ): RIO[ProgressDisplay & PostgresClient, Unit] =
     ctx.client.getResult[ApiDailyMatch](ApiDailyMatch.getUrl(matchId)).flatMap {
       _.foldPresentZIO(
-        ifUnchanged = unchanged =>
+        unchanged =>
           (ClubMatch.selectProcessedBodyHash(matchId) <&> ApiResponseBody.hashById(unchanged.bodyId)).flatMap {
             case (Some(marker), Some(hash)) if marker == hash =>
               ctx.refreshMatchUnchanged.update(_ + 1) *>
@@ -376,7 +376,7 @@ private[history] object HistoryProcessing {
             case (_, hash) =>
               unchanged.getValue.flatMap(refreshSingleMatchWithBody(ctx, matchId, _, hash))
           },
-        ifChanged = changed =>
+        changed =>
           changed.bodyIdOption
             .fold[RIO[PostgresClient, Option[String]]](ZIO.none)(ApiResponseBody.hashById)
             .flatMap(hash => refreshSingleMatchWithBody(ctx, matchId, changed.value, hash))
