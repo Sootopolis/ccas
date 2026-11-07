@@ -165,7 +165,7 @@ private[history] object HistorySeeding {
     entry: UnresolvedBoardPlayer
   ): RIO[PostgresClient, Option[Username]] =
     UsernameRenameResolver.resolveFromBoard(
-      client = client,
+      client,
       staleUsername = entry.username,
       matchId = entry.matchId,
       board = entry.board,
@@ -259,7 +259,7 @@ private[history] object HistorySeeding {
           bar <- ProgressDisplay.progressBar
           _ <- ZIO.foreachParDiscard(toQuery) { case (playerId, username) =>
             seedMatchesForPlayerAllClubs(
-              client = client,
+              client,
               clubId = clubId,
               clubSlug = clubSlug,
               playerId = playerId,
@@ -270,12 +270,12 @@ private[history] object HistorySeeding {
               unchangedCounter = unchangedPlayerCounter
             )
               .foldZIO(
-                failure = error =>
+                error =>
                   NetworkUnavailableException.recoverUnless(error)(
                     failedMembersRef.update(_ :+ FailedMember(username, error.safeMessage))
                       *> ZIO.logWarning(s"  $username: failed — ${error.safeMessage}")
                   ),
-                success = count =>
+                count =>
                   seedRef.update(_ + count) *> counterRef.updateAndGet(_ + 1).flatMap { n =>
                     bar.print(n, total, s"  Querying member matches: $n/$total")
                   }

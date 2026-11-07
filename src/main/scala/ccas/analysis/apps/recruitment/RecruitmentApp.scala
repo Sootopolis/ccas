@@ -261,7 +261,7 @@ object RecruitmentApp extends ZIOAppDefault {
         if (effectiveTarget == 0) {
           ZIO.logInfo("[Cumulative] Target already met, skipping explore") *>
             finalizeRun(
-              ctx = ctx,
+              ctx,
               trigger = trigger,
               startedAt = now,
               cumulative = cumulative,
@@ -272,9 +272,9 @@ object RecruitmentApp extends ZIOAppDefault {
             )
         } else {
           runExplorePhase(
-            ctx = ctx,
-            client = client,
-            pgClient = pgClient,
+            ctx,
+            client,
+            pgClient,
             sourceClubs = sourceClubs,
             timeLimitMinutes = timeLimitMinutes,
             trigger = trigger,
@@ -340,7 +340,7 @@ object RecruitmentApp extends ZIOAppDefault {
 
       // --- Run the explore loop (with optional timeout) ---
       loopEffect = RecruitmentExplore.exploreLoop(
-        ctx = ctx,
+        ctx,
         activePool = Map.empty,
         pendingSources = initialSources,
         staticStrategies = staticStrategies,
@@ -352,7 +352,7 @@ object RecruitmentApp extends ZIOAppDefault {
         case None          => loopEffect.unit
       }).onInterrupt(
         finalizeRun(
-          ctx = ctx,
+          ctx,
           trigger = trigger,
           startedAt = startedAt,
           cumulative = cumulative,
@@ -368,7 +368,7 @@ object RecruitmentApp extends ZIOAppDefault {
 
       // --- Finalize ---
       finalRun <- finalizeRun(
-        ctx = ctx,
+        ctx,
         trigger = trigger,
         startedAt = startedAt,
         cumulative = cumulative,

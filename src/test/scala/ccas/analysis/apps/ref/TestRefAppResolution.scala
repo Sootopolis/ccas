@@ -45,7 +45,7 @@ object TestRefAppResolution extends ZIOSpecDefault {
       // pid1 takes pid0's name, leaving pid0 holding none
       _      <- Player.updateCurrentState(Player(pid1, t0, Username("alice"), Active, None, t1))
       client <- fakeChessComClient(Map.empty)
-      _      <- runPopulate(client = client, forceSkipped = false, upgradeRefs = false)
+      _      <- runPopulate(client, forceSkipped = false, upgradeRefs = false)
       ref    <- PlayerMatchRef.selectId(pid0)
       skip   <- PlayerRefSkip.selectId(pid0)
       taker  <- PlayerRefSkip.selectId(pid1)
@@ -79,7 +79,7 @@ object TestRefAppResolution extends ZIOSpecDefault {
           s"match/$matchId1"        -> matchJson
         )
       )
-      _   <- runPopulate(client = client, forceSkipped = false, upgradeRefs = false)
+      _   <- runPopulate(client, forceSkipped = false, upgradeRefs = false)
       ref <- PlayerMatchRef.selectId(pid0)
     } yield assertTrue(
       ref.isDefined,
@@ -107,7 +107,7 @@ object TestRefAppResolution extends ZIOSpecDefault {
           s"match/$matchId2"        -> matchJson
         )
       )
-      _   <- runPopulate(client = client, forceSkipped = false, upgradeRefs = false)
+      _   <- runPopulate(client, forceSkipped = false, upgradeRefs = false)
       ref <- PlayerMatchRef.selectId(pid1)
     } yield assertTrue(
       ref.isDefined,
@@ -127,7 +127,7 @@ object TestRefAppResolution extends ZIOSpecDefault {
           s"player/charlie/matches" -> emptyPlayerMatchesJson
         )
       )
-      _   <- runPopulate(client = client, forceSkipped = false, upgradeRefs = false)
+      _   <- runPopulate(client, forceSkipped = false, upgradeRefs = false)
       ref <- PlayerMatchRef.selectId(pid0)
     } yield assertTrue(ref.isEmpty)
   }
@@ -150,7 +150,7 @@ object TestRefAppResolution extends ZIOSpecDefault {
           s"match/$matchId1"        -> matchJson
         )
       )
-      _   <- runPopulate(client = client, forceSkipped = false, upgradeRefs = false)
+      _   <- runPopulate(client, forceSkipped = false, upgradeRefs = false)
       ref <- PlayerMatchRef.selectId(pid0)
     } yield assertTrue(ref.isEmpty)
   }
@@ -173,7 +173,7 @@ object TestRefAppResolution extends ZIOSpecDefault {
         ),
         failures = Set("charlie")
       )
-      _          <- runPopulate(client = client, forceSkipped = false, upgradeRefs = false)
+      _          <- runPopulate(client, forceSkipped = false, upgradeRefs = false)
       aliceRef   <- PlayerMatchRef.selectId(pid0)
       charlieRef <- PlayerMatchRef.selectId(pid2)
     } yield assertTrue(
@@ -214,7 +214,7 @@ object TestRefAppResolution extends ZIOSpecDefault {
           s"match/$matchId1"       -> matchJson
         )
       )
-      _     <- runPopulate(client = client, forceSkipped = false, upgradeRefs = false)
+      _     <- runPopulate(client, forceSkipped = false, upgradeRefs = false)
       loser <- ClubMatchRef.selectId(clubId0)
       taker <- ClubMatchRef.selectId(clubId1)
       skip  <- ClubRefSkip.selectId(clubId0)
@@ -241,7 +241,7 @@ object TestRefAppResolution extends ZIOSpecDefault {
           s"match/$matchId1"         -> matchJson
         )
       )
-      _   <- runPopulate(client = client, forceSkipped = false, upgradeRefs = false)
+      _   <- runPopulate(client, forceSkipped = false, upgradeRefs = false)
       ref <- ClubMatchRef.selectId(clubId0)
     } yield assertTrue(
       ref.isDefined,
@@ -270,7 +270,7 @@ object TestRefAppResolution extends ZIOSpecDefault {
           s"match/$matchId1"         -> matchJson
         )
       )
-      _   <- runPopulate(client = client, forceSkipped = false, upgradeRefs = false)
+      _   <- runPopulate(client, forceSkipped = false, upgradeRefs = false)
       ref <- ClubMatchRef.selectId(clubId1)
     } yield assertTrue(
       ref.isDefined,
@@ -291,7 +291,7 @@ object TestRefAppResolution extends ZIOSpecDefault {
           s"club/other-club/matches" -> emptyClubMatchesJson
         )
       )
-      _   <- runPopulate(client = client, forceSkipped = false, upgradeRefs = false)
+      _   <- runPopulate(client, forceSkipped = false, upgradeRefs = false)
       ref <- ClubMatchRef.selectId(clubId0)
     } yield assertTrue(ref.isEmpty)
   }
@@ -315,7 +315,7 @@ object TestRefAppResolution extends ZIOSpecDefault {
           s"match/$matchId1"        -> matchJson
         )
       )
-      _   <- runPopulate(client = client, forceSkipped = false, upgradeRefs = false)
+      _   <- runPopulate(client, forceSkipped = false, upgradeRefs = false)
       ref <- ClubMatchRef.selectId(clubId0)
     } yield assertTrue(ref.isEmpty)
   }
@@ -343,7 +343,7 @@ object TestRefAppResolution extends ZIOSpecDefault {
           s"tournament/tourney-1/1"     -> apiTournamentRoundJson(List("other-player", "alice", "third-player"))
         )
       )
-      _   <- runPopulate(client = client, forceSkipped = false, upgradeRefs = false)
+      _   <- runPopulate(client, forceSkipped = false, upgradeRefs = false)
       ref <- PlayerTournamentRef.selectId(pid0)
     } yield assertTrue(
       ref.isDefined,
@@ -367,7 +367,7 @@ object TestRefAppResolution extends ZIOSpecDefault {
             s"tournament/tourney-1/1"     -> apiTournamentRoundJson(List("stranger1", "stranger2"))
           )
         )
-        _   <- runPopulate(client = client, forceSkipped = false, upgradeRefs = false)
+        _   <- runPopulate(client, forceSkipped = false, upgradeRefs = false)
         ref <- PlayerTournamentRef.selectId(pid0)
       } yield assertTrue(ref.isEmpty)
     }

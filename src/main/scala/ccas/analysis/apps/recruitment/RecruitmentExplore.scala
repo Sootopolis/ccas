@@ -54,7 +54,7 @@ private[recruitment] object RecruitmentExplore {
       replenished <- replenish(ctx, evaluated, staticStrategies)
       _ <- ZIO.unlessDiscard(replenished.newSources.isEmpty && replenished.remainingStrategies.isEmpty) {
         exploreLoop(
-          ctx = ctx,
+          ctx,
           activePool = activePool,
           pendingSources = replenished.newSources,
           staticStrategies = replenished.remainingStrategies,
@@ -99,7 +99,7 @@ private[recruitment] object RecruitmentExplore {
               if (sourceState.remaining.isEmpty) {
                 val pool3 = activation.pool - sourceId
                 exploreLoop(
-                  ctx = ctx,
+                  ctx,
                   activePool = pool3,
                   pendingSources = activation.pending,
                   staticStrategies = staticStrategies,
@@ -108,7 +108,7 @@ private[recruitment] object RecruitmentExplore {
                 )
               } else {
                 evaluateBatchFromSource(
-                  ctx = ctx,
+                  ctx,
                   pool = activation.pool,
                   sourceState = sourceState,
                   sourceId = sourceId,
@@ -282,7 +282,7 @@ private[recruitment] object RecruitmentExplore {
 
     val combined: RIO[PostgresClient, (List[Username], Set[Username])] =
       fetchBoth(clubSlug).onNotFound { e =>
-        ClubSlugRenameResolver.resolveAndPersist(client = client, staleSlug = clubSlug, clubIdHint = None).flatMap {
+        ClubSlugRenameResolver.resolveAndPersist(client, staleSlug = clubSlug, clubIdHint = None).flatMap {
           case Some(resolved) =>
             // Reuse the resolver's verified ApiClub to skip a duplicate `ApiClub.get(fresh)` on the admins leg.
             // Members still need a fresh fetch (different endpoint).

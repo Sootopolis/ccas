@@ -270,7 +270,7 @@ private[history] object HistoryProcessing {
 
       // Discover players from both teams (for BFS wave expansion)
       _ <- ZIO.foreachParDiscard(liveMatch.teams.team1.players ++ liveMatch.teams.team2.players) { p =>
-        resolvePlayerId(ctx = ctx, username = p.username, isOurTeam = false)
+        resolvePlayerId(ctx, p.username, isOurTeam = false)
       }
 
       _ <- HistoryPendingMatch.delete(clubId = ctx.clubId, matchId = matchId, isLive = true)
@@ -480,8 +480,8 @@ private[history] object HistoryProcessing {
             t1FairPlay = team1Fp.contains(t1Username.value)
             t2FairPlay = team2Fp.contains(t2Username.value)
 
-            t1PidOption <- resolvePlayerId(ctx = ctx, username = t1Username, isOurTeam = weAreTeam1.contains(true))
-            t2PidOption <- resolvePlayerId(ctx = ctx, username = t2Username, isOurTeam = weAreTeam1.contains(false))
+            t1PidOption <- resolvePlayerId(ctx, t1Username, isOurTeam = weAreTeam1.contains(true))
+            t2PidOption <- resolvePlayerId(ctx, t2Username, isOurTeam = weAreTeam1.contains(false))
             _ <- ZIO.whenDiscard(t1PidOption.isEmpty) {
               UnresolvedBoardPlayer.insert(
                 matchId = matchId,
@@ -629,7 +629,7 @@ private[history] object HistoryProcessing {
     // un-completed and torn down with the failing fiber tree. Log uses the input `username` since a failure here
     // means we couldn't even authenticate it.
     work.foldZIO(
-      failure = error =>
+      error =>
         NetworkUnavailableException.recoverUnless(error) {
           for {
             _ <- ctx.playersFailed.update(_ + 1)
@@ -637,7 +637,7 @@ private[history] object HistoryProcessing {
             _ <- promise.succeed(None)
           } yield None
         },
-      success = result => promise.succeed(result).as(result)
+      result => promise.succeed(result).as(result)
     )
   }
 

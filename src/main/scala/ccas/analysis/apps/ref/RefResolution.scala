@@ -52,7 +52,7 @@ private[ref] object RefResolution {
             _ <- ZIO.logDebug(s"  ${player.username}: resolved via DB")
           } yield true
         case None =>
-          resolvePlayerViaMatch(ctx = ctx, player = player, countResolved = true).flatMap {
+          resolvePlayerViaMatch(ctx, player, countResolved = true).flatMap {
             case ResolveResult.Resolved   => ZIO.succeed(true)
             case ResolveResult.SkipPlayer => skipPlayer(ctx, player, RefSkipReason.IdMismatch).as(false)
             case matchOutcome => // NotFound or NoData
@@ -153,11 +153,11 @@ private[ref] object RefResolution {
           case true => ZIO.succeed(ResolveResult.NotFound)
           case false =>
             fetchMatch(ctx, parsed.matchId, parsed.isLive).foldZIO(
-              failure = error =>
+              error =>
                 NetworkUnavailableException.recoverUnless(error)(
                   ctx.recordFailedUrl(parsed.matchUrl, error, "player").as(ResolveResult.NotFound)
                 ),
-              success = result =>
+              result =>
                 onTeamMatchTeams(ctx, parsed.matchUrl, "player", result, ResolveResult.NotFound) { teams =>
                   teams.findPlayerIsTeam1(player.username) match {
                     case None => ZIO.succeed(ResolveResult.NotFound)
@@ -223,11 +223,11 @@ private[ref] object RefResolution {
       case true => ZIO.succeed(ResolveResult.NotFound)
       case false =>
         ctx.client.get[ApiTournamentRound](roundUrl).foldZIO(
-          failure = error =>
+          error =>
             NetworkUnavailableException.recoverUnless(error)(
               ctx.recordFailedUrl(roundUrl, error, "player").as(ResolveResult.NotFound)
             ),
-          success = round => {
+          round => {
             val playerIdx = round.players.indexWhere(rp => rp.username == player.username)
             if (playerIdx < 0) {
               ZIO.succeed(ResolveResult.NotFound)
@@ -334,11 +334,11 @@ private[ref] object RefResolution {
       case true => ZIO.succeed(false)
       case false =>
         fetchMatch(ctx, parsed.matchId, parsed.isLive).foldZIO(
-          failure = error =>
+          error =>
             NetworkUnavailableException.recoverUnless(error)(
               ctx.recordFailedUrl(parsed.matchUrl, error, "club").as(false)
             ),
-          success = result =>
+          result =>
             onTeamMatchTeams(ctx, parsed.matchUrl, "club", result, false) { teams =>
               teams.findClubIsTeam1(club.slug) match {
                 case None => ZIO.succeed(false)
@@ -458,7 +458,7 @@ private[ref] object RefResolution {
     player: UnresolvedPlayer
   )(onVerified: => RIO[PostgresClient, ResolveResult]): RIO[ProgressDisplay & PostgresClient, ResolveResult] =
     verifyPlayerId(ctx.client, player.username, player.playerId).foldZIO(
-      failure = error =>
+      error =>
         NetworkUnavailableException.recoverUnless(error)(
           ZIO.logWarning(s"  ${player.username}: verification error — ${error.safeMessage}").as(ResolveResult.NotFound)
         ),
@@ -511,7 +511,7 @@ private[ref] object RefResolution {
             _ <- ZIO.logDebug(s"  ${player.username}: upgraded via DB")
           } yield true
         case None =>
-          resolvePlayerViaMatch(ctx = ctx, player = player, countResolved = false).map {
+          resolvePlayerViaMatch(ctx, player, countResolved = false).map {
             case ResolveResult.Resolved => true
             case _                      => false
           }
@@ -561,8 +561,8 @@ private[ref] object RefResolution {
         case true => ZIO.none
         case false =>
           ctx.client.get[ApiTournamentRound](roundUrl).foldZIO(
-            failure = error => ctx.recordFailedUrl(roundUrl, error, "player").as(None),
-            success = round => {
+            error => ctx.recordFailedUrl(roundUrl, error, "player").as(None),
+            round => {
               val playerIdx = round.players.indexWhere(rp => rp.username == trp.username)
               ZIO.when(playerIdx >= 0) {
                 val ref = PlayerTournamentRef(trp.playerId, slug, playerIdx)

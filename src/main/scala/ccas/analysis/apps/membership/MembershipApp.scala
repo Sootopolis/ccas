@@ -183,7 +183,7 @@ object MembershipApp extends ZIOAppDefault {
       _     <- Club.upsert(club)
       runId <- MembershipRun.insert(clubId, trigger, startedAt, jobRunIdOption)
       saved <- saveRoster(
-        client = client,
+        client,
         slug = resolved.slug,
         clubId = clubId,
         runId = runId,
@@ -251,7 +251,7 @@ object MembershipApp extends ZIOAppDefault {
       case None if attempt < MaxSaveAttempts =>
         ZIO.logInfo("Another reconcile saved this club's roster while this one ran; fetching the roster again") *>
           saveRoster(
-            client = client,
+            client,
             slug = slug,
             clubId = clubId,
             runId = runId,
@@ -287,9 +287,9 @@ object MembershipApp extends ZIOAppDefault {
       // Closed accounts neither roster lists: their club lists settle their rows (ADR 0022).
       rostered = storedRoster.membersByPlayerId.keySet ++ phaseB.resolvedIds
       settlement <- ClosedAccountClubs.settle(
-        client = client,
-        clubId = clubId,
-        storedRoster = storedRoster,
+        client,
+        clubId,
+        storedRoster,
         exclude = rostered
       )
       checked = MembershipVerdictCheck(storedRoster, phaseB, phaseC, settlement)

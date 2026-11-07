@@ -214,7 +214,7 @@ object Dispatcher {
         _ <- noteResolutions(wiring, currentClubOption, target, List(jobOutcome(result)))
         code <-
           if (stats.detach) { reportDetachedClub(wiring, result) }
-          else { follower.handleClub(result = result, logsToStderr = false, onComplete = _ => ZIO.unit) }
+          else { follower.handleClub(result, logsToStderr = false, onComplete = _ => ZIO.unit) }
       } yield code
 
     case CliCommand.Jobs(_, limit) =>
@@ -764,10 +764,10 @@ object Dispatcher {
     stdout: Boolean,
     interactiveConfirm: Boolean
   ): Task[Int] =
-    if (stdout) { follower.handleClub(result = result, logsToStderr = true, onComplete = deliverInvited(api, _)) }
+    if (stdout) { follower.handleClub(result, logsToStderr = true, onComplete = deliverInvited(api, _)) }
     else if (interactiveConfirm) {
-      follower.handleClub(result = result, logsToStderr = false, onComplete = confirmFlow(api, _))
-    } else { follower.handleClub(result = result, logsToStderr = true, onComplete = deferReport(api, _)) }
+      follower.handleClub(result, logsToStderr = false, onComplete = confirmFlow(api, _))
+    } else { follower.handleClub(result, logsToStderr = true, onComplete = deferReport(api, _)) }
 
   // Fetch a completed auto-confirm scout's invited usernames and print them bare to stdout. A fetch/decode failure is
   // not propagated (the scout already succeeded and is persisted): `deliveryFailed` notes it and the command exits 0.

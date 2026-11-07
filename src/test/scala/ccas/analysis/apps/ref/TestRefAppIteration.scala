@@ -57,7 +57,7 @@ object TestRefAppIteration extends ZIOSpecDefault {
           // match/$matchId1 not present -> 404
         )
       )
-      _   <- runPopulate(client = client, forceSkipped = false, upgradeRefs = false)
+      _   <- runPopulate(client, forceSkipped = false, upgradeRefs = false)
       ref <- PlayerMatchRef.selectId(pid0)
     } yield assertTrue(
       ref.isDefined,
@@ -82,7 +82,7 @@ object TestRefAppIteration extends ZIOSpecDefault {
           // match/$matchId1 not present -> 404
         )
       )
-      _        <- runPopulate(client = client, forceSkipped = false, upgradeRefs = false)
+      _        <- runPopulate(client, forceSkipped = false, upgradeRefs = false)
       matchRef <- PlayerMatchRef.selectId(pid0)
       tournRef <- PlayerTournamentRef.selectId(pid0)
     } yield assertTrue(
@@ -109,7 +109,7 @@ object TestRefAppIteration extends ZIOSpecDefault {
             s"tournament/good-tourney/1" -> apiTournamentRoundJson(List("alice", "someone"))
           )
         )
-        _   <- runPopulate(client = client, forceSkipped = false, upgradeRefs = false)
+        _   <- runPopulate(client, forceSkipped = false, upgradeRefs = false)
         ref <- PlayerTournamentRef.selectId(pid0)
       } yield assertTrue(
         ref.isDefined,
@@ -135,7 +135,7 @@ object TestRefAppIteration extends ZIOSpecDefault {
             s"tournament/good-tourney/1" -> apiTournamentRoundJson(List("alice", "bob", "someone"))
           )
         )
-        _        <- runPopulate(client = client, forceSkipped = false, upgradeRefs = false)
+        _        <- runPopulate(client, forceSkipped = false, upgradeRefs = false)
         aliceRef <- PlayerTournamentRef.selectId(pid0)
         bobRef   <- PlayerTournamentRef.selectId(pid1)
       } yield assertTrue(
@@ -180,7 +180,7 @@ object TestRefAppIteration extends ZIOSpecDefault {
           s"match/$matchId3" -> matchJson3
         )
       )
-      _   <- runPopulate(client = client, forceSkipped = false, upgradeRefs = false)
+      _   <- runPopulate(client, forceSkipped = false, upgradeRefs = false)
       ref <- ClubMatchRef.selectId(clubId0)
     } yield assertTrue(
       ref.isDefined,
@@ -218,7 +218,7 @@ object TestRefAppIteration extends ZIOSpecDefault {
           s"match/$matchId1"         -> matchJson
         )
       )
-      _         <- runPopulate(client = client, forceSkipped = false, upgradeRefs = false)
+      _         <- runPopulate(client, forceSkipped = false, upgradeRefs = false)
       playerRef <- PlayerMatchRef.selectId(pid0)
       clubRef   <- ClubMatchRef.selectId(clubId0)
     } yield assertTrue(
@@ -253,7 +253,7 @@ object TestRefAppIteration extends ZIOSpecDefault {
           s"club/other-club/matches" -> emptyClubMatchesJson
         )
       )
-      _         <- runPopulate(client = client, forceSkipped = false, upgradeRefs = false)
+      _         <- runPopulate(client, forceSkipped = false, upgradeRefs = false)
       playerRef <- PlayerMatchRef.selectId(pid0)
       clubRef   <- ClubMatchRef.selectId(clubId0)
     } yield assertTrue(

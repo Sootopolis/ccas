@@ -52,7 +52,7 @@ private[membership] object ClosedAccountClubs {
     exclude: Set[PlayerId]
   ): RIO[ProgressDisplay & PostgresClient, Settlement] =
     for {
-      fetched  <- gather(client = client, clubId = clubId, exclude = exclude)
+      fetched  <- gather(client, clubId, exclude)
       listings <- PlayerClubList.selectListings(clubId)
       outcomes = Chunk.from(listings).filterNot(listing => exclude.contains(listing.playerId)).map { listing =>
         listing.playerId -> outcome(clubId, storedRoster.rowsOf(listing.playerId), listing)
