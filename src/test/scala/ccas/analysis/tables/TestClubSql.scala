@@ -134,13 +134,11 @@ object TestClubSql extends ZIOSpecDefault {
       all       <- ClubMember.selectAll
       clubA_all <- ClubMember.selectClub(clubA.clubId)
       clubA_cur <- ClubMember.selectClubListed(clubA.clubId)
-      clubA_act <- ClubMember.selectClubActive(clubA.clubId)
       clubB_all <- ClubMember.selectClub(clubB.clubId)
     } yield assertTrue(
       all.toSet == Set(memA0, memA1, memA2, memB0),
       clubA_all.toSet == Set(memA0, memA1, memA2),
       clubA_cur.toSet == Set(memA0, memA1),
-      clubA_act.toSet == Set(memA0, memA1),
       clubB_all == List(memB0)
     )
   }
@@ -439,6 +437,9 @@ object TestClubSql extends ZIOSpecDefault {
         stale <- PlayerClubList.selectListings(clubA.clubId)
         _     <- PlayerClubList.save(listAt(Times.t2))
         fresh <- PlayerClubList.selectListings(clubA.clubId)
-      } yield assertTrue(stale.isEmpty, fresh == List(PlayerClubList.Listing(player2.playerId, Times.t0, Times.t1)))
+      } yield assertTrue(
+        stale.isEmpty,
+        fresh == List(PlayerClubList.Listing(player2.playerId, Times.t0, Times.t1, Closed))
+      )
     }
 }

@@ -170,7 +170,6 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
     testMergeResultsIncludesExternalChanges,
     testSelectPlayerIdsCurrentAtReturnsCurrentMembers,
     testSelectPlayerIdsCurrentAtExcludesLeftMembers,
-    testCountActiveCurrentAtExcludesNonActive,
     testSelectLatestCompletedReturnsCompletedRuns,
     testSelectLatestCompletedReturnsNoneWhenNoCompletedRuns,
     testSelectLatestReportedSkipsIncompleteAndDependencyRuns,
@@ -180,14 +179,14 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
   private def testMergeResultsIncludesExternalChanges = test("mergeResults includes external changes and memberships") {
     val extChange = MemberChangeSummary(pid1, Username("bob"), Chunk(JoinedClub(Times.t1)))
     val extMember = ClubMember.joined(clubId = clubId, playerId = pid1, since = Times.t1)
+    val movement  = RosterMovement(before = Set(pid0), after = Set(pid0, pid1))
     val result = MembershipApp.mergeResults(
       clubId = clubId,
       b = nothingListed,
       c = nothingDisappeared,
       settlement = noSettlement,
       refused = Chunk.empty,
-      currentMemberCount = 10,
-      previousMemberCount = 8,
+      rosterMovement = movement,
       startedAt = Times.t0,
       completedAt = Times.t1,
       externalChanges = Chunk(extChange),
@@ -196,8 +195,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
     assertTrue(
       result.changes == Chunk(extChange),
       result.newMemberships == Chunk(extMember),
-      result.currentMemberCount == 10,
-      result.previousMemberCount == 8
+      result.rosterMovement == movement
     )
   }
 
@@ -239,34 +237,6 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
       } yield assertTrue(
         atT0 == Set(pid0),
         atT2.isEmpty
-      )
-    }
-
-  private def testCountActiveCurrentAtExcludesNonActive =
-    test("countActiveCurrentAt excludes non-Active players and players outside the window") {
-      val alice = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0)
-      val bob   = Player(pid1, Times.t0, Username("bob"), Closed, None, Times.t0)
-      val carol = Player(pid2, Times.t0, Username("carol"), Active, None, Times.t0)
-      // alice: active, current → counted
-      val memAlice = ClubMember.joined(clubId = clubId, playerId = pid0, since = Times.t0)
-      // bob: closed but still current → excluded by status filter
-      val memBob = ClubMember.joined(clubId = clubId, playerId = pid1, since = Times.t0)
-      // carol: active but left at t1 → excluded by window at t2
-      val memCarol = ClubMember(
-        clubId = clubId,
-        playerId = pid2,
-        since = Times.t0,
-        lastSeen = Some(Times.t0),
-        until = Some(Times.t1)
-      )
-
-      for {
-        _      <- seedDb(players = List(alice, bob, carol), members = List(memAlice, memBob, memCarol))
-        atT0p5 <- ClubMember.countActiveCurrentAt(clubId, Times.t0.plusSeconds(30))
-        atT2   <- ClubMember.countActiveCurrentAt(clubId, Times.t2)
-      } yield assertTrue(
-        atT0p5 == 2, // alice + carol (both active, both current at t0+30s)
-        atT2 == 1    // alice only (carol has left, bob is Closed)
       )
     }
 
@@ -771,7 +741,8 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
     test("a member whose closed account's list leaves the club out had left, and ends at this roster") {
       classifyClosedBob(Active, Some(clubListJson("other-club" -> Times.t0))).map { (row, result) =>
         assertTrue(
-          result.changes.flatMap(_.changes) == Chunk(StatusChange(Times.t2, Active), LeftClub(Times.t2)),
+          result.changes.flatMap(_.changes) ==
+            Chunk(StatusChange(Times.t2, Active, Closed), LeftClub(Times.t2)),
           result.closedMemberships == Chunk(row.copy(lastSeen = Some(Times.t0), until = Some(Times.t2))),
           result.hiddenMemberships.isEmpty
         )
@@ -939,7 +910,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
       ).map { result =>
         assertTrue(
           result.changes.flatMap(_.changes).toSet ==
-            Set(UsernameChange(Times.t2, Username("ed-old")), StatusChange(Times.t2, Closed)),
+            Set(UsernameChange(Times.t2, Username("ed-old")), StatusChange(Times.t2, Closed, Active)),
           result.closedMemberships.isEmpty,
           result.hiddenMemberships.isEmpty
         )
@@ -1039,6 +1010,8 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
     testALeaveEndsBetweenTwoRosters,
     testRejoinPersistsBothRows,
     testJoinsADependencySawAreReportedNext,
+    testARostersBeforeIsThePreviousReportsAfter,
+    testEveryRosterGainAndLossIsNamed,
     testAReconcileOverlappingAnotherBuildsOnItsSave,
     testStaleCheckIgnoresAFailedRun,
     testARunThatCannotCompleteSavesNothing,
@@ -1053,6 +1026,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
     testAClosedAccountThatPlayedForTheClubIsAsked,
     testANameAnsweringForAnotherPlayerSettlesNothing,
     testAReactivatedAccountListedAgainReopens,
+    testAReopeningAnotherJobSawIsAnAccountReopening,
     testAReactivatedAccountMissingFromTheRosterHasLeft,
     testAReactivatedAccountUnderANewNameReopens,
     testAnOlderRowsJoinLeavesTheRowsAlone,
@@ -1060,6 +1034,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
     testAJoinBetweenRowsLeavesTheLatestWhole,
     testAJoinInsideAnEndedRowRejoins,
     testAJoinAnEndedRowWasSeenAfterLeavesItAlone,
+    testAnUnsettledJoinIsInNeitherEndOfTheRoster,
     testAnUnsettledJoinIsReportedUntilALaterJoinSettlesIt,
     testARenamedMemberAtAnOlderJoinIsReportedInThatRun,
     testARenamedMemberAtALaterJoinRejoinsInThatRun,
@@ -1185,8 +1160,74 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
         result <- reconcileWith(routes, RunTrigger.Cli)
       } yield assertTrue(
         result.changes.map(c => (c.playerId, c.changes.toList)) == Chunk((pid1, List(JoinedClub(Times.t1)))),
-        result.previousMemberCount == 1,
-        result.currentMemberCount == 2
+        result.rosterMovement == RosterMovement(before = Set(pid0), after = Set(pid0, pid1))
+      )
+    }
+
+  private def testARostersBeforeIsThePreviousReportsAfter =
+    test("a report's roster before is the previous report's roster after, when no other job reconciled between them") {
+      val alice    = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0)
+      val aliceRow = ClubMember.joined(clubId = clubId, playerId = pid0, since = Times.t0)
+      val profiles = Map(
+        "alice" -> apiPlayerJson(playerId = PlayerId.unwrap(pid0), username = "alice"),
+        "bob"   -> apiPlayerJson(playerId = PlayerId.unwrap(pid1), username = "bob")
+      )
+      val withBob    = clubRoutes(roster = List("alice" -> Times.t0, "bob" -> Times.t1), profiles = profiles)
+      val withoutBob = clubRoutes(roster = List("alice" -> Times.t0), profiles = profiles)
+      for {
+        _      <- deleteRuns
+        _      <- seedDb(players = List(alice), members = List(aliceRow))
+        _      <- completedRun(startedAt = Times.t0, completedAt = Times.t0.plusSeconds(60))
+        first  <- reconcileWith(withBob, RunTrigger.Cli)
+        second <- reconcileWith(withoutBob, RunTrigger.Cli)
+      } yield assertTrue(
+        first.rosterMovement == RosterMovement(before = Set(pid0), after = Set(pid0, pid1)),
+        second.rosterMovement.before == first.rosterMovement.after,
+        second.rosterMovement.losses == Set(pid1)
+      )
+    }
+
+  // A gain or loss with no line beside it leaves the operator to work out who it was.
+  private def testEveryRosterGainAndLossIsNamed =
+    test("every roster gain and loss of a run is named under an event in its report") {
+      def player(playerId: PlayerId, name: String) = Player(playerId, Times.t0, Username(name), Active, None, Times.t0)
+      def open(playerId: PlayerId) = ClubMember.joined(clubId = clubId, playerId = playerId, since = Times.t0)
+      def profile(playerId: PlayerId, name: String) =
+        name -> apiPlayerJson(playerId = PlayerId.unwrap(playerId), username = name)
+      val erinEnded = endedRow(playerId = pid4, since = Times.t0, until = Times.t2).copy(lastSeen = Some(Times.t1))
+      val carolClosed = apiPlayerJson(
+        playerId = PlayerId.unwrap(pid2),
+        username = "carol",
+        status = "closed",
+        lastOnline = Some(Times.t3.getEpochSecond)
+      )
+      val routes = clubRoutesListing(
+        roster = List("alice" -> Times.t0, "dave" -> Times.t3.plusSeconds(3600), "erin" -> Times.t0),
+        profiles = Map(
+          profile(pid0, "alice"),
+          profile(pid1, "bob"),
+          "carol" -> carolClosed,
+          profile(pid3, "dave"),
+          profile(pid4, "erin")
+        ),
+        clubLists = Map("carol" -> clubListJson("test-club" -> Times.t0))
+      )
+      for {
+        _ <- deleteRuns
+        _ <- seedDb(
+          players = List(player(pid0, "alice"), player(pid1, "bob"), player(pid2, "carol"), player(pid4, "erin")),
+          members = List(open(pid0), open(pid1), open(pid2), erinEnded)
+        )
+        _      <- completedRun(startedAt = Times.t3, completedAt = Times.t3.plusSeconds(60))
+        result <- reconcileWith(routes, RunTrigger.Cli)
+        output = MembershipReport.formatReconciliation(result, Map.empty)
+      } yield assertTrue(
+        result.rosterMovement.gains == Set(pid3, pid4),
+        result.rosterMovement.losses == Set(pid1, pid2),
+        output.contains("[JOINED]\n  dave — "),
+        output.contains("[BACK ON ROSTER]\n  erin — "),
+        output.contains("[LEFT CLUB]\n  bob — "),
+        output.contains("[ACCOUNT CLOSED]\n  carol — ")
       )
     }
 
@@ -1334,8 +1375,8 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
     }
 
   private def testDeltaReflectsNewJoinAcrossRuns =
-    test("previousMemberCount ignores rows this run inserts (regression)") {
-      // Regression: previousMemberCount used to be sampled after this run completed itself,
+    test("the roster before ignores rows this run inserts (regression)") {
+      // Regression: the previous count used to be sampled after this run completed itself,
       // so selectLatestCompleted returned THIS run and the delta always collapsed to 0.
       val bobJoined       = Times.t1.minusSeconds(600) // before the prior run completed
       val alice           = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0)
@@ -1358,8 +1399,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
         result <- reconcileWith(routes, RunTrigger.Cli)
       } yield assertTrue(
         result.newMemberships.size == 1,
-        result.previousMemberCount == 1,
-        result.currentMemberCount == 2
+        result.rosterMovement == RosterMovement(before = Set(pid0), after = Set(pid0, pid1))
       )
     }
 
@@ -1464,7 +1504,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
       } yield assertTrue(
         rows == List(ended.hidden(Times.t2)),
         result.settlement.hidden == Chunk(
-          ClosedAccountClubs.Hidden(Username("erin"), ended.hidden(Times.t2), Times.t1)
+          ClosedAccountClubs.Hidden(Username("erin"), ended.hidden(Times.t2), Closed)
         ),
         result.hiddenMemberships.isEmpty,
         result.settlement.unsettled.isEmpty
@@ -1488,7 +1528,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
         val listed = ClubMember.joined(clubId = clubId, playerId = pid5, since = Times.t0).hidden(Times.t3)
         assertTrue(
           rows.toSet == Set(earlier, listed),
-          result.settlement.opened == Chunk(ClosedAccountClubs.Opened(Username("finn"), listed))
+          result.settlement.opened == Chunk(ClosedAccountClubs.Opened(Username("finn"), listed, Closed))
         )
       }
     }
@@ -1620,6 +1660,21 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
       )
     }
 
+  // Another job refreshed the status first, so this run sees no status change, only the hidden row reopening.
+  private def testAReopeningAnotherJobSawIsAnAccountReopening =
+    test("a hidden membership whose account another job saw reopen is reported as an account reopening") {
+      val olga   = Player(pid4, Times.t0, Username("olga"), Active, None, Times.t2)
+      val hidden = ClubMember.joined(clubId = clubId, playerId = pid4, since = Times.t0).hidden(Times.t1)
+      for {
+        _      <- seedDb(players = List(olga), members = List(hidden))
+        result <- reconcileWith(clubRoutes(roster = List("olga" -> Times.t0), profiles = Map.empty), RunTrigger.Cli)
+        output = MembershipReport.formatReconciliation(result, Map.empty)
+      } yield assertTrue(
+        output.contains(s"[ACCOUNT REOPENED]\n  olga — member since ${Times.t0}, last seen ${Times.t1}\n"),
+        !output.contains("[BACK ON ROSTER]")
+      )
+    }
+
   private def testAReactivatedAccountMissingFromTheRosterHasLeft =
     test("a member a closed account hid, active again but missing from the roster, has left since last seen") {
       val kate   = Player(pid0, Times.t0, Username("kate"), Active, None, Times.t2)
@@ -1636,7 +1691,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
         rows.map(_.lastSeen) == List(Some(Times.t1)),
         rows.forall(_.until.nonEmpty),
         result.changes.flatMap(_.changes).exists(_.isInstanceOf[LeftClub]),
-        result.currentMemberCount == 0
+        result.rosterMovement.after.isEmpty
       )
     }
 
@@ -1747,6 +1802,25 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
       } yield assertTrue(
         before == (List(ended), Chunk((Times.t1, ended))),
         at == (List(ended), Chunk((Times.t2, ended)))
+      )
+    }
+
+  // A roster count taken from the list would gain them on every run, while their line says they are not counted.
+  private def testAnUnsettledJoinIsInNeitherEndOfTheRoster =
+    test("a player the roster lists whose join the rows cannot place is in neither end of the roster, run after run") {
+      val ended  = endedRow(playerId = pid5, since = Times.t0, until = Times.t3).copy(lastSeen = Some(Times.t2))
+      val routes = clubRoutes(roster = List("rita" -> Times.t1), profiles = Map.empty)
+      val none   = RosterMovement(before = Set.empty, after = Set.empty)
+      for {
+        _      <- deleteRuns
+        _      <- seedDb(players = List(rita), members = List(ended))
+        first  <- reconcileWith(routes, RunTrigger.Cli)
+        second <- reconcileWith(routes, RunTrigger.Cli)
+      } yield assertTrue(
+        unsettledJoins(first) == Chunk((Times.t1, ended)),
+        unsettledJoins(second) == Chunk((Times.t1, ended)),
+        first.rosterMovement == none,
+        second.rosterMovement == none
       )
     }
 
@@ -2144,7 +2218,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
         result.summaries.map(_.username) == List(renamed),
         result.summaries.flatMap(_.changes) == List(
           JoinedClub(Times.t1),
-          StatusChange(Times.t2, Active),
+          StatusChange(Times.t2, Active, Closed),
           UsernameChange(renamedAt, member.username)
         )
       )

@@ -26,8 +26,11 @@ final case class PlayerClubList(
 
 object PlayerClubList {
 
-  /** What a closed account's list says about one club: it was a member at closure, since `joined`. */
-  final case class Listing(playerId: PlayerId, lastOnline: Instant, joined: Instant) derives DbCodec
+  /** What a closed account's list says about one club: it was a member at closure, since `joined`. `status` is the
+    * closure's kind.
+    */
+  final case class Listing(playerId: PlayerId, lastOnline: Instant, joined: Instant, status: PlayerStatusCategory)
+      derives DbCodec
 
   def createTable: ZIO[PostgresClient, SQLException, Int] =
     transactZIO {
@@ -84,7 +87,7 @@ object PlayerClubList {
     */
   def selectListings(clubId: ClubId): ZIO[PostgresClient, SQLException, List[Listing]] =
     connectZIO {
-      sql"""SELECT l.player_id, l.last_online, e.joined FROM player_club_list l
+      sql"""SELECT l.player_id, l.last_online, e.joined, p.status FROM player_club_list l
             JOIN player p ON p.player_id = l.player_id
             JOIN player_club_list_entry e ON e.player_id = l.player_id
             WHERE p.status <> ${Active: PlayerStatusCategory} AND l.fetched_at >= p.since

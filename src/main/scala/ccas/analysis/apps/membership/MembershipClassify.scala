@@ -404,7 +404,7 @@ private[membership] object MembershipClassify {
     } else { PlayerChangeResult(None, None, Chunk.empty) }
 
   private def statusChange(player: Player, statusCategory: PlayerStatusCategory, now: Instant): Option[MemberChange] =
-    Option.when(player.status != statusCategory)(StatusChange(now, player.status))
+    Option.when(player.status != statusCategory)(StatusChange(now, player.status, statusCategory))
 
   private def matchRefFallback(
     client: ChessComClient,

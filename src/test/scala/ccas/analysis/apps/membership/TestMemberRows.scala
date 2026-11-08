@@ -138,7 +138,7 @@ object TestMemberRows extends ZIOSpecDefault {
       val kept = Chunk[MemberChange](
         AccountClosed(day(14), Closed),
         UsernameChange(day(14), Username("rita-old")),
-        StatusChange(day(14), Active)
+        StatusChange(day(14), Active, Closed)
       )
       val ritas = MemberChangeSummary(pid0, Username("rita"), kept :+ JoinedClub(day(14)))
       val bobs  = MemberChangeSummary(pid1, Username("bob"), Chunk(NewMember(day(14))))
@@ -157,7 +157,11 @@ object TestMemberRows extends ZIOSpecDefault {
       )
     },
     test("a player refused over a club list is named as the list names them, and the row it would open stays out") {
-      val opening = ClosedAccountClubs.Opened(username = Username("finn"), row = openFrom(14).hidden(day(15)))
+      val opening = ClosedAccountClubs.Opened(
+        username = Username("finn"),
+        row = openFrom(14).hidden(day(15)),
+        status = Closed
+      )
       val lists   = noSettlement.copy(opened = Chunk(opening))
       val b       = listed(changes = Chunk.empty, newMemberships = Chunk.empty, closedMemberships = Chunk.empty)
       val checked = MembershipVerdictCheck(holding(openFrom(10)), b, nothingDisappeared, lists)
@@ -169,7 +173,7 @@ object TestMemberRows extends ZIOSpecDefault {
     rows       <- MembershipGen.history(clubId = clubId, playerId = pid0, minRows = 0)
     joined     <- Gen.oneOf(MembershipGen.instant, Gen.fromIterable(day(0) :: rows.map(_.since)))
     lastOnline <- MembershipGen.instant
-  } yield (rows, Listing(playerId = pid0, lastOnline = lastOnline, joined = joined))
+  } yield (rows, Listing(playerId = pid0, lastOnline = lastOnline, joined = joined, status = Closed))
 
   private def suiteAClosedAccountsList = suite("a closed account's list")(
     test("whatever join a closed account's list shows, their rows stay valid and apart") {
@@ -177,7 +181,7 @@ object TestMemberRows extends ZIOSpecDefault {
         val unchanged = MemberRowChanges(narrowed = Chunk.empty, widened = Chunk.empty, opened = Chunk.empty)
         val changes = ClosedAccountClubs.outcome(clubId, MemberRows(rows), listing) match {
           case Outcome.Hide(row, _)                 => unchanged.copy(widened = Chunk(row))
-          case Outcome.Open(row)                    => unchanged.copy(opened = Chunk(row))
+          case Outcome.Open(row, _)                 => unchanged.copy(opened = Chunk(row))
           case Outcome.Overlaps | Outcome.Unchanged => unchanged
         }
         assertTrue(MemberRows(rows).conflictAfter(changes).isEmpty)
