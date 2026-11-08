@@ -38,6 +38,20 @@ object MembershipChange {
       case _: NewMember | _: JoinedClub | _: Rejoined | _: Reopened | _: LeftClub | _: Unresolvable => true
       case _: AccountClosed | _: UsernameChange | _: StatusChange                                   => false
     }
+
+    /** Whether this puts a player on the active roster. */
+    def gains: Boolean = this match {
+      case _: NewMember | _: JoinedClub | _: Rejoined | _: Reopened => true
+      case StatusChange(_, _, newStatus)                            => newStatus == PlayerStatusCategory.Active
+      case _: LeftClub | _: AccountClosed | _: Unresolvable | _: UsernameChange => false
+    }
+
+    /** Whether this takes a player off the active roster. */
+    def loses: Boolean = this match {
+      case _: LeftClub | _: AccountClosed | _: Unresolvable => true
+      case StatusChange(_, oldStatus, _)                    => oldStatus == PlayerStatusCategory.Active
+      case _: NewMember | _: JoinedClub | _: Rejoined | _: Reopened | _: UsernameChange => false
+    }
   }
 
   object MemberChange {

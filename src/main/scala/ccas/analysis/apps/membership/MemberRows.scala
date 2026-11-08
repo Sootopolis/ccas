@@ -38,8 +38,11 @@ enum MemberRowConflict {
 /** One player's rows in one club. */
 final case class MemberRows(rows: List[ClubMember]) {
 
+  /** The row that started last. */
+  def latestOption: Option[ClubMember] = rows.maxByOption(_.since)
+
   def place(join: Instant): JoinPlacement =
-    rows.maxByOption(_.since) match {
+    latestOption match {
       case None => JoinPlacement.First
       case Some(latest) =>
         if (latest.since == join) { JoinPlacement.SameMembership(latest) }

@@ -50,7 +50,7 @@ object MembershipRun {
     }
 
   /** The completed run that reported its changes last: one another job ran as a step of its own does not, so the next
-    * report still shows what it saw. Last to complete rather than to start, since a run that another saved during
+    * report still names what it moved. Last to complete rather than to start, since a run that another saved during
     * fetches again and saves after it (#312).
     */
   def selectLatestReported(clubId: ClubId): ZIO[PostgresClient, SQLException, Option[MembershipRun]] =

@@ -242,6 +242,87 @@ private[membership] object MembershipClassify {
       }
     }
 
+  // --- What other reconciles recorded ---
+
+  /** Those a roster movement moved with no event of this run's behind them: a reconcile another job ran, or a status
+    * refresh, recorded those moves (#440).
+    */
+  final case class UnnamedMoves(gains: Set[PlayerId], losses: Set[PlayerId]) {
+    def playerIds: Set[PlayerId] = gains ++ losses
+  }
+
+  /** Who `movement` moved that this run's `changes` and club lists don't name. A rename, say, doesn't name a move. */
+  def unnamedMoves(
+    movement: RosterMovement,
+    changes: Chunk[MemberChangeSummary],
+    settlement: ClosedAccountClubs.Settlement
+  ): UnnamedMoves = {
+    def naming(event: MemberChange => Boolean) = changes.filter(_.changes.exists(event)).map(_.playerId).toSet
+    val closedByLists = (settlement.hidden.map(_.row.playerId) ++ settlement.opened.map(_.row.playerId)).toSet
+    UnnamedMoves(
+      gains = movement.gains -- naming(_.gains),
+      losses = movement.losses -- naming(_.loses) -- closedByLists
+    )
+  }
+
+  /** What each of `moves` was, from `states` and `names`, the movers' histories, and `storedRoster`, the rows as other
+    * reconciles left them: this run changed none of a mover's rows, or an event would name them.
+    */
+  def nameMoves(
+    moves: UnnamedMoves,
+    storedRoster: StoredRoster,
+    states: List[PlayerSnapshot],
+    names: List[PlayerName],
+    previousReportAtOption: Option[Instant]
+  ): Chunk[MemberChangeSummary] = {
+    val statesByPlayer               = states.groupBy(_.playerId)
+    val namesByPlayer                = names.groupBy(_.playerId)
+    def statesOf(playerId: PlayerId) = statesByPlayer.getOrElse(playerId, Nil).sortBy(_.since)
+    def namesOf(playerId: PlayerId)  = namesByPlayer.getOrElse(playerId, Nil).sortBy(_.since)
+    def summaryOf(playerId: PlayerId)(change: MemberChange) =
+      MemberChangeSummary(playerId, MembershipReport.latestName(namesOf(playerId)), Chunk(change))
+    val gained = moves.gains.toList.flatMap { playerId =>
+      gainOf(storedRoster.rowsOf(playerId), statesOf(playerId), previousReportAtOption).map(summaryOf(playerId))
+    }
+    val lost = moves.losses.toList.flatMap { playerId =>
+      lossOf(storedRoster.rowsOf(playerId), statesOf(playerId), namesOf(playerId)).map(summaryOf(playerId))
+    }
+    Chunk.from(gained ++ lost)
+  }
+
+  /** A row already there at the last report, whose account was closed then and is active since, reopened. Any other
+    * gain is a join.
+    */
+  private def gainOf(
+    rows: MemberRows,
+    playerStates: List[PlayerSnapshot],
+    previousReportAtOption: Option[Instant]
+  ): Option[MemberChange] =
+    rows.latestOption.map { latest =>
+      val reopeningOption = previousReportAtOption.filterNot(latest.since.isAfter).flatMap { at =>
+        val (byThen, sinceThen) = playerStates.partition(!_.since.isAfter(at))
+        for {
+          closed <- byThen.lastOption.filter(_.status != PlayerStatusCategory.Active)
+          active <- sinceThen.find(_.status == PlayerStatusCategory.Active)
+        } yield StatusChange(active.since, closed.status, active.status)
+      }
+      reopeningOption.getOrElse(MemberChange.join(latest.since, rows.latestBefore(latest.since)))
+    }
+
+  /** How the latest row went off the roster. Still open, another job has seen the account close before any roster did:
+    * the next run names the closure from its row as well.
+    */
+  private def lossOf(
+    rows: MemberRows,
+    playerStates: List[PlayerSnapshot],
+    playerNames: List[PlayerName]
+  ): Option[MemberChange] =
+    rows.latestOption.flatMap(MembershipReport.offRosterChange(_, playerStates, playerNames)).orElse {
+      playerStates.reverse.takeWhile(_.status != PlayerStatusCategory.Active).lastOption.map { state =>
+        StatusChange(state.since, PlayerStatusCategory.Active, state.status)
+      }
+    }
+
   // --- Phase C: Classify disappeared members ---
 
   final case class PhaseCResult(

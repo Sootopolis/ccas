@@ -20,6 +20,7 @@ object TestMembershipAppPure extends ZIOSpecDefault {
   override def spec: Spec[Any, Throwable] = suite("TestMembershipAppPure")(
     suiteClassifyFromDb,
     suiteRosterMovement,
+    suiteUnnamedMoves,
     suiteMergeResults,
     suiteFormatReconciliation,
     suiteFormatReport,
@@ -77,6 +78,84 @@ object TestMembershipAppPure extends ZIOSpecDefault {
         movement.gains == Set(pid1),
         movement.losses == Set(pid0)
       )
+    }
+  )
+
+  private def suiteUnnamedMoves = suite("unnamedMoves")(
+    test("a member whose move this run's own event names gets no second line") {
+      val movement = RosterMovement(before = Set(pid1), after = Set(pid0))
+      val changes = Chunk(
+        MemberChangeSummary(pid0, Username("alice"), Chunk(JoinedClub(Times.t1))),
+        MemberChangeSummary(pid1, Username("bob"), Chunk(LeftClub(Times.t1)))
+      )
+      val moves = MembershipClassify.unnamedMoves(movement, changes, noSettlement)
+      assertTrue(moves.playerIds.isEmpty)
+    },
+    test("a rename alone does not name a move") {
+      val movement = RosterMovement(before = Set(pid1), after = Set(pid0))
+      val changes = Chunk(
+        MemberChangeSummary(pid0, Username("alice"), Chunk(UsernameChange(Times.t1, Username("old-alice")))),
+        MemberChangeSummary(pid1, Username("bob"), Chunk(UsernameChange(Times.t1, Username("old-bob"))))
+      )
+      val moves = MembershipClassify.unnamedMoves(movement, changes, noSettlement)
+      assertTrue(moves.gains == Set(pid0), moves.losses == Set(pid1))
+    },
+    test("a closure a club list found names the loss") {
+      val movement = RosterMovement(before = Set(pid1), after = Set.empty)
+      val moves    = MembershipClassify.unnamedMoves(movement, Chunk.empty, settlement)
+      assertTrue(moves.playerIds.isEmpty)
+    },
+    test("each event names a gain, a loss, or neither") {
+      val previous = PreviousMembership.Recorded(lastSeen = Times.t0, until = Times.t1)
+      val gains = List(
+        NewMember(Times.t1),
+        JoinedClub(Times.t1),
+        Rejoined(Times.t1, previous),
+        Reopened(Times.t1, MembershipStanding.Hidden(Times.t0)),
+        StatusChange(Times.t1, Closed, Active)
+      )
+      val losses = List(
+        LeftClub(Times.t1),
+        AccountClosed(Times.t1, Closed),
+        Unresolvable(Times.t1, Username("old")),
+        StatusChange(Times.t1, Active, Closed)
+      )
+      val neither = List(UsernameChange(Times.t1, Username("old")), StatusChange(Times.t1, Closed, Fairplay))
+      assertTrue(
+        gains.forall(change => change.gains && !change.loses),
+        losses.forall(change => change.loses && !change.gains),
+        neither.forall(change => !change.gains && !change.loses)
+      )
+    },
+    test("a gain whose row began after the last report is a join, though the account was closed then") {
+      val row    = ClubMember.joined(clubId = clubId, playerId = pid0, since = Times.t2)
+      val roster = emptyStoredRoster.copy(unlistedByPlayerId = Map(pid0 -> List(row)))
+      val states = List(PlayerSnapshot(pid0, Times.t0, Closed, None), PlayerSnapshot(pid0, Times.t2, Active, None))
+      val named = MembershipClassify.nameMoves(
+        MembershipClassify.UnnamedMoves(gains = Set(pid0), losses = Set.empty),
+        roster,
+        states,
+        Nil,
+        previousReportAtOption = Some(Times.t1)
+      )
+      assertTrue(named.flatMap(_.changes) == Chunk(JoinedClub(Times.t2)))
+    },
+    test("a loss whose row is still open is named from the account's status, dated when it first closed") {
+      val row    = ClubMember.joined(clubId = clubId, playerId = pid0, since = Times.t0)
+      val roster = emptyStoredRoster.copy(unlistedByPlayerId = Map(pid0 -> List(row)))
+      val states = List(
+        PlayerSnapshot(pid0, Times.t0, Active, None),
+        PlayerSnapshot(pid0, Times.t2, Closed, None),
+        PlayerSnapshot(pid0, Times.t3, Closed, None)
+      )
+      val named = MembershipClassify.nameMoves(
+        MembershipClassify.UnnamedMoves(gains = Set.empty, losses = Set(pid0)),
+        roster,
+        states,
+        Nil,
+        previousReportAtOption = Some(Times.t1)
+      )
+      assertTrue(named.flatMap(_.changes) == Chunk(StatusChange(Times.t2, Active, Closed)))
     }
   )
 
@@ -365,7 +444,8 @@ object TestMembershipAppPure extends ZIOSpecDefault {
       refused = Chunk(refused),
       rosterMovement = noMovement,
       startedAt = Times.t0,
-      completedAt = Times.t1
+      completedAt = Times.t1,
+      externalChanges = Chunk.empty
     )
 
     assertTrue(
@@ -393,7 +473,8 @@ object TestMembershipAppPure extends ZIOSpecDefault {
         refused = Chunk.empty,
         rosterMovement = noMovement,
         startedAt = Times.t0,
-        completedAt = Times.t1
+        completedAt = Times.t1,
+        externalChanges = Chunk.empty
       )
       assertTrue(result.hiddenMemberships == Chunk(cHidden), result.settlement == settlement)
     }
