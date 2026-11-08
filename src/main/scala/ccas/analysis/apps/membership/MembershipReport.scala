@@ -349,6 +349,30 @@ private[membership] object MembershipReport {
     }.map(_.flatten.toMap)
   }
 
+  /** How `row` went off the roster, read from the states its player has been in and the names they have held, each
+    * oldest first. `None` while it is open.
+    */
+  private[membership] def offRosterChange(
+    row: ClubMember,
+    playerStates: List[PlayerSnapshot],
+    playerNames: List[PlayerName]
+  ): Option[MemberChange] =
+    row.standing match {
+      case MembershipStanding.Open => None
+      case MembershipStanding.Ended(lastSeen, until) =>
+        Some(playerStates.findLast(!_.since.isAfter(until)) match {
+          case Some(state) =>
+            if (state.status == PlayerStatusCategory.Active) { LeftClub(until) }
+            else { AccountClosed(lastSeen, state.status) }
+          case None => Unresolvable(until, playerNames.headOption.fold(Username.wrap("unknown"))(_.username))
+        })
+      // Whatever the account's status now: History can see it active again before a roster reopens the row.
+      case MembershipStanding.Hidden(lastSeen) =>
+        playerStates.findLast(_.status != PlayerStatusCategory.Active).map { state =>
+          AccountClosed(lastSeen, state.status)
+        }
+    }
+
   // --- Report mode: DB-only ---
 
   /** Classifies each member whose membership began or ended in `[since, until]`, from the club's memberships, those
@@ -403,29 +427,7 @@ private[membership] object MembershipReport {
           }
         }
 
-        cm.standing match {
-          case MembershipStanding.Open => ()
-          case MembershipStanding.Ended(lastSeen, until) =>
-            if (inRange(until)) {
-              // Check latest state to determine reason
-              playerStates.filter(s => !s.since.isAfter(until)).lastOption match {
-                case Some(state) =>
-                  if (state.status == PlayerStatusCategory.Active) { changes += LeftClub(until) }
-                  else { changes += AccountClosed(lastSeen, state.status) }
-                case None =>
-                  // No state found near the closure — unresolvable
-                  val username = playerNames.headOption.fold(Username.wrap("unknown"))(_.username)
-                  changes += Unresolvable(until, username)
-              }
-            }
-          case MembershipStanding.Hidden(lastSeen) =>
-            // Whatever the account's status now: History can see it active again before a roster reopens the row.
-            if (inRange(lastSeen)) {
-              playerStates.findLast(_.status != PlayerStatusCategory.Active).foreach { state =>
-                changes += AccountClosed(lastSeen, state.status)
-              }
-            }
-        }
+        if (cm.until.orElse(cm.hiddenAt).exists(inRange)) { changes ++= offRosterChange(cm, playerStates, playerNames) }
       }
 
       // Two histories now (#254): a status change is read from the states, a rename from the name windows.

@@ -176,9 +176,8 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
     testSelectLatestReportedTakesTheLastToComplete
   )
 
-  private def testMergeResultsIncludesExternalChanges = test("mergeResults includes external changes and memberships") {
+  private def testMergeResultsIncludesExternalChanges = test("mergeResults includes what other reconciles recorded") {
     val extChange = MemberChangeSummary(pid1, Username("bob"), Chunk(JoinedClub(Times.t1)))
-    val extMember = ClubMember.joined(clubId = clubId, playerId = pid1, since = Times.t1)
     val movement  = RosterMovement(before = Set(pid0), after = Set(pid0, pid1))
     val result = MembershipApp.mergeResults(
       clubId = clubId,
@@ -189,12 +188,10 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
       rosterMovement = movement,
       startedAt = Times.t0,
       completedAt = Times.t1,
-      externalChanges = Chunk(extChange),
-      externalMemberships = Chunk(extMember)
+      externalChanges = Chunk(extChange)
     )
     assertTrue(
       result.changes == Chunk(extChange),
-      result.newMemberships == Chunk(extMember),
       result.rosterMovement == movement
     )
   }
@@ -1012,6 +1009,14 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
     testJoinsADependencySawAreReportedNext,
     testARostersBeforeIsThePreviousReportsAfter,
     testEveryRosterGainAndLossIsNamed,
+    testALeaveAnotherJobRecordedIsNamed,
+    testAClosureAnotherJobRecordedIsNamed,
+    testAnEndedRowOfAClosedAccountAnotherJobRecordedIsAClosure,
+    testAReopeningAnotherJobRecordedIsNamed,
+    testANewPlayerAnotherJobRecordedDatedBeforeTheReportIsAJoin,
+    testWhatAnotherJobRecordedIsNamedOnce,
+    testEveryMoveIsNamedWhicheverReconcileRecordedIt,
+    testAClosedAccountThatMovedNothingGetsNoLine,
     testAReconcileOverlappingAnotherBuildsOnItsSave,
     testStaleCheckIgnoresAFailedRun,
     testARunThatCannotCompleteSavesNothing,
@@ -1190,33 +1195,28 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
   // A gain or loss with no line beside it leaves the operator to work out who it was.
   private def testEveryRosterGainAndLossIsNamed =
     test("every roster gain and loss of a run is named under an event in its report") {
-      def player(playerId: PlayerId, name: String) = Player(playerId, Times.t0, Username(name), Active, None, Times.t0)
-      def open(playerId: PlayerId) = ClubMember.joined(clubId = clubId, playerId = playerId, since = Times.t0)
-      def profile(playerId: PlayerId, name: String) =
-        name -> apiPlayerJson(playerId = PlayerId.unwrap(playerId), username = name)
       val erinEnded = endedRow(playerId = pid4, since = Times.t0, until = Times.t2).copy(lastSeen = Some(Times.t1))
-      val carolClosed = apiPlayerJson(
-        playerId = PlayerId.unwrap(pid2),
-        username = "carol",
-        status = "closed",
-        lastOnline = Some(Times.t3.getEpochSecond)
-      )
       val routes = clubRoutesListing(
         roster = List("alice" -> Times.t0, "dave" -> Times.t3.plusSeconds(3600), "erin" -> Times.t0),
         profiles = Map(
-          profile(pid0, "alice"),
-          profile(pid1, "bob"),
-          "carol" -> carolClosed,
-          profile(pid3, "dave"),
-          profile(pid4, "erin")
+          profileOf(pid0, "alice"),
+          profileOf(pid1, "bob"),
+          closedProfileOf(pid2, "carol", lastOnline = Times.t3),
+          profileOf(pid3, "dave"),
+          profileOf(pid4, "erin")
         ),
         clubLists = Map("carol" -> clubListJson("test-club" -> Times.t0))
       )
       for {
         _ <- deleteRuns
         _ <- seedDb(
-          players = List(player(pid0, "alice"), player(pid1, "bob"), player(pid2, "carol"), player(pid4, "erin")),
-          members = List(open(pid0), open(pid1), open(pid2), erinEnded)
+          players = List(
+            activePlayer(pid0, "alice"),
+            activePlayer(pid1, "bob"),
+            activePlayer(pid2, "carol"),
+            activePlayer(pid4, "erin")
+          ),
+          members = List(openRow(pid0), openRow(pid1), openRow(pid2), erinEnded)
         )
         _      <- completedRun(startedAt = Times.t3, completedAt = Times.t3.plusSeconds(60))
         result <- reconcileWith(routes, RunTrigger.Cli)
@@ -1228,6 +1228,234 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
         output.contains("[BACK ON ROSTER]\n  erin — "),
         output.contains("[LEFT CLUB]\n  bob — "),
         output.contains("[ACCOUNT CLOSED]\n  carol — ")
+      )
+    }
+
+  private def activePlayer(playerId: PlayerId, name: String) =
+    Player(playerId, Times.t0, Username(name), Active, None, Times.t0)
+
+  private def openRow(playerId: PlayerId) = ClubMember.joined(clubId = clubId, playerId = playerId, since = Times.t0)
+
+  private def profileOf(playerId: PlayerId, name: String) =
+    name -> apiPlayerJson(playerId = PlayerId.unwrap(playerId), username = name)
+
+  private def closedProfileOf(playerId: PlayerId, name: String, lastOnline: Instant) =
+    name -> apiPlayerJson(
+      playerId = PlayerId.unwrap(playerId),
+      username = name,
+      status = "closed",
+      lastOnline = Some(lastOnline.getEpochSecond)
+    )
+
+  /** The previous report, ending after every fixture's date, so a later run's rows are what moved. */
+  private def reportedAfterTheFixtures = completedRun(startedAt = Times.t3, completedAt = Times.t3.plusSeconds(60))
+
+  /** A club of alice and bob, whom another job's reconcile records leaving, ahead of the membership runs. */
+  private def bobLeftInAnotherJobsReconcile = {
+    val routes = clubRoutes(
+      roster = List("alice" -> Times.t0),
+      profiles = Map(profileOf(pid0, "alice"), profileOf(pid1, "bob"))
+    )
+    for {
+      _ <- deleteRuns
+      _ <- seedDb(
+        players = List(activePlayer(pid0, "alice"), activePlayer(pid1, "bob")),
+        members = List(openRow(pid0), openRow(pid1))
+      )
+      _    <- reportedAfterTheFixtures
+      _    <- reconcileWith(routes, RunTrigger.Dependency)
+      rows <- ClubMember.selectClub(clubId)
+      until = rows.find(_.playerId == pid1).flatMap(_.until)
+    } yield (routes, until)
+  }
+
+  private def testALeaveAnotherJobRecordedIsNamed =
+    test("a leave another job's reconcile recorded is named by the next membership run") {
+      for {
+        (routes, until) <- bobLeftInAnotherJobsReconcile
+        result          <- reconcileWith(routes, RunTrigger.Cli)
+      } yield assertTrue(
+        result.rosterMovement.losses == Set(pid1),
+        until.nonEmpty,
+        result.changes.map(summary => (summary.playerId, summary.changes.toList)) ==
+          Chunk((pid1, until.toList.map(LeftClub(_))))
+      )
+    }
+
+  private def testAClosureAnotherJobRecordedIsNamed =
+    test(
+      "an account closure another job's reconcile recorded is named by the next membership run, even dated before " +
+        "the previous report ended"
+    ) {
+      val routes = clubRoutesListing(
+        roster = List("alice" -> Times.t0),
+        profiles = Map(profileOf(pid0, "alice"), closedProfileOf(pid2, "carol", lastOnline = Times.t1)),
+        clubLists = Map("carol" -> clubListJson("test-club" -> Times.t0))
+      )
+      for {
+        _ <- deleteRuns
+        _ <- seedDb(
+          players = List(activePlayer(pid0, "alice"), activePlayer(pid2, "carol")),
+          members = List(openRow(pid0), openRow(pid2))
+        )
+        _      <- reportedAfterTheFixtures
+        _      <- reconcileWith(routes, RunTrigger.Dependency)
+        result <- reconcileWith(routes, RunTrigger.Cli)
+        output = MembershipReport.formatReconciliation(result, Map.empty)
+      } yield assertTrue(
+        result.rosterMovement.losses == Set(pid2),
+        result.changes.flatMap(_.changes) == Chunk(AccountClosed(Times.t1, Closed)),
+        output.contains(s"[ACCOUNT CLOSED]\n  carol — status: closed, after ${Times.t1}\n")
+      )
+    }
+
+  private def testAnEndedRowOfAClosedAccountAnotherJobRecordedIsAClosure =
+    test(
+      "an account another job's reconcile saw close, ending its row, is named as a closure by the next membership run"
+    ) {
+      val routes = clubRoutesListing(
+        roster = List("alice" -> Times.t0),
+        profiles = Map(profileOf(pid0, "alice"), closedProfileOf(pid2, "carol", lastOnline = Times.t1)),
+        clubLists = Map("carol" -> clubListJson("other-club" -> Times.t0))
+      )
+      for {
+        _ <- deleteRuns
+        _ <- seedDb(
+          players = List(activePlayer(pid0, "alice"), activePlayer(pid2, "carol")),
+          members = List(openRow(pid0), openRow(pid2))
+        )
+        _      <- reportedAfterTheFixtures
+        _      <- reconcileWith(routes, RunTrigger.Dependency)
+        rows   <- ClubMember.selectClub(clubId)
+        result <- reconcileWith(routes, RunTrigger.Cli)
+      } yield assertTrue(
+        rows.find(_.playerId == pid2).flatMap(_.until).nonEmpty,
+        result.rosterMovement.losses == Set(pid2),
+        result.changes.flatMap(_.changes).collect { case closure: AccountClosed => closure.newStatus } == Chunk(Closed),
+        !result.changes.flatMap(_.changes).exists(_.isInstanceOf[LeftClub])
+      )
+    }
+
+  private def testAReopeningAnotherJobRecordedIsNamed =
+    test(
+      "a hidden membership another job's reconcile reopened is named by the next membership run as an account reopening"
+    ) {
+      val olga   = Player(pid4, Times.t0, Username("olga"), Closed, None, Times.t0)
+      val hidden = openRow(pid4).hidden(Times.t1)
+      val routes = clubRoutes(roster = List("olga" -> Times.t0), profiles = Map(profileOf(pid4, "olga")))
+      for {
+        _        <- deleteRuns
+        _        <- seedDb(players = List(olga), members = List(hidden))
+        _        <- reportedAfterTheFixtures
+        _        <- reconcileWith(routes, RunTrigger.Dependency)
+        reopened <- Player.selectId(pid4)
+        result   <- reconcileWith(routes, RunTrigger.Cli)
+        output = MembershipReport.formatReconciliation(result, Map.empty)
+      } yield assertTrue(
+        result.rosterMovement.gains == Set(pid4),
+        reopened.map(_.status).contains(Active),
+        result.changes.flatMap(_.changes).toList == reopened.toList.map(p => StatusChange(p.since, Closed, Active)),
+        output.contains("[ACCOUNT REOPENED]\n  olga — at ")
+      )
+    }
+
+  private def testANewPlayerAnotherJobRecordedDatedBeforeTheReportIsAJoin =
+    test("a new player another job's reconcile recorded, dated before the previous report ended, is named as a join") {
+      val routes = clubRoutes(
+        roster = List("alice" -> Times.t0, "dave" -> Times.t1),
+        profiles = Map(profileOf(pid0, "alice"), profileOf(pid3, "dave"))
+      )
+      for {
+        _      <- deleteRuns
+        _      <- seedDb(players = List(activePlayer(pid0, "alice")), members = List(openRow(pid0)))
+        _      <- reportedAfterTheFixtures
+        _      <- reconcileWith(routes, RunTrigger.Dependency)
+        result <- reconcileWith(routes, RunTrigger.Cli)
+      } yield assertTrue(
+        result.rosterMovement.gains == Set(pid3),
+        result.changes.map(summary => (summary.playerId, summary.changes.toList)) ==
+          Chunk((pid3, List(JoinedClub(Times.t1))))
+      )
+    }
+
+  private def testWhatAnotherJobRecordedIsNamedOnce =
+    test("what another job's reconcile recorded is named by one report only") {
+      for {
+        (routes, _) <- bobLeftInAnotherJobsReconcile
+        first       <- reconcileWith(routes, RunTrigger.Cli)
+        second      <- reconcileWith(routes, RunTrigger.Cli)
+      } yield assertTrue(
+        first.changes.map(_.playerId) == Chunk(pid1),
+        second.changes.isEmpty,
+        second.rosterMovement.gains.isEmpty,
+        second.rosterMovement.losses.isEmpty
+      )
+    }
+
+  private def testEveryMoveIsNamedWhicheverReconcileRecordedIt =
+    test("every roster gain and loss is named, whichever reconcile recorded it") {
+      val olga = Player(pid4, Times.t0, Username("olga"), Closed, None, Times.t0)
+      val profiles = Map(
+        profileOf(pid0, "alice"),
+        profileOf(pid1, "bob"),
+        closedProfileOf(pid2, "carol", lastOnline = Times.t1),
+        profileOf(pid3, "dave"),
+        profileOf(pid4, "olga"),
+        profileOf(pid5, "erin")
+      )
+      val carolsList     = Map("carol" -> clubListJson("test-club" -> Times.t0))
+      val onlyTheStayers = List("alice" -> Times.t0, "dave" -> Times.t3.plusSeconds(3600), "olga" -> Times.t0)
+      for {
+        _ <- deleteRuns
+        _ <- seedDb(
+          players = List(
+            activePlayer(pid0, "alice"),
+            activePlayer(pid1, "bob"),
+            activePlayer(pid2, "carol"),
+            olga,
+            activePlayer(pid5, "erin")
+          ),
+          members = List(openRow(pid0), openRow(pid1), openRow(pid2), openRow(pid4).hidden(Times.t1), openRow(pid5))
+        )
+        _ <- reportedAfterTheFixtures
+        // Bob leaves, carol's account closes, dave joins and olga's account reopens in another job's reconcile.
+        _ <- reconcileWith(
+          clubRoutesListing(
+            roster = onlyTheStayers :+ ("erin" -> Times.t0),
+            profiles = profiles,
+            clubLists = carolsList
+          ),
+          RunTrigger.Dependency
+        )
+        // Erin leaves in this one.
+        result <- reconcileWith(
+          clubRoutesListing(roster = onlyTheStayers, profiles = profiles, clubLists = carolsList),
+          RunTrigger.Cli
+        )
+        output = MembershipReport.formatReconciliation(result, Map.empty)
+      } yield assertTrue(
+        result.rosterMovement.gains == Set(pid3, pid4),
+        result.rosterMovement.losses == Set(pid1, pid2, pid5),
+        output.contains("[JOINED]\n  dave — "),
+        output.contains("[ACCOUNT REOPENED]\n  olga — "),
+        output.contains("[LEFT CLUB]\n  bob — "),
+        output.contains("  erin — by "),
+        output.contains("[ACCOUNT CLOSED]\n  carol — ")
+      )
+    }
+
+  private def testAClosedAccountThatMovedNothingGetsNoLine =
+    test("a closed account whose row moved nothing gets no line") {
+      val carol = Player(pid2, Times.t0, Username("carol"), Closed, None, Times.t0)
+      for {
+        _      <- deleteRuns
+        _      <- seedDb(players = List(carol), members = List(openRow(pid2).hidden(Times.t1)))
+        _      <- reportedAfterTheFixtures
+        result <- reconcileWith(clubRoutes(roster = Nil, profiles = Map.empty), RunTrigger.Cli)
+      } yield assertTrue(
+        result.changes.isEmpty,
+        result.rosterMovement.gains.isEmpty,
+        result.rosterMovement.losses.isEmpty
       )
     }
 

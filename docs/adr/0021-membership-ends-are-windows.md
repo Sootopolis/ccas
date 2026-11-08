@@ -1,6 +1,6 @@
 # A membership's ends are windows, taken from when the roster was seen
 
-**Status:** Accepted, 2026-10-10 (#302). Builds on [0017](0017-what-earns-a-history-table.md), which gave `club_member` its two ends and asked for overlap between them to be excluded. Amended by [0022](0022-a-closure-hides-a-membership.md) (#311): a row a closed account hides has a `last_seen` and no `until`, so `club_member_window` asks only that `until` come with `last_seen`, and a closed account's row no longer ends at its last visit. Amended by [0023](0023-inferred-memberships-are-computed-not-stored.md) (#302): History no longer guesses memberships, so no observed row replaces one.
+**Status:** Accepted, 2026-10-10 (#302). Builds on [0017](0017-what-earns-a-history-table.md), which gave `club_member` its two ends and asked for overlap between them to be excluded. Amended by [0022](0022-a-closure-hides-a-membership.md) (#311): a row a closed account hides has a `last_seen` and no `until`, so `club_member_window` asks only that `until` come with `last_seen`, and a closed account's row no longer ends at its last visit. Amended by [0023](0023-inferred-memberships-are-computed-not-stored.md) (#302): History no longer guesses memberships, so no observed row replaces one. Amended by #440: Membership's report names any roster move a dependency recorded, not only a join.
 
 ## Context
 
@@ -16,7 +16,7 @@ The missing half was knowable: the previous run had listed the player. But runs 
 
 **A row's ends are copied onto it when it closes.** `until` is the roster that no longer listed the player, or, for a rejoin, the new join date. `last_seen` is the club's previous roster, which listed every open roster row, held within the row; a guessed row was never on a roster, so it was known in only at its start. Nothing reads the runs afterwards to reinterpret a row, so `membership_run` stays an operational log: pruning it would change no membership.
 
-**Every reconcile is a run.** History's and Recruitment's are recorded with trigger `Dependency`, so the stale check counts them. Membership's report still measures from its own previous run, so a join a dependency saw is reported as before.
+**Every reconcile is a run.** History's and Recruitment's are recorded with trigger `Dependency`, so the stale check counts them. Membership's report still measures from its own previous run, so a roster move a dependency recorded shows up there, and the report names it from the player's rows and status history. A dependency's rename, or a move it undid before the report, moves nothing and goes unnamed.
 
 **A rejoin closes the old row at the new join date, before the new row opens.** The player had left by then, and the new row would otherwise overlap the old one while it was still open.
 
