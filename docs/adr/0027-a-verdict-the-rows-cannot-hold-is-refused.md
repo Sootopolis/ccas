@@ -1,6 +1,6 @@
 # A verdict a player's rows cannot hold is refused before the save, and reported
 
-**Status:** Accepted, 2026-11-01 (#403). Builds on [0026](0026-a-join-the-rows-cannot-place-changes-no-row.md), which fixed the joins known to break a save; this limits the damage from the next one nobody knows about.
+**Status:** Accepted, 2026-11-01 (#403). Builds on [0026](0026-a-join-the-rows-cannot-place-changes-no-row.md), which fixed the joins known to break a save; this limits the damage from the next one nobody knows about. Amended by #438: a reopened row is named as an account reopening or a return to the roster.
 
 ## Context
 
@@ -30,6 +30,6 @@ A reconcile saves a whole club in one transaction, so one player's rows breaking
 - A run with a refusal still completes, so the stale check counts it. A date-range report whose end that run covers reconciles nothing, so it shows neither the refusal nor a warning, as 0026 records for a join.
 - A row left open by a refused close later gets a `last_seen` from a roster that did not list the player, because the previous roster is taken to have listed every open row ([0021](0021-membership-ends-are-windows.md)).
 - With an empty row after a hidden one, a list's join at or after the empty row used to count as overlapping a membership, and was reported only in the run that fetched the list. It now reaches this check and is refused on every run. Neither changes a row.
-- A reopened row is named under `[REOPENED]` in a reconcile's report only. The date-range report reads the rows, and a reopened row keeps no trace of having been reopened.
+- A reopened row is named in a reconcile's report only: under `[ACCOUNT REOPENED]` if it was hidden, else `[BACK ON ROSTER]`, unless the run also saw the account turn active, which says so already. The date-range report reads the rows, and a reopened row keeps no trace of having been reopened.
 - A rejoin known only from matches stays `[JOINED]` in a reconcile's report, because a reconcile reads no boards.
 - Nothing stored changes, so rolling back means reverting the code.

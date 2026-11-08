@@ -30,7 +30,8 @@ object MembershipChange {
     case AccountClosed(ts: Instant, newStatus: PlayerStatusCategory) extends MemberChange(ts)
     case Unresolvable(ts: Instant, oldUsername: Username)            extends MemberChange(ts)
     case UsernameChange(ts: Instant, oldUsername: Username)          extends MemberChange(ts)
-    case StatusChange(ts: Instant, oldStatus: PlayerStatusCategory)  extends MemberChange(ts)
+    case StatusChange(ts: Instant, oldStatus: PlayerStatusCategory, newStatus: PlayerStatusCategory)
+        extends MemberChange(ts)
 
     /** Whether this only happened if the player's rows changed, so a refused verdict takes it back (ADR 0027). */
     def changesRows: Boolean = this match {
@@ -64,6 +65,30 @@ object MembershipChange {
         case MembershipStanding.Ended(lastSeen, until)              => Some(Recorded(lastSeen, until))
         case MembershipStanding.Open | _: MembershipStanding.Hidden => None
       }
+  }
+
+  /** A club's active members at the previous report's end and after this reconcile's save, both read from the rows
+    * (ADR 0026).
+    */
+  final case class RosterMovement(before: Set[PlayerId], after: Set[PlayerId]) {
+    def gains: Set[PlayerId]  = after -- before
+    def losses: Set[PlayerId] = before -- after
+    def net: Int              = after.size - before.size
+  }
+
+  object RosterMovement {
+
+    /** Those of `memberIds` whose account was active at `at`, by the states each has been in. */
+    def activeAt(memberIds: Set[PlayerId], states: List[PlayerSnapshot], at: Instant): Set[PlayerId] = {
+      val activePlayers = states
+        .filterNot(_.since.isAfter(at))
+        .groupBy(_.playerId)
+        .flatMap { case (playerId, history) =>
+          history.maxByOption(_.since).filter(_.status == PlayerStatusCategory.Active).map(_ => playerId)
+        }
+        .toSet
+      memberIds.intersect(activePlayers)
+    }
   }
 
   /** A join a player's rows cannot place, which changes none of them (ADR 0026). */
@@ -126,8 +151,7 @@ object MembershipChange {
     unsettledJoins: Chunk[UnsettledJoin],
     refused: Chunk[RefusedMembershipVerdict],
     settlement: ClosedAccountClubs.Settlement,
-    currentMemberCount: Int,
-    previousMemberCount: Int,
+    rosterMovement: RosterMovement,
     startedAt: Instant,
     completedAt: Instant
   )

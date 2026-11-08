@@ -121,14 +121,6 @@ object ClubMember {
               AND (cm.last_seen IS NULL OR p.status = ${Active: PlayerStatusCategory})""".query[ClubMember].run().toList
     )
 
-  def selectClubActive(clubId: ClubId): ZIO[PostgresClient, SQLException, List[ClubMember]] =
-    connectZIO(
-      sql"""SELECT cm.club_id, cm.player_id, cm.since, cm.last_seen, cm.until FROM club_member cm
-            JOIN player p ON p.player_id = cm.player_id AND p.status = ${Active: PlayerStatusCategory}
-            WHERE cm.club_id = $clubId AND cm.until IS NULL""".query[ClubMember]
-        .run().toList
-    )
-
   def insert(item: ClubMember): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""INSERT INTO club_member (club_id, player_id, since, last_seen, until)
@@ -164,14 +156,6 @@ object ClubMember {
       sql"""SELECT player_id FROM club_member
             WHERE club_id = $clubId AND since <= $at AND (until IS NULL OR until > $at)"""
         .query[PlayerId].run().toSet
-    }
-
-  def countActiveCurrentAt(clubId: ClubId, at: Instant): ZIO[PostgresClient, SQLException, Int] =
-    connectZIO {
-      sql"""SELECT COUNT(*)::INT FROM club_member cm
-            JOIN player p ON p.player_id = cm.player_id AND p.status = ${Active: PlayerStatusCategory}
-            WHERE cm.club_id = $clubId AND cm.since <= $at AND (cm.until IS NULL OR cm.until > $at)"""
-        .query[Int].run().head
     }
 
   /** The members at `at`, by the rows alone: a hidden row counts until its `lastSeen`, when its closure is dated, so a

@@ -190,8 +190,6 @@ object MembershipApp extends ZIOAppDefault {
         trustUsernames = trustUsernames,
         attempt = 1
       )
-      // Active accounts only, like the previous count: a closed account stays a member but is not counted.
-      currentMemberCount <- ClubMember.selectClubActive(clubId).map(_.size)
       // Members present in the DB but absent from the previous reported run joined at a reconcile another job ran as
       // a step of its own. Report them so joins aren't silently absorbed.
       phaseBJoinIds   = saved.phaseB.newMemberships.map(_.playerId).toSet
@@ -211,19 +209,21 @@ object MembershipApp extends ZIOAppDefault {
       c = saved.phaseC,
       settlement = saved.settlement,
       refused = saved.refused,
-      currentMemberCount = currentMemberCount,
-      previousMemberCount = saved.previousMemberCount,
+      rosterMovement = saved.rosterMovement,
       startedAt = startedAt,
       completedAt = saved.completedAt,
       externalChanges = externalChanges,
       externalMemberships = externalMemberships
     )
 
+  // Who was in a club at some moment by the rows, and which of them had active accounts then.
+  private final case class RosterAt(memberIds: Set[PlayerId], activeIds: Set[PlayerId])
+
   // What a saved roster was classified against and implied.
   private final case class SavedRoster(
     storedRoster: StoredRoster,
     prevMemberIds: Set[PlayerId],
-    previousMemberCount: Int,
+    rosterMovement: RosterMovement,
     phaseB: MembershipClassify.PhaseBResult,
     phaseC: MembershipClassify.PhaseCResult,
     settlement: ClosedAccountClubs.Settlement,
@@ -280,7 +280,7 @@ object MembershipApp extends ZIOAppDefault {
       (apiMembers, observedAt, storedRoster) <-
         fetchRoster(client, slug, clubId).zipPar(loadStoredRoster(clubId))
       // Read before this run completes, or it would be its own baseline.
-      (prevMemberIds, previousMemberCount) <- loadPreviousRoster(clubId)
+      previous <- loadPreviousRoster(clubId)
       apiMap = apiMembers.toMap
       phaseB <- MembershipClassify.classifyApiMembers(client, clubId, apiMap, storedRoster, observedAt, trustUsernames)
       phaseC <- MembershipClassify.classifyDisappeared(client, storedRoster, phaseB.resolvedIds, apiMap, observedAt)
@@ -294,7 +294,7 @@ object MembershipApp extends ZIOAppDefault {
       )
       checked = MembershipVerdictCheck(storedRoster, phaseB, phaseC, settlement)
       completedAt <- Clock.instant
-      saved <- saveUnlessSuperseded(
+      activeAfterOption <- saveUnlessSuperseded(
         clubId = clubId,
         version = version,
         runId = runId,
@@ -304,22 +304,22 @@ object MembershipApp extends ZIOAppDefault {
         c = checked.c,
         settlement = checked.settlement
       )
-    } yield Option.when(saved)(
+    } yield activeAfterOption.map { activeAfter =>
       SavedRoster(
         storedRoster = storedRoster,
-        prevMemberIds = prevMemberIds,
-        previousMemberCount = previousMemberCount,
+        prevMemberIds = previous.memberIds,
+        rosterMovement = RosterMovement(before = previous.activeIds, after = activeAfter),
         phaseB = checked.b,
         phaseC = checked.c,
         settlement = checked.settlement,
         refused = checked.refused,
         completedAt = completedAt
       )
-    )
+    }
 
   // A run is complete exactly when what its roster implied is saved, less any verdict refused (ADR 0027), so the stale
-  // check and the report's baseline agree with the rows and `club_roster_coverage`. Nothing is saved if another save
-  // came after `version`.
+  // check and the report's baseline agree with the rows and `club_roster_coverage`. Answers the active roster the save
+  // leaves, read under its lock, or nothing if another save came after `version`.
   private def saveUnlessSuperseded(
     clubId: ClubId,
     version: Option[Long],
@@ -329,15 +329,18 @@ object MembershipApp extends ZIOAppDefault {
     b: MembershipClassify.PhaseBResult,
     c: MembershipClassify.PhaseCResult,
     settlement: ClosedAccountClubs.Settlement
-  ): RIO[PostgresClient, Boolean] =
+  ): RIO[PostgresClient, Option[Set[PlayerId]]] =
     withTransaction {
       for {
         current <- ClubRosterCoverage.lockVersion(clubId)
-        saving = current == version
-        _ <- ZIO.whenDiscard(saving) {
-          persist(clubId, observedAt, b, c, settlement) *> MembershipRun.complete(runId, completedAt)
+        activeAfterOption <- ZIO.when(current == version) {
+          for {
+            _      <- persist(clubId, observedAt, b, c, settlement)
+            _      <- MembershipRun.complete(runId, completedAt)
+            roster <- rosterAt(clubId, completedAt)
+          } yield roster.activeIds
         }
-      } yield saving
+      } yield activeAfterOption
     }
 
   // Shared by the CLI ReconcileOnly path and the server membership job (JobRoutes): reconcile, then emit the
@@ -408,12 +411,18 @@ object MembershipApp extends ZIOAppDefault {
       )
     }
 
-  // The roster as the previous reported run left it: who was in, and how many of them had active accounts.
-  private def loadPreviousRoster(clubId: ClubId): RIO[PostgresClient, (Set[PlayerId], Int)] =
+  // The roster as the previous reported run left it, empty if there was none.
+  private def loadPreviousRoster(clubId: ClubId): RIO[PostgresClient, RosterAt] =
     MembershipRun.selectLatestReported(clubId).map(_.flatMap(_.completedAt)).flatMap {
-      case Some(at) => ClubMember.selectPlayerIdsCurrentAt(clubId, at) <*> ClubMember.countActiveCurrentAt(clubId, at)
-      case None     => ZIO.succeed((Set.empty[PlayerId], 0))
+      case Some(at) => rosterAt(clubId, at)
+      case None     => ZIO.succeed(RosterAt(memberIds = Set.empty, activeIds = Set.empty))
     }
+
+  private def rosterAt(clubId: ClubId, at: Instant): RIO[PostgresClient, RosterAt] =
+    for {
+      memberIds <- ClubMember.selectPlayerIdsCurrentAt(clubId, at)
+      states    <- PlayerSnapshot.selectHistory(memberIds)
+    } yield RosterAt(memberIds, activeIds = RosterMovement.activeAt(memberIds, states, at))
 
   // --- Merge & Persist ---
 
@@ -423,8 +432,7 @@ object MembershipApp extends ZIOAppDefault {
     c: MembershipClassify.PhaseCResult,
     settlement: ClosedAccountClubs.Settlement,
     refused: Chunk[RefusedMembershipVerdict],
-    currentMemberCount: Int,
-    previousMemberCount: Int,
+    rosterMovement: RosterMovement,
     startedAt: Instant,
     completedAt: Instant,
     externalChanges: Chunk[MemberChangeSummary] = Chunk.empty,
@@ -443,8 +451,7 @@ object MembershipApp extends ZIOAppDefault {
       unsettledJoins = b.unsettledJoins,
       refused = refused,
       settlement = settlement,
-      currentMemberCount = currentMemberCount,
-      previousMemberCount = previousMemberCount,
+      rosterMovement = rosterMovement,
       startedAt = startedAt,
       completedAt = completedAt
     )
