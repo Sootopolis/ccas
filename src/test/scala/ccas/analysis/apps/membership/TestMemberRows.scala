@@ -166,6 +166,27 @@ object TestMemberRows extends ZIOSpecDefault {
       val b       = listed(changes = Chunk.empty, newMemberships = Chunk.empty, closedMemberships = Chunk.empty)
       val checked = MembershipVerdictCheck(holding(openFrom(10)), b, nothingDisappeared, lists)
       assertTrue(checked.settlement.opened.isEmpty, checked.refused.map(_.username) == Chunk(Username("finn")))
+    },
+    test("a refused player's verdict carries the events it took out of the report, not the rename or status it kept") {
+      val kept =
+        Chunk[MemberChange](UsernameChange(day(14), Username("rita-old")), StatusChange(day(14), Active, Closed))
+      val ritas = MemberChangeSummary(pid0, Username("rita"), kept :+ JoinedClub(day(14)))
+      val b     = listed(changes = Chunk(ritas), newMemberships = Chunk(openFrom(14)), closedMemberships = Chunk.empty)
+      val checked = MembershipVerdictCheck(holding(openFrom(10)), b, nothingDisappeared, noSettlement)
+      assertTrue(checked.refused.map(_.unreported) == Chunk(Chunk(JoinedClub(day(14)))))
+    },
+    test("a refused player's verdict carries what a closed account's club list showed") {
+      val opening = ClosedAccountClubs.Opened(
+        username = Username("finn"),
+        row = openFrom(14).hidden(day(15)),
+        status = Closed
+      )
+      val lists   = noSettlement.copy(opened = Chunk(opening))
+      val b       = listed(changes = Chunk.empty, newMemberships = Chunk.empty, closedMemberships = Chunk.empty)
+      val checked = MembershipVerdictCheck(holding(openFrom(10)), b, nothingDisappeared, lists)
+      assertTrue(
+        checked.refused.map(_.unreported) == Chunk(Chunk(JoinedClub(day(14)), AccountClosed(day(15), Closed)))
+      )
     }
   )
 

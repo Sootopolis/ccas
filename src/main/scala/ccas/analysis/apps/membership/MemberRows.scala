@@ -4,7 +4,12 @@ import java.time.Instant
 
 import zio.Chunk
 
-import ccas.analysis.apps.membership.MembershipChange.{MemberChangeSummary, RefusedMembershipVerdict, StoredRoster}
+import ccas.analysis.apps.membership.MembershipChange.{
+  MemberChange,
+  MemberChangeSummary,
+  RefusedMembershipVerdict,
+  StoredRoster
+}
 import ccas.analysis.apps.membership.MembershipClassify.{PhaseBResult, PhaseCResult}
 import ccas.analysis.tables.{ClubMember, MembershipStanding}
 import ccas.api.misc.subtypes.{PlayerId, Username}
@@ -136,10 +141,18 @@ private[membership] object MembershipVerdictCheck {
       settlement.hidden.map(hidden => hidden.row.playerId -> hidden.username) ++
       settlement.opened.map(opened => opened.row.playerId -> opened.username)
     def kept(row: ClubMember) = !conflicts.contains(row.playerId)
+    // One rule takes an event out of the report and onto the verdict, so the two cannot disagree.
+    def takenOut(playerId: PlayerId, change: MemberChange) = conflicts.contains(playerId) && change.changesRows
+    val unreported = (
+      (b.changes ++ c.changes)
+        .flatMap(summary => summary.changes.map(summary.playerId -> _))
+        .filter((playerId, change) => takenOut(playerId, change)) ++
+        settlement.hidden.filterNot(hidden => kept(hidden.row)).flatMap(h => h.changes.map(h.row.playerId -> _)) ++
+        settlement.opened.filterNot(opened => kept(opened.row)).flatMap(o => o.changes.map(o.row.playerId -> _))
+    ).groupMap((playerId, _) => playerId)((_, change) => change)
     def withoutRowEvents(summaries: Chunk[MemberChangeSummary]) =
       summaries.map { summary =>
-        if (conflicts.contains(summary.playerId)) summary.copy(changes = summary.changes.filterNot(_.changesRows))
-        else summary
+        summary.copy(changes = summary.changes.filterNot(takenOut(summary.playerId, _)))
       }.filter(_.changes.nonEmpty)
     CheckedVerdicts(
       b = b.copy(
@@ -161,7 +174,8 @@ private[membership] object MembershipVerdictCheck {
         RefusedMembershipVerdict(
           playerId = playerId,
           username = names.getOrElse(playerId, Username.wrap("unknown")),
-          conflict = conflict
+          conflict = conflict,
+          unreported = unreported.getOrElse(playerId, Chunk.empty).sortBy(_.timestamp)
         )
       }.sortBy(_.username.value)
     )

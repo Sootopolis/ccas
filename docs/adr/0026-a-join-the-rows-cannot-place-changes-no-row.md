@@ -1,6 +1,6 @@
 # A join a member's rows cannot place changes no row, and is reported
 
-**Status:** Accepted, 2026-11-01 (#401). Narrows [0022](0022-a-closure-hides-a-membership.md)'s rule that the same `joined` seen again reopens a row: it now holds for a player's latest row only. Extended by [0027](0027-a-verdict-the-rows-cannot-hold-is-refused.md) (#403): a verdict the rows cannot hold, whatever produced it, is refused before the save. Amended by #438: both ends of a reconcile's roster summary come from the rows. Amended by #440: which moves another job's reconcile can leave unnamed.
+**Status:** Accepted, 2026-11-01 (#401). Narrows [0022](0022-a-closure-hides-a-membership.md)'s rule that the same `joined` seen again reopens a row: it now holds for a player's latest row only. Extended by [0027](0027-a-verdict-the-rows-cannot-hold-is-refused.md) (#403): a verdict the rows cannot hold, whatever produced it, is refused before the save. Amended by #438: both ends of a reconcile's roster summary come from the rows. Amended by #440: which moves another job's reconcile can leave unnamed. Amended by #445: the section is named for what the operator sees.
 
 ## Context
 
@@ -18,7 +18,7 @@ Neither is known to have happened. #324's property found the gap, and on 2026-11
 
 **A join the rows contradict cannot be placed.** That is a join before the latest row's start, or one inside an ended row at or before when it was last seen: a roster normally listed the old membership then, so this is not a fresh join. A hidden row is not held to the second test, because its last sighting can be only the account's last visit, which does not show membership. A join that cannot be placed changes no row, and the player still counts as listed, so nothing later reads them as gone. This is how 0022 already treats a closed account's club list that would overlap a recorded membership. A rename or a change of status still saves, since neither depends on the join.
 
-**It is reported whichever job reconciles.** Membership's report counts the join and lists it under `[ROSTER JOIN UNSETTLED]`. Any other reconcile logs a warning instead, because History's, Recruitment's and those `MembershipApp`'s `--since` mode runs first print no changes.
+**It is reported whichever job reconciles.** Membership's report counts the join and lists it under `[JOIN DATE CONFLICT]`. Any other reconcile logs a warning instead, because History's, Recruitment's and those `MembershipApp`'s `--since` mode runs first print no changes.
 
 ## Alternatives rejected
 

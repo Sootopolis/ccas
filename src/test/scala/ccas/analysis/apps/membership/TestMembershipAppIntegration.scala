@@ -2116,8 +2116,9 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
         logged <- ZTestLogger.logOutput
       } yield assertTrue(
         logged.filter(_.logLevel == LogLevel.Warning).map(_.message()) == List(
-          s"[ROSTER JOIN UNSETTLED] rita — listed as joined at ${Times.t1}, latest recorded membership from ${Times.t2} — " +
-            "left as recorded"
+          s"[JOIN DATE CONFLICT] rita — Chess.com lists them as joined at ${Times.t1}; we hold their membership from " +
+            s"${Times.t2} — our record is kept; this repeats each run until the roster changes or the record is " +
+            "corrected by hand"
         )
       )
     }.provideSomeLayer[PostgresClient & BodyStore & ProgressDisplay](ZTestLogger.default)
@@ -2140,9 +2141,9 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
           .provideSomeLayer[ProgressDisplay & PostgresClient](ZLayer.succeed(client))
         logged <- ZTestLogger.logOutput.map(_.map(_.message()))
       } yield assertTrue(
-        logged.contains("Unsettled joins:      1"),
-        logged.contains("[ROSTER JOIN UNSETTLED]"),
-        logged.count(_.contains("rita — listed as joined")) == 1
+        logged.contains("Join date conflicts:  1"),
+        logged.exists(_.startsWith("[JOIN DATE CONFLICT] — ")),
+        logged.count(_.contains("rita — Chess.com lists them as joined")) == 1
       )
     }.provideSomeLayer[PostgresClient & BodyStore & ProgressDisplay](ZTestLogger.default)
 
@@ -2226,7 +2227,8 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
       val refused = RefusedMembershipVerdict(
         playerId = pid5,
         username = Username("rita"),
-        conflict = MemberRowConflict.Overlap(ritaOpen, ritaJoined)
+        conflict = MemberRowConflict.Overlap(ritaOpen, ritaJoined),
+        unreported = Chunk(Rejoined(Times.t2, PreviousMembership.Recorded(lastSeen = Times.t1, until = Times.t1)))
       )
       for {
         _      <- seedRitasOverlap(rita)
@@ -2326,8 +2328,10 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
         logged <- ZTestLogger.logOutput
       } yield assertTrue(
         logged.filter(_.logLevel == LogLevel.Warning).map(_.message()) == List(
-          s"[MEMBERSHIP NOT RECORDED] rita — memberships from ${Times.t0} and from ${Times.t2} would overlap — " +
-            "left as recorded until the roster changes or someone corrects the rows by hand; worth an issue if it persists"
+          s"[MEMBERSHIP NOT RECORDED] rita — this run saw [REJOINED] at ${Times.t2} — previous membership last seen " +
+            s"at ${Times.t1}; recording it would overlap their memberships from ${Times.t0} and from ${Times.t2} — " +
+            "our record is kept and the rest of the club saved; this repeats each run until the roster changes or " +
+            "the record is corrected by hand, and is worth an issue if it persists"
         )
       )
     }.provideSomeLayer[PostgresClient & BodyStore & ProgressDisplay](ZTestLogger.default)
@@ -2350,8 +2354,8 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
         logged <- ZTestLogger.logOutput.map(_.map(_.message()))
       } yield assertTrue(
         logged.contains("Not recorded:         1"),
-        logged.contains("[MEMBERSHIP NOT RECORDED]"),
-        logged.count(_.contains("rita — memberships from")) == 1
+        logged.exists(_.startsWith("[MEMBERSHIP NOT RECORDED] — ")),
+        logged.count(_.contains("rita — this run saw [REJOINED]")) == 1
       )
     }.provideSomeLayer[PostgresClient & BodyStore & ProgressDisplay](ZTestLogger.default)
 

@@ -4,7 +4,7 @@ import java.time.Instant
 
 import zio.{Chunk, Clock, RIO, Task, ZIO}
 
-import ccas.analysis.apps.membership.MembershipChange.{later, StoredRoster}
+import ccas.analysis.apps.membership.MembershipChange.{later, MemberChange, StoredRoster}
 import ccas.analysis.tables.{ClubMember, MembershipStanding, PlayerClubList, PlayerName}
 import ccas.analysis.tables.PlayerClubList.Listing
 import ccas.api.misc.enums.PlayerStatusCategory
@@ -24,10 +24,21 @@ private[membership] object ClosedAccountClubs {
   final case class Unsettled(playerId: PlayerId, username: Username, reason: String)
 
   /** An ended row a kept list showed, hidden instead. */
-  final case class Hidden(username: Username, row: ClubMember, status: PlayerStatusCategory)
+  final case class Hidden(username: Username, row: ClubMember, status: PlayerStatusCategory) {
+
+    /** The closure it records, after the row was last seen. */
+    def changes: Chunk[MemberChange] = Chunk(closure(row, status))
+  }
 
   /** A membership a kept list showed that no row recorded, opened hidden. */
-  final case class Opened(username: Username, row: ClubMember, status: PlayerStatusCategory)
+  final case class Opened(username: Username, row: ClubMember, status: PlayerStatusCategory) {
+
+    /** The join it records, and the closure after it. */
+    def changes: Chunk[MemberChange] = Chunk(MemberChange.JoinedClub(row.since), closure(row, status))
+  }
+
+  private def closure(row: ClubMember, status: PlayerStatusCategory): MemberChange =
+    MemberChange.AccountClosed(row.hiddenAt.getOrElse(row.since), status)
 
   /** What the kept lists change about a club's rows, each under the name its player last held. */
   final case class Settlement(hidden: Chunk[Hidden], opened: Chunk[Opened], unsettled: Chunk[Unsettled])
