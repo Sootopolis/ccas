@@ -7,15 +7,7 @@ import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.analysis.apps.history.HistoryUtils.ProcessingContext
-import ccas.analysis.tables.{
-  ApiFetchFailure,
-  Club,
-  ClubMatch,
-  ClubMatchBoard,
-  HistoryPendingMatch,
-  PendingMatchStatus,
-  Tables
-}
+import ccas.analysis.tables.*
 import ccas.api.clubmatch.ApiDailyMatch
 import ccas.api.misc.enums.{ClubMatchStatus, TimeClass}
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug}

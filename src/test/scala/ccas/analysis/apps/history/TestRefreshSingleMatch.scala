@@ -8,18 +8,7 @@ import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, TestResult, ZIOSpecDefault}
 
 import ccas.analysis.apps.history.HistoryUtils.ProcessingContext
-import ccas.analysis.tables.{
-  ApiResponseBody,
-  ApiResponseCache,
-  Club,
-  ClubMatch,
-  ClubMatchBoard,
-  ClubMatchGame,
-  ClubMatchRef,
-  Tables,
-  UnresolvedBoardPlayer,
-  UnresolvedMatchClub
-}
+import ccas.analysis.tables.*
 import ccas.api.clubmatch.ApiDailyMatch
 import ccas.api.misc.enums.{ClubMatchStatus, TimeClass}
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug}

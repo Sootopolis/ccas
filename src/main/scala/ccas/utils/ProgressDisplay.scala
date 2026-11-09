@@ -8,26 +8,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.regex.Pattern
 
 import io.netty.handler.timeout.ReadTimeoutException
-import zio.{
-  Cause,
-  Chunk,
-  FiberId,
-  FiberRef,
-  FiberRefs,
-  LogLevel,
-  LogSpan,
-  Ref,
-  Runtime,
-  Scope,
-  Trace,
-  UIO,
-  ULayer,
-  Unsafe,
-  URIO,
-  ZIO,
-  ZLayer,
-  ZLogger
-}
+import zio.*
 import zio.stream.SubscriptionRef
 
 /** Manages progress bars rendered one-per-line on stdout; a redraw moves the cursor up over the block and repaints.
@@ -307,7 +288,7 @@ final class ProgressDisplay private[utils] (
   // inside `lock.synchronized` on the first bar. Only an `enabled` display probes; the server / non-TTY path stays at 80.
   private val terminalWidth: Int =
     if (enabled) {
-      Option(System.getenv("COLUMNS")).flatMap(_.toIntOption).filter(_ > 0).orElse(sttyCols).getOrElse(80)
+      Option(java.lang.System.getenv("COLUMNS")).flatMap(_.toIntOption).filter(_ > 0).orElse(sttyCols).getOrElse(80)
     } else { 80 }
 
   // The controlling terminal's column count via `stty size` (prints "<rows> <cols>"), reading /dev/tty so it reflects
@@ -361,7 +342,7 @@ object ProgressDisplay {
     *   `true` for stdout rendering. `false` suppresses every stdout side-effect — bar lifecycle (`addBar`/`removeBar`)
     *   still tracks state correctly so that `addBarScoped` finalisers behave the same in both modes.
     */
-  def make(enabled: Boolean): ProgressDisplay = makeWith(enabled, System.out, System.err, None)
+  def make(enabled: Boolean): ProgressDisplay = makeWith(enabled, java.lang.System.out, java.lang.System.err, None)
 
   /** Test-only factory that injects the bar-redraw (`out`) and defect (`err`) streams so suites can capture output
     * without mutating process-global `System.out` / `System.err`, and the optional global bar channel. Production code
@@ -396,7 +377,7 @@ object ProgressDisplay {
     * `ccas.utils`, so that no app lists it beside the layers whose logging it should carry: see [[installed]].
     */
   private[utils] def live(showProgress: Boolean): ULayer[ProgressDisplay] =
-    liveWith(showProgress, System.out, System.err)
+    liveWith(showProgress, java.lang.System.out, java.lang.System.err)
 
   /** Test-only variant of [[live]] that injects the bar-redraw (`out`) and defect (`err`) streams, so suites that
     * exercise the installed `ZLogger` (e.g. a throwing message thunk routed to `err`) can capture without swapping

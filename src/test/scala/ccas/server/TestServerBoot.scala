@@ -8,23 +8,7 @@ import java.sql.{Connection, SQLException}
 import java.util.concurrent.{CountDownLatch, TimeUnit}
 
 import org.postgresql.ds.PGSimpleDataSource
-import zio.{
-  durationInt,
-  Chunk,
-  Duration,
-  Exit,
-  Fiber,
-  Promise,
-  Ref,
-  RIO,
-  Scope,
-  Task,
-  UIO,
-  URIO,
-  ZEnvironment,
-  ZIO,
-  ZLayer
-}
+import zio.*
 import zio.http.{Client, Server}
 import zio.stream.ZStream
 import zio.test.{assertTrue, Live, Spec, TestAspect, TestClock, ZIOSpecDefault, ZTestLogger}
