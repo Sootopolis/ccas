@@ -76,7 +76,7 @@ object Tables extends ZIOAppDefault {
 
   /** Retention sweep for the two API-diagnostics tables, deliberately NOT part of [[ensureTables]]: it frees an
     * unbounded number of body objects at one round trip each, so on the boot path it held the HTTP port closed for as
-    * long as the backlog took. `CcasServer` forks it alongside `Server.serve` instead.
+    * long as the backlog took. `CcasServer` forks it alongside the HTTP server instead.
     * See docs/adr/0007-response-caching-in-postgres.md.
     */
   private[ccas] def retentionSweep: RIO[PostgresClient & BodyStore, Unit] =

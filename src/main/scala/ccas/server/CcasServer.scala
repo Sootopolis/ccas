@@ -3,20 +3,7 @@ package ccas.server
 import java.nio.file.{Files, Path, Paths}
 
 import com.typesafe.config.ConfigFactory
-import zio.{
-  duration2DurationOps,
-  durationInt,
-  Duration,
-  ExitCode,
-  RIO,
-  Schedule,
-  Scope,
-  URIO,
-  ZIO,
-  ZIOAppArgs,
-  ZIOAppDefault,
-  ZLayer
-}
+import zio.{durationInt, Duration, ExitCode, RIO, Schedule, Scope, UIO, URIO, ZIO, ZIOAppArgs, ZIOAppDefault, ZLayer}
 import zio.http.{Routes, Server}
 import zio.http.netty.NettyConfig
 
@@ -80,16 +67,19 @@ object CcasServer extends ZIOAppDefault {
       serveWith(
         pidFileOption = detachedPidFileOption,
         services = ZLayer.makeSome[ProgressDisplay, Served](
-          ShutdownLog.layer("the Chess.com client")(ChessComClient.live("server")),
-          ShutdownLog.layer("the HTTP client")(HttpClientLayer.live),
-          ShutdownLog.layer("the body store")(BodyStore.live),
-          ShutdownLog.layer("the database pool")(PostgresClient.live(onInit = poolInit)),
-          ShutdownLog.layer("the job runner")(JobRunner.live),
+          loggedLayer("the Chess.com client")(ChessComClient.live("server")),
+          loggedLayer("the HTTP client")(HttpClientLayer.live),
+          loggedLayer("the body store")(BodyStore.live),
+          loggedLayer("the database pool")(PostgresClient.live(onInit = poolInit)),
+          loggedLayer("the job runner")(JobRunner.live),
           JobScheduler.live
         ),
         server = httpServer(host, port)
       )
     }
+
+  private def loggedLayer[RIn, E, A](name: String)(layer: ZLayer[RIn, E, A]): ZLayer[RIn, E, A] =
+    BootLog.layer(name)(ShutdownLog.layer(name)(layer))
 
   /** The HTTP server [[boot]] listens with. */
   private[server] def httpServer(host: String, port: Int): ZLayer[Any, Throwable, Server] = {
@@ -115,19 +105,21 @@ object CcasServer extends ZIOAppDefault {
     server: ZLayer[Any, Throwable, Server]
   ): ZIO[Scope & ProgressDisplay, Throwable, Unit] =
     ShutdownLog.Stopwatch.make.flatMap { shutdown =>
-      (pidFileManaged(pidFileOption) *> ZIO.scoped {
-        for {
-          serverEnv <- ShutdownLog.step("the HTTP server")(server.build)
-          _ <- ShutdownLog.step("the running jobs")(ZIO.addFinalizer(ZIO.serviceWithZIO[JobRunner](_.interruptAll)))
-          _ <- running
-            .onInterrupt(shutdown.start("Shutting down"))
-            .provideSomeEnvironment[Scope & Served](_ ++ serverEnv)
-        } yield ()
-      }).provideSomeLayer[Scope & ProgressDisplay](services)
-        .ensuring(shutdown.stop("Stopped"))
+      BootLog.boot { started =>
+        (pidFileManaged(pidFileOption) *> ZIO.scoped {
+          for {
+            serverEnv <- ShutdownLog.step("the HTTP server")(server.build)
+            _ <- ShutdownLog.step("the running jobs")(ZIO.addFinalizer(ZIO.serviceWithZIO[JobRunner](_.interruptAll)))
+            _ <- running(started)
+              .onInterrupt(shutdown.start("Shutting down"))
+              .provideSomeEnvironment[Scope & Served](_ ++ serverEnv)
+          } yield ()
+        }).provideSomeLayer[Scope & ProgressDisplay](services)
+          .ensuring(shutdown.stop("Stopped"))
+      }
     }
 
-  private def running: URIO[Scope & Served & Server, Unit] = {
+  private def running(started: UIO[Unit]): URIO[Scope & Served & Server, Unit] = {
     val routes: Routes[JobRunner & ChessComClient & PostgresClient, Nothing] =
       List(
         HealthRoutes.routes,
@@ -143,25 +135,22 @@ object CcasServer extends ZIOAppDefault {
       scheduler <- ZIO.service[JobScheduler]
       _         <- ShutdownLog.step("the scheduler")(scheduler.start)
       _         <- ShutdownLog.step("the retention sweep")(retentionSweepForked)
-      _         <- Server.serve(routes)
+      // Not `Server.serve`, whose first install is what binds the port and which never returns: the boot has started
+      // only once this has, and a port already taken must leave this step open.
+      _ <- BootLog.step("the HTTP server")(Server.install(routes))
+      _ <- started
+      _ <- ZIO.never
     } yield ()
   }
 
-  /** The pool's `onInit`: names the database, then applies the tables and reports how long setup takes. The pool is
-    * lazy by default (`initializationFailTimeout = -1`), so naming it first means even a boot that then fails to connect
-    * says where it tried (#320).
+  /** The pool's `onInit`: names the database, then applies the tables. The pool is lazy by default
+    * (`initializationFailTimeout = -1`), so naming it first means even a boot that then fails to connect says where it
+    * tried (#320).
     */
   private[server] val poolInit: RIO[PostgresClient, Unit] =
     ZIO.serviceWithZIO[PostgresClient] { client =>
-      for {
-        _ <- ZIO.logInfo(
-          s"Database: ${client.addressOption.fold("address not readable from the configuration")(_.render)}"
-        )
-        _            <- ZIO.logInfo("Preparing application and scheduler tables")
-        (elapsed, _) <- ServerTables.ensureTables.timed
-        _            <- ZIO.logInfo(s"Application and scheduler tables ready in ${elapsed.render}")
-      } yield ()
-    }
+      ZIO.logInfo(s"Database: ${client.addressOption.fold("address not readable from the configuration")(_.render)}")
+    } *> ServerTables.ensureTables
 
   /** One pass of every retention sweep this server runs: the job-log files, then the two API-diagnostics tables.
     * Each half is caught on its own — one bad pass must not end the loop, and neither half's failure may skip the
@@ -197,7 +186,7 @@ object CcasServer extends ZIOAppDefault {
     * --detach`, whose parent passes the path in [[PidFileEnv]]. The server owns its pid-file lifecycle, so the path is
     * computed CLI-side (no `ccas.cli` import / package cycle) and the recorded pid is the real server JVM, not an
     * intermediate `setsid` process. Foreground `ccas server up` and the `ccas-server` deployable pass no path, so this
-    * is a no-op for them. Sequenced before `Server.serve` so the file exists by the time `/health/ready` is 200; the
+    * is a no-op for them. Sequenced before `Server.install` so the file exists by the time `/health/ready` is 200; the
     * release runs on SIGTERM because ZIOAppDefault's shutdown hook interrupts this scope.
     */
   private[server] def pidFileManaged(pidFileOption: Option[Path]): ZIO[Scope, Throwable, Unit] =

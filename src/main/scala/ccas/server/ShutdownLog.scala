@@ -7,7 +7,7 @@ import ccas.utils.ProgressDisplay
 /** The server's stop, logged as it goes: each step as it starts and again as it ends, with how long it took. A step
   * that hangs is then the one whose `Stopping` line has no `Stopped` after it, even once the time limit has cut the JVM
   * off (#316). Most steps run one after another; layers built side by side are released side by side, so their lines
-  * interleave. Only built steps are logged: a stop during boot, before zio-http's `Server started`, names none still
+  * interleave. Only built steps are logged: a stop during boot, before [[BootLog]]'s `Started in`, names none still
   * building.
   */
 private[server] object ShutdownLog {
