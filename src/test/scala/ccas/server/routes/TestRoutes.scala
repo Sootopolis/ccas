@@ -12,15 +12,7 @@ import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault, ZTestLogger}
 import ccas.analysis.apps.{ClubQuery, ClubRef, ClubResolution, NamedClub}
 import ccas.analysis.apps.recruitment.{CandidateOutcome, CriteriaSpec}
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.{apiClubJson, fakeChessComClient}
-import ccas.analysis.tables.{
-  Club,
-  ManagedClub,
-  Player,
-  RecruitmentCandidate,
-  RecruitmentCriteria,
-  RecruitmentRun,
-  RunTrigger
-}
+import ccas.analysis.tables.*
 import ccas.analysis.tables.subtypes.RecruitmentRunId
 import ccas.api.misc.enums.PlayerStatusCategory
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId, PlayerId, Username}

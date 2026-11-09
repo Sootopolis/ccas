@@ -22,19 +22,7 @@ import ccas.analysis.apps.recruitment.RecruitmentTestSupport.{
   apiMatchBoardJson,
   apiPlayerJson
 }
-import ccas.analysis.tables.{
-  Club,
-  ClubMember,
-  ClubRosterCoverage,
-  MembershipRun,
-  MembershipStanding,
-  Player,
-  PlayerClubList,
-  PlayerMatchRef,
-  PlayerName,
-  RunTrigger,
-  Tables
-}
+import ccas.analysis.tables.*
 import ccas.api.misc.enums.PlayerStatusCategory
 import ccas.api.misc.enums.PlayerStatusCategory.{Active, Closed}
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username}
