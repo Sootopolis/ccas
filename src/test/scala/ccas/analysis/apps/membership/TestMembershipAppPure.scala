@@ -9,7 +9,6 @@ import TestMembershipAppSupport.*
 
 import ccas.analysis.apps.membership.MembershipChange.*
 import ccas.analysis.apps.membership.MembershipChange.MemberChange.*
-import ccas.analysis.apps.membership.MembershipClassify.{PhaseBResult, PhaseCResult}
 import ccas.analysis.apps.membership.MembershipReport.InferredMember
 import ccas.analysis.tables.{ClubMember, MembershipStanding, Player, PlayerName, PlayerSnapshot}
 import ccas.api.misc.enums.PlayerStatusCategory.{Abuse, Active, Closed, Fairplay}
@@ -386,57 +385,32 @@ object TestMembershipAppPure extends ZIOSpecDefault {
   // ==========================================================================
 
   private def suiteMergeResults = suite("mergeResults")(
-    testConcatenatesPhaseBAndPhaseCFields,
-    testSettledRowsStayApartFromHidden
+    testConcatenatesPhaseBAndPhaseCFields
   )
 
   private def testConcatenatesPhaseBAndPhaseCFields = test("concatenates PhaseBResult and PhaseCResult fields") {
-    val bChange   = MemberChangeSummary(pid0, Username("alice"), Chunk(NewMember(Times.t1)))
-    val cChange   = MemberChangeSummary(pid1, Username("bob"), Chunk(LeftClub(Times.t1)))
-    val bPlayer   = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0)
-    val bUpdated  = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t1)
-    val bArchived = PlayerSnapshot(pid0, Times.t0, Active, None)
-    val cUpdated  = Player(pid1, Times.t0, Username("bob"), Closed, None, Times.t1)
-    val cArchived = PlayerSnapshot(pid1, Times.t0, Active, None)
-    val bMember   = ClubMember.joined(clubId = clubId, playerId = pid0, since = Times.t1)
-    val bClosed = ClubMember(
-      clubId = clubId,
-      playerId = pid2,
-      since = Times.t0,
-      lastSeen = Some(Times.t0),
-      until = Some(Times.t1)
-    )
-    val cClosed = ClubMember(
-      clubId = clubId,
-      playerId = pid1,
-      since = Times.t0,
-      lastSeen = Some(Times.t0),
-      until = Some(Times.t1)
-    )
-
-    val bReopened = ClubMember.joined(clubId = clubId, playerId = pid3, since = Times.t0)
-    val cHidden   = ClubMember.joined(clubId = clubId, playerId = pid4, since = Times.t0).hidden(Times.t1)
+    val bChange  = MemberChangeSummary(pid0, Username("alice"), Chunk(NewMember(Times.t1)))
+    val cChange  = MemberChangeSummary(pid1, Username("bob"), Chunk(LeftClub(Times.t1)))
+    val bPlayer  = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t0)
+    val bUpdated = Player(pid0, Times.t0, Username("alice"), Active, None, Times.t1)
+    val cUpdated = Player(pid1, Times.t0, Username("bob"), Closed, None, Times.t1)
+    val ritasRow = ClubMember.joined(clubId = clubId, playerId = pid5, since = Times.t0)
 
     val bUnsettled =
-      UnsettledJoin(playerId = pid5, username = Username("rita"), joinedAt = Times.t0, latest = bReopened)
+      UnsettledJoin(playerId = pid5, username = Username("rita"), joinedAt = Times.t0, latest = ritasRow)
     val refused = RefusedMembershipVerdict(
       playerId = pid5,
       username = Username("rita"),
-      conflict = MemberRowConflict.SameStart(bReopened),
+      conflict = MemberRowConflict.SameStart(ritasRow),
       unreported = Chunk.empty
     )
-    val phaseB = PhaseBResult(
-      resolvedIds = Set(pid0),
+    val phaseB = nothingListed.copy(
       changes = Chunk(bChange),
       newPlayers = Chunk(bPlayer),
       updatedPlayers = Chunk(bUpdated),
-      archivedSnapshots = Chunk(bArchived),
-      newMemberships = Chunk(bMember),
-      closedMemberships = Chunk(bClosed),
-      reopenedMemberships = Chunk(bReopened),
       unsettledJoins = Chunk(bUnsettled)
     )
-    val phaseC = PhaseCResult(Chunk(cChange), Chunk(cUpdated), Chunk(cArchived), Chunk(cClosed), Chunk(cHidden))
+    val phaseC = nothingDisappeared.copy(changes = Chunk(cChange), updatedPlayers = Chunk(cUpdated))
     val result = MembershipApp.mergeResults(
       clubId = clubId,
       b = phaseB,
@@ -453,32 +427,10 @@ object TestMembershipAppPure extends ZIOSpecDefault {
       result.changes == Chunk(bChange, cChange),
       result.newPlayers == Chunk(bPlayer),
       result.updatedPlayers == Chunk(bUpdated, cUpdated),
-      result.archivedSnapshots == Chunk(bArchived, cArchived),
-      result.newMemberships == Chunk(bMember),
-      result.closedMemberships == Chunk(bClosed, cClosed),
-      result.hiddenMemberships == Chunk(cHidden),
-      result.reopenedMemberships == Chunk(bReopened),
       result.unsettledJoins == Chunk(bUnsettled),
       result.refused == Chunk(refused)
     )
   }
-
-  private def testSettledRowsStayApartFromHidden =
-    test("the rows the club lists settled stay apart from the closures this run hid") {
-      val cHidden = ClubMember.joined(clubId = clubId, playerId = pid0, since = Times.t0).hidden(Times.t2)
-      val result = MembershipApp.mergeResults(
-        clubId = clubId,
-        b = nothingListed,
-        c = nothingDisappeared.copy(hiddenMemberships = Chunk(cHidden)),
-        settlement = settlement,
-        refused = Chunk.empty,
-        rosterMovement = noMovement,
-        startedAt = Times.t0,
-        completedAt = Times.t1,
-        externalChanges = Chunk.empty
-      )
-      assertTrue(result.hiddenMemberships == Chunk(cHidden), result.settlement == settlement)
-    }
 
   // ==========================================================================
   // formatReconciliation (pure)
@@ -505,18 +457,12 @@ object TestMembershipAppPure extends ZIOSpecDefault {
 
   private def reconciliation(
     changes: Chunk[MemberChangeSummary],
-    hiddenMemberships: Chunk[ClubMember],
     settlement: ClosedAccountClubs.Settlement
   ) = ReconciliationResult(
     clubId = clubId,
     changes = changes,
     newPlayers = Chunk.empty,
     updatedPlayers = Chunk.empty,
-    archivedSnapshots = Chunk.empty,
-    newMemberships = Chunk.empty,
-    closedMemberships = Chunk.empty,
-    hiddenMemberships = hiddenMemberships,
-    reopenedMemberships = Chunk.empty,
     unsettledJoins = Chunk.empty,
     refused = Chunk.empty,
     settlement = settlement,
@@ -547,8 +493,7 @@ object TestMembershipAppPure extends ZIOSpecDefault {
     test(
       "club-list findings appear under join and account-closed events"
     ) {
-      val output =
-        MembershipReport.formatReconciliation(reconciliation(Chunk.empty, Chunk.empty, settlement), Map.empty)
+      val output = MembershipReport.formatReconciliation(reconciliation(Chunk.empty, settlement), Map.empty)
       assertTrue(
         output.endsWith(
           s"""[JOINED]
@@ -573,7 +518,7 @@ object TestMembershipAppPure extends ZIOSpecDefault {
     ) {
       val closed   = MemberChangeSummary(pid0, Username("alice"), Chunk(AccountClosed(Times.t2, Closed)))
       val movement = RosterMovement(before = Set(pid0), after = Set(pid1, pid2))
-      val result   = reconciliation(Chunk(closed), Chunk.empty, noSettlement).copy(rosterMovement = movement)
+      val result   = reconciliation(Chunk(closed), noSettlement).copy(rosterMovement = movement)
       val output   = MembershipReport.formatReconciliation(result, Map.empty)
       assertTrue(
         output.contains("Active roster:        1 → 2 (+1)\n"),
@@ -588,8 +533,7 @@ object TestMembershipAppPure extends ZIOSpecDefault {
   private def testAClosureIsDatedAfterItsLastSighting =
     test("an account closure a reconcile found is dated after its last sighting") {
       val closed = MemberChangeSummary(pid0, Username("alice"), Chunk(AccountClosed(Times.t2, Fairplay)))
-      val output =
-        MembershipReport.formatReconciliation(reconciliation(Chunk(closed), Chunk.empty, noSettlement), Map.empty)
+      val output = MembershipReport.formatReconciliation(reconciliation(Chunk(closed), noSettlement), Map.empty)
       assertTrue(
         output.contains(s"[ACCOUNT CLOSED]\n  alice — status: closed for fair-play violations, after ${Times.t2}\n")
       )
@@ -597,8 +541,7 @@ object TestMembershipAppPure extends ZIOSpecDefault {
 
   private def testNoEventSectionsWhenNothingChanged =
     test("a run with no roster movement has zero gains and losses and no event sections") {
-      val output =
-        MembershipReport.formatReconciliation(reconciliation(Chunk.empty, Chunk.empty, noSettlement), Map.empty)
+      val output = MembershipReport.formatReconciliation(reconciliation(Chunk.empty, noSettlement), Map.empty)
       assertTrue(
         output.contains("Roster gains:         0\n"),
         output.contains("Roster losses:        0\n"),
@@ -614,11 +557,7 @@ object TestMembershipAppPure extends ZIOSpecDefault {
         MemberChangeSummary(pid1, Username("bob"), Chunk(StatusChange(Times.t2, Active, Fairplay))),
         MemberChangeSummary(pid2, Username("carol"), Chunk(StatusChange(Times.t2, Active, Abuse)))
       )
-      val result = reconciliation(
-        changes = changes,
-        hiddenMemberships = Chunk.empty,
-        settlement = noSettlement
-      )
+      val result = reconciliation(changes = changes, settlement = noSettlement)
       val output = MembershipReport.formatReconciliation(result, Map.empty)
       assertTrue(
         output.contains(s"[ACCOUNT CLOSED]\n  alice — status: closed, by ${Times.t2}"),
@@ -640,7 +579,7 @@ object TestMembershipAppPure extends ZIOSpecDefault {
         UnsettledJoin(playerId = pid1, username = Username("bob"), joinedAt = Times.t1, latest = ended),
         UnsettledJoin(playerId = pid2, username = Username("carol"), joinedAt = Times.t2, latest = hidden)
       )
-      val result = reconciliation(Chunk.empty, Chunk.empty, noSettlement).copy(unsettledJoins = joins)
+      val result = reconciliation(Chunk.empty, noSettlement).copy(unsettledJoins = joins)
       val output = MembershipReport.formatReconciliation(result, Map.empty)
       assertTrue(
         output.contains("Join date conflicts:  3\n"),
@@ -682,7 +621,7 @@ object TestMembershipAppPure extends ZIOSpecDefault {
           unreported = Chunk.empty
         )
       )
-      val result = reconciliation(Chunk.empty, Chunk.empty, noSettlement).copy(refused = refused)
+      val result = reconciliation(Chunk.empty, noSettlement).copy(refused = refused)
       val output = MembershipReport.formatReconciliation(result, Map.empty)
       assertTrue(
         output.contains("Not recorded:         3\n"),
@@ -707,7 +646,7 @@ object TestMembershipAppPure extends ZIOSpecDefault {
         conflict = MemberRowConflict.SameStart(row),
         unreported = Chunk(Reopened(Times.t0, MembershipStanding.Hidden(Times.t1)))
       )
-      val result = reconciliation(Chunk(reported), Chunk.empty, noSettlement).copy(refused = Chunk(refused))
+      val result = reconciliation(Chunk(reported), noSettlement).copy(refused = Chunk(refused))
       val output = MembershipReport.formatReconciliation(result, Map.empty)
       assertTrue(
         output.contains(s"[ACCOUNT REOPENED]\n  alice — at ${Times.t2}\n"),
@@ -730,8 +669,7 @@ object TestMembershipAppPure extends ZIOSpecDefault {
         conflict = MemberRowConflict.SameStart(row),
         unreported = Chunk(Reopened(Times.t0, MembershipStanding.Hidden(Times.t1)))
       )
-      val result =
-        reconciliation(Chunk(reactivated, external), Chunk.empty, noSettlement).copy(refused = Chunk(refused))
+      val result = reconciliation(Chunk(reactivated, external), noSettlement).copy(refused = Chunk(refused))
       val output = MembershipReport.formatReconciliation(result, Map.empty)
       assertTrue(
         output.contains(s"\n  alice — recording it would give them two memberships from ${Times.t0}\n"),
@@ -749,8 +687,7 @@ object TestMembershipAppPure extends ZIOSpecDefault {
         username = Username("bob"),
         changes = Chunk(Reopened(Times.t0, MembershipStanding.Ended(lastSeen = Times.t1, until = Times.t2)))
       )
-      val output =
-        MembershipReport.formatReconciliation(reconciliation(Chunk(back), Chunk.empty, noSettlement), Map.empty)
+      val output = MembershipReport.formatReconciliation(reconciliation(Chunk(back), noSettlement), Map.empty)
       assertTrue(
         output.contains(
           s"[BACK ON ROSTER]\n  bob — same membership since ${Times.t0}; last seen ${Times.t1}, missing by ${Times.t2}\n"
@@ -767,8 +704,7 @@ object TestMembershipAppPure extends ZIOSpecDefault {
         username = Username("alice"),
         changes = Chunk(Reopened(Times.t0, MembershipStanding.Hidden(Times.t1)))
       )
-      val output =
-        MembershipReport.formatReconciliation(reconciliation(Chunk(reopened), Chunk.empty, noSettlement), Map.empty)
+      val output = MembershipReport.formatReconciliation(reconciliation(Chunk(reopened), noSettlement), Map.empty)
       assertTrue(
         output.contains(s"[ACCOUNT REOPENED]\n  alice — member since ${Times.t0}, last seen ${Times.t1}\n"),
         !output.contains("[BACK ON ROSTER]")
@@ -791,8 +727,7 @@ object TestMembershipAppPure extends ZIOSpecDefault {
             Chunk(Reopened(Times.t0, MembershipStanding.Ended(lastSeen = Times.t0, until = Times.t1)), reactivated)
         )
       )
-      val output =
-        MembershipReport.formatReconciliation(reconciliation(changes, Chunk.empty, noSettlement), Map.empty)
+      val output = MembershipReport.formatReconciliation(reconciliation(changes, noSettlement), Map.empty)
       assertTrue(
         output.contains(s"[ACCOUNT REOPENED]\n  alice — at ${Times.t2}\n  bob — at ${Times.t2}\n\n"),
         !output.contains("[BACK ON ROSTER]")
@@ -804,7 +739,6 @@ object TestMembershipAppPure extends ZIOSpecDefault {
       val change = StatusChange(Times.t1, Closed, Active)
       val result = reconciliation(
         changes = Chunk(MemberChangeSummary(pid0, Username("alice"), Chunk(change))),
-        hiddenMemberships = Chunk.empty,
         settlement = noSettlement
       )
       val output = MembershipReport.formatReconciliation(result, Map.empty)
