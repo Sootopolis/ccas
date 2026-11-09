@@ -3,14 +3,14 @@ package ccas.cli.serve
 import java.nio.file.{Files, Path}
 
 import com.typesafe.config.ConfigFactory
-import zio.{duration2DurationOps, durationInt, ExitCode, Ref, Scope, UIO, ZIO}
-import zio.test.{assertTrue, Spec, TestAspect, TestClock, TestConsole, ZIOSpecDefault}
+import zio.{duration2DurationOps, durationInt, Cause, ExitCode, Ref, Scope, UIO, ZIO}
+import zio.test.{assertTrue, Spec, TestAspect, TestClock, TestConsole, ZIOSpecDefault, ZTestLogger}
 
 import ccas.cli.Main
 import ccas.cli.serve.HealthProbe.Readiness
 import ccas.cli.serve.PidFile.State
 import ccas.cli.serve.ServerList.Row
-import ccas.server.CcasServer
+import ccas.server.{BootGuard, CcasServer}
 
 /** Deterministic, DB-free unit tests for the `ccas server up --detach` / `status` / `down` / `list` lifecycle. The pure
   * decision logic ([[Detach.reconstruct]], [[Detach.resolveDeadline]], [[Detach.timeoutMessage]],
@@ -198,9 +198,14 @@ object TestServeLifecycle extends ZIOSpecDefault {
           val pidPath = PidFile.path(dir, 8081)
           ZIO.scoped {
             for {
-              server  <- liveProcess
-              _       <- ZIO.attempt(Files.writeString(pidPath, server.pid().toString + "\n"))
-              refusal <- Detach.startRefusal(pidPath = pidPath, port = 8081, portAnswering = ZIO.succeed(false))
+              server <- liveProcess
+              _      <- ZIO.attempt(Files.writeString(pidPath, server.pid().toString + "\n"))
+              refusal <- Detach.startRefusal(
+                pidPath = pidPath,
+                port = 8081,
+                portAnswering = ZIO.succeed(false),
+                listenProblem = ZIO.none
+              )
             } yield assertTrue(refusal.contains(s"already running on 127.0.0.1:8081, pid=${server.pid()}"))
           }
         }
@@ -208,22 +213,83 @@ object TestServeLifecycle extends ZIOSpecDefault {
       test("a server answering this port with no pid file refuses the start instead of passing as the new one") {
         withTempDir { dir =>
           val pidPath = PidFile.path(dir, 8080)
-          Detach.startRefusal(pidPath = pidPath, port = 8080, portAnswering = ZIO.succeed(true)).map { refusal =>
-            assertTrue(
-              refusal.exists(_.contains("already answering on 127.0.0.1:8080")),
-              refusal.exists(_.contains("SERVER_PORT"))
+          Detach
+            .startRefusal(pidPath = pidPath, port = 8080, portAnswering = ZIO.succeed(true), listenProblem = ZIO.none)
+            .map { refusal =>
+              assertTrue(
+                refusal.exists(_.contains("already answering on 127.0.0.1:8080")),
+                refusal.exists(_.contains("SERVER_PORT"))
+              )
+            }
+        }
+      },
+      test("a port nothing answers on but the server couldn't listen on refuses the start, saying why") {
+        withTempDir { dir =>
+          Detach
+            .startRefusal(
+              pidPath = PidFile.path(dir, 8080),
+              port = 8080,
+              portAnswering = ZIO.succeed(false),
+              listenProblem = ZIO.some("Cannot listen on 127.0.0.1:8080")
             )
-          }
+            .map(refusal => assertTrue(refusal.contains("Cannot listen on 127.0.0.1:8080")))
         }
       },
       test("a free port with no live pid file starts") {
         withTempDir { dir =>
           val pidPath = PidFile.path(dir, 8080)
           for {
-            _       <- ZIO.attempt(Files.writeString(pidPath, deadPid().toString + "\n"))
-            refusal <- Detach.startRefusal(pidPath = pidPath, port = 8080, portAnswering = ZIO.succeed(false))
+            _ <- ZIO.attempt(Files.writeString(pidPath, deadPid().toString + "\n"))
+            refusal <- Detach.startRefusal(
+              pidPath = pidPath,
+              port = 8080,
+              portAnswering = ZIO.succeed(false),
+              listenProblem = ZIO.none
+            )
           } yield assertTrue(refusal.isEmpty)
         }
+      }
+    ),
+    suite("Detach.startUnlessRefused")(
+      test("a server that comes up during the question refuses the start, without spawning anything") {
+        for {
+          refusals <- Ref.make(List(Option.empty[String], Some("already running on 127.0.0.1:8080, pid=7")))
+          started  <- Ref.make(false)
+          code <- Detach.startUnlessRefused(
+            refusal = refusals.modify(left => (left.head, left.tail)),
+            confirmed = ZIO.succeed(true),
+            start = started.set(true).as(ExitCode.success)
+          )
+          wasStarted <- started.get
+          err        <- TestConsole.outputErr
+        } yield assertTrue(code == ExitCode(1), !wasStarted, err.exists(_.contains("pid=7")))
+      },
+      test("a refusal before the question is given without asking") {
+        for {
+          asked <- Ref.make(false)
+          code <- Detach.startUnlessRefused(
+            refusal = ZIO.some("already running on 127.0.0.1:8080, pid=7"),
+            confirmed = asked.set(true).as(true),
+            start = ZIO.succeed(ExitCode.success)
+          )
+          wasAsked <- asked.get
+        } yield assertTrue(code == ExitCode(1), !wasAsked)
+      },
+      test("a declined question exits 1 without spawning anything") {
+        for {
+          started <- Ref.make(false)
+          code <- Detach.startUnlessRefused(
+            refusal = ZIO.none,
+            confirmed = ZIO.succeed(false),
+            start = started.set(true).as(ExitCode.success)
+          )
+          wasStarted <- started.get
+        } yield assertTrue(code == ExitCode(1), !wasStarted)
+      },
+      test("with no refusal either side of a yes, the start goes ahead") {
+        Detach
+          .startUnlessRefused(refusal = ZIO.none, confirmed = ZIO.succeed(true), start = ZIO.succeed(ExitCode(42)))
+          .map(code => assertTrue(code == ExitCode(42)))
       }
     ),
     suite("Detach.serverLog")(
@@ -288,6 +354,20 @@ object TestServeLifecycle extends ZIOSpecDefault {
           CcasServer.gracefulShutdownTimeout < ServerStop.TermTimeout
         )
       }
+    ),
+    suite("Main.serverExit")(
+      test("a refused boot exits 1 and logs no crash, since it has already said why") {
+        for {
+          code <- Main.serverExit(Cause.fail(BootGuard.Refused))
+          logs <- ZTestLogger.logOutput
+        } yield assertTrue(code == ExitCode(1), logs.isEmpty)
+      }.provide(ZTestLogger.default),
+      test("any other failure logs the crash") {
+        for {
+          code <- Main.serverExit(Cause.fail(new IllegalStateException("boom")))
+          logs <- ZTestLogger.logOutput
+        } yield assertTrue(code == ExitCode.failure, logs.map(_.message()).contains("ccas server exited abnormally"))
+      }.provide(ZTestLogger.default)
     ),
     suite("Main.applyServerEnv")(
       // A directory at the file's path, which no reader can read, root included.

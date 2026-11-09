@@ -13,10 +13,11 @@ import ccas.utils.sql.{DatabaseAddress, PostgresClient}
   */
 object BootGuard {
 
-  /** The operator answered no. [[CcasServer.serve]] fails with it, and both entry points exit 1 on it without logging
-    * an error, since the terminal has already said `aborted`.
+  /** The boot stopped before doing anything: the operator answered no, or it can't listen on its port.
+    * [[CcasServer.serve]] fails with it once the reason has been given, so both entry points exit 1 on it without
+    * logging an error.
     */
-  case object Declined extends Exception("boot declined at the database prompt")
+  case object Refused extends Exception("boot refused before it started")
 
   /** True when the boot may go ahead: nothing needed asking, or the operator said yes. Reads the same config the
     * server's pool will, so it must run after the ccas.env overlay.

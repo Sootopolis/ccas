@@ -162,11 +162,11 @@ object Main extends ZIOAppDefault {
       // display truncates causes.
       .foldCauseZIO(serverExit, ZIO.succeed(_))
 
-  // A declined boot prompt is the operator's answer, already acknowledged on the terminal, not a crash to log.
-  private def serverExit(cause: Cause[Any]): UIO[ExitCode] =
+  // A refused boot has already said why, on the terminal or in the log, so it isn't a crash to log.
+  private[cli] def serverExit(cause: Cause[Any]): UIO[ExitCode] =
     cause.failureOption match {
-      case Some(BootGuard.Declined) => ZIO.succeed(ExitCode(1))
-      case _                        => ZIO.logErrorCause("ccas server exited abnormally", cause).as(ExitCode.failure)
+      case Some(BootGuard.Refused) => ZIO.succeed(ExitCode(1))
+      case _                       => ZIO.logErrorCause("ccas server exited abnormally", cause).as(ExitCode.failure)
     }
 
   // Mandatory server config resolves from the process env OR the ccas.env overlay (applied as system properties by

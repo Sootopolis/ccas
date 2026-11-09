@@ -1,9 +1,10 @@
 package ccas.server
 
+import java.net.{InetAddress, ServerSocket}
 import java.nio.file.{Files, Path, Paths}
 
-import com.typesafe.config.ConfigFactory
-import zio.{durationInt, Duration, ExitCode, RIO, Schedule, Scope, UIO, URIO, ZIO, ZIOAppArgs, ZIOAppDefault, ZLayer}
+import com.typesafe.config.{Config, ConfigFactory}
+import zio.*
 import zio.http.{Routes, Server}
 import zio.http.netty.NettyConfig
 
@@ -22,15 +23,16 @@ import ccas.server.routes.{
 import ccas.server.scheduler.JobScheduler
 import ccas.utils.ProgressDisplay
 import ccas.utils.client.{BodyStore, ChessComClient, HttpClientLayer}
+import ccas.utils.errors.safeMessage
 import ccas.utils.sql.PostgresClient
 
 object CcasServer extends ZIOAppDefault {
 
-  // The standalone `ccas-server`. A declined boot exits 1 here rather than failing, which ZIOApp would log as an error
+  // The standalone `ccas-server`. A refused boot exits 1 here rather than failing, which ZIOApp would log as an error
   // with a stack trace. `exit` is safe only in the app that owns the JVM: called under `ccas.cli.Main`, it would
-  // deadlock with Main's shutdown hook, so `ccas server up` runs [[serve]] and handles `Declined` itself.
+  // deadlock with Main's shutdown hook, so `ccas server up` runs [[serve]] and handles `Refused` itself.
   override def run: ZIO[Any & ZIOAppArgs & Scope, Any, Any] =
-    withServerEnv(ServerEnvPaths.file)(serve).catchSome { case BootGuard.Declined => exit(ExitCode(1)) }
+    withServerEnv(ServerEnvPaths.file)(serve).catchSome { case BootGuard.Refused => exit(ExitCode(1)) }
 
   // ZIO's default waits forever (#316). Shorter than `ccas server down`'s wait before SIGKILL, so a stuck server exits
   // on its own, having logged the step it waits on (`ShutdownLog`). `ccas.cli.Main` uses the same limit.
@@ -51,21 +53,13 @@ object CcasServer extends ZIOAppDefault {
 
   /** Boots the server, once [[withServerEnv]] has applied the ccas.env file. */
   private[ccas] def serve: ZIO[Scope & ProgressDisplay, Throwable, Unit] =
-    ZIO.ifZIO(BootGuard.confirmed(detachedChild = detachedPidFileOption.isDefined))(
-      onTrue = boot,
-      onFalse = ZIO.fail(BootGuard.Declined)
-    )
-
-  // Behind the guard in `run`, since building these layers writes to the database: the pool's `onInit`, then
-  // `JobRunner.live`.
-  private def boot: ZIO[Scope & ProgressDisplay, Throwable, Unit] =
     ZIO.suspendSucceed {
       val config = ConfigFactory.load()
-      val host   = config.getString("server.host")
-      val port   = config.getInt("server.port")
-
-      serveWith(
+      startOn(
+        host = hostIn(config),
+        port = config.getInt("server.port"),
         pidFileOption = detachedPidFileOption,
+        confirmed = BootGuard.confirmed(detachedChild = detachedPidFileOption.isDefined),
         services = ZLayer.makeSome[ProgressDisplay, Served](
           loggedLayer("the Chess.com client")(ChessComClient.live("server")),
           loggedLayer("the HTTP client")(HttpClientLayer.live),
@@ -73,15 +67,60 @@ object CcasServer extends ZIOAppDefault {
           loggedLayer("the database pool")(PostgresClient.live(onInit = poolInit)),
           loggedLayer("the job runner")(JobRunner.live),
           JobScheduler.live
-        ),
-        server = httpServer(host, port)
+        )
       )
     }
 
   private def loggedLayer[RIn, E, A](name: String)(layer: ZLayer[RIn, E, A]): ZLayer[RIn, E, A] =
     BootLog.layer(name)(ShutdownLog.layer(name)(layer))
 
-  /** The HTTP server [[boot]] listens with. */
+  // In this order because building `services` writes to the database (the pool's `onInit`, then `JobRunner.live`), and
+  // a boot that can't listen must not have done that (#446). The port comes first so nobody is asked about a boot that
+  // could never come up, and again after `confirmed`, which can wait on the operator for any length of time.
+  private[server] def startOn(
+    host: String,
+    port: Int,
+    pidFileOption: Option[Path],
+    confirmed: UIO[Boolean],
+    services: ZLayer[ProgressDisplay, Throwable, Served]
+  ): ZIO[Scope & ProgressDisplay, Throwable, Unit] =
+    refuseUnlessListenable(host, port) *>
+      ZIO.ifZIO(confirmed)(
+        onTrue = refuseUnlessListenable(host, port) *> serveWith(pidFileOption, services, httpServer(host, port)),
+        onFalse = ZIO.fail(BootGuard.Refused)
+      )
+
+  private def hostIn(config: Config): String = config.getString("server.host")
+
+  /** [[listenProblem]] on the host this server is configured to bind, for `--detach`'s parent to ask before its child
+    * does. Reads the same config the child will, so it must run after the ccas.env overlay.
+    */
+  private[ccas] def configuredListenProblem(port: Int): Task[Option[String]] =
+    ZIO.attemptBlocking(hostIn(ConfigFactory.load())).flatMap(listenProblem(_, port))
+
+  private def refuseUnlessListenable(host: String, port: Int): IO[BootGuard.Refused.type, Unit] =
+    listenProblem(host, port).flatMap { problemOption =>
+      ZIO.foreachDiscard(problemOption) { problem =>
+        ProgressDisplay.sourced("boot")(ZIO.logError(problem)) *> ZIO.fail(BootGuard.Refused)
+      }
+    }
+
+  /** Why a server couldn't listen on `host:port`, if it couldn't, as the operator should read it. Binds and releases at
+    * once: holding the socket until the real bind would leave clients hanging on it until their timeouts through every
+    * boot, so a boot that loses the port while its layers build is left to that bind, ahead of the loops (`running`).
+    * `reuseAddress`, the JDK's default here, is what lets a restart past connections in TIME_WAIT.
+    */
+  private def listenProblem(host: String, port: Int): UIO[Option[String]] =
+    ZIO.attemptBlocking(new ServerSocket(port, 1, InetAddress.getByName(host)).close()).fold(
+      error =>
+        Some(
+          s"Cannot listen on $host:$port: ${error.safeMessage}. Nothing was started and the database wasn't touched. " +
+            "Stop what holds the port, or set SERVER_PORT or SERVER_HOST to an address this machine can listen on."
+        ),
+      _ => None
+    )
+
+  /** The HTTP server a boot listens with. */
   private[server] def httpServer(host: String, port: Int): ZLayer[Any, Throwable, Server] = {
     // Read-idle reaper: zio-http leaves `idleTimeout=None`, so a client that vanishes without FIN/RST would pin
     // a Netty channel and fd forever. Read-only, so it never resets on writes — which means every live log/progress
@@ -93,7 +132,7 @@ object CcasServer extends ZIOAppDefault {
     (ZLayer.succeed(config) ++ ZLayer.succeed(NettyConfig.defaultWithFastShutdown)) >>> Server.customized
   }
 
-  /** The services [[boot]] builds for the HTTP server and the loops to run on. */
+  /** The services a boot builds for the HTTP server and the loops to run on. */
   private[server] type Served = JobScheduler & JobRunner & PostgresClient & BodyStore & ChessComClient
 
   // The pid file stays in the caller's scope, so it outlives the services. The rest gets a scope of its own, closed
@@ -132,14 +171,15 @@ object CcasServer extends ZIOAppDefault {
       ).reduce(_ ++ _)
 
     for {
+      // Not `Server.serve`, whose first install is what binds the port and which never returns: the boot has started
+      // only once this has, and a port already taken must leave this step open. Ahead of the loops, whose first passes
+      // run at once, so a boot that loses the port has no schedule fired or cache row swept to answer for (#446).
+      _         <- BootLog.step("the HTTP server")(Server.install(routes))
       scheduler <- ZIO.service[JobScheduler]
       _         <- ShutdownLog.step("the scheduler")(scheduler.start)
       _         <- ShutdownLog.step("the retention sweep")(retentionSweepForked)
-      // Not `Server.serve`, whose first install is what binds the port and which never returns: the boot has started
-      // only once this has, and a port already taken must leave this step open.
-      _ <- BootLog.step("the HTTP server")(Server.install(routes))
-      _ <- started
-      _ <- ZIO.never
+      _         <- started
+      _         <- ZIO.never
     } yield ()
   }
 
@@ -168,7 +208,7 @@ object CcasServer extends ZIOAppDefault {
   // takes effect within a day rather than at the next restart.
   private val RetentionSweepInterval = 24.hours
 
-  /** Forked so the port binds without waiting for a pass, and daily so no pass has more than a day of backlog to
+  /** Forked so the boot finishes without waiting for a pass, and daily so no pass has more than a day of backlog to
     * clear. See docs/adr/0007-response-caching-in-postgres.md. Shutdown interrupts whatever pass is in flight; for
     * the table half that leaks objects, which the bucket lifecycle rule in ADR 0009 exists to collect (an interrupted
     * file sweep leaks nothing — the files remain).
