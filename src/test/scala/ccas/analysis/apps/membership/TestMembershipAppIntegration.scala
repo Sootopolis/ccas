@@ -1613,8 +1613,9 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
         _      <- seedDb(players = List(alice), members = List(aliceMembership))
         _      <- completedRun(startedAt = Times.t0, completedAt = Times.t1)
         result <- reconcileWith(routes, RunTrigger.Cli)
+        rows   <- ClubMember.selectClub(clubId)
       } yield assertTrue(
-        result.newMemberships.size == 1,
+        rows.toSet == Set(aliceMembership, ClubMember.joined(clubId = clubId, playerId = pid1, since = bobJoined)),
         result.rosterMovement == RosterMovement(before = Set(pid0), after = Set(pid0, pid1))
       )
     }
@@ -1652,8 +1653,6 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
         player <- Player.selectId(pid1)
       } yield assertTrue(
         rows == List(ClubMember.joined(clubId = clubId, playerId = pid1, since = Times.t0)),
-        result.reopenedMemberships.size == 1,
-        result.newMemberships.isEmpty,
         result.changes.flatMap(_.changes).contains(Reopened(Times.t0, MembershipStanding.Hidden(Times.t1))),
         player.map(_.status).contains(Active)
       )
@@ -1722,7 +1721,6 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
         result.settlement.hidden == Chunk(
           ClosedAccountClubs.Hidden(Username("erin"), ended.hidden(Times.t2), Closed)
         ),
-        result.hiddenMemberships.isEmpty,
         result.settlement.unsettled.isEmpty
       )
     }
@@ -1867,13 +1865,10 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
       val olga   = Player(pid4, Times.t0, Username("olga"), Active, None, Times.t2)
       val hidden = ClubMember.joined(clubId = clubId, playerId = pid4, since = Times.t0).hidden(Times.t1)
       for {
-        _      <- seedDb(players = List(olga), members = List(hidden))
-        result <- reconcileWith(clubRoutes(roster = List("olga" -> Times.t0), profiles = Map.empty), RunTrigger.Cli)
-        rows   <- ClubMember.selectClub(clubId)
-      } yield assertTrue(
-        rows == List(ClubMember.joined(clubId = clubId, playerId = pid4, since = Times.t0)),
-        result.reopenedMemberships.size == 1
-      )
+        _    <- seedDb(players = List(olga), members = List(hidden))
+        _    <- reconcileWith(clubRoutes(roster = List("olga" -> Times.t0), profiles = Map.empty), RunTrigger.Cli)
+        rows <- ClubMember.selectClub(clubId)
+      } yield assertTrue(rows == List(ClubMember.joined(clubId = clubId, playerId = pid4, since = Times.t0)))
     }
 
   // Another job refreshed the status first, so this run sees no status change, only the hidden row reopening.
@@ -2237,8 +2232,7 @@ object TestMembershipAppIntegration extends ZIOSpecDefault {
       } yield assertTrue(
         rows.toSet == Set(ritaOpen, ritaEmpty, ClubMember.joined(clubId = clubId, playerId = pid1, since = Times.t3)),
         result.refused == Chunk(refused),
-        result.changes.map(_.playerId) == Chunk(pid1),
-        result.newMemberships.map(_.playerId) == Chunk(pid1)
+        result.changes.map(_.playerId) == Chunk(pid1)
       )
     }
 
