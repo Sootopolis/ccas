@@ -17,7 +17,7 @@ import zio.*
 /** Database client for PostgreSQL with connection management and transient-error retry.
   *
   * Wraps a Magnum `Transactor` (backed by HikariCP) and adds:
-  *   - '''Connection pool hardening''' — keepalive probes, validation queries, and lazy initialization tolerant of cold
+  *   - '''Connection pool hardening''' — validation queries, socket timeouts, and lazy initialisation tolerant of cold
   *     starts (e.g. Neon serverless).
   *   - '''Transient-error retry''' — exponential backoff on connection-class errors (SQLState `08xxx`) so callers don't
   *     need to handle reconnection themselves.

@@ -88,7 +88,7 @@ A polling daemon on a configurable interval that checks enabled `JobSchedule` en
 
 ## Database
 
-Magnum (`com.augustnagro.magnum`) over PostgreSQL. `PostgresClient` (`ccas.utils.sql`) wraps a Magnum `Transactor` backed by HikariCP, adding connection-pool hardening (keepalive probes, validation queries, lazy initialisation) and transient-error retry. `PostgresClient.live` reads config under the `database` prefix; all app and server code depends on `PostgresClient`, never on `Transactor`.
+Magnum (`com.augustnagro.magnum`) over PostgreSQL. `PostgresClient` (`ccas.utils.sql`) wraps a Magnum `Transactor` backed by HikariCP, adding connection-pool hardening (validation queries, lazy initialisation, socket timeouts) and transient-error retry. `PostgresClient.live` reads config under the `database` prefix; all app and server code depends on `PostgresClient`, never on `Transactor`.
 
 Each table is a case class that `derives DbCodec`, with a companion holding its `createTable` and its queries, often built on a `SqlLiteral` column list. Tables backed by Magnum's `Repo` / `ImmutableRepo` are also annotated `@Table(PostgresDbType, SqlNameMapper.CamelToSnakeCase)`, which derives their table and column names from the case class; the rest name them in their SQL.
 

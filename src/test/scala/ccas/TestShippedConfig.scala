@@ -53,6 +53,19 @@ object TestShippedConfig extends ZIOSpecDefault {
         booleanKeys = reached.map(_.getValue.unwrapped).collect { case name: String => name }.toSet
         toggles     = ServerEnvKeys.all.filter(_.values == Toggle).map(_.name).toSet
       } yield assertTrue(booleanKeys.nonEmpty, booleanKeys == toggles)
+    },
+    // Neon suspends after 5 quiet minutes; the old defaults pinged two idle connections every 2 minutes (#420).
+    test(
+      "the shipped pool holds no idle connection and sends no keepalive, so an idle server lets a scale-to-zero database suspend"
+    ) {
+      for {
+        resolved <- ZIO.attempt(ConfigFactory.parseFile(Shipped, MustExist).resolve(NoEnvironment))
+        pool = resolved.getConfig("database.pool")
+      } yield assertTrue(
+        pool.getInt("minimumIdle") == 0,
+        pool.getLong("keepaliveTime") == 0L,
+        pool.getLong("idleTimeout") <= 60000L
+      )
     }
   )
 }
