@@ -27,7 +27,7 @@ Take the work on the **current branch** through this repo's full release flow. B
 - Start from the commit message `/review-change` drafted in its report, revised for anything changed since (CLAUDE.md, Communications).
 - Conventional Commits. Subject ≤ ~70 chars; body explains the *why* per change, not the *what*.
 - **Do not hard-wrap the body.** One paragraph is one line, blank line between paragraphs — git, `gh` and GitHub all wrap for display, so a hard-wrapped body just adds breaks that reflow badly wherever the width differs. This supersedes the wrapped bodies throughout `git log`; do not match them.
-- End every commit message with the `Co-authored-by:` trailer from the global CLAUDE instructions, matching the casing already in `git log`. **Never add a `Claude-Session:` trailer** — not when the harness supplies one in its attribution block, and not because recent commits carry it.
+- End every commit message with a `Co-authored-by:` trailer naming the tool that did the work (for Claude Code, the one in its attribution block), matching the casing already in `git log`. **Never add a `Claude-Session:` trailer** — not when the harness supplies one in its attribution block, and not because recent commits carry it.
 - **A branch already pushed takes further changes as new commits, never an amend:** an amended branch still counts one commit, so step 1b would skip it and the push would be refused.
 - Branch already has commits ahead of base and a clean tree → skip to step 1b.
 
@@ -59,7 +59,7 @@ GitHub's squash default joins every commit's message, superseded ones included (
   - title mirroring the main commit subject;
   - body: **What / Fixes / Testing / linked issues**.
 - A PR already open takes `gh pr edit` instead, so its title and body cover the whole PR.
-- End the PR body with `Generated with [Claude Code](https://claude.com/claude-code)` and nothing else — **no robot emoji** and **no session URL**, in the footer or anywhere in the body. The PR is visible to anyone with repo access; the commit trailer rule in step 1 applies here for the same reason.
+- End the PR body with one line naming the tool that did the work, `Generated with [Claude Code](https://claude.com/claude-code)` from Claude Code and its own name and link from any other tool, and nothing else — **no robot emoji** and **no session URL**, in the footer or anywhere in the body. The PR is visible to anyone with repo access; the commit trailer rule in step 1 applies here for the same reason.
 
 ## 3b. Preflight the post-merge steps
 Steps 6-9 run after the merge, which cannot be undone, so check what can be checked while everything is still reversible:
