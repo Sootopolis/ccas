@@ -54,7 +54,7 @@ A "set" is a **versioned insert**. Criteria rows are immutable and `recruitment_
 
 ## Server (`ccas.server`)
 
-`CcasServer extends ZIOAppDefault`. `ServerTables` ensures both analysis and server tables exist on startup. Retention is not part of that, and not part of any layer's construction: one forked fiber runs `JobRunner.sweepLogs` and then `Tables.retentionSweep`, repeating daily, so the port binds without waiting for either ([0007](adr/0007-response-caching-in-postgres.md)). That fiber outlives startup, so the log sweep skips jobs that are still running.
+`CcasServer extends ZIOAppDefault`. `ServerTables` ensures both analysis and server tables exist on startup. Retention is not part of that, and not part of any layer's construction: one forked fiber runs `JobRunner.sweepLogs` and then `Tables.retentionSweep`, repeating daily, so the boot doesn't wait for either ([0007](adr/0007-response-caching-in-postgres.md)). That fiber outlives startup, so the log sweep skips jobs that are still running. It and the scheduler start only once the port is bound. A boot checks it can listen before anything else and refuses if it can't, having written nothing. A boot that loses the port after that check has already built its layers, so it can have marked another server's running jobs failed (#110), but it dies at the bind without starting either loop.
 
 ### Routes
 

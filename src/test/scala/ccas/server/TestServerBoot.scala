@@ -1,10 +1,11 @@
 package ccas.server
 
 import java.io.{ByteArrayOutputStream, PrintStream}
-import java.net.{InetAddress, ServerSocket}
+import java.net.{InetAddress, InetSocketAddress, ServerSocket, Socket}
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path, Paths}
 import java.sql.{Connection, SQLException}
+import java.time.Instant
 import java.util.concurrent.{CountDownLatch, TimeUnit}
 
 import org.postgresql.ds.PGSimpleDataSource
@@ -13,21 +14,21 @@ import zio.http.{Client, Server}
 import zio.stream.ZStream
 import zio.test.{assertTrue, Live, Spec, TestAspect, TestClock, ZIOSpecDefault, ZTestLogger}
 
-import ccas.analysis.tables.RunTrigger
+import ccas.analysis.tables.{ApiResponseCache, RunTrigger}
 import ccas.api.misc.subtypes.{ClubId, JobRunId}
 import ccas.cli.CcasApiClient
-import ccas.server.jobs.{JobEffect, JobKind, JobLogs, JobRun, JobRunner}
+import ccas.server.jobs.{JobEffect, JobKind, JobLogs, JobRun, JobRunner, JobRunStatus}
 import ccas.server.routes.JobRoutes.JobStatusResponse
-import ccas.server.scheduler.JobScheduler
+import ccas.server.scheduler.{JobSchedule, JobScheduler}
 import ccas.utils.{JobLogSink, ProgressDisplay}
 import ccas.utils.client.{BodyStore, FsBodyStore, TestChessComClientSupport}
-import ccas.utils.sql.{DatabaseAddress, PostgresClient}
+import ccas.utils.sql.{DatabaseAddress, FreshSchemaLayer, PostgresClient}
 
 /** What `CcasServer` does at boot: the pid file a detached server owns, what it says and asks about its database
-  * (#320), the order it shuts down in and what it logs as it does (#316), and the logger its services and HTTP server
-  * inherit (#334, #337). The boot line's client never connects: the line has to come out before the first connection,
-  * so a boot that fails to connect still names where it tried. The terminal conversation itself is not reachable from
-  * a test; [[BootGuard]]'s decisions are.
+  * (#320), what it refuses to do on a port it can't listen on (#446), the order it shuts down in and what it logs as
+  * it does (#316), and the logger its services and HTTP server inherit (#334, #337). The boot line's client never
+  * connects: the line has to come out before the first connection, so a boot that fails to connect still names where
+  * it tried. The terminal conversation itself is not reachable from a test; [[BootGuard]]'s decisions are.
   */
 object TestServerBoot extends ZIOSpecDefault {
 
@@ -259,14 +260,14 @@ object TestServerBoot extends ZIOSpecDefault {
       test("a boot whose port is taken leaves the HTTP server step open and never says it has started") {
         ZIO.scoped {
           for {
-            taken     <- ZIO.fromAutoCloseable(ZIO.attempt(new ServerSocket(0, 1, InetAddress.getLoopbackAddress)))
+            port      <- takenPort
             log       <- ZIO.succeed(new ByteArrayOutputStream())
             events    <- Ref.make(Vector.empty[String])
             scheduler <- Promise.make[Nothing, Unit]
             sweep     <- Promise.make[Nothing, Unit]
             jobs      <- Promise.make[Nothing, Unit]
             services = stubServices(events, scheduler, sweep, jobs, pidFileOption = None)
-            server   = CcasServer.httpServer(host = "127.0.0.1", port = taken.getLocalPort)
+            server   = CcasServer.httpServer(host = "127.0.0.1", port = port)
             exit  <- JobLogSink.currentSink.locally(capturing(log))(serving(None, services, server).exit)
             lines <- bootLines(log)
           } yield assertTrue(
@@ -414,6 +415,139 @@ object TestServerBoot extends ZIOSpecDefault {
         lines(1).matches("""\[INFO \d{2}:\d{2}:\d{2}\] Starting the server\.\.\.""")
       )
     },
+    suite("a port the boot can't listen on")(
+      test("a boot on a taken port leaves job_run rows, schedules and cache rows untouched") {
+        ZIO.scoped {
+          for {
+            port   <- takenPort
+            before <- seedBootTargets
+            env    <- ZIO.environment[PostgresClient & BodyStore]
+            exit   <- startingOn(new ByteArrayOutputStream(), port, None, realServices(env)).exit
+            after  <- bootTargets
+          } yield assertTrue(exit == Exit.fail(BootGuard.Refused), after == before)
+        }
+      }.provide(FreshSchemaLayer(schema = "test_boot_taken_port", onInit = ServerTables.ensureTables)),
+      test(
+        "the same boot on a free port changes all three, so the test above can't pass on rows a boot would never touch"
+      ) {
+        for {
+          before <- seedBootTargets
+          env    <- ZIO.environment[PostgresClient & BodyStore]
+          // Port 0 passes the check and binds whatever is free.
+          fiber <- startingOn(new ByteArrayOutputStream(), 0, None, realServices(env)).fork
+          after <- bootTargets.delay(50.millis).repeatUntil(_.allMovedFrom(before))
+          exit  <- fiber.interrupt
+        } yield assertTrue(
+          after.job.exists(_.status == JobRunStatus.Failed),
+          after.schedules.exists(_.lastRunAt.exists(_.isAfter(longAgo))),
+          after.cache.isEmpty,
+          exit.isInterruptedOnly
+        )
+      }.provide(FreshSchemaLayer(schema = "test_boot_free_port", onInit = ServerTables.ensureTables))
+        @@ TestAspect.withLiveClock @@ TestAspect.timeout(60.seconds),
+      test("a boot on a taken port builds no service and leaves an existing pid file alone") {
+        ZIO.scoped {
+          for {
+            port  <- takenPort
+            built <- Ref.make(false)
+            dir   <- ZIO.attemptBlocking(Files.createTempDirectory("ccas-pid"))
+            path = dir.resolve(s"ccas-$port.pid")
+            _ <- ZIO.attemptBlocking(Files.writeString(path, "4242\n"))
+            services = ZLayer.fromZIOEnvironment(built.set(true) *> ZIO.fail(new IllegalStateException("built")))
+            exit     <- startingOn(new ByteArrayOutputStream(), port, Some(path), services).exit
+            wasBuilt <- built.get
+            pid      <- ZIO.attemptBlocking(Files.readString(path))
+          } yield assertTrue(exit == Exit.fail(BootGuard.Refused), !wasBuilt, pid == "4242\n")
+        }
+      },
+      test("a refused boot names the address it can't listen on and says nothing was started") {
+        ZIO.scoped {
+          for {
+            port <- takenPort
+            log  <- ZIO.succeed(new ByteArrayOutputStream())
+            _    <- startingOn(log, port, None, noServices).exit
+            lines = JobLogSink.stripAnsi(log.toString(StandardCharsets.UTF_8)).linesIterator.toList
+          } yield assertTrue(
+            lines.size == 1,
+            lines.head.matches(
+              s"""\\[ERROR \\d{2}:\\d{2}:\\d{2}\\] \\[boot\\] Cannot listen on 127\\.0\\.0\\.1:$port: .+""" +
+                """Nothing was started and the database wasn't touched\..+SERVER_PORT.+"""
+            )
+          )
+        }
+      },
+      test(
+        "the check a detached start's parent runs reports a taken port on the host the server is configured to bind"
+      ) {
+        ZIO.scoped {
+          for {
+            port    <- takenPort
+            problem <- CcasServer.configuredListenProblem(port)
+          } yield assertTrue(problem.exists(_.contains(s"Cannot listen on 127.0.0.1:$port")))
+        }
+      },
+      // Closing first leaves the listener's side in TIME_WAIT, as `server down` then `server up` does. The check must
+      // bind past that as the real bind would, or a quick restart would be refused. Getting as far as building the
+      // services is what shows it wasn't.
+      test("a restart isn't refused over the connections the last server closed") {
+        for {
+          port <- ZIO.attemptBlocking {
+            val loopback = InetAddress.getLoopbackAddress
+            val listener = new ServerSocket(0, 1, loopback)
+            val client   = new Socket(loopback, listener.getLocalPort)
+            listener.accept().close()
+            client.close()
+            listener.close()
+            listener.getLocalPort
+          }
+          exit <- startingOn(new ByteArrayOutputStream(), port, None, noServices).exit
+        } yield assertTrue(exit == Exit.fail(noServicesFailure))
+      },
+      // A question can wait on the operator for any length of time, and only a remote database is asked about.
+      test("a port taken while the operator reads the database question is refused before anything is built") {
+        ZIO.scoped {
+          for {
+            held <- Promise.make[Nothing, Unit]
+            listener <- ZIO.acquireRelease(ZIO.attempt(new ServerSocket())) { socket =>
+              ZIO.succeed(socket.close())
+            }
+            port <- ZIO.attemptBlocking {
+              val free = new ServerSocket(0, 1, InetAddress.getLoopbackAddress)
+              val port = free.getLocalPort
+              free.close()
+              port
+            }
+            confirmed = ZIO.succeed {
+              listener.bind(new InetSocketAddress(InetAddress.getLoopbackAddress, port), 1)
+              true
+            } <* held.succeed(())
+            exit <- JobLogSink.currentSink.locally(capturing(new ByteArrayOutputStream())) {
+              underServerEnv(CcasServer.startOn("127.0.0.1", port, None, confirmed, noServices)).exit
+            }
+            asked <- held.isDone
+          } yield assertTrue(asked, exit == Exit.fail(BootGuard.Refused))
+        }
+      },
+      // Through `serveWith`, past the check, as a boot is when another takes the port while its layers build.
+      test("a boot that loses the port after the check never starts the scheduler or the retention sweep") {
+        ZIO.scoped {
+          for {
+            port      <- takenPort
+            events    <- Ref.make(Vector.empty[String])
+            scheduler <- Promise.make[Nothing, Unit]
+            sweep     <- Promise.make[Nothing, Unit]
+            jobs      <- Promise.make[Nothing, Unit]
+            services = stubServices(events, scheduler, sweep, jobs, pidFileOption = None)
+            server   = CcasServer.httpServer(host = "127.0.0.1", port = port)
+            exit <- JobLogSink.currentSink.locally(capturing(new ByteArrayOutputStream())) {
+              serving(pidFileOption = None, services, server).exit
+            }
+            schedulerStarted <- scheduler.isDone
+            sweepStarted     <- sweep.isDone
+          } yield assertTrue(exit.isFailure, !schedulerStarted, !sweepStarted)
+        }
+      }
+    ),
     suite("BootGuard")(
       test("a loopback database boots without asking") {
         assertTrue(BootGuard.question(resolved = Right(local), detachedChild = false).isEmpty)
@@ -440,7 +574,8 @@ object TestServerBoot extends ZIOSpecDefault {
         assertTrue(BootGuard.question(resolved = unresolved, detachedChild = false).isEmpty)
       }
     )
-  )
+    // Sequential because two tests free a port and then use its number, which a sibling binding port 0 could be handed.
+  ) @@ TestAspect.sequential
 
   /** A `CcasServer.serveWith` running in the background over stub services, with both loops started and the HTTP
     * server listening on `port`. `events` is what the stubs have recorded, in order, and `logged` every line the
@@ -496,15 +631,97 @@ object TestServerBoot extends ZIOSpecDefault {
       }
     } yield (fiber, log)
 
-  // Through the wrapper both entry points use, with a ccas.env path no file can exist at, so it applies nothing.
   private def serving(
     pidFileOption: Option[Path],
     services: ZLayer[ProgressDisplay, Throwable, CcasServer.Served],
     server: ZLayer[Any, Throwable, Server]
   ): Task[Unit] =
-    CcasServer.withServerEnv(Right(Paths.get("/dev/null/ccas.env"))) {
-      ZIO.scoped[ProgressDisplay](CcasServer.serveWith(pidFileOption, services, server))
+    underServerEnv(CcasServer.serveWith(pidFileOption, services, server))
+
+  // Through the wrapper both entry points use, with a ccas.env path no file can exist at, so it applies nothing.
+  private def underServerEnv(boot: RIO[Scope & ProgressDisplay, Unit]): Task[Unit] =
+    CcasServer.withServerEnv(Right(Paths.get("/dev/null/ccas.env")))(ZIO.scoped[ProgressDisplay](boot))
+
+  // A loopback port held until the scope closes.
+  private val takenPort: ZIO[Scope, Throwable, Int] =
+    ZIO.fromAutoCloseable(ZIO.attempt(new ServerSocket(0, 1, InetAddress.getLoopbackAddress))).map(_.getLocalPort)
+
+  // The whole of a boot but the terminal, which a loopback test database never asks on.
+  private def startingOn(
+    log: ByteArrayOutputStream,
+    port: Int,
+    pidFileOption: Option[Path],
+    services: ZLayer[ProgressDisplay, Throwable, CcasServer.Served]
+  ): Task[Unit] =
+    JobLogSink.currentSink.locally(capturing(log)) {
+      val confirmed = BootGuard.confirmed(detachedChild = pidFileOption.isDefined)
+      underServerEnv(CcasServer.startOn("127.0.0.1", port, pidFileOption, confirmed, services))
     }
+
+  private val noServicesFailure = new IllegalStateException("this test builds no services")
+
+  private val noServices: ZLayer[ProgressDisplay, Throwable, CcasServer.Served] = ZLayer.fail(noServicesFailure)
+
+  // The real layers that write at boot, over the test's schema, with a client that answers every request with a 404.
+  private def realServices(
+    env: ZEnvironment[PostgresClient & BodyStore]
+  ): ZLayer[ProgressDisplay, Throwable, CcasServer.Served] =
+    ZLayer.makeSome[ProgressDisplay, CcasServer.Served](
+      ZLayer.succeedEnvironment(env),
+      TestChessComClientSupport.dummyLayer,
+      JobRunner.live,
+      JobScheduler.live
+    )
+
+  private val orphanJobId = JobRunId("job-left-running")
+  private val staleUrl    = "https://api.chess.com/pub/club/stale-test"
+
+  // Far outside any retention window and any schedule's interval, and to the whole second, so a row read back equals
+  // itself.
+  private val longAgo = Instant.parse("2024-01-01T00:00:00Z")
+
+  /** What each of a boot's writes reaches. */
+  private final case class BootTargets(
+    job: Option[JobRun],
+    schedules: List[JobSchedule],
+    cache: Option[ApiResponseCache]
+  ) {
+    def allMovedFrom(before: BootTargets): Boolean =
+      job != before.job && schedules != before.schedules && cache != before.cache
+  }
+
+  private val bootTargets: RIO[PostgresClient, BootTargets] =
+    for {
+      job       <- JobRun.selectId(orphanJobId)
+      schedules <- JobSchedule.selectAll
+      cache     <- ApiResponseCache.lookupMeta(staleUrl)
+    } yield BootTargets(job, schedules, cache)
+
+  // The schedule is its own: the test config seeds every default one disabled, and so never due.
+  private val seedBootTargets: RIO[PostgresClient & BodyStore, BootTargets] = {
+    val job =
+      JobRun(orphanJobId, JobKind.Stats, None, RunTrigger.Cli, JobRunStatus.Running, None, longAgo, None, None)
+    val dueSchedule = JobSchedule.interval(
+      id = 0L,
+      kind = JobKind.MatchRef,
+      clubIdOption = None,
+      params = None,
+      intervalHours = 1,
+      enabled = true,
+      lastRunAt = Some(longAgo)
+    )
+    JobRun.insert(job) *>
+      JobSchedule.insert(dueSchedule) *>
+      ApiResponseCache.upsertWithBody(
+        url = staleUrl,
+        body = """{"name":"stale"}""",
+        etag = None,
+        lastModified = None,
+        maxAgeSeconds = None,
+        contentType = None,
+        fetchedAt = longAgo
+      ) *> bootTargets
+  }
 
   /** A database that never hands over a connection: `getConnection` blocks until the thread is interrupted. */
   private final class StuckDataSource(entered: CountDownLatch) extends PGSimpleDataSource {

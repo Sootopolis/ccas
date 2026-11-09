@@ -8,7 +8,7 @@ import java.time.{Duration => JDuration}
 import scala.jdk.CollectionConverters.*
 import scala.jdk.OptionConverters.*
 
-import zio.{durationInt, Console, Duration, ExitCode, UIO, ZIO}
+import zio.{durationInt, Console, Duration, ExitCode, Task, UIO, ZIO}
 
 import ccas.cli.serve.HealthProbe.Readiness
 import ccas.server.{BootGuard, CcasServer}
@@ -81,41 +81,59 @@ object Detach {
 
   def run(logDir: Path, stateDir: Path, port: Int, readyDeadline: Duration): UIO[ExitCode] = {
     val pidPath = PidFile.path(stateDir, port)
-    val program =
-      startRefusal(pidPath, port, HealthProbe.isUp(port)).flatMap {
-        case Some(refusal) => Console.printLineError(refusal).orDie.as(ExitCode(1))
-        // Asked here, in the parent: the child may still hold the terminal (macOS has no `setsid`), so it skips.
-        case None =>
-          ZIO.ifZIO(BootGuard.confirmed(detachedChild = false))(
-            onTrue = start(logDir, port, pidPath, readyDeadline),
-            onFalse = ZIO.succeed(ExitCode(1))
-          )
-      }
+    val program = startUnlessRefused(
+      refusal = startRefusal(pidPath, port, HealthProbe.isUp(port), CcasServer.configuredListenProblem(port)),
+      // Asked here, in the parent: the child may still hold the terminal (macOS has no `setsid`), so it skips.
+      confirmed = BootGuard.confirmed(detachedChild = false),
+      start = start(logDir, port, pidPath, readyDeadline)
+    )
 
     program.catchAllCause { c =>
       Console.printLineError(s"error: ${c.squash.safeMessage}").orDie.as(ExitCode(1))
     }
   }
 
+  /** `start`, unless `refusal` has a reason not to, asked before the question and again after it: the question can wait
+    * on the operator for any length of time, and a server that came up meanwhile would have its log truncated by the
+    * spawn and its readiness taken for the new server's.
+    */
+  private[serve] def startUnlessRefused(
+    refusal: Task[Option[String]],
+    confirmed: UIO[Boolean],
+    start: Task[ExitCode]
+  ): Task[ExitCode] = {
+    def unlessRefused(next: Task[ExitCode]): Task[ExitCode] =
+      refusal.flatMap {
+        case Some(reason) => Console.printLineError(reason).orDie.as(ExitCode(1))
+        case None         => next
+      }
+    unlessRefused(ZIO.ifZIO(confirmed)(onTrue = unlessRefused(start), onFalse = ZIO.succeed(ExitCode(1))))
+  }
+
   /** Why a server can't start on `port`, if it can't. One that answers with no live pid file (a foreground server, or
     * one an older CLI started under another pid-file name) is refused too: the readiness wait would take its answer for
-    * the new server's, and report a start that never happened.
+    * the new server's, and report a start that never happened. So is one nothing answers on that the server couldn't
+    * listen on, before anyone is asked about a boot that could never come up.
     *
     * @param portAnswering whether a server answers on `port`; injected so tests need no network
+    * @param listenProblem why the server couldn't listen on `port`, if it couldn't; injected for the same reason
     */
   private[serve] def startRefusal(
     pidPath: Path,
     port: Int,
-    portAnswering: UIO[Boolean]
+    portAnswering: UIO[Boolean],
+    listenProblem: Task[Option[String]]
   ): ZIO[Any, Throwable, Option[String]] =
     ZIO.attemptBlocking(PidFile.alreadyRunning(PidFile.read(pidPath), PidFile.isAlive)).flatMap {
       case Some(pid) => ZIO.some(s"already running on 127.0.0.1:$port, pid=$pid")
       case None =>
-        portAnswering.map { answering =>
-          Option.when(answering)(
-            s"a server is already answering on 127.0.0.1:$port, but not one this CLI started (no pid file for that " +
-              "port); stop it first, or start this one on another port with SERVER_PORT"
-          )
+        portAnswering.flatMap {
+          case true =>
+            ZIO.some(
+              s"a server is already answering on 127.0.0.1:$port, but not one this CLI started (no pid file for that " +
+                "port); stop it first, or start this one on another port with SERVER_PORT"
+            )
+          case false => listenProblem
         }
     }
 
