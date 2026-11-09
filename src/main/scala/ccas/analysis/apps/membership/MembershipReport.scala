@@ -92,7 +92,7 @@ private[membership] object MembershipReport {
       _ <- ZIO.foreachDiscard(rosterSummary(result.rosterMovement))(ZIO.logInfo(_))
       _ <- ZIO.logInfo(s"New players:          ${result.newPlayers.size}")
       _ <- ZIO.logInfo(s"Updated players:      ${result.updatedPlayers.size}")
-      _ <- ZIO.logInfo(s"Unsettled joins:      ${result.unsettledJoins.size}")
+      _ <- ZIO.logInfo(s"Join date conflicts:  ${result.unsettledJoins.size}")
       _ <- ZIO.logInfo(s"Not recorded:         ${result.refused.size}")
       _ <- ZIO.logInfo("")
       _ <- printSections(reconciliationLines(result, invitations))
@@ -112,8 +112,8 @@ private[membership] object MembershipReport {
   /** The sections of a reconciliation's report that are not changes to a member, those with anything to say. */
   private def listSections(result: ReconciliationResult): List[List[String]] =
     List(
-      unsettledJoinLines(result.unsettledJoins),
-      refusedLines(result.refused),
+      joinConflictLines(result.unsettledJoins),
+      adviseOnce(RefusedLabel, RefusedAdvice, refusals(result).toList),
       unsettledLines(result.settlement)
     ).filter(_.nonEmpty)
 
@@ -160,24 +160,29 @@ private[membership] object MembershipReport {
   private def reconciliationLines(result: ReconciliationResult, invitations: Map[PlayerId, Instant]): List[ReportLine] =
     memberLines(result.changes.toList, invitations) ++ settlementLines(result.settlement)
 
-  /** The lines `summary`'s changes make, one per event: a closure a row names covers the status change behind it, and
-    * an account turning active covers the row it reopens.
+  /** The lines `summary`'s changes make, one per event. */
+  private def summaryLines(summary: MemberChangeSummary, lastInvited: Option[Instant]): Chunk[ReportLine] =
+    namedEvents(summary.changes).map(eventLine(summary.username, _, lastInvited))
+
+  private def eventLine(username: Username, change: MemberChange, lastInvited: Option[Instant]): ReportLine = {
+    val (section, detail) = changeLine(change, lastInvited)
+    ReportLine(section = section, username = username, timestamp = change.timestamp, detail = detail)
+  }
+
+  /** Those of one player's `changes` a report names, one per event: a closure a row names covers the status change
+    * behind it, and an account turning active covers the row it reopens.
     */
-  private def summaryLines(summary: MemberChangeSummary, lastInvited: Option[Instant]): Chunk[ReportLine] = {
-    val closureNamed = summary.changes.exists(_.isInstanceOf[AccountClosed])
-    val reactivated = summary.changes.exists {
+  private def namedEvents(changes: Chunk[MemberChange]): Chunk[MemberChange] = {
+    val closureNamed = changes.exists(_.isInstanceOf[AccountClosed])
+    val reactivated = changes.exists {
       case StatusChange(_, _, newStatus) => newStatus == PlayerStatusCategory.Active
       case _                             => false
     }
-    val events = summary.changes.filterNot {
+    changes.filterNot {
       case _: Reopened => reactivated
       case StatusChange(_, oldStatus, newStatus) =>
         closureNamed && oldStatus == PlayerStatusCategory.Active && newStatus != PlayerStatusCategory.Active
       case _ => false
-    }
-    events.map { change =>
-      val (section, detail) = changeLine(change, lastInvited)
-      ReportLine(section = section, username = summary.username, timestamp = change.timestamp, detail = detail)
     }
   }
 
@@ -231,65 +236,75 @@ private[membership] object MembershipReport {
   }
 
   /** What kept club lists showed (ADR 0022): a closure the rows had as an end, or a membership they lacked. */
-  private def settlementLines(settlement: ClosedAccountClubs.Settlement): List[ReportLine] = {
-    def closureLine(username: Username, row: ClubMember, status: PlayerStatusCategory) = {
-      val lastSeen = row.hiddenAt.getOrElse(row.since)
-      ReportLine(Section.Closures, username, lastSeen, closure(status, lastSeen))
-    }
-    val hidden = settlement.hidden.map(hidden => closureLine(hidden.username, hidden.row, hidden.status))
-    val opened = settlement.opened.flatMap { opened =>
-      Chunk(
-        ReportLine(Section.Joins, opened.username, opened.row.since, s"at ${opened.row.since}"),
-        closureLine(opened.username, opened.row, opened.status)
-      )
-    }
-    (hidden ++ opened).toList
-  }
+  private def settlementLines(settlement: ClosedAccountClubs.Settlement): List[ReportLine] =
+    (settlement.hidden.flatMap(hidden => hidden.changes.map(eventLine(hidden.username, _, lastInvited = None))) ++
+      settlement.opened.flatMap(opened => opened.changes.map(eventLine(opened.username, _, lastInvited = None)))).toList
 
-  private val UnsettledJoinLabel = "[ROSTER JOIN UNSETTLED]"
-  private val RefusedLabel       = "[MEMBERSHIP NOT RECORDED]"
+  private val JoinConflictLabel = "[JOIN DATE CONFLICT]"
+  private val JoinConflictAdvice =
+    "our record is kept; this repeats each run until the roster changes or the record is corrected by hand"
+  private val RefusedLabel = "[MEMBERSHIP NOT RECORDED]"
+  private val RefusedAdvice =
+    "our record is kept and the rest of the club saved; this repeats each run until the roster changes or the record " +
+      "is corrected by hand, and is worth an issue if it persists"
 
-  private def unsettledJoinLines(joins: Chunk[UnsettledJoin]): List[String] =
-    Option.when(joins.nonEmpty)(UnsettledJoinLabel).toList ++
-      joins.sortBy(_.joinedAt).map(join => s"  ${join.username} — ${unsettledJoin(join)}")
+  /** A section that gives its advice once, on its label line. */
+  private def adviseOnce(label: String, advice: String, lines: List[String]): List[String] =
+    Option.when(lines.nonEmpty)(s"$label — $advice").toList ++ lines.map("  " + _)
 
-  /** When an ended row was last seen is why a join inside it was refused, and only that row keeps them off the roster. */
-  private def unsettledJoin(join: UnsettledJoin): String = {
-    val latest = join.latest
-    val (standing, outcome) = latest.standing match {
-      case MembershipStanding.Open       => ("", "left as recorded")
-      case MembershipStanding.Hidden(at) => (s", hidden after $at", "left as recorded")
+  private def joinConflictLines(joins: Chunk[UnsettledJoin]): List[String] =
+    adviseOnce(JoinConflictLabel, JoinConflictAdvice, joins.sortBy(_.joinedAt).toList.map(joinConflict))
+
+  /** When an ended membership was last seen is why a join inside it conflicts, and only it keeps them off the roster. */
+  private def joinConflict(join: UnsettledJoin): String = {
+    val held = join.latest
+    val standing = held.standing match {
+      case MembershipStanding.Open       => ""
+      case MembershipStanding.Hidden(at) => s", account closed after $at"
       case MembershipStanding.Ended(lastSeen, until) =>
-        (s" to $until, last seen $lastSeen", "left as recorded, not counted as a member")
+        s", ended by $until and last seen $lastSeen, so they are not counted as a member"
     }
-    s"listed as joined at ${join.joinedAt}, latest recorded membership from ${latest.since}$standing — $outcome"
+    s"${join.username} — Chess.com lists them as joined at ${join.joinedAt}; we hold their membership from " +
+      s"${held.since}$standing"
   }
 
-  private def refusedLines(refused: Chunk[RefusedMembershipVerdict]): List[String] =
-    Option.when(refused.nonEmpty)(RefusedLabel).toList ++
-      refused.map(verdict => s"  ${verdict.username} — ${refusal(verdict)}")
+  /** Each refused player's line, naming only the events their reported ones do not already cover. Another job's
+    * reconcile can leave a player a summary of its own beside this run's, so a player's summaries are read together.
+    */
+  private def refusals(result: ReconciliationResult): Chunk[String] = {
+    val reported = result.changes.groupMapReduce(_.playerId)(_.changes)(_ ++ _)
+    result.refused.map(verdict => refusal(verdict, reported.getOrElse(verdict.playerId, Chunk.empty)))
+  }
 
-  private def refusal(verdict: RefusedMembershipVerdict): String = {
-    val why = verdict.conflict match {
+  /** What the run saw, as the sections the refusal took it out of, and what recording it would break. */
+  private def refusal(verdict: RefusedMembershipVerdict, reported: Chunk[MemberChange]): String = {
+    val named = namedEvents(reported ++ verdict.unreported)
+    val seen = verdict.unreported.filter(named.contains).map { change =>
+      val (section, detail) = changeLine(change, lastInvited = None)
+      s"${section.label} $detail"
+    }
+    val sawPart = Option.when(seen.nonEmpty)(s"this run saw ${seen.mkString("; ")}; ").getOrElse("")
+    val breaks = verdict.conflict match {
       case MemberRowConflict.Overlap(earlier, later) =>
-        s"memberships from ${earlier.since} and from ${later.since} would overlap"
-      case MemberRowConflict.SameStart(row) => s"two memberships would both start at ${row.since}"
+        s"overlap their memberships from ${earlier.since} and from ${later.since}"
+      case MemberRowConflict.SameStart(row) => s"give them two memberships from ${row.since}"
       case MemberRowConflict.OutOfOrder(row) =>
         val lastSeen = row.lastSeen.fold("never")(_.toString)
         val until    = row.until.fold("not ended")(_.toString)
-        s"the membership from ${row.since} would have its dates out of order: last seen $lastSeen, ended $until"
+        s"leave their membership from ${row.since} with its dates out of order: last seen $lastSeen, ended $until"
     }
-    s"$why — left as recorded until the roster changes or someone corrects the rows by hand; worth an issue if it persists"
+    s"${verdict.username} — ${sawPart}recording it would $breaks"
   }
 
-  /** Warns of each join the player's rows cannot place (ADR 0026) and each verdict refused (ADR 0027). Only a Membership
-    * reconcile prints its report, so without this another job's reconcile, or one a report runs first, would not say.
+  /** Warns of each join date that conflicts with our record (ADR 0026) and each verdict refused (ADR 0027). Only a
+    * Membership reconcile prints its report, so without this another job's reconcile, or one a report runs first,
+    * would not say.
     */
   def warnOfWhatWasNotRecorded(result: ReconciliationResult): UIO[Unit] =
     ZIO.foreachDiscard(result.unsettledJoins) { join =>
-      ZIO.logWarning(s"$UnsettledJoinLabel ${join.username} — ${unsettledJoin(join)}")
-    } *> ZIO.foreachDiscard(result.refused) { verdict =>
-      ZIO.logWarning(s"$RefusedLabel ${verdict.username} — ${refusal(verdict)}")
+      ZIO.logWarning(s"$JoinConflictLabel ${joinConflict(join)} — $JoinConflictAdvice")
+    } *> ZIO.foreachDiscard(refusals(result)) { refusal =>
+      ZIO.logWarning(s"$RefusedLabel $refusal — $RefusedAdvice")
     }
 
   /** No one is seen in and out at once, so recorded ends that meet hold no sighting of the player gone, only of them
@@ -315,7 +330,7 @@ private[membership] object MembershipReport {
                     |${rosterSummary(result.rosterMovement).mkString("\n")}
                     |New players:          ${result.newPlayers.size}
                     |Updated players:      ${result.updatedPlayers.size}
-                    |Unsettled joins:      ${result.unsettledJoins.size}
+                    |Join date conflicts:  ${result.unsettledJoins.size}
                     |Not recorded:         ${result.refused.size}
                     |""".stripMargin
     header + "\n" + formatSections(reconciliationLines(result, invitations)) +

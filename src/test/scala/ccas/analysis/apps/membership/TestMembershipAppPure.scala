@@ -422,7 +422,8 @@ object TestMembershipAppPure extends ZIOSpecDefault {
     val refused = RefusedMembershipVerdict(
       playerId = pid5,
       username = Username("rita"),
-      conflict = MemberRowConflict.SameStart(bReopened)
+      conflict = MemberRowConflict.SameStart(bReopened),
+      unreported = Chunk.empty
     )
     val phaseB = PhaseBResult(
       resolvedIds = Set(pid0),
@@ -534,6 +535,8 @@ object TestMembershipAppPure extends ZIOSpecDefault {
     testAccountStatusClosureUsesObservationTime,
     testAnUnsettledJoinHasItsSection,
     testARefusedPlayerHasASection,
+    testARefusedReopeningIsNamedOnce,
+    testARefusedReopeningIsNamedOnceBesideAnotherJobsChange,
     testAMemberBackOnTheRosterIsNamed,
     testAHiddenRowReopeningIsAnAccountReopening,
     testAnAccountReopeningIsNamedOnce,
@@ -626,8 +629,8 @@ object TestMembershipAppPure extends ZIOSpecDefault {
 
   private def testAnUnsettledJoinHasItsSection =
     test(
-      "a join the rows cannot place is counted in the header and listed under [ROSTER JOIN UNSETTLED] with both " +
-        "dates, and whether the latest membership has ended, keeping them off the roster, or is hidden"
+      "a join date Chess.com lists that our record contradicts is counted in the header and listed under " +
+        "[JOIN DATE CONFLICT] with that date, the membership we hold, and whether they are counted"
     ) {
       val open   = ClubMember.joined(clubId = clubId, playerId = pid0, since = Times.t2)
       val ended  = open.copy(playerId = pid1, since = Times.t2, lastSeen = Some(Times.t2), until = Some(Times.t3))
@@ -640,40 +643,99 @@ object TestMembershipAppPure extends ZIOSpecDefault {
       val result = reconciliation(Chunk.empty, Chunk.empty, noSettlement).copy(unsettledJoins = joins)
       val output = MembershipReport.formatReconciliation(result, Map.empty)
       assertTrue(
-        output.contains("Unsettled joins:      3\n"),
+        output.contains("Join date conflicts:  3\n"),
         output.contains(
-          s"""[ROSTER JOIN UNSETTLED]
-             |  alice — listed as joined at ${Times.t0}, latest recorded membership from ${Times.t2} — left as recorded
-             |  bob — listed as joined at ${Times.t1}, latest recorded membership from ${Times.t2} to ${Times.t3}, last seen ${Times.t2} — left as recorded, not counted as a member
-             |  carol — listed as joined at ${Times.t2}, latest recorded membership from ${Times.t3}, hidden after ${Times.t3} — left as recorded
+          s"""[JOIN DATE CONFLICT] — our record is kept; this repeats each run until the roster changes or the record is corrected by hand
+             |  alice — Chess.com lists them as joined at ${Times.t0}; we hold their membership from ${Times.t2}
+             |  bob — Chess.com lists them as joined at ${Times.t1}; we hold their membership from ${Times.t2}, ended by ${Times.t3} and last seen ${Times.t2}, so they are not counted as a member
+             |  carol — Chess.com lists them as joined at ${Times.t2}; we hold their membership from ${Times.t3}, account closed after ${Times.t3}
              |""".stripMargin
         )
       )
     }
 
   private def testARefusedPlayerHasASection =
-    test("a refused player is counted in the header and listed under [MEMBERSHIP NOT RECORDED] with why") {
+    test(
+      "a refused player is counted in the header and listed under [MEMBERSHIP NOT RECORDED] with what the run saw " +
+        "and what recording it would break"
+    ) {
       val first   = ClubMember.joined(clubId = clubId, playerId = pid0, since = Times.t0)
       val second  = ClubMember.joined(clubId = clubId, playerId = pid0, since = Times.t2)
       val outside = ClubMember(clubId, pid2, Times.t1, Some(Times.t0), Some(Times.t0))
       val refused = Chunk(
-        RefusedMembershipVerdict(pid0, Username("alice"), MemberRowConflict.Overlap(first, second)),
-        RefusedMembershipVerdict(pid1, Username("bob"), MemberRowConflict.SameStart(second)),
-        RefusedMembershipVerdict(pid2, Username("carol"), MemberRowConflict.OutOfOrder(outside))
+        RefusedMembershipVerdict(
+          playerId = pid0,
+          username = Username("alice"),
+          conflict = MemberRowConflict.Overlap(first, second),
+          unreported = Chunk(JoinedClub(Times.t2), AccountClosed(Times.t2, Closed))
+        ),
+        RefusedMembershipVerdict(
+          playerId = pid1,
+          username = Username("bob"),
+          conflict = MemberRowConflict.SameStart(second),
+          unreported = Chunk(LeftClub(Times.t2))
+        ),
+        RefusedMembershipVerdict(
+          playerId = pid2,
+          username = Username("carol"),
+          conflict = MemberRowConflict.OutOfOrder(outside),
+          unreported = Chunk.empty
+        )
       )
       val result = reconciliation(Chunk.empty, Chunk.empty, noSettlement).copy(refused = refused)
       val output = MembershipReport.formatReconciliation(result, Map.empty)
-      val next =
-        "left as recorded until the roster changes or someone corrects the rows by hand; worth an issue if it persists"
       assertTrue(
         output.contains("Not recorded:         3\n"),
         output.contains(
-          s"""[MEMBERSHIP NOT RECORDED]
-             |  alice — memberships from ${Times.t0} and from ${Times.t2} would overlap — $next
-             |  bob — two memberships would both start at ${Times.t2} — $next
-             |  carol — the membership from ${Times.t1} would have its dates out of order: last seen ${Times.t0}, ended ${Times.t0} — $next
+          s"""[MEMBERSHIP NOT RECORDED] — our record is kept and the rest of the club saved; this repeats each run until the roster changes or the record is corrected by hand, and is worth an issue if it persists
+             |  alice — this run saw [JOINED] at ${Times.t2}; [ACCOUNT CLOSED] status: closed, after ${Times.t2}; recording it would overlap their memberships from ${Times.t0} and from ${Times.t2}
+             |  bob — this run saw [LEFT CLUB] by ${Times.t2}; recording it would give them two memberships from ${Times.t2}
+             |  carol — recording it would leave their membership from ${Times.t1} with its dates out of order: last seen ${Times.t0}, ended ${Times.t0}
              |""".stripMargin
         )
+      )
+    }
+
+  private def testARefusedReopeningIsNamedOnce =
+    test("a refused player whose account turned active is named under [ACCOUNT REOPENED] once, not again as refused") {
+      val row = ClubMember.joined(clubId = clubId, playerId = pid0, since = Times.t0).hidden(Times.t1)
+      val reported =
+        MemberChangeSummary(pid0, Username("alice"), Chunk(StatusChange(Times.t2, Closed, Active)))
+      val refused = RefusedMembershipVerdict(
+        playerId = pid0,
+        username = Username("alice"),
+        conflict = MemberRowConflict.SameStart(row),
+        unreported = Chunk(Reopened(Times.t0, MembershipStanding.Hidden(Times.t1)))
+      )
+      val result = reconciliation(Chunk(reported), Chunk.empty, noSettlement).copy(refused = Chunk(refused))
+      val output = MembershipReport.formatReconciliation(result, Map.empty)
+      assertTrue(
+        output.contains(s"[ACCOUNT REOPENED]\n  alice — at ${Times.t2}\n"),
+        output.contains(s"\n  alice — recording it would give them two memberships from ${Times.t0}\n"),
+        !output.contains("member since")
+      )
+    }
+
+  private def testARefusedReopeningIsNamedOnceBesideAnotherJobsChange =
+    test(
+      "a refused player whose account turned active is not named again as refused when another job's change for " +
+        "them is listed separately"
+    ) {
+      val row         = ClubMember.joined(clubId = clubId, playerId = pid0, since = Times.t0).hidden(Times.t1)
+      val reactivated = MemberChangeSummary(pid0, Username("alice"), Chunk(StatusChange(Times.t2, Closed, Active)))
+      val external    = MemberChangeSummary(pid0, Username("alice"), Chunk(UsernameChange(Times.t1, Username("al"))))
+      val refused = RefusedMembershipVerdict(
+        playerId = pid0,
+        username = Username("alice"),
+        conflict = MemberRowConflict.SameStart(row),
+        unreported = Chunk(Reopened(Times.t0, MembershipStanding.Hidden(Times.t1)))
+      )
+      val result =
+        reconciliation(Chunk(reactivated, external), Chunk.empty, noSettlement).copy(refused = Chunk(refused))
+      val output = MembershipReport.formatReconciliation(result, Map.empty)
+      assertTrue(
+        output.contains(s"\n  alice — recording it would give them two memberships from ${Times.t0}\n"),
+        !output.contains("member since")
       )
     }
 

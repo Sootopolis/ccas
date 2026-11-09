@@ -108,8 +108,15 @@ object MembershipChange {
   /** A join a player's rows cannot place, which changes none of them (ADR 0026). */
   final case class UnsettledJoin(playerId: PlayerId, username: Username, joinedAt: Instant, latest: ClubMember)
 
-  /** A player whose rows, as this reconcile would leave them, the database would refuse (ADR 0027). */
-  final case class RefusedMembershipVerdict(playerId: PlayerId, username: Username, conflict: MemberRowConflict)
+  /** A player whose rows, as this reconcile would leave them, the database would refuse (ADR 0027), and the events
+    * the refusal took out of the report, so that it can still say what the run saw.
+    */
+  final case class RefusedMembershipVerdict(
+    playerId: PlayerId,
+    username: Username,
+    conflict: MemberRowConflict,
+    unreported: Chunk[MemberChange]
+  )
 
   /** What we held about a club's membership before a reconcile, which the fetched roster is compared against: the
     * members its roster should list, keyed by id and by the name each holds now, every other row by player, every

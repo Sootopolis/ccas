@@ -1,6 +1,6 @@
 # A verdict a player's rows cannot hold is refused before the save, and reported
 
-**Status:** Accepted, 2026-11-01 (#403). Builds on [0026](0026-a-join-the-rows-cannot-place-changes-no-row.md), which fixed the joins known to break a save; this limits the damage from the next one nobody knows about. Amended by #438: a reopened row is named as an account reopening or a return to the roster.
+**Status:** Accepted, 2026-11-01 (#403). Builds on [0026](0026-a-join-the-rows-cannot-place-changes-no-row.md), which fixed the joins known to break a save; this limits the damage from the next one nobody knows about. Amended by #438: a reopened row is named as an account reopening or a return to the roster. Amended by #445: a refusal names the events it takes out of the report.
 
 ## Context
 
@@ -10,7 +10,7 @@ A reconcile saves a whole club in one transaction, so one player's rows breaking
 
 **Each changed player's verdict is checked before the save.** Their stored rows, with the changes applied, are tested against `club_member_window`, `club_member_no_overlap` and `club_member_pkey`. The key is included because two empty rows with one start pass the other two and still collide. The check and the save read one list of changes, so they cannot disagree about what is written.
 
-**A verdict that fails is refused, not saved.** That player's rows stay as recorded and the rest of the club saves. Their renames, status changes and account closures still save, since none depends on their rows. The events that would report those rows changing are dropped: a join, a leave, a rejoin, a reopening or an unresolvable name. They stay resolved, so nothing later reads them as gone.
+**A verdict that fails is refused, not saved.** That player's rows stay as recorded and the rest of the club saves. Their renames, status changes and account closures still save, since none depends on their rows. The events that would report those rows changing leave their sections, and the refusal's line names them instead: a join, a leave, a rejoin, a reopening or an unresolvable name, and what a closed account's club list showed. A reopening the account turning active already names is not named twice. They stay resolved, so nothing later reads them as gone.
 
 **A roster entry is read once per player.** A refused player's other writes still save, and two writes of one player with different names would leave them without a current one, since the row keeps the first and the name history the last. So of several entries reaching one player, the one under the name their profile gives is read, or else the one under the name we hold, which keeps the choice from flipping once a rename is saved.
 
