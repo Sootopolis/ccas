@@ -14,14 +14,7 @@ import ccas.analysis.apps.ref.RefApp
 import ccas.analysis.apps.stats.StatsApp
 import ccas.analysis.tables.RunTrigger
 import ccas.server.jobs.{ClubJobEffect, JobCaps, JobEffect, JobKind, JobRunner}
-import ccas.server.scheduler.ScheduleParams.{
-  ClubDataOptions,
-  HistoryOptions,
-  MatchRefOptions,
-  MembershipOptions,
-  RecruitmentOptions,
-  StatsOptions
-}
+import ccas.server.scheduler.ScheduleParams.{ClubDataOptions, HistoryOptions, MatchRefOptions, MembershipOptions, RecruitmentOptions, StatsOptions}
 import ccas.utils.ProgressDisplay
 import ccas.utils.errors.{safeMessage, ConflictException}
 import ccas.utils.sql.PostgresClient

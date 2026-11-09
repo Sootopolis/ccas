@@ -8,26 +8,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.regex.Pattern
 
 import io.netty.handler.timeout.ReadTimeoutException
-import zio.{
-  Cause,
-  Chunk,
-  FiberId,
-  FiberRef,
-  FiberRefs,
-  LogLevel,
-  LogSpan,
-  Ref,
-  Runtime,
-  Scope,
-  Trace,
-  UIO,
-  ULayer,
-  Unsafe,
-  URIO,
-  ZIO,
-  ZLayer,
-  ZLogger
-}
+import zio.{Cause, Chunk, FiberId, FiberRef, FiberRefs, LogLevel, LogSpan, Ref, Runtime, Scope, Trace, UIO, ULayer, Unsafe, URIO, ZIO, ZLayer, ZLogger}
 import zio.stream.SubscriptionRef
 
 /** Manages progress bars rendered one-per-line on stdout; a redraw moves the cursor up over the block and repaints.

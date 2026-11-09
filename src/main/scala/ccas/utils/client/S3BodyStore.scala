@@ -2,12 +2,7 @@ package ccas.utils.client
 
 import software.amazon.awssdk.core.sync.RequestBody
 import software.amazon.awssdk.services.s3.S3Client
-import software.amazon.awssdk.services.s3.model.{
-  DeleteObjectRequest,
-  GetObjectRequest,
-  NoSuchKeyException,
-  PutObjectRequest
-}
+import software.amazon.awssdk.services.s3.model.{DeleteObjectRequest, GetObjectRequest, NoSuchKeyException, PutObjectRequest}
 import zio.{Task, ZIO}
 
 /** S3-API [[BodyStore]] pointed at Cloudflare R2 via an endpoint override (also covers B2 / MinIO / S3). The object

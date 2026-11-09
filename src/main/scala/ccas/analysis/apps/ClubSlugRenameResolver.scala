@@ -7,13 +7,7 @@ import ccas.api.club.ApiClub
 import ccas.api.misc.enums.PlayerStatusCategory
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, Username}
 import ccas.api.player.ApiPlayerClubs
-import ccas.utils.client.{
-  onNotFound,
-  swallowRecoveryErrors,
-  ChessComClient,
-  NetworkUnavailableException,
-  ReportedNotFound
-}
+import ccas.utils.client.{onNotFound, swallowRecoveryErrors, ChessComClient, NetworkUnavailableException, ReportedNotFound}
 import ccas.utils.errors.safeMessage
 import ccas.utils.sql.PostgresClient
 

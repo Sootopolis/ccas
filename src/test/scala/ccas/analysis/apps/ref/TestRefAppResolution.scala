@@ -6,16 +6,7 @@ import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 import TestRefAppSupport.*
 
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.apiDailyMatchJson
-import ccas.analysis.tables.{
-  Club,
-  ClubMatchRef,
-  ClubRefSkip,
-  Player,
-  PlayerMatchRef,
-  PlayerRefSkip,
-  PlayerTournamentRef,
-  Tables
-}
+import ccas.analysis.tables.{Club, ClubMatchRef, ClubRefSkip, Player, PlayerMatchRef, PlayerRefSkip, PlayerTournamentRef, Tables}
 import ccas.api.misc.enums.PlayerStatusCategory.Active
 import ccas.api.misc.subtypes.{ClubMatchId, TournamentSlug, Username}
 import ccas.utils.sql.FreshSchemaLayer

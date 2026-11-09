@@ -1,14 +1,6 @@
 package ccas.utils.errors
 
-import java.nio.file.{
-  AccessDeniedException,
-  DirectoryNotEmptyException,
-  FileAlreadyExistsException,
-  FileSystemException,
-  NoSuchFileException,
-  NotDirectoryException,
-  Path
-}
+import java.nio.file.{AccessDeniedException, DirectoryNotEmptyException, FileAlreadyExistsException, FileSystemException, NoSuchFileException, NotDirectoryException, Path}
 
 extension (error: Throwable) {
 

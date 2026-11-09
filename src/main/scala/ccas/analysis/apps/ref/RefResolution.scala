@@ -9,17 +9,7 @@ import RefUtils.*
 
 import ccas.analysis.apps.{ClubSlugRenameResolver, UsernameRenameResolver}
 import ccas.analysis.apps.ref.RefHelpers.parseMatchUrl
-import ccas.analysis.tables.{
-  ClubMatch,
-  ClubMatchBoard,
-  ClubMatchRef,
-  ClubRefSkip,
-  MatchKey,
-  PlayerMatchRef,
-  PlayerRefSkip,
-  PlayerTournamentRef,
-  RefSkipReason
-}
+import ccas.analysis.tables.{ClubMatch, ClubMatchBoard, ClubMatchRef, ClubRefSkip, MatchKey, PlayerMatchRef, PlayerRefSkip, PlayerTournamentRef, RefSkipReason}
 import ccas.api.club.ApiClubMatches
 import ccas.api.clubmatch.TeamMatchTeams
 import ccas.api.misc.subtypes.{ClubMatchId, PlayerId, TournamentSlug, Username}

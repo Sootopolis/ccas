@@ -7,12 +7,7 @@ import zio.{Chunk, Ref, RIO, ZIO, ZLayer}
 import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
-import ccas.analysis.apps.recruitment.RecruitmentTestSupport.{
-  apiDailyMatchJson,
-  apiMatchBoardJson,
-  apiPlayerJson,
-  emptyPlayerMatchesJson
-}
+import ccas.analysis.apps.recruitment.RecruitmentTestSupport.{apiDailyMatchJson, apiMatchBoardJson, apiPlayerJson, emptyPlayerMatchesJson}
 import ccas.analysis.tables.*
 import ccas.api.misc.enums.{ClubMatchStatus, PlayerStatusCategory, TimeClass, Title}
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username}

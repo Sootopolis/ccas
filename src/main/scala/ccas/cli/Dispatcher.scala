@@ -15,17 +15,7 @@ import ccas.cli.config.{ConfigWriter, CurrentClubRef}
 import ccas.server.routes.{ClubRequest, ClubResult, ClubRoutes}
 import ccas.server.routes.BlacklistRoutes.{BlacklistEntryResponse, CreateBlacklistRequest}
 import ccas.server.routes.ClubRoutes.{ClubInfo, ClubsResponse}
-import ccas.server.routes.JobRoutes.{
-  CancelResult,
-  ClubJobResult,
-  ConfirmResult,
-  HistoryRequest,
-  InvitedUsernames,
-  JobStatusResponse,
-  MembershipRequest,
-  RecruitmentRequest,
-  StatsRequest
-}
+import ccas.server.routes.JobRoutes.{CancelResult, ClubJobResult, ConfirmResult, HistoryRequest, InvitedUsernames, JobStatusResponse, MembershipRequest, RecruitmentRequest, StatsRequest}
 import ccas.server.routes.ManagedClubRoutes.{ManagedClubResponse, MarkManagedRequest}
 import ccas.server.routes.ScheduleRoutes.{CreateScheduleRequest, CreateScheduleResponse, ScheduleResponse}
 import ccas.server.scheduler.{MisfirePolicy, TriggerType}

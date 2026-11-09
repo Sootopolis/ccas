@@ -10,15 +10,7 @@ import zio.http.netty.NettyConfig
 import ccas.analysis.tables.Tables
 import ccas.server.config.{ServerEnvOverlay, ServerEnvPaths}
 import ccas.server.jobs.JobRunner
-import ccas.server.routes.{
-  BlacklistRoutes,
-  ClubRoutes,
-  HealthRoutes,
-  JobRoutes,
-  ManagedClubRoutes,
-  RecruitmentCriteriaRoutes,
-  ScheduleRoutes
-}
+import ccas.server.routes.{BlacklistRoutes, ClubRoutes, HealthRoutes, JobRoutes, ManagedClubRoutes, RecruitmentCriteriaRoutes, ScheduleRoutes}
 import ccas.server.scheduler.JobScheduler
 import ccas.utils.ProgressDisplay
 import ccas.utils.client.{BodyStore, ChessComClient, HttpClientLayer}

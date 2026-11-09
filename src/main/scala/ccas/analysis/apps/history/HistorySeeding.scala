@@ -6,13 +6,7 @@ import zio.{Chunk, Ref, RIO, ZIO}
 
 import HistoryUtils.*
 
-import ccas.analysis.apps.{
-  withClubSlugRenameRecovery,
-  withPlayerRenameRecovery,
-  ClubSlugRenameResolver,
-  PlayerUpdater,
-  UsernameRenameResolver
-}
+import ccas.analysis.apps.{withClubSlugRenameRecovery, withPlayerRenameRecovery, ClubSlugRenameResolver, PlayerUpdater, UsernameRenameResolver}
 import ccas.analysis.tables.*
 import ccas.api.club.ApiClubMatches
 import ccas.api.misc.subtypes.*

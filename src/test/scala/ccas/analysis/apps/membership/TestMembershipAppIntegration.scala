@@ -15,26 +15,8 @@ import ccas.analysis.apps.ClubSlugRenameResolver.ClubMismatchException
 import ccas.analysis.apps.membership.MembershipChange.*
 import ccas.analysis.apps.membership.MembershipChange.MemberChange.*
 import ccas.analysis.apps.membership.MembershipReport.InferredMember
-import ccas.analysis.apps.recruitment.RecruitmentTestSupport.{
-  apiClubJson,
-  apiClubMembersJson,
-  apiDailyMatchJson,
-  apiMatchBoardJson,
-  apiPlayerJson
-}
-import ccas.analysis.tables.{
-  Club,
-  ClubMember,
-  ClubRosterCoverage,
-  MembershipRun,
-  MembershipStanding,
-  Player,
-  PlayerClubList,
-  PlayerMatchRef,
-  PlayerName,
-  RunTrigger,
-  Tables
-}
+import ccas.analysis.apps.recruitment.RecruitmentTestSupport.{apiClubJson, apiClubMembersJson, apiDailyMatchJson, apiMatchBoardJson, apiPlayerJson}
+import ccas.analysis.tables.{Club, ClubMember, ClubRosterCoverage, MembershipRun, MembershipStanding, Player, PlayerClubList, PlayerMatchRef, PlayerName, RunTrigger, Tables}
 import ccas.api.misc.enums.PlayerStatusCategory
 import ccas.api.misc.enums.PlayerStatusCategory.{Active, Closed}
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username}

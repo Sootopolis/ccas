@@ -1,17 +1,7 @@
 package ccas.utils.errors
 
 import java.io.IOException
-import java.nio.file.{
-  AccessDeniedException,
-  DirectoryNotEmptyException,
-  FileAlreadyExistsException,
-  Files,
-  FileSystemException,
-  NoSuchFileException,
-  NotDirectoryException,
-  NotLinkException,
-  Path
-}
+import java.nio.file.{AccessDeniedException, DirectoryNotEmptyException, FileAlreadyExistsException, Files, FileSystemException, NoSuchFileException, NotDirectoryException, NotLinkException, Path}
 
 import zio.ZIO
 import zio.test.{assertTrue, Spec, ZIOSpecDefault}

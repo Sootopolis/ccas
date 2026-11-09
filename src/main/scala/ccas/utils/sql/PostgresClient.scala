@@ -12,21 +12,7 @@ import javax.sql.DataSource
 import com.augustnagro.magnum.{DbCon, DbTx, Transactor}
 import com.typesafe.config.{Config, ConfigFactory}
 import com.zaxxer.hikari.{HikariConfig, HikariDataSource}
-import zio.{
-  durationLong,
-  Duration,
-  FiberRef,
-  IO,
-  RIO,
-  Schedule,
-  Scope,
-  Task,
-  TaskLayer,
-  Unsafe,
-  ZEnvironment,
-  ZIO,
-  ZLayer
-}
+import zio.{durationLong, Duration, FiberRef, IO, RIO, Schedule, Scope, Task, TaskLayer, Unsafe, ZEnvironment, ZIO, ZLayer}
 
 /** Database client for PostgreSQL with connection management and transient-error retry.
   *

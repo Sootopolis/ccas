@@ -7,17 +7,7 @@ import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault, ZTestLogger}
 
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.{apiClubJson, apiDailyMatchJson, apiPlayerJson}
-import ccas.analysis.tables.{
-  Club,
-  ClubAdmin,
-  ClubMatch,
-  ClubMatchRef,
-  ClubName,
-  Player,
-  PlayerName,
-  PlayerSnapshot,
-  Tables
-}
+import ccas.analysis.tables.{Club, ClubAdmin, ClubMatch, ClubMatchRef, ClubName, Player, PlayerName, PlayerSnapshot, Tables}
 import ccas.api.misc.enums.{ClubMatchStatus, PlayerStatusCategory, TimeClass}
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username}
 import ccas.utils.ProgressDisplay

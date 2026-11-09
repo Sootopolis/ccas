@@ -8,23 +8,7 @@ import java.util.concurrent.ConcurrentLinkedQueue
 import scala.jdk.CollectionConverters.*
 
 import com.typesafe.config.ConfigFactory
-import zio.{
-  durationInt,
-  Cause,
-  Chunk,
-  Exit,
-  FiberId,
-  FiberRefs,
-  LogLevel,
-  LogSpan,
-  Ref,
-  Scope,
-  Trace,
-  UIO,
-  ZEnvironment,
-  ZIO,
-  ZLogger
-}
+import zio.{durationInt, Cause, Chunk, Exit, FiberId, FiberRefs, LogLevel, LogSpan, Ref, Scope, Trace, UIO, ZEnvironment, ZIO, ZLogger}
 import zio.config.magnolia.DeriveConfig
 import zio.config.typesafe.TypesafeConfigProvider
 import zio.test.*
