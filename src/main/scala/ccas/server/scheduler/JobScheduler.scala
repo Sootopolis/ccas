@@ -3,7 +3,23 @@ package ccas.server.scheduler
 import java.time.Instant
 
 import com.typesafe.config.ConfigFactory
-import zio.{durationLong, Clock, Duration, Schedule, Scope, Task, UIO, URIO, URLayer, ZEnvironment, ZIO, ZLayer}
+import zio.{
+  durationInt,
+  durationLong,
+  Clock,
+  Duration,
+  Ref,
+  RIO,
+  Schedule,
+  Scope,
+  Task,
+  UIO,
+  URIO,
+  URLayer,
+  ZEnvironment,
+  ZIO,
+  ZLayer
+}
 
 import ccas.analysis.apps.{ClubQuery, ClubResolution}
 import ccas.analysis.apps.clubdata.ClubDataApp
@@ -28,23 +44,66 @@ import ccas.utils.sql.PostgresClient
 
 trait JobScheduler {
   def start: URIO[Scope, Unit]
+
+  /** Read the schedules again at the next tick: call after writing `job_schedule`, since between reads the scheduler
+    * goes by what it read last (ADR 0028).
+    */
+  def recheck: UIO[Unit]
 }
 
 object JobScheduler {
 
+  /** The longest the scheduler goes without reading the schedules, so a write it was not told of is seen in time. */
+  private val MaxReadGap: Duration = 6.hours
+
   val live: URLayer[JobRunner & PostgresClient, JobScheduler] =
-    ZLayer.fromFunction { (runner: JobRunner, pgClient: PostgresClient) =>
+    ZLayer {
       val config = ConfigFactory.load()
       val pollMinutes =
         if config.hasPath("scheduler.pollIntervalMinutes")
         then config.getInt("scheduler.pollIntervalMinutes")
         else 15 // default poll interval in minutes
-      val pollInterval = pollMinutes.toLong.minutes
-      new JobSchedulerLive(runner, pgClient, pollInterval)
+      for {
+        runner   <- ZIO.service[JobRunner]
+        pgClient <- ZIO.service[PostgresClient]
+        scheduler <- JobSchedulerLive.make(
+          runner,
+          pgClient,
+          pollInterval = pollMinutes.toLong.minutes,
+          maxReadGap = MaxReadGap,
+          readSchedules = JobSchedule.selectEnabled
+        )
+      } yield scheduler
     }
 
-  private[scheduler] class JobSchedulerLive(runner: JobRunner, pgClient: PostgresClient, pollInterval: Duration)
-      extends JobScheduler {
+  val recheck: URIO[JobScheduler, Unit] = ZIO.serviceWithZIO[JobScheduler](_.recheck)
+
+  private[scheduler] object JobSchedulerLive {
+    def make(
+      runner: JobRunner,
+      pgClient: PostgresClient,
+      pollInterval: Duration,
+      maxReadGap: Duration,
+      readSchedules: RIO[PostgresClient, List[JobSchedule]]
+    ): UIO[JobSchedulerLive] =
+      for {
+        nextRead     <- Ref.make(Option.empty[Instant])
+        recheckAsked <- Ref.make(false)
+      } yield new JobSchedulerLive(runner, pgClient, pollInterval, maxReadGap, readSchedules, nextRead, recheckAsked)
+  }
+
+  /** Ticks every `pollInterval` but reads the enabled schedules only once `nextRead` has passed or a recheck was asked
+    * for; `nextRead` is empty until the first read and after a failed one.
+    */
+  private[scheduler] class JobSchedulerLive(
+    runner: JobRunner,
+    pgClient: PostgresClient,
+    pollInterval: Duration,
+    maxReadGap: Duration,
+    readSchedules: RIO[PostgresClient, List[JobSchedule]],
+    private[scheduler] val nextRead: Ref[Option[Instant]],
+    recheckAsked: Ref[Boolean]
+  ) extends JobScheduler {
 
     private val pgClientEnv = ZEnvironment(pgClient)
 
@@ -53,58 +112,92 @@ object JobScheduler {
     private val grace: Duration = pollInterval.multipliedBy(2)
 
     override def start: URIO[Scope, Unit] =
-      pollLoop
+      tick
         .repeat(Schedule.fixed(pollInterval))
         .forkScoped
         .unit
 
-    private def pollLoop: UIO[Unit] =
-      (for {
-        schedules <- JobSchedule.selectEnabled.provideEnvironment(pgClientEnv)
-        now       <- Clock.instant
-        _ <- ZIO.foreachDiscard(schedules) { schedule =>
-          // `isDue` decodes the trigger and can throw on a malformed (hand-edited) cron row; isolate that so one
-          // bad row logs and is treated as not-due rather than aborting the whole poll iteration.
-          ZIO
-            .attempt(schedule.isDue(now, grace))
-            .catchAll { e =>
-              ProgressDisplay
-                .sourced("scheduler")(
-                  ZIO.logError(s"${schedule.kind} (club ${schedule.clubIdOption}): invalid trigger: ${e.safeMessage}")
-                )
-                .as(false)
-            }
-            .flatMap { due =>
-              ZIO.whenDiscard(due) {
-                runSchedule(schedule, now).catchAll {
-                  // A job of this kind/club is already running (e.g. a forked job outliving its own
-                  // intervalHours). Expected and benign: last_run_at stays put, so the next tick after
-                  // the job ends submits promptly. Debug-log instead of ERROR-spamming for the duration.
-                  case _: ConflictException =>
-                    ProgressDisplay.sourced("scheduler")(
-                      ZIO.logDebug(s"${schedule.kind} (club ${schedule.clubIdOption}): already running, skipping tick")
-                    )
-                  case e =>
-                    ProgressDisplay.sourced("scheduler")(
-                      ZIO.logError(s"${schedule.kind} (club ${schedule.clubIdOption}): ${e.safeMessage}")
-                    )
-                }
-              }
-            }
-        }
-      } yield ())
-        .catchAll(e => ProgressDisplay.sourced("scheduler")(ZIO.logError(s"Poll error: ${e.safeMessage}")))
+    override def recheck: UIO[Unit] = recheckAsked.set(true)
 
-    private def runSchedule(schedule: JobSchedule, now: Instant): Task[Unit] =
+    /** The flag is taken before the read, so a recheck asked for while one runs is kept for the next tick. */
+    private def tick: UIO[Unit] =
+      for {
+        now            <- Clock.instant
+        asked          <- recheckAsked.getAndSet(false)
+        nextReadOption <- nextRead.get
+        _              <- ZIO.whenDiscard(asked || nextReadOption.forall(at => !now.isBefore(at)))(readAndFire)
+      } yield ()
+
+    /** `now` is taken after the read, which may have waited for a suspended compute to start. */
+    private def readAndFire: UIO[Unit] =
       (for {
-        effect <- jobEffect(schedule)
-        _      <- runner.submit(schedule.kind, schedule.clubIdOption, schedule.params, RunTrigger.Scheduled, effect)
-        _      <- JobSchedule.updateLastRunAt(schedule.id, now)
+        schedules <- readSchedules.provideEnvironment(pgClientEnv)
+        now       <- Clock.instant
+        fired     <- ZIO.foreach(schedules)(fireIfDue(_, now))
+        after     <- ZIO.attempt(nextReadAfter(fired.flatten, now))
+        _         <- nextRead.set(Some(after))
+      } yield ())
+        .catchAll { e =>
+          nextRead.set(None) *>
+            ProgressDisplay.sourced("scheduler")(ZIO.logError(s"Poll error: ${e.safeMessage}"))
+        }
+
+    /** A due schedule that didn't fire, as when its job is still running, holds the next read at the next tick. */
+    private def nextReadAfter(schedules: List[JobSchedule], now: Instant): Instant =
+      (now.plus(maxReadGap) :: schedules.flatMap(_.nextDue(now, grace))).min
+
+    /** Submits `schedule` if it is due. Returns it as it stands afterwards, with `lastRunAt` at `now` if submitted, or
+      * `None` for a row that can't fire until it is changed: one whose trigger or params won't decode. Such a row is
+      * logged at every read rather than holding the next one early.
+      */
+    private def fireIfDue(schedule: JobSchedule, now: Instant): UIO[Option[JobSchedule]] =
+      ZIO
+        .attempt(schedule.isDue(now, grace))
+        .foldZIO(
+          e => logUndecodable(schedule, "trigger", e).as(None),
+          due =>
+            if (due) { fire(schedule, now) }
+            else { ZIO.some(schedule) }
+        )
+
+    private def fire(schedule: JobSchedule, now: Instant): UIO[Option[JobSchedule]] =
+      jobEffect(schedule).foldZIO(
+        e => logUndecodable(schedule, "params", e).as(None),
+        effect =>
+          submit(schedule, effect, now).foldZIO(
+            e => logUnsubmitted(schedule, e).as(Some(schedule)),
+            _ => ZIO.some(schedule.copy(lastRunAt = Some(now)))
+          )
+      )
+
+    private def logUndecodable(schedule: JobSchedule, field: String, e: Throwable): UIO[Unit] =
+      ProgressDisplay.sourced("scheduler")(
+        ZIO.logError(s"${schedule.kind} (club ${schedule.clubIdOption}): invalid $field: ${e.safeMessage}")
+      )
+
+    private def logUnsubmitted(schedule: JobSchedule, e: Throwable): UIO[Unit] =
+      ProgressDisplay.sourced("scheduler") {
+        e match {
+          // A job of this kind/club is already running (e.g. a forked job outliving its own
+          // intervalHours). Expected and benign: last_run_at stays put, so the next tick after
+          // the job ends submits promptly. Debug-log instead of ERROR-spamming for the duration.
+          case _: ConflictException =>
+            ZIO.logDebug(s"${schedule.kind} (club ${schedule.clubIdOption}): already running, skipping tick")
+          case _ =>
+            ZIO.logError(s"${schedule.kind} (club ${schedule.clubIdOption}): ${e.safeMessage}")
+        }
+      }
+
+    private def submit(schedule: JobSchedule, effect: JobEffect, now: Instant): Task[Unit] =
+      (for {
+        _ <- runner.submit(schedule.kind, schedule.clubIdOption, schedule.params, RunTrigger.Scheduled, effect)
+        _ <- JobSchedule.updateLastRunAt(schedule.id, now)
       } yield ()).provideEnvironment(pgClientEnv)
 
-    // Decode `schedule.params` into typed per-kind options and thread them into the app call. Decoding is eager (before
-    // `submit`), so a malformed row fails here — caught by the poll loop's per-schedule guard — without submitting or
-    // advancing `last_run_at`. Absent params decode to the kind's all-`None` defaults.
+    /** Decode `schedule.params` into typed per-kind options and thread them into the app call. Decoding is eager
+      * (before `submit`), so a malformed row fails here without submitting or advancing `last_run_at`. Absent params
+      * decode to the kind's all-`None` defaults.
+      */
     private def jobEffect(schedule: JobSchedule): Task[JobEffect] =
       schedule.kind match {
         case JobKind.Recruitment =>

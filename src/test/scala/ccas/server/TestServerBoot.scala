@@ -798,6 +798,7 @@ object TestServerBoot extends ZIOSpecDefault {
 
   private final class LoopingScheduler(started: Promise[Nothing, Unit], interrupted: UIO[Unit]) extends JobScheduler {
     override def start: URIO[Scope, Unit] = (started.succeed(()) *> ZIO.never).onInterrupt(interrupted).forkScoped.unit
+    override def recheck: UIO[Unit]       = ZIO.unit
   }
 
   /** A job runner with one job running, whose log stream stays open until `interruptAll`, as the real runner's does.

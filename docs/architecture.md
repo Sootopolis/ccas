@@ -84,7 +84,7 @@ The CLI surface is `ccas cancel <job-id>`. A job cancelled out from under an act
 
 ### `JobScheduler`
 
-A polling daemon on a configurable interval that checks enabled `JobSchedule` entries and submits due jobs to the `JobRunner`.
+A polling daemon on a configurable interval that checks enabled `JobSchedule` entries and submits due jobs to the `JobRunner`. Most ticks stay in memory: it reads the table when a schedule may be due, so an idle server lets a Neon compute suspend ([0028](adr/0028-the-scheduler-reads-only-when-a-schedule-can-be-due.md)).
 
 ## Database
 

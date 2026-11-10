@@ -64,7 +64,7 @@ final case class JobSchedule(
 
   /** Whether this schedule should fire at `now`. Pure — drives [[JobScheduler]] and is TestClock-friendly.
     *   - Interval: at least `interval_hours` have elapsed since `last_run_at` (always due if never run).
-    *   - Cron: the most recent fire boundary (`expr.prev(now)`) is after `last_run_at`, gated by misfire:
+    *   - Cron: the most recent fire boundary, `now`'s own second included, is after `last_run_at`, gated by misfire:
     *     `CatchUp` fires regardless of how late; `Skip` only fires a boundary that elapsed within `grace`
     *     (so a boundary missed during downtime is skipped, and the next on-time boundary resumes cleanly).
     */
@@ -74,7 +74,13 @@ final case class JobSchedule(
         lastRunAt.forall(ts => ChronoUnit.HOURS.between(ts, now) >= hours)
 
       case ScheduleTrigger.Cron(expr, zone, misfire) =>
-        expr.prev(now.atZone(zone)) match {
+        val zoned = now.atZone(zone)
+        // `prev` is strict to the second, so a boundary in `now`'s second would wait a tick, or a day once `nextDue`
+        // stepped past it.
+        val prevOption =
+          if (expr.allOf(zoned)) { Some(zoned.truncatedTo(ChronoUnit.SECONDS)) }
+          else { expr.prev(zoned) }
+        prevOption match {
           case None => false
           case Some(prevZdt) =>
             val prevFire         = prevZdt.toInstant
@@ -87,6 +93,21 @@ final case class JobSchedule(
               }
             }
         }
+    }
+
+  /** The earliest instant from `now` at which [[isDue]] holds: `now` itself when it already does, `None` for a cron
+    * with no boundary left. A cron's next boundary is cron4s's, in wall-clock time, so it passes over the repeat of an
+    * hour the clocks go back through. Throws on a malformed row, as [[trigger]] does.
+    */
+  def nextDue(now: Instant, grace: Duration): Option[Instant] =
+    if (isDue(now, grace)) { Some(now) }
+    else {
+      trigger match {
+        // Not due, so it has run: the interval counts from that run.
+        case ScheduleTrigger.Interval(hours) => lastRunAt.map(_.plus(hours.toLong, ChronoUnit.HOURS))
+        // At the next boundary the most recent fire is that boundary, after any run so far and zero late.
+        case ScheduleTrigger.Cron(expr, zone, _) => expr.next(now.atZone(zone)).map(_.toInstant)
+      }
     }
 }
 

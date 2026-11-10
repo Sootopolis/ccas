@@ -159,7 +159,7 @@ object CcasServer extends ZIOAppDefault {
     }
 
   private def running(started: UIO[Unit]): URIO[Scope & Served & Server, Unit] = {
-    val routes: Routes[JobRunner & ChessComClient & PostgresClient, Nothing] =
+    val routes: Routes[JobRunner & JobScheduler & ChessComClient & PostgresClient, Nothing] =
       List(
         HealthRoutes.routes,
         JobRoutes.routes,

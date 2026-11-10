@@ -93,6 +93,13 @@ object TestJobScheduleIsDue extends ZIOSpecDefault {
       val staleLastRun = at(2026, 6, 27, 6, 0)
       assertTrue(daily9(Some(staleLastRun), MisfirePolicy.Skip).isDue(at(2026, 6, 28, 9, 5), grace))
     },
+    test("cron is due at the very instant of its boundary, under both policies") {
+      val lastRun = at(2026, 6, 26, 9, 0)
+      assertTrue(
+        daily9(Some(lastRun), MisfirePolicy.Skip).isDue(at(2026, 6, 27, 9, 0), grace),
+        daily9(Some(lastRun), MisfirePolicy.CatchUp).isDue(at(2026, 6, 27, 9, 0), grace)
+      )
+    },
     test("cron Skip does not double-fire within one boundary's grace window") {
       val justFired = at(2026, 6, 27, 9, 0)
       assertTrue(!daily9(Some(justFired), MisfirePolicy.Skip).isDue(at(2026, 6, 27, 9, 20), grace))
@@ -104,6 +111,41 @@ object TestJobScheduleIsDue extends ZIOSpecDefault {
         daily9(None, MisfirePolicy.CatchUp).isDue(at(2026, 6, 27, 9, 10), grace),
         daily9(None, MisfirePolicy.Skip).isDue(at(2026, 6, 27, 9, 10), grace)
       )
+    },
+
+    // --- nextDue ---
+    test("nextDue: an interval schedule is next due its interval after its last run") {
+      val lastRun = at(2026, 6, 27, 10, 0)
+      assertTrue(interval(24, Some(lastRun)).nextDue(at(2026, 6, 27, 12, 0), grace).contains(at(2026, 6, 28, 10, 0)))
+    },
+    test("nextDue: a schedule that has never run is due now") {
+      val now = at(2026, 6, 27, 12, 0)
+      assertTrue(interval(24, None).nextDue(now, grace).contains(now))
+    },
+    test("nextDue: a cron Skip schedule past its grace is next due at its next boundary") {
+      val lastRun = at(2026, 6, 27, 6, 0)
+      assertTrue(
+        daily9(Some(lastRun), MisfirePolicy.Skip).nextDue(at(2026, 6, 27, 12, 0), grace).contains(at(2026, 6, 28, 9, 0))
+      )
+    },
+    test("nextDue: a cron CatchUp schedule with a missed boundary is due now") {
+      val lastRun = at(2026, 6, 25, 9, 0)
+      val now     = at(2026, 6, 27, 12, 0)
+      assertTrue(daily9(Some(lastRun), MisfirePolicy.CatchUp).nextDue(now, grace).contains(now))
+    },
+    test("nextDue: isDue holds at nextDue and not a second before") {
+      val now = at(2026, 6, 27, 12, 0)
+      val schedules = List(
+        interval(24, Some(at(2026, 6, 27, 10, 0))),
+        daily9(Some(at(2026, 6, 27, 6, 0)), MisfirePolicy.Skip),
+        daily9(Some(at(2026, 6, 27, 9, 0)), MisfirePolicy.CatchUp)
+      )
+      val agrees = schedules.map { schedule =>
+        schedule.nextDue(now, grace).exists { due =>
+          schedule.isDue(due, grace) && !schedule.isDue(due.minusSeconds(1), grace)
+        }
+      }
+      assertTrue(agrees == List(true, true, true))
     }
   )
 }
