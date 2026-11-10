@@ -19,7 +19,7 @@ import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.connectZIO
 
 /** A scheduled job. The trigger is a tagged union over flat columns (see [[trigger]]):
-  *   - `Interval`: `interval_hours` set, cron columns NULL — fire when `interval_hours` have elapsed since
+  *   - `Interval`: `interval_hours` set, cron columns NULL — fire at the tick nearest `interval_hours` after
   *     `last_run_at`.
   *   - `Cron`: `cron_expr` (normalized 6-field) + `timezone` (IANA) + `misfire_policy` set, `interval_hours`
   *     NULL — fire at wall-clock boundaries.
@@ -62,16 +62,17 @@ final case class JobSchedule(
         ScheduleTrigger.Cron(expr, zone, mp)
     }
 
-  /** Whether this schedule should fire at `now`. Pure — drives [[JobScheduler]] and is TestClock-friendly.
-    *   - Interval: at least `interval_hours` have elapsed since `last_run_at` (always due if never run).
+  /** Whether this schedule should fire at `now`, for a scheduler ticking every `pollInterval`. Pure.
+    *   - Interval: `interval_hours` have elapsed since `last_run_at`, less half a poll interval, so the tick nearest
+    *     that time fires it (ADR 0029). Always due if never run.
     *   - Cron: the most recent fire boundary, `now`'s own second included, is after `last_run_at`, gated by misfire:
-    *     `CatchUp` fires regardless of how late; `Skip` only fires a boundary that elapsed within `grace`
-    *     (so a boundary missed during downtime is skipped, and the next on-time boundary resumes cleanly).
+    *     `CatchUp` fires regardless of how late; `Skip` only within two poll intervals of the boundary, so a boundary
+    *     missed during downtime is skipped and the next on-time one resumes cleanly.
     */
-  def isDue(now: Instant, grace: Duration): Boolean =
+  def isDue(now: Instant, pollInterval: Duration): Boolean =
     trigger match {
       case ScheduleTrigger.Interval(hours) =>
-        lastRunAt.forall(ts => ChronoUnit.HOURS.between(ts, now) >= hours)
+        lastRunAt.forall(ts => !now.isBefore(intervalDue(ts, hours, pollInterval)))
 
       case ScheduleTrigger.Cron(expr, zone, misfire) =>
         val zoned = now.atZone(zone)
@@ -89,7 +90,8 @@ final case class JobSchedule(
             else {
               misfire match {
                 case MisfirePolicy.CatchUp => true
-                case MisfirePolicy.Skip    => Duration.between(prevFire, now).compareTo(grace) <= 0
+                case MisfirePolicy.Skip =>
+                  Duration.between(prevFire, now).compareTo(JobSchedule.skipGrace(pollInterval)) <= 0
               }
             }
         }
@@ -99,19 +101,28 @@ final case class JobSchedule(
     * with no boundary left. A cron's next boundary is cron4s's, in wall-clock time, so it passes over the repeat of an
     * hour the clocks go back through. Throws on a malformed row, as [[trigger]] does.
     */
-  def nextDue(now: Instant, grace: Duration): Option[Instant] =
-    if (isDue(now, grace)) { Some(now) }
+  def nextDue(now: Instant, pollInterval: Duration): Option[Instant] =
+    if (isDue(now, pollInterval)) { Some(now) }
     else {
       trigger match {
         // Not due, so it has run: the interval counts from that run.
-        case ScheduleTrigger.Interval(hours) => lastRunAt.map(_.plus(hours.toLong, ChronoUnit.HOURS))
+        case ScheduleTrigger.Interval(hours) => lastRunAt.map(intervalDue(_, hours, pollInterval))
         // At the next boundary the most recent fire is that boundary, after any run so far and zero late.
         case ScheduleTrigger.Cron(expr, zone, _) => expr.next(now.atZone(zone)).map(_.toInstant)
       }
     }
+
+  /** When an interval schedule last run at `lastRun` falls due: half a poll interval early (ADR 0029). */
+  private def intervalDue(lastRun: Instant, hours: Short, pollInterval: Duration): Instant =
+    lastRun.plus(hours.toLong, ChronoUnit.HOURS).minus(pollInterval.dividedBy(2))
 }
 
 object JobSchedule {
+
+  /** How late a cron `Skip` schedule may still fire a boundary: one that lands just after a tick is seen up to one
+    * poll interval late, and the second interval is headroom for the read and the database.
+    */
+  private def skipGrace(pollInterval: Duration): Duration = pollInterval.multipliedBy(2)
 
   private val columns = SqlLiteral(
     "id, kind, club_id, params, trigger_type, interval_hours, cron_expr, timezone, misfire_policy, enabled, last_run_at"

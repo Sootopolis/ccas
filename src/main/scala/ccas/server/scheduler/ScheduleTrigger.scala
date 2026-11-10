@@ -20,7 +20,7 @@ enum TriggerType derives JsonCodec {
 object TriggerType extends EnumSql[TriggerType]
 
 /** What a cron schedule does when the server was down across one or more fire-times.
-  *   - [[Skip]]: do not fire a boundary that elapsed more than the scheduler's grace window ago; resume on
+  *   - [[Skip]]: do not fire a boundary that elapsed more than two poll intervals ago; resume on
   *     the next on-time boundary. Right for idempotent maintenance (e.g. ClubData) where a late run is noise.
   *   - [[CatchUp]]: on recovery, fire the most recent missed boundary exactly once, then resume. Right when a
   *     missed run still wants to happen on stale-but-acceptable data (e.g. a weekly Stats roll-up).

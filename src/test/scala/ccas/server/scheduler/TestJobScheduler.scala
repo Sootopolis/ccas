@@ -38,6 +38,7 @@ object TestJobScheduler extends ZIOSpecDefault {
       testParamsThreadedToSubmit,
       testMalformedParamsDoesNotBlockOthers,
       testIdleSchedulerReadsOnlyWhenDue,
+      testRunRecordedAfterItsTickFiresAnIntervalLater,
       testRecheckMakesTheNextTickRead,
       testUnseenWriteIsReadWithinTheGap,
       testUndecodableParamsDoNotReadEveryTick
@@ -656,6 +657,29 @@ object TestJobScheduler extends ZIOSpecDefault {
         clubsAtDue == List(Some(clubId)),
         readsAtDue == 2
       )
+    }
+
+  /** #457: a run is recorded after its tick, behind the read, so a schedule due a whole interval later lost a tick.
+    * Firing early is pinned by `TestJobScheduleIsDue`: a tick that does nothing can't be waited for here.
+    */
+  private def testRunRecordedAfterItsTickFiresAnIntervalLater =
+    test("an interval schedule whose run was recorded after its tick is not held back to the tick a poll later") {
+      val clubId = ClubId(318)
+      for {
+        submitted <- Ref.make(List.empty[Option[ClubId]])
+        w         <- watched(trackingRunner(submitted), maxReadGap)
+        now       <- Clock.instant
+        _         <- Club.upsert(Club(clubId, now, ClubSlug("lag-test"), "Lag Test", None, None, None))
+        _         <- JobSchedule.insert(membershipEvery(clubId, hours = 1, Some(now.plusSeconds(3))))
+        clubs <- ZIO.scoped {
+          for {
+            _     <- w.scheduler.start
+            _     <- w.readSettled(1)
+            _     <- TestClock.adjust(1.hour)
+            clubs <- submitted.get.repeatUntil(_.nonEmpty)
+          } yield clubs
+        }
+      } yield assertTrue(clubs == List(Some(clubId)))
     }
 
   private def testRecheckMakesTheNextTickRead =
