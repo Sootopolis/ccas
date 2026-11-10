@@ -107,10 +107,6 @@ object JobScheduler {
 
     private val pgClientEnv = ZEnvironment(pgClient)
 
-    // Skip lateness ceiling for cron `Skip` schedules: a boundary may land just after a poll (observed up to one
-    // pollInterval late) plus headroom for poll execution / DB latency. CatchUp ignores this; Interval is unaffected.
-    private val grace: Duration = pollInterval.multipliedBy(2)
-
     override def start: URIO[Scope, Unit] =
       tick
         .repeat(Schedule.fixed(pollInterval))
@@ -144,7 +140,7 @@ object JobScheduler {
 
     /** A due schedule that didn't fire, as when its job is still running, holds the next read at the next tick. */
     private def nextReadAfter(schedules: List[JobSchedule], now: Instant): Instant =
-      (now.plus(maxReadGap) :: schedules.flatMap(_.nextDue(now, grace))).min
+      (now.plus(maxReadGap) :: schedules.flatMap(_.nextDue(now, pollInterval))).min
 
     /** Submits `schedule` if it is due. Returns it as it stands afterwards, with `lastRunAt` at `now` if submitted, or
       * `None` for a row that can't fire until it is changed: one whose trigger or params won't decode. Such a row is
@@ -152,7 +148,7 @@ object JobScheduler {
       */
     private def fireIfDue(schedule: JobSchedule, now: Instant): UIO[Option[JobSchedule]] =
       ZIO
-        .attempt(schedule.isDue(now, grace))
+        .attempt(schedule.isDue(now, pollInterval))
         .foldZIO(
           e => logUndecodable(schedule, "trigger", e).as(None),
           due =>
@@ -188,6 +184,9 @@ object JobScheduler {
         }
       }
 
+    /** Records the run only once its job has started, so a failure between the two repeats a run rather than losing one:
+      * the scheduled jobs are near-idempotent, and a duplicate shows in `job_run` where a lost run wouldn't (#457).
+      */
     private def submit(schedule: JobSchedule, effect: JobEffect, now: Instant): Task[Unit] =
       (for {
         _ <- runner.submit(schedule.kind, schedule.clubIdOption, schedule.params, RunTrigger.Scheduled, effect)
