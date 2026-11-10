@@ -12,7 +12,7 @@ import ccas.analysis.apps.{ClubQuery, ClubResolution}
 import ccas.api.misc.subtypes.ClubId
 import ccas.server.jobs.JobKind
 import ccas.server.routes.RouteHelpers.*
-import ccas.server.scheduler.{JobSchedule, MisfirePolicy, ScheduleTrigger, TriggerType}
+import ccas.server.scheduler.{JobSchedule, JobScheduler, MisfirePolicy, ScheduleTrigger, TriggerType}
 import ccas.utils.client.ChessComClient
 import ccas.utils.errors.{BadRequestException, NotFoundException}
 import ccas.utils.sql.PostgresClient
@@ -196,15 +196,17 @@ object ScheduleRoutes {
         } yield UpdateArgs(None, normCron, tz, body.misfire, body.enabled, body.params.map(Some(_)))
     }
 
-  private def persist(schedule: JobSchedule): RIO[PostgresClient, ScheduleResponse] =
+  private def persist(schedule: JobSchedule): RIO[JobScheduler & PostgresClient, ScheduleResponse] =
     for {
       id      <- JobSchedule.insert(schedule)
+      _       <- JobScheduler.recheck
       created <- JobSchedule.selectId(id).someOrFail(new Exception("Failed to read back schedule"))
     } yield ScheduleResponse.fromSchedule(created)
 
   // --- Routes ---
 
-  val routes: Routes[ChessComClient & PostgresClient, Nothing] = Routes(
+  /** Each write asks the scheduler to recheck, so it doesn't wait for the schedules' next due time to read them again. */
+  val routes: Routes[ChessComClient & JobScheduler & PostgresClient, Nothing] = Routes(
     Method.GET / "api" / "schedules" -> handler {
       JobSchedule.selectAll.map(list => jsonResponse(Status.Ok, list.map(ScheduleResponse.fromSchedule)))
     },
@@ -239,11 +241,12 @@ object ScheduleRoutes {
           enabled = args.enabled,
           params = args.params
         )
+        _       <- JobScheduler.recheck
         updated <- JobSchedule.selectId(id).someOrFail(NotFoundException(s"Schedule $id not found"))
       } yield jsonResponse(Status.Ok, ScheduleResponse.fromSchedule(updated))
     },
     Method.DELETE / "api" / "schedules" / long("id") -> handler { (id: Long, _: Request) =>
-      JobSchedule.delete(id).as(Response(status = Status.NoContent))
+      (JobSchedule.delete(id) *> JobScheduler.recheck).as(Response(status = Status.NoContent))
     }
   ).handleErrorRequestCauseZIO(renderError)
 }

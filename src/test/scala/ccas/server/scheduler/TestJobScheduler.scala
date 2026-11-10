@@ -1,5 +1,6 @@
 package ccas.server.scheduler
 
+import java.time.Instant
 import java.time.temporal.ChronoUnit
 
 import zio.{durationInt, Clock, Duration, Ref, RIO, UIO, URIO, ZIO}
@@ -35,7 +36,11 @@ object TestJobScheduler extends ZIOSpecDefault {
       testErrorInOneScheduleDoesNotBlockOthers,
       testConflictKeepsPollingAndDoesNotAdvanceLastRunAt,
       testParamsThreadedToSubmit,
-      testMalformedParamsDoesNotBlockOthers
+      testMalformedParamsDoesNotBlockOthers,
+      testIdleSchedulerReadsOnlyWhenDue,
+      testRecheckMakesTheNextTickRead,
+      testUnseenWriteIsReadWithinTheGap,
+      testUndecodableParamsDoNotReadEveryTick
     )
       @@ TestAspect.before(TestDbCleanup.clearJobSchedules)
       @@ TestAspect.sequential
@@ -51,6 +56,16 @@ object TestJobScheduler extends ZIOSpecDefault {
   // `testErrorDoesNotCrashScheduler` watch `callCount` cross 2 across distinct iterations).
   private val pollInterval: Duration  = 1.minute
   private val advanceWindow: Duration = pollInterval.multipliedBy(5)
+  private val maxReadGap: Duration    = 1.day
+
+  private def makeScheduler(runner: JobRunner, pgClient: PostgresClient): UIO[JobScheduler.JobSchedulerLive] =
+    JobScheduler.JobSchedulerLive.make(
+      runner,
+      pgClient,
+      pollInterval = pollInterval,
+      maxReadGap = maxReadGap,
+      readSchedules = JobSchedule.selectEnabled
+    )
 
   /** JobRunner stub that counts submissions without running effects. */
   private def stubRunner(submissions: Ref[Int]): JobRunner = new JobRunner {
@@ -117,8 +132,8 @@ object TestJobScheduler extends ZIOSpecDefault {
     for {
       pgClient    <- ZIO.service[PostgresClient]
       submissions <- Ref.make(0)
-      runner    = stubRunner(submissions)
-      scheduler = new JobScheduler.JobSchedulerLive(runner, pgClient, pollInterval)
+      runner = stubRunner(submissions)
+      scheduler <- makeScheduler(runner, pgClient)
 
       // Always-due schedule: every poll triggers a submission.
       now <- Clock.instant
@@ -158,8 +173,8 @@ object TestJobScheduler extends ZIOSpecDefault {
     for {
       pgClient  <- ZIO.service[PostgresClient]
       submitted <- Ref.make(List.empty[Option[ClubId]])
-      runner    = trackingRunner(submitted)
-      scheduler = new JobScheduler.JobSchedulerLive(runner, pgClient, pollInterval)
+      runner = trackingRunner(submitted)
+      scheduler <- makeScheduler(runner, pgClient)
 
       now <- Clock.instant
       twoHoursAgo = now.minus(2, ChronoUnit.HOURS)
@@ -190,8 +205,8 @@ object TestJobScheduler extends ZIOSpecDefault {
     for {
       pgClient  <- ZIO.service[PostgresClient]
       submitted <- Ref.make(List.empty[Option[ClubId]])
-      runner    = trackingRunner(submitted)
-      scheduler = new JobScheduler.JobSchedulerLive(runner, pgClient, pollInterval)
+      runner = trackingRunner(submitted)
+      scheduler <- makeScheduler(runner, pgClient)
 
       now <- Clock.instant
       _   <- Club.upsert(Club(cronClubId, now, ClubSlug("cron-test"), "Cron Test", None, None, None))
@@ -226,8 +241,8 @@ object TestJobScheduler extends ZIOSpecDefault {
     for {
       pgClient  <- ZIO.service[PostgresClient]
       submitted <- Ref.make(List.empty[Option[ClubId]])
-      runner    = trackingRunner(submitted)
-      scheduler = new JobScheduler.JobSchedulerLive(runner, pgClient, pollInterval)
+      runner = trackingRunner(submitted)
+      scheduler <- makeScheduler(runner, pgClient)
 
       now <- Clock.instant
       _   <- Club.upsert(Club(notDueClubId, now, ClubSlug("notdue-test"), "Not Due Test", None, None, None))
@@ -275,8 +290,8 @@ object TestJobScheduler extends ZIOSpecDefault {
     for {
       pgClient  <- ZIO.service[PostgresClient]
       submitted <- Ref.make(List.empty[Option[ClubId]])
-      runner    = trackingRunner(submitted)
-      scheduler = new JobScheduler.JobSchedulerLive(runner, pgClient, pollInterval)
+      runner = trackingRunner(submitted)
+      scheduler <- makeScheduler(runner, pgClient)
 
       now <- Clock.instant
       _   <- Club.upsert(Club(disabledClubId, now, ClubSlug("disabled-test"), "Disabled Test", None, None, None))
@@ -340,7 +355,7 @@ object TestJobScheduler extends ZIOSpecDefault {
           ZIO.none
         override def sweepLogs: URIO[PostgresClient, Int] = ZIO.succeed(0)
       }
-      scheduler = new JobScheduler.JobSchedulerLive(failingRunner, pgClient, pollInterval)
+      scheduler <- makeScheduler(failingRunner, pgClient)
 
       now <- Clock.instant
       _   <- Club.upsert(Club(errorClubId, now, ClubSlug("error-test"), "Error Test", None, None, None))
@@ -394,7 +409,7 @@ object TestJobScheduler extends ZIOSpecDefault {
             ZIO.none
           override def sweepLogs: URIO[PostgresClient, Int] = ZIO.succeed(0)
         }
-        scheduler = new JobScheduler.JobSchedulerLive(runner, pgClient, pollInterval)
+        scheduler <- makeScheduler(runner, pgClient)
 
         now <- Clock.instant
         _   <- Club.upsert(Club(failClubId, now, ClubSlug("fail-sched"), "Fail", None, None, None))
@@ -462,7 +477,7 @@ object TestJobScheduler extends ZIOSpecDefault {
             ZIO.none
           override def sweepLogs: URIO[PostgresClient, Int] = ZIO.succeed(0)
         }
-        scheduler = new JobScheduler.JobSchedulerLive(conflictingRunner, pgClient, pollInterval)
+        scheduler <- makeScheduler(conflictingRunner, pgClient)
 
         now <- Clock.instant
         twoHoursAgo = now.minus(2, ChronoUnit.HOURS)
@@ -505,8 +520,8 @@ object TestJobScheduler extends ZIOSpecDefault {
       for {
         pgClient <- ZIO.service[PostgresClient]
         captured <- Ref.make(List.empty[Option[String]])
-        runner    = paramsCapturingRunner(captured)
-        scheduler = new JobScheduler.JobSchedulerLive(runner, pgClient, pollInterval)
+        runner = paramsCapturingRunner(captured)
+        scheduler <- makeScheduler(runner, pgClient)
         _ <- JobSchedule.insert(
           JobSchedule.interval(
             id = 0L,
@@ -538,8 +553,8 @@ object TestJobScheduler extends ZIOSpecDefault {
       for {
         pgClient  <- ZIO.service[PostgresClient]
         submitted <- Ref.make(List.empty[Option[ClubId]])
-        runner    = trackingRunner(submitted)
-        scheduler = new JobScheduler.JobSchedulerLive(runner, pgClient, pollInterval)
+        runner = trackingRunner(submitted)
+        scheduler <- makeScheduler(runner, pgClient)
 
         now <- Clock.instant
         _   <- Club.upsert(Club(ctrlClubId, now, ClubSlug("badparams-ctrl"), "Ctrl Always-Due", None, None, None))
@@ -578,5 +593,148 @@ object TestJobScheduler extends ZIOSpecDefault {
         clubs.exists(_.contains(ctrlClubId)), // control still submitted
         !clubs.contains(None)                 // malformed ClubData row never submitted
       )
+    }
+
+  /** A scheduler whose reads of the schedules are counted and whose next-read time the test can watch, so a test can
+    * wait for a read to finish before it moves the clock: otherwise a tick could find no next-read time yet and read.
+    */
+  private final case class Watched(scheduler: JobScheduler.JobSchedulerLive, reads: Ref[Int]) {
+    def readSettled(count: Int): UIO[Unit] =
+      (reads.get <*> scheduler.nextRead.get).repeatUntil((n, next) => n >= count && next.isDefined).unit
+  }
+
+  private def watched(runner: JobRunner, gap: Duration): URIO[PostgresClient, Watched] =
+    for {
+      pgClient <- ZIO.service[PostgresClient]
+      reads    <- Ref.make(0)
+      scheduler <- JobScheduler.JobSchedulerLive.make(
+        runner,
+        pgClient,
+        pollInterval = pollInterval,
+        maxReadGap = gap,
+        readSchedules = JobSchedule.selectEnabled <* reads.update(_ + 1)
+      )
+    } yield Watched(scheduler, reads)
+
+  private def membershipEvery(clubId: ClubId, hours: Short, lastRunAtOption: Option[Instant]): JobSchedule =
+    JobSchedule.interval(
+      id = 0L,
+      kind = JobKind.Membership,
+      clubIdOption = Some(clubId),
+      params = None,
+      intervalHours = hours,
+      enabled = true,
+      lastRunAt = lastRunAtOption
+    )
+
+  /** #422: between due times the ticks stay in the JVM, so an idle server lets the database suspend. */
+  private def testIdleSchedulerReadsOnlyWhenDue =
+    test("an idle scheduler does not read the schedules again until one is due, then submits it at that tick") {
+      val clubId = ClubId(315)
+      for {
+        submitted <- Ref.make(List.empty[Option[ClubId]])
+        w         <- watched(trackingRunner(submitted), maxReadGap)
+        now       <- Clock.instant
+        _         <- Club.upsert(Club(clubId, now, ClubSlug("idle-test"), "Idle Test", None, None, None))
+        _         <- JobSchedule.insert(membershipEvery(clubId, hours = 1, Some(now)))
+        result <- ZIO.scoped {
+          for {
+            _           <- w.scheduler.start
+            _           <- w.readSettled(1)
+            _           <- TestClock.adjust(59.minutes)
+            readsBefore <- w.reads.get
+            clubsBefore <- submitted.get
+            _           <- TestClock.adjust(1.minute)
+            clubsAtDue  <- submitted.get.repeatUntil(_.nonEmpty)
+            readsAtDue  <- w.reads.get
+          } yield (readsBefore, clubsBefore, clubsAtDue, readsAtDue)
+        }
+        (readsBefore, clubsBefore, clubsAtDue, readsAtDue) = result
+      } yield assertTrue(
+        readsBefore == 1,
+        clubsBefore.isEmpty,
+        clubsAtDue == List(Some(clubId)),
+        readsAtDue == 2
+      )
+    }
+
+  private def testRecheckMakesTheNextTickRead =
+    test(
+      "a schedule written behind the scheduler's back waits for a recheck, then the next tick reads and submits it"
+    ) {
+      val clubId = ClubId(316)
+      for {
+        submitted <- Ref.make(List.empty[Option[ClubId]])
+        w         <- watched(trackingRunner(submitted), maxReadGap)
+        now       <- Clock.instant
+        _         <- Club.upsert(Club(clubId, now, ClubSlug("recheck-test"), "Recheck Test", None, None, None))
+        result <- ZIO.scoped {
+          for {
+            _           <- w.scheduler.start
+            _           <- w.readSettled(1)
+            _           <- JobSchedule.insert(membershipEvery(clubId, hours = 24, None))
+            _           <- TestClock.adjust(advanceWindow)
+            readsBefore <- w.reads.get
+            _           <- w.scheduler.recheck
+            _           <- TestClock.adjust(pollInterval)
+            clubs       <- submitted.get.repeatUntil(_.nonEmpty)
+          } yield (readsBefore, clubs)
+        }
+        (readsBefore, clubs) = result
+      } yield assertTrue(readsBefore == 1, clubs == List(Some(clubId)))
+    }
+
+  /** Hand-edited SQL, or a second server, changes the schedules without a recheck; the gap bounds how late it's seen. */
+  private def testUnseenWriteIsReadWithinTheGap =
+    test("without a recheck, a schedule written behind the scheduler's back is read once the max read gap has passed") {
+      val clubId = ClubId(317)
+      val gap    = 10.minutes
+      for {
+        submitted <- Ref.make(List.empty[Option[ClubId]])
+        w         <- watched(trackingRunner(submitted), gap)
+        now       <- Clock.instant
+        _         <- Club.upsert(Club(clubId, now, ClubSlug("gap-test"), "Gap Test", None, None, None))
+        result <- ZIO.scoped {
+          for {
+            _           <- w.scheduler.start
+            _           <- w.readSettled(1)
+            _           <- JobSchedule.insert(membershipEvery(clubId, hours = 24, None))
+            _           <- TestClock.adjust(gap.minus(pollInterval))
+            clubsBefore <- submitted.get
+            _           <- TestClock.adjust(pollInterval)
+            clubs       <- submitted.get.repeatUntil(_.nonEmpty)
+          } yield (clubsBefore, clubs)
+        }
+        (clubsBefore, clubs) = result
+      } yield assertTrue(clubsBefore.isEmpty, clubs == List(Some(clubId)))
+    }
+
+  /** A row the API accepted with bad params can't fire until it is changed, which asks for a recheck. */
+  private def testUndecodableParamsDoNotReadEveryTick =
+    test("a due schedule whose params won't decode does not make every tick read the schedules") {
+      for {
+        submitted <- Ref.make(0)
+        w         <- watched(stubRunner(submitted), maxReadGap)
+        _ <- JobSchedule.insert(
+          JobSchedule.interval(
+            id = 0L,
+            kind = JobKind.ClubData,
+            clubIdOption = None,
+            params = Some("{not-json"),
+            intervalHours = 24,
+            enabled = true,
+            lastRunAt = None
+          )
+        )
+        readsAfter <- ZIO.scoped {
+          for {
+            _     <- w.scheduler.start
+            _     <- w.readSettled(1)
+            _     <- TestClock.adjust(advanceWindow)
+            reads <- w.reads.get
+          } yield reads
+        }
+        count <- submitted.get
+      } yield assertTrue(readsAfter == 1, count == 0)
     }
 }

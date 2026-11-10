@@ -7,7 +7,7 @@ import ccas.analysis.apps.{ClubQuery, ClubRef, ManagedClubApp}
 import ccas.analysis.tables.ManagedClubView
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 import ccas.server.routes.RouteHelpers.*
-import ccas.server.scheduler.JobSchedule
+import ccas.server.scheduler.{JobSchedule, JobScheduler}
 import ccas.utils.client.ChessComClient
 import ccas.utils.sql.PostgresClient
 
@@ -49,7 +49,7 @@ object ManagedClubRoutes {
   // --- Routes ---
 
   // Marking and unmarking answer with a `ClubResult` saying whether the marker changed.
-  val routes: Routes[ChessComClient & PostgresClient, Nothing] = Routes(
+  val routes: Routes[ChessComClient & JobScheduler & PostgresClient, Nothing] = Routes(
     Method.GET / "api" / "managed-clubs" -> handler { (_: Request) =>
       ManagedClubApp.list.map(views => jsonResponse(Status.Ok, views.map(ManagedClubResponse.fromView)))
     },
@@ -66,7 +66,8 @@ object ManagedClubRoutes {
       for {
         query <- ClubRequest.query(req)
         result <- ClubRequest.runOnReached(query) { clubId =>
-          PostgresClient.withTransaction(ManagedClubApp.unmark(clubId) <* JobSchedule.deleteByClub(clubId))
+          PostgresClient.withTransaction(ManagedClubApp.unmark(clubId) <* JobSchedule.deleteByClub(clubId)) <*
+            JobScheduler.recheck
         }
       } yield jsonResponse(Status.Ok, result)
     }

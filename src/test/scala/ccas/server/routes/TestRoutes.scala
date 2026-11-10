@@ -20,7 +20,7 @@ import ccas.server.ServerTables
 import ccas.server.jobs.*
 import ccas.server.routes.HealthRoutes.ReadyResponse
 import ccas.server.routes.JobRoutes.{ClubJobResult, ConfirmResult, InvitedUsernames, JobResult}
-import ccas.server.scheduler.{JobSchedule, ScheduleSeed}
+import ccas.server.scheduler.{JobSchedule, JobScheduler, ScheduleSeed}
 import ccas.utils.ProgressDisplay
 import ccas.utils.client.{ChessComClient, HttpStatusException, TestChessComClientSupport}
 import ccas.utils.errors.{ConflictException, ErrorResponse}
@@ -39,6 +39,7 @@ object TestRoutes extends ZIOSpecDefault {
   ).provideShared(
     FreshSchemaLayer(schema = "test_routes", onInit = ServerTables.ensureTables),
     fakeJobRunnerLayer,
+    recordingSchedulerLayer,
     TestChessComClientSupport.dummyLayer,
     ZTestLogger.default,
     Scope.default
@@ -129,6 +130,19 @@ object TestRoutes extends ZIOSpecDefault {
         sweptLogs  <- Ref.make(Set.empty[JobRunId])
       } yield new FakeJobRunner(jobs, nextAction, sweptLogs)
     }
+
+  // --- Recording JobScheduler ---
+
+  private final class RecordingScheduler(rechecks: Ref[Int]) extends JobScheduler {
+    override def start: URIO[Scope, Unit] = ZIO.unit
+    override def recheck: UIO[Unit]       = rechecks.update(_ + 1)
+    def count: UIO[Int]                   = rechecks.get
+  }
+
+  private val recordingSchedulerLayer: ULayer[JobScheduler] = ZLayer.fromZIO(Ref.make(0).map(RecordingScheduler(_)))
+
+  private val rechecks: URIO[JobScheduler, Int] =
+    ZIO.serviceWithZIO[JobScheduler](_.asInstanceOf[RecordingScheduler].count)
 
   // --- Request helper ---
 
@@ -894,8 +908,27 @@ object TestRoutes extends ZIOSpecDefault {
     testPostCronInvalidTimezoneReturns400,
     testPostBothTriggersReturns400,
     testPostCronMissingExprReturns400,
-    testPostSchedulesIntervalOverflowReturns400
+    testPostSchedulesIntervalOverflowReturns400,
+    testScheduleWritesAskForRecheck
   )
+
+  private def testScheduleWritesAskForRecheck =
+    test("POST, PUT and DELETE /api/schedules each ask the scheduler to recheck") {
+      for {
+        _      <- deleteAllSchedules
+        before <- rechecks
+        _ <- ScheduleRoutes.routes.runZIO(
+          jsonRequest(Method.POST, "/api/schedules", s"""{"kind":"Recruitment","club":$testClub,"intervalHours":24}""")
+        )
+        afterPost <- rechecks
+        listResp  <- ScheduleRoutes.routes.runZIO(jsonRequest(Method.GET, "/api/schedules"))
+        id        <- listResp.body.asString.map(extractFirstId)
+        _ <- ScheduleRoutes.routes.runZIO(jsonRequest(Method.PUT, s"/api/schedules/$id", """{"enabled":false}"""))
+        afterPut <- rechecks
+        _        <- ScheduleRoutes.routes.runZIO(jsonRequest(Method.DELETE, s"/api/schedules/$id"))
+        afterDel <- rechecks
+      } yield assertTrue(afterPost == before + 1, afterPut == before + 2, afterDel == before + 3)
+    }
 
   private def testGetSchedulesReturnsEmptyList = test("GET /api/schedules returns empty list") {
     for {
@@ -1217,8 +1250,19 @@ object TestRoutes extends ZIOSpecDefault {
     testUnmarkNameless,
     testUnmarkUnknownClub,
     testUnmarkClearsSchedules,
+    testUnmarkAsksForRecheck,
     testManagedListWireShape
   )
+
+  private def testUnmarkAsksForRecheck = test("DELETE /api/managed-clubs asks the scheduler to recheck") {
+    for {
+      _      <- resetManaged
+      _      <- ManagedClubRoutes.routes.runZIO(jsonRequest(Method.POST, "/api/managed-clubs", markTestClub))
+      before <- rechecks
+      _      <- ManagedClubRoutes.routes.runZIO(jsonRequest(Method.DELETE, "/api/managed-clubs?clubId=200"))
+      after  <- rechecks
+    } yield assertTrue(after == before + 1)
+  }
 
   private def testMarkAndList = test("POST marks a club; GET lists it") {
     for {
