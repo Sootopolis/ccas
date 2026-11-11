@@ -1,4 +1,4 @@
-Total members: 42 (+2)
+Members: 40 → 42 (+2)
 
 [JOINED]
   alice — at 2025-07-01T00:00:00Z — invited at 2025-06-02T00:00:00Z
@@ -29,7 +29,7 @@ Total members: 42 (+2)
   liam — at 2025-07-01T00:00:00Z — old username: liam-old
 
 [ACCOUNT STATUS CHANGE]
-  mia — at 2025-07-01T00:00:00Z — changed from closed to closed for fair-play violations
+  mia — at 2025-07-01T00:00:00Z — closure reason changed from none shown to fair-play violations
 
 [INFERRED FROM MATCHES]
   wes — played for the club from 2025-06-01T00:00:00Z to 2025-07-01T00:00:00Z, 3 matches

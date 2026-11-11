@@ -12,34 +12,45 @@ Not recorded:         3
   olga — at 2025-06-01T00:00:00Z
   alice — at 2025-07-01T00:00:00Z — invited at 2025-06-02T00:00:00Z
   bob — at 2025-07-01T00:00:00Z
+
 [REJOINED]
   carol — at 2025-07-01T00:00:00Z — previous membership ended between 2025-06-01T00:00:00Z and 2025-06-02T00:00:00Z — invited at 2025-06-01T00:00:00Z
   dave — at 2025-07-31T00:00:00Z — previously played for the club from 2025-06-01T00:00:00Z to 2025-06-02T00:00:00Z
+
 [BACK ON ROSTER]
   erin — same membership since 2025-06-01T00:00:00Z; last seen 2025-06-02T00:00:00Z, missing by 2025-07-01T00:00:00Z
+
 [LEFT CLUB]
   frank — by 2025-07-01T00:00:00Z
+
 [ACCOUNT CLOSED]
   gina — status: closed for fair-play violations, after 2025-06-02T00:00:00Z
   olga — status: closed, after 2025-06-02T00:00:00Z
   hugo — status: closed for abuse, by 2025-07-01T00:00:00Z
   noah — status: closed, after 2025-07-01T00:00:00Z
+
 [ACCOUNT REOPENED]
   ivy — member since 2025-06-01T00:00:00Z, last seen 2025-06-02T00:00:00Z
   jack — at 2025-07-31T00:00:00Z
+
 [USERNAME CHANGED]
   kate — at 2025-07-01T00:00:00Z — previously kate-old
+
 [UNRESOLVED MEMBER]
   liam — at 2025-07-01T00:00:00Z — old username: liam-old
+
 [ACCOUNT STATUS CHANGE]
-  mia — at 2025-07-01T00:00:00Z — changed from closed to closed for fair-play violations
+  mia — at 2025-07-01T00:00:00Z — closure reason changed from none shown to fair-play violations
+
 [JOIN DATE CONFLICT] — our record is kept; this repeats each run until the roster changes or the record is corrected by hand
   quinn — Chess.com lists them as joined at 2025-06-01T00:00:00Z; we hold their membership from 2025-07-01T00:00:00Z
   rosa — Chess.com lists them as joined at 2025-06-02T00:00:00Z; we hold their membership from 2025-07-01T00:00:00Z, ended by 2025-07-31T00:00:00Z and last seen 2025-07-01T00:00:00Z, so they are not counted as a member
   sam — Chess.com lists them as joined at 2025-07-01T00:00:00Z; we hold their membership from 2025-07-31T00:00:00Z, account closed after 2025-07-31T00:00:00Z
+
 [MEMBERSHIP NOT RECORDED] — our record is kept and the rest of the club saved; this repeats each run until the roster changes or the record is corrected by hand, and is worth an issue if it persists
   tom — this run saw [JOINED] at 2025-07-01T00:00:00Z; [ACCOUNT CLOSED] status: closed, after 2025-07-01T00:00:00Z; recording it would overlap their memberships from 2025-06-01T00:00:00Z and from 2025-07-01T00:00:00Z
   uma — this run saw [LEFT CLUB] by 2025-07-01T00:00:00Z; recording it would give them two memberships from 2025-07-01T00:00:00Z
   vic — recording it would leave their membership from 2025-06-02T00:00:00Z with its dates out of order: last seen 2025-06-01T00:00:00Z, ended 2025-06-01T00:00:00Z
+
 [MEMBERSHIP NEEDS REVIEW]
   pete — the closed account's club list can't be read under the name we hold

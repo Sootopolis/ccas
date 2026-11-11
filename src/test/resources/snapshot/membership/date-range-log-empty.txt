@@ -1,3 +1,4 @@
 === Report for test-club from 2025-06-02T00:00:00Z to 2025-07-31T00:00:00Z ===
-Members: 40 → 40
+Members: 40 → 40 (+0)
+
 No changes

@@ -43,7 +43,7 @@ Not recorded:         3
   liam — at 2025-07-01T00:00:00Z — old username: liam-old
 
 [ACCOUNT STATUS CHANGE]
-  mia — at 2025-07-01T00:00:00Z — changed from closed to closed for fair-play violations
+  mia — at 2025-07-01T00:00:00Z — closure reason changed from none shown to fair-play violations
 
 [JOIN DATE CONFLICT] — our record is kept; this repeats each run until the roster changes or the record is corrected by hand
   quinn — Chess.com lists them as joined at 2025-06-01T00:00:00Z; we hold their membership from 2025-07-01T00:00:00Z

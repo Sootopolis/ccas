@@ -27,6 +27,7 @@ object TestProgressBar extends ZIOSpecDefault {
     testCurrentLogLevelEnablesDebug,
     testLoggerSwallowsThrow,
     testSourcedRendersPrefixTag,
+    testAnEmptyMessageIsABlankLine,
     testStripSourceTag,
     testBenignReadIdleReapFiltered
   )
@@ -356,6 +357,15 @@ object TestProgressBar extends ZIOSpecDefault {
           clean.contains("run=abc123"),
           !clean.contains("src=")
         )
+      }
+    }
+
+  private def testAnEmptyMessageIsABlankLine =
+    test("an empty log message prints as a blank line, without the level, time or source") {
+      val effect = ProgressDisplay.sourced("membership/london-cc")(ZIO.logInfo("[JOINED]") *> ZIO.logInfo(""))
+      withLogCapture(effect).map { case (_, out) =>
+        val lines = stripAnsi(out).linesIterator.toList
+        assertTrue(lines.size == 2, lines.head.endsWith("] [membership/london-cc] [JOINED]"), lines(1) == "")
       }
     }
 
