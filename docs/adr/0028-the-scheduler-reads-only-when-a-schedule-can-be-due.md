@@ -1,6 +1,6 @@
 # The scheduler reads its schedules only when one can be due
 
-**Status:** Accepted, 2026-11-10 (#422).
+**Status:** Accepted, 2026-11-10 (#422). Amended by #458.
 
 ## Context
 
@@ -30,5 +30,5 @@ A due schedule that did not fire, because its job is still running or its submis
 - **A write the server is not told about is seen within `MaxReadGap`:** a hand-edited row, a second server's write, or `ServerTables` run on its own to seed. That is a new dependence on one server, bounded by the gap (#220).
 - **The idle cost is now a read per distinct due time plus one every `MaxReadGap`,** not one per tick. For production's four daily schedules that means a read when they come due and the gap's reads between them.
 - While a due job can't start because its last run is still going, the scheduler reads at every tick, as before. A long History crawl overlapping its own next run keeps the compute awake for that time, which the running job does anyway.
-- When the clocks go back, cron4s's next boundary is in wall-clock time, so a boundary in the repeated hour is first seen at a later read. A `CatchUp` schedule that already fired in that hour's first pass fires again then, late; a `Skip` one doesn't. Before this change both fired twice, on time (#458).
+- A read comes only when `nextDue` says a schedule can be due, so `isDue` must never hold before it. Across a clock change it did, and a cron fired twice; [0030](0030-a-cron-schedule-fires-each-wall-clock-time-once.md) settles what a cron means on those nights.
 - Nothing stored changes, so rolling back means reverting the code.

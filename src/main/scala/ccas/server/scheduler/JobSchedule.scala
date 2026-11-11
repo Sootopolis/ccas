@@ -1,10 +1,11 @@
 package ccas.server.scheduler
 
 import java.sql.SQLException
-import java.time.{Duration, Instant, ZoneId}
+import java.time.{Duration, Instant, ZonedDateTime, ZoneId}
 import java.time.temporal.ChronoUnit
 
 import com.augustnagro.magnum.*
+import cron4s.CronExpr
 import cron4s.lib.javatime.*
 import cron4s.syntax.all.*
 import zio.ZIO
@@ -65,7 +66,8 @@ final case class JobSchedule(
   /** Whether this schedule should fire at `now`, for a scheduler ticking every `pollInterval`. Pure.
     *   - Interval: `interval_hours` have elapsed since `last_run_at`, less half a poll interval, so the tick nearest
     *     that time fires it (ADR 0029). Always due if never run.
-    *   - Cron: the most recent fire boundary, `now`'s own second included, is after `last_run_at`, gated by misfire:
+    *   - Cron: the most recent fire boundary, `now`'s own second included and none after it, is after `last_run_at`
+    *     by the clock in the schedule's zone, so each wall-clock time fires once (ADR 0030), gated by misfire:
     *     `CatchUp` fires regardless of how late; `Skip` only within two poll intervals of the boundary, so a boundary
     *     missed during downtime is skipped and the next on-time one resumes cleanly.
     */
@@ -75,17 +77,15 @@ final case class JobSchedule(
         lastRunAt.forall(ts => !now.isBefore(intervalDue(ts, hours, pollInterval)))
 
       case ScheduleTrigger.Cron(expr, zone, misfire) =>
-        val zoned = now.atZone(zone)
-        // `prev` is strict to the second, so a boundary in `now`'s second would wait a tick, or a day once `nextDue`
-        // stepped past it.
-        val prevOption =
-          if (expr.allOf(zoned)) { Some(zoned.truncatedTo(ChronoUnit.SECONDS)) }
-          else { expr.prev(zoned) }
-        prevOption match {
+        val boundaryOption =
+          JobSchedule.latestCronBoundary(expr, now.atZone(zone)).filter(boundary => !boundary.toInstant.isAfter(now))
+        boundaryOption match {
           case None => false
           case Some(prevZdt) =>
-            val prevFire         = prevZdt.toInstant
-            val boundaryAfterRun = lastRunAt.forall(prevFire.isAfter)
+            val prevFire = prevZdt.toInstant
+            // In local time, so the repeat of a time the clocks go back through counts as run (ADR 0030).
+            val boundaryAfterRun =
+              lastRunAt.forall(run => prevZdt.toLocalDateTime.isAfter(run.atZone(zone).toLocalDateTime))
             if (!boundaryAfterRun) { false }
             else {
               misfire match {
@@ -98,8 +98,8 @@ final case class JobSchedule(
     }
 
   /** The earliest instant from `now` at which [[isDue]] holds: `now` itself when it already does, `None` for a cron
-    * with no boundary left. A cron's next boundary is cron4s's, in wall-clock time, so it passes over the repeat of an
-    * hour the clocks go back through. Throws on a malformed row, as [[trigger]] does.
+    * with no boundary left. A cron's next boundary is in wall-clock time, as in [[isDue]] (ADR 0030). Throws on a
+    * malformed row, as [[trigger]] does.
     */
   def nextDue(now: Instant, pollInterval: Duration): Option[Instant] =
     if (isDue(now, pollInterval)) { Some(now) }
@@ -108,9 +108,24 @@ final case class JobSchedule(
         // Not due, so it has run: the interval counts from that run.
         case ScheduleTrigger.Interval(hours) => lastRunAt.map(intervalDue(_, hours, pollInterval))
         // At the next boundary the most recent fire is that boundary, after any run so far and zero late.
-        case ScheduleTrigger.Cron(expr, zone, _) => expr.next(now.atZone(zone)).map(_.toInstant)
+        case ScheduleTrigger.Cron(expr, zone, _) => nextCronBoundary(expr, zone, now).map(_.toInstant)
       }
     }
+
+  /** The first boundary after `now` that has not run by the clock, which is the one cron4s's `next` gives except
+    * across a clock change (ADR 0030).
+    */
+  private def nextCronBoundary(expr: CronExpr, zone: ZoneId, now: Instant): Option[ZonedDateTime] = {
+    val zoned   = now.atZone(zone)
+    val shifted = JobSchedule.latestCronBoundary(expr, zoned).filter(_.toInstant.isAfter(now))
+    // Count from a run later than `now` by the clock, as one in the first pass of a repeated hour is, so the times it
+    // has run are passed over.
+    val from = lastRunAt
+      .map(_.atZone(zone))
+      .filter(_.toLocalDateTime.isAfter(zoned.toLocalDateTime))
+      .fold(zoned)(_.withLaterOffsetAtOverlap())
+    shifted.orElse(expr.next(from))
+  }
 
   /** When an interval schedule last run at `lastRun` falls due: half a poll interval early (ADR 0029). */
   private def intervalDue(lastRun: Instant, hours: Short, pollInterval: Duration): Instant =
@@ -123,6 +138,15 @@ object JobSchedule {
     * poll interval late, and the second interval is headroom for the read and the database.
     */
   private def skipGrace(pollInterval: Duration): Duration = pollInterval.multipliedBy(2)
+
+  /** The boundary cron4s takes as most recent at `zoned`, its own second included, since `prev` is strict to the second
+    * and a boundary in it would otherwise wait a tick, or a day once `nextDue` stepped past it. Past the gap the clocks
+    * go forward through it can be the shifted boundary, still to come (ADR 0030): [[isDue]] waits for it, and
+    * [[nextDue]] names it.
+    */
+  private def latestCronBoundary(expr: CronExpr, zoned: ZonedDateTime): Option[ZonedDateTime] =
+    if (expr.allOf(zoned)) { Some(zoned.truncatedTo(ChronoUnit.SECONDS)) }
+    else { expr.prev(zoned) }
 
   private val columns = SqlLiteral(
     "id, kind, club_id, params, trigger_type, interval_hours, cron_expr, timezone, misfire_policy, enabled, last_run_at"
@@ -237,7 +261,7 @@ object JobSchedule {
     connectZIO {
       sql"""INSERT INTO job_schedule
               (kind, club_id, params, trigger_type, interval_hours, cron_expr, timezone, misfire_policy, enabled, last_run_at)
-            SELECT ${seed.kind}, NULL, NULL, ${intervalTrigger}, ${seed.intervalHours}, NULL, NULL, NULL, ${seed.enabled}, NULL
+            SELECT ${seed.kind}, NULL, NULL, $intervalTrigger, ${seed.intervalHours}, NULL, NULL, NULL, ${seed.enabled}, NULL
             WHERE NOT EXISTS (
               SELECT 1 FROM job_schedule WHERE kind = ${seed.kind} AND club_id IS NULL
             )""".update.run()
@@ -255,7 +279,7 @@ object JobSchedule {
     connectZIO {
       sql"""INSERT INTO job_schedule
               (kind, club_id, params, trigger_type, interval_hours, cron_expr, timezone, misfire_policy, enabled, last_run_at)
-            VALUES (${seed.kind}, $clubId, NULL, ${intervalTrigger}, ${seed.intervalHours}, NULL, NULL, NULL, ${seed.enabled}, NULL)
+            VALUES (${seed.kind}, $clubId, NULL, $intervalTrigger, ${seed.intervalHours}, NULL, NULL, NULL, ${seed.enabled}, NULL)
             ON CONFLICT (kind, club_id) DO NOTHING""".update.run()
     }
 
