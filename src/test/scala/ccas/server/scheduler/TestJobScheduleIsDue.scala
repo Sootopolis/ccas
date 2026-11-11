@@ -31,6 +31,24 @@ object TestJobScheduleIsDue extends ZIOSpecDefault {
       lastRunAt = lastRunAt
     )
 
+  // London's clocks go back at 01:00 UTC on 25 October 2026 and forward at 01:00 UTC on 29 March 2026.
+  private def london(cronExpr: String, lastRun: Instant, misfire: MisfirePolicy): JobSchedule =
+    JobSchedule.cron(
+      id = 1L,
+      kind = JobKind.MatchRef,
+      clubIdOption = None,
+      params = None,
+      cronExpr = cronExpr,
+      timezone = "Europe/London",
+      misfire = misfire,
+      enabled = true,
+      lastRunAt = Some(lastRun)
+    )
+
+  private val dailyAt0130   = "0 30 1 * * ?"
+  private val hourly        = "0 0 * * * ?"
+  private val quarterHourly = "0 */15 * * * ?"
+
   private def interval(hours: Short, lastRunAt: Option[Instant]): JobSchedule =
     JobSchedule.interval(
       id = 1L,
@@ -127,6 +145,69 @@ object TestJobScheduleIsDue extends ZIOSpecDefault {
         daily9(None, MisfirePolicy.CatchUp).isDue(at(2026, 6, 27, 9, 10), pollInterval),
         daily9(None, MisfirePolicy.Skip).isDue(at(2026, 6, 27, 9, 10), pollInterval)
       )
+    },
+
+    // --- Cron: clock changes ---
+    test("a cron boundary in the hour the clocks go back through fires once, under both policies") {
+      // The first 01:30 (BST) ran; the second (GMT) is the same wall-clock time.
+      val lastRun = Instant.parse("2026-10-25T00:30:03Z")
+      val dues = for {
+        misfire <- List(MisfirePolicy.CatchUp, MisfirePolicy.Skip)
+        now     <- List("2026-10-25T01:30:00Z", "2026-10-25T06:30:00Z")
+      } yield london(dailyAt0130, lastRun, misfire).isDue(Instant.parse(now), pollInterval)
+      assertTrue(dues == List(false, false, false, false))
+    },
+    test("a cron that fires every quarter hour does not fire the repeated hour again when the clocks go back") {
+      val schedule = london(quarterHourly, Instant.parse("2026-10-25T00:45:00Z"), MisfirePolicy.CatchUp)
+      assertTrue(
+        !schedule.isDue(Instant.parse("2026-10-25T01:00:00Z"), pollInterval),
+        !schedule.isDue(Instant.parse("2026-10-25T01:15:00Z"), pollInterval),
+        schedule.isDue(Instant.parse("2026-10-25T02:00:00Z"), pollInterval)
+      )
+    },
+    test(
+      "a cron boundary the clocks skip fires at the instant java.time gives it, and not before, under both policies"
+    ) {
+      // 01:30 does not exist on 29 March; java.time resolves it to 02:30 BST, which is 01:30 UTC.
+      val dues = List(MisfirePolicy.CatchUp, MisfirePolicy.Skip).map { misfire =>
+        val schedule = london(dailyAt0130, Instant.parse("2026-03-28T01:30:00Z"), misfire)
+        val ran      = schedule.copy(lastRunAt = Some(Instant.parse("2026-03-29T01:30:00Z")))
+        List(
+          schedule.isDue(Instant.parse("2026-03-29T01:00:00Z"), pollInterval),
+          schedule.isDue(Instant.parse("2026-03-29T01:29:59Z"), pollInterval),
+          schedule.isDue(Instant.parse("2026-03-29T01:30:00Z"), pollInterval),
+          ran.isDue(Instant.parse("2026-03-29T01:45:00Z"), pollInterval)
+        )
+      }
+      assertTrue(dues == List(List(false, false, true, false), List(false, false, true, false)))
+    },
+    test("from every minute between a run and the next due boundary, a cron is not due and is next due at it") {
+      // Agreeing at every tick is what lets the scheduler read only at nextDue (ADR 0028), across both clock changes.
+      val runs = List(
+        (dailyAt0130, "2026-10-25T00:30:03Z", "2026-10-26T01:30:00Z"),
+        (hourly, "2026-10-25T00:00:00Z", "2026-10-25T02:00:00Z"),
+        (quarterHourly, "2026-10-25T00:15:00Z", "2026-10-25T00:30:00Z"),
+        (quarterHourly, "2026-10-25T00:45:00Z", "2026-10-25T02:00:00Z"),
+        (dailyAt0130, "2026-03-28T01:30:00Z", "2026-03-29T01:30:00Z"),
+        (hourly, "2026-03-29T00:00:00Z", "2026-03-29T01:00:00Z"),
+        (quarterHourly, "2026-03-29T00:45:00Z", "2026-03-29T01:00:00Z")
+      )
+      // Per run and policy: the minutes that disagree, by finding it due or naming another time, and whether it is due
+      // at the end.
+      val results = for {
+        (cronExpr, lastRun, nextBoundary) <- runs
+        misfire                           <- List(MisfirePolicy.CatchUp, MisfirePolicy.Skip)
+      } yield {
+        val schedule = london(cronExpr, Instant.parse(lastRun), misfire)
+        val due      = Instant.parse(nextBoundary)
+        val minutes =
+          Iterator.iterate(Instant.parse(lastRun).plusSeconds(1))(_.plusSeconds(60)).takeWhile(_.isBefore(due))
+        val disagreeing = minutes.count { minute =>
+          schedule.isDue(minute, pollInterval) || !schedule.nextDue(minute, pollInterval).contains(due)
+        }
+        disagreeing -> schedule.isDue(due, pollInterval)
+      }
+      assertTrue(results == List.fill(runs.size * 2)(0 -> true))
     },
 
     // --- nextDue ---
