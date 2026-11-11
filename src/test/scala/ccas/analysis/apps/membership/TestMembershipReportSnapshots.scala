@@ -6,7 +6,7 @@ import zio.test.{Spec, ZIOSpecDefault, ZTestLogger}
 
 import TestMembershipAppSupport.*
 
-import ccas.analysis.apps.TestTimes
+import ccas.analysis.apps.{NamedClub, TestTimes}
 import ccas.analysis.apps.membership.MembershipChange.*
 import ccas.analysis.apps.membership.MembershipChange.MemberChange.*
 import ccas.analysis.apps.membership.MembershipReport.{InferredMember, ReportResult}
@@ -54,19 +54,23 @@ object TestMembershipReportSnapshots extends ZIOSpecDefault with ZioSnapshots {
       } yield assertFileSnapshot(logs.map(_.message() + "\n").mkString, "membership/reconcile-log-empty.txt")
     }.provide(capturedLog, ZLayer.succeed(ProgressDisplay.make(enabled = false))),
     test("the date-range report, with every section and inferred memberships, reads as checked in") {
-      val report = ReportResult(
-        summaries = memberChanges.toList,
-        inferred = inferredMembers,
-        memberCountAtStart = 40,
-        memberCountAtEnd = 42,
-        invitations = invitations
-      )
-      assertFileSnapshot(MembershipReport.formatReport(report), "membership/date-range-report.txt")
+      assertFileSnapshot(MembershipReport.formatReport(everyRangeSection), "membership/date-range-report.txt")
     },
+    test("the date-range job log, with every section and inferred memberships, reads as checked in") {
+      for {
+        _    <- MembershipReport.logReport(namedClub, TestTimes.t1, TestTimes.t3, everyRangeSection)
+        logs <- ZTestLogger.logOutput
+      } yield assertFileSnapshot(logs.map(_.message() + "\n").mkString, "membership/date-range-log.txt")
+    }.provide(capturedLog, ZLayer.succeed(ProgressDisplay.make(enabled = false))),
     test("a date-range report with nothing to say reads as checked in") {
-      val report = ReportResult(Nil, Nil, memberCountAtStart = 40, memberCountAtEnd = 40, invitations = Map.empty)
-      assertFileSnapshot(MembershipReport.formatReport(report), "membership/date-range-report-empty.txt")
-    }
+      assertFileSnapshot(MembershipReport.formatReport(emptyRange), "membership/date-range-report-empty.txt")
+    },
+    test("the job log of a date-range report with nothing to say reads as checked in") {
+      for {
+        _    <- MembershipReport.logReport(namedClub, TestTimes.t1, TestTimes.t3, emptyRange)
+        logs <- ZTestLogger.logOutput
+      } yield assertFileSnapshot(logs.map(_.message() + "\n").mkString, "membership/date-range-log-empty.txt")
+    }.provide(capturedLog, ZLayer.succeed(ProgressDisplay.make(enabled = false)))
   )
 
   /** The log a test reads back, kept off the console, where it would read as the run's own warnings. */
@@ -208,4 +212,17 @@ object TestMembershipReportSnapshots extends ZIOSpecDefault with ZioSnapshots {
     InferredMember(Username("wes"), InferredMembership(player(23), TestTimes.t0, TestTimes.t2, matches = 3)),
     InferredMember(Username("xena"), InferredMembership(player(24), TestTimes.t1, TestTimes.t1, matches = 1))
   )
+
+  private val namedClub = NamedClub(clubId, club.slug)
+
+  private val everyRangeSection = ReportResult(
+    summaries = memberChanges.toList,
+    inferred = inferredMembers,
+    memberCountAtStart = 40,
+    memberCountAtEnd = 42,
+    invitations = invitations
+  )
+
+  private val emptyRange =
+    ReportResult(Nil, Nil, memberCountAtStart = 40, memberCountAtEnd = 40, invitations = Map.empty)
 }

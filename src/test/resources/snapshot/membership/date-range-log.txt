@@ -1,0 +1,27 @@
+=== Report for test-club from 2025-06-02T00:00:00Z to 2025-07-31T00:00:00Z ===
+Members: 40 → 42
+[JOINED]
+  alice — at 2025-07-01T00:00:00Z — invited at 2025-06-02T00:00:00Z
+  bob — at 2025-07-01T00:00:00Z
+[REJOINED]
+  carol — at 2025-07-01T00:00:00Z — previous membership ended between 2025-06-01T00:00:00Z and 2025-06-02T00:00:00Z — invited at 2025-06-01T00:00:00Z
+  dave — at 2025-07-31T00:00:00Z — previously played for the club from 2025-06-01T00:00:00Z to 2025-06-02T00:00:00Z
+[BACK ON ROSTER]
+  erin — same membership since 2025-06-01T00:00:00Z; last seen 2025-06-02T00:00:00Z, missing by 2025-07-01T00:00:00Z
+[LEFT CLUB]
+  frank — by 2025-07-01T00:00:00Z
+[ACCOUNT CLOSED]
+  gina — status: closed for fair-play violations, after 2025-06-02T00:00:00Z
+  hugo — status: closed for abuse, by 2025-07-01T00:00:00Z
+[ACCOUNT REOPENED]
+  ivy — member since 2025-06-01T00:00:00Z, last seen 2025-06-02T00:00:00Z
+  jack — at 2025-07-31T00:00:00Z
+[USERNAME CHANGED]
+  kate — at 2025-07-01T00:00:00Z — previously kate-old
+[UNRESOLVED MEMBER]
+  liam — at 2025-07-01T00:00:00Z — old username: liam-old
+[ACCOUNT STATUS CHANGE]
+  mia — at 2025-07-01T00:00:00Z — changed from closed to closed for fair-play violations
+[INFERRED FROM MATCHES]
+  wes — played for the club from 2025-06-01T00:00:00Z to 2025-07-01T00:00:00Z, 3 matches
+  xena — played for the club from 2025-06-02T00:00:00Z to 2025-06-02T00:00:00Z, 1 match
