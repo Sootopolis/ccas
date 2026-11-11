@@ -1,4 +1,5 @@
 import _root_.scalafix.sbt.{BuildInfo => ScalafixBuildInfo}
+import _root_.snapshot4s.{BuildInfo => Snapshot4sBuildInfo}
 
 import Versions.*
 
@@ -15,6 +16,9 @@ libraryDependencies ++= Seq(
   "dev.zio" %% "zio-test"          % vZio % Test,
   "dev.zio" %% "zio-test-sbt"      % vZio % Test,
   "dev.zio" %% "zio-test-magnolia" % vZio % Test,
+
+  // snapshot4s — file snapshots of operator-facing text (#455); the version is the sbt plugin's, pinned in plugins.sbt
+  "com.siriusxm" %% "snapshot4s-core" % Snapshot4sBuildInfo.snapshot4sVersion % Test,
 
   // zio-json
   "dev.zio" %% "zio-json" % vZioJson,
@@ -92,13 +96,20 @@ Test / parallelExecution := false
 Test / fork := true
 Test / javaOptions ++= Seq("--sun-misc-unsafe-memory-access=allow", "--enable-native-access=ALL-UNNAMED")
 
+// A failed snapshot leaves its output in `snapshot4sDirectory`, a passing one doesn't clear it, and
+// `snapshot4sPromote` applies whatever is there; so without this, a promote can restore a failure fixed since (#455).
+Test / testOptions += {
+  val outputs = snapshot4sDirectory.value
+  Tests.Setup(() => IO.delete(outputs))
+}
+
 // scalafmt runs before scalafix: a wrap can leave a multi-line lambda in parens, which `MultilineBlockBraces` flags,
 // and scalafix's output is already formatted (#214).
 addCommandAlias("lint", "scalafmtCheckAll; scalafmtSbtCheck; scalafixAll --check")
 addCommandAlias("lintFix", "scalafmtAll; scalafmtSbt; scalafixAll")
 
 lazy val root = (project in file("."))
-  .enablePlugins(BuildInfoPlugin, JavaAppPackaging)
+  .enablePlugins(BuildInfoPlugin, JavaAppPackaging, Snapshot4sPlugin)
   .settings(
     name := "ccas",
     // `sbt stage` emits two launchers: `bin/ccas` (primary, the CLI) and a forwarder
