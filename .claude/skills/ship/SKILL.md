@@ -75,6 +75,7 @@ Steps 6-9 run after the merge, which cannot be undone, so check what can be chec
 ## 5. Hand the merge to the user
 **Never merge the PR yourself** — no `gh pr merge`, even when the user said "ship". The user merges in the GitHub UI: it is their last look at the PR, and an agent merging its own PR trips the auto-mode classifier's "Merge Without Review" denial.
 - Once CI is green, report the PR link and CI result, and ask for **Squash and merge** — this repo's convention (PR number in `main` subjects, e.g. `… (#94)`). Mention the merged page's **Delete branch** button, which does the remote half of step 7.
+- In the same handover, suggest merging from the web, and if the user will use the iOS app, ask them to note whether its box shows the full commit message. Merges from the app have landed subject-only (#433, #434, #459), while every web merge so far has kept its body; what the app's box showed has never been recorded, so step 6's report has nothing to compare against.
 - Then wait with a background command (`run_in_background`), which re-invokes the session when the PR leaves `OPEN`:
 
   ```
