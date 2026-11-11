@@ -44,11 +44,21 @@ private[membership] object MembershipReport {
       invitations  <- lookupJoinInvitations(club.clubId, summaries)
       countAtStart <- ClubMember.countAt(club.clubId, since)
       countAtEnd   <- ClubMember.countAt(club.clubId, until)
-      _            <- ZIO.logInfo(s"=== Report for ${club.slug} from $since to $until ===")
-      _            <- ZIO.logInfo(s"Members: $countAtStart -> $countAtEnd")
-      _            <- printSections(memberLines(summaries, invitations))
-      _            <- ZIO.foreachDiscard(inferredLines(overlapping))(ZIO.logInfo(_))
-    } yield ReportResult(summaries, overlapping, countAtStart, countAtEnd, invitations)
+      result = ReportResult(summaries, overlapping, countAtStart, countAtEnd, invitations)
+      _ <- logReport(club, since, until, result)
+    } yield result
+
+  /** What a date-range report writes to its job log, which streams to the CLI. */
+  def logReport(club: NamedClub, since: Instant, until: Instant, rr: ReportResult): URIO[ProgressDisplay, Unit] = {
+    val inferred = inferredLines(rr.inferred)
+    for {
+      _ <- ZIO.logInfo(s"=== Report for ${club.slug} from $since to $until ===")
+      _ <- ZIO.logInfo(s"Members: ${rr.memberCountAtStart} → ${rr.memberCountAtEnd}")
+      _ <- ZIO.whenDiscard(rr.summaries.isEmpty && inferred.isEmpty)(ZIO.logInfo("No changes"))
+      _ <- printSections(memberLines(rr.summaries, rr.invitations))
+      _ <- ZIO.foreachDiscard(inferred)(ZIO.logInfo(_))
+    } yield ()
+  }
 
   /** Each of `inferred` that overlaps `[since, until]`, under its player's name now, earliest first. */
   private def inferredOverlapping(
