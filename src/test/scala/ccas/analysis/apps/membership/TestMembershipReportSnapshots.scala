@@ -6,6 +6,7 @@ import zio.test.{Spec, ZIOSpecDefault, ZTestLogger}
 
 import TestMembershipAppSupport.*
 
+import ccas.analysis.apps.TestTimes
 import ccas.analysis.apps.membership.MembershipChange.*
 import ccas.analysis.apps.membership.MembershipChange.MemberChange.*
 import ccas.analysis.apps.membership.MembershipReport.{InferredMember, ReportResult}
@@ -78,36 +79,44 @@ object TestMembershipReportSnapshots extends ZIOSpecDefault with ZioSnapshots {
 
   /** One member, or two where a section reads differently with each, for every section of member changes. */
   private val memberChanges = Chunk(
-    changed(1, "alice", NewMember(Times.t2)),
-    changed(2, "bob", JoinedClub(Times.t2)),
-    changed(3, "carol", Rejoined(Times.t2, PreviousMembership.Recorded(lastSeen = Times.t0, until = Times.t1))),
-    changed(4, "dave", Rejoined(Times.t3, PreviousMembership.Inferred(firstMatch = Times.t0, lastMatch = Times.t1))),
-    changed(5, "erin", Reopened(Times.t0, MembershipStanding.Ended(lastSeen = Times.t1, until = Times.t2))),
-    changed(6, "frank", LeftClub(Times.t2)),
-    changed(7, "gina", AccountClosed(Times.t1, Fairplay)),
-    changed(8, "hugo", StatusChange(Times.t2, Active, Abuse)),
-    changed(9, "ivy", Reopened(Times.t0, MembershipStanding.Hidden(Times.t1))),
-    changed(10, "jack", StatusChange(Times.t3, Closed, Active)),
-    changed(11, "kate", UsernameChange(Times.t2, Username("kate-old"))),
-    changed(12, "liam", Unresolvable(Times.t2, Username("liam-old"))),
-    changed(13, "mia", StatusChange(Times.t2, Closed, Fairplay))
+    changed(1, "alice", NewMember(TestTimes.t2)),
+    changed(2, "bob", JoinedClub(TestTimes.t2)),
+    changed(
+      3,
+      "carol",
+      Rejoined(TestTimes.t2, PreviousMembership.Recorded(lastSeen = TestTimes.t0, until = TestTimes.t1))
+    ),
+    changed(
+      4,
+      "dave",
+      Rejoined(TestTimes.t3, PreviousMembership.Inferred(firstMatch = TestTimes.t0, lastMatch = TestTimes.t1))
+    ),
+    changed(5, "erin", Reopened(TestTimes.t0, MembershipStanding.Ended(lastSeen = TestTimes.t1, until = TestTimes.t2))),
+    changed(6, "frank", LeftClub(TestTimes.t2)),
+    changed(7, "gina", AccountClosed(TestTimes.t1, Fairplay)),
+    changed(8, "hugo", StatusChange(TestTimes.t2, Active, Abuse)),
+    changed(9, "ivy", Reopened(TestTimes.t0, MembershipStanding.Hidden(TestTimes.t1))),
+    changed(10, "jack", StatusChange(TestTimes.t3, Closed, Active)),
+    changed(11, "kate", UsernameChange(TestTimes.t2, Username("kate-old"))),
+    changed(12, "liam", Unresolvable(TestTimes.t2, Username("liam-old"))),
+    changed(13, "mia", StatusChange(TestTimes.t2, Closed, Fairplay))
   )
 
   /** alice and carol were invited; bob joined uninvited. */
-  private val invitations = Map(player(1) -> Times.t1, player(3) -> Times.t0)
+  private val invitations = Map(player(1) -> TestTimes.t1, player(3) -> TestTimes.t0)
 
   private val settlement = ClosedAccountClubs.Settlement(
     hidden = Chunk(
       ClosedAccountClubs.Hidden(
         username = Username("noah"),
-        row = ClubMember.joined(clubId = clubId, playerId = player(14), since = Times.t0).hidden(Times.t2),
+        row = ClubMember.joined(clubId = clubId, playerId = player(14), since = TestTimes.t0).hidden(TestTimes.t2),
         status = Closed
       )
     ),
     opened = Chunk(
       ClosedAccountClubs.Opened(
         username = Username("olga"),
-        row = ClubMember.joined(clubId = clubId, playerId = player(15), since = Times.t0).hidden(Times.t1),
+        row = ClubMember.joined(clubId = clubId, playerId = player(15), since = TestTimes.t0).hidden(TestTimes.t1),
         status = Closed
       )
     ),
@@ -122,40 +131,40 @@ object TestMembershipReportSnapshots extends ZIOSpecDefault with ZioSnapshots {
 
   /** One join date conflict for each standing of the membership we hold. */
   private val unsettledJoins = {
-    val open = ClubMember.joined(clubId = clubId, playerId = player(17), since = Times.t2)
+    val open = ClubMember.joined(clubId = clubId, playerId = player(17), since = TestTimes.t2)
     val ended =
-      open.copy(playerId = player(18), since = Times.t2, lastSeen = Some(Times.t2), until = Some(Times.t3))
-    val hidden = ClubMember.joined(clubId = clubId, playerId = player(19), since = Times.t3).hidden(Times.t3)
+      open.copy(playerId = player(18), since = TestTimes.t2, lastSeen = Some(TestTimes.t2), until = Some(TestTimes.t3))
+    val hidden = ClubMember.joined(clubId = clubId, playerId = player(19), since = TestTimes.t3).hidden(TestTimes.t3)
     Chunk(
-      UnsettledJoin(playerId = player(17), username = Username("quinn"), joinedAt = Times.t0, latest = open),
-      UnsettledJoin(playerId = player(18), username = Username("rosa"), joinedAt = Times.t1, latest = ended),
-      UnsettledJoin(playerId = player(19), username = Username("sam"), joinedAt = Times.t2, latest = hidden)
+      UnsettledJoin(playerId = player(17), username = Username("quinn"), joinedAt = TestTimes.t0, latest = open),
+      UnsettledJoin(playerId = player(18), username = Username("rosa"), joinedAt = TestTimes.t1, latest = ended),
+      UnsettledJoin(playerId = player(19), username = Username("sam"), joinedAt = TestTimes.t2, latest = hidden)
     )
   }
 
   /** One refusal for each conflict, the first two with events the run saw. */
   private val refused = {
-    val first  = ClubMember.joined(clubId = clubId, playerId = player(20), since = Times.t0)
-    val second = ClubMember.joined(clubId = clubId, playerId = player(20), since = Times.t2)
+    val first  = ClubMember.joined(clubId = clubId, playerId = player(20), since = TestTimes.t0)
+    val second = ClubMember.joined(clubId = clubId, playerId = player(20), since = TestTimes.t2)
     val outside = ClubMember(
       clubId = clubId,
       playerId = player(22),
-      since = Times.t1,
-      lastSeen = Some(Times.t0),
-      until = Some(Times.t0)
+      since = TestTimes.t1,
+      lastSeen = Some(TestTimes.t0),
+      until = Some(TestTimes.t0)
     )
     Chunk(
       RefusedMembershipVerdict(
         playerId = player(20),
         username = Username("tom"),
         conflict = MemberRowConflict.Overlap(first, second),
-        unreported = Chunk(JoinedClub(Times.t2), AccountClosed(Times.t2, Closed))
+        unreported = Chunk(JoinedClub(TestTimes.t2), AccountClosed(TestTimes.t2, Closed))
       ),
       RefusedMembershipVerdict(
         playerId = player(21),
         username = Username("uma"),
         conflict = MemberRowConflict.SameStart(second),
-        unreported = Chunk(LeftClub(Times.t2))
+        unreported = Chunk(LeftClub(TestTimes.t2))
       ),
       RefusedMembershipVerdict(
         playerId = player(22),
@@ -178,8 +187,8 @@ object TestMembershipReportSnapshots extends ZIOSpecDefault with ZioSnapshots {
     refused = refused,
     settlement = settlement,
     rosterMovement = RosterMovement(before = onRoster(1 to 40), after = onRoster(3 to 44)),
-    startedAt = Times.t3,
-    completedAt = Times.t3.plusSeconds(754)
+    startedAt = TestTimes.t3,
+    completedAt = TestTimes.t3.plusSeconds(754)
   )
 
   private val nothingToSay = ReconciliationResult(
@@ -191,12 +200,12 @@ object TestMembershipReportSnapshots extends ZIOSpecDefault with ZioSnapshots {
     refused = Chunk.empty,
     settlement = noSettlement,
     rosterMovement = RosterMovement(before = onRoster(1 to 40), after = onRoster(1 to 40)),
-    startedAt = Times.t3,
-    completedAt = Times.t3.plusSeconds(754)
+    startedAt = TestTimes.t3,
+    completedAt = TestTimes.t3.plusSeconds(754)
   )
 
   private val inferredMembers = List(
-    InferredMember(Username("wes"), InferredMembership(player(23), Times.t0, Times.t2, matches = 3)),
-    InferredMember(Username("xena"), InferredMembership(player(24), Times.t1, Times.t1, matches = 1))
+    InferredMember(Username("wes"), InferredMembership(player(23), TestTimes.t0, TestTimes.t2, matches = 3)),
+    InferredMember(Username("xena"), InferredMembership(player(24), TestTimes.t1, TestTimes.t1, matches = 1))
   )
 }
