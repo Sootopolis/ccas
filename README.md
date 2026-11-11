@@ -37,6 +37,9 @@ sbt "runMain ccas.cli.Main server up"
 # Run tests (requires ccas_test database from docker compose)
 sbt test
 
+# After a deliberate change to a report's wording, rewrite its snapshots from the failed run, then read their diff
+sbt snapshot4sPromote
+
 # Check formatting (scalafmt) and the coding conventions (scalafix), as CI does
 sbt lint
 

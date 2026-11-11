@@ -1,0 +1,10 @@
+=== Reconciliation Complete ===
+Duration:             12m 34s
+Active roster:        40 → 40 (+0)
+Roster gains:         0
+Roster losses:        0
+New players:          0
+Updated players:      0
+Join date conflicts:  0
+Not recorded:         0
+
