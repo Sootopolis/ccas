@@ -39,7 +39,7 @@ When changes must reach `<base>` as separate PRs (CLAUDE.md, Git):
 - Each PR takes steps 1b-5 and 7-9 on its own; steps 6 and 6b can wait for the last merge.
 
 ## 1b. Collapse to one commit
-GitHub's squash default joins every commit's message, superseded ones included (#428), while a single commit's message normally lands as written (#433's lost its body, cause unknown, so step 6 checks). So that the user can just click merge, the branch goes up as one commit. If `git rev-list --count origin/<base>..HEAD` says 1, go to step 2. Otherwise, in the branch's own worktree, with a clean tree:
+GitHub's squash default joins every commit's message, superseded ones included (#428), while a single commit's message lands as written when merged from the web (step 5). So that the user can just click merge, the branch goes up as one commit. If `git rev-list --count origin/<base>..HEAD` says 1, go to step 2. Otherwise, in the branch's own worktree, with a clean tree:
 - On a published branch, `git fetch origin`, then `git merge-base --is-ancestor origin/<branch> HEAD` must pass. If it doesn't, the remote holds a commit this branch lacks: report it and stop.
 - Record `git rev-parse HEAD` as `<tip>` and `git merge-base origin/<base> HEAD` as `<merge-base>`, and write both out literally below: shell variables do not persist between calls.
 - `git reset --soft <merge-base>`: the merge base, since a reset to `origin/<base>` would undo whatever has landed there since.
@@ -75,7 +75,7 @@ Steps 6-9 run after the merge, which cannot be undone, so check what can be chec
 ## 5. Hand the merge to the user
 **Never merge the PR yourself** — no `gh pr merge`, even when the user said "ship". The user merges in the GitHub UI: it is their last look at the PR, and an agent merging its own PR trips the auto-mode classifier's "Merge Without Review" denial.
 - Once CI is green, report the PR link and CI result, and ask for **Squash and merge** — this repo's convention (PR number in `main` subjects, e.g. `… (#94)`). Mention the merged page's **Delete branch** button, which does the remote half of step 7.
-- In the same handover, suggest merging from the web, and if the user will use the iOS app, ask them to note whether its box shows the full commit message. Merges from the app have landed subject-only (#433, #434, #459), while every web merge so far has kept its body; what the app's box showed has never been recorded, so step 6's report has nothing to compare against.
+- In the same handover, ask for the merge from the web. The iOS app drops the commit body even when its box shows it (#468), while web merges keep it. If the user merges from the app anyway, step 9 carries the lost body.
 - Then wait with a background command (`run_in_background`), which re-invokes the session when the PR leaves `OPEN`:
 
   ```
@@ -136,6 +136,7 @@ Backref comments should already be posted (step 3b); this step adds the merge SH
 - Issues the PR *resolves*: `gh issue comment` with the PR link + merge SHA, then `gh issue close` if it is still open. A closing keyword in the PR body (`Resolves #N`) closes the issue at merge, and `gh issue close --comment` on a closed issue refuses without posting the comment — so never let it carry the comment.
 - Issues *deferred* or `pending-decision`: comment a backref (PR + SHA), keep open. Never auto-close a `pending-decision` item.
 - If no issue is resolved by the PR, say so explicitly rather than silently skipping the step.
+- If step 6 found the body lost, paste the commit body into the merge-SHA comment on the PR's main issue. Without it, the reason for the change survives only in the PR.
 
 ## Output
 Finish with a compact status table: commit SHA, PR #, PR CI, merge SHA (merged by the user), base-worktree sync, launcher staged, branch disposal, main CI, issues touched. Mark any step that was refused or skipped as such — never leave a blocked step looking complete, and list the exact commands needed to finish it.
