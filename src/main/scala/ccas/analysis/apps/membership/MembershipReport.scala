@@ -3,7 +3,7 @@ package ccas.analysis.apps.membership
 import java.sql.SQLException
 import java.time.{Duration as JDuration, Instant}
 
-import zio.{Chunk, RIO, UIO, URIO, ZIO}
+import zio.{Chunk, RIO, UIO, ZIO}
 
 import ccas.analysis.apps.NamedClub
 import ccas.analysis.apps.membership.MembershipChange.*
@@ -11,7 +11,7 @@ import ccas.analysis.apps.membership.MembershipChange.MemberChange.*
 import ccas.analysis.tables.*
 import ccas.api.misc.enums.PlayerStatusCategory
 import ccas.api.misc.subtypes.{ClubId, PlayerId, Username}
-import ccas.utils.{display, ProgressDisplay}
+import ccas.utils.display
 import ccas.utils.sql.PostgresClient
 
 private[membership] object MembershipReport {
@@ -29,7 +29,7 @@ private[membership] object MembershipReport {
   )
 
   /** Counts come from the rows alone, so each change in them has an event in `summaries` behind it. */
-  def report(club: NamedClub, since: Instant, until: Instant): RIO[ProgressDisplay & PostgresClient, ReportResult] =
+  def report(club: NamedClub, since: Instant, until: Instant): RIO[PostgresClient, ReportResult] =
     for {
       members   <- ClubMember.selectClub(club.clubId)
       sightings <- ClubMatchBoard.selectSightings(club.clubId)
@@ -49,16 +49,33 @@ private[membership] object MembershipReport {
     } yield result
 
   /** What a date-range report writes to its job log, which streams to the CLI. */
-  def logReport(club: NamedClub, since: Instant, until: Instant, rr: ReportResult): URIO[ProgressDisplay, Unit] = {
+  def logReport(club: NamedClub, since: Instant, until: Instant, rr: ReportResult): UIO[Unit] =
+    logOf(List(s"=== Report for ${club.slug} from $since to $until ===", memberCount(rr)) :: rangeBlocks(rr))
+
+  def formatReport(rr: ReportResult): String = fileOf(List(memberCount(rr)) :: rangeBlocks(rr))
+
+  /** The rows' member count at each end of the range. A hidden row counts until its `lastSeen`, so this is not the
+    * roster a reconcile counts.
+    */
+  private def memberCount(rr: ReportResult): String =
+    s"Members: ${rr.memberCountAtStart} → ${rr.memberCountAtEnd} (${signed(rr.memberCountAtEnd - rr.memberCountAtStart)})"
+
+  /** A date-range report's blocks after its header. */
+  private def rangeBlocks(rr: ReportResult): List[List[String]] = {
     val inferred = inferredLines(rr.inferred)
-    for {
-      _ <- ZIO.logInfo(s"=== Report for ${club.slug} from $since to $until ===")
-      _ <- ZIO.logInfo(s"Members: ${rr.memberCountAtStart} → ${rr.memberCountAtEnd}")
-      _ <- ZIO.whenDiscard(rr.summaries.isEmpty && inferred.isEmpty)(ZIO.logInfo("No changes"))
-      _ <- printSections(memberLines(rr.summaries, rr.invitations))
-      _ <- ZIO.foreachDiscard(inferred)(ZIO.logInfo(_))
-    } yield ()
+    val blocks   = sections(memberLines(rr.summaries, rr.invitations)) ++ Option.when(inferred.nonEmpty)(inferred)
+    if (blocks.isEmpty) { List(List("No changes")) }
+    else { blocks }
   }
+
+  /** A report's lines, its blocks with a blank line between each, so its file and its job log are spaced alike. */
+  private def layout(blocks: List[List[String]]): List[String] = blocks.flatMap("" :: _).drop(1)
+
+  private def fileOf(blocks: List[List[String]]): String = layout(blocks).map(_ + "\n").mkString
+
+  private def logOf(blocks: List[List[String]]): UIO[Unit] = ZIO.foreachDiscard(layout(blocks))(ZIO.logInfo(_))
+
+  private def signed(n: Int): String = if (n >= 0) s"+$n" else n.toString
 
   /** Each of `inferred` that overlaps `[since, until]`, under its player's name now, earliest first. */
   private def inferredOverlapping(
@@ -94,28 +111,39 @@ private[membership] object MembershipReport {
   def reportReconciliation(
     result: ReconciliationResult,
     invitations: Map[PlayerId, Instant]
-  ): URIO[ProgressDisplay, Unit] = {
+  ): UIO[Unit] = {
     val duration = JDuration.between(result.startedAt, result.completedAt)
-    for {
-      _ <- ZIO.logInfo(s"=== Reconciliation Complete ===")
-      _ <- ZIO.logInfo(s"Duration:             ${duration.display}")
-      _ <- ZIO.foreachDiscard(rosterSummary(result.rosterMovement))(ZIO.logInfo(_))
-      _ <- ZIO.logInfo(s"New players:          ${result.newPlayers.size}")
-      _ <- ZIO.logInfo(s"Updated players:      ${result.updatedPlayers.size}")
-      _ <- ZIO.logInfo(s"Join date conflicts:  ${result.unsettledJoins.size}")
-      _ <- ZIO.logInfo(s"Not recorded:         ${result.refused.size}")
-      _ <- ZIO.logInfo("")
-      _ <- printSections(reconciliationLines(result, invitations))
-      _ <- ZIO.foreachDiscard(listSections(result).flatten)(ZIO.logInfo(_))
-    } yield ()
+    val header   = "=== Reconciliation Complete ===" :: s"Duration:             ${duration.display}" :: totals(result)
+    logOf(header :: reconciliationBlocks(result, invitations))
   }
 
-  private def rosterSummary(movement: RosterMovement): List[String] = {
-    val sign = if (movement.net >= 0) "+" else ""
+  def formatReconciliation(result: ReconciliationResult, invitations: Map[PlayerId, Instant]): String = {
+    val duration = JDuration.between(result.startedAt, result.completedAt)
+    val times = List(
+      s"Started:   ${result.startedAt}",
+      s"Completed: ${result.completedAt}",
+      s"Duration:  ${duration.display}"
+    )
+    fileOf(times :: ("=== Reconciliation Complete ===" :: totals(result)) :: reconciliationBlocks(result, invitations))
+  }
+
+  /** A reconcile's blocks after its header. */
+  private def reconciliationBlocks(
+    result: ReconciliationResult,
+    invitations: Map[PlayerId, Instant]
+  ): List[List[String]] =
+    sections(reconciliationLines(result, invitations)) ++ listSections(result)
+
+  private def totals(result: ReconciliationResult): List[String] = {
+    val movement = result.rosterMovement
     List(
-      s"Active roster:        ${movement.before.size} → ${movement.after.size} ($sign${movement.net})",
+      s"Active roster:        ${movement.before.size} → ${movement.after.size} (${signed(movement.net)})",
       s"Roster gains:         ${movement.gains.size}",
-      s"Roster losses:        ${movement.losses.size}"
+      s"Roster losses:        ${movement.losses.size}",
+      s"New players:          ${result.newPlayers.size}",
+      s"Updated players:      ${result.updatedPlayers.size}",
+      s"Join date conflicts:  ${result.unsettledJoins.size}",
+      s"Not recorded:         ${result.refused.size}"
     )
   }
 
@@ -148,19 +176,11 @@ private[membership] object MembershipReport {
   /** What happened to `username`, under `section`, placed in it by `timestamp`. */
   private final case class ReportLine(section: Section, username: Username, timestamp: Instant, detail: String)
 
-  private def printSections(lines: List[ReportLine]): URIO[ProgressDisplay, Unit] =
-    ZIO.foreachDiscard(sections(lines)) { (label, entries) =>
-      ZIO.logInfo(label) *> ZIO.foreachDiscard(entries)(ZIO.logInfo(_))
-    }
-
-  private def formatSections(lines: List[ReportLine]): String =
-    sections(lines).map((label, entries) => (label :: entries).map(_ + "\n").mkString + "\n").mkString
-
-  /** Each section with anything in it, under its label, its lines earliest first. */
-  private def sections(lines: List[ReportLine]): List[(String, List[String])] =
+  /** Each section with anything in it, its label then its lines earliest first. */
+  private def sections(lines: List[ReportLine]): List[List[String]] =
     lines.groupBy(_.section).toList.sortBy((section, _) => section.ordinal).map { (section, inSection) =>
       val ordered = inSection.sortBy(line => (line.timestamp, line.username.value))
-      section.label -> ordered.map(line => s"  ${line.username} — ${line.detail}")
+      section.label :: ordered.map(line => s"  ${line.username} — ${line.detail}")
     }
 
   private def memberLines(summaries: List[MemberChangeSummary], invitations: Map[PlayerId, Instant]): List[ReportLine] =
@@ -220,18 +240,31 @@ private[membership] object MembershipReport {
         Section.Returns -> s"same membership since $since; last seen $lastSeen$missing"
     }
 
-  /** A status change seen at `ts`: a closure or a reopening if it crosses active, else one closure for another. */
+  /** A status change seen at `ts`: a closure or a reopening if it crosses active, else a change between inactive ones. */
   private def statusChangeLine(
     ts: Instant,
     oldStatus: PlayerStatusCategory,
     newStatus: PlayerStatusCategory
   ): (Section, String) =
     (oldStatus == PlayerStatusCategory.Active, newStatus == PlayerStatusCategory.Active) match {
-      case (true, false) => Section.Closures   -> s"status: ${statusDescription(newStatus)}, by $ts"
-      case (false, true) => Section.Reopenings -> s"at $ts"
-      case _ =>
-        Section.StatusChanges -> s"at $ts — changed from ${statusDescription(oldStatus)} to ${statusDescription(newStatus)}"
+      case (true, false) => Section.Closures      -> s"status: ${statusDescription(newStatus)}, by $ts"
+      case (false, true) => Section.Reopenings    -> s"at $ts"
+      case _             => Section.StatusChanges -> s"at $ts — ${statusChangeDetail(oldStatus, newStatus)}"
     }
+
+  /** Between two closures only the reason differs, so it is the reason that is named. */
+  private def statusChangeDetail(oldStatus: PlayerStatusCategory, newStatus: PlayerStatusCategory): String =
+    (closureReason(oldStatus), closureReason(newStatus)) match {
+      case (Some(was), Some(now)) => s"closure reason changed from $was to $now"
+      case _                      => s"changed from ${statusDescription(oldStatus)} to ${statusDescription(newStatus)}"
+    }
+
+  private def closureReason(status: PlayerStatusCategory): Option[String] = status match {
+    case PlayerStatusCategory.Closed                                => Some("none shown")
+    case PlayerStatusCategory.Fairplay                              => Some("fair-play violations")
+    case PlayerStatusCategory.Abuse                                 => Some("abuse")
+    case PlayerStatusCategory.Active | PlayerStatusCategory.Unknown => None
+  }
 
   /** An account that closed some time after `lastSeen`, the last we knew of it. */
   private def closure(status: PlayerStatusCategory, lastSeen: Instant): String =
@@ -329,32 +362,6 @@ private[membership] object MembershipReport {
       case PreviousMembership.Inferred(firstMatch, lastMatch) =>
         s"previously played for the club from $firstMatch to $lastMatch"
     }
-
-  def formatReconciliation(result: ReconciliationResult, invitations: Map[PlayerId, Instant]): String = {
-    val duration = JDuration.between(result.startedAt, result.completedAt)
-    val header = s"""Started:   ${result.startedAt}
-                    |Completed: ${result.completedAt}
-                    |Duration:  ${duration.display}
-                    |
-                    |=== Reconciliation Complete ===
-                    |${rosterSummary(result.rosterMovement).mkString("\n")}
-                    |New players:          ${result.newPlayers.size}
-                    |Updated players:      ${result.updatedPlayers.size}
-                    |Join date conflicts:  ${result.unsettledJoins.size}
-                    |Not recorded:         ${result.refused.size}
-                    |""".stripMargin
-    header + "\n" + formatSections(reconciliationLines(result, invitations)) +
-      listSections(result).map(_.map(_ + "\n").mkString).mkString("\n")
-  }
-
-  def formatReport(rr: ReportResult): String = {
-    val delta    = rr.memberCountAtEnd - rr.memberCountAtStart
-    val sign     = if (delta >= 0) "+" else ""
-    val header   = s"Total members: ${rr.memberCountAtEnd} ($sign$delta)\n\n"
-    val inferred = inferredLines(rr.inferred)
-    if (rr.summaries.isEmpty && inferred.isEmpty) { header + "No changes\n" }
-    else { header + formatSections(memberLines(rr.summaries, rr.invitations)) + inferred.map(_ + "\n").mkString }
-  }
 
   // --- Invitation lookup ---
 

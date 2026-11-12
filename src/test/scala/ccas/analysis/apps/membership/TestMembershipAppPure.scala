@@ -11,7 +11,7 @@ import ccas.analysis.apps.membership.MembershipChange.*
 import ccas.analysis.apps.membership.MembershipChange.MemberChange.*
 import ccas.analysis.apps.membership.MembershipReport.InferredMember
 import ccas.analysis.tables.{ClubMember, MembershipStanding, Player, PlayerName, PlayerSnapshot}
-import ccas.api.misc.enums.PlayerStatusCategory.{Abuse, Active, Closed, Fairplay}
+import ccas.api.misc.enums.PlayerStatusCategory.{Abuse, Active, Closed, Fairplay, Unknown}
 import ccas.api.misc.subtypes.Username
 
 object TestMembershipAppPure extends ZIOSpecDefault {
@@ -486,7 +486,8 @@ object TestMembershipAppPure extends ZIOSpecDefault {
     testAMemberBackOnTheRosterIsNamed,
     testAHiddenRowReopeningIsAnAccountReopening,
     testAnAccountReopeningIsNamedOnce,
-    testAccountReopenedHasItsOwnSection
+    testAccountReopenedHasItsOwnSection,
+    testAChangeOfClosureReasonNamesBothReasons
   )
 
   private def testClubListFindingsAreGroupedByEvent =
@@ -729,7 +730,7 @@ object TestMembershipAppPure extends ZIOSpecDefault {
       )
       val output = MembershipReport.formatReconciliation(reconciliation(changes, noSettlement), Map.empty)
       assertTrue(
-        output.contains(s"[ACCOUNT REOPENED]\n  alice — at ${Times.t2}\n  bob — at ${Times.t2}\n\n"),
+        output.endsWith(s"[ACCOUNT REOPENED]\n  alice — at ${Times.t2}\n  bob — at ${Times.t2}\n"),
         !output.contains("[BACK ON ROSTER]")
       )
     }
@@ -745,6 +746,25 @@ object TestMembershipAppPure extends ZIOSpecDefault {
       assertTrue(
         output.contains(s"[ACCOUNT REOPENED]\n  alice — at ${Times.t1}"),
         !output.contains("[BACK ON ROSTER]")
+      )
+    }
+
+  private def testAChangeOfClosureReasonNamesBothReasons =
+    test("a change of closure reason names the reason before and after") {
+      val changes = Chunk(
+        MemberChangeSummary(pid0, Username("alice"), Chunk(StatusChange(Times.t1, Closed, Fairplay))),
+        MemberChangeSummary(pid1, Username("bob"), Chunk(StatusChange(Times.t2, Abuse, Closed))),
+        MemberChangeSummary(pid2, Username("carol"), Chunk(StatusChange(Times.t3, Unknown, Closed)))
+      )
+      val output = MembershipReport.formatReconciliation(reconciliation(changes, noSettlement), Map.empty)
+      assertTrue(
+        output.contains(
+          s"""[ACCOUNT STATUS CHANGE]
+             |  alice — at ${Times.t1} — closure reason changed from none shown to fair-play violations
+             |  bob — at ${Times.t2} — closure reason changed from abuse to none shown
+             |  carol — at ${Times.t3} — changed from unknown to closed
+             |""".stripMargin
+        )
       )
     }
 
@@ -771,7 +791,7 @@ object TestMembershipAppPure extends ZIOSpecDefault {
     val rr     = MembershipReport.ReportResult(Nil, Nil, 10, 10, Map.empty)
     val output = MembershipReport.formatReport(rr)
     assertTrue(
-      output.contains("Total members: 10 (+0)"),
+      output.contains("Members: 10 → 10 (+0)"),
       output.contains("No changes")
     )
   }
@@ -828,13 +848,13 @@ object TestMembershipAppPure extends ZIOSpecDefault {
       val states    = List(PlayerSnapshot(pid0, Times.t0, Active, None), PlayerSnapshot(pid0, Times.t2, Closed, None))
       val summaries = MembershipReport.classifyFromDb(clubId, List(member), Nil, states, Nil, Times.t1, Times.t3)
       val output    = MembershipReport.formatReport(MembershipReport.ReportResult(summaries, Nil, 1, 0, Map.empty))
-      assertTrue(output.contains(s"[ACCOUNT CLOSED]\n  unknown — status: closed, after ${Times.t1}\n\n"))
+      assertTrue(output.endsWith(s"[ACCOUNT CLOSED]\n  unknown — status: closed, after ${Times.t1}\n"))
     }
 
   private def testShowsMemberCountDelta = test("shows member count delta") {
     val rr     = MembershipReport.ReportResult(Nil, Nil, 12, 10, Map.empty)
     val output = MembershipReport.formatReport(rr)
-    assertTrue(output.contains("Total members: 10 (-2)"))
+    assertTrue(output.contains("Members: 12 → 10 (-2)"))
   }
 
   private def testShowsInvitationDateOnJoinChanges =

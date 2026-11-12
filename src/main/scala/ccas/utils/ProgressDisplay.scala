@@ -213,7 +213,11 @@ final class ProgressDisplay private[utils] (
           val msg = message()
           if (!ProgressDisplay.isBenignReadIdleReap(level, msg, cause)) {
             val sink = context.getOrDefault(JobLogSink.currentSink)
-            logAboveBarsSync(sink, ProgressDisplay.format(level, msg, Instant.now(), cause, spans, annotations))
+            // An empty message spaces a report's sections, which a prefix would turn into a line of its own.
+            val line =
+              if (msg.isEmpty && cause.isEmpty) { "" }
+              else { ProgressDisplay.format(level, msg, Instant.now(), cause, spans, annotations) }
+            logAboveBarsSync(sink, line)
           }
         } catch { case t: Throwable => t.printStackTrace(err) }
       }
