@@ -5,7 +5,7 @@ import zio.*
 import zio.http.*
 import zio.test.*
 
-import ccas.analysis.tables.{ApiFetchFailure, ApiResponseBody, ApiResponseCache, Tables}
+import ccas.analysis.tables.{ApiFetchFailure, ApiResponseCache, Tables}
 import ccas.utils.client.TestChessComClientSupport.*
 import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
 import ccas.utils.sql.PostgresClient.connectZIO
@@ -21,8 +21,7 @@ object TestBodyStoreOutage extends ZIOSpecDefault {
 
   override def spec: Spec[TestEnvironment, Any] = suite("TestBodyStoreOutage")(
     suiteReadOutage,
-    suiteWriteOutage,
-    suiteStartup
+    suiteWriteOutage
   ).provideShared(
     FreshSchemaLayer("test_body_store_outage", Tables.ensureTables)
     // `sequential` for the same reason as TestChessComClientCaching: one shared schema + one shared fs store, so
@@ -62,20 +61,6 @@ object TestBodyStoreOutage extends ZIOSpecDefault {
 
   private def bodyRowCount: ZIO[PostgresClient, Throwable, Long] =
     connectZIO(sql"SELECT count(*) FROM api_response_body".query[Long].run().head)
-
-  // Addressed by hash rather than by row count: the startup test must not depend on which other rows happen to
-  // exist, nor on sibling tests leaving the Cloudflare body unreferenced.
-  private def cfPointerExists: ZIO[PostgresClient, Throwable, Boolean] =
-    connectZIO {
-      val hash = ApiResponseBody.CfCanonicalHash
-      sql"SELECT 1 FROM api_response_body WHERE body_hash = $hash".query[Int].run().nonEmpty
-    }
-
-  private def deleteCfPointer: ZIO[PostgresClient, Throwable, Int] =
-    connectZIO {
-      val hash = ApiResponseBody.CfCanonicalHash
-      sql"DELETE FROM api_response_body WHERE body_hash = $hash".update.run()
-    }
 
   private def suiteReadOutage = suite("read outage")(
     test("a Fresh hit whose body can't be read refetches from the network instead of failing") {
@@ -256,33 +241,6 @@ object TestBodyStoreOutage extends ZIOSpecDefault {
         inserted == 1,
         // The audit trail is the point of the table; the body is a bonus we drop rather than lose the row over.
         rows.exists(r => r.url == url && r.errorMessage.contains("429") && r.responseBody.isEmpty)
-      )
-    }
-  )
-
-  private def suiteStartup = suite("startup")(
-    test("normalizeCfBodies tolerates an unreachable store instead of failing boot") {
-      // `ensureTables` already pre-warmed the Cloudflare canonical body, so drop that exact pointer row first and
-      // assert on its presence by hash — no row-count arithmetic, and no dependence on sibling tests or on the
-      // order this suite's suites run in. (A future sibling that referenced the CF body would fail the DELETE on
-      // the FK, loudly, rather than silently invert the assertions.)
-      for {
-        pgClient <- ZIO.service[PostgresClient]
-        working  <- ZIO.service[BodyStore]
-        faulty   <- FaultyBodyStore.make(working)
-        env = ZEnvironment(pgClient, faulty)
-        _         <- deleteCfPointer
-        _         <- faulty.breakWrites
-        skipped   <- ApiResponseBody.normalizeCfBodies.provideEnvironment(env)
-        afterSkip <- cfPointerExists
-        _         <- faulty.healWrites
-        restored  <- ApiResponseBody.normalizeCfBodies.provideEnvironment(env)
-        afterHeal <- cfPointerExists
-      } yield assertTrue(
-        skipped == 0,
-        !afterSkip, // the outage inserted no pointer row for an object that was never stored
-        restored == 1,
-        afterHeal
       )
     }
   )

@@ -61,7 +61,6 @@ object Tables extends ZIOAppDefault {
       _ <- ApiResponseBody.createTable
       _ <- ApiResponseCache.createTable
       _ <- ApiFetchFailure.createTable
-      _ <- ApiResponseBody.normalizeCfBodies
       _ <- ClubMatch.createTable
       _ <- ClubMatchBoard.createTable
       _ <- ClubMatchGame.createTable

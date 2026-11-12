@@ -23,7 +23,7 @@ Only the blobs move. The metadata index, the within-`max-age` short-circuit and 
 
 The trait is honest about I/O (`Task`), but the only companion accessors are the error-degrading ones: `BodyStore.read` and `BodyStore.putOrSkip` (error → `false`). There is deliberately no raw `get` / `put` accessor to reach for by mistake; `delete` stays raw because every call site is already a best-effort `.ignore`.
 
-`ApiResponseBody.putBody` therefore returns `Option[String]`, and a `None` must skip the **whole** write: `ApiResponseCache.upsertWithBody` returns `Option[ApiResponseBodyId]` and persists neither the pointer nor the cache row, because a pointer with no object behind it is a cache entry that can only ever produce a refetch. Net effect of an outage: requests keep succeeding uncached, and the cache self-heals on the first successful put. `ApiFetchFailure.insert` degrades to a body-less audit row; `normalizeCfBodies` skips its pre-warm rather than failing boot. #199's budget guard is this same mechanism.
+`ApiResponseBody.putBody` therefore returns `Option[String]`, and a `None` must skip the **whole** write: `ApiResponseCache.upsertWithBody` returns `Option[ApiResponseBodyId]` and persists neither the pointer nor the cache row, because a pointer with no object behind it is a cache entry that can only ever produce a refetch. Net effect of an outage: requests keep succeeding uncached, and the cache self-heals on the first successful put. `ApiFetchFailure.insert` degrades to a body-less audit row. #199's budget guard is this same mechanism.
 
 ### Put before the transaction, never inside it
 
