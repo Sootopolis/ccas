@@ -1,37 +1,37 @@
-=== Report for test-club from 2025-06-02T00:00:00Z to 2025-07-31T00:00:00Z ===
-Members: 40 → 42 (+2)
+[INFO hh:mm:ss] === Report for test-club from 2025-06-02T00:00:00Z to 2025-07-31T00:00:00Z ===
+[INFO hh:mm:ss] Members: 40 → 42 (+2)
 
-[JOINED]
-  alice — at 2025-07-01T00:00:00Z — invited at 2025-06-02T00:00:00Z
-  bob — at 2025-07-01T00:00:00Z
+[INFO hh:mm:ss] [JOINED]
+[INFO hh:mm:ss]   alice — at 2025-07-01T00:00:00Z — invited at 2025-06-02T00:00:00Z
+[INFO hh:mm:ss]   bob — at 2025-07-01T00:00:00Z
 
-[REJOINED]
-  carol — at 2025-07-01T00:00:00Z — previous membership ended between 2025-06-01T00:00:00Z and 2025-06-02T00:00:00Z — invited at 2025-06-01T00:00:00Z
-  dave — at 2025-07-31T00:00:00Z — previously played for the club from 2025-06-01T00:00:00Z to 2025-06-02T00:00:00Z
+[INFO hh:mm:ss] [REJOINED]
+[INFO hh:mm:ss]   carol — at 2025-07-01T00:00:00Z — previous membership ended between 2025-06-01T00:00:00Z and 2025-06-02T00:00:00Z — invited at 2025-06-01T00:00:00Z
+[INFO hh:mm:ss]   dave — at 2025-07-31T00:00:00Z — previously played for the club from 2025-06-01T00:00:00Z to 2025-06-02T00:00:00Z
 
-[BACK ON ROSTER]
-  erin — same membership since 2025-06-01T00:00:00Z; last seen 2025-06-02T00:00:00Z, missing by 2025-07-01T00:00:00Z
+[INFO hh:mm:ss] [BACK ON ROSTER]
+[INFO hh:mm:ss]   erin — same membership since 2025-06-01T00:00:00Z; last seen 2025-06-02T00:00:00Z, missing by 2025-07-01T00:00:00Z
 
-[LEFT CLUB]
-  frank — by 2025-07-01T00:00:00Z
+[INFO hh:mm:ss] [LEFT CLUB]
+[INFO hh:mm:ss]   frank — by 2025-07-01T00:00:00Z
 
-[ACCOUNT CLOSED]
-  gina — status: closed for fair-play violations, after 2025-06-02T00:00:00Z
-  hugo — status: closed for abuse, by 2025-07-01T00:00:00Z
+[INFO hh:mm:ss] [ACCOUNT CLOSED]
+[INFO hh:mm:ss]   gina — status: closed for fair-play violations, after 2025-06-02T00:00:00Z
+[INFO hh:mm:ss]   hugo — status: closed for abuse, by 2025-07-01T00:00:00Z
 
-[ACCOUNT REOPENED]
-  ivy — member since 2025-06-01T00:00:00Z, last seen 2025-06-02T00:00:00Z
-  jack — at 2025-07-31T00:00:00Z
+[INFO hh:mm:ss] [ACCOUNT REOPENED]
+[INFO hh:mm:ss]   ivy — member since 2025-06-01T00:00:00Z, last seen 2025-06-02T00:00:00Z
+[INFO hh:mm:ss]   jack — at 2025-07-31T00:00:00Z
 
-[USERNAME CHANGED]
-  kate — at 2025-07-01T00:00:00Z — previously kate-old
+[INFO hh:mm:ss] [USERNAME CHANGED]
+[INFO hh:mm:ss]   kate — at 2025-07-01T00:00:00Z — previously kate-old
 
-[UNRESOLVED MEMBER]
-  liam — at 2025-07-01T00:00:00Z — old username: liam-old
+[INFO hh:mm:ss] [UNRESOLVED MEMBER]
+[INFO hh:mm:ss]   liam — at 2025-07-01T00:00:00Z — old username: liam-old
 
-[ACCOUNT STATUS CHANGE]
-  mia — at 2025-07-01T00:00:00Z — closure reason changed from none shown to fair-play violations
+[INFO hh:mm:ss] [ACCOUNT STATUS CHANGE]
+[INFO hh:mm:ss]   mia — at 2025-07-01T00:00:00Z — closure reason changed from none shown to fair-play violations
 
-[INFERRED FROM MATCHES]
-  wes — played for the club from 2025-06-01T00:00:00Z to 2025-07-01T00:00:00Z, 3 matches
-  xena — played for the club from 2025-06-02T00:00:00Z to 2025-06-02T00:00:00Z, 1 match
+[INFO hh:mm:ss] [INFERRED FROM MATCHES]
+[INFO hh:mm:ss]   wes — played for the club from 2025-06-01T00:00:00Z to 2025-07-01T00:00:00Z, 3 matches
+[INFO hh:mm:ss]   xena — played for the club from 2025-06-02T00:00:00Z to 2025-06-02T00:00:00Z, 1 match

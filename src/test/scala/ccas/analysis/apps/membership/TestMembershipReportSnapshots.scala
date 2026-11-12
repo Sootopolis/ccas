@@ -1,8 +1,8 @@
 package ccas.analysis.apps.membership
 
 import snapshot4s.generated.snapshotConfig
-import zio.{Chunk, Runtime}
-import zio.test.{assertTrue, Spec, ZIOSpecDefault, ZTestLogger}
+import zio.Chunk
+import zio.test.{assertTrue, Spec, ZIOSpecDefault}
 
 import TestMembershipAppSupport.*
 
@@ -13,11 +13,13 @@ import ccas.analysis.apps.membership.MembershipReport.{InferredMember, ReportRes
 import ccas.analysis.tables.{ClubMember, MembershipStanding}
 import ccas.api.misc.enums.PlayerStatusCategory.{Abuse, Active, Closed, Fairplay}
 import ccas.api.misc.subtypes.{PlayerId, Username}
+import ccas.server.jobs.JobLogFile
 import ccas.utils.ZioSnapshots
 
 /** Each membership report whole, as the operator reads it, against a checked-in file under
-  * `src/test/resources/snapshot/membership/`. A deliberate change to the wording fails here: `sbt snapshot4sPromote`
-  * rewrites the files, and their diff is the change as the operator will see it (#455).
+  * `src/test/resources/snapshot/membership/`: a report file as written, a job log as its `.log` file holds it. A
+  * deliberate change to the wording fails here: `sbt snapshot4sPromote` rewrites the files, and their diff is the
+  * change as the operator will see it (#455).
   */
 object TestMembershipReportSnapshots extends ZIOSpecDefault with ZioSnapshots {
 
@@ -29,18 +31,15 @@ object TestMembershipReportSnapshots extends ZIOSpecDefault with ZioSnapshots {
       )
     },
     test("the reconcile job log, with every section filled, reads as checked in") {
-      for {
-        _    <- MembershipReport.reportReconciliation(everySection, invitations)
-        logs <- ZTestLogger.logOutput
-      } yield assertFileSnapshot(logs.map(_.message() + "\n").mkString, "membership/reconcile-log.txt")
-    }.provide(capturedLog),
+      JobLogFile
+        .of(MembershipReport.reportReconciliation(everySection, invitations))
+        .map(assertFileSnapshot(_, "membership/reconcile-log.txt"))
+    },
     test("the warnings a reconcile logs for what it did not record read as checked in") {
-      for {
-        _    <- MembershipReport.warnOfWhatWasNotRecorded(everySection)
-        logs <- ZTestLogger.logOutput
-        lines = logs.map(entry => s"${entry.logLevel.label} ${entry.message()}\n")
-      } yield assertFileSnapshot(lines.mkString, "membership/reconcile-warnings.txt")
-    }.provide(capturedLog),
+      JobLogFile
+        .of(MembershipReport.warnOfWhatWasNotRecorded(everySection))
+        .map(assertFileSnapshot(_, "membership/reconcile-warnings.txt"))
+    },
     test("the report file of a reconcile with nothing to say reads as checked in") {
       assertFileSnapshot(
         MembershipReport.formatReconciliation(nothingToSay, Map.empty),
@@ -48,51 +47,39 @@ object TestMembershipReportSnapshots extends ZIOSpecDefault with ZioSnapshots {
       )
     },
     test("the job log of a reconcile with nothing to say reads as checked in") {
-      for {
-        _    <- MembershipReport.reportReconciliation(nothingToSay, Map.empty)
-        logs <- ZTestLogger.logOutput
-      } yield assertFileSnapshot(logs.map(_.message() + "\n").mkString, "membership/reconcile-log-empty.txt")
-    }.provide(capturedLog),
+      JobLogFile
+        .of(MembershipReport.reportReconciliation(nothingToSay, Map.empty))
+        .map(assertFileSnapshot(_, "membership/reconcile-log-empty.txt"))
+    },
     test("the date-range report, with every section and inferred memberships, reads as checked in") {
       assertFileSnapshot(MembershipReport.formatReport(everyRangeSection), "membership/date-range-report.txt")
     },
     test("the date-range job log, with every section and inferred memberships, reads as checked in") {
-      for {
-        _    <- MembershipReport.logReport(namedClub, TestTimes.t1, TestTimes.t3, everyRangeSection)
-        logs <- ZTestLogger.logOutput
-      } yield assertFileSnapshot(logs.map(_.message() + "\n").mkString, "membership/date-range-log.txt")
-    }.provide(capturedLog),
+      JobLogFile
+        .of(MembershipReport.logReport(namedClub, TestTimes.t1, TestTimes.t3, everyRangeSection))
+        .map(assertFileSnapshot(_, "membership/date-range-log.txt"))
+    },
     test("a date-range report with nothing to say reads as checked in") {
       assertFileSnapshot(MembershipReport.formatReport(emptyRange), "membership/date-range-report-empty.txt")
     },
     test("the job log of a date-range report with nothing to say reads as checked in") {
-      for {
-        _    <- MembershipReport.logReport(namedClub, TestTimes.t1, TestTimes.t3, emptyRange)
-        logs <- ZTestLogger.logOutput
-      } yield assertFileSnapshot(logs.map(_.message() + "\n").mkString, "membership/date-range-log-empty.txt")
-    }.provide(capturedLog),
+      JobLogFile
+        .of(MembershipReport.logReport(namedClub, TestTimes.t1, TestTimes.t3, emptyRange))
+        .map(assertFileSnapshot(_, "membership/date-range-log-empty.txt"))
+    },
     test("no report or job log ends in a blank line when a section of member changes comes last") {
       for {
-        _            <- MembershipReport.reportReconciliation(changesOnly, invitations)
-        reconcileLog <- ZTestLogger.logOutput
-        _            <- MembershipReport.logReport(namedClub, TestTimes.t1, TestTimes.t3, changesOnlyRange)
-        bothLogs     <- ZTestLogger.logOutput
-        files = List(
+        reconcileLog <- JobLogFile.of(MembershipReport.reportReconciliation(changesOnly, invitations))
+        rangeLog <- JobLogFile.of(MembershipReport.logReport(namedClub, TestTimes.t1, TestTimes.t3, changesOnlyRange))
+        outputs = List(
           MembershipReport.formatReconciliation(changesOnly, invitations),
-          MembershipReport.formatReport(changesOnlyRange)
+          MembershipReport.formatReport(changesOnlyRange),
+          reconcileLog,
+          rangeLog
         )
-        lastLogLines = List(reconcileLog.lastOption, bothLogs.drop(reconcileLog.size).lastOption).map(
-          _.map(_.message())
-        )
-      } yield assertTrue(
-        files.forall(file => file.endsWith("\n") && !file.endsWith("\n\n")),
-        lastLogLines.forall(_.exists(_.nonEmpty))
-      )
-    }.provide(capturedLog)
+      } yield assertTrue(outputs.forall(output => output.endsWith("\n") && !output.endsWith("\n\n")))
+    }
   )
-
-  /** The log a test reads back, kept off the console, where it would read as the run's own warnings. */
-  private val capturedLog = Runtime.removeDefaultLoggers >>> ZTestLogger.default
 
   private def player(n: Int): PlayerId = PlayerId(200 + n)
 

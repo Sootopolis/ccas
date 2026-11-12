@@ -114,6 +114,12 @@ object JobRunner {
     } yield dir
   }
 
+  /** Runs `effect` logging as a job does: through `display`'s logger, tagged with `label`, into `sink`. */
+  private[jobs] def logAsJob[R, E, A](display: ProgressDisplay, label: String, sink: JobLogSink)(
+    effect: ZIO[R, E, A]
+  ): ZIO[R, E, A] =
+    display.installLogger(ProgressDisplay.sourced(label)(JobLogSink.currentSink.locally(sink)(effect)))
+
   val live: RLayer[JobEnv, JobRunner] =
     ZLayer.scoped {
       for {
@@ -240,21 +246,15 @@ object JobRunner {
             _ <- completions.update(_ + (id -> promise))
             _ <- jobChannels.update(_ + (id -> channel))
             _ <- runningFibers.update(_ + (id -> fiberSlot))
-            // `installLogger` forces ProgressDisplay's ZLogger onto the job fiber itself, so the per-job FileSink is
-            // written regardless of which fiber submitted the job. `forkIn` inherits the submitter's loggers, which
-            // needn't include it: an HTTP request handler's didn't until #334, and HTTP-submitted jobs' per-job
-            // files stayed empty (#132).
+            // `logAsJob`'s `installLogger` forces ProgressDisplay's ZLogger onto the job fiber itself, so the per-job
+            // FileSink is written regardless of which fiber submitted the job. `forkIn` inherits the submitter's
+            // loggers, which needn't include it: an HTTP request handler's didn't until #334, and HTTP-submitted jobs'
+            // per-job files stayed empty (#132). It wraps the handlers too, so their lines land in the file.
             // `currentChannel.locally` scopes bar publishing to this job's channel for the whole run (forked children
             // inherit the FiberRef), mirroring `currentSink` for log lines.
-            fiber <- display.installLogger(
-              ProgressDisplay.sourced(label)(
-                ProgressDisplay.currentChannel.locally(Some(channel))(
-                  // Wraps the handlers too, so their lines land in the per-job file; forked children inherit it.
-                  JobLogSink.currentSink
-                    .locally(sink)(
-                      restore(runJob(id, effect(Some(id)))).onInterrupt(onCancelled(id))
-                    )
-                )
+            fiber <- logAsJob(display, label, sink)(
+              ProgressDisplay.currentChannel.locally(Some(channel))(
+                restore(runJob(id, effect(Some(id)))).onInterrupt(onCancelled(id))
               )
             ).ensuring(release).forkIn(layerScope)
             _ <- fiberSlot.succeed(fiber)
