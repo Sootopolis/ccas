@@ -135,6 +135,7 @@ Because step 1 keeps `wip` free of commits of its own, it can only ever lag the 
 Backref comments should already be posted (step 3b); this step adds the merge SHA and closes what the PR resolved.
 - Issues the PR *resolves*: `gh issue comment` with the PR link + merge SHA, then `gh issue close` if it is still open. A closing keyword in the PR body (`Resolves #N`) closes the issue at merge, and `gh issue close --comment` on a closed issue refuses without posting the comment — so never let it carry the comment.
 - Issues *deferred* or `pending-decision`: comment a backref (PR + SHA), keep open. Never auto-close a `pending-decision` item.
+- An issue filed from an item on another issue: backref that one too, naming the item, so it stops reading as open. #437 fixed an item of #405 without one, and a later survey picked the item again.
 - If no issue is resolved by the PR, say so explicitly rather than silently skipping the step.
 - If step 6 found the body lost, paste the commit body into the merge-SHA comment on the PR's main issue. Without it, the reason for the change survives only in the PR.
 
