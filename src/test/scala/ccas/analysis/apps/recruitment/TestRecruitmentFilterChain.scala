@@ -29,27 +29,24 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
   // Suite: Filter chain
   // ==========================================================================
 
-  /** Returns the filter chain outcome (in-memory) for a single candidate. Passing candidates are persisted as Deferred
-    * (pre-confirmation), but this helper reports the filter's judgment: Invited if the candidate passed, Rejected
-    * otherwise.
-    */
+  /** The outcome and reason stored for a single candidate, read back from the run's row. */
   private def evalSingle(
     responses: Map[String, String],
     criteria: RecruitmentCriteria,
     username: String = "alice"
-  ): RIO[ProgressDisplay & PostgresClient & BodyStore, CandidateOutcome] =
+  ): RIO[ProgressDisplay & PostgresClient & BodyStore, Option[Recorded]] =
     for {
       _          <- seedDb
       criteriaId <- seedCriteria(criteria)
       runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None, None)
       client     <- fakeChessComClient(responses)
-      invited    <- evalCandidates(client, runId, List(Username.wrap(username)), criteria)
-    } yield
-      if (invited.contains(Username.wrap(username))) CandidateOutcome.Invited
-      else CandidateOutcome.Rejected
+      _          <- evalCandidates(client, runId, List(Username.wrap(username)), criteria)
+      rows       <- RecruitmentCandidate.selectByRun(runId)
+    } yield rows.headOption.map(recordedOf)
 
   private def suiteFilterChain = suite("filter chain")(
     testRejectsClosedAccount,
+    testClosedAccountRejectedWithoutReadingCountry,
     testRejectsByMinDaysSinceRegistration,
     testAcceptsPlayerMeetingMinDaysSinceRegistration,
     testRejectsByNationalityExcludeMode,
@@ -60,6 +57,7 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
     testRejectsByDailyMaxElo,
     testAcceptsPlayerWithinEloRange,
     testRejectsByDailyMaxTimeoutPercent,
+    testFirstFailingCriterionIsRecorded,
     testRejectsByDailyMinGamesFinished,
     testDailyMinGamesFinishedCountsTeamMatchGames,
     testDailyMinGamesFinishedExcludesNonDailyGames,
@@ -90,15 +88,30 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
 
   private def testRejectsClosedAccount = test("rejects closed account") {
     val responses = Map("player/alice" -> apiPlayerJson(playerId = 200, username = "alice", status = "closed"))
-    for { outcome <- evalSingle(responses, makeCriteria()) } yield assertTrue(outcome == CandidateOutcome.Rejected)
+    for { recorded <- evalSingle(responses, makeCriteria()) } yield assertTrue(
+      recorded.contains(rejectedFor(RejectionReason.AccountNotActive))
+    )
   }
+
+  private def testClosedAccountRejectedWithoutReadingCountry =
+    test("a closed account is rejected as not active without its country being read") {
+      // A country URL with no path, which the nationality check cannot read.
+      val player = apiPlayerJson(playerId = 200, username = "alice", status = "closed")
+        .replace("https://api.chess.com/pub/country/US", "https://api.chess.com")
+      val criteria = makeCriteria().copy(nationalityCountries = List("XX"))
+      for {
+        recorded <- evalSingle(Map("player/alice" -> player), criteria)
+      } yield assertTrue(recorded.contains(rejectedFor(RejectionReason.AccountNotActive)))
+    }
 
   private def testRejectsByMinDaysSinceRegistration = test("rejects by minDaysSinceRegistration") {
     // Player joined 5 days ago, config requires 30 days
     val recentJoin = Instant.now().minus(Duration.ofDays(5)).getEpochSecond
     val responses  = Map("player/alice" -> apiPlayerJson(playerId = 200, username = "alice", joined = recentJoin))
     val criteria   = makeCriteria().copy(minDaysSinceRegistration = Some(30))
-    for { outcome <- evalSingle(responses, criteria) } yield assertTrue(outcome == CandidateOutcome.Rejected)
+    for { recorded <- evalSingle(responses, criteria) } yield assertTrue(
+      recorded.contains(rejectedFor(RejectionReason.MinDaysSinceRegistration))
+    )
   }
 
   private def testAcceptsPlayerMeetingMinDaysSinceRegistration =
@@ -107,32 +120,36 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
       val oldJoin   = Instant.now().minus(Duration.ofDays(60)).getEpochSecond
       val responses = Map("player/alice" -> apiPlayerJson(playerId = 200, username = "alice", joined = oldJoin))
       val criteria  = makeCriteria().copy(minDaysSinceRegistration = Some(30))
-      for { outcome <- evalSingle(responses, criteria) } yield assertTrue(outcome == CandidateOutcome.Invited)
+      for { recorded <- evalSingle(responses, criteria) } yield assertTrue(recorded.contains(passed))
     }
 
   private def testRejectsByNationalityExcludeMode = test("rejects by nationality exclude mode") {
     val responses = Map("player/alice" -> apiPlayerJson(playerId = 200, username = "alice", country = "XX"))
     val criteria  = makeCriteria().copy(nationalityExclude = true, nationalityCountries = List("XX", "YY"))
-    for { outcome <- evalSingle(responses, criteria) } yield assertTrue(outcome == CandidateOutcome.Rejected)
+    for { recorded <- evalSingle(responses, criteria) } yield assertTrue(
+      recorded.contains(rejectedFor(RejectionReason.Nationality))
+    )
   }
 
   private def testAcceptsPlayerNotInNationalityExcludeList = test("accepts player not in nationality exclude list") {
     val responses = Map("player/alice" -> apiPlayerJson(playerId = 200, username = "alice", country = "ZZ"))
     val criteria  = makeCriteria().copy(nationalityExclude = true, nationalityCountries = List("XX", "YY"))
-    for { outcome <- evalSingle(responses, criteria) } yield assertTrue(outcome == CandidateOutcome.Invited)
+    for { recorded <- evalSingle(responses, criteria) } yield assertTrue(recorded.contains(passed))
   }
 
   private def testRejectsByNationalityIncludeModeWhenNotInList =
     test("rejects by nationality include mode when not in list") {
       val responses = Map("player/alice" -> apiPlayerJson(playerId = 200, username = "alice", country = "ZZ"))
       val criteria  = makeCriteria().copy(nationalityExclude = false, nationalityCountries = List("XX", "YY"))
-      for { outcome <- evalSingle(responses, criteria) } yield assertTrue(outcome == CandidateOutcome.Rejected)
+      for { recorded <- evalSingle(responses, criteria) } yield assertTrue(
+        recorded.contains(rejectedFor(RejectionReason.Nationality))
+      )
     }
 
   private def testAcceptsPlayerInNationalityIncludeList = test("accepts player in nationality include list") {
     val responses = Map("player/alice" -> apiPlayerJson(playerId = 200, username = "alice", country = "YY"))
     val criteria  = makeCriteria().copy(nationalityExclude = false, nationalityCountries = List("XX", "YY"))
-    for { outcome <- evalSingle(responses, criteria) } yield assertTrue(outcome == CandidateOutcome.Invited)
+    for { recorded <- evalSingle(responses, criteria) } yield assertTrue(recorded.contains(passed))
   }
 
   private def testRejectsByDailyMinElo = test("rejects by dailyMinElo") {
@@ -141,7 +158,9 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
       "player/alice/stats" -> apiPlayerStatsJson(dailyElo = 800)
     )
     val criteria = makeCriteria().copy(dailyMinElo = Some(Elo(1000)))
-    for { outcome <- evalSingle(responses, criteria) } yield assertTrue(outcome == CandidateOutcome.Rejected)
+    for { recorded <- evalSingle(responses, criteria) } yield assertTrue(
+      recorded.contains(rejectedFor(RejectionReason.DailyMinElo))
+    )
   }
 
   private def testRejectsByDailyMaxElo = test("rejects by dailyMaxElo") {
@@ -150,7 +169,9 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
       "player/alice/stats" -> apiPlayerStatsJson(dailyElo = 2200)
     )
     val criteria = makeCriteria().copy(dailyMaxElo = Some(Elo(2000)))
-    for { outcome <- evalSingle(responses, criteria) } yield assertTrue(outcome == CandidateOutcome.Rejected)
+    for { recorded <- evalSingle(responses, criteria) } yield assertTrue(
+      recorded.contains(rejectedFor(RejectionReason.DailyMaxElo))
+    )
   }
 
   private def testAcceptsPlayerWithinEloRange = test("accepts player within Elo range") {
@@ -159,7 +180,7 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
       "player/alice/stats" -> apiPlayerStatsJson(dailyElo = 1500)
     )
     val criteria = makeCriteria().copy(dailyMinElo = Some(Elo(1000)), dailyMaxElo = Some(Elo(2000)))
-    for { outcome <- evalSingle(responses, criteria) } yield assertTrue(outcome == CandidateOutcome.Invited)
+    for { recorded <- evalSingle(responses, criteria) } yield assertTrue(recorded.contains(passed))
   }
 
   private def testRejectsByDailyMaxTimeoutPercent = test("rejects by dailyMaxTimeoutPercent") {
@@ -168,8 +189,22 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
       "player/alice/stats" -> apiPlayerStatsJson(timeoutPct = 15.0)
     )
     val criteria = makeCriteria().copy(dailyMaxTimeoutPercent = Some(10.0))
-    for { outcome <- evalSingle(responses, criteria) } yield assertTrue(outcome == CandidateOutcome.Rejected)
+    for { recorded <- evalSingle(responses, criteria) } yield assertTrue(
+      recorded.contains(rejectedFor(RejectionReason.DailyMaxTimeoutPercent))
+    )
   }
+
+  private def testFirstFailingCriterionIsRecorded =
+    test("the first failing criterion within a filter is the one recorded") {
+      val responses = Map(
+        "player/alice"       -> apiPlayerJson(200, "alice"),
+        "player/alice/stats" -> apiPlayerStatsJson(dailyElo = 1200, timeoutPct = 15.0)
+      )
+      val criteria = makeCriteria().copy(dailyMinElo = Some(Elo(1600)), dailyMaxTimeoutPercent = Some(10.0))
+      for {
+        recorded <- evalSingle(responses, criteria)
+      } yield assertTrue(recorded.contains(rejectedFor(RejectionReason.DailyMinElo)))
+    }
 
   private def testRejectsByDailyMinGamesFinished = test("rejects by dailyMinGamesFinished") {
     val responses = Map(
@@ -177,7 +212,9 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
       "player/alice/stats" -> apiPlayerStatsJson(wins = 5, losses = 3, draws = 2) // 10 games
     )
     val criteria = makeCriteria().copy(dailyMinGamesFinished = Some(50))
-    for { outcome <- evalSingle(responses, criteria) } yield assertTrue(outcome == CandidateOutcome.Rejected)
+    for { recorded <- evalSingle(responses, criteria) } yield assertTrue(
+      recorded.contains(rejectedFor(RejectionReason.DailyMinGamesFinished))
+    )
   }
 
   private def testDailyMinGamesFinishedCountsTeamMatchGames =
@@ -211,7 +248,7 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
       )
       // Require 3 games — should pass because TM games are included
       val criteria = makeCriteria().copy(dailyMinGamesFinished = Some(3))
-      for { outcome <- evalSingle(responses, criteria) } yield assertTrue(outcome == CandidateOutcome.Invited)
+      for { recorded <- evalSingle(responses, criteria) } yield assertTrue(recorded.contains(passed))
     }
 
   private def testDailyMinGamesFinishedExcludesNonDailyGames =
@@ -232,7 +269,9 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
       )
       // Only 1 daily game in archives — require 2, should reject
       val criteria = makeCriteria().copy(dailyMinGamesFinished = Some(2))
-      for { outcome <- evalSingle(responses, criteria) } yield assertTrue(outcome == CandidateOutcome.Rejected)
+      for { recorded <- evalSingle(responses, criteria) } yield assertTrue(
+        recorded.contains(rejectedFor(RejectionReason.DailyMinGamesFinished))
+      )
     }
 
   private def testArchiveFetchFailureRecordedInApiFetchFailure =
@@ -307,7 +346,9 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
       "player/alice/stats" -> apiPlayerStatsJson(timePerMove = 86400) // 24 hours
     )
     val criteria = makeCriteria().copy(dailyMaxHoursPerMove = Some(12))
-    for { outcome <- evalSingle(responses, criteria) } yield assertTrue(outcome == CandidateOutcome.Rejected)
+    for { recorded <- evalSingle(responses, criteria) } yield assertTrue(
+      recorded.contains(rejectedFor(RejectionReason.DailyMaxHoursPerMove))
+    )
   }
 
   private def testAcceptsPlayerWithinDailyMaxHoursPerMove = test("accepts player within dailyMaxHoursPerMove") {
@@ -316,7 +357,7 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
       "player/alice/stats" -> apiPlayerStatsJson(timePerMove = 36000) // 10 hours
     )
     val criteria = makeCriteria().copy(dailyMaxHoursPerMove = Some(12))
-    for { outcome <- evalSingle(responses, criteria) } yield assertTrue(outcome == CandidateOutcome.Invited)
+    for { recorded <- evalSingle(responses, criteria) } yield assertTrue(recorded.contains(passed))
   }
 
   private def testRejectsByMaxClubs = test("rejects by maxClubs") {
@@ -325,7 +366,9 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
       "player/alice/clubs" -> apiPlayerClubsJson(List("club-1", "club-2", "club-3", "club-4", "club-5", "club-6"))
     )
     val criteria = makeCriteria().copy(maxClubs = Some(5))
-    for { outcome <- evalSingle(responses, criteria) } yield assertTrue(outcome == CandidateOutcome.Rejected)
+    for { recorded <- evalSingle(responses, criteria) } yield assertTrue(
+      recorded.contains(rejectedFor(RejectionReason.MaxClubs))
+    )
   }
 
   private def testRejectsByExcludeClubs = test("rejects by excludeClubs") {
@@ -343,7 +386,7 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
       client     <- fakeChessComClient(responses)
       _          <- evalCandidates(client, runId, List(Username.wrap("alice")), criteria)
       cands      <- RecruitmentCandidate.selectByRun(runId)
-    } yield assertTrue(cands.head.outcome == CandidateOutcome.Rejected)
+    } yield assertTrue(recordedOf(cands.head) == rejectedFor(RejectionReason.ExcludeClubs))
   }
 
   private def testRejectsWhenPlayerHasMatchAgainstTargetClub =
@@ -354,7 +397,9 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
         "player/alice/matches"    -> apiPlayerMatchesJson(registeredIds = List(matchId)),
         s"club/$clubSlug/matches" -> apiClubMatchesJson(registeredIds = List(matchId))
       )
-      for { outcome <- evalSingle(responses, makeCriteria()) } yield assertTrue(outcome == CandidateOutcome.Rejected)
+      for { recorded <- evalSingle(responses, makeCriteria()) } yield assertTrue(
+        recorded.contains(rejectedFor(RejectionReason.InClubMatch))
+      )
     }
 
   private def testAcceptsWhenPlayerMatchesDontOverlapTargetClub =
@@ -364,7 +409,7 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
         "player/alice/matches"    -> apiPlayerMatchesJson(registeredIds = List("https://api.chess.com/pub/match/999")),
         s"club/$clubSlug/matches" -> apiClubMatchesJson(registeredIds = List("https://api.chess.com/pub/match/888"))
       )
-      for { outcome <- evalSingle(responses, makeCriteria()) } yield assertTrue(outcome == CandidateOutcome.Invited)
+      for { recorded <- evalSingle(responses, makeCriteria()) } yield assertTrue(recorded.contains(passed))
     }
 
   private def testRejectsByDaysSinceLastInvited = test("rejects by daysSinceLastInvited") {
@@ -377,14 +422,14 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
       // Create a prior run with alice invited recently
       priorRunId <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Instant.now(), None, None)
       _ <- RecruitmentCandidate.insert(
-        RecruitmentCandidate(priorRunId, pid0, Instant.now(), CandidateOutcome.Invited, None)
+        RecruitmentCandidate(priorRunId, pid0, Instant.now(), CandidateOutcome.Invited, None, None)
       )
       // Now evaluate alice again
       runId  <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None, None)
       client <- fakeChessComClient(Map("player/alice" -> apiPlayerJson(200, "alice")))
       _      <- evalCandidates(client, runId, List(Username("alice")), criteria)
       cands  <- RecruitmentCandidate.selectByRun(runId)
-    } yield assertTrue(cands.head.outcome == CandidateOutcome.Rejected)
+    } yield assertTrue(recordedOf(cands.head) == rejectedFor(RejectionReason.DaysSinceLastInvited))
   }
 
   private def testGatherClubCandidatesExcludesExistingAndEvaluated =
@@ -518,7 +563,7 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
         client <- fakeChessComClient(responses)
         _      <- evalCandidates(client, runId, List(Username("alice")), criteria)
         cands  <- RecruitmentCandidate.selectByRun(runId)
-      } yield assertTrue(cands.head.outcome == CandidateOutcome.Rejected)
+      } yield assertTrue(recordedOf(cands.head) == rejectedFor(RejectionReason.FormerMember))
     }
 
   private def testFormerMemberAcceptedWhenExcludeFormerMembersFalse =
@@ -568,7 +613,9 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
         client     <- fakeChessComClient(responses)
         _          <- evalCandidates(client, runId, List(Username("alice")), criteria)
         cands      <- RecruitmentCandidate.selectByRun(runId)
-      } yield assertTrue(cands.head.outcome == CandidateOutcome.Rejected)).ensuring(TestDbCleanup.clearMatches.orDie)
+      } yield assertTrue(recordedOf(cands.head) == rejectedFor(RejectionReason.FormerMember))).ensuring(
+        TestDbCleanup.clearMatches.orDie
+      )
     }
 
   /** A player whose account reopened, and who left the club before any reconcile saw them back, keeps the row the
@@ -604,7 +651,10 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
         client <- fakeChessComClient(responses)
         _      <- evalCandidates(client, runId, List(Username("alice")), criteria)
         cands  <- RecruitmentCandidate.selectByRun(runId)
-      } yield assertTrue(former.contains(pid0), cands.head.outcome == CandidateOutcome.Rejected)
+      } yield assertTrue(
+        former.contains(pid0),
+        recordedOf(cands.head) == rejectedFor(RejectionReason.FormerMember)
+      )
     }
 
   private def testOpenRowIsAFormerMember =
@@ -628,7 +678,10 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
         client <- fakeChessComClient(responses)
         _      <- evalCandidates(client, runId, List(Username("alice")), criteria)
         cands  <- RecruitmentCandidate.selectByRun(runId)
-      } yield assertTrue(former.contains(pid0), cands.head.outcome == CandidateOutcome.Rejected)
+      } yield assertTrue(
+        former.contains(pid0),
+        recordedOf(cands.head) == rejectedFor(RejectionReason.FormerMember)
+      )
     }
 
   private def testAdminOfSizableClubRejected =
@@ -646,7 +699,7 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
         client     <- fakeChessComClient(responses)
         _          <- evalCandidates(client, runId, List(Username("alice")), criteria)
         cands      <- RecruitmentCandidate.selectByRun(runId)
-      } yield assertTrue(cands.head.outcome == CandidateOutcome.Rejected)
+      } yield assertTrue(recordedOf(cands.head) == rejectedFor(RejectionReason.AdminOfSizableClub))
     }
 
   private def testAdminOfSmallClubAccepted = test("admin of small club accepted when avoidAdminMinClubSize is set") {
@@ -695,7 +748,7 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
       persistedClub   <- ClubName.selectCurrentHolder(ClubSlug(mysterySlug))
       persistedAdmins <- ClubAdmin.selectPlayerIdsByClub(sizableClubId)
     } yield assertTrue(
-      cands.head.outcome == CandidateOutcome.Rejected,
+      recordedOf(cands.head) == rejectedFor(RejectionReason.AdminOfDiscoveredClub),
       persistedClub.exists(_.membersCount.contains(500)),
       persistedAdmins.contains(pid0)
     )
@@ -728,7 +781,7 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
       cands      <- RecruitmentCandidate.selectByRun(runId)
     } yield assertTrue(
       cands.size == 2,
-      cands.forall(_.outcome == CandidateOutcome.Rejected)
+      cands.forall(recordedOf(_) == rejectedFor(RejectionReason.AdminOfDiscoveredClub))
     )
   }
 

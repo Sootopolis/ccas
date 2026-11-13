@@ -268,7 +268,7 @@ object TestRecruitmentAppExplore extends ZIOSpecDefault {
           RecruitmentRun(priorRunId, clubId, criteriaId, RunTrigger.Cli, Times.t0, Some(Times.t1), 0, None, None)
         )
         _ <- RecruitmentCandidate.insert(
-          RecruitmentCandidate(priorRunId, PlayerId(500), Times.t0, CandidateOutcome.Deferred, None)
+          RecruitmentCandidate(priorRunId, PlayerId(500), Times.t0, CandidateOutcome.Deferred, None, None)
         )
 
         // Verify selectDeferredByClub finds it
@@ -305,7 +305,7 @@ object TestRecruitmentAppExplore extends ZIOSpecDefault {
           RecruitmentRun(runId1, clubId, criteriaId, RunTrigger.Cli, Times.t0, Some(Times.t1), 0, None, None)
         )
         _ <- RecruitmentCandidate.insert(
-          RecruitmentCandidate(runId1, PlayerId(600), Times.t0, CandidateOutcome.Deferred, None)
+          RecruitmentCandidate(runId1, PlayerId(600), Times.t0, CandidateOutcome.Deferred, None, None)
         )
 
         // Should find the deferred candidate
@@ -317,7 +317,7 @@ object TestRecruitmentAppExplore extends ZIOSpecDefault {
           RecruitmentRun(runId2, clubId, criteriaId, RunTrigger.Cli, Times.t2, Some(Times.t3), 1, None, None)
         )
         _ <- RecruitmentCandidate.insert(
-          RecruitmentCandidate(runId2, PlayerId(600), Times.t2, CandidateOutcome.Invited, None)
+          RecruitmentCandidate(runId2, PlayerId(600), Times.t2, CandidateOutcome.Invited, None, None)
         )
 
         // Should no longer find the deferred candidate
@@ -326,6 +326,30 @@ object TestRecruitmentAppExplore extends ZIOSpecDefault {
         deferredBefore.size == 1,
         deferredAfter.isEmpty
       )
+    },
+    test("a later rejection from cache settles a deferred candidate") {
+      val criteria = makeCriteria()
+      for {
+        _          <- seedDb
+        criteriaId <- seedCriteria(criteria)
+        _          <- Player.insert(Player(PlayerId(601), Times.t0, Username("cache-rejected"), Active, None, Times.t0))
+        runId1     <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None, None)
+        _ <- RecruitmentCandidate.insert(
+          RecruitmentCandidate(runId1, PlayerId(601), Times.t0, CandidateOutcome.Deferred, None, None)
+        )
+        runId2 <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t2, None, None)
+        _ <- RecruitmentCandidate.insert(
+          RecruitmentCandidate(
+            runId2,
+            PlayerId(601),
+            Times.t2,
+            CandidateOutcome.RejectedFromCache,
+            Some(RejectionReason.MaxClubs),
+            None
+          )
+        )
+        deferred <- RecruitmentCandidate.selectDeferredByClub(clubId)
+      } yield assertTrue(!deferred.exists(_.playerId == PlayerId(601)))
     },
     test("empty source club does not abandon later source clubs (regression: dropped pending sources)") {
       val emptySource = ClubSlug("drop-empty-source")
@@ -399,8 +423,8 @@ object TestRecruitmentAppExplore extends ZIOSpecDefault {
         // The timeout turns that hang into a deterministic failure; post-fix the run completes immediately.
         result <- runRecruit(client, target = Some(5), explore = true, sourceClubs = List(tmSource))
           .timeout(30.seconds)
-        // cand-x's Player row is upserted by FetchAndCheckPlayer regardless of final candidate outcome, so this
-        // confirms the discovery path ran without depending on candidate-row persistence (cacheRejected can skip it).
+        // cand-x's Player row is written whatever the outcome of the evaluation, so this confirms the discovery path ran
+        // without depending on which outcome that was.
         candPlayer <- PlayerName.selectCurrentHolder(Username("cand-x"))
       } yield assertTrue(
         result.isDefined,

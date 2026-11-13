@@ -590,6 +590,17 @@ object RecruitmentTestSupport {
       }
     } yield revInvited.reverse
 
+  /** A stored row's outcome and rejection reason, which the filter tests compare. */
+  type Recorded = (CandidateOutcome, Option[RejectionReason])
+
+  def recordedOf(row: RecruitmentCandidate): Recorded = (row.outcome, row.rejectionReason)
+
+  val passed: Recorded = (CandidateOutcome.Deferred, None)
+
+  def rejectedFor(reason: RejectionReason): Recorded = (CandidateOutcome.Rejected, Some(reason))
+
+  def rejectedFromCacheFor(reason: RejectionReason): Recorded = (CandidateOutcome.RejectedFromCache, Some(reason))
+
   def makeCriteria(
     excludeClubs: List[ClubId] = Nil,
     excludeFormerMembers: Boolean = false,

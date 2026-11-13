@@ -220,7 +220,7 @@ object TestRecruitmentRenameRecovery extends ZIOSpecDefault {
         cand = staleCandidate
         result <- RecruitmentFilterDefs.CheckOpponentMatch.apply(FilterEnv(runCtx, cand))
       } yield assertTrue(
-        !result.rejected,
+        result.rejectionOption.isEmpty,
         result.candidate.playerMatchesOption.isDefined,
         result.candidate.username == freshU
       )
@@ -239,7 +239,7 @@ object TestRecruitmentRenameRecovery extends ZIOSpecDefault {
         cand = staleCandidate
         result <- RecruitmentFilterDefs.CheckClubs.apply(FilterEnv(runCtx, cand))
       } yield assertTrue(
-        !result.rejected,
+        result.rejectionOption.isEmpty,
         result.candidate.playerClubsOption.isDefined,
         result.candidate.username == freshU
       )
@@ -258,7 +258,7 @@ object TestRecruitmentRenameRecovery extends ZIOSpecDefault {
         cand = staleCandidate
         result <- RecruitmentFilterDefs.CheckOngoingGames.apply(FilterEnv(runCtx, cand))
       } yield assertTrue(
-        !result.rejected,
+        result.rejectionOption.isEmpty,
         result.candidate.username == freshU
       )
     }
@@ -277,7 +277,7 @@ object TestRecruitmentRenameRecovery extends ZIOSpecDefault {
         cand = staleCandidate
         result <- RecruitmentFilterDefs.CheckDailyStats.apply(FilterEnv(runCtx, cand))
       } yield assertTrue(
-        !result.rejected,
+        result.rejectionOption.isEmpty,
         result.candidate.cacheOption.exists(_.dailyElo.contains(Elo(1500))),
         result.candidate.username == freshU
       )
@@ -521,7 +521,8 @@ object TestRecruitmentRenameRecovery extends ZIOSpecDefault {
           playerId = pid,
           evaluatedAt = Times.t0,
           outcome = CandidateOutcome.Deferred,
-          rejectionReason = None
+          rejectionReason = None,
+          errorMessage = None
         )
       )
       client <- fakeChessComClient(

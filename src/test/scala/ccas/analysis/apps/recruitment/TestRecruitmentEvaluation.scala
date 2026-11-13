@@ -135,7 +135,8 @@ object TestRecruitmentEvaluation extends ZIOSpecDefault {
         candidates.size == 1,
         candidates.head.outcome == CandidateOutcome.Error,
         candidates.head.playerId == pid0,
-        candidates.head.rejectionReason.isDefined
+        candidates.head.errorMessage.isDefined,
+        candidates.head.rejectionReason.isEmpty
       )
     }
 
@@ -147,24 +148,24 @@ object TestRecruitmentEvaluation extends ZIOSpecDefault {
   private def seedCache(cache: PlayerRecruitmentCache): RIO[PostgresClient, Unit] =
     seedDb *> seedPlayer(cache.playerId) *> PlayerRecruitmentCache.upsert(cache).unit
 
-  /** Evaluates alice in a run of its own, returning the outcome written for her, if any. */
+  /** Evaluates alice in a run of its own, returning the outcome and reason written for her, if any. */
   private def evaluateOnce(
     responses: Map[String, String],
     criteria: RecruitmentCriteria
-  ): RIO[ProgressDisplay & PostgresClient & BodyStore, Option[CandidateOutcome]] =
+  ): RIO[ProgressDisplay & PostgresClient & BodyStore, Option[Recorded]] =
     for {
       criteriaId <- seedCriteria(criteria)
       runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None, None)
       client     <- fakeChessComClient(responses)
       _          <- evalCandidates(client, runId, List(Username("alice")), criteria)
       candidates <- RecruitmentCandidate.selectByRun(runId)
-    } yield candidates.headOption.map(_.outcome)
+    } yield candidates.headOption.map(recordedOf)
 
   private def evalSingleWithCache(
     responses: Map[String, String],
     criteria: RecruitmentCriteria,
     cache: PlayerRecruitmentCache
-  ): RIO[ProgressDisplay & PostgresClient & BodyStore, Option[CandidateOutcome]] =
+  ): RIO[ProgressDisplay & PostgresClient & BodyStore, Option[Recorded]] =
     seedCache(cache) *> evaluateOnce(responses, criteria)
 
   private def suiteCacheFilters = suite("cache-aware filters")(
@@ -175,6 +176,7 @@ object TestRecruitmentEvaluation extends ZIOSpecDefault {
     testMaxClubsCacheRejectionAt48hOldCache,
     testStaleCacheFallsThroughToApiChecks,
     testCacheOnlyRejectionDoesNotBlockReEvaluation,
+    testCacheRejectionCountsAsEvaluated,
     testDailyStatsRejectionKeepsNoEarlierFigure,
     testEarlierFigureDoesNotRejectFromRedatedRow,
     testRefreshedClubCountRejectsFromCacheNextTime,
@@ -202,11 +204,11 @@ object TestRecruitmentEvaluation extends ZIOSpecDefault {
       val seeded = staleRow(lastDailyTimeoutAt = None, lastTmTimeoutAt = None)
       for {
         _         <- seedCache(seeded)
-        outcome   <- evaluateOnce(aliceAt1200, dailyStatsRejectsAlice)
+        recorded  <- evaluateOnce(aliceAt1200, dailyStatsRejectsAlice)
         rowOption <- PlayerRecruitmentCache.selectId(pid0)
         row = rowOption.get
       } yield assertTrue(
-        outcome.contains(CandidateOutcome.Rejected),
+        recorded.contains(rejectedFor(RejectionReason.DailyMinElo)),
         row.fetchedAt.isAfter(seeded.fetchedAt),
         row.dailyElo.contains(Elo(1200)),
         row.dailyScoreRate.isDefined,
@@ -227,8 +229,8 @@ object TestRecruitmentEvaluation extends ZIOSpecDefault {
         first  <- evaluateOnce(aliceAt1200, dailyStatsRejectsAlice)
         second <- evaluateOnce(aliceAt1200, ongoingLimit)
       } yield assertTrue(
-        first.contains(CandidateOutcome.Rejected),
-        second.contains(CandidateOutcome.Deferred)
+        first.contains(rejectedFor(RejectionReason.DailyMinElo)),
+        second.contains(passed)
       )
     }
 
@@ -243,10 +245,10 @@ object TestRecruitmentEvaluation extends ZIOSpecDefault {
         rowOption <- PlayerRecruitmentCache.selectId(pid0)
         second    <- evaluateOnce(responses, criteria)
       } yield assertTrue(
-        first.contains(CandidateOutcome.Rejected),
+        first.contains(rejectedFor(RejectionReason.MaxClubs)),
         rowOption.exists(_.fetchedAt.isAfter(seeded.fetchedAt)),
         rowOption.flatMap(_.clubCount).contains(2),
-        second.isEmpty // cache-only rejection: no candidate row persisted
+        second.contains(rejectedFromCacheFor(RejectionReason.MaxClubs))
       )
     }
 
@@ -276,10 +278,10 @@ object TestRecruitmentEvaluation extends ZIOSpecDefault {
       val responses = aliceAt1200 + ("player/alice/clubs" -> apiPlayerClubsJson(List("club-a", "club-b")))
       for {
         _         <- seedCache(seeded)
-        outcome   <- evaluateOnce(responses, makeCriteria().copy(maxClubs = Some(1)))
+        recorded  <- evaluateOnce(responses, makeCriteria().copy(maxClubs = Some(1)))
         rowOption <- PlayerRecruitmentCache.selectId(pid0)
       } yield assertTrue(
-        outcome.contains(CandidateOutcome.Rejected),
+        recorded.contains(rejectedFor(RejectionReason.MaxClubs)),
         rowOption.map(_.fetchedAt).contains(fiveDaysAgo),
         rowOption.flatMap(_.clubCount).contains(2),
         rowOption.flatMap(_.dailyElo) == seeded.dailyElo,
@@ -324,32 +326,32 @@ object TestRecruitmentEvaluation extends ZIOSpecDefault {
     test("a zero-tolerance daily timeout inside the 90-day window rejects from cache") {
       val cache = cacheWithTimeouts(dailyTimeoutAgeDaysOption = Some(89), tmTimeoutAgeDaysOption = None)
       for {
-        outcome <- evalSingleWithCache(cleanEvaluationResponses, zeroDailyTolerance, cache)
-      } yield assertTrue(outcome.isEmpty) // cache-only rejection: no candidate row persisted
+        recorded <- evalSingleWithCache(cleanEvaluationResponses, zeroDailyTolerance, cache)
+      } yield assertTrue(recorded.contains(rejectedFromCacheFor(RejectionReason.RecentDailyTimeout)))
     }
 
   private def testDailyTimeoutOutsideWindowDoesNotRejectFromCache =
     test("a zero-tolerance daily timeout older than 90 days does not reject from cache") {
       val cache = cacheWithTimeouts(dailyTimeoutAgeDaysOption = Some(91), tmTimeoutAgeDaysOption = None)
       for {
-        outcome <- evalSingleWithCache(cleanEvaluationResponses, zeroDailyTolerance, cache)
-      } yield assertTrue(outcome.contains(CandidateOutcome.Deferred))
+        recorded <- evalSingleWithCache(cleanEvaluationResponses, zeroDailyTolerance, cache)
+      } yield assertTrue(recorded.contains(passed))
     }
 
   private def testTmTimeoutInsideWindowRejectsFromCache =
     test("a zero-tolerance team-match timeout inside the 90-day window rejects from cache") {
       val cache = cacheWithTimeouts(dailyTimeoutAgeDaysOption = None, tmTimeoutAgeDaysOption = Some(89))
       for {
-        outcome <- evalSingleWithCache(cleanEvaluationResponses, zeroTmTolerance, cache)
-      } yield assertTrue(outcome.isEmpty) // cache-only rejection: no candidate row persisted
+        recorded <- evalSingleWithCache(cleanEvaluationResponses, zeroTmTolerance, cache)
+      } yield assertTrue(recorded.contains(rejectedFromCacheFor(RejectionReason.RecentTmTimeout)))
     }
 
   private def testTmTimeoutOutsideWindowDoesNotRejectFromCache =
     test("a zero-tolerance team-match timeout older than 90 days does not reject from cache") {
       val cache = cacheWithTimeouts(dailyTimeoutAgeDaysOption = None, tmTimeoutAgeDaysOption = Some(91))
       for {
-        outcome <- evalSingleWithCache(cleanEvaluationResponses, zeroTmTolerance, cache)
-      } yield assertTrue(outcome.contains(CandidateOutcome.Deferred))
+        recorded <- evalSingleWithCache(cleanEvaluationResponses, zeroTmTolerance, cache)
+      } yield assertTrue(recorded.contains(passed))
     }
 
   private def testMaxClubsCacheRejectionAt48hOldCache = test("maxClubs cache rejection at 48h old cache") {
@@ -373,8 +375,8 @@ object TestRecruitmentEvaluation extends ZIOSpecDefault {
     val responses = Map("player/alice" -> apiPlayerJson(200, "alice"))
 
     for {
-      outcome <- evalSingleWithCache(responses, criteria, cache48h)
-    } yield assertTrue(outcome.isEmpty) // cache-only rejection: no candidate row persisted
+      recorded <- evalSingleWithCache(responses, criteria, cache48h)
+    } yield assertTrue(recorded.contains(rejectedFromCacheFor(RejectionReason.MaxClubs)))
   }
 
   private def testStaleCacheFallsThroughToApiChecks = test("stale cache falls through to API checks") {
@@ -406,8 +408,8 @@ object TestRecruitmentEvaluation extends ZIOSpecDefault {
     )
 
     for {
-      outcome <- evalSingleWithCache(responses, criteria, staleCache)
-    } yield assertTrue(outcome.contains(CandidateOutcome.Deferred))
+      recorded <- evalSingleWithCache(responses, criteria, staleCache)
+    } yield assertTrue(recorded.contains(passed))
   }
 
   private def testCacheOnlyRejectionDoesNotBlockReEvaluation =
@@ -432,14 +434,27 @@ object TestRecruitmentEvaluation extends ZIOSpecDefault {
       val responses = Map("player/alice" -> apiPlayerJson(200, "alice"))
 
       for {
-        // First run: cache-only rejection (no candidate row written)
-        outcome1 <- evalSingleWithCache(responses, criteria, cache)
-        // Verify no Rejected row exists for daysSinceRejected to find
+        recorded <- evalSingleWithCache(responses, criteria, cache)
         rejected <- RecruitmentCandidate.selectLatestRejectedByAlias(pid0, clubId, "default")
       } yield assertTrue(
-        outcome1.isEmpty,
-        rejected.isEmpty
+        recorded.contains(rejectedFromCacheFor(RejectionReason.MaxClubs)),
+        rejected.isEmpty // the cooldown reads only `Rejected` rows
       )
+    }
+
+  private def testCacheRejectionCountsAsEvaluated =
+    test("a cache rejection counts towards the run's evaluated total") {
+      val cache = cacheWithTimeouts(dailyTimeoutAgeDaysOption = None, tmTimeoutAgeDaysOption = None)
+        .copy(fetchedAt = Instant.now().minus(Duration.ofHours(12)), clubCount = Some(120))
+      val criteria = makeCriteria().copy(maxClubs = Some(50))
+      for {
+        _          <- seedCache(cache)
+        criteriaId <- seedCriteria(criteria)
+        runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None, None)
+        client     <- fakeChessComClient(Map("player/alice" -> apiPlayerJson(200, "alice")))
+        _          <- evalCandidates(client, runId, List(Username("alice")), criteria)
+        evaluated  <- RecruitmentCandidate.selectCountByRun(runId)
+      } yield assertTrue(evaluated == 1)
     }
 
   // ==========================================================================
@@ -461,7 +476,7 @@ object TestRecruitmentEvaluation extends ZIOSpecDefault {
     playerId: PlayerId,
     username: String,
     games: List[String]
-  ): RIO[ProgressDisplay & PostgresClient & BodyStore, (Option[CandidateOutcome], Option[PlayerRecruitmentCache])] = {
+  ): RIO[ProgressDisplay & PostgresClient & BodyStore, (Option[Recorded], Option[PlayerRecruitmentCache])] = {
     // Every month of the window serves the games, so a month rolling over mid-test cannot lose them.
     val responses = archivesInWindow(username, Instant.now(), archiveJson(games)) ++ Map(
       s"player/$username"       -> apiPlayerJson(PlayerId.unwrap(playerId), username),
@@ -476,7 +491,7 @@ object TestRecruitmentEvaluation extends ZIOSpecDefault {
       _          <- evalCandidates(client, runId, List(Username.wrap(username)), criteria)
       candidates <- RecruitmentCandidate.selectByRun(runId)
       cache      <- PlayerRecruitmentCache.selectId(playerId)
-    } yield (candidates.headOption.map(_.outcome), cache)
+    } yield (candidates.headOption.map(recordedOf), cache)
   }
 
   private def suiteTmTimeouts = suite("team-match timeouts")(
@@ -493,9 +508,9 @@ object TestRecruitmentEvaluation extends ZIOSpecDefault {
         tmGame("alice", "win", "checkmated")
       )
       for {
-        (outcome, cache) <- evalTmGames(pid0, "alice", games)
+        (recorded, cache) <- evalTmGames(pid0, "alice", games)
       } yield assertTrue(
-        outcome.contains(CandidateOutcome.Rejected),
+        recorded.contains(rejectedFor(RejectionReason.DailyMaxTmTimeoutPercent)),
         cache.flatMap(_.tmTimeoutPct90d).contains(25.0)
       )
     }
@@ -507,9 +522,9 @@ object TestRecruitmentEvaluation extends ZIOSpecDefault {
         tmGame("bob", "checkmated", "win")
       )
       for {
-        (outcome, cache) <- evalTmGames(pid1, "bob", games)
+        (recorded, cache) <- evalTmGames(pid1, "bob", games)
       } yield assertTrue(
-        outcome.contains(CandidateOutcome.Deferred),
+        recorded.contains(passed),
         cache.flatMap(_.tmTimeoutPct90d).contains(0.0)
       )
     }
