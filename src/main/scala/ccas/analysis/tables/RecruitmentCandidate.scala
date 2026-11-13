@@ -6,8 +6,9 @@ import java.time.Instant
 import com.augustnagro.magnum.*
 import zio.ZIO
 
-import ccas.analysis.apps.recruitment.CandidateOutcome
+import ccas.analysis.apps.recruitment.{CandidateOutcome, RejectionReason}
 import ccas.analysis.apps.recruitment.CandidateOutcome.given
+import ccas.analysis.apps.recruitment.RejectionReason.given
 import ccas.analysis.tables.subtypes.RecruitmentRunId
 import ccas.api.misc.subtypes.{ClubId, PlayerId}
 import ccas.utils.sql.DbCodecs.given
@@ -19,14 +20,15 @@ final case class RecruitmentCandidate(
   playerId: PlayerId,
   evaluatedAt: Instant,
   outcome: CandidateOutcome,
-  rejectionReason: Option[String]
+  rejectionReason: Option[RejectionReason],
+  errorMessage: Option[String]
 ) derives DbCodec
 
 object RecruitmentCandidate {
-  private val selectCols = SqlLiteral("run_id, player_id, evaluated_at, outcome, rejection_reason")
+  private val selectCols = SqlLiteral("run_id, player_id, evaluated_at, outcome, rejection_reason, error_message")
 
   private val selectColsRc = SqlLiteral(
-    "rc.run_id, rc.player_id, rc.evaluated_at, rc.outcome, rc.rejection_reason"
+    "rc.run_id, rc.player_id, rc.evaluated_at, rc.outcome, rc.rejection_reason, rc.error_message"
   )
 
   def createTable: ZIO[PostgresClient, SQLException, Int] =
@@ -35,8 +37,17 @@ object RecruitmentCandidate {
               run_id            BIGINT NOT NULL,
               player_id         BIGINT NOT NULL,
               evaluated_at      TIMESTAMPTZ NOT NULL,
-              outcome           TEXT NOT NULL CHECK (outcome IN ('Invited', 'Rejected', 'AlreadyMember', 'Error', 'Deferred')),
+              outcome           TEXT NOT NULL CHECK (outcome IN ('Invited', 'Rejected', 'Error', 'Deferred', 'RejectedFromCache')),
               rejection_reason  TEXT,
+              error_message     TEXT,
+              -- `Rejected` rows from before #430 have no reason, so a `Rejected` row may lack one; a cache rejection must
+              -- have one, and no other row may.
+              CONSTRAINT recruitment_candidate_rejection_reason_check CHECK (CASE outcome
+                WHEN 'Rejected' THEN TRUE
+                WHEN 'RejectedFromCache' THEN rejection_reason IS NOT NULL
+                ELSE rejection_reason IS NULL
+              END),
+              CONSTRAINT recruitment_candidate_error_message_check CHECK ((outcome = 'Error') = (error_message IS NOT NULL)),
               PRIMARY KEY (run_id, player_id),
               FOREIGN KEY (run_id) REFERENCES recruitment_run (run_id) ON DELETE RESTRICT,
               FOREIGN KEY (player_id) REFERENCES player (player_id) ON DELETE RESTRICT
@@ -161,12 +172,13 @@ object RecruitmentCandidate {
             ) AND outcome = $deferred""".update.run()
     }
 
-  /** Returns deferred candidates for a club that have not been resolved (Invited/Rejected) in a later run. */
+  /** Returns deferred candidates for a club that a later run has not invited or rejected, from cache or not. */
   def selectDeferredByClub(clubId: ClubId): ZIO[PostgresClient, SQLException, List[RecruitmentCandidate]] =
     connectZIO {
-      val deferred: CandidateOutcome = CandidateOutcome.Deferred
-      val invited: CandidateOutcome  = CandidateOutcome.Invited
-      val rejected: CandidateOutcome = CandidateOutcome.Rejected
+      val deferred: CandidateOutcome          = CandidateOutcome.Deferred
+      val invited: CandidateOutcome           = CandidateOutcome.Invited
+      val rejected: CandidateOutcome          = CandidateOutcome.Rejected
+      val rejectedFromCache: CandidateOutcome = CandidateOutcome.RejectedFromCache
       sql"""SELECT $selectColsRc FROM recruitment_candidate rc
             JOIN recruitment_run rr ON rc.run_id = rr.run_id
             WHERE rr.club_id = $clubId AND rc.outcome = $deferred
@@ -174,7 +186,7 @@ object RecruitmentCandidate {
                 SELECT 1 FROM recruitment_candidate rc2
                 JOIN recruitment_run rr2 ON rc2.run_id = rr2.run_id
                 WHERE rr2.club_id = $clubId AND rc2.player_id = rc.player_id
-                  AND rc2.outcome IN ($invited, $rejected)
+                  AND rc2.outcome IN ($invited, $rejected, $rejectedFromCache)
                   AND rc2.evaluated_at > rc.evaluated_at
               )
             ORDER BY rc.evaluated_at DESC"""
@@ -183,16 +195,19 @@ object RecruitmentCandidate {
 
   def insert(item: RecruitmentCandidate): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
-      sql"""INSERT INTO recruitment_candidate (run_id, player_id, evaluated_at, outcome, rejection_reason)
-            VALUES (${item.runId}, ${item.playerId}, ${item.evaluatedAt}, ${item.outcome}, ${item
-          .rejectionReason})""".update.run()
+      sql"""INSERT INTO recruitment_candidate
+              (run_id, player_id, evaluated_at, outcome, rejection_reason, error_message)
+            VALUES (${item.runId}, ${item.playerId}, ${item.evaluatedAt}, ${item.outcome}, ${item.rejectionReason},
+              ${item.errorMessage})""".update.run()
     }
 
   /** Writes nothing when the run already holds a row for the player: 0 means another evaluation claimed them first. */
   def insertIfNew(item: RecruitmentCandidate): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
-      sql"""INSERT INTO recruitment_candidate (run_id, player_id, evaluated_at, outcome, rejection_reason)
-            VALUES (${item.runId}, ${item.playerId}, ${item.evaluatedAt}, ${item.outcome}, ${item.rejectionReason})
+      sql"""INSERT INTO recruitment_candidate
+              (run_id, player_id, evaluated_at, outcome, rejection_reason, error_message)
+            VALUES (${item.runId}, ${item.playerId}, ${item.evaluatedAt}, ${item.outcome}, ${item.rejectionReason},
+              ${item.errorMessage})
             ON CONFLICT (run_id, player_id) DO NOTHING""".update.run()
     }
 

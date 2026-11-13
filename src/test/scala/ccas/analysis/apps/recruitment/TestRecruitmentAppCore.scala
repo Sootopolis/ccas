@@ -132,11 +132,18 @@ object TestRecruitmentAppCore extends ZIOSpecDefault {
         runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None, None)
         _ <- RecruitmentCandidate
           .insert(
-            RecruitmentCandidate(runId, pid0, Times.t0, CandidateOutcome.Invited, None)
+            RecruitmentCandidate(runId, pid0, Times.t0, CandidateOutcome.Invited, None, None)
           )
         _ <- RecruitmentCandidate
           .insert(
-            RecruitmentCandidate(runId, pid1, Times.t0, CandidateOutcome.Rejected, Some("too few games"))
+            RecruitmentCandidate(
+              runId,
+              pid1,
+              Times.t0,
+              CandidateOutcome.Rejected,
+              Some(RejectionReason.DailyMinGamesFinished),
+              None
+            )
           )
         all <- RecruitmentCandidate.selectByRun(runId)
       } yield assertTrue(all.size == 2)
@@ -150,11 +157,11 @@ object TestRecruitmentAppCore extends ZIOSpecDefault {
         runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None, None)
         _ <- RecruitmentCandidate
           .insert(
-            RecruitmentCandidate(runId, pid0, Times.t0, CandidateOutcome.Invited, None)
+            RecruitmentCandidate(runId, pid0, Times.t0, CandidateOutcome.Invited, None, None)
           )
         _ <- RecruitmentCandidate
           .insert(
-            RecruitmentCandidate(runId, pid1, Times.t0, CandidateOutcome.Rejected, Some("reason"))
+            RecruitmentCandidate(runId, pid1, Times.t0, CandidateOutcome.Rejected, Some(RejectionReason.MaxClubs), None)
           )
         invited <- RecruitmentCandidate.selectInvitedByRun(runId)
       } yield assertTrue(
@@ -172,7 +179,7 @@ object TestRecruitmentAppCore extends ZIOSpecDefault {
         runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None, None)
         // Insert out of player_id order; the query must return them ascending regardless.
         _ <- ZIO.foreachDiscard(List(pid2, pid0, pid1)) { pid =>
-          RecruitmentCandidate.insert(RecruitmentCandidate(runId, pid, Times.t0, CandidateOutcome.Invited, None))
+          RecruitmentCandidate.insert(RecruitmentCandidate(runId, pid, Times.t0, CandidateOutcome.Invited, None, None))
         }
         invited <- RecruitmentCandidate.selectInvitedByRun(runId)
       } yield assertTrue(invited.map(_.playerId) == List(pid0, pid1, pid2))
@@ -198,10 +205,14 @@ object TestRecruitmentAppCore extends ZIOSpecDefault {
           RecruitmentRun(runB, clubId, criteriaId, RunTrigger.Cli, nowT, Some(nowT), 0, None, None)
         )
         // pid0 invited in BOTH runs (the duplicate); pid1 only in A; pid2 only in B.
-        _ <- RecruitmentCandidate.insert(RecruitmentCandidate(runA, pid0, earlier, CandidateOutcome.Invited, None))
-        _ <- RecruitmentCandidate.insert(RecruitmentCandidate(runB, pid0, nowT, CandidateOutcome.Invited, None))
-        _ <- RecruitmentCandidate.insert(RecruitmentCandidate(runA, pid1, earlier, CandidateOutcome.Invited, None))
-        _ <- RecruitmentCandidate.insert(RecruitmentCandidate(runB, pid2, nowT, CandidateOutcome.Invited, None))
+        _ <- RecruitmentCandidate.insert(
+          RecruitmentCandidate(runA, pid0, earlier, CandidateOutcome.Invited, None, None)
+        )
+        _ <- RecruitmentCandidate.insert(RecruitmentCandidate(runB, pid0, nowT, CandidateOutcome.Invited, None, None))
+        _ <- RecruitmentCandidate.insert(
+          RecruitmentCandidate(runA, pid1, earlier, CandidateOutcome.Invited, None, None)
+        )
+        _ <- RecruitmentCandidate.insert(RecruitmentCandidate(runB, pid2, nowT, CandidateOutcome.Invited, None, None))
         invited <- RecruitmentCandidate.selectInvitedToday(clubId, "default")
         pid0Row = invited.find(_.playerId == pid0)
       } yield assertTrue(
@@ -222,7 +233,14 @@ object TestRecruitmentAppCore extends ZIOSpecDefault {
         _ <- ZIO.foreachDiscard(outcomes.zip(enumPids)) { (outcome, pid) =>
           RecruitmentCandidate
             .insert(
-              RecruitmentCandidate(runId, pid, Times.t0, outcome, Some(s"reason-$pid"))
+              RecruitmentCandidate(
+                runId,
+                pid,
+                Times.t0,
+                outcome,
+                Option.when(outcome == CandidateOutcome.RejectedFromCache)(RejectionReason.MaxClubs),
+                Option.when(outcome == CandidateOutcome.Error)("boom")
+              )
             )
         }
         candidates <- RecruitmentCandidate.selectByRun(runId)
@@ -231,6 +249,46 @@ object TestRecruitmentAppCore extends ZIOSpecDefault {
         candidates.size == outcomes.size,
         loadedOutcomes == outcomes.toSet
       )
+    },
+    test("a cache rejection with no reason is refused") {
+      for {
+        _          <- seedDb
+        _          <- seedPlayer(pid0)
+        criteriaId <- seedCriteria(makeCriteria())
+        runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None, None)
+        exit <- RecruitmentCandidate.insert(
+          RecruitmentCandidate(runId, pid0, Times.t0, CandidateOutcome.RejectedFromCache, None, None)
+        ).exit
+        message = exit.foldExit(_.squash.getMessage, _ => "")
+      } yield assertTrue(message.contains("recruitment_candidate_rejection_reason_check"))
+    },
+    test("an error with no message is refused") {
+      for {
+        _          <- seedDb
+        _          <- seedPlayer(pid0)
+        criteriaId <- seedCriteria(makeCriteria())
+        runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None, None)
+        exit <- RecruitmentCandidate.insert(
+          RecruitmentCandidate(runId, pid0, Times.t0, CandidateOutcome.Error, None, None)
+        ).exit
+        message = exit.foldExit(_.squash.getMessage, _ => "")
+      } yield assertTrue(message.contains("recruitment_candidate_error_message_check"))
+    },
+    test("RejectionReason enum round-trip for all variants") {
+      val reasons  = RejectionReason.values.toList
+      val enumPids = reasons.indices.toList.map(i => PlayerId.wrap(300L + i))
+      for {
+        _          <- seedDb
+        _          <- ZIO.foreachDiscard(enumPids)(seedPlayer)
+        criteriaId <- seedCriteria(makeCriteria())
+        runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None, None)
+        _ <- ZIO.foreachDiscard(reasons.zip(enumPids)) { (reason, pid) =>
+          RecruitmentCandidate.insert(
+            RecruitmentCandidate(runId, pid, Times.t0, CandidateOutcome.Rejected, Some(reason), None)
+          )
+        }
+        candidates <- RecruitmentCandidate.selectByRun(runId)
+      } yield assertTrue(candidates.flatMap(_.rejectionReason).toSet == reasons.toSet)
     },
     test("RecruitmentCandidate selectLatestInvitedByClub returns latest for matching club") {
       for {
@@ -241,11 +299,11 @@ object TestRecruitmentAppCore extends ZIOSpecDefault {
         runId2     <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t1, None, None)
         _ <- RecruitmentCandidate
           .insert(
-            RecruitmentCandidate(runId1, pid0, Times.t0, CandidateOutcome.Invited, None)
+            RecruitmentCandidate(runId1, pid0, Times.t0, CandidateOutcome.Invited, None, None)
           )
         _ <- RecruitmentCandidate
           .insert(
-            RecruitmentCandidate(runId2, pid0, Times.t1, CandidateOutcome.Invited, None)
+            RecruitmentCandidate(runId2, pid0, Times.t1, CandidateOutcome.Invited, None, None)
           )
         latest <- RecruitmentCandidate.selectLatestInvitedByClub(pid0, clubId)
       } yield assertTrue(
@@ -262,7 +320,7 @@ object TestRecruitmentAppCore extends ZIOSpecDefault {
         criteriaId <- seedCriteria(makeCriteria())
         otherRunId <- RecruitmentRun.insert(sourceClubId, criteriaId, RunTrigger.Cli, Times.t0, None, None)
         _ <- RecruitmentCandidate.insert(
-          RecruitmentCandidate(otherRunId, pid0, Times.t0, CandidateOutcome.Invited, None)
+          RecruitmentCandidate(otherRunId, pid0, Times.t0, CandidateOutcome.Invited, None, None)
         )
         forOtherClub <- RecruitmentCandidate.selectLatestInvitedByClub(pid0, sourceClubId)
         forOurClub   <- RecruitmentCandidate.selectLatestInvitedByClub(pid0, clubId)
@@ -468,11 +526,11 @@ object TestRecruitmentAppCore extends ZIOSpecDefault {
         )
         _ <- RecruitmentCandidate
           .insert(
-            RecruitmentCandidate(runId, pid0, Times.t0, CandidateOutcome.Invited, None)
+            RecruitmentCandidate(runId, pid0, Times.t0, CandidateOutcome.Invited, None, None)
           )
         _ <- RecruitmentCandidate
           .insert(
-            RecruitmentCandidate(runId, pid1, Times.t0, CandidateOutcome.Invited, None)
+            RecruitmentCandidate(runId, pid1, Times.t0, CandidateOutcome.Invited, None, None)
           )
         _ <- RecruitmentApp.showReport(NamedClub(clubId, clubSlug), Some(runId.toString))
       } yield assertTrue(true)
@@ -488,7 +546,7 @@ object TestRecruitmentAppCore extends ZIOSpecDefault {
         )
         _ <- RecruitmentCandidate
           .insert(
-            RecruitmentCandidate(runId, pid0, Times.t0, CandidateOutcome.Invited, None)
+            RecruitmentCandidate(runId, pid0, Times.t0, CandidateOutcome.Invited, None, None)
           )
         _ <- RecruitmentApp.showReport(NamedClub(clubId, clubSlug), None)
       } yield assertTrue(true)

@@ -31,16 +31,16 @@ private[recruitment] object RecruitmentFilters {
       env = FilterEnv(runCtx.copy(now = now), candidateCtx)
       ctxRef <- Ref.make(candidateCtx)
       result <- (for {
-        (outcome, finalCandidate) <- runFilters(env, filters, ctxRef)
-        written                   <- persistCandidateResults(runId, now, finalCandidate, outcome)
-        _                         <- writePlayerMatchRef(env.run.client, finalCandidate).ignore
-      } yield found(outcome, finalCandidate, written)).catchAll { error =>
+        (rejectionOption, finalCandidate) <- runFilters(env, filters, ctxRef)
+        written                           <- persistCandidateResults(runId, now, finalCandidate, rejectionOption)
+        _                                 <- writePlayerMatchRef(env.run.client, finalCandidate).ignore
+      } yield found(rejectionOption, finalCandidate, written)).catchAll { error =>
         // A systemic outage hits every in-flight candidate; re-raise so the run aborts rather than persisting an
         // `Error` row for each (which would suppress them as evaluated). Genuine per-candidate errors still record.
         NetworkUnavailableException.recoverUnless(error) {
           for {
             latestCtx <- ctxRef.get
-            _         <- persistCandidateResults(runId, now, latestCtx, CandidateOutcome.Error, Some(error.safeMessage))
+            _         <- persistCandidateError(runId, now, latestCtx, error.safeMessage)
           } yield None
         }
       }
@@ -76,17 +76,24 @@ private[recruitment] object RecruitmentFilters {
     env: FilterEnv,
     filters: List[RecruitmentFilter],
     ctxRef: Ref[CandidateContext]
-  ): RIO[PostgresClient, (CandidateOutcome, CandidateContext)] =
-    ZIO.foldLeft(filters)(FilterResult(false, env.candidate)) {
-      case (r @ FilterResult(true, _), _)     => ZIO.succeed(r)
-      case (FilterResult(false, ctx), filter) => ctxRef.set(ctx) *> filter(env.copy(candidate = ctx))
-    }.map(r => (if (r.rejected) CandidateOutcome.Rejected else CandidateOutcome.Invited, r.candidate))
+  ): RIO[PostgresClient, (Option[Rejection], CandidateContext)] =
+    ZIO.foldLeft(filters)((Option.empty[Rejection], env.candidate)) {
+      case ((None, ctx), filter) =>
+        ctxRef.set(ctx) *> filter(env.copy(candidate = ctx)).map { result =>
+          (result.rejectionOption.map(Rejection(filter.rejectedAs, _)), result.candidate)
+        }
+      case (rejected, _) => ZIO.succeed(rejected)
+    }
 
   // A find needs this evaluation's own `Deferred` row: without one there is nothing to confirm, and a player listed
   // under two names would be found twice. The handle is the one the player was written under.
-  private def found(outcome: CandidateOutcome, candidate: CandidateContext, written: Boolean): Option[FoundCandidate] =
+  private def found(
+    rejectionOption: Option[Rejection],
+    candidate: CandidateContext,
+    written: Boolean
+  ): Option[FoundCandidate] =
     candidate.apiPlayerOption.flatMap { apiPlayer =>
-      Option.when(written && outcome == CandidateOutcome.Invited) {
+      Option.when(written && rejectionOption.isEmpty) {
         FoundCandidate(apiPlayer.playerId, candidate.username)
       }
     }

@@ -176,6 +176,21 @@ object TestRecruitmentPure extends ZIOSpecDefault {
     }
   )
 
+  // A reason is named after the field it enforces (`RejectionReason`), so its row sets that field and no other. The two
+  // zero-tolerance checks judge a timeout's date, which no field names.
+  private def recordsItsCriterion(row: CacheCriterionRow): Boolean =
+    row.entry match {
+      case CacheCriterion.ZeroToleranceDailyTimeout => row.entry.reason == RejectionReason.RecentDailyTimeout
+      case CacheCriterion.ZeroToleranceTmTimeout    => row.entry.reason == RejectionReason.RecentTmTimeout
+      case _ =>
+        val base = makeCriteria()
+        val setFields = row.criteria.productElementNames.zip(row.criteria.productIterator.zip(base.productIterator))
+          .collect { case (name, (value, default)) if value != default => name }
+          .toList
+        val reason = row.entry.reason.toString
+        setFields == List(reason.head.toLower +: reason.tail)
+    }
+
   private def cacheCriterionTests(row: CacheCriterionRow) = {
     def firing(cache: PlayerRecruitmentCache): List[CacheCriterion] = firingUnder(row.criteria, cache)
     List(
@@ -193,6 +208,9 @@ object TestRecruitmentPure extends ZIOSpecDefault {
       },
       test(s"${row.name}: an absent figure fires nothing") {
         assertTrue(firing(cacheAged(0)).isEmpty)
+      },
+      test(s"${row.name}: a rejection records the reason the criterion it reads would") {
+        assertTrue(recordsItsCriterion(row))
       }
     )
   }

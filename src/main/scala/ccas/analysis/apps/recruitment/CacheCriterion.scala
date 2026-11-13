@@ -27,7 +27,11 @@ private val FigureStalenessDays = 30L
 private[recruitment] def figuresFresh(cache: PlayerRecruitmentCache, now: Instant): Boolean =
   FigureStalenessDays > cacheRowAgeDays(cache, now)
 
+/** A check that can reject from cached figures alone. It records its live check's `reason`, except for the two
+  * zero-tolerance timeouts, which judge a timeout's date where no live check does.
+  */
 private[recruitment] enum CacheCriterion(
+  val reason: RejectionReason,
   private val stalenessDays: Long,
   private val shouldReject: CacheCheck => Boolean
 ) {
@@ -37,6 +41,7 @@ private[recruitment] enum CacheCriterion(
   // rate criteria below also apply at a limit of 0, and by the row's age.
   case ZeroToleranceDailyTimeout
       extends CacheCriterion(
+        reason = RejectionReason.RecentDailyTimeout,
         stalenessDays = StatsWindowDays,
         shouldReject = in =>
           in.criteria.dailyMaxTimeoutPercent.contains(0.0) && in.timeoutInWindow(in.cache.lastDailyTimeoutAt)
@@ -44,6 +49,7 @@ private[recruitment] enum CacheCriterion(
 
   case ZeroToleranceTmTimeout
       extends CacheCriterion(
+        reason = RejectionReason.RecentTmTimeout,
         stalenessDays = StatsWindowDays,
         shouldReject = in =>
           in.criteria.dailyMaxTmTimeoutPercent.contains(0.0) && in.timeoutInWindow(in.cache.lastTmTimeoutAt)
@@ -51,42 +57,49 @@ private[recruitment] enum CacheCriterion(
 
   case MaxClubs
       extends CacheCriterion(
+        reason = RejectionReason.MaxClubs,
         stalenessDays = FigureStalenessDays,
         shouldReject = in => in.criteria.maxClubs.exists(max => in.cache.clubCount.exists(_ > max))
       )
 
   case MinDailyElo
       extends CacheCriterion(
+        reason = RejectionReason.DailyMinElo,
         stalenessDays = FigureStalenessDays,
         shouldReject = in => in.criteria.dailyMinElo.exists(min => in.cache.dailyElo.exists(_.value < min.value))
       )
 
   case MaxDailyElo
       extends CacheCriterion(
+        reason = RejectionReason.DailyMaxElo,
         stalenessDays = FigureStalenessDays,
         shouldReject = in => in.criteria.dailyMaxElo.exists(max => in.cache.dailyElo.exists(_.value > max.value))
       )
 
   case MinDailyScoreRate
       extends CacheCriterion(
+        reason = RejectionReason.DailyMinScoreRate,
         stalenessDays = FigureStalenessDays,
         shouldReject = in => in.criteria.dailyMinScoreRate.exists(min => in.cache.dailyScoreRate.exists(_ < min))
       )
 
   case MaxDailyScoreRate
       extends CacheCriterion(
+        reason = RejectionReason.DailyMaxScoreRate,
         stalenessDays = FigureStalenessDays,
         shouldReject = in => in.criteria.dailyMaxScoreRate.exists(max => in.cache.dailyScoreRate.exists(_ > max))
       )
 
   case MaxDailyTimeoutPercent
       extends CacheCriterion(
+        reason = RejectionReason.DailyMaxTimeoutPercent,
         stalenessDays = FigureStalenessDays,
         shouldReject = in => in.criteria.dailyMaxTimeoutPercent.exists(max => in.cache.dailyTimeoutPct.exists(_ > max))
       )
 
   case MinDailyGamesFinished
       extends CacheCriterion(
+        reason = RejectionReason.DailyMinGamesFinished,
         stalenessDays = FigureStalenessDays,
         shouldReject = in =>
           in.criteria.dailyMinGamesFinished.exists(min => in.cache.dailyGamesFinished.exists(_ < min))
@@ -94,18 +107,21 @@ private[recruitment] enum CacheCriterion(
 
   case MinOngoingGames
       extends CacheCriterion(
+        reason = RejectionReason.DailyMinOngoingGames,
         stalenessDays = FigureStalenessDays,
         shouldReject = in => in.criteria.dailyMinOngoingGames.exists(min => in.cache.ongoingGames.exists(_ < min))
       )
 
   case MaxOngoingGames
       extends CacheCriterion(
+        reason = RejectionReason.DailyMaxOngoingGames,
         stalenessDays = FigureStalenessDays,
         shouldReject = in => in.criteria.dailyMaxOngoingGames.exists(max => in.cache.ongoingGames.exists(_ > max))
       )
 
   case MinOngoingTeamMatches
       extends CacheCriterion(
+        reason = RejectionReason.DailyMinOngoingTeamMatches,
         stalenessDays = FigureStalenessDays,
         shouldReject = in =>
           in.criteria.dailyMinOngoingTeamMatches.exists(min => in.cache.ongoingTeamMatches.exists(_ < min))
@@ -113,6 +129,7 @@ private[recruitment] enum CacheCriterion(
 
   case MinTmGamesFinished
       extends CacheCriterion(
+        reason = RejectionReason.DailyMinTmGamesFinished,
         stalenessDays = FigureStalenessDays,
         shouldReject = in =>
           in.criteria.dailyMinTmGamesFinished.exists(min => in.cache.tmGamesFinished90d.exists(_ < min))
@@ -120,6 +137,7 @@ private[recruitment] enum CacheCriterion(
 
   case MaxTmTimeoutPercent
       extends CacheCriterion(
+        reason = RejectionReason.DailyMaxTmTimeoutPercent,
         stalenessDays = FigureStalenessDays,
         shouldReject = in =>
           in.criteria.dailyMaxTmTimeoutPercent.exists(max => in.cache.tmTimeoutPct90d.exists(_ > max))

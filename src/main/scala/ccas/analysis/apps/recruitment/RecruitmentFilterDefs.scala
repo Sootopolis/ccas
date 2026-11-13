@@ -6,6 +6,7 @@ import java.time.temporal.ChronoUnit
 import zio.{IO, RIO, ZIO}
 
 import RecruitmentStatsHelpers.*
+import RejectionReason.*
 
 import ccas.analysis.apps.{withClubSlugRenameRecovery, withPlayerRenameRecovery, UsernameRenameResolver}
 import ccas.analysis.apps.clubdata.ClubAdminResolver
@@ -72,17 +73,20 @@ private[recruitment] object RecruitmentFilterDefs {
           isNewPlayer = existingPlayerOption.isEmpty,
           cacheOption = cached
         )
-        val rejected =
-          statusCat != PlayerStatusCategory.Active
-            || criteria.minDaysSinceRegistration.exists { days =>
-              ChronoUnit.DAYS.between(Instant.ofEpochSecond(apiPlayer.joined), now) < days
-            }
-            || (criteria.nationalityCountries.nonEmpty && {
-              val countryCode = apiPlayer.country.path.segments.last
-              val listed      = criteria.nationalityCountries.contains(countryCode)
-              criteria.nationalityExclude == listed
-            })
-        FilterResult(rejected, updatedCtx)
+        val registeredTooRecently = criteria.minDaysSinceRegistration.exists { days =>
+          ChronoUnit.DAYS.between(Instant.ofEpochSecond(apiPlayer.joined), now) < days
+        }
+        // A `def`: reading the country can fail, so only a player the checks before it passed reaches it.
+        def wrongNationality = criteria.nationalityCountries.nonEmpty && {
+          val countryCode = apiPlayer.country.path.segments.last
+          val listed      = criteria.nationalityCountries.contains(countryCode)
+          criteria.nationalityExclude == listed
+        }
+        val rejectionOption =
+          if (statusCat != PlayerStatusCategory.Active) Some(AccountNotActive)
+          else if (registeredTooRecently) Some(MinDaysSinceRegistration)
+          else Option.when(wrongNationality)(Nationality)
+        FilterResult(rejectionOption, updatedCtx)
       }
   }
 
@@ -92,10 +96,10 @@ private[recruitment] object RecruitmentFilterDefs {
         apiPlayer    <- requireApiPlayer(env)
         recentInvite <- RecruitmentCandidate.selectLatestInvitedByClub(apiPlayer.playerId, env.run.clubId)
       } yield {
-        val rejected = env.run.criteria.daysSinceLastInvited.exists { days =>
+        val invitedRecently = env.run.criteria.daysSinceLastInvited.exists { days =>
           recentInvite.exists(c => ChronoUnit.DAYS.between(c.evaluatedAt, env.run.now) < days)
         }
-        FilterResult(rejected, env.candidate)
+        FilterResult(Option.when(invitedRecently)(DaysSinceLastInvited), env.candidate)
       }
   }
 
@@ -104,37 +108,35 @@ private[recruitment] object RecruitmentFilterDefs {
       for {
         apiPlayer   <- requireApiPlayer(env)
         blacklisted <- RecruitmentBlacklist.isBlacklisted(env.run.clubId, apiPlayer.playerId, env.run.now)
-      } yield FilterResult(blacklisted, env.candidate)
+      } yield FilterResult(Option.when(blacklisted)(Blacklisted), env.candidate)
   }
 
   object CheckAdminOfSizableClub extends RecruitmentFilter {
     def apply(env: FilterEnv): RIO[PostgresClient, FilterResult] =
       requireApiPlayer(env).map { apiPlayer =>
-        FilterResult(env.run.adminExcludedPlayerIds.contains(apiPlayer.playerId), env.candidate)
+        val admin = env.run.adminExcludedPlayerIds.contains(apiPlayer.playerId)
+        FilterResult(Option.when(admin)(AdminOfSizableClub), env.candidate)
       }
   }
 
   object CheckFormerMember extends RecruitmentFilter {
     def apply(env: FilterEnv): RIO[PostgresClient, FilterResult] =
       requireApiPlayer(env).map { apiPlayer =>
-        FilterResult(env.run.formerMemberIds.contains(apiPlayer.playerId), env.candidate)
+        val formerMember = env.run.formerMemberIds.contains(apiPlayer.playerId)
+        FilterResult(Option.when(formerMember)(FormerMember), env.candidate)
       }
   }
 
-  private def runCacheCriteria(
-    cache: PlayerRecruitmentCache,
-    criteria: RecruitmentCriteria,
-    now: Instant
-  ): Boolean = {
-    val check = CacheCheck(cache, criteria, now)
-    CacheCriterion.values.exists(_.fires(check))
-  }
-
   object CheckCacheCriteria extends RecruitmentFilter {
+    override val rejectedAs: CandidateOutcome = CandidateOutcome.RejectedFromCache
+
     def apply(env: FilterEnv): RIO[PostgresClient, FilterResult] =
       ZIO.succeed {
-        val rejected = env.candidate.cacheOption.exists(runCacheCriteria(_, env.run.criteria, env.run.now))
-        FilterResult(rejected, if (rejected) env.candidate.copy(cacheRejected = true) else env.candidate)
+        val rejectionOption = env.candidate.cacheOption.flatMap { cache =>
+          val check = CacheCheck(cache, env.run.criteria, env.run.now)
+          CacheCriterion.values.find(_.fires(check)).map(_.reason)
+        }
+        FilterResult(rejectionOption, env.candidate)
       }
   }
 
@@ -149,7 +151,7 @@ private[recruitment] object RecruitmentFilterDefs {
         val registeredIds = playerMatches.registered.map(_.`@id`).toSet ++
           playerMatches.inProgress.map(_.`@id`).toSet
         FilterResult(
-          rejected = registeredIds.exists(env.run.clubMatchIds.contains),
+          rejectionOption = Option.when(registeredIds.exists(env.run.clubMatchIds.contains))(InClubMatch),
           candidate = env.candidate.copy(username = username, playerMatchesOption = Some(playerMatches))
         )
       }
@@ -167,12 +169,12 @@ private[recruitment] object RecruitmentFilterDefs {
       } yield {
         val clubCount = playerClubs.clubs.size
         val criteria  = env.run.criteria
-        val rejected =
-          criteria.maxClubs.exists(clubCount > _)
-            || env.run.excludedSlugs.exists(clubNames.contains)
+        val rejectionOption =
+          if (criteria.maxClubs.exists(clubCount > _)) Some(MaxClubs)
+          else Option.when(env.run.excludedSlugs.exists(clubNames.contains))(ExcludeClubs)
         val updatedCache = writeFigures(env, apiPlayer.playerId)(_.copy(clubCount = Some(clubCount)))
         FilterResult(
-          rejected = rejected,
+          rejectionOption = rejectionOption,
           candidate = env.candidate.copy(
             username = username,
             cacheOption = Some(updatedCache),
@@ -210,7 +212,7 @@ private[recruitment] object RecruitmentFilterDefs {
           if (rejected) ZIO.succeed(true)
           else evaluateClub(env.run, playerClub.clubName, apiPlayer.playerId, min, cutoff)
         }
-      } yield FilterResult(rejected, env.candidate)
+      } yield FilterResult(Option.when(rejected)(AdminOfDiscoveredClub), env.candidate)
 
     private def evaluateClub(
       run: RunContext,
@@ -317,7 +319,7 @@ private[recruitment] object RecruitmentFilterDefs {
         (username, playerStats) <- fetchRecovering(env, apiPlayer.playerId)(fetch)
         candidate = env.candidate.copy(username = username)
         result <- playerStats.chessDaily match {
-          case None             => ZIO.succeed(FilterResult(true, candidate))
+          case None             => ZIO.succeed(FilterResult(Some(NoDailyStats), candidate))
           case Some(dailyStats) => applyDailyStats(env.copy(candidate = candidate), dailyStats)
         }
       } yield result
@@ -353,24 +355,29 @@ private[recruitment] object RecruitmentFilterDefs {
         )
         val dailyTimePerMove = dailyStats.record.timePerMove
         val criteria         = env.run.criteria
-        val rejected =
-          criteria.dailyMinElo.exists(min => dailyElo.value < min.value)
-            || criteria.dailyMaxElo.exists(max => dailyElo.value > max.value)
-            || criteria.dailyMinScoreRate.exists(dailyStats.record.scoreRate < _)
-            || criteria.dailyMaxScoreRate.exists(dailyStats.record.scoreRate > _)
-            || criteria.dailyMaxTimeoutPercent.exists(dailyTimeoutPct > _)
-            || criteria.dailyMinGamesFinished.exists(min => dailyGamesFinished90d.getOrElse(dailyGamesFinished) < min)
-            || criteria.dailyMaxHoursPerMove.exists(maxHours => dailyTimePerMove > maxHours * 3600)
+        val gamesFinished    = dailyGamesFinished90d.getOrElse(dailyGamesFinished)
+        val slowMoves        = criteria.dailyMaxHoursPerMove.exists(hours => dailyTimePerMove > hours * 3600)
+        val rejectionOption =
+          if (criteria.dailyMinElo.exists(min => dailyElo.value < min.value)) Some(DailyMinElo)
+          else if (criteria.dailyMaxElo.exists(max => dailyElo.value > max.value)) Some(DailyMaxElo)
+          else if (criteria.dailyMinScoreRate.exists(dailyStats.record.scoreRate < _)) Some(DailyMinScoreRate)
+          else if (criteria.dailyMaxScoreRate.exists(dailyStats.record.scoreRate > _)) Some(DailyMaxScoreRate)
+          else if (criteria.dailyMaxTimeoutPercent.exists(dailyTimeoutPct > _)) Some(DailyMaxTimeoutPercent)
+          else if (criteria.dailyMinGamesFinished.exists(gamesFinished < _)) Some(DailyMinGamesFinished)
+          else Option.when(slowMoves)(DailyMaxHoursPerMove)
         val updatedCache = writeFigures(env, apiPlayer.playerId) {
           _.copy(
             dailyElo = Some(dailyElo),
             dailyTimeoutPct = Some(dailyTimeoutPct),
-            dailyGamesFinished = Some(dailyGamesFinished90d.getOrElse(dailyGamesFinished)),
+            dailyGamesFinished = Some(gamesFinished),
             lastDailyTimeoutAt = mergedDailyTimeout,
             dailyScoreRate = Some(dailyStats.record.scoreRate)
           )
         }
-        FilterResult(rejected, env.candidate.copy(cacheOption = Some(updatedCache), recentArchivesOption = archives))
+        FilterResult(
+          rejectionOption,
+          env.candidate.copy(cacheOption = Some(updatedCache), recentArchivesOption = archives)
+        )
       }
     }
   }
@@ -386,14 +393,15 @@ private[recruitment] object RecruitmentFilterDefs {
         val ongoingGames       = currentGames.games.size
         val ongoingTeamMatches = currentGames.games.count(_.`match`.isDefined)
         val criteria           = env.run.criteria
-        val rejected =
-          criteria.dailyMinOngoingGames.exists(ongoingGames < _)
-            || criteria.dailyMaxOngoingGames.exists(ongoingGames > _)
-            || criteria.dailyMinOngoingTeamMatches.exists(ongoingTeamMatches < _)
+        val fewTeamMatches     = criteria.dailyMinOngoingTeamMatches.exists(ongoingTeamMatches < _)
+        val rejectionOption =
+          if (criteria.dailyMinOngoingGames.exists(ongoingGames < _)) Some(DailyMinOngoingGames)
+          else if (criteria.dailyMaxOngoingGames.exists(ongoingGames > _)) Some(DailyMaxOngoingGames)
+          else Option.when(fewTeamMatches)(DailyMinOngoingTeamMatches)
         val updatedCache = writeFigures(env, apiPlayer.playerId)(
           _.copy(ongoingGames = Some(ongoingGames), ongoingTeamMatches = Some(ongoingTeamMatches))
         )
-        FilterResult(rejected, env.candidate.copy(username = username, cacheOption = Some(updatedCache)))
+        FilterResult(rejectionOption, env.candidate.copy(username = username, cacheOption = Some(updatedCache)))
       }
     }
   }
@@ -419,11 +427,13 @@ private[recruitment] object RecruitmentFilterDefs {
             lastTmTimeoutAt = mergeOptionalInstants(tmStats.lastTimeoutAt, cache.lastTmTimeoutAt)
           )
         }
-        val criteria = env.run.criteria
-        val rejected =
-          criteria.dailyMinTmGamesFinished.exists(tmStats.gamesFinished < _)
-            || criteria.dailyMaxTmTimeoutPercent.exists(max => tmStats.timeoutPct.exists(_ > max))
-        FilterResult(rejected, env.candidate.copy(username = tmStats.username, cacheOption = Some(updatedCache)))
+        val criteria   = env.run.criteria
+        val tmTimeouts = criteria.dailyMaxTmTimeoutPercent.exists(max => tmStats.timeoutPct.exists(_ > max))
+        val rejectionOption =
+          if (criteria.dailyMinTmGamesFinished.exists(tmStats.gamesFinished < _)) Some(DailyMinTmGamesFinished)
+          else Option.when(tmTimeouts)(DailyMaxTmTimeoutPercent)
+        val candidate = env.candidate.copy(username = tmStats.username, cacheOption = Some(updatedCache))
+        FilterResult(rejectionOption, candidate)
       }
   }
 }

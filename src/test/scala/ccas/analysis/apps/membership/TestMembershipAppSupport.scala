@@ -158,7 +158,7 @@ object TestMembershipAppSupport {
               RETURNING run_id""".query[RecruitmentRunId].run().head
       }
       _ <- RecruitmentCandidate.insert(
-        RecruitmentCandidate(runId, playerId, evaluatedAt, CandidateOutcome.Invited, None)
+        RecruitmentCandidate(runId, playerId, evaluatedAt, CandidateOutcome.Invited, None, None)
       )
     } yield ()
 }

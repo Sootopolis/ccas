@@ -17,14 +17,34 @@ import ccas.utils.sql.PostgresClient.withTransaction
 private[recruitment] object RecruitmentPersistence {
 
   /** Returns whether the candidate row was written. A player listed under two names is evaluated twice, and
-    * whichever evaluation writes first keeps its result.
+    * whichever evaluation writes first keeps its result. A pass is written as `Deferred` until the run confirms it.
     */
   def persistCandidateResults(
     runId: RecruitmentRunId,
     now: Instant,
     candidate: CandidateContext,
+    rejectionOption: Option[Rejection]
+  ): RIO[PostgresClient, Boolean] = {
+    val outcome = rejectionOption.fold(CandidateOutcome.Deferred)(_.outcome)
+    persist(runId, now, candidate, outcome, rejectionOption.map(_.reason), errorMessageOption = None)
+  }
+
+  /** As [[persistCandidateResults]], for an evaluation that failed. */
+  def persistCandidateError(
+    runId: RecruitmentRunId,
+    now: Instant,
+    candidate: CandidateContext,
+    errorMessage: String
+  ): RIO[PostgresClient, Boolean] =
+    persist(runId, now, candidate, CandidateOutcome.Error, reasonOption = None, Some(errorMessage))
+
+  private def persist(
+    runId: RecruitmentRunId,
+    now: Instant,
+    candidate: CandidateContext,
     outcome: CandidateOutcome,
-    errorMessage: Option[String] = None
+    reasonOption: Option[RejectionReason],
+    errorMessageOption: Option[String]
   ): RIO[PostgresClient, Boolean] =
     // No player data (transient API error) — skip persistence, retry next run
     ZIO.foreach(candidate.apiPlayerOption) { ap =>
@@ -55,16 +75,13 @@ private[recruitment] object RecruitmentPersistence {
               }
             }
           _ <- ZIO.foreachDiscard(candidate.cacheOption)(PlayerRecruitmentCache.upsert)
-          // Skip candidate row for cache-only rejections so they aren't blocked by daysSinceRejected
-          // Passing candidates are written as Deferred; only flipped to Invited after confirmation at finalization
-          dbOutcome = if (outcome == CandidateOutcome.Invited) CandidateOutcome.Deferred else outcome
-          insertedOption <- ZIO.when(!candidate.cacheRejected) {
-            RecruitmentCandidate.insertIfNew(RecruitmentCandidate(runId, ap.playerId, now, dbOutcome, errorMessage))
-          }
-          _ <- ZIO.whenDiscard(insertedOption.contains(0)) {
+          inserted <- RecruitmentCandidate.insertIfNew(
+            RecruitmentCandidate(runId, ap.playerId, now, outcome, reasonOption, errorMessageOption)
+          )
+          _ <- ZIO.whenDiscard(inserted == 0) {
             ZIO.logInfo(s"[Recruitment] ${candidate.username} (player ${ap.playerId}) already evaluated in this run")
           }
-        } yield insertedOption.contains(1)
+        } yield inserted == 1
       }
     }.map(_.contains(true))
 

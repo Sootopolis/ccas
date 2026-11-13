@@ -19,6 +19,9 @@ import ccas.utils.sql.PostgresClient
 
 private[recruitment] trait RecruitmentFilter {
   def apply(env: FilterEnv): RIO[PostgresClient, FilterResult]
+
+  /** The outcome stored when this filter rejects a candidate. */
+  def rejectedAs: CandidateOutcome = CandidateOutcome.Rejected
 }
 
 /** Shared across all candidates in a run. */
@@ -45,11 +48,6 @@ private[recruitment] case class RunContext(
   * @param username
   *   The handle Chess.com last answered to. A filter whose fetch recovers a rename writes the fresh one back, so later
   *   filters and persistence never act on the name the player left.
-  * @param cacheRejected
-  *   Set by [[RecruitmentFilterDefs.CheckCacheCriteria]] when the candidate is rejected purely on cached stats (no
-  *   fresh API data fetched beyond the initial player lookup). When true, no
-  *   [[ccas.analysis.tables.RecruitmentCandidate]] row is persisted so the candidate is not blocked by the
-  *   `daysSinceRejected` cooldown and can be re-evaluated once the cache ages out.
   */
 private[recruitment] case class CandidateContext(
   username: Username,
@@ -57,7 +55,6 @@ private[recruitment] case class CandidateContext(
   isNewPlayer: Boolean,
   cacheOption: Option[PlayerRecruitmentCache],
   recentArchivesOption: Option[List[ApiPlayerArchive]] = None,
-  cacheRejected: Boolean = false,
   playerMatchesOption: Option[ApiPlayerMatches] = None,
   playerClubsOption: Option[ApiPlayerClubs] = None
 )
@@ -74,7 +71,11 @@ private[recruitment] case class FoundCandidate(playerId: PlayerId, username: Use
 /** Groups contexts passed to each filter. */
 private[recruitment] case class FilterEnv(run: RunContext, candidate: CandidateContext)
 
-private[recruitment] case class FilterResult(rejected: Boolean, candidate: CandidateContext)
+/** `rejectionOption` is the first check this filter's candidate failed, if any. */
+private[recruitment] case class FilterResult(rejectionOption: Option[RejectionReason], candidate: CandidateContext)
+
+/** A rejection as it is stored: the rejecting filter's outcome, and the check that failed. */
+private[recruitment] case class Rejection(outcome: CandidateOutcome, reason: RejectionReason)
 
 // --- Explore mode types ---
 
