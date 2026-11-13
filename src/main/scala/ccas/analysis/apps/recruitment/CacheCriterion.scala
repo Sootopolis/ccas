@@ -12,22 +12,29 @@ private[recruitment] final case class CacheCheck(
   criteria: RecruitmentCriteria,
   now: Instant
 ) {
-  val rowAgeDays: Long = ChronoUnit.DAYS.between(cache.fetchedAt, now)
+  val rowAgeDays: Long = cacheRowAgeDays(cache, now)
 
   def timeoutInWindow(timeoutAtOption: Option[Instant]): Boolean =
     timeoutAtOption.exists(!_.isBefore(now.minus(StatsWindowDays, ChronoUnit.DAYS)))
 }
 
+private def cacheRowAgeDays(cache: PlayerRecruitmentCache, now: Instant): Long =
+  ChronoUnit.DAYS.between(cache.fetchedAt, now)
+
 private val FigureStalenessDays = 30L
+
+/** Whether `cache`'s figures can still reject from cache, by its age alone. */
+private[recruitment] def figuresFresh(cache: PlayerRecruitmentCache, now: Instant): Boolean =
+  FigureStalenessDays > cacheRowAgeDays(cache, now)
 
 private[recruitment] enum CacheCriterion(
   private val stalenessDays: Long,
   private val shouldReject: CacheCheck => Boolean
 ) {
 
-  // These two go by the timeout's own age: the row keeps one after it leaves the window a full evaluation counts. A
-  // timeout is newer than its row only if it came during the run, so the row age rarely decides here. The rate criteria
-  // below also apply at a limit of 0, and by the row's age.
+  // These two go by the timeout's own age: the row keeps one after it leaves the window a full evaluation counts. A fresh
+  // row keeps its date when a timeout is merged in (#429), so the row's age can close one still inside the window. The
+  // rate criteria below also apply at a limit of 0, and by the row's age.
   case ZeroToleranceDailyTimeout
       extends CacheCriterion(
         stalenessDays = StatsWindowDays,

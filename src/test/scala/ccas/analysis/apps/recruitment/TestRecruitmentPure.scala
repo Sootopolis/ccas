@@ -127,9 +127,9 @@ object TestRecruitmentPure extends ZIOSpecDefault {
   private val now: Instant = TestTimes.t0
 
   private def cacheAged(days: Long): PlayerRecruitmentCache =
-    PlayerRecruitmentCache.empty(PlayerId(1), now.minus(days, ChronoUnit.DAYS), None)
+    PlayerRecruitmentCache.empty(PlayerId(1), now.minus(days, ChronoUnit.DAYS))
 
-  // A timeout from during the run, newer than its row: still inside the window at the limit, so the row's age decides.
+  // A timeout newer than its row: still inside the window at the limit, so the row's age decides.
   private def duringRun(cache: PlayerRecruitmentCache): Option[Instant] =
     Some(cache.fetchedAt.plusSeconds(1))
 

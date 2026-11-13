@@ -36,13 +36,16 @@ private[recruitment] object RecruitmentFilterDefs {
       .withPlayerRenameRecovery(env.run.client, env.candidate.username, Some(playerId))(fetchUnder)
   }
 
-  private def getOrUpdateCache(
-    env: FilterEnv
+  // A fresh row keeps its older date, which undersells a figure written now but never oversells one; a stale row is
+  // restarted, so its unusable figures cannot take the new date (#429).
+  private def writeFigures(
+    env: FilterEnv,
+    playerId: PlayerId
   )(update: PlayerRecruitmentCache => PlayerRecruitmentCache): PlayerRecruitmentCache = {
-    val playerId = env.candidate.apiPlayerOption.get.playerId
-    val base = env.candidate.cacheOption.getOrElse(
-      PlayerRecruitmentCache.empty(playerId, env.run.now, None)
-    )
+    val now = env.run.now
+    val base = env.candidate.cacheOption.fold(PlayerRecruitmentCache.empty(playerId, now)) { cache =>
+      if (figuresFresh(cache, now)) cache else cache.restartAt(now)
+    }
     update(base)
   }
 
@@ -167,7 +170,7 @@ private[recruitment] object RecruitmentFilterDefs {
         val rejected =
           criteria.maxClubs.exists(clubCount > _)
             || env.run.excludedSlugs.exists(clubNames.contains)
-        val updatedCache = getOrUpdateCache(env)(_.copy(clubCount = Some(clubCount)))
+        val updatedCache = writeFigures(env, apiPlayer.playerId)(_.copy(clubCount = Some(clubCount)))
         FilterResult(
           rejected = rejected,
           candidate = env.candidate.copy(
@@ -337,7 +340,7 @@ private[recruitment] object RecruitmentFilterDefs {
               env.run.client.getUncached[ApiPlayerArchive](url)
             }
           }
-        _ <- requireApiPlayer(env)
+        apiPlayer <- requireApiPlayer(env)
       } yield {
         val cutoff90d = env.run.now.minus(StatsWindowDays, ChronoUnit.DAYS)
         val dailyGamesFinished90d = archives.map(
@@ -358,9 +361,8 @@ private[recruitment] object RecruitmentFilterDefs {
             || criteria.dailyMaxTimeoutPercent.exists(dailyTimeoutPct > _)
             || criteria.dailyMinGamesFinished.exists(min => dailyGamesFinished90d.getOrElse(dailyGamesFinished) < min)
             || criteria.dailyMaxHoursPerMove.exists(maxHours => dailyTimePerMove > maxHours * 3600)
-        val updatedCache = getOrUpdateCache(env) {
+        val updatedCache = writeFigures(env, apiPlayer.playerId) {
           _.copy(
-            fetchedAt = env.run.now,
             dailyElo = Some(dailyElo),
             dailyTimeoutPct = Some(dailyTimeoutPct),
             dailyGamesFinished = Some(dailyGamesFinished90d.getOrElse(dailyGamesFinished)),
@@ -388,7 +390,7 @@ private[recruitment] object RecruitmentFilterDefs {
           criteria.dailyMinOngoingGames.exists(ongoingGames < _)
             || criteria.dailyMaxOngoingGames.exists(ongoingGames > _)
             || criteria.dailyMinOngoingTeamMatches.exists(ongoingTeamMatches < _)
-        val updatedCache = getOrUpdateCache(env)(
+        val updatedCache = writeFigures(env, apiPlayer.playerId)(
           _.copy(ongoingGames = Some(ongoingGames), ongoingTeamMatches = Some(ongoingTeamMatches))
         )
         FilterResult(rejected, env.candidate.copy(username = username, cacheOption = Some(updatedCache)))
@@ -400,8 +402,6 @@ private[recruitment] object RecruitmentFilterDefs {
     def apply(env: FilterEnv): RIO[PostgresClient, FilterResult] =
       for {
         apiPlayer <- requireApiPlayer(env)
-        cache <- ZIO.fromOption(env.candidate.cacheOption)
-          .orElseFail(new NoSuchElementException("cache not set — CheckDailyStats must run before CheckTmStats"))
         tmStats <- fetchTmStats(
           client = env.run.client,
           username = env.candidate.username,
@@ -412,12 +412,13 @@ private[recruitment] object RecruitmentFilterDefs {
         )
         _ <- env.run.discoveredOpponents.update(_ ++ tmStats.opponentUsernames)
       } yield {
-        val mergedTmTimeout = mergeOptionalInstants(tmStats.lastTimeoutAt, cache.lastTmTimeoutAt)
-        val updatedCache = cache.copy(
-          tmGamesFinished90d = Some(tmStats.gamesFinished),
-          tmTimeoutPct90d = tmStats.timeoutPct,
-          lastTmTimeoutAt = mergedTmTimeout
-        )
+        val updatedCache = writeFigures(env, apiPlayer.playerId) { cache =>
+          cache.copy(
+            tmGamesFinished90d = Some(tmStats.gamesFinished),
+            tmTimeoutPct90d = tmStats.timeoutPct,
+            lastTmTimeoutAt = mergeOptionalInstants(tmStats.lastTimeoutAt, cache.lastTmTimeoutAt)
+          )
+        }
         val criteria = env.run.criteria
         val rejected =
           criteria.dailyMinTmGamesFinished.exists(tmStats.gamesFinished < _)

@@ -1,6 +1,7 @@
 package ccas.analysis.apps.recruitment
 
 import java.time.{Duration, Instant}
+import java.time.temporal.ChronoUnit
 
 import zio.{RIO, ZLayer}
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
@@ -142,24 +143,29 @@ object TestRecruitmentEvaluation extends ZIOSpecDefault {
   // Suite: Cache-aware filters
   // ==========================================================================
 
-  /** Helper: run evalSingle but seed a cache row (and its player FK) before evaluation. */
-  private def evalSingleWithCache(
+  /** Seeds `cache` and its player, leaving the evaluations to [[evaluateOnce]]. */
+  private def seedCache(cache: PlayerRecruitmentCache): RIO[PostgresClient, Unit] =
+    seedDb *> seedPlayer(cache.playerId) *> PlayerRecruitmentCache.upsert(cache).unit
+
+  /** Evaluates alice in a run of its own, returning the outcome written for her, if any. */
+  private def evaluateOnce(
     responses: Map[String, String],
-    criteria: RecruitmentCriteria,
-    cache: PlayerRecruitmentCache,
-    username: String = "alice"
+    criteria: RecruitmentCriteria
   ): RIO[ProgressDisplay & PostgresClient & BodyStore, Option[CandidateOutcome]] =
     for {
-      _ <- seedDb
-      // Seed player row for FK constraint, then seed cache
-      _          <- seedPlayer(cache.playerId)
-      _          <- PlayerRecruitmentCache.upsert(cache)
       criteriaId <- seedCriteria(criteria)
       runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None, None)
       client     <- fakeChessComClient(responses)
-      _          <- evalCandidates(client, runId, List(Username.wrap(username)), criteria)
-      cands      <- RecruitmentCandidate.selectByRun(runId)
-    } yield cands.headOption.map(_.outcome)
+      _          <- evalCandidates(client, runId, List(Username("alice")), criteria)
+      candidates <- RecruitmentCandidate.selectByRun(runId)
+    } yield candidates.headOption.map(_.outcome)
+
+  private def evalSingleWithCache(
+    responses: Map[String, String],
+    criteria: RecruitmentCriteria,
+    cache: PlayerRecruitmentCache
+  ): RIO[ProgressDisplay & PostgresClient & BodyStore, Option[CandidateOutcome]] =
+    seedCache(cache) *> evaluateOnce(responses, criteria)
 
   private def suiteCacheFilters = suite("cache-aware filters")(
     testDailyTimeoutInsideWindowRejectsFromCache,
@@ -168,8 +174,118 @@ object TestRecruitmentEvaluation extends ZIOSpecDefault {
     testTmTimeoutOutsideWindowDoesNotRejectFromCache,
     testMaxClubsCacheRejectionAt48hOldCache,
     testStaleCacheFallsThroughToApiChecks,
-    testCacheOnlyRejectionDoesNotBlockReEvaluation
+    testCacheOnlyRejectionDoesNotBlockReEvaluation,
+    testDailyStatsRejectionKeepsNoEarlierFigure,
+    testEarlierFigureDoesNotRejectFromRedatedRow,
+    testRefreshedClubCountRejectsFromCacheNextTime,
+    testRedatedRowKeepsEarlierTimeouts,
+    testFreshRowKeepsItsFiguresAndDate
   )
+
+  /** A row too old for its figures to reject from cache, holding 100 ongoing games. */
+  private def staleRow(lastDailyTimeoutAt: Option[Instant], lastTmTimeoutAt: Option[Instant]): PlayerRecruitmentCache =
+    cacheWithTimeouts(dailyTimeoutAgeDaysOption = None, tmTimeoutAgeDaysOption = None).copy(
+      ongoingGames = Some(100),
+      lastDailyTimeoutAt = lastDailyTimeoutAt,
+      lastTmTimeoutAt = lastTmTimeoutAt
+    )
+
+  // A daily Elo of 1200 against a minimum of 1600: `CheckDailyStats` rejects, so the filters after it never run.
+  private val aliceAt1200 = Map(
+    "player/alice"       -> apiPlayerJson(200, "alice"),
+    "player/alice/stats" -> apiPlayerStatsJson(dailyElo = 1200)
+  )
+  private val dailyStatsRejectsAlice = makeCriteria().copy(dailyMinElo = Some(Elo(1600)))
+
+  private def testDailyStatsRejectionKeepsNoEarlierFigure =
+    test("a daily-stats rejection keeps no figure from an earlier evaluation") {
+      val seeded = staleRow(lastDailyTimeoutAt = None, lastTmTimeoutAt = None)
+      for {
+        _         <- seedCache(seeded)
+        outcome   <- evaluateOnce(aliceAt1200, dailyStatsRejectsAlice)
+        rowOption <- PlayerRecruitmentCache.selectId(pid0)
+        row = rowOption.get
+      } yield assertTrue(
+        outcome.contains(CandidateOutcome.Rejected),
+        row.fetchedAt.isAfter(seeded.fetchedAt),
+        row.dailyElo.contains(Elo(1200)),
+        row.dailyScoreRate.isDefined,
+        row.clubCount.contains(0), // the seeded row holds 5
+        row.ongoingGames.isEmpty,
+        row.ongoingTeamMatches.isEmpty,
+        row.tmGamesFinished90d.isEmpty,
+        row.tmTimeoutPct90d.isEmpty
+      )
+    }
+
+  private def testEarlierFigureDoesNotRejectFromRedatedRow =
+    test("a figure from an earlier evaluation does not reject from cache after the row is re-dated") {
+      // The seeded 100 ongoing games would fail this limit; Chess.com now reports none.
+      val ongoingLimit = makeCriteria().copy(dailyMaxOngoingGames = Some(60))
+      for {
+        _      <- seedCache(staleRow(lastDailyTimeoutAt = None, lastTmTimeoutAt = None))
+        first  <- evaluateOnce(aliceAt1200, dailyStatsRejectsAlice)
+        second <- evaluateOnce(aliceAt1200, ongoingLimit)
+      } yield assertTrue(
+        first.contains(CandidateOutcome.Rejected),
+        second.contains(CandidateOutcome.Deferred)
+      )
+    }
+
+  private def testRefreshedClubCountRejectsFromCacheNextTime =
+    test("a club count refreshed on a stale row rejects from cache next time") {
+      val responses = aliceAt1200 + ("player/alice/clubs" -> apiPlayerClubsJson(List("club-a", "club-b")))
+      val criteria  = makeCriteria().copy(maxClubs = Some(1))
+      val seeded    = staleRow(lastDailyTimeoutAt = None, lastTmTimeoutAt = None)
+      for {
+        _         <- seedCache(seeded)
+        first     <- evaluateOnce(responses, criteria)
+        rowOption <- PlayerRecruitmentCache.selectId(pid0)
+        second    <- evaluateOnce(responses, criteria)
+      } yield assertTrue(
+        first.contains(CandidateOutcome.Rejected),
+        rowOption.exists(_.fetchedAt.isAfter(seeded.fetchedAt)),
+        rowOption.flatMap(_.clubCount).contains(2),
+        second.isEmpty // cache-only rejection: no candidate row persisted
+      )
+    }
+
+  private def testRedatedRowKeepsEarlierTimeouts =
+    test("a re-dated row keeps the timeouts of earlier evaluations") {
+      // Whole seconds, so the values survive the database's microsecond precision unchanged.
+      val now          = Instant.now().truncatedTo(ChronoUnit.SECONDS)
+      val dailyTimeout = now.minus(Duration.ofDays(20))
+      val tmTimeout    = now.minus(Duration.ofDays(10))
+      for {
+        _         <- seedCache(staleRow(lastDailyTimeoutAt = Some(dailyTimeout), lastTmTimeoutAt = Some(tmTimeout)))
+        _         <- evaluateOnce(aliceAt1200, dailyStatsRejectsAlice)
+        rowOption <- PlayerRecruitmentCache.selectId(pid0)
+      } yield assertTrue(
+        rowOption.flatMap(_.lastDailyTimeoutAt).contains(dailyTimeout),
+        rowOption.flatMap(_.lastTmTimeoutAt).contains(tmTimeout)
+      )
+    }
+
+  private def testFreshRowKeepsItsFiguresAndDate =
+    test("a fresh row keeps its figures and its date when a filter refreshes one") {
+      // Whole seconds, so the date survives the database's microsecond precision unchanged.
+      val fiveDaysAgo = Instant.now().truncatedTo(ChronoUnit.SECONDS).minus(Duration.ofDays(5))
+      val seeded = cacheWithTimeouts(dailyTimeoutAgeDaysOption = None, tmTimeoutAgeDaysOption = None)
+        .copy(fetchedAt = fiveDaysAgo, clubCount = Some(0))
+      // Two clubs against a limit of one: `CheckClubs` refreshes the count, then rejects.
+      val responses = aliceAt1200 + ("player/alice/clubs" -> apiPlayerClubsJson(List("club-a", "club-b")))
+      for {
+        _         <- seedCache(seeded)
+        outcome   <- evaluateOnce(responses, makeCriteria().copy(maxClubs = Some(1)))
+        rowOption <- PlayerRecruitmentCache.selectId(pid0)
+      } yield assertTrue(
+        outcome.contains(CandidateOutcome.Rejected),
+        rowOption.map(_.fetchedAt).contains(fiveDaysAgo),
+        rowOption.flatMap(_.clubCount).contains(2),
+        rowOption.flatMap(_.dailyElo) == seeded.dailyElo,
+        rowOption.flatMap(_.ongoingGames) == seeded.ongoingGames
+      )
+    }
 
   /** A 30-day-old row whose figures are all clean, so only the timeouts given can reject from cache. */
   private def cacheWithTimeouts(

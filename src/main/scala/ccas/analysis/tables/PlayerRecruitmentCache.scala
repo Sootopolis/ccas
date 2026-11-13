@@ -11,6 +11,7 @@ import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.connectZIO
 
+/** No figure is older than `fetchedAt`, except the two timeout instants, which carry their own date (#429). */
 final case class PlayerRecruitmentCache(
   playerId: PlayerId,
   fetchedAt: Instant,
@@ -25,10 +26,16 @@ final case class PlayerRecruitmentCache(
   tmTimeoutPct90d: Option[Double],
   lastDailyTimeoutAt: Option[Instant],
   lastTmTimeoutAt: Option[Instant]
-) derives DbCodec
+) derives DbCodec {
+
+  /** A row dated `fetchedAt` with no figures yet, keeping only the timeouts. */
+  def restartAt(fetchedAt: Instant): PlayerRecruitmentCache =
+    PlayerRecruitmentCache.empty(playerId, fetchedAt)
+      .copy(lastDailyTimeoutAt = lastDailyTimeoutAt, lastTmTimeoutAt = lastTmTimeoutAt)
+}
 
 object PlayerRecruitmentCache {
-  def empty(playerId: PlayerId, fetchedAt: Instant, clubCount: Option[Int]): PlayerRecruitmentCache =
+  def empty(playerId: PlayerId, fetchedAt: Instant): PlayerRecruitmentCache =
     PlayerRecruitmentCache(
       playerId = playerId,
       fetchedAt = fetchedAt,
@@ -36,7 +43,7 @@ object PlayerRecruitmentCache {
       dailyScoreRate = None,
       dailyTimeoutPct = None,
       dailyGamesFinished = None,
-      clubCount = clubCount,
+      clubCount = None,
       ongoingGames = None,
       ongoingTeamMatches = None,
       tmGamesFinished90d = None,
