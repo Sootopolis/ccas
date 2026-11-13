@@ -290,7 +290,7 @@ object TestRecruitmentRenameRecovery extends ZIOSpecDefault {
         client <- fakeChessComClient(responses = freshProfile, failures = Set("alice-old"))
         runCtx <- runContext(client)
         cand = staleCandidate.copy(
-          cacheOption = Some(PlayerRecruitmentCache.empty(playerId = pid, fetchedAt = runCtx.now, clubCount = None))
+          cacheOption = Some(PlayerRecruitmentCache.empty(playerId = pid, fetchedAt = runCtx.now))
         )
         result <- RecruitmentFilterDefs.CheckTmStats.apply(FilterEnv(runCtx, cand))
       } yield assertTrue(result.candidate.username == freshU)
