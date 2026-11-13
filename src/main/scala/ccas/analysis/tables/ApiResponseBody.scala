@@ -24,15 +24,11 @@ final case class ApiResponseBody(
 
 object ApiResponseBody {
 
-  /** Canonical body stored for Cloudflare challenge 403 responses. Contains the CF challenge marker so that downstream
-    * retry schedules (which pattern-match on the marker) continue to work.
+  /** Canonical body stored for Cloudflare challenge 403 responses, so every challenge shares one pointer row and object.
+    * Contains the CF challenge marker so that downstream retry schedules (which pattern-match on the marker) continue
+    * to work.
     */
   val CfCanonicalBody = "[Cloudflare challenge: /cdn-cgi/challenge-platform/]"
-
-  /** [[CfCanonicalBody]]'s SHA-256 — its `body_hash` in this table and its object key in the [[BodyStore]]. Exposed
-    * because it is the one hash in the schema that is a compile-time constant rather than derived from a response.
-    */
-  val CfCanonicalHash: String = sha256(CfCanonicalBody)
 
   def createTable: ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
@@ -147,32 +143,6 @@ object ApiResponseBody {
     * (`client_stats.cache_unserved` during a sweep), not from argument.
     */
   private[tables] val ObjectDeleteParallelism = 8
-
-  /** Ensure the canonical Cloudflare-challenge body exists (object + pointer row). Idempotent — safe on every
-    * startup. Going forward every CF 403 is written with [[CfCanonicalBody]] at fetch time (see
-    * `ChessComClient.handleResponse`), so all CF failure rows already dedup to this one hash; any legacy per-request
-    * CF variant rows from before that behaviour age out via the `api_fetch_failure` retention sweep.
-    *
-    * A store outage skips the pointer row and returns 0 rather than failing startup — this is only a pre-warm; the
-    * first CF 403 recreates object + pointer through the normal [[putBody]] path.
-    */
-  def normalizeCfBodies: ZIO[PostgresClient & BodyStore, SQLException, Int] =
-    // Uses the precomputed [[CfCanonicalHash]] rather than routing through [[putBody]], which would re-derive the
-    // same constant SHA-256 on every startup. The put-before-pointer ordering putBody documents still holds.
-    BodyStore
-      .putOrSkip(CfCanonicalHash, CfCanonicalBody.getBytes(StandardCharsets.UTF_8), "startup Cloudflare pre-warm")
-      .flatMap { stored =>
-        if (stored) { insertPointerIfAbsent(CfCanonicalHash) }
-        // Debug, not warn: `BodyStore`'s health decorator already raised one WARN for the outage itself, and this
-        // adds only which pre-warm was skipped.
-        else { ZIO.logDebug("BodyStore unavailable; skipping Cloudflare canonical-body pre-warm").as(0) }
-      }
-
-  private def insertPointerIfAbsent(hash: String): ZIO[PostgresClient, SQLException, Int] =
-    connectZIO {
-      sql"""INSERT INTO api_response_body (body_hash) VALUES ($hash)
-            ON CONFLICT (body_hash) DO NOTHING""".update.run()
-    }
 
   private def sha256(input: String): String = {
     val digest = MessageDigest.getInstance("SHA-256")

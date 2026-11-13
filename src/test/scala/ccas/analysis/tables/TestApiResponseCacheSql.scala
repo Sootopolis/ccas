@@ -45,12 +45,8 @@ object TestApiResponseCacheSql extends ZIOSpecDefault {
   private def countCache: ZIO[PostgresClient, SQLException, Long] =
     connectZIO(sql"SELECT COUNT(*) FROM api_response_cache".query[Long].run().head)
 
-  // Excludes the Cloudflare canonical pre-warm row `ensureTables` writes, so the count is what this suite created.
   private def countBodies: ZIO[PostgresClient, SQLException, Long] =
-    connectZIO {
-      val cfHash = ApiResponseBody.CfCanonicalHash
-      sql"SELECT COUNT(*) FROM api_response_body WHERE body_hash <> $cfHash".query[Long].run().head
-    }
+    connectZIO(sql"SELECT COUNT(*) FROM api_response_body".query[Long].run().head)
 
   private def wipeCache: ZIO[PostgresClient, SQLException, Unit] =
     for {
