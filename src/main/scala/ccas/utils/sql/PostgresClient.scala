@@ -358,7 +358,7 @@ object PostgresClient {
   ): TaskLayer[PostgresClient] =
     ZLayer.scoped {
       for {
-        (hikariConfig, addressOption, baseDelay, maxRetries) <- ZIO.attemptBlocking {
+        settings <- ZIO.attemptBlocking {
           val config       = ConfigFactory.load().getConfig(prefix)
           val hikariConfig = new HikariConfig()
 
@@ -405,18 +405,26 @@ object PostgresClient {
           val baseDelay  = if (config.hasPath("retry.baseDelayMs")) config.getLong("retry.baseDelayMs") else 100L
           val maxRetries = if (config.hasPath("retry.maxRetries")) config.getInt("retry.maxRetries") else 3
 
-          (hikariConfig, databaseAddress(resolved.jdbcUrl), baseDelay, maxRetries)
+          LiveSettings(hikariConfig, databaseAddress(resolved.jdbcUrl), baseDelay.millis, maxRetries)
         }
-        hikariDs <- ZIO.fromAutoCloseable(ZIO.attemptBlocking(new HikariDataSource(hikariConfig)))
+        hikariDs <- ZIO.fromAutoCloseable(ZIO.attemptBlocking(new HikariDataSource(settings.hikariConfig)))
         client = new PostgresClient(
           transactor = Transactor(hikariDs),
-          addressOption = addressOption,
-          retryBaseDelay = baseDelay.millis,
-          retryMaxRetries = maxRetries
+          addressOption = settings.addressOption,
+          retryBaseDelay = settings.retryBaseDelay,
+          retryMaxRetries = settings.retryMaxRetries
         )
         _ <- onInit.provideEnvironment(ZEnvironment(client))
       } yield client
     }
+
+  /** What [[live]] reads from config before it opens the pool. */
+  private case class LiveSettings(
+    hikariConfig: HikariConfig,
+    addressOption: Option[DatabaseAddress],
+    retryBaseDelay: Duration,
+    retryMaxRetries: Int
+  )
 
   /** Build a PostgresClient from a pre-existing DataSource. Unlike `live`, this does not manage the DataSource
     * lifecycle (no close on scope exit) and does not read configuration. Useful for testing with custom DataSource
