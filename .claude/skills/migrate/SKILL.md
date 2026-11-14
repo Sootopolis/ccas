@@ -61,4 +61,4 @@ What ran against which database, the verification results, and anything handed o
 - **Without the MCP**: the user runs the script in the Neon console's SQL editor, or with `psql` and the connection string the console gives, in their own terminal. The string never enters the chat.
 - **History**: the point-in-time window is in README, Backups; the backup is the real floor.
 - **Backup**: `scripts/backup-neon.sh` (README, Backups).
-- **Branches**: `create_branch` gives a copy-on-write branch of production to rehearse on. Ask before creating one, and delete it once the rollout is verified.
+- **Branches**: `create_branch` gives a copy-on-write branch of production to rehearse on. Ask before creating one, and delete it once the rollout is verified. Without the user's dump, a branch stands in as the backup: keep it untouched and rehearse on a second branch, since rehearsing migrates it (#430).
