@@ -1,0 +1,10 @@
+Started:   2025-06-01T00:00:00Z
+Completed: 2025-06-01T00:12:00Z
+Duration:  12m 0s
+
+Evaluated: 2 | Invited: 2
+
+alice bob
+
+alice https://www.chess.com/member/alice
+bob https://www.chess.com/member/bob

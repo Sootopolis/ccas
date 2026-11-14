@@ -1,0 +1,19 @@
+Started:   2025-06-01T00:00:00Z
+Completed: 2025-06-01T00:12:00Z
+Duration:  12m 0s
+
+Evaluated: 57 | Invited: 2
+
+Rejected: 55, 17 of them on cached figures
+  maxClubs: in too many clubs                                         26
+  dailyMinElo: daily rating too low                                   12
+  dailyMinGamesFinished: too few daily games finished in 90 days       6
+  account not active                                                   4
+  in one of the club's matches                                         4
+  dailyMaxTmTimeoutPercent: a team-match timeout in the last 90 days   2
+  no reason recorded                                                   1
+
+alice bob
+
+alice https://www.chess.com/member/alice
+bob https://www.chess.com/member/bob
