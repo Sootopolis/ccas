@@ -1,0 +1,6 @@
+[INFO hh:mm:ss] Criteria #1 (alias default):
+[INFO hh:mm:ss]   minDaysSinceRegistration 90 · daysSinceLastInvited 180 · daysSinceRejected 30
+[INFO hh:mm:ss]   maxClubs 40 · excludeSourceAdmins · avoidAdminMinClubSize 100 · excludeFormerMembers
+[INFO hh:mm:ss]   dailyMinElo 1000 · dailyMinScoreRate 0.375 · dailyMaxScoreRate 0.875
+[INFO hh:mm:ss]   dailyMinGamesFinished 20 · dailyMaxTimeoutPercent 5 · dailyMaxHoursPerMove 12 · dailyMaxOngoingGames 60
+[INFO hh:mm:ss]   dailyMinTmGamesFinished 10 · dailyMaxTmTimeoutPercent 0

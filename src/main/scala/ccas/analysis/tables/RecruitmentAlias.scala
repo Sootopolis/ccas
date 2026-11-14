@@ -45,6 +45,15 @@ object RecruitmentAlias {
         .query[RecruitmentAlias].run().toList
     }
 
+  /** The aliases that have pointed at `criteriaId`, which a run records instead of its alias. A set reuses a criteria
+    * row only for the alias it was made for, so this is one alias in practice.
+    */
+  def selectAliasesFor(criteriaId: Long): ZIO[PostgresClient, SQLException, List[String]] =
+    connectZIO {
+      sql"SELECT DISTINCT alias FROM recruitment_alias WHERE criteria_id = $criteriaId ORDER BY alias"
+        .query[String].run().toList
+    }
+
   def countDistinct(clubId: ClubId): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"SELECT COUNT(DISTINCT alias) FROM recruitment_alias WHERE club_id = $clubId"

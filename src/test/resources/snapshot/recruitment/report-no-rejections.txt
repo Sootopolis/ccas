@@ -1,3 +1,10 @@
+Criteria #1 (alias default):
+  minDaysSinceRegistration 90 · daysSinceLastInvited 180 · daysSinceRejected 30
+  maxClubs 40 · excludeSourceAdmins · avoidAdminMinClubSize 100 · excludeFormerMembers
+  dailyMinElo 1000 · dailyMinScoreRate 0.375 · dailyMaxScoreRate 0.875
+  dailyMinGamesFinished 20 · dailyMaxTimeoutPercent 5 · dailyMaxHoursPerMove 12 · dailyMaxOngoingGames 60
+  dailyMinTmGamesFinished 10 · dailyMaxTmTimeoutPercent 0
+
 Started:   2025-06-01T00:00:00Z
 Completed: 2025-06-01T00:12:00Z
 Duration:  12m 0s
