@@ -8,14 +8,14 @@ import zio.test.{Spec, ZIOSpecDefault}
 import ccas.analysis.apps.TestTimes
 import ccas.analysis.apps.recruitment.CandidateOutcome.{Rejected, RejectedFromCache}
 import ccas.analysis.apps.recruitment.RejectionReason.*
-import ccas.analysis.tables.RejectionCount
+import ccas.analysis.tables.{RecruitmentCriteria, RejectionCount}
 import ccas.api.misc.subtypes.Username
 import ccas.server.jobs.JobLogFile
 import ccas.utils.ZioSnapshots
 
-/** A recruit run's report file and the rejection block of its job log, as the operator reads them, against checked-in
-  * files under `src/test/resources/snapshot/recruitment/`. `sbt snapshot4sPromote` rewrites them after a deliberate
-  * change, and their diff is the change as the operator will see it (#478).
+/** A recruit run's report file and the criteria and rejection blocks of its job log, as the operator reads them,
+  * against checked-in files under `src/test/resources/snapshot/recruitment/`. `sbt snapshot4sPromote` rewrites them
+  * after a deliberate change, and their diff is the change as the operator will see it (#478).
   */
 object TestRecruitmentReportSnapshots extends ZIOSpecDefault with ZioSnapshots {
 
@@ -30,12 +30,25 @@ object TestRecruitmentReportSnapshots extends ZIOSpecDefault with ZioSnapshots {
     },
     test("the recruit report file of a run that rejected no one reads as checked in") {
       assertFileSnapshot(report(Nil), "recruitment/report-no-rejections.txt")
+    },
+    test("the recruit job log's criteria block reads as checked in") {
+      JobLogFile
+        .of(RecruitmentApp.logCriteria(criteriaLines))
+        .map(assertFileSnapshot(_, "recruitment/criteria-log.txt"))
     }
+  )
+
+  /** Production's criteria when #481 was built: `defaultDaily`, avoiding admins of clubs of 100 or more. */
+  private val criteriaLines = RecruitmentApp.criteriaBlock(
+    1,
+    List("default"),
+    RecruitmentApp.settingLines(RecruitmentCriteria.defaultDaily.copy(avoidAdminMinClubSize = Some(100)), Map.empty)
   )
 
   /** Two invited, and every other candidate rejected, so the figures add up as a real run's would. */
   private def report(rejections: List[RejectionCount]): String =
     RecruitmentApp.formatRecruitmentOutput(
+      criteriaLines = criteriaLines,
       usernames = List(Username("alice"), Username("bob")),
       evaluatedCount = 2 + rejections.map(_.count).sum,
       rejections = rejections,

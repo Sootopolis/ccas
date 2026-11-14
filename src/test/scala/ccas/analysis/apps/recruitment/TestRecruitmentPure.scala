@@ -8,7 +8,7 @@ import zio.test.{assertTrue, Spec, ZIOSpecDefault}
 import ccas.analysis.apps.TestTimes
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.makeCriteria
 import ccas.analysis.tables.{PlayerRecruitmentCache, RecruitmentCriteria, RejectionCount}
-import ccas.api.misc.subtypes.{ClubSlug, Elo, PlayerId}
+import ccas.api.misc.subtypes.{ClubId, ClubSlug, Elo, PlayerId}
 
 object TestRecruitmentPure extends ZIOSpecDefault {
 
@@ -16,7 +16,73 @@ object TestRecruitmentPure extends ZIOSpecDefault {
     suiteParseRecruitArgs,
     suiteRejectionLines,
     suiteCriteriaHelpers,
+    suiteCriteriaBlock,
     suite("cached criteria")(cachedCriteriaTests*)
+  )
+
+  // ==========================================================================
+  // Suite: The criteria block a run logs and reports (pure)
+  // ==========================================================================
+
+  /** Criteria with nothing set, which `makeCriteria` alone is not: it sets `excludeSourceAdmins`. */
+  private val nothingSet = makeCriteria().copy(excludeSourceAdmins = false)
+
+  private def suiteCriteriaBlock = suite("criteria block")(
+    test("the criteria block lists only the settings that are set") {
+      val criteria = nothingSet.copy(
+        maxClubs = Some(40),
+        dailyMinElo = Some(Elo(1200)),
+        dailyMaxTmTimeoutPercent = Some(0.0)
+      )
+      assertTrue(
+        RecruitmentApp.settingLines(criteria, Map.empty) == List(
+          "maxClubs 40",
+          "dailyMinElo 1200",
+          "dailyMaxTmTimeoutPercent 0"
+        )
+      )
+    },
+    test("every setting the operator can set appears in the block once set") {
+      val everySet = RecruitmentCriteria.defaultDaily.copy(
+        nationalityCountries = List("GB"),
+        excludeClubs = List(ClubId(7)),
+        avoidAdminMinClubSize = Some(100),
+        dailyMaxElo = Some(Elo(2000)),
+        dailyMinOngoingGames = Some(1),
+        dailyMinOngoingTeamMatches = Some(1)
+      )
+      val shown = RecruitmentApp.settingLines(everySet, Map.empty).flatMap(_.split(" · ")).map(_.takeWhile(_ != ' '))
+      // nationalityExclude reads as the nationality list's sense, not under its own name.
+      val settable = CriteriaSpec.fromCriteria(everySet).productElementNames.toSet - "nationalityExclude"
+      assertTrue(settable.diff(shown.toSet).isEmpty, shown.size == shown.distinct.size)
+    },
+    test("a nationality list says whether it excludes or requires its countries") {
+      val listed = nothingSet.copy(nationalityCountries = List("GB", "FR"))
+      assertTrue(
+        RecruitmentApp.settingLines(listed.copy(nationalityExclude = true), Map.empty) ==
+          List("nationalityCountries GB, FR (excluded)"),
+        RecruitmentApp.settingLines(listed, Map.empty) == List("nationalityCountries GB, FR (only these)"),
+        RecruitmentApp.settingLines(nothingSet.copy(nationalityExclude = true), Map.empty).isEmpty
+      )
+    },
+    test("an excluded club reads by slug, or by id when no club row has it") {
+      val criteria = nothingSet.copy(excludeClubs = List(ClubId(1), ClubId(2)))
+      assertTrue(
+        RecruitmentApp.settingLines(criteria, Map(ClubId(1) -> ClubSlug("club-a"))) == List("excludeClubs club-a, #2")
+      )
+    },
+    test("a whole-number limit reads without a decimal point") {
+      val criteria = nothingSet.copy(dailyMinScoreRate = Some(3.0 / 8), dailyMaxTimeoutPercent = Some(5.0))
+      assertTrue(
+        RecruitmentApp.settingLines(criteria, Map.empty) == List("dailyMinScoreRate 0.375", "dailyMaxTimeoutPercent 5")
+      )
+    },
+    test("criteria with nothing set say so") {
+      assertTrue(
+        RecruitmentApp.settingLines(nothingSet, Map.empty).isEmpty,
+        RecruitmentApp.criteriaBlock(7, List("loose"), Nil) == List("Criteria #7 (alias loose): none set")
+      )
+    }
   )
 
   // ==========================================================================

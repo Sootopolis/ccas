@@ -507,6 +507,31 @@ object TestRecruitmentAppCore extends ZIOSpecDefault {
         todaysTotal.headOption.contains("=== Today's Total: 2 ==="),
         todaysTotal.drop(1).takeWhile(_.startsWith("  ")) == List("  candidate-a", "  candidate-b")
       )
+    }.provideSomeLayer[PostgresClient & BodyStore & ProgressDisplay](ZTestLogger.default),
+    test("a recruit run logs its criteria before evaluating anyone") {
+      val responses = Map(
+        s"club/$clubSlug"         -> apiClubJson(clubId.value, clubSlug.value),
+        s"club/$clubSlug/members" -> apiClubMembersJson(List(("existing", Times.t0.getEpochSecond))),
+        "club/source-club"        -> apiClubJson(sourceClubId.value, "source-club"),
+        "club/source-club/members" -> apiClubMembersJson(
+          List(("existing", Times.t0.getEpochSecond), ("candidate-a", Times.t0.getEpochSecond))
+        ),
+        "player/existing"    -> apiPlayerJson(199, "existing"),
+        "player/candidate-a" -> apiPlayerJson(200, "candidate-a")
+      )
+      for {
+        _          <- seedDb
+        criteriaId <- seedCriteria(makeCriteria())
+        client     <- fakeChessComClient(responses)
+        _          <- runRecruit(client, sourceClubs = List(ClubSlug("source-club")))
+        logged     <- ZTestLogger.logOutput.map(_.map(_.message()))
+        header           = s"Criteria #$criteriaId (alias default):"
+        firstCandidateAt = logged.indexWhere(_.contains("candidate-a"))
+      } yield assertTrue(
+        logged.dropWhile(_ != header).take(2) == List(header, "  excludeSourceAdmins"),
+        firstCandidateAt >= 0,
+        logged.indexOf(header) < firstCandidateAt
+      )
     }.provideSomeLayer[PostgresClient & BodyStore & ProgressDisplay](ZTestLogger.default)
   )
   // ==========================================================================
@@ -550,6 +575,24 @@ object TestRecruitmentAppCore extends ZIOSpecDefault {
           )
         _ <- RecruitmentApp.showReport(NamedClub(clubId, clubSlug), None)
       } yield assertTrue(true)
+    },
+    test("a report shows the criteria its run used, not the alias's latest") {
+      for {
+        _     <- seedDb
+        ranOn <- seedCriteria(makeCriteria().copy(maxClubs = Some(40)))
+        runId <- RecruitmentRun.insert(clubId, ranOn, RunTrigger.Cli, Times.t0, None, None)
+        _ <- RecruitmentRun.update(
+          RecruitmentRun(runId, clubId, ranOn, RunTrigger.Cli, Times.t0, Some(Times.t1), 0, None, None)
+        )
+        // The alias moves on after the run, as a later `set` would move it; `seedCriteria` stamps its row now.
+        latest   <- RecruitmentCriteria.insert(makeCriteria().copy(maxClubs = Some(10)))
+        _        <- RecruitmentAlias.insert(RecruitmentAlias(clubId, "default", Instant.now().plusSeconds(60), latest))
+        aliasNow <- RecruitmentAlias.selectLatest(clubId, "default")
+        report   <- RecruitmentApp.showReport(NamedClub(clubId, clubSlug), Some(runId.toString))
+      } yield assertTrue(
+        aliasNow.exists(_.criteriaId == latest),
+        report.criteriaLines == List(s"Criteria #$ranOn (alias default):", "  maxClubs 40 · excludeSourceAdmins")
+      )
     }
   )
 
