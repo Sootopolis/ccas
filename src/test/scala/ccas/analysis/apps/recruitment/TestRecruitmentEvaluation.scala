@@ -3,11 +3,12 @@ package ccas.analysis.apps.recruitment
 import java.time.{Duration, Instant}
 import java.time.temporal.ChronoUnit
 
-import zio.{RIO, ZLayer}
+import zio.{RIO, ZIO, ZLayer}
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.*
 import ccas.analysis.tables.*
+import ccas.analysis.tables.subtypes.RecruitmentRunId
 import ccas.api.misc.subtypes.{Elo, PlayerId, Username}
 import ccas.utils.ProgressDisplay
 import ccas.utils.client.BodyStore
@@ -177,6 +178,7 @@ object TestRecruitmentEvaluation extends ZIOSpecDefault {
     testStaleCacheFallsThroughToApiChecks,
     testCacheOnlyRejectionDoesNotBlockReEvaluation,
     testCacheRejectionCountsAsEvaluated,
+    testRejectionCountsGroupByReason,
     testDailyStatsRejectionKeepsNoEarlierFigure,
     testEarlierFigureDoesNotRejectFromRedatedRow,
     testRefreshedClubCountRejectsFromCacheNextTime,
@@ -455,6 +457,51 @@ object TestRecruitmentEvaluation extends ZIOSpecDefault {
         _          <- evalCandidates(client, runId, List(Username("alice")), criteria)
         evaluated  <- RecruitmentCandidate.selectCountByRun(runId)
       } yield assertTrue(evaluated == 1)
+    }
+
+  private def testRejectionCountsGroupByReason =
+    test("a run's rejection counts group its rows by reason, and leave out invited, deferred and errored ones") {
+      def row(
+        runId: RecruitmentRunId,
+        playerId: PlayerId,
+        outcome: CandidateOutcome,
+        reasonOption: Option[RejectionReason]
+      ) =
+        RecruitmentCandidate(
+          runId,
+          playerId,
+          Times.t0,
+          outcome,
+          reasonOption,
+          Option.when(outcome == CandidateOutcome.Error)("boom")
+        )
+      for {
+        _          <- seedDb
+        criteriaId <- seedCriteria(makeCriteria())
+        runId      <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, Times.t0, None, None)
+        players = List(pid0, pid1, pid2, pid3, PlayerId(210), PlayerId(211), PlayerId(220), PlayerId(221))
+        _ <- ZIO.foreachDiscard(players)(seedPlayer)
+        _ <- ZIO.foreachDiscard(
+          List(
+            row(runId, pid0, CandidateOutcome.Rejected, Some(RejectionReason.MaxClubs)),
+            row(runId, pid1, CandidateOutcome.Rejected, Some(RejectionReason.MaxClubs)),
+            row(runId, pid2, CandidateOutcome.RejectedFromCache, Some(RejectionReason.MaxClubs)),
+            row(runId, pid3, CandidateOutcome.Rejected, Some(RejectionReason.DailyMinElo)),
+            row(runId, PlayerId(210), CandidateOutcome.Rejected, None), // from before #430
+            row(runId, PlayerId(211), CandidateOutcome.Invited, None),
+            row(runId, PlayerId(220), CandidateOutcome.Deferred, None),
+            row(runId, PlayerId(221), CandidateOutcome.Error, None)
+          )
+        )(RecruitmentCandidate.insert)
+        counts <- RecruitmentCandidate.selectRejectionCountsByRun(runId)
+      } yield assertTrue(
+        counts.toSet == Set(
+          RejectionCount(Some(RejectionReason.MaxClubs), CandidateOutcome.Rejected, 2),
+          RejectionCount(Some(RejectionReason.MaxClubs), CandidateOutcome.RejectedFromCache, 1),
+          RejectionCount(Some(RejectionReason.DailyMinElo), CandidateOutcome.Rejected, 1),
+          RejectionCount(None, CandidateOutcome.Rejected, 1)
+        )
+      )
     }
 
   // ==========================================================================

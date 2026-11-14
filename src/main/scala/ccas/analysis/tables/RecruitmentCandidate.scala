@@ -24,6 +24,12 @@ final case class RecruitmentCandidate(
   errorMessage: Option[String]
 ) derives DbCodec
 
+/** How many of a run's candidates one check rejected with one outcome. `reasonOption` is empty only on `Rejected` rows
+  * from before #430.
+  */
+final case class RejectionCount(reasonOption: Option[RejectionReason], outcome: CandidateOutcome, count: Int)
+    derives DbCodec
+
 object RecruitmentCandidate {
   private val selectCols = SqlLiteral("run_id, player_id, evaluated_at, outcome, rejection_reason, error_message")
 
@@ -121,6 +127,16 @@ object RecruitmentCandidate {
       sql"SELECT COUNT(*) FROM recruitment_candidate WHERE run_id = $runId"
         .query[Int].run().headOption
     }.someOrFail(new SQLException("COUNT query produced no rows"))
+
+  def selectRejectionCountsByRun(runId: RecruitmentRunId): ZIO[PostgresClient, SQLException, List[RejectionCount]] =
+    connectZIO {
+      val rejected: CandidateOutcome          = CandidateOutcome.Rejected
+      val rejectedFromCache: CandidateOutcome = CandidateOutcome.RejectedFromCache
+      sql"""SELECT rejection_reason, outcome, COUNT(*) FROM recruitment_candidate
+            WHERE run_id = $runId AND outcome IN ($rejected, $rejectedFromCache)
+            GROUP BY rejection_reason, outcome"""
+        .query[RejectionCount].run().toList
+    }
 
   def selectDeferredCountByRun(runId: RecruitmentRunId): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {

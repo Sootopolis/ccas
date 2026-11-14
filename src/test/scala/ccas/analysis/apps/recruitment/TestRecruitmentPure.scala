@@ -7,13 +7,14 @@ import zio.test.{assertTrue, Spec, ZIOSpecDefault}
 
 import ccas.analysis.apps.TestTimes
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.makeCriteria
-import ccas.analysis.tables.{PlayerRecruitmentCache, RecruitmentCriteria}
+import ccas.analysis.tables.{PlayerRecruitmentCache, RecruitmentCriteria, RejectionCount}
 import ccas.api.misc.subtypes.{ClubSlug, Elo, PlayerId}
 
 object TestRecruitmentPure extends ZIOSpecDefault {
 
   override def spec: Spec[Any, Throwable] = suite("TestRecruitmentPure")(
     suiteParseRecruitArgs,
+    suiteRejectionLines,
     suiteCriteriaHelpers,
     suite("cached criteria")(cachedCriteriaTests*)
   )
@@ -74,6 +75,56 @@ object TestRecruitmentPure extends ZIOSpecDefault {
     test("flags only, no positional") {
       val r = RecruitmentApp.parseRecruitArgs(List("--target", "20", "--cumulative"))
       assertTrue(r.alias == "default", r.target.contains(20), r.cumulative)
+    }
+  )
+
+  // ==========================================================================
+  // Suite: a run's rejections in its report and log (pure)
+  // ==========================================================================
+
+  private def suiteRejectionLines = suite("rejectionLines")(
+    test("rejection reasons are listed by count, largest first, ties in declaration order") {
+      val lines = RecruitmentApp.rejectionLines(
+        List(
+          RejectionCount(Some(RejectionReason.DailyMinElo), CandidateOutcome.Rejected, 2),
+          RejectionCount(None, CandidateOutcome.Rejected, 2),
+          RejectionCount(Some(RejectionReason.MaxClubs), CandidateOutcome.Rejected, 5),
+          RejectionCount(Some(RejectionReason.AccountNotActive), CandidateOutcome.Rejected, 2)
+        )
+      )
+      assertTrue(
+        lines == List(
+          "Rejected: 11",
+          "  maxClubs: in too many clubs        5",
+          "  account not active                 2",
+          "  dailyMinElo: daily rating too low  2",
+          "  no reason recorded                 2"
+        )
+      )
+    },
+    test("a cache rejection counts under its reason and in the cached total") {
+      val lines = RecruitmentApp.rejectionLines(
+        List(
+          RejectionCount(Some(RejectionReason.MaxClubs), CandidateOutcome.Rejected, 3),
+          RejectionCount(Some(RejectionReason.MaxClubs), CandidateOutcome.RejectedFromCache, 4),
+          RejectionCount(Some(RejectionReason.DailyMinElo), CandidateOutcome.RejectedFromCache, 1)
+        )
+      )
+      assertTrue(
+        lines == List(
+          "Rejected: 8, 5 of them on cached figures",
+          "  maxClubs: in too many clubs        7",
+          "  dailyMinElo: daily rating too low  1"
+        )
+      )
+    },
+    test("a run that rejected no one has no rejection block") {
+      assertTrue(RecruitmentApp.rejectionLines(Nil).isEmpty)
+    },
+    test("every criteria field a rejection reason names is one the operator can set") {
+      val settable = CriteriaSpec.fromCriteria(RecruitmentCriteria.defaultDaily).productElementNames.toSet
+      val named    = RejectionReason.values.toList.flatMap(_.criteriaFieldOption)
+      assertTrue(named.filterNot(settable).isEmpty)
     }
   )
 
@@ -176,8 +227,8 @@ object TestRecruitmentPure extends ZIOSpecDefault {
     }
   )
 
-  // A reason is named after the field it enforces (`RejectionReason`), so its row sets that field and no other. The two
-  // zero-tolerance checks judge a timeout's date, which no field names.
+  // A row sets the field its reason enforces and no other. The two zero-tolerance checks share their field with a rate
+  // check, so each must also record its own reason, which judges a timeout's date.
   private def recordsItsCriterion(row: CacheCriterionRow): Boolean =
     row.entry match {
       case CacheCriterion.ZeroToleranceDailyTimeout => row.entry.reason == RejectionReason.RecentDailyTimeout
@@ -187,8 +238,7 @@ object TestRecruitmentPure extends ZIOSpecDefault {
         val setFields = row.criteria.productElementNames.zip(row.criteria.productIterator.zip(base.productIterator))
           .collect { case (name, (value, default)) if value != default => name }
           .toList
-        val reason = row.entry.reason.toString
-        setFields == List(reason.head.toLower +: reason.tail)
+        setFields == row.entry.reason.criteriaFieldOption.toList
     }
 
   private def cacheCriterionTests(row: CacheCriterionRow) = {

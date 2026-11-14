@@ -5,7 +5,7 @@ import java.time.{Duration as JDuration, Instant}
 
 import scala.io.StdIn
 
-import zio.{durationLong, Clock, ExitCode, Ref, RIO, Scope, Task, ZEnvironment, ZIO, ZIOAppArgs, ZIOAppDefault}
+import zio.{durationLong, Clock, ExitCode, Ref, RIO, Scope, Task, UIO, ZEnvironment, ZIO, ZIOAppArgs, ZIOAppDefault}
 
 import ccas.analysis.apps.{withClubSlugRenameRecovery, ClubQuery, ClubResolution, ClubSlugRenameResolver, NamedClub}
 import ccas.analysis.apps.membership.MembershipApp
@@ -81,6 +81,7 @@ object RecruitmentApp extends ZIOAppDefault {
               output = formatRecruitmentOutput(
                 usernames = report.usernames,
                 evaluatedCount = report.evaluatedCount,
+                rejections = report.rejections,
                 startedAt = report.run.startedAt,
                 completedAt = completedAt
               )
@@ -107,14 +108,16 @@ object RecruitmentApp extends ZIOAppDefault {
                 else RecruitmentCandidate.selectInvitedByRun(run.runId)
               resolvedMap <- PlayerName.selectCurrentNames(candidates.map(_.playerId))
               // Drop any player_id that doesn't resolve to a handle — these lists are paste-ready invite targets, and a
-              // `[pid=N]` placeholder isn't invitable. Matches the server's `usernamesFor` so the file and the
-              // --report/clipboard output are identical.
+              // `[pid=N]` placeholder isn't invitable. Matches the server's `usernamesFor` so the file's invite list
+              // and the --report/clipboard output are identical.
               usernames = candidates.flatMap(c => resolvedMap.get(c.playerId))
               evaluatedCount <- RecruitmentCandidate.selectCountByRun(run.runId)
+              rejections     <- RecruitmentCandidate.selectRejectionCountsByRun(run.runId)
               now            <- Clock.instant
               output = formatRecruitmentOutput(
                 usernames = usernames,
                 evaluatedCount = evaluatedCount,
+                rejections = rejections,
                 startedAt = run.startedAt,
                 completedAt = run.completedAt.getOrElse(now)
               )
@@ -416,13 +419,14 @@ object RecruitmentApp extends ZIOAppDefault {
       evalCount <- ctx.evalCountRef.get
       clubId = ctx.runCtx.clubId
       alias  = ctx.runCtx.alias
-      (finalRun, deferredCount) <- withTransaction {
+      committed <- withTransaction {
         for {
           _ <- ZIO.foreachDiscard(confirmed) { c =>
             RecruitmentCandidate.updateOutcome(ctx.runId, c.playerId, CandidateOutcome.Invited)
               .filterOrFail(_ == 1)(new SQLException(s"No candidate row in run ${ctx.runId} for ${c.username}"))
           }
           deferredCount <- RecruitmentCandidate.selectDeferredCountByRun(ctx.runId)
+          rejections    <- RecruitmentCandidate.selectRejectionCountsByRun(ctx.runId)
           finalRun = RecruitmentRun(
             runId = ctx.runId,
             clubId = clubId,
@@ -435,9 +439,9 @@ object RecruitmentApp extends ZIOAppDefault {
             jobRunIdOption = jobRunIdOption
           )
           _ <- RecruitmentRun.update(finalRun)
-        } yield (finalRun, deferredCount)
+        } yield CommittedRun(finalRun, deferredCount, rejections)
       }
-      duration = JDuration.between(startedAt, finalRun.completedAt.get)
+      duration = JDuration.between(startedAt, committed.run.completedAt.get)
       _ <- ZIO.logInfo(s"=== $label ===")
       _ <- ZIO.logInfo(s"Duration: ${duration.display}")
       _ <- ZIO.logInfo(s"Candidates evaluated: $evalCount")
@@ -445,11 +449,13 @@ object RecruitmentApp extends ZIOAppDefault {
       _ <- ZIO.whenDiscard(found.nonEmpty && confirmed.isEmpty) {
         ZIO.logInfo(s"Found (not confirmed): ${found.size}")
       }
-      _ <- ZIO.whenDiscard(deferredCount > 0)(ZIO.logInfo(s"Deferred: $deferredCount"))
+      _ <- ZIO.whenDiscard(committed.deferredCount > 0)(ZIO.logInfo(s"Deferred: ${committed.deferredCount}"))
       // CLI prompt already displayed candidates; skip redundant listing
       _ <- ZIO.whenDiscard(trigger != RunTrigger.Cli) {
         ZIO.foreachDiscard(confirmed)(c => ZIO.logInfo(s"  ${c.username}"))
       }
+      // After the invited list, so its indented names can't read as rejections.
+      _ <- logRejections(committed.rejections)
       // Cumulative summary: show today's total across all runs. This run is already among them — the transaction above
       // committed its Invited outcomes and its completed_at, which is what `selectInvitedToday` filters on.
       _ <- ZIO.whenDiscard(cumulative && alreadyFound > 0) {
@@ -463,7 +469,10 @@ object RecruitmentApp extends ZIOAppDefault {
           _ <- ZIO.foreachDiscard(todayUsernames)(u => ZIO.logInfo(s"  $u"))
         } yield ()
       }
-    } yield finalRun
+    } yield committed.run
+
+  /** A finished run as its closing transaction wrote it, with the counts read back in the same transaction. */
+  private case class CommittedRun(run: RecruitmentRun, deferredCount: Int, rejections: List[RejectionCount])
 
   private def promptConfirmation(found: List[FoundCandidate]): Task[List[FoundCandidate]] =
     for {
@@ -478,19 +487,52 @@ object RecruitmentApp extends ZIOAppDefault {
 
   // --- Report mode ---
 
-  private def formatRecruitmentOutput(
+  private[recruitment] def formatRecruitmentOutput(
     usernames: List[Username],
     evaluatedCount: Int,
+    rejections: List[RejectionCount],
     startedAt: Instant,
     completedAt: Instant
   ): String = {
-    val duration = JDuration.between(startedAt, completedAt)
-    val timing   = s"Started:   $startedAt\nCompleted: $completedAt\nDuration:  ${duration.display}\n\n"
-    val stats    = s"Evaluated: $evaluatedCount | Invited: ${usernames.size}"
-    s"$timing$stats\n\n${ApiPlayer.profileReviewBlock(usernames)}\n"
+    val duration       = JDuration.between(startedAt, completedAt)
+    val timing         = s"Started:   $startedAt\nCompleted: $completedAt\nDuration:  ${duration.display}\n\n"
+    val stats          = s"Evaluated: $evaluatedCount | Invited: ${usernames.size}"
+    val rejectionBlock = rejectionLines(rejections).map(line => s"$line\n").mkString
+    val rejectionPart  = if (rejectionBlock.isEmpty) "" else s"\n$rejectionBlock"
+    s"$timing$stats\n$rejectionPart\n${ApiPlayer.profileReviewBlock(usernames)}\n"
   }
 
-  final case class RecruitmentReportResult(usernames: List[Username], evaluatedCount: Int, run: RecruitmentRun)
+  private[recruitment] def logRejections(rejections: List[RejectionCount]): UIO[Unit] =
+    ZIO.foreachDiscard(rejectionLines(rejections))(line => ZIO.logInfo(line))
+
+  /** A run's rejections by check, most frequent first, with how many were judged on cached figures alone. A cache
+    * rejection counts under the reason it records, as a live rejection for the same check would (#478).
+    */
+  private[recruitment] def rejectionLines(rejections: List[RejectionCount]): List[String] =
+    if (rejections.isEmpty) Nil
+    else {
+      val total  = rejections.map(_.count).sum
+      val cached = rejections.filter(_.outcome == CandidateOutcome.RejectedFromCache).map(_.count).sum
+      val byReason = rejections
+        .groupMapReduce(_.reasonOption)(_.count)(_ + _)
+        .toList
+        .sortBy((reasonOption, count) => (-count, reasonOption.fold(Int.MaxValue)(_.ordinal)))
+        .map((reasonOption, count) => (reasonOption.fold("no reason recorded")(_.label), count))
+      val labelWidth = byReason.map(_._1.length).max
+      val countWidth = byReason.map(_._2.toString.length).max
+      val cachedNote = if (cached > 0) s", $cached of them on cached figures" else ""
+      s"Rejected: $total$cachedNote" :: byReason.map { (label, count) =>
+        val countText = count.toString
+        s"  ${label.padTo(labelWidth, ' ')}  ${" " * (countWidth - countText.length)}$countText"
+      }
+    }
+
+  final case class RecruitmentReportResult(
+    usernames: List[Username],
+    evaluatedCount: Int,
+    rejections: List[RejectionCount],
+    run: RecruitmentRun
+  )
 
   def showReport(club: NamedClub, runIdOption: Option[String]): RIO[PostgresClient, RecruitmentReportResult] =
     for {
@@ -506,11 +548,13 @@ object RecruitmentApp extends ZIOAppDefault {
       }
       invited        <- RecruitmentCandidate.selectInvitedByRun(run.runId)
       evaluatedCount <- RecruitmentCandidate.selectCountByRun(run.runId)
+      rejections     <- RecruitmentCandidate.selectRejectionCountsByRun(run.runId)
       resolvedMap    <- PlayerName.selectCurrentNames(invited.map(_.playerId))
-      // Drop unresolved player_ids: paste-ready invite list, identical to the server's `usernamesFor`, so the file
-      // matches `--report`/clipboard. Rendering is the caller's job (via `formatRecruitmentOutput`) — no formatting here.
+      // Drop unresolved player_ids: paste-ready invite list, identical to the server's `usernamesFor`, so the file's
+      // invite list matches `--report`/clipboard. Rendering is the caller's job (via `formatRecruitmentOutput`) — no
+      // formatting here.
       usernames = invited.flatMap(c => resolvedMap.get(c.playerId))
-    } yield RecruitmentReportResult(usernames, evaluatedCount, run)
+    } yield RecruitmentReportResult(usernames, evaluatedCount, rejections, run)
 
   // --- Match ref writing ---
 
