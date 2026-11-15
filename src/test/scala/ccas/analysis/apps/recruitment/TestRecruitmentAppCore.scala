@@ -525,7 +525,7 @@ object TestRecruitmentAppCore extends ZIOSpecDefault {
         client <- fakeChessComClient(responses)
         _      <- runRecruit(client, sourceClubs = List(ClubSlug("source-club")))
         logged <- ZTestLogger.logOutput.map(_.map(_.message()))
-        header           = logged.find(_.startsWith("Criteria for alias default, set ")).getOrElse("")
+        header           = logged.find(_.startsWith("test-club's criteria \"default\", version of ")).getOrElse("")
         firstCandidateAt = logged.indexWhere(_.contains("candidate-a"))
       } yield assertTrue(
         logged.dropWhile(_ != header).take(2) ==
@@ -533,7 +533,52 @@ object TestRecruitmentAppCore extends ZIOSpecDefault {
         firstCandidateAt >= 0,
         logged.indexOf(header) < firstCandidateAt
       )
+    }.provideSomeLayer[PostgresClient & BodyStore & ProgressDisplay](ZTestLogger.default),
+    test("a run whose criteria were confirmed logs one line naming them instead of the block") {
+      for {
+        _          <- seedDb
+        criteriaId <- seedCriteria(makeCriteria())
+        client     <- fakeChessComClient(soloClubResponses)
+        _          <- runRecruit(client, confirmedCriteriaIdOption = Some(criteriaId))
+        logged     <- ZTestLogger.logOutput.map(_.map(_.message()))
+      } yield assertTrue(
+        logged.exists(_.startsWith("Criteria as confirmed: test-club's criteria \"default\", version of ")),
+        !logged.exists(_.contains("excludeSourceAdmins"))
+      )
+    }.provideSomeLayer[PostgresClient & BodyStore & ProgressDisplay](ZTestLogger.default),
+    test("a run submitted with criteria that changed after they were confirmed fails before recording a run") {
+      for {
+        _         <- seedDb
+        confirmed <- seedCriteria(makeCriteria().copy(maxClubs = Some(40)))
+        // A set between the confirmation and the run moves the name on, a minute after `seedCriteria`'s row.
+        edited <- RecruitmentCriteria.insert(makeCriteria().copy(maxClubs = Some(10)))
+        _      <- RecruitmentAlias.insert(RecruitmentAlias(clubId, "default", Instant.now().plusSeconds(60), edited))
+        client <- fakeChessComClient(soloClubResponses)
+        exit   <- runRecruit(client, confirmedCriteriaIdOption = Some(confirmed)).exit
+        runs   <- connectZIO(sql"SELECT COUNT(*) FROM recruitment_run".query[Int].run().head)
+      } yield assertTrue(
+        exit.causeOption.flatMap(_.failureOption).map(_.getMessage).contains(
+          "test-club's criteria \"default\" changed after you confirmed them; run again to see them"
+        ),
+        runs == 0
+      )
+    },
+    test("a run's summary names its club") {
+      for {
+        _      <- seedDb
+        _      <- seedCriteria(makeCriteria())
+        client <- fakeChessComClient(soloClubResponses)
+        _      <- runRecruit(client)
+        logged <- ZTestLogger.logOutput.map(_.map(_.message()))
+      } yield assertTrue(logged.contains("=== Recruitment Complete: test-club ==="))
     }.provideSomeLayer[PostgresClient & BodyStore & ProgressDisplay](ZTestLogger.default)
+  )
+
+  /** The club recruiting, with one member and nothing to scout: enough for a run to start and finish. */
+  private val soloClubResponses = Map(
+    s"club/$clubSlug"         -> apiClubJson(clubId.value, clubSlug.value),
+    s"club/$clubSlug/members" -> apiClubMembersJson(List(("existing", Times.t0.getEpochSecond))),
+    "player/existing"         -> apiPlayerJson(199, "existing")
   )
   // ==========================================================================
   // Suite: Report mode
@@ -591,8 +636,11 @@ object TestRecruitmentAppCore extends ZIOSpecDefault {
         recap  <- CriteriaRecap.ofId(ranOn)
         recap2 <- CriteriaRecap.ofId(later)
       } yield assertTrue(
-        recap.headOption.contains("Criteria for alias default, set 2026-01-05:"),
-        recap2.headOption.contains("Criteria for alias default, set 2026-02-01; alias strict, set 2026-01-09:")
+        recap.headOption.contains("test-club's criteria \"default\", version of 2026-01-05 12:00 UTC:"),
+        recap2.headOption.contains(
+          "test-club's criteria \"default\", version of 2026-02-01 12:00 UTC; " +
+            "test-club's criteria \"strict\", version of 2026-01-09 12:00 UTC:"
+        )
       )
     },
     test("a report shows the criteria its run used, not the alias's latest") {

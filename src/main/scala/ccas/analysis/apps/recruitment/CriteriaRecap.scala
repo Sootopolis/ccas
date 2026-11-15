@@ -1,6 +1,7 @@
 package ccas.analysis.apps.recruitment
 
 import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
 
 import zio.{RIO, ZIO}
 
@@ -9,8 +10,9 @@ import ccas.analysis.tables.{Club, RecruitmentAlias, RecruitmentCriteria}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, Elo}
 import ccas.utils.sql.PostgresClient
 
-/** Criteria as the operator reads them: named by alias and the date it was set, one setting per line, each with what
-  * it holds a candidate to. A run's job log and report file, and the criteria route, all print it (#485).
+/** Criteria as the operator reads them: named by club and name, dated by version, one setting per line, each with
+  * what it holds a candidate to. A run's report file and the criteria route print it, and so does a run's job log,
+  * unless the operator has just confirmed it at the terminal, when the log names it in one line instead (#485).
   */
 object CriteriaRecap {
 
@@ -27,29 +29,48 @@ object CriteriaRecap {
 
   /** [[ofId]] for a criteria row already read. */
   def of(criteria: RecruitmentCriteria): RIO[PostgresClient, List[String]] =
+    named(criteria).map(names => lines(names.aliases, criteria, names.clubSlugs))
+
+  /** The line a run logs in place of the recap when the operator has just read it and confirmed (#485). */
+  def confirmed(criteria: RecruitmentCriteria): RIO[PostgresClient, String] =
+    named(criteria).map(names => s"Criteria as confirmed: ${header(names.aliases, names.clubSlugs)}")
+
+  /** The names that point at the criteria, and the slugs of the clubs they and the criteria name. */
+  private final case class Names(aliases: List[RecruitmentAlias], clubSlugs: Map[ClubId, ClubSlug])
+
+  private def named(criteria: RecruitmentCriteria): RIO[PostgresClient, Names] =
     for {
-      aliases       <- RecruitmentAlias.selectFirstPerAlias(criteria.criteriaId)
-      excludedClubs <- ZIO.foreach(criteria.excludeClubs)(Club.selectId).map(_.flatten)
-      clubSlugs = excludedClubs.map(club => club.clubId -> club.slug).toMap
-    } yield lines(aliases, criteria, clubSlugs)
+      aliases <- RecruitmentAlias.selectFirstPerAlias(criteria.criteriaId)
+      clubs   <- ZIO.foreach((aliases.map(_.clubId) ++ criteria.excludeClubs).distinct)(Club.selectId)
+    } yield Names(aliases, clubs.flatten.map(club => club.clubId -> club.slug).toMap)
 
   private[recruitment] def lines(
     aliases: List[RecruitmentAlias],
     criteria: RecruitmentCriteria,
     clubSlugs: Map[ClubId, ClubSlug]
   ): List[String] = {
-    val title = header(aliases)
+    val title = header(aliases, clubSlugs)
     settingLines(criteria, clubSlugs) match {
       case Nil      => List(s"$title: none set")
       case settings => s"$title:" :: settings.map(setting => s"  $setting")
     }
   }
 
-  private[recruitment] def header(aliases: List[RecruitmentAlias]): String =
-    aliases.map(row => s"alias ${row.alias}, set ${row.since.atOffset(ZoneOffset.UTC).toLocalDate}") match {
+  /** Names the criteria as the operator does: by club and name, dated by the version, never by the criteria id. */
+  private[recruitment] def header(aliases: List[RecruitmentAlias], clubSlugs: Map[ClubId, ClubSlug]): String =
+    aliases.map { row =>
+      // To the minute, so two versions set on one day read apart.
+      val version = row.since.atOffset(ZoneOffset.UTC).format(VersionFormat)
+      s"${slugOf(row.clubId, clubSlugs)}'s criteria \"${row.alias}\", version of $version"
+    } match {
       case Nil   => "Criteria"
-      case named => s"Criteria for ${named.mkString("; ")}"
+      case named => named.mkString("; ")
     }
+
+  private val VersionFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm 'UTC'")
+
+  private def slugOf(clubId: ClubId, clubSlugs: Map[ClubId, ClubSlug]): String =
+    clubSlugs.get(clubId).fold(s"#$clubId")(ClubSlug.unwrap)
 
   /** The settings that are set, aligned in columns. An excluded club missing from `clubSlugs` reads as its id. */
   private[recruitment] def settingLines(
@@ -78,7 +99,7 @@ object CriteriaRecap {
       Option.when(items.nonEmpty)(Setting(name, None, s"$meaning: ${items.mkString(", ")}"))
     val nationalitySense =
       if (criteria.nationalityExclude) "from none of these countries" else "from one of these countries"
-    val excludedClubs = criteria.excludeClubs.map(id => clubSlugs.get(id).fold(s"#$id")(ClubSlug.unwrap))
+    val excludedClubs = criteria.excludeClubs.map(slugOf(_, clubSlugs))
     val window        = s"in the last $StatsWindowDays days"
     List(
       whole(
@@ -87,7 +108,12 @@ object CriteriaRecap {
         "joined Chess.com at least this many days ago"
       ),
       whole("daysSinceLastInvited", criteria.daysSinceLastInvited, "not invited to this club within this many days"),
-      whole("daysSinceRejected", criteria.daysSinceRejected, "not rejected under this alias within this many days"),
+      // The cooldown is kept per name, so it spans the edits a name has had (`RecruitmentExplore`).
+      whole(
+        "daysSinceRejected",
+        criteria.daysSinceRejected,
+        "not rejected by these criteria, or an earlier version of them, within this many days"
+      ),
       list("nationalityCountries", criteria.nationalityCountries, nationalitySense),
       whole("maxClubs", criteria.maxClubs, "in at most this many clubs"),
       list("excludeClubs", excludedClubs, "in none of these clubs"),

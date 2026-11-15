@@ -671,7 +671,8 @@ object RecruitmentTestSupport {
     alias: String = "default",
     trigger: RunTrigger = RunTrigger.Api,
     autoConfirm: Boolean = true,
-    cumulative: Boolean = false
+    cumulative: Boolean = false,
+    confirmedCriteriaIdOption: Option[Long] = None
   ): ZIO[ProgressDisplay & PostgresClient, Throwable, RecruitmentRun] =
     for {
       xa      <- ZIO.service[PostgresClient]
@@ -686,7 +687,8 @@ object RecruitmentTestSupport {
           sourceClubs = sourceClubs,
           explore = explore,
           trigger = trigger,
-          autoConfirm = autoConfirm
+          autoConfirm = autoConfirm,
+          confirmedCriteriaIdOption = confirmedCriteriaIdOption
         )
         .provideEnvironment(ZEnvironment(client, xa, display))
     } yield result

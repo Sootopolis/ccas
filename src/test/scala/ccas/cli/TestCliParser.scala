@@ -187,7 +187,7 @@ object TestCliParser extends ZIOSpecDefault {
               server = DefaultServer,
               club = Some("team-alpha"),
               clubIdOption = None,
-              alias = None,
+              criteriaNameOption = None,
               target = Some(5),
               cumulative = false,
               sourceClubs = List("x", "y"),
@@ -200,6 +200,14 @@ object TestCliParser extends ZIOSpecDefault {
             )
           )
         )
+      }
+    },
+    test("recruit's --criteria names the criteria to use") {
+      parsed("recruit", "--criteria", "strict").map { c =>
+        assertTrue(c.exists {
+          case recruit: CliCommand.Recruit => recruit.criteriaNameOption.contains("strict")
+          case _                           => false
+        })
       }
     },
     test("recruit with no --club parses to None") {
@@ -233,7 +241,7 @@ object TestCliParser extends ZIOSpecDefault {
             server = DefaultServer,
             club = None,
             clubIdOption = None,
-            alias = None,
+            criteriaNameOption = None,
             target = None,
             cumulative = false,
             sourceClubs = Nil,

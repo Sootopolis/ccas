@@ -1,7 +1,7 @@
 package ccas.server.routes
 
 import zio.http.*
-import zio.json.{DeriveJsonCodec, JsonCodec}
+import zio.json.{jsonField, DeriveJsonCodec, JsonCodec}
 
 import ccas.analysis.apps.ClubQuery
 import ccas.analysis.apps.recruitment.{CriteriaRecap, CriteriaSpec, RecruitmentCriteriaApp}
@@ -23,8 +23,15 @@ object RecruitmentCriteriaRoutes {
     given JsonCodec[SetCriteriaResponse] = DeriveJsonCodec.gen
   }
 
-  /** An alias's criteria, and the recap a run under them would print. */
-  private[ccas] case class CriteriaView(criteria: CriteriaSpec, recap: List[String])
+  /** An alias's criteria, and the recap a run under them would print. `criteriaId` names this version, for a recruit
+    * the operator confirms to send back (`RecruitmentRequest.confirmedCriteriaId`); a server from before #485's
+    * follow-up omits it, so a newer CLI still reads its answer.
+    */
+  private[ccas] case class CriteriaView(
+    @jsonField("criteriaId") criteriaIdOption: Option[Long],
+    criteria: CriteriaSpec,
+    recap: List[String]
+  )
   object CriteriaView {
     given JsonCodec[CriteriaView] = DeriveJsonCodec.gen
   }
@@ -56,7 +63,7 @@ object RecruitmentCriteriaRoutes {
           for {
             criteria <- RecruitmentCriteriaApp.show(club, alias)
             recap    <- CriteriaRecap.of(criteria)
-          } yield CriteriaView(CriteriaSpec.fromCriteria(criteria), recap)
+          } yield CriteriaView(Some(criteria.criteriaId), CriteriaSpec.fromCriteria(criteria), recap)
         }
       } yield jsonResponse(Status.Ok, result)
     },

@@ -1159,6 +1159,7 @@ object TestRoutes extends ZIOSpecDefault {
   private def suiteRecruitmentCriteriaRoutes = suite("RecruitmentCriteriaRoutes")(
     testCriteriaAcrossNames,
     testCriteriaRecap,
+    testCriteriaUnknownName,
     testCriteriaUnknownClub,
     testCriteriaValidatesBeforeResolving
   )
@@ -1200,22 +1201,40 @@ object TestRoutes extends ZIOSpecDefault {
     }
 
   private def testCriteriaRecap =
-    test("reading an alias's criteria answers the date it was set and the recap") {
+    test("reading a club's named criteria answers their version and the recap") {
       val criteria = CriteriaSpec.fromCriteria(RecruitmentCriteria.defaultDaily).toJson
       val body     = s"""{"club":{"kind":"by_id","clubId":$renamedClubId},"alias":"two words","criteria":$criteria}"""
       for {
         _     <- ensureRenamedClub
-        _     <- RecruitmentCriteriaRoutes.routes.runZIO(jsonRequest(Method.POST, "/api/recruitment-criteria", body))
+        set   <- RecruitmentCriteriaRoutes.routes.runZIO(jsonRequest(Method.POST, "/api/recruitment-criteria", body))
         today <- Clock.instant.map(_.atOffset(ZoneOffset.UTC).toLocalDate)
         show <- RecruitmentCriteriaRoutes.routes.runZIO(
           jsonRequest(Method.GET, s"/api/recruitment-criteria/two%20words?clubId=$renamedClubId")
         )
-        view <- show.body.asString.map(_.fromJson[ClubResult[RecruitmentCriteriaRoutes.CriteriaView]])
-        recap = view.toOption.flatMap(_.resultOption).map(_.recap).getOrElse(Nil)
+        setResult <- set.body.asString.map(_.fromJson[ClubResult[RecruitmentCriteriaRoutes.SetCriteriaResponse]])
+        view      <- show.body.asString.map(_.fromJson[ClubResult[RecruitmentCriteriaRoutes.CriteriaView]])
+        shown = view.toOption.flatMap(_.resultOption)
+        recap = shown.map(_.recap).getOrElse(Nil)
       } yield assertTrue(
-        recap.headOption.contains(s"Criteria for alias two words, set $today:"),
+        shown.flatMap(_.criteriaIdOption) == setResult.toOption.flatMap(_.resultOption).map(_.criteriaId),
+        recap.headOption.exists(_.startsWith(s"renamed-to's criteria \"two words\", version of $today ")),
+        recap.headOption.exists(_.endsWith(" UTC:")),
         recap.exists(_.startsWith("  dailyMinElo ")),
         !recap.exists(_.contains("criteria_id"))
+      )
+    }
+
+  private def testCriteriaUnknownName =
+    test("criteria the club has no set of are reported by name, in the operator's words") {
+      for {
+        _ <- ensureRenamedClub
+        show <- RecruitmentCriteriaRoutes.routes.runZIO(
+          jsonRequest(Method.GET, s"/api/recruitment-criteria/nope?clubId=$renamedClubId")
+        )
+        body <- show.body.asString
+      } yield assertTrue(
+        show.status == Status.NotFound,
+        body.fromJson[ErrorResponse] == Right(ErrorResponse("renamed-to has no criteria named \"nope\""))
       )
     }
 

@@ -31,7 +31,8 @@ object TestReconcileAsDependency extends ZIOSpecDefault {
       val recruit = RecruitmentApp.recruit(
         clubSlug = ClubSlug("recruitment-dep"),
         expectedClubIdOption = None,
-        alias = "no-such-alias"
+        alias = "no-such-alias",
+        confirmedCriteriaIdOption = None
       )
       for {
         exit <- withClient(clubId)(recruit).exit
