@@ -14,6 +14,10 @@ import ccas.utils.sql.PostgresClient.connectZIO
 final case class RecruitmentAlias(clubId: ClubId, alias: String, since: Instant, criteriaId: Long) derives DbCodec
 
 object RecruitmentAlias {
+
+  /** The alias a recruit run uses when none is named. */
+  val Default: String = "default"
+
   private val selectCols = SqlLiteral("club_id, alias, since, criteria_id")
 
   def createTable: ZIO[PostgresClient, SQLException, Int] =
@@ -45,13 +49,16 @@ object RecruitmentAlias {
         .query[RecruitmentAlias].run().toList
     }
 
-  /** The aliases that have pointed at `criteriaId`, which a run records instead of its alias. A set reuses a criteria
-    * row only for the alias it was made for, so this is one alias in practice.
+  /** Each alias that has pointed at `criteriaId`, which a run records instead of its alias, by the row that first did:
+    * when it was set to these criteria. A set reuses a criteria row only for the alias it was made for, so this is one
+    * row in practice.
     */
-  def selectAliasesFor(criteriaId: Long): ZIO[PostgresClient, SQLException, List[String]] =
+  def selectFirstPerAlias(criteriaId: Long): ZIO[PostgresClient, SQLException, List[RecruitmentAlias]] =
     connectZIO {
-      sql"SELECT DISTINCT alias FROM recruitment_alias WHERE criteria_id = $criteriaId ORDER BY alias"
-        .query[String].run().toList
+      sql"""SELECT DISTINCT ON (alias) $selectCols FROM recruitment_alias
+            WHERE criteria_id = $criteriaId
+            ORDER BY alias, since"""
+        .query[RecruitmentAlias].run().toList
     }
 
   def countDistinct(clubId: ClubId): ZIO[PostgresClient, SQLException, Int] =

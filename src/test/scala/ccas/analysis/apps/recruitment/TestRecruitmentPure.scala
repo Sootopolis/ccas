@@ -7,7 +7,7 @@ import zio.test.{assertTrue, Spec, ZIOSpecDefault}
 
 import ccas.analysis.apps.TestTimes
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.makeCriteria
-import ccas.analysis.tables.{PlayerRecruitmentCache, RecruitmentCriteria, RejectionCount}
+import ccas.analysis.tables.{PlayerRecruitmentCache, RecruitmentAlias, RecruitmentCriteria, RejectionCount}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, Elo, PlayerId}
 
 object TestRecruitmentPure extends ZIOSpecDefault {
@@ -21,28 +21,46 @@ object TestRecruitmentPure extends ZIOSpecDefault {
   )
 
   // ==========================================================================
-  // Suite: The criteria block a run logs and reports (pure)
+  // Suite: The criteria recap a run logs and reports, and the CLI confirms (pure)
   // ==========================================================================
 
   /** Criteria with nothing set, which `makeCriteria` alone is not: it sets `excludeSourceAdmins`. */
   private val nothingSet = makeCriteria().copy(excludeSourceAdmins = false)
 
-  private def suiteCriteriaBlock = suite("criteria block")(
-    test("the criteria block lists only the settings that are set") {
+  private def aliasSet(alias: String, since: String): RecruitmentAlias =
+    RecruitmentAlias(ClubId(1), alias, Instant.parse(since), criteriaId = 7)
+
+  private def suiteCriteriaBlock = suite("criteria recap")(
+    test("the criteria recap puts one setting per line, aligned, with what it means") {
       val criteria = nothingSet.copy(
         maxClubs = Some(40),
+        excludeSourceAdmins = true,
         dailyMinElo = Some(Elo(1200)),
         dailyMaxTmTimeoutPercent = Some(0.0)
       )
       assertTrue(
-        RecruitmentApp.settingLines(criteria, Map.empty) == List(
-          "maxClubs 40",
-          "dailyMinElo 1200",
-          "dailyMaxTmTimeoutPercent 0"
+        CriteriaRecap.settingLines(criteria, Map.empty) == List(
+          "maxClubs                  40    in at most this many clubs",
+          "excludeSourceAdmins       yes   not an admin of a club being scouted",
+          "dailyMinElo               1200  daily rating at least this",
+          "dailyMaxTmTimeoutPercent  0     timed out of at most this % of team-match games in the last 90 days"
         )
       )
     },
-    test("every setting the operator can set appears in the block once set") {
+    test("the criteria recap names the alias and the date it was set, not the criteria id") {
+      val lines = CriteriaRecap.lines(List(aliasSet("default", "2026-03-18T23:30:00Z")), makeCriteria(), Map.empty)
+      assertTrue(
+        lines.headOption.contains("Criteria for alias default, set 2026-03-18:"),
+        !lines.exists(_.contains("7"))
+      )
+    },
+    test("criteria several aliases point at name each, with the date it was set") {
+      val aliases = List(aliasSet("loose", "2026-01-02T00:00:00Z"), aliasSet("strict", "2026-02-03T00:00:00Z"))
+      assertTrue(
+        CriteriaRecap.header(aliases) == "Criteria for alias loose, set 2026-01-02; alias strict, set 2026-02-03"
+      )
+    },
+    test("every setting the operator can set appears in the recap once set") {
       val everySet = RecruitmentCriteria.defaultDaily.copy(
         nationalityCountries = List("GB"),
         excludeClubs = List(ClubId(7)),
@@ -51,7 +69,7 @@ object TestRecruitmentPure extends ZIOSpecDefault {
         dailyMinOngoingGames = Some(1),
         dailyMinOngoingTeamMatches = Some(1)
       )
-      val shown = RecruitmentApp.settingLines(everySet, Map.empty).flatMap(_.split(" · ")).map(_.takeWhile(_ != ' '))
+      val shown = CriteriaRecap.settingLines(everySet, Map.empty).map(_.takeWhile(_ != ' '))
       // nationalityExclude reads as the nationality list's sense, not under its own name.
       val settable = CriteriaSpec.fromCriteria(everySet).productElementNames.toSet - "nationalityExclude"
       assertTrue(settable.diff(shown.toSet).isEmpty, shown.size == shown.distinct.size)
@@ -59,28 +77,45 @@ object TestRecruitmentPure extends ZIOSpecDefault {
     test("a nationality list says whether it excludes or requires its countries") {
       val listed = nothingSet.copy(nationalityCountries = List("GB", "FR"))
       assertTrue(
-        RecruitmentApp.settingLines(listed.copy(nationalityExclude = true), Map.empty) ==
-          List("nationalityCountries GB, FR (excluded)"),
-        RecruitmentApp.settingLines(listed, Map.empty) == List("nationalityCountries GB, FR (only these)"),
-        RecruitmentApp.settingLines(nothingSet.copy(nationalityExclude = true), Map.empty).isEmpty
+        CriteriaRecap.settingLines(listed.copy(nationalityExclude = true), Map.empty) ==
+          List("nationalityCountries  from none of these countries: GB, FR"),
+        CriteriaRecap.settingLines(listed, Map.empty) == List(
+          "nationalityCountries  from one of these countries: GB, FR"
+        ),
+        CriteriaRecap.settingLines(nothingSet.copy(nationalityExclude = true), Map.empty).isEmpty
       )
     },
-    test("an excluded club reads by slug, or by id when no club row has it") {
-      val criteria = nothingSet.copy(excludeClubs = List(ClubId(1), ClubId(2)))
+    test("a list-valued setting follows its meaning, leaving the others aligned") {
+      // An excluded club reads by slug, or by id when no club row has it.
+      val criteria = nothingSet.copy(maxClubs = Some(40), excludeClubs = List(ClubId(1), ClubId(2)))
       assertTrue(
-        RecruitmentApp.settingLines(criteria, Map(ClubId(1) -> ClubSlug("club-a"))) == List("excludeClubs club-a, #2")
+        CriteriaRecap.settingLines(criteria, Map(ClubId(1) -> ClubSlug("club-a"))) == List(
+          "maxClubs      40  in at most this many clubs",
+          "excludeClubs      in none of these clubs: club-a, #2"
+        )
       )
     },
     test("a whole-number limit reads without a decimal point") {
       val criteria = nothingSet.copy(dailyMinScoreRate = Some(3.0 / 8), dailyMaxTimeoutPercent = Some(5.0))
       assertTrue(
-        RecruitmentApp.settingLines(criteria, Map.empty) == List("dailyMinScoreRate 0.375", "dailyMaxTimeoutPercent 5")
+        CriteriaRecap.settingLines(criteria, Map.empty) == List(
+          "dailyMinScoreRate       0.375  daily score rate at least this, draws counting half",
+          "dailyMaxTimeoutPercent  5      timed out of at most this % of daily games, by Chess.com's figure"
+        )
+      )
+    },
+    test("a daily timeout limit of 0 reads as no timeout in the window, which the cached check also enforces") {
+      val zero = CriteriaRecap.settingLines(nothingSet.copy(dailyMaxTimeoutPercent = Some(0.0)), Map.empty)
+      val five = CriteriaRecap.settingLines(nothingSet.copy(dailyMaxTimeoutPercent = Some(5.0)), Map.empty)
+      assertTrue(
+        zero == List("dailyMaxTimeoutPercent  0  no daily game timed out in the last 90 days"),
+        five == List("dailyMaxTimeoutPercent  5  timed out of at most this % of daily games, by Chess.com's figure")
       )
     },
     test("criteria with nothing set say so") {
       assertTrue(
-        RecruitmentApp.settingLines(nothingSet, Map.empty).isEmpty,
-        RecruitmentApp.criteriaBlock(7, List("loose"), Nil) == List("Criteria #7 (alias loose): none set")
+        CriteriaRecap.lines(List(aliasSet("loose", "2026-03-18T00:00:00Z")), nothingSet, Map.empty) ==
+          List("Criteria for alias loose, set 2026-03-18: none set")
       )
     }
   )
@@ -148,6 +183,13 @@ object TestRecruitmentPure extends ZIOSpecDefault {
   // Suite: a run's rejections in its report and log (pure)
   // ==========================================================================
 
+  /** The criteria field a reason enforces, if it enforces one. */
+  private def fieldOf(reason: RejectionReason): Option[String] =
+    reason.check match {
+      case RejectionReason.Check.Field(name, _) => Some(name)
+      case RejectionReason.Check.Standing(_)    => None
+    }
+
   private def suiteRejectionLines = suite("rejectionLines")(
     test("rejection reasons are listed by count, largest first, ties in declaration order") {
       val lines = RecruitmentApp.rejectionLines(
@@ -161,10 +203,10 @@ object TestRecruitmentPure extends ZIOSpecDefault {
       assertTrue(
         lines == List(
           "Rejected: 11",
-          "  maxClubs: in too many clubs        5",
-          "  account not active                 2",
-          "  dailyMinElo: daily rating too low  2",
-          "  no reason recorded                 2"
+          "  maxClubs            5",
+          "  account not active  2",
+          "  dailyMinElo         2",
+          "  no reason recorded  2"
         )
       )
     },
@@ -179,17 +221,49 @@ object TestRecruitmentPure extends ZIOSpecDefault {
       assertTrue(
         lines == List(
           "Rejected: 8, 5 of them on cached figures",
-          "  maxClubs: in too many clubs        7",
-          "  dailyMinElo: daily rating too low  1"
+          "  maxClubs     7",
+          "  dailyMinElo  1"
         )
       )
     },
     test("a run that rejected no one has no rejection block") {
       assertTrue(RecruitmentApp.rejectionLines(Nil).isEmpty)
     },
+    test("the rejection summary names the field alone") {
+      assertTrue(
+        RejectionReason.DailyMinElo.label == "dailyMinElo",
+        RejectionReason.MaxClubs.label == "maxClubs",
+        RejectionReason.DailyMinTmGamesFinished.label == "dailyMinTmGamesFinished"
+      )
+    },
+    test("a field with two checks keeps a qualifier in the rejection summary") {
+      val shared = RejectionReason.values.toList.groupBy(fieldOf).collect {
+        case (Some(_), reasons) if reasons.size > 1 => reasons
+      }.flatten.toList
+      assertTrue(
+        shared.map(_.label).sorted == List(
+          "avoidAdminMinClubSize (in their club list)",
+          "avoidAdminMinClubSize (on record)",
+          "dailyMaxTimeoutPercent (a timeout in 90 days)",
+          "dailyMaxTimeoutPercent (rate)",
+          "dailyMaxTmTimeoutPercent (a timeout in 90 days)",
+          "dailyMaxTmTimeoutPercent (rate)"
+        )
+      )
+    },
+    test("a reason that enforces no field keeps its text") {
+      assertTrue(
+        RejectionReason.values.toList.filter(fieldOf(_).isEmpty).map(_.label) == List(
+          "account not active",
+          "blacklisted",
+          "in one of the club's matches",
+          "no daily stats"
+        )
+      )
+    },
     test("every criteria field a rejection reason names is one the operator can set") {
       val settable = CriteriaSpec.fromCriteria(RecruitmentCriteria.defaultDaily).productElementNames.toSet
-      val named    = RejectionReason.values.toList.flatMap(_.criteriaFieldOption)
+      val named    = RejectionReason.values.toList.flatMap(fieldOf)
       assertTrue(named.filterNot(settable).isEmpty)
     }
   )
@@ -304,7 +378,7 @@ object TestRecruitmentPure extends ZIOSpecDefault {
         val setFields = row.criteria.productElementNames.zip(row.criteria.productIterator.zip(base.productIterator))
           .collect { case (name, (value, default)) if value != default => name }
           .toList
-        setFields == row.entry.reason.criteriaFieldOption.toList
+        setFields == fieldOf(row.entry.reason).toList
     }
 
   private def cacheCriterionTests(row: CacheCriterionRow) = {

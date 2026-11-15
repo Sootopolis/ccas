@@ -1,6 +1,6 @@
 package ccas.analysis.apps.recruitment
 
-import java.time.Duration
+import java.time.{Duration, Instant}
 
 import snapshot4s.generated.snapshotConfig
 import zio.test.{Spec, ZIOSpecDefault}
@@ -8,8 +8,8 @@ import zio.test.{Spec, ZIOSpecDefault}
 import ccas.analysis.apps.TestTimes
 import ccas.analysis.apps.recruitment.CandidateOutcome.{Rejected, RejectedFromCache}
 import ccas.analysis.apps.recruitment.RejectionReason.*
-import ccas.analysis.tables.{RecruitmentCriteria, RejectionCount}
-import ccas.api.misc.subtypes.Username
+import ccas.analysis.tables.{RecruitmentAlias, RecruitmentCriteria, RejectionCount}
+import ccas.api.misc.subtypes.{ClubId, Username}
 import ccas.server.jobs.JobLogFile
 import ccas.utils.ZioSnapshots
 
@@ -39,10 +39,10 @@ object TestRecruitmentReportSnapshots extends ZIOSpecDefault with ZioSnapshots {
   )
 
   /** Production's criteria when #481 was built: `defaultDaily`, avoiding admins of clubs of 100 or more. */
-  private val criteriaLines = RecruitmentApp.criteriaBlock(
-    1,
-    List("default"),
-    RecruitmentApp.settingLines(RecruitmentCriteria.defaultDaily.copy(avoidAdminMinClubSize = Some(100)), Map.empty)
+  private val criteriaLines = CriteriaRecap.lines(
+    List(RecruitmentAlias(ClubId(1), "default", Instant.parse("2026-03-18T09:00:00Z"), criteriaId = 1)),
+    RecruitmentCriteria.defaultDaily.copy(avoidAdminMinClubSize = Some(100)),
+    Map.empty
   )
 
   /** Two invited, and every other candidate rejected, so the figures add up as a real run's would. */
@@ -56,7 +56,9 @@ object TestRecruitmentReportSnapshots extends ZIOSpecDefault with ZioSnapshots {
       completedAt = TestTimes.t0.plus(Duration.ofMinutes(12))
     )
 
-  /** maxClubs both live and from cache, so the two add up; a tie at 4 between two checks; a row from before #430. */
+  /** maxClubs both live and from cache, so the two add up; a tie at 4 between two checks; both checks of one field;
+    * a row from before #430.
+    */
   private val rejections = List(
     RejectionCount(Some(MaxClubs), Rejected, 17),
     RejectionCount(Some(MaxClubs), RejectedFromCache, 9),
@@ -64,6 +66,8 @@ object TestRecruitmentReportSnapshots extends ZIOSpecDefault with ZioSnapshots {
     RejectionCount(Some(DailyMinGamesFinished), RejectedFromCache, 6),
     RejectionCount(Some(InClubMatch), Rejected, 4),
     RejectionCount(Some(AccountNotActive), Rejected, 4),
+    RejectionCount(Some(AdminOfSizableClub), Rejected, 3),
+    RejectionCount(Some(AdminOfDiscoveredClub), Rejected, 2),
     RejectionCount(Some(RecentTmTimeout), RejectedFromCache, 2),
     RejectionCount(None, Rejected, 1)
   )

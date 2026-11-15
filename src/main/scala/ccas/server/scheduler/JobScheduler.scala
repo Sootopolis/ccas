@@ -28,7 +28,7 @@ import ccas.analysis.apps.membership.MembershipApp
 import ccas.analysis.apps.recruitment.RecruitmentApp
 import ccas.analysis.apps.ref.RefApp
 import ccas.analysis.apps.stats.StatsApp
-import ccas.analysis.tables.RunTrigger
+import ccas.analysis.tables.{RecruitmentAlias, RunTrigger}
 import ccas.server.jobs.{ClubJobEffect, JobCaps, JobEffect, JobKind, JobRunner}
 import ccas.server.scheduler.ScheduleParams.{
   ClubDataOptions,
@@ -205,7 +205,7 @@ object JobScheduler {
               RecruitmentApp.recruit(
                 clubSlug = club.slug,
                 expectedClubIdOption = Some(club.clubId),
-                alias = opts.alias.getOrElse("default"),
+                alias = opts.alias.getOrElse(RecruitmentAlias.Default),
                 target = opts.target.map(_ min JobCaps.MaxTarget),
                 cumulative = opts.cumulative.getOrElse(false),
                 sourceClubs = opts.sourceClubs.getOrElse(Nil),

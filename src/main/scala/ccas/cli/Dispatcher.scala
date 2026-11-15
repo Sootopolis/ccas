@@ -1,5 +1,6 @@
 package ccas.cli
 
+import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.nio.file.Path
 import java.util.Base64
@@ -9,6 +10,7 @@ import scala.io.StdIn
 import zio.*
 
 import ccas.analysis.apps.{ClubQuery, ClubRef, ClubResolution, NamedClub}
+import ccas.analysis.tables.RecruitmentAlias
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, Username}
 import ccas.api.player.ApiPlayer
 import ccas.cli.config.{ConfigWriter, CurrentClubRef}
@@ -27,6 +29,7 @@ import ccas.server.routes.JobRoutes.{
   StatsRequest
 }
 import ccas.server.routes.ManagedClubRoutes.{ManagedClubResponse, MarkManagedRequest}
+import ccas.server.routes.RecruitmentCriteriaRoutes.CriteriaView
 import ccas.server.routes.ScheduleRoutes.{CreateScheduleRequest, CreateScheduleResponse, ScheduleResponse}
 import ccas.server.scheduler.{MisfirePolicy, TriggerType}
 import ccas.utils.errors.safeMessage
@@ -179,26 +182,13 @@ object Dispatcher {
             // run prompts; any other non-interactive run (e.g. stdout redirected to a file) defers rather than
             // silently inviting: `autoConfirm = Some(false)` for all but `--stdout` has the server leave them Deferred.
             val interactiveConfirm = !recruit.stdout && hasTty
-            for {
-              clubTarget <- resolveClub(recruit.club, recruit.clubIdOption, currentClubOption)
-              result <- sendSettlingAmbiguity(clubTarget, (r: ClubJobResult) => List(r.resolution), hasTty) { chosen =>
-                api.postJson[RecruitmentRequest, ClubJobResult](
-                  path = "/api/jobs/recruitment",
-                  body = RecruitmentRequest(
-                    club = chosen.query,
-                    alias = recruit.alias,
-                    target = recruit.target,
-                    cumulative = flag(recruit.cumulative),
-                    sourceClubs = Option.when(recruit.sourceClubs.nonEmpty)(recruit.sourceClubs.map(ClubSlug(_))),
-                    timeLimitMinutes = recruit.timeLimitMinutes,
-                    explore = recruit.explore,
-                    autoConfirm = Option.unless(recruit.stdout)(false)
-                  )
-                )
-              }
-              _    <- noteResolutions(wiring, currentClubOption, clubTarget, List(jobOutcome(result)))
-              code <- handleRecruitResult(follower, api, result, recruit.stdout, interactiveConfirm)
-            } yield code
+            val alias              = recruit.alias.getOrElse(RecruitmentAlias.Default)
+            def submit(target: ClubTarget): Task[Int] =
+              submitRecruit(wiring, api, follower, recruit, currentClubOption, target, interactiveConfirm)
+            resolveClub(recruit.club, recruit.clubIdOption, currentClubOption).flatMap { clubTarget =>
+              if (interactiveConfirm) { confirmCriteria(wiring, api, currentClubOption, clubTarget, alias)(submit) }
+              else { submit(clubTarget) }
+            }
           }
       }
 
@@ -751,6 +741,69 @@ object Dispatcher {
   // Is this an interactive terminal? Fully qualified because `import zio.*` brings `zio.System` into scope. Null when
   // either stdin or stdout is redirected, which is exactly when we must not prompt or emit an OSC 52 clipboard escape.
   private def hasTty: Boolean = java.lang.System.console() != null
+
+  // A wrong criteria's rejections keep their players out for `daysSinceRejected`, however soon the criteria are
+  // fixed, so an interactive run shows them and asks first (#485). A yes submits by id to the club settled while
+  // reading them, so an ambiguous name is asked about, and a changed one noted, only once.
+  private[cli] def confirmCriteria(
+    wiring: CliWiring,
+    api: CcasApiClient,
+    currentClubOption: Option[String],
+    target: ClubTarget,
+    alias: String
+  )(submit: ClubTarget => Task[Int]): Task[Int] =
+    for {
+      (club, view) <- actOnClub(wiring, currentClubOption, target) { chosen =>
+        api.getJson[ClubResult[CriteriaView]](
+          s"/api/recruitment-criteria/${pathSegment(alias)}?${ClubRequest.queryString(chosen.query)}"
+        )
+      }
+      _      <- ZIO.foreachDiscard(view.recap)(line => Console.printLine(line).orDie)
+      _      <- Console.print("Run with these criteria? [Y/n] ").orDie
+      answer <- Console.readLine.orElseSucceed("n")
+      code <-
+        if (isYes(answer)) { submit(ClubTarget.byId(club.clubId)) }
+        else {
+          Console.printLine(
+            "Not started. Edit the criteria with: sbt \"runMain ccas.analysis.apps.recruitment.RecruitmentCriteriaApp " +
+              s"set ${ClubSlug.unwrap(club.slug)} $alias\""
+          ).orDie.as(0)
+        }
+    } yield code
+
+  private def submitRecruit(
+    wiring: CliWiring,
+    api: CcasApiClient,
+    follower: JobFollower,
+    recruit: CliCommand.Recruit,
+    currentClubOption: Option[String],
+    target: ClubTarget,
+    interactiveConfirm: Boolean
+  ): Task[Int] =
+    for {
+      result <- sendSettlingAmbiguity(target, (r: ClubJobResult) => List(r.resolution), hasTty) { chosen =>
+        api.postJson[RecruitmentRequest, ClubJobResult](
+          path = "/api/jobs/recruitment",
+          body = RecruitmentRequest(
+            club = chosen.query,
+            alias = recruit.alias,
+            target = recruit.target,
+            cumulative = flag(recruit.cumulative),
+            sourceClubs = Option.when(recruit.sourceClubs.nonEmpty)(recruit.sourceClubs.map(ClubSlug(_))),
+            timeLimitMinutes = recruit.timeLimitMinutes,
+            explore = recruit.explore,
+            autoConfirm = Option.when(!recruit.stdout)(false)
+          )
+        )
+      }
+      _    <- noteResolutions(wiring, currentClubOption, target, List(jobOutcome(result)))
+      code <- handleRecruitResult(follower, api, result, recruit.stdout, interactiveConfirm)
+    } yield code
+
+  // An alias is free text, so it is percent-encoded as a path segment: `URLEncoder` writes a space as `+`, which a path
+  // keeps literally.
+  private def pathSegment(value: String): String =
+    URLEncoder.encode(value, StandardCharsets.UTF_8).replace("+", "%20")
 
   // Deliver a completed scout's result per mode. All three route the job log to stderr so stdout carries only the
   // username payload (clean for a pipe or a redirect):
