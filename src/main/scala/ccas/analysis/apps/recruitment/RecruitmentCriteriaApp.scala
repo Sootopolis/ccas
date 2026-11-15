@@ -206,12 +206,15 @@ object RecruitmentCriteriaApp extends ZIOAppDefault {
   def show(club: NamedClub, alias: String): RIO[PostgresClient, RecruitmentCriteria] =
     for {
       aliasRow <- RecruitmentAlias.selectLatest(club.clubId, alias)
-        .someOrFail(NotFoundException(s"No recruitment alias '$alias' found for club '${club.slug}'"))
+        .someOrFail(NotFoundException(noSuchCriteria(club.slug, alias)))
       criteria <- RecruitmentCriteria.selectId(aliasRow.criteriaId)
         .someOrFail(
           new IllegalStateException(s"Criteria ${aliasRow.criteriaId} referenced by alias '$alias' not found")
         )
     } yield criteria
+
+  /** What an operator who names criteria the club lacks is told, in their words: a name, not an alias row. */
+  def noSuchCriteria(club: ClubSlug, alias: String): String = s"$club has no criteria named \"$alias\""
 
   def list(clubId: ClubId): RIO[PostgresClient, List[RecruitmentAlias]] =
     RecruitmentAlias.selectClub(clubId)

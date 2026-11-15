@@ -17,7 +17,7 @@ import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId, PlayerId, Username}
 import ccas.api.player.ApiPlayer
 import ccas.utils.{display, OutputFile, ProgressDisplay}
 import ccas.utils.client.{BodyStore, ChessComClient, HttpClientLayer, NetworkUnavailableException}
-import ccas.utils.errors.{BadRequestException, NotFoundException}
+import ccas.utils.errors.{BadRequestException, ConflictException, NotFoundException}
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.withTransaction
 
@@ -102,7 +102,8 @@ object RecruitmentApp extends ZIOAppDefault {
                 cumulative = parsed.cumulative,
                 sourceClubs = parsed.sourceClubs,
                 explore = parsed.sourceClubs.isEmpty || !parsed.focus,
-                showHints = true
+                showHints = true,
+                confirmedCriteriaIdOption = None
               )
               candidates <-
                 if (parsed.cumulative) RecruitmentCandidate.selectInvitedToday(run.clubId, parsed.alias)
@@ -162,7 +163,9 @@ object RecruitmentApp extends ZIOAppDefault {
     // them Invited — the CLI confirms them afterwards via the confirm endpoint. Defaults true so the standalone app,
     // the scheduler, and non-interactive API calls keep auto-confirming.
     autoConfirm: Boolean = true,
-    jobRunIdOption: Option[JobRunId] = None
+    jobRunIdOption: Option[JobRunId] = None,
+    // The criteria the operator read and confirmed at the terminal, which the alias must still point at.
+    confirmedCriteriaIdOption: Option[Long]
   ): RIO[ProgressDisplay & ChessComClient & PostgresClient, RecruitmentRun] = ZIO.scoped {
     for {
       _ <- MembershipApp.reconcile(
@@ -180,11 +183,16 @@ object RecruitmentApp extends ZIOAppDefault {
       club          = Club.fromApi(apiClub)
       // On the recovery path the resolver already upserted under the canonical slug, so this is an idempotent
       // reaffirmation; on the happy path it is the source-of-truth write.
-      _ <- Club.upsert(club)
-      aliasRow <- RecruitmentAlias.selectLatest(clubId, alias)
-        .someOrFail(NotFoundException(s"No recruitment alias '$alias' found for club '$clubSlug'"))
-      criteria <- RecruitmentCriteria.selectId(aliasRow.criteriaId)
-        .someOrFail(IllegalStateException(s"Criteria ${aliasRow.criteriaId} referenced by alias '$alias' not found"))
+      _        <- Club.upsert(club)
+      criteria <- RecruitmentCriteriaApp.show(NamedClub(clubId, effectiveSlug), alias)
+      // A run under criteria the operator did not confirm would reject players by settings they never saw (#485).
+      _ <- ZIO.whenDiscard(confirmedCriteriaIdOption.exists(_ != criteria.criteriaId)) {
+        ZIO.fail(
+          ConflictException(
+            s"$effectiveSlug's criteria \"$alias\" changed after you confirmed them; run again to see them"
+          )
+        )
+      }
       resolvedTarget = target.getOrElse(DefaultTarget)
       alreadyFound <-
         if (cumulative) RecruitmentRun.sumCandidatesFoundToday(clubId, alias)
@@ -192,7 +200,9 @@ object RecruitmentApp extends ZIOAppDefault {
       effectiveTarget = (resolvedTarget - alreadyFound) max 0
       now   <- Clock.instant
       runId <- RecruitmentRun.insert(clubId, criteria.criteriaId, trigger, now, Some(effectiveTarget), jobRunIdOption)
-      _     <- CriteriaRecap.of(criteria).flatMap(logCriteria)
+      // Just read and confirmed at the terminal, the recap is named in one line rather than shown again.
+      _ <- (if (confirmedCriteriaIdOption.isDefined) { CriteriaRecap.confirmed(criteria).map(List(_)) }
+            else { CriteriaRecap.of(criteria) }).flatMap(logCriteria)
 
       // --- Shared setup ---
       targetMembers <- ApiClubMembers.get(client, effectiveSlug)
@@ -446,7 +456,7 @@ object RecruitmentApp extends ZIOAppDefault {
         } yield CommittedRun(finalRun, deferredCount, rejections)
       }
       duration = JDuration.between(startedAt, committed.run.completedAt.get)
-      _ <- ZIO.logInfo(s"=== $label ===")
+      _ <- ZIO.logInfo(s"=== $label: ${ctx.clubSlug} ===")
       _ <- ZIO.logInfo(s"Duration: ${duration.display}")
       _ <- ZIO.logInfo(s"Candidates evaluated: $evalCount")
       _ <- ZIO.logInfo(s"Invited: ${confirmed.size}")

@@ -1,7 +1,7 @@
-[INFO hh:mm:ss] Criteria for alias default, set 2026-03-18:
+[INFO hh:mm:ss] team-alpha's criteria "default", version of 2026-03-18 09:00 UTC:
 [INFO hh:mm:ss]   minDaysSinceRegistration  90     joined Chess.com at least this many days ago
 [INFO hh:mm:ss]   daysSinceLastInvited      180    not invited to this club within this many days
-[INFO hh:mm:ss]   daysSinceRejected         30     not rejected under this alias within this many days
+[INFO hh:mm:ss]   daysSinceRejected         30     not rejected by these criteria, or an earlier version of them, within this many days
 [INFO hh:mm:ss]   maxClubs                  40     in at most this many clubs
 [INFO hh:mm:ss]   excludeSourceAdmins       yes    not an admin of a club being scouted
 [INFO hh:mm:ss]   avoidAdminMinClubSize     100    not an admin of an active club with at least this many members

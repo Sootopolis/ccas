@@ -2,6 +2,7 @@ package ccas.cli
 
 import zio.cli.*
 
+import ccas.analysis.tables.RecruitmentAlias
 import ccas.cli.serve.HealthProbe
 
 /** Parsed `ccas` subcommand. Each variant carries the resolved server URL plus its already-validated arguments, so
@@ -72,7 +73,7 @@ object CliCommand {
     server: String,
     club: Option[String],
     clubIdOption: Option[Long],
-    alias: Option[String],
+    criteriaNameOption: Option[String],
     target: Option[Int],
     cumulative: Boolean,
     sourceClubs: List[String],
@@ -337,7 +338,8 @@ object CliCommand {
     Command(
       name = "recruit",
       options = serverOpt(default) ++
-        (Options.text("alias").optional ?? "Recruitment-criteria alias to use (default: the club's default)") ++
+        (Options.text("criteria").optional ??
+          s"Which of the club's named criteria to use (default: \"${RecruitmentAlias.Default}\")") ++
         (intOpt("target") ?? "Stop once N candidates have been found") ++
         (Options.boolean("cumulative") ?? "Count candidates already found earlier today toward the target") ++
         sourceClubsOpt ++
@@ -362,7 +364,7 @@ object CliCommand {
         case (
               (
                 server,
-                alias,
+                criteriaNameOption,
                 target,
                 cumulative,
                 sourceClubs,
@@ -380,7 +382,7 @@ object CliCommand {
             server = server,
             club = club,
             clubIdOption = clubIdOption,
-            alias = alias,
+            criteriaNameOption = criteriaNameOption,
             target = target,
             cumulative = cumulative,
             sourceClubs = sourceClubs,

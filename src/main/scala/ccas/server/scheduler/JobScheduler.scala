@@ -212,7 +212,8 @@ object JobScheduler {
                 timeLimitMinutes = opts.timeLimitMinutes.map(_ min JobCaps.MaxTimeLimitMinutes).orElse(Some(30)),
                 explore = opts.explore.getOrElse(true),
                 trigger = RunTrigger.Scheduled,
-                jobRunIdOption = jobRunIdOption
+                jobRunIdOption = jobRunIdOption,
+                confirmedCriteriaIdOption = None
               )
             }
           }

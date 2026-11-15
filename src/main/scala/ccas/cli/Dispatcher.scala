@@ -5,8 +5,6 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.Path
 import java.util.Base64
 
-import scala.io.StdIn
-
 import zio.*
 
 import ccas.analysis.apps.{ClubQuery, ClubRef, ClubResolution, NamedClub}
@@ -181,14 +179,7 @@ object Dispatcher {
             // positive intent: only `--stdout` (programmatic consumption) auto-confirms from the CLI. An interactive
             // run prompts; any other non-interactive run (e.g. stdout redirected to a file) defers rather than
             // silently inviting: `autoConfirm = Some(false)` for all but `--stdout` has the server leave them Deferred.
-            val interactiveConfirm = !recruit.stdout && hasTty
-            val alias              = recruit.alias.getOrElse(RecruitmentAlias.Default)
-            def submit(target: ClubTarget): Task[Int] =
-              submitRecruit(wiring, api, follower, recruit, currentClubOption, target, interactiveConfirm)
-            resolveClub(recruit.club, recruit.clubIdOption, currentClubOption).flatMap { clubTarget =>
-              if (interactiveConfirm) { confirmCriteria(wiring, api, currentClubOption, clubTarget, alias)(submit) }
-              else { submit(clubTarget) }
-            }
+            scout(wiring, api, follower, recruit, currentClubOption, interactiveConfirm = !recruit.stdout && hasTty)
           }
       }
 
@@ -742,6 +733,37 @@ object Dispatcher {
   // either stdin or stdout is redirected, which is exactly when we must not prompt or emit an OSC 52 clipboard escape.
   private def hasTty: Boolean = java.lang.System.console() != null
 
+  /** A recruit scout: an interactive one confirms its criteria first and sends the version confirmed, so the run
+    * refuses any other and names them in one line instead of repeating them (#485).
+    */
+  private[cli] def scout(
+    wiring: CliWiring,
+    api: CcasApiClient,
+    follower: JobFollower,
+    recruit: CliCommand.Recruit,
+    currentClubOption: Option[String],
+    interactiveConfirm: Boolean
+  ): Task[Int] = {
+    val criteriaName = recruit.criteriaNameOption.getOrElse(RecruitmentAlias.Default)
+    def submit(target: ClubTarget, confirmedCriteriaIdOption: Option[Long]): Task[Int] =
+      submitRecruit(
+        wiring,
+        api,
+        follower,
+        recruit,
+        currentClubOption,
+        interactiveConfirm,
+        target,
+        confirmedCriteriaIdOption
+      )
+    resolveClub(recruit.club, recruit.clubIdOption, currentClubOption).flatMap { clubTarget =>
+      if (interactiveConfirm) {
+        // An older server answers no criteria id; the run then logs its full recap, as one that confirmed nothing.
+        confirmCriteria(wiring, api, currentClubOption, clubTarget, criteriaName)(submit)
+      } else { submit(clubTarget, None) }
+    }
+  }
+
   // A wrong criteria's rejections keep their players out for `daysSinceRejected`, however soon the criteria are
   // fixed, so an interactive run shows them and asks first (#485). A yes submits by id to the club settled while
   // reading them, so an ambiguous name is asked about, and a changed one noted, only once.
@@ -750,23 +772,23 @@ object Dispatcher {
     api: CcasApiClient,
     currentClubOption: Option[String],
     target: ClubTarget,
-    alias: String
-  )(submit: ClubTarget => Task[Int]): Task[Int] =
+    criteriaName: String
+  )(submit: (ClubTarget, Option[Long]) => Task[Int]): Task[Int] =
     for {
       (club, view) <- actOnClub(wiring, currentClubOption, target) { chosen =>
         api.getJson[ClubResult[CriteriaView]](
-          s"/api/recruitment-criteria/${pathSegment(alias)}?${ClubRequest.queryString(chosen.query)}"
+          s"/api/recruitment-criteria/${pathSegment(criteriaName)}?${ClubRequest.queryString(chosen.query)}"
         )
       }
       _      <- ZIO.foreachDiscard(view.recap)(line => Console.printLine(line).orDie)
       _      <- Console.print("Run with these criteria? [Y/n] ").orDie
       answer <- Console.readLine.orElseSucceed("n")
       code <-
-        if (isYes(answer)) { submit(ClubTarget.byId(club.clubId)) }
+        if (isYes(answer)) { submit(ClubTarget.byId(club.clubId), view.criteriaIdOption) }
         else {
           Console.printLine(
             "Not started. Edit the criteria with: sbt \"runMain ccas.analysis.apps.recruitment.RecruitmentCriteriaApp " +
-              s"set ${ClubSlug.unwrap(club.slug)} $alias\""
+              s"set ${ClubSlug.unwrap(club.slug)} $criteriaName\""
           ).orDie.as(0)
         }
     } yield code
@@ -777,8 +799,9 @@ object Dispatcher {
     follower: JobFollower,
     recruit: CliCommand.Recruit,
     currentClubOption: Option[String],
+    interactiveConfirm: Boolean,
     target: ClubTarget,
-    interactiveConfirm: Boolean
+    confirmedCriteriaIdOption: Option[Long]
   ): Task[Int] =
     for {
       result <- sendSettlingAmbiguity(target, (r: ClubJobResult) => List(r.resolution), hasTty) { chosen =>
@@ -786,13 +809,14 @@ object Dispatcher {
           path = "/api/jobs/recruitment",
           body = RecruitmentRequest(
             club = chosen.query,
-            alias = recruit.alias,
+            alias = recruit.criteriaNameOption,
             target = recruit.target,
             cumulative = flag(recruit.cumulative),
             sourceClubs = Option.when(recruit.sourceClubs.nonEmpty)(recruit.sourceClubs.map(ClubSlug(_))),
             timeLimitMinutes = recruit.timeLimitMinutes,
             explore = recruit.explore,
-            autoConfirm = Option.when(!recruit.stdout)(false)
+            autoConfirm = Option.when(!recruit.stdout)(false),
+            confirmedCriteriaId = confirmedCriteriaIdOption
           )
         )
       }
@@ -800,8 +824,8 @@ object Dispatcher {
       code <- handleRecruitResult(follower, api, result, recruit.stdout, interactiveConfirm)
     } yield code
 
-  // An alias is free text, so it is percent-encoded as a path segment: `URLEncoder` writes a space as `+`, which a path
-  // keeps literally.
+  // A criteria name is free text, so it is percent-encoded as a path segment: `URLEncoder` writes a space as `+`,
+  // which a path keeps literally.
   private def pathSegment(value: String): String =
     URLEncoder.encode(value, StandardCharsets.UTF_8).replace("+", "%20")
 
@@ -819,7 +843,7 @@ object Dispatcher {
   ): Task[Int] =
     if (stdout) { follower.handleClub(result, logsToStderr = true, onComplete = deliverInvited(api, _)) }
     else if (interactiveConfirm) {
-      follower.handleClub(result, logsToStderr = false, onComplete = confirmFlow(api, _))
+      follower.handleClub(result, logsToStderr = false, onComplete = confirmFlow(api, result.club, _))
     } else { follower.handleClub(result, logsToStderr = true, onComplete = deferReport(api, _)) }
 
   // Fetch a completed auto-confirm scout's invited usernames and print them bare to stdout. A fetch/decode failure is
@@ -845,20 +869,19 @@ object Dispatcher {
 
   // Deferred-confirm flow: the scout left candidates Deferred. Show them, ask, and only then flip to Invited + copy.
   // Declining (or a read failure defaulting to "n") leaves them Deferred — nobody is burned, and they resurface.
-  private def confirmFlow(api: CcasApiClient, jobId: String): Task[Unit] =
+  // `club` is the job's label, which for a club that ran is its slug: the prompt names the club the invites are for.
+  private[cli] def confirmFlow(api: CcasApiClient, club: String, jobId: String): Task[Unit] =
     api.getJson[InvitedUsernames](s"/api/jobs/$jobId/recruitment/found").flatMap { found =>
       if (found.usernames.isEmpty) { Console.printLine("No candidates found.").orDie }
-      else { confirmPrompt(api, jobId, found.usernames) }
+      else { confirmPrompt(api, club, jobId, found.usernames) }
     }.catchAll(confirmFailed)
 
-  private def confirmPrompt(api: CcasApiClient, jobId: String, names: List[String]): Task[Unit] =
+  private def confirmPrompt(api: CcasApiClient, club: String, jobId: String, names: List[String]): Task[Unit] =
     for {
-      _ <- Console.printLine(s"\nFound ${names.size} candidates:").orDie
-      _ <- ZIO.foreachDiscard(names)(n => Console.printLine(s"  ${profileUrlLine(n)}").orDie)
-      answer <- ZIO.attemptBlocking {
-        StdIn.readLine(s"\nMark all ${names.size} as Invited and copy to clipboard? [Y/n] ")
-      }
-        .orElseSucceed("n")
+      _      <- Console.printLine(s"\nFound ${names.size} candidates:").orDie
+      _      <- ZIO.foreachDiscard(names)(n => Console.printLine(s"  ${profileUrlLine(n)}").orDie)
+      _      <- Console.print(s"\nMark all ${names.size} as invited to $club and copy to clipboard? [Y/n] ").orDie
+      answer <- Console.readLine.orElseSucceed("n")
       _ <-
         if (isYes(answer)) { confirmAndCopy(api, jobId) }
         else { Console.printLine(s"Left ${names.size} as deferred; they'll resurface on the next run.").orDie }

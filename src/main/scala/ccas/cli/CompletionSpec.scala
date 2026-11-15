@@ -97,7 +97,7 @@ object CompletionSpec {
       path = List("recruit"),
       flags = List(
         server,
-        "--alias",
+        "--criteria",
         "--target",
         "--cumulative",
         "--source-clubs",
@@ -110,7 +110,8 @@ object CompletionSpec {
         "--report",
         "--no-progress"
       ),
-      valueFlags = List(server, "--alias", "--target", "--source-clubs", "--time-limit-minutes", clubFlag, clubIdFlag),
+      valueFlags =
+        List(server, "--criteria", "--target", "--source-clubs", "--time-limit-minutes", clubFlag, clubIdFlag),
       // `--report`'s optional `[run-id]` is a bare numeric positional with nothing to complete, so NoArgs (suggest
       // nothing) is the right shell behavior.
       positional = NoArgs

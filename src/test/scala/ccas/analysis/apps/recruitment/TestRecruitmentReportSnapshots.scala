@@ -9,7 +9,7 @@ import ccas.analysis.apps.TestTimes
 import ccas.analysis.apps.recruitment.CandidateOutcome.{Rejected, RejectedFromCache}
 import ccas.analysis.apps.recruitment.RejectionReason.*
 import ccas.analysis.tables.{RecruitmentAlias, RecruitmentCriteria, RejectionCount}
-import ccas.api.misc.subtypes.{ClubId, Username}
+import ccas.api.misc.subtypes.{ClubId, ClubSlug, Username}
 import ccas.server.jobs.JobLogFile
 import ccas.utils.ZioSnapshots
 
@@ -42,7 +42,7 @@ object TestRecruitmentReportSnapshots extends ZIOSpecDefault with ZioSnapshots {
   private val criteriaLines = CriteriaRecap.lines(
     List(RecruitmentAlias(ClubId(1), "default", Instant.parse("2026-03-18T09:00:00Z"), criteriaId = 1)),
     RecruitmentCriteria.defaultDaily.copy(avoidAdminMinClubSize = Some(100)),
-    Map.empty
+    Map(ClubId(1) -> ClubSlug("team-alpha"))
   )
 
   /** Two invited, and every other candidate rejected, so the figures add up as a real run's would. */

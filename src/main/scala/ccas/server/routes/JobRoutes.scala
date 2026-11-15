@@ -45,7 +45,10 @@ object JobRoutes {
     explore: Option[Boolean],
     // When Some(false) the scout leaves candidates Deferred for the CLI to confirm; absent/Some(true) auto-confirms
     // (scheduler, raw API, and non-interactive `ccas recruit`). The interactive CLI sends false.
-    autoConfirm: Option[Boolean]
+    autoConfirm: Option[Boolean],
+    // The criteria the operator read and confirmed (`CriteriaView.criteriaId`): the run refuses any other, and names
+    // these in one line instead of logging them again. Absent for everything but an interactive `ccas recruit`.
+    confirmedCriteriaId: Option[Long]
   )
   object RecruitmentRequest {
     given JsonCodec[RecruitmentRequest] = DeriveJsonCodec.gen
@@ -211,7 +214,8 @@ object JobRoutes {
           explore = body.explore.getOrElse(true),
           trigger = RunTrigger.Api,
           autoConfirm = body.autoConfirm.getOrElse(true),
-          jobRunIdOption = jobRunIdOption
+          jobRunIdOption = jobRunIdOption,
+          confirmedCriteriaIdOption = body.confirmedCriteriaId
         )
       }
     } yield jsonResponse(Status.Ok, result)

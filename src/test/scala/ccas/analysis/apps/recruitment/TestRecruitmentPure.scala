@@ -30,6 +30,9 @@ object TestRecruitmentPure extends ZIOSpecDefault {
   private def aliasSet(alias: String, since: String): RecruitmentAlias =
     RecruitmentAlias(ClubId(1), alias, Instant.parse(since), criteriaId = 7)
 
+  /** The slug of the club `aliasSet`'s rows belong to. */
+  private val teamAlpha = Map(ClubId(1) -> ClubSlug("team-alpha"))
+
   private def suiteCriteriaBlock = suite("criteria recap")(
     test("the criteria recap puts one setting per line, aligned, with what it means") {
       val criteria = nothingSet.copy(
@@ -47,17 +50,27 @@ object TestRecruitmentPure extends ZIOSpecDefault {
         )
       )
     },
-    test("the criteria recap names the alias and the date it was set, not the criteria id") {
-      val lines = CriteriaRecap.lines(List(aliasSet("default", "2026-03-18T23:30:00Z")), makeCriteria(), Map.empty)
+    test("the criteria recap names the club, the criteria and their version, not the criteria id") {
+      val lines = CriteriaRecap.lines(List(aliasSet("default", "2026-03-18T23:30:00Z")), makeCriteria(), teamAlpha)
       assertTrue(
-        lines.headOption.contains("Criteria for alias default, set 2026-03-18:"),
+        lines.headOption.contains("team-alpha's criteria \"default\", version of 2026-03-18 23:30 UTC:"),
         !lines.exists(_.contains("7"))
       )
     },
-    test("criteria several aliases point at name each, with the date it was set") {
+    test("criteria several names point at name each, with its version") {
       val aliases = List(aliasSet("loose", "2026-01-02T00:00:00Z"), aliasSet("strict", "2026-02-03T00:00:00Z"))
       assertTrue(
-        CriteriaRecap.header(aliases) == "Criteria for alias loose, set 2026-01-02; alias strict, set 2026-02-03"
+        CriteriaRecap.header(aliases, teamAlpha) ==
+          "team-alpha's criteria \"loose\", version of 2026-01-02 00:00 UTC; " +
+          "team-alpha's criteria \"strict\", version of 2026-02-03 00:00 UTC"
+      )
+    },
+    test("two versions set on one day read apart, by the minute in UTC") {
+      val morning   = CriteriaRecap.header(List(aliasSet("default", "2026-11-15T09:05:00Z")), teamAlpha)
+      val afternoon = CriteriaRecap.header(List(aliasSet("default", "2026-11-15T14:32:59Z")), teamAlpha)
+      assertTrue(
+        morning == "team-alpha's criteria \"default\", version of 2026-11-15 09:05 UTC",
+        afternoon == "team-alpha's criteria \"default\", version of 2026-11-15 14:32 UTC"
       )
     },
     test("every setting the operator can set appears in the recap once set") {
@@ -114,8 +127,8 @@ object TestRecruitmentPure extends ZIOSpecDefault {
     },
     test("criteria with nothing set say so") {
       assertTrue(
-        CriteriaRecap.lines(List(aliasSet("loose", "2026-03-18T00:00:00Z")), nothingSet, Map.empty) ==
-          List("Criteria for alias loose, set 2026-03-18: none set")
+        CriteriaRecap.lines(List(aliasSet("loose", "2026-03-18T00:00:00Z")), nothingSet, teamAlpha) ==
+          List("team-alpha's criteria \"loose\", version of 2026-03-18 00:00 UTC: none set")
       )
     }
   )

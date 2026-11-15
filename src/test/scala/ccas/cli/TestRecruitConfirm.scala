@@ -1,6 +1,6 @@
 package ccas.cli
 
-import zio.{ExitCode, Ref, Task, UIO, ZIO}
+import zio.{durationInt, ExitCode, Ref, Task, UIO, ZIO}
 import zio.http.{handler, string, Method, Request, Response, Route, Routes, Status}
 import zio.json.DecoderOps
 import zio.test.{assertTrue, Spec, TestConsole, ZIOSpecDefault}
@@ -10,52 +10,55 @@ import ccas.analysis.apps.recruitment.CriteriaSpec
 import ccas.analysis.tables.RecruitmentCriteria
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 import ccas.server.routes.{ClubRequest, ClubResult}
-import ccas.server.routes.JobRoutes.{ClubJobResult, RecruitmentRequest}
+import ccas.server.routes.JobRoutes.{ClubJobResult, InvitedUsernames, RecruitmentRequest}
 import ccas.server.routes.RecruitmentCriteriaRoutes.CriteriaView
 
-/** An interactive `ccas recruit` shows the criteria it would run under and asks before submitting (#485): through
-  * [[Dispatcher.confirmCriteria]] with a submit that records what it was asked to run, and through
-  * [[Dispatcher.dispatch]] for a run with no terminal, against a [[FakeCcasServer]] that knows one alias of one club.
+/** An interactive `ccas recruit` shows the criteria it would run under and asks before submitting, then asks before
+  * marking invites (#485): through [[Dispatcher.confirmCriteria]] with a submit that records what it was asked to run,
+  * through [[Dispatcher.scout]] for what a confirmed run sends, and through [[Dispatcher.dispatch]] for a run with no
+  * terminal, against a [[FakeCcasServer]] that knows one set of criteria of one club.
   */
 object TestRecruitConfirm extends ZIOSpecDefault {
 
   private val alpha       = NamedClub(ClubId(1), ClubSlug("team-alpha"))
   private val byAlphaName = ClubQuery.BySlug(alpha.slug)
   private val named       = ClubTarget(byAlphaName, "team-alpha")
-  private val recap = List("Criteria for alias default, set 2026-03-18:", "  maxClubs  40  in at most this many clubs")
+  private val shownId     = 7L
+  private val recap =
+    List("team-alpha's criteria \"default\", version of 2026-03-18:", "  maxClubs  40  in at most this many clubs")
 
-  // Answers the criteria of alias `default` for the club named `team-alpha` as `resolution` resolves it, and 400 for
-  // anything else, so a case pins the alias and the club the command asked about. Counts the requests it answers.
+  // Answers the criteria named `default` for the club named `team-alpha` as `resolution` resolves it, and 400 for
+  // anything else, so a case pins the name and the club the command asked about. Counts the requests it answers.
   private def criteriaRoute(resolution: ClubResolution, asked: Ref[Int]): Route[Any, Nothing] =
-    Method.GET / "api" / "recruitment-criteria" / string("alias") -> handler { (alias: String, req: Request) =>
-      val view = CriteriaView(CriteriaSpec.fromCriteria(RecruitmentCriteria.defaultDaily), recap)
+    Method.GET / "api" / "recruitment-criteria" / string("name") -> handler { (name: String, req: Request) =>
+      val view = CriteriaView(Some(shownId), CriteriaSpec.fromCriteria(RecruitmentCriteria.defaultDaily), recap)
       asked.update(_ + 1) *> ClubRequest.query(req).option.map { queryOption =>
-        if (alias == "default" && queryOption.contains(byAlphaName)) {
+        if (name == "default" && queryOption.contains(byAlphaName)) {
           FakeCcasServer.json(ClubResult(byAlphaName.describe, resolution, resolution.runnable.toOption.map(_ => view)))
         } else { Response.status(Status.BadRequest) }
       }
     }
 
-  /** Runs the confirmation with a submit that records the club it was asked to run against, and answers 7. */
-  private def confirm(resolution: ClubResolution): Task[(Int, List[ClubTarget])] =
+  /** Runs the confirmation with a submit that records the club and criteria it was asked to run, and answers 7. */
+  private def confirm(resolution: ClubResolution): Task[(Int, List[(ClubTarget, Option[Long])])] =
     for {
       asked     <- Ref.make(0)
-      submitted <- Ref.make(List.empty[ClubTarget])
+      submitted <- Ref.make(List.empty[(ClubTarget, Option[Long])])
       routes = Routes(criteriaRoute(resolution, asked))
       wiring <- TempWiring(routes)
       api    <- FakeCcasServer.api(routes)
-      code <- Dispatcher.confirmCriteria(wiring, api, None, named, "default") { target =>
-        submitted.update(_ :+ target).as(7)
+      code <- Dispatcher.confirmCriteria(wiring, api, None, named, "default") { (target, criteriaId) =>
+        submitted.update(_ :+ (target -> criteriaId)).as(7)
       }
       targets <- submitted.get
     } yield (code, targets)
 
-  // The recruit submit route, recording each request's club and answering that no job started, so nothing is followed.
-  private def recruitSubmit(sent: Ref[List[ClubQuery]]): Route[Any, Nothing] =
+  // The recruit submit route, recording each request and answering that no job started, so nothing is followed.
+  private def recruitSubmit(sent: Ref[List[RecruitmentRequest]]): Route[Any, Nothing] =
     Method.POST / "api" / "jobs" / "recruitment" -> handler { (req: Request) =>
       for {
         body <- req.body.asString.orElseSucceed("")
-        _    <- ZIO.foreachDiscard(body.fromJson[RecruitmentRequest].toOption)(r => sent.update(_ :+ r.club))
+        _    <- ZIO.foreachDiscard(body.fromJson[RecruitmentRequest].toOption)(r => sent.update(_ :+ r))
       } yield FakeCcasServer.json(
         ClubJobResult(byAlphaName.describe, None, Some("refused by the test"), ClubResolution.Known(alpha))
       )
@@ -66,7 +69,7 @@ object TestRecruitConfirm extends ZIOSpecDefault {
       server = FakeCcasServer.Url,
       club = Some("team-alpha"),
       clubIdOption = None,
-      alias = None,
+      criteriaNameOption = None,
       target = None,
       cumulative = false,
       sourceClubs = Nil,
@@ -103,9 +106,22 @@ object TestRecruitConfirm extends ZIOSpecDefault {
         out                 <- output
       } yield assertTrue(
         code == 7,
-        submittedTo.map(_.query) == List(ClubQuery.ById(ClubId(1))),
+        submittedTo.map(_._1.query) == List(ClubQuery.ById(ClubId(1))),
         !out.contains("Not started.")
       )
+    },
+    test("a confirmed run sends the version of the criteria it showed") {
+      for {
+        _     <- TestConsole.feedLines("y")
+        asked <- Ref.make(0)
+        sent  <- Ref.make(List.empty[RecruitmentRequest])
+        routes = Routes(criteriaRoute(ClubResolution.Known(alpha), asked), recruitSubmit(sent))
+        wiring <- TempWiring(routes)
+        api    <- FakeCcasServer.api(routes)
+        follower = JobFollower(api, 1.minute, 1.milli, 3, showProgress = false, wiring.recentJobsFile)
+        _         <- Dispatcher.scout(wiring, api, follower, recruit, None, interactiveConfirm = true)
+        submitted <- sent.get
+      } yield assertTrue(submitted.map(_.confirmedCriteriaId) == List(Some(shownId)))
     },
     test("criteria the server has no club for stop the run before it asks") {
       for {
@@ -113,10 +129,10 @@ object TestRecruitConfirm extends ZIOSpecDefault {
         out  <- output
       } yield assertTrue(exit.isFailure, !out.contains("Run with these criteria?"))
     },
-    test("a recruit with no terminal submits without reading or asking about the criteria") {
+    test("a recruit with no terminal submits without reading, asking about or vouching for the criteria") {
       for {
         asked <- Ref.make(0)
-        sent  <- Ref.make(List.empty[ClubQuery])
+        sent  <- Ref.make(List.empty[RecruitmentRequest])
         routes = Routes(criteriaRoute(ClubResolution.Known(alpha), asked), recruitSubmit(sent))
         wiring    <- TempWiring(routes)
         code      <- Dispatcher.dispatch(wiring)(recruit, None)
@@ -126,8 +142,22 @@ object TestRecruitConfirm extends ZIOSpecDefault {
       } yield assertTrue(
         code == ExitCode(1),
         askedFor == 0,
-        submitted == List(byAlphaName),
+        submitted.map(r => (r.club, r.confirmedCriteriaId)) == List((byAlphaName, None)),
         !out.contains("Run with these criteria?")
+      )
+    },
+    test("the invite prompt names the club the candidates are invited to") {
+      val found = Method.GET / "api" / "jobs" / string("jobId") / "recruitment" / "found" -> handler {
+        (_: String, _: Request) => FakeCcasServer.json(InvitedUsernames(List("alice")))
+      }
+      for {
+        _   <- TestConsole.feedLines("n")
+        api <- FakeCcasServer.api(Routes(found))
+        _   <- Dispatcher.confirmFlow(api, "team-alpha", "job-1")
+        out <- output
+      } yield assertTrue(
+        out.contains("Mark all 1 as invited to team-alpha and copy to clipboard? [Y/n]"),
+        out.contains("Left 1 as deferred")
       )
     }
   )

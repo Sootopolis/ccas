@@ -4,9 +4,12 @@ import zio.json.{DecoderOps, EncoderOps}
 import zio.test.{assertTrue, Spec, ZIOSpecDefault}
 
 import ccas.analysis.apps.{ClubQuery, ClubResolution, NamedClub}
+import ccas.analysis.apps.recruitment.CriteriaSpec
+import ccas.analysis.tables.RecruitmentCriteria
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 import ccas.server.routes.JobRoutes.*
 import ccas.server.routes.ManagedClubRoutes.ManagedClubResponse
+import ccas.server.routes.RecruitmentCriteriaRoutes.CriteriaView
 import ccas.server.routes.ScheduleRoutes.{CreateScheduleRequest, CreateScheduleResponse, ScheduleResponse}
 
 /** Pins the shape of the submit wire: how a request names its club, and the JSON key of every field whose Scala name
@@ -47,9 +50,19 @@ object TestWireFieldNames extends ZIOSpecDefault {
         sourceClubs = None,
         timeLimitMinutes = None,
         explore = None,
-        autoConfirm = None
+        autoConfirm = None,
+        confirmedCriteriaId = None
       )
       assertTrue(request.toJson.contains("\"kind\":\"by_id\""), request.toJson.contains("\"clubId\":42"))
+    },
+    test("a criteria view answers its version as `criteriaId`, and one from an older server without it still reads") {
+      val view   = CriteriaView(Some(7L), CriteriaSpec.fromCriteria(RecruitmentCriteria.defaultDaily), Nil)
+      val withNo = view.copy(criteriaIdOption = None).toJson.replace("\"criteriaId\":null,", "")
+      assertTrue(
+        view.toJson.contains("\"criteriaId\":7"),
+        !withNo.contains("criteriaId"),
+        withNo.fromJson[CriteriaView].map(_.criteriaIdOption) == Right(None)
+      )
     },
     test("a submit response answers with `jobId`") {
       val single = JobResult(jobIdOption = Some("job-1"), error = None)
