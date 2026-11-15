@@ -4,7 +4,7 @@ import zio.http.*
 import zio.json.{DeriveJsonCodec, JsonCodec}
 
 import ccas.analysis.apps.ClubQuery
-import ccas.analysis.apps.recruitment.{CriteriaSpec, RecruitmentCriteriaApp}
+import ccas.analysis.apps.recruitment.{CriteriaRecap, CriteriaSpec, RecruitmentCriteriaApp}
 import ccas.server.routes.RouteHelpers.*
 import ccas.utils.client.ChessComClient
 import ccas.utils.sql.PostgresClient
@@ -23,6 +23,12 @@ object RecruitmentCriteriaRoutes {
     given JsonCodec[SetCriteriaResponse] = DeriveJsonCodec.gen
   }
 
+  /** An alias's criteria, and the recap a run under them would print. */
+  private[ccas] case class CriteriaView(criteria: CriteriaSpec, recap: List[String])
+  object CriteriaView {
+    given JsonCodec[CriteriaView] = DeriveJsonCodec.gen
+  }
+
   private[server] case class AliasSummary(alias: String, since: String, criteriaId: Long)
   object AliasSummary {
     given JsonCodec[AliasSummary] = DeriveJsonCodec.gen
@@ -30,7 +36,8 @@ object RecruitmentCriteriaRoutes {
 
   // --- Routes ---
 
-  // Each answers with a `ClubResult` carrying the new criteria id, the alias's criteria, or the club's aliases.
+  // Each answers with a `ClubResult` carrying the new criteria id, the alias's criteria with their recap, or the club's
+  // aliases.
   val routes: Routes[ChessComClient & PostgresClient, Nothing] = Routes(
     Method.POST / "api" / "recruitment-criteria" -> handler { (req: Request) =>
       for {
@@ -44,8 +51,13 @@ object RecruitmentCriteriaRoutes {
     },
     Method.GET / "api" / "recruitment-criteria" / string("alias") -> handler { (alias: String, req: Request) =>
       for {
-        query  <- ClubRequest.query(req)
-        result <- ClubRequest.run(query)(RecruitmentCriteriaApp.show(_, alias).map(CriteriaSpec.fromCriteria))
+        query <- ClubRequest.query(req)
+        result <- ClubRequest.run(query) { club =>
+          for {
+            criteria <- RecruitmentCriteriaApp.show(club, alias)
+            recap    <- CriteriaRecap.of(criteria)
+          } yield CriteriaView(CriteriaSpec.fromCriteria(criteria), recap)
+        }
       } yield jsonResponse(Status.Ok, result)
     },
     Method.GET / "api" / "recruitment-criteria" -> handler { (req: Request) =>

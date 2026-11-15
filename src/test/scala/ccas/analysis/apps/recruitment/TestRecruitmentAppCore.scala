@@ -520,15 +520,16 @@ object TestRecruitmentAppCore extends ZIOSpecDefault {
         "player/candidate-a" -> apiPlayerJson(200, "candidate-a")
       )
       for {
-        _          <- seedDb
-        criteriaId <- seedCriteria(makeCriteria())
-        client     <- fakeChessComClient(responses)
-        _          <- runRecruit(client, sourceClubs = List(ClubSlug("source-club")))
-        logged     <- ZTestLogger.logOutput.map(_.map(_.message()))
-        header           = s"Criteria #$criteriaId (alias default):"
+        _      <- seedDb
+        _      <- seedCriteria(makeCriteria())
+        client <- fakeChessComClient(responses)
+        _      <- runRecruit(client, sourceClubs = List(ClubSlug("source-club")))
+        logged <- ZTestLogger.logOutput.map(_.map(_.message()))
+        header           = logged.find(_.startsWith("Criteria for alias default, set ")).getOrElse("")
         firstCandidateAt = logged.indexWhere(_.contains("candidate-a"))
       } yield assertTrue(
-        logged.dropWhile(_ != header).take(2) == List(header, "  excludeSourceAdmins"),
+        logged.dropWhile(_ != header).take(2) ==
+          List(header, "  excludeSourceAdmins  yes  not an admin of a club being scouted"),
         firstCandidateAt >= 0,
         logged.indexOf(header) < firstCandidateAt
       )
@@ -576,6 +577,24 @@ object TestRecruitmentAppCore extends ZIOSpecDefault {
         _ <- RecruitmentApp.showReport(NamedClub(clubId, clubSlug), None)
       } yield assertTrue(true)
     },
+    test("a run's criteria block is dated by the alias row that points at its criteria") {
+      def at(day: String): Instant = Instant.parse(s"${day}T12:00:00Z")
+      for {
+        _     <- seedDb
+        ranOn <- RecruitmentCriteria.insert(makeCriteria().copy(maxClubs = Some(40)))
+        later <- RecruitmentCriteria.insert(makeCriteria().copy(maxClubs = Some(10)))
+        _     <- RecruitmentAlias.insert(RecruitmentAlias(clubId, "default", at("2026-01-05"), ranOn))
+        _     <- RecruitmentAlias.insert(RecruitmentAlias(clubId, "default", at("2026-02-01"), later))
+        // Set back to the same row, which no `set` does today: the date is still when the alias first meant it.
+        _      <- RecruitmentAlias.insert(RecruitmentAlias(clubId, "default", at("2026-03-01"), ranOn))
+        _      <- RecruitmentAlias.insert(RecruitmentAlias(clubId, "strict", at("2026-01-09"), later))
+        recap  <- CriteriaRecap.ofId(ranOn)
+        recap2 <- CriteriaRecap.ofId(later)
+      } yield assertTrue(
+        recap.headOption.contains("Criteria for alias default, set 2026-01-05:"),
+        recap2.headOption.contains("Criteria for alias default, set 2026-02-01; alias strict, set 2026-01-09:")
+      )
+    },
     test("a report shows the criteria its run used, not the alias's latest") {
       for {
         _     <- seedDb
@@ -591,7 +610,10 @@ object TestRecruitmentAppCore extends ZIOSpecDefault {
         report   <- RecruitmentApp.showReport(NamedClub(clubId, clubSlug), Some(runId.toString))
       } yield assertTrue(
         aliasNow.exists(_.criteriaId == latest),
-        report.criteriaLines == List(s"Criteria #$ranOn (alias default):", "  maxClubs 40 · excludeSourceAdmins")
+        report.criteriaLines.drop(1) == List(
+          "  maxClubs             40   in at most this many clubs",
+          "  excludeSourceAdmins  yes  not an admin of a club being scouted"
+        )
       )
     }
   )

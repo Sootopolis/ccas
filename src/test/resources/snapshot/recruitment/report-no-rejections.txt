@@ -1,9 +1,20 @@
-Criteria #1 (alias default):
-  minDaysSinceRegistration 90 · daysSinceLastInvited 180 · daysSinceRejected 30
-  maxClubs 40 · excludeSourceAdmins · avoidAdminMinClubSize 100 · excludeFormerMembers
-  dailyMinElo 1000 · dailyMinScoreRate 0.375 · dailyMaxScoreRate 0.875
-  dailyMinGamesFinished 20 · dailyMaxTimeoutPercent 5 · dailyMaxHoursPerMove 12 · dailyMaxOngoingGames 60
-  dailyMinTmGamesFinished 10 · dailyMaxTmTimeoutPercent 0
+Criteria for alias default, set 2026-03-18:
+  minDaysSinceRegistration  90     joined Chess.com at least this many days ago
+  daysSinceLastInvited      180    not invited to this club within this many days
+  daysSinceRejected         30     not rejected under this alias within this many days
+  maxClubs                  40     in at most this many clubs
+  excludeSourceAdmins       yes    not an admin of a club being scouted
+  avoidAdminMinClubSize     100    not an admin of an active club with at least this many members
+  excludeFormerMembers      yes    not a former member of this club
+  dailyMinElo               1000   daily rating at least this
+  dailyMinScoreRate         0.375  daily score rate at least this, draws counting half
+  dailyMaxScoreRate         0.875  daily score rate at most this, draws counting half
+  dailyMinGamesFinished     20     at least this many daily games ended in the last 90 days
+  dailyMaxTimeoutPercent    5      timed out of at most this % of daily games, by Chess.com's figure
+  dailyMaxHoursPerMove      12     averages at most this many hours a daily move
+  dailyMaxOngoingGames      60     playing at most this many daily games now
+  dailyMinTmGamesFinished   10     at least this many team-match games ended in the last 90 days
+  dailyMaxTmTimeoutPercent  0      timed out of at most this % of team-match games in the last 90 days
 
 Started:   2025-06-01T00:00:00Z
 Completed: 2025-06-01T00:12:00Z

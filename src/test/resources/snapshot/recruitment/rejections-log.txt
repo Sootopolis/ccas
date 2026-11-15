@@ -1,8 +1,10 @@
-[INFO hh:mm:ss] Rejected: 55, 17 of them on cached figures
-[INFO hh:mm:ss]   maxClubs: in too many clubs                                         26
-[INFO hh:mm:ss]   dailyMinElo: daily rating too low                                   12
-[INFO hh:mm:ss]   dailyMinGamesFinished: too few daily games finished in 90 days       6
-[INFO hh:mm:ss]   account not active                                                   4
-[INFO hh:mm:ss]   in one of the club's matches                                         4
-[INFO hh:mm:ss]   dailyMaxTmTimeoutPercent: a team-match timeout in the last 90 days   2
-[INFO hh:mm:ss]   no reason recorded                                                   1
+[INFO hh:mm:ss] Rejected: 60, 17 of them on cached figures
+[INFO hh:mm:ss]   maxClubs                                         26
+[INFO hh:mm:ss]   dailyMinElo                                      12
+[INFO hh:mm:ss]   dailyMinGamesFinished                             6
+[INFO hh:mm:ss]   account not active                                4
+[INFO hh:mm:ss]   in one of the club's matches                      4
+[INFO hh:mm:ss]   avoidAdminMinClubSize (on record)                 3
+[INFO hh:mm:ss]   avoidAdminMinClubSize (in their club list)        2
+[INFO hh:mm:ss]   dailyMaxTmTimeoutPercent (a timeout in 90 days)   2
+[INFO hh:mm:ss]   no reason recorded                                1

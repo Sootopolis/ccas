@@ -13,7 +13,7 @@ import ccas.analysis.apps.ref.RefHelpers
 import ccas.analysis.tables.*
 import ccas.analysis.tables.subtypes.RecruitmentRunId
 import ccas.api.club.{ApiClubMatches, ApiClubMembers}
-import ccas.api.misc.subtypes.{ClubId, ClubSlug, Elo, JobRunId, PlayerId, Username}
+import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId, PlayerId, Username}
 import ccas.api.player.ApiPlayer
 import ccas.utils.{display, OutputFile, ProgressDisplay}
 import ccas.utils.client.{BodyStore, ChessComClient, HttpClientLayer, NetworkUnavailableException}
@@ -57,7 +57,7 @@ object RecruitmentApp extends ZIOAppDefault {
       case _                                      => None
     }
     RecruitArgs(
-      alias = positional.headOption.getOrElse("default"),
+      alias = positional.headOption.getOrElse(RecruitmentAlias.Default),
       sourceClubs = positional.drop(1).map(ClubSlug.wrap),
       target = target,
       cumulative = flagTokens.contains("--cumulative"),
@@ -114,7 +114,7 @@ object RecruitmentApp extends ZIOAppDefault {
               usernames = candidates.flatMap(c => resolvedMap.get(c.playerId))
               evaluatedCount <- RecruitmentCandidate.selectCountByRun(run.runId)
               rejections     <- RecruitmentCandidate.selectRejectionCountsByRun(run.runId)
-              inForce        <- criteriaLines(run.criteriaId)
+              inForce        <- CriteriaRecap.ofId(run.criteriaId)
               now            <- Clock.instant
               output = formatRecruitmentOutput(
                 criteriaLines = inForce,
@@ -192,7 +192,7 @@ object RecruitmentApp extends ZIOAppDefault {
       effectiveTarget = (resolvedTarget - alreadyFound) max 0
       now   <- Clock.instant
       runId <- RecruitmentRun.insert(clubId, criteria.criteriaId, trigger, now, Some(effectiveTarget), jobRunIdOption)
-      _     <- criteriaLines(criteria.criteriaId).flatMap(logCriteria)
+      _     <- CriteriaRecap.of(criteria).flatMap(logCriteria)
 
       // --- Shared setup ---
       targetMembers <- ApiClubMembers.get(client, effectiveSlug)
@@ -508,85 +508,6 @@ object RecruitmentApp extends ZIOAppDefault {
     s"$criteriaPart\n$timing$stats\n$rejectionPart\n${ApiPlayer.profileReviewBlock(usernames)}\n"
   }
 
-  /** The criteria a run judged by, read through the `criteria_id` it recorded: criteria rows are only ever inserted,
-    * so an old run's block is exactly what it ran with (#481).
-    */
-  private[recruitment] def criteriaLines(criteriaId: Long): RIO[PostgresClient, List[String]] =
-    for {
-      criteria <- RecruitmentCriteria.selectId(criteriaId)
-        .someOrFail(IllegalStateException(s"Criteria $criteriaId recorded by a recruit run not found"))
-      aliases       <- RecruitmentAlias.selectAliasesFor(criteriaId)
-      excludedClubs <- ZIO.foreach(criteria.excludeClubs)(Club.selectId).map(_.flatten)
-      clubSlugs = excludedClubs.map(club => club.clubId -> club.slug).toMap
-    } yield criteriaBlock(criteriaId, aliases, settingLines(criteria, clubSlugs))
-
-  /** The settings that are set, grouped onto lines by what they judge. Names are [[CriteriaSpec]]'s and values read as
-    * the operator sets them. An excluded club missing from `clubSlugs` reads as its id.
-    */
-  private[recruitment] def settingLines(
-    criteria: RecruitmentCriteria,
-    clubSlugs: Map[ClubId, ClubSlug]
-  ): List[String] = {
-    def whole(name: String, value: Option[Int]): Option[String] = value.map(v => s"$name $v")
-    def decimal(name: String, value: Option[Double]): Option[String] =
-      value.map(v => s"$name ${BigDecimal(v).bigDecimal.stripTrailingZeros.toPlainString}")
-    def flag(name: String, value: Boolean): Option[String] = Option.when(value)(name)
-    val nationality = Option.when(criteria.nationalityCountries.nonEmpty) {
-      val sense = if (criteria.nationalityExclude) "excluded" else "only these"
-      s"nationalityCountries ${criteria.nationalityCountries.mkString(", ")} ($sense)"
-    }
-    val clubs = Option.when(criteria.excludeClubs.nonEmpty) {
-      criteria.excludeClubs.map(id => clubSlugs.get(id).fold(s"#$id")(_.toString)).mkString("excludeClubs ", ", ", "")
-    }
-    List(
-      List(
-        whole("minDaysSinceRegistration", criteria.minDaysSinceRegistration),
-        whole("daysSinceLastInvited", criteria.daysSinceLastInvited),
-        whole("daysSinceRejected", criteria.daysSinceRejected),
-        nationality
-      ),
-      List(
-        whole("maxClubs", criteria.maxClubs),
-        clubs,
-        flag("excludeSourceAdmins", criteria.excludeSourceAdmins),
-        whole("avoidAdminMinClubSize", criteria.avoidAdminMinClubSize),
-        flag("excludeFormerMembers", criteria.excludeFormerMembers)
-      ),
-      List(
-        whole("dailyMinElo", criteria.dailyMinElo.map(Elo.unwrap(_).toInt)),
-        whole("dailyMaxElo", criteria.dailyMaxElo.map(Elo.unwrap(_).toInt)),
-        decimal("dailyMinScoreRate", criteria.dailyMinScoreRate),
-        decimal("dailyMaxScoreRate", criteria.dailyMaxScoreRate)
-      ),
-      List(
-        whole("dailyMinGamesFinished", criteria.dailyMinGamesFinished),
-        decimal("dailyMaxTimeoutPercent", criteria.dailyMaxTimeoutPercent),
-        whole("dailyMaxHoursPerMove", criteria.dailyMaxHoursPerMove),
-        whole("dailyMinOngoingGames", criteria.dailyMinOngoingGames),
-        whole("dailyMaxOngoingGames", criteria.dailyMaxOngoingGames)
-      ),
-      List(
-        whole("dailyMinTmGamesFinished", criteria.dailyMinTmGamesFinished),
-        decimal("dailyMaxTmTimeoutPercent", criteria.dailyMaxTmTimeoutPercent),
-        whole("dailyMinOngoingTeamMatches", criteria.dailyMinOngoingTeamMatches)
-      )
-    ).map(_.flatten).filter(_.nonEmpty).map(_.mkString(" · "))
-  }
-
-  private[recruitment] def criteriaBlock(
-    criteriaId: Long,
-    aliases: List[String],
-    settings: List[String]
-  ): List[String] = {
-    val aliasPart = aliases match {
-      case Nil          => ""
-      case alias :: Nil => s" (alias $alias)"
-      case _            => s" (aliases ${aliases.mkString(", ")})"
-    }
-    val header = s"Criteria #$criteriaId$aliasPart"
-    if (settings.isEmpty) List(s"$header: none set") else s"$header:" :: settings.map(setting => s"  $setting")
-  }
-
   private[recruitment] def logCriteria(lines: List[String]): UIO[Unit] =
     ZIO.foreachDiscard(lines)(line => ZIO.logInfo(line))
 
@@ -639,7 +560,7 @@ object RecruitmentApp extends ZIOAppDefault {
       evaluatedCount <- RecruitmentCandidate.selectCountByRun(run.runId)
       rejections     <- RecruitmentCandidate.selectRejectionCountsByRun(run.runId)
       resolvedMap    <- PlayerName.selectCurrentNames(invited.map(_.playerId))
-      inForce        <- criteriaLines(run.criteriaId)
+      inForce        <- CriteriaRecap.ofId(run.criteriaId)
       // Drop unresolved player_ids: paste-ready invite list, identical to the server's `usernamesFor`, so the file's
       // invite list matches `--report`/clipboard. Rendering is the caller's job (via `formatRecruitmentOutput`) — no
       // formatting here.

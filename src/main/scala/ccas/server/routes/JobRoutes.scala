@@ -14,7 +14,7 @@ import ccas.analysis.apps.membership.MembershipApp
 import ccas.analysis.apps.recruitment.RecruitmentApp
 import ccas.analysis.apps.ref.RefApp
 import ccas.analysis.apps.stats.StatsApp
-import ccas.analysis.tables.{PlayerName, RecruitmentCandidate, RecruitmentRun, RunTrigger}
+import ccas.analysis.tables.{PlayerName, RecruitmentAlias, RecruitmentCandidate, RecruitmentRun, RunTrigger}
 import ccas.analysis.tables.subtypes.RecruitmentRunId
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId, Username}
 import ccas.server.jobs.*
@@ -203,7 +203,7 @@ object JobRoutes {
         RecruitmentApp.recruit(
           clubSlug = club.slug,
           expectedClubIdOption = Some(club.clubId),
-          alias = body.alias.getOrElse("default"),
+          alias = body.alias.getOrElse(RecruitmentAlias.Default),
           target = body.target.map(_ min JobCaps.MaxTarget),
           cumulative = body.cumulative.getOrElse(false),
           sourceClubs = body.sourceClubs.getOrElse(Nil),

@@ -1,6 +1,17 @@
-[INFO hh:mm:ss] Criteria #1 (alias default):
-[INFO hh:mm:ss]   minDaysSinceRegistration 90 · daysSinceLastInvited 180 · daysSinceRejected 30
-[INFO hh:mm:ss]   maxClubs 40 · excludeSourceAdmins · avoidAdminMinClubSize 100 · excludeFormerMembers
-[INFO hh:mm:ss]   dailyMinElo 1000 · dailyMinScoreRate 0.375 · dailyMaxScoreRate 0.875
-[INFO hh:mm:ss]   dailyMinGamesFinished 20 · dailyMaxTimeoutPercent 5 · dailyMaxHoursPerMove 12 · dailyMaxOngoingGames 60
-[INFO hh:mm:ss]   dailyMinTmGamesFinished 10 · dailyMaxTmTimeoutPercent 0
+[INFO hh:mm:ss] Criteria for alias default, set 2026-03-18:
+[INFO hh:mm:ss]   minDaysSinceRegistration  90     joined Chess.com at least this many days ago
+[INFO hh:mm:ss]   daysSinceLastInvited      180    not invited to this club within this many days
+[INFO hh:mm:ss]   daysSinceRejected         30     not rejected under this alias within this many days
+[INFO hh:mm:ss]   maxClubs                  40     in at most this many clubs
+[INFO hh:mm:ss]   excludeSourceAdmins       yes    not an admin of a club being scouted
+[INFO hh:mm:ss]   avoidAdminMinClubSize     100    not an admin of an active club with at least this many members
+[INFO hh:mm:ss]   excludeFormerMembers      yes    not a former member of this club
+[INFO hh:mm:ss]   dailyMinElo               1000   daily rating at least this
+[INFO hh:mm:ss]   dailyMinScoreRate         0.375  daily score rate at least this, draws counting half
+[INFO hh:mm:ss]   dailyMaxScoreRate         0.875  daily score rate at most this, draws counting half
+[INFO hh:mm:ss]   dailyMinGamesFinished     20     at least this many daily games ended in the last 90 days
+[INFO hh:mm:ss]   dailyMaxTimeoutPercent    5      timed out of at most this % of daily games, by Chess.com's figure
+[INFO hh:mm:ss]   dailyMaxHoursPerMove      12     averages at most this many hours a daily move
+[INFO hh:mm:ss]   dailyMaxOngoingGames      60     playing at most this many daily games now
+[INFO hh:mm:ss]   dailyMinTmGamesFinished   10     at least this many team-match games ended in the last 90 days
+[INFO hh:mm:ss]   dailyMaxTmTimeoutPercent  0      timed out of at most this % of team-match games in the last 90 days

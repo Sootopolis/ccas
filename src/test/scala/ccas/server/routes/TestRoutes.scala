@@ -3,7 +3,7 @@ package ccas.server.routes
 import java.time.{Instant, LocalDateTime, ZoneOffset}
 
 import com.augustnagro.magnum.sql
-import zio.{LogLevel, Ref, RIO, Scope, Task, UIO, ULayer, URIO, ZIO, ZLayer}
+import zio.{Clock, LogLevel, Ref, RIO, Scope, Task, UIO, ULayer, URIO, ZIO, ZLayer}
 import zio.http.*
 import zio.json.{DecoderOps, EncoderOps}
 import zio.stream.ZStream
@@ -1158,6 +1158,7 @@ object TestRoutes extends ZIOSpecDefault {
 
   private def suiteRecruitmentCriteriaRoutes = suite("RecruitmentCriteriaRoutes")(
     testCriteriaAcrossNames,
+    testCriteriaRecap,
     testCriteriaUnknownClub,
     testCriteriaValidatesBeforeResolving
   )
@@ -1187,12 +1188,34 @@ object TestRoutes extends ZIOSpecDefault {
           jsonRequest(Method.GET, "/api/recruitment-criteria?slug=renamed-to")
         )
         setResult  <- set.body.asString.map(_.fromJson[ClubResult[RecruitmentCriteriaRoutes.SetCriteriaResponse]])
-        showResult <- show.body.asString.map(_.fromJson[ClubResult[CriteriaSpec]])
+        showResult <- show.body.asString.map(_.fromJson[ClubResult[RecruitmentCriteriaRoutes.CriteriaView]])
         listResult <- list.body.asString.map(_.fromJson[ClubResult[List[RecruitmentCriteriaRoutes.AliasSummary]]])
       } yield assertTrue(
         setResult.exists(r => r.resolution == renamed && r.resultOption.isDefined),
-        showResult.exists(_.resultOption.contains(CriteriaSpec.fromCriteria(RecruitmentCriteria.defaultDaily.capped))),
+        showResult.exists(
+          _.resultOption.map(_.criteria).contains(CriteriaSpec.fromCriteria(RecruitmentCriteria.defaultDaily.capped))
+        ),
         listResult.exists(_.resultOption.exists(_.map(_.alias) == List("across-names")))
+      )
+    }
+
+  private def testCriteriaRecap =
+    test("reading an alias's criteria answers the date it was set and the recap") {
+      val criteria = CriteriaSpec.fromCriteria(RecruitmentCriteria.defaultDaily).toJson
+      val body     = s"""{"club":{"kind":"by_id","clubId":$renamedClubId},"alias":"two words","criteria":$criteria}"""
+      for {
+        _     <- ensureRenamedClub
+        _     <- RecruitmentCriteriaRoutes.routes.runZIO(jsonRequest(Method.POST, "/api/recruitment-criteria", body))
+        today <- Clock.instant.map(_.atOffset(ZoneOffset.UTC).toLocalDate)
+        show <- RecruitmentCriteriaRoutes.routes.runZIO(
+          jsonRequest(Method.GET, s"/api/recruitment-criteria/two%20words?clubId=$renamedClubId")
+        )
+        view <- show.body.asString.map(_.fromJson[ClubResult[RecruitmentCriteriaRoutes.CriteriaView]])
+        recap = view.toOption.flatMap(_.resultOption).map(_.recap).getOrElse(Nil)
+      } yield assertTrue(
+        recap.headOption.contains(s"Criteria for alias two words, set $today:"),
+        recap.exists(_.startsWith("  dailyMinElo ")),
+        !recap.exists(_.contains("criteria_id"))
       )
     }
 

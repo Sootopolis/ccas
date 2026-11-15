@@ -353,7 +353,10 @@ object CliCommand {
       args = (Args.integer("run-id") ?? "With --report, the run id to show (default: the club's latest run)")
         .atMost(1)
         .map(_.headOption.map(_.toInt))
-    ).withHelp("Submit a recruitment scouting job for a club (interactive runs confirm invites before marking them)")
+    ).withHelp(
+      "Submit a recruitment scouting job for a club (interactive runs confirm the criteria first, and invites before " +
+        "marking them)"
+    )
       // Options and the optional `[run-id]` arg combine as (optionsTuple, argValue), so destructure the two levels.
       .map {
         case (
