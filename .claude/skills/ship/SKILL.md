@@ -19,7 +19,8 @@ Take the work on the **current branch** through this repo's full release flow. B
   - This moves work without being asked, and it is safe because it only ever *adds* a ref. Anything that would discard a ref — `reset --hard` on a branch with unshipped commits, a force-push — still stops and asks, except steps 1b and 2's collapse, whose diff proves it loses nothing.
 - `git status --porcelain` — uncommitted changes are part of this ship (step 1). If clean AND `git rev-list --left-right --count origin/<base>...HEAD` shows 0 ahead → STOP (nothing to ship).
 - `git worktree list --porcelain` — note which worktree holds the base branch (fast-forwarded in step 6) and whether any worktree sits **parked** on a local branch (`wip`) that is *not* the branch being shipped — that parked branch is caught up to the merge in step 7. NEVER hardcode worktree paths.
-- `git rev-parse --abbrev-ref <branch>@{upstream}` — whether the shipped branch is published. A branch with no upstream has never left the machine, which changes disposal (step 7).
+- `git rev-parse --abbrev-ref <branch>@{upstream}` — whether the shipped branch is published, which steps 1, 1b and 2 ask.
+- The repository's merge settings, which steps 1b, 5 and 7 rely on: `gh api repos/{owner}/{repo} --jq '[.squash_merge_commit_title, .squash_merge_commit_message, .delete_branch_on_merge, .allow_merge_commit, .allow_rebase_merge] | @tsv'` must print `COMMIT_OR_PR_TITLE`, `COMMIT_MESSAGES`, `true`, `false`, `false`. Anything else → STOP and say which differs. `PR_BODY` is no way round step 1b: GitHub re-wraps the PR's description at 72 columns as it fills the merge box, and adds a `Co-authored-by` line of its own (#507).
 - CLAUDE.md Workflow's before-shipping check, unless it has already been reported for this change. An open question stops the ship until it is answered.
 
 ## 1. Commit (only if there are changes)
@@ -74,7 +75,7 @@ Steps 6-9 run after the merge, which cannot be undone, so check what can be chec
 
 ## 5. Hand the merge to the user
 **Never merge the PR yourself** — no `gh pr merge`, even when the user said "ship". The user merges in the GitHub UI: it is their last look at the PR, and an agent merging its own PR trips the auto-mode classifier's "Merge Without Review" denial.
-- Once CI is green, report the PR link and CI result, and ask for **Squash and merge** — this repo's convention (PR number in `main` subjects, e.g. `… (#94)`). Mention the merged page's **Delete branch** button, which does the remote half of step 7.
+- Once CI is green, report the PR link and CI result, and ask for the merge. Squash is the only method the repository offers, and GitHub adds the PR number to the subject (`… (#94)`).
 - In the same handover, ask for the merge from the web. The iOS app drops the commit body even when its box shows it (#468), while web merges keep it. If the user merges from the app anyway, step 9 carries the lost body.
 - Then wait with a background command (`run_in_background`), which re-invokes the session when the PR leaves `OPEN`:
 
@@ -105,9 +106,10 @@ The `ccas` launcher on `PATH` runs the build staged in the base worktree, so a m
 ## 7. Dispose of the shipped branch
 **The working model is throwaway branches.** One branch per PR, cut from base, deleted after merge. `wip` is a *local-only parking branch* for the worktree — it is never pushed and has no upstream (`origin` holds `main` alone). That is deliberate: a published branch would have to be force-pushed to recycle, because squash-merge gives `main` a new SHA and the branch then diverges. Unpublished, recycling is a local fast-forward nobody has to approve.
 
-- **The shipped branch** — delete it: `git push origin --delete <branch>` (only if it was published and the user did not already press **Delete branch**), then catch `wip` up (below) and delete the local branch from there. That order is forced: git refuses to delete the branch you are standing on, and step 0 left you on it. No confirmation needed for a throwaway branch this flow cut in step 0, once the equality check below passes. A remote deleted from the UI before that check loses nothing — the local branch still holds the work until the check clears it.
-- **A delete denied by the classifier** ("Git Destructive") is handed over, not worked around: give the exact `git push origin --delete` / `git branch -D` commands for the user to run with `!`.
-- **Before deleting anything published, prove it holds nothing unique.** Compare each file the branch changed against the commit the merge actually produced, which is the only reference point that cannot move:
+- **The shipped branch** — GitHub deletes its remote at the merge, and step 6's `fetch --prune` drops the tracking ref. Catch `wip` up (below) and delete the local branch from there. That order is forced: git refuses to delete the branch you are standing on, and step 0 left you on it. No confirmation needed for a throwaway branch this flow cut in step 0, once the equality check below passes. The remote going first loses nothing — the local branch still holds the work until the check clears it.
+- **A remote that survived the merge** (`git ls-remote --heads origin <branch>` still prints it) is deleted with `git push origin --delete <branch>` once the check below passes, and reported: step 0's settings should have removed it. A `remote ref does not exist` failure there means GitHub got to it first.
+- **A delete denied by the classifier** ("Git Destructive") is handed over, not worked around: give the exact command for the user to run with `!`.
+- **Before deleting the local branch, prove it holds nothing unique.** Compare each file the branch changed against the commit the merge actually produced, which is the only reference point that cannot move:
 
   ```
   MERGED=$(gh pr view <n> --json mergeCommit -q .mergeCommit.oid)   # resolves for a squash merge too
@@ -115,7 +117,7 @@ The `ccas` launcher on `PATH` runs the build staged in the base worktree, so a m
   ```
 
   Empty means everything the branch changed is in that commit, so deletion loses nothing no matter what has landed since. Diff only those files: a PR merged between the branch's cut and its own merge is in `$MERGED` but not in the branch, so a whole-tree diff lists its files too (#339, merged 16 s after #338). Non-empty means STOP and ASK, whether the branch holds work the merge lacks or another PR changed one of its files. Cross-check with `gh pr list --state all --head <branch>`.
-- **`git branch -d` will refuse; that refusal is noise.** It tests commit reachability, which squash-merge always breaks. That empty diff is the proof `-d` wanted — use `git branch -D` once it is clean, never before. The remote delete fires `pre-push`, which self-skips on a delete-only push; nothing to bypass. It can instead fail with `remote ref does not exist` when the branch was already deleted from the UI — harmless, the branch is already gone.
+- **`git branch -d` will refuse; that refusal is noise.** It tests commit reachability, which squash-merge always breaks. That empty diff is the proof `-d` wanted — use `git branch -D` once it is clean, never before.
 - **Do not compare against `<base>` instead.** A PR landing on base after this merge makes the diff non-empty wherever it touched one of the branch's files, and nothing then distinguishes "branch has unique work" from "base has newer work". The merge commit stays put; base does not.
 - **Never use `git rev-list` counts or `git cherry` for this.** They compare commits rather than content, and squash-merge guarantees the two disagree: `rev-list` reads the branch as ahead because the squash is a new SHA, and `git cherry` compares *patch-ids*, so an N-commit branch collapsed into one squash commit yields N patch-ids matching nothing in base.
 - **Ambiguous, or the user calls a branch long-lived?** ASK before deleting. Deletion is irreversible from here.
